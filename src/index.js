@@ -27,20 +27,19 @@ const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xW
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 
 const PUBLIC_MENU = [
+  [{ text: "Start Here / Requirements", callback_data: "quick_start" }],
   [{ text: "Create Wallet Set", callback_data: "create_wallets" }],
   [{ text: "Import Wallet", callback_data: "import_wallet" }],
   [{ text: "My Wallets", callback_data: "list_wallets" }],
   [{ text: "Check Balances", callback_data: "check_balances" }],
-  [{ text: "Export Backup", callback_data: "export_backup" }],
-  [{ text: "Emergency Key Export", callback_data: "export_private_keys" }],
-  [{ text: "Restore Backup", callback_data: "restore_backup" }],
+  [{ text: "Backup / Restore", callback_data: "backup_menu" }],
   [{ text: "Fund Wallets", callback_data: "fund_wallets" }],
   [{ text: "Bundle Buy Token", callback_data: "batch_buy" }],
   [{ text: "Bundle Sell Token", callback_data: "batch_sell" }],
-  [{ text: "Volume Alerts", callback_data: "volume_alerts" }],
-  [{ text: "Sweep SOL", callback_data: "sweep_sol" }],
+  [{ text: "Withdraw SOL", callback_data: "sweep_sol" }],
   [{ text: "Sweep Tokens", callback_data: "sweep_tokens" }],
-  [{ text: "Close Empty Token Accounts", callback_data: "close_empty_accounts" }]
+  [{ text: "Close Empty Token Accounts", callback_data: "close_empty_accounts" }],
+  [{ text: "Volume Alerts", callback_data: "volume_alerts" }]
 ];
 
 const ADMIN_MENU = [
@@ -55,6 +54,8 @@ const PRIVATE_CHAT_ACTIONS = new Set([
   "import_wallet",
   "list_wallets",
   "check_balances",
+  "quick_start",
+  "backup_menu",
   "export_backup",
   "export_private_keys",
   "restore_backup",
@@ -97,8 +98,10 @@ function loadConfig() {
 
   const feeWallet = process.env.FEE_WALLET || "AUcSFZsCdawzfqa4KzHK1BHz1RDrBnj8CF5kxoy3NvxV";
   const bundleFeeBps = Number.parseInt(process.env.BUNDLE_FEE_BPS || "50", 10);
-  const bundleConcurrency = Number.parseInt(process.env.BUNDLE_CONCURRENCY || "3", 10);
+  const bundleConcurrency = Number.parseInt(process.env.BUNDLE_CONCURRENCY || "1", 10);
   const buyReserveSol = Number.parseFloat(process.env.BUY_RESERVE_SOL || "0.01");
+  const rpcDelayMs = Number.parseInt(process.env.RPC_DELAY_MS || "800", 10);
+  const rpcRetries = Number.parseInt(process.env.RPC_RETRIES || "8", 10);
 
   if (!Number.isInteger(bundleFeeBps) || bundleFeeBps < 0 || bundleFeeBps > 1000) {
     throw new Error("BUNDLE_FEE_BPS must be an integer from 0 to 1000.");
@@ -110,6 +113,14 @@ function loadConfig() {
 
   if (!Number.isFinite(buyReserveSol) || buyReserveSol < 0 || buyReserveSol > 0.1) {
     throw new Error("BUY_RESERVE_SOL must be from 0 to 0.1.");
+  }
+
+  if (!Number.isInteger(rpcDelayMs) || rpcDelayMs < 0 || rpcDelayMs > 10_000) {
+    throw new Error("RPC_DELAY_MS must be an integer from 0 to 10000.");
+  }
+
+  if (!Number.isInteger(rpcRetries) || rpcRetries < 0 || rpcRetries > 20) {
+    throw new Error("RPC_RETRIES must be an integer from 0 to 20.");
   }
 
   try {
@@ -137,6 +148,9 @@ function loadConfig() {
     bundleFeeBps,
     bundleConcurrency,
     buyReserveLamports: solToLamports(buyReserveSol),
+    buyReserveSol,
+    rpcDelayMs,
+    rpcRetries,
     defaultSlippageBps: Number.parseInt(process.env.DEFAULT_SLIPPAGE_BPS || "100", 10),
     priorityFeeLamports: Number.parseInt(process.env.PRIORITY_FEE_LAMPORTS || "0", 10)
   };
@@ -456,6 +470,12 @@ async function handleCallback(query, userId) {
   }
 
   switch (query.data) {
+    case "quick_start":
+      await say(chatId, quickStartText());
+      break;
+    case "backup_menu":
+      await showBackupMenu(chatId);
+      break;
     case "create_wallets":
       setSession(chatId, "create_wallets_label", userId);
       await say(chatId, "Send a label for this wallet set.");
@@ -681,10 +701,23 @@ async function continueFlow(chatId, text, session) {
       case "buy_wallets":
         session.data.walletIndexes = await parseWalletSelection(text, session.userId);
         session.step = "buy_amount";
-        await say(chatId, "Send SOL amount to spend per wallet.");
+        await say(chatId, [
+          "Send SOL amount to spend per wallet.",
+          "",
+          "Examples:",
+          "- `0.05` means spend 0.05 SOL from each selected wallet",
+          "- `max` means use each wallet's available SOL except the safety reserve",
+          "",
+          `Safety reserve kept for fees: ${CONFIG.buyReserveSol} SOL per wallet`
+        ].join("\n"));
         break;
       case "buy_amount":
-        session.data.amountSol = parsePositiveNumber(text);
+        if (["max", "all"].includes(text.trim().toLowerCase())) {
+          session.data.amountMode = "max";
+        } else {
+          session.data.amountMode = "fixed";
+          session.data.amountSol = parsePositiveNumber(text);
+        }
         session.step = "buy_slippage";
         await say(chatId, `Send slippage in basis points, or type default for ${CONFIG.defaultSlippageBps} bps.`);
         break;
@@ -1004,7 +1037,7 @@ async function fundWalletsFlow(chatId, session) {
       const signature = await sendLegacyTransaction(tx, [sourceKeypair]);
       results.push(`${target.label}: ${signature}`);
     } catch (error) {
-      results.push(`Wallet ${targetIndex}: failed - ${formatError(error)}`);
+      results.push(`Wallet ${targetIndex}: failed - ${friendlyError(error)}`);
     }
   }
 
@@ -1025,22 +1058,26 @@ async function fundWalletsFlow(chatId, session) {
 async function batchBuyFlow(chatId, session) {
   const store = await readWalletStore();
   const wallets = session.data.walletIndexes.map((index) => getWalletAt(store, index, session.userId));
-  const amountLamports = solToLamports(session.data.amountSol);
-  const feeLamports = calculateFeeLamports(amountLamports);
-  const swapLamports = amountLamports - feeLamports;
   const results = [];
-
-  if (swapLamports <= 0) {
-    throw new Error("Amount is too small after platform fee.");
-  }
 
   await runWithConcurrency(wallets, CONFIG.bundleConcurrency, async (wallet) => {
     try {
       const keypair = decryptWallet(wallet);
-      const balance = await connection.getBalance(keypair.publicKey, "confirmed");
+      const balance = await rpcWithRetry("get wallet SOL balance", () => connection.getBalance(keypair.publicKey, "confirmed"));
+      const amountLamports = session.data.amountMode === "max"
+        ? balance - CONFIG.buyReserveLamports
+        : solToLamports(session.data.amountSol);
+      const feeLamports = calculateFeeLamports(amountLamports);
+      const swapLamports = amountLamports - feeLamports;
       const recommendedLamports = recommendedBuyFundingLamports(amountLamports);
+
+      if (amountLamports <= 0 || swapLamports <= 0) {
+        results.push(`${wallet.label}: not enough SOL after keeping ${CONFIG.buyReserveSol} SOL safety reserve.`);
+        return;
+      }
+
       if (balance < recommendedLamports) {
-        results.push(`${wallet.label}: not enough SOL. Has ${lamportsToSol(balance)} SOL, recommended ${lamportsToSol(recommendedLamports)} SOL for this buy.`);
+        results.push(`${wallet.label}: not enough SOL. Has ${lamportsToSol(balance)} SOL, needs about ${lamportsToSol(recommendedLamports)} SOL. Use a smaller amount or type max.`);
         return;
       }
 
@@ -1058,9 +1095,9 @@ async function batchBuyFlow(chatId, session) {
       } catch (feeError) {
         feeStatus = `, fee failed - ${formatError(feeError)}`;
       }
-      results.push(`${wallet.label}: swap ${result.signature}${feeStatus}`);
+      results.push(`${wallet.label}: spent ${lamportsToSol(amountLamports)} SOL, swap ${result.signature}${feeStatus}`);
     } catch (error) {
-      results.push(`${wallet.label}: failed - ${formatError(error)}`);
+      results.push(`${wallet.label}: failed - ${friendlyError(error)}`);
     }
   });
 
@@ -1068,9 +1105,8 @@ async function batchBuyFlow(chatId, session) {
     chatId,
     userId: session.userId,
     tokenMint: session.data.tokenMint,
-    amountSolPerWallet: session.data.amountSol,
-    netSwapSolPerWallet: lamportsToSol(swapLamports),
-    feeSolPerWallet: lamportsToSol(feeLamports),
+    amountMode: session.data.amountMode,
+    amountSolPerWallet: session.data.amountSol ?? null,
     feeWallet: CONFIG.feeWallet,
     feeBps: CONFIG.bundleFeeBps,
     slippageBps: session.data.slippageBps,
@@ -1121,7 +1157,7 @@ async function batchSellFlow(chatId, session) {
       }
       results.push(`${wallet.label}: swap ${result.signature}${feeStatus}`);
     } catch (error) {
-      results.push(`${wallet.label}: failed - ${formatError(error)}`);
+      results.push(`${wallet.label}: failed - ${friendlyError(error)}`);
     }
   });
 
@@ -1192,7 +1228,7 @@ async function sweepSolFlow(chatId, session) {
       results.push(`${wallet.label}: ${lamportsToSol(sendableLamports)} SOL drained, fee ${lamportsToSol(feeLamports)} SOL, ${signature}`);
       await sleep(250);
     } catch (error) {
-      results.push(`${wallet.label}: failed - ${formatError(error)}`);
+      results.push(`${wallet.label}: failed - ${friendlyError(error)}`);
     }
   }
 
@@ -1238,7 +1274,7 @@ async function sweepTokensFlow(chatId, session) {
           const destinationAta = getAssociatedTokenAddress(mint, destination, tokenProgramId);
           const tx = new Transaction();
 
-          const destinationInfo = await connection.getAccountInfo(destinationAta, "confirmed");
+          const destinationInfo = await rpcWithRetry("check destination token account", () => connection.getAccountInfo(destinationAta, "confirmed"));
           if (!destinationInfo) {
             tx.add(
               createAssociatedTokenAccountInstruction(
@@ -1267,11 +1303,11 @@ async function sweepTokensFlow(chatId, session) {
           const signature = await sendLegacyTransaction(tx, [keypair]);
           results.push(`${wallet.label}: ${account.mint} ${account.uiAmount}, ${signature}`);
         } catch (error) {
-          results.push(`${wallet.label}: ${account.mint} failed - ${formatError(error)}`);
+          results.push(`${wallet.label}: ${account.mint} failed - ${friendlyError(error)}`);
         }
       }
     } catch (error) {
-      results.push(`${wallet.label}: failed - ${formatError(error)}`);
+      results.push(`${wallet.label}: failed - ${friendlyError(error)}`);
     }
   }
 
@@ -1323,7 +1359,7 @@ async function closeEmptyAccountsFlow(chatId, session) {
 
       results.push(`${wallet.label}: closed ${emptyAccounts.length}, ${signatures.join(", ")}`);
     } catch (error) {
-      results.push(`${wallet.label}: failed - ${formatError(error)}`);
+      results.push(`${wallet.label}: failed - ${friendlyError(error)}`);
     }
   }
 
@@ -1459,10 +1495,10 @@ async function getMintDecimals(mint) {
 }
 
 async function getOwnedTokenAccounts(owner) {
-  const responses = await Promise.all([
-    connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }, "confirmed"),
-    connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }, "confirmed")
-  ]);
+  const responses = [];
+  responses.push(await rpcWithRetry("get SPL token accounts", () => connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }, "confirmed")));
+  await sleep(CONFIG.rpcDelayMs);
+  responses.push(await rpcWithRetry("get Token-2022 accounts", () => connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }, "confirmed")));
 
   return responses.flatMap((response, index) => {
     const tokenProgramId = index === 0 ? TOKEN_PROGRAM_ID : TOKEN_2022_PROGRAM_ID;
@@ -1562,10 +1598,9 @@ async function showWalletBalances(chatId, userId) {
   await runWithConcurrency(wallets, 4, async (wallet, index) => {
     try {
       const keypair = decryptWallet(wallet);
-      const [balance, tokenAccounts] = await Promise.all([
-        connection.getBalance(keypair.publicKey, "confirmed"),
-        getOwnedTokenAccounts(keypair.publicKey)
-      ]);
+      const balance = await rpcWithRetry("get wallet SOL balance", () => connection.getBalance(keypair.publicKey, "confirmed"));
+      await sleep(CONFIG.rpcDelayMs);
+      const tokenAccounts = await getOwnedTokenAccounts(keypair.publicKey);
       const nonZeroTokens = tokenAccounts.filter((account) => account.rawAmount > 0n);
       const tokenPreview = nonZeroTokens
         .slice(0, 4)
@@ -1580,7 +1615,7 @@ async function showWalletBalances(chatId, userId) {
         nonZeroTokens.length ? `Tokens:\n  ${tokenPreview}${more}` : "Tokens: none"
       ].join("\n");
     } catch (error) {
-      lines[index] = `${index + 1}. ${wallet.label}\n${wallet.publicKey}\nBalance check failed: ${formatError(error)}`;
+      lines[index] = `${index + 1}. ${wallet.label}\n${wallet.publicKey}\nBalance check failed: ${friendlyError(error)}`;
     }
   });
 
@@ -1600,7 +1635,7 @@ async function selectedTokenBalanceSummary(userId, walletIndexes, tokenMint) {
       if (token && token.rawAmount > 0n) holders += 1;
       lines[resultIndex] = `${walletIndex}. ${wallet.label}: ${token?.uiAmount || "0"}`;
     } catch (error) {
-      lines[resultIndex] = `${walletIndex}. ${wallet.label}: balance check failed - ${formatError(error)}`;
+      lines[resultIndex] = `${walletIndex}. ${wallet.label}: balance check failed - ${friendlyError(error)}`;
     }
   });
 
@@ -1618,6 +1653,49 @@ async function exportAudit(chatId) {
     return `${entry.timestamp} | ${entry.action}`;
   });
   await say(chatId, latest.length ? `Last ${latest.length} audit entries:\n\n${latest.join("\n")}` : "Audit log is empty.");
+}
+
+async function showBackupMenu(chatId) {
+  await telegram("sendMessage", {
+    chat_id: chatId,
+    text: "Backup and recovery tools:",
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "Export Backup", callback_data: "export_backup" }],
+        [{ text: "Restore Backup", callback_data: "restore_backup" }],
+        [{ text: "Emergency Key Export", callback_data: "export_private_keys" }]
+      ]
+    }
+  });
+}
+
+function quickStartText() {
+  return [
+    "Start Here",
+    "",
+    "1. Create Wallet Set",
+    "Make the wallets you want the bot to control.",
+    "",
+    "2. Save Backup",
+    "The bot automatically sends a backup after wallet creation/import. Keep it private.",
+    "",
+    "3. Fund Wallets",
+    `Each buy wallet needs buy amount + about ${CONFIG.buyReserveSol} SOL for fees/reserve.`,
+    "",
+    "4. Bundle Buy",
+    "Enter token mint, wallets, then amount. Type `max` to use all available SOL except the safety reserve.",
+    "",
+    "5. Bundle Sell",
+    "The bot checks token balances first. If a wallet shows 0, it cannot sell that token.",
+    "",
+    "6. Withdraw SOL",
+    "Use Withdraw SOL to send SOL out. Latest version drains balance - network fee to avoid rent errors.",
+    "",
+    "Common errors:",
+    "- RPC rate limit: wait, select fewer wallets, or use paid/private SOLANA_RPC_URL.",
+    "- No quote: token has no Jupiter route/liquidity, wrong mint, amount too small, or slippage too low.",
+    "- Not enough SOL: add SOL or type `max` in the buy amount step."
+  ].join("\n");
 }
 
 async function walletPrompt(userId, prefix) {
@@ -1992,6 +2070,20 @@ function formatFundConfirm(data) {
 }
 
 function formatBuyConfirm(data) {
+  if (data.amountMode === "max") {
+    return [
+      "Confirm bundle buy:",
+      `Token mint: ${data.tokenMint}`,
+      `Wallets: ${data.walletIndexes.join(", ")}`,
+      `Spend mode: MAX`,
+      `Each wallet keeps safety reserve: ${CONFIG.buyReserveSol} SOL`,
+      `Platform fee: ${formatFeeRate()} to ${CONFIG.feeWallet}`,
+      `Slippage: ${data.slippageBps} bps`,
+      "",
+      "Reply `yes` to execute or `/cancel`."
+    ].join("\n");
+  }
+
   const amountLamports = solToLamports(data.amountSol);
   const feeLamports = calculateFeeLamports(amountLamports);
   const recommendedLamports = recommendedBuyFundingLamports(amountLamports);
@@ -2122,7 +2214,29 @@ function formatError(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function rpcWithRetry(label, operation, retries = 5) {
+function friendlyError(error) {
+  const message = formatError(error);
+
+  if (message.includes("429") || /too many requests|rate limit/i.test(message)) {
+    return "RPC rate limit. Try again in a minute, reduce selected wallets, or use a paid/private SOLANA_RPC_URL.";
+  }
+
+  if (/failed to get quote|could not build a quote|quote\/order|No routes/i.test(message)) {
+    return "No Jupiter route/quote. Check token mint, liquidity, amount size, slippage, and wallet SOL balance.";
+  }
+
+  if (/insufficient funds for rent/i.test(message)) {
+    return "Not enough SOL after fees/rent. Use Withdraw SOL on the latest version, or keep about 0.001 SOL behind on old versions.";
+  }
+
+  if (/insufficient funds|custom program error: 0x1/i.test(message)) {
+    return "Not enough SOL for swap plus network fees. Add SOL, use a smaller amount, or type max in the buy amount step.";
+  }
+
+  return message;
+}
+
+async function rpcWithRetry(label, operation, retries = CONFIG.rpcRetries) {
   let lastError;
 
   for (let attempt = 0; attempt <= retries; attempt += 1) {
@@ -2131,7 +2245,7 @@ async function rpcWithRetry(label, operation, retries = 5) {
     } catch (error) {
       lastError = error;
       if (!isRetryableRpcError(error) || attempt === retries) break;
-      const delayMs = 750 * (attempt + 1);
+      const delayMs = CONFIG.rpcDelayMs * (attempt + 1);
       console.warn(`${label} failed with a retryable RPC error. Retrying in ${delayMs}ms.`);
       await sleep(delayMs);
     }

@@ -33,8 +33,10 @@ This bot does not provide wallet washing, provenance hiding, mixer behavior, or 
    JUPITER_API_KEY=...
    FEE_WALLET=AUcSFZsCdawzfqa4KzHK1BHz1RDrBnj8CF5kxoy3NvxV
    BUNDLE_FEE_BPS=50
-   BUNDLE_CONCURRENCY=3
+   BUNDLE_CONCURRENCY=1
    BUY_RESERVE_SOL=0.01
+   RPC_DELAY_MS=800
+   RPC_RETRIES=8
    TELEGRAM_ADMIN_USER_IDS=123456789
    ```
 
@@ -59,7 +61,7 @@ Batch buy and sell use Jupiter Swap API v2, so you need a Jupiter API key from t
 
 Bundle buy and sell charge a 0.5% platform fee by default. `BUNDLE_FEE_BPS=50` means 50 basis points, which is 0.5%, and fees are sent to `FEE_WALLET`.
 
-`BUNDLE_CONCURRENCY=3` runs up to 3 wallet swaps at the same time. Raise carefully if your RPC/Jupiter plan can handle it. `BUY_RESERVE_SOL=0.01` is the recommended extra SOL per wallet for network fees and token-account creation around buys.
+`BUNDLE_CONCURRENCY=1` is the safest default for free/public RPCs. Raise it only if your RPC/Jupiter plan can handle it. `BUY_RESERVE_SOL=0.01` is the recommended extra SOL per wallet for network fees and token-account creation around buys.
 
 For bundle buys, fund each wallet with at least:
 
@@ -72,6 +74,10 @@ Example: buying `0.10 SOL` from 10 wallets with `BUY_RESERVE_SOL=0.01` needs abo
 Wallet import accepts a base58 private key, a JSON byte array like `[12,34,...]`, or a comma-separated 64-byte secret key. It does not accept seed phrases or public wallet addresses.
 
 `Sweep SOL` drains each selected wallet by estimating the network fee and sending `balance - fee`. This avoids the old rent error where a wallet was left with too little SOL to remain rent-exempt.
+
+In the buy amount step, users can type `max` to use each wallet's available SOL except the safety reserve.
+
+If you see `429 Too Many Requests`, your current Solana RPC is rate-limiting. Keep `BUNDLE_CONCURRENCY=1`, leave `RPC_DELAY_MS=800` or higher, and use a paid/private `SOLANA_RPC_URL` for reliable multi-wallet usage.
 
 `Emergency Key Export` sends raw private keys for the Telegram user's own bot wallets after an exact confirmation phrase. This is for recovery only. Anyone with that file can drain those wallets.
 
