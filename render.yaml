@@ -22,6 +22,10 @@ services:
         value: AUcSFZsCdawzfqa4KzHK1BHz1RDrBnj8CF5kxoy3NvxV
       - key: BUNDLE_FEE_BPS
         value: 50
+      - key: BUNDLE_CONCURRENCY
+        value: 3
+      - key: BUY_RESERVE_SOL
+        value: 0.01
       - key: DEFAULT_SLIPPAGE_BPS
         value: 100
       - key: PRIORITY_FEE_LAMPORTS

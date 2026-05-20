@@ -4,6 +4,7 @@ Telegram bot for legitimate, auditable Solana wallet operations:
 
 - Create/import managed wallets
 - Export/restore encrypted wallet backups
+- Emergency private key export for user-owned wallets
 - Fund managed wallets from an imported wallet
 - Batch buy a token through Jupiter
 - Batch sell a token through Jupiter
@@ -32,6 +33,8 @@ This bot does not provide wallet washing, provenance hiding, mixer behavior, or 
    JUPITER_API_KEY=...
    FEE_WALLET=AUcSFZsCdawzfqa4KzHK1BHz1RDrBnj8CF5kxoy3NvxV
    BUNDLE_FEE_BPS=50
+   BUNDLE_CONCURRENCY=3
+   BUY_RESERVE_SOL=0.01
    TELEGRAM_ADMIN_USER_IDS=123456789
    ```
 
@@ -45,6 +48,7 @@ This bot does not provide wallet washing, provenance hiding, mixer behavior, or 
 
 - `/start` - open the menu
 - `/wallets` - list managed wallets
+- `/balances` - show SOL and token balances for your wallets
 - `/cancel` - cancel the current flow
 
 The bot keeps encrypted key material and an audit log under `DATA_DIR`.
@@ -54,6 +58,24 @@ Set `TELEGRAM_ADMIN_USER_IDS` to your numeric Telegram user ID to show bot-wide 
 Batch buy and sell use Jupiter Swap API v2, so you need a Jupiter API key from the Jupiter developer portal.
 
 Bundle buy and sell charge a 0.5% platform fee by default. `BUNDLE_FEE_BPS=50` means 50 basis points, which is 0.5%, and fees are sent to `FEE_WALLET`.
+
+`BUNDLE_CONCURRENCY=3` runs up to 3 wallet swaps at the same time. Raise carefully if your RPC/Jupiter plan can handle it. `BUY_RESERVE_SOL=0.01` is the recommended extra SOL per wallet for network fees and token-account creation around buys.
+
+For bundle buys, fund each wallet with at least:
+
+```text
+buy amount per wallet + BUY_RESERVE_SOL
+```
+
+Example: buying `0.10 SOL` from 10 wallets with `BUY_RESERVE_SOL=0.01` needs about `1.10 SOL` across the 10 wallets, plus a little SOL in the source wallet for funding transaction fees.
+
+Wallet import accepts a base58 private key, a JSON byte array like `[12,34,...]`, or a comma-separated 64-byte secret key. It does not accept seed phrases or public wallet addresses.
+
+`Sweep SOL` drains each selected wallet by estimating the network fee and sending `balance - fee`. This avoids the old rent error where a wallet was left with too little SOL to remain rent-exempt.
+
+`Emergency Key Export` sends raw private keys for the Telegram user's own bot wallets after an exact confirmation phrase. This is for recovery only. Anyone with that file can drain those wallets.
+
+Quote failures usually mean Jupiter cannot build a route for the token/amount, liquidity is too low, slippage is too low, the wallet does not have enough SOL after fees, or Jupiter/RPC is rate-limiting the request.
 
 The Volume Alerts button is for legitimate monitoring. This bot does not run repeated buy/sell loops to manufacture volume.
 
@@ -86,7 +108,7 @@ DATA_DIR=./data
 ALLOW_EPHEMERAL_STORAGE=true
 ```
 
-But local files can reset whenever Render redeploys, restarts, or spins down the free instance. Users should tap **Export Backup** after creating/importing wallets, then use **Restore Backup** if the free service resets.
+But local files can reset whenever Render redeploys, restarts, or spins down the free instance. The bot automatically sends each user an encrypted backup file after wallet creation, wallet import, and wallet restore. Users can also tap **Export Backup** any time, then use **Restore Backup** if the free service resets.
 
 Keep `APP_SECRET` the same forever. Backups are encrypted with the bot's `APP_SECRET`; if that value changes, old backups and stored wallets cannot be restored.
 
@@ -119,6 +141,7 @@ https://your-service-name.onrender.com/healthz
 ```
 
 This can reduce idle spin-down, but Render Free can still restart services and local files can still reset. Keep using **Export Backup** after wallet changes.
+The bot also sends automatic backups after wallet create/import/restore, so users do not have to remember every time.
 
 ### Paid Persistent Option
 
@@ -137,6 +160,8 @@ Then attach a persistent disk with mount path `/var/data`. This avoids needing m
 - `render.yaml` does not contain private keys or bot secrets; sensitive values use `sync: false`.
 - Wallet private keys are encrypted before being written to `DATA_DIR`.
 - Wallet records are scoped by Telegram user ID, so users only see and operate their own managed wallets in the bot UI.
+- On Render Free, the bot automatically DMs encrypted backups after wallet creation/import/restore because local storage is ephemeral.
+- Users can also use Emergency Key Export to import bot-created wallets into Phantom/Solflare and move funds outside the bot.
 - `APP_SECRET` must stay stable, because it is the key used to decrypt stored wallets and backups.
 
 Health check URL:
