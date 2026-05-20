@@ -3,6 +3,7 @@
 Telegram bot for legitimate, auditable Solana wallet operations:
 
 - Create/import managed wallets
+- Export/restore encrypted wallet backups
 - Fund managed wallets from an imported wallet
 - Batch buy a token through Jupiter
 - Batch sell a token through Jupiter
@@ -58,7 +59,7 @@ The Volume Alerts button is for legitimate monitoring. This bot does not run rep
 
 ## Deploy On Render
 
-This repo includes `render.yaml` for a Render Web Service. The web service runs the Telegram polling bot and exposes `/healthz` so Render can health-check it.
+This repo includes `render.yaml` for a free Render Web Service. The web service runs Telegram webhook mode and exposes `/healthz` so Render can health-check it.
 
 1. Push this folder to a GitHub repo.
 2. In Render, choose **New > Blueprint** and select the repo.
@@ -67,6 +68,8 @@ This repo includes `render.yaml` for a Render Web Service. The web service runs 
 
    ```bash
    TELEGRAM_BOT_TOKEN=...
+   TELEGRAM_WEBHOOK_URL=https://your-service-name.onrender.com
+   KEEPALIVE_URL=https://your-service-name.onrender.com
    APP_SECRET=...
    JUPITER_API_KEY=...
    TELEGRAM_ADMIN_USER_IDS=123456789
@@ -74,11 +77,59 @@ This repo includes `render.yaml` for a Render Web Service. The web service runs 
 
 5. Deploy the service.
 
-`DATA_DIR` is set to `/var/data` in `render.yaml` and backed by a 1 GB Render disk. Wallets, audit logs, emergency-stop state, and the app-secret fingerprint are stored there, so normal Render restarts/redeploys will not reset wallets.
+### Free Render Storage Reality
 
-Do not remove the Render disk, change `DATA_DIR`, or regenerate `APP_SECRET` after wallets exist. The bot encrypts wallet keys with `APP_SECRET`; if that value changes, the bot now fails startup with a clear error instead of silently acting like wallets reset.
+Render Free web services cannot attach persistent disks. The bot can run for free with:
 
-Use a Render plan that supports persistent disks. The blueprint uses `starter` for that reason.
+```bash
+DATA_DIR=./data
+ALLOW_EPHEMERAL_STORAGE=true
+```
+
+But local files can reset whenever Render redeploys, restarts, or spins down the free instance. Users should tap **Export Backup** after creating/importing wallets, then use **Restore Backup** if the free service resets.
+
+Keep `APP_SECRET` the same forever. Backups are encrypted with the bot's `APP_SECRET`; if that value changes, old backups and stored wallets cannot be restored.
+
+### Webhook URL
+
+Free Render services spin down when idle. Telegram long polling will not reliably wake them, so this bot uses Telegram webhooks on Render.
+
+After Render gives you the public URL, set:
+
+```bash
+TELEGRAM_WEBHOOK_URL=https://your-service-name.onrender.com
+```
+
+`TELEGRAM_WEBHOOK_SECRET` should be a random secret. The Blueprint can generate it automatically.
+
+### Free Keep-Alive Ping
+
+The bot includes an optional keep-alive pinger for Render Free:
+
+```bash
+KEEPALIVE_ENABLED=true
+KEEPALIVE_URL=https://your-service-name.onrender.com
+KEEPALIVE_INTERVAL_MINUTES=10
+```
+
+It pings:
+
+```text
+https://your-service-name.onrender.com/healthz
+```
+
+This can reduce idle spin-down, but Render Free can still restart services and local files can still reset. Keep using **Export Backup** after wallet changes.
+
+### Paid Persistent Option
+
+For production, use a paid Render service with a persistent disk:
+
+```bash
+DATA_DIR=/var/data
+ALLOW_EPHEMERAL_STORAGE=false
+```
+
+Then attach a persistent disk with mount path `/var/data`. This avoids needing manual backup/restore after restarts.
 
 ## Key Safety
 
@@ -86,7 +137,7 @@ Use a Render plan that supports persistent disks. The blueprint uses `starter` f
 - `render.yaml` does not contain private keys or bot secrets; sensitive values use `sync: false`.
 - Wallet private keys are encrypted before being written to `DATA_DIR`.
 - Wallet records are scoped by Telegram user ID, so users only see and operate their own managed wallets in the bot UI.
-- `APP_SECRET` must stay stable, because it is the key used to decrypt stored wallets.
+- `APP_SECRET` must stay stable, because it is the key used to decrypt stored wallets and backups.
 
 Health check URL:
 

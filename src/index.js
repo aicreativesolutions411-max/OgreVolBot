@@ -30,6 +30,8 @@ const PUBLIC_MENU = [
   [{ text: "Create Wallet Set", callback_data: "create_wallets" }],
   [{ text: "Import Wallet", callback_data: "import_wallet" }],
   [{ text: "My Wallets", callback_data: "list_wallets" }],
+  [{ text: "Export Backup", callback_data: "export_backup" }],
+  [{ text: "Restore Backup", callback_data: "restore_backup" }],
   [{ text: "Fund Wallets", callback_data: "fund_wallets" }],
   [{ text: "Bundle Buy Token", callback_data: "batch_buy" }],
   [{ text: "Bundle Sell Token", callback_data: "batch_sell" }],
@@ -50,6 +52,8 @@ const PRIVATE_CHAT_ACTIONS = new Set([
   "create_wallets",
   "import_wallet",
   "list_wallets",
+  "export_backup",
+  "restore_backup",
   "fund_wallets",
   "batch_buy",
   "batch_sell",
@@ -61,6 +65,14 @@ const PRIVATE_CHAT_ACTIONS = new Set([
 async function main() {
   await ensureDataFiles();
   startHealthServer();
+  startKeepAlivePinger();
+
+  if (CONFIG.webhookUrl) {
+    await setupWebhook();
+    console.log("Telegram bot is running in webhook mode.");
+    return;
+  }
+
   await telegram("deleteWebhook", { drop_pending_updates: true });
   await sendLoop();
 }
@@ -97,7 +109,13 @@ function loadConfig() {
     rpcUrl: process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com",
     appSecret: secret,
     dataDir: path.resolve(process.cwd(), process.env.DATA_DIR || path.join(__dirname, "..", "data")),
+    allowEphemeralStorage: parseBoolean(process.env.ALLOW_EPHEMERAL_STORAGE || "false"),
     port: Number.parseInt(process.env.PORT || "0", 10),
+    webhookUrl: (process.env.TELEGRAM_WEBHOOK_URL || "").replace(/\/$/, ""),
+    webhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET || "",
+    keepAliveEnabled: parseBoolean(process.env.KEEPALIVE_ENABLED || "false"),
+    keepAliveUrl: (process.env.KEEPALIVE_URL || process.env.TELEGRAM_WEBHOOK_URL || "").replace(/\/$/, ""),
+    keepAliveIntervalMinutes: Number.parseInt(process.env.KEEPALIVE_INTERVAL_MINUTES || "10", 10),
     adminUserIds: parseAllowedUserIds(process.env.TELEGRAM_ADMIN_USER_IDS || process.env.TELEGRAM_ALLOWED_USER_IDS || ""),
     jupiterApiKey: process.env.JUPITER_API_KEY || "",
     jupiterApiBase: (process.env.JUPITER_API_BASE || "https://api.jup.ag/swap/v2").replace(/\/$/, ""),
@@ -108,10 +126,51 @@ function loadConfig() {
   };
 }
 
+function startKeepAlivePinger() {
+  if (!CONFIG.keepAliveEnabled) return;
+
+  if (!CONFIG.keepAliveUrl) {
+    console.warn("KEEPALIVE_ENABLED=true but KEEPALIVE_URL and TELEGRAM_WEBHOOK_URL are empty. Keep-alive pinger is disabled.");
+    return;
+  }
+
+  const intervalMinutes = Math.min(Math.max(CONFIG.keepAliveIntervalMinutes, 5), 14);
+  const intervalMs = intervalMinutes * 60 * 1000;
+  const target = `${CONFIG.keepAliveUrl}/healthz`;
+
+  const ping = async () => {
+    try {
+      const response = await fetch(target, {
+        headers: { "User-Agent": "solana-telegram-wallet-ops-bot-keepalive" }
+      });
+      console.log(`Keep-alive ping ${target}: ${response.status}`);
+    } catch (error) {
+      console.warn(`Keep-alive ping failed: ${error.message}`);
+    }
+  };
+
+  console.log(`Keep-alive pinger enabled. Pinging ${target} every ${intervalMinutes} minute(s).`);
+  setTimeout(ping, 30_000);
+  setInterval(ping, intervalMs);
+}
+
+async function setupWebhook() {
+  if (!CONFIG.webhookSecret) {
+    throw new Error("TELEGRAM_WEBHOOK_SECRET is required when TELEGRAM_WEBHOOK_URL is set.");
+  }
+
+  await telegram("setWebhook", {
+    url: `${CONFIG.webhookUrl}${webhookPath()}`,
+    secret_token: CONFIG.webhookSecret,
+    allowed_updates: ["message", "callback_query"],
+    drop_pending_updates: false
+  });
+}
+
 function startHealthServer() {
   if (!CONFIG.port) return;
 
-  const server = http.createServer((request, response) => {
+  const server = http.createServer(async (request, response) => {
     if (request.url === "/" || request.url === "/healthz") {
       response.writeHead(200, { "Content-Type": "application/json" });
       response.end(JSON.stringify({
@@ -119,6 +178,26 @@ function startHealthServer() {
         service: "solana-telegram-wallet-ops-bot",
         uptimeSeconds: Math.round(process.uptime())
       }));
+      return;
+    }
+
+    if (request.method === "POST" && request.url === webhookPath()) {
+      if (CONFIG.webhookSecret && request.headers["x-telegram-bot-api-secret-token"] !== CONFIG.webhookSecret) {
+        response.writeHead(403, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ ok: false, error: "forbidden" }));
+        return;
+      }
+
+      try {
+        const update = JSON.parse(await readRequestBody(request));
+        await handleUpdate(update);
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ ok: true }));
+      } catch (error) {
+        console.error("Webhook error:", error.message);
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ ok: true }));
+      }
       return;
     }
 
@@ -131,11 +210,28 @@ function startHealthServer() {
   });
 }
 
+function webhookPath() {
+  return `/telegram/webhook/${CONFIG.webhookSecret}`;
+}
+
+function readRequestBody(request) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    request.on("data", (chunk) => chunks.push(chunk));
+    request.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    request.on("error", reject);
+  });
+}
+
 function parseAllowedUserIds(value) {
   return value
     .split(",")
     .map((item) => Number.parseInt(item.trim(), 10))
     .filter((item) => Number.isInteger(item));
+}
+
+function parseBoolean(value) {
+  return ["1", "true", "yes", "on"].includes(String(value).toLowerCase());
 }
 
 function loadDotEnv() {
@@ -157,13 +253,46 @@ function loadDotEnv() {
 }
 
 async function ensureDataFiles() {
-  await fs.mkdir(CONFIG.dataDir, { recursive: true });
+  await ensureDataDir();
   await writeJsonIfMissing(walletPath(), { wallets: [] });
   await writeJsonIfMissing(auditPath(), { entries: [] });
   await writeJsonIfMissing(statePath(), { paused: false });
   await ensureAppSecretFingerprint();
   await assignUnownedWalletsToSingleAdmin();
   await validateStoredWalletSecrets();
+}
+
+async function ensureDataDir() {
+  try {
+    await fs.mkdir(CONFIG.dataDir, { recursive: true });
+    await fs.access(CONFIG.dataDir, fsSync.constants.R_OK | fsSync.constants.W_OK);
+  } catch (error) {
+    if (isPermissionError(error)) {
+      if (CONFIG.allowEphemeralStorage) {
+        const fallbackDir = path.resolve(process.cwd(), "data");
+        await fs.mkdir(fallbackDir, { recursive: true });
+        await fs.access(fallbackDir, fsSync.constants.R_OK | fsSync.constants.W_OK);
+        console.warn(`DATA_DIR ${CONFIG.dataDir} is not writable. Falling back to ephemeral storage at ${fallbackDir}. Wallet data can reset on free Render.`);
+        CONFIG.dataDir = fallbackDir;
+        return;
+      }
+
+      throw new Error([
+        `Cannot write DATA_DIR at ${CONFIG.dataDir}.`,
+        "On Render, this usually means the persistent disk is not mounted.",
+        "Fix: add a persistent disk to this Web Service with mount path /var/data, keep DATA_DIR=/var/data, and redeploy.",
+        "For free Render testing, set ALLOW_EPHEMERAL_STORAGE=true and use the bot's Export Backup button after wallet changes.",
+        "If you created a normal Web Service from Git instead of a Blueprint, render.yaml did not automatically attach the disk.",
+        "Do not change DATA_DIR to an ephemeral path for real wallets, or wallet data can reset on redeploy."
+      ].join(" "));
+    }
+
+    throw error;
+  }
+}
+
+function isPermissionError(error) {
+  return ["EACCES", "EPERM", "EROFS"].includes(error?.code);
 }
 
 async function writeJsonIfMissing(filePath, value) {
@@ -322,6 +451,13 @@ async function handleCallback(query, userId) {
     case "list_wallets":
       await listWallets(chatId, userId);
       break;
+    case "export_backup":
+      await exportWalletBackup(chatId, userId);
+      break;
+    case "restore_backup":
+      setSession(chatId, "restore_backup", userId);
+      await say(chatId, "Paste your encrypted backup text, or upload the backup .txt file I sent you.");
+      break;
     case "fund_wallets":
       setSession(chatId, "fund_source", userId);
       await say(chatId, await walletPrompt(userId, "Send the source wallet number. This source must be one of your managed wallets."));
@@ -375,6 +511,13 @@ async function handleCallback(query, userId) {
 async function handleMessage(message, userId) {
   const chatId = message.chat.id;
   const text = (message.text || "").trim();
+  const session = sessions.get(chatId);
+
+  if (message.document && session?.step === "restore_backup" && String(session.userId) === String(userId)) {
+    const backupText = await fetchTelegramFileText(message.document.file_id);
+    await continueFlow(chatId, backupText, session);
+    return;
+  }
 
   if (!text) return;
 
@@ -420,7 +563,6 @@ async function handleMessage(message, userId) {
     return;
   }
 
-  const session = sessions.get(chatId);
   if (!session) {
     await say(chatId, "Use /start to choose an action.");
     return;
@@ -458,6 +600,9 @@ async function continueFlow(chatId, text, session) {
         break;
       case "import_wallet_secret":
         await importWalletFlow(chatId, text, session);
+        break;
+      case "restore_backup":
+        await restoreWalletBackupFlow(chatId, text, session);
         break;
       case "fund_source":
         session.data.sourceIndex = parseWalletIndex(text);
@@ -627,6 +772,86 @@ async function importWalletFlow(chatId, text, session) {
 
   clearSession(chatId);
   await say(chatId, `Imported wallet ${session.data.label}: ${keypair.publicKey.toBase58()}`);
+  await showMenu(chatId, session.userId);
+}
+
+async function exportWalletBackup(chatId, userId) {
+  const store = await readWalletStore();
+  const wallets = walletsForOwner(store, userId);
+
+  if (wallets.length === 0) {
+    await say(chatId, "You do not have any wallets to back up yet.");
+    return;
+  }
+
+  const backup = encodeBackup({
+    version: 1,
+    createdAt: new Date().toISOString(),
+    walletCount: wallets.length,
+    wallets: wallets.map((wallet) => ({
+      label: wallet.label,
+      publicKey: wallet.publicKey,
+      secret: wallet.secret
+    }))
+  });
+
+  await sendDocument(
+    chatId,
+    `wallet-backup-${userId}-${new Date().toISOString().slice(0, 10)}.txt`,
+    backup
+  );
+  await say(chatId, "Backup exported. Keep this file private. It is encrypted with this bot's APP_SECRET, so restore only works if APP_SECRET stays the same.");
+}
+
+async function restoreWalletBackupFlow(chatId, text, session) {
+  const backup = decodeBackup(text);
+  if (backup.version !== 1 || !Array.isArray(backup.wallets)) {
+    throw new Error("Backup format is not valid.");
+  }
+
+  const store = await readWalletStore();
+  const existing = new Set(walletsForOwner(store, session.userId).map((wallet) => wallet.publicKey));
+  const restored = [];
+  let skipped = 0;
+
+  for (const wallet of backup.wallets) {
+    if (!wallet?.secret || !wallet?.publicKey) {
+      skipped += 1;
+      continue;
+    }
+
+    const keypair = decryptWallet({ secret: wallet.secret });
+    const publicKey = keypair.publicKey.toBase58();
+    if (publicKey !== wallet.publicKey) {
+      skipped += 1;
+      continue;
+    }
+
+    if (existing.has(publicKey)) {
+      skipped += 1;
+      continue;
+    }
+
+    store.wallets.push({
+      ownerId: session.userId,
+      label: cleanLabel(wallet.label || "Restored Wallet"),
+      publicKey,
+      secret: wallet.secret
+    });
+    existing.add(publicKey);
+    restored.push(publicKey);
+  }
+
+  await writeWalletStore(store);
+  await audit("restore_wallet_backup", {
+    chatId,
+    userId: session.userId,
+    restored: restored.length,
+    skipped
+  });
+
+  clearSession(chatId);
+  await say(chatId, `Restore complete. Restored ${restored.length} wallet(s). Skipped ${skipped}.`);
   await showMenu(chatId, session.userId);
 }
 
@@ -1197,6 +1422,33 @@ async function telegram(method, payload = {}) {
   });
 }
 
+async function sendDocument(chatId, filename, text) {
+  const form = new FormData();
+  form.append("chat_id", String(chatId));
+  form.append("document", new Blob([text], { type: "text/plain" }), filename);
+
+  const response = await fetch(`https://api.telegram.org/bot${CONFIG.telegramToken}/sendDocument`, {
+    method: "POST",
+    body: form
+  });
+  const data = await response.json();
+
+  if (!response.ok || !data.ok) {
+    throw new Error(data.description || "Telegram sendDocument failed");
+  }
+
+  return data.result;
+}
+
+async function fetchTelegramFileText(fileId) {
+  const file = await telegram("getFile", { file_id: fileId });
+  const response = await fetch(`https://api.telegram.org/file/bot${CONFIG.telegramToken}/${file.file_path}`);
+  if (!response.ok) {
+    throw new Error(`Could not download backup file: HTTP ${response.status}`);
+  }
+  return response.text();
+}
+
 async function fetchJson(url, init) {
   const response = await fetch(url, init);
   const text = await response.text();
@@ -1300,6 +1552,26 @@ function keypairFromSecret(text) {
   }
 
   return Keypair.fromSecretKey(bs58.decode(trimmed));
+}
+
+function encodeBackup(value) {
+  return Buffer.from(JSON.stringify(value), "utf8")
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function decodeBackup(text) {
+  const trimmed = text.trim();
+  if (trimmed.startsWith("{")) {
+    return JSON.parse(trimmed);
+  }
+
+  const compact = trimmed.replace(/\s+/g, "");
+  const base64 = compact.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
+  return JSON.parse(Buffer.from(padded, "base64").toString("utf8"));
 }
 
 function parseWalletIndex(text) {
