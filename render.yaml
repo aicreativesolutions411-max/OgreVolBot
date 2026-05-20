@@ -1,0 +1,38 @@
+services:
+  - type: web
+    name: solana-telegram-wallet-ops-bot
+    env: node
+    plan: starter
+    autoDeploy: true
+    buildCommand: npm ci
+    startCommand: npm run render-start
+    healthCheckPath: /healthz
+    disk:
+      name: wallet-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: DATA_DIR
+        value: /var/data
+      - key: SOLANA_RPC_URL
+        value: https://api.mainnet-beta.solana.com
+      - key: JUPITER_API_BASE
+        value: https://api.jup.ag/swap/v2
+      - key: FEE_WALLET
+        value: AUcSFZsCdawzfqa4KzHK1BHz1RDrBnj8CF5kxoy3NvxV
+      - key: BUNDLE_FEE_BPS
+        value: 50
+      - key: DEFAULT_SLIPPAGE_BPS
+        value: 100
+      - key: PRIORITY_FEE_LAMPORTS
+        value: 0
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: APP_SECRET
+        sync: false
+      - key: JUPITER_API_KEY
+        sync: false
+      - key: TELEGRAM_ALLOWED_USER_IDS
+        sync: false
