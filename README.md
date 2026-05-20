@@ -31,7 +31,7 @@ This bot does not provide wallet washing, provenance hiding, mixer behavior, or 
    JUPITER_API_KEY=...
    FEE_WALLET=AUcSFZsCdawzfqa4KzHK1BHz1RDrBnj8CF5kxoy3NvxV
    BUNDLE_FEE_BPS=50
-   TELEGRAM_ALLOWED_USER_IDS=123456789
+   TELEGRAM_ADMIN_USER_IDS=123456789
    ```
 
 4. Start the bot:
@@ -48,7 +48,7 @@ This bot does not provide wallet washing, provenance hiding, mixer behavior, or 
 
 The bot keeps encrypted key material and an audit log under `DATA_DIR`.
 
-Set `TELEGRAM_ALLOWED_USER_IDS` to your numeric Telegram user ID before using real funds. If it is blank, anyone who can message the bot can operate it.
+Set `TELEGRAM_ADMIN_USER_IDS` to your numeric Telegram user ID to show bot-wide admin controls like audit export and emergency stop. Public users can still use their own wallet/trading menu in DM.
 
 Batch buy and sell use Jupiter Swap API v2, so you need a Jupiter API key from the Jupiter developer portal.
 
@@ -69,7 +69,7 @@ This repo includes `render.yaml` for a Render Web Service. The web service runs 
    TELEGRAM_BOT_TOKEN=...
    APP_SECRET=...
    JUPITER_API_KEY=...
-   TELEGRAM_ALLOWED_USER_IDS=123456789
+   TELEGRAM_ADMIN_USER_IDS=123456789
    ```
 
 5. Deploy the service.
@@ -85,6 +85,7 @@ Use a Render plan that supports persistent disks. The blueprint uses `starter` f
 - `.env` and `data/` are ignored by Git.
 - `render.yaml` does not contain private keys or bot secrets; sensitive values use `sync: false`.
 - Wallet private keys are encrypted before being written to `DATA_DIR`.
+- Wallet records are scoped by Telegram user ID, so users only see and operate their own managed wallets in the bot UI.
 - `APP_SECRET` must stay stable, because it is the key used to decrypt stored wallets.
 
 Health check URL:

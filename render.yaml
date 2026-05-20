@@ -34,5 +34,5 @@ services:
         sync: false
       - key: JUPITER_API_KEY
         sync: false
-      - key: TELEGRAM_ALLOWED_USER_IDS
+      - key: TELEGRAM_ADMIN_USER_IDS
         sync: false

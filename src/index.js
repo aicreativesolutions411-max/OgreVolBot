@@ -26,21 +26,37 @@ const TOKEN_2022_PROGRAM_ID = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqC
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 
-const MAIN_MENU = [
+const PUBLIC_MENU = [
   [{ text: "Create Wallet Set", callback_data: "create_wallets" }],
   [{ text: "Import Wallet", callback_data: "import_wallet" }],
-  [{ text: "List Wallets", callback_data: "list_wallets" }],
+  [{ text: "My Wallets", callback_data: "list_wallets" }],
   [{ text: "Fund Wallets", callback_data: "fund_wallets" }],
   [{ text: "Bundle Buy Token", callback_data: "batch_buy" }],
   [{ text: "Bundle Sell Token", callback_data: "batch_sell" }],
   [{ text: "Volume Alerts", callback_data: "volume_alerts" }],
   [{ text: "Sweep SOL", callback_data: "sweep_sol" }],
   [{ text: "Sweep Tokens", callback_data: "sweep_tokens" }],
-  [{ text: "Close Empty Token Accounts", callback_data: "close_empty_accounts" }],
+  [{ text: "Close Empty Token Accounts", callback_data: "close_empty_accounts" }]
+];
+
+const ADMIN_MENU = [
   [{ text: "Export Audit Log", callback_data: "export_audit" }],
   [{ text: "Emergency Stop", callback_data: "emergency_stop" }],
   [{ text: "Unlock Bot", callback_data: "unlock_bot" }]
 ];
+
+const ADMIN_ACTIONS = new Set(["export_audit", "emergency_stop", "unlock_bot"]);
+const PRIVATE_CHAT_ACTIONS = new Set([
+  "create_wallets",
+  "import_wallet",
+  "list_wallets",
+  "fund_wallets",
+  "batch_buy",
+  "batch_sell",
+  "sweep_sol",
+  "sweep_tokens",
+  "close_empty_accounts"
+]);
 
 async function main() {
   await ensureDataFiles();
@@ -82,7 +98,7 @@ function loadConfig() {
     appSecret: secret,
     dataDir: path.resolve(process.cwd(), process.env.DATA_DIR || path.join(__dirname, "..", "data")),
     port: Number.parseInt(process.env.PORT || "0", 10),
-    allowedUserIds: parseAllowedUserIds(process.env.TELEGRAM_ALLOWED_USER_IDS || ""),
+    adminUserIds: parseAllowedUserIds(process.env.TELEGRAM_ADMIN_USER_IDS || process.env.TELEGRAM_ALLOWED_USER_IDS || ""),
     jupiterApiKey: process.env.JUPITER_API_KEY || "",
     jupiterApiBase: (process.env.JUPITER_API_BASE || "https://api.jup.ag/swap/v2").replace(/\/$/, ""),
     feeWallet,
@@ -146,6 +162,7 @@ async function ensureDataFiles() {
   await writeJsonIfMissing(auditPath(), { entries: [] });
   await writeJsonIfMissing(statePath(), { paused: false });
   await ensureAppSecretFingerprint();
+  await assignUnownedWalletsToSingleAdmin();
   await validateStoredWalletSecrets();
 }
 
@@ -211,6 +228,25 @@ async function validateStoredWalletSecrets() {
   }
 }
 
+async function assignUnownedWalletsToSingleAdmin() {
+  const store = await readWalletStore();
+  const unowned = store.wallets.filter((wallet) => wallet.ownerId === undefined || wallet.ownerId === null);
+
+  if (unowned.length === 0) return;
+
+  if (CONFIG.adminUserIds.length !== 1) {
+    console.warn("Found wallets without ownerId. They are hidden until TELEGRAM_ADMIN_USER_IDS has exactly one admin for migration.");
+    return;
+  }
+
+  for (const wallet of unowned) {
+    wallet.ownerId = CONFIG.adminUserIds[0];
+  }
+
+  await writeWalletStore(store);
+  console.log(`Assigned ${unowned.length} existing wallet(s) to admin ${CONFIG.adminUserIds[0]}.`);
+}
+
 function appSecretFingerprint() {
   return crypto.createHash("sha256").update(CONFIG.appSecret).digest("hex");
 }
@@ -240,26 +276,34 @@ async function sendLoop() {
 
 async function handleUpdate(update) {
   const user = update.callback_query?.from || update.message?.from;
-  const chatId = update.callback_query?.message?.chat?.id || update.message?.chat?.id;
-
-  if (!isAuthorized(user?.id)) {
-    if (chatId) await say(chatId, "This bot is not authorized for your Telegram account.");
+  if (!user?.id) {
     return;
   }
 
   if (update.callback_query) {
-    await handleCallback(update.callback_query);
+    await handleCallback(update.callback_query, user.id);
     return;
   }
 
   if (update.message) {
-    await handleMessage(update.message);
+    await handleMessage(update.message, user.id);
   }
 }
 
-async function handleCallback(query) {
+async function handleCallback(query, userId) {
   const chatId = query.message.chat.id;
+  const chat = query.message.chat;
   await telegram("answerCallbackQuery", { callback_query_id: query.id });
+
+  if (ADMIN_ACTIONS.has(query.data) && !isAdmin(userId)) {
+    await say(chatId, "Only bot admins can use that control.");
+    return;
+  }
+
+  if (PRIVATE_CHAT_ACTIONS.has(query.data) && !isPrivateChat(chat)) {
+    await say(chatId, "Open this bot in DM to use wallet and trading features. That keeps wallet prompts out of group chat.");
+    return;
+  }
 
   if (await isPausedActionBlocked(query.data)) {
     await say(chatId, "Emergency stop is active. Use Unlock Bot to re-enable transaction flows.");
@@ -268,26 +312,26 @@ async function handleCallback(query) {
 
   switch (query.data) {
     case "create_wallets":
-      setSession(chatId, "create_wallets_label");
+      setSession(chatId, "create_wallets_label", userId);
       await say(chatId, "Send a label for this wallet set.");
       break;
     case "import_wallet":
-      setSession(chatId, "import_wallet_label");
+      setSession(chatId, "import_wallet_label", userId);
       await say(chatId, "Send a label for this wallet.");
       break;
     case "list_wallets":
-      await listWallets(chatId);
+      await listWallets(chatId, userId);
       break;
     case "fund_wallets":
-      setSession(chatId, "fund_source");
-      await say(chatId, await walletPrompt("Send the source wallet number. This source must be one of your imported managed wallets."));
+      setSession(chatId, "fund_source", userId);
+      await say(chatId, await walletPrompt(userId, "Send the source wallet number. This source must be one of your managed wallets."));
       break;
     case "batch_buy":
-      setSession(chatId, "buy_token");
+      setSession(chatId, "buy_token", userId);
       await say(chatId, "Send the token mint address you want to buy.");
       break;
     case "batch_sell":
-      setSession(chatId, "sell_token");
+      setSession(chatId, "sell_token", userId);
       await say(chatId, "Send the token mint address you want to sell from all selected wallets.");
       break;
     case "volume_alerts":
@@ -299,16 +343,16 @@ async function handleCallback(query) {
       ].join("\n"));
       break;
     case "sweep_sol":
-      setSession(chatId, "sweep_sol_destination");
+      setSession(chatId, "sweep_sol_destination", userId);
       await say(chatId, "Send the destination wallet address for swept SOL.");
       break;
     case "sweep_tokens":
-      setSession(chatId, "sweep_tokens_destination");
+      setSession(chatId, "sweep_tokens_destination", userId);
       await say(chatId, "Send the destination wallet address for swept SPL tokens.");
       break;
     case "close_empty_accounts":
-      setSession(chatId, "close_empty_accounts_wallets");
-      await say(chatId, await walletPrompt("Send wallet numbers to check, separated by commas, or `all`."));
+      setSession(chatId, "close_empty_accounts_wallets", userId);
+      await say(chatId, await walletPrompt(userId, "Send wallet numbers to check, separated by commas, or `all`."));
       break;
     case "export_audit":
       await exportAudit(chatId);
@@ -320,7 +364,7 @@ async function handleCallback(query) {
       await say(chatId, "Emergency stop is active. Transaction flows are locked.");
       break;
     case "unlock_bot":
-      setSession(chatId, "unlock_confirm");
+      setSession(chatId, "unlock_confirm", userId);
       await say(chatId, "Reply `yes` to unlock transaction flows, or `/cancel`.");
       break;
     default:
@@ -328,7 +372,7 @@ async function handleCallback(query) {
   }
 }
 
-async function handleMessage(message) {
+async function handleMessage(message, userId) {
   const chatId = message.chat.id;
   const text = (message.text || "").trim();
 
@@ -336,30 +380,42 @@ async function handleMessage(message) {
 
   if (text === "/start" || text === "/menu") {
     clearSession(chatId);
-    await showMenu(chatId);
+    await showMenu(chatId, userId);
     return;
   }
 
   if (text === "/cancel") {
     clearSession(chatId);
     await say(chatId, "Current flow canceled.");
-    await showMenu(chatId);
+    await showMenu(chatId, userId);
     return;
   }
 
   if (text === "/wallets") {
-    await listWallets(chatId);
+    if (!isPrivateChat(message.chat)) {
+      await say(chatId, "Open this bot in DM to view your wallets.");
+      return;
+    }
+    await listWallets(chatId, userId);
     return;
   }
 
   if (text === "/bundle" || text === "/buy") {
-    setSession(chatId, "buy_token");
+    if (!isPrivateChat(message.chat)) {
+      await say(chatId, "Open this bot in DM to use bundle buy.");
+      return;
+    }
+    setSession(chatId, "buy_token", userId);
     await say(chatId, "Send the token mint address you want to bundle buy.");
     return;
   }
 
   if (text === "/sell") {
-    setSession(chatId, "sell_token");
+    if (!isPrivateChat(message.chat)) {
+      await say(chatId, "Open this bot in DM to use bundle sell.");
+      return;
+    }
+    setSession(chatId, "sell_token", userId);
     await say(chatId, "Send the token mint address you want to bundle sell.");
     return;
   }
@@ -367,6 +423,11 @@ async function handleMessage(message) {
   const session = sessions.get(chatId);
   if (!session) {
     await say(chatId, "Use /start to choose an action.");
+    return;
+  }
+
+  if (String(session.userId) !== String(userId)) {
+    await say(chatId, "That active flow belongs to another Telegram user. Use /cancel and start your own flow in DM.");
     return;
   }
 
@@ -401,10 +462,10 @@ async function continueFlow(chatId, text, session) {
       case "fund_source":
         session.data.sourceIndex = parseWalletIndex(text);
         session.step = "fund_targets";
-        await say(chatId, await walletPrompt("Send target wallet numbers separated by commas, or `all`."));
+        await say(chatId, await walletPrompt(session.userId, "Send target wallet numbers separated by commas, or `all`."));
         break;
       case "fund_targets":
-        session.data.targetIndexes = await parseWalletSelection(text, { exclude: [session.data.sourceIndex] });
+        session.data.targetIndexes = await parseWalletSelection(text, session.userId, { exclude: [session.data.sourceIndex] });
         session.step = "fund_amount";
         await say(chatId, "Send SOL amount per target wallet.");
         break;
@@ -419,10 +480,10 @@ async function continueFlow(chatId, text, session) {
       case "buy_token":
         session.data.tokenMint = parsePublicKey(text).toBase58();
         session.step = "buy_wallets";
-        await say(chatId, await walletPrompt("Send buyer wallet numbers separated by commas, or `all`."));
+        await say(chatId, await walletPrompt(session.userId, "Send buyer wallet numbers separated by commas, or `all`."));
         break;
       case "buy_wallets":
-        session.data.walletIndexes = await parseWalletSelection(text);
+        session.data.walletIndexes = await parseWalletSelection(text, session.userId);
         session.step = "buy_amount";
         await say(chatId, "Send SOL amount to spend per wallet.");
         break;
@@ -442,10 +503,10 @@ async function continueFlow(chatId, text, session) {
       case "sell_token":
         session.data.tokenMint = parsePublicKey(text).toBase58();
         session.step = "sell_wallets";
-        await say(chatId, await walletPrompt("Send seller wallet numbers separated by commas, or `all`."));
+        await say(chatId, await walletPrompt(session.userId, "Send seller wallet numbers separated by commas, or `all`."));
         break;
       case "sell_wallets":
-        session.data.walletIndexes = await parseWalletSelection(text);
+        session.data.walletIndexes = await parseWalletSelection(text, session.userId);
         session.step = "sell_percent";
         await say(chatId, "Send percent to sell from each wallet, from 1 to 100.");
         break;
@@ -465,10 +526,10 @@ async function continueFlow(chatId, text, session) {
       case "sweep_sol_destination":
         session.data.destination = parsePublicKey(text).toBase58();
         session.step = "sweep_sol_wallets";
-        await say(chatId, await walletPrompt("Send wallet numbers to sweep, separated by commas, or `all`."));
+        await say(chatId, await walletPrompt(session.userId, "Send wallet numbers to sweep, separated by commas, or `all`."));
         break;
       case "sweep_sol_wallets":
-        session.data.walletIndexes = await parseWalletSelection(text);
+        session.data.walletIndexes = await parseWalletSelection(text, session.userId);
         session.step = "sweep_sol_confirm";
         await say(chatId, formatSweepSolConfirm(session.data));
         break;
@@ -478,10 +539,10 @@ async function continueFlow(chatId, text, session) {
       case "sweep_tokens_destination":
         session.data.destination = parsePublicKey(text).toBase58();
         session.step = "sweep_tokens_wallets";
-        await say(chatId, await walletPrompt("Send wallet numbers to sweep tokens from, separated by commas, or `all`."));
+        await say(chatId, await walletPrompt(session.userId, "Send wallet numbers to sweep tokens from, separated by commas, or `all`."));
         break;
       case "sweep_tokens_wallets":
-        session.data.walletIndexes = await parseWalletSelection(text);
+        session.data.walletIndexes = await parseWalletSelection(text, session.userId);
         session.step = "sweep_tokens_mint";
         await say(chatId, "Send a token mint to sweep, or type `all` to sweep every SPL token found.");
         break;
@@ -494,7 +555,7 @@ async function continueFlow(chatId, text, session) {
         await confirmOrCancel(chatId, text, () => sweepTokensFlow(chatId, session));
         break;
       case "close_empty_accounts_wallets":
-        session.data.walletIndexes = await parseWalletSelection(text);
+        session.data.walletIndexes = await parseWalletSelection(text, session.userId);
         session.step = "close_empty_accounts_confirm";
         await say(chatId, formatCloseAccountsConfirm(session.data));
         break;
@@ -502,7 +563,7 @@ async function continueFlow(chatId, text, session) {
         await confirmOrCancel(chatId, text, () => closeEmptyAccountsFlow(chatId, session));
         break;
       case "unlock_confirm":
-        await confirmOrCancel(chatId, text, () => unlockBotFlow(chatId), { allowWhilePaused: true });
+        await confirmOrCancel(chatId, text, () => unlockBotFlow(chatId, session.userId), { allowWhilePaused: true });
         break;
       default:
         clearSession(chatId);
@@ -513,12 +574,12 @@ async function continueFlow(chatId, text, session) {
   }
 }
 
-async function unlockBotFlow(chatId) {
+async function unlockBotFlow(chatId, userId) {
   await setPaused(false);
   await audit("unlock_bot", { chatId });
   clearSession(chatId);
   await say(chatId, "Bot unlocked. Transaction flows are enabled.");
-  await showMenu(chatId);
+  await showMenu(chatId, userId);
 }
 
 async function createWalletsFlow(chatId, text, session) {
@@ -533,13 +594,14 @@ async function createWalletsFlow(chatId, text, session) {
   for (let index = 1; index <= count; index += 1) {
     const keypair = Keypair.generate();
     const label = `${session.data.label} ${index}`;
-    store.wallets.push(walletRecord(label, keypair));
+    store.wallets.push(walletRecord(label, keypair, session.userId));
     created.push(`${label}: ${keypair.publicKey.toBase58()}`);
   }
 
   await writeWalletStore(store);
   await audit("create_wallet_set", {
     chatId,
+    userId: session.userId,
     label: session.data.label,
     count,
     publicKeys: created
@@ -547,36 +609,37 @@ async function createWalletsFlow(chatId, text, session) {
 
   clearSession(chatId);
   await say(chatId, `Created ${count} wallet(s):\n\n${created.join("\n")}`);
-  await showMenu(chatId);
+  await showMenu(chatId, session.userId);
 }
 
 async function importWalletFlow(chatId, text, session) {
   const keypair = keypairFromSecret(text);
   const store = await readWalletStore();
-  store.wallets.push(walletRecord(session.data.label, keypair));
+  store.wallets.push(walletRecord(session.data.label, keypair, session.userId));
   await writeWalletStore(store);
 
   await audit("import_wallet", {
     chatId,
+    userId: session.userId,
     label: session.data.label,
     publicKey: keypair.publicKey.toBase58()
   });
 
   clearSession(chatId);
   await say(chatId, `Imported wallet ${session.data.label}: ${keypair.publicKey.toBase58()}`);
-  await showMenu(chatId);
+  await showMenu(chatId, session.userId);
 }
 
 async function fundWalletsFlow(chatId, session) {
   const store = await readWalletStore();
-  const source = getWalletAt(store, session.data.sourceIndex);
+  const source = getWalletAt(store, session.data.sourceIndex, session.userId);
   const sourceKeypair = decryptWallet(source);
   const amountLamports = solToLamports(session.data.amountSol);
   const results = [];
 
   for (const targetIndex of session.data.targetIndexes) {
     try {
-      const target = getWalletAt(store, targetIndex);
+      const target = getWalletAt(store, targetIndex, session.userId);
       const tx = new Transaction().add(
         SystemProgram.transfer({
           fromPubkey: sourceKeypair.publicKey,
@@ -593,20 +656,21 @@ async function fundWalletsFlow(chatId, session) {
 
   await audit("fund_wallets", {
     chatId,
+    userId: session.userId,
     source: publicWallet(source),
-    targets: session.data.targetIndexes.map((index) => publicWallet(getWalletAt(store, index))),
+    targets: session.data.targetIndexes.map((index) => publicWallet(getWalletAt(store, index, session.userId))),
     amountSol: session.data.amountSol,
     signatures: results
   });
 
   clearSession(chatId);
   await say(chatId, `Funding complete:\n\n${results.join("\n")}`);
-  await showMenu(chatId);
+  await showMenu(chatId, session.userId);
 }
 
 async function batchBuyFlow(chatId, session) {
   const store = await readWalletStore();
-  const wallets = session.data.walletIndexes.map((index) => getWalletAt(store, index));
+  const wallets = session.data.walletIndexes.map((index) => getWalletAt(store, index, session.userId));
   const amountLamports = solToLamports(session.data.amountSol);
   const feeLamports = calculateFeeLamports(amountLamports);
   const swapLamports = amountLamports - feeLamports;
@@ -641,6 +705,7 @@ async function batchBuyFlow(chatId, session) {
 
   await audit("batch_buy_token", {
     chatId,
+    userId: session.userId,
     tokenMint: session.data.tokenMint,
     amountSolPerWallet: session.data.amountSol,
     netSwapSolPerWallet: lamportsToSol(swapLamports),
@@ -654,12 +719,12 @@ async function batchBuyFlow(chatId, session) {
 
   clearSession(chatId);
   await say(chatId, `Batch buy complete:\n\n${results.join("\n")}`);
-  await showMenu(chatId);
+  await showMenu(chatId, session.userId);
 }
 
 async function batchSellFlow(chatId, session) {
   const store = await readWalletStore();
-  const wallets = session.data.walletIndexes.map((index) => getWalletAt(store, index));
+  const wallets = session.data.walletIndexes.map((index) => getWalletAt(store, index, session.userId));
   const results = [];
 
   for (const wallet of wallets) {
@@ -701,6 +766,7 @@ async function batchSellFlow(chatId, session) {
 
   await audit("batch_sell_token", {
     chatId,
+    userId: session.userId,
     tokenMint: session.data.tokenMint,
     percent: session.data.percent,
     feeWallet: CONFIG.feeWallet,
@@ -712,7 +778,7 @@ async function batchSellFlow(chatId, session) {
 
   clearSession(chatId);
   await say(chatId, `Batch sell complete:\n\n${results.join("\n")}`);
-  await showMenu(chatId);
+  await showMenu(chatId, session.userId);
 }
 
 async function sweepSolFlow(chatId, session) {
@@ -721,7 +787,7 @@ async function sweepSolFlow(chatId, session) {
   const results = [];
   const reserveLamports = 10_000;
 
-  for (const wallet of session.data.walletIndexes.map((index) => getWalletAt(store, index))) {
+  for (const wallet of session.data.walletIndexes.map((index) => getWalletAt(store, index, session.userId))) {
     try {
       const keypair = decryptWallet(wallet);
       const balance = await connection.getBalance(keypair.publicKey, "confirmed");
@@ -748,6 +814,7 @@ async function sweepSolFlow(chatId, session) {
 
   await audit("sweep_sol", {
     chatId,
+    userId: session.userId,
     destination: session.data.destination,
     walletIndexes: session.data.walletIndexes,
     results
@@ -755,7 +822,7 @@ async function sweepSolFlow(chatId, session) {
 
   clearSession(chatId);
   await say(chatId, `SOL sweep complete:\n\n${results.join("\n")}`);
-  await showMenu(chatId);
+  await showMenu(chatId, session.userId);
 }
 
 async function sweepTokensFlow(chatId, session) {
@@ -763,7 +830,7 @@ async function sweepTokensFlow(chatId, session) {
   const destination = new PublicKey(session.data.destination);
   const results = [];
 
-  for (const wallet of session.data.walletIndexes.map((index) => getWalletAt(store, index))) {
+  for (const wallet of session.data.walletIndexes.map((index) => getWalletAt(store, index, session.userId))) {
     try {
       const keypair = decryptWallet(wallet);
       const tokenAccounts = await getOwnedTokenAccounts(keypair.publicKey);
@@ -826,6 +893,7 @@ async function sweepTokensFlow(chatId, session) {
 
   await audit("sweep_tokens", {
     chatId,
+    userId: session.userId,
     destination: session.data.destination,
     tokenMint: session.data.tokenMint,
     walletIndexes: session.data.walletIndexes,
@@ -834,14 +902,14 @@ async function sweepTokensFlow(chatId, session) {
 
   clearSession(chatId);
   await say(chatId, `Token sweep complete:\n\n${results.join("\n") || "No tokens swept."}`);
-  await showMenu(chatId);
+  await showMenu(chatId, session.userId);
 }
 
 async function closeEmptyAccountsFlow(chatId, session) {
   const store = await readWalletStore();
   const results = [];
 
-  for (const wallet of session.data.walletIndexes.map((index) => getWalletAt(store, index))) {
+  for (const wallet of session.data.walletIndexes.map((index) => getWalletAt(store, index, session.userId))) {
     try {
       const keypair = decryptWallet(wallet);
       const emptyAccounts = (await getOwnedTokenAccounts(keypair.publicKey)).filter((account) => account.rawAmount === 0n);
@@ -877,13 +945,14 @@ async function closeEmptyAccountsFlow(chatId, session) {
 
   await audit("close_empty_token_accounts", {
     chatId,
+    userId: session.userId,
     walletIndexes: session.data.walletIndexes,
     results
   });
 
   clearSession(chatId);
   await say(chatId, `Close accounts complete:\n\n${results.join("\n")}`);
-  await showMenu(chatId);
+  await showMenu(chatId, session.userId);
 }
 
 async function executeJupiterSwap({ signer, inputMint, outputMint, amount, slippageBps }) {
@@ -1067,15 +1136,16 @@ function createCloseAccountInstruction(account, destination, owner, signers = []
   });
 }
 
-async function listWallets(chatId) {
+async function listWallets(chatId, userId) {
   const store = await readWalletStore();
-  if (store.wallets.length === 0) {
-    await say(chatId, "No wallets are managed yet.");
+  const wallets = walletsForOwner(store, userId);
+  if (wallets.length === 0) {
+    await say(chatId, "You do not have any managed wallets yet.");
     return;
   }
 
-  const lines = store.wallets.map((wallet, index) => `${index + 1}. ${wallet.label}\n${wallet.publicKey}`);
-  await say(chatId, `Managed wallets:\n\n${lines.join("\n\n")}`);
+  const lines = wallets.map((wallet, index) => `${index + 1}. ${wallet.label}\n${wallet.publicKey}`);
+  await say(chatId, `Your managed wallets:\n\n${lines.join("\n\n")}`);
 }
 
 async function exportAudit(chatId) {
@@ -1086,18 +1156,20 @@ async function exportAudit(chatId) {
   await say(chatId, latest.length ? `Last ${latest.length} audit entries:\n\n${latest.join("\n")}` : "Audit log is empty.");
 }
 
-async function walletPrompt(prefix) {
+async function walletPrompt(userId, prefix) {
   const store = await readWalletStore();
-  const lines = store.wallets.map((wallet, index) => `${index + 1}. ${wallet.label} - ${wallet.publicKey}`);
-  return `${prefix}\n\n${lines.join("\n") || "No wallets are managed yet."}`;
+  const wallets = walletsForOwner(store, userId);
+  const lines = wallets.map((wallet, index) => `${index + 1}. ${wallet.label} - ${wallet.publicKey}`);
+  return `${prefix}\n\n${lines.join("\n") || "You do not have any managed wallets yet."}`;
 }
 
-async function showMenu(chatId) {
+async function showMenu(chatId, userId) {
   const state = await readState();
+  const menu = isAdmin(userId) ? [...PUBLIC_MENU, ...ADMIN_MENU] : PUBLIC_MENU;
   await telegram("sendMessage", {
     chat_id: chatId,
     text: `${state.paused ? "Status: emergency stop active.\n\n" : ""}Choose a wallet operation:`,
-    reply_markup: { inline_keyboard: MAIN_MENU }
+    reply_markup: { inline_keyboard: menu }
   });
 }
 
@@ -1172,8 +1244,9 @@ async function setPaused(paused) {
   await fs.writeFile(statePath(), JSON.stringify(state, null, 2));
 }
 
-function walletRecord(label, keypair) {
+function walletRecord(label, keypair, ownerId) {
   return {
+    ownerId,
     label,
     publicKey: keypair.publicKey.toBase58(),
     secret: encryptSecret(Buffer.from(keypair.secretKey))
@@ -1237,13 +1310,14 @@ function parseWalletIndex(text) {
   return index;
 }
 
-async function parseWalletSelection(text, options = {}) {
+async function parseWalletSelection(text, userId, options = {}) {
   const store = await readWalletStore();
+  const wallets = walletsForOwner(store, userId);
   const exclude = new Set(options.exclude || []);
   let indexes;
 
   if (text.trim().toLowerCase() === "all") {
-    indexes = store.wallets.map((_, index) => index + 1);
+    indexes = wallets.map((_, index) => index + 1);
   } else {
     indexes = text
       .split(",")
@@ -1258,18 +1332,22 @@ async function parseWalletSelection(text, options = {}) {
   }
 
   for (const index of indexes) {
-    getWalletAt(store, index);
+    getWalletAt(store, index, userId);
   }
 
   return indexes;
 }
 
-function getWalletAt(store, oneBasedIndex) {
-  const wallet = store.wallets[oneBasedIndex - 1];
+function getWalletAt(store, oneBasedIndex, userId) {
+  const wallet = walletsForOwner(store, userId)[oneBasedIndex - 1];
   if (!wallet) {
     throw new Error(`Wallet ${oneBasedIndex} does not exist.`);
   }
   return wallet;
+}
+
+function walletsForOwner(store, userId) {
+  return store.wallets.filter((wallet) => String(wallet.ownerId) === String(userId));
 }
 
 function parsePublicKey(text) {
@@ -1417,8 +1495,12 @@ async function confirmOrCancel(chatId, text, onConfirm, options = {}) {
   await onConfirm();
 }
 
-function isAuthorized(userId) {
-  return CONFIG.allowedUserIds.length === 0 || CONFIG.allowedUserIds.includes(userId);
+function isAdmin(userId) {
+  return CONFIG.adminUserIds.includes(userId);
+}
+
+function isPrivateChat(chat) {
+  return chat?.type === "private";
 }
 
 async function isPausedActionBlocked(action) {
@@ -1426,8 +1508,8 @@ async function isPausedActionBlocked(action) {
   return (await readState()).paused && !allowedWhilePaused.has(action);
 }
 
-function setSession(chatId, step) {
-  sessions.set(chatId, { step, data: {} });
+function setSession(chatId, step, userId) {
+  sessions.set(chatId, { step, userId, data: {} });
 }
 
 function clearSession(chatId) {
