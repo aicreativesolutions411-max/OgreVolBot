@@ -20,6 +20,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const CONFIG = loadConfig();
 const connection = new Connection(CONFIG.rpcUrl, "confirmed");
+const rpcLimiter = createRpcLimiter();
+const jupiterLimiter = createJupiterLimiter();
 const sessions = new Map();
 const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const TOKEN_2022_PROGRAM_ID = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
@@ -100,8 +102,13 @@ function loadConfig() {
   const bundleFeeBps = Number.parseInt(process.env.BUNDLE_FEE_BPS || "50", 10);
   const bundleConcurrency = Number.parseInt(process.env.BUNDLE_CONCURRENCY || "1", 10);
   const buyReserveSol = Number.parseFloat(process.env.BUY_RESERVE_SOL || "0.01");
-  const rpcDelayMs = Number.parseInt(process.env.RPC_DELAY_MS || "800", 10);
-  const rpcRetries = Number.parseInt(process.env.RPC_RETRIES || "8", 10);
+  const rpcDelayMs = Number.parseInt(process.env.RPC_DELAY_MS || "1500", 10);
+  const rpcRetries = Number.parseInt(process.env.RPC_RETRIES || "10", 10);
+  const rpcMinIntervalMs = Number.parseInt(process.env.RPC_MIN_INTERVAL_MS || "1200", 10);
+  const rpc429CooldownMs = Number.parseInt(process.env.RPC_429_COOLDOWN_MS || "15000", 10);
+  const jupiterMinIntervalMs = Number.parseInt(process.env.JUPITER_MIN_INTERVAL_MS || "1200", 10);
+  const jupiterRetries = Number.parseInt(process.env.JUPITER_RETRIES || "5", 10);
+  const jupiter429CooldownMs = Number.parseInt(process.env.JUPITER_429_COOLDOWN_MS || "15000", 10);
 
   if (!Number.isInteger(bundleFeeBps) || bundleFeeBps < 0 || bundleFeeBps > 1000) {
     throw new Error("BUNDLE_FEE_BPS must be an integer from 0 to 1000.");
@@ -121,6 +128,26 @@ function loadConfig() {
 
   if (!Number.isInteger(rpcRetries) || rpcRetries < 0 || rpcRetries > 20) {
     throw new Error("RPC_RETRIES must be an integer from 0 to 20.");
+  }
+
+  if (!Number.isInteger(rpcMinIntervalMs) || rpcMinIntervalMs < 0 || rpcMinIntervalMs > 30_000) {
+    throw new Error("RPC_MIN_INTERVAL_MS must be an integer from 0 to 30000.");
+  }
+
+  if (!Number.isInteger(rpc429CooldownMs) || rpc429CooldownMs < 0 || rpc429CooldownMs > 120_000) {
+    throw new Error("RPC_429_COOLDOWN_MS must be an integer from 0 to 120000.");
+  }
+
+  if (!Number.isInteger(jupiterMinIntervalMs) || jupiterMinIntervalMs < 0 || jupiterMinIntervalMs > 30_000) {
+    throw new Error("JUPITER_MIN_INTERVAL_MS must be an integer from 0 to 30000.");
+  }
+
+  if (!Number.isInteger(jupiterRetries) || jupiterRetries < 0 || jupiterRetries > 20) {
+    throw new Error("JUPITER_RETRIES must be an integer from 0 to 20.");
+  }
+
+  if (!Number.isInteger(jupiter429CooldownMs) || jupiter429CooldownMs < 0 || jupiter429CooldownMs > 120_000) {
+    throw new Error("JUPITER_429_COOLDOWN_MS must be an integer from 0 to 120000.");
   }
 
   try {
@@ -151,6 +178,11 @@ function loadConfig() {
     buyReserveSol,
     rpcDelayMs,
     rpcRetries,
+    rpcMinIntervalMs,
+    rpc429CooldownMs,
+    jupiterMinIntervalMs,
+    jupiterRetries,
+    jupiter429CooldownMs,
     defaultSlippageBps: Number.parseInt(process.env.DEFAULT_SLIPPAGE_BPS || "100", 10),
     priorityFeeLamports: Number.parseInt(process.env.PRIORITY_FEE_LAMPORTS || "0", 10)
   };
@@ -220,9 +252,11 @@ function startHealthServer() {
 
       try {
         const update = JSON.parse(await readRequestBody(request));
-        await handleUpdate(update);
         response.writeHead(200, { "Content-Type": "application/json" });
         response.end(JSON.stringify({ ok: true }));
+        void handleUpdate(update).catch((error) => {
+          console.error("Webhook update error:", error.message);
+        });
       } catch (error) {
         console.error("Webhook error:", error.message);
         response.writeHead(200, { "Content-Type": "application/json" });
@@ -963,7 +997,13 @@ async function exportPrivateKeys(chatId, userId) {
 }
 
 async function restoreWalletBackupFlow(chatId, text, session) {
-  const backup = decodeBackup(text);
+  let backup;
+  try {
+    backup = decodeBackup(text);
+  } catch {
+    throw new Error("Could not read that backup. Upload the .txt backup file the bot sent, or paste the full backup text without editing it.");
+  }
+
   if (backup.version !== 1 || !Array.isArray(backup.wallets)) {
     throw new Error("Backup format is not valid.");
   }
@@ -1390,9 +1430,9 @@ async function executeJupiterSwap({ signer, inputMint, outputMint, amount, slipp
     orderUrl.searchParams.set("priorityFeeLamports", String(CONFIG.priorityFeeLamports));
   }
 
-  const order = await fetchJson(orderUrl, {
+  const order = await jupiterFetchJson(orderUrl, {
     headers: jupiterHeaders()
-  });
+  }, "Jupiter order");
 
   if (!order?.transaction) {
     throw new Error(order?.errorMessage || order?.error || "Jupiter could not build a quote/order. Check the token mint, liquidity, slippage, API key/rate limits, and wallet SOL balance.");
@@ -1401,7 +1441,7 @@ async function executeJupiterSwap({ signer, inputMint, outputMint, amount, slipp
   const tx = VersionedTransaction.deserialize(Buffer.from(order.transaction, "base64"));
   tx.sign([signer]);
 
-  const execute = await fetchJson(`${CONFIG.jupiterApiBase}/execute`, {
+  const execute = await jupiterFetchJson(`${CONFIG.jupiterApiBase}/execute`, {
     method: "POST",
     headers: jupiterHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({
@@ -1409,7 +1449,7 @@ async function executeJupiterSwap({ signer, inputMint, outputMint, amount, slipp
       requestId: order.requestId,
       lastValidBlockHeight: order.lastValidBlockHeight
     })
-  });
+  }, "Jupiter execute");
 
   if (execute.status && execute.status !== "Success") {
     throw new Error(execute.error || `Jupiter execute failed with code ${execute.code ?? "unknown"}.`);
@@ -1483,7 +1523,7 @@ async function getTokenBalanceForMint(owner, mint) {
 }
 
 async function getMintDecimals(mint) {
-  const response = await connection.getParsedAccountInfo(mint, "confirmed");
+  const response = await rpcWithRetry("get mint account", () => connection.getParsedAccountInfo(mint, "confirmed"));
   const data = response.value?.data;
   const decimals = data && "parsed" in data ? data.parsed?.info?.decimals : null;
 
@@ -1689,12 +1729,7 @@ function quickStartText() {
     "The bot checks token balances first. If a wallet shows 0, it cannot sell that token.",
     "",
     "6. Withdraw SOL",
-    "Use Withdraw SOL to send SOL out. Latest version drains balance - network fee to avoid rent errors.",
-    "",
-    "Common errors:",
-    "- RPC rate limit: wait, select fewer wallets, or use paid/private SOLANA_RPC_URL.",
-    "- No quote: token has no Jupiter route/liquidity, wrong mint, amount too small, or slippage too low.",
-    "- Not enough SOL: add SOL or type `max` in the buy amount step."
+    "Use Withdraw SOL to send SOL out. Latest version drains balance - network fee to avoid rent errors."
   ].join("\n");
 }
 
@@ -1769,10 +1804,21 @@ async function fetchTelegramFileText(fileId) {
 async function fetchJson(url, init) {
   const response = await fetch(url, init);
   const text = await response.text();
-  const data = text ? JSON.parse(text) : {};
+  let data = {};
+
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { error: text.slice(0, 300) };
+    }
+  }
 
   if (!response.ok) {
-    throw new Error(data.error || data.description || `HTTP ${response.status}`);
+    const error = new Error(data.error || data.description || `HTTP ${response.status}`);
+    error.status = response.status;
+    error.retryAfter = response.headers.get("retry-after");
+    throw error;
   }
 
   return data;
@@ -1928,15 +1974,43 @@ function encodeBackup(value) {
 }
 
 function decodeBackup(text) {
-  const trimmed = text.trim();
-  if (trimmed.startsWith("{")) {
-    return JSON.parse(trimmed);
+  const normalized = normalizeBackupText(text);
+  const jsonCandidate = extractJsonObject(normalized);
+
+  if (jsonCandidate) {
+    return JSON.parse(jsonCandidate);
   }
 
-  const compact = trimmed.replace(/\s+/g, "");
+  const compact = normalized.replace(/[^A-Za-z0-9+/=_-]/g, "");
+  if (!compact) {
+    throw new Error("Backup is empty.");
+  }
+
   const base64 = compact.replace(/-/g, "+").replace(/_/g, "/");
   const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
   return JSON.parse(Buffer.from(padded, "base64").toString("utf8"));
+}
+
+function normalizeBackupText(text) {
+  return String(text)
+    .replace(/^\uFEFF/, "")
+    .replace(/^\s*```(?:json|txt|text)?\s*/i, "")
+    .replace(/\s*```\s*$/i, "")
+    .replace(/^\s*Backup(?: file| text)?:\s*/i, "")
+    .trim()
+    .replace(/^["']|["']$/g, "")
+    .trim();
+}
+
+function extractJsonObject(text) {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+
+  if (start === -1 || end === -1 || end <= start) {
+    return null;
+  }
+
+  return text.slice(start, end + 1);
 }
 
 function parseWalletIndex(text) {
@@ -2218,7 +2292,7 @@ function friendlyError(error) {
   const message = formatError(error);
 
   if (message.includes("429") || /too many requests|rate limit/i.test(message)) {
-    return "RPC rate limit. Try again in a minute, reduce selected wallets, or use a paid/private SOLANA_RPC_URL.";
+    return "Rate limit after automatic retries. The bot slowed down and queued requests, but the RPC or Jupiter endpoint is still throttling. Use fewer wallets, wait a minute, or upgrade SOLANA_RPC_URL/Jupiter limits for reliable batches.";
   }
 
   if (/failed to get quote|could not build a quote|quote\/order|No routes/i.test(message)) {
@@ -2241,11 +2315,15 @@ async function rpcWithRetry(label, operation, retries = CONFIG.rpcRetries) {
 
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     try {
-      return await operation();
+      return await rpcLimiter.schedule(label, operation);
     } catch (error) {
       lastError = error;
       if (!isRetryableRpcError(error) || attempt === retries) break;
-      const delayMs = CONFIG.rpcDelayMs * (attempt + 1);
+      if (CONFIG.rpc429CooldownMs > 0) {
+        rpcLimiter.cooldown(CONFIG.rpc429CooldownMs);
+      }
+      const jitterMs = Math.floor(Math.random() * 250);
+      const delayMs = CONFIG.rpcDelayMs * (attempt + 1) + jitterMs;
       console.warn(`${label} failed with a retryable RPC error. Retrying in ${delayMs}ms.`);
       await sleep(delayMs);
     }
@@ -2254,9 +2332,98 @@ async function rpcWithRetry(label, operation, retries = CONFIG.rpcRetries) {
   throw lastError;
 }
 
+async function jupiterFetchJson(url, init, label, retries = CONFIG.jupiterRetries) {
+  let lastError;
+
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      return await jupiterLimiter.schedule(label, () => fetchJson(url, init));
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableServiceError(error) || attempt === retries) break;
+      const retryAfterMs = parseRetryAfterMs(error.retryAfter);
+      if (CONFIG.jupiter429CooldownMs > 0) {
+        jupiterLimiter.cooldown(Math.max(CONFIG.jupiter429CooldownMs, retryAfterMs));
+      }
+      const jitterMs = Math.floor(Math.random() * 250);
+      const delayMs = Math.max(CONFIG.jupiterMinIntervalMs, retryAfterMs) + (CONFIG.jupiterMinIntervalMs * attempt) + jitterMs;
+      console.warn(`${label} failed with a retryable API error. Retrying in ${delayMs}ms.`);
+      await sleep(delayMs);
+    }
+  }
+
+  throw lastError;
+}
+
+function createRpcLimiter() {
+  let gate = Promise.resolve();
+  let nextStartAt = 0;
+  let cooldownUntil = 0;
+
+  return {
+    async schedule(_label, operation) {
+      const waitTurn = gate.then(async () => {
+        const waitMs = Math.max(0, nextStartAt - Date.now(), cooldownUntil - Date.now());
+        if (waitMs > 0) {
+          await sleep(waitMs);
+        }
+        nextStartAt = Date.now() + CONFIG.rpcMinIntervalMs;
+      });
+      gate = waitTurn.catch(() => {});
+      await waitTurn;
+      return operation();
+    },
+    cooldown(milliseconds) {
+      cooldownUntil = Math.max(cooldownUntil, Date.now() + milliseconds);
+    }
+  };
+}
+
+function createJupiterLimiter() {
+  let gate = Promise.resolve();
+  let nextStartAt = 0;
+  let cooldownUntil = 0;
+
+  return {
+    async schedule(_label, operation) {
+      const waitTurn = gate.then(async () => {
+        const waitMs = Math.max(0, nextStartAt - Date.now(), cooldownUntil - Date.now());
+        if (waitMs > 0) {
+          await sleep(waitMs);
+        }
+        nextStartAt = Date.now() + CONFIG.jupiterMinIntervalMs;
+      });
+      gate = waitTurn.catch(() => {});
+      await waitTurn;
+      return operation();
+    },
+    cooldown(milliseconds) {
+      cooldownUntil = Math.max(cooldownUntil, Date.now() + milliseconds);
+    }
+  };
+}
+
 function isRetryableRpcError(error) {
   const message = formatError(error);
   return message.includes("429") || /too many requests/i.test(message) || /rate limit/i.test(message);
+}
+
+function isRetryableServiceError(error) {
+  const status = Number(error?.status);
+  const message = formatError(error);
+  return status === 429
+    || [500, 502, 503, 504].includes(status)
+    || /too many requests|rate limit|temporarily unavailable|fetch failed|network/i.test(message);
+}
+
+function parseRetryAfterMs(value) {
+  if (!value) return 0;
+  const seconds = Number.parseFloat(value);
+  if (Number.isFinite(seconds)) {
+    return Math.max(0, Math.floor(seconds * 1000));
+  }
+  const dateMs = Date.parse(value);
+  return Number.isFinite(dateMs) ? Math.max(0, dateMs - Date.now()) : 0;
 }
 
 function sleep(ms) {

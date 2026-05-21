@@ -18,6 +18,12 @@ services:
         value: https://api.mainnet-beta.solana.com
       - key: JUPITER_API_BASE
         value: https://api.jup.ag/swap/v2
+      - key: JUPITER_MIN_INTERVAL_MS
+        value: 1200
+      - key: JUPITER_RETRIES
+        value: 5
+      - key: JUPITER_429_COOLDOWN_MS
+        value: 15000
       - key: FEE_WALLET
         value: AUcSFZsCdawzfqa4KzHK1BHz1RDrBnj8CF5kxoy3NvxV
       - key: BUNDLE_FEE_BPS
@@ -26,10 +32,14 @@ services:
         value: 1
       - key: BUY_RESERVE_SOL
         value: 0.01
+      - key: RPC_MIN_INTERVAL_MS
+        value: 1200
       - key: RPC_DELAY_MS
-        value: 800
+        value: 1500
       - key: RPC_RETRIES
-        value: 8
+        value: 10
+      - key: RPC_429_COOLDOWN_MS
+        value: 15000
       - key: DEFAULT_SLIPPAGE_BPS
         value: 100
       - key: PRIORITY_FEE_LAMPORTS

@@ -31,12 +31,17 @@ This bot does not provide wallet washing, provenance hiding, mixer behavior, or 
    SOLANA_RPC_URL=...
    APP_SECRET=...
    JUPITER_API_KEY=...
+   JUPITER_MIN_INTERVAL_MS=1200
+   JUPITER_RETRIES=5
+   JUPITER_429_COOLDOWN_MS=15000
    FEE_WALLET=AUcSFZsCdawzfqa4KzHK1BHz1RDrBnj8CF5kxoy3NvxV
    BUNDLE_FEE_BPS=50
    BUNDLE_CONCURRENCY=1
    BUY_RESERVE_SOL=0.01
-   RPC_DELAY_MS=800
-   RPC_RETRIES=8
+   RPC_MIN_INTERVAL_MS=1200
+   RPC_DELAY_MS=1500
+   RPC_RETRIES=10
+   RPC_429_COOLDOWN_MS=15000
    TELEGRAM_ADMIN_USER_IDS=123456789
    ```
 
@@ -61,7 +66,7 @@ Batch buy and sell use Jupiter Swap API v2, so you need a Jupiter API key from t
 
 Bundle buy and sell charge a 0.5% platform fee by default. `BUNDLE_FEE_BPS=50` means 50 basis points, which is 0.5%, and fees are sent to `FEE_WALLET`.
 
-`BUNDLE_CONCURRENCY=1` is the safest default for free/public RPCs. Raise it only if your RPC/Jupiter plan can handle it. `BUY_RESERVE_SOL=0.01` is the recommended extra SOL per wallet for network fees and token-account creation around buys.
+`BUNDLE_CONCURRENCY=1` is the safest default for free/public RPCs. Raise it only if your RPC/Jupiter plan can handle it. The bot also has a global RPC queue controlled by `RPC_MIN_INTERVAL_MS`, `RPC_DELAY_MS`, `RPC_RETRIES`, and `RPC_429_COOLDOWN_MS`, plus a Jupiter queue controlled by `JUPITER_MIN_INTERVAL_MS`, `JUPITER_RETRIES`, and `JUPITER_429_COOLDOWN_MS`. This keeps multiple users/actions from hammering the same endpoints at once. `BUY_RESERVE_SOL=0.01` is the recommended extra SOL per wallet for network fees and token-account creation around buys.
 
 For bundle buys, fund each wallet with at least:
 
@@ -77,7 +82,7 @@ Wallet import accepts a base58 private key, a JSON byte array like `[12,34,...]`
 
 In the buy amount step, users can type `max` to use each wallet's available SOL except the safety reserve.
 
-If you see `429 Too Many Requests`, your current Solana RPC is rate-limiting. Keep `BUNDLE_CONCURRENCY=1`, leave `RPC_DELAY_MS=800` or higher, and use a paid/private `SOLANA_RPC_URL` for reliable multi-wallet usage.
+If you still see `429 Too Many Requests`, your current Solana RPC or Jupiter plan is rate-limiting even after the bot queues and slows requests. Keep `BUNDLE_CONCURRENCY=1`, keep `RPC_MIN_INTERVAL_MS=1200` and `JUPITER_MIN_INTERVAL_MS=1200` or higher, and use a paid/private `SOLANA_RPC_URL` plus higher Jupiter limits for reliable multi-wallet usage. Public `https://api.mainnet-beta.solana.com` is not reliable for production batches.
 
 `Emergency Key Export` sends raw private keys for the Telegram user's own bot wallets after an exact confirmation phrase. This is for recovery only. Anyone with that file can drain those wallets.
 
@@ -98,6 +103,7 @@ This repo includes `render.yaml` for a free Render Web Service. The web service 
    TELEGRAM_BOT_TOKEN=...
    TELEGRAM_WEBHOOK_URL=https://your-service-name.onrender.com
    KEEPALIVE_URL=https://your-service-name.onrender.com
+   SOLANA_RPC_URL=https://your-private-mainnet-rpc
    APP_SECRET=...
    JUPITER_API_KEY=...
    TELEGRAM_ADMIN_USER_IDS=123456789
