@@ -8,6 +8,7 @@ Telegram bot for legitimate, auditable Solana wallet operations:
 - Fund managed wallets from an imported wallet
 - Batch buy a token through Jupiter
 - Batch sell a token through Jupiter
+- Timed trade plans: buy now, sell later by timer, take-profit, or stop-loss
 - Sweep SOL to a destination wallet
 - Sweep SPL tokens to a destination wallet
 - Close empty token accounts
@@ -42,6 +43,8 @@ This bot does not provide wallet washing, provenance hiding, mixer behavior, or 
    RPC_DELAY_MS=1500
    RPC_RETRIES=10
    RPC_429_COOLDOWN_MS=15000
+   KEEPALIVE_ENABLED=true
+   KEEPALIVE_INTERVAL_MINUTES=5
    TELEGRAM_ADMIN_USER_IDS=123456789
    ```
 
@@ -93,7 +96,24 @@ If Telegram file upload is failing, users can paste recovery text instead. Resto
 
 Quote failures usually mean Jupiter cannot build a route for the token/amount, liquidity is too low, slippage is too low, the wallet does not have enough SOL after fees, or Jupiter/RPC is rate-limiting the request.
 
-The Volume Alerts button is for legitimate monitoring. This bot does not run repeated buy/sell loops to manufacture volume.
+The main menu shows this as **Volume**. Under the hood it is a timed trade plan: it buys a token now from selected user wallets, then sells later when one of the user's configured exits triggers:
+
+- Timer exit, such as sell 15 minutes after buy
+- Take-profit, such as sell if estimated value is up 25%
+- Stop-loss, such as sell if estimated value is down 10%
+
+Wallet selection supports wallet numbers, `all`, or a wallet group like `group: ogretest`. The bot checks plans about once per minute while the service is awake. If Render was asleep, it catches up when the service wakes and the local data still exists.
+
+This is a position-management feature for the user's own wallets. It does not run repeated buy/sell loops to manufacture volume.
+
+Menu and buy-flow messages include:
+
+```text
+Powered by Ogres
+Telegram: https://t.me/ogrecoinonsol
+Website: https://ogremode.com/
+Twitter: https://twitter.com/i/communities/1930265213917425858
+```
 
 ## Deploy On Render
 
@@ -148,7 +168,7 @@ The bot includes an optional keep-alive pinger for Render Free:
 ```bash
 KEEPALIVE_ENABLED=true
 KEEPALIVE_URL=https://your-service-name.onrender.com
-KEEPALIVE_INTERVAL_MINUTES=10
+KEEPALIVE_INTERVAL_MINUTES=5
 ```
 
 It pings:
@@ -157,8 +177,21 @@ It pings:
 https://your-service-name.onrender.com/healthz
 ```
 
-This can reduce idle spin-down, but Render Free can still restart services and local files can still reset. Keep using **Export Backup** after wallet changes.
-The bot also sends automatic backups after wallet create/import/restore, so users do not have to remember every time.
+The health server also responds on `/healthz`, `/readyz`, and `/wake`. The `/healthz` response includes uptime, data directory, webhook mode, and the latest keep-alive ping status.
+
+Important Render Free detail: an in-app keep-alive only runs while the service is already awake. For the free setup, also use an external uptime monitor such as UptimeRobot, Better Stack, cron-job.org, or any service that sends an HTTP GET to:
+
+```text
+https://your-service-name.onrender.com/healthz
+```
+
+Set the external monitor to every 5 minutes. Render Free can still restart services and local files can still reset. Keep using backups.
+
+The bot sends automatic encrypted `.txt` backup files after wallet create/import/restore, so users do not have to remember every time. It sends a Telegram document, not pasted backup code in chat. Automatic wallet-group backup filenames include the wallet group label, for example:
+
+```text
+wallet-backup-ogretest-123456789-2026-05-21.txt
+```
 
 ### Paid Persistent Option
 

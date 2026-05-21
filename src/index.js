@@ -23,10 +23,25 @@ const connection = new Connection(CONFIG.rpcUrl, "confirmed");
 const rpcLimiter = createRpcLimiter();
 const jupiterLimiter = createJupiterLimiter();
 const sessions = new Map();
+const startedAt = new Date();
+let lastKeepAliveStatus = {
+  enabled: false,
+  target: null,
+  lastPingAt: null,
+  lastStatus: null,
+  lastError: null
+};
+let tradePlanRunnerActive = false;
 const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const TOKEN_2022_PROGRAM_ID = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 const SOL_MINT = "So11111111111111111111111111111111111111112";
+const BRAND_FOOTER = [
+  "Powered by Ogres",
+  "Telegram: https://t.me/ogrecoinonsol",
+  "Website: https://ogremode.com/",
+  "Twitter: https://twitter.com/i/communities/1930265213917425858"
+].join("\n");
 
 const PUBLIC_MENU = [
   [{ text: "Start Here / Requirements", callback_data: "quick_start" }],
@@ -38,10 +53,10 @@ const PUBLIC_MENU = [
   [{ text: "Fund Wallets", callback_data: "fund_wallets" }],
   [{ text: "Bundle Buy Token", callback_data: "batch_buy" }],
   [{ text: "Bundle Sell Token", callback_data: "batch_sell" }],
+  [{ text: "Volume", callback_data: "timed_trade_plans" }],
   [{ text: "Withdraw SOL", callback_data: "sweep_sol" }],
   [{ text: "Sweep Tokens", callback_data: "sweep_tokens" }],
-  [{ text: "Close Empty Token Accounts", callback_data: "close_empty_accounts" }],
-  [{ text: "Volume Alerts", callback_data: "volume_alerts" }]
+  [{ text: "Close Empty Token Accounts", callback_data: "close_empty_accounts" }]
 ];
 
 const ADMIN_MENU = [
@@ -65,6 +80,7 @@ const PRIVATE_CHAT_ACTIONS = new Set([
   "fund_wallets",
   "batch_buy",
   "batch_sell",
+  "timed_trade_plans",
   "sweep_sol",
   "sweep_tokens",
   "close_empty_accounts"
@@ -74,6 +90,7 @@ async function main() {
   await ensureDataFiles();
   startHealthServer();
   startKeepAlivePinger();
+  startTradePlanRunner();
 
   if (CONFIG.webhookUrl) {
     await setupWebhook();
@@ -168,7 +185,7 @@ function loadConfig() {
     webhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET || "",
     keepAliveEnabled: parseBoolean(process.env.KEEPALIVE_ENABLED || "false"),
     keepAliveUrl: (process.env.KEEPALIVE_URL || process.env.TELEGRAM_WEBHOOK_URL || "").replace(/\/$/, ""),
-    keepAliveIntervalMinutes: Number.parseInt(process.env.KEEPALIVE_INTERVAL_MINUTES || "10", 10),
+    keepAliveIntervalMinutes: Number.parseInt(process.env.KEEPALIVE_INTERVAL_MINUTES || "5", 10),
     adminUserIds: parseAllowedUserIds(process.env.TELEGRAM_ADMIN_USER_IDS || process.env.TELEGRAM_ALLOWED_USER_IDS || ""),
     jupiterApiKey: process.env.JUPITER_API_KEY || "",
     jupiterApiBase: (process.env.JUPITER_API_BASE || "https://api.jup.ag/swap/v2").replace(/\/$/, ""),
@@ -190,24 +207,32 @@ function loadConfig() {
 }
 
 function startKeepAlivePinger() {
+  lastKeepAliveStatus.enabled = CONFIG.keepAliveEnabled;
   if (!CONFIG.keepAliveEnabled) return;
 
   if (!CONFIG.keepAliveUrl) {
     console.warn("KEEPALIVE_ENABLED=true but KEEPALIVE_URL and TELEGRAM_WEBHOOK_URL are empty. Keep-alive pinger is disabled.");
+    lastKeepAliveStatus.lastError = "KEEPALIVE_URL and TELEGRAM_WEBHOOK_URL are empty";
     return;
   }
 
   const intervalMinutes = Math.min(Math.max(CONFIG.keepAliveIntervalMinutes, 5), 14);
   const intervalMs = intervalMinutes * 60 * 1000;
   const target = `${CONFIG.keepAliveUrl}/healthz`;
+  lastKeepAliveStatus.target = target;
 
   const ping = async () => {
+    lastKeepAliveStatus.lastPingAt = new Date().toISOString();
     try {
       const response = await fetch(target, {
         headers: { "User-Agent": "solana-telegram-wallet-ops-bot-keepalive" }
       });
+      lastKeepAliveStatus.lastStatus = response.status;
+      lastKeepAliveStatus.lastError = null;
       console.log(`Keep-alive ping ${target}: ${response.status}`);
     } catch (error) {
+      lastKeepAliveStatus.lastStatus = null;
+      lastKeepAliveStatus.lastError = error.message;
       console.warn(`Keep-alive ping failed: ${error.message}`);
     }
   };
@@ -215,6 +240,16 @@ function startKeepAlivePinger() {
   console.log(`Keep-alive pinger enabled. Pinging ${target} every ${intervalMinutes} minute(s).`);
   setTimeout(ping, 30_000);
   setInterval(ping, intervalMs);
+}
+
+function startTradePlanRunner() {
+  setTimeout(() => void processTradePlans().catch((error) => {
+    console.error("Trade plan runner failed:", error.message);
+  }), 45_000);
+
+  setInterval(() => void processTradePlans().catch((error) => {
+    console.error("Trade plan runner failed:", error.message);
+  }), 60_000);
 }
 
 async function setupWebhook() {
@@ -234,17 +269,23 @@ function startHealthServer() {
   if (!CONFIG.port) return;
 
   const server = http.createServer(async (request, response) => {
-    if (request.url === "/" || request.url === "/healthz") {
+    const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
+
+    if (["/", "/healthz", "/readyz", "/wake"].includes(requestUrl.pathname)) {
       response.writeHead(200, { "Content-Type": "application/json" });
       response.end(JSON.stringify({
         ok: true,
         service: "solana-telegram-wallet-ops-bot",
-        uptimeSeconds: Math.round(process.uptime())
+        startedAt: startedAt.toISOString(),
+        uptimeSeconds: Math.round(process.uptime()),
+        dataDir: CONFIG.dataDir,
+        webhookMode: Boolean(CONFIG.webhookUrl),
+        keepAlive: lastKeepAliveStatus
       }));
       return;
     }
 
-    if (request.method === "POST" && request.url === webhookPath()) {
+    if (request.method === "POST" && requestUrl.pathname === webhookPath()) {
       if (CONFIG.webhookSecret && request.headers["x-telegram-bot-api-secret-token"] !== CONFIG.webhookSecret) {
         response.writeHead(403, { "Content-Type": "application/json" });
         response.end(JSON.stringify({ ok: false, error: "forbidden" }));
@@ -322,6 +363,7 @@ async function ensureDataFiles() {
   await writeJsonIfMissing(walletPath(), { wallets: [] });
   await writeJsonIfMissing(auditPath(), { entries: [] });
   await writeJsonIfMissing(statePath(), { paused: false });
+  await writeJsonIfMissing(tradePlansPath(), { plans: [] });
   await ensureAppSecretFingerprint();
   await assignUnownedWalletsToSingleAdmin();
   await validateStoredWalletSecrets();
@@ -378,6 +420,10 @@ function auditPath() {
 
 function statePath() {
   return path.join(CONFIG.dataDir, "state.json");
+}
+
+function tradePlansPath() {
+  return path.join(CONFIG.dataDir, "trade-plans.json");
 }
 
 function appSecretFingerprintPath() {
@@ -558,19 +604,15 @@ async function handleCallback(query, userId) {
       break;
     case "batch_buy":
       setSession(chatId, "buy_token", userId);
-      await say(chatId, "Send the token mint address you want to buy.");
+      await say(chatId, withBrandFooter("Send the token mint address you want to buy."));
       break;
     case "batch_sell":
       setSession(chatId, "sell_token", userId);
       await say(chatId, "Send the token mint address you want to sell from all selected wallets.");
       break;
-    case "volume_alerts":
-      await say(chatId, [
-        "Volume Alerts are the safe version of this feature.",
-        "",
-        "I can track real volume spikes, trending moves, and watched-token activity.",
-        "I cannot run repeated buy/sell loops to manufacture volume."
-      ].join("\n"));
+    case "timed_trade_plans":
+      setSession(chatId, "plan_token", userId);
+      await say(chatId, timedTradePlanIntroText());
       break;
     case "sweep_sol":
       setSession(chatId, "sweep_sol_destination", userId);
@@ -675,7 +717,7 @@ async function handleMessage(message, userId) {
       return;
     }
     setSession(chatId, "buy_token", userId);
-    await say(chatId, "Send the token mint address you want to bundle buy.");
+    await say(chatId, withBrandFooter("Send the token mint address you want to bundle buy."));
     return;
   }
 
@@ -830,7 +872,7 @@ async function continueFlow(chatId, text, session) {
           "- `max` means use each wallet's available SOL except the safety reserve",
           "",
           `Safety reserve kept for fees: ${CONFIG.buyReserveSol} SOL per wallet`
-        ].join("\n"));
+        ].concat("", BRAND_FOOTER).join("\n"));
         break;
       case "buy_amount":
         if (["max", "all"].includes(text.trim().toLowerCase())) {
@@ -840,12 +882,12 @@ async function continueFlow(chatId, text, session) {
           session.data.amountSol = parsePositiveNumber(text);
         }
         session.step = "buy_slippage";
-        await say(chatId, `Send slippage in basis points, or type default for ${CONFIG.defaultSlippageBps} bps.`);
+        await say(chatId, withBrandFooter(`Send slippage in basis points, or type default for ${CONFIG.defaultSlippageBps} bps.`));
         break;
       case "buy_slippage":
         session.data.slippageBps = parseSlippage(text);
         session.step = "buy_confirm";
-        await say(chatId, formatBuyConfirm(session.data));
+        await say(chatId, withBrandFooter(formatBuyConfirm(session.data)));
         break;
       case "buy_confirm":
         await confirmOrCancel(chatId, text, () => batchBuyFlow(chatId, session));
@@ -872,6 +914,50 @@ async function continueFlow(chatId, text, session) {
         break;
       case "sell_confirm":
         await confirmOrCancel(chatId, text, () => batchSellFlow(chatId, session));
+        break;
+      case "plan_token":
+        session.data.tokenMint = parsePublicKey(text).toBase58();
+        session.step = "plan_wallets";
+        await say(chatId, await walletPrompt(session.userId, "Send wallet numbers, `all`, or `group: group name` for the timed trade plan."));
+        break;
+      case "plan_wallets":
+        session.data.walletIndexes = await parseWalletSelectionOrGroup(text, session.userId);
+        session.data.walletSelector = text.trim();
+        session.step = "plan_buy_amount";
+        await say(chatId, "Send SOL amount to buy per wallet. Timed plans use a fixed amount, for example `0.05`.");
+        break;
+      case "plan_buy_amount":
+        session.data.amountSol = parsePositiveNumber(text);
+        session.step = "plan_sell_delay";
+        await say(chatId, "Send how many minutes after the buy to sell. Example: `15` sells after 15 minutes.");
+        break;
+      case "plan_sell_delay":
+        session.data.sellDelayMinutes = parseDelayMinutes(text);
+        session.step = "plan_sell_percent";
+        await say(chatId, "Send percent to sell when the timer, take-profit, or stop-loss triggers. Example: `100`.");
+        break;
+      case "plan_sell_percent":
+        session.data.sellPercent = parsePercent(text);
+        session.step = "plan_take_profit";
+        await say(chatId, "Send take-profit percent up, or `0` / `off` to disable. Example: `25` sells when estimated value is about +25%.");
+        break;
+      case "plan_take_profit":
+        session.data.takeProfitPct = parseOptionalTriggerPercent(text);
+        session.step = "plan_stop_loss";
+        await say(chatId, "Send stop-loss percent down, or `0` / `off` to disable. Example: `10` sells when estimated value is about -10%.");
+        break;
+      case "plan_stop_loss":
+        session.data.stopLossPct = parseOptionalTriggerPercent(text);
+        session.step = "plan_slippage";
+        await say(chatId, `Send slippage in basis points, or type default for ${CONFIG.defaultSlippageBps} bps.`);
+        break;
+      case "plan_slippage":
+        session.data.slippageBps = parseSlippage(text);
+        session.step = "plan_confirm";
+        await say(chatId, withBrandFooter(formatTimedTradePlanConfirm(session.data)));
+        break;
+      case "plan_confirm":
+        await confirmOrCancel(chatId, text, () => createTimedTradePlanFlow(chatId, session));
         break;
       case "sweep_sol_destination":
         session.data.destination = parsePublicKey(text).toBase58();
@@ -940,11 +1026,14 @@ async function createWalletsFlow(chatId, text, session) {
 
   const store = await readWalletStore();
   const created = [];
+  const createdRecords = [];
 
   for (let index = 1; index <= count; index += 1) {
     const keypair = Keypair.generate();
     const label = `${session.data.label} ${index}`;
-    store.wallets.push(walletRecord(label, keypair, session.userId));
+    const record = walletRecord(label, keypair, session.userId);
+    store.wallets.push(record);
+    createdRecords.push(record);
     created.push(`${label}: ${keypair.publicKey.toBase58()}`);
   }
 
@@ -959,14 +1048,15 @@ async function createWalletsFlow(chatId, text, session) {
 
   clearSession(chatId);
   await say(chatId, `Created ${count} wallet(s):\n\n${created.join("\n")}`);
-  await sendAutomaticWalletBackup(chatId, session.userId, "Automatic backup after wallet creation.");
+  await sendAutomaticWalletBackup(chatId, session.userId, "Automatic backup after wallet creation.", session.data.label, createdRecords);
   await showMenu(chatId, session.userId);
 }
 
 async function importWalletFlow(chatId, text, session) {
   const keypair = keypairFromSecret(text);
   const store = await readWalletStore();
-  store.wallets.push(walletRecord(session.data.label, keypair, session.userId));
+  const record = walletRecord(session.data.label, keypair, session.userId);
+  store.wallets.push(record);
   await writeWalletStore(store);
 
   await audit("import_wallet", {
@@ -978,28 +1068,29 @@ async function importWalletFlow(chatId, text, session) {
 
   clearSession(chatId);
   await say(chatId, `Imported wallet ${session.data.label}: ${keypair.publicKey.toBase58()}`);
-  await sendAutomaticWalletBackup(chatId, session.userId, "Automatic backup after wallet import.");
+  await sendAutomaticWalletBackup(chatId, session.userId, "Automatic backup after wallet import.", session.data.label, [record]);
   await showMenu(chatId, session.userId);
 }
 
 async function exportWalletBackup(chatId, userId) {
-  const sent = await sendWalletBackup(chatId, userId, "Manual backup export.");
+  const sent = await sendWalletBackup(chatId, userId, "Manual backup export.", "manual-all-wallets");
   if (!sent) return;
   await say(chatId, "Backup exported. Keep this file private. It is encrypted with this bot's APP_SECRET, so restore only works if APP_SECRET stays the same.");
 }
 
-async function sendAutomaticWalletBackup(chatId, userId, note) {
+async function sendAutomaticWalletBackup(chatId, userId, note, groupLabel = "wallets", walletRecords = null) {
   try {
-    await sendWalletBackup(chatId, userId, note);
-    await say(chatId, "I sent you an automatic encrypted wallet backup. Keep that file private. If Render Free resets, use Restore Backup with that file.");
+    const filename = await sendWalletBackup(chatId, userId, note, groupLabel, walletRecords);
+    await say(chatId, `I sent you an automatic encrypted wallet backup: ${filename}. Keep it private. If Render Free resets, use Restore Backup with that file.`);
   } catch (error) {
     await say(chatId, `Automatic backup failed: ${formatError(error)}. Use Export Backup before funding wallets.`);
   }
 }
 
-async function sendWalletBackup(chatId, userId, note) {
+async function sendWalletBackup(chatId, userId, note, groupLabel = "wallets", walletRecords = null) {
   const store = await readWalletStore();
-  const wallets = walletsForOwner(store, userId);
+  const wallets = (walletRecords || walletsForOwner(store, userId))
+    .filter((wallet) => String(wallet.ownerId) === String(userId));
 
   if (wallets.length === 0) {
     await say(chatId, "You do not have any wallets to back up yet.");
@@ -1010,6 +1101,7 @@ async function sendWalletBackup(chatId, userId, note) {
     version: 1,
     createdAt: new Date().toISOString(),
     note,
+    groupLabel,
     walletCount: wallets.length,
     wallets: wallets.map((wallet) => ({
       label: wallet.label,
@@ -1018,12 +1110,9 @@ async function sendWalletBackup(chatId, userId, note) {
     }))
   });
 
-  await sendDocument(
-    chatId,
-    `wallet-backup-${userId}-${new Date().toISOString().slice(0, 10)}.txt`,
-    backup
-  );
-  return true;
+  const filename = `wallet-backup-${sanitizeFilenamePart(groupLabel)}-${userId}-${new Date().toISOString().slice(0, 10)}.txt`;
+  await sendDocument(chatId, filename, backup);
+  return filename;
 }
 
 async function exportPrivateKeysConfirmFlow(chatId, text, session) {
@@ -1101,7 +1190,7 @@ async function restoreWalletBackupFlow(chatId, text, session) {
   clearSession(chatId);
   await say(chatId, `Restore complete. Restored ${restored.length} wallet(s). Skipped ${skipped}.`);
   if (restored.length > 0) {
-    await sendAutomaticWalletBackup(chatId, session.userId, "Automatic backup after wallet restore.");
+    await sendAutomaticWalletBackup(chatId, session.userId, "Automatic backup after wallet restore.", "restored-wallets");
   }
   await showMenu(chatId, session.userId);
 }
@@ -1269,7 +1358,7 @@ async function batchBuyFlow(chatId, session) {
   });
 
   clearSession(chatId);
-  await say(chatId, `Batch buy complete:\n\n${results.join("\n")}`);
+  await say(chatId, withBrandFooter(`Batch buy complete:\n\n${results.join("\n")}`));
   await showMenu(chatId, session.userId);
 }
 
@@ -1330,6 +1419,292 @@ async function batchSellFlow(chatId, session) {
   clearSession(chatId);
   await say(chatId, `Batch sell complete:\n\n${results.join("\n")}`);
   await showMenu(chatId, session.userId);
+}
+
+async function createTimedTradePlanFlow(chatId, session) {
+  const store = await readWalletStore();
+  const wallets = session.data.walletIndexes.map((index) => getWalletAt(store, index, session.userId));
+  const amountLamports = solToLamports(session.data.amountSol);
+  const results = [];
+  const planWallets = [];
+
+  await runWithConcurrency(wallets, 1, async (wallet) => {
+    try {
+      const result = await buyTokenForPlan(wallet, session.data.tokenMint, amountLamports, session.data.slippageBps);
+      results.push(`${wallet.label}: buy ${result.signature}${result.feeStatus}`);
+      planWallets.push({
+        label: wallet.label,
+        publicKey: wallet.publicKey,
+        basisLamports: amountLamports,
+        tokenOutAmount: result.outputAmount || null,
+        buySignature: result.signature,
+        status: "watching",
+        lastCheckedAt: null,
+        lastMovePct: null
+      });
+    } catch (error) {
+      results.push(`${wallet.label}: buy failed - ${friendlyError(error)}`);
+    }
+  });
+
+  if (planWallets.length === 0) {
+    clearSession(chatId);
+    await say(chatId, withBrandFooter(`Timed trade plan was not created because no buys succeeded.\n\n${results.join("\n")}`));
+    await showMenu(chatId, session.userId);
+    return;
+  }
+
+  const now = Date.now();
+  const plan = {
+    id: crypto.randomUUID(),
+    status: "watching",
+    userId: session.userId,
+    chatId,
+    tokenMint: session.data.tokenMint,
+    walletSelector: session.data.walletSelector,
+    amountSol: session.data.amountSol,
+    sellDelayMinutes: session.data.sellDelayMinutes,
+    sellAfterAt: new Date(now + session.data.sellDelayMinutes * 60_000).toISOString(),
+    sellPercent: session.data.sellPercent,
+    takeProfitPct: session.data.takeProfitPct,
+    stopLossPct: session.data.stopLossPct,
+    slippageBps: session.data.slippageBps,
+    createdAt: new Date().toISOString(),
+    wallets: planWallets,
+    results
+  };
+
+  const plans = await readTradePlans();
+  plans.plans.push(plan);
+  await writeTradePlans(plans);
+  await audit("create_timed_trade_plan", {
+    chatId,
+    userId: session.userId,
+    planId: plan.id,
+    tokenMint: plan.tokenMint,
+    wallets: planWallets.map((wallet) => wallet.publicKey),
+    sellAfterAt: plan.sellAfterAt,
+    takeProfitPct: plan.takeProfitPct,
+    stopLossPct: plan.stopLossPct
+  });
+
+  clearSession(chatId);
+  await say(chatId, withBrandFooter([
+    "Timed trade plan created.",
+    `Plan ID: ${plan.id}`,
+    `Sell timer: ${plan.sellAfterAt}`,
+    `Take-profit: ${plan.takeProfitPct ? `+${plan.takeProfitPct}%` : "off"}`,
+    `Stop-loss: ${plan.stopLossPct ? `-${plan.stopLossPct}%` : "off"}`,
+    "",
+    results.join("\n")
+  ].join("\n")));
+  await showMenu(chatId, session.userId);
+}
+
+async function buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps) {
+  const keypair = decryptWallet(wallet);
+  const balance = await rpcWithRetry("get wallet SOL balance", () => connection.getBalance(keypair.publicKey, "confirmed"));
+  const feeLamports = calculateFeeLamports(amountLamports);
+  const swapLamports = amountLamports - feeLamports;
+  const recommendedLamports = recommendedBuyFundingLamports(amountLamports);
+
+  if (amountLamports <= 0 || swapLamports <= 0) {
+    throw new Error(`Not enough SOL after keeping ${CONFIG.buyReserveSol} SOL safety reserve.`);
+  }
+
+  if (balance < recommendedLamports) {
+    throw new Error(`Not enough SOL. Has ${lamportsToSol(balance)} SOL, needs about ${lamportsToSol(recommendedLamports)} SOL.`);
+  }
+
+  const result = await executeJupiterSwap({
+    signer: keypair,
+    inputMint: SOL_MINT,
+    outputMint: tokenMint,
+    amount: swapLamports,
+    slippageBps
+  });
+
+  let feeStatus = "";
+  try {
+    const feeSignature = await collectSolFee(keypair, feeLamports);
+    feeStatus = feeSignature ? `, fee ${feeSignature}` : "";
+  } catch (feeError) {
+    feeStatus = `, fee failed - ${formatError(feeError)}`;
+  }
+
+  return {
+    signature: result.signature,
+    outputAmount: result.outputAmount,
+    feeStatus
+  };
+}
+
+async function sellTokenFromWallet(wallet, tokenMint, percent, slippageBps) {
+  const keypair = decryptWallet(wallet);
+  const token = await getTokenBalanceForMint(keypair.publicKey, new PublicKey(tokenMint));
+  if (!token || token.rawAmount === 0n) {
+    throw new Error("no token balance");
+  }
+
+  const amount = (token.rawAmount * BigInt(percent)) / 100n;
+  if (amount === 0n) {
+    throw new Error("sell amount rounded to zero");
+  }
+
+  const result = await executeJupiterSwap({
+    signer: keypair,
+    inputMint: tokenMint,
+    outputMint: SOL_MINT,
+    amount: amount.toString(),
+    slippageBps
+  });
+  const outputLamports = BigInt(result.outputAmount || 0);
+  const feeLamports = calculateFeeLamports(outputLamports);
+  let feeStatus = "";
+
+  try {
+    const feeSignature = await collectSolFee(keypair, feeLamports);
+    feeStatus = feeSignature ? `, fee ${feeSignature}` : "";
+  } catch (feeError) {
+    feeStatus = `, fee failed - ${formatError(feeError)}`;
+  }
+
+  return {
+    signature: result.signature,
+    outputLamports: outputLamports.toString(),
+    feeStatus
+  };
+}
+
+async function processTradePlans() {
+  if (tradePlanRunnerActive) return;
+  tradePlanRunnerActive = true;
+
+  try {
+    const state = await readState();
+    if (state.paused) return;
+
+    const planStore = await readTradePlans();
+    const walletStore = await readWalletStore();
+    let changed = false;
+
+    for (const plan of planStore.plans) {
+      if (plan.status !== "watching") continue;
+
+      const walletMessages = [];
+      for (const planWallet of plan.wallets) {
+        if (planWallet.status !== "watching") continue;
+        const result = await processTradePlanWallet(plan, planWallet, walletStore);
+        if (result.changed) changed = true;
+        if (result.message) walletMessages.push(result.message);
+      }
+
+      if (plan.wallets.every((wallet) => wallet.status !== "watching")) {
+        plan.status = "completed";
+        plan.completedAt = new Date().toISOString();
+        changed = true;
+      }
+
+      if (walletMessages.length > 0) {
+        await say(plan.chatId, withBrandFooter([
+          `Timed trade plan update: ${plan.id}`,
+          ...walletMessages
+        ].join("\n")));
+      }
+    }
+
+    if (changed) {
+      await writeTradePlans(planStore);
+    }
+  } finally {
+    tradePlanRunnerActive = false;
+  }
+}
+
+async function processTradePlanWallet(plan, planWallet, walletStore) {
+  const wallet = walletsForOwner(walletStore, plan.userId).find((item) => item.publicKey === planWallet.publicKey);
+  if (!wallet) {
+    planWallet.status = "failed";
+    planWallet.error = "wallet not found";
+    planWallet.updatedAt = new Date().toISOString();
+    return { changed: true, message: `${planWallet.label}: failed - wallet not found` };
+  }
+
+  let triggerReason = null;
+  const now = Date.now();
+  if (now >= Date.parse(plan.sellAfterAt)) {
+    triggerReason = "timer";
+  }
+
+  if (!triggerReason && (plan.takeProfitPct || plan.stopLossPct)) {
+    try {
+      const estimate = await estimatePlanWalletMove(plan, wallet);
+      planWallet.lastCheckedAt = new Date().toISOString();
+      planWallet.lastMovePct = estimate.movePct;
+
+      if (plan.takeProfitPct && estimate.movePct >= plan.takeProfitPct) {
+        triggerReason = `take-profit +${estimate.movePct.toFixed(2)}%`;
+      } else if (plan.stopLossPct && estimate.movePct <= -plan.stopLossPct) {
+        triggerReason = `stop-loss ${estimate.movePct.toFixed(2)}%`;
+      } else {
+        return { changed: true, message: null };
+      }
+    } catch (error) {
+      planWallet.lastCheckedAt = new Date().toISOString();
+      planWallet.lastError = friendlyError(error);
+      return { changed: true, message: null };
+    }
+  }
+
+  if (!triggerReason) {
+    return { changed: false, message: null };
+  }
+
+  try {
+    const sell = await sellTokenFromWallet(wallet, plan.tokenMint, plan.sellPercent, plan.slippageBps);
+    planWallet.status = "sold";
+    planWallet.triggerReason = triggerReason;
+    planWallet.sellSignature = sell.signature;
+    planWallet.sellFeeStatus = sell.feeStatus;
+    planWallet.soldAt = new Date().toISOString();
+    return { changed: true, message: `${planWallet.label}: sold by ${triggerReason}, ${sell.signature}${sell.feeStatus}` };
+  } catch (error) {
+    planWallet.status = "failed";
+    planWallet.triggerReason = triggerReason;
+    planWallet.error = friendlyError(error);
+    planWallet.updatedAt = new Date().toISOString();
+    return { changed: true, message: `${planWallet.label}: sell failed by ${triggerReason} - ${friendlyError(error)}` };
+  }
+}
+
+async function estimatePlanWalletMove(plan, wallet) {
+  const keypair = decryptWallet(wallet);
+  const token = await getTokenBalanceForMint(keypair.publicKey, new PublicKey(plan.tokenMint));
+  if (!token || token.rawAmount === 0n) {
+    throw new Error("no token balance");
+  }
+
+  const amount = (token.rawAmount * BigInt(plan.sellPercent)) / 100n;
+  if (amount === 0n) {
+    throw new Error("sell amount rounded to zero");
+  }
+
+  const order = await createJupiterOrder({
+    taker: keypair.publicKey,
+    inputMint: plan.tokenMint,
+    outputMint: SOL_MINT,
+    amount: amount.toString(),
+    slippageBps: plan.slippageBps
+  });
+
+  const estimatedOut = BigInt(order.outAmount || order.outputAmount || 0);
+  const basis = (BigInt(plan.wallets.find((item) => item.publicKey === wallet.publicKey)?.basisLamports || 0) * BigInt(plan.sellPercent)) / 100n;
+  if (basis <= 0n) {
+    throw new Error("missing plan basis");
+  }
+
+  const movePct = (Number(estimatedOut - basis) / Number(basis)) * 100;
+  return { estimatedOut, basis, movePct };
 }
 
 async function sweepSolFlow(chatId, session) {
@@ -1500,23 +1875,13 @@ async function executeJupiterSwap({ signer, inputMint, outputMint, amount, slipp
     throw new Error("Missing JUPITER_API_KEY. Batch buy/sell requires a Jupiter API key.");
   }
 
-  const orderUrl = new URL(`${CONFIG.jupiterApiBase}/order`);
-  orderUrl.searchParams.set("inputMint", inputMint);
-  orderUrl.searchParams.set("outputMint", outputMint);
-  orderUrl.searchParams.set("amount", String(amount));
-  orderUrl.searchParams.set("taker", signer.publicKey.toBase58());
-  orderUrl.searchParams.set("slippageBps", String(slippageBps));
-  if (CONFIG.priorityFeeLamports > 0) {
-    orderUrl.searchParams.set("priorityFeeLamports", String(CONFIG.priorityFeeLamports));
-  }
-
-  const order = await jupiterFetchJson(orderUrl, {
-    headers: jupiterHeaders()
-  }, "Jupiter order");
-
-  if (!order?.transaction) {
-    throw new Error(order?.errorMessage || order?.error || "Jupiter could not build a quote/order. Check the token mint, liquidity, slippage, API key/rate limits, and wallet SOL balance.");
-  }
+  const order = await createJupiterOrder({
+    taker: signer.publicKey,
+    inputMint,
+    outputMint,
+    amount,
+    slippageBps
+  });
 
   const tx = VersionedTransaction.deserialize(Buffer.from(order.transaction, "base64"));
   tx.sign([signer]);
@@ -1545,6 +1910,33 @@ async function executeJupiterSwap({ signer, inputMint, outputMint, amount, slipp
     mode: order.mode,
     outputAmount: execute.outputAmountResult || order.outAmount
   };
+}
+
+async function createJupiterOrder({ taker, inputMint, outputMint, amount, slippageBps }) {
+  if (!CONFIG.jupiterApiKey) {
+    throw new Error("Missing JUPITER_API_KEY. Swaps and timed trade plans require a Jupiter API key.");
+  }
+
+  const takerKey = taker instanceof PublicKey ? taker : new PublicKey(taker);
+  const orderUrl = new URL(`${CONFIG.jupiterApiBase}/order`);
+  orderUrl.searchParams.set("inputMint", inputMint);
+  orderUrl.searchParams.set("outputMint", outputMint);
+  orderUrl.searchParams.set("amount", String(amount));
+  orderUrl.searchParams.set("taker", takerKey.toBase58());
+  orderUrl.searchParams.set("slippageBps", String(slippageBps));
+  if (CONFIG.priorityFeeLamports > 0) {
+    orderUrl.searchParams.set("priorityFeeLamports", String(CONFIG.priorityFeeLamports));
+  }
+
+  const order = await jupiterFetchJson(orderUrl, {
+    headers: jupiterHeaders()
+  }, "Jupiter order");
+
+  if (!order?.transaction) {
+    throw new Error(order?.errorMessage || order?.error || "Jupiter could not build a quote/order. Check the token mint, liquidity, slippage, API key/rate limits, and wallet SOL balance.");
+  }
+
+  return order;
 }
 
 function jupiterHeaders(extra = {}) {
@@ -1874,7 +2266,7 @@ async function exportAudit(chatId) {
 async function showBackupMenu(chatId) {
   await telegram("sendMessage", {
     chat_id: chatId,
-    text: "Backup and recovery tools:",
+    text: withBrandFooter("Backup and recovery tools:"),
     reply_markup: {
       inline_keyboard: [
         [{ text: "Export Backup", callback_data: "export_backup" }],
@@ -1910,6 +2302,26 @@ function quickStartText() {
   ].join("\n");
 }
 
+function timedTradePlanIntroText() {
+  return withBrandFooter([
+    "Timed Trade Plans",
+    "",
+    "What it does:",
+    "- Buys a token from selected wallets now.",
+    "- Sells later after your chosen timer.",
+    "- Can sell early if take-profit or stop-loss triggers.",
+    "- Works by wallet numbers, `all`, or `group: group name`.",
+    "",
+    "This is for managing your own position. It is not a volume or wash-trading tool.",
+    "",
+    "Send the token mint address to start."
+  ].join("\n"));
+}
+
+function withBrandFooter(text) {
+  return `${text}\n\n${BRAND_FOOTER}`;
+}
+
 async function walletPrompt(userId, prefix) {
   const store = await readWalletStore();
   const wallets = walletsForOwner(store, userId);
@@ -1922,7 +2334,7 @@ async function showMenu(chatId, userId) {
   const menu = isAdmin(userId) ? [...PUBLIC_MENU, ...ADMIN_MENU] : PUBLIC_MENU;
   await telegram("sendMessage", {
     chat_id: chatId,
-    text: `${state.paused ? "Status: emergency stop active.\n\n" : ""}Choose a wallet operation:`,
+    text: withBrandFooter(`${state.paused ? "Status: emergency stop active.\n\n" : ""}Choose a wallet operation:`),
     reply_markup: { inline_keyboard: menu }
   });
 }
@@ -2027,6 +2439,16 @@ async function audit(action, details) {
 
 async function readState() {
   return readJson(statePath());
+}
+
+async function readTradePlans() {
+  const store = await readJson(tradePlansPath());
+  if (!Array.isArray(store.plans)) store.plans = [];
+  return store;
+}
+
+async function writeTradePlans(store) {
+  await fs.writeFile(tradePlansPath(), JSON.stringify(store, null, 2));
 }
 
 async function setPaused(paused) {
@@ -2431,6 +2853,35 @@ async function parseWalletSelection(text, userId, options = {}) {
   return indexes;
 }
 
+async function parseWalletSelectionOrGroup(text, userId) {
+  const trimmed = text.trim();
+  const groupMatch = trimmed.match(/^group\s*:?\s*(.+)$/i);
+  if (!groupMatch) {
+    return parseWalletSelection(text, userId);
+  }
+
+  const group = groupMatch[1].trim().toLowerCase();
+  if (!group) {
+    throw new Error("Group name cannot be empty.");
+  }
+
+  const store = await readWalletStore();
+  const wallets = walletsForOwner(store, userId);
+  const indexes = wallets
+    .map((wallet, index) => ({ wallet, index: index + 1 }))
+    .filter(({ wallet }) => {
+      const label = wallet.label.toLowerCase();
+      return label === group || label.startsWith(`${group} `);
+    })
+    .map(({ index }) => index);
+
+  if (indexes.length === 0) {
+    throw new Error(`No wallets found for group "${groupMatch[1].trim()}".`);
+  }
+
+  return indexes;
+}
+
 function getWalletAt(store, oneBasedIndex, userId) {
   const wallet = walletsForOwner(store, userId)[oneBasedIndex - 1];
   if (!wallet) {
@@ -2467,6 +2918,27 @@ function parsePercent(text) {
   return value;
 }
 
+function parseDelayMinutes(text) {
+  const value = Number.parseInt(text, 10);
+  if (!Number.isInteger(value) || value < 1 || value > 10_080) {
+    throw new Error("Sell timer must be from 1 minute to 10080 minutes.");
+  }
+  return value;
+}
+
+function parseOptionalTriggerPercent(text) {
+  const normalized = text.trim().toLowerCase();
+  if (["0", "off", "none", "no", "disable", "disabled"].includes(normalized)) {
+    return 0;
+  }
+
+  const value = Number.parseFloat(normalized.replace(/%$/, ""));
+  if (!Number.isFinite(value) || value <= 0 || value > 10000) {
+    throw new Error("Trigger percent must be 0/off, or a positive number up to 10000.");
+  }
+  return value;
+}
+
 function parseSlippage(text) {
   if (text.trim().toLowerCase() === "default") {
     return CONFIG.defaultSlippageBps;
@@ -2483,6 +2955,15 @@ function cleanLabel(text) {
   const label = text.trim().replace(/\s+/g, " ").slice(0, 40);
   if (!label) throw new Error("Label cannot be empty.");
   return label;
+}
+
+function sanitizeFilenamePart(text) {
+  return String(text || "wallets")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40) || "wallets";
 }
 
 function solToLamports(sol) {
@@ -2566,6 +3047,26 @@ function formatSellConfirm(data) {
     `Platform fee: ${formatFeeRate()} of SOL output to ${CONFIG.feeWallet}`,
     `Slippage: ${data.slippageBps} bps`,
     "",
+    "Reply `yes` to execute or `/cancel`."
+  ].join("\n");
+}
+
+function formatTimedTradePlanConfirm(data) {
+  const amountLamports = solToLamports(data.amountSol);
+  const feeLamports = calculateFeeLamports(amountLamports);
+  return [
+    "Confirm timed trade plan:",
+    `Token mint: ${data.tokenMint}`,
+    `Wallets: ${data.walletIndexes.join(", ")}`,
+    `Buy per wallet: ${data.amountSol} SOL`,
+    `Net buy before routing fees: ${lamportsToSol(amountLamports - feeLamports)} SOL`,
+    `Sell timer: ${data.sellDelayMinutes} minute(s) after buy`,
+    `Sell percent: ${data.sellPercent}%`,
+    `Take-profit: ${data.takeProfitPct ? `+${data.takeProfitPct}%` : "off"}`,
+    `Stop-loss: ${data.stopLossPct ? `-${data.stopLossPct}%` : "off"}`,
+    `Slippage: ${data.slippageBps} bps`,
+    "",
+    "The bot buys now, then watches once per minute while awake. If Render was asleep, it catches up when it wakes.",
     "Reply `yes` to execute or `/cancel`."
   ].join("\n");
 }

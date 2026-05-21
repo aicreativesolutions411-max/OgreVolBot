@@ -55,7 +55,7 @@ services:
       - key: KEEPALIVE_URL
         sync: false
       - key: KEEPALIVE_INTERVAL_MINUTES
-        value: 10
+        value: 5
       - key: APP_SECRET
         sync: false
       - key: JUPITER_API_KEY
