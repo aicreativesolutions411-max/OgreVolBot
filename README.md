@@ -56,6 +56,7 @@ This bot does not provide wallet washing, provenance hiding, mixer behavior, or 
 - `/start` - open the menu
 - `/wallets` - list managed wallets
 - `/balances` - show SOL and token balances for your wallets
+- `/withdraw` - withdraw maximum available SOL from selected wallets
 - `/cancel` - cancel the current flow
 
 The bot keeps encrypted key material and an audit log under `DATA_DIR`.
@@ -85,6 +86,10 @@ In the buy amount step, users can type `max` to use each wallet's available SOL 
 If you still see `429 Too Many Requests`, your current Solana RPC or Jupiter plan is rate-limiting even after the bot queues and slows requests. Keep `BUNDLE_CONCURRENCY=1`, keep `RPC_MIN_INTERVAL_MS=1200` and `JUPITER_MIN_INTERVAL_MS=1200` or higher, and use a paid/private `SOLANA_RPC_URL` plus higher Jupiter limits for reliable multi-wallet usage. Public `https://api.mainnet-beta.solana.com` is not reliable for production batches.
 
 `Emergency Key Export` sends raw private keys for the Telegram user's own bot wallets after an exact confirmation phrase. This is for recovery only. Anyone with that file can drain those wallets.
+
+`Rescue Backup Keys` lets a user upload the wallet backup `.txt` file and receive a private-key recovery file even if the wallets are not currently restored in the bot. If the backup opens but keys cannot decrypt, the new deployment is using a different `APP_SECRET`; set Render back to the exact old `APP_SECRET`, redeploy, then restore or rescue again.
+
+If Telegram file upload is failing, users can paste recovery text instead. Restore and Rescue scan pasted text for lines like `Base58 secret key: ...` or `JSON secret key: [12,34,...]` and rebuild only the valid Solana wallet keys they find.
 
 Quote failures usually mean Jupiter cannot build a route for the token/amount, liquidity is too low, slippage is too low, the wallet does not have enough SOL after fees, or Jupiter/RPC is rate-limiting the request.
 

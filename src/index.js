@@ -61,6 +61,7 @@ const PRIVATE_CHAT_ACTIONS = new Set([
   "export_backup",
   "export_private_keys",
   "restore_backup",
+  "rescue_backup_keys",
   "fund_wallets",
   "batch_buy",
   "batch_sell",
@@ -540,7 +541,16 @@ async function handleCallback(query, userId) {
       break;
     case "restore_backup":
       setSession(chatId, "restore_backup", userId);
-      await say(chatId, "Paste your encrypted backup text, or upload the backup .txt file I sent you.");
+      await say(chatId, "Paste the backup text, upload the backup .txt file, or paste emergency key text that contains `Base58 secret key:` / `JSON secret key:` lines.");
+      break;
+    case "rescue_backup_keys":
+      setSession(chatId, "rescue_backup_keys", userId);
+      await say(chatId, [
+        "Upload the backup .txt file, paste the backup text, or paste emergency key text.",
+        "",
+        "I will read the backup or extract the wallet keys from pasted text, then send a private-key recovery file without needing the wallets to already be restored.",
+        "Only do this in DM. Delete the recovery file after importing into Solflare/Phantom."
+      ].join("\n"));
       break;
     case "fund_wallets":
       setSession(chatId, "fund_source", userId);
@@ -597,9 +607,12 @@ async function handleMessage(message, userId) {
   const text = (message.text || "").trim();
   const session = sessions.get(chatId);
 
-  if (message.document && session?.step === "restore_backup" && String(session.userId) === String(userId)) {
-    const backupText = await fetchTelegramFileText(message.document.file_id);
-    await continueFlow(chatId, backupText, session);
+  if (message.document) {
+    try {
+      await handleDocumentMessage(message, userId, session);
+    } catch (error) {
+      await say(chatId, `Backup file error: ${friendlyBackupError(error)}`);
+    }
     return;
   }
 
@@ -624,6 +637,26 @@ async function handleMessage(message, userId) {
       return;
     }
     await listWallets(chatId, userId);
+    return;
+  }
+
+  if (text === "/restore" || text === "/backup") {
+    if (!isPrivateChat(message.chat)) {
+      await say(chatId, "Open this bot in DM to restore a backup.");
+      return;
+    }
+    setSession(chatId, "restore_backup", userId);
+    await say(chatId, "Upload the backup .txt file, paste the full backup text, or paste emergency key text with Base58/JSON secret-key lines.");
+    return;
+  }
+
+  if (text === "/rescue") {
+    if (!isPrivateChat(message.chat)) {
+      await say(chatId, "Open this bot in DM to use rescue recovery.");
+      return;
+    }
+    setSession(chatId, "rescue_backup_keys", userId);
+    await say(chatId, "Upload the backup .txt file or paste backup/emergency-key text. I will send a private-key recovery file.");
     return;
   }
 
@@ -656,6 +689,16 @@ async function handleMessage(message, userId) {
     return;
   }
 
+  if (text === "/withdraw" || text === "/sweep") {
+    if (!isPrivateChat(message.chat)) {
+      await say(chatId, "Open this bot in DM to withdraw SOL.");
+      return;
+    }
+    setSession(chatId, "sweep_sol_destination", userId);
+    await say(chatId, "Send the destination wallet address for withdrawn SOL.");
+    return;
+  }
+
   if (!session) {
     await say(chatId, "Use /start to choose an action.");
     return;
@@ -666,13 +709,54 @@ async function handleMessage(message, userId) {
     return;
   }
 
-  if ((await readState()).paused && session.step !== "unlock_confirm") {
+  const stepsAllowedWhilePaused = new Set(["unlock_confirm", "restore_backup", "rescue_backup_keys", "export_private_keys_confirm"]);
+  if ((await readState()).paused && !stepsAllowedWhilePaused.has(session.step)) {
     clearSession(chatId);
     await say(chatId, "Emergency stop is active. Current flow canceled.");
     return;
   }
 
   await continueFlow(chatId, text, session);
+}
+
+async function handleDocumentMessage(message, userId, session) {
+  const chatId = message.chat.id;
+
+  if (!isPrivateChat(message.chat)) {
+    await say(chatId, "Open this bot in DM before uploading wallet backup files.");
+    return;
+  }
+
+  if (session && String(session.userId) !== String(userId)) {
+    await say(chatId, "That active flow belongs to another Telegram user. Use /cancel and start your own flow in DM.");
+    return;
+  }
+
+  if (message.document.file_size && message.document.file_size > 2_000_000) {
+    await say(chatId, "That file is too large for a wallet backup. Upload the small .txt backup file the bot sent.");
+    return;
+  }
+
+  const filename = message.document.file_name || "uploaded file";
+  const backupText = await fetchTelegramFileText(message.document.file_id);
+
+  if (session?.step === "rescue_backup_keys") {
+    await rescueBackupKeysFlow(chatId, backupText, session);
+    return;
+  }
+
+  if (session?.step === "restore_backup") {
+    await continueFlow(chatId, backupText, session);
+    return;
+  }
+
+  if (!looksLikeBackupDocument(filename, backupText)) {
+    await say(chatId, "I received a file. To restore wallets, use Backup / Restore > Restore Backup, then upload the .txt backup file.");
+    return;
+  }
+
+  const restoreSession = { step: "restore_backup", userId, data: {} };
+  await restoreWalletBackupFlow(chatId, backupText, restoreSession);
 }
 
 async function continueFlow(chatId, text, session) {
@@ -705,6 +789,9 @@ async function continueFlow(chatId, text, session) {
         break;
       case "restore_backup":
         await restoreWalletBackupFlow(chatId, text, session);
+        break;
+      case "rescue_backup_keys":
+        await rescueBackupKeysFlow(chatId, text, session);
         break;
       case "export_private_keys_confirm":
         await exportPrivateKeysConfirmFlow(chatId, text, session);
@@ -959,6 +1046,102 @@ async function exportPrivateKeys(chatId, userId) {
     return;
   }
 
+  await sendPrivateKeyDocument(chatId, userId, wallets, `emergency-private-keys-${userId}`);
+
+  await audit("export_private_keys", {
+    chatId,
+    userId,
+    walletCount: wallets.length
+  });
+
+  await say(chatId, "Emergency private key file sent. Delete it after importing/recovering funds. Do not share it with anyone.");
+}
+
+async function restoreWalletBackupFlow(chatId, text, session) {
+  const backup = parseBackupPayload(text);
+  const backupWallets = backupWalletList(backup);
+  const store = await readWalletStore();
+  const existing = new Set(walletsForOwner(store, session.userId).map((wallet) => wallet.publicKey));
+  const restored = [];
+  let skipped = 0;
+  const errors = [];
+
+  for (const [index, wallet] of backupWallets.entries()) {
+    let record;
+    try {
+      record = walletRecordFromBackup(wallet, session.userId, index);
+    } catch (error) {
+      skipped += 1;
+      errors.push(`Wallet ${index + 1}: ${friendlyBackupError(error)}`);
+      continue;
+    }
+
+    if (existing.has(record.publicKey)) {
+      skipped += 1;
+      continue;
+    }
+
+    store.wallets.push(record);
+    existing.add(record.publicKey);
+    restored.push(record.publicKey);
+  }
+
+  if (restored.length === 0 && errors.length > 0) {
+    throw new Error(`Backup parsed but no wallets could be restored. ${errors.slice(0, 3).join(" ")}`);
+  }
+
+  await writeWalletStore(store);
+  await audit("restore_wallet_backup", {
+    chatId,
+    userId: session.userId,
+    restored: restored.length,
+    skipped
+  });
+
+  clearSession(chatId);
+  await say(chatId, `Restore complete. Restored ${restored.length} wallet(s). Skipped ${skipped}.`);
+  if (restored.length > 0) {
+    await sendAutomaticWalletBackup(chatId, session.userId, "Automatic backup after wallet restore.");
+  }
+  await showMenu(chatId, session.userId);
+}
+
+async function rescueBackupKeysFlow(chatId, text, session) {
+  const backup = parseBackupPayload(text);
+  const backupWallets = backupWalletList(backup);
+  const records = [];
+  const errors = [];
+
+  for (const [index, wallet] of backupWallets.entries()) {
+    try {
+      records.push(walletRecordFromBackup(wallet, session.userId, index));
+    } catch (error) {
+      errors.push(`Wallet ${index + 1}: ${friendlyBackupError(error)}`);
+    }
+  }
+
+  if (records.length === 0) {
+    throw new Error(`Backup parsed but no private keys could be opened. ${errors.slice(0, 3).join(" ")}`);
+  }
+
+  await sendPrivateKeyDocument(chatId, session.userId, records, `rescue-private-keys-${session.userId}`);
+  await audit("rescue_backup_private_keys", {
+    chatId,
+    userId: session.userId,
+    exported: records.length,
+    skipped: errors.length
+  });
+
+  clearSession(chatId);
+  await say(chatId, [
+    `Rescue key file sent for ${records.length} wallet(s).`,
+    errors.length ? `Skipped ${errors.length}: ${errors.slice(0, 3).join(" ")}` : "",
+    "Import those keys into Solflare/Phantom to move funds outside the bot. Delete the file after recovery."
+  ].filter(Boolean).join("\n"));
+  await showMenu(chatId, session.userId);
+}
+
+async function sendPrivateKeyDocument(chatId, userId, wallets, filenamePrefix) {
   const lines = [
     "EMERGENCY PRIVATE KEY EXPORT",
     "Anyone with these keys can drain these wallets.",
@@ -983,78 +1166,9 @@ async function exportPrivateKeys(chatId, userId) {
 
   await sendDocument(
     chatId,
-    `emergency-private-keys-${userId}-${new Date().toISOString().slice(0, 10)}.txt`,
+    `${filenamePrefix}-${new Date().toISOString().slice(0, 10)}.txt`,
     lines.join("\n")
   );
-
-  await audit("export_private_keys", {
-    chatId,
-    userId,
-    walletCount: wallets.length
-  });
-
-  await say(chatId, "Emergency private key file sent. Delete it after importing/recovering funds. Do not share it with anyone.");
-}
-
-async function restoreWalletBackupFlow(chatId, text, session) {
-  let backup;
-  try {
-    backup = decodeBackup(text);
-  } catch {
-    throw new Error("Could not read that backup. Upload the .txt backup file the bot sent, or paste the full backup text without editing it.");
-  }
-
-  if (backup.version !== 1 || !Array.isArray(backup.wallets)) {
-    throw new Error("Backup format is not valid.");
-  }
-
-  const store = await readWalletStore();
-  const existing = new Set(walletsForOwner(store, session.userId).map((wallet) => wallet.publicKey));
-  const restored = [];
-  let skipped = 0;
-
-  for (const wallet of backup.wallets) {
-    if (!wallet?.secret || !wallet?.publicKey) {
-      skipped += 1;
-      continue;
-    }
-
-    const keypair = decryptWallet({ secret: wallet.secret });
-    const publicKey = keypair.publicKey.toBase58();
-    if (publicKey !== wallet.publicKey) {
-      skipped += 1;
-      continue;
-    }
-
-    if (existing.has(publicKey)) {
-      skipped += 1;
-      continue;
-    }
-
-    store.wallets.push({
-      ownerId: session.userId,
-      label: cleanLabel(wallet.label || "Restored Wallet"),
-      publicKey,
-      secret: wallet.secret
-    });
-    existing.add(publicKey);
-    restored.push(publicKey);
-  }
-
-  await writeWalletStore(store);
-  await audit("restore_wallet_backup", {
-    chatId,
-    userId: session.userId,
-    restored: restored.length,
-    skipped
-  });
-
-  clearSession(chatId);
-  await say(chatId, `Restore complete. Restored ${restored.length} wallet(s). Skipped ${skipped}.`);
-  if (restored.length > 0) {
-    await sendAutomaticWalletBackup(chatId, session.userId, "Automatic backup after wallet restore.");
-  }
-  await showMenu(chatId, session.userId);
 }
 
 async function fundWalletsFlow(chatId, session) {
@@ -1226,46 +1340,12 @@ async function sweepSolFlow(chatId, session) {
   for (const wallet of session.data.walletIndexes.map((index) => getWalletAt(store, index, session.userId))) {
     try {
       const keypair = decryptWallet(wallet);
-      const balance = await rpcWithRetry("get SOL balance", () => connection.getBalance(keypair.publicKey, "confirmed"));
-
-      if (balance <= 0) {
-        results.push(`${wallet.label}: no sweepable SOL`);
+      const result = await drainSolFromWallet(keypair, destination);
+      if (!result.signature) {
+        results.push(`${wallet.label}: ${result.message}`);
         continue;
       }
-
-      const latestBlockhash = await rpcWithRetry("get latest blockhash", () => connection.getLatestBlockhash("confirmed"));
-      const feeProbe = new Transaction({
-        recentBlockhash: latestBlockhash.blockhash,
-        feePayer: keypair.publicKey
-      }).add(
-        SystemProgram.transfer({
-          fromPubkey: keypair.publicKey,
-          toPubkey: destination,
-          lamports: 1
-        })
-      );
-      const feeLamports = await estimateLegacyTransactionFee(feeProbe);
-      const sendableLamports = balance - feeLamports;
-
-      if (sendableLamports <= 0) {
-        results.push(`${wallet.label}: no sweepable SOL after network fee`);
-        continue;
-      }
-
-      await assertDestinationCanReceiveSol(destination, sendableLamports);
-
-      const tx = new Transaction({
-        recentBlockhash: latestBlockhash.blockhash,
-        feePayer: keypair.publicKey
-      }).add(
-        SystemProgram.transfer({
-          fromPubkey: keypair.publicKey,
-          toPubkey: destination,
-          lamports: sendableLamports
-        })
-      );
-      const signature = await sendLegacyTransaction(tx, [keypair], { latestBlockhash });
-      results.push(`${wallet.label}: ${lamportsToSol(sendableLamports)} SOL drained, fee ${lamportsToSol(feeLamports)} SOL, ${signature}`);
+      results.push(`${wallet.label}: ${lamportsToSol(result.sentLamports)} SOL drained, fee ${lamportsToSol(result.feeLamports)} SOL, ${result.signature}`);
       await sleep(250);
     } catch (error) {
       results.push(`${wallet.label}: failed - ${friendlyError(error)}`);
@@ -1474,6 +1554,66 @@ function jupiterHeaders(extra = {}) {
   };
 }
 
+async function drainSolFromWallet(keypair, destination) {
+  let lastError;
+
+  if (keypair.publicKey.equals(destination)) {
+    return { signature: null, message: "destination is the same as this wallet. Choose a different wallet to withdraw to." };
+  }
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const balance = await rpcWithRetry("get SOL balance", () => connection.getBalance(keypair.publicKey, "confirmed"));
+
+      if (balance <= 0) {
+        return { signature: null, message: "no sweepable SOL" };
+      }
+
+      const latestBlockhash = await rpcWithRetry("get latest blockhash", () => connection.getLatestBlockhash("confirmed"));
+      const feeProbe = new Transaction({
+        recentBlockhash: latestBlockhash.blockhash,
+        feePayer: keypair.publicKey
+      }).add(
+        SystemProgram.transfer({
+          fromPubkey: keypair.publicKey,
+          toPubkey: destination,
+          lamports: 1
+        })
+      );
+      const feeLamports = await estimateLegacyTransactionFee(feeProbe);
+      const sendableLamports = balance - feeLamports;
+
+      if (sendableLamports <= 0) {
+        return {
+          signature: null,
+          message: `no sweepable SOL after network fee. Has ${lamportsToSol(balance)} SOL; estimated fee ${lamportsToSol(feeLamports)} SOL`
+        };
+      }
+
+      await assertDestinationCanReceiveSol(destination, sendableLamports);
+
+      const tx = new Transaction({
+        recentBlockhash: latestBlockhash.blockhash,
+        feePayer: keypair.publicKey
+      }).add(
+        SystemProgram.transfer({
+          fromPubkey: keypair.publicKey,
+          toPubkey: destination,
+          lamports: sendableLamports
+        })
+      );
+      const signature = await sendLegacyTransaction(tx, [keypair], { latestBlockhash });
+      return { signature, sentLamports: sendableLamports, feeLamports };
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableSweepError(error) || attempt === 1) break;
+      await sleep(CONFIG.rpcDelayMs);
+    }
+  }
+
+  throw lastError;
+}
+
 async function sendLegacyTransaction(tx, signers, options = {}) {
   const { blockhash, lastValidBlockHeight } = options.latestBlockhash || await rpcWithRetry("get latest blockhash", () => connection.getLatestBlockhash("confirmed"));
   tx.recentBlockhash = blockhash;
@@ -1481,7 +1621,7 @@ async function sendLegacyTransaction(tx, signers, options = {}) {
   tx.sign(...signers);
   const signature = await rpcWithRetry("send raw transaction", () => connection.sendRawTransaction(tx.serialize(), {
     skipPreflight: false,
-    maxRetries: 3
+    maxRetries: 10
   }));
   await rpcWithRetry("confirm transaction", () => connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed"));
   return signature;
@@ -1535,26 +1675,48 @@ async function getMintDecimals(mint) {
 }
 
 async function getOwnedTokenAccounts(owner) {
-  const responses = [];
-  responses.push(await rpcWithRetry("get SPL token accounts", () => connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }, "confirmed")));
-  await sleep(CONFIG.rpcDelayMs);
-  responses.push(await rpcWithRetry("get Token-2022 accounts", () => connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }, "confirmed")));
+  const { accounts, warnings, successes } = await getOwnedTokenAccountsWithWarnings(owner);
+  if (successes === 0 && warnings.length > 0) {
+    throw new Error(warnings.join(" | "));
+  }
+  return accounts;
+}
 
-  return responses.flatMap((response, index) => {
-    const tokenProgramId = index === 0 ? TOKEN_PROGRAM_ID : TOKEN_2022_PROGRAM_ID;
+async function getOwnedTokenAccountsWithWarnings(owner) {
+  const lookups = [
+    { label: "SPL", programId: TOKEN_PROGRAM_ID },
+    { label: "Token-2022", programId: TOKEN_2022_PROGRAM_ID }
+  ];
+  const accounts = [];
+  const warnings = [];
+  let successes = 0;
 
-    return response.value.map((item) => {
-      const parsed = item.account.data.parsed.info;
-      const amount = parsed.tokenAmount;
+  for (const lookup of lookups) {
+    try {
+      const response = await rpcWithRetry(`get ${lookup.label} token accounts`, () => connection.getParsedTokenAccountsByOwner(owner, { programId: lookup.programId }, "confirmed"));
+      successes += 1;
+      accounts.push(...parseTokenAccountResponse(response, lookup.programId));
+    } catch (error) {
+      warnings.push(`${lookup.label}: ${friendlyError(error)}`);
+    }
+    await sleep(CONFIG.rpcDelayMs);
+  }
 
-      return {
-        pubkey: item.pubkey.toBase58(),
-        mint: parsed.mint,
-        tokenProgramId: tokenProgramId.toBase58(),
-        rawAmount: BigInt(amount.amount),
-        uiAmount: amount.uiAmountString || "0"
-      };
-    });
+  return { accounts, warnings, successes };
+}
+
+function parseTokenAccountResponse(response, tokenProgramId) {
+  return response.value.map((item) => {
+    const parsed = item.account.data.parsed.info;
+    const amount = parsed.tokenAmount;
+
+    return {
+      pubkey: item.pubkey.toBase58(),
+      mint: parsed.mint,
+      tokenProgramId: tokenProgramId.toBase58(),
+      rawAmount: BigInt(amount.amount),
+      uiAmount: amount.uiAmountString || "0"
+    };
   });
 }
 
@@ -1635,25 +1797,39 @@ async function showWalletBalances(chatId, userId) {
 
   const lines = [];
 
-  await runWithConcurrency(wallets, 4, async (wallet, index) => {
+  await runWithConcurrency(wallets, 1, async (wallet, index) => {
     try {
       const keypair = decryptWallet(wallet);
-      const balance = await rpcWithRetry("get wallet SOL balance", () => connection.getBalance(keypair.publicKey, "confirmed"));
-      await sleep(CONFIG.rpcDelayMs);
-      const tokenAccounts = await getOwnedTokenAccounts(keypair.publicKey);
-      const nonZeroTokens = tokenAccounts.filter((account) => account.rawAmount > 0n);
-      const tokenPreview = nonZeroTokens
-        .slice(0, 4)
-        .map((account) => `${shortMint(account.mint)}: ${account.uiAmount}`)
-        .join("\n  ");
-      const more = nonZeroTokens.length > 4 ? `\n  +${nonZeroTokens.length - 4} more token account(s)` : "";
-
-      lines[index] = [
+      const parts = [
         `${index + 1}. ${wallet.label}`,
-        `${wallet.publicKey}`,
-        `SOL: ${lamportsToSol(balance)}`,
-        nonZeroTokens.length ? `Tokens:\n  ${tokenPreview}${more}` : "Tokens: none"
-      ].join("\n");
+        `${wallet.publicKey}`
+      ];
+
+      try {
+        const balance = await rpcWithRetry("get wallet SOL balance", () => connection.getBalance(keypair.publicKey, "confirmed"));
+        parts.push(`SOL: ${lamportsToSol(balance)}`);
+      } catch (error) {
+        parts.push(`SOL: unavailable - ${friendlyError(error)}`);
+      }
+
+      const { accounts: tokenAccounts, warnings, successes } = await getOwnedTokenAccountsWithWarnings(keypair.publicKey);
+      const nonZeroTokens = tokenAccounts.filter((account) => account.rawAmount > 0n);
+      if (nonZeroTokens.length > 0) {
+        const tokenPreview = nonZeroTokens
+          .slice(0, 4)
+          .map((account) => `${shortMint(account.mint)}: ${account.uiAmount}`)
+          .join("\n  ");
+        const more = nonZeroTokens.length > 4 ? `\n  +${nonZeroTokens.length - 4} more token account(s)` : "";
+        parts.push(`Tokens:\n  ${tokenPreview}${more}`);
+      } else if (successes === 0 && warnings.length > 0) {
+        parts.push(`Tokens: unavailable - ${warnings.join(" | ")}`);
+      } else if (warnings.length > 0) {
+        parts.push(`Tokens: none found. Partial scan warning: ${warnings.join(" | ")}`);
+      } else {
+        parts.push("Tokens: none");
+      }
+
+      lines[index] = parts.join("\n");
     } catch (error) {
       lines[index] = `${index + 1}. ${wallet.label}\n${wallet.publicKey}\nBalance check failed: ${friendlyError(error)}`;
     }
@@ -1667,7 +1843,7 @@ async function selectedTokenBalanceSummary(userId, walletIndexes, tokenMint) {
   const lines = [];
   let holders = 0;
 
-  await runWithConcurrency(walletIndexes, 4, async (walletIndex, resultIndex) => {
+  await runWithConcurrency(walletIndexes, 1, async (walletIndex, resultIndex) => {
     const wallet = getWalletAt(store, walletIndex, userId);
     try {
       const keypair = decryptWallet(wallet);
@@ -1703,6 +1879,7 @@ async function showBackupMenu(chatId) {
       inline_keyboard: [
         [{ text: "Export Backup", callback_data: "export_backup" }],
         [{ text: "Restore Backup", callback_data: "restore_backup" }],
+        [{ text: "Rescue Backup Keys", callback_data: "rescue_backup_keys" }],
         [{ text: "Emergency Key Export", callback_data: "export_private_keys" }]
       ]
     }
@@ -1893,16 +2070,20 @@ function encryptSecret(secret) {
 }
 
 function decryptWallet(wallet) {
-  const secret = wallet.secret;
-  const salt = Buffer.from(secret.salt, "base64");
-  const iv = Buffer.from(secret.iv, "base64");
-  const tag = Buffer.from(secret.tag, "base64");
-  const data = Buffer.from(secret.data, "base64");
-  const key = crypto.scryptSync(CONFIG.appSecret, salt, 32);
-  const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
-  decipher.setAuthTag(tag);
-  const decrypted = Buffer.concat([decipher.update(data), decipher.final()]);
-  return Keypair.fromSecretKey(decrypted);
+  try {
+    const secret = wallet.secret;
+    const salt = Buffer.from(secret.salt, "base64");
+    const iv = Buffer.from(secret.iv, "base64");
+    const tag = Buffer.from(secret.tag, "base64");
+    const data = Buffer.from(secret.data, "base64");
+    const key = crypto.scryptSync(CONFIG.appSecret, salt, 32);
+    const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
+    decipher.setAuthTag(tag);
+    const decrypted = Buffer.concat([decipher.update(data), decipher.final()]);
+    return Keypair.fromSecretKey(decrypted);
+  } catch {
+    throw new Error("Wallet key could not be decrypted. Use the exact same APP_SECRET that created the wallets/backups, then restore or export keys.");
+  }
 }
 
 function keypairFromSecret(text) {
@@ -1963,6 +2144,207 @@ function keypairFromBytes(bytes, options = {}) {
   }
 
   throw new Error(`Secret key must be 64 bytes, or a 32-byte seed. Received ${bytes.length} bytes.`);
+}
+
+function parseBackupPayload(text) {
+  try {
+    return decodeBackup(text);
+  } catch (error) {
+    const looseBackup = looseWalletBackupFromText(text);
+    if (looseBackup.wallets.length > 0) {
+      return looseBackup;
+    }
+    throw new Error(`Could not read that backup. Upload the .txt backup file the bot sent, paste the full backup text, or paste emergency key text with Base58 secret key / JSON secret key lines. ${formatError(error)}`);
+  }
+}
+
+function looseWalletBackupFromText(text) {
+  const normalized = normalizeBackupText(text).replace(/\r/g, "");
+  const wallets = [];
+  const seen = new Set();
+  const blocks = splitLooseWalletBlocks(normalized);
+
+  for (const [index, block] of blocks.entries()) {
+    const label = looseWalletLabel(block, index);
+    const declaredPublicKey = loosePublicKey(block);
+
+    for (const secretText of looseSecretCandidates(block)) {
+      try {
+        tryAddLooseWallet(wallets, seen, secretText, label, declaredPublicKey);
+      } catch {
+        // Ignore loose-text false positives; a valid key candidate will be imported.
+      }
+    }
+  }
+
+  if (wallets.length === 0) {
+    for (const secretText of looseSecretCandidates(normalized)) {
+      try {
+        tryAddLooseWallet(wallets, seen, secretText, "Recovered Wallet", null);
+      } catch {
+        // Ignore loose-text false positives; a valid key candidate will be imported.
+      }
+    }
+  }
+
+  return {
+    version: "loose-text",
+    createdAt: new Date().toISOString(),
+    note: "Recovered from pasted key text",
+    walletCount: wallets.length,
+    wallets
+  };
+}
+
+function splitLooseWalletBlocks(text) {
+  const matches = [...text.matchAll(/(?:^|\n)\s*(Wallet\s+\d+\s*:[\s\S]*?)(?=\n\s*Wallet\s+\d+\s*:|$)/gi)]
+    .map((match) => match[1].trim())
+    .filter(Boolean);
+  return matches.length ? matches : [text];
+}
+
+function looseWalletLabel(block, index) {
+  const walletMatch = block.match(/Wallet\s+\d+\s*:\s*([^\n]+)/i);
+  if (walletMatch?.[1]) return cleanLabel(walletMatch[1]);
+
+  const labelMatch = block.match(/(?:Label|Name)\s*:\s*([^\n]+)/i);
+  if (labelMatch?.[1]) return cleanLabel(labelMatch[1]);
+
+  return `Recovered Wallet ${index + 1}`;
+}
+
+function loosePublicKey(block) {
+  const match = block.match(/(?:Public\s*key|PublicKey|Address|Pubkey)\s*:\s*([1-9A-HJ-NP-Za-km-z]{32,64})/i);
+  return match?.[1] || null;
+}
+
+function looseSecretCandidates(block) {
+  const candidates = [];
+
+  for (const regex of [
+    /(?:Base58\s*secret\s*key|Base58SecretKey|Private\s*key|Secret\s*key)\s*:\s*([1-9A-HJ-NP-Za-km-z]{80,120})/gi,
+    /(?:base58|privateKey|private_key|secretKey|secret_key)\s*["'=:\s]+([1-9A-HJ-NP-Za-km-z]{80,120})/gi
+  ]) {
+    for (const match of block.matchAll(regex)) {
+      candidates.push(match[1]);
+    }
+  }
+
+  for (const regex of [
+    /(?:JSON\s*secret\s*key|Secret\s*key|secretKey|secret_key)\s*:\s*(\[[\d,\s]+\])/gi,
+    /(\[(?:\s*\d+\s*,){31,}\s*\d+\s*\])/g
+  ]) {
+    for (const match of block.matchAll(regex)) {
+      candidates.push(match[1]);
+    }
+  }
+
+  return [...new Set(candidates)];
+}
+
+function tryAddLooseWallet(wallets, seen, secretText, label, declaredPublicKey) {
+  const keypair = keypairFromSecret(secretText);
+  const publicKey = keypair.publicKey.toBase58();
+
+  if (declaredPublicKey && declaredPublicKey !== publicKey) {
+    return;
+  }
+
+  if (seen.has(publicKey)) {
+    return;
+  }
+
+  seen.add(publicKey);
+  wallets.push({
+    label,
+    publicKey,
+    secretKey: bs58.encode(keypair.secretKey)
+  });
+}
+
+function backupWalletList(backup) {
+  if (Array.isArray(backup)) return backup;
+
+  for (const key of ["wallets", "managedWallets", "items", "accounts"]) {
+    if (Array.isArray(backup?.[key])) return backup[key];
+  }
+
+  if (Array.isArray(backup?.data?.wallets)) return backup.data.wallets;
+
+  throw new Error("Backup format is not valid. I could not find a wallets list in it.");
+}
+
+function walletRecordFromBackup(wallet, ownerId, index) {
+  if (!wallet || typeof wallet !== "object") {
+    throw new Error("Backup wallet entry is empty.");
+  }
+
+  const encryptedSecret = encryptedSecretFromBackup(wallet);
+  if (encryptedSecret) {
+    const keypair = decryptWallet({ secret: encryptedSecret });
+    const publicKey = keypair.publicKey.toBase58();
+    assertBackupPublicKey(wallet, publicKey);
+    return {
+      ownerId,
+      label: cleanLabel(wallet.label || wallet.name || `Restored Wallet ${index + 1}`),
+      publicKey,
+      secret: encryptedSecret
+    };
+  }
+
+  const keypair = keypairFromBackupWallet(wallet);
+  const publicKey = keypair.publicKey.toBase58();
+  assertBackupPublicKey(wallet, publicKey);
+  return walletRecord(cleanLabel(wallet.label || wallet.name || `Restored Wallet ${index + 1}`), keypair, ownerId);
+}
+
+function encryptedSecretFromBackup(wallet) {
+  const secret = wallet.secret || wallet.encryptedSecret || wallet.encrypted_secret;
+  if (secret && typeof secret === "object" && !Array.isArray(secret) && secret.salt && secret.iv && secret.tag && secret.data) {
+    return secret;
+  }
+  return null;
+}
+
+function keypairFromBackupWallet(wallet) {
+  const candidates = [
+    wallet.secretKey,
+    wallet.secret_key,
+    wallet.privateKey,
+    wallet.private_key,
+    wallet.base58SecretKey,
+    wallet.base58_secret_key,
+    wallet.base58,
+    wallet.keypair,
+    wallet.secret
+  ];
+
+  for (const candidate of candidates) {
+    if (candidate === undefined || candidate === null) continue;
+    if (Array.isArray(candidate)) {
+      return keypairFromBytes(candidate, { allowSeed: true });
+    }
+    if (typeof candidate === "object") {
+      for (const nestedKey of ["secretKey", "secret_key", "privateKey", "private_key"]) {
+        if (candidate[nestedKey] !== undefined) {
+          return keypairFromBackupWallet({ [nestedKey]: candidate[nestedKey] });
+        }
+      }
+      continue;
+    }
+    if (typeof candidate === "string" && candidate.trim()) {
+      return keypairFromSecret(candidate);
+    }
+  }
+
+  throw new Error("No private key was found in this wallet entry.");
+}
+
+function assertBackupPublicKey(wallet, publicKey) {
+  const declared = wallet.publicKey || wallet.pubkey || wallet.address || wallet.wallet || wallet.owner;
+  if (declared && String(declared).trim() !== publicKey) {
+    throw new Error(`Public key mismatch. Backup says ${declared}, but the private key opens ${publicKey}.`);
+  }
 }
 
 function encodeBackup(value) {
@@ -2190,9 +2572,12 @@ function formatSellConfirm(data) {
 
 function formatSweepSolConfirm(data) {
   return [
-    "Confirm SOL sweep:",
+    "Confirm SOL withdraw:",
     `Destination: ${data.destination}`,
     `Wallets: ${data.walletIndexes.join(", ")}`,
+    "",
+    "This sends each selected wallet's maximum available SOL minus the live network fee.",
+    "If the destination is brand new, the first transfer must be large enough to create it on-chain.",
     "",
     "Reply `yes` to execute or `/cancel`."
   ].join("\n");
@@ -2243,7 +2628,18 @@ function isPrivateChat(chat) {
 }
 
 async function isPausedActionBlocked(action) {
-  const allowedWhilePaused = new Set(["list_wallets", "export_audit", "emergency_stop", "unlock_bot"]);
+  const allowedWhilePaused = new Set([
+    "list_wallets",
+    "check_balances",
+    "backup_menu",
+    "export_backup",
+    "restore_backup",
+    "rescue_backup_keys",
+    "export_private_keys",
+    "export_audit",
+    "emergency_stop",
+    "unlock_bot"
+  ]);
   return (await readState()).paused && !allowedWhilePaused.has(action);
 }
 
@@ -2300,7 +2696,11 @@ function friendlyError(error) {
   }
 
   if (/insufficient funds for rent/i.test(message)) {
-    return "Not enough SOL after fees/rent. Use Withdraw SOL on the latest version, or keep about 0.001 SOL behind on old versions.";
+    return "Not enough SOL after fees/rent. For Withdraw SOL, use an existing funded destination wallet, or make sure the amount is enough to create a brand-new destination account.";
+  }
+
+  if (/destination account does not exist/i.test(message)) {
+    return message;
   }
 
   if (/insufficient funds|custom program error: 0x1/i.test(message)) {
@@ -2308,6 +2708,27 @@ function friendlyError(error) {
   }
 
   return message;
+}
+
+function friendlyBackupError(error) {
+  const message = formatError(error);
+  if (/APP_SECRET|could not be decrypted/i.test(message)) {
+    return "Backup opened, but wallet keys could not be decrypted. Set the new Render APP_SECRET to the exact old APP_SECRET, redeploy, then restore or use /rescue.";
+  }
+  if (/Unexpected token|JSON|Could not read that backup|Backup format/i.test(message)) {
+    return "Could not read that backup. Upload the original wallet-backup .txt file, paste the full backup text, or paste emergency key text with Base58 secret key / JSON secret key lines.";
+  }
+  return message;
+}
+
+function looksLikeBackupDocument(filename, text) {
+  const name = String(filename || "").toLowerCase();
+  const sample = String(text || "").slice(0, 500).toLowerCase();
+  return name.includes("backup")
+    || name.endsWith(".txt")
+    || sample.includes("\"wallets\"")
+    || sample.includes("wallet-backup")
+    || sample.includes("encrypted");
 }
 
 async function rpcWithRetry(label, operation, retries = CONFIG.rpcRetries) {
@@ -2414,6 +2835,12 @@ function isRetryableServiceError(error) {
   return status === 429
     || [500, 502, 503, 504].includes(status)
     || /too many requests|rate limit|temporarily unavailable|fetch failed|network/i.test(message);
+}
+
+function isRetryableSweepError(error) {
+  const message = formatError(error);
+  return isRetryableRpcError(error)
+    || /blockhash|block height exceeded|insufficient funds|insufficient funds for rent|account.*insufficient/i.test(message);
 }
 
 function parseRetryAfterMs(value) {
