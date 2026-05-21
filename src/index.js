@@ -44,19 +44,10 @@ const BRAND_FOOTER = [
 ].join("\n");
 
 const PUBLIC_MENU = [
-  [{ text: "Start Here / Requirements", callback_data: "quick_start" }],
-  [{ text: "Create Wallet Set", callback_data: "create_wallets" }],
-  [{ text: "Import Wallet", callback_data: "import_wallet" }],
-  [{ text: "My Wallets", callback_data: "list_wallets" }],
-  [{ text: "Check Balances", callback_data: "check_balances" }],
-  [{ text: "Backup / Restore", callback_data: "backup_menu" }],
-  [{ text: "Fund Wallets", callback_data: "fund_wallets" }],
-  [{ text: "Bundle Buy Token", callback_data: "batch_buy" }],
-  [{ text: "Bundle Sell Token", callback_data: "batch_sell" }],
-  [{ text: "Volume", callback_data: "timed_trade_plans" }],
-  [{ text: "Withdraw SOL", callback_data: "sweep_sol" }],
-  [{ text: "Sweep Tokens", callback_data: "sweep_tokens" }],
-  [{ text: "Close Empty Token Accounts", callback_data: "close_empty_accounts" }]
+  [{ text: "🐎 Start Here", callback_data: "quick_start" }],
+  [{ text: "💳 Wallet", callback_data: "wallet_menu" }, { text: "🧲 Bundle", callback_data: "bundle_menu" }],
+  [{ text: "📊📈 Volume", callback_data: "timed_trade_plans" }, { text: "🔍 Check Balances", callback_data: "check_balances" }],
+  [{ text: "💾 Backup / Restore", callback_data: "backup_menu" }, { text: "🏦 Withdrawal", callback_data: "withdrawal_menu" }]
 ];
 
 const ADMIN_MENU = [
@@ -69,8 +60,13 @@ const ADMIN_ACTIONS = new Set(["export_audit", "emergency_stop", "unlock_bot"]);
 const PRIVATE_CHAT_ACTIONS = new Set([
   "create_wallets",
   "import_wallet",
+  "wallet_menu",
+  "bundle_menu",
+  "withdrawal_menu",
   "list_wallets",
   "check_balances",
+  "pnl_results",
+  "copy_trade_info",
   "quick_start",
   "backup_menu",
   "export_backup",
@@ -364,6 +360,7 @@ async function ensureDataFiles() {
   await writeJsonIfMissing(auditPath(), { entries: [] });
   await writeJsonIfMissing(statePath(), { paused: false });
   await writeJsonIfMissing(tradePlansPath(), { plans: [] });
+  await writeJsonIfMissing(tradeHistoryPath(), { trades: [] });
   await ensureAppSecretFingerprint();
   await assignUnownedWalletsToSingleAdmin();
   await validateStoredWalletSecrets();
@@ -424,6 +421,10 @@ function statePath() {
 
 function tradePlansPath() {
   return path.join(CONFIG.dataDir, "trade-plans.json");
+}
+
+function tradeHistoryPath() {
+  return path.join(CONFIG.dataDir, "trade-history.json");
 }
 
 function appSecretFingerprintPath() {
@@ -557,6 +558,15 @@ async function handleCallback(query, userId) {
     case "backup_menu":
       await showBackupMenu(chatId);
       break;
+    case "wallet_menu":
+      await showWalletMenu(chatId);
+      break;
+    case "bundle_menu":
+      await showBundleMenu(chatId);
+      break;
+    case "withdrawal_menu":
+      await showWithdrawalMenu(chatId);
+      break;
     case "create_wallets":
       setSession(chatId, "create_wallets_label", userId);
       await say(chatId, "Send a label for this wallet set.");
@@ -570,6 +580,12 @@ async function handleCallback(query, userId) {
       break;
     case "check_balances":
       await showWalletBalances(chatId, userId);
+      break;
+    case "pnl_results":
+      await showPnlResults(chatId, userId);
+      break;
+    case "copy_trade_info":
+      await say(chatId, copyTradeText());
       break;
     case "export_backup":
       await exportWalletBackup(chatId, userId);
@@ -1302,6 +1318,7 @@ async function batchBuyFlow(chatId, session) {
   const store = await readWalletStore();
   const wallets = session.data.walletIndexes.map((index) => getWalletAt(store, index, session.userId));
   const results = [];
+  const tradeEvents = [];
 
   await runWithConcurrency(wallets, CONFIG.bundleConcurrency, async (wallet) => {
     try {
@@ -1339,11 +1356,23 @@ async function batchBuyFlow(chatId, session) {
         feeStatus = `, fee failed - ${formatError(feeError)}`;
       }
       results.push(`${wallet.label}: spent ${lamportsToSol(amountLamports)} SOL, swap ${result.signature}${feeStatus}`);
+      tradeEvents.push({
+        userId: session.userId,
+        type: "buy",
+        source: "bundle",
+        tokenMint: session.data.tokenMint,
+        walletLabel: wallet.label,
+        walletPublicKey: wallet.publicKey,
+        solLamportsSpent: String(amountLamports),
+        tokenAmount: result.outputAmount || null,
+        signature: result.signature
+      });
     } catch (error) {
       results.push(`${wallet.label}: failed - ${friendlyError(error)}`);
     }
   });
 
+  await recordTradeEvents(tradeEvents);
   await audit("batch_buy_token", {
     chatId,
     userId: session.userId,
@@ -1366,6 +1395,7 @@ async function batchSellFlow(chatId, session) {
   const store = await readWalletStore();
   const wallets = session.data.walletIndexes.map((index) => getWalletAt(store, index, session.userId));
   const results = [];
+  const tradeEvents = [];
 
   await runWithConcurrency(wallets, CONFIG.bundleConcurrency, async (wallet) => {
     try {
@@ -1399,11 +1429,24 @@ async function batchSellFlow(chatId, session) {
         feeStatus = `, fee failed - ${formatError(feeError)}`;
       }
       results.push(`${wallet.label}: swap ${result.signature}${feeStatus}`);
+      tradeEvents.push({
+        userId: session.userId,
+        type: "sell",
+        source: "bundle",
+        tokenMint: session.data.tokenMint,
+        walletLabel: wallet.label,
+        walletPublicKey: wallet.publicKey,
+        tokenAmount: amount.toString(),
+        solLamportsReceived: outputLamports.toString(),
+        signature: result.signature
+      });
     } catch (error) {
       results.push(`${wallet.label}: failed - ${friendlyError(error)}`);
     }
   });
 
+  await recordTradeEvents(tradeEvents);
+  const pnl = await pnlSummaryText(session.userId, session.data.tokenMint);
   await audit("batch_sell_token", {
     chatId,
     userId: session.userId,
@@ -1417,7 +1460,7 @@ async function batchSellFlow(chatId, session) {
   });
 
   clearSession(chatId);
-  await say(chatId, `Batch sell complete:\n\n${results.join("\n")}`);
+  await say(chatId, `Batch sell complete:\n\n${results.join("\n")}\n\n${pnl}`);
   await showMenu(chatId, session.userId);
 }
 
@@ -1427,11 +1470,23 @@ async function createTimedTradePlanFlow(chatId, session) {
   const amountLamports = solToLamports(session.data.amountSol);
   const results = [];
   const planWallets = [];
+  const tradeEvents = [];
 
   await runWithConcurrency(wallets, 1, async (wallet) => {
     try {
       const result = await buyTokenForPlan(wallet, session.data.tokenMint, amountLamports, session.data.slippageBps);
       results.push(`${wallet.label}: buy ${result.signature}${result.feeStatus}`);
+      tradeEvents.push({
+        userId: session.userId,
+        type: "buy",
+        source: "timed_plan",
+        tokenMint: session.data.tokenMint,
+        walletLabel: wallet.label,
+        walletPublicKey: wallet.publicKey,
+        solLamportsSpent: String(amountLamports),
+        tokenAmount: result.outputAmount || null,
+        signature: result.signature
+      });
       planWallets.push({
         label: wallet.label,
         publicKey: wallet.publicKey,
@@ -1454,6 +1509,7 @@ async function createTimedTradePlanFlow(chatId, session) {
     return;
   }
 
+  await recordTradeEvents(tradeEvents);
   const now = Date.now();
   const plan = {
     id: crypto.randomUUID(),
@@ -1571,6 +1627,7 @@ async function sellTokenFromWallet(wallet, tokenMint, percent, slippageBps) {
 
   return {
     signature: result.signature,
+    tokenAmount: amount.toString(),
     outputLamports: outputLamports.toString(),
     feeStatus
   };
@@ -1662,6 +1719,17 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
 
   try {
     const sell = await sellTokenFromWallet(wallet, plan.tokenMint, plan.sellPercent, plan.slippageBps);
+    await recordTradeEvents([{
+      userId: plan.userId,
+      type: "sell",
+      source: "timed_plan",
+      tokenMint: plan.tokenMint,
+      walletLabel: wallet.label,
+      walletPublicKey: wallet.publicKey,
+      tokenAmount: sell.tokenAmount,
+      solLamportsReceived: sell.outputLamports,
+      signature: sell.signature
+    }]);
     planWallet.status = "sold";
     planWallet.triggerReason = triggerReason;
     planWallet.sellSignature = sell.signature;
@@ -2175,7 +2243,21 @@ async function listWallets(chatId, userId) {
   }
 
   const lines = wallets.map((wallet, index) => `${index + 1}. ${wallet.label}\n${wallet.publicKey}`);
-  await say(chatId, `Your managed wallets:\n\n${lines.join("\n\n")}`);
+  await telegram("sendMessage", {
+    chat_id: chatId,
+    text: `Your managed wallets:\n\n${lines.join("\n\n")}\n\nTap a button below to copy a wallet address.`,
+    disable_web_page_preview: true,
+    reply_markup: {
+      inline_keyboard: copyWalletKeyboard(wallets)
+    }
+  });
+}
+
+function copyWalletKeyboard(wallets) {
+  return wallets.map((wallet, index) => ([{
+    text: `Copy ${index + 1}`,
+    copy_text: { text: wallet.publicKey }
+  }]));
 }
 
 async function showWalletBalances(chatId, userId) {
@@ -2261,6 +2343,123 @@ async function exportAudit(chatId) {
     return `${entry.timestamp} | ${entry.action}`;
   });
   await say(chatId, latest.length ? `Last ${latest.length} audit entries:\n\n${latest.join("\n")}` : "Audit log is empty.");
+}
+
+async function showWalletMenu(chatId) {
+  await telegram("sendMessage", {
+    chat_id: chatId,
+    text: withBrandFooter("Wallet tools:"),
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "💴💶💷 Create Wallet Set", callback_data: "create_wallets" }],
+        [{ text: "Import Wallet", callback_data: "import_wallet" }],
+        [{ text: "💳 My Wallets", callback_data: "list_wallets" }],
+        [{ text: "PnL / Results", callback_data: "pnl_results" }],
+        [{ text: "Close Empty Token Accounts", callback_data: "close_empty_accounts" }]
+      ]
+    }
+  });
+}
+
+async function showBundleMenu(chatId) {
+  await telegram("sendMessage", {
+    chat_id: chatId,
+    text: withBrandFooter("Bundle and trade tools:"),
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "🧲 Bundle Buy", callback_data: "batch_buy" }],
+        [{ text: "🧲 Bundle Sell", callback_data: "batch_sell" }],
+        [{ text: "Auto Sell / Timed Plan", callback_data: "timed_trade_plans" }],
+        [{ text: "Copy Trade", callback_data: "copy_trade_info" }]
+      ]
+    }
+  });
+}
+
+async function showWithdrawalMenu(chatId) {
+  await telegram("sendMessage", {
+    chat_id: chatId,
+    text: withBrandFooter("Withdrawal tools:"),
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "🏦 Withdraw SOL", callback_data: "sweep_sol" }],
+        [{ text: "Sweep Tokens", callback_data: "sweep_tokens" }],
+        [{ text: "Fund Wallets", callback_data: "fund_wallets" }]
+      ]
+    }
+  });
+}
+
+async function showPnlResults(chatId, userId) {
+  await say(chatId, await pnlSummaryText(userId));
+}
+
+async function pnlSummaryText(userId, tokenFilter = null) {
+  const history = await readTradeHistory();
+  const aggregates = new Map();
+
+  for (const trade of history.trades.filter((item) => String(item.userId) === String(userId))) {
+    if (tokenFilter && trade.tokenMint !== tokenFilter) continue;
+    const key = `${trade.walletPublicKey}:${trade.tokenMint}`;
+    const entry = aggregates.get(key) || {
+      walletLabel: trade.walletLabel,
+      walletPublicKey: trade.walletPublicKey,
+      tokenMint: trade.tokenMint,
+      buys: 0,
+      sells: 0,
+      spent: 0n,
+      received: 0n
+    };
+
+    if (trade.type === "buy") {
+      entry.buys += 1;
+      entry.spent += BigInt(trade.solLamportsSpent || 0);
+    } else if (trade.type === "sell") {
+      entry.sells += 1;
+      entry.received += BigInt(trade.solLamportsReceived || 0);
+    }
+    aggregates.set(key, entry);
+  }
+
+  const rows = [...aggregates.values()]
+    .sort((a, b) => Number((b.received - b.spent) - (a.received - a.spent)))
+    .slice(0, 12);
+
+  if (rows.length === 0) {
+    return "PnL / Results\n\nNo bot trade history yet. Buys and sells made from this bot will show here.";
+  }
+
+  return [
+    "PnL / Results",
+    "Realized SOL estimate from this bot's recorded buys/sells. Open token value is not included.",
+    "",
+    ...rows.map((row) => {
+      const realized = row.received - row.spent;
+      const sign = realized >= 0n ? "+" : "-";
+      const abs = realized >= 0n ? realized : -realized;
+      return [
+        `${row.walletLabel} - ${shortMint(row.tokenMint)}`,
+        `Buys/Sells: ${row.buys}/${row.sells}`,
+        `Spent: ${lamportsToSol(Number(row.spent))} SOL`,
+        `Received: ${lamportsToSol(Number(row.received))} SOL`,
+        `Realized: ${sign}${lamportsToSol(Number(abs))} SOL`
+      ].join("\n");
+    })
+  ].join("\n\n");
+}
+
+function copyTradeText() {
+  return withBrandFooter([
+    "Copy Trade",
+    "",
+    "Safe copy-trade setup is planned as a separate wallet-watcher flow:",
+    "- Choose a public wallet to watch.",
+    "- Pick your own bot wallets.",
+    "- Set max SOL per copied buy.",
+    "- Set take-profit and stop-loss.",
+    "",
+    "For now, use Volume or Bundle tools for user-confirmed trades."
+  ].join("\n"));
 }
 
 async function showBackupMenu(chatId) {
@@ -2449,6 +2648,23 @@ async function readTradePlans() {
 
 async function writeTradePlans(store) {
   await fs.writeFile(tradePlansPath(), JSON.stringify(store, null, 2));
+}
+
+async function readTradeHistory() {
+  const store = await readJson(tradeHistoryPath());
+  if (!Array.isArray(store.trades)) store.trades = [];
+  return store;
+}
+
+async function recordTradeEvents(events) {
+  if (!events.length) return;
+  const store = await readTradeHistory();
+  store.trades.push(...events.map((event) => ({
+    id: crypto.randomUUID(),
+    timestamp: new Date().toISOString(),
+    ...event
+  })));
+  await fs.writeFile(tradeHistoryPath(), JSON.stringify(store, null, 2));
 }
 
 async function setPaused(paused) {

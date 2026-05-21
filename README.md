@@ -9,6 +9,8 @@ Telegram bot for legitimate, auditable Solana wallet operations:
 - Batch buy a token through Jupiter
 - Batch sell a token through Jupiter
 - Timed trade plans: buy now, sell later by timer, take-profit, or stop-loss
+- PnL / Results from bot-recorded buys and sells
+- Copy buttons for managed wallet addresses
 - Sweep SOL to a destination wallet
 - Sweep SPL tokens to a destination wallet
 - Close empty token accounts
@@ -105,6 +107,18 @@ The main menu shows this as **Volume**. Under the hood it is a timed trade plan:
 Wallet selection supports wallet numbers, `all`, or a wallet group like `group: ogretest`. The bot checks plans about once per minute while the service is awake. If Render was asleep, it catches up when the service wakes and the local data still exists.
 
 This is a position-management feature for the user's own wallets. It does not run repeated buy/sell loops to manufacture volume.
+
+The front menu is intentionally short:
+
+- 🐎 Start Here
+- 💳 Wallet
+- 🧲 Bundle
+- 📊📈 Volume
+- 🔍 Check Balances
+- 💾 Backup / Restore
+- 🏦 Withdrawal
+
+The Wallet menu includes wallet creation/import, My Wallets with copy buttons, and PnL / Results. The Bundle menu contains Bundle Buy, Bundle Sell, Auto Sell / Timed Plan, and Copy Trade info. Copy Trade is shown as a setup/info item until a full wallet-watcher implementation is added.
 
 Menu and buy-flow messages include:
 
