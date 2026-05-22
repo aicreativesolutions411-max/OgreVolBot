@@ -131,25 +131,32 @@ The main menu also includes **OgreSniper**. It provides:
 - Scan Early Plays from latest Solana token profiles, with direct Snipe buttons
 - Score Token for a pasted mint
 - Snipe Setup, which scores a mint and then creates a timed-plan entry after user confirmation
-- Modes: Safe Mode, Smart Money Only, Fast Scalps, Low Cap Moonshots, Meme Momentum, and AI Narrative
+- Modes: Safe Scan, Smart Money Scan, Fast Scalp Scan, Low Cap Scan, Meme Scan, and AI Scan. Tapping a mode immediately scans that category.
 
 OgreSniper scoring is heuristic. It uses Dexscreener/Pump.fun metadata and available market signals to estimate entry score, momentum, rug risk, exit risk, and manipulation score. It does not guarantee profitable trades, and it does not bypass the normal confirm screen.
 
 OgreSniper options:
 
-- **Scan Early Plays** checks latest Solana token profiles and shows the highest-scoring candidates with tap-to-copy CA text, Dex chart buttons, and **Snipe #1/#2/#3** buttons.
+- **Scan Early Plays** checks latest Solana token profiles and shows the highest-scoring candidates with tap-to-copy CA text, Dex chart buttons, and **Snipe #1** through **Snipe #5** buttons.
 - **Score Token** scores one pasted mint before entry and includes **Snipe This** so the user does not need to paste the mint again.
 - **Snipe Setup** scores a mint, asks for wallet selection and SOL amount, then auto-selects a recommended exit preset before confirmation.
-- **Modes** adjust score/risk strictness: Safe Mode, Smart Money Only, Fast Scalps, Low Cap Moonshots, Meme Momentum, and AI Narrative.
+- **Modes** adjust score/risk strictness and immediately run that category scan: Safe Scan, Smart Money Scan, Fast Scalp Scan, Low Cap Scan, Meme Scan, and AI Scan.
 
 Fast scan flow:
 
 1. Tap **Scan Early Plays**.
 2. Open a Dex chart or copy the CA from the result.
-3. Tap **Snipe #1**, **Snipe #2**, or **Snipe #3**.
+3. Tap **Snipe #1** through **Snipe #5**.
 4. Pick **All Wallets**, a quick wallet button, or **Custom / Group**.
 5. Pick 0.05, 0.10, 0.50, 1 SOL, or **Buy X SOL**.
 6. Review the recommended exit preset, customize TP/SL if needed, set slippage, then tap **Confirm**.
+
+Mode scan flow:
+
+1. Tap **Modes**.
+2. Pick the category: Safe, Smart Money, Fast Scalp, Low Cap, Meme, or AI.
+3. The bot saves that mode and shows ranked picks for that category.
+4. Tap a **Snipe** button, choose wallets and amount, set profit/loss settings, then confirm.
 
 OgreSniper exit presets:
 

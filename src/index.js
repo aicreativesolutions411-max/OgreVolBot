@@ -3353,6 +3353,8 @@ async function showSniperModes(chatId, userId, messageId = null) {
     "",
     `Current: ${sniperModeLabel(settings.mode)}`,
     "",
+    "Tap a mode to scan that category now. Each mode returns ranked picks with Snipe buttons, chart links, and copyable CA lines.",
+    "",
     "Safe Mode: stricter score/risk filters.",
     "Smart Money Only: waits for stronger quality signals.",
     "Fast Scalps: quicker auto-exit defaults.",
@@ -3361,9 +3363,9 @@ async function showSniperModes(chatId, userId, messageId = null) {
     "AI Narrative: prioritizes AI/meta naming."
   ].join("\n")), {
     inline_keyboard: [
-      [{ text: "Safe Mode", callback_data: "sniper_mode_safe" }, { text: "Smart Money", callback_data: "sniper_mode_smart" }],
-      [{ text: "Fast Scalps", callback_data: "sniper_mode_fast" }, { text: "Low Cap", callback_data: "sniper_mode_moonshot" }],
-      [{ text: "Meme Momentum", callback_data: "sniper_mode_meme" }, { text: "AI Narrative", callback_data: "sniper_mode_ai" }],
+      [{ text: "Safe Scan", callback_data: "sniper_mode_safe" }, { text: "Smart Money Scan", callback_data: "sniper_mode_smart" }],
+      [{ text: "Fast Scalp Scan", callback_data: "sniper_mode_fast" }, { text: "Low Cap Scan", callback_data: "sniper_mode_moonshot" }],
+      [{ text: "Meme Scan", callback_data: "sniper_mode_meme" }, { text: "AI Scan", callback_data: "sniper_mode_ai" }],
       [{ text: "Back", callback_data: "sniper_menu" }]
     ]
   });
@@ -3507,9 +3509,15 @@ async function buildPositionsOverview(userId) {
   return rows;
 }
 
-async function showSniperScan(chatId, userId, messageId = null) {
+async function showSniperScan(chatId, userId, messageId = null, options = {}) {
   const settings = await sniperSettingsForUser(userId);
-  await sendOrEditMessage(chatId, messageId, withBrandFooter("OgreSniper is scanning latest Solana profiles...\n\nThis checks metadata, liquidity/market signals when available, and momentum heuristics."), {
+  const modeLabel = sniperModeLabel(settings.mode);
+  const scanningLines = [
+    options.modeSelected ? `${modeLabel} selected.` : "OgreSniper is scanning latest Solana profiles...",
+    "",
+    `Scanning for ${modeLabel} picks with metadata, liquidity/market signals, and momentum heuristics.`
+  ];
+  await sendOrEditMessage(chatId, messageId, withBrandFooter(scanningLines.join("\n")), {
     inline_keyboard: [[{ text: "Back", callback_data: "sniper_menu" }]]
   });
 
@@ -3534,7 +3542,7 @@ async function showSniperScan(chatId, userId, messageId = null) {
   }
 
   const keyboard = [
-    ...rows.slice(0, 3).map((row, index) => ([
+    ...rows.slice(0, 5).map((row, index) => ([
       { text: `Snipe #${index + 1}`, callback_data: `sniper_pick:${row.tokenMint}` },
       { text: `Chart #${index + 1}`, url: dexScreenerUrl(row.tokenMint) }
     ])),
@@ -3544,9 +3552,9 @@ async function showSniperScan(chatId, userId, messageId = null) {
   ];
 
   await sendOrEditHtmlMessage(chatId, messageId, withBrandFooter([
-      "<b>OgreSniper Top Picks</b>",
-      `Mode: <b>${escapeHtml(sniperModeLabel(settings.mode))}</b>`,
-      "Tap a Snipe button to choose wallets and size. CA lines are tap-to-copy.",
+      `<b>${escapeHtml(modeLabel)} Picks</b>`,
+      `Mode: <b>${escapeHtml(modeLabel)}</b>`,
+      "Tap Snipe, choose wallets and SOL size, then review/customize profit and loss settings before Confirm. CA lines are tap-to-copy.",
       "",
       ...rows.map(formatSniperPickHtml)
     ].join("\n\n")), {
@@ -4262,10 +4270,13 @@ function howToPage(topic) {
         "- Scan Early Plays: checks latest Solana token profiles and shows the top ranked picks. Each pick has a Snipe button, chart button, and tap-to-copy CA.",
         "- Score Token: paste a mint and get a score. The result has a Snipe This button so you do not need to paste it again.",
         "- Snipe Setup: paste a mint manually, choose wallets, choose SOL per wallet, review the recommended exit preset, optionally customize take-profit/stop-loss, choose slippage, then tap Confirm.",
-        "- Modes: choose Safe Mode, Smart Money Only, Fast Scalps, Low Cap Moonshots, Meme Momentum, or AI Narrative.",
+        "- Modes: choose Safe Scan, Smart Money Scan, Fast Scalp Scan, Low Cap Scan, Meme Scan, or AI Scan. Tapping a mode saves that mode and immediately scans that category.",
         "",
         "Fast scan flow:",
-        "Tap Scan Early Plays, open the Dex chart if you want to inspect it, then tap Snipe #1/#2/#3. Pick All Wallets, a quick wallet button, or Custom / Group. Pick 0.05, 0.10, 0.50, 1 SOL, or Buy X SOL. OgreSniper then selects the best matching exit preset for the mode and score.",
+        "Tap Scan Early Plays, open the Dex chart if you want to inspect it, then tap Snipe #1 through #5. Pick All Wallets, a quick wallet button, or Custom / Group. Pick 0.05, 0.10, 0.50, 1 SOL, or Buy X SOL. OgreSniper then selects the best matching exit preset for the mode and score.",
+        "",
+        "Mode scan flow:",
+        "Tap Modes, pick the category you want, then choose from the ranked list. The rest is the same: Snipe button, wallet, amount, profit/loss preset, optional custom TP/SL, slippage, Confirm.",
         "",
         "Modes explained:",
         "- Safe Mode: strict score and risk limits. Best first mode.",
@@ -4905,7 +4916,7 @@ async function updateSniperMode(chatId, userId, mode, messageId = null) {
   };
   await writeSniperSettings(store);
   await audit("sniper_mode_update", { chatId, userId, mode });
-  await showSniperMenu(chatId, userId, messageId);
+  await showSniperScan(chatId, userId, messageId, { modeSelected: true });
 }
 
 async function setPaused(paused) {
