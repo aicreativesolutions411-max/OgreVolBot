@@ -50,11 +50,19 @@ const PNL_CARD_STYLE = Object.freeze({
   fontFamily: "Arial, Helvetica, sans-serif",
   bg: "#071407",
   green: "#18ff29",
+  slime: "#39ff14",
   red: "#ff3838",
   white: "#f7fff7",
   muted: "#b8c7b8",
   panel: "rgba(4, 16, 5, 0.72)"
 });
+const PNL_CARD_BORDER_FILES = [
+  path.join(__dirname, "assets", "pnl-borders", "ogre-pnl-border-1.png"),
+  path.join(__dirname, "assets", "pnl-borders", "ogre-pnl-border-2.png"),
+  path.join(__dirname, "assets", "pnl-borders", "ogre-pnl-border-3.png")
+];
+const pnlBorderDataUrlCache = new Map();
+let pnlBorderRotationIndex = 0;
 const BRAND_FOOTER = [
   "Powered by Ogres",
   "Telegram: https://t.me/ogrecoinonsol",
@@ -169,8 +177,8 @@ function loadConfig() {
   const jupiter429CooldownMs = Number.parseInt(process.env.JUPITER_429_COOLDOWN_MS || String(speedDefaults.jupiter429CooldownMs), 10);
   const balanceConcurrency = Number.parseInt(process.env.BALANCE_CONCURRENCY || String(speedDefaults.balanceConcurrency), 10);
   const balanceCacheTtlMs = Number.parseInt(process.env.BALANCE_CACHE_TTL_MS || "12000", 10);
-  const defaultSlippageBps = Number.parseInt(process.env.DEFAULT_SLIPPAGE_BPS || "100", 10);
-  const sniperDefaultSlippageBps = Number.parseInt(process.env.SNIPER_DEFAULT_SLIPPAGE_BPS || "500", 10);
+  const defaultSlippageBps = Number.parseInt(process.env.DEFAULT_SLIPPAGE_BPS || "400", 10);
+  const sniperDefaultSlippageBps = Number.parseInt(process.env.SNIPER_DEFAULT_SLIPPAGE_BPS || "400", 10);
   const jupiterSwapMaxAttempts = Number.parseInt(process.env.JUPITER_SWAP_MAX_ATTEMPTS || "2", 10);
 
   if (!Number.isInteger(bundleFeeBps) || bundleFeeBps < 0 || bundleFeeBps > 1000) {
@@ -3984,6 +3992,10 @@ async function renderPnlCard(row, metadata = {}) {
     priceMove || null
   ].filter(Boolean).join("  |  ");
   const profitLabel = `${positive ? "+" : "-"}${lamportsBigToSol(realized >= 0n ? realized : -realized)} SOL`;
+  const borderDataUrl = await nextPnlBorderDataUrl();
+  const borderLayer = borderDataUrl
+    ? `<image href="${borderDataUrl}" x="0" y="0" width="${PNL_CARD_STYLE.width}" height="${PNL_CARD_STYLE.height}" preserveAspectRatio="xMidYMid slice"/>`
+    : pnlSlimeBorderSvg();
 
   const svg = `
 <svg xmlns="http://www.w3.org/2000/svg" width="${PNL_CARD_STYLE.width}" height="${PNL_CARD_STYLE.height}" viewBox="0 0 ${PNL_CARD_STYLE.width} ${PNL_CARD_STYLE.height}">
@@ -4001,6 +4013,10 @@ async function renderPnlCard(row, metadata = {}) {
     <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
       <feDropShadow dx="0" dy="20" stdDeviation="24" flood-color="#000000" flood-opacity="0.55"/>
     </filter>
+    <filter id="slimeGlow" x="-10%" y="-20%" width="120%" height="145%">
+      <feDropShadow dx="0" dy="0" stdDeviation="5" flood-color="${PNL_CARD_STYLE.slime}" flood-opacity="0.95"/>
+      <feDropShadow dx="0" dy="0" stdDeviation="18" flood-color="${PNL_CARD_STYLE.slime}" flood-opacity="0.42"/>
+    </filter>
   </defs>
   <rect width="1200" height="675" fill="url(#bg)"/>
   <rect width="1200" height="675" fill="url(#glow)"/>
@@ -4008,6 +4024,7 @@ async function renderPnlCard(row, metadata = {}) {
     <path d="M0 570 C220 420 342 690 540 520 S882 430 1200 560 L1200 675 L0 675 Z" fill="${accent}"/>
     <path d="M60 100 H1140 M60 590 H1140 M980 60 V615" stroke="${accent}" stroke-width="2"/>
   </g>
+  ${borderLayer}
   <rect x="42" y="86" width="1116" height="510" rx="42" fill="${PNL_CARD_STYLE.panel}" filter="url(#shadow)" stroke="rgba(255,255,255,0.09)"/>
   ${art}
   <text x="555" y="162" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="74" font-weight="900" fill="${PNL_CARD_STYLE.white}" letter-spacing="0">OGRE</text>
@@ -4021,6 +4038,52 @@ async function renderPnlCard(row, metadata = {}) {
 </svg>`;
 
   return sharp(Buffer.from(svg)).png().toBuffer();
+}
+
+async function nextPnlBorderDataUrl() {
+  if (PNL_CARD_BORDER_FILES.length === 0) return null;
+
+  for (let attempt = 0; attempt < PNL_CARD_BORDER_FILES.length; attempt += 1) {
+    const index = pnlBorderRotationIndex % PNL_CARD_BORDER_FILES.length;
+    pnlBorderRotationIndex = (pnlBorderRotationIndex + 1) % PNL_CARD_BORDER_FILES.length;
+    const dataUrl = await pnlBorderDataUrl(PNL_CARD_BORDER_FILES[index]);
+    if (dataUrl) return dataUrl;
+  }
+
+  return null;
+}
+
+async function pnlBorderDataUrl(filePath) {
+  if (pnlBorderDataUrlCache.has(filePath)) {
+    return pnlBorderDataUrlCache.get(filePath);
+  }
+
+  try {
+    const buffer = await fs.readFile(filePath);
+    const dataUrl = `data:image/png;base64,${buffer.toString("base64")}`;
+    pnlBorderDataUrlCache.set(filePath, dataUrl);
+    return dataUrl;
+  } catch {
+    pnlBorderDataUrlCache.set(filePath, null);
+    return null;
+  }
+}
+
+function pnlSlimeBorderSvg() {
+  const slime = PNL_CARD_STYLE.slime;
+  return `
+  <g filter="url(#slimeGlow)">
+    <rect x="42" y="86" width="1116" height="510" rx="42" fill="none" stroke="${slime}" stroke-width="7"/>
+    <path d="M85 86 H1115 Q1158 86 1158 129 V157 C1139 153 1125 168 1111 150 C1097 132 1078 138 1070 158 C1062 178 1039 178 1030 158 C1020 134 997 137 987 157 C978 176 955 176 947 156 C938 135 916 134 906 154 C896 175 872 176 864 153 C856 130 834 134 825 156 C817 177 791 177 784 154 C777 131 755 132 747 155 C738 181 711 177 704 153 C697 131 674 134 665 156 C657 177 632 178 623 154 C614 130 591 134 584 156 C576 179 548 179 541 155 C534 132 511 133 503 155 C495 177 469 177 462 154 C454 130 431 133 423 155 C415 177 389 176 382 153 C374 130 352 132 344 155 C336 179 309 176 302 152 C295 130 272 134 264 156 C256 178 231 177 223 154 C216 134 194 132 184 151 C174 170 150 169 141 151 C132 133 111 134 101 154 C94 168 76 166 60 157 V129 Q60 86 85 86 Z" fill="${slime}" opacity="0.96"/>
+    <path d="M135 86 C123 118 129 150 141 181 C151 207 143 236 124 258 C112 230 114 202 103 180 C91 155 92 124 108 86 Z" fill="${slime}"/>
+    <path d="M308 86 C292 125 309 156 299 190 C292 214 272 223 254 215 C278 188 257 154 275 116 C281 102 289 92 299 86 Z" fill="${slime}" opacity="0.92"/>
+    <path d="M526 86 C511 126 527 169 515 207 C507 234 485 251 461 247 C492 213 469 169 489 124 C498 103 510 91 526 86 Z" fill="${slime}"/>
+    <path d="M742 86 C725 124 744 158 734 198 C727 226 705 237 681 230 C711 202 691 158 708 120 C716 102 728 91 742 86 Z" fill="${slime}" opacity="0.92"/>
+    <path d="M1014 86 C999 120 1012 150 1002 181 C995 204 977 213 957 207 C982 184 964 149 980 116 C988 100 1000 90 1014 86 Z" fill="${slime}"/>
+    <circle cx="141" cy="181" r="12" fill="${slime}"/>
+    <circle cx="515" cy="207" r="14" fill="${slime}"/>
+    <circle cx="734" cy="198" r="11" fill="${slime}"/>
+  </g>`;
 }
 
 async function getDexTokenMetadata(tokenMint) {
@@ -4446,7 +4509,7 @@ function howToPage(topic) {
         "",
         "Execution:",
         "OgreSniper uses the same timed-plan engine as Volume. It buys after you confirm, then watches for the selected timer, take-profit, or stop-loss exit.",
-        `Fast launches can move before the first transaction lands, so OgreSniper's default slippage is ${CONFIG.sniperDefaultSlippageBps} bps and swaps can retry with a fresh Jupiter order on retryable quote/execution errors.`,
+        `Fast launches can move before the first transaction lands, so OgreSniper's default slippage is ${CONFIG.sniperDefaultSlippageBps} bps and swaps can retry with a fresh Jupiter order on retryable quote/execution errors. Use 300 bps, default 400 bps, or 500 bps for normal use; higher custom slippage can create a worse fill.`,
         "",
         "Manual CA trades:",
         "If you already know the token you want, use Trade for one wallet or Bundle for multiple wallets. OgreSniper is kept focused on bot-researched picks.",
@@ -4752,17 +4815,10 @@ async function sendQuickPercentPrompt(chatId, text) {
 
 async function sendQuickSlippagePrompt(chatId, text, options = {}) {
   const defaultBps = Number.isInteger(options.defaultBps) ? options.defaultBps : CONFIG.defaultSlippageBps;
-  const inline_keyboard = options.fastButtons
-    ? [
-        [{ text: `Default ${defaultBps} bps`, callback_data: "quick:default" }, { text: "500 bps", callback_data: "quick:500" }],
-        [{ text: "1000 bps", callback_data: "quick:1000" }, { text: "1500 bps", callback_data: "quick:1500" }],
-        [{ text: "Custom", callback_data: "quick:custom" }]
-      ]
-    : [
-        [{ text: `Default ${defaultBps} bps`, callback_data: "quick:default" }, { text: "100 bps", callback_data: "quick:100" }],
-        [{ text: "300 bps", callback_data: "quick:300" }, { text: "500 bps", callback_data: "quick:500" }],
-        [{ text: "Custom", callback_data: "quick:custom" }]
-      ];
+  const inline_keyboard = [
+    [{ text: `Default ${defaultBps} bps`, callback_data: "quick:default" }, { text: "300 bps", callback_data: "quick:300" }],
+    [{ text: "500 bps", callback_data: "quick:500" }, { text: "Custom", callback_data: "quick:custom" }]
+  ];
 
   await telegram("sendMessage", {
     chat_id: chatId,

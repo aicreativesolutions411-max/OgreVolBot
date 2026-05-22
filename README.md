@@ -50,8 +50,8 @@ This bot does not provide wallet washing, provenance hiding, mixer behavior, or 
    BUNDLE_CONCURRENCY=2
    BALANCE_CONCURRENCY=3
    BALANCE_CACHE_TTL_MS=12000
-   DEFAULT_SLIPPAGE_BPS=100
-   SNIPER_DEFAULT_SLIPPAGE_BPS=500
+   DEFAULT_SLIPPAGE_BPS=400
+   SNIPER_DEFAULT_SLIPPAGE_BPS=400
    JUPITER_SWAP_MAX_ATTEMPTS=2
    BUY_RESERVE_SOL=0.01
    RPC_MIN_INTERVAL_MS=450
@@ -169,7 +169,7 @@ OgreSniper exit presets:
 
 After the amount is chosen, the bot picks a recommended preset from the active mode and score. Users can tap **Use Preset**, **Customize TP/SL**, or **Back**. Custom TP/SL changes the take-profit and stop-loss percentages while keeping the preset timer and sell percent.
 
-OgreSniper uses `SNIPER_DEFAULT_SLIPPAGE_BPS` for its default slippage button. The starter value is 500 bps because early launches can move before the first transaction lands. Normal Trade and Bundle still use `DEFAULT_SLIPPAGE_BPS`.
+Slippage quick buttons use a safer 3% / 4% / 5% shape: 300 bps, default 400 bps, and 500 bps. Anything higher is left behind **Custom** because it can land at a worse fill if price moves against the user. OgreSniper uses `SNIPER_DEFAULT_SLIPPAGE_BPS`; normal Trade and Bundle use `DEFAULT_SLIPPAGE_BPS`.
 
 Manual CA trades belong in **Trade** for one wallet or **Bundle** for multiple wallets. OgreSniper stays focused on bot-researched picks and fast managed exits.
 
@@ -191,7 +191,7 @@ The How To Use button opens a clickable learning hub with user-friendly instruct
 
 The Trade menu is for one wallet at a time. It includes Buy, Sell, Auto Sell, DCA Buy, DCA Sell, Positions, and Wallets. Buy screens include quick buttons for `0.10 SOL`, `0.50 SOL`, `1 SOL`, `max`, and custom amount. Sell screens include quick buttons for `25%`, `50%`, `100%`, and custom percent.
 
-The Wallet menu includes wallet creation/import, My Wallets with tap-to-copy address text, Positions Overview, and PnL / Results. Positions Overview only shows coins the managed wallets still hold. PnL / Results shows bot-recorded buys and sells newest first, with older trades below, plus share-card buttons. Successful sells try to send a PnL card automatically. Cards use Dexscreener metadata/art first; if Dexscreener has no token image/name/symbol, the bot tries Pump.fun metadata next. The Bundle menu contains Bundle Buy, Bundle Sell, DCA Buy, DCA Sell, and Copy Trade info. Use the main Volume button for auto-sell, take-profit, stop-loss, and Repeat cycles. Copy Trade is shown as a setup/info item until a full wallet-watcher implementation is added.
+The Wallet menu includes wallet creation/import, My Wallets with tap-to-copy address text, Check Balances, Positions Overview, and PnL / Results. Positions Overview only shows coins the managed wallets still hold. PnL / Results shows bot-recorded buys and sells newest first, with older trades below, plus share-card buttons. Successful sells try to send a PnL card automatically. Cards use Dexscreener metadata/art first; if Dexscreener has no token image/name/symbol, the bot tries Pump.fun metadata next. Cards rotate through the branded neon slime frame assets while keeping the same PnL text layout. The Bundle menu contains Bundle Buy, Bundle Sell, DCA Buy, DCA Sell, and Copy Trade info. Use the main Volume button for auto-sell, take-profit, stop-loss, and Repeat cycles. Copy Trade is shown as a setup/info item until a full wallet-watcher implementation is added.
 
 Menu navigation edits the existing Telegram menu message when possible, with Main Menu back buttons on submenus. Wallet lists, backups, trade results, and generated PnL cards still post as new messages so users do not lose important data.
 
