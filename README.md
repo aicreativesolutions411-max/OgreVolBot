@@ -115,7 +115,7 @@ This is a position-management feature for the user's own wallets. It does not ru
 
 The front menu is intentionally short:
 
-- 🐎 Start Here
+- 🐎 How To Use
 - 💱 Trade
 - 💳 Wallet
 - 🧲 Bundle
@@ -123,6 +123,8 @@ The front menu is intentionally short:
 - 🔍 Check Balances
 - 💾 Backup / Restore
 - 🏦 Withdrawal
+
+The How To Use button opens a clickable learning hub with user-friendly instructions for Trade, Wallet, Bundle, Volume, Check Balances, Backup / Restore, Withdrawal, and a Success Checklist. The Backup / Restore page explains exactly how to upload the automatic `.txt` backup file from Telegram or paste backup text if upload fails.
 
 The Trade menu is for one wallet at a time. It includes Buy, Sell, Auto Sell, DCA Buy, DCA Sell, Positions, and Wallets. Buy screens include quick buttons for `0.10 SOL`, `0.50 SOL`, `1 SOL`, `max`, and custom amount. Sell screens include quick buttons for `25%`, `50%`, `100%`, and custom percent.
 

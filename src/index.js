@@ -45,7 +45,7 @@ const BRAND_FOOTER = [
 ].join("\n");
 
 const PUBLIC_MENU = [
-  [{ text: "🐎 Start Here", callback_data: "quick_start" }],
+  [{ text: "🐎 How To Use", callback_data: "quick_start" }],
   [{ text: "💱 Trade", callback_data: "trade_menu" }],
   [{ text: "💳 Wallet", callback_data: "wallet_menu" }, { text: "🧲 Bundle", callback_data: "bundle_menu" }],
   [{ text: "📊📈 Volume", callback_data: "timed_trade_plans" }, { text: "🔍 Check Balances", callback_data: "check_balances" }],
@@ -72,6 +72,7 @@ const PRIVATE_CHAT_ACTIONS = new Set([
   "positions_overview",
   "copy_trade_info",
   "quick_start",
+  "main_menu",
   "backup_menu",
   "export_backup",
   "export_private_keys",
@@ -573,6 +574,15 @@ async function handleCallback(query, userId) {
     return;
   }
 
+  if (query.data?.startsWith("howto_")) {
+    if (!isPrivateChat(chat)) {
+      await say(chatId, "Open this bot in DM to use the How To guide.");
+      return;
+    }
+    await showHowToPage(chatId, query.data.replace("howto_", ""));
+    return;
+  }
+
   if (await isPausedActionBlocked(query.data)) {
     await say(chatId, "Emergency stop is active. Use Unlock Bot to re-enable transaction flows.");
     return;
@@ -589,7 +599,10 @@ async function handleCallback(query, userId) {
 
   switch (query.data) {
     case "quick_start":
-      await say(chatId, quickStartText());
+      await showHowToMenu(chatId);
+      break;
+    case "main_menu":
+      await showMenu(chatId, userId);
       break;
     case "backup_menu":
       await showBackupMenu(chatId);
@@ -3136,28 +3149,299 @@ async function showBackupMenu(chatId) {
   });
 }
 
-function quickStartText() {
+async function showHowToMenu(chatId) {
+  await telegram("sendMessage", {
+    chat_id: chatId,
+    text: withBrandFooter([
+      "How To Use This Bot",
+      "",
+      "Tap a section below to learn that part of the bot. Start with Wallet, Backup, and Trade if this is your first time.",
+      "",
+      "Basic flow:",
+      "1. Create or import a wallet.",
+      "2. Save the automatic backup file.",
+      "3. Fund the wallet with enough SOL for buys plus network fees.",
+      "4. Trade, track positions, then withdraw when ready."
+    ].join("\n")),
+    disable_web_page_preview: true,
+    reply_markup: { inline_keyboard: howToMenuKeyboard() }
+  });
+}
+
+async function showHowToPage(chatId, topic) {
+  if (topic === "menu") {
+    await showHowToMenu(chatId);
+    return;
+  }
+
+  const page = howToPage(topic);
+  if (!page) {
+    await showHowToMenu(chatId);
+    return;
+  }
+
+  await telegram("sendMessage", {
+    chat_id: chatId,
+    text: withBrandFooter(page.text),
+    disable_web_page_preview: true,
+    reply_markup: { inline_keyboard: howToPageKeyboard(page.openAction) }
+  });
+}
+
+function howToMenuKeyboard() {
   return [
-    "Start Here",
-    "",
-    "1. Create Wallet Set",
-    "Make the wallets you want the bot to control.",
-    "",
-    "2. Save Backup",
-    "The bot automatically sends a backup after wallet creation/import. Keep it private.",
-    "",
-    "3. Fund Wallets",
-    `Each buy wallet needs buy amount + about ${CONFIG.buyReserveSol} SOL for fees/reserve.`,
-    "",
-    "4. Bundle Buy",
-    "Enter token mint, wallets, then amount. Type `max` to use all available SOL except the safety reserve.",
-    "",
-    "5. Bundle Sell",
-    "The bot checks token balances first. If a wallet shows 0, it cannot sell that token.",
-    "",
-    "6. Withdraw SOL",
-    "Use Withdraw SOL to send SOL out. Latest version drains balance - network fee to avoid rent errors."
-  ].join("\n");
+    [{ text: "💱 Trade", callback_data: "howto_trade" }],
+    [{ text: "💳 Wallet", callback_data: "howto_wallet" }, { text: "🧲 Bundle", callback_data: "howto_bundle" }],
+    [{ text: "📊📈 Volume", callback_data: "howto_volume" }, { text: "🔍 Check Balances", callback_data: "howto_balances" }],
+    [{ text: "💾 Backup / Restore", callback_data: "howto_backup" }, { text: "🏦 Withdrawal", callback_data: "howto_withdrawal" }],
+    [{ text: "✅ Success Checklist", callback_data: "howto_success" }],
+    [{ text: "Open Main Menu", callback_data: "main_menu" }]
+  ];
+}
+
+function howToPageKeyboard(openAction) {
+  const rows = [];
+  if (openAction) {
+    rows.push([{ text: "Open This Menu", callback_data: openAction }]);
+  }
+  rows.push(
+    [{ text: "Back to How To", callback_data: "howto_menu" }],
+    [{ text: "Main Menu", callback_data: "main_menu" }]
+  );
+  return rows;
+}
+
+function howToPage(topic) {
+  const pages = {
+    trade: {
+      openAction: "trade_menu",
+      text: [
+        "How To Use: Trade",
+        "",
+        "Use Trade when you only want to trade one wallet at a time.",
+        "",
+        "Buttons inside Trade:",
+        "- Buy: choose one wallet, paste the token mint, then tap a quick amount like Buy 0.10 SOL, Buy 0.50 SOL, Buy 1 SOL, Use Max, or Buy X SOL.",
+        "- Sell: choose one wallet, paste the token mint, then tap Sell 25%, Sell 50%, Sell 100%, or Sell X %.",
+        "- Auto Sell: buys now, then sells later by timer, take-profit, or stop-loss.",
+        "- DCA Buy: splits one total SOL amount into smaller buys over time.",
+        "- DCA Sell: captures the wallet's current token balance, then sells your chosen percent in smaller slices.",
+        "- Positions: shows bot-tracked positions, PnL estimate, balances, and Dexscreener links.",
+        "- Wallets: shows your wallet addresses with copy buttons.",
+        "",
+        "Important settings:",
+        `- Safety reserve: the bot keeps about ${CONFIG.buyReserveSol} SOL per wallet for fees and token account creation.`,
+        "- Slippage: default is usually fine. Raise it only if a token is moving fast or quotes fail from price movement.",
+        "- Use Max: spends available SOL minus the safety reserve.",
+        "- Confirm screen: always read token mint, wallet, amount, fee, and slippage before replying yes.",
+        "",
+        "Best first trade:",
+        "Use a small amount, confirm the token on Dexscreener, then test sell before using larger size."
+      ].join("\n")
+    },
+    wallet: {
+      openAction: "wallet_menu",
+      text: [
+        "How To Use: Wallet",
+        "",
+        "The Wallet menu controls the wallets saved inside the bot for your Telegram account.",
+        "",
+        "Buttons inside Wallet:",
+        "- Create Wallet Set: enter a group label, then a count from 1 to 20. Example label: ogretest. The bot creates ogretest 1, ogretest 2, etc.",
+        "- Import Wallet: enter a label, then paste a private key from Phantom/Solflare. Accepted formats are base58 secret key, JSON byte array, or comma-separated 64-byte array.",
+        "- My Wallets: lists wallet labels and addresses. Tap Copy 1, Copy 2, etc. to copy one address quickly.",
+        "- Positions Overview: shows tokens held, estimated value when Jupiter can quote, and Dexscreener links.",
+        "- PnL / Results: shows realized SOL from buys and sells recorded by this bot.",
+        "- Close Empty Token Accounts: reclaims rent from empty SPL token accounts when possible.",
+        "",
+        "Wallet privacy and safety:",
+        "- Each Telegram user only sees their own wallets.",
+        "- Private keys are encrypted at rest with APP_SECRET.",
+        "- Never send seed phrases. The bot does not need them.",
+        "- Delete Telegram messages that contain raw private keys after importing.",
+        "",
+        "After creating/importing wallets:",
+        "The bot sends an automatic encrypted backup file. Keep that file private."
+      ].join("\n")
+    },
+    bundle: {
+      openAction: "bundle_menu",
+      text: [
+        "How To Use: Bundle",
+        "",
+        "Use Bundle when you want the same action across multiple wallets.",
+        "",
+        "Buttons inside Bundle:",
+        "- Bundle Buy: paste token mint, choose wallets, choose SOL per wallet, choose slippage, confirm.",
+        "- Bundle Sell: paste token mint, choose wallets, choose percent to sell, choose slippage, confirm.",
+        "- DCA Buy: split a total SOL amount per selected wallet into scheduled smaller buys.",
+        "- DCA Sell: split a selected percent per wallet into scheduled smaller sells.",
+        "- Auto Sell / Timed Plan: buy now from selected wallets, then sell by timer, take-profit, or stop-loss.",
+        "- Copy Trade: info/setup placeholder for a future wallet watcher.",
+        "",
+        "Wallet selection:",
+        "- Type `all` to use every wallet you own.",
+        "- Type numbers like `1,2,5` to pick specific wallets.",
+        "- Type `group: ogretest` to use wallets whose labels match that group.",
+        "",
+        "Funding rule:",
+        `Each wallet needs at least buy amount + ${CONFIG.buyReserveSol} SOL reserve. Example: 10 wallets buying 0.10 SOL each need about 1.10 SOL spread across those wallets.`,
+        "",
+        "Speed and reliability:",
+        "- The bot queues RPC/Jupiter calls to avoid 429 rate-limit errors.",
+        "- Free/public RPC is not reliable for big batches.",
+        "- If you get rate limits, lower batch size or use a private RPC."
+      ].join("\n")
+    },
+    volume: {
+      openAction: "timed_trade_plans",
+      text: [
+        "How To Use: Volume",
+        "",
+        "The Volume button is a timed trade plan for managing your own position. It is not a wash-trading or fake-volume tool.",
+        "",
+        "What it does:",
+        "- Buys a token now from selected wallet(s).",
+        "- Watches the position about once per minute while the bot is awake.",
+        "- Sells when the timer, take-profit, or stop-loss triggers.",
+        "- If Render sleeps, it catches up when the service wakes and the saved data still exists.",
+        "",
+        "Settings explained:",
+        "- Token mint: the coin you want to trade.",
+        "- Wallets: numbers, all, or group: name.",
+        "- Buy amount: fixed SOL amount per wallet.",
+        "- Sell timer: minutes after buy before selling.",
+        "- Sell percent: how much of the token balance to sell when triggered.",
+        "- Take-profit: sell early if estimated value rises by this percent. Use 0/off to disable.",
+        "- Stop-loss: sell early if estimated value falls by this percent. Use 0/off to disable.",
+        "- Slippage: tolerance for the swap route.",
+        "",
+        "Good setup example:",
+        "Buy 0.10 SOL, sell after 30 minutes, sell 100%, take-profit 25%, stop-loss 10%, default slippage."
+      ].join("\n")
+    },
+    balances: {
+      openAction: "check_balances",
+      text: [
+        "How To Use: Check Balances",
+        "",
+        "Check Balances scans your bot wallets and shows:",
+        "- SOL balance.",
+        "- Token accounts with non-zero balances.",
+        "- Partial warnings if an RPC call is rate-limited.",
+        "",
+        "How to use it:",
+        "Tap Check Balances from the main menu. The bot checks one wallet at a time so it is less likely to hit RPC rate limits.",
+        "",
+        "What errors mean:",
+        "- 429 Too Many Requests: your RPC is rate-limiting. Wait, refresh later, or use a better RPC.",
+        "- Tokens unavailable: token account lookup failed, usually from RPC limits.",
+        "- Tokens none: that wallet has no visible SPL token balances.",
+        "",
+        "For a coin-specific view before selling:",
+        "Use Sell or Bundle Sell, paste the token mint, then select wallet(s). The bot shows selected token balances before asking sell percent."
+      ].join("\n")
+    },
+    backup: {
+      openAction: "backup_menu",
+      text: [
+        "How To Use: Backup / Restore",
+        "",
+        "This is one of the most important menus. Backups protect users if Render restarts, redeploys, or free storage resets.",
+        "",
+        "Buttons inside Backup / Restore:",
+        "- Export Backup: sends an encrypted .txt backup file for your bot wallets.",
+        "- Restore Backup: loads wallets back into the bot from an encrypted backup file or pasted backup text.",
+        "- Rescue Backup Keys: reads a backup and sends a private-key recovery file without needing wallets restored first.",
+        "- Emergency Key Export: sends raw private keys for wallets already inside the bot after exact confirmation.",
+        "",
+        "Automatic backups:",
+        "The bot automatically sends a backup file after wallet creation, wallet import, and wallet restore. The filename includes the group label, user ID, and date.",
+        "",
+        "How to restore by uploading the saved file:",
+        "1. Open the bot in DM.",
+        "2. Tap Backup / Restore.",
+        "3. Tap Restore Backup.",
+        "4. In Telegram, tap the paperclip/attachment button.",
+        "5. Choose File or Document, not photo.",
+        "6. Select the wallet-backup-... .txt file the bot sent you.",
+        "7. Send it to the bot.",
+        "8. The bot imports any wallets that are not already saved.",
+        "",
+        "If file upload fails:",
+        "Open the .txt file, copy all text, tap Restore Backup, and paste it into chat. The bot can also scan pasted text that contains Base58 secret key or JSON secret key lines.",
+        "",
+        "APP_SECRET warning:",
+        "Encrypted backups only restore when Render uses the same APP_SECRET that created them. Never change APP_SECRET after wallets exist.",
+        "",
+        "Keep backups private. Anyone with raw private keys can drain funds."
+      ].join("\n")
+    },
+    withdrawal: {
+      openAction: "withdrawal_menu",
+      text: [
+        "How To Use: Withdrawal",
+        "",
+        "Use Withdrawal when you want to move SOL or tokens out of bot-managed wallets.",
+        "",
+        "Buttons inside Withdrawal:",
+        "- Withdraw SOL: sends the maximum safe SOL from selected wallets to your destination wallet. It estimates the network fee and sends balance minus fee to avoid rent errors.",
+        "- Sweep Tokens: sends SPL tokens from selected wallets to your destination wallet. You can sweep one mint or all tokens found.",
+        "- Fund Wallets: sends SOL from one managed source wallet to selected managed target wallets.",
+        "",
+        "Withdraw SOL steps:",
+        "1. Tap Withdrawal.",
+        "2. Tap Withdraw SOL.",
+        "3. Paste the destination wallet address.",
+        "4. Choose wallet numbers or type all.",
+        "5. Confirm with yes.",
+        "",
+        "Sweep Tokens steps:",
+        "1. Paste destination wallet.",
+        "2. Choose source wallet numbers or all.",
+        "3. Paste one token mint, or type all.",
+        "4. Confirm with yes.",
+        "",
+        "Funding wallets:",
+        "Use Fund Wallets when one bot wallet has SOL and you want to distribute a fixed amount to other bot wallets.",
+        "",
+        "If a withdraw fails:",
+        "Check that the destination address is correct, the wallet has enough SOL for network fees, and your RPC is not rate-limiting."
+      ].join("\n")
+    },
+    success: {
+      openAction: null,
+      text: [
+        "Success Checklist",
+        "",
+        "Before trading:",
+        "- Save your APP_SECRET and never change it.",
+        "- Keep every automatic backup file private.",
+        "- Use a real Solana RPC for smoother buys/sells. Public RPC can rate-limit.",
+        "- Add a Jupiter API key for swap routes.",
+        `- Fund each buy wallet with buy amount + about ${CONFIG.buyReserveSol} SOL reserve.`,
+        "- Test with a small buy and sell first.",
+        "",
+        "When buying:",
+        "- Verify the token mint.",
+        "- Open the Dexscreener link and check liquidity.",
+        "- Use quick buttons for common sizes or Buy X SOL for custom.",
+        "- Read the confirm screen before replying yes.",
+        "",
+        "When selling:",
+        "- Use Positions Overview or Check Balances first.",
+        "- If token balance shows 0, that wallet cannot sell that token.",
+        "- Use Sell 25%, 50%, 100%, or Sell X %.",
+        "",
+        "When something fails:",
+        "- Quote failed usually means no route, low liquidity, slippage too low, not enough SOL, or API/RPC limits.",
+        "- 429 means rate limit. Wait or upgrade RPC/Jupiter limits.",
+        "- If the bot resets, use Backup / Restore with the .txt backup file."
+      ].join("\n")
+    }
+  };
+
+  return pages[topic] || null;
 }
 
 function timedTradePlanIntroText() {
@@ -4206,6 +4490,8 @@ function isPrivateChat(chat) {
 
 async function isPausedActionBlocked(action) {
   const allowedWhilePaused = new Set([
+    "quick_start",
+    "main_menu",
     "list_wallets",
     "check_balances",
     "backup_menu",
