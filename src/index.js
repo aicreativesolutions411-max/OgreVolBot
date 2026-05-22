@@ -61,6 +61,7 @@ const BRAND_FOOTER = [
 const PUBLIC_MENU = [
   [{ text: "🐎 How To Use", callback_data: "quick_start" }],
   [{ text: "💱 Trade", callback_data: "trade_menu" }],
+  [{ text: "🎯 OgreSniper", callback_data: "sniper_menu" }],
   [{ text: "💳 Wallet", callback_data: "wallet_menu" }, { text: "🧲 Bundle", callback_data: "bundle_menu" }],
   [{ text: "📊📈 Volume", callback_data: "timed_trade_plans" }, { text: "🔍 Check Balances", callback_data: "check_balances" }],
   [{ text: "💾 Backup / Restore", callback_data: "backup_menu" }, { text: "🏦 Withdrawal", callback_data: "withdrawal_menu" }]
@@ -78,6 +79,17 @@ const PRIVATE_CHAT_ACTIONS = new Set([
   "import_wallet",
   "wallet_menu",
   "trade_menu",
+  "sniper_menu",
+  "sniper_scan",
+  "sniper_scan_token",
+  "sniper_setup",
+  "sniper_modes",
+  "sniper_mode_safe",
+  "sniper_mode_smart",
+  "sniper_mode_fast",
+  "sniper_mode_moonshot",
+  "sniper_mode_meme",
+  "sniper_mode_ai",
   "bundle_menu",
   "withdrawal_menu",
   "list_wallets",
@@ -448,6 +460,7 @@ async function ensureDataFiles() {
   await writeJsonIfMissing(statePath(), { paused: false });
   await writeJsonIfMissing(tradePlansPath(), { plans: [] });
   await writeJsonIfMissing(dcaPlansPath(), { plans: [] });
+  await writeJsonIfMissing(sniperSettingsPath(), { users: {} });
   await writeJsonIfMissing(tradeHistoryPath(), { trades: [] });
   await ensureAppSecretFingerprint();
   await assignUnownedWalletsToSingleAdmin();
@@ -513,6 +526,10 @@ function tradePlansPath() {
 
 function dcaPlansPath() {
   return path.join(CONFIG.dataDir, "dca-plans.json");
+}
+
+function sniperSettingsPath() {
+  return path.join(CONFIG.dataDir, "sniper-settings.json");
 }
 
 function tradeHistoryPath() {
@@ -690,6 +707,31 @@ async function handleCallback(query, userId) {
     case "trade_menu":
       await showTradeMenu(chatId, messageId);
       break;
+    case "sniper_menu":
+      await showSniperMenu(chatId, userId, messageId);
+      break;
+    case "sniper_modes":
+      await showSniperModes(chatId, userId, messageId);
+      break;
+    case "sniper_scan":
+      await showSniperScan(chatId, userId, messageId);
+      break;
+    case "sniper_scan_token":
+      setSession(chatId, "sniper_scan_token", userId);
+      await say(chatId, withBrandFooter("Send a token mint to score before entry."));
+      break;
+    case "sniper_setup":
+      setSession(chatId, "sniper_token", userId);
+      await say(chatId, withBrandFooter("Send the token mint you want OgreSniper to score and set up."));
+      break;
+    case "sniper_mode_safe":
+    case "sniper_mode_smart":
+    case "sniper_mode_fast":
+    case "sniper_mode_moonshot":
+    case "sniper_mode_meme":
+    case "sniper_mode_ai":
+      await updateSniperMode(chatId, userId, query.data.replace("sniper_mode_", ""), messageId);
+      break;
     case "bundle_menu":
       await showBundleMenu(chatId, messageId);
       break;
@@ -813,7 +855,7 @@ async function handleCallback(query, userId) {
       break;
     case "unlock_bot":
       setSession(chatId, "unlock_confirm", userId);
-      await say(chatId, "Reply `yes` to unlock transaction flows, or `/cancel`.");
+      await sendConfirmPrompt(chatId, "Confirm unlock:\n\nThis re-enables transaction flows after emergency stop.");
       break;
     default:
       await say(chatId, "Unknown menu action. Use /start to reopen the menu.");
@@ -941,6 +983,15 @@ async function handleMessage(message, userId) {
       return;
     }
     await showTradeMenu(chatId);
+    return;
+  }
+
+  if (text === "/sniper") {
+    if (!isPrivateChat(message.chat)) {
+      await say(chatId, "Open this bot in DM to use OgreSniper.");
+      return;
+    }
+    await showSniperMenu(chatId, userId);
     return;
   }
 
@@ -1106,6 +1157,85 @@ async function continueFlow(chatId, text, session) {
         break;
       case "fund_confirm":
         await confirmOrCancel(chatId, text, () => fundWalletsFlow(chatId, session));
+        break;
+      case "sniper_scan_token":
+        await sniperScanTokenFlow(chatId, text, session);
+        break;
+      case "sniper_token":
+        await sniperTokenFlow(chatId, text, session);
+        break;
+      case "sniper_wallets":
+        session.data.walletIndexes = await parseWalletSelectionOrGroup(text, session.userId);
+        session.data.walletSelector = text.trim();
+        session.step = "sniper_amount";
+        await sendQuickAmountPrompt(chatId, [
+          "Send SOL amount to use per wallet.",
+          "",
+          "Early launches are risky. Start small until the filters prove themselves."
+        ].join("\n"));
+        break;
+      case "sniper_amount":
+        session.data.amountSol = parsePositiveNumber(text);
+        session.step = "sniper_exit_preset";
+        await sendQuickChoicePrompt(chatId, "Choose an exit preset for this snipe.", [
+          [{ text: "Fast Scalp", value: "fast" }, { text: "Balanced", value: "balanced" }],
+          [{ text: "Moonbag", value: "moonbag" }, { text: "Safe", value: "safe" }]
+        ], { includeCustom: false });
+        break;
+      case "sniper_exit_preset":
+        applySniperExitPreset(session, text);
+        session.step = "sniper_exit_review";
+        await sendQuickChoicePrompt(chatId, formatSniperPresetDetails(session.data), [
+          [{ text: "Use Preset", value: "use" }, { text: "Customize TP/SL", value: "customize" }],
+          [{ text: "Back", value: "back" }]
+        ], { includeCustom: false });
+        break;
+      case "sniper_exit_review": {
+        const choice = text.trim().toLowerCase();
+        if (choice === "back") {
+          session.step = "sniper_exit_preset";
+          await sendQuickChoicePrompt(chatId, "Choose an exit preset for this snipe.", [
+            [{ text: "Fast Scalp", value: "fast" }, { text: "Balanced", value: "balanced" }],
+            [{ text: "Moonbag", value: "moonbag" }, { text: "Safe", value: "safe" }]
+          ], { includeCustom: false });
+          break;
+        }
+        if (choice === "customize") {
+          session.step = "sniper_custom_take_profit";
+          await sendQuickChoicePrompt(chatId, "Send custom take-profit percent. Example: `35` sells when estimated value is about +35%.", [
+            [{ text: "+20%", value: "20" }, { text: "+35%", value: "35" }],
+            [{ text: "+50%", value: "50" }, { text: "+100%", value: "100" }]
+          ]);
+          break;
+        }
+        if (choice !== "use") {
+          throw new Error("Choose Use Preset, Customize TP/SL, or Back.");
+        }
+        session.step = "sniper_slippage";
+        await sendQuickSlippagePrompt(chatId, `Send slippage in basis points, or type default for ${CONFIG.defaultSlippageBps} bps.`);
+        break;
+      }
+      case "sniper_custom_take_profit":
+        session.data.takeProfitPct = parseOptionalTriggerPercent(text);
+        session.step = "sniper_custom_stop_loss";
+        await sendQuickChoicePrompt(chatId, "Send custom stop-loss percent. Example: `12` sells when estimated value is about -12%.", [
+          [{ text: "-8%", value: "8" }, { text: "-10%", value: "10" }],
+          [{ text: "-15%", value: "15" }, { text: "-25%", value: "25" }]
+        ]);
+        break;
+      case "sniper_custom_stop_loss":
+        session.data.stopLossPct = parseOptionalTriggerPercent(text);
+        session.data.exitPreset = `${session.data.exitPreset} + Custom TP/SL`;
+        session.step = "sniper_slippage";
+        await sendQuickSlippagePrompt(chatId, `Custom exits saved: TP +${session.data.takeProfitPct}%, SL -${session.data.stopLossPct}%.\n\nSend slippage in basis points, or type default for ${CONFIG.defaultSlippageBps} bps.`);
+        break;
+      case "sniper_slippage":
+        session.data.slippageBps = parseSlippage(text);
+        session.step = "sniper_confirm";
+        await sendConfirmPrompt(chatId, withBrandFooter(formatSniperConfirm(session.data)));
+        break;
+      case "sniper_confirm":
+        await confirmOrCancel(chatId, text, () => createSniperTimedPlanFlow(chatId, session));
         break;
       case "trade_buy_wallet": {
         const wallet = await setSingleWalletSelection(session, text);
@@ -1965,6 +2095,21 @@ async function createTimedTradePlanFlow(chatId, session) {
     results.join("\n")
   ].join("\n")));
   await showMenu(chatId, session.userId);
+}
+
+async function createSniperTimedPlanFlow(chatId, session) {
+  const score = session.data.score || await scoreSniperCandidate({ tokenMint: session.data.tokenMint }, await sniperSettingsForUser(session.userId));
+  await audit("sniper_entry_confirmed", {
+    chatId,
+    userId: session.userId,
+    tokenMint: session.data.tokenMint,
+    score: score.score,
+    category: score.category,
+    rugRisk: score.rugRisk,
+    exitRisk: score.exitRisk,
+    mode: session.data.settings?.mode || "safe"
+  });
+  await createTimedTradePlanFlow(chatId, session);
 }
 
 async function createDcaPlanFlow(chatId, session) {
@@ -3161,6 +3306,51 @@ async function showTradeMenu(chatId, messageId = null) {
   });
 }
 
+async function showSniperMenu(chatId, userId, messageId = null) {
+  const settings = await sniperSettingsForUser(userId);
+  await sendOrEditMessage(chatId, messageId, withBrandFooter([
+    "OgreSniper",
+    "",
+    "Find early plays, score risk, and set up a fast entry with automatic exits.",
+    "",
+    `Mode: ${sniperModeLabel(settings.mode)}`,
+    `Minimum score: ${settings.minScore}/100`,
+    `Risk ceiling: ${settings.maxRisk}/100`,
+    "",
+    "Scanner is heuristic. It filters obvious garbage and momentum weakness, but early launches can still fail fast."
+  ].join("\n")), {
+    inline_keyboard: [
+      [{ text: "Scan Early Plays", callback_data: "sniper_scan" }],
+      [{ text: "Score Token", callback_data: "sniper_scan_token" }, { text: "Snipe Setup", callback_data: "sniper_setup" }],
+      [{ text: "Modes", callback_data: "sniper_modes" }],
+      [{ text: "Main Menu", callback_data: "main_menu" }]
+    ]
+  });
+}
+
+async function showSniperModes(chatId, userId, messageId = null) {
+  const settings = await sniperSettingsForUser(userId);
+  await sendOrEditMessage(chatId, messageId, withBrandFooter([
+    "OgreSniper Modes",
+    "",
+    `Current: ${sniperModeLabel(settings.mode)}`,
+    "",
+    "Safe Mode: stricter score/risk filters.",
+    "Smart Money Only: waits for stronger quality signals.",
+    "Fast Scalps: quicker auto-exit defaults.",
+    "Low Cap Moonshots: allows earlier, riskier momentum.",
+    "Meme Momentum: prioritizes social/meta language.",
+    "AI Narrative: prioritizes AI/meta naming."
+  ].join("\n")), {
+    inline_keyboard: [
+      [{ text: "Safe Mode", callback_data: "sniper_mode_safe" }, { text: "Smart Money", callback_data: "sniper_mode_smart" }],
+      [{ text: "Fast Scalps", callback_data: "sniper_mode_fast" }, { text: "Low Cap", callback_data: "sniper_mode_moonshot" }],
+      [{ text: "Meme Momentum", callback_data: "sniper_mode_meme" }, { text: "AI Narrative", callback_data: "sniper_mode_ai" }],
+      [{ text: "Back", callback_data: "sniper_menu" }]
+    ]
+  });
+}
+
 async function showBundleMenu(chatId, messageId = null) {
   await sendOrEditMessage(chatId, messageId, withBrandFooter("Bundle tools:\n\nUse Volume for auto-sell and repeat cycles."), {
     inline_keyboard: [
@@ -3298,6 +3488,92 @@ async function buildPositionsOverview(userId) {
 
   return rows;
 }
+
+async function showSniperScan(chatId, userId, messageId = null) {
+  const settings = await sniperSettingsForUser(userId);
+  await sendOrEditMessage(chatId, messageId, withBrandFooter("OgreSniper is scanning latest Solana profiles...\n\nThis checks metadata, liquidity/market signals when available, and momentum heuristics."), {
+    inline_keyboard: [[{ text: "Back", callback_data: "sniper_menu" }]]
+  });
+
+  const candidates = await fetchSniperCandidates();
+  const scored = [];
+  for (const candidate of candidates.slice(0, 18)) {
+    try {
+      scored.push(await scoreSniperCandidate(candidate, settings));
+    } catch {
+      // Ignore broken profile rows.
+    }
+  }
+
+  const rows = scored
+    .filter((item) => item.score >= Math.max(45, settings.minScore - 20))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 8);
+
+  if (rows.length === 0) {
+    await say(chatId, withBrandFooter("OgreSniper scan found no usable early-play candidates right now.\n\nTry again later, lower mode strictness, or use Score Token with a mint you already found."));
+    return;
+  }
+
+  await telegram("sendMessage", {
+    chat_id: chatId,
+    text: withBrandFooter([
+      "OgreSniper Scan",
+      `Mode: ${sniperModeLabel(settings.mode)}`,
+      "",
+      ...rows.map(formatSniperScoreBlock)
+    ].join("\n\n")),
+    disable_web_page_preview: true,
+    reply_markup: {
+      inline_keyboard: [
+        ...rows.slice(0, 4).map((row, index) => ([{ text: `Chart ${index + 1}: ${row.symbol || shortMint(row.tokenMint)}`, url: dexScreenerUrl(row.tokenMint) }])),
+        [{ text: "Score Token", callback_data: "sniper_scan_token" }, { text: "Snipe Setup", callback_data: "sniper_setup" }],
+        [{ text: "Back", callback_data: "sniper_menu" }]
+      ]
+    }
+  });
+}
+
+async function sniperScanTokenFlow(chatId, text, session) {
+  const tokenMint = parsePublicKey(text).toBase58();
+  const settings = await sniperSettingsForUser(session.userId);
+  const score = await scoreSniperCandidate({ tokenMint }, settings);
+  clearSession(chatId);
+  await telegram("sendMessage", {
+    chat_id: chatId,
+    text: withBrandFooter(["OgreSniper Token Score", "", formatSniperScoreBlock(score), "", "Use Snipe Setup if you want to enter with automatic exits."].join("\n")),
+    disable_web_page_preview: true,
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "Chart", url: dexScreenerUrl(tokenMint) }],
+        [{ text: "Snipe Setup", callback_data: "sniper_setup" }, { text: "Back", callback_data: "sniper_menu" }]
+      ]
+    }
+  });
+}
+
+async function sniperTokenFlow(chatId, text, session) {
+  session.data.tokenMint = parsePublicKey(text).toBase58();
+  const settings = await sniperSettingsForUser(session.userId);
+  session.data.settings = settings;
+  session.data.score = await scoreSniperCandidate({ tokenMint: session.data.tokenMint }, settings);
+
+  if (session.data.score.score < settings.minScore || session.data.score.rugRisk > settings.maxRisk) {
+    await say(chatId, withBrandFooter([
+      "OgreSniper caution:",
+      "",
+      formatSniperScoreBlock(session.data.score),
+      "",
+      `This does not meet ${sniperModeLabel(settings.mode)} filters. You can /cancel or continue by sending wallet numbers anyway.`
+    ].join("\n")));
+  } else {
+    await say(chatId, withBrandFooter(["OgreSniper score passed filters:", "", formatSniperScoreBlock(session.data.score)].join("\n")));
+  }
+
+  session.step = "sniper_wallets";
+  await say(chatId, await walletPrompt(session.userId, "Send wallet numbers, `all`, or `group: group name` for this snipe."));
+}
+
 
 function ensurePosition(positions, tokenMint) {
   const existing = positions.get(tokenMint);
@@ -3554,6 +3830,187 @@ async function getPumpFunTokenMetadata(tokenMint) {
   };
 }
 
+async function fetchSniperCandidates() {
+  const profiles = await fetchJson("https://api.dexscreener.com/token-profiles/latest/v1", {
+    headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" }
+  }).catch(() => []);
+
+  return (Array.isArray(profiles) ? profiles : [])
+    .filter((item) => String(item.chainId || "").toLowerCase() === "solana" && item.tokenAddress)
+    .map((item) => ({
+      tokenMint: item.tokenAddress,
+      profile: item
+    }));
+}
+
+async function scoreSniperCandidate(candidate, settings) {
+  const tokenMint = candidate.tokenMint;
+  const metadata = await getDexTokenMetadata(tokenMint);
+  const dex = await getDexScreenerTokenMetadata(tokenMint).catch(() => ({}));
+  const text = `${metadata.symbol || ""} ${metadata.name || ""}`.toLowerCase();
+  const marketCap = Number(metadata.marketCap || metadata.fdv || dex.marketCap || dex.fdv || 0);
+  const h24 = Number(dex.priceChange?.h24 || 0);
+  const h6 = Number(dex.priceChange?.h6 || 0);
+  const h1 = Number(dex.priceChange?.h1 || 0);
+  const hasImage = Boolean(metadata.imageUrl);
+  const hasMeta = Boolean(metadata.symbol && metadata.name);
+  const narrative = sniperNarrativeScore(text, settings.mode);
+  const liquiditySignal = marketCap > 0 ? Math.min(20, Math.log10(Math.max(10, marketCap)) * 3) : 6;
+  const momentumSignal = Math.max(0, Math.min(25, (h1 * 0.4) + (h6 * 0.15) + (h24 * 0.05)));
+  const metadataSignal = (hasMeta ? 12 : 2) + (hasImage ? 8 : 0);
+  const modeBonus = sniperModeBonus(settings.mode, { marketCap, h1, h6, h24, text });
+  const score = clamp(Math.round(28 + liquiditySignal + momentumSignal + metadataSignal + narrative + modeBonus), 1, 100);
+  const rugRisk = clamp(Math.round(76 - metadataSignal - liquiditySignal - Math.min(18, momentumSignal) + sniperRiskPenalty(text)), 1, 100);
+  const exitRisk = clamp(Math.round(60 - Math.min(22, momentumSignal) + (marketCap > 0 && marketCap < 25_000 ? 18 : 0) + (h1 < -10 ? 20 : 0)), 1, 100);
+  const manipulationScore = clamp(Math.round(35 + (marketCap > 0 && marketCap < 15_000 ? 25 : 0) + (Math.abs(h1) > 100 ? 25 : 0) - (hasMeta ? 8 : 0)), 1, 100);
+  const category = score >= 82 && rugRisk <= settings.maxRisk
+    ? "High Conviction"
+    : score >= settings.minScore && momentumSignal >= 10
+      ? "Momentum"
+      : score >= settings.minScore
+        ? "Stealth Accumulation"
+        : "Avoid";
+
+  return {
+    tokenMint,
+    symbol: metadata.symbol,
+    name: metadata.name,
+    score,
+    category,
+    rugRisk,
+    exitRisk,
+    manipulationScore,
+    momentum: momentumSignal >= 18 ? "Strong" : momentumSignal >= 8 ? "Building" : "Weak",
+    smartMoney: score >= 80 ? "High" : score >= 65 ? "Medium" : "Low",
+    reasons: sniperReasons({ hasImage, hasMeta, marketCap, h1, h6, h24, narrative, settings })
+  };
+}
+
+function formatSniperScoreBlock(score) {
+  return [
+    `${score.category}: ${score.symbol || shortMint(score.tokenMint)}`,
+    `Entry Score: ${score.score}/100`,
+    `Momentum: ${score.momentum}`,
+    `Rug Risk: ${score.rugRisk}/100`,
+    `Exit Risk: ${score.exitRisk}/100`,
+    `Manipulation Score: ${score.manipulationScore}/100`,
+    `Smart Money Proxy: ${score.smartMoney}`,
+    `Mint: ${score.tokenMint}`,
+    score.reasons?.length ? `Why: ${score.reasons.join(" | ")}` : ""
+  ].filter(Boolean).join("\n");
+}
+
+function sniperReasons(data) {
+  const reasons = [];
+  if (data.hasMeta) reasons.push("metadata live");
+  if (data.hasImage) reasons.push("token art found");
+  if (data.marketCap > 0) reasons.push(`MC ${formatUsdCompact(data.marketCap)}`);
+  if (data.h1 > 0) reasons.push(`1h +${data.h1.toFixed(1)}%`);
+  if (data.narrative > 0) reasons.push(`${sniperModeLabel(data.settings.mode)} narrative match`);
+  return reasons.slice(0, 4);
+}
+
+function sniperModeDefaults(mode) {
+  const defaults = {
+    safe: { mode: "safe", minScore: 78, maxRisk: 42 },
+    smart: { mode: "smart", minScore: 82, maxRisk: 45 },
+    fast: { mode: "fast", minScore: 68, maxRisk: 58 },
+    moonshot: { mode: "moonshot", minScore: 62, maxRisk: 65 },
+    meme: { mode: "meme", minScore: 66, maxRisk: 58 },
+    ai: { mode: "ai", minScore: 66, maxRisk: 58 }
+  };
+  return defaults[mode] || defaults.safe;
+}
+
+function sniperModeLabel(mode) {
+  const labels = {
+    safe: "Safe Mode",
+    smart: "Smart Money Only",
+    fast: "Fast Scalps",
+    moonshot: "Low Cap Moonshots",
+    meme: "Meme Momentum",
+    ai: "AI Narrative"
+  };
+  return labels[mode] || labels.safe;
+}
+
+function sniperNarrativeScore(text, mode) {
+  const keywords = {
+    ai: ["ai", "agent", "gpt", "robot", "neural", "compute", "agi"],
+    meme: ["dog", "cat", "frog", "pepe", "bonk", "wif", "meme", "cto"],
+    moonshot: ["moon", "rocket", "pump", "gem", "100x"],
+    fast: ["pump", "moon", "send", "ape"]
+  };
+  const list = keywords[mode] || [];
+  return list.some((word) => text.includes(word)) ? 10 : 0;
+}
+
+function sniperModeBonus(mode, data) {
+  if (mode === "safe" && data.marketCap >= 50_000) return 6;
+  if (mode === "smart" && data.h1 > 10 && data.h6 > 0) return 8;
+  if (mode === "fast" && data.h1 > 15) return 10;
+  if (mode === "moonshot" && data.marketCap > 0 && data.marketCap < 200_000) return 8;
+  if (mode === "meme" || mode === "ai") return sniperNarrativeScore(data.text, mode);
+  return 0;
+}
+
+function sniperRiskPenalty(text) {
+  const bad = ["test", "rug", "scam", "honeypot", "copy", "fake"];
+  return bad.some((word) => text.includes(word)) ? 18 : 0;
+}
+
+function applySniperExitPreset(session, presetText) {
+  const preset = String(presetText || "").trim().toLowerCase();
+  const presets = {
+    fast: { sellDelaySeconds: 180, sellPercent: 100, takeProfitPct: 25, stopLossPct: 10, label: "Fast Scalp" },
+    balanced: { sellDelaySeconds: 900, sellPercent: 80, takeProfitPct: 50, stopLossPct: 15, label: "Balanced" },
+    moonbag: { sellDelaySeconds: 1800, sellPercent: 60, takeProfitPct: 100, stopLossPct: 25, label: "Moonbag" },
+    safe: { sellDelaySeconds: 600, sellPercent: 100, takeProfitPct: 20, stopLossPct: 8, label: "Safe" }
+  };
+  const selected = presets[preset];
+  if (!selected) {
+    throw new Error("Choose Fast Scalp, Balanced, Moonbag, or Safe.");
+  }
+  Object.assign(session.data, selected, {
+    sellDelayMinutes: selected.sellDelaySeconds / 60,
+    loopCount: 1,
+    exitPreset: selected.label,
+    allowRepeat: false
+  });
+}
+
+function formatSniperPresetDetails(data) {
+  return [
+    `Exit preset selected: ${data.exitPreset}`,
+    "",
+    `Sell timer: ${formatDelay(data.sellDelaySeconds)} after buy`,
+    `Sell percent: ${data.sellPercent}%`,
+    `Take-profit: +${data.takeProfitPct}%`,
+    `Stop-loss: -${data.stopLossPct}%`,
+    "",
+    sniperPresetExplanation(data.exitPreset),
+    "",
+    "Use this preset, customize take-profit/stop-loss, or go back and choose another preset."
+  ].join("\n");
+}
+
+function sniperPresetExplanation(label) {
+  const normalized = String(label || "").toLowerCase();
+  if (normalized.includes("fast")) {
+    return "Fast Scalp is built for quick flips: exit fast, take smaller wins, and cut early if it fades.";
+  }
+  if (normalized.includes("balanced")) {
+    return "Balanced gives the trade more time while still taking most of the position off on strength.";
+  }
+  if (normalized.includes("moonbag")) {
+    return "Moonbag takes profit on a bigger move while leaving more room for upside and volatility.";
+  }
+  if (normalized.includes("safe")) {
+    return "Safe is strict: smaller profit target, tighter stop, and full exit to protect capital.";
+  }
+  return "This preset controls timer exit, take-profit, stop-loss, and sell percent.";
+}
+
 async function tokenImageDataUrl(imageUrl) {
   if (!/^https?:\/\//i.test(String(imageUrl || ""))) return null;
 
@@ -3631,6 +4088,7 @@ async function showHowToPage(chatId, topic, messageId = null) {
 function howToMenuKeyboard() {
   return [
     [{ text: "💱 Trade", callback_data: "howto_trade" }],
+    [{ text: "🎯 OgreSniper", callback_data: "howto_sniper" }],
     [{ text: "💳 Wallet", callback_data: "howto_wallet" }, { text: "🧲 Bundle", callback_data: "howto_bundle" }],
     [{ text: "📊📈 Volume", callback_data: "howto_volume" }, { text: "🔍 Check Balances", callback_data: "howto_balances" }],
     [{ text: "💾 Backup / Restore", callback_data: "howto_backup" }, { text: "🏦 Withdrawal", callback_data: "howto_withdrawal" }],
@@ -3677,6 +4135,50 @@ function howToPage(topic) {
         "",
         "Best first trade:",
         "Use a small amount, confirm the token on Dexscreener, then try a sell before using larger size."
+      ].join("\n")
+    },
+    sniper: {
+      openAction: "sniper_menu",
+      text: [
+        "How To Use: OgreSniper",
+        "",
+        "OgreSniper is for finding early plays, scoring risk, and setting up a buy with automatic exits.",
+        "",
+        "Buttons inside OgreSniper:",
+        "- Scan Early Plays: checks latest Solana token profiles and ranks them by entry score, momentum, rug risk, exit risk, and manipulation score.",
+        "- Score Token: paste a mint and get a score before entering.",
+        "- Snipe Setup: paste a mint, choose wallets, choose SOL per wallet, choose an exit preset, optionally customize take-profit/stop-loss, choose slippage, then tap Confirm.",
+        "- Modes: choose Safe Mode, Smart Money Only, Fast Scalps, Low Cap Moonshots, Meme Momentum, or AI Narrative.",
+        "",
+        "Modes explained:",
+        "- Safe Mode: strict score and risk limits. Best first mode.",
+        "- Smart Money Only: stricter score requirement and stronger momentum quality.",
+        "- Fast Scalps: allows more speed-focused entries and pairs well with the Fast Scalp exit.",
+        "- Low Cap Moonshots: allows earlier low-cap setups, with higher risk.",
+        "- Meme Momentum: gives extra weight to current meme-style names/meta.",
+        "- AI Narrative: gives extra weight to AI/agent/computing style names/meta.",
+        "",
+        "Scoring explained:",
+        "- Entry Score estimates metadata quality, liquidity/market signals, price momentum, and narrative fit.",
+        "- Rug Risk is a heuristic warning based on weak metadata, weak liquidity signals, and bad naming patterns.",
+        "- Exit Risk warns when momentum is weak or the launch looks thin.",
+        "- Manipulation Score warns when the move/market cap looks easy to push around.",
+        "- Smart Money Proxy is a quality proxy from available signals, not true wallet tracking yet.",
+        "",
+        "Exit presets:",
+        "- Fast Scalp: sells 100% after 3 minutes, or earlier at +25% take-profit / -10% stop-loss.",
+        "- Balanced: sells 80% after 15 minutes, or earlier at +50% take-profit / -15% stop-loss.",
+        "- Moonbag: sells 60% after 30 minutes, or earlier at +100% take-profit / -25% stop-loss.",
+        "- Safe: sells 100% after 10 minutes, or earlier at +20% take-profit / -8% stop-loss.",
+        "",
+        "Custom exits:",
+        "After choosing a preset, OgreSniper shows what it will do. Tap Use Preset, Customize TP/SL, or Back. Customize TP/SL changes the take-profit and stop-loss percentages while keeping the preset timer and sell percent.",
+        "",
+        "Execution:",
+        "OgreSniper uses the same timed-plan engine as Volume. It buys after you confirm, then watches for the selected timer, take-profit, or stop-loss exit.",
+        "",
+        "Best practice:",
+        "Start tiny, avoid low-score plays, and use Safe Mode until your RPC/Jupiter setup is reliable."
       ].join("\n")
     },
     wallet: {
@@ -3838,13 +4340,13 @@ function howToPage(topic) {
         "2. Tap Withdraw SOL.",
         "3. Paste the destination wallet address.",
         "4. Choose wallet numbers or type all.",
-        "5. Tap Confirm, or reply yes.",
+    "5. Tap Confirm.",
         "",
         "Sweep Tokens steps:",
         "1. Paste destination wallet.",
         "2. Choose source wallet numbers or all.",
         "3. Paste one token mint, or type all.",
-        "4. Tap Confirm, or reply yes.",
+        "4. Tap Confirm.",
         "",
         "Funding wallets:",
         "Use Fund Wallets when one bot wallet has SOL and you want to distribute a fixed amount to other bot wallets.",
@@ -3871,7 +4373,7 @@ function howToPage(topic) {
         "- Verify the token mint.",
         "- Open the Dexscreener link and check liquidity.",
         "- Use quick buttons for common sizes or Buy X SOL for custom.",
-        "- Read the confirm screen before replying yes.",
+        "- Read the confirm screen before tapping Confirm.",
         "",
         "When selling:",
         "- Use Positions Overview or Check Balances first.",
@@ -3988,7 +4490,8 @@ async function sendQuickSlippagePrompt(chatId, text) {
   });
 }
 
-async function sendQuickChoicePrompt(chatId, text, rows) {
+async function sendQuickChoicePrompt(chatId, text, rows, options = {}) {
+  const includeCustom = options.includeCustom !== false;
   await telegram("sendMessage", {
     chat_id: chatId,
     text: withBrandFooter(text),
@@ -3999,20 +4502,25 @@ async function sendQuickChoicePrompt(chatId, text, rows) {
           text: button.text,
           callback_data: `quick:${button.value}`
         }))),
-        [{ text: "Custom", callback_data: "quick:custom" }]
+        ...(includeCustom ? [[{ text: "Custom", callback_data: "quick:custom" }]] : [])
       ]
     }
   });
 }
 
 async function sendConfirmPrompt(chatId, text) {
+  const prompt = "Tap Confirm to execute, or Cancel to go back.";
+  const messageText = text.includes(BRAND_FOOTER)
+    ? text.replace(`\n\n${BRAND_FOOTER}`, `\n\n${prompt}\n\n${BRAND_FOOTER}`)
+    : `${text}\n\n${prompt}`;
+
   await telegram("sendMessage", {
     chat_id: chatId,
-    text,
+    text: messageText,
     disable_web_page_preview: true,
     reply_markup: {
       inline_keyboard: [
-        [{ text: "✅ Confirm", callback_data: "quick:yes" }, { text: "Cancel", callback_data: "quick:cancel" }]
+        [{ text: "✅ Confirm", callback_data: "quick:yes" }, { text: "Cancel / Back", callback_data: "quick:cancel" }]
       ]
     }
   });
@@ -4221,6 +4729,38 @@ async function recordTradeEvents(events) {
     ...event
   })));
   await fs.writeFile(tradeHistoryPath(), JSON.stringify(store, null, 2));
+}
+
+async function readSniperSettings() {
+  const store = await readJson(sniperSettingsPath());
+  if (!store.users || typeof store.users !== "object") store.users = {};
+  return store;
+}
+
+async function writeSniperSettings(store) {
+  await fs.writeFile(sniperSettingsPath(), JSON.stringify(store, null, 2));
+}
+
+async function sniperSettingsForUser(userId) {
+  const store = await readSniperSettings();
+  const key = String(userId);
+  const settings = {
+    ...sniperModeDefaults("safe"),
+    ...(store.users[key] || {})
+  };
+  return settings;
+}
+
+async function updateSniperMode(chatId, userId, mode, messageId = null) {
+  const store = await readSniperSettings();
+  const key = String(userId);
+  store.users[key] = {
+    ...sniperModeDefaults(mode),
+    mode
+  };
+  await writeSniperSettings(store);
+  await audit("sniper_mode_update", { chatId, userId, mode });
+  await showSniperMenu(chatId, userId, messageId);
 }
 
 async function setPaused(paused) {
@@ -4694,6 +5234,10 @@ function parsePositiveNumber(text) {
   return value;
 }
 
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
 function parsePercent(text) {
   const value = Number.parseInt(text, 10);
   if (!Number.isInteger(value) || value < 1 || value > 100) {
@@ -4933,9 +5477,7 @@ function formatFundConfirm(data) {
     "Confirm funding:",
     `Source wallet: ${data.sourceIndex}`,
     `Target wallets: ${data.targetIndexes.join(", ")}`,
-    `Amount per wallet: ${data.amountSol} SOL`,
-    "",
-    "Reply `yes` to execute or `/cancel`."
+    `Amount per wallet: ${data.amountSol} SOL`
   ].join("\n");
 }
 
@@ -4951,9 +5493,7 @@ function formatBuyConfirm(data) {
       `Spend mode: MAX`,
       `Each wallet keeps safety reserve: ${CONFIG.buyReserveSol} SOL`,
       `Platform fee: ${formatFeeRate()} to ${CONFIG.feeWallet}`,
-      `Slippage: ${data.slippageBps} bps`,
-      "",
-      "Reply `yes` to execute or `/cancel`."
+      `Slippage: ${data.slippageBps} bps`
     ].join("\n");
   }
 
@@ -4968,9 +5508,7 @@ function formatBuyConfirm(data) {
     `${data.tradeMode === "single" ? "Net swap" : "Net swap per wallet"}: ${lamportsToSol(amountLamports - feeLamports)} SOL`,
     `Platform fee: ${formatFeeRate()} to ${CONFIG.feeWallet}`,
     `${data.tradeMode === "single" ? "Recommended balance" : "Recommended balance per wallet"}: ${lamportsToSol(recommendedLamports)} SOL`,
-    `Slippage: ${data.slippageBps} bps`,
-    "",
-    "Reply `yes` to execute or `/cancel`."
+    `Slippage: ${data.slippageBps} bps`
   ].join("\n");
 }
 
@@ -4984,9 +5522,7 @@ function formatSellConfirm(data) {
     walletLabel,
     `${data.tradeMode === "single" ? "Percent" : "Percent per wallet"}: ${data.percent}%`,
     `Platform fee: ${formatFeeRate()} of SOL output to ${CONFIG.feeWallet}`,
-    `Slippage: ${data.slippageBps} bps`,
-    "",
-    "Reply `yes` to execute or `/cancel`."
+    `Slippage: ${data.slippageBps} bps`
   ].join("\n");
 }
 
@@ -5007,9 +5543,29 @@ function formatTimedTradePlanConfirm(data) {
     `Stop-loss: ${data.stopLossPct ? `-${data.stopLossPct}%` : "off"}`,
     `Slippage: ${data.slippageBps} bps`,
     "",
-    "The bot buys now, then watches every few seconds while awake. If Render was asleep, it catches up when it wakes.",
-    "Reply `yes` to execute or `/cancel`."
+    "The bot buys now, then watches every few seconds while awake. If Render was asleep, it catches up when it wakes."
   ].join("\n");
+}
+
+function formatSniperConfirm(data) {
+  const score = data.score;
+  return [
+    "Confirm OgreSniper entry:",
+    `Token mint: ${data.tokenMint}`,
+    `Wallets: ${data.walletIndexes.join(", ")}`,
+    `Mode: ${sniperModeLabel(data.settings?.mode || "safe")}`,
+    score ? `Entry Score: ${score.score}/100 (${score.category})` : "",
+    score ? `Rug Risk: ${score.rugRisk}/100` : "",
+    `${data.tradeMode === "single" ? "Buy" : "Buy per wallet"}: ${data.amountSol} SOL`,
+    `Exit preset: ${data.exitPreset}`,
+    `Sell timer: ${formatDelay(data.sellDelaySeconds)} after buy`,
+    `Sell percent: ${data.sellPercent}%`,
+    `Take-profit: +${data.takeProfitPct}%`,
+    `Stop-loss: -${data.stopLossPct}%`,
+    `Slippage: ${data.slippageBps} bps`,
+    "",
+    "This buys now, then watches for timer/take-profit/stop-loss exits."
+  ].filter(Boolean).join("\n");
 }
 
 function formatDcaPlanConfirm(data) {
@@ -5042,8 +5598,7 @@ function formatDcaPlanConfirm(data) {
   lines.push(
     `Platform fee: ${formatFeeRate()} ${data.side === "buy" ? "of SOL input" : "of SOL output"} to ${CONFIG.feeWallet}`,
     "",
-    "The first slice runs on the next runner tick, usually within 1 minute. If Render sleeps, it catches up when awake.",
-    "Reply `yes` to execute or `/cancel`."
+    "The first slice runs on the next runner tick, usually within 1 minute. If Render sleeps, it catches up when awake."
   );
 
   return lines.join("\n");
@@ -5056,9 +5611,7 @@ function formatSweepSolConfirm(data) {
     `Wallets: ${data.walletIndexes.join(", ")}`,
     "",
     "This sends each selected wallet's maximum available SOL minus the live network fee.",
-    "If the destination is brand new, the first transfer must be large enough to create it on-chain.",
-    "",
-    "Reply `yes` to execute or `/cancel`."
+    "If the destination is brand new, the first transfer must be large enough to create it on-chain."
   ].join("\n");
 }
 
@@ -5067,24 +5620,20 @@ function formatSweepTokensConfirm(data) {
     "Confirm token sweep:",
     `Destination: ${data.destination}`,
     `Wallets: ${data.walletIndexes.join(", ")}`,
-    `Token mint: ${data.tokenMint}`,
-    "",
-    "Reply `yes` to execute or `/cancel`."
+    `Token mint: ${data.tokenMint}`
   ].join("\n");
 }
 
 function formatCloseAccountsConfirm(data) {
   return [
     "Confirm close empty token accounts:",
-    `Wallets: ${data.walletIndexes.join(", ")}`,
-    "",
-    "Reply `yes` to execute or `/cancel`."
+    `Wallets: ${data.walletIndexes.join(", ")}`
   ].join("\n");
 }
 
 async function confirmOrCancel(chatId, text, onConfirm, options = {}) {
   if (text.trim().toLowerCase() !== "yes") {
-    await say(chatId, "Reply `yes` to confirm, or `/cancel` to stop this flow.");
+    await sendConfirmPrompt(chatId, "Confirm this action:");
     return;
   }
 

@@ -7,6 +7,7 @@ Telegram bot for legitimate, auditable Solana wallet operations:
 - Emergency private key export for user-owned wallets
 - Fund managed wallets from an imported wallet
 - Single-wallet trade menu for quick buy/sell, auto sell, and DCA
+- OgreSniper early-play scanner, token scorer, mode presets, and timed-plan entry setup
 - Batch buy a token through Jupiter
 - Batch sell a token through Jupiter
 - DCA buy and DCA sell plans with scheduled slices
@@ -67,6 +68,7 @@ This bot does not provide wallet washing, provenance hiding, mixer behavior, or 
 
 - `/start` - open the menu
 - `/trade` - open the single-wallet trade menu
+- `/sniper` - open OgreSniper
 - `/buy` - start a one-wallet buy
 - `/sell` - start a one-wallet sell
 - `/positions` - view positions overview
@@ -124,10 +126,38 @@ Wallet selection supports wallet numbers, `all`, or a wallet group like `group: 
 
 This is a position-management feature for the user's own wallets. It does not run repeated buy/sell loops to manufacture volume.
 
+The main menu also includes **OgreSniper**. It provides:
+
+- Scan Early Plays from latest Solana token profiles
+- Score Token for a pasted mint
+- Snipe Setup, which scores a mint and then creates a timed-plan entry after user confirmation
+- Modes: Safe Mode, Smart Money Only, Fast Scalps, Low Cap Moonshots, Meme Momentum, and AI Narrative
+
+OgreSniper scoring is heuristic. It uses Dexscreener/Pump.fun metadata and available market signals to estimate entry score, momentum, rug risk, exit risk, and manipulation score. It does not guarantee profitable trades, and it does not bypass the normal confirm screen.
+
+OgreSniper options:
+
+- **Scan Early Plays** checks latest Solana token profiles and shows the highest-scoring candidates.
+- **Score Token** scores one pasted mint before entry.
+- **Snipe Setup** scores a mint, asks for wallet selection and SOL amount, then applies an exit preset before confirmation.
+- **Modes** adjust score/risk strictness: Safe Mode, Smart Money Only, Fast Scalps, Low Cap Moonshots, Meme Momentum, and AI Narrative.
+
+OgreSniper exit presets:
+
+- **Fast Scalp** sells 100% after 3 minutes, or earlier at +25% take-profit / -10% stop-loss.
+- **Balanced** sells 80% after 15 minutes, or earlier at +50% take-profit / -15% stop-loss.
+- **Moonbag** sells 60% after 30 minutes, or earlier at +100% take-profit / -25% stop-loss.
+- **Safe** sells 100% after 10 minutes, or earlier at +20% take-profit / -8% stop-loss.
+
+After choosing a preset, the bot shows exactly what it will do. Users can tap **Use Preset**, **Customize TP/SL**, or **Back**. Custom TP/SL changes the take-profit and stop-loss percentages while keeping the preset timer and sell percent.
+
+Normal trade confirmations use inline **Confirm** and **Cancel / Back** buttons. Emergency raw private key export still requires typing `EXPORT KEYS` exactly because it exposes recovery keys.
+
 The front menu is intentionally short:
 
 - 🐎 How To Use
 - 💱 Trade
+- 🎯 OgreSniper
 - 💳 Wallet
 - 🧲 Bundle
 - 📊📈 Volume
