@@ -26,6 +26,10 @@ const jupiterLimiter = createJupiterLimiter();
 const sessions = new Map();
 const mintProgramCache = new Map();
 const dexMetadataCache = new Map();
+const solBalanceCache = new Map();
+const tokenAccountsCache = new Map();
+const tokenBalanceCache = new Map();
+const positionValueCache = new Map();
 const startedAt = new Date();
 let lastKeepAliveStatus = {
   enabled: false,
@@ -81,8 +85,6 @@ const PRIVATE_CHAT_ACTIONS = new Set([
   "trade_menu",
   "sniper_menu",
   "sniper_scan",
-  "sniper_scan_token",
-  "sniper_setup",
   "sniper_modes",
   "sniper_mode_safe",
   "sniper_mode_smart",
@@ -165,6 +167,11 @@ function loadConfig() {
   const jupiterMinIntervalMs = Number.parseInt(process.env.JUPITER_MIN_INTERVAL_MS || String(speedDefaults.jupiterMinIntervalMs), 10);
   const jupiterRetries = Number.parseInt(process.env.JUPITER_RETRIES || "5", 10);
   const jupiter429CooldownMs = Number.parseInt(process.env.JUPITER_429_COOLDOWN_MS || String(speedDefaults.jupiter429CooldownMs), 10);
+  const balanceConcurrency = Number.parseInt(process.env.BALANCE_CONCURRENCY || String(speedDefaults.balanceConcurrency), 10);
+  const balanceCacheTtlMs = Number.parseInt(process.env.BALANCE_CACHE_TTL_MS || "12000", 10);
+  const defaultSlippageBps = Number.parseInt(process.env.DEFAULT_SLIPPAGE_BPS || "100", 10);
+  const sniperDefaultSlippageBps = Number.parseInt(process.env.SNIPER_DEFAULT_SLIPPAGE_BPS || "500", 10);
+  const jupiterSwapMaxAttempts = Number.parseInt(process.env.JUPITER_SWAP_MAX_ATTEMPTS || "2", 10);
 
   if (!Number.isInteger(bundleFeeBps) || bundleFeeBps < 0 || bundleFeeBps > 1000) {
     throw new Error("BUNDLE_FEE_BPS must be an integer from 0 to 1000.");
@@ -206,6 +213,26 @@ function loadConfig() {
     throw new Error("JUPITER_429_COOLDOWN_MS must be an integer from 0 to 120000.");
   }
 
+  if (!Number.isInteger(balanceConcurrency) || balanceConcurrency < 1 || balanceConcurrency > 8) {
+    throw new Error("BALANCE_CONCURRENCY must be an integer from 1 to 8.");
+  }
+
+  if (!Number.isInteger(balanceCacheTtlMs) || balanceCacheTtlMs < 0 || balanceCacheTtlMs > 120_000) {
+    throw new Error("BALANCE_CACHE_TTL_MS must be an integer from 0 to 120000.");
+  }
+
+  if (!Number.isInteger(defaultSlippageBps) || defaultSlippageBps < 1 || defaultSlippageBps > 5000) {
+    throw new Error("DEFAULT_SLIPPAGE_BPS must be an integer from 1 to 5000.");
+  }
+
+  if (!Number.isInteger(sniperDefaultSlippageBps) || sniperDefaultSlippageBps < 1 || sniperDefaultSlippageBps > 5000) {
+    throw new Error("SNIPER_DEFAULT_SLIPPAGE_BPS must be an integer from 1 to 5000.");
+  }
+
+  if (!Number.isInteger(jupiterSwapMaxAttempts) || jupiterSwapMaxAttempts < 1 || jupiterSwapMaxAttempts > 5) {
+    throw new Error("JUPITER_SWAP_MAX_ATTEMPTS must be an integer from 1 to 5.");
+  }
+
   try {
     new PublicKey(feeWallet);
   } catch {
@@ -242,7 +269,11 @@ function loadConfig() {
     jupiterMinIntervalMs,
     jupiterRetries,
     jupiter429CooldownMs,
-    defaultSlippageBps: Number.parseInt(process.env.DEFAULT_SLIPPAGE_BPS || "100", 10),
+    balanceConcurrency,
+    balanceCacheTtlMs,
+    defaultSlippageBps,
+    sniperDefaultSlippageBps,
+    jupiterSwapMaxAttempts,
     priorityFeeLamports: Number.parseInt(process.env.PRIORITY_FEE_LAMPORTS || "0", 10)
   };
 }
@@ -409,6 +440,7 @@ function tradingSpeedDefaults(preset) {
   const presets = {
     safe: {
       bundleConcurrency: 1,
+      balanceConcurrency: 1,
       rpcDelayMs: 1500,
       rpcMinIntervalMs: 1200,
       rpc429CooldownMs: 15000,
@@ -417,6 +449,7 @@ function tradingSpeedDefaults(preset) {
     },
     balanced: {
       bundleConcurrency: 2,
+      balanceConcurrency: 3,
       rpcDelayMs: 750,
       rpcMinIntervalMs: 450,
       rpc429CooldownMs: 10000,
@@ -425,6 +458,7 @@ function tradingSpeedDefaults(preset) {
     },
     fast: {
       bundleConcurrency: 3,
+      balanceConcurrency: 5,
       rpcDelayMs: 400,
       rpcMinIntervalMs: 200,
       rpc429CooldownMs: 7000,
@@ -644,7 +678,7 @@ async function handleCallback(query, userId) {
   const chatId = query.message.chat.id;
   const chat = query.message.chat;
   const messageId = query.message?.message_id;
-  await telegram("answerCallbackQuery", { callback_query_id: query.id });
+  void telegram("answerCallbackQuery", { callback_query_id: query.id }).catch(() => {});
 
   if (ADMIN_ACTIONS.has(query.data) && !isAdmin(userId)) {
     await say(chatId, "Only bot admins can use that control.");
@@ -691,7 +725,7 @@ async function handleCallback(query, userId) {
       await say(chatId, "Open this bot in DM to use OgreSniper.");
       return;
     }
-    if (await isPausedActionBlocked("sniper_setup")) {
+    if (await isPausedActionBlocked("sniper_pick")) {
       await say(chatId, "Emergency stop is active. Use Unlock Bot to re-enable transaction flows.");
       return;
     }
@@ -729,14 +763,6 @@ async function handleCallback(query, userId) {
     case "sniper_scan":
       await showSniperScan(chatId, userId, messageId);
       break;
-    case "sniper_scan_token":
-      setSession(chatId, "sniper_scan_token", userId);
-      await say(chatId, withBrandFooter("Send a token mint to score before entry."));
-      break;
-    case "sniper_setup":
-      setSession(chatId, "sniper_token", userId);
-      await say(chatId, withBrandFooter("Send the token mint you want OgreSniper to score and set up."));
-      break;
     case "sniper_mode_safe":
     case "sniper_mode_smart":
     case "sniper_mode_fast":
@@ -763,7 +789,7 @@ async function handleCallback(query, userId) {
       await listWallets(chatId, userId);
       break;
     case "check_balances":
-      await showWalletBalances(chatId, userId);
+      await showWalletBalances(chatId, userId, messageId);
       break;
     case "pnl_results":
       await showPnlResults(chatId, userId, messageId);
@@ -878,15 +904,15 @@ async function handleCallback(query, userId) {
 async function handleQuickButton(chatId, callbackData, userId, messageId = null) {
   const session = sessions.get(chatId);
   if (!session || String(session.userId) !== String(userId)) {
-    await clearInlineKeyboard(chatId, messageId);
+    scheduleInlineKeyboardClear(chatId, messageId);
     await say(chatId, "That quick button expired. Use /start and choose the action again.");
     return;
   }
 
   const value = callbackData.slice("quick:".length);
-  await clearInlineKeyboard(chatId, messageId);
 
   if (value === "cancel") {
+    scheduleInlineKeyboardClear(chatId, messageId);
     clearSession(chatId);
     await say(chatId, "Current flow canceled.");
     await showMenu(chatId, userId);
@@ -900,6 +926,8 @@ async function handleQuickButton(chatId, callbackData, userId, messageId = null)
     }
     session.executing = true;
   }
+
+  scheduleInlineKeyboardClear(chatId, messageId);
 
   if (value === "custom") {
     await say(chatId, "Type your custom value now, or /cancel.");
@@ -921,6 +949,11 @@ async function clearInlineKeyboard(chatId, messageId) {
   } catch {
     // Best-effort cleanup only. Telegram may reject edits for old messages.
   }
+}
+
+function scheduleInlineKeyboardClear(chatId, messageId) {
+  if (!messageId) return;
+  void clearInlineKeyboard(chatId, messageId).catch(() => {});
 }
 
 async function handleMessage(message, userId) {
@@ -1171,12 +1204,6 @@ async function continueFlow(chatId, text, session) {
       case "fund_confirm":
         await confirmOrCancel(chatId, text, () => fundWalletsFlow(chatId, session));
         break;
-      case "sniper_scan_token":
-        await sniperScanTokenFlow(chatId, text, session);
-        break;
-      case "sniper_token":
-        await sniperTokenFlow(chatId, text, session);
-        break;
       case "sniper_wallets":
         session.data.walletIndexes = await parseWalletSelectionOrGroup(text, session.userId);
         session.data.walletSelector = text.trim();
@@ -1230,7 +1257,7 @@ async function continueFlow(chatId, text, session) {
           throw new Error("Choose Use Preset, Customize TP/SL, or Back.");
         }
         session.step = "sniper_slippage";
-        await sendQuickSlippagePrompt(chatId, `Send slippage in basis points, or type default for ${CONFIG.defaultSlippageBps} bps.`);
+        await sendQuickSlippagePrompt(chatId, `Fast launches move hard. Choose slippage for this snipe, or type default for ${CONFIG.sniperDefaultSlippageBps} bps.`, { defaultBps: CONFIG.sniperDefaultSlippageBps, fastButtons: true });
         break;
       }
       case "sniper_custom_take_profit":
@@ -1245,10 +1272,10 @@ async function continueFlow(chatId, text, session) {
         session.data.stopLossPct = parseOptionalTriggerPercent(text);
         session.data.exitPreset = `${session.data.exitPreset} + Custom TP/SL`;
         session.step = "sniper_slippage";
-        await sendQuickSlippagePrompt(chatId, `Custom exits saved: TP +${session.data.takeProfitPct}%, SL -${session.data.stopLossPct}%.\n\nSend slippage in basis points, or type default for ${CONFIG.defaultSlippageBps} bps.`);
+        await sendQuickSlippagePrompt(chatId, `Custom exits saved: TP +${session.data.takeProfitPct}%, SL -${session.data.stopLossPct}%.\n\nFast launches move hard. Choose slippage for this snipe, or type default for ${CONFIG.sniperDefaultSlippageBps} bps.`, { defaultBps: CONFIG.sniperDefaultSlippageBps, fastButtons: true });
         break;
       case "sniper_slippage":
-        session.data.slippageBps = parseSlippage(text);
+        session.data.slippageBps = parseSlippage(text, CONFIG.sniperDefaultSlippageBps);
         session.step = "sniper_confirm";
         await sendConfirmPrompt(chatId, withBrandFooter(formatSniperConfirm(session.data)));
         break;
@@ -1836,6 +1863,8 @@ async function fundWalletsFlow(chatId, session) {
         })
       );
       const signature = await sendLegacyTransaction(tx, [sourceKeypair]);
+      invalidateWalletReadCache(source.publicKey);
+      invalidateWalletReadCache(target.publicKey);
       results.push(`${target.label}: ${signature}`);
     } catch (error) {
       results.push(`Wallet ${targetIndex}: failed - ${friendlyError(error)}`);
@@ -1866,7 +1895,7 @@ async function batchBuyFlow(chatId, session) {
   await runWithConcurrency(wallets, CONFIG.bundleConcurrency, async (wallet) => {
     try {
       const keypair = decryptWallet(wallet);
-      const balance = await rpcWithRetry("get wallet SOL balance", () => connection.getBalance(keypair.publicKey, "confirmed"));
+      const balance = await getSolBalanceCached(keypair.publicKey, { force: true });
       const amountLamports = session.data.amountMode === "max"
         ? balance - CONFIG.buyReserveLamports
         : solToLamports(session.data.amountSol);
@@ -1898,7 +1927,7 @@ async function batchBuyFlow(chatId, session) {
       } catch (feeError) {
         feeStatus = `, fee failed - ${formatError(feeError)}`;
       }
-      results.push(`${wallet.label}: spent ${lamportsToSol(amountLamports)} SOL, swap ${result.signature}${feeStatus}`);
+      results.push(`${wallet.label}: spent ${lamportsToSol(amountLamports)} SOL, swap ${result.signature}${formatSwapAttemptSuffix(result)}${feeStatus}`);
       tradeEvents.push({
         userId: session.userId,
         type: "buy",
@@ -1946,7 +1975,7 @@ async function batchSellFlow(chatId, session) {
   await runWithConcurrency(wallets, CONFIG.bundleConcurrency, async (wallet) => {
     try {
       const keypair = decryptWallet(wallet);
-      const token = await getTokenBalanceForMint(keypair.publicKey, new PublicKey(session.data.tokenMint));
+      const token = await getTokenBalanceForMintCached(keypair.publicKey, new PublicKey(session.data.tokenMint), { force: true });
       if (!token || token.rawAmount === 0n) {
         results.push(`${wallet.label}: no token balance`);
         return;
@@ -1974,7 +2003,7 @@ async function batchSellFlow(chatId, session) {
       } catch (feeError) {
         feeStatus = `, fee failed - ${formatError(feeError)}`;
       }
-      results.push(`${wallet.label}: swap ${result.signature}${feeStatus}`);
+      results.push(`${wallet.label}: swap ${result.signature}${formatSwapAttemptSuffix(result)}${feeStatus}`);
       tradeEvents.push({
         userId: session.userId,
         type: "sell",
@@ -1992,7 +2021,7 @@ async function batchSellFlow(chatId, session) {
   });
 
   await recordTradeEvents(tradeEvents);
-  const pnl = await pnlSummaryText(session.userId, session.data.tokenMint);
+  const pnl = await pnlSummaryText(session.userId, session.data.tokenMint, { limit: 12 });
   await audit(isSingleTrade ? "single_sell_token" : "batch_sell_token", {
     chatId,
     userId: session.userId,
@@ -2023,10 +2052,10 @@ async function createTimedTradePlanFlow(chatId, session) {
   const planWallets = [];
   const tradeEvents = [];
 
-  await runWithConcurrency(wallets, 1, async (wallet) => {
+  await runWithConcurrency(wallets, CONFIG.bundleConcurrency, async (wallet) => {
     try {
       const result = await buyTokenForPlan(wallet, session.data.tokenMint, amountLamports, session.data.slippageBps);
-      results.push(`${wallet.label}: buy ${result.signature}${result.feeStatus}`);
+      results.push(`${wallet.label}: buy ${result.signature}${formatSwapAttemptSuffix(result)}${result.feeStatus}`);
       tradeEvents.push({
         userId: session.userId,
         type: "buy",
@@ -2156,10 +2185,10 @@ async function createDcaPlanFlow(chatId, session) {
       setupResults.push(`${wallet.label}: scheduled ${session.data.totalSol} SOL across ${session.data.orderCount} buy(s)`);
     }
   } else {
-    await runWithConcurrency(selectedWallets, 1, async (wallet) => {
+    await runWithConcurrency(selectedWallets, CONFIG.balanceConcurrency, async (wallet) => {
       try {
         const keypair = decryptWallet(wallet);
-        const token = await getTokenBalanceForMint(keypair.publicKey, new PublicKey(session.data.tokenMint));
+        const token = await getTokenBalanceForMintCached(keypair.publicKey, new PublicKey(session.data.tokenMint), { force: true });
         if (!token || token.rawAmount === 0n) {
           setupResults.push(`${wallet.label}: skipped, no token balance`);
           return;
@@ -2245,7 +2274,7 @@ async function createDcaPlanFlow(chatId, session) {
 
 async function buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps) {
   const keypair = decryptWallet(wallet);
-  const balance = await rpcWithRetry("get wallet SOL balance", () => connection.getBalance(keypair.publicKey, "confirmed"));
+  const balance = await getSolBalanceCached(keypair.publicKey, { force: true });
   const feeLamports = calculateFeeLamports(amountLamports);
   const swapLamports = amountLamports - feeLamports;
   const recommendedLamports = recommendedBuyFundingLamports(amountLamports);
@@ -2277,13 +2306,14 @@ async function buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps) {
   return {
     signature: result.signature,
     outputAmount: result.outputAmount,
+    attempts: result.attempts,
     feeStatus
   };
 }
 
 async function sellTokenFromWallet(wallet, tokenMint, percent, slippageBps) {
   const keypair = decryptWallet(wallet);
-  const token = await getTokenBalanceForMint(keypair.publicKey, new PublicKey(tokenMint));
+  const token = await getTokenBalanceForMintCached(keypair.publicKey, new PublicKey(tokenMint), { force: true });
   if (!token || token.rawAmount === 0n) {
     throw new Error("no token balance");
   }
@@ -2325,8 +2355,13 @@ async function sellTokenAmountFromWallet(wallet, tokenMint, amount, slippageBps)
     signature: result.signature,
     tokenAmount: sellAmount.toString(),
     outputLamports: outputLamports.toString(),
+    attempts: result.attempts,
     feeStatus
   };
+}
+
+function formatSwapAttemptSuffix(result) {
+  return result?.attempts > 1 ? `, landed after ${result.attempts} attempts` : "";
 }
 
 async function processTradePlans() {
@@ -2442,7 +2477,7 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
     }
 
     planWallet.status = "sold";
-    return { changed: true, message: `${planWallet.label}: sold loop ${planWallet.completedLoops}/${plan.loopCount || 1} by ${triggerReason}, ${sell.signature}${sell.feeStatus}` };
+    return { changed: true, message: `${planWallet.label}: sold loop ${planWallet.completedLoops}/${plan.loopCount || 1} by ${triggerReason}, ${sell.signature}${formatSwapAttemptSuffix(sell)}${sell.feeStatus}` };
   } catch (error) {
     planWallet.status = "failed";
     planWallet.triggerReason = triggerReason;
@@ -2481,7 +2516,7 @@ async function restartTimedPlanLoop(plan, planWallet, wallet, sell, triggerReaso
 
     return {
       changed: true,
-      message: `${planWallet.label}: sold loop ${planWallet.completedLoops}/${plan.loopCount} by ${triggerReason}, ${sell.signature}${sell.feeStatus}; started loop ${planWallet.currentLoop}/${plan.loopCount}, buy ${buy.signature}${buy.feeStatus}`
+      message: `${planWallet.label}: sold loop ${planWallet.completedLoops}/${plan.loopCount} by ${triggerReason}, ${sell.signature}${formatSwapAttemptSuffix(sell)}${sell.feeStatus}; started loop ${planWallet.currentLoop}/${plan.loopCount}, buy ${buy.signature}${formatSwapAttemptSuffix(buy)}${buy.feeStatus}`
     };
   } catch (error) {
     planWallet.status = "failed";
@@ -2489,7 +2524,7 @@ async function restartTimedPlanLoop(plan, planWallet, wallet, sell, triggerReaso
     planWallet.updatedAt = new Date().toISOString();
     return {
       changed: true,
-      message: `${planWallet.label}: sold loop ${planWallet.completedLoops}/${plan.loopCount} by ${triggerReason}, ${sell.signature}${sell.feeStatus}; next loop buy failed - ${friendlyError(error)}`
+      message: `${planWallet.label}: sold loop ${planWallet.completedLoops}/${plan.loopCount} by ${triggerReason}, ${sell.signature}${formatSwapAttemptSuffix(sell)}${sell.feeStatus}; next loop buy failed - ${friendlyError(error)}`
     };
   }
 }
@@ -2573,7 +2608,7 @@ async function processDcaPlanWallet(plan, planWallet, walletStore) {
       planWallet.failures = 0;
       planWallet.lastSignature = buy.signature;
       planWallet.updatedAt = new Date().toISOString();
-      planWallet.results = appendLimited(planWallet.results, `buy ${planWallet.completedOrders}/${plan.orderCount}: ${buy.signature}`);
+      planWallet.results = appendLimited(planWallet.results, `buy ${planWallet.completedOrders}/${plan.orderCount}: ${buy.signature}${formatSwapAttemptSuffix(buy)}`);
 
       await recordTradeEvents([{
         userId: plan.userId,
@@ -2594,7 +2629,7 @@ async function processDcaPlanWallet(plan, planWallet, walletStore) {
 
       return {
         changed: true,
-        message: `${planWallet.label}: DCA buy ${planWallet.completedOrders}/${plan.orderCount}, ${lamportsToSol(amountLamports)} SOL, ${buy.signature}${buy.feeStatus}`
+        message: `${planWallet.label}: DCA buy ${planWallet.completedOrders}/${plan.orderCount}, ${lamportsToSol(amountLamports)} SOL, ${buy.signature}${formatSwapAttemptSuffix(buy)}${buy.feeStatus}`
       };
     }
 
@@ -2607,7 +2642,7 @@ async function processDcaPlanWallet(plan, planWallet, walletStore) {
     planWallet.failures = 0;
     planWallet.lastSignature = sell.signature;
     planWallet.updatedAt = new Date().toISOString();
-    planWallet.results = appendLimited(planWallet.results, `sell ${planWallet.completedOrders}/${plan.orderCount}: ${sell.signature}`);
+    planWallet.results = appendLimited(planWallet.results, `sell ${planWallet.completedOrders}/${plan.orderCount}: ${sell.signature}${formatSwapAttemptSuffix(sell)}`);
 
     await recordTradeEvents([{
       userId: plan.userId,
@@ -2628,7 +2663,7 @@ async function processDcaPlanWallet(plan, planWallet, walletStore) {
 
     return {
       changed: true,
-      message: `${planWallet.label}: DCA sell ${planWallet.completedOrders}/${plan.orderCount}, ${sell.signature}${sell.feeStatus}`
+      message: `${planWallet.label}: DCA sell ${planWallet.completedOrders}/${plan.orderCount}, ${sell.signature}${formatSwapAttemptSuffix(sell)}${sell.feeStatus}`
     };
   } catch (error) {
     const failures = Number.parseInt(planWallet.failures || 0, 10) + 1;
@@ -2647,7 +2682,7 @@ async function processDcaPlanWallet(plan, planWallet, walletStore) {
 
 async function estimatePlanWalletMove(plan, wallet) {
   const keypair = decryptWallet(wallet);
-  const token = await getTokenBalanceForMint(keypair.publicKey, new PublicKey(plan.tokenMint));
+  const token = await getTokenBalanceForMintCached(keypair.publicKey, new PublicKey(plan.tokenMint));
   if (!token || token.rawAmount === 0n) {
     throw new Error("no token balance");
   }
@@ -2688,6 +2723,7 @@ async function sweepSolFlow(chatId, session) {
         results.push(`${wallet.label}: ${result.message}`);
         continue;
       }
+      invalidateWalletReadCache(wallet.publicKey);
       results.push(`${wallet.label}: ${lamportsToSol(result.sentLamports)} SOL drained, fee ${lamportsToSol(result.feeLamports)} SOL, ${result.signature}`);
       await sleep(250);
     } catch (error) {
@@ -2716,7 +2752,12 @@ async function sweepTokensFlow(chatId, session) {
   for (const wallet of session.data.walletIndexes.map((index) => getWalletAt(store, index, session.userId))) {
     try {
       const keypair = decryptWallet(wallet);
-      const tokenAccounts = await getOwnedTokenAccounts(keypair.publicKey);
+      const tokenAccounts = await getOwnedTokenAccountsWithWarningsCached(keypair.publicKey, { force: true }).then((result) => {
+        if (result.successes === 0 && result.warnings.length > 0) {
+          throw new Error(result.warnings.join(" | "));
+        }
+        return result.accounts;
+      });
       const matchingAccounts = session.data.tokenMint === "all"
         ? tokenAccounts
         : tokenAccounts.filter((account) => account.mint === session.data.tokenMint);
@@ -2764,6 +2805,7 @@ async function sweepTokensFlow(chatId, session) {
           );
 
           const signature = await sendLegacyTransaction(tx, [keypair]);
+          invalidateWalletReadCache(wallet.publicKey);
           results.push(`${wallet.label}: ${account.mint} ${account.uiAmount}, ${signature}`);
         } catch (error) {
           results.push(`${wallet.label}: ${account.mint} failed - ${friendlyError(error)}`);
@@ -2795,7 +2837,12 @@ async function closeEmptyAccountsFlow(chatId, session) {
   for (const wallet of session.data.walletIndexes.map((index) => getWalletAt(store, index, session.userId))) {
     try {
       const keypair = decryptWallet(wallet);
-      const emptyAccounts = (await getOwnedTokenAccounts(keypair.publicKey)).filter((account) => account.rawAmount === 0n);
+      const emptyAccounts = (await getOwnedTokenAccountsWithWarningsCached(keypair.publicKey, { force: true }).then((result) => {
+        if (result.successes === 0 && result.warnings.length > 0) {
+          throw new Error(result.warnings.join(" | "));
+        }
+        return result.accounts;
+      })).filter((account) => account.rawAmount === 0n);
 
       if (emptyAccounts.length === 0) {
         results.push(`${wallet.label}: no empty token accounts`);
@@ -2820,6 +2867,7 @@ async function closeEmptyAccountsFlow(chatId, session) {
         signatures.push(await sendLegacyTransaction(tx, [keypair]));
       }
 
+      invalidateWalletReadCache(wallet.publicKey);
       results.push(`${wallet.label}: closed ${emptyAccounts.length}, ${signatures.join(", ")}`);
     } catch (error) {
       results.push(`${wallet.label}: failed - ${friendlyError(error)}`);
@@ -2843,41 +2891,55 @@ async function executeJupiterSwap({ signer, inputMint, outputMint, amount, slipp
     throw new Error("Missing JUPITER_API_KEY. Swaps require a Jupiter API key.");
   }
 
-  const order = await createJupiterOrder({
-    taker: signer.publicKey,
-    inputMint,
-    outputMint,
-    amount,
-    slippageBps
-  });
+  let lastError;
+  for (let attempt = 0; attempt < CONFIG.jupiterSwapMaxAttempts; attempt += 1) {
+    try {
+      const order = await createJupiterOrder({
+        taker: signer.publicKey,
+        inputMint,
+        outputMint,
+        amount,
+        slippageBps
+      });
 
-  const tx = VersionedTransaction.deserialize(Buffer.from(order.transaction, "base64"));
-  tx.sign([signer]);
+      const tx = VersionedTransaction.deserialize(Buffer.from(order.transaction, "base64"));
+      tx.sign([signer]);
 
-  const execute = await jupiterFetchJson(`${CONFIG.jupiterApiBase}/execute`, {
-    method: "POST",
-    headers: jupiterHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({
-      signedTransaction: Buffer.from(tx.serialize()).toString("base64"),
-      requestId: order.requestId,
-      lastValidBlockHeight: order.lastValidBlockHeight
-    })
-  }, "Jupiter execute");
+      const execute = await jupiterFetchJson(`${CONFIG.jupiterApiBase}/execute`, {
+        method: "POST",
+        headers: jupiterHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          signedTransaction: Buffer.from(tx.serialize()).toString("base64"),
+          requestId: order.requestId,
+          lastValidBlockHeight: order.lastValidBlockHeight
+        })
+      }, "Jupiter execute");
 
-  if (execute.status && execute.status !== "Success") {
-    throw new Error(execute.error || `Jupiter execute failed with code ${execute.code ?? "unknown"}.`);
+      if (execute.status && execute.status !== "Success") {
+        throw new Error(execute.error || `Jupiter execute failed with code ${execute.code ?? "unknown"}.`);
+      }
+
+      if (!execute.signature) {
+        throw new Error("Jupiter execute did not return a transaction signature.");
+      }
+
+      return {
+        signature: execute.signature,
+        router: order.router,
+        mode: order.mode,
+        outputAmount: execute.outputAmountResult || order.outAmount,
+        attempts: attempt + 1
+      };
+    } catch (error) {
+      lastError = error;
+      if (attempt >= CONFIG.jupiterSwapMaxAttempts - 1 || !isRetryableSwapError(error)) {
+        break;
+      }
+      await sleep(Math.min(900, 250 + attempt * 250));
+    }
   }
 
-  if (!execute.signature) {
-    throw new Error("Jupiter execute did not return a transaction signature.");
-  }
-
-  return {
-    signature: execute.signature,
-    router: order.router,
-    mode: order.mode,
-    outputAmount: execute.outputAmountResult || order.outAmount
-  };
+  throw lastError;
 }
 
 async function createJupiterOrder({ taker, inputMint, outputMint, amount, slippageBps }) {
@@ -2923,7 +2985,7 @@ async function drainSolFromWallet(keypair, destination) {
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      const balance = await rpcWithRetry("get SOL balance", () => connection.getBalance(keypair.publicKey, "confirmed"));
+      const balance = await getSolBalanceCached(keypair.publicKey, { force: true });
 
       if (balance <= 0) {
         return { signature: null, message: "no sweepable SOL" };
@@ -3017,6 +3079,17 @@ async function collectSolFee(signer, feeLamports) {
   return sendLegacyTransaction(tx, [signer]);
 }
 
+async function getSolBalanceCached(owner, options = {}) {
+  const ownerKey = owner instanceof PublicKey ? owner : new PublicKey(owner);
+  const cacheKey = ownerKey.toBase58();
+  const cached = getTimedCache(solBalanceCache, cacheKey, options.ttlMs);
+  if (!options.force && cached !== undefined) return cached;
+
+  const balance = await rpcWithRetry("get wallet SOL balance", () => connection.getBalance(ownerKey, "confirmed"));
+  setTimedCache(solBalanceCache, cacheKey, balance);
+  return balance;
+}
+
 async function getTokenBalanceForMint(owner, mint) {
   const ownerKey = owner instanceof PublicKey ? owner : new PublicKey(owner);
   const mintKey = mint instanceof PublicKey ? mint : new PublicKey(mint);
@@ -3032,6 +3105,25 @@ async function getTokenBalanceForMint(owner, mint) {
   }
 
   return aggregateTokenAccountsForMint(accounts, mintKey);
+}
+
+async function getTokenBalanceForMintCached(owner, mint, options = {}) {
+  const ownerKey = owner instanceof PublicKey ? owner : new PublicKey(owner);
+  const mintKey = mint instanceof PublicKey ? mint : new PublicKey(mint);
+  const ownerText = ownerKey.toBase58();
+  const mintText = mintKey.toBase58();
+  const cachedAccounts = getTimedCache(tokenAccountsCache, ownerText, options.ttlMs);
+  if (!options.force && cachedAccounts?.successes > 0) {
+    return aggregateTokenAccountsForMint(cachedAccounts.accounts, mintKey);
+  }
+
+  const cacheKey = `${ownerText}:${mintText}`;
+  const cached = getTimedCache(tokenBalanceCache, cacheKey, options.ttlMs);
+  if (!options.force && cached !== undefined) return cached;
+
+  const balance = await getTokenBalanceForMint(ownerKey, mintKey);
+  setTimedCache(tokenBalanceCache, cacheKey, balance);
+  return balance;
 }
 
 async function getMintTokenProgramId(mint) {
@@ -3074,6 +3166,7 @@ async function getOwnedTokenAccounts(owner) {
 }
 
 async function getOwnedTokenAccountsWithWarnings(owner) {
+  const ownerKey = owner instanceof PublicKey ? owner : new PublicKey(owner);
   const lookups = [
     { label: "SPL", programId: TOKEN_PROGRAM_ID },
     { label: "Token-2022", programId: TOKEN_2022_PROGRAM_ID }
@@ -3082,18 +3175,28 @@ async function getOwnedTokenAccountsWithWarnings(owner) {
   const warnings = [];
   let successes = 0;
 
-  for (const lookup of lookups) {
+  await Promise.all(lookups.map(async (lookup) => {
     try {
-      const response = await rpcWithRetry(`get ${lookup.label} token accounts`, () => connection.getParsedTokenAccountsByOwner(owner, { programId: lookup.programId }, "confirmed"));
+      const response = await rpcWithRetry(`get ${lookup.label} token accounts`, () => connection.getParsedTokenAccountsByOwner(ownerKey, { programId: lookup.programId }, "confirmed"));
       successes += 1;
       accounts.push(...parseTokenAccountResponse(response, lookup.programId));
     } catch (error) {
       warnings.push(`${lookup.label}: ${friendlyError(error)}`);
     }
-    await sleep(CONFIG.rpcDelayMs);
-  }
+  }));
 
   return { accounts, warnings, successes };
+}
+
+async function getOwnedTokenAccountsWithWarningsCached(owner, options = {}) {
+  const ownerKey = owner instanceof PublicKey ? owner : new PublicKey(owner);
+  const cacheKey = ownerKey.toBase58();
+  const cached = getTimedCache(tokenAccountsCache, cacheKey, options.ttlMs);
+  if (!options.force && cached) return cached;
+
+  const result = await getOwnedTokenAccountsWithWarnings(ownerKey);
+  setTimedCache(tokenAccountsCache, cacheKey, result);
+  return result;
 }
 
 function parseTokenAccountResponse(response, tokenProgramId = null) {
@@ -3213,7 +3316,7 @@ async function listWallets(chatId, userId) {
   }
 }
 
-async function showWalletBalances(chatId, userId) {
+async function showWalletBalances(chatId, userId, messageId = null) {
   const store = await readWalletStore();
   const wallets = walletsForOwner(store, userId);
 
@@ -3222,9 +3325,20 @@ async function showWalletBalances(chatId, userId) {
     return;
   }
 
+  const started = Date.now();
+  const status = await sendOrEditMessage(chatId, messageId, withBrandFooter([
+    "Checking wallet balances...",
+    "",
+    `${wallets.length} wallet(s) queued.`,
+    `Read speed: ${CONFIG.balanceConcurrency} at a time.`,
+    `Cache: ${Math.round(CONFIG.balanceCacheTtlMs / 1000)}s for quick refreshes.`
+  ].join("\n")), {
+    inline_keyboard: [[{ text: "Main Menu", callback_data: "main_menu" }]]
+  });
+  const targetMessageId = messageId || status?.message_id || null;
   const lines = [];
 
-  await runWithConcurrency(wallets, 1, async (wallet, index) => {
+  await runWithConcurrency(wallets, CONFIG.balanceConcurrency, async (wallet, index) => {
     try {
       const keypair = decryptWallet(wallet);
       const parts = [
@@ -3233,13 +3347,13 @@ async function showWalletBalances(chatId, userId) {
       ];
 
       try {
-        const balance = await rpcWithRetry("get wallet SOL balance", () => connection.getBalance(keypair.publicKey, "confirmed"));
+        const balance = await getSolBalanceCached(keypair.publicKey);
         parts.push(`SOL: ${lamportsToSol(balance)}`);
       } catch (error) {
         parts.push(`SOL: unavailable - ${friendlyError(error)}`);
       }
 
-      const { accounts: tokenAccounts, warnings, successes } = await getOwnedTokenAccountsWithWarnings(keypair.publicKey);
+      const { accounts: tokenAccounts, warnings, successes } = await getOwnedTokenAccountsWithWarningsCached(keypair.publicKey);
       const nonZeroTokens = tokenAccounts.filter((account) => account.rawAmount > 0n);
       if (nonZeroTokens.length > 0) {
         const tokenPreview = nonZeroTokens
@@ -3262,19 +3376,41 @@ async function showWalletBalances(chatId, userId) {
     }
   });
 
-  await say(chatId, `Wallet balances:\n\n${lines.join("\n\n")}`);
+  const finalText = withBrandFooter([
+    "Wallet balances",
+    `Updated in ${((Date.now() - started) / 1000).toFixed(1)}s.`,
+    "",
+    lines.join("\n\n")
+  ].join("\n"));
+  const replyMarkup = {
+    inline_keyboard: [
+      [{ text: "Refresh", callback_data: "check_balances" }, { text: "Positions", callback_data: "positions_overview" }],
+      [{ text: "Main Menu", callback_data: "main_menu" }]
+    ]
+  };
+
+  if (targetMessageId && finalText.length <= 3900) {
+    await sendOrEditMessage(chatId, targetMessageId, finalText, replyMarkup);
+    return;
+  }
+
+  if (targetMessageId) {
+    scheduleInlineKeyboardClear(chatId, targetMessageId);
+  }
+  await say(chatId, finalText);
 }
 
 async function selectedTokenBalanceSummary(userId, walletIndexes, tokenMint) {
   const store = await readWalletStore();
   const lines = [];
   let holders = 0;
+  const mint = new PublicKey(tokenMint);
 
-  await runWithConcurrency(walletIndexes, 1, async (walletIndex, resultIndex) => {
+  await runWithConcurrency(walletIndexes, CONFIG.balanceConcurrency, async (walletIndex, resultIndex) => {
     const wallet = getWalletAt(store, walletIndex, userId);
     try {
       const keypair = decryptWallet(wallet);
-      const token = await getTokenBalanceForMint(keypair.publicKey, new PublicKey(tokenMint));
+      const token = await getTokenBalanceForMintCached(keypair.publicKey, mint);
       if (token && token.rawAmount > 0n) holders += 1;
       lines[resultIndex] = `${walletIndex}. ${wallet.label}: ${token?.uiAmount || "0"}`;
     } catch (error) {
@@ -3304,6 +3440,7 @@ async function showWalletMenu(chatId, messageId = null) {
       [{ text: "💴💶💷 Create Wallet Set", callback_data: "create_wallets" }],
       [{ text: "Import Wallet", callback_data: "import_wallet" }],
       [{ text: "💳 My Wallets", callback_data: "list_wallets" }],
+      [{ text: "🔍 Check Balances", callback_data: "check_balances" }],
       [{ text: "Positions Overview", callback_data: "positions_overview" }],
       [{ text: "PnL / Results", callback_data: "pnl_results" }],
       [{ text: "Close Empty Token Accounts", callback_data: "close_empty_accounts" }],
@@ -3399,22 +3536,33 @@ async function showPnlResults(chatId, userId, messageId = null) {
     text: `Card ${index + 1}: ${row.symbol || shortMint(row.tokenMint)}`,
     callback_data: `pnl_card:${row.tokenMint}`
   }]));
-
-  await sendOrEditMessage(chatId, messageId, withBrandFooter(await pnlSummaryText(userId)), {
+  const replyMarkup = {
     inline_keyboard: [
       [{ text: "Share Best PnL Card", callback_data: "pnl_card" }],
       ...cardButtons,
       [{ text: "Positions", callback_data: "positions_overview" }, { text: "Wallet Menu", callback_data: "wallet_menu" }],
       [{ text: "Main Menu", callback_data: "main_menu" }]
     ]
-  });
+  };
+  const text = withBrandFooter(await pnlSummaryText(userId));
+
+  await sendLongMenuText(chatId, messageId, text, replyMarkup);
 }
 
 async function showPositionsOverview(chatId, userId, messageId = null) {
+  const started = Date.now();
+  const status = await sendOrEditMessage(chatId, messageId, withBrandFooter([
+    "Loading positions...",
+    "",
+    "Checking wallet token accounts and recent bot trade history."
+  ].join("\n")), {
+    inline_keyboard: [[{ text: "Main Menu", callback_data: "main_menu" }]]
+  });
+  const targetMessageId = messageId || status?.message_id || null;
   const positions = await buildPositionsOverview(userId);
 
   if (positions.length === 0) {
-    await sendOrEditMessage(chatId, messageId, withBrandFooter("Positions Overview\n\nNo token positions found yet. Buy or import funded wallets, then refresh balances."), {
+    await sendOrEditMessage(chatId, targetMessageId, withBrandFooter("Positions Overview\n\nNo active token positions found. This view only shows coins your managed wallets still hold."), {
       inline_keyboard: [
         [{ text: "Refresh", callback_data: "positions_overview" }],
         [{ text: "Main Menu", callback_data: "main_menu" }]
@@ -3451,7 +3599,7 @@ async function showPositionsOverview(chatId, userId, messageId = null) {
     [{ text: "PnL / Results", callback_data: "pnl_results" }, { text: "Main Menu", callback_data: "main_menu" }]
   ];
 
-  await sendOrEditMessage(chatId, messageId, withBrandFooter(["Positions Overview", ...rows].join("\n\n")), {
+  await sendOrEditMessage(chatId, targetMessageId, withBrandFooter(["Positions Overview", "Current holdings only.", `Updated in ${((Date.now() - started) / 1000).toFixed(1)}s.`, ...rows].join("\n\n")), {
     inline_keyboard: keyboard
   });
 }
@@ -3473,10 +3621,10 @@ async function buildPositionsOverview(userId) {
     }
   }
 
-  await runWithConcurrency(wallets, 1, async (wallet) => {
+  await runWithConcurrency(wallets, CONFIG.balanceConcurrency, async (wallet) => {
     try {
       const keypair = decryptWallet(wallet);
-      const { accounts } = await getOwnedTokenAccountsWithWarnings(keypair.publicKey);
+      const { accounts } = await getOwnedTokenAccountsWithWarningsCached(keypair.publicKey);
       for (const account of accounts.filter((item) => item.rawAmount > 0n)) {
         const position = ensurePosition(positions, account.mint);
         position.rawAmount += account.rawAmount;
@@ -3493,17 +3641,17 @@ async function buildPositionsOverview(userId) {
   });
 
   const rows = [...positions.values()]
-    .filter((position) => position.rawAmount > 0n || position.buys > 0 || position.sells > 0)
-    .sort((a, b) => Number((b.rawAmount > 0n ? 1 : 0) - (a.rawAmount > 0n ? 1 : 0)) || Number((b.spent - b.received) - (a.spent - a.received)));
+    .filter((position) => position.rawAmount > 0n)
+    .sort((a, b) => Number((b.spent - b.received) - (a.spent - a.received)));
 
-  for (const position of rows.slice(0, 5)) {
+  await runWithConcurrency(rows.slice(0, 5), Math.min(2, CONFIG.balanceConcurrency), async (position) => {
     try {
       position.estimatedValueLamports = await estimatePositionValue(position);
     } catch (error) {
       position.estimatedValueLamports = null;
       position.valueError = friendlyError(error);
     }
-  }
+  });
 
   return rows;
 }
@@ -3522,13 +3670,13 @@ async function showSniperScan(chatId, userId, messageId = null, options = {}) {
 
   const candidates = await fetchSniperCandidates();
   const scored = [];
-  for (const candidate of candidates.slice(0, 18)) {
+  await runWithConcurrency(candidates.slice(0, 18), Math.min(6, Math.max(3, CONFIG.balanceConcurrency)), async (candidate) => {
     try {
       scored.push(await scoreSniperCandidate(candidate, settings));
     } catch {
       // Ignore broken profile rows.
     }
-  }
+  });
 
   const rows = scored
     .filter((item) => item.score >= Math.max(45, settings.minScore - 20))
@@ -3560,49 +3708,8 @@ async function showSniperScan(chatId, userId, messageId = null, options = {}) {
     });
 }
 
-async function sniperScanTokenFlow(chatId, text, session) {
-  const tokenMint = parsePublicKey(text).toBase58();
-  const settings = await sniperSettingsForUser(session.userId);
-  const score = await scoreSniperCandidate({ tokenMint }, settings);
-  clearSession(chatId);
-  await telegram("sendMessage", {
-    chat_id: chatId,
-    text: withBrandFooter(["<b>OgreSniper Token Score</b>", "", formatSniperPickHtml(score), "", "Tap Snipe This to choose wallets, size, and the recommended exit preset."].join("\n")),
-    parse_mode: "HTML",
-    disable_web_page_preview: true,
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: "Chart", url: dexScreenerUrl(tokenMint) }],
-        [{ text: "Snipe This", callback_data: `sniper_pick:${tokenMint}` }, { text: "Back", callback_data: "sniper_menu" }]
-      ]
-    }
-  });
-}
-
-async function sniperTokenFlow(chatId, text, session) {
-  session.data.tokenMint = parsePublicKey(text).toBase58();
-  const settings = await sniperSettingsForUser(session.userId);
-  session.data.settings = settings;
-  session.data.score = await scoreSniperCandidate({ tokenMint: session.data.tokenMint }, settings);
-
-  if (session.data.score.score < settings.minScore || session.data.score.rugRisk > settings.maxRisk) {
-    await say(chatId, withBrandFooter([
-      "OgreSniper caution:",
-      "",
-      formatSniperScoreBlock(session.data.score),
-      "",
-      `This does not meet ${sniperModeLabel(settings.mode)} filters. You can /cancel or continue by sending wallet numbers anyway.`
-    ].join("\n")));
-  } else {
-    await say(chatId, withBrandFooter(["OgreSniper score passed filters:", "", formatSniperScoreBlock(session.data.score)].join("\n")));
-  }
-
-  session.step = "sniper_wallets";
-  await sendSniperWalletPrompt(chatId, session.userId, session.data.score, "Send wallet numbers, `all`, or `group: group name` for this snipe.");
-}
-
 async function startSniperPickFlow(chatId, userId, tokenMint, messageId = null) {
-  await clearInlineKeyboard(chatId, messageId);
+  scheduleInlineKeyboardClear(chatId, messageId);
   const settings = await sniperSettingsForUser(userId);
   const score = await scoreSniperCandidate({ tokenMint: parsePublicKey(tokenMint).toBase58() }, settings);
   sessions.set(chatId, {
@@ -3700,6 +3807,13 @@ async function estimatePositionValue(position) {
     throw new Error("Jupiter API key missing");
   }
 
+  const cacheKey = [
+    position.tokenMint,
+    ...position.accounts.slice(0, 8).map((account) => `${account.walletPublicKey}:${account.rawAmount}`)
+  ].join("|");
+  const cached = getTimedCache(positionValueCache, cacheKey);
+  if (cached !== undefined) return cached;
+
   let total = 0n;
   for (const account of position.accounts.slice(0, 8)) {
     const order = await createJupiterOrder({
@@ -3711,33 +3825,79 @@ async function estimatePositionValue(position) {
     });
     total += BigInt(order.outAmount || order.outputAmount || 0);
   }
+  setTimedCache(positionValueCache, cacheKey, total);
   return total;
 }
 
-async function pnlSummaryText(userId, tokenFilter = null) {
-  const rows = await pnlRows(userId, tokenFilter, { groupByToken: false, limit: 12 });
+async function pnlSummaryText(userId, tokenFilter = null, options = {}) {
+  const trades = await tradeHistoryRows(userId, tokenFilter);
 
-  if (rows.length === 0) {
+  if (trades.length === 0) {
     return "PnL / Results\n\nNo bot trade history yet. Buys and sells made from this bot will show here.";
   }
 
+  const totals = trades.reduce((summary, trade) => {
+    if (trade.type === "buy") {
+      summary.buys += 1;
+      summary.spent += BigInt(trade.solLamportsSpent || 0);
+    } else if (trade.type === "sell") {
+      summary.sells += 1;
+      summary.received += BigInt(trade.solLamportsReceived || 0);
+    }
+    return summary;
+  }, { buys: 0, sells: 0, spent: 0n, received: 0n });
+  const realized = totals.received - totals.spent;
+  const shownTrades = options.limit ? trades.slice(0, options.limit) : trades;
+
   return [
     "PnL / Results",
-    "Realized SOL estimate from this bot's recorded buys/sells. Open token value is not included.",
+    "Trade history from this bot, newest first. Oldest trades are at the bottom.",
+    "Open token value is not included in realized PnL.",
     "",
-    ...rows.map((row) => {
-      const realized = row.received - row.spent;
-      const sign = realized >= 0n ? "+" : "-";
-      const abs = realized >= 0n ? realized : -realized;
-      return [
-        `${row.walletLabel || "All wallets"} - ${shortMint(row.tokenMint)}`,
-        `Buys/Sells: ${row.buys}/${row.sells}`,
-        `Spent: ${lamportsToSol(Number(row.spent))} SOL`,
-        `Received: ${lamportsToSol(Number(row.received))} SOL`,
-        `Realized: ${sign}${lamportsToSol(Number(abs))} SOL`
-      ].join("\n");
-    })
-  ].join("\n\n");
+    `Trades: ${trades.length} | Buys: ${totals.buys} | Sells: ${totals.sells}`,
+    `Spent: ${lamportsBigToSol(totals.spent)} SOL`,
+    `Received: ${lamportsBigToSol(totals.received)} SOL`,
+    `Net realized: ${formatSignedLamports(realized)} SOL`,
+    shownTrades.length < trades.length ? `Showing latest ${shownTrades.length} of ${trades.length} trade(s). Open PnL / Results for full history.` : "",
+    "",
+    ...shownTrades.map(formatTradeHistoryEntry)
+  ].filter(Boolean).join("\n\n");
+}
+
+async function tradeHistoryRows(userId, tokenFilter = null) {
+  const history = await readTradeHistory();
+  return history.trades
+    .filter((trade) => String(trade.userId) === String(userId))
+    .filter((trade) => !tokenFilter || trade.tokenMint === tokenFilter)
+    .sort((a, b) => (Date.parse(b.timestamp || "") || 0) - (Date.parse(a.timestamp || "") || 0));
+}
+
+function formatTradeHistoryEntry(trade, index) {
+  const isBuy = trade.type === "buy";
+  const solAmount = isBuy
+    ? BigInt(trade.solLamportsSpent || 0)
+    : BigInt(trade.solLamportsReceived || 0);
+  return [
+    `${index + 1}. ${formatTradeTimestamp(trade.timestamp)} - ${String(trade.type || "trade").toUpperCase()}`,
+    `Wallet: ${trade.walletLabel || shortMint(trade.walletPublicKey || "")}`,
+    `Token: ${shortMint(trade.tokenMint)}`,
+    `${isBuy ? "Spent" : "Received"}: ${lamportsBigToSol(solAmount)} SOL`,
+    trade.tokenAmount ? `Token amount: ${shortMint(trade.tokenAmount)}` : "",
+    trade.source ? `Source: ${formatTradeSource(trade.source)}` : "",
+    trade.signature ? `Tx: ${shortMint(trade.signature)}` : ""
+  ].filter(Boolean).join("\n");
+}
+
+function formatTradeTimestamp(value) {
+  const date = new Date(value || 0);
+  if (Number.isNaN(date.getTime())) return "unknown time";
+  return `${date.toISOString().slice(0, 16).replace("T", " ")} UTC`;
+}
+
+function formatTradeSource(value) {
+  return String(value || "")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 async function pnlRows(userId, tokenFilter = null, options = {}) {
@@ -3980,20 +4140,6 @@ async function scoreSniperCandidate(candidate, settings) {
     smartMoney: score >= 80 ? "High" : score >= 65 ? "Medium" : "Low",
     reasons: sniperReasons({ hasImage, hasMeta, marketCap, h1, h6, h24, narrative, settings })
   };
-}
-
-function formatSniperScoreBlock(score) {
-  return [
-    `${score.category}: ${score.symbol || shortMint(score.tokenMint)}`,
-    `Entry Score: ${score.score}/100`,
-    `Momentum: ${score.momentum}`,
-    `Rug Risk: ${score.rugRisk}/100`,
-    `Exit Risk: ${score.exitRisk}/100`,
-    `Manipulation Score: ${score.manipulationScore}/100`,
-    `Smart Money Proxy: ${score.smartMoney}`,
-    `Mint: ${score.tokenMint}`,
-    score.reasons?.length ? `Why: ${score.reasons.join(" | ")}` : ""
-  ].filter(Boolean).join("\n");
 }
 
 function formatSniperPickHtml(score, index = null) {
@@ -4244,7 +4390,7 @@ function howToPage(topic) {
         "- Auto Sell: buys now, then sells later by timer, take-profit, or stop-loss.",
         "- DCA Buy: splits one total SOL amount into smaller buys over time.",
         "- DCA Sell: captures the wallet's current token balance, then sells your chosen percent in smaller slices.",
-        "- Positions: shows bot-tracked positions, PnL estimate, balances, and Dexscreener links.",
+        "- Positions: shows only coins your managed wallets still hold, with estimated value when available and Dexscreener links.",
         "- Wallets: shows your wallet addresses as tap-to-copy address text.",
         "",
         "Important settings:",
@@ -4300,6 +4446,7 @@ function howToPage(topic) {
         "",
         "Execution:",
         "OgreSniper uses the same timed-plan engine as Volume. It buys after you confirm, then watches for the selected timer, take-profit, or stop-loss exit.",
+        `Fast launches can move before the first transaction lands, so OgreSniper's default slippage is ${CONFIG.sniperDefaultSlippageBps} bps and swaps can retry with a fresh Jupiter order on retryable quote/execution errors.`,
         "",
         "Manual CA trades:",
         "If you already know the token you want, use Trade for one wallet or Bundle for multiple wallets. OgreSniper is kept focused on bot-researched picks.",
@@ -4319,8 +4466,9 @@ function howToPage(topic) {
         "- Create Wallet Set: enter a group label, then a count from 1 to 20. Example label: ogretest. The bot creates ogretest 1, ogretest 2, etc.",
         "- Import Wallet: enter a label, then paste a private key from Phantom/Solflare. Accepted formats are base58 secret key, JSON byte array, or comma-separated 64-byte array.",
         "- My Wallets: lists wallet labels and addresses. Tap or long-press the address text to copy it.",
-        "- Positions Overview: shows tokens held, estimated value when Jupiter can quote, and Dexscreener links.",
-        "- PnL / Results: shows realized SOL from buys and sells recorded by this bot.",
+        "- Check Balances: scans your bot wallets for SOL, token holdings, current positions, and quick refresh/position buttons.",
+        "- Positions Overview: shows current token holdings only, estimated value when Jupiter can quote, and Dexscreener links.",
+        "- PnL / Results: shows every bot-recorded buy and sell, newest first and oldest last.",
         "- Close Empty Token Accounts: reclaims rent from empty SPL token accounts when possible.",
         "",
         "Wallet privacy and safety:",
@@ -4404,7 +4552,7 @@ function howToPage(topic) {
         "- Partial warnings if an RPC call is rate-limited.",
         "",
         "How to use it:",
-        "Tap Check Balances from the main menu. The bot checks one wallet at a time so it is less likely to hit RPC rate limits.",
+        "Tap Check Balances from the main menu. The bot responds immediately, checks wallets with controlled concurrency, and reuses very fresh balance data for quick refreshes.",
         "",
         "What errors mean:",
         "- 429 Too Many Requests: your RPC is rate-limiting. Wait, refresh later, or use a better RPC.",
@@ -4602,17 +4750,26 @@ async function sendQuickPercentPrompt(chatId, text) {
   });
 }
 
-async function sendQuickSlippagePrompt(chatId, text) {
+async function sendQuickSlippagePrompt(chatId, text, options = {}) {
+  const defaultBps = Number.isInteger(options.defaultBps) ? options.defaultBps : CONFIG.defaultSlippageBps;
+  const inline_keyboard = options.fastButtons
+    ? [
+        [{ text: `Default ${defaultBps} bps`, callback_data: "quick:default" }, { text: "500 bps", callback_data: "quick:500" }],
+        [{ text: "1000 bps", callback_data: "quick:1000" }, { text: "1500 bps", callback_data: "quick:1500" }],
+        [{ text: "Custom", callback_data: "quick:custom" }]
+      ]
+    : [
+        [{ text: `Default ${defaultBps} bps`, callback_data: "quick:default" }, { text: "100 bps", callback_data: "quick:100" }],
+        [{ text: "300 bps", callback_data: "quick:300" }, { text: "500 bps", callback_data: "quick:500" }],
+        [{ text: "Custom", callback_data: "quick:custom" }]
+      ];
+
   await telegram("sendMessage", {
     chat_id: chatId,
     text: withBrandFooter(text),
     disable_web_page_preview: true,
     reply_markup: {
-      inline_keyboard: [
-        [{ text: "Default", callback_data: "quick:default" }, { text: "100 bps", callback_data: "quick:100" }],
-        [{ text: "300 bps", callback_data: "quick:300" }, { text: "500 bps", callback_data: "quick:500" }],
-        [{ text: "Custom", callback_data: "quick:custom" }]
-      ]
+      inline_keyboard
     }
   });
 }
@@ -4686,23 +4843,23 @@ async function say(chatId, text) {
 async function sendOrEditMessage(chatId, messageId, text, replyMarkup = null) {
   if (messageId) {
     try {
-      await telegram("editMessageText", {
+      const result = await telegram("editMessageText", {
         chat_id: chatId,
         message_id: messageId,
         text,
         disable_web_page_preview: true,
         reply_markup: replyMarkup || undefined
       });
-      return;
+      return result;
     } catch (error) {
       if (/message is not modified/i.test(formatError(error))) {
-        return;
+        return null;
       }
       // Fall through to a new message if Telegram cannot edit this message.
     }
   }
 
-  await telegram("sendMessage", {
+  return telegram("sendMessage", {
     chat_id: chatId,
     text,
     disable_web_page_preview: true,
@@ -4710,10 +4867,31 @@ async function sendOrEditMessage(chatId, messageId, text, replyMarkup = null) {
   });
 }
 
+async function sendLongMenuText(chatId, messageId, text, replyMarkup = null) {
+  if (text.length <= 3900) {
+    await sendOrEditMessage(chatId, messageId, text, replyMarkup);
+    return;
+  }
+
+  const chunks = chunkText(text, 3300);
+  for (const [index, chunk] of chunks.entries()) {
+    const labeled = `Part ${index + 1}/${chunks.length}\n\n${chunk}`;
+    if (index === 0) {
+      await sendOrEditMessage(chatId, messageId, labeled, replyMarkup);
+    } else {
+      await telegram("sendMessage", {
+        chat_id: chatId,
+        text: labeled,
+        disable_web_page_preview: true
+      });
+    }
+  }
+}
+
 async function sendOrEditHtmlMessage(chatId, messageId, text, replyMarkup = null) {
   if (messageId) {
     try {
-      await telegram("editMessageText", {
+      const result = await telegram("editMessageText", {
         chat_id: chatId,
         message_id: messageId,
         text,
@@ -4721,15 +4899,15 @@ async function sendOrEditHtmlMessage(chatId, messageId, text, replyMarkup = null
         disable_web_page_preview: true,
         reply_markup: replyMarkup || undefined
       });
-      return;
+      return result;
     } catch (error) {
       if (/message is not modified/i.test(formatError(error))) {
-        return;
+        return null;
       }
     }
   }
 
-  await telegram("sendMessage", {
+  return telegram("sendMessage", {
     chat_id: chatId,
     text,
     parse_mode: "HTML",
@@ -4877,6 +5055,9 @@ async function readTradeHistory() {
 
 async function recordTradeEvents(events) {
   if (!events.length) return;
+  for (const event of events) {
+    invalidateWalletReadCache(event.walletPublicKey);
+  }
   const store = await readTradeHistory();
   store.trades.push(...events.map((event) => ({
     id: crypto.randomUUID(),
@@ -5461,9 +5642,9 @@ function parseOptionalTriggerPercent(text) {
   return value;
 }
 
-function parseSlippage(text) {
+function parseSlippage(text, defaultBps = CONFIG.defaultSlippageBps) {
   if (text.trim().toLowerCase() === "default") {
-    return CONFIG.defaultSlippageBps;
+    return defaultBps;
   }
 
   const value = Number.parseInt(text, 10);
@@ -5852,6 +6033,35 @@ function chunkArray(items, size) {
   return chunks;
 }
 
+function getTimedCache(cache, key, ttlMs = CONFIG.balanceCacheTtlMs) {
+  if (ttlMs <= 0) return undefined;
+  const entry = cache.get(key);
+  if (!entry) return undefined;
+  if (Date.now() - entry.createdAt > ttlMs) {
+    cache.delete(key);
+    return undefined;
+  }
+  return entry.value;
+}
+
+function setTimedCache(cache, key, value) {
+  if (CONFIG.balanceCacheTtlMs <= 0) return;
+  cache.set(key, { createdAt: Date.now(), value });
+}
+
+function invalidateWalletReadCache(publicKey) {
+  const key = String(publicKey || "");
+  if (!key) return;
+  solBalanceCache.delete(key);
+  tokenAccountsCache.delete(key);
+  for (const cacheKey of [...tokenBalanceCache.keys()]) {
+    if (cacheKey.startsWith(`${key}:`)) {
+      tokenBalanceCache.delete(cacheKey);
+    }
+  }
+  positionValueCache.clear();
+}
+
 async function runWithConcurrency(items, concurrency, worker) {
   let nextIndex = 0;
   const runners = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
@@ -6020,6 +6230,16 @@ function isRetryableServiceError(error) {
   return status === 429
     || [500, 502, 503, 504].includes(status)
     || /too many requests|rate limit|temporarily unavailable|fetch failed|network/i.test(message);
+}
+
+function isRetryableSwapError(error) {
+  const message = formatError(error);
+  if (/insufficient funds|not enough sol|no token balance|missing jupiter|invalid public key/i.test(message)) {
+    return false;
+  }
+
+  return isRetryableServiceError(error)
+    || /slippage|price|quote|route|blockhash|expired|timeout|temporarily|execute|simulation|transaction|failed to land|did not return/i.test(message);
 }
 
 function isRetryableSweepError(error) {

@@ -12,8 +12,8 @@ Telegram bot for legitimate, auditable Solana wallet operations:
 - Batch sell a token through Jupiter
 - DCA buy and DCA sell plans with scheduled slices
 - Timed trade plans: buy now, sell later by timer, take-profit, or stop-loss
-- Positions Overview with live token balances, estimated value when Jupiter can quote, PnL, and Dexscreener links
-- PnL / Results from bot-recorded buys and sells
+- Positions Overview with current live token holdings only, estimated value when Jupiter can quote, and Dexscreener links
+- PnL / Results as a bot-recorded trade log, newest first and oldest last
 - PnL share cards as Telegram PNG images using Dexscreener token metadata/art first, with a best-effort Pump.fun metadata fallback for missing art/name/symbol
 - Tap-to-copy managed wallet addresses
 - Sweep SOL to a destination wallet
@@ -48,6 +48,11 @@ This bot does not provide wallet washing, provenance hiding, mixer behavior, or 
    FEE_WALLET=AUcSFZsCdawzfqa4KzHK1BHz1RDrBnj8CF5kxoy3NvxV
    BUNDLE_FEE_BPS=50
    BUNDLE_CONCURRENCY=2
+   BALANCE_CONCURRENCY=3
+   BALANCE_CACHE_TTL_MS=12000
+   DEFAULT_SLIPPAGE_BPS=100
+   SNIPER_DEFAULT_SLIPPAGE_BPS=500
+   JUPITER_SWAP_MAX_ATTEMPTS=2
    BUY_RESERVE_SOL=0.01
    RPC_MIN_INTERVAL_MS=450
    RPC_DELAY_MS=750
@@ -86,7 +91,7 @@ Batch buy and sell use Jupiter Swap API v2, so you need a Jupiter API key from t
 
 Bundle buy and sell charge a 0.5% platform fee by default. `BUNDLE_FEE_BPS=50` means 50 basis points, which is 0.5%, and fees are sent to `FEE_WALLET`.
 
-`TRADING_SPEED_PRESET` can be `safe`, `balanced`, or `fast`. `balanced` is the default and is much smoother on a decent RPC. Use `safe` for free/public RPCs that keep returning 429s, or `fast` only with a private RPC and solid Jupiter limits. The bot also has a global RPC queue controlled by `RPC_MIN_INTERVAL_MS`, `RPC_DELAY_MS`, `RPC_RETRIES`, and `RPC_429_COOLDOWN_MS`, plus a Jupiter queue controlled by `JUPITER_MIN_INTERVAL_MS`, `JUPITER_RETRIES`, and `JUPITER_429_COOLDOWN_MS`. `BUY_RESERVE_SOL=0.01` is the recommended extra SOL per wallet for network fees and token-account creation around buys.
+`TRADING_SPEED_PRESET` can be `safe`, `balanced`, or `fast`. `balanced` is the default and is much smoother on a decent RPC. Use `safe` for free/public RPCs that keep returning 429s, or `fast` only with a private RPC and solid Jupiter limits. The bot also has a global RPC queue controlled by `RPC_MIN_INTERVAL_MS`, `RPC_DELAY_MS`, `RPC_RETRIES`, and `RPC_429_COOLDOWN_MS`, plus a Jupiter queue controlled by `JUPITER_MIN_INTERVAL_MS`, `JUPITER_RETRIES`, and `JUPITER_429_COOLDOWN_MS`. `BALANCE_CONCURRENCY` controls how many wallet balance reads can be prepared at once, and `BALANCE_CACHE_TTL_MS` reuses fresh balance data for quick refreshes. `BUY_RESERVE_SOL=0.01` is the recommended extra SOL per wallet for network fees and token-account creation around buys.
 
 For bundle buys, fund each wallet with at least:
 
@@ -146,6 +151,7 @@ Fast scan flow:
 4. Pick **All Wallets**, a quick wallet button, or **Custom / Group**.
 5. Pick 0.05, 0.10, 0.50, 1 SOL, or **Buy X SOL**.
 6. Review the recommended exit preset, customize TP/SL if needed, set slippage, then tap **Confirm**.
+7. If a fast launch moves between quote and execution, the bot can retry with a fresh Jupiter order before it reports failure. Tune this with `JUPITER_SWAP_MAX_ATTEMPTS`.
 
 Mode scan flow:
 
@@ -162,6 +168,8 @@ OgreSniper exit presets:
 - **Safe** sells 100% after 10 minutes, or earlier at +20% take-profit / -8% stop-loss.
 
 After the amount is chosen, the bot picks a recommended preset from the active mode and score. Users can tap **Use Preset**, **Customize TP/SL**, or **Back**. Custom TP/SL changes the take-profit and stop-loss percentages while keeping the preset timer and sell percent.
+
+OgreSniper uses `SNIPER_DEFAULT_SLIPPAGE_BPS` for its default slippage button. The starter value is 500 bps because early launches can move before the first transaction lands. Normal Trade and Bundle still use `DEFAULT_SLIPPAGE_BPS`.
 
 Manual CA trades belong in **Trade** for one wallet or **Bundle** for multiple wallets. OgreSniper stays focused on bot-researched picks and fast managed exits.
 
@@ -183,7 +191,7 @@ The How To Use button opens a clickable learning hub with user-friendly instruct
 
 The Trade menu is for one wallet at a time. It includes Buy, Sell, Auto Sell, DCA Buy, DCA Sell, Positions, and Wallets. Buy screens include quick buttons for `0.10 SOL`, `0.50 SOL`, `1 SOL`, `max`, and custom amount. Sell screens include quick buttons for `25%`, `50%`, `100%`, and custom percent.
 
-The Wallet menu includes wallet creation/import, My Wallets with tap-to-copy address text, Positions Overview, and PnL / Results. PnL / Results includes share-card buttons, and successful sells try to send a PnL card automatically. Cards use Dexscreener metadata/art first; if Dexscreener has no token image/name/symbol, the bot tries Pump.fun metadata next. The Bundle menu contains Bundle Buy, Bundle Sell, DCA Buy, DCA Sell, and Copy Trade info. Use the main Volume button for auto-sell, take-profit, stop-loss, and Repeat cycles. Copy Trade is shown as a setup/info item until a full wallet-watcher implementation is added.
+The Wallet menu includes wallet creation/import, My Wallets with tap-to-copy address text, Positions Overview, and PnL / Results. Positions Overview only shows coins the managed wallets still hold. PnL / Results shows bot-recorded buys and sells newest first, with older trades below, plus share-card buttons. Successful sells try to send a PnL card automatically. Cards use Dexscreener metadata/art first; if Dexscreener has no token image/name/symbol, the bot tries Pump.fun metadata next. The Bundle menu contains Bundle Buy, Bundle Sell, DCA Buy, DCA Sell, and Copy Trade info. Use the main Volume button for auto-sell, take-profit, stop-loss, and Repeat cycles. Copy Trade is shown as a setup/info item until a full wallet-watcher implementation is added.
 
 Menu navigation edits the existing Telegram menu message when possible, with Main Menu back buttons on submenus. Wallet lists, backups, trade results, and generated PnL cards still post as new messages so users do not lose important data.
 
