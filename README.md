@@ -129,24 +129,20 @@ This is a position-management feature for the user's own wallets. It does not ru
 The main menu also includes **OgreSniper**. It provides:
 
 - Scan Early Plays from latest Solana token profiles, with direct Snipe buttons
-- Score Token for a pasted mint
-- Snipe Setup, which scores a mint and then creates a timed-plan entry after user confirmation
 - Modes: Safe Scan, Smart Money Scan, Fast Scalp Scan, Low Cap Scan, Meme Scan, and AI Scan. Tapping a mode immediately scans that category.
 
 OgreSniper scoring is heuristic. It uses Dexscreener/Pump.fun metadata and available market signals to estimate entry score, momentum, rug risk, exit risk, and manipulation score. It does not guarantee profitable trades, and it does not bypass the normal confirm screen.
 
 OgreSniper options:
 
-- **Scan Early Plays** checks latest Solana token profiles and shows the highest-scoring candidates with tap-to-copy CA text, Dex chart buttons, and **Snipe #1** through **Snipe #5** buttons.
-- **Score Token** scores one pasted mint before entry and includes **Snipe This** so the user does not need to paste the mint again.
-- **Snipe Setup** scores a mint, asks for wallet selection and SOL amount, then auto-selects a recommended exit preset before confirmation.
+- **Scan Early Plays** checks latest Solana token profiles and shows the highest-scoring candidates with tap-to-copy CA text, Dex chart links in the text, and **Snipe #1** through **Snipe #6** buttons.
 - **Modes** adjust score/risk strictness and immediately run that category scan: Safe Scan, Smart Money Scan, Fast Scalp Scan, Low Cap Scan, Meme Scan, and AI Scan.
 
 Fast scan flow:
 
 1. Tap **Scan Early Plays**.
-2. Open a Dex chart or copy the CA from the result.
-3. Tap **Snipe #1** through **Snipe #5**.
+2. Open the Dex chart link in the text or copy the CA from the result.
+3. Tap **Snipe #1** through **Snipe #6**.
 4. Pick **All Wallets**, a quick wallet button, or **Custom / Group**.
 5. Pick 0.05, 0.10, 0.50, 1 SOL, or **Buy X SOL**.
 6. Review the recommended exit preset, customize TP/SL if needed, set slippage, then tap **Confirm**.
@@ -166,6 +162,8 @@ OgreSniper exit presets:
 - **Safe** sells 100% after 10 minutes, or earlier at +20% take-profit / -8% stop-loss.
 
 After the amount is chosen, the bot picks a recommended preset from the active mode and score. Users can tap **Use Preset**, **Customize TP/SL**, or **Back**. Custom TP/SL changes the take-profit and stop-loss percentages while keeping the preset timer and sell percent.
+
+Manual CA trades belong in **Trade** for one wallet or **Bundle** for multiple wallets. OgreSniper stays focused on bot-researched picks and fast managed exits.
 
 Normal trade confirmations use inline **Confirm** and **Cancel / Back** buttons. Emergency raw private key export still requires typing `EXPORT KEYS` exactly because it exposes recovery keys.
 

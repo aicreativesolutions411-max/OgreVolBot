@@ -3339,7 +3339,6 @@ async function showSniperMenu(chatId, userId, messageId = null) {
   ].join("\n")), {
     inline_keyboard: [
       [{ text: "Scan Early Plays", callback_data: "sniper_scan" }],
-      [{ text: "Score Token", callback_data: "sniper_scan_token" }, { text: "Snipe Setup", callback_data: "sniper_setup" }],
       [{ text: "Modes", callback_data: "sniper_modes" }],
       [{ text: "Main Menu", callback_data: "main_menu" }]
     ]
@@ -3534,27 +3533,26 @@ async function showSniperScan(chatId, userId, messageId = null, options = {}) {
   const rows = scored
     .filter((item) => item.score >= Math.max(45, settings.minScore - 20))
     .sort((a, b) => b.score - a.score)
-    .slice(0, 5);
+    .slice(0, 6);
 
   if (rows.length === 0) {
-    await say(chatId, withBrandFooter("OgreSniper scan found no usable early-play candidates right now.\n\nTry again later, lower mode strictness, or use Score Token with a mint you already found."));
+    await say(chatId, withBrandFooter("OgreSniper scan found no usable early-play candidates right now.\n\nTry again later or choose a different mode."));
     return;
   }
 
   const keyboard = [
-    ...rows.slice(0, 5).map((row, index) => ([
-      { text: `Snipe #${index + 1}`, callback_data: `sniper_pick:${row.tokenMint}` },
-      { text: `Chart #${index + 1}`, url: dexScreenerUrl(row.tokenMint) }
-    ])),
+    ...chunkArray(rows.slice(0, 6).map((row, index) => ({
+      text: `Snipe #${index + 1}`,
+      callback_data: `sniper_pick:${row.tokenMint}`
+    })), 2),
     [{ text: "Refresh Scan", callback_data: "sniper_scan" }, { text: "Modes", callback_data: "sniper_modes" }],
-    [{ text: "Score Token", callback_data: "sniper_scan_token" }, { text: "Manual Setup", callback_data: "sniper_setup" }],
     [{ text: "Back", callback_data: "sniper_menu" }]
   ];
 
   await sendOrEditHtmlMessage(chatId, messageId, withBrandFooter([
       `<b>${escapeHtml(modeLabel)} Picks</b>`,
       `Mode: <b>${escapeHtml(modeLabel)}</b>`,
-      "Tap Snipe, choose wallets and SOL size, then review/customize profit and loss settings before Confirm. CA lines are tap-to-copy.",
+      "Tap Snipe, choose wallets and SOL size, then review/customize profit and loss settings before Confirm. CA lines are tap-to-copy and Dex links open charts.",
       "",
       ...rows.map(formatSniperPickHtml)
     ].join("\n\n")), {
@@ -4267,13 +4265,11 @@ function howToPage(topic) {
         "OgreSniper is for finding highest-scored early plays, choosing a setup quickly, and setting up a buy with automatic exits.",
         "",
         "Buttons inside OgreSniper:",
-        "- Scan Early Plays: checks latest Solana token profiles and shows the top ranked picks. Each pick has a Snipe button, chart button, and tap-to-copy CA.",
-        "- Score Token: paste a mint and get a score. The result has a Snipe This button so you do not need to paste it again.",
-        "- Snipe Setup: paste a mint manually, choose wallets, choose SOL per wallet, review the recommended exit preset, optionally customize take-profit/stop-loss, choose slippage, then tap Confirm.",
+        "- Scan Early Plays: checks latest Solana token profiles and shows the top ranked picks. Each pick has a Snipe button, Dex chart link in the text, and tap-to-copy CA.",
         "- Modes: choose Safe Scan, Smart Money Scan, Fast Scalp Scan, Low Cap Scan, Meme Scan, or AI Scan. Tapping a mode saves that mode and immediately scans that category.",
         "",
         "Fast scan flow:",
-        "Tap Scan Early Plays, open the Dex chart if you want to inspect it, then tap Snipe #1 through #5. Pick All Wallets, a quick wallet button, or Custom / Group. Pick 0.05, 0.10, 0.50, 1 SOL, or Buy X SOL. OgreSniper then selects the best matching exit preset for the mode and score.",
+        "Tap Scan Early Plays, open the Dex chart link in the text if you want to inspect it, then tap Snipe #1 through #6. Pick All Wallets, a quick wallet button, or Custom / Group. Pick 0.05, 0.10, 0.50, 1 SOL, or Buy X SOL. OgreSniper then selects the best matching exit preset for the mode and score.",
         "",
         "Mode scan flow:",
         "Tap Modes, pick the category you want, then choose from the ranked list. The rest is the same: Snipe button, wallet, amount, profit/loss preset, optional custom TP/SL, slippage, Confirm.",
@@ -4304,6 +4300,9 @@ function howToPage(topic) {
         "",
         "Execution:",
         "OgreSniper uses the same timed-plan engine as Volume. It buys after you confirm, then watches for the selected timer, take-profit, or stop-loss exit.",
+        "",
+        "Manual CA trades:",
+        "If you already know the token you want, use Trade for one wallet or Bundle for multiple wallets. OgreSniper is kept focused on bot-researched picks.",
         "",
         "Best practice:",
         "Start tiny, avoid low-score plays, and use Safe Mode until your RPC/Jupiter setup is reliable."
