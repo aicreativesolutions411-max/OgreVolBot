@@ -5,6 +5,7 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import bs58 from "bs58";
+import sharp from "sharp";
 import {
   Connection,
   Keypair,
@@ -24,6 +25,7 @@ const rpcLimiter = createRpcLimiter();
 const jupiterLimiter = createJupiterLimiter();
 const sessions = new Map();
 const mintProgramCache = new Map();
+const dexMetadataCache = new Map();
 const startedAt = new Date();
 let lastKeepAliveStatus = {
   enabled: false,
@@ -38,6 +40,17 @@ const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ
 const TOKEN_2022_PROGRAM_ID = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 const SOL_MINT = "So11111111111111111111111111111111111111112";
+const PNL_CARD_STYLE = Object.freeze({
+  width: 1200,
+  height: 675,
+  fontFamily: "Arial, Helvetica, sans-serif",
+  bg: "#071407",
+  green: "#18ff29",
+  red: "#ff3838",
+  white: "#f7fff7",
+  muted: "#b8c7b8",
+  panel: "rgba(4, 16, 5, 0.72)"
+});
 const BRAND_FOOTER = [
   "Powered by Ogres",
   "Telegram: https://t.me/ogrecoinonsol",
@@ -70,6 +83,7 @@ const PRIVATE_CHAT_ACTIONS = new Set([
   "list_wallets",
   "check_balances",
   "pnl_results",
+  "pnl_card",
   "positions_overview",
   "copy_trade_info",
   "quick_start",
@@ -201,6 +215,8 @@ function loadConfig() {
     adminUserIds: parseAllowedUserIds(process.env.TELEGRAM_ADMIN_USER_IDS || process.env.TELEGRAM_ALLOWED_USER_IDS || ""),
     jupiterApiKey: process.env.JUPITER_API_KEY || "",
     jupiterApiBase: (process.env.JUPITER_API_BASE || "https://api.jup.ag/swap/v2").replace(/\/$/, ""),
+    pumpFunApiBase: (process.env.PUMPFUN_API_BASE || "https://frontend-api-v3.pump.fun").replace(/\/$/, ""),
+    pumpFunApiToken: process.env.PUMPFUN_API_TOKEN || "",
     tradingSpeedPreset,
     feeWallet,
     bundleFeeBps,
@@ -610,6 +626,7 @@ async function handleUpdate(update) {
 async function handleCallback(query, userId) {
   const chatId = query.message.chat.id;
   const chat = query.message.chat;
+  const messageId = query.message?.message_id;
   await telegram("answerCallbackQuery", { callback_query_id: query.id });
 
   if (ADMIN_ACTIONS.has(query.data) && !isAdmin(userId)) {
@@ -627,7 +644,7 @@ async function handleCallback(query, userId) {
       await say(chatId, "Open this bot in DM to use the How To guide.");
       return;
     }
-    await showHowToPage(chatId, query.data.replace("howto_", ""));
+    await showHowToPage(chatId, query.data.replace("howto_", ""), messageId);
     return;
   }
 
@@ -640,6 +657,18 @@ async function handleCallback(query, userId) {
     return;
   }
 
+  if (query.data === "pnl_card" || query.data?.startsWith("pnl_card:")) {
+    if (!isPrivateChat(chat)) {
+      await say(chatId, "Open this bot in DM to create a PnL card.");
+      return;
+    }
+    const tokenMint = query.data.startsWith("pnl_card:")
+      ? query.data.slice("pnl_card:".length)
+      : null;
+    await sendPnlCard(chatId, userId, tokenMint);
+    return;
+  }
+
   if (await isPausedActionBlocked(query.data)) {
     await say(chatId, "Emergency stop is active. Use Unlock Bot to re-enable transaction flows.");
     return;
@@ -647,25 +676,25 @@ async function handleCallback(query, userId) {
 
   switch (query.data) {
     case "quick_start":
-      await showHowToMenu(chatId);
+      await showHowToMenu(chatId, messageId);
       break;
     case "main_menu":
-      await showMenu(chatId, userId);
+      await showMenu(chatId, userId, messageId);
       break;
     case "backup_menu":
-      await showBackupMenu(chatId);
+      await showBackupMenu(chatId, messageId);
       break;
     case "wallet_menu":
-      await showWalletMenu(chatId);
+      await showWalletMenu(chatId, messageId);
       break;
     case "trade_menu":
-      await showTradeMenu(chatId);
+      await showTradeMenu(chatId, messageId);
       break;
     case "bundle_menu":
-      await showBundleMenu(chatId);
+      await showBundleMenu(chatId, messageId);
       break;
     case "withdrawal_menu":
-      await showWithdrawalMenu(chatId);
+      await showWithdrawalMenu(chatId, messageId);
       break;
     case "create_wallets":
       setSession(chatId, "create_wallets_label", userId);
@@ -682,10 +711,10 @@ async function handleCallback(query, userId) {
       await showWalletBalances(chatId, userId);
       break;
     case "pnl_results":
-      await showPnlResults(chatId, userId);
+      await showPnlResults(chatId, userId, messageId);
       break;
     case "positions_overview":
-      await showPositionsOverview(chatId, userId);
+      await showPositionsOverview(chatId, userId, messageId);
       break;
     case "copy_trade_info":
       await say(chatId, copyTradeText());
@@ -1830,6 +1859,9 @@ async function batchSellFlow(chatId, session) {
 
   clearSession(chatId);
   await sendTradeResult(chatId, withBrandFooter(`${isSingleTrade ? "Sell complete" : "Batch sell complete"}:\n\n${results.join("\n")}\n\n${pnl}`), isSingleTrade);
+  if (tradeEvents.length > 0) {
+    await sendPnlCard(chatId, session.userId, session.data.tokenMint, { quietNoData: true });
+  }
   if (!isSingleTrade) {
     await showMenu(chatId, session.userId);
   }
@@ -3103,76 +3135,82 @@ async function exportAudit(chatId) {
   await say(chatId, latest.length ? `Last ${latest.length} audit entries:\n\n${latest.join("\n")}` : "Audit log is empty.");
 }
 
-async function showWalletMenu(chatId) {
-  await telegram("sendMessage", {
-    chat_id: chatId,
-    text: withBrandFooter("Wallet tools:"),
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: "💴💶💷 Create Wallet Set", callback_data: "create_wallets" }],
-        [{ text: "Import Wallet", callback_data: "import_wallet" }],
-        [{ text: "💳 My Wallets", callback_data: "list_wallets" }],
-        [{ text: "Positions Overview", callback_data: "positions_overview" }],
-        [{ text: "PnL / Results", callback_data: "pnl_results" }],
-        [{ text: "Close Empty Token Accounts", callback_data: "close_empty_accounts" }]
-      ]
-    }
+async function showWalletMenu(chatId, messageId = null) {
+  await sendOrEditMessage(chatId, messageId, withBrandFooter("Wallet tools:"), {
+    inline_keyboard: [
+      [{ text: "💴💶💷 Create Wallet Set", callback_data: "create_wallets" }],
+      [{ text: "Import Wallet", callback_data: "import_wallet" }],
+      [{ text: "💳 My Wallets", callback_data: "list_wallets" }],
+      [{ text: "Positions Overview", callback_data: "positions_overview" }],
+      [{ text: "PnL / Results", callback_data: "pnl_results" }],
+      [{ text: "Close Empty Token Accounts", callback_data: "close_empty_accounts" }],
+      [{ text: "Main Menu", callback_data: "main_menu" }]
+    ]
   });
 }
 
-async function showTradeMenu(chatId) {
-  await telegram("sendMessage", {
-    chat_id: chatId,
-    text: withBrandFooter("Single-wallet trade tools:\n\nPick one wallet first, then use quick buttons like 0.10 SOL, 0.50 SOL, 1 SOL, 25%, 50%, and 100%."),
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: "Buy", callback_data: "trade_buy" }, { text: "Sell", callback_data: "trade_sell" }],
-        [{ text: "Auto Sell", callback_data: "trade_auto_sell" }],
-        [{ text: "DCA Buy", callback_data: "trade_dca_buy" }, { text: "DCA Sell", callback_data: "trade_dca_sell" }],
-        [{ text: "Positions", callback_data: "positions_overview" }, { text: "Wallets", callback_data: "list_wallets" }]
-      ]
-    }
+async function showTradeMenu(chatId, messageId = null) {
+  await sendOrEditMessage(chatId, messageId, withBrandFooter("Single-wallet trade tools:\n\nPick one wallet first, then use quick buttons like 0.10 SOL, 0.50 SOL, 1 SOL, 25%, 50%, and 100%."), {
+    inline_keyboard: [
+      [{ text: "Buy", callback_data: "trade_buy" }, { text: "Sell", callback_data: "trade_sell" }],
+      [{ text: "Auto Sell", callback_data: "trade_auto_sell" }],
+      [{ text: "DCA Buy", callback_data: "trade_dca_buy" }, { text: "DCA Sell", callback_data: "trade_dca_sell" }],
+      [{ text: "Positions", callback_data: "positions_overview" }, { text: "Wallets", callback_data: "list_wallets" }],
+      [{ text: "Main Menu", callback_data: "main_menu" }]
+    ]
   });
 }
 
-async function showBundleMenu(chatId) {
-  await telegram("sendMessage", {
-    chat_id: chatId,
-    text: withBrandFooter("Bundle tools:\n\nUse Volume for auto-sell and repeat cycles."),
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: "🧲 Bundle Buy", callback_data: "batch_buy" }],
-        [{ text: "🧲 Bundle Sell", callback_data: "batch_sell" }],
-        [{ text: "DCA Buy", callback_data: "dca_buy" }, { text: "DCA Sell", callback_data: "dca_sell" }],
-        [{ text: "Copy Trade", callback_data: "copy_trade_info" }]
-      ]
-    }
+async function showBundleMenu(chatId, messageId = null) {
+  await sendOrEditMessage(chatId, messageId, withBrandFooter("Bundle tools:\n\nUse Volume for auto-sell and repeat cycles."), {
+    inline_keyboard: [
+      [{ text: "🧲 Bundle Buy", callback_data: "batch_buy" }],
+      [{ text: "🧲 Bundle Sell", callback_data: "batch_sell" }],
+      [{ text: "DCA Buy", callback_data: "dca_buy" }, { text: "DCA Sell", callback_data: "dca_sell" }],
+      [{ text: "Copy Trade", callback_data: "copy_trade_info" }],
+      [{ text: "Main Menu", callback_data: "main_menu" }]
+    ]
   });
 }
 
-async function showWithdrawalMenu(chatId) {
-  await telegram("sendMessage", {
-    chat_id: chatId,
-    text: withBrandFooter("Withdrawal tools:"),
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: "🏦 Withdraw SOL", callback_data: "sweep_sol" }],
-        [{ text: "Sweep Tokens", callback_data: "sweep_tokens" }],
-        [{ text: "Fund Wallets", callback_data: "fund_wallets" }]
-      ]
-    }
+async function showWithdrawalMenu(chatId, messageId = null) {
+  await sendOrEditMessage(chatId, messageId, withBrandFooter("Withdrawal tools:"), {
+    inline_keyboard: [
+      [{ text: "🏦 Withdraw SOL", callback_data: "sweep_sol" }],
+      [{ text: "Sweep Tokens", callback_data: "sweep_tokens" }],
+      [{ text: "Fund Wallets", callback_data: "fund_wallets" }],
+      [{ text: "Main Menu", callback_data: "main_menu" }]
+    ]
   });
 }
 
-async function showPnlResults(chatId, userId) {
-  await say(chatId, await pnlSummaryText(userId));
+async function showPnlResults(chatId, userId, messageId = null) {
+  const tokenRows = await pnlRows(userId, null, { groupByToken: true, limit: 5 });
+  const cardButtons = tokenRows.map((row, index) => ([{
+    text: `Card ${index + 1}: ${row.symbol || shortMint(row.tokenMint)}`,
+    callback_data: `pnl_card:${row.tokenMint}`
+  }]));
+
+  await sendOrEditMessage(chatId, messageId, withBrandFooter(await pnlSummaryText(userId)), {
+    inline_keyboard: [
+      [{ text: "Share Best PnL Card", callback_data: "pnl_card" }],
+      ...cardButtons,
+      [{ text: "Positions", callback_data: "positions_overview" }, { text: "Wallet Menu", callback_data: "wallet_menu" }],
+      [{ text: "Main Menu", callback_data: "main_menu" }]
+    ]
+  });
 }
 
-async function showPositionsOverview(chatId, userId) {
+async function showPositionsOverview(chatId, userId, messageId = null) {
   const positions = await buildPositionsOverview(userId);
 
   if (positions.length === 0) {
-    await say(chatId, withBrandFooter("Positions Overview\n\nNo token positions found yet. Buy or import funded wallets, then refresh balances."));
+    await sendOrEditMessage(chatId, messageId, withBrandFooter("Positions Overview\n\nNo token positions found yet. Buy or import funded wallets, then refresh balances."), {
+      inline_keyboard: [
+        [{ text: "Refresh", callback_data: "positions_overview" }],
+        [{ text: "Main Menu", callback_data: "main_menu" }]
+      ]
+    });
     return;
   }
 
@@ -3200,14 +3238,12 @@ async function showPositionsOverview(chatId, userId) {
     ...positions.slice(0, 5).map((position, index) => ([{
       text: `Dex ${index + 1}: ${shortMint(position.tokenMint)}`,
       url: dexScreenerUrl(position.tokenMint)
-    }]))
+    }])),
+    [{ text: "PnL / Results", callback_data: "pnl_results" }, { text: "Main Menu", callback_data: "main_menu" }]
   ];
 
-  await telegram("sendMessage", {
-    chat_id: chatId,
-    text: withBrandFooter(["Positions Overview", ...rows].join("\n\n")),
-    disable_web_page_preview: true,
-    reply_markup: { inline_keyboard: keyboard }
+  await sendOrEditMessage(chatId, messageId, withBrandFooter(["Positions Overview", ...rows].join("\n\n")), {
+    inline_keyboard: keyboard
   });
 }
 
@@ -3307,35 +3343,7 @@ async function estimatePositionValue(position) {
 }
 
 async function pnlSummaryText(userId, tokenFilter = null) {
-  const history = await readTradeHistory();
-  const aggregates = new Map();
-
-  for (const trade of history.trades.filter((item) => String(item.userId) === String(userId))) {
-    if (tokenFilter && trade.tokenMint !== tokenFilter) continue;
-    const key = `${trade.walletPublicKey}:${trade.tokenMint}`;
-    const entry = aggregates.get(key) || {
-      walletLabel: trade.walletLabel,
-      walletPublicKey: trade.walletPublicKey,
-      tokenMint: trade.tokenMint,
-      buys: 0,
-      sells: 0,
-      spent: 0n,
-      received: 0n
-    };
-
-    if (trade.type === "buy") {
-      entry.buys += 1;
-      entry.spent += BigInt(trade.solLamportsSpent || 0);
-    } else if (trade.type === "sell") {
-      entry.sells += 1;
-      entry.received += BigInt(trade.solLamportsReceived || 0);
-    }
-    aggregates.set(key, entry);
-  }
-
-  const rows = [...aggregates.values()]
-    .sort((a, b) => Number((b.received - b.spent) - (a.received - a.spent)))
-    .slice(0, 12);
+  const rows = await pnlRows(userId, tokenFilter, { groupByToken: false, limit: 12 });
 
   if (rows.length === 0) {
     return "PnL / Results\n\nNo bot trade history yet. Buys and sells made from this bot will show here.";
@@ -3350,7 +3358,7 @@ async function pnlSummaryText(userId, tokenFilter = null) {
       const sign = realized >= 0n ? "+" : "-";
       const abs = realized >= 0n ? realized : -realized;
       return [
-        `${row.walletLabel} - ${shortMint(row.tokenMint)}`,
+        `${row.walletLabel || "All wallets"} - ${shortMint(row.tokenMint)}`,
         `Buys/Sells: ${row.buys}/${row.sells}`,
         `Spent: ${lamportsToSol(Number(row.spent))} SOL`,
         `Received: ${lamportsToSol(Number(row.received))} SOL`,
@@ -3358,6 +3366,209 @@ async function pnlSummaryText(userId, tokenFilter = null) {
       ].join("\n");
     })
   ].join("\n\n");
+}
+
+async function pnlRows(userId, tokenFilter = null, options = {}) {
+  const history = await readTradeHistory();
+  const groupByToken = Boolean(options.groupByToken);
+  const aggregates = new Map();
+
+  for (const trade of history.trades.filter((item) => String(item.userId) === String(userId))) {
+    if (tokenFilter && trade.tokenMint !== tokenFilter) continue;
+    const key = groupByToken ? trade.tokenMint : `${trade.walletPublicKey}:${trade.tokenMint}`;
+    const entry = aggregates.get(key) || {
+      walletLabel: groupByToken ? "All wallets" : trade.walletLabel,
+      walletPublicKey: groupByToken ? null : trade.walletPublicKey,
+      tokenMint: trade.tokenMint,
+      buys: 0,
+      sells: 0,
+      spent: 0n,
+      received: 0n,
+      lastTradeAt: null
+    };
+
+    if (trade.type === "buy") {
+      entry.buys += 1;
+      entry.spent += BigInt(trade.solLamportsSpent || 0);
+    } else if (trade.type === "sell") {
+      entry.sells += 1;
+      entry.received += BigInt(trade.solLamportsReceived || 0);
+    }
+    entry.lastTradeAt = trade.timestamp || entry.lastTradeAt;
+    aggregates.set(key, entry);
+  }
+
+  return [...aggregates.values()]
+    .sort((a, b) => compareBigInt((b.received - b.spent), (a.received - a.spent)))
+    .slice(0, options.limit || 12);
+}
+
+async function sendPnlCard(chatId, userId, tokenFilter = null, options = {}) {
+  const rows = await pnlRows(userId, tokenFilter, { groupByToken: true, limit: 1 });
+  if (rows.length === 0) {
+    if (!options.quietNoData) {
+      await say(chatId, "No PnL data yet. Buy and sell from the bot first, then create a card.");
+    }
+    return;
+  }
+
+  const row = rows[0];
+  try {
+    const metadata = await getDexTokenMetadata(row.tokenMint);
+    const png = await renderPnlCard(row, metadata);
+    await sendPhoto(chatId, `pnl-card-${sanitizeFilenamePart(metadata.symbol || row.tokenMint)}.png`, png, [
+      `${metadata.symbol || shortMint(row.tokenMint)} PnL card`,
+      dexScreenerUrl(row.tokenMint)
+    ].join("\n"), {
+      inline_keyboard: [
+        [{ text: "Chart", url: dexScreenerUrl(row.tokenMint) }],
+        [{ text: "PnL / Results", callback_data: "pnl_results" }, { text: "Positions", callback_data: "positions_overview" }]
+      ]
+    });
+  } catch (error) {
+    if (!options.quietNoData) {
+      await say(chatId, `Could not create PnL card: ${friendlyError(error)}`);
+    }
+  }
+}
+
+async function renderPnlCard(row, metadata = {}) {
+  const spent = row.spent;
+  const received = row.received;
+  const realized = received - spent;
+  const positive = realized >= 0n;
+  const accent = positive ? PNL_CARD_STYLE.green : PNL_CARD_STYLE.red;
+  const multiple = formatPnlMultiple(received, spent);
+  const symbol = sanitizeCardText(metadata.symbol || shortMint(row.tokenMint), 18);
+  const name = sanitizeCardText(metadata.name || "OgreTradeBot", 26);
+  const imageDataUrl = await tokenImageDataUrl(metadata.imageUrl);
+  const art = imageDataUrl
+    ? `<image href="${imageDataUrl}" x="72" y="142" width="430" height="430" preserveAspectRatio="xMidYMid slice" clip-path="url(#artClip)"/>`
+    : `<rect x="72" y="142" width="430" height="430" rx="34" fill="#123018"/><text x="287" y="385" text-anchor="middle" font-size="92" font-weight="900" fill="${accent}" font-family="${PNL_CARD_STYLE.fontFamily}">${escapeSvg(symbol.slice(0, 4))}</text>`;
+  const priceMove = formatDexPriceMove(metadata.priceChange);
+  const marketCap = metadata.marketCap || metadata.fdv;
+  const subline = [
+    marketCap ? `MC ${formatUsdCompact(marketCap)}` : null,
+    priceMove || null
+  ].filter(Boolean).join("  |  ");
+  const profitLabel = `${positive ? "+" : "-"}${lamportsBigToSol(realized >= 0n ? realized : -realized)} SOL`;
+
+  const svg = `
+<svg xmlns="http://www.w3.org/2000/svg" width="${PNL_CARD_STYLE.width}" height="${PNL_CARD_STYLE.height}" viewBox="0 0 ${PNL_CARD_STYLE.width} ${PNL_CARD_STYLE.height}">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#061006"/>
+      <stop offset="48%" stop-color="#0b2b12"/>
+      <stop offset="100%" stop-color="#020702"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="68%" cy="50%" r="48%">
+      <stop offset="0%" stop-color="${accent}" stop-opacity="0.38"/>
+      <stop offset="100%" stop-color="${accent}" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="artClip"><rect x="72" y="142" width="430" height="430" rx="34"/></clipPath>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="20" stdDeviation="24" flood-color="#000000" flood-opacity="0.55"/>
+    </filter>
+  </defs>
+  <rect width="1200" height="675" fill="url(#bg)"/>
+  <rect width="1200" height="675" fill="url(#glow)"/>
+  <g opacity="0.16">
+    <path d="M0 570 C220 420 342 690 540 520 S882 430 1200 560 L1200 675 L0 675 Z" fill="${accent}"/>
+    <path d="M60 100 H1140 M60 590 H1140 M980 60 V615" stroke="${accent}" stroke-width="2"/>
+  </g>
+  <rect x="42" y="86" width="1116" height="510" rx="42" fill="${PNL_CARD_STYLE.panel}" filter="url(#shadow)" stroke="rgba(255,255,255,0.09)"/>
+  ${art}
+  <text x="555" y="162" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="74" font-weight="900" fill="${PNL_CARD_STYLE.white}" letter-spacing="0">OGRE</text>
+  <text x="555" y="215" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="34" font-weight="800" fill="${PNL_CARD_STYLE.muted}">PNL CARD</text>
+  <text x="555" y="392" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="170" font-weight="900" fill="${accent}" letter-spacing="0">${escapeSvg(multiple)}X</text>
+  <text x="555" y="450" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="38" font-weight="900" fill="${PNL_CARD_STYLE.white}">${escapeSvg(symbol)} / ${escapeSvg(name)}</text>
+  <text x="555" y="500" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="34" font-weight="800" fill="${accent}">Profit ${escapeSvg(profitLabel)}</text>
+  <text x="555" y="544" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="28" font-weight="700" fill="${PNL_CARD_STYLE.muted}">Spent ${escapeSvg(lamportsBigToSol(spent))} SOL  |  Received ${escapeSvg(lamportsBigToSol(received))} SOL</text>
+  <text x="555" y="584" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="26" font-weight="700" fill="${PNL_CARD_STYLE.muted}">${escapeSvg(subline || shortMint(row.tokenMint))}</text>
+  <text x="1010" y="630" text-anchor="end" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="24" font-weight="800" fill="${PNL_CARD_STYLE.white}">@ogrecoinonsol</text>
+</svg>`;
+
+  return sharp(Buffer.from(svg)).png().toBuffer();
+}
+
+async function getDexTokenMetadata(tokenMint) {
+  const cached = dexMetadataCache.get(tokenMint);
+  if (cached && Date.now() - cached.cachedAt < 5 * 60 * 1000) {
+    return cached.value;
+  }
+
+  const dexValue = await getDexScreenerTokenMetadata(tokenMint).catch(() => ({}));
+  const needsPumpFallback = !dexValue.imageUrl || !dexValue.symbol || !dexValue.name;
+  const pumpValue = needsPumpFallback
+    ? await getPumpFunTokenMetadata(tokenMint).catch(() => ({}))
+    : {};
+  const value = {
+    symbol: dexValue.symbol || pumpValue.symbol || "",
+    name: dexValue.name || pumpValue.name || "",
+    imageUrl: dexValue.imageUrl || pumpValue.imageUrl || "",
+    marketCap: dexValue.marketCap || pumpValue.marketCap || null,
+    fdv: dexValue.fdv || null,
+    priceChange: dexValue.priceChange || null,
+    source: dexValue.imageUrl ? "dexscreener" : pumpValue.imageUrl ? "pumpfun" : "fallback"
+  };
+
+  dexMetadataCache.set(tokenMint, { cachedAt: Date.now(), value });
+  return value;
+}
+
+async function getDexScreenerTokenMetadata(tokenMint) {
+  const data = await fetchJson(`https://api.dexscreener.com/tokens/v1/solana/${encodeURIComponent(tokenMint)}`, {
+    headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" }
+  });
+  const pairs = Array.isArray(data) ? data : [];
+  const best = pairs
+    .filter((pair) => pair?.baseToken?.address === tokenMint || pair?.quoteToken?.address === tokenMint)
+    .sort((a, b) => Number(b?.liquidity?.usd || 0) - Number(a?.liquidity?.usd || 0))[0] || pairs[0] || {};
+  const token = best?.baseToken?.address === tokenMint ? best.baseToken : best?.quoteToken || best?.baseToken || {};
+
+  return {
+    symbol: token.symbol || "",
+    name: token.name || "",
+    imageUrl: best?.info?.imageUrl || "",
+    marketCap: best?.marketCap || null,
+    fdv: best?.fdv || null,
+    priceChange: best?.priceChange || null
+  };
+}
+
+async function getPumpFunTokenMetadata(tokenMint) {
+  const headers = { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" };
+  if (CONFIG.pumpFunApiToken) {
+    headers.Authorization = `Bearer ${CONFIG.pumpFunApiToken}`;
+  }
+
+  const url = `${CONFIG.pumpFunApiBase}/coins/${encodeURIComponent(tokenMint)}?sync=false`;
+  const response = await fetchJson(url, { headers });
+  const coin = response?.data || response;
+
+  return {
+    symbol: coin?.symbol || "",
+    name: coin?.name || "",
+    imageUrl: coin?.image_uri || coin?.image || coin?.metadata?.image || "",
+    marketCap: coin?.usd_market_cap || coin?.market_cap || null
+  };
+}
+
+async function tokenImageDataUrl(imageUrl) {
+  if (!/^https?:\/\//i.test(String(imageUrl || ""))) return null;
+
+  try {
+    const response = await fetch(imageUrl, {
+      headers: { "User-Agent": "solana-telegram-wallet-ops-bot" },
+      signal: AbortSignal.timeout(7000)
+    });
+    if (!response.ok) return null;
+    const source = Buffer.from(await response.arrayBuffer());
+    const png = await sharp(source, { animated: false }).resize(430, 430, { fit: "cover" }).png().toBuffer();
+    return `data:image/png;base64,${png.toString("base64")}`;
+  } catch {
+    return null;
+  }
 }
 
 function copyTradeText() {
@@ -3374,25 +3585,20 @@ function copyTradeText() {
   ].join("\n"));
 }
 
-async function showBackupMenu(chatId) {
-  await telegram("sendMessage", {
-    chat_id: chatId,
-    text: withBrandFooter("Backup and recovery tools:"),
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: "Export Backup", callback_data: "export_backup" }],
-        [{ text: "Restore Backup", callback_data: "restore_backup" }],
-        [{ text: "Rescue Backup Keys", callback_data: "rescue_backup_keys" }],
-        [{ text: "Emergency Key Export", callback_data: "export_private_keys" }]
-      ]
-    }
+async function showBackupMenu(chatId, messageId = null) {
+  await sendOrEditMessage(chatId, messageId, withBrandFooter("Backup and recovery tools:"), {
+    inline_keyboard: [
+      [{ text: "Export Backup", callback_data: "export_backup" }],
+      [{ text: "Restore Backup", callback_data: "restore_backup" }],
+      [{ text: "Rescue Backup Keys", callback_data: "rescue_backup_keys" }],
+      [{ text: "Emergency Key Export", callback_data: "export_private_keys" }],
+      [{ text: "Main Menu", callback_data: "main_menu" }]
+    ]
   });
 }
 
-async function showHowToMenu(chatId) {
-  await telegram("sendMessage", {
-    chat_id: chatId,
-    text: withBrandFooter([
+async function showHowToMenu(chatId, messageId = null) {
+  await sendOrEditMessage(chatId, messageId, withBrandFooter([
       "How To Use This Bot",
       "",
       "Tap a section below to learn that part of the bot. Start with Wallet, Backup, and Trade if this is your first time.",
@@ -3402,29 +3608,23 @@ async function showHowToMenu(chatId) {
       "2. Save the automatic backup file.",
       "3. Fund the wallet with enough SOL for buys plus network fees.",
       "4. Trade, track positions, then withdraw when ready."
-    ].join("\n")),
-    disable_web_page_preview: true,
-    reply_markup: { inline_keyboard: howToMenuKeyboard() }
-  });
+    ].join("\n")), { inline_keyboard: howToMenuKeyboard() });
 }
 
-async function showHowToPage(chatId, topic) {
+async function showHowToPage(chatId, topic, messageId = null) {
   if (topic === "menu") {
-    await showHowToMenu(chatId);
+    await showHowToMenu(chatId, messageId);
     return;
   }
 
   const page = howToPage(topic);
   if (!page) {
-    await showHowToMenu(chatId);
+    await showHowToMenu(chatId, messageId);
     return;
   }
 
-  await telegram("sendMessage", {
-    chat_id: chatId,
-    text: withBrandFooter(page.text),
-    disable_web_page_preview: true,
-    reply_markup: { inline_keyboard: howToPageKeyboard(page.openAction) }
+  await sendOrEditMessage(chatId, messageId, withBrandFooter(page.text), {
+    inline_keyboard: howToPageKeyboard(page.openAction)
   });
 }
 
@@ -3732,13 +3932,11 @@ async function walletPrompt(userId, prefix) {
   return `${prefix}\n\n${lines.join("\n") || "You do not have any managed wallets yet."}`;
 }
 
-async function showMenu(chatId, userId) {
+async function showMenu(chatId, userId, messageId = null) {
   const state = await readState();
   const menu = isAdmin(userId) ? [...PUBLIC_MENU, ...ADMIN_MENU] : PUBLIC_MENU;
-  await telegram("sendMessage", {
-    chat_id: chatId,
-    text: withBrandFooter(`${state.paused ? "Status: emergency stop active.\n\n" : ""}Choose a wallet operation:`),
-    reply_markup: { inline_keyboard: menu }
+  await sendOrEditMessage(chatId, messageId, withBrandFooter(`${state.paused ? "Status: emergency stop active.\n\n" : ""}Choose a wallet operation:`), {
+    inline_keyboard: menu
   });
 }
 
@@ -3850,6 +4048,33 @@ async function say(chatId, text) {
   }
 }
 
+async function sendOrEditMessage(chatId, messageId, text, replyMarkup = null) {
+  if (messageId) {
+    try {
+      await telegram("editMessageText", {
+        chat_id: chatId,
+        message_id: messageId,
+        text,
+        disable_web_page_preview: true,
+        reply_markup: replyMarkup || undefined
+      });
+      return;
+    } catch (error) {
+      if (/message is not modified/i.test(formatError(error))) {
+        return;
+      }
+      // Fall through to a new message if Telegram cannot edit this message.
+    }
+  }
+
+  await telegram("sendMessage", {
+    chat_id: chatId,
+    text,
+    disable_web_page_preview: true,
+    reply_markup: replyMarkup || undefined
+  });
+}
+
 async function telegram(method, payload = {}) {
   return fetchJson(`https://api.telegram.org/bot${CONFIG.telegramToken}/${method}`, {
     method: "POST",
@@ -3876,6 +4101,26 @@ async function sendDocument(chatId, filename, text) {
 
   if (!response.ok || !data.ok) {
     throw new Error(data.description || "Telegram sendDocument failed");
+  }
+
+  return data.result;
+}
+
+async function sendPhoto(chatId, filename, buffer, caption = "", replyMarkup = null) {
+  const form = new FormData();
+  form.append("chat_id", String(chatId));
+  form.append("photo", new Blob([buffer], { type: "image/png" }), filename);
+  if (caption) form.append("caption", caption);
+  if (replyMarkup) form.append("reply_markup", JSON.stringify(replyMarkup));
+
+  const response = await fetch(`https://api.telegram.org/bot${CONFIG.telegramToken}/sendPhoto`, {
+    method: "POST",
+    body: form
+  });
+  const data = await response.json();
+
+  if (!response.ok || !data.ok) {
+    throw new Error(data.description || "Telegram sendPhoto failed");
   }
 
   return data.result;
@@ -4623,8 +4868,53 @@ function shortMint(value) {
   return text.length > 12 ? `${text.slice(0, 4)}...${text.slice(-4)}` : text;
 }
 
+function compareBigInt(left, right) {
+  if (left > right) return 1;
+  if (left < right) return -1;
+  return 0;
+}
+
+function formatPnlMultiple(received, spent) {
+  if (spent <= 0n) return "--";
+  const value = Number(received) / Number(spent);
+  if (!Number.isFinite(value)) return "--";
+  const decimals = value >= 100 ? 0 : value >= 10 ? 1 : 2;
+  return value.toFixed(decimals).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function sanitizeCardText(value, maxLength) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  return text.length > maxLength ? `${text.slice(0, Math.max(1, maxLength - 1))}` : text;
+}
+
+function formatUsdCompact(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) return "";
+  if (number >= 1_000_000_000) return `$${(number / 1_000_000_000).toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}B`;
+  if (number >= 1_000_000) return `$${(number / 1_000_000).toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}M`;
+  if (number >= 1_000) return `$${(number / 1_000).toFixed(1).replace(/0+$/, "").replace(/\.$/, "")}K`;
+  return `$${Math.round(number).toLocaleString("en-US")}`;
+}
+
+function formatDexPriceMove(priceChange) {
+  const entry = [
+    ["24h", priceChange?.h24],
+    ["6h", priceChange?.h6],
+    ["1h", priceChange?.h1]
+  ].find(([, value]) => Number.isFinite(Number(value)));
+  if (!entry) return "";
+  const [label, value] = entry;
+  const number = Number(value);
+  return `${label} ${number >= 0 ? "+" : ""}${number.toFixed(2)}%`;
+}
+
 function dexScreenerUrl(tokenMint) {
   return `https://dexscreener.com/solana/${tokenMint}`;
+}
+
+function escapeSvg(value) {
+  return escapeHtml(value).replace(/"/g, "&quot;");
 }
 
 function escapeHtml(value) {

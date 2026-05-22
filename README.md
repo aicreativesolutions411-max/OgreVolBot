@@ -13,6 +13,7 @@ Telegram bot for legitimate, auditable Solana wallet operations:
 - Timed trade plans: buy now, sell later by timer, take-profit, or stop-loss
 - Positions Overview with live token balances, estimated value when Jupiter can quote, PnL, and Dexscreener links
 - PnL / Results from bot-recorded buys and sells
+- PnL share cards as Telegram PNG images using Dexscreener token metadata/art first, with a best-effort Pump.fun metadata fallback for missing art/name/symbol
 - Tap-to-copy managed wallet addresses
 - Sweep SOL to a destination wallet
 - Sweep SPL tokens to a destination wallet
@@ -37,6 +38,8 @@ This bot does not provide wallet washing, provenance hiding, mixer behavior, or 
    SOLANA_RPC_URL=...
    APP_SECRET=...
    JUPITER_API_KEY=...
+   PUMPFUN_API_BASE=https://frontend-api-v3.pump.fun
+   PUMPFUN_API_TOKEN=
    TRADING_SPEED_PRESET=balanced
    JUPITER_MIN_INTERVAL_MS=500
    JUPITER_RETRIES=5
@@ -136,7 +139,9 @@ The How To Use button opens a clickable learning hub with user-friendly instruct
 
 The Trade menu is for one wallet at a time. It includes Buy, Sell, Auto Sell, DCA Buy, DCA Sell, Positions, and Wallets. Buy screens include quick buttons for `0.10 SOL`, `0.50 SOL`, `1 SOL`, `max`, and custom amount. Sell screens include quick buttons for `25%`, `50%`, `100%`, and custom percent.
 
-The Wallet menu includes wallet creation/import, My Wallets with tap-to-copy address text, Positions Overview, and PnL / Results. The Bundle menu contains Bundle Buy, Bundle Sell, DCA Buy, DCA Sell, and Copy Trade info. Use the main Volume button for auto-sell, take-profit, stop-loss, and Repeat cycles. Copy Trade is shown as a setup/info item until a full wallet-watcher implementation is added.
+The Wallet menu includes wallet creation/import, My Wallets with tap-to-copy address text, Positions Overview, and PnL / Results. PnL / Results includes share-card buttons, and successful sells try to send a PnL card automatically. Cards use Dexscreener metadata/art first; if Dexscreener has no token image/name/symbol, the bot tries Pump.fun metadata next. The Bundle menu contains Bundle Buy, Bundle Sell, DCA Buy, DCA Sell, and Copy Trade info. Use the main Volume button for auto-sell, take-profit, stop-loss, and Repeat cycles. Copy Trade is shown as a setup/info item until a full wallet-watcher implementation is added.
+
+Menu navigation edits the existing Telegram menu message when possible, with Main Menu back buttons on submenus. Wallet lists, backups, trade results, and generated PnL cards still post as new messages so users do not lose important data.
 
 Menu and buy-flow messages include:
 
