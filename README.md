@@ -128,7 +128,7 @@ This is a position-management feature for the user's own wallets. It does not ru
 
 The main menu also includes **OgreSniper**. It provides:
 
-- Scan Early Plays from latest Solana token profiles
+- Scan Early Plays from latest Solana token profiles, with direct Snipe buttons
 - Score Token for a pasted mint
 - Snipe Setup, which scores a mint and then creates a timed-plan entry after user confirmation
 - Modes: Safe Mode, Smart Money Only, Fast Scalps, Low Cap Moonshots, Meme Momentum, and AI Narrative
@@ -137,10 +137,19 @@ OgreSniper scoring is heuristic. It uses Dexscreener/Pump.fun metadata and avail
 
 OgreSniper options:
 
-- **Scan Early Plays** checks latest Solana token profiles and shows the highest-scoring candidates.
-- **Score Token** scores one pasted mint before entry.
-- **Snipe Setup** scores a mint, asks for wallet selection and SOL amount, then applies an exit preset before confirmation.
+- **Scan Early Plays** checks latest Solana token profiles and shows the highest-scoring candidates with tap-to-copy CA text, Dex chart buttons, and **Snipe #1/#2/#3** buttons.
+- **Score Token** scores one pasted mint before entry and includes **Snipe This** so the user does not need to paste the mint again.
+- **Snipe Setup** scores a mint, asks for wallet selection and SOL amount, then auto-selects a recommended exit preset before confirmation.
 - **Modes** adjust score/risk strictness: Safe Mode, Smart Money Only, Fast Scalps, Low Cap Moonshots, Meme Momentum, and AI Narrative.
+
+Fast scan flow:
+
+1. Tap **Scan Early Plays**.
+2. Open a Dex chart or copy the CA from the result.
+3. Tap **Snipe #1**, **Snipe #2**, or **Snipe #3**.
+4. Pick **All Wallets**, a quick wallet button, or **Custom / Group**.
+5. Pick 0.05, 0.10, 0.50, 1 SOL, or **Buy X SOL**.
+6. Review the recommended exit preset, customize TP/SL if needed, set slippage, then tap **Confirm**.
 
 OgreSniper exit presets:
 
@@ -149,7 +158,7 @@ OgreSniper exit presets:
 - **Moonbag** sells 60% after 30 minutes, or earlier at +100% take-profit / -25% stop-loss.
 - **Safe** sells 100% after 10 minutes, or earlier at +20% take-profit / -8% stop-loss.
 
-After choosing a preset, the bot shows exactly what it will do. Users can tap **Use Preset**, **Customize TP/SL**, or **Back**. Custom TP/SL changes the take-profit and stop-loss percentages while keeping the preset timer and sell percent.
+After the amount is chosen, the bot picks a recommended preset from the active mode and score. Users can tap **Use Preset**, **Customize TP/SL**, or **Back**. Custom TP/SL changes the take-profit and stop-loss percentages while keeping the preset timer and sell percent.
 
 Normal trade confirmations use inline **Confirm** and **Cancel / Back** buttons. Emergency raw private key export still requires typing `EXPORT KEYS` exactly because it exposes recovery keys.
 

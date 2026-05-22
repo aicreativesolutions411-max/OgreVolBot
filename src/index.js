@@ -686,6 +686,19 @@ async function handleCallback(query, userId) {
     return;
   }
 
+  if (query.data?.startsWith("sniper_pick:")) {
+    if (!isPrivateChat(chat)) {
+      await say(chatId, "Open this bot in DM to use OgreSniper.");
+      return;
+    }
+    if (await isPausedActionBlocked("sniper_setup")) {
+      await say(chatId, "Emergency stop is active. Use Unlock Bot to re-enable transaction flows.");
+      return;
+    }
+    await startSniperPickFlow(chatId, userId, query.data.slice("sniper_pick:".length), messageId);
+    return;
+  }
+
   if (await isPausedActionBlocked(query.data)) {
     await say(chatId, "Emergency stop is active. Use Unlock Bot to re-enable transaction flows.");
     return;
@@ -1176,10 +1189,15 @@ async function continueFlow(chatId, text, session) {
         break;
       case "sniper_amount":
         session.data.amountSol = parsePositiveNumber(text);
-        session.step = "sniper_exit_preset";
-        await sendQuickChoicePrompt(chatId, "Choose an exit preset for this snipe.", [
-          [{ text: "Fast Scalp", value: "fast" }, { text: "Balanced", value: "balanced" }],
-          [{ text: "Moonbag", value: "moonbag" }, { text: "Safe", value: "safe" }]
+        applySniperExitPreset(session, recommendedSniperExitPreset(session.data.score, session.data.settings));
+        session.step = "sniper_exit_review";
+        await sendQuickChoicePrompt(chatId, [
+          "Recommended exit preset selected.",
+          "",
+          formatSniperPresetDetails(session.data)
+        ].join("\n"), [
+          [{ text: "Use Preset", value: "use" }, { text: "Customize TP/SL", value: "customize" }],
+          [{ text: "Back", value: "back" }]
         ], { includeCustom: false });
         break;
       case "sniper_exit_preset":
@@ -3311,13 +3329,13 @@ async function showSniperMenu(chatId, userId, messageId = null) {
   await sendOrEditMessage(chatId, messageId, withBrandFooter([
     "OgreSniper",
     "",
-    "Find early plays, score risk, and set up a fast entry with automatic exits.",
+    "Find the highest-scored early plays, pick one fast, and set up a buy with automatic exits.",
     "",
     `Mode: ${sniperModeLabel(settings.mode)}`,
     `Minimum score: ${settings.minScore}/100`,
     `Risk ceiling: ${settings.maxRisk}/100`,
     "",
-    "Scanner is heuristic. It filters obvious garbage and momentum weakness, but early launches can still fail fast."
+    "Scan shows ranked picks with Snipe buttons. After amount, the bot auto-selects a take-profit / stop-loss preset you can customize before Confirm."
   ].join("\n")), {
     inline_keyboard: [
       [{ text: "Scan Early Plays", callback_data: "sniper_scan" }],
@@ -3508,30 +3526,32 @@ async function showSniperScan(chatId, userId, messageId = null) {
   const rows = scored
     .filter((item) => item.score >= Math.max(45, settings.minScore - 20))
     .sort((a, b) => b.score - a.score)
-    .slice(0, 8);
+    .slice(0, 5);
 
   if (rows.length === 0) {
     await say(chatId, withBrandFooter("OgreSniper scan found no usable early-play candidates right now.\n\nTry again later, lower mode strictness, or use Score Token with a mint you already found."));
     return;
   }
 
-  await telegram("sendMessage", {
-    chat_id: chatId,
-    text: withBrandFooter([
-      "OgreSniper Scan",
-      `Mode: ${sniperModeLabel(settings.mode)}`,
+  const keyboard = [
+    ...rows.slice(0, 3).map((row, index) => ([
+      { text: `Snipe #${index + 1}`, callback_data: `sniper_pick:${row.tokenMint}` },
+      { text: `Chart #${index + 1}`, url: dexScreenerUrl(row.tokenMint) }
+    ])),
+    [{ text: "Refresh Scan", callback_data: "sniper_scan" }, { text: "Modes", callback_data: "sniper_modes" }],
+    [{ text: "Score Token", callback_data: "sniper_scan_token" }, { text: "Manual Setup", callback_data: "sniper_setup" }],
+    [{ text: "Back", callback_data: "sniper_menu" }]
+  ];
+
+  await sendOrEditHtmlMessage(chatId, messageId, withBrandFooter([
+      "<b>OgreSniper Top Picks</b>",
+      `Mode: <b>${escapeHtml(sniperModeLabel(settings.mode))}</b>`,
+      "Tap a Snipe button to choose wallets and size. CA lines are tap-to-copy.",
       "",
-      ...rows.map(formatSniperScoreBlock)
-    ].join("\n\n")),
-    disable_web_page_preview: true,
-    reply_markup: {
-      inline_keyboard: [
-        ...rows.slice(0, 4).map((row, index) => ([{ text: `Chart ${index + 1}: ${row.symbol || shortMint(row.tokenMint)}`, url: dexScreenerUrl(row.tokenMint) }])),
-        [{ text: "Score Token", callback_data: "sniper_scan_token" }, { text: "Snipe Setup", callback_data: "sniper_setup" }],
-        [{ text: "Back", callback_data: "sniper_menu" }]
-      ]
-    }
-  });
+      ...rows.map(formatSniperPickHtml)
+    ].join("\n\n")), {
+      inline_keyboard: keyboard
+    });
 }
 
 async function sniperScanTokenFlow(chatId, text, session) {
@@ -3541,12 +3561,13 @@ async function sniperScanTokenFlow(chatId, text, session) {
   clearSession(chatId);
   await telegram("sendMessage", {
     chat_id: chatId,
-    text: withBrandFooter(["OgreSniper Token Score", "", formatSniperScoreBlock(score), "", "Use Snipe Setup if you want to enter with automatic exits."].join("\n")),
+    text: withBrandFooter(["<b>OgreSniper Token Score</b>", "", formatSniperPickHtml(score), "", "Tap Snipe This to choose wallets, size, and the recommended exit preset."].join("\n")),
+    parse_mode: "HTML",
     disable_web_page_preview: true,
     reply_markup: {
       inline_keyboard: [
         [{ text: "Chart", url: dexScreenerUrl(tokenMint) }],
-        [{ text: "Snipe Setup", callback_data: "sniper_setup" }, { text: "Back", callback_data: "sniper_menu" }]
+        [{ text: "Snipe This", callback_data: `sniper_pick:${tokenMint}` }, { text: "Back", callback_data: "sniper_menu" }]
       ]
     }
   });
@@ -3571,7 +3592,76 @@ async function sniperTokenFlow(chatId, text, session) {
   }
 
   session.step = "sniper_wallets";
-  await say(chatId, await walletPrompt(session.userId, "Send wallet numbers, `all`, or `group: group name` for this snipe."));
+  await sendSniperWalletPrompt(chatId, session.userId, session.data.score, "Send wallet numbers, `all`, or `group: group name` for this snipe.");
+}
+
+async function startSniperPickFlow(chatId, userId, tokenMint, messageId = null) {
+  await clearInlineKeyboard(chatId, messageId);
+  const settings = await sniperSettingsForUser(userId);
+  const score = await scoreSniperCandidate({ tokenMint: parsePublicKey(tokenMint).toBase58() }, settings);
+  sessions.set(chatId, {
+    step: "sniper_wallets",
+    userId,
+    data: {
+      tokenMint: score.tokenMint,
+      settings,
+      score
+    }
+  });
+
+  await sendSniperWalletPrompt(chatId, userId, score, "Pick loaded. Choose the wallets to use for this entry.");
+}
+
+async function sendSniperWalletPrompt(chatId, userId, score, prefix) {
+  const store = await readWalletStore();
+  const wallets = walletsForOwner(store, userId);
+  if (wallets.length === 0) {
+    clearSession(chatId);
+    await telegram("sendMessage", {
+      chat_id: chatId,
+      text: withBrandFooter("No managed wallets found yet. Create or import a wallet first, then come back to OgreSniper."),
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "Wallet Menu", callback_data: "wallet_menu" }],
+          [{ text: "Back", callback_data: "sniper_menu" }]
+        ]
+      }
+    });
+    return;
+  }
+
+  const walletLines = wallets.slice(0, 12).map((wallet, index) => `${index + 1}. ${escapeHtml(wallet.label)} - <code>${wallet.publicKey}</code>`);
+  const hiddenCount = Math.max(0, wallets.length - walletLines.length);
+  const quickWalletRows = [
+    ...(wallets.length > 1 ? [[{ text: "All Wallets", callback_data: "quick:all" }]] : []),
+    ...chunkArray(wallets.slice(0, 4).map((wallet, index) => ({
+      text: `Wallet ${index + 1}`,
+      callback_data: `quick:${index + 1}`
+    })), 2),
+    [{ text: "Custom / Group", callback_data: "quick:custom" }, { text: "Cancel", callback_data: "quick:cancel" }]
+  ];
+
+  await telegram("sendMessage", {
+    chat_id: chatId,
+    text: withBrandFooter([
+      "<b>OgreSniper Entry</b>",
+      "",
+      formatSniperPickHtml(score),
+      "",
+      escapeHtml(prefix),
+      "",
+      ...walletLines,
+      hiddenCount ? `...and ${hiddenCount} more wallet(s). Use Custom / Group for the rest.` : ""
+    ].filter(Boolean).join("\n")),
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "Open Dex Chart", url: dexScreenerUrl(score.tokenMint) }],
+        ...quickWalletRows
+      ]
+    }
+  });
 }
 
 
@@ -3900,6 +3990,20 @@ function formatSniperScoreBlock(score) {
   ].filter(Boolean).join("\n");
 }
 
+function formatSniperPickHtml(score, index = null) {
+  const rank = Number.isInteger(index) ? `${index + 1}. ` : "";
+  const label = escapeHtml(score.symbol || score.name || shortMint(score.tokenMint));
+  const reasons = score.reasons?.length ? escapeHtml(score.reasons.join(" | ")) : "highest available quality signals";
+  return [
+    `<b>${rank}${escapeHtml(score.category)}: ${label}</b>`,
+    `Score: <b>${score.score}/100</b> | Momentum: ${escapeHtml(score.momentum)} | Rug: ${score.rugRisk}/100 | Exit: ${score.exitRisk}/100`,
+    `Smart: ${escapeHtml(score.smartMoney)} | Manipulation: ${score.manipulationScore}/100`,
+    `CA: <code>${score.tokenMint}</code>`,
+    `Dex: <a href="${dexScreenerUrl(score.tokenMint)}">Open chart</a>`,
+    `Why: ${reasons}`
+  ].join("\n");
+}
+
 function sniperReasons(data) {
   const reasons = [];
   if (data.hasMeta) reasons.push("metadata live");
@@ -3977,6 +4081,16 @@ function applySniperExitPreset(session, presetText) {
     exitPreset: selected.label,
     allowRepeat: false
   });
+}
+
+function recommendedSniperExitPreset(score, settings) {
+  const mode = settings?.mode || "safe";
+  if (mode === "fast") return "fast";
+  if (mode === "moonshot") return "moonbag";
+  if (mode === "safe" || score?.rugRisk <= 35 && score?.exitRisk <= 40) return "safe";
+  if (score?.score >= 88 && score?.rugRisk <= 45) return "moonbag";
+  if (score?.score >= 74) return "balanced";
+  return "fast";
 }
 
 function formatSniperPresetDetails(data) {
@@ -4142,13 +4256,16 @@ function howToPage(topic) {
       text: [
         "How To Use: OgreSniper",
         "",
-        "OgreSniper is for finding early plays, scoring risk, and setting up a buy with automatic exits.",
+        "OgreSniper is for finding highest-scored early plays, choosing a setup quickly, and setting up a buy with automatic exits.",
         "",
         "Buttons inside OgreSniper:",
-        "- Scan Early Plays: checks latest Solana token profiles and ranks them by entry score, momentum, rug risk, exit risk, and manipulation score.",
-        "- Score Token: paste a mint and get a score before entering.",
-        "- Snipe Setup: paste a mint, choose wallets, choose SOL per wallet, choose an exit preset, optionally customize take-profit/stop-loss, choose slippage, then tap Confirm.",
+        "- Scan Early Plays: checks latest Solana token profiles and shows the top ranked picks. Each pick has a Snipe button, chart button, and tap-to-copy CA.",
+        "- Score Token: paste a mint and get a score. The result has a Snipe This button so you do not need to paste it again.",
+        "- Snipe Setup: paste a mint manually, choose wallets, choose SOL per wallet, review the recommended exit preset, optionally customize take-profit/stop-loss, choose slippage, then tap Confirm.",
         "- Modes: choose Safe Mode, Smart Money Only, Fast Scalps, Low Cap Moonshots, Meme Momentum, or AI Narrative.",
+        "",
+        "Fast scan flow:",
+        "Tap Scan Early Plays, open the Dex chart if you want to inspect it, then tap Snipe #1/#2/#3. Pick All Wallets, a quick wallet button, or Custom / Group. Pick 0.05, 0.10, 0.50, 1 SOL, or Buy X SOL. OgreSniper then selects the best matching exit preset for the mode and score.",
         "",
         "Modes explained:",
         "- Safe Mode: strict score and risk limits. Best first mode.",
@@ -4172,7 +4289,7 @@ function howToPage(topic) {
         "- Safe: sells 100% after 10 minutes, or earlier at +20% take-profit / -8% stop-loss.",
         "",
         "Custom exits:",
-        "After choosing a preset, OgreSniper shows what it will do. Tap Use Preset, Customize TP/SL, or Back. Customize TP/SL changes the take-profit and stop-loss percentages while keeping the preset timer and sell percent.",
+        "After amount selection, OgreSniper shows the recommended preset. Tap Use Preset, Customize TP/SL, or Back. Customize TP/SL changes the take-profit and stop-loss percentages while keeping the preset timer and sell percent.",
         "",
         "Execution:",
         "OgreSniper uses the same timed-plan engine as Volume. It buys after you confirm, then watches for the selected timer, take-profit, or stop-loss exit.",
@@ -4578,6 +4695,34 @@ async function sendOrEditMessage(chatId, messageId, text, replyMarkup = null) {
   await telegram("sendMessage", {
     chat_id: chatId,
     text,
+    disable_web_page_preview: true,
+    reply_markup: replyMarkup || undefined
+  });
+}
+
+async function sendOrEditHtmlMessage(chatId, messageId, text, replyMarkup = null) {
+  if (messageId) {
+    try {
+      await telegram("editMessageText", {
+        chat_id: chatId,
+        message_id: messageId,
+        text,
+        parse_mode: "HTML",
+        disable_web_page_preview: true,
+        reply_markup: replyMarkup || undefined
+      });
+      return;
+    } catch (error) {
+      if (/message is not modified/i.test(formatError(error))) {
+        return;
+      }
+    }
+  }
+
+  await telegram("sendMessage", {
+    chat_id: chatId,
+    text,
+    parse_mode: "HTML",
     disable_web_page_preview: true,
     reply_markup: replyMarkup || undefined
   });
