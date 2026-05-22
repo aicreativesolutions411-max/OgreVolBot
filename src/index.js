@@ -23,6 +23,7 @@ const connection = new Connection(CONFIG.rpcUrl, "confirmed");
 const rpcLimiter = createRpcLimiter();
 const jupiterLimiter = createJupiterLimiter();
 const sessions = new Map();
+const mintProgramCache = new Map();
 const startedAt = new Date();
 let lastKeepAliveStatus = {
   enabled: false,
@@ -127,15 +128,17 @@ function loadConfig() {
 
   const feeWallet = process.env.FEE_WALLET || "AUcSFZsCdawzfqa4KzHK1BHz1RDrBnj8CF5kxoy3NvxV";
   const bundleFeeBps = Number.parseInt(process.env.BUNDLE_FEE_BPS || "50", 10);
-  const bundleConcurrency = Number.parseInt(process.env.BUNDLE_CONCURRENCY || "1", 10);
+  const tradingSpeedPreset = parseTradingSpeedPreset(process.env.TRADING_SPEED_PRESET || "balanced");
+  const speedDefaults = tradingSpeedDefaults(tradingSpeedPreset);
+  const bundleConcurrency = Number.parseInt(process.env.BUNDLE_CONCURRENCY || String(speedDefaults.bundleConcurrency), 10);
   const buyReserveSol = Number.parseFloat(process.env.BUY_RESERVE_SOL || "0.01");
-  const rpcDelayMs = Number.parseInt(process.env.RPC_DELAY_MS || "1500", 10);
+  const rpcDelayMs = Number.parseInt(process.env.RPC_DELAY_MS || String(speedDefaults.rpcDelayMs), 10);
   const rpcRetries = Number.parseInt(process.env.RPC_RETRIES || "10", 10);
-  const rpcMinIntervalMs = Number.parseInt(process.env.RPC_MIN_INTERVAL_MS || "1200", 10);
-  const rpc429CooldownMs = Number.parseInt(process.env.RPC_429_COOLDOWN_MS || "15000", 10);
-  const jupiterMinIntervalMs = Number.parseInt(process.env.JUPITER_MIN_INTERVAL_MS || "1200", 10);
+  const rpcMinIntervalMs = Number.parseInt(process.env.RPC_MIN_INTERVAL_MS || String(speedDefaults.rpcMinIntervalMs), 10);
+  const rpc429CooldownMs = Number.parseInt(process.env.RPC_429_COOLDOWN_MS || String(speedDefaults.rpc429CooldownMs), 10);
+  const jupiterMinIntervalMs = Number.parseInt(process.env.JUPITER_MIN_INTERVAL_MS || String(speedDefaults.jupiterMinIntervalMs), 10);
   const jupiterRetries = Number.parseInt(process.env.JUPITER_RETRIES || "5", 10);
-  const jupiter429CooldownMs = Number.parseInt(process.env.JUPITER_429_COOLDOWN_MS || "15000", 10);
+  const jupiter429CooldownMs = Number.parseInt(process.env.JUPITER_429_COOLDOWN_MS || String(speedDefaults.jupiter429CooldownMs), 10);
 
   if (!Number.isInteger(bundleFeeBps) || bundleFeeBps < 0 || bundleFeeBps > 1000) {
     throw new Error("BUNDLE_FEE_BPS must be an integer from 0 to 1000.");
@@ -198,6 +201,7 @@ function loadConfig() {
     adminUserIds: parseAllowedUserIds(process.env.TELEGRAM_ADMIN_USER_IDS || process.env.TELEGRAM_ALLOWED_USER_IDS || ""),
     jupiterApiKey: process.env.JUPITER_API_KEY || "",
     jupiterApiBase: (process.env.JUPITER_API_BASE || "https://api.jup.ag/swap/v2").replace(/\/$/, ""),
+    tradingSpeedPreset,
     feeWallet,
     bundleFeeBps,
     bundleConcurrency,
@@ -299,6 +303,12 @@ function startHealthServer() {
         uptimeSeconds: Math.round(process.uptime()),
         dataDir: CONFIG.dataDir,
         webhookMode: Boolean(CONFIG.webhookUrl),
+        tradeSpeed: {
+          preset: CONFIG.tradingSpeedPreset,
+          bundleConcurrency: CONFIG.bundleConcurrency,
+          rpcMinIntervalMs: CONFIG.rpcMinIntervalMs,
+          jupiterMinIntervalMs: CONFIG.jupiterMinIntervalMs
+        },
         keepAlive: lastKeepAliveStatus
       }));
       return;
@@ -357,6 +367,44 @@ function parseAllowedUserIds(value) {
 
 function parseBoolean(value) {
   return ["1", "true", "yes", "on"].includes(String(value).toLowerCase());
+}
+
+function parseTradingSpeedPreset(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["safe", "balanced", "fast"].includes(normalized)) {
+    return normalized;
+  }
+  throw new Error("TRADING_SPEED_PRESET must be safe, balanced, or fast.");
+}
+
+function tradingSpeedDefaults(preset) {
+  const presets = {
+    safe: {
+      bundleConcurrency: 1,
+      rpcDelayMs: 1500,
+      rpcMinIntervalMs: 1200,
+      rpc429CooldownMs: 15000,
+      jupiterMinIntervalMs: 1200,
+      jupiter429CooldownMs: 15000
+    },
+    balanced: {
+      bundleConcurrency: 2,
+      rpcDelayMs: 750,
+      rpcMinIntervalMs: 450,
+      rpc429CooldownMs: 10000,
+      jupiterMinIntervalMs: 500,
+      jupiter429CooldownMs: 10000
+    },
+    fast: {
+      bundleConcurrency: 3,
+      rpcDelayMs: 400,
+      rpcMinIntervalMs: 200,
+      rpc429CooldownMs: 7000,
+      jupiterMinIntervalMs: 250,
+      jupiter429CooldownMs: 7000
+    }
+  };
+  return presets[preset] || presets.balanced;
 }
 
 function loadDotEnv() {
@@ -583,17 +631,17 @@ async function handleCallback(query, userId) {
     return;
   }
 
-  if (await isPausedActionBlocked(query.data)) {
-    await say(chatId, "Emergency stop is active. Use Unlock Bot to re-enable transaction flows.");
-    return;
-  }
-
   if (query.data?.startsWith("quick:")) {
     if (!isPrivateChat(chat)) {
       await say(chatId, "Open this bot in DM to use wallet and trading quick buttons.");
       return;
     }
     await handleQuickButton(chatId, query.data, userId);
+    return;
+  }
+
+  if (await isPausedActionBlocked(query.data)) {
+    await say(chatId, "Emergency stop is active. Use Unlock Bot to re-enable transaction flows.");
     return;
   }
 
@@ -751,6 +799,13 @@ async function handleQuickButton(chatId, callbackData, userId) {
   }
 
   const value = callbackData.slice("quick:".length);
+  if (value === "cancel") {
+    clearSession(chatId);
+    await say(chatId, "Current flow canceled.");
+    await showMenu(chatId, userId);
+    return;
+  }
+
   if (value === "custom") {
     await say(chatId, "Type your custom value now, or /cancel.");
     return;
@@ -966,7 +1021,7 @@ async function continueFlow(chatId, text, session) {
       case "fund_amount":
         session.data.amountSol = parsePositiveNumber(text);
         session.step = "fund_confirm";
-        await say(chatId, formatFundConfirm(session.data));
+        await sendConfirmPrompt(chatId, formatFundConfirm(session.data));
         break;
       case "fund_confirm":
         await confirmOrCancel(chatId, text, () => fundWalletsFlow(chatId, session));
@@ -1082,7 +1137,7 @@ async function continueFlow(chatId, text, session) {
       case "buy_slippage":
         session.data.slippageBps = parseSlippage(text);
         session.step = "buy_confirm";
-        await say(chatId, withBrandFooter(formatBuyConfirm(session.data)));
+        await sendConfirmPrompt(chatId, withBrandFooter(formatBuyConfirm(session.data)));
         break;
       case "buy_confirm":
         await confirmOrCancel(chatId, text, () => batchBuyFlow(chatId, session));
@@ -1105,7 +1160,7 @@ async function continueFlow(chatId, text, session) {
       case "sell_slippage":
         session.data.slippageBps = parseSlippage(text);
         session.step = "sell_confirm";
-        await say(chatId, formatSellConfirm(session.data));
+        await sendConfirmPrompt(chatId, withBrandFooter(formatSellConfirm(session.data)));
         break;
       case "sell_confirm":
         await confirmOrCancel(chatId, text, () => batchSellFlow(chatId, session));
@@ -1158,7 +1213,7 @@ async function continueFlow(chatId, text, session) {
       case "plan_slippage":
         session.data.slippageBps = parseSlippage(text);
         session.step = "plan_confirm";
-        await say(chatId, withBrandFooter(formatTimedTradePlanConfirm(session.data)));
+        await sendConfirmPrompt(chatId, withBrandFooter(formatTimedTradePlanConfirm(session.data)));
         break;
       case "plan_confirm":
         await confirmOrCancel(chatId, text, () => createTimedTradePlanFlow(chatId, session));
@@ -1211,7 +1266,7 @@ async function continueFlow(chatId, text, session) {
       case "dca_slippage":
         session.data.slippageBps = parseSlippage(text);
         session.step = "dca_confirm";
-        await say(chatId, withBrandFooter(formatDcaPlanConfirm(session.data)));
+        await sendConfirmPrompt(chatId, withBrandFooter(formatDcaPlanConfirm(session.data)));
         break;
       case "dca_confirm":
         await confirmOrCancel(chatId, text, () => createDcaPlanFlow(chatId, session));
@@ -1224,7 +1279,7 @@ async function continueFlow(chatId, text, session) {
       case "sweep_sol_wallets":
         session.data.walletIndexes = await parseWalletSelection(text, session.userId);
         session.step = "sweep_sol_confirm";
-        await say(chatId, formatSweepSolConfirm(session.data));
+        await sendConfirmPrompt(chatId, formatSweepSolConfirm(session.data));
         break;
       case "sweep_sol_confirm":
         await confirmOrCancel(chatId, text, () => sweepSolFlow(chatId, session));
@@ -1242,7 +1297,7 @@ async function continueFlow(chatId, text, session) {
       case "sweep_tokens_mint":
         session.data.tokenMint = text.toLowerCase() === "all" ? "all" : parsePublicKey(text).toBase58();
         session.step = "sweep_tokens_confirm";
-        await say(chatId, formatSweepTokensConfirm(session.data));
+        await sendConfirmPrompt(chatId, formatSweepTokensConfirm(session.data));
         break;
       case "sweep_tokens_confirm":
         await confirmOrCancel(chatId, text, () => sweepTokensFlow(chatId, session));
@@ -1250,7 +1305,7 @@ async function continueFlow(chatId, text, session) {
       case "close_empty_accounts_wallets":
         session.data.walletIndexes = await parseWalletSelection(text, session.userId);
         session.step = "close_empty_accounts_confirm";
-        await say(chatId, formatCloseAccountsConfirm(session.data));
+        await sendConfirmPrompt(chatId, formatCloseAccountsConfirm(session.data));
         break;
       case "close_empty_accounts_confirm":
         await confirmOrCancel(chatId, text, () => closeEmptyAccountsFlow(chatId, session));
@@ -1629,8 +1684,10 @@ async function batchBuyFlow(chatId, session) {
   });
 
   clearSession(chatId);
-  await say(chatId, withBrandFooter(`${isSingleTrade ? "Buy complete" : "Batch buy complete"}:\n\n${results.join("\n")}`));
-  await showMenu(chatId, session.userId);
+  await sendTradeResult(chatId, withBrandFooter(`${isSingleTrade ? "Buy complete" : "Batch buy complete"}:\n\n${results.join("\n")}`), isSingleTrade);
+  if (!isSingleTrade) {
+    await showMenu(chatId, session.userId);
+  }
 }
 
 async function batchSellFlow(chatId, session) {
@@ -1703,8 +1760,10 @@ async function batchSellFlow(chatId, session) {
   });
 
   clearSession(chatId);
-  await say(chatId, `${isSingleTrade ? "Sell complete" : "Batch sell complete"}:\n\n${results.join("\n")}\n\n${pnl}`);
-  await showMenu(chatId, session.userId);
+  await sendTradeResult(chatId, withBrandFooter(`${isSingleTrade ? "Sell complete" : "Batch sell complete"}:\n\n${results.join("\n")}\n\n${pnl}`), isSingleTrade);
+  if (!isSingleTrade) {
+    await showMenu(chatId, session.userId);
+  }
 }
 
 async function createTimedTradePlanFlow(chatId, session) {
@@ -2457,7 +2516,7 @@ async function closeEmptyAccountsFlow(chatId, session) {
 
 async function executeJupiterSwap({ signer, inputMint, outputMint, amount, slippageBps }) {
   if (!CONFIG.jupiterApiKey) {
-    throw new Error("Missing JUPITER_API_KEY. Batch buy/sell requires a Jupiter API key.");
+    throw new Error("Missing JUPITER_API_KEY. Swaps require a Jupiter API key.");
   }
 
   const order = await createJupiterOrder({
@@ -2635,8 +2694,39 @@ async function collectSolFee(signer, feeLamports) {
 }
 
 async function getTokenBalanceForMint(owner, mint) {
-  const accounts = await getOwnedTokenAccounts(owner);
-  return accounts.find((account) => account.mint === mint.toBase58()) || null;
+  const ownerKey = owner instanceof PublicKey ? owner : new PublicKey(owner);
+  const mintKey = mint instanceof PublicKey ? mint : new PublicKey(mint);
+  const tokenProgramId = await getMintTokenProgramId(mintKey);
+  let accounts = [];
+
+  if (tokenProgramId.equals(TOKEN_2022_PROGRAM_ID)) {
+    const response = await rpcWithRetry("get Token-2022 accounts for selected mint", () => connection.getParsedTokenAccountsByOwner(ownerKey, { programId: TOKEN_2022_PROGRAM_ID }, "confirmed"));
+    accounts = parseTokenAccountResponse(response, TOKEN_2022_PROGRAM_ID).filter((account) => account.mint === mintKey.toBase58());
+  } else {
+    const response = await rpcWithRetry("get token accounts for selected mint", () => connection.getParsedTokenAccountsByOwner(ownerKey, { mint: mintKey }, "confirmed"));
+    accounts = parseTokenAccountResponse(response, tokenProgramId).filter((account) => account.mint === mintKey.toBase58());
+  }
+
+  return aggregateTokenAccountsForMint(accounts, mintKey);
+}
+
+async function getMintTokenProgramId(mint) {
+  const mintKey = mint instanceof PublicKey ? mint : new PublicKey(mint);
+  const cacheKey = mintKey.toBase58();
+  const cached = mintProgramCache.get(cacheKey);
+  if (cached) return cached;
+
+  const account = await rpcWithRetry("get mint owner program", () => connection.getAccountInfo(mintKey, "confirmed"));
+  if (!account?.owner) {
+    throw new Error(`Could not read mint account ${cacheKey}.`);
+  }
+
+  if (!account.owner.equals(TOKEN_PROGRAM_ID) && !account.owner.equals(TOKEN_2022_PROGRAM_ID)) {
+    throw new Error(`${cacheKey} is not an SPL token mint.`);
+  }
+
+  mintProgramCache.set(cacheKey, account.owner);
+  return account.owner;
 }
 
 async function getMintDecimals(mint) {
@@ -2682,19 +2772,39 @@ async function getOwnedTokenAccountsWithWarnings(owner) {
   return { accounts, warnings, successes };
 }
 
-function parseTokenAccountResponse(response, tokenProgramId) {
+function parseTokenAccountResponse(response, tokenProgramId = null) {
   return response.value.map((item) => {
     const parsed = item.account.data.parsed.info;
     const amount = parsed.tokenAmount;
+    const ownerProgram = tokenProgramId?.toBase58?.()
+      || item.account.owner?.toBase58?.()
+      || String(item.account.owner || "");
 
     return {
       pubkey: item.pubkey.toBase58(),
       mint: parsed.mint,
-      tokenProgramId: tokenProgramId.toBase58(),
+      tokenProgramId: ownerProgram,
       rawAmount: BigInt(amount.amount),
-      uiAmount: amount.uiAmountString || "0"
+      uiAmount: amount.uiAmountString || "0",
+      decimals: amount.decimals
     };
   });
+}
+
+function aggregateTokenAccountsForMint(accounts, mint) {
+  const mintText = mint instanceof PublicKey ? mint.toBase58() : String(mint);
+  const matching = accounts.filter((account) => account.mint === mintText && account.rawAmount > 0n);
+  if (matching.length === 0) return null;
+
+  const rawAmount = matching.reduce((total, account) => total + account.rawAmount, 0n);
+  const decimals = Number.isInteger(matching[0].decimals) ? matching[0].decimals : 0;
+
+  return {
+    ...matching[0],
+    rawAmount,
+    uiAmount: rawTokenAmountToUi(rawAmount, decimals),
+    accountCount: matching.length
+  };
 }
 
 function getAssociatedTokenAddress(mint, owner, tokenProgramId = TOKEN_PROGRAM_ID) {
@@ -3233,7 +3343,7 @@ function howToPage(topic) {
         `- Safety reserve: the bot keeps about ${CONFIG.buyReserveSol} SOL per wallet for fees and token account creation.`,
         "- Slippage: default is usually fine. Raise it only if a token is moving fast or quotes fail from price movement.",
         "- Use Max: spends available SOL minus the safety reserve.",
-        "- Confirm screen: always read token mint, wallet, amount, fee, and slippage before replying yes.",
+        "- Confirm screen: always read token mint, wallet, amount, fee, and slippage before tapping Confirm.",
         "",
         "Best first trade:",
         "Use a small amount, confirm the token on Dexscreener, then test sell before using larger size."
@@ -3394,13 +3504,13 @@ function howToPage(topic) {
         "2. Tap Withdraw SOL.",
         "3. Paste the destination wallet address.",
         "4. Choose wallet numbers or type all.",
-        "5. Confirm with yes.",
+        "5. Tap Confirm, or reply yes.",
         "",
         "Sweep Tokens steps:",
         "1. Paste destination wallet.",
         "2. Choose source wallet numbers or all.",
         "3. Paste one token mint, or type all.",
-        "4. Confirm with yes.",
+        "4. Tap Confirm, or reply yes.",
         "",
         "Funding wallets:",
         "Use Fund Wallets when one bot wallet has SOL and you want to distribute a fixed amount to other bot wallets.",
@@ -3418,6 +3528,7 @@ function howToPage(topic) {
         "- Save your APP_SECRET and never change it.",
         "- Keep every automatic backup file private.",
         "- Use a real Solana RPC for smoother buys/sells. Public RPC can rate-limit.",
+        "- Use TRADING_SPEED_PRESET=balanced for normal use, safe if you see 429s, or fast only with a private RPC.",
         "- Add a Jupiter API key for swap routes.",
         `- Fund each buy wallet with buy amount + about ${CONFIG.buyReserveSol} SOL reserve.`,
         "- Test with a small buy and sell first.",
@@ -3556,6 +3667,38 @@ async function sendQuickChoicePrompt(chatId, text, rows) {
           callback_data: `quick:${button.value}`
         }))),
         [{ text: "Custom", callback_data: "quick:custom" }]
+      ]
+    }
+  });
+}
+
+async function sendConfirmPrompt(chatId, text) {
+  await telegram("sendMessage", {
+    chat_id: chatId,
+    text,
+    disable_web_page_preview: true,
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "✅ Confirm", callback_data: "quick:yes" }, { text: "Cancel", callback_data: "quick:cancel" }]
+      ]
+    }
+  });
+}
+
+async function sendTradeResult(chatId, text, withActions = false) {
+  if (!withActions) {
+    await say(chatId, text);
+    return;
+  }
+
+  await telegram("sendMessage", {
+    chat_id: chatId,
+    text,
+    disable_web_page_preview: true,
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "Buy Again", callback_data: "trade_buy" }, { text: "Sell", callback_data: "trade_sell" }],
+        [{ text: "Positions", callback_data: "positions_overview" }, { text: "Trade Menu", callback_data: "trade_menu" }]
       ]
     }
   });
@@ -4292,6 +4435,17 @@ function formatTokenAmount(value) {
   if (Math.abs(value) >= 1_000_000) return value.toLocaleString("en-US", { maximumFractionDigits: 2 });
   if (Math.abs(value) >= 1) return value.toLocaleString("en-US", { maximumFractionDigits: 6 });
   return value.toPrecision(6).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function rawTokenAmountToUi(rawAmount, decimals) {
+  const raw = BigInt(rawAmount);
+  const precision = Number.isInteger(decimals) ? decimals : 0;
+  if (precision <= 0) return raw.toString();
+
+  const base = 10n ** BigInt(precision);
+  const whole = raw / base;
+  const fraction = (raw % base).toString().padStart(precision, "0").replace(/0+$/, "");
+  return `${whole.toString()}${fraction ? `.${fraction}` : ""}`;
 }
 
 function formatFeeRate() {
