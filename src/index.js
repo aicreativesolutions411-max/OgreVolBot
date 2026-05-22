@@ -46,6 +46,7 @@ const BRAND_FOOTER = [
 
 const PUBLIC_MENU = [
   [{ text: "🐎 Start Here", callback_data: "quick_start" }],
+  [{ text: "💱 Trade", callback_data: "trade_menu" }],
   [{ text: "💳 Wallet", callback_data: "wallet_menu" }, { text: "🧲 Bundle", callback_data: "bundle_menu" }],
   [{ text: "📊📈 Volume", callback_data: "timed_trade_plans" }, { text: "🔍 Check Balances", callback_data: "check_balances" }],
   [{ text: "💾 Backup / Restore", callback_data: "backup_menu" }, { text: "🏦 Withdrawal", callback_data: "withdrawal_menu" }]
@@ -62,6 +63,7 @@ const PRIVATE_CHAT_ACTIONS = new Set([
   "create_wallets",
   "import_wallet",
   "wallet_menu",
+  "trade_menu",
   "bundle_menu",
   "withdrawal_menu",
   "list_wallets",
@@ -78,6 +80,11 @@ const PRIVATE_CHAT_ACTIONS = new Set([
   "fund_wallets",
   "batch_buy",
   "batch_sell",
+  "trade_buy",
+  "trade_sell",
+  "trade_auto_sell",
+  "trade_dca_buy",
+  "trade_dca_sell",
   "dca_buy",
   "dca_sell",
   "timed_trade_plans",
@@ -590,6 +597,9 @@ async function handleCallback(query, userId) {
     case "wallet_menu":
       await showWalletMenu(chatId);
       break;
+    case "trade_menu":
+      await showTradeMenu(chatId);
+      break;
     case "bundle_menu":
       await showBundleMenu(chatId);
       break;
@@ -657,6 +667,26 @@ async function handleCallback(query, userId) {
     case "batch_sell":
       setSession(chatId, "sell_token", userId);
       await say(chatId, "Send the token mint address you want to sell from all selected wallets.");
+      break;
+    case "trade_buy":
+      sessions.set(chatId, { step: "trade_buy_wallet", userId, data: { tradeMode: "single" } });
+      await say(chatId, await walletPrompt(userId, "Choose one wallet to buy from. Send the wallet number."));
+      break;
+    case "trade_sell":
+      sessions.set(chatId, { step: "trade_sell_wallet", userId, data: { tradeMode: "single" } });
+      await say(chatId, await walletPrompt(userId, "Choose one wallet to sell from. Send the wallet number."));
+      break;
+    case "trade_auto_sell":
+      sessions.set(chatId, { step: "trade_plan_wallet", userId, data: { tradeMode: "single" } });
+      await say(chatId, await walletPrompt(userId, "Choose one wallet for the auto-sell / timed plan. Send the wallet number."));
+      break;
+    case "trade_dca_buy":
+      sessions.set(chatId, { step: "trade_dca_wallet", userId, data: { tradeMode: "single", side: "buy" } });
+      await say(chatId, await walletPrompt(userId, "Choose one wallet for this DCA buy. Send the wallet number."));
+      break;
+    case "trade_dca_sell":
+      sessions.set(chatId, { step: "trade_dca_wallet", userId, data: { tradeMode: "single", side: "sell" } });
+      await say(chatId, await walletPrompt(userId, "Choose one wallet for this DCA sell. Send the wallet number."));
       break;
     case "dca_buy":
       sessions.set(chatId, { step: "dca_token", userId, data: { side: "buy" } });
@@ -927,6 +957,86 @@ async function continueFlow(chatId, text, session) {
         break;
       case "fund_confirm":
         await confirmOrCancel(chatId, text, () => fundWalletsFlow(chatId, session));
+        break;
+      case "trade_buy_wallet": {
+        const wallet = await setSingleWalletSelection(session, text);
+        session.step = "trade_buy_token";
+        await say(chatId, withBrandFooter(`Selected wallet: ${wallet.label}\n${wallet.publicKey}\n\nSend the token mint address to buy.`));
+        break;
+      }
+      case "trade_buy_token":
+        session.data.tokenMint = parsePublicKey(text).toBase58();
+        session.step = "buy_amount";
+        await sendQuickAmountPrompt(chatId, [
+          `Selected wallet: ${session.data.walletLabel}`,
+          `Dexscreener: ${dexScreenerUrl(session.data.tokenMint)}`,
+          "",
+          "Choose a quick buy amount or type your custom SOL amount.",
+          "",
+          `Safety reserve kept for fees: ${CONFIG.buyReserveSol} SOL`
+        ].join("\n"), { allowMax: true });
+        break;
+      case "trade_sell_wallet": {
+        const wallet = await setSingleWalletSelection(session, text);
+        session.step = "trade_sell_token";
+        await say(chatId, withBrandFooter(`Selected wallet: ${wallet.label}\n${wallet.publicKey}\n\nSend the token mint address to sell.`));
+        break;
+      }
+      case "trade_sell_token":
+        session.data.tokenMint = parsePublicKey(text).toBase58();
+        session.step = "sell_percent";
+        await sendQuickPercentPrompt(chatId, [
+          `Selected wallet: ${session.data.walletLabel}`,
+          `Dexscreener: ${dexScreenerUrl(session.data.tokenMint)}`,
+          "",
+          await selectedTokenBalanceSummary(session.userId, session.data.walletIndexes, session.data.tokenMint),
+          "",
+          "Choose a quick sell percent or type a custom percent from 1 to 100."
+        ].join("\n"));
+        break;
+      case "trade_plan_wallet": {
+        const wallet = await setSingleWalletSelection(session, text);
+        session.step = "trade_plan_token";
+        await say(chatId, withBrandFooter(`Selected wallet: ${wallet.label}\n${wallet.publicKey}\n\nSend the token mint address for the auto-sell / timed plan.`));
+        break;
+      }
+      case "trade_plan_token":
+        session.data.tokenMint = parsePublicKey(text).toBase58();
+        session.step = "plan_buy_amount";
+        await sendQuickAmountPrompt(chatId, [
+          `Selected wallet: ${session.data.walletLabel}`,
+          `Dexscreener: ${dexScreenerUrl(session.data.tokenMint)}`,
+          "",
+          "Choose the SOL amount to buy now. The bot can sell later by timer, take-profit, or stop-loss."
+        ].join("\n"));
+        break;
+      case "trade_dca_wallet": {
+        const wallet = await setSingleWalletSelection(session, text);
+        session.step = "trade_dca_token";
+        await say(chatId, withBrandFooter(`Selected wallet: ${wallet.label}\n${wallet.publicKey}\n\nSend the token mint address for this DCA ${session.data.side}.`));
+        break;
+      }
+      case "trade_dca_token":
+        session.data.tokenMint = parsePublicKey(text).toBase58();
+        if (session.data.side === "buy") {
+          session.step = "dca_buy_total";
+          await sendQuickAmountPrompt(chatId, [
+            `Selected wallet: ${session.data.walletLabel}`,
+            `Dexscreener: ${dexScreenerUrl(session.data.tokenMint)}`,
+            "",
+            "Send total SOL to DCA from this wallet. Example: `1` split over 5 buys spends 0.2 SOL each buy."
+          ].join("\n"));
+        } else {
+          session.step = "dca_sell_percent";
+          await sendQuickPercentPrompt(chatId, [
+            `Selected wallet: ${session.data.walletLabel}`,
+            `Dexscreener: ${dexScreenerUrl(session.data.tokenMint)}`,
+            "",
+            await selectedTokenBalanceSummary(session.userId, session.data.walletIndexes, session.data.tokenMint),
+            "",
+            "Send total percent to DCA sell from this wallet, from 1 to 100."
+          ].join("\n"));
+        }
         break;
       case "buy_token":
         session.data.tokenMint = parsePublicKey(text).toBase58();
@@ -1437,6 +1547,7 @@ async function batchBuyFlow(chatId, session) {
   const wallets = session.data.walletIndexes.map((index) => getWalletAt(store, index, session.userId));
   const results = [];
   const tradeEvents = [];
+  const isSingleTrade = session.data.tradeMode === "single";
 
   await runWithConcurrency(wallets, CONFIG.bundleConcurrency, async (wallet) => {
     try {
@@ -1477,7 +1588,7 @@ async function batchBuyFlow(chatId, session) {
       tradeEvents.push({
         userId: session.userId,
         type: "buy",
-        source: "bundle",
+        source: isSingleTrade ? "single_trade" : "bundle",
         tokenMint: session.data.tokenMint,
         walletLabel: wallet.label,
         walletPublicKey: wallet.publicKey,
@@ -1491,7 +1602,7 @@ async function batchBuyFlow(chatId, session) {
   });
 
   await recordTradeEvents(tradeEvents);
-  await audit("batch_buy_token", {
+  await audit(isSingleTrade ? "single_buy_token" : "batch_buy_token", {
     chatId,
     userId: session.userId,
     tokenMint: session.data.tokenMint,
@@ -1505,7 +1616,7 @@ async function batchBuyFlow(chatId, session) {
   });
 
   clearSession(chatId);
-  await say(chatId, withBrandFooter(`Batch buy complete:\n\n${results.join("\n")}`));
+  await say(chatId, withBrandFooter(`${isSingleTrade ? "Buy complete" : "Batch buy complete"}:\n\n${results.join("\n")}`));
   await showMenu(chatId, session.userId);
 }
 
@@ -1514,6 +1625,7 @@ async function batchSellFlow(chatId, session) {
   const wallets = session.data.walletIndexes.map((index) => getWalletAt(store, index, session.userId));
   const results = [];
   const tradeEvents = [];
+  const isSingleTrade = session.data.tradeMode === "single";
 
   await runWithConcurrency(wallets, CONFIG.bundleConcurrency, async (wallet) => {
     try {
@@ -1550,7 +1662,7 @@ async function batchSellFlow(chatId, session) {
       tradeEvents.push({
         userId: session.userId,
         type: "sell",
-        source: "bundle",
+        source: isSingleTrade ? "single_trade" : "bundle",
         tokenMint: session.data.tokenMint,
         walletLabel: wallet.label,
         walletPublicKey: wallet.publicKey,
@@ -1565,7 +1677,7 @@ async function batchSellFlow(chatId, session) {
 
   await recordTradeEvents(tradeEvents);
   const pnl = await pnlSummaryText(session.userId, session.data.tokenMint);
-  await audit("batch_sell_token", {
+  await audit(isSingleTrade ? "single_sell_token" : "batch_sell_token", {
     chatId,
     userId: session.userId,
     tokenMint: session.data.tokenMint,
@@ -1578,7 +1690,7 @@ async function batchSellFlow(chatId, session) {
   });
 
   clearSession(chatId);
-  await say(chatId, `Batch sell complete:\n\n${results.join("\n")}\n\n${pnl}`);
+  await say(chatId, `${isSingleTrade ? "Sell complete" : "Batch sell complete"}:\n\n${results.join("\n")}\n\n${pnl}`);
   await showMenu(chatId, session.userId);
 }
 
@@ -2754,6 +2866,21 @@ async function showWalletMenu(chatId) {
   });
 }
 
+async function showTradeMenu(chatId) {
+  await telegram("sendMessage", {
+    chat_id: chatId,
+    text: withBrandFooter("Single-wallet trade tools:\n\nPick one wallet first, then use quick buttons like 0.10 SOL, 0.50 SOL, 1 SOL, 25%, 50%, and 100%."),
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "Buy", callback_data: "trade_buy" }, { text: "Sell", callback_data: "trade_sell" }],
+        [{ text: "Auto Sell", callback_data: "trade_auto_sell" }],
+        [{ text: "DCA Buy", callback_data: "trade_dca_buy" }, { text: "DCA Sell", callback_data: "trade_dca_sell" }],
+        [{ text: "Positions", callback_data: "positions_overview" }, { text: "Wallets", callback_data: "list_wallets" }]
+      ]
+    }
+  });
+}
+
 async function showBundleMenu(chatId) {
   await telegram("sendMessage", {
     chat_id: chatId,
@@ -3087,8 +3214,8 @@ async function showMenu(chatId, userId) {
 
 async function sendQuickAmountPrompt(chatId, text, options = {}) {
   const lastRow = options.allowMax
-    ? [{ text: "Use Max", callback_data: "quick:max" }, { text: "Custom", callback_data: "quick:custom" }]
-    : [{ text: "Custom", callback_data: "quick:custom" }];
+    ? [{ text: "Use Max", callback_data: "quick:max" }, { text: "Buy X SOL", callback_data: "quick:custom" }]
+    : [{ text: "Buy X SOL", callback_data: "quick:custom" }];
 
   await telegram("sendMessage", {
     chat_id: chatId,
@@ -3096,8 +3223,8 @@ async function sendQuickAmountPrompt(chatId, text, options = {}) {
     disable_web_page_preview: true,
     reply_markup: {
       inline_keyboard: [
-        [{ text: "0.05 SOL", callback_data: "quick:0.05" }, { text: "0.10 SOL", callback_data: "quick:0.10" }],
-        [{ text: "0.50 SOL", callback_data: "quick:0.50" }, { text: "1 SOL", callback_data: "quick:1" }],
+        [{ text: "Buy 0.10 SOL", callback_data: "quick:0.10" }, { text: "Buy 0.50 SOL", callback_data: "quick:0.50" }, { text: "Buy 1 SOL", callback_data: "quick:1" }],
+        [{ text: "Buy 0.05 SOL", callback_data: "quick:0.05" }],
         lastRow
       ]
     }
@@ -3111,8 +3238,8 @@ async function sendQuickPercentPrompt(chatId, text) {
     disable_web_page_preview: true,
     reply_markup: {
       inline_keyboard: [
-        [{ text: "25%", callback_data: "quick:25" }, { text: "50%", callback_data: "quick:50" }, { text: "100%", callback_data: "quick:100" }],
-        [{ text: "Custom %", callback_data: "quick:custom" }]
+        [{ text: "Sell 25%", callback_data: "quick:25" }, { text: "Sell 50%", callback_data: "quick:50" }, { text: "Sell 100%", callback_data: "quick:100" }],
+        [{ text: "Sell X %", callback_data: "quick:custom" }]
       ]
     }
   });
@@ -3691,6 +3818,18 @@ async function parseWalletSelection(text, userId, options = {}) {
   return indexes;
 }
 
+async function setSingleWalletSelection(session, text) {
+  const index = parseWalletIndex(text);
+  const store = await readWalletStore();
+  const wallet = getWalletAt(store, index, session.userId);
+  session.data.walletIndex = index;
+  session.data.walletIndexes = [index];
+  session.data.walletSelector = wallet.label;
+  session.data.walletLabel = wallet.label;
+  session.data.walletPublicKey = wallet.publicKey;
+  return wallet;
+}
+
 async function parseWalletSelectionOrGroup(text, userId) {
   const trimmed = text.trim();
   const groupMatch = trimmed.match(/^group\s*:?\s*(.+)$/i);
@@ -3900,11 +4039,14 @@ function formatFundConfirm(data) {
 }
 
 function formatBuyConfirm(data) {
+  const heading = data.tradeMode === "single" ? "Confirm buy:" : "Confirm bundle buy:";
+  const walletLabel = data.tradeMode === "single" && data.walletLabel ? `Wallet: ${data.walletLabel}` : `Wallets: ${data.walletIndexes.join(", ")}`;
+
   if (data.amountMode === "max") {
     return [
-      "Confirm bundle buy:",
+      heading,
       `Token mint: ${data.tokenMint}`,
-      `Wallets: ${data.walletIndexes.join(", ")}`,
+      walletLabel,
       `Spend mode: MAX`,
       `Each wallet keeps safety reserve: ${CONFIG.buyReserveSol} SOL`,
       `Platform fee: ${formatFeeRate()} to ${CONFIG.feeWallet}`,
@@ -3918,13 +4060,13 @@ function formatBuyConfirm(data) {
   const feeLamports = calculateFeeLamports(amountLamports);
   const recommendedLamports = recommendedBuyFundingLamports(amountLamports);
   return [
-    "Confirm bundle buy:",
+    heading,
     `Token mint: ${data.tokenMint}`,
-    `Wallets: ${data.walletIndexes.join(", ")}`,
-    `Spend per wallet: ${data.amountSol} SOL`,
-    `Net swap per wallet: ${lamportsToSol(amountLamports - feeLamports)} SOL`,
+    walletLabel,
+    `${data.tradeMode === "single" ? "Spend" : "Spend per wallet"}: ${data.amountSol} SOL`,
+    `${data.tradeMode === "single" ? "Net swap" : "Net swap per wallet"}: ${lamportsToSol(amountLamports - feeLamports)} SOL`,
     `Platform fee: ${formatFeeRate()} to ${CONFIG.feeWallet}`,
-    `Recommended balance per wallet: ${lamportsToSol(recommendedLamports)} SOL`,
+    `${data.tradeMode === "single" ? "Recommended balance" : "Recommended balance per wallet"}: ${lamportsToSol(recommendedLamports)} SOL`,
     `Slippage: ${data.slippageBps} bps`,
     "",
     "Reply `yes` to execute or `/cancel`."
@@ -3932,11 +4074,14 @@ function formatBuyConfirm(data) {
 }
 
 function formatSellConfirm(data) {
+  const heading = data.tradeMode === "single" ? "Confirm sell:" : "Confirm bundle sell:";
+  const walletLabel = data.tradeMode === "single" && data.walletLabel ? `Wallet: ${data.walletLabel}` : `Wallets: ${data.walletIndexes.join(", ")}`;
+
   return [
-    "Confirm bundle sell:",
+    heading,
     `Token mint: ${data.tokenMint}`,
-    `Wallets: ${data.walletIndexes.join(", ")}`,
-    `Percent per wallet: ${data.percent}%`,
+    walletLabel,
+    `${data.tradeMode === "single" ? "Percent" : "Percent per wallet"}: ${data.percent}%`,
     `Platform fee: ${formatFeeRate()} of SOL output to ${CONFIG.feeWallet}`,
     `Slippage: ${data.slippageBps} bps`,
     "",
@@ -3947,11 +4092,12 @@ function formatSellConfirm(data) {
 function formatTimedTradePlanConfirm(data) {
   const amountLamports = solToLamports(data.amountSol);
   const feeLamports = calculateFeeLamports(amountLamports);
+  const walletLabel = data.tradeMode === "single" && data.walletLabel ? `Wallet: ${data.walletLabel}` : `Wallets: ${data.walletIndexes.join(", ")}`;
   return [
     "Confirm timed trade plan:",
     `Token mint: ${data.tokenMint}`,
-    `Wallets: ${data.walletIndexes.join(", ")}`,
-    `Buy per wallet: ${data.amountSol} SOL`,
+    walletLabel,
+    `${data.tradeMode === "single" ? "Buy" : "Buy per wallet"}: ${data.amountSol} SOL`,
     `Net buy before routing fees: ${lamportsToSol(amountLamports - feeLamports)} SOL`,
     `Sell timer: ${data.sellDelayMinutes} minute(s) after buy`,
     `Sell percent: ${data.sellPercent}%`,
@@ -3965,10 +4111,11 @@ function formatTimedTradePlanConfirm(data) {
 }
 
 function formatDcaPlanConfirm(data) {
+  const walletLabel = data.tradeMode === "single" && data.walletLabel ? `Wallet: ${data.walletLabel}` : `Wallets: ${data.walletIndexes.join(", ")}`;
   const lines = [
     `Confirm DCA ${data.side}:`,
     `Token mint: ${data.tokenMint}`,
-    `Wallets: ${data.walletIndexes.join(", ")}`,
+    walletLabel,
     `Orders: ${data.orderCount}`,
     `Interval: ${data.intervalMinutes} minute(s)`,
     `Slippage: ${data.slippageBps} bps`

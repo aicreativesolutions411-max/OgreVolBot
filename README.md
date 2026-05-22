@@ -6,6 +6,7 @@ Telegram bot for legitimate, auditable Solana wallet operations:
 - Export/restore encrypted wallet backups
 - Emergency private key export for user-owned wallets
 - Fund managed wallets from an imported wallet
+- Single-wallet trade menu for quick buy/sell, auto sell, and DCA
 - Batch buy a token through Jupiter
 - Batch sell a token through Jupiter
 - DCA buy and DCA sell plans with scheduled slices
@@ -115,12 +116,15 @@ This is a position-management feature for the user's own wallets. It does not ru
 The front menu is intentionally short:
 
 - 🐎 Start Here
+- 💱 Trade
 - 💳 Wallet
 - 🧲 Bundle
 - 📊📈 Volume
 - 🔍 Check Balances
 - 💾 Backup / Restore
 - 🏦 Withdrawal
+
+The Trade menu is for one wallet at a time. It includes Buy, Sell, Auto Sell, DCA Buy, DCA Sell, Positions, and Wallets. Buy screens include quick buttons for `0.10 SOL`, `0.50 SOL`, `1 SOL`, `max`, and custom amount. Sell screens include quick buttons for `25%`, `50%`, `100%`, and custom percent.
 
 The Wallet menu includes wallet creation/import, My Wallets with copy buttons, Positions Overview, and PnL / Results. The Bundle menu contains Bundle Buy, Bundle Sell, DCA Buy, DCA Sell, Auto Sell / Timed Plan, and Copy Trade info. Copy Trade is shown as a setup/info item until a full wallet-watcher implementation is added.
 
