@@ -258,11 +258,11 @@ function startKeepAlivePinger() {
 function startTradePlanRunner() {
   setTimeout(() => void processTradePlans().catch((error) => {
     console.error("Trade plan runner failed:", error.message);
-  }), 45_000);
+  }), 10_000);
 
   setInterval(() => void processTradePlans().catch((error) => {
     console.error("Trade plan runner failed:", error.message);
-  }), 60_000);
+  }), 5_000);
 }
 
 function startDcaPlanRunner() {
@@ -636,7 +636,7 @@ async function handleCallback(query, userId) {
       await say(chatId, "Open this bot in DM to use wallet and trading quick buttons.");
       return;
     }
-    await handleQuickButton(chatId, query.data, userId);
+    await handleQuickButton(chatId, query.data, userId, query.message?.message_id);
     return;
   }
 
@@ -791,19 +791,30 @@ async function handleCallback(query, userId) {
   }
 }
 
-async function handleQuickButton(chatId, callbackData, userId) {
+async function handleQuickButton(chatId, callbackData, userId, messageId = null) {
   const session = sessions.get(chatId);
   if (!session || String(session.userId) !== String(userId)) {
+    await clearInlineKeyboard(chatId, messageId);
     await say(chatId, "That quick button expired. Use /start and choose the action again.");
     return;
   }
 
   const value = callbackData.slice("quick:".length);
+  await clearInlineKeyboard(chatId, messageId);
+
   if (value === "cancel") {
     clearSession(chatId);
     await say(chatId, "Current flow canceled.");
     await showMenu(chatId, userId);
     return;
+  }
+
+  if (value === "yes") {
+    if (session.executing) {
+      await say(chatId, "Already executing this action. Please wait for the result.");
+      return;
+    }
+    session.executing = true;
   }
 
   if (value === "custom") {
@@ -812,6 +823,20 @@ async function handleQuickButton(chatId, callbackData, userId) {
   }
 
   await continueFlow(chatId, value, session);
+}
+
+async function clearInlineKeyboard(chatId, messageId) {
+  if (!messageId) return;
+
+  try {
+    await telegram("editMessageReplyMarkup", {
+      chat_id: chatId,
+      message_id: messageId,
+      reply_markup: { inline_keyboard: [] }
+    });
+  } catch {
+    // Best-effort cleanup only. Telegram may reject edits for old messages.
+  }
 }
 
 async function handleMessage(message, userId) {
@@ -881,23 +906,50 @@ async function handleMessage(message, userId) {
     return;
   }
 
-  if (text === "/bundle" || text === "/buy") {
+  if (text === "/trade") {
     if (!isPrivateChat(message.chat)) {
-      await say(chatId, "Open this bot in DM to use bundle buy.");
+      await say(chatId, "Open this bot in DM to trade.");
       return;
     }
-    setSession(chatId, "buy_token", userId);
-    await say(chatId, withBrandFooter("Send the token mint address you want to bundle buy."));
+    await showTradeMenu(chatId);
+    return;
+  }
+
+  if (text === "/buy") {
+    if (!isPrivateChat(message.chat)) {
+      await say(chatId, "Open this bot in DM to buy.");
+      return;
+    }
+    sessions.set(chatId, { step: "trade_buy_wallet", userId, data: { tradeMode: "single" } });
+    await say(chatId, await walletPrompt(userId, "Choose one wallet to buy from. Send the wallet number."));
+    return;
+  }
+
+  if (text === "/bundle") {
+    if (!isPrivateChat(message.chat)) {
+      await say(chatId, "Open this bot in DM to use bundle tools.");
+      return;
+    }
+    await showBundleMenu(chatId);
     return;
   }
 
   if (text === "/sell") {
     if (!isPrivateChat(message.chat)) {
-      await say(chatId, "Open this bot in DM to use bundle sell.");
+      await say(chatId, "Open this bot in DM to sell.");
       return;
     }
-    setSession(chatId, "sell_token", userId);
-    await say(chatId, "Send the token mint address you want to bundle sell.");
+    sessions.set(chatId, { step: "trade_sell_wallet", userId, data: { tradeMode: "single" } });
+    await say(chatId, await walletPrompt(userId, "Choose one wallet to sell from. Send the wallet number."));
+    return;
+  }
+
+  if (text === "/positions") {
+    if (!isPrivateChat(message.chat)) {
+      await say(chatId, "Open this bot in DM to view positions.");
+      return;
+    }
+    await showPositionsOverview(chatId, userId);
     return;
   }
 
@@ -1179,13 +1231,15 @@ async function continueFlow(chatId, text, session) {
       case "plan_buy_amount":
         session.data.amountSol = parsePositiveNumber(text);
         session.step = "plan_sell_delay";
-        await sendQuickChoicePrompt(chatId, "Send how many minutes after the buy to sell. Example: `15` sells after 15 minutes.", [
+        await sendQuickChoicePrompt(chatId, "Choose when to auto-sell after the buy. Use `5s` for a quick 5-second exit, or type minutes like `15`.", [
+          [{ text: "5 sec", value: "5s" }, { text: "1 min", value: "1" }],
           [{ text: "5 min", value: "5" }, { text: "15 min", value: "15" }],
           [{ text: "30 min", value: "30" }, { text: "60 min", value: "60" }]
         ]);
         break;
       case "plan_sell_delay":
-        session.data.sellDelayMinutes = parseDelayMinutes(text);
+        session.data.sellDelaySeconds = parseSellDelaySeconds(text);
+        session.data.sellDelayMinutes = session.data.sellDelaySeconds / 60;
         session.step = "plan_sell_percent";
         await sendQuickPercentPrompt(chatId, "Send percent to sell when the timer, take-profit, or stop-loss triggers. Example: `100`.");
         break;
@@ -1207,6 +1261,14 @@ async function continueFlow(chatId, text, session) {
         break;
       case "plan_stop_loss":
         session.data.stopLossPct = parseOptionalTriggerPercent(text);
+        session.step = "plan_loop_count";
+        await sendQuickChoicePrompt(chatId, "Repeat cycles: choose how many total buy/sell cycles this plan should run.", [
+          [{ text: "Repeat 1x", value: "1" }, { text: "Repeat 5x", value: "5" }],
+          [{ text: "Repeat 10x", value: "10" }]
+        ]);
+        break;
+      case "plan_loop_count":
+        session.data.loopCount = parseLoopCount(text);
         session.step = "plan_slippage";
         await sendQuickSlippagePrompt(chatId, `Send slippage in basis points, or type default for ${CONFIG.defaultSlippageBps} bps.`);
         break;
@@ -1318,6 +1380,7 @@ async function continueFlow(chatId, text, session) {
         await say(chatId, "That flow reset. Use /start to choose an action.");
     }
   } catch (error) {
+    session.executing = false;
     await say(chatId, `Input error: ${error.message}`);
   }
 }
@@ -1795,6 +1858,9 @@ async function createTimedTradePlanFlow(chatId, session) {
         basisLamports: amountLamports,
         tokenOutAmount: result.outputAmount || null,
         buySignature: result.signature,
+        currentLoop: 1,
+        completedLoops: 0,
+        sellAfterAt: new Date(Date.now() + session.data.sellDelaySeconds * 1000).toISOString(),
         status: "watching",
         lastCheckedAt: null,
         lastMovePct: null
@@ -1822,8 +1888,10 @@ async function createTimedTradePlanFlow(chatId, session) {
     walletSelector: session.data.walletSelector,
     amountSol: session.data.amountSol,
     sellDelayMinutes: session.data.sellDelayMinutes,
-    sellAfterAt: new Date(now + session.data.sellDelayMinutes * 60_000).toISOString(),
+    sellDelaySeconds: session.data.sellDelaySeconds,
+    sellAfterAt: new Date(now + session.data.sellDelaySeconds * 1000).toISOString(),
     sellPercent: session.data.sellPercent,
+    loopCount: session.data.loopCount || 1,
     takeProfitPct: session.data.takeProfitPct,
     stopLossPct: session.data.stopLossPct,
     slippageBps: session.data.slippageBps,
@@ -1842,6 +1910,7 @@ async function createTimedTradePlanFlow(chatId, session) {
     tokenMint: plan.tokenMint,
     wallets: planWallets.map((wallet) => wallet.publicKey),
     sellAfterAt: plan.sellAfterAt,
+    loopCount: plan.loopCount,
     takeProfitPct: plan.takeProfitPct,
     stopLossPct: plan.stopLossPct
   });
@@ -1851,6 +1920,7 @@ async function createTimedTradePlanFlow(chatId, session) {
     "Timed trade plan created.",
     `Plan ID: ${plan.id}`,
     `Sell timer: ${plan.sellAfterAt}`,
+    `Loops: ${plan.loopCount}`,
     `Take-profit: ${plan.takeProfitPct ? `+${plan.takeProfitPct}%` : "off"}`,
     `Stop-loss: ${plan.stopLossPct ? `-${plan.stopLossPct}%` : "off"}`,
     "",
@@ -2114,11 +2184,16 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
 
   let triggerReason = null;
   const now = Date.now();
-  if (now >= Date.parse(plan.sellAfterAt)) {
+  if (now >= Date.parse(planWallet.sellAfterAt || plan.sellAfterAt)) {
     triggerReason = "timer";
   }
 
   if (!triggerReason && (plan.takeProfitPct || plan.stopLossPct)) {
+    const lastCheckedAt = Date.parse(planWallet.lastCheckedAt || "");
+    if (Number.isFinite(lastCheckedAt) && now - lastCheckedAt < 30_000) {
+      return { changed: false, message: null };
+    }
+
     try {
       const estimate = await estimatePlanWalletMove(plan, wallet);
       planWallet.lastCheckedAt = new Date().toISOString();
@@ -2155,18 +2230,66 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
       solLamportsReceived: sell.outputLamports,
       signature: sell.signature
     }]);
-    planWallet.status = "sold";
+    planWallet.completedLoops = Number.parseInt(planWallet.completedLoops || 0, 10) + 1;
     planWallet.triggerReason = triggerReason;
     planWallet.sellSignature = sell.signature;
     planWallet.sellFeeStatus = sell.feeStatus;
     planWallet.soldAt = new Date().toISOString();
-    return { changed: true, message: `${planWallet.label}: sold by ${triggerReason}, ${sell.signature}${sell.feeStatus}` };
+
+    if (planWallet.completedLoops < (plan.loopCount || 1)) {
+      return restartTimedPlanLoop(plan, planWallet, wallet, sell, triggerReason);
+    }
+
+    planWallet.status = "sold";
+    return { changed: true, message: `${planWallet.label}: sold loop ${planWallet.completedLoops}/${plan.loopCount || 1} by ${triggerReason}, ${sell.signature}${sell.feeStatus}` };
   } catch (error) {
     planWallet.status = "failed";
     planWallet.triggerReason = triggerReason;
     planWallet.error = friendlyError(error);
     planWallet.updatedAt = new Date().toISOString();
     return { changed: true, message: `${planWallet.label}: sell failed by ${triggerReason} - ${friendlyError(error)}` };
+  }
+}
+
+async function restartTimedPlanLoop(plan, planWallet, wallet, sell, triggerReason) {
+  try {
+    const amountLamports = solToLamports(plan.amountSol);
+    const buy = await buyTokenForPlan(wallet, plan.tokenMint, amountLamports, plan.slippageBps);
+    await recordTradeEvents([{
+      userId: plan.userId,
+      type: "buy",
+      source: "timed_plan_loop",
+      tokenMint: plan.tokenMint,
+      walletLabel: wallet.label,
+      walletPublicKey: wallet.publicKey,
+      solLamportsSpent: String(amountLamports),
+      tokenAmount: buy.outputAmount || null,
+      signature: buy.signature
+    }]);
+
+    planWallet.status = "watching";
+    planWallet.currentLoop = planWallet.completedLoops + 1;
+    planWallet.basisLamports = amountLamports;
+    planWallet.tokenOutAmount = buy.outputAmount || null;
+    planWallet.buySignature = buy.signature;
+    planWallet.lastCheckedAt = null;
+    planWallet.lastMovePct = null;
+    planWallet.lastError = null;
+    planWallet.sellAfterAt = new Date(Date.now() + (plan.sellDelaySeconds || Math.round((plan.sellDelayMinutes || 1) * 60)) * 1000).toISOString();
+    planWallet.updatedAt = new Date().toISOString();
+
+    return {
+      changed: true,
+      message: `${planWallet.label}: sold loop ${planWallet.completedLoops}/${plan.loopCount} by ${triggerReason}, ${sell.signature}${sell.feeStatus}; started loop ${planWallet.currentLoop}/${plan.loopCount}, buy ${buy.signature}${buy.feeStatus}`
+    };
+  } catch (error) {
+    planWallet.status = "failed";
+    planWallet.error = `next loop buy failed after sell: ${friendlyError(error)}`;
+    planWallet.updatedAt = new Date().toISOString();
+    return {
+      changed: true,
+      message: `${planWallet.label}: sold loop ${planWallet.completedLoops}/${plan.loopCount} by ${triggerReason}, ${sell.signature}${sell.feeStatus}; next loop buy failed - ${friendlyError(error)}`
+    };
   }
 }
 
@@ -2869,22 +2992,24 @@ async function listWallets(chatId, userId) {
     return;
   }
 
-  const lines = wallets.map((wallet, index) => `${index + 1}. ${wallet.label}\n${wallet.publicKey}`);
-  await telegram("sendMessage", {
-    chat_id: chatId,
-    text: `Your managed wallets:\n\n${lines.join("\n\n")}\n\nTap a button below to copy a wallet address.`,
-    disable_web_page_preview: true,
-    reply_markup: {
-      inline_keyboard: copyWalletKeyboard(wallets)
-    }
-  });
-}
+  const pageSize = 20;
+  for (let start = 0; start < wallets.length; start += pageSize) {
+    const pageWallets = wallets.slice(start, start + pageSize);
+    const lines = pageWallets.map((wallet, index) => {
+      const walletNumber = start + index + 1;
+      return `${walletNumber}. ${escapeHtml(wallet.label)}\n<code>${wallet.publicKey}</code>`;
+    });
+    const pageLabel = wallets.length > pageSize
+      ? ` (${start + 1}-${start + pageWallets.length} of ${wallets.length})`
+      : "";
 
-function copyWalletKeyboard(wallets) {
-  return wallets.map((wallet, index) => ([{
-    text: `Copy ${index + 1}`,
-    copy_text: { text: wallet.publicKey }
-  }]));
+    await telegram("sendMessage", {
+      chat_id: chatId,
+      text: `Your managed wallets${pageLabel}:\n\n${lines.join("\n\n")}\n\nTap or long-press an address to copy it.`,
+      disable_web_page_preview: true,
+      parse_mode: "HTML"
+    });
+  }
 }
 
 async function showWalletBalances(chatId, userId) {
@@ -3337,7 +3462,7 @@ function howToPage(topic) {
         "- DCA Buy: splits one total SOL amount into smaller buys over time.",
         "- DCA Sell: captures the wallet's current token balance, then sells your chosen percent in smaller slices.",
         "- Positions: shows bot-tracked positions, PnL estimate, balances, and Dexscreener links.",
-        "- Wallets: shows your wallet addresses with copy buttons.",
+        "- Wallets: shows your wallet addresses as tap-to-copy address text.",
         "",
         "Important settings:",
         `- Safety reserve: the bot keeps about ${CONFIG.buyReserveSol} SOL per wallet for fees and token account creation.`,
@@ -3346,7 +3471,7 @@ function howToPage(topic) {
         "- Confirm screen: always read token mint, wallet, amount, fee, and slippage before tapping Confirm.",
         "",
         "Best first trade:",
-        "Use a small amount, confirm the token on Dexscreener, then test sell before using larger size."
+        "Use a small amount, confirm the token on Dexscreener, then try a sell before using larger size."
       ].join("\n")
     },
     wallet: {
@@ -3359,7 +3484,7 @@ function howToPage(topic) {
         "Buttons inside Wallet:",
         "- Create Wallet Set: enter a group label, then a count from 1 to 20. Example label: ogretest. The bot creates ogretest 1, ogretest 2, etc.",
         "- Import Wallet: enter a label, then paste a private key from Phantom/Solflare. Accepted formats are base58 secret key, JSON byte array, or comma-separated 64-byte array.",
-        "- My Wallets: lists wallet labels and addresses. Tap Copy 1, Copy 2, etc. to copy one address quickly.",
+        "- My Wallets: lists wallet labels and addresses. Tap or long-press the address text to copy it.",
         "- Positions Overview: shows tokens held, estimated value when Jupiter can quote, and Dexscreener links.",
         "- PnL / Results: shows realized SOL from buys and sells recorded by this bot.",
         "- Close Empty Token Accounts: reclaims rent from empty SPL token accounts when possible.",
@@ -3420,14 +3545,17 @@ function howToPage(topic) {
         "- Token mint: the coin you want to trade.",
         "- Wallets: numbers, all, or group: name.",
         "- Buy amount: fixed SOL amount per wallet.",
-        "- Sell timer: minutes after buy before selling.",
+        "- Sell timer: choose 5 seconds for a quick exit, or set minutes like 1, 5, 15, 30, or 60.",
         "- Sell percent: how much of the token balance to sell when triggered.",
         "- Take-profit: sell early if estimated value rises by this percent. Use 0/off to disable.",
         "- Stop-loss: sell early if estimated value falls by this percent. Use 0/off to disable.",
+        "- Repeat cycles: total buy/sell cycles. 1 is normal; 5 or 10 repeats the cycle multiple times.",
         "- Slippage: tolerance for the swap route.",
         "",
         "Good setup example:",
-        "Buy 0.10 SOL, sell after 30 minutes, sell 100%, take-profit 25%, stop-loss 10%, default slippage."
+        "Quick exit example: buy 0.05 SOL, sell after 5 seconds, sell 100%, take-profit off, stop-loss off, Repeat 1x, default slippage.",
+        "Repeat example: buy 0.05 SOL, sell after 5 seconds, sell 100%, take-profit off, stop-loss off, Repeat 5x, default slippage.",
+        "Normal example: buy 0.10 SOL, sell after 30 minutes, sell 100%, take-profit 25%, stop-loss 10%, default slippage."
       ].join("\n")
     },
     balances: {
@@ -3561,8 +3689,9 @@ function timedTradePlanIntroText() {
     "",
     "What it does:",
     "- Buys a token from selected wallets now.",
-    "- Sells later after your chosen timer.",
+    "- Sells later after your chosen timer, including a 5-second quick exit option.",
     "- Can sell early if take-profit or stop-loss triggers.",
+    "- Can loop the buy/sell cycle 1, 5, 10, or a custom count up to 10.",
     "- Works by wallet numbers, `all`, or `group: group name`.",
     "",
     "This is for managing your own position. It is not a volume or wash-trading tool.",
@@ -4325,15 +4454,46 @@ function parsePercent(text) {
 function parseDelayMinutes(text) {
   const value = Number.parseInt(text, 10);
   if (!Number.isInteger(value) || value < 1 || value > 10_080) {
-    throw new Error("Sell timer must be from 1 minute to 10080 minutes.");
+    throw new Error("Delay must be from 1 minute to 10080 minutes.");
   }
   return value;
+}
+
+function parseSellDelaySeconds(text) {
+  const normalized = text.trim().toLowerCase();
+  const secondsMatch = normalized.match(/^(\d+)\s*(s|sec|secs|second|seconds)$/);
+  if (secondsMatch) {
+    const seconds = Number.parseInt(secondsMatch[1], 10);
+    if (!Number.isInteger(seconds) || seconds < 5 || seconds > 59) {
+      throw new Error("Second-based auto-sell timers must be from 5 to 59 seconds.");
+    }
+    return seconds;
+  }
+
+  const minutes = parseDelayMinutes(normalized.replace(/\s*(m|min|mins|minute|minutes)$/i, ""));
+  return minutes * 60;
+}
+
+function formatDelay(seconds) {
+  const value = Number(seconds);
+  if (!Number.isFinite(value)) return "unknown";
+  if (value < 60) return `${value} second(s)`;
+  const minutes = value / 60;
+  return Number.isInteger(minutes) ? `${minutes} minute(s)` : `${minutes.toFixed(2)} minute(s)`;
 }
 
 function parseDcaOrderCount(text) {
   const value = Number.parseInt(text, 10);
   if (!Number.isInteger(value) || value < 2 || value > 50) {
     throw new Error("DCA order count must be from 2 to 50.");
+  }
+  return value;
+}
+
+function parseLoopCount(text) {
+  const value = Number.parseInt(text, 10);
+  if (!Number.isInteger(value) || value < 1 || value > 10) {
+    throw new Error("Repeat cycles must be from 1 to 10.");
   }
   return value;
 }
@@ -4461,6 +4621,13 @@ function dexScreenerUrl(tokenMint) {
   return `https://dexscreener.com/solana/${tokenMint}`;
 }
 
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
 function appendLimited(list, item, limit = 20) {
   return [...(Array.isArray(list) ? list : []), item].slice(-limit);
 }
@@ -4537,13 +4704,14 @@ function formatTimedTradePlanConfirm(data) {
     walletLabel,
     `${data.tradeMode === "single" ? "Buy" : "Buy per wallet"}: ${data.amountSol} SOL`,
     `Net buy before routing fees: ${lamportsToSol(amountLamports - feeLamports)} SOL`,
-    `Sell timer: ${data.sellDelayMinutes} minute(s) after buy`,
+    `Sell timer: ${formatDelay(data.sellDelaySeconds)} after buy`,
     `Sell percent: ${data.sellPercent}%`,
+    `Repeat cycles: ${data.loopCount || 1}x`,
     `Take-profit: ${data.takeProfitPct ? `+${data.takeProfitPct}%` : "off"}`,
     `Stop-loss: ${data.stopLossPct ? `-${data.stopLossPct}%` : "off"}`,
     `Slippage: ${data.slippageBps} bps`,
     "",
-    "The bot buys now, then watches once per minute while awake. If Render was asleep, it catches up when it wakes.",
+    "The bot buys now, then watches every few seconds while awake. If Render was asleep, it catches up when it wakes.",
     "Reply `yes` to execute or `/cancel`."
   ].join("\n");
 }
