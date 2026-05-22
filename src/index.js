@@ -738,7 +738,7 @@ async function handleCallback(query, userId) {
       await say(chatId, await walletPrompt(userId, "Choose one wallet to sell from. Send the wallet number."));
       break;
     case "trade_auto_sell":
-      sessions.set(chatId, { step: "trade_plan_wallet", userId, data: { tradeMode: "single" } });
+      sessions.set(chatId, { step: "trade_plan_wallet", userId, data: { tradeMode: "single", allowRepeat: false } });
       await say(chatId, await walletPrompt(userId, "Choose one wallet for the auto-sell / timed plan. Send the wallet number."));
       break;
     case "trade_dca_buy":
@@ -758,7 +758,7 @@ async function handleCallback(query, userId) {
       await say(chatId, dcaIntroText("sell"));
       break;
     case "timed_trade_plans":
-      setSession(chatId, "plan_token", userId);
+      sessions.set(chatId, { step: "plan_token", userId, data: { allowRepeat: true } });
       await say(chatId, timedTradePlanIntroText());
       break;
     case "sweep_sol":
@@ -1261,11 +1261,17 @@ async function continueFlow(chatId, text, session) {
         break;
       case "plan_stop_loss":
         session.data.stopLossPct = parseOptionalTriggerPercent(text);
-        session.step = "plan_loop_count";
-        await sendQuickChoicePrompt(chatId, "Repeat cycles: choose how many total buy/sell cycles this plan should run.", [
-          [{ text: "Repeat 1x", value: "1" }, { text: "Repeat 5x", value: "5" }],
-          [{ text: "Repeat 10x", value: "10" }]
-        ]);
+        if (session.data.allowRepeat) {
+          session.step = "plan_loop_count";
+          await sendQuickChoicePrompt(chatId, "Repeat cycles: choose how many total buy/sell cycles this plan should run.", [
+            [{ text: "Repeat 1x", value: "1" }, { text: "Repeat 5x", value: "5" }],
+            [{ text: "Repeat 10x", value: "10" }]
+          ]);
+        } else {
+          session.data.loopCount = 1;
+          session.step = "plan_slippage";
+          await sendQuickSlippagePrompt(chatId, `Send slippage in basis points, or type default for ${CONFIG.defaultSlippageBps} bps.`);
+        }
         break;
       case "plan_loop_count":
         session.data.loopCount = parseLoopCount(text);
@@ -3132,13 +3138,12 @@ async function showTradeMenu(chatId) {
 async function showBundleMenu(chatId) {
   await telegram("sendMessage", {
     chat_id: chatId,
-    text: withBrandFooter("Bundle and trade tools:"),
+    text: withBrandFooter("Bundle tools:\n\nUse Volume for auto-sell and repeat cycles."),
     reply_markup: {
       inline_keyboard: [
         [{ text: "🧲 Bundle Buy", callback_data: "batch_buy" }],
         [{ text: "🧲 Bundle Sell", callback_data: "batch_sell" }],
         [{ text: "DCA Buy", callback_data: "dca_buy" }, { text: "DCA Sell", callback_data: "dca_sell" }],
-        [{ text: "Auto Sell / Timed Plan", callback_data: "timed_trade_plans" }],
         [{ text: "Copy Trade", callback_data: "copy_trade_info" }]
       ]
     }
@@ -3511,8 +3516,9 @@ function howToPage(topic) {
         "- Bundle Sell: paste token mint, choose wallets, choose percent to sell, choose slippage, confirm.",
         "- DCA Buy: split a total SOL amount per selected wallet into scheduled smaller buys.",
         "- DCA Sell: split a selected percent per wallet into scheduled smaller sells.",
-        "- Auto Sell / Timed Plan: buy now from selected wallets, then sell by timer, take-profit, or stop-loss.",
         "- Copy Trade: info/setup placeholder for a future wallet watcher.",
+        "",
+        "Use the main Volume button for auto-sell, take-profit, stop-loss, and Repeat cycles.",
         "",
         "Wallet selection:",
         "- Type `all` to use every wallet you own.",
