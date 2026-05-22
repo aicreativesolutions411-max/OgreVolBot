@@ -32,6 +32,7 @@ let lastKeepAliveStatus = {
   lastError: null
 };
 let tradePlanRunnerActive = false;
+let dcaPlanRunnerActive = false;
 const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const TOKEN_2022_PROGRAM_ID = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
@@ -66,6 +67,7 @@ const PRIVATE_CHAT_ACTIONS = new Set([
   "list_wallets",
   "check_balances",
   "pnl_results",
+  "positions_overview",
   "copy_trade_info",
   "quick_start",
   "backup_menu",
@@ -76,6 +78,8 @@ const PRIVATE_CHAT_ACTIONS = new Set([
   "fund_wallets",
   "batch_buy",
   "batch_sell",
+  "dca_buy",
+  "dca_sell",
   "timed_trade_plans",
   "sweep_sol",
   "sweep_tokens",
@@ -87,6 +91,7 @@ async function main() {
   startHealthServer();
   startKeepAlivePinger();
   startTradePlanRunner();
+  startDcaPlanRunner();
 
   if (CONFIG.webhookUrl) {
     await setupWebhook();
@@ -248,6 +253,16 @@ function startTradePlanRunner() {
   }), 60_000);
 }
 
+function startDcaPlanRunner() {
+  setTimeout(() => void processDcaPlans().catch((error) => {
+    console.error("DCA plan runner failed:", error.message);
+  }), 50_000);
+
+  setInterval(() => void processDcaPlans().catch((error) => {
+    console.error("DCA plan runner failed:", error.message);
+  }), 60_000);
+}
+
 async function setupWebhook() {
   if (!CONFIG.webhookSecret) {
     throw new Error("TELEGRAM_WEBHOOK_SECRET is required when TELEGRAM_WEBHOOK_URL is set.");
@@ -360,6 +375,7 @@ async function ensureDataFiles() {
   await writeJsonIfMissing(auditPath(), { entries: [] });
   await writeJsonIfMissing(statePath(), { paused: false });
   await writeJsonIfMissing(tradePlansPath(), { plans: [] });
+  await writeJsonIfMissing(dcaPlansPath(), { plans: [] });
   await writeJsonIfMissing(tradeHistoryPath(), { trades: [] });
   await ensureAppSecretFingerprint();
   await assignUnownedWalletsToSingleAdmin();
@@ -421,6 +437,10 @@ function statePath() {
 
 function tradePlansPath() {
   return path.join(CONFIG.dataDir, "trade-plans.json");
+}
+
+function dcaPlansPath() {
+  return path.join(CONFIG.dataDir, "dca-plans.json");
 }
 
 function tradeHistoryPath() {
@@ -551,6 +571,15 @@ async function handleCallback(query, userId) {
     return;
   }
 
+  if (query.data?.startsWith("quick:")) {
+    if (!isPrivateChat(chat)) {
+      await say(chatId, "Open this bot in DM to use wallet and trading quick buttons.");
+      return;
+    }
+    await handleQuickButton(chatId, query.data, userId);
+    return;
+  }
+
   switch (query.data) {
     case "quick_start":
       await say(chatId, quickStartText());
@@ -583,6 +612,9 @@ async function handleCallback(query, userId) {
       break;
     case "pnl_results":
       await showPnlResults(chatId, userId);
+      break;
+    case "positions_overview":
+      await showPositionsOverview(chatId, userId);
       break;
     case "copy_trade_info":
       await say(chatId, copyTradeText());
@@ -626,6 +658,14 @@ async function handleCallback(query, userId) {
       setSession(chatId, "sell_token", userId);
       await say(chatId, "Send the token mint address you want to sell from all selected wallets.");
       break;
+    case "dca_buy":
+      sessions.set(chatId, { step: "dca_token", userId, data: { side: "buy" } });
+      await say(chatId, dcaIntroText("buy"));
+      break;
+    case "dca_sell":
+      sessions.set(chatId, { step: "dca_token", userId, data: { side: "sell" } });
+      await say(chatId, dcaIntroText("sell"));
+      break;
     case "timed_trade_plans":
       setSession(chatId, "plan_token", userId);
       await say(chatId, timedTradePlanIntroText());
@@ -658,6 +698,22 @@ async function handleCallback(query, userId) {
     default:
       await say(chatId, "Unknown menu action. Use /start to reopen the menu.");
   }
+}
+
+async function handleQuickButton(chatId, callbackData, userId) {
+  const session = sessions.get(chatId);
+  if (!session || String(session.userId) !== String(userId)) {
+    await say(chatId, "That quick button expired. Use /start and choose the action again.");
+    return;
+  }
+
+  const value = callbackData.slice("quick:".length);
+  if (value === "custom") {
+    await say(chatId, "Type your custom value now, or /cancel.");
+    return;
+  }
+
+  await continueFlow(chatId, value, session);
 }
 
 async function handleMessage(message, userId) {
@@ -875,12 +931,12 @@ async function continueFlow(chatId, text, session) {
       case "buy_token":
         session.data.tokenMint = parsePublicKey(text).toBase58();
         session.step = "buy_wallets";
-        await say(chatId, await walletPrompt(session.userId, "Send buyer wallet numbers separated by commas, or `all`."));
+        await say(chatId, await walletPrompt(session.userId, `Dexscreener: ${dexScreenerUrl(session.data.tokenMint)}\n\nSend buyer wallet numbers separated by commas, or \`all\`.`));
         break;
       case "buy_wallets":
         session.data.walletIndexes = await parseWalletSelection(text, session.userId);
         session.step = "buy_amount";
-        await say(chatId, [
+        await sendQuickAmountPrompt(chatId, [
           "Send SOL amount to spend per wallet.",
           "",
           "Examples:",
@@ -888,7 +944,7 @@ async function continueFlow(chatId, text, session) {
           "- `max` means use each wallet's available SOL except the safety reserve",
           "",
           `Safety reserve kept for fees: ${CONFIG.buyReserveSol} SOL per wallet`
-        ].concat("", BRAND_FOOTER).join("\n"));
+        ].join("\n"), { allowMax: true });
         break;
       case "buy_amount":
         if (["max", "all"].includes(text.trim().toLowerCase())) {
@@ -898,7 +954,7 @@ async function continueFlow(chatId, text, session) {
           session.data.amountSol = parsePositiveNumber(text);
         }
         session.step = "buy_slippage";
-        await say(chatId, withBrandFooter(`Send slippage in basis points, or type default for ${CONFIG.defaultSlippageBps} bps.`));
+        await sendQuickSlippagePrompt(chatId, `Send slippage in basis points, or type default for ${CONFIG.defaultSlippageBps} bps.`);
         break;
       case "buy_slippage":
         session.data.slippageBps = parseSlippage(text);
@@ -911,17 +967,17 @@ async function continueFlow(chatId, text, session) {
       case "sell_token":
         session.data.tokenMint = parsePublicKey(text).toBase58();
         session.step = "sell_wallets";
-        await say(chatId, await walletPrompt(session.userId, "Send seller wallet numbers separated by commas, or `all`."));
+        await say(chatId, await walletPrompt(session.userId, `Dexscreener: ${dexScreenerUrl(session.data.tokenMint)}\n\nSend seller wallet numbers separated by commas, or \`all\`.`));
         break;
       case "sell_wallets":
         session.data.walletIndexes = await parseWalletSelection(text, session.userId);
         session.step = "sell_percent";
-        await say(chatId, `${await selectedTokenBalanceSummary(session.userId, session.data.walletIndexes, session.data.tokenMint)}\n\nSend percent to sell from each wallet, from 1 to 100.`);
+        await sendQuickPercentPrompt(chatId, `${await selectedTokenBalanceSummary(session.userId, session.data.walletIndexes, session.data.tokenMint)}\n\nSend percent to sell from each wallet, from 1 to 100.`);
         break;
       case "sell_percent":
         session.data.percent = parsePercent(text);
         session.step = "sell_slippage";
-        await say(chatId, `Send slippage in basis points, or type default for ${CONFIG.defaultSlippageBps} bps.`);
+        await sendQuickSlippagePrompt(chatId, `Send slippage in basis points, or type default for ${CONFIG.defaultSlippageBps} bps.`);
         break;
       case "sell_slippage":
         session.data.slippageBps = parseSlippage(text);
@@ -934,38 +990,47 @@ async function continueFlow(chatId, text, session) {
       case "plan_token":
         session.data.tokenMint = parsePublicKey(text).toBase58();
         session.step = "plan_wallets";
-        await say(chatId, await walletPrompt(session.userId, "Send wallet numbers, `all`, or `group: group name` for the timed trade plan."));
+        await say(chatId, await walletPrompt(session.userId, `Dexscreener: ${dexScreenerUrl(session.data.tokenMint)}\n\nSend wallet numbers, \`all\`, or \`group: group name\` for the timed trade plan.`));
         break;
       case "plan_wallets":
         session.data.walletIndexes = await parseWalletSelectionOrGroup(text, session.userId);
         session.data.walletSelector = text.trim();
         session.step = "plan_buy_amount";
-        await say(chatId, "Send SOL amount to buy per wallet. Timed plans use a fixed amount, for example `0.05`.");
+        await sendQuickAmountPrompt(chatId, "Send SOL amount to buy per wallet. Timed plans use a fixed amount, for example `0.05`.");
         break;
       case "plan_buy_amount":
         session.data.amountSol = parsePositiveNumber(text);
         session.step = "plan_sell_delay";
-        await say(chatId, "Send how many minutes after the buy to sell. Example: `15` sells after 15 minutes.");
+        await sendQuickChoicePrompt(chatId, "Send how many minutes after the buy to sell. Example: `15` sells after 15 minutes.", [
+          [{ text: "5 min", value: "5" }, { text: "15 min", value: "15" }],
+          [{ text: "30 min", value: "30" }, { text: "60 min", value: "60" }]
+        ]);
         break;
       case "plan_sell_delay":
         session.data.sellDelayMinutes = parseDelayMinutes(text);
         session.step = "plan_sell_percent";
-        await say(chatId, "Send percent to sell when the timer, take-profit, or stop-loss triggers. Example: `100`.");
+        await sendQuickPercentPrompt(chatId, "Send percent to sell when the timer, take-profit, or stop-loss triggers. Example: `100`.");
         break;
       case "plan_sell_percent":
         session.data.sellPercent = parsePercent(text);
         session.step = "plan_take_profit";
-        await say(chatId, "Send take-profit percent up, or `0` / `off` to disable. Example: `25` sells when estimated value is about +25%.");
+        await sendQuickChoicePrompt(chatId, "Send take-profit percent up, or `0` / `off` to disable. Example: `25` sells when estimated value is about +25%.", [
+          [{ text: "Off", value: "0" }, { text: "+10%", value: "10" }],
+          [{ text: "+25%", value: "25" }, { text: "+50%", value: "50" }]
+        ]);
         break;
       case "plan_take_profit":
         session.data.takeProfitPct = parseOptionalTriggerPercent(text);
         session.step = "plan_stop_loss";
-        await say(chatId, "Send stop-loss percent down, or `0` / `off` to disable. Example: `10` sells when estimated value is about -10%.");
+        await sendQuickChoicePrompt(chatId, "Send stop-loss percent down, or `0` / `off` to disable. Example: `10` sells when estimated value is about -10%.", [
+          [{ text: "Off", value: "0" }, { text: "-10%", value: "10" }],
+          [{ text: "-25%", value: "25" }, { text: "-50%", value: "50" }]
+        ]);
         break;
       case "plan_stop_loss":
         session.data.stopLossPct = parseOptionalTriggerPercent(text);
         session.step = "plan_slippage";
-        await say(chatId, `Send slippage in basis points, or type default for ${CONFIG.defaultSlippageBps} bps.`);
+        await sendQuickSlippagePrompt(chatId, `Send slippage in basis points, or type default for ${CONFIG.defaultSlippageBps} bps.`);
         break;
       case "plan_slippage":
         session.data.slippageBps = parseSlippage(text);
@@ -974,6 +1039,59 @@ async function continueFlow(chatId, text, session) {
         break;
       case "plan_confirm":
         await confirmOrCancel(chatId, text, () => createTimedTradePlanFlow(chatId, session));
+        break;
+      case "dca_token":
+        session.data.tokenMint = parsePublicKey(text).toBase58();
+        session.step = "dca_wallets";
+        await say(chatId, await walletPrompt(session.userId, `Dexscreener: ${dexScreenerUrl(session.data.tokenMint)}\n\nSend wallet numbers, \`all\`, or \`group: group name\` for this DCA ${session.data.side}.`));
+        break;
+      case "dca_wallets":
+        session.data.walletIndexes = await parseWalletSelectionOrGroup(text, session.userId);
+        session.data.walletSelector = text.trim();
+        if (session.data.side === "buy") {
+          session.step = "dca_buy_total";
+          await sendQuickAmountPrompt(chatId, "Send total SOL to DCA from each selected wallet. Example: `1` split over 5 buys spends 0.2 SOL each buy.");
+        } else {
+          session.step = "dca_sell_percent";
+          await sendQuickPercentPrompt(chatId, `${await selectedTokenBalanceSummary(session.userId, session.data.walletIndexes, session.data.tokenMint)}\n\nSend total percent to DCA sell from each selected wallet, from 1 to 100.`);
+        }
+        break;
+      case "dca_buy_total":
+        session.data.totalSol = parsePositiveNumber(text);
+        session.step = "dca_orders";
+        await sendQuickChoicePrompt(chatId, "How many DCA orders? Send a number from 2 to 50.", [
+          [{ text: "2", value: "2" }, { text: "3", value: "3" }, { text: "5", value: "5" }],
+          [{ text: "10", value: "10" }]
+        ]);
+        break;
+      case "dca_sell_percent":
+        session.data.totalPercent = parsePercent(text);
+        session.step = "dca_orders";
+        await sendQuickChoicePrompt(chatId, "How many DCA sell orders? Send a number from 2 to 50.", [
+          [{ text: "2", value: "2" }, { text: "3", value: "3" }, { text: "5", value: "5" }],
+          [{ text: "10", value: "10" }]
+        ]);
+        break;
+      case "dca_orders":
+        session.data.orderCount = parseDcaOrderCount(text);
+        session.step = "dca_interval";
+        await sendQuickChoicePrompt(chatId, "Send minutes between each DCA order. Example: `5` runs one slice every 5 minutes.", [
+          [{ text: "1 min", value: "1" }, { text: "5 min", value: "5" }],
+          [{ text: "15 min", value: "15" }, { text: "60 min", value: "60" }]
+        ]);
+        break;
+      case "dca_interval":
+        session.data.intervalMinutes = parseDelayMinutes(text);
+        session.step = "dca_slippage";
+        await sendQuickSlippagePrompt(chatId, `Send slippage in basis points, or type default for ${CONFIG.defaultSlippageBps} bps.`);
+        break;
+      case "dca_slippage":
+        session.data.slippageBps = parseSlippage(text);
+        session.step = "dca_confirm";
+        await say(chatId, withBrandFooter(formatDcaPlanConfirm(session.data)));
+        break;
+      case "dca_confirm":
+        await confirmOrCancel(chatId, text, () => createDcaPlanFlow(chatId, session));
         break;
       case "sweep_sol_destination":
         session.data.destination = parsePublicKey(text).toBase58();
@@ -1557,6 +1675,119 @@ async function createTimedTradePlanFlow(chatId, session) {
   await showMenu(chatId, session.userId);
 }
 
+async function createDcaPlanFlow(chatId, session) {
+  const store = await readWalletStore();
+  const selectedWallets = session.data.walletIndexes.map((index) => getWalletAt(store, index, session.userId));
+  const setupResults = [];
+  const planWallets = [];
+
+  if (session.data.side === "buy") {
+    const totalLamports = BigInt(solToLamports(session.data.totalSol));
+    if (totalLamports < BigInt(session.data.orderCount)) {
+      throw new Error("Total SOL is too small for the number of DCA orders.");
+    }
+
+    for (const wallet of selectedWallets) {
+      planWallets.push({
+        label: wallet.label,
+        publicKey: wallet.publicKey,
+        status: "active",
+        completedOrders: 0,
+        failures: 0,
+        startingLamports: totalLamports.toString(),
+        remainingLamports: totalLamports.toString(),
+        results: []
+      });
+      setupResults.push(`${wallet.label}: scheduled ${session.data.totalSol} SOL across ${session.data.orderCount} buy(s)`);
+    }
+  } else {
+    await runWithConcurrency(selectedWallets, 1, async (wallet) => {
+      try {
+        const keypair = decryptWallet(wallet);
+        const token = await getTokenBalanceForMint(keypair.publicKey, new PublicKey(session.data.tokenMint));
+        if (!token || token.rawAmount === 0n) {
+          setupResults.push(`${wallet.label}: skipped, no token balance`);
+          return;
+        }
+
+        const amountToSell = (token.rawAmount * BigInt(session.data.totalPercent)) / 100n;
+        if (amountToSell === 0n) {
+          setupResults.push(`${wallet.label}: skipped, sell amount rounded to zero`);
+          return;
+        }
+
+        planWallets.push({
+          label: wallet.label,
+          publicKey: wallet.publicKey,
+          status: "active",
+          completedOrders: 0,
+          failures: 0,
+          startingRawAmount: amountToSell.toString(),
+          remainingRawAmount: amountToSell.toString(),
+          startingUiAmount: token.uiAmount,
+          results: []
+        });
+        setupResults.push(`${wallet.label}: scheduled ${session.data.totalPercent}% of ${token.uiAmount} tokens across ${session.data.orderCount} sell(s)`);
+      } catch (error) {
+        setupResults.push(`${wallet.label}: setup failed - ${friendlyError(error)}`);
+      }
+    });
+  }
+
+  if (planWallets.length === 0) {
+    clearSession(chatId);
+    await say(chatId, withBrandFooter(`DCA ${session.data.side} plan was not created because no wallets were ready.\n\n${setupResults.join("\n")}`));
+    await showMenu(chatId, session.userId);
+    return;
+  }
+
+  const plan = {
+    id: crypto.randomUUID(),
+    status: "active",
+    side: session.data.side,
+    userId: session.userId,
+    chatId,
+    tokenMint: session.data.tokenMint,
+    walletSelector: session.data.walletSelector,
+    orderCount: session.data.orderCount,
+    intervalMinutes: session.data.intervalMinutes,
+    slippageBps: session.data.slippageBps,
+    nextRunAt: new Date().toISOString(),
+    createdAt: new Date().toISOString(),
+    wallets: planWallets,
+    setupResults
+  };
+
+  const plans = await readDcaPlans();
+  plans.plans.push(plan);
+  await writeDcaPlans(plans);
+  await audit("create_dca_plan", {
+    chatId,
+    userId: session.userId,
+    planId: plan.id,
+    side: plan.side,
+    tokenMint: plan.tokenMint,
+    wallets: planWallets.map((wallet) => wallet.publicKey),
+    orderCount: plan.orderCount,
+    intervalMinutes: plan.intervalMinutes
+  });
+
+  clearSession(chatId);
+  await say(chatId, withBrandFooter([
+    `DCA ${plan.side} plan created.`,
+    `Plan ID: ${plan.id}`,
+    `Orders: ${plan.orderCount}`,
+    `Interval: ${plan.intervalMinutes} minute(s)`,
+    "First order starts on the next runner tick, usually within 1 minute.",
+    "",
+    setupResults.join("\n")
+  ].join("\n")));
+  setTimeout(() => void processDcaPlans().catch((error) => {
+    console.error("DCA plan immediate run failed:", error.message);
+  }), 1_000);
+  await showMenu(chatId, session.userId);
+}
+
 async function buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps) {
   const keypair = decryptWallet(wallet);
   const balance = await rpcWithRetry("get wallet SOL balance", () => connection.getBalance(keypair.publicKey, "confirmed"));
@@ -1607,11 +1838,21 @@ async function sellTokenFromWallet(wallet, tokenMint, percent, slippageBps) {
     throw new Error("sell amount rounded to zero");
   }
 
+  return sellTokenAmountFromWallet(wallet, tokenMint, amount, slippageBps);
+}
+
+async function sellTokenAmountFromWallet(wallet, tokenMint, amount, slippageBps) {
+  const keypair = decryptWallet(wallet);
+  const sellAmount = BigInt(amount);
+  if (sellAmount <= 0n) {
+    throw new Error("sell amount rounded to zero");
+  }
+
   const result = await executeJupiterSwap({
     signer: keypair,
     inputMint: tokenMint,
     outputMint: SOL_MINT,
-    amount: amount.toString(),
+    amount: sellAmount.toString(),
     slippageBps
   });
   const outputLamports = BigInt(result.outputAmount || 0);
@@ -1627,7 +1868,7 @@ async function sellTokenFromWallet(wallet, tokenMint, percent, slippageBps) {
 
   return {
     signature: result.signature,
-    tokenAmount: amount.toString(),
+    tokenAmount: sellAmount.toString(),
     outputLamports: outputLamports.toString(),
     feeStatus
   };
@@ -1742,6 +1983,157 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
     planWallet.error = friendlyError(error);
     planWallet.updatedAt = new Date().toISOString();
     return { changed: true, message: `${planWallet.label}: sell failed by ${triggerReason} - ${friendlyError(error)}` };
+  }
+}
+
+async function processDcaPlans() {
+  if (dcaPlanRunnerActive) return;
+  dcaPlanRunnerActive = true;
+
+  try {
+    const state = await readState();
+    if (state.paused) return;
+
+    const planStore = await readDcaPlans();
+    const walletStore = await readWalletStore();
+    let changed = false;
+
+    for (const plan of planStore.plans) {
+      if (plan.status !== "active") continue;
+      const nextRunAt = Date.parse(plan.nextRunAt || plan.createdAt || new Date().toISOString());
+      if (Date.now() < nextRunAt) continue;
+
+      const messages = [];
+      for (const planWallet of plan.wallets) {
+        if (planWallet.status !== "active") continue;
+        const result = await processDcaPlanWallet(plan, planWallet, walletStore);
+        if (result.changed) changed = true;
+        if (result.message) messages.push(result.message);
+      }
+
+      if (plan.wallets.every((wallet) => wallet.status !== "active")) {
+        plan.status = "completed";
+        plan.completedAt = new Date().toISOString();
+        changed = true;
+      } else {
+        plan.nextRunAt = new Date(Date.now() + plan.intervalMinutes * 60_000).toISOString();
+        changed = true;
+      }
+
+      if (messages.length > 0) {
+        await say(plan.chatId, withBrandFooter([
+          `DCA ${plan.side} update: ${plan.id}`,
+          ...messages
+        ].join("\n")));
+      }
+    }
+
+    if (changed) {
+      await writeDcaPlans(planStore);
+    }
+  } finally {
+    dcaPlanRunnerActive = false;
+  }
+}
+
+async function processDcaPlanWallet(plan, planWallet, walletStore) {
+  const wallet = walletsForOwner(walletStore, plan.userId).find((item) => item.publicKey === planWallet.publicKey);
+  if (!wallet) {
+    planWallet.status = "failed";
+    planWallet.error = "wallet not found";
+    planWallet.updatedAt = new Date().toISOString();
+    return { changed: true, message: `${planWallet.label}: failed - wallet not found` };
+  }
+
+  const completedOrders = Number.parseInt(planWallet.completedOrders || 0, 10);
+  const remainingOrders = plan.orderCount - completedOrders;
+  if (remainingOrders <= 0) {
+    planWallet.status = "completed";
+    planWallet.completedAt = new Date().toISOString();
+    return { changed: true, message: null };
+  }
+
+  try {
+    if (plan.side === "buy") {
+      const remainingLamports = BigInt(planWallet.remainingLamports || 0);
+      const amountLamportsBig = remainingLamports / BigInt(remainingOrders);
+      const amountLamports = bigIntToSafeNumber(amountLamportsBig, "DCA buy amount");
+      const buy = await buyTokenForPlan(wallet, plan.tokenMint, amountLamports, plan.slippageBps);
+      const nextRemaining = remainingLamports - amountLamportsBig;
+      planWallet.remainingLamports = nextRemaining.toString();
+      planWallet.completedOrders = completedOrders + 1;
+      planWallet.failures = 0;
+      planWallet.lastSignature = buy.signature;
+      planWallet.updatedAt = new Date().toISOString();
+      planWallet.results = appendLimited(planWallet.results, `buy ${planWallet.completedOrders}/${plan.orderCount}: ${buy.signature}`);
+
+      await recordTradeEvents([{
+        userId: plan.userId,
+        type: "buy",
+        source: "dca",
+        tokenMint: plan.tokenMint,
+        walletLabel: wallet.label,
+        walletPublicKey: wallet.publicKey,
+        solLamportsSpent: String(amountLamports),
+        tokenAmount: buy.outputAmount || null,
+        signature: buy.signature
+      }]);
+
+      if (planWallet.completedOrders >= plan.orderCount || nextRemaining <= 0n) {
+        planWallet.status = "completed";
+        planWallet.completedAt = new Date().toISOString();
+      }
+
+      return {
+        changed: true,
+        message: `${planWallet.label}: DCA buy ${planWallet.completedOrders}/${plan.orderCount}, ${lamportsToSol(amountLamports)} SOL, ${buy.signature}${buy.feeStatus}`
+      };
+    }
+
+    const remainingRawAmount = BigInt(planWallet.remainingRawAmount || 0);
+    const amountRaw = remainingRawAmount / BigInt(remainingOrders);
+    const sell = await sellTokenAmountFromWallet(wallet, plan.tokenMint, amountRaw, plan.slippageBps);
+    const nextRemaining = remainingRawAmount - amountRaw;
+    planWallet.remainingRawAmount = nextRemaining.toString();
+    planWallet.completedOrders = completedOrders + 1;
+    planWallet.failures = 0;
+    planWallet.lastSignature = sell.signature;
+    planWallet.updatedAt = new Date().toISOString();
+    planWallet.results = appendLimited(planWallet.results, `sell ${planWallet.completedOrders}/${plan.orderCount}: ${sell.signature}`);
+
+    await recordTradeEvents([{
+      userId: plan.userId,
+      type: "sell",
+      source: "dca",
+      tokenMint: plan.tokenMint,
+      walletLabel: wallet.label,
+      walletPublicKey: wallet.publicKey,
+      tokenAmount: sell.tokenAmount,
+      solLamportsReceived: sell.outputLamports,
+      signature: sell.signature
+    }]);
+
+    if (planWallet.completedOrders >= plan.orderCount || nextRemaining <= 0n) {
+      planWallet.status = "completed";
+      planWallet.completedAt = new Date().toISOString();
+    }
+
+    return {
+      changed: true,
+      message: `${planWallet.label}: DCA sell ${planWallet.completedOrders}/${plan.orderCount}, ${sell.signature}${sell.feeStatus}`
+    };
+  } catch (error) {
+    const failures = Number.parseInt(planWallet.failures || 0, 10) + 1;
+    planWallet.failures = failures;
+    planWallet.lastError = friendlyError(error);
+    planWallet.updatedAt = new Date().toISOString();
+    if (failures >= 3) {
+      planWallet.status = "failed";
+    }
+    return {
+      changed: true,
+      message: `${planWallet.label}: DCA ${plan.side} failed (${failures}/3) - ${friendlyError(error)}`
+    };
   }
 }
 
@@ -2354,6 +2746,7 @@ async function showWalletMenu(chatId) {
         [{ text: "💴💶💷 Create Wallet Set", callback_data: "create_wallets" }],
         [{ text: "Import Wallet", callback_data: "import_wallet" }],
         [{ text: "💳 My Wallets", callback_data: "list_wallets" }],
+        [{ text: "Positions Overview", callback_data: "positions_overview" }],
         [{ text: "PnL / Results", callback_data: "pnl_results" }],
         [{ text: "Close Empty Token Accounts", callback_data: "close_empty_accounts" }]
       ]
@@ -2369,6 +2762,7 @@ async function showBundleMenu(chatId) {
       inline_keyboard: [
         [{ text: "🧲 Bundle Buy", callback_data: "batch_buy" }],
         [{ text: "🧲 Bundle Sell", callback_data: "batch_sell" }],
+        [{ text: "DCA Buy", callback_data: "dca_buy" }, { text: "DCA Sell", callback_data: "dca_sell" }],
         [{ text: "Auto Sell / Timed Plan", callback_data: "timed_trade_plans" }],
         [{ text: "Copy Trade", callback_data: "copy_trade_info" }]
       ]
@@ -2392,6 +2786,144 @@ async function showWithdrawalMenu(chatId) {
 
 async function showPnlResults(chatId, userId) {
   await say(chatId, await pnlSummaryText(userId));
+}
+
+async function showPositionsOverview(chatId, userId) {
+  const positions = await buildPositionsOverview(userId);
+
+  if (positions.length === 0) {
+    await say(chatId, withBrandFooter("Positions Overview\n\nNo token positions found yet. Buy or import funded wallets, then refresh balances."));
+    return;
+  }
+
+  const rows = positions.slice(0, 8).map((position, index) => {
+    const valueLine = position.estimatedValueLamports !== null
+      ? `Value: ${lamportsBigToSol(position.estimatedValueLamports)} SOL est.`
+      : `Value: unavailable${position.valueError ? ` - ${position.valueError}` : ""}`;
+    const profitLine = position.estimatedValueLamports !== null
+      ? `Profit: ${formatSignedLamports(position.estimatedValueLamports + position.received - position.spent)} SOL${position.spent > 0n ? ` / ${formatPercentMove(position.estimatedValueLamports + position.received - position.spent, position.spent)}` : ""}`
+      : `Realized: ${formatSignedLamports(position.received - position.spent)} SOL`;
+
+    return [
+      `${index + 1}. ${shortMint(position.tokenMint)}`,
+      profitLine,
+      valueLine,
+      `Balance: ${formatTokenAmount(position.uiAmount)} tokens across ${position.walletCount} wallet(s)`,
+      `Buys/Sells: ${position.buys}/${position.sells}`,
+      `Dex: ${dexScreenerUrl(position.tokenMint)}`
+    ].join("\n");
+  });
+
+  const keyboard = [
+    [{ text: "Buy", callback_data: "batch_buy" }, { text: "Sell & Manage", callback_data: "batch_sell" }],
+    [{ text: "Refresh", callback_data: "positions_overview" }],
+    ...positions.slice(0, 5).map((position, index) => ([{
+      text: `Dex ${index + 1}: ${shortMint(position.tokenMint)}`,
+      url: dexScreenerUrl(position.tokenMint)
+    }]))
+  ];
+
+  await telegram("sendMessage", {
+    chat_id: chatId,
+    text: withBrandFooter(["Positions Overview", ...rows].join("\n\n")),
+    disable_web_page_preview: true,
+    reply_markup: { inline_keyboard: keyboard }
+  });
+}
+
+async function buildPositionsOverview(userId) {
+  const store = await readWalletStore();
+  const wallets = walletsForOwner(store, userId);
+  const history = await readTradeHistory();
+  const positions = new Map();
+
+  for (const trade of history.trades.filter((item) => String(item.userId) === String(userId))) {
+    const position = ensurePosition(positions, trade.tokenMint);
+    if (trade.type === "buy") {
+      position.buys += 1;
+      position.spent += BigInt(trade.solLamportsSpent || 0);
+    } else if (trade.type === "sell") {
+      position.sells += 1;
+      position.received += BigInt(trade.solLamportsReceived || 0);
+    }
+  }
+
+  await runWithConcurrency(wallets, 1, async (wallet) => {
+    try {
+      const keypair = decryptWallet(wallet);
+      const { accounts } = await getOwnedTokenAccountsWithWarnings(keypair.publicKey);
+      for (const account of accounts.filter((item) => item.rawAmount > 0n)) {
+        const position = ensurePosition(positions, account.mint);
+        position.rawAmount += account.rawAmount;
+        position.uiAmount += Number.parseFloat(account.uiAmount || "0") || 0;
+        position.wallets.add(wallet.publicKey);
+        position.accounts.push({
+          walletPublicKey: wallet.publicKey,
+          rawAmount: account.rawAmount
+        });
+      }
+    } catch (error) {
+      // Keep the positions page usable even if one wallet balance lookup is rate-limited.
+    }
+  });
+
+  const rows = [...positions.values()]
+    .filter((position) => position.rawAmount > 0n || position.buys > 0 || position.sells > 0)
+    .sort((a, b) => Number((b.rawAmount > 0n ? 1 : 0) - (a.rawAmount > 0n ? 1 : 0)) || Number((b.spent - b.received) - (a.spent - a.received)));
+
+  for (const position of rows.slice(0, 5)) {
+    try {
+      position.estimatedValueLamports = await estimatePositionValue(position);
+    } catch (error) {
+      position.estimatedValueLamports = null;
+      position.valueError = friendlyError(error);
+    }
+  }
+
+  return rows;
+}
+
+function ensurePosition(positions, tokenMint) {
+  const existing = positions.get(tokenMint);
+  if (existing) return existing;
+
+  const created = {
+    tokenMint,
+    buys: 0,
+    sells: 0,
+    spent: 0n,
+    received: 0n,
+    rawAmount: 0n,
+    uiAmount: 0,
+    wallets: new Set(),
+    accounts: [],
+    estimatedValueLamports: null,
+    valueError: null,
+    get walletCount() {
+      return this.wallets.size;
+    }
+  };
+  positions.set(tokenMint, created);
+  return created;
+}
+
+async function estimatePositionValue(position) {
+  if (!CONFIG.jupiterApiKey) {
+    throw new Error("Jupiter API key missing");
+  }
+
+  let total = 0n;
+  for (const account of position.accounts.slice(0, 8)) {
+    const order = await createJupiterOrder({
+      taker: new PublicKey(account.walletPublicKey),
+      inputMint: position.tokenMint,
+      outputMint: SOL_MINT,
+      amount: account.rawAmount.toString(),
+      slippageBps: CONFIG.defaultSlippageBps
+    });
+    total += BigInt(order.outAmount || order.outputAmount || 0);
+  }
+  return total;
 }
 
 async function pnlSummaryText(userId, tokenFilter = null) {
@@ -2517,6 +3049,21 @@ function timedTradePlanIntroText() {
   ].join("\n"));
 }
 
+function dcaIntroText(side) {
+  const label = side === "buy" ? "DCA Buy" : "DCA Sell";
+  const action = side === "buy"
+    ? "splits one total SOL amount into smaller buys over time."
+    : "splits one selected token amount into smaller sells over time.";
+  return withBrandFooter([
+    label,
+    "",
+    `This ${action}`,
+    "You choose the token, wallets, number of orders, interval, and slippage.",
+    "",
+    "Send the token mint address to start."
+  ].join("\n"));
+}
+
 function withBrandFooter(text) {
   return `${text}\n\n${BRAND_FOOTER}`;
 }
@@ -2535,6 +3082,71 @@ async function showMenu(chatId, userId) {
     chat_id: chatId,
     text: withBrandFooter(`${state.paused ? "Status: emergency stop active.\n\n" : ""}Choose a wallet operation:`),
     reply_markup: { inline_keyboard: menu }
+  });
+}
+
+async function sendQuickAmountPrompt(chatId, text, options = {}) {
+  const lastRow = options.allowMax
+    ? [{ text: "Use Max", callback_data: "quick:max" }, { text: "Custom", callback_data: "quick:custom" }]
+    : [{ text: "Custom", callback_data: "quick:custom" }];
+
+  await telegram("sendMessage", {
+    chat_id: chatId,
+    text: withBrandFooter(text),
+    disable_web_page_preview: true,
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "0.05 SOL", callback_data: "quick:0.05" }, { text: "0.10 SOL", callback_data: "quick:0.10" }],
+        [{ text: "0.50 SOL", callback_data: "quick:0.50" }, { text: "1 SOL", callback_data: "quick:1" }],
+        lastRow
+      ]
+    }
+  });
+}
+
+async function sendQuickPercentPrompt(chatId, text) {
+  await telegram("sendMessage", {
+    chat_id: chatId,
+    text: withBrandFooter(text),
+    disable_web_page_preview: true,
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "25%", callback_data: "quick:25" }, { text: "50%", callback_data: "quick:50" }, { text: "100%", callback_data: "quick:100" }],
+        [{ text: "Custom %", callback_data: "quick:custom" }]
+      ]
+    }
+  });
+}
+
+async function sendQuickSlippagePrompt(chatId, text) {
+  await telegram("sendMessage", {
+    chat_id: chatId,
+    text: withBrandFooter(text),
+    disable_web_page_preview: true,
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "Default", callback_data: "quick:default" }, { text: "100 bps", callback_data: "quick:100" }],
+        [{ text: "300 bps", callback_data: "quick:300" }, { text: "500 bps", callback_data: "quick:500" }],
+        [{ text: "Custom", callback_data: "quick:custom" }]
+      ]
+    }
+  });
+}
+
+async function sendQuickChoicePrompt(chatId, text, rows) {
+  await telegram("sendMessage", {
+    chat_id: chatId,
+    text: withBrandFooter(text),
+    disable_web_page_preview: true,
+    reply_markup: {
+      inline_keyboard: [
+        ...rows.map((row) => row.map((button) => ({
+          text: button.text,
+          callback_data: `quick:${button.value}`
+        }))),
+        [{ text: "Custom", callback_data: "quick:custom" }]
+      ]
+    }
   });
 }
 
@@ -2648,6 +3260,16 @@ async function readTradePlans() {
 
 async function writeTradePlans(store) {
   await fs.writeFile(tradePlansPath(), JSON.stringify(store, null, 2));
+}
+
+async function readDcaPlans() {
+  const store = await readJson(dcaPlansPath());
+  if (!Array.isArray(store.plans)) store.plans = [];
+  return store;
+}
+
+async function writeDcaPlans(store) {
+  await fs.writeFile(dcaPlansPath(), JSON.stringify(store, null, 2));
 }
 
 async function readTradeHistory() {
@@ -3142,6 +3764,14 @@ function parseDelayMinutes(text) {
   return value;
 }
 
+function parseDcaOrderCount(text) {
+  const value = Number.parseInt(text, 10);
+  if (!Number.isInteger(value) || value < 2 || value > 50) {
+    throw new Error("DCA order count must be from 2 to 50.");
+  }
+  return value;
+}
+
 function parseOptionalTriggerPercent(text) {
   const normalized = text.trim().toLowerCase();
   if (["0", "off", "none", "no", "disable", "disabled"].includes(normalized)) {
@@ -3194,12 +3824,51 @@ function calculateFeeLamports(amountLamports) {
   return Number(feeLamports);
 }
 
+function bigIntToSafeNumber(value, label) {
+  if (value <= 0n) {
+    throw new Error(`${label} rounded to zero.`);
+  }
+  if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error(`${label} is too large.`);
+  }
+  return Number(value);
+}
+
 function recommendedBuyFundingLamports(amountLamports) {
   return amountLamports + CONFIG.buyReserveLamports;
 }
 
 function lamportsToSol(lamports) {
   return (lamports / LAMPORTS_PER_SOL).toFixed(9).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function lamportsBigToSol(value) {
+  const amount = BigInt(value);
+  const sign = amount < 0n ? "-" : "";
+  const absolute = amount < 0n ? -amount : amount;
+  const whole = absolute / BigInt(LAMPORTS_PER_SOL);
+  const fraction = (absolute % BigInt(LAMPORTS_PER_SOL)).toString().padStart(9, "0").replace(/0+$/, "");
+  return `${sign}${whole.toString()}${fraction ? `.${fraction}` : ""}`;
+}
+
+function formatSignedLamports(value) {
+  const amount = BigInt(value);
+  return `${amount >= 0n ? "+" : "-"}${lamportsBigToSol(amount >= 0n ? amount : -amount)}`;
+}
+
+function formatPercentMove(delta, basis) {
+  if (basis <= 0n) return "";
+  const pct = (Number(delta) / Number(basis)) * 100;
+  if (!Number.isFinite(pct)) return "";
+  return `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`;
+}
+
+function formatTokenAmount(value) {
+  if (!Number.isFinite(value)) return "0";
+  if (value === 0) return "0";
+  if (Math.abs(value) >= 1_000_000) return value.toLocaleString("en-US", { maximumFractionDigits: 2 });
+  if (Math.abs(value) >= 1) return value.toLocaleString("en-US", { maximumFractionDigits: 6 });
+  return value.toPrecision(6).replace(/0+$/, "").replace(/\.$/, "");
 }
 
 function formatFeeRate() {
@@ -3209,6 +3878,14 @@ function formatFeeRate() {
 function shortMint(value) {
   const text = String(value);
   return text.length > 12 ? `${text.slice(0, 4)}...${text.slice(-4)}` : text;
+}
+
+function dexScreenerUrl(tokenMint) {
+  return `https://dexscreener.com/solana/${tokenMint}`;
+}
+
+function appendLimited(list, item, limit = 20) {
+  return [...(Array.isArray(list) ? list : []), item].slice(-limit);
 }
 
 function formatFundConfirm(data) {
@@ -3285,6 +3962,42 @@ function formatTimedTradePlanConfirm(data) {
     "The bot buys now, then watches once per minute while awake. If Render was asleep, it catches up when it wakes.",
     "Reply `yes` to execute or `/cancel`."
   ].join("\n");
+}
+
+function formatDcaPlanConfirm(data) {
+  const lines = [
+    `Confirm DCA ${data.side}:`,
+    `Token mint: ${data.tokenMint}`,
+    `Wallets: ${data.walletIndexes.join(", ")}`,
+    `Orders: ${data.orderCount}`,
+    `Interval: ${data.intervalMinutes} minute(s)`,
+    `Slippage: ${data.slippageBps} bps`
+  ];
+
+  if (data.side === "buy") {
+    const totalLamports = solToLamports(data.totalSol);
+    const feeLamports = calculateFeeLamports(totalLamports);
+    lines.push(
+      `Total spend per wallet: ${data.totalSol} SOL`,
+      `Approx net swap total: ${lamportsToSol(totalLamports - feeLamports)} SOL`,
+      `Approx each order: ${lamportsToSol(Math.floor(totalLamports / data.orderCount))} SOL before fee split`,
+      `Recommended balance per wallet: ${lamportsToSol(recommendedBuyFundingLamports(totalLamports))} SOL`
+    );
+  } else {
+    lines.push(
+      `Total percent to sell per wallet: ${data.totalPercent}%`,
+      "The bot captures the current token balance at confirmation, then sells that amount in equal slices."
+    );
+  }
+
+  lines.push(
+    `Platform fee: ${formatFeeRate()} ${data.side === "buy" ? "of SOL input" : "of SOL output"} to ${CONFIG.feeWallet}`,
+    "",
+    "The first slice runs on the next runner tick, usually within 1 minute. If Render sleeps, it catches up when awake.",
+    "Reply `yes` to execute or `/cancel`."
+  );
+
+  return lines.join("\n");
 }
 
 function formatSweepSolConfirm(data) {

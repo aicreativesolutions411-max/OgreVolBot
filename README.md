@@ -8,7 +8,9 @@ Telegram bot for legitimate, auditable Solana wallet operations:
 - Fund managed wallets from an imported wallet
 - Batch buy a token through Jupiter
 - Batch sell a token through Jupiter
+- DCA buy and DCA sell plans with scheduled slices
 - Timed trade plans: buy now, sell later by timer, take-profit, or stop-loss
+- Positions Overview with live token balances, estimated value when Jupiter can quote, PnL, and Dexscreener links
 - PnL / Results from bot-recorded buys and sells
 - Copy buttons for managed wallet addresses
 - Sweep SOL to a destination wallet
@@ -98,6 +100,8 @@ If Telegram file upload is failing, users can paste recovery text instead. Resto
 
 Quote failures usually mean Jupiter cannot build a route for the token/amount, liquidity is too low, slippage is too low, the wallet does not have enough SOL after fees, or Jupiter/RPC is rate-limiting the request.
 
+The Bundle submenu includes **DCA Buy** and **DCA Sell**. DCA Buy splits a total SOL amount per wallet into smaller buys over time. DCA Sell captures the current token balance at confirmation, then sells the selected percent in smaller slices. Both plans are stored in `dca-plans.json`, check once per minute while awake, and resume from saved data after a restart if `DATA_DIR` is still available.
+
 The main menu shows this as **Volume**. Under the hood it is a timed trade plan: it buys a token now from selected user wallets, then sells later when one of the user's configured exits triggers:
 
 - Timer exit, such as sell 15 minutes after buy
@@ -118,7 +122,7 @@ The front menu is intentionally short:
 - 💾 Backup / Restore
 - 🏦 Withdrawal
 
-The Wallet menu includes wallet creation/import, My Wallets with copy buttons, and PnL / Results. The Bundle menu contains Bundle Buy, Bundle Sell, Auto Sell / Timed Plan, and Copy Trade info. Copy Trade is shown as a setup/info item until a full wallet-watcher implementation is added.
+The Wallet menu includes wallet creation/import, My Wallets with copy buttons, Positions Overview, and PnL / Results. The Bundle menu contains Bundle Buy, Bundle Sell, DCA Buy, DCA Sell, Auto Sell / Timed Plan, and Copy Trade info. Copy Trade is shown as a setup/info item until a full wallet-watcher implementation is added.
 
 Menu and buy-flow messages include:
 
