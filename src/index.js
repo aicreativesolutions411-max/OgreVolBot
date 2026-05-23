@@ -4390,7 +4390,7 @@ async function startAutoSnipeFlow(chatId, userId, messageId = null) {
       `Scored: ${result.scoredCount}`,
       `Strict qualified: ${result.strictCount}`,
       `Backup qualified: ${result.backupCount}`,
-      `Safety passed: ${result.freshCount}`,
+      `Usable after precheck: ${result.freshCount}`,
       "",
       "Try again in a minute, or use Scan Early Plays to review picks manually."
     ].join("\n")), {
@@ -4424,10 +4424,11 @@ async function startAutoSnipeFlow(chatId, userId, messageId = null) {
   });
 
   await sendSniperWalletPrompt(chatId, userId, result.pick, [
-    `AutoSnipe picked the strongest ${result.tier === "strict" ? "strict" : "backup"} setup it found.`,
+    `AutoSnipe picked the strongest ${formatAutoSnipeTier(result.tier)} setup it found.`,
+    result.pick.autoSnipeSafetyNote ? `Precheck: ${result.pick.autoSnipeSafetyNote}` : "",
     `Defaults after amount: +${AUTOSNIPE_TAKE_PROFIT_PCT}% take-profit, -${AUTOSNIPE_STOP_LOSS_PCT}% stop-loss, ${AUTOSNIPE_SLIPPAGE_BPS} bps slippage.`,
     "Choose wallets, then choose SOL amount. The next screen will be Confirm."
-  ].join("\n"));
+  ].filter(Boolean).join("\n"));
 }
 
 async function startSniperPickFlow(chatId, userId, tokenMint, messageId = null) {
@@ -5088,18 +5089,39 @@ function freshAutoSnipeRows(rows, previousShown, recentTokens) {
 }
 
 async function filterAutoSnipeMintSafe(rows) {
-  const safe = [];
+  const preferred = [];
+  const fallback = [];
   for (const row of rows) {
     try {
       const safety = await getMintSafetyInfo(row.tokenMint);
-      if (safety.tokenProgram !== TOKEN_PROGRAM_ID.toBase58()) continue;
-      if (safety.freezeAuthority || safety.mintAuthority) continue;
-      safe.push(row);
+      if (safety.tokenProgram === TOKEN_2022_PROGRAM_ID.toBase58()) continue;
+      if (safety.freezeAuthority) continue;
+      if (safety.mintAuthority) {
+        fallback.push({
+          ...row,
+          autoSnipeSafetyNote: "mint authority is active; final buy safety may block it"
+        });
+        continue;
+      }
+      preferred.push({
+        ...row,
+        autoSnipeSafetyNote: "mint precheck passed"
+      });
     } catch {
-      // If we cannot prove the mint is clean enough, AutoSnipe skips it.
+      fallback.push({
+        ...row,
+        autoSnipeSafetyNote: "mint precheck was unavailable; final buy safety will recheck before sending"
+      });
     }
   }
-  return safe;
+  return preferred.length > 0 ? preferred : fallback;
+}
+
+function formatAutoSnipeTier(tier) {
+  if (tier === "strict") return "strict";
+  if (tier === "backup") return "backup";
+  if (tier === "repeat") return "repeat-strength";
+  return "available";
 }
 
 async function recentAutoSnipeTokenSet(userId) {
