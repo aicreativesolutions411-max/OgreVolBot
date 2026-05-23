@@ -4388,7 +4388,9 @@ async function startAutoSnipeFlow(chatId, userId, messageId = null) {
       "AutoSnipe did not find a strong enough fresh setup right now.",
       "",
       `Scored: ${result.scoredCount}`,
-      `Qualified: ${result.qualifiedCount}`,
+      `Strict qualified: ${result.strictCount}`,
+      `Backup qualified: ${result.backupCount}`,
+      `Safety passed: ${result.freshCount}`,
       "",
       "Try again in a minute, or use Scan Early Plays to review picks manually."
     ].join("\n")), {
@@ -4407,19 +4409,22 @@ async function startAutoSnipeFlow(chatId, userId, messageId = null) {
     data: {
       tokenMint: result.pick.tokenMint,
       settings: result.settings,
-      score: result.pick,
-      autoSnipe: true,
-      planSource: "autosnipe",
-      autoSnipeStats: {
-        scoredCount: result.scoredCount,
-        qualifiedCount: result.qualifiedCount,
-        freshCount: result.freshCount
+        score: result.pick,
+        autoSnipe: true,
+        planSource: "autosnipe",
+        autoSnipeStats: {
+          scoredCount: result.scoredCount,
+          qualifiedCount: result.qualifiedCount,
+          strictCount: result.strictCount,
+          backupCount: result.backupCount,
+          freshCount: result.freshCount,
+          tier: result.tier
+        }
       }
-    }
   });
 
   await sendSniperWalletPrompt(chatId, userId, result.pick, [
-    "AutoSnipe picked the strongest fresh setup it found.",
+    `AutoSnipe picked the strongest ${result.tier === "strict" ? "strict" : "backup"} setup it found.`,
     `Defaults after amount: +${AUTOSNIPE_TAKE_PROFIT_PCT}% take-profit, -${AUTOSNIPE_STOP_LOSS_PCT}% stop-loss, ${AUTOSNIPE_SLIPPAGE_BPS} bps slippage.`,
     "Choose wallets, then choose SOL amount. The next screen will be Confirm."
   ].join("\n"));
@@ -4959,7 +4964,7 @@ function pruneSniperScanState() {
 
 function rotateSniperCandidatePool(candidates, scanState) {
   const unique = uniqueSniperCandidates(candidates);
-  return rotateItems(unique.slice(0, 180), scanState.candidateOffset).slice(0, 72);
+  return rotateItems(unique.slice(0, 260), scanState.candidateOffset).slice(0, 108);
 }
 
 function uniqueSniperCandidates(candidates) {
@@ -5029,14 +5034,33 @@ async function findAutoSnipePick(userId) {
 
   const recentTokens = await recentAutoSnipeTokenSet(userId);
   const previousShown = new Set(scanState.previousShown || []);
-  const qualified = scored
+  const strictQualified = scored
     .filter((item) => isAutoSnipePick(item))
     .sort(compareAutoSnipeScores);
-  const fresh = qualified.filter((item) => {
-    const recentlySeen = previousShown.has(item.tokenMint) || recentTokens.has(item.tokenMint);
-    return !recentlySeen || shouldRepeatAutoSnipePick(item);
-  });
-  const safeFresh = await filterAutoSnipeMintSafe(fresh.slice(0, 12));
+  const strictMints = new Set(strictQualified.map((item) => item.tokenMint));
+  const backupQualified = scored
+    .filter((item) => !strictMints.has(item.tokenMint))
+    .filter((item) => isAutoSnipeBackupPick(item))
+    .sort(compareAutoSnipeScores);
+
+  let tier = "strict";
+  let safeFresh = await filterAutoSnipeMintSafe(
+    freshAutoSnipeRows(strictQualified, previousShown, recentTokens).slice(0, 18)
+  );
+  if (safeFresh.length === 0) {
+    tier = "backup";
+    safeFresh = await filterAutoSnipeMintSafe(
+      freshAutoSnipeRows(backupQualified, previousShown, recentTokens).slice(0, 30)
+    );
+  }
+  if (safeFresh.length === 0) {
+    tier = "repeat";
+    safeFresh = await filterAutoSnipeMintSafe(
+      uniqueSniperScoreRows([...strictQualified, ...backupQualified])
+        .filter((item) => shouldRepeatAutoSnipePick(item))
+        .slice(0, 18)
+    );
+  }
   const pick = safeFresh[0] || null;
 
   if (pick) {
@@ -5047,9 +5071,20 @@ async function findAutoSnipePick(userId) {
     pick,
     settings,
     scoredCount: scored.length,
-    qualifiedCount: qualified.length,
-    freshCount: safeFresh.length
+    qualifiedCount: strictQualified.length + backupQualified.length,
+    strictCount: strictQualified.length,
+    backupCount: backupQualified.length,
+    freshCount: safeFresh.length,
+    tier
   };
+}
+
+function freshAutoSnipeRows(rows, previousShown, recentTokens) {
+  const fresh = rows.filter((item) => {
+    const recentlySeen = previousShown.has(item.tokenMint) || recentTokens.has(item.tokenMint);
+    return !recentlySeen || shouldRepeatAutoSnipePick(item);
+  });
+  return fresh.length > 0 ? fresh : rows.filter((item) => shouldRepeatAutoSnipePick(item));
 }
 
 async function filterAutoSnipeMintSafe(rows) {
@@ -5089,40 +5124,62 @@ function isAutoSnipePick(item) {
   const liquidityToMarketCap = item.marketCap > 0 ? item.liquidityUsd / item.marketCap : 0;
 
   return item.category !== "Avoid"
-    && item.score >= 82
-    && item.rugRisk <= 38
-    && item.exitRisk <= 45
-    && item.manipulationScore <= 55
+    && item.score >= 78
+    && item.rugRisk <= 48
+    && item.exitRisk <= 58
+    && item.manipulationScore <= 68
     && item.scalpScore >= 4
-    && item.marketCap >= 8_000
-    && item.marketCap <= 120_000
-    && item.liquidityUsd >= 6_000
-    && item.liquidityUsd <= 80_000
-    && liquidityToMarketCap >= 0.06
-    && liquidityToMarketCap <= 0.85
-    && (item.volume5m >= 1_000 || item.volumeH1 >= 12_000)
-    && item.buyPressure >= 1.15
-    && item.m5 >= -4
-    && item.m5 <= 35
-    && item.h1 >= 0
+    && item.marketCap >= 5_000
+    && item.marketCap <= 220_000
+    && item.liquidityUsd >= 4_000
+    && item.liquidityUsd <= 120_000
+    && liquidityToMarketCap >= 0.025
+    && liquidityToMarketCap <= 1.25
+    && (item.volume5m >= 500 || item.volumeH1 >= 5_000)
+    && item.buyPressure >= 1.03
+    && item.m5 >= -8
+    && item.m5 <= 55
+    && item.h1 >= -5
     && item.h1 <= 120
     && !flags.has("hard dump")
     && !flags.has("dumping")
     && !flags.has("sell pressure")
-    && !flags.has("low volume")
-    && !flags.has("thin liquidity")
-    && !flags.has("weak liquidity");
+    && !flags.has("low volume");
+}
+
+function isAutoSnipeBackupPick(item) {
+  const flags = new Set(item.riskFlags || []);
+  const liquidityToMarketCap = item.marketCap > 0 ? item.liquidityUsd / item.marketCap : 0;
+
+  return item.category !== "Avoid"
+    && item.score >= 64
+    && item.rugRisk <= 64
+    && item.exitRisk <= 76
+    && item.manipulationScore <= 84
+    && item.scalpScore >= 3
+    && item.marketCap >= 3_000
+    && item.marketCap <= 450_000
+    && item.liquidityUsd >= 2_500
+    && liquidityToMarketCap >= 0.012
+    && (item.volume5m >= 250 || item.volumeH1 >= 2_500)
+    && item.buyPressure >= 0.95
+    && item.m5 >= -12
+    && item.h1 >= -10
+    && !flags.has("hard dump")
+    && !flags.has("sell pressure")
+    && !flags.has("low volume");
 }
 
 function shouldRepeatAutoSnipePick(item) {
-  return item.score >= 92
-    && item.rugRisk <= 30
-    && item.exitRisk <= 35
+  return item.score >= 86
+    && item.rugRisk <= 42
+    && item.exitRisk <= 50
     && item.scalpScore >= 5
-    && item.buyPressure >= 1.35
+    && item.buyPressure >= 1.2
     && item.m5 >= 2
-    && item.h1 >= 8
-    && !(item.riskFlags || []).length;
+    && item.h1 >= 5
+    && !(item.riskFlags || []).includes("hard dump")
+    && !(item.riskFlags || []).includes("sell pressure");
 }
 
 function compareAutoSnipeScores(a, b) {
