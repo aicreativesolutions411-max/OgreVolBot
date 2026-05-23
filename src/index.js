@@ -50,6 +50,9 @@ const AUTOSNIPE_TAKE_PROFIT_PCT = 15;
 const AUTOSNIPE_STOP_LOSS_PCT = 8;
 const AUTOSNIPE_SLIPPAGE_BPS = 400;
 const AUTOSNIPE_SELL_DELAY_SECONDS = 300;
+const AUTO_BUNDLE_TAKE_PROFIT_PCT = 60;
+const AUTO_BUNDLE_STOP_LOSS_PCT = 10;
+const AUTO_BUNDLE_SELL_DELAY_SECONDS = 172800;
 const PNL_CARD_STYLE = Object.freeze({
   width: 1200,
   height: 675,
@@ -126,6 +129,7 @@ const PRIVATE_CHAT_ACTIONS = new Set([
   "restore_backup",
   "rescue_backup_keys",
   "fund_wallets",
+  "auto_bundle",
   "batch_buy",
   "batch_sell",
   "trade_buy",
@@ -797,6 +801,26 @@ async function handleCallback(query, userId) {
     case "bundle_menu":
       await showBundleMenu(chatId, messageId);
       break;
+    case "auto_bundle":
+      sessions.set(chatId, {
+        step: "auto_bundle_token",
+        userId,
+        data: {
+          tradeMode: "bundle",
+          autoBundle: true,
+          planSource: "auto_bundle",
+          allowRepeat: false
+        }
+      });
+      await say(chatId, withBrandFooter([
+        "Auto Bundle",
+        "",
+        "Send the token mint / CA.",
+        "",
+        `Default exits: -${AUTO_BUNDLE_STOP_LOSS_PCT}% stop-loss and +${AUTO_BUNDLE_TAKE_PROFIT_PCT}% take-profit.`,
+        "After wallet and amount, you can use defaults or customize full exits, wallet-by-wallet profit targets, or 25% ladder chunks."
+      ].join("\n")));
+      break;
     case "withdrawal_menu":
       await showWithdrawalMenu(chatId, messageId);
       break;
@@ -1466,6 +1490,110 @@ async function continueFlow(chatId, text, session) {
             "Send total percent to DCA sell from this wallet, from 1 to 100."
           ].join("\n"));
         }
+        break;
+      case "auto_bundle_token":
+        session.data.tokenMint = parsePublicKey(text).toBase58();
+        session.step = "auto_bundle_wallets";
+        await say(chatId, await walletPrompt(session.userId, [
+          `Dexscreener: ${dexScreenerUrl(session.data.tokenMint)}`,
+          "",
+          "Send wallet numbers, `all`, or `group: group name` for Auto Bundle."
+        ].join("\n")));
+        break;
+      case "auto_bundle_wallets":
+        session.data.walletIndexes = await parseWalletSelectionOrGroup(text, session.userId);
+        session.data.walletSelector = text.trim();
+        session.step = "auto_bundle_amount";
+        await sendQuickAmountPrompt(chatId, [
+          "Choose SOL amount to buy per selected wallet.",
+          "",
+          `Default exits are -${AUTO_BUNDLE_STOP_LOSS_PCT}% stop-loss and +${AUTO_BUNDLE_TAKE_PROFIT_PCT}% take-profit. You can customize exits next.`
+        ].join("\n"));
+        break;
+      case "auto_bundle_amount":
+        session.data.amountSol = parsePositiveNumber(text);
+        applyAutoBundleDefaults(session);
+        session.step = "auto_bundle_exit_mode";
+        await sendQuickChoicePrompt(chatId, [
+          "Choose Auto Bundle exit style.",
+          "",
+          "Default: full sell at +60%, full stop-loss at -10%.",
+          "Custom Full Exit: set your own TP/SL and fallback timer.",
+          "25% Ladder: sell chunks of the original bag at multiple profit levels.",
+          "By Wallet Targets: each wallet gets its own take-profit target."
+        ].join("\n"), [
+          [{ text: "Use Default", value: "default" }],
+          [{ text: "Custom Full Exit", value: "custom" }],
+          [{ text: "25% Ladder", value: "ladder" }],
+          [{ text: "By Wallet Targets", value: "wallets" }]
+        ], { includeCustom: false });
+        break;
+      case "auto_bundle_exit_mode":
+        await handleAutoBundleExitMode(chatId, text, session);
+        break;
+      case "auto_bundle_take_profit":
+        session.data.takeProfitPct = parseOptionalTriggerPercent(text);
+        session.data.takeProfitMode = "single";
+        session.step = "auto_bundle_stop_loss";
+        await sendQuickChoicePrompt(chatId, "Choose stop-loss percent. Example: `10` exits around -10%.", [
+          [{ text: "-8%", value: "8" }, { text: "-10%", value: "10" }],
+          [{ text: "-15%", value: "15" }, { text: "-25%", value: "25" }]
+        ]);
+        break;
+      case "auto_bundle_ladder_levels":
+        session.data.takeProfitMode = "ladder";
+        session.data.takeProfitLadder = parseTakeProfitLadder(text);
+        session.data.takeProfitPct = session.data.takeProfitLadder[0]?.pct || AUTO_BUNDLE_TAKE_PROFIT_PCT;
+        session.data.triggerSellPercent = session.data.takeProfitLadder[0]?.sellPercent || 25;
+        session.step = "auto_bundle_stop_loss";
+        await sendQuickChoicePrompt(chatId, [
+          `Ladder saved: ${formatTakeProfitLadder(session.data.takeProfitLadder)}`,
+          "",
+          "Choose stop-loss percent. Stop-loss always exits the remaining bag."
+        ].join("\n"), [
+          [{ text: "-8%", value: "8" }, { text: "-10%", value: "10" }],
+          [{ text: "-15%", value: "15" }, { text: "-25%", value: "25" }]
+        ]);
+        break;
+      case "auto_bundle_wallet_targets":
+        session.data.takeProfitMode = "wallets";
+        session.data.walletTakeProfitTargets = parseWalletTakeProfitTargets(text, session.data.walletIndexes);
+        session.data.takeProfitPct = AUTO_BUNDLE_TAKE_PROFIT_PCT;
+        session.data.triggerSellPercent = 100;
+        session.step = "auto_bundle_stop_loss";
+        await sendQuickChoicePrompt(chatId, [
+          "Wallet take-profit targets saved.",
+          "",
+          formatWalletTakeProfitTargets(session.data),
+          "",
+          "Choose stop-loss percent. Stop-loss exits every selected wallet's remaining bag."
+        ].join("\n"), [
+          [{ text: "-8%", value: "8" }, { text: "-10%", value: "10" }],
+          [{ text: "-15%", value: "15" }, { text: "-25%", value: "25" }]
+        ]);
+        break;
+      case "auto_bundle_stop_loss":
+        session.data.stopLossPct = parseOptionalTriggerPercent(text);
+        session.step = "auto_bundle_timer";
+        await sendQuickChoicePrompt(chatId, "Choose fallback timer if TP/SL does not trigger first.", [
+          [{ text: "30 min", value: "30" }, { text: "1 hour", value: "60" }],
+          [{ text: "6 hours", value: "360" }, { text: "1 day", value: "1440" }],
+          [{ text: "2 days", value: "2880" }]
+        ]);
+        break;
+      case "auto_bundle_timer":
+        session.data.sellDelaySeconds = parseSellDelaySeconds(text);
+        session.data.sellDelayMinutes = session.data.sellDelaySeconds / 60;
+        session.step = "auto_bundle_slippage";
+        await sendQuickSlippagePrompt(chatId, `Choose slippage for Auto Bundle, or type default for ${CONFIG.defaultSlippageBps} bps.`);
+        break;
+      case "auto_bundle_slippage":
+        session.data.slippageBps = parseSlippage(text);
+        session.step = "auto_bundle_confirm";
+        await sendConfirmPrompt(chatId, withBrandFooter(formatTimedTradePlanConfirm(session.data)));
+        break;
+      case "auto_bundle_confirm":
+        await confirmOrCancel(chatId, text, () => createTimedTradePlanFlow(chatId, session));
         break;
       case "buy_token":
         session.data.tokenMint = parsePublicKey(text).toBase58();
@@ -2481,14 +2609,17 @@ async function sellAllTokensFlow(chatId, session) {
 
 async function createTimedTradePlanFlow(chatId, session) {
   const store = await readWalletStore();
-  const wallets = session.data.walletIndexes.map((index) => getWalletAt(store, index, session.userId));
+  const selectedWallets = session.data.walletIndexes.map((index) => ({
+    index,
+    wallet: getWalletAt(store, index, session.userId)
+  }));
   const amountLamports = solToLamports(session.data.amountSol);
   const planSource = session.data.planSource || (session.data.autoSnipe ? "autosnipe" : "timed_plan");
   const results = [];
   const planWallets = [];
   const tradeEvents = [];
 
-  await runWithConcurrency(wallets, CONFIG.bundleConcurrency, async (wallet) => {
+  await runWithConcurrency(selectedWallets, CONFIG.bundleConcurrency, async ({ index, wallet }) => {
     try {
       const result = await buyTokenForPlan(wallet, session.data.tokenMint, amountLamports, session.data.slippageBps, { trackTokenDelta: true });
       results.push(formatBuySuccessLine(wallet, result.amountLamports, result.feeLamports, result.swapLamports, result, result.feeStatus));
@@ -2511,6 +2642,8 @@ async function createTimedTradePlanFlow(chatId, session) {
         buySignature: result.signature,
         currentLoop: 1,
         completedLoops: 0,
+        takeProfitPct: walletTakeProfitForIndex(session.data, index),
+        completedTakeProfitLevels: [],
         sellAfterAt: new Date(Date.now() + session.data.sellDelaySeconds * 1000).toISOString(),
         status: "watching",
         lastCheckedAt: null,
@@ -2523,7 +2656,7 @@ async function createTimedTradePlanFlow(chatId, session) {
 
   if (planWallets.length === 0) {
     clearSession(chatId);
-    await say(chatId, withBrandFooter(`Timed trade plan was not created because no buys succeeded.\n\n${results.join("\n")}`));
+    await say(chatId, withBrandFooter(`${session.data.autoBundle ? "Auto Bundle" : "Timed trade plan"} was not created because no buys succeeded.\n\n${results.join("\n")}`));
     await showMenu(chatId, session.userId);
     return;
   }
@@ -2547,6 +2680,9 @@ async function createTimedTradePlanFlow(chatId, session) {
     loopCount: session.data.loopCount || 1,
     takeProfitPct: session.data.takeProfitPct,
     stopLossPct: session.data.stopLossPct,
+    takeProfitMode: session.data.takeProfitMode || "single",
+    takeProfitLadder: Array.isArray(session.data.takeProfitLadder) ? session.data.takeProfitLadder : [],
+    autoBundle: Boolean(session.data.autoBundle),
     slippageBps: session.data.slippageBps,
     createdAt: new Date().toISOString(),
     wallets: planWallets,
@@ -2564,19 +2700,21 @@ async function createTimedTradePlanFlow(chatId, session) {
     wallets: planWallets.map((wallet) => wallet.publicKey),
     sellAfterAt: plan.sellAfterAt,
     loopCount: plan.loopCount,
+    source: plan.source,
+    takeProfitMode: plan.takeProfitMode,
     takeProfitPct: plan.takeProfitPct,
     stopLossPct: plan.stopLossPct
   });
 
   clearSession(chatId);
   await say(chatId, withBrandFooter([
-    "Timed trade plan created.",
+    `${plan.autoBundle ? "Auto Bundle plan created." : "Timed trade plan created."}`,
     `Plan ID: ${plan.id}`,
     `Sell timer: ${plan.sellAfterAt}`,
     `Loops: ${plan.loopCount}`,
-    `Take-profit: ${plan.takeProfitPct ? `+${plan.takeProfitPct}%` : "off"}`,
+    `Take-profit: ${formatPlanTakeProfitSummary(plan)}`,
     `Stop-loss: ${plan.stopLossPct ? `-${plan.stopLossPct}%` : "off"}`,
-    plan.takeProfitPct || plan.stopLossPct ? `TP/SL sell percent: ${plan.triggerSellPercent}%` : "",
+    plan.takeProfitMode === "ladder" ? "" : plan.takeProfitPct || plan.stopLossPct ? `TP/SL sell percent: ${plan.triggerSellPercent}%` : "",
     "",
     results.join("\n")
   ].filter(Boolean).join("\n")));
@@ -2846,12 +2984,54 @@ function isPriceExitTrigger(triggerReason) {
   return /^(take-profit|stop-loss)\b/i.test(String(triggerReason || ""));
 }
 
-function effectiveTimedSellPercent(plan, triggerReason) {
+function effectiveTimedSellPercent(plan, planWallet, triggerReason, triggerMeta = null) {
+  if (triggerMeta?.sellPercent) {
+    return clamp(Number.parseInt(triggerMeta.sellPercent, 10), 1, 100);
+  }
+
+  if (/^stop-loss\b/i.test(String(triggerReason || ""))) {
+    return 100;
+  }
+
   const configured = isPriceExitTrigger(triggerReason)
-    ? plan.triggerSellPercent ?? 100
+    ? planWallet?.triggerSellPercent ?? plan.triggerSellPercent ?? 100
     : plan.sellPercent ?? 100;
   const percent = Number.parseInt(configured, 10);
   return Number.isInteger(percent) ? clamp(percent, 1, 100) : 100;
+}
+
+function planHasPriceExit(plan, planWallet) {
+  return Boolean(
+    plan.stopLossPct
+      || plan.takeProfitPct
+      || planWallet?.takeProfitPct
+      || nextTakeProfitLadderLevel(plan, planWallet)
+  );
+}
+
+function nextTakeProfitLadderLevel(plan, planWallet) {
+  if (plan.takeProfitMode !== "ladder" || !Array.isArray(plan.takeProfitLadder) || plan.takeProfitLadder.length === 0) {
+    return null;
+  }
+
+  const completed = new Set((planWallet?.completedTakeProfitLevels || []).map((value) => Number.parseInt(value, 10)));
+  return plan.takeProfitLadder
+    .map((level, index) => ({ ...level, index }))
+    .find((level) => !completed.has(level.index)) || null;
+}
+
+function walletTakeProfitPct(plan, planWallet) {
+  const value = plan.takeProfitMode === "wallets" && planWallet?.takeProfitPct
+    ? planWallet.takeProfitPct
+    : plan.takeProfitPct;
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : 0;
+}
+
+function timedPlanExitSource(plan) {
+  if (plan.source === "autosnipe") return "autosnipe_exit";
+  if (plan.source === "auto_bundle") return "auto_bundle_exit";
+  return "timed_plan";
 }
 
 async function processTradePlans() {
@@ -2887,7 +3067,7 @@ async function processTradePlans() {
 
       if (walletMessages.length > 0) {
         await say(plan.chatId, withBrandFooter([
-          `Timed trade plan update: ${plan.id}`,
+          `${plan.autoBundle ? "Auto Bundle update" : "Timed trade plan update"}: ${plan.id}`,
           ...walletMessages
         ].join("\n")));
       }
@@ -2915,9 +3095,10 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
   }
 
   let triggerReason = null;
+  let triggerMeta = null;
   const now = Date.now();
 
-  if (!triggerReason && (plan.takeProfitPct || plan.stopLossPct)) {
+  if (!triggerReason && planHasPriceExit(plan, planWallet)) {
     const lastCheckedAt = Date.parse(planWallet.lastCheckedAt || "");
     const timerDue = now >= Date.parse(planWallet.sellAfterAt || plan.sellAfterAt);
     if (!timerDue && Number.isFinite(lastCheckedAt) && now - lastCheckedAt < 10_000) {
@@ -2929,10 +3110,23 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
       planWallet.lastCheckedAt = new Date().toISOString();
       planWallet.lastMovePct = estimate.movePct;
 
-      if (plan.takeProfitPct && estimate.movePct >= plan.takeProfitPct) {
-        triggerReason = `take-profit +${estimate.movePct.toFixed(2)}%`;
-      } else if (plan.stopLossPct && estimate.movePct <= -plan.stopLossPct) {
+      const stopLossPct = Number(plan.stopLossPct || 0);
+      const ladderLevel = nextTakeProfitLadderLevel(plan, planWallet);
+      const takeProfitPct = ladderLevel ? Number(ladderLevel.pct) : walletTakeProfitPct(plan, planWallet);
+
+      if (stopLossPct && estimate.movePct <= -stopLossPct) {
         triggerReason = `stop-loss ${estimate.movePct.toFixed(2)}%`;
+        triggerMeta = { kind: "stop-loss", sellPercent: 100 };
+      } else if (takeProfitPct && estimate.movePct >= takeProfitPct) {
+        triggerReason = `take-profit +${estimate.movePct.toFixed(2)}%`;
+        triggerMeta = ladderLevel
+          ? {
+              kind: "take-profit",
+              ladderLevelIndex: ladderLevel.index,
+              targetPct: ladderLevel.pct,
+              sellPercent: ladderLevel.sellPercent
+            }
+          : { kind: "take-profit", sellPercent: planWallet.triggerSellPercent ?? plan.triggerSellPercent ?? 100 };
       } else {
         return { changed: true, message: null };
       }
@@ -2952,7 +3146,7 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
   }
 
   try {
-    const sellPercent = effectiveTimedSellPercent(plan, triggerReason);
+    const sellPercent = effectiveTimedSellPercent(plan, planWallet, triggerReason, triggerMeta);
     const sell = await sellTokenFromWallet(wallet, plan.tokenMint, sellPercent, plan.slippageBps, {
       baseRawAmount: planWallet.tokenOutAmount
     });
@@ -2960,7 +3154,7 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
     await recordTradeEvents([{
       userId: plan.userId,
       type: "sell",
-      source: plan.source === "autosnipe" ? "autosnipe_exit" : "timed_plan",
+      source: timedPlanExitSource(plan),
       tokenMint: plan.tokenMint,
       walletLabel: wallet.label,
       walletPublicKey: wallet.publicKey,
@@ -2968,6 +3162,40 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
       solLamportsReceived: sell.outputLamports,
       signature: sell.signature
     }]);
+    if (triggerMeta?.kind === "take-profit" && Number.isInteger(triggerMeta.ladderLevelIndex)) {
+      const completed = new Set((planWallet.completedTakeProfitLevels || []).map((value) => Number.parseInt(value, 10)));
+      completed.add(triggerMeta.ladderLevelIndex);
+      planWallet.completedTakeProfitLevels = [...completed].sort((a, b) => a - b);
+      planWallet.partialExitSignatures = appendLimited(planWallet.partialExitSignatures, {
+        level: triggerMeta.ladderLevelIndex,
+        targetPct: triggerMeta.targetPct,
+        sellPercent,
+        signature: sell.signature,
+        soldAt: new Date().toISOString()
+      });
+      planWallet.triggerReason = `${triggerReason} (ladder +${triggerMeta.targetPct}%)`;
+      planWallet.failures = 0;
+      planWallet.sellFeeStatus = sell.feeStatus;
+      planWallet.updatedAt = new Date().toISOString();
+
+      const nextLevel = nextTakeProfitLadderLevel(plan, planWallet);
+      if (nextLevel) {
+        planWallet.status = "watching";
+        return {
+          changed: true,
+          message: `${formatTimedSellSuccessLine(planWallet, sell, planWallet.triggerReason, plan.loopCount || 1)}; next ladder target +${nextLevel.pct}% sells ${nextLevel.sellPercent}%`
+        };
+      }
+
+      planWallet.status = "sold";
+      planWallet.soldAt = new Date().toISOString();
+      return {
+        changed: true,
+        message: `${formatTimedSellSuccessLine(planWallet, sell, planWallet.triggerReason, plan.loopCount || 1)}; ladder complete`,
+        pnlCardToken: plan.tokenMint
+      };
+    }
+
     planWallet.completedLoops = Number.parseInt(planWallet.completedLoops || 0, 10) + 1;
     planWallet.triggerReason = triggerReason;
     planWallet.failures = 0;
@@ -4156,8 +4384,9 @@ async function showSniperModes(chatId, userId, messageId = null) {
 }
 
 async function showBundleMenu(chatId, messageId = null) {
-  await sendOrEditMessage(chatId, messageId, withBrandFooter("Bundle tools:\n\nUse Volume for auto-sell and repeat cycles."), {
+  await sendOrEditMessage(chatId, messageId, withBrandFooter("Bundle tools:\n\nAuto Bundle buys selected wallets, then watches stop-loss / take-profit exits."), {
     inline_keyboard: [
+      [{ text: "Auto Bundle", callback_data: "auto_bundle" }],
       [{ text: "🧲 Bundle Buy", callback_data: "batch_buy" }],
       [{ text: "🧲 Bundle Sell", callback_data: "batch_sell" }],
       [{ text: "DCA Buy", callback_data: "dca_buy" }, { text: "DCA Sell", callback_data: "dca_sell" }],
@@ -5656,6 +5885,94 @@ function applyAutoSnipeExitPreset(session) {
   });
 }
 
+function applyAutoBundleDefaults(session) {
+  Object.assign(session.data, {
+    tradeMode: "bundle",
+    autoBundle: true,
+    planSource: "auto_bundle",
+    sellDelaySeconds: AUTO_BUNDLE_SELL_DELAY_SECONDS,
+    sellDelayMinutes: AUTO_BUNDLE_SELL_DELAY_SECONDS / 60,
+    sellPercent: 100,
+    triggerSellPercent: 100,
+    takeProfitPct: AUTO_BUNDLE_TAKE_PROFIT_PCT,
+    stopLossPct: AUTO_BUNDLE_STOP_LOSS_PCT,
+    takeProfitMode: "single",
+    takeProfitLadder: [],
+    walletTakeProfitTargets: null,
+    loopCount: 1,
+    exitPreset: "Auto Bundle Default",
+    allowRepeat: false
+  });
+}
+
+async function handleAutoBundleExitMode(chatId, text, session) {
+  const choice = text.trim().toLowerCase();
+  if (choice === "default") {
+    applyAutoBundleDefaults(session);
+    session.step = "auto_bundle_slippage";
+    await sendQuickSlippagePrompt(chatId, [
+      "Default Auto Bundle exits selected.",
+      "",
+      `Take-profit: +${AUTO_BUNDLE_TAKE_PROFIT_PCT}% full exit`,
+      `Stop-loss: -${AUTO_BUNDLE_STOP_LOSS_PCT}% full exit`,
+      `Fallback timer: ${formatDelay(AUTO_BUNDLE_SELL_DELAY_SECONDS)}`,
+      "",
+      `Choose slippage, or type default for ${CONFIG.defaultSlippageBps} bps.`
+    ].join("\n"));
+    return;
+  }
+
+  if (choice === "custom") {
+    session.data.takeProfitMode = "single";
+    session.data.takeProfitLadder = [];
+    session.data.walletTakeProfitTargets = null;
+    session.step = "auto_bundle_take_profit";
+    await sendQuickChoicePrompt(chatId, "Choose custom take-profit percent. Full exit sells 100% of each tracked bag.", [
+      [{ text: "+40%", value: "40" }, { text: "+60%", value: "60" }],
+      [{ text: "+100%", value: "100" }, { text: "+150%", value: "150" }]
+    ]);
+    return;
+  }
+
+  if (choice === "ladder") {
+    session.data.takeProfitMode = "ladder";
+    session.step = "auto_bundle_ladder_levels";
+    await sendQuickChoicePrompt(chatId, [
+      "Send profit levels for ladder exits.",
+      "",
+      "The bot splits the original tracked bag across the levels. With 4 levels, each trigger sells 25% of the original bag.",
+      "",
+      "Example: `40,70,100,150` sells 25% at +40%, 25% at +70%, 25% at +100%, and the last 25% at +150%."
+    ].join("\n"), [
+      [{ text: "40,70,100,150", value: "40,70,100,150" }],
+      [{ text: "25,50,75,100", value: "25,50,75,100" }],
+      [{ text: "60,90,120,150", value: "60,90,120,150" }]
+    ]);
+    return;
+  }
+
+  if (choice === "wallets") {
+    session.data.takeProfitMode = "wallets";
+    session.step = "auto_bundle_wallet_targets";
+    await sendQuickChoicePrompt(chatId, [
+      "Set take-profit by wallet.",
+      "",
+      "Send one percent per selected wallet in the same order. Example for 3 wallets: `40,70,100`.",
+      "",
+      "Or use a spread button to auto-fill targets from the first selected wallet to the last.",
+      "",
+      await selectedWalletTargetOrderText(session.userId, session.data.walletIndexes)
+    ].join("\n"), [
+      [{ text: "Spread 40-70%", value: "spread:40:70" }],
+      [{ text: "Spread 60-120%", value: "spread:60:120" }],
+      [{ text: "All +60%", value: "all:60" }]
+    ]);
+    return;
+  }
+
+  throw new Error("Choose Default, Custom Full Exit, 25% Ladder, or By Wallet Targets.");
+}
+
 function recommendedSniperExitPreset(score, settings) {
   const mode = settings?.mode || "safe";
   if (mode === "fast") return "fast";
@@ -5928,6 +6245,9 @@ function howToPage(topic) {
         "Use Bundle when you want the same action across multiple wallets.",
         "",
         "Buttons inside Bundle:",
+        `- Auto Bundle: paste CA, choose wallets/group, choose SOL per wallet, then use the default -${AUTO_BUNDLE_STOP_LOSS_PCT}% stop-loss / +${AUTO_BUNDLE_TAKE_PROFIT_PCT}% take-profit or customize exits before confirming.`,
+        "- Auto Bundle 25% Ladder: set multiple profit levels like `40,70,100,150`; each level sells a chunk of the original tracked bag.",
+        "- Auto Bundle By Wallet Targets: set different take-profit targets per wallet, such as wallet 1 at +40% and wallet 2 at +70%. Stop-loss still exits the remaining bag.",
         "- Bundle Buy: paste token mint, choose wallets, choose fixed SOL per wallet, then choose normal buy or add take-profit / stop-loss before confirming.",
         "- Bundle Sell: paste token mint, choose wallets, choose percent to sell, choose slippage, confirm.",
         "- DCA Buy: split a total SOL amount per selected wallet into scheduled smaller buys.",
@@ -6984,6 +7304,25 @@ async function parseWalletSelectionOrGroup(text, userId) {
   return indexes;
 }
 
+async function selectedWalletTargetOrderText(userId, walletIndexes) {
+  const store = await readWalletStore();
+  return walletIndexes
+    .map((walletIndex, orderIndex) => {
+      const wallet = getWalletAt(store, walletIndex, userId);
+      return `${orderIndex + 1}. Wallet ${walletIndex}: ${wallet.label}`;
+    })
+    .join("\n");
+}
+
+function walletTakeProfitForIndex(data, walletIndex) {
+  if (data.takeProfitMode !== "wallets" || !data.walletTakeProfitTargets) {
+    return null;
+  }
+
+  const value = Number(data.walletTakeProfitTargets[String(walletIndex)]);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
 function getWalletAt(store, oneBasedIndex, userId) {
   const wallet = walletsForOwner(store, userId)[oneBasedIndex - 1];
   if (!wallet) {
@@ -7091,6 +7430,82 @@ function parseOptionalTriggerPercent(text) {
     throw new Error("Trigger percent must be 0/off, or a positive number up to 10000.");
   }
   return value;
+}
+
+function parseTakeProfitLadder(text) {
+  const levels = parseNumberList(text);
+  if (levels.length < 2 || levels.length > 8) {
+    throw new Error("Ladder must have 2 to 8 profit levels. Example: 40,70,100,150.");
+  }
+
+  const sorted = [...levels].sort((a, b) => a - b);
+  for (let index = 1; index < sorted.length; index += 1) {
+    if (sorted[index] === sorted[index - 1]) {
+      throw new Error("Ladder levels must be unique.");
+    }
+  }
+
+  const baseChunk = Math.floor(100 / sorted.length);
+  return sorted.map((pct, index) => ({
+    pct,
+    sellPercent: index === sorted.length - 1 ? 100 - (baseChunk * (sorted.length - 1)) : baseChunk
+  }));
+}
+
+function parseWalletTakeProfitTargets(text, walletIndexes) {
+  const normalized = text.trim().toLowerCase();
+  const indexes = Array.isArray(walletIndexes) ? walletIndexes : [];
+  if (indexes.length === 0) {
+    throw new Error("No wallets selected.");
+  }
+
+  if (normalized.startsWith("spread:")) {
+    const [, startText, endText] = normalized.split(":");
+    const start = parsePositivePercentValue(startText);
+    const end = parsePositivePercentValue(endText);
+    const values = indexes.length === 1
+      ? [start]
+      : indexes.map((_, index) => start + ((end - start) * index) / (indexes.length - 1));
+    return walletTargetMap(indexes, values);
+  }
+
+  if (normalized.startsWith("all:")) {
+    const value = parsePositivePercentValue(normalized.split(":")[1]);
+    return walletTargetMap(indexes, indexes.map(() => value));
+  }
+
+  const values = parseNumberList(text);
+  if (values.length !== indexes.length) {
+    throw new Error(`Send exactly ${indexes.length} take-profit value(s), one for each selected wallet.`);
+  }
+  return walletTargetMap(indexes, values);
+}
+
+function walletTargetMap(indexes, values) {
+  return Object.fromEntries(indexes.map((walletIndex, index) => [
+    String(walletIndex),
+    Number(values[index].toFixed(2))
+  ]));
+}
+
+function parseNumberList(text) {
+  const values = String(text || "")
+    .split(/[,\s]+/)
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .map(parsePositivePercentValue);
+  if (values.length === 0) {
+    throw new Error("Send one or more percent values.");
+  }
+  return values;
+}
+
+function parsePositivePercentValue(value) {
+  const number = Number.parseFloat(String(value || "").replace(/%$/, ""));
+  if (!Number.isFinite(number) || number <= 0 || number > 10000) {
+    throw new Error("Percent values must be positive numbers up to 10000.");
+  }
+  return number;
 }
 
 function parseSlippage(text, defaultBps = CONFIG.defaultSlippageBps) {
@@ -7289,6 +7704,45 @@ function uniqueTokenMintsFromEvents(events) {
     .filter(Boolean))];
 }
 
+function formatTakeProfitLadder(levels) {
+  if (!Array.isArray(levels) || levels.length === 0) return "off";
+  return levels.map((level) => `+${level.pct}% sells ${level.sellPercent}%`).join(" | ");
+}
+
+function formatWalletTakeProfitTargets(data) {
+  if (!data?.walletTakeProfitTargets) return "No wallet targets set.";
+  return (data.walletIndexes || [])
+    .map((walletIndex) => `Wallet ${walletIndex}: +${data.walletTakeProfitTargets[String(walletIndex)]}%`)
+    .join("\n");
+}
+
+function formatTakeProfitSummary(data) {
+  if (data.takeProfitMode === "ladder") {
+    return `ladder: ${formatTakeProfitLadder(data.takeProfitLadder)}`;
+  }
+
+  if (data.takeProfitMode === "wallets") {
+    return `by wallet:\n${formatWalletTakeProfitTargets(data)}`;
+  }
+
+  return data.takeProfitPct ? `+${data.takeProfitPct}%` : "off";
+}
+
+function formatPlanTakeProfitSummary(plan) {
+  if (plan.takeProfitMode === "ladder") {
+    return `ladder: ${formatTakeProfitLadder(plan.takeProfitLadder)}`;
+  }
+
+  if (plan.takeProfitMode === "wallets") {
+    const targets = (plan.wallets || [])
+      .map((wallet) => `${wallet.label}: +${wallet.takeProfitPct || plan.takeProfitPct}%`)
+      .join(" | ");
+    return targets || "by wallet";
+  }
+
+  return plan.takeProfitPct ? `+${plan.takeProfitPct}%` : "off";
+}
+
 function formatFundConfirm(data) {
   return [
     "Confirm funding:",
@@ -7455,16 +7909,16 @@ function formatTimedTradePlanConfirm(data) {
   const feeLamports = calculateFeeLamports(amountLamports);
   const walletLabel = data.tradeMode === "single" && data.walletLabel ? `Wallet: ${data.walletLabel}` : `Wallets: ${data.walletIndexes.join(", ")}`;
   return [
-    "Confirm timed trade plan:",
+    data.autoBundle ? "Confirm Auto Bundle plan:" : "Confirm timed trade plan:",
     `Token mint: ${data.tokenMint}`,
     walletLabel,
     `${data.tradeMode === "single" ? "Buy" : "Buy per wallet"}: ${data.amountSol} SOL`,
     `Net buy before routing fees: ${lamportsToSol(amountLamports - feeLamports)} SOL`,
     `Sell timer: ${formatDelay(data.sellDelaySeconds)} after buy`,
     `Timer sell percent: ${data.sellPercent}%`,
-    `Take-profit/stop-loss sell percent: ${data.triggerSellPercent || 100}%`,
+    data.takeProfitMode === "ladder" ? "Take-profit sell style: ladder chunks" : `Take-profit/stop-loss sell percent: ${data.triggerSellPercent || 100}%`,
     `Repeat cycles: ${data.loopCount || 1}x`,
-    `Take-profit: ${data.takeProfitPct ? `+${data.takeProfitPct}%` : "off"}`,
+    `Take-profit: ${formatTakeProfitSummary(data)}`,
     `Stop-loss: ${data.stopLossPct ? `-${data.stopLossPct}%` : "off"}`,
     `Slippage: ${data.slippageBps} bps`,
     "",
