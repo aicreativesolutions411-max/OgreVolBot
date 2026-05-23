@@ -3932,7 +3932,7 @@ async function showSniperScan(chatId, userId, messageId = null, options = {}) {
     options.modeSelected ? `${modeLabel} selected.` : "OgreSniper is scanning latest Solana profiles...",
     "",
     `Scanning for ${modeLabel} picks with metadata, liquidity/market signals, and momentum heuristics.`,
-    "Refresh rotates the shortlist while keeping high-score picks first."
+    "Refresh rotates fresh mode-fit picks and avoids repeating the last screen when enough candidates are available."
   ];
   await sendOrEditMessage(chatId, messageId, withBrandFooter(scanningLines.join("\n")), {
     inline_keyboard: [[{ text: "Back", callback_data: "sniper_menu" }]]
@@ -3940,7 +3940,7 @@ async function showSniperScan(chatId, userId, messageId = null, options = {}) {
 
   const candidates = await fetchSniperCandidates();
   const scored = [];
-  const scanPool = rotateSniperCandidatePool(candidates, scanState);
+  const scanPool = await hydrateSniperCandidates(rotateSniperCandidatePool(candidates, scanState));
   await runWithConcurrency(scanPool, Math.min(6, Math.max(3, CONFIG.balanceConcurrency)), async (candidate) => {
     try {
       scored.push(await scoreSniperCandidate(candidate, settings));
@@ -3956,7 +3956,12 @@ async function showSniperScan(chatId, userId, messageId = null, options = {}) {
     .filter((item) => isFallbackSniperPick(item, settings))
     .sort(compareSniperScores);
   const qualifiedRows = strictRows.length >= 6 ? strictRows : fallbackRows;
-  const rows = selectRotatingSniperRows(qualifiedRows, scanState);
+  const modeRows = qualifiedRows.filter((item) => isModeRelevantSniperPick(item, settings.mode));
+  const displayRows = modeRows.length >= 6
+    ? modeRows
+    : uniqueSniperScoreRows([...modeRows, ...qualifiedRows]);
+  const rows = selectRotatingSniperRows(displayRows, scanState);
+  rememberSniperScanRows(userId, settings.mode, rows);
 
   if (rows.length === 0) {
     await say(chatId, withBrandFooter("OgreSniper scan found no usable early-play candidates right now.\n\nTry again later or choose a different mode."));
@@ -3975,7 +3980,7 @@ async function showSniperScan(chatId, userId, messageId = null, options = {}) {
   await sendOrEditHtmlMessage(chatId, messageId, withBrandFooter([
       `<b>${escapeHtml(modeLabel)} Picks</b>`,
       `Mode: <b>${escapeHtml(modeLabel)}</b>`,
-      `Refresh: <b>${scanState.refreshCount}</b> | Scored: <b>${scored.length}</b> | Qualified: <b>${qualifiedRows.length}</b>`,
+      `Refresh: <b>${scanState.refreshCount}</b> | Scored: <b>${scored.length}</b> | Qualified: <b>${qualifiedRows.length}</b> | Mode-fit: <b>${modeRows.length}</b>`,
       "Tap Snipe, choose wallets and SOL size, then review/customize profit and loss settings before Confirm. CA lines are tap-to-copy and Dex links open charts.",
       "",
       ...rows.map(formatSniperPickHtml)
@@ -4400,13 +4405,38 @@ async function getDexTokenMetadata(tokenMint) {
 }
 
 async function getDexScreenerTokenMetadata(tokenMint) {
-  const data = await fetchJson(`https://api.dexscreener.com/tokens/v1/solana/${encodeURIComponent(tokenMint)}`, {
+  const pairs = await fetchDexScreenerTokenPairsBatch([tokenMint]);
+  return metadataFromDexPair(tokenMint, bestDexPairForToken(tokenMint, pairs));
+}
+
+async function fetchDexScreenerTokenPairsBatch(tokenMints) {
+  const addresses = [...new Set((tokenMints || []).filter(Boolean))].slice(0, 30);
+  if (addresses.length === 0) return [];
+
+  const tokenPath = addresses.map((address) => encodeURIComponent(address)).join(",");
+  const data = await fetchJson(`https://api.dexscreener.com/tokens/v1/solana/${tokenPath}`, {
     headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" }
   });
-  const pairs = Array.isArray(data) ? data : [];
-  const best = pairs
-    .filter((pair) => pair?.baseToken?.address === tokenMint || pair?.quoteToken?.address === tokenMint)
-    .sort((a, b) => Number(b?.liquidity?.usd || 0) - Number(a?.liquidity?.usd || 0))[0] || pairs[0] || {};
+  return Array.isArray(data) ? data : [];
+}
+
+function bestDexPairForToken(tokenMint, pairs) {
+  return (pairs || [])
+    .filter((pair) => pairMatchesToken(pair, tokenMint))
+    .sort(compareDexPairsForSniper)[0] || null;
+}
+
+function pairMatchesToken(pair, tokenMint) {
+  return pair?.baseToken?.address === tokenMint || pair?.quoteToken?.address === tokenMint;
+}
+
+function compareDexPairsForSniper(a, b) {
+  return Number(b?.liquidity?.usd || 0) - Number(a?.liquidity?.usd || 0)
+    || Number(b?.volume?.h1 || 0) - Number(a?.volume?.h1 || 0)
+    || Number(b?.marketCap || b?.fdv || 0) - Number(a?.marketCap || a?.fdv || 0);
+}
+
+function metadataFromDexPair(tokenMint, best = null) {
   const token = best?.baseToken?.address === tokenMint ? best.baseToken : best?.quoteToken || best?.baseToken || {};
 
   return {
@@ -4442,14 +4472,26 @@ async function getPumpFunTokenMetadata(tokenMint) {
 }
 
 async function fetchSniperCandidates() {
-  const profiles = await fetchJson("https://api.dexscreener.com/token-profiles/latest/v1", {
-    headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" }
-  }).catch(() => []);
+  const headers = { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" };
+  const [profiles, latestBoosts, topBoosts] = await Promise.all([
+    fetchJson("https://api.dexscreener.com/token-profiles/latest/v1", { headers }).catch(() => []),
+    fetchJson("https://api.dexscreener.com/token-boosts/latest/v1", { headers }).catch(() => []),
+    fetchJson("https://api.dexscreener.com/token-boosts/top/v1", { headers }).catch(() => [])
+  ]);
 
-  return (Array.isArray(profiles) ? profiles : [])
+  return uniqueSniperCandidates([
+    ...sniperCandidatesFromDexList(profiles, "profile"),
+    ...sniperCandidatesFromDexList(latestBoosts, "latest-boost"),
+    ...sniperCandidatesFromDexList(topBoosts, "top-boost")
+  ]);
+}
+
+function sniperCandidatesFromDexList(items, source) {
+  return (Array.isArray(items) ? items : [])
     .filter((item) => String(item.chainId || "").toLowerCase() === "solana" && item.tokenAddress)
     .map((item) => ({
       tokenMint: item.tokenAddress,
+      source,
       profile: item
     }));
 }
@@ -4459,8 +4501,9 @@ function nextSniperScanState(userId, mode) {
   const previous = sniperScanState.get(key) || { refreshCount: 0, candidateOffset: -24, displayOffset: -5 };
   const next = {
     refreshCount: previous.refreshCount + 1,
-    candidateOffset: previous.candidateOffset + 24,
-    displayOffset: previous.displayOffset + 5,
+    candidateOffset: previous.candidateOffset + 42,
+    displayOffset: previous.displayOffset + 6,
+    previousShown: previous.lastShown || [],
     updatedAt: Date.now()
   };
   sniperScanState.set(key, next);
@@ -4480,10 +4523,7 @@ function pruneSniperScanState() {
 
 function rotateSniperCandidatePool(candidates, scanState) {
   const unique = uniqueSniperCandidates(candidates);
-  const latestAnchor = unique.slice(0, 12);
-  const rotatingPool = rotateItems(unique.slice(12, 120), scanState.candidateOffset).slice(0, 36);
-  const combined = uniqueSniperCandidates([...latestAnchor, ...rotatingPool]);
-  return combined.slice(0, 48);
+  return rotateItems(unique.slice(0, 180), scanState.candidateOffset).slice(0, 72);
 }
 
 function uniqueSniperCandidates(candidates) {
@@ -4499,7 +4539,8 @@ function uniqueSniperCandidates(candidates) {
 }
 
 function compareSniperScores(a, b) {
-  return (b.score - a.score)
+  return Number(b.modeRelevance || 0) - Number(a.modeRelevance || 0)
+    || (b.score - a.score)
     || (a.rugRisk - b.rugRisk)
     || (a.exitRisk - b.exitRisk)
     || (a.manipulationScore - b.manipulationScore);
@@ -4508,10 +4549,20 @@ function compareSniperScores(a, b) {
 function selectRotatingSniperRows(rows, scanState) {
   if (rows.length <= 6) return rows;
 
-  const anchorCount = rows.length >= 10 ? 1 : 2;
-  const anchors = rows.slice(0, anchorCount);
-  const rotatingRows = rotateItems(rows.slice(anchorCount, 30), scanState.displayOffset);
-  return uniqueSniperScoreRows([...anchors, ...rotatingRows]).slice(0, 6);
+  const previousShown = new Set(scanState.previousShown || []);
+  const freshRows = rows.filter((row) => !previousShown.has(row.tokenMint));
+  const pool = freshRows.length >= 6 ? freshRows : rows;
+  return uniqueSniperScoreRows(rotateItems(pool.slice(0, 42), scanState.displayOffset)).slice(0, 6);
+}
+
+function rememberSniperScanRows(userId, mode, rows) {
+  const key = `${userId}:${mode}`;
+  const previous = sniperScanState.get(key) || {};
+  sniperScanState.set(key, {
+    ...previous,
+    lastShown: rows.map((row) => row.tokenMint),
+    updatedAt: Date.now()
+  });
 }
 
 function uniqueSniperScoreRows(rows) {
@@ -4539,6 +4590,50 @@ function isFallbackSniperPick(item, settings) {
     && item.rugRisk <= settings.maxRisk + 24
     && item.exitRisk <= 84
     && !item.riskFlags?.includes("hard dump");
+}
+
+async function hydrateSniperCandidates(candidates) {
+  const unique = uniqueSniperCandidates(candidates);
+  const pairByToken = new Map();
+
+  await runWithConcurrency(chunkArray(unique.map((item) => item.tokenMint), 30), 2, async (chunk) => {
+    const pairs = await fetchDexScreenerTokenPairsBatch(chunk).catch(() => []);
+    for (const tokenMint of chunk) {
+      const best = bestDexPairForToken(tokenMint, pairs);
+      if (best) pairByToken.set(tokenMint, best);
+    }
+  });
+
+  return unique.map((candidate) => {
+    const pair = pairByToken.get(candidate.tokenMint);
+    const metadata = pair
+      ? mergeSniperMetadata(metadataFromDexPair(candidate.tokenMint, pair), candidate.profile, candidate.source)
+      : null;
+    if (metadata) {
+      dexMetadataCache.set(candidate.tokenMint, { cachedAt: Date.now(), value: metadata });
+    }
+    return {
+      ...candidate,
+      dexPair: pair || null,
+      metadata
+    };
+  });
+}
+
+function mergeSniperMetadata(dexValue, profile = {}, source = "profile") {
+  return {
+    ...dexValue,
+    symbol: dexValue.symbol || profile.symbol || "",
+    name: dexValue.name || profile.name || "",
+    imageUrl: dexValue.imageUrl || profile.icon || "",
+    description: profile.description || "",
+    profileSource: source,
+    boostAmount: Number(profile.amount || profile.totalAmount || 0)
+  };
+}
+
+function isModeRelevantSniperPick(item, mode) {
+  return Number(item.modeRelevance || 0) >= (mode === "ai" || mode === "meme" ? 5 : 3);
 }
 
 function rotateItems(items, offset) {
@@ -4604,8 +4699,8 @@ function sniperRiskFlags(data) {
 
 async function scoreSniperCandidate(candidate, settings) {
   const tokenMint = candidate.tokenMint;
-  const metadata = await getDexTokenMetadata(tokenMint);
-  const text = `${metadata.symbol || ""} ${metadata.name || ""}`.toLowerCase();
+  const metadata = candidate.metadata || await getDexTokenMetadata(tokenMint);
+  const text = `${metadata.symbol || ""} ${metadata.name || ""} ${metadata.description || ""}`.toLowerCase();
   const marketCap = Number(metadata.marketCap || metadata.fdv || 0);
   const liquidityUsd = Number(metadata.liquidityUsd || 0);
   const volume5m = Number(metadata.volume?.m5 || 0);
@@ -4624,6 +4719,17 @@ async function scoreSniperCandidate(candidate, settings) {
   const hasImage = Boolean(metadata.imageUrl);
   const hasMeta = Boolean(metadata.symbol && metadata.name);
   const narrative = sniperNarrativeScore(text, settings.mode);
+  const modeRelevance = sniperModeRelevance(settings.mode, {
+    marketCap,
+    liquidityUsd,
+    h1,
+    h6,
+    h24,
+    text,
+    buyPressure,
+    volumeH1,
+    narrative
+  });
   const liquiditySignal = liquidityUsd > 0
     ? Math.min(22, Math.log10(Math.max(10, liquidityUsd)) * 4)
     : marketCap > 0 ? Math.min(12, Math.log10(Math.max(10, marketCap)) * 2) : 2;
@@ -4635,7 +4741,7 @@ async function scoreSniperCandidate(candidate, settings) {
   const namePenalty = sniperRiskPenalty(text);
   const momentumSignal = Math.max(0, Math.min(25, (h1 * 0.45) + (h6 * 0.12) + (h24 * 0.03)));
   const metadataSignal = (hasMeta ? 12 : 2) + (hasImage ? 8 : 0);
-  const modeBonus = sniperModeBonus(settings.mode, { marketCap, liquidityUsd, h1, h6, h24, text, buyPressure, volumeH1 });
+  const modeBonus = sniperModeBonus(settings.mode, { marketCap, liquidityUsd, h1, h6, h24, text, buyPressure, volumeH1, narrative });
   const riskTotal = namePenalty + dumpPenalty + liquidityPenalty + sellPressurePenalty;
   const score = clamp(Math.round(26 + liquiditySignal + volumeSignal + momentumSignal + metadataSignal + narrative + modeBonus + buyPressureSignal - riskTotal), 1, 100);
   const rugRisk = clamp(Math.round(70 - metadataSignal - Math.min(18, liquiditySignal) - Math.min(10, volumeSignal) + namePenalty + liquidityPenalty + sellPressurePenalty + Math.round(dumpPenalty * 0.65)), 1, 100);
@@ -4664,6 +4770,12 @@ async function scoreSniperCandidate(candidate, settings) {
     liquidityUsd,
     volumeH1,
     buyPressure,
+    modeRelevance,
+    marketCap,
+    h1,
+    h6,
+    h24,
+    narrative,
     pairAgeMinutes,
     riskFlags,
     momentum: momentumSignal >= 18 ? "Strong" : momentumSignal >= 8 ? "Building" : "Weak",
@@ -4679,7 +4791,8 @@ function formatSniperPickHtml(score, index = null) {
   return [
     `<b>${rank}${escapeHtml(score.category)}: ${label}</b>`,
     `Score: <b>${score.score}/100</b> | Momentum: ${escapeHtml(score.momentum)} | Rug: ${score.rugRisk}/100 | Exit: ${score.exitRisk}/100`,
-    `Liq: ${formatUsdCompact(score.liquidityUsd || 0) || "$0"} | Vol 1h: ${formatUsdCompact(score.volumeH1 || 0) || "$0"} | Flow: ${formatBuyPressure(score.buyPressure)}`,
+    `MC: ${formatUsdCompact(score.marketCap || 0) || "$0"} | Liq: ${formatUsdCompact(score.liquidityUsd || 0) || "$0"} | Vol 1h: ${formatUsdCompact(score.volumeH1 || 0) || "$0"}`,
+    `Flow: ${formatBuyPressure(score.buyPressure)} | Mode fit: ${score.modeRelevance || 0}/5`,
     `Smart: ${escapeHtml(score.smartMoney)} | Manipulation: ${score.manipulationScore}/100${score.riskFlags?.length ? ` | Flags: ${escapeHtml(score.riskFlags.join(", "))}` : ""}`,
     `CA: <code>${score.tokenMint}</code>`,
     `Dex: <a href="${dexScreenerUrl(score.tokenMint)}">Open chart</a>`,
@@ -4739,12 +4852,46 @@ function sniperNarrativeScore(text, mode) {
 }
 
 function sniperModeBonus(mode, data) {
-  if (mode === "safe" && data.liquidityUsd >= 10_000 && data.marketCap >= 50_000 && data.buyPressure >= 1) return 8;
-  if (mode === "smart" && data.h1 > 8 && data.h6 > 0 && data.buyPressure >= 1.1) return 10;
-  if (mode === "fast" && data.h1 > 12 && data.volumeH1 > 5_000 && data.buyPressure >= 1) return 11;
-  if (mode === "moonshot" && data.marketCap > 0 && data.marketCap < 200_000 && data.liquidityUsd >= 5_000) return 8;
-  if (mode === "meme" || mode === "ai") return sniperNarrativeScore(data.text, mode);
+  const relevance = sniperModeRelevance(mode, data);
+  if (mode === "safe") return relevance >= 3 ? 8 : 0;
+  if (mode === "smart") return relevance >= 3 ? 10 : 0;
+  if (mode === "fast") return relevance >= 3 ? 11 : 0;
+  if (mode === "moonshot") return relevance >= 3 ? 8 : 0;
+  if (mode === "meme" || mode === "ai") return data.narrative > 0 ? 12 : 0;
   return 0;
+}
+
+function sniperModeRelevance(mode, data) {
+  if (mode === "ai" || mode === "meme") return data.narrative > 0 ? 5 : 0;
+  if (mode === "safe") {
+    return Number(data.liquidityUsd >= 10_000)
+      + Number(data.marketCap >= 50_000)
+      + Number(data.buyPressure >= 1)
+      + Number(data.h1 >= -5)
+      + Number(data.volumeH1 >= 3_000);
+  }
+  if (mode === "smart") {
+    return Number(data.buyPressure >= 1.1)
+      + Number(data.volumeH1 >= 5_000)
+      + Number(data.h1 > 5)
+      + Number(data.h6 >= 0)
+      + Number(data.liquidityUsd >= 8_000);
+  }
+  if (mode === "fast") {
+    return Number(data.h1 > 8)
+      + Number(data.volumeH1 >= 10_000)
+      + Number(data.buyPressure >= 1.15)
+      + Number(data.liquidityUsd >= 5_000)
+      + Number(data.h6 >= -5);
+  }
+  if (mode === "moonshot") {
+    return Number(data.marketCap > 0 && data.marketCap <= 250_000)
+      + Number(data.liquidityUsd >= 3_000)
+      + Number(data.buyPressure >= 1)
+      + Number(data.volumeH1 >= 1_500)
+      + Number(data.h1 >= -10);
+  }
+  return 1;
 }
 
 function sniperRiskPenalty(text) {
