@@ -30,6 +30,7 @@ const solBalanceCache = new Map();
 const tokenAccountsCache = new Map();
 const tokenBalanceCache = new Map();
 const positionValueCache = new Map();
+const mintSafetyCache = new Map();
 const sniperScanState = new Map();
 const startedAt = new Date();
 let lastKeepAliveStatus = {
@@ -45,7 +46,7 @@ const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ
 const TOKEN_2022_PROGRAM_ID = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 const SOL_MINT = "So11111111111111111111111111111111111111112";
-const AUTOSNIPE_TAKE_PROFIT_PCT = 25;
+const AUTOSNIPE_TAKE_PROFIT_PCT = 15;
 const AUTOSNIPE_STOP_LOSS_PCT = 8;
 const AUTOSNIPE_SLIPPAGE_BPS = 400;
 const AUTOSNIPE_SELL_DELAY_SECONDS = 300;
@@ -107,6 +108,7 @@ const PRIVATE_CHAT_ACTIONS = new Set([
   "sniper_mode_moonshot",
   "sniper_mode_meme",
   "sniper_mode_ai",
+  "sniper_mode_long",
   "bundle_menu",
   "withdrawal_menu",
   "list_wallets",
@@ -789,6 +791,7 @@ async function handleCallback(query, userId) {
     case "sniper_mode_moonshot":
     case "sniper_mode_meme":
     case "sniper_mode_ai":
+    case "sniper_mode_long":
       await updateSniperMode(chatId, userId, query.data.replace("sniper_mode_", ""), messageId);
       break;
     case "bundle_menu":
@@ -1342,7 +1345,8 @@ async function continueFlow(chatId, text, session) {
           session.step = "sniper_exit_preset";
           await sendQuickChoicePrompt(chatId, "Choose an exit preset for this snipe.", [
             [{ text: "Fast Scalp", value: "fast" }, { text: "Balanced", value: "balanced" }],
-            [{ text: "Moonbag", value: "moonbag" }, { text: "Safe", value: "safe" }]
+            [{ text: "Moonbag", value: "moonbag" }, { text: "Safe", value: "safe" }],
+            [{ text: "Long Term", value: "long" }]
           ], { includeCustom: false });
           break;
         }
@@ -1488,13 +1492,79 @@ async function continueFlow(chatId, text, session) {
           session.data.amountMode = "fixed";
           session.data.amountSol = parsePositiveNumber(text);
         }
+        if (session.data.amountMode === "max") {
+          session.step = "buy_slippage";
+          await sendQuickSlippagePrompt(chatId, buySlippagePromptText(session.data));
+        } else {
+          session.step = "buy_auto_exit";
+          await sendQuickChoicePrompt(chatId, [
+            "Do you want to add automatic take-profit / stop-loss to this buy?",
+            "",
+            "No: buys immediately like normal.",
+            "Add TP/SL: buys now, then the bot watches and sells on your targets or timer."
+          ].join("\n"), [
+            [{ text: "No Auto Exit", value: "no" }],
+            [{ text: "Add TP/SL", value: "yes" }]
+          ], { includeCustom: false });
+        }
+        break;
+      case "buy_auto_exit": {
+        const choice = text.trim().toLowerCase();
+        if (choice === "no") {
+          session.data.autoExit = false;
+          session.step = "buy_slippage";
+          await sendQuickSlippagePrompt(chatId, buySlippagePromptText(session.data));
+          break;
+        }
+        if (choice !== "yes") {
+          throw new Error("Choose No Auto Exit or Add TP/SL.");
+        }
+        session.data.autoExit = true;
+        session.data.sellPercent = 100;
+        session.data.triggerSellPercent = 100;
+        session.data.loopCount = 1;
+        session.step = "buy_auto_take_profit";
+        await sendQuickChoicePrompt(chatId, "Choose take-profit percent. TP sells 100% of the tracked bag.", [
+          [{ text: "+15%", value: "15" }, { text: "+25%", value: "25" }],
+          [{ text: "+50%", value: "50" }, { text: "+100%", value: "100" }]
+        ]);
+        break;
+      }
+      case "buy_auto_take_profit":
+        session.data.takeProfitPct = parseOptionalTriggerPercent(text);
+        session.step = "buy_auto_stop_loss";
+        await sendQuickChoicePrompt(chatId, "Choose stop-loss percent. SL sells 100% of the tracked bag.", [
+          [{ text: "-8%", value: "8" }, { text: "-10%", value: "10" }],
+          [{ text: "-15%", value: "15" }, { text: "-25%", value: "25" }]
+        ]);
+        break;
+      case "buy_auto_stop_loss":
+        session.data.stopLossPct = parseOptionalTriggerPercent(text);
+        session.step = "buy_auto_timer";
+        await sendQuickChoicePrompt(chatId, "Choose fallback auto-sell timer if TP/SL does not trigger first.", [
+          [{ text: "5 min", value: "5" }, { text: "30 min", value: "30" }],
+          [{ text: "1 hour", value: "60" }, { text: "2 hours", value: "120" }],
+          [{ text: "1 day", value: "1440" }]
+        ]);
+        break;
+      case "buy_auto_timer":
+        session.data.sellDelaySeconds = parseSellDelaySeconds(text);
+        session.data.sellDelayMinutes = session.data.sellDelaySeconds / 60;
         session.step = "buy_slippage";
         await sendQuickSlippagePrompt(chatId, buySlippagePromptText(session.data));
         break;
       case "buy_slippage":
         session.data.slippageBps = parseSlippage(text);
-        session.step = "buy_confirm";
-        await sendConfirmPrompt(chatId, withBrandFooter(formatBuyConfirm(session.data)));
+        if (session.data.autoExit) {
+          session.step = "buy_auto_confirm";
+          await sendConfirmPrompt(chatId, withBrandFooter(formatTimedTradePlanConfirm(session.data)));
+        } else {
+          session.step = "buy_confirm";
+          await sendConfirmPrompt(chatId, withBrandFooter(formatBuyConfirm(session.data)));
+        }
+        break;
+      case "buy_auto_confirm":
+        await confirmOrCancel(chatId, text, () => createTimedTradePlanFlow(chatId, session));
         break;
       case "buy_confirm":
         await confirmOrCancel(chatId, text, () => batchBuyFlow(chatId, session));
@@ -2153,12 +2223,20 @@ async function batchBuyFlow(chatId, session) {
         return;
       }
 
+      const safetyOrder = await assertTokenBuySafety({
+        tokenMint: session.data.tokenMint,
+        taker: keypair.publicKey,
+        buyLamports: swapLamports,
+        slippageBps: session.data.slippageBps
+      });
+
       const result = await executeJupiterSwap({
         signer: keypair,
         inputMint: SOL_MINT,
         outputMint: session.data.tokenMint,
         amount: swapLamports,
-        slippageBps: session.data.slippageBps
+        slippageBps: session.data.slippageBps,
+        prebuiltOrder: safetyOrder
       });
       let feeStatus = "";
       try {
@@ -2269,7 +2347,7 @@ async function batchSellFlow(chatId, session) {
   });
 
   await recordTradeEvents(tradeEvents);
-  const pnl = await pnlSummaryText(session.userId, session.data.tokenMint, { limit: 12 });
+  const pnl = await pnlSummaryText(session.userId, session.data.tokenMint, { limit: 8 });
   await audit(isSingleTrade ? "single_sell_token" : "batch_sell_token", {
     chatId,
     userId: session.userId,
@@ -2284,7 +2362,7 @@ async function batchSellFlow(chatId, session) {
 
   clearSession(chatId);
   await sendTradeResult(chatId, withBrandFooter(`${isSingleTrade ? "Sell complete" : "Batch sell complete"}:\n\n${results.join("\n")}\n\n${pnl}`), isSingleTrade);
-  if (tradeEvents.length > 0) {
+  if (isSingleTrade && tradeEvents.length > 0) {
     await sendPnlCard(chatId, session.userId, session.data.tokenMint, { quietNoData: true });
   }
   if (!isSingleTrade) {
@@ -2395,6 +2473,9 @@ async function sellAllTokensFlow(chatId, session) {
     "",
     "Tip: use Close Empty Token Accounts after sells if you want to reclaim token-account rent."
   ].join("\n")));
+  for (const tokenMint of uniqueTokenMintsFromEvents(tradeEvents).slice(0, 6)) {
+    await sendPnlCard(chatId, session.userId, tokenMint, { quietNoData: true });
+  }
   await showMenu(chatId, session.userId);
 }
 
@@ -2647,6 +2728,12 @@ async function buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps, o
   }
 
   const trackMint = options.trackTokenDelta ? new PublicKey(tokenMint) : null;
+  const safetyOrder = await assertTokenBuySafety({
+    tokenMint,
+    taker: keypair.publicKey,
+    buyLamports: swapLamports,
+    slippageBps
+  });
   const tokenBeforeRaw = trackMint ? await safeTokenRawBalance(keypair.publicKey, trackMint) : null;
 
   const result = await executeJupiterSwap({
@@ -2654,7 +2741,8 @@ async function buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps, o
     inputMint: SOL_MINT,
     outputMint: tokenMint,
     amount: swapLamports,
-    slippageBps
+    slippageBps,
+    prebuiltOrder: safetyOrder
   });
   invalidateWalletReadCache(wallet.publicKey);
   const tokenDeltaAmount = trackMint
@@ -2747,9 +2835,7 @@ function sellAmountForPercent(currentRawAmount, percent, baseRawAmount = null) {
   if (targetBase <= 0n) return (current * BigInt(percent)) / 100n;
 
   if (percent >= 100) {
-    if (current <= targetBase) return current;
-    const extraBps = ((current - targetBase) * 10_000n) / targetBase;
-    return extraBps <= 500n ? current : targetBase;
+    return current;
   }
 
   const targetAmount = (targetBase * BigInt(percent)) / 100n;
@@ -2784,11 +2870,13 @@ async function processTradePlans() {
       if (plan.status !== "watching") continue;
 
       const walletMessages = [];
+      const pnlCardTokens = new Set();
       for (const planWallet of plan.wallets) {
         if (planWallet.status !== "watching") continue;
         const result = await processTradePlanWallet(plan, planWallet, walletStore);
         if (result.changed) changed = true;
         if (result.message) walletMessages.push(result.message);
+        if (result.pnlCardToken) pnlCardTokens.add(result.pnlCardToken);
       }
 
       if (plan.wallets.every((wallet) => wallet.status !== "watching")) {
@@ -2802,6 +2890,10 @@ async function processTradePlans() {
           `Timed trade plan update: ${plan.id}`,
           ...walletMessages
         ].join("\n")));
+      }
+
+      for (const tokenMint of pnlCardTokens) {
+        await sendPnlCard(plan.chatId, plan.userId, tokenMint, { quietNoData: true });
       }
     }
 
@@ -2828,7 +2920,7 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
   if (!triggerReason && (plan.takeProfitPct || plan.stopLossPct)) {
     const lastCheckedAt = Date.parse(planWallet.lastCheckedAt || "");
     const timerDue = now >= Date.parse(planWallet.sellAfterAt || plan.sellAfterAt);
-    if (!timerDue && Number.isFinite(lastCheckedAt) && now - lastCheckedAt < 30_000) {
+    if (!timerDue && Number.isFinite(lastCheckedAt) && now - lastCheckedAt < 10_000) {
       return { changed: false, message: null };
     }
 
@@ -2878,6 +2970,7 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
     }]);
     planWallet.completedLoops = Number.parseInt(planWallet.completedLoops || 0, 10) + 1;
     planWallet.triggerReason = triggerReason;
+    planWallet.failures = 0;
     planWallet.sellSignature = sell.signature;
     planWallet.sellFeeStatus = sell.feeStatus;
     planWallet.soldAt = new Date().toISOString();
@@ -2887,13 +2980,22 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
     }
 
     planWallet.status = "sold";
-    return { changed: true, message: `${formatTimedSellSuccessLine(planWallet, sell, triggerReason, plan.loopCount || 1)}` };
+    return {
+      changed: true,
+      message: `${formatTimedSellSuccessLine(planWallet, sell, triggerReason, plan.loopCount || 1)}`,
+      pnlCardToken: plan.tokenMint
+    };
   } catch (error) {
-    planWallet.status = "failed";
+    const failures = Number.parseInt(planWallet.failures || 0, 10) + 1;
+    planWallet.failures = failures;
+    planWallet.status = failures >= 5 ? "failed" : "watching";
     planWallet.triggerReason = triggerReason;
     planWallet.error = friendlyError(error);
     planWallet.updatedAt = new Date().toISOString();
-    return { changed: true, message: `${planWallet.label}: sell failed by ${triggerReason} - ${friendlyError(error)}` };
+    return {
+      changed: true,
+      message: `${planWallet.label}: sell failed by ${triggerReason} (${failures}/5) - ${friendlyError(error)}${failures < 5 ? ". Will retry." : ""}`
+    };
   }
 }
 
@@ -2962,11 +3064,13 @@ async function processDcaPlans() {
       if (Date.now() < nextRunAt) continue;
 
       const messages = [];
+      const pnlCardTokens = new Set();
       for (const planWallet of plan.wallets) {
         if (planWallet.status !== "active") continue;
         const result = await processDcaPlanWallet(plan, planWallet, walletStore);
         if (result.changed) changed = true;
         if (result.message) messages.push(result.message);
+        if (result.pnlCardToken) pnlCardTokens.add(result.pnlCardToken);
       }
 
       if (plan.wallets.every((wallet) => wallet.status !== "active")) {
@@ -2983,6 +3087,10 @@ async function processDcaPlans() {
           `DCA ${plan.side} update: ${plan.id}`,
           ...messages
         ].join("\n")));
+      }
+
+      for (const tokenMint of pnlCardTokens) {
+        await sendPnlCard(plan.chatId, plan.userId, tokenMint, { quietNoData: true });
       }
     }
 
@@ -3071,14 +3179,16 @@ async function processDcaPlanWallet(plan, planWallet, walletStore) {
       signature: sell.signature
     }]);
 
-    if (planWallet.completedOrders >= plan.orderCount || nextRemaining <= 0n) {
+    const completed = planWallet.completedOrders >= plan.orderCount || nextRemaining <= 0n;
+    if (completed) {
       planWallet.status = "completed";
       planWallet.completedAt = new Date().toISOString();
     }
 
     return {
       changed: true,
-      message: `DCA sell ${planWallet.completedOrders}/${plan.orderCount}: ${formatSellSuccessLine(wallet, sell)}`
+      message: `DCA sell ${planWallet.completedOrders}/${plan.orderCount}: ${formatSellSuccessLine(wallet, sell)}`,
+      pnlCardToken: completed ? plan.tokenMint : null
     };
   } catch (error) {
     const failures = Number.parseInt(planWallet.failures || 0, 10) + 1;
@@ -3305,7 +3415,7 @@ async function closeEmptyAccountsFlow(chatId, session) {
   await showMenu(chatId, session.userId);
 }
 
-async function executeJupiterSwap({ signer, inputMint, outputMint, amount, slippageBps }) {
+async function executeJupiterSwap({ signer, inputMint, outputMint, amount, slippageBps, prebuiltOrder = null }) {
   if (!CONFIG.jupiterApiKey) {
     throw new Error("Missing JUPITER_API_KEY. Swaps require a Jupiter API key.");
   }
@@ -3313,7 +3423,9 @@ async function executeJupiterSwap({ signer, inputMint, outputMint, amount, slipp
   let lastError;
   for (let attempt = 0; attempt < CONFIG.jupiterSwapMaxAttempts; attempt += 1) {
     try {
-      const order = await createJupiterOrder({
+      const order = attempt === 0 && prebuiltOrder
+        ? prebuiltOrder
+        : await createJupiterOrder({
         taker: signer.publicKey,
         inputMint,
         outputMint,
@@ -3386,6 +3498,71 @@ async function createJupiterOrder({ taker, inputMint, outputMint, amount, slippa
   }
 
   return order;
+}
+
+async function assertTokenBuySafety({ tokenMint, taker, buyLamports, slippageBps }) {
+  const safety = await getMintSafetyInfo(tokenMint);
+  if (safety.tokenProgram === TOKEN_2022_PROGRAM_ID.toBase58()) {
+    throw new Error("Token-2022 mint blocked for safety. Token-2022 can include transfer rules that make exits unreliable.");
+  }
+  if (safety.freezeAuthority) {
+    throw new Error("Token safety check failed: freeze authority is still active.");
+  }
+  if (safety.mintAuthority) {
+    throw new Error("Token safety check failed: mint authority is still active.");
+  }
+
+  const buyOrder = await createJupiterOrder({
+    taker,
+    inputMint: SOL_MINT,
+    outputMint: tokenMint,
+    amount: buyLamports,
+    slippageBps
+  });
+  const estimatedTokenOut = BigInt(buyOrder.outAmount || buyOrder.outputAmount || 0);
+  if (estimatedTokenOut <= 0n) {
+    throw new Error("Token safety check failed: buy route returned zero token output.");
+  }
+
+  const sellOrder = await createJupiterOrder({
+    taker,
+    inputMint: tokenMint,
+    outputMint: SOL_MINT,
+    amount: estimatedTokenOut.toString(),
+    slippageBps
+  });
+  const estimatedSolBack = BigInt(sellOrder.outAmount || sellOrder.outputAmount || 0);
+  if (estimatedSolBack <= 0n) {
+    throw new Error("Token safety check failed: no working sell route back to SOL.");
+  }
+
+  return buyOrder;
+}
+
+async function getMintSafetyInfo(tokenMint) {
+  const mintKey = tokenMint instanceof PublicKey ? tokenMint : new PublicKey(tokenMint);
+  const cacheKey = mintKey.toBase58();
+  const cached = getTimedCache(mintSafetyCache, cacheKey, 10 * 60 * 1000);
+  if (cached) return cached;
+
+  const response = await rpcWithRetry("get mint safety info", () => connection.getParsedAccountInfo(mintKey, "confirmed"));
+  const account = response.value;
+  if (!account?.owner) {
+    throw new Error(`Could not read mint account ${cacheKey}.`);
+  }
+  const tokenProgram = account.owner.toBase58();
+  const data = account.data;
+  const info = data && typeof data === "object" && "parsed" in data ? data.parsed?.info || {} : {};
+  const safety = {
+    tokenProgram,
+    mintAuthority: info.mintAuthority || null,
+    freezeAuthority: info.freezeAuthority || null,
+    supply: info.supply || null,
+    decimals: Number.isInteger(info.decimals) ? info.decimals : null
+  };
+
+  setTimedCache(mintSafetyCache, cacheKey, safety);
+  return safety;
 }
 
 function jupiterHeaders(extra = {}) {
@@ -3963,16 +4140,16 @@ async function showSniperModes(chatId, userId, messageId = null) {
     "Safe Mode: stricter score/risk filters.",
     "Smart Money Only: waits for stronger quality signals.",
     "Fast Scalps: quicker auto-exit defaults.",
-    "Low Cap Moonshots: allows earlier, riskier momentum.",
+    "Low Cap Moonshots: focuses on low market-cap picks under $30K when available.",
     "Meme Momentum: prioritizes social/meta language.",
-    "AI Narrative: prioritizes AI/meta naming.",
-    "AutoSnipe: fresh-scans, auto-picks one high-conviction scalp setup, then uses +25% TP / -8% SL / 400 bps slippage."
+    "Long Term: looks for stronger day-or-two setups with a 2-day timer.",
+    `AutoSnipe: fresh-scans, auto-picks one high-conviction scalp setup, then uses +${AUTOSNIPE_TAKE_PROFIT_PCT}% TP / -${AUTOSNIPE_STOP_LOSS_PCT}% SL / ${AUTOSNIPE_SLIPPAGE_BPS} bps slippage.`
   ].join("\n")), {
     inline_keyboard: [
       [{ text: "AutoSnipe", callback_data: "sniper_auto" }],
       [{ text: "Safe Scan", callback_data: "sniper_mode_safe" }, { text: "Smart Money Scan", callback_data: "sniper_mode_smart" }],
       [{ text: "Fast Scalp Scan", callback_data: "sniper_mode_fast" }, { text: "Low Cap Scan", callback_data: "sniper_mode_moonshot" }],
-      [{ text: "Meme Scan", callback_data: "sniper_mode_meme" }, { text: "AI Scan", callback_data: "sniper_mode_ai" }],
+      [{ text: "Meme Scan", callback_data: "sniper_mode_meme" }, { text: "Long Term", callback_data: "sniper_mode_long" }],
       [{ text: "Back", callback_data: "sniper_menu" }]
     ]
   });
@@ -4017,7 +4194,7 @@ async function showPnlResults(chatId, userId, messageId = null) {
       [{ text: "Main Menu", callback_data: "main_menu" }]
     ]
   };
-  const text = withBrandFooter(await pnlSummaryText(userId));
+  const text = withBrandFooter(await pnlSummaryText(userId, null, { includeTrades: false }));
 
   await sendLongMenuText(chatId, messageId, text, replyMarkup);
 }
@@ -4162,9 +4339,9 @@ async function showSniperScan(chatId, userId, messageId = null, options = {}) {
     .sort(compareSniperScores);
   const qualifiedRows = strictRows.length >= 6 ? strictRows : fallbackRows;
   const modeRows = qualifiedRows.filter((item) => isModeRelevantSniperPick(item, settings.mode));
-  const displayRows = modeRows.length >= 6
+  const displayRows = modeRows.length > 0
     ? modeRows
-    : uniqueSniperScoreRows([...modeRows, ...qualifiedRows]);
+    : qualifiedRows;
   const rows = selectRotatingSniperRows(displayRows, scanState);
   rememberSniperScanRows(userId, settings.mode, rows);
 
@@ -4388,19 +4565,20 @@ async function pnlSummaryText(userId, tokenFilter = null, options = {}) {
   }, { buys: 0, sells: 0, spent: 0n, received: 0n });
   const realized = totals.received - totals.spent;
   const shownTrades = options.limit ? trades.slice(0, options.limit) : trades;
+  const includeTrades = options.includeTrades !== false;
 
   return [
     "PnL / Results",
-    "Trade history from this bot, newest first. Oldest trades are at the bottom.",
+    includeTrades ? "Trade history from this bot, newest first. Oldest trades are at the bottom." : "Tap a card button below to share a result. Use Card by CA for older tokens.",
     "Open token value is not included in realized PnL.",
     "",
     `Trades: ${trades.length} | Buys: ${totals.buys} | Sells: ${totals.sells}`,
     `Spent: ${lamportsBigToSol(totals.spent)} SOL`,
     `Received: ${lamportsBigToSol(totals.received)} SOL`,
     `Net realized: ${formatSignedLamports(realized)} SOL`,
-    shownTrades.length < trades.length ? `Showing latest ${shownTrades.length} of ${trades.length} trade(s). Open PnL / Results for full history.` : "",
+    includeTrades && shownTrades.length < trades.length ? `Showing latest ${shownTrades.length} of ${trades.length} trade(s).` : "",
     "",
-    ...shownTrades.map(formatTradeHistoryEntry)
+    ...(includeTrades ? shownTrades.map(formatTradeHistoryEntry) : [])
   ].filter(Boolean).join("\n\n");
 }
 
@@ -4575,14 +4753,13 @@ async function renderPnlCard(row, metadata = {}) {
   ${borderLayer}
   <rect x="42" y="86" width="1116" height="510" rx="42" fill="${PNL_CARD_STYLE.panel}" filter="url(#shadow)" stroke="rgba(255,255,255,0.09)"/>
   ${art}
-  <text x="555" y="162" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="74" font-weight="900" fill="${PNL_CARD_STYLE.white}" letter-spacing="0">OGRE</text>
+  <text x="555" y="162" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="54" font-weight="900" fill="${PNL_CARD_STYLE.white}" letter-spacing="0">@OgreTradeBot</text>
   <text x="555" y="215" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="34" font-weight="800" fill="${PNL_CARD_STYLE.muted}">PNL CARD</text>
   <text x="555" y="392" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="170" font-weight="900" fill="${accent}" letter-spacing="0">${escapeSvg(multiple)}X</text>
   <text x="555" y="450" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="38" font-weight="900" fill="${PNL_CARD_STYLE.white}">${escapeSvg(symbol)} / ${escapeSvg(name)}</text>
   <text x="555" y="500" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="34" font-weight="800" fill="${accent}">Profit ${escapeSvg(profitLabel)}</text>
   <text x="555" y="544" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="28" font-weight="700" fill="${PNL_CARD_STYLE.muted}">Spent ${escapeSvg(lamportsBigToSol(spent))} SOL  |  Received ${escapeSvg(lamportsBigToSol(received))} SOL</text>
   <text x="555" y="584" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="26" font-weight="700" fill="${PNL_CARD_STYLE.muted}">${escapeSvg(subline || shortMint(row.tokenMint))}</text>
-  <text x="1010" y="630" text-anchor="end" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="24" font-weight="800" fill="${PNL_CARD_STYLE.white}">@ogrecoinonsol</text>
 </svg>`;
 
   return sharp(Buffer.from(svg)).png().toBuffer();
@@ -4859,7 +5036,8 @@ async function findAutoSnipePick(userId) {
     const recentlySeen = previousShown.has(item.tokenMint) || recentTokens.has(item.tokenMint);
     return !recentlySeen || shouldRepeatAutoSnipePick(item);
   });
-  const pick = fresh[0] || null;
+  const safeFresh = await filterAutoSnipeMintSafe(fresh.slice(0, 12));
+  const pick = safeFresh[0] || null;
 
   if (pick) {
     rememberSniperScanRows(userId, "autosnipe", [pick]);
@@ -4870,13 +5048,28 @@ async function findAutoSnipePick(userId) {
     settings,
     scoredCount: scored.length,
     qualifiedCount: qualified.length,
-    freshCount: fresh.length
+    freshCount: safeFresh.length
   };
+}
+
+async function filterAutoSnipeMintSafe(rows) {
+  const safe = [];
+  for (const row of rows) {
+    try {
+      const safety = await getMintSafetyInfo(row.tokenMint);
+      if (safety.tokenProgram !== TOKEN_PROGRAM_ID.toBase58()) continue;
+      if (safety.freezeAuthority || safety.mintAuthority) continue;
+      safe.push(row);
+    } catch {
+      // If we cannot prove the mint is clean enough, AutoSnipe skips it.
+    }
+  }
+  return safe;
 }
 
 async function recentAutoSnipeTokenSet(userId) {
   const history = await readTradeHistory();
-  const cutoff = Date.now() - 60 * 60 * 1000;
+  const cutoff = Date.now() - 6 * 60 * 60 * 1000;
   const tokens = new Set();
 
   for (const trade of history.trades) {
@@ -4893,40 +5086,50 @@ async function recentAutoSnipeTokenSet(userId) {
 
 function isAutoSnipePick(item) {
   const flags = new Set(item.riskFlags || []);
-  const weakLiquidityAllowed = item.score >= 88 && item.rugRisk <= 35 && item.exitRisk <= 40;
+  const liquidityToMarketCap = item.marketCap > 0 ? item.liquidityUsd / item.marketCap : 0;
 
   return item.category !== "Avoid"
-    && item.score >= 74
-    && item.rugRisk <= 48
-    && item.exitRisk <= 58
-    && item.manipulationScore <= 70
+    && item.score >= 82
+    && item.rugRisk <= 38
+    && item.exitRisk <= 45
+    && item.manipulationScore <= 55
     && item.scalpScore >= 4
-    && item.liquidityUsd >= 5_000
-    && (item.volume5m >= 750 || item.volumeH1 >= 7_500)
-    && item.buyPressure >= 1.05
+    && item.marketCap >= 8_000
+    && item.marketCap <= 120_000
+    && item.liquidityUsd >= 6_000
+    && item.liquidityUsd <= 80_000
+    && liquidityToMarketCap >= 0.06
+    && liquidityToMarketCap <= 0.85
+    && (item.volume5m >= 1_000 || item.volumeH1 >= 12_000)
+    && item.buyPressure >= 1.15
+    && item.m5 >= -4
+    && item.m5 <= 35
+    && item.h1 >= 0
+    && item.h1 <= 120
     && !flags.has("hard dump")
     && !flags.has("dumping")
     && !flags.has("sell pressure")
     && !flags.has("low volume")
     && !flags.has("thin liquidity")
-    && (!flags.has("weak liquidity") || weakLiquidityAllowed);
+    && !flags.has("weak liquidity");
 }
 
 function shouldRepeatAutoSnipePick(item) {
-  return item.score >= 90
-    && item.rugRisk <= 35
-    && item.exitRisk <= 40
+  return item.score >= 92
+    && item.rugRisk <= 30
+    && item.exitRisk <= 35
     && item.scalpScore >= 5
-    && item.buyPressure >= 1.25
+    && item.buyPressure >= 1.35
     && item.m5 >= 2
-    && item.h1 >= 5
+    && item.h1 >= 8
     && !(item.riskFlags || []).length;
 }
 
 function compareAutoSnipeScores(a, b) {
-  return (b.score - a.score)
-    || ((b.scalpScore || 0) - (a.scalpScore || 0))
+  return (b.scalpScore - a.scalpScore)
+    || (b.score - a.score)
     || (Number(b.buyPressure || 0) - Number(a.buyPressure || 0))
+    || (Number(b.volume5m || 0) - Number(a.volume5m || 0))
     || (a.exitRisk - b.exitRisk)
     || (a.rugRisk - b.rugRisk)
     || (a.manipulationScore - b.manipulationScore);
@@ -4993,6 +5196,8 @@ function mergeSniperMetadata(dexValue, profile = {}, source = "profile") {
 
 function isModeRelevantSniperPick(item, mode) {
   if (mode === "autosnipe") return Number(item.modeRelevance || 0) >= 4;
+  if (mode === "moonshot") return Number(item.modeRelevance || 0) >= 3 && item.marketCap > 0 && item.marketCap <= 30_000;
+  if (mode === "long") return Number(item.modeRelevance || 0) >= 3 && item.h6 >= 0;
   return Number(item.modeRelevance || 0) >= (mode === "ai" || mode === "meme" ? 5 : 3);
 }
 
@@ -5239,7 +5444,8 @@ function sniperModeDefaults(mode) {
     moonshot: { mode: "moonshot", minScore: 62, maxRisk: 65 },
     meme: { mode: "meme", minScore: 66, maxRisk: 58 },
     ai: { mode: "ai", minScore: 66, maxRisk: 58 },
-    autosnipe: { mode: "autosnipe", minScore: 78, maxRisk: 42 }
+    long: { mode: "long", minScore: 72, maxRisk: 48 },
+    autosnipe: { mode: "autosnipe", minScore: 82, maxRisk: 38 }
   };
   return defaults[mode] || defaults.safe;
 }
@@ -5252,6 +5458,7 @@ function sniperModeLabel(mode) {
     moonshot: "Low Cap Moonshots",
     meme: "Meme Momentum",
     ai: "AI Narrative",
+    long: "Long Term",
     autosnipe: "AutoSnipe"
   };
   return labels[mode] || labels.safe;
@@ -5262,7 +5469,8 @@ function sniperNarrativeScore(text, mode) {
     ai: ["ai", "agent", "gpt", "robot", "neural", "compute", "agi"],
     meme: ["dog", "cat", "frog", "pepe", "bonk", "wif", "meme", "cto"],
     moonshot: ["moon", "rocket", "pump", "gem", "100x"],
-    fast: ["pump", "moon", "send", "ape"]
+    fast: ["pump", "moon", "send", "ape"],
+    long: ["utility", "ai", "agent", "game", "defi", "protocol", "community"]
   };
   const list = keywords[mode] || [];
   return list.some((word) => text.includes(word)) ? 10 : 0;
@@ -5275,6 +5483,7 @@ function sniperModeBonus(mode, data) {
   if (mode === "fast") return relevance >= 3 ? 11 : 0;
   if (mode === "autosnipe") return relevance >= 4 ? 13 : relevance >= 3 ? 6 : 0;
   if (mode === "moonshot") return relevance >= 3 ? 8 : 0;
+  if (mode === "long") return relevance >= 4 ? 10 : relevance >= 3 ? 5 : 0;
   if (mode === "meme" || mode === "ai") return data.narrative > 0 ? 12 : 0;
   return 0;
 }
@@ -5310,11 +5519,18 @@ function sniperModeRelevance(mode, data) {
       + Number(data.h6 >= -5 && data.m5 >= -6);
   }
   if (mode === "moonshot") {
-    return Number(data.marketCap > 0 && data.marketCap <= 250_000)
+    return Number(data.marketCap > 0 && data.marketCap <= 30_000)
       + Number(data.liquidityUsd >= 3_000)
       + Number(data.buyPressure >= 1)
       + Number(data.volumeH1 >= 3_000 || data.volume5m >= 500)
       + Number(data.h1 >= -5 && data.m5 >= -10);
+  }
+  if (mode === "long") {
+    return Number(data.marketCap >= 30_000 && data.marketCap <= 1_500_000)
+      + Number(data.liquidityUsd >= 10_000)
+      + Number(data.buyPressure >= 1)
+      + Number(data.h1 >= 0 && data.h6 >= 0)
+      + Number(data.h24 >= -10);
   }
   return 1;
 }
@@ -5330,11 +5546,12 @@ function applySniperExitPreset(session, presetText) {
     fast: { sellDelaySeconds: 180, sellPercent: 100, takeProfitPct: 35, stopLossPct: 10, label: "Fast Scalp" },
     balanced: { sellDelaySeconds: 900, sellPercent: 80, takeProfitPct: 50, stopLossPct: 15, label: "Balanced" },
     moonbag: { sellDelaySeconds: 1800, sellPercent: 60, takeProfitPct: 100, stopLossPct: 25, label: "Moonbag" },
-    safe: { sellDelaySeconds: 600, sellPercent: 100, takeProfitPct: 20, stopLossPct: 8, label: "Safe" }
+    safe: { sellDelaySeconds: 600, sellPercent: 100, takeProfitPct: 20, stopLossPct: 8, label: "Safe" },
+    long: { sellDelaySeconds: 172800, sellPercent: 100, takeProfitPct: 75, stopLossPct: 20, label: "Long Term" }
   };
   const selected = presets[preset];
   if (!selected) {
-    throw new Error("Choose Fast Scalp, Balanced, Moonbag, or Safe.");
+    throw new Error("Choose Fast Scalp, Balanced, Moonbag, Safe, or Long Term.");
   }
   Object.assign(session.data, selected, {
     sellDelayMinutes: selected.sellDelaySeconds / 60,
@@ -5354,7 +5571,7 @@ function applyAutoSnipeExitPreset(session) {
     takeProfitPct: AUTOSNIPE_TAKE_PROFIT_PCT,
     stopLossPct: AUTOSNIPE_STOP_LOSS_PCT,
     loopCount: 1,
-    exitPreset: "AutoSnipe 25%",
+    exitPreset: `AutoSnipe ${AUTOSNIPE_TAKE_PROFIT_PCT}%`,
     allowRepeat: false,
     slippageBps: AUTOSNIPE_SLIPPAGE_BPS
   });
@@ -5364,6 +5581,7 @@ function recommendedSniperExitPreset(score, settings) {
   const mode = settings?.mode || "safe";
   if (mode === "fast") return "fast";
   if (mode === "moonshot") return "moonbag";
+  if (mode === "long") return "long";
   if (mode === "safe" || score?.rugRisk <= 35 && score?.exitRisk <= 40) return "safe";
   if (score?.score >= 88 && score?.rugRisk <= 45) return "moonbag";
   if (score?.score >= 74) return "balanced";
@@ -5398,6 +5616,12 @@ function sniperPresetExplanation(label) {
   }
   if (normalized.includes("safe")) {
     return "Safe is strict: smaller profit target, tighter stop, and full exit to protect capital.";
+  }
+  if (normalized.includes("long")) {
+    return "Long Term gives stronger setups up to 2 days to develop, while still using take-profit and stop-loss exits.";
+  }
+  if (normalized.includes("autosnipe")) {
+    return "AutoSnipe is tuned for faster low-cap scalps with a realistic profit target and tight stop.";
   }
   return "This preset controls timer exit, take-profit, stop-loss, and sell percent.";
 }
@@ -5511,7 +5735,7 @@ function howToPage(topic) {
         "Use Trade when you only want to trade one wallet at a time.",
         "",
         "Buttons inside Trade:",
-        "- Buy: choose one wallet, paste the token mint, then tap a quick amount like Buy 0.10 SOL, Buy 0.50 SOL, Buy 1 SOL, Use Max, or Buy X SOL.",
+        "- Buy: choose one wallet, paste the token mint, then tap a quick amount like Buy 0.10 SOL, Buy 0.50 SOL, Buy 1 SOL, Use Max, or Buy X SOL. With a fixed amount, you can add take-profit / stop-loss before confirming.",
         "- Sell: choose one wallet, paste the token mint, then tap Sell 25%, Sell 50%, Sell 100%, or Sell X %.",
         "- Sell All Tokens: choose one wallet, multiple wallets, all, or group: name. The bot sells every token with a Jupiter route into SOL, then lets you keep SOL in those wallets or send it to one destination.",
         "- Auto Sell: buys now, then sells later by timer, take-profit, or stop-loss.",
@@ -5525,6 +5749,7 @@ function howToPage(topic) {
         "- Slippage: default is usually fine. Raise it only if a token is moving fast or quotes fail from price movement.",
         "- Use Max: spends available SOL minus the safety reserve.",
         "- Confirm screen: always read token mint, wallet, amount, fee, and slippage before tapping Confirm.",
+        "- Safety check: buys block active mint/freeze authority and require a Jupiter sell route back to SOL.",
         "",
         "Best first trade:",
         "Use a small amount, confirm the token on Dexscreener, then try a sell before using larger size."
@@ -5540,7 +5765,7 @@ function howToPage(topic) {
         "Buttons inside OgreSniper:",
         `- AutoSnipe: fresh-scans, picks one high-conviction scalp setup, then after wallet and amount it fills +${AUTOSNIPE_TAKE_PROFIT_PCT}% take-profit, -${AUTOSNIPE_STOP_LOSS_PCT}% stop-loss, ${AUTOSNIPE_SLIPPAGE_BPS} bps slippage, and a ${formatDelay(AUTOSNIPE_SELL_DELAY_SECONDS)} timer fallback.`,
         "- Scan Early Plays: checks latest Solana token profiles and shows the top ranked picks. Each pick has a Snipe button, Dex chart link in the text, and tap-to-copy CA.",
-        "- Modes: choose Safe Scan, Smart Money Scan, Fast Scalp Scan, Low Cap Scan, Meme Scan, or AI Scan. Tapping a mode saves that mode and immediately scans that category.",
+        "- Modes: choose Safe Scan, Smart Money Scan, Fast Scalp Scan, Low Cap Scan, Meme Scan, or Long Term. Tapping a mode saves that mode and immediately scans that category.",
         "",
         "AutoSnipe flow:",
         "Tap AutoSnipe, let it scan, choose wallet(s), choose SOL amount, then Confirm. It avoids recent AutoSnipe tokens unless the current score is strong enough to justify another entry.",
@@ -5556,9 +5781,9 @@ function howToPage(topic) {
         "- Safe Mode: strict score and risk limits. Best first mode.",
         "- Smart Money Only: stricter score requirement and stronger momentum quality.",
         "- Fast Scalps: allows more speed-focused entries and pairs well with the Fast Scalp exit.",
-        "- Low Cap Moonshots: allows earlier low-cap setups, with higher risk.",
+        "- Low Cap Moonshots: focuses on lower market-cap picks under $30K when available, with higher risk.",
         "- Meme Momentum: gives extra weight to current meme-style names/meta.",
-        "- AI Narrative: gives extra weight to AI/agent/computing style names/meta.",
+        "- Long Term: looks for better day-or-two setups and uses a 2-day timer by default.",
         "",
         "Scoring explained:",
         "- Entry Score estimates metadata quality, liquidity, 5m/1h volume, buy pressure, price momentum, and narrative fit.",
@@ -5573,6 +5798,7 @@ function howToPage(topic) {
         "- Balanced: timer sells 80% after 15 minutes. Take-profit or stop-loss sells 100% of the tracked bag.",
         "- Moonbag: timer sells 60% after 30 minutes. Take-profit or stop-loss sells 100% of the tracked bag.",
         "- Safe: sells 100% after 10 minutes, or earlier at +20% take-profit / -8% stop-loss.",
+        "- Long Term: sells 100% after 2 days, or earlier at +75% take-profit / -20% stop-loss.",
         "",
         "Custom exits:",
         "After amount selection, OgreSniper shows the recommended preset. Tap Use Preset, Customize TP/SL, or Back. Customize TP/SL changes the take-profit and stop-loss percentages. TP/SL exits are always full exits on the tracked bag.",
@@ -5623,7 +5849,7 @@ function howToPage(topic) {
         "Use Bundle when you want the same action across multiple wallets.",
         "",
         "Buttons inside Bundle:",
-        "- Bundle Buy: paste token mint, choose wallets, choose SOL per wallet, choose slippage, confirm.",
+        "- Bundle Buy: paste token mint, choose wallets, choose fixed SOL per wallet, then choose normal buy or add take-profit / stop-loss before confirming.",
         "- Bundle Sell: paste token mint, choose wallets, choose percent to sell, choose slippage, confirm.",
         "- DCA Buy: split a total SOL amount per selected wallet into scheduled smaller buys.",
         "- DCA Sell: split a selected percent per wallet into scheduled smaller sells.",
@@ -6754,6 +6980,7 @@ function formatDelay(seconds) {
   const value = Number(seconds);
   if (!Number.isFinite(value)) return "unknown";
   if (value < 60) return `${value} second(s)`;
+  if (value >= 86_400 && value % 86_400 === 0) return `${value / 86_400} day(s)`;
   const minutes = value / 60;
   return Number.isInteger(minutes) ? `${minutes} minute(s)` : `${minutes.toFixed(2)} minute(s)`;
 }
@@ -6977,6 +7204,12 @@ function limitResultLines(lines, limit = 80) {
   ];
 }
 
+function uniqueTokenMintsFromEvents(events) {
+  return [...new Set((Array.isArray(events) ? events : [])
+    .map((event) => event.tokenMint)
+    .filter(Boolean))];
+}
+
 function formatFundConfirm(data) {
   return [
     "Confirm funding:",
@@ -7023,7 +7256,8 @@ function formatBuyConfirm(data) {
       `Spend mode: MAX`,
       `Each wallet keeps safety reserve: ${CONFIG.buyReserveSol} SOL`,
       `Platform fee: ${formatFeeRate()} to ${CONFIG.feeWallet}`,
-      `Slippage: ${data.slippageBps} bps`
+      `Slippage: ${data.slippageBps} bps`,
+      "Safety check: before buying, the bot blocks active mint/freeze authority and requires a Jupiter sell route back to SOL."
     ].join("\n");
   }
 
@@ -7038,9 +7272,10 @@ function formatBuyConfirm(data) {
     `${data.tradeMode === "single" ? "Net Jupiter swap input" : "Net Jupiter swap input per wallet"}: ${lamportsToSol(amountLamports - feeLamports)} SOL`,
     `Platform fee: ${lamportsToSol(feeLamports)} SOL (${formatFeeRate()}) to ${CONFIG.feeWallet}`,
     `${data.tradeMode === "single" ? "Recommended balance" : "Recommended balance per wallet"}: ${lamportsToSol(recommendedLamports)} SOL`,
-    `Slippage: ${data.slippageBps} bps`,
-    "",
-    "If the token output looks too low after buying, that is usually price impact/liquidity/route movement, not the SOL input being cut in half."
+      `Slippage: ${data.slippageBps} bps`,
+      "Safety check: before buying, the bot blocks active mint/freeze authority and requires a Jupiter sell route back to SOL.",
+      "",
+      "If the token output looks too low after buying, that is usually price impact/liquidity/route movement, not the SOL input being cut in half."
   ].join("\n");
 }
 
@@ -7154,6 +7389,7 @@ function formatTimedTradePlanConfirm(data) {
     `Stop-loss: ${data.stopLossPct ? `-${data.stopLossPct}%` : "off"}`,
     `Slippage: ${data.slippageBps} bps`,
     "",
+    "Safety check: before buying, the bot blocks active mint/freeze authority and requires a Jupiter sell route back to SOL.",
     "The bot buys now, then watches every few seconds while awake. If Render was asleep, it catches up when it wakes."
   ].join("\n");
 }
@@ -7176,6 +7412,7 @@ function formatSniperConfirm(data) {
     `Stop-loss: -${data.stopLossPct}% -> sells 100% of the tracked bag`,
     `Slippage: ${data.slippageBps} bps`,
     "",
+    "Safety check: before buying, the bot blocks active mint/freeze authority and requires a Jupiter sell route back to SOL.",
     "This buys now, then watches for timer/take-profit/stop-loss exits. Price-trigger exits are full exits."
   ].filter(Boolean).join("\n");
 }
