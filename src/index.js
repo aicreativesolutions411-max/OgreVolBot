@@ -45,6 +45,10 @@ const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ
 const TOKEN_2022_PROGRAM_ID = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 const SOL_MINT = "So11111111111111111111111111111111111111112";
+const AUTOSNIPE_TAKE_PROFIT_PCT = 25;
+const AUTOSNIPE_STOP_LOSS_PCT = 8;
+const AUTOSNIPE_SLIPPAGE_BPS = 400;
+const AUTOSNIPE_SELL_DELAY_SECONDS = 300;
 const PNL_CARD_STYLE = Object.freeze({
   width: 1200,
   height: 675,
@@ -95,6 +99,7 @@ const PRIVATE_CHAT_ACTIONS = new Set([
   "trade_menu",
   "sniper_menu",
   "sniper_scan",
+  "sniper_auto",
   "sniper_modes",
   "sniper_mode_safe",
   "sniper_mode_smart",
@@ -129,6 +134,7 @@ const PRIVATE_CHAT_ACTIONS = new Set([
   "dca_buy",
   "dca_sell",
   "timed_trade_plans",
+  "sell_all_tokens",
   "sweep_sol",
   "sweep_tokens",
   "close_empty_accounts"
@@ -774,6 +780,9 @@ async function handleCallback(query, userId) {
     case "sniper_scan":
       await showSniperScan(chatId, userId, messageId);
       break;
+    case "sniper_auto":
+      await startAutoSnipeFlow(chatId, userId, messageId);
+      break;
     case "sniper_mode_safe":
     case "sniper_mode_smart":
     case "sniper_mode_fast":
@@ -894,6 +903,10 @@ async function handleCallback(query, userId) {
     case "timed_trade_plans":
       sessions.set(chatId, { step: "plan_token", userId, data: { allowRepeat: true } });
       await say(chatId, timedTradePlanIntroText());
+      break;
+    case "sell_all_tokens":
+      sessions.set(chatId, { step: "sell_all_tokens_wallets", userId, data: {} });
+      await say(chatId, await walletPrompt(userId, "Send one wallet number, multiple wallet numbers, `all`, or `group: group name`.\n\nThe bot will sell every SPL token it can route through Jupiter into SOL."));
       break;
     case "sweep_sol":
       setSession(chatId, "sweep_sol_destination", userId);
@@ -1297,6 +1310,13 @@ async function continueFlow(chatId, text, session) {
         break;
       case "sniper_amount":
         session.data.amountSol = parsePositiveNumber(text);
+        if (session.data.autoSnipe) {
+          applyAutoSnipeExitPreset(session);
+          session.data.slippageBps = AUTOSNIPE_SLIPPAGE_BPS;
+          session.step = "sniper_confirm";
+          await sendConfirmPrompt(chatId, withBrandFooter(formatSniperConfirm(session.data)));
+          break;
+        }
         applySniperExitPreset(session, recommendedSniperExitPreset(session.data.score, session.data.settings));
         session.step = "sniper_exit_review";
         await sendQuickChoicePrompt(chatId, [
@@ -1623,6 +1643,49 @@ async function continueFlow(chatId, text, session) {
         break;
       case "dca_confirm":
         await confirmOrCancel(chatId, text, () => createDcaPlanFlow(chatId, session));
+        break;
+      case "sell_all_tokens_wallets":
+        session.data.walletIndexes = await parseWalletSelectionOrGroup(text, session.userId);
+        session.data.walletSelector = text.trim();
+        session.step = "sell_all_tokens_after";
+        await sendQuickChoicePrompt(chatId, [
+          "After selling all selected wallet tokens into SOL, where should the SOL stay?",
+          "",
+          "Keep in wallets: leaves each wallet's SOL in place.",
+          "Send to one wallet: drains each selected wallet's SOL after the sells finish."
+        ].join("\n"), [
+          [{ text: "Keep in wallets", value: "keep" }],
+          [{ text: "Send to one wallet", value: "sweep" }]
+        ], { includeCustom: false });
+        break;
+      case "sell_all_tokens_after":
+        if (text.trim().toLowerCase() === "keep") {
+          session.data.sweepAfter = false;
+          session.step = "sell_all_tokens_slippage";
+          await sendQuickSlippagePrompt(chatId, `Choose slippage for selling all tokens, or type default for ${CONFIG.defaultSlippageBps} bps.`);
+        } else if (text.trim().toLowerCase() === "sweep") {
+          session.data.sweepAfter = true;
+          session.step = "sell_all_tokens_destination";
+          await say(chatId, "Send the destination wallet address that should receive all SOL after the token sells.");
+        } else {
+          await sendQuickChoicePrompt(chatId, "Choose where SOL should go after selling tokens.", [
+            [{ text: "Keep in wallets", value: "keep" }],
+            [{ text: "Send to one wallet", value: "sweep" }]
+          ], { includeCustom: false });
+        }
+        break;
+      case "sell_all_tokens_destination":
+        session.data.destination = parsePublicKey(text).toBase58();
+        session.step = "sell_all_tokens_slippage";
+        await sendQuickSlippagePrompt(chatId, `Choose slippage for selling all tokens, or type default for ${CONFIG.defaultSlippageBps} bps.`);
+        break;
+      case "sell_all_tokens_slippage":
+        session.data.slippageBps = parseSlippage(text);
+        session.step = "sell_all_tokens_confirm";
+        await sendConfirmPrompt(chatId, withBrandFooter(formatSellAllTokensConfirm(session.data)));
+        break;
+      case "sell_all_tokens_confirm":
+        await confirmOrCancel(chatId, text, () => sellAllTokensFlow(chatId, session));
         break;
       case "sweep_sol_destination":
         session.data.destination = parsePublicKey(text).toBase58();
@@ -2229,10 +2292,117 @@ async function batchSellFlow(chatId, session) {
   }
 }
 
+async function sellAllTokensFlow(chatId, session) {
+  const store = await readWalletStore();
+  const destination = session.data.sweepAfter ? new PublicKey(session.data.destination) : null;
+  const wallets = session.data.walletIndexes.map((index) => getWalletAt(store, index, session.userId));
+  const results = [];
+  const tradeEvents = [];
+  let soldCount = 0;
+  let skippedCount = 0;
+  let sweptCount = 0;
+
+  for (const wallet of wallets) {
+    let keypair;
+
+    try {
+      keypair = decryptWallet(wallet);
+      const lookup = await getOwnedTokenAccountsWithWarningsCached(keypair.publicKey, { force: true });
+      if (lookup.successes === 0 && lookup.warnings.length > 0) {
+        throw new Error(lookup.warnings.join(" | "));
+      }
+
+      if (lookup.warnings.length > 0) {
+        results.push(`${wallet.label}: token account check warning - ${lookup.warnings.join(" | ")}`);
+      }
+
+      const tokens = sellableTokensFromAccounts(lookup.accounts);
+      if (tokens.length === 0) {
+        results.push(`${wallet.label}: no sellable SPL token balances found`);
+      }
+
+      for (const token of tokens) {
+        try {
+          const sell = await sellTokenAmountFromWallet(wallet, token.mint, token.rawAmount, session.data.slippageBps);
+          soldCount += 1;
+          invalidateWalletReadCache(wallet.publicKey);
+          results.push(formatSellAllTokenLine(wallet, token, sell));
+          tradeEvents.push({
+            userId: session.userId,
+            type: "sell",
+            source: "sell_all_tokens",
+            tokenMint: token.mint,
+            walletLabel: wallet.label,
+            walletPublicKey: wallet.publicKey,
+            tokenAmount: sell.tokenAmount,
+            solLamportsReceived: sell.outputLamports,
+            signature: sell.signature
+          });
+          await sleep(Math.max(250, CONFIG.rpcDelayMs));
+        } catch (error) {
+          skippedCount += 1;
+          results.push(`${wallet.label}: ${shortMint(token.mint)} skipped - ${friendlyError(error)}`);
+          await sleep(Math.max(250, CONFIG.rpcDelayMs));
+        }
+      }
+
+      if (destination) {
+        try {
+          const sweep = await drainSolFromWallet(keypair, destination);
+          if (sweep.signature) {
+            sweptCount += 1;
+            invalidateWalletReadCache(wallet.publicKey);
+            invalidateWalletReadCache(destination.toBase58());
+            results.push(`${wallet.label}: sent ${lamportsToSol(sweep.sentLamports)} SOL to ${shortMint(destination.toBase58())}`);
+          } else {
+            results.push(`${wallet.label}: SOL not sent - ${sweep.message}`);
+          }
+          await sleep(Math.max(250, CONFIG.rpcDelayMs));
+        } catch (error) {
+          results.push(`${wallet.label}: SOL send failed - ${friendlyError(error)}`);
+        }
+      }
+    } catch (error) {
+      results.push(`${wallet.label}: failed - ${friendlyError(error)}`);
+    }
+  }
+
+  await recordTradeEvents(tradeEvents);
+  await audit("sell_all_tokens", {
+    chatId,
+    userId: session.userId,
+    walletIndexes: session.data.walletIndexes,
+    destination: session.data.destination || null,
+    sweepAfter: Boolean(session.data.sweepAfter),
+    feeWallet: CONFIG.feeWallet,
+    feeBps: CONFIG.bundleFeeBps,
+    slippageBps: session.data.slippageBps,
+    soldCount,
+    skippedCount,
+    sweptCount,
+    results
+  });
+
+  clearSession(chatId);
+  await say(chatId, withBrandFooter([
+    "Sell all tokens complete.",
+    "",
+    `Tokens sold: ${soldCount}`,
+    `Tokens skipped: ${skippedCount}`,
+    destination ? `Wallets sent to destination: ${sweptCount}/${wallets.length}` : "SOL location: kept in the selected wallets",
+    "",
+    ...limitResultLines(results),
+    "",
+    "Tip: use Close Empty Token Accounts after sells if you want to reclaim token-account rent."
+  ].join("\n")));
+  await showMenu(chatId, session.userId);
+}
+
 async function createTimedTradePlanFlow(chatId, session) {
   const store = await readWalletStore();
   const wallets = session.data.walletIndexes.map((index) => getWalletAt(store, index, session.userId));
   const amountLamports = solToLamports(session.data.amountSol);
+  const planSource = session.data.planSource || (session.data.autoSnipe ? "autosnipe" : "timed_plan");
   const results = [];
   const planWallets = [];
   const tradeEvents = [];
@@ -2244,7 +2414,7 @@ async function createTimedTradePlanFlow(chatId, session) {
       tradeEvents.push({
         userId: session.userId,
         type: "buy",
-        source: "timed_plan",
+        source: planSource,
         tokenMint: session.data.tokenMint,
         walletLabel: wallet.label,
         walletPublicKey: wallet.publicKey,
@@ -2285,6 +2455,7 @@ async function createTimedTradePlanFlow(chatId, session) {
     userId: session.userId,
     chatId,
     tokenMint: session.data.tokenMint,
+    source: planSource,
     walletSelector: session.data.walletSelector,
     amountSol: session.data.amountSol,
     sellDelayMinutes: session.data.sellDelayMinutes,
@@ -2341,7 +2512,8 @@ async function createSniperTimedPlanFlow(chatId, session) {
     category: score.category,
     rugRisk: score.rugRisk,
     exitRisk: score.exitRisk,
-    mode: session.data.settings?.mode || "safe"
+    mode: session.data.settings?.mode || "safe",
+    autoSnipe: Boolean(session.data.autoSnipe)
   });
   await createTimedTradePlanFlow(chatId, session);
 }
@@ -2585,7 +2757,7 @@ function sellAmountForPercent(currentRawAmount, percent, baseRawAmount = null) {
 }
 
 function isPriceExitTrigger(triggerReason) {
-  return /^take-profit|^stop-loss/i.test(String(triggerReason || ""));
+  return /^(take-profit|stop-loss)\b/i.test(String(triggerReason || ""));
 }
 
 function effectiveTimedSellPercent(plan, triggerReason) {
@@ -2696,7 +2868,7 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
     await recordTradeEvents([{
       userId: plan.userId,
       type: "sell",
-      source: "timed_plan",
+      source: plan.source === "autosnipe" ? "autosnipe_exit" : "timed_plan",
       tokenMint: plan.tokenMint,
       walletLabel: wallet.label,
       walletPublicKey: wallet.publicKey,
@@ -2756,7 +2928,9 @@ async function restartTimedPlanLoop(plan, planWallet, wallet, sell, triggerReaso
       changed: true,
       message: [
         formatTimedSellSuccessLine(planWallet, sell, triggerReason, plan.loopCount),
-        `started loop ${planWallet.currentLoop}/${plan.loopCount}, ${formatBuySuccessLine(wallet, buy.amountLamports, buy.feeLamports, buy.swapLamports, buy, buy.feeStatus)}`
+        isPriceExitTrigger(triggerReason)
+          ? `started loop ${planWallet.currentLoop}/${plan.loopCount}, bought again with ${lamportsToSol(buy.amountLamports)} SOL`
+          : `started loop ${planWallet.currentLoop}/${plan.loopCount}, ${formatBuySuccessLine(wallet, buy.amountLamports, buy.feeLamports, buy.swapLamports, buy, buy.feeStatus)}`
       ].join("; ")
     };
   } catch (error) {
@@ -3500,6 +3674,32 @@ function aggregateTokenAccountsForMint(accounts, mint) {
   };
 }
 
+function sellableTokensFromAccounts(accounts) {
+  const byMint = new Map();
+
+  for (const account of accounts) {
+    if (!account || account.rawAmount <= 0n || account.mint === SOL_MINT) continue;
+
+    const current = byMint.get(account.mint);
+    if (!current) {
+      byMint.set(account.mint, {
+        mint: account.mint,
+        rawAmount: account.rawAmount,
+        decimals: account.decimals,
+        uiAmount: account.uiAmount,
+        accountCount: 1
+      });
+      continue;
+    }
+
+    current.rawAmount += account.rawAmount;
+    current.accountCount += 1;
+    current.uiAmount = rawTokenAmountToUi(current.rawAmount, current.decimals);
+  }
+
+  return [...byMint.values()].sort((left, right) => compareBigInt(right.rawAmount, left.rawAmount));
+}
+
 function getAssociatedTokenAddress(mint, owner, tokenProgramId = TOKEN_PROGRAM_ID) {
   return PublicKey.findProgramAddressSync(
     [owner.toBuffer(), tokenProgramId.toBuffer(), mint.toBuffer()],
@@ -3721,6 +3921,7 @@ async function showTradeMenu(chatId, messageId = null) {
     inline_keyboard: [
       [{ text: "Buy", callback_data: "trade_buy" }, { text: "Sell", callback_data: "trade_sell" }],
       [{ text: "Auto Sell", callback_data: "trade_auto_sell" }],
+      [{ text: "Sell All Tokens", callback_data: "sell_all_tokens" }],
       [{ text: "DCA Buy", callback_data: "trade_dca_buy" }, { text: "DCA Sell", callback_data: "trade_dca_sell" }],
       [{ text: "Positions", callback_data: "positions_overview" }, { text: "Wallets", callback_data: "list_wallets" }],
       [{ text: "Main Menu", callback_data: "main_menu" }]
@@ -3742,6 +3943,7 @@ async function showSniperMenu(chatId, userId, messageId = null) {
     "Scan shows ranked picks with Snipe buttons. After amount, the bot auto-selects a take-profit / stop-loss preset you can customize before Confirm."
   ].join("\n")), {
     inline_keyboard: [
+      [{ text: "AutoSnipe", callback_data: "sniper_auto" }],
       [{ text: "Scan Early Plays", callback_data: "sniper_scan" }],
       [{ text: "Modes", callback_data: "sniper_modes" }],
       [{ text: "Main Menu", callback_data: "main_menu" }]
@@ -3763,9 +3965,11 @@ async function showSniperModes(chatId, userId, messageId = null) {
     "Fast Scalps: quicker auto-exit defaults.",
     "Low Cap Moonshots: allows earlier, riskier momentum.",
     "Meme Momentum: prioritizes social/meta language.",
-    "AI Narrative: prioritizes AI/meta naming."
+    "AI Narrative: prioritizes AI/meta naming.",
+    "AutoSnipe: fresh-scans, auto-picks one high-conviction scalp setup, then uses +25% TP / -8% SL / 400 bps slippage."
   ].join("\n")), {
     inline_keyboard: [
+      [{ text: "AutoSnipe", callback_data: "sniper_auto" }],
       [{ text: "Safe Scan", callback_data: "sniper_mode_safe" }, { text: "Smart Money Scan", callback_data: "sniper_mode_smart" }],
       [{ text: "Fast Scalp Scan", callback_data: "sniper_mode_fast" }, { text: "Low Cap Scan", callback_data: "sniper_mode_moonshot" }],
       [{ text: "Meme Scan", callback_data: "sniper_mode_meme" }, { text: "AI Scan", callback_data: "sniper_mode_ai" }],
@@ -3790,6 +3994,7 @@ async function showWithdrawalMenu(chatId, messageId = null) {
   await sendOrEditMessage(chatId, messageId, withBrandFooter("Withdrawal tools:"), {
     inline_keyboard: [
       [{ text: "🏦 Withdraw SOL", callback_data: "sweep_sol" }],
+      [{ text: "Sell All Tokens to SOL", callback_data: "sell_all_tokens" }],
       [{ text: "Sweep Tokens", callback_data: "sweep_tokens" }],
       [{ text: "Fund Wallets", callback_data: "fund_wallets" }],
       [{ text: "Main Menu", callback_data: "main_menu" }]
@@ -3987,6 +4192,60 @@ async function showSniperScan(chatId, userId, messageId = null, options = {}) {
     ].join("\n\n")), {
       inline_keyboard: keyboard
     });
+}
+
+async function startAutoSnipeFlow(chatId, userId, messageId = null) {
+  const status = await sendOrEditMessage(chatId, messageId, withBrandFooter([
+    "AutoSnipe is fresh-scanning now...",
+    "",
+    "Looking for one high-conviction scalp setup with live metadata, active volume, buyer pressure, and manageable risk."
+  ].join("\n")), {
+    inline_keyboard: [[{ text: "Back", callback_data: "sniper_menu" }]]
+  });
+  const targetMessageId = messageId || status?.message_id || null;
+
+  const result = await findAutoSnipePick(userId);
+  if (!result.pick) {
+    clearSession(chatId);
+    await sendOrEditMessage(chatId, targetMessageId, withBrandFooter([
+      "AutoSnipe did not find a strong enough fresh setup right now.",
+      "",
+      `Scored: ${result.scoredCount}`,
+      `Qualified: ${result.qualifiedCount}`,
+      "",
+      "Try again in a minute, or use Scan Early Plays to review picks manually."
+    ].join("\n")), {
+      inline_keyboard: [
+        [{ text: "Try AutoSnipe Again", callback_data: "sniper_auto" }],
+        [{ text: "Scan Early Plays", callback_data: "sniper_scan" }],
+        [{ text: "Back", callback_data: "sniper_menu" }]
+      ]
+    });
+    return;
+  }
+
+  sessions.set(chatId, {
+    step: "sniper_wallets",
+    userId,
+    data: {
+      tokenMint: result.pick.tokenMint,
+      settings: result.settings,
+      score: result.pick,
+      autoSnipe: true,
+      planSource: "autosnipe",
+      autoSnipeStats: {
+        scoredCount: result.scoredCount,
+        qualifiedCount: result.qualifiedCount,
+        freshCount: result.freshCount
+      }
+    }
+  });
+
+  await sendSniperWalletPrompt(chatId, userId, result.pick, [
+    "AutoSnipe picked the strongest fresh setup it found.",
+    `Defaults after amount: +${AUTOSNIPE_TAKE_PROFIT_PCT}% take-profit, -${AUTOSNIPE_STOP_LOSS_PCT}% stop-loss, ${AUTOSNIPE_SLIPPAGE_BPS} bps slippage.`,
+    "Choose wallets, then choose SOL amount. The next screen will be Confirm."
+  ].join("\n"));
 }
 
 async function startSniperPickFlow(chatId, userId, tokenMint, messageId = null) {
@@ -4576,19 +4835,119 @@ function uniqueSniperScoreRows(rows) {
   return unique;
 }
 
+async function findAutoSnipePick(userId) {
+  const settings = sniperModeDefaults("autosnipe");
+  const scanState = nextSniperScanState(userId, "autosnipe");
+  const candidates = await fetchSniperCandidates();
+  const scored = [];
+  const scanPool = await hydrateSniperCandidates(rotateSniperCandidatePool(candidates, scanState));
+
+  await runWithConcurrency(scanPool, Math.min(6, Math.max(3, CONFIG.balanceConcurrency)), async (candidate) => {
+    try {
+      scored.push(await scoreSniperCandidate(candidate, settings));
+    } catch {
+      // Ignore broken rows; AutoSnipe only needs the best valid setup.
+    }
+  });
+
+  const recentTokens = await recentAutoSnipeTokenSet(userId);
+  const previousShown = new Set(scanState.previousShown || []);
+  const qualified = scored
+    .filter((item) => isAutoSnipePick(item))
+    .sort(compareAutoSnipeScores);
+  const fresh = qualified.filter((item) => {
+    const recentlySeen = previousShown.has(item.tokenMint) || recentTokens.has(item.tokenMint);
+    return !recentlySeen || shouldRepeatAutoSnipePick(item);
+  });
+  const pick = fresh[0] || null;
+
+  if (pick) {
+    rememberSniperScanRows(userId, "autosnipe", [pick]);
+  }
+
+  return {
+    pick,
+    settings,
+    scoredCount: scored.length,
+    qualifiedCount: qualified.length,
+    freshCount: fresh.length
+  };
+}
+
+async function recentAutoSnipeTokenSet(userId) {
+  const history = await readTradeHistory();
+  const cutoff = Date.now() - 60 * 60 * 1000;
+  const tokens = new Set();
+
+  for (const trade of history.trades) {
+    if (String(trade.userId) !== String(userId)) continue;
+    if (trade.type !== "buy" || trade.source !== "autosnipe" || !trade.tokenMint) continue;
+    const timestamp = Date.parse(trade.timestamp || "");
+    if (Number.isFinite(timestamp) && timestamp >= cutoff) {
+      tokens.add(trade.tokenMint);
+    }
+  }
+
+  return tokens;
+}
+
+function isAutoSnipePick(item) {
+  const flags = new Set(item.riskFlags || []);
+  const weakLiquidityAllowed = item.score >= 88 && item.rugRisk <= 35 && item.exitRisk <= 40;
+
+  return item.category !== "Avoid"
+    && item.score >= 74
+    && item.rugRisk <= 48
+    && item.exitRisk <= 58
+    && item.manipulationScore <= 70
+    && item.scalpScore >= 4
+    && item.liquidityUsd >= 5_000
+    && (item.volume5m >= 750 || item.volumeH1 >= 7_500)
+    && item.buyPressure >= 1.05
+    && !flags.has("hard dump")
+    && !flags.has("dumping")
+    && !flags.has("sell pressure")
+    && !flags.has("low volume")
+    && !flags.has("thin liquidity")
+    && (!flags.has("weak liquidity") || weakLiquidityAllowed);
+}
+
+function shouldRepeatAutoSnipePick(item) {
+  return item.score >= 90
+    && item.rugRisk <= 35
+    && item.exitRisk <= 40
+    && item.scalpScore >= 5
+    && item.buyPressure >= 1.25
+    && item.m5 >= 2
+    && item.h1 >= 5
+    && !(item.riskFlags || []).length;
+}
+
+function compareAutoSnipeScores(a, b) {
+  return (b.score - a.score)
+    || ((b.scalpScore || 0) - (a.scalpScore || 0))
+    || (Number(b.buyPressure || 0) - Number(a.buyPressure || 0))
+    || (a.exitRisk - b.exitRisk)
+    || (a.rugRisk - b.rugRisk)
+    || (a.manipulationScore - b.manipulationScore);
+}
+
 function isStrictSniperPick(item, settings) {
   return item.category !== "Avoid"
     && item.score >= Math.max(52, settings.minScore - 10)
     && item.rugRisk <= settings.maxRisk + 14
     && item.exitRisk <= 72
+    && item.scalpScore >= 3
     && !item.riskFlags?.includes("dumping")
-    && !item.riskFlags?.includes("sell pressure");
+    && !item.riskFlags?.includes("sell pressure")
+    && !item.riskFlags?.includes("low volume");
 }
 
 function isFallbackSniperPick(item, settings) {
   return item.score >= Math.max(45, settings.minScore - 22)
     && item.rugRisk <= settings.maxRisk + 24
     && item.exitRisk <= 84
+    && item.scalpScore >= 2
     && !item.riskFlags?.includes("hard dump");
 }
 
@@ -4633,6 +4992,7 @@ function mergeSniperMetadata(dexValue, profile = {}, source = "profile") {
 }
 
 function isModeRelevantSniperPick(item, mode) {
+  if (mode === "autosnipe") return Number(item.modeRelevance || 0) >= 4;
   return Number(item.modeRelevance || 0) >= (mode === "ai" || mode === "meme" ? 5 : 3);
 }
 
@@ -4649,8 +5009,50 @@ function buyPressureRatio(buys, sells) {
   return (buyCount + 1) / (sellCount + 1);
 }
 
-function sniperDumpPenalty({ h1, h6, h24 }) {
+function sniperScalpSetup({ m5, h1, h6, volume5m, volumeH1, buyPressure, liquidityUsd, sells5m, sellsH1 }) {
+  const hasActiveVolume = volume5m >= 750 || volumeH1 >= 5_000;
+  const hasGoodLiquidity = liquidityUsd >= 5_000;
+  const buyersPresent = buyPressure >= 1.08;
+  const notTooMuchShortSelling = sells5m < 8 || buyPressure >= 1.2;
+
+  if (!hasActiveVolume || !hasGoodLiquidity) {
+    return { label: "Low-volume watch", score: 0 };
+  }
+
+  if (m5 >= 4 && h1 >= 6 && buyersPresent) {
+    return { label: "Breakout scalp", score: 5 };
+  }
+
+  if (m5 >= -2 && h1 >= 8 && buyersPresent && notTooMuchShortSelling) {
+    return { label: "Uptrend scalp", score: 4 };
+  }
+
+  if (m5 >= -12 && m5 <= 2 && (h1 >= 15 || h6 >= 20) && buyPressure >= 1.18 && volumeH1 >= 7_500) {
+    return { label: "Cool-off bounce", score: 4 };
+  }
+
+  if (m5 >= 0 && h1 >= 0 && volumeH1 >= 10_000 && buyPressure >= 1) {
+    return { label: "Volume building", score: 3 };
+  }
+
+  if (h1 >= 10 && volumeH1 >= 5_000 && buyPressure >= 0.95 && sellsH1 < 30) {
+    return { label: "Needs confirmation", score: 2 };
+  }
+
+  return { label: "Slow/unclear", score: 1 };
+}
+
+function sniperVolumePenalty({ volume5m, volumeH1, liquidityUsd }) {
   let penalty = 0;
+  if (volume5m < 250 && volumeH1 < 2_000) penalty += 18;
+  else if (volume5m < 750 && volumeH1 < 5_000) penalty += 10;
+  if (liquidityUsd >= 25_000 && volumeH1 < 2_500) penalty += 6;
+  return penalty;
+}
+
+function sniperDumpPenalty({ m5, h1, h6, h24 }) {
+  let penalty = 0;
+  if (m5 < -10) penalty += Math.min(18, Math.abs(m5) * 0.9);
   if (h1 < -8) penalty += Math.min(24, Math.abs(h1) * 0.9);
   if (h6 < -15) penalty += Math.min(20, Math.abs(h6) * 0.45);
   if (h24 < -35) penalty += 10;
@@ -4686,8 +5088,9 @@ function sniperSellPressurePenalty({ buys5m, sells5m, buysH1, sellsH1 }) {
 function sniperRiskFlags(data) {
   const flags = [];
   if (data.namePenalty > 0) flags.push("bad name");
-  if (data.h1 < -20 || data.h6 < -35) flags.push("hard dump");
-  else if (data.h1 < -8 || data.h6 < -15) flags.push("dumping");
+  if (data.m5 < -18 || data.h1 < -20 || data.h6 < -35) flags.push("hard dump");
+  else if (data.m5 < -10 || data.h1 < -8 || data.h6 < -15) flags.push("dumping");
+  if (data.volume5m < 250 && data.volumeH1 < 2_000) flags.push("low volume");
   if (data.liquidityUsd > 0 && data.liquidityUsd < 10_000) flags.push("thin liquidity");
   if (data.marketCap > 0 && data.liquidityUsd > 0 && data.liquidityUsd / data.marketCap < 0.03) flags.push("weak liquidity");
   if ((data.sells5m >= 5 && buyPressureRatio(data.buys5m, data.sells5m) < 0.9)
@@ -4705,6 +5108,7 @@ async function scoreSniperCandidate(candidate, settings) {
   const liquidityUsd = Number(metadata.liquidityUsd || 0);
   const volume5m = Number(metadata.volume?.m5 || 0);
   const volumeH1 = Number(metadata.volume?.h1 || 0);
+  const m5 = Number(metadata.priceChange?.m5 || 0);
   const h24 = Number(metadata.priceChange?.h24 || 0);
   const h6 = Number(metadata.priceChange?.h6 || 0);
   const h1 = Number(metadata.priceChange?.h1 || 0);
@@ -4722,32 +5126,36 @@ async function scoreSniperCandidate(candidate, settings) {
   const modeRelevance = sniperModeRelevance(settings.mode, {
     marketCap,
     liquidityUsd,
+    m5,
     h1,
     h6,
     h24,
     text,
     buyPressure,
+    volume5m,
     volumeH1,
     narrative
   });
+  const scalp = sniperScalpSetup({ m5, h1, h6, volume5m, volumeH1, buyPressure, liquidityUsd, sells5m, sellsH1 });
   const liquiditySignal = liquidityUsd > 0
     ? Math.min(22, Math.log10(Math.max(10, liquidityUsd)) * 4)
     : marketCap > 0 ? Math.min(12, Math.log10(Math.max(10, marketCap)) * 2) : 2;
   const volumeSignal = Math.min(14, Math.log10(Math.max(1, volumeH1 + volume5m)) * 2.5);
   const buyPressureSignal = clamp(Math.round((buyPressure - 1) * 10), -8, 10);
-  const dumpPenalty = sniperDumpPenalty({ h1, h6, h24 });
+  const dumpPenalty = sniperDumpPenalty({ m5, h1, h6, h24 });
   const liquidityPenalty = sniperLiquidityPenalty({ marketCap, liquidityUsd });
   const sellPressurePenalty = sniperSellPressurePenalty({ buys5m, sells5m, buysH1, sellsH1 });
+  const volumePenalty = sniperVolumePenalty({ volume5m, volumeH1, liquidityUsd });
   const namePenalty = sniperRiskPenalty(text);
-  const momentumSignal = Math.max(0, Math.min(25, (h1 * 0.45) + (h6 * 0.12) + (h24 * 0.03)));
+  const momentumSignal = Math.max(0, Math.min(25, (m5 * 0.8) + (h1 * 0.35) + (h6 * 0.1) + (h24 * 0.02)));
   const metadataSignal = (hasMeta ? 12 : 2) + (hasImage ? 8 : 0);
-  const modeBonus = sniperModeBonus(settings.mode, { marketCap, liquidityUsd, h1, h6, h24, text, buyPressure, volumeH1, narrative });
-  const riskTotal = namePenalty + dumpPenalty + liquidityPenalty + sellPressurePenalty;
-  const score = clamp(Math.round(26 + liquiditySignal + volumeSignal + momentumSignal + metadataSignal + narrative + modeBonus + buyPressureSignal - riskTotal), 1, 100);
-  const rugRisk = clamp(Math.round(70 - metadataSignal - Math.min(18, liquiditySignal) - Math.min(10, volumeSignal) + namePenalty + liquidityPenalty + sellPressurePenalty + Math.round(dumpPenalty * 0.65)), 1, 100);
-  const exitRisk = clamp(Math.round(54 - Math.min(18, momentumSignal) - Math.max(0, buyPressureSignal) + dumpPenalty + sellPressurePenalty + (marketCap > 0 && marketCap < 20_000 ? 12 : 0)), 1, 100);
-  const manipulationScore = clamp(Math.round(28 + (liquidityPenalty * 0.8) + (Math.abs(h1) > 100 ? 18 : 0) + sellPressurePenalty + (pairAgeMinutes !== null && pairAgeMinutes < 10 ? 10 : 0) - (hasMeta ? 6 : 0)), 1, 100);
-  const riskFlags = sniperRiskFlags({ h1, h6, h24, liquidityUsd, marketCap, buys5m, sells5m, buysH1, sellsH1, namePenalty });
+  const modeBonus = sniperModeBonus(settings.mode, { marketCap, liquidityUsd, m5, h1, h6, h24, text, buyPressure, volume5m, volumeH1, narrative });
+  const riskTotal = namePenalty + dumpPenalty + liquidityPenalty + sellPressurePenalty + volumePenalty;
+  const score = clamp(Math.round(22 + liquiditySignal + volumeSignal + momentumSignal + metadataSignal + narrative + modeBonus + buyPressureSignal + (scalp.score * 5) - riskTotal), 1, 100);
+  const rugRisk = clamp(Math.round(70 - metadataSignal - Math.min(18, liquiditySignal) - Math.min(10, volumeSignal) + namePenalty + liquidityPenalty + sellPressurePenalty + volumePenalty + Math.round(dumpPenalty * 0.65)), 1, 100);
+  const exitRisk = clamp(Math.round(58 - Math.min(18, momentumSignal) - Math.max(0, buyPressureSignal) - (scalp.score * 3) + dumpPenalty + sellPressurePenalty + volumePenalty + (marketCap > 0 && marketCap < 20_000 ? 12 : 0)), 1, 100);
+  const manipulationScore = clamp(Math.round(28 + (liquidityPenalty * 0.8) + (Math.abs(m5) > 60 ? 12 : 0) + (Math.abs(h1) > 100 ? 18 : 0) + sellPressurePenalty + (pairAgeMinutes !== null && pairAgeMinutes < 10 ? 10 : 0) - (hasMeta ? 6 : 0)), 1, 100);
+  const riskFlags = sniperRiskFlags({ m5, h1, h6, h24, liquidityUsd, marketCap, volume5m, volumeH1, buys5m, sells5m, buysH1, sellsH1, namePenalty });
   const category = riskFlags.includes("hard dump") || rugRisk > settings.maxRisk + 26
     ? "Avoid"
     : score >= 82 && rugRisk <= settings.maxRisk
@@ -4768,19 +5176,23 @@ async function scoreSniperCandidate(candidate, settings) {
     exitRisk,
     manipulationScore,
     liquidityUsd,
+    volume5m,
     volumeH1,
     buyPressure,
+    scalpSetup: scalp.label,
+    scalpScore: scalp.score,
     modeRelevance,
     marketCap,
+    m5,
     h1,
     h6,
     h24,
     narrative,
     pairAgeMinutes,
     riskFlags,
-    momentum: momentumSignal >= 18 ? "Strong" : momentumSignal >= 8 ? "Building" : "Weak",
+    momentum: scalp.score >= 4 ? "Scalp-ready" : momentumSignal >= 18 ? "Strong" : momentumSignal >= 8 ? "Building" : "Weak",
     smartMoney: score >= 80 ? "High" : score >= 65 ? "Medium" : "Low",
-    reasons: sniperReasons({ hasImage, hasMeta, marketCap, liquidityUsd, volumeH1, h1, h6, h24, narrative, buyPressure, riskFlags, settings })
+    reasons: sniperReasons({ hasImage, hasMeta, marketCap, liquidityUsd, volume5m, volumeH1, m5, h1, h6, h24, narrative, buyPressure, scalpSetup: scalp.label, riskFlags, settings })
   };
 }
 
@@ -4791,7 +5203,8 @@ function formatSniperPickHtml(score, index = null) {
   return [
     `<b>${rank}${escapeHtml(score.category)}: ${label}</b>`,
     `Score: <b>${score.score}/100</b> | Momentum: ${escapeHtml(score.momentum)} | Rug: ${score.rugRisk}/100 | Exit: ${score.exitRisk}/100`,
-    `MC: ${formatUsdCompact(score.marketCap || 0) || "$0"} | Liq: ${formatUsdCompact(score.liquidityUsd || 0) || "$0"} | Vol 1h: ${formatUsdCompact(score.volumeH1 || 0) || "$0"}`,
+    `Setup: <b>${escapeHtml(score.scalpSetup || "Scalp watch")}</b> | 5m: ${formatPercentCompact(score.m5)} | 1h: ${formatPercentCompact(score.h1)}`,
+    `MC: ${formatUsdCompact(score.marketCap || 0) || "$0"} | Liq: ${formatUsdCompact(score.liquidityUsd || 0) || "$0"} | Vol 5m/1h: ${formatUsdCompact(score.volume5m || 0) || "$0"} / ${formatUsdCompact(score.volumeH1 || 0) || "$0"}`,
     `Flow: ${formatBuyPressure(score.buyPressure)} | Mode fit: ${score.modeRelevance || 0}/5`,
     `Smart: ${escapeHtml(score.smartMoney)} | Manipulation: ${score.manipulationScore}/100${score.riskFlags?.length ? ` | Flags: ${escapeHtml(score.riskFlags.join(", "))}` : ""}`,
     `CA: <code>${score.tokenMint}</code>`,
@@ -4802,12 +5215,14 @@ function formatSniperPickHtml(score, index = null) {
 
 function sniperReasons(data) {
   const reasons = [];
+  if (data.scalpSetup) reasons.push(data.scalpSetup);
   if (data.hasMeta) reasons.push("metadata live");
-  if (data.hasImage) reasons.push("token art found");
   if (data.liquidityUsd > 0) reasons.push(`liq ${formatUsdCompact(data.liquidityUsd)}`);
-  if (data.volumeH1 > 0) reasons.push(`1h vol ${formatUsdCompact(data.volumeH1)}`);
+  if (data.volume5m > 0) reasons.push(`5m vol ${formatUsdCompact(data.volume5m)}`);
+  if (data.volumeH1 > 0 && reasons.length < 4) reasons.push(`1h vol ${formatUsdCompact(data.volumeH1)}`);
   if (data.buyPressure > 1.15) reasons.push("buyers leading");
-  if (data.h1 > 0) reasons.push(`1h +${data.h1.toFixed(1)}%`);
+  if (data.m5 > 0) reasons.push(`5m +${data.m5.toFixed(1)}%`);
+  else if (data.h1 > 0) reasons.push(`1h +${data.h1.toFixed(1)}%`);
   if (data.narrative > 0) reasons.push(`${sniperModeLabel(data.settings.mode)} narrative match`);
   for (const flag of data.riskFlags || []) {
     if (reasons.length >= 4) break;
@@ -4823,7 +5238,8 @@ function sniperModeDefaults(mode) {
     fast: { mode: "fast", minScore: 68, maxRisk: 58 },
     moonshot: { mode: "moonshot", minScore: 62, maxRisk: 65 },
     meme: { mode: "meme", minScore: 66, maxRisk: 58 },
-    ai: { mode: "ai", minScore: 66, maxRisk: 58 }
+    ai: { mode: "ai", minScore: 66, maxRisk: 58 },
+    autosnipe: { mode: "autosnipe", minScore: 78, maxRisk: 42 }
   };
   return defaults[mode] || defaults.safe;
 }
@@ -4835,7 +5251,8 @@ function sniperModeLabel(mode) {
     fast: "Fast Scalps",
     moonshot: "Low Cap Moonshots",
     meme: "Meme Momentum",
-    ai: "AI Narrative"
+    ai: "AI Narrative",
+    autosnipe: "AutoSnipe"
   };
   return labels[mode] || labels.safe;
 }
@@ -4856,6 +5273,7 @@ function sniperModeBonus(mode, data) {
   if (mode === "safe") return relevance >= 3 ? 8 : 0;
   if (mode === "smart") return relevance >= 3 ? 10 : 0;
   if (mode === "fast") return relevance >= 3 ? 11 : 0;
+  if (mode === "autosnipe") return relevance >= 4 ? 13 : relevance >= 3 ? 6 : 0;
   if (mode === "moonshot") return relevance >= 3 ? 8 : 0;
   if (mode === "meme" || mode === "ai") return data.narrative > 0 ? 12 : 0;
   return 0;
@@ -4867,29 +5285,36 @@ function sniperModeRelevance(mode, data) {
     return Number(data.liquidityUsd >= 10_000)
       + Number(data.marketCap >= 50_000)
       + Number(data.buyPressure >= 1)
-      + Number(data.h1 >= -5)
-      + Number(data.volumeH1 >= 3_000);
+      + Number(data.m5 >= -4 && data.h1 >= 0)
+      + Number(data.volumeH1 >= 5_000 || data.volume5m >= 750);
   }
   if (mode === "smart") {
     return Number(data.buyPressure >= 1.1)
-      + Number(data.volumeH1 >= 5_000)
-      + Number(data.h1 > 5)
+      + Number(data.volumeH1 >= 7_500 || data.volume5m >= 1_000)
+      + Number(data.h1 > 5 || data.m5 > 2)
       + Number(data.h6 >= 0)
       + Number(data.liquidityUsd >= 8_000);
   }
   if (mode === "fast") {
-    return Number(data.h1 > 8)
-      + Number(data.volumeH1 >= 10_000)
+    return Number(data.m5 > 2 || data.h1 > 8)
+      + Number(data.volumeH1 >= 10_000 || data.volume5m >= 1_500)
       + Number(data.buyPressure >= 1.15)
       + Number(data.liquidityUsd >= 5_000)
-      + Number(data.h6 >= -5);
+      + Number(data.h6 >= -5 && data.m5 >= -8);
+  }
+  if (mode === "autosnipe") {
+    return Number(data.m5 >= 0 && data.h1 >= 4)
+      + Number(data.volumeH1 >= 10_000 || data.volume5m >= 1_000)
+      + Number(data.buyPressure >= 1.15)
+      + Number(data.liquidityUsd >= 8_000)
+      + Number(data.h6 >= -5 && data.m5 >= -6);
   }
   if (mode === "moonshot") {
     return Number(data.marketCap > 0 && data.marketCap <= 250_000)
       + Number(data.liquidityUsd >= 3_000)
       + Number(data.buyPressure >= 1)
-      + Number(data.volumeH1 >= 1_500)
-      + Number(data.h1 >= -10);
+      + Number(data.volumeH1 >= 3_000 || data.volume5m >= 500)
+      + Number(data.h1 >= -5 && data.m5 >= -10);
   }
   return 1;
 }
@@ -4902,7 +5327,7 @@ function sniperRiskPenalty(text) {
 function applySniperExitPreset(session, presetText) {
   const preset = String(presetText || "").trim().toLowerCase();
   const presets = {
-    fast: { sellDelaySeconds: 180, sellPercent: 100, takeProfitPct: 25, stopLossPct: 10, label: "Fast Scalp" },
+    fast: { sellDelaySeconds: 180, sellPercent: 100, takeProfitPct: 35, stopLossPct: 10, label: "Fast Scalp" },
     balanced: { sellDelaySeconds: 900, sellPercent: 80, takeProfitPct: 50, stopLossPct: 15, label: "Balanced" },
     moonbag: { sellDelaySeconds: 1800, sellPercent: 60, takeProfitPct: 100, stopLossPct: 25, label: "Moonbag" },
     safe: { sellDelaySeconds: 600, sellPercent: 100, takeProfitPct: 20, stopLossPct: 8, label: "Safe" }
@@ -4917,6 +5342,21 @@ function applySniperExitPreset(session, presetText) {
     loopCount: 1,
     exitPreset: selected.label,
     allowRepeat: false
+  });
+}
+
+function applyAutoSnipeExitPreset(session) {
+  Object.assign(session.data, {
+    sellDelaySeconds: AUTOSNIPE_SELL_DELAY_SECONDS,
+    sellDelayMinutes: AUTOSNIPE_SELL_DELAY_SECONDS / 60,
+    sellPercent: 100,
+    triggerSellPercent: 100,
+    takeProfitPct: AUTOSNIPE_TAKE_PROFIT_PCT,
+    stopLossPct: AUTOSNIPE_STOP_LOSS_PCT,
+    loopCount: 1,
+    exitPreset: "AutoSnipe 25%",
+    allowRepeat: false,
+    slippageBps: AUTOSNIPE_SLIPPAGE_BPS
   });
 }
 
@@ -5073,6 +5513,7 @@ function howToPage(topic) {
         "Buttons inside Trade:",
         "- Buy: choose one wallet, paste the token mint, then tap a quick amount like Buy 0.10 SOL, Buy 0.50 SOL, Buy 1 SOL, Use Max, or Buy X SOL.",
         "- Sell: choose one wallet, paste the token mint, then tap Sell 25%, Sell 50%, Sell 100%, or Sell X %.",
+        "- Sell All Tokens: choose one wallet, multiple wallets, all, or group: name. The bot sells every token with a Jupiter route into SOL, then lets you keep SOL in those wallets or send it to one destination.",
         "- Auto Sell: buys now, then sells later by timer, take-profit, or stop-loss.",
         "- DCA Buy: splits one total SOL amount into smaller buys over time.",
         "- DCA Sell: captures the wallet's current token balance, then sells your chosen percent in smaller slices.",
@@ -5097,8 +5538,12 @@ function howToPage(topic) {
         "OgreSniper is for finding highest-scored early plays, choosing a setup quickly, and setting up a buy with automatic exits.",
         "",
         "Buttons inside OgreSniper:",
+        `- AutoSnipe: fresh-scans, picks one high-conviction scalp setup, then after wallet and amount it fills +${AUTOSNIPE_TAKE_PROFIT_PCT}% take-profit, -${AUTOSNIPE_STOP_LOSS_PCT}% stop-loss, ${AUTOSNIPE_SLIPPAGE_BPS} bps slippage, and a ${formatDelay(AUTOSNIPE_SELL_DELAY_SECONDS)} timer fallback.`,
         "- Scan Early Plays: checks latest Solana token profiles and shows the top ranked picks. Each pick has a Snipe button, Dex chart link in the text, and tap-to-copy CA.",
         "- Modes: choose Safe Scan, Smart Money Scan, Fast Scalp Scan, Low Cap Scan, Meme Scan, or AI Scan. Tapping a mode saves that mode and immediately scans that category.",
+        "",
+        "AutoSnipe flow:",
+        "Tap AutoSnipe, let it scan, choose wallet(s), choose SOL amount, then Confirm. It avoids recent AutoSnipe tokens unless the current score is strong enough to justify another entry.",
         "",
         "Fast scan flow:",
         "Tap Scan Early Plays, open the Dex chart link in the text if you want to inspect it, then tap Snipe #1 through #6. Pick All Wallets, a quick wallet button, or Custom / Group. Pick 0.05, 0.10, 0.50, 1 SOL, or Buy X SOL. OgreSniper then selects the best matching exit preset for the mode and score.",
@@ -5116,14 +5561,15 @@ function howToPage(topic) {
         "- AI Narrative: gives extra weight to AI/agent/computing style names/meta.",
         "",
         "Scoring explained:",
-        "- Entry Score estimates metadata quality, liquidity, 1h volume, buy pressure, price momentum, and narrative fit.",
+        "- Entry Score estimates metadata quality, liquidity, 5m/1h volume, buy pressure, price momentum, and narrative fit.",
+        "- Setup labels show what kind of quick-trade idea it is: Breakout scalp, Uptrend scalp, Cool-off bounce, or Volume building.",
         "- Rug Risk is a heuristic warning based on weak metadata, weak liquidity, sell pressure, dumping, and bad naming patterns.",
         "- Exit Risk warns when momentum is weak, sellers are leading, or the launch looks thin.",
         "- Manipulation Score warns when liquidity is thin, the pair is very new, or the move/market cap looks easy to push around.",
         "- Smart Money Proxy is a quality proxy from available signals, not true wallet tracking yet.",
         "",
         "Exit presets:",
-        "- Fast Scalp: sells 100% after 3 minutes, or earlier at +25% take-profit / -10% stop-loss.",
+        "- Fast Scalp: sells 100% after 3 minutes, or earlier at +35% take-profit / -10% stop-loss.",
         "- Balanced: timer sells 80% after 15 minutes. Take-profit or stop-loss sells 100% of the tracked bag.",
         "- Moonbag: timer sells 60% after 30 minutes. Take-profit or stop-loss sells 100% of the tracked bag.",
         "- Safe: sells 100% after 10 minutes, or earlier at +20% take-profit / -8% stop-loss.",
@@ -5297,6 +5743,7 @@ function howToPage(topic) {
         "",
         "Buttons inside Withdrawal:",
         "- Withdraw SOL: sends the maximum safe SOL from selected wallets to your destination wallet. It estimates the network fee and sends balance minus fee to avoid rent errors.",
+        "- Sell All Tokens to SOL: sells every non-zero SPL token in selected wallets through Jupiter. After the sells, choose whether SOL stays in each wallet or gets sent to one destination wallet.",
         "- Sweep Tokens: sends SPL tokens from selected wallets to your destination wallet. You can sweep one mint or all tokens found.",
         "- Fund Wallets: sends SOL from one managed source wallet to selected managed target wallets.",
         "",
@@ -5312,6 +5759,13 @@ function howToPage(topic) {
         "2. Choose source wallet numbers or all.",
         "3. Paste one token mint, or type all.",
         "4. Tap Confirm.",
+        "",
+        "Sell All Tokens to SOL steps:",
+        "1. Tap Sell All Tokens to SOL.",
+        "2. Choose wallet numbers, all, or group: name.",
+        "3. Choose Keep in wallets or Send to one wallet.",
+        "4. If sending to one wallet, paste the destination.",
+        "5. Choose slippage and Confirm.",
         "",
         "Funding wallets:",
         "Use Fund Wallets when one bot wallet has SOL and you want to distribute a fixed amount to other bot wallets.",
@@ -6477,6 +6931,12 @@ function formatBuyPressure(value) {
   return "sellers";
 }
 
+function formatPercentCompact(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "0%";
+  return `${number >= 0 ? "+" : ""}${number.toFixed(Math.abs(number) >= 100 ? 0 : 1)}%`;
+}
+
 function formatDexPriceMove(priceChange) {
   const entry = [
     ["24h", priceChange?.h24],
@@ -6506,6 +6966,15 @@ function escapeHtml(value) {
 
 function appendLimited(list, item, limit = 20) {
   return [...(Array.isArray(list) ? list : []), item].slice(-limit);
+}
+
+function limitResultLines(lines, limit = 80) {
+  const list = Array.isArray(lines) ? lines : [];
+  if (list.length <= limit) return list;
+  return [
+    ...list.slice(0, limit),
+    `...${list.length - limit} more result(s) saved in the audit log.`
+  ];
 }
 
 function formatFundConfirm(data) {
@@ -6596,11 +7065,44 @@ function formatSellSuccessLine(wallet, sell) {
   ].join(", ");
 }
 
+function formatSellAllTokenLine(wallet, token, sell) {
+  const outputLamports = BigInt(sell.outputLamports || 0);
+  const feeLamports = BigInt(sell.feeLamports || calculateFeeLamports(outputLamports));
+  const netLamports = outputLamports > feeLamports ? outputLamports - feeLamports : 0n;
+  const accountNote = token.accountCount > 1 ? ` across ${token.accountCount} accounts` : "";
+  return `${wallet.label}: sold ${token.uiAmount} of ${shortMint(token.mint)}${accountNote}, got ${lamportsBigToSol(netLamports)} SOL`;
+}
+
 function formatTimedSellSuccessLine(planWallet, sell, triggerReason, loopCount) {
+  if (isPriceExitTrigger(triggerReason)) {
+    return formatPriceExitRecap(planWallet, sell, triggerReason, loopCount);
+  }
+
   return [
     `${planWallet.label}: sold loop ${planWallet.completedLoops}/${loopCount} by ${triggerReason}`,
     sell.sellPercent ? `sell ${sell.sellPercent}%` : "",
     formatSellSuccessLine({ label: planWallet.label }, sell).replace(`${planWallet.label}: `, "")
+  ].filter(Boolean).join(", ");
+}
+
+function formatPriceExitRecap(planWallet, sell, triggerReason, loopCount) {
+  const reason = String(triggerReason || "");
+  const isProfit = /^take-profit\b/i.test(reason);
+  const percentMatch = reason.match(/[-+]?\d+(?:\.\d+)?%/);
+  const label = isProfit ? "Profit target hit" : "Stop loss hit";
+  const outputLamports = BigInt(sell.outputLamports || 0);
+  const feeLamports = BigInt(sell.feeLamports || calculateFeeLamports(outputLamports));
+  const gotBack = outputLamports > feeLamports ? outputLamports - feeLamports : 0n;
+  const sellPercent = Number.isFinite(Number(sell.sellPercent)) ? Number(sell.sellPercent) : 100;
+  const putIn = (BigInt(planWallet.basisLamports || 0) * BigInt(sellPercent)) / 100n;
+  const net = gotBack - putIn;
+
+  return [
+    `${planWallet.label}: ${label}${percentMatch ? ` ${percentMatch[0]}` : ""}`,
+    loopCount > 1 ? `loop ${planWallet.completedLoops}/${loopCount}` : "",
+    `put in ${lamportsBigToSol(putIn)} SOL`,
+    `got back ${lamportsBigToSol(gotBack)} SOL`,
+    `net ${formatSignedLamports(net)} SOL`
   ].filter(Boolean).join(", ");
 }
 
@@ -6617,6 +7119,21 @@ function formatSellConfirm(data) {
     `Slippage: ${data.slippageBps} bps`,
     data.percent === 100 ? "Sell 100% uses the full current raw token balance found in each selected wallet." : ""
   ].filter(Boolean).join("\n");
+}
+
+function formatSellAllTokensConfirm(data) {
+  return [
+    "Confirm sell all tokens:",
+    `Wallets: ${data.walletSelector || data.walletIndexes.join(", ")}`,
+    "Action: sell every non-zero SPL token with a Jupiter route into SOL",
+    data.sweepAfter
+      ? `After sells: send all SOL to ${data.destination}`
+      : "After sells: keep SOL in the selected wallets",
+    `Platform fee: ${formatFeeRate()} of SOL output to ${CONFIG.feeWallet}`,
+    `Slippage: ${data.slippageBps} bps`,
+    "",
+    "Tokens with no route, tiny liquidity, or unsupported routing will be skipped and shown in the recap."
+  ].join("\n");
 }
 
 function formatTimedTradePlanConfirm(data) {
@@ -6648,6 +7165,7 @@ function formatSniperConfirm(data) {
     `Token mint: ${data.tokenMint}`,
     `Wallets: ${data.walletIndexes.join(", ")}`,
     `Mode: ${sniperModeLabel(data.settings?.mode || "safe")}`,
+    data.autoSnipe ? "AutoSnipe: fresh-picked best available setup and filled the default exits." : "",
     score ? `Entry Score: ${score.score}/100 (${score.category})` : "",
     score ? `Rug Risk: ${score.rugRisk}/100` : "",
     `${data.tradeMode === "single" ? "Buy" : "Buy per wallet"}: ${data.amountSol} SOL`,
