@@ -30,6 +30,7 @@ const solBalanceCache = new Map();
 const tokenAccountsCache = new Map();
 const tokenBalanceCache = new Map();
 const positionValueCache = new Map();
+const sniperScanState = new Map();
 const startedAt = new Date();
 let lastKeepAliveStatus = {
   enabled: false,
@@ -89,6 +90,7 @@ const ADMIN_ACTIONS = new Set(["export_audit", "emergency_stop", "unlock_bot"]);
 const PRIVATE_CHAT_ACTIONS = new Set([
   "create_wallets",
   "import_wallet",
+  "delete_wallets",
   "wallet_menu",
   "trade_menu",
   "sniper_menu",
@@ -106,6 +108,7 @@ const PRIVATE_CHAT_ACTIONS = new Set([
   "check_balances",
   "pnl_results",
   "pnl_card",
+  "pnl_card_by_ca",
   "positions_overview",
   "copy_trade_info",
   "quick_start",
@@ -793,6 +796,15 @@ async function handleCallback(query, userId) {
       setSession(chatId, "import_wallet_label", userId);
       await say(chatId, "Send a label for this wallet.");
       break;
+    case "delete_wallets":
+      setSession(chatId, "delete_wallets_select", userId);
+      await say(chatId, await walletPrompt(userId, [
+        "Send wallet numbers to remove from the bot, separated by commas, or `all`.",
+        "",
+        "This only deletes the saved bot wallet record. It does not move SOL or tokens on-chain.",
+        "The bot will send an encrypted backup file before removing anything."
+      ].join("\n")));
+      break;
     case "list_wallets":
       await listWallets(chatId, userId);
       break;
@@ -801,6 +813,10 @@ async function handleCallback(query, userId) {
       break;
     case "pnl_results":
       await showPnlResults(chatId, userId, messageId);
+      break;
+    case "pnl_card_by_ca":
+      setSession(chatId, "pnl_card_token", userId);
+      await say(chatId, "Paste the token mint / CA for the PnL card. Example: `5RAZ...pump`.\n\nCards only work for tokens traded from this bot.");
       break;
     case "positions_overview":
       await showPositionsOverview(chatId, userId, messageId);
@@ -1002,6 +1018,21 @@ async function handleMessage(message, userId) {
     return;
   }
 
+  if (text === "/deletewallets" || text === "/removewallets") {
+    if (!isPrivateChat(message.chat)) {
+      await say(chatId, "Open this bot in DM to remove saved wallets.");
+      return;
+    }
+    setSession(chatId, "delete_wallets_select", userId);
+    await say(chatId, await walletPrompt(userId, [
+      "Send wallet numbers to remove from the bot, separated by commas, or `all`.",
+      "",
+      "This only deletes the saved bot wallet record. It does not move SOL or tokens on-chain.",
+      "The bot will send an encrypted backup file before removing anything."
+    ].join("\n")));
+    return;
+  }
+
   if (text === "/restore" || text === "/backup") {
     if (!isPrivateChat(message.chat)) {
       await say(chatId, "Open this bot in DM to restore a backup.");
@@ -1084,6 +1115,35 @@ async function handleMessage(message, userId) {
       return;
     }
     await showPositionsOverview(chatId, userId);
+    return;
+  }
+
+  const pnlCommand = parseCommandWithArgument(text, ["pnl"]);
+  if (pnlCommand) {
+    if (!isPrivateChat(message.chat)) {
+      await say(chatId, "Open this bot in DM to view PnL.");
+      return;
+    }
+    if (pnlCommand.argument) {
+      await sendPnlCardForTokenText(chatId, userId, pnlCommand.argument);
+    } else {
+      await showPnlResults(chatId, userId);
+    }
+    return;
+  }
+
+  const pnlCardCommand = parseCommandWithArgument(text, ["pnlcard", "pnl_card", "card"]);
+  if (pnlCardCommand) {
+    if (!isPrivateChat(message.chat)) {
+      await say(chatId, "Open this bot in DM to create a PnL card.");
+      return;
+    }
+    if (pnlCardCommand.argument) {
+      await sendPnlCardForTokenText(chatId, userId, pnlCardCommand.argument);
+    } else {
+      setSession(chatId, "pnl_card_token", userId);
+      await say(chatId, "Paste the token mint / CA for the PnL card. You can also use `/pnlcard CA` in one message.");
+    }
     return;
   }
 
@@ -1185,6 +1245,15 @@ async function continueFlow(chatId, text, session) {
       case "import_wallet_secret":
         await importWalletFlow(chatId, text, session);
         break;
+      case "delete_wallets_select":
+        await prepareDeleteWalletsFlow(chatId, text, session);
+        break;
+      case "delete_wallets_confirm":
+        await confirmDeleteWalletsBackupFlow(chatId, text, session);
+        break;
+      case "delete_wallets_final_confirm":
+        await confirmOrCancel(chatId, text, () => deleteWalletsFlow(chatId, session));
+        break;
       case "restore_backup":
         await restoreWalletBackupFlow(chatId, text, session);
         break;
@@ -1193,6 +1262,10 @@ async function continueFlow(chatId, text, session) {
         break;
       case "export_private_keys_confirm":
         await exportPrivateKeysConfirmFlow(chatId, text, session);
+        break;
+      case "pnl_card_token":
+        clearSession(chatId);
+        await sendPnlCardForTokenText(chatId, session.userId, text);
         break;
       case "fund_source":
         session.data.sourceIndex = parseWalletIndex(text);
@@ -1396,7 +1469,7 @@ async function continueFlow(chatId, text, session) {
           session.data.amountSol = parsePositiveNumber(text);
         }
         session.step = "buy_slippage";
-        await sendQuickSlippagePrompt(chatId, `Send slippage in basis points, or type default for ${CONFIG.defaultSlippageBps} bps.`);
+        await sendQuickSlippagePrompt(chatId, buySlippagePromptText(session.data));
         break;
       case "buy_slippage":
         session.data.slippageBps = parseSlippage(text);
@@ -1665,6 +1738,102 @@ async function importWalletFlow(chatId, text, session) {
   await showMenu(chatId, session.userId);
 }
 
+async function prepareDeleteWalletsFlow(chatId, text, session) {
+  session.data.walletIndexes = await parseWalletSelection(text, session.userId);
+  const store = await readWalletStore();
+  const selected = session.data.walletIndexes.map((index) => getWalletAt(store, index, session.userId));
+  session.data.walletPublicKeys = selected.map((wallet) => wallet.publicKey);
+  session.data.wallets = selected.map(publicWallet);
+  session.step = "delete_wallets_confirm";
+  await sendConfirmPrompt(chatId, withBrandFooter(formatDeleteWalletsConfirm(session.data)));
+}
+
+async function confirmDeleteWalletsBackupFlow(chatId, text, session) {
+  if (text.trim().toLowerCase() !== "yes") {
+    session.executing = false;
+    await sendConfirmPrompt(chatId, withBrandFooter(formatDeleteWalletsConfirm(session.data)));
+    return;
+  }
+
+  if ((await readState()).paused) {
+    clearSession(chatId);
+    await say(chatId, "Emergency stop is active. Wallet removal canceled.");
+    return;
+  }
+
+  const store = await readWalletStore();
+  const selected = selectedWalletRecordsForDelete(store, session);
+
+  try {
+    await say(chatId, "First confirmation received. Sending encrypted backup before final delete confirmation.");
+    session.data.backupFilename = await sendWalletBackup(chatId, session.userId, "Encrypted backup before wallet removal.", "removed-wallets", selected);
+  } catch (error) {
+    session.executing = false;
+    await say(chatId, `Backup failed, so I did not remove any wallets: ${formatError(error)}`);
+    return;
+  }
+
+  session.step = "delete_wallets_final_confirm";
+  session.executing = false;
+  await sendConfirmPrompt(chatId, withBrandFooter(formatDeleteWalletsFinalConfirm(session.data)));
+}
+
+async function deleteWalletsFlow(chatId, session) {
+  const store = await readWalletStore();
+  const selected = selectedWalletRecordsForDelete(store, session);
+  const selectedPublicKeys = new Set(selected.map((wallet) => wallet.publicKey));
+  const removedLines = selected.map((wallet) => `${wallet.label}: ${wallet.publicKey}`);
+
+  if (!session.data.backupFilename) {
+    try {
+      session.data.backupFilename = await sendWalletBackup(chatId, session.userId, "Encrypted backup before wallet removal.", "removed-wallets", selected);
+    } catch (error) {
+      session.executing = false;
+      await say(chatId, `Backup failed, so I did not remove any wallets: ${formatError(error)}`);
+      return;
+    }
+  }
+
+  const before = store.wallets.length;
+  store.wallets = store.wallets.filter((wallet) => {
+    return !(String(wallet.ownerId) === String(session.userId) && selectedPublicKeys.has(wallet.publicKey));
+  });
+  const removed = before - store.wallets.length;
+
+  await writeWalletStore(store);
+  await audit("delete_wallets", {
+    chatId,
+    userId: session.userId,
+    removed,
+    wallets: selected.map(publicWallet)
+  });
+
+  clearSession(chatId);
+  await say(chatId, [
+    `Removed ${removed} wallet record(s) from the bot.`,
+    session.data.backupFilename ? `Backup sent first: ${session.data.backupFilename}` : "",
+    "",
+    "This did not move any SOL or tokens on-chain.",
+    "To restore access later, use Backup / Restore > Restore Backup with that backup file and the same APP_SECRET.",
+    "",
+    removedLines.join("\n")
+  ].filter(Boolean).join("\n"));
+  await showWalletMenu(chatId);
+}
+
+function selectedWalletRecordsForDelete(store, session) {
+  const selectedPublicKeys = new Set(session.data.walletPublicKeys || []);
+  const selected = store.wallets.filter((wallet) => {
+    return String(wallet.ownerId) === String(session.userId) && selectedPublicKeys.has(wallet.publicKey);
+  });
+
+  if (selected.length !== selectedPublicKeys.size) {
+    throw new Error("One or more selected wallets changed before removal. Start Remove Wallets again.");
+  }
+
+  return selected;
+}
+
 async function exportWalletBackup(chatId, userId) {
   const sent = await sendWalletBackup(chatId, userId, "Manual backup export.", "manual-all-wallets");
   if (!sent) return;
@@ -1931,11 +2100,11 @@ async function batchBuyFlow(chatId, session) {
       let feeStatus = "";
       try {
         const feeSignature = await collectSolFee(keypair, feeLamports);
-        feeStatus = feeSignature ? `, fee ${feeSignature}` : "";
+        feeStatus = feeSignature ? `, fee tx ${feeSignature}` : "";
       } catch (feeError) {
         feeStatus = `, fee failed - ${formatError(feeError)}`;
       }
-      results.push(`${wallet.label}: spent ${lamportsToSol(amountLamports)} SOL, swap ${result.signature}${formatSwapAttemptSuffix(result)}${feeStatus}`);
+      results.push(formatBuySuccessLine(wallet, amountLamports, feeLamports, swapLamports, result, feeStatus));
       tradeEvents.push({
         userId: session.userId,
         type: "buy",
@@ -2007,11 +2176,19 @@ async function batchSellFlow(chatId, session) {
       let feeStatus = "";
       try {
         const feeSignature = await collectSolFee(keypair, feeLamports);
-        feeStatus = feeSignature ? `, fee ${feeSignature}` : "";
+        feeStatus = feeSignature ? `, fee tx ${feeSignature}` : "";
       } catch (feeError) {
         feeStatus = `, fee failed - ${formatError(feeError)}`;
       }
-      results.push(`${wallet.label}: swap ${result.signature}${formatSwapAttemptSuffix(result)}${feeStatus}`);
+      const sell = {
+        signature: result.signature,
+        tokenAmount: amount.toString(),
+        outputLamports: outputLamports.toString(),
+        feeLamports: feeLamports.toString(),
+        attempts: result.attempts,
+        feeStatus
+      };
+      results.push(formatSellSuccessLine(wallet, sell));
       tradeEvents.push({
         userId: session.userId,
         type: "sell",
@@ -2019,7 +2196,7 @@ async function batchSellFlow(chatId, session) {
         tokenMint: session.data.tokenMint,
         walletLabel: wallet.label,
         walletPublicKey: wallet.publicKey,
-        tokenAmount: amount.toString(),
+        tokenAmount: sell.tokenAmount,
         solLamportsReceived: outputLamports.toString(),
         signature: result.signature
       });
@@ -2063,7 +2240,7 @@ async function createTimedTradePlanFlow(chatId, session) {
   await runWithConcurrency(wallets, CONFIG.bundleConcurrency, async (wallet) => {
     try {
       const result = await buyTokenForPlan(wallet, session.data.tokenMint, amountLamports, session.data.slippageBps);
-      results.push(`${wallet.label}: buy ${result.signature}${formatSwapAttemptSuffix(result)}${result.feeStatus}`);
+      results.push(formatBuySuccessLine(wallet, result.amountLamports, result.feeLamports, result.swapLamports, result, result.feeStatus));
       tradeEvents.push({
         userId: session.userId,
         type: "buy",
@@ -2306,7 +2483,7 @@ async function buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps) {
   let feeStatus = "";
   try {
     const feeSignature = await collectSolFee(keypair, feeLamports);
-    feeStatus = feeSignature ? `, fee ${feeSignature}` : "";
+    feeStatus = feeSignature ? `, fee tx ${feeSignature}` : "";
   } catch (feeError) {
     feeStatus = `, fee failed - ${formatError(feeError)}`;
   }
@@ -2314,19 +2491,22 @@ async function buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps) {
   return {
     signature: result.signature,
     outputAmount: result.outputAmount,
+    amountLamports,
+    feeLamports,
+    swapLamports,
     attempts: result.attempts,
     feeStatus
   };
 }
 
-async function sellTokenFromWallet(wallet, tokenMint, percent, slippageBps) {
+async function sellTokenFromWallet(wallet, tokenMint, percent, slippageBps, options = {}) {
   const keypair = decryptWallet(wallet);
   const token = await getTokenBalanceForMintCached(keypair.publicKey, new PublicKey(tokenMint), { force: true });
   if (!token || token.rawAmount === 0n) {
     throw new Error("no token balance");
   }
 
-  const amount = (token.rawAmount * BigInt(percent)) / 100n;
+  const amount = sellAmountForPercent(token.rawAmount, percent, options.baseRawAmount);
   if (amount === 0n) {
     throw new Error("sell amount rounded to zero");
   }
@@ -2354,7 +2534,7 @@ async function sellTokenAmountFromWallet(wallet, tokenMint, amount, slippageBps)
 
   try {
     const feeSignature = await collectSolFee(keypair, feeLamports);
-    feeStatus = feeSignature ? `, fee ${feeSignature}` : "";
+    feeStatus = feeSignature ? `, fee tx ${feeSignature}` : "";
   } catch (feeError) {
     feeStatus = `, fee failed - ${formatError(feeError)}`;
   }
@@ -2363,6 +2543,7 @@ async function sellTokenAmountFromWallet(wallet, tokenMint, amount, slippageBps)
     signature: result.signature,
     tokenAmount: sellAmount.toString(),
     outputLamports: outputLamports.toString(),
+    feeLamports: feeLamports.toString(),
     attempts: result.attempts,
     feeStatus
   };
@@ -2370,6 +2551,27 @@ async function sellTokenAmountFromWallet(wallet, tokenMint, amount, slippageBps)
 
 function formatSwapAttemptSuffix(result) {
   return result?.attempts > 1 ? `, landed after ${result.attempts} attempts` : "";
+}
+
+function sellAmountForPercent(currentRawAmount, percent, baseRawAmount = null) {
+  const current = BigInt(currentRawAmount || 0);
+  if (current <= 0n) return 0n;
+
+  if (!baseRawAmount) {
+    return (current * BigInt(percent)) / 100n;
+  }
+
+  const targetBase = BigInt(baseRawAmount);
+  if (targetBase <= 0n) return (current * BigInt(percent)) / 100n;
+
+  if (percent >= 100) {
+    if (current <= targetBase) return current;
+    const extraBps = ((current - targetBase) * 10_000n) / targetBase;
+    return extraBps <= 500n ? current : targetBase;
+  }
+
+  const targetAmount = (targetBase * BigInt(percent)) / 100n;
+  return targetAmount > current ? current : targetAmount;
 }
 
 async function processTradePlans() {
@@ -2462,7 +2664,9 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
   }
 
   try {
-    const sell = await sellTokenFromWallet(wallet, plan.tokenMint, plan.sellPercent, plan.slippageBps);
+    const sell = await sellTokenFromWallet(wallet, plan.tokenMint, plan.sellPercent, plan.slippageBps, {
+      baseRawAmount: planWallet.tokenOutAmount
+    });
     await recordTradeEvents([{
       userId: plan.userId,
       type: "sell",
@@ -2485,7 +2689,7 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
     }
 
     planWallet.status = "sold";
-    return { changed: true, message: `${planWallet.label}: sold loop ${planWallet.completedLoops}/${plan.loopCount || 1} by ${triggerReason}, ${sell.signature}${formatSwapAttemptSuffix(sell)}${sell.feeStatus}` };
+    return { changed: true, message: `${formatTimedSellSuccessLine(planWallet, sell, triggerReason, plan.loopCount || 1)}` };
   } catch (error) {
     planWallet.status = "failed";
     planWallet.triggerReason = triggerReason;
@@ -2524,7 +2728,10 @@ async function restartTimedPlanLoop(plan, planWallet, wallet, sell, triggerReaso
 
     return {
       changed: true,
-      message: `${planWallet.label}: sold loop ${planWallet.completedLoops}/${plan.loopCount} by ${triggerReason}, ${sell.signature}${formatSwapAttemptSuffix(sell)}${sell.feeStatus}; started loop ${planWallet.currentLoop}/${plan.loopCount}, buy ${buy.signature}${formatSwapAttemptSuffix(buy)}${buy.feeStatus}`
+      message: [
+        formatTimedSellSuccessLine(planWallet, sell, triggerReason, plan.loopCount),
+        `started loop ${planWallet.currentLoop}/${plan.loopCount}, ${formatBuySuccessLine(wallet, buy.amountLamports, buy.feeLamports, buy.swapLamports, buy, buy.feeStatus)}`
+      ].join("; ")
     };
   } catch (error) {
     planWallet.status = "failed";
@@ -2532,7 +2739,7 @@ async function restartTimedPlanLoop(plan, planWallet, wallet, sell, triggerReaso
     planWallet.updatedAt = new Date().toISOString();
     return {
       changed: true,
-      message: `${planWallet.label}: sold loop ${planWallet.completedLoops}/${plan.loopCount} by ${triggerReason}, ${sell.signature}${formatSwapAttemptSuffix(sell)}${sell.feeStatus}; next loop buy failed - ${friendlyError(error)}`
+      message: `${formatTimedSellSuccessLine(planWallet, sell, triggerReason, plan.loopCount)}; next loop buy failed - ${friendlyError(error)}`
     };
   }
 }
@@ -2616,7 +2823,7 @@ async function processDcaPlanWallet(plan, planWallet, walletStore) {
       planWallet.failures = 0;
       planWallet.lastSignature = buy.signature;
       planWallet.updatedAt = new Date().toISOString();
-      planWallet.results = appendLimited(planWallet.results, `buy ${planWallet.completedOrders}/${plan.orderCount}: ${buy.signature}${formatSwapAttemptSuffix(buy)}`);
+      planWallet.results = appendLimited(planWallet.results, `buy ${planWallet.completedOrders}/${plan.orderCount}: ${formatBuySuccessLine(wallet, buy.amountLamports, buy.feeLamports, buy.swapLamports, buy, buy.feeStatus)}`);
 
       await recordTradeEvents([{
         userId: plan.userId,
@@ -2637,7 +2844,7 @@ async function processDcaPlanWallet(plan, planWallet, walletStore) {
 
       return {
         changed: true,
-        message: `${planWallet.label}: DCA buy ${planWallet.completedOrders}/${plan.orderCount}, ${lamportsToSol(amountLamports)} SOL, ${buy.signature}${formatSwapAttemptSuffix(buy)}${buy.feeStatus}`
+        message: `DCA buy ${planWallet.completedOrders}/${plan.orderCount}: ${formatBuySuccessLine(wallet, buy.amountLamports, buy.feeLamports, buy.swapLamports, buy, buy.feeStatus)}`
       };
     }
 
@@ -2650,7 +2857,7 @@ async function processDcaPlanWallet(plan, planWallet, walletStore) {
     planWallet.failures = 0;
     planWallet.lastSignature = sell.signature;
     planWallet.updatedAt = new Date().toISOString();
-    planWallet.results = appendLimited(planWallet.results, `sell ${planWallet.completedOrders}/${plan.orderCount}: ${sell.signature}${formatSwapAttemptSuffix(sell)}`);
+    planWallet.results = appendLimited(planWallet.results, `sell ${planWallet.completedOrders}/${plan.orderCount}: ${formatSellSuccessLine(wallet, sell)}`);
 
     await recordTradeEvents([{
       userId: plan.userId,
@@ -2671,7 +2878,7 @@ async function processDcaPlanWallet(plan, planWallet, walletStore) {
 
     return {
       changed: true,
-      message: `${planWallet.label}: DCA sell ${planWallet.completedOrders}/${plan.orderCount}, ${sell.signature}${formatSwapAttemptSuffix(sell)}${sell.feeStatus}`
+      message: `DCA sell ${planWallet.completedOrders}/${plan.orderCount}: ${formatSellSuccessLine(wallet, sell)}`
     };
   } catch (error) {
     const failures = Number.parseInt(planWallet.failures || 0, 10) + 1;
@@ -2695,7 +2902,8 @@ async function estimatePlanWalletMove(plan, wallet) {
     throw new Error("no token balance");
   }
 
-  const amount = (token.rawAmount * BigInt(plan.sellPercent)) / 100n;
+  const planWallet = plan.wallets.find((item) => item.publicKey === wallet.publicKey);
+  const amount = sellAmountForPercent(token.rawAmount, plan.sellPercent, planWallet?.tokenOutAmount);
   if (amount === 0n) {
     throw new Error("sell amount rounded to zero");
   }
@@ -2709,13 +2917,15 @@ async function estimatePlanWalletMove(plan, wallet) {
   });
 
   const estimatedOut = BigInt(order.outAmount || order.outputAmount || 0);
-  const basis = (BigInt(plan.wallets.find((item) => item.publicKey === wallet.publicKey)?.basisLamports || 0) * BigInt(plan.sellPercent)) / 100n;
+  const estimatedFee = BigInt(calculateFeeLamports(estimatedOut));
+  const estimatedNetOut = estimatedOut > estimatedFee ? estimatedOut - estimatedFee : 0n;
+  const basis = (BigInt(planWallet?.basisLamports || 0) * BigInt(plan.sellPercent)) / 100n;
   if (basis <= 0n) {
     throw new Error("missing plan basis");
   }
 
-  const movePct = (Number(estimatedOut - basis) / Number(basis)) * 100;
-  return { estimatedOut, basis, movePct };
+  const movePct = (Number(estimatedNetOut - basis) / Number(basis)) * 100;
+  return { estimatedOut, estimatedNetOut, basis, movePct };
 }
 
 async function sweepSolFlow(chatId, session) {
@@ -3452,6 +3662,7 @@ async function showWalletMenu(chatId, messageId = null) {
       [{ text: "Positions Overview", callback_data: "positions_overview" }],
       [{ text: "PnL / Results", callback_data: "pnl_results" }],
       [{ text: "Close Empty Token Accounts", callback_data: "close_empty_accounts" }],
+      [{ text: "Remove Wallets", callback_data: "delete_wallets" }],
       [{ text: "Main Menu", callback_data: "main_menu" }]
     ]
   });
@@ -3539,14 +3750,15 @@ async function showWithdrawalMenu(chatId, messageId = null) {
 }
 
 async function showPnlResults(chatId, userId, messageId = null) {
-  const tokenRows = await pnlRows(userId, null, { groupByToken: true, limit: 5 });
+  const tokenRows = await pnlRows(userId, null, { groupByToken: true, sortBy: "recent", limit: 10 });
   const cardButtons = tokenRows.map((row, index) => ([{
-    text: `Card ${index + 1}: ${row.symbol || shortMint(row.tokenMint)}`,
+    text: `Latest Card ${index + 1}: ${shortMint(row.tokenMint)}`,
     callback_data: `pnl_card:${row.tokenMint}`
   }]));
   const replyMarkup = {
     inline_keyboard: [
       [{ text: "Share Best PnL Card", callback_data: "pnl_card" }],
+      [{ text: "Card by CA", callback_data: "pnl_card_by_ca" }],
       ...cardButtons,
       [{ text: "Positions", callback_data: "positions_overview" }, { text: "Wallet Menu", callback_data: "wallet_menu" }],
       [{ text: "Main Menu", callback_data: "main_menu" }]
@@ -3667,10 +3879,12 @@ async function buildPositionsOverview(userId) {
 async function showSniperScan(chatId, userId, messageId = null, options = {}) {
   const settings = await sniperSettingsForUser(userId);
   const modeLabel = sniperModeLabel(settings.mode);
+  const scanState = nextSniperScanState(userId, settings.mode);
   const scanningLines = [
     options.modeSelected ? `${modeLabel} selected.` : "OgreSniper is scanning latest Solana profiles...",
     "",
-    `Scanning for ${modeLabel} picks with metadata, liquidity/market signals, and momentum heuristics.`
+    `Scanning for ${modeLabel} picks with metadata, liquidity/market signals, and momentum heuristics.`,
+    "Refresh rotates the shortlist while keeping high-score picks first."
   ];
   await sendOrEditMessage(chatId, messageId, withBrandFooter(scanningLines.join("\n")), {
     inline_keyboard: [[{ text: "Back", callback_data: "sniper_menu" }]]
@@ -3678,7 +3892,8 @@ async function showSniperScan(chatId, userId, messageId = null, options = {}) {
 
   const candidates = await fetchSniperCandidates();
   const scored = [];
-  await runWithConcurrency(candidates.slice(0, 18), Math.min(6, Math.max(3, CONFIG.balanceConcurrency)), async (candidate) => {
+  const scanPool = rotateSniperCandidatePool(candidates, scanState);
+  await runWithConcurrency(scanPool, Math.min(6, Math.max(3, CONFIG.balanceConcurrency)), async (candidate) => {
     try {
       scored.push(await scoreSniperCandidate(candidate, settings));
     } catch {
@@ -3686,10 +3901,10 @@ async function showSniperScan(chatId, userId, messageId = null, options = {}) {
     }
   });
 
-  const rows = scored
-    .filter((item) => item.score >= Math.max(45, settings.minScore - 20))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 6);
+  const qualifiedRows = scored
+    .filter((item) => item.score >= Math.max(45, settings.minScore - 20) && item.rugRisk <= settings.maxRisk + 28)
+    .sort(compareSniperScores);
+  const rows = selectRotatingSniperRows(qualifiedRows, scanState);
 
   if (rows.length === 0) {
     await say(chatId, withBrandFooter("OgreSniper scan found no usable early-play candidates right now.\n\nTry again later or choose a different mode."));
@@ -3708,6 +3923,7 @@ async function showSniperScan(chatId, userId, messageId = null, options = {}) {
   await sendOrEditHtmlMessage(chatId, messageId, withBrandFooter([
       `<b>${escapeHtml(modeLabel)} Picks</b>`,
       `Mode: <b>${escapeHtml(modeLabel)}</b>`,
+      `Refresh: <b>${scanState.refreshCount}</b> | Scored: <b>${scored.length}</b> | Qualified: <b>${qualifiedRows.length}</b>`,
       "Tap Snipe, choose wallets and SOL size, then review/customize profit and loss settings before Confirm. CA lines are tap-to-copy and Dex links open charts.",
       "",
       ...rows.map(formatSniperPickHtml)
@@ -3934,20 +4150,31 @@ async function pnlRows(userId, tokenFilter = null, options = {}) {
       entry.sells += 1;
       entry.received += BigInt(trade.solLamportsReceived || 0);
     }
-    entry.lastTradeAt = trade.timestamp || entry.lastTradeAt;
+    if (!entry.lastTradeAt || tradeTimestampMs(trade.timestamp) >= tradeTimestampMs(entry.lastTradeAt)) {
+      entry.lastTradeAt = trade.timestamp || entry.lastTradeAt;
+    }
     aggregates.set(key, entry);
   }
 
+  const sortBy = options.sortBy || "pnl";
   return [...aggregates.values()]
-    .sort((a, b) => compareBigInt((b.received - b.spent), (a.received - a.spent)))
+    .sort((a, b) => sortBy === "recent"
+      ? tradeTimestampMs(b.lastTradeAt) - tradeTimestampMs(a.lastTradeAt)
+      : compareBigInt((b.received - b.spent), (a.received - a.spent)))
     .slice(0, options.limit || 12);
+}
+
+function tradeTimestampMs(value) {
+  return Date.parse(value || "") || 0;
 }
 
 async function sendPnlCard(chatId, userId, tokenFilter = null, options = {}) {
   const rows = await pnlRows(userId, tokenFilter, { groupByToken: true, limit: 1 });
   if (rows.length === 0) {
     if (!options.quietNoData) {
-      await say(chatId, "No PnL data yet. Buy and sell from the bot first, then create a card.");
+      await say(chatId, tokenFilter
+        ? `No PnL data found for ${shortMint(tokenFilter)}. Cards only work for buys/sells made from this bot.`
+        : "No PnL data yet. Buy and sell from the bot first, then create a card.");
     }
     return;
   }
@@ -3970,6 +4197,11 @@ async function sendPnlCard(chatId, userId, tokenFilter = null, options = {}) {
       await say(chatId, `Could not create PnL card: ${friendlyError(error)}`);
     }
   }
+}
+
+async function sendPnlCardForTokenText(chatId, userId, text) {
+  const tokenMint = parsePublicKey(text).toBase58();
+  await sendPnlCard(chatId, userId, tokenMint);
 }
 
 async function renderPnlCard(row, metadata = {}) {
@@ -4162,15 +4394,91 @@ async function fetchSniperCandidates() {
     }));
 }
 
+function nextSniperScanState(userId, mode) {
+  const key = `${userId}:${mode}`;
+  const previous = sniperScanState.get(key) || { refreshCount: 0, candidateOffset: -24, displayOffset: -5 };
+  const next = {
+    refreshCount: previous.refreshCount + 1,
+    candidateOffset: previous.candidateOffset + 24,
+    displayOffset: previous.displayOffset + 5,
+    updatedAt: Date.now()
+  };
+  sniperScanState.set(key, next);
+  pruneSniperScanState();
+  return next;
+}
+
+function pruneSniperScanState() {
+  const maxAgeMs = 60 * 60 * 1000;
+  const now = Date.now();
+  for (const [key, state] of sniperScanState.entries()) {
+    if (now - Number(state.updatedAt || 0) > maxAgeMs) {
+      sniperScanState.delete(key);
+    }
+  }
+}
+
+function rotateSniperCandidatePool(candidates, scanState) {
+  const unique = uniqueSniperCandidates(candidates);
+  const latestAnchor = unique.slice(0, 12);
+  const rotatingPool = rotateItems(unique.slice(12, 120), scanState.candidateOffset).slice(0, 36);
+  const combined = uniqueSniperCandidates([...latestAnchor, ...rotatingPool]);
+  return combined.slice(0, 48);
+}
+
+function uniqueSniperCandidates(candidates) {
+  const seen = new Set();
+  const rows = [];
+  for (const candidate of candidates || []) {
+    const tokenMint = candidate?.tokenMint;
+    if (!tokenMint || seen.has(tokenMint)) continue;
+    seen.add(tokenMint);
+    rows.push(candidate);
+  }
+  return rows;
+}
+
+function compareSniperScores(a, b) {
+  return (b.score - a.score)
+    || (a.rugRisk - b.rugRisk)
+    || (a.exitRisk - b.exitRisk)
+    || (a.manipulationScore - b.manipulationScore);
+}
+
+function selectRotatingSniperRows(rows, scanState) {
+  if (rows.length <= 6) return rows;
+
+  const anchorCount = rows.length >= 10 ? 1 : 2;
+  const anchors = rows.slice(0, anchorCount);
+  const rotatingRows = rotateItems(rows.slice(anchorCount, 30), scanState.displayOffset);
+  return uniqueSniperScoreRows([...anchors, ...rotatingRows]).slice(0, 6);
+}
+
+function uniqueSniperScoreRows(rows) {
+  const seen = new Set();
+  const unique = [];
+  for (const row of rows) {
+    if (!row?.tokenMint || seen.has(row.tokenMint)) continue;
+    seen.add(row.tokenMint);
+    unique.push(row);
+  }
+  return unique;
+}
+
+function rotateItems(items, offset) {
+  if (!Array.isArray(items) || items.length <= 1) return items || [];
+  const start = Math.abs(Number(offset) || 0) % items.length;
+  return [...items.slice(start), ...items.slice(0, start)];
+}
+
 async function scoreSniperCandidate(candidate, settings) {
   const tokenMint = candidate.tokenMint;
   const metadata = await getDexTokenMetadata(tokenMint);
-  const dex = await getDexScreenerTokenMetadata(tokenMint).catch(() => ({}));
   const text = `${metadata.symbol || ""} ${metadata.name || ""}`.toLowerCase();
-  const marketCap = Number(metadata.marketCap || metadata.fdv || dex.marketCap || dex.fdv || 0);
-  const h24 = Number(dex.priceChange?.h24 || 0);
-  const h6 = Number(dex.priceChange?.h6 || 0);
-  const h1 = Number(dex.priceChange?.h1 || 0);
+  const marketCap = Number(metadata.marketCap || metadata.fdv || 0);
+  const h24 = Number(metadata.priceChange?.h24 || 0);
+  const h6 = Number(metadata.priceChange?.h6 || 0);
+  const h1 = Number(metadata.priceChange?.h1 || 0);
   const hasImage = Boolean(metadata.imageUrl);
   const hasMeta = Boolean(metadata.symbol && metadata.name);
   const narrative = sniperNarrativeScore(text, settings.mode);
@@ -4378,6 +4686,7 @@ async function showBackupMenu(chatId, messageId = null) {
       [{ text: "Restore Backup", callback_data: "restore_backup" }],
       [{ text: "Rescue Backup Keys", callback_data: "rescue_backup_keys" }],
       [{ text: "Emergency Key Export", callback_data: "export_private_keys" }],
+      [{ text: "Remove Wallets", callback_data: "delete_wallets" }],
       [{ text: "Main Menu", callback_data: "main_menu" }]
     ]
   });
@@ -4479,6 +4788,7 @@ function howToPage(topic) {
         "",
         "Fast scan flow:",
         "Tap Scan Early Plays, open the Dex chart link in the text if you want to inspect it, then tap Snipe #1 through #6. Pick All Wallets, a quick wallet button, or Custom / Group. Pick 0.05, 0.10, 0.50, 1 SOL, or Buy X SOL. OgreSniper then selects the best matching exit preset for the mode and score.",
+        "Tap Refresh Scan to rotate through more qualified picks. The bot keeps the highest-score pick anchored, then rotates the other slots from a wider scored pool so you see fresh options more often.",
         "",
         "Mode scan flow:",
         "Tap Modes, pick the category you want, then choose from the ranked list. The rest is the same: Snipe button, wallet, amount, profit/loss preset, optional custom TP/SL, slippage, Confirm.",
@@ -4531,8 +4841,9 @@ function howToPage(topic) {
         "- My Wallets: lists wallet labels and addresses. Tap or long-press the address text to copy it.",
         "- Check Balances: scans your bot wallets for SOL, token holdings, current positions, and quick refresh/position buttons.",
         "- Positions Overview: shows current token holdings only, estimated value when Jupiter can quote, and Dexscreener links.",
-        "- PnL / Results: shows every bot-recorded buy and sell, newest first and oldest last.",
+        "- PnL / Results: shows every bot-recorded buy and sell, newest first and oldest last. Latest token card buttons appear first; use Card by CA or `/pnlcard CA` for older tokens.",
         "- Close Empty Token Accounts: reclaims rent from empty SPL token accounts when possible.",
+        "- Remove Wallets: deletes selected saved wallet records from the bot after two confirmations. It sends an encrypted backup before the final confirm and does not move funds on-chain.",
         "",
         "Wallet privacy and safety:",
         "- Each Telegram user only sees their own wallets.",
@@ -4638,6 +4949,7 @@ function howToPage(topic) {
         "- Restore Backup: loads wallets back into the bot from an encrypted backup file or pasted backup text.",
         "- Rescue Backup Keys: reads a backup and sends a private-key recovery file without needing wallets restored first.",
         "- Emergency Key Export: sends raw private keys for wallets already inside the bot after exact confirmation.",
+        "- Remove Wallets: sends an encrypted backup, asks for a second confirmation, then removes selected wallet records from the bot without moving funds.",
         "",
         "Automatic backups:",
         "The bot automatically sends a backup file after wallet creation, wallet import, and wallet restore. The filename includes the group label, user ID, and date.",
@@ -4657,6 +4969,7 @@ function howToPage(topic) {
         "",
         "APP_SECRET warning:",
         "Encrypted backups only restore when Render uses the same APP_SECRET that created them. Never change APP_SECRET after wallets exist.",
+        "If a wallet is removed by mistake, Restore Backup can add it back as long as you use the backup file and the same APP_SECRET.",
         "",
         "Keep backups private. Anyone with raw private keys can drain funds."
       ].join("\n")
@@ -5618,6 +5931,14 @@ function parsePublicKey(text) {
   }
 }
 
+function parseCommandWithArgument(text, names) {
+  const match = String(text || "").trim().match(/^\/([a-z0-9_]+)(?:@[a-z0-9_]+)?(?:\s+([\s\S]+))?$/i);
+  if (!match) return null;
+  const command = match[1].toLowerCase();
+  if (!names.includes(command)) return null;
+  return { command, argument: String(match[2] || "").trim() };
+}
+
 function parsePositiveNumber(text) {
   const value = Number.parseFloat(text);
   if (!Number.isFinite(value) || value <= 0) {
@@ -5873,6 +6194,31 @@ function formatFundConfirm(data) {
   ].join("\n");
 }
 
+function buySlippagePromptText(data) {
+  if (data.amountMode === "max") {
+    return [
+      "Amount selected: MAX.",
+      `Each wallet keeps ${CONFIG.buyReserveSol} SOL safety reserve.`,
+      `The confirm screen will show fee rate: ${formatFeeRate()}.`,
+      "",
+      `Send slippage in basis points, or type default for ${CONFIG.defaultSlippageBps} bps.`
+    ].join("\n");
+  }
+
+  const amountLamports = solToLamports(data.amountSol);
+  const feeLamports = calculateFeeLamports(amountLamports);
+  const swapLamports = amountLamports - feeLamports;
+  return [
+    `Button spend: ${lamportsToSol(amountLamports)} SOL`,
+    `Net Jupiter swap input: ${lamportsToSol(swapLamports)} SOL`,
+    `Platform fee: ${lamportsToSol(feeLamports)} SOL (${formatFeeRate()})`,
+    "",
+    "Slippage is not a fee. It only controls how much price movement you allow before the swap fails.",
+    "",
+    `Send slippage in basis points, or type default for ${CONFIG.defaultSlippageBps} bps.`
+  ].join("\n");
+}
+
 function formatBuyConfirm(data) {
   const heading = data.tradeMode === "single" ? "Confirm buy:" : "Confirm bundle buy:";
   const walletLabel = data.tradeMode === "single" && data.walletLabel ? `Wallet: ${data.walletLabel}` : `Wallets: ${data.walletIndexes.join(", ")}`;
@@ -5896,12 +6242,42 @@ function formatBuyConfirm(data) {
     heading,
     `Token mint: ${data.tokenMint}`,
     walletLabel,
-    `${data.tradeMode === "single" ? "Spend" : "Spend per wallet"}: ${data.amountSol} SOL`,
-    `${data.tradeMode === "single" ? "Net swap" : "Net swap per wallet"}: ${lamportsToSol(amountLamports - feeLamports)} SOL`,
-    `Platform fee: ${formatFeeRate()} to ${CONFIG.feeWallet}`,
+    `${data.tradeMode === "single" ? "Button spend" : "Button spend per wallet"}: ${lamportsToSol(amountLamports)} SOL`,
+    `${data.tradeMode === "single" ? "Net Jupiter swap input" : "Net Jupiter swap input per wallet"}: ${lamportsToSol(amountLamports - feeLamports)} SOL`,
+    `Platform fee: ${lamportsToSol(feeLamports)} SOL (${formatFeeRate()}) to ${CONFIG.feeWallet}`,
     `${data.tradeMode === "single" ? "Recommended balance" : "Recommended balance per wallet"}: ${lamportsToSol(recommendedLamports)} SOL`,
-    `Slippage: ${data.slippageBps} bps`
+    `Slippage: ${data.slippageBps} bps`,
+    "",
+    "If the token output looks too low after buying, that is usually price impact/liquidity/route movement, not the SOL input being cut in half."
   ].join("\n");
+}
+
+function formatBuySuccessLine(wallet, amountLamports, feeLamports, swapLamports, result, feeStatus) {
+  return [
+    `${wallet.label}: button spend ${lamportsToSol(amountLamports)} SOL`,
+    `net swap ${lamportsToSol(swapLamports)} SOL`,
+    `fee ${lamportsToSol(feeLamports)} SOL`,
+    `tx ${result.signature}${formatSwapAttemptSuffix(result)}${feeStatus}`
+  ].join(", ");
+}
+
+function formatSellSuccessLine(wallet, sell) {
+  const outputLamports = BigInt(sell.outputLamports || 0);
+  const feeLamports = BigInt(sell.feeLamports || calculateFeeLamports(outputLamports));
+  const netLamports = outputLamports > feeLamports ? outputLamports - feeLamports : 0n;
+  return [
+    `${wallet.label}: swap ${sell.signature}${formatSwapAttemptSuffix(sell)}`,
+    `gross out ${lamportsBigToSol(outputLamports)} SOL`,
+    `fee ${lamportsBigToSol(feeLamports)} SOL`,
+    `net after fee ${lamportsBigToSol(netLamports)} SOL${sell.feeStatus || ""}`
+  ].join(", ");
+}
+
+function formatTimedSellSuccessLine(planWallet, sell, triggerReason, loopCount) {
+  return [
+    `${planWallet.label}: sold loop ${planWallet.completedLoops}/${loopCount} by ${triggerReason}`,
+    formatSellSuccessLine({ label: planWallet.label }, sell).replace(`${planWallet.label}: `, "")
+  ].join(", ");
 }
 
 function formatSellConfirm(data) {
@@ -5914,8 +6290,9 @@ function formatSellConfirm(data) {
     walletLabel,
     `${data.tradeMode === "single" ? "Percent" : "Percent per wallet"}: ${data.percent}%`,
     `Platform fee: ${formatFeeRate()} of SOL output to ${CONFIG.feeWallet}`,
-    `Slippage: ${data.slippageBps} bps`
-  ].join("\n");
+    `Slippage: ${data.slippageBps} bps`,
+    data.percent === 100 ? "Sell 100% uses the full current raw token balance found in each selected wallet." : ""
+  ].filter(Boolean).join("\n");
 }
 
 function formatTimedTradePlanConfirm(data) {
@@ -6020,6 +6397,43 @@ function formatCloseAccountsConfirm(data) {
   return [
     "Confirm close empty token accounts:",
     `Wallets: ${data.walletIndexes.join(", ")}`
+  ].join("\n");
+}
+
+function formatDeleteWalletsConfirm(data) {
+  const selected = (data.wallets || []).map((wallet, index) => {
+    return `${index + 1}. ${wallet.label}: ${wallet.publicKey}`;
+  });
+
+  return [
+    "Confirm wallet removal (1 of 2):",
+    "",
+    "This deletes the saved wallet record(s) from this bot only.",
+    "It does not move SOL or tokens on-chain.",
+    "The bot will send an encrypted backup file before the final confirmation.",
+    "",
+    "Selected wallets:",
+    selected.join("\n"),
+    "",
+    "After this first confirm, review/save the backup file, then confirm one more time to delete."
+  ].join("\n");
+}
+
+function formatDeleteWalletsFinalConfirm(data) {
+  const selected = (data.wallets || []).map((wallet, index) => {
+    return `${index + 1}. ${wallet.label}: ${wallet.publicKey}`;
+  });
+
+  return [
+    "Final wallet removal confirmation (2 of 2):",
+    "",
+    `Backup file sent: ${data.backupFilename || "sent"}`,
+    "That encrypted backup keeps the wallet keys recoverable through Backup / Restore as long as the same APP_SECRET is used.",
+    "",
+    "Tap Confirm one more time to remove these saved wallet records from the bot.",
+    "This still does not move SOL or tokens on-chain.",
+    "",
+    selected.join("\n")
   ].join("\n");
 }
 

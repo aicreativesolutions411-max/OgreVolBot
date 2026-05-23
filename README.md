@@ -77,8 +77,12 @@ This bot does not provide wallet washing, provenance hiding, mixer behavior, or 
 - `/buy` - start a one-wallet buy
 - `/sell` - start a one-wallet sell
 - `/positions` - view positions overview
+- `/pnl` - view PnL / Results
+- `/pnlcard` - paste a token CA to create a PnL card
+- `/pnlcard CA` - create a PnL card for a specific token CA
 - `/bundle` - open bundle tools
 - `/wallets` - list managed wallets
+- `/deletewallets` - remove saved wallets from the bot after backup and confirmation
 - `/balances` - show SOL and token balances for your wallets
 - `/withdraw` - withdraw maximum available SOL from selected wallets
 - `/cancel` - cancel the current flow
@@ -191,7 +195,7 @@ The How To Use button opens a clickable learning hub with user-friendly instruct
 
 The Trade menu is for one wallet at a time. It includes Buy, Sell, Auto Sell, DCA Buy, DCA Sell, Positions, and Wallets. Buy screens include quick buttons for `0.10 SOL`, `0.50 SOL`, `1 SOL`, `max`, and custom amount. Sell screens include quick buttons for `25%`, `50%`, `100%`, and custom percent.
 
-The Wallet menu includes wallet creation/import, My Wallets with tap-to-copy address text, Check Balances, Positions Overview, and PnL / Results. Positions Overview only shows coins the managed wallets still hold. PnL / Results shows bot-recorded buys and sells newest first, with older trades below, plus share-card buttons. Successful sells try to send a PnL card automatically. Cards use Dexscreener metadata/art first; if Dexscreener has no token image/name/symbol, the bot tries Pump.fun metadata next. Cards rotate through the branded neon slime frame assets while keeping the same PnL text layout. The Bundle menu contains Bundle Buy, Bundle Sell, DCA Buy, DCA Sell, and Copy Trade info. Use the main Volume button for auto-sell, take-profit, stop-loss, and Repeat cycles. Copy Trade is shown as a setup/info item until a full wallet-watcher implementation is added.
+The Wallet and Backup / Restore menus include Remove Wallets. Remove Wallets deletes selected saved wallet records from the bot only after two confirmations, sends an encrypted backup before the final confirmation, and does not move funds on-chain. If removed by mistake, users can restore the backup later as long as Render still uses the same APP_SECRET. Positions Overview only shows coins the managed wallets still hold. PnL / Results shows bot-recorded buys and sells newest first, with older trades below, plus share-card buttons. PnL card buttons show the latest traded tokens first, and users can tap **Card by CA** or use `/pnlcard CA` for any older token that falls off the visible list. Successful sells try to send a PnL card automatically. Cards use Dexscreener metadata/art first; if Dexscreener has no token image/name/symbol, the bot tries Pump.fun metadata next. Cards rotate through the branded neon slime frame assets while keeping the same PnL text layout. The Bundle menu contains Bundle Buy, Bundle Sell, DCA Buy, DCA Sell, and Copy Trade info. Use the main Volume button for auto-sell, take-profit, stop-loss, and Repeat cycles. Copy Trade is shown as a setup/info item until a full wallet-watcher implementation is added.
 
 Menu navigation edits the existing Telegram menu message when possible, with Main Menu back buttons on submenus. Wallet lists, backups, trade results, and generated PnL cards still post as new messages so users do not lose important data.
 
