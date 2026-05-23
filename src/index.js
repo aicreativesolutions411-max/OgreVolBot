@@ -2239,7 +2239,7 @@ async function createTimedTradePlanFlow(chatId, session) {
 
   await runWithConcurrency(wallets, CONFIG.bundleConcurrency, async (wallet) => {
     try {
-      const result = await buyTokenForPlan(wallet, session.data.tokenMint, amountLamports, session.data.slippageBps);
+      const result = await buyTokenForPlan(wallet, session.data.tokenMint, amountLamports, session.data.slippageBps, { trackTokenDelta: true });
       results.push(formatBuySuccessLine(wallet, result.amountLamports, result.feeLamports, result.swapLamports, result, result.feeStatus));
       tradeEvents.push({
         userId: session.userId,
@@ -2249,14 +2249,14 @@ async function createTimedTradePlanFlow(chatId, session) {
         walletLabel: wallet.label,
         walletPublicKey: wallet.publicKey,
         solLamportsSpent: String(amountLamports),
-        tokenAmount: result.outputAmount || null,
+        tokenAmount: result.tokenDeltaAmount || result.outputAmount || null,
         signature: result.signature
       });
       planWallets.push({
         label: wallet.label,
         publicKey: wallet.publicKey,
         basisLamports: amountLamports,
-        tokenOutAmount: result.outputAmount || null,
+        tokenOutAmount: result.tokenDeltaAmount || result.outputAmount || null,
         buySignature: result.signature,
         currentLoop: 1,
         completedLoops: 0,
@@ -2291,6 +2291,7 @@ async function createTimedTradePlanFlow(chatId, session) {
     sellDelaySeconds: session.data.sellDelaySeconds,
     sellAfterAt: new Date(now + session.data.sellDelaySeconds * 1000).toISOString(),
     sellPercent: session.data.sellPercent,
+    triggerSellPercent: session.data.triggerSellPercent || 100,
     loopCount: session.data.loopCount || 1,
     takeProfitPct: session.data.takeProfitPct,
     stopLossPct: session.data.stopLossPct,
@@ -2323,9 +2324,10 @@ async function createTimedTradePlanFlow(chatId, session) {
     `Loops: ${plan.loopCount}`,
     `Take-profit: ${plan.takeProfitPct ? `+${plan.takeProfitPct}%` : "off"}`,
     `Stop-loss: ${plan.stopLossPct ? `-${plan.stopLossPct}%` : "off"}`,
+    plan.takeProfitPct || plan.stopLossPct ? `TP/SL sell percent: ${plan.triggerSellPercent}%` : "",
     "",
     results.join("\n")
-  ].join("\n")));
+  ].filter(Boolean).join("\n")));
   await showMenu(chatId, session.userId);
 }
 
@@ -2457,7 +2459,7 @@ async function createDcaPlanFlow(chatId, session) {
   await showMenu(chatId, session.userId);
 }
 
-async function buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps) {
+async function buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps, options = {}) {
   const keypair = decryptWallet(wallet);
   const balance = await getSolBalanceCached(keypair.publicKey, { force: true });
   const feeLamports = calculateFeeLamports(amountLamports);
@@ -2472,6 +2474,9 @@ async function buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps) {
     throw new Error(`Not enough SOL. Has ${lamportsToSol(balance)} SOL, needs about ${lamportsToSol(recommendedLamports)} SOL.`);
   }
 
+  const trackMint = options.trackTokenDelta ? new PublicKey(tokenMint) : null;
+  const tokenBeforeRaw = trackMint ? await safeTokenRawBalance(keypair.publicKey, trackMint) : null;
+
   const result = await executeJupiterSwap({
     signer: keypair,
     inputMint: SOL_MINT,
@@ -2479,6 +2484,10 @@ async function buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps) {
     amount: swapLamports,
     slippageBps
   });
+  invalidateWalletReadCache(wallet.publicKey);
+  const tokenDeltaAmount = trackMint
+    ? await readTokenDeltaAfterBuy(keypair.publicKey, trackMint, tokenBeforeRaw)
+    : null;
 
   let feeStatus = "";
   try {
@@ -2491,6 +2500,7 @@ async function buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps) {
   return {
     signature: result.signature,
     outputAmount: result.outputAmount,
+    tokenDeltaAmount,
     amountLamports,
     feeLamports,
     swapLamports,
@@ -2574,6 +2584,18 @@ function sellAmountForPercent(currentRawAmount, percent, baseRawAmount = null) {
   return targetAmount > current ? current : targetAmount;
 }
 
+function isPriceExitTrigger(triggerReason) {
+  return /^take-profit|^stop-loss/i.test(String(triggerReason || ""));
+}
+
+function effectiveTimedSellPercent(plan, triggerReason) {
+  const configured = isPriceExitTrigger(triggerReason)
+    ? plan.triggerSellPercent ?? 100
+    : plan.sellPercent ?? 100;
+  const percent = Number.parseInt(configured, 10);
+  return Number.isInteger(percent) ? clamp(percent, 1, 100) : 100;
+}
+
 async function processTradePlans() {
   if (tradePlanRunnerActive) return;
   tradePlanRunnerActive = true;
@@ -2630,13 +2652,11 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
 
   let triggerReason = null;
   const now = Date.now();
-  if (now >= Date.parse(planWallet.sellAfterAt || plan.sellAfterAt)) {
-    triggerReason = "timer";
-  }
 
   if (!triggerReason && (plan.takeProfitPct || plan.stopLossPct)) {
     const lastCheckedAt = Date.parse(planWallet.lastCheckedAt || "");
-    if (Number.isFinite(lastCheckedAt) && now - lastCheckedAt < 30_000) {
+    const timerDue = now >= Date.parse(planWallet.sellAfterAt || plan.sellAfterAt);
+    if (!timerDue && Number.isFinite(lastCheckedAt) && now - lastCheckedAt < 30_000) {
       return { changed: false, message: null };
     }
 
@@ -2659,14 +2679,20 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
     }
   }
 
+  if (!triggerReason && now >= Date.parse(planWallet.sellAfterAt || plan.sellAfterAt)) {
+    triggerReason = "timer";
+  }
+
   if (!triggerReason) {
     return { changed: false, message: null };
   }
 
   try {
-    const sell = await sellTokenFromWallet(wallet, plan.tokenMint, plan.sellPercent, plan.slippageBps, {
+    const sellPercent = effectiveTimedSellPercent(plan, triggerReason);
+    const sell = await sellTokenFromWallet(wallet, plan.tokenMint, sellPercent, plan.slippageBps, {
       baseRawAmount: planWallet.tokenOutAmount
     });
+    sell.sellPercent = sellPercent;
     await recordTradeEvents([{
       userId: plan.userId,
       type: "sell",
@@ -2702,7 +2728,7 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
 async function restartTimedPlanLoop(plan, planWallet, wallet, sell, triggerReason) {
   try {
     const amountLamports = solToLamports(plan.amountSol);
-    const buy = await buyTokenForPlan(wallet, plan.tokenMint, amountLamports, plan.slippageBps);
+    const buy = await buyTokenForPlan(wallet, plan.tokenMint, amountLamports, plan.slippageBps, { trackTokenDelta: true });
     await recordTradeEvents([{
       userId: plan.userId,
       type: "buy",
@@ -2711,14 +2737,14 @@ async function restartTimedPlanLoop(plan, planWallet, wallet, sell, triggerReaso
       walletLabel: wallet.label,
       walletPublicKey: wallet.publicKey,
       solLamportsSpent: String(amountLamports),
-      tokenAmount: buy.outputAmount || null,
+      tokenAmount: buy.tokenDeltaAmount || buy.outputAmount || null,
       signature: buy.signature
     }]);
 
     planWallet.status = "watching";
     planWallet.currentLoop = planWallet.completedLoops + 1;
     planWallet.basisLamports = amountLamports;
-    planWallet.tokenOutAmount = buy.outputAmount || null;
+    planWallet.tokenOutAmount = buy.tokenDeltaAmount || buy.outputAmount || null;
     planWallet.buySignature = buy.signature;
     planWallet.lastCheckedAt = null;
     planWallet.lastMovePct = null;
@@ -2903,7 +2929,8 @@ async function estimatePlanWalletMove(plan, wallet) {
   }
 
   const planWallet = plan.wallets.find((item) => item.publicKey === wallet.publicKey);
-  const amount = sellAmountForPercent(token.rawAmount, plan.sellPercent, planWallet?.tokenOutAmount);
+  const triggerSellPercent = effectiveTimedSellPercent(plan, "take-profit");
+  const amount = sellAmountForPercent(token.rawAmount, triggerSellPercent, planWallet?.tokenOutAmount);
   if (amount === 0n) {
     throw new Error("sell amount rounded to zero");
   }
@@ -2919,7 +2946,7 @@ async function estimatePlanWalletMove(plan, wallet) {
   const estimatedOut = BigInt(order.outAmount || order.outputAmount || 0);
   const estimatedFee = BigInt(calculateFeeLamports(estimatedOut));
   const estimatedNetOut = estimatedOut > estimatedFee ? estimatedOut - estimatedFee : 0n;
-  const basis = (BigInt(planWallet?.basisLamports || 0) * BigInt(plan.sellPercent)) / 100n;
+  const basis = (BigInt(planWallet?.basisLamports || 0) * BigInt(triggerSellPercent)) / 100n;
   if (basis <= 0n) {
     throw new Error("missing plan basis");
   }
@@ -3342,6 +3369,27 @@ async function getTokenBalanceForMintCached(owner, mint, options = {}) {
   const balance = await getTokenBalanceForMint(ownerKey, mintKey);
   setTimedCache(tokenBalanceCache, cacheKey, balance);
   return balance;
+}
+
+async function safeTokenRawBalance(owner, mint) {
+  try {
+    const token = await getTokenBalanceForMintCached(owner, mint, { force: true });
+    return BigInt(token?.rawAmount || 0);
+  } catch {
+    return 0n;
+  }
+}
+
+async function readTokenDeltaAfterBuy(owner, mint, beforeRaw) {
+  const before = BigInt(beforeRaw || 0);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const after = await safeTokenRawBalance(owner, mint);
+    if (after > before) {
+      return (after - before).toString();
+    }
+    await sleep(450);
+  }
+  return null;
 }
 
 async function getMintTokenProgramId(mint) {
@@ -3901,9 +3949,13 @@ async function showSniperScan(chatId, userId, messageId = null, options = {}) {
     }
   });
 
-  const qualifiedRows = scored
-    .filter((item) => item.score >= Math.max(45, settings.minScore - 20) && item.rugRisk <= settings.maxRisk + 28)
+  const strictRows = scored
+    .filter((item) => isStrictSniperPick(item, settings))
     .sort(compareSniperScores);
+  const fallbackRows = scored
+    .filter((item) => isFallbackSniperPick(item, settings))
+    .sort(compareSniperScores);
+  const qualifiedRows = strictRows.length >= 6 ? strictRows : fallbackRows;
   const rows = selectRotatingSniperRows(qualifiedRows, scanState);
 
   if (rows.length === 0) {
@@ -4336,6 +4388,10 @@ async function getDexTokenMetadata(tokenMint) {
     marketCap: dexValue.marketCap || pumpValue.marketCap || null,
     fdv: dexValue.fdv || null,
     priceChange: dexValue.priceChange || null,
+    liquidityUsd: dexValue.liquidityUsd || null,
+    volume: dexValue.volume || null,
+    txns: dexValue.txns || null,
+    pairCreatedAt: dexValue.pairCreatedAt || null,
     source: dexValue.imageUrl ? "dexscreener" : pumpValue.imageUrl ? "pumpfun" : "fallback"
   };
 
@@ -4359,7 +4415,11 @@ async function getDexScreenerTokenMetadata(tokenMint) {
     imageUrl: best?.info?.imageUrl || "",
     marketCap: best?.marketCap || null,
     fdv: best?.fdv || null,
-    priceChange: best?.priceChange || null
+    priceChange: best?.priceChange || null,
+    liquidityUsd: best?.liquidity?.usd || null,
+    volume: best?.volume || null,
+    txns: best?.txns || null,
+    pairCreatedAt: best?.pairCreatedAt || null
   };
 }
 
@@ -4465,10 +4525,81 @@ function uniqueSniperScoreRows(rows) {
   return unique;
 }
 
+function isStrictSniperPick(item, settings) {
+  return item.category !== "Avoid"
+    && item.score >= Math.max(52, settings.minScore - 10)
+    && item.rugRisk <= settings.maxRisk + 14
+    && item.exitRisk <= 72
+    && !item.riskFlags?.includes("dumping")
+    && !item.riskFlags?.includes("sell pressure");
+}
+
+function isFallbackSniperPick(item, settings) {
+  return item.score >= Math.max(45, settings.minScore - 22)
+    && item.rugRisk <= settings.maxRisk + 24
+    && item.exitRisk <= 84
+    && !item.riskFlags?.includes("hard dump");
+}
+
 function rotateItems(items, offset) {
   if (!Array.isArray(items) || items.length <= 1) return items || [];
   const start = Math.abs(Number(offset) || 0) % items.length;
   return [...items.slice(start), ...items.slice(0, start)];
+}
+
+function buyPressureRatio(buys, sells) {
+  const buyCount = Math.max(0, Number(buys) || 0);
+  const sellCount = Math.max(0, Number(sells) || 0);
+  if (buyCount === 0 && sellCount === 0) return 1;
+  return (buyCount + 1) / (sellCount + 1);
+}
+
+function sniperDumpPenalty({ h1, h6, h24 }) {
+  let penalty = 0;
+  if (h1 < -8) penalty += Math.min(24, Math.abs(h1) * 0.9);
+  if (h6 < -15) penalty += Math.min(20, Math.abs(h6) * 0.45);
+  if (h24 < -35) penalty += 10;
+  return Math.round(penalty);
+}
+
+function sniperLiquidityPenalty({ marketCap, liquidityUsd }) {
+  let penalty = 0;
+  if (liquidityUsd <= 0) penalty += 18;
+  else if (liquidityUsd < 5_000) penalty += 18;
+  else if (liquidityUsd < 10_000) penalty += 10;
+
+  if (marketCap > 0 && liquidityUsd > 0) {
+    const liqToMc = liquidityUsd / marketCap;
+    if (liqToMc < 0.015) penalty += 18;
+    else if (liqToMc < 0.03) penalty += 10;
+  }
+
+  return Math.round(penalty);
+}
+
+function sniperSellPressurePenalty({ buys5m, sells5m, buysH1, sellsH1 }) {
+  const shortPressure = buyPressureRatio(buys5m, sells5m);
+  const hourlyPressure = buyPressureRatio(buysH1, sellsH1);
+  let penalty = 0;
+  if (sells5m >= 5 && shortPressure < 0.75) penalty += 18;
+  else if (sells5m >= 3 && shortPressure < 0.95) penalty += 8;
+  if (sellsH1 >= 10 && hourlyPressure < 0.8) penalty += 14;
+  else if (sellsH1 >= 5 && hourlyPressure < 1) penalty += 6;
+  return penalty;
+}
+
+function sniperRiskFlags(data) {
+  const flags = [];
+  if (data.namePenalty > 0) flags.push("bad name");
+  if (data.h1 < -20 || data.h6 < -35) flags.push("hard dump");
+  else if (data.h1 < -8 || data.h6 < -15) flags.push("dumping");
+  if (data.liquidityUsd > 0 && data.liquidityUsd < 10_000) flags.push("thin liquidity");
+  if (data.marketCap > 0 && data.liquidityUsd > 0 && data.liquidityUsd / data.marketCap < 0.03) flags.push("weak liquidity");
+  if ((data.sells5m >= 5 && buyPressureRatio(data.buys5m, data.sells5m) < 0.9)
+    || (data.sellsH1 >= 10 && buyPressureRatio(data.buysH1, data.sellsH1) < 0.85)) {
+    flags.push("sell pressure");
+  }
+  return flags;
 }
 
 async function scoreSniperCandidate(candidate, settings) {
@@ -4476,21 +4607,44 @@ async function scoreSniperCandidate(candidate, settings) {
   const metadata = await getDexTokenMetadata(tokenMint);
   const text = `${metadata.symbol || ""} ${metadata.name || ""}`.toLowerCase();
   const marketCap = Number(metadata.marketCap || metadata.fdv || 0);
+  const liquidityUsd = Number(metadata.liquidityUsd || 0);
+  const volume5m = Number(metadata.volume?.m5 || 0);
+  const volumeH1 = Number(metadata.volume?.h1 || 0);
   const h24 = Number(metadata.priceChange?.h24 || 0);
   const h6 = Number(metadata.priceChange?.h6 || 0);
   const h1 = Number(metadata.priceChange?.h1 || 0);
+  const tx5m = metadata.txns?.m5 || {};
+  const txH1 = metadata.txns?.h1 || {};
+  const buys5m = Number(tx5m.buys || 0);
+  const sells5m = Number(tx5m.sells || 0);
+  const buysH1 = Number(txH1.buys || 0);
+  const sellsH1 = Number(txH1.sells || 0);
+  const buyPressure = buyPressureRatio(buys5m + buysH1, sells5m + sellsH1);
+  const pairAgeMinutes = metadata.pairCreatedAt ? Math.max(0, Math.round((Date.now() - Number(metadata.pairCreatedAt)) / 60_000)) : null;
   const hasImage = Boolean(metadata.imageUrl);
   const hasMeta = Boolean(metadata.symbol && metadata.name);
   const narrative = sniperNarrativeScore(text, settings.mode);
-  const liquiditySignal = marketCap > 0 ? Math.min(20, Math.log10(Math.max(10, marketCap)) * 3) : 6;
-  const momentumSignal = Math.max(0, Math.min(25, (h1 * 0.4) + (h6 * 0.15) + (h24 * 0.05)));
+  const liquiditySignal = liquidityUsd > 0
+    ? Math.min(22, Math.log10(Math.max(10, liquidityUsd)) * 4)
+    : marketCap > 0 ? Math.min(12, Math.log10(Math.max(10, marketCap)) * 2) : 2;
+  const volumeSignal = Math.min(14, Math.log10(Math.max(1, volumeH1 + volume5m)) * 2.5);
+  const buyPressureSignal = clamp(Math.round((buyPressure - 1) * 10), -8, 10);
+  const dumpPenalty = sniperDumpPenalty({ h1, h6, h24 });
+  const liquidityPenalty = sniperLiquidityPenalty({ marketCap, liquidityUsd });
+  const sellPressurePenalty = sniperSellPressurePenalty({ buys5m, sells5m, buysH1, sellsH1 });
+  const namePenalty = sniperRiskPenalty(text);
+  const momentumSignal = Math.max(0, Math.min(25, (h1 * 0.45) + (h6 * 0.12) + (h24 * 0.03)));
   const metadataSignal = (hasMeta ? 12 : 2) + (hasImage ? 8 : 0);
-  const modeBonus = sniperModeBonus(settings.mode, { marketCap, h1, h6, h24, text });
-  const score = clamp(Math.round(28 + liquiditySignal + momentumSignal + metadataSignal + narrative + modeBonus), 1, 100);
-  const rugRisk = clamp(Math.round(76 - metadataSignal - liquiditySignal - Math.min(18, momentumSignal) + sniperRiskPenalty(text)), 1, 100);
-  const exitRisk = clamp(Math.round(60 - Math.min(22, momentumSignal) + (marketCap > 0 && marketCap < 25_000 ? 18 : 0) + (h1 < -10 ? 20 : 0)), 1, 100);
-  const manipulationScore = clamp(Math.round(35 + (marketCap > 0 && marketCap < 15_000 ? 25 : 0) + (Math.abs(h1) > 100 ? 25 : 0) - (hasMeta ? 8 : 0)), 1, 100);
-  const category = score >= 82 && rugRisk <= settings.maxRisk
+  const modeBonus = sniperModeBonus(settings.mode, { marketCap, liquidityUsd, h1, h6, h24, text, buyPressure, volumeH1 });
+  const riskTotal = namePenalty + dumpPenalty + liquidityPenalty + sellPressurePenalty;
+  const score = clamp(Math.round(26 + liquiditySignal + volumeSignal + momentumSignal + metadataSignal + narrative + modeBonus + buyPressureSignal - riskTotal), 1, 100);
+  const rugRisk = clamp(Math.round(70 - metadataSignal - Math.min(18, liquiditySignal) - Math.min(10, volumeSignal) + namePenalty + liquidityPenalty + sellPressurePenalty + Math.round(dumpPenalty * 0.65)), 1, 100);
+  const exitRisk = clamp(Math.round(54 - Math.min(18, momentumSignal) - Math.max(0, buyPressureSignal) + dumpPenalty + sellPressurePenalty + (marketCap > 0 && marketCap < 20_000 ? 12 : 0)), 1, 100);
+  const manipulationScore = clamp(Math.round(28 + (liquidityPenalty * 0.8) + (Math.abs(h1) > 100 ? 18 : 0) + sellPressurePenalty + (pairAgeMinutes !== null && pairAgeMinutes < 10 ? 10 : 0) - (hasMeta ? 6 : 0)), 1, 100);
+  const riskFlags = sniperRiskFlags({ h1, h6, h24, liquidityUsd, marketCap, buys5m, sells5m, buysH1, sellsH1, namePenalty });
+  const category = riskFlags.includes("hard dump") || rugRisk > settings.maxRisk + 26
+    ? "Avoid"
+    : score >= 82 && rugRisk <= settings.maxRisk
     ? "High Conviction"
     : score >= settings.minScore && momentumSignal >= 10
       ? "Momentum"
@@ -4507,9 +4661,14 @@ async function scoreSniperCandidate(candidate, settings) {
     rugRisk,
     exitRisk,
     manipulationScore,
+    liquidityUsd,
+    volumeH1,
+    buyPressure,
+    pairAgeMinutes,
+    riskFlags,
     momentum: momentumSignal >= 18 ? "Strong" : momentumSignal >= 8 ? "Building" : "Weak",
     smartMoney: score >= 80 ? "High" : score >= 65 ? "Medium" : "Low",
-    reasons: sniperReasons({ hasImage, hasMeta, marketCap, h1, h6, h24, narrative, settings })
+    reasons: sniperReasons({ hasImage, hasMeta, marketCap, liquidityUsd, volumeH1, h1, h6, h24, narrative, buyPressure, riskFlags, settings })
   };
 }
 
@@ -4520,7 +4679,8 @@ function formatSniperPickHtml(score, index = null) {
   return [
     `<b>${rank}${escapeHtml(score.category)}: ${label}</b>`,
     `Score: <b>${score.score}/100</b> | Momentum: ${escapeHtml(score.momentum)} | Rug: ${score.rugRisk}/100 | Exit: ${score.exitRisk}/100`,
-    `Smart: ${escapeHtml(score.smartMoney)} | Manipulation: ${score.manipulationScore}/100`,
+    `Liq: ${formatUsdCompact(score.liquidityUsd || 0) || "$0"} | Vol 1h: ${formatUsdCompact(score.volumeH1 || 0) || "$0"} | Flow: ${formatBuyPressure(score.buyPressure)}`,
+    `Smart: ${escapeHtml(score.smartMoney)} | Manipulation: ${score.manipulationScore}/100${score.riskFlags?.length ? ` | Flags: ${escapeHtml(score.riskFlags.join(", "))}` : ""}`,
     `CA: <code>${score.tokenMint}</code>`,
     `Dex: <a href="${dexScreenerUrl(score.tokenMint)}">Open chart</a>`,
     `Why: ${reasons}`
@@ -4531,9 +4691,15 @@ function sniperReasons(data) {
   const reasons = [];
   if (data.hasMeta) reasons.push("metadata live");
   if (data.hasImage) reasons.push("token art found");
-  if (data.marketCap > 0) reasons.push(`MC ${formatUsdCompact(data.marketCap)}`);
+  if (data.liquidityUsd > 0) reasons.push(`liq ${formatUsdCompact(data.liquidityUsd)}`);
+  if (data.volumeH1 > 0) reasons.push(`1h vol ${formatUsdCompact(data.volumeH1)}`);
+  if (data.buyPressure > 1.15) reasons.push("buyers leading");
   if (data.h1 > 0) reasons.push(`1h +${data.h1.toFixed(1)}%`);
   if (data.narrative > 0) reasons.push(`${sniperModeLabel(data.settings.mode)} narrative match`);
+  for (const flag of data.riskFlags || []) {
+    if (reasons.length >= 4) break;
+    reasons.push(`watch ${flag}`);
+  }
   return reasons.slice(0, 4);
 }
 
@@ -4573,10 +4739,10 @@ function sniperNarrativeScore(text, mode) {
 }
 
 function sniperModeBonus(mode, data) {
-  if (mode === "safe" && data.marketCap >= 50_000) return 6;
-  if (mode === "smart" && data.h1 > 10 && data.h6 > 0) return 8;
-  if (mode === "fast" && data.h1 > 15) return 10;
-  if (mode === "moonshot" && data.marketCap > 0 && data.marketCap < 200_000) return 8;
+  if (mode === "safe" && data.liquidityUsd >= 10_000 && data.marketCap >= 50_000 && data.buyPressure >= 1) return 8;
+  if (mode === "smart" && data.h1 > 8 && data.h6 > 0 && data.buyPressure >= 1.1) return 10;
+  if (mode === "fast" && data.h1 > 12 && data.volumeH1 > 5_000 && data.buyPressure >= 1) return 11;
+  if (mode === "moonshot" && data.marketCap > 0 && data.marketCap < 200_000 && data.liquidityUsd >= 5_000) return 8;
   if (mode === "meme" || mode === "ai") return sniperNarrativeScore(data.text, mode);
   return 0;
 }
@@ -4600,6 +4766,7 @@ function applySniperExitPreset(session, presetText) {
   }
   Object.assign(session.data, selected, {
     sellDelayMinutes: selected.sellDelaySeconds / 60,
+    triggerSellPercent: 100,
     loopCount: 1,
     exitPreset: selected.label,
     allowRepeat: false
@@ -4621,9 +4788,9 @@ function formatSniperPresetDetails(data) {
     `Exit preset selected: ${data.exitPreset}`,
     "",
     `Sell timer: ${formatDelay(data.sellDelaySeconds)} after buy`,
-    `Sell percent: ${data.sellPercent}%`,
-    `Take-profit: +${data.takeProfitPct}%`,
-    `Stop-loss: -${data.stopLossPct}%`,
+    `Timer sell: ${data.sellPercent}%`,
+    `Take-profit: +${data.takeProfitPct}% -> sells 100% of the tracked bag`,
+    `Stop-loss: -${data.stopLossPct}% -> sells 100% of the tracked bag`,
     "",
     sniperPresetExplanation(data.exitPreset),
     "",
@@ -4788,7 +4955,7 @@ function howToPage(topic) {
         "",
         "Fast scan flow:",
         "Tap Scan Early Plays, open the Dex chart link in the text if you want to inspect it, then tap Snipe #1 through #6. Pick All Wallets, a quick wallet button, or Custom / Group. Pick 0.05, 0.10, 0.50, 1 SOL, or Buy X SOL. OgreSniper then selects the best matching exit preset for the mode and score.",
-        "Tap Refresh Scan to rotate through more qualified picks. The bot keeps the highest-score pick anchored, then rotates the other slots from a wider scored pool so you see fresh options more often.",
+        "Tap Refresh Scan to rotate through more qualified picks. The bot keeps the highest-score pick anchored, then rotates the other slots from a wider scored pool so you see fresh options more often. It now filters harder against hard dumps, sell pressure, thin liquidity, and weak liquidity-to-market-cap setups.",
         "",
         "Mode scan flow:",
         "Tap Modes, pick the category you want, then choose from the ranked list. The rest is the same: Snipe button, wallet, amount, profit/loss preset, optional custom TP/SL, slippage, Confirm.",
@@ -4802,20 +4969,20 @@ function howToPage(topic) {
         "- AI Narrative: gives extra weight to AI/agent/computing style names/meta.",
         "",
         "Scoring explained:",
-        "- Entry Score estimates metadata quality, liquidity/market signals, price momentum, and narrative fit.",
-        "- Rug Risk is a heuristic warning based on weak metadata, weak liquidity signals, and bad naming patterns.",
-        "- Exit Risk warns when momentum is weak or the launch looks thin.",
-        "- Manipulation Score warns when the move/market cap looks easy to push around.",
+        "- Entry Score estimates metadata quality, liquidity, 1h volume, buy pressure, price momentum, and narrative fit.",
+        "- Rug Risk is a heuristic warning based on weak metadata, weak liquidity, sell pressure, dumping, and bad naming patterns.",
+        "- Exit Risk warns when momentum is weak, sellers are leading, or the launch looks thin.",
+        "- Manipulation Score warns when liquidity is thin, the pair is very new, or the move/market cap looks easy to push around.",
         "- Smart Money Proxy is a quality proxy from available signals, not true wallet tracking yet.",
         "",
         "Exit presets:",
         "- Fast Scalp: sells 100% after 3 minutes, or earlier at +25% take-profit / -10% stop-loss.",
-        "- Balanced: sells 80% after 15 minutes, or earlier at +50% take-profit / -15% stop-loss.",
-        "- Moonbag: sells 60% after 30 minutes, or earlier at +100% take-profit / -25% stop-loss.",
+        "- Balanced: timer sells 80% after 15 minutes. Take-profit or stop-loss sells 100% of the tracked bag.",
+        "- Moonbag: timer sells 60% after 30 minutes. Take-profit or stop-loss sells 100% of the tracked bag.",
         "- Safe: sells 100% after 10 minutes, or earlier at +20% take-profit / -8% stop-loss.",
         "",
         "Custom exits:",
-        "After amount selection, OgreSniper shows the recommended preset. Tap Use Preset, Customize TP/SL, or Back. Customize TP/SL changes the take-profit and stop-loss percentages while keeping the preset timer and sell percent.",
+        "After amount selection, OgreSniper shows the recommended preset. Tap Use Preset, Customize TP/SL, or Back. Customize TP/SL changes the take-profit and stop-loss percentages. TP/SL exits are always full exits on the tracked bag.",
         "",
         "Execution:",
         "OgreSniper uses the same timed-plan engine as Volume. It buys after you confirm, then watches for the selected timer, take-profit, or stop-loss exit.",
@@ -6154,6 +6321,15 @@ function formatUsdCompact(value) {
   return `$${Math.round(number).toLocaleString("en-US")}`;
 }
 
+function formatBuyPressure(value) {
+  const ratio = Number(value);
+  if (!Number.isFinite(ratio)) return "flat";
+  if (ratio >= 1.35) return "buyers strong";
+  if (ratio >= 1.1) return "buyers";
+  if (ratio >= 0.9) return "flat";
+  return "sellers";
+}
+
 function formatDexPriceMove(priceChange) {
   const entry = [
     ["24h", priceChange?.h24],
@@ -6276,8 +6452,9 @@ function formatSellSuccessLine(wallet, sell) {
 function formatTimedSellSuccessLine(planWallet, sell, triggerReason, loopCount) {
   return [
     `${planWallet.label}: sold loop ${planWallet.completedLoops}/${loopCount} by ${triggerReason}`,
+    sell.sellPercent ? `sell ${sell.sellPercent}%` : "",
     formatSellSuccessLine({ label: planWallet.label }, sell).replace(`${planWallet.label}: `, "")
-  ].join(", ");
+  ].filter(Boolean).join(", ");
 }
 
 function formatSellConfirm(data) {
@@ -6306,7 +6483,8 @@ function formatTimedTradePlanConfirm(data) {
     `${data.tradeMode === "single" ? "Buy" : "Buy per wallet"}: ${data.amountSol} SOL`,
     `Net buy before routing fees: ${lamportsToSol(amountLamports - feeLamports)} SOL`,
     `Sell timer: ${formatDelay(data.sellDelaySeconds)} after buy`,
-    `Sell percent: ${data.sellPercent}%`,
+    `Timer sell percent: ${data.sellPercent}%`,
+    `Take-profit/stop-loss sell percent: ${data.triggerSellPercent || 100}%`,
     `Repeat cycles: ${data.loopCount || 1}x`,
     `Take-profit: ${data.takeProfitPct ? `+${data.takeProfitPct}%` : "off"}`,
     `Stop-loss: ${data.stopLossPct ? `-${data.stopLossPct}%` : "off"}`,
@@ -6328,12 +6506,12 @@ function formatSniperConfirm(data) {
     `${data.tradeMode === "single" ? "Buy" : "Buy per wallet"}: ${data.amountSol} SOL`,
     `Exit preset: ${data.exitPreset}`,
     `Sell timer: ${formatDelay(data.sellDelaySeconds)} after buy`,
-    `Sell percent: ${data.sellPercent}%`,
-    `Take-profit: +${data.takeProfitPct}%`,
-    `Stop-loss: -${data.stopLossPct}%`,
+    `Timer sell: ${data.sellPercent}%`,
+    `Take-profit: +${data.takeProfitPct}% -> sells 100% of the tracked bag`,
+    `Stop-loss: -${data.stopLossPct}% -> sells 100% of the tracked bag`,
     `Slippage: ${data.slippageBps} bps`,
     "",
-    "This buys now, then watches for timer/take-profit/stop-loss exits."
+    "This buys now, then watches for timer/take-profit/stop-loss exits. Price-trigger exits are full exits."
   ].filter(Boolean).join("\n");
 }
 
