@@ -4,7 +4,7 @@ services:
     env: node
     plan: starter
     autoDeploy: true
-    buildCommand: npm ci
+    buildCommand: npm ci && npm run build:web
     startCommand: npm run render-start
     healthCheckPath: /healthz
     disk:
@@ -21,7 +21,17 @@ services:
       - key: AUTO_SEND_RECOVERY_KEY_FILE
         value: true
       - key: SOLANA_RPC_URL
-        value: https://api.mainnet-beta.solana.com
+        sync: false
+      - key: TRADING_SPEED_PRESET
+        value: balanced
+      - key: PUMPFUN_API_BASE
+        value: https://frontend-api-v3.pump.fun
+      - key: PUMPFUN_API_TOKEN
+        sync: false
+      - key: PHOTON_NEW_PAIRS_URL
+        sync: false
+      - key: PHOTON_API_KEY
+        sync: false
       - key: MANUAL_LAUNCH_SCAN_INTERVAL_MS
         value: 500
       - key: SOLANA_TRACKER_API_BASE

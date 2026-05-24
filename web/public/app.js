@@ -616,6 +616,11 @@ function bundleHtml() {
           <h3>Multi-Wallet Control</h3>
           <p>Select the exact wallets to use. Each selected wallet must hold enough SOL for buy amount, fees, and reserve.</p>
         </article>
+        <article>
+          <h3>Copy Trade / KOL Tracker</h3>
+          <p>Use KOL signals as the CA source, then send them into Bundle or arm a copy plan with the exits above.</p>
+          <button data-tab="kol">Open KOL Tracker</button>
+        </article>
         ${bundleResultHtml()}
       </aside>
     </section>
@@ -983,10 +988,6 @@ function launchWatchesHtml() {
 }
 
 function kolHtml() {
-  if (!state.wallets.length) {
-    return `${createWalletSection()}${emptyState("No wallets loaded yet", "Create or restore a wallet above first. KOL copy plans need managed wallets before they can trade.")}`;
-  }
-
   const configured = state.kolScan?.configured !== false;
   return `
     <section class="section-actions mode-row">
@@ -1005,10 +1006,15 @@ function kolHtml() {
             <p>Pick wallets and exits once, then tap Copy Plan on any KOL signal. Trade and Bundle send the CA to those tabs.</p>
           </div>
         </div>
-        <div class="wallet-checks">
-          ${walletChecksHtml("kol")}
-        </div>
-        ${walletGroupHtml("kol")}
+        ${state.wallets.length ? `
+          <div class="wallet-checks">
+            ${walletChecksHtml("kol")}
+          </div>
+          ${walletGroupHtml("kol")}
+        ` : `
+          <p class="trade-status">KOL viewing works now. Create, restore, or import a wallet before using Copy Plan to trade.</p>
+          <button class="secondary" data-tab="wallets">Open Wallets</button>
+        `}
         <div class="volume-grid">
           <label>
             Buy Per Wallet
@@ -1103,6 +1109,7 @@ function kolHtml() {
         </article>
       </aside>
     </section>
+    ${state.kolScan?.kols?.length ? kolSummaryHtml() : ""}
     ${state.kolScan ? kolRowsHtml() : emptyState("No KOL scan loaded", "Pick a KOL mode or tap Refresh.")}
   `;
 }
@@ -1123,13 +1130,55 @@ function kolResultHtml() {
   return `<div class="mini-results">${row.results.map((item) => `<span data-ok="${item.ok ? "true" : "false"}">${escapeHtml(item.message || item)}</span>`).join("")}</div>`;
 }
 
+function kolSummaryHtml() {
+  const scan = state.kolScan || {};
+  const kols = scan.kols || [];
+  if (!kols.length || scan.configured === false) return "";
+  return `
+    <section class="kol-dashboard">
+      <div class="trade-head">
+        <div>
+          <h3>${escapeHtml(scan.label || "KOL Tracker")}</h3>
+          <p>${escapeHtml(scan.message || "Live KOL leaderboard loaded.")}</p>
+        </div>
+        <span>${escapeHtml(scan.kolCount || kols.length)} tracked</span>
+      </div>
+      <div class="kol-grid">
+        ${kols.slice(0, 12).map((kol, index) => `
+          <article class="kol-profile">
+            <div class="pick-top">
+              <span>${index + 1}</span>
+              <h3>${escapeHtml(kol.name || kol.shortWallet || "KOL Wallet")}</h3>
+              <em>${escapeHtml(kol.winRateLabel || "n/a")}</em>
+            </div>
+            <p>${kol.twitter ? `@${escapeHtml(kol.twitter)}` : escapeHtml(kol.shortWallet || kol.wallet || "")}</p>
+            <dl>
+              <div><dt>Realized</dt><dd>${escapeHtml(kol.realizedLabel || "$0")}</dd></div>
+              <div><dt>ROI</dt><dd>${escapeHtml(kol.roiLabel || "n/a")}</dd></div>
+              <div><dt>Trades</dt><dd>${escapeHtml(kol.trades ?? "n/a")}</dd></div>
+            </dl>
+            <small>Last trade: ${escapeHtml(formatDate(kol.lastTradeAt))}</small>
+            <div class="card-actions">
+              ${kol.solscanUrl ? `<a href="${escapeHtml(kol.solscanUrl)}" target="_blank" rel="noreferrer">Wallet</a>` : ""}
+              ${kol.wallet ? `<button data-copy="${escapeHtml(kol.wallet)}">Copy Wallet</button>` : ""}
+            </div>
+          </article>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
 function kolRowsHtml() {
   const scan = state.kolScan || {};
   if (scan.configured === false) {
     return emptyState("KOL Tracker needs an API key", scan.message || "Add SOLANA_TRACKER_API_KEY on Render.");
   }
   if (!scan.rows?.length) {
-    return emptyState("No KOL signals found", scan.message || "Try Refresh or another mode.");
+    return emptyState(
+      scan.kols?.length ? "No token signals on this refresh" : "No KOL signals found",
+      scan.message || "Try Refresh or another mode."
+    );
   }
   return `
     <section class="pick-grid">
@@ -1664,6 +1713,13 @@ function walletsHtml() {
   if (!state.wallets.length) return `${create}${emptyState("No wallets yet", "Create a wallet set above to get started on web.")}`;
   return `
     ${create}
+    <section class="create-wallet-card">
+      <div>
+        <h3>Copy Trade / KOL Tracker</h3>
+        <p>Track public KOL wallets, review their active signals, then route a pick into Trade, Bundle, or a managed copy plan.</p>
+      </div>
+      <button data-tab="kol">Open KOL Tracker</button>
+    </section>
     <div class="table-list">
       ${state.wallets.map((wallet) => `
         <article class="row-card">

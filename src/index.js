@@ -855,7 +855,7 @@ function webCorsHeaders(request) {
     ? "*"
     : allowedOrigins.includes("*") || allowedOrigins.includes(origin) || (portalOrigin && portalOrigin === origin)
       ? origin
-      : origin;
+      : portalOrigin || allowedOrigins[0] || "null";
   return {
     "Access-Control-Allow-Origin": allowOrigin || "*",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
@@ -5683,6 +5683,7 @@ async function showWalletMenu(chatId, messageId = null) {
       [{ text: "🔍 Check Balances", callback_data: "check_balances" }],
       [{ text: "Positions Overview", callback_data: "positions_overview" }],
       [{ text: "PnL / Results", callback_data: "pnl_results" }],
+      [{ text: "Copy Trade / KOL Tracker", callback_data: "kol_tracker_menu" }],
       [{ text: "Close Empty Token Accounts", callback_data: "close_empty_accounts" }],
       [{ text: "Remove Wallets", callback_data: "delete_wallets" }],
       [{ text: "Main Menu", callback_data: "main_menu" }]
@@ -5820,8 +5821,22 @@ async function showKolScan(chatId, userId, mode = "hot", messageId = null) {
     ""
   ];
 
+  if (scan.kols?.length) {
+    lines.push("Top KOL wallets:", "");
+    scan.kols.slice(0, 5).forEach((kol, index) => {
+      lines.push(
+        `${index + 1}. ${kol.name}${kol.twitter ? ` (@${kol.twitter})` : ""}`,
+        `Wallet: ${kol.shortWallet || shortMint(kol.wallet)}`,
+        `Win: ${kol.winRateLabel || "n/a"} | ROI: ${kol.roiLabel || "n/a"} | Realized: ${kol.realizedLabel || "$0"}`,
+        ""
+      );
+    });
+  }
+
   if (scan.rows.length === 0) {
-    lines.push("No strong KOL signals found on this refresh. Try another mode or refresh in a minute.");
+    lines.push(scan.kols?.length
+      ? "KOL leaderboard loaded, but no current token signals came back on this refresh. Try another mode or refresh in a minute."
+      : "No strong KOL signals found on this refresh. Try another mode or refresh in a minute.");
   } else {
     scan.rows.slice(0, 6).forEach((row, index) => {
       lines.push(
@@ -5928,7 +5943,8 @@ async function showBundleMenu(chatId, messageId = null) {
       [{ text: "🧲 Bundle Buy", callback_data: "batch_buy" }],
       [{ text: "🧲 Bundle Sell", callback_data: "batch_sell" }],
       [{ text: "DCA Buy", callback_data: "dca_buy" }, { text: "DCA Sell", callback_data: "dca_sell" }],
-      [{ text: "Copy Trade", callback_data: "copy_trade_info" }],
+      [{ text: "Copy Trade / KOL Tracker", callback_data: "kol_tracker_menu" }],
+      [{ text: "Copy Trade Info", callback_data: "copy_trade_info" }],
       [{ text: "Main Menu", callback_data: "main_menu" }]
     ]
   });
@@ -10509,6 +10525,7 @@ async function buildKolScan(userId, mode = "hot", wallet = "") {
     source: "solana_tracker",
     apiBase: CONFIG.solanaTrackerApiBase,
     kolCount: 0,
+    kols: [],
     rows: [],
     message: ""
   };
@@ -10529,6 +10546,7 @@ async function buildKolScan(userId, mode = "hot", wallet = "") {
       description: "Latest buy-style trades from the wallet you entered.",
       wallet: owner,
       kolCount: 1,
+      kols: [webKolSummaryRow({ wallet: owner, name: shortMint(owner) })],
       rows: rows.slice(0, 12),
       message: rows.length ? "Custom wallet signals loaded." : "No recent buy-style token trades found for this wallet."
     };
@@ -10553,8 +10571,31 @@ async function buildKolScan(userId, mode = "hot", wallet = "") {
   return {
     ...base,
     kolCount: topKols.length,
+    kols: topKols.map((kol) => webKolSummaryRow(kol)),
     rows: sorted,
-    message: sorted.length ? "KOL signals loaded." : "No usable KOL positions found on this refresh."
+    message: sorted.length ? "KOL signals loaded." : "KOL leaderboard loaded, but no current token positions came back for this refresh."
+  };
+}
+
+function webKolSummaryRow(kol = {}) {
+  const wallet = firstString(kol.wallet, kol.owner, kol.address, kol.publicKey);
+  const twitter = stripAt(firstString(kol.twitter, kol.x, kol.username));
+  const name = firstString(kol.name, twitter, wallet ? shortMint(wallet) : "Unknown KOL");
+  return {
+    wallet,
+    shortWallet: wallet ? shortMint(wallet) : "",
+    name,
+    twitter,
+    avatar: firstString(kol.avatar, kol.image),
+    realizedUsd: Number(kol.realizedUsd || 0),
+    realizedLabel: formatUsdCompact(kol.realizedUsd || 0) || "$0",
+    roiPct: kol.roiPct ?? null,
+    roiLabel: formatPercentNumber(kol.roiPct),
+    winRatePct: kol.winRatePct ?? null,
+    winRateLabel: formatPercentNumber(kol.winRatePct),
+    trades: Number.isFinite(Number(kol.trades)) ? Number(kol.trades) : null,
+    lastTradeAt: kol.lastTradeAt || null,
+    solscanUrl: wallet ? `https://solscan.io/account/${wallet}` : ""
   };
 }
 
@@ -10623,47 +10664,128 @@ async function solanaTrackerJson(pathName, options = {}) {
 function normalizeKolLeaderboard(data) {
   return arrayFromApiData(data).map((row) => {
     const identity = row.identity || row.profile || row.kol || {};
+    const stats = row.stats || row.summary || {};
+    const pnl = row.pnl || row.profit || {};
+    const counts = row.counts || row.count || {};
+    const timing = row.timing || row.time || {};
+    const period = row.period || row.periodStats || row.performance || {};
     const wallet = firstString(row.wallet, row.owner, row.address, row.publicKey, identity.wallet, identity.address);
     const twitter = stripAt(firstString(identity.twitter, identity.x, row.twitter, row.x, row.username));
     const name = firstString(identity.name, row.name, twitter, wallet ? shortMint(wallet) : "Unknown KOL");
-    const stats = row.stats || row.summary || row.pnl || row;
     return {
       wallet,
       name,
       twitter,
       avatar: firstString(identity.avatar, identity.image, row.avatar, row.image),
-      realizedUsd: firstNumber(stats.realized, stats.realizedUsd, stats.realized_usd, stats.realizedPnlUsd, stats.pnlUsd),
-      roiPct: firstNumber(stats.roi, stats.roiPct, stats.roi_percentage, stats.totalRoi, stats.percentage),
-      winRatePct: normalizePercentLike(firstNumber(stats.winPercentage, stats.win_percentage, stats.winRate, stats.win_rate)),
-      trades: firstNumber(stats.trades, stats.tradeCount, stats.totalTrades),
-      lastTradeAt: firstString(stats.lastTrade, stats.last_trade, stats.lastTradeAt, row.lastTradeAt)
+      realizedUsd: firstNumber(
+        row.realizedUsd,
+        row.realized_usd,
+        row.realized,
+        row.realizedPnlUsd,
+        row.pnlUsd,
+        pnl.realized,
+        pnl.realizedUsd,
+        pnl.realized_usd,
+        pnl.total,
+        stats.realized,
+        stats.realizedUsd,
+        stats.realized_usd,
+        period.realized
+      ),
+      roiPct: normalizePercentLike(firstNumber(
+        row.roi,
+        row.roiPct,
+        row.roi_percentage,
+        row.totalRoi,
+        pnl.roi,
+        pnl.roiPct,
+        pnl.roi_percentage,
+        stats.roi,
+        stats.roiPct,
+        stats.roi_percentage,
+        period.roi
+      )),
+      winRatePct: normalizePercentLike(firstNumber(
+        row.winPercentage,
+        row.win_percentage,
+        row.winRate,
+        row.win_rate,
+        stats.winPercentage,
+        stats.win_percentage,
+        stats.winRate,
+        stats.win_rate,
+        period.winRate,
+        period.win_percentage
+      )),
+      trades: firstNumber(
+        row.trades,
+        row.tradeCount,
+        row.totalTrades,
+        counts.trades,
+        counts.tradeCount,
+        counts.totalTrades,
+        stats.trades,
+        stats.tradeCount,
+        stats.totalTrades,
+        period.trades
+      ),
+      lastTradeAt: normalizeTimestamp(firstString(
+        row.lastTrade,
+        row.last_trade,
+        row.lastTradeAt,
+        timing.lastTrade,
+        timing.last_trade,
+        timing.lastTradeAt,
+        stats.lastTrade,
+        stats.last_trade,
+        stats.lastTradeAt,
+        period.lastTrade
+      ))
     };
   });
 }
 
 function normalizeKolPosition(position) {
-  const token = position.token || position.mint || position.meta || position.metadata || {};
+  const tokenValue = position.token;
+  const token = tokenValue && typeof tokenValue === "object" ? tokenValue : {};
+  const meta = position.meta || position.metadata || position.tokenMeta || {};
   const pnl = position.pnl || position.profit || position.performance || {};
-  const value = position.value || position.position || position.balance || {};
+  const currentValue = position.current || position.value || position.position || position.balance || {};
+  const current = currentValue && typeof currentValue === "object" ? currentValue : { value: currentValue };
+  const timing = position.timing || {};
   const tokenMint = firstString(
+    typeof tokenValue === "string" ? tokenValue : "",
     token.address,
     token.mint,
     token.tokenAddress,
+    meta.address,
+    meta.mint,
+    meta.tokenAddress,
     position.tokenMint,
     position.mint,
     position.address
   );
   return {
     tokenMint,
-    symbol: firstString(token.symbol, position.symbol, position.ticker),
-    name: firstString(token.name, position.name),
-    valueUsd: firstNumber(position.valueUsd, position.usdValue, value.valueUsd, value.usd, value.value),
-    amount: firstString(position.amount, position.balance, value.amount, value.uiAmount),
+    symbol: firstString(meta.symbol, token.symbol, position.symbol, position.ticker),
+    name: firstString(meta.name, token.name, position.name),
+    valueUsd: firstNumber(position.valueUsd, position.usdValue, current.valueUsd, current.usdValue, current.usd, current.value),
+    amount: firstString(position.amount, position.balance, current.balance, current.amount, current.uiAmount),
     realizedUsd: firstNumber(pnl.realized, pnl.realizedUsd, pnl.realized_usd),
     unrealizedUsd: firstNumber(pnl.unrealized, pnl.unrealizedUsd, pnl.unrealized_usd),
     totalPnlUsd: firstNumber(pnl.total, pnl.totalUsd, pnl.total_usd, position.pnlUsd),
     roiPct: normalizePercentLike(firstNumber(pnl.roi, pnl.roiPct, pnl.roi_percentage, position.roi)),
-    lastTradeAt: normalizeTimestamp(firstString(position.lastTrade, position.last_trade, position.lastTradeAt, value.lastTrade))
+    lastTradeAt: normalizeTimestamp(firstString(
+      position.lastTrade,
+      position.last_trade,
+      position.lastTradeAt,
+      timing.lastTrade,
+      timing.last_trade,
+      timing.lastTradeAt,
+      current.lastTrade,
+      current.last_trade,
+      current.lastTradeAt
+    ))
   };
 }
 
