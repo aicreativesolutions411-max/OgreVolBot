@@ -3882,9 +3882,6 @@ async function createJupiterOrder({ taker, inputMint, outputMint, amount, slippa
 
 async function assertTokenBuySafety({ tokenMint, taker, buyLamports, slippageBps }) {
   const safety = await getMintSafetyInfo(tokenMint);
-  if (safety.tokenProgram === TOKEN_2022_PROGRAM_ID.toBase58()) {
-    throw new Error("Token-2022 mint blocked for safety. Token-2022 can include transfer rules that make exits unreliable.");
-  }
   if (safety.freezeAuthority) {
     throw new Error("Token safety check failed: freeze authority is still active.");
   }
@@ -5669,13 +5666,13 @@ async function filterSniperCandidatesForBuy(rows, options = {}) {
   for (const row of rows) {
     if (accepted.length >= targetAccepted) break;
     stats.checked += 1;
+    let isToken2022 = false;
 
     try {
       const safety = await getMintSafetyInfo(row.tokenMint);
       if (safety.tokenProgram === TOKEN_2022_PROGRAM_ID.toBase58()) {
         stats.token2022 += 1;
-        stats.lastReject = `${sniperCandidateLabel(row)} blocked: Token-2022`;
-        continue;
+        isToken2022 = true;
       }
       if (safety.freezeAuthority) {
         stats.freezeAuthority += 1;
@@ -5706,7 +5703,9 @@ async function filterSniperCandidatesForBuy(rows, options = {}) {
 
       accepted.push({
         ...row,
-        autoSnipeSafetyNote: "mint and round-trip route precheck passed"
+        autoSnipeSafetyNote: isToken2022
+          ? "Token-2022 mint; round-trip route precheck passed"
+          : "mint and round-trip route precheck passed"
       });
       stats.accepted += 1;
       continue;
@@ -5714,7 +5713,9 @@ async function filterSniperCandidatesForBuy(rows, options = {}) {
 
     accepted.push({
       ...row,
-      autoSnipeSafetyNote: taker ? "mint precheck passed; route precheck skipped" : "mint precheck passed; add/import a wallet for route precheck"
+      autoSnipeSafetyNote: isToken2022
+        ? taker ? "Token-2022 mint; route precheck skipped" : "Token-2022 mint; add/import a wallet for route precheck"
+        : taker ? "mint precheck passed; route precheck skipped" : "mint precheck passed; add/import a wallet for route precheck"
     });
     stats.accepted += 1;
   }
@@ -5799,7 +5800,7 @@ function mergeSniperPrecheckStats(target, source) {
 
 function formatSniperPrecheckSummary(stats) {
   if (!stats || !stats.checked) return "";
-  const blocked = stats.token2022 + stats.freezeAuthority + stats.mintAuthority + stats.routeRejected;
+  const blocked = stats.freezeAuthority + stats.mintAuthority + stats.routeRejected;
   const parts = [
     `Prechecked: ${stats.checked}`,
     `Route-safe: ${stats.accepted}`,
@@ -5807,7 +5808,7 @@ function formatSniperPrecheckSummary(stats) {
     stats.routeRejected ? `No route: ${stats.routeRejected}` : "",
     stats.mintAuthority ? `Mint active: ${stats.mintAuthority}` : "",
     stats.freezeAuthority ? `Freeze active: ${stats.freezeAuthority}` : "",
-    stats.token2022 ? `Token-2022: ${stats.token2022}` : "",
+    stats.token2022 ? `Token-2022 tested: ${stats.token2022}` : "",
     stats.mintReadUnavailable ? `Mint read skipped: ${stats.mintReadUnavailable}` : ""
   ].filter(Boolean);
   return [
