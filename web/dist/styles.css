@@ -350,6 +350,10 @@ button:disabled {
   background: rgba(255, 93, 93, 0.09);
 }
 
+.dashboard-error {
+  margin: 0;
+}
+
 .dashboard {
   display: grid;
   gap: 14px;
@@ -680,6 +684,10 @@ code {
   border-radius: 8px;
   padding: 12px;
   background: rgba(114, 255, 35, 0.08);
+}
+
+.kol-status {
+  margin-bottom: 14px;
 }
 
 .trade-side {

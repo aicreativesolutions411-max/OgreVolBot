@@ -121,7 +121,7 @@ The web Bundle tab exposes multi-wallet bundle buy/sell from the page. Users sel
 
 The web Launch Snipe tab exposes Manual Launch Snipe from the page. Users preset ticker, wallets, buy amount, take-profit, stop-loss, fallback timer, and slippage; the backend keeps scanning the configured launch/profile feeds until a matching ticker appears, then buys with the preset wallets.
 
-The web KOL Tracker tab uses the Solana Tracker Data API when `SOLANA_TRACKER_API_KEY` is set on Render. It shows Hot Buys, Top KOLs, Consistent KOLs, Fresh Activity, and custom-wallet scans. Each signal includes chart/copy buttons plus Trade, Bundle, and Copy Plan actions. Copy Plan uses the same timed engine as Volume with preset-or-custom timer, take-profit, stop-loss, repeat, and slippage settings.
+The web KOL Tracker tab uses MadeOnSol as the cheap primary KOL feed when `MADE_ON_SOL_API_KEY` is set on Render. Solana Tracker can stay disabled, or it can be used as an optional fallback/context source when `SOLANA_TRACKER_API_KEY` and `KOL_USE_SOLANA_TRACKER_FALLBACK=true` are set. It shows Hot Buys, Top KOLs, Consistent KOLs, Fresh Activity, and custom-wallet scans. Each signal includes chart/copy buttons plus Trade, Bundle, and Copy Plan actions. Copy Plan uses the same timed engine as Volume with preset-or-custom timer, take-profit, stop-loss, repeat, and slippage settings.
 
 The web dashboard has an optional email field. If `RESEND_API_KEY` and `EMAIL_FROM` are set on Render, users can request a fresh email login code later. Email never carries private keys, backup files, or permanent login tokens.
 
@@ -152,15 +152,31 @@ Set `TELEGRAM_ADMIN_USER_IDS` to your numeric Telegram user ID to show bot-wide 
 
 Batch buy and sell use Jupiter Swap API v2, so you need a Jupiter API key from the Jupiter developer portal.
 
-KOL Tracker uses Solana Tracker Data API. Set `SOLANA_TRACKER_API_KEY` on Render to enable live KOL leaderboards and custom wallet trade scans. Optional tuning:
+KOL Tracker can mix MadeOnSol and Solana Tracker while keeping API keys server-side on Render. For lowest Solana Tracker credit usage, set MadeOnSol first and keep fallback off:
 
 ```text
+MADE_ON_SOL_API_KEY=
+MADE_ON_SOL_API_BASE=https://madeonsol.com/api/v1
+MADE_ON_SOL_KOL_LIMIT=10
+MADE_ON_SOL_CACHE_TTL_MS=900000
+KOL_USE_SOLANA_TRACKER_FALLBACK=false
+```
+
+Optional Solana Tracker tuning:
+
+```text
+SOLANA_TRACKER_API_KEY=
 SOLANA_TRACKER_API_BASE=https://data.solanatracker.io
 SOLANA_TRACKER_KOL_LIMIT=12
 SOLANA_TRACKER_CACHE_TTL_MS=15000
+SOLANA_TRACKER_KOL_CACHE_TTL_MS=120000
+SOLANA_TRACKER_KOL_SIGNAL_LOOKUPS=2
+SOLANA_TRACKER_KOL_POSITION_LIMIT=4
+SOLANA_TRACKER_KOL_POSITION_CONCURRENCY=1
+SOLANA_TRACKER_KOL_USE_PERIOD_ENDPOINT=false
 ```
 
-The key stays server-side on Render. Browser users only call your `/api/web/kol/*` routes.
+Browser users only call your `/api/web/kol/*` routes; they never receive either provider key. MadeOnSol results cache for `MADE_ON_SOL_CACHE_TTL_MS`. Solana Tracker runs in credit-safe mode by default: each uncached fallback refresh uses the KOL leaderboard plus only `SOLANA_TRACKER_KOL_SIGNAL_LOOKUPS` wallet-position lookups. `SOLANA_TRACKER_KOL_USE_PERIOD_ENDPOINT=false` avoids the `/v2/pnl/leaderboard/kols/period` endpoint and uses the main KOL leaderboard with mode-specific sorting instead.
 
 Bundle buy and sell charge a 0.5% platform fee by default. `BUNDLE_FEE_BPS=50` means 50 basis points, which is 0.5%, and fees are sent to `FEE_WALLET`.
 

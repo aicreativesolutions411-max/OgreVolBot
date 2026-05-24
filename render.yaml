@@ -34,12 +34,30 @@ services:
         sync: false
       - key: MANUAL_LAUNCH_SCAN_INTERVAL_MS
         value: 500
+      - key: MADE_ON_SOL_API_BASE
+        value: https://madeonsol.com/api/v1
+      - key: MADE_ON_SOL_KOL_LIMIT
+        value: 10
+      - key: MADE_ON_SOL_CACHE_TTL_MS
+        value: 900000
+      - key: KOL_USE_SOLANA_TRACKER_FALLBACK
+        value: false
       - key: SOLANA_TRACKER_API_BASE
         value: https://data.solanatracker.io
       - key: SOLANA_TRACKER_KOL_LIMIT
         value: 12
       - key: SOLANA_TRACKER_CACHE_TTL_MS
         value: 15000
+      - key: SOLANA_TRACKER_KOL_CACHE_TTL_MS
+        value: 120000
+      - key: SOLANA_TRACKER_KOL_SIGNAL_LOOKUPS
+        value: 2
+      - key: SOLANA_TRACKER_KOL_POSITION_LIMIT
+        value: 4
+      - key: SOLANA_TRACKER_KOL_POSITION_CONCURRENCY
+        value: 1
+      - key: SOLANA_TRACKER_KOL_USE_PERIOD_ENDPOINT
+        value: false
       - key: JUPITER_API_BASE
         value: https://api.jup.ag/swap/v2
       - key: JUPITER_MIN_INTERVAL_MS
@@ -103,6 +121,8 @@ services:
       - key: APP_SECRET
         sync: false
       - key: JUPITER_API_KEY
+        sync: false
+      - key: MADE_ON_SOL_API_KEY
         sync: false
       - key: SOLANA_TRACKER_API_KEY
         sync: false

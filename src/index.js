@@ -36,6 +36,7 @@ let sniperCandidatesCache = { cachedAt: 0, value: [] };
 let photonNewPairsCache = { cachedAt: 0, value: [] };
 let manualLaunchCandidatesCache = { cachedAt: 0, value: [] };
 const solanaTrackerCache = new Map();
+const madeOnSolCache = new Map();
 const webLoginAttemptLimits = new Map();
 const startedAt = new Date();
 const WEB_LOGIN_CODE_TTL_MS = 10 * 60 * 1000;
@@ -226,6 +227,14 @@ function loadConfig() {
   const webSessionTtlHours = Number.parseInt(process.env.WEB_SESSION_TTL_HOURS || "72", 10);
   const solanaTrackerKolLimit = Number.parseInt(process.env.SOLANA_TRACKER_KOL_LIMIT || "12", 10);
   const solanaTrackerCacheTtlMs = Number.parseInt(process.env.SOLANA_TRACKER_CACHE_TTL_MS || "15000", 10);
+  const solanaTrackerKolCacheTtlMs = Number.parseInt(process.env.SOLANA_TRACKER_KOL_CACHE_TTL_MS || "120000", 10);
+  const solanaTrackerKolSignalLookups = Number.parseInt(process.env.SOLANA_TRACKER_KOL_SIGNAL_LOOKUPS || "2", 10);
+  const solanaTrackerKolPositionLimit = Number.parseInt(process.env.SOLANA_TRACKER_KOL_POSITION_LIMIT || "4", 10);
+  const solanaTrackerKolPositionConcurrency = Number.parseInt(process.env.SOLANA_TRACKER_KOL_POSITION_CONCURRENCY || "1", 10);
+  const solanaTrackerKolUsePeriodEndpoint = parseBoolean(process.env.SOLANA_TRACKER_KOL_USE_PERIOD_ENDPOINT || "false");
+  const madeOnSolKolLimit = Number.parseInt(process.env.MADE_ON_SOL_KOL_LIMIT || "10", 10);
+  const madeOnSolCacheTtlMs = Number.parseInt(process.env.MADE_ON_SOL_CACHE_TTL_MS || "900000", 10);
+  const kolUseSolanaTrackerFallback = parseBoolean(process.env.KOL_USE_SOLANA_TRACKER_FALLBACK || "false");
 
   if (!Number.isInteger(bundleFeeBps) || bundleFeeBps < 0 || bundleFeeBps > 1000) {
     throw new Error("BUNDLE_FEE_BPS must be an integer from 0 to 1000.");
@@ -303,6 +312,30 @@ function loadConfig() {
     throw new Error("SOLANA_TRACKER_CACHE_TTL_MS must be an integer from 0 to 300000.");
   }
 
+  if (!Number.isInteger(solanaTrackerKolCacheTtlMs) || solanaTrackerKolCacheTtlMs < 15_000 || solanaTrackerKolCacheTtlMs > 900_000) {
+    throw new Error("SOLANA_TRACKER_KOL_CACHE_TTL_MS must be an integer from 15000 to 900000.");
+  }
+
+  if (!Number.isInteger(solanaTrackerKolSignalLookups) || solanaTrackerKolSignalLookups < 0 || solanaTrackerKolSignalLookups > 12) {
+    throw new Error("SOLANA_TRACKER_KOL_SIGNAL_LOOKUPS must be an integer from 0 to 12.");
+  }
+
+  if (!Number.isInteger(solanaTrackerKolPositionLimit) || solanaTrackerKolPositionLimit < 1 || solanaTrackerKolPositionLimit > 12) {
+    throw new Error("SOLANA_TRACKER_KOL_POSITION_LIMIT must be an integer from 1 to 12.");
+  }
+
+  if (!Number.isInteger(solanaTrackerKolPositionConcurrency) || solanaTrackerKolPositionConcurrency < 1 || solanaTrackerKolPositionConcurrency > 5) {
+    throw new Error("SOLANA_TRACKER_KOL_POSITION_CONCURRENCY must be an integer from 1 to 5.");
+  }
+
+  if (!Number.isInteger(madeOnSolKolLimit) || madeOnSolKolLimit < 1 || madeOnSolKolLimit > 50) {
+    throw new Error("MADE_ON_SOL_KOL_LIMIT must be an integer from 1 to 50.");
+  }
+
+  if (!Number.isInteger(madeOnSolCacheTtlMs) || madeOnSolCacheTtlMs < 60_000 || madeOnSolCacheTtlMs > 86_400_000) {
+    throw new Error("MADE_ON_SOL_CACHE_TTL_MS must be an integer from 60000 to 86400000.");
+  }
+
   try {
     new PublicKey(feeWallet);
   } catch {
@@ -333,6 +366,16 @@ function loadConfig() {
     solanaTrackerApiBase: (process.env.SOLANA_TRACKER_API_BASE || "https://data.solanatracker.io").replace(/\/$/, ""),
     solanaTrackerKolLimit,
     solanaTrackerCacheTtlMs,
+    solanaTrackerKolCacheTtlMs,
+    solanaTrackerKolSignalLookups,
+    solanaTrackerKolPositionLimit,
+    solanaTrackerKolPositionConcurrency,
+    solanaTrackerKolUsePeriodEndpoint,
+    madeOnSolApiKey: process.env.MADE_ON_SOL_API_KEY || "",
+    madeOnSolApiBase: (process.env.MADE_ON_SOL_API_BASE || "https://madeonsol.com/api/v1").replace(/\/$/, ""),
+    madeOnSolKolLimit,
+    madeOnSolCacheTtlMs,
+    kolUseSolanaTrackerFallback,
     telegramBotUsername: normalizeTelegramUsername(process.env.TELEGRAM_BOT_USERNAME || ""),
     webPortalUrl: (process.env.WEB_PORTAL_URL || "").replace(/\/$/, ""),
     webAllowedOrigin: process.env.WEB_ALLOWED_ORIGIN || "*",
@@ -5798,9 +5841,7 @@ async function showKolTrackerMenu(chatId, messageId = null) {
     "",
     "Track Solana KOL wallets, see what they are holding or recently buying, open charts, then choose Trade, Bundle, or Copy Plan from a signal.",
     "",
-    CONFIG.solanaTrackerApiKey
-      ? "Data source: Solana Tracker Data API."
-      : "Setup needed: add SOLANA_TRACKER_API_KEY on Render to enable live KOL data."
+    kolDataSourceText()
   ].join("\n")), {
     inline_keyboard: [
       [{ text: "Hot KOL Buys", callback_data: "kol_scan_hot" }],
@@ -5818,8 +5859,8 @@ async function showKolScan(chatId, userId, mode = "hot", messageId = null) {
     await sendOrEditMessage(chatId, messageId, withBrandFooter([
       "KOL Tracker setup needed.",
       "",
-      "Add SOLANA_TRACKER_API_KEY on Render, then redeploy.",
-      "Optional: SOLANA_TRACKER_KOL_LIMIT and SOLANA_TRACKER_CACHE_TTL_MS."
+      "Add MADE_ON_SOL_API_KEY or SOLANA_TRACKER_API_KEY on Render, then redeploy.",
+      "MadeOnSol can be the cheap primary source. Solana Tracker can stay off or run as fallback."
     ].join("\n")), {
       inline_keyboard: [
         [{ text: "Back", callback_data: "kol_tracker_menu" }],
@@ -5836,6 +5877,7 @@ async function showKolScan(chatId, userId, mode = "hot", messageId = null) {
     "",
     `KOLs checked: ${scan.kolCount}`,
     `Signals found: ${scan.rows.length}`,
+    scan.creditHint || "",
     ""
   ];
 
@@ -5863,6 +5905,7 @@ async function showKolScan(chatId, userId, mode = "hot", messageId = null) {
         `CA: ${row.tokenMint}`,
         `KOL: ${row.kolName}${row.twitter ? ` (@${row.twitter})` : ""}`,
         `Value: ${row.valueLabel} | KOL win: ${row.winRateLabel} | ROI: ${row.roiLabel}`,
+        `Source: ${row.sourceLabel || row.source || "KOL data"}`,
         `Chart: ${row.dexUrl}`,
         ""
       );
@@ -5872,6 +5915,17 @@ async function showKolScan(chatId, userId, mode = "hot", messageId = null) {
   await sendLongMenuText(chatId, messageId, withBrandFooter(lines.join("\n")), {
     inline_keyboard: kolScanKeyboard(scan.rows, mode)
   });
+}
+
+function kolDataSourceText() {
+  if (CONFIG.madeOnSolApiKey && CONFIG.solanaTrackerApiKey) {
+    return CONFIG.kolUseSolanaTrackerFallback
+      ? "Data sources: MadeOnSol primary + Solana Tracker fallback/context."
+      : "Data source: MadeOnSol primary. Solana Tracker key is saved but fallback is off.";
+  }
+  if (CONFIG.madeOnSolApiKey) return "Data source: MadeOnSol API.";
+  if (CONFIG.solanaTrackerApiKey) return "Data source: Solana Tracker Data API.";
+  return "Setup needed: add MADE_ON_SOL_API_KEY or SOLANA_TRACKER_API_KEY on Render.";
 }
 
 function kolScanKeyboard(rows, mode) {
@@ -8519,12 +8573,12 @@ function howToPage(topic) {
       text: [
         "How To Use: KOL Tracker",
         "",
-        "KOL Tracker follows public Solana KOL wallets through the Solana Tracker Data API, then turns their current positions or recent buy-style trades into quick signals.",
+        "KOL Tracker follows public Solana KOL data through MadeOnSol and/or Solana Tracker, then turns current positions or recent buy-style trades into quick signals.",
         "",
         "Buttons inside KOL Tracker:",
         "- Hot KOL Buys: recent high-performing KOLs and their strongest current positions.",
         "- Top KOLs: best ranked KOL wallets by realized performance.",
-        "- Consistent KOLs: focuses on win-rate / consistency over the recent period.",
+        "- Consistent KOLs: focuses on win-rate / consistency from the available KOL leaderboard.",
         "- Fresh Activity: prioritizes wallets with newest activity.",
         "- Trade: sends the signal CA into the one-wallet Trade flow.",
         "- Bundle: sends the signal CA into the Bundle flow for multiple wallets.",
@@ -8535,13 +8589,18 @@ function howToPage(topic) {
         "- All KOL copy settings have quick presets plus Custom inputs.",
         "",
         "Setup:",
-        "- Add SOLANA_TRACKER_API_KEY on Render.",
+        "- Add MADE_ON_SOL_API_KEY on Render for the cheaper primary KOL feed.",
+        "- Optional: add SOLANA_TRACKER_API_KEY only if you want Solana Tracker leaderboard/context.",
+        "- KOL_USE_SOLANA_TRACKER_FALLBACK=false keeps Solana Tracker from being used when MadeOnSol has enough data.",
+        "- MADE_ON_SOL_CACHE_TTL_MS controls how long MadeOnSol KOL results are cached. Default is 900000 ms.",
         "- Optional: SOLANA_TRACKER_KOL_LIMIT controls how many ranked KOL wallets are checked per scan.",
-        "- Optional: SOLANA_TRACKER_CACHE_TTL_MS controls how long scans are cached to save credits.",
+        "- Optional: SOLANA_TRACKER_KOL_CACHE_TTL_MS controls how long KOL scans are cached to save credits.",
+        "- Optional: SOLANA_TRACKER_KOL_SIGNAL_LOOKUPS controls how many KOL wallets get deeper position lookups per mode refresh. Default is 2.",
+        "- Optional: SOLANA_TRACKER_KOL_USE_PERIOD_ENDPOINT=false avoids the period endpoint and uses the main KOL leaderboard with mode-specific sorting.",
         "",
         "Notes:",
         "- KOL signals are not guarantees. Always check the chart and token liquidity.",
-        "- The Solana Tracker API key stays on Render; it is not exposed to website users."
+        "- API keys stay on Render; they are not exposed to website users."
       ].join("\n")
     },
     wallet: {
@@ -10535,64 +10594,437 @@ async function webCreateKolEntry(userId, body = {}) {
 async function buildKolScan(userId, mode = "hot", wallet = "") {
   const safeMode = normalizeKolMode(mode);
   const customWallet = String(wallet || "").trim();
+  const hasMadeOnSol = Boolean(CONFIG.madeOnSolApiKey);
+  const hasSolanaTracker = Boolean(CONFIG.solanaTrackerApiKey);
   const base = {
     mode: safeMode,
     label: kolModeLabel(safeMode),
     description: kolModeDescription(safeMode),
-    configured: Boolean(CONFIG.solanaTrackerApiKey),
-    source: "solana_tracker",
-    apiBase: CONFIG.solanaTrackerApiBase,
+    configured: hasMadeOnSol || hasSolanaTracker,
+    source: hasMadeOnSol && hasSolanaTracker ? "mixed" : hasMadeOnSol ? "made_on_sol" : "solana_tracker",
+    apiBase: hasMadeOnSol ? CONFIG.madeOnSolApiBase : CONFIG.solanaTrackerApiBase,
+    sources: {
+      madeOnSol: hasMadeOnSol,
+      solanaTracker: hasSolanaTracker,
+      solanaTrackerFallback: CONFIG.kolUseSolanaTrackerFallback,
+      solanaTrackerPeriodEndpoint: CONFIG.solanaTrackerKolUsePeriodEndpoint
+    },
     kolCount: 0,
     kols: [],
     rows: [],
     message: ""
   };
 
-  if (!CONFIG.solanaTrackerApiKey) {
+  if (!base.configured) {
     return {
       ...base,
-      message: "Set SOLANA_TRACKER_API_KEY on Render to enable KOL Tracker."
+      message: "Set MADE_ON_SOL_API_KEY or SOLANA_TRACKER_API_KEY on Render to enable KOL Tracker."
     };
   }
 
-  if (customWallet) {
-    const owner = parsePublicKey(customWallet).toBase58();
-    const rows = await fetchKolWalletTradeSignals(owner, safeMode);
+  try {
+    if (customWallet) {
+      const owner = parsePublicKey(customWallet).toBase58();
+      const madeRows = hasMadeOnSol
+        ? await fetchMadeOnSolKolFeedSignals(safeMode, { kol: owner }).catch(() => [])
+        : [];
+      const solanaRows = hasSolanaTracker && (!madeRows.length || CONFIG.kolUseSolanaTrackerFallback)
+        ? await fetchKolWalletTradeSignals(owner, safeMode).catch(() => [])
+        : [];
+      const rows = uniqueKolSignals([...madeRows, ...solanaRows]).sort(compareKolSignals).slice(0, 12);
+      return {
+        ...base,
+        label: `Custom Wallet ${shortMint(owner)}`,
+        description: "Latest buy-style trades from the wallet you entered.",
+        wallet: owner,
+        kolCount: 1,
+        kols: [webKolSummaryRow({ wallet: owner, name: shortMint(owner) })],
+        rows,
+        madeOnSolRows: madeRows.length,
+        solanaTrackerRows: solanaRows.length,
+        message: rows.length
+          ? `Custom wallet signals loaded from ${kolSourceSummary(Boolean(madeRows.length), Boolean(solanaRows.length))}.`
+          : "No recent buy-style token trades found for this wallet."
+      };
+    }
+
+    const madePart = hasMadeOnSol
+      ? await buildMadeOnSolKolPart(safeMode).catch((error) => ({ rows: [], kols: [], error: formatError(error), calls: 1 }))
+      : { rows: [], kols: [], calls: 0 };
+    const shouldUseSolanaTracker = hasSolanaTracker && (!hasMadeOnSol || (CONFIG.kolUseSolanaTrackerFallback && madePart.rows.length < 4));
+    const solanaPart = shouldUseSolanaTracker
+      ? await buildSolanaTrackerKolPart(safeMode).catch((error) => ({ rows: [], kols: [], error: formatError(error), calls: 1, signalWalletsChecked: 0 }))
+      : { rows: [], kols: [], calls: 0, signalWalletsChecked: 0 };
+
+    const sorted = uniqueKolSignals([
+      ...(madePart.rows || []),
+      ...(solanaPart.rows || [])
+    ])
+      .sort(compareKolSignals)
+      .slice(0, 12);
+    const kols = uniqueKolSummaries([
+      ...(madePart.kols || []),
+      ...(solanaPart.kols || [])
+    ]).slice(0, 12);
+    const sourceSummary = kolSourceSummary(Boolean(madePart.rows?.length || madePart.kols?.length), Boolean(solanaPart.rows?.length || solanaPart.kols?.length));
+    const notes = [madePart.error ? `MadeOnSol: ${madePart.error}` : "", solanaPart.error ? `Solana Tracker: ${solanaPart.error}` : ""].filter(Boolean);
+
     return {
       ...base,
-      label: `Custom Wallet ${shortMint(owner)}`,
-      description: "Latest buy-style trades from the wallet you entered.",
-      wallet: owner,
-      kolCount: 1,
-      kols: [webKolSummaryRow({ wallet: owner, name: shortMint(owner) })],
-      rows: rows.slice(0, 12),
-      message: rows.length ? "Custom wallet signals loaded." : "No recent buy-style token trades found for this wallet."
+      kolCount: kols.length,
+      kols,
+      rows: sorted,
+      madeOnSolRows: madePart.rows?.length || 0,
+      solanaTrackerRows: solanaPart.rows?.length || 0,
+      madeOnSolCalls: madePart.calls || 0,
+      solanaTrackerCalls: solanaPart.calls || 0,
+      signalWalletsChecked: solanaPart.signalWalletsChecked || 0,
+      cacheTtlMs: Math.max(CONFIG.madeOnSolCacheTtlMs, CONFIG.solanaTrackerKolCacheTtlMs),
+      periodEndpoint: CONFIG.solanaTrackerKolUsePeriodEndpoint,
+      creditHint: kolCreditHint(solanaPart.signalWalletsChecked || 0, madePart.calls || 0, solanaPart.calls || 0),
+      notes,
+      message: sorted.length
+        ? `KOL signals loaded from ${sourceSummary}. ${kolCreditHint(solanaPart.signalWalletsChecked || 0, madePart.calls || 0, solanaPart.calls || 0)}`
+        : `KOL dashboard loaded from ${sourceSummary}. ${kolCreditHint(solanaPart.signalWalletsChecked || 0, madePart.calls || 0, solanaPart.calls || 0)}`
+    };
+  } catch (error) {
+    return {
+      ...base,
+      error: formatError(error),
+      message: `KOL Tracker could not load ${kolModeLabel(safeMode)}: ${formatError(error)}`
     };
   }
+}
 
+function kolSourceSummary(usedMadeOnSol, usedSolanaTracker) {
+  if (usedMadeOnSol && usedSolanaTracker) return "MadeOnSol + Solana Tracker";
+  if (usedMadeOnSol) return "MadeOnSol";
+  if (usedSolanaTracker) return "Solana Tracker";
+  return "configured sources";
+}
+
+function kolCreditHint(signalWalletsChecked, madeOnSolCalls = 0, solanaTrackerCalls = null) {
+  const trackerCalls = solanaTrackerCalls === null
+    ? 1 + Math.max(0, Number(signalWalletsChecked || 0))
+    : Number(solanaTrackerCalls || 0);
+  const parts = [];
+  if (madeOnSolCalls) parts.push(`${madeOnSolCalls} MadeOnSol call(s), cache ${Math.round(CONFIG.madeOnSolCacheTtlMs / 1000)}s`);
+  if (trackerCalls) parts.push(`${trackerCalls} Solana Tracker call(s), cache ${Math.round(CONFIG.solanaTrackerKolCacheTtlMs / 1000)}s`);
+  if (!parts.length) return "Uses cached or local KOL data.";
+  return `Uses about ${parts.join(" + ")} per uncached refresh.`;
+}
+
+function uniqueKolSummaries(kols) {
+  const seen = new Set();
+  const rows = [];
+  for (const kol of kols || []) {
+    const key = kol.wallet || kol.name || kol.twitter || JSON.stringify(kol);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    rows.push(kol);
+  }
+  return rows;
+}
+
+async function buildMadeOnSolKolPart(mode) {
+  const safeMode = normalizeKolMode(mode);
+  if (safeMode === "top" || safeMode === "consistent") {
+    const kols = await fetchMadeOnSolKolLeaderboard(safeMode);
+    return { rows: [], kols, calls: 1 };
+  }
+
+  const rows = safeMode === "hot"
+    ? await fetchMadeOnSolHotKolTokens(safeMode)
+    : await fetchMadeOnSolKolFeedSignals(safeMode);
+  return {
+    rows: rows.slice(0, 12),
+    kols: uniqueKolSummaries(rows.map((row) => webKolSummaryRow({
+      wallet: row.kolWallet,
+      name: row.kolName,
+      twitter: row.twitter,
+      lastTradeAt: row.lastTradeAt,
+      trades: row.kolCount || null
+    }))).slice(0, 12),
+    calls: 1
+  };
+}
+
+async function buildSolanaTrackerKolPart(mode) {
+  const safeMode = normalizeKolMode(mode);
   const kols = await fetchKolLeaderboard(safeMode);
   const signals = [];
   const topKols = kols.slice(0, Math.min(CONFIG.solanaTrackerKolLimit, 12));
+  const signalKols = topKols.slice(0, Math.min(CONFIG.solanaTrackerKolSignalLookups, topKols.length));
 
-  await runWithConcurrency(topKols, 3, async (kol) => {
+  await runWithConcurrency(signalKols, CONFIG.solanaTrackerKolPositionConcurrency, async (kol) => {
     const positions = await fetchKolWalletPositions(kol.wallet, safeMode).catch(() => []);
-    for (const position of positions.slice(0, 4)) {
+    for (const position of positions.slice(0, CONFIG.solanaTrackerKolPositionLimit)) {
       const signal = normalizeKolPositionSignal(position, kol, safeMode);
       if (signal) signals.push(signal);
     }
   });
 
-  const sorted = uniqueKolSignals(signals)
-    .sort(compareKolSignals)
-    .slice(0, 12);
+  return {
+    rows: uniqueKolSignals(signals).sort(compareKolSignals).slice(0, 12),
+    kols: topKols.map((kol) => webKolSummaryRow(kol)),
+    calls: 1 + signalKols.length,
+    signalWalletsChecked: signalKols.length
+  };
+}
+
+async function fetchMadeOnSolKolFeedSignals(mode, filters = {}) {
+  const search = new URLSearchParams({
+    limit: String(CONFIG.madeOnSolKolLimit),
+    action: "buy"
+  });
+  if (filters.kol) {
+    search.set("kol", filters.kol);
+    search.set("wallet", filters.kol);
+  }
+  const data = await madeOnSolJson(`/kol/feed?${search.toString()}`, { cacheTtlMs: CONFIG.madeOnSolCacheTtlMs });
+  return arrayFromApiData(data)
+    .map((trade) => normalizeMadeOnSolKolTradeSignal(trade, mode))
+    .filter(Boolean)
+    .sort(compareKolSignals);
+}
+
+async function fetchMadeOnSolHotKolTokens(mode) {
+  const search = new URLSearchParams({
+    period: normalizeKolMode(mode) === "fresh" ? "1h" : "6h",
+    min_kols: "1",
+    limit: String(Math.min(CONFIG.madeOnSolKolLimit, 20))
+  });
+  const data = await madeOnSolJson(`/kol/tokens/hot?${search.toString()}`, { cacheTtlMs: CONFIG.madeOnSolCacheTtlMs });
+  const rows = arrayFromApiData(data)
+    .map((token) => normalizeMadeOnSolHotTokenSignal(token, mode))
+    .filter(Boolean)
+    .sort(compareKolSignals);
+  return rows.length ? rows : fetchMadeOnSolKolFeedSignals(mode);
+}
+
+async function fetchMadeOnSolKolLeaderboard(mode) {
+  const safeMode = normalizeKolMode(mode);
+  const search = new URLSearchParams({
+    period: safeMode === "consistent" ? "30d" : "7d",
+    limit: String(Math.min(CONFIG.madeOnSolKolLimit, 20))
+  });
+  const data = await madeOnSolJson(`/kol/leaderboard?${search.toString()}`, { cacheTtlMs: CONFIG.madeOnSolCacheTtlMs });
+  return arrayFromApiData(data)
+    .map((row) => normalizeMadeOnSolLeaderboardKol(row))
+    .filter((kol) => kol.name || kol.wallet)
+    .map((kol) => webKolSummaryRow(kol));
+}
+
+async function madeOnSolJson(pathName, options = {}) {
+  const url = `${CONFIG.madeOnSolApiBase}${pathName.startsWith("/") ? pathName : `/${pathName}`}`;
+  const cacheTtlMs = Number(options.cacheTtlMs ?? CONFIG.madeOnSolCacheTtlMs);
+  const cached = madeOnSolCache.get(url);
+  if (cached && cacheTtlMs > 0 && Date.now() - cached.cachedAt < cacheTtlMs) {
+    return cached.value;
+  }
+
+  const data = await fetchJson(url, {
+    headers: {
+      "Accept": "application/json",
+      "User-Agent": "solana-telegram-wallet-ops-bot",
+      "Authorization": `Bearer ${CONFIG.madeOnSolApiKey}`,
+      "x-api-key": CONFIG.madeOnSolApiKey
+    },
+    timeoutMs: options.timeoutMs || 6_500
+  });
+  madeOnSolCache.set(url, { cachedAt: Date.now(), value: data });
+  return data;
+}
+
+function normalizeMadeOnSolKolTradeSignal(trade, mode) {
+  const token = trade.token || trade.tokenInfo || trade.token_info || trade.metadata || {};
+  const kol = trade.kol || trade.trader || trade.walletInfo || trade.wallet_info || {};
+  const action = String(firstString(trade.action, trade.side, trade.type, "buy")).toLowerCase();
+  if (action.includes("sell")) return null;
+  const tokenMint = firstString(
+    trade.tokenMint,
+    trade.token_mint,
+    trade.mint,
+    trade.tokenAddress,
+    trade.token_address,
+    token.mint,
+    token.address,
+    token.tokenAddress
+  );
+  if (!tokenMint || tokenMint === SOL_MINT) return null;
+  const solAmount = firstNumber(trade.solAmount, trade.sol_amount, trade.amountSol, trade.amount_sol, trade.sizeSol, trade.size_sol);
+  const usdValue = firstNumber(trade.valueUsd, trade.value_usd, trade.usdValue, trade.usd_value, trade.amountUsd, trade.amount_usd, trade.volumeUsd);
+  const winRate = normalizePercentLike(firstNumber(
+    trade.winRate,
+    trade.win_rate,
+    trade.winrate_7d,
+    trade.kolWinRate,
+    trade.kol_win_rate,
+    kol.winRate,
+    kol.win_rate
+  ));
+  const roiPct = normalizePercentLike(firstNumber(trade.roi, trade.roiPct, trade.roi_pct, kol.roi, kol.roiPct));
+  const lastTradeAt = normalizeTimestamp(firstString(
+    trade.tradedAt,
+    trade.traded_at,
+    trade.timestamp,
+    trade.time,
+    trade.createdAt,
+    trade.created_at
+  ));
+  const score = scoreMadeOnSolSignal({
+    solAmount,
+    usdValue,
+    winRate,
+    roiPct,
+    ageHours: hoursSince(lastTradeAt),
+    mode
+  });
+  if (score < 35 && normalizeKolMode(mode) !== "fresh") return null;
 
   return {
-    ...base,
-    kolCount: topKols.length,
-    kols: topKols.map((kol) => webKolSummaryRow(kol)),
-    rows: sorted,
-    message: sorted.length ? "KOL signals loaded." : "KOL leaderboard loaded, but no current token positions came back for this refresh."
+    tokenMint,
+    symbol: firstString(token.symbol, trade.symbol, trade.ticker, shortMint(tokenMint)),
+    name: firstString(token.name, trade.name, "Unknown Token"),
+    score,
+    signalType: "MadeOnSol KOL buy",
+    kolWallet: firstString(trade.wallet, trade.walletAddress, trade.wallet_address, trade.kolWallet, trade.kol_wallet, kol.wallet, kol.address),
+    kolName: firstString(trade.kolName, trade.kol_name, trade.name, kol.name, kol.username, "KOL Wallet"),
+    twitter: stripAt(firstString(trade.twitter, trade.x, trade.username, kol.twitter, kol.x, kol.username, twitterHandleFromUrl(kol.twitterUrl || kol.twitter_url))),
+    valueUsd: Number(usdValue || solAmount || 0),
+    valueLabel: usdValue ? (formatUsdCompact(usdValue) || "$0") : solAmount ? `${formatCompactNumber(solAmount)} SOL` : "n/a",
+    roiPct,
+    roiLabel: formatPercentNumber(roiPct),
+    winRatePct: winRate,
+    winRateLabel: formatPercentNumber(winRate),
+    kolRoiPct: roiPct,
+    realizedLabel: "n/a",
+    lastTradeAt,
+    dexUrl: dexScreenerUrl(tokenMint),
+    source: "made_on_sol_feed",
+    sourceLabel: "MadeOnSol",
+    mode: normalizeKolMode(mode)
   };
+}
+
+function normalizeMadeOnSolHotTokenSignal(tokenRow, mode) {
+  const token = tokenRow.token || tokenRow.tokenInfo || tokenRow.token_info || tokenRow.metadata || {};
+  const tokenMint = firstString(
+    tokenRow.tokenMint,
+    tokenRow.token_mint,
+    tokenRow.mint,
+    tokenRow.address,
+    tokenRow.tokenAddress,
+    tokenRow.token_address,
+    token.mint,
+    token.address,
+    token.tokenAddress
+  );
+  if (!tokenMint || tokenMint === SOL_MINT) return null;
+  const kolCount = firstNumber(tokenRow.kolCount, tokenRow.kol_count, tokenRow.kols, tokenRow.kols_total, tokenRow.kolsRecent, tokenRow.kols_recent);
+  const buySol = firstNumber(tokenRow.buySol, tokenRow.buy_sol, tokenRow.totalBuySol, tokenRow.total_buy_sol, tokenRow.netFlowSol, tokenRow.net_flow_sol);
+  const volumeUsd = firstNumber(tokenRow.volumeUsd, tokenRow.volume_usd, tokenRow.volume, tokenRow.totalVolumeUsd, tokenRow.total_volume_usd);
+  const marketCap = firstNumber(tokenRow.marketCap, tokenRow.market_cap, tokenRow.mc, token.marketCap, token.market_cap);
+  const lastTradeAt = normalizeTimestamp(firstString(tokenRow.lastTradeAt, tokenRow.last_trade_at, tokenRow.updatedAt, tokenRow.updated_at, tokenRow.createdAt, tokenRow.created_at));
+  const score = scoreMadeOnSolHotToken({ kolCount, buySol, volumeUsd, marketCap, ageHours: hoursSince(lastTradeAt), mode });
+  if (score < 35 && normalizeKolMode(mode) !== "fresh") return null;
+  const topKol = Array.isArray(tokenRow.kolsList) ? tokenRow.kolsList[0] : Array.isArray(tokenRow.kol_wallets) ? tokenRow.kol_wallets[0] : null;
+  return {
+    tokenMint,
+    symbol: firstString(token.symbol, tokenRow.symbol, tokenRow.ticker, shortMint(tokenMint)),
+    name: firstString(token.name, tokenRow.name, "Unknown Token"),
+    score,
+    signalType: "Hot KOL token",
+    kolWallet: firstString(topKol?.wallet, topKol?.address, tokenRow.topKolWallet, tokenRow.top_kol_wallet),
+    kolName: kolCount ? `${kolCount} KOL${Number(kolCount) === 1 ? "" : "s"}` : firstString(topKol?.name, tokenRow.topKolName, "KOL cluster"),
+    twitter: stripAt(firstString(topKol?.twitter, topKol?.x, tokenRow.topKolTwitter)),
+    valueUsd: Number(volumeUsd || buySol || 0),
+    valueLabel: volumeUsd ? (formatUsdCompact(volumeUsd) || "$0") : buySol ? `${formatCompactNumber(buySol)} SOL` : "n/a",
+    roiPct: null,
+    roiLabel: marketCap ? `MC ${formatUsdCompact(marketCap)}` : "n/a",
+    winRatePct: null,
+    winRateLabel: kolCount ? `${kolCount} KOL${Number(kolCount) === 1 ? "" : "s"}` : "n/a",
+    kolRoiPct: null,
+    realizedLabel: buySol ? `${formatCompactNumber(buySol)} SOL buys` : "n/a",
+    lastTradeAt,
+    dexUrl: dexScreenerUrl(tokenMint),
+    source: "made_on_sol_hot",
+    sourceLabel: "MadeOnSol",
+    mode: normalizeKolMode(mode)
+  };
+}
+
+function normalizeMadeOnSolLeaderboardKol(row) {
+  const profile = row.profile || row.identity || row.kol || row.walletInfo || row.wallet_info || {};
+  const stats = row.stats || row.summary || row.performance || {};
+  const wallet = firstString(row.wallet, row.walletAddress, row.wallet_address, row.address, profile.wallet, profile.address);
+  const twitter = stripAt(firstString(row.twitter, row.x, row.username, profile.twitter, profile.x, profile.username, twitterHandleFromUrl(row.twitterUrl || row.twitter_url || profile.twitterUrl || profile.twitter_url)));
+  return {
+    wallet,
+    name: firstString(row.name, row.kolName, row.kol_name, profile.name, twitter, wallet ? shortMint(wallet) : "Unknown KOL"),
+    twitter,
+    avatar: firstString(row.avatar, row.image, profile.avatar, profile.image),
+    realizedUsd: firstNumber(row.realizedUsd, row.realized_usd, row.realized, row.pnlUsd, row.pnl_usd, stats.realizedUsd, stats.realized_usd, stats.realized),
+    roiPct: normalizePercentLike(firstNumber(row.roi, row.roiPct, row.roi_pct, stats.roi, stats.roiPct, stats.roi_pct)),
+    winRatePct: normalizePercentLike(firstNumber(row.winRate, row.win_rate, row.winrate, row.winPercentage, row.win_percentage, stats.winRate, stats.win_rate, stats.winPercentage)),
+    trades: firstNumber(row.trades, row.tradeCount, row.trade_count, stats.trades, stats.tradeCount),
+    lastTradeAt: normalizeTimestamp(firstString(row.lastTradeAt, row.last_trade_at, row.lastTrade, stats.lastTradeAt, stats.last_trade_at))
+  };
+}
+
+function scoreMadeOnSolSignal({ solAmount, usdValue, winRate, roiPct, ageHours, mode }) {
+  const safeMode = normalizeKolMode(mode);
+  let score = 52;
+  const numericSol = Number(solAmount || 0);
+  const numericUsd = Number(usdValue || 0);
+  if (numericSol > 0) score += Math.min(18, Math.log10(Math.max(1, numericSol * 10)) * 8);
+  if (numericUsd > 0) score += Math.min(18, Math.log10(Math.max(1, numericUsd)) * 3);
+  if (Number.isFinite(Number(winRate))) score += Math.min(12, Math.max(0, Number(winRate)) / 7);
+  if (Number.isFinite(Number(roiPct))) score += Math.min(10, Math.max(0, Number(roiPct)) / 30);
+  if (Number.isFinite(ageHours)) {
+    if (ageHours <= 1) score += 13;
+    else if (ageHours <= 6) score += 8;
+    else if (ageHours <= 24) score += 4;
+  }
+  if (safeMode === "fresh" && Number.isFinite(ageHours) && ageHours <= 6) score += 8;
+  if (safeMode === "consistent" && Number(winRate || 0) >= 55) score += 7;
+  return Math.round(Math.max(0, Math.min(100, score)));
+}
+
+function scoreMadeOnSolHotToken({ kolCount, buySol, volumeUsd, marketCap, ageHours, mode }) {
+  const safeMode = normalizeKolMode(mode);
+  let score = 50;
+  score += Math.min(18, Math.max(0, Number(kolCount || 0)) * 5);
+  if (Number(buySol || 0) > 0) score += Math.min(15, Math.log10(Math.max(1, Number(buySol) * 10)) * 6);
+  if (Number(volumeUsd || 0) > 0) score += Math.min(14, Math.log10(Math.max(1, Number(volumeUsd))) * 2.5);
+  if (Number.isFinite(Number(marketCap)) && Number(marketCap) > 0) {
+    if (Number(marketCap) >= 5_000 && Number(marketCap) <= 500_000) score += 8;
+    else if (Number(marketCap) <= 2_000_000) score += 4;
+  }
+  if (Number.isFinite(ageHours)) {
+    if (ageHours <= 1) score += 12;
+    else if (ageHours <= 6) score += 7;
+    else if (ageHours <= 24) score += 3;
+  }
+  if (safeMode === "hot" && Number(kolCount || 0) >= 2) score += 6;
+  if (safeMode === "fresh" && Number.isFinite(ageHours) && ageHours <= 3) score += 8;
+  return Math.round(Math.max(0, Math.min(100, score)));
+}
+
+function twitterHandleFromUrl(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const match = text.match(/(?:x\.com|twitter\.com)\/([^/?#]+)/i);
+  return match ? stripAt(match[1]) : stripAt(text);
+}
+
+function formatCompactNumber(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "0";
+  if (Math.abs(number) >= 1_000_000_000) return `${(number / 1_000_000_000).toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}B`;
+  if (Math.abs(number) >= 1_000_000) return `${(number / 1_000_000).toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}M`;
+  if (Math.abs(number) >= 1_000) return `${(number / 1_000).toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}K`;
+  return number.toFixed(number >= 10 ? 2 : 4).replace(/0+$/, "").replace(/\.$/, "");
 }
 
 function webKolSummaryRow(kol = {}) {
@@ -10619,13 +11051,14 @@ function webKolSummaryRow(kol = {}) {
 
 async function fetchKolLeaderboard(mode) {
   const params = kolLeaderboardParams(mode);
-  const pathName = params.period ? `/v2/pnl/leaderboard/kols/period` : `/v2/pnl/leaderboard/kols`;
+  const usePeriodEndpoint = Boolean(params.period && CONFIG.solanaTrackerKolUsePeriodEndpoint);
+  const pathName = usePeriodEndpoint ? `/v2/pnl/leaderboard/kols/period` : `/v2/pnl/leaderboard/kols`;
   const search = new URLSearchParams();
-  if (params.period) search.set("period", params.period);
+  if (usePeriodEndpoint) search.set("period", params.period);
   search.set("sort", params.sort);
   search.set("direction", params.direction);
   search.set("limit", String(CONFIG.solanaTrackerKolLimit));
-  const data = await solanaTrackerJson(`${pathName}?${search.toString()}`, { cacheTtlMs: CONFIG.solanaTrackerCacheTtlMs });
+  const data = await solanaTrackerJson(`${pathName}?${search.toString()}`, { cacheTtlMs: CONFIG.solanaTrackerKolCacheTtlMs });
   return normalizeKolLeaderboard(data)
     .filter((kol) => kol.wallet)
     .slice(0, CONFIG.solanaTrackerKolLimit);
@@ -10636,23 +11069,25 @@ function kolLeaderboardParams(mode) {
   if (safeMode === "top") return { sort: "realized", direction: "desc" };
   if (safeMode === "consistent") return { period: "30d", sort: "win_percentage", direction: "desc" };
   if (safeMode === "fresh") return { period: "7d", sort: "last_trade", direction: "desc" };
-  return { period: "1d", sort: "realized", direction: "desc" };
+  return CONFIG.solanaTrackerKolUsePeriodEndpoint
+    ? { period: "1d", sort: "realized", direction: "desc" }
+    : { sort: "value", direction: "desc" };
 }
 
 async function fetchKolWalletPositions(wallet, mode) {
   const search = new URLSearchParams({
     sort: normalizeKolMode(mode) === "fresh" ? "last_trade" : "value",
     direction: "desc",
-    limit: "8",
+    limit: String(CONFIG.solanaTrackerKolPositionLimit),
     filter: "holding"
   });
-  const data = await solanaTrackerJson(`/v2/pnl/wallets/${encodeURIComponent(wallet)}/positions?${search.toString()}`, { cacheTtlMs: CONFIG.solanaTrackerCacheTtlMs });
+  const data = await solanaTrackerJson(`/v2/pnl/wallets/${encodeURIComponent(wallet)}/positions?${search.toString()}`, { cacheTtlMs: CONFIG.solanaTrackerKolCacheTtlMs });
   return arrayFromApiData(data).map((position) => normalizeKolPosition(position)).filter((position) => position.tokenMint);
 }
 
 async function fetchKolWalletTradeSignals(wallet, mode) {
-  const search = new URLSearchParams({ limit: "25" });
-  const data = await solanaTrackerJson(`/wallet/${encodeURIComponent(wallet)}/trades?${search.toString()}`, { cacheTtlMs: Math.min(CONFIG.solanaTrackerCacheTtlMs, 8_000) });
+  const search = new URLSearchParams({ limit: "15" });
+  const data = await solanaTrackerJson(`/wallet/${encodeURIComponent(wallet)}/trades?${search.toString()}`, { cacheTtlMs: CONFIG.solanaTrackerKolCacheTtlMs });
   const trades = arrayFromApiData(data)
     .map((trade) => normalizeKolTradeSignal(trade, wallet, mode))
     .filter(Boolean);
@@ -10831,6 +11266,7 @@ function normalizeKolPositionSignal(position, kol, mode) {
     lastTradeAt: position.lastTradeAt || kol.lastTradeAt || null,
     dexUrl: dexScreenerUrl(position.tokenMint),
     source: "kol_position",
+    sourceLabel: "Solana Tracker",
     mode: normalizeKolMode(mode)
   };
 }
@@ -10868,6 +11304,7 @@ function normalizeKolTradeSignal(trade, wallet, mode) {
     lastTradeAt: normalizeTimestamp(firstString(trade.time, trade.timestamp, trade.date, trade.createdAt)),
     dexUrl: dexScreenerUrl(tokenMint),
     source: "kol_trade",
+    sourceLabel: "Solana Tracker",
     mode: normalizeKolMode(mode)
   };
 }
@@ -10940,22 +11377,40 @@ function kolModeDescription(mode) {
   return {
     hot: "Recent high-performing KOLs and the strongest current positions they are holding.",
     top: "Best ranked KOL wallets by realized performance, then their highest-value current token positions.",
-    consistent: "KOLs ranked by consistency/win rate, then filtered into cleaner copyable positions.",
+    consistent: "KOLs ranked by consistency/win rate from the available leaderboard, then filtered into cleaner copyable positions.",
     fresh: "KOL wallets with the newest activity first, useful when you want faster signal flow."
   }[normalizeKolMode(mode)];
 }
 
 function arrayFromApiData(data) {
   if (Array.isArray(data)) return data;
-  for (const key of ["data", "items", "results", "traders", "kols", "leaderboard", "positions", "trades"]) {
+  const keys = [
+    "data",
+    "items",
+    "results",
+    "traders",
+    "kols",
+    "leaderboard",
+    "positions",
+    "trades",
+    "feed",
+    "tokens",
+    "hotTokens",
+    "hot_tokens",
+    "kolTrades",
+    "kol_trades",
+    "alerts"
+  ];
+  for (const key of keys) {
     if (Array.isArray(data?.[key])) return data[key];
   }
-  if (Array.isArray(data?.data?.items)) return data.data.items;
-  if (Array.isArray(data?.data?.positions)) return data.data.positions;
-  if (Array.isArray(data?.data?.trades)) return data.data.trades;
-  if (Array.isArray(data?.data?.traders)) return data.data.traders;
-  if (Array.isArray(data?.data?.kols)) return data.data.kols;
-  if (Array.isArray(data?.data?.leaderboard)) return data.data.leaderboard;
+  for (const containerKey of ["data", "result", "response"]) {
+    const container = data?.[containerKey];
+    if (Array.isArray(container)) return container;
+    for (const key of keys) {
+      if (Array.isArray(container?.[key])) return container[key];
+    }
+  }
   return [];
 }
 

@@ -58,6 +58,9 @@ const state = {
   kolMode: "hot",
   kolWallet: "",
   kolResult: null,
+  kolStatus: "",
+  kolLoading: false,
+  kolLastUpdatedAt: "",
   restoreResult: null,
   importResult: null,
   backupResult: null,
@@ -69,6 +72,7 @@ const app = $("[data-app]");
 const loginView = $("[data-login]");
 const dashboardView = $("[data-dashboard]");
 const errorBox = $("[data-error]");
+const dashboardErrorBox = $("[data-dashboard-error]");
 
 function apiUrl(path) {
   return `${apiBase}${path}`;
@@ -161,8 +165,11 @@ function resetWebSession(message = "") {
 }
 
 function setError(message = "") {
-  errorBox.hidden = !message;
-  errorBox.textContent = message;
+  [errorBox, dashboardErrorBox].forEach((box) => {
+    if (!box) return;
+    box.hidden = !message;
+    box.textContent = message;
+  });
 }
 
 function dexUrl(tokenMint) {
@@ -257,6 +264,11 @@ async function loadKolScan(mode = state.kolMode, wallet = state.kolWallet) {
   state.kolMode = mode;
   state.kolWallet = String(wallet || "").trim();
   state.loading = true;
+  state.kolLoading = true;
+  state.kolStatus = state.kolWallet
+    ? "Scanning custom KOL wallet..."
+    : `Loading ${kolModeLabel(state.kolMode)}...`;
+  setError("");
   render();
 
   try {
@@ -264,8 +276,14 @@ async function loadKolScan(mode = state.kolMode, wallet = state.kolWallet) {
     if (state.kolWallet) params.set("wallet", state.kolWallet);
     const data = await api(`/api/web/kol/scan?${params.toString()}`);
     state.kolScan = data.scan;
+    state.kolLastUpdatedAt = new Date().toISOString();
+    state.kolStatus = data.scan?.message || `${kolModeLabel(state.kolMode)} loaded.`;
+  } catch (error) {
+    state.kolStatus = error.message || "KOL scan failed.";
+    throw error;
   } finally {
     state.loading = false;
+    state.kolLoading = false;
     render();
   }
 }
@@ -1038,15 +1056,17 @@ function launchWatchesHtml() {
 
 function kolHtml() {
   const configured = state.kolScan?.configured !== false;
+  const disabled = state.kolLoading ? "disabled" : "";
   return `
     <section class="section-actions mode-row">
-      <button data-kol-mode="hot" data-active="${state.kolMode === "hot"}">Hot Buys</button>
-      <button data-kol-mode="top" data-active="${state.kolMode === "top"}">Top KOLs</button>
-      <button data-kol-mode="consistent" data-active="${state.kolMode === "consistent"}">Consistent</button>
-      <button data-kol-mode="fresh" data-active="${state.kolMode === "fresh"}">Fresh</button>
-      <button data-kol-refresh>Refresh</button>
+      <button data-kol-mode="hot" data-active="${state.kolMode === "hot"}" ${disabled}>Hot Buys</button>
+      <button data-kol-mode="top" data-active="${state.kolMode === "top"}" ${disabled}>Top KOLs</button>
+      <button data-kol-mode="consistent" data-active="${state.kolMode === "consistent"}" ${disabled}>Consistent</button>
+      <button data-kol-mode="fresh" data-active="${state.kolMode === "fresh"}" ${disabled}>Fresh</button>
+      <button data-kol-refresh ${disabled}>${state.kolLoading ? "Scanning..." : "Refresh"}</button>
     </section>
     <p class="scan-meta">${escapeHtml(kolModeDescription(state.kolMode))}</p>
+    ${kolScanStatusHtml()}
     <section class="trade-layout">
       <article class="trade-card">
         <div class="trade-head">
@@ -1138,7 +1158,7 @@ function kolHtml() {
             <input data-kol-slippage-custom data-custom-for="kol-slippage" type="number" min="1" max="5000" step="1" placeholder="Custom bps" hidden>
           </label>
         </div>
-        <p class="trade-status" data-kol-status>${state.kolResult ? escapeHtml(state.kolResult.message || "KOL copy plan armed.") : configured ? "Ready. Tap Copy Plan on a signal below." : "Add SOLANA_TRACKER_API_KEY on Render to enable live KOL scans."}</p>
+        <p class="trade-status" data-kol-status>${state.kolResult ? escapeHtml(state.kolResult.message || "KOL copy plan armed.") : configured ? "Ready. Tap Copy Plan on a signal below." : "Add MADE_ON_SOL_API_KEY or SOLANA_TRACKER_API_KEY on Render to enable live KOL scans."}</p>
         ${kolResultHtml()}
       </article>
 
@@ -1150,11 +1170,11 @@ function kolHtml() {
             Wallet Address
             <input data-kol-wallet type="text" placeholder="Paste KOL wallet" value="${escapeHtml(state.kolWallet || "")}">
           </label>
-          <button data-kol-wallet-scan>Scan Wallet</button>
+          <button data-kol-wallet-scan ${disabled}>${state.kolLoading ? "Scanning..." : "Scan Wallet"}</button>
         </article>
         <article>
           <h3>Data Source</h3>
-          <p>${configured ? "Solana Tracker API is configured. The key stays on your Render backend." : "Set SOLANA_TRACKER_API_KEY on Render, then redeploy."}</p>
+          <p>${escapeHtml(kolDataSourceText())}</p>
         </article>
       </aside>
     </section>
@@ -1163,11 +1183,45 @@ function kolHtml() {
   `;
 }
 
+function kolScanStatusHtml() {
+  const scan = state.kolScan || null;
+  const status = state.kolStatus
+    || scan?.message
+    || `Pick ${kolModeLabel(state.kolMode)} or tap Refresh.`;
+  const details = scan
+    ? ` ${Number(scan.kolCount || scan.kols?.length || 0)} KOL wallet(s), ${Number(scan.rows?.length || 0)} token signal(s).`
+    : "";
+  const updated = state.kolLastUpdatedAt ? ` Last updated ${formatDate(state.kolLastUpdatedAt)}.` : "";
+  return `<p class="trade-status kol-status">${escapeHtml(`${status}${state.kolLoading ? "" : details}${updated}`)}</p>`;
+}
+
+function kolDataSourceText() {
+  const scan = state.kolScan || {};
+  if (scan.sources?.madeOnSol && scan.sources?.solanaTracker) {
+    return scan.sources?.solanaTrackerFallback
+      ? "MadeOnSol primary with Solana Tracker fallback/context. Keys stay on Render."
+      : "MadeOnSol primary. Solana Tracker key is saved but fallback is off.";
+  }
+  if (scan.sources?.madeOnSol || scan.source === "made_on_sol") return "MadeOnSol API is configured. The key stays on your Render backend.";
+  if (scan.sources?.solanaTracker || scan.source === "solana_tracker") return "Solana Tracker API is configured. The key stays on your Render backend.";
+  return "Set MADE_ON_SOL_API_KEY or SOLANA_TRACKER_API_KEY on Render, then redeploy.";
+}
+
+function kolModeLabel(mode) {
+  const map = {
+    hot: "Hot Buys",
+    top: "Top KOLs",
+    consistent: "Consistent",
+    fresh: "Fresh"
+  };
+  return map[mode] || map.hot;
+}
+
 function kolModeDescription(mode) {
   const map = {
     hot: "Recent high-performing KOLs and the strongest current positions they are holding.",
     top: "Best ranked KOL wallets by realized performance, then their highest-value current token positions.",
-    consistent: "KOLs ranked by consistency/win rate, then filtered into cleaner copyable positions.",
+    consistent: "KOLs ranked by consistency/win rate from the available leaderboard, then filtered into cleaner copyable positions.",
     fresh: "KOL wallets with the newest activity first, useful when you want faster signal flow."
   };
   return map[mode] || map.hot;
@@ -1221,7 +1275,7 @@ function kolSummaryHtml() {
 function kolRowsHtml() {
   const scan = state.kolScan || {};
   if (scan.configured === false) {
-    return emptyState("KOL Tracker needs an API key", scan.message || "Add SOLANA_TRACKER_API_KEY on Render.");
+    return emptyState("KOL Tracker needs an API key", scan.message || "Add MADE_ON_SOL_API_KEY or SOLANA_TRACKER_API_KEY on Render.");
   }
   if (!scan.rows?.length) {
     return emptyState(
@@ -1247,6 +1301,7 @@ function kolRowsHtml() {
             <div><dt>Win Rate</dt><dd>${escapeHtml(row.winRateLabel || "n/a")}</dd></div>
             <div><dt>KOL ROI</dt><dd>${escapeHtml(row.roiLabel || "n/a")}</dd></div>
             <div><dt>Realized</dt><dd>${escapeHtml(row.realizedLabel || "n/a")}</dd></div>
+            <div><dt>Source</dt><dd>${escapeHtml(row.sourceLabel || row.source || "KOL")}</dd></div>
           </dl>
           <div class="card-actions">
             <button data-kol-copy="${escapeHtml(row.tokenMint)}">Copy Plan</button>
@@ -2057,25 +2112,31 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-kol-mode]")) {
     state.kolWallet = "";
     await loadKolScan(target.dataset.kolMode).catch((error) => setError(error.message));
+    return;
   }
   if (target.matches("[data-kol-refresh]")) {
     await loadKolScan(state.kolMode, state.kolWallet).catch((error) => setError(error.message));
+    return;
   }
   if (target.matches("[data-kol-wallet-scan]")) {
     await loadKolScan(state.kolMode, $("[data-kol-wallet]")?.value || "").catch((error) => setError(error.message));
+    return;
   }
   if (target.matches("[data-kol-copy]")) {
     await createKolCopyPlan(target.dataset.kolCopy);
+    return;
   }
   if (target.matches("[data-kol-trade]")) {
     state.tradeToken = target.dataset.kolTrade || "";
     state.activeTab = "trade";
     render();
+    return;
   }
   if (target.matches("[data-kol-bundle]")) {
     state.bundleToken = target.dataset.kolBundle || "";
     state.activeTab = "bundle";
     render();
+    return;
   }
   if (target.matches("[data-bundle-buy]")) {
     await executeBundle("buy");
