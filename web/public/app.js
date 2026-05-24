@@ -89,10 +89,26 @@ async function api(path, options = {}) {
   const data = await response.json().catch(() => ({}));
 
   if (!response.ok || data.ok === false) {
-    throw new Error(data.message || data.error || `HTTP ${response.status}`);
+    const message = data.message || data.error || `HTTP ${response.status}`;
+    const error = new Error(message);
+    error.status = response.status;
+    error.data = data;
+    if (response.status === 401) {
+      resetWebSession(message);
+    }
+    throw error;
   }
 
   return data;
+}
+
+function resetWebSession(message = "") {
+  state.token = "";
+  state.user = null;
+  state.loading = false;
+  clearStoredToken();
+  render();
+  setError(message || "Your web session expired. Tap Create Account to start a fresh session.");
 }
 
 function setError(message = "") {
@@ -155,20 +171,23 @@ async function loadAll() {
   state.loading = true;
   render();
 
-  const [wallets, balances, positions, pnl, launchWatches] = await Promise.all([
-    api("/api/web/wallets"),
-    api("/api/web/balances"),
-    api("/api/web/positions"),
-    api("/api/web/pnl"),
-    api("/api/web/launch/watches")
-  ]);
-  state.wallets = wallets.wallets || [];
-  state.balances = balances.balances || [];
-  state.positions = positions.positions || [];
-  state.pnl = pnl.pnl || null;
-  state.launchWatches = launchWatches.watches || [];
-  state.loading = false;
-  render();
+  try {
+    const [wallets, balances, positions, pnl, launchWatches] = await Promise.all([
+      api("/api/web/wallets"),
+      api("/api/web/balances"),
+      api("/api/web/positions"),
+      api("/api/web/pnl"),
+      api("/api/web/launch/watches")
+    ]);
+    state.wallets = wallets.wallets || [];
+    state.balances = balances.balances || [];
+    state.positions = positions.positions || [];
+    state.pnl = pnl.pnl || null;
+    state.launchWatches = launchWatches.watches || [];
+  } finally {
+    state.loading = false;
+    render();
+  }
 }
 
 async function loadScan(mode = state.scanMode) {
@@ -276,7 +295,7 @@ function createWalletSection() {
         Count
         <input data-wallet-count-input type="number" min="1" max="20" value="1">
       </label>
-      <button data-create-wallets>Create</button>
+      <button class="primary" type="button" data-create-wallets>Create Wallets</button>
       <small data-create-wallet-status></small>
     </section>
   `;
@@ -342,7 +361,7 @@ function downloadsHtml() {
 
 function tradeHtml() {
   if (!state.wallets.length) {
-    return `${createWalletSection()}${emptyState("Create a wallet first", "The web trade desk needs at least one managed wallet before it can buy or sell.")}`;
+    return `${createWalletSection()}${emptyState("No wallets loaded yet", "Create a wallet set above, restore a backup, or import a wallet. After one wallet is saved, the Trade buttons unlock automatically.")}`;
   }
 
   return `
@@ -464,7 +483,7 @@ function tradeResultHtml() {
 
 function bundleHtml() {
   if (!state.wallets.length) {
-    return `${createWalletSection()}${emptyState("Create wallets first", "Bundle needs two or more managed wallets to be useful.")}`;
+    return `${createWalletSection()}${emptyState("No wallets loaded yet", "Create or restore wallets above first. Bundle works after the web account has managed wallets saved.")}`;
   }
 
   return `
@@ -670,7 +689,7 @@ function syncCustomFields(root = document) {
 
 function volumeHtml() {
   if (!state.wallets.length) {
-    return `${createWalletSection()}${emptyState("Create a wallet first", "Volume plans need at least one managed wallet before they can buy and watch exits.")}`;
+    return `${createWalletSection()}${emptyState("No wallets loaded yet", "Create or restore a wallet above first. Volume plans need a saved wallet so they can buy and watch exits.")}`;
   }
 
   return `
@@ -832,7 +851,7 @@ function volumeResultHtml() {
 
 function launchHtml() {
   if (!state.wallets.length) {
-    return `${createWalletSection()}${emptyState("Create wallets first", "Launch Snipe needs managed wallets selected before it can watch and buy a ticker.")}`;
+    return `${createWalletSection()}${emptyState("No wallets loaded yet", "Create or restore wallets above first. Launch Snipe needs selected wallets before it can watch and buy a ticker.")}`;
   }
 
   return `
@@ -965,7 +984,7 @@ function launchWatchesHtml() {
 
 function kolHtml() {
   if (!state.wallets.length) {
-    return `${createWalletSection()}${emptyState("Create a wallet first", "KOL Tracker can scan without wallets, but trading/copy plans need at least one managed wallet.")}`;
+    return `${createWalletSection()}${emptyState("No wallets loaded yet", "Create or restore a wallet above first. KOL copy plans need managed wallets before they can trade.")}`;
   }
 
   const configured = state.kolScan?.configured !== false;
@@ -1149,14 +1168,24 @@ async function createWalletSet() {
   const countInput = $("[data-wallet-count-input]");
   const status = $("[data-create-wallet-status]");
   if (!labelInput || !countInput || !status) return;
+  const buttons = [...document.querySelectorAll("[data-create-wallets]")];
+  setError("");
   status.textContent = "Creating wallets...";
+  buttons.forEach((button) => {
+    button.disabled = true;
+    button.textContent = "Creating...";
+  });
 
   try {
+    const count = Number.parseInt(countInput.value || "1", 10);
+    if (!Number.isInteger(count) || count < 1 || count > 20) {
+      throw new Error("Wallet count must be from 1 to 20.");
+    }
     const data = await api("/api/web/wallets/create", {
       method: "POST",
       body: JSON.stringify({
         label: labelInput.value.trim() || "Ogre Web",
-        count: countInput.value
+        count
       })
     });
     state.downloads = data.downloads;
@@ -1168,6 +1197,12 @@ async function createWalletSet() {
     render();
   } catch (error) {
     status.textContent = error.message;
+    setError(error.message);
+  } finally {
+    buttons.forEach((button) => {
+      button.disabled = false;
+      button.textContent = "Create Wallets";
+    });
   }
 }
 
@@ -1883,12 +1918,12 @@ document.addEventListener("click", async (event) => {
   const target = event.target.closest("button, a");
   if (!target) return;
 
-  if (target.matches("[data-web-signup]")) createWebAccount();
-  if (target.matches("[data-logout]")) logout();
-  if (target.matches("[data-create-wallets]")) createWalletSet();
-  if (target.matches("[data-restore-backup]")) restoreWalletBackup();
-  if (target.matches("[data-export-backup]")) exportWalletBackup();
-  if (target.matches("[data-import-wallet]")) importWallet();
+  if (target.matches("[data-web-signup]")) await createWebAccount();
+  if (target.matches("[data-logout]")) await logout();
+  if (target.matches("[data-create-wallets]")) await createWalletSet();
+  if (target.matches("[data-restore-backup]")) await restoreWalletBackup();
+  if (target.matches("[data-export-backup]")) await exportWalletBackup();
+  if (target.matches("[data-import-wallet]")) await importWallet();
   if (target.matches("[data-download]")) {
     const file = state.downloads?.[target.dataset.download];
     if (file) downloadText(file.filename, file.text);

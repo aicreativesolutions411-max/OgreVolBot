@@ -279,6 +279,11 @@ select:focus {
   text-decoration: none;
 }
 
+button:disabled {
+  cursor: progress;
+  opacity: 0.62;
+}
+
 .secondary,
 .secondary-link,
 .ghost,

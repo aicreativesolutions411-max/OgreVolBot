@@ -9283,7 +9283,7 @@ function issueWebSessionRecord(userId, chatId, now = Date.now()) {
 async function authenticateWebRequest(request) {
   const token = webAuthTokenFromRequest(request);
   if (!token) {
-    const error = new Error("Missing web session. Log in with a fresh Telegram /web code.");
+    const error = new Error("Missing web session. Tap Create Account on the web panel, or log in again with a fresh Telegram /web code.");
     error.statusCode = 401;
     throw error;
   }
@@ -9294,7 +9294,7 @@ async function authenticateWebRequest(request) {
   const session = store.sessions.find((item) => item.tokenHash === tokenHash && Date.parse(item.expiresAt || "") > now);
 
   if (!session) {
-    const error = new Error("Web session expired. Open Telegram and request a new /web code.");
+    const error = new Error("Web session expired. Tap Create Account on the web panel, or open Telegram and request a fresh /web code.");
     error.statusCode = 401;
     throw error;
   }
