@@ -7,7 +7,7 @@ Telegram bot for legitimate, auditable Solana wallet operations:
 - Emergency private key export for user-owned wallets
 - Fund managed wallets from an imported wallet
 - Single-wallet trade menu for quick buy/sell, auto sell, and DCA
-- OgreSniper early-play scanner, token scorer, mode presets, and timed-plan entry setup
+- OgreSniper early-play scanner, token scorer, mode presets, AutoSnipe/PumpSnipe, and Manual Launch Snipe
 - Batch buy a token through Jupiter
 - Batch sell a token through Jupiter
 - DCA buy and DCA sell plans with scheduled slices
@@ -38,26 +38,30 @@ This bot does not provide wallet washing, provenance hiding, mixer behavior, or 
    TELEGRAM_BOT_TOKEN=...
    SOLANA_RPC_URL=...
    APP_SECRET=...
+   AUTO_SEND_RECOVERY_KEY_FILE=false
    JUPITER_API_KEY=...
    PUMPFUN_API_BASE=https://frontend-api-v3.pump.fun
    PUMPFUN_API_TOKEN=
+   PHOTON_NEW_PAIRS_URL=
+   PHOTON_API_KEY=
+   MANUAL_LAUNCH_SCAN_INTERVAL_MS=500
    TRADING_SPEED_PRESET=balanced
-   JUPITER_MIN_INTERVAL_MS=500
+   JUPITER_MIN_INTERVAL_MS=350
    JUPITER_RETRIES=5
-   JUPITER_429_COOLDOWN_MS=10000
+   JUPITER_429_COOLDOWN_MS=7000
    FEE_WALLET=AUcSFZsCdawzfqa4KzHK1BHz1RDrBnj8CF5kxoy3NvxV
    BUNDLE_FEE_BPS=50
    BUNDLE_CONCURRENCY=2
-   BALANCE_CONCURRENCY=3
-   BALANCE_CACHE_TTL_MS=12000
+   BALANCE_CONCURRENCY=5
+   BALANCE_CACHE_TTL_MS=8000
    DEFAULT_SLIPPAGE_BPS=400
    SNIPER_DEFAULT_SLIPPAGE_BPS=400
-   JUPITER_SWAP_MAX_ATTEMPTS=2
+   JUPITER_SWAP_MAX_ATTEMPTS=3
    BUY_RESERVE_SOL=0.01
-   RPC_MIN_INTERVAL_MS=450
-   RPC_DELAY_MS=750
+   RPC_MIN_INTERVAL_MS=250
+   RPC_DELAY_MS=250
    RPC_RETRIES=10
-   RPC_429_COOLDOWN_MS=10000
+   RPC_429_COOLDOWN_MS=5000
    KEEPALIVE_ENABLED=true
    KEEPALIVE_INTERVAL_MINUTES=5
    TELEGRAM_ADMIN_USER_IDS=123456789
@@ -113,7 +117,9 @@ In the buy amount step, users can type `max` to use each wallet's available SOL 
 
 If you still see `429 Too Many Requests`, your current Solana RPC or Jupiter plan is rate-limiting even after the bot queues and slows requests. Switch `TRADING_SPEED_PRESET=safe`, keep `BUNDLE_CONCURRENCY=1`, or use a paid/private `SOLANA_RPC_URL` plus higher Jupiter limits for reliable multi-wallet usage. Public `https://api.mainnet-beta.solana.com` is not reliable for production batches.
 
-`Emergency Key Export` sends raw private keys for the Telegram user's own bot wallets after an exact confirmation phrase. This is for recovery only. Anyone with that file can drain those wallets.
+`Emergency Key Export` / **Solflare Key Export** sends raw private keys for the Telegram user's own bot wallets after an exact confirmation phrase. This is for recovery only. Anyone with that file can drain those wallets.
+
+`AUTO_SEND_RECOVERY_KEY_FILE=true` makes the bot also send a Solflare/Phantom recovery key file after wallet create/import/restore, and before wallet removal. This is the strongest recovery fallback if Render storage or `APP_SECRET` gets misconfigured later, but it sends raw private keys through Telegram documents. Keep it `false` unless you accept that risk and want the extra emergency file.
 
 `Rescue Backup Keys` lets a user upload the wallet backup `.txt` file and receive a private-key recovery file even if the wallets are not currently restored in the bot. If the backup opens but keys cannot decrypt, the new deployment is using a different `APP_SECRET`; set Render back to the exact old `APP_SECRET`, redeploy, then restore or rescue again.
 
@@ -138,6 +144,8 @@ This is a position-management feature for the user's own wallets. It does not ru
 The main menu also includes **OgreSniper**. It provides:
 
 - Scan Early Plays from latest Solana token profiles, with direct Snipe buttons
+- AutoSnipe and PumpSnipe rotate away from recently shown/bought tokens when enough candidates are available, then let users keep the default exits or customize TP/SL before confirming
+- Manual Launch Snipe lets a user enter a ticker ahead of launch, preselect wallets/SOL/exits/slippage, and watch live Solana launch/profile feeds for a matching ticker
 - Modes: Safe Scan, Smart Money Scan, Fast Scalp Scan, Low Cap Scan, Meme Scan, and AI Scan. Tapping a mode immediately scans that category.
 
 OgreSniper scoring is heuristic. It uses Dexscreener/Pump.fun metadata and available market signals to estimate entry score, momentum, rug risk, exit risk, and manipulation score. It does not guarantee profitable trades, and it does not bypass the normal confirm screen.
@@ -145,6 +153,9 @@ OgreSniper scoring is heuristic. It uses Dexscreener/Pump.fun metadata and avail
 OgreSniper options:
 
 - **Scan Early Plays** checks latest Solana token profiles and shows the highest-scoring candidates with tap-to-copy CA text, Dex chart links in the text, and **Snipe #1** through **Snipe #6** buttons.
+- **AutoSnipe** defaults to +25% take-profit, -8% stop-loss, 400 bps slippage, and a full-bag exit. After the SOL amount, users can tap **Use Default** or **Customize**.
+- **PumpSnipe** defaults to +40% take-profit, -8% stop-loss, 300 bps slippage, and a full-bag exit. It accepts lower market-cap early setups than AutoSnipe and also supports **Customize** before confirm.
+- **Manual Launch Snipe** watches for a ticker the user enters ahead of time, then buys with the preselected wallets once a matching live launch/profile appears. By default it uses the bot's current Solana launch/profile feeds. If you set `PHOTON_NEW_PAIRS_URL`, the watcher checks that feed first and can pass `PHOTON_API_KEY` as a bearer token. It scans every `MANUAL_LAUNCH_SCAN_INTERVAL_MS` while awake, defaults to `1500` ms, supports `500` ms on paid/private RPC setups, uses short burst caching so multiple watches do not duplicate the same feed calls, and sends **Cancel Watch** controls after the plan is armed and under **Active Launch Watches**.
 - **Modes** adjust score/risk strictness and immediately run that category scan: Safe Scan, Smart Money Scan, Fast Scalp Scan, Low Cap Scan, Meme Scan, and AI Scan.
 
 Fast scan flow:
@@ -191,11 +202,13 @@ The front menu is intentionally short:
 - 💾 Backup / Restore
 - 🏦 Withdrawal
 
-The How To Use button opens a clickable learning hub with user-friendly instructions for Trade, Wallet, Bundle, Volume, Check Balances, Backup / Restore, Withdrawal, and a Success Checklist. The Backup / Restore page explains exactly how to upload the automatic `.txt` backup file from Telegram or paste backup text if upload fails.
+The How To Use button opens a clickable learning hub with user-friendly instructions for Trade, Wallet, Bundle, Volume, Check Balances, Backup / Restore, Withdrawal, and a Success Checklist. The Backup / Restore page explains exactly how to verify/upload the automatic `.txt` backup file from Telegram or paste backup text if upload fails.
 
 The Trade menu is for one wallet at a time. It includes Buy, Sell, Auto Sell, DCA Buy, DCA Sell, Positions, and Wallets. Buy screens include quick buttons for `0.10 SOL`, `0.50 SOL`, `1 SOL`, `max`, and custom amount. Sell screens include quick buttons for `25%`, `50%`, `100%`, and custom percent.
 
 The Wallet and Backup / Restore menus include Remove Wallets. Remove Wallets deletes selected saved wallet records from the bot only after two confirmations, sends an encrypted backup before the final confirmation, and does not move funds on-chain. If removed by mistake, users can restore the backup later as long as Render still uses the same APP_SECRET. Positions Overview only shows coins the managed wallets still hold. PnL / Results shows bot-recorded buys and sells newest first, with older trades below, plus share-card buttons. PnL card buttons show the latest traded tokens first, and users can tap **Card by CA** or use `/pnlcard CA` for any older token that falls off the visible list. Successful sells try to send a PnL card automatically. Cards use Dexscreener metadata/art first; if Dexscreener has no token image/name/symbol, the bot tries Pump.fun metadata next. Cards rotate through the branded neon slime frame assets while keeping the same PnL text layout. The Bundle menu contains Bundle Buy, Bundle Sell, DCA Buy, DCA Sell, and Copy Trade info. Use the main Volume button for auto-sell, take-profit, stop-loss, and Repeat cycles. Copy Trade is shown as a setup/info item until a full wallet-watcher implementation is added.
+
+Auto Bundle custom take-profit accepts larger targets. Type `500` for a +500% profit target, shown as about 6x value. Type `5x` if the intended target is 5x value, which equals +400% profit. The same parser is used by full exits, wallet targets, ladders, sniper custom exits, manual launch exits, and timed trade take-profit.
 
 Menu navigation edits the existing Telegram menu message when possible, with Main Menu back buttons on submenus. Wallet lists, backups, trade results, and generated PnL cards still post as new messages so users do not lose important data.
 
@@ -280,10 +293,10 @@ https://your-service-name.onrender.com/healthz
 
 Set the external monitor to every 5 minutes. Render Free can still restart services and local files can still reset. Keep using backups.
 
-The bot sends automatic encrypted `.txt` backup files after wallet create/import/restore, so users do not have to remember every time. It sends a Telegram document, not pasted backup code in chat. Automatic wallet-group backup filenames include the wallet group label, for example:
+The bot sends automatic encrypted `.txt` backup files after wallet create/import/restore, so users do not have to remember every time. It sends a Telegram document, not pasted backup code in chat. Backup / Restore includes **Verify Backup File**, which lists the wallet public keys inside a backup before restoring or rescuing keys. If `AUTO_SEND_RECOVERY_KEY_FILE=true`, the bot also sends a separate Solflare/Phantom recovery key file with raw keys for the affected wallets. Automatic wallet-group backup filenames include the wallet group label, exact timestamp, wallet hint, and fingerprint, for example:
 
 ```text
-wallet-backup-ogretest-123456789-2026-05-21.txt
+wallet-backup-ogretest-123456789-20260524014233-HTHf-Wdnb-a1b2c3d4.txt
 ```
 
 ### Paid Persistent Option

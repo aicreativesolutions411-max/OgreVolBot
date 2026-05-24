@@ -14,34 +14,46 @@ services:
         value: ./data
       - key: ALLOW_EPHEMERAL_STORAGE
         value: true
+      - key: AUTO_SEND_RECOVERY_KEY_FILE
+        value: false
       - key: SOLANA_RPC_URL
         value: https://api.mainnet-beta.solana.com
+      - key: MANUAL_LAUNCH_SCAN_INTERVAL_MS
+        value: 500
       - key: JUPITER_API_BASE
         value: https://api.jup.ag/swap/v2
       - key: JUPITER_MIN_INTERVAL_MS
-        value: 1200
+        value: 350
       - key: JUPITER_RETRIES
         value: 5
       - key: JUPITER_429_COOLDOWN_MS
-        value: 15000
+        value: 7000
       - key: FEE_WALLET
         value: AUcSFZsCdawzfqa4KzHK1BHz1RDrBnj8CF5kxoy3NvxV
       - key: BUNDLE_FEE_BPS
         value: 50
       - key: BUNDLE_CONCURRENCY
-        value: 1
+        value: 2
+      - key: BALANCE_CONCURRENCY
+        value: 5
+      - key: BALANCE_CACHE_TTL_MS
+        value: 8000
       - key: BUY_RESERVE_SOL
         value: 0.01
       - key: RPC_MIN_INTERVAL_MS
-        value: 1200
+        value: 250
       - key: RPC_DELAY_MS
-        value: 1500
+        value: 250
       - key: RPC_RETRIES
         value: 10
       - key: RPC_429_COOLDOWN_MS
-        value: 15000
+        value: 5000
       - key: DEFAULT_SLIPPAGE_BPS
-        value: 100
+        value: 400
+      - key: SNIPER_DEFAULT_SLIPPAGE_BPS
+        value: 400
+      - key: JUPITER_SWAP_MAX_ATTEMPTS
+        value: 3
       - key: PRIORITY_FEE_LAMPORTS
         value: 0
       - key: TELEGRAM_BOT_TOKEN
