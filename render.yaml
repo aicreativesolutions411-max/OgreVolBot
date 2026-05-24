@@ -2,18 +2,22 @@ services:
   - type: web
     name: solana-telegram-wallet-ops-bot
     env: node
-    plan: free
+    plan: starter
     autoDeploy: true
     buildCommand: npm ci
     startCommand: npm run render-start
     healthCheckPath: /healthz
+    disk:
+      name: ogre-wallet-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
       - key: NODE_VERSION
         value: 20
       - key: DATA_DIR
-        value: ./data
+        value: /var/data
       - key: ALLOW_EPHEMERAL_STORAGE
-        value: true
+        value: false
       - key: AUTO_SEND_RECOVERY_KEY_FILE
         value: true
       - key: SOLANA_RPC_URL

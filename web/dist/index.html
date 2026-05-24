@@ -40,13 +40,7 @@
         <form class="login-card" onsubmit="return false;">
           <img src="./assets/ogre-aces.jpg" alt="OgreTrade welcome art">
           <button class="primary" type="button" data-web-signup>Create Account</button>
-          <div class="divider"><span>or link Telegram</span></div>
-          <a class="secondary-link" data-bot-link target="_blank" rel="noreferrer">Open @OgreTradeBot</a>
-          <label>
-            Telegram web code
-            <input data-login-code type="text" inputmode="text" autocomplete="one-time-code" placeholder="ABCD-1234">
-          </label>
-          <button class="secondary" type="button" data-login-submit>Connect Telegram Account</button>
+          <p class="login-note">Create a web account, then create wallets, restore a backup file, or import an existing wallet. Backups download from the wallet menu.</p>
           <p class="error" data-error hidden></p>
         </form>
       </section>
@@ -56,11 +50,10 @@
           <div>
             <p class="eyebrow">Connected</p>
             <h1>Command center</h1>
-            <p>Web account <code data-user-id></code>. Use the dashboard here, or link Telegram when you want chat controls too.</p>
+            <p>Web account <code data-user-id></code>. Create wallets, restore backups, import wallets, and trade from this panel.</p>
           </div>
           <div class="head-actions">
             <button class="secondary" type="button" data-refresh-all>Refresh All</button>
-            <button class="secondary" type="button" data-open-bot>Telegram Bot</button>
             <button class="ghost" type="button" data-logout>Log Out</button>
           </div>
         </div>
@@ -87,6 +80,9 @@
         <nav class="tabs" aria-label="Portal views">
           <button data-tab="dashboard" data-active="true">Home</button>
           <button data-tab="trade">Trade</button>
+          <button data-tab="bundle">Bundle</button>
+          <button data-tab="volume">Volume</button>
+          <button data-tab="launch">Launch Snipe</button>
           <button data-tab="wallets">Wallets</button>
           <button data-tab="positions">Positions</button>
           <button data-tab="pnl">PnL</button>

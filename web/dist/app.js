@@ -5,8 +5,32 @@ const defaultRenderApiBase = "https://ogrevolbot.onrender.com";
 const apiBase = configuredApiBase
   || (window.location.hostname.endsWith("onrender.com") ? sameOriginApiBase : defaultRenderApiBase);
 
+function getStoredToken() {
+  try {
+    return window.localStorage?.getItem("ogreWebToken") || "";
+  } catch {
+    return "";
+  }
+}
+
+function setStoredToken(token) {
+  try {
+    window.localStorage?.setItem("ogreWebToken", token);
+  } catch {
+    // Private browsing or embedded browsers may block localStorage.
+  }
+}
+
+function clearStoredToken() {
+  try {
+    window.localStorage?.removeItem("ogreWebToken");
+  } catch {
+    // Private browsing or embedded browsers may block localStorage.
+  }
+}
+
 const state = {
-  token: localStorage.getItem("ogreWebToken") || "",
+  token: getStoredToken(),
   user: null,
   activeTab: "dashboard",
   loading: false,
@@ -18,6 +42,16 @@ const state = {
   scanMode: "safe",
   tradeToken: "",
   tradeResult: null,
+  bundleToken: "",
+  bundleResult: null,
+  volumeToken: "",
+  volumeResult: null,
+  sniperResult: null,
+  launchResult: null,
+  launchWatches: [],
+  restoreResult: null,
+  importResult: null,
+  backupResult: null,
   downloads: null
 };
 
@@ -25,7 +59,6 @@ const $ = (selector) => document.querySelector(selector);
 const app = $("[data-app]");
 const loginView = $("[data-login]");
 const dashboardView = $("[data-dashboard]");
-const codeInput = $("[data-login-code]");
 const errorBox = $("[data-error]");
 
 function apiUrl(path) {
@@ -63,39 +96,9 @@ function setError(message = "") {
   errorBox.textContent = message;
 }
 
-function botStartUrl() {
-  if (config.telegramBotUsername) {
-    return `https://t.me/${config.telegramBotUsername}?start=web`;
-  }
-  return "https://t.me/ogretradebot?start=web";
-}
-
 function dexUrl(tokenMint) {
   const mint = String(tokenMint || "").trim();
   return mint ? `https://dexscreener.com/solana/${encodeURIComponent(mint)}` : "#";
-}
-
-async function login() {
-  setError("");
-  const code = codeInput.value.trim();
-  if (!code) {
-    setError("Paste the login code the Telegram bot sent you.");
-    return;
-  }
-
-  try {
-    const data = await api("/api/web/login", {
-      method: "POST",
-      body: JSON.stringify({ code })
-    });
-    state.token = data.token;
-    state.user = data.user;
-    localStorage.setItem("ogreWebToken", state.token);
-    codeInput.value = "";
-    await loadAll();
-  } catch (error) {
-    setError(error.message);
-  }
 }
 
 async function createWebAccount() {
@@ -107,26 +110,9 @@ async function createWebAccount() {
     });
     state.token = data.token;
     state.user = data.user;
-    localStorage.setItem("ogreWebToken", state.token);
+    setStoredToken(state.token);
+    state.activeTab = "wallets";
     await loadAll();
-  } catch (error) {
-    setError(error.message);
-  }
-}
-
-async function requestEmailCode() {
-  setError("");
-  const email = document.querySelector("[data-signup-email]")?.value?.trim() || "";
-  if (!email) {
-    setError("Enter the email saved on your web account first.");
-    return;
-  }
-  try {
-    await api("/api/web/email-code", {
-      method: "POST",
-      body: JSON.stringify({ email })
-    });
-    setError("Email code sent. Paste it in the code box below.");
   } catch (error) {
     setError(error.message);
   }
@@ -140,7 +126,7 @@ async function logout() {
   }
   state.token = "";
   state.user = null;
-  localStorage.removeItem("ogreWebToken");
+  clearStoredToken();
   render();
 }
 
@@ -156,7 +142,7 @@ async function loadSession() {
     await loadAll();
   } catch {
     state.token = "";
-    localStorage.removeItem("ogreWebToken");
+    clearStoredToken();
     render();
   }
 }
@@ -165,16 +151,18 @@ async function loadAll() {
   state.loading = true;
   render();
 
-  const [wallets, balances, positions, pnl] = await Promise.all([
+  const [wallets, balances, positions, pnl, launchWatches] = await Promise.all([
     api("/api/web/wallets"),
     api("/api/web/balances"),
     api("/api/web/positions"),
-    api("/api/web/pnl")
+    api("/api/web/pnl"),
+    api("/api/web/launch/watches")
   ]);
   state.wallets = wallets.wallets || [];
   state.balances = balances.balances || [];
   state.positions = positions.positions || [];
   state.pnl = pnl.pnl || null;
+  state.launchWatches = launchWatches.watches || [];
   state.loading = false;
   render();
 }
@@ -203,13 +191,10 @@ function render() {
   dashboardView.hidden = !state.user;
 
   if (!state.user) {
-    $("[data-bot-link]").href = botStartUrl();
     return;
   }
 
   $("[data-user-id]").textContent = state.user.id;
-  const emailField = $("[data-email]");
-  if (emailField && document.activeElement !== emailField) emailField.value = state.user.email || "";
   $("[data-wallet-count]").textContent = state.wallets.length;
   $("[data-total-sol]").textContent = totalSol().toFixed(4);
   $("[data-position-count]").textContent = state.positions.length;
@@ -225,6 +210,9 @@ function renderTabs() {
   const panel = $("[data-panel]");
   if (state.activeTab === "dashboard") panel.innerHTML = dashboardHtml();
   if (state.activeTab === "trade") panel.innerHTML = tradeHtml();
+  if (state.activeTab === "bundle") panel.innerHTML = bundleHtml();
+  if (state.activeTab === "volume") panel.innerHTML = volumeHtml();
+  if (state.activeTab === "launch") panel.innerHTML = launchHtml();
   if (state.activeTab === "wallets") panel.innerHTML = walletsHtml();
   if (state.activeTab === "positions") panel.innerHTML = positionsHtml();
   if (state.activeTab === "pnl") panel.innerHTML = pnlHtml();
@@ -235,10 +223,12 @@ function dashboardHtml() {
   return `
     <section class="panel-grid">
       ${visualCard("visual-aces", "Trade Desk", "Quick buy and sell from one wallet with .10, .50, 1 SOL, max, and percent sell buttons.")}
-      ${visualCard("visual-cauldron", "Sniper Scanner", "Scan modes rotate fresh picks with Dex links, copyable CAs, risk notes, and one-click handoff to Trade.")}
-      ${visualCard("visual-candle", "Backup First", "Web wallet creation downloads both encrypted bot backups and Solflare-style recovery files.")}
+      ${visualCard("visual-cauldron", "Bundle + Volume", "Buy or sell across selected wallets, then manage timed exits with Volume plans.")}
+      ${visualCard("visual-candle", "Launch Snipe", "Preset ticker, wallets, amount, TP/SL, and slippage, then watch live feeds until launch.")}
     </section>
     ${createWalletSection()}
+    ${importWalletSection()}
+    ${backupRestoreSection()}
     ${downloadsHtml()}
   `;
 }
@@ -264,6 +254,50 @@ function createWalletSection() {
       </label>
       <button data-create-wallets>Create</button>
       <small data-create-wallet-status></small>
+    </section>
+  `;
+}
+
+function backupRestoreSection() {
+  return `
+    <section class="create-wallet-card restore-card">
+      <div>
+        <h3>Backup / Restore</h3>
+        <p>Load bot backup files or pasted recovery text back into this web account. Keep backup files private.</p>
+      </div>
+      <label>
+        Backup File
+        <input data-restore-file type="file" accept=".txt,.json,text/plain,application/json">
+      </label>
+      <label class="wide-field">
+        Backup Text
+        <textarea data-restore-text rows="5" placeholder="Paste the wallet-backup text here, or choose the backup .txt file above."></textarea>
+      </label>
+      <button data-restore-backup>Restore Wallets</button>
+      <button type="button" class="secondary" data-export-backup>Download Current Backup</button>
+      <small data-restore-status>${state.restoreResult ? escapeHtml(state.restoreResult.message || "Restore complete.") : ""}</small>
+      <small data-export-status>${state.backupResult ? escapeHtml(state.backupResult.message || "Backup ready.") : ""}</small>
+    </section>
+  `;
+}
+
+function importWalletSection() {
+  return `
+    <section class="create-wallet-card restore-card">
+      <div>
+        <h3>Import Wallet</h3>
+        <p>Paste a base58 private key or JSON secret-key array. The bot encrypts it with this account and immediately downloads fresh backup files.</p>
+      </div>
+      <label>
+        Label
+        <input data-import-label type="text" placeholder="Imported Wallet">
+      </label>
+      <label class="wide-field">
+        Private Key / Secret Key
+        <textarea data-import-secret rows="5" placeholder="Base58 private key or [12,34,...] secret key"></textarea>
+      </label>
+      <button data-import-wallet>Import</button>
+      <small data-import-status>${state.importResult ? escapeHtml(state.importResult.message || "Import complete.") : ""}</small>
     </section>
   `;
 }
@@ -295,7 +329,6 @@ function tradeHtml() {
             <h3>One-Wallet Trade</h3>
             <p>Paste a token CA, pick a wallet, then use fast buy and sell buttons from the webpage.</p>
           </div>
-          <a class="mini-link" data-trade-dex href="${state.tradeToken ? dexUrl(state.tradeToken) : "#"}" target="_blank" rel="noreferrer">Dex</a>
         </div>
         <label>
           Wallet
@@ -403,6 +436,336 @@ function tradeResultHtml() {
   `;
 }
 
+function bundleHtml() {
+  if (!state.wallets.length) {
+    return `${createWalletSection()}${emptyState("Create wallets first", "Bundle needs two or more managed wallets to be useful.")}`;
+  }
+
+  return `
+    <section class="trade-layout">
+      <article class="trade-card">
+        <div class="trade-head">
+          <div>
+            <h3>Bundle</h3>
+            <p>Buy or sell the same token across selected wallets from one clean panel.</p>
+          </div>
+          <a class="mini-link" href="${state.bundleToken ? dexUrl(state.bundleToken) : "#"}" target="_blank" rel="noreferrer">Dex</a>
+        </div>
+        <label>
+          Token CA
+          <input data-bundle-token type="text" placeholder="Paste Solana token mint" value="${escapeHtml(state.bundleToken || state.tradeToken)}">
+        </label>
+        <div class="wallet-checks">
+          ${walletChecksHtml("bundle")}
+        </div>
+        ${walletGroupHtml("bundle")}
+        <div class="volume-grid">
+          <label>
+            Buy Per Wallet
+            <input data-bundle-amount type="number" min="0" step="0.01" value="0.1">
+          </label>
+          <label>
+            Sell Percent
+            <select data-bundle-percent>
+              <option value="25">25%</option>
+              <option value="50">50%</option>
+              <option value="100" selected>100%</option>
+            </select>
+          </label>
+          <label>
+            Slippage
+            <select data-bundle-slippage>
+              <option value="300">3%</option>
+              <option value="400" selected>4%</option>
+              <option value="500">5%</option>
+            </select>
+          </label>
+        </div>
+        <div class="quick-grid two-wide">
+          <button class="primary" data-bundle-buy>Bundle Buy</button>
+          <button data-bundle-sell>Bundle Sell</button>
+        </div>
+        <p class="trade-status" data-bundle-status>${state.bundleResult ? escapeHtml(state.bundleResult.message || "Bundle complete.") : "Ready."}</p>
+      </article>
+      <aside class="trade-side">
+        <article>
+          <h3>Multi-Wallet Control</h3>
+          <p>Select the exact wallets to use. Each selected wallet must hold enough SOL for buy amount, fees, and reserve.</p>
+        </article>
+        ${bundleResultHtml()}
+      </aside>
+    </section>
+  `;
+}
+
+function bundleResultHtml() {
+  if (!state.bundleResult) {
+    return `
+      <article>
+        <h3>Latest Bundle</h3>
+        <p>Bundle buy/sell results will show here wallet by wallet.</p>
+      </article>
+    `;
+  }
+
+  return `
+    <article class="latest-trade">
+      <h3>${escapeHtml(state.bundleResult.type === "bundle_sell" ? "Bundle Sell" : "Bundle Buy")}</h3>
+      <p>${escapeHtml(state.bundleResult.message || "")}</p>
+      <div class="mini-results">
+        ${(state.bundleResult.results || []).map((row) => `<span data-ok="${row.ok ? "true" : "false"}">${escapeHtml(row.message)}</span>`).join("")}
+      </div>
+      <div class="card-actions">
+        <button data-copy="${escapeHtml(state.bundleResult.tokenMint)}">Copy CA</button>
+        <a href="${escapeHtml(state.bundleResult.dexUrl)}" target="_blank" rel="noreferrer">Dex</a>
+      </div>
+    </article>
+  `;
+}
+
+function walletChecksHtml(prefix) {
+  return state.wallets.map((wallet, index) => `
+    <label class="wallet-check">
+      <input type="checkbox" data-${prefix}-wallet value="${wallet.index}" ${index < 6 ? "checked" : ""}>
+      <span>${wallet.index}. ${escapeHtml(wallet.label)}</span>
+      <code>${escapeHtml(wallet.shortPublicKey || wallet.publicKey)}</code>
+    </label>
+  `).join("");
+}
+
+function walletGroupHtml(prefix) {
+  return `
+    <label>
+      Optional Group Label
+      <input data-${prefix}-group type="text" placeholder="Example: Ogre">
+    </label>
+  `;
+}
+
+function volumeHtml() {
+  if (!state.wallets.length) {
+    return `${createWalletSection()}${emptyState("Create a wallet first", "Volume plans need at least one managed wallet before they can buy and watch exits.")}`;
+  }
+
+  return `
+    <section class="trade-layout">
+      <article class="trade-card">
+        <div class="trade-head">
+          <div>
+            <h3>Volume Plan</h3>
+            <p>Buy once, then auto-manage the exit by timer, take-profit, stop-loss, or repeat cycles.</p>
+          </div>
+          <a class="mini-link" href="${state.volumeToken ? dexUrl(state.volumeToken) : "#"}" target="_blank" rel="noreferrer">Dex</a>
+        </div>
+        <label>
+          Token CA
+          <input data-volume-token type="text" placeholder="Paste Solana token mint" value="${escapeHtml(state.volumeToken || state.tradeToken)}">
+        </label>
+        <div class="wallet-checks">
+          ${walletChecksHtml("volume")}
+        </div>
+        ${walletGroupHtml("volume")}
+
+        <div class="volume-grid">
+          <label>
+            Buy Amount
+            <input data-volume-amount type="number" min="0" step="0.01" value="0.1">
+          </label>
+          <label>
+            Sell After
+            <select data-volume-delay>
+              <option value="5s">5 sec</option>
+              <option value="1">1 min</option>
+              <option value="5" selected>5 min</option>
+              <option value="15">15 min</option>
+              <option value="30">30 min</option>
+              <option value="60">1 hour</option>
+            </select>
+          </label>
+          <label>
+            Take Profit
+            <select data-volume-tp>
+              <option value="15">+15%</option>
+              <option value="25" selected>+25%</option>
+              <option value="50">+50%</option>
+              <option value="100">+100%</option>
+            </select>
+          </label>
+          <label>
+            Stop Loss
+            <select data-volume-sl>
+              <option value="8" selected>-8%</option>
+              <option value="10">-10%</option>
+              <option value="15">-15%</option>
+              <option value="25">-25%</option>
+            </select>
+          </label>
+          <label>
+            Repeat
+            <select data-volume-loop>
+              <option value="1" selected>1x</option>
+              <option value="5">5x</option>
+              <option value="10">10x</option>
+            </select>
+          </label>
+          <label>
+            Slippage
+            <select data-volume-slippage>
+              <option value="300">3%</option>
+              <option value="400" selected>4%</option>
+              <option value="500">5%</option>
+            </select>
+          </label>
+        </div>
+
+        <button class="primary" data-volume-start>Start Volume Plan</button>
+        <p class="trade-status" data-volume-status>${state.volumeResult ? escapeHtml(state.volumeResult.message || "Volume plan armed.") : "Ready."}</p>
+      </article>
+
+      <aside class="trade-side">
+        <article>
+          <h3>What It Does</h3>
+        <p>Volume is a timed position manager: it buys from selected wallets, then watches for your timer, profit target, or stop-loss. Repeat runs the same managed cycle again after an exit.</p>
+        </article>
+        <article>
+          <h3>Default Setup</h3>
+          <p>5 minute fallback timer, +25% take-profit, -8% stop-loss, 4% slippage, 100% exit.</p>
+        </article>
+        ${volumeResultHtml()}
+      </aside>
+    </section>
+  `;
+}
+
+function volumeResultHtml() {
+  if (!state.volumeResult) {
+    return `
+      <article>
+        <h3>Latest Plan</h3>
+        <p>Your latest web volume plan recap will show here after the first buy lands.</p>
+      </article>
+    `;
+  }
+
+  const row = state.volumeResult;
+  return `
+    <article class="latest-trade">
+      <h3>Plan Armed</h3>
+      <p>${escapeHtml(row.message || "")}</p>
+      <dl>
+        <div><dt>Wallets</dt><dd>${escapeHtml(row.walletLabel || `${row.successCount || 0}/${row.walletCount || 0}`)}</dd></div>
+        <div><dt>Buy</dt><dd>${escapeHtml(row.amountSol)} SOL</dd></div>
+        <div><dt>TP / SL</dt><dd>+${escapeHtml(row.takeProfitPct)}% / -${escapeHtml(row.stopLossPct)}%</dd></div>
+        <div><dt>Repeat</dt><dd>${escapeHtml(row.loopCount)}x</dd></div>
+      </dl>
+      ${row.results?.length ? `<div class="mini-results">${row.results.map((item) => `<span data-ok="${item.ok ? "true" : "false"}">${escapeHtml(item.message || item)}</span>`).join("")}</div>` : ""}
+      <div class="card-actions">
+        <button data-copy="${escapeHtml(row.tokenMint)}">Copy CA</button>
+        <a href="${escapeHtml(row.dexUrl)}" target="_blank" rel="noreferrer">Dex</a>
+      </div>
+    </article>
+  `;
+}
+
+function launchHtml() {
+  if (!state.wallets.length) {
+    return `${createWalletSection()}${emptyState("Create wallets first", "Launch Snipe needs managed wallets selected before it can watch and buy a ticker.")}`;
+  }
+
+  return `
+    <section class="trade-layout">
+      <article class="trade-card">
+        <div class="trade-head">
+          <div>
+            <h3>Launch Snipe</h3>
+            <p>Preset the ticker, wallets, SOL amount, exits, and slippage. The backend keeps scanning until that ticker appears.</p>
+          </div>
+        </div>
+        <label>
+          Ticker
+          <input data-launch-ticker type="text" placeholder="Example: OGRE">
+        </label>
+        <div class="wallet-checks">
+          ${walletChecksHtml("launch")}
+        </div>
+        ${walletGroupHtml("launch")}
+        <div class="volume-grid">
+          <label>
+            Buy Per Wallet
+            <input data-launch-amount type="number" min="0" step="0.01" value="0.1">
+          </label>
+          <label>
+            Take Profit
+            <select data-launch-tp>
+              <option value="25">+25%</option>
+              <option value="40" selected>+40%</option>
+              <option value="60">+60%</option>
+              <option value="100">+100%</option>
+            </select>
+          </label>
+          <label>
+            Stop Loss
+            <select data-launch-sl>
+              <option value="8" selected>-8%</option>
+              <option value="10">-10%</option>
+              <option value="15">-15%</option>
+            </select>
+          </label>
+          <label>
+            Fallback Sell
+            <select data-launch-delay>
+              <option value="1">1 min</option>
+              <option value="3" selected>3 min</option>
+              <option value="5">5 min</option>
+              <option value="15">15 min</option>
+            </select>
+          </label>
+          <label>
+            Slippage
+            <select data-launch-slippage>
+              <option value="300" selected>3%</option>
+              <option value="400">4%</option>
+              <option value="500">5%</option>
+            </select>
+          </label>
+        </div>
+        <button class="primary" data-launch-start>Start Launch Watch</button>
+        <p class="trade-status" data-launch-status>${state.launchResult ? escapeHtml(state.launchResult.message || "Launch watch armed.") : "Ready."}</p>
+      </article>
+
+      <aside class="trade-side">
+        <article>
+          <h3>How It Works</h3>
+          <p>It scans live launch/profile feeds about every ${escapeHtml(launchScanSeconds())} seconds while Render is awake. If PHOTON_NEW_PAIRS_URL is set, it checks that feed first.</p>
+        </article>
+        <article>
+          <h3>Active Watches</h3>
+          ${launchWatchesHtml()}
+        </article>
+      </aside>
+    </section>
+  `;
+}
+
+function launchScanSeconds() {
+  const first = state.launchWatches?.[0]?.scanIntervalMs;
+  return first ? (first / 1000).toFixed(first % 1000 === 0 ? 0 : 1) : "1.5";
+}
+
+function launchWatchesHtml() {
+  if (!state.launchWatches.length) return "<p>No active launch watches yet.</p>";
+  return `
+    <div class="mini-results">
+      ${state.launchWatches.map((watch) => `
+        <span>
+          $${escapeHtml(watch.ticker)} - ${escapeHtml(watch.status)} - ${escapeHtml(watch.walletCount)} wallet(s)
+          ${watch.status === "launch_watch" ? `<button data-launch-cancel="${escapeHtml(watch.id)}">Cancel</button>` : ""}
+        </span>
+      `).join("")}
+    </div>
+  `;
+}
+
 async function createWalletSet() {
   const labelInput = $("[data-wallet-label]");
   const countInput = $("[data-wallet-count-input]");
@@ -427,6 +790,121 @@ async function createWalletSet() {
     render();
   } catch (error) {
     status.textContent = error.message;
+  }
+}
+
+async function restoreWalletBackup() {
+  const textarea = $("[data-restore-text]");
+  const status = $("[data-restore-status]");
+  if (!textarea || !status) return;
+  const backupText = textarea.value.trim();
+  if (!backupText) {
+    status.textContent = "Choose a backup file or paste backup text first.";
+    return;
+  }
+
+  status.textContent = "Restoring wallets...";
+  try {
+    const data = await api("/api/web/wallets/restore", {
+      method: "POST",
+      body: JSON.stringify({ backupText })
+    });
+    state.restoreResult = data.restore;
+    if (data.restore?.downloads) {
+      state.downloads = data.restore.downloads;
+      if (data.restore.downloads.encryptedBackup) {
+        downloadText(data.restore.downloads.encryptedBackup.filename, data.restore.downloads.encryptedBackup.text);
+      }
+      if (data.restore.downloads.recoveryKeys) {
+        downloadText(data.restore.downloads.recoveryKeys.filename, data.restore.downloads.recoveryKeys.text);
+      }
+    }
+    textarea.value = "";
+    status.textContent = data.restore?.message || "Restore complete.";
+    await loadAll();
+    state.activeTab = "wallets";
+    render();
+  } catch (error) {
+    status.textContent = error.message;
+  }
+}
+
+async function exportWalletBackup() {
+  const status = $("[data-export-status]");
+  if (!status) return;
+
+  status.textContent = "Building backup files...";
+  try {
+    const data = await api("/api/web/wallets/export", {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    state.backupResult = data.backup;
+    if (data.backup?.downloads) {
+      state.downloads = data.backup.downloads;
+      if (data.backup.downloads.encryptedBackup) {
+        downloadText(data.backup.downloads.encryptedBackup.filename, data.backup.downloads.encryptedBackup.text);
+      }
+      if (data.backup.downloads.recoveryKeys) {
+        downloadText(data.backup.downloads.recoveryKeys.filename, data.backup.downloads.recoveryKeys.text);
+      }
+    }
+    status.textContent = data.backup?.message || "Backup ready.";
+    render();
+  } catch (error) {
+    status.textContent = error.message;
+  }
+}
+
+async function importWallet() {
+  const labelInput = $("[data-import-label]");
+  const secretInput = $("[data-import-secret]");
+  const status = $("[data-import-status]");
+  if (!labelInput || !secretInput || !status) return;
+  const label = labelInput.value.trim() || "Imported Wallet";
+  const secret = secretInput.value.trim();
+  if (!secret) {
+    status.textContent = "Paste a private key or JSON secret-key array first.";
+    return;
+  }
+
+  status.textContent = "Importing wallet...";
+  try {
+    const data = await api("/api/web/wallets/import", {
+      method: "POST",
+      body: JSON.stringify({ label, secret })
+    });
+    state.importResult = data.imported;
+    if (data.imported?.downloads) {
+      state.downloads = data.imported.downloads;
+      if (data.imported.downloads.encryptedBackup) {
+        downloadText(data.imported.downloads.encryptedBackup.filename, data.imported.downloads.encryptedBackup.text);
+      }
+      if (data.imported.downloads.recoveryKeys) {
+        downloadText(data.imported.downloads.recoveryKeys.filename, data.imported.downloads.recoveryKeys.text);
+      }
+    }
+    secretInput.value = "";
+    status.textContent = data.imported?.message || "Import complete.";
+    await loadAll();
+    state.activeTab = "wallets";
+    render();
+  } catch (error) {
+    status.textContent = error.message;
+  }
+}
+
+async function readRestoreFile(input) {
+  const status = $("[data-restore-status]");
+  const textarea = $("[data-restore-text]");
+  const file = input?.files?.[0];
+  if (!file || !textarea) return;
+  if (status) status.textContent = "Reading backup file...";
+  try {
+    textarea.value = await file.text();
+    if (status) status.textContent = "Backup loaded. Tap Restore Wallets.";
+  } catch (error) {
+    if (status) status.textContent = `Could not read file: ${error.message}`;
   }
 }
 
@@ -514,29 +992,185 @@ async function executeWebSell(percent) {
   }
 }
 
-async function saveEmail() {
-  const input = $("[data-email]");
-  const status = $("[data-email-status]");
-  if (!input || !status) return;
-  status.textContent = "Saving...";
+function readVolumeForm() {
+  const walletIndexes = checkedWalletIndexes("volume");
+  const walletGroup = $("[data-volume-group]")?.value?.trim() || "";
+  const tokenMint = $("[data-volume-token]")?.value?.trim() || "";
+  const amountSol = $("[data-volume-amount]")?.value || "";
+  const sellDelay = $("[data-volume-delay]")?.value || "5";
+  const takeProfitPct = $("[data-volume-tp]")?.value || "25";
+  const stopLossPct = $("[data-volume-sl]")?.value || "8";
+  const loopCount = $("[data-volume-loop]")?.value || "1";
+  const slippageBps = $("[data-volume-slippage]")?.value || "400";
+  if (!walletIndexes.length && !walletGroup) throw new Error("Choose at least one wallet or enter a group label.");
+  if (!tokenMint) throw new Error("Paste a token CA first.");
+  state.volumeToken = tokenMint;
+  return { walletIndexes, walletGroup, tokenMint, amountSol, sellDelay, takeProfitPct, stopLossPct, loopCount, slippageBps };
+}
+
+function setVolumeStatus(message) {
+  const status = $("[data-volume-status]");
+  if (status) status.textContent = message;
+}
+
+async function createVolumePlan() {
   try {
-    const data = await api("/api/web/email", {
+    const payload = readVolumeForm();
+    setVolumeStatus("Buying and arming plan...");
+    const data = await api("/api/web/volume/plan", {
       method: "POST",
-      body: JSON.stringify({ email: input.value.trim() })
+      body: JSON.stringify(payload)
     });
-    state.user.email = data.profile.email || "";
-    status.textContent = data.emailSent
-      ? "Saved. Reminder email sent."
-      : data.emailError
-        ? `Saved. Email send skipped: ${data.emailError}`
-        : "Saved. Email sending is not configured on Render yet.";
+    state.volumeResult = data.plan;
+    await loadAll();
+    state.activeTab = "volume";
+    render();
   } catch (error) {
-    status.textContent = error.message;
+    setVolumeStatus(error.message);
+  }
+}
+
+function readSniperEntryForm(tokenMint) {
+  const walletIndexes = checkedWalletIndexes("sniper");
+  const walletGroup = $("[data-sniper-group]")?.value?.trim() || "";
+  const amountSol = $("[data-sniper-amount]")?.value || "";
+  const sellDelay = $("[data-sniper-delay]")?.value || (state.scanMode === "pumpsnipe" ? "3" : "5");
+  const takeProfitPct = $("[data-sniper-tp]")?.value || (state.scanMode === "pumpsnipe" ? "40" : "25");
+  const stopLossPct = $("[data-sniper-sl]")?.value || "8";
+  const slippageBps = $("[data-sniper-slippage]")?.value || (state.scanMode === "pumpsnipe" ? "300" : "400");
+  if (!walletIndexes.length && !walletGroup) throw new Error("Choose at least one wallet or enter a group label.");
+  if (!tokenMint) throw new Error("Pick a token first.");
+  state.tradeToken = tokenMint;
+  state.volumeToken = tokenMint;
+  state.bundleToken = tokenMint;
+  return {
+    mode: state.scanMode,
+    tokenMint,
+    walletIndexes,
+    walletGroup,
+    amountSol,
+    sellDelay,
+    takeProfitPct,
+    stopLossPct,
+    slippageBps,
+    loopCount: "1"
+  };
+}
+
+function setSniperStatus(message) {
+  const status = $("[data-sniper-status]");
+  if (status) status.textContent = message;
+}
+
+async function createSniperEntry(tokenMint) {
+  try {
+    const payload = readSniperEntryForm(tokenMint);
+    setSniperStatus("Buying and arming exits...");
+    const data = await api("/api/web/sniper/entry", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    state.sniperResult = data.plan;
+    await loadAll();
+    state.activeTab = "sniper";
+    render();
+  } catch (error) {
+    setSniperStatus(error.message);
+  }
+}
+
+function checkedWalletIndexes(prefix) {
+  return [...document.querySelectorAll(`[data-${prefix}-wallet]:checked`)].map((input) => input.value);
+}
+
+function setBundleStatus(message) {
+  const status = $("[data-bundle-status]");
+  if (status) status.textContent = message;
+}
+
+function readBundleForm() {
+  const tokenMint = $("[data-bundle-token]")?.value?.trim() || "";
+  const walletIndexes = checkedWalletIndexes("bundle");
+  const walletGroup = $("[data-bundle-group]")?.value?.trim() || "";
+  const amountSol = $("[data-bundle-amount]")?.value || "";
+  const percent = $("[data-bundle-percent]")?.value || "100";
+  const slippageBps = $("[data-bundle-slippage]")?.value || "400";
+  if (!tokenMint) throw new Error("Paste a token CA first.");
+  if (!walletIndexes.length && !walletGroup) throw new Error("Choose at least one wallet or enter a group label.");
+  state.bundleToken = tokenMint;
+  return { tokenMint, walletIndexes, walletGroup, amountSol, percent, slippageBps };
+}
+
+async function executeBundle(action) {
+  try {
+    const payload = readBundleForm();
+    setBundleStatus(action === "buy" ? "Sending bundle buy..." : "Sending bundle sell...");
+    const data = await api(`/api/web/bundle/${action}`, {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    state.bundleResult = data.bundle;
+    await loadAll();
+    state.activeTab = "bundle";
+    render();
+  } catch (error) {
+    setBundleStatus(error.message);
+  }
+}
+
+function setLaunchStatus(message) {
+  const status = $("[data-launch-status]");
+  if (status) status.textContent = message;
+}
+
+function readLaunchForm() {
+  const ticker = $("[data-launch-ticker]")?.value?.trim() || "";
+  const walletIndexes = checkedWalletIndexes("launch");
+  const walletGroup = $("[data-launch-group]")?.value?.trim() || "";
+  const amountSol = $("[data-launch-amount]")?.value || "";
+  const takeProfitPct = $("[data-launch-tp]")?.value || "40";
+  const stopLossPct = $("[data-launch-sl]")?.value || "8";
+  const sellDelay = $("[data-launch-delay]")?.value || "180";
+  const slippageBps = $("[data-launch-slippage]")?.value || "300";
+  if (!ticker) throw new Error("Enter a ticker to watch.");
+  if (!walletIndexes.length && !walletGroup) throw new Error("Choose at least one wallet or enter a group label.");
+  return { ticker, walletIndexes, walletGroup, amountSol, takeProfitPct, stopLossPct, sellDelay, slippageBps };
+}
+
+async function startLaunchWatch() {
+  try {
+    const payload = readLaunchForm();
+    setLaunchStatus("Arming launch watch...");
+    const data = await api("/api/web/launch/watch", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    state.launchResult = data.watch;
+    await loadAll();
+    state.activeTab = "launch";
+    render();
+  } catch (error) {
+    setLaunchStatus(error.message);
+  }
+}
+
+async function cancelLaunchWatch(planId) {
+  try {
+    const data = await api("/api/web/launch/cancel", {
+      method: "POST",
+      body: JSON.stringify({ planId })
+    });
+    state.launchResult = data.watch;
+    await loadAll();
+    state.activeTab = "launch";
+    render();
+  } catch (error) {
+    setLaunchStatus(error.message);
   }
 }
 
 function walletsHtml() {
-  const create = `${createWalletSection()}${downloadsHtml()}`;
+  const create = `${createWalletSection()}${importWalletSection()}${backupRestoreSection()}${downloadsHtml()}`;
   if (!state.wallets.length) return `${create}${emptyState("No wallets yet", "Create a wallet set above to get started on web.")}`;
   return `
     ${create}
@@ -598,23 +1232,111 @@ function pnlHtml() {
 
 function sniperHtml() {
   const modes = [
-    ["safe", "Safe"],
-    ["smart", "Smart"],
-    ["fast", "Fast"],
+    ["safe", "Safe Picks"],
+    ["smart", "Smart Accumulation"],
+    ["fast", "Fast Movers"],
+    ["pumpsnipe", "PumpSnipe"],
     ["moonshot", "Low MC"],
-    ["meme", "Meme"],
-    ["long", "Long"]
+    ["meme", "Narratives"],
+    ["long", "Long Term"]
   ];
+  const activeLabel = modes.find(([mode]) => mode === state.scanMode)?.[1] || "Picks";
   return `
     <div class="mode-row">
       ${modes.map(([mode, label]) => `<button data-scan-mode="${mode}" data-active="${state.scanMode === mode}">${label}</button>`).join("")}
     </div>
+    <p class="scan-meta">${escapeHtml(sniperModeDescription(state.scanMode))}</p>
     <div class="section-actions">
-      <button class="primary" data-refresh-scan>Refresh Picks</button>
+      <button class="primary" data-refresh-scan>Refresh ${escapeHtml(activeLabel)}</button>
       <button data-tab="trade">Trade Desk</button>
     </div>
+    ${sniperSetupHtml()}
     ${state.scan ? sniperRowsHtml() : emptyState("No scan loaded", "Pick a mode or tap Refresh Picks.")}
   `;
+}
+
+function sniperModeDescription(mode) {
+  const descriptions = {
+    safe: "Safer-looking picks with stronger liquidity, cleaner trend, lower risk flags, and no obvious dump/sell-pressure pattern.",
+    smart: "Accumulation-style picks: buyer pressure, steady volume, and cleaner momentum without obvious sell pressure.",
+    fast: "Fast movers with volume picking up and a cleaner short-term trend for quicker in-and-out trades.",
+    pumpsnipe: "Very early pump-style launches, usually lower market cap, with enough volume/liquidity to attempt a quick trade.",
+    moonshot: "Low market-cap picks in the 4k-40k range with usable volume and no active dump signal.",
+    meme: "Narrative picks based on token metadata/keywords plus volume and trend checks. Add a social feed later for true social velocity.",
+    long: "Longer-hold candidates with steadier accumulation signals and less short-term dump pressure."
+  };
+  return descriptions[mode] || descriptions.safe;
+}
+
+function sniperSetupHtml() {
+  if (!state.wallets.length) {
+    return emptyState("Create wallets to snipe", "Sniper can scan without wallets, but buying needs at least one managed wallet.");
+  }
+
+  const isPump = state.scanMode === "pumpsnipe";
+  return `
+    <section class="trade-card sniper-setup">
+      <div class="trade-head">
+        <div>
+          <h3>${isPump ? "PumpSnipe Setup" : "Sniper Buy Setup"}</h3>
+          <p>Select wallets once, then tap Snipe on any pick. Amount is per selected wallet.</p>
+        </div>
+      </div>
+      <div class="wallet-checks">
+        ${walletChecksHtml("sniper")}
+      </div>
+      ${walletGroupHtml("sniper")}
+      <div class="volume-grid">
+        <label>
+          Buy Per Wallet
+          <input data-sniper-amount type="number" min="0" step="0.01" value="0.1">
+        </label>
+        <label>
+          Take Profit
+          <select data-sniper-tp>
+            <option value="15">+15%</option>
+            <option value="25" ${isPump ? "" : "selected"}>+25%</option>
+            <option value="40" ${isPump ? "selected" : ""}>+40%</option>
+            <option value="50">+50%</option>
+            <option value="100">+100%</option>
+          </select>
+        </label>
+        <label>
+          Stop Loss
+          <select data-sniper-sl>
+            <option value="8" selected>-8%</option>
+            <option value="10">-10%</option>
+            <option value="15">-15%</option>
+          </select>
+        </label>
+        <label>
+          Fallback Sell
+          <select data-sniper-delay>
+            <option value="1">1 min</option>
+            <option value="3" ${isPump ? "selected" : ""}>3 min</option>
+            <option value="5" ${isPump ? "" : "selected"}>5 min</option>
+            <option value="15">15 min</option>
+          </select>
+        </label>
+        <label>
+          Slippage
+          <select data-sniper-slippage>
+            <option value="300" ${isPump ? "selected" : ""}>3%</option>
+            <option value="400" ${isPump ? "" : "selected"}>4%</option>
+            <option value="500">5%</option>
+          </select>
+        </label>
+      </div>
+      <p class="trade-status" data-sniper-status>${state.sniperResult ? escapeHtml(state.sniperResult.message || "Sniper plan armed.") : "Ready. Tap Snipe on a pick below."}</p>
+      ${sniperResultHtml()}
+    </section>
+  `;
+}
+
+function sniperResultHtml() {
+  const row = state.sniperResult;
+  if (!row?.results?.length) return "";
+  return `<div class="mini-results">${row.results.map((item) => `<span data-ok="${item.ok ? "true" : "false"}">${escapeHtml(item.message || item)}</span>`).join("")}</div>`;
 }
 
 function sniperRowsHtml() {
@@ -641,6 +1363,7 @@ function sniperRowsHtml() {
           <code>${row.tokenMint}</code>
           <div class="card-actions">
             <button data-copy="${row.tokenMint}">Copy CA</button>
+            <button class="primary" data-sniper-buy="${row.tokenMint}">Snipe</button>
             <button data-use-token="${row.tokenMint}">Trade</button>
             <a href="${row.dexUrl}" target="_blank" rel="noreferrer">Dex</a>
           </div>
@@ -671,12 +1394,12 @@ document.addEventListener("click", async (event) => {
   const target = event.target.closest("button, a");
   if (!target) return;
 
-  if (target.matches("[data-login-submit]")) login();
   if (target.matches("[data-web-signup]")) createWebAccount();
-  if (target.matches("[data-email-code]")) requestEmailCode();
   if (target.matches("[data-logout]")) logout();
-  if (target.matches("[data-email-save]")) saveEmail();
   if (target.matches("[data-create-wallets]")) createWalletSet();
+  if (target.matches("[data-restore-backup]")) restoreWalletBackup();
+  if (target.matches("[data-export-backup]")) exportWalletBackup();
+  if (target.matches("[data-import-wallet]")) importWallet();
   if (target.matches("[data-download]")) {
     const file = state.downloads?.[target.dataset.download];
     if (file) downloadText(file.filename, file.text);
@@ -696,13 +1419,32 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-trade-sell-custom]")) {
     await executeWebSell($("[data-sell-custom]")?.value);
   }
+  if (target.matches("[data-volume-start]")) {
+    await createVolumePlan();
+  }
+  if (target.matches("[data-sniper-buy]")) {
+    await createSniperEntry(target.dataset.sniperBuy);
+  }
+  if (target.matches("[data-bundle-buy]")) {
+    await executeBundle("buy");
+  }
+  if (target.matches("[data-bundle-sell]")) {
+    await executeBundle("sell");
+  }
+  if (target.matches("[data-launch-start]")) {
+    await startLaunchWatch();
+  }
+  if (target.matches("[data-launch-cancel]")) {
+    await cancelLaunchWatch(target.dataset.launchCancel);
+  }
   if (target.matches("[data-use-token]")) {
     state.tradeToken = target.dataset.useToken || "";
+    state.volumeToken = target.dataset.useToken || "";
+    state.bundleToken = target.dataset.useToken || "";
     state.activeTab = "trade";
     render();
   }
   if (target.matches("[data-refresh-all]")) loadAll().catch((error) => setError(error.message));
-  if (target.matches("[data-open-bot]")) window.open(botStartUrl(), "_blank", "noopener,noreferrer");
 
   if (target.matches("[data-tab]")) {
     state.activeTab = target.dataset.tab;
@@ -728,8 +1470,11 @@ document.addEventListener("click", async (event) => {
   }
 });
 
-codeInput.addEventListener("keydown", (event) => {
-  if (event.key === "Enter") login();
+document.addEventListener("change", async (event) => {
+  const target = event.target;
+  if (target?.matches?.("[data-restore-file]")) {
+    await readRestoreFile(target);
+  }
 });
 
 loadSession();

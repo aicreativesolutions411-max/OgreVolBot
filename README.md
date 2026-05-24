@@ -112,6 +112,12 @@ The web dashboard can create wallet sets directly. After web wallet creation, it
 
 The web Trade tab is for simple one-wallet trading from the browser. It uses the same backend wallet encryption, Jupiter swap path, token safety precheck, slippage settings, and fee logic as the Telegram Trade button. Scanner rows can hand a CA straight into the Trade tab so users can stay on the webpage.
 
+The web Volume tab creates the same timed position plan used by the Telegram Volume button: buy now, then sell by timer, take-profit, stop-loss, or repeat cycle. It is a position-management feature for the user's own wallet, not a fake-volume tool.
+
+The web Bundle tab exposes multi-wallet bundle buy/sell from the page. Users select the exact managed wallets, paste a token CA, set buy amount per wallet or sell percent, choose slippage, and run the bundle.
+
+The web Launch Snipe tab exposes Manual Launch Snipe from the page. Users preset ticker, wallets, buy amount, take-profit, stop-loss, fallback timer, and slippage; the backend keeps scanning the configured launch/profile feeds until a matching ticker appears, then buys with the preset wallets.
+
 The web dashboard has an optional email field. If `RESEND_API_KEY` and `EMAIL_FROM` are set on Render, users can request a fresh email login code later. Email never carries private keys, backup files, or permanent login tokens.
 
 The Render bot also serves the same built portal at `/portal` after `npm run build:web`, but Cloudflare Pages is recommended for the public website.
@@ -189,7 +195,7 @@ The main menu also includes **OgreSniper**. It provides:
 - Scan Early Plays from latest Solana token profiles, with direct Snipe buttons
 - AutoSnipe and PumpSnipe rotate away from recently shown/bought tokens when enough candidates are available, then let users keep the default exits or customize TP/SL before confirming
 - Manual Launch Snipe lets a user enter a ticker ahead of launch, preselect wallets/SOL/exits/slippage, and watch live Solana launch/profile feeds for a matching ticker
-- Modes: Safe Scan, Smart Money Scan, Fast Scalp Scan, Low Cap Scan, Meme Scan, and AI Scan. Tapping a mode immediately scans that category.
+- Modes: Safe Picks, Smart Accumulation, Fast Movers, PumpSnipe, Low MC, Narratives, and Long Term. Tapping a mode immediately scans that category and refreshes the six quick-pick buttons for that style.
 
 OgreSniper scoring is heuristic. It uses Dexscreener/Pump.fun metadata and available market signals to estimate entry score, momentum, rug risk, exit risk, and manipulation score. It does not guarantee profitable trades, and it does not bypass the normal confirm screen.
 
@@ -199,7 +205,7 @@ OgreSniper options:
 - **AutoSnipe** defaults to +25% take-profit, -8% stop-loss, 400 bps slippage, and a full-bag exit. After the SOL amount, users can tap **Use Default** or **Customize**.
 - **PumpSnipe** defaults to +40% take-profit, -8% stop-loss, 300 bps slippage, and a full-bag exit. It accepts lower market-cap early setups than AutoSnipe and also supports **Customize** before confirm.
 - **Manual Launch Snipe** watches for a ticker the user enters ahead of time, then buys with the preselected wallets once a matching live launch/profile appears. By default it uses the bot's current Solana launch/profile feeds. If you set `PHOTON_NEW_PAIRS_URL`, the watcher checks that feed first and can pass `PHOTON_API_KEY` as a bearer token. It scans every `MANUAL_LAUNCH_SCAN_INTERVAL_MS` while awake, defaults to `1500` ms, supports `500` ms on paid/private RPC setups, uses short burst caching so multiple watches do not duplicate the same feed calls, and sends **Cancel Watch** controls after the plan is armed and under **Active Launch Watches**.
-- **Modes** adjust score/risk strictness and immediately run that category scan: Safe Scan, Smart Money Scan, Fast Scalp Scan, Low Cap Scan, Meme Scan, and AI Scan.
+- **Modes** adjust score/risk strictness and immediately run that category scan: Safe Picks, Smart Accumulation, Fast Movers, PumpSnipe, Low MC, Narratives, and Long Term.
 
 Fast scan flow:
 
@@ -214,7 +220,7 @@ Fast scan flow:
 Mode scan flow:
 
 1. Tap **Modes**.
-2. Pick the category: Safe, Smart Money, Fast Scalp, Low Cap, Meme, or AI.
+2. Pick the category: Safe Picks, Smart Accumulation, Fast Movers, PumpSnipe, Low MC, Narratives, or Long Term.
 3. The bot saves that mode and shows ranked picks for that category.
 4. Tap a **Snipe** button, choose wallets and amount, set profit/loss settings, then confirm.
 
@@ -294,7 +300,7 @@ DATA_DIR=./data
 ALLOW_EPHEMERAL_STORAGE=true
 ```
 
-But local files can reset whenever Render redeploys, restarts, or spins down the free instance. The bot automatically sends each user an encrypted backup file after wallet creation, wallet import, and wallet restore. Users can also tap **Export Backup** any time, then use **Restore Backup** if the free service resets.
+But local files can reset whenever Render redeploys, restarts, or spins down the free instance. The bot automatically sends each user an encrypted backup file after wallet creation, wallet import, and wallet restore. Users can also tap **Export Backup** in Telegram or **Download Current Backup** on the web panel any time, then use **Restore Backup** if the free service resets.
 
 Keep `APP_SECRET` the same forever. Backups are encrypted with the bot's `APP_SECRET`; if that value changes, old backups and stored wallets cannot be restored.
 
@@ -344,7 +350,7 @@ wallet-backup-ogretest-123456789-20260524014233-HTHf-Wdnb-a1b2c3d4.txt
 
 ### Paid Persistent Option
 
-For production, use a paid Render service with a persistent disk:
+For production, use a paid Render service with a persistent disk. The included `render.yaml` is set up for a Starter web service with a 1 GB disk mounted at `/var/data`:
 
 ```bash
 DATA_DIR=/var/data

@@ -498,7 +498,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
         telegramBotUsername: CONFIG.telegramBotUsername,
         telegramBotUrl: telegramBotStartUrl(),
         socials: brandSocialLinks(),
-        features: ["wallets", "balances", "positions", "pnl", "sniper-scan", "one-wallet-trade"]
+        features: ["wallets", "balances", "positions", "pnl", "sniper-scan", "one-wallet-trade", "volume-plans", "bundle", "launch-watch"]
       });
       return;
     }
@@ -589,6 +589,35 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "POST" && pathname === "/api/web/wallets/restore") {
+      const body = await readJsonRequestBody(request);
+      const result = await restoreWebWalletBackup(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        restore: result
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/wallets/export") {
+      const result = await exportWebWalletBackup(auth.userId);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        backup: result
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/wallets/import") {
+      const body = await readJsonRequestBody(request);
+      const result = await importWebWallet(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        imported: result
+      });
+      return;
+    }
+
     if (request.method === "POST" && pathname === "/api/web/trade/buy") {
       const body = await readJsonRequestBody(request);
       const result = await webTradeBuy(auth.userId, body);
@@ -605,6 +634,64 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendWebJson(request, response, 200, {
         ok: true,
         trade: result
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/volume/plan") {
+      const body = await readJsonRequestBody(request);
+      const result = await webCreateVolumePlan(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        plan: result
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/bundle/buy") {
+      const body = await readJsonRequestBody(request);
+      const result = await webBundleBuy(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        bundle: result
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/bundle/sell") {
+      const body = await readJsonRequestBody(request);
+      const result = await webBundleSell(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        bundle: result
+      });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/launch/watches") {
+      sendWebJson(request, response, 200, {
+        ok: true,
+        watches: await webLaunchWatches(auth.userId)
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/launch/watch") {
+      const body = await readJsonRequestBody(request);
+      const result = await webCreateLaunchWatch(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        watch: result
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/launch/cancel") {
+      const body = await readJsonRequestBody(request);
+      const result = await webCancelLaunchWatch(auth.userId, body.planId);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        watch: result
       });
       return;
     }
@@ -638,6 +725,16 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendWebJson(request, response, 200, {
         ok: true,
         scan: await webSniperScan(auth.userId, mode)
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/sniper/entry") {
+      const body = await readJsonRequestBody(request);
+      const result = await webCreateSniperEntry(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        plan: result
       });
       return;
     }
@@ -4042,6 +4139,7 @@ function timedPlanExitSource(plan) {
   if (plan.source === "pumpsnipe") return "pumpsnipe_exit";
   if (plan.source === "manual_launch_snipe") return "manual_launch_snipe_exit";
   if (plan.source === "auto_bundle") return "auto_bundle_exit";
+  if (plan.source === "web_volume") return "web_volume_exit";
   return "timed_plan";
 }
 
@@ -4061,7 +4159,7 @@ async function processTradePlans() {
       if (plan.status === "launch_watch") {
         const result = await processLaunchWatchPlan(plan, walletStore);
         if (result.changed) changed = true;
-        if (result.message) {
+        if (result.message && plan.chatId) {
           await say(plan.chatId, withBrandFooter(result.message));
         }
         continue;
@@ -4085,14 +4183,14 @@ async function processTradePlans() {
         changed = true;
       }
 
-      if (walletMessages.length > 0) {
+      if (walletMessages.length > 0 && plan.chatId) {
         await say(plan.chatId, withBrandFooter([
           `${plan.autoBundle ? "Auto Bundle update" : "Timed trade plan update"}: ${plan.id}`,
           ...walletMessages
         ].join("\n")));
       }
 
-      for (const tokenMint of pnlCardTokens) {
+      for (const tokenMint of plan.chatId ? pnlCardTokens : []) {
         await sendPnlCard(plan.chatId, plan.userId, tokenMint, { quietNoData: true });
       }
     }
@@ -4423,14 +4521,14 @@ async function processDcaPlans() {
         changed = true;
       }
 
-      if (messages.length > 0) {
+      if (messages.length > 0 && plan.chatId) {
         await say(plan.chatId, withBrandFooter([
           `DCA ${plan.side} update: ${plan.id}`,
           ...messages
         ].join("\n")));
       }
 
-      for (const tokenMint of pnlCardTokens) {
+      for (const tokenMint of plan.chatId ? pnlCardTokens : []) {
         await sendPnlCard(plan.chatId, plan.userId, tokenMint, { quietNoData: true });
       }
     }
@@ -5482,20 +5580,20 @@ async function showSniperModes(chatId, userId, messageId = null) {
     "",
     "Tap a mode to scan that category now. Each mode returns ranked picks with Snipe buttons, chart links, and copyable CA lines.",
     "",
-    "Safe Mode: stricter score/risk filters.",
-    "Smart Money Only: waits for stronger quality signals.",
-    "Fast Scalps: quicker auto-exit defaults.",
-    "Low Cap Moonshots: focuses on low market-cap picks under $30K when available.",
-    "Meme Momentum: prioritizes social/meta language.",
-    "Long Term: looks for stronger day-or-two setups with a 2-day timer.",
+    "Safe Picks: stronger liquidity, cleaner trend, lower risk flags.",
+    "Smart Accumulation: buyer pressure and steady volume without obvious sell pressure.",
+    "Fast Movers: volume picking up with cleaner short-term momentum.",
+    "Low MC Picks: focuses on $4K-$40K market caps with usable volume.",
+    "Narratives: metadata/keyword narrative matches plus volume and trend checks.",
+    "Long Term: steadier accumulation signals for longer holds.",
     `AutoSnipe: fresh-scans, auto-picks one high-conviction scalp setup, then uses +${AUTOSNIPE_TAKE_PROFIT_PCT}% TP / -${AUTOSNIPE_STOP_LOSS_PCT}% SL / ${AUTOSNIPE_SLIPPAGE_BPS} bps slippage.`,
     `PumpSnipe: focuses on very early pump-style launches, then uses +${PUMPSNIPE_TAKE_PROFIT_PCT}% TP / -${PUMPSNIPE_STOP_LOSS_PCT}% SL / ${PUMPSNIPE_SLIPPAGE_BPS} bps slippage by default.`
   ].join("\n")), {
     inline_keyboard: [
       [{ text: "Auto", callback_data: "sniper_auto_menu" }],
-      [{ text: "Safe Scan", callback_data: "sniper_mode_safe" }, { text: "Smart Money Scan", callback_data: "sniper_mode_smart" }],
-      [{ text: "Fast Scalp Scan", callback_data: "sniper_mode_fast" }, { text: "Low Cap Scan", callback_data: "sniper_mode_moonshot" }],
-      [{ text: "Meme Scan", callback_data: "sniper_mode_meme" }, { text: "Long Term", callback_data: "sniper_mode_long" }],
+      [{ text: "Safe Picks", callback_data: "sniper_mode_safe" }, { text: "Smart Accumulation", callback_data: "sniper_mode_smart" }],
+      [{ text: "Fast Movers", callback_data: "sniper_mode_fast" }, { text: "Low MC Picks", callback_data: "sniper_mode_moonshot" }],
+      [{ text: "Narratives", callback_data: "sniper_mode_meme" }, { text: "Long Term", callback_data: "sniper_mode_long" }],
       [{ text: "Back", callback_data: "sniper_menu" }]
     ]
   });
@@ -5684,14 +5782,18 @@ async function showSniperScan(chatId, userId, messageId = null, options = {}) {
   const fallbackRows = scored
     .filter((item) => isFallbackSniperPick(item, settings))
     .sort(compareSniperScores);
-  const qualifiedRows = strictRows.length >= 6 ? strictRows : fallbackRows;
+  const qualifiedRows = uniqueSniperScoreRows([...strictRows, ...fallbackRows])
+    .sort(compareSniperScores);
   const modeRows = qualifiedRows.filter((item) => isModeRelevantSniperPick(item, settings.mode));
   const looseModeRows = modeRows.length > 0
     ? modeRows
     : qualifiedRows.filter((item) => isLooseModeRelevantSniperPick(item, settings.mode));
-  const displayRows = looseModeRows.length > 0
-    ? looseModeRows
-    : settings.mode === "safe" ? qualifiedRows : [];
+  const cleanFallbackRows = qualifiedRows.filter((item) => isCleanTrendCandidate(item, { allowDumping: settings.mode === "moonshot", minM5: -18, minH1: -22, minH6: -35, maxManipulation: 88 }));
+  const displayRows = uniqueSniperScoreRows([
+    ...(looseModeRows.length > 0 ? looseModeRows : []),
+    ...(looseModeRows.length < 6 ? cleanFallbackRows : []),
+    ...(settings.mode === "safe" ? qualifiedRows : [])
+  ]);
   const rows = selectRotatingSniperRows(displayRows, scanState);
   rememberSniperScanRows(userId, settings.mode, rows);
 
@@ -6533,7 +6635,7 @@ function selectRotatingSniperRows(rows, scanState) {
   const previousShown = new Set(scanState.previousShown || []);
   const freshRows = rows.filter((row) => !previousShown.has(row.tokenMint));
   const pool = freshRows.length >= 6 ? freshRows : rows;
-  return uniqueSniperScoreRows(rotateItems(pool.slice(0, 42), scanState.displayOffset)).slice(0, 6);
+  return uniqueSniperScoreRows(rotateItems(pool.slice(0, 84), scanState.displayOffset)).slice(0, 6);
 }
 
 function rememberSniperScanRows(userId, mode, rows) {
@@ -7094,43 +7196,94 @@ function mergeSniperMetadata(dexValue, profile = {}, source = "profile") {
   };
 }
 
+function isCleanTrendCandidate(item, options = {}) {
+  const flags = new Set(item.riskFlags || []);
+  const minM5 = Number(options.minM5 ?? -12);
+  const minH1 = Number(options.minH1 ?? -12);
+  const minH6 = Number(options.minH6 ?? -20);
+  const maxManipulation = Number(options.maxManipulation ?? 82);
+  return item.category !== "Avoid"
+    && !flags.has("hard dump")
+    && !flags.has("sell pressure")
+    && (options.allowDumping || !flags.has("dumping"))
+    && Number(item.m5 || 0) >= minM5
+    && Number(item.h1 || 0) >= minH1
+    && Number(item.h6 || 0) >= minH6
+    && Number(item.manipulationScore || 0) <= maxManipulation;
+}
+
 function isModeRelevantSniperPick(item, mode) {
-  if (mode === "autosnipe") return Number(item.modeRelevance || 0) >= 4;
-  if (mode === "pumpsnipe") return Number(item.modeRelevance || 0) >= 3;
-  if (mode === "moonshot") return Number(item.modeRelevance || 0) >= 3 && item.marketCap > 0 && item.marketCap <= 30_000;
-  if (mode === "long") return Number(item.modeRelevance || 0) >= 3 && item.h6 >= 0;
-  return Number(item.modeRelevance || 0) >= (mode === "ai" || mode === "meme" ? 5 : 3);
+  if (mode === "autosnipe") return Number(item.modeRelevance || 0) >= 4 && isCleanTrendCandidate(item, { minM5: -6, minH1: -8, minH6: -15, maxManipulation: 70 });
+  if (mode === "pumpsnipe") return Number(item.modeRelevance || 0) >= 3 && isCleanTrendCandidate(item, { allowDumping: true, minM5: -18, minH1: -22, minH6: -30, maxManipulation: 92 });
+  if (mode === "moonshot") return Number(item.modeRelevance || 0) >= 3
+    && item.marketCap >= 4_000
+    && item.marketCap <= 40_000
+    && isCleanTrendCandidate(item, { allowDumping: true, minM5: -12, minH1: -15, minH6: -25, maxManipulation: 78 });
+  if (mode === "long") return Number(item.modeRelevance || 0) >= 3
+    && item.h6 >= -5
+    && item.h24 >= -10
+    && isCleanTrendCandidate(item, { minM5: -10, minH1: -8, minH6: -8, maxManipulation: 62 });
+  if (mode === "safe") return Number(item.modeRelevance || 0) >= 3
+    && isCleanTrendCandidate(item, { minM5: -6, minH1: -5, minH6: -10, maxManipulation: 58 });
+  if (mode === "smart") return Number(item.modeRelevance || 0) >= 3
+    && isCleanTrendCandidate(item, { minM5: -8, minH1: -6, minH6: -12, maxManipulation: 64 });
+  if (mode === "fast") return Number(item.modeRelevance || 0) >= 3
+    && isCleanTrendCandidate(item, { minM5: -6, minH1: -8, minH6: -15, maxManipulation: 72 });
+  if (mode === "ai" || mode === "meme") return Number(item.modeRelevance || 0) >= 5
+    && isCleanTrendCandidate(item, { allowDumping: true, minM5: -10, minH1: -10, minH6: -18, maxManipulation: 75 });
+  return Number(item.modeRelevance || 0) >= 3 && isCleanTrendCandidate(item);
 }
 
 function isLooseModeRelevantSniperPick(item, mode) {
   if (mode === "moonshot") {
-    return item.marketCap > 0
-      && item.marketCap <= 50_000
+    return item.marketCap >= 4_000
+      && item.marketCap <= 40_000
       && item.liquidityUsd >= 400
       && item.scalpScore >= 1
-      && !(item.riskFlags || []).includes("hard dump");
+      && (item.volume5m >= 50 || item.volumeH1 >= 500)
+      && isCleanTrendCandidate(item, { allowDumping: true, minM5: -14, minH1: -18, minH6: -28, maxManipulation: 82 });
+  }
+  if (mode === "pumpsnipe") {
+    return item.marketCap >= 3_000
+      && item.marketCap <= 60_000
+      && item.liquidityUsd >= 400
+      && item.scalpScore >= 1
+      && (item.volume5m >= 50 || item.volumeH1 >= 400)
+      && item.m5 >= -30
+      && isCleanTrendCandidate(item, { allowDumping: true, minM5: -30, minH1: -35, minH6: -45, maxManipulation: 94 });
   }
   if (mode === "fast") {
     return item.scalpScore >= 2
       && (item.volume5m >= 75 || item.volumeH1 >= 750)
       && item.m5 >= -12
-      && !(item.riskFlags || []).includes("hard dump");
+      && item.buyPressure >= 0.9
+      && isCleanTrendCandidate(item, { allowDumping: true, minM5: -12, minH1: -14, minH6: -20, maxManipulation: 78 });
   }
   if (mode === "meme" || mode === "ai") {
     return item.narrative > 0
       && item.scalpScore >= 1
-      && !(item.riskFlags || []).includes("hard dump");
+      && (item.volume5m >= 50 || item.volumeH1 >= 750)
+      && isCleanTrendCandidate(item, { allowDumping: true, minM5: -12, minH1: -14, minH6: -22, maxManipulation: 80 });
   }
   if (mode === "smart") {
     return item.buyPressure >= 1
-      && item.liquidityUsd >= 750
-      && item.scalpScore >= 1;
+      && item.liquidityUsd >= 1_000
+      && item.scalpScore >= 1
+      && item.m5 <= 35
+      && isCleanTrendCandidate(item, { minM5: -10, minH1: -10, minH6: -18, maxManipulation: 70 });
   }
   if (mode === "long") {
     return item.h1 >= -5
       && item.h6 >= -10
       && item.liquidityUsd >= 1_000
-      && !(item.riskFlags || []).includes("hard dump");
+      && item.volumeH1 >= 1_000
+      && isCleanTrendCandidate(item, { minM5: -12, minH1: -8, minH6: -12, maxManipulation: 68 });
+  }
+  if (mode === "safe") {
+    return item.liquidityUsd >= 5_000
+      && (item.volume5m >= 100 || item.volumeH1 >= 1_500)
+      && item.buyPressure >= 0.95
+      && isCleanTrendCandidate(item, { minM5: -8, minH1: -8, minH6: -12, maxManipulation: 66 });
   }
   return false;
 }
@@ -7409,10 +7562,10 @@ function sniperReasons(data) {
 
 function sniperModeDefaults(mode) {
   const defaults = {
-    safe: { mode: "safe", minScore: 78, maxRisk: 42 },
-    smart: { mode: "smart", minScore: 82, maxRisk: 45 },
+    safe: { mode: "safe", minScore: 74, maxRisk: 40 },
+    smart: { mode: "smart", minScore: 74, maxRisk: 48 },
     fast: { mode: "fast", minScore: 68, maxRisk: 58 },
-    moonshot: { mode: "moonshot", minScore: 62, maxRisk: 65 },
+    moonshot: { mode: "moonshot", minScore: 56, maxRisk: 70 },
     meme: { mode: "meme", minScore: 66, maxRisk: 58 },
     ai: { mode: "ai", minScore: 66, maxRisk: 58 },
     long: { mode: "long", minScore: 72, maxRisk: 48 },
@@ -7424,11 +7577,11 @@ function sniperModeDefaults(mode) {
 
 function sniperModeLabel(mode) {
   const labels = {
-    safe: "Safe Mode",
-    smart: "Smart Money Only",
-    fast: "Fast Scalps",
-    moonshot: "Low Cap Moonshots",
-    meme: "Meme Momentum",
+    safe: "Safe Picks",
+    smart: "Smart Accumulation",
+    fast: "Fast Movers",
+    moonshot: "Low MC Picks",
+    meme: "Narratives",
     ai: "AI Narrative",
     long: "Long Term",
     autosnipe: "AutoSnipe",
@@ -7473,16 +7626,16 @@ function sniperModeRelevance(mode, data) {
       + Number(data.volumeH1 >= 5_000 || data.volume5m >= 750);
   }
   if (mode === "smart") {
-    return Number(data.buyPressure >= 1.1)
-      + Number(data.volumeH1 >= 7_500 || data.volume5m >= 1_000)
-      + Number(data.h1 > 5 || data.m5 > 2)
-      + Number(data.h6 >= 0)
-      + Number(data.liquidityUsd >= 8_000);
+    return Number(data.buyPressure >= 1.05)
+      + Number(data.volumeH1 >= 3_500 || data.volume5m >= 400)
+      + Number(data.m5 >= -6 && data.m5 <= 18)
+      + Number(data.h1 >= -4 && data.h6 >= -10)
+      + Number(data.liquidityUsd >= 2_500);
   }
   if (mode === "fast") {
     return Number(data.m5 > 2 || data.h1 > 8)
-      + Number(data.volumeH1 >= 10_000 || data.volume5m >= 1_500)
-      + Number(data.buyPressure >= 1.15)
+      + Number(data.volumeH1 >= 5_000 || data.volume5m >= 750)
+      + Number(data.buyPressure >= 1.05)
       + Number(data.liquidityUsd >= 5_000)
       + Number(data.h6 >= -5 && data.m5 >= -8);
   }
@@ -7504,18 +7657,18 @@ function sniperModeRelevance(mode, data) {
       + Number(data.m5 >= -15 && data.h1 >= -20);
   }
   if (mode === "moonshot") {
-    return Number(data.marketCap > 0 && data.marketCap <= 30_000)
-      + Number(data.liquidityUsd >= 3_000)
-      + Number(data.buyPressure >= 1)
-      + Number(data.volumeH1 >= 3_000 || data.volume5m >= 500)
-      + Number(data.h1 >= -5 && data.m5 >= -10);
+    return Number(data.marketCap >= 4_000 && data.marketCap <= 40_000)
+      + Number(data.liquidityUsd >= 400)
+      + Number(data.buyPressure >= 0.85)
+      + Number(data.volumeH1 >= 500 || data.volume5m >= 50)
+      + Number(data.h1 >= -12 && data.m5 >= -12);
   }
   if (mode === "long") {
-    return Number(data.marketCap >= 30_000 && data.marketCap <= 1_500_000)
-      + Number(data.liquidityUsd >= 10_000)
+    return Number(data.marketCap >= 30_000 && data.marketCap <= 2_500_000)
+      + Number(data.liquidityUsd >= 5_000)
       + Number(data.buyPressure >= 1)
-      + Number(data.h1 >= 0 && data.h6 >= 0)
-      + Number(data.h24 >= -10);
+      + Number(data.h1 >= -4 && data.h6 >= -8)
+      + Number(data.h24 >= -12);
   }
   return 1;
 }
@@ -7909,7 +8062,7 @@ function howToPage(topic) {
         `- PumpSnipe: focuses on very early pump-style launches, including lower market-cap setups, and uses +${PUMPSNIPE_TAKE_PROFIT_PCT}% take-profit, -${PUMPSNIPE_STOP_LOSS_PCT}% stop-loss, ${PUMPSNIPE_SLIPPAGE_BPS} bps default slippage, and a ${formatDelay(PUMPSNIPE_SELL_DELAY_SECONDS)} fallback. After amount, tap Use Default or Customize.`,
         `- Manual Launch Snipe: enter a ticker before a launch, choose wallets, SOL size, TP/SL, and slippage, then the bot watches live launch/profile feeds about every ${(CONFIG.manualLaunchScanIntervalMs / 1000).toFixed(CONFIG.manualLaunchScanIntervalMs % 1000 === 0 ? 0 : 1)}s while awake and buys once that ticker appears. If PHOTON_NEW_PAIRS_URL is set, it checks that feed first. The armed watch message and Active Launch Watches screen both include cancel buttons.`,
         "- Scan Early Plays: checks latest Solana token profiles and shows the top ranked picks. Each pick has a Snipe button, Dex chart link in the text, and tap-to-copy CA.",
-        "- Modes: choose Safe Scan, Smart Money Scan, Fast Scalp Scan, Low Cap Scan, Meme Scan, or Long Term. Tapping a mode saves that mode and immediately scans that category.",
+        "- Modes: choose Safe Picks, Smart Accumulation, Fast Movers, PumpSnipe, Low MC, Narratives, or Long Term. Tapping a mode saves that mode and immediately scans that category.",
         "",
         "Auto flow:",
         "Tap Auto, choose AutoSnipe or PumpSnipe, let it scan, choose wallet(s), choose SOL amount, then Confirm. PumpSnipe rotates a wider early-launch pool so it can surface new pump-style options more often.",
@@ -8000,7 +8153,7 @@ function howToPage(topic) {
         "- Bundle Sell: paste token mint, choose wallets, choose percent to sell, choose slippage, confirm.",
         "- DCA Buy: split a total SOL amount per selected wallet into scheduled smaller buys.",
         "- DCA Sell: split a selected percent per wallet into scheduled smaller sells.",
-        "- Copy Trade: info/setup placeholder for a future wallet watcher.",
+        "- Copy Trade: info/setup item for a future wallet watcher.",
         "",
         "Use the main Volume button for auto-sell, take-profit, stop-loss, and Repeat cycles.",
         "",
@@ -9033,6 +9186,176 @@ async function createWebWalletSet(userId, body = {}) {
   };
 }
 
+async function restoreWebWalletBackup(userId, body = {}) {
+  const text = String(body.backupText || body.text || "").trim();
+  if (!text) {
+    const error = new Error("Choose a backup file or paste backup text first.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const backup = parseBackupPayload(text);
+  const backupWallets = backupWalletList(backup);
+  const store = await readWalletStore();
+  const existing = new Set(walletsForOwner(store, userId).map((wallet) => wallet.publicKey));
+  const restoredRecords = [];
+  const skippedExisting = [];
+  const errors = [];
+  let skipped = 0;
+
+  for (const [index, wallet] of backupWallets.entries()) {
+    let record;
+    try {
+      record = walletRecordFromBackup(wallet, userId, index);
+    } catch (error) {
+      skipped += 1;
+      errors.push(`Wallet ${index + 1}: ${friendlyBackupError(error)}`);
+      continue;
+    }
+
+    if (existing.has(record.publicKey)) {
+      skipped += 1;
+      skippedExisting.push(`${record.label}: ${record.publicKey}`);
+      continue;
+    }
+
+    store.wallets.push(record);
+    existing.add(record.publicKey);
+    restoredRecords.push(record);
+  }
+
+  if (restoredRecords.length === 0 && errors.length > 0) {
+    throw new Error(`Backup parsed but no wallets could be restored. ${errors.slice(0, 3).join(" ")}`);
+  }
+
+  await writeWalletStore(store);
+  await audit("web_restore_wallet_backup", {
+    userId,
+    backupId: backup?.backupId || backup?.id || "",
+    groupLabel: backup?.groupLabel || "",
+    restored: restoredRecords.length,
+    skipped,
+    errors: errors.slice(0, 5)
+  });
+
+  const downloads = restoredRecords.length > 0
+    ? webBackupDownloadsForWallets(
+      userId,
+      restoredRecords,
+      backup?.groupLabel || "restored-wallets",
+      "Automatic web backup after wallet restore."
+    )
+    : null;
+
+  return {
+    restoredCount: restoredRecords.length,
+    skippedCount: skipped,
+    skippedExisting: skippedExisting.slice(0, 25),
+    errors: errors.slice(0, 10),
+    downloads,
+    wallets: restoredRecords.map((wallet, index) => ({
+      index: index + 1,
+      label: wallet.label,
+      publicKey: wallet.publicKey,
+      shortPublicKey: shortMint(wallet.publicKey)
+    })),
+    message: `Restore complete: ${restoredRecords.length} wallet(s) restored, ${skipped} skipped.`
+  };
+}
+
+async function exportWebWalletBackup(userId) {
+  const store = await readWalletStore();
+  const wallets = walletsForOwner(store, userId);
+  if (wallets.length === 0) {
+    const error = new Error("No wallets found in this web account yet.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  await audit("web_export_wallet_backup", {
+    userId,
+    walletCount: wallets.length
+  });
+
+  return {
+    walletCount: wallets.length,
+    downloads: webBackupDownloadsForWallets(
+      userId,
+      wallets,
+      "current-web-wallets",
+      "Manual web backup export for all wallets currently loaded in this account."
+    ),
+    message: `Backup ready: ${wallets.length} wallet(s) exported.`
+  };
+}
+
+async function importWebWallet(userId, body = {}) {
+  const label = cleanLabel(String(body.label || "Imported Wallet"));
+  const secret = String(body.secret || body.privateKey || "").trim();
+  if (!secret) {
+    const error = new Error("Paste a private key or JSON secret-key array first.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const keypair = keypairFromSecret(secret);
+  const publicKey = keypair.publicKey.toBase58();
+  const store = await readWalletStore();
+  const existing = walletsForOwner(store, userId).find((wallet) => wallet.publicKey === publicKey);
+  if (existing) {
+    const error = new Error(`That wallet is already imported as ${existing.label}.`);
+    error.statusCode = 409;
+    throw error;
+  }
+
+  const record = walletRecord(label, keypair, userId);
+  store.wallets.push(record);
+  await writeWalletStore(store);
+  await audit("web_import_wallet", {
+    userId,
+    label,
+    publicKey
+  });
+
+  return {
+    label: record.label,
+    publicKey,
+    shortPublicKey: shortMint(publicKey),
+    downloads: webBackupDownloadsForWallets(
+      userId,
+      [record],
+      label,
+      "Automatic web backup after wallet import."
+    ),
+    message: `Imported ${record.label}: ${publicKey}`
+  };
+}
+
+function webBackupDownloadsForWallets(userId, wallets, groupLabel, note) {
+  if (!Array.isArray(wallets) || wallets.length === 0) return null;
+  const encryptedBackup = buildWalletBackupDocument(userId, note, groupLabel, wallets);
+  const recoveryKeys = buildPrivateKeyDocument(
+    userId,
+    wallets,
+    `solflare-recovery-${sanitizeFilenamePart(groupLabel)}-${userId}`,
+    {
+      title: "SOLFLARE / PHANTOM RECOVERY KEY FILE",
+      note
+    }
+  );
+
+  return {
+    encryptedBackup: {
+      filename: encryptedBackup.filename,
+      text: encryptedBackup.text
+    },
+    recoveryKeys: {
+      filename: recoveryKeys.filename,
+      text: recoveryKeys.text
+    }
+  };
+}
+
 async function webTradeBuy(userId, body = {}) {
   const store = await readWalletStore();
   const wallet = getWalletAt(store, parseWebWalletIndex(body.walletIndex), userId);
@@ -9127,6 +9450,458 @@ async function webTradeSell(userId, body = {}) {
     dexUrl: dexScreenerUrl(tokenMint),
     message: `${wallet.label} sold ${percent}% of ${shortMint(tokenMint)} for ${lamportsBigToSol(netLamports)} SOL after fee.`
   };
+}
+
+async function webCreateManagedBuyPlan(userId, wallets, body = {}, options = {}) {
+  const tokenMint = parsePublicKey(String(body.tokenMint || "")).toBase58();
+  const amountSol = parsePositiveNumber(String(body.amountSol || ""));
+  const amountLamports = solToLamports(amountSol);
+  const sellDelaySeconds = parseSellDelaySeconds(String(body.sellDelay || body.sellDelaySeconds || options.defaultSellDelay || "5"));
+  const sellPercent = parsePercent(String(body.sellPercent || "100"));
+  const takeProfitPct = parseTakeProfitPercent(String(body.takeProfitPct || options.defaultTakeProfitPct || "25"));
+  const stopLossPct = parseOptionalTriggerPercent(String(body.stopLossPct || options.defaultStopLossPct || "8"));
+  const loopCount = parseLoopCount(String(body.loopCount || "1"));
+  const slippageBps = parseWebSlippage(body.slippageBps || options.defaultSlippageBps);
+  const source = options.source || "web_volume";
+  const label = options.label || "Plan";
+  const results = [];
+  const tradeEvents = [];
+  const planWallets = [];
+
+  const now = Date.now();
+  await runWithConcurrency(wallets, CONFIG.bundleConcurrency, async (wallet) => {
+    try {
+      const result = await buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps, { trackTokenDelta: true });
+      const tokenAmount = result.tokenDeltaAmount || result.outputAmount || null;
+      tradeEvents.push({
+        userId,
+        type: "buy",
+        source,
+        tokenMint,
+        walletLabel: wallet.label,
+        walletPublicKey: wallet.publicKey,
+        solLamportsSpent: String(amountLamports),
+        tokenAmount,
+        signature: result.signature
+      });
+      planWallets.push({
+        label: wallet.label,
+        publicKey: wallet.publicKey,
+        basisLamports: amountLamports,
+        tokenOutAmount: tokenAmount,
+        buySignature: result.signature,
+        currentLoop: 1,
+        completedLoops: 0,
+        takeProfitPct: null,
+        completedTakeProfitLevels: [],
+        sellAfterAt: new Date(now + sellDelaySeconds * 1000).toISOString(),
+        status: "watching",
+        lastCheckedAt: null,
+        lastMovePct: null
+      });
+      results.push({
+        ok: true,
+        walletLabel: wallet.label,
+        walletPublicKey: wallet.publicKey,
+        signature: result.signature,
+        message: formatBuySuccessLine(wallet, result.amountLamports, result.feeLamports, result.swapLamports, result, result.feeStatus)
+      });
+    } catch (error) {
+      results.push({
+        ok: false,
+        walletLabel: wallet.label,
+        walletPublicKey: wallet.publicKey,
+        message: `${wallet.label}: buy failed - ${friendlyError(error)}`
+      });
+    }
+  });
+
+  if (planWallets.length === 0) {
+    throw new Error(`${label} was not created because no buys succeeded.\n\n${results.map((row) => row.message).join("\n")}`);
+  }
+
+  await recordTradeEvents(tradeEvents);
+
+  const plan = {
+    id: crypto.randomUUID(),
+    status: "watching",
+    userId,
+    chatId: null,
+    tokenMint,
+    source,
+    walletSelector: String(body.walletGroup || "").trim()
+      ? `group:${String(body.walletGroup).trim()}`
+      : Array.isArray(body.walletIndexes)
+      ? body.walletIndexes.join(",")
+      : String(body.walletIndex || planWallets.length),
+    amountSol,
+    sellDelayMinutes: sellDelaySeconds / 60,
+    sellDelaySeconds,
+    sellAfterAt: new Date(now + sellDelaySeconds * 1000).toISOString(),
+    sellPercent,
+    triggerSellPercent: 100,
+    loopCount,
+    takeProfitPct,
+    stopLossPct,
+    takeProfitMode: "single",
+    takeProfitLadder: [],
+    autoBundle: false,
+    slippageBps,
+    createdAt: new Date().toISOString(),
+    wallets: planWallets,
+    results: results.map((row) => row.message)
+  };
+
+  const plans = await readTradePlans();
+  plans.plans.push(plan);
+  await writeTradePlans(plans);
+  await audit(options.auditType || "web_create_managed_plan", {
+    userId,
+    planId: plan.id,
+    tokenMint,
+    wallets: planWallets.map((wallet) => wallet.publicKey),
+    walletCount: wallets.length,
+    successCount: planWallets.length,
+    amountSol,
+    sellDelaySeconds,
+    sellPercent,
+    takeProfitPct,
+    stopLossPct,
+    loopCount,
+    source,
+    slippageBps
+  });
+
+  setTimeout(() => void processTradePlans().catch((error) => {
+    console.error(`${label} immediate run failed:`, error.message);
+  }), 1_000);
+
+  return {
+    id: plan.id,
+    tokenMint,
+    shortMint: shortMint(tokenMint),
+    walletLabel: planWallets.length === 1 ? planWallets[0].label : `${planWallets.length}/${wallets.length} wallets`,
+    walletCount: wallets.length,
+    successCount: planWallets.length,
+    failedCount: Math.max(0, wallets.length - planWallets.length),
+    amountSol: lamportsToSol(amountLamports),
+    sellAfterAt: plan.sellAfterAt,
+    sellDelaySeconds,
+    sellPercent,
+    takeProfitPct,
+    stopLossPct,
+    loopCount,
+    slippageBps,
+    source,
+    results,
+    dexUrl: dexScreenerUrl(tokenMint),
+    message: `${label} armed: ${planWallets.length}/${wallets.length} wallet(s) bought ${shortMint(tokenMint)}. Watching TP +${takeProfitPct}%, SL -${stopLossPct}%, or timer.`
+  };
+}
+
+async function webCreateVolumePlan(userId, body = {}) {
+  const store = await readWalletStore();
+  const wallets = Array.isArray(body.walletIndexes) || String(body.walletGroup || "").trim()
+    ? webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup)
+    : [getWalletAt(store, parseWebWalletIndex(body.walletIndex), userId)];
+  return webCreateManagedBuyPlan(userId, wallets, body, {
+    source: "web_volume",
+    label: "Volume plan",
+    auditType: "web_create_volume_plan",
+    defaultSellDelay: "5",
+    defaultTakeProfitPct: "25",
+    defaultStopLossPct: "8",
+    defaultSlippageBps: 400
+  });
+}
+
+async function webCreateSniperEntry(userId, body = {}) {
+  const store = await readWalletStore();
+  const wallets = webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup);
+  const mode = normalizeSniperMode(body.mode || "safe");
+  const isPump = mode === "pumpsnipe";
+  return webCreateManagedBuyPlan(userId, wallets, { ...body, mode }, {
+    source: isPump ? "pumpsnipe" : "autosnipe",
+    label: isPump ? "PumpSnipe plan" : "Sniper plan",
+    auditType: "web_create_sniper_plan",
+    defaultSellDelay: isPump ? "3" : "5",
+    defaultTakeProfitPct: isPump ? "40" : "25",
+    defaultStopLossPct: "8",
+    defaultSlippageBps: isPump ? 300 : 400
+  });
+}
+
+async function webBundleBuy(userId, body = {}) {
+  const store = await readWalletStore();
+  const wallets = webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup);
+  const tokenMint = parsePublicKey(String(body.tokenMint || "")).toBase58();
+  const amountSol = parsePositiveNumber(String(body.amountSol || ""));
+  const amountLamports = solToLamports(amountSol);
+  const slippageBps = parseWebSlippage(body.slippageBps);
+  const results = [];
+  const tradeEvents = [];
+
+  await runWithConcurrency(wallets, CONFIG.bundleConcurrency, async (wallet) => {
+    try {
+      const result = await buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps, { trackTokenDelta: true });
+      results.push({
+        ok: true,
+        walletLabel: wallet.label,
+        walletPublicKey: wallet.publicKey,
+        spentSol: lamportsToSol(result.amountLamports),
+        netSwapSol: lamportsToSol(result.swapLamports),
+        feeSol: lamportsToSol(result.feeLamports),
+        signature: result.signature,
+        message: `${wallet.label}: bought with ${lamportsToSol(result.amountLamports)} SOL`
+      });
+      tradeEvents.push({
+        userId,
+        type: "buy",
+        source: "web_bundle",
+        tokenMint,
+        walletLabel: wallet.label,
+        walletPublicKey: wallet.publicKey,
+        solLamportsSpent: String(result.amountLamports),
+        tokenAmount: result.tokenDeltaAmount || result.outputAmount || null,
+        signature: result.signature
+      });
+    } catch (error) {
+      results.push({
+        ok: false,
+        walletLabel: wallet.label,
+        walletPublicKey: wallet.publicKey,
+        message: `${wallet.label}: buy failed - ${friendlyError(error)}`
+      });
+    }
+  });
+
+  await recordTradeEvents(tradeEvents);
+  await audit("web_bundle_buy", {
+    userId,
+    tokenMint,
+    walletCount: wallets.length,
+    successCount: tradeEvents.length,
+    amountSol,
+    slippageBps
+  });
+
+  return webBundleResult("bundle_buy", tokenMint, wallets.length, tradeEvents.length, results);
+}
+
+async function webBundleSell(userId, body = {}) {
+  const store = await readWalletStore();
+  const wallets = webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup);
+  const tokenMint = parsePublicKey(String(body.tokenMint || "")).toBase58();
+  const percent = parsePercent(String(body.percent || "100"));
+  const slippageBps = parseWebSlippage(body.slippageBps);
+  const results = [];
+  const tradeEvents = [];
+
+  await runWithConcurrency(wallets, CONFIG.bundleConcurrency, async (wallet) => {
+    try {
+      const sell = await sellTokenFromWallet(wallet, tokenMint, percent, slippageBps);
+      const outputLamports = BigInt(sell.outputLamports || 0);
+      const feeLamports = BigInt(sell.feeLamports || 0);
+      const netLamports = outputLamports > feeLamports ? outputLamports - feeLamports : 0n;
+      results.push({
+        ok: true,
+        walletLabel: wallet.label,
+        walletPublicKey: wallet.publicKey,
+        percent,
+        netSol: lamportsBigToSol(netLamports),
+        feeSol: lamportsBigToSol(feeLamports),
+        signature: sell.signature,
+        message: `${wallet.label}: sold ${percent}% for ${lamportsBigToSol(netLamports)} SOL after fee`
+      });
+      tradeEvents.push({
+        userId,
+        type: "sell",
+        source: "web_bundle",
+        tokenMint,
+        walletLabel: wallet.label,
+        walletPublicKey: wallet.publicKey,
+        tokenAmount: sell.tokenAmount,
+        solLamportsReceived: sell.outputLamports,
+        signature: sell.signature
+      });
+    } catch (error) {
+      results.push({
+        ok: false,
+        walletLabel: wallet.label,
+        walletPublicKey: wallet.publicKey,
+        message: `${wallet.label}: sell failed - ${friendlyError(error)}`
+      });
+    }
+  });
+
+  await recordTradeEvents(tradeEvents);
+  await audit("web_bundle_sell", {
+    userId,
+    tokenMint,
+    walletCount: wallets.length,
+    successCount: tradeEvents.length,
+    percent,
+    slippageBps
+  });
+
+  return webBundleResult("bundle_sell", tokenMint, wallets.length, tradeEvents.length, results);
+}
+
+function webBundleResult(type, tokenMint, walletCount, successCount, results) {
+  return {
+    type,
+    tokenMint,
+    shortMint: shortMint(tokenMint),
+    walletCount,
+    successCount,
+    failedCount: Math.max(0, walletCount - successCount),
+    dexUrl: dexScreenerUrl(tokenMint),
+    results,
+    message: `${type === "bundle_buy" ? "Bundle buy" : "Bundle sell"} complete: ${successCount}/${walletCount} wallet(s) succeeded.`
+  };
+}
+
+async function webCreateLaunchWatch(userId, body = {}) {
+  const store = await readWalletStore();
+  const wallets = webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup);
+  const ticker = cleanTickerSymbol(String(body.ticker || ""));
+  const amountSol = parsePositiveNumber(String(body.amountSol || ""));
+  const sellDelaySeconds = body.sellDelay || body.sellDelaySeconds
+    ? parseSellDelaySeconds(String(body.sellDelay || body.sellDelaySeconds))
+    : PUMPSNIPE_SELL_DELAY_SECONDS;
+  const takeProfitPct = parseTakeProfitPercent(String(body.takeProfitPct || PUMPSNIPE_TAKE_PROFIT_PCT));
+  const stopLossPct = parseOptionalTriggerPercent(String(body.stopLossPct || PUMPSNIPE_STOP_LOSS_PCT));
+  const slippageBps = parseWebSlippage(body.slippageBps || PUMPSNIPE_SLIPPAGE_BPS);
+  const plan = {
+    id: crypto.randomUUID(),
+    status: "launch_watch",
+    userId,
+    chatId: null,
+    source: "manual_launch_snipe",
+    launchTicker: ticker,
+    walletSelector: wallets.map((wallet) => wallet.label).join(", "),
+    amountSol,
+    sellDelayMinutes: sellDelaySeconds / 60,
+    sellDelaySeconds,
+    sellPercent: 100,
+    triggerSellPercent: 100,
+    loopCount: 1,
+    takeProfitPct,
+    stopLossPct,
+    takeProfitMode: "single",
+    takeProfitLadder: [],
+    autoBundle: false,
+    manualLaunch: true,
+    slippageBps,
+    createdAt: new Date().toISOString(),
+    lastScanAt: null,
+    wallets: wallets.map((wallet) => ({
+      label: wallet.label,
+      publicKey: wallet.publicKey,
+      status: "pending",
+      results: []
+    })),
+    results: [`Watching for ticker $${ticker}`]
+  };
+
+  const plans = await readTradePlans();
+  plans.plans.push(plan);
+  await writeTradePlans(plans);
+  await audit("web_create_manual_launch_snipe", {
+    userId,
+    planId: plan.id,
+    ticker,
+    wallets: wallets.map(publicWallet),
+    amountSol,
+    sellDelaySeconds,
+    takeProfitPct,
+    stopLossPct,
+    slippageBps
+  });
+  setTimeout(() => void processTradePlans().catch((error) => {
+    console.error("Web manual launch immediate scan failed:", error.message);
+  }), 250);
+
+  return webLaunchWatchRow(plan);
+}
+
+async function webLaunchWatches(userId) {
+  const plans = await readTradePlans();
+  return plans.plans
+    .filter((plan) => String(plan.userId) === String(userId) && ["launch_watch", "watching"].includes(plan.status) && plan.manualLaunch)
+    .sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0))
+    .slice(0, 20)
+    .map(webLaunchWatchRow);
+}
+
+async function webCancelLaunchWatch(userId, planId) {
+  const store = await readTradePlans();
+  const plan = store.plans.find((item) => item.id === String(planId || "") && String(item.userId) === String(userId));
+  if (!plan) {
+    throw new Error("Launch watch not found.");
+  }
+  if (plan.status !== "launch_watch") {
+    throw new Error("This launch watch is no longer scanning.");
+  }
+
+  plan.status = "canceled";
+  plan.canceledAt = new Date().toISOString();
+  plan.results = appendLimited([...(plan.results || []), "Canceled from web panel."]);
+  await writeTradePlans(store);
+  await audit("web_cancel_manual_launch_snipe", { userId, planId: plan.id, ticker: plan.launchTicker });
+  return webLaunchWatchRow(plan);
+}
+
+function webLaunchWatchRow(plan) {
+  return {
+    id: plan.id,
+    status: plan.status,
+    ticker: plan.launchTicker,
+    tokenMint: plan.tokenMint || null,
+    shortMint: plan.tokenMint ? shortMint(plan.tokenMint) : null,
+    walletCount: plan.wallets?.length || 0,
+    amountSol: plan.amountSol,
+    takeProfitPct: plan.takeProfitPct,
+    stopLossPct: plan.stopLossPct,
+    sellDelaySeconds: plan.sellDelaySeconds,
+    slippageBps: plan.slippageBps,
+    scanIntervalMs: CONFIG.manualLaunchScanIntervalMs,
+    createdAt: plan.createdAt,
+    lastScanAt: plan.lastScanAt || null,
+    results: (plan.results || []).slice(-6),
+    dexUrl: plan.tokenMint ? dexScreenerUrl(plan.tokenMint) : null,
+    message: plan.status === "launch_watch"
+      ? `Watching $${plan.launchTicker} every ${(CONFIG.manualLaunchScanIntervalMs / 1000).toFixed(CONFIG.manualLaunchScanIntervalMs % 1000 === 0 ? 0 : 1)}s while the backend is awake.`
+      : `Launch watch ${plan.status}.`
+  };
+}
+
+function webSelectedWallets(store, userId, walletIndexes, walletGroup = "") {
+  const ownerWallets = walletsForOwner(store, userId);
+  const group = String(walletGroup || "").trim().toLowerCase();
+  const indexes = group
+    ? ownerWallets
+      .map((wallet, index) => ({ wallet, index: index + 1 }))
+      .filter(({ wallet }) => {
+        const label = String(wallet.label || "").toLowerCase();
+        return label === group || label.startsWith(`${group} `);
+      })
+      .map(({ index }) => index)
+    : Array.isArray(walletIndexes)
+      ? walletIndexes.map((value) => Number.parseInt(value, 10))
+      : String(walletIndexes || "").toLowerCase() === "all"
+        ? ownerWallets.map((_, index) => index + 1)
+        : [];
+
+  const uniqueIndexes = [...new Set(indexes)].filter((index) => Number.isInteger(index) && index >= 1);
+  if (uniqueIndexes.length === 0) {
+    throw new Error(group ? `No wallets found for group "${walletGroup}".` : "Choose at least one wallet.");
+  }
+  if (uniqueIndexes.length > 20) {
+    throw new Error("Choose 20 wallets or fewer.");
+  }
+
+  return uniqueIndexes.map((index) => getWalletAt(store, index, userId));
 }
 
 function parseWebWalletIndex(value) {
@@ -9284,9 +10059,14 @@ async function webSniperScan(userId, mode) {
   const safeMode = normalizeSniperMode(mode);
   const settings = { ...sniperModeDefaults(safeMode), mode: safeMode };
   const scanState = nextSniperScanState(`web:${userId}`, safeMode);
-  const candidates = await fetchSniperCandidates();
+  const candidates = safeMode === "pumpsnipe"
+    ? await fetchPumpSnipeCandidates()
+    : await fetchSniperCandidates();
   const scored = [];
-  const scanPool = await hydrateSniperCandidates(rotateSniperCandidatePool(candidates, scanState));
+  const rotatedPool = safeMode === "pumpsnipe"
+    ? rotatePumpSnipeCandidatePool(candidates, scanState)
+    : rotateSniperCandidatePool(candidates, scanState);
+  const scanPool = await hydrateSniperCandidates(rotatedPool);
 
   await runWithConcurrency(scanPool, Math.min(6, Math.max(3, CONFIG.balanceConcurrency)), async (candidate) => {
     try {
@@ -9296,13 +10076,25 @@ async function webSniperScan(userId, mode) {
     }
   });
 
-  const strictRows = scored.filter((item) => isStrictSniperPick(item, settings)).sort(compareSniperScores);
-  const fallbackRows = scored.filter((item) => isFallbackSniperPick(item, settings)).sort(compareSniperScores);
-  const qualifiedRows = strictRows.length >= 6 ? strictRows : fallbackRows;
+  const strictRows = safeMode === "pumpsnipe"
+    ? scored.filter((item) => isPumpSnipePick(item)).sort(comparePumpSnipeScores)
+    : scored.filter((item) => isStrictSniperPick(item, settings)).sort(compareSniperScores);
+  const strictMints = new Set(strictRows.map((item) => item.tokenMint));
+  const fallbackRows = safeMode === "pumpsnipe"
+    ? scored.filter((item) => !strictMints.has(item.tokenMint)).filter((item) => isPumpSnipeBackupPick(item)).sort(comparePumpSnipeScores)
+    : scored.filter((item) => isFallbackSniperPick(item, settings)).sort(compareSniperScores);
+  const qualifiedRows = uniqueSniperScoreRows([...strictRows, ...fallbackRows])
+    .sort(safeMode === "pumpsnipe" ? comparePumpSnipeScores : compareSniperScores);
   const modeRows = qualifiedRows.filter((item) => isModeRelevantSniperPick(item, safeMode));
   const looseModeRows = modeRows.length > 0 ? modeRows : qualifiedRows.filter((item) => isLooseModeRelevantSniperPick(item, safeMode));
-  const displayRows = looseModeRows.length > 0 ? looseModeRows : safeMode === "safe" ? qualifiedRows : [];
+  const cleanFallbackRows = qualifiedRows.filter((item) => isCleanTrendCandidate(item, { allowDumping: safeMode === "pumpsnipe" || safeMode === "moonshot", minM5: -18, minH1: -22, minH6: -35, maxManipulation: 88 }));
+  const displayRows = uniqueSniperScoreRows([
+    ...(looseModeRows.length > 0 ? looseModeRows : []),
+    ...(looseModeRows.length < 6 ? cleanFallbackRows : []),
+    ...(safeMode === "safe" || safeMode === "pumpsnipe" ? qualifiedRows : [])
+  ]);
   const rows = selectRotatingSniperRows(displayRows, scanState).slice(0, 6);
+  rememberSniperScanRows(`web:${userId}`, safeMode, rows);
 
   return {
     mode: safeMode,
