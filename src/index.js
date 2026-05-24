@@ -2866,7 +2866,7 @@ async function preflightSniperSelectedRoute(session) {
     return { ok: false, reason: route.reason };
   }
 
-  return { ok: true, note: "selected-wallet buy and sell route precheck passed" };
+  return { ok: true, note: "selected-wallet buy route precheck passed" };
 }
 
 async function sendSniperPreflightFailure(chatId, session, reason) {
@@ -3017,22 +3017,34 @@ async function buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps, o
   }
 
   const trackMint = options.trackTokenDelta ? new PublicKey(tokenMint) : null;
-  const safetyOrder = await assertTokenBuySafety({
-    tokenMint,
-    taker: keypair.publicKey,
-    buyLamports: swapLamports,
-    slippageBps
-  });
-  const tokenBeforeRaw = trackMint ? await safeTokenRawBalance(keypair.publicKey, trackMint) : null;
+  let result;
+  let tokenBeforeRaw = null;
+  try {
+    const safetyOrder = await assertTokenBuySafety({
+      tokenMint,
+      taker: keypair.publicKey,
+      buyLamports: swapLamports,
+      slippageBps
+    });
+    tokenBeforeRaw = trackMint ? await safeTokenRawBalance(keypair.publicKey, trackMint) : null;
 
-  const result = await executeJupiterSwap({
-    signer: keypair,
-    inputMint: SOL_MINT,
-    outputMint: tokenMint,
-    amount: swapLamports,
-    slippageBps,
-    prebuiltOrder: safetyOrder
-  });
+    result = await executeJupiterSwap({
+      signer: keypair,
+      inputMint: SOL_MINT,
+      outputMint: tokenMint,
+      amount: swapLamports,
+      slippageBps,
+      prebuiltOrder: safetyOrder
+    });
+  } catch (error) {
+    throw enrichBuyError(error, {
+      balance,
+      amountLamports,
+      feeLamports,
+      swapLamports,
+      recommendedLamports
+    });
+  }
   invalidateWalletReadCache(wallet.publicKey);
   const tokenDeltaAmount = trackMint
     ? await readTokenDeltaAfterBuy(keypair.publicKey, trackMint, tokenBeforeRaw)
@@ -3899,18 +3911,6 @@ async function assertTokenBuySafety({ tokenMint, taker, buyLamports, slippageBps
   const estimatedTokenOut = BigInt(buyOrder.outAmount || buyOrder.outputAmount || 0);
   if (estimatedTokenOut <= 0n) {
     throw new Error("Token safety check failed: buy route returned zero token output.");
-  }
-
-  const sellOrder = await createJupiterOrder({
-    taker,
-    inputMint: tokenMint,
-    outputMint: SOL_MINT,
-    amount: estimatedTokenOut.toString(),
-    slippageBps
-  });
-  const estimatedSolBack = BigInt(sellOrder.outAmount || sellOrder.outputAmount || 0);
-  if (estimatedSolBack <= 0n) {
-    throw new Error("Token safety check failed: no working sell route back to SOL.");
   }
 
   return buyOrder;
@@ -5661,7 +5661,10 @@ async function filterSniperCandidatesForBuy(rows, options = {}) {
   const accepted = [];
   const stats = createSniperPrecheckStats();
   const targetAccepted = Math.max(1, Number(options.targetAccepted || 1));
-  const taker = await sniperRoutePrecheckTaker(options.userId, options.routeProbeLamports || SNIPER_ROUTE_PROBE_LAMPORTS);
+  const shouldCheckRoute = options.checkRoute === true;
+  const taker = shouldCheckRoute
+    ? await sniperRoutePrecheckTaker(options.userId, options.routeProbeLamports || SNIPER_ROUTE_PROBE_LAMPORTS)
+    : null;
 
   for (const row of rows) {
     if (accepted.length >= targetAccepted) break;
@@ -5688,7 +5691,7 @@ async function filterSniperCandidatesForBuy(rows, options = {}) {
       stats.mintReadUnavailable += 1;
     }
 
-    if (taker && CONFIG.jupiterApiKey) {
+    if (shouldCheckRoute && taker && CONFIG.jupiterApiKey) {
       const route = await checkSniperRoundTripRoute({
         tokenMint: row.tokenMint,
         taker,
@@ -5704,8 +5707,8 @@ async function filterSniperCandidatesForBuy(rows, options = {}) {
       accepted.push({
         ...row,
         autoSnipeSafetyNote: isToken2022
-          ? "Token-2022 mint; round-trip route precheck passed"
-          : "mint and round-trip route precheck passed"
+          ? "Token-2022 mint; buy route precheck passed"
+          : "mint and buy route precheck passed"
       });
       stats.accepted += 1;
       continue;
@@ -5714,8 +5717,8 @@ async function filterSniperCandidatesForBuy(rows, options = {}) {
     accepted.push({
       ...row,
       autoSnipeSafetyNote: isToken2022
-        ? taker ? "Token-2022 mint; route precheck skipped" : "Token-2022 mint; add/import a wallet for route precheck"
-        : taker ? "mint precheck passed; route precheck skipped" : "mint precheck passed; add/import a wallet for route precheck"
+        ? "Token-2022 mint; trade route checks after wallet and amount"
+        : "mint precheck passed; trade route checks after wallet and amount"
     });
     stats.accepted += 1;
   }
@@ -5758,19 +5761,7 @@ async function checkSniperRoundTripRoute({ tokenMint, taker, amountLamports, sli
       return { ok: false, reason: "buy route returned zero token output" };
     }
 
-    const sellOrder = await createJupiterOrder({
-      taker,
-      inputMint: tokenMint,
-      outputMint: SOL_MINT,
-      amount: estimatedTokenOut.toString(),
-      slippageBps
-    });
-    const estimatedSolBack = BigInt(sellOrder.outAmount || sellOrder.outputAmount || 0);
-    if (estimatedSolBack <= 0n) {
-      return { ok: false, reason: "sell route returned zero SOL output" };
-    }
-
-    return { ok: true };
+    return { ok: true, estimatedTokenOut: estimatedTokenOut.toString() };
   } catch (error) {
     return { ok: false, reason: friendlyError(error) };
   }
@@ -5803,7 +5794,7 @@ function formatSniperPrecheckSummary(stats) {
   const blocked = stats.freezeAuthority + stats.mintAuthority + stats.routeRejected;
   const parts = [
     `Prechecked: ${stats.checked}`,
-    `Route-safe: ${stats.accepted}`,
+    `Mint-safe: ${stats.accepted}`,
     blocked ? `Blocked: ${blocked}` : "",
     stats.routeRejected ? `No route: ${stats.routeRejected}` : "",
     stats.mintAuthority ? `Mint active: ${stats.mintAuthority}` : "",
@@ -8188,6 +8179,19 @@ function recommendedBuyFundingLamports(amountLamports) {
   return amountLamports + CONFIG.buyReserveLamports;
 }
 
+function enrichBuyError(error, details) {
+  const base = friendlyError(error);
+  const debug = [
+    `wallet SOL ${lamportsToSol(details.balance)}`,
+    `requested ${lamportsToSol(details.amountLamports)}`,
+    `swap ${lamportsToSol(details.swapLamports)}`,
+    `fee ${lamportsToSol(details.feeLamports)}`,
+    `reserve ${CONFIG.buyReserveSol}`,
+    `needs about ${lamportsToSol(details.recommendedLamports)}`
+  ].join(", ");
+  return new Error(`Buy failed after funding check: ${base} (${debug}).`);
+}
+
 function lamportsToSol(lamports) {
   return (lamports / LAMPORTS_PER_SOL).toFixed(9).replace(/0+$/, "").replace(/\.$/, "");
 }
@@ -8775,6 +8779,10 @@ function formatError(error) {
 
 function friendlyError(error) {
   const message = formatError(error);
+
+  if (message.startsWith("Buy failed after funding check:")) {
+    return message;
+  }
 
   if (message.includes("429") || /too many requests|rate limit/i.test(message)) {
     return "Rate limit after automatic retries. The bot slowed down and queued requests, but the RPC or Jupiter endpoint is still throttling. Use fewer wallets, wait a minute, or upgrade SOLANA_RPC_URL/Jupiter limits for reliable batches.";
