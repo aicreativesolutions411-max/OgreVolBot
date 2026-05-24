@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>OgreTradeBot Web</title>
+    <title>Ogre Trade Panel</title>
     <meta name="description" content="OgreTradeBot web dashboard for meme token trading, wallets, balances, positions, PnL, and sniper scans.">
     <link rel="stylesheet" href="./styles.css">
     <script src="./config.js"></script>
@@ -12,42 +12,34 @@
   <body>
     <main class="shell" data-app>
       <header class="topbar">
-        <a class="brand" href="https://ogremode.com/" target="_blank" rel="noreferrer">
-          <span class="brand-mark">OG</span>
-          <span>
-            <strong>OgreTradeBot</strong>
-            <small>Meme trader command center</small>
-          </span>
-        </a>
-        <div class="status-pill">
-          <span class="status-dot" data-status-dot data-status="loading"></span>
-          <span data-status-text>Checking backend...</span>
-        </div>
+        <span class="powered">Powered by Ogres</span>
+        <nav class="social-links" aria-label="Ogre links">
+          <a href="https://t.me/ogrecoinonsol" target="_blank" rel="noreferrer">Telegram</a>
+          <a href="https://ogremode.com/" target="_blank" rel="noreferrer">Website</a>
+          <a href="https://twitter.com/i/communities/1930265213917425858" target="_blank" rel="noreferrer">X</a>
+        </nav>
       </header>
 
       <section class="login-view" data-login>
         <div class="login-copy">
-          <p class="eyebrow">OgreTradeBot Web</p>
-          <h1>Fast meme trading from one clean dashboard.</h1>
+          <p class="eyebrow">OgreTradeBot</p>
+          <h1>Ogre Trade Panel</h1>
           <p class="lead">
-            Create wallets, download backups, buy and sell from one wallet, review positions,
-            track PnL, and scan fresh plays. Telegram is optional for users who also want the chat bot.
+            A fast command panel for meme coin traders. Trade one wallet, run bundle workflows,
+            manage timed volume tools, scan early plays, snipe fresh launches, track positions,
+            and review PnL from one clean interface.
           </p>
           <div class="login-steps">
-            <span>Create web account</span>
-            <span>Trade from web</span>
-            <span>Back up every wallet</span>
+            <span>Trade</span>
+            <span>Bundle</span>
+            <span>Snipe</span>
+            <span>Track PnL</span>
           </div>
         </div>
 
         <form class="login-card" onsubmit="return false;">
           <img src="./assets/ogre-aces.jpg" alt="OgreTrade welcome art">
-          <label>
-            Optional email
-            <input data-signup-email type="email" autocomplete="email" placeholder="you@example.com">
-          </label>
-          <button class="primary" type="button" data-web-signup>Create Web Account</button>
-          <button class="secondary" type="button" data-email-code>Email Login Code</button>
+          <button class="primary" type="button" data-web-signup>Create Account</button>
           <div class="divider"><span>or link Telegram</span></div>
           <a class="secondary-link" data-bot-link target="_blank" rel="noreferrer">Open @OgreTradeBot</a>
           <label>
@@ -56,7 +48,6 @@
           </label>
           <button class="secondary" type="button" data-login-submit>Connect Telegram Account</button>
           <p class="error" data-error hidden></p>
-          <small>API: <span data-api-base></span></small>
         </form>
       </section>
 
@@ -108,9 +99,9 @@
       <footer class="footer">
         <span>Powered by Ogres</span>
         <nav>
-          <a href="https://t.me/OgreTradeBot?start=web" target="_blank" rel="noreferrer">Telegram Bot</a>
+          <a href="https://t.me/ogrecoinonsol" target="_blank" rel="noreferrer">Telegram</a>
           <a href="https://ogremode.com/" target="_blank" rel="noreferrer">Website</a>
-          <a href="https://twitter.com/i/communities/1930265213917425858" target="_blank" rel="noreferrer">Twitter</a>
+          <a href="https://twitter.com/i/communities/1930265213917425858" target="_blank" rel="noreferrer">X</a>
         </nav>
       </footer>
     </main>

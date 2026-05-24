@@ -1,5 +1,5 @@
 window.OGRE_PORTAL_CONFIG = {
-  "apiBase": "https://ogrevolbot.onrender.com",
+  "apiBase": "",
   "telegramBotUsername": "OgreTradeBot",
   "portalUrl": ""
 };

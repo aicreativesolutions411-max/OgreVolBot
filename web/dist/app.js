@@ -1,10 +1,13 @@
 const config = window.OGRE_PORTAL_CONFIG || {};
-const apiBase = (config.apiBase || "https://ogrevolbot.onrender.com").replace(/\/+$/, "");
+const configuredApiBase = String(config.apiBase || "").trim().replace(/\/+$/, "");
+const sameOriginApiBase = window.location.origin.replace(/\/+$/, "");
+const defaultRenderApiBase = "https://ogrevolbot.onrender.com";
+const apiBase = configuredApiBase
+  || (window.location.hostname.endsWith("onrender.com") ? sameOriginApiBase : defaultRenderApiBase);
 
 const state = {
   token: localStorage.getItem("ogreWebToken") || "",
   user: null,
-  status: null,
   activeTab: "dashboard",
   loading: false,
   wallets: [],
@@ -22,8 +25,6 @@ const $ = (selector) => document.querySelector(selector);
 const app = $("[data-app]");
 const loginView = $("[data-login]");
 const dashboardView = $("[data-dashboard]");
-const statusDot = $("[data-status-dot]");
-const statusText = $("[data-status-text]");
 const codeInput = $("[data-login-code]");
 const errorBox = $("[data-error]");
 
@@ -38,11 +39,16 @@ async function api(path, options = {}) {
   };
   if (state.token) headers.Authorization = `Bearer ${state.token}`;
 
-  const response = await fetch(apiUrl(path), {
-    ...options,
-    headers,
-    cache: "no-store"
-  });
+  let response;
+  try {
+    response = await fetch(apiUrl(path), {
+      ...options,
+      headers,
+      cache: "no-store"
+    });
+  } catch (error) {
+    throw new Error(`Could not reach the OgreTrade API at ${apiBase}. Check OGRE_API_BASE on the website and WEB_ALLOWED_ORIGIN on Render.`);
+  }
   const data = await response.json().catch(() => ({}));
 
   if (!response.ok || data.ok === false) {
@@ -57,11 +63,6 @@ function setError(message = "") {
   errorBox.textContent = message;
 }
 
-function setStatus(kind, text) {
-  statusDot.dataset.status = kind;
-  statusText.textContent = text;
-}
-
 function botStartUrl() {
   if (config.telegramBotUsername) {
     return `https://t.me/${config.telegramBotUsername}?start=web`;
@@ -72,17 +73,6 @@ function botStartUrl() {
 function dexUrl(tokenMint) {
   const mint = String(tokenMint || "").trim();
   return mint ? `https://dexscreener.com/solana/${encodeURIComponent(mint)}` : "#";
-}
-
-async function refreshBackendStatus() {
-  try {
-    const response = await fetch(apiUrl("/healthz"), { cache: "no-store" });
-    const data = await response.json();
-    state.status = data;
-    setStatus("ok", "Backend online");
-  } catch (error) {
-    setStatus("warn", `Render check failed: ${error.message}`);
-  }
 }
 
 async function login() {
@@ -110,11 +100,10 @@ async function login() {
 
 async function createWebAccount() {
   setError("");
-  const email = document.querySelector("[data-signup-email]")?.value?.trim() || "";
   try {
     const data = await api("/api/web/signup", {
       method: "POST",
-      body: JSON.stringify({ email })
+      body: JSON.stringify({})
     });
     state.token = data.token;
     state.user = data.user;
@@ -176,7 +165,6 @@ async function loadAll() {
   state.loading = true;
   render();
 
-  await refreshBackendStatus();
   const [wallets, balances, positions, pnl] = await Promise.all([
     api("/api/web/wallets"),
     api("/api/web/balances"),
@@ -216,7 +204,6 @@ function render() {
 
   if (!state.user) {
     $("[data-bot-link]").href = botStartUrl();
-    $("[data-api-base]").textContent = apiBase;
     return;
   }
 
@@ -253,18 +240,6 @@ function dashboardHtml() {
     </section>
     ${createWalletSection()}
     ${downloadsHtml()}
-    <section class="profile-card">
-      <div>
-        <h3>Email Reminder</h3>
-        <p>Add an optional email for portal reminders. It does not replace Telegram login and it never receives private keys or permanent tokens.</p>
-      </div>
-      <label>
-        Email
-        <input data-email type="email" placeholder="you@example.com" value="${escapeHtml(state.user?.email || "")}">
-      </label>
-      <button data-email-save>Save Email</button>
-      <small data-email-status></small>
-    </section>
   `;
 }
 
@@ -757,5 +732,4 @@ codeInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") login();
 });
 
-refreshBackendStatus();
 loadSession();

@@ -93,7 +93,7 @@ OGRE_API_BASE=https://your-render-service.onrender.com
 TELEGRAM_BOT_USERNAME=OgreTradeBot
 ```
 
-For your current Render service, that should be your Render bot URL, for example `https://ogrevolbot.onrender.com`. The web app checks `OGRE_API_BASE/healthz`, so the bot health endpoint returns a browser-safe CORS header.
+For your current Render service, `OGRE_API_BASE` should be your Render bot URL, for example `https://ogrevolbot.onrender.com`. The web app uses that backend for account creation, wallets, balances, scans, and trades. If the website is served directly from the Render `/portal` route, it can use the same origin automatically. If `OGRE_API_BASE` is blank on a separate website, the app falls back to `https://ogrevolbot.onrender.com`; change `OGRE_API_BASE` if your Render service has a different name.
 
 Set these Render environment variables too:
 

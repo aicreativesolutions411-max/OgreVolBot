@@ -698,9 +698,15 @@ function webContentType(filePath) {
 }
 
 function webCorsHeaders(request) {
-  const origin = request.headers.origin || "*";
+  const origin = request.headers.origin || "";
   const allowed = CONFIG.webAllowedOrigin || "*";
-  const allowOrigin = allowed === "*" ? "*" : allowed.split(",").map((item) => item.trim()).includes(origin) ? origin : allowed.split(",")[0].trim();
+  const allowedOrigins = allowed.split(",").map((item) => item.trim()).filter(Boolean);
+  const portalOrigin = originFromUrl(CONFIG.webPortalUrl);
+  const allowOrigin = !origin
+    ? "*"
+    : allowedOrigins.includes("*") || allowedOrigins.includes(origin) || (portalOrigin && portalOrigin === origin)
+      ? origin
+      : origin;
   return {
     "Access-Control-Allow-Origin": allowOrigin || "*",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
@@ -708,6 +714,14 @@ function webCorsHeaders(request) {
     "Access-Control-Max-Age": "86400",
     "Vary": "Origin"
   };
+}
+
+function originFromUrl(value) {
+  try {
+    return value ? new URL(value).origin : "";
+  } catch {
+    return "";
+  }
 }
 
 function sendWebJson(request, response, status, data) {

@@ -29,7 +29,7 @@ function normalizeBaseUrl(value) {
 await fs.rm(distDir, { recursive: true, force: true });
 await copyDir(publicDir, distDir);
 
-const apiBase = normalizeBaseUrl(process.env.OGRE_API_BASE || process.env.WEB_API_BASE || "https://ogrevolbot.onrender.com");
+const apiBase = normalizeBaseUrl(process.env.OGRE_API_BASE || process.env.WEB_API_BASE || "");
 const telegramBotUsername = String(process.env.TELEGRAM_BOT_USERNAME || "OgreTradeBot").trim().replace(/^@/, "");
 const portalUrl = normalizeBaseUrl(process.env.WEB_PORTAL_URL || "");
 const configSource = `window.OGRE_PORTAL_CONFIG = ${JSON.stringify({ apiBase, telegramBotUsername, portalUrl }, null, 2)};\n`;
