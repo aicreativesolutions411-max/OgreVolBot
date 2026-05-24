@@ -75,7 +75,7 @@ This bot does not provide wallet washing, provenance hiding, mixer behavior, or 
 
 ## Web App
 
-The repo includes a lightweight static web app for Cloudflare Pages. It is a web-first OgreTradeBot dashboard for the Render bot backend with web account creation, optional Telegram-code linking, wallet creation, backup downloads, one-wallet buy/sell controls, balances, positions, PnL, and OgreSniper scans.
+The repo includes a lightweight static web app for Cloudflare Pages. It is a web-first OgreTradeBot dashboard for the Render bot backend with web account creation, optional Telegram-code linking, wallet creation, backup downloads, one-wallet buy/sell controls, balances, positions, PnL, OgreSniper scans, and KOL Tracker signals.
 
 Cloudflare Pages settings:
 
@@ -114,9 +114,11 @@ The web Trade tab is for simple one-wallet trading from the browser. It uses the
 
 The web Volume tab creates the same timed position plan used by the Telegram Volume button: buy now, then sell by timer, take-profit, stop-loss, or repeat cycle. It is a position-management feature for the user's own wallet, not a fake-volume tool.
 
-The web Bundle tab exposes multi-wallet bundle buy/sell from the page. Users select the exact managed wallets, paste a token CA, set buy amount per wallet or sell percent, choose slippage, and run the bundle.
+The web Bundle tab exposes multi-wallet bundle buy/sell from the page. Users select the exact managed wallets, paste a token CA, set buy amount per wallet or sell percent, choose slippage, and run the bundle. It also includes **Bundle Buy + Auto Exits**, which buys across the selected wallets and immediately arms timer, take-profit, stop-loss, repeat count, repeat wait, and custom target settings.
 
 The web Launch Snipe tab exposes Manual Launch Snipe from the page. Users preset ticker, wallets, buy amount, take-profit, stop-loss, fallback timer, and slippage; the backend keeps scanning the configured launch/profile feeds until a matching ticker appears, then buys with the preset wallets.
+
+The web KOL Tracker tab uses the Solana Tracker Data API when `SOLANA_TRACKER_API_KEY` is set on Render. It shows Hot Buys, Top KOLs, Consistent KOLs, Fresh Activity, and custom-wallet scans. Each signal includes chart/copy buttons plus Trade, Bundle, and Copy Plan actions. Copy Plan uses the same timed engine as Volume with preset-or-custom timer, take-profit, stop-loss, repeat, and slippage settings.
 
 The web dashboard has an optional email field. If `RESEND_API_KEY` and `EMAIL_FROM` are set on Render, users can request a fresh email login code later. Email never carries private keys, backup files, or permanent login tokens.
 
@@ -127,6 +129,7 @@ The Render bot also serves the same built portal at `/portal` after `npm run bui
 - `/start` - open the menu
 - `/trade` - open the single-wallet trade menu
 - `/sniper` - open OgreSniper
+- `/kol` - open KOL Tracker
 - `/buy` - start a one-wallet buy
 - `/sell` - start a one-wallet sell
 - `/positions` - view positions overview
@@ -145,6 +148,16 @@ The bot keeps encrypted key material and an audit log under `DATA_DIR`.
 Set `TELEGRAM_ADMIN_USER_IDS` to your numeric Telegram user ID to show bot-wide admin controls like audit export and emergency stop. Public users can still use their own wallet/trading menu in DM.
 
 Batch buy and sell use Jupiter Swap API v2, so you need a Jupiter API key from the Jupiter developer portal.
+
+KOL Tracker uses Solana Tracker Data API. Set `SOLANA_TRACKER_API_KEY` on Render to enable live KOL leaderboards and custom wallet trade scans. Optional tuning:
+
+```text
+SOLANA_TRACKER_API_BASE=https://data.solanatracker.io
+SOLANA_TRACKER_KOL_LIMIT=12
+SOLANA_TRACKER_CACHE_TTL_MS=15000
+```
+
+The key stays server-side on Render. Browser users only call your `/api/web/kol/*` routes.
 
 Bundle buy and sell charge a 0.5% platform fee by default. `BUNDLE_FEE_BPS=50` means 50 basis points, which is 0.5%, and fees are sent to `FEE_WALLET`.
 
@@ -182,6 +195,7 @@ The main menu shows this as **Volume**. Under the hood it is a timed trade plan:
 
 - 5-second quick exit for short auto-sell timing
 - Repeat cycles for running the timed buy/sell flow 1, 5, 10, or a custom count up to 10
+- Repeat wait, such as no wait, 5 seconds, 30 seconds, 1 minute, 5 minutes, or a custom timer before the next cycle starts
 - Timer exit, such as sell 15 minutes after buy
 - Take-profit, such as sell if estimated value is up 25%
 - Stop-loss, such as sell if estimated value is down 10%
@@ -205,7 +219,7 @@ OgreSniper options:
 - **AutoSnipe** defaults to +25% take-profit, -8% stop-loss, 400 bps slippage, and a full-bag exit. After the SOL amount, users can tap **Use Default** or **Customize**.
 - **PumpSnipe** defaults to +40% take-profit, -8% stop-loss, 300 bps slippage, and a full-bag exit. It accepts lower market-cap early setups than AutoSnipe and also supports **Customize** before confirm.
 - **Manual Launch Snipe** watches for a ticker the user enters ahead of time, then buys with the preselected wallets once a matching live launch/profile appears. By default it uses the bot's current Solana launch/profile feeds. If you set `PHOTON_NEW_PAIRS_URL`, the watcher checks that feed first and can pass `PHOTON_API_KEY` as a bearer token. It scans every `MANUAL_LAUNCH_SCAN_INTERVAL_MS` while awake, defaults to `1500` ms, supports `500` ms on paid/private RPC setups, uses short burst caching so multiple watches do not duplicate the same feed calls, and sends **Cancel Watch** controls after the plan is armed and under **Active Launch Watches**.
-- **Modes** adjust score/risk strictness and immediately run that category scan: Safe Picks, Smart Accumulation, Fast Movers, PumpSnipe, Low MC, Narratives, and Long Term.
+- **Modes** adjust score/risk strictness and immediately run that category scan: Safe Picks, Smart Accumulation, Fast Movers, PumpSnipe, Low MC, Narratives, and Long Term. Refreshes are mode-specific, and the scanner avoids recently shown picks across modes when enough candidates are available.
 
 Fast scan flow:
 
@@ -231,7 +245,7 @@ OgreSniper exit presets:
 - **Moonbag** sells 60% after 30 minutes, or earlier at +100% take-profit / -25% stop-loss.
 - **Safe** sells 100% after 10 minutes, or earlier at +20% take-profit / -8% stop-loss.
 
-After the amount is chosen, the bot picks a recommended preset from the active mode and score. Users can tap **Use Preset**, **Customize TP/SL**, or **Back**. Custom TP/SL changes the take-profit and stop-loss percentages while keeping the preset timer and sell percent.
+After the amount is chosen, the bot picks a recommended preset from the active mode and score. Users can tap **Use Preset**, **Customize TP/SL**, or **Back**. Custom TP/SL changes the take-profit and stop-loss percentages while keeping the preset timer and sell percent. The web panel exposes custom fields directly for timer, TP, SL, repeat count, repeat wait, and slippage on Volume, Bundle auto exits, Sniper, and Launch Snipe.
 
 Slippage quick buttons use a safer 3% / 4% / 5% shape: 300 bps, default 400 bps, and 500 bps. Anything higher is left behind **Custom** because it can land at a worse fill if price moves against the user. OgreSniper uses `SNIPER_DEFAULT_SLIPPAGE_BPS`; normal Trade and Bundle use `DEFAULT_SLIPPAGE_BPS`.
 

@@ -49,6 +49,10 @@ const state = {
   sniperResult: null,
   launchResult: null,
   launchWatches: [],
+  kolScan: null,
+  kolMode: "hot",
+  kolWallet: "",
+  kolResult: null,
   restoreResult: null,
   importResult: null,
   backupResult: null,
@@ -181,6 +185,23 @@ async function loadScan(mode = state.scanMode) {
   }
 }
 
+async function loadKolScan(mode = state.kolMode, wallet = state.kolWallet) {
+  state.kolMode = mode;
+  state.kolWallet = String(wallet || "").trim();
+  state.loading = true;
+  render();
+
+  try {
+    const params = new URLSearchParams({ mode });
+    if (state.kolWallet) params.set("wallet", state.kolWallet);
+    const data = await api(`/api/web/kol/scan?${params.toString()}`);
+    state.kolScan = data.scan;
+  } finally {
+    state.loading = false;
+    render();
+  }
+}
+
 function totalSol() {
   return state.balances.reduce((sum, row) => sum + Number(row.sol || 0), 0);
 }
@@ -213,10 +234,12 @@ function renderTabs() {
   if (state.activeTab === "bundle") panel.innerHTML = bundleHtml();
   if (state.activeTab === "volume") panel.innerHTML = volumeHtml();
   if (state.activeTab === "launch") panel.innerHTML = launchHtml();
+  if (state.activeTab === "kol") panel.innerHTML = kolHtml();
   if (state.activeTab === "wallets") panel.innerHTML = walletsHtml();
   if (state.activeTab === "positions") panel.innerHTML = positionsHtml();
   if (state.activeTab === "pnl") panel.innerHTML = pnlHtml();
   if (state.activeTab === "sniper") panel.innerHTML = sniperHtml();
+  syncCustomFields(panel);
 }
 
 function dashboardHtml() {
@@ -225,6 +248,7 @@ function dashboardHtml() {
       ${visualCard("visual-aces", "Trade Desk", "Quick buy and sell from one wallet with .10, .50, 1 SOL, max, and percent sell buttons.")}
       ${visualCard("visual-cauldron", "Bundle + Volume", "Buy or sell across selected wallets, then manage timed exits with Volume plans.")}
       ${visualCard("visual-candle", "Launch Snipe", "Preset ticker, wallets, amount, TP/SL, and slippage, then watch live feeds until launch.")}
+      ${visualCard("visual-cauldron", "KOL Tracker", "Follow KOL wallets, review their strongest current signals, then trade, bundle, or copy-plan from the same panel.")}
     </section>
     ${createWalletSection()}
     ${importWalletSection()}
@@ -342,11 +366,13 @@ function tradeHtml() {
         </label>
         <label>
           Slippage
-          <select data-trade-slippage>
+          <select data-trade-slippage data-custom-select="trade-slippage">
             <option value="300">3% - tighter</option>
             <option value="400" selected>4% - default</option>
             <option value="500">5% - faster fills</option>
+            <option value="custom">Custom</option>
           </select>
+          <input data-trade-slippage-custom data-custom-for="trade-slippage" type="number" min="1" max="5000" step="1" placeholder="Custom bps" hidden>
         </label>
 
         <div class="trade-block">
@@ -466,20 +492,99 @@ function bundleHtml() {
           </label>
           <label>
             Sell Percent
-            <select data-bundle-percent>
+            <select data-bundle-percent data-custom-select="bundle-percent">
               <option value="25">25%</option>
               <option value="50">50%</option>
               <option value="100" selected>100%</option>
+              <option value="custom">Custom</option>
             </select>
+            <input data-bundle-percent-custom data-custom-for="bundle-percent" type="number" min="1" max="100" step="1" placeholder="Custom %" hidden>
           </label>
           <label>
             Slippage
-            <select data-bundle-slippage>
+            <select data-bundle-slippage data-custom-select="bundle-slippage">
               <option value="300">3%</option>
               <option value="400" selected>4%</option>
               <option value="500">5%</option>
+              <option value="custom">Custom</option>
             </select>
+            <input data-bundle-slippage-custom data-custom-for="bundle-slippage" type="number" min="1" max="5000" step="1" placeholder="Custom bps" hidden>
           </label>
+        </div>
+        <div class="trade-block">
+          <div>
+            <h4>Auto Exit After Bundle Buy</h4>
+            <p>Optional timed plan for selected wallets. Use presets or type custom targets like 500 or 5x.</p>
+          </div>
+          <div class="volume-grid">
+            <label>
+              Fallback Sell
+              <select data-bundle-plan-delay data-custom-select="bundle-plan-delay">
+                <option value="5s">5 sec</option>
+                <option value="1">1 min</option>
+                <option value="5" selected>5 min</option>
+                <option value="15">15 min</option>
+                <option value="60">1 hour</option>
+                <option value="custom">Custom</option>
+              </select>
+              <input data-bundle-plan-delay-custom data-custom-for="bundle-plan-delay" type="text" placeholder="Custom: 45s or 120" hidden>
+            </label>
+            <label>
+              Take Profit
+              <select data-bundle-plan-tp data-custom-select="bundle-plan-tp">
+                <option value="25">+25%</option>
+                <option value="60" selected>+60%</option>
+                <option value="100">+100%</option>
+                <option value="250">+250%</option>
+                <option value="custom">Custom</option>
+              </select>
+              <input data-bundle-plan-tp-custom data-custom-for="bundle-plan-tp" type="text" placeholder="Custom: 500 or 5x" hidden>
+            </label>
+            <label>
+              Stop Loss
+              <select data-bundle-plan-sl data-custom-select="bundle-plan-sl">
+                <option value="0">Off</option>
+                <option value="8">-8%</option>
+                <option value="10" selected>-10%</option>
+                <option value="15">-15%</option>
+                <option value="custom">Custom</option>
+              </select>
+              <input data-bundle-plan-sl-custom data-custom-for="bundle-plan-sl" type="text" placeholder="Custom SL %" hidden>
+            </label>
+            <label>
+              Repeat
+              <select data-bundle-plan-loop data-custom-select="bundle-plan-loop">
+                <option value="1" selected>1x</option>
+                <option value="5">5x</option>
+                <option value="10">10x</option>
+                <option value="custom">Custom</option>
+              </select>
+              <input data-bundle-plan-loop-custom data-custom-for="bundle-plan-loop" type="number" min="1" max="10" step="1" placeholder="Custom 1-10" hidden>
+            </label>
+            <label>
+              Repeat Wait
+              <select data-bundle-plan-loop-delay data-custom-select="bundle-plan-loop-delay">
+                <option value="0" selected>No wait</option>
+                <option value="5s">5 sec</option>
+                <option value="30s">30 sec</option>
+                <option value="1">1 min</option>
+                <option value="5">5 min</option>
+                <option value="custom">Custom</option>
+              </select>
+              <input data-bundle-plan-loop-delay-custom data-custom-for="bundle-plan-loop-delay" type="text" placeholder="Custom: 30s or 2" hidden>
+            </label>
+            <label>
+              Timer Sell
+              <select data-bundle-plan-sell-percent data-custom-select="bundle-plan-sell-percent">
+                <option value="50">50%</option>
+                <option value="80">80%</option>
+                <option value="100" selected>100%</option>
+                <option value="custom">Custom</option>
+              </select>
+              <input data-bundle-plan-sell-percent-custom data-custom-for="bundle-plan-sell-percent" type="number" min="1" max="100" step="1" placeholder="Custom %" hidden>
+            </label>
+          </div>
+          <button class="primary" data-bundle-plan>Bundle Buy + Auto Exits</button>
         </div>
         <div class="quick-grid two-wide">
           <button class="primary" data-bundle-buy>Bundle Buy</button>
@@ -508,9 +613,12 @@ function bundleResultHtml() {
     `;
   }
 
+  const title = state.bundleResult.source === "web_bundle_plan"
+    ? "Bundle Auto Exit Plan"
+    : state.bundleResult.type === "bundle_sell" ? "Bundle Sell" : "Bundle Buy";
   return `
     <article class="latest-trade">
-      <h3>${escapeHtml(state.bundleResult.type === "bundle_sell" ? "Bundle Sell" : "Bundle Buy")}</h3>
+      <h3>${escapeHtml(title)}</h3>
       <p>${escapeHtml(state.bundleResult.message || "")}</p>
       <div class="mini-results">
         ${(state.bundleResult.results || []).map((row) => `<span data-ok="${row.ok ? "true" : "false"}">${escapeHtml(row.message)}</span>`).join("")}
@@ -540,6 +648,24 @@ function walletGroupHtml(prefix) {
       <input data-${prefix}-group type="text" placeholder="Example: Ogre">
     </label>
   `;
+}
+
+function fieldValue(selectSelector, customSelector, fallback = "") {
+  const selected = $(selectSelector)?.value || fallback;
+  if (selected !== "custom") return selected;
+  const custom = $(customSelector)?.value?.trim();
+  if (!custom) throw new Error("Enter the custom value first.");
+  return custom;
+}
+
+function syncCustomFields(root = document) {
+  root.querySelectorAll("[data-custom-for]").forEach((input) => {
+    const select = [...document.querySelectorAll("[data-custom-select]")]
+      .find((item) => item.dataset.customSelect === input.dataset.customFor);
+    const isCustom = select?.value === "custom";
+    input.hidden = !isCustom;
+    if (!isCustom) input.value = "";
+  });
 }
 
 function volumeHtml() {
@@ -573,48 +699,83 @@ function volumeHtml() {
           </label>
           <label>
             Sell After
-            <select data-volume-delay>
+            <select data-volume-delay data-custom-select="volume-delay">
               <option value="5s">5 sec</option>
               <option value="1">1 min</option>
               <option value="5" selected>5 min</option>
               <option value="15">15 min</option>
               <option value="30">30 min</option>
               <option value="60">1 hour</option>
+              <option value="custom">Custom</option>
             </select>
+            <input data-volume-delay-custom data-custom-for="volume-delay" type="text" placeholder="Custom: 45s, 2, 2h" hidden>
           </label>
           <label>
             Take Profit
-            <select data-volume-tp>
+            <select data-volume-tp data-custom-select="volume-tp">
+              <option value="0">Off</option>
               <option value="15">+15%</option>
               <option value="25" selected>+25%</option>
               <option value="50">+50%</option>
               <option value="100">+100%</option>
+              <option value="250">+250%</option>
+              <option value="custom">Custom</option>
             </select>
+            <input data-volume-tp-custom data-custom-for="volume-tp" type="text" placeholder="Custom: 500 or 5x" hidden>
           </label>
           <label>
             Stop Loss
-            <select data-volume-sl>
+            <select data-volume-sl data-custom-select="volume-sl">
+              <option value="0">Off</option>
               <option value="8" selected>-8%</option>
               <option value="10">-10%</option>
               <option value="15">-15%</option>
               <option value="25">-25%</option>
+              <option value="custom">Custom</option>
             </select>
+            <input data-volume-sl-custom data-custom-for="volume-sl" type="text" placeholder="Custom SL %" hidden>
           </label>
           <label>
             Repeat
-            <select data-volume-loop>
+            <select data-volume-loop data-custom-select="volume-loop">
               <option value="1" selected>1x</option>
               <option value="5">5x</option>
               <option value="10">10x</option>
+              <option value="custom">Custom</option>
             </select>
+            <input data-volume-loop-custom data-custom-for="volume-loop" type="number" min="1" max="10" step="1" placeholder="Custom 1-10" hidden>
+          </label>
+          <label>
+            Repeat Wait
+            <select data-volume-loop-delay data-custom-select="volume-loop-delay">
+              <option value="0" selected>No wait</option>
+              <option value="5s">5 sec</option>
+              <option value="30s">30 sec</option>
+              <option value="1">1 min</option>
+              <option value="5">5 min</option>
+              <option value="custom">Custom</option>
+            </select>
+            <input data-volume-loop-delay-custom data-custom-for="volume-loop-delay" type="text" placeholder="Custom: 30s or 2" hidden>
+          </label>
+          <label>
+            Timer Sell
+            <select data-volume-sell-percent data-custom-select="volume-sell-percent">
+              <option value="50">50%</option>
+              <option value="80">80%</option>
+              <option value="100" selected>100%</option>
+              <option value="custom">Custom</option>
+            </select>
+            <input data-volume-sell-percent-custom data-custom-for="volume-sell-percent" type="number" min="1" max="100" step="1" placeholder="Custom %" hidden>
           </label>
           <label>
             Slippage
-            <select data-volume-slippage>
+            <select data-volume-slippage data-custom-select="volume-slippage">
               <option value="300">3%</option>
               <option value="400" selected>4%</option>
               <option value="500">5%</option>
+              <option value="custom">Custom</option>
             </select>
+            <input data-volume-slippage-custom data-custom-for="volume-slippage" type="number" min="1" max="5000" step="1" placeholder="Custom bps" hidden>
           </label>
         </div>
 
@@ -657,6 +818,8 @@ function volumeResultHtml() {
         <div><dt>Buy</dt><dd>${escapeHtml(row.amountSol)} SOL</dd></div>
         <div><dt>TP / SL</dt><dd>+${escapeHtml(row.takeProfitPct)}% / -${escapeHtml(row.stopLossPct)}%</dd></div>
         <div><dt>Repeat</dt><dd>${escapeHtml(row.loopCount)}x</dd></div>
+        <div><dt>Repeat Wait</dt><dd>${escapeHtml(row.loopDelaySeconds || 0)} sec</dd></div>
+        <div><dt>Timer Sell</dt><dd>${escapeHtml(row.sellPercent || 100)}%</dd></div>
       </dl>
       ${row.results?.length ? `<div class="mini-results">${row.results.map((item) => `<span data-ok="${item.ok ? "true" : "false"}">${escapeHtml(item.message || item)}</span>`).join("")}</div>` : ""}
       <div class="card-actions">
@@ -696,37 +859,71 @@ function launchHtml() {
           </label>
           <label>
             Take Profit
-            <select data-launch-tp>
+            <select data-launch-tp data-custom-select="launch-tp">
+              <option value="0">Off</option>
               <option value="25">+25%</option>
               <option value="40" selected>+40%</option>
               <option value="60">+60%</option>
               <option value="100">+100%</option>
+              <option value="250">+250%</option>
+              <option value="custom">Custom</option>
             </select>
+            <input data-launch-tp-custom data-custom-for="launch-tp" type="text" placeholder="Custom: 500 or 5x" hidden>
           </label>
           <label>
             Stop Loss
-            <select data-launch-sl>
+            <select data-launch-sl data-custom-select="launch-sl">
+              <option value="0">Off</option>
               <option value="8" selected>-8%</option>
               <option value="10">-10%</option>
               <option value="15">-15%</option>
+              <option value="custom">Custom</option>
             </select>
+            <input data-launch-sl-custom data-custom-for="launch-sl" type="text" placeholder="Custom SL %" hidden>
           </label>
           <label>
             Fallback Sell
-            <select data-launch-delay>
+            <select data-launch-delay data-custom-select="launch-delay">
+              <option value="5s">5 sec</option>
               <option value="1">1 min</option>
               <option value="3" selected>3 min</option>
               <option value="5">5 min</option>
               <option value="15">15 min</option>
+              <option value="custom">Custom</option>
             </select>
+            <input data-launch-delay-custom data-custom-for="launch-delay" type="text" placeholder="Custom: 45s, 2, 2h" hidden>
+          </label>
+          <label>
+            Repeat
+            <select data-launch-loop data-custom-select="launch-loop">
+              <option value="1" selected>1x</option>
+              <option value="5">5x</option>
+              <option value="10">10x</option>
+              <option value="custom">Custom</option>
+            </select>
+            <input data-launch-loop-custom data-custom-for="launch-loop" type="number" min="1" max="10" step="1" placeholder="Custom 1-10" hidden>
+          </label>
+          <label>
+            Repeat Wait
+            <select data-launch-loop-delay data-custom-select="launch-loop-delay">
+              <option value="0" selected>No wait</option>
+              <option value="5s">5 sec</option>
+              <option value="30s">30 sec</option>
+              <option value="1">1 min</option>
+              <option value="5">5 min</option>
+              <option value="custom">Custom</option>
+            </select>
+            <input data-launch-loop-delay-custom data-custom-for="launch-loop-delay" type="text" placeholder="Custom: 30s or 2" hidden>
           </label>
           <label>
             Slippage
-            <select data-launch-slippage>
+            <select data-launch-slippage data-custom-select="launch-slippage">
               <option value="300" selected>3%</option>
               <option value="400">4%</option>
               <option value="500">5%</option>
+              <option value="custom">Custom</option>
             </select>
+            <input data-launch-slippage-custom data-custom-for="launch-slippage" type="number" min="1" max="5000" step="1" placeholder="Custom bps" hidden>
           </label>
         </div>
         <button class="primary" data-launch-start>Start Launch Watch</button>
@@ -763,6 +960,187 @@ function launchWatchesHtml() {
         </span>
       `).join("")}
     </div>
+  `;
+}
+
+function kolHtml() {
+  if (!state.wallets.length) {
+    return `${createWalletSection()}${emptyState("Create a wallet first", "KOL Tracker can scan without wallets, but trading/copy plans need at least one managed wallet.")}`;
+  }
+
+  const configured = state.kolScan?.configured !== false;
+  return `
+    <section class="section-actions mode-row">
+      <button data-kol-mode="hot" data-active="${state.kolMode === "hot"}">Hot Buys</button>
+      <button data-kol-mode="top" data-active="${state.kolMode === "top"}">Top KOLs</button>
+      <button data-kol-mode="consistent" data-active="${state.kolMode === "consistent"}">Consistent</button>
+      <button data-kol-mode="fresh" data-active="${state.kolMode === "fresh"}">Fresh</button>
+      <button data-kol-refresh>Refresh</button>
+    </section>
+    <p class="scan-meta">${escapeHtml(kolModeDescription(state.kolMode))}</p>
+    <section class="trade-layout">
+      <article class="trade-card">
+        <div class="trade-head">
+          <div>
+            <h3>KOL Copy Setup</h3>
+            <p>Pick wallets and exits once, then tap Copy Plan on any KOL signal. Trade and Bundle send the CA to those tabs.</p>
+          </div>
+        </div>
+        <div class="wallet-checks">
+          ${walletChecksHtml("kol")}
+        </div>
+        ${walletGroupHtml("kol")}
+        <div class="volume-grid">
+          <label>
+            Buy Per Wallet
+            <input data-kol-amount type="number" min="0" step="0.01" value="0.1">
+          </label>
+          <label>
+            Take Profit
+            <select data-kol-tp data-custom-select="kol-tp">
+              <option value="0">Off</option>
+              <option value="15">+15%</option>
+              <option value="25" selected>+25%</option>
+              <option value="40">+40%</option>
+              <option value="60">+60%</option>
+              <option value="100">+100%</option>
+              <option value="custom">Custom</option>
+            </select>
+            <input data-kol-tp-custom data-custom-for="kol-tp" type="text" placeholder="Custom: 500 or 5x" hidden>
+          </label>
+          <label>
+            Stop Loss
+            <select data-kol-sl data-custom-select="kol-sl">
+              <option value="0">Off</option>
+              <option value="8" selected>-8%</option>
+              <option value="10">-10%</option>
+              <option value="15">-15%</option>
+              <option value="custom">Custom</option>
+            </select>
+            <input data-kol-sl-custom data-custom-for="kol-sl" type="text" placeholder="Custom SL %" hidden>
+          </label>
+          <label>
+            Fallback Sell
+            <select data-kol-delay data-custom-select="kol-delay">
+              <option value="5s">5 sec</option>
+              <option value="1">1 min</option>
+              <option value="5" selected>5 min</option>
+              <option value="15">15 min</option>
+              <option value="60">1 hour</option>
+              <option value="custom">Custom</option>
+            </select>
+            <input data-kol-delay-custom data-custom-for="kol-delay" type="text" placeholder="Custom: 45s, 2, 2h" hidden>
+          </label>
+          <label>
+            Repeat
+            <select data-kol-loop data-custom-select="kol-loop">
+              <option value="1" selected>1x</option>
+              <option value="5">5x</option>
+              <option value="10">10x</option>
+              <option value="custom">Custom</option>
+            </select>
+            <input data-kol-loop-custom data-custom-for="kol-loop" type="number" min="1" max="10" step="1" placeholder="Custom 1-10" hidden>
+          </label>
+          <label>
+            Repeat Wait
+            <select data-kol-loop-delay data-custom-select="kol-loop-delay">
+              <option value="0" selected>No wait</option>
+              <option value="5s">5 sec</option>
+              <option value="30s">30 sec</option>
+              <option value="1">1 min</option>
+              <option value="5">5 min</option>
+              <option value="custom">Custom</option>
+            </select>
+            <input data-kol-loop-delay-custom data-custom-for="kol-loop-delay" type="text" placeholder="Custom: 30s or 2" hidden>
+          </label>
+          <label>
+            Slippage
+            <select data-kol-slippage data-custom-select="kol-slippage">
+              <option value="300">3%</option>
+              <option value="400" selected>4%</option>
+              <option value="500">5%</option>
+              <option value="custom">Custom</option>
+            </select>
+            <input data-kol-slippage-custom data-custom-for="kol-slippage" type="number" min="1" max="5000" step="1" placeholder="Custom bps" hidden>
+          </label>
+        </div>
+        <p class="trade-status" data-kol-status>${state.kolResult ? escapeHtml(state.kolResult.message || "KOL copy plan armed.") : configured ? "Ready. Tap Copy Plan on a signal below." : "Add SOLANA_TRACKER_API_KEY on Render to enable live KOL scans."}</p>
+        ${kolResultHtml()}
+      </article>
+
+      <aside class="trade-side">
+        <article>
+          <h3>Custom KOL Wallet</h3>
+          <p>Paste any public Solana wallet to inspect recent buy-style trades from that wallet.</p>
+          <label>
+            Wallet Address
+            <input data-kol-wallet type="text" placeholder="Paste KOL wallet" value="${escapeHtml(state.kolWallet || "")}">
+          </label>
+          <button data-kol-wallet-scan>Scan Wallet</button>
+        </article>
+        <article>
+          <h3>Data Source</h3>
+          <p>${configured ? "Solana Tracker API is configured. The key stays on your Render backend." : "Set SOLANA_TRACKER_API_KEY on Render, then redeploy."}</p>
+        </article>
+      </aside>
+    </section>
+    ${state.kolScan ? kolRowsHtml() : emptyState("No KOL scan loaded", "Pick a KOL mode or tap Refresh.")}
+  `;
+}
+
+function kolModeDescription(mode) {
+  const map = {
+    hot: "Recent high-performing KOLs and the strongest current positions they are holding.",
+    top: "Best ranked KOL wallets by realized performance, then their highest-value current token positions.",
+    consistent: "KOLs ranked by consistency/win rate, then filtered into cleaner copyable positions.",
+    fresh: "KOL wallets with the newest activity first, useful when you want faster signal flow."
+  };
+  return map[mode] || map.hot;
+}
+
+function kolResultHtml() {
+  const row = state.kolResult;
+  if (!row?.results?.length) return "";
+  return `<div class="mini-results">${row.results.map((item) => `<span data-ok="${item.ok ? "true" : "false"}">${escapeHtml(item.message || item)}</span>`).join("")}</div>`;
+}
+
+function kolRowsHtml() {
+  const scan = state.kolScan || {};
+  if (scan.configured === false) {
+    return emptyState("KOL Tracker needs an API key", scan.message || "Add SOLANA_TRACKER_API_KEY on Render.");
+  }
+  if (!scan.rows?.length) {
+    return emptyState("No KOL signals found", scan.message || "Try Refresh or another mode.");
+  }
+  return `
+    <section class="pick-grid">
+      ${scan.rows.slice(0, 12).map((row, index) => `
+        <article class="pick-card kol-card">
+          <div class="pick-top">
+            <span>${index + 1}</span>
+            <h3>${escapeHtml(row.symbol || "KOL Signal")}</h3>
+            <em>${escapeHtml(row.signalType || "KOL signal")}</em>
+          </div>
+          <p>${escapeHtml(row.name || "")}</p>
+          <code>${escapeHtml(row.tokenMint)}</code>
+          <dl>
+            <div><dt>Score</dt><dd>${escapeHtml(row.score || 0)}/100</dd></div>
+            <div><dt>KOL</dt><dd>${escapeHtml(row.kolName || "Unknown")}</dd></div>
+            <div><dt>Value</dt><dd>${escapeHtml(row.valueLabel || "$0")}</dd></div>
+            <div><dt>Win Rate</dt><dd>${escapeHtml(row.winRateLabel || "n/a")}</dd></div>
+            <div><dt>KOL ROI</dt><dd>${escapeHtml(row.roiLabel || "n/a")}</dd></div>
+            <div><dt>Realized</dt><dd>${escapeHtml(row.realizedLabel || "n/a")}</dd></div>
+          </dl>
+          <div class="card-actions">
+            <button data-kol-copy="${escapeHtml(row.tokenMint)}">Copy Plan</button>
+            <button data-kol-trade="${escapeHtml(row.tokenMint)}">Trade</button>
+            <button data-kol-bundle="${escapeHtml(row.tokenMint)}">Bundle</button>
+            <a href="${escapeHtml(row.dexUrl)}" target="_blank" rel="noreferrer">Chart</a>
+            <button data-copy="${escapeHtml(row.tokenMint)}">Copy CA</button>
+          </div>
+        </article>
+      `).join("")}
+    </section>
   `;
 }
 
@@ -923,7 +1301,7 @@ function downloadText(filename, text) {
 function readTradeForm() {
   const walletIndex = $("[data-trade-wallet]")?.value || "";
   const tokenMint = $("[data-trade-token]")?.value?.trim() || "";
-  const slippageBps = $("[data-trade-slippage]")?.value || "400";
+  const slippageBps = fieldValue("[data-trade-slippage]", "[data-trade-slippage-custom]", "400");
   if (!walletIndex) throw new Error("Choose a wallet first.");
   if (!tokenMint) throw new Error("Paste a token CA first.");
   state.tradeToken = tokenMint;
@@ -997,15 +1375,17 @@ function readVolumeForm() {
   const walletGroup = $("[data-volume-group]")?.value?.trim() || "";
   const tokenMint = $("[data-volume-token]")?.value?.trim() || "";
   const amountSol = $("[data-volume-amount]")?.value || "";
-  const sellDelay = $("[data-volume-delay]")?.value || "5";
-  const takeProfitPct = $("[data-volume-tp]")?.value || "25";
-  const stopLossPct = $("[data-volume-sl]")?.value || "8";
-  const loopCount = $("[data-volume-loop]")?.value || "1";
-  const slippageBps = $("[data-volume-slippage]")?.value || "400";
+  const sellDelay = fieldValue("[data-volume-delay]", "[data-volume-delay-custom]", "5");
+  const takeProfitPct = fieldValue("[data-volume-tp]", "[data-volume-tp-custom]", "25");
+  const stopLossPct = fieldValue("[data-volume-sl]", "[data-volume-sl-custom]", "8");
+  const loopCount = fieldValue("[data-volume-loop]", "[data-volume-loop-custom]", "1");
+  const loopDelay = fieldValue("[data-volume-loop-delay]", "[data-volume-loop-delay-custom]", "0");
+  const sellPercent = fieldValue("[data-volume-sell-percent]", "[data-volume-sell-percent-custom]", "100");
+  const slippageBps = fieldValue("[data-volume-slippage]", "[data-volume-slippage-custom]", "400");
   if (!walletIndexes.length && !walletGroup) throw new Error("Choose at least one wallet or enter a group label.");
   if (!tokenMint) throw new Error("Paste a token CA first.");
   state.volumeToken = tokenMint;
-  return { walletIndexes, walletGroup, tokenMint, amountSol, sellDelay, takeProfitPct, stopLossPct, loopCount, slippageBps };
+  return { walletIndexes, walletGroup, tokenMint, amountSol, sellDelay, takeProfitPct, stopLossPct, loopCount, loopDelay, sellPercent, slippageBps };
 }
 
 function setVolumeStatus(message) {
@@ -1034,10 +1414,12 @@ function readSniperEntryForm(tokenMint) {
   const walletIndexes = checkedWalletIndexes("sniper");
   const walletGroup = $("[data-sniper-group]")?.value?.trim() || "";
   const amountSol = $("[data-sniper-amount]")?.value || "";
-  const sellDelay = $("[data-sniper-delay]")?.value || (state.scanMode === "pumpsnipe" ? "3" : "5");
-  const takeProfitPct = $("[data-sniper-tp]")?.value || (state.scanMode === "pumpsnipe" ? "40" : "25");
-  const stopLossPct = $("[data-sniper-sl]")?.value || "8";
-  const slippageBps = $("[data-sniper-slippage]")?.value || (state.scanMode === "pumpsnipe" ? "300" : "400");
+  const sellDelay = fieldValue("[data-sniper-delay]", "[data-sniper-delay-custom]", state.scanMode === "pumpsnipe" ? "3" : "5");
+  const takeProfitPct = fieldValue("[data-sniper-tp]", "[data-sniper-tp-custom]", state.scanMode === "pumpsnipe" ? "40" : "25");
+  const stopLossPct = fieldValue("[data-sniper-sl]", "[data-sniper-sl-custom]", "8");
+  const loopCount = fieldValue("[data-sniper-loop]", "[data-sniper-loop-custom]", "1");
+  const loopDelay = fieldValue("[data-sniper-loop-delay]", "[data-sniper-loop-delay-custom]", "0");
+  const slippageBps = fieldValue("[data-sniper-slippage]", "[data-sniper-slippage-custom]", state.scanMode === "pumpsnipe" ? "300" : "400");
   if (!walletIndexes.length && !walletGroup) throw new Error("Choose at least one wallet or enter a group label.");
   if (!tokenMint) throw new Error("Pick a token first.");
   state.tradeToken = tokenMint;
@@ -1053,7 +1435,8 @@ function readSniperEntryForm(tokenMint) {
     takeProfitPct,
     stopLossPct,
     slippageBps,
-    loopCount: "1"
+    loopCount,
+    loopDelay
   };
 }
 
@@ -1079,6 +1462,46 @@ async function createSniperEntry(tokenMint) {
   }
 }
 
+function setKolStatus(message) {
+  const status = $("[data-kol-status]");
+  if (status) status.textContent = message;
+}
+
+function readKolPlanForm(tokenMint) {
+  const walletIndexes = checkedWalletIndexes("kol");
+  const walletGroup = $("[data-kol-group]")?.value?.trim() || "";
+  const amountSol = $("[data-kol-amount]")?.value || "";
+  const sellDelay = fieldValue("[data-kol-delay]", "[data-kol-delay-custom]", "5");
+  const takeProfitPct = fieldValue("[data-kol-tp]", "[data-kol-tp-custom]", "25");
+  const stopLossPct = fieldValue("[data-kol-sl]", "[data-kol-sl-custom]", "8");
+  const loopCount = fieldValue("[data-kol-loop]", "[data-kol-loop-custom]", "1");
+  const loopDelay = fieldValue("[data-kol-loop-delay]", "[data-kol-loop-delay-custom]", "0");
+  const slippageBps = fieldValue("[data-kol-slippage]", "[data-kol-slippage-custom]", "400");
+  if (!walletIndexes.length && !walletGroup) throw new Error("Choose at least one wallet or enter a group label.");
+  if (!tokenMint) throw new Error("Pick a KOL signal first.");
+  state.tradeToken = tokenMint;
+  state.volumeToken = tokenMint;
+  state.bundleToken = tokenMint;
+  return { tokenMint, walletIndexes, walletGroup, amountSol, sellDelay, takeProfitPct, stopLossPct, loopCount, loopDelay, sellPercent: "100", slippageBps };
+}
+
+async function createKolCopyPlan(tokenMint) {
+  try {
+    const payload = readKolPlanForm(tokenMint);
+    setKolStatus("Buying and arming KOL copy plan...");
+    const data = await api("/api/web/kol/entry", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    state.kolResult = data.plan;
+    await loadAll();
+    state.activeTab = "kol";
+    render();
+  } catch (error) {
+    setKolStatus(error.message);
+  }
+}
+
 function checkedWalletIndexes(prefix) {
   return [...document.querySelectorAll(`[data-${prefix}-wallet]:checked`)].map((input) => input.value);
 }
@@ -1093,12 +1516,25 @@ function readBundleForm() {
   const walletIndexes = checkedWalletIndexes("bundle");
   const walletGroup = $("[data-bundle-group]")?.value?.trim() || "";
   const amountSol = $("[data-bundle-amount]")?.value || "";
-  const percent = $("[data-bundle-percent]")?.value || "100";
-  const slippageBps = $("[data-bundle-slippage]")?.value || "400";
+  const percent = fieldValue("[data-bundle-percent]", "[data-bundle-percent-custom]", "100");
+  const slippageBps = fieldValue("[data-bundle-slippage]", "[data-bundle-slippage-custom]", "400");
   if (!tokenMint) throw new Error("Paste a token CA first.");
   if (!walletIndexes.length && !walletGroup) throw new Error("Choose at least one wallet or enter a group label.");
   state.bundleToken = tokenMint;
   return { tokenMint, walletIndexes, walletGroup, amountSol, percent, slippageBps };
+}
+
+function readBundlePlanForm() {
+  const payload = readBundleForm();
+  return {
+    ...payload,
+    sellDelay: fieldValue("[data-bundle-plan-delay]", "[data-bundle-plan-delay-custom]", "5"),
+    takeProfitPct: fieldValue("[data-bundle-plan-tp]", "[data-bundle-plan-tp-custom]", "60"),
+    stopLossPct: fieldValue("[data-bundle-plan-sl]", "[data-bundle-plan-sl-custom]", "10"),
+    loopCount: fieldValue("[data-bundle-plan-loop]", "[data-bundle-plan-loop-custom]", "1"),
+    loopDelay: fieldValue("[data-bundle-plan-loop-delay]", "[data-bundle-plan-loop-delay-custom]", "0"),
+    sellPercent: fieldValue("[data-bundle-plan-sell-percent]", "[data-bundle-plan-sell-percent-custom]", "100")
+  };
 }
 
 async function executeBundle(action) {
@@ -1118,6 +1554,23 @@ async function executeBundle(action) {
   }
 }
 
+async function executeBundlePlan() {
+  try {
+    const payload = readBundlePlanForm();
+    setBundleStatus("Buying and arming bundle exits...");
+    const data = await api("/api/web/bundle/plan", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    state.bundleResult = data.plan;
+    await loadAll();
+    state.activeTab = "bundle";
+    render();
+  } catch (error) {
+    setBundleStatus(error.message);
+  }
+}
+
 function setLaunchStatus(message) {
   const status = $("[data-launch-status]");
   if (status) status.textContent = message;
@@ -1128,13 +1581,15 @@ function readLaunchForm() {
   const walletIndexes = checkedWalletIndexes("launch");
   const walletGroup = $("[data-launch-group]")?.value?.trim() || "";
   const amountSol = $("[data-launch-amount]")?.value || "";
-  const takeProfitPct = $("[data-launch-tp]")?.value || "40";
-  const stopLossPct = $("[data-launch-sl]")?.value || "8";
-  const sellDelay = $("[data-launch-delay]")?.value || "180";
-  const slippageBps = $("[data-launch-slippage]")?.value || "300";
+  const takeProfitPct = fieldValue("[data-launch-tp]", "[data-launch-tp-custom]", "40");
+  const stopLossPct = fieldValue("[data-launch-sl]", "[data-launch-sl-custom]", "8");
+  const sellDelay = fieldValue("[data-launch-delay]", "[data-launch-delay-custom]", "3");
+  const loopCount = fieldValue("[data-launch-loop]", "[data-launch-loop-custom]", "1");
+  const loopDelay = fieldValue("[data-launch-loop-delay]", "[data-launch-loop-delay-custom]", "0");
+  const slippageBps = fieldValue("[data-launch-slippage]", "[data-launch-slippage-custom]", "300");
   if (!ticker) throw new Error("Enter a ticker to watch.");
   if (!walletIndexes.length && !walletGroup) throw new Error("Choose at least one wallet or enter a group label.");
-  return { ticker, walletIndexes, walletGroup, amountSol, takeProfitPct, stopLossPct, sellDelay, slippageBps };
+  return { ticker, walletIndexes, walletGroup, amountSol, takeProfitPct, stopLossPct, sellDelay, loopCount, loopDelay, slippageBps };
 }
 
 async function startLaunchWatch() {
@@ -1293,38 +1748,72 @@ function sniperSetupHtml() {
         </label>
         <label>
           Take Profit
-          <select data-sniper-tp>
+          <select data-sniper-tp data-custom-select="sniper-tp">
+            <option value="0">Off</option>
             <option value="15">+15%</option>
             <option value="25" ${isPump ? "" : "selected"}>+25%</option>
             <option value="40" ${isPump ? "selected" : ""}>+40%</option>
             <option value="50">+50%</option>
             <option value="100">+100%</option>
+            <option value="250">+250%</option>
+            <option value="custom">Custom</option>
           </select>
+          <input data-sniper-tp-custom data-custom-for="sniper-tp" type="text" placeholder="Custom: 500 or 5x" hidden>
         </label>
         <label>
           Stop Loss
-          <select data-sniper-sl>
+          <select data-sniper-sl data-custom-select="sniper-sl">
+            <option value="0">Off</option>
             <option value="8" selected>-8%</option>
             <option value="10">-10%</option>
             <option value="15">-15%</option>
+            <option value="custom">Custom</option>
           </select>
+          <input data-sniper-sl-custom data-custom-for="sniper-sl" type="text" placeholder="Custom SL %" hidden>
         </label>
         <label>
           Fallback Sell
-          <select data-sniper-delay>
+          <select data-sniper-delay data-custom-select="sniper-delay">
+            <option value="5s">5 sec</option>
             <option value="1">1 min</option>
             <option value="3" ${isPump ? "selected" : ""}>3 min</option>
             <option value="5" ${isPump ? "" : "selected"}>5 min</option>
             <option value="15">15 min</option>
+            <option value="custom">Custom</option>
           </select>
+          <input data-sniper-delay-custom data-custom-for="sniper-delay" type="text" placeholder="Custom: 45s, 2, 2h" hidden>
+        </label>
+        <label>
+          Repeat
+          <select data-sniper-loop data-custom-select="sniper-loop">
+            <option value="1" selected>1x</option>
+            <option value="5">5x</option>
+            <option value="10">10x</option>
+            <option value="custom">Custom</option>
+          </select>
+          <input data-sniper-loop-custom data-custom-for="sniper-loop" type="number" min="1" max="10" step="1" placeholder="Custom 1-10" hidden>
+        </label>
+        <label>
+          Repeat Wait
+          <select data-sniper-loop-delay data-custom-select="sniper-loop-delay">
+            <option value="0" selected>No wait</option>
+            <option value="5s">5 sec</option>
+            <option value="30s">30 sec</option>
+            <option value="1">1 min</option>
+            <option value="5">5 min</option>
+            <option value="custom">Custom</option>
+          </select>
+          <input data-sniper-loop-delay-custom data-custom-for="sniper-loop-delay" type="text" placeholder="Custom: 30s or 2" hidden>
         </label>
         <label>
           Slippage
-          <select data-sniper-slippage>
+          <select data-sniper-slippage data-custom-select="sniper-slippage">
             <option value="300" ${isPump ? "selected" : ""}>3%</option>
             <option value="400" ${isPump ? "" : "selected"}>4%</option>
             <option value="500">5%</option>
+            <option value="custom">Custom</option>
           </select>
+          <input data-sniper-slippage-custom data-custom-for="sniper-slippage" type="number" min="1" max="5000" step="1" placeholder="Custom bps" hidden>
         </label>
       </div>
       <p class="trade-status" data-sniper-status>${state.sniperResult ? escapeHtml(state.sniperResult.message || "Sniper plan armed.") : "Ready. Tap Snipe on a pick below."}</p>
@@ -1425,11 +1914,37 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-sniper-buy]")) {
     await createSniperEntry(target.dataset.sniperBuy);
   }
+  if (target.matches("[data-kol-mode]")) {
+    state.kolWallet = "";
+    await loadKolScan(target.dataset.kolMode).catch((error) => setError(error.message));
+  }
+  if (target.matches("[data-kol-refresh]")) {
+    await loadKolScan(state.kolMode, state.kolWallet).catch((error) => setError(error.message));
+  }
+  if (target.matches("[data-kol-wallet-scan]")) {
+    await loadKolScan(state.kolMode, $("[data-kol-wallet]")?.value || "").catch((error) => setError(error.message));
+  }
+  if (target.matches("[data-kol-copy]")) {
+    await createKolCopyPlan(target.dataset.kolCopy);
+  }
+  if (target.matches("[data-kol-trade]")) {
+    state.tradeToken = target.dataset.kolTrade || "";
+    state.activeTab = "trade";
+    render();
+  }
+  if (target.matches("[data-kol-bundle]")) {
+    state.bundleToken = target.dataset.kolBundle || "";
+    state.activeTab = "bundle";
+    render();
+  }
   if (target.matches("[data-bundle-buy]")) {
     await executeBundle("buy");
   }
   if (target.matches("[data-bundle-sell]")) {
     await executeBundle("sell");
+  }
+  if (target.matches("[data-bundle-plan]")) {
+    await executeBundlePlan();
   }
   if (target.matches("[data-launch-start]")) {
     await startLaunchWatch();
@@ -1450,6 +1965,9 @@ document.addEventListener("click", async (event) => {
     state.activeTab = target.dataset.tab;
     if (state.activeTab === "sniper" && !state.scan) {
       await loadScan().catch((error) => setError(error.message));
+    }
+    if (state.activeTab === "kol" && !state.kolScan) {
+      await loadKolScan().catch((error) => setError(error.message));
     }
     render();
   }
@@ -1472,6 +1990,9 @@ document.addEventListener("click", async (event) => {
 
 document.addEventListener("change", async (event) => {
   const target = event.target;
+  if (target?.matches?.("[data-custom-select]")) {
+    syncCustomFields();
+  }
   if (target?.matches?.("[data-restore-file]")) {
     await readRestoreFile(target);
   }

@@ -24,6 +24,12 @@ services:
         value: https://api.mainnet-beta.solana.com
       - key: MANUAL_LAUNCH_SCAN_INTERVAL_MS
         value: 500
+      - key: SOLANA_TRACKER_API_BASE
+        value: https://data.solanatracker.io
+      - key: SOLANA_TRACKER_KOL_LIMIT
+        value: 12
+      - key: SOLANA_TRACKER_CACHE_TTL_MS
+        value: 15000
       - key: JUPITER_API_BASE
         value: https://api.jup.ag/swap/v2
       - key: JUPITER_MIN_INTERVAL_MS
@@ -87,6 +93,8 @@ services:
       - key: APP_SECRET
         sync: false
       - key: JUPITER_API_KEY
+        sync: false
+      - key: SOLANA_TRACKER_API_KEY
         sync: false
       - key: TELEGRAM_ADMIN_USER_IDS
         sync: false
