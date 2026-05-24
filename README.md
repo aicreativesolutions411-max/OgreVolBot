@@ -91,6 +91,7 @@ Set this Cloudflare Pages environment variable:
 ```text
 OGRE_API_BASE=https://your-render-service.onrender.com
 TELEGRAM_BOT_USERNAME=OgreTradeBot
+WEB_PORTAL_URL=https://www.slimewire.org
 ```
 
 For your current Render service, `OGRE_API_BASE` should be your Render bot URL, for example `https://ogrevolbot.onrender.com`. The web app uses that backend for account creation, wallets, balances, scans, and trades. If the website is served directly from the Render `/portal` route, it can use the same origin automatically. If `OGRE_API_BASE` is blank on a separate website, the app falls back to `https://ogrevolbot.onrender.com`; change `OGRE_API_BASE` if your Render service has a different name.
@@ -99,12 +100,14 @@ Set these Render environment variables too:
 
 ```text
 TELEGRAM_BOT_USERNAME=OgreTradeBot
-WEB_PORTAL_URL=https://your-cloudflare-pages-site.pages.dev
-WEB_ALLOWED_ORIGIN=https://your-cloudflare-pages-site.pages.dev
+WEB_PORTAL_URL=https://www.slimewire.org
+WEB_ALLOWED_ORIGIN=https://www.slimewire.org,https://slimewire.org,https://your-cloudflare-pages-site.pages.dev,https://*.your-cloudflare-pages-site.pages.dev
 WEB_SESSION_TTL_HOURS=72
 RESEND_API_KEY=
 EMAIL_FROM=
 ```
+
+Cloudflare Pages creates preview deployment URLs such as `https://8cfb8188.your-cloudflare-pages-site.pages.dev`. Those preview URLs are different browser origins from the stable production URL, so they must be allowed by CORS if you open them. Use `https://www.slimewire.org` as the stable production URL for users, keep the wildcard preview origin above for testing, and use `WEB_ALLOWED_ORIGIN=*` only while you are still changing domains.
 
 Users can create a web account directly from the site. Existing Telegram users can also connect by opening `@OgreTradeBot`, sending `/web`, or tapping the bot's **Web App** menu button. The bot sends a one-time 64-bit random code that expires after 10 minutes, stores only a hash of the code, and rate-limits failed web login attempts.
 

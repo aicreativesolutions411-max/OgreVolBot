@@ -853,7 +853,7 @@ function webCorsHeaders(request) {
   const portalOrigin = originFromUrl(CONFIG.webPortalUrl);
   const allowOrigin = !origin
     ? "*"
-    : allowedOrigins.includes("*") || allowedOrigins.includes(origin) || (portalOrigin && portalOrigin === origin)
+    : allowedOrigins.includes("*") || allowedOrigins.some((allowedOrigin) => originMatchesAllowedOrigin(origin, allowedOrigin)) || (portalOrigin && originMatchesAllowedOrigin(origin, portalOrigin))
       ? origin
       : portalOrigin || allowedOrigins[0] || "null";
   return {
@@ -863,6 +863,24 @@ function webCorsHeaders(request) {
     "Access-Control-Max-Age": "86400",
     "Vary": "Origin"
   };
+}
+
+function originMatchesAllowedOrigin(origin, allowedOrigin) {
+  if (!origin || !allowedOrigin) return false;
+  if (allowedOrigin === "*" || origin === allowedOrigin) return true;
+
+  try {
+    const originUrl = new URL(origin);
+    const allowedUrl = new URL(allowedOrigin);
+    if (originUrl.protocol !== allowedUrl.protocol) return false;
+    const allowedHost = allowedUrl.hostname.toLowerCase();
+    const originHost = originUrl.hostname.toLowerCase();
+    if (!allowedHost.startsWith("*.")) return false;
+    const suffix = allowedHost.slice(2);
+    return originHost === suffix || originHost.endsWith(`.${suffix}`);
+  } catch {
+    return false;
+  }
 }
 
 function originFromUrl(value) {

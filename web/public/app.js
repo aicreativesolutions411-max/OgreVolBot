@@ -2,8 +2,13 @@ const config = window.OGRE_PORTAL_CONFIG || {};
 const configuredApiBase = String(config.apiBase || "").trim().replace(/\/+$/, "");
 const sameOriginApiBase = window.location.origin.replace(/\/+$/, "");
 const defaultRenderApiBase = "https://ogrevolbot.onrender.com";
-const apiBase = configuredApiBase
-  || (window.location.hostname.endsWith("onrender.com") ? sameOriginApiBase : defaultRenderApiBase);
+const apiCandidates = [
+  configuredApiBase,
+  window.location.hostname.endsWith("onrender.com") ? sameOriginApiBase : "",
+  defaultRenderApiBase
+].filter(Boolean);
+let apiBase = apiCandidates[0] || defaultRenderApiBase;
+const API_CONNECT_TIMEOUT_MS = 18_000;
 
 function getStoredToken() {
   try {
@@ -69,6 +74,31 @@ function apiUrl(path) {
   return `${apiBase}${path}`;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = API_CONNECT_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function wakeApi(base) {
+  try {
+    await fetchWithTimeout(`${base}/wake`, { cache: "no-store" }, 8_000);
+  } catch {
+    // Wake checks are best-effort. The main request below reports the real failure.
+  }
+}
+
 async function api(path, options = {}) {
   const headers = {
     "Content-Type": "application/json",
@@ -77,14 +107,33 @@ async function api(path, options = {}) {
   if (state.token) headers.Authorization = `Bearer ${state.token}`;
 
   let response;
+  let lastError = null;
   try {
-    response = await fetch(apiUrl(path), {
-      ...options,
-      headers,
-      cache: "no-store"
-    });
+    response = await fetchWithTimeout(apiUrl(path), { ...options, headers, cache: "no-store" });
   } catch (error) {
-    throw new Error(`Could not reach the OgreTrade API at ${apiBase}. Check OGRE_API_BASE on the website and WEB_ALLOWED_ORIGIN on Render.`);
+    lastError = error;
+    await wakeApi(apiBase);
+    await sleep(900);
+    try {
+      response = await fetchWithTimeout(apiUrl(path), { ...options, headers, cache: "no-store" });
+    } catch (retryError) {
+      lastError = retryError;
+      for (const fallbackBase of apiCandidates) {
+        if (fallbackBase === apiBase) continue;
+        try {
+          await wakeApi(fallbackBase);
+          response = await fetchWithTimeout(`${fallbackBase}${path}`, { ...options, headers, cache: "no-store" });
+          apiBase = fallbackBase;
+          break;
+        } catch (fallbackError) {
+          lastError = fallbackError;
+        }
+      }
+      if (!response) {
+        const detail = lastError?.name === "AbortError" ? "The request timed out." : "The browser blocked or could not open the request.";
+        throw new Error(`${detail} Could not reach the OgreTrade API at ${apiBase}. If you use Cloudflare Pages or a custom domain, set OGRE_API_BASE=https://ogrevolbot.onrender.com on the website build and add that site origin to WEB_ALLOWED_ORIGIN on Render. You can also use the same-origin Render portal at https://ogrevolbot.onrender.com/portal/.`);
+      }
+    }
   }
   const data = await response.json().catch(() => ({}));
 
