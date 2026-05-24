@@ -38,7 +38,7 @@ This bot does not provide wallet washing, provenance hiding, mixer behavior, or 
    TELEGRAM_BOT_TOKEN=...
    SOLANA_RPC_URL=...
    APP_SECRET=...
-   AUTO_SEND_RECOVERY_KEY_FILE=false
+   AUTO_SEND_RECOVERY_KEY_FILE=true
    JUPITER_API_KEY=...
    PUMPFUN_API_BASE=https://frontend-api-v3.pump.fun
    PUMPFUN_API_TOKEN=
@@ -72,6 +72,45 @@ This bot does not provide wallet washing, provenance hiding, mixer behavior, or 
    ```bash
    npm start
    ```
+
+## Web Portal
+
+The repo includes a lightweight static web portal for Cloudflare Pages. It is a desktop dashboard for the Render bot backend with Telegram-code login, wallets, balances, positions, PnL, and OgreSniper scans. Telegram remains the live trading confirmation interface.
+
+Cloudflare Pages settings:
+
+```text
+Build command: npm run build:web
+Build output directory: web/dist
+Root directory: leave blank
+Node version: 20
+```
+
+Set this Cloudflare Pages environment variable:
+
+```text
+OGRE_API_BASE=https://your-render-service.onrender.com
+TELEGRAM_BOT_USERNAME=YourBotUsernameWithoutAt
+```
+
+For your current Render service, that should be your Render bot URL, for example `https://ogrevolbot.onrender.com`. The portal checks `OGRE_API_BASE/healthz`, so the bot health endpoint returns a browser-safe CORS header.
+
+Set these Render environment variables too:
+
+```text
+TELEGRAM_BOT_USERNAME=YourBotUsernameWithoutAt
+WEB_PORTAL_URL=https://your-cloudflare-pages-site.pages.dev
+WEB_ALLOWED_ORIGIN=https://your-cloudflare-pages-site.pages.dev
+WEB_SESSION_TTL_HOURS=72
+RESEND_API_KEY=
+EMAIL_FROM=
+```
+
+Users connect the web portal by opening the Telegram bot and sending `/web`, or by tapping the bot's **Web Portal** menu button. The bot sends a one-time 64-bit random code that expires after 10 minutes, stores only a hash of the code, and rate-limits failed web login attempts. The website exchanges that code for a web session and can show public wallet addresses, balances, positions, PnL, and OgreSniper scans. Private keys are never sent to the browser.
+
+The web dashboard has an optional email reminder field. If `RESEND_API_KEY` and `EMAIL_FROM` are set on Render, saving an email sends the user a portal/login reminder. It does not email private keys, backup files, or permanent login tokens.
+
+The Render bot also serves the same built portal at `/portal` after `npm run build:web`, but Cloudflare Pages is recommended for the public website.
 
 ## Telegram Commands
 
@@ -119,7 +158,7 @@ If you still see `429 Too Many Requests`, your current Solana RPC or Jupiter pla
 
 `Emergency Key Export` / **Solflare Key Export** sends raw private keys for the Telegram user's own bot wallets after an exact confirmation phrase. This is for recovery only. Anyone with that file can drain those wallets.
 
-`AUTO_SEND_RECOVERY_KEY_FILE=true` makes the bot also send a Solflare/Phantom recovery key file after wallet create/import/restore, and before wallet removal. This is the strongest recovery fallback if Render storage or `APP_SECRET` gets misconfigured later, but it sends raw private keys through Telegram documents. Keep it `false` unless you accept that risk and want the extra emergency file.
+`AUTO_SEND_RECOVERY_KEY_FILE=true` makes the bot also send a Solflare/Phantom recovery key file after wallet create/import/restore, and before wallet removal. This is now the recommended recovery-first setup so new wallet sets immediately get both the encrypted bot backup and a Solflare-style key export. The recovery key file contains raw private keys, so users must keep it private.
 
 `Rescue Backup Keys` lets a user upload the wallet backup `.txt` file and receive a private-key recovery file even if the wallets are not currently restored in the bot. If the backup opens but keys cannot decrypt, the new deployment is using a different `APP_SECRET`; set Render back to the exact old `APP_SECRET`, redeploy, then restore or rescue again.
 

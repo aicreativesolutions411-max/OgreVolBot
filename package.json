@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node src/index.js",
     "render-start": "node src/index.js",
-    "check": "node --check src/index.js"
+    "check": "node --check src/index.js",
+    "build:web": "node scripts/build-web.js"
   },
   "dependencies": {
     "@solana/web3.js": "^1.98.4",

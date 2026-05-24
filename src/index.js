@@ -35,7 +35,10 @@ const sniperScanState = new Map();
 let sniperCandidatesCache = { cachedAt: 0, value: [] };
 let photonNewPairsCache = { cachedAt: 0, value: [] };
 let manualLaunchCandidatesCache = { cachedAt: 0, value: [] };
+const webLoginAttemptLimits = new Map();
 const startedAt = new Date();
+const WEB_LOGIN_CODE_TTL_MS = 10 * 60 * 1000;
+const WEB_STATIC_DIR = path.resolve(__dirname, "..", "web", "dist");
 let lastKeepAliveStatus = {
   enabled: false,
   target: null,
@@ -90,6 +93,7 @@ const BRAND_FOOTER = [
 
 const PUBLIC_MENU = [
   [{ text: "🐎 How To Use", callback_data: "quick_start" }],
+  [{ text: "Web Portal", callback_data: "web_portal" }],
   [{ text: "💱 Trade", callback_data: "trade_menu" }],
   [{ text: "🎯 OgreSniper", callback_data: "sniper_menu" }],
   [{ text: "💳 Wallet", callback_data: "wallet_menu" }, { text: "🧲 Bundle", callback_data: "bundle_menu" }],
@@ -142,6 +146,7 @@ const PRIVATE_CHAT_ACTIONS = new Set([
   "restore_backup",
   "verify_backup_file",
   "rescue_backup_keys",
+  "web_portal",
   "fund_wallets",
   "auto_bundle",
   "batch_buy",
@@ -210,6 +215,7 @@ function loadConfig() {
   const sniperDefaultSlippageBps = Number.parseInt(process.env.SNIPER_DEFAULT_SLIPPAGE_BPS || "400", 10);
   const jupiterSwapMaxAttempts = Number.parseInt(process.env.JUPITER_SWAP_MAX_ATTEMPTS || "2", 10);
   const manualLaunchScanIntervalMs = Number.parseInt(process.env.MANUAL_LAUNCH_SCAN_INTERVAL_MS || String(DEFAULT_MANUAL_LAUNCH_SCAN_INTERVAL_MS), 10);
+  const webSessionTtlHours = Number.parseInt(process.env.WEB_SESSION_TTL_HOURS || "72", 10);
 
   if (!Number.isInteger(bundleFeeBps) || bundleFeeBps < 0 || bundleFeeBps > 1000) {
     throw new Error("BUNDLE_FEE_BPS must be an integer from 0 to 1000.");
@@ -275,6 +281,10 @@ function loadConfig() {
     throw new Error("MANUAL_LAUNCH_SCAN_INTERVAL_MS must be an integer from 500 to 30000.");
   }
 
+  if (!Number.isInteger(webSessionTtlHours) || webSessionTtlHours < 1 || webSessionTtlHours > 720) {
+    throw new Error("WEB_SESSION_TTL_HOURS must be an integer from 1 to 720.");
+  }
+
   try {
     new PublicKey(feeWallet);
   } catch {
@@ -287,7 +297,7 @@ function loadConfig() {
     appSecret: secret,
     dataDir: path.resolve(process.cwd(), process.env.DATA_DIR || path.join(__dirname, "..", "data")),
     allowEphemeralStorage: parseBoolean(process.env.ALLOW_EPHEMERAL_STORAGE || "false"),
-    autoSendRecoveryKeyFile: parseBoolean(process.env.AUTO_SEND_RECOVERY_KEY_FILE || "false"),
+    autoSendRecoveryKeyFile: parseBoolean(process.env.AUTO_SEND_RECOVERY_KEY_FILE || "true"),
     port: Number.parseInt(process.env.PORT || "0", 10),
     webhookUrl: (process.env.TELEGRAM_WEBHOOK_URL || "").replace(/\/$/, ""),
     webhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET || "",
@@ -301,6 +311,12 @@ function loadConfig() {
     pumpFunApiToken: process.env.PUMPFUN_API_TOKEN || "",
     photonNewPairsUrl: (process.env.PHOTON_NEW_PAIRS_URL || "").trim(),
     photonApiKey: process.env.PHOTON_API_KEY || "",
+    telegramBotUsername: normalizeTelegramUsername(process.env.TELEGRAM_BOT_USERNAME || ""),
+    webPortalUrl: (process.env.WEB_PORTAL_URL || "").replace(/\/$/, ""),
+    webAllowedOrigin: process.env.WEB_ALLOWED_ORIGIN || "*",
+    webSessionTtlHours,
+    resendApiKey: process.env.RESEND_API_KEY || "",
+    emailFrom: process.env.EMAIL_FROM || "",
     tradingSpeedPreset,
     feeWallet,
     bundleFeeBps,
@@ -400,8 +416,27 @@ function startHealthServer() {
   const server = http.createServer(async (request, response) => {
     const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
 
+    if (request.method === "OPTIONS" && requestUrl.pathname.startsWith("/api/")) {
+      response.writeHead(204, webCorsHeaders(request));
+      response.end();
+      return;
+    }
+
+    if (requestUrl.pathname.startsWith("/api/web/")) {
+      await handleWebApiRequest(request, response, requestUrl);
+      return;
+    }
+
+    if (requestUrl.pathname === "/portal" || requestUrl.pathname.startsWith("/portal/")) {
+      await serveWebPortal(requestUrl, response);
+      return;
+    }
+
     if (["/", "/healthz", "/readyz", "/wake"].includes(requestUrl.pathname)) {
-      response.writeHead(200, { "Content-Type": "application/json" });
+      response.writeHead(200, {
+        "Content-Type": "application/json",
+        ...webCorsHeaders(request)
+      });
       response.end(JSON.stringify({
         ok: true,
         service: "solana-telegram-wallet-ops-bot",
@@ -451,6 +486,195 @@ function startHealthServer() {
   });
 }
 
+async function handleWebApiRequest(request, response, requestUrl) {
+  try {
+    const pathname = requestUrl.pathname;
+
+    if (request.method === "GET" && pathname === "/api/web/config") {
+      sendWebJson(request, response, 200, {
+        ok: true,
+        service: "OgreTradeBot",
+        portalUrl: CONFIG.webPortalUrl,
+        telegramBotUsername: CONFIG.telegramBotUsername,
+        telegramBotUrl: telegramBotStartUrl(),
+        socials: brandSocialLinks(),
+        features: ["wallets", "balances", "positions", "pnl", "sniper-scan"]
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/login") {
+      assertWebLoginAttemptAllowed(request);
+      const body = await readJsonRequestBody(request);
+      const result = await verifyWebLoginCode(body.code);
+      clearWebLoginAttempts(request);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        token: result.token,
+        expiresAt: result.expiresAt,
+        user: await webUserSummary(result.userId)
+      });
+      return;
+    }
+
+    const auth = await authenticateWebRequest(request);
+
+    if (request.method === "POST" && pathname === "/api/web/logout") {
+      await revokeWebSession(auth.tokenHash);
+      sendWebJson(request, response, 200, { ok: true });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/me") {
+      sendWebJson(request, response, 200, {
+        ok: true,
+        user: await webUserSummary(auth.userId)
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/email") {
+      const body = await readJsonRequestBody(request);
+      const result = await updateWebProfileEmail(auth.userId, body.email);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        profile: result.profile,
+        emailSent: result.emailSent,
+        emailError: result.emailError
+      });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/wallets") {
+      sendWebJson(request, response, 200, {
+        ok: true,
+        wallets: await webWalletRows(auth.userId)
+      });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/balances") {
+      sendWebJson(request, response, 200, {
+        ok: true,
+        balances: await webBalanceRows(auth.userId)
+      });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/positions") {
+      sendWebJson(request, response, 200, {
+        ok: true,
+        positions: await webPositionRows(auth.userId)
+      });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/pnl") {
+      sendWebJson(request, response, 200, {
+        ok: true,
+        pnl: await webPnlSummary(auth.userId)
+      });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/sniper/scan") {
+      const mode = requestUrl.searchParams.get("mode") || "safe";
+      sendWebJson(request, response, 200, {
+        ok: true,
+        scan: await webSniperScan(auth.userId, mode)
+      });
+      return;
+    }
+
+    sendWebJson(request, response, 404, { ok: false, error: "not_found" });
+  } catch (error) {
+    const status = error.statusCode || error.status || 500;
+    sendWebJson(request, response, status, {
+      ok: false,
+      error: status >= 500 ? "server_error" : "request_error",
+      message: friendlyError(error)
+    });
+  }
+}
+
+async function serveWebPortal(requestUrl, response) {
+  const relativePath = requestUrl.pathname === "/portal"
+    ? "index.html"
+    : decodeURIComponent(requestUrl.pathname.replace(/^\/portal\/?/, "")) || "index.html";
+  const safeRelativePath = relativePath.replace(/^[/\\]+/, "");
+  const filePath = path.resolve(WEB_STATIC_DIR, safeRelativePath);
+
+  if (!filePath.startsWith(WEB_STATIC_DIR)) {
+    response.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
+    response.end("Forbidden");
+    return;
+  }
+
+  try {
+    const stat = await fs.stat(filePath);
+    const target = stat.isDirectory() ? path.join(filePath, "index.html") : filePath;
+    const data = await fs.readFile(target);
+    response.writeHead(200, {
+      "Content-Type": webContentType(target),
+      "Cache-Control": target.endsWith("index.html") ? "no-store" : "public, max-age=3600"
+    });
+    response.end(data);
+  } catch {
+    response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+    response.end("Not found");
+  }
+}
+
+function webContentType(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  const types = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".svg": "image/svg+xml; charset=utf-8"
+  };
+  return types[ext] || "application/octet-stream";
+}
+
+function webCorsHeaders(request) {
+  const origin = request.headers.origin || "*";
+  const allowed = CONFIG.webAllowedOrigin || "*";
+  const allowOrigin = allowed === "*" ? "*" : allowed.split(",").map((item) => item.trim()).includes(origin) ? origin : allowed.split(",")[0].trim();
+  return {
+    "Access-Control-Allow-Origin": allowOrigin || "*",
+    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type,Authorization,X-Ogre-Session",
+    "Access-Control-Max-Age": "86400",
+    "Vary": "Origin"
+  };
+}
+
+function sendWebJson(request, response, status, data) {
+  response.writeHead(status, {
+    "Content-Type": "application/json",
+    "Cache-Control": "no-store",
+    ...webCorsHeaders(request)
+  });
+  response.end(JSON.stringify(data));
+}
+
+async function readJsonRequestBody(request) {
+  const text = await readRequestBody(request);
+  if (!text.trim()) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    const error = new Error("Request body must be valid JSON.");
+    error.statusCode = 400;
+    throw error;
+  }
+}
+
 function webhookPath() {
   return `/telegram/webhook/${CONFIG.webhookSecret}`;
 }
@@ -469,6 +693,10 @@ function parseAllowedUserIds(value) {
     .split(",")
     .map((item) => Number.parseInt(item.trim(), 10))
     .filter((item) => Number.isInteger(item));
+}
+
+function normalizeTelegramUsername(value) {
+  return String(value || "").trim().replace(/^@/, "");
 }
 
 function parseBoolean(value) {
@@ -543,6 +771,7 @@ async function ensureDataFiles() {
   await writeJsonIfMissing(dcaPlansPath(), { plans: [] });
   await writeJsonIfMissing(sniperSettingsPath(), { users: {} });
   await writeJsonIfMissing(tradeHistoryPath(), { trades: [] });
+  await writeJsonIfMissing(webAuthPath(), { codes: [], sessions: [] });
   await ensureAppSecretFingerprint();
   await assignUnownedWalletsToSingleAdmin();
   await validateStoredWalletSecrets();
@@ -615,6 +844,10 @@ function sniperSettingsPath() {
 
 function tradeHistoryPath() {
   return path.join(CONFIG.dataDir, "trade-history.json");
+}
+
+function webAuthPath() {
+  return path.join(CONFIG.dataDir, "web-auth.json");
 }
 
 function appSecretFingerprintPath() {
@@ -797,6 +1030,9 @@ async function handleCallback(query, userId) {
   switch (query.data) {
     case "quick_start":
       await showHowToMenu(chatId, messageId);
+      break;
+    case "web_portal":
+      await sendWebLoginCode(chatId, userId, messageId);
       break;
     case "main_menu":
       await showMenu(chatId, userId, messageId);
@@ -1103,6 +1339,16 @@ async function handleMessage(message, userId) {
   if (text === "/start" || text === "/menu") {
     clearSession(chatId);
     await showMenu(chatId, userId);
+    return;
+  }
+
+  if (text === "/web" || /^\/start(?:@\w+)?\s+web$/i.test(text)) {
+    if (!isPrivateChat(message.chat)) {
+      await say(chatId, "Open this bot in DM to connect the web portal.");
+      return;
+    }
+    clearSession(chatId);
+    await sendWebLoginCode(chatId, userId);
     return;
   }
 
@@ -7760,10 +8006,10 @@ function howToPage(topic) {
         "- Remove Wallets: sends an encrypted backup, asks for a second confirmation, then removes selected wallet records from the bot without moving funds.",
         "",
         "Automatic backups:",
-        "The bot automatically sends a backup file after wallet creation, wallet import, and wallet restore. The filename includes the group label, user ID, exact timestamp, wallet hint, and backup fingerprint so repeated group names do not look identical.",
+        "The bot automatically sends an encrypted bot backup file after wallet creation, wallet import, and wallet restore. The filename includes the group label, user ID, exact timestamp, wallet hint, and backup fingerprint so repeated group names do not look identical.",
         "If several old files have the same label, tap Verify Backup File and upload each one until the needed public address appears.",
-        "Optional raw recovery file:",
-        "If AUTO_SEND_RECOVERY_KEY_FILE=true on Render, the bot also sends a Solflare/Phantom recovery key file after wallet create/import/restore. This is easier to import if the bot fails, but it contains raw private keys and must be kept private.",
+        "Solflare recovery file:",
+        "With AUTO_SEND_RECOVERY_KEY_FILE=true, the bot also sends a Solflare/Phantom recovery key file after wallet create/import/restore. This is easier to import if the bot fails, but it contains raw private keys and must be kept private.",
         "",
         "How to restore by uploading the saved file:",
         "1. Open the bot in DM.",
@@ -8267,6 +8513,505 @@ async function readSniperSettings() {
 
 async function writeSniperSettings(store) {
   await fs.writeFile(sniperSettingsPath(), JSON.stringify(store, null, 2));
+}
+
+async function readWebAuthStore() {
+  const store = await readJson(webAuthPath());
+  if (!Array.isArray(store.codes)) store.codes = [];
+  if (!Array.isArray(store.sessions)) store.sessions = [];
+  if (!store.profiles || typeof store.profiles !== "object") store.profiles = {};
+  return store;
+}
+
+async function writeWebAuthStore(store) {
+  await fs.writeFile(webAuthPath(), JSON.stringify(store, null, 2));
+}
+
+async function createWebLoginCode(userId, chatId) {
+  const store = await readWebAuthStore();
+  const now = Date.now();
+  const code = crypto.randomBytes(8).toString("hex").toUpperCase();
+  const formatted = code.match(/.{1,4}/g).join("-");
+  const expiresAt = new Date(now + WEB_LOGIN_CODE_TTL_MS).toISOString();
+
+  store.codes = store.codes.filter((item) => {
+    const expired = Date.parse(item.expiresAt || "") <= now;
+    const sameUser = String(item.userId) === String(userId);
+    return !expired && !sameUser && !item.usedAt;
+  });
+  store.codes.push({
+    codeHash: hashWebSecret(code),
+    userId: String(userId),
+    chatId: String(chatId),
+    createdAt: new Date(now).toISOString(),
+    expiresAt
+  });
+  store.sessions = store.sessions.filter((item) => Date.parse(item.expiresAt || "") > now);
+  await writeWebAuthStore(store);
+  await audit("web_login_code_created", { userId, chatId, expiresAt });
+
+  return { code: formatted, expiresAt };
+}
+
+async function verifyWebLoginCode(input) {
+  const normalized = normalizeWebLoginCode(input);
+  if (!normalized) {
+    const error = new Error("Enter the login code from Telegram.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const store = await readWebAuthStore();
+  const now = Date.now();
+  const codeHash = hashWebSecret(normalized);
+  const index = store.codes.findIndex((item) => item.codeHash === codeHash && !item.usedAt && Date.parse(item.expiresAt || "") > now);
+
+  if (index === -1) {
+    const error = new Error("Login code is expired or invalid. Open Telegram and request a new /web code.");
+    error.statusCode = 401;
+    throw error;
+  }
+
+  const codeRecord = store.codes[index];
+  const token = crypto.randomBytes(32).toString("base64url");
+  const tokenHash = hashWebSecret(token);
+  const expiresAt = new Date(now + CONFIG.webSessionTtlHours * 60 * 60 * 1000).toISOString();
+
+  store.codes[index] = {
+    ...codeRecord,
+    usedAt: new Date(now).toISOString()
+  };
+  store.codes = store.codes.filter((item) => !item.usedAt && Date.parse(item.expiresAt || "") > now);
+  store.sessions = [
+    ...store.sessions.filter((item) => Date.parse(item.expiresAt || "") > now),
+    {
+      tokenHash,
+      userId: String(codeRecord.userId),
+      chatId: String(codeRecord.chatId || codeRecord.userId),
+      createdAt: new Date(now).toISOString(),
+      lastUsedAt: new Date(now).toISOString(),
+      expiresAt
+    }
+  ];
+  await writeWebAuthStore(store);
+  await audit("web_login_success", { userId: codeRecord.userId, expiresAt });
+
+  return { token, tokenHash, userId: codeRecord.userId, expiresAt };
+}
+
+async function authenticateWebRequest(request) {
+  const token = webAuthTokenFromRequest(request);
+  if (!token) {
+    const error = new Error("Missing web session. Log in with a fresh Telegram /web code.");
+    error.statusCode = 401;
+    throw error;
+  }
+
+  const tokenHash = hashWebSecret(token);
+  const store = await readWebAuthStore();
+  const now = Date.now();
+  const session = store.sessions.find((item) => item.tokenHash === tokenHash && Date.parse(item.expiresAt || "") > now);
+
+  if (!session) {
+    const error = new Error("Web session expired. Open Telegram and request a new /web code.");
+    error.statusCode = 401;
+    throw error;
+  }
+
+  session.lastUsedAt = new Date(now).toISOString();
+  store.sessions = store.sessions.filter((item) => Date.parse(item.expiresAt || "") > now);
+  await writeWebAuthStore(store);
+
+  return { userId: session.userId, chatId: session.chatId, tokenHash };
+}
+
+async function revokeWebSession(tokenHash) {
+  const store = await readWebAuthStore();
+  store.sessions = store.sessions.filter((item) => item.tokenHash !== tokenHash);
+  await writeWebAuthStore(store);
+}
+
+function webAuthTokenFromRequest(request) {
+  const auth = request.headers.authorization || "";
+  if (/^bearer\s+/i.test(auth)) return auth.replace(/^bearer\s+/i, "").trim();
+  return String(request.headers["x-ogre-session"] || "").trim();
+}
+
+function normalizeWebLoginCode(value) {
+  return String(value || "").replace(/[^a-f0-9]/gi, "").toUpperCase();
+}
+
+function hashWebSecret(value) {
+  return crypto.createHmac("sha256", CONFIG.appSecret).update(String(value)).digest("hex");
+}
+
+function assertWebLoginAttemptAllowed(request) {
+  const key = webClientKey(request);
+  const now = Date.now();
+  const windowMs = 10 * 60 * 1000;
+  const record = webLoginAttemptLimits.get(key) || { count: 0, resetAt: now + windowMs };
+
+  if (record.resetAt <= now) {
+    record.count = 0;
+    record.resetAt = now + windowMs;
+  }
+
+  record.count += 1;
+  webLoginAttemptLimits.set(key, record);
+
+  if (record.count > 8) {
+    const error = new Error("Too many login attempts. Wait a few minutes, then request a new Telegram /web code.");
+    error.statusCode = 429;
+    throw error;
+  }
+}
+
+function clearWebLoginAttempts(request) {
+  webLoginAttemptLimits.delete(webClientKey(request));
+}
+
+function webClientKey(request) {
+  return String(request.headers["cf-connecting-ip"]
+    || request.headers["x-forwarded-for"]
+    || request.socket?.remoteAddress
+    || "unknown").split(",")[0].trim();
+}
+
+async function sendWebLoginCode(chatId, userId, messageId = null) {
+  const { code, expiresAt } = await createWebLoginCode(userId, chatId);
+  const lines = [
+    "Web Portal Login",
+    "",
+    `Code: ${code}`,
+    `Expires: ${expiresAt}`,
+    "",
+    "Enter this one-time code on the OgreTrade web portal. It is 64-bit random, expires in 10 minutes, and is stored only as a hash.",
+    "The website can view your bot dashboard, but private keys stay on the Render backend.",
+    CONFIG.webPortalUrl ? `Portal: ${CONFIG.webPortalUrl}` : "Set WEB_PORTAL_URL on Render so this message can include your website link.",
+    "",
+    "Never give this code to anyone else."
+  ];
+
+  await sendOrEditMessage(chatId, messageId, withBrandFooter(lines.join("\n")), {
+    inline_keyboard: [
+      ...(CONFIG.webPortalUrl ? [[{ text: "Open Web Portal", url: CONFIG.webPortalUrl }]] : []),
+      [{ text: "Main Menu", callback_data: "main_menu" }]
+    ]
+  });
+}
+
+async function webUserSummary(userId) {
+  const wallets = await webWalletRows(userId);
+  const profile = await webProfileForUser(userId);
+  return {
+    id: String(userId),
+    isAdmin: isAdmin(userId),
+    walletCount: wallets.length,
+    email: profile.email || "",
+    portalUrl: CONFIG.webPortalUrl,
+    telegramBotUrl: telegramBotStartUrl()
+  };
+}
+
+async function webProfileForUser(userId) {
+  const store = await readWebAuthStore();
+  return store.profiles[String(userId)] || {};
+}
+
+async function updateWebProfileEmail(userId, emailValue) {
+  const email = normalizeEmail(emailValue);
+  const store = await readWebAuthStore();
+  const key = String(userId);
+  const profile = {
+    ...(store.profiles[key] || {}),
+    email,
+    updatedAt: new Date().toISOString()
+  };
+  store.profiles[key] = profile;
+  await writeWebAuthStore(store);
+  await audit("web_profile_email_update", { userId, hasEmail: Boolean(email) });
+
+  let emailSent = false;
+  let emailError = null;
+  if (email) {
+    try {
+      emailSent = await sendPortalReminderEmail(email);
+    } catch (error) {
+      emailError = friendlyError(error);
+    }
+  }
+
+  return { profile, emailSent, emailError };
+}
+
+function normalizeEmail(value) {
+  const email = String(value || "").trim().toLowerCase();
+  if (!email) return "";
+  if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    const error = new Error("Enter a valid email address, or leave it blank.");
+    error.statusCode = 400;
+    throw error;
+  }
+  return email;
+}
+
+async function sendPortalReminderEmail(email) {
+  if (!CONFIG.resendApiKey || !CONFIG.emailFrom) {
+    return false;
+  }
+
+  const portalUrl = CONFIG.webPortalUrl || "your OgreTrade web portal";
+  const botUrl = telegramBotStartUrl() || "your Telegram bot";
+  await fetchJson("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${CONFIG.resendApiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      from: CONFIG.emailFrom,
+      to: email,
+      subject: "Your OgreTrade portal login reminder",
+      text: [
+        "OgreTrade portal reminder",
+        "",
+        `Portal: ${portalUrl}`,
+        `Telegram bot: ${botUrl}`,
+        "",
+        "To log in later, open the Telegram bot and send /web to get a fresh one-time code.",
+        "For security, this email does not include wallet private keys, backup files, or a permanent login token."
+      ].join("\n")
+    }),
+    timeoutMs: 8_000
+  });
+  return true;
+}
+
+async function webWalletRows(userId) {
+  const store = await readWalletStore();
+  return walletsForOwner(store, userId).map((wallet, index) => ({
+    index: index + 1,
+    label: wallet.label,
+    publicKey: wallet.publicKey,
+    shortPublicKey: shortMint(wallet.publicKey)
+  }));
+}
+
+async function webBalanceRows(userId) {
+  const store = await readWalletStore();
+  const wallets = walletsForOwner(store, userId);
+  const rows = [];
+
+  await runWithConcurrency(wallets, CONFIG.balanceConcurrency, async (wallet, index) => {
+    const row = {
+      index: index + 1,
+      label: wallet.label,
+      publicKey: wallet.publicKey,
+      shortPublicKey: shortMint(wallet.publicKey),
+      sol: null,
+      tokens: [],
+      warnings: [],
+      error: null
+    };
+
+    try {
+      const keypair = decryptWallet(wallet);
+      const balance = await getSolBalanceCached(keypair.publicKey);
+      row.sol = lamportsToSol(balance);
+      row.lamports = String(balance);
+
+      const { accounts, warnings } = await getOwnedTokenAccountsWithWarningsCached(keypair.publicKey);
+      row.warnings = warnings || [];
+      row.tokens = accounts
+        .filter((account) => account.rawAmount > 0n)
+        .slice(0, 12)
+        .map((account) => ({
+          mint: account.mint,
+          shortMint: shortMint(account.mint),
+          uiAmount: account.uiAmount,
+          rawAmount: account.rawAmount.toString(),
+          dexUrl: dexScreenerUrl(account.mint)
+        }));
+    } catch (error) {
+      row.error = friendlyError(error);
+    }
+
+    rows[index] = row;
+  });
+
+  return rows;
+}
+
+async function webPositionRows(userId) {
+  const positions = await buildPositionsOverview(userId);
+  return positions.slice(0, 25).map((position) => {
+    const realized = position.received - position.spent;
+    const openPnl = position.estimatedValueLamports !== null
+      ? position.estimatedValueLamports + position.received - position.spent
+      : null;
+    return {
+      tokenMint: position.tokenMint,
+      shortMint: shortMint(position.tokenMint),
+      dexUrl: dexScreenerUrl(position.tokenMint),
+      uiAmount: formatTokenAmount(position.uiAmount),
+      walletCount: position.walletCount,
+      buys: position.buys,
+      sells: position.sells,
+      spentSol: lamportsBigToSol(position.spent),
+      receivedSol: lamportsBigToSol(position.received),
+      realizedSol: formatSignedLamports(realized),
+      estimatedValueSol: position.estimatedValueLamports !== null ? lamportsBigToSol(position.estimatedValueLamports) : null,
+      openPnlSol: openPnl !== null ? formatSignedLamports(openPnl) : null,
+      openPnlPercent: openPnl !== null && position.spent > 0n ? formatPercentMove(openPnl, position.spent) : null,
+      valueError: position.valueError || null
+    };
+  });
+}
+
+async function webPnlSummary(userId) {
+  const trades = await tradeHistoryRows(userId, null);
+  const tokenRows = await pnlRows(userId, null, { groupByToken: true, sortBy: "recent", limit: 25 });
+  const totals = trades.reduce((summary, trade) => {
+    if (trade.type === "buy") {
+      summary.buys += 1;
+      summary.spent += BigInt(trade.solLamportsSpent || 0);
+    } else if (trade.type === "sell") {
+      summary.sells += 1;
+      summary.received += BigInt(trade.solLamportsReceived || 0);
+    }
+    return summary;
+  }, { buys: 0, sells: 0, spent: 0n, received: 0n });
+  const realized = totals.received - totals.spent;
+
+  return {
+    totals: {
+      tradeCount: trades.length,
+      buys: totals.buys,
+      sells: totals.sells,
+      spentSol: lamportsBigToSol(totals.spent),
+      receivedSol: lamportsBigToSol(totals.received),
+      realizedSol: formatSignedLamports(realized)
+    },
+    tokens: tokenRows.map((row) => ({
+      tokenMint: row.tokenMint,
+      shortMint: shortMint(row.tokenMint),
+      walletLabel: row.walletLabel,
+      buys: row.buys,
+      sells: row.sells,
+      spentSol: lamportsBigToSol(row.spent),
+      receivedSol: lamportsBigToSol(row.received),
+      realizedSol: formatSignedLamports(row.received - row.spent),
+      lastTradeAt: row.lastTradeAt,
+      dexUrl: dexScreenerUrl(row.tokenMint)
+    })),
+    trades: trades.slice(0, 50).map((trade) => ({
+      id: trade.id,
+      timestamp: trade.timestamp,
+      type: trade.type,
+      walletLabel: trade.walletLabel || shortMint(trade.walletPublicKey || ""),
+      walletPublicKey: trade.walletPublicKey || null,
+      tokenMint: trade.tokenMint,
+      shortMint: shortMint(trade.tokenMint || ""),
+      solAmount: trade.type === "buy"
+        ? lamportsBigToSol(BigInt(trade.solLamportsSpent || 0))
+        : lamportsBigToSol(BigInt(trade.solLamportsReceived || 0)),
+      tokenAmount: trade.tokenAmount || null,
+      source: trade.source ? formatTradeSource(trade.source) : null,
+      signature: trade.signature || null,
+      dexUrl: trade.tokenMint ? dexScreenerUrl(trade.tokenMint) : null
+    }))
+  };
+}
+
+async function webSniperScan(userId, mode) {
+  const safeMode = normalizeSniperMode(mode);
+  const settings = { ...sniperModeDefaults(safeMode), mode: safeMode };
+  const scanState = nextSniperScanState(`web:${userId}`, safeMode);
+  const candidates = await fetchSniperCandidates();
+  const scored = [];
+  const scanPool = await hydrateSniperCandidates(rotateSniperCandidatePool(candidates, scanState));
+
+  await runWithConcurrency(scanPool, Math.min(6, Math.max(3, CONFIG.balanceConcurrency)), async (candidate) => {
+    try {
+      scored.push(await scoreSniperCandidate(candidate, settings));
+    } catch {
+      // Ignore broken profile rows.
+    }
+  });
+
+  const strictRows = scored.filter((item) => isStrictSniperPick(item, settings)).sort(compareSniperScores);
+  const fallbackRows = scored.filter((item) => isFallbackSniperPick(item, settings)).sort(compareSniperScores);
+  const qualifiedRows = strictRows.length >= 6 ? strictRows : fallbackRows;
+  const modeRows = qualifiedRows.filter((item) => isModeRelevantSniperPick(item, safeMode));
+  const looseModeRows = modeRows.length > 0 ? modeRows : qualifiedRows.filter((item) => isLooseModeRelevantSniperPick(item, safeMode));
+  const displayRows = looseModeRows.length > 0 ? looseModeRows : safeMode === "safe" ? qualifiedRows : [];
+  const rows = selectRotatingSniperRows(displayRows, scanState).slice(0, 6);
+
+  return {
+    mode: safeMode,
+    label: sniperModeLabel(safeMode),
+    refreshCount: scanState.refreshCount,
+    scanned: scored.length,
+    qualified: qualifiedRows.length,
+    modeFit: modeRows.length,
+    rows: rows.map(webSniperRow)
+  };
+}
+
+function normalizeSniperMode(mode) {
+  const normalized = String(mode || "safe").trim().toLowerCase();
+  const map = {
+    lowcap: "moonshot",
+    low_cap: "moonshot",
+    pumpsnipe: "pumpsnipe",
+    auto: "safe"
+  };
+  const value = map[normalized] || normalized;
+  return ["safe", "smart", "fast", "moonshot", "meme", "ai", "long", "pumpsnipe"].includes(value) ? value : "safe";
+}
+
+function webSniperRow(row) {
+  return {
+    tokenMint: row.tokenMint,
+    symbol: row.symbol || shortMint(row.tokenMint),
+    name: row.name || "Unknown",
+    score: row.score,
+    category: row.category,
+    rugRisk: row.rugRisk,
+    exitRisk: row.exitRisk,
+    manipulationScore: row.manipulationScore,
+    momentum: row.momentum,
+    smartMoney: row.smartMoney,
+    scalpSetup: row.scalpSetup,
+    marketCap: row.marketCap,
+    marketCapLabel: formatUsdCompact(row.marketCap || 0) || "$0",
+    liquidityUsd: row.liquidityUsd,
+    liquidityLabel: formatUsdCompact(row.liquidityUsd || 0) || "$0",
+    volume5m: row.volume5m,
+    volume5mLabel: formatUsdCompact(row.volume5m || 0) || "$0",
+    volumeH1: row.volumeH1,
+    volumeH1Label: formatUsdCompact(row.volumeH1 || 0) || "$0",
+    m5: row.m5,
+    h1: row.h1,
+    h6: row.h6,
+    h24: row.h24,
+    pairAgeMinutes: row.pairAgeMinutes,
+    riskFlags: row.riskFlags || [],
+    reasons: row.reasons || [],
+    dexUrl: dexScreenerUrl(row.tokenMint)
+  };
+}
+
+function telegramBotStartUrl() {
+  return CONFIG.telegramBotUsername ? `https://t.me/${CONFIG.telegramBotUsername}?start=web` : "";
+}
+
+function brandSocialLinks() {
+  return {
+    telegram: "https://t.me/ogrecoinonsol",
+    website: "https://ogremode.com/",
+    twitter: "https://twitter.com/i/communities/1930265213917425858"
+  };
 }
 
 async function sniperSettingsForUser(userId) {

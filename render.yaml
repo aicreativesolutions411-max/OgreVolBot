@@ -15,7 +15,7 @@ services:
       - key: ALLOW_EPHEMERAL_STORAGE
         value: true
       - key: AUTO_SEND_RECOVERY_KEY_FILE
-        value: false
+        value: true
       - key: SOLANA_RPC_URL
         value: https://api.mainnet-beta.solana.com
       - key: MANUAL_LAUNCH_SCAN_INTERVAL_MS
@@ -62,6 +62,18 @@ services:
         sync: false
       - key: TELEGRAM_WEBHOOK_SECRET
         generateValue: true
+      - key: TELEGRAM_BOT_USERNAME
+        sync: false
+      - key: WEB_PORTAL_URL
+        sync: false
+      - key: WEB_ALLOWED_ORIGIN
+        value: "*"
+      - key: WEB_SESSION_TTL_HOURS
+        value: 72
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
       - key: KEEPALIVE_ENABLED
         value: true
       - key: KEEPALIVE_URL

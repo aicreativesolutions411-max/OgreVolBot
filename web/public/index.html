@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>OgreTrade Portal</title>
+    <meta name="description" content="OgreTrade desktop portal for wallets, balances, positions, PnL, and sniper scans.">
+    <link rel="stylesheet" href="./styles.css">
+    <script src="./config.js"></script>
+    <script type="module" src="./app.js"></script>
+  </head>
+  <body>
+    <main class="shell" data-app>
+      <header class="topbar">
+        <a class="brand" href="https://ogremode.com/" target="_blank" rel="noreferrer">
+          <span class="brand-mark">OG</span>
+          <span>
+            <strong>OgreTrade Portal</strong>
+            <small>Telegram bot desktop dashboard</small>
+          </span>
+        </a>
+        <div class="status-pill">
+          <span class="status-dot" data-status-dot data-status="loading"></span>
+          <span data-status-text>Checking Render...</span>
+        </div>
+      </header>
+
+      <section class="login-view" data-login>
+        <div class="login-copy">
+          <p class="eyebrow">Secure web login</p>
+          <h1>Use the bot from a cleaner desktop view.</h1>
+          <p class="lead">
+            Open Telegram, request a web code, then paste it here. The website shows wallet dashboards,
+            PnL, balances, and sniper scans without exposing private keys in the browser.
+          </p>
+          <div class="login-steps">
+            <a class="primary-link" data-bot-link target="_blank" rel="noreferrer">Open Telegram Bot</a>
+            <span>Send <code>/web</code></span>
+            <span>Paste the code below</span>
+          </div>
+        </div>
+
+        <form class="login-card" onsubmit="return false;">
+          <img src="./assets/ogre-aces.jpg" alt="OgreTrade welcome art">
+          <label>
+            Web login code
+            <input data-login-code type="text" inputmode="text" autocomplete="one-time-code" placeholder="ABCD-1234">
+          </label>
+          <button class="primary" type="button" data-login-submit>Connect Portal</button>
+          <p class="error" data-error hidden></p>
+          <small>API: <span data-api-base></span></small>
+        </form>
+      </section>
+
+      <section class="dashboard" data-dashboard hidden>
+        <div class="dashboard-head">
+          <div>
+            <p class="eyebrow">Connected</p>
+            <h1>Command center</h1>
+            <p>User <code data-user-id></code>. Trading confirmations still run through Telegram.</p>
+          </div>
+          <div class="head-actions">
+            <button class="secondary" type="button" data-refresh-all>Refresh All</button>
+            <button class="secondary" type="button" data-open-bot>Open Bot</button>
+            <button class="ghost" type="button" data-logout>Log Out</button>
+          </div>
+        </div>
+
+        <section class="metrics" aria-label="Account metrics">
+          <article>
+            <span>Wallets</span>
+            <strong data-wallet-count>0</strong>
+          </article>
+          <article>
+            <span>Total SOL</span>
+            <strong data-total-sol>0</strong>
+          </article>
+          <article>
+            <span>Positions</span>
+            <strong data-position-count>0</strong>
+          </article>
+          <article>
+            <span>Realized PnL</span>
+            <strong data-realized>+0 SOL</strong>
+          </article>
+        </section>
+
+        <nav class="tabs" aria-label="Portal views">
+          <button data-tab="dashboard" data-active="true">Home</button>
+          <button data-tab="wallets">Wallets</button>
+          <button data-tab="positions">Positions</button>
+          <button data-tab="pnl">PnL</button>
+          <button data-tab="sniper">Sniper</button>
+        </nav>
+
+        <section class="panel-host" data-panel></section>
+      </section>
+
+      <footer class="footer">
+        <span>Powered by Ogres</span>
+        <nav>
+          <a href="https://t.me/ogrecoinonsol" target="_blank" rel="noreferrer">Telegram</a>
+          <a href="https://ogremode.com/" target="_blank" rel="noreferrer">Website</a>
+          <a href="https://twitter.com/i/communities/1930265213917425858" target="_blank" rel="noreferrer">Twitter</a>
+        </nav>
+      </footer>
+    </main>
+  </body>
+</html>
