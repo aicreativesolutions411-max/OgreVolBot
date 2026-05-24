@@ -54,6 +54,7 @@ const PUMPSNIPE_TAKE_PROFIT_PCT = 40;
 const PUMPSNIPE_STOP_LOSS_PCT = 8;
 const PUMPSNIPE_SLIPPAGE_BPS = 300;
 const PUMPSNIPE_SELL_DELAY_SECONDS = 180;
+const SNIPER_ROUTE_PROBE_LAMPORTS = 50_000_000;
 const AUTO_BUNDLE_TAKE_PROFIT_PCT = 60;
 const AUTO_BUNDLE_STOP_LOSS_PCT = 10;
 const AUTO_BUNDLE_SELL_DELAY_SECONDS = 172800;
@@ -1354,6 +1355,14 @@ async function continueFlow(chatId, text, session) {
         session.data.amountSol = parsePositiveNumber(text);
         if (session.data.pumpSnipe) {
           applyPumpSnipeExitPreset(session);
+          {
+            const preflight = await preflightSniperSelectedRoute(session);
+            if (!preflight.ok) {
+              await sendSniperPreflightFailure(chatId, session, preflight.reason);
+              break;
+            }
+            session.data.routePrecheckNote = preflight.note;
+          }
           session.step = "pumpsnipe_exit_review";
           await sendQuickChoicePrompt(chatId, [
             "PumpSnipe defaults selected.",
@@ -1367,7 +1376,14 @@ async function continueFlow(chatId, text, session) {
         }
         if (session.data.autoSnipe) {
           applyAutoSnipeExitPreset(session);
-          session.data.slippageBps = AUTOSNIPE_SLIPPAGE_BPS;
+          {
+            const preflight = await preflightSniperSelectedRoute(session);
+            if (!preflight.ok) {
+              await sendSniperPreflightFailure(chatId, session, preflight.reason);
+              break;
+            }
+            session.data.routePrecheckNote = preflight.note;
+          }
           session.step = "sniper_confirm";
           await sendConfirmPrompt(chatId, withBrandFooter(formatSniperConfirm(session.data)));
           break;
@@ -2806,6 +2822,70 @@ async function createSniperTimedPlanFlow(chatId, session) {
     pumpSnipe: Boolean(session.data.pumpSnipe)
   });
   await createTimedTradePlanFlow(chatId, session);
+}
+
+async function preflightSniperSelectedRoute(session) {
+  if (!CONFIG.jupiterApiKey) {
+    return { ok: false, reason: "Missing JUPITER_API_KEY. AutoSnipe/PumpSnipe need Jupiter before they can buy." };
+  }
+
+  const store = await readWalletStore();
+  const selectedWallets = session.data.walletIndexes.map((index) => getWalletAt(store, index, session.userId));
+  const amountLamports = solToLamports(session.data.amountSol);
+  const feeLamports = calculateFeeLamports(amountLamports);
+  const swapLamports = amountLamports - feeLamports;
+  if (swapLamports <= 0) {
+    return { ok: false, reason: "Amount is too small after the bot fee. Choose a bigger SOL amount." };
+  }
+
+  let taker = null;
+  for (const wallet of selectedWallets) {
+    try {
+      const balance = await getSolBalanceCached(new PublicKey(wallet.publicKey), { force: true });
+      if (balance >= recommendedBuyFundingLamports(amountLamports)) {
+        taker = new PublicKey(wallet.publicKey);
+        break;
+      }
+    } catch {
+      // Try the next selected wallet.
+    }
+  }
+
+  if (!taker) {
+    return { ok: false, reason: `No selected wallet has enough SOL for ${session.data.amountSol} SOL plus the ${CONFIG.buyReserveSol} SOL safety reserve.` };
+  }
+
+  const route = await checkSniperRoundTripRoute({
+    tokenMint: session.data.tokenMint,
+    taker,
+    amountLamports: swapLamports,
+    slippageBps: session.data.slippageBps || CONFIG.sniperDefaultSlippageBps
+  });
+
+  if (!route.ok) {
+    return { ok: false, reason: route.reason };
+  }
+
+  return { ok: true, note: "selected-wallet buy and sell route precheck passed" };
+}
+
+async function sendSniperPreflightFailure(chatId, session, reason) {
+  const messageId = session.activePromptMessageId || null;
+  const isPump = Boolean(session.data.pumpSnipe);
+  clearSession(chatId);
+  await sendOrEditMessage(chatId, messageId, withBrandFooter([
+    `${isPump ? "PumpSnipe" : "AutoSnipe"} rejected that pick before Confirm.`,
+    "",
+    reason,
+    "",
+    "I did not send a buy. Tap retry to rotate to a different live setup."
+  ].join("\n")), {
+    inline_keyboard: [
+      [{ text: `Try ${isPump ? "PumpSnipe" : "AutoSnipe"} Again`, callback_data: isPump ? "sniper_pumpsnipe" : "sniper_auto" }],
+      [{ text: "Scan Early Plays", callback_data: "sniper_scan" }],
+      [{ text: "Back", callback_data: isPump ? "sniper_auto_menu" : "sniper_menu" }]
+    ]
+  });
 }
 
 async function createDcaPlanFlow(chatId, session) {
@@ -4701,6 +4781,7 @@ async function startAutoSnipeFlow(chatId, userId, messageId = null) {
   const targetMessageId = messageId || status?.message_id || null;
 
   const result = await findAutoSnipePick(userId);
+  const precheckSummary = formatSniperPrecheckSummary(result.precheckStats);
   if (!result.pick) {
     clearSession(chatId);
     await sendOrEditMessage(chatId, targetMessageId, withBrandFooter([
@@ -4710,9 +4791,10 @@ async function startAutoSnipeFlow(chatId, userId, messageId = null) {
       `Strict qualified: ${result.strictCount}`,
       `Backup qualified: ${result.backupCount}`,
       `Usable after precheck: ${result.freshCount}`,
+      precheckSummary,
       "",
       "Try again in a minute, or use Scan Early Plays to review picks manually."
-    ].join("\n")), {
+    ].filter(Boolean).join("\n")), {
       inline_keyboard: [
         [{ text: "Try AutoSnipe Again", callback_data: "sniper_auto" }],
         [{ text: "Scan Early Plays", callback_data: "sniper_scan" }],
@@ -4761,6 +4843,7 @@ async function startPumpSnipeFlow(chatId, userId, messageId = null) {
   const targetMessageId = messageId || status?.message_id || null;
 
   const result = await findPumpSnipePick(userId);
+  const precheckSummary = formatSniperPrecheckSummary(result.precheckStats);
   if (!result.pick) {
     clearSession(chatId);
     await sendOrEditMessage(chatId, targetMessageId, withBrandFooter([
@@ -4770,9 +4853,10 @@ async function startPumpSnipeFlow(chatId, userId, messageId = null) {
       `Strict qualified: ${result.strictCount}`,
       `Backup qualified: ${result.backupCount}`,
       `Usable after precheck: ${result.freshCount}`,
+      precheckSummary,
       "",
       "Tap Try PumpSnipe Again to rotate the candidate pool, or use Scan Early Plays to review more options manually."
-    ].join("\n")), {
+    ].filter(Boolean).join("\n")), {
       inline_keyboard: [
         [{ text: "Try PumpSnipe Again", callback_data: "sniper_pumpsnipe" }],
         [{ text: "Scan Early Plays", callback_data: "sniper_scan" }],
@@ -5413,6 +5497,7 @@ async function findAutoSnipePick(userId) {
   const scanState = nextSniperScanState(userId, "autosnipe");
   const candidates = await fetchSniperCandidates();
   const scored = [];
+  const precheckStats = createSniperPrecheckStats();
   const scanPool = await hydrateSniperCandidates(rotateSniperCandidatePool(candidates, scanState));
 
   await runWithConcurrency(scanPool, Math.min(6, Math.max(3, CONFIG.balanceConcurrency)), async (candidate) => {
@@ -5435,22 +5520,31 @@ async function findAutoSnipePick(userId) {
     .sort(compareAutoSnipeScores);
 
   let tier = "strict";
-  let safeFresh = await filterAutoSnipeMintSafe(
-    freshAutoSnipeRows(strictQualified, previousShown, recentTokens).slice(0, 18)
+  let precheck = await filterSniperCandidatesForBuy(
+    freshAutoSnipeRows(strictQualified, previousShown, recentTokens).slice(0, 18),
+    { userId, slippageBps: AUTOSNIPE_SLIPPAGE_BPS, targetAccepted: 1 }
   );
+  mergeSniperPrecheckStats(precheckStats, precheck.stats);
+  let safeFresh = precheck.rows;
   if (safeFresh.length === 0) {
     tier = "backup";
-    safeFresh = await filterAutoSnipeMintSafe(
-      freshAutoSnipeRows(backupQualified, previousShown, recentTokens).slice(0, 30)
+    precheck = await filterSniperCandidatesForBuy(
+      freshAutoSnipeRows(backupQualified, previousShown, recentTokens).slice(0, 30),
+      { userId, slippageBps: AUTOSNIPE_SLIPPAGE_BPS, targetAccepted: 1 }
     );
+    mergeSniperPrecheckStats(precheckStats, precheck.stats);
+    safeFresh = precheck.rows;
   }
   if (safeFresh.length === 0) {
     tier = "repeat";
-    safeFresh = await filterAutoSnipeMintSafe(
+    precheck = await filterSniperCandidatesForBuy(
       uniqueSniperScoreRows([...strictQualified, ...backupQualified])
         .filter((item) => shouldRepeatAutoSnipePick(item))
-        .slice(0, 18)
+        .slice(0, 18),
+      { userId, slippageBps: AUTOSNIPE_SLIPPAGE_BPS, targetAccepted: 1 }
     );
+    mergeSniperPrecheckStats(precheckStats, precheck.stats);
+    safeFresh = precheck.rows;
   }
   const pick = safeFresh[0] || null;
 
@@ -5466,7 +5560,8 @@ async function findAutoSnipePick(userId) {
     strictCount: strictQualified.length,
     backupCount: backupQualified.length,
     freshCount: safeFresh.length,
-    tier
+    tier,
+    precheckStats
   };
 }
 
@@ -5475,6 +5570,7 @@ async function findPumpSnipePick(userId) {
   const scanState = nextSniperScanState(userId, "pumpsnipe");
   const candidates = await fetchPumpSnipeCandidates();
   const scored = [];
+  const precheckStats = createSniperPrecheckStats();
   const scanPool = await hydrateSniperCandidates(rotatePumpSnipeCandidatePool(candidates, scanState));
 
   await runWithConcurrency(scanPool, Math.min(8, Math.max(4, CONFIG.balanceConcurrency)), async (candidate) => {
@@ -5497,22 +5593,31 @@ async function findPumpSnipePick(userId) {
     .sort(comparePumpSnipeScores);
 
   let tier = "strict";
-  let safeFresh = await filterAutoSnipeMintSafe(
-    freshPumpSnipeRows(strictQualified, previousShown, recentTokens).slice(0, 24)
+  let precheck = await filterSniperCandidatesForBuy(
+    freshPumpSnipeRows(strictQualified, previousShown, recentTokens).slice(0, 24),
+    { userId, slippageBps: PUMPSNIPE_SLIPPAGE_BPS, targetAccepted: 1 }
   );
+  mergeSniperPrecheckStats(precheckStats, precheck.stats);
+  let safeFresh = precheck.rows;
   if (safeFresh.length === 0) {
     tier = "backup";
-    safeFresh = await filterAutoSnipeMintSafe(
-      freshPumpSnipeRows(backupQualified, previousShown, recentTokens).slice(0, 36)
+    precheck = await filterSniperCandidatesForBuy(
+      freshPumpSnipeRows(backupQualified, previousShown, recentTokens).slice(0, 36),
+      { userId, slippageBps: PUMPSNIPE_SLIPPAGE_BPS, targetAccepted: 1 }
     );
+    mergeSniperPrecheckStats(precheckStats, precheck.stats);
+    safeFresh = precheck.rows;
   }
   if (safeFresh.length === 0) {
     tier = "repeat";
-    safeFresh = await filterAutoSnipeMintSafe(
+    precheck = await filterSniperCandidatesForBuy(
       uniqueSniperScoreRows([...strictQualified, ...backupQualified])
         .filter((item) => shouldRepeatPumpSnipePick(item))
-        .slice(0, 24)
+        .slice(0, 24),
+      { userId, slippageBps: PUMPSNIPE_SLIPPAGE_BPS, targetAccepted: 1 }
     );
+    mergeSniperPrecheckStats(precheckStats, precheck.stats);
+    safeFresh = precheck.rows;
   }
 
   const pick = safeFresh[0] || null;
@@ -5528,7 +5633,8 @@ async function findPumpSnipePick(userId) {
     strictCount: strictQualified.length,
     backupCount: backupQualified.length,
     freshCount: safeFresh.length,
-    tier
+    tier,
+    precheckStats
   };
 }
 
@@ -5554,33 +5660,164 @@ function freshPumpSnipeRows(rows, previousShown, recentTokens) {
   return strongRepeats.length > 0 ? strongRepeats : rows;
 }
 
-async function filterAutoSnipeMintSafe(rows) {
-  const preferred = [];
-  const fallback = [];
+async function filterSniperCandidatesForBuy(rows, options = {}) {
+  const accepted = [];
+  const stats = createSniperPrecheckStats();
+  const targetAccepted = Math.max(1, Number(options.targetAccepted || 1));
+  const taker = await sniperRoutePrecheckTaker(options.userId, options.routeProbeLamports || SNIPER_ROUTE_PROBE_LAMPORTS);
+
   for (const row of rows) {
+    if (accepted.length >= targetAccepted) break;
+    stats.checked += 1;
+
     try {
       const safety = await getMintSafetyInfo(row.tokenMint);
-      if (safety.tokenProgram === TOKEN_2022_PROGRAM_ID.toBase58()) continue;
-      if (safety.freezeAuthority) continue;
-      if (safety.mintAuthority) {
-        fallback.push({
-          ...row,
-          autoSnipeSafetyNote: "mint authority is active; final buy safety may block it"
-        });
+      if (safety.tokenProgram === TOKEN_2022_PROGRAM_ID.toBase58()) {
+        stats.token2022 += 1;
+        stats.lastReject = `${sniperCandidateLabel(row)} blocked: Token-2022`;
         continue;
       }
-      preferred.push({
-        ...row,
-        autoSnipeSafetyNote: "mint precheck passed"
-      });
+      if (safety.freezeAuthority) {
+        stats.freezeAuthority += 1;
+        stats.lastReject = `${sniperCandidateLabel(row)} blocked: freeze authority active`;
+        continue;
+      }
+      if (safety.mintAuthority) {
+        stats.mintAuthority += 1;
+        stats.lastReject = `${sniperCandidateLabel(row)} blocked: mint authority active`;
+        continue;
+      }
     } catch {
-      fallback.push({
-        ...row,
-        autoSnipeSafetyNote: "mint precheck was unavailable; final buy safety will recheck before sending"
-      });
+      stats.mintReadUnavailable += 1;
     }
+
+    if (taker && CONFIG.jupiterApiKey) {
+      const route = await checkSniperRoundTripRoute({
+        tokenMint: row.tokenMint,
+        taker,
+        amountLamports: options.routeProbeLamports || SNIPER_ROUTE_PROBE_LAMPORTS,
+        slippageBps: options.slippageBps || CONFIG.sniperDefaultSlippageBps
+      });
+      if (!route.ok) {
+        stats.routeRejected += 1;
+        stats.lastReject = `${sniperCandidateLabel(row)} route blocked: ${route.reason}`;
+        continue;
+      }
+
+      accepted.push({
+        ...row,
+        autoSnipeSafetyNote: "mint and round-trip route precheck passed"
+      });
+      stats.accepted += 1;
+      continue;
+    }
+
+    accepted.push({
+      ...row,
+      autoSnipeSafetyNote: taker ? "mint precheck passed; route precheck skipped" : "mint precheck passed; add/import a wallet for route precheck"
+    });
+    stats.accepted += 1;
   }
-  return preferred.length > 0 ? preferred : fallback;
+
+  return { rows: accepted, stats };
+}
+
+async function sniperRoutePrecheckTaker(userId, minLamports = SNIPER_ROUTE_PROBE_LAMPORTS) {
+  try {
+    const store = await readWalletStore();
+    const wallets = walletsForOwner(store, userId);
+    for (const wallet of wallets.slice(0, 6)) {
+      try {
+        const publicKey = new PublicKey(wallet.publicKey);
+        const balance = await getSolBalanceCached(publicKey, { force: false });
+        if (balance >= minLamports + CONFIG.buyReserveLamports) {
+          return publicKey;
+        }
+      } catch {
+        // Try the next wallet.
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function checkSniperRoundTripRoute({ tokenMint, taker, amountLamports, slippageBps }) {
+  try {
+    const buyOrder = await createJupiterOrder({
+      taker,
+      inputMint: SOL_MINT,
+      outputMint: tokenMint,
+      amount: amountLamports,
+      slippageBps
+    });
+    const estimatedTokenOut = BigInt(buyOrder.outAmount || buyOrder.outputAmount || 0);
+    if (estimatedTokenOut <= 0n) {
+      return { ok: false, reason: "buy route returned zero token output" };
+    }
+
+    const sellOrder = await createJupiterOrder({
+      taker,
+      inputMint: tokenMint,
+      outputMint: SOL_MINT,
+      amount: estimatedTokenOut.toString(),
+      slippageBps
+    });
+    const estimatedSolBack = BigInt(sellOrder.outAmount || sellOrder.outputAmount || 0);
+    if (estimatedSolBack <= 0n) {
+      return { ok: false, reason: "sell route returned zero SOL output" };
+    }
+
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, reason: friendlyError(error) };
+  }
+}
+
+function createSniperPrecheckStats() {
+  return {
+    checked: 0,
+    accepted: 0,
+    token2022: 0,
+    freezeAuthority: 0,
+    mintAuthority: 0,
+    mintReadUnavailable: 0,
+    routeRejected: 0,
+    lastReject: ""
+  };
+}
+
+function mergeSniperPrecheckStats(target, source) {
+  if (!source) return target;
+  for (const key of ["checked", "accepted", "token2022", "freezeAuthority", "mintAuthority", "mintReadUnavailable", "routeRejected"]) {
+    target[key] += Number(source[key] || 0);
+  }
+  if (source.lastReject) target.lastReject = source.lastReject;
+  return target;
+}
+
+function formatSniperPrecheckSummary(stats) {
+  if (!stats || !stats.checked) return "";
+  const blocked = stats.token2022 + stats.freezeAuthority + stats.mintAuthority + stats.routeRejected;
+  const parts = [
+    `Prechecked: ${stats.checked}`,
+    `Route-safe: ${stats.accepted}`,
+    blocked ? `Blocked: ${blocked}` : "",
+    stats.routeRejected ? `No route: ${stats.routeRejected}` : "",
+    stats.mintAuthority ? `Mint active: ${stats.mintAuthority}` : "",
+    stats.freezeAuthority ? `Freeze active: ${stats.freezeAuthority}` : "",
+    stats.token2022 ? `Token-2022: ${stats.token2022}` : "",
+    stats.mintReadUnavailable ? `Mint read skipped: ${stats.mintReadUnavailable}` : ""
+  ].filter(Boolean);
+  return [
+    parts.join(" | "),
+    stats.lastReject ? `Last blocker: ${stats.lastReject}` : ""
+  ].filter(Boolean).join("\n");
+}
+
+function sniperCandidateLabel(row) {
+  return row?.symbol || row?.name || shortMint(row?.tokenMint || "");
 }
 
 function formatAutoSnipeTier(tier) {
@@ -5667,20 +5904,20 @@ function isPumpSnipePick(item) {
 
   return item.category !== "Avoid"
     && earlyEnough
-    && item.score >= 58
-    && item.rugRisk <= 72
-    && item.exitRisk <= 84
-    && item.manipulationScore <= 90
+    && item.score >= 50
+    && item.rugRisk <= 84
+    && item.exitRisk <= 92
+    && item.manipulationScore <= 96
     && item.scalpScore >= 2
-    && item.marketCap >= 1_000
-    && item.marketCap <= 180_000
-    && item.liquidityUsd >= 1_000
-    && liquidityToMarketCap >= 0.008
-    && (item.volume5m >= 100 || item.volumeH1 >= 1_000)
-    && item.buyPressure >= 0.85
-    && item.m5 >= -15
-    && item.m5 <= 90
-    && item.h1 >= -20
+    && item.marketCap >= 500
+    && item.marketCap <= 220_000
+    && item.liquidityUsd >= 500
+    && liquidityToMarketCap >= 0.004
+    && (item.volume5m >= 75 || item.volumeH1 >= 750)
+    && item.buyPressure >= 0.65
+    && item.m5 >= -25
+    && item.m5 <= 180
+    && item.h1 >= -35
     && !flags.has("hard dump")
     && !flags.has("sell pressure");
 }
@@ -5690,18 +5927,18 @@ function isPumpSnipeBackupPick(item) {
   const liquidityToMarketCap = item.marketCap > 0 ? item.liquidityUsd / item.marketCap : 0;
 
   return item.category !== "Avoid"
-    && item.score >= 48
-    && item.rugRisk <= 82
-    && item.exitRisk <= 92
-    && item.manipulationScore <= 95
+    && item.score >= 42
+    && item.rugRisk <= 90
+    && item.exitRisk <= 96
+    && item.manipulationScore <= 98
     && item.scalpScore >= 1
-    && item.marketCap >= 750
-    && item.marketCap <= 280_000
-    && item.liquidityUsd >= 750
-    && liquidityToMarketCap >= 0.006
-    && (item.volume5m >= 50 || item.volumeH1 >= 500)
-    && item.buyPressure >= 0.75
-    && item.m5 >= -20
+    && item.marketCap >= 400
+    && item.marketCap <= 320_000
+    && item.liquidityUsd >= 400
+    && liquidityToMarketCap >= 0.003
+    && (item.volume5m >= 50 || item.volumeH1 >= 400)
+    && item.buyPressure >= 0.55
+    && item.m5 >= -30
     && !flags.has("hard dump")
     && !flags.has("sell pressure");
 }
@@ -5880,6 +6117,39 @@ function sniperScalpSetup({ m5, h1, h6, volume5m, volumeH1, buyPressure, liquidi
   return { label: "Slow/unclear", score: 1 };
 }
 
+function pumpSnipeScalpSetup({ m5, h1, h6, volume5m, volumeH1, buyPressure, liquidityUsd, sells5m, sellsH1 }) {
+  const hasEarlyVolume = volume5m >= 75 || volumeH1 >= 750;
+  const hasTradableLiquidity = liquidityUsd >= 500;
+  const buyersPresent = buyPressure >= 0.85;
+  const shortSellsControlled = sells5m < 12 || buyPressure >= 1;
+
+  if (!hasEarlyVolume || !hasTradableLiquidity) {
+    return { label: "Early watch", score: 1 };
+  }
+
+  if (m5 >= 6 && buyersPresent && volume5m >= 150) {
+    return { label: "Fresh pump breakout", score: 5 };
+  }
+
+  if (m5 >= -4 && h1 >= 4 && buyersPresent && shortSellsControlled) {
+    return { label: "Early uptrend scalp", score: 4 };
+  }
+
+  if (m5 >= -10 && h1 >= 8 && buyPressure >= 0.95 && volumeH1 >= 1_500) {
+    return { label: "Early cool-off bounce", score: 4 };
+  }
+
+  if (m5 >= -8 && volumeH1 >= 1_000 && buyPressure >= 0.8) {
+    return { label: "Pump volume building", score: 3 };
+  }
+
+  if (h1 >= -5 && volumeH1 >= 750 && buyPressure >= 0.75 && sellsH1 < 40) {
+    return { label: "Early confirmation", score: 2 };
+  }
+
+  return { label: "Early watch", score: 1 };
+}
+
 function sniperVolumePenalty({ volume5m, volumeH1, liquidityUsd }) {
   let penalty = 0;
   if (volume5m < 250 && volumeH1 < 2_000) penalty += 18;
@@ -5976,7 +6246,9 @@ async function scoreSniperCandidate(candidate, settings) {
     narrative,
     pairAgeMinutes
   });
-  const scalp = sniperScalpSetup({ m5, h1, h6, volume5m, volumeH1, buyPressure, liquidityUsd, sells5m, sellsH1 });
+  const scalp = settings.mode === "pumpsnipe"
+    ? pumpSnipeScalpSetup({ m5, h1, h6, volume5m, volumeH1, buyPressure, liquidityUsd, sells5m, sellsH1 })
+    : sniperScalpSetup({ m5, h1, h6, volume5m, volumeH1, buyPressure, liquidityUsd, sells5m, sellsH1 });
   const liquiditySignal = liquidityUsd > 0
     ? Math.min(22, Math.log10(Math.max(10, liquidityUsd)) * 4)
     : marketCap > 0 ? Math.min(12, Math.log10(Math.max(10, marketCap)) * 2) : 2;
@@ -6081,7 +6353,7 @@ function sniperModeDefaults(mode) {
     ai: { mode: "ai", minScore: 66, maxRisk: 58 },
     long: { mode: "long", minScore: 72, maxRisk: 48 },
     autosnipe: { mode: "autosnipe", minScore: 82, maxRisk: 38 },
-    pumpsnipe: { mode: "pumpsnipe", minScore: 58, maxRisk: 68 }
+    pumpsnipe: { mode: "pumpsnipe", minScore: 48, maxRisk: 78 }
   };
   return defaults[mode] || defaults.safe;
 }
