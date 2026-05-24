@@ -73,9 +73,9 @@ This bot does not provide wallet washing, provenance hiding, mixer behavior, or 
    npm start
    ```
 
-## Web Portal
+## Web App
 
-The repo includes a lightweight static web portal for Cloudflare Pages. It is a desktop dashboard for the Render bot backend with Telegram-code login, wallets, balances, positions, PnL, and OgreSniper scans. Telegram remains the live trading confirmation interface.
+The repo includes a lightweight static web app for Cloudflare Pages. It is a web-first OgreTradeBot dashboard for the Render bot backend with web account creation, optional Telegram-code linking, wallet creation, backup downloads, one-wallet buy/sell controls, balances, positions, PnL, and OgreSniper scans.
 
 Cloudflare Pages settings:
 
@@ -90,15 +90,15 @@ Set this Cloudflare Pages environment variable:
 
 ```text
 OGRE_API_BASE=https://your-render-service.onrender.com
-TELEGRAM_BOT_USERNAME=YourBotUsernameWithoutAt
+TELEGRAM_BOT_USERNAME=OgreTradeBot
 ```
 
-For your current Render service, that should be your Render bot URL, for example `https://ogrevolbot.onrender.com`. The portal checks `OGRE_API_BASE/healthz`, so the bot health endpoint returns a browser-safe CORS header.
+For your current Render service, that should be your Render bot URL, for example `https://ogrevolbot.onrender.com`. The web app checks `OGRE_API_BASE/healthz`, so the bot health endpoint returns a browser-safe CORS header.
 
 Set these Render environment variables too:
 
 ```text
-TELEGRAM_BOT_USERNAME=YourBotUsernameWithoutAt
+TELEGRAM_BOT_USERNAME=OgreTradeBot
 WEB_PORTAL_URL=https://your-cloudflare-pages-site.pages.dev
 WEB_ALLOWED_ORIGIN=https://your-cloudflare-pages-site.pages.dev
 WEB_SESSION_TTL_HOURS=72
@@ -106,9 +106,13 @@ RESEND_API_KEY=
 EMAIL_FROM=
 ```
 
-Users connect the web portal by opening the Telegram bot and sending `/web`, or by tapping the bot's **Web Portal** menu button. The bot sends a one-time 64-bit random code that expires after 10 minutes, stores only a hash of the code, and rate-limits failed web login attempts. The website exchanges that code for a web session and can show public wallet addresses, balances, positions, PnL, and OgreSniper scans. Private keys are never sent to the browser.
+Users can create a web account directly from the site. Existing Telegram users can also connect by opening `@OgreTradeBot`, sending `/web`, or tapping the bot's **Web App** menu button. The bot sends a one-time 64-bit random code that expires after 10 minutes, stores only a hash of the code, and rate-limits failed web login attempts.
 
-The web dashboard has an optional email reminder field. If `RESEND_API_KEY` and `EMAIL_FROM` are set on Render, saving an email sends the user a portal/login reminder. It does not email private keys, backup files, or permanent login tokens.
+The web dashboard can create wallet sets directly. After web wallet creation, it downloads both the encrypted bot backup and the Solflare/Phantom recovery key file. The recovery key file contains raw private keys, so users must store it privately.
+
+The web Trade tab is for simple one-wallet trading from the browser. It uses the same backend wallet encryption, Jupiter swap path, token safety precheck, slippage settings, and fee logic as the Telegram Trade button. Scanner rows can hand a CA straight into the Trade tab so users can stay on the webpage.
+
+The web dashboard has an optional email field. If `RESEND_API_KEY` and `EMAIL_FROM` are set on Render, users can request a fresh email login code later. Email never carries private keys, backup files, or permanent login tokens.
 
 The Render bot also serves the same built portal at `/portal` after `npm run build:web`, but Cloudflare Pages is recommended for the public website.
 

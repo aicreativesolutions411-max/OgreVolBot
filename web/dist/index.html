@@ -3,8 +3,8 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>OgreTrade Portal</title>
-    <meta name="description" content="OgreTrade desktop portal for wallets, balances, positions, PnL, and sniper scans.">
+    <title>OgreTradeBot Web</title>
+    <meta name="description" content="OgreTradeBot web dashboard for meme token trading, wallets, balances, positions, PnL, and sniper scans.">
     <link rel="stylesheet" href="./styles.css">
     <script src="./config.js"></script>
     <script type="module" src="./app.js"></script>
@@ -15,38 +15,46 @@
         <a class="brand" href="https://ogremode.com/" target="_blank" rel="noreferrer">
           <span class="brand-mark">OG</span>
           <span>
-            <strong>OgreTrade Portal</strong>
-            <small>Telegram bot desktop dashboard</small>
+            <strong>OgreTradeBot</strong>
+            <small>Meme trader command center</small>
           </span>
         </a>
         <div class="status-pill">
           <span class="status-dot" data-status-dot data-status="loading"></span>
-          <span data-status-text>Checking Render...</span>
+          <span data-status-text>Checking backend...</span>
         </div>
       </header>
 
       <section class="login-view" data-login>
         <div class="login-copy">
-          <p class="eyebrow">Secure web login</p>
-          <h1>Use the bot from a cleaner desktop view.</h1>
+          <p class="eyebrow">OgreTradeBot Web</p>
+          <h1>Fast meme trading from one clean dashboard.</h1>
           <p class="lead">
-            Open Telegram, request a web code, then paste it here. The website shows wallet dashboards,
-            PnL, balances, and sniper scans without exposing private keys in the browser.
+            Create wallets, download backups, buy and sell from one wallet, review positions,
+            track PnL, and scan fresh plays. Telegram is optional for users who also want the chat bot.
           </p>
           <div class="login-steps">
-            <a class="primary-link" data-bot-link target="_blank" rel="noreferrer">Open Telegram Bot</a>
-            <span>Send <code>/web</code></span>
-            <span>Paste the code below</span>
+            <span>Create web account</span>
+            <span>Trade from web</span>
+            <span>Back up every wallet</span>
           </div>
         </div>
 
         <form class="login-card" onsubmit="return false;">
           <img src="./assets/ogre-aces.jpg" alt="OgreTrade welcome art">
           <label>
-            Web login code
+            Optional email
+            <input data-signup-email type="email" autocomplete="email" placeholder="you@example.com">
+          </label>
+          <button class="primary" type="button" data-web-signup>Create Web Account</button>
+          <button class="secondary" type="button" data-email-code>Email Login Code</button>
+          <div class="divider"><span>or link Telegram</span></div>
+          <a class="secondary-link" data-bot-link target="_blank" rel="noreferrer">Open @OgreTradeBot</a>
+          <label>
+            Telegram web code
             <input data-login-code type="text" inputmode="text" autocomplete="one-time-code" placeholder="ABCD-1234">
           </label>
-          <button class="primary" type="button" data-login-submit>Connect Portal</button>
+          <button class="secondary" type="button" data-login-submit>Connect Telegram Account</button>
           <p class="error" data-error hidden></p>
           <small>API: <span data-api-base></span></small>
         </form>
@@ -57,11 +65,11 @@
           <div>
             <p class="eyebrow">Connected</p>
             <h1>Command center</h1>
-            <p>User <code data-user-id></code>. Trading confirmations still run through Telegram.</p>
+            <p>Web account <code data-user-id></code>. Use the dashboard here, or link Telegram when you want chat controls too.</p>
           </div>
           <div class="head-actions">
             <button class="secondary" type="button" data-refresh-all>Refresh All</button>
-            <button class="secondary" type="button" data-open-bot>Open Bot</button>
+            <button class="secondary" type="button" data-open-bot>Telegram Bot</button>
             <button class="ghost" type="button" data-logout>Log Out</button>
           </div>
         </div>
@@ -87,6 +95,7 @@
 
         <nav class="tabs" aria-label="Portal views">
           <button data-tab="dashboard" data-active="true">Home</button>
+          <button data-tab="trade">Trade</button>
           <button data-tab="wallets">Wallets</button>
           <button data-tab="positions">Positions</button>
           <button data-tab="pnl">PnL</button>
@@ -99,7 +108,7 @@
       <footer class="footer">
         <span>Powered by Ogres</span>
         <nav>
-          <a href="https://t.me/ogrecoinonsol" target="_blank" rel="noreferrer">Telegram</a>
+          <a href="https://t.me/OgreTradeBot?start=web" target="_blank" rel="noreferrer">Telegram Bot</a>
           <a href="https://ogremode.com/" target="_blank" rel="noreferrer">Website</a>
           <a href="https://twitter.com/i/communities/1930265213917425858" target="_blank" rel="noreferrer">Twitter</a>
         </nav>

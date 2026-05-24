@@ -37,7 +37,8 @@ a {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -212,6 +213,24 @@ h3 {
   color: #dcebd8;
 }
 
+.divider {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 10px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.divider::before,
+.divider::after {
+  content: "";
+  height: 1px;
+  background: var(--line);
+}
+
 .login-card {
   display: grid;
   gap: 16px;
@@ -237,7 +256,8 @@ label {
   font-weight: 800;
 }
 
-input {
+input,
+select {
   width: 100%;
   min-height: 48px;
   border: 1px solid var(--line-strong);
@@ -249,6 +269,17 @@ input {
 }
 
 input:focus {
+  box-shadow: 0 0 0 3px rgba(114, 255, 35, 0.18);
+}
+
+select {
+  appearance: none;
+  background:
+    linear-gradient(45deg, transparent 50%, var(--green-2) 50%) right 18px center / 8px 8px no-repeat,
+    rgba(0, 0, 0, 0.35);
+}
+
+select:focus {
   box-shadow: 0 0 0 3px rgba(114, 255, 35, 0.18);
 }
 
@@ -268,6 +299,8 @@ input:focus {
 .tabs button,
 .row-card button,
 .profile-card button,
+.create-wallet-card button,
+.download-card button,
 .card-actions button,
 .card-actions a,
 .mini-link {
@@ -305,6 +338,8 @@ input:focus {
 .empty,
 .row-card,
 .pick-card,
+.trade-card,
+.trade-side article,
 .pnl-summary {
   border: 1px solid var(--line);
   background: var(--panel);
@@ -415,9 +450,11 @@ input:focus {
   background-image: url("./assets/ogre-candle.jpg");
 }
 
-.profile-card {
+.profile-card,
+.create-wallet-card,
+.download-card {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(220px, 320px) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(160px, 260px) minmax(110px, 150px) auto;
   gap: 14px;
   align-items: end;
   margin-top: 12px;
@@ -427,13 +464,24 @@ input:focus {
   background: var(--panel);
 }
 
-.profile-card p {
+.profile-card {
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 320px) auto;
+}
+
+.download-card {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.profile-card p,
+.create-wallet-card p,
+.download-card p {
   margin-bottom: 0;
   color: #c7d7c2;
   line-height: 1.55;
 }
 
-.profile-card small {
+.profile-card small,
+.create-wallet-card small {
   grid-column: 1 / -1;
 }
 
@@ -479,6 +527,94 @@ code {
 .row-card small {
   display: block;
   margin-top: 4px;
+}
+
+.trade-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(280px, 0.8fr);
+  gap: 14px;
+}
+
+.trade-card,
+.trade-side article {
+  padding: 18px;
+}
+
+.trade-card {
+  display: grid;
+  gap: 14px;
+}
+
+.trade-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.trade-head p,
+.trade-block p,
+.trade-side p,
+.trade-status {
+  margin-bottom: 0;
+  color: #c7d7c2;
+  line-height: 1.55;
+}
+
+.trade-block {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.trade-block h4 {
+  margin: 0 0 4px;
+}
+
+.quick-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.inline-action {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.trade-status {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: rgba(114, 255, 35, 0.08);
+}
+
+.trade-side {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+}
+
+.latest-trade dl {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.latest-trade dt {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.latest-trade dd {
+  margin: 2px 0 0;
+  font-weight: 900;
 }
 
 .pnl-summary {
@@ -558,6 +694,8 @@ code {
 .card-actions a,
 .card-actions button,
 .profile-card button,
+.create-wallet-card button,
+.download-card button,
 .row-card button {
   min-height: 38px;
   padding: 0 12px;
@@ -590,9 +728,12 @@ code {
   .login-view,
   .panel-grid,
   .pick-grid,
+  .trade-layout,
   .metrics,
   .pnl-summary,
-  .profile-card {
+  .profile-card,
+  .create-wallet-card,
+  .download-card {
     grid-template-columns: 1fr;
   }
 
@@ -621,5 +762,10 @@ code {
   .row-card {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .quick-grid,
+  .inline-action {
+    grid-template-columns: 1fr;
   }
 }

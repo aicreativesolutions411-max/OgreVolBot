@@ -12,7 +12,10 @@ const state = {
   positions: [],
   pnl: null,
   scan: null,
-  scanMode: "safe"
+  scanMode: "safe",
+  tradeToken: "",
+  tradeResult: null,
+  downloads: null
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -63,7 +66,12 @@ function botStartUrl() {
   if (config.telegramBotUsername) {
     return `https://t.me/${config.telegramBotUsername}?start=web`;
   }
-  return "https://t.me/ogrecoinonsol";
+  return "https://t.me/ogretradebot?start=web";
+}
+
+function dexUrl(tokenMint) {
+  const mint = String(tokenMint || "").trim();
+  return mint ? `https://dexscreener.com/solana/${encodeURIComponent(mint)}` : "#";
 }
 
 async function refreshBackendStatus() {
@@ -71,7 +79,7 @@ async function refreshBackendStatus() {
     const response = await fetch(apiUrl("/healthz"), { cache: "no-store" });
     const data = await response.json();
     state.status = data;
-    setStatus("ok", `Render online - ${Math.floor((data.uptimeSeconds || 0) / 60)}m uptime`);
+    setStatus("ok", "Backend online");
   } catch (error) {
     setStatus("warn", `Render check failed: ${error.message}`);
   }
@@ -95,6 +103,41 @@ async function login() {
     localStorage.setItem("ogreWebToken", state.token);
     codeInput.value = "";
     await loadAll();
+  } catch (error) {
+    setError(error.message);
+  }
+}
+
+async function createWebAccount() {
+  setError("");
+  const email = document.querySelector("[data-signup-email]")?.value?.trim() || "";
+  try {
+    const data = await api("/api/web/signup", {
+      method: "POST",
+      body: JSON.stringify({ email })
+    });
+    state.token = data.token;
+    state.user = data.user;
+    localStorage.setItem("ogreWebToken", state.token);
+    await loadAll();
+  } catch (error) {
+    setError(error.message);
+  }
+}
+
+async function requestEmailCode() {
+  setError("");
+  const email = document.querySelector("[data-signup-email]")?.value?.trim() || "";
+  if (!email) {
+    setError("Enter the email saved on your web account first.");
+    return;
+  }
+  try {
+    await api("/api/web/email-code", {
+      method: "POST",
+      body: JSON.stringify({ email })
+    });
+    setError("Email code sent. Paste it in the code box below.");
   } catch (error) {
     setError(error.message);
   }
@@ -194,6 +237,7 @@ function renderTabs() {
 
   const panel = $("[data-panel]");
   if (state.activeTab === "dashboard") panel.innerHTML = dashboardHtml();
+  if (state.activeTab === "trade") panel.innerHTML = tradeHtml();
   if (state.activeTab === "wallets") panel.innerHTML = walletsHtml();
   if (state.activeTab === "positions") panel.innerHTML = positionsHtml();
   if (state.activeTab === "pnl") panel.innerHTML = pnlHtml();
@@ -203,10 +247,12 @@ function renderTabs() {
 function dashboardHtml() {
   return `
     <section class="panel-grid">
-      ${visualCard("visual-aces", "Fast Flow", "Use Telegram for live trade confirms. Use this web portal for desktop monitoring, copying wallet addresses, and finding picks.")}
-      ${visualCard("visual-cauldron", "Sniper Desk", "Scan modes rotate fresh picks and keep Dex links plus copyable CAs close at hand.")}
-      ${visualCard("visual-candle", "Backup First", "New wallet sets send both encrypted bot backups and Solflare-style recovery files in Telegram.")}
+      ${visualCard("visual-aces", "Trade Desk", "Quick buy and sell from one wallet with .10, .50, 1 SOL, max, and percent sell buttons.")}
+      ${visualCard("visual-cauldron", "Sniper Scanner", "Scan modes rotate fresh picks with Dex links, copyable CAs, risk notes, and one-click handoff to Trade.")}
+      ${visualCard("visual-candle", "Backup First", "Web wallet creation downloads both encrypted bot backups and Solflare-style recovery files.")}
     </section>
+    ${createWalletSection()}
+    ${downloadsHtml()}
     <section class="profile-card">
       <div>
         <h3>Email Reminder</h3>
@@ -224,6 +270,273 @@ function dashboardHtml() {
 
 function visualCard(className, title, body) {
   return `<article class="panel visual-card ${className}"><div><h3>${escapeHtml(title)}</h3><p>${escapeHtml(body)}</p></div></article>`;
+}
+
+function createWalletSection() {
+  return `
+    <section class="create-wallet-card">
+      <div>
+        <h3>Create Wallet Set</h3>
+        <p>Create fresh managed wallets from the web. The browser downloads both backup files immediately after creation.</p>
+      </div>
+      <label>
+        Label
+        <input data-wallet-label type="text" placeholder="Ogre Web">
+      </label>
+      <label>
+        Count
+        <input data-wallet-count-input type="number" min="1" max="20" value="1">
+      </label>
+      <button data-create-wallets>Create</button>
+      <small data-create-wallet-status></small>
+    </section>
+  `;
+}
+
+function downloadsHtml() {
+  if (!state.downloads) return "";
+  return `
+    <section class="download-card">
+      <div>
+        <h3>Wallet Backups Ready</h3>
+        <p>Keep both files private. The recovery file contains raw private keys.</p>
+      </div>
+      <button data-download="encryptedBackup">Download Bot Backup</button>
+      <button data-download="recoveryKeys">Download Solflare Keys</button>
+    </section>
+  `;
+}
+
+function tradeHtml() {
+  if (!state.wallets.length) {
+    return `${createWalletSection()}${emptyState("Create a wallet first", "The web trade desk needs at least one managed wallet before it can buy or sell.")}`;
+  }
+
+  return `
+    <section class="trade-layout">
+      <article class="trade-card">
+        <div class="trade-head">
+          <div>
+            <h3>One-Wallet Trade</h3>
+            <p>Paste a token CA, pick a wallet, then use fast buy and sell buttons from the webpage.</p>
+          </div>
+          <a class="mini-link" data-trade-dex href="${state.tradeToken ? dexUrl(state.tradeToken) : "#"}" target="_blank" rel="noreferrer">Dex</a>
+        </div>
+        <label>
+          Wallet
+          <select data-trade-wallet>
+            ${walletOptionsHtml()}
+          </select>
+        </label>
+        <label>
+          Token CA
+          <input data-trade-token type="text" placeholder="Paste Solana token mint" value="${escapeHtml(state.tradeToken)}">
+        </label>
+        <label>
+          Slippage
+          <select data-trade-slippage>
+            <option value="300">3% - tighter</option>
+            <option value="400" selected>4% - default</option>
+            <option value="500">5% - faster fills</option>
+          </select>
+        </label>
+
+        <div class="trade-block">
+          <div>
+            <h4>Buy</h4>
+            <p>Quick SOL amounts include the bot fee and keep the safety reserve.</p>
+          </div>
+          <div class="quick-grid">
+            <button class="primary" data-trade-buy-quick="0.1">Buy .10 SOL</button>
+            <button class="primary" data-trade-buy-quick="0.5">Buy .50 SOL</button>
+            <button class="primary" data-trade-buy-quick="1">Buy 1 SOL</button>
+            <button data-trade-buy-max>Buy Max</button>
+          </div>
+          <div class="inline-action">
+            <input data-buy-custom type="number" min="0" step="0.01" placeholder="Custom SOL">
+            <button data-trade-buy-custom>Buy Custom</button>
+          </div>
+        </div>
+
+        <div class="trade-block">
+          <div>
+            <h4>Sell</h4>
+            <p>Sell buttons use the selected wallet and token CA above.</p>
+          </div>
+          <div class="quick-grid">
+            <button data-trade-sell-quick="25">Sell 25%</button>
+            <button data-trade-sell-quick="50">Sell 50%</button>
+            <button data-trade-sell-quick="100">Sell 100%</button>
+          </div>
+          <div class="inline-action">
+            <input data-sell-custom type="number" min="1" max="100" step="1" placeholder="Custom %">
+            <button data-trade-sell-custom>Sell Custom</button>
+          </div>
+        </div>
+        <p class="trade-status" data-trade-status>${state.tradeResult ? escapeHtml(state.tradeResult.message || "Trade complete.") : "Ready."}</p>
+      </article>
+
+      <aside class="trade-side">
+        <article>
+          <h3>Web Trading</h3>
+          <p>Uses the same backend wallet encryption, Jupiter route, safety precheck, slippage settings, and fee collection as the Telegram bot.</p>
+        </article>
+        <article>
+          <h3>Selected Token</h3>
+          <code>${state.tradeToken ? escapeHtml(state.tradeToken) : "Paste a CA or tap Trade from a scanner pick."}</code>
+        </article>
+        ${tradeResultHtml()}
+      </aside>
+    </section>
+  `;
+}
+
+function walletOptionsHtml() {
+  return state.wallets.map((wallet) => {
+    const balance = state.balances.find((row) => Number(row.index) === Number(wallet.index));
+    const sol = balance?.sol !== null && balance?.sol !== undefined ? `${Number(balance.sol).toFixed(4)} SOL` : "balance loading";
+    return `<option value="${wallet.index}">${wallet.index}. ${escapeHtml(wallet.label)} - ${sol}</option>`;
+  }).join("");
+}
+
+function tradeResultHtml() {
+  if (!state.tradeResult) {
+    return `
+      <article>
+        <h3>Latest Result</h3>
+        <p>Your latest web buy or sell recap will appear here after the transaction lands.</p>
+      </article>
+    `;
+  }
+
+  const row = state.tradeResult;
+  const isBuy = row.type === "buy";
+  return `
+    <article class="latest-trade">
+      <h3>${isBuy ? "Buy Complete" : "Sell Complete"}</h3>
+      <p>${escapeHtml(row.message || "")}</p>
+      <dl>
+        <div><dt>Wallet</dt><dd>${escapeHtml(row.walletLabel)}</dd></div>
+        <div><dt>${isBuy ? "Spent" : "Net"}</dt><dd>${escapeHtml(isBuy ? row.spentSol : row.netSol)} SOL</dd></div>
+        <div><dt>Fee</dt><dd>${escapeHtml(row.feeSol || "0")} SOL</dd></div>
+      </dl>
+      <div class="card-actions">
+        <button data-copy="${escapeHtml(row.tokenMint)}">Copy CA</button>
+        <a href="${escapeHtml(row.dexUrl)}" target="_blank" rel="noreferrer">Dex</a>
+      </div>
+    </article>
+  `;
+}
+
+async function createWalletSet() {
+  const labelInput = $("[data-wallet-label]");
+  const countInput = $("[data-wallet-count-input]");
+  const status = $("[data-create-wallet-status]");
+  if (!labelInput || !countInput || !status) return;
+  status.textContent = "Creating wallets...";
+
+  try {
+    const data = await api("/api/web/wallets/create", {
+      method: "POST",
+      body: JSON.stringify({
+        label: labelInput.value.trim() || "Ogre Web",
+        count: countInput.value
+      })
+    });
+    state.downloads = data.downloads;
+    downloadText(data.downloads.encryptedBackup.filename, data.downloads.encryptedBackup.text);
+    downloadText(data.downloads.recoveryKeys.filename, data.downloads.recoveryKeys.text);
+    status.textContent = `Created ${data.wallets.length} wallet(s). Backup downloads started.`;
+    await loadAll();
+    state.activeTab = "wallets";
+    render();
+  } catch (error) {
+    status.textContent = error.message;
+  }
+}
+
+function downloadText(filename, text) {
+  const blob = new Blob([text], { type: "text/plain" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+function readTradeForm() {
+  const walletIndex = $("[data-trade-wallet]")?.value || "";
+  const tokenMint = $("[data-trade-token]")?.value?.trim() || "";
+  const slippageBps = $("[data-trade-slippage]")?.value || "400";
+  if (!walletIndex) throw new Error("Choose a wallet first.");
+  if (!tokenMint) throw new Error("Paste a token CA first.");
+  state.tradeToken = tokenMint;
+  return { walletIndex, tokenMint, slippageBps };
+}
+
+function setTradeStatus(message) {
+  const status = $("[data-trade-status]");
+  if (status) status.textContent = message;
+}
+
+async function executeWebBuy(amountSol, amountMode = "fixed") {
+  try {
+    const form = readTradeForm();
+    const payload = {
+      tokenMint: form.tokenMint,
+      walletIndex: form.walletIndex,
+      slippageBps: form.slippageBps
+    };
+    if (amountMode === "max") {
+      payload.amountMode = "max";
+    } else {
+      const value = Number(amountSol);
+      if (!Number.isFinite(value) || value <= 0) throw new Error("Enter a buy amount greater than zero.");
+      payload.amountSol = String(value);
+    }
+
+    setTradeStatus("Sending buy...");
+    const data = await api("/api/web/trade/buy", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    state.tradeResult = data.trade;
+    await loadAll();
+    state.activeTab = "trade";
+    render();
+  } catch (error) {
+    setTradeStatus(error.message);
+  }
+}
+
+async function executeWebSell(percent) {
+  try {
+    const form = readTradeForm();
+    const value = Number.parseInt(percent, 10);
+    if (!Number.isInteger(value) || value < 1 || value > 100) {
+      throw new Error("Sell percent must be from 1 to 100.");
+    }
+
+    setTradeStatus("Sending sell...");
+    const data = await api("/api/web/trade/sell", {
+      method: "POST",
+      body: JSON.stringify({
+        tokenMint: form.tokenMint,
+        walletIndex: form.walletIndex,
+        slippageBps: form.slippageBps,
+        percent: value
+      })
+    });
+    state.tradeResult = data.trade;
+    await loadAll();
+    state.activeTab = "trade";
+    render();
+  } catch (error) {
+    setTradeStatus(error.message);
+  }
 }
 
 async function saveEmail() {
@@ -248,8 +561,10 @@ async function saveEmail() {
 }
 
 function walletsHtml() {
-  if (!state.wallets.length) return emptyState("No wallets yet", "Create or import wallets from Telegram first.");
+  const create = `${createWalletSection()}${downloadsHtml()}`;
+  if (!state.wallets.length) return `${create}${emptyState("No wallets yet", "Create a wallet set above to get started on web.")}`;
   return `
+    ${create}
     <div class="table-list">
       ${state.wallets.map((wallet) => `
         <article class="row-card">
@@ -321,7 +636,7 @@ function sniperHtml() {
     </div>
     <div class="section-actions">
       <button class="primary" data-refresh-scan>Refresh Picks</button>
-      <a class="secondary-link" href="${botStartUrl()}" target="_blank" rel="noreferrer">Trade in Telegram</a>
+      <button data-tab="trade">Trade Desk</button>
     </div>
     ${state.scan ? sniperRowsHtml() : emptyState("No scan loaded", "Pick a mode or tap Refresh Picks.")}
   `;
@@ -351,6 +666,7 @@ function sniperRowsHtml() {
           <code>${row.tokenMint}</code>
           <div class="card-actions">
             <button data-copy="${row.tokenMint}">Copy CA</button>
+            <button data-use-token="${row.tokenMint}">Trade</button>
             <a href="${row.dexUrl}" target="_blank" rel="noreferrer">Dex</a>
           </div>
         </article>
@@ -381,8 +697,35 @@ document.addEventListener("click", async (event) => {
   if (!target) return;
 
   if (target.matches("[data-login-submit]")) login();
+  if (target.matches("[data-web-signup]")) createWebAccount();
+  if (target.matches("[data-email-code]")) requestEmailCode();
   if (target.matches("[data-logout]")) logout();
   if (target.matches("[data-email-save]")) saveEmail();
+  if (target.matches("[data-create-wallets]")) createWalletSet();
+  if (target.matches("[data-download]")) {
+    const file = state.downloads?.[target.dataset.download];
+    if (file) downloadText(file.filename, file.text);
+  }
+  if (target.matches("[data-trade-buy-quick]")) {
+    await executeWebBuy(target.dataset.tradeBuyQuick);
+  }
+  if (target.matches("[data-trade-buy-max]")) {
+    await executeWebBuy(null, "max");
+  }
+  if (target.matches("[data-trade-buy-custom]")) {
+    await executeWebBuy($("[data-buy-custom]")?.value);
+  }
+  if (target.matches("[data-trade-sell-quick]")) {
+    await executeWebSell(target.dataset.tradeSellQuick);
+  }
+  if (target.matches("[data-trade-sell-custom]")) {
+    await executeWebSell($("[data-sell-custom]")?.value);
+  }
+  if (target.matches("[data-use-token]")) {
+    state.tradeToken = target.dataset.useToken || "";
+    state.activeTab = "trade";
+    render();
+  }
   if (target.matches("[data-refresh-all]")) loadAll().catch((error) => setError(error.message));
   if (target.matches("[data-open-bot]")) window.open(botStartUrl(), "_blank", "noopener,noreferrer");
 

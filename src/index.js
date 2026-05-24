@@ -93,7 +93,7 @@ const BRAND_FOOTER = [
 
 const PUBLIC_MENU = [
   [{ text: "🐎 How To Use", callback_data: "quick_start" }],
-  [{ text: "Web Portal", callback_data: "web_portal" }],
+  [{ text: "Web App", callback_data: "web_portal" }],
   [{ text: "💱 Trade", callback_data: "trade_menu" }],
   [{ text: "🎯 OgreSniper", callback_data: "sniper_menu" }],
   [{ text: "💳 Wallet", callback_data: "wallet_menu" }, { text: "🧲 Bundle", callback_data: "bundle_menu" }],
@@ -498,7 +498,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
         telegramBotUsername: CONFIG.telegramBotUsername,
         telegramBotUrl: telegramBotStartUrl(),
         socials: brandSocialLinks(),
-        features: ["wallets", "balances", "positions", "pnl", "sniper-scan"]
+        features: ["wallets", "balances", "positions", "pnl", "sniper-scan", "one-wallet-trade"]
       });
       return;
     }
@@ -513,6 +513,32 @@ async function handleWebApiRequest(request, response, requestUrl) {
         token: result.token,
         expiresAt: result.expiresAt,
         user: await webUserSummary(result.userId)
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/signup") {
+      const body = await readJsonRequestBody(request);
+      const result = await createWebAccount(body.email);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        token: result.token,
+        expiresAt: result.expiresAt,
+        user: await webUserSummary(result.userId),
+        emailSent: result.emailSent,
+        emailError: result.emailError
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/email-code") {
+      assertWebLoginAttemptAllowed(request);
+      const body = await readJsonRequestBody(request);
+      const result = await sendEmailWebLoginCode(body.email);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        expiresAt: result.expiresAt,
+        emailSent: result.emailSent
       });
       return;
     }
@@ -549,6 +575,36 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendWebJson(request, response, 200, {
         ok: true,
         wallets: await webWalletRows(auth.userId)
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/wallets/create") {
+      const body = await readJsonRequestBody(request);
+      const result = await createWebWalletSet(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        ...result
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/trade/buy") {
+      const body = await readJsonRequestBody(request);
+      const result = await webTradeBuy(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        trade: result
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/trade/sell") {
+      const body = await readJsonRequestBody(request);
+      const result = await webTradeSell(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        trade: result
       });
       return;
     }
@@ -2657,9 +2713,15 @@ async function sendWalletBackup(chatId, userId, note, groupLabel = "wallets", wa
     return false;
   }
 
+  const { filename, text } = buildWalletBackupDocument(userId, note, groupLabel, wallets);
+  await sendDocument(chatId, filename, text);
+  return filename;
+}
+
+function buildWalletBackupDocument(userId, note, groupLabel = "wallets", wallets = []) {
   const createdAt = new Date().toISOString();
   const backupId = backupFingerprint(wallets, createdAt);
-  const backup = encodeBackup({
+  const text = encodeBackup({
     version: 1,
     backupId,
     createdAt,
@@ -2675,8 +2737,7 @@ async function sendWalletBackup(chatId, userId, note, groupLabel = "wallets", wa
   });
 
   const filename = walletBackupFilename(groupLabel, userId, wallets, createdAt, backupId);
-  await sendDocument(chatId, filename, backup);
-  return filename;
+  return { filename, text, createdAt, backupId };
 }
 
 function walletBackupFilename(groupLabel, userId, wallets, createdAt, backupId) {
@@ -2919,6 +2980,12 @@ function formatBackupInspectionSummary(summary) {
 }
 
 async function sendPrivateKeyDocument(chatId, userId, wallets, filenamePrefix, options = {}) {
+  const { filename, text } = buildPrivateKeyDocument(userId, wallets, filenamePrefix, options);
+  await sendDocument(chatId, filename, text);
+  return filename;
+}
+
+function buildPrivateKeyDocument(userId, wallets, filenamePrefix, options = {}) {
   const exportedAt = new Date().toISOString();
   const lines = [
     options.title || "EMERGENCY PRIVATE KEY EXPORT",
@@ -2946,8 +3013,7 @@ async function sendPrivateKeyDocument(chatId, userId, wallets, filenamePrefix, o
   }
 
   const filename = privateKeyExportFilename(filenamePrefix, wallets, exportedAt);
-  await sendDocument(chatId, filename, lines.join("\n"));
-  return filename;
+  return { filename, text: lines.join("\n"), exportedAt };
 }
 
 function privateKeyExportFilename(filenamePrefix, wallets, createdAt) {
@@ -8530,6 +8596,14 @@ async function writeWebAuthStore(store) {
 async function createWebLoginCode(userId, chatId) {
   const store = await readWebAuthStore();
   const now = Date.now();
+  const result = addWebLoginCodeToStore(store, userId, chatId, now);
+  await writeWebAuthStore(store);
+  await audit("web_login_code_created", { userId, chatId, expiresAt: result.expiresAt });
+
+  return result;
+}
+
+function addWebLoginCodeToStore(store, userId, chatId, now = Date.now()) {
   const code = crypto.randomBytes(8).toString("hex").toUpperCase();
   const formatted = code.match(/.{1,4}/g).join("-");
   const expiresAt = new Date(now + WEB_LOGIN_CODE_TTL_MS).toISOString();
@@ -8547,8 +8621,6 @@ async function createWebLoginCode(userId, chatId) {
     expiresAt
   });
   store.sessions = store.sessions.filter((item) => Date.parse(item.expiresAt || "") > now);
-  await writeWebAuthStore(store);
-  await audit("web_login_code_created", { userId, chatId, expiresAt });
 
   return { code: formatted, expiresAt };
 }
@@ -8573,30 +8645,72 @@ async function verifyWebLoginCode(input) {
   }
 
   const codeRecord = store.codes[index];
-  const token = crypto.randomBytes(32).toString("base64url");
-  const tokenHash = hashWebSecret(token);
-  const expiresAt = new Date(now + CONFIG.webSessionTtlHours * 60 * 60 * 1000).toISOString();
-
   store.codes[index] = {
     ...codeRecord,
     usedAt: new Date(now).toISOString()
   };
   store.codes = store.codes.filter((item) => !item.usedAt && Date.parse(item.expiresAt || "") > now);
+  const session = issueWebSessionRecord(codeRecord.userId, codeRecord.chatId || codeRecord.userId, now);
   store.sessions = [
     ...store.sessions.filter((item) => Date.parse(item.expiresAt || "") > now),
-    {
+    session.record
+  ];
+  await writeWebAuthStore(store);
+  await audit("web_login_success", { userId: codeRecord.userId, expiresAt: session.expiresAt });
+
+  return { token: session.token, tokenHash: session.tokenHash, userId: codeRecord.userId, expiresAt: session.expiresAt };
+}
+
+async function createWebAccount(emailValue = "") {
+  const store = await readWebAuthStore();
+  const now = Date.now();
+  const userId = `web_${crypto.randomBytes(12).toString("base64url")}`;
+  const email = normalizeEmail(emailValue);
+  const session = issueWebSessionRecord(userId, userId, now);
+
+  store.profiles[userId] = {
+    email,
+    source: "web",
+    createdAt: new Date(now).toISOString(),
+    updatedAt: new Date(now).toISOString()
+  };
+  store.sessions = [
+    ...store.sessions.filter((item) => Date.parse(item.expiresAt || "") > now),
+    session.record
+  ];
+  await writeWebAuthStore(store);
+  await audit("web_account_created", { userId, hasEmail: Boolean(email), expiresAt: session.expiresAt });
+
+  let emailSent = false;
+  let emailError = null;
+  if (email) {
+    try {
+      emailSent = await sendPortalReminderEmail(email);
+    } catch (error) {
+      emailError = friendlyError(error);
+    }
+  }
+
+  return { userId, token: session.token, tokenHash: session.tokenHash, expiresAt: session.expiresAt, emailSent, emailError };
+}
+
+function issueWebSessionRecord(userId, chatId, now = Date.now()) {
+  const token = crypto.randomBytes(32).toString("base64url");
+  const tokenHash = hashWebSecret(token);
+  const expiresAt = new Date(now + CONFIG.webSessionTtlHours * 60 * 60 * 1000).toISOString();
+  return {
+    token,
+    tokenHash,
+    expiresAt,
+    record: {
       tokenHash,
-      userId: String(codeRecord.userId),
-      chatId: String(codeRecord.chatId || codeRecord.userId),
+      userId: String(userId),
+      chatId: String(chatId || userId),
       createdAt: new Date(now).toISOString(),
       lastUsedAt: new Date(now).toISOString(),
       expiresAt
     }
-  ];
-  await writeWebAuthStore(store);
-  await audit("web_login_success", { userId: codeRecord.userId, expiresAt });
-
-  return { token, tokenHash, userId: codeRecord.userId, expiresAt };
+  };
 }
 
 async function authenticateWebRequest(request) {
@@ -8685,8 +8799,8 @@ async function sendWebLoginCode(chatId, userId, messageId = null) {
     `Code: ${code}`,
     `Expires: ${expiresAt}`,
     "",
-    "Enter this one-time code on the OgreTrade web portal. It is 64-bit random, expires in 10 minutes, and is stored only as a hash.",
-    "The website can view your bot dashboard, but private keys stay on the Render backend.",
+    "Enter this one-time code on the OgreTradeBot web app. It is 64-bit random, expires in 10 minutes, and is stored only as a hash.",
+    "The web app can open your dashboard and one-wallet trade desk. Private keys stay encrypted on the Render backend.",
     CONFIG.webPortalUrl ? `Portal: ${CONFIG.webPortalUrl}` : "Set WEB_PORTAL_URL on Render so this message can include your website link.",
     "",
     "Never give this code to anyone else."
@@ -8694,7 +8808,7 @@ async function sendWebLoginCode(chatId, userId, messageId = null) {
 
   await sendOrEditMessage(chatId, messageId, withBrandFooter(lines.join("\n")), {
     inline_keyboard: [
-      ...(CONFIG.webPortalUrl ? [[{ text: "Open Web Portal", url: CONFIG.webPortalUrl }]] : []),
+      ...(CONFIG.webPortalUrl ? [[{ text: "Open Web App", url: CONFIG.webPortalUrl }]] : []),
       [{ text: "Main Menu", callback_data: "main_menu" }]
     ]
   });
@@ -8744,6 +8858,35 @@ async function updateWebProfileEmail(userId, emailValue) {
   return { profile, emailSent, emailError };
 }
 
+async function sendEmailWebLoginCode(emailValue) {
+  const email = normalizeEmail(emailValue);
+  if (!email) {
+    const error = new Error("Enter the email saved on your web account.");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!CONFIG.resendApiKey || !CONFIG.emailFrom) {
+    const error = new Error("Email login is not configured yet. Use Create Web Account or Telegram /web code.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const store = await readWebAuthStore();
+  const entry = Object.entries(store.profiles).find(([, profile]) => String(profile.email || "").toLowerCase() === email);
+  if (!entry) {
+    const error = new Error("No web account found for that email.");
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const [userId] = entry;
+  const result = addWebLoginCodeToStore(store, userId, userId);
+  await writeWebAuthStore(store);
+  await sendWebLoginCodeEmail(email, result.code, result.expiresAt);
+  await audit("web_email_login_code_sent", { userId, emailHash: hashWebSecret(email), expiresAt: result.expiresAt });
+  return { expiresAt: result.expiresAt, emailSent: true };
+}
+
 function normalizeEmail(value) {
   const email = String(value || "").trim().toLowerCase();
   if (!email) return "";
@@ -8762,6 +8905,31 @@ async function sendPortalReminderEmail(email) {
 
   const portalUrl = CONFIG.webPortalUrl || "your OgreTrade web portal";
   const botUrl = telegramBotStartUrl() || "your Telegram bot";
+  await sendEmailViaResend(email, "Your OgreTrade portal login reminder", [
+    "OgreTrade portal reminder",
+    "",
+    `Portal: ${portalUrl}`,
+    `Telegram bot: ${botUrl}`,
+    "",
+    "To log in later, use the website's Email Login Code button or open the Telegram bot and send /web.",
+    "For security, this email does not include wallet private keys, backup files, or a permanent login token."
+  ].join("\n"));
+  return true;
+}
+
+async function sendWebLoginCodeEmail(email, code, expiresAt) {
+  await sendEmailViaResend(email, "Your OgreTrade web login code", [
+    "OgreTrade web login code",
+    "",
+    `Code: ${code}`,
+    `Expires: ${expiresAt}`,
+    "",
+    "Paste this one-time code into the OgreTrade web portal.",
+    "For security, this email does not include wallet private keys, backup files, or a permanent login token."
+  ].join("\n"));
+}
+
+async function sendEmailViaResend(email, subject, text) {
   await fetchJson("https://api.resend.com/emails", {
     method: "POST",
     headers: {
@@ -8771,20 +8939,11 @@ async function sendPortalReminderEmail(email) {
     body: JSON.stringify({
       from: CONFIG.emailFrom,
       to: email,
-      subject: "Your OgreTrade portal login reminder",
-      text: [
-        "OgreTrade portal reminder",
-        "",
-        `Portal: ${portalUrl}`,
-        `Telegram bot: ${botUrl}`,
-        "",
-        "To log in later, open the Telegram bot and send /web to get a fresh one-time code.",
-        "For security, this email does not include wallet private keys, backup files, or a permanent login token."
-      ].join("\n")
+      subject,
+      text
     }),
     timeoutMs: 8_000
   });
-  return true;
 }
 
 async function webWalletRows(userId) {
@@ -8795,6 +8954,190 @@ async function webWalletRows(userId) {
     publicKey: wallet.publicKey,
     shortPublicKey: shortMint(wallet.publicKey)
   }));
+}
+
+async function createWebWalletSet(userId, body = {}) {
+  const label = cleanLabel(String(body.label || "Ogre Web"));
+  const count = Number.parseInt(body.count || "1", 10);
+  if (!Number.isInteger(count) || count < 1 || count > 20) {
+    const error = new Error("Wallet count must be from 1 to 20.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const store = await readWalletStore();
+  const createdRecords = [];
+  for (let index = 1; index <= count; index += 1) {
+    const keypair = Keypair.generate();
+    const walletLabel = count === 1 ? label : `${label} ${index}`;
+    const record = walletRecord(walletLabel, keypair, userId);
+    store.wallets.push(record);
+    createdRecords.push(record);
+  }
+
+  await writeWalletStore(store);
+  await audit("web_create_wallet_set", {
+    userId,
+    label,
+    count,
+    publicKeys: createdRecords.map((wallet) => wallet.publicKey)
+  });
+
+  const encryptedBackup = buildWalletBackupDocument(
+    userId,
+    "Automatic web backup after wallet creation.",
+    label,
+    createdRecords
+  );
+  const recoveryKeys = buildPrivateKeyDocument(
+    userId,
+    createdRecords,
+    `solflare-recovery-${sanitizeFilenamePart(label)}-${userId}`,
+    {
+      title: "SOLFLARE / PHANTOM RECOVERY KEY FILE",
+      note: "Automatic web recovery file after wallet creation."
+    }
+  );
+
+  return {
+    wallets: createdRecords.map((wallet, index) => ({
+      index: index + 1,
+      label: wallet.label,
+      publicKey: wallet.publicKey,
+      shortPublicKey: shortMint(wallet.publicKey)
+    })),
+    downloads: {
+      encryptedBackup: {
+        filename: encryptedBackup.filename,
+        text: encryptedBackup.text
+      },
+      recoveryKeys: {
+        filename: recoveryKeys.filename,
+        text: recoveryKeys.text
+      }
+    }
+  };
+}
+
+async function webTradeBuy(userId, body = {}) {
+  const store = await readWalletStore();
+  const wallet = getWalletAt(store, parseWebWalletIndex(body.walletIndex), userId);
+  const tokenMint = parsePublicKey(String(body.tokenMint || "")).toBase58();
+  const slippageBps = parseWebSlippage(body.slippageBps);
+  const amountLamports = await webBuyAmountLamports(wallet, body);
+  const result = await buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps, { trackTokenDelta: true });
+  const tokenAmount = result.tokenDeltaAmount || result.outputAmount || null;
+
+  await recordTradeEvents([{
+    userId,
+    type: "buy",
+    source: "web_trade",
+    tokenMint,
+    walletLabel: wallet.label,
+    walletPublicKey: wallet.publicKey,
+    solLamportsSpent: String(result.amountLamports),
+    tokenAmount,
+    signature: result.signature
+  }]);
+  await audit("web_trade_buy", {
+    userId,
+    tokenMint,
+    wallet: publicWallet(wallet),
+    amountMode: String(body.amountMode || "").toLowerCase() === "max" ? "max" : "fixed",
+    amountSol: lamportsToSol(result.amountLamports),
+    slippageBps,
+    signature: result.signature
+  });
+
+  return {
+    type: "buy",
+    tokenMint,
+    shortMint: shortMint(tokenMint),
+    walletLabel: wallet.label,
+    walletPublicKey: wallet.publicKey,
+    spentSol: lamportsToSol(result.amountLamports),
+    netSwapSol: lamportsToSol(result.swapLamports),
+    feeSol: lamportsToSol(result.feeLamports),
+    tokenAmount,
+    signature: result.signature,
+    attempts: result.attempts,
+    dexUrl: dexScreenerUrl(tokenMint),
+    message: `${wallet.label} bought ${shortMint(tokenMint)} with ${lamportsToSol(result.amountLamports)} SOL.`
+  };
+}
+
+async function webTradeSell(userId, body = {}) {
+  const store = await readWalletStore();
+  const wallet = getWalletAt(store, parseWebWalletIndex(body.walletIndex), userId);
+  const tokenMint = parsePublicKey(String(body.tokenMint || "")).toBase58();
+  const percent = parsePercent(String(body.percent || "100"));
+  const slippageBps = parseWebSlippage(body.slippageBps);
+  const result = await sellTokenFromWallet(wallet, tokenMint, percent, slippageBps);
+  const outputLamports = BigInt(result.outputLamports || 0);
+  const feeLamports = BigInt(result.feeLamports || 0);
+  const netLamports = outputLamports > feeLamports ? outputLamports - feeLamports : 0n;
+
+  await recordTradeEvents([{
+    userId,
+    type: "sell",
+    source: "web_trade",
+    tokenMint,
+    walletLabel: wallet.label,
+    walletPublicKey: wallet.publicKey,
+    tokenAmount: result.tokenAmount,
+    solLamportsReceived: result.outputLamports,
+    signature: result.signature
+  }]);
+  await audit("web_trade_sell", {
+    userId,
+    tokenMint,
+    wallet: publicWallet(wallet),
+    percent,
+    slippageBps,
+    signature: result.signature
+  });
+
+  return {
+    type: "sell",
+    tokenMint,
+    shortMint: shortMint(tokenMint),
+    walletLabel: wallet.label,
+    walletPublicKey: wallet.publicKey,
+    percent,
+    tokenAmount: result.tokenAmount,
+    grossSol: lamportsBigToSol(outputLamports),
+    feeSol: lamportsBigToSol(feeLamports),
+    netSol: lamportsBigToSol(netLamports),
+    signature: result.signature,
+    attempts: result.attempts,
+    dexUrl: dexScreenerUrl(tokenMint),
+    message: `${wallet.label} sold ${percent}% of ${shortMint(tokenMint)} for ${lamportsBigToSol(netLamports)} SOL after fee.`
+  };
+}
+
+function parseWebWalletIndex(value) {
+  const index = Number.parseInt(value || "1", 10);
+  if (!Number.isInteger(index) || index < 1) {
+    throw new Error("Choose a wallet first.");
+  }
+  return index;
+}
+
+function parseWebSlippage(value) {
+  return parseSlippage(String(value || "default"), CONFIG.defaultSlippageBps);
+}
+
+async function webBuyAmountLamports(wallet, body = {}) {
+  if (String(body.amountMode || "").trim().toLowerCase() === "max") {
+    const balance = await getSolBalanceCached(new PublicKey(wallet.publicKey), { force: true });
+    const amountLamports = balance - CONFIG.buyReserveLamports;
+    if (amountLamports <= 0) {
+      throw new Error(`Not enough SOL after keeping ${CONFIG.buyReserveSol} SOL safety reserve.`);
+    }
+    return amountLamports;
+  }
+
+  return solToLamports(parsePositiveNumber(String(body.amountSol || "")));
 }
 
 async function webBalanceRows(userId) {
@@ -9003,12 +9346,12 @@ function webSniperRow(row) {
 }
 
 function telegramBotStartUrl() {
-  return CONFIG.telegramBotUsername ? `https://t.me/${CONFIG.telegramBotUsername}?start=web` : "";
+  return `https://t.me/${CONFIG.telegramBotUsername || "OgreTradeBot"}?start=web`;
 }
 
 function brandSocialLinks() {
   return {
-    telegram: "https://t.me/ogrecoinonsol",
+    telegram: telegramBotStartUrl(),
     website: "https://ogremode.com/",
     twitter: "https://twitter.com/i/communities/1930265213917425858"
   };
