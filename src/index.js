@@ -1001,15 +1001,15 @@ async function handleQuickButton(chatId, callbackData, userId, messageId = null)
       return;
     }
     session.executing = true;
+    scheduleInlineKeyboardClear(chatId, messageId);
   }
 
   if (messageId) {
     session.activePromptMessageId = messageId;
   }
-  scheduleInlineKeyboardClear(chatId, messageId);
 
   if (value === "custom") {
-    await sendFlowPrompt(chatId, "Type your custom value now, or /cancel.", null, { brand: false });
+    await sendFlowPrompt(chatId, "Type your custom value now, or /cancel.", { inline_keyboard: [] }, { brand: false });
     return;
   }
 
@@ -4728,18 +4728,18 @@ async function startAutoSnipeFlow(chatId, userId, messageId = null) {
     data: {
       tokenMint: result.pick.tokenMint,
       settings: result.settings,
-        score: result.pick,
-        autoSnipe: true,
-        planSource: "autosnipe",
-        autoSnipeStats: {
-          scoredCount: result.scoredCount,
-          qualifiedCount: result.qualifiedCount,
-          strictCount: result.strictCount,
-          backupCount: result.backupCount,
-          freshCount: result.freshCount,
-          tier: result.tier
-        }
+      score: result.pick,
+      autoSnipe: true,
+      planSource: "autosnipe",
+      autoSnipeStats: {
+        scoredCount: result.scoredCount,
+        qualifiedCount: result.qualifiedCount,
+        strictCount: result.strictCount,
+        backupCount: result.backupCount,
+        freshCount: result.freshCount,
+        tier: result.tier
       }
+    }
   });
 
   await sendSniperWalletPrompt(chatId, userId, result.pick, [
@@ -4747,7 +4747,7 @@ async function startAutoSnipeFlow(chatId, userId, messageId = null) {
     result.pick.autoSnipeSafetyNote ? `Precheck: ${result.pick.autoSnipeSafetyNote}` : "",
     `Defaults after amount: +${AUTOSNIPE_TAKE_PROFIT_PCT}% take-profit, -${AUTOSNIPE_STOP_LOSS_PCT}% stop-loss, ${AUTOSNIPE_SLIPPAGE_BPS} bps slippage.`,
     "Choose wallets, then choose SOL amount. The next screen will be Confirm."
-  ].filter(Boolean).join("\n"));
+  ].filter(Boolean).join("\n"), targetMessageId);
 }
 
 async function startPumpSnipeFlow(chatId, userId, messageId = null) {
@@ -4807,7 +4807,7 @@ async function startPumpSnipeFlow(chatId, userId, messageId = null) {
     result.pick.autoSnipeSafetyNote ? `Precheck: ${result.pick.autoSnipeSafetyNote}` : "",
     `Defaults after amount: +${PUMPSNIPE_TAKE_PROFIT_PCT}% take-profit, -${PUMPSNIPE_STOP_LOSS_PCT}% stop-loss, ${PUMPSNIPE_SLIPPAGE_BPS} bps slippage.`,
     "Choose wallets, choose SOL amount, then use defaults or customize before Confirm."
-  ].filter(Boolean).join("\n"));
+  ].filter(Boolean).join("\n"), targetMessageId);
 }
 
 async function startSniperPickFlow(chatId, userId, tokenMint, messageId = null) {
@@ -4827,20 +4827,16 @@ async function startSniperPickFlow(chatId, userId, tokenMint, messageId = null) 
   await sendSniperWalletPrompt(chatId, userId, score, "Pick loaded. Choose the wallets to use for this entry.");
 }
 
-async function sendSniperWalletPrompt(chatId, userId, score, prefix) {
+async function sendSniperWalletPrompt(chatId, userId, score, prefix, messageId = null) {
   const store = await readWalletStore();
   const wallets = walletsForOwner(store, userId);
   if (wallets.length === 0) {
     clearSession(chatId);
-    await telegram("sendMessage", {
-      chat_id: chatId,
-      text: withBrandFooter("No managed wallets found yet. Create or import a wallet first, then come back to OgreSniper."),
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "Wallet Menu", callback_data: "wallet_menu" }],
-          [{ text: "Back", callback_data: "sniper_menu" }]
-        ]
-      }
+    await sendOrEditMessage(chatId, messageId, withBrandFooter("No managed wallets found yet. Create or import a wallet first, then come back to OgreSniper."), {
+      inline_keyboard: [
+        [{ text: "Wallet Menu", callback_data: "wallet_menu" }],
+        [{ text: "Back", callback_data: "sniper_menu" }]
+      ]
     });
     return;
   }
@@ -4856,9 +4852,7 @@ async function sendSniperWalletPrompt(chatId, userId, score, prefix) {
     [{ text: "Custom / Group", callback_data: "quick:custom" }, { text: "Cancel", callback_data: "quick:cancel" }]
   ];
 
-  await telegram("sendMessage", {
-    chat_id: chatId,
-    text: withBrandFooter([
+  const result = await sendOrEditHtmlMessage(chatId, messageId, withBrandFooter([
       "<b>OgreSniper Entry</b>",
       "",
       formatSniperPickHtml(score),
@@ -4867,16 +4861,18 @@ async function sendSniperWalletPrompt(chatId, userId, score, prefix) {
       "",
       ...walletLines,
       hiddenCount ? `...and ${hiddenCount} more wallet(s). Use Custom / Group for the rest.` : ""
-    ].filter(Boolean).join("\n")),
-    parse_mode: "HTML",
-    disable_web_page_preview: true,
-    reply_markup: {
+    ].filter(Boolean).join("\n")), {
       inline_keyboard: [
         [{ text: "Open Dex Chart", url: dexScreenerUrl(score.tokenMint) }],
         ...quickWalletRows
       ]
-    }
-  });
+    });
+  const session = sessions.get(chatId);
+  if (session && result?.message_id) {
+    session.activePromptMessageId = result.message_id;
+  } else if (session && messageId) {
+    session.activePromptMessageId = messageId;
+  }
 }
 
 
