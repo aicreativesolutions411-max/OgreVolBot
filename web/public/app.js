@@ -94,9 +94,11 @@ const state = {
 };
 
 const $ = (selector) => document.querySelector(selector);
-const setText = (selector, value) => {
-  const element = $(selector);
+const writeText = (element, value) => {
   if (element) element.textContent = value;
+};
+const setText = (selector, value) => {
+  writeText($(selector), value);
 };
 const app = $("[data-app]");
 const loginView = $("[data-login]");
@@ -198,7 +200,7 @@ function setError(message = "") {
   [errorBox, dashboardErrorBox].forEach((box) => {
     if (!box) return;
     box.hidden = !message;
-    box.textContent = message;
+    writeText(box, message);
   });
 }
 
@@ -1811,10 +1813,10 @@ async function createWalletSet() {
   if (!labelInput || !countInput || !status) return;
   const buttons = [...document.querySelectorAll("[data-create-wallets]")];
   setError("");
-  status.textContent = "Creating wallets...";
+  writeText(status, "Creating wallets...");
   buttons.forEach((button) => {
     button.disabled = true;
-    button.textContent = "Creating...";
+    writeText(button, "Creating...");
   });
 
   try {
@@ -1832,17 +1834,17 @@ async function createWalletSet() {
     state.downloads = data.downloads;
     downloadText(data.downloads.encryptedBackup.filename, data.downloads.encryptedBackup.text);
     downloadText(data.downloads.recoveryKeys.filename, data.downloads.recoveryKeys.text);
-    status.textContent = `Created ${data.wallets.length} wallet(s). Backup downloads started.`;
+    writeText(status, `Created ${data.wallets.length} wallet(s). Backup downloads started.`);
     await loadAll();
     state.activeTab = "wallets";
     render();
   } catch (error) {
-    status.textContent = error.message;
+    writeText(status, error.message);
     setError(error.message);
   } finally {
     buttons.forEach((button) => {
       button.disabled = false;
-      button.textContent = "Create Wallets";
+      writeText(button, "Create Wallets");
     });
   }
 }
@@ -1853,11 +1855,11 @@ async function restoreWalletBackup() {
   if (!textarea || !status) return;
   const backupText = textarea.value.trim();
   if (!backupText) {
-    status.textContent = "Choose a backup file or paste backup text first.";
+    writeText(status, "Choose a backup file or paste backup text first.");
     return;
   }
 
-  status.textContent = "Restoring wallets...";
+  writeText(status, "Restoring wallets...");
   try {
     const data = await api("/api/web/wallets/restore", {
       method: "POST",
@@ -1874,12 +1876,12 @@ async function restoreWalletBackup() {
       }
     }
     textarea.value = "";
-    status.textContent = data.restore?.message || "Restore complete.";
+    writeText(status, data.restore?.message || "Restore complete.");
     await loadAll();
     state.activeTab = "wallets";
     render();
   } catch (error) {
-    status.textContent = error.message;
+    writeText(status, error.message);
   }
 }
 
@@ -1887,7 +1889,7 @@ async function exportWalletBackup() {
   const status = $("[data-export-status]");
   if (!status) return;
 
-  status.textContent = "Building backup files...";
+  writeText(status, "Building backup files...");
   try {
     const data = await api("/api/web/wallets/export", {
       method: "POST",
@@ -1903,10 +1905,10 @@ async function exportWalletBackup() {
         downloadText(data.backup.downloads.recoveryKeys.filename, data.backup.downloads.recoveryKeys.text);
       }
     }
-    status.textContent = data.backup?.message || "Backup ready.";
+    writeText(status, data.backup?.message || "Backup ready.");
     render();
   } catch (error) {
-    status.textContent = error.message;
+    writeText(status, error.message);
   }
 }
 
@@ -1918,11 +1920,11 @@ async function importWallet() {
   const label = labelInput.value.trim() || "Imported Wallet";
   const secret = secretInput.value.trim();
   if (!secret) {
-    status.textContent = "Paste a private key or JSON secret-key array first.";
+    writeText(status, "Paste a private key or JSON secret-key array first.");
     return;
   }
 
-  status.textContent = "Importing wallet...";
+  writeText(status, "Importing wallet...");
   try {
     const data = await api("/api/web/wallets/import", {
       method: "POST",
@@ -1939,12 +1941,12 @@ async function importWallet() {
       }
     }
     secretInput.value = "";
-    status.textContent = data.imported?.message || "Import complete.";
+    writeText(status, data.imported?.message || "Import complete.");
     await loadAll();
     state.activeTab = "wallets";
     render();
   } catch (error) {
-    status.textContent = error.message;
+    writeText(status, error.message);
   }
 }
 
@@ -1953,12 +1955,12 @@ async function readRestoreFile(input) {
   const textarea = $("[data-restore-text]");
   const file = input?.files?.[0];
   if (!file || !textarea) return;
-  if (status) status.textContent = "Reading backup file...";
+  writeText(status, "Reading backup file...");
   try {
     textarea.value = await file.text();
-    if (status) status.textContent = "Backup loaded. Tap Restore Wallets.";
+    writeText(status, "Backup loaded. Tap Restore Wallets.");
   } catch (error) {
-    if (status) status.textContent = `Could not read file: ${error.message}`;
+    writeText(status, `Could not read file: ${error.message}`);
   }
 }
 
@@ -1979,12 +1981,12 @@ function connectXAccount() {
   const status = $("[data-x-status]");
   const handle = cleanXHandle(input?.value || "");
   if (!handle) {
-    if (status) status.textContent = "Enter a valid X handle first.";
+    writeText(status, "Enter a valid X handle first.");
     return;
   }
   state.xHandle = handle;
   setStoredXHandle(handle);
-  if (status) status.textContent = `Connected as @${handle}. Share buttons now open X with SlimeWire tagged.`;
+  writeText(status, `Connected as @${handle}. Share buttons now open X with SlimeWire tagged.`);
   render();
 }
 
@@ -1996,7 +1998,7 @@ function disconnectXAccount() {
 
 async function updateProfileAvatar(payload, statusText = "Saving PFP...") {
   const status = $("[data-avatar-status]");
-  if (status) status.textContent = statusText;
+  writeText(status, statusText);
   try {
     const data = await api("/api/web/profile/avatar", {
       method: "POST",
@@ -2008,10 +2010,10 @@ async function updateProfileAvatar(payload, statusText = "Saving PFP...") {
       avatarSource: data.profile?.avatarSource || "",
       avatarUpdatedAt: data.profile?.avatarUpdatedAt || ""
     };
-    if (status) status.textContent = state.user.avatar ? "PFP saved." : "PFP removed.";
+    writeText(status, state.user.avatar ? "PFP saved." : "PFP removed.");
     render();
   } catch (error) {
-    if (status) status.textContent = error.message;
+    writeText(status, error.message);
     setError(error.message);
   }
 }
@@ -2021,19 +2023,19 @@ async function uploadProfileAvatar(input) {
   const file = input?.files?.[0];
   if (!file) return;
   if (!/^image\/(png|jpe?g|webp)$/i.test(file.type)) {
-    if (status) status.textContent = "Use a PNG, JPG, or WebP image.";
+    writeText(status, "Use a PNG, JPG, or WebP image.");
     return;
   }
   if (file.size > 5 * 1024 * 1024) {
-    if (status) status.textContent = "Use an image under 5 MB.";
+    writeText(status, "Use an image under 5 MB.");
     return;
   }
   try {
-    if (status) status.textContent = "Compressing PFP...";
+    writeText(status, "Compressing PFP...");
     const avatarDataUrl = await imageFileToAvatarDataUrl(file);
     await updateProfileAvatar({ avatarDataUrl }, "Saving compressed PFP...");
   } catch (error) {
-    if (status) status.textContent = error.message;
+    writeText(status, error.message);
     setError(error.message);
   } finally {
     input.value = "";
@@ -2081,7 +2083,7 @@ async function useXProfileAvatar() {
   const url = xAvatarUrl(state.xHandle);
   if (!url) {
     const status = $("[data-avatar-status]");
-    if (status) status.textContent = "Connect an X handle first.";
+    writeText(status, "Connect an X handle first.");
     return;
   }
   await updateProfileAvatar({ avatarUrl: url, avatarSource: "x" }, "Saving X PFP...");
@@ -2091,12 +2093,12 @@ async function connectBrowserWallet(providerId) {
   const status = $("[data-wallet-connect-status]");
   const provider = walletProviderById(providerId);
   if (!provider) {
-    if (status) status.textContent = `${walletProviderLabel(providerId)} is not detected in this browser. Install/open the wallet extension, then refresh.`;
+    writeText(status, `${walletProviderLabel(providerId)} is not detected in this browser. Install/open the wallet extension, then refresh.`);
     return;
   }
 
   try {
-    if (status) status.textContent = `Opening ${walletProviderLabel(providerId, provider)}...`;
+    writeText(status, `Opening ${walletProviderLabel(providerId, provider)}...`);
     const result = await provider.connect?.({ onlyIfTrusted: false });
     const publicKey = result?.publicKey || provider.publicKey;
     const publicKeyText = publicKey?.toBase58?.() || publicKey?.toString?.() || "";
@@ -2112,10 +2114,10 @@ async function connectBrowserWallet(providerId) {
       ...state.user,
       connectedWallet: data.profile?.connectedWallet || null
     };
-    if (status) status.textContent = `Connected ${shortAddress(publicKeyText)}.`;
+    writeText(status, `Connected ${shortAddress(publicKeyText)}.`);
     render();
   } catch (error) {
-    if (status) status.textContent = error.message || "Wallet connection was cancelled.";
+    writeText(status, error.message || "Wallet connection was cancelled.");
   }
 }
 
@@ -2144,10 +2146,10 @@ async function disconnectBrowserWallet() {
       ...state.user,
       connectedWallet: null
     };
-    if (status) status.textContent = "Connected wallet removed.";
+    writeText(status, "Connected wallet removed.");
     render();
   } catch (error) {
-    if (status) status.textContent = error.message;
+    writeText(status, error.message);
     setError(error.message);
   }
 }
@@ -2172,11 +2174,11 @@ function shareManualWatch(type) {
   const status = $("[data-share-watch-status]");
   const value = input?.value?.trim() || "";
   if (!value) {
-    if (status) status.textContent = isKol ? "Enter a KOL handle or wallet first." : "Enter a coin, ticker, or CA first.";
+    writeText(status, isKol ? "Enter a KOL handle or wallet first." : "Enter a coin, ticker, or CA first.");
     return;
   }
   openXShare(isKol ? manualKolWatchShareText(value) : manualCoinWatchShareText(value));
-  if (status) status.textContent = isKol ? "KOL watch post opened in X." : "Coin watch post opened in X.";
+  writeText(status, isKol ? "KOL watch post opened in X." : "Coin watch post opened in X.");
 }
 
 async function fetchPnlCardBlob(tokenMint) {
@@ -2240,7 +2242,7 @@ function readTradeForm() {
 
 function setTradeStatus(message) {
   const status = $("[data-trade-status]");
-  if (status) status.textContent = message;
+  writeText(status, message);
 }
 
 async function executeWebBuy(amountSol, amountMode = "fixed") {
@@ -2320,7 +2322,7 @@ function readVolumeForm() {
 
 function setVolumeStatus(message) {
   const status = $("[data-volume-status]");
-  if (status) status.textContent = message;
+  writeText(status, message);
 }
 
 async function createVolumePlan() {
@@ -2373,7 +2375,7 @@ function readSniperEntryForm(tokenMint) {
 
 function setSniperStatus(message) {
   const status = $("[data-sniper-status]");
-  if (status) status.textContent = message;
+  writeText(status, message);
 }
 
 async function createSniperEntry(tokenMint) {
@@ -2395,7 +2397,7 @@ async function createSniperEntry(tokenMint) {
 
 function setKolStatus(message) {
   const status = $("[data-kol-status]");
-  if (status) status.textContent = message;
+  writeText(status, message);
 }
 
 function readKolPlanForm(tokenMint) {
@@ -2472,7 +2474,7 @@ function checkedWalletIndexes(prefix) {
 
 function setBundleStatus(message) {
   const status = $("[data-bundle-status]");
-  if (status) status.textContent = message;
+  writeText(status, message);
 }
 
 function readBundleForm() {
@@ -2538,7 +2540,7 @@ async function executeBundlePlan() {
 
 function setLaunchStatus(message) {
   const status = $("[data-launch-status]");
-  if (status) status.textContent = message;
+  writeText(status, message);
 }
 
 function readLaunchForm() {
@@ -3054,8 +3056,8 @@ document.addEventListener("click", async (event) => {
   if (copyValue) {
     const originalLabel = target.getAttribute("data-copy-label") || target.textContent || "Copy";
     await navigator.clipboard.writeText(copyValue);
-    target.textContent = "Copied";
-    setTimeout(() => { target.textContent = originalLabel; }, 1000);
+    writeText(target, "Copied");
+    setTimeout(() => { writeText(target, originalLabel); }, 1000);
   }
 });
 
