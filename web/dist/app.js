@@ -364,16 +364,17 @@ function renderTabs() {
 function dashboardHtml() {
   return `
     ${accountToolsHtml()}
+    ${setupIntroHtml()}
+    ${createWalletSection()}
+    ${connectWalletSection()}
+    ${profilePfpSection()}
+    ${xConnectSection()}
     <section class="panel-grid">
       ${visualCard("visual-aces", "Trade Desk", "Quick buy and sell from one wallet with .10, .50, 1 SOL, max, and percent sell buttons.")}
       ${visualCard("visual-cauldron", "Bundle + Volume", "Buy or sell across selected wallets, then manage timed exits with Volume plans.")}
       ${visualCard("visual-candle", "Launch Snipe", "Preset ticker, wallets, amount, TP/SL, and slippage, then watch live feeds until launch.")}
       ${visualCard("visual-cauldron", "KOL Tracker", "Follow KOL wallets, review their strongest current signals, then trade, bundle, or copy-plan from the same panel.")}
     </section>
-    ${createWalletSection()}
-    ${connectWalletSection()}
-    ${profilePfpSection()}
-    ${xConnectSection()}
     ${importWalletSection()}
     ${backupRestoreSection()}
     ${downloadsHtml()}
@@ -396,6 +397,17 @@ function accountToolsHtml() {
 
 function visualCard(className, title, body) {
   return `<article class="panel visual-card ${className}"><div><h3>${escapeHtml(title)}</h3><p>${escapeHtml(body)}</p></div></article>`;
+}
+
+function setupIntroHtml() {
+  return `
+    <section class="setup-intro">
+      <div>
+        <h3>Quick Setup</h3>
+        <p>Create bot wallets, connect Phantom or Solflare, add your profile PFP, and connect X before trading.</p>
+      </div>
+    </section>
+  `;
 }
 
 function profilePfpSection() {
@@ -651,6 +663,25 @@ function isSafeAvatarSrc(value) {
 function xAvatarUrl(handle) {
   const clean = cleanXHandle(handle);
   return clean ? `https://unavatar.io/twitter/${encodeURIComponent(clean)}` : "";
+}
+
+function kolAvatarSrc(kol = {}) {
+  const avatar = String(kol.avatar || kol.image || "").trim();
+  if (isSafeAvatarSrc(avatar)) return avatar;
+  const twitter = cleanXHandle(kol.twitter || kol.x || kol.username || "");
+  return twitter ? xAvatarUrl(twitter) : "";
+}
+
+function kolAvatarLabel(kol = {}) {
+  const text = String(kol.twitter || kol.name || kol.kolName || kol.shortWallet || kol.wallet || "KO").trim();
+  return text.replace(/^@+/, "").slice(0, 2).toUpperCase() || "KO";
+}
+
+function kolAvatarMarkup(kol = {}, className = "kol-avatar") {
+  const src = kolAvatarSrc(kol);
+  return src
+    ? `<img class="${escapeHtml(className)}" src="${escapeHtml(src)}" alt="">`
+    : `<div class="${escapeHtml(className)} kol-avatar-fallback" aria-hidden="true">${escapeHtml(kolAvatarLabel(kol))}</div>`;
 }
 
 function browserWalletChoices() {
@@ -1578,7 +1609,7 @@ function kolSummaryHtml() {
       <div class="kol-grid">
         ${kols.slice(0, 12).map((kol, index) => `
           <article class="kol-profile">
-            ${kol.avatar ? `<img class="kol-avatar" src="${escapeHtml(kol.avatar)}" alt="">` : ""}
+            ${kolAvatarMarkup(kol)}
             <div class="pick-top">
               <span>${index + 1}</span>
               <h3>${escapeHtml(kol.name || kol.shortWallet || "KOL Wallet")}</h3>
@@ -1627,6 +1658,7 @@ function kolRowsHtml() {
         const realizedLabel = isCluster ? "Buys" : "Realized";
         return `
           <article class="pick-card kol-card">
+            ${kolAvatarMarkup(row, "kol-avatar small")}
             <div class="pick-top">
               <span>${index + 1}</span>
               <h3>${escapeHtml(row.symbol || "KOL Signal")}</h3>

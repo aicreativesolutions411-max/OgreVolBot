@@ -533,6 +533,28 @@ button:disabled {
   background: linear-gradient(0deg, rgba(2, 4, 2, 0.96), rgba(2, 4, 2, 0.12));
 }
 
+.setup-intro {
+  margin-top: 12px;
+  padding: 14px 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: linear-gradient(90deg, rgba(114, 255, 35, 0.12), rgba(10, 17, 12, 0.88));
+}
+
+.setup-intro h3,
+.setup-intro p {
+  margin-bottom: 0;
+}
+
+.setup-intro h3 {
+  color: var(--green-2);
+}
+
+.setup-intro p {
+  margin-top: 4px;
+  color: #c7d7c2;
+}
+
 .visual-aces {
   background-image: url("./assets/ogre-aces.jpg");
 }
@@ -941,6 +963,19 @@ code {
   border-radius: 50%;
   object-fit: cover;
   background: rgba(255, 255, 255, 0.06);
+}
+
+.kol-avatar.small {
+  width: 42px;
+  height: 42px;
+}
+
+.kol-avatar-fallback {
+  display: grid;
+  place-items: center;
+  color: var(--green-2);
+  font-weight: 950;
+  box-shadow: 0 0 18px rgba(114, 255, 35, 0.12);
 }
 
 .kol-profile h3,
