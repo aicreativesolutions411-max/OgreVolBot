@@ -367,12 +367,13 @@ button:disabled {
 .panel,
 .empty,
 .row-card,
-.pick-card,
-.trade-card,
-.trade-side article,
-.kol-dashboard,
-.kol-profile,
-.pnl-summary {
+  .pick-card,
+  .trade-card,
+  .trade-side article,
+  .connected-wallet-card,
+  .kol-dashboard,
+  .kol-profile,
+  .pnl-summary {
   border: 1px solid var(--line);
   background: var(--panel);
   border-radius: 12px;
@@ -588,6 +589,46 @@ button:disabled {
 
 .download-card {
   grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.connected-wallet-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  margin-top: 12px;
+  padding: 18px;
+  background: linear-gradient(135deg, rgba(114, 255, 35, 0.08), rgba(10, 17, 12, 0.88));
+}
+
+.connected-wallet-card h3,
+.connected-wallet-card p,
+.connected-wallet-card small {
+  margin-bottom: 0;
+}
+
+.connected-wallet-card small {
+  display: block;
+  margin-top: 8px;
+  line-height: 1.5;
+}
+
+.connected-token-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.connected-token-list a {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 6px 9px;
+  color: var(--green-2);
+  background: rgba(255, 255, 255, 0.04);
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 850;
 }
 
 .account-check-card {
@@ -1088,6 +1129,7 @@ code {
   .pfp-card,
   .setup-hub-card,
   .wallet-connect-card,
+  .connected-wallet-card,
   .x-watch-card,
   .x-connect-card,
   .account-check-card,

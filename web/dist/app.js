@@ -77,6 +77,10 @@ const state = {
   volumeToken: "",
   volumeResult: null,
   sniperResult: null,
+  connectedWalletBalance: null,
+  livePairs: null,
+  livePairsLoading: false,
+  livePairsLastUpdatedAt: "",
   launchResult: null,
   launchWatches: [],
   kolScan: null,
@@ -92,6 +96,7 @@ const state = {
   downloads: null,
   xHandle: getStoredXHandle()
 };
+let livePairsTimer = null;
 
 const $ = (selector) => document.querySelector(selector);
 const writeText = (element, value) => {
@@ -365,6 +370,7 @@ async function loadAll() {
     ]);
     state.wallets = wallets.wallets || [];
     state.balances = balances.balances || [];
+    state.connectedWalletBalance = balances.connectedWallet || null;
     state.positions = positions.positions || [];
     state.pnl = pnl.pnl || null;
     state.launchWatches = launchWatches.watches || [];
@@ -372,6 +378,37 @@ async function loadAll() {
     state.loading = false;
     render();
   }
+}
+
+async function loadLivePairs({ silent = false } = {}) {
+  state.livePairsLoading = true;
+  if (!silent) state.loading = true;
+  render();
+
+  try {
+    const data = await api("/api/web/live-pairs");
+    state.livePairs = data.livePairs;
+    state.livePairsLastUpdatedAt = data.livePairs?.refreshedAt || new Date().toISOString();
+  } finally {
+    state.livePairsLoading = false;
+    if (!silent) state.loading = false;
+    render();
+  }
+}
+
+function scheduleLivePairsAutoRefresh() {
+  if (livePairsTimer) {
+    clearTimeout(livePairsTimer);
+    livePairsTimer = null;
+  }
+
+  if (!state.user || state.activeTab !== "live") return;
+  const refreshSeconds = Number(state.livePairs?.refreshSeconds || 30);
+  const delayMs = Math.max(15, refreshSeconds) * 1000;
+  livePairsTimer = setTimeout(() => {
+    if (!state.user || state.activeTab !== "live" || state.livePairsLoading) return;
+    loadLivePairs({ silent: true }).catch((error) => setError(error.message));
+  }, delayMs);
 }
 
 async function loadScan(mode = state.scanMode) {
@@ -437,6 +474,10 @@ function render() {
   setText("[data-realized]", state.pnl?.totals?.realizedSol || "+0 SOL");
   const avatar = $("[data-user-avatar]");
   if (avatar) avatar.innerHTML = userAvatarHtml("SW");
+  const connectedWallet = state.user?.connectedWallet || null;
+  setText("[data-connected-wallet-summary]", connectedWallet
+    ? `${connectedWallet.provider || "Browser wallet"} connected: ${shortAddress(connectedWallet.publicKey)}`
+    : "No browser wallet connected.");
   renderTabs();
 }
 
@@ -452,6 +493,7 @@ function renderTabs() {
   if (state.activeTab === "trade") panel.innerHTML = tradeHtml();
   if (state.activeTab === "bundle") panel.innerHTML = bundleHtml();
   if (state.activeTab === "volume") panel.innerHTML = volumeHtml();
+  if (state.activeTab === "live") panel.innerHTML = livePairsHtml();
   if (state.activeTab === "launch") panel.innerHTML = launchHtml();
   if (state.activeTab === "kol") panel.innerHTML = kolHtml();
   if (state.activeTab === "wallets") panel.innerHTML = walletsHtml();
@@ -459,6 +501,7 @@ function renderTabs() {
   if (state.activeTab === "pnl") panel.innerHTML = pnlHtml();
   if (state.activeTab === "sniper") panel.innerHTML = sniperHtml();
   syncCustomFields(panel);
+  scheduleLivePairsAutoRefresh();
 }
 
 function dashboardHtml() {
@@ -470,6 +513,7 @@ function dashboardHtml() {
       ${visualCard("visual-cauldron", "Bundle + Volume", "Buy or sell across selected wallets, then manage timed exits with Volume plans.")}
       ${visualCard("visual-candle", "Launch Snipe", "Preset ticker, wallets, amount, TP/SL, and slippage, then watch live feeds until launch.")}
       ${visualCard("visual-cauldron", "KOL Tracker", "Follow KOL wallets, review their strongest current signals, then trade, bundle, or copy-plan from the same panel.")}
+      ${visualCard("visual-candle", "Live Pairs", "Auto-refresh new Pump and fresh-pair listings while the tab is open, with safety-filtered Trade, Bundle, and Share actions.")}
     </section>
     ${importWalletSection()}
     ${backupRestoreSection()}
@@ -510,7 +554,7 @@ function accountProfileSection() {
           <p>${connected ? `Wallet connected: ${escapeHtml(connected.shortPublicKey || shortAddress(connected.publicKey))}` : "No browser wallet connected yet."}</p>
         </div>
       </div>
-      <button type="button" class="primary" data-connect-wallet="solana">Connect Wallet</button>
+      ${connected ? `<button type="button" data-copy="${escapeHtml(connected.publicKey)}">Copy Connected</button>` : `<button type="button" class="primary" data-connect-wallet="solana">Connect Wallet</button>`}
       <button type="button" data-tab="wallets">Open Wallets</button>
     </section>
   `;
@@ -654,9 +698,10 @@ function createWalletSection() {
         </label>
         <div class="profile-actions">
           <button type="button" class="primary" data-connect-x>${state.xHandle ? "Update X" : "Connect X"}</button>
+          <button type="button" data-open-x-login>${state.xHandle ? "Open X" : "Open X Login"}</button>
           ${state.xHandle ? `<button type="button" data-clear-x>Disconnect</button>` : ""}
         </div>
-        <small data-x-status>${state.xHandle ? `Connected as @${escapeHtml(state.xHandle)}.` : "Local to this browser. No X password or API key is stored."}</small>
+        <small data-x-status>${state.xHandle ? `Connected as @${escapeHtml(state.xHandle)}. X opens for posts and profile checks.` : "Enter a handle, then Connect X. No X password or API key is stored."}</small>
       </article>
     </section>
   `;
@@ -708,8 +753,9 @@ function xConnectSection() {
         <input data-x-handle type="text" placeholder="@yourhandle" value="${escapeHtml(state.xHandle ? `@${state.xHandle}` : "")}">
       </label>
       <button type="button" class="primary" data-connect-x>${state.xHandle ? "Update X" : "Connect X"}</button>
+      <button type="button" data-open-x-login>${state.xHandle ? "Open X" : "Open X Login"}</button>
       ${state.xHandle ? `<button type="button" data-clear-x>Disconnect</button>` : ""}
-      <small data-x-status>${state.xHandle ? `Connected as @${escapeHtml(state.xHandle)}. Share buttons will tag ${escapeHtml(shareSiteUrl)}.` : `Connect is local to this browser. No X password or API key is stored.`}</small>
+      <small data-x-status>${state.xHandle ? `Connected as @${escapeHtml(state.xHandle)}. Share buttons will tag ${escapeHtml(shareSiteUrl)}.` : `Enter a handle, then Connect X. No X password or API key is stored.`}</small>
     </section>
     <section class="create-wallet-card x-watch-card">
       <div>
@@ -869,6 +915,11 @@ function isSafeAvatarSrc(value) {
 function xAvatarUrl(handle) {
   const clean = cleanXHandle(handle);
   return clean ? `https://unavatar.io/twitter/${encodeURIComponent(clean)}` : "";
+}
+
+function xProfileUrl(handle = state.xHandle) {
+  const clean = cleanXHandle(handle);
+  return clean ? `https://x.com/${encodeURIComponent(clean)}` : "https://x.com/i/flow/login";
 }
 
 function kolAvatarSrc(kol = {}) {
@@ -2087,9 +2138,10 @@ async function connectXAccount() {
     writeText(status, "Enter a valid X handle first.");
     return;
   }
+  const openedWindow = window.open(xProfileUrl(handle), "_blank", "noopener,noreferrer");
 
   try {
-    writeText(status, `Connecting @${handle}...`);
+    writeText(status, openedWindow ? `Opening X and saving @${handle}...` : `Saving @${handle}. Allow popups if X did not open.`);
     const data = await api("/api/web/profile/x", {
       method: "POST",
       body: JSON.stringify({ xHandle: handle })
@@ -2102,6 +2154,16 @@ async function connectXAccount() {
     writeText(status, error.message);
     setError(error.message);
   }
+}
+
+function openXLoginOrProfile() {
+  const status = $("[data-x-status]");
+  const inputHandle = cleanXHandle($("[data-x-handle]")?.value || state.xHandle || "");
+  const url = xProfileUrl(inputHandle || state.xHandle);
+  window.open(url, "_blank", "noopener,noreferrer");
+  writeText(status, inputHandle
+    ? `Opened X for @${inputHandle}. Tap Connect X after checking the handle.`
+    : "Opened X login. Add your handle here after signing in.");
 }
 
 async function disconnectXAccount() {
@@ -2240,8 +2302,16 @@ async function connectBrowserWallet(providerId) {
       ...state.user,
       connectedWallet: data.profile?.connectedWallet || null
     });
+    state.connectedWalletBalance = {
+      publicKey: publicKeyText,
+      shortPublicKey: shortAddress(publicKeyText),
+      provider: walletProviderLabel(providerId, provider),
+      tokens: []
+    };
+    state.activeTab = "wallets";
     writeText(status, `Connected ${shortAddress(publicKeyText)}.`);
     render();
+    loadAll().catch((error) => setError(`Connected wallet saved. Balance refresh failed: ${error.message}`));
   } catch (error) {
     writeText(status, error.message || "Wallet connection was cancelled.");
   }
@@ -2272,6 +2342,7 @@ async function disconnectBrowserWallet() {
       ...state.user,
       connectedWallet: null
     });
+    state.connectedWalletBalance = null;
     writeText(status, "Connected wallet removed.");
     render();
   } catch (error) {
@@ -2746,9 +2817,11 @@ async function cancelLaunchWatch(planId) {
 
 function walletsHtml() {
   const create = `${createWalletSection()}${importWalletSection()}${backupRestoreSection()}${downloadsHtml()}`;
-  if (!state.wallets.length) return `${create}${emptyState("No wallets yet", "Create a wallet set above to get started on web.")}`;
+  const connected = connectedWalletCardHtml();
+  if (!state.wallets.length) return `${create}${connected}${emptyState("No managed bot wallets yet", "Create a wallet set above to trade with bot automation. Connected browser wallets show above as view-only balances.")}`;
   return `
     ${create}
+    ${connected}
     ${walletBalanceSummaryHtml()}
     <section class="account-check-card">
       <div>
@@ -2774,6 +2847,40 @@ function walletsHtml() {
         </article>
       `).join("")}
     </div>
+  `;
+}
+
+function connectedWalletCardHtml() {
+  const connected = state.connectedWalletBalance || state.user?.connectedWallet || null;
+  if (!connected?.publicKey) return "";
+  const balance = state.connectedWalletBalance || {};
+  const sol = Number.isFinite(Number(balance.sol)) ? `${Number(balance.sol).toFixed(4)} SOL` : balance.error ? "Balance error" : "loading";
+  const tokenText = Number(balance.tokens?.length || 0) === 1 ? "1 token" : `${Number(balance.tokens?.length || 0)} tokens`;
+  const warningText = balance.warnings?.length ? ` | ${balance.warnings.length} warning(s)` : "";
+  const tokenRows = (balance.tokens || []).slice(0, 6).map((token) => `
+    <a href="${escapeHtml(token.dexUrl || dexUrl(token.mint))}" target="_blank" rel="noreferrer">
+      ${escapeHtml(token.shortMint || shortAddress(token.mint))}: ${escapeHtml(token.uiAmount ?? "held")}
+    </a>
+  `).join("");
+  return `
+    <section class="connected-wallet-card">
+      <div>
+        <h3>Connected Browser Wallet</h3>
+        <p>${escapeHtml(connected.provider || balance.provider || "Solana Wallet")} ${escapeHtml(shortAddress(connected.publicKey))}</p>
+        <code>${escapeHtml(connected.publicKey)}</code>
+        <small>Balance: ${escapeHtml(sol)} | ${escapeHtml(tokenText)}${escapeHtml(warningText)}</small>
+        ${balance.error ? `<small>Check failed: ${escapeHtml(balance.error)}</small>` : ""}
+        ${tokenRows ? `<div class="connected-token-list">${tokenRows}</div>` : ""}
+        <small>Browser wallets are shown for balance checks. Bot trading uses managed wallets because trades need signing automation.</small>
+      </div>
+      <div class="card-actions">
+        <button data-refresh-all>Refresh</button>
+        <button data-copy="${escapeHtml(connected.publicKey)}">Copy</button>
+        <a href="https://solscan.io/account/${encodeURIComponent(connected.publicKey)}" target="_blank" rel="noreferrer">Solscan</a>
+        <button data-tab="trade">Trade Managed Wallet</button>
+        <button data-tab="bundle">Bundle</button>
+      </div>
+    </section>
   `;
 }
 
@@ -2872,6 +2979,63 @@ function pnlHtml() {
       `).join("")}
     </div>
   `;
+}
+
+function livePairsHtml() {
+  const rows = state.livePairs?.rows || [];
+  const status = state.livePairsLoading
+    ? "Scanning live pairs..."
+    : state.livePairs?.message || "Live Pairs refreshes while this tab is open.";
+  return `
+    <section class="account-check-card">
+      <div>
+        <h3>Live Pairs</h3>
+        <p>Fresh Pump/new-pair listings with mint/freeze safety checks. Auto-refresh runs only while this tab is open.</p>
+      </div>
+      <button class="primary" data-refresh-live-pairs>${state.livePairsLoading ? "Scanning..." : "Refresh Live"}</button>
+      <button data-tab="trade">Trade</button>
+      <button data-tab="bundle">Bundle</button>
+    </section>
+    <p class="scan-meta">${escapeHtml(status)}${state.livePairsLastUpdatedAt ? ` Last updated ${escapeHtml(formatDate(state.livePairsLastUpdatedAt))}.` : ""}</p>
+    ${rows.length ? livePairRowsHtml(rows) : emptyState("No live pairs yet", "Keep this tab open or tap Refresh Live. The feed filters out active mint/freeze authority and Token-2022 mints.")}
+  `;
+}
+
+function livePairRowsHtml(rows) {
+  return `
+    <div class="pick-grid">
+      ${rows.map((row, index) => `
+        <article class="pick-card live-pair-card">
+          <div class="pick-top">
+            <span>#${index + 1}</span>
+            <strong>${escapeHtml(row.symbol || row.shortMint || shortAddress(row.tokenMint))}</strong>
+            <em>${escapeHtml(row.liveLabel || "Live")}</em>
+          </div>
+          <h3>${escapeHtml(row.name || row.category || "Fresh Pair")}</h3>
+          <p>${escapeHtml(row.scalpSetup || row.momentum || "Fresh feed")} | Age ${escapeHtml(row.pairAgeLabel || "new")} | Rug ${escapeHtml(row.rugRisk ?? "n/a")}/100</p>
+          <dl>
+            <div><dt>MC</dt><dd>${escapeHtml(row.marketCapLabel || "$0")}</dd></div>
+            <div><dt>Liq</dt><dd>${escapeHtml(row.liquidityLabel || "$0")}</dd></div>
+            <div><dt>Vol 5m</dt><dd>${escapeHtml(row.volume5mLabel || "$0")}</dd></div>
+          </dl>
+          <code>${escapeHtml(row.tokenMint)}</code>
+          <small>${escapeHtml(row.safetyNote || "Mint/freeze safety checked")}</small>
+          <div class="card-actions">
+            <button data-copy="${escapeHtml(row.tokenMint)}">Copy CA</button>
+            <button class="primary" data-use-token="${escapeHtml(row.tokenMint)}">Trade</button>
+            <button data-use-token-bundle="${escapeHtml(row.tokenMint)}">Bundle</button>
+            <button data-use-token-volume="${escapeHtml(row.tokenMint)}">Volume</button>
+            ${xShareButton(livePairShareText(row), "Share")}
+            <a href="${escapeHtml(row.dexUrl || dexUrl(row.tokenMint))}" target="_blank" rel="noreferrer">Dex</a>
+          </div>
+        </article>
+      `).join("")}
+    </div>
+  `;
+}
+
+function livePairShareText(row) {
+  return `Live pair ${row.symbol || shortAddress(row.tokenMint)} spotted on SlimeWire: MC ${row.marketCapLabel || "n/a"}, liq ${row.liquidityLabel || "n/a"}, age ${row.pairAgeLabel || "new"}.`;
 }
 
 function sniperHtml() {
@@ -3079,6 +3243,7 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-web-signup-connect]")) await createAccountAndConnectWallet();
   if (target.matches("[data-logout]")) await logout();
   if (target.matches("[data-connect-x]")) await connectXAccount();
+  if (target.matches("[data-open-x-login]")) openXLoginOrProfile();
   if (target.matches("[data-clear-x]")) await disconnectXAccount();
   if (target.matches("[data-save-login-credentials]")) await saveLoginCredentials();
   if (target.matches("[data-use-x-avatar]")) await useXProfileAvatar();
@@ -3186,12 +3351,29 @@ document.addEventListener("click", async (event) => {
     state.activeTab = "trade";
     render();
   }
+  if (target.matches("[data-use-token-bundle]")) {
+    state.bundleToken = target.dataset.useTokenBundle || "";
+    state.tradeToken = state.bundleToken;
+    state.volumeToken = state.bundleToken;
+    state.activeTab = "bundle";
+    render();
+  }
+  if (target.matches("[data-use-token-volume]")) {
+    state.volumeToken = target.dataset.useTokenVolume || "";
+    state.tradeToken = state.volumeToken;
+    state.bundleToken = state.volumeToken;
+    state.activeTab = "volume";
+    render();
+  }
   if (target.matches("[data-refresh-all]")) loadAll().catch((error) => setError(error.message));
 
   if (target.matches("[data-tab]")) {
     state.activeTab = target.dataset.tab;
     if (state.activeTab === "sniper" && !state.scan) {
       await loadScan().catch((error) => setError(error.message));
+    }
+    if (state.activeTab === "live" && !state.livePairs) {
+      await loadLivePairs().catch((error) => setError(error.message));
     }
     if (state.activeTab === "kol" && !state.kolScan) {
       await loadKolScan().catch((error) => setError(error.message));
@@ -3201,6 +3383,10 @@ document.addEventListener("click", async (event) => {
 
   if (target.matches("[data-refresh-scan]")) {
     await loadScan().catch((error) => setError(error.message));
+  }
+
+  if (target.matches("[data-refresh-live-pairs]")) {
+    await loadLivePairs().catch((error) => setError(error.message));
   }
 
   if (target.matches("[data-scan-mode]")) {

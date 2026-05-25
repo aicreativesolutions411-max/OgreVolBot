@@ -839,9 +839,14 @@ async function handleWebApiRequest(request, response, requestUrl) {
     }
 
     if (request.method === "GET" && pathname === "/api/web/balances") {
+      const [balances, connectedWallet] = await Promise.all([
+        webBalanceRows(auth.userId),
+        webConnectedWalletBalance(auth.userId)
+      ]);
       sendWebJson(request, response, 200, {
         ok: true,
-        balances: await webBalanceRows(auth.userId)
+        balances,
+        connectedWallet
       });
       return;
     }
@@ -874,6 +879,14 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendWebJson(request, response, 200, {
         ok: true,
         scan: await webSniperScan(auth.userId, mode)
+      });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/live-pairs") {
+      sendWebJson(request, response, 200, {
+        ok: true,
+        livePairs: await webLivePairs(auth.userId)
       });
       return;
     }
@@ -11487,6 +11500,49 @@ async function webBalanceRows(userId) {
   return rows;
 }
 
+async function webConnectedWalletBalance(userId) {
+  const profile = await webProfileForUser(userId);
+  const connected = profile.connectedWallet || null;
+  if (!connected?.publicKey) return null;
+
+  const row = {
+    label: connected.provider || "Connected Wallet",
+    publicKey: connected.publicKey,
+    shortPublicKey: connected.shortPublicKey || shortMint(connected.publicKey),
+    provider: connected.provider || "Solana Wallet",
+    connectedAt: connected.connectedAt || "",
+    sol: null,
+    lamports: null,
+    tokens: [],
+    warnings: [],
+    error: null,
+    viewOnly: true
+  };
+
+  try {
+    const owner = new PublicKey(connected.publicKey);
+    const balance = await getSolBalanceCached(owner);
+    row.sol = lamportsToSol(balance);
+    row.lamports = String(balance);
+    const { accounts, warnings } = await getOwnedTokenAccountsWithWarningsCached(owner);
+    row.warnings = warnings || [];
+    row.tokens = accounts
+      .filter((account) => account.rawAmount > 0n)
+      .slice(0, 12)
+      .map((account) => ({
+        mint: account.mint,
+        shortMint: shortMint(account.mint),
+        uiAmount: account.uiAmount,
+        rawAmount: account.rawAmount.toString(),
+        dexUrl: dexScreenerUrl(account.mint)
+      }));
+  } catch (error) {
+    row.error = friendlyError(error);
+  }
+
+  return row;
+}
+
 async function webPositionRows(userId) {
   const positions = await buildPositionsOverview(userId);
   return positions.slice(0, 25).map((position) => {
@@ -11762,12 +11818,12 @@ async function buildKolScan(userId, mode = "hot", wallet = "") {
       const solanaRows = hasSolanaTracker && (!madeRows.length || CONFIG.kolUseSolanaTrackerFallback)
         ? await fetchKolWalletTradeSignals(owner, safeMode).catch(() => [])
         : [];
-      const rows = await hydrateKolSignalMetadata(uniqueKolSignals([
+      const rows = await hydrateKolSignalMetadata(diversifyKolSignals(uniqueKolSignals([
         ...madeRows,
         ...solanaPositionRows,
         ...solanaRows,
         ...(localPart.rows || [])
-      ]).sort(compareKolSignals).slice(0, 12));
+      ]).sort(compareKolSignals), 12));
       return {
         ...base,
         configured: true,
@@ -11810,12 +11866,10 @@ async function buildKolScan(userId, mode = "hot", wallet = "") {
       ? await buildSolanaTrackerKolPart(safeMode).catch((error) => ({ rows: [], kols: [], error: formatError(error), calls: 1, signalWalletsChecked: 0 }))
       : { rows: [], kols: [], calls: 0, signalWalletsChecked: 0 };
 
-    const sorted = await hydrateKolSignalMetadata(uniqueKolSignals([
+    const sorted = await hydrateKolSignalMetadata(diversifyKolSignals(uniqueKolSignals([
       ...(madePart.rows || []),
       ...(solanaPart.rows || [])
-    ])
-      .sort(compareKolSignals)
-      .slice(0, 12));
+    ]).sort(compareKolSignals), 12));
     const kols = uniqueKolSummaries([
       ...(madePart.kols || []),
       ...(solanaPart.kols || [])
@@ -11864,12 +11918,22 @@ function uniqueKolSummaries(kols) {
   const seen = new Set();
   const rows = [];
   for (const kol of kols || []) {
-    const key = kol.wallet || kol.name || kol.twitter || JSON.stringify(kol);
+    const key = kolSummaryIdentityKey(kol);
     if (!key || seen.has(key)) continue;
     seen.add(key);
     rows.push(kol);
   }
   return rows;
+}
+
+function kolSummaryIdentityKey(kol = {}) {
+  const wallet = firstString(kol.wallet, kol.owner, kol.address, kol.publicKey);
+  if (wallet) return `wallet:${wallet}`;
+  const twitter = stripAt(firstString(kol.twitter, kol.x, kol.username, deepFindKolTwitter(kol))).toLowerCase();
+  if (twitter) return `x:${twitter}`;
+  const name = String(firstString(kol.name, kol.kolName, kol.kol_name)).trim().toLowerCase();
+  if (name && !/^(unknown kol|kol wallet|kol cluster|\d+\s+kols?)$/i.test(name)) return `name:${name}`;
+  return "";
 }
 
 async function buildMadeOnSolKolPart(mode) {
@@ -12761,6 +12825,48 @@ function uniqueKolSignals(signals) {
   return rows;
 }
 
+function diversifyKolSignals(signals, limit = 12) {
+  const picked = [];
+  const seenRows = new Set();
+  const seenIdentities = new Set();
+
+  for (const signal of signals || []) {
+    const rowKey = kolSignalRowKey(signal);
+    const identity = kolSignalIdentityKey(signal);
+    if (seenRows.has(rowKey)) continue;
+    if (identity && seenIdentities.has(identity)) continue;
+    picked.push(signal);
+    seenRows.add(rowKey);
+    if (identity) seenIdentities.add(identity);
+    if (picked.length >= limit) return picked;
+  }
+
+  for (const signal of signals || []) {
+    const rowKey = kolSignalRowKey(signal);
+    if (seenRows.has(rowKey)) continue;
+    picked.push(signal);
+    seenRows.add(rowKey);
+    if (picked.length >= limit) break;
+  }
+
+  return picked;
+}
+
+function kolSignalRowKey(signal = {}) {
+  return `${signal.tokenMint || ""}:${signal.kolWallet || ""}:${signal.twitter || ""}:${signal.kolName || ""}`;
+}
+
+function kolSignalIdentityKey(signal = {}) {
+  const wallet = firstString(signal.kolWallet, signal.wallet, signal.owner, signal.address);
+  if (wallet) return `wallet:${wallet}`;
+  const twitter = stripAt(firstString(signal.twitter, signal.x, signal.username)).toLowerCase();
+  if (twitter) return `x:${twitter}`;
+  const name = String(firstString(signal.kolName, signal.name)).trim().toLowerCase();
+  if (name && !/^(unknown|unknown token|unknown kol|kol wallet|kol cluster|\d+\s+kols?)$/i.test(name)) return `name:${name}`;
+  const tokenMint = firstString(signal.tokenMint);
+  return tokenMint ? `token:${tokenMint}` : "";
+}
+
 function kolSignalType(position, mode) {
   const ageHours = hoursSince(position.lastTradeAt);
   if (normalizeKolMode(mode) === "fresh" || (Number.isFinite(ageHours) && ageHours <= 12)) {
@@ -12919,6 +13025,94 @@ async function webSniperScan(userId, mode) {
     modeFit: modeRows.length,
     displayPool: display.displayRows.length,
     rows: rows.map(webSniperRow)
+  };
+}
+
+async function webLivePairs(userId) {
+  const scanState = nextSniperScanState(`web:${userId}`, "livepairs");
+  const settings = sniperModeDefaults("pumpsnipe");
+  const candidates = await fetchSniperCandidatesForMode("pumpsnipe", { ttlMs: 750, scanState });
+  const scanPool = await hydrateSniperCandidates(rotatePumpSnipeCandidatePool(candidates, scanState).slice(0, 90));
+  const scored = [];
+
+  await runWithConcurrency(scanPool, Math.min(6, Math.max(3, CONFIG.balanceConcurrency)), async (candidate) => {
+    try {
+      scored.push(await scoreSniperCandidate(candidate, settings));
+    } catch {
+      // Ignore broken live-pair rows.
+    }
+  });
+
+  const freshRows = uniqueSniperScoreRows(scored)
+    .filter(isWebLivePairCandidate)
+    .sort(compareWebLivePairs);
+  const safeRows = await filterWebLivePairsForSafety(freshRows, 12);
+  rememberSniperScanRows(`web:${userId}`, "livepairs", safeRows);
+
+  return {
+    label: "Live Pairs",
+    refreshCount: scanState.refreshCount,
+    scanned: scored.length,
+    qualified: freshRows.length,
+    rows: safeRows.map(webLivePairRow),
+    refreshedAt: new Date().toISOString(),
+    refreshSeconds: 30,
+    message: safeRows.length
+      ? `Live Pairs found ${safeRows.length} safety-checked pair(s).`
+      : "No safety-checked live pairs right now. It will refresh while this tab is open."
+  };
+}
+
+function isWebLivePairCandidate(item) {
+  const flags = new Set(item.riskFlags || []);
+  const age = Number(item.pairAgeMinutes);
+  const freshEnough = !Number.isFinite(age) || age <= 720 || isPumpStyleToken(item);
+  return item.category !== "Avoid"
+    && freshEnough
+    && item.marketCap >= 300
+    && item.marketCap <= 500_000
+    && item.rugRisk <= 92
+    && item.exitRisk <= 98
+    && item.manipulationScore <= 98
+    && item.liquidityUsd >= 150
+    && (item.volume5m >= 5 || item.volumeH1 >= 50 || isPumpStyleToken(item))
+    && !flags.has("hard dump")
+    && !flags.has("sell pressure");
+}
+
+function compareWebLivePairs(a, b) {
+  return (pumpFreshnessScore(b) - pumpFreshnessScore(a))
+    || (Number(b.volume5m || 0) - Number(a.volume5m || 0))
+    || (b.scalpScore - a.scalpScore)
+    || (b.score - a.score)
+    || (a.rugRisk - b.rugRisk);
+}
+
+async function filterWebLivePairsForSafety(rows, limit = 12) {
+  const accepted = [];
+  for (const row of rows) {
+    if (accepted.length >= limit) break;
+    try {
+      const safety = await getMintSafetyInfo(row.tokenMint);
+      if (safety.tokenProgram === TOKEN_2022_PROGRAM_ID.toBase58()) continue;
+      if (safety.freezeAuthority || safety.mintAuthority) continue;
+      accepted.push({
+        ...row,
+        safetyNote: "Mint/freeze safety passed"
+      });
+    } catch {
+      // If the mint cannot be read, do not put it in the live feed.
+    }
+  }
+  return accepted;
+}
+
+function webLivePairRow(row) {
+  return {
+    ...webSniperRow(row),
+    pairAgeLabel: Number.isFinite(Number(row.pairAgeMinutes)) ? `${Math.round(Number(row.pairAgeMinutes))}m` : "new",
+    safetyNote: row.safetyNote || "Mint/freeze safety passed",
+    liveLabel: row.pairAgeMinutes !== null && Number(row.pairAgeMinutes) <= 30 ? "Just Listed" : isPumpStyleToken(row) ? "Pump Feed" : "Live Pair"
   };
 }
 
