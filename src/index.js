@@ -11610,6 +11610,7 @@ async function buildMadeOnSolKolPart(mode) {
         wallet: row.kolWallet,
         name: row.kolName,
         twitter: row.twitter,
+        avatar: row.avatar,
         lastTradeAt: row.lastTradeAt,
         trades: row.kolCount || null
       }))).slice(0, 12),
@@ -11869,6 +11870,14 @@ function normalizeMadeOnSolKolTradeSignal(trade, mode) {
   if (score < 35 && normalizeKolMode(mode) !== "fresh") return null;
 
   const kolWallet = firstString(trade.wallet, trade.walletAddress, trade.wallet_address, trade.kolWallet, trade.kol_wallet, kol.wallet, kol.wallet_address, kol.address);
+  const kolTwitter = stripAt(firstString(trade.kolTwitter, trade.kol_twitter, trade.twitter, trade.x, trade.username, kol.twitter, kol.kol_twitter, kol.x, kol.username, twitterHandleFromUrl(kol.twitterUrl || kol.twitter_url || kol.xUrl || kol.x_url), deepFindKolTwitter(kol, trade)));
+  const kolAvatar = firstString(
+    trade.kolAvatar, trade.kol_avatar,
+    deepFindKolAvatar(kol, trade.kol, trade.trader, trade.walletInfo, trade.wallet_info),
+    trade.avatar, trade.avatarUrl, trade.avatar_url, trade.image, trade.imageUrl, trade.image_url,
+    trade.profileImage, trade.profile_image, trade.profileImageUrl, trade.profile_image_url,
+    trade.profilePic, trade.profile_pic, trade.pfp, trade.pfpUrl, trade.pfp_url
+  );
   return {
     tokenMint,
     symbol: firstString(token.symbol, token.token_symbol, trade.tokenSymbol, trade.token_symbol, trade.symbol, trade.ticker, shortMint(tokenMint)),
@@ -11877,8 +11886,8 @@ function normalizeMadeOnSolKolTradeSignal(trade, mode) {
     signalType: "MadeOnSol KOL buy",
     kolWallet,
     kolName: firstString(trade.kolName, trade.kol_name, trade.traderName, trade.trader_name, kol.name, kol.kol_name, kol.username, "KOL Wallet"),
-    twitter: stripAt(firstString(trade.kolTwitter, trade.kol_twitter, trade.twitter, trade.x, trade.username, kol.twitter, kol.kol_twitter, kol.x, kol.username, twitterHandleFromUrl(kol.twitterUrl || kol.twitter_url))),
-    avatar: firstString(trade.kolAvatar, trade.kol_avatar, trade.avatar, trade.image, kol.avatar, kol.image, kol.profileImage, kol.profile_image, kol.profilePic, kol.profile_pic, kol.pfp),
+    twitter: kolTwitter,
+    avatar: kolAvatar,
     valueUsd: Number(usdValue || solAmount || 0),
     valueLabel: usdValue ? (formatUsdCompact(usdValue) || "$0") : solAmount ? `${formatCompactNumber(solAmount)} SOL` : "n/a",
     roiPct,
@@ -11949,6 +11958,15 @@ function normalizeMadeOnSolHotTokenSignal(tokenRow, mode) {
   const kolName = kolWallet
     ? firstString(topKolObject.name, topKolObject.username, topKolObject.twitter, tokenRow.topKolName, tokenRow.top_kol_name, shortMint(kolWallet))
     : kolCount ? `${kolCount} KOL${Number(kolCount) === 1 ? "" : "s"}` : "KOL cluster";
+  const topKolTwitter = stripAt(firstString(topKolObject.twitter, topKolObject.x, topKolObject.username, twitterHandleFromUrl(topKolObject.twitterUrl || topKolObject.twitter_url || topKolObject.xUrl || topKolObject.x_url), tokenRow.topKolTwitter, deepFindKolTwitter(topKolObject)));
+  const topKolAvatar = firstString(
+    deepFindKolAvatar(topKolObject),
+    topKolObject.avatar, topKolObject.avatarUrl, topKolObject.avatar_url,
+    topKolObject.image, topKolObject.imageUrl, topKolObject.image_url,
+    topKolObject.profileImage, topKolObject.profile_image, topKolObject.profileImageUrl, topKolObject.profile_image_url,
+    topKolObject.profilePic, topKolObject.profile_pic, topKolObject.pfp, topKolObject.pfpUrl, topKolObject.pfp_url,
+    tokenRow.topKolAvatar, tokenRow.top_kol_avatar, tokenRow.topKolAvatarUrl, tokenRow.top_kol_avatar_url
+  );
   return {
     tokenMint,
     symbol: firstString(token.symbol, token.token_symbol, tokenRow.tokenSymbol, tokenRow.token_symbol, tokenRow.symbol, tokenRow.ticker, shortMint(tokenMint)),
@@ -11958,8 +11976,8 @@ function normalizeMadeOnSolHotTokenSignal(tokenRow, mode) {
     kolWallet,
     kolName,
     kolCount,
-    twitter: stripAt(firstString(topKolObject.twitter, topKolObject.x, topKolObject.username, tokenRow.topKolTwitter)),
-    avatar: firstString(topKolObject.avatar, topKolObject.image, topKolObject.profileImage, topKolObject.profile_image, topKolObject.profilePic, topKolObject.profile_pic, tokenRow.topKolAvatar, tokenRow.top_kol_avatar),
+    twitter: topKolTwitter,
+    avatar: topKolAvatar,
     valueUsd: Number(volumeUsd || buySol || 0),
     valueLabel: volumeUsd ? (formatUsdCompact(volumeUsd) || "$0") : buySol ? `${formatCompactNumber(buySol)} SOL` : "n/a",
     roiPct: null,
@@ -11981,7 +11999,9 @@ function normalizeMadeOnSolLeaderboardKol(row) {
   const profile = row.profile || row.identity || row.kol || row.walletInfo || row.wallet_info || {};
   const stats = row.stats || row.summary || row.performance || {};
   const wallet = firstString(row.wallet, row.walletAddress, row.wallet_address, row.address, profile.wallet, profile.address);
-  const twitter = stripAt(firstString(row.twitter, row.x, row.username, profile.twitter, profile.x, profile.username, twitterHandleFromUrl(row.twitterUrl || row.twitter_url || profile.twitterUrl || profile.twitter_url)));
+  const socials = row.socials || row.social || {};
+  const profileSocials = profile.socials || profile.social || {};
+  const twitter = stripAt(firstString(row.twitter, row.x, row.username, socials.twitter, socials.x, profile.twitter, profile.x, profile.username, profileSocials.twitter, profileSocials.x, twitterHandleFromUrl(row.twitterUrl || row.twitter_url || row.xUrl || row.x_url || profile.twitterUrl || profile.twitter_url || profile.xUrl || profile.x_url), deepFindKolTwitter(profile, row)));
   const buyCount = firstNumber(row.buyCount, row.buy_count, stats.buyCount, stats.buy_count);
   const sellCount = firstNumber(row.sellCount, row.sell_count, stats.sellCount, stats.sell_count);
   const pnlSol = firstNumber(row.pnl, row.realizedSol, row.realized_sol, stats.pnl, stats.realizedSol, stats.realized_sol);
@@ -11992,7 +12012,7 @@ function normalizeMadeOnSolLeaderboardKol(row) {
     wallet,
     name: firstString(row.name, row.kolName, row.kol_name, profile.name, twitter, wallet ? shortMint(wallet) : "Unknown KOL"),
     twitter,
-    avatar: firstString(row.avatar, row.image, row.profileImage, row.profile_image, row.profilePic, row.profile_pic, row.pfp, profile.avatar, profile.image, profile.profileImage, profile.profile_image, profile.profilePic, profile.profile_pic, profile.pfp),
+    avatar: firstString(deepFindKolAvatar(profile, row), row.avatar, row.avatarUrl, row.avatar_url, row.image, row.imageUrl, row.image_url, row.profileImage, row.profile_image, row.profileImageUrl, row.profile_image_url, row.profilePic, row.profile_pic, row.profilePicture, row.profile_picture, row.pfp, row.pfpUrl, row.pfp_url, profile.avatar, profile.avatarUrl, profile.avatar_url, profile.image, profile.imageUrl, profile.image_url, profile.profileImage, profile.profile_image, profile.profileImageUrl, profile.profile_image_url, profile.profilePic, profile.profile_pic, profile.profilePicture, profile.profile_picture, profile.pfp, profile.pfpUrl, profile.pfp_url),
     realizedUsd: firstNumber(row.realizedUsd, row.realized_usd, row.realized, row.pnlUsd, row.pnl_usd, stats.realizedUsd, stats.realized_usd, stats.realized),
     realizedLabel: pnlSol !== null ? `${formatCompactNumber(pnlSol)} SOL` : "",
     roiPct: normalizePercentLike(firstNumber(row.roi, row.roiPct, row.roi_pct, stats.roi, stats.roiPct, stats.roi_pct)),
@@ -12049,6 +12069,63 @@ function twitterHandleFromUrl(value) {
   return match ? stripAt(match[1]) : stripAt(text);
 }
 
+function deepFindKolAvatar(...values) {
+  const keyPattern = /(avatar|pfp|profile.*(image|pic|photo|picture)|image.*url|photo.*url|picture.*url|avatar.*url)/i;
+  for (const value of values) {
+    const found = deepFindStringByKey(value, keyPattern, { preferUrl: true });
+    const normalized = normalizeAvatarUrlCandidate(found);
+    if (normalized) return normalized;
+  }
+  return "";
+}
+
+function deepFindKolTwitter(...values) {
+  const keyPattern = /(^|_)(twitter|x|username|handle|screenname|screen_name)($|_)|twitter.*url|x.*url/i;
+  for (const value of values) {
+    const found = deepFindStringByKey(value, keyPattern, { preferUrl: false });
+    const handle = twitterHandleFromUrl(found);
+    if (handle && !/^https?$/i.test(handle)) return handle;
+  }
+  return "";
+}
+
+function deepFindStringByKey(value, keyPattern, options = {}, seen = new Set(), depth = 0) {
+  if (!value || depth > 5) return "";
+  if (typeof value !== "object") return "";
+  if (seen.has(value)) return "";
+  seen.add(value);
+
+  const entries = Array.isArray(value)
+    ? value.map((item, index) => [String(index), item])
+    : Object.entries(value);
+
+  for (const [key, child] of entries) {
+    if (keyPattern.test(key) && child !== null && child !== undefined && typeof child !== "object") {
+      const text = String(child).trim();
+      if (text && (!options.preferUrl || /^(https?:)?\/\//i.test(text) || text.startsWith("data:image/"))) {
+        return text;
+      }
+    }
+  }
+
+  for (const [, child] of entries) {
+    const nested = deepFindStringByKey(child, keyPattern, options, seen, depth + 1);
+    if (nested) return nested;
+  }
+
+  return "";
+}
+
+function normalizeAvatarUrlCandidate(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (/^data:image\//i.test(text)) return text;
+  if (/^\/\//.test(text)) return `https:${text}`;
+  if (/^https:\/\//i.test(text)) return text;
+  if (/^http:\/\//i.test(text)) return text.replace(/^http:/i, "https:");
+  return "";
+}
+
 function formatCompactNumber(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "0";
@@ -12060,7 +12137,8 @@ function formatCompactNumber(value) {
 
 function webKolSummaryRow(kol = {}) {
   const wallet = firstString(kol.wallet, kol.owner, kol.address, kol.publicKey);
-  const twitter = stripAt(firstString(kol.twitter, kol.x, kol.username));
+  const socials = kol.socials || kol.social || {};
+  const twitter = stripAt(firstString(kol.twitter, kol.x, kol.username, socials.twitter, socials.x, twitterHandleFromUrl(kol.twitterUrl || kol.twitter_url || kol.xUrl || kol.x_url), deepFindKolTwitter(kol)));
   const name = firstString(kol.name, twitter, wallet ? shortMint(wallet) : "Unknown KOL");
   const realizedUsd = firstNumber(kol.realizedUsd, kol.realized_usd);
   const realizedLabel = firstString(
@@ -12080,7 +12158,7 @@ function webKolSummaryRow(kol = {}) {
     shortWallet: wallet ? shortMint(wallet) : "",
     name,
     twitter,
-    avatar: firstString(kol.avatar, kol.image, kol.profileImage, kol.profile_image, kol.profilePic, kol.profile_pic, kol.pfp),
+    avatar: firstString(deepFindKolAvatar(kol), kol.avatar, kol.avatarUrl, kol.avatar_url, kol.image, kol.imageUrl, kol.image_url, kol.profileImage, kol.profile_image, kol.profileImageUrl, kol.profile_image_url, kol.profilePic, kol.profile_pic, kol.profilePicture, kol.profile_picture, kol.pfp, kol.pfpUrl, kol.pfp_url),
     realizedUsd: Number(realizedUsd || 0),
     realizedLabel,
     roiPct: kol.roiPct ?? null,
@@ -12171,13 +12249,15 @@ function normalizeKolLeaderboard(data) {
     const timing = row.timing || row.time || {};
     const period = row.period || row.periodStats || row.performance || {};
     const wallet = firstString(row.wallet, row.owner, row.address, row.publicKey, identity.wallet, identity.address);
-    const twitter = stripAt(firstString(identity.twitter, identity.x, row.twitter, row.x, row.username));
+    const socials = row.socials || row.social || {};
+    const identitySocials = identity.socials || identity.social || {};
+    const twitter = stripAt(firstString(identity.twitter, identity.x, identity.username, identitySocials.twitter, identitySocials.x, row.twitter, row.x, row.username, socials.twitter, socials.x, twitterHandleFromUrl(identity.twitterUrl || identity.twitter_url || identity.xUrl || identity.x_url || row.twitterUrl || row.twitter_url || row.xUrl || row.x_url), deepFindKolTwitter(identity, row)));
     const name = firstString(identity.name, row.name, twitter, wallet ? shortMint(wallet) : "Unknown KOL");
     return {
       wallet,
       name,
       twitter,
-      avatar: firstString(identity.avatar, identity.image, identity.profileImage, identity.profile_image, identity.profilePic, identity.profile_pic, identity.pfp, row.avatar, row.image, row.profileImage, row.profile_image, row.profilePic, row.profile_pic, row.pfp),
+      avatar: firstString(deepFindKolAvatar(identity, row), identity.avatar, identity.avatarUrl, identity.avatar_url, identity.image, identity.imageUrl, identity.image_url, identity.profileImage, identity.profile_image, identity.profileImageUrl, identity.profile_image_url, identity.profilePic, identity.profile_pic, identity.profilePicture, identity.profile_picture, identity.pfp, identity.pfpUrl, identity.pfp_url, row.avatar, row.avatarUrl, row.avatar_url, row.image, row.imageUrl, row.image_url, row.profileImage, row.profile_image, row.profileImageUrl, row.profile_image_url, row.profilePic, row.profile_pic, row.profilePicture, row.profile_picture, row.pfp, row.pfpUrl, row.pfp_url),
       realizedUsd: firstNumber(
         row.realizedUsd,
         row.realized_usd,

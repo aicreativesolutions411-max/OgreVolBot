@@ -62,7 +62,7 @@ function clearStoredXHandle() {
 const state = {
   token: getStoredToken(),
   user: null,
-  activeTab: "setup",
+  activeTab: "dashboard",
   loading: false,
   wallets: [],
   balances: [],
@@ -218,8 +218,29 @@ async function createWebAccount() {
     state.token = data.token;
     state.user = data.user;
     setStoredToken(state.token);
-    state.activeTab = "setup";
+    state.activeTab = "dashboard";
     await loadAll();
+  } catch (error) {
+    setError(error.message);
+  }
+}
+
+async function createAccountAndConnectWallet() {
+  setError("");
+  try {
+    if (!state.user) {
+      const data = await api("/api/web/signup", {
+        method: "POST",
+        body: JSON.stringify({})
+      });
+      state.token = data.token;
+      state.user = data.user;
+      setStoredToken(state.token);
+      await loadAll();
+    }
+    state.activeTab = "profile";
+    render();
+    await connectBrowserWallet("solana");
   } catch (error) {
     setError(error.message);
   }
@@ -332,7 +353,8 @@ function render() {
     return;
   }
 
-  $("[data-user-id]").textContent = state.user.id;
+  const userIdEl = $("[data-user-id]");
+  if (userIdEl) userIdEl.textContent = state.user.id;
   $("[data-wallet-count]").textContent = state.wallets.length;
   $("[data-total-sol]").textContent = totalSol().toFixed(4);
   $("[data-position-count]").textContent = state.positions.length;
@@ -348,8 +370,8 @@ function renderTabs() {
   });
 
   const panel = $("[data-panel]");
-  if (state.activeTab === "setup") panel.innerHTML = setupHtml();
   if (state.activeTab === "dashboard") panel.innerHTML = dashboardHtml();
+  if (state.activeTab === "profile") panel.innerHTML = profileHtml();
   if (state.activeTab === "trade") panel.innerHTML = tradeHtml();
   if (state.activeTab === "bundle") panel.innerHTML = bundleHtml();
   if (state.activeTab === "volume") panel.innerHTML = volumeHtml();
@@ -365,6 +387,7 @@ function renderTabs() {
 function dashboardHtml() {
   return `
     ${accountToolsHtml()}
+    ${createWalletSection()}
     <section class="panel-grid">
       ${visualCard("visual-aces", "Trade Desk", "Quick buy and sell from one wallet with .10, .50, 1 SOL, max, and percent sell buttons.")}
       ${visualCard("visual-cauldron", "Bundle + Volume", "Buy or sell across selected wallets, then manage timed exits with Volume plans.")}
@@ -377,13 +400,41 @@ function dashboardHtml() {
   `;
 }
 
-function setupHtml() {
+function profileHtml() {
   return `
-    ${setupIntroHtml()}
-    ${createWalletSection()}
-    ${importWalletSection()}
-    ${backupRestoreSection()}
-    ${downloadsHtml()}
+    ${profileIntroHtml()}
+    ${accountProfileSection()}
+    ${connectWalletSection()}
+    ${profilePfpSection()}
+    ${xConnectSection()}
+  `;
+}
+
+function profileIntroHtml() {
+  return `
+    <section class="profile-intro">
+      <div>
+        <h3>Profile</h3>
+        <p>Save your public wallet connection, upload a panel PFP, and connect X for sharing and PFP import.</p>
+      </div>
+    </section>
+  `;
+}
+
+function accountProfileSection() {
+  const connected = state.user?.connectedWallet;
+  return `
+    <section class="profile-card account-profile-card">
+      <div class="pfp-row">
+        <div class="user-avatar" aria-hidden="true">${userAvatarHtml("SW")}</div>
+        <div>
+          <h3>SlimeWire Account</h3>
+          <p>${connected ? `Wallet connected: ${escapeHtml(connected.shortPublicKey || shortAddress(connected.publicKey))}` : "No browser wallet connected yet."}</p>
+        </div>
+      </div>
+      <button type="button" class="primary" data-connect-wallet="solana">Connect Wallet</button>
+      <button type="button" data-tab="wallets">Open Wallets</button>
+    </section>
   `;
 }
 
@@ -403,17 +454,6 @@ function accountToolsHtml() {
 
 function visualCard(className, title, body) {
   return `<article class="panel visual-card ${className}"><div><h3>${escapeHtml(title)}</h3><p>${escapeHtml(body)}</p></div></article>`;
-}
-
-function setupIntroHtml() {
-  return `
-    <section class="setup-intro">
-      <div>
-        <h3>Quick Setup</h3>
-        <p>Create bot wallets, connect Phantom or Solflare, add your profile PFP, and connect X before trading.</p>
-      </div>
-    </section>
-  `;
 }
 
 function profilePfpSection() {
@@ -2875,6 +2915,7 @@ document.addEventListener("click", async (event) => {
   if (!target) return;
 
   if (target.matches("[data-web-signup]")) await createWebAccount();
+  if (target.matches("[data-web-signup-connect]")) await createAccountAndConnectWallet();
   if (target.matches("[data-logout]")) await logout();
   if (target.matches("[data-connect-x]")) connectXAccount();
   if (target.matches("[data-clear-x]")) disconnectXAccount();

@@ -533,7 +533,7 @@ button:disabled {
   background: linear-gradient(0deg, rgba(2, 4, 2, 0.96), rgba(2, 4, 2, 0.12));
 }
 
-.setup-intro {
+.profile-intro {
   margin-top: 12px;
   padding: 14px 18px;
   border: 1px solid var(--line);
@@ -541,16 +541,16 @@ button:disabled {
   background: linear-gradient(90deg, rgba(114, 255, 35, 0.12), rgba(10, 17, 12, 0.88));
 }
 
-.setup-intro h3,
-.setup-intro p {
+.profile-intro h3,
+.profile-intro p {
   margin-bottom: 0;
 }
 
-.setup-intro h3 {
+.profile-intro h3 {
   color: var(--green-2);
 }
 
-.setup-intro p {
+.profile-intro p {
   margin-top: 4px;
   color: #c7d7c2;
 }

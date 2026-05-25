@@ -44,23 +44,21 @@
         <form class="login-card" onsubmit="return false;">
           <img src="./assets/ogre-aces.jpg" alt="OgreTrade welcome art">
           <button class="primary" type="button" data-web-signup>Create Account</button>
-          <p class="login-note">Create a web account to open Setup: create bot wallets, connect Phantom or Solflare, upload a PFP, connect X, restore backups, or import an existing wallet.</p>
+          <button class="secondary" type="button" data-web-signup-connect>Connect Wallet</button>
+          <p class="login-note">Create a web account to create bot wallets, connect Phantom or Solflare, upload a PFP, connect X, restore backups, or import an existing wallet.</p>
           <p class="error" data-error hidden></p>
         </form>
       </section>
 
       <section class="dashboard" data-dashboard hidden>
         <div class="dashboard-head">
-          <div class="dashboard-title-row">
-            <div class="user-avatar large" data-user-avatar aria-hidden="true"><span>SW</span></div>
-            <div>
-              <p class="eyebrow">Connected</p>
-              <h1>Command center</h1>
-              <p>Web account <code data-user-id></code>. Create wallets, restore backups, import wallets, and trade from this panel.</p>
-            </div>
+          <div>
+            <h1 class="slime-title panel-title">SlimeWire Panel</h1>
           </div>
           <div class="head-actions">
-            <button class="primary" type="button" data-tab="setup">Open Setup</button>
+            <button class="primary" type="button" data-tab="wallets">Create Wallet</button>
+            <button class="secondary" type="button" data-connect-wallet="solana">Connect Wallet</button>
+            <button class="secondary" type="button" data-tab="profile">Profile</button>
             <button class="secondary" type="button" data-refresh-all>Refresh All</button>
             <button class="ghost" type="button" data-logout>Log Out</button>
           </div>
@@ -86,8 +84,8 @@
         </section>
 
         <nav class="tabs" aria-label="Portal views">
-          <button data-tab="setup" data-active="true">Setup</button>
-          <button data-tab="dashboard">Home</button>
+          <button data-tab="dashboard" data-active="true">Home</button>
+          <button data-tab="profile">Profile</button>
           <button data-tab="trade">Trade</button>
           <button data-tab="bundle">Bundle</button>
           <button data-tab="volume">Volume</button>
