@@ -7184,6 +7184,17 @@ async function fetchPumpSnipeCandidates(options = {}) {
   return uniqueSniperCandidates([...pumpLatest, ...search, ...latestFirst, ...topBoostBackup]);
 }
 
+async function fetchLivePairCandidates(options = {}) {
+  const ttlMs = Number.isFinite(Number(options.ttlMs)) ? Number(options.ttlMs) : 500;
+  const [photon, pumpLatest, dexLatest] = await Promise.all([
+    fetchPhotonNewPairCandidates({ ...options, ttlMs }).catch(() => []),
+    fetchPumpFunLatestCandidates({ ...options, timeoutMs: options.timeoutMs || 1_800 }).catch(() => []),
+    fetchSniperCandidates({ ...options, ttlMs, timeoutMs: options.timeoutMs || 1_800 }).catch(() => [])
+  ]);
+  const freshDexRows = dexLatest.filter((candidate) => candidate.source !== "top-boost");
+  return uniqueSniperCandidates([...photon, ...pumpLatest, ...freshDexRows]);
+}
+
 async function findManualLaunchCandidate(ticker) {
   const target = cleanTickerSymbol(ticker);
   const candidates = await fetchManualLaunchCandidates();
@@ -8489,7 +8500,8 @@ async function scoreSniperCandidate(candidate, settings) {
   const buysH1 = Number(txH1.buys || 0);
   const sellsH1 = Number(txH1.sells || 0);
   const buyPressure = buyPressureRatio(buys5m + buysH1, sells5m + sellsH1);
-  const pairAgeMinutes = metadata.pairCreatedAt ? Math.max(0, Math.round((Date.now() - Number(metadata.pairCreatedAt)) / 60_000)) : null;
+  const pairAgeSeconds = metadata.pairCreatedAt ? Math.max(0, Math.floor((Date.now() - Number(metadata.pairCreatedAt)) / 1000)) : null;
+  const pairAgeMinutes = pairAgeSeconds === null ? null : Math.floor(pairAgeSeconds / 60);
   const hasImage = Boolean(metadata.imageUrl);
   const hasMeta = Boolean(metadata.symbol && metadata.name);
   const narrative = sniperNarrativeScore(text, settings.mode);
@@ -8562,6 +8574,8 @@ async function scoreSniperCandidate(candidate, settings) {
     h6,
     h24,
     narrative,
+    pairCreatedAt: metadata.pairCreatedAt || null,
+    pairAgeSeconds,
     pairAgeMinutes,
     riskFlags,
     momentum: scalp.score >= 4 ? "Scalp-ready" : momentumSignal >= 18 ? "Strong" : momentumSignal >= 8 ? "Building" : "Weak",
@@ -13031,8 +13045,8 @@ async function webSniperScan(userId, mode) {
 async function webLivePairs(userId) {
   const scanState = nextSniperScanState(`web:${userId}`, "livepairs");
   const settings = sniperModeDefaults("pumpsnipe");
-  const candidates = await fetchSniperCandidatesForMode("pumpsnipe", { ttlMs: 750, scanState });
-  const scanPool = await hydrateSniperCandidates(rotatePumpSnipeCandidatePool(candidates, scanState).slice(0, 90));
+  const candidates = await fetchLivePairCandidates({ ttlMs: 500, timeoutMs: 1_800, scanState });
+  const scanPool = await hydrateSniperCandidates(uniqueSniperCandidates(candidates).slice(0, 120));
   const scored = [];
 
   await runWithConcurrency(scanPool, Math.min(6, Math.max(3, CONFIG.balanceConcurrency)), async (candidate) => {
@@ -13056,7 +13070,7 @@ async function webLivePairs(userId) {
     qualified: freshRows.length,
     rows: safeRows.map(webLivePairRow),
     refreshedAt: new Date().toISOString(),
-    refreshSeconds: 30,
+    refreshSeconds: 6,
     message: safeRows.length
       ? `Live Pairs found ${safeRows.length} safety-checked pair(s).`
       : "No safety-checked live pairs right now. It will refresh while this tab is open."
@@ -13065,24 +13079,34 @@ async function webLivePairs(userId) {
 
 function isWebLivePairCandidate(item) {
   const flags = new Set(item.riskFlags || []);
-  const age = Number(item.pairAgeMinutes);
-  const freshEnough = !Number.isFinite(age) || age <= 720 || isPumpStyleToken(item);
-  return item.category !== "Avoid"
-    && freshEnough
+  const ageSeconds = Number(item.pairAgeSeconds);
+  const ageMinutes = Number(item.pairAgeMinutes);
+  const freshEnough = !Number.isFinite(ageSeconds)
+    || ageSeconds <= 6 * 60 * 60
+    || Number.isFinite(ageMinutes) && ageMinutes <= 360
+    || isPumpStyleToken(item);
+  const hasFreshActivity = Number(item.volume5m || 0) > 0
+    || Number(item.volumeH1 || 0) > 0
+    || Number(item.liquidityUsd || 0) > 0
+    || isPumpStyleToken(item);
+  return freshEnough
     && item.marketCap >= 300
-    && item.marketCap <= 500_000
-    && item.rugRisk <= 92
+    && item.marketCap <= 750_000
+    && item.rugRisk <= 96
     && item.exitRisk <= 98
     && item.manipulationScore <= 98
-    && item.liquidityUsd >= 150
-    && (item.volume5m >= 5 || item.volumeH1 >= 50 || isPumpStyleToken(item))
+    && hasFreshActivity
     && !flags.has("hard dump")
     && !flags.has("sell pressure");
 }
 
 function compareWebLivePairs(a, b) {
-  return (pumpFreshnessScore(b) - pumpFreshnessScore(a))
+  const aCreated = Number(a.pairCreatedAt || 0);
+  const bCreated = Number(b.pairCreatedAt || 0);
+  return (bCreated - aCreated)
+    || (pumpFreshnessScore(b) - pumpFreshnessScore(a))
     || (Number(b.volume5m || 0) - Number(a.volume5m || 0))
+    || (Number(b.volumeH1 || 0) - Number(a.volumeH1 || 0))
     || (b.scalpScore - a.scalpScore)
     || (b.score - a.score)
     || (a.rugRisk - b.rugRisk);
@@ -13110,10 +13134,24 @@ async function filterWebLivePairsForSafety(rows, limit = 12) {
 function webLivePairRow(row) {
   return {
     ...webSniperRow(row),
-    pairAgeLabel: Number.isFinite(Number(row.pairAgeMinutes)) ? `${Math.round(Number(row.pairAgeMinutes))}m` : "new",
+    pairAgeLabel: formatLivePairAgeLabel(row.pairAgeSeconds, row.pairAgeMinutes),
     safetyNote: row.safetyNote || "Mint/freeze safety passed",
-    liveLabel: row.pairAgeMinutes !== null && Number(row.pairAgeMinutes) <= 30 ? "Just Listed" : isPumpStyleToken(row) ? "Pump Feed" : "Live Pair"
+    liveLabel: Number(row.pairAgeSeconds) <= 60 ? "Seconds Old" : row.pairAgeMinutes !== null && Number(row.pairAgeMinutes) <= 30 ? "Just Listed" : isPumpStyleToken(row) ? "Pump Feed" : "Live Pair"
   };
+}
+
+function formatLivePairAgeLabel(pairAgeSeconds, pairAgeMinutes) {
+  const seconds = Number(pairAgeSeconds);
+  if (Number.isFinite(seconds)) {
+    if (seconds < 60) return `${Math.max(0, Math.floor(seconds))}s`;
+    if (seconds < 180) return `${Math.floor(seconds / 60)}m ${Math.floor(seconds % 60)}s`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+    if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h`;
+    return `${Math.floor(seconds / 86_400)}d`;
+  }
+  const minutes = Number(pairAgeMinutes);
+  if (Number.isFinite(minutes)) return `${Math.max(0, Math.round(minutes))}m`;
+  return "new";
 }
 
 function normalizeSniperMode(mode) {
@@ -13153,6 +13191,8 @@ function webSniperRow(row) {
     h1: row.h1,
     h6: row.h6,
     h24: row.h24,
+    pairCreatedAt: row.pairCreatedAt || null,
+    pairAgeSeconds: row.pairAgeSeconds,
     pairAgeMinutes: row.pairAgeMinutes,
     riskFlags: row.riskFlags || [],
     reasons: row.reasons || [],

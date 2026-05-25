@@ -404,7 +404,7 @@ function scheduleLivePairsAutoRefresh() {
 
   if (!state.user || state.activeTab !== "live") return;
   const refreshSeconds = Number(state.livePairs?.refreshSeconds || 30);
-  const delayMs = Math.max(15, refreshSeconds) * 1000;
+  const delayMs = Math.max(5, refreshSeconds) * 1000;
   livePairsTimer = setTimeout(() => {
     if (!state.user || state.activeTab !== "live" || state.livePairsLoading) return;
     loadLivePairs({ silent: true }).catch((error) => setError(error.message));
@@ -2990,7 +2990,7 @@ function livePairsHtml() {
     <section class="account-check-card">
       <div>
         <h3>Live Pairs</h3>
-        <p>Fresh Pump/new-pair listings with mint/freeze safety checks. Auto-refresh runs only while this tab is open.</p>
+        <p>Newest Pump/new-pair listings with mint/freeze safety checks. Auto-refresh runs every few seconds while this tab is open.</p>
       </div>
       <button class="primary" data-refresh-live-pairs>${state.livePairsLoading ? "Scanning..." : "Refresh Live"}</button>
       <button data-tab="trade">Trade</button>
@@ -3016,7 +3016,7 @@ function livePairRowsHtml(rows) {
           <dl>
             <div><dt>MC</dt><dd>${escapeHtml(row.marketCapLabel || "$0")}</dd></div>
             <div><dt>Liq</dt><dd>${escapeHtml(row.liquidityLabel || "$0")}</dd></div>
-            <div><dt>Vol 5m</dt><dd>${escapeHtml(row.volume5mLabel || "$0")}</dd></div>
+            <div><dt>Vol 5m/1h</dt><dd>${escapeHtml(row.volume5mLabel || "$0")} / ${escapeHtml(row.volumeH1Label || "$0")}</dd></div>
           </dl>
           <code>${escapeHtml(row.tokenMint)}</code>
           <small>${escapeHtml(row.safetyNote || "Mint/freeze safety checked")}</small>
