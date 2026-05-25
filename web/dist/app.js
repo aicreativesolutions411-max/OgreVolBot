@@ -62,7 +62,7 @@ function clearStoredXHandle() {
 const state = {
   token: getStoredToken(),
   user: null,
-  activeTab: "dashboard",
+  activeTab: "setup",
   loading: false,
   wallets: [],
   balances: [],
@@ -218,7 +218,7 @@ async function createWebAccount() {
     state.token = data.token;
     state.user = data.user;
     setStoredToken(state.token);
-    state.activeTab = "wallets";
+    state.activeTab = "setup";
     await loadAll();
   } catch (error) {
     setError(error.message);
@@ -348,6 +348,7 @@ function renderTabs() {
   });
 
   const panel = $("[data-panel]");
+  if (state.activeTab === "setup") panel.innerHTML = setupHtml();
   if (state.activeTab === "dashboard") panel.innerHTML = dashboardHtml();
   if (state.activeTab === "trade") panel.innerHTML = tradeHtml();
   if (state.activeTab === "bundle") panel.innerHTML = bundleHtml();
@@ -364,17 +365,22 @@ function renderTabs() {
 function dashboardHtml() {
   return `
     ${accountToolsHtml()}
-    ${setupIntroHtml()}
-    ${createWalletSection()}
-    ${connectWalletSection()}
-    ${profilePfpSection()}
-    ${xConnectSection()}
     <section class="panel-grid">
       ${visualCard("visual-aces", "Trade Desk", "Quick buy and sell from one wallet with .10, .50, 1 SOL, max, and percent sell buttons.")}
       ${visualCard("visual-cauldron", "Bundle + Volume", "Buy or sell across selected wallets, then manage timed exits with Volume plans.")}
       ${visualCard("visual-candle", "Launch Snipe", "Preset ticker, wallets, amount, TP/SL, and slippage, then watch live feeds until launch.")}
       ${visualCard("visual-cauldron", "KOL Tracker", "Follow KOL wallets, review their strongest current signals, then trade, bundle, or copy-plan from the same panel.")}
     </section>
+    ${importWalletSection()}
+    ${backupRestoreSection()}
+    ${downloadsHtml()}
+  `;
+}
+
+function setupHtml() {
+  return `
+    ${setupIntroHtml()}
+    ${createWalletSection()}
     ${importWalletSection()}
     ${backupRestoreSection()}
     ${downloadsHtml()}
@@ -436,22 +442,82 @@ function profilePfpSection() {
 }
 
 function createWalletSection() {
+  const connected = state.user?.connectedWallet;
+  const hasAvatar = Boolean(state.user?.avatar);
+  const xHandle = state.xHandle ? `@${state.xHandle}` : "";
   return `
-    <section class="create-wallet-card">
-      <div>
+    <section class="create-wallet-card setup-hub-card">
+      <article class="setup-hub-panel">
         <h3>Create Wallet Set</h3>
-        <p>Create fresh managed wallets from the web. The browser downloads both backup files immediately after creation.</p>
-      </div>
-      <label>
-        Label
-        <input data-wallet-label type="text" placeholder="Ogre Web">
-      </label>
-      <label>
-        Count
-        <input data-wallet-count-input type="number" min="1" max="20" value="1">
-      </label>
-      <button class="primary" type="button" data-create-wallets>Create Wallets</button>
-      <small data-create-wallet-status></small>
+        <p>Create fresh managed wallets. Backup files download immediately after creation.</p>
+        <label>
+          Label
+          <input data-wallet-label type="text" placeholder="Ogre Web">
+        </label>
+        <label>
+          Count
+          <input data-wallet-count-input type="number" min="1" max="20" value="1">
+        </label>
+        <button class="primary" type="button" data-create-wallets>Create Wallets</button>
+        <small data-create-wallet-status></small>
+      </article>
+
+      <article class="setup-hub-panel">
+        <h3>Connect Wallet</h3>
+        <p>Connect Phantom, Solflare, Backpack, or a detected Solana wallet. Public address only.</p>
+        <div class="wallet-provider-buttons">
+          ${browserWalletChoices().map((wallet) => `
+            <button type="button" data-connect-wallet="${wallet.id}" ${wallet.detected ? "" : `title="${escapeHtml(wallet.label)} extension not detected"`}>
+              ${escapeHtml(wallet.label)}
+            </button>
+          `).join("")}
+        </div>
+        <div class="connected-wallet-box">
+          ${connected ? `
+            <span>${escapeHtml(connected.provider || "Solana Wallet")}</span>
+            <code>${escapeHtml(connected.publicKey)}</code>
+            <div class="card-actions compact">
+              <button type="button" data-copy="${escapeHtml(connected.publicKey)}">Copy</button>
+              <a href="https://solscan.io/account/${encodeURIComponent(connected.publicKey)}" target="_blank" rel="noreferrer">Solscan</a>
+              <button type="button" data-disconnect-wallet>Remove</button>
+            </div>
+          ` : `<small>No wallet connected yet.</small>`}
+        </div>
+        <small data-wallet-connect-status>${connected ? `Connected ${escapeHtml(connected.shortPublicKey || shortAddress(connected.publicKey))}.` : "Pick a wallet. Your extension will ask you to approve."}</small>
+      </article>
+
+      <article class="setup-hub-panel">
+        <div class="pfp-row compact">
+          <div class="user-avatar mini" aria-hidden="true">${userAvatarHtml("SW")}</div>
+          <div>
+            <h3>Profile PFP</h3>
+            <p>Upload your panel PFP or pull your public X picture.</p>
+          </div>
+        </div>
+        <label>
+          Upload Image
+          <input data-avatar-file type="file" accept="image/png,image/jpeg,image/webp">
+        </label>
+        <div class="profile-actions">
+          <button type="button" data-use-x-avatar ${state.xHandle ? "" : "disabled"}>${xHandle ? `Use ${escapeHtml(xHandle)} PFP` : "Use X PFP"}</button>
+          ${hasAvatar ? `<button type="button" data-clear-avatar>Remove</button>` : ""}
+        </div>
+        <small data-avatar-status>${hasAvatar ? `PFP saved${state.user.avatarSource ? ` from ${escapeHtml(state.user.avatarSource)}` : ""}.` : "Optional. Connect X first if you want to use your X PFP."}</small>
+      </article>
+
+      <article class="setup-hub-panel">
+        <h3>Connect X</h3>
+        <p>Save your handle for share buttons, watch posts, and PFP import.</p>
+        <label>
+          X Handle
+          <input data-x-handle type="text" placeholder="@yourhandle" value="${escapeHtml(state.xHandle ? `@${state.xHandle}` : "")}">
+        </label>
+        <div class="profile-actions">
+          <button type="button" class="primary" data-connect-x>${state.xHandle ? "Update X" : "Connect X"}</button>
+          ${state.xHandle ? `<button type="button" data-clear-x>Disconnect</button>` : ""}
+        </div>
+        <small data-x-status>${state.xHandle ? `Connected as @${escapeHtml(state.xHandle)}.` : "Local to this browser. No X password or API key is stored."}</small>
+      </article>
     </section>
   `;
 }
@@ -668,8 +734,10 @@ function xAvatarUrl(handle) {
 function kolAvatarSrc(kol = {}) {
   const avatar = String(kol.avatar || kol.image || "").trim();
   if (isSafeAvatarSrc(avatar)) return avatar;
-  const twitter = cleanXHandle(kol.twitter || kol.x || kol.username || "");
-  return twitter ? xAvatarUrl(twitter) : "";
+  const directHandle = cleanXHandle(kol.twitter || kol.x || kol.username || "");
+  if (directHandle) return xAvatarUrl(directHandle);
+  const nameHandle = cleanXHandle(kol.name || kol.kolName || "");
+  return nameHandle && nameHandle.length >= 2 ? xAvatarUrl(nameHandle) : "";
 }
 
 function kolAvatarLabel(kol = {}) {
@@ -2477,7 +2545,7 @@ async function cancelLaunchWatch(planId) {
 }
 
 function walletsHtml() {
-  const create = `${createWalletSection()}${connectWalletSection()}${profilePfpSection()}${xConnectSection()}${importWalletSection()}${backupRestoreSection()}${downloadsHtml()}`;
+  const create = `${createWalletSection()}${importWalletSection()}${backupRestoreSection()}${downloadsHtml()}`;
   if (!state.wallets.length) return `${create}${emptyState("No wallets yet", "Create a wallet set above to get started on web.")}`;
   return `
     ${create}

@@ -598,6 +598,33 @@ button:disabled {
   grid-template-columns: minmax(0, 1fr) minmax(180px, 260px) minmax(260px, 1.2fr) auto;
 }
 
+.setup-hub-card {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: stretch;
+}
+
+.setup-hub-panel {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.setup-hub-panel + .setup-hub-panel {
+  border-left: 1px solid var(--line);
+  padding-left: 14px;
+}
+
+.setup-hub-panel h3,
+.setup-hub-panel p {
+  margin-bottom: 0;
+}
+
+.setup-hub-panel p {
+  color: #c7d7c2;
+  line-height: 1.45;
+}
+
 .x-connect-card {
   grid-template-columns: minmax(0, 1fr) minmax(180px, 260px) auto auto;
 }
@@ -1055,12 +1082,20 @@ code {
   .profile-card,
   .create-wallet-card,
   .pfp-card,
+  .setup-hub-card,
   .wallet-connect-card,
   .x-watch-card,
   .x-connect-card,
   .account-check-card,
   .download-card {
     grid-template-columns: 1fr;
+  }
+
+  .setup-hub-panel + .setup-hub-panel {
+    border-left: 0;
+    border-top: 1px solid var(--line);
+    padding-left: 0;
+    padding-top: 14px;
   }
 
   .dashboard-head,

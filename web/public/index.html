@@ -34,6 +34,9 @@
             <span>Volume Control</span>
             <span>Snipe</span>
             <span>KOL Tracking</span>
+            <span>Wallet Connect</span>
+            <span>Profile PFP</span>
+            <span>Connect X</span>
             <span>PnL Cards</span>
           </div>
         </div>
@@ -41,7 +44,7 @@
         <form class="login-card" onsubmit="return false;">
           <img src="./assets/ogre-aces.jpg" alt="OgreTrade welcome art">
           <button class="primary" type="button" data-web-signup>Create Account</button>
-          <p class="login-note">Create a web account, then create wallets, restore a backup file, or import an existing wallet. Backups download from the wallet menu.</p>
+          <p class="login-note">Create a web account to open Setup: create bot wallets, connect Phantom or Solflare, upload a PFP, connect X, restore backups, or import an existing wallet.</p>
           <p class="error" data-error hidden></p>
         </form>
       </section>
@@ -57,6 +60,7 @@
             </div>
           </div>
           <div class="head-actions">
+            <button class="primary" type="button" data-tab="setup">Open Setup</button>
             <button class="secondary" type="button" data-refresh-all>Refresh All</button>
             <button class="ghost" type="button" data-logout>Log Out</button>
           </div>
@@ -82,7 +86,8 @@
         </section>
 
         <nav class="tabs" aria-label="Portal views">
-          <button data-tab="dashboard" data-active="true">Home</button>
+          <button data-tab="setup" data-active="true">Setup</button>
+          <button data-tab="dashboard">Home</button>
           <button data-tab="trade">Trade</button>
           <button data-tab="bundle">Bundle</button>
           <button data-tab="volume">Volume</button>
