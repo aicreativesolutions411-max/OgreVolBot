@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>SlimeWire</title>
     <meta name="description" content="SlimeWire web dashboard for meme token trading, wallets, balances, positions, PnL, and sniper scans.">
-    <link rel="stylesheet" href="./styles.css?v=20260524-no-timer-options">
+    <link rel="stylesheet" href="./styles.css?v=20260525-signal-presets">
     <script src="./config.js"></script>
-    <script type="module" src="./app.js?v=20260524-no-timer-options"></script>
+    <script type="module" src="./app.js?v=20260525-signal-presets"></script>
   </head>
   <body>
     <main class="shell" data-app>
@@ -42,7 +42,7 @@
         </div>
 
         <form class="login-card" onsubmit="return false;">
-          <img src="./assets/ogre-aces.jpg" alt="OgreTrade welcome art">
+          <img src="./assets/ogre-aces.jpg" alt="SlimeWire welcome art">
           <label>
             Username
             <input data-login-username type="text" autocomplete="username" placeholder="slimewire">
@@ -54,6 +54,7 @@
           <button class="primary" type="button" data-web-password-login>Log In</button>
           <button type="button" data-web-signup>Create Account</button>
           <button class="secondary" type="button" data-web-signup-connect>Connect Wallet</button>
+          <button class="ghost" type="button" data-browse-guest>Browse Dashboard</button>
           <p class="login-note">Set a username and password once so your PFP, connected wallet, X handle, backups, and managed wallets are waiting when you come back. You can also create without one and add it later in Profile.</p>
           <small data-login-status></small>
           <p class="error" data-error hidden></p>
@@ -104,6 +105,7 @@
           <button data-tab="bundle">Bundle</button>
           <button data-tab="volume">Volume</button>
           <button data-tab="live">Live Pairs</button>
+          <button data-tab="watchlist">Watchlist</button>
           <button data-tab="launch">Launch Snipe</button>
           <button data-tab="kol">KOL Tracker</button>
           <button data-tab="wallets">Wallets / Balances</button>

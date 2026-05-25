@@ -36,7 +36,7 @@ let sniperCandidatesCache = { cachedAt: 0, value: [] };
 const dexSearchCandidatesCache = new Map();
 let photonNewPairsCache = { cachedAt: 0, value: [] };
 let manualLaunchCandidatesCache = { cachedAt: 0, value: [] };
-let livePairsSharedCache = { cachedAt: 0, value: null, promise: null };
+let livePairsSharedCache = new Map();
 const solanaTrackerCache = new Map();
 const madeOnSolCache = new Map();
 const webLoginAttemptLimits = new Map();
@@ -210,7 +210,8 @@ function loadConfig() {
   }
 
   const feeWallet = process.env.FEE_WALLET || "AUcSFZsCdawzfqa4KzHK1BHz1RDrBnj8CF5kxoy3NvxV";
-  const bundleFeeBps = Number.parseInt(process.env.BUNDLE_FEE_BPS || "50", 10);
+  const bundleFeeBps = Number.parseInt(process.env.BUNDLE_FEE_BPS || "65", 10);
+  const referralFeeBps = Number.parseInt(process.env.REFERRAL_FEE_BPS || "15", 10);
   const tradingSpeedPreset = parseTradingSpeedPreset(process.env.TRADING_SPEED_PRESET || "balanced");
   const speedDefaults = tradingSpeedDefaults(tradingSpeedPreset);
   const bundleConcurrency = Number.parseInt(process.env.BUNDLE_CONCURRENCY || String(speedDefaults.bundleConcurrency), 10);
@@ -228,7 +229,7 @@ function loadConfig() {
   const sniperDefaultSlippageBps = Number.parseInt(process.env.SNIPER_DEFAULT_SLIPPAGE_BPS || "400", 10);
   const jupiterSwapMaxAttempts = Number.parseInt(process.env.JUPITER_SWAP_MAX_ATTEMPTS || "2", 10);
   const manualLaunchScanIntervalMs = Number.parseInt(process.env.MANUAL_LAUNCH_SCAN_INTERVAL_MS || String(DEFAULT_MANUAL_LAUNCH_SCAN_INTERVAL_MS), 10);
-  const webSessionTtlHours = Number.parseInt(process.env.WEB_SESSION_TTL_HOURS || "72", 10);
+  const webSessionTtlHours = Number.parseInt(process.env.WEB_SESSION_TTL_HOURS || "720", 10);
   const solanaTrackerKolLimit = Number.parseInt(process.env.SOLANA_TRACKER_KOL_LIMIT || "12", 10);
   const solanaTrackerCacheTtlMs = Number.parseInt(process.env.SOLANA_TRACKER_CACHE_TTL_MS || "15000", 10);
   const solanaTrackerKolCacheTtlMs = Number.parseInt(process.env.SOLANA_TRACKER_KOL_CACHE_TTL_MS || "120000", 10);
@@ -247,6 +248,10 @@ function loadConfig() {
 
   if (!Number.isInteger(bundleFeeBps) || bundleFeeBps < 0 || bundleFeeBps > 1000) {
     throw new Error("BUNDLE_FEE_BPS must be an integer from 0 to 1000.");
+  }
+
+  if (!Number.isInteger(referralFeeBps) || referralFeeBps < 0 || referralFeeBps > bundleFeeBps) {
+    throw new Error("REFERRAL_FEE_BPS must be an integer from 0 through BUNDLE_FEE_BPS.");
   }
 
   if (!Number.isInteger(bundleConcurrency) || bundleConcurrency < 1 || bundleConcurrency > 10) {
@@ -411,6 +416,7 @@ function loadConfig() {
     tradingSpeedPreset,
     feeWallet,
     bundleFeeBps,
+    referralFeeBps,
     bundleConcurrency,
     buyReserveLamports: solToLamports(buyReserveSol),
     buyReserveSol,
@@ -648,6 +654,45 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "GET" && pathname === "/api/web/sniper/scan") {
+      const auth = await authenticateOptionalWebRequest(request);
+      const mode = requestUrl.searchParams.get("mode") || "safe";
+      sendWebJson(request, response, 200, {
+        ok: true,
+        scan: await webSniperScan(auth?.userId || "guest", mode)
+      });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/live-pairs") {
+      const auth = await authenticateOptionalWebRequest(request);
+      const bucket = requestUrl.searchParams.get("bucket") || "live";
+      sendWebJson(request, response, 200, {
+        ok: true,
+        livePairs: await webLivePairs(auth?.userId || "guest", bucket)
+      });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/kol/scan") {
+      const auth = await authenticateOptionalWebRequest(request);
+      const mode = requestUrl.searchParams.get("mode") || "hot";
+      const wallet = requestUrl.searchParams.get("wallet") || "";
+      sendWebJson(request, response, 200, {
+        ok: true,
+        scan: await webKolScan(auth?.userId || "guest", mode, wallet)
+      });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/slimewire-traders") {
+      sendWebJson(request, response, 200, {
+        ok: true,
+        traders: await webSlimewireTraders()
+      });
+      return;
+    }
+
     const auth = await authenticateWebRequest(request);
 
     if (request.method === "POST" && pathname === "/api/web/logout") {
@@ -715,6 +760,55 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendWebJson(request, response, 200, {
         ok: true,
         profile: result.profile,
+        user: await webUserSummary(auth.userId)
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/profile/referral") {
+      const body = await readJsonRequestBody(request);
+      const result = await updateWebReferralProfile(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        profile: result.profile,
+        user: await webUserSummary(auth.userId)
+      });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/presets") {
+      sendWebJson(request, response, 200, {
+        ok: true,
+        presets: await webPresetRows(auth.userId)
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/presets") {
+      const body = await readJsonRequestBody(request);
+      const result = await updateWebPreset(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        presets: result.presets,
+        user: await webUserSummary(auth.userId)
+      });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/watchlist") {
+      sendWebJson(request, response, 200, {
+        ok: true,
+        watchlist: await webWatchlistRows(auth.userId)
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/watchlist") {
+      const body = await readJsonRequestBody(request);
+      const result = await updateWebWatchlist(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        watchlist: result.watchlist,
         user: await webUserSummary(auth.userId)
       });
       return;
@@ -3721,7 +3815,7 @@ async function sellAllTokensFlow(chatId, session) {
 
       for (const token of tokens) {
         try {
-          const sell = await sellTokenAmountFromWallet(wallet, token.mint, token.rawAmount, session.data.slippageBps);
+          const sell = await sellTokenAmountFromWallet(wallet, token.mint, token.rawAmount, session.data.slippageBps, { userId: session.userId });
           soldCount += 1;
           invalidateWalletReadCache(wallet.publicKey);
           results.push(formatSellAllTokenLine(wallet, token, sell));
@@ -3823,7 +3917,7 @@ async function createTimedTradePlanFlow(chatId, session) {
 
   await runWithConcurrency(selectedWallets, CONFIG.bundleConcurrency, async ({ index, wallet }) => {
     try {
-      const result = await buyTokenForPlan(wallet, session.data.tokenMint, amountLamports, session.data.slippageBps, { trackTokenDelta: true });
+      const result = await buyTokenForPlan(wallet, session.data.tokenMint, amountLamports, session.data.slippageBps, { trackTokenDelta: true, userId: session.userId });
       results.push(formatBuySuccessLine(wallet, result.amountLamports, result.feeLamports, result.swapLamports, result, result.feeStatus));
       tradeEvents.push({
         userId: session.userId,
@@ -4349,7 +4443,7 @@ async function buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps, o
 
   let feeStatus = "";
   try {
-    const feeSignature = await collectSolFee(keypair, feeLamports);
+    const feeSignature = await collectSolFee(keypair, feeLamports, { userId: options.userId });
     feeStatus = feeSignature ? `, fee tx ${feeSignature}` : "";
   } catch (feeError) {
     feeStatus = `, fee failed - ${formatError(feeError)}`;
@@ -4379,10 +4473,10 @@ async function sellTokenFromWallet(wallet, tokenMint, percent, slippageBps, opti
     throw new Error("sell amount rounded to zero");
   }
 
-  return sellTokenAmountFromWallet(wallet, tokenMint, amount, slippageBps);
+  return sellTokenAmountFromWallet(wallet, tokenMint, amount, slippageBps, options);
 }
 
-async function sellTokenAmountFromWallet(wallet, tokenMint, amount, slippageBps) {
+async function sellTokenAmountFromWallet(wallet, tokenMint, amount, slippageBps, options = {}) {
   const keypair = decryptWallet(wallet);
   const sellAmount = BigInt(amount);
   if (sellAmount <= 0n) {
@@ -4401,7 +4495,7 @@ async function sellTokenAmountFromWallet(wallet, tokenMint, amount, slippageBps)
   let feeStatus = "";
 
   try {
-    const feeSignature = await collectSolFee(keypair, feeLamports);
+    const feeSignature = await collectSolFee(keypair, feeLamports, { userId: options.userId });
     feeStatus = feeSignature ? `, fee tx ${feeSignature}` : "";
   } catch (feeError) {
     feeStatus = `, fee failed - ${formatError(feeError)}`;
@@ -4680,7 +4774,8 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
   try {
     const sellPercent = effectiveTimedSellPercent(plan, planWallet, triggerReason, triggerMeta);
     const sell = await sellTokenFromWallet(wallet, plan.tokenMint, sellPercent, plan.slippageBps, {
-      baseRawAmount: planWallet.tokenOutAmount
+      baseRawAmount: planWallet.tokenOutAmount,
+      userId: plan.userId
     });
     sell.sellPercent = sellPercent;
     await recordTradeEvents([{
@@ -4829,7 +4924,7 @@ async function processCopyWalletWatchPlan(plan, walletStore) {
     }
 
     try {
-      const buy = await buyTokenForPlan(wallet, tokenMint, amountLamports, plan.slippageBps, { trackTokenDelta: true });
+      const buy = await buyTokenForPlan(wallet, tokenMint, amountLamports, plan.slippageBps, { trackTokenDelta: true, userId: plan.userId });
       Object.assign(planWallet, {
         basisLamports: amountLamports,
         tokenOutAmount: buy.tokenDeltaAmount || buy.outputAmount || null,
@@ -4920,7 +5015,7 @@ async function processLaunchWatchPlan(plan, walletStore) {
     }
 
     try {
-      const buy = await buyTokenForPlan(wallet, match.tokenMint, amountLamports, plan.slippageBps, { trackTokenDelta: true });
+      const buy = await buyTokenForPlan(wallet, match.tokenMint, amountLamports, plan.slippageBps, { trackTokenDelta: true, userId: plan.userId });
       Object.assign(planWallet, {
         basisLamports: amountLamports,
         tokenOutAmount: buy.tokenDeltaAmount || buy.outputAmount || null,
@@ -4987,7 +5082,7 @@ async function processLaunchWatchPlan(plan, walletStore) {
 async function restartTimedPlanLoop(plan, planWallet, wallet, sell, triggerReason) {
   try {
     const amountLamports = solToLamports(plan.amountSol);
-    const buy = await buyTokenForPlan(wallet, plan.tokenMint, amountLamports, plan.slippageBps, { trackTokenDelta: true });
+    const buy = await buyTokenForPlan(wallet, plan.tokenMint, amountLamports, plan.slippageBps, { trackTokenDelta: true, userId: plan.userId });
     await recordTradeEvents([{
       userId: plan.userId,
       type: "buy",
@@ -5035,7 +5130,7 @@ async function restartTimedPlanLoop(plan, planWallet, wallet, sell, triggerReaso
 async function startDelayedTimedPlanLoop(plan, planWallet, wallet) {
   try {
     const amountLamports = solToLamports(plan.amountSol);
-    const buy = await buyTokenForPlan(wallet, plan.tokenMint, amountLamports, plan.slippageBps, { trackTokenDelta: true });
+    const buy = await buyTokenForPlan(wallet, plan.tokenMint, amountLamports, plan.slippageBps, { trackTokenDelta: true, userId: plan.userId });
     await recordTradeEvents([{
       userId: plan.userId,
       type: "buy",
@@ -5153,7 +5248,7 @@ async function processDcaPlanWallet(plan, planWallet, walletStore) {
       const remainingLamports = BigInt(planWallet.remainingLamports || 0);
       const amountLamportsBig = remainingLamports / BigInt(remainingOrders);
       const amountLamports = bigIntToSafeNumber(amountLamportsBig, "DCA buy amount");
-      const buy = await buyTokenForPlan(wallet, plan.tokenMint, amountLamports, plan.slippageBps);
+      const buy = await buyTokenForPlan(wallet, plan.tokenMint, amountLamports, plan.slippageBps, { userId: plan.userId });
       const nextRemaining = remainingLamports - amountLamportsBig;
       planWallet.remainingLamports = nextRemaining.toString();
       planWallet.completedOrders = completedOrders + 1;
@@ -5187,7 +5282,7 @@ async function processDcaPlanWallet(plan, planWallet, walletStore) {
 
     const remainingRawAmount = BigInt(planWallet.remainingRawAmount || 0);
     const amountRaw = remainingRawAmount / BigInt(remainingOrders);
-    const sell = await sellTokenAmountFromWallet(wallet, plan.tokenMint, amountRaw, plan.slippageBps);
+    const sell = await sellTokenAmountFromWallet(wallet, plan.tokenMint, amountRaw, plan.slippageBps, { userId: plan.userId });
     const nextRemaining = remainingRawAmount - amountRaw;
     planWallet.remainingRawAmount = nextRemaining.toString();
     planWallet.completedOrders = completedOrders + 1;
@@ -5675,18 +5770,56 @@ async function assertDestinationCanReceiveSol(destination, lamports) {
   }
 }
 
-async function collectSolFee(signer, feeLamports) {
+async function collectSolFee(signer, feeLamports, options = {}) {
   if (!feeLamports) return null;
+  const feeAmount = BigInt(feeLamports);
+  if (feeAmount <= 0n) return null;
+  const targets = await referralFeeTargets(options.userId, feeAmount);
+  const ownerLamports = Number(targets.ownerLamports);
+  const referralLamports = Number(targets.referralLamports);
 
-  const tx = new Transaction().add(
-    SystemProgram.transfer({
+  const tx = new Transaction();
+  if (ownerLamports > 0) {
+    tx.add(SystemProgram.transfer({
       fromPubkey: signer.publicKey,
       toPubkey: new PublicKey(CONFIG.feeWallet),
-      lamports: feeLamports
-    })
-  );
+      lamports: ownerLamports
+    }));
+  }
+  if (targets.referralWallet && referralLamports > 0) {
+    tx.add(SystemProgram.transfer({
+      fromPubkey: signer.publicKey,
+      toPubkey: new PublicKey(targets.referralWallet),
+      lamports: referralLamports
+    }));
+  }
+  if (!tx.instructions.length) return null;
 
   return sendLegacyTransaction(tx, [signer]);
+}
+
+async function referralFeeTargets(userId, feeLamports) {
+  const total = BigInt(feeLamports);
+  const fallback = { ownerLamports: total, referralLamports: 0n, referralWallet: "" };
+  if (!userId || CONFIG.bundleFeeBps <= 0 || CONFIG.referralFeeBps <= 0) return fallback;
+
+  try {
+    const store = await readWebAuthStore();
+    const profile = store.profiles[String(userId)] || {};
+    const referrer = profile.referredByUserId ? store.profiles[String(profile.referredByUserId)] : null;
+    const referralWallet = referrer?.referralPayoutWallet || "";
+    if (!referralWallet || referralWallet === CONFIG.feeWallet) return fallback;
+    new PublicKey(referralWallet);
+    const referralLamports = (total * BigInt(CONFIG.referralFeeBps)) / BigInt(CONFIG.bundleFeeBps);
+    if (referralLamports <= 0n || referralLamports >= total) return fallback;
+    return {
+      ownerLamports: total - referralLamports,
+      referralLamports,
+      referralWallet
+    };
+  } catch {
+    return fallback;
+  }
 }
 
 async function getSolBalanceCached(owner, options = {}) {
@@ -7086,6 +7219,9 @@ async function getDexTokenMetadata(tokenMint) {
     symbol: dexValue.symbol || pumpValue.symbol || "",
     name: dexValue.name || pumpValue.name || "",
     imageUrl: dexValue.imageUrl || pumpValue.imageUrl || "",
+    websiteUrl: dexValue.websiteUrl || "",
+    twitterUrl: dexValue.twitterUrl || "",
+    telegramUrl: dexValue.telegramUrl || "",
     marketCap: dexValue.marketCap || pumpValue.marketCap || null,
     fdv: dexValue.fdv || null,
     priceChange: dexValue.priceChange || null,
@@ -7173,11 +7309,15 @@ function compareDexPairsForSniper(a, b) {
 
 function metadataFromDexPair(tokenMint, best = null) {
   const token = best?.baseToken?.address === tokenMint ? best.baseToken : best?.quoteToken || best?.baseToken || {};
+  const links = dexPairLinks(best);
 
   return {
     symbol: token.symbol || "",
     name: token.name || "",
     imageUrl: best?.info?.imageUrl || "",
+    websiteUrl: links.websiteUrl,
+    twitterUrl: links.twitterUrl,
+    telegramUrl: links.telegramUrl,
     marketCap: best?.marketCap || null,
     fdv: best?.fdv || null,
     priceChange: best?.priceChange || null,
@@ -7186,6 +7326,24 @@ function metadataFromDexPair(tokenMint, best = null) {
     txns: best?.txns || null,
     pairCreatedAt: best?.pairCreatedAt || null
   };
+}
+
+function dexPairLinks(pair = null) {
+  const websites = Array.isArray(pair?.info?.websites) ? pair.info.websites : [];
+  const socials = Array.isArray(pair?.info?.socials) ? pair.info.socials : [];
+  const websiteUrl = firstString(
+    websites.find((item) => /website|site|web/i.test(item?.label || ""))?.url,
+    websites[0]?.url
+  );
+  const twitterUrl = firstString(
+    socials.find((item) => /twitter|x/i.test(item?.type || item?.label || ""))?.url,
+    socials.find((item) => /twitter\.com|x\.com/i.test(item?.url || ""))?.url
+  );
+  const telegramUrl = firstString(
+    socials.find((item) => /telegram|tg/i.test(item?.type || item?.label || ""))?.url,
+    socials.find((item) => /t\.me|telegram/i.test(item?.url || ""))?.url
+  );
+  return { websiteUrl, twitterUrl, telegramUrl };
 }
 
 async function getPumpFunTokenMetadata(tokenMint, options = {}) {
@@ -7311,7 +7469,7 @@ async function fetchLivePairCandidates(options = {}) {
     fetchPumpFunLatestCandidates({ ...options, timeoutMs: options.timeoutMs || 1_800 }).catch(() => []),
     fetchSniperCandidates({ ...options, ttlMs, timeoutMs: options.timeoutMs || 1_800 }).catch(() => [])
   ]);
-  const freshDexRows = dexLatest.filter((candidate) => candidate.source !== "top-boost");
+  const freshDexRows = dexLatest.filter((candidate) => candidate.source !== "top-boost" || normalizeLivePairBucket(options.bucket) !== "live");
   return uniqueSniperCandidates([...photon, ...pumpLatest, ...freshDexRows])
     .sort(compareLivePairCandidates);
 }
@@ -7658,19 +7816,20 @@ function compareSniperScoresForMode(mode, a, b) {
   return compareSniperScores(a, b);
 }
 
-function selectRotatingSniperRows(rows, scanState) {
-  if (rows.length <= 6) return uniqueSniperScoreRows(rotateItems(rows, scanState.displayOffset)).slice(0, 6);
+function selectRotatingSniperRows(rows, scanState, limit = 6) {
+  const displayLimit = Math.max(1, Math.min(Number.parseInt(limit, 10) || 6, 12));
+  if (rows.length <= displayLimit) return uniqueSniperScoreRows(rotateItems(rows, scanState.displayOffset)).slice(0, displayLimit);
 
   const previousShown = new Set(scanState.previousShown || []);
   const lastShown = new Set(scanState.lastShown || []);
   const neverShownRows = rows.filter((row) => !previousShown.has(row.tokenMint));
   const notLastRows = rows.filter((row) => !lastShown.has(row.tokenMint));
-  const pool = neverShownRows.length >= 6
+  const pool = neverShownRows.length >= displayLimit
     ? neverShownRows
-    : notLastRows.length >= 6
+    : notLastRows.length >= displayLimit
       ? uniqueSniperScoreRows([...neverShownRows, ...notLastRows])
       : uniqueSniperScoreRows([...neverShownRows, ...notLastRows, ...rows]);
-  return uniqueSniperScoreRows(rotateItems(pool.slice(0, 140), scanState.displayOffset)).slice(0, 6);
+  return uniqueSniperScoreRows(rotateItems(pool.slice(0, 180), scanState.displayOffset)).slice(0, displayLimit);
 }
 
 function rememberSniperScanRows(userId, mode, rows) {
@@ -8383,7 +8542,8 @@ function isLooseModeRelevantSniperPick(item, mode) {
   return false;
 }
 
-function buildSniperModeDisplay(qualifiedRows, mode, scanState) {
+function buildSniperModeDisplay(qualifiedRows, mode, scanState, options = {}) {
+  const limit = Number.parseInt(options.limit || 6, 10);
   const safeMode = String(mode || "safe");
   const sorter = safeMode === "pumpsnipe"
     ? comparePumpSnipeScores
@@ -8419,7 +8579,7 @@ function buildSniperModeDisplay(qualifiedRows, mode, scanState) {
     looseModeRows,
     fallbackRows,
     displayRows,
-    rows: selectRotatingSniperRows(displayRows, scanState)
+    rows: selectRotatingSniperRows(displayRows, scanState, limit)
   };
 }
 
@@ -10086,6 +10246,139 @@ async function writeWebAuthStore(store) {
   await writeJsonFile(webAuthPath(), store);
 }
 
+function defaultWebPresets() {
+  return {
+    trade: [
+      {
+        id: "trade-default-scalp",
+        name: "Scalp .10",
+        kind: "trade",
+        walletIndex: "1",
+        amountSol: "0.1",
+        takeProfitPct: "25",
+        stopLossPct: "8",
+        sellDelay: "off",
+        sellPercent: "100",
+        slippageBps: "400",
+        readonly: true
+      },
+      {
+        id: "trade-default-fast",
+        name: "Fast .50",
+        kind: "trade",
+        walletIndex: "1",
+        amountSol: "0.5",
+        takeProfitPct: "40",
+        stopLossPct: "10",
+        sellDelay: "5",
+        sellPercent: "100",
+        slippageBps: "400",
+        readonly: true
+      }
+    ],
+    bundle: [
+      {
+        id: "bundle-default-six",
+        name: "6 Wallet .10",
+        kind: "bundle",
+        walletIndexes: ["1", "2", "3", "4", "5", "6"],
+        walletGroup: "",
+        amountSol: "0.1",
+        takeProfitPct: "60",
+        stopLossPct: "10",
+        sellDelay: "off",
+        sellPercent: "100",
+        slippageBps: "400",
+        readonly: true
+      },
+      {
+        id: "bundle-default-scalp",
+        name: "Bundle Scalp",
+        kind: "bundle",
+        walletIndexes: ["1", "2", "3"],
+        walletGroup: "",
+        amountSol: "0.1",
+        takeProfitPct: "25",
+        stopLossPct: "8",
+        sellDelay: "5",
+        sellPercent: "100",
+        slippageBps: "400",
+        readonly: true
+      }
+    ]
+  };
+}
+
+function ensureWebProfileDefaults(store, userId) {
+  const key = String(userId);
+  const existing = store.profiles[key] || {};
+  let changed = false;
+  const profile = { ...existing };
+
+  if (!profile.referralCode) {
+    profile.referralCode = generateWebReferralCode(store, profile.username || key);
+    changed = true;
+  }
+  if (!Array.isArray(profile.tradePresets)) {
+    profile.tradePresets = [];
+    changed = true;
+  }
+  if (!Array.isArray(profile.bundlePresets)) {
+    profile.bundlePresets = [];
+    changed = true;
+  }
+  if (!Array.isArray(profile.watchedTokens)) {
+    profile.watchedTokens = [];
+    changed = true;
+  }
+  if (typeof profile.showOnTraderBoard !== "boolean") {
+    profile.showOnTraderBoard = false;
+    changed = true;
+  }
+  if (profile.referralPayoutWallet === undefined) {
+    profile.referralPayoutWallet = "";
+    changed = true;
+  }
+
+  if (changed || !store.profiles[key]) {
+    profile.updatedAt = profile.updatedAt || new Date().toISOString();
+    store.profiles[key] = profile;
+  }
+  return { profile, changed };
+}
+
+function generateWebReferralCode(store, seed = "sw") {
+  const cleanSeed = String(seed || "sw")
+    .replace(/^web_/i, "")
+    .replace(/[^a-z0-9]/gi, "")
+    .slice(0, 8)
+    .toUpperCase() || "SW";
+  for (let i = 0; i < 20; i += 1) {
+    const suffix = crypto.randomBytes(3).toString("hex").toUpperCase();
+    const code = normalizeReferralCode(`${cleanSeed}${suffix}`);
+    if (!findWebProfileByReferralCode(store, code)) return code;
+  }
+  return normalizeReferralCode(crypto.randomBytes(7).toString("hex").toUpperCase());
+}
+
+function normalizeReferralCode(value) {
+  return String(value || "").trim().replace(/[^a-z0-9]/gi, "").toUpperCase().slice(0, 20);
+}
+
+function findWebProfileByReferralCode(store, codeValue) {
+  const code = normalizeReferralCode(codeValue);
+  if (!code) return null;
+  const entry = Object.entries(store.profiles || {}).find(([, profile]) => normalizeReferralCode(profile.referralCode) === code);
+  return entry ? { userId: entry[0], profile: entry[1] } : null;
+}
+
+function webReferralLink(code) {
+  const base = CONFIG.webPortalUrl || "https://www.slimewire.org";
+  const url = new URL(base);
+  url.searchParams.set("ref", normalizeReferralCode(code));
+  return url.toString();
+}
+
 async function createWebLoginCode(userId, chatId) {
   const store = await readWebAuthStore();
   const now = Date.now();
@@ -10192,6 +10485,8 @@ async function createWebAccount(options = {}) {
   const username = wantsPasswordLogin ? normalizeWebUsername(rawUsername) : "";
   const passwordLogin = wantsPasswordLogin ? hashWebPassword(normalizeWebPassword(rawPassword)) : null;
   if (username) assertWebUsernameAvailable(store, username);
+  const referralEntry = findWebProfileByReferralCode(store, body.referralCode || body.ref || "");
+  const referralCode = generateWebReferralCode(store, username || userId);
   const session = issueWebSessionRecord(userId, userId, now);
 
   store.profiles[userId] = {
@@ -10199,6 +10494,14 @@ async function createWebAccount(options = {}) {
     username,
     usernameNormalized: username,
     passwordLogin,
+    referralCode,
+    referredByUserId: referralEntry && referralEntry.userId !== userId ? String(referralEntry.userId) : "",
+    referredByCode: referralEntry && referralEntry.userId !== userId ? normalizeReferralCode(referralEntry.profile.referralCode) : "",
+    referralPayoutWallet: "",
+    showOnTraderBoard: false,
+    tradePresets: [],
+    bundlePresets: [],
+    watchedTokens: [],
     xHandle: "",
     xConnectedAt: "",
     avatarDataUrl: "",
@@ -10351,6 +10654,16 @@ async function authenticateWebRequest(request) {
   return { userId: session.userId, chatId: session.chatId, tokenHash };
 }
 
+async function authenticateOptionalWebRequest(request) {
+  const token = webAuthTokenFromRequest(request);
+  if (!token) return null;
+  try {
+    return await authenticateWebRequest(request);
+  } catch {
+    return null;
+  }
+}
+
 async function revokeWebSession(tokenHash) {
   const store = await readWebAuthStore();
   store.sessions = store.sessions.filter((item) => item.tokenHash !== tokenHash);
@@ -10442,6 +10755,14 @@ async function webUserSummary(userId) {
     avatarSource: profile.avatarSource || "",
     avatarUpdatedAt: profile.avatarUpdatedAt || "",
     connectedWallet: profile.connectedWallet || null,
+    referralCode: profile.referralCode || "",
+    referralLink: profile.referralCode ? webReferralLink(profile.referralCode) : "",
+    referralPayoutWallet: profile.referralPayoutWallet || "",
+    referredByCode: profile.referredByCode || "",
+    showOnTraderBoard: Boolean(profile.showOnTraderBoard),
+    tradePresetCount: Array.isArray(profile.tradePresets) ? profile.tradePresets.length : 0,
+    bundlePresetCount: Array.isArray(profile.bundlePresets) ? profile.bundlePresets.length : 0,
+    watchlistCount: Array.isArray(profile.watchedTokens) ? profile.watchedTokens.length : 0,
     portalUrl: CONFIG.webPortalUrl,
     telegramBotUrl: telegramBotStartUrl()
   };
@@ -10449,7 +10770,9 @@ async function webUserSummary(userId) {
 
 async function webProfileForUser(userId) {
   const store = await readWebAuthStore();
-  return store.profiles[String(userId)] || {};
+  const result = ensureWebProfileDefaults(store, userId);
+  if (result.changed) await writeWebAuthStore(store);
+  return result.profile;
 }
 
 async function updateWebProfileEmail(userId, emailValue) {
@@ -10586,6 +10909,275 @@ async function updateWebProfileXHandle(userId, body = {}) {
   await writeWebAuthStore(store);
   await audit("web_profile_x_update", { userId, xHandle, connected: Boolean(xHandle) });
   return { profile };
+}
+
+async function updateWebReferralProfile(userId, body = {}) {
+  const store = await readWebAuthStore();
+  const key = String(userId);
+  const now = new Date().toISOString();
+  const { profile: existing } = ensureWebProfileDefaults(store, userId);
+  const referralPayoutWallet = body.clearPayout
+    ? ""
+    : String(body.referralPayoutWallet || body.wallet || "").trim()
+      ? normalizeConnectedWalletPublicKey(body.referralPayoutWallet || body.wallet)
+      : existing.referralPayoutWallet || "";
+  const profile = {
+    ...existing,
+    referralPayoutWallet,
+    showOnTraderBoard: parseBoolean(String(body.showOnTraderBoard ?? existing.showOnTraderBoard ?? "false")),
+    updatedAt: now
+  };
+  store.profiles[key] = profile;
+  await writeWebAuthStore(store);
+  await audit("web_referral_profile_update", {
+    userId,
+    hasPayoutWallet: Boolean(referralPayoutWallet),
+    showOnTraderBoard: profile.showOnTraderBoard
+  });
+  return { profile };
+}
+
+async function webPresetRows(userId) {
+  const profile = await webProfileForUser(userId);
+  const defaults = defaultWebPresets();
+  return {
+    trade: [...defaults.trade, ...cleanStoredPresets(profile.tradePresets, "trade")],
+    bundle: [...defaults.bundle, ...cleanStoredPresets(profile.bundlePresets, "bundle")]
+  };
+}
+
+async function updateWebPreset(userId, body = {}) {
+  const type = normalizeWebPresetType(body.type || body.kind);
+  const store = await readWebAuthStore();
+  const key = String(userId);
+  const { profile: existing } = ensureWebProfileDefaults(store, userId);
+  const field = type === "bundle" ? "bundlePresets" : "tradePresets";
+  const current = cleanStoredPresets(existing[field], type);
+  const action = String(body.action || "save").trim().toLowerCase();
+
+  let next = current;
+  if (action === "delete") {
+    const id = String(body.id || "").trim();
+    next = current.filter((preset) => preset.id !== id);
+  } else {
+    const preset = normalizeWebPreset(type, body.preset || body);
+    const existingIndex = current.findIndex((item) => item.id === preset.id);
+    next = existingIndex >= 0
+      ? current.map((item, index) => (index === existingIndex ? preset : item))
+      : [preset, ...current].slice(0, 5);
+  }
+
+  const profile = {
+    ...existing,
+    [field]: next,
+    updatedAt: new Date().toISOString()
+  };
+  store.profiles[key] = profile;
+  await writeWebAuthStore(store);
+  await audit("web_preset_update", { userId, type, action, count: next.length });
+  return { presets: await webPresetRows(userId) };
+}
+
+function normalizeWebPresetType(value) {
+  const type = String(value || "").trim().toLowerCase();
+  if (type === "bundle") return "bundle";
+  if (type === "trade") return "trade";
+  const error = new Error("Preset type must be trade or bundle.");
+  error.statusCode = 400;
+  throw error;
+}
+
+function cleanStoredPresets(value, type) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      try {
+        return normalizeWebPreset(type, item, { keepId: true });
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean)
+    .slice(0, 5);
+}
+
+function normalizeWebPreset(type, raw = {}, options = {}) {
+  const id = options.keepId && String(raw.id || "").trim()
+    ? String(raw.id).trim().slice(0, 80)
+    : `${type}-${crypto.randomUUID()}`;
+  const name = String(raw.name || `${type === "bundle" ? "Bundle" : "Trade"} Preset`).trim().replace(/[^\w .%-]/g, "").slice(0, 32) || "Preset";
+  const amountSol = String(raw.amountSol || raw.amount || "0.1").trim();
+  parsePositiveNumber(amountSol);
+  const takeProfitPct = String(raw.takeProfitPct || "25").trim();
+  parseTakeProfitPercent(takeProfitPct);
+  const stopLossPct = String(raw.stopLossPct || "8").trim();
+  parseOptionalTriggerPercent(stopLossPct);
+  const sellDelay = firstString(raw.sellDelay, raw.sellDelaySeconds, "off");
+  parseOptionalSellDelaySeconds(sellDelay);
+  const sellPercent = String(raw.sellPercent || "100").trim();
+  parsePercent(sellPercent);
+  const slippageBps = String(raw.slippageBps || "400").trim();
+  parseWebSlippage(slippageBps);
+
+  const preset = {
+    id,
+    name,
+    kind: type,
+    amountSol,
+    takeProfitPct,
+    stopLossPct,
+    sellDelay,
+    sellPercent,
+    slippageBps,
+    updatedAt: new Date().toISOString()
+  };
+  if (type === "trade") {
+    preset.walletIndex = String(raw.walletIndex || "1").replace(/[^\d]/g, "") || "1";
+  } else {
+    preset.walletIndexes = Array.isArray(raw.walletIndexes)
+      ? uniqueStrings(raw.walletIndexes.map((item) => String(item).replace(/[^\d]/g, "")).filter(Boolean)).slice(0, 20)
+      : [];
+    preset.walletGroup = String(raw.walletGroup || "").trim().replace(/[^\w .-]/g, "").slice(0, 40);
+    if (!preset.walletIndexes.length && !preset.walletGroup) {
+      preset.walletIndexes = ["1", "2", "3", "4", "5", "6"];
+    }
+  }
+  return preset;
+}
+
+async function webWatchlistRows(userId) {
+  const profile = await webProfileForUser(userId);
+  const watched = Array.isArray(profile.watchedTokens) ? profile.watchedTokens : [];
+  const rows = [];
+  await runWithConcurrency(watched.slice(0, 100), 4, async (item) => {
+    const tokenMint = String(item.tokenMint || "").trim();
+    if (!tokenMint) return;
+    const metadata = await getDexTokenMetadata(tokenMint).catch(() => ({}));
+    rows.push(webTokenWatchRow(tokenMint, metadata, item));
+  });
+  rows.sort((a, b) => Date.parse(b.addedAt || "") - Date.parse(a.addedAt || ""));
+  return { rows, count: rows.length };
+}
+
+async function updateWebWatchlist(userId, body = {}) {
+  const tokenMint = parsePublicKey(String(body.tokenMint || "")).toBase58();
+  const action = String(body.action || "add").trim().toLowerCase();
+  const store = await readWebAuthStore();
+  const key = String(userId);
+  const { profile: existing } = ensureWebProfileDefaults(store, userId);
+  const current = Array.isArray(existing.watchedTokens) ? existing.watchedTokens : [];
+  let next = current.filter((item) => item.tokenMint !== tokenMint);
+
+  if (action !== "remove") {
+    next.unshift({
+      tokenMint,
+      symbol: String(body.symbol || "").trim().slice(0, 24),
+      name: String(body.name || "").trim().slice(0, 80),
+      imageUrl: String(body.imageUrl || "").trim().slice(0, 500),
+      addedAt: new Date().toISOString()
+    });
+    next = next.slice(0, 100);
+  }
+
+  const profile = {
+    ...existing,
+    watchedTokens: next,
+    updatedAt: new Date().toISOString()
+  };
+  store.profiles[key] = profile;
+  await writeWebAuthStore(store);
+  await audit("web_watchlist_update", { userId, action, tokenMint, count: next.length });
+  return { watchlist: await webWatchlistRows(userId) };
+}
+
+function webTokenWatchRow(tokenMint, metadata = {}, saved = {}) {
+  const row = webSniperRow({
+    tokenMint,
+    symbol: metadata.symbol || saved.symbol || shortMint(tokenMint),
+    name: metadata.name || saved.name || "Watched Token",
+    imageUrl: metadata.imageUrl || saved.imageUrl || "",
+    websiteUrl: metadata.websiteUrl || saved.websiteUrl || "",
+    twitterUrl: metadata.twitterUrl || saved.twitterUrl || "",
+    telegramUrl: metadata.telegramUrl || saved.telegramUrl || "",
+    marketCap: metadata.marketCap || 0,
+    liquidityUsd: metadata.liquidityUsd || 0,
+    volume5m: metadata.volume?.m5 || 0,
+    volumeH1: metadata.volume?.h1 || 0,
+    pairCreatedAt: metadata.pairCreatedAt || null,
+    score: 0,
+    category: "Watchlist",
+    rugRisk: "check",
+    exitRisk: "check",
+    manipulationScore: "check",
+    momentum: "Watching",
+    smartMoney: "Watchlist",
+    scalpSetup: "Saved watch",
+    riskFlags: [],
+    reasons: []
+  });
+  return {
+    ...row,
+    addedAt: saved.addedAt || "",
+    watched: true
+  };
+}
+
+async function webSlimewireTraders() {
+  const [authStore, tradeHistory] = await Promise.all([readWebAuthStore(), readTradeHistory()]);
+  const totals = new Map();
+  for (const trade of tradeHistory.trades || []) {
+    const userId = String(trade.userId || "");
+    if (!userId) continue;
+    const profile = authStore.profiles?.[userId];
+    if (!profile?.showOnTraderBoard) continue;
+    const current = totals.get(userId) || {
+      userId,
+      tradeCount: 0,
+      buys: 0,
+      sells: 0,
+      spent: 0n,
+      received: 0n,
+      lastTradeAt: ""
+    };
+    current.tradeCount += 1;
+    if (String(trade.type).includes("buy")) current.buys += 1;
+    if (String(trade.type).includes("sell")) current.sells += 1;
+    current.spent += BigInt(trade.solLamportsSpent || 0);
+    current.received += BigInt(trade.solLamportsReceived || 0);
+    if (!current.lastTradeAt || Date.parse(trade.timestamp || "") > Date.parse(current.lastTradeAt)) {
+      current.lastTradeAt = trade.timestamp || "";
+    }
+    totals.set(userId, current);
+  }
+
+  return [...totals.values()]
+    .map((row) => {
+      const profile = authStore.profiles[row.userId] || {};
+      const realized = row.received - row.spent;
+      const name = profile.username || profile.xHandle || shortMint(row.userId);
+      return {
+        userId: row.userId,
+        name,
+        username: profile.username || "",
+        twitter: profile.xHandle || "",
+        avatar: profile.avatarDataUrl || profile.avatarUrl || "",
+        wallet: profile.connectedWallet?.publicKey || "",
+        shortWallet: profile.connectedWallet?.shortPublicKey || "",
+        referralCode: profile.referralCode || "",
+        referralLink: profile.referralCode ? webReferralLink(profile.referralCode) : "",
+        realizedLamports: realized.toString(),
+        realizedLabel: `${realized >= 0n ? "+" : "-"}${lamportsBigToSol(realized >= 0n ? realized : -realized)} SOL`,
+        roiLabel: row.spent > 0n ? `${Number((realized * 10000n) / row.spent / 100n)}%` : "n/a",
+        winRateLabel: row.sells > 0 ? `${row.sells} closed` : "building",
+        trades: row.tradeCount,
+        buys: row.buys,
+        sells: row.sells,
+        lastTradeAt: row.lastTradeAt,
+        source: "slimewire"
+      };
+    })
+    .sort((a, b) => Number(BigInt(b.realizedLamports || 0n) - BigInt(a.realizedLamports || 0n)) || Number(b.trades || 0) - Number(a.trades || 0))
+    .slice(0, 25);
 }
 
 function normalizeWebXHandle(value) {
@@ -11001,7 +11593,7 @@ async function webTradeBuy(userId, body = {}) {
   const tokenMint = parsePublicKey(String(body.tokenMint || "")).toBase58();
   const slippageBps = parseWebSlippage(body.slippageBps);
   const amountLamports = await webBuyAmountLamports(wallet, body);
-  const result = await buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps, { trackTokenDelta: true });
+  const result = await buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps, { trackTokenDelta: true, userId });
   const tokenAmount = result.tokenDeltaAmount || result.outputAmount || null;
 
   await recordTradeEvents([{
@@ -11054,7 +11646,7 @@ async function webTradeSell(userId, body = {}) {
   const tokenMint = parsePublicKey(String(body.tokenMint || "")).toBase58();
   const percent = parsePercent(String(body.percent || "100"));
   const slippageBps = parseWebSlippage(body.slippageBps);
-  const result = await sellTokenFromWallet(wallet, tokenMint, percent, slippageBps);
+  const result = await sellTokenFromWallet(wallet, tokenMint, percent, slippageBps, { userId });
   const outputLamports = BigInt(result.outputLamports || 0);
   const feeLamports = BigInt(result.feeLamports || 0);
   const netLamports = outputLamports > feeLamports ? outputLamports - feeLamports : 0n;
@@ -11253,7 +11845,7 @@ async function webCreateManagedBuyPlan(userId, wallets, body = {}, options = {})
   await runWithConcurrency(wallets, CONFIG.bundleConcurrency, async (wallet) => {
     const walletIndex = Number(wallet.webIndex || wallets.indexOf(wallet) + 1);
     try {
-      const result = await buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps, { trackTokenDelta: true });
+      const result = await buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps, { trackTokenDelta: true, userId });
       const tokenAmount = result.tokenDeltaAmount || result.outputAmount || null;
       tradeEvents.push({
         userId,
@@ -11449,7 +12041,7 @@ async function webBundleBuy(userId, body = {}) {
 
   await runWithConcurrency(wallets, CONFIG.bundleConcurrency, async (wallet) => {
     try {
-      const result = await buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps, { trackTokenDelta: true });
+      const result = await buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps, { trackTokenDelta: true, userId });
       results.push({
         ok: true,
         walletLabel: wallet.label,
@@ -11505,7 +12097,7 @@ async function webBundleSell(userId, body = {}) {
 
   await runWithConcurrency(wallets, CONFIG.bundleConcurrency, async (wallet) => {
     try {
-      const sell = await sellTokenFromWallet(wallet, tokenMint, percent, slippageBps);
+      const sell = await sellTokenFromWallet(wallet, tokenMint, percent, slippageBps, { userId });
       const outputLamports = BigInt(sell.outputLamports || 0);
       const feeLamports = BigInt(sell.feeLamports || 0);
       const netLamports = outputLamports > feeLamports ? outputLamports - feeLamports : 0n;
@@ -11987,6 +12579,20 @@ async function webPnlCard(userId, tokenMintText) {
 }
 
 async function webKolScan(userId, mode = "hot", wallet = "") {
+  if (String(mode || "").trim().toLowerCase() === "slimewire") {
+    const traders = await webSlimewireTraders();
+    return {
+      configured: true,
+      label: "Top SlimeWire Traders",
+      message: traders.length
+        ? "Top opt-in SlimeWire traders by saved web trade history."
+        : "No opt-in SlimeWire traders yet. Turn on the leaderboard option in Profile after you have trade history.",
+      kolCount: traders.length,
+      kols: traders,
+      rows: [],
+      source: "slimewire"
+    };
+  }
   return buildKolScan(userId, mode, wallet);
 }
 
@@ -13345,9 +13951,9 @@ async function webSniperScan(userId, mode) {
   });
 
   const { qualifiedRows } = buildQualifiedSniperRows(scored, settings);
-  const display = buildSniperModeDisplay(qualifiedRows, safeMode, scanState);
+  const display = buildSniperModeDisplay(qualifiedRows, safeMode, scanState, { limit: 12 });
   const modeRows = display.modeRows;
-  const rows = display.rows.slice(0, 6);
+  const rows = display.rows.slice(0, 12);
   rememberSniperScanRows(`web:${userId}`, safeMode, rows);
 
   return {
@@ -13362,47 +13968,53 @@ async function webSniperScan(userId, mode) {
   };
 }
 
-async function webLivePairs(userId) {
-  if (CONFIG.livePairsSharedCacheMs > 0 && livePairsSharedCache.value && Date.now() - livePairsSharedCache.cachedAt < CONFIG.livePairsSharedCacheMs) {
-    return livePairsSharedCache.value;
+async function webLivePairs(userId, bucket = "live") {
+  const safeBucket = normalizeLivePairBucket(bucket);
+  const cacheKey = safeBucket;
+  const cached = livePairsSharedCache.get(cacheKey) || { cachedAt: 0, value: null, promise: null };
+  if (CONFIG.livePairsSharedCacheMs > 0 && cached.value && Date.now() - cached.cachedAt < CONFIG.livePairsSharedCacheMs) {
+    return cached.value;
   }
 
-  if (CONFIG.livePairsSharedCacheMs > 0 && livePairsSharedCache.promise) {
-    return livePairsSharedCache.promise;
+  if (CONFIG.livePairsSharedCacheMs > 0 && cached.promise) {
+    return cached.promise;
   }
 
-  const promise = buildWebLivePairs(userId);
+  const promise = buildWebLivePairs(userId, safeBucket);
   if (CONFIG.livePairsSharedCacheMs > 0) {
-    livePairsSharedCache.promise = promise;
+    livePairsSharedCache.set(cacheKey, { ...cached, promise });
   }
 
   try {
     const value = await promise;
     if (CONFIG.livePairsSharedCacheMs > 0) {
-      livePairsSharedCache = { cachedAt: Date.now(), value, promise: null };
+      livePairsSharedCache.set(cacheKey, { cachedAt: Date.now(), value, promise: null });
     }
     return value;
   } finally {
-    if (livePairsSharedCache.promise === promise) {
-      livePairsSharedCache.promise = null;
+    const current = livePairsSharedCache.get(cacheKey);
+    if (current?.promise === promise) {
+      livePairsSharedCache.set(cacheKey, { ...current, promise: null });
     }
   }
 }
 
-async function buildWebLivePairs(userId) {
-  const scanState = nextSniperScanState(`web:${userId}`, "livepairs");
-  const candidates = await fetchLivePairCandidates({ ttlMs: 500, timeoutMs: 1_200, scanState });
+async function buildWebLivePairs(userId, bucket = "live") {
+  const safeBucket = normalizeLivePairBucket(bucket);
+  const scanState = nextSniperScanState(`web:${userId}`, `livepairs:${safeBucket}`);
+  const candidates = await fetchLivePairCandidates({ ttlMs: safeBucket === "live" ? 500 : 2_500, timeoutMs: safeBucket === "live" ? 1_200 : 1_800, scanState, bucket: safeBucket });
   const liveRows = uniqueSniperScoreRows(candidates.map(livePairCandidateToRow).filter(Boolean))
-    .filter(isWebLivePairCandidate)
+    .filter((row) => isWebLivePairCandidate(row, safeBucket))
     .sort(compareWebLivePairs);
-  const safety = await maybeFilterWebLivePairsForSafety(liveRows, 12);
+  const safety = await maybeFilterWebLivePairsForSafety(liveRows, livePairBucketLimit(safeBucket));
   const safeRows = CONFIG.livePairsImageEnrich
     ? await enrichWebLivePairsForImages(safety.rows)
     : safety.rows;
-  rememberSniperScanRows(`web:${userId}`, "livepairs", safeRows);
+  rememberSniperScanRows(`web:${userId}`, `livepairs:${safeBucket}`, safeRows);
 
   return {
-    label: "Live Pairs",
+    label: livePairBucketLabel(safeBucket),
+    bucket: safeBucket,
     refreshCount: scanState.refreshCount,
     scanned: candidates.length,
     qualified: liveRows.length,
@@ -13410,9 +14022,69 @@ async function buildWebLivePairs(userId) {
     refreshedAt: new Date().toISOString(),
     refreshSeconds: CONFIG.livePairsRefreshSeconds,
     message: safeRows.length
-      ? livePairStatusMessage(safeRows.length, safety.stats)
-      : "No fresh live pairs from the launch feeds right now. It will refresh while this tab is open."
+      ? livePairStatusMessage(safeRows.length, safety.stats, safeBucket)
+      : `${livePairBucketLabel(safeBucket)} did not find matching pairs right now. It will refresh while this tab is open.`
   };
+}
+
+function normalizeLivePairBucket(bucket) {
+  const normalized = String(bucket || "live").trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+  const map = {
+    live: "live",
+    fresh: "live",
+    under1h: "under1h",
+    onehour: "under1h",
+    hour: "under1h",
+    under3h: "under3h",
+    threehour: "under3h",
+    under1d: "under1d",
+    day: "under1d",
+    under24h: "under1d"
+  };
+  return map[normalized] || "live";
+}
+
+function livePairBucketLabel(bucket) {
+  const labels = {
+    live: "Live Pairs",
+    under1h: "10-59 Minute Pairs",
+    under3h: "Under 3 Hour Pairs",
+    under1d: "Under 1 Day Pairs"
+  };
+  return labels[normalizeLivePairBucket(bucket)] || labels.live;
+}
+
+function livePairBucketLimit(bucket) {
+  return normalizeLivePairBucket(bucket) === "live" ? 18 : 24;
+}
+
+function livePairAgeMinutesValue(item) {
+  const seconds = Number(item?.pairAgeSeconds);
+  if (Number.isFinite(seconds)) return seconds / 60;
+  const minutes = Number(item?.pairAgeMinutes);
+  if (Number.isFinite(minutes)) return minutes;
+  return null;
+}
+
+function isLivePairInBucket(item, bucket) {
+  const safeBucket = normalizeLivePairBucket(bucket);
+  const ageMinutes = livePairAgeMinutesValue(item);
+  if (safeBucket === "live") return ageMinutes === null || ageMinutes < 10;
+  if (ageMinutes === null) return false;
+  if (safeBucket === "under1h") return ageMinutes >= 10 && ageMinutes < 60;
+  if (safeBucket === "under3h") return ageMinutes >= 60 && ageMinutes < 180;
+  if (safeBucket === "under1d") return ageMinutes >= 180 && ageMinutes < 1440;
+  return true;
+}
+
+function livePairMaxMarketCap(bucket) {
+  const maxByBucket = {
+    live: 750_000,
+    under1h: 1_000_000,
+    under3h: 1_500_000,
+    under1d: 2_000_000
+  };
+  return maxByBucket[normalizeLivePairBucket(bucket)] || maxByBucket.live;
 }
 
 function livePairCandidateToRow(candidate) {
@@ -13441,6 +14113,9 @@ function livePairCandidateToRow(candidate) {
     profile.logo,
     profile.metadata?.image
   );
+  const websiteUrl = firstString(profile.websiteUrl, profile.website_url, profile.website, profile.url, profile.links?.website);
+  const twitterUrl = firstString(profile.twitterUrl, profile.twitter_url, profile.twitter, profile.xUrl, profile.links?.twitter, profile.links?.x);
+  const telegramUrl = firstString(profile.telegramUrl, profile.telegram_url, profile.telegram, profile.links?.telegram);
   const isPump = String(source).toLowerCase().includes("pump") || isPumpStyleToken({
     tokenMint: candidate.tokenMint,
     symbol,
@@ -13479,21 +14154,25 @@ function livePairCandidateToRow(candidate) {
     reasons: [],
     source,
     imageUrl,
+    websiteUrl,
+    twitterUrl,
+    telegramUrl,
     isPump,
     pumpUrl: isPump ? pumpFunUrl(candidate.tokenMint) : ""
   };
 }
 
-function livePairStatusMessage(count, stats = {}) {
+function livePairStatusMessage(count, stats = {}, bucket = "live") {
+  const label = livePairBucketLabel(bucket);
   if (stats.rpcSafetySkipped) {
-    return `Live Pairs found ${count} fresh launch(es). Trade safety runs before any buy.`;
+    return `${label} found ${count} pair(s). Trade safety runs before any buy.`;
   }
   const checked = Number(stats.accepted || 0);
   const pending = Number(stats.pending || 0);
   if (pending > 0) {
-    return `Live Pairs found ${count} fresh launch(es). ${checked} mint/freeze checked; ${pending} still settling on-chain.`;
+    return `${label} found ${count} pair(s). ${checked} mint/freeze checked; ${pending} still settling on-chain.`;
   }
-  return `Live Pairs found ${count} mint/freeze checked launch(es).`;
+  return `${label} found ${count} mint/freeze checked pair(s).`;
 }
 
 async function maybeFilterWebLivePairsForSafety(rows, limit = 12) {
@@ -13537,6 +14216,9 @@ async function enrichWebLivePairsForImages(rows) {
     let volume5m = firstNumber(dexMeta.volume?.m5, row.volume5m) || 0;
     let volumeH1 = firstNumber(dexMeta.volume?.h1, row.volumeH1) || 0;
     let pairCreatedAt = firstNumber(dexMeta.pairCreatedAt, row.pairCreatedAt) || null;
+    const websiteUrl = firstString(dexMeta.websiteUrl, row.websiteUrl);
+    const twitterUrl = firstString(dexMeta.twitterUrl, row.twitterUrl);
+    const telegramUrl = firstString(dexMeta.telegramUrl, row.telegramUrl);
 
     if (!imageUrl && webLivePairIsPump(row)) {
       const pumpMeta = await getPumpFunTokenMetadata(row.tokenMint, { timeoutMs: 900 }).catch(() => ({}));
@@ -13555,6 +14237,9 @@ async function enrichWebLivePairsForImages(rows) {
       symbol,
       name,
       imageUrl,
+      websiteUrl,
+      twitterUrl,
+      telegramUrl,
       marketCap,
       liquidityUsd,
       volume5m,
@@ -13577,21 +14262,24 @@ function webLivePairIsPump(row) {
     || isPumpStyleToken(row);
 }
 
-function isWebLivePairCandidate(item) {
+function isWebLivePairCandidate(item, bucket = "live") {
   const flags = new Set(item.riskFlags || []);
+  const safeBucket = normalizeLivePairBucket(bucket);
   const ageSeconds = Number(item.pairAgeSeconds);
   const ageMinutes = Number(item.pairAgeMinutes);
-  const freshEnough = !Number.isFinite(ageSeconds)
-    || ageSeconds <= 6 * 60 * 60
-    || Number.isFinite(ageMinutes) && ageMinutes <= 360
-    || isPumpStyleToken(item);
+  const marketCap = Number(item.marketCap || 0);
+  const minMarketCap = safeBucket === "live" ? 0 : 7_000;
+  const maxMarketCap = livePairMaxMarketCap(safeBucket);
+  const marketCapOk = safeBucket === "live"
+    ? (!marketCap || marketCap <= maxMarketCap)
+    : marketCap >= minMarketCap && marketCap <= maxMarketCap;
   const hasFreshActivity = Number(item.volume5m || 0) > 0
     || Number(item.volumeH1 || 0) > 0
     || Number(item.liquidityUsd || 0) > 0
     || Number.isFinite(ageSeconds) && ageSeconds <= 300
     || isPumpStyleToken(item);
-  return freshEnough
-    && (!Number(item.marketCap) || item.marketCap <= 750_000)
+  return isLivePairInBucket(item, safeBucket)
+    && marketCapOk
     && hasFreshActivity
     && !flags.has("hard dump")
     && !flags.has("sell pressure");
@@ -13689,9 +14377,13 @@ function webSniperRow(row) {
   const isPump = Boolean(row.isPump) || webLivePairIsPump(row);
   return {
     tokenMint: row.tokenMint,
+    shortMint: shortMint(row.tokenMint),
     symbol: row.symbol || shortMint(row.tokenMint),
     name: row.name || "Unknown",
     imageUrl: row.imageUrl || "",
+    websiteUrl: row.websiteUrl || "",
+    twitterUrl: row.twitterUrl || "",
+    telegramUrl: row.telegramUrl || "",
     isPump,
     pumpUrl: row.pumpUrl || (isPump ? pumpFunUrl(row.tokenMint) : ""),
     score: row.score,

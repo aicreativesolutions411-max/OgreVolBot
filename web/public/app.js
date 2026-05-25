@@ -59,6 +59,20 @@ function clearStoredXHandle() {
   }
 }
 
+function storedReferralCode() {
+  try {
+    const url = new URL(window.location.href);
+    const fromUrl = String(url.searchParams.get("ref") || "").replace(/[^a-z0-9]/gi, "").toUpperCase();
+    if (fromUrl) {
+      window.localStorage?.setItem("slimewireReferralCode", fromUrl);
+      return fromUrl;
+    }
+    return String(window.localStorage?.getItem("slimewireReferralCode") || "").replace(/[^a-z0-9]/gi, "").toUpperCase();
+  } catch {
+    return "";
+  }
+}
+
 const state = {
   token: getStoredToken(),
   user: null,
@@ -80,8 +94,12 @@ const state = {
   sniperResult: null,
   connectedWalletBalance: null,
   livePairs: null,
+  livePairsByBucket: {},
   livePairsLoading: false,
+  livePairsLoadingByBucket: {},
   livePairsLastUpdatedAt: "",
+  livePairsLastUpdatedByBucket: {},
+  livePairBucket: "live",
   launchResult: null,
   launchWatches: [],
   kolScan: null,
@@ -91,13 +109,22 @@ const state = {
   kolStatus: "",
   kolLoading: false,
   kolLastUpdatedAt: "",
+  presets: { trade: [], bundle: [] },
+  watchlist: { rows: [], count: 0 },
+  watchlistLoading: false,
+  selectedTradePresetId: "trade-default-scalp",
+  selectedBundlePresetId: "bundle-default-six",
   restoreResult: null,
   importResult: null,
   backupResult: null,
   downloads: null,
-  xHandle: getStoredXHandle()
+  xHandle: getStoredXHandle(),
+  loginCollapsed: true
 };
 let livePairsTimer = null;
+let scanTimer = null;
+let kolTimer = null;
+let watchlistTimer = null;
 
 const $ = (selector) => document.querySelector(selector);
 const writeText = (element, value) => {
@@ -106,11 +133,22 @@ const writeText = (element, value) => {
 const setText = (selector, value) => {
   writeText($(selector), value);
 };
+const setHidden = (selector, hidden) => {
+  const element = $(selector);
+  if (element) element.hidden = hidden;
+};
 const app = $("[data-app]");
 const loginView = $("[data-login]");
 const dashboardView = $("[data-dashboard]");
 const errorBox = $("[data-error]");
 const dashboardErrorBox = $("[data-dashboard-error]");
+
+const LIVE_PAIR_BUCKETS = [
+  ["live", "Live"],
+  ["under1h", "10-59m"],
+  ["under3h", "Under 3h"],
+  ["under1d", "Under 1d"]
+];
 
 function apiUrl(path) {
   return `${apiBase}${path}`;
@@ -173,7 +211,7 @@ async function api(path, options = {}) {
       }
       if (!response) {
         const detail = lastError?.name === "AbortError" ? "The request timed out." : "The browser blocked or could not open the request.";
-        throw new Error(`${detail} Could not reach OgreTrade right now. Try again in a moment or contact support.`);
+        throw new Error(`${detail} Could not reach SlimeWire right now. Try again in a moment or contact support.`);
       }
     }
   }
@@ -206,8 +244,8 @@ async function readApiJson(response) {
       ok: false,
       error: "invalid_api_response",
       message: contentType.includes("text/html")
-        ? "OgreTrade API returned a webpage instead of JSON. Check OGRE_API_BASE, WEB_ALLOWED_ORIGIN, and redeploy both Render and Cloudflare."
-        : `OgreTrade API returned invalid JSON${preview ? `: ${preview}` : "."}`
+        ? "SlimeWire API returned a webpage instead of JSON. Check OGRE_API_BASE, WEB_ALLOWED_ORIGIN, and redeploy both Render and Cloudflare."
+        : `SlimeWire API returned invalid JSON${preview ? `: ${preview}` : "."}`
     };
   }
 }
@@ -242,6 +280,19 @@ function resetWebSession(message = "") {
   setError(message || "Your web session expired. Log in, or tap Create Account to start a fresh session.");
 }
 
+async function ensureWebAccount(statusElement = null, message = "Creating secure web profile...") {
+  if (state.user && state.token) return state.user;
+  writeText(statusElement, message);
+  const data = await api("/api/web/signup", {
+    method: "POST",
+    body: JSON.stringify({ referralCode: storedReferralCode() })
+  });
+  state.token = data.token;
+  applyUserFromApi(data.user);
+  setStoredToken(state.token);
+  return state.user;
+}
+
 function setError(message = "") {
   [errorBox, dashboardErrorBox].forEach((box) => {
     if (!box) return;
@@ -268,11 +319,12 @@ async function createWebAccount() {
     writeText(status, credentials.username ? "Creating saved login..." : "Creating account...");
     const data = await api("/api/web/signup", {
       method: "POST",
-      body: JSON.stringify(credentials)
+      body: JSON.stringify({ ...credentials, referralCode: storedReferralCode() })
     });
     state.token = data.token;
     applyUserFromApi(data.user);
     setStoredToken(state.token);
+    state.loginCollapsed = true;
     state.activeTab = "dashboard";
     writeText(status, credentials.username ? "Account created. Login saved." : "Account created.");
     await loadAll();
@@ -295,6 +347,7 @@ async function passwordLogin() {
     state.token = data.token;
     applyUserFromApi(data.user);
     setStoredToken(state.token);
+    state.loginCollapsed = true;
     state.activeTab = "dashboard";
     writeText(status, "Logged in.");
     await loadAll();
@@ -313,11 +366,12 @@ async function createAccountAndConnectWallet() {
       writeText(status, credentials.username ? "Creating saved login..." : "Creating account...");
       const data = await api("/api/web/signup", {
         method: "POST",
-        body: JSON.stringify(credentials)
+        body: JSON.stringify({ ...credentials, referralCode: storedReferralCode() })
       });
       state.token = data.token;
       applyUserFromApi(data.user);
       setStoredToken(state.token);
+      state.loginCollapsed = true;
       await loadAll();
     }
     state.activeTab = "profile";
@@ -329,6 +383,12 @@ async function createAccountAndConnectWallet() {
 }
 
 async function logout() {
+  if (!state.user) {
+    state.loginCollapsed = false;
+    render();
+    loginView?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    return;
+  }
   try {
     await api("/api/web/logout", { method: "POST" });
   } catch {
@@ -358,16 +418,31 @@ async function loadSession() {
 }
 
 async function loadAll() {
+  if (!state.user || !state.token) {
+    state.wallets = [];
+    state.balances = [];
+    state.positions = [];
+    state.pnl = null;
+    state.connectedWalletBalance = null;
+    state.launchWatches = [];
+    state.presets = { trade: [], bundle: [] };
+    state.watchlist = { rows: [], count: 0 };
+    render();
+    return;
+  }
+
   state.loading = true;
   render();
 
   try {
-    const [wallets, balances, positions, pnl, launchWatches] = await Promise.all([
+    const [wallets, balances, positions, pnl, launchWatches, presets, watchlist] = await Promise.all([
       api("/api/web/wallets"),
       api("/api/web/balances"),
       api("/api/web/positions"),
       api("/api/web/pnl"),
-      api("/api/web/launch/watches")
+      api("/api/web/launch/watches"),
+      api("/api/web/presets"),
+      api("/api/web/watchlist")
     ]);
     state.wallets = wallets.wallets || [];
     state.balances = balances.balances || [];
@@ -375,26 +450,64 @@ async function loadAll() {
     state.positions = positions.positions || [];
     state.pnl = pnl.pnl || null;
     state.launchWatches = launchWatches.watches || [];
+    state.presets = presets.presets || { trade: [], bundle: [] };
+    state.watchlist = watchlist.watchlist || { rows: [], count: 0 };
   } finally {
     state.loading = false;
     render();
   }
 }
 
-async function loadLivePairs({ silent = false } = {}) {
-  state.livePairsLoading = true;
-  if (!silent) state.loading = true;
-  render();
+function normalizeLivePairBucket(bucket) {
+  const value = String(bucket || "live");
+  return LIVE_PAIR_BUCKETS.some(([id]) => id === value) ? value : "live";
+}
+
+function currentLivePairs() {
+  return state.livePairsByBucket[state.livePairBucket] || state.livePairs || null;
+}
+
+function currentLivePairsUpdatedAt() {
+  return state.livePairsLastUpdatedByBucket[state.livePairBucket] || state.livePairsLastUpdatedAt || "";
+}
+
+async function loadLivePairs({ silent = false, bucket = state.livePairBucket, renderOnComplete = true } = {}) {
+  const safeBucket = normalizeLivePairBucket(bucket);
+  const isActiveBucket = safeBucket === state.livePairBucket;
+  state.livePairsLoadingByBucket = { ...state.livePairsLoadingByBucket, [safeBucket]: true };
+  state.livePairsLoading = Boolean(state.livePairsLoadingByBucket[state.livePairBucket]);
+  if (!silent && isActiveBucket) state.loading = true;
+  if (isActiveBucket || !silent) render();
 
   try {
-    const data = await api("/api/web/live-pairs");
-    state.livePairs = data.livePairs;
-    state.livePairsLastUpdatedAt = data.livePairs?.refreshedAt || new Date().toISOString();
+    const data = await api(`/api/web/live-pairs?bucket=${encodeURIComponent(safeBucket)}`);
+    const value = data.livePairs;
+    const updatedAt = value?.refreshedAt || new Date().toISOString();
+    state.livePairsByBucket = { ...state.livePairsByBucket, [safeBucket]: value };
+    state.livePairsLastUpdatedByBucket = { ...state.livePairsLastUpdatedByBucket, [safeBucket]: updatedAt };
+    if (isActiveBucket) {
+      state.livePairs = value;
+      state.livePairsLastUpdatedAt = updatedAt;
+    }
   } finally {
-    state.livePairsLoading = false;
-    if (!silent) state.loading = false;
-    render();
+    const nextLoading = { ...state.livePairsLoadingByBucket };
+    delete nextLoading[safeBucket];
+    state.livePairsLoadingByBucket = nextLoading;
+    state.livePairsLoading = Boolean(nextLoading[state.livePairBucket]);
+    if (!silent && isActiveBucket) state.loading = false;
+    if (renderOnComplete) render();
   }
+}
+
+async function refreshLivePairBuckets({ silent = false } = {}) {
+  await loadLivePairs({ silent, bucket: state.livePairBucket });
+  const otherBuckets = LIVE_PAIR_BUCKETS
+    .map(([bucket]) => bucket)
+    .filter((bucket) => bucket !== state.livePairBucket);
+  await Promise.allSettled(otherBuckets.map((bucket) => (
+    loadLivePairs({ silent: true, bucket, renderOnComplete: false })
+  )));
+  if (state.activeTab === "live") render();
 }
 
 function scheduleLivePairsAutoRefresh() {
@@ -403,39 +516,79 @@ function scheduleLivePairsAutoRefresh() {
     livePairsTimer = null;
   }
 
-  if (!state.user || state.activeTab !== "live") return;
-  const refreshSeconds = Number(state.livePairs?.refreshSeconds || 30);
+  if (state.activeTab !== "live") return;
+  const refreshSeconds = Number(currentLivePairs()?.refreshSeconds || 30);
   const delayMs = Math.max(3, refreshSeconds) * 1000;
   livePairsTimer = setTimeout(() => {
-    if (!state.user || state.activeTab !== "live" || state.livePairsLoading) return;
-    loadLivePairs({ silent: true }).catch((error) => setError(error.message));
+    if (state.activeTab !== "live" || state.livePairsLoading) return;
+    refreshLivePairBuckets({ silent: true }).catch((error) => setError(error.message));
   }, delayMs);
 }
 
-async function loadScan(mode = state.scanMode) {
+function scheduleScannerAutoRefresh() {
+  if (scanTimer) {
+    clearTimeout(scanTimer);
+    scanTimer = null;
+  }
+  if (state.activeTab !== "sniper") return;
+  scanTimer = setTimeout(() => {
+    if (state.activeTab !== "sniper" || state.loading) return;
+    loadScan(state.scanMode, { silent: true }).catch((error) => setError(error.message));
+  }, 20_000);
+}
+
+function scheduleKolAutoRefresh() {
+  if (kolTimer) {
+    clearTimeout(kolTimer);
+    kolTimer = null;
+  }
+  if (state.activeTab !== "kol" || state.kolWallet) return;
+  kolTimer = setTimeout(() => {
+    if (state.activeTab !== "kol" || state.kolLoading || state.kolWallet) return;
+    loadKolScan(state.kolMode, "", { silent: true }).catch((error) => setError(error.message));
+  }, 60_000);
+}
+
+function scheduleWatchlistAutoRefresh() {
+  if (watchlistTimer) {
+    clearTimeout(watchlistTimer);
+    watchlistTimer = null;
+  }
+  if (state.activeTab !== "watchlist" || !state.user || !state.token) return;
+  watchlistTimer = setTimeout(() => {
+    if (state.activeTab !== "watchlist") return;
+    loadWatchlist({ silent: true }).catch((error) => setError(error.message));
+  }, 30_000);
+}
+
+async function loadScan(mode = state.scanMode, options = {}) {
+  const silent = Boolean(options.silent);
   state.scanMode = mode;
-  state.loading = true;
-  render();
+  if (!silent) {
+    state.loading = true;
+    render();
+  }
 
   try {
     const data = await api(`/api/web/sniper/scan?mode=${encodeURIComponent(mode)}`);
     state.scan = data.scan;
   } finally {
-    state.loading = false;
+    if (!silent) state.loading = false;
     render();
   }
 }
 
-async function loadKolScan(mode = state.kolMode, wallet = state.kolWallet) {
+async function loadKolScan(mode = state.kolMode, wallet = state.kolWallet, options = {}) {
+  const silent = Boolean(options.silent);
   state.kolMode = mode;
   state.kolWallet = String(wallet || "").trim();
-  state.loading = true;
+  if (!silent) state.loading = true;
   state.kolLoading = true;
   state.kolStatus = state.kolWallet
     ? "Scanning custom KOL wallet..."
     : `Loading ${kolModeLabel(state.kolMode)}...`;
   setError("");
-  render();
+  if (!silent) render();
 
   try {
     const params = new URLSearchParams({ mode });
@@ -448,8 +601,22 @@ async function loadKolScan(mode = state.kolMode, wallet = state.kolWallet) {
     state.kolStatus = error.message || "KOL scan failed.";
     throw error;
   } finally {
-    state.loading = false;
+    if (!silent) state.loading = false;
     state.kolLoading = false;
+    render();
+  }
+}
+
+async function loadWatchlist(options = {}) {
+  if (!state.user || !state.token) return;
+  const silent = Boolean(options.silent);
+  state.watchlistLoading = true;
+  if (!silent) render();
+  try {
+    const data = await api("/api/web/watchlist");
+    state.watchlist = data.watchlist || { rows: [], count: 0 };
+  } finally {
+    state.watchlistLoading = false;
     render();
   }
 }
@@ -461,14 +628,10 @@ function totalSol() {
 function render() {
   if (!app || !loginView || !dashboardView) return;
   app.dataset.loading = state.loading ? "true" : "false";
-  loginView.hidden = Boolean(state.user);
-  dashboardView.hidden = !state.user;
+  loginView.hidden = Boolean(state.user) || state.loginCollapsed;
+  dashboardView.hidden = false;
 
-  if (!state.user) {
-    return;
-  }
-
-  setText("[data-user-id]", state.user.id);
+  setText("[data-user-id]", state.user?.id || "guest");
   setText("[data-wallet-count]", state.wallets.length);
   setText("[data-total-sol]", totalSol().toFixed(4));
   setText("[data-position-count]", state.positions.length);
@@ -478,7 +641,14 @@ function render() {
   const connectedWallet = state.user?.connectedWallet || null;
   setText("[data-connected-wallet-summary]", connectedWallet
     ? `${connectedWallet.provider || "Browser wallet"} connected: ${shortAddress(connectedWallet.publicKey)}`
-    : "No browser wallet connected.");
+    : state.user
+      ? "No browser wallet connected."
+      : "Browse scans now. Create or connect only when you are ready.");
+  const logoutButton = $("[data-logout]");
+  if (logoutButton) {
+    logoutButton.hidden = false;
+    writeText(logoutButton, state.user ? "Log Out" : "Log In");
+  }
   renderTabs();
 }
 
@@ -498,6 +668,7 @@ function renderTabs() {
   if (state.activeTab === "bundle") panel.innerHTML = bundleHtml();
   if (state.activeTab === "volume") panel.innerHTML = volumeHtml();
   if (state.activeTab === "live") panel.innerHTML = livePairsHtml();
+  if (state.activeTab === "watchlist") panel.innerHTML = watchlistHtml();
   if (state.activeTab === "launch") panel.innerHTML = launchHtml();
   if (state.activeTab === "kol") panel.innerHTML = kolHtml();
   if (state.activeTab === "wallets") panel.innerHTML = walletsHtml();
@@ -506,6 +677,9 @@ function renderTabs() {
   if (state.activeTab === "sniper") panel.innerHTML = sniperHtml();
   syncCustomFields(panel);
   scheduleLivePairsAutoRefresh();
+  scheduleScannerAutoRefresh();
+  scheduleKolAutoRefresh();
+  scheduleWatchlistAutoRefresh();
 }
 
 function dashboardHtml() {
@@ -533,6 +707,7 @@ function profileHtml() {
     ${connectWalletSection()}
     ${profilePfpSection()}
     ${xConnectSection()}
+    ${referralSection()}
   `;
 }
 
@@ -784,6 +959,34 @@ function xConnectSection() {
   `;
 }
 
+function referralSection() {
+  const code = state.user?.referralCode || "";
+  const link = state.user?.referralLink || (code ? `${shareSiteUrl}?ref=${encodeURIComponent(code)}` : "");
+  return `
+    <section class="create-wallet-card referral-card">
+      <div>
+        <h3>Referral + Trader Board</h3>
+        <p>Share SlimeWire and optionally earn the referral split on users you bring in. The trader board is opt-in only.</p>
+      </div>
+      <label>
+        Referral Payout Wallet
+        <input data-referral-wallet type="text" placeholder="Wallet for referral fees" value="${escapeHtml(state.user?.referralPayoutWallet || "")}">
+      </label>
+      <label class="checkbox-line">
+        <input data-show-trader-board type="checkbox" ${state.user?.showOnTraderBoard ? "checked" : ""}>
+        Show me on Top SlimeWire Traders
+      </label>
+      <div class="card-actions">
+        <button type="button" class="primary" data-save-referral>Save Referral</button>
+        ${link ? `<button type="button" data-copy="${escapeHtml(link)}">Copy Link</button>` : ""}
+        ${link ? xShareButton(`Trade faster on SlimeWire. Referral: ${link}`, "Share X") : ""}
+        ${link ? telegramShareButton(`Trade faster on SlimeWire. Referral: ${link}`, "Share TG") : ""}
+      </div>
+      <small data-referral-status>${code ? `Your code: ${escapeHtml(code)}${state.user?.referredByCode ? ` | Referred by ${escapeHtml(state.user.referredByCode)}` : ""}` : "Create or log in to get a referral code."}</small>
+    </section>
+  `;
+}
+
 function backupRestoreSection() {
   return `
     <section class="create-wallet-card restore-card">
@@ -846,16 +1049,22 @@ function xShareButton(text, label = "Share X") {
   return `<button type="button" data-share-x data-share-text="${escapeHtml(text)}">${escapeHtml(label)}</button>`;
 }
 
+function telegramShareButton(text, label = "TG") {
+  const body = shareTextWithSite(text);
+  const url = `https://t.me/share/url?url=${encodeURIComponent(shareSiteUrl)}&text=${encodeURIComponent(body)}`;
+  return `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`;
+}
+
 function shareTextWithSite(text) {
   const base = String(text || "").replace(/\s+/g, " ").trim();
   const body = base.length > 210 ? `${base.slice(0, 207).trim()}...` : base;
-  return `${body} Traded on SlimeWire.`;
+  return `${body} ${shareSiteUrl}`;
 }
 
 function tradeShareText(row) {
   const isBuy = row.type === "buy";
   const amount = isBuy ? `${row.spentSol} SOL` : `${row.netSol} SOL`;
-  return `${isBuy ? "Bought" : "Sold"} ${row.shortMint || shortAddress(row.tokenMint)} for ${amount} from the Ogre Trade Panel.`;
+  return `${isBuy ? "Bought" : "Sold"} ${row.shortMint || shortAddress(row.tokenMint)} for ${amount}. Chart ${dexUrl(row.tokenMint)}`;
 }
 
 function bundleShareText(row) {
@@ -876,11 +1085,11 @@ function positionShareText(position) {
 }
 
 function sniperShareText(row) {
-  return `Watching ${row.symbol || shortAddress(row.tokenMint)} from ${state.scan?.label || "OgreSniper"}: score ${row.score}/100, MC ${row.marketCapLabel}, liq ${row.liquidityLabel}.`;
+  return `Watching ${row.symbol || shortAddress(row.tokenMint)}: score ${row.score}/100, MC ${row.marketCapLabel}, liq ${row.liquidityLabel}. Chart ${dexUrl(row.tokenMint)}`;
 }
 
 function kolShareText(row) {
-  return `KOL signal ${row.symbol || shortAddress(row.tokenMint)}: score ${row.score || 0}/100, value ${row.valueLabel || "$0"}, signal ${row.winRateLabel || "n/a"}.`;
+  return `KOL signal ${row.symbol || shortAddress(row.tokenMint)}: score ${row.score || 0}/100, value ${row.valueLabel || "$0"}, signal ${row.winRateLabel || "n/a"}. Chart ${dexUrl(row.tokenMint)}`;
 }
 
 function kolProfileShareText(kol) {
@@ -894,13 +1103,15 @@ function launchShareText(watch) {
 
 function manualCoinWatchShareText(value) {
   const text = String(value || "").trim();
-  return `Watching ${text.startsWith("$") ? text : text.length > 30 ? shortAddress(text) : `$${text.replace(/^\$+/, "")}`} from the Ogre Trade Panel.`;
+  const label = text.startsWith("$") ? text : text.length > 30 ? shortAddress(text) : `$${text.replace(/^\$+/, "")}`;
+  const chart = text.length > 30 ? ` Chart ${dexUrl(text)}` : "";
+  return `Watching ${label}.${chart}`;
 }
 
 function manualKolWatchShareText(value) {
   const text = String(value || "").trim();
   const label = text.startsWith("@") ? text : text.length > 30 ? shortAddress(text) : `@${text.replace(/^@+/, "")}`;
-  return `Watching KOL ${label} from the Ogre Trade Panel.`;
+  return `Watching KOL ${label}.`;
 }
 
 function userAvatarHtml(fallback = "SW") {
@@ -1191,6 +1402,7 @@ function tradeHtml() {
           <code>${state.tradeToken ? escapeHtml(state.tradeToken) : "Paste a CA or tap Trade from a scanner pick."}</code>
           ${state.tradeToken ? `<div class="card-actions">${xShareButton(manualCoinWatchShareText(state.tradeToken), "Share Watch")}</div>` : ""}
         </article>
+        ${tradePresetManagerHtml()}
         <article>
           <h3>Balance Check</h3>
           <p>Refresh wallet balances and open positions without leaving this account.</p>
@@ -1424,6 +1636,7 @@ function bundleHtml() {
             ${state.bundleToken ? xShareButton(manualCoinWatchShareText(state.bundleToken), "Share Token") : ""}
           </div>
         </article>
+        ${bundlePresetManagerHtml()}
         ${bundleResultHtml()}
       </aside>
     </section>
@@ -1485,6 +1698,101 @@ function fieldValue(selectSelector, customSelector, fallback = "") {
   const custom = $(customSelector)?.value?.trim();
   if (!custom) throw new Error("Enter the custom value first.");
   return custom;
+}
+
+function presetOptionsHtml(kind, selectedId = "") {
+  const presets = state.presets?.[kind] || [];
+  if (!presets.length) return `<option value="custom">Custom / manual</option>`;
+  return `
+    ${presets.map((preset) => `<option value="${escapeHtml(preset.id)}" ${preset.id === selectedId ? "selected" : ""}>${escapeHtml(preset.name)}</option>`).join("")}
+    <option value="custom">Custom / manual</option>
+  `;
+}
+
+function fastPresetToolbarHtml(context = "scanner") {
+  return `
+    <section class="preset-toolbar">
+      <label>
+        Fast Trade Preset
+        <select data-fast-trade-preset="${escapeHtml(context)}">
+          ${presetOptionsHtml("trade", state.selectedTradePresetId)}
+        </select>
+      </label>
+      <label>
+        Fast Bundle Preset
+        <select data-fast-bundle-preset="${escapeHtml(context)}">
+          ${presetOptionsHtml("bundle", state.selectedBundlePresetId)}
+        </select>
+      </label>
+      <button type="button" data-tab="trade">Edit Trade Presets</button>
+      <button type="button" data-tab="bundle">Edit Bundle Presets</button>
+    </section>
+  `;
+}
+
+function tradePresetManagerHtml() {
+  return `
+    <article class="preset-card">
+      <h3>Trade Presets</h3>
+      <p>Save up to five one-wallet presets for instant Trade buttons on scanners, watchlists, and KOL signals.</p>
+      <label>Name <input data-trade-preset-name type="text" placeholder="Fast scalp"></label>
+      <label>Wallet <select data-trade-preset-wallet>${walletOptionsHtml()}</select></label>
+      <div class="volume-grid compact-grid">
+        <label>Buy SOL <input data-trade-preset-amount type="number" min="0" step="0.01" value="0.1"></label>
+        <label>Take Profit <input data-trade-preset-tp type="text" value="25"></label>
+        <label>Stop Loss <input data-trade-preset-sl type="text" value="8"></label>
+        <label>Timer <input data-trade-preset-delay type="text" value="off"></label>
+        <label>Exit % <input data-trade-preset-sell-percent type="number" min="1" max="100" value="100"></label>
+        <label>Slippage BPS <input data-trade-preset-slippage type="number" min="1" max="5000" value="400"></label>
+      </div>
+      <div class="card-actions">
+        <button type="button" class="primary" data-save-preset="trade">Save Trade Preset</button>
+      </div>
+      ${presetListHtml("trade")}
+      <small data-trade-preset-status></small>
+    </article>
+  `;
+}
+
+function bundlePresetManagerHtml() {
+  return `
+    <article class="preset-card">
+      <h3>Bundle Presets</h3>
+      <p>Save up to five multi-wallet presets for instant Bundle buttons on scanners, watchlists, and KOL signals.</p>
+      <label>Name <input data-bundle-preset-name type="text" placeholder="Six wallet send"></label>
+      <div class="wallet-checks preset-wallets">${walletChecksHtml("bundle-preset")}</div>
+      ${walletGroupHtml("bundle-preset")}
+      <div class="volume-grid compact-grid">
+        <label>Buy SOL <input data-bundle-preset-amount type="number" min="0" step="0.01" value="0.1"></label>
+        <label>Take Profit <input data-bundle-preset-tp type="text" value="60"></label>
+        <label>Stop Loss <input data-bundle-preset-sl type="text" value="10"></label>
+        <label>Timer <input data-bundle-preset-delay type="text" value="off"></label>
+        <label>Exit % <input data-bundle-preset-sell-percent type="number" min="1" max="100" value="100"></label>
+        <label>Slippage BPS <input data-bundle-preset-slippage type="number" min="1" max="5000" value="400"></label>
+      </div>
+      <div class="card-actions">
+        <button type="button" class="primary" data-save-preset="bundle">Save Bundle Preset</button>
+      </div>
+      ${presetListHtml("bundle")}
+      <small data-bundle-preset-status></small>
+    </article>
+  `;
+}
+
+function presetListHtml(kind) {
+  const presets = state.presets?.[kind] || [];
+  if (!presets.length) return `<p class="muted">No presets loaded yet.</p>`;
+  return `
+    <div class="preset-list">
+      ${presets.map((preset) => `
+        <div class="preset-pill" data-readonly="${preset.readonly ? "true" : "false"}">
+          <span>${escapeHtml(preset.name)}</span>
+          <small>${escapeHtml(preset.amountSol)} SOL | TP ${escapeHtml(preset.takeProfitPct)} | SL ${escapeHtml(preset.stopLossPct)} | ${escapeHtml(preset.sellDelay || "off")}</small>
+          ${preset.readonly ? "" : `<button type="button" data-delete-preset="${escapeHtml(kind)}" data-preset-id="${escapeHtml(preset.id)}">Delete</button>`}
+        </div>
+      `).join("")}
+    </div>
+  `;
 }
 
 function timerSellSummary(row) {
@@ -1861,6 +2169,7 @@ function kolHtml() {
       <button data-kol-mode="top" data-active="${state.kolMode === "top"}" ${disabled}>Top KOLs</button>
       <button data-kol-mode="consistent" data-active="${state.kolMode === "consistent"}" ${disabled}>Consistent</button>
       <button data-kol-mode="fresh" data-active="${state.kolMode === "fresh"}" ${disabled}>Fresh</button>
+      <button data-kol-mode="slimewire" data-active="${state.kolMode === "slimewire"}" ${disabled}>Top SlimeWire</button>
       <button data-kol-refresh ${disabled}>${state.kolLoading ? "Scanning..." : "Refresh"}</button>
     </section>
     <p class="scan-meta">${escapeHtml(kolModeDescription(state.kolMode))}</p>
@@ -1987,7 +2296,9 @@ function kolHtml() {
       </aside>
     </section>
     ${state.kolScan?.kols?.length ? kolSummaryHtml() : ""}
-    ${state.kolScan ? kolRowsHtml() : emptyState("No KOL scan loaded", "Pick a KOL mode or tap Refresh.")}
+    ${state.kolMode === "slimewire" && state.kolScan
+      ? state.kolScan.kols?.length ? "" : emptyState("No SlimeWire traders yet", "Traders appear here only after they opt in from Profile and have site trade history.")
+      : state.kolScan ? kolRowsHtml() : emptyState("No KOL scan loaded", "Pick a KOL mode or tap Refresh.")}
   `;
 }
 
@@ -2008,7 +2319,8 @@ function kolModeLabel(mode) {
     hot: "Hot Buys",
     top: "Top KOLs",
     consistent: "Consistent",
-    fresh: "Fresh"
+    fresh: "Fresh",
+    slimewire: "Top SlimeWire Traders"
   };
   return map[mode] || map.hot;
 }
@@ -2018,7 +2330,8 @@ function kolModeDescription(mode) {
     hot: "Recent high-performing KOLs and the strongest current positions they are holding.",
     top: "Best ranked KOL wallets by realized performance, then their highest-value current token positions.",
     consistent: "KOLs ranked by consistency/win rate from the available leaderboard, then filtered into cleaner copyable positions.",
-    fresh: "KOL wallets with the newest activity first, useful when you want faster signal flow."
+    fresh: "KOL wallets with the newest activity first, useful when you want faster signal flow.",
+    slimewire: "Opt-in SlimeWire users ranked by closed trades and recent activity."
   };
   return map[mode] || map.hot;
 }
@@ -2084,56 +2397,12 @@ function kolRowsHtml() {
       scan.message || "Try Refresh or another mode."
     );
   }
-  return `
-    <section class="pick-grid">
-      ${scan.rows.slice(0, 12).map((row, index) => {
-        const isCluster = row.source === "made_on_sol_hot" && !row.kolWallet;
-        const kolLabel = isCluster ? "KOLs" : "KOL";
-        const kolValue = isCluster ? (row.winRateLabel || row.kolName || "cluster") : (row.kolName || "Unknown");
-        const roiLabel = isCluster ? "Market Cap" : "KOL ROI";
-        const realizedLabel = isCluster ? "Buys" : "Realized";
-        return `
-          <article class="pick-card kol-card">
-            <div class="kol-token-head">
-              ${livePairAvatarHtml(row)}
-              <div>
-                <div class="pick-top">
-                  <span>${index + 1}</span>
-                  <strong>${escapeHtml(row.symbol || "KOL Signal")}</strong>
-                  <em>${escapeHtml(row.signalType || "KOL signal")}</em>
-                </div>
-                <h3>${escapeHtml(row.name || "")}</h3>
-                <div class="kol-source-row">
-                  ${kolAvatarMarkup(row, "kol-avatar tiny")}
-                  <span>${escapeHtml(kolValue)}</span>
-                </div>
-              </div>
-            </div>
-            <code>${escapeHtml(row.tokenMint)}</code>
-            <dl>
-              <div><dt>Score</dt><dd>${escapeHtml(row.score || 0)}/100</dd></div>
-              <div><dt>${kolLabel}</dt><dd>${escapeHtml(kolValue)}</dd></div>
-              <div><dt>Value</dt><dd>${escapeHtml(row.valueLabel || "$0")}</dd></div>
-              <div><dt>Signal</dt><dd>${escapeHtml(row.winRateLabel || "n/a")}</dd></div>
-              <div><dt>${roiLabel}</dt><dd>${escapeHtml(row.roiLabel || "n/a")}</dd></div>
-              <div><dt>${realizedLabel}</dt><dd>${escapeHtml(row.realizedLabel || "n/a")}</dd></div>
-            </dl>
-            <div class="card-actions">
-            <button data-kol-copy="${escapeHtml(row.tokenMint)}">Buy Position</button>
-            <button data-kol-trade="${escapeHtml(row.tokenMint)}">Trade</button>
-            <button data-kol-bundle="${escapeHtml(row.tokenMint)}">Bundle</button>
-            ${xShareButton(kolShareText(row), "Share Signal")}
-            ${row.kolWallet ? `<button data-kol-copy-wallet="${escapeHtml(row.kolWallet)}">Copy Wallet</button>` : ""}
-            ${row.pumpUrl ? `<a href="${escapeHtml(row.pumpUrl)}" target="_blank" rel="noreferrer">Pump</a>` : ""}
-            <a href="${escapeHtml(row.dexUrl)}" target="_blank" rel="noreferrer">Chart</a>
-              ${row.kolscanUrl || row.kolWallet ? `<a href="${escapeHtml(row.kolscanUrl || kolscanUrl(row.kolWallet))}" target="_blank" rel="noreferrer">KOLscan</a>` : ""}
-              <button data-copy="${escapeHtml(row.tokenMint)}">Copy CA</button>
-            </div>
-          </article>
-        `;
-      }).join("")}
-    </section>
-  `;
+  return tokenSignalRowsHtml(scan.rows.slice(0, 18), {
+    context: "kol",
+    primaryAction: "quickTrade",
+    primaryActionLabel: "Trade",
+    shareBuilder: kolShareText
+  });
 }
 
 async function createWalletSet() {
@@ -2154,6 +2423,7 @@ async function createWalletSet() {
     if (!Number.isInteger(count) || count < 1 || count > 20) {
       throw new Error("Wallet count must be from 1 to 20.");
     }
+    await ensureWebAccount(status, "Creating secure web profile for wallet backups...");
     const data = await api("/api/web/wallets/create", {
       method: "POST",
       body: JSON.stringify({
@@ -2201,6 +2471,7 @@ async function restoreWalletBackup() {
 
   writeText(status, "Restoring wallets...");
   try {
+    await ensureWebAccount(status, "Creating secure web profile for restored wallets...");
     const data = await api("/api/web/wallets/restore", {
       method: "POST",
       body: JSON.stringify({ backupText })
@@ -2231,6 +2502,7 @@ async function exportWalletBackup() {
 
   writeText(status, "Building backup files...");
   try {
+    await ensureWebAccount(status, "Opening secure web profile...");
     const data = await api("/api/web/wallets/export", {
       method: "POST",
       body: JSON.stringify({})
@@ -2266,6 +2538,7 @@ async function importWallet() {
 
   writeText(status, "Importing wallet...");
   try {
+    await ensureWebAccount(status, "Creating secure web profile for imported wallet...");
     const data = await api("/api/web/wallets/import", {
       method: "POST",
       body: JSON.stringify({ label, secret })
@@ -2328,6 +2601,7 @@ async function connectXAccount() {
 
   try {
     writeText(status, openedWindow ? `Opening X and saving @${handle}...` : `Saving @${handle}. Allow popups if X did not open.`);
+    await ensureWebAccount(status, "Creating secure web profile for X sharing...");
     const data = await api("/api/web/profile/x", {
       method: "POST",
       body: JSON.stringify({ xHandle: handle })
@@ -2356,6 +2630,14 @@ async function disconnectXAccount() {
   const status = $("[data-x-status]");
   const input = $("[data-x-handle]");
   try {
+    if (!state.user || !state.token) {
+      state.xHandle = "";
+      if (input) input.value = "";
+      clearStoredXHandle();
+      writeText(status, "X unlinked. Enter a new handle any time and tap Save X Handle.");
+      render();
+      return;
+    }
     const data = await api("/api/web/profile/x", {
       method: "POST",
       body: JSON.stringify({ clear: true })
@@ -2376,6 +2658,7 @@ async function updateProfileAvatar(payload, statusText = "Saving PFP...") {
   const status = $("[data-avatar-status]");
   writeText(status, statusText);
   try {
+    await ensureWebAccount(status, "Creating secure web profile for PFP...");
     const data = await api("/api/web/profile/avatar", {
       method: "POST",
       body: JSON.stringify(payload)
@@ -2479,6 +2762,7 @@ async function connectBrowserWallet(providerId) {
     const publicKey = result?.publicKey || provider.publicKey;
     const publicKeyText = publicKey?.toBase58?.() || publicKey?.toString?.() || "";
     if (!publicKeyText) throw new Error("Wallet connected, but no public address was returned.");
+    await ensureWebAccount(status, "Creating secure web profile for connected wallet...");
     const data = await api("/api/web/profile/connected-wallet", {
       method: "POST",
       body: JSON.stringify({
@@ -2507,6 +2791,12 @@ async function connectBrowserWallet(providerId) {
 
 async function disconnectBrowserWallet() {
   const status = $("[data-wallet-connect-status]");
+  if (!state.user || !state.token) {
+    state.connectedWalletBalance = null;
+    writeText(status, "Connected wallet removed.");
+    render();
+    return;
+  }
   try {
     const providerName = state.user?.connectedWallet?.provider || "";
     const provider = providerName.toLowerCase().includes("phantom")
@@ -2551,6 +2841,7 @@ async function saveLoginCredentials() {
   }
 
   try {
+    await ensureWebAccount(status, "Creating secure web profile...");
     writeText(status, "Saving login...");
     const data = await api("/api/web/profile/credentials", {
       method: "POST",
@@ -3029,6 +3320,192 @@ async function executeBundlePlan() {
   }
 }
 
+function presetById(kind, id) {
+  return (state.presets?.[kind] || []).find((preset) => preset.id === id) || null;
+}
+
+async function quickPresetTrade(tokenMint) {
+  const preset = presetById("trade", state.selectedTradePresetId);
+  if (!preset || state.selectedTradePresetId === "custom") {
+    state.tradeToken = tokenMint;
+    state.activeTab = "trade";
+    render();
+    return;
+  }
+  try {
+    await ensureWebAccount(null, "Opening secure web profile...");
+    if (!state.wallets.some((wallet) => String(wallet.index) === String(preset.walletIndex || "1"))) {
+      throw new Error("This trade preset wallet is not loaded. Edit it in the Trade tab.");
+    }
+    const payload = {
+      tokenMint,
+      walletIndex: preset.walletIndex || "1",
+      amountSol: preset.amountSol,
+      slippageBps: preset.slippageBps,
+      autoExit: true,
+      takeProfitPct: preset.takeProfitPct,
+      stopLossPct: preset.stopLossPct,
+      sellDelay: preset.sellDelay || "off",
+      sellPercent: preset.sellPercent || "100"
+    };
+    setError("");
+    const data = await api("/api/web/trade/buy", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    state.tradeResult = data.trade;
+    if (data.trade?.autoExitPlan) state.tradePlanResult = data.trade.autoExitPlan;
+    state.tradeToken = tokenMint;
+    await loadAll();
+    state.activeTab = "trade";
+    render();
+  } catch (error) {
+    setError(error.message);
+  }
+}
+
+async function quickPresetBundle(tokenMint) {
+  const preset = presetById("bundle", state.selectedBundlePresetId);
+  if (!preset || state.selectedBundlePresetId === "custom") {
+    state.bundleToken = tokenMint;
+    state.activeTab = "bundle";
+    render();
+    return;
+  }
+  try {
+    await ensureWebAccount(null, "Opening secure web profile...");
+    const payload = {
+      tokenMint,
+      walletIndexes: (preset.walletIndexes || []).filter((index) => state.wallets.some((wallet) => String(wallet.index) === String(index))),
+      walletGroup: preset.walletGroup || "",
+      amountSol: preset.amountSol,
+      percent: "100",
+      slippageBps: preset.slippageBps,
+      sellDelay: preset.sellDelay || "off",
+      takeProfitPct: preset.takeProfitPct,
+      stopLossPct: preset.stopLossPct,
+      sellPercent: preset.sellPercent || "100",
+      loopCount: "1",
+      loopDelay: "0"
+    };
+    if (!payload.walletIndexes.length && !payload.walletGroup) {
+      throw new Error("This bundle preset does not match any loaded wallets. Edit it in the Bundle tab.");
+    }
+    setError("");
+    const data = await api("/api/web/bundle/plan", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    state.bundleResult = data.plan;
+    state.bundleToken = tokenMint;
+    await loadAll();
+    state.activeTab = "bundle";
+    render();
+  } catch (error) {
+    setError(error.message);
+  }
+}
+
+function readPresetForm(kind) {
+  if (kind === "trade") {
+    return {
+      name: $("[data-trade-preset-name]")?.value || "Trade Preset",
+      walletIndex: $("[data-trade-preset-wallet]")?.value || "1",
+      amountSol: $("[data-trade-preset-amount]")?.value || "0.1",
+      takeProfitPct: $("[data-trade-preset-tp]")?.value || "25",
+      stopLossPct: $("[data-trade-preset-sl]")?.value || "8",
+      sellDelay: $("[data-trade-preset-delay]")?.value || "off",
+      sellPercent: $("[data-trade-preset-sell-percent]")?.value || "100",
+      slippageBps: $("[data-trade-preset-slippage]")?.value || "400"
+    };
+  }
+  return {
+    name: $("[data-bundle-preset-name]")?.value || "Bundle Preset",
+    walletIndexes: checkedWalletIndexes("bundle-preset"),
+    walletGroup: $("[data-bundle-preset-group]")?.value?.trim() || "",
+    amountSol: $("[data-bundle-preset-amount]")?.value || "0.1",
+    takeProfitPct: $("[data-bundle-preset-tp]")?.value || "60",
+    stopLossPct: $("[data-bundle-preset-sl]")?.value || "10",
+    sellDelay: $("[data-bundle-preset-delay]")?.value || "off",
+    sellPercent: $("[data-bundle-preset-sell-percent]")?.value || "100",
+    slippageBps: $("[data-bundle-preset-slippage]")?.value || "400"
+  };
+}
+
+async function savePreset(kind) {
+  const status = $(`[data-${kind}-preset-status]`);
+  try {
+    await ensureWebAccount(status, "Creating secure web profile for presets...");
+    writeText(status, "Saving preset...");
+    const data = await api("/api/web/presets", {
+      method: "POST",
+      body: JSON.stringify({ type: kind, action: "save", preset: readPresetForm(kind) })
+    });
+    state.presets = data.presets || state.presets;
+    writeText(status, "Preset saved.");
+    render();
+  } catch (error) {
+    writeText(status, error.message);
+    setError(error.message);
+  }
+}
+
+async function deletePreset(kind, id) {
+  try {
+    const data = await api("/api/web/presets", {
+      method: "POST",
+      body: JSON.stringify({ type: kind, action: "delete", id })
+    });
+    state.presets = data.presets || state.presets;
+    render();
+  } catch (error) {
+    setError(error.message);
+  }
+}
+
+async function saveReferralSettings() {
+  const status = $("[data-referral-status]");
+  try {
+    await ensureWebAccount(status, "Opening secure web profile...");
+    writeText(status, "Saving referral settings...");
+    const data = await api("/api/web/profile/referral", {
+      method: "POST",
+      body: JSON.stringify({
+        referralPayoutWallet: $("[data-referral-wallet]")?.value || "",
+        showOnTraderBoard: Boolean($("[data-show-trader-board]")?.checked)
+      })
+    });
+    applyUserFromApi(data.user);
+    writeText(status, "Referral settings saved.");
+    render();
+  } catch (error) {
+    writeText(status, error.message);
+    setError(error.message);
+  }
+}
+
+async function updateWatchlist(action, target) {
+  const tokenMint = target.dataset.watchToken || target.dataset.unwatchToken || "";
+  if (!tokenMint) return;
+  try {
+    await ensureWebAccount(null, "Opening secure web profile for watchlist...");
+    const data = await api("/api/web/watchlist", {
+      method: "POST",
+      body: JSON.stringify({
+        action,
+        tokenMint,
+        symbol: target.dataset.watchSymbol || "",
+        name: target.dataset.watchName || "",
+        imageUrl: target.dataset.watchImage || ""
+      })
+    });
+    state.watchlist = data.watchlist || state.watchlist;
+    render();
+  } catch (error) {
+    setError(error.message);
+  }
+}
+
 function setLaunchStatus(message) {
   const status = $("[data-launch-status]");
   writeText(status, message);
@@ -3254,62 +3731,191 @@ function pnlHtml() {
 }
 
 function livePairsHtml() {
-  const rows = state.livePairs?.rows || [];
-  const status = state.livePairsLoading
+  const activeLivePairs = currentLivePairs();
+  const rows = activeLivePairs?.rows || [];
+  const activeBucketLabel = LIVE_PAIR_BUCKETS.find(([bucket]) => bucket === state.livePairBucket)?.[1] || "Live";
+  const lastUpdatedAt = currentLivePairsUpdatedAt();
+  const bucketLoading = Boolean(state.livePairsLoadingByBucket[state.livePairBucket]);
+  const status = bucketLoading
     ? "Scanning live pairs..."
-    : state.livePairs?.message || "Live Pairs refreshes while this tab is open.";
+    : activeLivePairs?.message || "Live Pairs refreshes while this tab is open.";
   return `
-    <section class="account-check-card">
-      <div>
-        <h3>Live Pairs</h3>
-        <p>Newest Pump/new-pair listings with fast metadata refresh. Trade safety checks run before any buy.</p>
-      </div>
-      <button class="primary" data-refresh-live-pairs>${state.livePairsLoading ? "Scanning..." : "Refresh Live"}</button>
-      <button data-tab="trade">Trade</button>
-      <button data-tab="bundle">Bundle</button>
+    <section class="terminal-layout live-terminal">
+      <main class="terminal-main">
+        <div class="terminal-title-row">
+          <div>
+            <h3>Live Pairs</h3>
+            <p>Newest Pump/new-pair listings with fast metadata refresh. Trade safety checks run before any buy.</p>
+          </div>
+          <span>${escapeHtml(activeBucketLabel)} | ${escapeHtml(rows.length)} shown</span>
+        </div>
+        <div class="mode-row terminal-modes live-pair-buckets">
+          ${LIVE_PAIR_BUCKETS.map(([bucket, label]) => {
+            const count = state.livePairsByBucket[bucket]?.rows?.length;
+            const suffix = Number.isFinite(Number(count)) ? ` (${count})` : "";
+            return `<button data-live-pair-bucket="${bucket}" data-active="${state.livePairBucket === bucket}">${label}${suffix}</button>`;
+          }).join("")}
+        </div>
+        <p class="scan-meta">${escapeHtml(status)}${lastUpdatedAt ? ` Last updated ${escapeHtml(formatDate(lastUpdatedAt))}.` : ""}</p>
+        ${rows.length ? livePairRowsHtml(rows) : emptyState("No live pairs yet", "Keep this tab open or tap Refresh Live. Trade safety checks run before any buy.")}
+      </main>
+      <aside class="trade-side order-ticket-stack">
+        <article class="order-ticket">
+          <h3>Live Pair Actions</h3>
+          <p>Refresh the live feed, then send any pair into Trade, Bundle, or Volume from the pair card.</p>
+          <div class="card-actions action-grid">
+            <button class="primary" data-refresh-live-pairs>${bucketLoading ? "Scanning..." : "Refresh Feed"}</button>
+            <button data-tab="trade">Trade</button>
+            <button data-tab="bundle">Bundle</button>
+            <button data-tab="volume">Volume</button>
+          </div>
+        </article>
+        <article>
+          <h3>Feed Status</h3>
+          <p>${escapeHtml(livePairBucketDescription(state.livePairBucket))}</p>
+          <p>${escapeHtml(status)}</p>
+          <p>${lastUpdatedAt ? `Updated ${escapeHtml(formatDate(lastUpdatedAt))}` : "Waiting for first refresh."}</p>
+          <p>All age buckets refresh in the background while this tab is open.</p>
+        </article>
+      </aside>
     </section>
-    <p class="scan-meta">${escapeHtml(status)}${state.livePairsLastUpdatedAt ? ` Last updated ${escapeHtml(formatDate(state.livePairsLastUpdatedAt))}.` : ""}</p>
-    ${rows.length ? livePairRowsHtml(rows) : emptyState("No live pairs yet", "Keep this tab open or tap Refresh Live. Trade safety checks run before any buy.")}
+  `;
+}
+
+function livePairBucketDescription(bucket) {
+  const descriptions = {
+    live: "Fresh launch feed. Focuses on pairs that just appeared, usually under 10 minutes old.",
+    under1h: "10-59 minute pairs. Filters out market caps below $7K.",
+    under3h: "One to three hour pairs. Filters out market caps below $7K.",
+    under1d: "Three to twenty-four hour pairs. Filters out market caps below $7K."
+  };
+  return descriptions[bucket] || descriptions.live;
+}
+
+function watchlistHtml() {
+  if (!state.user || !state.token) {
+    return `${createWalletSection()}${emptyState("Create or log in to save a watchlist", "You can browse scanners as a guest. Tap Watch after creating an account to save coins here.")}`;
+  }
+  const rows = state.watchlist?.rows || [];
+  return `
+    <section class="terminal-layout watchlist-terminal">
+      <main class="terminal-main">
+        <div class="terminal-title-row">
+          <div>
+            <h3>Watchlist</h3>
+            <p>Saved coins refresh while this tab is open. Use Trade or Bundle presets when you are ready.</p>
+          </div>
+          <span>${rows.length} watched</span>
+        </div>
+        <div class="section-actions terminal-actions">
+          <button class="primary" data-refresh-watchlist>${state.watchlistLoading ? "Refreshing..." : "Refresh Watchlist"}</button>
+          <button data-tab="live">Live Pairs</button>
+          <button data-tab="sniper">Sniper</button>
+          <button data-tab="kol">KOL Tracker</button>
+        </div>
+        ${rows.length ? tokenSignalRowsHtml(rows, { context: "watchlist", shareBuilder: (row) => manualCoinWatchShareText(row.tokenMint) }) : emptyState("No watched coins yet", "Tap Watch on Live Pairs, Sniper, or KOL signals to save coins here.")}
+      </main>
+      <aside class="trade-side order-ticket-stack">
+        <article class="order-ticket">
+          <h3>Fast Actions</h3>
+          <p>Rows use your saved Trade and Bundle presets. Edit presets from the Trade or Bundle tabs any time.</p>
+          <div class="card-actions action-grid">
+            <button data-tab="trade">Trade Presets</button>
+            <button data-tab="bundle">Bundle Presets</button>
+          </div>
+        </article>
+      </aside>
+    </section>
   `;
 }
 
 function livePairRowsHtml(rows) {
+  return tokenSignalRowsHtml(rows, { context: "live", shareBuilder: livePairShareText });
+}
+
+function tokenSignalRowsHtml(rows, options = {}) {
+  const shareBuilder = options.shareBuilder || livePairShareText;
   return `
-    <div class="pick-grid">
-      ${rows.map((row, index) => `
-        <article class="pick-card live-pair-card">
-          <div class="live-pair-head">
-            ${livePairAvatarHtml(row)}
-            <div>
-              <div class="pick-top">
-                <span>#${index + 1}</span>
-                <strong>${escapeHtml(row.symbol || row.shortMint || shortAddress(row.tokenMint))}</strong>
-                <em>${escapeHtml(row.liveLabel || "Live")}</em>
-              </div>
-              <h3>${escapeHtml(row.name || row.category || "Fresh Pair")}</h3>
-            </div>
-          </div>
-          <p>${escapeHtml(row.scalpSetup || row.momentum || "Fresh feed")} | Age ${escapeHtml(row.pairAgeLabel || "new")} | Rug ${escapeHtml(row.rugRisk ?? "n/a")}/100</p>
-          <dl>
-            <div><dt>MC</dt><dd>${escapeHtml(row.marketCapLabel || "$0")}</dd></div>
-            <div><dt>Liq</dt><dd>${escapeHtml(row.liquidityLabel || "$0")}</dd></div>
-            <div><dt>Vol 5m/1h</dt><dd>${escapeHtml(row.volume5mLabel || "$0")} / ${escapeHtml(row.volumeH1Label || "$0")}</dd></div>
-          </dl>
-          <code>${escapeHtml(row.tokenMint)}</code>
-          <small>${escapeHtml(row.safetyNote || "Mint/freeze safety checked")}</small>
-          <div class="card-actions">
-            <button data-copy="${escapeHtml(row.tokenMint)}">Copy CA</button>
-            <button class="primary" data-use-token="${escapeHtml(row.tokenMint)}">Trade</button>
-            <button data-use-token-bundle="${escapeHtml(row.tokenMint)}">Bundle</button>
-            <button data-use-token-volume="${escapeHtml(row.tokenMint)}">Volume</button>
-            ${xShareButton(livePairShareText(row), "Share")}
-            ${row.pumpUrl ? `<a href="${escapeHtml(row.pumpUrl)}" target="_blank" rel="noreferrer">Pump</a>` : ""}
-            <a href="${escapeHtml(row.dexUrl || dexUrl(row.tokenMint))}" target="_blank" rel="noreferrer">Dex</a>
-          </div>
-        </article>
-      `).join("")}
+    ${fastPresetToolbarHtml(options.context || "scanner")}
+    <div class="signal-list">
+      <div class="signal-header">
+        <span>Pair Info</span>
+        <span>Age</span>
+        <span>Current Liquidity</span>
+        <span>FDV / MC</span>
+        <span>Txns</span>
+        <span>Volume</span>
+        <span>Action</span>
+      </div>
+      ${rows.map((row, index) => tokenSignalRowHtml(row, index, { ...options, shareText: shareBuilder(row) })).join("")}
     </div>
   `;
+}
+
+function tokenSignalRowHtml(row, index, options = {}) {
+  const watched = isTokenWatched(row.tokenMint);
+  const shareText = options.shareText || livePairShareText(row);
+  const actionLabel = options.primaryActionLabel || "Trade";
+  const primaryAction = options.primaryAction || "quickTrade";
+  const watchButton = options.context === "watchlist"
+    ? `<button type="button" data-unwatch-token="${escapeHtml(row.tokenMint)}">Remove</button>`
+    : `<button type="button" data-watch-token="${escapeHtml(row.tokenMint)}" data-watch-symbol="${escapeHtml(row.symbol || "")}" data-watch-name="${escapeHtml(row.name || "")}" data-watch-image="${escapeHtml(row.imageUrl || "")}">${watched ? "Watching" : "Watch"}</button>`;
+  return `
+    <article class="signal-row">
+      <div class="signal-token">
+        ${livePairAvatarHtml(row)}
+        <div>
+          <div class="signal-name-row">
+            <strong>${escapeHtml(row.symbol || row.shortMint || shortAddress(row.tokenMint))}</strong>
+            <small>${escapeHtml(row.name || row.category || "Token")}</small>
+          </div>
+          <button type="button" class="ca-copy" data-copy="${escapeHtml(row.tokenMint)}">${escapeHtml(shortAddress(row.tokenMint))}</button>
+          <div class="signal-links">
+            <a href="${escapeHtml(row.dexUrl || dexUrl(row.tokenMint))}" target="_blank" rel="noreferrer" title="DexScreener">DEX</a>
+            ${row.pumpUrl ? `<a href="${escapeHtml(row.pumpUrl)}" target="_blank" rel="noreferrer" title="Pump">PUMP</a>` : ""}
+            ${row.twitterUrl ? `<a href="${escapeHtml(row.twitterUrl)}" target="_blank" rel="noreferrer" title="X">X</a>` : ""}
+            ${row.websiteUrl ? `<a href="${escapeHtml(row.websiteUrl)}" target="_blank" rel="noreferrer" title="Website">WEB</a>` : ""}
+            <button type="button" data-share-x data-share-text="${escapeHtml(shareText)}" title="Share to X">SHARE</button>
+            ${telegramShareButton(shareText, "TG")}
+          </div>
+        </div>
+      </div>
+      <div class="signal-cell"><span>${escapeHtml(row.pairAgeLabel || formatAgeFromRow(row) || "new")}</span><small>${escapeHtml(row.scalpSetup || row.momentum || `#${index + 1}`)}</small></div>
+      <div class="signal-cell"><span>${escapeHtml(row.liquidityLabel || "$0")}</span><small>${formatChangeHtml(row.h1)}</small></div>
+      <div class="signal-cell"><span>${escapeHtml(row.marketCapLabel || "$0")}</span><small>${escapeHtml(row.category || row.signalType || "signal")}</small></div>
+      <div class="signal-cell"><span>${escapeHtml(row.txnsLabel || row.winRateLabel || "n/a")}</span><small>${escapeHtml(row.valueLabel || row.smartMoney || "")}</small></div>
+      <div class="signal-cell"><span>${escapeHtml(row.volumeH1Label || row.volumeLabel || "$0")}</span><small>5m ${escapeHtml(row.volume5mLabel || "$0")}</small></div>
+      <div class="signal-actions">
+        ${primaryAction === "snipe" ? `<button type="button" class="primary" data-sniper-buy="${escapeHtml(row.tokenMint)}">${escapeHtml(actionLabel)}</button>` : `<button type="button" class="primary" data-quick-trade-token="${escapeHtml(row.tokenMint)}">${escapeHtml(actionLabel)}</button>`}
+        <button type="button" data-quick-bundle-token="${escapeHtml(row.tokenMint)}">Bundle</button>
+        ${watchButton}
+      </div>
+    </article>
+  `;
+}
+
+function isTokenWatched(tokenMint) {
+  const mint = String(tokenMint || "");
+  return Boolean((state.watchlist?.rows || []).some((row) => String(row.tokenMint) === mint));
+}
+
+function formatAgeFromRow(row) {
+  const seconds = Number(row.pairAgeSeconds);
+  if (Number.isFinite(seconds)) {
+    if (seconds < 60) return `${Math.max(1, Math.floor(seconds))}s`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+    return `${Math.floor(seconds / 3600)}h`;
+  }
+  const minutes = Number(row.pairAgeMinutes);
+  if (Number.isFinite(minutes)) return `${Math.max(0, Math.round(minutes))}m`;
+  return "";
+}
+
+function formatChangeHtml(value) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number) || number === 0) return "trend n/a";
+  const sign = number > 0 ? "+" : "";
+  return `<span class="${number >= 0 ? "positive" : "negative"}">${sign}${number.toFixed(Math.abs(number) >= 10 ? 0 : 1)}%</span>`;
 }
 
 function livePairAvatarHtml(row) {
@@ -3336,16 +3942,30 @@ function sniperHtml() {
   ];
   const activeLabel = modes.find(([mode]) => mode === state.scanMode)?.[1] || "Picks";
   return `
-    <div class="mode-row">
-      ${modes.map(([mode, label]) => `<button data-scan-mode="${mode}" data-active="${state.scanMode === mode}">${label}</button>`).join("")}
-    </div>
-    <p class="scan-meta">${escapeHtml(sniperModeDescription(state.scanMode))}</p>
-    <div class="section-actions">
-      <button class="primary" data-refresh-scan>Refresh ${escapeHtml(activeLabel)}</button>
-      <button data-tab="trade">Trade Desk</button>
-    </div>
-    ${sniperSetupHtml()}
-    ${state.scan ? sniperRowsHtml() : emptyState("No scan loaded", "Pick a mode or tap Refresh Picks.")}
+    <section class="terminal-layout sniper-terminal">
+      <main class="terminal-main">
+        <div class="terminal-title-row">
+          <div>
+            <h3>OgreSniper</h3>
+            <p>${escapeHtml(sniperModeDescription(state.scanMode))}</p>
+          </div>
+          <span>${escapeHtml(activeLabel)}</span>
+        </div>
+        <div class="mode-row terminal-modes">
+          ${modes.map(([mode, label]) => `<button data-scan-mode="${mode}" data-active="${state.scanMode === mode}">${label}</button>`).join("")}
+        </div>
+        <div class="section-actions terminal-actions">
+          <button class="primary" data-refresh-scan>Refresh ${escapeHtml(activeLabel)}</button>
+          <button data-tab="trade">Trade Desk</button>
+          <button data-tab="bundle">Bundle</button>
+          <button data-tab="live">Live Pairs</button>
+        </div>
+        ${state.scan ? sniperRowsHtml() : emptyState("No scan loaded", "Pick a mode or tap Refresh Picks.")}
+      </main>
+      <aside class="trade-side order-ticket-stack">
+        ${sniperSetupHtml()}
+      </aside>
+    </section>
   `;
 }
 
@@ -3475,38 +4095,7 @@ function sniperRowsHtml() {
   }
   return `
     <p class="scan-meta">${escapeHtml(state.scan.label)} | scored ${state.scan.scanned} | qualified ${state.scan.qualified} | mode-fit ${state.scan.modeFit} | display pool ${state.scan.displayPool || 0}</p>
-    <div class="pick-grid">
-      ${state.scan.rows.map((row, index) => `
-        <article class="pick-card">
-          <div class="live-pair-head">
-            ${livePairAvatarHtml(row)}
-            <div>
-              <div class="pick-top">
-                <span>#${index + 1}</span>
-                <strong>${escapeHtml(row.symbol || row.shortMint)}</strong>
-                <em>${row.score}/100</em>
-              </div>
-              <h3>${escapeHtml(row.category)}</h3>
-            </div>
-          </div>
-          <p>${escapeHtml(row.scalpSetup || row.momentum)} | Rug ${row.rugRisk}/100 | Exit ${row.exitRisk}/100</p>
-          <dl>
-            <div><dt>MC</dt><dd>${row.marketCapLabel}</dd></div>
-            <div><dt>Liq</dt><dd>${row.liquidityLabel}</dd></div>
-            <div><dt>Vol 5m</dt><dd>${row.volume5mLabel}</dd></div>
-          </dl>
-          <code>${row.tokenMint}</code>
-          <div class="card-actions">
-            <button data-copy="${row.tokenMint}">Copy CA</button>
-            <button class="primary" data-sniper-buy="${row.tokenMint}">Snipe</button>
-            <button data-use-token="${row.tokenMint}">Trade</button>
-            ${xShareButton(sniperShareText(row), "Share Pick")}
-            ${row.pumpUrl ? `<a href="${escapeHtml(row.pumpUrl)}" target="_blank" rel="noreferrer">Pump</a>` : ""}
-            <a href="${row.dexUrl}" target="_blank" rel="noreferrer">Dex</a>
-          </div>
-        </article>
-      `).join("")}
-    </div>
+    ${tokenSignalRowsHtml(state.scan.rows, { context: "sniper", primaryAction: "snipe", primaryActionLabel: "Snipe", shareBuilder: sniperShareText })}
   `;
 }
 
@@ -3534,11 +4123,16 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-web-signup]")) await createWebAccount();
   if (target.matches("[data-web-password-login]")) await passwordLogin();
   if (target.matches("[data-web-signup-connect]")) await createAccountAndConnectWallet();
+  if (target.matches("[data-browse-guest]")) {
+    state.loginCollapsed = true;
+    render();
+  }
   if (target.matches("[data-logout]")) await logout();
   if (target.matches("[data-connect-x]")) await connectXAccount();
   if (target.matches("[data-open-x-login]")) openXLoginOrProfile();
   if (target.matches("[data-clear-x]")) await disconnectXAccount();
   if (target.matches("[data-save-login-credentials]")) await saveLoginCredentials();
+  if (target.matches("[data-save-referral]")) await saveReferralSettings();
   if (target.matches("[data-use-x-avatar]")) await useXProfileAvatar();
   if (target.matches("[data-clear-avatar]")) await updateProfileAvatar({ clear: true }, "Removing PFP...");
   if (target.matches("[data-connect-wallet]")) await connectBrowserWallet(target.dataset.connectWallet);
@@ -3546,6 +4140,12 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-share-x]")) openXShare(target.dataset.shareText || "");
   if (target.matches("[data-share-watch-token-btn]")) shareManualWatch("token");
   if (target.matches("[data-share-watch-kol-btn]")) shareManualWatch("kol");
+  if (target.matches("[data-save-preset]")) await savePreset(target.dataset.savePreset);
+  if (target.matches("[data-delete-preset]")) await deletePreset(target.dataset.deletePreset, target.dataset.presetId || "");
+  if (target.matches("[data-quick-trade-token]")) await quickPresetTrade(target.dataset.quickTradeToken || "");
+  if (target.matches("[data-quick-bundle-token]")) await quickPresetBundle(target.dataset.quickBundleToken || "");
+  if (target.matches("[data-watch-token]")) await updateWatchlist("add", target);
+  if (target.matches("[data-unwatch-token]")) await updateWatchlist("remove", target);
   if (target.matches("[data-pnl-card]")) {
     try {
       await downloadPnlCard(target.dataset.pnlCard);
@@ -3661,18 +4261,30 @@ document.addEventListener("click", async (event) => {
     state.activeTab = "volume";
     render();
   }
-  if (target.matches("[data-refresh-all]")) loadAll().catch((error) => setError(error.message));
+  if (target.matches("[data-refresh-all]")) {
+    if (!state.user || !state.token) {
+      if (state.activeTab === "live") await refreshLivePairBuckets({ silent: true }).catch((error) => setError(error.message));
+      else if (state.activeTab === "sniper") await loadScan().catch((error) => setError(error.message));
+      else if (state.activeTab === "kol") await loadKolScan().catch((error) => setError(error.message));
+      else setError("Browsing is open. Create or connect a profile when you want saved wallets, balances, or trades.");
+    } else {
+      loadAll().catch((error) => setError(error.message));
+    }
+  }
 
   if (target.matches("[data-tab]")) {
     state.activeTab = target.dataset.tab;
     if (state.activeTab === "sniper" && !state.scan) {
       await loadScan().catch((error) => setError(error.message));
     }
-    if (state.activeTab === "live" && !state.livePairs) {
-      await loadLivePairs().catch((error) => setError(error.message));
+    if (state.activeTab === "live" && !state.livePairsByBucket[state.livePairBucket]) {
+      await refreshLivePairBuckets().catch((error) => setError(error.message));
     }
     if (state.activeTab === "kol" && !state.kolScan) {
       await loadKolScan().catch((error) => setError(error.message));
+    }
+    if (state.activeTab === "watchlist" && state.user && state.token) {
+      await loadWatchlist({ silent: true }).catch((error) => setError(error.message));
     }
     render();
   }
@@ -3682,7 +4294,19 @@ document.addEventListener("click", async (event) => {
   }
 
   if (target.matches("[data-refresh-live-pairs]")) {
-    await loadLivePairs().catch((error) => setError(error.message));
+    await refreshLivePairBuckets().catch((error) => setError(error.message));
+  }
+
+  if (target.matches("[data-refresh-watchlist]")) {
+    await loadWatchlist().catch((error) => setError(error.message));
+  }
+
+  if (target.matches("[data-live-pair-bucket]")) {
+    state.livePairBucket = target.dataset.livePairBucket || "live";
+    state.livePairs = currentLivePairs();
+    state.livePairsLastUpdatedAt = currentLivePairsUpdatedAt();
+    render();
+    await refreshLivePairBuckets().catch((error) => setError(error.message));
   }
 
   if (target.matches("[data-scan-mode]")) {
@@ -3702,6 +4326,12 @@ document.addEventListener("change", async (event) => {
   const target = event.target;
   if (target?.matches?.("[data-custom-select]")) {
     syncCustomFields();
+  }
+  if (target?.matches?.("[data-fast-trade-preset]")) {
+    state.selectedTradePresetId = target.value || "custom";
+  }
+  if (target?.matches?.("[data-fast-bundle-preset]")) {
+    state.selectedBundlePresetId = target.value || "custom";
   }
   if (target?.matches?.("[data-restore-file]")) {
     await readRestoreFile(target);
