@@ -382,6 +382,69 @@ button:disabled {
   padding: 20px;
 }
 
+.dashboard-title-row,
+.pfp-row,
+.wallet-row-main {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.dashboard-title-row {
+  align-items: flex-start;
+}
+
+.user-avatar {
+  width: 72px;
+  height: 72px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 32% 18%, rgba(187, 255, 99, 0.42), transparent 34px),
+    linear-gradient(135deg, rgba(114, 255, 35, 0.2), rgba(0, 0, 0, 0.74));
+  box-shadow: 0 0 24px rgba(114, 255, 35, 0.18);
+  color: var(--green-2);
+  font-weight: 950;
+}
+
+.user-avatar.large {
+  width: 86px;
+  height: 86px;
+  font-size: 28px;
+}
+
+.user-avatar.mini {
+  width: 46px;
+  height: 46px;
+  font-size: 14px;
+}
+
+.user-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.user-avatar span {
+  display: inline;
+  margin: 0;
+}
+
+.pfp-card {
+  grid-template-columns: minmax(0, 1.15fr) minmax(190px, 280px) auto;
+}
+
+.profile-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .dashboard-head h1 {
   margin-bottom: 8px;
   font-size: clamp(38px, 5vw, 60px);
@@ -511,6 +574,49 @@ button:disabled {
 
 .restore-card {
   grid-template-columns: minmax(0, 1fr) minmax(180px, 260px) minmax(260px, 1.2fr) auto;
+}
+
+.x-connect-card {
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 260px) auto auto;
+}
+
+.x-watch-card {
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 260px) minmax(180px, 260px) auto;
+}
+
+.wallet-connect-card {
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.8fr) minmax(220px, 0.8fr);
+}
+
+.wallet-provider-buttons {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(120px, 1fr));
+  gap: 10px;
+}
+
+.connected-wallet-box {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.connected-wallet-box span,
+.connected-wallet-box small {
+  color: #c7d7c2;
+}
+
+.connected-wallet-box code {
+  font-size: 13px;
+}
+
+.card-actions.compact {
+  gap: 8px;
+}
+
+.share-watch-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(120px, auto));
+  gap: 10px;
 }
 
 .wide-field {
@@ -828,6 +934,15 @@ code {
   background: var(--panel-2);
 }
 
+.kol-avatar {
+  width: 52px;
+  height: 52px;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  object-fit: cover;
+  background: rgba(255, 255, 255, 0.06);
+}
+
 .kol-profile h3,
 .kol-profile p,
 .kol-profile small {
@@ -904,6 +1019,10 @@ code {
   .pnl-summary,
   .profile-card,
   .create-wallet-card,
+  .pfp-card,
+  .wallet-connect-card,
+  .x-watch-card,
+  .x-connect-card,
   .account-check-card,
   .download-card {
     grid-template-columns: 1fr;
