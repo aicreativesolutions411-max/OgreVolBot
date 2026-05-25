@@ -404,7 +404,7 @@ function scheduleLivePairsAutoRefresh() {
 
   if (!state.user || state.activeTab !== "live") return;
   const refreshSeconds = Number(state.livePairs?.refreshSeconds || 30);
-  const delayMs = Math.max(5, refreshSeconds) * 1000;
+  const delayMs = Math.max(3, refreshSeconds) * 1000;
   livePairsTimer = setTimeout(() => {
     if (!state.user || state.activeTab !== "live" || state.livePairsLoading) return;
     loadLivePairs({ silent: true }).catch((error) => setError(error.message));

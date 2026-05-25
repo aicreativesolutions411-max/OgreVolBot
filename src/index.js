@@ -7192,7 +7192,23 @@ async function fetchLivePairCandidates(options = {}) {
     fetchSniperCandidates({ ...options, ttlMs, timeoutMs: options.timeoutMs || 1_800 }).catch(() => [])
   ]);
   const freshDexRows = dexLatest.filter((candidate) => candidate.source !== "top-boost");
-  return uniqueSniperCandidates([...photon, ...pumpLatest, ...freshDexRows]);
+  return uniqueSniperCandidates([...photon, ...pumpLatest, ...freshDexRows])
+    .sort(compareLivePairCandidates);
+}
+
+function compareLivePairCandidates(a, b) {
+  return Number(livePairCandidateCreatedAt(b) || 0) - Number(livePairCandidateCreatedAt(a) || 0);
+}
+
+function livePairCandidateCreatedAt(candidate) {
+  const profile = candidate?.metadata || candidate?.profile || {};
+  return normalizePairCreatedAt(firstString(
+    profile.pairCreatedAt,
+    profile.created_timestamp,
+    profile.createdAt,
+    profile.created_at,
+    profile.timestamp
+  ));
 }
 
 async function findManualLaunchCandidate(ticker) {
@@ -7289,7 +7305,14 @@ function sniperCandidatesFromPhotonData(data) {
           name: token.name || item?.name || "",
           description: item?.description || "",
           icon: token.image || token.imageUrl || item?.image || item?.imageUrl || "",
-          pairCreatedAt: item?.pairCreatedAt || item?.createdAt || item?.created_at || null
+          pairCreatedAt: item?.pairCreatedAt || item?.createdAt || item?.created_at || item?.timestamp || null,
+          marketCap: firstNumber(item?.marketCap, item?.market_cap, item?.fdv, item?.usdMarketCap, token.marketCap, token.market_cap),
+          fdv: firstNumber(item?.fdv, token.fdv),
+          liquidityUsd: firstNumber(item?.liquidityUsd, item?.liquidity_usd, item?.liquidity?.usd, item?.liquidity, token.liquidityUsd, token.liquidity?.usd),
+          volume: {
+            m5: firstNumber(item?.volume?.m5, item?.volume5m, item?.volume_5m, token.volume?.m5),
+            h1: firstNumber(item?.volume?.h1, item?.volume1h, item?.volume_h1, item?.volume, token.volume?.h1, token.volume)
+          }
         }
       };
     })
@@ -13044,37 +13067,82 @@ async function webSniperScan(userId, mode) {
 
 async function webLivePairs(userId) {
   const scanState = nextSniperScanState(`web:${userId}`, "livepairs");
-  const settings = sniperModeDefaults("pumpsnipe");
-  const candidates = await fetchLivePairCandidates({ ttlMs: 500, timeoutMs: 1_800, scanState });
-  const scanPool = await hydrateSniperCandidates(uniqueSniperCandidates(candidates).slice(0, 120));
-  const scored = [];
-
-  await runWithConcurrency(scanPool, Math.min(6, Math.max(3, CONFIG.balanceConcurrency)), async (candidate) => {
-    try {
-      scored.push(await scoreSniperCandidate(candidate, settings));
-    } catch {
-      // Ignore broken live-pair rows.
-    }
-  });
-
-  const freshRows = uniqueSniperScoreRows(scored)
+  const candidates = await fetchLivePairCandidates({ ttlMs: 500, timeoutMs: 1_200, scanState });
+  const liveRows = uniqueSniperScoreRows(candidates.map(livePairCandidateToRow).filter(Boolean))
     .filter(isWebLivePairCandidate)
     .sort(compareWebLivePairs);
-  const safeRows = await filterWebLivePairsForSafety(freshRows, 12);
+  const safety = await filterWebLivePairsForSafety(liveRows, 12);
+  const safeRows = safety.rows;
   rememberSniperScanRows(`web:${userId}`, "livepairs", safeRows);
 
   return {
     label: "Live Pairs",
     refreshCount: scanState.refreshCount,
-    scanned: scored.length,
-    qualified: freshRows.length,
+    scanned: candidates.length,
+    qualified: liveRows.length,
     rows: safeRows.map(webLivePairRow),
     refreshedAt: new Date().toISOString(),
-    refreshSeconds: 6,
+    refreshSeconds: 4,
     message: safeRows.length
-      ? `Live Pairs found ${safeRows.length} safety-checked pair(s).`
-      : "No safety-checked live pairs right now. It will refresh while this tab is open."
+      ? livePairStatusMessage(safeRows.length, safety.stats)
+      : "No fresh live pairs from the launch feeds right now. It will refresh while this tab is open."
   };
+}
+
+function livePairCandidateToRow(candidate) {
+  if (!candidate?.tokenMint) return null;
+  const profile = candidate.metadata || candidate.profile || {};
+  const pairCreatedAt = livePairCandidateCreatedAt(candidate);
+  const pairAgeSeconds = pairCreatedAt ? Math.max(0, Math.floor((Date.now() - Number(pairCreatedAt)) / 1000)) : null;
+  const volumeObject = typeof profile.volume === "object" && profile.volume !== null ? profile.volume : {};
+  const volumeNumber = typeof profile.volume === "object" ? null : firstNumber(profile.volume);
+  const marketCap = firstNumber(profile.marketCap, profile.usd_market_cap, profile.market_cap, profile.fdv) || 0;
+  const liquidityUsd = firstNumber(profile.liquidityUsd, profile.liquidity_usd, profile.liquidity?.usd, profile.liquidity) || 0;
+  const volume5m = firstNumber(volumeObject.m5, profile.volume5m, profile.volume_5m) || 0;
+  const volumeH1 = firstNumber(volumeObject.h1, profile.volumeH1, profile.volume_h1, volumeNumber) || 0;
+  const m5 = normalizePercentLike(profile.priceChange?.m5 ?? profile.price_change_m5 ?? profile.m5) || 0;
+  const h1 = normalizePercentLike(profile.priceChange?.h1 ?? profile.price_change_h1 ?? profile.h1) || 0;
+
+  return {
+    tokenMint: candidate.tokenMint,
+    symbol: firstString(profile.symbol, profile.ticker) || shortMint(candidate.tokenMint),
+    name: firstString(profile.name) || "Fresh Launch",
+    score: 0,
+    category: candidate.source === "photon" ? "Photon Live" : candidate.source?.includes("pump") ? "Pump Live" : "Live Pair",
+    rugRisk: "check",
+    exitRisk: "check",
+    manipulationScore: "check",
+    liquidityUsd,
+    volume5m,
+    volumeH1,
+    buyPressure: 1,
+    scalpSetup: "Fresh launch",
+    scalpScore: 0,
+    modeRelevance: 0,
+    marketCap,
+    m5,
+    h1,
+    h6: 0,
+    h24: 0,
+    narrative: 0,
+    pairCreatedAt,
+    pairAgeSeconds,
+    pairAgeMinutes: pairAgeSeconds === null ? null : Math.floor(pairAgeSeconds / 60),
+    riskFlags: [],
+    momentum: volume5m > 0 || volumeH1 > 0 ? "Fresh flow" : "Just listed",
+    smartMoney: "Live",
+    reasons: [],
+    source: candidate.source || "live"
+  };
+}
+
+function livePairStatusMessage(count, stats = {}) {
+  const checked = Number(stats.accepted || 0);
+  const pending = Number(stats.pending || 0);
+  if (pending > 0) {
+    return `Live Pairs found ${count} fresh launch(es). ${checked} mint/freeze checked; ${pending} still settling on-chain.`;
+  }
+  return `Live Pairs found ${count} mint/freeze checked launch(es).`;
 }
 
 function isWebLivePairCandidate(item) {
@@ -13088,13 +13156,10 @@ function isWebLivePairCandidate(item) {
   const hasFreshActivity = Number(item.volume5m || 0) > 0
     || Number(item.volumeH1 || 0) > 0
     || Number(item.liquidityUsd || 0) > 0
+    || Number.isFinite(ageSeconds) && ageSeconds <= 300
     || isPumpStyleToken(item);
   return freshEnough
-    && item.marketCap >= 300
-    && item.marketCap <= 750_000
-    && item.rugRisk <= 96
-    && item.exitRisk <= 98
-    && item.manipulationScore <= 98
+    && (!Number(item.marketCap) || item.marketCap <= 750_000)
     && hasFreshActivity
     && !flags.has("hard dump")
     && !flags.has("sell pressure");
@@ -13114,21 +13179,43 @@ function compareWebLivePairs(a, b) {
 
 async function filterWebLivePairsForSafety(rows, limit = 12) {
   const accepted = [];
-  for (const row of rows) {
-    if (accepted.length >= limit) break;
+  const pending = [];
+  const stats = {
+    checked: 0,
+    accepted: 0,
+    pending: 0,
+    blocked: 0,
+    token2022: 0
+  };
+  const candidates = rows.slice(0, Math.max(limit * 4, 32));
+
+  await runWithConcurrency(candidates, Math.min(8, Math.max(3, CONFIG.balanceConcurrency)), async (row) => {
     try {
       const safety = await getMintSafetyInfo(row.tokenMint);
-      if (safety.tokenProgram === TOKEN_2022_PROGRAM_ID.toBase58()) continue;
-      if (safety.freezeAuthority || safety.mintAuthority) continue;
+      stats.checked += 1;
+      if (safety.tokenProgram === TOKEN_2022_PROGRAM_ID.toBase58()) stats.token2022 += 1;
+      if (safety.freezeAuthority || safety.mintAuthority) {
+        stats.blocked += 1;
+        return;
+      }
       accepted.push({
         ...row,
-        safetyNote: "Mint/freeze safety passed"
+        safetyNote: safety.tokenProgram === TOKEN_2022_PROGRAM_ID.toBase58()
+          ? "Token-2022 mint/freeze clear"
+          : "Mint/freeze safety passed"
       });
+      stats.accepted += 1;
     } catch {
-      // If the mint cannot be read, do not put it in the live feed.
+      pending.push({
+        ...row,
+        safetyNote: "Mint check pending; trade precheck still runs before buy"
+      });
+      stats.pending += 1;
     }
-  }
-  return accepted;
+  });
+
+  const combined = uniqueSniperScoreRows([...accepted, ...pending]).sort(compareWebLivePairs).slice(0, limit);
+  return { rows: combined, stats };
 }
 
 function webLivePairRow(row) {
@@ -13136,7 +13223,7 @@ function webLivePairRow(row) {
     ...webSniperRow(row),
     pairAgeLabel: formatLivePairAgeLabel(row.pairAgeSeconds, row.pairAgeMinutes),
     safetyNote: row.safetyNote || "Mint/freeze safety passed",
-    liveLabel: Number(row.pairAgeSeconds) <= 60 ? "Seconds Old" : row.pairAgeMinutes !== null && Number(row.pairAgeMinutes) <= 30 ? "Just Listed" : isPumpStyleToken(row) ? "Pump Feed" : "Live Pair"
+    liveLabel: Number.isFinite(Number(row.pairAgeSeconds)) && Number(row.pairAgeSeconds) <= 60 ? "Seconds Old" : row.pairAgeMinutes !== null && Number(row.pairAgeMinutes) <= 30 ? "Just Listed" : isPumpStyleToken(row) ? "Pump Feed" : "Live Pair"
   };
 }
 
