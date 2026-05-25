@@ -94,6 +94,10 @@ const state = {
 };
 
 const $ = (selector) => document.querySelector(selector);
+const setText = (selector, value) => {
+  const element = $(selector);
+  if (element) element.textContent = value;
+};
 const app = $("[data-app]");
 const loginView = $("[data-login]");
 const dashboardView = $("[data-dashboard]");
@@ -345,6 +349,7 @@ function totalSol() {
 }
 
 function render() {
+  if (!app || !loginView || !dashboardView) return;
   app.dataset.loading = state.loading ? "true" : "false";
   loginView.hidden = Boolean(state.user);
   dashboardView.hidden = !state.user;
@@ -353,23 +358,23 @@ function render() {
     return;
   }
 
-  const userIdEl = $("[data-user-id]");
-  if (userIdEl) userIdEl.textContent = state.user.id;
-  $("[data-wallet-count]").textContent = state.wallets.length;
-  $("[data-total-sol]").textContent = totalSol().toFixed(4);
-  $("[data-position-count]").textContent = state.positions.length;
-  $("[data-realized]").textContent = state.pnl?.totals?.realizedSol || "+0 SOL";
+  setText("[data-user-id]", state.user.id);
+  setText("[data-wallet-count]", state.wallets.length);
+  setText("[data-total-sol]", totalSol().toFixed(4));
+  setText("[data-position-count]", state.positions.length);
+  setText("[data-realized]", state.pnl?.totals?.realizedSol || "+0 SOL");
   const avatar = $("[data-user-avatar]");
   if (avatar) avatar.innerHTML = userAvatarHtml("SW");
   renderTabs();
 }
 
 function renderTabs() {
+  const panel = $("[data-panel]");
+  if (!panel) return;
   document.querySelectorAll("[data-tab]").forEach((button) => {
     button.dataset.active = button.dataset.tab === state.activeTab ? "true" : "false";
   });
 
-  const panel = $("[data-panel]");
   if (state.activeTab === "dashboard") panel.innerHTML = dashboardHtml();
   if (state.activeTab === "profile") panel.innerHTML = profileHtml();
   if (state.activeTab === "trade") panel.innerHTML = tradeHtml();
