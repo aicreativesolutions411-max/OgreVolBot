@@ -324,6 +324,7 @@ button:disabled {
 .row-card button,
 .profile-card button,
 .create-wallet-card button,
+.account-check-card button,
 .download-card button,
 .trade-side button,
 .card-actions button,
@@ -483,6 +484,7 @@ button:disabled {
 
 .profile-card,
 .create-wallet-card,
+.account-check-card,
 .download-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(160px, 260px) minmax(110px, 150px) auto;
@@ -503,6 +505,10 @@ button:disabled {
   grid-template-columns: minmax(0, 1fr) auto auto;
 }
 
+.account-check-card {
+  grid-template-columns: minmax(0, 1fr) repeat(3, minmax(120px, auto));
+}
+
 .restore-card {
   grid-template-columns: minmax(0, 1fr) minmax(180px, 260px) minmax(260px, 1.2fr) auto;
 }
@@ -513,6 +519,7 @@ button:disabled {
 
 .profile-card p,
 .create-wallet-card p,
+.account-check-card p,
 .download-card p {
   margin-bottom: 0;
   color: #c7d7c2;
@@ -856,6 +863,7 @@ code {
 .card-actions button,
 .profile-card button,
 .create-wallet-card button,
+.account-check-card button,
 .download-card button,
 .trade-side button,
 .row-card button {
@@ -896,6 +904,7 @@ code {
   .pnl-summary,
   .profile-card,
   .create-wallet-card,
+  .account-check-card,
   .download-card {
     grid-template-columns: 1fr;
   }

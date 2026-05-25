@@ -121,7 +121,7 @@ The web Bundle tab exposes multi-wallet bundle buy/sell from the page. Users sel
 
 The web Launch Snipe tab exposes Manual Launch Snipe from the page. Users preset ticker, wallets, buy amount, take-profit, stop-loss, fallback timer, and slippage; the backend keeps scanning the configured launch/profile feeds until a matching ticker appears, then buys with the preset wallets.
 
-The web KOL Tracker tab uses MadeOnSol as the cheap primary KOL feed when `MADE_ON_SOL_API_KEY` is set on Render. Solana Tracker can stay disabled, or it can be used as an optional fallback/context source when `SOLANA_TRACKER_API_KEY` and `KOL_USE_SOLANA_TRACKER_FALLBACK=true` are set. It shows Hot Buys, Top KOLs, Consistent KOLs, Fresh Activity, and custom-wallet scans. Each signal includes chart/copy buttons plus Trade, Bundle, and Copy Plan actions. Copy Plan uses the same timed engine as Volume with preset-or-custom timer, take-profit, stop-loss, repeat, and slippage settings.
+The web KOL Tracker tab uses MadeOnSol as the cheap primary KOL feed when `MADE_ON_SOL_API_KEY` is set on Render. Solana Tracker can stay disabled, or it can be used as an optional fallback/context source when `SOLANA_TRACKER_API_KEY` and `KOL_USE_SOLANA_TRACKER_FALLBACK=true` are set. It shows Hot Buys, Top KOLs, Consistent KOLs, Fresh Activity, and custom-wallet scans. Pasting a public wallet works even without a KOL API key by reading its current token holdings from RPC. KOLscan is mixed in as direct account, trades, and leaderboard links so users can inspect the same wallet context externally without the backend scraping their frontend. Each signal includes chart/copy buttons plus Trade, Bundle, and Buy Position actions. Buy Position uses the same timed engine as Volume with preset-or-custom timer, take-profit, stop-loss, repeat, and slippage settings. If `SOLANA_TRACKER_API_KEY` is set, users can also arm **Copy Wallet Next Buy**, which ignores already-seen recent buys and watches the pasted wallet for the next new buy at `KOL_COPY_SCAN_INTERVAL_MS`.
 
 The web dashboard has an optional email field. If `RESEND_API_KEY` and `EMAIL_FROM` are set on Render, users can request a fresh email login code later. Email never carries private keys, backup files, or permanent login tokens.
 
@@ -174,9 +174,10 @@ SOLANA_TRACKER_KOL_SIGNAL_LOOKUPS=2
 SOLANA_TRACKER_KOL_POSITION_LIMIT=4
 SOLANA_TRACKER_KOL_POSITION_CONCURRENCY=1
 SOLANA_TRACKER_KOL_USE_PERIOD_ENDPOINT=false
+KOL_COPY_SCAN_INTERVAL_MS=30000
 ```
 
-Browser users only call your `/api/web/kol/*` routes; they never receive either provider key. MadeOnSol results cache for `MADE_ON_SOL_CACHE_TTL_MS`. Solana Tracker runs in credit-safe mode by default: each uncached fallback refresh uses the KOL leaderboard plus only `SOLANA_TRACKER_KOL_SIGNAL_LOOKUPS` wallet-position lookups. `SOLANA_TRACKER_KOL_USE_PERIOD_ENDPOINT=false` avoids the `/v2/pnl/leaderboard/kols/period` endpoint and uses the main KOL leaderboard with mode-specific sorting instead.
+Browser users only call your `/api/web/kol/*` routes; they never receive either provider key. MadeOnSol results cache for `MADE_ON_SOL_CACHE_TTL_MS`. Solana Tracker runs in credit-safe mode by default: each uncached fallback refresh uses the KOL leaderboard plus only `SOLANA_TRACKER_KOL_SIGNAL_LOOKUPS` wallet-position lookups. `SOLANA_TRACKER_KOL_USE_PERIOD_ENDPOINT=false` avoids the `/v2/pnl/leaderboard/kols/period` endpoint and uses the main KOL leaderboard with mode-specific sorting instead. `KOL_COPY_SCAN_INTERVAL_MS` controls how often a Copy Wallet watch checks the pasted wallet's new buys; lower is faster but uses more Solana Tracker credits.
 
 Bundle buy and sell charge a 0.5% platform fee by default. `BUNDLE_FEE_BPS=50` means 50 basis points, which is 0.5%, and fees are sent to `FEE_WALLET`.
 

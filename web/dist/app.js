@@ -177,6 +177,11 @@ function dexUrl(tokenMint) {
   return mint ? `https://dexscreener.com/solana/${encodeURIComponent(mint)}` : "#";
 }
 
+function kolscanUrl(wallet) {
+  const address = String(wallet || "").trim();
+  return address ? `https://kolscan.io/account/${encodeURIComponent(address)}` : "https://kolscan.io";
+}
+
 async function createWebAccount() {
   setError("");
   try {
@@ -330,6 +335,7 @@ function renderTabs() {
 
 function dashboardHtml() {
   return `
+    ${accountToolsHtml()}
     <section class="panel-grid">
       ${visualCard("visual-aces", "Trade Desk", "Quick buy and sell from one wallet with .10, .50, 1 SOL, max, and percent sell buttons.")}
       ${visualCard("visual-cauldron", "Bundle + Volume", "Buy or sell across selected wallets, then manage timed exits with Volume plans.")}
@@ -340,6 +346,20 @@ function dashboardHtml() {
     ${importWalletSection()}
     ${backupRestoreSection()}
     ${downloadsHtml()}
+  `;
+}
+
+function accountToolsHtml() {
+  return `
+    <section class="account-check-card">
+      <div>
+        <h3>Wallet Checks</h3>
+        <p>Open balances, current token positions, or refresh everything before trading.</p>
+      </div>
+      <button class="primary" data-tab="wallets">Wallet Balances</button>
+      <button data-tab="positions">Open Positions</button>
+      <button data-refresh-all>Refresh All</button>
+    </section>
   `;
 }
 
@@ -504,6 +524,14 @@ function tradeHtml() {
         <article>
           <h3>Selected Token</h3>
           <code>${state.tradeToken ? escapeHtml(state.tradeToken) : "Paste a CA or tap Trade from a scanner pick."}</code>
+        </article>
+        <article>
+          <h3>Balance Check</h3>
+          <p>Refresh wallet balances and open positions without leaving this account.</p>
+          <div class="card-actions">
+            <button data-refresh-all>Refresh Balances</button>
+            <button data-tab="positions">Positions</button>
+          </div>
         </article>
         ${tradeResultHtml()}
       </aside>
@@ -682,6 +710,10 @@ function bundleHtml() {
         <article>
           <h3>Multi-Wallet Control</h3>
           <p>Select the exact wallets to use. Each selected wallet must hold enough SOL for buy amount, fees, and reserve.</p>
+          <div class="card-actions">
+            <button data-refresh-all>Refresh Balances</button>
+            <button data-tab="positions">Positions</button>
+          </div>
         </article>
         <article>
           <h3>Copy Trade / KOL Tracker</h3>
@@ -883,6 +915,14 @@ function volumeHtml() {
           <h3>Default Setup</h3>
           <p>5 minute fallback timer, +25% take-profit, -8% stop-loss, 4% slippage, 100% exit.</p>
         </article>
+        <article>
+          <h3>After Entry</h3>
+          <p>Refresh balances or view positions after a plan buys or exits.</p>
+          <div class="card-actions">
+            <button data-refresh-all>Refresh Balances</button>
+            <button data-tab="positions">Positions</button>
+          </div>
+        </article>
         ${volumeResultHtml()}
       </aside>
     </section>
@@ -1072,7 +1112,7 @@ function kolHtml() {
         <div class="trade-head">
           <div>
             <h3>KOL Copy Setup</h3>
-            <p>Pick wallets and exits once, then tap Copy Plan on any KOL signal. Trade and Bundle send the CA to those tabs.</p>
+            <p>Pick wallets and exits once, then buy a selected KOL position, send it to Trade/Bundle, or arm Copy Wallet for the next new buy.</p>
           </div>
         </div>
         ${state.wallets.length ? `
@@ -1158,23 +1198,28 @@ function kolHtml() {
             <input data-kol-slippage-custom data-custom-for="kol-slippage" type="number" min="1" max="5000" step="1" placeholder="Custom bps" hidden>
           </label>
         </div>
-        <p class="trade-status" data-kol-status>${state.kolResult ? escapeHtml(state.kolResult.message || "KOL copy plan armed.") : configured ? "Ready. Tap Copy Plan on a signal below." : "Add MADE_ON_SOL_API_KEY or SOLANA_TRACKER_API_KEY on Render to enable live KOL scans."}</p>
+        <p class="trade-status" data-kol-status>${state.kolResult ? escapeHtml(state.kolResult.message || "KOL copy plan armed.") : configured ? "Ready. Tap Buy Position on a signal below, or Copy Wallet after scanning a public wallet." : "Paste a public wallet for a free holdings scan, or add MADE_ON_SOL_API_KEY / SOLANA_TRACKER_API_KEY for live KOL feeds."}</p>
         ${kolResultHtml()}
       </article>
 
       <aside class="trade-side">
         <article>
           <h3>Custom KOL Wallet</h3>
-          <p>Paste any public Solana wallet to inspect recent buy-style trades from that wallet.</p>
+          <p>Paste any public Solana wallet to inspect current holdings. KOLscan links open the same wallet externally; Solana Tracker enables next-buy watching.</p>
           <label>
             Wallet Address
             <input data-kol-wallet type="text" placeholder="Paste KOL wallet" value="${escapeHtml(state.kolWallet || "")}">
           </label>
           <button data-kol-wallet-scan ${disabled}>${state.kolLoading ? "Scanning..." : "Scan Wallet"}</button>
+          ${state.kolWallet ? `<button class="primary" data-kol-copy-wallet="${escapeHtml(state.kolWallet)}" ${disabled}>Copy Wallet Next Buy</button>` : ""}
         </article>
         <article>
           <h3>Data Source</h3>
           <p>${escapeHtml(kolDataSourceText())}</p>
+          <div class="card-actions">
+            <a href="https://kolscan.io/trades" target="_blank" rel="noreferrer">KOLscan Trades</a>
+            <a href="https://kolscan.io/leaderboard" target="_blank" rel="noreferrer">KOLscan Leaderboard</a>
+          </div>
         </article>
       </aside>
     </section>
@@ -1197,6 +1242,11 @@ function kolScanStatusHtml() {
 
 function kolDataSourceText() {
   const scan = state.kolScan || {};
+  if (scan.sources?.localWallet || scan.source === "wallet_scan") {
+    return scan.copyWalletEnabled
+      ? `Public wallet holdings scan plus Solana Tracker copy-watch. Copy watch checks about every ${Math.round(Number(scan.copyScanIntervalMs || 30000) / 1000)}s.`
+      : "Public wallet holdings scan uses your Render RPC and does not need a KOL API key. Add Solana Tracker for live copy-wallet watching.";
+  }
   if (scan.sources?.madeOnSol && scan.sources?.solanaTracker) {
     return scan.sources?.solanaTrackerFallback
       ? "MadeOnSol primary with Solana Tracker fallback/context. Keys stay on Render."
@@ -1260,10 +1310,13 @@ function kolSummaryHtml() {
               <div><dt>ROI</dt><dd>${escapeHtml(kol.roiLabel || "n/a")}</dd></div>
               <div><dt>Trades</dt><dd>${escapeHtml(kol.trades ?? "n/a")}</dd></div>
             </dl>
-            <small>Last trade: ${escapeHtml(formatDate(kol.lastTradeAt))}</small>
+            <small>${escapeHtml(kol.volumeLabel || "Volume n/a")} | Last trade: ${escapeHtml(formatDate(kol.lastTradeAt))}</small>
             <div class="card-actions">
               ${kol.solscanUrl ? `<a href="${escapeHtml(kol.solscanUrl)}" target="_blank" rel="noreferrer">Wallet</a>` : ""}
-              ${kol.wallet ? `<button data-copy="${escapeHtml(kol.wallet)}">Copy Wallet</button>` : ""}
+              ${kol.kolscanUrl || kol.wallet ? `<a href="${escapeHtml(kol.kolscanUrl || kolscanUrl(kol.wallet))}" target="_blank" rel="noreferrer">KOLscan</a>` : ""}
+              ${kol.wallet ? `<button data-kol-scan-wallet="${escapeHtml(kol.wallet)}">Scan Positions</button>` : ""}
+              ${kol.wallet ? `<button data-kol-copy-wallet="${escapeHtml(kol.wallet)}">Copy Wallet</button>` : ""}
+              ${kol.wallet ? `<button data-copy="${escapeHtml(kol.wallet)}">Copy Address</button>` : ""}
             </div>
           </article>
         `).join("")}
@@ -1304,10 +1357,12 @@ function kolRowsHtml() {
             <div><dt>Source</dt><dd>${escapeHtml(row.sourceLabel || row.source || "KOL")}</dd></div>
           </dl>
           <div class="card-actions">
-            <button data-kol-copy="${escapeHtml(row.tokenMint)}">Copy Plan</button>
+            <button data-kol-copy="${escapeHtml(row.tokenMint)}">Buy Position</button>
             <button data-kol-trade="${escapeHtml(row.tokenMint)}">Trade</button>
             <button data-kol-bundle="${escapeHtml(row.tokenMint)}">Bundle</button>
+            ${row.kolWallet ? `<button data-kol-copy-wallet="${escapeHtml(row.kolWallet)}">Copy Wallet</button>` : ""}
             <a href="${escapeHtml(row.dexUrl)}" target="_blank" rel="noreferrer">Chart</a>
+            ${row.kolscanUrl || row.kolWallet ? `<a href="${escapeHtml(row.kolscanUrl || kolscanUrl(row.kolWallet))}" target="_blank" rel="noreferrer">KOLscan</a>` : ""}
             <button data-copy="${escapeHtml(row.tokenMint)}">Copy CA</button>
           </div>
         </article>
@@ -1673,6 +1728,22 @@ function readKolPlanForm(tokenMint) {
   return { tokenMint, walletIndexes, walletGroup, amountSol, sellDelay, takeProfitPct, stopLossPct, loopCount, loopDelay, sellPercent: "100", slippageBps };
 }
 
+function readKolWalletCopyForm(copyWallet) {
+  const walletIndexes = checkedWalletIndexes("kol");
+  const walletGroup = $("[data-kol-group]")?.value?.trim() || "";
+  const amountSol = $("[data-kol-amount]")?.value || "";
+  const sellDelay = fieldValue("[data-kol-delay]", "[data-kol-delay-custom]", "5");
+  const takeProfitPct = fieldValue("[data-kol-tp]", "[data-kol-tp-custom]", "25");
+  const stopLossPct = fieldValue("[data-kol-sl]", "[data-kol-sl-custom]", "8");
+  const loopCount = fieldValue("[data-kol-loop]", "[data-kol-loop-custom]", "1");
+  const loopDelay = fieldValue("[data-kol-loop-delay]", "[data-kol-loop-delay-custom]", "0");
+  const slippageBps = fieldValue("[data-kol-slippage]", "[data-kol-slippage-custom]", "400");
+  const wallet = String(copyWallet || state.kolWallet || $("[data-kol-wallet]")?.value || "").trim();
+  if (!walletIndexes.length && !walletGroup) throw new Error("Choose at least one wallet or enter a group label.");
+  if (!wallet) throw new Error("Paste or choose a KOL wallet first.");
+  return { copyWallet: wallet, walletIndexes, walletGroup, amountSol, sellDelay, takeProfitPct, stopLossPct, loopCount, loopDelay, sellPercent: "100", slippageBps };
+}
+
 async function createKolCopyPlan(tokenMint) {
   try {
     const payload = readKolPlanForm(tokenMint);
@@ -1683,6 +1754,23 @@ async function createKolCopyPlan(tokenMint) {
     });
     state.kolResult = data.plan;
     await loadAll();
+    state.activeTab = "kol";
+    render();
+  } catch (error) {
+    setKolStatus(error.message);
+  }
+}
+
+async function createKolCopyWallet(copyWallet) {
+  try {
+    const payload = readKolWalletCopyForm(copyWallet);
+    setKolStatus("Arming Copy Wallet watch...");
+    const data = await api("/api/web/kol/copy-wallet", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    state.kolResult = data.plan;
+    state.kolWallet = payload.copyWallet;
     state.activeTab = "kol";
     render();
   } catch (error) {
@@ -1817,11 +1905,14 @@ function walletsHtml() {
   if (!state.wallets.length) return `${create}${emptyState("No wallets yet", "Create a wallet set above to get started on web.")}`;
   return `
     ${create}
-    <section class="create-wallet-card">
+    ${walletBalanceSummaryHtml()}
+    <section class="account-check-card">
       <div>
-        <h3>Copy Trade / KOL Tracker</h3>
-        <p>Track public KOL wallets, review their active signals, then route a pick into Trade, Bundle, or a managed copy plan.</p>
+        <h3>Wallet Actions</h3>
+        <p>Refresh balances, view token positions, or open KOL Tracker from the same account.</p>
       </div>
+      <button class="primary" data-refresh-all>Refresh Balances</button>
+      <button data-tab="positions">View Positions</button>
       <button data-tab="kol">Open KOL Tracker</button>
     </section>
     <div class="table-list">
@@ -1830,6 +1921,7 @@ function walletsHtml() {
           <div>
             <strong>${wallet.index}. ${escapeHtml(wallet.label)}</strong>
             <code>${wallet.publicKey}</code>
+            ${walletBalanceLine(wallet)}
           </div>
           <button data-copy="${wallet.publicKey}">Copy</button>
         </article>
@@ -1838,9 +1930,44 @@ function walletsHtml() {
   `;
 }
 
-function positionsHtml() {
-  if (!state.positions.length) return emptyState("No open positions", "Current token holdings will show here.");
+function walletBalanceSummaryHtml() {
+  const tokenTotal = state.balances.reduce((sum, row) => sum + Number(row.tokens?.length || 0), 0);
+  const errorCount = state.balances.filter((row) => row.error).length;
   return `
+    <section class="pnl-summary wallet-summary">
+      <div><span>Wallets</span><strong>${state.wallets.length}</strong></div>
+      <div><span>Total SOL</span><strong>${totalSol().toFixed(4)}</strong></div>
+      <div><span>Token Accounts</span><strong>${tokenTotal}</strong></div>
+      <div><span>Balance Errors</span><strong>${errorCount}</strong></div>
+    </section>
+  `;
+}
+
+function walletBalanceLine(wallet) {
+  const balance = state.balances.find((row) => Number(row.index) === Number(wallet.index));
+  if (!balance) return `<span>Balance: loading</span>`;
+  if (balance.error) return `<span>Balance check failed: ${escapeHtml(balance.error)}</span>`;
+  const sol = Number.isFinite(Number(balance.sol)) ? `${Number(balance.sol).toFixed(4)} SOL` : "SOL unavailable";
+  const tokenText = Number(balance.tokens?.length || 0) === 1 ? "1 token" : `${Number(balance.tokens?.length || 0)} tokens`;
+  const warnings = balance.warnings?.length ? ` | ${balance.warnings.length} warning(s)` : "";
+  return `<span>Balance: ${escapeHtml(sol)} | ${escapeHtml(tokenText)}${escapeHtml(warnings)}</span>`;
+}
+
+function positionsHtml() {
+  const header = `
+    <section class="account-check-card">
+      <div>
+        <h3>Open Positions</h3>
+        <p>Only current token holdings show here. Use Refresh after buys, sells, or transfers.</p>
+      </div>
+      <button class="primary" data-refresh-all>Refresh Positions</button>
+      <button data-tab="wallets">Wallet Balances</button>
+      <button data-tab="pnl">PnL History</button>
+    </section>
+  `;
+  if (!state.positions.length) return `${header}${emptyState("No open positions", "Current token holdings will show here after a wallet holds non-zero tokens.")}`;
+  return `
+    ${header}
     <div class="table-list">
       ${state.positions.map((position) => `
         <article class="row-card position">
@@ -1857,8 +1984,20 @@ function positionsHtml() {
 }
 
 function pnlHtml() {
-  if (!state.pnl?.totals?.tradeCount) return emptyState("No PnL yet", "Trades made through the bot will show here.");
+  const header = `
+    <section class="account-check-card">
+      <div>
+        <h3>PnL / Results</h3>
+        <p>Refresh after a trade closes, or jump back to open positions and wallet balances.</p>
+      </div>
+      <button class="primary" data-refresh-all>Refresh PnL</button>
+      <button data-tab="positions">Open Positions</button>
+      <button data-tab="wallets">Wallet Balances</button>
+    </section>
+  `;
+  if (!state.pnl?.totals?.tradeCount) return `${header}${emptyState("No PnL yet", "Trades made through the bot will show here.")}`;
   return `
+    ${header}
     <section class="pnl-summary">
       <div><span>Trades</span><strong>${state.pnl.totals.tradeCount}</strong></div>
       <div><span>Spent</span><strong>${state.pnl.totals.spentSol} SOL</strong></div>
@@ -1911,7 +2050,7 @@ function sniperModeDescription(mode) {
     smart: "Accumulation-style picks: buyer pressure, steady volume, and cleaner momentum without obvious sell pressure.",
     fast: "Fast movers with volume picking up and a cleaner short-term trend for quicker in-and-out trades.",
     pumpsnipe: "Very early pump-style launches, usually lower market cap, with enough volume/liquidity to attempt a quick trade.",
-    moonshot: "Low market-cap picks in the 4k-40k range with usable volume and no active dump signal.",
+    moonshot: "Low market-cap picks targeting the 4k-40k range, with fallback up to 60k only when the cleaner low-cap pool is thin.",
     meme: "Narrative picks based on token metadata/keywords plus volume and trend checks. Add a social feed later for true social velocity.",
     long: "Longer-hold candidates with steadier accumulation signals and less short-term dump pressure."
   };
@@ -2028,7 +2167,7 @@ function sniperRowsHtml() {
     return emptyState("No usable picks", "Refresh again or choose a different mode.");
   }
   return `
-    <p class="scan-meta">${escapeHtml(state.scan.label)} | scored ${state.scan.scanned} | qualified ${state.scan.qualified} | mode-fit ${state.scan.modeFit}</p>
+    <p class="scan-meta">${escapeHtml(state.scan.label)} | scored ${state.scan.scanned} | qualified ${state.scan.qualified} | mode-fit ${state.scan.modeFit} | display pool ${state.scan.displayPool || 0}</p>
     <div class="pick-grid">
       ${state.scan.rows.map((row, index) => `
         <article class="pick-card">
@@ -2122,8 +2261,16 @@ document.addEventListener("click", async (event) => {
     await loadKolScan(state.kolMode, $("[data-kol-wallet]")?.value || "").catch((error) => setError(error.message));
     return;
   }
+  if (target.matches("[data-kol-scan-wallet]")) {
+    await loadKolScan(state.kolMode, target.dataset.kolScanWallet || "").catch((error) => setError(error.message));
+    return;
+  }
   if (target.matches("[data-kol-copy]")) {
     await createKolCopyPlan(target.dataset.kolCopy);
+    return;
+  }
+  if (target.matches("[data-kol-copy-wallet]")) {
+    await createKolCopyWallet(target.dataset.kolCopyWallet || "");
     return;
   }
   if (target.matches("[data-kol-trade]")) {
@@ -2183,9 +2330,10 @@ document.addEventListener("click", async (event) => {
 
   const copyValue = target.getAttribute("data-copy");
   if (copyValue) {
+    const originalLabel = target.getAttribute("data-copy-label") || target.textContent || "Copy";
     await navigator.clipboard.writeText(copyValue);
     target.textContent = "Copied";
-    setTimeout(() => { target.textContent = copyValue.length > 44 ? "Copy CA" : "Copy"; }, 1000);
+    setTimeout(() => { target.textContent = originalLabel; }, 1000);
   }
 });
 

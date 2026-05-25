@@ -58,6 +58,8 @@ services:
         value: 1
       - key: SOLANA_TRACKER_KOL_USE_PERIOD_ENDPOINT
         value: false
+      - key: KOL_COPY_SCAN_INTERVAL_MS
+        value: 30000
       - key: JUPITER_API_BASE
         value: https://api.jup.ag/swap/v2
       - key: JUPITER_MIN_INTERVAL_MS
