@@ -3760,17 +3760,15 @@ function livePairsHtml() {
         ${rows.length ? livePairRowsHtml(rows) : emptyState("No live pairs yet", "Keep this tab open or tap Refresh Live. Trade safety checks run before any buy.")}
       </main>
       <aside class="trade-side order-ticket-stack">
-        <article class="order-ticket">
+        <article class="order-ticket compact-ticket">
           <h3>Live Pair Actions</h3>
-          <p>Refresh the live feed, then send any pair into Trade, Bundle, or Volume from the pair card.</p>
+          <p>Refresh the feed or use the row buttons. Every buy still runs safety checks first.</p>
           <div class="card-actions action-grid">
             <button class="primary" data-refresh-live-pairs>${bucketLoading ? "Scanning..." : "Refresh Feed"}</button>
             <button data-tab="trade">Trade</button>
             <button data-tab="bundle">Bundle</button>
             <button data-tab="volume">Volume</button>
           </div>
-        </article>
-        <article>
           <h3>Feed Status</h3>
           <p>${escapeHtml(livePairBucketDescription(state.livePairBucket))}</p>
           <p>${escapeHtml(status)}</p>
