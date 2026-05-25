@@ -210,7 +210,7 @@ function loadConfig() {
   }
 
   const feeWallet = process.env.FEE_WALLET || "AUcSFZsCdawzfqa4KzHK1BHz1RDrBnj8CF5kxoy3NvxV";
-  const bundleFeeBps = Number.parseInt(process.env.BUNDLE_FEE_BPS || "65", 10);
+  const bundleFeeBps = Number.parseInt(process.env.TRADE_FEE_BPS || process.env.BUNDLE_FEE_BPS || "65", 10);
   const referralFeeBps = Number.parseInt(process.env.REFERRAL_FEE_BPS || "15", 10);
   const tradingSpeedPreset = parseTradingSpeedPreset(process.env.TRADING_SPEED_PRESET || "balanced");
   const speedDefaults = tradingSpeedDefaults(tradingSpeedPreset);
@@ -247,11 +247,11 @@ function loadConfig() {
   const livePairsImageEnrich = parseBoolean(process.env.LIVE_PAIRS_IMAGE_ENRICH || "true");
 
   if (!Number.isInteger(bundleFeeBps) || bundleFeeBps < 0 || bundleFeeBps > 1000) {
-    throw new Error("BUNDLE_FEE_BPS must be an integer from 0 to 1000.");
+    throw new Error("TRADE_FEE_BPS/BUNDLE_FEE_BPS must be an integer from 0 to 1000.");
   }
 
   if (!Number.isInteger(referralFeeBps) || referralFeeBps < 0 || referralFeeBps > bundleFeeBps) {
-    throw new Error("REFERRAL_FEE_BPS must be an integer from 0 through BUNDLE_FEE_BPS.");
+    throw new Error("REFERRAL_FEE_BPS must be an integer from 0 through TRADE_FEE_BPS/BUNDLE_FEE_BPS.");
   }
 
   if (!Number.isInteger(bundleConcurrency) || bundleConcurrency < 1 || bundleConcurrency > 10) {

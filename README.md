@@ -50,7 +50,8 @@ This bot does not provide wallet washing, provenance hiding, mixer behavior, or 
    JUPITER_RETRIES=5
    JUPITER_429_COOLDOWN_MS=7000
    FEE_WALLET=AUcSFZsCdawzfqa4KzHK1BHz1RDrBnj8CF5kxoy3NvxV
-   BUNDLE_FEE_BPS=65
+   TRADE_FEE_BPS=65
+   BUNDLE_FEE_BPS=
    REFERRAL_FEE_BPS=15
    BUNDLE_CONCURRENCY=2
    BALANCE_CONCURRENCY=5
@@ -181,7 +182,7 @@ KOL_COPY_SCAN_INTERVAL_MS=30000
 
 Browser users only call your `/api/web/kol/*` routes; they never receive either provider key. MadeOnSol results cache for `MADE_ON_SOL_CACHE_TTL_MS`. Solana Tracker runs in credit-safe mode by default: each uncached fallback refresh uses the KOL leaderboard plus only `SOLANA_TRACKER_KOL_SIGNAL_LOOKUPS` wallet-position lookups. `SOLANA_TRACKER_KOL_USE_PERIOD_ENDPOINT=false` avoids the `/v2/pnl/leaderboard/kols/period` endpoint and uses the main KOL leaderboard with mode-specific sorting instead. `KOL_COPY_SCAN_INTERVAL_MS` controls how often a Copy Wallet watch checks the pasted wallet's new buys; lower is faster but uses more Solana Tracker credits.
 
-Bundle buy and sell charge a 0.65% platform fee by default. `BUNDLE_FEE_BPS=65` means 65 basis points, which is 0.65%, and fees are sent to `FEE_WALLET`. If a user joins from a saved referral link, `REFERRAL_FEE_BPS=15` splits 0.15% to the referrer payout wallet and leaves 0.5% for the main fee wallet.
+Buys and sells charge a 0.65% platform trade fee by default across Trade, Bundle, Volume/timed plans, DCA, Sniper, Launch Snipe, and KOL copy plans. `TRADE_FEE_BPS=65` means 65 basis points, which is 0.65%, and fees are sent to `FEE_WALLET`. The old `BUNDLE_FEE_BPS` name is still accepted as a fallback for existing Render envs, but `TRADE_FEE_BPS` is the clearer setting going forward. If a user joins from a saved referral link, `REFERRAL_FEE_BPS=15` splits 0.15% to the referrer payout wallet and leaves 0.5% for the main fee wallet.
 
 `TRADING_SPEED_PRESET` can be `safe`, `balanced`, or `fast`. `balanced` is the default and is much smoother on a decent RPC. Use `safe` for free/public RPCs that keep returning 429s, or `fast` only with a private RPC and solid Jupiter limits. The bot also has a global RPC queue controlled by `RPC_MIN_INTERVAL_MS`, `RPC_DELAY_MS`, `RPC_RETRIES`, and `RPC_429_COOLDOWN_MS`, plus a Jupiter queue controlled by `JUPITER_MIN_INTERVAL_MS`, `JUPITER_RETRIES`, and `JUPITER_429_COOLDOWN_MS`. `BALANCE_CONCURRENCY` controls how many wallet balance reads can be prepared at once, and `BALANCE_CACHE_TTL_MS` reuses fresh balance data for quick refreshes. `BUY_RESERVE_SOL=0.01` is the recommended extra SOL per wallet for network fees and token-account creation around buys.
 
