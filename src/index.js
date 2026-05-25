@@ -7024,14 +7024,14 @@ async function getDexScreenerTokenMetadata(tokenMint) {
   return metadataFromDexPair(tokenMint, bestDexPairForToken(tokenMint, pairs));
 }
 
-async function fetchDexScreenerTokenPairsBatch(tokenMints) {
+async function fetchDexScreenerTokenPairsBatch(tokenMints, options = {}) {
   const addresses = [...new Set((tokenMints || []).filter(Boolean))].slice(0, 30);
   if (addresses.length === 0) return [];
 
   const tokenPath = addresses.map((address) => encodeURIComponent(address)).join(",");
   const data = await fetchJson(`https://api.dexscreener.com/tokens/v1/solana/${tokenPath}`, {
     headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" },
-    timeoutMs: 4_500
+    timeoutMs: options.timeoutMs || 4_500
   });
   return Array.isArray(data) ? data : [];
 }
@@ -7069,21 +7069,22 @@ function metadataFromDexPair(tokenMint, best = null) {
   };
 }
 
-async function getPumpFunTokenMetadata(tokenMint) {
+async function getPumpFunTokenMetadata(tokenMint, options = {}) {
   const headers = { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" };
   if (CONFIG.pumpFunApiToken) {
     headers.Authorization = `Bearer ${CONFIG.pumpFunApiToken}`;
   }
 
   const url = `${CONFIG.pumpFunApiBase}/coins/${encodeURIComponent(tokenMint)}?sync=false`;
-  const response = await fetchJson(url, { headers, timeoutMs: 3_500 });
+  const response = await fetchJson(url, { headers, timeoutMs: options.timeoutMs || 3_500 });
   const coin = response?.data || response;
 
   return {
     symbol: coin?.symbol || "",
     name: coin?.name || "",
     imageUrl: coin?.image_uri || coin?.image || coin?.metadata?.image || "",
-    marketCap: coin?.usd_market_cap || coin?.market_cap || null
+    marketCap: coin?.usd_market_cap || coin?.market_cap || null,
+    pairCreatedAt: normalizePairCreatedAt(firstString(coin?.created_timestamp, coin?.createdAt, coin?.created_at, coin?.timestamp))
   };
 }
 
@@ -8048,7 +8049,7 @@ function pumpFreshnessScore(item) {
 }
 
 function isPumpStyleToken(item) {
-  const haystack = `${item?.tokenMint || ""} ${item?.symbol || ""} ${item?.name || ""}`.toLowerCase();
+  const haystack = `${item?.tokenMint || ""} ${item?.symbol || ""} ${item?.name || ""} ${item?.source || ""} ${item?.category || ""}`.toLowerCase();
   return haystack.includes("pump");
 }
 
@@ -13072,7 +13073,7 @@ async function webLivePairs(userId) {
     .filter(isWebLivePairCandidate)
     .sort(compareWebLivePairs);
   const safety = await filterWebLivePairsForSafety(liveRows, 12);
-  const safeRows = safety.rows;
+  const safeRows = await enrichWebLivePairsForImages(safety.rows);
   rememberSniperScanRows(`web:${userId}`, "livepairs", safeRows);
 
   return {
@@ -13102,13 +13103,32 @@ function livePairCandidateToRow(candidate) {
   const volumeH1 = firstNumber(volumeObject.h1, profile.volumeH1, profile.volume_h1, volumeNumber) || 0;
   const m5 = normalizePercentLike(profile.priceChange?.m5 ?? profile.price_change_m5 ?? profile.m5) || 0;
   const h1 = normalizePercentLike(profile.priceChange?.h1 ?? profile.price_change_h1 ?? profile.h1) || 0;
+  const source = candidate.source || "live";
+  const symbol = firstString(profile.symbol, profile.ticker) || shortMint(candidate.tokenMint);
+  const name = firstString(profile.name) || "Fresh Launch";
+  const imageUrl = firstString(
+    profile.imageUrl,
+    profile.image_url,
+    profile.icon,
+    profile.image,
+    profile.image_uri,
+    profile.logoURI,
+    profile.logo,
+    profile.metadata?.image
+  );
+  const isPump = String(source).toLowerCase().includes("pump") || isPumpStyleToken({
+    tokenMint: candidate.tokenMint,
+    symbol,
+    name,
+    source
+  });
 
   return {
     tokenMint: candidate.tokenMint,
-    symbol: firstString(profile.symbol, profile.ticker) || shortMint(candidate.tokenMint),
-    name: firstString(profile.name) || "Fresh Launch",
+    symbol,
+    name,
     score: 0,
-    category: candidate.source === "photon" ? "Photon Live" : candidate.source?.includes("pump") ? "Pump Live" : "Live Pair",
+    category: source === "photon" ? "Photon Live" : String(source).includes("pump") ? "Pump Live" : "Live Pair",
     rugRisk: "check",
     exitRisk: "check",
     manipulationScore: "check",
@@ -13132,7 +13152,10 @@ function livePairCandidateToRow(candidate) {
     momentum: volume5m > 0 || volumeH1 > 0 ? "Fresh flow" : "Just listed",
     smartMoney: "Live",
     reasons: [],
-    source: candidate.source || "live"
+    source,
+    imageUrl,
+    isPump,
+    pumpUrl: isPump ? pumpFunUrl(candidate.tokenMint) : ""
   };
 }
 
@@ -13143,6 +13166,61 @@ function livePairStatusMessage(count, stats = {}) {
     return `Live Pairs found ${count} fresh launch(es). ${checked} mint/freeze checked; ${pending} still settling on-chain.`;
   }
   return `Live Pairs found ${count} mint/freeze checked launch(es).`;
+}
+
+async function enrichWebLivePairsForImages(rows) {
+  if (!rows.length) return rows;
+  const pairs = await fetchDexScreenerTokenPairsBatch(rows.map((row) => row.tokenMint), { timeoutMs: 1_200 }).catch(() => []);
+  const enriched = [...rows];
+
+  await runWithConcurrency(rows.map((row, index) => ({ row, index })), 4, async ({ row, index }) => {
+    const dexMeta = metadataFromDexPair(row.tokenMint, bestDexPairForToken(row.tokenMint, pairs));
+    let imageUrl = firstString(dexMeta.imageUrl, row.imageUrl);
+    let symbol = firstString(dexMeta.symbol, row.symbol);
+    let name = firstString(dexMeta.name, row.name);
+    let marketCap = firstNumber(dexMeta.marketCap, row.marketCap) || 0;
+    let liquidityUsd = firstNumber(dexMeta.liquidityUsd, row.liquidityUsd) || 0;
+    let volume5m = firstNumber(dexMeta.volume?.m5, row.volume5m) || 0;
+    let volumeH1 = firstNumber(dexMeta.volume?.h1, row.volumeH1) || 0;
+    let pairCreatedAt = firstNumber(dexMeta.pairCreatedAt, row.pairCreatedAt) || null;
+
+    if (!imageUrl && webLivePairIsPump(row)) {
+      const pumpMeta = await getPumpFunTokenMetadata(row.tokenMint, { timeoutMs: 900 }).catch(() => ({}));
+      imageUrl = firstString(pumpMeta.imageUrl, imageUrl);
+      symbol = symbol && symbol !== shortMint(row.tokenMint) ? symbol : firstString(pumpMeta.symbol, symbol);
+      name = name && name !== "Fresh Launch" ? name : firstString(pumpMeta.name, name);
+      marketCap = Number(marketCap) > 0 ? marketCap : firstNumber(pumpMeta.marketCap, marketCap) || 0;
+      pairCreatedAt = firstNumber(pairCreatedAt, pumpMeta.pairCreatedAt) || null;
+    }
+
+    const pairAgeSeconds = pairCreatedAt ? Math.max(0, Math.floor((Date.now() - Number(pairCreatedAt)) / 1000)) : row.pairAgeSeconds;
+    const isPump = webLivePairIsPump({ ...row, symbol, name });
+
+    enriched[index] = {
+      ...row,
+      symbol,
+      name,
+      imageUrl,
+      marketCap,
+      liquidityUsd,
+      volume5m,
+      volumeH1,
+      pairCreatedAt,
+      pairAgeSeconds,
+      pairAgeMinutes: Number.isFinite(Number(pairAgeSeconds)) ? Math.floor(Number(pairAgeSeconds) / 60) : row.pairAgeMinutes,
+      isPump,
+      pumpUrl: isPump ? pumpFunUrl(row.tokenMint) : ""
+    };
+  });
+
+  return enriched;
+}
+
+function webLivePairIsPump(row) {
+  return Boolean(row?.isPump)
+    || String(row?.source || "").toLowerCase().includes("pump")
+    || String(row?.category || "").toLowerCase().includes("pump")
+    || isPumpStyleToken(row);
 }
 
 function isWebLivePairCandidate(item) {
@@ -13254,10 +13332,14 @@ function normalizeSniperMode(mode) {
 }
 
 function webSniperRow(row) {
+  const isPump = Boolean(row.isPump) || webLivePairIsPump(row);
   return {
     tokenMint: row.tokenMint,
     symbol: row.symbol || shortMint(row.tokenMint),
     name: row.name || "Unknown",
+    imageUrl: row.imageUrl || "",
+    isPump,
+    pumpUrl: row.pumpUrl || (isPump ? pumpFunUrl(row.tokenMint) : ""),
     score: row.score,
     category: row.category,
     rugRisk: row.rugRisk,
@@ -14293,6 +14375,10 @@ function formatDexPriceMove(priceChange) {
 
 function dexScreenerUrl(tokenMint) {
   return `https://dexscreener.com/solana/${tokenMint}`;
+}
+
+function pumpFunUrl(tokenMint) {
+  return `https://pump.fun/coin/${tokenMint}`;
 }
 
 function kolscanAccountUrl(wallet) {

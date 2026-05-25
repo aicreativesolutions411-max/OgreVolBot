@@ -485,6 +485,9 @@ function renderTabs() {
   const panel = $("[data-panel]");
   if (!panel) return;
   document.querySelectorAll("[data-tab]").forEach((button) => {
+    if (!button.closest(".tabs")) button.removeAttribute("data-active");
+  });
+  document.querySelectorAll(".tabs [data-tab]").forEach((button) => {
     button.dataset.active = button.dataset.tab === state.activeTab ? "true" : "false";
   });
 
@@ -690,18 +693,18 @@ function createWalletSection() {
       </article>
 
       <article class="setup-hub-panel">
-        <h3>Connect X</h3>
-        <p>Save your handle for share buttons, watch posts, and PFP import.</p>
+        <h3>X Profile</h3>
+        <p>Save, change, or unlink the handle used for share buttons, watch posts, and PFP import.</p>
         <label>
           X Handle
           <input data-x-handle type="text" placeholder="@yourhandle" value="${escapeHtml(state.xHandle ? `@${state.xHandle}` : "")}">
         </label>
         <div class="profile-actions">
-          <button type="button" class="primary" data-connect-x>${state.xHandle ? "Update X" : "Connect X"}</button>
-          <button type="button" data-open-x-login>${state.xHandle ? "Open X" : "Open X Login"}</button>
-          ${state.xHandle ? `<button type="button" data-clear-x>Disconnect</button>` : ""}
+          <button type="button" data-connect-x>${state.xHandle ? "Save Different X" : "Save X Handle"}</button>
+          <button type="button" data-open-x-login>${state.xHandle ? "Open X Profile" : "Open X Login"}</button>
+          ${state.xHandle ? `<button type="button" class="danger-lite" data-clear-x>Unlink X</button>` : ""}
         </div>
-        <small data-x-status>${state.xHandle ? `Connected as @${escapeHtml(state.xHandle)}. X opens for posts and profile checks.` : "Enter a handle, then Connect X. No X password or API key is stored."}</small>
+        <small data-x-status>${state.xHandle ? `Saved as @${escapeHtml(state.xHandle)}. Type another handle and save to change it.` : "Enter a handle, then Save X Handle. No X password or API key is stored."}</small>
       </article>
     </section>
   `;
@@ -742,20 +745,21 @@ function connectWalletSection() {
 }
 
 function xConnectSection() {
+  const connected = Boolean(state.xHandle);
   return `
     <section class="create-wallet-card x-connect-card">
       <div>
-        <h3>Connect X</h3>
-        <p>Save your X handle to unlock fast share buttons for PnL cards, trades, scanner picks, watchlists, KOL signals, and launch watches. Posts always open in X for you to review first.</p>
+        <h3>X Profile</h3>
+        <p>Save, change, or unlink the X handle used for share buttons on PnL cards, trades, scanner picks, watchlists, KOL signals, and launch watches. Posts always open in X for review first.</p>
       </div>
       <label>
         X Handle
         <input data-x-handle type="text" placeholder="@yourhandle" value="${escapeHtml(state.xHandle ? `@${state.xHandle}` : "")}">
       </label>
-      <button type="button" class="primary" data-connect-x>${state.xHandle ? "Update X" : "Connect X"}</button>
-      <button type="button" data-open-x-login>${state.xHandle ? "Open X" : "Open X Login"}</button>
-      ${state.xHandle ? `<button type="button" data-clear-x>Disconnect</button>` : ""}
-      <small data-x-status>${state.xHandle ? `Connected as @${escapeHtml(state.xHandle)}. Share buttons will tag ${escapeHtml(shareSiteUrl)}.` : `Enter a handle, then Connect X. No X password or API key is stored.`}</small>
+      <button type="button" data-connect-x>${connected ? "Save Different X" : "Save X Handle"}</button>
+      <button type="button" data-open-x-login>${connected ? "Open X Profile" : "Open X Login"}</button>
+      ${connected ? `<button type="button" class="danger-lite" data-clear-x>Unlink X</button>` : ""}
+      <small data-x-status>${connected ? `Saved as @${escapeHtml(state.xHandle)}. Enter a different handle and tap Save Different X to change it, or Unlink X to remove it.` : `Enter a handle, then Save X Handle. No X password or API key is stored.`}</small>
     </section>
     <section class="create-wallet-card x-watch-card">
       <div>
@@ -2168,6 +2172,7 @@ function openXLoginOrProfile() {
 
 async function disconnectXAccount() {
   const status = $("[data-x-status]");
+  const input = $("[data-x-handle]");
   try {
     const data = await api("/api/web/profile/x", {
       method: "POST",
@@ -2175,8 +2180,9 @@ async function disconnectXAccount() {
     });
     applyUserFromApi(data.user || { ...state.user, xHandle: "" });
     state.xHandle = "";
+    if (input) input.value = "";
     clearStoredXHandle();
-    writeText(status, "X disconnected.");
+    writeText(status, "X unlinked. Enter a new handle any time and tap Save X Handle.");
     render();
   } catch (error) {
     writeText(status, error.message);
@@ -3006,12 +3012,17 @@ function livePairRowsHtml(rows) {
     <div class="pick-grid">
       ${rows.map((row, index) => `
         <article class="pick-card live-pair-card">
-          <div class="pick-top">
-            <span>#${index + 1}</span>
-            <strong>${escapeHtml(row.symbol || row.shortMint || shortAddress(row.tokenMint))}</strong>
-            <em>${escapeHtml(row.liveLabel || "Live")}</em>
+          <div class="live-pair-head">
+            ${livePairAvatarHtml(row)}
+            <div>
+              <div class="pick-top">
+                <span>#${index + 1}</span>
+                <strong>${escapeHtml(row.symbol || row.shortMint || shortAddress(row.tokenMint))}</strong>
+                <em>${escapeHtml(row.liveLabel || "Live")}</em>
+              </div>
+              <h3>${escapeHtml(row.name || row.category || "Fresh Pair")}</h3>
+            </div>
           </div>
-          <h3>${escapeHtml(row.name || row.category || "Fresh Pair")}</h3>
           <p>${escapeHtml(row.scalpSetup || row.momentum || "Fresh feed")} | Age ${escapeHtml(row.pairAgeLabel || "new")} | Rug ${escapeHtml(row.rugRisk ?? "n/a")}/100</p>
           <dl>
             <div><dt>MC</dt><dd>${escapeHtml(row.marketCapLabel || "$0")}</dd></div>
@@ -3026,12 +3037,21 @@ function livePairRowsHtml(rows) {
             <button data-use-token-bundle="${escapeHtml(row.tokenMint)}">Bundle</button>
             <button data-use-token-volume="${escapeHtml(row.tokenMint)}">Volume</button>
             ${xShareButton(livePairShareText(row), "Share")}
+            ${row.pumpUrl ? `<a href="${escapeHtml(row.pumpUrl)}" target="_blank" rel="noreferrer">Pump</a>` : ""}
             <a href="${escapeHtml(row.dexUrl || dexUrl(row.tokenMint))}" target="_blank" rel="noreferrer">Dex</a>
           </div>
         </article>
       `).join("")}
     </div>
   `;
+}
+
+function livePairAvatarHtml(row) {
+  const label = String(row.symbol || row.name || row.shortMint || "?").trim().slice(0, 2).toUpperCase() || "?";
+  if (row.imageUrl) {
+    return `<div class="live-pair-avatar"><img src="${escapeHtml(row.imageUrl)}" alt="${escapeHtml(row.symbol || row.name || "Token")}" loading="lazy" onerror="this.hidden=true;"><span>${escapeHtml(label)}</span></div>`;
+  }
+  return `<div class="live-pair-avatar fallback">${escapeHtml(label)}</div>`;
 }
 
 function livePairShareText(row) {

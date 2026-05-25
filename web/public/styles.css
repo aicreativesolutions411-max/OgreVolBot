@@ -342,6 +342,12 @@ button:disabled {
   color: #d4e4cf;
 }
 
+.danger-lite {
+  border-color: rgba(255, 93, 93, 0.42) !important;
+  color: #ffd0d0 !important;
+  background: rgba(255, 93, 93, 0.08) !important;
+}
+
 .error {
   margin: 0;
   border: 1px solid rgba(255, 93, 93, 0.35);
@@ -496,9 +502,10 @@ button:disabled {
 
 .tabs button[data-active="true"],
 .mode-row button[data-active="true"] {
-  background: rgba(114, 255, 35, 0.16);
+  background: linear-gradient(135deg, rgba(114, 255, 35, 0.94), rgba(187, 255, 99, 0.94));
   border-color: var(--line-strong);
-  color: var(--green-2);
+  color: #071006;
+  box-shadow: 0 0 18px rgba(114, 255, 35, 0.16);
 }
 
 .panel-host {
@@ -956,6 +963,43 @@ code {
   gap: 10px;
   padding: 14px;
   background: var(--panel-2);
+}
+
+.live-pair-head {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.live-pair-avatar {
+  width: 58px;
+  height: 58px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background:
+    radial-gradient(circle at 30% 20%, rgba(187, 255, 99, 0.32), transparent 32px),
+    rgba(255, 255, 255, 0.04);
+  color: var(--green-2);
+  font-weight: 950;
+}
+
+.live-pair-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.live-pair-avatar span {
+  display: none;
+}
+
+.live-pair-avatar img[hidden] + span,
+.live-pair-avatar.fallback {
+  display: grid;
 }
 
 .pick-top {
