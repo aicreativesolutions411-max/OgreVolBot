@@ -72,6 +72,7 @@ const state = {
   scanMode: "safe",
   tradeToken: "",
   tradeResult: null,
+  tradePlanResult: null,
   bundleToken: "",
   bundleResult: null,
   volumeToken: "",
@@ -1017,7 +1018,7 @@ function tradeHtml() {
         <div class="trade-block">
           <div>
             <h4>Buy</h4>
-            <p>Quick SOL amounts include the bot fee and keep the safety reserve.</p>
+            <p>Quick SOL amounts include the bot fee and keep the safety reserve. Optional auto-exit arms only the selected wallet.</p>
           </div>
           <div class="quick-grid">
             <button class="primary" data-trade-buy-quick="0.1">Buy .10 SOL</button>
@@ -1028,6 +1029,54 @@ function tradeHtml() {
           <div class="inline-action">
             <input data-buy-custom type="number" min="0" step="0.01" placeholder="Custom SOL">
             <button data-trade-buy-custom>Buy Custom</button>
+          </div>
+          <div class="volume-grid compact-grid">
+            <label>
+              Take Profit
+              <select data-trade-auto-tp data-custom-select="trade-auto-tp">
+                <option value="0" selected>Off</option>
+                <option value="15">+15%</option>
+                <option value="25">+25%</option>
+                <option value="50">+50%</option>
+                <option value="100">+100%</option>
+                <option value="custom">Custom</option>
+              </select>
+              <input data-trade-auto-tp-custom data-custom-for="trade-auto-tp" type="text" placeholder="Custom: 500 or 5x" hidden>
+            </label>
+            <label>
+              Stop Loss
+              <select data-trade-auto-sl data-custom-select="trade-auto-sl">
+                <option value="0" selected>Off</option>
+                <option value="8">-8%</option>
+                <option value="10">-10%</option>
+                <option value="15">-15%</option>
+                <option value="25">-25%</option>
+                <option value="custom">Custom</option>
+              </select>
+              <input data-trade-auto-sl-custom data-custom-for="trade-auto-sl" type="text" placeholder="Custom SL %" hidden>
+            </label>
+            <label>
+              Fallback Timer
+              <select data-trade-auto-delay data-custom-select="trade-auto-delay">
+                <option value="off" selected>Off</option>
+                <option value="5s">5 sec</option>
+                <option value="5">5 min</option>
+                <option value="15">15 min</option>
+                <option value="60">1 hour</option>
+                <option value="custom">Custom</option>
+              </select>
+              <input data-trade-auto-delay-custom data-custom-for="trade-auto-delay" type="text" placeholder="Custom: 45s, 2, 2h" hidden>
+            </label>
+            <label>
+              Exit Size
+              <select data-trade-auto-sell-percent data-custom-select="trade-auto-sell-percent">
+                <option value="50">50%</option>
+                <option value="80">80%</option>
+                <option value="100" selected>100%</option>
+                <option value="custom">Custom</option>
+              </select>
+              <input data-trade-auto-sell-percent-custom data-custom-for="trade-auto-sell-percent" type="number" min="1" max="100" step="1" placeholder="Custom %" hidden>
+            </label>
           </div>
         </div>
 
@@ -1045,6 +1094,89 @@ function tradeHtml() {
             <input data-sell-custom type="number" min="1" max="100" step="1" placeholder="Custom %">
             <button data-trade-sell-custom>Sell Custom</button>
           </div>
+        </div>
+
+        <div class="trade-block managed-trade-block">
+          <div>
+            <h4>Managed Buy + Auto Exit</h4>
+            <p>Use one wallet, multiple wallets, or a saved group. The bot buys, then watches take-profit, stop-loss, or timer.</p>
+          </div>
+          <div class="wallet-checks">
+            ${walletChecksHtml("trade-plan")}
+          </div>
+          ${walletGroupHtml("trade-plan")}
+          <div class="volume-grid">
+            <label>
+              Buy Per Wallet
+              <select data-trade-plan-amount data-custom-select="trade-plan-amount">
+                <option value="0.1" selected>.10 SOL</option>
+                <option value="0.5">.50 SOL</option>
+                <option value="1">1 SOL</option>
+                <option value="custom">Custom</option>
+              </select>
+              <input data-trade-plan-amount-custom data-custom-for="trade-plan-amount" type="number" min="0" step="0.01" placeholder="Custom SOL" hidden>
+            </label>
+            <label>
+              Take Profit
+              <select data-trade-plan-tp data-custom-select="trade-plan-tp">
+                <option value="0">Off</option>
+                <option value="15">+15%</option>
+                <option value="25" selected>+25%</option>
+                <option value="50">+50%</option>
+                <option value="100">+100%</option>
+                <option value="250">+250%</option>
+                <option value="custom">Custom</option>
+              </select>
+              <input data-trade-plan-tp-custom data-custom-for="trade-plan-tp" type="text" placeholder="Custom: 500 or 5x" hidden>
+            </label>
+            <label>
+              Stop Loss
+              <select data-trade-plan-sl data-custom-select="trade-plan-sl">
+                <option value="0">Off</option>
+                <option value="8" selected>-8%</option>
+                <option value="10">-10%</option>
+                <option value="15">-15%</option>
+                <option value="25">-25%</option>
+                <option value="custom">Custom</option>
+              </select>
+              <input data-trade-plan-sl-custom data-custom-for="trade-plan-sl" type="text" placeholder="Custom SL %" hidden>
+            </label>
+            <label>
+              Fallback Sell
+              <select data-trade-plan-delay data-custom-select="trade-plan-delay">
+                <option value="off">No timer</option>
+                <option value="5s">5 sec</option>
+                <option value="1">1 min</option>
+                <option value="5" selected>5 min</option>
+                <option value="15">15 min</option>
+                <option value="60">1 hour</option>
+                <option value="custom">Custom</option>
+              </select>
+              <input data-trade-plan-delay-custom data-custom-for="trade-plan-delay" type="text" placeholder="Custom: 45s, 2, 2h" hidden>
+            </label>
+            <label>
+              Timer Sell
+              <select data-trade-plan-sell-percent data-custom-select="trade-plan-sell-percent">
+                <option value="50">50%</option>
+                <option value="80">80%</option>
+                <option value="100" selected>100%</option>
+                <option value="custom">Custom</option>
+              </select>
+              <input data-trade-plan-sell-percent-custom data-custom-for="trade-plan-sell-percent" type="number" min="1" max="100" step="1" placeholder="Custom %" hidden>
+            </label>
+            <label>
+              Slippage
+              <select data-trade-plan-slippage data-custom-select="trade-plan-slippage">
+                <option value="300">3%</option>
+                <option value="400" selected>4%</option>
+                <option value="500">5%</option>
+                <option value="custom">Custom</option>
+              </select>
+              <input data-trade-plan-slippage-custom data-custom-for="trade-plan-slippage" type="number" min="1" max="5000" step="1" placeholder="Custom bps" hidden>
+            </label>
+          </div>
+          ${walletExitTargetsHtml("trade-plan")}
+          <button class="primary" data-trade-plan-start>Buy + Watch Exit</button>
         </div>
         <p class="trade-status" data-trade-status>${state.tradeResult ? escapeHtml(state.tradeResult.message || "Trade complete.") : "Ready."}</p>
       </article>
@@ -1068,6 +1200,7 @@ function tradeHtml() {
           </div>
         </article>
         ${tradeResultHtml()}
+        ${tradePlanResultHtml()}
       </aside>
     </section>
   `;
@@ -1105,6 +1238,37 @@ function tradeResultHtml() {
       <div class="card-actions">
         <button data-copy="${escapeHtml(row.tokenMint)}">Copy CA</button>
         ${xShareButton(tradeShareText(row))}
+        <a href="${escapeHtml(row.dexUrl)}" target="_blank" rel="noreferrer">Dex</a>
+      </div>
+    </article>
+  `;
+}
+
+function tradePlanResultHtml() {
+  if (!state.tradePlanResult) {
+    return `
+      <article>
+        <h3>Managed Exit</h3>
+        <p>Use Buy + Watch Exit when you want the token trade to manage TP, SL, and timer exits automatically.</p>
+      </article>
+    `;
+  }
+
+  const row = state.tradePlanResult;
+  return `
+    <article class="latest-trade">
+      <h3>Managed Trade Armed</h3>
+      <p>${escapeHtml(row.message || "")}</p>
+      <dl>
+        <div><dt>Wallets</dt><dd>${escapeHtml(row.walletLabel || `${row.successCount || 0}/${row.walletCount || 0}`)}</dd></div>
+        <div><dt>Buy</dt><dd>${escapeHtml(row.amountSol)} SOL</dd></div>
+        <div><dt>TP / SL</dt><dd>${escapeHtml(row.takeProfitSummary || `+${row.takeProfitPct}%`)} / ${escapeHtml(row.stopLossSummary || `-${row.stopLossPct}%`)}</dd></div>
+        <div><dt>Timer Sell</dt><dd>${escapeHtml(timerSellSummary(row))}</dd></div>
+      </dl>
+      ${row.results?.length ? `<div class="mini-results">${row.results.map((item) => `<span data-ok="${item.ok ? "true" : "false"}">${escapeHtml(item.message || item)}</span>`).join("")}</div>` : ""}
+      <div class="card-actions">
+        <button data-copy="${escapeHtml(row.tokenMint)}">Copy CA</button>
+        ${xShareButton(planShareText(row, "Armed managed trade"))}
         <a href="${escapeHtml(row.dexUrl)}" target="_blank" rel="noreferrer">Dex</a>
       </div>
     </article>
@@ -1169,6 +1333,7 @@ function bundleHtml() {
             <label>
               Fallback Sell
               <select data-bundle-plan-delay data-custom-select="bundle-plan-delay">
+                <option value="off">No timer</option>
                 <option value="5s">5 sec</option>
                 <option value="1">1 min</option>
                 <option value="5" selected>5 min</option>
@@ -1295,9 +1460,10 @@ function bundleResultHtml() {
 }
 
 function walletChecksHtml(prefix) {
+  const defaultCheckedCount = prefix === "trade-plan" ? 1 : 6;
   return state.wallets.map((wallet, index) => `
     <label class="wallet-check">
-      <input type="checkbox" data-${prefix}-wallet value="${wallet.index}" ${index < 6 ? "checked" : ""}>
+      <input type="checkbox" data-${prefix}-wallet value="${wallet.index}" ${index < defaultCheckedCount ? "checked" : ""}>
       <span>${wallet.index}. ${escapeHtml(wallet.label)}</span>
       <code>${escapeHtml(wallet.shortPublicKey || wallet.publicKey)}</code>
     </label>
@@ -1319,6 +1485,10 @@ function fieldValue(selectSelector, customSelector, fallback = "") {
   const custom = $(customSelector)?.value?.trim();
   if (!custom) throw new Error("Enter the custom value first.");
   return custom;
+}
+
+function timerSellSummary(row) {
+  return Number(row?.sellDelaySeconds || 0) > 0 ? `${row?.sellPercent || 100}%` : "Off";
 }
 
 function walletExitTargetsHtml(prefix) {
@@ -1405,6 +1575,7 @@ function volumeHtml() {
           <label>
             Sell After
             <select data-volume-delay data-custom-select="volume-delay">
+              <option value="off">No timer</option>
               <option value="5s">5 sec</option>
               <option value="1">1 min</option>
               <option value="5" selected>5 min</option>
@@ -1533,7 +1704,7 @@ function volumeResultHtml() {
         <div><dt>TP / SL</dt><dd>${escapeHtml(row.takeProfitSummary || `+${row.takeProfitPct}%`)} / ${escapeHtml(row.stopLossSummary || `-${row.stopLossPct}%`)}</dd></div>
         <div><dt>Repeat</dt><dd>${escapeHtml(row.loopCount)}x</dd></div>
         <div><dt>Repeat Wait</dt><dd>${escapeHtml(row.loopDelaySeconds || 0)} sec</dd></div>
-        <div><dt>Timer Sell</dt><dd>${escapeHtml(row.sellPercent || 100)}%</dd></div>
+        <div><dt>Timer Sell</dt><dd>${escapeHtml(timerSellSummary(row))}</dd></div>
       </dl>
       ${row.results?.length ? `<div class="mini-results">${row.results.map((item) => `<span data-ok="${item.ok ? "true" : "false"}">${escapeHtml(item.message || item)}</span>`).join("")}</div>` : ""}
       <div class="card-actions">
@@ -1599,6 +1770,7 @@ function launchHtml() {
           <label>
             Fallback Sell
             <select data-launch-delay data-custom-select="launch-delay">
+              <option value="off">No timer</option>
               <option value="5s">5 sec</option>
               <option value="1">1 min</option>
               <option value="3" selected>3 min</option>
@@ -1742,6 +1914,7 @@ function kolHtml() {
           <label>
             Fallback Sell
             <select data-kol-delay data-custom-select="kol-delay">
+              <option value="off">No timer</option>
               <option value="5s">5 sec</option>
               <option value="1">1 min</option>
               <option value="5" selected>5 min</option>
@@ -1921,13 +2094,21 @@ function kolRowsHtml() {
         const realizedLabel = isCluster ? "Buys" : "Realized";
         return `
           <article class="pick-card kol-card">
-            ${kolAvatarMarkup(row, "kol-avatar small")}
-            <div class="pick-top">
-              <span>${index + 1}</span>
-              <h3>${escapeHtml(row.symbol || "KOL Signal")}</h3>
-              <em>${escapeHtml(row.signalType || "KOL signal")}</em>
+            <div class="kol-token-head">
+              ${livePairAvatarHtml(row)}
+              <div>
+                <div class="pick-top">
+                  <span>${index + 1}</span>
+                  <strong>${escapeHtml(row.symbol || "KOL Signal")}</strong>
+                  <em>${escapeHtml(row.signalType || "KOL signal")}</em>
+                </div>
+                <h3>${escapeHtml(row.name || "")}</h3>
+                <div class="kol-source-row">
+                  ${kolAvatarMarkup(row, "kol-avatar tiny")}
+                  <span>${escapeHtml(kolValue)}</span>
+                </div>
+              </div>
             </div>
-            <p>${escapeHtml(row.name || "")}</p>
             <code>${escapeHtml(row.tokenMint)}</code>
             <dl>
               <div><dt>Score</dt><dd>${escapeHtml(row.score || 0)}/100</dd></div>
@@ -1943,6 +2124,7 @@ function kolRowsHtml() {
             <button data-kol-bundle="${escapeHtml(row.tokenMint)}">Bundle</button>
             ${xShareButton(kolShareText(row), "Share Signal")}
             ${row.kolWallet ? `<button data-kol-copy-wallet="${escapeHtml(row.kolWallet)}">Copy Wallet</button>` : ""}
+            ${row.pumpUrl ? `<a href="${escapeHtml(row.pumpUrl)}" target="_blank" rel="noreferrer">Pump</a>` : ""}
             <a href="${escapeHtml(row.dexUrl)}" target="_blank" rel="noreferrer">Chart</a>
               ${row.kolscanUrl || row.kolWallet ? `<a href="${escapeHtml(row.kolscanUrl || kolscanUrl(row.kolWallet))}" target="_blank" rel="noreferrer">KOLscan</a>` : ""}
               <button data-copy="${escapeHtml(row.tokenMint)}">Copy CA</button>
@@ -2470,6 +2652,22 @@ function readTradeForm() {
   return { walletIndex, tokenMint, slippageBps };
 }
 
+function isEnabledTradeTarget(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return Boolean(normalized) && !["0", "off", "none", "no", "disabled"].includes(normalized);
+}
+
+function readSingleTradeAutoExit() {
+  const takeProfitPct = fieldValue("[data-trade-auto-tp]", "[data-trade-auto-tp-custom]", "0");
+  const stopLossPct = fieldValue("[data-trade-auto-sl]", "[data-trade-auto-sl-custom]", "0");
+  const sellDelay = fieldValue("[data-trade-auto-delay]", "[data-trade-auto-delay-custom]", "off");
+  const sellPercent = fieldValue("[data-trade-auto-sell-percent]", "[data-trade-auto-sell-percent-custom]", "100");
+  const enabled = isEnabledTradeTarget(takeProfitPct)
+    || isEnabledTradeTarget(stopLossPct)
+    || isEnabledTradeTarget(sellDelay);
+  return { enabled, takeProfitPct, stopLossPct, sellDelay, sellPercent };
+}
+
 function setTradeStatus(message) {
   const status = $("[data-trade-status]");
   writeText(status, message);
@@ -2491,12 +2689,26 @@ async function executeWebBuy(amountSol, amountMode = "fixed") {
       payload.amountSol = String(value);
     }
 
-    setTradeStatus("Sending buy...");
+    const autoExit = readSingleTradeAutoExit();
+    if (autoExit.enabled) {
+      Object.assign(payload, {
+        autoExit: true,
+        takeProfitPct: autoExit.takeProfitPct,
+        stopLossPct: autoExit.stopLossPct,
+        sellDelay: autoExit.sellDelay,
+        sellPercent: autoExit.sellPercent
+      });
+    }
+
+    setTradeStatus(autoExit.enabled ? "Sending buy and arming auto-exit..." : "Sending buy...");
     const data = await api("/api/web/trade/buy", {
       method: "POST",
       body: JSON.stringify(payload)
     });
     state.tradeResult = data.trade;
+    if (data.trade?.autoExitPlan) {
+      state.tradePlanResult = data.trade.autoExitPlan;
+    }
     await loadAll();
     state.activeTab = "trade";
     render();
@@ -2524,6 +2736,55 @@ async function executeWebSell(percent) {
       })
     });
     state.tradeResult = data.trade;
+    await loadAll();
+    state.activeTab = "trade";
+    render();
+  } catch (error) {
+    setTradeStatus(error.message);
+  }
+}
+
+function readTradePlanForm() {
+  const walletIndexes = checkedWalletIndexes("trade-plan");
+  const walletGroup = $("[data-trade-plan-group]")?.value?.trim() || "";
+  const tokenMint = $("[data-trade-token]")?.value?.trim() || "";
+  const amountSol = fieldValue("[data-trade-plan-amount]", "[data-trade-plan-amount-custom]", "0.1");
+  const takeProfitPct = fieldValue("[data-trade-plan-tp]", "[data-trade-plan-tp-custom]", "25");
+  const stopLossPct = fieldValue("[data-trade-plan-sl]", "[data-trade-plan-sl-custom]", "8");
+  const sellDelay = fieldValue("[data-trade-plan-delay]", "[data-trade-plan-delay-custom]", "5");
+  const sellPercent = fieldValue("[data-trade-plan-sell-percent]", "[data-trade-plan-sell-percent-custom]", "100");
+  const slippageBps = fieldValue("[data-trade-plan-slippage]", "[data-trade-plan-slippage-custom]", "400");
+  if (!walletIndexes.length && !walletGroup) throw new Error("Choose at least one wallet or enter a group label.");
+  if (!tokenMint) throw new Error("Paste a token CA first.");
+  state.tradeToken = tokenMint;
+  state.volumeToken = tokenMint;
+  state.bundleToken = tokenMint;
+  return {
+    walletIndexes,
+    walletGroup,
+    tokenMint,
+    amountSol,
+    sellDelay,
+    takeProfitPct,
+    stopLossPct,
+    sellPercent,
+    loopCount: "1",
+    loopDelay: "0",
+    slippageBps,
+    ...readWalletExitTargets("trade-plan")
+  };
+}
+
+async function createTradePlan() {
+  try {
+    const payload = readTradePlanForm();
+    setTradeStatus("Buying and arming managed exit...");
+    const data = await api("/api/web/trade/plan", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    state.tradePlanResult = data.plan;
+    state.tradeResult = null;
     await loadAll();
     state.activeTab = "trade";
     render();
@@ -2865,7 +3126,8 @@ function connectedWalletCardHtml() {
   const warningText = balance.warnings?.length ? ` | ${balance.warnings.length} warning(s)` : "";
   const tokenRows = (balance.tokens || []).slice(0, 6).map((token) => `
     <a href="${escapeHtml(token.dexUrl || dexUrl(token.mint))}" target="_blank" rel="noreferrer">
-      ${escapeHtml(token.shortMint || shortAddress(token.mint))}: ${escapeHtml(token.uiAmount ?? "held")}
+      ${livePairAvatarHtml({ ...token, tokenMint: token.mint, symbol: token.symbol || token.shortMint, name: token.name || "" })}
+      <span>${escapeHtml(token.symbol || token.shortMint || shortAddress(token.mint))}: ${escapeHtml(token.uiAmount ?? "held")}</span>
     </a>
   `).join("");
   return `
@@ -2930,10 +3192,12 @@ function positionsHtml() {
     ${header}
     <div class="table-list">
       ${state.positions.map((position) => `
-        <article class="row-card position">
-          <div>
-            <strong>${position.shortMint}</strong>
+        <article class="row-card position with-avatar">
+          ${livePairAvatarHtml(position)}
+          <div class="row-main">
+            <strong>${escapeHtml(position.symbol || position.shortMint)}</strong>
             <span>${position.uiAmount} tokens across ${position.walletCount} wallet(s)</span>
+            ${position.name ? `<small>${escapeHtml(position.name)}</small>` : ""}
             <small>Value: ${position.estimatedValueSol || "unavailable"} SOL | PnL: ${position.openPnlSol || position.realizedSol}</small>
           </div>
           <div class="card-actions">
@@ -2969,10 +3233,12 @@ function pnlHtml() {
     </section>
     <div class="table-list">
       ${state.pnl.tokens.map((row) => `
-        <article class="row-card">
-          <div>
-            <strong>${row.shortMint}</strong>
+        <article class="row-card with-avatar">
+          ${livePairAvatarHtml(row)}
+          <div class="row-main">
+            <strong>${escapeHtml(row.symbol || row.shortMint)}</strong>
             <span>${row.realizedSol} realized | buys ${row.buys} / sells ${row.sells}</span>
+            ${row.name ? `<small>${escapeHtml(row.name)}</small>` : ""}
             <small>Latest: ${formatDate(row.lastTradeAt)}</small>
           </div>
           <div class="card-actions">
@@ -2996,14 +3262,14 @@ function livePairsHtml() {
     <section class="account-check-card">
       <div>
         <h3>Live Pairs</h3>
-        <p>Newest Pump/new-pair listings with mint/freeze safety checks. Auto-refresh runs every few seconds while this tab is open.</p>
+        <p>Newest Pump/new-pair listings with fast metadata refresh. Trade safety checks run before any buy.</p>
       </div>
       <button class="primary" data-refresh-live-pairs>${state.livePairsLoading ? "Scanning..." : "Refresh Live"}</button>
       <button data-tab="trade">Trade</button>
       <button data-tab="bundle">Bundle</button>
     </section>
     <p class="scan-meta">${escapeHtml(status)}${state.livePairsLastUpdatedAt ? ` Last updated ${escapeHtml(formatDate(state.livePairsLastUpdatedAt))}.` : ""}</p>
-    ${rows.length ? livePairRowsHtml(rows) : emptyState("No live pairs yet", "Keep this tab open or tap Refresh Live. The feed filters out active mint/freeze authority and Token-2022 mints.")}
+    ${rows.length ? livePairRowsHtml(rows) : emptyState("No live pairs yet", "Keep this tab open or tap Refresh Live. Trade safety checks run before any buy.")}
   `;
 }
 
@@ -3147,6 +3413,7 @@ function sniperSetupHtml() {
         <label>
           Fallback Sell
           <select data-sniper-delay data-custom-select="sniper-delay">
+            <option value="off">No timer</option>
             <option value="5s">5 sec</option>
             <option value="1">1 min</option>
             <option value="3" ${isPump ? "selected" : ""}>3 min</option>
@@ -3211,12 +3478,17 @@ function sniperRowsHtml() {
     <div class="pick-grid">
       ${state.scan.rows.map((row, index) => `
         <article class="pick-card">
-          <div class="pick-top">
-            <span>#${index + 1}</span>
-            <strong>${escapeHtml(row.symbol || row.shortMint)}</strong>
-            <em>${row.score}/100</em>
+          <div class="live-pair-head">
+            ${livePairAvatarHtml(row)}
+            <div>
+              <div class="pick-top">
+                <span>#${index + 1}</span>
+                <strong>${escapeHtml(row.symbol || row.shortMint)}</strong>
+                <em>${row.score}/100</em>
+              </div>
+              <h3>${escapeHtml(row.category)}</h3>
+            </div>
           </div>
-          <h3>${escapeHtml(row.category)}</h3>
           <p>${escapeHtml(row.scalpSetup || row.momentum)} | Rug ${row.rugRisk}/100 | Exit ${row.exitRisk}/100</p>
           <dl>
             <div><dt>MC</dt><dd>${row.marketCapLabel}</dd></div>
@@ -3229,6 +3501,7 @@ function sniperRowsHtml() {
             <button class="primary" data-sniper-buy="${row.tokenMint}">Snipe</button>
             <button data-use-token="${row.tokenMint}">Trade</button>
             ${xShareButton(sniperShareText(row), "Share Pick")}
+            ${row.pumpUrl ? `<a href="${escapeHtml(row.pumpUrl)}" target="_blank" rel="noreferrer">Pump</a>` : ""}
             <a href="${row.dexUrl}" target="_blank" rel="noreferrer">Dex</a>
           </div>
         </article>
@@ -3305,6 +3578,9 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-trade-sell-custom]")) {
     await executeWebSell($("[data-sell-custom]")?.value);
+  }
+  if (target.matches("[data-trade-plan-start]")) {
+    await createTradePlan();
   }
   if (target.matches("[data-volume-start]")) {
     await createVolumePlan();

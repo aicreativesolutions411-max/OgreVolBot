@@ -36,6 +36,7 @@ let sniperCandidatesCache = { cachedAt: 0, value: [] };
 const dexSearchCandidatesCache = new Map();
 let photonNewPairsCache = { cachedAt: 0, value: [] };
 let manualLaunchCandidatesCache = { cachedAt: 0, value: [] };
+let livePairsSharedCache = { cachedAt: 0, value: null, promise: null };
 const solanaTrackerCache = new Map();
 const madeOnSolCache = new Map();
 const webLoginAttemptLimits = new Map();
@@ -239,6 +240,10 @@ function loadConfig() {
   const madeOnSolKolLimit = Number.parseInt(process.env.MADE_ON_SOL_KOL_LIMIT || "10", 10);
   const madeOnSolCacheTtlMs = Number.parseInt(process.env.MADE_ON_SOL_CACHE_TTL_MS || "900000", 10);
   const kolUseSolanaTrackerFallback = parseBoolean(process.env.KOL_USE_SOLANA_TRACKER_FALLBACK || "false");
+  const livePairsRpcSafety = parseBoolean(process.env.LIVE_PAIRS_RPC_SAFETY || "false");
+  const livePairsRefreshSeconds = Number.parseInt(process.env.LIVE_PAIRS_REFRESH_SECONDS || "4", 10);
+  const livePairsSharedCacheMs = Number.parseInt(process.env.LIVE_PAIRS_SHARED_CACHE_MS || "4000", 10);
+  const livePairsImageEnrich = parseBoolean(process.env.LIVE_PAIRS_IMAGE_ENRICH || "true");
 
   if (!Number.isInteger(bundleFeeBps) || bundleFeeBps < 0 || bundleFeeBps > 1000) {
     throw new Error("BUNDLE_FEE_BPS must be an integer from 0 to 1000.");
@@ -344,6 +349,14 @@ function loadConfig() {
     throw new Error("MADE_ON_SOL_CACHE_TTL_MS must be an integer from 60000 to 86400000.");
   }
 
+  if (!Number.isInteger(livePairsRefreshSeconds) || livePairsRefreshSeconds < 2 || livePairsRefreshSeconds > 60) {
+    throw new Error("LIVE_PAIRS_REFRESH_SECONDS must be an integer from 2 to 60.");
+  }
+
+  if (!Number.isInteger(livePairsSharedCacheMs) || livePairsSharedCacheMs < 0 || livePairsSharedCacheMs > 60_000) {
+    throw new Error("LIVE_PAIRS_SHARED_CACHE_MS must be an integer from 0 to 60000.");
+  }
+
   try {
     new PublicKey(feeWallet);
   } catch {
@@ -370,6 +383,10 @@ function loadConfig() {
     pumpFunApiToken: process.env.PUMPFUN_API_TOKEN || "",
     photonNewPairsUrl: (process.env.PHOTON_NEW_PAIRS_URL || "").trim(),
     photonApiKey: process.env.PHOTON_API_KEY || "",
+    livePairsRpcSafety,
+    livePairsRefreshSeconds,
+    livePairsSharedCacheMs,
+    livePairsImageEnrich,
     solanaTrackerApiKey: process.env.SOLANA_TRACKER_API_KEY || "",
     solanaTrackerApiBase: (process.env.SOLANA_TRACKER_API_BASE || "https://data.solanatracker.io").replace(/\/$/, ""),
     solanaTrackerKolLimit,
@@ -766,6 +783,16 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendWebJson(request, response, 200, {
         ok: true,
         trade: result
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/trade/plan") {
+      const body = await readJsonRequestBody(request);
+      const result = await webCreateTradePlan(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        plan: result
       });
       return;
     }
@@ -2466,15 +2493,16 @@ async function continueFlow(chatId, text, session) {
       case "auto_bundle_stop_loss":
         session.data.stopLossPct = parseOptionalTriggerPercent(text);
         session.step = "auto_bundle_timer";
-        await sendQuickChoicePrompt(chatId, "Choose fallback timer if TP/SL does not trigger first.", [
-          [{ text: "30 min", value: "30" }, { text: "1 hour", value: "60" }],
-          [{ text: "6 hours", value: "360" }, { text: "1 day", value: "1440" }],
-          [{ text: "2 days", value: "2880" }]
+        await sendQuickChoicePrompt(chatId, "Choose fallback timer if TP/SL does not trigger first, or choose No Timer to only use TP/SL.", [
+          [{ text: "No Timer", value: "off" }, { text: "30 min", value: "30" }],
+          [{ text: "1 hour", value: "60" }, { text: "6 hours", value: "360" }],
+          [{ text: "1 day", value: "1440" }, { text: "2 days", value: "2880" }]
         ]);
         break;
       case "auto_bundle_timer":
-        session.data.sellDelaySeconds = parseSellDelaySeconds(text);
+        session.data.sellDelaySeconds = parseOptionalSellDelaySeconds(text);
         session.data.sellDelayMinutes = session.data.sellDelaySeconds / 60;
+        ensureTimedPlanHasExit(session.data);
         session.step = "auto_bundle_slippage";
         await sendQuickSlippagePrompt(chatId, `Choose slippage for Auto Bundle, or type default for ${CONFIG.defaultSlippageBps} bps.`);
         break;
@@ -2527,6 +2555,17 @@ async function continueFlow(chatId, text, session) {
         break;
       case "manual_launch_stop_loss":
         session.data.stopLossPct = parseOptionalTriggerPercent(text);
+        session.step = "manual_launch_timer";
+        await sendQuickChoicePrompt(chatId, "Choose fallback timer after the launch buy, or choose No Timer to only use TP/SL.", [
+          [{ text: "No Timer", value: "off" }, { text: "5 sec", value: "5s" }],
+          [{ text: "1 min", value: "1" }, { text: "3 min", value: "3" }],
+          [{ text: "5 min", value: "5" }, { text: "15 min", value: "15" }]
+        ]);
+        break;
+      case "manual_launch_timer":
+        session.data.sellDelaySeconds = parseOptionalSellDelaySeconds(text);
+        session.data.sellDelayMinutes = session.data.sellDelaySeconds / 60;
+        ensureTimedPlanHasExit(session.data);
         session.step = "manual_launch_slippage";
         await sendQuickSlippagePrompt(chatId, `Choose slippage for launch entry, or type default for ${PUMPSNIPE_SLIPPAGE_BPS} bps.`, { defaultBps: PUMPSNIPE_SLIPPAGE_BPS, fastButtons: true });
         break;
@@ -2612,15 +2651,17 @@ async function continueFlow(chatId, text, session) {
       case "buy_auto_stop_loss":
         session.data.stopLossPct = parseOptionalTriggerPercent(text);
         session.step = "buy_auto_timer";
-        await sendQuickChoicePrompt(chatId, "Choose fallback auto-sell timer if TP/SL does not trigger first.", [
-          [{ text: "5 min", value: "5" }, { text: "30 min", value: "30" }],
-          [{ text: "1 hour", value: "60" }, { text: "2 hours", value: "120" }],
+        await sendQuickChoicePrompt(chatId, "Choose fallback auto-sell timer if TP/SL does not trigger first, or choose No Timer to only use TP/SL.", [
+          [{ text: "No Timer", value: "off" }, { text: "5 min", value: "5" }],
+          [{ text: "30 min", value: "30" }, { text: "1 hour", value: "60" }],
+          [{ text: "2 hours", value: "120" }],
           [{ text: "1 day", value: "1440" }]
         ]);
         break;
       case "buy_auto_timer":
-        session.data.sellDelaySeconds = parseSellDelaySeconds(text);
+        session.data.sellDelaySeconds = parseOptionalSellDelaySeconds(text);
         session.data.sellDelayMinutes = session.data.sellDelaySeconds / 60;
+        ensureTimedPlanHasExit(session.data);
         session.step = "buy_slippage";
         await sendQuickSlippagePrompt(chatId, buySlippagePromptText(session.data));
         break;
@@ -2677,17 +2718,18 @@ async function continueFlow(chatId, text, session) {
       case "plan_buy_amount":
         session.data.amountSol = parsePositiveNumber(text);
         session.step = "plan_sell_delay";
-        await sendQuickChoicePrompt(chatId, "Choose when to auto-sell after the buy. Use `5s` for a quick 5-second exit, or type minutes like `15`.", [
-          [{ text: "5 sec", value: "5s" }, { text: "1 min", value: "1" }],
-          [{ text: "5 min", value: "5" }, { text: "15 min", value: "15" }],
+        await sendQuickChoicePrompt(chatId, "Choose fallback sell after buy. Use No Timer if you only want TP/SL exits.", [
+          [{ text: "No Timer", value: "off" }, { text: "5 sec", value: "5s" }],
+          [{ text: "1 min", value: "1" }, { text: "5 min", value: "5" }],
+          [{ text: "15 min", value: "15" }],
           [{ text: "30 min", value: "30" }, { text: "60 min", value: "60" }]
         ]);
         break;
       case "plan_sell_delay":
-        session.data.sellDelaySeconds = parseSellDelaySeconds(text);
+        session.data.sellDelaySeconds = parseOptionalSellDelaySeconds(text);
         session.data.sellDelayMinutes = session.data.sellDelaySeconds / 60;
         session.step = "plan_sell_percent";
-        await sendQuickPercentPrompt(chatId, "Send percent to sell when the timer, take-profit, or stop-loss triggers. Example: `100`.");
+        await sendQuickPercentPrompt(chatId, "Send percent to sell when an exit triggers. Example: `100`.");
         break;
       case "plan_sell_percent":
         session.data.sellPercent = parsePercent(text);
@@ -2707,6 +2749,7 @@ async function continueFlow(chatId, text, session) {
         break;
       case "plan_stop_loss":
         session.data.stopLossPct = parseOptionalTriggerPercent(text);
+        ensureTimedPlanHasExit(session.data);
         if (session.data.allowRepeat) {
           session.step = "plan_loop_count";
           await sendQuickChoicePrompt(chatId, "Repeat cycles: choose how many total buy/sell cycles this plan should run.", [
@@ -3767,6 +3810,16 @@ async function createTimedTradePlanFlow(chatId, session) {
   const results = [];
   const planWallets = [];
   const tradeEvents = [];
+  ensureTimedPlanHasExit({
+    sellDelaySeconds: session.data.sellDelaySeconds,
+    takeProfitPct: session.data.takeProfitPct,
+    stopLossPct: session.data.stopLossPct,
+    walletTakeProfitTargets: session.data.walletTakeProfitTargets,
+    walletStopLossTargets: session.data.walletStopLossTargets,
+    takeProfitLadder: session.data.takeProfitLadder
+  });
+  const now = Date.now();
+  const sellAfterAt = planSellAfterAtFromNow(session.data, now);
 
   await runWithConcurrency(selectedWallets, CONFIG.bundleConcurrency, async ({ index, wallet }) => {
     try {
@@ -3794,7 +3847,7 @@ async function createTimedTradePlanFlow(chatId, session) {
         takeProfitPct: walletTakeProfitForIndex(session.data, index),
         stopLossPct: walletStopLossForIndex(session.data, index),
         completedTakeProfitLevels: [],
-        sellAfterAt: new Date(Date.now() + session.data.sellDelaySeconds * 1000).toISOString(),
+        sellAfterAt,
         status: "watching",
         lastCheckedAt: null,
         lastMovePct: null
@@ -3812,7 +3865,6 @@ async function createTimedTradePlanFlow(chatId, session) {
   }
 
   await recordTradeEvents(tradeEvents);
-  const now = Date.now();
   const plan = {
     id: crypto.randomUUID(),
     status: "watching",
@@ -3824,7 +3876,7 @@ async function createTimedTradePlanFlow(chatId, session) {
     amountSol: session.data.amountSol,
     sellDelayMinutes: session.data.sellDelayMinutes,
     sellDelaySeconds: session.data.sellDelaySeconds,
-    sellAfterAt: new Date(now + session.data.sellDelaySeconds * 1000).toISOString(),
+    sellAfterAt,
     sellPercent: session.data.sellPercent,
     triggerSellPercent: session.data.triggerSellPercent || 100,
     loopCount: session.data.loopCount || 1,
@@ -3862,7 +3914,7 @@ async function createTimedTradePlanFlow(chatId, session) {
   await say(chatId, withBrandFooter([
     `${plan.autoBundle ? "Auto Bundle plan created." : "Timed trade plan created."}`,
     `Plan ID: ${plan.id}`,
-    `Sell timer: ${plan.sellAfterAt}`,
+    `Sell timer: ${formatSellTimerSummary(plan.sellDelaySeconds)}`,
     `Loops: ${plan.loopCount}`,
     `Take-profit: ${formatPlanTakeProfitSummary(plan)}`,
     `Stop-loss: ${formatPlanStopLossSummary(plan)}`,
@@ -3955,6 +4007,7 @@ async function sendManualLaunchArmedMessage(chatId, plan) {
     `Buy amount: ${plan.amountSol} SOL per wallet`,
     `Take-profit: ${formatTakeProfitTarget(plan.takeProfitPct)}`,
     `Stop-loss: -${plan.stopLossPct}%`,
+    `Fallback timer: ${formatSellTimerSummary(plan.sellDelaySeconds)}`,
     `Slippage: ${plan.slippageBps} bps`,
     `Scan speed: every ${(CONFIG.manualLaunchScanIntervalMs / 1000).toFixed(CONFIG.manualLaunchScanIntervalMs % 1000 === 0 ? 0 : 1)}s while online`,
     "Watch window: until matched or canceled",
@@ -4417,6 +4470,32 @@ function planHasPriceExit(plan, planWallet) {
   );
 }
 
+function planSellAfterAtFromNow(plan, now = Date.now()) {
+  const seconds = Number(plan?.sellDelaySeconds);
+  if (!Number.isFinite(seconds) || seconds <= 0) return null;
+  return new Date(now + seconds * 1000).toISOString();
+}
+
+function ensureTimedPlanHasExit({
+  sellDelaySeconds,
+  takeProfitPct,
+  stopLossPct,
+  walletTakeProfitTargets,
+  walletStopLossTargets,
+  takeProfitLadder
+} = {}) {
+  const hasExit = Number(sellDelaySeconds || 0) > 0
+    || Number(takeProfitPct || 0) > 0
+    || Number(stopLossPct || 0) > 0
+    || (Array.isArray(takeProfitLadder) && takeProfitLadder.length > 0)
+    || Boolean(walletTakeProfitTargets && Object.keys(walletTakeProfitTargets).length)
+    || Boolean(walletStopLossTargets && Object.keys(walletStopLossTargets).length);
+
+  if (!hasExit) {
+    throw new Error("Turn on take-profit, stop-loss, or a fallback timer before starting this plan.");
+  }
+}
+
 function nextTakeProfitLadderLevel(plan, planWallet) {
   if (plan.takeProfitMode !== "ladder" || !Array.isArray(plan.takeProfitLadder) || plan.takeProfitLadder.length === 0) {
     return null;
@@ -4451,6 +4530,8 @@ function timedPlanExitSource(plan) {
   if (plan.source === "kol_copy_wallet") return "kol_copy_wallet_exit";
   if (plan.source === "auto_bundle") return "auto_bundle_exit";
   if (plan.source === "web_bundle_plan") return "web_bundle_plan_exit";
+  if (plan.source === "web_trade_plan") return "web_trade_plan_exit";
+  if (plan.source === "web_trade_auto_exit") return "web_trade_auto_exit";
   if (plan.source === "web_volume") return "web_volume_exit";
   return "timed_plan";
 }
@@ -4730,7 +4811,7 @@ async function processCopyWalletWatchPlan(plan, walletStore) {
     source: signal.sourceLabel || signal.source || "KOL wallet trade",
     lastTradeAt: signal.lastTradeAt || null
   };
-  plan.sellAfterAt = new Date(Date.now() + (plan.sellDelaySeconds || 300) * 1000).toISOString();
+  plan.sellAfterAt = planSellAfterAtFromNow(plan);
 
   const ownerWallets = walletsForOwner(walletStore, plan.userId);
   const amountLamports = solToLamports(plan.amountSol);
@@ -4824,7 +4905,7 @@ async function processLaunchWatchPlan(plan, walletStore) {
 
   plan.tokenMint = match.tokenMint;
   plan.launchMatchedAt = new Date().toISOString();
-  plan.sellAfterAt = new Date(Date.now() + (plan.sellDelaySeconds || 180) * 1000).toISOString();
+  plan.sellAfterAt = planSellAfterAtFromNow(plan);
   const amountLamports = solToLamports(plan.amountSol);
   const tradeEvents = [];
   const results = [];
@@ -4928,7 +5009,7 @@ async function restartTimedPlanLoop(plan, planWallet, wallet, sell, triggerReaso
     planWallet.lastMovePct = null;
     planWallet.lastError = null;
     planWallet.nextLoopAt = null;
-    planWallet.sellAfterAt = new Date(Date.now() + (plan.sellDelaySeconds || Math.round((plan.sellDelayMinutes || 1) * 60)) * 1000).toISOString();
+    planWallet.sellAfterAt = planSellAfterAtFromNow(plan);
     planWallet.updatedAt = new Date().toISOString();
 
     return {
@@ -4976,7 +5057,7 @@ async function startDelayedTimedPlanLoop(plan, planWallet, wallet) {
     planWallet.lastMovePct = null;
     planWallet.lastError = null;
     planWallet.nextLoopAt = null;
-    planWallet.sellAfterAt = new Date(Date.now() + (plan.sellDelaySeconds || Math.round((plan.sellDelayMinutes || 1) * 60)) * 1000).toISOString();
+    planWallet.sellAfterAt = planSellAfterAtFromNow(plan);
     planWallet.updatedAt = new Date().toISOString();
 
     return {
@@ -6885,7 +6966,7 @@ async function renderPnlCard(row, metadata = {}) {
   const accent = positive ? PNL_CARD_STYLE.green : PNL_CARD_STYLE.red;
   const multiple = formatPnlMultiple(received, spent);
   const symbol = sanitizeCardText(metadata.symbol || shortMint(row.tokenMint), 18);
-  const name = sanitizeCardText(metadata.name || "OgreTradeBot", 26);
+  const name = sanitizeCardText(metadata.name || "SlimeWire", 26);
   const imageDataUrl = await tokenImageDataUrl(metadata.imageUrl);
   const art = imageDataUrl
     ? `<image href="${imageDataUrl}" x="72" y="142" width="430" height="430" preserveAspectRatio="xMidYMid slice" clip-path="url(#artClip)"/>`
@@ -6932,7 +7013,7 @@ async function renderPnlCard(row, metadata = {}) {
   ${borderLayer}
   <rect x="42" y="86" width="1116" height="510" rx="42" fill="${PNL_CARD_STYLE.panel}" filter="url(#shadow)" stroke="rgba(255,255,255,0.09)"/>
   ${art}
-  <text x="555" y="162" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="54" font-weight="900" fill="${PNL_CARD_STYLE.white}" letter-spacing="0">@OgreTradeBot</text>
+  <text x="555" y="162" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="54" font-weight="900" fill="${PNL_CARD_STYLE.white}" letter-spacing="0">SlimeWire.com</text>
   <text x="555" y="215" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="34" font-weight="800" fill="${PNL_CARD_STYLE.muted}">PNL CARD</text>
   <text x="555" y="392" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="170" font-weight="900" fill="${accent}" letter-spacing="0">${escapeSvg(multiple)}X</text>
   <text x="555" y="450" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="38" font-weight="900" fill="${PNL_CARD_STYLE.white}">${escapeSvg(symbol)} / ${escapeSvg(name)}</text>
@@ -7017,6 +7098,44 @@ async function getDexTokenMetadata(tokenMint) {
 
   dexMetadataCache.set(tokenMint, { cachedAt: Date.now(), value });
   return value;
+}
+
+async function tokenMetadataMapForMints(tokenMints, options = {}) {
+  const addresses = [...new Set((tokenMints || []).filter(Boolean))].slice(0, options.limit || 30);
+  const metadataByMint = new Map();
+  const uncached = [];
+
+  for (const mint of addresses) {
+    const cached = dexMetadataCache.get(mint);
+    if (cached && Date.now() - cached.cachedAt < 5 * 60 * 1000) {
+      metadataByMint.set(mint, cached.value);
+    } else {
+      uncached.push(mint);
+    }
+  }
+
+  if (!uncached.length) return metadataByMint;
+
+  const pairs = await fetchDexScreenerTokenPairsBatch(uncached, { timeoutMs: options.timeoutMs || 3_500 }).catch(() => []);
+  await runWithConcurrency(uncached, options.concurrency || 3, async (mint) => {
+    const dexValue = metadataFromDexPair(mint, bestDexPairForToken(mint, pairs));
+    const needsPumpFallback = options.pumpFallback !== false && (!dexValue.symbol || !dexValue.name || !dexValue.imageUrl);
+    const pumpValue = needsPumpFallback
+      ? await getPumpFunTokenMetadata(mint, { timeoutMs: options.pumpTimeoutMs || 1_500 }).catch(() => ({}))
+      : {};
+    const value = {
+      ...dexValue,
+      symbol: dexValue.symbol || pumpValue.symbol || "",
+      name: dexValue.name || pumpValue.name || "",
+      imageUrl: dexValue.imageUrl || pumpValue.imageUrl || "",
+      marketCap: dexValue.marketCap || pumpValue.marketCap || null,
+      source: dexValue.imageUrl ? "dexscreener" : pumpValue.imageUrl ? "pumpfun" : "fallback"
+    };
+    dexMetadataCache.set(mint, { cachedAt: Date.now(), value });
+    metadataByMint.set(mint, value);
+  });
+
+  return metadataByMint;
 }
 
 async function getDexScreenerTokenMetadata(tokenMint) {
@@ -8575,11 +8694,20 @@ async function scoreSniperCandidate(candidate, settings) {
       : score >= settings.minScore
         ? "Stealth Accumulation"
         : "Avoid";
+  const isPump = isPumpStyleToken({
+    tokenMint,
+    symbol: metadata.symbol,
+    name: metadata.name,
+    source: metadata.source || metadata.profileSource
+  });
 
   return {
     tokenMint,
     symbol: metadata.symbol,
     name: metadata.name,
+    imageUrl: metadata.imageUrl || "",
+    isPump,
+    pumpUrl: isPump ? pumpFunUrl(tokenMint) : "",
     score,
     category,
     rugRisk,
@@ -8812,7 +8940,7 @@ function formatAutoSnipePresetDetails(data) {
   return [
     `Exit preset selected: ${data.exitPreset}`,
     "",
-    `Sell timer fallback: ${formatDelay(data.sellDelaySeconds)} after buy`,
+    `Sell timer fallback: ${formatSellTimerSummary(data.sellDelaySeconds)}`,
     `Take-profit: ${formatTakeProfitTarget(data.takeProfitPct)} -> sells 100% of the tracked bag`,
     `Stop-loss: -${data.stopLossPct}% -> sells 100% of the tracked bag`,
     `Default slippage: ${AUTOSNIPE_SLIPPAGE_BPS} bps`
@@ -8843,7 +8971,7 @@ function formatPumpSnipePresetDetails(data) {
   return [
     `Exit preset selected: ${data.exitPreset}`,
     "",
-    `Sell timer fallback: ${formatDelay(data.sellDelaySeconds)} after buy`,
+    `Sell timer fallback: ${formatSellTimerSummary(data.sellDelaySeconds)}`,
     `Take-profit: ${formatTakeProfitTarget(data.takeProfitPct)} -> sells 100% of the tracked bag`,
     `Stop-loss: -${data.stopLossPct}% -> sells 100% of the tracked bag`,
     `Default slippage: ${PUMPSNIPE_SLIPPAGE_BPS} bps`,
@@ -8909,7 +9037,7 @@ async function handleAutoBundleExitMode(chatId, text, session) {
       "",
       `Take-profit: ${formatTakeProfitTarget(AUTO_BUNDLE_TAKE_PROFIT_PCT)} full exit`,
       `Stop-loss: -${AUTO_BUNDLE_STOP_LOSS_PCT}% full exit`,
-      `Fallback timer: ${formatDelay(AUTO_BUNDLE_SELL_DELAY_SECONDS)}`,
+      `Fallback timer: ${formatSellTimerSummary(AUTO_BUNDLE_SELL_DELAY_SECONDS)}`,
       "",
       `Choose slippage, or type default for ${CONFIG.defaultSlippageBps} bps.`
     ].join("\n"));
@@ -8989,8 +9117,8 @@ function formatSniperPresetDetails(data) {
   return [
     `Exit preset selected: ${data.exitPreset}`,
     "",
-    `Sell timer: ${formatDelay(data.sellDelaySeconds)} after buy`,
-    `Timer sell: ${data.sellPercent}%`,
+    `Sell timer: ${formatSellTimerSummary(data.sellDelaySeconds)}`,
+    Number(data.sellDelaySeconds || 0) > 0 ? `Timer sell: ${data.sellPercent}%` : "",
     `Take-profit: ${formatTakeProfitTarget(data.takeProfitPct)} -> sells 100% of the tracked bag`,
     `Stop-loss: -${data.stopLossPct}% -> sells 100% of the tracked bag`,
     "",
@@ -10897,6 +11025,11 @@ async function webTradeBuy(userId, body = {}) {
     signature: result.signature
   });
 
+  const autoExitPlan = body.autoExit
+    ? await webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, result, body, slippageBps)
+    : null;
+  const baseMessage = `${wallet.label} bought ${shortMint(tokenMint)} with ${lamportsToSol(result.amountLamports)} SOL.`;
+
   return {
     type: "buy",
     tokenMint,
@@ -10910,7 +11043,8 @@ async function webTradeBuy(userId, body = {}) {
     signature: result.signature,
     attempts: result.attempts,
     dexUrl: dexScreenerUrl(tokenMint),
-    message: `${wallet.label} bought ${shortMint(tokenMint)} with ${lamportsToSol(result.amountLamports)} SOL.`
+    autoExitPlan,
+    message: autoExitPlan ? `${baseMessage} ${autoExitPlan.shortMessage}` : baseMessage
   };
 }
 
@@ -10963,11 +11097,135 @@ async function webTradeSell(userId, body = {}) {
   };
 }
 
+async function webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, buyResult, body = {}, slippageBps = CONFIG.defaultSlippageBps) {
+  const takeProfitPct = parseTakeProfitPercent(String(body.takeProfitPct || "0"));
+  const stopLossPct = parseOptionalTriggerPercent(String(body.stopLossPct || "0"));
+  const sellDelaySeconds = parseOptionalSellDelaySeconds(firstString(body.sellDelay, body.sellDelaySeconds, "off"));
+  const sellPercent = parsePercent(String(body.sellPercent || "100"));
+
+  if (!takeProfitPct && !stopLossPct && sellDelaySeconds <= 0) {
+    return null;
+  }
+
+  const now = Date.now();
+  const sellAfterAt = planSellAfterAtFromNow({ sellDelaySeconds }, now);
+  const amountLamports = Number(buyResult.amountLamports || 0);
+  const tokenAmount = buyResult.tokenDeltaAmount || buyResult.outputAmount || null;
+  const walletIndex = parseWebWalletIndex(body.walletIndex || "1");
+  const planWallet = {
+    label: wallet.label,
+    publicKey: wallet.publicKey,
+    walletIndex,
+    basisLamports: amountLamports,
+    tokenOutAmount: tokenAmount,
+    buySignature: buyResult.signature,
+    currentLoop: 1,
+    completedLoops: 0,
+    takeProfitPct: null,
+    stopLossPct: null,
+    completedTakeProfitLevels: [],
+    sellAfterAt,
+    status: "watching",
+    lastCheckedAt: null,
+    lastMovePct: null
+  };
+  const plan = {
+    id: crypto.randomUUID(),
+    status: "watching",
+    userId,
+    chatId: null,
+    tokenMint,
+    source: "web_trade_auto_exit",
+    walletSelector: String(walletIndex),
+    amountSol: lamportsToSol(amountLamports),
+    sellDelayMinutes: sellDelaySeconds / 60,
+    sellDelaySeconds,
+    sellAfterAt,
+    sellPercent,
+    triggerSellPercent: sellPercent,
+    loopCount: 1,
+    loopDelaySeconds: 0,
+    takeProfitPct,
+    stopLossPct,
+    takeProfitMode: "single",
+    stopLossMode: "single",
+    takeProfitLadder: [],
+    autoBundle: false,
+    slippageBps,
+    createdAt: new Date().toISOString(),
+    wallets: [planWallet],
+    results: [`${wallet.label}: auto-exit armed after quick buy`]
+  };
+
+  const plans = await readTradePlans();
+  plans.plans.push(plan);
+  await writeTradePlans(plans);
+  await audit("web_trade_auto_exit_plan", {
+    userId,
+    planId: plan.id,
+    tokenMint,
+    wallet: publicWallet(wallet),
+    sellDelaySeconds,
+    sellPercent,
+    takeProfitPct,
+    stopLossPct,
+    slippageBps,
+    buySignature: buyResult.signature
+  });
+
+  setTimeout(() => void processTradePlans().catch((error) => {
+    console.error("Single trade auto-exit immediate run failed:", error.message);
+  }), 1_000);
+
+  const timerSummary = sellDelaySeconds > 0 ? formatDelay(sellDelaySeconds) : "timer off";
+  return {
+    id: plan.id,
+    tokenMint,
+    shortMint: shortMint(tokenMint),
+    walletLabel: wallet.label,
+    walletCount: 1,
+    successCount: 1,
+    failedCount: 0,
+    amountSol: lamportsToSol(amountLamports),
+    sellAfterAt,
+    sellDelaySeconds,
+    sellPercent,
+    takeProfitPct,
+    stopLossPct,
+    takeProfitSummary: formatPlanTakeProfitSummary(plan),
+    stopLossSummary: formatPlanStopLossSummary(plan),
+    loopCount: 1,
+    loopDelaySeconds: 0,
+    slippageBps,
+    source: "web_trade_auto_exit",
+    results: [{ ok: true, message: `${wallet.label}: auto-exit armed` }],
+    dexUrl: dexScreenerUrl(tokenMint),
+    shortMessage: `Auto-exit armed: TP ${formatPlanTakeProfitSummary(plan)}, SL ${formatPlanStopLossSummary(plan)}, ${timerSummary}.`,
+    message: `Single trade auto-exit armed for ${wallet.label}: TP ${formatPlanTakeProfitSummary(plan)}, SL ${formatPlanStopLossSummary(plan)}, ${timerSummary}.`
+  };
+}
+
+async function webCreateTradePlan(userId, body = {}) {
+  const store = await readWalletStore();
+  const wallets = Array.isArray(body.walletIndexes) || String(body.walletGroup || "").trim()
+    ? webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup)
+    : [getWalletAt(store, parseWebWalletIndex(body.walletIndex || "1"), userId)];
+  return webCreateManagedBuyPlan(userId, wallets, body, {
+    source: "web_trade_plan",
+    label: "Managed trade",
+    auditType: "web_create_trade_plan",
+    defaultSellDelay: "5",
+    defaultTakeProfitPct: "25",
+    defaultStopLossPct: "8",
+    defaultSlippageBps: 400
+  });
+}
+
 async function webCreateManagedBuyPlan(userId, wallets, body = {}, options = {}) {
   const tokenMint = parsePublicKey(String(body.tokenMint || "")).toBase58();
   const amountSol = parsePositiveNumber(String(body.amountSol || ""));
   const amountLamports = solToLamports(amountSol);
-  const sellDelaySeconds = parseSellDelaySeconds(String(body.sellDelay || body.sellDelaySeconds || options.defaultSellDelay || "5"));
+  const sellDelaySeconds = parseOptionalSellDelaySeconds(firstString(body.sellDelay, body.sellDelaySeconds, options.defaultSellDelay, "5"));
   const sellPercent = parsePercent(String(body.sellPercent || "100"));
   const takeProfitPct = parseTakeProfitPercent(String(body.takeProfitPct || options.defaultTakeProfitPct || "25"));
   const stopLossPct = parseOptionalTriggerPercent(String(body.stopLossPct || options.defaultStopLossPct || "8"));
@@ -10982,8 +11240,16 @@ async function webCreateManagedBuyPlan(userId, wallets, body = {}, options = {})
   const walletIndexes = wallets.map((wallet, index) => Number(wallet.webIndex || index + 1));
   const walletTakeProfitTargets = parseWebWalletTakeProfitTargets(body, walletIndexes);
   const walletStopLossTargets = parseWebWalletStopLossTargets(body, walletIndexes);
+  ensureTimedPlanHasExit({
+    sellDelaySeconds,
+    takeProfitPct,
+    stopLossPct,
+    walletTakeProfitTargets,
+    walletStopLossTargets
+  });
 
   const now = Date.now();
+  const sellAfterAt = planSellAfterAtFromNow({ sellDelaySeconds }, now);
   await runWithConcurrency(wallets, CONFIG.bundleConcurrency, async (wallet) => {
     const walletIndex = Number(wallet.webIndex || wallets.indexOf(wallet) + 1);
     try {
@@ -11012,7 +11278,7 @@ async function webCreateManagedBuyPlan(userId, wallets, body = {}, options = {})
         takeProfitPct: walletTakeProfitTargets ? walletTakeProfitTargets[String(walletIndex)] || null : null,
         stopLossPct: walletStopLossTargets ? walletStopLossTargets[String(walletIndex)] || null : null,
         completedTakeProfitLevels: [],
-        sellAfterAt: new Date(now + sellDelaySeconds * 1000).toISOString(),
+        sellAfterAt,
         status: "watching",
         lastCheckedAt: null,
         lastMovePct: null
@@ -11055,7 +11321,7 @@ async function webCreateManagedBuyPlan(userId, wallets, body = {}, options = {})
     amountSol,
     sellDelayMinutes: sellDelaySeconds / 60,
     sellDelaySeconds,
-    sellAfterAt: new Date(now + sellDelaySeconds * 1000).toISOString(),
+    sellAfterAt,
     sellPercent,
     triggerSellPercent: 100,
     loopCount,
@@ -11121,7 +11387,7 @@ async function webCreateManagedBuyPlan(userId, wallets, body = {}, options = {})
     source,
     results,
     dexUrl: dexScreenerUrl(tokenMint),
-    message: `${label} armed: ${planWallets.length}/${wallets.length} wallet(s) bought ${shortMint(tokenMint)}. Watching TP ${formatPlanTakeProfitSummary(plan)}, SL ${formatPlanStopLossSummary(plan)}, or timer.`
+    message: `${label} armed: ${planWallets.length}/${wallets.length} wallet(s) bought ${shortMint(tokenMint)}. Watching TP ${formatPlanTakeProfitSummary(plan)}, SL ${formatPlanStopLossSummary(plan)}${sellDelaySeconds > 0 ? `, timer ${formatSellTimerSummary(sellDelaySeconds)}` : ""}.`
   };
 }
 
@@ -11306,8 +11572,9 @@ async function webCreateLaunchWatch(userId, body = {}) {
   const wallets = webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup);
   const ticker = cleanTickerSymbol(String(body.ticker || ""));
   const amountSol = parsePositiveNumber(String(body.amountSol || ""));
-  const sellDelaySeconds = body.sellDelay || body.sellDelaySeconds
-    ? parseSellDelaySeconds(String(body.sellDelay || body.sellDelaySeconds))
+  const sellDelayInput = firstString(body.sellDelay, body.sellDelaySeconds);
+  const sellDelaySeconds = sellDelayInput
+    ? parseOptionalSellDelaySeconds(sellDelayInput)
     : PUMPSNIPE_SELL_DELAY_SECONDS;
   const takeProfitPct = parseTakeProfitPercent(String(body.takeProfitPct || PUMPSNIPE_TAKE_PROFIT_PCT));
   const stopLossPct = parseOptionalTriggerPercent(String(body.stopLossPct || PUMPSNIPE_STOP_LOSS_PCT));
@@ -11317,6 +11584,13 @@ async function webCreateLaunchWatch(userId, body = {}) {
   const walletIndexes = wallets.map((wallet, index) => Number(wallet.webIndex || index + 1));
   const walletTakeProfitTargets = parseWebWalletTakeProfitTargets(body, walletIndexes);
   const walletStopLossTargets = parseWebWalletStopLossTargets(body, walletIndexes);
+  ensureTimedPlanHasExit({
+    sellDelaySeconds,
+    takeProfitPct,
+    stopLossPct,
+    walletTakeProfitTargets,
+    walletStopLossTargets
+  });
   const plan = {
     id: crypto.randomUUID(),
     status: "launch_watch",
@@ -11564,7 +11838,7 @@ async function webConnectedWalletBalance(userId) {
     row.lamports = String(balance);
     const { accounts, warnings } = await getOwnedTokenAccountsWithWarningsCached(owner);
     row.warnings = warnings || [];
-    row.tokens = accounts
+    const tokens = accounts
       .filter((account) => account.rawAmount > 0n)
       .slice(0, 12)
       .map((account) => ({
@@ -11574,6 +11848,19 @@ async function webConnectedWalletBalance(userId) {
         rawAmount: account.rawAmount.toString(),
         dexUrl: dexScreenerUrl(account.mint)
       }));
+    const metadataByMint = await tokenMetadataMapForMints(tokens.map((token) => token.mint), {
+      timeoutMs: 1_800,
+      pumpTimeoutMs: 900
+    }).catch(() => new Map());
+    row.tokens = tokens.map((token) => {
+      const metadata = metadataByMint.get(token.mint) || {};
+      return {
+        ...token,
+        symbol: metadata.symbol || token.shortMint,
+        name: metadata.name || "",
+        imageUrl: metadata.imageUrl || ""
+      };
+    });
   } catch (error) {
     row.error = friendlyError(error);
   }
@@ -11583,7 +11870,13 @@ async function webConnectedWalletBalance(userId) {
 
 async function webPositionRows(userId) {
   const positions = await buildPositionsOverview(userId);
-  return positions.slice(0, 25).map((position) => {
+  const limited = positions.slice(0, 25);
+  const metadataByMint = await tokenMetadataMapForMints(limited.map((position) => position.tokenMint), {
+    timeoutMs: 2_000,
+    pumpTimeoutMs: 1_000
+  }).catch(() => new Map());
+  return limited.map((position) => {
+    const metadata = metadataByMint.get(position.tokenMint) || {};
     const realized = position.received - position.spent;
     const openPnl = position.estimatedValueLamports !== null
       ? position.estimatedValueLamports + position.received - position.spent
@@ -11591,6 +11884,9 @@ async function webPositionRows(userId) {
     return {
       tokenMint: position.tokenMint,
       shortMint: shortMint(position.tokenMint),
+      symbol: metadata.symbol || shortMint(position.tokenMint),
+      name: metadata.name || "",
+      imageUrl: metadata.imageUrl || "",
       dexUrl: dexScreenerUrl(position.tokenMint),
       uiAmount: formatTokenAmount(position.uiAmount),
       walletCount: position.walletCount,
@@ -11610,6 +11906,10 @@ async function webPositionRows(userId) {
 async function webPnlSummary(userId) {
   const trades = await tradeHistoryRows(userId, null);
   const tokenRows = await pnlRows(userId, null, { groupByToken: true, sortBy: "recent", limit: 25 });
+  const metadataByMint = await tokenMetadataMapForMints(tokenRows.map((row) => row.tokenMint), {
+    timeoutMs: 2_000,
+    pumpTimeoutMs: 1_000
+  }).catch(() => new Map());
   const totals = trades.reduce((summary, trade) => {
     if (trade.type === "buy") {
       summary.buys += 1;
@@ -11631,18 +11931,24 @@ async function webPnlSummary(userId) {
       receivedSol: lamportsBigToSol(totals.received),
       realizedSol: formatSignedLamports(realized)
     },
-    tokens: tokenRows.map((row) => ({
-      tokenMint: row.tokenMint,
-      shortMint: shortMint(row.tokenMint),
-      walletLabel: row.walletLabel,
-      buys: row.buys,
-      sells: row.sells,
-      spentSol: lamportsBigToSol(row.spent),
-      receivedSol: lamportsBigToSol(row.received),
-      realizedSol: formatSignedLamports(row.received - row.spent),
-      lastTradeAt: row.lastTradeAt,
-      dexUrl: dexScreenerUrl(row.tokenMint)
-    })),
+    tokens: tokenRows.map((row) => {
+      const metadata = metadataByMint.get(row.tokenMint) || {};
+      return {
+        tokenMint: row.tokenMint,
+        shortMint: shortMint(row.tokenMint),
+        symbol: metadata.symbol || shortMint(row.tokenMint),
+        name: metadata.name || "",
+        imageUrl: metadata.imageUrl || "",
+        walletLabel: row.walletLabel,
+        buys: row.buys,
+        sells: row.sells,
+        spentSol: lamportsBigToSol(row.spent),
+        receivedSol: lamportsBigToSol(row.received),
+        realizedSol: formatSignedLamports(row.received - row.spent),
+        lastTradeAt: row.lastTradeAt,
+        dexUrl: dexScreenerUrl(row.tokenMint)
+      };
+    }),
     trades: trades.slice(0, 50).map((trade) => ({
       id: trade.id,
       timestamp: trade.timestamp,
@@ -11707,7 +12013,7 @@ async function webCreateKolCopyWallet(userId, body = {}) {
   const store = await readWalletStore();
   const wallets = webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup);
   const amountSol = parsePositiveNumber(String(body.amountSol || ""));
-  const sellDelaySeconds = parseSellDelaySeconds(String(body.sellDelay || body.sellDelaySeconds || "5"));
+  const sellDelaySeconds = parseOptionalSellDelaySeconds(firstString(body.sellDelay, body.sellDelaySeconds, "5"));
   const takeProfitPct = parseTakeProfitPercent(String(body.takeProfitPct || "25"));
   const stopLossPct = parseOptionalTriggerPercent(String(body.stopLossPct || "8"));
   const loopCount = parseLoopCount(String(body.loopCount || "1"));
@@ -11716,6 +12022,13 @@ async function webCreateKolCopyWallet(userId, body = {}) {
   const walletIndexes = wallets.map((wallet, index) => Number(wallet.webIndex || index + 1));
   const walletTakeProfitTargets = parseWebWalletTakeProfitTargets(body, walletIndexes);
   const walletStopLossTargets = parseWebWalletStopLossTargets(body, walletIndexes);
+  ensureTimedPlanHasExit({
+    sellDelaySeconds,
+    takeProfitPct,
+    stopLossPct,
+    walletTakeProfitTargets,
+    walletStopLossTargets
+  });
   const initialSignals = await fetchKolWalletTradeSignals(copyWallet, "fresh", {
     limit: 12,
     cacheTtlMs: Math.max(0, Math.min(CONFIG.kolCopyScanIntervalMs - 500, CONFIG.solanaTrackerKolCacheTtlMs))
@@ -12074,53 +12387,31 @@ async function hydrateKolSignalMetadata(rows) {
     .filter((row) => row?.tokenMint && needsKolMetadataHydration(row))
     .map((row) => row.tokenMint))]
     .slice(0, 30);
-  if (!mints.length) return signals;
-
-  const metadataByMint = new Map();
-  const uncached = [];
-  for (const mint of mints) {
-    const cached = dexMetadataCache.get(mint);
-    if (cached && Date.now() - cached.cachedAt < 5 * 60 * 1000) {
-      metadataByMint.set(mint, cached.value);
-    } else {
-      uncached.push(mint);
-    }
-  }
-
-  if (uncached.length) {
-    const pairs = await fetchDexScreenerTokenPairsBatch(uncached).catch(() => []);
-    await runWithConcurrency(uncached, 3, async (mint) => {
-      const dexValue = metadataFromDexPair(mint, bestDexPairForToken(mint, pairs));
-      let value = dexValue;
-      if (!dexValue.symbol || !dexValue.name) {
-        const pumpValue = await getPumpFunTokenMetadata(mint).catch(() => ({}));
-        value = {
-          ...dexValue,
-          symbol: dexValue.symbol || pumpValue.symbol || "",
-          name: dexValue.name || pumpValue.name || "",
-          imageUrl: dexValue.imageUrl || pumpValue.imageUrl || "",
-          marketCap: dexValue.marketCap || pumpValue.marketCap || null
-        };
-      }
-      dexMetadataCache.set(mint, { cachedAt: Date.now(), value });
-      metadataByMint.set(mint, value);
-    });
-  }
+  const metadataByMint = mints.length
+    ? await tokenMetadataMapForMints(mints, { timeoutMs: 2_500, pumpTimeoutMs: 1_200 }).catch(() => new Map())
+    : new Map();
 
   return signals.map((row) => {
-    const metadata = metadataByMint.get(row.tokenMint);
-    const kolscanUrl = row.kolscanUrl || kolscanAccountUrl(row.kolWallet);
-    if (!metadata) return { ...row, kolscanUrl };
+    const metadata = metadataByMint.get(row.tokenMint) || {};
     const symbol = meaningfulTokenText(row.symbol, row.tokenMint) || metadata.symbol || shortMint(row.tokenMint);
     const name = meaningfulTokenText(row.name, row.tokenMint) || metadata.name || (symbol !== shortMint(row.tokenMint) ? symbol : "Unknown Token");
+    const isPump = Boolean(row.isPump) || isPumpStyleToken({
+      tokenMint: row.tokenMint,
+      symbol,
+      name,
+      source: row.source || metadata.source
+    });
     return {
       ...row,
       symbol,
       name,
+      imageUrl: firstString(row.imageUrl, metadata.imageUrl),
+      isPump,
+      pumpUrl: row.pumpUrl || (isPump ? pumpFunUrl(row.tokenMint) : ""),
       valueLabel: row.valueLabel && row.valueLabel !== "n/a" ? row.valueLabel : metadata.volume?.h1 ? `${formatUsdCompact(metadata.volume.h1)} 1h vol` : row.valueLabel,
       roiLabel: row.roiLabel && row.roiLabel !== "n/a" ? row.roiLabel : metadata.marketCap ? `MC ${formatUsdCompact(metadata.marketCap)}` : row.roiLabel,
       dexUrl: row.dexUrl || dexScreenerUrl(row.tokenMint),
-      kolscanUrl
+      kolscanUrl: row.kolscanUrl || kolscanAccountUrl(row.kolWallet)
     };
   });
 }
@@ -12128,7 +12419,8 @@ async function hydrateKolSignalMetadata(rows) {
 function needsKolMetadataHydration(row) {
   return !meaningfulTokenText(row.symbol, row.tokenMint)
     || !meaningfulTokenText(row.name, row.tokenMint)
-    || row.name === "Unknown Token";
+    || row.name === "Unknown Token"
+    || !row.imageUrl;
 }
 
 function meaningfulTokenText(value, tokenMint = "") {
@@ -12264,6 +12556,7 @@ function normalizeMadeOnSolKolTradeSignal(trade, mode) {
     tokenMint,
     symbol: firstString(token.symbol, token.token_symbol, trade.tokenSymbol, trade.token_symbol, trade.symbol, trade.ticker, shortMint(tokenMint)),
     name: firstString(token.name, token.token_name, trade.tokenName, trade.token_name, trade.token_name_display, "Unknown Token"),
+    imageUrl: firstString(token.image_uri, token.image, token.imageUrl, token.image_url, token.logoURI, token.logo, token.metadata?.image, trade.tokenImage, trade.token_image, trade.tokenImageUrl, trade.token_image_url),
     score,
     signalType: "MadeOnSol KOL buy",
     kolWallet,
@@ -12353,6 +12646,7 @@ function normalizeMadeOnSolHotTokenSignal(tokenRow, mode) {
     tokenMint,
     symbol: firstString(token.symbol, token.token_symbol, tokenRow.tokenSymbol, tokenRow.token_symbol, tokenRow.symbol, tokenRow.ticker, shortMint(tokenMint)),
     name: firstString(token.name, token.token_name, tokenRow.tokenName, tokenRow.token_name, tokenRow.name, "Unknown Token"),
+    imageUrl: firstString(token.image_uri, token.image, token.imageUrl, token.image_url, token.logoURI, token.logo, token.metadata?.image, tokenRow.tokenImage, tokenRow.token_image, tokenRow.tokenImageUrl, tokenRow.token_image_url),
     score,
     signalType: kolWallet ? "Hot KOL buy" : "Hot KOL cluster",
     kolWallet,
@@ -12760,6 +13054,7 @@ function normalizeKolPositionSignal(position, kol, mode) {
     tokenMint: position.tokenMint,
     symbol: position.symbol || shortMint(position.tokenMint),
     name: position.name || "Unknown Token",
+    imageUrl: firstString(position.imageUrl, position.image_url, position.image, position.logoURI, position.logo, position.metadata?.image),
     score,
     signalType: kolSignalType(position, mode),
     kolWallet: kol.wallet,
@@ -12800,6 +13095,7 @@ function normalizeKolTradeSignal(trade, wallet, mode) {
     tokenMint,
     symbol: firstString(tokenInfo.symbol, trade.symbol, shortMint(tokenMint)),
     name: firstString(tokenInfo.name, trade.name, "Unknown Token"),
+    imageUrl: firstString(tokenInfo.imageUrl, tokenInfo.image_url, tokenInfo.image, tokenInfo.image_uri, tokenInfo.logoURI, tokenInfo.logo, tokenInfo.metadata?.image),
     score,
     signalType: "Latest wallet buy",
     kolWallet: wallet,
@@ -13067,13 +13363,42 @@ async function webSniperScan(userId, mode) {
 }
 
 async function webLivePairs(userId) {
+  if (CONFIG.livePairsSharedCacheMs > 0 && livePairsSharedCache.value && Date.now() - livePairsSharedCache.cachedAt < CONFIG.livePairsSharedCacheMs) {
+    return livePairsSharedCache.value;
+  }
+
+  if (CONFIG.livePairsSharedCacheMs > 0 && livePairsSharedCache.promise) {
+    return livePairsSharedCache.promise;
+  }
+
+  const promise = buildWebLivePairs(userId);
+  if (CONFIG.livePairsSharedCacheMs > 0) {
+    livePairsSharedCache.promise = promise;
+  }
+
+  try {
+    const value = await promise;
+    if (CONFIG.livePairsSharedCacheMs > 0) {
+      livePairsSharedCache = { cachedAt: Date.now(), value, promise: null };
+    }
+    return value;
+  } finally {
+    if (livePairsSharedCache.promise === promise) {
+      livePairsSharedCache.promise = null;
+    }
+  }
+}
+
+async function buildWebLivePairs(userId) {
   const scanState = nextSniperScanState(`web:${userId}`, "livepairs");
   const candidates = await fetchLivePairCandidates({ ttlMs: 500, timeoutMs: 1_200, scanState });
   const liveRows = uniqueSniperScoreRows(candidates.map(livePairCandidateToRow).filter(Boolean))
     .filter(isWebLivePairCandidate)
     .sort(compareWebLivePairs);
-  const safety = await filterWebLivePairsForSafety(liveRows, 12);
-  const safeRows = await enrichWebLivePairsForImages(safety.rows);
+  const safety = await maybeFilterWebLivePairsForSafety(liveRows, 12);
+  const safeRows = CONFIG.livePairsImageEnrich
+    ? await enrichWebLivePairsForImages(safety.rows)
+    : safety.rows;
   rememberSniperScanRows(`web:${userId}`, "livepairs", safeRows);
 
   return {
@@ -13083,7 +13408,7 @@ async function webLivePairs(userId) {
     qualified: liveRows.length,
     rows: safeRows.map(webLivePairRow),
     refreshedAt: new Date().toISOString(),
-    refreshSeconds: 4,
+    refreshSeconds: CONFIG.livePairsRefreshSeconds,
     message: safeRows.length
       ? livePairStatusMessage(safeRows.length, safety.stats)
       : "No fresh live pairs from the launch feeds right now. It will refresh while this tab is open."
@@ -13160,12 +13485,41 @@ function livePairCandidateToRow(candidate) {
 }
 
 function livePairStatusMessage(count, stats = {}) {
+  if (stats.rpcSafetySkipped) {
+    return `Live Pairs found ${count} fresh launch(es). Trade safety runs before any buy.`;
+  }
   const checked = Number(stats.accepted || 0);
   const pending = Number(stats.pending || 0);
   if (pending > 0) {
     return `Live Pairs found ${count} fresh launch(es). ${checked} mint/freeze checked; ${pending} still settling on-chain.`;
   }
   return `Live Pairs found ${count} mint/freeze checked launch(es).`;
+}
+
+async function maybeFilterWebLivePairsForSafety(rows, limit = 12) {
+  if (CONFIG.livePairsRpcSafety) {
+    return filterWebLivePairsForSafety(rows, limit);
+  }
+
+  const limited = uniqueSniperScoreRows(rows)
+    .sort(compareWebLivePairs)
+    .slice(0, limit)
+    .map((row) => ({
+      ...row,
+      safetyNote: "Trade safety runs before buy"
+    }));
+
+  return {
+    rows: limited,
+    stats: {
+      checked: 0,
+      accepted: 0,
+      pending: 0,
+      blocked: 0,
+      token2022: 0,
+      rpcSafetySkipped: true
+    }
+  };
 }
 
 async function enrichWebLivePairsForImages(rows) {
@@ -13968,6 +14322,14 @@ function parseSellDelaySeconds(text) {
   return minutes * 60;
 }
 
+function parseOptionalSellDelaySeconds(text) {
+  const normalized = String(text || "").trim().toLowerCase();
+  if (!normalized || ["0", "off", "none", "no", "disable", "disabled"].includes(normalized)) {
+    return 0;
+  }
+  return parseSellDelaySeconds(normalized);
+}
+
 function parseLoopDelaySeconds(text) {
   const normalized = text.trim().toLowerCase();
   if (!normalized || ["0", "off", "none", "no", "disabled", "now", "immediate"].includes(normalized)) {
@@ -13983,6 +14345,10 @@ function formatDelay(seconds) {
   if (value >= 86_400 && value % 86_400 === 0) return `${value / 86_400} day(s)`;
   const minutes = value / 60;
   return Number.isInteger(minutes) ? `${minutes} minute(s)` : `${minutes.toFixed(2)} minute(s)`;
+}
+
+function formatSellTimerSummary(seconds) {
+  return Number(seconds || 0) > 0 ? `${formatDelay(seconds)} after buy` : "off";
 }
 
 function parseDcaOrderCount(text) {
@@ -14653,8 +15019,8 @@ function formatTimedTradePlanConfirm(data) {
     walletLabel,
     `${data.tradeMode === "single" ? "Buy" : "Buy per wallet"}: ${data.amountSol} SOL`,
     `Net swap: ${lamportsToSol(amountLamports - feeLamports)} SOL`,
-    `Sell timer: ${formatDelay(data.sellDelaySeconds)} after buy`,
-    `Timer sell: ${data.sellPercent}%`,
+    `Sell timer: ${formatSellTimerSummary(data.sellDelaySeconds)}`,
+    Number(data.sellDelaySeconds || 0) > 0 ? `Timer sell: ${data.sellPercent}%` : "",
     data.takeProfitMode === "ladder" ? "Take-profit: ladder chunks" : `TP/SL sell: ${data.triggerSellPercent || 100}%`,
     `Repeat cycles: ${data.loopCount || 1}x`,
     data.loopDelaySeconds ? `Repeat wait: ${formatDelay(data.loopDelaySeconds)}` : "",
@@ -14662,7 +15028,7 @@ function formatTimedTradePlanConfirm(data) {
     `Stop-loss: ${data.stopLossPct ? `-${data.stopLossPct}%` : "off"}`,
     `Slippage: ${data.slippageBps} bps`,
     "Safety: blocks active mint/freeze authority; sell route is checked at exit."
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 function formatManualLaunchConfirm(data) {
@@ -14676,7 +15042,7 @@ function formatManualLaunchConfirm(data) {
     `Net swap: ${lamportsToSol(amountLamports - feeLamports)} SOL`,
     `Take-profit: ${formatTakeProfitTarget(data.takeProfitPct)}`,
     `Stop-loss: -${data.stopLossPct}%`,
-    `Fallback timer: ${formatDelay(data.sellDelaySeconds)} after buy`,
+    `Fallback timer: ${formatSellTimerSummary(data.sellDelaySeconds)}`,
     data.loopCount > 1 ? `Repeat cycles: ${data.loopCount}x${data.loopDelaySeconds ? `, wait ${formatDelay(data.loopDelaySeconds)}` : ""}` : "",
     `Slippage: ${data.slippageBps} bps`,
     `The bot buys only after a live ${CONFIG.photonNewPairsUrl ? "Photon/Solana" : "Solana"} token profile matches this ticker.`
@@ -14694,7 +15060,7 @@ function formatSniperConfirm(data) {
     score ? `Rug Risk: ${score.rugRisk}/100` : "",
     `${data.tradeMode === "single" ? "Buy" : "Buy per wallet"}: ${data.amountSol} SOL`,
     `Exit: ${data.exitPreset}`,
-    `Timer: ${formatDelay(data.sellDelaySeconds)} / ${data.sellPercent}%`,
+    `Timer: ${formatSellTimerSummary(data.sellDelaySeconds)}${Number(data.sellDelaySeconds || 0) > 0 ? ` / ${data.sellPercent}%` : ""}`,
     `TP/SL: ${formatTakeProfitTarget(data.takeProfitPct)} / -${data.stopLossPct}%`,
     `Slippage: ${data.slippageBps} bps`,
     "Safety: blocks active mint/freeze authority. Sell route is checked when an exit triggers."

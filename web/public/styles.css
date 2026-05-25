@@ -628,14 +628,24 @@ button:disabled {
 }
 
 .connected-token-list a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   border: 1px solid var(--line);
   border-radius: 999px;
-  padding: 6px 9px;
+  padding: 5px 9px 5px 5px;
   color: var(--green-2);
   background: rgba(255, 255, 255, 0.04);
   text-decoration: none;
   font-size: 12px;
   font-weight: 850;
+}
+
+.connected-token-list .live-pair-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  font-size: 10px;
 }
 
 .account-check-card {
@@ -758,6 +768,14 @@ button:disabled {
   padding: 14px;
 }
 
+.row-card.with-avatar {
+  justify-content: flex-start;
+}
+
+.row-card.with-avatar > .row-main {
+  flex: 1;
+}
+
 .row-card div {
   min-width: 0;
 }
@@ -837,6 +855,11 @@ code {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
+}
+
+.compact-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-top: 2px;
 }
 
 .wallet-checks,
@@ -1019,6 +1042,26 @@ code {
   font-weight: 900;
 }
 
+.kol-token-head {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.kol-token-head h3 {
+  margin: 8px 0 0;
+}
+
+.kol-source-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  color: #c7d7c2;
+  font-size: 13px;
+}
+
 .pick-card h3,
 .pick-card p {
   margin-bottom: 0;
@@ -1084,6 +1127,11 @@ code {
 .kol-avatar.small {
   width: 42px;
   height: 42px;
+}
+
+.kol-avatar.tiny {
+  width: 24px;
+  height: 24px;
 }
 
 .kol-avatar-fallback {
