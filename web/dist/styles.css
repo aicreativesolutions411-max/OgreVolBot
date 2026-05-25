@@ -250,7 +250,7 @@ h3 {
 
 .login-card img {
   width: 100%;
-  aspect-ratio: 4 / 5;
+  aspect-ratio: 16 / 10;
   object-fit: cover;
   border-radius: 12px;
   border: 1px solid var(--line-strong);
@@ -627,6 +627,10 @@ button:disabled {
 
 .x-connect-card {
   grid-template-columns: minmax(0, 1fr) minmax(180px, 260px) auto auto;
+}
+
+.login-security-card {
+  grid-template-columns: minmax(0, 1fr) minmax(170px, 240px) minmax(170px, 240px) auto;
 }
 
 .x-watch-card {

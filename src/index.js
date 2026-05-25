@@ -591,9 +591,23 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "POST" && pathname === "/api/web/password-login") {
+      assertWebLoginAttemptAllowed(request);
+      const body = await readJsonRequestBody(request);
+      const result = await verifyWebPasswordLogin(body.username, body.password);
+      clearWebLoginAttempts(request);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        token: result.token,
+        expiresAt: result.expiresAt,
+        user: await webUserSummary(result.userId)
+      });
+      return;
+    }
+
     if (request.method === "POST" && pathname === "/api/web/signup") {
       const body = await readJsonRequestBody(request);
-      const result = await createWebAccount(body.email);
+      const result = await createWebAccount(body);
       sendWebJson(request, response, 200, {
         ok: true,
         token: result.token,
@@ -645,6 +659,17 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "POST" && pathname === "/api/web/profile/credentials") {
+      const body = await readJsonRequestBody(request);
+      const result = await updateWebProfileCredentials(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        profile: result.profile,
+        user: await webUserSummary(auth.userId)
+      });
+      return;
+    }
+
     if (request.method === "POST" && pathname === "/api/web/profile/avatar") {
       const body = await readJsonRequestBody(request, 400_000);
       const result = await updateWebProfileAvatar(auth.userId, body);
@@ -659,6 +684,17 @@ async function handleWebApiRequest(request, response, requestUrl) {
     if (request.method === "POST" && pathname === "/api/web/profile/connected-wallet") {
       const body = await readJsonRequestBody(request);
       const result = await updateWebConnectedWallet(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        profile: result.profile,
+        user: await webUserSummary(auth.userId)
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/profile/x") {
+      const body = await readJsonRequestBody(request);
+      const result = await updateWebProfileXHandle(auth.userId, body);
       sendWebJson(request, response, 200, {
         ok: true,
         profile: result.profile,
@@ -1163,10 +1199,11 @@ function isPermissionError(error) {
 
 async function writeJsonIfMissing(filePath, value) {
   try {
-    await fs.access(filePath);
+    const existing = await fs.readFile(filePath, "utf8");
+    if (existing.trim()) return;
   } catch {
-    await fs.writeFile(filePath, JSON.stringify(value, null, 2));
   }
+  await writeJsonFile(filePath, value);
 }
 
 function walletPath() {
@@ -1222,11 +1259,11 @@ async function ensureAppSecretFingerprint() {
     if (error?.code !== "ENOENT") throw error;
   }
 
-  await fs.writeFile(appSecretFingerprintPath(), JSON.stringify({
+  await writeJsonFile(appSecretFingerprintPath(), {
     algorithm: "sha256",
     fingerprint: current,
     createdAt: new Date().toISOString()
-  }, null, 2));
+  });
 }
 
 async function validateStoredWalletSecrets() {
@@ -9628,13 +9665,12 @@ async function sendDocument(chatId, filename, text) {
   form.append("chat_id", String(chatId));
   form.append("document", new Blob([text], { type: "text/plain" }), filename);
 
-  const response = await fetch(`https://api.telegram.org/bot${CONFIG.telegramToken}/sendDocument`, {
+  const data = await fetchJson(`https://api.telegram.org/bot${CONFIG.telegramToken}/sendDocument`, {
     method: "POST",
     body: form
   });
-  const data = await response.json();
 
-  if (!response.ok || !data.ok) {
+  if (!data.ok) {
     throw new Error(data.description || "Telegram sendDocument failed");
   }
 
@@ -9648,13 +9684,12 @@ async function sendPhoto(chatId, filename, buffer, caption = "", replyMarkup = n
   if (caption) form.append("caption", caption);
   if (replyMarkup) form.append("reply_markup", JSON.stringify(replyMarkup));
 
-  const response = await fetch(`https://api.telegram.org/bot${CONFIG.telegramToken}/sendPhoto`, {
+  const data = await fetchJson(`https://api.telegram.org/bot${CONFIG.telegramToken}/sendPhoto`, {
     method: "POST",
     body: form
   });
-  const data = await response.json();
 
-  if (!response.ok || !data.ok) {
+  if (!data.ok) {
     throw new Error(data.description || "Telegram sendPhoto failed");
   }
 
@@ -9721,21 +9756,89 @@ async function readWalletStore() {
 }
 
 async function writeWalletStore(store) {
-  await fs.writeFile(walletPath(), JSON.stringify(store, null, 2));
+  await writeJsonFile(walletPath(), store);
 }
 
 async function readJson(filePath) {
-  return JSON.parse(await fs.readFile(filePath, "utf8"));
+  const fallback = defaultJsonForPath(filePath);
+  let text = "";
+
+  try {
+    text = await fs.readFile(filePath, "utf8");
+  } catch (error) {
+    if (error?.code !== "ENOENT" || fallback === null) throw error;
+    await writeJsonFile(filePath, fallback);
+    return cloneJson(fallback);
+  }
+
+  if (!text.trim()) {
+    if (fallback === null) {
+      const error = new Error(`${path.basename(filePath)} is empty.`);
+      error.statusCode = 500;
+      throw error;
+    }
+    await writeJsonFile(filePath, fallback);
+    return cloneJson(fallback);
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    const wrapped = new Error(`${path.basename(filePath)} is not valid JSON. Use the backup/restore file if this data file was interrupted during deploy.`);
+    wrapped.statusCode = 500;
+    wrapped.cause = error;
+    throw wrapped;
+  }
+}
+
+async function writeJsonFile(filePath, value) {
+  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.${crypto.randomBytes(4).toString("hex")}.tmp`;
+  try {
+    await fs.writeFile(tmpPath, JSON.stringify(value, null, 2));
+    await fs.rename(tmpPath, filePath);
+  } catch (error) {
+    await fs.unlink(tmpPath).catch(() => {});
+    throw error;
+  }
+}
+
+function defaultJsonForPath(filePath) {
+  switch (path.basename(filePath)) {
+    case "wallets.json":
+      return { wallets: [] };
+    case "audit-log.json":
+      return { entries: [] };
+    case "state.json":
+      return { paused: false };
+    case "trade-plans.json":
+    case "dca-plans.json":
+      return { plans: [] };
+    case "sniper-settings.json":
+      return { users: {} };
+    case "trade-history.json":
+      return { trades: [] };
+    case "web-auth.json":
+      return { codes: [], sessions: [], profiles: {} };
+    case "app-secret.json":
+      return {};
+    default:
+      return null;
+  }
+}
+
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
 }
 
 async function audit(action, details) {
   const auditLog = await readJson(auditPath());
+  if (!Array.isArray(auditLog.entries)) auditLog.entries = [];
   auditLog.entries.push({
     timestamp: new Date().toISOString(),
     action,
     details
   });
-  await fs.writeFile(auditPath(), JSON.stringify(auditLog, null, 2));
+  await writeJsonFile(auditPath(), auditLog);
 }
 
 async function readState() {
@@ -9749,7 +9852,7 @@ async function readTradePlans() {
 }
 
 async function writeTradePlans(store) {
-  await fs.writeFile(tradePlansPath(), JSON.stringify(store, null, 2));
+  await writeJsonFile(tradePlansPath(), store);
 }
 
 async function readDcaPlans() {
@@ -9759,7 +9862,7 @@ async function readDcaPlans() {
 }
 
 async function writeDcaPlans(store) {
-  await fs.writeFile(dcaPlansPath(), JSON.stringify(store, null, 2));
+  await writeJsonFile(dcaPlansPath(), store);
 }
 
 async function readTradeHistory() {
@@ -9779,7 +9882,7 @@ async function recordTradeEvents(events) {
     timestamp: new Date().toISOString(),
     ...event
   })));
-  await fs.writeFile(tradeHistoryPath(), JSON.stringify(store, null, 2));
+  await writeJsonFile(tradeHistoryPath(), store);
 }
 
 async function readSniperSettings() {
@@ -9789,7 +9892,7 @@ async function readSniperSettings() {
 }
 
 async function writeSniperSettings(store) {
-  await fs.writeFile(sniperSettingsPath(), JSON.stringify(store, null, 2));
+  await writeJsonFile(sniperSettingsPath(), store);
 }
 
 async function readWebAuthStore() {
@@ -9801,7 +9904,7 @@ async function readWebAuthStore() {
 }
 
 async function writeWebAuthStore(store) {
-  await fs.writeFile(webAuthPath(), JSON.stringify(store, null, 2));
+  await writeJsonFile(webAuthPath(), store);
 }
 
 async function createWebLoginCode(userId, chatId) {
@@ -9872,15 +9975,53 @@ async function verifyWebLoginCode(input) {
   return { token: session.token, tokenHash: session.tokenHash, userId: codeRecord.userId, expiresAt: session.expiresAt };
 }
 
-async function createWebAccount(emailValue = "") {
+async function verifyWebPasswordLogin(usernameValue, passwordValue) {
+  const username = normalizeWebUsername(usernameValue);
+  const password = normalizeWebPassword(passwordValue);
+  const store = await readWebAuthStore();
+  const entry = findWebProfileByUsername(store, username);
+  const invalidError = () => {
+    const error = new Error("Username or password is incorrect.");
+    error.statusCode = 401;
+    return error;
+  };
+
+  if (!entry?.profile?.passwordLogin) throw invalidError();
+  if (!verifyWebPassword(password, entry.profile.passwordLogin)) throw invalidError();
+
+  const now = Date.now();
+  const session = issueWebSessionRecord(entry.userId, entry.userId, now);
+  store.sessions = [
+    ...store.sessions.filter((item) => Date.parse(item.expiresAt || "") > now),
+    session.record
+  ];
+  entry.profile.lastPasswordLoginAt = new Date(now).toISOString();
+  await writeWebAuthStore(store);
+  await audit("web_password_login_success", { userId: entry.userId, username, expiresAt: session.expiresAt });
+  return { token: session.token, tokenHash: session.tokenHash, userId: entry.userId, expiresAt: session.expiresAt };
+}
+
+async function createWebAccount(options = {}) {
+  const body = typeof options === "string" ? { email: options } : (options || {});
   const store = await readWebAuthStore();
   const now = Date.now();
   const userId = `web_${crypto.randomBytes(12).toString("base64url")}`;
-  const email = normalizeEmail(emailValue);
+  const email = normalizeEmail(body.email);
+  const rawUsername = String(body.username || "").trim();
+  const rawPassword = String(body.password || "");
+  const wantsPasswordLogin = Boolean(rawUsername || rawPassword);
+  const username = wantsPasswordLogin ? normalizeWebUsername(rawUsername) : "";
+  const passwordLogin = wantsPasswordLogin ? hashWebPassword(normalizeWebPassword(rawPassword)) : null;
+  if (username) assertWebUsernameAvailable(store, username);
   const session = issueWebSessionRecord(userId, userId, now);
 
   store.profiles[userId] = {
     email,
+    username,
+    usernameNormalized: username,
+    passwordLogin,
+    xHandle: "",
+    xConnectedAt: "",
     avatarDataUrl: "",
     avatarUrl: "",
     avatarSource: "",
@@ -9894,7 +10035,7 @@ async function createWebAccount(emailValue = "") {
     session.record
   ];
   await writeWebAuthStore(store);
-  await audit("web_account_created", { userId, hasEmail: Boolean(email), expiresAt: session.expiresAt });
+  await audit("web_account_created", { userId, hasEmail: Boolean(email), hasPasswordLogin: Boolean(username), username, expiresAt: session.expiresAt });
 
   let emailSent = false;
   let emailError = null;
@@ -9926,6 +10067,83 @@ function issueWebSessionRecord(userId, chatId, now = Date.now()) {
       expiresAt
     }
   };
+}
+
+function normalizeWebUsername(value) {
+  const username = String(value || "")
+    .trim()
+    .replace(/^@+/, "")
+    .toLowerCase();
+
+  if (!/^[a-z0-9][a-z0-9_.-]{2,23}$/.test(username)) {
+    const error = new Error("Username must be 3-24 characters and use letters, numbers, dot, dash, or underscore.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  return username;
+}
+
+function normalizeWebPassword(value) {
+  const password = String(value || "");
+  if (password.length < 8 || password.length > 128) {
+    const error = new Error("Password must be 8-128 characters.");
+    error.statusCode = 400;
+    throw error;
+  }
+  return password;
+}
+
+function assertWebUsernameAvailable(store, username, excludeUserId = "") {
+  const existing = findWebProfileByUsername(store, username);
+  if (existing && String(existing.userId) !== String(excludeUserId || "")) {
+    const error = new Error("That username is already taken.");
+    error.statusCode = 409;
+    throw error;
+  }
+}
+
+function findWebProfileByUsername(store, usernameValue) {
+  const username = String(usernameValue || "").trim().toLowerCase();
+  if (!username) return null;
+  const entry = Object.entries(store.profiles || {}).find(([, profile]) => {
+    const saved = String(profile.usernameNormalized || profile.username || "").trim().toLowerCase();
+    return saved === username;
+  });
+  return entry ? { userId: entry[0], profile: entry[1] } : null;
+}
+
+function hashWebPassword(password) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const options = { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
+  const hash = crypto.scryptSync(password, salt, 32, options).toString("hex");
+  return {
+    algorithm: "scrypt",
+    salt,
+    hash,
+    keyLength: 32,
+    N: options.N,
+    r: options.r,
+    p: options.p,
+    createdAt: new Date().toISOString()
+  };
+}
+
+function verifyWebPassword(password, record = {}) {
+  try {
+    if (record.algorithm !== "scrypt" || !record.salt || !record.hash) return false;
+    const keyLength = Number.parseInt(record.keyLength || "32", 10);
+    const expected = Buffer.from(String(record.hash), "hex");
+    const actual = crypto.scryptSync(password, String(record.salt), keyLength, {
+      N: Number.parseInt(record.N || "16384", 10),
+      r: Number.parseInt(record.r || "8", 10),
+      p: Number.parseInt(record.p || "1", 10),
+      maxmem: 64 * 1024 * 1024
+    });
+    return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+  } catch {
+    return false;
+  }
 }
 
 async function authenticateWebRequest(request) {
@@ -9989,7 +10207,7 @@ function assertWebLoginAttemptAllowed(request) {
   webLoginAttemptLimits.set(key, record);
 
   if (record.count > 8) {
-    const error = new Error("Too many login attempts. Wait a few minutes, then request a new Telegram /web code.");
+    const error = new Error("Too many login attempts. Wait a few minutes, then try again.");
     error.statusCode = 429;
     throw error;
   }
@@ -10037,6 +10255,10 @@ async function webUserSummary(userId) {
     isAdmin: isAdmin(userId),
     walletCount: wallets.length,
     email: profile.email || "",
+    username: profile.username || "",
+    hasPasswordLogin: Boolean(profile.passwordLogin?.hash),
+    xHandle: profile.xHandle || "",
+    xProfileUrl: profile.xHandle ? `https://x.com/${profile.xHandle}` : "",
     avatar: profile.avatarDataUrl || profile.avatarUrl || "",
     avatarSource: profile.avatarSource || "",
     avatarUpdatedAt: profile.avatarUpdatedAt || "",
@@ -10075,6 +10297,28 @@ async function updateWebProfileEmail(userId, emailValue) {
   }
 
   return { profile, emailSent, emailError };
+}
+
+async function updateWebProfileCredentials(userId, body = {}) {
+  const username = normalizeWebUsername(body.username);
+  const password = normalizeWebPassword(body.password);
+  const store = await readWebAuthStore();
+  const key = String(userId);
+  const existing = store.profiles[key] || {};
+  assertWebUsernameAvailable(store, username, key);
+  const now = new Date().toISOString();
+  const profile = {
+    ...existing,
+    username,
+    usernameNormalized: username,
+    passwordLogin: hashWebPassword(password),
+    credentialsUpdatedAt: now,
+    updatedAt: now
+  };
+  store.profiles[key] = profile;
+  await writeWebAuthStore(store);
+  await audit("web_profile_credentials_update", { userId, username });
+  return { profile };
 }
 
 async function updateWebProfileAvatar(userId, body = {}) {
@@ -10145,6 +10389,42 @@ async function updateWebConnectedWallet(userId, body = {}) {
     connected: Boolean(connectedWallet)
   });
   return { profile };
+}
+
+async function updateWebProfileXHandle(userId, body = {}) {
+  const store = await readWebAuthStore();
+  const key = String(userId);
+  const now = new Date().toISOString();
+  const existing = store.profiles[key] || {};
+  const xHandle = body.clear ? "" : normalizeWebXHandle(body.xHandle || body.handle || body.username);
+  const profile = {
+    ...existing,
+    xHandle,
+    xConnectedAt: xHandle ? now : "",
+    updatedAt: now
+  };
+  store.profiles[key] = profile;
+  await writeWebAuthStore(store);
+  await audit("web_profile_x_update", { userId, xHandle, connected: Boolean(xHandle) });
+  return { profile };
+}
+
+function normalizeWebXHandle(value) {
+  const handle = String(value || "")
+    .trim()
+    .replace(/^@+/, "")
+    .replace(/^https?:\/\/(www\.)?(twitter\.com|x\.com)\//i, "")
+    .split(/[/?#]/)[0]
+    .replace(/[^a-z0-9_]/gi, "")
+    .slice(0, 15);
+
+  if (!/^[a-z0-9_]{1,15}$/i.test(handle)) {
+    const error = new Error("Enter a valid X handle, like @yourname.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  return handle;
 }
 
 function normalizeConnectedWalletPublicKey(value) {
@@ -12724,7 +13004,7 @@ async function setPaused(paused) {
   const state = await readState();
   state.paused = paused;
   state.updatedAt = new Date().toISOString();
-  await fs.writeFile(statePath(), JSON.stringify(state, null, 2));
+  await writeJsonFile(statePath(), state);
 }
 
 function walletRecord(label, keypair, ownerId) {

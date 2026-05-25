@@ -171,7 +171,7 @@ async function api(path, options = {}) {
       }
     }
   }
-  const data = await response.json().catch(() => ({}));
+  const data = await readApiJson(response);
 
   if (!response.ok || data.ok === false) {
     const message = data.message || data.error || `HTTP ${response.status}`;
@@ -187,13 +187,53 @@ async function api(path, options = {}) {
   return data;
 }
 
+async function readApiJson(response) {
+  const contentType = response.headers.get("content-type") || "";
+  const text = await response.text();
+  if (!text.trim()) return {};
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    const preview = text.replace(/\s+/g, " ").trim().slice(0, 180);
+    return {
+      ok: false,
+      error: "invalid_api_response",
+      message: contentType.includes("text/html")
+        ? "OgreTrade API returned a webpage instead of JSON. Check OGRE_API_BASE, WEB_ALLOWED_ORIGIN, and redeploy both Render and Cloudflare."
+        : `OgreTrade API returned invalid JSON${preview ? `: ${preview}` : "."}`
+    };
+  }
+}
+
+function applyUserFromApi(user) {
+  if (!user) return;
+  state.user = user;
+  if (Object.prototype.hasOwnProperty.call(user, "xHandle")) {
+    state.xHandle = cleanXHandle(user.xHandle);
+    if (state.xHandle) setStoredXHandle(state.xHandle);
+    else clearStoredXHandle();
+  } else if (!state.xHandle) {
+    state.xHandle = getStoredXHandle();
+  }
+}
+
+function loginCredentialsFromForm({ requirePassword = false } = {}) {
+  const username = String($("[data-login-username]")?.value || "").trim();
+  const password = String($("[data-login-password]")?.value || "");
+  if (!username && !password && !requirePassword) return {};
+  if (!username) throw new Error("Enter your username.");
+  if (!password) throw new Error("Enter your password.");
+  return { username, password };
+}
+
 function resetWebSession(message = "") {
   state.token = "";
   state.user = null;
   state.loading = false;
   clearStoredToken();
   render();
-  setError(message || "Your web session expired. Tap Create Account to start a fresh session.");
+  setError(message || "Your web session expired. Log in, or tap Create Account to start a fresh session.");
 }
 
 function setError(message = "") {
@@ -216,31 +256,61 @@ function kolscanUrl(wallet) {
 
 async function createWebAccount() {
   setError("");
+  const status = $("[data-login-status]");
   try {
+    const credentials = loginCredentialsFromForm();
+    writeText(status, credentials.username ? "Creating saved login..." : "Creating account...");
     const data = await api("/api/web/signup", {
       method: "POST",
-      body: JSON.stringify({})
+      body: JSON.stringify(credentials)
     });
     state.token = data.token;
-    state.user = data.user;
+    applyUserFromApi(data.user);
     setStoredToken(state.token);
     state.activeTab = "dashboard";
+    writeText(status, credentials.username ? "Account created. Login saved." : "Account created.");
     await loadAll();
   } catch (error) {
+    writeText(status, error.message);
+    setError(error.message);
+  }
+}
+
+async function passwordLogin() {
+  setError("");
+  const status = $("[data-login-status]");
+  try {
+    const credentials = loginCredentialsFromForm({ requirePassword: true });
+    writeText(status, "Logging in...");
+    const data = await api("/api/web/password-login", {
+      method: "POST",
+      body: JSON.stringify(credentials)
+    });
+    state.token = data.token;
+    applyUserFromApi(data.user);
+    setStoredToken(state.token);
+    state.activeTab = "dashboard";
+    writeText(status, "Logged in.");
+    await loadAll();
+  } catch (error) {
+    writeText(status, error.message);
     setError(error.message);
   }
 }
 
 async function createAccountAndConnectWallet() {
   setError("");
+  const status = $("[data-login-status]");
   try {
     if (!state.user) {
+      const credentials = loginCredentialsFromForm();
+      writeText(status, credentials.username ? "Creating saved login..." : "Creating account...");
       const data = await api("/api/web/signup", {
         method: "POST",
-        body: JSON.stringify({})
+        body: JSON.stringify(credentials)
       });
       state.token = data.token;
-      state.user = data.user;
+      applyUserFromApi(data.user);
       setStoredToken(state.token);
       await loadAll();
     }
@@ -272,7 +342,7 @@ async function loadSession() {
 
   try {
     const data = await api("/api/web/me");
-    state.user = data.user;
+    applyUserFromApi(data.user);
     await loadAll();
   } catch {
     state.token = "";
@@ -411,6 +481,7 @@ function profileHtml() {
   return `
     ${profileIntroHtml()}
     ${accountProfileSection()}
+    ${loginSecuritySection()}
     ${connectWalletSection()}
     ${profilePfpSection()}
     ${xConnectSection()}
@@ -441,6 +512,28 @@ function accountProfileSection() {
       </div>
       <button type="button" class="primary" data-connect-wallet="solana">Connect Wallet</button>
       <button type="button" data-tab="wallets">Open Wallets</button>
+    </section>
+  `;
+}
+
+function loginSecuritySection() {
+  const username = state.user?.username || "";
+  return `
+    <section class="profile-card login-security-card">
+      <div>
+        <h3>Saved Login</h3>
+        <p>${username ? `Username saved: ${escapeHtml(username)}. Update the password here any time.` : "Add a username and password so this profile follows you across browsers and devices."}</p>
+      </div>
+      <label>
+        Username
+        <input data-profile-username type="text" autocomplete="username" placeholder="slimewire" value="${escapeHtml(username)}">
+      </label>
+      <label>
+        Password
+        <input data-profile-password type="password" autocomplete="new-password" placeholder="${state.user?.hasPasswordLogin ? "New password" : "8+ characters"}">
+      </label>
+      <button type="button" class="primary" data-save-login-credentials>${username ? "Update Login" : "Save Login"}</button>
+      <small data-login-security-status>${state.user?.hasPasswordLogin ? "Password login is active for this profile." : "Password is stored as a salted hash. Private keys are not shown or emailed."}</small>
     </section>
   `;
 }
@@ -1831,10 +1924,20 @@ async function createWalletSet() {
         count
       })
     });
-    state.downloads = data.downloads;
-    downloadText(data.downloads.encryptedBackup.filename, data.downloads.encryptedBackup.text);
-    downloadText(data.downloads.recoveryKeys.filename, data.downloads.recoveryKeys.text);
-    writeText(status, `Created ${data.wallets.length} wallet(s). Backup downloads started.`);
+    const wallets = Array.isArray(data.wallets) ? data.wallets : [];
+    if (!wallets.length) {
+      throw new Error(data.message || "Wallet create did not return wallet data. Refresh and try again.");
+    }
+    state.downloads = data.downloads || null;
+    if (data.downloads?.encryptedBackup?.text) {
+      downloadText(data.downloads.encryptedBackup.filename, data.downloads.encryptedBackup.text);
+    }
+    if (data.downloads?.recoveryKeys?.text) {
+      downloadText(data.downloads.recoveryKeys.filename, data.downloads.recoveryKeys.text);
+    }
+    writeText(status, data.downloads
+      ? `Created ${wallets.length} wallet(s). Backup downloads started.`
+      : `Created ${wallets.length} wallet(s). Use Download Backup before funding.`);
     await loadAll();
     state.activeTab = "wallets";
     render();
@@ -1976,7 +2079,7 @@ function downloadText(filename, text) {
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
-function connectXAccount() {
+async function connectXAccount() {
   const input = $("[data-x-handle]");
   const status = $("[data-x-status]");
   const handle = cleanXHandle(input?.value || "");
@@ -1984,16 +2087,39 @@ function connectXAccount() {
     writeText(status, "Enter a valid X handle first.");
     return;
   }
-  state.xHandle = handle;
-  setStoredXHandle(handle);
-  writeText(status, `Connected as @${handle}. Share buttons now open X with SlimeWire tagged.`);
-  render();
+
+  try {
+    writeText(status, `Connecting @${handle}...`);
+    const data = await api("/api/web/profile/x", {
+      method: "POST",
+      body: JSON.stringify({ xHandle: handle })
+    });
+    applyUserFromApi(data.user || { ...state.user, xHandle: data.profile?.xHandle || handle });
+    setStoredXHandle(state.xHandle);
+    writeText(status, `Connected @${state.xHandle}. Share buttons now open X posts with SlimeWire tagged.`);
+    render();
+  } catch (error) {
+    writeText(status, error.message);
+    setError(error.message);
+  }
 }
 
-function disconnectXAccount() {
-  state.xHandle = "";
-  clearStoredXHandle();
-  render();
+async function disconnectXAccount() {
+  const status = $("[data-x-status]");
+  try {
+    const data = await api("/api/web/profile/x", {
+      method: "POST",
+      body: JSON.stringify({ clear: true })
+    });
+    applyUserFromApi(data.user || { ...state.user, xHandle: "" });
+    state.xHandle = "";
+    clearStoredXHandle();
+    writeText(status, "X disconnected.");
+    render();
+  } catch (error) {
+    writeText(status, error.message);
+    setError(error.message);
+  }
 }
 
 async function updateProfileAvatar(payload, statusText = "Saving PFP...") {
@@ -2004,12 +2130,12 @@ async function updateProfileAvatar(payload, statusText = "Saving PFP...") {
       method: "POST",
       body: JSON.stringify(payload)
     });
-    state.user = data.user || {
+    applyUserFromApi(data.user || {
       ...state.user,
       avatar: data.profile?.avatarDataUrl || data.profile?.avatarUrl || "",
       avatarSource: data.profile?.avatarSource || "",
       avatarUpdatedAt: data.profile?.avatarUpdatedAt || ""
-    };
+    });
     writeText(status, state.user.avatar ? "PFP saved." : "PFP removed.");
     render();
   } catch (error) {
@@ -2110,10 +2236,10 @@ async function connectBrowserWallet(providerId) {
         provider: walletProviderLabel(providerId, provider)
       })
     });
-    state.user = data.user || {
+    applyUserFromApi(data.user || {
       ...state.user,
       connectedWallet: data.profile?.connectedWallet || null
-    };
+    });
     writeText(status, `Connected ${shortAddress(publicKeyText)}.`);
     render();
   } catch (error) {
@@ -2142,11 +2268,38 @@ async function disconnectBrowserWallet() {
       method: "POST",
       body: JSON.stringify({ clear: true })
     });
-    state.user = data.user || {
+    applyUserFromApi(data.user || {
       ...state.user,
       connectedWallet: null
-    };
+    });
     writeText(status, "Connected wallet removed.");
+    render();
+  } catch (error) {
+    writeText(status, error.message);
+    setError(error.message);
+  }
+}
+
+async function saveLoginCredentials() {
+  const usernameInput = $("[data-profile-username]");
+  const passwordInput = $("[data-profile-password]");
+  const status = $("[data-login-security-status]");
+  const username = String(usernameInput?.value || "").trim();
+  const password = String(passwordInput?.value || "");
+  if (!username || !password) {
+    writeText(status, "Enter a username and password first.");
+    return;
+  }
+
+  try {
+    writeText(status, "Saving login...");
+    const data = await api("/api/web/profile/credentials", {
+      method: "POST",
+      body: JSON.stringify({ username, password })
+    });
+    applyUserFromApi(data.user || { ...state.user, username, hasPasswordLogin: true });
+    if (passwordInput) passwordInput.value = "";
+    writeText(status, "Saved. You can now log back in with this username and password.");
     render();
   } catch (error) {
     writeText(status, error.message);
@@ -2189,7 +2342,7 @@ async function fetchPnlCardBlob(tokenMint) {
     cache: "no-store"
   }, 30_000);
   if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
+    const data = await readApiJson(response);
     throw new Error(data.message || data.error || `Could not build PnL card (${response.status}).`);
   }
   return {
@@ -2922,10 +3075,12 @@ document.addEventListener("click", async (event) => {
   if (!target) return;
 
   if (target.matches("[data-web-signup]")) await createWebAccount();
+  if (target.matches("[data-web-password-login]")) await passwordLogin();
   if (target.matches("[data-web-signup-connect]")) await createAccountAndConnectWallet();
   if (target.matches("[data-logout]")) await logout();
-  if (target.matches("[data-connect-x]")) connectXAccount();
-  if (target.matches("[data-clear-x]")) disconnectXAccount();
+  if (target.matches("[data-connect-x]")) await connectXAccount();
+  if (target.matches("[data-clear-x]")) await disconnectXAccount();
+  if (target.matches("[data-save-login-credentials]")) await saveLoginCredentials();
   if (target.matches("[data-use-x-avatar]")) await useXProfileAvatar();
   if (target.matches("[data-clear-avatar]")) await updateProfileAvatar({ clear: true }, "Removing PFP...");
   if (target.matches("[data-connect-wallet]")) await connectBrowserWallet(target.dataset.connectWallet);
