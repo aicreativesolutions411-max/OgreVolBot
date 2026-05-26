@@ -116,6 +116,8 @@ const state = {
   selectedBundlePresetId: "bundle-default-six",
   fastTradePresetStatus: "",
   fastBundlePresetStatus: "",
+  editingTradePresetId: "",
+  editingBundlePresetId: "",
   walletRemoveStatus: "",
   restoreResult: null,
   importResult: null,
@@ -458,6 +460,7 @@ async function loadAll() {
     state.pnl = pnl.pnl || null;
     state.launchWatches = launchWatches.watches || [];
     state.presets = presets.presets || { trade: [], bundle: [] };
+    ensureSelectedPresetsStillExist();
     state.watchlist = watchlist.watchlist || { rows: [], count: 0 };
   } finally {
     state.loading = false;
@@ -1281,15 +1284,7 @@ function tradeHtml() {
             </label>
             <label>
               Fallback Timer
-              <select data-trade-auto-delay data-custom-select="trade-auto-delay">
-                <option value="off" selected>No timer</option>
-                <option value="5s">5 sec</option>
-                <option value="5">5 min</option>
-                <option value="15">15 min</option>
-                <option value="60">1 hour</option>
-                <option value="custom">Custom</option>
-              </select>
-              <input data-trade-auto-delay-custom data-custom-for="trade-auto-delay" type="text" placeholder="Custom: 45s, 2, 2h" hidden>
+              ${fallbackTimerSelectHtml("trade-auto-delay", "data-trade-auto-delay", "off")}
             </label>
             <label>
               Exit Size
@@ -1368,16 +1363,7 @@ function tradeHtml() {
             </label>
             <label>
               Fallback Sell
-              <select data-trade-plan-delay data-custom-select="trade-plan-delay">
-                <option value="off">No timer</option>
-                <option value="5s">5 sec</option>
-                <option value="1">1 min</option>
-                <option value="5" selected>5 min</option>
-                <option value="15">15 min</option>
-                <option value="60">1 hour</option>
-                <option value="custom">Custom</option>
-              </select>
-              <input data-trade-plan-delay-custom data-custom-for="trade-plan-delay" type="text" placeholder="Custom: 45s, 2, 2h" hidden>
+              ${fallbackTimerSelectHtml("trade-plan-delay", "data-trade-plan-delay", "5")}
             </label>
             <label>
               Timer Sell
@@ -1433,14 +1419,14 @@ function tradeHtml() {
   `;
 }
 
-function walletOptionsHtml() {
+function walletOptionsHtml(selectedIndex = "") {
   if (!state.wallets.length) {
     return `<option value="1">No managed wallets loaded</option>`;
   }
   return state.wallets.map((wallet) => {
     const balance = state.balances.find((row) => Number(row.index) === Number(wallet.index));
     const sol = balance?.sol !== null && balance?.sol !== undefined ? `${Number(balance.sol).toFixed(4)} SOL` : "balance loading";
-    return `<option value="${wallet.index}">${wallet.index}. ${escapeHtml(wallet.label)} - ${sol}</option>`;
+    return `<option value="${wallet.index}" ${String(wallet.index) === String(selectedIndex || "") ? "selected" : ""}>${wallet.index}. ${escapeHtml(wallet.label)} - ${sol}</option>`;
   }).join("");
 }
 
@@ -1562,16 +1548,7 @@ function bundleHtml() {
           <div class="volume-grid">
             <label>
               Fallback Sell
-              <select data-bundle-plan-delay data-custom-select="bundle-plan-delay">
-                <option value="off">No timer</option>
-                <option value="5s">5 sec</option>
-                <option value="1">1 min</option>
-                <option value="5" selected>5 min</option>
-                <option value="15">15 min</option>
-                <option value="60">1 hour</option>
-                <option value="custom">Custom</option>
-              </select>
-              <input data-bundle-plan-delay-custom data-custom-for="bundle-plan-delay" type="text" placeholder="Custom: 45s or 120" hidden>
+              ${fallbackTimerSelectHtml("bundle-plan-delay", "data-bundle-plan-delay", "5")}
             </label>
             <label>
               Take Profit
@@ -1607,15 +1584,7 @@ function bundleHtml() {
             </label>
             <label>
               Repeat Wait
-              <select data-bundle-plan-loop-delay data-custom-select="bundle-plan-loop-delay">
-                <option value="0" selected>No wait</option>
-                <option value="5s">5 sec</option>
-                <option value="30s">30 sec</option>
-                <option value="1">1 min</option>
-                <option value="5">5 min</option>
-                <option value="custom">Custom</option>
-              </select>
-              <input data-bundle-plan-loop-delay-custom data-custom-for="bundle-plan-loop-delay" type="text" placeholder="Custom: 30s or 2" hidden>
+              ${repeatWaitSelectHtml("bundle-plan-loop-delay", "data-bundle-plan-loop-delay", "0")}
             </label>
             <label>
               Timer Sell
@@ -1691,22 +1660,23 @@ function bundleResultHtml() {
   `;
 }
 
-function walletChecksHtml(prefix) {
+function walletChecksHtml(prefix, selectedIndexes = null) {
   const defaultCheckedCount = prefix === "trade-plan" ? 1 : 6;
+  const selectedSet = Array.isArray(selectedIndexes) ? new Set(selectedIndexes.map(String)) : null;
   return state.wallets.map((wallet, index) => `
     <label class="wallet-check">
-      <input type="checkbox" data-${prefix}-wallet value="${wallet.index}" ${index < defaultCheckedCount ? "checked" : ""}>
+      <input type="checkbox" data-${prefix}-wallet value="${wallet.index}" ${selectedSet ? (selectedSet.has(String(wallet.index)) ? "checked" : "") : (index < defaultCheckedCount ? "checked" : "")}>
       <span>${wallet.index}. ${escapeHtml(wallet.label)}</span>
       <code>${escapeHtml(wallet.shortPublicKey || wallet.publicKey)}</code>
     </label>
   `).join("");
 }
 
-function walletGroupHtml(prefix) {
+function walletGroupHtml(prefix, value = "") {
   return `
     <label>
       Optional Group Label
-      <input data-${prefix}-group type="text" placeholder="Example: Ogre">
+      <input data-${prefix}-group type="text" placeholder="Example: Ogre" value="${escapeHtml(value)}">
     </label>
   `;
 }
@@ -1726,6 +1696,65 @@ function presetOptionsHtml(kind, selectedId = "") {
     ${presets.map((preset) => `<option value="${escapeHtml(preset.id)}" ${preset.id === selectedId ? "selected" : ""}>${escapeHtml(preset.name)}</option>`).join("")}
     <option value="custom" ${selectedId === "custom" ? "selected" : ""}>Custom / manual</option>
   `;
+}
+
+const FALLBACK_TIMER_OPTIONS = [
+  ["off", "No timer"],
+  ["5s", "5 sec"],
+  ["1", "1 min"],
+  ["3", "3 min"],
+  ["5", "5 min"],
+  ["15", "15 min"],
+  ["30", "30 min"],
+  ["60", "1 hour"],
+  ["custom", "Custom time"]
+];
+
+const REPEAT_WAIT_OPTIONS = [
+  ["0", "No wait"],
+  ["5s", "5 sec"],
+  ["30s", "30 sec"],
+  ["1", "1 min"],
+  ["5", "5 min"],
+  ["15", "15 min"],
+  ["30", "30 min"],
+  ["60", "1 hour"],
+  ["custom", "Custom time"]
+];
+
+function selectWithCustomHtml({ selectAttr, customAttr, customFor, options, selected = "", customType = "text", customPlaceholder = "Custom time" }) {
+  const value = String(selected || "");
+  const knownValues = new Set(options.map(([optionValue]) => optionValue));
+  const selectValue = knownValues.has(value) ? value : "custom";
+  const customValue = selectValue === "custom" && value !== "custom" ? value : "";
+  return `
+    <select ${selectAttr} data-custom-select="${escapeHtml(customFor)}">
+      ${options.map(([optionValue, label]) => `<option value="${escapeHtml(optionValue)}" ${optionValue === selectValue ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}
+    </select>
+    <input ${customAttr} data-custom-for="${escapeHtml(customFor)}" type="${escapeHtml(customType)}" value="${escapeHtml(customValue)}" placeholder="${escapeHtml(customPlaceholder)}" ${selectValue === "custom" ? "" : "hidden"}>
+  `;
+}
+
+function fallbackTimerSelectHtml(customFor, dataAttr, selected = "off") {
+  return selectWithCustomHtml({
+    selectAttr: `${dataAttr}`,
+    customAttr: `${dataAttr}-custom`,
+    customFor,
+    options: FALLBACK_TIMER_OPTIONS,
+    selected,
+    customPlaceholder: "Custom: 45s, 20, 2h"
+  });
+}
+
+function repeatWaitSelectHtml(customFor, dataAttr, selected = "0") {
+  return selectWithCustomHtml({
+    selectAttr: `${dataAttr}`,
+    customAttr: `${dataAttr}-custom`,
+    customFor,
+    options: REPEAT_WAIT_OPTIONS,
+    selected,
+    customPlaceholder: "Custom: 30s, 20, 2h"
+  });
 }
 
 function fastPresetToolbarHtml(context = "scanner") {
@@ -1765,7 +1794,7 @@ function fastTradePresetBuilderHtml() {
         <label>Buy SOL <input data-fast-trade-preset-amount type="number" min="0" step="0.01" value="0.1"></label>
         <label>Take Profit <input data-fast-trade-preset-tp type="text" value="25" placeholder="25 or 5x"></label>
         <label>Stop Loss <input data-fast-trade-preset-sl type="text" value="8" placeholder="8"></label>
-        <label>Fallback Timer <input data-fast-trade-preset-delay type="text" value="off" placeholder="No timer, 5s, 5m"></label>
+        <label>Fallback Timer ${fallbackTimerSelectHtml("fast-trade-preset-delay", "data-fast-trade-preset-delay", "off")}</label>
         <label>Exit % <input data-fast-trade-preset-sell-percent type="number" min="1" max="100" value="100"></label>
         <label>Slippage BPS <input data-fast-trade-preset-slippage type="number" min="1" max="5000" value="400"></label>
       </div>
@@ -1796,7 +1825,7 @@ function fastBundlePresetBuilderHtml() {
         <label>Buy SOL <input data-fast-bundle-preset-amount type="number" min="0" step="0.01" value="0.1"></label>
         <label>Take Profit <input data-fast-bundle-preset-tp type="text" value="60" placeholder="60 or 5x"></label>
         <label>Stop Loss <input data-fast-bundle-preset-sl type="text" value="10" placeholder="10"></label>
-        <label>Fallback Timer <input data-fast-bundle-preset-delay type="text" value="off" placeholder="No timer, 5s, 5m"></label>
+        <label>Fallback Timer ${fallbackTimerSelectHtml("fast-bundle-preset-delay", "data-fast-bundle-preset-delay", "off")}</label>
         <label>Exit % <input data-fast-bundle-preset-sell-percent type="number" min="1" max="100" value="100"></label>
         <label>Slippage BPS <input data-fast-bundle-preset-slippage type="number" min="1" max="5000" value="400"></label>
       </div>
@@ -1809,23 +1838,38 @@ function fastBundlePresetBuilderHtml() {
   `;
 }
 
+function editingPreset(kind) {
+  const id = kind === "trade" ? state.editingTradePresetId : state.editingBundlePresetId;
+  return id ? presetById(kind, id) : null;
+}
+
+function setEditingPreset(kind, id) {
+  if (kind === "trade") state.editingTradePresetId = id || "";
+  if (kind === "bundle") state.editingBundlePresetId = id || "";
+}
+
 function tradePresetManagerHtml() {
+  const preset = editingPreset("trade");
+  const isReadonlyEdit = Boolean(preset?.readonly);
+  const saveLabel = preset ? (isReadonlyEdit ? "Save Edited Copy" : "Update Trade Preset") : "Save Trade Preset";
   return `
     <article class="preset-card">
       <h3>Trade Presets</h3>
-      <p>Save up to five one-wallet presets for instant Trade buttons on scanners, watchlists, and KOL signals.</p>
-      <label>Name <input data-trade-preset-name type="text" placeholder="Fast scalp"></label>
-      <label>Wallet <select data-trade-preset-wallet>${walletOptionsHtml()}</select></label>
+      <p>${preset ? `Editing ${escapeHtml(preset.name)}.${isReadonlyEdit ? " Default presets save as a new custom copy." : ""}` : "Save up to five one-wallet presets for instant Trade buttons on scanners, watchlists, and KOL signals."}</p>
+      <input data-trade-preset-id type="hidden" value="${preset && !preset.readonly ? escapeHtml(preset.id) : ""}">
+      <label>Name <input data-trade-preset-name type="text" placeholder="Fast scalp" value="${escapeHtml(preset?.name || "")}"></label>
+      <label>Wallet <select data-trade-preset-wallet>${walletOptionsHtml(preset?.walletIndex || "")}</select></label>
       <div class="volume-grid compact-grid">
-        <label>Buy SOL <input data-trade-preset-amount type="number" min="0" step="0.01" value="0.1"></label>
-        <label>Take Profit <input data-trade-preset-tp type="text" value="25"></label>
-        <label>Stop Loss <input data-trade-preset-sl type="text" value="8"></label>
-        <label>Fallback Timer <input data-trade-preset-delay type="text" value="off" placeholder="No timer, 5s, 5m"></label>
-        <label>Exit % <input data-trade-preset-sell-percent type="number" min="1" max="100" value="100"></label>
-        <label>Slippage BPS <input data-trade-preset-slippage type="number" min="1" max="5000" value="400"></label>
+        <label>Buy SOL <input data-trade-preset-amount type="number" min="0" step="0.01" value="${escapeHtml(preset?.amountSol || "0.1")}"></label>
+        <label>Take Profit <input data-trade-preset-tp type="text" value="${escapeHtml(preset?.takeProfitPct || "25")}"></label>
+        <label>Stop Loss <input data-trade-preset-sl type="text" value="${escapeHtml(preset?.stopLossPct || "8")}"></label>
+        <label>Fallback Timer ${fallbackTimerSelectHtml("trade-preset-delay", "data-trade-preset-delay", preset?.sellDelay || "off")}</label>
+        <label>Exit % <input data-trade-preset-sell-percent type="number" min="1" max="100" value="${escapeHtml(preset?.sellPercent || "100")}"></label>
+        <label>Slippage BPS <input data-trade-preset-slippage type="number" min="1" max="5000" value="${escapeHtml(preset?.slippageBps || "400")}"></label>
       </div>
       <div class="card-actions">
-        <button type="button" class="primary" data-save-preset="trade">Save Trade Preset</button>
+        <button type="button" class="primary" data-save-preset="trade">${saveLabel}</button>
+        ${preset ? `<button type="button" data-cancel-preset-edit="trade">Cancel Edit</button>` : ""}
       </div>
       ${presetListHtml("trade")}
       <small data-trade-preset-status></small>
@@ -1834,23 +1878,28 @@ function tradePresetManagerHtml() {
 }
 
 function bundlePresetManagerHtml() {
+  const preset = editingPreset("bundle");
+  const isReadonlyEdit = Boolean(preset?.readonly);
+  const saveLabel = preset ? (isReadonlyEdit ? "Save Edited Copy" : "Update Bundle Preset") : "Save Bundle Preset";
   return `
     <article class="preset-card">
       <h3>Bundle Presets</h3>
-      <p>Save up to five multi-wallet presets for instant Bundle buttons on scanners, watchlists, and KOL signals.</p>
-      <label>Name <input data-bundle-preset-name type="text" placeholder="Six wallet send"></label>
-      <div class="wallet-checks preset-wallets">${walletChecksHtml("bundle-preset")}</div>
-      ${walletGroupHtml("bundle-preset")}
+      <p>${preset ? `Editing ${escapeHtml(preset.name)}.${isReadonlyEdit ? " Default presets save as a new custom copy." : ""}` : "Save up to five multi-wallet presets for instant Bundle buttons on scanners, watchlists, and KOL signals."}</p>
+      <input data-bundle-preset-id type="hidden" value="${preset && !preset.readonly ? escapeHtml(preset.id) : ""}">
+      <label>Name <input data-bundle-preset-name type="text" placeholder="Six wallet send" value="${escapeHtml(preset?.name || "")}"></label>
+      <div class="wallet-checks preset-wallets">${walletChecksHtml("bundle-preset", preset?.walletIndexes || null)}</div>
+      ${walletGroupHtml("bundle-preset", preset?.walletGroup || "")}
       <div class="volume-grid compact-grid">
-        <label>Buy SOL <input data-bundle-preset-amount type="number" min="0" step="0.01" value="0.1"></label>
-        <label>Take Profit <input data-bundle-preset-tp type="text" value="60"></label>
-        <label>Stop Loss <input data-bundle-preset-sl type="text" value="10"></label>
-        <label>Fallback Timer <input data-bundle-preset-delay type="text" value="off" placeholder="No timer, 5s, 5m"></label>
-        <label>Exit % <input data-bundle-preset-sell-percent type="number" min="1" max="100" value="100"></label>
-        <label>Slippage BPS <input data-bundle-preset-slippage type="number" min="1" max="5000" value="400"></label>
+        <label>Buy SOL <input data-bundle-preset-amount type="number" min="0" step="0.01" value="${escapeHtml(preset?.amountSol || "0.1")}"></label>
+        <label>Take Profit <input data-bundle-preset-tp type="text" value="${escapeHtml(preset?.takeProfitPct || "60")}"></label>
+        <label>Stop Loss <input data-bundle-preset-sl type="text" value="${escapeHtml(preset?.stopLossPct || "10")}"></label>
+        <label>Fallback Timer ${fallbackTimerSelectHtml("bundle-preset-delay", "data-bundle-preset-delay", preset?.sellDelay || "off")}</label>
+        <label>Exit % <input data-bundle-preset-sell-percent type="number" min="1" max="100" value="${escapeHtml(preset?.sellPercent || "100")}"></label>
+        <label>Slippage BPS <input data-bundle-preset-slippage type="number" min="1" max="5000" value="${escapeHtml(preset?.slippageBps || "400")}"></label>
       </div>
       <div class="card-actions">
-        <button type="button" class="primary" data-save-preset="bundle">Save Bundle Preset</button>
+        <button type="button" class="primary" data-save-preset="bundle">${saveLabel}</button>
+        ${preset ? `<button type="button" data-cancel-preset-edit="bundle">Cancel Edit</button>` : ""}
       </div>
       ${presetListHtml("bundle")}
       <small data-bundle-preset-status></small>
@@ -1867,7 +1916,10 @@ function presetListHtml(kind) {
         <div class="preset-pill" data-readonly="${preset.readonly ? "true" : "false"}">
           <span>${escapeHtml(preset.name)}</span>
           <small>${escapeHtml(preset.amountSol)} SOL | TP ${escapeHtml(preset.takeProfitPct)} | SL ${escapeHtml(preset.stopLossPct)} | ${escapeHtml(preset.sellDelay || "off")}</small>
-          ${preset.readonly ? "" : `<button type="button" data-delete-preset="${escapeHtml(kind)}" data-preset-id="${escapeHtml(preset.id)}">Delete</button>`}
+          <div class="preset-actions">
+            <button type="button" data-edit-preset="${escapeHtml(kind)}" data-preset-id="${escapeHtml(preset.id)}">Edit</button>
+            <button type="button" data-delete-preset="${escapeHtml(kind)}" data-preset-id="${escapeHtml(preset.id)}">${preset.readonly ? "Remove" : "Delete"}</button>
+          </div>
         </div>
       `).join("")}
     </div>
@@ -1969,17 +2021,7 @@ function volumeHtml() {
           </label>
           <label>
             Sell After
-            <select data-volume-delay data-custom-select="volume-delay">
-              <option value="off">No timer</option>
-              <option value="5s">5 sec</option>
-              <option value="1">1 min</option>
-              <option value="5" selected>5 min</option>
-              <option value="15">15 min</option>
-              <option value="30">30 min</option>
-              <option value="60">1 hour</option>
-              <option value="custom">Custom</option>
-            </select>
-            <input data-volume-delay-custom data-custom-for="volume-delay" type="text" placeholder="Custom: 45s, 2, 2h" hidden>
+            ${fallbackTimerSelectHtml("volume-delay", "data-volume-delay", "5")}
           </label>
           <label>
             Take Profit
@@ -2018,15 +2060,7 @@ function volumeHtml() {
           </label>
           <label>
             Repeat Wait
-            <select data-volume-loop-delay data-custom-select="volume-loop-delay">
-              <option value="0" selected>No wait</option>
-              <option value="5s">5 sec</option>
-              <option value="30s">30 sec</option>
-              <option value="1">1 min</option>
-              <option value="5">5 min</option>
-              <option value="custom">Custom</option>
-            </select>
-            <input data-volume-loop-delay-custom data-custom-for="volume-loop-delay" type="text" placeholder="Custom: 30s or 2" hidden>
+            ${repeatWaitSelectHtml("volume-loop-delay", "data-volume-loop-delay", "0")}
           </label>
           <label>
             Timer Sell
@@ -2165,16 +2199,7 @@ function launchHtml() {
           </label>
           <label>
             Fallback Sell
-            <select data-launch-delay data-custom-select="launch-delay">
-              <option value="off">No timer</option>
-              <option value="5s">5 sec</option>
-              <option value="1">1 min</option>
-              <option value="3" selected>3 min</option>
-              <option value="5">5 min</option>
-              <option value="15">15 min</option>
-              <option value="custom">Custom</option>
-            </select>
-            <input data-launch-delay-custom data-custom-for="launch-delay" type="text" placeholder="Custom: 45s, 2, 2h" hidden>
+            ${fallbackTimerSelectHtml("launch-delay", "data-launch-delay", "3")}
           </label>
           <label>
             Repeat
@@ -2188,15 +2213,7 @@ function launchHtml() {
           </label>
           <label>
             Repeat Wait
-            <select data-launch-loop-delay data-custom-select="launch-loop-delay">
-              <option value="0" selected>No wait</option>
-              <option value="5s">5 sec</option>
-              <option value="30s">30 sec</option>
-              <option value="1">1 min</option>
-              <option value="5">5 min</option>
-              <option value="custom">Custom</option>
-            </select>
-            <input data-launch-loop-delay-custom data-custom-for="launch-loop-delay" type="text" placeholder="Custom: 30s or 2" hidden>
+            ${repeatWaitSelectHtml("launch-loop-delay", "data-launch-loop-delay", "0")}
           </label>
           <label>
             Slippage
@@ -2310,16 +2327,7 @@ function kolHtml() {
           </label>
           <label>
             Fallback Sell
-            <select data-kol-delay data-custom-select="kol-delay">
-              <option value="off">No timer</option>
-              <option value="5s">5 sec</option>
-              <option value="1">1 min</option>
-              <option value="5" selected>5 min</option>
-              <option value="15">15 min</option>
-              <option value="60">1 hour</option>
-              <option value="custom">Custom</option>
-            </select>
-            <input data-kol-delay-custom data-custom-for="kol-delay" type="text" placeholder="Custom: 45s, 2, 2h" hidden>
+            ${fallbackTimerSelectHtml("kol-delay", "data-kol-delay", "5")}
           </label>
           <label>
             Repeat
@@ -2333,15 +2341,7 @@ function kolHtml() {
           </label>
           <label>
             Repeat Wait
-            <select data-kol-loop-delay data-custom-select="kol-loop-delay">
-              <option value="0" selected>No wait</option>
-              <option value="5s">5 sec</option>
-              <option value="30s">30 sec</option>
-              <option value="1">1 min</option>
-              <option value="5">5 min</option>
-              <option value="custom">Custom</option>
-            </select>
-            <input data-kol-loop-delay-custom data-custom-for="kol-loop-delay" type="text" placeholder="Custom: 30s or 2" hidden>
+            ${repeatWaitSelectHtml("kol-loop-delay", "data-kol-loop-delay", "0")}
           </label>
           <label>
             Slippage
@@ -3462,6 +3462,21 @@ function presetById(kind, id) {
   return (state.presets?.[kind] || []).find((preset) => preset.id === id) || null;
 }
 
+function ensureSelectedPresetsStillExist() {
+  if (!presetById("trade", state.selectedTradePresetId)) {
+    state.selectedTradePresetId = state.presets?.trade?.[0]?.id || "custom";
+  }
+  if (!presetById("bundle", state.selectedBundlePresetId)) {
+    state.selectedBundlePresetId = state.presets?.bundle?.[0]?.id || "custom";
+  }
+  if (state.editingTradePresetId && !presetById("trade", state.editingTradePresetId)) {
+    state.editingTradePresetId = "";
+  }
+  if (state.editingBundlePresetId && !presetById("bundle", state.editingBundlePresetId)) {
+    state.editingBundlePresetId = "";
+  }
+}
+
 async function quickPresetTrade(tokenMint) {
   const preset = presetById("trade", state.selectedTradePresetId);
   if (!preset || state.selectedTradePresetId === "custom") {
@@ -3544,24 +3559,26 @@ function readPresetForm(kind, source = "manager") {
   const prefix = source === "fast" ? `fast-${kind}` : kind;
   if (kind === "trade") {
     return {
+      id: $(`[data-${prefix}-preset-id]`)?.value || "",
       name: $(`[data-${prefix}-preset-name]`)?.value || "Trade Preset",
       walletIndex: $(`[data-${prefix}-preset-wallet]`)?.value || "1",
       amountSol: $(`[data-${prefix}-preset-amount]`)?.value || "0.1",
       takeProfitPct: $(`[data-${prefix}-preset-tp]`)?.value || "25",
       stopLossPct: $(`[data-${prefix}-preset-sl]`)?.value || "8",
-      sellDelay: $(`[data-${prefix}-preset-delay]`)?.value || "off",
+      sellDelay: fieldValue(`[data-${prefix}-preset-delay]`, `[data-${prefix}-preset-delay-custom]`, "off"),
       sellPercent: $(`[data-${prefix}-preset-sell-percent]`)?.value || "100",
       slippageBps: $(`[data-${prefix}-preset-slippage]`)?.value || "400"
     };
   }
   return {
+    id: $(`[data-${prefix}-preset-id]`)?.value || "",
     name: $(`[data-${prefix}-preset-name]`)?.value || "Bundle Preset",
     walletIndexes: checkedWalletIndexes(`${prefix}-preset`),
     walletGroup: $(`[data-${prefix}-preset-group]`)?.value?.trim() || "",
     amountSol: $(`[data-${prefix}-preset-amount]`)?.value || "0.1",
     takeProfitPct: $(`[data-${prefix}-preset-tp]`)?.value || "60",
     stopLossPct: $(`[data-${prefix}-preset-sl]`)?.value || "10",
-    sellDelay: $(`[data-${prefix}-preset-delay]`)?.value || "off",
+    sellDelay: fieldValue(`[data-${prefix}-preset-delay]`, `[data-${prefix}-preset-delay-custom]`, "off"),
     sellPercent: $(`[data-${prefix}-preset-sell-percent]`)?.value || "100",
     slippageBps: $(`[data-${prefix}-preset-slippage]`)?.value || "400"
   };
@@ -3572,6 +3589,16 @@ function selectNewestUserPreset(kind, presets) {
   if (!newest?.id) return;
   if (kind === "trade") state.selectedTradePresetId = newest.id;
   if (kind === "bundle") state.selectedBundlePresetId = newest.id;
+}
+
+function selectPresetId(kind, id) {
+  const exists = Boolean(id && presetById(kind, id));
+  if (kind === "trade") {
+    state.selectedTradePresetId = exists ? id : (state.presets?.trade?.[0]?.id || "custom");
+  }
+  if (kind === "bundle") {
+    state.selectedBundlePresetId = exists ? id : (state.presets?.bundle?.[0]?.id || "custom");
+  }
 }
 
 function setFastPresetStatus(kind, message) {
@@ -3590,11 +3617,16 @@ async function savePreset(kind, source = "manager") {
       body: JSON.stringify({ type: kind, action: "save", preset })
     });
     state.presets = data.presets || state.presets;
-    selectNewestUserPreset(kind, state.presets?.[kind]);
+    if (preset.id && presetById(kind, preset.id)) {
+      selectPresetId(kind, preset.id);
+    } else {
+      selectNewestUserPreset(kind, state.presets?.[kind]);
+    }
+    if (source === "manager") setEditingPreset(kind, "");
     if (source === "fast") {
       setFastPresetStatus(kind, `Saved "${preset.name}". Tap ${kind === "trade" ? "Trade" : "Bundle"} on any row.`);
     }
-    writeText(status, "Preset saved.");
+    writeText(status, preset.id ? "Preset updated." : "Preset saved.");
     render();
   } catch (error) {
     if (source === "fast") setFastPresetStatus(kind, error.message);
@@ -3610,10 +3642,20 @@ async function deletePreset(kind, id) {
       body: JSON.stringify({ type: kind, action: "delete", id })
     });
     state.presets = data.presets || state.presets;
+    if (kind === "trade" && state.selectedTradePresetId === id) selectPresetId("trade", "");
+    if (kind === "bundle" && state.selectedBundlePresetId === id) selectPresetId("bundle", "");
+    if ((kind === "trade" && state.editingTradePresetId === id) || (kind === "bundle" && state.editingBundlePresetId === id)) {
+      setEditingPreset(kind, "");
+    }
     render();
   } catch (error) {
     setError(error.message);
   }
+}
+
+function editPreset(kind, id) {
+  setEditingPreset(kind, id);
+  render();
 }
 
 async function saveReferralSettings() {
@@ -4182,16 +4224,7 @@ function sniperSetupHtml() {
         </label>
         <label>
           Fallback Sell
-          <select data-sniper-delay data-custom-select="sniper-delay">
-            <option value="off">No timer</option>
-            <option value="5s">5 sec</option>
-            <option value="1">1 min</option>
-            <option value="3" ${isPump ? "selected" : ""}>3 min</option>
-            <option value="5" ${isPump ? "" : "selected"}>5 min</option>
-            <option value="15">15 min</option>
-            <option value="custom">Custom</option>
-          </select>
-          <input data-sniper-delay-custom data-custom-for="sniper-delay" type="text" placeholder="Custom: 45s, 2, 2h" hidden>
+          ${fallbackTimerSelectHtml("sniper-delay", "data-sniper-delay", isPump ? "3" : "5")}
         </label>
         <label>
           Repeat
@@ -4205,15 +4238,7 @@ function sniperSetupHtml() {
         </label>
         <label>
           Repeat Wait
-          <select data-sniper-loop-delay data-custom-select="sniper-loop-delay">
-            <option value="0" selected>No wait</option>
-            <option value="5s">5 sec</option>
-            <option value="30s">30 sec</option>
-            <option value="1">1 min</option>
-            <option value="5">5 min</option>
-            <option value="custom">Custom</option>
-          </select>
-          <input data-sniper-loop-delay-custom data-custom-for="sniper-loop-delay" type="text" placeholder="Custom: 30s or 2" hidden>
+          ${repeatWaitSelectHtml("sniper-loop-delay", "data-sniper-loop-delay", "0")}
         </label>
         <label>
           Slippage
@@ -4296,6 +4321,11 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-share-watch-kol-btn]")) shareManualWatch("kol");
   if (target.matches("[data-save-preset]")) await savePreset(target.dataset.savePreset);
   if (target.matches("[data-save-fast-preset]")) await savePreset(target.dataset.saveFastPreset, "fast");
+  if (target.matches("[data-edit-preset]")) editPreset(target.dataset.editPreset, target.dataset.presetId || "");
+  if (target.matches("[data-cancel-preset-edit]")) {
+    setEditingPreset(target.dataset.cancelPresetEdit, "");
+    render();
+  }
   if (target.matches("[data-delete-preset]")) await deletePreset(target.dataset.deletePreset, target.dataset.presetId || "");
   if (target.matches("[data-quick-trade-token]")) await quickPresetTrade(target.dataset.quickTradeToken || "");
   if (target.matches("[data-quick-bundle-token]")) await quickPresetBundle(target.dataset.quickBundleToken || "");

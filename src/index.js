@@ -10384,6 +10384,10 @@ function ensureWebProfileDefaults(store, userId) {
     profile.bundlePresets = [];
     changed = true;
   }
+  if (!Array.isArray(profile.hiddenWebPresetIds)) {
+    profile.hiddenWebPresetIds = [];
+    changed = true;
+  }
   if (!Array.isArray(profile.watchedTokens)) {
     profile.watchedTokens = [];
     changed = true;
@@ -10558,6 +10562,7 @@ async function createWebAccount(options = {}) {
     showOnTraderBoard: false,
     tradePresets: [],
     bundlePresets: [],
+    hiddenWebPresetIds: [],
     watchedTokens: [],
     xHandle: "",
     xConnectedAt: "",
@@ -10997,9 +11002,10 @@ async function updateWebReferralProfile(userId, body = {}) {
 async function webPresetRows(userId) {
   const profile = await webProfileForUser(userId);
   const defaults = defaultWebPresets();
+  const hiddenIds = new Set(Array.isArray(profile.hiddenWebPresetIds) ? profile.hiddenWebPresetIds.map(String) : []);
   return {
-    trade: [...defaults.trade, ...cleanStoredPresets(profile.tradePresets, "trade")],
-    bundle: [...defaults.bundle, ...cleanStoredPresets(profile.bundlePresets, "bundle")]
+    trade: [...defaults.trade.filter((preset) => !hiddenIds.has(preset.id)), ...cleanStoredPresets(profile.tradePresets, "trade")],
+    bundle: [...defaults.bundle.filter((preset) => !hiddenIds.has(preset.id)), ...cleanStoredPresets(profile.bundlePresets, "bundle")]
   };
 }
 
@@ -11011,13 +11017,23 @@ async function updateWebPreset(userId, body = {}) {
   const field = type === "bundle" ? "bundlePresets" : "tradePresets";
   const current = cleanStoredPresets(existing[field], type);
   const action = String(body.action || "save").trim().toLowerCase();
+  const defaultIds = new Set((defaultWebPresets()[type] || []).map((preset) => preset.id));
+  let hiddenWebPresetIds = Array.isArray(existing.hiddenWebPresetIds)
+    ? uniqueStrings(existing.hiddenWebPresetIds.map(String))
+    : [];
 
   let next = current;
   if (action === "delete") {
     const id = String(body.id || "").trim();
-    next = current.filter((preset) => preset.id !== id);
+    if (defaultIds.has(id)) {
+      hiddenWebPresetIds = uniqueStrings([...hiddenWebPresetIds, id]);
+    } else {
+      next = current.filter((preset) => preset.id !== id);
+    }
   } else {
-    const preset = normalizeWebPreset(type, body.preset || body);
+    const rawPreset = body.preset || body;
+    const rawId = String(rawPreset.id || "").trim();
+    const preset = normalizeWebPreset(type, rawPreset, { keepId: Boolean(rawId && !defaultIds.has(rawId)) });
     const existingIndex = current.findIndex((item) => item.id === preset.id);
     next = existingIndex >= 0
       ? current.map((item, index) => (index === existingIndex ? preset : item))
@@ -11027,6 +11043,7 @@ async function updateWebPreset(userId, body = {}) {
   const profile = {
     ...existing,
     [field]: next,
+    hiddenWebPresetIds,
     updatedAt: new Date().toISOString()
   };
   store.profiles[key] = profile;

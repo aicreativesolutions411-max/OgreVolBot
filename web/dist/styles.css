@@ -217,7 +217,7 @@ small {
 .brand-logo {
   display: block;
   object-fit: contain;
-  mix-blend-mode: screen;
+  mix-blend-mode: normal;
   user-select: none;
   filter:
     drop-shadow(0 0 18px rgba(114, 255, 35, 0.42))
@@ -1617,13 +1617,19 @@ code {
 
 .preset-pill {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto;
   gap: 8px;
   align-items: center;
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 8px;
   background: rgba(255, 255, 255, 0.035);
+}
+
+.preset-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
 }
 
 .preset-pill span {
@@ -2068,6 +2074,14 @@ code {
 
   .preset-pill {
     grid-template-columns: 1fr;
+  }
+
+  .preset-actions {
+    justify-content: stretch;
+  }
+
+  .preset-actions button {
+    flex: 1;
   }
 
   .signal-token {
