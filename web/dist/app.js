@@ -3760,26 +3760,21 @@ function livePairsHtml() {
             return `<button data-live-pair-bucket="${bucket}" data-active="${state.livePairBucket === bucket}">${label}${suffix}</button>`;
           }).join("")}
         </div>
-        <p class="scan-meta">${escapeHtml(status)}${lastUpdatedAt ? ` Last updated ${escapeHtml(formatDate(lastUpdatedAt))}.` : ""}</p>
-        ${rows.length ? livePairRowsHtml(rows) : emptyState("No live pairs yet", "Keep this tab open or tap Refresh Live. Trade safety checks run before any buy.")}
-      </main>
-      <aside class="trade-side order-ticket-stack">
-        <article class="order-ticket compact-ticket">
-          <h3>Live Pair Actions</h3>
-          <p>Refresh the feed or use the row buttons. Every buy still runs safety checks first.</p>
-          <div class="card-actions action-grid">
+        <div class="live-control-strip">
+          <div>
+            <strong>${escapeHtml(activeBucketLabel)} Feed</strong>
+            <span>${escapeHtml(livePairBucketDescription(state.livePairBucket))}</span>
+          </div>
+          <div class="card-actions compact">
             <button class="primary" data-refresh-live-pairs>${bucketLoading ? "Scanning..." : "Refresh Feed"}</button>
             <button data-tab="trade">Trade</button>
             <button data-tab="bundle">Bundle</button>
             <button data-tab="volume">Volume</button>
           </div>
-          <h3>Feed Status</h3>
-          <p>${escapeHtml(livePairBucketDescription(state.livePairBucket))}</p>
-          <p>${escapeHtml(status)}</p>
-          <p>${lastUpdatedAt ? `Updated ${escapeHtml(formatDate(lastUpdatedAt))}` : "Waiting for first refresh."}</p>
-          <p>All age buckets refresh in the background while this tab is open.</p>
-        </article>
-      </aside>
+          <small>${escapeHtml(status)}${lastUpdatedAt ? ` Updated ${escapeHtml(formatDate(lastUpdatedAt))}.` : ""}</small>
+        </div>
+        ${rows.length ? livePairRowsHtml(rows) : emptyState("No live pairs yet", "Keep this tab open or tap Refresh Live. Trade safety checks run before any buy.")}
+      </main>
     </section>
   `;
 }

@@ -14057,16 +14057,39 @@ async function buildWebLivePairs(userId, bucket = "live") {
     ? await enrichWebLivePairsForImages(baseRows)
     : baseRows;
   let usedRelaxedBucket = false;
+  const targetLimit = livePairBucketLimit(safeBucket);
   let liveRows = uniqueSniperScoreRows(enrichedRows)
     .filter((row) => isWebLivePairCandidate(row, safeBucket))
     .sort(compareWebLivePairs);
-  if (!liveRows.length && safeBucket !== "live") {
+  if (liveRows.length < targetLimit && safeBucket !== "live") {
     usedRelaxedBucket = true;
-    liveRows = uniqueSniperScoreRows(enrichedRows)
-      .filter((row) => isWebLivePairCandidate(row, safeBucket, { relaxedAge: true }))
+    liveRows = uniqueSniperScoreRows([
+      ...liveRows,
+      ...enrichedRows
+        .filter((row) => isWebLivePairCandidate(row, safeBucket, { relaxedAge: true }))
+        .map((row) => ({ ...row, bucketNote: "nearby age match" }))
+    ])
       .sort(compareWebLivePairs);
   }
-  const safety = await maybeFilterWebLivePairsForSafety(liveRows, livePairBucketLimit(safeBucket));
+  if (liveRows.length < targetLimit && safeBucket !== "live") {
+    liveRows = uniqueSniperScoreRows([
+      ...liveRows,
+      ...enrichedRows
+        .filter((row) => isWebLivePairBackfillCandidate(row, safeBucket))
+        .map((row) => ({ ...row, bucketNote: "active backfill" }))
+    ])
+      .sort(compareWebLivePairs);
+  }
+  if (liveRows.length < targetLimit && safeBucket !== "live") {
+    liveRows = uniqueSniperScoreRows([
+      ...liveRows,
+      ...enrichedRows
+        .filter((row) => isWebLivePairBackfillCandidate(row, safeBucket, { allowUnknownMarketCap: true }))
+        .map((row) => ({ ...row, bucketNote: "activity backfill" }))
+    ])
+      .sort(compareWebLivePairs);
+  }
+  const safety = await maybeFilterWebLivePairsForSafety(liveRows, targetLimit);
   const safeRows = CONFIG.livePairsImageEnrich && safeBucket === "live"
     ? await enrichWebLivePairsForImages(safety.rows)
     : safety.rows;
@@ -14355,6 +14378,25 @@ function isWebLivePairCandidate(item, bucket = "live", options = {}) {
   return ageOk
     && marketCapOk
     && hasFreshActivity
+    && !flags.has("hard dump")
+    && !flags.has("sell pressure");
+}
+
+function isWebLivePairBackfillCandidate(item, bucket = "live", options = {}) {
+  const flags = new Set(item.riskFlags || []);
+  const safeBucket = normalizeLivePairBucket(bucket);
+  const marketCap = Number(item.marketCap || 0);
+  const liquidityUsd = Number(item.liquidityUsd || 0);
+  const volume5m = Number(item.volume5m || 0);
+  const volumeH1 = Number(item.volumeH1 || 0);
+  const maxMarketCap = livePairMaxMarketCap(safeBucket);
+  const hasMarketCap = marketCap > 0;
+  const marketCapOk = options.allowUnknownMarketCap
+    ? (!hasMarketCap || marketCap <= maxMarketCap)
+    : marketCap >= 7_000 && marketCap <= maxMarketCap;
+  const activityOk = volume5m > 0 || volumeH1 > 0 || liquidityUsd > 0 || isPumpStyleToken(item);
+  return marketCapOk
+    && activityOk
     && !flags.has("hard dump")
     && !flags.has("sell pressure");
 }
