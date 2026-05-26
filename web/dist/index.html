@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>SlimeWire</title>
     <meta name="description" content="SlimeWire web dashboard for meme token trading, wallets, balances, positions, PnL, and sniper scans.">
-    <link rel="stylesheet" href="./styles.css?v=20260525-logo-assets">
+    <link rel="stylesheet" href="./styles.css?v=20260525-panel-logo-tight">
     <script src="./config.js"></script>
-    <script type="module" src="./app.js?v=20260525-logo-assets"></script>
+    <script type="module" src="./app.js?v=20260525-panel-logo-tight"></script>
   </head>
   <body>
     <main class="shell" data-app>
@@ -20,9 +20,20 @@
             <a href="https://twitter.com/i/communities/1930265213917425858" target="_blank" rel="noreferrer">X</a>
           </nav>
           <div class="top-auth-actions" data-auth-actions>
-            <button type="button" data-open-login>Log In</button>
-            <button class="primary" type="button" data-web-signup>Create Account</button>
-            <button type="button" data-web-signup-connect>Connect Wallet</button>
+            <div class="top-auth-group" data-guest-actions>
+              <button type="button" data-open-login>Log In</button>
+              <button class="primary" type="button" data-web-signup>Create Account</button>
+              <button type="button" data-web-signup-connect>Connect Wallet</button>
+            </div>
+            <div class="top-auth-group" data-session-actions hidden>
+              <button type="button" data-tab="wallets">Create Wallet</button>
+              <button type="button" data-connect-wallet="solana">Connect Wallet</button>
+              <button class="top-profile-button" type="button" data-tab="profile">
+                <span class="top-profile-avatar" data-top-avatar aria-hidden="true"><span>SW</span></span>
+                <span>Profile</span>
+              </button>
+              <button type="button" data-logout>Log Out</button>
+            </div>
           </div>
         </div>
         <form class="top-login-panel" data-top-login onsubmit="return false;" hidden>
@@ -42,7 +53,7 @@
 
       <section class="login-view" data-login>
         <div class="login-copy">
-          <img class="brand-logo hero-logo" src="./assets/slimewire-wordmark.png" alt="SlimeWire">
+          <img class="brand-logo hero-logo" src="./assets/slimewire-panel-wordmark-wide.png" alt="SlimeWire Panel">
           <p class="lead">
             A fast meme-coin trade desk built for clean execution. Trade one wallet, bundle across
             wallet groups, control timed volume plans, snipe fresh launches, follow KOL signals,
@@ -69,26 +80,6 @@
       </section>
 
       <section class="dashboard" data-dashboard hidden>
-        <div class="dashboard-head">
-          <div class="dashboard-title-row">
-            <div class="user-avatar mini" data-user-avatar aria-hidden="true"><span>SW</span></div>
-            <div>
-              <div class="panel-brand-line" aria-label="SlimeWire Panel">
-                <img class="brand-logo panel-logo" src="./assets/slimewire-wordmark.png" alt="SlimeWire">
-                <span>Panel</span>
-              </div>
-              <p data-connected-wallet-summary>No browser wallet connected.</p>
-            </div>
-          </div>
-          <div class="head-actions">
-            <button class="secondary" type="button" data-tab="wallets">Create Wallet</button>
-            <button class="secondary" type="button" data-connect-wallet="solana">Connect Wallet</button>
-            <button class="secondary" type="button" data-tab="profile">Profile</button>
-            <button class="secondary" type="button" data-refresh-all>Refresh All</button>
-            <button class="ghost" type="button" data-logout>Log Out</button>
-          </div>
-        </div>
-
         <section class="metrics" aria-label="Account metrics">
           <article>
             <span>Wallets</span>

@@ -141,6 +141,8 @@ const app = $("[data-app]");
 const loginView = $("[data-login]");
 const topLoginPanel = $("[data-top-login]");
 const authActions = $("[data-auth-actions]");
+const guestActions = $("[data-guest-actions]");
+const sessionActions = $("[data-session-actions]");
 const dashboardView = $("[data-dashboard]");
 const errorBox = $("[data-error]");
 const dashboardErrorBox = $("[data-dashboard-error]");
@@ -632,7 +634,9 @@ function render() {
   app.dataset.loading = state.loading ? "true" : "false";
   loginView.hidden = Boolean(state.user);
   if (topLoginPanel) topLoginPanel.hidden = Boolean(state.user) || state.loginCollapsed;
-  if (authActions) authActions.hidden = Boolean(state.user);
+  if (authActions) authActions.hidden = false;
+  if (guestActions) guestActions.hidden = Boolean(state.user);
+  if (sessionActions) sessionActions.hidden = !state.user;
   dashboardView.hidden = false;
 
   setText("[data-user-id]", state.user?.id || "guest");
@@ -642,6 +646,8 @@ function render() {
   setText("[data-realized]", state.pnl?.totals?.realizedSol || "+0 SOL");
   const avatar = $("[data-user-avatar]");
   if (avatar) avatar.innerHTML = userAvatarHtml("SW");
+  const topAvatar = $("[data-top-avatar]");
+  if (topAvatar) topAvatar.innerHTML = userAvatarHtml("SW");
   const connectedWallet = state.user?.connectedWallet || null;
   setText("[data-connected-wallet-summary]", connectedWallet
     ? `${connectedWallet.provider || "Browser wallet"} connected: ${shortAddress(connectedWallet.publicKey)}`
@@ -650,8 +656,8 @@ function render() {
       : "Browse scans now. Create or connect only when you are ready.");
   const logoutButton = $("[data-logout]");
   if (logoutButton) {
-    logoutButton.hidden = false;
-    writeText(logoutButton, state.user ? "Log Out" : "Log In");
+    logoutButton.hidden = !state.user;
+    writeText(logoutButton, "Log Out");
   }
   renderTabs();
 }
