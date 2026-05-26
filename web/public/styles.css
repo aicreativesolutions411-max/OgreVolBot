@@ -191,8 +191,8 @@ small {
 
 .login-view {
   display: grid;
-  grid-template-columns: minmax(0, 1.42fr) minmax(260px, 430px);
-  gap: 18px;
+  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 460px);
+  gap: 16px;
   align-items: center;
   min-height: 0;
   padding: 14px 18px;
@@ -224,22 +224,41 @@ small {
 }
 
 .hero-logo {
-  width: min(850px, 100%);
+  width: min(960px, 100%);
   height: auto;
   margin: -8px 0 8px;
 }
 
 .hero-mark {
-  width: min(410px, 30vw);
-  max-height: 360px;
+  width: min(430px, 31vw);
+  max-height: 380px;
   justify-self: end;
   align-self: center;
+  margin-left: 0;
   object-fit: contain;
-  mix-blend-mode: screen;
+  mix-blend-mode: normal;
   opacity: 0.96;
   filter:
     drop-shadow(0 0 24px rgba(114, 255, 35, 0.36))
     drop-shadow(0 22px 45px rgba(0, 0, 0, 0.42));
+}
+
+@media (min-width: 1500px) {
+  .login-view {
+    grid-template-columns: minmax(0, 1fr) minmax(520px, 650px);
+    gap: 0;
+  }
+
+  .hero-logo {
+    width: min(1040px, 100%);
+  }
+
+  .hero-mark {
+    width: min(620px, 34vw);
+    max-height: 480px;
+    justify-self: start;
+    margin-left: -90px;
+  }
 }
 
 .eyebrow {
@@ -1742,6 +1761,15 @@ code {
 }
 
 @media (max-width: 920px) {
+  body {
+    background-attachment: scroll;
+  }
+
+  .shell {
+    width: min(100% - 18px, 1180px);
+    padding-top: 10px;
+  }
+
   .login-view,
   .panel-grid,
   .pick-grid,
@@ -1775,12 +1803,44 @@ code {
   .footer {
     align-items: flex-start;
     flex-direction: column;
+    gap: 8px;
   }
 
   .topbar-right {
     width: 100%;
     align-items: flex-start;
     flex-direction: column;
+    gap: 8px;
+  }
+
+  .powered {
+    font-size: 13px;
+  }
+
+  .social-links,
+  .top-auth-actions,
+  .top-auth-group,
+  .login-steps {
+    width: 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .social-links::-webkit-scrollbar,
+  .top-auth-actions::-webkit-scrollbar,
+  .top-auth-group::-webkit-scrollbar,
+  .login-steps::-webkit-scrollbar,
+  .tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .social-links a,
+  .top-auth-actions button,
+  .login-steps span {
+    flex: 0 0 auto;
   }
 
   .top-login-panel {
@@ -1788,14 +1848,57 @@ code {
     width: 100%;
   }
 
+  .login-view {
+    position: relative;
+    gap: 8px;
+    padding: 12px;
+  }
+
   .hero-logo {
-    width: min(520px, 92vw);
+    width: min(540px, 100%);
+    margin: -4px 0 6px;
   }
 
   .hero-mark {
-    width: min(190px, 48vw);
-    max-height: 190px;
-    justify-self: start;
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    z-index: 0;
+    width: min(170px, 38vw);
+    max-height: 170px;
+    margin-left: 0;
+    opacity: 0.24;
+    pointer-events: none;
+  }
+
+  .lead {
+    max-width: 100%;
+    font-size: 14px;
+    line-height: 1.34;
+  }
+
+  .login-steps {
+    margin-top: 8px;
+  }
+
+  .sponsor-strip {
+    width: 100%;
+    margin-top: 10px;
+    padding: 8px 10px;
+  }
+
+  .metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .metrics article {
+    min-height: 70px;
+    padding: 10px 12px;
+  }
+
+  .metrics strong {
+    margin-top: 4px;
+    font-size: 22px;
   }
 
   .order-ticket-stack {
@@ -1814,6 +1917,14 @@ code {
 
   .tabs {
     top: 0;
+    gap: 6px;
+    padding: 6px;
+  }
+
+  .tabs button {
+    min-height: 38px;
+    padding: 0 12px;
+    font-size: 13px;
   }
 
   .signal-header {
@@ -1823,6 +1934,8 @@ code {
   .signal-row {
     grid-template-columns: minmax(0, 1fr);
     align-items: stretch;
+    min-height: 0;
+    padding: 10px;
   }
 
   .signal-actions {
@@ -1832,17 +1945,30 @@ code {
 
 @media (max-width: 620px) {
   .shell {
-    width: min(100% - 20px, 1180px);
-    padding-top: 12px;
+    width: min(100% - 14px, 1180px);
+    padding-top: 8px;
   }
 
   .login-view {
-    padding: 18px;
+    padding: 10px;
+  }
+
+  .hero-mark {
+    display: none;
+  }
+
+  .lead {
+    font-size: 13px;
   }
 
   .sponsor-strip {
-    grid-template-columns: 1fr;
+    grid-template-columns: auto minmax(0, 1fr);
     gap: 6px;
+  }
+
+  .sponsor-strip small {
+    grid-column: 1 / -1;
+    white-space: normal;
   }
 
   h1 {
@@ -1865,10 +1991,16 @@ code {
   }
 
   .signal-token {
-    grid-template-columns: 44px minmax(0, 1fr);
+    grid-template-columns: 40px minmax(0, 1fr);
   }
 
   .signal-actions {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .signal-actions button {
+    min-height: 36px;
+    padding: 0 6px;
+    font-size: 12px;
   }
 }
