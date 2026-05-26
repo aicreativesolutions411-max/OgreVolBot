@@ -120,7 +120,10 @@ button,
 }
 
 .top-auth-actions .primary {
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--green), var(--green-2));
   color: #071006;
+  box-shadow: 0 0 18px rgba(114, 255, 35, 0.2);
 }
 
 .top-login-panel {
@@ -155,9 +158,9 @@ small {
 
 .login-view {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 320px);
   gap: 18px;
-  align-items: start;
+  align-items: center;
   min-height: 0;
   padding: 18px;
   border: 1px solid var(--line);
@@ -171,16 +174,36 @@ small {
 
 .login-copy {
   align-self: start;
+  position: relative;
+  z-index: 1;
+  min-width: 0;
 }
 
-.login-view .slime-title {
-  margin-bottom: 10px;
-  padding-bottom: 14px;
-  font-size: clamp(44px, 6vw, 68px);
+.brand-logo {
+  display: block;
+  object-fit: contain;
+  user-select: none;
+  filter:
+    drop-shadow(0 0 18px rgba(114, 255, 35, 0.42))
+    drop-shadow(0 8px 0 rgba(8, 43, 5, 0.42));
 }
 
-.login-view .slime-title::after {
-  height: 14px;
+.hero-logo {
+  width: min(560px, 54vw);
+  max-height: 150px;
+  margin: -6px 0 12px;
+}
+
+.hero-mark {
+  width: min(280px, 22vw);
+  max-height: 270px;
+  justify-self: end;
+  align-self: center;
+  object-fit: contain;
+  opacity: 0.96;
+  filter:
+    drop-shadow(0 0 24px rgba(114, 255, 35, 0.36))
+    drop-shadow(0 22px 45px rgba(0, 0, 0, 0.42));
 }
 
 .eyebrow {
@@ -505,6 +528,31 @@ button:disabled {
 
 .dashboard-title-row {
   align-items: flex-start;
+}
+
+.panel-brand-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  min-width: 0;
+  margin-bottom: 6px;
+}
+
+.panel-logo {
+  width: min(350px, 32vw);
+  max-height: 92px;
+}
+
+.panel-brand-line span {
+  color: var(--green-2);
+  font-size: clamp(36px, 4vw, 62px);
+  font-weight: 950;
+  line-height: 0.92;
+  text-shadow:
+    0 0 14px rgba(114, 255, 35, 0.55),
+    0 0 34px rgba(57, 255, 20, 0.35);
+  filter: drop-shadow(0 8px 0 rgba(8, 43, 5, 0.5));
 }
 
 .user-avatar {
@@ -1748,6 +1796,20 @@ code {
   .top-login-panel {
     position: static;
     width: 100%;
+  }
+
+  .hero-logo {
+    width: min(440px, 90vw);
+  }
+
+  .hero-mark {
+    width: min(190px, 48vw);
+    max-height: 190px;
+    justify-self: start;
+  }
+
+  .panel-logo {
+    width: min(320px, 70vw);
   }
 
   .order-ticket-stack {
