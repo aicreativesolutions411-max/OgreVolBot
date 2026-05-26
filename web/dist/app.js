@@ -114,6 +114,9 @@ const state = {
   watchlistLoading: false,
   selectedTradePresetId: "trade-default-scalp",
   selectedBundlePresetId: "bundle-default-six",
+  fastTradePresetStatus: "",
+  fastBundlePresetStatus: "",
+  walletRemoveStatus: "",
   restoreResult: null,
   importResult: null,
   backupResult: null,
@@ -1279,7 +1282,7 @@ function tradeHtml() {
             <label>
               Fallback Timer
               <select data-trade-auto-delay data-custom-select="trade-auto-delay">
-                <option value="off" selected>Off</option>
+                <option value="off" selected>No timer</option>
                 <option value="5s">5 sec</option>
                 <option value="5">5 min</option>
                 <option value="15">15 min</option>
@@ -1291,6 +1294,7 @@ function tradeHtml() {
             <label>
               Exit Size
               <select data-trade-auto-sell-percent data-custom-select="trade-auto-sell-percent">
+                <option value="off">No timer</option>
                 <option value="50">50%</option>
                 <option value="80">80%</option>
                 <option value="100" selected>100%</option>
@@ -1378,6 +1382,7 @@ function tradeHtml() {
             <label>
               Timer Sell
               <select data-trade-plan-sell-percent data-custom-select="trade-plan-sell-percent">
+                <option value="off">No timer</option>
                 <option value="50">50%</option>
                 <option value="80">80%</option>
                 <option value="100" selected>100%</option>
@@ -1429,6 +1434,9 @@ function tradeHtml() {
 }
 
 function walletOptionsHtml() {
+  if (!state.wallets.length) {
+    return `<option value="1">No managed wallets loaded</option>`;
+  }
   return state.wallets.map((wallet) => {
     const balance = state.balances.find((row) => Number(row.index) === Number(wallet.index));
     const sol = balance?.sol !== null && balance?.sol !== undefined ? `${Number(balance.sol).toFixed(4)} SOL` : "balance loading";
@@ -1612,6 +1620,7 @@ function bundleHtml() {
             <label>
               Timer Sell
               <select data-bundle-plan-sell-percent data-custom-select="bundle-plan-sell-percent">
+                <option value="off">No timer</option>
                 <option value="50">50%</option>
                 <option value="80">80%</option>
                 <option value="100" selected>100%</option>
@@ -1712,10 +1721,10 @@ function fieldValue(selectSelector, customSelector, fallback = "") {
 
 function presetOptionsHtml(kind, selectedId = "") {
   const presets = state.presets?.[kind] || [];
-  if (!presets.length) return `<option value="custom">Custom / manual</option>`;
+  if (!presets.length) return `<option value="custom" selected>Custom / manual</option>`;
   return `
     ${presets.map((preset) => `<option value="${escapeHtml(preset.id)}" ${preset.id === selectedId ? "selected" : ""}>${escapeHtml(preset.name)}</option>`).join("")}
-    <option value="custom">Custom / manual</option>
+    <option value="custom" ${selectedId === "custom" ? "selected" : ""}>Custom / manual</option>
   `;
 }
 
@@ -1736,7 +1745,67 @@ function fastPresetToolbarHtml(context = "scanner") {
       </label>
       <button type="button" data-tab="trade">Edit Trade Presets</button>
       <button type="button" data-tab="bundle">Edit Bundle Presets</button>
+      ${state.selectedTradePresetId === "custom" ? fastTradePresetBuilderHtml() : ""}
+      ${state.selectedBundlePresetId === "custom" ? fastBundlePresetBuilderHtml() : ""}
     </section>
+  `;
+}
+
+function fastTradePresetBuilderHtml() {
+  const status = state.fastTradePresetStatus || (state.wallets.length ? "Save this once, then tap Trade on any row." : "Load or connect a wallet before live trading.");
+  return `
+    <article class="fast-preset-builder" data-fast-preset-builder="trade">
+      <div>
+        <h4>Custom Fast Trade</h4>
+        <p>Pick one wallet and save the buy, profit, stop, timer, exit percent, and slippage settings here.</p>
+      </div>
+      <div class="fast-preset-grid">
+        <label>Name <input data-fast-trade-preset-name type="text" value="Custom Trade"></label>
+        <label>Wallet <select data-fast-trade-preset-wallet>${walletOptionsHtml()}</select></label>
+        <label>Buy SOL <input data-fast-trade-preset-amount type="number" min="0" step="0.01" value="0.1"></label>
+        <label>Take Profit <input data-fast-trade-preset-tp type="text" value="25" placeholder="25 or 5x"></label>
+        <label>Stop Loss <input data-fast-trade-preset-sl type="text" value="8" placeholder="8"></label>
+        <label>Fallback Timer <input data-fast-trade-preset-delay type="text" value="off" placeholder="No timer, 5s, 5m"></label>
+        <label>Exit % <input data-fast-trade-preset-sell-percent type="number" min="1" max="100" value="100"></label>
+        <label>Slippage BPS <input data-fast-trade-preset-slippage type="number" min="1" max="5000" value="400"></label>
+      </div>
+      <div class="fast-preset-actions">
+        <button type="button" class="primary" data-save-fast-preset="trade">Save & Use Trade Preset</button>
+        <button type="button" data-tab="wallets">Create / Load Wallets</button>
+        <small data-fast-trade-preset-status>${escapeHtml(status)}</small>
+      </div>
+    </article>
+  `;
+}
+
+function fastBundlePresetBuilderHtml() {
+  const status = state.fastBundlePresetStatus || (state.wallets.length ? "Save this once, then tap Bundle on any row." : "Load wallets before live bundle trading.");
+  return `
+    <article class="fast-preset-builder" data-fast-preset-builder="bundle">
+      <div>
+        <h4>Custom Fast Bundle</h4>
+        <p>Select wallet numbers or type a group label, then save the same exit and slippage rules for fast Bundle buttons.</p>
+      </div>
+      <div class="fast-preset-wallets">
+        <strong>Wallets</strong>
+        <div class="wallet-checks preset-wallets">${walletChecksHtml("fast-bundle-preset")}</div>
+        ${walletGroupHtml("fast-bundle-preset")}
+      </div>
+      <div class="fast-preset-grid">
+        <label>Name <input data-fast-bundle-preset-name type="text" value="Custom Bundle"></label>
+        <label>Buy SOL <input data-fast-bundle-preset-amount type="number" min="0" step="0.01" value="0.1"></label>
+        <label>Take Profit <input data-fast-bundle-preset-tp type="text" value="60" placeholder="60 or 5x"></label>
+        <label>Stop Loss <input data-fast-bundle-preset-sl type="text" value="10" placeholder="10"></label>
+        <label>Fallback Timer <input data-fast-bundle-preset-delay type="text" value="off" placeholder="No timer, 5s, 5m"></label>
+        <label>Exit % <input data-fast-bundle-preset-sell-percent type="number" min="1" max="100" value="100"></label>
+        <label>Slippage BPS <input data-fast-bundle-preset-slippage type="number" min="1" max="5000" value="400"></label>
+      </div>
+      <div class="fast-preset-actions">
+        <button type="button" class="primary" data-save-fast-preset="bundle">Save & Use Bundle Preset</button>
+        <button type="button" data-tab="wallets">Create / Load Wallets</button>
+        <small data-fast-bundle-preset-status>${escapeHtml(status)}</small>
+      </div>
+    </article>
   `;
 }
 
@@ -1751,7 +1820,7 @@ function tradePresetManagerHtml() {
         <label>Buy SOL <input data-trade-preset-amount type="number" min="0" step="0.01" value="0.1"></label>
         <label>Take Profit <input data-trade-preset-tp type="text" value="25"></label>
         <label>Stop Loss <input data-trade-preset-sl type="text" value="8"></label>
-        <label>Timer <input data-trade-preset-delay type="text" value="off"></label>
+        <label>Fallback Timer <input data-trade-preset-delay type="text" value="off" placeholder="No timer, 5s, 5m"></label>
         <label>Exit % <input data-trade-preset-sell-percent type="number" min="1" max="100" value="100"></label>
         <label>Slippage BPS <input data-trade-preset-slippage type="number" min="1" max="5000" value="400"></label>
       </div>
@@ -1776,7 +1845,7 @@ function bundlePresetManagerHtml() {
         <label>Buy SOL <input data-bundle-preset-amount type="number" min="0" step="0.01" value="0.1"></label>
         <label>Take Profit <input data-bundle-preset-tp type="text" value="60"></label>
         <label>Stop Loss <input data-bundle-preset-sl type="text" value="10"></label>
-        <label>Timer <input data-bundle-preset-delay type="text" value="off"></label>
+        <label>Fallback Timer <input data-bundle-preset-delay type="text" value="off" placeholder="No timer, 5s, 5m"></label>
         <label>Exit % <input data-bundle-preset-sell-percent type="number" min="1" max="100" value="100"></label>
         <label>Slippage BPS <input data-bundle-preset-slippage type="number" min="1" max="5000" value="400"></label>
       </div>
@@ -1859,6 +1928,14 @@ function syncCustomFields(root = document) {
     input.hidden = !isCustom;
     if (!isCustom) input.value = "";
   });
+}
+
+function syncTimerSellNoTimer(select) {
+  if (!select?.dataset?.customSelect?.endsWith("-sell-percent") || select.value !== "off") return;
+  const delayKey = select.dataset.customSelect.replace(/-sell-percent$/, "-delay");
+  const delaySelect = document.querySelector(`[data-custom-select="${delayKey}"]`);
+  if (delaySelect) delaySelect.value = "off";
+  syncCustomFields();
 }
 
 function volumeHtml() {
@@ -1954,6 +2031,7 @@ function volumeHtml() {
           <label>
             Timer Sell
             <select data-volume-sell-percent data-custom-select="volume-sell-percent">
+              <option value="off">No timer</option>
               <option value="50">50%</option>
               <option value="80">80%</option>
               <option value="100" selected>100%</option>
@@ -2573,6 +2651,42 @@ async function importWallet() {
   }
 }
 
+async function removeManagedWallet(walletIndex, walletLabel = "this wallet") {
+  const label = String(walletLabel || `Wallet ${walletIndex}`);
+  const firstConfirm = window.confirm(`Remove ${label} from this web account?\n\nA backup file and recovery key file will download first. This does not move any SOL or tokens.`);
+  if (!firstConfirm) return;
+  const finalConfirm = window.confirm(`Final confirmation: remove ${label} from the saved wallet list?\n\nYou can restore it later only from the backup/recovery file.`);
+  if (!finalConfirm) return;
+
+  const status = $("[data-wallet-remove-status]");
+  state.walletRemoveStatus = `Backing up ${label} before removal...`;
+  writeText(status, state.walletRemoveStatus);
+  setError("");
+
+  try {
+    const data = await api("/api/web/wallets/remove", {
+      method: "POST",
+      body: JSON.stringify({ walletIndexes: [String(walletIndex)] })
+    });
+    const result = data.removed || {};
+    state.downloads = result.downloads || state.downloads;
+    if (result.downloads?.encryptedBackup?.text) {
+      downloadText(result.downloads.encryptedBackup.filename, result.downloads.encryptedBackup.text);
+    }
+    if (result.downloads?.recoveryKeys?.text) {
+      downloadText(result.downloads.recoveryKeys.filename, result.downloads.recoveryKeys.text);
+    }
+    state.walletRemoveStatus = result.message || `Removed ${label}.`;
+    await loadAll();
+    state.activeTab = "wallets";
+    render();
+  } catch (error) {
+    state.walletRemoveStatus = error.message;
+    writeText(status, error.message);
+    setError(error.message);
+  }
+}
+
 async function readRestoreFile(input) {
   const status = $("[data-restore-status]");
   const textarea = $("[data-restore-text]");
@@ -2958,11 +3072,20 @@ function isEnabledTradeTarget(value) {
   return Boolean(normalized) && !["0", "off", "none", "no", "disabled"].includes(normalized);
 }
 
+function normalizeTimerSellSettings(sellDelay, sellPercent) {
+  const normalizedPercent = String(sellPercent || "").trim().toLowerCase();
+  if (["0", "off", "none", "no", "disabled"].includes(normalizedPercent)) {
+    return { sellDelay: "off", sellPercent: "100" };
+  }
+  return { sellDelay, sellPercent };
+}
+
 function readSingleTradeAutoExit() {
   const takeProfitPct = fieldValue("[data-trade-auto-tp]", "[data-trade-auto-tp-custom]", "0");
   const stopLossPct = fieldValue("[data-trade-auto-sl]", "[data-trade-auto-sl-custom]", "0");
-  const sellDelay = fieldValue("[data-trade-auto-delay]", "[data-trade-auto-delay-custom]", "off");
-  const sellPercent = fieldValue("[data-trade-auto-sell-percent]", "[data-trade-auto-sell-percent-custom]", "100");
+  let sellDelay = fieldValue("[data-trade-auto-delay]", "[data-trade-auto-delay-custom]", "off");
+  let sellPercent = fieldValue("[data-trade-auto-sell-percent]", "[data-trade-auto-sell-percent-custom]", "100");
+  ({ sellDelay, sellPercent } = normalizeTimerSellSettings(sellDelay, sellPercent));
   const enabled = isEnabledTradeTarget(takeProfitPct)
     || isEnabledTradeTarget(stopLossPct)
     || isEnabledTradeTarget(sellDelay);
@@ -3052,8 +3175,9 @@ function readTradePlanForm() {
   const amountSol = fieldValue("[data-trade-plan-amount]", "[data-trade-plan-amount-custom]", "0.1");
   const takeProfitPct = fieldValue("[data-trade-plan-tp]", "[data-trade-plan-tp-custom]", "25");
   const stopLossPct = fieldValue("[data-trade-plan-sl]", "[data-trade-plan-sl-custom]", "8");
-  const sellDelay = fieldValue("[data-trade-plan-delay]", "[data-trade-plan-delay-custom]", "5");
-  const sellPercent = fieldValue("[data-trade-plan-sell-percent]", "[data-trade-plan-sell-percent-custom]", "100");
+  let sellDelay = fieldValue("[data-trade-plan-delay]", "[data-trade-plan-delay-custom]", "5");
+  let sellPercent = fieldValue("[data-trade-plan-sell-percent]", "[data-trade-plan-sell-percent-custom]", "100");
+  ({ sellDelay, sellPercent } = normalizeTimerSellSettings(sellDelay, sellPercent));
   const slippageBps = fieldValue("[data-trade-plan-slippage]", "[data-trade-plan-slippage-custom]", "400");
   if (!walletIndexes.length && !walletGroup) throw new Error("Choose at least one wallet or enter a group label.");
   if (!tokenMint) throw new Error("Paste a token CA first.");
@@ -3099,12 +3223,13 @@ function readVolumeForm() {
   const walletGroup = $("[data-volume-group]")?.value?.trim() || "";
   const tokenMint = $("[data-volume-token]")?.value?.trim() || "";
   const amountSol = $("[data-volume-amount]")?.value || "";
-  const sellDelay = fieldValue("[data-volume-delay]", "[data-volume-delay-custom]", "5");
+  let sellDelay = fieldValue("[data-volume-delay]", "[data-volume-delay-custom]", "5");
   const takeProfitPct = fieldValue("[data-volume-tp]", "[data-volume-tp-custom]", "25");
   const stopLossPct = fieldValue("[data-volume-sl]", "[data-volume-sl-custom]", "8");
   const loopCount = fieldValue("[data-volume-loop]", "[data-volume-loop-custom]", "1");
   const loopDelay = fieldValue("[data-volume-loop-delay]", "[data-volume-loop-delay-custom]", "0");
-  const sellPercent = fieldValue("[data-volume-sell-percent]", "[data-volume-sell-percent-custom]", "100");
+  let sellPercent = fieldValue("[data-volume-sell-percent]", "[data-volume-sell-percent-custom]", "100");
+  ({ sellDelay, sellPercent } = normalizeTimerSellSettings(sellDelay, sellPercent));
   const slippageBps = fieldValue("[data-volume-slippage]", "[data-volume-slippage-custom]", "400");
   if (!walletIndexes.length && !walletGroup) throw new Error("Choose at least one wallet or enter a group label.");
   if (!tokenMint) throw new Error("Paste a token CA first.");
@@ -3284,14 +3409,17 @@ function readBundleForm() {
 
 function readBundlePlanForm() {
   const payload = readBundleForm();
+  let sellDelay = fieldValue("[data-bundle-plan-delay]", "[data-bundle-plan-delay-custom]", "5");
+  let sellPercent = fieldValue("[data-bundle-plan-sell-percent]", "[data-bundle-plan-sell-percent-custom]", "100");
+  ({ sellDelay, sellPercent } = normalizeTimerSellSettings(sellDelay, sellPercent));
   return {
     ...payload,
-    sellDelay: fieldValue("[data-bundle-plan-delay]", "[data-bundle-plan-delay-custom]", "5"),
+    sellDelay,
     takeProfitPct: fieldValue("[data-bundle-plan-tp]", "[data-bundle-plan-tp-custom]", "60"),
     stopLossPct: fieldValue("[data-bundle-plan-sl]", "[data-bundle-plan-sl-custom]", "10"),
     loopCount: fieldValue("[data-bundle-plan-loop]", "[data-bundle-plan-loop-custom]", "1"),
     loopDelay: fieldValue("[data-bundle-plan-loop-delay]", "[data-bundle-plan-loop-delay-custom]", "0"),
-    sellPercent: fieldValue("[data-bundle-plan-sell-percent]", "[data-bundle-plan-sell-percent-custom]", "100"),
+    sellPercent,
     ...readWalletExitTargets("bundle-plan")
   };
 }
@@ -3337,9 +3465,7 @@ function presetById(kind, id) {
 async function quickPresetTrade(tokenMint) {
   const preset = presetById("trade", state.selectedTradePresetId);
   if (!preset || state.selectedTradePresetId === "custom") {
-    state.tradeToken = tokenMint;
-    state.activeTab = "trade";
-    render();
+    setError("Save the custom fast trade preset first, then tap Trade again.");
     return;
   }
   try {
@@ -3377,9 +3503,7 @@ async function quickPresetTrade(tokenMint) {
 async function quickPresetBundle(tokenMint) {
   const preset = presetById("bundle", state.selectedBundlePresetId);
   if (!preset || state.selectedBundlePresetId === "custom") {
-    state.bundleToken = tokenMint;
-    state.activeTab = "bundle";
-    render();
+    setError("Save the custom fast bundle preset first, then tap Bundle again.");
     return;
   }
   try {
@@ -3416,45 +3540,64 @@ async function quickPresetBundle(tokenMint) {
   }
 }
 
-function readPresetForm(kind) {
+function readPresetForm(kind, source = "manager") {
+  const prefix = source === "fast" ? `fast-${kind}` : kind;
   if (kind === "trade") {
     return {
-      name: $("[data-trade-preset-name]")?.value || "Trade Preset",
-      walletIndex: $("[data-trade-preset-wallet]")?.value || "1",
-      amountSol: $("[data-trade-preset-amount]")?.value || "0.1",
-      takeProfitPct: $("[data-trade-preset-tp]")?.value || "25",
-      stopLossPct: $("[data-trade-preset-sl]")?.value || "8",
-      sellDelay: $("[data-trade-preset-delay]")?.value || "off",
-      sellPercent: $("[data-trade-preset-sell-percent]")?.value || "100",
-      slippageBps: $("[data-trade-preset-slippage]")?.value || "400"
+      name: $(`[data-${prefix}-preset-name]`)?.value || "Trade Preset",
+      walletIndex: $(`[data-${prefix}-preset-wallet]`)?.value || "1",
+      amountSol: $(`[data-${prefix}-preset-amount]`)?.value || "0.1",
+      takeProfitPct: $(`[data-${prefix}-preset-tp]`)?.value || "25",
+      stopLossPct: $(`[data-${prefix}-preset-sl]`)?.value || "8",
+      sellDelay: $(`[data-${prefix}-preset-delay]`)?.value || "off",
+      sellPercent: $(`[data-${prefix}-preset-sell-percent]`)?.value || "100",
+      slippageBps: $(`[data-${prefix}-preset-slippage]`)?.value || "400"
     };
   }
   return {
-    name: $("[data-bundle-preset-name]")?.value || "Bundle Preset",
-    walletIndexes: checkedWalletIndexes("bundle-preset"),
-    walletGroup: $("[data-bundle-preset-group]")?.value?.trim() || "",
-    amountSol: $("[data-bundle-preset-amount]")?.value || "0.1",
-    takeProfitPct: $("[data-bundle-preset-tp]")?.value || "60",
-    stopLossPct: $("[data-bundle-preset-sl]")?.value || "10",
-    sellDelay: $("[data-bundle-preset-delay]")?.value || "off",
-    sellPercent: $("[data-bundle-preset-sell-percent]")?.value || "100",
-    slippageBps: $("[data-bundle-preset-slippage]")?.value || "400"
+    name: $(`[data-${prefix}-preset-name]`)?.value || "Bundle Preset",
+    walletIndexes: checkedWalletIndexes(`${prefix}-preset`),
+    walletGroup: $(`[data-${prefix}-preset-group]`)?.value?.trim() || "",
+    amountSol: $(`[data-${prefix}-preset-amount]`)?.value || "0.1",
+    takeProfitPct: $(`[data-${prefix}-preset-tp]`)?.value || "60",
+    stopLossPct: $(`[data-${prefix}-preset-sl]`)?.value || "10",
+    sellDelay: $(`[data-${prefix}-preset-delay]`)?.value || "off",
+    sellPercent: $(`[data-${prefix}-preset-sell-percent]`)?.value || "100",
+    slippageBps: $(`[data-${prefix}-preset-slippage]`)?.value || "400"
   };
 }
 
-async function savePreset(kind) {
-  const status = $(`[data-${kind}-preset-status]`);
+function selectNewestUserPreset(kind, presets) {
+  const newest = (presets || []).find((preset) => !preset.readonly);
+  if (!newest?.id) return;
+  if (kind === "trade") state.selectedTradePresetId = newest.id;
+  if (kind === "bundle") state.selectedBundlePresetId = newest.id;
+}
+
+function setFastPresetStatus(kind, message) {
+  if (kind === "trade") state.fastTradePresetStatus = message;
+  if (kind === "bundle") state.fastBundlePresetStatus = message;
+}
+
+async function savePreset(kind, source = "manager") {
+  const status = source === "fast" ? $(`[data-fast-${kind}-preset-status]`) : $(`[data-${kind}-preset-status]`);
   try {
     await ensureWebAccount(status, "Creating secure web profile for presets...");
     writeText(status, "Saving preset...");
+    const preset = readPresetForm(kind, source);
     const data = await api("/api/web/presets", {
       method: "POST",
-      body: JSON.stringify({ type: kind, action: "save", preset: readPresetForm(kind) })
+      body: JSON.stringify({ type: kind, action: "save", preset })
     });
     state.presets = data.presets || state.presets;
+    selectNewestUserPreset(kind, state.presets?.[kind]);
+    if (source === "fast") {
+      setFastPresetStatus(kind, `Saved "${preset.name}". Tap ${kind === "trade" ? "Trade" : "Bundle"} on any row.`);
+    }
     writeText(status, "Preset saved.");
     render();
   } catch (error) {
+    if (source === "fast") setFastPresetStatus(kind, error.message);
     writeText(status, error.message);
     setError(error.message);
   }
@@ -3580,11 +3723,12 @@ function walletsHtml() {
     <section class="account-check-card">
       <div>
         <h3>Wallet Actions</h3>
-        <p>Refresh balances, view token positions, or open KOL Tracker from the same account.</p>
+        <p>Refresh balances, view token positions, or remove saved wallet records after backup.</p>
       </div>
       <button class="primary" data-refresh-all>Refresh Balances</button>
       <button data-tab="positions">View Positions</button>
       <button data-tab="kol">Open KOL Tracker</button>
+      <small data-wallet-remove-status>${escapeHtml(state.walletRemoveStatus || "")}</small>
     </section>
     <div class="table-list">
       ${state.wallets.map((wallet) => `
@@ -3597,7 +3741,10 @@ function walletsHtml() {
             ${walletBalanceLine(wallet)}
             </div>
           </div>
-          <button data-copy="${wallet.publicKey}">Copy</button>
+          <div class="card-actions compact">
+            <button data-copy="${wallet.publicKey}">Copy</button>
+            <button class="danger-lite" data-remove-wallet="${wallet.index}" data-wallet-label="${escapeHtml(`${wallet.index}. ${wallet.label}`)}">Remove</button>
+          </div>
         </article>
       `).join("")}
     </div>
@@ -4148,6 +4295,7 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-share-watch-token-btn]")) shareManualWatch("token");
   if (target.matches("[data-share-watch-kol-btn]")) shareManualWatch("kol");
   if (target.matches("[data-save-preset]")) await savePreset(target.dataset.savePreset);
+  if (target.matches("[data-save-fast-preset]")) await savePreset(target.dataset.saveFastPreset, "fast");
   if (target.matches("[data-delete-preset]")) await deletePreset(target.dataset.deletePreset, target.dataset.presetId || "");
   if (target.matches("[data-quick-trade-token]")) await quickPresetTrade(target.dataset.quickTradeToken || "");
   if (target.matches("[data-quick-bundle-token]")) await quickPresetBundle(target.dataset.quickBundleToken || "");
@@ -4167,6 +4315,7 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-restore-backup]")) await restoreWalletBackup();
   if (target.matches("[data-export-backup]")) await exportWalletBackup();
   if (target.matches("[data-import-wallet]")) await importWallet();
+  if (target.matches("[data-remove-wallet]")) await removeManagedWallet(target.dataset.removeWallet || "", target.dataset.walletLabel || "");
   if (target.matches("[data-download]")) {
     const file = state.downloads?.[target.dataset.download];
     if (file) downloadText(file.filename, file.text);
@@ -4333,12 +4482,17 @@ document.addEventListener("change", async (event) => {
   const target = event.target;
   if (target?.matches?.("[data-custom-select]")) {
     syncCustomFields();
+    syncTimerSellNoTimer(target);
   }
   if (target?.matches?.("[data-fast-trade-preset]")) {
     state.selectedTradePresetId = target.value || "custom";
+    if (state.selectedTradePresetId === "custom") state.fastTradePresetStatus = "";
+    render();
   }
   if (target?.matches?.("[data-fast-bundle-preset]")) {
     state.selectedBundlePresetId = target.value || "custom";
+    if (state.selectedBundlePresetId === "custom") state.fastBundlePresetStatus = "";
+    render();
   }
   if (target?.matches?.("[data-restore-file]")) {
     await readRestoreFile(target);

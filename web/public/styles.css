@@ -211,6 +211,7 @@ small {
   z-index: 1;
   width: 100%;
   min-width: 0;
+  padding-left: clamp(0px, 1.2vw, 22px);
 }
 
 .brand-logo {
@@ -224,9 +225,9 @@ small {
 }
 
 .hero-logo {
-  width: min(960px, 100%);
+  width: min(900px, 96%);
   height: auto;
-  margin: -8px 0 8px;
+  margin: -8px auto 8px;
 }
 
 .hero-mark {
@@ -245,19 +246,19 @@ small {
 
 @media (min-width: 1500px) {
   .login-view {
-    grid-template-columns: minmax(0, 1fr) minmax(520px, 650px);
-    gap: 0;
+    grid-template-columns: minmax(0, 1.05fr) minmax(500px, 610px);
+    gap: 14px;
   }
 
   .hero-logo {
-    width: min(1040px, 100%);
+    width: min(980px, 96%);
   }
 
   .hero-mark {
-    width: min(620px, 34vw);
-    max-height: 480px;
-    justify-self: start;
-    margin-left: -90px;
+    width: min(540px, 30vw);
+    max-height: 440px;
+    justify-self: center;
+    margin-left: -18px;
   }
 }
 
@@ -824,6 +825,11 @@ button:disabled {
 
 .account-check-card {
   grid-template-columns: minmax(0, 1fr) repeat(3, minmax(120px, auto));
+}
+
+.account-check-card small {
+  grid-column: 1 / -1;
+  color: var(--muted);
 }
 
 .restore-card {
@@ -1543,6 +1549,61 @@ code {
   background: rgba(255, 255, 255, 0.035);
 }
 
+.fast-preset-builder {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(114, 255, 35, 0.075), rgba(3, 18, 6, 0.92));
+  box-shadow: 0 0 18px rgba(114, 255, 35, 0.08);
+}
+
+.fast-preset-builder h4,
+.fast-preset-builder p {
+  margin: 0;
+}
+
+.fast-preset-builder h4 {
+  font-size: 18px;
+}
+
+.fast-preset-builder p,
+.fast-preset-builder small {
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.fast-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.fast-preset-wallets {
+  display: grid;
+  gap: 8px;
+}
+
+.fast-preset-wallets .wallet-checks {
+  max-height: 165px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.fast-preset-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.fast-preset-actions small {
+  min-height: 20px;
+  min-width: min(100%, 240px);
+}
+
 .preset-card {
   display: grid;
   gap: 12px;
@@ -1792,6 +1853,10 @@ code {
     grid-template-columns: 1fr;
   }
 
+  .fast-preset-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .setup-hub-panel + .setup-hub-panel {
     border-left: 0;
     border-top: 1px solid var(--line);
@@ -1852,6 +1917,10 @@ code {
     position: relative;
     gap: 8px;
     padding: 12px;
+  }
+
+  .login-copy {
+    padding-left: 0;
   }
 
   .hero-logo {
@@ -1982,7 +2051,18 @@ code {
 
   .quick-grid,
   .volume-grid,
+  .fast-preset-grid,
   .inline-action {
+    grid-template-columns: 1fr;
+  }
+
+  .preset-toolbar,
+  .fast-preset-builder {
+    padding: 8px;
+  }
+
+  .fast-preset-actions {
+    display: grid;
     grid-template-columns: 1fr;
   }
 

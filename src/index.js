@@ -861,6 +861,16 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "POST" && pathname === "/api/web/wallets/remove") {
+      const body = await readJsonRequestBody(request);
+      const result = await removeWebWallets(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        removed: result
+      });
+      return;
+    }
+
     if (request.method === "POST" && pathname === "/api/web/trade/buy") {
       const body = await readJsonRequestBody(request);
       const result = await webTradeBuy(auth.userId, body);
@@ -11606,6 +11616,58 @@ async function importWebWallet(userId, body = {}) {
       "Automatic web backup after wallet import."
     ),
     message: `Imported ${record.label}: ${publicKey}`
+  };
+}
+
+async function removeWebWallets(userId, body = {}) {
+  const rawIndexes = Array.isArray(body.walletIndexes)
+    ? body.walletIndexes
+    : String(body.walletIndex || body.index || "")
+      .split(/[,\s]+/)
+      .filter(Boolean);
+  const indexes = uniqueStrings(rawIndexes.map((item) => String(item).replace(/[^\d]/g, "")).filter(Boolean));
+  if (!indexes.length) {
+    const error = new Error("Choose at least one wallet to remove.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const store = await readWalletStore();
+  const owned = walletsForOwner(store, userId);
+  const selected = indexes.map((index) => {
+    const wallet = owned[Number.parseInt(index, 10) - 1];
+    if (!wallet) {
+      const error = new Error(`Wallet ${index} does not exist.`);
+      error.statusCode = 400;
+      throw error;
+    }
+    return wallet;
+  });
+  const selectedPublicKeys = new Set(selected.map((wallet) => wallet.publicKey));
+  const downloads = webBackupDownloadsForWallets(
+    userId,
+    selected,
+    "removed-web-wallets",
+    "Automatic web backup before wallet removal."
+  );
+
+  const before = store.wallets.length;
+  store.wallets = store.wallets.filter((wallet) => {
+    return !(String(wallet.ownerId) === String(userId) && selectedPublicKeys.has(wallet.publicKey));
+  });
+  const removedCount = before - store.wallets.length;
+  await writeWalletStore(store);
+  await audit("web_remove_wallets", {
+    userId,
+    removedCount,
+    wallets: selected.map(publicWallet)
+  });
+
+  return {
+    removedCount,
+    downloads,
+    wallets: await webWalletRows(userId),
+    message: `Removed ${removedCount} wallet record(s). Backup downloads started first. No SOL or tokens were moved.`
   };
 }
 
