@@ -7464,14 +7464,61 @@ async function fetchPumpSnipeCandidates(options = {}) {
 
 async function fetchLivePairCandidates(options = {}) {
   const ttlMs = Number.isFinite(Number(options.ttlMs)) ? Number(options.ttlMs) : 500;
-  const [photon, pumpLatest, dexLatest] = await Promise.all([
+  const safeBucket = normalizeLivePairBucket(options.bucket);
+  const [photon, pumpLatest, dexLatest, dexBucketSearch] = await Promise.all([
     fetchPhotonNewPairCandidates({ ...options, ttlMs }).catch(() => []),
     fetchPumpFunLatestCandidates({ ...options, timeoutMs: options.timeoutMs || 1_800 }).catch(() => []),
-    fetchSniperCandidates({ ...options, ttlMs, timeoutMs: options.timeoutMs || 1_800 }).catch(() => [])
+    fetchSniperCandidates({ ...options, ttlMs, timeoutMs: options.timeoutMs || 1_800 }).catch(() => []),
+    safeBucket === "live"
+      ? Promise.resolve([])
+      : fetchDexSearchCandidatesForLiveBucket(safeBucket, options).catch(() => [])
   ]);
-  const freshDexRows = dexLatest.filter((candidate) => candidate.source !== "top-boost" || normalizeLivePairBucket(options.bucket) !== "live");
-  return uniqueSniperCandidates([...photon, ...pumpLatest, ...freshDexRows])
+  const freshDexRows = dexLatest.filter((candidate) => candidate.source !== "top-boost" || safeBucket !== "live");
+  return uniqueSniperCandidates([...photon, ...pumpLatest, ...dexBucketSearch, ...freshDexRows])
     .sort(compareLivePairCandidates);
+}
+
+async function fetchDexSearchCandidatesForLiveBucket(bucket, options = {}) {
+  const safeBucket = normalizeLivePairBucket(bucket);
+  const queries = livePairBucketSearchQueries(safeBucket, options.scanState);
+  if (!queries.length) return [];
+
+  const ttlMs = Number.isFinite(Number(options.searchTtlMs))
+    ? Number(options.searchTtlMs)
+    : Math.max(3_000, Number(options.ttlMs || 0), 6_000);
+  const headers = { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" };
+  const rows = [];
+
+  await runWithConcurrency(queries, 3, async (query) => {
+    const cacheKey = `live:${safeBucket}:${query}`;
+    const cached = dexSearchCandidatesCache.get(cacheKey);
+    if (!options.force && cached && Date.now() - cached.cachedAt < ttlMs) {
+      rows.push(...cached.value);
+      return;
+    }
+
+    const data = await fetchJson(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(query)}`, {
+      headers,
+      timeoutMs: options.timeoutMs || 2_500
+    }).catch(() => null);
+    const value = sniperCandidatesFromDexPairs(arrayFromApiData(data, ["pairs"]), `live:${safeBucket}:${query}`);
+    dexSearchCandidatesCache.set(cacheKey, { cachedAt: Date.now(), value });
+    rows.push(...value);
+  });
+
+  return uniqueSniperCandidates(rows);
+}
+
+function livePairBucketSearchQueries(bucket, scanState = {}) {
+  const querySets = {
+    under1h: ["pump solana", "pumpfun solana", "new pump", "solana meme", "raydium pump", "solana trending", "solana volume", "cto pump"],
+    under3h: ["solana trending", "solana pump", "raydium solana", "solana movers", "bonk solana", "pumpfun", "solana breakout", "cto solana"],
+    under1d: ["solana volume", "solana movers", "solana meme", "solana breakout", "raydium solana", "pump trending", "solana community", "solana gem"]
+  };
+  const list = querySets[normalizeLivePairBucket(bucket)] || [];
+  const refreshCount = Number(scanState?.refreshCount || 0);
+  const offset = refreshCount * 2 + stringModulo(bucket, list.length || 1) + Math.floor(Date.now() / 60_000);
+  return rotateItems(list, offset).slice(0, 4);
 }
 
 function compareLivePairCandidates(a, b) {
@@ -14003,11 +14050,24 @@ async function buildWebLivePairs(userId, bucket = "live") {
   const safeBucket = normalizeLivePairBucket(bucket);
   const scanState = nextSniperScanState(`web:${userId}`, `livepairs:${safeBucket}`);
   const candidates = await fetchLivePairCandidates({ ttlMs: safeBucket === "live" ? 500 : 2_500, timeoutMs: safeBucket === "live" ? 1_200 : 1_800, scanState, bucket: safeBucket });
-  const liveRows = uniqueSniperScoreRows(candidates.map(livePairCandidateToRow).filter(Boolean))
+  const baseRows = uniqueSniperScoreRows(candidates.map(livePairCandidateToRow).filter(Boolean))
+    .sort(compareWebLivePairs)
+    .slice(0, safeBucket === "live" ? 80 : 120);
+  const enrichedRows = safeBucket !== "live" || CONFIG.livePairsImageEnrich
+    ? await enrichWebLivePairsForImages(baseRows)
+    : baseRows;
+  let usedRelaxedBucket = false;
+  let liveRows = uniqueSniperScoreRows(enrichedRows)
     .filter((row) => isWebLivePairCandidate(row, safeBucket))
     .sort(compareWebLivePairs);
+  if (!liveRows.length && safeBucket !== "live") {
+    usedRelaxedBucket = true;
+    liveRows = uniqueSniperScoreRows(enrichedRows)
+      .filter((row) => isWebLivePairCandidate(row, safeBucket, { relaxedAge: true }))
+      .sort(compareWebLivePairs);
+  }
   const safety = await maybeFilterWebLivePairsForSafety(liveRows, livePairBucketLimit(safeBucket));
-  const safeRows = CONFIG.livePairsImageEnrich
+  const safeRows = CONFIG.livePairsImageEnrich && safeBucket === "live"
     ? await enrichWebLivePairsForImages(safety.rows)
     : safety.rows;
   rememberSniperScanRows(`web:${userId}`, `livepairs:${safeBucket}`, safeRows);
@@ -14022,7 +14082,7 @@ async function buildWebLivePairs(userId, bucket = "live") {
     refreshedAt: new Date().toISOString(),
     refreshSeconds: CONFIG.livePairsRefreshSeconds,
     message: safeRows.length
-      ? livePairStatusMessage(safeRows.length, safety.stats, safeBucket)
+      ? livePairStatusMessage(safeRows.length, { ...safety.stats, relaxedAge: usedRelaxedBucket }, safeBucket)
       : `${livePairBucketLabel(safeBucket)} did not find matching pairs right now. It will refresh while this tab is open.`
   };
 }
@@ -14075,6 +14135,16 @@ function isLivePairInBucket(item, bucket) {
   if (safeBucket === "under3h") return ageMinutes >= 60 && ageMinutes < 180;
   if (safeBucket === "under1d") return ageMinutes >= 180 && ageMinutes < 1440;
   return true;
+}
+
+function isLivePairInRelaxedBucket(item, bucket) {
+  const safeBucket = normalizeLivePairBucket(bucket);
+  const ageMinutes = livePairAgeMinutesValue(item);
+  if (ageMinutes === null) return false;
+  if (safeBucket === "under1h") return ageMinutes >= 5 && ageMinutes < 90;
+  if (safeBucket === "under3h") return ageMinutes >= 30 && ageMinutes < 240;
+  if (safeBucket === "under1d") return ageMinutes >= 60 && ageMinutes < 1440;
+  return isLivePairInBucket(item, safeBucket);
 }
 
 function livePairMaxMarketCap(bucket) {
@@ -14164,6 +14234,9 @@ function livePairCandidateToRow(candidate) {
 
 function livePairStatusMessage(count, stats = {}, bucket = "live") {
   const label = livePairBucketLabel(bucket);
+  if (stats.relaxedAge) {
+    return `${label} found ${count} nearby age-match pair(s). Trade safety runs before any buy.`;
+  }
   if (stats.rpcSafetySkipped) {
     return `${label} found ${count} pair(s). Trade safety runs before any buy.`;
   }
@@ -14262,7 +14335,7 @@ function webLivePairIsPump(row) {
     || isPumpStyleToken(row);
 }
 
-function isWebLivePairCandidate(item, bucket = "live") {
+function isWebLivePairCandidate(item, bucket = "live", options = {}) {
   const flags = new Set(item.riskFlags || []);
   const safeBucket = normalizeLivePairBucket(bucket);
   const ageSeconds = Number(item.pairAgeSeconds);
@@ -14278,7 +14351,8 @@ function isWebLivePairCandidate(item, bucket = "live") {
     || Number(item.liquidityUsd || 0) > 0
     || Number.isFinite(ageSeconds) && ageSeconds <= 300
     || isPumpStyleToken(item);
-  return isLivePairInBucket(item, safeBucket)
+  const ageOk = options.relaxedAge ? isLivePairInRelaxedBucket(item, safeBucket) : isLivePairInBucket(item, safeBucket);
+  return ageOk
     && marketCapOk
     && hasFreshActivity
     && !flags.has("hard dump")

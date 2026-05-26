@@ -13,11 +13,31 @@
     <main class="shell" data-app>
       <header class="topbar">
         <span class="powered">Powered by Ogres</span>
-        <nav class="social-links" aria-label="Ogre links">
-          <a href="https://t.me/ogrecoinonsol" target="_blank" rel="noreferrer">Telegram</a>
-          <a href="https://ogremode.com/" target="_blank" rel="noreferrer">Website</a>
-          <a href="https://twitter.com/i/communities/1930265213917425858" target="_blank" rel="noreferrer">X</a>
-        </nav>
+        <div class="topbar-right">
+          <nav class="social-links" aria-label="Ogre links">
+            <a href="https://t.me/ogrecoinonsol" target="_blank" rel="noreferrer">Telegram</a>
+            <a href="https://ogremode.com/" target="_blank" rel="noreferrer">Website</a>
+            <a href="https://twitter.com/i/communities/1930265213917425858" target="_blank" rel="noreferrer">X</a>
+          </nav>
+          <div class="top-auth-actions" data-auth-actions>
+            <button type="button" data-open-login>Log In</button>
+            <button class="primary" type="button" data-web-signup>Create Account</button>
+            <button type="button" data-web-signup-connect>Connect Wallet</button>
+          </div>
+        </div>
+        <form class="top-login-panel" data-top-login onsubmit="return false;" hidden>
+          <label>
+            Username
+            <input data-login-username type="text" autocomplete="username" placeholder="slimewire">
+          </label>
+          <label>
+            Password
+            <input data-login-password type="password" autocomplete="current-password" placeholder="8+ characters">
+          </label>
+          <button class="primary" type="button" data-web-password-login>Log In</button>
+          <small data-login-status></small>
+          <p class="error" data-error hidden></p>
+        </form>
       </header>
 
       <section class="login-view" data-login>
@@ -39,26 +59,12 @@
             <span>Connect X</span>
             <span>PnL Cards</span>
           </div>
+          <div class="sponsor-strip">
+            <span>Sponsors</span>
+            <strong>Coming Soon</strong>
+            <small>Featured projects will live here.</small>
+          </div>
         </div>
-
-        <form class="login-card" onsubmit="return false;">
-          <img src="./assets/ogre-aces.jpg" alt="SlimeWire welcome art">
-          <label>
-            Username
-            <input data-login-username type="text" autocomplete="username" placeholder="slimewire">
-          </label>
-          <label>
-            Password
-            <input data-login-password type="password" autocomplete="current-password" placeholder="8+ characters">
-          </label>
-          <button class="primary" type="button" data-web-password-login>Log In</button>
-          <button type="button" data-web-signup>Create Account</button>
-          <button class="secondary" type="button" data-web-signup-connect>Connect Wallet</button>
-          <button class="ghost" type="button" data-browse-guest>Browse Dashboard</button>
-          <p class="login-note">Save a login once so wallets, presets, PFP, X, watchlist, and referrals are waiting when you come back.</p>
-          <small data-login-status></small>
-          <p class="error" data-error hidden></p>
-        </form>
       </section>
 
       <section class="dashboard" data-dashboard hidden>

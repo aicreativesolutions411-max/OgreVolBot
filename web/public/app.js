@@ -139,6 +139,8 @@ const setHidden = (selector, hidden) => {
 };
 const app = $("[data-app]");
 const loginView = $("[data-login]");
+const topLoginPanel = $("[data-top-login]");
+const authActions = $("[data-auth-actions]");
 const dashboardView = $("[data-dashboard]");
 const errorBox = $("[data-error]");
 const dashboardErrorBox = $("[data-dashboard-error]");
@@ -628,7 +630,9 @@ function totalSol() {
 function render() {
   if (!app || !loginView || !dashboardView) return;
   app.dataset.loading = state.loading ? "true" : "false";
-  loginView.hidden = Boolean(state.user) || state.loginCollapsed;
+  loginView.hidden = Boolean(state.user);
+  if (topLoginPanel) topLoginPanel.hidden = Boolean(state.user) || state.loginCollapsed;
+  if (authActions) authActions.hidden = Boolean(state.user);
   dashboardView.hidden = false;
 
   setText("[data-user-id]", state.user?.id || "guest");
@@ -4121,6 +4125,10 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-web-signup]")) await createWebAccount();
   if (target.matches("[data-web-password-login]")) await passwordLogin();
   if (target.matches("[data-web-signup-connect]")) await createAccountAndConnectWallet();
+  if (target.matches("[data-open-login]")) {
+    state.loginCollapsed = !state.loginCollapsed;
+    render();
+  }
   if (target.matches("[data-browse-guest]")) {
     state.loginCollapsed = true;
     render();

@@ -70,7 +70,16 @@ button,
 }
 
 .topbar {
+  position: relative;
   margin-bottom: 18px;
+}
+
+.topbar-right,
+.top-auth-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 .powered {
@@ -99,6 +108,46 @@ button,
   font-weight: 850;
 }
 
+.top-auth-actions button {
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 13px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.top-auth-actions .primary {
+  color: #071006;
+}
+
+.top-login-panel {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 10px);
+  right: 0;
+  width: min(420px, calc(100vw - 28px));
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(114, 255, 35, 0.08), rgba(10, 17, 12, 0.96)),
+    #071108;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
+}
+
+.top-login-panel[hidden] {
+  display: none;
+}
+
+.top-login-panel input {
+  min-height: 40px;
+}
+
 .muted,
 small {
   color: var(--muted);
@@ -106,7 +155,7 @@ small {
 
 .login-view {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+  grid-template-columns: minmax(0, 1fr);
   gap: 18px;
   align-items: start;
   min-height: 0;
@@ -230,6 +279,40 @@ h3 {
   color: #dcebd8;
   font-size: 13px;
   font-weight: 850;
+}
+
+.sponsor-strip {
+  width: min(720px, 100%);
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 11px 14px;
+  border: 1px solid rgba(187, 255, 99, 0.48);
+  border-radius: 12px;
+  background:
+    linear-gradient(90deg, rgba(114, 255, 35, 0.18), rgba(255, 255, 255, 0.045)),
+    rgba(7, 18, 9, 0.82);
+  box-shadow: 0 0 34px rgba(114, 255, 35, 0.12);
+}
+
+.sponsor-strip span {
+  color: var(--green-2);
+  font-size: 12px;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.sponsor-strip strong {
+  color: var(--ink);
+}
+
+.sponsor-strip small {
+  overflow: hidden;
+  margin: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .divider {
@@ -1593,6 +1676,17 @@ code {
   .footer {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .topbar-right {
+    width: 100%;
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .top-login-panel {
+    position: static;
+    width: 100%;
   }
 
   .order-ticket-stack {
