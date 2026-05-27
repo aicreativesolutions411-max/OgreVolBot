@@ -4894,9 +4894,11 @@ body:has([data-app][data-route="connect"])::before {
   padding: 0;
   border: 0;
   border-radius: 0;
-  background: url("./assets/slimewire/references/enter-swamp-reference.jpg") center / contain no-repeat;
+  background: transparent;
   box-shadow: none;
   transform: none;
+  display: grid;
+  place-items: center;
 }
 
 .swamp-splash-button:hover,
@@ -4905,10 +4907,15 @@ body:has([data-app][data-route="connect"])::before {
   outline: none;
 }
 
-.swamp-splash-mark,
-.swamp-splash-enter {
-  opacity: 0;
-  pointer-events: none;
+.swamp-splash-reference {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+  border-radius: 0 !important;
+  filter:
+    drop-shadow(0 0 18px rgba(114, 255, 35, 0.42))
+    drop-shadow(0 0 46px rgba(114, 255, 35, 0.16));
 }
 
 [data-app][data-route="connect"] {
@@ -4969,27 +4976,29 @@ body:has([data-app][data-route="connect"])::before {
 .connect-hero-side {
   min-height: 0;
   padding: 0;
-  justify-items: start;
+  justify-items: center;
   align-content: center;
+  text-align: center;
   gap: 8px;
 }
 
 .connect-hero-side .connect-mark {
-  width: clamp(56px, 6vw, 86px);
-  margin-left: clamp(14px, 2vw, 34px);
+  width: clamp(88px, 8vw, 124px);
+  margin-left: 0;
   filter: drop-shadow(0 0 16px rgba(114, 255, 35, 0.48));
 }
 
 .connect-hero-side p {
-  margin: 12px 0 0 clamp(14px, 2vw, 34px);
+  margin: 14px 0 0;
   color: rgba(245, 255, 242, 0.78);
   font-size: clamp(15px, 2vw, 24px);
-  letter-spacing: 0.32em;
+  font-weight: 900;
+  letter-spacing: 0.4em;
   text-transform: uppercase;
 }
 
 .connect-hero-side h1 {
-  margin: -2px 0 8px clamp(14px, 2vw, 34px);
+  margin: -2px 0 8px;
   color: var(--green);
   font-family: Inter, system-ui, sans-serif;
   font-size: clamp(58px, 8vw, 112px);
@@ -5072,8 +5081,8 @@ body:has([data-app][data-route="connect"])::before {
 
 .connect-provider-row {
   display: grid;
-  grid-template-columns: repeat(4, clamp(54px, 6vw, 70px));
-  gap: clamp(10px, 1.4vw, 18px);
+  grid-template-columns: repeat(3, clamp(58px, 6vw, 72px));
+  gap: clamp(12px, 1.8vw, 22px);
   justify-content: center;
   margin: 6px 0 4px;
 }
@@ -5292,11 +5301,12 @@ button[data-position-sell][data-position-sell-percent="100"],
   }
 
   .connect-hero-side .connect-mark {
-    width: 48px;
+    width: 64px;
   }
 
   .connect-hero-side p {
-    font-size: 12px;
+    font-size: 13px;
+    font-weight: 900;
   }
 
   .connect-hero-side h1 {
@@ -5320,8 +5330,8 @@ button[data-position-sell][data-position-sell-percent="100"],
   }
 
   .connect-provider-row {
-    grid-template-columns: repeat(4, 48px);
-    gap: 8px;
+    grid-template-columns: repeat(3, 50px);
+    gap: 12px;
   }
 
   .provider-orb {

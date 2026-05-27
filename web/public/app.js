@@ -3198,6 +3198,15 @@ function imageFileToAvatarDataUrl(file) {
   });
 }
 
+async function presetAvatarToDataUrl(url) {
+  const assetBase = document.querySelector('script[src*="app.js"]')?.src || document.baseURI || window.location.href;
+  const absoluteUrl = new URL(String(url || ""), assetBase).toString();
+  const response = await fetch(absoluteUrl, { cache: "force-cache" });
+  if (!response.ok) throw new Error("Could not load that preset PFP.");
+  const blob = await response.blob();
+  return imageFileToAvatarDataUrl(blob);
+}
+
 async function useXProfileAvatar() {
   const url = xAvatarUrl(state.xHandle);
   if (!url) {
@@ -5250,10 +5259,18 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-use-x-avatar]")) await useXProfileAvatar();
   if (target.matches("[data-clear-avatar]")) await updateProfileAvatar({ clear: true }, "Removing PFP...");
   if (target.matches("[data-preset-avatar]")) {
-    await updateProfileAvatar({
-      avatarUrl: target.dataset.presetAvatar,
-      avatarSource: target.dataset.avatarLabel || "preset"
-    }, "Saving preset PFP...");
+    const status = $("[data-avatar-status]");
+    writeText(status, "Loading preset PFP...");
+    try {
+      const avatarDataUrl = await presetAvatarToDataUrl(target.dataset.presetAvatar);
+      await updateProfileAvatar({
+        avatarDataUrl,
+        avatarSource: target.dataset.avatarLabel || "preset"
+      }, "Saving preset PFP...");
+    } catch (error) {
+      writeText(status, error.message);
+      setError(error.message);
+    }
   }
   if (target.matches("[data-connect-wallet]")) await connectBrowserWallet(target.dataset.connectWallet);
   if (target.matches("[data-disconnect-wallet]")) await disconnectBrowserWallet();
