@@ -227,6 +227,14 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function publicErrorMessage(message = "") {
+  const text = String(message || "");
+  if (/OGRE_API|WEB_ALLOWED|Render|Cloudflare|backend|API returned|invalid JSON|Jupiter|RPC|Helius|MadeOnSol|Solana Tracker|API key/i.test(text)) {
+    return "SlimeWire could not complete that request right now. Refresh and try again, or contact support if it continues.";
+  }
+  return text;
+}
+
 async function fetchWithTimeout(url, options = {}, timeoutMs = API_CONNECT_TIMEOUT_MS) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -280,14 +288,14 @@ async function api(path, options = {}) {
       }
       if (!response) {
         const detail = lastError?.name === "AbortError" ? "The request timed out." : "The browser blocked or could not open the request.";
-        throw new Error(`${detail} Could not reach SlimeWire right now. Try again in a moment or contact support.`);
+        throw new Error(`${detail} SlimeWire could not connect right now. Try again in a moment.`);
       }
     }
   }
   const data = await readApiJson(response);
 
   if (!response.ok || data.ok === false) {
-    const message = data.message || data.error || `HTTP ${response.status}`;
+    const message = publicErrorMessage(data.message || data.error || `HTTP ${response.status}`);
     const error = new Error(message);
     error.status = response.status;
     error.data = data;
@@ -308,15 +316,41 @@ async function readApiJson(response) {
   try {
     return JSON.parse(text);
   } catch {
-    const preview = text.replace(/\s+/g, " ").trim().slice(0, 180);
     return {
       ok: false,
       error: "invalid_api_response",
       message: contentType.includes("text/html")
-        ? "SlimeWire API returned a webpage instead of JSON. Check OGRE_API_BASE, WEB_ALLOWED_ORIGIN, and redeploy both Render and Cloudflare."
-        : `SlimeWire API returned invalid JSON${preview ? `: ${preview}` : "."}`
+        ? "SlimeWire received an unexpected page response. Refresh and try again."
+        : "SlimeWire received an unexpected response. Refresh and try again."
     };
   }
+}
+
+function policyText(kind) {
+  if (kind === "privacy") {
+    return [
+      "Slime Policy",
+      "",
+      "SlimeWire only asks for information needed to operate your account, connect wallets you choose, remember saved preferences, and show your trading dashboard.",
+      "",
+      "Never share seed phrases or private keys with anyone. If you use managed wallets, download and protect your backup files. Wallet actions are your responsibility, and you should review every trade before confirming.",
+      "",
+      "We do not ask for your X password, Telegram password, wallet seed phrase, or wallet recovery phrase. Public wallet addresses and public on-chain activity may be visible on the blockchain.",
+      "",
+      "Use SlimeWire only where lawful, keep your own tax and trading records, and contact support if you need account help."
+    ].join("\n");
+  }
+  return [
+    "Slimeness",
+    "",
+    "By using SlimeWire, you agree to use the tools responsibly, follow applicable laws, and understand that crypto trading is risky.",
+    "",
+    "Trades can fail, move quickly, or receive less than expected because of liquidity, slippage, network conditions, and market volatility. No result or profit is guaranteed.",
+    "",
+    "You are responsible for checking wallet addresses, token mints, trade settings, fees, backups, and any tax or reporting obligations that apply to you.",
+    "",
+    "Do not use SlimeWire for unlawful activity, harassment, fraud, or unauthorized access to anyone else's wallet or account."
+  ].join("\n");
 }
 
 function applyUserFromApi(user) {
@@ -1072,7 +1106,7 @@ function createWalletSection() {
           <button type="button" data-open-x-login>${state.xHandle ? "Open X Profile" : "Open X Login"}</button>
           ${state.xHandle ? `<button type="button" class="danger-lite" data-clear-x>Unlink X</button>` : ""}
         </div>
-        <small data-x-status>${state.xHandle ? `Saved as @${escapeHtml(state.xHandle)}. Type another handle and save to change it.` : "Enter a handle, then Save X Handle. No X password or API key is stored."}</small>
+        <small data-x-status>${state.xHandle ? `Saved as @${escapeHtml(state.xHandle)}. Type another handle and save to change it.` : "Enter a handle, then Save X Handle. No X password is stored."}</small>
       </article>
     </section>
   `;
@@ -1127,7 +1161,7 @@ function xConnectSection() {
       <button type="button" data-connect-x>${connected ? "Save Different X" : "Save X Handle"}</button>
       <button type="button" data-open-x-login>${connected ? "Open X Profile" : "Open X Login"}</button>
       ${connected ? `<button type="button" class="danger-lite" data-clear-x>Unlink X</button>` : ""}
-      <small data-x-status>${connected ? `Saved as @${escapeHtml(state.xHandle)}. Enter a different handle and tap Save Different X to change it, or Unlink X to remove it.` : `Enter a handle, then Save X Handle. No X password or API key is stored.`}</small>
+      <small data-x-status>${connected ? `Saved as @${escapeHtml(state.xHandle)}. Enter a different handle and tap Save Different X to change it, or Unlink X to remove it.` : `Enter a handle, then Save X Handle. No X password is stored.`}</small>
     </section>
     <section class="create-wallet-card x-watch-card">
       <div>
@@ -1602,7 +1636,7 @@ function tradeHtml() {
       <aside class="trade-side">
         <article>
           <h3>Web Trading</h3>
-          <p>Uses encrypted managed wallets, Jupiter routes, safety precheck, slippage settings, and the same fee logic as the Telegram bot.</p>
+          <p>Uses encrypted managed wallets, route previews, safety checks, slippage settings, and the same fee logic as the Telegram bot.</p>
         </article>
         <article>
           <h3>Selected Token</h3>
@@ -1824,7 +1858,7 @@ function bundleHtml() {
         </article>
         <article>
           <h3>Copy Trade / KOL Tracker</h3>
-          <p>Use KOL signals as the CA source, then send them into Bundle or arm a copy plan with the exits above.</p>
+          <p>Use KOL signals as trade ideas, then send them into Bundle or arm a copy plan with the exits above.</p>
           <div class="card-actions">
             <button data-tab="kol">Open KOL Tracker</button>
             ${state.bundleToken ? xShareButton(manualCoinWatchShareText(state.bundleToken), "Share Token") : ""}
@@ -3774,7 +3808,7 @@ async function sellPositionPercent(tokenMint, percentText = "100") {
       `Mint: ${tokenMint}`,
       "Wallets: all managed wallets holding this token",
       "Slippage: 4%",
-      "Expected SOL, minimum output, and route are returned after Jupiter builds/submits the sell."
+      "Expected SOL, minimum output, and route details are shown before the sell is submitted."
     ].join("\n"));
     if (!ok) return;
     const data = await api("/api/web/bundle/sell", {
@@ -4556,7 +4590,7 @@ function liveTradesHtml() {
 function stopLossAuditHtml() {
   const plans = [state.tradePlanResult, state.bundleResult, state.volumeResult, state.sniperResult, state.kolResult, state.launchResult].filter(Boolean);
   if (!plans.length) {
-    return emptyState("No active audit item loaded", "Managed exits show status here after you create a trade, bundle, volume, sniper, KOL, or launch plan. Browser wallets are manual-only; managed wallets can be watched server-side.");
+    return emptyState("No active audit item loaded", "Managed exits show status here after you create a trade, bundle, volume, sniper, KOL, or launch plan. Browser wallets are manual-only; managed wallets can be watched by SlimeWire while your session is active.");
   }
   return `
     <div class="table-list compact-table">
@@ -4565,7 +4599,7 @@ function stopLossAuditHtml() {
           <div class="row-main">
             <strong>${escapeHtml(plan.label || plan.type || "Managed Exit")}</strong>
             <span>Status: ${escapeHtml(plan.status || "watching")} | TP ${escapeHtml(plan.takeProfitSummary || plan.takeProfitPct || "off")} | SL ${escapeHtml(plan.stopLossSummary || plan.stopLossPct || "off")}</span>
-            <small>Execution mode: managed wallet server-side watcher when the app backend is running. Browser-connected wallets require manual signing.</small>
+            <small>Execution mode: managed wallet watcher when SlimeWire is active. Browser-connected wallets require manual signing.</small>
             ${plan.message ? `<small>${escapeHtml(plan.message)}</small>` : ""}
           </div>
           <div class="card-actions compact">
@@ -5031,8 +5065,7 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-policy]")) {
     event.preventDefault();
-    const kind = target.dataset.policy === "privacy" ? "Slime Policy" : "Slimeness";
-    window.alert(`${kind}\n\nThis public page is a placeholder for the site's ${target.dataset.policy === "privacy" ? "privacy policy" : "terms of service"}. Add your final legal copy before launch.`);
+    window.alert(policyText(target.dataset.policy === "privacy" ? "privacy" : "terms"));
     return;
   }
   if (target.matches("[data-top-refresh-wallet]")) {

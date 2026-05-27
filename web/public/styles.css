@@ -3835,6 +3835,14 @@ body {
     white-space: nowrap;
   }
 
+  [data-app][data-route="terminal"] [data-active-preset-label] {
+    grid-column: 1 / -1;
+    justify-content: center;
+    white-space: normal;
+    line-height: 1.2;
+    text-align: center;
+  }
+
   [data-app][data-route="terminal"] .dashboard {
     width: 100%;
     max-width: 100%;
@@ -4026,4 +4034,617 @@ body {
   [data-app][data-route="terminal"] .live-pair-buckets {
     grid-template-columns: 1fr !important;
   }
+}
+
+/* Final SlimeWire entry + mobile density pass.
+   Uses production assets as decoration only; trading data stays real HTML. */
+:root {
+  --slime-frame-rich: url("./assets/slimewire/png/slime-border-frame-rich.png");
+}
+
+body:has([data-app][data-route="intro"])::before,
+body:has([data-app][data-route="connect"])::before {
+  opacity: 0;
+}
+
+[data-app][data-route="intro"] {
+  width: 100%;
+  max-width: none;
+  min-height: 100svh;
+  margin: 0;
+  padding: 0;
+}
+
+[data-app][data-route="intro"] .topbar,
+[data-app][data-route="intro"] .footer {
+  display: none !important;
+}
+
+.swamp-splash {
+  width: 100%;
+  height: 100svh;
+  min-height: 100svh;
+  display: grid;
+  place-items: center;
+  padding: 22px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 50% 45%, rgba(114, 255, 35, 0.08), transparent 20rem),
+    #000 !important;
+}
+
+.swamp-splash-button {
+  width: min(620px, 88vw);
+  max-height: 90svh;
+  display: grid;
+  place-items: center;
+  gap: clamp(16px, 4.5svh, 34px);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent !important;
+  box-shadow: none !important;
+  transform: translateY(-1svh);
+}
+
+.swamp-splash-button:hover {
+  transform: translateY(calc(-1svh - 2px));
+}
+
+.swamp-splash-button img {
+  border-radius: 0 !important;
+  object-fit: contain;
+}
+
+.swamp-splash-button img.swamp-splash-mark {
+  width: min(270px, 48vw);
+  max-height: 34svh;
+  filter:
+    drop-shadow(0 0 18px rgba(114, 255, 35, 0.52))
+    drop-shadow(0 0 52px rgba(114, 255, 35, 0.18));
+}
+
+.swamp-splash-button img.swamp-splash-enter {
+  width: min(540px, 84vw);
+  max-height: 22svh;
+  filter:
+    drop-shadow(0 0 18px rgba(114, 255, 35, 0.48))
+    drop-shadow(0 0 48px rgba(114, 255, 35, 0.16));
+}
+
+[data-app][data-route="connect"] {
+  width: 100%;
+  max-width: none;
+  min-height: 100svh;
+  margin: 0;
+  padding: 0;
+}
+
+[data-app][data-route="connect"] .topbar,
+[data-app][data-route="connect"] .footer {
+  display: none !important;
+}
+
+.connect-view {
+  min-height: 100svh;
+  display: grid;
+  place-items: center;
+  padding: clamp(14px, 2.4vw, 28px);
+  overflow-x: hidden;
+  background:
+    linear-gradient(rgba(0, 0, 0, 0.74), rgba(0, 0, 0, 0.88)),
+    var(--slime-grid),
+    radial-gradient(circle at 28% 38%, rgba(114, 255, 35, 0.12), transparent 28rem),
+    radial-gradient(circle at 76% 40%, rgba(114, 255, 35, 0.12), transparent 26rem),
+    #000;
+  background-size: auto, 430px 430px, auto, auto, auto;
+}
+
+.swamp-connect-shell {
+  position: relative;
+  width: min(1180px, calc(100vw - 36px));
+  min-height: min(656px, calc(100svh - 36px));
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(360px, 0.95fr);
+  align-items: center;
+  gap: clamp(24px, 4.4vw, 62px);
+  padding: clamp(34px, 4.2vw, 58px) clamp(40px, 5vw, 74px);
+  overflow: visible;
+  border: 1px solid rgba(114, 255, 35, 0.16);
+  border-radius: 24px;
+  background:
+    linear-gradient(115deg, rgba(0, 0, 0, 0.9), rgba(3, 9, 4, 0.78)),
+    var(--slime-grid);
+  background-size: auto, 360px 360px;
+  box-shadow:
+    0 0 44px rgba(114, 255, 35, 0.1),
+    inset 0 0 90px rgba(114, 255, 35, 0.035);
+}
+
+.swamp-connect-shell::before {
+  content: "";
+  position: absolute;
+  inset: -54px -62px -58px;
+  z-index: 0;
+  pointer-events: none;
+  background: var(--slime-frame-rich) center / 100% 100% no-repeat;
+  opacity: 0.92;
+  filter: drop-shadow(0 0 18px rgba(114, 255, 35, 0.24));
+}
+
+.connect-hero-side,
+.connect-card,
+.connect-powered {
+  position: relative;
+  z-index: 1;
+}
+
+.connect-hero-side {
+  min-height: 472px;
+  display: grid;
+  align-content: center;
+  gap: 10px;
+  padding: 0 0 28px;
+}
+
+.connect-hero-side .connect-mark {
+  width: 72px;
+  margin-bottom: 8px;
+}
+
+.connect-hero-side p {
+  margin: 0;
+  color: rgba(245, 255, 242, 0.76);
+  font-size: clamp(16px, 1.8vw, 23px);
+  letter-spacing: 0.4em;
+  text-transform: uppercase;
+}
+
+.connect-hero-side h1 {
+  margin: -4px 0 14px;
+  color: var(--green);
+  font-size: clamp(68px, 8.4vw, 104px);
+  line-height: 0.86;
+  text-shadow: 0 0 32px rgba(114, 255, 35, 0.36);
+}
+
+.mock-chart {
+  width: min(510px, 100%);
+  min-height: 188px;
+  padding: 13px;
+  background:
+    linear-gradient(rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0.58)),
+    var(--slime-grid);
+  background-size: auto, 240px 240px;
+}
+
+.mock-chart svg {
+  height: 124px;
+}
+
+.connect-ogre {
+  left: -66px;
+  bottom: -82px;
+  width: min(340px, 58%);
+  opacity: 0.92;
+}
+
+.connect-card {
+  width: min(470px, 100%);
+  justify-self: center;
+  display: grid;
+  justify-items: center;
+  gap: 9px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+}
+
+.connect-card .connect-logo {
+  width: min(300px, 86%);
+  max-height: 58px;
+  margin: 0 auto 2px;
+  object-fit: contain;
+  filter: drop-shadow(0 0 18px rgba(114, 255, 35, 0.28));
+}
+
+.connect-card h2 {
+  margin: 0;
+  color: var(--green-2);
+  font-size: clamp(44px, 5vw, 66px);
+  line-height: 0.92;
+  white-space: nowrap;
+  text-align: center;
+  text-shadow: 0 0 30px rgba(114, 255, 35, 0.34);
+}
+
+.connect-card > p,
+.connect-subtitle,
+.policy-copy,
+.connect-status,
+.connect-card small {
+  text-align: center;
+}
+
+.connect-card > p {
+  margin: 4px 0 12px;
+  color: rgba(245, 255, 242, 0.82);
+}
+
+.connect-subtitle {
+  margin: 0 0 6px;
+  color: rgba(245, 255, 242, 0.68);
+}
+
+.connect-provider-row {
+  grid-template-columns: repeat(4, 60px);
+  gap: 14px;
+  margin: 0 0 14px;
+}
+
+.provider-orb {
+  width: 56px;
+  height: 56px;
+  border: 1px solid rgba(114, 255, 35, 0.55);
+  border-radius: 50%;
+  background: radial-gradient(circle at 48% 35%, rgba(114, 255, 35, 0.18), rgba(0, 0, 0, 0.72) 70%);
+  color: var(--green-2);
+  box-shadow:
+    inset 0 0 18px rgba(114, 255, 35, 0.08),
+    0 0 22px rgba(114, 255, 35, 0.12);
+}
+
+.connect-login-panel {
+  width: min(386px, 100%);
+  padding: 12px;
+  border: 1px solid rgba(114, 255, 35, 0.32);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.42);
+}
+
+.connect-actions {
+  width: min(420px, 100%);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.connect-actions .slime-login-button {
+  grid-column: auto;
+}
+
+.connect-actions button {
+  min-height: 46px;
+  border-radius: 8px;
+}
+
+.connect-actions button:last-child {
+  grid-column: 1 / -1;
+  width: max-content;
+  min-width: 204px;
+  justify-self: center;
+}
+
+.connect-powered {
+  bottom: 22px;
+}
+
+@media (max-width: 980px) {
+  .swamp-connect-shell {
+    width: min(100%, calc(100vw - 22px));
+    min-height: auto;
+    grid-template-columns: 1fr;
+    gap: 18px;
+    padding: 34px 22px 60px;
+  }
+
+  .swamp-connect-shell::before {
+    inset: -38px -32px -44px;
+  }
+
+  .connect-hero-side {
+    min-height: 320px;
+    justify-items: center;
+    text-align: center;
+  }
+
+  .connect-ogre {
+    left: 0;
+    bottom: -70px;
+    width: min(260px, 55vw);
+    opacity: 0.44;
+  }
+}
+
+@media (max-width: 620px) {
+  .swamp-splash {
+    padding: 18px;
+  }
+
+  .swamp-splash-button {
+    width: 92vw;
+    gap: 18px;
+  }
+
+  .swamp-splash-button img.swamp-splash-mark {
+    width: min(240px, 62vw);
+  }
+
+  .swamp-splash-button img.swamp-splash-enter {
+    width: min(420px, 88vw);
+  }
+
+  .connect-view {
+    padding: 8px;
+  }
+
+  .swamp-connect-shell {
+    width: min(100%, calc(100vw - 16px));
+    padding: 28px 14px 50px;
+    border-radius: 18px;
+  }
+
+  .swamp-connect-shell::before {
+    inset: -28px -18px -34px;
+    opacity: 0.54;
+  }
+
+  .connect-hero-side {
+    min-height: 242px;
+    padding-bottom: 12px;
+  }
+
+  .connect-hero-side .connect-mark {
+    width: 52px;
+  }
+
+  .connect-hero-side p {
+    font-size: 13px;
+    letter-spacing: 0.28em;
+  }
+
+  .connect-hero-side h1 {
+    font-size: clamp(50px, 16vw, 72px);
+  }
+
+  .mock-chart {
+    min-height: 142px;
+    padding: 10px;
+  }
+
+  .mock-chart svg {
+    height: 92px;
+  }
+
+  .connect-ogre {
+    width: min(210px, 54vw);
+    bottom: -56px;
+  }
+
+  .connect-card .connect-logo {
+    width: min(260px, 84%);
+    max-height: 50px;
+  }
+
+  .connect-card h2 {
+    font-size: clamp(38px, 12vw, 54px);
+  }
+
+  .connect-provider-row {
+    grid-template-columns: repeat(4, 50px);
+    gap: 9px;
+  }
+
+  .provider-orb {
+    width: 48px;
+    height: 48px;
+  }
+
+  .connect-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .connect-actions button {
+    min-height: 40px;
+    padding: 0 8px;
+    font-size: 13px;
+  }
+
+  .connect-actions button:last-child {
+    grid-column: 1 / -1;
+    width: 100%;
+    min-width: 0;
+  }
+}
+
+@media (max-width: 760px) {
+  html,
+  body {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  [data-app][data-route="terminal"] {
+    width: 100%;
+    max-width: 100%;
+    padding: 4px 4px 10px;
+    overflow-x: hidden;
+  }
+
+  [data-app][data-route="terminal"] .topbar {
+    gap: 6px;
+    padding: 6px;
+  }
+
+  [data-app][data-route="terminal"] .powered img {
+    max-width: 132px;
+    height: 28px;
+  }
+
+  [data-app][data-route="terminal"] .top-sync-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 5px;
+  }
+
+  [data-app][data-route="terminal"] .top-sync-strip button,
+  [data-app][data-route="terminal"] .top-sync-strip span {
+    min-height: 28px;
+    padding: 0 5px;
+    font-size: 11px;
+  }
+
+  [data-app][data-route="terminal"] .metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  [data-app][data-route="terminal"] .metrics article {
+    min-height: 52px;
+    padding: 7px 8px;
+  }
+
+  [data-app][data-route="terminal"] .metrics span {
+    font-size: 10px;
+  }
+
+  [data-app][data-route="terminal"] .metrics strong {
+    font-size: 22px;
+  }
+
+  [data-app][data-route="terminal"] .tabs {
+    gap: 5px;
+    padding: 5px;
+  }
+
+  [data-app][data-route="terminal"] .tabs button {
+    max-width: min(44vw, 170px);
+    min-height: 34px;
+    padding: 0 10px;
+    font-size: 13px;
+  }
+
+  [data-app][data-route="terminal"] .dashboard,
+  [data-app][data-route="terminal"] .command-terminal,
+  [data-app][data-route="terminal"] .command-grid {
+    gap: 7px;
+  }
+
+  [data-app][data-route="terminal"] .terminal-panel,
+  [data-app][data-route="terminal"] .trade-card,
+  [data-app][data-route="terminal"] .trade-side article {
+    padding: 8px;
+    border-radius: 10px;
+  }
+
+  [data-app][data-route="terminal"] .terminal-panel header {
+    gap: 6px;
+    margin-bottom: 7px;
+  }
+
+  [data-app][data-route="terminal"] .terminal-panel h4 {
+    font-size: 15px;
+  }
+
+  [data-app][data-route="terminal"] .live-pair-buckets {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 6px;
+  }
+
+  [data-app][data-route="terminal"] .live-pair-buckets button,
+  [data-app][data-route="terminal"] .section-actions button,
+  [data-app][data-route="terminal"] .section-actions a,
+  [data-app][data-route="terminal"] .head-actions button,
+  [data-app][data-route="terminal"] .card-actions button,
+  [data-app][data-route="terminal"] .compact-row-actions button,
+  [data-app][data-route="terminal"] .signal-actions button,
+  [data-app][data-route="terminal"] .signal-actions a {
+    min-height: 32px;
+    padding: 0 8px;
+    font-size: 12px;
+  }
+
+  [data-app][data-route="terminal"] .compact-signal-row,
+  [data-app][data-route="terminal"] .live-trade-row,
+  [data-app][data-route="terminal"] .token-preview-card {
+    grid-template-columns: 34px minmax(0, 1fr) !important;
+    gap: 7px;
+    padding: 8px;
+  }
+
+  [data-app][data-route="terminal"] .live-pair-avatar,
+  [data-app][data-route="terminal"] .signal-avatar,
+  [data-app][data-route="terminal"] .token-avatar,
+  [data-app][data-route="terminal"] .compact-signal-row img {
+    width: 34px;
+    height: 34px;
+  }
+
+  [data-app][data-route="terminal"] .compact-signal-main strong,
+  [data-app][data-route="terminal"] .signal-name-row strong {
+    font-size: 14px;
+  }
+
+  [data-app][data-route="terminal"] .compact-signal-main small,
+  [data-app][data-route="terminal"] .signal-cell,
+  [data-app][data-route="terminal"] .live-trade-row small,
+  [data-app][data-route="terminal"] .token-preview-card small {
+    font-size: 11px;
+    line-height: 1.25;
+  }
+
+  [data-app][data-route="terminal"] .signal-row {
+    gap: 7px;
+    padding: 8px;
+  }
+
+  [data-app][data-route="terminal"] .signal-token {
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 7px;
+  }
+
+  [data-app][data-route="terminal"] .compact-row-actions,
+  [data-app][data-route="terminal"] .signal-actions,
+  [data-app][data-route="terminal"] .card-actions,
+  [data-app][data-route="terminal"] .section-actions,
+  [data-app][data-route="terminal"] .head-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 6px;
+  }
+
+  [data-app][data-route="terminal"] .form-grid,
+  [data-app][data-route="terminal"] .preset-form,
+  [data-app][data-route="terminal"] .fast-preset-grid,
+  [data-app][data-route="terminal"] .quick-grid {
+    gap: 7px;
+  }
+
+  [data-app][data-route="terminal"] label,
+  [data-app][data-route="terminal"] input,
+  [data-app][data-route="terminal"] select,
+  [data-app][data-route="terminal"] textarea {
+    font-size: 13px;
+  }
+
+  [data-app][data-route="terminal"] input,
+  [data-app][data-route="terminal"] select,
+  [data-app][data-route="terminal"] textarea {
+    min-height: 38px;
+  }
+}
+
+@media (max-width: 360px) {
+  [data-app][data-route="terminal"] .compact-row-actions,
+  [data-app][data-route="terminal"] .signal-actions,
+  [data-app][data-route="terminal"] .card-actions,
+  [data-app][data-route="terminal"] .section-actions,
+  [data-app][data-route="terminal"] .head-actions {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+[hidden] {
+  display: none !important;
 }
