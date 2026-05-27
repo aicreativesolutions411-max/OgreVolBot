@@ -5535,30 +5535,83 @@ button[data-position-sell][data-position-sell-percent="100"],
 }
 
 [data-app][data-route="terminal"] .best-picks-panel .compact-signal-list {
-  grid-template-columns: repeat(5, minmax(132px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(196px, 1fr));
 }
 
 [data-app][data-route="terminal"] .best-picks-panel .compact-signal-row {
-  grid-template-columns: 38px minmax(0, 1fr) auto !important;
+  position: relative;
+  grid-template-columns: 40px minmax(0, 1fr) !important;
+  min-height: 122px;
+  align-content: start;
 }
 
 [data-app][data-route="terminal"] .best-picks-panel .compact-signal-row > img,
 [data-app][data-route="terminal"] .best-picks-panel .live-pair-avatar,
 [data-app][data-route="terminal"] .best-picks-panel .compact-signal-row .token-avatar {
-  width: 38px;
-  height: 38px;
+  width: 40px;
+  height: 40px;
 }
 
-@media (min-width: 1340px) {
-  [data-app][data-route="terminal"] .live-pairs-panel .compact-signal-row {
-    grid-template-columns: 44px minmax(0, 1fr) auto minmax(194px, auto) !important;
+[data-app][data-route="terminal"] .best-picks-panel .compact-signal-main {
+  padding-right: 54px;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel .score-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  min-width: 48px;
+  max-width: 54px;
+  padding: 4px 5px;
+  font-size: 10px;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel .score-badge small {
+  display: none;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel .compact-row-actions {
+  grid-column: 1 / -1;
+  grid-row: auto;
+  margin-top: 4px;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel .compact-row-actions button {
+  min-height: 32px;
+  padding: 0 5px;
+  font-size: 10px;
+}
+
+@media (min-width: 900px) {
+  [data-app][data-route="terminal"] .live-pairs-panel .compact-signal-row,
+  [data-app][data-route="terminal"] .kol-panel .compact-signal-row,
+  [data-app][data-route="terminal"] .watchlist-panel .compact-signal-row {
+    grid-template-columns: 44px minmax(0, 1fr) minmax(212px, auto) !important;
+    min-height: 76px;
   }
 
-  [data-app][data-route="terminal"] .live-pairs-panel .compact-row-actions {
-    grid-column: 4;
+  [data-app][data-route="terminal"] .live-pairs-panel .score-badge,
+  [data-app][data-route="terminal"] .kol-panel .score-badge,
+  [data-app][data-route="terminal"] .watchlist-panel .score-badge {
+    display: none;
+  }
+
+  [data-app][data-route="terminal"] .live-pairs-panel .compact-row-actions,
+  [data-app][data-route="terminal"] .kol-panel .compact-row-actions,
+  [data-app][data-route="terminal"] .watchlist-panel .compact-row-actions {
+    grid-column: 3;
     grid-row: 1;
     width: auto;
-    min-width: 194px;
+    min-width: 212px;
+    grid-template-columns: repeat(3, minmax(62px, 1fr));
+  }
+
+  [data-app][data-route="terminal"] .live-pairs-panel .compact-row-actions button,
+  [data-app][data-route="terminal"] .kol-panel .compact-row-actions button,
+  [data-app][data-route="terminal"] .watchlist-panel .compact-row-actions button {
+    min-height: 34px;
+    padding: 0 5px;
+    font-size: 10px;
   }
 }
 
@@ -5583,6 +5636,129 @@ button[data-position-sell][data-position-sell-percent="100"],
 
   .powered img {
     width: 148px;
+  }
+}
+
+[data-app][data-route="terminal"] .compact-link-row,
+[data-app][data-route="terminal"] .signal-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  min-width: 0;
+}
+
+[data-app][data-route="terminal"] .compact-link-row a,
+[data-app][data-route="terminal"] .compact-link-row button,
+[data-app][data-route="terminal"] .signal-links a,
+[data-app][data-route="terminal"] .signal-links button,
+[data-app][data-route="terminal"] .sniper-pill {
+  min-height: 20px;
+  padding: 2px 7px;
+  border: 1px solid rgba(137, 255, 67, 0.42);
+  border-radius: 999px;
+  background: rgba(12, 32, 12, 0.86);
+  color: var(--slime-green-strong);
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1.2;
+  text-decoration: none;
+  white-space: nowrap;
+  box-shadow: 0 0 10px rgba(137, 255, 67, 0.12);
+}
+
+[data-app][data-route="terminal"] .compact-link-row button,
+[data-app][data-route="terminal"] .signal-links button {
+  cursor: pointer;
+}
+
+[data-app][data-route="terminal"] .sniper-pill {
+  border-color: rgba(68, 214, 255, 0.58);
+  color: #65e8ff;
+}
+
+[data-app][data-route="terminal"] .compact-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2px 6px;
+  margin-top: 3px;
+  color: var(--slime-muted);
+  font-size: 10px;
+  line-height: 1.25;
+}
+
+[data-app][data-route="terminal"] .compact-stat-grid span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+[data-app][data-route="terminal"] .compact-stat-grid b {
+  color: var(--slime-text);
+  font-weight: 900;
+}
+
+[data-app][data-route="terminal"] .signal-actions {
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  gap: 6px;
+}
+
+[data-app][data-route="terminal"] .signal-actions button:last-child {
+  grid-column: auto !important;
+}
+
+[data-app][data-route="terminal"] .signal-actions button,
+[data-app][data-route="terminal"] .compact-row-actions button {
+  min-width: 0;
+  white-space: nowrap;
+}
+
+[data-app][data-route="terminal"] .volume-windows small {
+  white-space: normal;
+  line-height: 1.25;
+}
+
+[data-app][data-route="terminal"] .terminal-panel header button,
+[data-app][data-route="terminal"] [data-top-refresh-wallet],
+[data-app][data-route="terminal"] [data-refresh-live-pairs] {
+  border-color: rgba(137, 255, 67, 0.52);
+  background:
+    linear-gradient(180deg, rgba(45, 91, 20, 0.58), rgba(8, 22, 9, 0.92));
+  color: var(--slime-text);
+  box-shadow: 0 0 14px rgba(137, 255, 67, 0.12), inset 0 0 12px rgba(137, 255, 67, 0.08);
+}
+
+@media (max-width: 760px) {
+  [data-app][data-route="terminal"] .compact-signal-row {
+    gap: 6px;
+  }
+
+  [data-app][data-route="terminal"] .compact-stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    font-size: 9px;
+  }
+
+  [data-app][data-route="terminal"] .compact-link-row a,
+  [data-app][data-route="terminal"] .compact-link-row button,
+  [data-app][data-route="terminal"] .signal-links a,
+  [data-app][data-route="terminal"] .signal-links button,
+  [data-app][data-route="terminal"] .sniper-pill {
+    padding: 2px 5px;
+    font-size: 9px;
+  }
+
+  [data-app][data-route="terminal"] .compact-row-actions,
+  [data-app][data-route="terminal"] .signal-actions {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 4px;
+  }
+
+  [data-app][data-route="terminal"] .compact-row-actions button,
+  [data-app][data-route="terminal"] .signal-actions button {
+    min-height: 28px;
+    padding: 0 5px;
+    font-size: 9px;
   }
 }
 

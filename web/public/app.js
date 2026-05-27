@@ -861,8 +861,32 @@ async function refreshAfterTrade(signature = "") {
   await refreshWalletState({ force: true });
 }
 
-function render() {
+function shouldDeferTerminalRender() {
+  const active = document.activeElement;
+  if (!active || state.route !== "terminal") return false;
+  const tag = String(active.tagName || "").toLowerCase();
+  const editable = active.isContentEditable || ["input", "textarea", "select"].includes(tag);
+  if (!editable) return false;
+  return Boolean(active.closest(".fast-preset-builder, .preset-toolbar, .preset-card, .order-ticket, .volume-grid, .sniper-setup, .wallet-exit-grid"));
+}
+
+function requestDeferredRender() {
+  state.pendingRender = true;
+}
+
+function flushDeferredRender() {
+  if (!state.pendingRender || shouldDeferTerminalRender()) return;
+  state.pendingRender = false;
+  render({ force: true });
+}
+
+function render(options = {}) {
   if (!app || !loginView || !dashboardView) return;
+  if (!options.force && shouldDeferTerminalRender()) {
+    requestDeferredRender();
+    return;
+  }
+  state.pendingRender = false;
   app.dataset.loading = state.loading ? "true" : "false";
   app.dataset.route = state.route;
   loginView.hidden = state.route !== "intro";
@@ -4389,6 +4413,70 @@ function scoreWhyText(row = {}) {
   return [...parts, ...warnings.map((warning) => `warning: ${warning}`)].join(" | ") || "Score uses available liquidity, volume, age, momentum, buys/sells, KOL, and risk signals.";
 }
 
+function compactUsd(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) return "n/a";
+  if (number >= 1_000_000) return `$${(number / 1_000_000).toFixed(number >= 10_000_000 ? 0 : 1)}M`;
+  if (number >= 1_000) return `$${(number / 1_000).toFixed(number >= 100_000 ? 0 : 1)}K`;
+  return `$${Math.round(number)}`;
+}
+
+function firstStatLabel(...values) {
+  for (const value of values) {
+    const text = String(value ?? "").trim();
+    if (text && text !== "$0" && text.toLowerCase() !== "n/a") return text;
+  }
+  return "n/a";
+}
+
+function volumeWindowItems(row = {}) {
+  return [
+    ["15m", firstStatLabel(row.volumeM15Label, compactUsd(row.volumeM15))],
+    ["30m", firstStatLabel(row.volumeM30Label, compactUsd(row.volumeM30))],
+    ["1h", firstStatLabel(row.volumeH1Label, row.volumeLabel, compactUsd(row.volumeH1))],
+    ["24h", firstStatLabel(row.volumeH24Label, compactUsd(row.volumeH24))]
+  ];
+}
+
+function compactStatsHtml(row = {}) {
+  const mc = firstStatLabel(row.marketCapLabel, row.fdvLabel, compactUsd(row.marketCap));
+  const liq = firstStatLabel(row.liquidityLabel, compactUsd(row.liquidityUsd));
+  const volume = volumeWindowItems(row);
+  return `
+    <div class="compact-stat-grid">
+      <span>MC <b>${escapeHtml(mc)}</b></span>
+      <span>Liq <b>${escapeHtml(liq)}</b></span>
+      ${volume.map(([label, value]) => `<span>${escapeHtml(label)} <b>${escapeHtml(value)}</b></span>`).join("")}
+    </div>
+  `;
+}
+
+function miniTokenLinksHtml(row = {}, shareText = "") {
+  const text = shareText || livePairShareText(row);
+  const sniperCount = Number(row.sniperCount || row.snipers || 0);
+  return `
+    <div class="compact-link-row">
+      <a href="${escapeHtml(row.dexUrl || dexUrl(row.tokenMint))}" target="_blank" rel="noreferrer" title="DexScreener">DEX</a>
+      ${row.pumpUrl ? `<a href="${escapeHtml(row.pumpUrl)}" target="_blank" rel="noreferrer" title="Pump">PUMP</a>` : ""}
+      ${row.twitterUrl ? `<a href="${escapeHtml(row.twitterUrl)}" target="_blank" rel="noreferrer" title="X">X</a>` : ""}
+      ${row.telegramUrl ? `<a href="${escapeHtml(row.telegramUrl)}" target="_blank" rel="noreferrer" title="Telegram">TG</a>` : ""}
+      ${row.websiteUrl ? `<a href="${escapeHtml(row.websiteUrl)}" target="_blank" rel="noreferrer" title="Website">WEB</a>` : ""}
+      <button type="button" data-share-x data-share-text="${escapeHtml(text)}" title="Share">SHARE</button>
+      ${sniperCount > 0 ? `<span class="sniper-pill" title="Sniper count">SCOPE ${escapeHtml(sniperCount)}</span>` : ""}
+    </div>
+  `;
+}
+
+function compareNewestLiveRows(a = {}, b = {}) {
+  const aAge = Number(a.pairAgeSeconds);
+  const bAge = Number(b.pairAgeSeconds);
+  if (Number.isFinite(aAge) && Number.isFinite(bAge) && aAge !== bAge) return aAge - bAge;
+  const aCreated = Number(a.pairCreatedAt || 0);
+  const bCreated = Number(b.pairCreatedAt || 0);
+  if (aCreated || bCreated) return bCreated - aCreated;
+  return Number(b.bestPickScore || 0) - Number(a.bestPickScore || 0);
+}
+
 function compactSignalRowsHtml(rows, options = {}) {
   const limit = options.limit || 6;
   const actionLabel = options.actionLabel || "Buy Preset";
@@ -4407,7 +4495,9 @@ function compactSignalRowsHtml(rows, options = {}) {
               <small>${escapeHtml(row.name || row.category || "Token")}</small>
             </div>
             <button type="button" class="ca-copy" data-copy="${escapeHtml(row.tokenMint)}">${escapeHtml(shortAddress(row.tokenMint))}</button>
-            <span>${escapeHtml(row.pairAgeLabel || formatAgeFromRow(row) || "age unknown")} | Liq ${escapeHtml(row.liquidityLabel || "n/a")} | Vol ${escapeHtml(row.volumeH1Label || row.volumeLabel || "n/a")}</span>
+            <span>${escapeHtml(row.pairAgeLabel || formatAgeFromRow(row) || "age unknown")} | ${escapeHtml(row.scalpSetup || row.momentum || row.category || "live")}</span>
+            ${miniTokenLinksHtml(row)}
+            ${compactStatsHtml(row)}
           </div>
           ${scoreBadgeHtml(row)}
           <div class="compact-row-actions">
@@ -4425,6 +4515,7 @@ function terminalHtml() {
   const liveFeed = currentLivePairs();
   const liveRows = liveFeed?.rows || [];
   const bestRows = [...liveRows].sort((a, b) => Number(b.bestPickScore || 0) - Number(a.bestPickScore || 0));
+  const newestLiveRows = [...liveRows].sort(compareNewestLiveRows);
   const kolRows = state.kolScan?.rows || [];
   const watchRows = state.watchlist?.rows || [];
   const token = selectedTerminalTokenRow();
@@ -4466,7 +4557,7 @@ function terminalHtml() {
           </article>
           <article class="terminal-panel live-pairs-panel">
             <header><h4>Live Pairs</h4><button data-tab="live">Open</button></header>
-            ${compactSignalRowsHtml(liveRows, { limit: 6, actionLabel: activePresetButtonLabel() })}
+            ${compactSignalRowsHtml(newestLiveRows, { limit: 6, actionLabel: activePresetButtonLabel() })}
           </article>
           <article class="terminal-panel live-trades-panel">
             <header><h4>Live Trades</h4><button data-tab="liveTrades">Open</button></header>
@@ -4926,17 +5017,22 @@ function tokenSignalRowHtml(row, index, options = {}) {
             <a href="${escapeHtml(row.dexUrl || dexUrl(row.tokenMint))}" target="_blank" rel="noreferrer" title="DexScreener">DEX</a>
             ${row.pumpUrl ? `<a href="${escapeHtml(row.pumpUrl)}" target="_blank" rel="noreferrer" title="Pump">PUMP</a>` : ""}
             ${row.twitterUrl ? `<a href="${escapeHtml(row.twitterUrl)}" target="_blank" rel="noreferrer" title="X">X</a>` : ""}
+            ${row.telegramUrl ? `<a href="${escapeHtml(row.telegramUrl)}" target="_blank" rel="noreferrer" title="Telegram">TG</a>` : ""}
             ${row.websiteUrl ? `<a href="${escapeHtml(row.websiteUrl)}" target="_blank" rel="noreferrer" title="Website">WEB</a>` : ""}
             <button type="button" data-share-x data-share-text="${escapeHtml(shareText)}" title="Share to X">SHARE</button>
             ${telegramShareButton(shareText, "TG")}
+            ${Number(row.sniperCount || 0) > 0 ? `<span class="sniper-pill" title="Sniper count">SCOPE ${escapeHtml(row.sniperCount)}</span>` : ""}
           </div>
         </div>
       </div>
       <div class="signal-cell"><span>${escapeHtml(row.pairAgeLabel || formatAgeFromRow(row) || "new")}</span><small>${escapeHtml(row.scalpSetup || row.momentum || `#${index + 1}`)}</small></div>
-      <div class="signal-cell"><span>${escapeHtml(row.liquidityLabel || "$0")}</span><small>${formatChangeHtml(row.h1)}</small></div>
-      <div class="signal-cell"><span>${escapeHtml(row.marketCapLabel || "$0")}</span><small>${escapeHtml(row.category || row.signalType || "signal")}</small></div>
+      <div class="signal-cell"><span>${escapeHtml(firstStatLabel(row.liquidityLabel, compactUsd(row.liquidityUsd)))}</span><small>${formatChangeHtml(row.h1)}</small></div>
+      <div class="signal-cell"><span>${escapeHtml(firstStatLabel(row.marketCapLabel, compactUsd(row.marketCap)))}</span><small>${escapeHtml(row.category || row.signalType || "signal")}</small></div>
       <div class="signal-cell"><span>${escapeHtml(row.txnsLabel || row.winRateLabel || "n/a")}</span><small>${escapeHtml(row.bestPickScore ? `Score ${row.bestPickScore}/100` : row.valueLabel || row.smartMoney || "")}</small></div>
-      <div class="signal-cell"><span>${escapeHtml(row.volumeH1Label || row.volumeLabel || "$0")}</span><small>5m ${escapeHtml(row.volume5mLabel || "$0")}</small></div>
+      <div class="signal-cell volume-windows">
+        <span>${escapeHtml(firstStatLabel(row.volumeH1Label, row.volumeLabel, compactUsd(row.volumeH1)))}</span>
+        <small>${volumeWindowItems(row).map(([label, value]) => `${label} ${value}`).join(" | ")}</small>
+      </div>
       <div class="signal-actions">
         ${primaryAction === "snipe" ? `<button type="button" class="primary" data-sniper-buy="${escapeHtml(row.tokenMint)}">${escapeHtml(actionLabel)}</button>` : `<button type="button" class="primary" data-quick-trade-token="${escapeHtml(row.tokenMint)}">${escapeHtml(actionLabel)}</button>`}
         <button type="button" data-quick-bundle-token="${escapeHtml(row.tokenMint)}">Bundle</button>
@@ -5478,13 +5574,17 @@ document.addEventListener("change", async (event) => {
   }
   if (target?.matches?.("[data-fast-trade-preset]")) {
     state.selectedTradePresetId = target.value || "custom";
-    if (state.selectedTradePresetId === "custom") state.fastTradePresetStatus = "";
-    render();
+    state.fastTradePresetStatus = state.selectedTradePresetId === "custom"
+      ? ""
+      : "Trade preset selected. Tap Trade or Buy on a token row to use it.";
+    render({ force: true });
   }
   if (target?.matches?.("[data-fast-bundle-preset]")) {
     state.selectedBundlePresetId = target.value || "custom";
-    if (state.selectedBundlePresetId === "custom") state.fastBundlePresetStatus = "";
-    render();
+    state.fastBundlePresetStatus = state.selectedBundlePresetId === "custom"
+      ? ""
+      : "Bundle preset selected. It will not buy until you tap a Bundle button.";
+    render({ force: true });
   }
   if (target?.matches?.("[data-terminal-sort]")) {
     state.terminalSort = target.value || "best";
@@ -5497,6 +5597,10 @@ document.addEventListener("change", async (event) => {
   if (target?.matches?.("[data-avatar-file]")) {
     await uploadProfileAvatar(target);
   }
+});
+
+document.addEventListener("focusout", () => {
+  setTimeout(flushDeferredRender, 50);
 });
 
 async function initializeApp() {

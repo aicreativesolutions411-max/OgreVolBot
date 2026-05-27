@@ -1,0 +1,25 @@
+{
+  "name": "solana-telegram-wallet-ops-bot",
+  "version": "0.1.0",
+  "description": "Telegram bot for auditable Solana wallet operations, batch buys/sells, and sweeps.",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "render-start": "node src/index.js",
+    "check": "node --check src/index.js",
+    "test": "node --test tests/*.test.js",
+    "build:web": "node scripts/build-web.js"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.98.4",
+    "bs58": "^6.0.0",
+    "sharp": "^0.34.5"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
