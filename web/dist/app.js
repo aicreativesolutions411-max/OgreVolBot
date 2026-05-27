@@ -76,7 +76,27 @@ function storedReferralCode() {
 const state = {
   token: getStoredToken(),
   user: null,
-  activeTab: "dashboard",
+  route: window.location.pathname.startsWith("/connect")
+    ? "connect"
+    : window.location.pathname.startsWith("/terminal")
+      ? "terminal"
+      : "intro",
+  activeTab: window.location.pathname.includes("/tx-audit")
+    ? "txAudit"
+    : window.location.pathname.includes("/trade")
+      ? "trade"
+      : window.location.pathname.includes("/kol")
+        ? "kol"
+        : "terminal",
+  terminalSubtab: "positions",
+  terminalSort: "best",
+  terminalToken: "",
+  terminalTxSignature: "",
+  terminalTxAudit: null,
+  terminalTxLoading: false,
+  walletRefreshing: false,
+  lastWalletRefreshAt: "",
+  walletRefreshError: "",
   loading: false,
   wallets: [],
   balances: [],
@@ -144,6 +164,7 @@ const setHidden = (selector, hidden) => {
 };
 const app = $("[data-app]");
 const loginView = $("[data-login]");
+const connectView = $("[data-connect]");
 const topLoginPanel = $("[data-top-login]");
 const authActions = $("[data-auth-actions]");
 const guestActions = $("[data-guest-actions]");
@@ -154,10 +175,49 @@ const dashboardErrorBox = $("[data-dashboard-error]");
 
 const LIVE_PAIR_BUCKETS = [
   ["live", "Live"],
-  ["under1h", "10-59m"],
-  ["under3h", "Under 3h"],
-  ["under1d", "Under 1d"]
+  ["under1h", "Last 1h"],
+  ["under3h", "Last 3h"],
+  ["under1d", "Last 24h"]
 ];
+
+const LIVE_PAIR_SORTS = [
+  ["best", "Best Picks"],
+  ["newest", "Newest"],
+  ["volume", "Most Volume"],
+  ["liquidity", "Most Liquidity"],
+  ["buys", "Most Buys"],
+  ["momentum", "Highest Momentum"],
+  ["risk", "Highest Risk"]
+];
+
+function routeForPath(pathname = window.location.pathname) {
+  if (pathname.startsWith("/connect")) return "connect";
+  if (pathname.startsWith("/terminal")) return "terminal";
+  return "intro";
+}
+
+function tabForPath(pathname = window.location.pathname) {
+  if (pathname.includes("/tx-audit")) return "txAudit";
+  if (pathname.includes("/trade")) return "trade";
+  if (pathname.includes("/kol")) return "kol";
+  if (pathname.includes("/live-pairs")) return "live";
+  if (pathname.includes("/positions")) return "positions";
+  return "terminal";
+}
+
+function navigateTo(pathname, tab = null) {
+  const nextPath = pathname || "/terminal";
+  state.route = routeForPath(nextPath);
+  if (state.route === "terminal") state.activeTab = tab || tabForPath(nextPath);
+  window.history.pushState({}, "", nextPath);
+  render();
+}
+
+window.addEventListener("popstate", () => {
+  state.route = routeForPath();
+  state.activeTab = tabForPath();
+  render();
+});
 
 function apiUrl(path) {
   return `${apiBase}${path}`;
@@ -336,7 +396,7 @@ async function createWebAccount() {
     state.loginCollapsed = true;
     state.activeTab = "dashboard";
     writeText(status, credentials.username ? "Account created. Login saved." : "Account created.");
-    await loadAll();
+    await refreshAfterTrade(data.trade?.signature);
   } catch (error) {
     writeText(status, error.message);
     setError(error.message);
@@ -359,7 +419,7 @@ async function passwordLogin() {
     state.loginCollapsed = true;
     state.activeTab = "dashboard";
     writeText(status, "Logged in.");
-    await loadAll();
+    await refreshAfterTrade(data.trade?.signature);
   } catch (error) {
     writeText(status, error.message);
     setError(error.message);
@@ -418,7 +478,7 @@ async function loadSession() {
   try {
     const data = await api("/api/web/me");
     applyUserFromApi(data.user);
-    await loadAll();
+    await refreshAfterTrade(firstResultSignature(data.plan));
   } catch {
     state.token = "";
     clearStoredToken();
@@ -426,7 +486,7 @@ async function loadSession() {
   }
 }
 
-async function loadAll() {
+async function loadAll(options = {}) {
   if (!state.user || !state.token) {
     state.wallets = [];
     state.balances = [];
@@ -444,10 +504,11 @@ async function loadAll() {
   render();
 
   try {
+    const forceQuery = options.force ? "?force=true" : "";
     const [wallets, balances, positions, pnl, launchWatches, presets, watchlist] = await Promise.all([
       api("/api/web/wallets"),
-      api("/api/web/balances"),
-      api("/api/web/positions"),
+      api(`/api/web/balances${forceQuery}`),
+      api(`/api/web/positions${forceQuery}`),
       api("/api/web/pnl"),
       api("/api/web/launch/watches"),
       api("/api/web/presets"),
@@ -462,6 +523,10 @@ async function loadAll() {
     state.presets = presets.presets || { trade: [], bundle: [] };
     ensureSelectedPresetsStillExist();
     state.watchlist = watchlist.watchlist || { rows: [], count: 0 };
+    if (options.force) {
+      state.lastWalletRefreshAt = new Date().toISOString();
+      state.walletRefreshError = "";
+    }
   } finally {
     state.loading = false;
     render();
@@ -490,7 +555,7 @@ async function loadLivePairs({ silent = false, bucket = state.livePairBucket, re
   if (isActiveBucket || !silent) render();
 
   try {
-    const data = await api(`/api/web/live-pairs?bucket=${encodeURIComponent(safeBucket)}`);
+    const data = await api(`/api/web/live-pairs?bucket=${encodeURIComponent(safeBucket)}&sort=${encodeURIComponent(state.terminalSort || "best")}`);
     const value = data.livePairs;
     const updatedAt = value?.refreshedAt || new Date().toISOString();
     state.livePairsByBucket = { ...state.livePairsByBucket, [safeBucket]: value };
@@ -517,7 +582,7 @@ async function refreshLivePairBuckets({ silent = false } = {}) {
   await Promise.allSettled(otherBuckets.map((bucket) => (
     loadLivePairs({ silent: true, bucket, renderOnComplete: false })
   )));
-  if (state.activeTab === "live") render();
+  if (state.activeTab === "live" || state.activeTab === "terminal") render();
 }
 
 function scheduleLivePairsAutoRefresh() {
@@ -526,11 +591,11 @@ function scheduleLivePairsAutoRefresh() {
     livePairsTimer = null;
   }
 
-  if (state.activeTab !== "live") return;
+  if (state.activeTab !== "live" && state.activeTab !== "terminal") return;
   const refreshSeconds = Number(currentLivePairs()?.refreshSeconds || 30);
   const delayMs = Math.max(3, refreshSeconds) * 1000;
   livePairsTimer = setTimeout(() => {
-    if (state.activeTab !== "live" || state.livePairsLoading) return;
+    if ((state.activeTab !== "live" && state.activeTab !== "terminal") || state.livePairsLoading) return;
     refreshLivePairBuckets({ silent: true }).catch((error) => setError(error.message));
   }, delayMs);
 }
@@ -552,9 +617,9 @@ function scheduleKolAutoRefresh() {
     clearTimeout(kolTimer);
     kolTimer = null;
   }
-  if (state.activeTab !== "kol" || state.kolWallet) return;
+  if ((state.activeTab !== "kol" && state.activeTab !== "terminal") || state.kolWallet) return;
   kolTimer = setTimeout(() => {
-    if (state.activeTab !== "kol" || state.kolLoading || state.kolWallet) return;
+    if ((state.activeTab !== "kol" && state.activeTab !== "terminal") || state.kolLoading || state.kolWallet) return;
     loadKolScan(state.kolMode, "", { silent: true }).catch((error) => setError(error.message));
   }, 60_000);
 }
@@ -564,9 +629,9 @@ function scheduleWatchlistAutoRefresh() {
     clearTimeout(watchlistTimer);
     watchlistTimer = null;
   }
-  if (state.activeTab !== "watchlist" || !state.user || !state.token) return;
+  if ((state.activeTab !== "watchlist" && state.activeTab !== "terminal") || !state.user || !state.token) return;
   watchlistTimer = setTimeout(() => {
-    if (state.activeTab !== "watchlist") return;
+    if (state.activeTab !== "watchlist" && state.activeTab !== "terminal") return;
     loadWatchlist({ silent: true }).catch((error) => setError(error.message));
   }, 30_000);
 }
@@ -635,21 +700,87 @@ function totalSol() {
   return state.balances.reduce((sum, row) => sum + Number(row.sol || 0), 0);
 }
 
+function secondsSince(isoText) {
+  const time = Date.parse(isoText || "");
+  if (!Number.isFinite(time)) return null;
+  return Math.max(0, Math.floor((Date.now() - time) / 1000));
+}
+
+function ageTextFromSeconds(seconds) {
+  if (!Number.isFinite(seconds)) return "never";
+  if (seconds < 5) return "just now";
+  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  return `${Math.floor(seconds / 3600)}h ago`;
+}
+
+function syncHealthLabel() {
+  if (state.walletRefreshing) return "Refreshing...";
+  if (state.walletRefreshError) return `Sync error: ${state.walletRefreshError}`;
+  const seconds = secondsSince(state.lastWalletRefreshAt);
+  if (seconds === null) return "Sync not run";
+  if (seconds > 45) return `Stale: ${ageTextFromSeconds(seconds)}`;
+  return `Synced ${ageTextFromSeconds(seconds)}`;
+}
+
+function activePresetSummary() {
+  const trade = presetById("trade", state.selectedTradePresetId);
+  const bundle = presetById("bundle", state.selectedBundlePresetId);
+  const tradeLabel = trade ? `${trade.name} ${trade.amountSol || ""} SOL` : "Trade custom";
+  const bundleLabel = bundle ? bundle.name : "Bundle custom";
+  return `Preset: ${tradeLabel} | ${bundleLabel}`;
+}
+
+async function refreshWalletState({ force = true } = {}) {
+  if (!state.user || !state.token) {
+    setError("Create or log in before refreshing wallet balances.");
+    return;
+  }
+  if (state.walletRefreshing) return;
+  state.walletRefreshing = true;
+  state.walletRefreshError = "";
+  render();
+  try {
+    await loadAll({ force });
+    state.lastWalletRefreshAt = new Date().toISOString();
+  } catch (error) {
+    state.walletRefreshError = error.message || "Refresh failed.";
+    setError(state.walletRefreshError);
+  } finally {
+    state.walletRefreshing = false;
+    render();
+  }
+}
+
+async function refreshAfterTrade(signature = "") {
+  if (signature) state.lastTradeSignature = signature;
+  await refreshWalletState({ force: true });
+}
+
 function render() {
   if (!app || !loginView || !dashboardView) return;
   app.dataset.loading = state.loading ? "true" : "false";
-  loginView.hidden = Boolean(state.user);
+  app.dataset.route = state.route;
+  loginView.hidden = state.route !== "intro";
+  if (connectView) connectView.hidden = state.route !== "connect";
   if (topLoginPanel) topLoginPanel.hidden = Boolean(state.user) || state.loginCollapsed;
   if (authActions) authActions.hidden = false;
   if (guestActions) guestActions.hidden = Boolean(state.user);
   if (sessionActions) sessionActions.hidden = !state.user;
-  dashboardView.hidden = false;
+  dashboardView.hidden = state.route !== "terminal";
+  setHidden("[data-terminal-global-search]", state.route !== "terminal");
+  setHidden("[data-top-sync-strip]", state.route !== "terminal");
 
   setText("[data-user-id]", state.user?.id || "guest");
   setText("[data-wallet-count]", state.wallets.length);
   setText("[data-total-sol]", totalSol().toFixed(4));
   setText("[data-position-count]", state.positions.length);
   setText("[data-realized]", state.pnl?.totals?.realizedSol || "+0 SOL");
+  setText("[data-top-sol]", `${totalSol().toFixed(4)} SOL`);
+  setText("[data-top-portfolio]", `${state.positions.length} position${state.positions.length === 1 ? "" : "s"}`);
+  setText("[data-sync-health]", syncHealthLabel());
+  setText("[data-active-preset-label]", activePresetSummary());
+  setHidden("[data-refresh-spinner]", !state.walletRefreshing);
   const avatar = $("[data-user-avatar]");
   if (avatar) avatar.innerHTML = userAvatarHtml("SW");
   const topAvatar = $("[data-top-avatar]");
@@ -665,7 +796,7 @@ function render() {
     logoutButton.hidden = !state.user;
     writeText(logoutButton, "Log Out");
   }
-  renderTabs();
+  if (state.route === "terminal") renderTabs();
 }
 
 function renderTabs() {
@@ -678,18 +809,21 @@ function renderTabs() {
     button.dataset.active = button.dataset.tab === state.activeTab ? "true" : "false";
   });
 
+  if (state.activeTab === "terminal") panel.innerHTML = terminalHtml();
   if (state.activeTab === "dashboard") panel.innerHTML = dashboardHtml();
   if (state.activeTab === "profile") panel.innerHTML = profileHtml();
   if (state.activeTab === "trade") panel.innerHTML = tradeHtml();
   if (state.activeTab === "bundle") panel.innerHTML = bundleHtml();
   if (state.activeTab === "volume") panel.innerHTML = volumeHtml();
   if (state.activeTab === "live") panel.innerHTML = livePairsHtml();
+  if (state.activeTab === "liveTrades") panel.innerHTML = liveTradesHtml();
   if (state.activeTab === "watchlist") panel.innerHTML = watchlistHtml();
   if (state.activeTab === "launch") panel.innerHTML = launchHtml();
   if (state.activeTab === "kol") panel.innerHTML = kolHtml();
   if (state.activeTab === "wallets") panel.innerHTML = walletsHtml();
   if (state.activeTab === "positions") panel.innerHTML = positionsHtml();
   if (state.activeTab === "pnl") panel.innerHTML = pnlHtml();
+  if (state.activeTab === "txAudit") panel.innerHTML = txAuditHtml();
   if (state.activeTab === "sniper") panel.innerHTML = sniperHtml();
   syncCustomFields(panel);
   scheduleLivePairsAutoRefresh();
@@ -703,11 +837,11 @@ function dashboardHtml() {
     ${accountToolsHtml()}
     ${createWalletSection()}
     <section class="panel-grid">
-      ${visualCard("visual-aces", "Trade Desk", "Quick buy and sell from one wallet with .10, .50, 1 SOL, max, and percent sell buttons.")}
-      ${visualCard("visual-cauldron", "Bundle + Volume", "Buy or sell across selected wallets, then manage timed exits with Volume plans.")}
-      ${visualCard("visual-candle", "Launch Snipe", "Preset ticker, wallets, amount, TP/SL, and slippage, then watch live feeds until launch.")}
-      ${visualCard("visual-cauldron", "KOL Tracker", "Follow KOL wallets, review their strongest current signals, then trade, bundle, or copy-plan from the same panel.")}
-      ${visualCard("visual-candle", "Live Pairs", "Auto-refresh new Pump and fresh-pair listings while the tab is open, with safety-filtered Trade, Bundle, and Share actions.")}
+      ${visualCard("visual-trade", "Trade Desk", "Quick buy and sell from one wallet with .10, .50, 1 SOL, max, and percent sell buttons.", "trade")}
+      ${visualCard("visual-bundle", "Bundle + Volume", "Buy or sell across selected wallets, then manage timed exits with Volume plans.", "bundle")}
+      ${visualCard("visual-launch", "Launch Snipe", "Preset ticker, wallets, amount, TP/SL, and slippage, then watch live feeds until launch.", "launch")}
+      ${visualCard("visual-kol", "KOL Tracker", "Follow KOL wallets, review their strongest current signals, then trade, bundle, or copy-plan from the same panel.", "kol")}
+      ${visualCard("visual-live", "Live Pairs", "Auto-refresh new Pump and fresh-pair listings while the tab is open, with safety-filtered Trade, Bundle, and Share actions.", "live-pairs")}
     </section>
     ${importWalletSection()}
     ${backupRestoreSection()}
@@ -724,6 +858,7 @@ function profileHtml() {
     ${profilePfpSection()}
     ${xConnectSection()}
     ${referralSection()}
+    ${traderBoardSection()}
   `;
 }
 
@@ -791,8 +926,16 @@ function accountToolsHtml() {
   `;
 }
 
-function visualCard(className, title, body) {
-  return `<article class="panel visual-card ${className}"><div><h3>${escapeHtml(title)}</h3><p>${escapeHtml(body)}</p></div></article>`;
+function visualCard(className, title, body, icon = "trade") {
+  return `
+    <article class="panel visual-card ${className}">
+      <img class="feature-icon" src="./assets/slimewire/svg/icons/${escapeHtml(icon)}.svg" alt="" aria-hidden="true">
+      <div>
+        <h3>${escapeHtml(title)}</h3>
+        <p>${escapeHtml(body)}</p>
+      </div>
+    </article>
+  `;
 }
 
 function profilePfpSection() {
@@ -981,16 +1124,12 @@ function referralSection() {
   return `
     <section class="create-wallet-card referral-card">
       <div>
-        <h3>Referral + Trader Board</h3>
-        <p>Share SlimeWire and optionally earn the referral split on users you bring in. The trader board is opt-in only.</p>
+        <h3>Referral</h3>
+        <p>Share SlimeWire and optionally earn the referral split on users you bring in. This is separate from the trader board.</p>
       </div>
       <label>
         Referral Payout Wallet
         <input data-referral-wallet type="text" placeholder="Wallet for referral fees" value="${escapeHtml(state.user?.referralPayoutWallet || "")}">
-      </label>
-      <label class="checkbox-line">
-        <input data-show-trader-board type="checkbox" ${state.user?.showOnTraderBoard ? "checked" : ""}>
-        Show me on Top SlimeWire Traders
       </label>
       <div class="card-actions">
         <button type="button" class="primary" data-save-referral>Save Referral</button>
@@ -999,6 +1138,40 @@ function referralSection() {
         ${link ? telegramShareButton(`Trade faster on SlimeWire. Referral: ${link}`, "Share TG") : ""}
       </div>
       <small data-referral-status>${code ? `Your code: ${escapeHtml(code)}${state.user?.referredByCode ? ` | Referred by ${escapeHtml(state.user.referredByCode)}` : ""}` : "Create or log in to get a referral code."}</small>
+    </section>
+  `;
+}
+
+function traderBoardSection() {
+  const mode = state.user?.traderBoardWalletMode || "all";
+  const selected = Array.isArray(state.user?.traderBoardWalletIndexes)
+    ? state.user.traderBoardWalletIndexes
+    : state.wallets.map((wallet) => String(wallet.index));
+  return `
+    <section class="create-wallet-card trader-board-card">
+      <div>
+        <h3>Top SlimeWire Traders</h3>
+        <p>Opt in only if you want your SlimeWire trade stats shown on the KOL board. Choose all bot wallets or only the wallets you want counted.</p>
+      </div>
+      <label class="checkbox-line">
+        <input data-show-trader-board type="checkbox" ${state.user?.showOnTraderBoard ? "checked" : ""}>
+        Show me on Top SlimeWire Traders
+      </label>
+      <label>
+        Tracked Wallets
+        <select data-trader-board-wallet-mode>
+          <option value="all" ${mode === "all" ? "selected" : ""}>All SlimeWire wallets</option>
+          <option value="manual" ${mode === "manual" ? "selected" : ""}>Only selected wallets</option>
+        </select>
+      </label>
+      <div class="wallet-checks preset-wallets trader-board-wallets">
+        ${state.wallets.length ? walletChecksHtml("trader-board", selected) : `<p class="muted">Create or restore wallets first if you want manual wallet selection.</p>`}
+      </div>
+      <div class="card-actions">
+        <button type="button" class="primary" data-save-trader-board>Save Trader Board</button>
+        <button type="button" data-tab="kol">View Top Traders</button>
+      </div>
+      <small data-trader-board-status>${state.user?.showOnTraderBoard ? "You are opted in. Ranking updates from saved SlimeWire trade history." : "Off by default. Referral is not required."}</small>
     </section>
   `;
 }
@@ -2458,7 +2631,7 @@ function kolSummaryHtml() {
               <div><dt>ROI</dt><dd>${escapeHtml(kol.roiLabel || "n/a")}</dd></div>
               <div><dt>Trades</dt><dd>${escapeHtml(kol.trades ?? "n/a")}</dd></div>
             </dl>
-            <small>${escapeHtml(kol.volumeLabel || "Volume n/a")} | Last trade: ${escapeHtml(formatDate(kol.lastTradeAt))}</small>
+            <small>${escapeHtml(kol.source === "slimewire" ? `Tracking ${kol.trackedWalletMode === "manual" ? `${kol.trackedWalletCount || 0} wallet(s)` : "all wallets"}` : (kol.volumeLabel || "Volume n/a"))} | Last trade: ${escapeHtml(formatDate(kol.lastTradeAt))}</small>
             <div class="card-actions">
               ${kol.solscanUrl ? `<a href="${escapeHtml(kol.solscanUrl)}" target="_blank" rel="noreferrer">Wallet</a>` : ""}
               ${kol.kolscanUrl || kol.wallet ? `<a href="${escapeHtml(kol.kolscanUrl || kolscanUrl(kol.wallet))}" target="_blank" rel="noreferrer">KOLscan</a>` : ""}
@@ -2533,7 +2706,7 @@ async function createWalletSet() {
     writeText(status, data.downloads
       ? `Created ${wallets.length} wallet(s). Backup downloads started.`
       : `Created ${wallets.length} wallet(s). Use Download Backup before funding.`);
-    await loadAll();
+    await refreshAfterTrade(firstResultSignature(data.plan));
     state.activeTab = "wallets";
     render();
   } catch (error) {
@@ -2576,7 +2749,7 @@ async function restoreWalletBackup() {
     }
     textarea.value = "";
     writeText(status, data.restore?.message || "Restore complete.");
-    await loadAll();
+    await refreshAfterTrade(firstResultSignature(data.plan));
     state.activeTab = "wallets";
     render();
   } catch (error) {
@@ -2643,7 +2816,7 @@ async function importWallet() {
     }
     secretInput.value = "";
     writeText(status, data.imported?.message || "Import complete.");
-    await loadAll();
+    await refreshAfterTrade(firstResultSignature(data.plan));
     state.activeTab = "wallets";
     render();
   } catch (error) {
@@ -2677,7 +2850,7 @@ async function removeManagedWallet(walletIndex, walletLabel = "this wallet") {
       downloadText(result.downloads.recoveryKeys.filename, result.downloads.recoveryKeys.text);
     }
     state.walletRemoveStatus = result.message || `Removed ${label}.`;
-    await loadAll();
+    await refreshAfterTrade(firstResultSignature(data.plan));
     state.activeTab = "wallets";
     render();
   } catch (error) {
@@ -3133,7 +3306,7 @@ async function executeWebBuy(amountSol, amountMode = "fixed") {
     if (data.trade?.autoExitPlan) {
       state.tradePlanResult = data.trade.autoExitPlan;
     }
-    await loadAll();
+    await refreshAfterTrade(firstResultSignature(data.bundle));
     state.activeTab = "trade";
     render();
   } catch (error) {
@@ -3160,7 +3333,7 @@ async function executeWebSell(percent) {
       })
     });
     state.tradeResult = data.trade;
-    await loadAll();
+    await refreshAfterTrade(firstResultSignature(data.plan));
     state.activeTab = "trade";
     render();
   } catch (error) {
@@ -3210,7 +3383,7 @@ async function createTradePlan() {
     });
     state.tradePlanResult = data.plan;
     state.tradeResult = null;
-    await loadAll();
+    await refreshAfterTrade(data.trade?.signature);
     state.activeTab = "trade";
     render();
   } catch (error) {
@@ -3251,7 +3424,7 @@ async function createVolumePlan() {
       body: JSON.stringify(payload)
     });
     state.volumeResult = data.plan;
-    await loadAll();
+    await refreshAfterTrade(firstResultSignature(data.plan));
     state.activeTab = "volume";
     render();
   } catch (error) {
@@ -3304,7 +3477,7 @@ async function createSniperEntry(tokenMint) {
       body: JSON.stringify(payload)
     });
     state.sniperResult = data.plan;
-    await loadAll();
+    await refreshAfterTrade(firstResultSignature(data.plan));
     state.activeTab = "sniper";
     render();
   } catch (error) {
@@ -3360,7 +3533,7 @@ async function createKolCopyPlan(tokenMint) {
       body: JSON.stringify(payload)
     });
     state.kolResult = data.plan;
-    await loadAll();
+    await refreshAfterTrade(firstResultSignature(data.plan));
     state.activeTab = "kol";
     render();
   } catch (error) {
@@ -3433,7 +3606,7 @@ async function executeBundle(action) {
       body: JSON.stringify(payload)
     });
     state.bundleResult = data.bundle;
-    await loadAll();
+    await refreshAfterTrade(firstResultSignature(data.bundle));
     state.activeTab = "bundle";
     render();
   } catch (error) {
@@ -3450,7 +3623,7 @@ async function executeBundlePlan() {
       body: JSON.stringify(payload)
     });
     state.bundleResult = data.plan;
-    await loadAll();
+    await refreshAfterTrade(firstResultSignature(data.plan));
     state.activeTab = "bundle";
     render();
   } catch (error) {
@@ -3507,7 +3680,7 @@ async function quickPresetTrade(tokenMint) {
     state.tradeResult = data.trade;
     if (data.trade?.autoExitPlan) state.tradePlanResult = data.trade.autoExitPlan;
     state.tradeToken = tokenMint;
-    await loadAll();
+    await refreshAfterTrade(data.trade?.signature);
     state.activeTab = "trade";
     render();
   } catch (error) {
@@ -3547,11 +3720,75 @@ async function quickPresetBundle(tokenMint) {
     });
     state.bundleResult = data.plan;
     state.bundleToken = tokenMint;
-    await loadAll();
+    await refreshAfterTrade(firstResultSignature(data.plan));
     state.activeTab = "bundle";
     render();
   } catch (error) {
     setError(error.message);
+  }
+}
+
+async function sellPositionPercent(tokenMint, percentText = "100") {
+  try {
+    await ensureWebAccount(null, "Opening secure web profile...");
+    const percent = Number.parseInt(percentText, 10);
+    if (!tokenMint) throw new Error("Missing token mint for position exit.");
+    if (!Number.isInteger(percent) || percent < 1 || percent > 100) throw new Error("Sell percent must be from 1 to 100.");
+    const position = state.positions.find((item) => String(item.tokenMint) === String(tokenMint));
+    const tokenLabel = position?.symbol || position?.name || shortAddress(tokenMint);
+    const ok = window.confirm([
+      `Exit ${percent}% of ${tokenLabel}?`,
+      `Mint: ${tokenMint}`,
+      "Wallets: all managed wallets holding this token",
+      "Slippage: 4%",
+      "Expected SOL, minimum output, and route are returned after Jupiter builds/submits the sell."
+    ].join("\n"));
+    if (!ok) return;
+    const data = await api("/api/web/bundle/sell", {
+      method: "POST",
+      body: JSON.stringify({
+        tokenMint,
+        walletIndexes: "all",
+        percent,
+        slippageBps: "400"
+      })
+    });
+    state.bundleResult = data.bundle;
+    state.bundleToken = tokenMint;
+    state.tradeToken = tokenMint;
+    await refreshAfterTrade(firstResultSignature(data.bundle));
+    state.activeTab = "positions";
+    render();
+  } catch (error) {
+    setError(error.message);
+  }
+}
+
+function firstResultSignature(result) {
+  if (result?.signature) return result.signature;
+  const row = (result?.results || []).find((item) => item.signature);
+  return row?.signature || "";
+}
+
+async function runTxAudit() {
+  const signature = $("[data-tx-audit-signature]")?.value?.trim() || state.terminalTxSignature || "";
+  if (!signature) {
+    setError("Paste a transaction signature first.");
+    return;
+  }
+  state.terminalTxSignature = signature;
+  state.terminalTxLoading = true;
+  state.terminalTxAudit = null;
+  render();
+  try {
+    const data = await api(`/api/web/tx-audit?signature=${encodeURIComponent(signature)}`);
+    state.terminalTxAudit = data.audit || { error: "No audit data returned." };
+  } catch (error) {
+    state.terminalTxAudit = { error: error.message || "Transaction audit failed." };
+    setError(error.message);
+  } finally {
+    state.terminalTxLoading = false;
+    render();
   }
 }
 
@@ -3666,12 +3903,34 @@ async function saveReferralSettings() {
     const data = await api("/api/web/profile/referral", {
       method: "POST",
       body: JSON.stringify({
-        referralPayoutWallet: $("[data-referral-wallet]")?.value || "",
-        showOnTraderBoard: Boolean($("[data-show-trader-board]")?.checked)
+        referralPayoutWallet: $("[data-referral-wallet]")?.value || ""
       })
     });
     applyUserFromApi(data.user);
     writeText(status, "Referral settings saved.");
+    render();
+  } catch (error) {
+    writeText(status, error.message);
+    setError(error.message);
+  }
+}
+
+async function saveTraderBoardSettings() {
+  const status = $("[data-trader-board-status]");
+  try {
+    await ensureWebAccount(status, "Opening secure web profile...");
+    writeText(status, "Saving trader board settings...");
+    const mode = $("[data-trader-board-wallet-mode]")?.value || "all";
+    const data = await api("/api/web/profile/referral", {
+      method: "POST",
+      body: JSON.stringify({
+        showOnTraderBoard: Boolean($("[data-show-trader-board]")?.checked),
+        traderBoardWalletMode: mode,
+        traderBoardWalletIndexes: checkedWalletIndexes("trader-board")
+      })
+    });
+    applyUserFromApi(data.user);
+    writeText(status, data.user?.showOnTraderBoard ? "Trader board settings saved. Your board stats will use the selected wallet rule." : "Trader board is off.");
     render();
   } catch (error) {
     writeText(status, error.message);
@@ -3867,21 +4126,7 @@ function positionsHtml() {
   return `
     ${header}
     <div class="table-list">
-      ${state.positions.map((position) => `
-        <article class="row-card position with-avatar">
-          ${livePairAvatarHtml(position)}
-          <div class="row-main">
-            <strong>${escapeHtml(position.symbol || position.shortMint)}</strong>
-            <span>${position.uiAmount} tokens across ${position.walletCount} wallet(s)</span>
-            ${position.name ? `<small>${escapeHtml(position.name)}</small>` : ""}
-            <small>Value: ${position.estimatedValueSol || "unavailable"} SOL | PnL: ${position.openPnlSol || position.realizedSol}</small>
-          </div>
-          <div class="card-actions">
-            ${xShareButton(positionShareText(position))}
-            <a href="${position.dexUrl}" target="_blank" rel="noreferrer">Dex</a>
-          </div>
-        </article>
-      `).join("")}
+      ${state.positions.map(positionRowHtml).join("")}
     </div>
   `;
 }
@@ -3929,6 +4174,444 @@ function pnlHtml() {
   `;
 }
 
+function allVisibleSignalRows() {
+  const liveRows = Object.values(state.livePairsByBucket || {}).flatMap((feed) => feed?.rows || []);
+  const scanRows = state.scan?.rows || [];
+  const kolRows = state.kolScan?.rows || [];
+  const watchRows = state.watchlist?.rows || [];
+  const byMint = new Map();
+  for (const row of [...liveRows, ...scanRows, ...kolRows, ...watchRows]) {
+    const mint = String(row?.tokenMint || "");
+    if (mint && !byMint.has(mint)) byMint.set(mint, row);
+  }
+  return [...byMint.values()];
+}
+
+function selectedTerminalTokenRow() {
+  const mint = String(state.terminalToken || state.tradeToken || "").trim();
+  if (!mint) return (currentLivePairs()?.rows || [])[0] || allVisibleSignalRows()[0] || null;
+  return allVisibleSignalRows().find((row) => String(row.tokenMint) === mint) || {
+    tokenMint: mint,
+    shortMint: shortAddress(mint),
+    symbol: shortAddress(mint),
+    dexUrl: dexUrl(mint)
+  };
+}
+
+function scoreBadgeHtml(row = {}) {
+  const score = Number(row.bestPickScore || row.score || 0);
+  const warnings = row.scoreWarnings || row.bestPickWarnings || [];
+  const label = score ? `${score}/100` : "n/a";
+  return `
+    <span class="score-badge" title="${escapeHtml(scoreWhyText(row))}">
+      <strong>${escapeHtml(label)}</strong>
+      <small>${warnings.length ? "warnings" : "best pick"}</small>
+    </span>
+  `;
+}
+
+function scoreWhyText(row = {}) {
+  const inputs = row.scoreBreakdown || row.bestPickInputs || {};
+  const parts = Object.entries(inputs).map(([key, value]) => `${key}: ${value}`);
+  const warnings = row.scoreWarnings || row.bestPickWarnings || [];
+  return [...parts, ...warnings.map((warning) => `warning: ${warning}`)].join(" | ") || "Score uses available liquidity, volume, age, momentum, buys/sells, KOL, and risk signals.";
+}
+
+function compactSignalRowsHtml(rows, options = {}) {
+  const limit = options.limit || 6;
+  const actionLabel = options.actionLabel || "Buy Preset";
+  const emptyTitle = options.emptyTitle || "No signals loaded";
+  const emptyMessage = options.emptyMessage || "Refresh the feed to load current signals.";
+  const visibleRows = (rows || []).slice(0, limit);
+  if (!visibleRows.length) return emptyState(emptyTitle, emptyMessage);
+  return `
+    <div class="compact-signal-list">
+      ${visibleRows.map((row) => `
+        <article class="compact-signal-row" data-preview-token="${escapeHtml(row.tokenMint)}">
+          ${livePairAvatarHtml(row)}
+          <div class="compact-signal-main">
+            <div>
+              <strong>${escapeHtml(row.symbol || row.shortMint || shortAddress(row.tokenMint))}</strong>
+              <small>${escapeHtml(row.name || row.category || "Token")}</small>
+            </div>
+            <button type="button" class="ca-copy" data-copy="${escapeHtml(row.tokenMint)}">${escapeHtml(shortAddress(row.tokenMint))}</button>
+            <span>${escapeHtml(row.pairAgeLabel || formatAgeFromRow(row) || "age unknown")} | Liq ${escapeHtml(row.liquidityLabel || "n/a")} | Vol ${escapeHtml(row.volumeH1Label || row.volumeLabel || "n/a")}</span>
+          </div>
+          ${scoreBadgeHtml(row)}
+          <div class="compact-row-actions">
+            <button type="button" class="primary" data-quick-trade-token="${escapeHtml(row.tokenMint)}">${escapeHtml(actionLabel)}</button>
+            <button type="button" data-quick-bundle-token="${escapeHtml(row.tokenMint)}">Bundle</button>
+            <button type="button" data-watch-token="${escapeHtml(row.tokenMint)}" data-watch-symbol="${escapeHtml(row.symbol || "")}" data-watch-name="${escapeHtml(row.name || "")}" data-watch-image="${escapeHtml(row.imageUrl || "")}">${isTokenWatched(row.tokenMint) ? "Watching" : "Watch"}</button>
+          </div>
+        </article>
+      `).join("")}
+    </div>
+  `;
+}
+
+function terminalHtml() {
+  const liveFeed = currentLivePairs();
+  const liveRows = liveFeed?.rows || [];
+  const bestRows = [...liveRows].sort((a, b) => Number(b.bestPickScore || 0) - Number(a.bestPickScore || 0));
+  const kolRows = state.kolScan?.rows || [];
+  const watchRows = state.watchlist?.rows || [];
+  const token = selectedTerminalTokenRow();
+  const bucketLoading = Boolean(state.livePairsLoadingByBucket[state.livePairBucket]);
+  const lastUpdated = currentLivePairsUpdatedAt();
+  return `
+    <section class="command-terminal">
+      <main class="command-workspace">
+        <div class="terminal-title-row command-title">
+          <div>
+            <h3>Live Terminal</h3>
+            <p>Best picks, live pairs, KOL signals, watchlist movement, positions, and quick execution stay visible from one command center.</p>
+          </div>
+          <span>${bucketLoading ? "Refreshing" : "Live"}${lastUpdated ? ` | ${escapeHtml(ageTextFromSeconds(secondsSince(lastUpdated) || 0))}` : ""}</span>
+        </div>
+
+        <div class="command-controls">
+          <div class="mode-row terminal-modes live-pair-buckets">
+            ${LIVE_PAIR_BUCKETS.map(([bucket, label]) => {
+              const count = state.livePairsByBucket[bucket]?.rows?.length;
+              const suffix = Number.isFinite(Number(count)) ? ` (${count})` : "";
+              return `<button data-live-pair-bucket="${bucket}" data-active="${state.livePairBucket === bucket}">${label}${suffix}</button>`;
+            }).join("")}
+          </div>
+          <label>
+            Sort
+            <select data-terminal-sort>
+              ${LIVE_PAIR_SORTS.map(([value, label]) => `<option value="${value}" ${state.terminalSort === value ? "selected" : ""}>${label}</option>`).join("")}
+            </select>
+          </label>
+          <button class="primary" data-refresh-live-pairs>${bucketLoading ? "Refreshing..." : "Refresh Feeds"}</button>
+          <button data-top-refresh-wallet>${state.walletRefreshing ? "Refreshing Wallet..." : "Refresh Wallet"}</button>
+        </div>
+
+        <section class="command-grid">
+          <article class="terminal-panel best-picks-panel">
+            <header><h4>Best Picks</h4><span>Score + reasons</span></header>
+            ${compactSignalRowsHtml(bestRows, { limit: 5, emptyTitle: "No Best Picks yet", emptyMessage: "Refresh Live Pairs to score current pairs." })}
+          </article>
+          <article class="terminal-panel live-pairs-panel">
+            <header><h4>Live Pairs</h4><button data-tab="live">Open</button></header>
+            ${compactSignalRowsHtml(liveRows, { limit: 6, actionLabel: activePresetButtonLabel() })}
+          </article>
+          <article class="terminal-panel live-trades-panel">
+            <header><h4>Live Trades</h4><button data-tab="liveTrades">Open</button></header>
+            ${liveTradeRowsHtml(6)}
+          </article>
+          <article class="terminal-panel kol-panel">
+            <header><h4>KOL Signals</h4><button data-kol-refresh>${state.kolLoading ? "Loading..." : "Refresh"}</button></header>
+            ${compactSignalRowsHtml(kolRows, { limit: 5, emptyTitle: "No KOL signals loaded", emptyMessage: "Refresh KOL Tracker to load signals." })}
+          </article>
+          <article class="terminal-panel watchlist-panel">
+            <header><h4>Watchlist</h4><button data-refresh-watchlist>${state.watchlistLoading ? "Refreshing..." : "Refresh"}</button></header>
+            ${compactSignalRowsHtml(watchRows, { limit: 5, emptyTitle: "No watchlist yet", emptyMessage: "Tap Watch on any token row to save it here." })}
+          </article>
+          <article class="terminal-panel token-preview-panel">
+            <header><h4>Token Preview</h4><button data-use-token="${escapeHtml(token?.tokenMint || "")}">Trade</button></header>
+            ${tokenPreviewHtml(token)}
+          </article>
+        </section>
+
+        ${terminalBottomTablesHtml()}
+      </main>
+      <aside class="trade-side order-ticket-stack terminal-dock">
+        ${terminalTradePanelHtml(token)}
+      </aside>
+    </section>
+  `;
+}
+
+function activePresetButtonLabel() {
+  const preset = presetById("trade", state.selectedTradePresetId);
+  return preset?.amountSol ? `Buy ${preset.amountSol} SOL` : "Buy Preset";
+}
+
+function tokenPreviewHtml(token) {
+  if (!token?.tokenMint) return emptyState("No token selected", "Click any row to preview it here without leaving the live feeds.");
+  const hasPosition = state.positions.some((position) => String(position.tokenMint) === String(token.tokenMint));
+  return `
+    <div class="token-preview-card with-avatar">
+      ${livePairAvatarHtml(token)}
+      <div>
+        <strong>${escapeHtml(token.symbol || token.shortMint || shortAddress(token.tokenMint))}</strong>
+        <small>${escapeHtml(token.name || token.category || "Token")}</small>
+        <button type="button" class="ca-copy" data-copy="${escapeHtml(token.tokenMint)}">${escapeHtml(shortAddress(token.tokenMint))}</button>
+      </div>
+    </div>
+    <dl class="mini-stats">
+      <div><dt>Age</dt><dd>${escapeHtml(token.pairAgeLabel || formatAgeFromRow(token) || "age unknown")}</dd></div>
+      <div><dt>Liquidity</dt><dd>${escapeHtml(token.liquidityLabel || "n/a")}</dd></div>
+      <div><dt>MC / FDV</dt><dd>${escapeHtml(token.marketCapLabel || "n/a")}</dd></div>
+      <div><dt>Volume</dt><dd>${escapeHtml(token.volumeH1Label || token.volumeLabel || "n/a")}</dd></div>
+      <div><dt>Score</dt><dd>${escapeHtml(token.bestPickScore ? `${token.bestPickScore}/100` : "n/a")}</dd></div>
+      <div><dt>Position</dt><dd>${hasPosition ? "Held" : "None"}</dd></div>
+    </dl>
+    <div class="card-actions compact">
+      <a href="${escapeHtml(token.dexUrl || dexUrl(token.tokenMint))}" target="_blank" rel="noreferrer">Dex</a>
+      ${token.pumpUrl ? `<a href="${escapeHtml(token.pumpUrl)}" target="_blank" rel="noreferrer">Pump</a>` : ""}
+      <button class="primary" data-quick-trade-token="${escapeHtml(token.tokenMint)}">${escapeHtml(activePresetButtonLabel())}</button>
+      <button data-quick-bundle-token="${escapeHtml(token.tokenMint)}">Bundle</button>
+      ${hasPosition ? `<button data-position-sell="${escapeHtml(token.tokenMint)}" data-position-sell-percent="100">Exit 100%</button>` : ""}
+    </div>
+    <small class="score-breakdown">Why: ${escapeHtml(scoreWhyText(token))}</small>
+  `;
+}
+
+function terminalTradePanelHtml(token) {
+  const heldPosition = token?.tokenMint ? state.positions.find((position) => String(position.tokenMint) === String(token.tokenMint)) : null;
+  return `
+    <article class="order-ticket terminal-ticket">
+      <h3>Trade Panel</h3>
+      <p>Uses the selected active preset for fast buys. Manual trade settings remain in the Trade, Bundle, Volume, and Sniper tabs.</p>
+      <div class="segmented-control">
+        <button data-tab="trade">Buy / Sell</button>
+        <button data-tab="bundle">Bundle</button>
+        <button data-tab="volume">Volume</button>
+        <button data-tab="sniper">Snipe</button>
+      </div>
+      <label>
+        Active Trade Preset
+        <select data-fast-trade-preset="terminal">
+          ${presetOptionsHtml("trade", state.selectedTradePresetId)}
+        </select>
+      </label>
+      <label>
+        Active Bundle Preset
+        <select data-fast-bundle-preset="terminal">
+          ${presetOptionsHtml("bundle", state.selectedBundlePresetId)}
+        </select>
+      </label>
+      <div class="ticket-balance-row">
+        <span>${totalSol().toFixed(4)} SOL</span>
+        <button data-top-refresh-wallet>${state.walletRefreshing ? "Refreshing..." : "Refresh Balance"}</button>
+      </div>
+      ${token?.tokenMint ? `
+        <code>${escapeHtml(token.tokenMint)}</code>
+        <div class="quick-grid">
+          <button class="primary" data-quick-trade-token="${escapeHtml(token.tokenMint)}">${escapeHtml(activePresetButtonLabel())}</button>
+          <button data-quick-bundle-token="${escapeHtml(token.tokenMint)}">Bundle Preset</button>
+          <button data-use-token="${escapeHtml(token.tokenMint)}">Manual Trade</button>
+          <button data-use-token-volume="${escapeHtml(token.tokenMint)}">Volume Plan</button>
+        </div>
+        ${heldPosition ? `
+          <div class="exit-strip">
+            <strong>Position held</strong>
+            <button data-position-sell="${escapeHtml(token.tokenMint)}" data-position-sell-percent="25">Sell 25%</button>
+            <button data-position-sell="${escapeHtml(token.tokenMint)}" data-position-sell-percent="50">Sell 50%</button>
+            <button data-position-sell="${escapeHtml(token.tokenMint)}" data-position-sell-percent="100">Exit 100%</button>
+          </div>
+        ` : ""}
+      ` : emptyState("No token selected", "Click a live pair, KOL signal, watchlist row, or paste a CA in the top search.")}
+      <small>${escapeHtml(syncHealthLabel())}</small>
+      ${state.selectedTradePresetId === "custom" ? fastTradePresetBuilderHtml() : ""}
+      ${state.selectedBundlePresetId === "custom" ? fastBundlePresetBuilderHtml() : ""}
+    </article>
+  `;
+}
+
+function terminalBottomTablesHtml() {
+  const tabs = [
+    ["positions", "Positions"],
+    ["orders", "Open Orders"],
+    ["history", "Order History"],
+    ["wallets", "Wallets"],
+    ["kol", "KOL Signals"],
+    ["sniper", "Sniper Logs"],
+    ["tx", "Transaction Audit"],
+    ["reconcile", "Balance Reconciliation"]
+  ];
+  return `
+    <section class="terminal-panel terminal-bottom">
+      <div class="mode-row terminal-modes compact">
+        ${tabs.map(([id, label]) => `<button data-terminal-subtab="${id}" data-active="${state.terminalSubtab === id}">${label}</button>`).join("")}
+      </div>
+      ${terminalSubtabHtml()}
+    </section>
+  `;
+}
+
+function terminalSubtabHtml() {
+  if (state.terminalSubtab === "orders") return stopLossAuditHtml();
+  if (state.terminalSubtab === "history") return liveTradeRowsHtml(12);
+  if (state.terminalSubtab === "wallets") return walletBalanceSummaryHtml();
+  if (state.terminalSubtab === "kol") return compactSignalRowsHtml(state.kolScan?.rows || [], { limit: 8 });
+  if (state.terminalSubtab === "sniper") return state.scan ? tokenSignalRowsHtml(state.scan.rows || [], { context: "sniper", primaryAction: "snipe", primaryActionLabel: "Snipe", hideToolbar: true }) : emptyState("No sniper scan loaded", "Open Sniper or refresh a scan mode.");
+  if (state.terminalSubtab === "tx") return txAuditHtml(true);
+  if (state.terminalSubtab === "reconcile") return balanceReconciliationHtml();
+  return positionsTableHtml(6);
+}
+
+function positionsTableHtml(limit = 25) {
+  if (!state.positions.length) return emptyState("No open positions", "Open token holdings will show here after refresh.");
+  return `
+    <div class="table-list compact-table">
+      ${state.positions.slice(0, limit).map(positionRowHtml).join("")}
+    </div>
+  `;
+}
+
+function positionRowHtml(position) {
+  return `
+    <article class="row-card position with-avatar">
+      ${livePairAvatarHtml(position)}
+      <div class="row-main">
+        <strong>${escapeHtml(position.symbol || position.shortMint)}</strong>
+        <span>${escapeHtml(position.uiAmount)} tokens across ${escapeHtml(position.walletCount)} wallet(s)</span>
+        ${position.name ? `<small>${escapeHtml(position.name)}</small>` : ""}
+        <small>Value: ${escapeHtml(position.estimatedValueSol || "Price unavailable")} SOL | PnL: ${escapeHtml(position.openPnlSol || position.realizedSol || "Price unavailable")}</small>
+        ${position.valueError ? `<small class="warning-text">Price warning: ${escapeHtml(position.valueError)}</small>` : ""}
+      </div>
+      <div class="card-actions compact">
+        <button data-position-sell="${escapeHtml(position.tokenMint)}" data-position-sell-percent="25">Sell 25%</button>
+        <button data-position-sell="${escapeHtml(position.tokenMint)}" data-position-sell-percent="50">Sell 50%</button>
+        <button class="primary" data-position-sell="${escapeHtml(position.tokenMint)}" data-position-sell-percent="100">Exit 100%</button>
+        <button data-position-sell-custom="${escapeHtml(position.tokenMint)}">Custom %</button>
+        ${xShareButton(positionShareText(position))}
+        <a href="${escapeHtml(position.dexUrl || dexUrl(position.tokenMint))}" target="_blank" rel="noreferrer">Dex</a>
+      </div>
+    </article>
+  `;
+}
+
+function liveTradeRowsHtml(limit = 10) {
+  const trades = state.pnl?.trades || [];
+  if (!trades.length) return emptyState("No live trade history yet", "Submitted web trades will appear here after refresh.");
+  return `
+    <div class="live-trade-list">
+      ${trades.slice(0, limit).map((trade) => `
+        <article class="live-trade-row">
+          <strong>${escapeHtml(String(trade.type || "").toUpperCase())} ${escapeHtml(trade.shortMint || shortAddress(trade.tokenMint))}</strong>
+          <span>${escapeHtml(trade.walletLabel || "wallet")} | ${escapeHtml(trade.solAmount || "0")} SOL</span>
+          <small>${escapeHtml(formatDate(trade.timestamp))}</small>
+          <div class="card-actions compact">
+            ${trade.tokenMint ? `<button data-preview-token="${escapeHtml(trade.tokenMint)}">Preview</button><button data-quick-trade-token="${escapeHtml(trade.tokenMint)}">${escapeHtml(activePresetButtonLabel())}</button>` : ""}
+            ${trade.signature ? `<a href="https://solscan.io/tx/${encodeURIComponent(trade.signature)}" target="_blank" rel="noreferrer">Tx</a>` : ""}
+          </div>
+        </article>
+      `).join("")}
+    </div>
+  `;
+}
+
+function liveTradesHtml() {
+  return `
+    <section class="terminal-layout live-trades-terminal">
+      <main class="terminal-main">
+        <div class="terminal-title-row">
+          <div>
+            <h3>Live Trades</h3>
+            <p>Recent web trade activity, fast token preview, and active preset buys stay connected to the terminal.</p>
+          </div>
+          <span>${state.pnl?.trades?.length || 0} trades</span>
+        </div>
+        <div class="section-actions terminal-actions">
+          <button class="primary" data-top-refresh-wallet>Refresh Trades</button>
+          <button data-tab="terminal">Command Center</button>
+          <button data-tab="pnl">PnL</button>
+        </div>
+        ${liveTradeRowsHtml(25)}
+      </main>
+      <aside class="trade-side order-ticket-stack">
+        ${terminalTradePanelHtml(selectedTerminalTokenRow())}
+      </aside>
+    </section>
+  `;
+}
+
+function stopLossAuditHtml() {
+  const plans = [state.tradePlanResult, state.bundleResult, state.volumeResult, state.sniperResult, state.kolResult, state.launchResult].filter(Boolean);
+  if (!plans.length) {
+    return emptyState("No active audit item loaded", "Managed exits show status here after you create a trade, bundle, volume, sniper, KOL, or launch plan. Browser wallets are manual-only; managed wallets can be watched server-side.");
+  }
+  return `
+    <div class="table-list compact-table">
+      ${plans.map((plan) => `
+        <article class="row-card">
+          <div class="row-main">
+            <strong>${escapeHtml(plan.label || plan.type || "Managed Exit")}</strong>
+            <span>Status: ${escapeHtml(plan.status || "watching")} | TP ${escapeHtml(plan.takeProfitSummary || plan.takeProfitPct || "off")} | SL ${escapeHtml(plan.stopLossSummary || plan.stopLossPct || "off")}</span>
+            <small>Execution mode: managed wallet server-side watcher when the app backend is running. Browser-connected wallets require manual signing.</small>
+            ${plan.message ? `<small>${escapeHtml(plan.message)}</small>` : ""}
+          </div>
+          <div class="card-actions compact">
+            <button data-top-refresh-wallet>Refresh Status</button>
+            <button data-tab="positions">Positions</button>
+          </div>
+        </article>
+      `).join("")}
+    </div>
+  `;
+}
+
+function balanceReconciliationHtml() {
+  const balanceErrors = state.balances.filter((row) => row.error);
+  const warningCount = state.balances.reduce((sum, row) => sum + Number(row.warnings?.length || 0), 0);
+  return `
+    <section class="account-check-card reconciliation-card">
+      <div>
+        <h3>Balance Reconciliation</h3>
+        <p>Compares the app wallet list against the latest on-chain SOL and SPL token refresh. Positions are kept visible even when price data is unavailable.</p>
+        <small>Last updated: ${escapeHtml(ageTextFromSeconds(secondsSince(state.lastWalletRefreshAt)))} | Warnings: ${warningCount} | Errors: ${balanceErrors.length}</small>
+      </div>
+      <button class="primary" data-top-refresh-wallet>${state.walletRefreshing ? "Refreshing..." : "Force Refresh"}</button>
+    </section>
+    ${balanceErrors.length ? `
+      <div class="table-list compact-table">
+        ${balanceErrors.map((row) => `<article class="row-card"><strong>${escapeHtml(row.label || `Wallet ${row.index}`)}</strong><span>${escapeHtml(row.error)}</span></article>`).join("")}
+      </div>
+    ` : emptyState("Wallet state synced", "No balance errors reported by the last refresh.")}
+  `;
+}
+
+function txAuditHtml(compact = false) {
+  const audit = state.terminalTxAudit;
+  return `
+    <section class="${compact ? "tx-audit compact" : "terminal-layout tx-audit"}">
+      <main class="terminal-main">
+        <div class="terminal-title-row">
+          <div>
+            <h3>Tx Audit</h3>
+            <p>Paste a Solana transaction signature to see finalized status, SOL/token deltas, created token accounts, programs, logs, and whether balances should refresh.</p>
+          </div>
+          <span>${state.terminalTxLoading ? "Fetching" : "Ready"}</span>
+        </div>
+        <div class="inline-action">
+          <input data-tx-audit-signature type="text" placeholder="Solana transaction signature" value="${escapeHtml(state.terminalTxSignature || "")}">
+          <button class="primary" data-run-tx-audit>${state.terminalTxLoading ? "Auditing..." : "Audit Tx"}</button>
+        </div>
+        ${audit ? txAuditResultHtml(audit) : emptyState("No transaction loaded", "Use this when a wallet balance looks stale or a trade needs accounting review.")}
+      </main>
+      ${compact ? "" : `<aside class="trade-side order-ticket-stack">${stopLossAuditHtml()}${balanceReconciliationHtml()}</aside>`}
+    </section>
+  `;
+}
+
+function txAuditResultHtml(audit) {
+  if (audit.error) return `<article class="row-card"><strong>Audit failed</strong><span>${escapeHtml(audit.error)}</span></article>`;
+  return `
+    <section class="pnl-summary tx-summary">
+      <div><span>Status</span><strong>${escapeHtml(audit.status || "unknown")}</strong></div>
+      <div><span>Fee</span><strong>${escapeHtml(audit.feeSol || "0")} SOL</strong></div>
+      <div><span>Slot</span><strong>${escapeHtml(audit.slot || "n/a")}</strong></div>
+      <div><span>Refresh</span><strong>${audit.shouldRefreshBalances ? "Yes" : "No"}</strong></div>
+    </section>
+    <div class="table-list compact-table">
+      <article class="row-card"><strong>Fee payer</strong><code>${escapeHtml(audit.feePayer || "unknown")}</code></article>
+      <article class="row-card"><strong>SOL deltas</strong><span>${(audit.solDeltas || []).map((row) => `${shortAddress(row.account)} ${row.deltaSol}`).join(" | ") || "none"}</span></article>
+      <article class="row-card"><strong>Token deltas</strong><span>${(audit.tokenDeltas || []).map((row) => `${shortAddress(row.owner || row.account)} ${row.deltaUiAmount} ${shortAddress(row.mint)}`).join(" | ") || "none"}</span></article>
+      <article class="row-card"><strong>Created token accounts</strong><span>${(audit.createdAssociatedTokenAccounts || []).map((row) => shortAddress(row.account)).join(", ") || "none detected"}</span></article>
+      <article class="row-card"><strong>Programs</strong><span>${(audit.programs || []).join(", ") || "n/a"}</span></article>
+      ${audit.explorerUrl ? `<article class="row-card"><strong>Explorer</strong><a href="${escapeHtml(audit.explorerUrl)}" target="_blank" rel="noreferrer">Open Solscan</a></article>` : ""}
+    </div>
+    <details class="raw-log-panel">
+      <summary>Raw logs</summary>
+      <pre>${escapeHtml((audit.logs || []).join("\n") || "No logs returned.")}</pre>
+    </details>
+  `;
+}
+
 function livePairsHtml() {
   const activeLivePairs = currentLivePairs();
   const rows = activeLivePairs?.rows || [];
@@ -3961,6 +4644,11 @@ function livePairsHtml() {
             <span>${escapeHtml(livePairBucketDescription(state.livePairBucket))}</span>
           </div>
           <div class="card-actions compact">
+            <label class="compact-label">Sort
+              <select data-terminal-sort>
+                ${LIVE_PAIR_SORTS.map(([value, label]) => `<option value="${value}" ${state.terminalSort === value ? "selected" : ""}>${label}</option>`).join("")}
+              </select>
+            </label>
             <button class="primary" data-refresh-live-pairs>${bucketLoading ? "Scanning..." : "Refresh Feed"}</button>
             <button data-tab="trade">Trade</button>
             <button data-tab="bundle">Bundle</button>
@@ -4028,7 +4716,7 @@ function livePairRowsHtml(rows) {
 function tokenSignalRowsHtml(rows, options = {}) {
   const shareBuilder = options.shareBuilder || livePairShareText;
   return `
-    ${fastPresetToolbarHtml(options.context || "scanner")}
+    ${options.hideToolbar ? "" : fastPresetToolbarHtml(options.context || "scanner")}
     <div class="signal-list">
       <div class="signal-header">
         <span>Pair Info</span>
@@ -4075,7 +4763,7 @@ function tokenSignalRowHtml(row, index, options = {}) {
       <div class="signal-cell"><span>${escapeHtml(row.pairAgeLabel || formatAgeFromRow(row) || "new")}</span><small>${escapeHtml(row.scalpSetup || row.momentum || `#${index + 1}`)}</small></div>
       <div class="signal-cell"><span>${escapeHtml(row.liquidityLabel || "$0")}</span><small>${formatChangeHtml(row.h1)}</small></div>
       <div class="signal-cell"><span>${escapeHtml(row.marketCapLabel || "$0")}</span><small>${escapeHtml(row.category || row.signalType || "signal")}</small></div>
-      <div class="signal-cell"><span>${escapeHtml(row.txnsLabel || row.winRateLabel || "n/a")}</span><small>${escapeHtml(row.valueLabel || row.smartMoney || "")}</small></div>
+      <div class="signal-cell"><span>${escapeHtml(row.txnsLabel || row.winRateLabel || "n/a")}</span><small>${escapeHtml(row.bestPickScore ? `Score ${row.bestPickScore}/100` : row.valueLabel || row.smartMoney || "")}</small></div>
       <div class="signal-cell"><span>${escapeHtml(row.volumeH1Label || row.volumeLabel || "$0")}</span><small>5m ${escapeHtml(row.volume5mLabel || "$0")}</small></div>
       <div class="signal-actions">
         ${primaryAction === "snipe" ? `<button type="button" class="primary" data-sniper-buy="${escapeHtml(row.tokenMint)}">${escapeHtml(actionLabel)}</button>` : `<button type="button" class="primary" data-quick-trade-token="${escapeHtml(row.tokenMint)}">${escapeHtml(actionLabel)}</button>`}
@@ -4115,7 +4803,15 @@ function livePairAvatarHtml(row) {
   if (row.imageUrl) {
     return `<div class="live-pair-avatar"><img src="${escapeHtml(row.imageUrl)}" alt="${escapeHtml(row.symbol || row.name || "Token")}" loading="lazy" onerror="this.hidden=true;"><span>${escapeHtml(label)}</span></div>`;
   }
-  return `<div class="live-pair-avatar fallback">${escapeHtml(label)}</div>`;
+  const mascot = tokenMascotIndex(row.tokenMint || row.symbol || row.name);
+  return `<div class="live-pair-avatar fallback with-mascot"><img src="./assets/slimewire/png/token-mascots/token-mascot-${mascot}.png" alt="" aria-hidden="true"><span>${escapeHtml(label)}</span></div>`;
+}
+
+function tokenMascotIndex(value = "") {
+  const text = String(value || "");
+  let total = 0;
+  for (let index = 0; index < text.length; index += 1) total += text.charCodeAt(index);
+  return (total % 5) + 1;
 }
 
 function livePairShareText(row) {
@@ -4292,8 +4988,67 @@ function formatDate(value) {
 }
 
 document.addEventListener("click", async (event) => {
-  const target = event.target.closest("button, a");
+  const target = event.target.closest("button, a, [data-preview-token]");
   if (!target) return;
+
+  if (target.matches("[data-nav-route]")) {
+    event.preventDefault();
+    navigateTo(target.dataset.navRoute || "/terminal", target.dataset.tab || null);
+    return;
+  }
+  if (target.matches("[data-policy]")) {
+    event.preventDefault();
+    const kind = target.dataset.policy === "privacy" ? "Slime Policy" : "Slimeness";
+    window.alert(`${kind}\n\nThis public page is a placeholder for the site's ${target.dataset.policy === "privacy" ? "privacy policy" : "terms of service"}. Add your final legal copy before launch.`);
+    return;
+  }
+  if (target.matches("[data-top-refresh-wallet]")) {
+    await refreshWalletState({ force: true });
+    return;
+  }
+  if (target.matches("[data-global-token-open]")) {
+    const token = $("[data-global-token-search]")?.value?.trim() || "";
+    if (token) {
+      state.terminalToken = token;
+      state.tradeToken = token;
+      state.bundleToken = token;
+      state.volumeToken = token;
+      state.activeTab = "terminal";
+      state.route = "terminal";
+      window.history.pushState({}, "", "/terminal");
+      render();
+    }
+    return;
+  }
+  if (target.matches("[data-preview-token]")) {
+    const token = target.dataset.previewToken || "";
+    if (token) {
+      state.terminalToken = token;
+      state.tradeToken = token;
+      state.bundleToken = token;
+      state.volumeToken = token;
+      render();
+    }
+    return;
+  }
+  if (target.matches("[data-terminal-subtab]")) {
+    state.terminalSubtab = target.dataset.terminalSubtab || "positions";
+    render();
+    return;
+  }
+  if (target.matches("[data-position-sell]")) {
+    await sellPositionPercent(target.dataset.positionSell || "", target.dataset.positionSellPercent || "100");
+    return;
+  }
+  if (target.matches("[data-position-sell-custom]")) {
+    const percent = window.prompt("Sell what percent of this position?", "100");
+    if (percent) await sellPositionPercent(target.dataset.positionSellCustom || "", percent);
+    return;
+  }
+  if (target.matches("[data-run-tx-audit]")) {
+    await runTxAudit();
+    return;
+  }
 
   if (target.matches("[data-web-signup]")) await createWebAccount();
   if (target.matches("[data-web-password-login]")) await passwordLogin();
@@ -4312,6 +5067,7 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-clear-x]")) await disconnectXAccount();
   if (target.matches("[data-save-login-credentials]")) await saveLoginCredentials();
   if (target.matches("[data-save-referral]")) await saveReferralSettings();
+  if (target.matches("[data-save-trader-board]")) await saveTraderBoardSettings();
   if (target.matches("[data-use-x-avatar]")) await useXProfileAvatar();
   if (target.matches("[data-clear-avatar]")) await updateProfileAvatar({ clear: true }, "Removing PFP...");
   if (target.matches("[data-connect-wallet]")) await connectBrowserWallet(target.dataset.connectWallet);
@@ -4449,24 +5205,28 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-refresh-all]")) {
     if (!state.user || !state.token) {
-      if (state.activeTab === "live") await refreshLivePairBuckets({ silent: true }).catch((error) => setError(error.message));
+      if (state.activeTab === "live" || state.activeTab === "terminal") await refreshLivePairBuckets({ silent: true }).catch((error) => setError(error.message));
       else if (state.activeTab === "sniper") await loadScan().catch((error) => setError(error.message));
       else if (state.activeTab === "kol") await loadKolScan().catch((error) => setError(error.message));
       else setError("Browsing is open. Create or connect a profile when you want saved wallets, balances, or trades.");
     } else {
-      loadAll().catch((error) => setError(error.message));
+      refreshWalletState({ force: true }).catch((error) => setError(error.message));
     }
   }
 
   if (target.matches("[data-tab]")) {
     state.activeTab = target.dataset.tab;
+    if (state.route !== "terminal") {
+      state.route = "terminal";
+      window.history.pushState({}, "", "/terminal");
+    }
     if (state.activeTab === "sniper" && !state.scan) {
       await loadScan().catch((error) => setError(error.message));
     }
-    if (state.activeTab === "live" && !state.livePairsByBucket[state.livePairBucket]) {
+    if ((state.activeTab === "live" || state.activeTab === "terminal") && !state.livePairsByBucket[state.livePairBucket]) {
       await refreshLivePairBuckets().catch((error) => setError(error.message));
     }
-    if (state.activeTab === "kol" && !state.kolScan) {
+    if ((state.activeTab === "kol" || state.activeTab === "terminal") && !state.kolScan) {
       await loadKolScan().catch((error) => setError(error.message));
     }
     if (state.activeTab === "watchlist" && state.user && state.token) {
@@ -4524,6 +5284,11 @@ document.addEventListener("change", async (event) => {
     if (state.selectedBundlePresetId === "custom") state.fastBundlePresetStatus = "";
     render();
   }
+  if (target?.matches?.("[data-terminal-sort]")) {
+    state.terminalSort = target.value || "best";
+    await refreshLivePairBuckets({ silent: true }).catch((error) => setError(error.message));
+    render();
+  }
   if (target?.matches?.("[data-restore-file]")) {
     await readRestoreFile(target);
   }
@@ -4532,4 +5297,15 @@ document.addEventListener("change", async (event) => {
   }
 });
 
-loadSession();
+async function initializeApp() {
+  await loadSession();
+  if (state.route === "terminal") {
+    await Promise.allSettled([
+      refreshLivePairBuckets({ silent: true }),
+      loadKolScan(state.kolMode, "", { silent: true })
+    ]);
+    render();
+  }
+}
+
+initializeApp();

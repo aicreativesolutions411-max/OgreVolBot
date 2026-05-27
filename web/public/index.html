@@ -5,20 +5,34 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>SlimeWire</title>
     <meta name="description" content="SlimeWire web dashboard for meme token trading, wallets, balances, positions, PnL, and sniper scans.">
-    <link rel="stylesheet" href="./styles.css?v=20260526-panel-clean">
+    <link rel="stylesheet" href="./styles.css?v=20260526-slimewire-assets">
     <script src="./config.js"></script>
-    <script type="module" src="./app.js?v=20260526-panel-clean"></script>
+    <script type="module" src="./app.js?v=20260526-slimewire-assets"></script>
   </head>
   <body>
     <main class="shell" data-app>
       <header class="topbar">
-        <span class="powered">Powered by Ogres</span>
+        <span class="powered"><img src="./assets/slimewire/svg/powered-by-ogres-badge.svg" alt="Powered by Ogres"></span>
         <div class="topbar-right">
           <nav class="social-links" aria-label="Ogre links">
             <a href="https://t.me/ogrecoinonsol" target="_blank" rel="noreferrer">Telegram</a>
             <a href="https://ogremode.com/" target="_blank" rel="noreferrer">Website</a>
             <a href="https://twitter.com/i/communities/1930265213917425858" target="_blank" rel="noreferrer">X</a>
           </nav>
+          <form class="terminal-global-search" data-terminal-global-search onsubmit="return false;" hidden>
+            <input data-global-token-search type="text" placeholder="Search or paste token CA">
+            <button type="button" data-global-token-open>Open</button>
+          </form>
+          <div class="top-sync-strip" data-top-sync-strip hidden>
+            <button type="button" data-top-refresh-wallet>
+              <span data-refresh-spinner hidden></span>
+              Refresh
+            </button>
+            <span data-top-sol>0.0000 SOL</span>
+            <span data-top-portfolio>0 positions</span>
+            <span data-sync-health>Sync idle</span>
+            <span data-active-preset-label>Preset: none</span>
+          </div>
           <div class="top-auth-actions" data-auth-actions>
             <div class="top-auth-group" data-guest-actions>
               <button type="button" data-open-login>Log In</button>
@@ -51,32 +65,65 @@
         </form>
       </header>
 
-      <section class="login-view" data-login>
-        <div class="login-copy">
-          <img class="brand-logo hero-logo" src="./assets/slimewire-panel-wordmark-clean.png" alt="SlimeWire Panel">
-          <p class="lead">
-            A fast meme-coin trade desk built for clean execution. Trade one wallet, bundle across
-            wallet groups, control timed volume plans, snipe fresh launches, follow KOL signals,
-            scan early movers, manage positions, download backups, and flex PnL cards from one dashboard.
-          </p>
-          <div class="login-steps">
-            <span>Trade</span>
-            <span>Bundle</span>
-            <span>Volume Control</span>
-            <span>Snipe</span>
-            <span>KOL Tracking</span>
-            <span>Wallet Connect</span>
-            <span>Profile PFP</span>
-            <span>Connect X</span>
-            <span>PnL Cards</span>
-          </div>
-          <div class="sponsor-strip">
-            <span>Sponsors</span>
-            <strong>Coming Soon</strong>
-            <small>Featured projects will live here.</small>
-          </div>
+      <section class="login-view swamp-splash" data-login>
+        <button class="swamp-splash-button" type="button" data-nav-route="/connect" aria-label="Enter the Swamp">
+          <img src="./assets/slimewire-enter-swamp-splash.jpg" alt="Enter the Swamp">
+        </button>
+        <div class="splash-fineprint">
+          <a href="https://t.me/ogrecoinonsol" target="_blank" rel="noreferrer">Telegram</a>
+          <a href="https://ogremode.com/" target="_blank" rel="noreferrer">Website</a>
+          <a href="https://twitter.com/i/communities/1930265213917425858" target="_blank" rel="noreferrer">X</a>
         </div>
-        <img class="hero-mark" src="./assets/slimewire-mark-cutout.png" alt="" aria-hidden="true">
+      </section>
+
+      <section class="connect-view" data-connect hidden>
+        <article class="swamp-connect-shell">
+          <section class="connect-hero-side" aria-label="SlimeWire trader terminal preview">
+            <img class="connect-mark" src="./assets/slimewire/png/slimewire-mark.png" alt="" aria-hidden="true">
+            <p>Built for</p>
+            <h1>Traders</h1>
+            <div class="mock-chart" aria-hidden="true">
+              <span>1M</span><span>Info</span><span>Indicators</span><span>Alerts</span><span>Trading View</span>
+              <svg viewBox="0 0 460 210" role="img" aria-label="stylized trading chart">
+                <polyline points="10,165 46,138 84,154 122,92 160,116 198,54 236,78 274,44 312,102 350,72 388,132 444,92" />
+                <g>
+                  <rect x="55" y="98" width="10" height="62"/><rect x="92" y="70" width="10" height="88"/>
+                  <rect x="139" y="42" width="10" height="122"/><rect x="188" y="86" width="10" height="78"/>
+                  <rect x="234" y="36" width="10" height="128"/><rect x="285" y="92" width="10" height="72"/>
+                  <rect x="336" y="62" width="10" height="102"/><rect x="388" y="112" width="10" height="52"/>
+                </g>
+              </svg>
+            </div>
+            <img class="connect-ogre" src="./assets/slimewire/png/slimewire-ogre-hero-cutout.png" alt="" aria-hidden="true">
+          </section>
+          <section class="connect-card">
+            <img class="connect-logo" src="./assets/slimewire-panel-wordmark-clean.png" alt="SlimeWire">
+            <h2>Start Sliming</h2>
+            <p>Be in control of your swamp 24-7.</p>
+            <span class="connect-subtitle">Continue with</span>
+            <div class="connect-provider-row">
+              <a class="provider-orb" href="https://t.me/ogrecoinonsol" target="_blank" rel="noreferrer" aria-label="Open Telegram">TG</a>
+              <button class="provider-orb" type="button" data-web-signup-connect aria-label="Connect Phantom or Solflare">SOL</button>
+              <button class="provider-orb" type="button" data-open-login aria-label="Open login">ID</button>
+              <button class="provider-orb" type="button" data-web-signup aria-label="Create account">+</button>
+            </div>
+            <div class="connect-actions">
+              <button class="primary slime-login-button" type="button" data-web-signup-connect>Connect Wallet</button>
+              <button type="button" data-tab="wallets" data-nav-route="/terminal">Create Wallet</button>
+              <button type="button" data-open-login>Log In</button>
+              <button type="button" data-web-signup>Create Account</button>
+              <button type="button" data-nav-route="/terminal">Browse Terminal</button>
+            </div>
+            <small data-connected-wallet-summary>Connect a wallet or create an account when you are ready to trade.</small>
+            <p class="policy-copy">
+              By signing in you agree to
+              <a href="#slimeness" data-policy="terms">Slimeness</a>
+              and
+              <a href="#slime-policy" data-policy="privacy">Slime Policy</a>.
+            </p>
+          </section>
+          <span class="connect-powered">Powered by Ogres</span>
+        </article>
       </section>
 
       <section class="dashboard" data-dashboard hidden>
@@ -100,18 +147,21 @@
         </section>
 
         <nav class="tabs" aria-label="Portal views">
-          <button data-tab="dashboard" data-active="true">Home</button>
+          <button data-tab="terminal" data-active="true">Live Terminal</button>
+          <button data-tab="dashboard">Home</button>
           <button data-tab="profile">Profile</button>
           <button data-tab="trade">Trade</button>
           <button data-tab="bundle">Bundle</button>
           <button data-tab="volume">Volume</button>
           <button data-tab="live">Live Pairs</button>
+          <button data-tab="liveTrades">Live Trades</button>
           <button data-tab="watchlist">Watchlist</button>
           <button data-tab="launch">Launch Snipe</button>
           <button data-tab="kol">KOL Tracker</button>
           <button data-tab="wallets">Wallets / Balances</button>
           <button data-tab="positions">Positions</button>
           <button data-tab="pnl">PnL</button>
+          <button data-tab="txAudit">Tx Audit</button>
           <button data-tab="sniper">Sniper</button>
         </nav>
 

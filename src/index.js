@@ -7,6 +7,16 @@ import { fileURLToPath } from "node:url";
 import bs58 from "bs58";
 import sharp from "sharp";
 import {
+  computeBestPickScore,
+  formatLivePairAge as formatLivePairAgeFromData,
+  isLivePairInBucket as isLivePairInBucketWindow,
+  livePairBucketLabel as livePairBucketLabelCore,
+  normalizeLivePairBucket as normalizeLivePairBucketCore,
+  normalizePairTimestamp,
+  pairAgeMinutes as pairAgeMinutesFromData,
+  sortLivePairs
+} from "./lib/liveTerminal.js";
+import {
   Connection,
   Keypair,
   LAMPORTS_PER_SOL,
@@ -524,12 +534,20 @@ function startHealthServer() {
       return;
     }
 
-    if (requestUrl.pathname === "/portal" || requestUrl.pathname.startsWith("/portal/")) {
+    if (request.method === "GET" && (requestUrl.pathname === "/" || requestUrl.pathname === "/connect"
+      || requestUrl.pathname === "/portal" || requestUrl.pathname.startsWith("/portal/")
+      || requestUrl.pathname === "/terminal" || requestUrl.pathname.startsWith("/terminal/"))) {
       await serveWebPortal(requestUrl, response);
       return;
     }
 
-    if (["/", "/healthz", "/readyz", "/wake"].includes(requestUrl.pathname)) {
+    if (request.method === "GET" && (requestUrl.pathname.startsWith("/assets/")
+      || /\.(?:css|js|png|jpe?g|svg|webp|ico)$/i.test(requestUrl.pathname))) {
+      await serveWebPortal(requestUrl, response);
+      return;
+    }
+
+    if (["/healthz", "/readyz", "/wake"].includes(requestUrl.pathname)) {
       response.writeHead(200, {
         "Content-Type": "application/json",
         ...webCorsHeaders(request)
@@ -667,9 +685,10 @@ async function handleWebApiRequest(request, response, requestUrl) {
     if (request.method === "GET" && pathname === "/api/web/live-pairs") {
       const auth = await authenticateOptionalWebRequest(request);
       const bucket = requestUrl.searchParams.get("bucket") || "live";
+      const sort = requestUrl.searchParams.get("sort") || "best";
       sendWebJson(request, response, 200, {
         ok: true,
-        livePairs: await webLivePairs(auth?.userId || "guest", bucket)
+        livePairs: await webLivePairs(auth?.userId || "guest", bucket, { sort })
       });
       return;
     }
@@ -970,9 +989,10 @@ async function handleWebApiRequest(request, response, requestUrl) {
     }
 
     if (request.method === "GET" && pathname === "/api/web/balances") {
+      const force = parseBoolean(requestUrl.searchParams.get("force") || "false");
       const [balances, connectedWallet] = await Promise.all([
-        webBalanceRows(auth.userId),
-        webConnectedWalletBalance(auth.userId)
+        webBalanceRows(auth.userId, { force }),
+        webConnectedWalletBalance(auth.userId, { force })
       ]);
       sendWebJson(request, response, 200, {
         ok: true,
@@ -983,9 +1003,10 @@ async function handleWebApiRequest(request, response, requestUrl) {
     }
 
     if (request.method === "GET" && pathname === "/api/web/positions") {
+      const force = parseBoolean(requestUrl.searchParams.get("force") || "false");
       sendWebJson(request, response, 200, {
         ok: true,
-        positions: await webPositionRows(auth.userId)
+        positions: await webPositionRows(auth.userId, { force })
       });
       return;
     }
@@ -1005,6 +1026,15 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "GET" && pathname === "/api/web/tx-audit") {
+      const signature = requestUrl.searchParams.get("signature") || "";
+      sendWebJson(request, response, 200, {
+        ok: true,
+        audit: await webTxAudit(signature)
+      });
+      return;
+    }
+
     if (request.method === "GET" && pathname === "/api/web/sniper/scan") {
       const mode = requestUrl.searchParams.get("mode") || "safe";
       sendWebJson(request, response, 200, {
@@ -1015,9 +1045,11 @@ async function handleWebApiRequest(request, response, requestUrl) {
     }
 
     if (request.method === "GET" && pathname === "/api/web/live-pairs") {
+      const bucket = requestUrl.searchParams.get("bucket") || "live";
+      const sort = requestUrl.searchParams.get("sort") || "best";
       sendWebJson(request, response, 200, {
         ok: true,
-        livePairs: await webLivePairs(auth.userId)
+        livePairs: await webLivePairs(auth.userId, bucket, { sort })
       });
       return;
     }
@@ -1074,9 +1106,10 @@ async function handleWebApiRequest(request, response, requestUrl) {
 }
 
 async function serveWebPortal(requestUrl, response) {
-  const relativePath = requestUrl.pathname === "/portal"
+  const relativePath = requestUrl.pathname === "/" || requestUrl.pathname === "/connect"
+    || requestUrl.pathname === "/portal" || requestUrl.pathname === "/terminal"
     ? "index.html"
-    : decodeURIComponent(requestUrl.pathname.replace(/^\/portal\/?/, "")) || "index.html";
+    : decodeURIComponent(requestUrl.pathname.replace(/^\/(?:portal|terminal)\/?/, "")) || "index.html";
   const safeRelativePath = relativePath.replace(/^[/\\]+/, "");
   const filePath = path.resolve(WEB_STATIC_DIR, safeRelativePath);
 
@@ -6595,7 +6628,7 @@ async function showPositionsOverview(chatId, userId, messageId = null) {
   });
 }
 
-async function buildPositionsOverview(userId) {
+async function buildPositionsOverview(userId, options = {}) {
   const store = await readWalletStore();
   const wallets = walletsForOwner(store, userId);
   const history = await readTradeHistory();
@@ -6615,7 +6648,7 @@ async function buildPositionsOverview(userId) {
   await runWithConcurrency(wallets, CONFIG.balanceConcurrency, async (wallet) => {
     try {
       const keypair = decryptWallet(wallet);
-      const { accounts } = await getOwnedTokenAccountsWithWarningsCached(keypair.publicKey);
+      const { accounts } = await getOwnedTokenAccountsWithWarningsCached(keypair.publicKey, { force: Boolean(options.force) });
       for (const account of accounts.filter((item) => item.rawAmount > 0n)) {
         const position = ensurePosition(positions, account.mint);
         position.rawAmount += account.rawAmount;
@@ -7539,9 +7572,18 @@ function livePairCandidateCreatedAt(candidate) {
   const profile = candidate?.metadata || candidate?.profile || {};
   return normalizePairCreatedAt(firstString(
     profile.pairCreatedAt,
+    profile.pair_created_at,
+    profile.pair_created_timestamp,
+    profile.poolCreatedAt,
+    profile.pool_created_at,
+    profile.pool_created_timestamp,
+    profile.listingCreatedAt,
+    profile.listedAt,
+    profile.launchTimestamp,
     profile.created_timestamp,
     profile.createdAt,
     profile.created_at,
+    profile.pairCreatedTime,
     profile.timestamp
   ));
 }
@@ -8498,13 +8540,7 @@ function mergeSniperMetadata(dexValue, profile = {}, source = "profile") {
 }
 
 function normalizePairCreatedAt(value) {
-  if (value === null || value === undefined || value === "") return null;
-  const number = Number(value);
-  if (Number.isFinite(number)) {
-    return number < 10_000_000_000 ? number * 1000 : number;
-  }
-  const parsed = Date.parse(String(value));
-  return Number.isFinite(parsed) ? parsed : null;
+  return normalizePairTimestamp(value);
 }
 
 function isCleanTrendCandidate(item, options = {}) {
@@ -10396,6 +10432,18 @@ function ensureWebProfileDefaults(store, userId) {
     profile.showOnTraderBoard = false;
     changed = true;
   }
+  if (!["all", "manual"].includes(String(profile.traderBoardWalletMode || ""))) {
+    profile.traderBoardWalletMode = "all";
+    changed = true;
+  }
+  if (!Array.isArray(profile.traderBoardWalletIndexes)) {
+    profile.traderBoardWalletIndexes = [];
+    changed = true;
+  }
+  if (!Array.isArray(profile.traderBoardWalletPublicKeys)) {
+    profile.traderBoardWalletPublicKeys = [];
+    changed = true;
+  }
   if (profile.referralPayoutWallet === undefined) {
     profile.referralPayoutWallet = "";
     changed = true;
@@ -10560,6 +10608,9 @@ async function createWebAccount(options = {}) {
     referredByCode: referralEntry && referralEntry.userId !== userId ? normalizeReferralCode(referralEntry.profile.referralCode) : "",
     referralPayoutWallet: "",
     showOnTraderBoard: false,
+    traderBoardWalletMode: "all",
+    traderBoardWalletIndexes: [],
+    traderBoardWalletPublicKeys: [],
     tradePresets: [],
     bundlePresets: [],
     hiddenWebPresetIds: [],
@@ -10822,6 +10873,9 @@ async function webUserSummary(userId) {
     referralPayoutWallet: profile.referralPayoutWallet || "",
     referredByCode: profile.referredByCode || "",
     showOnTraderBoard: Boolean(profile.showOnTraderBoard),
+    traderBoardWalletMode: ["all", "manual"].includes(String(profile.traderBoardWalletMode || "")) ? profile.traderBoardWalletMode : "all",
+    traderBoardWalletIndexes: Array.isArray(profile.traderBoardWalletIndexes) ? profile.traderBoardWalletIndexes : [],
+    traderBoardWalletCount: Array.isArray(profile.traderBoardWalletPublicKeys) ? profile.traderBoardWalletPublicKeys.length : 0,
     tradePresetCount: Array.isArray(profile.tradePresets) ? profile.tradePresets.length : 0,
     bundlePresetCount: Array.isArray(profile.bundlePresets) ? profile.bundlePresets.length : 0,
     watchlistCount: Array.isArray(profile.watchedTokens) ? profile.watchedTokens.length : 0,
@@ -10980,13 +11034,48 @@ async function updateWebReferralProfile(userId, body = {}) {
   const { profile: existing } = ensureWebProfileDefaults(store, userId);
   const referralPayoutWallet = body.clearPayout
     ? ""
-    : String(body.referralPayoutWallet || body.wallet || "").trim()
+      : String(body.referralPayoutWallet || body.wallet || "").trim()
       ? normalizeConnectedWalletPublicKey(body.referralPayoutWallet || body.wallet)
       : existing.referralPayoutWallet || "";
+  const traderBoardWalletMode = ["all", "manual"].includes(String(body.traderBoardWalletMode || "").trim().toLowerCase())
+    ? String(body.traderBoardWalletMode).trim().toLowerCase()
+    : existing.traderBoardWalletMode || "all";
+  let traderBoardWalletIndexes = Array.isArray(existing.traderBoardWalletIndexes) ? existing.traderBoardWalletIndexes : [];
+  let traderBoardWalletPublicKeys = Array.isArray(existing.traderBoardWalletPublicKeys) ? existing.traderBoardWalletPublicKeys : [];
+  if (body.traderBoardWalletIndexes !== undefined || body.traderBoardWalletMode !== undefined) {
+    const walletStore = await readWalletStore();
+    const rawIndexes = Array.isArray(body.traderBoardWalletIndexes)
+      ? body.traderBoardWalletIndexes
+      : String(body.traderBoardWalletIndexes || "").split(/[,\s]+/);
+    traderBoardWalletIndexes = uniqueStrings(rawIndexes
+      .map((value) => String(value || "").replace(/[^\d]/g, ""))
+      .filter(Boolean))
+      .slice(0, 50);
+    const selectedWallets = traderBoardWalletIndexes
+      .map((index) => {
+        try {
+          const walletIndex = Number.parseInt(index, 10);
+          return { ...getWalletAt(walletStore, walletIndex, userId), webIndex: walletIndex };
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
+    traderBoardWalletIndexes = selectedWallets.map((wallet) => String(wallet.webIndex || wallet.index || ""));
+    traderBoardWalletPublicKeys = uniqueStrings(selectedWallets.map((wallet) => wallet.publicKey).filter(Boolean));
+    if (parseBoolean(String(body.showOnTraderBoard ?? existing.showOnTraderBoard ?? "false")) && traderBoardWalletMode === "manual" && !traderBoardWalletPublicKeys.length) {
+      const error = new Error("Select at least one wallet for the trader board, or choose All SlimeWire wallets.");
+      error.statusCode = 400;
+      throw error;
+    }
+  }
   const profile = {
     ...existing,
     referralPayoutWallet,
     showOnTraderBoard: parseBoolean(String(body.showOnTraderBoard ?? existing.showOnTraderBoard ?? "false")),
+    traderBoardWalletMode,
+    traderBoardWalletIndexes,
+    traderBoardWalletPublicKeys,
     updatedAt: now
   };
   store.profiles[key] = profile;
@@ -10994,7 +11083,9 @@ async function updateWebReferralProfile(userId, body = {}) {
   await audit("web_referral_profile_update", {
     userId,
     hasPayoutWallet: Boolean(referralPayoutWallet),
-    showOnTraderBoard: profile.showOnTraderBoard
+    showOnTraderBoard: profile.showOnTraderBoard,
+    traderBoardWalletMode,
+    traderBoardWalletCount: traderBoardWalletPublicKeys.length
   });
   return { profile };
 }
@@ -11204,6 +11295,10 @@ async function webSlimewireTraders() {
     if (!userId) continue;
     const profile = authStore.profiles?.[userId];
     if (!profile?.showOnTraderBoard) continue;
+    if (profile.traderBoardWalletMode === "manual") {
+      const selectedPublicKeys = new Set((Array.isArray(profile.traderBoardWalletPublicKeys) ? profile.traderBoardWalletPublicKeys : []).map(String));
+      if (!selectedPublicKeys.size || !selectedPublicKeys.has(String(trade.walletPublicKey || ""))) continue;
+    }
     const current = totals.get(userId) || {
       userId,
       tradeCount: 0,
@@ -11239,6 +11334,10 @@ async function webSlimewireTraders() {
         shortWallet: profile.connectedWallet?.shortPublicKey || "",
         referralCode: profile.referralCode || "",
         referralLink: profile.referralCode ? webReferralLink(profile.referralCode) : "",
+        trackedWalletMode: profile.traderBoardWalletMode || "all",
+        trackedWalletCount: profile.traderBoardWalletMode === "manual"
+          ? (Array.isArray(profile.traderBoardWalletPublicKeys) ? profile.traderBoardWalletPublicKeys.length : 0)
+          : "all",
         realizedLamports: realized.toString(),
         realizedLabel: `${realized >= 0n ? "+" : "-"}${lamportsBigToSol(realized >= 0n ? realized : -realized)} SOL`,
         roiLabel: row.spent > 0n ? `${Number((realized * 10000n) / row.spent / 100n)}%` : "n/a",
@@ -12485,7 +12584,7 @@ async function webBuyAmountLamports(wallet, body = {}) {
   return solToLamports(parsePositiveNumber(String(body.amountSol || "")));
 }
 
-async function webBalanceRows(userId) {
+async function webBalanceRows(userId, options = {}) {
   const store = await readWalletStore();
   const wallets = walletsForOwner(store, userId);
   const rows = [];
@@ -12504,11 +12603,11 @@ async function webBalanceRows(userId) {
 
     try {
       const keypair = decryptWallet(wallet);
-      const balance = await getSolBalanceCached(keypair.publicKey);
+      const balance = await getSolBalanceCached(keypair.publicKey, { force: Boolean(options.force) });
       row.sol = lamportsToSol(balance);
       row.lamports = String(balance);
 
-      const { accounts, warnings } = await getOwnedTokenAccountsWithWarningsCached(keypair.publicKey);
+      const { accounts, warnings } = await getOwnedTokenAccountsWithWarningsCached(keypair.publicKey, { force: Boolean(options.force) });
       row.warnings = warnings || [];
       row.tokens = accounts
         .filter((account) => account.rawAmount > 0n)
@@ -12530,7 +12629,7 @@ async function webBalanceRows(userId) {
   return rows;
 }
 
-async function webConnectedWalletBalance(userId) {
+async function webConnectedWalletBalance(userId, options = {}) {
   const profile = await webProfileForUser(userId);
   const connected = profile.connectedWallet || null;
   if (!connected?.publicKey) return null;
@@ -12551,10 +12650,10 @@ async function webConnectedWalletBalance(userId) {
 
   try {
     const owner = new PublicKey(connected.publicKey);
-    const balance = await getSolBalanceCached(owner);
+    const balance = await getSolBalanceCached(owner, { force: Boolean(options.force) });
     row.sol = lamportsToSol(balance);
     row.lamports = String(balance);
-    const { accounts, warnings } = await getOwnedTokenAccountsWithWarningsCached(owner);
+    const { accounts, warnings } = await getOwnedTokenAccountsWithWarningsCached(owner, { force: Boolean(options.force) });
     row.warnings = warnings || [];
     const tokens = accounts
       .filter((account) => account.rawAmount > 0n)
@@ -12586,8 +12685,8 @@ async function webConnectedWalletBalance(userId) {
   return row;
 }
 
-async function webPositionRows(userId) {
-  const positions = await buildPositionsOverview(userId);
+async function webPositionRows(userId, options = {}) {
+  const positions = await buildPositionsOverview(userId, options);
   const limited = positions.slice(0, 25);
   const metadataByMint = await tokenMetadataMapForMints(limited.map((position) => position.tokenMint), {
     timeoutMs: 2_000,
@@ -12702,6 +12801,148 @@ async function webPnlCard(userId, tokenMintText) {
     png,
     filename: `pnl-card-${sanitizeFilenamePart(metadata.symbol || row.tokenMint)}.png`
   };
+}
+
+async function webTxAudit(signatureText) {
+  const signature = String(signatureText || "").trim();
+  if (!/^[1-9A-HJ-NP-Za-km-z]{40,100}$/.test(signature)) {
+    throw new Error("Paste a valid Solana transaction signature.");
+  }
+
+  const tx = await rpcWithRetry("get transaction audit", () => connection.getParsedTransaction(signature, {
+    commitment: "finalized",
+    maxSupportedTransactionVersion: 0
+  }));
+  if (!tx) {
+    return {
+      signature,
+      status: "not_found",
+      message: "Finalized transaction was not found by the configured RPC. Try again later or check the signature on Solscan.",
+      explorerUrl: `https://solscan.io/tx/${signature}`
+    };
+  }
+
+  const solDeltas = parseSolBalanceDeltas(tx);
+  const tokenDeltas = parseTokenBalanceDeltas(tx);
+  const createdAtas = detectCreatedAssociatedTokenAccounts(tx);
+  const swapActivity = detectSwapActivity(tx);
+  const feePayer = solDeltas[0]?.account || "";
+
+  return {
+    signature,
+    status: tx.meta?.err ? "failed" : "finalized",
+    error: tx.meta?.err || null,
+    slot: tx.slot,
+    blockTime: tx.blockTime || null,
+    blockTimeLabel: tx.blockTime ? new Date(tx.blockTime * 1000).toISOString() : "",
+    feeLamports: tx.meta?.fee || 0,
+    feeSol: lamportsToSol(tx.meta?.fee || 0),
+    feePayer,
+    signer: feePayer,
+    programs: swapActivity.programs,
+    swapActivity,
+    solDeltas,
+    tokenDeltas,
+    createdAssociatedTokenAccounts: createdAtas,
+    logs: tx.meta?.logMessages || [],
+    explorerUrl: `https://solscan.io/tx/${signature}`,
+    shouldRefreshBalances: !tx.meta?.err && (solDeltas.length > 0 || tokenDeltas.length > 0 || createdAtas.length > 0)
+  };
+}
+
+function parseSolBalanceDeltas(tx) {
+  const accountKeys = tx.transaction?.message?.accountKeys || [];
+  const pre = tx.meta?.preBalances || [];
+  const post = tx.meta?.postBalances || [];
+  return accountKeys.map((key, index) => {
+    const pubkey = key.pubkey?.toBase58?.() || key.pubkey?.toString?.() || key.toString?.() || String(key);
+    const before = Number(pre[index] || 0);
+    const after = Number(post[index] || 0);
+    const delta = after - before;
+    if (delta === 0) return null;
+    return {
+      account: pubkey,
+      shortAccount: shortMint(pubkey),
+      beforeSol: lamportsToSol(before),
+      afterSol: lamportsToSol(after),
+      deltaSol: formatSignedLamports(BigInt(delta))
+    };
+  }).filter(Boolean);
+}
+
+function parseTokenBalanceDeltas(tx) {
+  const byKey = new Map();
+  const collect = (balance, side) => {
+    if (!balance?.mint) return;
+    const owner = balance.owner || "";
+    const key = `${balance.accountIndex}:${owner}:${balance.mint}`;
+    const current = byKey.get(key) || {
+      accountIndex: balance.accountIndex,
+      owner,
+      shortOwner: owner ? shortMint(owner) : "",
+      mint: balance.mint,
+      shortMint: shortMint(balance.mint),
+      decimals: balance.uiTokenAmount?.decimals ?? null,
+      preRaw: 0n,
+      postRaw: 0n
+    };
+    const amount = BigInt(balance.uiTokenAmount?.amount || 0);
+    if (side === "pre") current.preRaw = amount;
+    else current.postRaw = amount;
+    byKey.set(key, current);
+  };
+
+  for (const balance of tx.meta?.preTokenBalances || []) collect(balance, "pre");
+  for (const balance of tx.meta?.postTokenBalances || []) collect(balance, "post");
+
+  return [...byKey.values()].map((row) => {
+    const delta = row.postRaw - row.preRaw;
+    const decimals = Number.isInteger(row.decimals) ? row.decimals : 0;
+    return {
+      ...row,
+      preAmount: rawTokenAmountToUi(row.preRaw, decimals),
+      postAmount: rawTokenAmountToUi(row.postRaw, decimals),
+      deltaAmount: `${delta < 0n ? "-" : ""}${rawTokenAmountToUi(delta < 0n ? -delta : delta, decimals)}`
+    };
+  }).filter((row) => row.preRaw !== row.postRaw);
+}
+
+function detectCreatedAssociatedTokenAccounts(tx) {
+  return flattenParsedInstructions(tx)
+    .filter((instruction) => {
+      const type = String(instruction.parsed?.type || "").toLowerCase();
+      const program = String(instruction.program || instruction.programId || "").toLowerCase();
+      return type.includes("create") && (type.includes("associated") || program.includes("associated"));
+    })
+    .map((instruction) => ({
+      type: instruction.parsed?.type || "create",
+      account: instruction.parsed?.info?.account || instruction.parsed?.info?.associatedAccount || "",
+      mint: instruction.parsed?.info?.mint || "",
+      wallet: instruction.parsed?.info?.wallet || instruction.parsed?.info?.owner || "",
+      program: instruction.program || String(instruction.programId || "")
+    }));
+}
+
+function detectSwapActivity(tx) {
+  const instructions = flattenParsedInstructions(tx);
+  const logs = tx.meta?.logMessages || [];
+  const programs = uniqueStrings(instructions.map((instruction) => (
+    instruction.programId?.toBase58?.() || instruction.programId?.toString?.() || instruction.program || ""
+  )).filter(Boolean)).slice(0, 20);
+  const lowerLogs = logs.join("\n").toLowerCase();
+  const swapLike = /jupiter|raydium|orca|meteora|pump|swap|route/.test(lowerLogs)
+    || instructions.some((instruction) => /swap|route/i.test(String(instruction.parsed?.type || instruction.program || "")));
+  return {
+    detected: swapLike,
+    programs,
+    summary: swapLike ? "Swap/route activity detected from parsed instructions or logs." : "No obvious swap activity detected in parsed logs."
+  };
+}
+
+function flattenParsedInstructions(tx) {
+  const top = tx.transaction?.message?.instructions || [];
+  const inner = (tx.meta?.innerInstructions || []).flatMap((group) => group.instructions || []);
+  return [...top, ...inner].filter(Boolean);
 }
 
 async function webKolScan(userId, mode = "hot", wallet = "") {
@@ -14094,9 +14335,10 @@ async function webSniperScan(userId, mode) {
   };
 }
 
-async function webLivePairs(userId, bucket = "live") {
+async function webLivePairs(userId, bucket = "live", options = {}) {
   const safeBucket = normalizeLivePairBucket(bucket);
-  const cacheKey = safeBucket;
+  const sort = String(options.sort || "best").toLowerCase();
+  const cacheKey = `${safeBucket}:${sort}`;
   const cached = livePairsSharedCache.get(cacheKey) || { cachedAt: 0, value: null, promise: null };
   if (CONFIG.livePairsSharedCacheMs > 0 && cached.value && Date.now() - cached.cachedAt < CONFIG.livePairsSharedCacheMs) {
     return cached.value;
@@ -14106,7 +14348,7 @@ async function webLivePairs(userId, bucket = "live") {
     return cached.promise;
   }
 
-  const promise = buildWebLivePairs(userId, safeBucket);
+  const promise = buildWebLivePairs(userId, safeBucket, { sort });
   if (CONFIG.livePairsSharedCacheMs > 0) {
     livePairsSharedCache.set(cacheKey, { ...cached, promise });
   }
@@ -14125,8 +14367,9 @@ async function webLivePairs(userId, bucket = "live") {
   }
 }
 
-async function buildWebLivePairs(userId, bucket = "live") {
+async function buildWebLivePairs(userId, bucket = "live", options = {}) {
   const safeBucket = normalizeLivePairBucket(bucket);
+  const sort = String(options.sort || "best").toLowerCase();
   const scanState = nextSniperScanState(`web:${userId}`, `livepairs:${safeBucket}`);
   const candidates = await fetchLivePairCandidates({ ttlMs: safeBucket === "live" ? 500 : 2_500, timeoutMs: safeBucket === "live" ? 1_200 : 1_800, scanState, bucket: safeBucket });
   const baseRows = uniqueSniperScoreRows(candidates.map(livePairCandidateToRow).filter(Boolean))
@@ -14135,48 +14378,20 @@ async function buildWebLivePairs(userId, bucket = "live") {
   const enrichedRows = safeBucket !== "live" || CONFIG.livePairsImageEnrich
     ? await enrichWebLivePairsForImages(baseRows)
     : baseRows;
-  let usedRelaxedBucket = false;
   const targetLimit = livePairBucketLimit(safeBucket);
   let liveRows = uniqueSniperScoreRows(enrichedRows)
     .filter((row) => isWebLivePairCandidate(row, safeBucket))
-    .sort(compareWebLivePairs);
-  if (liveRows.length < targetLimit && safeBucket !== "live") {
-    usedRelaxedBucket = true;
-    liveRows = uniqueSniperScoreRows([
-      ...liveRows,
-      ...enrichedRows
-        .filter((row) => isWebLivePairCandidate(row, safeBucket, { relaxedAge: true }))
-        .map((row) => ({ ...row, bucketNote: "nearby age match" }))
-    ])
-      .sort(compareWebLivePairs);
-  }
-  if (liveRows.length < targetLimit && safeBucket !== "live") {
-    liveRows = uniqueSniperScoreRows([
-      ...liveRows,
-      ...enrichedRows
-        .filter((row) => isWebLivePairBackfillCandidate(row, safeBucket))
-        .map((row) => ({ ...row, bucketNote: "active backfill" }))
-    ])
-      .sort(compareWebLivePairs);
-  }
-  if (liveRows.length < targetLimit && safeBucket !== "live") {
-    liveRows = uniqueSniperScoreRows([
-      ...liveRows,
-      ...enrichedRows
-        .filter((row) => isWebLivePairBackfillCandidate(row, safeBucket, { allowUnknownMarketCap: true }))
-        .map((row) => ({ ...row, bucketNote: "activity backfill" }))
-    ])
-      .sort(compareWebLivePairs);
-  }
+    .sort((a, b) => compareWebLivePairs(a, b, sort));
   const safety = await maybeFilterWebLivePairsForSafety(liveRows, targetLimit);
-  const safeRows = CONFIG.livePairsImageEnrich && safeBucket === "live"
+  const safeRows = sortLivePairs(CONFIG.livePairsImageEnrich && safeBucket === "live"
     ? await enrichWebLivePairsForImages(safety.rows)
-    : safety.rows;
+    : safety.rows, sort).slice(0, targetLimit);
   rememberSniperScanRows(`web:${userId}`, `livepairs:${safeBucket}`, safeRows);
 
   return {
     label: livePairBucketLabel(safeBucket),
     bucket: safeBucket,
+    sort,
     refreshCount: scanState.refreshCount,
     scanned: candidates.length,
     qualified: liveRows.length,
@@ -14184,36 +14399,18 @@ async function buildWebLivePairs(userId, bucket = "live") {
     refreshedAt: new Date().toISOString(),
     refreshSeconds: CONFIG.livePairsRefreshSeconds,
     message: safeRows.length
-      ? livePairStatusMessage(safeRows.length, { ...safety.stats, relaxedAge: usedRelaxedBucket }, safeBucket)
+      ? livePairStatusMessage(safeRows.length, safety.stats, safeBucket)
       : `${livePairBucketLabel(safeBucket)} did not find matching pairs right now. It will refresh while this tab is open.`
   };
 }
 
 function normalizeLivePairBucket(bucket) {
-  const normalized = String(bucket || "live").trim().toLowerCase().replace(/[^a-z0-9]/g, "");
-  const map = {
-    live: "live",
-    fresh: "live",
-    under1h: "under1h",
-    onehour: "under1h",
-    hour: "under1h",
-    under3h: "under3h",
-    threehour: "under3h",
-    under1d: "under1d",
-    day: "under1d",
-    under24h: "under1d"
-  };
-  return map[normalized] || "live";
+  return normalizeLivePairBucketCore(bucket);
 }
 
 function livePairBucketLabel(bucket) {
-  const labels = {
-    live: "Live Pairs",
-    under1h: "10-59 Minute Pairs",
-    under3h: "Under 3 Hour Pairs",
-    under1d: "Under 1 Day Pairs"
-  };
-  return labels[normalizeLivePairBucket(bucket)] || labels.live;
+  const label = livePairBucketLabelCore(bucket);
+  return label === "Live" ? "Live Pairs" : `${label} Pairs`;
 }
 
 function livePairBucketLimit(bucket) {
@@ -14221,22 +14418,11 @@ function livePairBucketLimit(bucket) {
 }
 
 function livePairAgeMinutesValue(item) {
-  const seconds = Number(item?.pairAgeSeconds);
-  if (Number.isFinite(seconds)) return seconds / 60;
-  const minutes = Number(item?.pairAgeMinutes);
-  if (Number.isFinite(minutes)) return minutes;
-  return null;
+  return pairAgeMinutesFromData(item);
 }
 
 function isLivePairInBucket(item, bucket) {
-  const safeBucket = normalizeLivePairBucket(bucket);
-  const ageMinutes = livePairAgeMinutesValue(item);
-  if (safeBucket === "live") return ageMinutes === null || ageMinutes < 10;
-  if (ageMinutes === null) return false;
-  if (safeBucket === "under1h") return ageMinutes >= 10 && ageMinutes < 60;
-  if (safeBucket === "under3h") return ageMinutes >= 60 && ageMinutes < 180;
-  if (safeBucket === "under1d") return ageMinutes >= 180 && ageMinutes < 1440;
-  return true;
+  return isLivePairInBucketWindow(item, bucket);
 }
 
 function isLivePairInRelaxedBucket(item, bucket) {
@@ -14272,6 +14458,13 @@ function livePairCandidateToRow(candidate) {
   const volumeH1 = firstNumber(volumeObject.h1, profile.volumeH1, profile.volume_h1, volumeNumber) || 0;
   const m5 = normalizePercentLike(profile.priceChange?.m5 ?? profile.price_change_m5 ?? profile.m5) || 0;
   const h1 = normalizePercentLike(profile.priceChange?.h1 ?? profile.price_change_h1 ?? profile.h1) || 0;
+  const txns5m = profile.txns?.m5 || profile.transactions?.m5 || {};
+  const txnsH1 = profile.txns?.h1 || profile.transactions?.h1 || {};
+  const buys5m = Number(firstNumber(txns5m.buys, profile.buys5m, profile.buys_5m) || 0);
+  const sells5m = Number(firstNumber(txns5m.sells, profile.sells5m, profile.sells_5m) || 0);
+  const buysH1 = Number(firstNumber(txnsH1.buys, profile.buysH1, profile.buys_h1, profile.buys) || 0);
+  const sellsH1 = Number(firstNumber(txnsH1.sells, profile.sellsH1, profile.sells_h1, profile.sells) || 0);
+  const buyPressure = buyPressureRatio(buys5m + buysH1, sells5m + sellsH1);
   const source = candidate.source || "live";
   const symbol = firstString(profile.symbol, profile.ticker) || shortMint(candidate.tokenMint);
   const name = firstString(profile.name) || "Fresh Launch";
@@ -14295,7 +14488,7 @@ function livePairCandidateToRow(candidate) {
     source
   });
 
-  return {
+  const row = {
     tokenMint: candidate.tokenMint,
     symbol,
     name,
@@ -14307,7 +14500,11 @@ function livePairCandidateToRow(candidate) {
     liquidityUsd,
     volume5m,
     volumeH1,
-    buyPressure: 1,
+    buyPressure,
+    buys5m,
+    sells5m,
+    buysH1,
+    sellsH1,
     scalpSetup: "Fresh launch",
     scalpScore: 0,
     modeRelevance: 0,
@@ -14331,6 +14528,15 @@ function livePairCandidateToRow(candidate) {
     telegramUrl,
     isPump,
     pumpUrl: isPump ? pumpFunUrl(candidate.tokenMint) : ""
+  };
+  const bestPick = computeBestPickScore(row);
+  return {
+    ...row,
+    bestPickScore: bestPick.score,
+    bestPickLabel: bestPick.label,
+    bestPickInputs: bestPick.inputs,
+    bestPickWarnings: bestPick.warnings,
+    reasons: bestPick.warnings.length ? bestPick.warnings : row.reasons
   };
 }
 
@@ -14407,7 +14613,7 @@ async function enrichWebLivePairsForImages(rows) {
     const pairAgeSeconds = pairCreatedAt ? Math.max(0, Math.floor((Date.now() - Number(pairCreatedAt)) / 1000)) : row.pairAgeSeconds;
     const isPump = webLivePairIsPump({ ...row, symbol, name });
 
-    enriched[index] = {
+    const nextRow = {
       ...row,
       symbol,
       name,
@@ -14424,6 +14630,14 @@ async function enrichWebLivePairsForImages(rows) {
       pairAgeMinutes: Number.isFinite(Number(pairAgeSeconds)) ? Math.floor(Number(pairAgeSeconds) / 60) : row.pairAgeMinutes,
       isPump,
       pumpUrl: isPump ? pumpFunUrl(row.tokenMint) : ""
+    };
+    const bestPick = computeBestPickScore(nextRow);
+    enriched[index] = {
+      ...nextRow,
+      bestPickScore: bestPick.score,
+      bestPickLabel: bestPick.label,
+      bestPickInputs: bestPick.inputs,
+      bestPickWarnings: bestPick.warnings
     };
   });
 
@@ -14480,7 +14694,10 @@ function isWebLivePairBackfillCandidate(item, bucket = "live", options = {}) {
     && !flags.has("sell pressure");
 }
 
-function compareWebLivePairs(a, b) {
+function compareWebLivePairs(a, b, sort = "best") {
+  const sorted = sortLivePairs([a, b], sort);
+  if (sorted[0] === b) return 1;
+  if (sorted[0] === a) return -1;
   const aCreated = Number(a.pairCreatedAt || 0);
   const bCreated = Number(b.pairCreatedAt || 0);
   return (bCreated - aCreated)
@@ -14534,9 +14751,21 @@ async function filterWebLivePairsForSafety(rows, limit = 12) {
 }
 
 function webLivePairRow(row) {
+  const bestPick = row.bestPickScore ? {
+    score: row.bestPickScore,
+    label: row.bestPickLabel || "",
+    inputs: row.bestPickInputs || {},
+    warnings: row.bestPickWarnings || []
+  } : computeBestPickScore(row);
   return {
     ...webSniperRow(row),
-    pairAgeLabel: formatLivePairAgeLabel(row.pairAgeSeconds, row.pairAgeMinutes),
+    pairAgeLabel: formatLivePairAgeFromData(row),
+    bestPickScore: bestPick.score,
+    bestPickLabel: bestPick.label,
+    bestPickInputs: bestPick.inputs,
+    bestPickWarnings: bestPick.warnings,
+    scoreBreakdown: bestPick.inputs,
+    scoreWarnings: bestPick.warnings,
     safetyNote: row.safetyNote || "Mint/freeze safety passed",
     liveLabel: Number.isFinite(Number(row.pairAgeSeconds)) && Number(row.pairAgeSeconds) <= 60 ? "Seconds Old" : row.pairAgeMinutes !== null && Number(row.pairAgeMinutes) <= 30 ? "Just Listed" : isPumpStyleToken(row) ? "Pump Feed" : "Live Pair"
   };
@@ -14597,6 +14826,11 @@ function webSniperRow(row) {
     volume5mLabel: formatUsdCompact(row.volume5m || 0) || "$0",
     volumeH1: row.volumeH1,
     volumeH1Label: formatUsdCompact(row.volumeH1 || 0) || "$0",
+    buys5m: row.buys5m || 0,
+    sells5m: row.sells5m || 0,
+    buysH1: row.buysH1 || 0,
+    sellsH1: row.sellsH1 || 0,
+    txnsLabel: `${Number(row.buys5m || 0) + Number(row.buysH1 || 0)}/${Number(row.sells5m || 0) + Number(row.sellsH1 || 0)}`,
     m5: row.m5,
     h1: row.h1,
     h6: row.h6,
