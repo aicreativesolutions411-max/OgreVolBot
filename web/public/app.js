@@ -4451,6 +4451,21 @@ function compactStatsHtml(row = {}) {
   `;
 }
 
+function compactMetricsLineHtml(row = {}) {
+  const mc = firstStatLabel(row.marketCapLabel, row.fdvLabel, compactUsd(row.marketCap));
+  const liq = firstStatLabel(row.liquidityLabel, compactUsd(row.liquidityUsd));
+  const vol15 = firstStatLabel(row.volumeM15Label, compactUsd(row.volumeM15));
+  const vol1h = firstStatLabel(row.volumeH1Label, row.volumeLabel, compactUsd(row.volumeH1));
+  return `
+    <div class="compact-metrics-line">
+      <span>MC <b>${escapeHtml(mc)}</b></span>
+      <span>Liq <b>${escapeHtml(liq)}</b></span>
+      <span>15m <b>${escapeHtml(vol15)}</b></span>
+      <span>1h <b>${escapeHtml(vol1h)}</b></span>
+    </div>
+  `;
+}
+
 function miniTokenLinksHtml(row = {}, shareText = "") {
   const text = shareText || livePairShareText(row);
   const sniperCount = Number(row.sniperCount || row.snipers || 0);
@@ -4496,8 +4511,8 @@ function compactSignalRowsHtml(rows, options = {}) {
             </div>
             <button type="button" class="ca-copy" data-copy="${escapeHtml(row.tokenMint)}">${escapeHtml(shortAddress(row.tokenMint))}</button>
             <span>${escapeHtml(row.pairAgeLabel || formatAgeFromRow(row) || "age unknown")} | ${escapeHtml(row.scalpSetup || row.momentum || row.category || "live")}</span>
+            ${compactMetricsLineHtml(row)}
             ${miniTokenLinksHtml(row)}
-            ${compactStatsHtml(row)}
           </div>
           ${scoreBadgeHtml(row)}
           <div class="compact-row-actions">
@@ -4553,19 +4568,15 @@ function terminalHtml() {
         <section class="command-grid">
           <article class="terminal-panel best-picks-panel">
             <header><h4>Best Picks</h4><span>Score + reasons</span></header>
-            ${compactSignalRowsHtml(bestRows, { limit: 5, actionLabel: "Buy", emptyTitle: "No Best Picks yet", emptyMessage: "Refresh Live Pairs to score current pairs." })}
+            ${compactSignalRowsHtml(bestRows, { limit: 4, actionLabel: "Buy", emptyTitle: "No Best Picks yet", emptyMessage: "Refresh Live Pairs to score current pairs." })}
           </article>
           <article class="terminal-panel live-pairs-panel">
             <header><h4>Live Pairs</h4><button data-tab="live">Open</button></header>
             ${compactSignalRowsHtml(newestLiveRows, { limit: 6, actionLabel: activePresetButtonLabel() })}
           </article>
-          <article class="terminal-panel live-trades-panel">
-            <header><h4>Live Trades</h4><button data-tab="liveTrades">Open</button></header>
-            ${liveTradeRowsHtml(6)}
-          </article>
           <article class="terminal-panel kol-panel">
             <header><h4>KOL Signals</h4><button data-kol-refresh>${state.kolLoading ? "Loading..." : "Refresh"}</button></header>
-            ${compactSignalRowsHtml(kolRows, { limit: 5, actionLabel: "Buy", emptyTitle: "No KOL signals loaded", emptyMessage: "Refresh KOL Tracker to load signals." })}
+            ${compactSignalRowsHtml(kolRows, { limit: 6, actionLabel: "Buy", emptyTitle: "No KOL signals loaded", emptyMessage: "Refresh KOL Tracker to load signals." })}
           </article>
           <article class="terminal-panel watchlist-panel">
             <header><h4>Watchlist</h4><button data-refresh-watchlist>${state.watchlistLoading ? "Refreshing..." : "Refresh"}</button></header>

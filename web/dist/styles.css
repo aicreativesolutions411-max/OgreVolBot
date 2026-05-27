@@ -5699,6 +5699,27 @@ button[data-position-sell][data-position-sell-percent="100"],
   font-weight: 900;
 }
 
+[data-app][data-route="terminal"] .compact-metrics-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 8px;
+  min-width: 0;
+  margin-top: 1px;
+  color: var(--slime-muted);
+  font-size: 10px;
+  line-height: 1.25;
+}
+
+[data-app][data-route="terminal"] .compact-metrics-line span {
+  min-width: 0;
+  white-space: nowrap;
+}
+
+[data-app][data-route="terminal"] .compact-metrics-line b {
+  color: var(--slime-text);
+  font-weight: 900;
+}
+
 [data-app][data-route="terminal"] .signal-actions {
   grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
   gap: 6px;
@@ -5759,6 +5780,80 @@ button[data-position-sell][data-position-sell-percent="100"],
     min-height: 28px;
     padding: 0 5px;
     font-size: 9px;
+  }
+}
+
+[data-app][data-route="terminal"] .live-trades-panel {
+  display: none !important;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel .compact-signal-list {
+  grid-template-columns: repeat(4, minmax(178px, 1fr)) !important;
+}
+
+[data-app][data-route="terminal"] .live-pairs-panel,
+[data-app][data-route="terminal"] .kol-panel,
+[data-app][data-route="terminal"] .watchlist-panel,
+[data-app][data-route="terminal"] .token-preview-panel {
+  grid-column: span 6 !important;
+}
+
+[data-app][data-route="terminal"] .compact-signal-main .ca-copy {
+  width: max-content;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--slime-green-strong);
+  box-shadow: none;
+  line-height: 1.1;
+}
+
+@media (min-width: 900px) and (max-width: 1500px) {
+  [data-app][data-route="terminal"] .live-pairs-panel .compact-signal-row,
+  [data-app][data-route="terminal"] .kol-panel .compact-signal-row,
+  [data-app][data-route="terminal"] .watchlist-panel .compact-signal-row {
+    grid-template-columns: 42px minmax(0, 1fr) !important;
+    min-height: 98px;
+  }
+
+  [data-app][data-route="terminal"] .live-pairs-panel .compact-row-actions,
+  [data-app][data-route="terminal"] .kol-panel .compact-row-actions,
+  [data-app][data-route="terminal"] .watchlist-panel .compact-row-actions {
+    grid-column: 1 / -1 !important;
+    grid-row: 2 !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+
+  [data-app][data-route="terminal"] .compact-link-row {
+    max-height: 46px;
+    overflow: hidden;
+  }
+}
+
+@media (max-width: 900px) {
+  [data-app][data-route="terminal"] .best-picks-panel .compact-signal-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  [data-app][data-route="terminal"] .live-pairs-panel,
+  [data-app][data-route="terminal"] .kol-panel,
+  [data-app][data-route="terminal"] .watchlist-panel,
+  [data-app][data-route="terminal"] .token-preview-panel {
+    grid-column: auto !important;
+  }
+}
+
+@media (max-width: 620px) {
+  [data-app][data-route="terminal"] .best-picks-panel .compact-signal-list {
+    grid-template-columns: 1fr !important;
+  }
+
+  [data-app][data-route="terminal"] .compact-metrics-line {
+    font-size: 9px;
+    gap: 2px 6px;
   }
 }
 
