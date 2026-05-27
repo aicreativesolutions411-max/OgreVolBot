@@ -686,9 +686,10 @@ async function handleWebApiRequest(request, response, requestUrl) {
       const auth = await authenticateOptionalWebRequest(request);
       const bucket = requestUrl.searchParams.get("bucket") || "live";
       const sort = requestUrl.searchParams.get("sort") || "best";
+      const force = parseBoolean(requestUrl.searchParams.get("force") || "false");
       sendWebJson(request, response, 200, {
         ok: true,
-        livePairs: await webLivePairs(auth?.userId || "guest", bucket, { sort })
+        livePairs: await webLivePairs(auth?.userId || "guest", bucket, { sort, force })
       });
       return;
     }
@@ -1047,9 +1048,10 @@ async function handleWebApiRequest(request, response, requestUrl) {
     if (request.method === "GET" && pathname === "/api/web/live-pairs") {
       const bucket = requestUrl.searchParams.get("bucket") || "live";
       const sort = requestUrl.searchParams.get("sort") || "best";
+      const force = parseBoolean(requestUrl.searchParams.get("force") || "false");
       sendWebJson(request, response, 200, {
         ok: true,
-        livePairs: await webLivePairs(auth.userId, bucket, { sort })
+        livePairs: await webLivePairs(auth.userId, bucket, { sort, force })
       });
       return;
     }
@@ -7361,10 +7363,10 @@ function metadataFromDexPair(tokenMint, best = null) {
     websiteUrl: links.websiteUrl,
     twitterUrl: links.twitterUrl,
     telegramUrl: links.telegramUrl,
-    marketCap: best?.marketCap || null,
-    fdv: best?.fdv || null,
+    marketCap: firstNumber(best?.marketCap, best?.fdv),
+    fdv: firstNumber(best?.fdv),
     priceChange: best?.priceChange || null,
-    liquidityUsd: best?.liquidity?.usd || null,
+    liquidityUsd: firstNumber(best?.liquidity?.usd),
     volume: best?.volume || null,
     txns: best?.txns || null,
     pairCreatedAt: best?.pairCreatedAt || null
@@ -7542,7 +7544,7 @@ async function fetchDexSearchCandidatesForLiveBucket(bucket, options = {}) {
 
     const data = await fetchJson(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(query)}`, {
       headers,
-      timeoutMs: options.timeoutMs || 2_500
+      timeoutMs: options.timeoutMs || 3_000
     }).catch(() => null);
     const value = sniperCandidatesFromDexPairs(arrayFromApiData(data, ["pairs"]), `live:${safeBucket}:${query}`);
     dexSearchCandidatesCache.set(cacheKey, { cachedAt: Date.now(), value });
@@ -7561,7 +7563,7 @@ function livePairBucketSearchQueries(bucket, scanState = {}) {
   const list = querySets[normalizeLivePairBucket(bucket)] || [];
   const refreshCount = Number(scanState?.refreshCount || 0);
   const offset = refreshCount * 2 + stringModulo(bucket, list.length || 1) + Math.floor(Date.now() / 60_000);
-  return rotateItems(list, offset).slice(0, 4);
+  return rotateItems(list, offset).slice(0, 6);
 }
 
 function compareLivePairCandidates(a, b) {
@@ -7634,7 +7636,7 @@ async function fetchManualLaunchCandidates() {
 async function fetchPhotonNewPairCandidates(options = {}) {
   if (!CONFIG.photonNewPairsUrl) return [];
   const ttlMs = Number.isFinite(Number(options.ttlMs)) ? Number(options.ttlMs) : Math.max(500, Math.min(CONFIG.manualLaunchScanIntervalMs, 2_000));
-  if (ttlMs > 0 && Date.now() - photonNewPairsCache.cachedAt < ttlMs) {
+  if (!options.force && ttlMs > 0 && Date.now() - photonNewPairsCache.cachedAt < ttlMs) {
     return photonNewPairsCache.value;
   }
 
@@ -7761,6 +7763,7 @@ function sniperCandidatesFromDexPairs(pairs, source) {
       const quote = pair?.quoteToken || {};
       const token = base.address && base.address !== SOL_MINT ? base : quote.address && quote.address !== SOL_MINT ? quote : null;
       if (!token?.address) return null;
+      const links = dexPairLinks(pair);
       return {
         tokenMint: token.address,
         source,
@@ -7768,10 +7771,18 @@ function sniperCandidatesFromDexPairs(pairs, source) {
           symbol: token.symbol || "",
           name: token.name || "",
           icon: pair?.info?.imageUrl || "",
+          imageUrl: pair?.info?.imageUrl || "",
+          websiteUrl: links.websiteUrl,
+          twitterUrl: links.twitterUrl,
+          telegramUrl: links.telegramUrl,
           pairCreatedAt: pair?.pairCreatedAt || null,
           marketCap: firstNumber(pair?.marketCap, pair?.fdv),
           fdv: pair?.fdv || null,
-          volume: firstNumber(pair?.volume?.m5, pair?.volume?.h1, pair?.volume?.h24)
+          liquidityUsd: pair?.liquidity?.usd || null,
+          liquidity: pair?.liquidity || null,
+          volume: pair?.volume || null,
+          txns: pair?.txns || null,
+          priceChange: pair?.priceChange || null
         }
       };
     })
@@ -14338,17 +14349,18 @@ async function webSniperScan(userId, mode) {
 async function webLivePairs(userId, bucket = "live", options = {}) {
   const safeBucket = normalizeLivePairBucket(bucket);
   const sort = String(options.sort || "best").toLowerCase();
+  const force = Boolean(options.force);
   const cacheKey = `${safeBucket}:${sort}`;
   const cached = livePairsSharedCache.get(cacheKey) || { cachedAt: 0, value: null, promise: null };
-  if (CONFIG.livePairsSharedCacheMs > 0 && cached.value && Date.now() - cached.cachedAt < CONFIG.livePairsSharedCacheMs) {
+  if (!force && CONFIG.livePairsSharedCacheMs > 0 && cached.value && Date.now() - cached.cachedAt < CONFIG.livePairsSharedCacheMs) {
     return cached.value;
   }
 
-  if (CONFIG.livePairsSharedCacheMs > 0 && cached.promise) {
+  if (!force && CONFIG.livePairsSharedCacheMs > 0 && cached.promise) {
     return cached.promise;
   }
 
-  const promise = buildWebLivePairs(userId, safeBucket, { sort });
+  const promise = buildWebLivePairs(userId, safeBucket, { sort, force });
   if (CONFIG.livePairsSharedCacheMs > 0) {
     livePairsSharedCache.set(cacheKey, { ...cached, promise });
   }
@@ -14370,11 +14382,18 @@ async function webLivePairs(userId, bucket = "live", options = {}) {
 async function buildWebLivePairs(userId, bucket = "live", options = {}) {
   const safeBucket = normalizeLivePairBucket(bucket);
   const sort = String(options.sort || "best").toLowerCase();
+  const isLive = safeBucket === "live";
   const scanState = nextSniperScanState(`web:${userId}`, `livepairs:${safeBucket}`);
-  const candidates = await fetchLivePairCandidates({ ttlMs: safeBucket === "live" ? 500 : 2_500, timeoutMs: safeBucket === "live" ? 1_200 : 1_800, scanState, bucket: safeBucket });
+  const candidates = await fetchLivePairCandidates({
+    ttlMs: isLive ? 500 : 1_500,
+    timeoutMs: isLive ? 1_300 : 2_800,
+    scanState,
+    bucket: safeBucket,
+    force: Boolean(options.force)
+  });
   const baseRows = uniqueSniperScoreRows(candidates.map(livePairCandidateToRow).filter(Boolean))
     .sort(compareWebLivePairs)
-    .slice(0, safeBucket === "live" ? 80 : 120);
+    .slice(0, isLive ? 110 : 240);
   const enrichedRows = safeBucket !== "live" || CONFIG.livePairsImageEnrich
     ? await enrichWebLivePairsForImages(baseRows)
     : baseRows;
@@ -14382,6 +14401,15 @@ async function buildWebLivePairs(userId, bucket = "live", options = {}) {
   let liveRows = uniqueSniperScoreRows(enrichedRows)
     .filter((row) => isWebLivePairCandidate(row, safeBucket))
     .sort((a, b) => compareWebLivePairs(a, b, sort));
+  if (!isLive && liveRows.length < targetLimit) {
+    const currentMints = new Set(liveRows.map((row) => row.tokenMint));
+    const backfillRows = uniqueSniperScoreRows(enrichedRows)
+      .filter((row) => !currentMints.has(row.tokenMint))
+      .filter((row) => isLivePairInBucket(row, safeBucket))
+      .filter((row) => isWebLivePairBackfillCandidate(row, safeBucket, { allowUnknownMarketCap: true }))
+      .sort((a, b) => compareWebLivePairs(a, b, sort));
+    liveRows = uniqueSniperScoreRows([...liveRows, ...backfillRows]).sort((a, b) => compareWebLivePairs(a, b, sort));
+  }
   const safety = await maybeFilterWebLivePairsForSafety(liveRows, targetLimit);
   const safeRows = sortLivePairs(CONFIG.livePairsImageEnrich && safeBucket === "live"
     ? await enrichWebLivePairsForImages(safety.rows)
@@ -14414,7 +14442,7 @@ function livePairBucketLabel(bucket) {
 }
 
 function livePairBucketLimit(bucket) {
-  return normalizeLivePairBucket(bucket) === "live" ? 18 : 24;
+  return normalizeLivePairBucket(bucket) === "live" ? 18 : 30;
 }
 
 function livePairAgeMinutesValue(item) {

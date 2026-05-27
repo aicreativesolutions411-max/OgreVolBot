@@ -566,11 +566,28 @@ async function loadAll(options = {}) {
     return;
   }
 
-  state.loading = true;
-  render();
+  const showLoading = !options.silent;
+  if (showLoading) {
+    state.loading = true;
+    render();
+  }
 
   try {
     const forceQuery = options.force ? "?force=true" : "";
+    if (options.skipCore) {
+      const [pnl, launchWatches, presets, watchlist] = await Promise.all([
+        api("/api/web/pnl"),
+        api("/api/web/launch/watches"),
+        api("/api/web/presets"),
+        api("/api/web/watchlist")
+      ]);
+      state.pnl = pnl.pnl || null;
+      state.launchWatches = launchWatches.watches || [];
+      state.presets = presets.presets || { trade: [], bundle: [] };
+      ensureSelectedPresetsStillExist();
+      state.watchlist = watchlist.watchlist || { rows: [], count: 0 };
+      return;
+    }
     const [wallets, balances, positions, pnl, launchWatches, presets, watchlist] = await Promise.all([
       api("/api/web/wallets"),
       api(`/api/web/balances${forceQuery}`),
@@ -594,9 +611,27 @@ async function loadAll(options = {}) {
       state.walletRefreshError = "";
     }
   } finally {
-    state.loading = false;
+    if (showLoading) {
+      state.loading = false;
+    }
     render();
   }
+}
+
+async function loadWalletCore(options = {}) {
+  if (!state.user || !state.token) return;
+  const forceQuery = options.force ? "?force=true" : "";
+  const [wallets, balances, positions] = await Promise.all([
+    api("/api/web/wallets"),
+    api(`/api/web/balances${forceQuery}`),
+    api(`/api/web/positions${forceQuery}`)
+  ]);
+  state.wallets = wallets.wallets || [];
+  state.balances = balances.balances || [];
+  state.connectedWalletBalance = balances.connectedWallet || null;
+  state.positions = positions.positions || [];
+  state.lastWalletRefreshAt = new Date().toISOString();
+  state.walletRefreshError = "";
 }
 
 function normalizeLivePairBucket(bucket) {
@@ -612,7 +647,7 @@ function currentLivePairsUpdatedAt() {
   return state.livePairsLastUpdatedByBucket[state.livePairBucket] || state.livePairsLastUpdatedAt || "";
 }
 
-async function loadLivePairs({ silent = false, bucket = state.livePairBucket, renderOnComplete = true } = {}) {
+async function loadLivePairs({ silent = false, bucket = state.livePairBucket, renderOnComplete = true, force = false } = {}) {
   const safeBucket = normalizeLivePairBucket(bucket);
   const isActiveBucket = safeBucket === state.livePairBucket;
   state.livePairsLoadingByBucket = { ...state.livePairsLoadingByBucket, [safeBucket]: true };
@@ -621,7 +656,8 @@ async function loadLivePairs({ silent = false, bucket = state.livePairBucket, re
   if (isActiveBucket || !silent) render();
 
   try {
-    const data = await api(`/api/web/live-pairs?bucket=${encodeURIComponent(safeBucket)}&sort=${encodeURIComponent(state.terminalSort || "best")}`);
+    const forceQuery = force ? "&force=true" : "";
+    const data = await api(`/api/web/live-pairs?bucket=${encodeURIComponent(safeBucket)}&sort=${encodeURIComponent(state.terminalSort || "best")}${forceQuery}`);
     const value = data.livePairs;
     const updatedAt = value?.refreshedAt || new Date().toISOString();
     state.livePairsByBucket = { ...state.livePairsByBucket, [safeBucket]: value };
@@ -640,13 +676,13 @@ async function loadLivePairs({ silent = false, bucket = state.livePairBucket, re
   }
 }
 
-async function refreshLivePairBuckets({ silent = false } = {}) {
-  await loadLivePairs({ silent, bucket: state.livePairBucket });
+async function refreshLivePairBuckets({ silent = false, force = false } = {}) {
+  await loadLivePairs({ silent, bucket: state.livePairBucket, force });
   const otherBuckets = LIVE_PAIR_BUCKETS
     .map(([bucket]) => bucket)
     .filter((bucket) => bucket !== state.livePairBucket);
   await Promise.allSettled(otherBuckets.map((bucket) => (
-    loadLivePairs({ silent: true, bucket, renderOnComplete: false })
+    loadLivePairs({ silent: true, bucket, renderOnComplete: false, force })
   )));
   if (state.activeTab === "live" || state.activeTab === "terminal") render();
 }
@@ -807,8 +843,10 @@ async function refreshWalletState({ force = true } = {}) {
   state.walletRefreshError = "";
   render();
   try {
-    await loadAll({ force });
+    await loadWalletCore({ force });
     state.lastWalletRefreshAt = new Date().toISOString();
+    render();
+    await loadAll({ force, skipCore: true, silent: true });
   } catch (error) {
     state.walletRefreshError = error.message || "Refresh failed.";
     setError(state.walletRefreshError);
@@ -923,6 +961,7 @@ function profileHtml() {
     ${loginSecuritySection()}
     ${connectWalletSection()}
     ${profilePfpSection()}
+    ${badgeShowcaseSection()}
     ${xConnectSection()}
     ${referralSection()}
     ${traderBoardSection()}
@@ -1021,11 +1060,61 @@ function profilePfpSection() {
         Upload Image
         <input data-avatar-file type="file" accept="image/png,image/jpeg,image/webp">
       </label>
+      ${pfpPresetPickerHtml()}
       <div class="profile-actions">
         <button type="button" data-use-x-avatar ${state.xHandle ? "" : "disabled"}>${xHandle ? `Use ${escapeHtml(xHandle)} PFP` : "Use X PFP"}</button>
         ${hasAvatar ? `<button type="button" data-clear-avatar>Remove</button>` : ""}
       </div>
       <small data-avatar-status>${hasAvatar ? `PFP saved${state.user.avatarSource ? ` from ${escapeHtml(state.user.avatarSource)}` : ""}.` : "Optional. You can also connect X below and use that public profile image."}</small>
+    </section>
+  `;
+}
+
+function pfpPresetPickerHtml() {
+  const presets = [
+    ["./assets/slimewire/png/slimewire-mark.png", "SlimeWire"],
+    ["./assets/slimewire/png/token-mascots/token-mascot-1.png", "Ogre"],
+    ["./assets/slimewire/png/token-mascots/token-mascot-2.png", "Swamp"],
+    ["./assets/slimewire/png/token-mascots/token-mascot-3.png", "Moss"],
+    ["./assets/slimewire/png/token-mascots/token-mascot-4.png", "Slime"]
+  ];
+  return `
+    <div class="pfp-preset-grid" aria-label="Preset PFP options">
+      ${presets.map(([url, label]) => `
+        <button type="button" data-preset-avatar="${escapeHtml(url)}" data-avatar-label="${escapeHtml(label)}" aria-label="Use ${escapeHtml(label)} PFP">
+          <img src="${escapeHtml(url)}" alt="">
+        </button>
+      `).join("")}
+    </div>
+  `;
+}
+
+function badgeShowcaseSection() {
+  const tradeCount = Number(state.pnl?.totals?.tradeCount || 0);
+  const hasWallet = state.wallets.length > 0 || Boolean(state.user?.connectedWallet);
+  const badges = [
+    ["System Synced", "Earned when your wallet state is fresh.", state.lastUpdatedAt && !state.walletRefreshError, "health"],
+    ["Active Preset", "Earned after saving or selecting a fast trade preset.", Boolean(presetById("trade", state.selectedTradePresetId)), "snipe"],
+    ["Best Picks Scout", "Earned after opening Live Terminal or Sniper scans.", Boolean(state.livePairRows?.length || state.scan), "best-picks"],
+    ["Wallet Ready", "Earned after creating, importing, or connecting a wallet.", hasWallet, "wallet"],
+    ["Trader", "Earned after SlimeWire records completed trades.", tradeCount > 0, "trade"],
+    ["Live Watcher", "Earned after adding coins to your watchlist.", Boolean(state.watchlist?.length), "watchlist"]
+  ];
+  return `
+    <section class="create-wallet-card badge-showcase-card">
+      <div>
+        <h3>SlimeWire Badges</h3>
+        <p>Badges unlock from actions you take on the panel. They are visual status marks only and do not expose wallets, sources, or private data.</p>
+      </div>
+      <div class="badge-grid">
+        ${badges.map(([label, detail, earned, icon]) => `
+          <article class="earned-badge ${earned ? "is-earned" : ""}">
+            <img src="./assets/slimewire/svg/icons/${escapeHtml(icon)}.svg" alt="" aria-hidden="true">
+            <strong>${escapeHtml(label)}</strong>
+            <small>${earned ? "Earned" : "Locked"} · ${escapeHtml(detail)}</small>
+          </article>
+        `).join("")}
+      </div>
     </section>
   `;
 }
@@ -2602,7 +2691,7 @@ function kolHtml() {
       <aside class="trade-side">
         <article>
           <h3>Custom KOL Wallet</h3>
-          <p>Paste any public Solana wallet to inspect current holdings, open KOLscan, or arm copy-watch from your selected wallets.</p>
+          <p>Paste any public Solana wallet to inspect current holdings, open an outside trader profile, or arm copy-watch from your selected wallets.</p>
           <label>
             Wallet Address
             <input data-kol-wallet type="text" placeholder="Paste KOL wallet" value="${escapeHtml(state.kolWallet || "")}">
@@ -2617,8 +2706,8 @@ function kolHtml() {
           <h3>KOL Tools</h3>
           <p>Open outside KOL dashboards for extra wallet context, then come back here to trade, bundle, or copy from your saved wallets.</p>
           <div class="card-actions">
-            <a href="https://kolscan.io/trades" target="_blank" rel="noreferrer">KOLscan Trades</a>
-            <a href="https://kolscan.io/leaderboard" target="_blank" rel="noreferrer">KOLscan Leaderboard</a>
+            <a href="https://kolscan.io/trades" target="_blank" rel="noreferrer">Live Trader Feed</a>
+            <a href="https://kolscan.io/leaderboard" target="_blank" rel="noreferrer">Trader Leaderboard</a>
           </div>
         </article>
       </aside>
@@ -2632,14 +2721,21 @@ function kolHtml() {
 
 function kolScanStatusHtml() {
   const scan = state.kolScan || null;
-  const status = state.kolStatus
-    || scan?.message
-    || `Pick ${kolModeLabel(state.kolMode)} or tap Refresh.`;
-  const details = scan
-    ? ` ${Number(scan.kolCount || scan.kols?.length || 0)} KOL wallet(s), ${Number(scan.rows?.length || 0)} token signal(s).`
-    : "";
-  const updated = state.kolLastUpdatedAt ? ` Last updated ${formatDate(state.kolLastUpdatedAt)}.` : "";
-  return `<p class="trade-status kol-status">${escapeHtml(`${status}${state.kolLoading ? "" : details}${updated}`)}</p>`;
+  const modeLabel = kolModeLabel(state.kolMode);
+  const status = state.kolLoading
+    ? `Scanning ${modeLabel}`
+    : scan ? `${modeLabel} loaded` : `Pick ${modeLabel} or tap Refresh`;
+  const kolCount = Number(scan?.kolCount || scan?.kols?.length || 0);
+  const signalCount = Number(scan?.rows?.length || 0);
+  const updated = state.kolLastUpdatedAt ? formatDate(state.kolLastUpdatedAt) : "Not run";
+  return `
+    <div class="trade-status kol-status kol-status-grid">
+      <span>${escapeHtml(status)}</span>
+      <span>${escapeHtml(kolCount)} KOLs</span>
+      <span>${escapeHtml(signalCount)} signals</span>
+      <span>${escapeHtml(updated)}</span>
+    </div>
+  `;
 }
 
 function kolModeLabel(mode) {
@@ -2679,7 +2775,7 @@ function kolSummaryHtml() {
       <div class="trade-head">
         <div>
           <h3>${escapeHtml(scan.label || "KOL Tracker")}</h3>
-          <p>${escapeHtml(scan.message || "Live KOL leaderboard loaded.")}</p>
+          <p>${escapeHtml(`${kolModeLabel(state.kolMode)} with ${Number(scan.rows?.length || 0)} current token signal(s).`)}</p>
         </div>
         <span>${escapeHtml(scan.kolCount || kols.length)} tracked</span>
       </div>
@@ -2701,7 +2797,7 @@ function kolSummaryHtml() {
             <small>${escapeHtml(kol.source === "slimewire" ? `Tracking ${kol.trackedWalletMode === "manual" ? `${kol.trackedWalletCount || 0} wallet(s)` : "all wallets"}` : (kol.volumeLabel || "Volume n/a"))} | Last trade: ${escapeHtml(formatDate(kol.lastTradeAt))}</small>
             <div class="card-actions">
               ${kol.solscanUrl ? `<a href="${escapeHtml(kol.solscanUrl)}" target="_blank" rel="noreferrer">Wallet</a>` : ""}
-              ${kol.kolscanUrl || kol.wallet ? `<a href="${escapeHtml(kol.kolscanUrl || kolscanUrl(kol.wallet))}" target="_blank" rel="noreferrer">KOLscan</a>` : ""}
+              ${kol.kolscanUrl || kol.wallet ? `<a href="${escapeHtml(kol.kolscanUrl || kolscanUrl(kol.wallet))}" target="_blank" rel="noreferrer">Trader Profile</a>` : ""}
               ${xShareButton(kolProfileShareText(kol), "Share Watch")}
               ${kol.wallet ? `<button data-kol-scan-wallet="${escapeHtml(kol.wallet)}">Scan Positions</button>` : ""}
               ${kol.wallet ? `<button data-kol-copy-wallet="${escapeHtml(kol.wallet)}">Copy Wallet</button>` : ""}
@@ -4732,9 +4828,9 @@ function livePairsHtml() {
 function livePairBucketDescription(bucket) {
   const descriptions = {
     live: "Fresh launch feed. Focuses on pairs that just appeared, usually under 10 minutes old.",
-    under1h: "10-59 minute pairs. Filters out market caps below $7K.",
-    under3h: "One to three hour pairs. Filters out market caps below $7K.",
-    under1d: "Three to twenty-four hour pairs. Filters out market caps below $7K."
+    under1h: "Pairs created in the last 60 minutes, with lower-quality tiny caps pushed down.",
+    under3h: "Pairs created in the last 3 hours, refreshed with broader liquidity and volume data.",
+    under1d: "Pairs created in the last 24 hours, ranked by current liquidity, volume, momentum, and risk."
   };
   return descriptions[bucket] || descriptions.live;
 }
@@ -5153,6 +5249,12 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-save-trader-board]")) await saveTraderBoardSettings();
   if (target.matches("[data-use-x-avatar]")) await useXProfileAvatar();
   if (target.matches("[data-clear-avatar]")) await updateProfileAvatar({ clear: true }, "Removing PFP...");
+  if (target.matches("[data-preset-avatar]")) {
+    await updateProfileAvatar({
+      avatarUrl: target.dataset.presetAvatar,
+      avatarSource: target.dataset.avatarLabel || "preset"
+    }, "Saving preset PFP...");
+  }
   if (target.matches("[data-connect-wallet]")) await connectBrowserWallet(target.dataset.connectWallet);
   if (target.matches("[data-disconnect-wallet]")) await disconnectBrowserWallet();
   if (target.matches("[data-share-x]")) openXShare(target.dataset.shareText || "");
@@ -5323,7 +5425,7 @@ document.addEventListener("click", async (event) => {
   }
 
   if (target.matches("[data-refresh-live-pairs]")) {
-    await refreshLivePairBuckets().catch((error) => setError(error.message));
+    await refreshLivePairBuckets({ force: true }).catch((error) => setError(error.message));
   }
 
   if (target.matches("[data-refresh-watchlist]")) {
@@ -5335,7 +5437,7 @@ document.addEventListener("click", async (event) => {
     state.livePairs = currentLivePairs();
     state.livePairsLastUpdatedAt = currentLivePairsUpdatedAt();
     render();
-    await refreshLivePairBuckets().catch((error) => setError(error.message));
+    await refreshLivePairBuckets({ force: true }).catch((error) => setError(error.message));
   }
 
   if (target.matches("[data-scan-mode]")) {
