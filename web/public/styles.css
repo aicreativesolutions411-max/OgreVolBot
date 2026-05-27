@@ -3732,3 +3732,298 @@ code {
     grid-template-columns: 1fr;
   }
 }
+
+/* Mobile terminal fit pass: keep the Padre-style density without page-wide side scroll. */
+html,
+body {
+  max-width: 100%;
+}
+
+@media (max-width: 760px) {
+  html,
+  body {
+    overflow-x: hidden;
+  }
+
+  body::before {
+    opacity: 0.08;
+  }
+
+  img,
+  svg,
+  canvas,
+  iframe {
+    max-width: 100%;
+  }
+
+  .connect-view,
+  .dashboard,
+  .panel-host,
+  .panel,
+  .terminal-panel,
+  .command-terminal,
+  .command-workspace,
+  .trade-side,
+  .order-ticket-stack,
+  .signal-list {
+    max-width: 100%;
+    overflow-x: clip;
+  }
+
+  [data-app][data-route="terminal"] {
+    width: 100%;
+    max-width: 100%;
+    padding: 6px 6px 12px;
+    overflow-x: hidden;
+  }
+
+  [data-app][data-route="terminal"] *,
+  [data-app][data-route="connect"] * {
+    min-width: 0;
+  }
+
+  [data-app][data-route="terminal"] .topbar {
+    width: 100%;
+    max-width: 100%;
+    gap: 8px;
+    padding: 6px;
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  [data-app][data-route="terminal"] .powered img {
+    width: auto;
+    max-width: 150px;
+    height: 30px;
+  }
+
+  [data-app][data-route="terminal"] .topbar-right,
+  [data-app][data-route="terminal"] .top-auth-actions,
+  [data-app][data-route="terminal"] .top-auth-group,
+  [data-app][data-route="terminal"] .terminal-global-search,
+  [data-app][data-route="terminal"] .terminal-global-search input,
+  [data-app][data-route="terminal"] .top-sync-strip {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  [data-app][data-route="terminal"] .terminal-global-search {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  [data-app][data-route="terminal"] .terminal-global-search input {
+    width: 100%;
+  }
+
+  [data-app][data-route="terminal"] .top-sync-strip {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    border-radius: 12px;
+  }
+
+  [data-app][data-route="terminal"] .top-sync-strip button,
+  [data-app][data-route="terminal"] .top-sync-strip span {
+    width: 100%;
+    min-height: 30px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    padding: 0 7px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  [data-app][data-route="terminal"] .dashboard {
+    width: 100%;
+    max-width: 100%;
+    gap: 8px;
+  }
+
+  [data-app][data-route="terminal"] .metrics {
+    width: 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  [data-app][data-route="terminal"] .metrics article {
+    min-height: 62px;
+    padding: 9px 10px;
+  }
+
+  [data-app][data-route="terminal"] .tabs {
+    width: 100%;
+    max-width: 100%;
+    gap: 6px;
+    padding: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x proximity;
+  }
+
+  [data-app][data-route="terminal"] .tabs button {
+    flex: 0 0 auto;
+    width: auto;
+    max-width: min(48vw, 190px);
+    min-height: 38px;
+    justify-content: center;
+    scroll-snap-align: start;
+    white-space: nowrap;
+  }
+
+  [data-app][data-route="terminal"] .panel-host {
+    width: 100%;
+  }
+
+  [data-app][data-route="terminal"] .command-title {
+    width: 100%;
+    padding: 10px;
+    border-radius: 12px;
+    background: rgba(5, 8, 6, 0.74);
+  }
+
+  [data-app][data-route="terminal"] .terminal-title-row,
+  [data-app][data-route="terminal"] .terminal-panel header,
+  .head-actions,
+  .section-actions,
+  .card-actions,
+  .compact-row-actions,
+  .fast-preset-actions,
+  .profile-actions {
+    align-items: stretch;
+    flex-wrap: wrap;
+    max-width: 100%;
+  }
+
+  [data-app][data-route="terminal"] .terminal-title-row h2,
+  [data-app][data-route="terminal"] .terminal-title-row p {
+    overflow-wrap: anywhere;
+  }
+
+  [data-app][data-route="terminal"] .command-controls,
+  [data-app][data-route="terminal"] .command-grid,
+  [data-app][data-route="terminal"] .live-control-strip,
+  [data-app][data-route="terminal"] .preset-toolbar,
+  [data-app][data-route="terminal"] .fast-preset-builder,
+  [data-app][data-route="terminal"] .fast-preset-grid,
+  [data-app][data-route="terminal"] .quick-grid,
+  [data-app][data-route="terminal"] .volume-grid,
+  [data-app][data-route="terminal"] .wallet-exit-grid,
+  [data-app][data-route="terminal"] .inline-action,
+  [data-app][data-route="terminal"] .profile-card,
+  [data-app][data-route="terminal"] .create-wallet-card,
+  [data-app][data-route="terminal"] .wallet-connect-card,
+  [data-app][data-route="terminal"] .connected-wallet-card,
+  [data-app][data-route="terminal"] .account-check-card,
+  [data-app][data-route="terminal"] .download-card,
+  [data-app][data-route="terminal"] .pnl-summary {
+    grid-template-columns: 1fr !important;
+  }
+
+  [data-app][data-route="terminal"] .live-pair-buckets {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 7px;
+  }
+
+  [data-app][data-route="terminal"] .best-picks-panel .compact-signal-list,
+  [data-app][data-route="terminal"] .compact-signal-list,
+  [data-app][data-route="terminal"] .live-trade-list {
+    grid-template-columns: 1fr !important;
+  }
+
+  [data-app][data-route="terminal"] .compact-signal-row,
+  [data-app][data-route="terminal"] .live-trade-row,
+  [data-app][data-route="terminal"] .token-preview-card {
+    grid-template-columns: 40px minmax(0, 1fr) !important;
+    align-items: start;
+  }
+
+  [data-app][data-route="terminal"] .score-badge,
+  [data-app][data-route="terminal"] .compact-row-actions {
+    grid-column: 1 / -1;
+    justify-self: stretch;
+  }
+
+  [data-app][data-route="terminal"] .compact-row-actions,
+  [data-app][data-route="terminal"] .signal-actions,
+  [data-app][data-route="terminal"] .card-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  [data-app][data-route="terminal"] .section-actions,
+  [data-app][data-route="terminal"] .head-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  [data-app][data-route="terminal"] .section-actions button,
+  [data-app][data-route="terminal"] .section-actions a,
+  [data-app][data-route="terminal"] .head-actions button,
+  [data-app][data-route="terminal"] .card-actions button,
+  [data-app][data-route="terminal"] .card-actions a,
+  [data-app][data-route="terminal"] .compact-row-actions button {
+    width: 100%;
+  }
+
+  [data-app][data-route="terminal"] .signal-list {
+    overflow: visible;
+  }
+
+  [data-app][data-route="terminal"] .signal-header {
+    display: none;
+  }
+
+  [data-app][data-route="terminal"] .signal-row {
+    grid-template-columns: 1fr !important;
+    gap: 9px;
+    align-items: stretch;
+    min-height: 0;
+    padding: 10px;
+  }
+
+  [data-app][data-route="terminal"] .signal-token {
+    grid-template-columns: 40px minmax(0, 1fr);
+  }
+
+  [data-app][data-route="terminal"] .signal-cell,
+  [data-app][data-route="terminal"] .signal-name-row,
+  [data-app][data-route="terminal"] .compact-signal-main,
+  [data-app][data-route="terminal"] .live-trade-row {
+    overflow-wrap: anywhere;
+  }
+
+  [data-app][data-route="terminal"] .order-ticket-stack {
+    position: static;
+    max-height: none;
+    overflow: visible;
+  }
+
+  [data-app][data-route="terminal"] .trade-card,
+  [data-app][data-route="terminal"] .trade-side article,
+  [data-app][data-route="terminal"] .terminal-panel {
+    padding: 10px;
+  }
+}
+
+@media (max-width: 420px) {
+  [data-app][data-route="terminal"] .metrics {
+    grid-template-columns: 1fr;
+  }
+
+  [data-app][data-route="terminal"] .top-sync-strip,
+  [data-app][data-route="terminal"] .section-actions,
+  [data-app][data-route="terminal"] .head-actions,
+  [data-app][data-route="terminal"] .card-actions,
+  [data-app][data-route="terminal"] .compact-row-actions,
+  [data-app][data-route="terminal"] .signal-actions {
+    grid-template-columns: 1fr;
+  }
+
+  [data-app][data-route="terminal"] .live-pair-buckets {
+    grid-template-columns: 1fr !important;
+  }
+}
