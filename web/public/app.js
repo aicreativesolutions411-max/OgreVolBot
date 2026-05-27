@@ -4462,7 +4462,7 @@ function terminalHtml() {
         <section class="command-grid">
           <article class="terminal-panel best-picks-panel">
             <header><h4>Best Picks</h4><span>Score + reasons</span></header>
-            ${compactSignalRowsHtml(bestRows, { limit: 5, emptyTitle: "No Best Picks yet", emptyMessage: "Refresh Live Pairs to score current pairs." })}
+            ${compactSignalRowsHtml(bestRows, { limit: 5, actionLabel: "Buy", emptyTitle: "No Best Picks yet", emptyMessage: "Refresh Live Pairs to score current pairs." })}
           </article>
           <article class="terminal-panel live-pairs-panel">
             <header><h4>Live Pairs</h4><button data-tab="live">Open</button></header>
@@ -4474,11 +4474,11 @@ function terminalHtml() {
           </article>
           <article class="terminal-panel kol-panel">
             <header><h4>KOL Signals</h4><button data-kol-refresh>${state.kolLoading ? "Loading..." : "Refresh"}</button></header>
-            ${compactSignalRowsHtml(kolRows, { limit: 5, emptyTitle: "No KOL signals loaded", emptyMessage: "Refresh KOL Tracker to load signals." })}
+            ${compactSignalRowsHtml(kolRows, { limit: 5, actionLabel: "Buy", emptyTitle: "No KOL signals loaded", emptyMessage: "Refresh KOL Tracker to load signals." })}
           </article>
           <article class="terminal-panel watchlist-panel">
             <header><h4>Watchlist</h4><button data-refresh-watchlist>${state.watchlistLoading ? "Refreshing..." : "Refresh"}</button></header>
-            ${compactSignalRowsHtml(watchRows, { limit: 5, emptyTitle: "No watchlist yet", emptyMessage: "Tap Watch on any token row to save it here." })}
+            ${compactSignalRowsHtml(watchRows, { limit: 5, actionLabel: "Buy", emptyTitle: "No watchlist yet", emptyMessage: "Tap Watch on any token row to save it here." })}
           </article>
           <article class="terminal-panel token-preview-panel">
             <header><h4>Token Preview</h4><button data-use-token="${escapeHtml(token?.tokenMint || "")}">Trade</button></header>
