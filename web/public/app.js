@@ -331,9 +331,27 @@ function applyUserFromApi(user) {
   }
 }
 
+function firstFormValue(selectors) {
+  for (const selector of selectors) {
+    const element = $(selector);
+    if (element && !element.closest("[hidden]")) return String(element.value || "");
+  }
+  for (const selector of selectors) {
+    const element = $(selector);
+    if (element) return String(element.value || "");
+  }
+  return "";
+}
+
+function loginStatusElement() {
+  const visibleConnectStatus = $("[data-connect-status]");
+  if (visibleConnectStatus && !visibleConnectStatus.closest("[hidden]")) return visibleConnectStatus;
+  return $("[data-login-status]") || visibleConnectStatus;
+}
+
 function loginCredentialsFromForm({ requirePassword = false } = {}) {
-  const username = String($("[data-login-username]")?.value || "").trim();
-  const password = String($("[data-login-password]")?.value || "");
+  const username = firstFormValue(["[data-connect-login-username]", "[data-login-username]"]).trim();
+  const password = firstFormValue(["[data-connect-login-password]", "[data-login-password]"]);
   if (!username && !password && !requirePassword) return {};
   if (!username) throw new Error("Enter your username.");
   if (!password) throw new Error("Enter your password.");
@@ -382,7 +400,7 @@ function kolscanUrl(wallet) {
 
 async function createWebAccount() {
   setError("");
-  const status = $("[data-login-status]");
+  const status = loginStatusElement();
   try {
     const credentials = loginCredentialsFromForm();
     writeText(status, credentials.username ? "Creating saved login..." : "Creating account...");
@@ -405,7 +423,7 @@ async function createWebAccount() {
 
 async function passwordLogin() {
   setError("");
-  const status = $("[data-login-status]");
+  const status = loginStatusElement();
   try {
     const credentials = loginCredentialsFromForm({ requirePassword: true });
     writeText(status, "Logging in...");
@@ -428,7 +446,7 @@ async function passwordLogin() {
 
 async function createAccountAndConnectWallet() {
   setError("");
-  const status = $("[data-login-status]");
+  const status = loginStatusElement();
   try {
     if (!state.user) {
       const credentials = loginCredentialsFromForm();
@@ -446,9 +464,23 @@ async function createAccountAndConnectWallet() {
     state.activeTab = "profile";
     render();
     await connectBrowserWallet("solana");
+    if (state.user) {
+      state.route = "terminal";
+      window.history.pushState({}, "", "/terminal");
+      render();
+    }
   } catch (error) {
     setError(error.message);
   }
+}
+
+async function createAccountAndOpenWallets() {
+  await createWebAccount();
+  if (!state.user) return;
+  state.route = "terminal";
+  state.activeTab = "wallets";
+  window.history.pushState({}, "", "/terminal");
+  render();
 }
 
 async function logout() {
@@ -764,6 +796,7 @@ function render() {
   loginView.hidden = state.route !== "intro";
   if (connectView) connectView.hidden = state.route !== "connect";
   if (topLoginPanel) topLoginPanel.hidden = Boolean(state.user) || state.loginCollapsed;
+  setHidden("[data-connect-login-panel]", Boolean(state.user) || state.loginCollapsed);
   if (authActions) authActions.hidden = false;
   if (guestActions) guestActions.hidden = Boolean(state.user);
   if (sessionActions) sessionActions.hidden = !state.user;
@@ -5050,6 +5083,23 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
+  if (target.matches("[data-connect-login-toggle]")) {
+    state.loginCollapsed = !state.loginCollapsed;
+    render();
+    return;
+  }
+  if (target.matches("[data-connect-password-login]")) {
+    await passwordLogin();
+    return;
+  }
+  if (target.matches("[data-connect-create-account]")) {
+    await createWebAccount();
+    return;
+  }
+  if (target.matches("[data-connect-create-wallet]")) {
+    await createAccountAndOpenWallets();
+    return;
+  }
   if (target.matches("[data-web-signup]")) await createWebAccount();
   if (target.matches("[data-web-password-login]")) await passwordLogin();
   if (target.matches("[data-web-signup-connect]")) await createAccountAndConnectWallet();

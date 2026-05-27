@@ -67,13 +67,9 @@
 
       <section class="login-view swamp-splash" data-login>
         <button class="swamp-splash-button" type="button" data-nav-route="/connect" aria-label="Enter the Swamp">
-          <img src="./assets/slimewire-enter-swamp-splash.jpg" alt="Enter the Swamp">
+          <img class="swamp-splash-mark" src="./assets/slimewire/png/slimewire-mark.png" alt="SlimeWire">
+          <img class="swamp-splash-enter" src="./assets/slimewire/png/enter-swamp-button.png" alt="Enter the Swamp">
         </button>
-        <div class="splash-fineprint">
-          <a href="https://t.me/ogrecoinonsol" target="_blank" rel="noreferrer">Telegram</a>
-          <a href="https://ogremode.com/" target="_blank" rel="noreferrer">Website</a>
-          <a href="https://twitter.com/i/communities/1930265213917425858" target="_blank" rel="noreferrer">X</a>
-        </div>
       </section>
 
       <section class="connect-view" data-connect hidden>
@@ -101,20 +97,35 @@
             <h2>Start Sliming</h2>
             <p>Be in control of your swamp 24-7.</p>
             <span class="connect-subtitle">Continue with</span>
-            <div class="connect-provider-row">
+            <div class="connect-provider-row" aria-label="Connection methods">
               <a class="provider-orb" href="https://t.me/ogrecoinonsol" target="_blank" rel="noreferrer" aria-label="Open Telegram">TG</a>
-              <button class="provider-orb" type="button" data-web-signup-connect aria-label="Connect Phantom or Solflare">SOL</button>
-              <button class="provider-orb" type="button" data-open-login aria-label="Open login">ID</button>
-              <button class="provider-orb" type="button" data-web-signup aria-label="Create account">+</button>
+              <button class="provider-orb" type="button" data-web-signup-connect aria-label="Connect Phantom or Solflare wallet">SOL</button>
+              <button class="provider-orb" type="button" data-connect-login-toggle aria-label="Use saved SlimeWire login">ID</button>
+              <button class="provider-orb" type="button" data-connect-login-toggle aria-label="Use username or email login">@</button>
             </div>
+            <form class="connect-login-panel" data-connect-login-panel onsubmit="return false;" hidden>
+              <label>
+                Username or Email
+                <input data-connect-login-username type="text" autocomplete="username" placeholder="slimewire">
+              </label>
+              <label>
+                Password
+                <input data-connect-login-password type="password" autocomplete="current-password" placeholder="8+ characters">
+              </label>
+              <div class="connect-form-actions">
+                <button class="primary" type="button" data-connect-password-login>Lock In</button>
+                <button type="button" data-connect-create-account>Save Login</button>
+              </div>
+            </form>
             <div class="connect-actions">
               <button class="primary slime-login-button" type="button" data-web-signup-connect>Connect Wallet</button>
-              <button type="button" data-tab="wallets" data-nav-route="/terminal">Create Wallet</button>
-              <button type="button" data-open-login>Log In</button>
-              <button type="button" data-web-signup>Create Account</button>
+              <button type="button" data-connect-create-wallet>Create Wallet</button>
+              <button type="button" data-connect-login-toggle>Lock In</button>
+              <button type="button" data-connect-create-account>Create Account</button>
               <button type="button" data-nav-route="/terminal">Browse Terminal</button>
             </div>
             <small data-connected-wallet-summary>Connect a wallet or create an account when you are ready to trade.</small>
+            <small class="connect-status" data-connect-status data-wallet-connect-status></small>
             <p class="policy-copy">
               By signing in you agree to
               <a href="#slimeness" data-policy="terms">Slimeness</a>
