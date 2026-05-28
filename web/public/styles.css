@@ -6003,3 +6003,217 @@ button[data-position-sell][data-position-sell-percent="100"],
 [hidden] {
   display: none !important;
 }
+
+/* Final Live Terminal density pass: keep the command center readable without
+   spending the lower grid on duplicate watch/preview panels. */
+[data-app][data-route="terminal"] .command-grid {
+  grid-template-columns: repeat(12, minmax(0, 1fr)) !important;
+  gap: 14px !important;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel {
+  grid-column: 1 / -1 !important;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel .compact-signal-list {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fit, minmax(178px, 1fr)) !important;
+  gap: 10px !important;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel .compact-signal-row {
+  grid-template-columns: 42px minmax(0, 1fr) !important;
+  min-height: 132px !important;
+  padding: 10px !important;
+  align-content: start !important;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel .compact-signal-main {
+  grid-column: 2 !important;
+  grid-row: 1 !important;
+  min-width: 0 !important;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel .score-badge {
+  display: none !important;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel .compact-row-actions {
+  grid-column: 1 / -1 !important;
+  grid-row: 2 !important;
+  min-width: 0 !important;
+  margin-top: 6px !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+}
+
+[data-app][data-route="terminal"] .live-pairs-panel,
+[data-app][data-route="terminal"] .kol-panel {
+  grid-column: span 6 !important;
+  min-height: 700px !important;
+}
+
+[data-app][data-route="terminal"] .live-pairs-panel .compact-signal-list,
+[data-app][data-route="terminal"] .kol-panel .compact-signal-list {
+  gap: 10px !important;
+}
+
+[data-app][data-route="terminal"] .live-pairs-panel .compact-signal-row,
+[data-app][data-route="terminal"] .kol-panel .compact-signal-row {
+  grid-template-columns: 52px minmax(0, 1fr) 74px !important;
+  min-height: 148px !important;
+  padding: 11px 12px !important;
+  align-items: start !important;
+  align-content: start !important;
+}
+
+[data-app][data-route="terminal"] .live-pairs-panel .live-pair-avatar,
+[data-app][data-route="terminal"] .kol-panel .live-pair-avatar {
+  grid-column: 1 !important;
+  grid-row: 1 !important;
+  width: 48px !important;
+  height: 48px !important;
+}
+
+[data-app][data-route="terminal"] .live-pairs-panel .compact-signal-main,
+[data-app][data-route="terminal"] .kol-panel .compact-signal-main {
+  grid-column: 2 !important;
+  grid-row: 1 !important;
+  min-width: 0 !important;
+  padding-right: 0 !important;
+}
+
+[data-app][data-route="terminal"] .live-pairs-panel .score-badge,
+[data-app][data-route="terminal"] .kol-panel .score-badge {
+  display: flex !important;
+  position: static !important;
+  grid-column: 3 !important;
+  grid-row: 1 !important;
+  align-self: start !important;
+  justify-self: end !important;
+  width: 66px !important;
+  min-width: 0 !important;
+  padding: 6px 7px !important;
+  font-size: 11px !important;
+  line-height: 1.05 !important;
+}
+
+[data-app][data-route="terminal"] .live-pairs-panel .score-badge small,
+[data-app][data-route="terminal"] .kol-panel .score-badge small {
+  font-size: 9px !important;
+}
+
+[data-app][data-route="terminal"] .live-pairs-panel .compact-row-actions,
+[data-app][data-route="terminal"] .kol-panel .compact-row-actions {
+  grid-column: 1 / -1 !important;
+  grid-row: 2 !important;
+  width: 100% !important;
+  margin-top: 8px !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+}
+
+[data-app][data-route="terminal"] .live-pairs-panel .compact-row-actions button,
+[data-app][data-route="terminal"] .kol-panel .compact-row-actions button,
+[data-app][data-route="terminal"] .best-picks-panel .compact-row-actions button {
+  min-width: 0 !important;
+  min-height: 36px !important;
+  padding: 8px 8px !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+[data-app][data-route="terminal"] .compact-signal-main > div {
+  display: grid !important;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr) !important;
+  gap: 6px !important;
+  align-items: baseline !important;
+}
+
+[data-app][data-route="terminal"] .compact-signal-main > div strong,
+[data-app][data-route="terminal"] .compact-signal-main > div small,
+[data-app][data-route="terminal"] .compact-signal-main .ca-copy {
+  min-width: 0 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+[data-app][data-route="terminal"] .compact-metrics-line {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 3px 8px !important;
+  line-height: 1.15 !important;
+  max-height: none !important;
+  white-space: normal !important;
+}
+
+[data-app][data-route="terminal"] .compact-link-row {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 4px !important;
+  max-height: none !important;
+  overflow: visible !important;
+}
+
+[data-app][data-route="terminal"] .compact-link-row a,
+[data-app][data-route="terminal"] .compact-link-row button,
+[data-app][data-route="terminal"] .compact-link-row .sniper-pill {
+  min-height: 22px !important;
+  padding: 2px 7px !important;
+  font-size: 10px !important;
+}
+
+@media (max-width: 1180px) {
+  [data-app][data-route="terminal"] .live-pairs-panel,
+  [data-app][data-route="terminal"] .kol-panel {
+    grid-column: 1 / -1 !important;
+    min-height: 0 !important;
+  }
+}
+
+@media (max-width: 640px) {
+  [data-app][data-route="terminal"] .best-picks-panel .compact-signal-list {
+    grid-template-columns: 1fr !important;
+  }
+
+  [data-app][data-route="terminal"] .best-picks-panel .compact-signal-row,
+  [data-app][data-route="terminal"] .live-pairs-panel .compact-signal-row,
+  [data-app][data-route="terminal"] .kol-panel .compact-signal-row {
+    grid-template-columns: 44px minmax(0, 1fr) !important;
+    min-height: 0 !important;
+  }
+
+  [data-app][data-route="terminal"] .live-pairs-panel .score-badge,
+  [data-app][data-route="terminal"] .kol-panel .score-badge {
+    display: none !important;
+  }
+
+  [data-app][data-route="terminal"] .compact-row-actions {
+    grid-template-columns: 1.15fr 1fr 1fr !important;
+  }
+}
+
+/* Keep the right-side ticket steady while live feeds refresh on the left. */
+[data-app][data-route="terminal"] .terminal-dock {
+  position: sticky !important;
+  top: 82px !important;
+  align-self: start !important;
+  max-height: calc(100vh - 98px) !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain !important;
+  scrollbar-gutter: stable !important;
+  contain: layout paint !important;
+}
+
+[data-app][data-route="terminal"] .terminal-dock .terminal-ticket {
+  min-height: 0;
+}
+
+@media (max-width: 1180px) {
+  [data-app][data-route="terminal"] .terminal-dock {
+    position: static !important;
+    max-height: none !important;
+    overflow: visible !important;
+    contain: none !important;
+  }
+}

@@ -13196,12 +13196,13 @@ async function buildKolScan(userId, mode = "hot", wallet = "") {
       const solanaRows = hasSolanaTracker && (!madeRows.length || CONFIG.kolUseSolanaTrackerFallback)
         ? await fetchKolWalletTradeSignals(owner, safeMode).catch(() => [])
         : [];
-      const rows = await hydrateKolSignalMetadata(diversifyKolSignals(uniqueKolSignals([
+      const customCandidates = diversifyKolSignals(uniqueKolSignals([
         ...madeRows,
         ...solanaPositionRows,
         ...solanaRows,
         ...(localPart.rows || [])
-      ]).sort(compareKolSignals), 12));
+      ]).sort(compareKolSignals), 24);
+      const rows = diversifyKolSignals((await hydrateKolSignalMetadata(customCandidates)).sort(compareKolSignals), 12);
       return {
         ...base,
         configured: true,
@@ -13244,10 +13245,11 @@ async function buildKolScan(userId, mode = "hot", wallet = "") {
       ? await buildSolanaTrackerKolPart(safeMode).catch((error) => ({ rows: [], kols: [], error: formatError(error), calls: 1, signalWalletsChecked: 0 }))
       : { rows: [], kols: [], calls: 0, signalWalletsChecked: 0 };
 
-    const sorted = await hydrateKolSignalMetadata(diversifyKolSignals(uniqueKolSignals([
+    const signalCandidates = diversifyKolSignals(uniqueKolSignals([
       ...(madePart.rows || []),
       ...(solanaPart.rows || [])
-    ]).sort(compareKolSignals), 12));
+    ]).sort(compareKolSignals), 24);
+    const sorted = diversifyKolSignals((await hydrateKolSignalMetadata(signalCandidates)).sort(compareKolSignals), 12);
     const kols = uniqueKolSummaries([
       ...(madePart.kols || []),
       ...(solanaPart.kols || [])
@@ -13411,7 +13413,7 @@ function normalizePublicWalletPositionSignal(token, wallet, mode, index = 0) {
 async function hydrateKolSignalMetadata(rows) {
   const signals = Array.isArray(rows) ? rows : [];
   const mints = [...new Set(signals
-    .filter((row) => row?.tokenMint && needsKolMetadataHydration(row))
+    .filter((row) => row?.tokenMint)
     .map((row) => row.tokenMint))]
     .slice(0, 30);
   const metadataByMint = mints.length
@@ -13422,23 +13424,92 @@ async function hydrateKolSignalMetadata(rows) {
     const metadata = metadataByMint.get(row.tokenMint) || {};
     const symbol = meaningfulTokenText(row.symbol, row.tokenMint) || metadata.symbol || shortMint(row.tokenMint);
     const name = meaningfulTokenText(row.name, row.tokenMint) || metadata.name || (symbol !== shortMint(row.tokenMint) ? symbol : "Unknown Token");
+    const volume = metadata.volume || {};
+    const txns5m = metadata.txns?.m5 || {};
+    const txnsH1 = metadata.txns?.h1 || {};
+    const priceChange = metadata.priceChange || {};
+    const marketCap = firstMeaningfulNumber(row.marketCap, metadata.marketCap, row.fdv, metadata.fdv) || 0;
+    const fdv = firstMeaningfulNumber(row.fdv, metadata.fdv, marketCap) || 0;
+    const liquidityUsd = firstMeaningfulNumber(row.liquidityUsd, metadata.liquidityUsd) || 0;
+    const volume5m = firstMeaningfulNumber(row.volume5m, volume.m5) || 0;
+    const volumeM15 = firstMeaningfulNumber(row.volumeM15, volume.m15, volume.m15m) || 0;
+    const volumeM30 = firstMeaningfulNumber(row.volumeM30, volume.m30, volume.m30m) || 0;
+    const volumeH1 = firstMeaningfulNumber(row.volumeH1, volume.h1) || 0;
+    const volumeH24 = firstMeaningfulNumber(row.volumeH24, volume.h24, volume.d1) || 0;
+    const m5 = firstMeaningfulNumber(row.m5, priceChange.m5) || 0;
+    const h1 = firstMeaningfulNumber(row.h1, priceChange.h1) || 0;
+    const h6 = firstMeaningfulNumber(row.h6, priceChange.h6) || 0;
+    const h24 = firstMeaningfulNumber(row.h24, priceChange.h24) || 0;
+    const buys5m = firstMeaningfulNumber(row.buys5m, txns5m.buys) || 0;
+    const sells5m = firstMeaningfulNumber(row.sells5m, txns5m.sells) || 0;
+    const buysH1 = firstMeaningfulNumber(row.buysH1, txnsH1.buys) || 0;
+    const sellsH1 = firstMeaningfulNumber(row.sellsH1, txnsH1.sells) || 0;
+    const pairCreatedAt = firstMeaningfulNumber(normalizePairCreatedAt(row.pairCreatedAt), normalizePairCreatedAt(metadata.pairCreatedAt)) || null;
+    const pairAgeSeconds = pairCreatedAt
+      ? Math.max(0, Math.floor((Date.now() - pairCreatedAt) / 1000))
+      : Number.isFinite(Number(row.pairAgeSeconds)) ? Number(row.pairAgeSeconds) : null;
+    const pairAgeMinutes = Number.isFinite(Number(pairAgeSeconds))
+      ? Math.floor(Number(pairAgeSeconds) / 60)
+      : Number.isFinite(Number(row.pairAgeMinutes)) ? Number(row.pairAgeMinutes) : null;
     const isPump = Boolean(row.isPump) || isPumpStyleToken({
       tokenMint: row.tokenMint,
       symbol,
       name,
       source: row.source || metadata.source
     });
-    return {
+    const enriched = {
       ...row,
       symbol,
       name,
       imageUrl: firstString(row.imageUrl, metadata.imageUrl),
+      websiteUrl: firstString(row.websiteUrl, metadata.websiteUrl),
+      twitterUrl: firstString(row.twitterUrl, metadata.twitterUrl),
+      telegramUrl: firstString(row.telegramUrl, metadata.telegramUrl),
+      marketCap,
+      fdv,
+      marketCapLabel: formatUsdCompact(marketCap) || row.marketCapLabel || "n/a",
+      fdvLabel: formatUsdCompact(fdv) || row.fdvLabel || "n/a",
+      liquidityUsd,
+      liquidityLabel: formatUsdCompact(liquidityUsd) || row.liquidityLabel || "n/a",
+      volume5m,
+      volume5mLabel: formatUsdCompact(volume5m) || row.volume5mLabel || "n/a",
+      volumeM15,
+      volumeM15Label: formatUsdCompact(volumeM15) || row.volumeM15Label || "",
+      volumeM30,
+      volumeM30Label: formatUsdCompact(volumeM30) || row.volumeM30Label || "",
+      volumeH1,
+      volumeH1Label: formatUsdCompact(volumeH1) || row.volumeH1Label || row.volumeLabel || "n/a",
+      volumeH24,
+      volumeH24Label: formatUsdCompact(volumeH24) || row.volumeH24Label || "",
+      m5,
+      h1,
+      h6,
+      h24,
+      buys5m,
+      sells5m,
+      buysH1,
+      sellsH1,
+      txnsLabel: `${buys5m + buysH1}/${sells5m + sellsH1}`,
+      pairCreatedAt,
+      pairAgeSeconds,
+      pairAgeMinutes,
+      pairAgeLabel: Number.isFinite(Number(pairAgeSeconds)) ? formatLivePairAgeLabel(pairAgeSeconds, pairAgeMinutes) : row.pairAgeLabel,
       isPump,
       pumpUrl: row.pumpUrl || (isPump ? pumpFunUrl(row.tokenMint) : ""),
       valueLabel: row.valueLabel && row.valueLabel !== "n/a" ? row.valueLabel : metadata.volume?.h1 ? `${formatUsdCompact(metadata.volume.h1)} 1h vol` : row.valueLabel,
       roiLabel: row.roiLabel && row.roiLabel !== "n/a" ? row.roiLabel : metadata.marketCap ? `MC ${formatUsdCompact(metadata.marketCap)}` : row.roiLabel,
       dexUrl: row.dexUrl || dexScreenerUrl(row.tokenMint),
       kolscanUrl: row.kolscanUrl || kolscanAccountUrl(row.kolWallet)
+    };
+    const bestPick = computeBestPickScore(enriched);
+    return {
+      ...enriched,
+      bestPickScore: firstMeaningfulNumber(enriched.bestPickScore, bestPick.score) || bestPick.score,
+      bestPickLabel: enriched.bestPickLabel || bestPick.label,
+      bestPickInputs: enriched.bestPickInputs || bestPick.inputs,
+      bestPickWarnings: enriched.bestPickWarnings || bestPick.warnings,
+      scoreBreakdown: enriched.scoreBreakdown || bestPick.inputs,
+      scoreWarnings: enriched.scoreWarnings || bestPick.warnings
     };
   });
 }
@@ -13448,6 +13519,16 @@ function needsKolMetadataHydration(row) {
     || !meaningfulTokenText(row.name, row.tokenMint)
     || row.name === "Unknown Token"
     || !row.imageUrl;
+}
+
+function firstMeaningfulNumber(...values) {
+  const finite = [];
+  for (const value of values) {
+    if (value === null || value === undefined || value === "") continue;
+    const number = Number(value);
+    if (Number.isFinite(number)) finite.push(number);
+  }
+  return finite.find((number) => number !== 0) ?? finite[0] ?? null;
 }
 
 function meaningfulTokenText(value, tokenMint = "") {
@@ -14169,9 +14250,33 @@ function scoreKolSignal({ position, kol, mode }) {
 }
 
 function compareKolSignals(a, b) {
-  return (Number(b.score || 0) - Number(a.score || 0))
-    || (Number(b.valueUsd || 0) - Number(a.valueUsd || 0))
+  return (kolSignalFreshnessRank(b) - kolSignalFreshnessRank(a))
+    || (Number(b.bestPickScore || b.score || 0) - Number(a.bestPickScore || a.score || 0))
+    || (Number(b.marketCap || b.fdv || 0) > 0 ? 1 : 0) - (Number(a.marketCap || a.fdv || 0) > 0 ? 1 : 0)
+    || (Number(b.liquidityUsd || 0) > 0 ? 1 : 0) - (Number(a.liquidityUsd || 0) > 0 ? 1 : 0)
+    || (Number(b.volumeH1 || b.valueUsd || 0) - Number(a.volumeH1 || a.valueUsd || 0))
     || (Date.parse(b.lastTradeAt || 0) - Date.parse(a.lastTradeAt || 0));
+}
+
+function kolSignalFreshnessRank(signal = {}) {
+  const tradeHours = hoursSince(signal.lastTradeAt);
+  if (Number.isFinite(tradeHours)) {
+    if (tradeHours <= 1) return 12;
+    if (tradeHours <= 6) return 9;
+    if (tradeHours <= 24) return 6;
+    if (tradeHours <= 72) return 2;
+    return -8;
+  }
+
+  const createdAt = normalizePairCreatedAt(signal.pairCreatedAt);
+  if (!createdAt && !Number.isFinite(Number(signal.pairAgeSeconds))) return 0;
+  const ageMinutes = createdAt
+    ? (Date.now() - createdAt) / 60_000
+    : Number(signal.pairAgeSeconds) / 60;
+  if (ageMinutes <= 60) return 10;
+  if (ageMinutes <= 180) return 8;
+  if (ageMinutes <= 1440) return 5;
+  return -4;
 }
 
 function uniqueKolSignals(signals) {

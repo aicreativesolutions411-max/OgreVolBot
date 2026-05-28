@@ -91,6 +91,7 @@ const state = {
   terminalSubtab: "positions",
   terminalSort: "best",
   terminalToken: "",
+  terminalAutoToken: "",
   terminalTxSignature: "",
   terminalTxAudit: null,
   terminalTxLoading: false,
@@ -867,7 +868,7 @@ function shouldDeferTerminalRender() {
   const tag = String(active.tagName || "").toLowerCase();
   const editable = active.isContentEditable || ["input", "textarea", "select"].includes(tag);
   if (!editable) return false;
-  return Boolean(active.closest(".fast-preset-builder, .preset-toolbar, .preset-card, .order-ticket, .volume-grid, .sniper-setup, .wallet-exit-grid"));
+  return Boolean(active.closest(".fast-preset-builder, .preset-toolbar, .preset-card, .order-ticket, .order-ticket-stack, .terminal-dock, .trade-side, .volume-grid, .sniper-setup, .wallet-exit-grid"));
 }
 
 function requestDeferredRender() {
@@ -931,6 +932,9 @@ function render(options = {}) {
 function renderTabs() {
   const panel = $("[data-panel]");
   if (!panel) return;
+  const terminalDockScrollTop = state.activeTab === "terminal"
+    ? (panel.querySelector(".terminal-dock")?.scrollTop || 0)
+    : 0;
   document.querySelectorAll("[data-tab]").forEach((button) => {
     if (!button.closest(".tabs")) button.removeAttribute("data-active");
   });
@@ -955,6 +959,10 @@ function renderTabs() {
   if (state.activeTab === "txAudit") panel.innerHTML = txAuditHtml();
   if (state.activeTab === "sniper") panel.innerHTML = sniperHtml();
   syncCustomFields(panel);
+  if (state.activeTab === "terminal") {
+    const dock = panel.querySelector(".terminal-dock");
+    if (dock) dock.scrollTop = terminalDockScrollTop;
+  }
   scheduleLivePairsAutoRefresh();
   scheduleScannerAutoRefresh();
   scheduleKolAutoRefresh();
@@ -4384,13 +4392,103 @@ function allVisibleSignalRows() {
 }
 
 function selectedTerminalTokenRow() {
-  const mint = String(state.terminalToken || state.tradeToken || "").trim();
-  if (!mint) return (currentLivePairs()?.rows || [])[0] || allVisibleSignalRows()[0] || null;
-  return allVisibleSignalRows().find((row) => String(row.tokenMint) === mint) || {
+  const allRows = allVisibleSignalRows();
+  const rowForMint = (mint) => allRows.find((row) => String(row.tokenMint) === mint) || {
     tokenMint: mint,
     shortMint: shortAddress(mint),
     symbol: shortAddress(mint),
     dexUrl: dexUrl(mint)
+  };
+  const explicitMint = String(state.terminalToken || state.tradeToken || "").trim();
+  if (explicitMint) return rowForMint(explicitMint);
+  const autoMint = String(state.terminalAutoToken || "").trim();
+  if (autoMint) return rowForMint(autoMint);
+  const firstRow = (currentLivePairs()?.rows || [])[0] || allRows[0] || null;
+  if (firstRow?.tokenMint) state.terminalAutoToken = String(firstRow.tokenMint);
+  return firstRow;
+}
+
+function marketDataRowsByMint() {
+  const rows = [
+    ...Object.values(state.livePairsByBucket || {}).flatMap((feed) => feed?.rows || []),
+    ...(state.livePairs?.rows || []),
+    ...(state.scan?.rows || []),
+    ...(state.watchlist?.rows || [])
+  ];
+  const byMint = new Map();
+  for (const row of rows) {
+    const mint = String(row?.tokenMint || "");
+    if (!mint) continue;
+    const existing = byMint.get(mint);
+    if (!existing || marketDataWeight(row) > marketDataWeight(existing)) byMint.set(mint, row);
+  }
+  return byMint;
+}
+
+function marketDataWeight(row = {}) {
+  return [
+    row.marketCap,
+    row.liquidityUsd,
+    row.volume5m,
+    row.volumeM15,
+    row.volumeH1,
+    row.pairCreatedAt,
+    row.imageUrl,
+    row.twitterUrl,
+    row.telegramUrl,
+    row.websiteUrl
+  ].reduce((score, value) => score + (value && String(value).toLowerCase() !== "n/a" ? 1 : 0), 0);
+}
+
+function mergeMarketDataIntoRows(rows = []) {
+  const marketByMint = marketDataRowsByMint();
+  return (rows || []).map((row) => mergeMarketData(row, marketByMint.get(String(row?.tokenMint || ""))));
+}
+
+function firstUsefulNumber(...values) {
+  for (const value of values) {
+    const number = Number(value);
+    if (Number.isFinite(number) && number > 0) return number;
+  }
+  for (const value of values) {
+    const number = Number(value);
+    if (Number.isFinite(number)) return number;
+  }
+  return 0;
+}
+
+function mergeMarketData(row = {}, market = null) {
+  if (!market) return row;
+  return {
+    ...row,
+    imageUrl: row.imageUrl || market.imageUrl || "",
+    websiteUrl: row.websiteUrl || market.websiteUrl || "",
+    twitterUrl: row.twitterUrl || market.twitterUrl || "",
+    telegramUrl: row.telegramUrl || market.telegramUrl || "",
+    dexUrl: row.dexUrl || market.dexUrl,
+    pumpUrl: row.pumpUrl || market.pumpUrl || "",
+    isPump: row.isPump || market.isPump,
+    pairCreatedAt: row.pairCreatedAt || market.pairCreatedAt,
+    pairAgeSeconds: Number.isFinite(Number(row.pairAgeSeconds)) ? row.pairAgeSeconds : market.pairAgeSeconds,
+    pairAgeMinutes: Number.isFinite(Number(row.pairAgeMinutes)) ? row.pairAgeMinutes : market.pairAgeMinutes,
+    pairAgeLabel: row.pairAgeLabel || market.pairAgeLabel,
+    marketCap: firstUsefulNumber(row.marketCap, market.marketCap, row.fdv, market.fdv),
+    fdv: firstUsefulNumber(row.fdv, market.fdv, row.marketCap, market.marketCap),
+    marketCapLabel: firstStatLabel(row.marketCapLabel, market.marketCapLabel, compactUsd(row.marketCap), compactUsd(market.marketCap)),
+    fdvLabel: firstStatLabel(row.fdvLabel, market.fdvLabel, compactUsd(row.fdv), compactUsd(market.fdv)),
+    liquidityUsd: firstUsefulNumber(row.liquidityUsd, market.liquidityUsd),
+    liquidityLabel: firstStatLabel(row.liquidityLabel, market.liquidityLabel, compactUsd(row.liquidityUsd), compactUsd(market.liquidityUsd)),
+    volume5m: firstUsefulNumber(row.volume5m, market.volume5m),
+    volume5mLabel: firstStatLabel(row.volume5mLabel, market.volume5mLabel, compactUsd(row.volume5m), compactUsd(market.volume5m)),
+    volumeM15: firstUsefulNumber(row.volumeM15, market.volumeM15),
+    volumeM15Label: firstStatLabel(row.volumeM15Label, market.volumeM15Label, compactUsd(row.volumeM15), compactUsd(market.volumeM15)),
+    volumeM30: firstUsefulNumber(row.volumeM30, market.volumeM30),
+    volumeM30Label: firstStatLabel(row.volumeM30Label, market.volumeM30Label, compactUsd(row.volumeM30), compactUsd(market.volumeM30)),
+    volumeH1: firstUsefulNumber(row.volumeH1, market.volumeH1),
+    volumeH1Label: firstStatLabel(row.volumeH1Label, row.volumeLabel, market.volumeH1Label, market.volumeLabel, compactUsd(row.volumeH1), compactUsd(market.volumeH1)),
+    volumeH24: firstUsefulNumber(row.volumeH24, market.volumeH24),
+    volumeH24Label: firstStatLabel(row.volumeH24Label, market.volumeH24Label, compactUsd(row.volumeH24), compactUsd(market.volumeH24)),
+    sniperCount: firstUsefulNumber(row.sniperCount, market.sniperCount)
   };
 }
 
@@ -4531,8 +4629,7 @@ function terminalHtml() {
   const liveRows = liveFeed?.rows || [];
   const bestRows = [...liveRows].sort((a, b) => Number(b.bestPickScore || 0) - Number(a.bestPickScore || 0));
   const newestLiveRows = [...liveRows].sort(compareNewestLiveRows);
-  const kolRows = state.kolScan?.rows || [];
-  const watchRows = state.watchlist?.rows || [];
+  const kolRows = mergeMarketDataIntoRows(state.kolScan?.rows || []);
   const token = selectedTerminalTokenRow();
   const bucketLoading = Boolean(state.livePairsLoadingByBucket[state.livePairBucket]);
   const lastUpdated = currentLivePairsUpdatedAt();
@@ -4542,7 +4639,7 @@ function terminalHtml() {
         <div class="terminal-title-row command-title">
           <div>
             <h3>Live Terminal</h3>
-            <p>Best picks, live pairs, KOL signals, watchlist movement, positions, and quick execution stay visible from one command center.</p>
+            <p>Best picks, live pairs, KOL signals, positions, and quick execution stay visible from one command center.</p>
           </div>
           <span>${bucketLoading ? "Refreshing" : "Live"}${lastUpdated ? ` | ${escapeHtml(ageTextFromSeconds(secondsSince(lastUpdated) || 0))}` : ""}</span>
         </div>
@@ -4572,19 +4669,11 @@ function terminalHtml() {
           </article>
           <article class="terminal-panel live-pairs-panel">
             <header><h4>Live Pairs</h4><button data-tab="live">Open</button></header>
-            ${compactSignalRowsHtml(newestLiveRows, { limit: 6, actionLabel: activePresetButtonLabel() })}
+            ${compactSignalRowsHtml(newestLiveRows, { limit: 10, actionLabel: activePresetButtonLabel() })}
           </article>
           <article class="terminal-panel kol-panel">
             <header><h4>KOL Signals</h4><button data-kol-refresh>${state.kolLoading ? "Loading..." : "Refresh"}</button></header>
-            ${compactSignalRowsHtml(kolRows, { limit: 6, actionLabel: "Buy", emptyTitle: "No KOL signals loaded", emptyMessage: "Refresh KOL Tracker to load signals." })}
-          </article>
-          <article class="terminal-panel watchlist-panel">
-            <header><h4>Watchlist</h4><button data-refresh-watchlist>${state.watchlistLoading ? "Refreshing..." : "Refresh"}</button></header>
-            ${compactSignalRowsHtml(watchRows, { limit: 5, actionLabel: "Buy", emptyTitle: "No watchlist yet", emptyMessage: "Tap Watch on any token row to save it here." })}
-          </article>
-          <article class="terminal-panel token-preview-panel">
-            <header><h4>Token Preview</h4><button data-use-token="${escapeHtml(token?.tokenMint || "")}">Trade</button></header>
-            ${tokenPreviewHtml(token)}
+            ${compactSignalRowsHtml(kolRows, { limit: 10, actionLabel: "Buy", emptyTitle: "No KOL signals loaded", emptyMessage: "Refresh KOL Tracker to load signals." })}
           </article>
         </section>
 
@@ -5288,6 +5377,7 @@ document.addEventListener("click", async (event) => {
     const token = $("[data-global-token-search]")?.value?.trim() || "";
     if (token) {
       state.terminalToken = token;
+      state.terminalAutoToken = token;
       state.tradeToken = token;
       state.bundleToken = token;
       state.volumeToken = token;
@@ -5302,6 +5392,7 @@ document.addEventListener("click", async (event) => {
     const token = target.dataset.previewToken || "";
     if (token) {
       state.terminalToken = token;
+      state.terminalAutoToken = token;
       state.tradeToken = token;
       state.bundleToken = token;
       state.volumeToken = token;
