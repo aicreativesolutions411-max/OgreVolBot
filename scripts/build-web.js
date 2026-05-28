@@ -29,11 +29,22 @@ function normalizeBaseUrl(value) {
 await fs.rm(distDir, { recursive: true, force: true });
 await copyDir(publicDir, distDir);
 
+const buildId = String(process.env.WEB_BUILD_ID || new Date().toISOString().replace(/[-:.TZ]/g, "")).slice(0, 14);
 const apiBase = normalizeBaseUrl(process.env.OGRE_API_BASE || process.env.WEB_API_BASE || process.env.RENDER_EXTERNAL_URL || "https://ogrevolbot.onrender.com");
 const telegramBotUsername = String(process.env.TELEGRAM_BOT_USERNAME || "OgreTradeBot").trim().replace(/^@/, "");
 const portalUrl = normalizeBaseUrl(process.env.WEB_PORTAL_URL || "https://www.slimewire.org");
 const configSource = `window.OGRE_PORTAL_CONFIG = ${JSON.stringify({ apiBase, telegramBotUsername, portalUrl }, null, 2)};\n`;
 await fs.writeFile(path.join(distDir, "config.js"), configSource, "utf8");
+
+const indexPath = path.join(distDir, "index.html");
+const indexHtml = await fs.readFile(indexPath, "utf8");
+await fs.writeFile(
+  indexPath,
+  indexHtml
+    .replace(/styles\.css(?:\?v=[^"]*)?/g, `styles.css?v=${buildId}`)
+    .replace(/app\.js(?:\?v=[^"]*)?/g, `app.js?v=${buildId}`),
+  "utf8"
+);
 
 try {
   const assetDir = path.join(distDir, "assets");

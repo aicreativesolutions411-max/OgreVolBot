@@ -5857,6 +5857,149 @@ button[data-position-sell][data-position-sell-percent="100"],
   }
 }
 
+[data-app][data-route="terminal"] .command-grid {
+  grid-template-columns: repeat(12, minmax(0, 1fr)) !important;
+  align-items: start;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel {
+  grid-column: span 12 !important;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel .compact-signal-list {
+  grid-template-columns: 1fr !important;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel .compact-signal-row {
+  position: static !important;
+  grid-template-columns: 46px minmax(230px, 1fr) minmax(88px, auto) minmax(186px, auto) !important;
+  min-height: 74px !important;
+  align-items: center !important;
+  align-content: center !important;
+  padding: 9px 10px !important;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel .compact-signal-main {
+  grid-column: 2 !important;
+  grid-row: 1 !important;
+  padding-right: 0 !important;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel .score-badge {
+  position: static !important;
+  grid-column: 3 !important;
+  grid-row: 1 !important;
+  justify-self: start;
+  min-width: 72px !important;
+  max-width: 92px !important;
+  padding: 5px 8px !important;
+  font-size: 11px !important;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel .score-badge small {
+  display: block !important;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel .compact-row-actions {
+  grid-column: 4 !important;
+  grid-row: 1 !important;
+  min-width: 186px !important;
+  margin-top: 0 !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel .compact-row-actions button {
+  min-height: 34px !important;
+  font-size: 11px !important;
+}
+
+[data-app][data-route="terminal"] .live-pairs-panel,
+[data-app][data-route="terminal"] .kol-panel,
+[data-app][data-route="terminal"] .watchlist-panel,
+[data-app][data-route="terminal"] .token-preview-panel {
+  grid-column: span 6 !important;
+}
+
+[data-app][data-route="terminal"] .live-pairs-panel .compact-signal-row,
+[data-app][data-route="terminal"] .kol-panel .compact-signal-row,
+[data-app][data-route="terminal"] .watchlist-panel .compact-signal-row {
+  grid-template-columns: 44px minmax(0, 1fr) !important;
+  min-height: 104px !important;
+  align-content: start;
+}
+
+[data-app][data-route="terminal"] .live-pairs-panel .score-badge,
+[data-app][data-route="terminal"] .kol-panel .score-badge,
+[data-app][data-route="terminal"] .watchlist-panel .score-badge {
+  display: none !important;
+}
+
+[data-app][data-route="terminal"] .live-pairs-panel .compact-row-actions,
+[data-app][data-route="terminal"] .kol-panel .compact-row-actions,
+[data-app][data-route="terminal"] .watchlist-panel .compact-row-actions {
+  grid-column: 1 / -1 !important;
+  grid-row: 2 !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+}
+
+[data-app][data-route="terminal"] .compact-signal-main > div {
+  gap: 7px;
+}
+
+[data-app][data-route="terminal"] .compact-signal-main > div strong {
+  max-width: 11ch;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel .compact-signal-main > div strong {
+  max-width: 18ch;
+}
+
+[data-app][data-route="terminal"] .compact-signal-main > div small {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+[data-app][data-route="terminal"] .compact-link-row {
+  margin-top: 2px;
+  max-height: 48px;
+  overflow: hidden;
+}
+
+[data-app][data-route="terminal"] .compact-metrics-line {
+  margin-top: 2px;
+  font-size: 10.5px;
+}
+
+@media (max-width: 1250px) {
+  [data-app][data-route="terminal"] .best-picks-panel .compact-signal-row {
+    grid-template-columns: 44px minmax(0, 1fr) minmax(82px, auto) !important;
+    min-height: 112px !important;
+  }
+
+  [data-app][data-route="terminal"] .best-picks-panel .compact-row-actions {
+    grid-column: 1 / -1 !important;
+    grid-row: 2 !important;
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+}
+
+@media (max-width: 900px) {
+  [data-app][data-route="terminal"] .command-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  [data-app][data-route="terminal"] .best-picks-panel,
+  [data-app][data-route="terminal"] .live-pairs-panel,
+  [data-app][data-route="terminal"] .kol-panel,
+  [data-app][data-route="terminal"] .watchlist-panel,
+  [data-app][data-route="terminal"] .token-preview-panel {
+    grid-column: auto !important;
+  }
+}
+
 [hidden] {
   display: none !important;
 }

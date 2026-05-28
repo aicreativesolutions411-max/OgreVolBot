@@ -1149,9 +1149,10 @@ async function serveWebPortal(requestUrl, response) {
     const stat = await fs.stat(filePath);
     const target = stat.isDirectory() ? path.join(filePath, "index.html") : filePath;
     const data = await fs.readFile(target);
+    const noStoreAsset = target.endsWith("index.html") || /\.(?:js|css)$/i.test(target);
     response.writeHead(200, {
       "Content-Type": webContentType(target),
-      "Cache-Control": target.endsWith("index.html") ? "no-store" : "public, max-age=3600"
+      "Cache-Control": noStoreAsset ? "no-store" : "public, max-age=3600"
     });
     response.end(data);
   } catch {
