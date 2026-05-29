@@ -996,15 +996,20 @@ function dashboardHtml() {
 function profileHtml() {
   return `
     ${profileIntroHtml()}
-    <section class="profile-clean-grid">
+    <section class="profile-clean-grid profile-compact-grid">
       ${accountProfileSection()}
       ${loginSecuritySection()}
       ${profilePfpSection()}
       ${xConnectSection()}
     </section>
-    ${badgeShowcaseSection()}
-    ${referralSection()}
-    ${traderBoardSection()}
+    <details class="profile-extra-details">
+      <summary>Badges, referrals, and top trader board</summary>
+      <div class="profile-extra-grid">
+        ${badgeShowcaseSection()}
+        ${referralSection()}
+        ${traderBoardSection()}
+      </div>
+    </details>
   `;
 }
 
@@ -1658,7 +1663,7 @@ function tradeHtml() {
             <label>
               Exit Size
               <select data-trade-auto-sell-percent data-custom-select="trade-auto-sell-percent">
-                <option value="off">No timer</option>
+                <option value="off">Off</option>
                 <option value="50">50%</option>
                 <option value="80">80%</option>
                 <option value="100" selected>100%</option>
@@ -1735,9 +1740,9 @@ function tradeHtml() {
               ${fallbackTimerSelectHtml("trade-plan-delay", "data-trade-plan-delay", "5")}
             </label>
             <label>
-              Timer Sell
+              Exit Size
               <select data-trade-plan-sell-percent data-custom-select="trade-plan-sell-percent">
-                <option value="off">No timer</option>
+                <option value="off">Off</option>
                 <option value="50">50%</option>
                 <option value="80">80%</option>
                 <option value="100" selected>100%</option>
@@ -1848,7 +1853,7 @@ function tradePlanResultHtml() {
         <div><dt>Wallets</dt><dd>${escapeHtml(row.walletLabel || `${row.successCount || 0}/${row.walletCount || 0}`)}</dd></div>
         <div><dt>Buy</dt><dd>${escapeHtml(row.amountSol)} SOL</dd></div>
         <div><dt>TP / SL</dt><dd>${escapeHtml(row.takeProfitSummary || `+${row.takeProfitPct}%`)} / ${escapeHtml(row.stopLossSummary || `-${row.stopLossPct}%`)}</dd></div>
-        <div><dt>Timer Sell</dt><dd>${escapeHtml(timerSellSummary(row))}</dd></div>
+        <div><dt>Timer Exit</dt><dd>${escapeHtml(timerSellSummary(row))}</dd></div>
       </dl>
       ${row.results?.length ? `<div class="mini-results">${row.results.map((item) => `<span data-ok="${item.ok ? "true" : "false"}">${escapeHtml(item.message || item)}</span>`).join("")}</div>` : ""}
       <div class="card-actions">
@@ -1956,9 +1961,9 @@ function bundleHtml() {
               ${repeatWaitSelectHtml("bundle-plan-loop-delay", "data-bundle-plan-loop-delay", "0")}
             </label>
             <label>
-              Timer Sell
+              Exit Size
               <select data-bundle-plan-sell-percent data-custom-select="bundle-plan-sell-percent">
-                <option value="off">No timer</option>
+                <option value="off">Off</option>
                 <option value="50">50%</option>
                 <option value="80">80%</option>
                 <option value="100" selected>100%</option>
@@ -2070,24 +2075,31 @@ function presetOptionsHtml(kind, selectedId = "") {
 const FALLBACK_TIMER_OPTIONS = [
   ["off", "No timer"],
   ["5s", "5 sec"],
+  ["10s", "10 sec"],
+  ["15s", "15 sec"],
+  ["30s", "30 sec"],
   ["1", "1 min"],
   ["3", "3 min"],
   ["5", "5 min"],
   ["15", "15 min"],
   ["30", "30 min"],
   ["60", "1 hour"],
+  ["120", "2 hours"],
   ["custom", "Custom time"]
 ];
 
 const REPEAT_WAIT_OPTIONS = [
   ["0", "No wait"],
   ["5s", "5 sec"],
+  ["10s", "10 sec"],
+  ["15s", "15 sec"],
   ["30s", "30 sec"],
   ["1", "1 min"],
   ["5", "5 min"],
   ["15", "15 min"],
   ["30", "30 min"],
   ["60", "1 hour"],
+  ["120", "2 hours"],
   ["custom", "Custom time"]
 ];
 
@@ -2436,9 +2448,9 @@ function volumeHtml() {
             ${repeatWaitSelectHtml("volume-loop-delay", "data-volume-loop-delay", "0")}
           </label>
           <label>
-            Timer Sell
+            Exit Size
             <select data-volume-sell-percent data-custom-select="volume-sell-percent">
-              <option value="off">No timer</option>
+              <option value="off">Off</option>
               <option value="50">50%</option>
               <option value="80">80%</option>
               <option value="100" selected>100%</option>
@@ -2507,7 +2519,7 @@ function volumeResultHtml() {
         <div><dt>TP / SL</dt><dd>${escapeHtml(row.takeProfitSummary || `+${row.takeProfitPct}%`)} / ${escapeHtml(row.stopLossSummary || `-${row.stopLossPct}%`)}</dd></div>
         <div><dt>Repeat</dt><dd>${escapeHtml(row.loopCount)}x</dd></div>
         <div><dt>Repeat Wait</dt><dd>${escapeHtml(row.loopDelaySeconds || 0)} sec</dd></div>
-        <div><dt>Timer Sell</dt><dd>${escapeHtml(timerSellSummary(row))}</dd></div>
+        <div><dt>Timer Exit</dt><dd>${escapeHtml(timerSellSummary(row))}</dd></div>
       </dl>
       ${row.results?.length ? `<div class="mini-results">${row.results.map((item) => `<span data-ok="${item.ok ? "true" : "false"}">${escapeHtml(item.message || item)}</span>`).join("")}</div>` : ""}
       <div class="card-actions">
@@ -3293,9 +3305,8 @@ async function connectBrowserWallet(providerId) {
       provider: walletProviderLabel(providerId, provider),
       tokens: []
     };
-    state.activeTab = "wallets";
     writeText(status, `Connected ${shortAddress(publicKeyText)}.`);
-    render();
+    navigateTo("/terminal", "terminal");
     loadAll().catch((error) => setError(`Connected wallet saved. Balance refresh failed: ${error.message}`));
   } catch (error) {
     writeText(status, error.message || "Wallet connection was cancelled.");
@@ -4265,6 +4276,7 @@ function walletsHtml() {
       <button class="primary" data-refresh-all>Refresh Balances</button>
       <button data-tab="positions">View Positions</button>
       <button data-tab="kol">Open KOL Tracker</button>
+      <button data-tab="txAudit">Tx Audit</button>
       <small data-wallet-remove-status>${escapeHtml(state.walletRemoveStatus || "")}</small>
     </section>
     <div class="table-list">
@@ -4319,6 +4331,7 @@ function connectedWalletCardHtml() {
       <div class="card-actions">
         <button data-refresh-all>Refresh</button>
         <button data-copy="${escapeHtml(connected.publicKey)}">Copy</button>
+        <button data-tab="txAudit">Tx Audit</button>
         <a href="https://solscan.io/account/${encodeURIComponent(connected.publicKey)}" target="_blank" rel="noreferrer">Solscan</a>
       </div>
     </section>
@@ -4887,20 +4900,18 @@ function terminalHtml() {
           <button data-top-refresh-wallet>${state.walletRefreshing ? "Refreshing Wallet..." : "Refresh Wallet"}</button>
         </div>
 
-        ${terminalPresetStripHtml()}
-
         <section class="command-grid">
           <article class="terminal-panel best-picks-panel">
             <header><h4>Best Picks</h4><span>Score + reasons</span></header>
-            ${compactSignalRowsHtml(bestRows, { layout: "terminal", limit: 6, actionLabel: activePresetButtonLabel(), emptyTitle: "No Best Picks yet", emptyMessage: "Refresh Live Pairs to score current pairs." })}
+            ${compactSignalRowsHtml(bestRows, { layout: "terminal", limit: 8, actionLabel: "Trade", emptyTitle: "No Best Picks yet", emptyMessage: "Refresh Live Pairs to score current pairs." })}
           </article>
           <article class="terminal-panel live-pairs-panel">
             <header><h4>Live Pairs</h4><button data-tab="live">Open</button></header>
-            ${compactSignalRowsHtml(newestLiveRows, { layout: "terminal", limit: 12, actionLabel: activePresetButtonLabel() })}
+            ${compactSignalRowsHtml(newestLiveRows, { layout: "terminal", limit: 12, actionLabel: "Trade" })}
           </article>
           <article class="terminal-panel kol-panel">
             <header><h4>KOL Signals</h4><button data-kol-refresh>${state.kolLoading ? "Loading..." : "Refresh"}</button></header>
-            ${compactSignalRowsHtml(kolRows, { layout: "terminal", limit: 12, actionLabel: activePresetButtonLabel(), emptyTitle: "No KOL signals loaded", emptyMessage: "Refresh KOL Tracker to load signals." })}
+            ${compactSignalRowsHtml(kolRows, { layout: "terminal", limit: 12, actionLabel: "Trade", emptyTitle: "No KOL signals loaded", emptyMessage: "Refresh KOL Tracker to load signals." })}
           </article>
         </section>
 
@@ -4951,50 +4962,81 @@ function tokenPreviewHtml(token) {
 
 function terminalTradePanelHtml(token) {
   const heldPosition = token?.tokenMint ? state.positions.find((position) => String(position.tokenMint) === String(token.tokenMint)) : null;
+  const activeTrade = activePresetDetail("trade");
+  const activeBundle = activePresetDetail("bundle");
   return `
     <article class="order-ticket terminal-ticket">
-      <h3>Trade Panel</h3>
-      <p>Selected preset powers row buys. Browser wallets still ask for approval; managed wallets can run saved fast actions.</p>
-      <div class="segmented-control">
-        <button data-tab="trade">Buy / Sell</button>
-        <button data-tab="bundle">Bundle</button>
-        <button data-tab="volume">Volume</button>
-        <button data-tab="sniper">Snipe</button>
-      </div>
-      <label>
-        Active Trade Preset
-        <select data-fast-trade-preset="terminal">
-          ${presetOptionsHtml("trade", state.selectedTradePresetId)}
-        </select>
-      </label>
-      <label>
-        Active Bundle Preset
-        <select data-fast-bundle-preset="terminal">
-          ${presetOptionsHtml("bundle", state.selectedBundlePresetId)}
-        </select>
-      </label>
-      <div class="ticket-balance-row">
-        <span>${totalSol().toFixed(4)} SOL</span>
-        <button data-top-refresh-wallet>${state.walletRefreshing ? "Refreshing..." : "Refresh Balance"}</button>
-      </div>
-      ${token?.tokenMint ? `
-        <code>${escapeHtml(token.tokenMint)}</code>
-        <div class="quick-grid">
-          <button class="primary" data-quick-trade-token="${escapeHtml(token.tokenMint)}">${escapeHtml(activePresetButtonLabel())}</button>
-          <button data-quick-bundle-token="${escapeHtml(token.tokenMint)}">Bundle Preset</button>
-          <button data-use-token="${escapeHtml(token.tokenMint)}">Manual Trade</button>
-          <button data-use-token-volume="${escapeHtml(token.tokenMint)}">Volume Plan</button>
-        </div>
-        ${heldPosition ? `
-          <div class="exit-strip">
-            <strong>Position held</strong>
-            <button data-position-sell="${escapeHtml(token.tokenMint)}" data-position-sell-percent="25">Sell 25%</button>
-            <button data-position-sell="${escapeHtml(token.tokenMint)}" data-position-sell-percent="50">Sell 50%</button>
-            <button data-position-sell="${escapeHtml(token.tokenMint)}" data-position-sell-percent="100">Exit 100%</button>
+      <details class="terminal-ticket-details" open>
+        <summary>
+          <span>Trade Panel</span>
+          <small>${escapeHtml(activeTrade)}</small>
+        </summary>
+        <div class="ticket-collapse-body">
+          <p>Row trades use the active preset. Managed wallets can run saved fast actions; browser wallets still ask for approval.</p>
+          <div class="segmented-control">
+            <button data-tab="trade">Buy / Sell</button>
+            <button data-tab="trade">Manual CA</button>
           </div>
-        ` : ""}
-      ` : emptyState("No token selected", "Click a live pair, KOL signal, watchlist row, or paste a CA in the top search.")}
-      <small>${escapeHtml(syncHealthLabel())}</small>
+
+          <details class="side-preset-details">
+            <summary>
+              <span>Active Presets</span>
+              <small>${escapeHtml(activeBundle)}</small>
+            </summary>
+            <label>
+              Trade Preset
+              <select data-fast-trade-preset="terminal">
+                ${presetOptionsHtml("trade", state.selectedTradePresetId)}
+              </select>
+            </label>
+            <label>
+              Bundle Preset
+              <select data-fast-bundle-preset="terminal">
+                ${presetOptionsHtml("bundle", state.selectedBundlePresetId)}
+              </select>
+            </label>
+            <div class="quick-grid">
+              <button type="button" data-edit-selected-preset="trade">Edit Trade Preset</button>
+              <button type="button" data-edit-selected-preset="bundle">Edit Bundle Preset</button>
+            </div>
+            ${state.selectedTradePresetId === "custom" ? fastTradePresetBuilderHtml() : ""}
+            ${state.selectedBundlePresetId === "custom" ? fastBundlePresetBuilderHtml() : ""}
+          </details>
+
+          <details class="ogre-tek-details">
+            <summary>Ogre TeK</summary>
+            <div class="ogre-tek-side-actions">
+              <button type="button" data-tab="sniper">Sniper</button>
+              <button type="button" data-tab="bundle">Bundler</button>
+              <button type="button" data-tab="volume">Volume</button>
+              <button type="button" data-tab="launch">Launch Snipe</button>
+            </div>
+          </details>
+
+          <div class="ticket-balance-row">
+            <span>${totalSol().toFixed(4)} SOL</span>
+            <button data-top-refresh-wallet>${state.walletRefreshing ? "Refreshing..." : "Refresh Balance"}</button>
+          </div>
+          ${token?.tokenMint ? `
+            <code>${escapeHtml(token.tokenMint)}</code>
+            <div class="quick-grid">
+              <button class="primary" data-quick-trade-token="${escapeHtml(token.tokenMint)}">Trade</button>
+              <button data-quick-bundle-token="${escapeHtml(token.tokenMint)}">Bundle</button>
+              <button data-use-token-volume="${escapeHtml(token.tokenMint)}">Volume</button>
+              <button data-tab="sniper">Snipe</button>
+            </div>
+            ${heldPosition ? `
+              <div class="exit-strip">
+                <strong>Position held</strong>
+                <button data-position-sell="${escapeHtml(token.tokenMint)}" data-position-sell-percent="25">Sell 25%</button>
+                <button data-position-sell="${escapeHtml(token.tokenMint)}" data-position-sell-percent="50">Sell 50%</button>
+                <button data-position-sell="${escapeHtml(token.tokenMint)}" data-position-sell-percent="100">Exit 100%</button>
+              </div>
+            ` : ""}
+          ` : emptyState("No token selected", "Click a live pair, KOL signal, watchlist row, or paste a CA in the top search.")}
+          <small>${escapeHtml(syncHealthLabel())}</small>
+        </div>
+      </details>
     </article>
   `;
 }

@@ -3301,6 +3301,189 @@ code {
   }
 }
 
+/* Final terminal cleanup: all live feed panels use the same readable row system. */
+[data-app][data-route="terminal"] .command-grid {
+  grid-template-columns: 1fr !important;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel,
+[data-app][data-route="terminal"] .live-pairs-panel,
+[data-app][data-route="terminal"] .kol-panel {
+  grid-column: 1 / -1 !important;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel .terminal-token-list,
+[data-app][data-route="terminal"] .live-pairs-panel .terminal-token-list,
+[data-app][data-route="terminal"] .kol-panel .terminal-token-list {
+  grid-template-columns: 1fr !important;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel .terminal-token-stats span:nth-child(n+4),
+[data-app][data-route="terminal"] .live-pairs-panel .terminal-token-stats span:nth-child(n+4),
+[data-app][data-route="terminal"] .kol-panel .terminal-token-stats span:nth-child(n+4) {
+  display: grid !important;
+}
+
+@media (min-width: 1181px) {
+  [data-app][data-route="terminal"] .terminal-token-row,
+  [data-app][data-route="terminal"] .best-picks-panel .terminal-token-row,
+  [data-app][data-route="terminal"] .live-pairs-panel .terminal-token-row,
+  [data-app][data-route="terminal"] .kol-panel .terminal-token-row {
+    grid-template-columns: 48px minmax(190px, 0.95fr) minmax(300px, 1.35fr) 58px minmax(220px, 0.9fr) !important;
+    gap: 9px 12px !important;
+    align-items: center !important;
+    padding: 10px 12px !important;
+  }
+
+  [data-app][data-route="terminal"] .best-picks-panel .terminal-token-stats,
+  [data-app][data-route="terminal"] .best-picks-panel .terminal-score-chip,
+  [data-app][data-route="terminal"] .best-picks-panel .terminal-token-actions {
+    grid-column: auto !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-token-stats,
+  [data-app][data-route="terminal"] .best-picks-panel .terminal-token-stats {
+    grid-template-columns: repeat(5, minmax(48px, 1fr)) !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-token-actions,
+  [data-app][data-route="terminal"] .best-picks-panel .terminal-token-actions {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-score-chip,
+  [data-app][data-route="terminal"] .best-picks-panel .terminal-score-chip {
+    grid-column: auto !important;
+    grid-row: auto !important;
+    width: 58px !important;
+    min-height: 42px !important;
+  }
+
+  [data-app][data-route="terminal"] .best-picks-panel .terminal-token-row .live-pair-avatar,
+  [data-app][data-route="terminal"] .best-picks-panel .terminal-token-row .token-avatar,
+  [data-app][data-route="terminal"] .best-picks-panel .terminal-token-row > img {
+    width: 46px !important;
+    height: 46px !important;
+    max-width: 46px !important;
+  }
+}
+
+[data-app][data-route="terminal"] .terminal-ticket-details,
+[data-app][data-route="terminal"] .side-preset-details,
+[data-app][data-route="terminal"] .ogre-tek-details {
+  border: 1px solid rgba(137, 255, 67, 0.28);
+  border-radius: 14px;
+  background: rgba(5, 18, 7, 0.72);
+}
+
+[data-app][data-route="terminal"] .terminal-ticket-details > summary,
+[data-app][data-route="terminal"] .side-preset-details > summary,
+[data-app][data-route="terminal"] .ogre-tek-details > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  cursor: pointer;
+  padding: 10px 12px;
+  color: var(--text);
+  font-family: var(--font-display);
+  list-style: none;
+}
+
+[data-app][data-route="terminal"] .terminal-ticket-details > summary::-webkit-details-marker,
+[data-app][data-route="terminal"] .side-preset-details > summary::-webkit-details-marker,
+[data-app][data-route="terminal"] .ogre-tek-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+[data-app][data-route="terminal"] .terminal-ticket-details > summary::after,
+[data-app][data-route="terminal"] .side-preset-details > summary::after,
+[data-app][data-route="terminal"] .ogre-tek-details > summary::after {
+  content: "+";
+  color: var(--slime-green);
+}
+
+[data-app][data-route="terminal"] .terminal-ticket-details[open] > summary::after,
+[data-app][data-route="terminal"] .side-preset-details[open] > summary::after,
+[data-app][data-route="terminal"] .ogre-tek-details[open] > summary::after {
+  content: "-";
+}
+
+[data-app][data-route="terminal"] .ticket-collapse-body {
+  display: grid;
+  gap: 10px;
+  padding: 0 10px 12px;
+}
+
+[data-app][data-route="terminal"] .side-preset-details,
+[data-app][data-route="terminal"] .ogre-tek-details {
+  margin-top: 4px;
+}
+
+[data-app][data-route="terminal"] .side-preset-details label,
+[data-app][data-route="terminal"] .side-preset-details .quick-grid,
+[data-app][data-route="terminal"] .ogre-tek-side-actions {
+  margin: 0 10px 10px;
+}
+
+[data-app][data-route="terminal"] .ogre-tek-side-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.profile-compact-grid {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)) !important;
+  gap: 12px !important;
+}
+
+.profile-compact-grid .profile-card,
+.profile-compact-grid .create-wallet-card {
+  min-height: 0 !important;
+  padding: 14px !important;
+}
+
+.profile-compact-grid p,
+.profile-compact-grid small {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.profile-compact-grid input {
+  min-height: 38px;
+}
+
+.profile-extra-details {
+  margin-top: 14px;
+  border: 1px solid rgba(137, 255, 67, 0.26);
+  border-radius: 14px;
+  background: rgba(5, 18, 7, 0.72);
+  overflow: hidden;
+}
+
+.profile-extra-details > summary {
+  cursor: pointer;
+  padding: 12px 14px;
+  font-family: var(--font-display);
+  color: var(--text);
+}
+
+.profile-extra-grid {
+  display: grid;
+  gap: 12px;
+  padding: 0 12px 12px;
+}
+
+@media (max-width: 760px) {
+  [data-app][data-route="terminal"] .terminal-ticket-details {
+    border-radius: 12px;
+  }
+
+  [data-app][data-route="terminal"] .ticket-collapse-body {
+    padding: 0 8px 10px;
+  }
+}
+
 .portfolio-card {
   align-items: start;
 }
@@ -7275,5 +7458,72 @@ body {
   [data-app][data-route="terminal"] .terminal-preset-strip-grid {
     grid-template-columns: 1fr !important;
     padding: 0 10px 10px !important;
+  }
+}
+
+/* Last-pass terminal layout lock. Keep all live terminal feeds as clean rows. */
+[data-app][data-route="terminal"] .command-grid {
+  grid-template-columns: 1fr !important;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel,
+[data-app][data-route="terminal"] .live-pairs-panel,
+[data-app][data-route="terminal"] .kol-panel {
+  grid-column: 1 / -1 !important;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel .terminal-token-list,
+[data-app][data-route="terminal"] .live-pairs-panel .terminal-token-list,
+[data-app][data-route="terminal"] .kol-panel .terminal-token-list {
+  grid-template-columns: 1fr !important;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel .terminal-token-stats span:nth-child(n+4),
+[data-app][data-route="terminal"] .live-pairs-panel .terminal-token-stats span:nth-child(n+4),
+[data-app][data-route="terminal"] .kol-panel .terminal-token-stats span:nth-child(n+4) {
+  display: block !important;
+}
+
+@media (min-width: 1181px) {
+  [data-app][data-route="terminal"] .terminal-token-row,
+  [data-app][data-route="terminal"] .best-picks-panel .terminal-token-row,
+  [data-app][data-route="terminal"] .live-pairs-panel .terminal-token-row,
+  [data-app][data-route="terminal"] .kol-panel .terminal-token-row {
+    grid-template-columns: 48px minmax(190px, 0.95fr) minmax(300px, 1.35fr) 58px minmax(220px, 0.9fr) !important;
+    gap: 9px 12px !important;
+    align-items: center !important;
+    padding: 10px 12px !important;
+  }
+
+  [data-app][data-route="terminal"] .best-picks-panel .terminal-token-stats,
+  [data-app][data-route="terminal"] .best-picks-panel .terminal-score-chip,
+  [data-app][data-route="terminal"] .best-picks-panel .terminal-token-actions {
+    grid-column: auto !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-token-stats,
+  [data-app][data-route="terminal"] .best-picks-panel .terminal-token-stats {
+    grid-template-columns: repeat(5, minmax(48px, 1fr)) !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-token-actions,
+  [data-app][data-route="terminal"] .best-picks-panel .terminal-token-actions {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-score-chip,
+  [data-app][data-route="terminal"] .best-picks-panel .terminal-score-chip {
+    grid-column: auto !important;
+    grid-row: auto !important;
+    width: 58px !important;
+    min-height: 42px !important;
+  }
+
+  [data-app][data-route="terminal"] .best-picks-panel .terminal-token-row .live-pair-avatar,
+  [data-app][data-route="terminal"] .best-picks-panel .terminal-token-row .token-avatar,
+  [data-app][data-route="terminal"] .best-picks-panel .terminal-token-row > img {
+    width: 46px !important;
+    height: 46px !important;
+    max-width: 46px !important;
   }
 }
