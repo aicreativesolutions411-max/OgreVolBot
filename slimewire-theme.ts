@@ -1,0 +1,36 @@
+
+export const slimewireTheme = {
+  colors: {
+    bg: '#020402',
+    bgElevated: '#050805',
+    panel: '#061006',
+    panel2: '#0b160b',
+    panel3: '#101c10',
+    border: '#1c3516',
+    borderBright: '#b6ff00',
+    borderMuted: '#28451d',
+    lime: '#b6ff00',
+    lime2: '#7cff00',
+    lime3: '#5eff00',
+    text: '#e8fbe2',
+    textMuted: '#9bb894',
+    textDim: '#5d7658',
+    red: '#ff4d4d',
+    amber: '#ffd166',
+    cyan: '#23d6ff',
+    purple: '#8a5cff',
+  },
+  radius: {
+    xs: 8,
+    sm: 12,
+    md: 16,
+    lg: 22,
+    xl: 32,
+  },
+  shadows: {
+    panel: '0 20px 80px rgba(0,0,0,.55)',
+    glowSm: '0 0 16px rgba(182,255,0,.25)',
+    glowMd: '0 0 32px rgba(182,255,0,.32)',
+    glowLg: '0 0 54px rgba(182,255,0,.35)',
+  },
+} as const;
