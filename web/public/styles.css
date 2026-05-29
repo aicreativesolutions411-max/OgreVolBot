@@ -3301,6 +3301,59 @@ code {
   }
 }
 
+.portfolio-card {
+  align-items: start;
+}
+
+.portfolio-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.portfolio-metrics span {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid rgba(137, 255, 67, 0.16);
+  border-radius: 12px;
+  background: rgba(8, 18, 10, 0.68);
+}
+
+.portfolio-metrics small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.portfolio-metrics strong {
+  color: var(--green-2);
+  font-size: 18px;
+}
+
+.wallet-tools-details {
+  margin-top: 14px;
+}
+
+@media (max-width: 640px) {
+  .portfolio-metrics {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .connected-wallet-card .card-actions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .connected-wallet-card .card-actions > * {
+    min-width: 0;
+    padding-inline: 8px;
+  }
+}
+
 /* Clean entry flow pass */
 [data-app][data-route="intro"],
 [data-app][data-route="connect"] {
@@ -6193,6 +6246,308 @@ button[data-position-sell][data-position-sell-percent="100"],
   }
 }
 
+/* Deterministic Live Terminal rows. These replace squeezed cards in the command
+   center so live refreshes cannot stack text, badges, and action buttons. */
+[data-app][data-route="terminal"] .command-terminal {
+  grid-template-columns: minmax(0, 1fr) minmax(270px, 360px);
+  align-items: start;
+}
+
+[data-app][data-route="terminal"] .command-grid {
+  display: grid !important;
+  grid-template-columns: repeat(12, minmax(0, 1fr)) !important;
+  align-items: start !important;
+  gap: 14px !important;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel,
+[data-app][data-route="terminal"] .live-pairs-panel,
+[data-app][data-route="terminal"] .kol-panel {
+  grid-column: 1 / -1 !important;
+  min-height: 0 !important;
+}
+
+[data-app][data-route="terminal"] .terminal-token-list {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+[data-app][data-route="terminal"] .terminal-token-row {
+  display: grid;
+  grid-template-columns: 44px minmax(155px, 1.05fr) minmax(270px, 1.15fr) 54px minmax(190px, 0.85fr);
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(137, 255, 67, 0.18);
+  border-radius: 13px;
+  background: linear-gradient(180deg, rgba(13, 24, 15, 0.92), rgba(6, 12, 8, 0.92));
+  box-shadow: inset 0 0 0 1px rgba(137, 255, 67, 0.03);
+}
+
+[data-app][data-route="terminal"] .terminal-token-row:hover {
+  border-color: rgba(137, 255, 67, 0.36);
+  box-shadow: 0 0 22px rgba(114, 255, 35, 0.08), inset 0 0 0 1px rgba(137, 255, 67, 0.04);
+}
+
+[data-app][data-route="terminal"] .terminal-token-row .live-pair-avatar,
+[data-app][data-route="terminal"] .terminal-token-row .token-avatar,
+[data-app][data-route="terminal"] .terminal-token-row > img {
+  width: 44px !important;
+  height: 44px !important;
+  border-radius: 12px;
+  object-fit: cover;
+}
+
+[data-app][data-route="terminal"] .terminal-token-main {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+[data-app][data-route="terminal"] .terminal-token-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+[data-app][data-route="terminal"] .terminal-token-title strong,
+[data-app][data-route="terminal"] .terminal-token-title small,
+[data-app][data-route="terminal"] .terminal-token-age,
+[data-app][data-route="terminal"] .terminal-token-main .ca-copy {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+[data-app][data-route="terminal"] .terminal-token-title strong {
+  max-width: 12ch;
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 950;
+}
+
+[data-app][data-route="terminal"] .terminal-token-title small,
+[data-app][data-route="terminal"] .terminal-token-age {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+[data-app][data-route="terminal"] .terminal-token-main .ca-copy {
+  width: max-content;
+  max-width: 100%;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--green-2);
+  box-shadow: none;
+  line-height: 1.1;
+  text-align: left;
+}
+
+[data-app][data-route="terminal"] .terminal-token-stats {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+  min-width: 0;
+  align-items: center;
+}
+
+[data-app][data-route="terminal"] .terminal-token-stats span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+[data-app][data-route="terminal"] .terminal-token-stats small {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+[data-app][data-route="terminal"] .terminal-token-stats strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 950;
+}
+
+[data-app][data-route="terminal"] .terminal-score-chip {
+  display: grid;
+  place-items: center;
+  gap: 0;
+  width: 54px;
+  min-height: 44px;
+  border: 1px solid rgba(137, 255, 67, 0.34);
+  border-radius: 14px;
+  background: rgba(20, 52, 12, 0.62);
+  color: var(--green-2);
+  line-height: 1;
+}
+
+[data-app][data-route="terminal"] .terminal-score-chip strong {
+  font-size: 15px;
+  font-weight: 950;
+}
+
+[data-app][data-route="terminal"] .terminal-score-chip small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+[data-app][data-route="terminal"] .terminal-token-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+
+[data-app][data-route="terminal"] .terminal-token-actions button {
+  min-width: 0;
+  min-height: 34px;
+  padding: 0 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+[data-app][data-route="terminal"] .terminal-token-row .compact-link-row {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 4px !important;
+  min-width: 0;
+  max-height: 24px !important;
+  overflow: hidden !important;
+}
+
+[data-app][data-route="terminal"] .terminal-token-row .compact-link-row a,
+[data-app][data-route="terminal"] .terminal-token-row .compact-link-row button,
+[data-app][data-route="terminal"] .terminal-token-row .sniper-pill {
+  min-height: 20px !important;
+  padding: 2px 6px !important;
+  font-size: 9.5px !important;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel .terminal-token-list {
+  grid-template-columns: repeat(auto-fit, minmax(520px, 1fr));
+}
+
+[data-app][data-route="terminal"] .live-pairs-panel .terminal-token-list,
+[data-app][data-route="terminal"] .kol-panel .terminal-token-list {
+  grid-template-columns: 1fr;
+}
+
+[data-app][data-route="terminal"] .terminal-preset-strip details[open] {
+  padding-bottom: 10px;
+}
+
+[data-app][data-route="terminal"] .terminal-preset-strip-grid {
+  align-items: end;
+}
+
+[data-app][data-route="terminal"] .terminal-dock {
+  min-height: 620px;
+}
+
+[data-app][data-route="terminal"] .terminal-dock .terminal-ticket {
+  min-height: 620px;
+}
+
+@media (min-width: 1181px) {
+  [data-app][data-route="terminal"] .terminal-dock {
+    position: sticky !important;
+    top: 76px !important;
+    max-height: calc(100vh - 88px) !important;
+    overflow-y: auto !important;
+    overscroll-behavior: contain !important;
+    scrollbar-gutter: stable !important;
+  }
+}
+
+@media (max-width: 1380px) {
+  [data-app][data-route="terminal"] .terminal-token-row {
+    grid-template-columns: 44px minmax(0, 1fr) 56px;
+  }
+
+  [data-app][data-route="terminal"] .terminal-token-stats,
+  [data-app][data-route="terminal"] .terminal-token-actions {
+    grid-column: 1 / -1;
+  }
+
+  [data-app][data-route="terminal"] .terminal-token-stats {
+    grid-template-columns: repeat(5, minmax(72px, 1fr));
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  [data-app][data-route="terminal"] .terminal-score-chip {
+    grid-column: 3;
+    grid-row: 1;
+  }
+}
+
+@media (max-width: 760px) {
+  [data-app][data-route="terminal"] .command-terminal {
+    grid-template-columns: 1fr;
+  }
+
+  [data-app][data-route="terminal"] .best-picks-panel .terminal-token-list {
+    grid-template-columns: 1fr;
+  }
+
+  [data-app][data-route="terminal"] .terminal-token-row {
+    grid-template-columns: 38px minmax(0, 1fr);
+    gap: 8px;
+    padding: 8px;
+  }
+
+  [data-app][data-route="terminal"] .terminal-token-row .live-pair-avatar,
+  [data-app][data-route="terminal"] .terminal-token-row .token-avatar,
+  [data-app][data-route="terminal"] .terminal-token-row > img {
+    width: 38px !important;
+    height: 38px !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-score-chip {
+    display: none;
+  }
+
+  [data-app][data-route="terminal"] .terminal-token-stats {
+    grid-template-columns: repeat(5, minmax(58px, 1fr));
+    gap: 5px 8px;
+    overflow-x: auto;
+  }
+
+  [data-app][data-route="terminal"] .terminal-token-actions {
+    grid-template-columns: 1.12fr 1fr 1fr;
+    gap: 5px;
+  }
+
+  [data-app][data-route="terminal"] .terminal-token-actions button {
+    min-height: 31px;
+    padding: 0 5px;
+    font-size: 11px;
+  }
+
+  [data-app][data-route="terminal"] .terminal-token-row .compact-link-row {
+    max-height: 22px !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-dock,
+  [data-app][data-route="terminal"] .terminal-dock .terminal-ticket {
+    min-height: 0;
+  }
+}
+
 /* Keep the right-side ticket steady while live feeds refresh on the left. */
 [data-app][data-route="terminal"] .terminal-dock {
   position: sticky !important;
@@ -6209,11 +6564,716 @@ button[data-position-sell][data-position-sell-percent="100"],
   min-height: 0;
 }
 
+.pnl-portfolio-table {
+  display: grid;
+  gap: 0;
+  border: 1px solid rgba(137, 255, 67, 0.18);
+  border-radius: 14px;
+  overflow: hidden;
+  background: rgba(4, 10, 6, 0.74);
+}
+
+.pnl-portfolio-head,
+.pnl-portfolio-row {
+  display: grid;
+  grid-template-columns: minmax(210px, 1.25fr) minmax(90px, 0.7fr) minmax(90px, 0.7fr) minmax(90px, 0.7fr) minmax(110px, 0.7fr) minmax(220px, 1fr);
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
+}
+
+.pnl-portfolio-head {
+  padding: 10px 14px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 950;
+  letter-spacing: 0;
+  text-transform: uppercase;
+  background: rgba(137, 255, 67, 0.055);
+}
+
+.pnl-portfolio-row {
+  padding: 12px 14px;
+  border-top: 1px solid rgba(137, 255, 67, 0.12);
+}
+
+.pnl-token-cell {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+}
+
+.pnl-token-cell > div {
+  min-width: 0;
+}
+
+.pnl-token-cell strong,
+.pnl-token-cell small,
+.pnl-portfolio-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pnl-token-cell .ca-copy {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  min-height: 0;
+  color: var(--green-2);
+  text-align: left;
+}
+
+.pnl-portfolio-row span {
+  font-weight: 850;
+}
+
+.pnl-portfolio-row span small {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.pnl-portfolio-row .positive {
+  color: var(--green-2);
+}
+
+.pnl-portfolio-row .negative {
+  color: #ff5c5c;
+}
+
+@media (max-width: 980px) {
+  .pnl-portfolio-head {
+    display: none;
+  }
+
+  .pnl-portfolio-row {
+    grid-template-columns: minmax(0, 1fr) repeat(2, minmax(72px, 0.45fr));
+    gap: 8px;
+  }
+
+  .pnl-portfolio-row .card-actions {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 640px) {
+  .pnl-portfolio-row {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .pnl-token-cell {
+    grid-column: 1 / -1;
+  }
+}
+
 @media (max-width: 1180px) {
   [data-app][data-route="terminal"] .terminal-dock {
     position: static !important;
     max-height: none !important;
     overflow: visible !important;
     contain: none !important;
+  }
+}
+
+/* Mobile/live-terminal cleanup pass. Keep execution controls discoverable while
+   making the live feed read like a compact trading list instead of stacked cards. */
+.profile-clean-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+}
+
+.wallet-tools-details,
+.terminal-preset-strip {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: rgba(7, 15, 9, 0.72);
+  box-shadow: var(--shadow-soft);
+}
+
+.wallet-tools-details > summary,
+.terminal-preset-strip summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 14px 16px;
+  font-weight: 900;
+  color: var(--text);
+}
+
+.terminal-preset-strip summary {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.terminal-preset-strip summary strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--green);
+}
+
+.terminal-preset-strip-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 0 14px 12px;
+}
+
+.ogre-tek-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 0 14px 14px;
+}
+
+.ogre-tek-bar span {
+  font-weight: 900;
+  color: var(--green);
+}
+
+.preset-pill[data-active="true"] {
+  border-color: var(--green);
+  box-shadow: 0 0 0 1px rgba(133, 255, 55, 0.25), 0 0 24px rgba(133, 255, 55, 0.12);
+}
+
+.preset-actions {
+  flex-wrap: wrap;
+}
+
+.wallet-tools-details > *:not(summary) {
+  margin: 14px;
+}
+
+[data-app][data-route="terminal"] .terminal-title-row p {
+  max-width: 780px;
+}
+
+[data-app][data-route="terminal"] .terminal-dock .terminal-ticket {
+  min-height: 520px;
+}
+
+[data-app][data-route="terminal"] .live-pairs-panel .compact-signal-row,
+[data-app][data-route="terminal"] .kol-panel .compact-signal-row {
+  grid-template-columns: 52px minmax(0, 1fr) !important;
+  min-height: 138px !important;
+}
+
+[data-app][data-route="terminal"] .live-pairs-panel .score-badge,
+[data-app][data-route="terminal"] .kol-panel .score-badge {
+  display: none !important;
+}
+
+[data-app][data-route="terminal"] .live-pairs-panel .compact-signal-main,
+[data-app][data-route="terminal"] .kol-panel .compact-signal-main {
+  grid-column: 2 !important;
+  max-width: 100% !important;
+}
+
+[data-app][data-route="terminal"] .compact-signal-main {
+  gap: 3px !important;
+}
+
+[data-app][data-route="terminal"] .compact-signal-main > div {
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr) !important;
+  max-width: 100% !important;
+}
+
+[data-app][data-route="terminal"] .compact-signal-main > span,
+[data-app][data-route="terminal"] .compact-metrics-line,
+[data-app][data-route="terminal"] .compact-link-row {
+  min-width: 0 !important;
+  overflow-wrap: anywhere !important;
+}
+
+[data-app][data-route="terminal"] .compact-metrics-line b {
+  color: var(--text);
+}
+
+[data-app][data-route="terminal"] .live-pairs-panel .compact-row-actions,
+[data-app][data-route="terminal"] .kol-panel .compact-row-actions {
+  grid-column: 1 / -1 !important;
+  display: grid !important;
+  grid-template-columns: 1.15fr 1fr 1fr !important;
+  gap: 8px !important;
+}
+
+@media (max-width: 900px) {
+  body {
+    overflow-x: hidden;
+  }
+
+  .terminal-preset-strip-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  [data-app][data-route="terminal"] .terminal-dock .terminal-ticket {
+    min-height: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .profile-clean-grid,
+  .terminal-preset-strip-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .terminal-preset-strip summary {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  [data-app][data-route="terminal"] .command-controls {
+    grid-template-columns: 1fr !important;
+  }
+
+  [data-app][data-route="terminal"] .best-picks-panel .compact-signal-list,
+  [data-app][data-route="terminal"] .live-pairs-panel .compact-signal-list,
+  [data-app][data-route="terminal"] .kol-panel .compact-signal-list {
+    gap: 8px !important;
+  }
+
+  [data-app][data-route="terminal"] .best-picks-panel .compact-signal-row,
+  [data-app][data-route="terminal"] .live-pairs-panel .compact-signal-row,
+  [data-app][data-route="terminal"] .kol-panel .compact-signal-row {
+    padding: 9px !important;
+    grid-template-columns: 42px minmax(0, 1fr) !important;
+  }
+
+  [data-app][data-route="terminal"] .compact-row-actions {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 6px !important;
+  }
+
+  [data-app][data-route="terminal"] .compact-row-actions button {
+    min-height: 34px !important;
+    padding: 7px 5px !important;
+    font-size: 12px !important;
+  }
+
+  [data-app][data-route="terminal"] .compact-link-row a,
+  [data-app][data-route="terminal"] .compact-link-row button,
+  [data-app][data-route="terminal"] .compact-link-row .sniper-pill {
+    font-size: 9.5px !important;
+    padding: 2px 6px !important;
+  }
+}
+
+/* Final SlimeWire command-center fit pass.
+   This block intentionally sits last: it normalizes the current terminal-token
+   rows and prevents old compact-card rules from squeezing live data. */
+html,
+body {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+[data-app][data-route="terminal"] *,
+[data-app][data-route="terminal"] *::before,
+[data-app][data-route="terminal"] *::after {
+  box-sizing: border-box;
+}
+
+[data-app][data-route="terminal"] .dashboard-view,
+[data-app][data-route="terminal"] .dashboard-body,
+[data-app][data-route="terminal"] .dashboard-content,
+[data-app][data-route="terminal"] .command-workspace,
+[data-app][data-route="terminal"] .command-grid,
+[data-app][data-route="terminal"] .terminal-panel,
+[data-app][data-route="terminal"] .terminal-token-row,
+[data-app][data-route="terminal"] .terminal-token-row * {
+  min-width: 0 !important;
+}
+
+[data-app][data-route="terminal"] .command-terminal {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) clamp(286px, 23vw, 360px) !important;
+  gap: 14px !important;
+  align-items: start !important;
+}
+
+[data-app][data-route="terminal"] .command-grid {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 14px !important;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel {
+  grid-column: 1 / -1 !important;
+}
+
+[data-app][data-route="terminal"] .live-pairs-panel,
+[data-app][data-route="terminal"] .kol-panel {
+  grid-column: auto !important;
+}
+
+[data-app][data-route="terminal"] .terminal-panel {
+  overflow: hidden !important;
+}
+
+[data-app][data-route="terminal"] .terminal-token-list {
+  display: grid !important;
+  grid-template-columns: 1fr !important;
+  gap: 8px !important;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel .terminal-token-list {
+  grid-template-columns: repeat(auto-fit, minmax(188px, 1fr)) !important;
+}
+
+[data-app][data-route="terminal"] .terminal-token-row {
+  display: grid !important;
+  grid-template-columns: 46px minmax(132px, 0.72fr) minmax(214px, 1fr) 58px minmax(172px, 0.8fr) !important;
+  grid-auto-rows: min-content !important;
+  gap: 8px 10px !important;
+  align-items: center !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  min-height: 0 !important;
+  padding: 9px 10px !important;
+  overflow: hidden !important;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel .terminal-token-row {
+  grid-template-columns: 40px minmax(0, 1fr) !important;
+  align-content: start !important;
+  gap: 7px !important;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel .terminal-token-stats,
+[data-app][data-route="terminal"] .best-picks-panel .terminal-score-chip,
+[data-app][data-route="terminal"] .best-picks-panel .terminal-token-actions {
+  grid-column: 1 / -1 !important;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel .terminal-token-actions {
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel .terminal-token-stats {
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  gap: 5px !important;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel .terminal-token-stats span:nth-child(n+4) {
+  display: none !important;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel .terminal-score-chip {
+  display: flex !important;
+  justify-content: center !important;
+  width: 100% !important;
+  min-height: 26px !important;
+  padding: 2px 6px !important;
+}
+
+[data-app][data-route="terminal"] .terminal-token-row .live-pair-avatar,
+[data-app][data-route="terminal"] .terminal-token-row .token-avatar,
+[data-app][data-route="terminal"] .terminal-token-row > img {
+  width: 46px !important;
+  height: 46px !important;
+  max-width: 46px !important;
+  border-radius: 12px !important;
+  object-fit: cover !important;
+}
+
+[data-app][data-route="terminal"] .best-picks-panel .terminal-token-row .live-pair-avatar,
+[data-app][data-route="terminal"] .best-picks-panel .terminal-token-row .token-avatar,
+[data-app][data-route="terminal"] .best-picks-panel .terminal-token-row > img {
+  width: 40px !important;
+  height: 40px !important;
+  max-width: 40px !important;
+}
+
+[data-app][data-route="terminal"] .terminal-token-title {
+  display: grid !important;
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr) !important;
+  gap: 7px !important;
+  align-items: baseline !important;
+}
+
+[data-app][data-route="terminal"] .terminal-token-title strong,
+[data-app][data-route="terminal"] .terminal-token-title small,
+[data-app][data-route="terminal"] .terminal-token-age,
+[data-app][data-route="terminal"] .terminal-token-main .ca-copy {
+  display: block !important;
+  max-width: 100% !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+[data-app][data-route="terminal"] .terminal-token-main .ca-copy {
+  width: fit-content !important;
+  max-width: 100% !important;
+}
+
+[data-app][data-route="terminal"] .terminal-token-stats {
+  display: grid !important;
+  grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+  gap: 6px !important;
+}
+
+[data-app][data-route="terminal"] .terminal-token-stats strong,
+[data-app][data-route="terminal"] .terminal-token-stats small {
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+[data-app][data-route="terminal"] .terminal-score-chip {
+  width: 58px !important;
+  min-height: 42px !important;
+  align-self: center !important;
+}
+
+[data-app][data-route="terminal"] .terminal-token-actions {
+  display: grid !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  gap: 6px !important;
+}
+
+[data-app][data-route="terminal"] .terminal-token-actions button {
+  width: 100% !important;
+  min-width: 0 !important;
+  min-height: 32px !important;
+  padding: 0 6px !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+  font-size: 11.5px !important;
+}
+
+[data-app][data-route="terminal"] .terminal-token-row .compact-link-row {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 4px !important;
+  max-height: 46px !important;
+  overflow: hidden !important;
+}
+
+[data-app][data-route="terminal"] .terminal-token-row .compact-link-row a,
+[data-app][data-route="terminal"] .terminal-token-row .compact-link-row button,
+[data-app][data-route="terminal"] .terminal-token-row .sniper-pill {
+  min-height: 18px !important;
+  padding: 1px 6px !important;
+  font-size: 9px !important;
+  line-height: 1.45 !important;
+}
+
+[data-app][data-route="terminal"] .terminal-dock {
+  position: sticky !important;
+  top: 76px !important;
+  align-self: start !important;
+  max-height: calc(100vh - 92px) !important;
+  min-height: 560px !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain !important;
+  scrollbar-gutter: stable !important;
+  contain: layout paint !important;
+}
+
+[data-app][data-route="terminal"] .terminal-dock .terminal-ticket {
+  min-height: 560px !important;
+}
+
+[data-app][data-route="terminal"] .terminal-ticket code {
+  display: block !important;
+  max-width: 100% !important;
+  overflow-wrap: anywhere !important;
+  word-break: break-word !important;
+}
+
+[data-app][data-route="terminal"] .ticket-balance-row {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  align-items: center !important;
+  gap: 8px !important;
+}
+
+[data-app][data-route="terminal"] .ticket-balance-row button,
+[data-app][data-route="terminal"] [data-top-refresh-wallet],
+[data-app][data-route="terminal"] [data-refresh-live-pairs],
+[data-app][data-route="terminal"] [data-kol-refresh] {
+  border-color: rgba(137, 255, 67, 0.62) !important;
+  background: radial-gradient(circle at 30% 20%, rgba(148, 255, 64, 0.28), rgba(12, 38, 12, 0.82)) !important;
+  color: var(--text) !important;
+  box-shadow: inset 0 0 0 1px rgba(137, 255, 67, 0.16), 0 0 20px rgba(132, 255, 45, 0.12) !important;
+}
+
+[data-app][data-route="terminal"] .terminal-preset-strip {
+  overflow: visible !important;
+}
+
+[data-app][data-route="terminal"] .terminal-preset-strip-grid {
+  grid-template-columns: repeat(auto-fit, minmax(175px, 1fr)) !important;
+}
+
+[data-app][data-route="terminal"] .fast-preset-builder {
+  max-width: 100% !important;
+}
+
+[data-app][data-route="terminal"] .fast-preset-builder input,
+[data-app][data-route="terminal"] .fast-preset-builder select,
+[data-app][data-route="terminal"] .terminal-preset-strip input,
+[data-app][data-route="terminal"] .terminal-preset-strip select {
+  width: 100% !important;
+}
+
+@media (max-width: 1500px) {
+  [data-app][data-route="terminal"] .command-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-token-row {
+    grid-template-columns: 44px minmax(0, 1fr) 58px !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-token-stats,
+  [data-app][data-route="terminal"] .terminal-token-actions {
+    grid-column: 1 / -1 !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-score-chip {
+    grid-column: 3 !important;
+    grid-row: 1 !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-token-stats {
+    grid-template-columns: repeat(5, minmax(64px, 1fr)) !important;
+  }
+}
+
+@media (max-width: 1180px) {
+  [data-app][data-route="terminal"] .command-terminal {
+    grid-template-columns: 1fr !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-dock {
+    position: static !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+    contain: none !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-dock .terminal-ticket {
+    min-height: 0 !important;
+  }
+}
+
+@media (max-width: 760px) {
+  [data-app][data-route="terminal"] .command-workspace {
+    gap: 10px !important;
+  }
+
+  [data-app][data-route="terminal"] .command-title {
+    padding: 12px !important;
+  }
+
+  [data-app][data-route="terminal"] .command-title p {
+    display: none !important;
+  }
+
+  [data-app][data-route="terminal"] .command-controls {
+    grid-template-columns: 1fr !important;
+    gap: 8px !important;
+  }
+
+  [data-app][data-route="terminal"] .live-pair-buckets {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 6px !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-panel {
+    padding: 10px !important;
+  }
+
+  [data-app][data-route="terminal"] .best-picks-panel .terminal-token-list {
+    grid-template-columns: 1fr !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-token-row,
+  [data-app][data-route="terminal"] .best-picks-panel .terminal-token-row {
+    grid-template-columns: 38px minmax(0, 1fr) !important;
+    gap: 7px !important;
+    padding: 8px !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-score-chip {
+    display: none !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-token-row .live-pair-avatar,
+  [data-app][data-route="terminal"] .terminal-token-row .token-avatar,
+  [data-app][data-route="terminal"] .terminal-token-row > img {
+    width: 38px !important;
+    height: 38px !important;
+    max-width: 38px !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-token-title {
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 0 !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-token-title strong {
+    font-size: 14px !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-token-title small {
+    display: none !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-token-stats,
+  [data-app][data-route="terminal"] .best-picks-panel .terminal-token-stats {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 5px !important;
+    font-size: 10px !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-token-stats span:nth-child(n+4) {
+    display: none !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-token-actions {
+    grid-template-columns: 1.05fr 0.95fr 0.95fr !important;
+    gap: 5px !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-token-actions button {
+    min-height: 30px !important;
+    padding: 0 4px !important;
+    font-size: 10.5px !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-token-row .compact-link-row {
+    max-height: 22px !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-token-row .compact-link-row a,
+  [data-app][data-route="terminal"] .terminal-token-row .compact-link-row button,
+  [data-app][data-route="terminal"] .terminal-token-row .sniper-pill {
+    font-size: 8.8px !important;
+    padding: 1px 5px !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-preset-strip summary {
+    padding: 10px 12px !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-preset-strip-grid {
+    grid-template-columns: 1fr !important;
+    padding: 0 10px 10px !important;
   }
 }

@@ -257,8 +257,8 @@ function loadConfig() {
   const livePairsImageEnrich = parseBoolean(process.env.LIVE_PAIRS_IMAGE_ENRICH || "true");
   const minExitMarketCapUsd = Number.parseInt(process.env.MIN_EXIT_MARKET_CAP_USD || "2000", 10);
   const minExitLiquidityUsd = Number.parseInt(process.env.MIN_EXIT_LIQUIDITY_USD || "250", 10);
-  const stopLossCheckIntervalMs = Number.parseInt(process.env.STOP_LOSS_CHECK_INTERVAL_MS || "3000", 10);
-  const stopLossTriggerBufferPct = Number.parseFloat(process.env.STOP_LOSS_TRIGGER_BUFFER_PCT || "0.75");
+  const stopLossCheckIntervalMs = Number.parseInt(process.env.STOP_LOSS_CHECK_INTERVAL_MS || "2000", 10);
+  const stopLossTriggerBufferPct = Number.parseFloat(process.env.STOP_LOSS_TRIGGER_BUFFER_PCT || "1.5");
 
   if (!Number.isInteger(bundleFeeBps) || bundleFeeBps < 0 || bundleFeeBps > 1000) {
     throw new Error("TRADE_FEE_BPS/BUNDLE_FEE_BPS must be an integer from 0 to 1000.");
@@ -4802,13 +4802,15 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
     }
 
     try {
-      const estimate = await estimatePlanWalletMove(plan, wallet);
-      planWallet.lastCheckedAt = new Date().toISOString();
-      planWallet.lastMovePct = estimate.movePct;
-
       const stopLossPct = walletStopLossPct(plan, planWallet);
       const ladderLevel = nextTakeProfitLadderLevel(plan, planWallet);
       const takeProfitPct = ladderLevel ? Number(ladderLevel.pct) : walletTakeProfitPct(plan, planWallet);
+      const estimateSellPercent = stopLossPct
+        ? 100
+        : (ladderLevel?.sellPercent ?? planWallet.triggerSellPercent ?? plan.triggerSellPercent ?? 100);
+      const estimate = await estimatePlanWalletMove(plan, wallet, estimateSellPercent);
+      planWallet.lastCheckedAt = new Date().toISOString();
+      planWallet.lastMovePct = estimate.movePct;
 
       const stopLossTriggerPct = stopLossPct
         ? Math.max(0.1, Number(stopLossPct) - CONFIG.stopLossTriggerBufferPct)
@@ -5404,7 +5406,7 @@ async function processDcaPlanWallet(plan, planWallet, walletStore) {
   }
 }
 
-async function estimatePlanWalletMove(plan, wallet) {
+async function estimatePlanWalletMove(plan, wallet, sellPercentOverride = null) {
   const keypair = decryptWallet(wallet);
   const token = await getTokenBalanceForMintCached(keypair.publicKey, new PublicKey(plan.tokenMint));
   if (!token || token.rawAmount === 0n) {
@@ -5412,7 +5414,7 @@ async function estimatePlanWalletMove(plan, wallet) {
   }
 
   const planWallet = plan.wallets.find((item) => item.publicKey === wallet.publicKey);
-  const triggerSellPercent = effectiveTimedSellPercent(plan, planWallet, "take-profit");
+  const triggerSellPercent = Math.max(1, Math.min(100, Number.parseFloat(sellPercentOverride || effectiveTimedSellPercent(plan, planWallet, "take-profit")) || 100));
   const amount = sellAmountForPercent(token.rawAmount, triggerSellPercent, planWallet?.tokenOutAmount);
   if (amount === 0n) {
     throw new Error("sell amount rounded to zero");
@@ -7102,15 +7104,23 @@ async function pnlRows(userId, tokenFilter = null, options = {}) {
       sells: 0,
       spent: 0n,
       received: 0n,
+      firstBuyAt: null,
+      lastSellAt: null,
       lastTradeAt: null
     };
 
     if (trade.type === "buy") {
       entry.buys += 1;
       entry.spent += BigInt(trade.solLamportsSpent || 0);
+      if (!entry.firstBuyAt || tradeTimestampMs(trade.timestamp) < tradeTimestampMs(entry.firstBuyAt)) {
+        entry.firstBuyAt = trade.timestamp || entry.firstBuyAt;
+      }
     } else if (trade.type === "sell") {
       entry.sells += 1;
       entry.received += BigInt(trade.solLamportsReceived || 0);
+      if (!entry.lastSellAt || tradeTimestampMs(trade.timestamp) >= tradeTimestampMs(entry.lastSellAt)) {
+        entry.lastSellAt = trade.timestamp || entry.lastSellAt;
+      }
     }
     if (!entry.lastTradeAt || tradeTimestampMs(trade.timestamp) >= tradeTimestampMs(entry.lastTradeAt)) {
       entry.lastTradeAt = trade.timestamp || entry.lastTradeAt;
@@ -7128,6 +7138,24 @@ async function pnlRows(userId, tokenFilter = null, options = {}) {
 
 function tradeTimestampMs(value) {
   return Date.parse(value || "") || 0;
+}
+
+function formatPnlHoldDuration(row = {}) {
+  const start = tradeTimestampMs(row.firstBuyAt);
+  const end = tradeTimestampMs(row.lastSellAt || row.lastTradeAt);
+  if (!start || !end || end < start) return "n/a";
+  return formatCompactDurationMs(end - start);
+}
+
+function formatCompactDurationMs(ms) {
+  const seconds = Math.max(0, Math.floor(Number(ms || 0) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours}h ${minutes % 60}m`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ${hours % 24}h`;
 }
 
 async function sendPnlCard(chatId, userId, tokenFilter = null, options = {}) {
@@ -7186,6 +7214,7 @@ async function renderPnlCard(row, metadata = {}) {
     priceMove || null
   ].filter(Boolean).join("  |  ");
   const profitLabel = `${positive ? "+" : "-"}${lamportsBigToSol(realized >= 0n ? realized : -realized)} SOL`;
+  const holdLabel = formatPnlHoldDuration(row);
   const borderDataUrl = await nextPnlBorderDataUrl();
   const borderLayer = borderDataUrl
     ? `<image href="${borderDataUrl}" x="0" y="0" width="${PNL_CARD_STYLE.width}" height="${PNL_CARD_STYLE.height}" preserveAspectRatio="xMidYMid slice"/>`
@@ -7227,7 +7256,8 @@ async function renderPnlCard(row, metadata = {}) {
   <text x="555" y="450" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="38" font-weight="900" fill="${PNL_CARD_STYLE.white}">${escapeSvg(symbol)} / ${escapeSvg(name)}</text>
   <text x="555" y="500" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="34" font-weight="800" fill="${accent}">Profit ${escapeSvg(profitLabel)}</text>
   <text x="555" y="544" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="28" font-weight="700" fill="${PNL_CARD_STYLE.muted}">Spent ${escapeSvg(lamportsBigToSol(spent))} SOL  |  Received ${escapeSvg(lamportsBigToSol(received))} SOL</text>
-  <text x="555" y="584" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="26" font-weight="700" fill="${PNL_CARD_STYLE.muted}">${escapeSvg(subline || shortMint(row.tokenMint))}</text>
+  <text x="555" y="584" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="26" font-weight="700" fill="${PNL_CARD_STYLE.muted}">Held ${escapeSvg(holdLabel)}</text>
+  <text x="555" y="620" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="24" font-weight="700" fill="${PNL_CARD_STYLE.muted}">${escapeSvg(subline || shortMint(row.tokenMint))}</text>
 </svg>`;
 
   return sharp(Buffer.from(svg)).png().toBuffer();
@@ -7330,7 +7360,14 @@ async function tokenMetadataMapForMints(tokenMints, options = {}) {
   const pairs = await fetchDexScreenerTokenPairsBatch(uncached, { timeoutMs: options.timeoutMs || 3_500 }).catch(() => []);
   await runWithConcurrency(uncached, options.concurrency || 3, async (mint) => {
     const dexValue = metadataFromDexPair(mint, bestDexPairForToken(mint, pairs));
-    const needsPumpFallback = options.pumpFallback !== false && (!dexValue.symbol || !dexValue.name || !dexValue.imageUrl);
+    const needsPumpFallback = options.pumpFallback !== false && (
+      !dexValue.symbol
+      || !dexValue.name
+      || !dexValue.imageUrl
+      || !dexValue.marketCap
+      || !dexValue.liquidityUsd
+      || !dexValue.volume?.h1
+    );
     const pumpValue = needsPumpFallback
       ? await getPumpFunTokenMetadata(mint, { timeoutMs: options.pumpTimeoutMs || 1_500 }).catch(() => ({}))
       : {};
@@ -7340,6 +7377,12 @@ async function tokenMetadataMapForMints(tokenMints, options = {}) {
       name: dexValue.name || pumpValue.name || "",
       imageUrl: dexValue.imageUrl || pumpValue.imageUrl || "",
       marketCap: dexValue.marketCap || pumpValue.marketCap || null,
+      fdv: dexValue.fdv || pumpValue.fdv || null,
+      liquidityUsd: dexValue.liquidityUsd || pumpValue.liquidityUsd || null,
+      volume: dexValue.volume || pumpValue.volume || null,
+      txns: dexValue.txns || pumpValue.txns || null,
+      priceChange: dexValue.priceChange || pumpValue.priceChange || null,
+      pairCreatedAt: dexValue.pairCreatedAt || pumpValue.pairCreatedAt || null,
       source: dexValue.imageUrl ? "dexscreener" : pumpValue.imageUrl ? "pumpfun" : "fallback"
     };
     dexMetadataCache.set(mint, { cachedAt: Date.now(), value });
@@ -7430,12 +7473,40 @@ async function getPumpFunTokenMetadata(tokenMint, options = {}) {
   const url = `${CONFIG.pumpFunApiBase}/coins/${encodeURIComponent(tokenMint)}?sync=false`;
   const response = await fetchJson(url, { headers, timeoutMs: options.timeoutMs || 3_500 });
   const coin = response?.data || response;
+  const volume = typeof coin?.volume === "object" && coin.volume !== null ? coin.volume : {};
+  const txns = typeof coin?.txns === "object" && coin.txns !== null ? coin.txns : {};
+  const transactions = typeof coin?.transactions === "object" && coin.transactions !== null ? coin.transactions : {};
 
   return {
     symbol: coin?.symbol || "",
     name: coin?.name || "",
     imageUrl: coin?.image_uri || coin?.image || coin?.metadata?.image || "",
-    marketCap: coin?.usd_market_cap || coin?.market_cap || null,
+    marketCap: firstNumber(coin?.usd_market_cap, coin?.market_cap, coin?.marketCap, coin?.fdv) || null,
+    fdv: firstNumber(coin?.fdv, coin?.marketCap, coin?.usd_market_cap, coin?.market_cap) || null,
+    liquidityUsd: firstNumber(coin?.liquidity_usd, coin?.liquidityUsd, coin?.liquidity?.usd, coin?.liquidity) || null,
+    volume: {
+      m5: firstNumber(volume.m5, coin?.volume5m, coin?.volume_5m) || 0,
+      m15: firstNumber(volume.m15, volume.m15m, coin?.volume15m, coin?.volume_15m, coin?.volumeM15) || 0,
+      m30: firstNumber(volume.m30, volume.m30m, coin?.volume30m, coin?.volume_30m, coin?.volumeM30) || 0,
+      h1: firstNumber(volume.h1, coin?.volumeH1, coin?.volume_h1, coin?.volume_1h, coin?.volume) || 0,
+      h24: firstNumber(volume.h24, volume.d1, coin?.volume24h, coin?.volume_h24, coin?.volume_24h) || 0
+    },
+    txns: {
+      m5: {
+        buys: firstNumber(txns.m5?.buys, transactions.m5?.buys, coin?.buys5m, coin?.buys_5m) || 0,
+        sells: firstNumber(txns.m5?.sells, transactions.m5?.sells, coin?.sells5m, coin?.sells_5m) || 0
+      },
+      h1: {
+        buys: firstNumber(txns.h1?.buys, transactions.h1?.buys, coin?.buysH1, coin?.buys_h1, coin?.buys) || 0,
+        sells: firstNumber(txns.h1?.sells, transactions.h1?.sells, coin?.sellsH1, coin?.sells_h1, coin?.sells) || 0
+      }
+    },
+    priceChange: {
+      m5: normalizePercentLike(coin?.priceChange?.m5 ?? coin?.price_change_m5 ?? coin?.m5) || 0,
+      h1: normalizePercentLike(coin?.priceChange?.h1 ?? coin?.price_change_h1 ?? coin?.h1) || 0,
+      h6: normalizePercentLike(coin?.priceChange?.h6 ?? coin?.price_change_h6 ?? coin?.h6) || 0,
+      h24: normalizePercentLike(coin?.priceChange?.h24 ?? coin?.price_change_h24 ?? coin?.h24) || 0
+    },
     pairCreatedAt: normalizePairCreatedAt(firstString(coin?.created_timestamp, coin?.createdAt, coin?.created_at, coin?.timestamp))
   };
 }
@@ -8340,6 +8411,7 @@ function isAutoSnipePick(item) {
   const liquidityToMarketCap = item.marketCap > 0 ? item.liquidityUsd / item.marketCap : 0;
 
   return item.category !== "Avoid"
+    && !isPumpMayhemToken(item)
     && item.score >= 78
     && item.rugRisk <= 48
     && item.exitRisk <= 58
@@ -8368,6 +8440,7 @@ function isAutoSnipeBackupPick(item) {
   const liquidityToMarketCap = item.marketCap > 0 ? item.liquidityUsd / item.marketCap : 0;
 
   return item.category !== "Avoid"
+    && !isPumpMayhemToken(item)
     && item.score >= 64
     && item.rugRisk <= 64
     && item.exitRisk <= 76
@@ -8395,6 +8468,7 @@ function isPumpSnipePick(item) {
 
   return item.category !== "Avoid"
     && earlyEnough
+    && !isPumpMayhemToken(item)
     && item.score >= 50
     && item.rugRisk <= 84
     && item.exitRisk <= 92
@@ -8418,6 +8492,7 @@ function isPumpSnipeBackupPick(item) {
   const liquidityToMarketCap = item.marketCap > 0 ? item.liquidityUsd / item.marketCap : 0;
 
   return item.category !== "Avoid"
+    && !isPumpMayhemToken(item)
     && item.score >= 42
     && item.rugRisk <= 90
     && item.exitRisk <= 96
@@ -8471,8 +8546,34 @@ function isPumpStyleToken(item) {
   return haystack.includes("pump");
 }
 
+function isPumpMayhemToken(item) {
+  const labels = [
+    item?.tokenMint,
+    item?.symbol,
+    item?.name,
+    item?.source,
+    item?.category,
+    item?.platform,
+    item?.market,
+    item?.dexId,
+    item?.profileSource,
+    item?.profile?.source,
+    item?.profile?.market,
+    item?.profile?.mode,
+    item?.metadata?.source,
+    item?.metadata?.market,
+    item?.metadata?.mode,
+    item?.dexPair?.dexId,
+    item?.dexPair?.labels,
+    item?.labels,
+    item?.riskFlags
+  ].flat().filter(Boolean).join(" ").toLowerCase();
+  return /\bmayhem\b/.test(labels) || labels.includes("pump mayhem") || labels.includes("mayhem mode");
+}
+
 function isStrictSniperPick(item, settings) {
   return item.category !== "Avoid"
+    && !isPumpMayhemToken(item)
     && item.score >= Math.max(52, settings.minScore - 10)
     && item.rugRisk <= settings.maxRisk + 14
     && item.exitRisk <= 72
@@ -8484,6 +8585,7 @@ function isStrictSniperPick(item, settings) {
 
 function isFallbackSniperPick(item, settings) {
   return item.score >= Math.max(45, settings.minScore - 22)
+    && !isPumpMayhemToken(item)
     && item.rugRisk <= settings.maxRisk + 24
     && item.exitRisk <= 84
     && item.scalpScore >= 2
@@ -8492,14 +8594,15 @@ function isFallbackSniperPick(item, settings) {
 
 function buildQualifiedSniperRows(scored, settings) {
   const safeMode = String(settings.mode || "safe");
+  const eligibleRows = (scored || []).filter((item) => !isPumpMayhemToken(item));
   const sorter = safeMode === "pumpsnipe"
     ? comparePumpSnipeScores
     : (a, b) => compareSniperScoresForMode(safeMode, a, b);
 
   if (safeMode === "pumpsnipe") {
-    const strictRows = scored.filter((item) => isPumpSnipePick(item)).sort(sorter);
+    const strictRows = eligibleRows.filter((item) => isPumpSnipePick(item)).sort(sorter);
     const strictMints = new Set(strictRows.map((item) => item.tokenMint));
-    const fallbackRows = scored
+    const fallbackRows = eligibleRows
       .filter((item) => !strictMints.has(item.tokenMint))
       .filter((item) => isPumpSnipeBackupPick(item))
       .sort(sorter);
@@ -8510,20 +8613,20 @@ function buildQualifiedSniperRows(scored, settings) {
     };
   }
 
-  const modeRows = scored
+  const modeRows = eligibleRows
     .filter((item) => isModeRelevantSniperPick(item, safeMode))
     .sort(sorter);
   const modeMints = new Set(modeRows.map((item) => item.tokenMint));
-  const looseRows = scored
+  const looseRows = eligibleRows
     .filter((item) => !modeMints.has(item.tokenMint))
     .filter((item) => isLooseModeRelevantSniperPick(item, safeMode))
     .sort(sorter);
   const looseMints = new Set([...modeMints, ...looseRows.map((item) => item.tokenMint)]);
-  const fallbackRows = scored
+  const fallbackRows = eligibleRows
     .filter((item) => !looseMints.has(item.tokenMint))
     .filter((item) => isModeFallbackSniperPick(item, safeMode))
     .sort(sorter);
-  const genericRows = scored
+  const genericRows = eligibleRows
     .filter((item) => !looseMints.has(item.tokenMint))
     .filter((item) => isStrictSniperPick(item, settings) || isFallbackSniperPick(item, settings))
     .sort(sorter);
@@ -12816,7 +12919,10 @@ async function webPnlSummary(userId) {
         spentSol: lamportsBigToSol(row.spent),
         receivedSol: lamportsBigToSol(row.received),
         realizedSol: formatSignedLamports(row.received - row.spent),
+        firstBuyAt: row.firstBuyAt,
+        lastSellAt: row.lastSellAt,
         lastTradeAt: row.lastTradeAt,
+        holdTime: formatPnlHoldDuration(row),
         dexUrl: dexScreenerUrl(row.tokenMint)
       };
     }),
@@ -13436,6 +13542,8 @@ async function hydrateKolSignalMetadata(rows) {
     const volumeM30 = firstMeaningfulNumber(row.volumeM30, volume.m30, volume.m30m) || 0;
     const volumeH1 = firstMeaningfulNumber(row.volumeH1, volume.h1) || 0;
     const volumeH24 = firstMeaningfulNumber(row.volumeH24, volume.h24, volume.d1) || 0;
+    const primaryVolume = firstMeaningfulNumber(volumeM15, volumeM30, volumeH1, volume5m, volumeH24) || 0;
+    const primaryVolumeLabel = formatUsdCompact(primaryVolume);
     const m5 = firstMeaningfulNumber(row.m5, priceChange.m5) || 0;
     const h1 = firstMeaningfulNumber(row.h1, priceChange.h1) || 0;
     const h6 = firstMeaningfulNumber(row.h6, priceChange.h6) || 0;
@@ -13481,6 +13589,9 @@ async function hydrateKolSignalMetadata(rows) {
       volumeH1Label: formatUsdCompact(volumeH1) || row.volumeH1Label || row.volumeLabel || "n/a",
       volumeH24,
       volumeH24Label: formatUsdCompact(volumeH24) || row.volumeH24Label || "",
+      volumeLabel: row.volumeLabel && row.volumeLabel !== "n/a"
+        ? row.volumeLabel
+        : primaryVolumeLabel ? `${primaryVolumeLabel} vol` : "n/a",
       m5,
       h1,
       h6,
@@ -13496,8 +13607,8 @@ async function hydrateKolSignalMetadata(rows) {
       pairAgeLabel: Number.isFinite(Number(pairAgeSeconds)) ? formatLivePairAgeLabel(pairAgeSeconds, pairAgeMinutes) : row.pairAgeLabel,
       isPump,
       pumpUrl: row.pumpUrl || (isPump ? pumpFunUrl(row.tokenMint) : ""),
-      valueLabel: row.valueLabel && row.valueLabel !== "n/a" ? row.valueLabel : metadata.volume?.h1 ? `${formatUsdCompact(metadata.volume.h1)} 1h vol` : row.valueLabel,
-      roiLabel: row.roiLabel && row.roiLabel !== "n/a" ? row.roiLabel : metadata.marketCap ? `MC ${formatUsdCompact(metadata.marketCap)}` : row.roiLabel,
+      valueLabel: row.valueLabel && row.valueLabel !== "n/a" ? row.valueLabel : primaryVolumeLabel ? `${primaryVolumeLabel} vol` : row.valueLabel,
+      roiLabel: row.roiLabel && row.roiLabel !== "n/a" ? row.roiLabel : marketCap ? `MC ${formatUsdCompact(marketCap)}` : row.roiLabel,
       dexUrl: row.dexUrl || dexScreenerUrl(row.tokenMint),
       kolscanUrl: row.kolscanUrl || kolscanAccountUrl(row.kolWallet)
     };
@@ -13511,7 +13622,7 @@ async function hydrateKolSignalMetadata(rows) {
       scoreBreakdown: enriched.scoreBreakdown || bestPick.inputs,
       scoreWarnings: enriched.scoreWarnings || bestPick.warnings
     };
-  });
+  }).filter((row) => !isPumpMayhemToken(row));
 }
 
 function needsKolMetadataHydration(row) {
@@ -14558,6 +14669,15 @@ async function buildWebLivePairs(userId, bucket = "live", options = {}) {
       .sort((a, b) => compareWebLivePairs(a, b, sort));
     liveRows = uniqueSniperScoreRows([...liveRows, ...backfillRows]).sort((a, b) => compareWebLivePairs(a, b, sort));
   }
+  if (!isLive && liveRows.length < targetLimit) {
+    const currentMints = new Set(liveRows.map((row) => row.tokenMint));
+    const relaxedRows = uniqueSniperScoreRows(enrichedRows)
+      .filter((row) => !currentMints.has(row.tokenMint))
+      .filter((row) => isLivePairInRelaxedBucket(row, safeBucket))
+      .filter((row) => isWebLivePairCandidate(row, safeBucket, { relaxedAge: true }))
+      .sort((a, b) => compareWebLivePairs(a, b, sort));
+    liveRows = uniqueSniperScoreRows([...liveRows, ...relaxedRows]).sort((a, b) => compareWebLivePairs(a, b, sort));
+  }
   const safety = await maybeFilterWebLivePairsForSafety(liveRows, targetLimit);
   const safeRows = sortLivePairs(CONFIG.livePairsImageEnrich && safeBucket === "live"
     ? await enrichWebLivePairsForImages(safety.rows)
@@ -14719,6 +14839,9 @@ function livePairCandidateToRow(candidate) {
     isPump,
     pumpUrl: isPump ? pumpFunUrl(candidate.tokenMint) : ""
   };
+  if (isPumpMayhemToken({ ...row, profile: candidate.profile })) {
+    return null;
+  }
   const bestPick = computeBestPickScore(row);
   return {
     ...row,
@@ -14794,12 +14917,18 @@ async function enrichWebLivePairsForImages(rows) {
     const twitterUrl = firstString(dexMeta.twitterUrl, row.twitterUrl);
     const telegramUrl = firstString(dexMeta.telegramUrl, row.telegramUrl);
 
-    if (!imageUrl && webLivePairIsPump(row)) {
+    if (webLivePairIsPump(row) && (!imageUrl || !marketCap || !liquidityUsd || !volumeH1 || !volumeM15)) {
       const pumpMeta = await getPumpFunTokenMetadata(row.tokenMint, { timeoutMs: 900 }).catch(() => ({}));
       imageUrl = firstString(pumpMeta.imageUrl, imageUrl);
       symbol = symbol && symbol !== shortMint(row.tokenMint) ? symbol : firstString(pumpMeta.symbol, symbol);
       name = name && name !== "Fresh Launch" ? name : firstString(pumpMeta.name, name);
       marketCap = Number(marketCap) > 0 ? marketCap : firstNumber(pumpMeta.marketCap, marketCap) || 0;
+      liquidityUsd = Number(liquidityUsd) > 0 ? liquidityUsd : firstNumber(pumpMeta.liquidityUsd, liquidityUsd) || 0;
+      volume5m = Number(volume5m) > 0 ? volume5m : firstNumber(pumpMeta.volume?.m5, volume5m) || 0;
+      volumeM15 = Number(volumeM15) > 0 ? volumeM15 : firstNumber(pumpMeta.volume?.m15, volumeM15) || 0;
+      volumeM30 = Number(volumeM30) > 0 ? volumeM30 : firstNumber(pumpMeta.volume?.m30, volumeM30) || 0;
+      volumeH1 = Number(volumeH1) > 0 ? volumeH1 : firstNumber(pumpMeta.volume?.h1, volumeH1) || 0;
+      volumeH24 = Number(volumeH24) > 0 ? volumeH24 : firstNumber(pumpMeta.volume?.h24, volumeH24) || 0;
       pairCreatedAt = firstNumber(pairCreatedAt, pumpMeta.pairCreatedAt) || null;
     }
 
@@ -14827,6 +14956,10 @@ async function enrichWebLivePairsForImages(rows) {
       isPump,
       pumpUrl: isPump ? pumpFunUrl(row.tokenMint) : ""
     };
+    if (isPumpMayhemToken({ ...row, ...nextRow, metadata: dexMeta })) {
+      enriched[index] = null;
+      return;
+    }
     const bestPick = computeBestPickScore(nextRow);
     enriched[index] = {
       ...nextRow,
@@ -14837,7 +14970,7 @@ async function enrichWebLivePairsForImages(rows) {
     };
   });
 
-  return enriched;
+  return enriched.filter(Boolean);
 }
 
 function webLivePairIsPump(row) {
@@ -14877,6 +15010,7 @@ function isWebLivePairCandidate(item, bucket = "live", options = {}) {
   return ageOk
     && marketCapOk
     && hasFreshActivity
+    && !isPumpMayhemToken(item)
     && !isKnownBelowExitFloor(item)
     && !flags.has("hard dump")
     && !flags.has("sell pressure");
@@ -14897,6 +15031,7 @@ function isWebLivePairBackfillCandidate(item, bucket = "live", options = {}) {
   const activityOk = volume5m > 0 || volumeH1 > 0 || liquidityUsd > 0 || isPumpStyleToken(item);
   return marketCapOk
     && activityOk
+    && !isPumpMayhemToken(item)
     && !isKnownBelowExitFloor(item)
     && !flags.has("hard dump")
     && !flags.has("sell pressure");
@@ -15040,6 +15175,7 @@ function webSniperRow(row) {
     volumeH1Label: formatUsdCompact(row.volumeH1 || 0) || "n/a",
     volumeH24: row.volumeH24,
     volumeH24Label: row.volumeH24 ? formatUsdCompact(row.volumeH24 || 0) : "",
+    volumeLabel: formatUsdCompact(firstMeaningfulNumber(row.volumeM15, row.volumeM30, row.volumeH1, row.volume5m, row.volumeH24) || 0) || "n/a",
     sniperCount: row.sniperCount || 0,
     buys5m: row.buys5m || 0,
     sells5m: row.sells5m || 0,

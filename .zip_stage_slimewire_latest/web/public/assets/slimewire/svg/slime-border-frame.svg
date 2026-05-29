@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" fill="none">
+
+  <defs>
+    <linearGradient id="slimeGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F0FF48"/>
+      <stop offset="0.38" stop-color="#B6FF00"/>
+      <stop offset="0.72" stop-color="#50E500"/>
+      <stop offset="1" stop-color="#137600"/>
+    </linearGradient>
+    <linearGradient id="darkGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0F1C0E"/>
+      <stop offset="1" stop-color="#020402"/>
+    </linearGradient>
+    <radialGradient id="glowGrad" cx="50%" cy="50%" r="60%">
+      <stop offset="0" stop-color="#B6FF00" stop-opacity="0.55"/>
+      <stop offset="0.52" stop-color="#5EFF00" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#5EFF00" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="softGlow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="3.5" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.7 0 0 0 0 1 0 0 0 0 0 0 0 0 0.9 0" result="greenBlur"/>
+      <feMerge><feMergeNode in="greenBlur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="heavyGlow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.7 0 0 0 0 1 0 0 0 0 0 0 0 0 0.9 0" result="greenBlur"/>
+      <feMerge><feMergeNode in="greenBlur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="innerShadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feOffset dx="0" dy="1"/>
+      <feGaussianBlur stdDeviation="1.5" result="offset-blur"/>
+      <feComposite operator="out" in="SourceGraphic" in2="offset-blur" result="inverse"/>
+      <feFlood flood-color="#E6FF40" flood-opacity="0.55" result="color"/>
+      <feComposite operator="in" in="color" in2="inverse" result="shadow"/>
+      <feComposite operator="over" in="shadow" in2="SourceGraphic"/>
+    </filter>
+  </defs>
+
+  <rect width="1600" height="1000" fill="transparent"/>
+  <path d="M91 92C260 70 380 86 510 78C612 72 758 64 880 81C1020 100 1132 69 1280 82C1402 93 1478 75 1525 105C1547 119 1551 166 1536 196C1548 284 1545 391 1533 506C1549 637 1543 762 1532 881C1525 945 1458 936 1395 923C1240 940 1128 910 1005 930C850 955 740 922 598 931C422 943 315 910 168 928C87 938 46 899 58 834C44 707 65 611 53 496C42 386 63 290 52 183C46 126 50 99 91 92Z" fill="none" stroke="url(#slimeGrad)" stroke-width="30" stroke-linecap="round" stroke-linejoin="round" filter="url(#softGlow)"/>
+  <path d="M119 102C245 92 357 101 518 91C658 82 732 80 878 95C1025 111 1144 87 1278 96C1374 102 1457 94 1510 114" stroke="#F2FF5B" stroke-width="8" stroke-linecap="round" opacity="0.85"/>
+  <path d="M141 924C281 916 389 929 550 919C710 909 833 944 1006 919C1141 899 1262 929 1400 914C1466 906 1518 913 1534 865" stroke="#F2FF5B" stroke-width="7" stroke-linecap="round" opacity="0.65"/>
+  <g fill="url(#slimeGrad)" filter="url(#softGlow)">
+    <path d="M226 80c18 0 27 12 26 28c-1 27-8 45-22 45c-15 0-12-26-12-42c0-13-2-21 8-31z"/>
+    <path d="M430 87c16 0 26 10 24 24c-3 39-13 65-28 64c-15-2-10-33-9-55c1-12 1-20 13-33z"/>
+    <path d="M758 76c24 1 36 17 30 38c-10 50-24 78-42 72c-19-7-5-48-2-72c1-17 1-26 14-38z"/>
+    <path d="M1056 82c18-1 30 12 28 30c-3 37-12 56-26 57c-16 1-10-32-9-53c1-10 1-19 7-34z"/>
+    <path d="M1350 87c25 1 37 16 30 37c-11 47-20 72-39 69c-18-3-10-43-7-68c1-16 3-24 16-38z"/>
+    <path d="M1555 273c9 20 2 35-14 42c-40 18-68 22-73 6c-6-16 33-27 55-38c13-6 21-9 32-10z"/>
+    <path d="M1544 720c10 23 3 38-16 45c-36 14-61 17-68 1c-8-18 31-25 51-35c13-6 21-9 33-11z"/>
+    <path d="M44 350c-15 16-13 33 0 43c35 27 62 38 72 24c10-14-25-35-44-51c-12-10-19-14-28-16z"/>
+    <path d="M52 760c-14 18-10 35 7 45c41 24 70 29 78 13c7-17-33-30-56-44c-13-8-21-11-29-14z"/>
+  </g>
+</svg>

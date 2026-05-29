@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SlimeWire</title>
+    <meta name="description" content="SlimeWire web dashboard for meme token trading, wallets, balances, positions, PnL, and sniper scans.">
+    <link rel="preload" as="image" href="./assets/slimewire/png/slimewire-mark.png">
+    <link rel="preload" as="image" href="./assets/slimewire/references/enter-swamp-reference.jpg">
+    <link rel="preload" as="image" href="./assets/slimewire/png/slime-border-frame-rich.png">
+    <link rel="stylesheet" href="./styles.css?v=20260528030543">
+    <script src="./config.js"></script>
+    <script type="module" src="./app.js?v=20260528030543"></script>
+  </head>
+  <body>
+    <main class="shell" data-app>
+      <header class="topbar">
+        <span class="powered"><img src="./assets/slimewire/svg/powered-by-ogres-badge.svg" alt="Powered by Ogres"></span>
+        <div class="topbar-right">
+          <nav class="social-links" aria-label="Ogre links">
+            <a href="https://t.me/ogrecoinonsol" target="_blank" rel="noreferrer">Telegram</a>
+            <a href="https://ogremode.com/" target="_blank" rel="noreferrer">Website</a>
+            <a href="https://twitter.com/i/communities/1930265213917425858" target="_blank" rel="noreferrer">X</a>
+          </nav>
+          <form class="terminal-global-search" data-terminal-global-search onsubmit="return false;" hidden>
+            <input data-global-token-search type="text" placeholder="Search or paste token CA">
+            <button type="button" data-global-token-open>Open</button>
+          </form>
+          <div class="top-sync-strip" data-top-sync-strip hidden>
+            <button type="button" data-top-refresh-wallet>
+              <span data-refresh-spinner hidden></span>
+              Refresh
+            </button>
+            <span data-top-sol>0.0000 SOL</span>
+            <span data-top-portfolio>0 positions</span>
+            <span data-sync-health>Sync idle</span>
+            <span data-active-preset-label>Preset: none</span>
+          </div>
+          <div class="top-auth-actions" data-auth-actions>
+            <div class="top-auth-group" data-guest-actions>
+              <button type="button" data-open-login>Log In</button>
+              <button class="primary" type="button" data-web-signup>Create Account</button>
+              <button type="button" data-web-signup-connect>Connect Wallet</button>
+            </div>
+            <div class="top-auth-group" data-session-actions hidden>
+              <button type="button" data-tab="wallets">Create Wallet</button>
+              <button type="button" data-connect-wallet="solana">Connect Wallet</button>
+              <button class="top-profile-button" type="button" data-tab="profile">
+                <span class="top-profile-avatar" data-top-avatar aria-hidden="true"><span>SW</span></span>
+                <span>Profile</span>
+              </button>
+              <button type="button" data-logout>Log Out</button>
+            </div>
+          </div>
+        </div>
+        <form class="top-login-panel" data-top-login onsubmit="return false;" hidden>
+          <label>
+            Username
+            <input data-login-username type="text" autocomplete="username" placeholder="slimewire">
+          </label>
+          <label>
+            Password
+            <input data-login-password type="password" autocomplete="current-password" placeholder="8+ characters">
+          </label>
+          <button class="primary" type="button" data-web-password-login>Log In</button>
+          <small data-login-status></small>
+          <p class="error" data-error hidden></p>
+        </form>
+      </header>
+
+      <section class="login-view swamp-splash" data-login>
+        <button class="swamp-splash-button" type="button" data-nav-route="/connect" aria-label="Enter the Swamp">
+          <img class="swamp-splash-reference" src="./assets/slimewire/references/enter-swamp-reference.jpg" alt="Enter the Swamp">
+        </button>
+      </section>
+
+      <section class="connect-view" data-connect hidden>
+        <article class="swamp-connect-shell">
+          <section class="connect-hero-side" aria-label="SlimeWire trader terminal preview">
+            <img class="connect-mark" src="./assets/slimewire/png/slimewire-mark.png" alt="" aria-hidden="true">
+            <p>Built for</p>
+            <h1>Traders</h1>
+            <div class="connect-method-showcase" aria-label="Connection options">
+              <button class="connect-method-card" type="button" data-connect-wallet="phantom">
+                <img src="./assets/slimewire/png/providers/phantom-orb.jpg" alt="">
+                <span>Phantom</span>
+              </button>
+              <button class="connect-method-card" type="button" data-connect-wallet="solflare">
+                <img src="./assets/slimewire/png/providers/solflare-orb.jpg" alt="">
+                <span>Solflare</span>
+              </button>
+            </div>
+            <img class="connect-ogre" src="./assets/slimewire/png/slimewire-ogre-hero-cutout.png" alt="" aria-hidden="true">
+          </section>
+          <section class="connect-card">
+            <img class="connect-logo" src="./assets/slimewire-panel-wordmark-clean.png" alt="SlimeWire">
+            <h2>Start Sliming</h2>
+            <p>Be in control of your swamp 24-7.</p>
+            <span class="connect-subtitle">Continue with</span>
+            <div class="connect-provider-row" aria-label="Connection methods">
+              <button class="provider-orb provider-phantom" type="button" data-connect-wallet="phantom" aria-label="Connect Phantom wallet"><img src="./assets/slimewire/png/providers/phantom-orb.jpg" alt=""><span>PH</span></button>
+              <button class="provider-orb provider-solflare" type="button" data-connect-wallet="solflare" aria-label="Connect Solflare wallet"><img src="./assets/slimewire/png/providers/solflare-orb.jpg" alt=""><span>SF</span></button>
+            </div>
+            <form class="connect-login-panel" data-connect-login-panel onsubmit="return false;" hidden>
+              <label>
+                Username or Email
+                <input data-connect-login-username type="text" autocomplete="username" placeholder="slimewire">
+              </label>
+              <label>
+                Password
+                <input data-connect-login-password type="password" autocomplete="current-password" placeholder="8+ characters">
+              </label>
+              <div class="connect-form-actions">
+                <button class="primary" type="button" data-connect-password-login>Lock In</button>
+                <button type="button" data-connect-create-account>Save Login</button>
+              </div>
+            </form>
+            <div class="connect-actions">
+              <button class="primary slime-login-button" type="button" data-web-signup-connect>Connect Wallet</button>
+              <button type="button" data-connect-create-wallet>Create Wallet</button>
+              <button type="button" data-connect-login-toggle>Lock In</button>
+              <button type="button" data-connect-create-account>Create Account</button>
+              <button type="button" data-nav-route="/terminal">Browse Terminal</button>
+            </div>
+            <small data-connected-wallet-summary>Connect a wallet or create an account when you are ready to trade.</small>
+            <small class="connect-status" data-connect-status data-wallet-connect-status></small>
+            <p class="policy-copy">
+              By signing in you agree to
+              <a href="#slimeness" data-policy="terms">Slimeness</a>
+              and
+              <a href="#slime-policy" data-policy="privacy">Slime Policy</a>.
+            </p>
+          </section>
+          <span class="connect-powered">Powered by Ogres</span>
+        </article>
+      </section>
+
+      <section class="dashboard" data-dashboard hidden>
+        <section class="metrics" aria-label="Account metrics">
+          <article>
+            <span>Wallets</span>
+            <strong data-wallet-count>0</strong>
+          </article>
+          <article>
+            <span>Total SOL</span>
+            <strong data-total-sol>0</strong>
+          </article>
+          <article>
+            <span>Positions</span>
+            <strong data-position-count>0</strong>
+          </article>
+          <article>
+            <span>Realized PnL</span>
+            <strong data-realized>+0 SOL</strong>
+          </article>
+        </section>
+
+        <nav class="tabs" aria-label="Portal views">
+          <button data-tab="terminal" data-active="true">Live Terminal</button>
+          <button data-tab="dashboard">Home</button>
+          <button data-tab="profile">Profile</button>
+          <button data-tab="trade">Trade</button>
+          <button data-tab="bundle">Bundle</button>
+          <button data-tab="volume">Volume</button>
+          <button data-tab="live">Live Pairs</button>
+          <button data-tab="liveTrades">Live Trades</button>
+          <button data-tab="watchlist">Watchlist</button>
+          <button data-tab="launch">Launch Snipe</button>
+          <button data-tab="kol">KOL Tracker</button>
+          <button data-tab="wallets">Wallets / Balances</button>
+          <button data-tab="positions">Positions</button>
+          <button data-tab="pnl">PnL</button>
+          <button data-tab="txAudit">Tx Audit</button>
+          <button data-tab="sniper">Sniper</button>
+        </nav>
+
+        <p class="error dashboard-error" data-dashboard-error hidden></p>
+        <section class="panel-host" data-panel></section>
+      </section>
+
+      <footer class="footer">
+        <span>Powered by Ogres</span>
+        <nav>
+          <a href="https://t.me/ogrecoinonsol" target="_blank" rel="noreferrer">Telegram</a>
+          <a href="https://ogremode.com/" target="_blank" rel="noreferrer">Website</a>
+          <a href="https://twitter.com/i/communities/1930265213917425858" target="_blank" rel="noreferrer">X</a>
+        </nav>
+      </footer>
+    </main>
+  </body>
+</html>
