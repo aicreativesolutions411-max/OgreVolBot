@@ -1,4 +1,19 @@
+import {
+  canSubmitPerpOrder,
+  createPerpsProvider,
+  ogreTekRouteStatus,
+  resolveOgreTekConfig,
+  shouldShowOgreTekNav,
+  validatePerpOrder
+} from "./perps.js";
+import {
+  smartChartSuggestion,
+  tradeActionLabelFromPreset
+} from "./liveTerminalUi.js";
+
 const config = window.OGRE_PORTAL_CONFIG || {};
+const ogreTekConfig = resolveOgreTekConfig(config);
+const perpsProvider = createPerpsProvider(ogreTekConfig);
 const configuredApiBase = String(config.apiBase || "").trim().replace(/\/+$/, "");
 const sameOriginApiBase = window.location.origin.replace(/\/+$/, "");
 const defaultRenderApiBase = "https://ogrevolbot.onrender.com";
@@ -73,15 +88,35 @@ function storedReferralCode() {
   }
 }
 
+function getStoredLaunchCoinDraft() {
+  try {
+    return JSON.parse(window.localStorage?.getItem("slimewireLaunchCoinDraft") || "{}") || {};
+  } catch {
+    return {};
+  }
+}
+
+function setStoredLaunchCoinDraft(draft) {
+  try {
+    window.localStorage?.setItem("slimewireLaunchCoinDraft", JSON.stringify(draft || {}));
+  } catch {
+    // Launch drafts are convenience-only and should not block the terminal.
+  }
+}
+
 const state = {
   token: getStoredToken(),
   user: null,
   route: window.location.pathname.startsWith("/connect")
     ? "connect"
-    : window.location.pathname.startsWith("/terminal")
+    : window.location.pathname.startsWith("/terminal") || window.location.pathname.startsWith("/ogre-tek")
       ? "terminal"
       : "intro",
-  activeTab: window.location.pathname.includes("/tx-audit")
+  activeTab: window.location.pathname.includes("/ogre-tek")
+    ? "ogreTek"
+    : window.location.pathname.includes("/chart")
+      ? "smartChart"
+    : window.location.pathname.includes("/tx-audit")
     ? "txAudit"
     : window.location.pathname.includes("/trade")
       ? "trade"
@@ -91,6 +126,7 @@ const state = {
   terminalSubtab: "positions",
   terminalSort: "best",
   terminalToken: "",
+  smartChartToken: "",
   terminalAutoToken: "",
   terminalTxSignature: "",
   terminalTxAudit: null,
@@ -122,6 +158,8 @@ const state = {
   livePairsLastUpdatedByBucket: {},
   livePairBucket: "live",
   launchResult: null,
+  launchCoinDraft: getStoredLaunchCoinDraft(),
+  launchCoinStatus: "",
   launchWatches: [],
   kolScan: null,
   kolMode: "hot",
@@ -136,6 +174,26 @@ const state = {
   selectedTradePresetId: "trade-default-scalp",
   selectedBundlePresetId: "bundle-default-six",
   terminalTradeCollapsed: false,
+  ogreTek: {
+    loading: false,
+    error: "",
+    markets: [],
+    account: null,
+    positions: [],
+    orders: [],
+    selectedMarket: "SOL-PERP",
+    direction: "long",
+    orderType: "market",
+    collateralUsd: "100",
+    leverage: "2",
+    slippagePct: "0.5",
+    priorityFeeLamports: "0",
+    limitPrice: "",
+    stopPrice: "",
+    reviewOpen: false,
+    riskAccepted: false,
+    status: ""
+  },
   fastTradePresetStatus: "",
   fastBundlePresetStatus: "",
   editingTradePresetId: "",
@@ -194,11 +252,14 @@ const LIVE_PAIR_SORTS = [
 
 function routeForPath(pathname = window.location.pathname) {
   if (pathname.startsWith("/connect")) return "connect";
+  if (pathname.startsWith("/ogre-tek")) return "terminal";
   if (pathname.startsWith("/terminal")) return "terminal";
   return "intro";
 }
 
 function tabForPath(pathname = window.location.pathname) {
+  if (pathname.includes("/ogre-tek")) return "ogreTek";
+  if (pathname.includes("/chart")) return "smartChart";
   if (pathname.includes("/tx-audit")) return "txAudit";
   if (pathname.includes("/trade")) return "trade";
   if (pathname.includes("/kol")) return "kol";
@@ -383,6 +444,18 @@ function loginStatusElement() {
   const visibleConnectStatus = $("[data-connect-status]");
   if (visibleConnectStatus && !visibleConnectStatus.closest("[hidden]")) return visibleConnectStatus;
   return $("[data-login-status]") || visibleConnectStatus;
+}
+
+function visibleElement(selector) {
+  const candidates = [...document.querySelectorAll(selector)];
+  return candidates.find((element) => !element.closest("[hidden]") && element.offsetParent !== null)
+    || candidates.find((element) => !element.closest("[hidden]"))
+    || candidates[0]
+    || null;
+}
+
+function walletConnectStatusElement() {
+  return visibleElement("[data-wallet-connect-status]");
 }
 
 function loginCredentialsFromForm({ requirePassword = false } = {}) {
@@ -912,6 +985,9 @@ function render(options = {}) {
   setText("[data-sync-health]", syncHealthLabel());
   setText("[data-active-preset-label]", activePresetSummary());
   setHidden("[data-refresh-spinner]", !state.walletRefreshing);
+  document.querySelectorAll('[data-feature="ogre-tek"]').forEach((element) => {
+    element.hidden = !shouldShowOgreTekNav(ogreTekConfig);
+  });
   const avatar = $("[data-user-avatar]");
   if (avatar) avatar.innerHTML = userAvatarHtml("SW");
   const topAvatar = $("[data-top-avatar]");
@@ -953,6 +1029,8 @@ function renderTabs() {
   if (state.activeTab === "live") panel.innerHTML = livePairsHtml();
   if (state.activeTab === "liveTrades") panel.innerHTML = liveTradesHtml();
   if (state.activeTab === "watchlist") panel.innerHTML = watchlistHtml();
+  if (state.activeTab === "smartChart") panel.innerHTML = smartChartHtml();
+  if (state.activeTab === "launchCoin") panel.innerHTML = launchCoinHtml();
   if (state.activeTab === "launch") panel.innerHTML = launchHtml();
   if (state.activeTab === "kol") panel.innerHTML = kolHtml();
   if (state.activeTab === "wallets") panel.innerHTML = walletsHtml();
@@ -960,6 +1038,10 @@ function renderTabs() {
   if (state.activeTab === "pnl") panel.innerHTML = pnlHtml();
   if (state.activeTab === "txAudit") panel.innerHTML = txAuditHtml();
   if (state.activeTab === "sniper") panel.innerHTML = sniperHtml();
+  if (state.activeTab === "ogreTek") {
+    panel.innerHTML = ogreTekHtml();
+    ensureOgreTekData();
+  }
   syncCustomFields(panel);
   if (state.activeTab === "terminal") {
     const dock = panel.querySelector(".terminal-dock");
@@ -1190,11 +1272,11 @@ function createWalletSection() {
 
       <article class="setup-hub-panel">
         <h3>Connect Wallet</h3>
-        <p>Connect Phantom, Solflare, Backpack, or a detected Solana wallet. Public address only.</p>
+        <p>Connect, reconnect, or switch Phantom, Solflare, Backpack, or a detected Solana wallet. Public address only.</p>
         <div class="wallet-provider-buttons">
           ${browserWalletChoices().map((wallet) => `
             <button type="button" data-connect-wallet="${wallet.id}" ${wallet.detected ? "" : `title="${escapeHtml(wallet.label)} extension not detected"`}>
-              ${escapeHtml(wallet.label)}
+              ${escapeHtml(connected ? `Switch ${wallet.label}` : wallet.label)}
             </button>
           `).join("")}
         </div>
@@ -1205,6 +1287,7 @@ function createWalletSection() {
             <div class="card-actions compact">
               <button type="button" data-copy="${escapeHtml(connected.publicKey)}">Copy</button>
               <a href="https://solscan.io/account/${encodeURIComponent(connected.publicKey)}" target="_blank" rel="noreferrer">Solscan</a>
+              <button type="button" data-connect-wallet="solana">Reconnect</button>
               <button type="button" data-disconnect-wallet>Remove</button>
             </div>
           ` : `<small>No wallet connected yet.</small>`}
@@ -1255,12 +1338,12 @@ function connectWalletSection() {
     <section class="create-wallet-card wallet-connect-card">
       <div>
         <h3>Connect Wallet</h3>
-        <p>Connect Phantom, Solflare, Backpack, or another browser Solana wallet. This saves the public address only; it never imports private keys.</p>
+        <p>Connect, reconnect, or switch Phantom, Solflare, Backpack, or another browser Solana wallet. This saves the public address only; it never imports private keys.</p>
       </div>
       <div class="wallet-provider-buttons">
         ${browserWalletChoices().map((wallet) => `
           <button type="button" data-connect-wallet="${wallet.id}" ${wallet.detected ? "" : `title="${escapeHtml(wallet.label)} extension not detected"`}>
-            ${escapeHtml(wallet.label)}
+            ${escapeHtml(connected ? `Switch to ${wallet.label}` : wallet.label)}
           </button>
         `).join("")}
       </div>
@@ -1271,6 +1354,7 @@ function connectWalletSection() {
           <div class="card-actions compact">
             <button type="button" data-copy="${escapeHtml(connected.publicKey)}">Copy</button>
             <a href="https://solscan.io/account/${encodeURIComponent(connected.publicKey)}" target="_blank" rel="noreferrer">Solscan</a>
+            <button type="button" data-connect-wallet="solana">Reconnect</button>
             <button type="button" data-disconnect-wallet>Remove</button>
           </div>
         ` : `
@@ -2637,6 +2721,224 @@ function launchHtml() {
   `;
 }
 
+function launchCoinHtml() {
+  const draft = state.launchCoinDraft || {};
+  return `
+    <section class="trade-layout launch-coin-layout">
+      <article class="trade-card launch-coin-card">
+        <div class="trade-head">
+          <div>
+            <h3>Launch Coin</h3>
+            <p>Build the launch sheet here, open the official Pump create flow, then paste the live CA back into SlimeWire for Trade, Bundle, Snipe, or Volume presets.</p>
+          </div>
+          <span class="pill">Ogre TeK</span>
+        </div>
+
+        <details open class="launch-coin-section">
+          <summary>Coin Details</summary>
+          <div class="volume-grid">
+            <label>
+              Token Name
+              <input data-launch-coin-name type="text" placeholder="Example: Ogre Mode" value="${escapeHtml(draft.name || "")}">
+            </label>
+            <label>
+              Ticker
+              <input data-launch-coin-symbol type="text" placeholder="Example: OGRE" value="${escapeHtml(draft.symbol || "")}">
+            </label>
+            <label class="full-span">
+              Description
+              <textarea data-launch-coin-description rows="3" placeholder="Short public token description">${escapeHtml(draft.description || "")}</textarea>
+            </label>
+            <label>
+              Image
+              <input data-launch-coin-image type="file" accept="image/png,image/jpeg,image/webp,gif">
+            </label>
+            <label>
+              Website
+              <input data-launch-coin-website type="url" placeholder="https://..." value="${escapeHtml(draft.website || "")}">
+            </label>
+            <label>
+              X
+              <input data-launch-coin-x type="text" placeholder="@handle or URL" value="${escapeHtml(draft.x || "")}">
+            </label>
+            <label>
+              Telegram
+              <input data-launch-coin-telegram type="url" placeholder="https://t.me/..." value="${escapeHtml(draft.telegram || "")}">
+            </label>
+          </div>
+        </details>
+
+        <details open class="launch-coin-section">
+          <summary>Post-Launch Presets</summary>
+          <div class="volume-grid">
+            <label>
+              Live CA After Launch
+              <input data-launch-coin-ca type="text" placeholder="Paste CA once official launch is live" value="${escapeHtml(draft.tokenMint || "")}">
+            </label>
+            <label>
+              Action After CA
+              <select data-launch-coin-action>
+                <option value="watch" ${draft.action === "watch" ? "selected" : ""}>Watch only</option>
+                <option value="trade" ${draft.action === "trade" ? "selected" : ""}>Send to Trade preset</option>
+                <option value="bundle" ${draft.action === "bundle" ? "selected" : ""}>Send to Bundle preset</option>
+                <option value="launch-watch" ${draft.action === "launch-watch" ? "selected" : ""}>Arm Launch Snipe watcher</option>
+              </select>
+            </label>
+            <label>
+              Trade Preset
+              <select data-launch-coin-trade-preset>
+                ${presetOptionsHtml("trade", draft.tradePresetId || state.selectedTradePresetId)}
+              </select>
+            </label>
+            <label>
+              Bundle Preset
+              <select data-launch-coin-bundle-preset>
+                ${presetOptionsHtml("bundle", draft.bundlePresetId || state.selectedBundlePresetId)}
+              </select>
+            </label>
+            <label>
+              Stop Loss
+              <select data-launch-coin-sl data-custom-select="launch-coin-sl">
+                <option value="0" ${String(draft.stopLossPct || "") === "0" ? "selected" : ""}>Off</option>
+                <option value="8" ${String(draft.stopLossPct || "8") === "8" ? "selected" : ""}>-8%</option>
+                <option value="10" ${String(draft.stopLossPct || "") === "10" ? "selected" : ""}>-10%</option>
+                <option value="15" ${String(draft.stopLossPct || "") === "15" ? "selected" : ""}>-15%</option>
+                <option value="custom">Custom</option>
+              </select>
+              <input data-launch-coin-sl-custom data-custom-for="launch-coin-sl" type="text" placeholder="Custom SL %" hidden>
+            </label>
+            <label>
+              Take Profit
+              <select data-launch-coin-tp data-custom-select="launch-coin-tp">
+                <option value="0" ${String(draft.takeProfitPct || "") === "0" ? "selected" : ""}>Off</option>
+                <option value="25" ${String(draft.takeProfitPct || "") === "25" ? "selected" : ""}>+25%</option>
+                <option value="40" ${String(draft.takeProfitPct || "40") === "40" ? "selected" : ""}>+40%</option>
+                <option value="60" ${String(draft.takeProfitPct || "") === "60" ? "selected" : ""}>+60%</option>
+                <option value="100" ${String(draft.takeProfitPct || "") === "100" ? "selected" : ""}>+100%</option>
+                <option value="custom">Custom</option>
+              </select>
+              <input data-launch-coin-tp-custom data-custom-for="launch-coin-tp" type="text" placeholder="Custom: 500 or 5x" hidden>
+            </label>
+            <label>
+              Fallback Timer
+              ${fallbackTimerSelectHtml("launch-coin-delay", "data-launch-coin-delay", draft.sellDelay || "off")}
+            </label>
+            <label>
+              Slippage
+              <select data-launch-coin-slippage data-custom-select="launch-coin-slippage">
+                <option value="300" ${String(draft.slippageBps || "300") === "300" ? "selected" : ""}>3%</option>
+                <option value="400" ${String(draft.slippageBps || "") === "400" ? "selected" : ""}>4%</option>
+                <option value="500" ${String(draft.slippageBps || "") === "500" ? "selected" : ""}>5%</option>
+                <option value="custom">Custom</option>
+              </select>
+              <input data-launch-coin-slippage-custom data-custom-for="launch-coin-slippage" type="number" min="1" max="5000" step="1" placeholder="Custom bps" hidden>
+            </label>
+          </div>
+        </details>
+
+        <div class="quick-grid launch-coin-actions">
+          <button class="primary" type="button" data-launch-coin-save>Save Launch Sheet</button>
+          <button type="button" data-launch-coin-use-ca>Use Live CA</button>
+          <a href="https://pump.fun/create" target="_blank" rel="noreferrer">Open Pump Create</a>
+          <a href="https://marketplace.dexscreener.com/" target="_blank" rel="noreferrer">Pay Dex / Edit Metadata</a>
+        </div>
+        <p class="trade-status" data-launch-coin-status>${escapeHtml(state.launchCoinStatus || "Ready. Official Pump/Dex actions open in their own secure pages; SlimeWire stores only your launch draft and trading presets.")}</p>
+      </article>
+
+      <aside class="trade-side">
+        <article>
+          <h3>How It Works</h3>
+          <p>SlimeWire prepares the details, presets, and post-launch CA workflow. Until a verified launch API is added, Pump creation and Dex marketplace payment stay on the official pages.</p>
+        </article>
+        <article>
+          <h3>Credit Use</h3>
+          <p>Saving a draft and opening Pump/Dex links does not use Helius or Jupiter credits. Credits are used later for wallet balance refreshes, quotes, buys, sells, bundles, and active exit monitoring.</p>
+        </article>
+        <article>
+          <h3>Active Launch Watches</h3>
+          ${launchWatchesHtml()}
+        </article>
+      </aside>
+    </section>
+  `;
+}
+
+function readLaunchCoinDraft() {
+  const draft = state.launchCoinDraft || {};
+  const imageFile = $("[data-launch-coin-image]")?.files?.[0];
+  return {
+    name: ($("[data-launch-coin-name]")?.value || "").trim(),
+    symbol: ($("[data-launch-coin-symbol]")?.value || "").trim().replace(/^\$/, "").toUpperCase(),
+    description: ($("[data-launch-coin-description]")?.value || "").trim(),
+    imageName: imageFile?.name || draft.imageName || "",
+    website: ($("[data-launch-coin-website]")?.value || "").trim(),
+    x: ($("[data-launch-coin-x]")?.value || "").trim(),
+    telegram: ($("[data-launch-coin-telegram]")?.value || "").trim(),
+    tokenMint: ($("[data-launch-coin-ca]")?.value || "").trim(),
+    action: $("[data-launch-coin-action]")?.value || "watch",
+    tradePresetId: $("[data-launch-coin-trade-preset]")?.value || state.selectedTradePresetId,
+    bundlePresetId: $("[data-launch-coin-bundle-preset]")?.value || state.selectedBundlePresetId,
+    stopLossPct: fieldValue("[data-launch-coin-sl]", "[data-launch-coin-sl-custom]", "8"),
+    takeProfitPct: fieldValue("[data-launch-coin-tp]", "[data-launch-coin-tp-custom]", "40"),
+    sellDelay: fieldValue("[data-launch-coin-delay]", "[data-launch-coin-delay-custom]", "off"),
+    slippageBps: fieldValue("[data-launch-coin-slippage]", "[data-launch-coin-slippage-custom]", "300"),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function launchCoinActionLabel(action) {
+  if (action === "bundle") return "Bundle";
+  if (action === "launch-watch") return "Launch Snipe";
+  if (action === "trade") return "Trade";
+  return "Live Terminal";
+}
+
+function saveLaunchCoinDraft({ silent = false } = {}) {
+  try {
+    const draft = readLaunchCoinDraft();
+    state.launchCoinDraft = draft;
+    setStoredLaunchCoinDraft(draft);
+    const label = draft.name || draft.symbol || "launch";
+    state.launchCoinStatus = `Saved ${label}. Open Pump Create, launch on the official page, then paste the live CA here to route into ${launchCoinActionLabel(draft.action)}.`;
+    if (!silent) writeText($("[data-launch-coin-status]"), state.launchCoinStatus);
+    return draft;
+  } catch (error) {
+    state.launchCoinStatus = error.message;
+    writeText($("[data-launch-coin-status]"), error.message);
+    throw error;
+  }
+}
+
+async function useLaunchCoinMint() {
+  const draft = saveLaunchCoinDraft({ silent: true });
+  const tokenMint = String(draft.tokenMint || "").trim();
+  const status = $("[data-launch-coin-status]");
+  if (!tokenMint || tokenMint.length < 32) {
+    state.launchCoinStatus = "Paste the live token CA from Pump first. SlimeWire will not guess the CA.";
+    writeText(status, state.launchCoinStatus);
+    return;
+  }
+
+  state.terminalToken = tokenMint;
+  state.terminalAutoToken = tokenMint;
+  state.tradeToken = tokenMint;
+  state.bundleToken = tokenMint;
+  state.volumeToken = tokenMint;
+  if (draft.tradePresetId) state.selectedTradePresetId = draft.tradePresetId;
+  if (draft.bundlePresetId) state.selectedBundlePresetId = draft.bundlePresetId;
+
+  const nextTab = draft.action === "bundle"
+    ? "bundle"
+    : draft.action === "launch-watch"
+      ? "launch"
+      : draft.action === "trade"
+        ? "trade"
+        : "terminal";
+  state.launchCoinStatus = `Loaded ${shortAddress(tokenMint)} into ${launchCoinActionLabel(draft.action)}. Review the selected preset before sending any trade.`;
+  navigateTo("/terminal", nextTab);
+  render({ force: true });
+}
+
 function launchScanSeconds() {
   const first = state.launchWatches?.[0]?.scanIntervalMs;
   return first ? (first / 1000).toFixed(first % 1000 === 0 ? 0 : 1) : "1.5";
@@ -3281,7 +3583,7 @@ async function useXProfileAvatar() {
 }
 
 async function connectBrowserWallet(providerId) {
-  const status = $("[data-wallet-connect-status]");
+  const status = walletConnectStatusElement();
   const provider = walletProviderById(providerId);
   if (!provider) {
     writeText(status, `${walletProviderLabel(providerId)} is not detected in this browser. Install/open the wallet extension, then refresh.`);
@@ -3321,7 +3623,7 @@ async function connectBrowserWallet(providerId) {
 }
 
 async function disconnectBrowserWallet() {
-  const status = $("[data-wallet-connect-status]");
+  const status = walletConnectStatusElement();
   if (!state.user || !state.token) {
     state.connectedWalletBalance = null;
     writeText(status, "Connected wallet removed.");
@@ -4519,6 +4821,25 @@ function selectedTerminalTokenRow() {
   return firstRow;
 }
 
+function selectedSmartChartTokenRow() {
+  const allRows = allVisibleSignalRows();
+  const rowForMint = (mint) => allRows.find((row) => String(row.tokenMint || "") === mint) || {
+    tokenMint: mint,
+    shortMint: shortAddress(mint),
+    symbol: shortAddress(mint),
+    name: "Custom Token",
+    dexUrl: dexUrl(mint),
+    pumpUrl: mint.toLowerCase().endsWith("pump") ? `https://pump.fun/coin/${encodeURIComponent(mint)}` : ""
+  };
+  const explicitMint = String(state.smartChartToken || state.terminalToken || state.tradeToken || "").trim();
+  if (explicitMint) return rowForMint(explicitMint);
+  return selectedTerminalTokenRow();
+}
+
+function dexChartEmbedUrl(mint) {
+  return `https://dexscreener.com/solana/${encodeURIComponent(mint)}?embed=1&theme=dark`;
+}
+
 function marketDataRowsByMint() {
   const rows = [
     ...Object.values(state.livePairsByBucket || {}).flatMap((feed) => feed?.rows || []),
@@ -4759,6 +5080,7 @@ function terminalSignalRowsHtml(rows, options = {}) {
               <div class="terminal-token-title">
                 <strong>${escapeHtml(row.symbol || row.shortMint || shortAddress(row.tokenMint))}</strong>
                 <small>${escapeHtml(row.name || row.category || "Token")}</small>
+                <em class="mobile-score-mini" title="${escapeHtml(scoreWhyText(row))}">${escapeHtml(scoreLabel)} score</em>
               </div>
               <button type="button" class="ca-copy" data-copy="${escapeHtml(row.tokenMint)}">${escapeHtml(shortAddress(row.tokenMint))}</button>
               <span class="terminal-token-age">${escapeHtml(row.pairAgeLabel || formatAgeFromRow(row) || "age unknown")} | ${escapeHtml(setup)}</span>
@@ -4770,8 +5092,9 @@ function terminalSignalRowsHtml(rows, options = {}) {
               <small>score</small>
             </span>
             <div class="terminal-token-actions">
-              <button type="button" class="primary" data-quick-trade-token="${escapeHtml(row.tokenMint)}">${escapeHtml(actionLabel)}</button>
+              <button type="button" class="primary" data-quick-trade-token="${escapeHtml(row.tokenMint)}" title="Buy with active preset">${escapeHtml(actionLabel)}</button>
               <button type="button" data-quick-bundle-token="${escapeHtml(row.tokenMint)}">Bundle</button>
+              <button type="button" data-smart-chart-token="${escapeHtml(row.tokenMint)}">Chart</button>
               <button type="button" class="watch-action" data-watch-token="${escapeHtml(row.tokenMint)}" data-watch-symbol="${escapeHtml(row.symbol || "")}" data-watch-name="${escapeHtml(row.name || "")}" data-watch-image="${escapeHtml(row.imageUrl || "")}">${isTokenWatched(row.tokenMint) ? "Saved" : "Watch"}</button>
             </div>
           </article>
@@ -4808,8 +5131,9 @@ function compactSignalRowsHtml(rows, options = {}) {
           </div>
           ${scoreBadgeHtml(row)}
           <div class="compact-row-actions">
-            <button type="button" class="primary" data-quick-trade-token="${escapeHtml(row.tokenMint)}">${escapeHtml(actionLabel)}</button>
+            <button type="button" class="primary" data-quick-trade-token="${escapeHtml(row.tokenMint)}" title="Buy with active preset">${escapeHtml(actionLabel)}</button>
             <button type="button" data-quick-bundle-token="${escapeHtml(row.tokenMint)}">Bundle</button>
+            <button type="button" data-smart-chart-token="${escapeHtml(row.tokenMint)}">Chart</button>
             <button type="button" class="watch-action" data-watch-token="${escapeHtml(row.tokenMint)}" data-watch-symbol="${escapeHtml(row.symbol || "")}" data-watch-name="${escapeHtml(row.name || "")}" data-watch-image="${escapeHtml(row.imageUrl || "")}">${isTokenWatched(row.tokenMint) ? "Saved" : "Watch"}</button>
           </div>
         </article>
@@ -4879,6 +5203,7 @@ function terminalHtml() {
   const bucketLoading = Boolean(state.livePairsLoadingByBucket[state.livePairBucket]);
   const lastUpdated = currentLivePairsUpdatedAt();
   const collapsed = Boolean(state.terminalTradeCollapsed);
+  const rowTradeLabel = activePresetButtonLabel();
   return `
     <section class="command-terminal ${collapsed ? "trade-panel-collapsed" : ""}">
       <main class="command-workspace">
@@ -4911,15 +5236,15 @@ function terminalHtml() {
         <section class="command-grid">
           <article class="terminal-panel best-picks-panel">
             <header><h4>Best Picks</h4><span>Score + reasons</span></header>
-            ${compactSignalRowsHtml(bestRows, { layout: "terminal", limit: 8, actionLabel: "Trade", emptyTitle: "No Best Picks yet", emptyMessage: "Refresh Live Pairs to score current pairs." })}
+            ${compactSignalRowsHtml(bestRows, { layout: "terminal", limit: 8, actionLabel: rowTradeLabel, emptyTitle: "No Best Picks yet", emptyMessage: "Refresh Live Pairs to score current pairs." })}
           </article>
           <article class="terminal-panel live-pairs-panel">
             <header><h4>Live Pairs</h4><button data-tab="live">Open</button></header>
-            ${compactSignalRowsHtml(newestLiveRows, { layout: "terminal", limit: 12, actionLabel: "Trade" })}
+            ${compactSignalRowsHtml(newestLiveRows, { layout: "terminal", limit: 12, actionLabel: rowTradeLabel })}
           </article>
           <article class="terminal-panel kol-panel">
             <header><h4>KOL Signals</h4><button data-kol-refresh>${state.kolLoading ? "Loading..." : "Refresh"}</button></header>
-            ${compactSignalRowsHtml(kolRows, { layout: "terminal", limit: 12, actionLabel: "Trade", emptyTitle: "No KOL signals loaded", emptyMessage: "Refresh KOL Tracker to load signals." })}
+            ${compactSignalRowsHtml(kolRows, { layout: "terminal", limit: 12, actionLabel: rowTradeLabel, emptyTitle: "No KOL signals loaded", emptyMessage: "Refresh KOL Tracker to load signals." })}
           </article>
         </section>
 
@@ -4934,7 +5259,7 @@ function terminalHtml() {
 
 function activePresetButtonLabel() {
   const preset = presetById("trade", state.selectedTradePresetId);
-  return preset?.amountSol ? `Buy ${preset.amountSol} SOL` : "Buy Preset";
+  return tradeActionLabelFromPreset(preset, "Trade");
 }
 
 function tokenPreviewHtml(token) {
@@ -4965,6 +5290,118 @@ function tokenPreviewHtml(token) {
       ${hasPosition ? `<button data-position-sell="${escapeHtml(token.tokenMint)}" data-position-sell-percent="100">Exit 100%</button>` : ""}
     </div>
     <small class="score-breakdown">Why: ${escapeHtml(scoreWhyText(token))}</small>
+  `;
+}
+
+function smartChartHtml() {
+  const token = selectedSmartChartTokenRow();
+  const mint = String(token?.tokenMint || "").trim();
+  const heldPosition = mint ? state.positions.find((position) => String(position.tokenMint) === mint) : null;
+  const relatedRows = mint
+    ? uniqueSignalRows([
+        token,
+        ...allVisibleSignalRows().filter((row) => String(row.tokenMint || "") === mint)
+      ]).filter(Boolean).slice(0, 5)
+    : terminalBestPickRows().slice(0, 5);
+  const suggestion = smartChartSuggestion(token || {});
+  if (!mint) {
+    return `
+      <section class="smart-chart-terminal">
+        <div class="terminal-title-row">
+          <div>
+            <h3>Smart Chart</h3>
+            <p>Paste a token CA or open Chart from any row to load a focused chart workspace.</p>
+          </div>
+        </div>
+        <div class="smart-chart-search">
+          <input data-smart-chart-input placeholder="Paste token CA" autocomplete="off">
+          <button class="primary" type="button" data-smart-chart-open>Open Chart</button>
+        </div>
+        <div class="terminal-panel">
+          <div class="terminal-title-row">
+            <h3>Suggested tokens</h3>
+          </div>
+          ${compactSignalRowsHtml(relatedRows, {
+            layout: "terminal",
+            limit: 5,
+            actionLabel: activePresetButtonLabel(),
+            emptyTitle: "No chart picks loaded",
+            emptyMessage: "Refresh feeds, then open Smart Chart again."
+          })}
+        </div>
+      </section>
+    `;
+  }
+  return `
+    <section class="smart-chart-terminal">
+      <div class="terminal-title-row">
+        <div>
+          <h3>Smart Chart</h3>
+          <p>Chart, scanner stats, live signals, and preset actions for the selected token.</p>
+        </div>
+        <button type="button" data-tab="terminal">Back to Live Terminal</button>
+      </div>
+      <div class="smart-chart-search">
+        <input data-smart-chart-input value="${escapeHtml(mint)}" placeholder="Paste token CA" autocomplete="off">
+        <button class="primary" type="button" data-smart-chart-open>Open Chart</button>
+      </div>
+      <div class="smart-chart-grid">
+        <article class="terminal-panel smart-chart-main">
+          <div class="smart-chart-token-header">
+            ${livePairAvatarHtml(token)}
+            <div>
+              <strong>${escapeHtml(token.symbol || token.shortMint || shortAddress(mint))}</strong>
+              <small>${escapeHtml(token.name || token.category || "Token")}</small>
+              <button type="button" class="ca-copy" data-copy="${escapeHtml(mint)}">${escapeHtml(shortAddress(mint))}</button>
+            </div>
+            <div class="smart-chart-links">
+              ${miniTokenLinksHtml(token)}
+            </div>
+          </div>
+          <div class="smart-chart-frame">
+            <iframe title="DexScreener chart for ${escapeHtml(token.symbol || shortAddress(mint))}" src="${escapeHtml(dexChartEmbedUrl(mint))}" loading="lazy"></iframe>
+          </div>
+          <small class="score-breakdown">If the embedded chart does not load, use the DEX link above.</small>
+        </article>
+        <aside class="terminal-panel smart-chart-side">
+          <h3>${escapeHtml(token.symbol || "Token")} setup</h3>
+          ${terminalTokenStatsHtml(token)}
+          <div class="smart-chart-suggestion">
+            <strong>Smart read</strong>
+            <p>${escapeHtml(suggestion)}</p>
+          </div>
+          <div class="smart-chart-actions">
+            <button class="primary" type="button" data-quick-trade-token="${escapeHtml(mint)}">${escapeHtml(activePresetButtonLabel())}</button>
+            <button type="button" data-quick-bundle-token="${escapeHtml(mint)}">Bundle</button>
+            <button type="button" data-use-token-volume="${escapeHtml(mint)}">Volume</button>
+            <button type="button" data-watch-token="${escapeHtml(mint)}">${isTokenWatched(mint) ? "Saved" : "Watch"}</button>
+            ${heldPosition ? `<button type="button" class="danger" data-position-sell="${escapeHtml(mint)}" data-position-sell-percent="100">Exit 100%</button>` : ""}
+          </div>
+        </aside>
+      </div>
+      <div class="smart-chart-bottom-grid">
+        <article class="terminal-panel">
+          <div class="terminal-title-row">
+            <h3>Related signals</h3>
+            <button type="button" data-refresh-feeds>Refresh</button>
+          </div>
+          ${compactSignalRowsHtml(relatedRows, {
+            layout: "terminal",
+            limit: 5,
+            actionLabel: activePresetButtonLabel(),
+            emptyTitle: "No related signals",
+            emptyMessage: "This token is loaded from CA. Refresh feeds to look for matching signals."
+          })}
+        </article>
+        <article class="terminal-panel">
+          <div class="terminal-title-row">
+            <h3>Position</h3>
+            <button type="button" data-refresh-wallet>Refresh Wallet</button>
+          </div>
+          ${heldPosition ? `<div class="table-list compact-table">${positionRowHtml(heldPosition)}</div>` : emptyState("No position", "No current SlimeWire position is tracked for this token.")}
+        </article>
+      </div>
+    </section>
   `;
 }
 
@@ -5030,8 +5467,9 @@ function terminalTradePanelHtml(token, collapsed = false) {
           ${token?.tokenMint ? `
             <code>${escapeHtml(token.tokenMint)}</code>
             <div class="quick-grid">
-              <button class="primary" data-quick-trade-token="${escapeHtml(token.tokenMint)}">Trade</button>
+              <button class="primary" data-quick-trade-token="${escapeHtml(token.tokenMint)}">${escapeHtml(activePresetButtonLabel())}</button>
               <button data-quick-bundle-token="${escapeHtml(token.tokenMint)}">Bundle</button>
+              <button data-smart-chart-token="${escapeHtml(token.tokenMint)}">Chart</button>
               <button data-use-token-volume="${escapeHtml(token.tokenMint)}">Volume</button>
               <button data-tab="sniper">Snipe</button>
             </div>
@@ -5614,6 +6052,395 @@ function sniperRowsHtml() {
   `;
 }
 
+function ogreTekWalletAddress() {
+  return state.user?.connectedWallet?.publicKey || "";
+}
+
+function ogreTekMarket() {
+  return state.ogreTek.markets.find((market) => market.symbol === state.ogreTek.selectedMarket) || state.ogreTek.markets[0] || null;
+}
+
+function ogreTekOrderRequest() {
+  return {
+    marketSymbol: state.ogreTek.selectedMarket,
+    direction: state.ogreTek.direction,
+    orderType: state.ogreTek.orderType,
+    collateralUsd: state.ogreTek.collateralUsd,
+    leverage: state.ogreTek.leverage,
+    slippagePct: state.ogreTek.slippagePct,
+    priorityFeeLamports: state.ogreTek.priorityFeeLamports,
+    limitPrice: state.ogreTek.limitPrice,
+    stopPrice: state.ogreTek.stopPrice
+  };
+}
+
+function ogreTekValidation() {
+  return validatePerpOrder(ogreTekOrderRequest(), ogreTekMarket(), state.ogreTek.account, ogreTekConfig);
+}
+
+function formatOgreUsd(value, digits = 2) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "n/a";
+  if (Math.abs(number) >= 1_000_000_000) return `$${(number / 1_000_000_000).toFixed(2)}B`;
+  if (Math.abs(number) >= 1_000_000) return `$${(number / 1_000_000).toFixed(2)}M`;
+  if (Math.abs(number) >= 1_000) return `$${(number / 1_000).toFixed(1)}K`;
+  return `$${number.toFixed(digits)}`;
+}
+
+function formatOgrePrice(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "n/a";
+  if (number >= 1_000) return `$${number.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+  return `$${number.toFixed(number >= 10 ? 2 : 4)}`;
+}
+
+function formatOgrePct(value, digits = 3) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "n/a";
+  return `${number >= 0 ? "+" : ""}${number.toFixed(digits)}%`;
+}
+
+function ogreTekFreshness(value) {
+  const time = Date.parse(value || "");
+  if (!time) return "not loaded";
+  const seconds = Math.max(0, Math.round((Date.now() - time) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.round(seconds / 60);
+  return `${minutes}m ago`;
+}
+
+function updateOgreTekDraftFromDom() {
+  document.querySelectorAll("[data-ogre-tek-field]").forEach((field) => {
+    const key = field.dataset.ogreTekField;
+    if (!key || !(key in state.ogreTek)) return;
+    if (field.type === "checkbox") state.ogreTek[key] = Boolean(field.checked);
+    else state.ogreTek[key] = field.value;
+  });
+}
+
+async function ensureOgreTekData() {
+  if (!ogreTekConfig.enabled || state.ogreTek.loading || state.ogreTek.markets.length || state.ogreTek.error) return;
+  await loadOgreTekData({ silent: true }).catch((error) => {
+    state.ogreTek.error = publicErrorMessage(error.message);
+    render({ force: true });
+  });
+}
+
+async function loadOgreTekData({ force = false, silent = false } = {}) {
+  if (!ogreTekConfig.enabled) return;
+  if (state.ogreTek.loading && !force) return;
+  state.ogreTek.loading = true;
+  state.ogreTek.error = "";
+  if (!silent) render({ force: true });
+  try {
+    const walletAddress = ogreTekWalletAddress();
+    const [markets, account, positions, orders] = await Promise.all([
+      perpsProvider.getMarkets(),
+      perpsProvider.getAccount(walletAddress),
+      perpsProvider.getPositions(walletAddress),
+      perpsProvider.getOpenOrders(walletAddress)
+    ]);
+    state.ogreTek.markets = markets || [];
+    state.ogreTek.account = account || null;
+    state.ogreTek.positions = positions || [];
+    state.ogreTek.orders = orders || [];
+    if (!state.ogreTek.markets.some((market) => market.symbol === state.ogreTek.selectedMarket)) {
+      state.ogreTek.selectedMarket = state.ogreTek.markets[0]?.symbol || "SOL-PERP";
+    }
+    state.ogreTek.status = `Updated ${new Date().toLocaleTimeString()}`;
+  } catch (error) {
+    state.ogreTek.error = publicErrorMessage(error.message);
+  } finally {
+    state.ogreTek.loading = false;
+    render({ force: true });
+  }
+}
+
+function ogreTekComingSoonHtml() {
+  return `
+    <section class="ogre-tek-page">
+      <article class="ogre-tek-header ogre-tek-coming-soon">
+        <div>
+          <p class="eyebrow">Ogre Tek</p>
+          <h2>Perp Mode is staged but hidden</h2>
+          <p>Turn on the Ogre Tek feature flag when you are ready to test the perps terminal. Existing trade, bundle, volume, and sniper tools stay untouched.</p>
+        </div>
+        <span class="slime-status-badge">Coming Soon</span>
+      </article>
+    </section>
+  `;
+}
+
+function ogreTekHtml() {
+  if (ogreTekRouteStatus(ogreTekConfig) !== "enabled") return ogreTekComingSoonHtml();
+  const connected = Boolean(ogreTekWalletAddress());
+  const market = ogreTekMarket();
+  const validation = ogreTekValidation();
+  const quote = validation.quote;
+  const account = state.ogreTek.account;
+  const canReview = validation.ok && !state.ogreTek.loading;
+  const providerStatus = state.ogreTek.error ? "Provider Error" : state.ogreTek.loading ? "Loading" : "Ready";
+  const reviewButtonText = ogreTekConfig.demoMode ? "Review Demo Trade" : "Review Trade";
+  const confirmButtonText = ogreTekConfig.demoMode ? "Confirm Demo Review" : "Confirm Order";
+  const confirmDisabled = ogreTekConfig.demoMode
+    ? !state.ogreTek.riskAccepted || !validation.ok
+    : !canSubmitPerpOrder({ validation, riskAccepted: state.ogreTek.riskAccepted, demoMode: ogreTekConfig.demoMode });
+
+  return `
+    <section class="ogre-tek-page">
+      <article class="ogre-tek-header">
+        <div>
+          <p class="eyebrow">Ogre Tek</p>
+          <h2>Ogre Tek</h2>
+          <p>Perpetual trading terminal for swamp-level execution.</p>
+        </div>
+        <div class="ogre-tek-badges">
+          <span class="slime-status-badge">${ogreTekConfig.demoMode ? "Demo Mode" : "Live Adapter"}</span>
+          <span class="slime-status-badge" data-ok="${connected ? "true" : "false"}">${connected ? "Wallet Connected" : "Wallet Disconnected"}</span>
+          <span class="slime-status-badge" data-ok="${state.ogreTek.error ? "false" : "true"}">${escapeHtml(providerStatus)}</span>
+        </div>
+      </article>
+
+      <article class="ogre-risk-copy">
+        Perpetual futures are leveraged derivatives. You can lose your collateral and may be liquidated. This interface does not provide financial advice.
+      </article>
+
+      ${state.ogreTek.error ? `<p class="error dashboard-error">${escapeHtml(state.ogreTek.error)}</p>` : ""}
+
+      <section class="ogre-tek-grid">
+        <div class="ogre-tek-main">
+          <article class="slime-panel ogre-market-panel">
+            <div class="panel-title-row">
+              <div>
+                <h3>Perps Markets</h3>
+                <p>${escapeHtml(state.ogreTek.status || "Demo market data loads when the tab opens.")}</p>
+              </div>
+              <button type="button" data-ogre-tek-refresh>${state.ogreTek.loading ? "Refreshing..." : "Refresh"}</button>
+            </div>
+            ${ogreMarketsHtml()}
+          </article>
+
+          <article class="slime-panel">
+            <div class="panel-title-row">
+              <h3>Open Positions</h3>
+              <span>${state.ogreTek.positions.length} open</span>
+            </div>
+            ${ogrePositionsHtml()}
+          </article>
+
+          <article class="slime-panel">
+            <div class="panel-title-row">
+              <h3>Orders</h3>
+              <span>Open, trigger, and history</span>
+            </div>
+            ${ogreOrdersHtml()}
+          </article>
+        </div>
+
+        <aside class="ogre-tek-side">
+          <article class="slime-panel ogre-ticket">
+            <h3>Trading Ticket</h3>
+            <div class="ogre-ticket-tabs">
+              <button type="button" data-ogre-tek-side="long" data-active="${state.ogreTek.direction === "long"}">Long</button>
+              <button type="button" data-ogre-tek-side="short" data-active="${state.ogreTek.direction === "short"}">Short</button>
+            </div>
+            <label>
+              Market
+              <select data-ogre-tek-field="selectedMarket">
+                ${state.ogreTek.markets.map((item) => `<option value="${escapeHtml(item.symbol)}" ${item.symbol === state.ogreTek.selectedMarket ? "selected" : ""}>${escapeHtml(item.symbol)}</option>`).join("")}
+              </select>
+            </label>
+            <label>
+              Order Type
+              <select data-ogre-tek-field="orderType">
+                ${["market", "limit", "stop", "take-profit", "stop-loss"].map((type) => `<option value="${type}" ${state.ogreTek.orderType === type ? "selected" : ""}>${escapeHtml(type.replace("-", " ").toUpperCase())}</option>`).join("")}
+              </select>
+            </label>
+            <div class="ogre-ticket-grid">
+              <label>
+                Collateral USD
+                <input data-ogre-tek-field="collateralUsd" type="number" min="0" step="1" value="${escapeHtml(state.ogreTek.collateralUsd)}">
+              </label>
+              <label>
+                Leverage
+                <input data-ogre-tek-field="leverage" type="range" min="1" max="${escapeHtml(ogreTekConfig.maxLeverage)}" step="0.5" value="${escapeHtml(state.ogreTek.leverage)}">
+                <span>${escapeHtml(state.ogreTek.leverage)}x max ${escapeHtml(ogreTekConfig.maxLeverage)}x</span>
+              </label>
+              <label>
+                Limit Price
+                <input data-ogre-tek-field="limitPrice" type="number" min="0" step="0.01" placeholder="Optional" value="${escapeHtml(state.ogreTek.limitPrice)}">
+              </label>
+              <label>
+                Stop / Trigger
+                <input data-ogre-tek-field="stopPrice" type="number" min="0" step="0.01" placeholder="Optional" value="${escapeHtml(state.ogreTek.stopPrice)}">
+              </label>
+              <label>
+                Slippage %
+                <input data-ogre-tek-field="slippagePct" type="number" min="0" max="10" step="0.1" value="${escapeHtml(state.ogreTek.slippagePct)}">
+              </label>
+              <label>
+                Priority Fee
+                <input data-ogre-tek-field="priorityFeeLamports" type="number" min="0" step="1000" value="${escapeHtml(state.ogreTek.priorityFeeLamports)}">
+              </label>
+            </div>
+            ${ogreQuoteHtml(quote, market)}
+            ${ogreValidationHtml(validation)}
+            <button class="primary" type="button" data-ogre-tek-review ${canReview ? "" : "disabled"}>${escapeHtml(reviewButtonText)}</button>
+            <button type="button" data-ogre-tek-place-trade disabled>Place Trade</button>
+            <button type="button" data-ogre-tek-demo-action="kill">Emergency Close / Kill Switch</button>
+          </article>
+
+          <article class="slime-panel ogre-account-panel">
+            <h3>Risk Shield</h3>
+            ${ogreAccountHtml(account)}
+          </article>
+        </aside>
+      </section>
+      ${state.ogreTek.reviewOpen ? ogreRiskModalHtml({ validation, quote, market, confirmButtonText, confirmDisabled }) : ""}
+    </section>
+  `;
+}
+
+function ogreMarketsHtml() {
+  if (state.ogreTek.loading && !state.ogreTek.markets.length) return emptyState("Loading markets", "Ogre Tek is loading demo perps markets.");
+  if (!state.ogreTek.markets.length) return emptyState("No markets available", "No allowed perps markets are available for this provider.");
+  return `
+    <div class="ogre-market-grid">
+      ${state.ogreTek.markets.map((market) => `
+        <button type="button" class="ogre-market-card" data-ogre-tek-market="${escapeHtml(market.symbol)}" data-active="${market.symbol === state.ogreTek.selectedMarket}">
+          <span>${escapeHtml(market.symbol)}</span>
+          <strong>${formatOgrePrice(market.indexPrice)}</strong>
+          <small>Oracle ${formatOgrePrice(market.oraclePrice)} | 24h ${formatOgrePct(market.change24hPct, 2)}</small>
+          <small>Funding ${formatOgrePct(market.fundingRatePct, 3)} | OI ${formatOgreUsd(market.openInterestUsd, 0)}</small>
+          <small>Fresh ${escapeHtml(ogreTekFreshness(market.updatedAt))}</small>
+        </button>
+      `).join("")}
+    </div>
+  `;
+}
+
+function ogreQuoteHtml(quote, market) {
+  return `
+    <div class="ogre-quote-grid">
+      <span><small>Index</small><strong>${formatOgrePrice(market?.indexPrice)}</strong></span>
+      <span><small>Position</small><strong>${formatOgreUsd(quote?.positionSizeUsd)}</strong></span>
+      <span><small>Liquidation</small><strong>${formatOgrePrice(quote?.liquidationPrice)}</strong></span>
+      <span><small>Fees</small><strong>${formatOgreUsd(quote?.takerFeeUsd)}</strong></span>
+      <span><small>Funding Impact</small><strong>${formatOgreUsd(quote?.fundingImpactUsd)}</strong></span>
+      <span><small>Max Loss</small><strong>${formatOgreUsd(quote?.maxLossUsd)}</strong></span>
+    </div>
+  `;
+}
+
+function ogreValidationHtml(validation) {
+  const errors = validation.errors || [];
+  const warnings = validation.warnings || [];
+  if (!errors.length && !warnings.length) return `<p class="trade-status" data-ok="true">Ogre Guardrails passed for demo review.</p>`;
+  return `
+    <div class="ogre-risk-list">
+      ${errors.map((error) => `<p data-kind="error">${escapeHtml(error)}</p>`).join("")}
+      ${warnings.map((warning) => `<p data-kind="warning">${escapeHtml(warning)}</p>`).join("")}
+    </div>
+  `;
+}
+
+function ogrePositionsHtml() {
+  if (!ogreTekWalletAddress()) return emptyState("Wallet disconnected", "Connect Phantom, Solflare, Backpack, or another detected Solana wallet to view perps account data.");
+  if (!state.ogreTek.positions.length) return emptyState("No open positions", "Mock positions will appear here when the provider reports them.");
+  return `
+    <div class="ogre-tek-table">
+      <div class="ogre-table-head"><span>Position</span><span>Size</span><span>Entry / Mark</span><span>Liq</span><span>PnL</span><span>Actions</span></div>
+      ${state.ogreTek.positions.map((position) => `
+        <div class="ogre-table-row">
+          <span><strong>${escapeHtml(position.marketSymbol)}</strong><small>${escapeHtml(position.side)} | margin ${formatOgrePct(position.marginRatioPct, 1)}</small></span>
+          <span>${formatOgreUsd(position.sizeUsd)}<small>collateral ${formatOgreUsd(position.collateralUsd)}</small></span>
+          <span>${formatOgrePrice(position.entryPrice)}<small>mark ${formatOgrePrice(position.markPrice)}</small></span>
+          <span>${formatOgrePrice(position.liquidationPrice)}</span>
+          <span data-positive="${Number(position.unrealizedPnlUsd) >= 0}">${formatOgreUsd(position.unrealizedPnlUsd)}</span>
+          <span class="ogre-row-actions">
+            <button type="button" data-ogre-tek-demo-action="close">Close</button>
+            <button type="button" data-ogre-tek-demo-action="collateral">Add Collateral</button>
+            <button type="button" data-ogre-tek-demo-action="reduce">Reduce</button>
+            <button type="button" data-ogre-tek-demo-action="tpsl">Set TP/SL</button>
+          </span>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function ogreOrdersHtml() {
+  if (!ogreTekWalletAddress()) return emptyState("Wallet disconnected", "Connect a wallet to load open and trigger orders.");
+  if (!state.ogreTek.orders.length) return emptyState("No orders", "Open, trigger, and history orders will list here when a real adapter is configured.");
+  return `
+    <div class="ogre-tek-table ogre-tek-table-small">
+      <div class="ogre-table-head"><span>Order</span><span>Trigger</span><span>Size</span><span>Status</span><span>Action</span></div>
+      ${state.ogreTek.orders.map((order) => `
+        <div class="ogre-table-row">
+          <span><strong>${escapeHtml(order.marketSymbol)}</strong><small>${escapeHtml(order.type)} ${escapeHtml(order.side)}</small></span>
+          <span>${formatOgrePrice(order.triggerPrice)}</span>
+          <span>${formatOgreUsd(order.sizeUsd)}</span>
+          <span>${escapeHtml(order.status || "open")}</span>
+          <span><button type="button" data-ogre-tek-demo-action="cancel">Cancel</button></span>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function ogreAccountHtml(account) {
+  if (!account?.connected) return `<p>Connect a wallet to load collateral, health, positions, and margin risk.</p>`;
+  return `
+    <div class="ogre-account-grid">
+      <span><small>Wallet SOL</small><strong>${Number(account.walletBalanceSol || 0).toFixed(4)}</strong></span>
+      <span><small>Available Collateral</small><strong>${formatOgreUsd(account.availableCollateralUsd)}</strong></span>
+      <span><small>Used Margin</small><strong>${formatOgreUsd(account.usedMarginUsd)}</strong></span>
+      <span><small>Unrealized PnL</small><strong>${formatOgreUsd(account.unrealizedPnlUsd)}</strong></span>
+      <span><small>Health</small><strong>${escapeHtml(account.healthScore || 0)}/100</strong></span>
+      <span><small>Daily Loss Limit</small><strong>${formatOgreUsd(account.dailyLossLimitUsd)}</strong></span>
+      <span><small>Max Leverage</small><strong>${escapeHtml(account.maxLeverageAllowed || ogreTekConfig.maxLeverage)}x</strong></span>
+      <span><small>Account Freshness</small><strong>${escapeHtml(ogreTekFreshness(account.updatedAt))}</strong></span>
+    </div>
+  `;
+}
+
+function ogreRiskModalHtml({ validation, quote, market, confirmButtonText, confirmDisabled }) {
+  const order = validation.order || {};
+  return `
+    <div class="ogre-tek-modal-backdrop" role="presentation">
+      <article class="ogre-tek-modal" role="dialog" aria-modal="true" aria-label="Ogre Tek risk confirmation">
+        <div class="panel-title-row">
+          <div>
+            <h3>Risk Confirmation</h3>
+            <p>Review every estimate before any wallet signature.</p>
+          </div>
+          <button type="button" data-ogre-tek-close-review>Close</button>
+        </div>
+        <div class="ogre-review-grid">
+          <span><small>Direction</small><strong>${escapeHtml(order.direction || "long")}</strong></span>
+          <span><small>Market</small><strong>${escapeHtml(order.marketSymbol || market?.symbol || "n/a")}</strong></span>
+          <span><small>Collateral</small><strong>${formatOgreUsd(order.collateralUsd)}</strong></span>
+          <span><small>Leverage</small><strong>${escapeHtml(order.leverage || 0)}x</strong></span>
+          <span><small>Entry Estimate</small><strong>${formatOgrePrice(quote?.entryPrice)}</strong></span>
+          <span><small>Liquidation Estimate</small><strong>${formatOgrePrice(quote?.liquidationPrice)}</strong></span>
+          <span><small>Fees</small><strong>${formatOgreUsd(quote?.takerFeeUsd)}</strong></span>
+          <span><small>Funding Rate</small><strong>${formatOgrePct(market?.fundingRatePct, 3)}</strong></span>
+          <span><small>Max Loss Warning</small><strong>${formatOgreUsd(quote?.maxLossUsd)}</strong></span>
+        </div>
+        ${ogreValidationHtml(validation)}
+        <label class="ogre-risk-check">
+          <input type="checkbox" data-ogre-tek-risk-accepted ${state.ogreTek.riskAccepted ? "checked" : ""}>
+          I understand leveraged perpetual trading can result in liquidation.
+        </label>
+        <div class="ogre-modal-actions">
+          <button type="button" data-ogre-tek-close-review>Cancel</button>
+          <button class="primary" type="button" data-ogre-tek-confirm-review ${confirmDisabled ? "disabled" : ""}>${escapeHtml(confirmButtonText)}</button>
+        </div>
+      </article>
+    </div>
+  `;
+}
+
 function emptyState(title, body) {
   return `<article class="empty"><h3>${escapeHtml(title)}</h3><p>${escapeHtml(body)}</p></article>`;
 }
@@ -5647,6 +6474,58 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-top-refresh-wallet]")) {
     await refreshWalletState({ force: true });
+    return;
+  }
+  if (target.matches("[data-ogre-tek-refresh]")) {
+    await loadOgreTekData({ force: true }).catch((error) => setError(error.message));
+    return;
+  }
+  if (target.matches("[data-ogre-tek-market]")) {
+    state.ogreTek.selectedMarket = target.dataset.ogreTekMarket || state.ogreTek.selectedMarket;
+    state.ogreTek.reviewOpen = false;
+    render({ force: true });
+    return;
+  }
+  if (target.matches("[data-ogre-tek-side]")) {
+    state.ogreTek.direction = target.dataset.ogreTekSide === "short" ? "short" : "long";
+    state.ogreTek.reviewOpen = false;
+    render({ force: true });
+    return;
+  }
+  if (target.matches("[data-ogre-tek-review]")) {
+    updateOgreTekDraftFromDom();
+    state.ogreTek.reviewOpen = true;
+    state.ogreTek.riskAccepted = false;
+    render({ force: true });
+    return;
+  }
+  if (target.matches("[data-ogre-tek-close-review]")) {
+    state.ogreTek.reviewOpen = false;
+    state.ogreTek.riskAccepted = false;
+    render({ force: true });
+    return;
+  }
+  if (target.matches("[data-ogre-tek-confirm-review]")) {
+    updateOgreTekDraftFromDom();
+    const validation = ogreTekValidation();
+    if (!state.ogreTek.riskAccepted || !validation.ok) {
+      state.ogreTek.status = "Risk confirmation is incomplete.";
+    } else if (ogreTekConfig.demoMode) {
+      state.ogreTek.status = "Demo review confirmed. No live transaction was submitted.";
+      state.ogreTek.reviewOpen = false;
+      state.ogreTek.riskAccepted = false;
+    } else {
+      state.ogreTek.status = "Live perps adapter is not wired in this build.";
+      state.ogreTek.reviewOpen = false;
+      state.ogreTek.riskAccepted = false;
+    }
+    render({ force: true });
+    return;
+  }
+  if (target.matches("[data-ogre-tek-demo-action]")) {
+    const action = target.dataset.ogreTekDemoAction || "action";
+    state.ogreTek.status = `Demo mode: ${action.replace(/-/g, " ")} is staged for the real provider adapter. No transaction was submitted.`;
+    render({ force: true });
     return;
   }
   if (target.matches("[data-toggle-terminal-ticket]")) {
@@ -5751,6 +6630,14 @@ document.addEventListener("click", async (event) => {
       setError(error.message);
     }
   }
+  if (target.matches("[data-launch-coin-save]")) {
+    saveLaunchCoinDraft();
+    return;
+  }
+  if (target.matches("[data-launch-coin-use-ca]")) {
+    await useLaunchCoinMint();
+    return;
+  }
   if (target.matches("[data-connect-wallet]")) await connectBrowserWallet(target.dataset.connectWallet);
   if (target.matches("[data-disconnect-wallet]")) await disconnectBrowserWallet();
   if (target.matches("[data-share-x]")) openXShare(target.dataset.shareText || "");
@@ -5794,6 +6681,41 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-quick-trade-token]")) await quickPresetTrade(target.dataset.quickTradeToken || "");
   if (target.matches("[data-quick-bundle-token]")) await quickPresetBundle(target.dataset.quickBundleToken || "");
+  if (target.matches("[data-smart-chart-token]")) {
+    const tokenMint = target.dataset.smartChartToken || "";
+    state.smartChartToken = tokenMint;
+    state.terminalToken = tokenMint;
+    state.tradeToken = tokenMint;
+    state.bundleToken = tokenMint;
+    state.volumeToken = tokenMint;
+    state.activeTab = "smartChart";
+    state.route = "terminal";
+    window.history.pushState({}, "", "/terminal/chart");
+    render();
+    return;
+  }
+  if (target.matches("[data-smart-chart-open]")) {
+    const tokenMint = String($("[data-smart-chart-input]")?.value || "").trim();
+    if (!tokenMint) {
+      setError("Paste a token CA first.");
+      return;
+    }
+    state.smartChartToken = tokenMint;
+    state.terminalToken = tokenMint;
+    state.tradeToken = tokenMint;
+    state.bundleToken = tokenMint;
+    state.volumeToken = tokenMint;
+    state.activeTab = "smartChart";
+    state.route = "terminal";
+    window.history.pushState({}, "", "/terminal/chart");
+    render();
+    return;
+  }
+  if (target.matches("[data-refresh-feeds]")) {
+    await refreshLivePairBuckets({ force: true }).catch((error) => setError(error.message));
+    if (!state.kolScan) await loadKolScan().catch((error) => setError(error.message));
+    return;
+  }
   if (target.matches("[data-watch-token]")) await updateWatchlist("add", target);
   if (target.matches("[data-unwatch-token]")) await updateWatchlist("remove", target);
   if (target.matches("[data-pnl-card]")) {
@@ -5925,17 +6847,29 @@ document.addEventListener("click", async (event) => {
 
   if (target.matches("[data-tab]")) {
     state.activeTab = target.dataset.tab;
+    if (state.activeTab === "ogreTek") {
+      state.route = "terminal";
+      window.history.pushState({}, "", "/ogre-tek");
+      await loadOgreTekData({ silent: true }).catch((error) => setError(error.message));
+      render();
+      return;
+    }
     if (state.route !== "terminal") {
       state.route = "terminal";
+      window.history.pushState({}, "", "/terminal");
+    }
+    if (state.activeTab === "smartChart") {
+      window.history.pushState({}, "", "/terminal/chart");
+    } else if (window.location.pathname.includes("/terminal/chart")) {
       window.history.pushState({}, "", "/terminal");
     }
     if (state.activeTab === "sniper" && !state.scan) {
       await loadScan().catch((error) => setError(error.message));
     }
-    if ((state.activeTab === "live" || state.activeTab === "terminal") && !state.livePairsByBucket[state.livePairBucket]) {
+    if ((state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "smartChart") && !state.livePairsByBucket[state.livePairBucket]) {
       await refreshLivePairBuckets().catch((error) => setError(error.message));
     }
-    if ((state.activeTab === "kol" || state.activeTab === "terminal") && !state.kolScan) {
+    if ((state.activeTab === "kol" || state.activeTab === "terminal" || state.activeTab === "smartChart") && !state.kolScan) {
       await loadKolScan().catch((error) => setError(error.message));
     }
     if (state.activeTab === "watchlist" && state.user && state.token) {
@@ -6002,6 +6936,15 @@ document.addEventListener("change", async (event) => {
     await refreshLivePairBuckets({ silent: true }).catch((error) => setError(error.message));
     render();
   }
+  if (target?.matches?.("[data-ogre-tek-field]")) {
+    updateOgreTekDraftFromDom();
+    state.ogreTek.reviewOpen = false;
+    render({ force: true });
+  }
+  if (target?.matches?.("[data-ogre-tek-risk-accepted]")) {
+    state.ogreTek.riskAccepted = Boolean(target.checked);
+    render({ force: true });
+  }
   if (target?.matches?.("[data-restore-file]")) {
     await readRestoreFile(target);
   }
@@ -6014,6 +6957,13 @@ document.addEventListener("focusout", () => {
   setTimeout(flushDeferredRender, 50);
 });
 
+document.addEventListener("input", (event) => {
+  const target = event.target;
+  if (!target?.matches?.("[data-ogre-tek-field]")) return;
+  updateOgreTekDraftFromDom();
+  if (target.type === "range") render({ force: true });
+});
+
 async function initializeApp() {
   await loadSession();
   if (state.route === "terminal") {
@@ -6021,6 +6971,9 @@ async function initializeApp() {
       refreshLivePairBuckets({ silent: true }),
       loadKolScan(state.kolMode, "", { silent: true })
     ]);
+    if (state.activeTab === "ogreTek") {
+      await loadOgreTekData({ silent: true }).catch((error) => setError(error.message));
+    }
     render();
   }
 }

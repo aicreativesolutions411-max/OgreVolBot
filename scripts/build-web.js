@@ -26,6 +26,25 @@ function normalizeBaseUrl(value) {
   return String(value || "").trim().replace(/\/+$/, "");
 }
 
+function envBool(name, fallback = false) {
+  const value = process.env[name];
+  if (value === undefined || value === "") return fallback;
+  return ["1", "true", "yes", "on", "enabled"].includes(String(value).trim().toLowerCase());
+}
+
+function envNumber(name, fallback) {
+  const parsed = Number(process.env[name]);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function envList(name, fallback) {
+  const items = String(process.env[name] || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return items.length ? items : fallback;
+}
+
 await fs.rm(distDir, { recursive: true, force: true });
 await copyDir(publicDir, distDir);
 
@@ -33,7 +52,19 @@ const buildId = String(process.env.WEB_BUILD_ID || new Date().toISOString().repl
 const apiBase = normalizeBaseUrl(process.env.OGRE_API_BASE || process.env.WEB_API_BASE || process.env.RENDER_EXTERNAL_URL || "https://ogrevolbot.onrender.com");
 const telegramBotUsername = String(process.env.TELEGRAM_BOT_USERNAME || "OgreTradeBot").trim().replace(/^@/, "");
 const portalUrl = normalizeBaseUrl(process.env.WEB_PORTAL_URL || "https://www.slimewire.org");
-const configSource = `window.OGRE_PORTAL_CONFIG = ${JSON.stringify({ apiBase, telegramBotUsername, portalUrl }, null, 2)};\n`;
+const ogreTek = {
+  enabled: envBool("OGRE_TEK_ENABLED", envBool("NEXT_PUBLIC_ENABLE_OGRE_TEK", false)),
+  demoMode: envBool("OGRE_TEK_DEMO_MODE", true),
+  provider: String(process.env.OGRE_TEK_PROVIDER || "mock").trim().toLowerCase() || "mock",
+  maxLeverage: Math.max(1, envNumber("OGRE_TEK_MAX_LEVERAGE", 5)),
+  maxPositionSize: Math.max(0, envNumber("OGRE_TEK_MAX_POSITION_SIZE", 10_000)),
+  dailyLossLimit: Math.max(0, envNumber("OGRE_TEK_DAILY_LOSS_LIMIT", 500)),
+  allowedMarkets: envList("OGRE_TEK_ALLOWED_MARKETS", ["SOL-PERP", "BTC-PERP", "ETH-PERP"]),
+  emergencyDisabled: envBool("OGRE_TEK_EMERGENCY_DISABLED", false),
+  staleMarketMs: Math.max(5_000, envNumber("OGRE_TEK_STALE_MARKET_MS", 60_000)),
+  staleAccountMs: Math.max(5_000, envNumber("OGRE_TEK_STALE_ACCOUNT_MS", 60_000))
+};
+const configSource = `window.OGRE_PORTAL_CONFIG = ${JSON.stringify({ apiBase, telegramBotUsername, portalUrl, ogreTek }, null, 2)};\n`;
 await fs.writeFile(path.join(distDir, "config.js"), configSource, "utf8");
 
 const indexPath = path.join(distDir, "index.html");
