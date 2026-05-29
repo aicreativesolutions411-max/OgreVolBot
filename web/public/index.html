@@ -9,6 +9,7 @@
     <link rel="preload" as="image" href="./assets/slimewire/references/enter-swamp-reference.jpg">
     <link rel="preload" as="image" href="./assets/slimewire/png/slime-border-frame-rich.png">
     <link rel="stylesheet" href="./styles.css?v=20260527-terminal-cleanup">
+    <link rel="stylesheet" href="./slimewire-final-overrides.css?v=20260529-terminal-panel">
     <script src="./config.js"></script>
     <script type="module" src="./app.js?v=20260527-terminal-cleanup"></script>
   </head>
@@ -157,20 +158,22 @@
 
         <nav class="tabs" aria-label="Portal views">
           <button data-tab="terminal" data-active="true">Live Terminal</button>
-          <button data-tab="dashboard">Home</button>
-          <button data-tab="profile">Profile</button>
+          <button data-tab="profile">Home / Profile</button>
           <button data-tab="trade">Trade</button>
-          <button data-tab="bundle">Bundle</button>
-          <button data-tab="volume">Volume</button>
           <button data-tab="live">Live Pairs</button>
           <button data-tab="liveTrades">Live Trades</button>
           <button data-tab="watchlist">Watchlist</button>
-          <button data-tab="launch">Launch Snipe</button>
           <button data-tab="kol">KOL Tracker</button>
+          <details class="nav-tool-group" open>
+            <summary>Ogre TeK</summary>
+            <button data-tab="bundle">Bundle</button>
+            <button data-tab="volume">Volume</button>
+            <button data-tab="launch">Launch Snipe</button>
+            <button data-tab="sniper">Sniper</button>
+          </details>
           <button data-tab="wallets">Wallets / Balances</button>
           <button data-tab="positions">Positions</button>
           <button data-tab="pnl">PnL</button>
-          <button data-tab="sniper">Sniper</button>
         </nav>
 
         <p class="error dashboard-error" data-dashboard-error hidden></p>

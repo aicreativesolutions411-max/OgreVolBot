@@ -135,6 +135,7 @@ const state = {
   watchlistLoading: false,
   selectedTradePresetId: "trade-default-scalp",
   selectedBundlePresetId: "bundle-default-six",
+  terminalTradeCollapsed: false,
   fastTradePresetStatus: "",
   fastBundlePresetStatus: "",
   editingTradePresetId: "",
@@ -995,21 +996,23 @@ function dashboardHtml() {
 
 function profileHtml() {
   return `
-    ${profileIntroHtml()}
-    <section class="profile-clean-grid profile-compact-grid">
+    <section class="profile-row-shell">
+      ${profileIntroHtml()}
+      <section class="profile-row-list">
       ${accountProfileSection()}
       ${loginSecuritySection()}
       ${profilePfpSection()}
       ${xConnectSection()}
+      </section>
+      <details class="profile-extra-details">
+        <summary>Badges, referrals, and top trader board</summary>
+        <div class="profile-extra-grid">
+          ${badgeShowcaseSection()}
+          ${referralSection()}
+          ${traderBoardSection()}
+        </div>
+      </details>
     </section>
-    <details class="profile-extra-details">
-      <summary>Badges, referrals, and top trader board</summary>
-      <div class="profile-extra-grid">
-        ${badgeShowcaseSection()}
-        ${referralSection()}
-        ${traderBoardSection()}
-      </div>
-    </details>
   `;
 }
 
@@ -1508,6 +1511,10 @@ function userAvatarHtml(fallback = "SW") {
   const avatar = String(state.user?.avatar || "").trim();
   if (isSafeAvatarSrc(avatar)) {
     return `<img src="${escapeHtml(avatar)}" alt="">`;
+  }
+  const ogreAvatar = "./assets/slimewire/png/token-mascots/token-mascot-1.png";
+  if (fallback === "SW" || fallback === "OG") {
+    return `<img src="${ogreAvatar}" alt="">`;
   }
   const label = String(fallback || "SW").trim().slice(0, 2).toUpperCase() || "SW";
   return `<span>${escapeHtml(label)}</span>`;
@@ -4765,7 +4772,7 @@ function terminalSignalRowsHtml(rows, options = {}) {
             <div class="terminal-token-actions">
               <button type="button" class="primary" data-quick-trade-token="${escapeHtml(row.tokenMint)}">${escapeHtml(actionLabel)}</button>
               <button type="button" data-quick-bundle-token="${escapeHtml(row.tokenMint)}">Bundle</button>
-              <button type="button" data-watch-token="${escapeHtml(row.tokenMint)}" data-watch-symbol="${escapeHtml(row.symbol || "")}" data-watch-name="${escapeHtml(row.name || "")}" data-watch-image="${escapeHtml(row.imageUrl || "")}">${isTokenWatched(row.tokenMint) ? "Watching" : "Watch"}</button>
+              <button type="button" class="watch-action" data-watch-token="${escapeHtml(row.tokenMint)}" data-watch-symbol="${escapeHtml(row.symbol || "")}" data-watch-name="${escapeHtml(row.name || "")}" data-watch-image="${escapeHtml(row.imageUrl || "")}">${isTokenWatched(row.tokenMint) ? "Saved" : "Watch"}</button>
             </div>
           </article>
         `;
@@ -4803,7 +4810,7 @@ function compactSignalRowsHtml(rows, options = {}) {
           <div class="compact-row-actions">
             <button type="button" class="primary" data-quick-trade-token="${escapeHtml(row.tokenMint)}">${escapeHtml(actionLabel)}</button>
             <button type="button" data-quick-bundle-token="${escapeHtml(row.tokenMint)}">Bundle</button>
-            <button type="button" data-watch-token="${escapeHtml(row.tokenMint)}" data-watch-symbol="${escapeHtml(row.symbol || "")}" data-watch-name="${escapeHtml(row.name || "")}" data-watch-image="${escapeHtml(row.imageUrl || "")}">${isTokenWatched(row.tokenMint) ? "Watching" : "Watch"}</button>
+            <button type="button" class="watch-action" data-watch-token="${escapeHtml(row.tokenMint)}" data-watch-symbol="${escapeHtml(row.symbol || "")}" data-watch-name="${escapeHtml(row.name || "")}" data-watch-image="${escapeHtml(row.imageUrl || "")}">${isTokenWatched(row.tokenMint) ? "Saved" : "Watch"}</button>
           </div>
         </article>
       `).join("")}
@@ -4871,8 +4878,9 @@ function terminalHtml() {
   const token = selectedTerminalTokenRow();
   const bucketLoading = Boolean(state.livePairsLoadingByBucket[state.livePairBucket]);
   const lastUpdated = currentLivePairsUpdatedAt();
+  const collapsed = Boolean(state.terminalTradeCollapsed);
   return `
-    <section class="command-terminal">
+    <section class="command-terminal ${collapsed ? "trade-panel-collapsed" : ""}">
       <main class="command-workspace">
         <div class="terminal-title-row command-title">
           <div>
@@ -4917,8 +4925,8 @@ function terminalHtml() {
 
         ${terminalBottomTablesHtml()}
       </main>
-      <aside class="trade-side order-ticket-stack terminal-dock">
-        ${terminalTradePanelHtml(token)}
+      <aside class="trade-side order-ticket-stack terminal-dock ${collapsed ? "is-collapsed" : ""}">
+        ${terminalTradePanelHtml(token, collapsed)}
       </aside>
     </section>
   `;
@@ -4960,17 +4968,29 @@ function tokenPreviewHtml(token) {
   `;
 }
 
-function terminalTradePanelHtml(token) {
+function terminalTradePanelHtml(token, collapsed = false) {
   const heldPosition = token?.tokenMint ? state.positions.find((position) => String(position.tokenMint) === String(token.tokenMint)) : null;
   const activeTrade = activePresetDetail("trade");
   const activeBundle = activePresetDetail("bundle");
+  if (collapsed) {
+    return `
+      <article class="order-ticket terminal-ticket terminal-ticket-collapsed">
+        <button type="button" class="terminal-ticket-collapsed-button" data-toggle-terminal-ticket aria-label="Open trade panel">
+          <span>Trade</span>
+          <strong>‹</strong>
+        </button>
+      </article>
+    `;
+  }
   return `
     <article class="order-ticket terminal-ticket">
-      <details class="terminal-ticket-details" open>
-        <summary>
+      <div class="terminal-ticket-header">
+        <div>
           <span>Trade Panel</span>
           <small>${escapeHtml(activeTrade)}</small>
-        </summary>
+        </div>
+        <button type="button" class="terminal-ticket-toggle" data-toggle-terminal-ticket aria-label="Hide trade panel">›</button>
+      </div>
         <div class="ticket-collapse-body">
           <p>Row trades use the active preset. Managed wallets can run saved fast actions; browser wallets still ask for approval.</p>
           <div class="segmented-control">
@@ -5003,16 +5023,6 @@ function terminalTradePanelHtml(token) {
             ${state.selectedBundlePresetId === "custom" ? fastBundlePresetBuilderHtml() : ""}
           </details>
 
-          <details class="ogre-tek-details">
-            <summary>Ogre TeK</summary>
-            <div class="ogre-tek-side-actions">
-              <button type="button" data-tab="sniper">Sniper</button>
-              <button type="button" data-tab="bundle">Bundler</button>
-              <button type="button" data-tab="volume">Volume</button>
-              <button type="button" data-tab="launch">Launch Snipe</button>
-            </div>
-          </details>
-
           <div class="ticket-balance-row">
             <span>${totalSol().toFixed(4)} SOL</span>
             <button data-top-refresh-wallet>${state.walletRefreshing ? "Refreshing..." : "Refresh Balance"}</button>
@@ -5036,7 +5046,6 @@ function terminalTradePanelHtml(token) {
           ` : emptyState("No token selected", "Click a live pair, KOL signal, watchlist row, or paste a CA in the top search.")}
           <small>${escapeHtml(syncHealthLabel())}</small>
         </div>
-      </details>
     </article>
   `;
 }
@@ -5369,7 +5378,7 @@ function tokenSignalRowHtml(row, index, options = {}) {
   const primaryAction = options.primaryAction || "quickTrade";
   const watchButton = options.context === "watchlist"
     ? `<button type="button" data-unwatch-token="${escapeHtml(row.tokenMint)}">Remove</button>`
-    : `<button type="button" data-watch-token="${escapeHtml(row.tokenMint)}" data-watch-symbol="${escapeHtml(row.symbol || "")}" data-watch-name="${escapeHtml(row.name || "")}" data-watch-image="${escapeHtml(row.imageUrl || "")}">${watched ? "Watching" : "Watch"}</button>`;
+    : `<button type="button" class="watch-action" data-watch-token="${escapeHtml(row.tokenMint)}" data-watch-symbol="${escapeHtml(row.symbol || "")}" data-watch-name="${escapeHtml(row.name || "")}" data-watch-image="${escapeHtml(row.imageUrl || "")}">${watched ? "Saved" : "Watch"}</button>`;
   return `
     <article class="signal-row">
       <div class="signal-token">
@@ -5638,6 +5647,11 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-top-refresh-wallet]")) {
     await refreshWalletState({ force: true });
+    return;
+  }
+  if (target.matches("[data-toggle-terminal-ticket]")) {
+    state.terminalTradeCollapsed = !state.terminalTradeCollapsed;
+    render({ force: true });
     return;
   }
   if (target.matches("[data-global-token-open]")) {
