@@ -116,6 +116,8 @@ const state = {
     ? "ogreTek"
     : window.location.pathname.includes("/chart")
       ? "smartChart"
+    : window.location.pathname.includes("/slime-scope")
+      ? "slimeScope"
     : window.location.pathname.includes("/tx-audit")
     ? "txAudit"
     : window.location.pathname.includes("/trade")
@@ -157,6 +159,7 @@ const state = {
   livePairsLastUpdatedAt: "",
   livePairsLastUpdatedByBucket: {},
   livePairBucket: "live",
+  slimeScopeMode: "new",
   launchResult: null,
   launchCoinDraft: getStoredLaunchCoinDraft(),
   launchCoinStatus: "",
@@ -173,7 +176,8 @@ const state = {
   watchlistLoading: false,
   selectedTradePresetId: "trade-default-scalp",
   selectedBundlePresetId: "bundle-default-six",
-  terminalTradeCollapsed: false,
+  quickBuyAmountOverride: "",
+  terminalTradeCollapsed: true,
   ogreTek: {
     loading: false,
     error: "",
@@ -261,6 +265,7 @@ function tabForPath(pathname = window.location.pathname) {
   if (pathname.includes("/ogre-tek")) return "ogreTek";
   if (pathname.includes("/chart")) return "smartChart";
   if (pathname.includes("/tx-audit")) return "txAudit";
+  if (pathname.includes("/slime-scope")) return "slimeScope";
   if (pathname.includes("/trade")) return "trade";
   if (pathname.includes("/kol")) return "kol";
   if (pathname.includes("/live-pairs")) return "live";
@@ -759,7 +764,7 @@ async function refreshLivePairBuckets({ silent = false, force = false } = {}) {
   await Promise.allSettled(otherBuckets.map((bucket) => (
     loadLivePairs({ silent: true, bucket, renderOnComplete: false, force })
   )));
-  if (state.activeTab === "live" || state.activeTab === "terminal") render();
+  if (state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "slimeScope") render();
 }
 
 function scheduleLivePairsAutoRefresh() {
@@ -768,11 +773,11 @@ function scheduleLivePairsAutoRefresh() {
     livePairsTimer = null;
   }
 
-  if (state.activeTab !== "live" && state.activeTab !== "terminal") return;
+  if (state.activeTab !== "live" && state.activeTab !== "terminal" && state.activeTab !== "slimeScope") return;
   const refreshSeconds = Number(currentLivePairs()?.refreshSeconds || 30);
   const delayMs = Math.max(3, refreshSeconds) * 1000;
   livePairsTimer = setTimeout(() => {
-    if ((state.activeTab !== "live" && state.activeTab !== "terminal") || state.livePairsLoading) return;
+    if ((state.activeTab !== "live" && state.activeTab !== "terminal" && state.activeTab !== "slimeScope") || state.livePairsLoading) return;
     refreshLivePairBuckets({ silent: true }).catch((error) => setError(error.message));
   }, delayMs);
 }
@@ -1028,6 +1033,7 @@ function renderTabs() {
   if (state.activeTab === "volume") panel.innerHTML = volumeHtml();
   if (state.activeTab === "live") panel.innerHTML = livePairsHtml();
   if (state.activeTab === "liveTrades") panel.innerHTML = liveTradesHtml();
+  if (state.activeTab === "slimeScope") panel.innerHTML = slimeScopeHtml();
   if (state.activeTab === "watchlist") panel.innerHTML = watchlistHtml();
   if (state.activeTab === "smartChart") panel.innerHTML = smartChartHtml();
   if (state.activeTab === "launchCoin") panel.innerHTML = launchCoinHtml();
@@ -1409,12 +1415,30 @@ function xConnectSection() {
 function referralSection() {
   const code = state.user?.referralCode || "";
   const link = state.user?.referralLink || (code ? `${shareSiteUrl}?ref=${encodeURIComponent(code)}` : "");
+  const stats = state.user?.referralStats || {};
+  const referralRows = Array.isArray(stats.referrals) ? stats.referrals : [];
   return `
     <section class="create-wallet-card referral-card">
       <div>
         <h3>Referral</h3>
         <p>Share SlimeWire and optionally earn the referral split on users you bring in. This is separate from the trader board.</p>
       </div>
+      <div class="referral-stats-grid">
+        <span><small>Total earned</small><strong>${escapeHtml(stats.totalSol || "0")} SOL</strong></span>
+        <span><small>Payouts</small><strong>${escapeHtml(stats.payoutCount || 0)}</strong></span>
+        <span><small>Referral users</small><strong>${escapeHtml(referralRows.length)}</strong></span>
+      </div>
+      ${referralRows.length ? `
+        <div class="referral-breakdown">
+          ${referralRows.slice(0, 6).map((row) => `
+            <div class="referral-breakdown-row">
+              <span>${escapeHtml(row.userId || "user")}</span>
+              <strong>${escapeHtml(row.sol || "0")} SOL</strong>
+              <small>${escapeHtml(row.payoutCount || 0)} payout${Number(row.payoutCount || 0) === 1 ? "" : "s"}</small>
+            </div>
+          `).join("")}
+        </div>
+      ` : `<small>No referral payouts yet. They will appear here when referred users trade and referral fees are paid.</small>`}
       <label>
         Referral Payout Wallet
         <input data-referral-wallet type="text" placeholder="Wallet for referral fees" value="${escapeHtml(state.user?.referralPayoutWallet || "")}">
@@ -4197,10 +4221,12 @@ async function quickPresetTrade(tokenMint) {
     if (!state.wallets.some((wallet) => String(wallet.index) === String(preset.walletIndex || "1"))) {
       throw new Error("This trade preset wallet is not loaded. Edit it in the Trade tab.");
     }
+    const amountSol = activeQuickBuyAmount(preset);
+    if (!amountSol) throw new Error("Set a quick buy amount first.");
     const payload = {
       tokenMint,
       walletIndex: preset.walletIndex || "1",
-      amountSol: preset.amountSol,
+      amountSol,
       slippageBps: preset.slippageBps,
       autoExit: true,
       takeProfitPct: preset.takeProfitPct,
@@ -4568,7 +4594,10 @@ function walletsHtml() {
   const create = `${createWalletSection()}${importWalletSection()}${backupRestoreSection()}${downloadsHtml()}`;
   const walletTools = `
     <details class="wallet-tools-details">
-      <summary>Wallet Tools / Backup / Import</summary>
+      <summary>
+        <span>Wallet Tools / Backup / Import</span>
+        <span class="wallet-tools-drop-action">Drop <span class="wallet-tools-caret" aria-hidden="true">v</span></span>
+      </summary>
       ${create}
     </details>
   `;
@@ -5193,6 +5222,118 @@ function terminalPresetStripHtml() {
   `;
 }
 
+function formatQuickBuyAmount(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) return "";
+  return number >= 1 ? number.toFixed(2).replace(/\.?0+$/, "") : number.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function normalizedQuickBuyAmount(value = state.quickBuyAmountOverride) {
+  const clean = String(value || "").replace(/[^0-9.]/g, "");
+  if (!clean) return "";
+  const number = Number(clean);
+  if (!Number.isFinite(number) || number <= 0) return "";
+  return formatQuickBuyAmount(number);
+}
+
+function activeTradePreset() {
+  return presetById("trade", state.selectedTradePresetId);
+}
+
+function activeQuickBuyAmount(preset = activeTradePreset()) {
+  return normalizedQuickBuyAmount() || formatQuickBuyAmount(preset?.amountSol);
+}
+
+function rowAgeSeconds(row = {}) {
+  const value = Number(row.pairAgeSeconds);
+  if (Number.isFinite(value) && value >= 0) return value;
+  const created = Number(row.pairCreatedAt || row.createdAt || 0);
+  if (created > 0) {
+    const timestamp = created < 10_000_000_000 ? created * 1000 : created;
+    return Math.max(0, Math.round((Date.now() - timestamp) / 1000));
+  }
+  return Number.POSITIVE_INFINITY;
+}
+
+function slimeScopeRows(mode = state.slimeScopeMode) {
+  const rows = uniqueSignalRows([
+    ...(state.livePairsByBucket.live?.rows || []),
+    ...(state.livePairsByBucket.under1h?.rows || []),
+    ...(state.livePairsByBucket.under3h?.rows || []),
+    ...(state.livePairsByBucket.under1d?.rows || []),
+    ...(state.scan?.rows || []),
+    ...(state.kolScan?.rows || [])
+  ]).map((row) => mergeMarketData(row, marketDataRowsByMint().get(String(row?.tokenMint || ""))));
+
+  const withMarket = rows.filter((row) => !isUiMayhemRow(row));
+  const sortedBest = (items) => [...items].sort((a, b) => (
+    Number(b.bestPickScore || b.score || 0) - Number(a.bestPickScore || a.score || 0)
+    || firstUsefulNumber(b.volumeM15, b.volumeM30, b.volumeH1, b.volumeH24) - firstUsefulNumber(a.volumeM15, a.volumeM30, a.volumeH1, a.volumeH24)
+    || compareNewestLiveRows(a, b)
+  ));
+
+  if (mode === "graduated") {
+    const graduated = withMarket.filter((row) => firstUsefulNumber(row.marketCap, row.fdv) >= 69_000 || firstUsefulNumber(row.liquidityUsd) >= 30_000);
+    return sortedBest(graduated.length ? graduated : withMarket.filter((row) => rowAgeSeconds(row) <= 86_400));
+  }
+  if (mode === "graduating") {
+    const graduating = withMarket.filter((row) => {
+      const mc = firstUsefulNumber(row.marketCap, row.fdv);
+      const volume = firstUsefulNumber(row.volumeM15, row.volumeM30, row.volumeH1, row.volumeH24);
+      return mc >= 7_000 && mc < 69_000 && (volume > 0 || firstUsefulNumber(row.liquidityUsd) > 2_000);
+    });
+    return sortedBest(graduating.length ? graduating : withMarket.filter((row) => rowAgeSeconds(row) <= 10_800));
+  }
+  return [...withMarket].filter((row) => rowAgeSeconds(row) <= 3_600).sort(compareNewestLiveRows);
+}
+
+function slimeScopeHtml() {
+  const modes = [
+    ["new", "New"],
+    ["graduating", "Graduating"],
+    ["graduated", "Graduated"]
+  ];
+  const rows = slimeScopeRows();
+  return `
+    <section class="slime-scope-page">
+      <div class="terminal-title-row">
+        <div>
+          <h3>Slime Scope</h3>
+          <p>Fast pump-style view for new, graduating, and graduated pairs. Mayhem-mode rows stay filtered out.</p>
+        </div>
+        <span>${rows.length} shown</span>
+      </div>
+      <div class="command-controls slime-scope-controls">
+        <div class="mode-row terminal-modes slime-scope-tabs">
+          ${modes.map(([mode, label]) => `<button data-slime-scope-mode="${mode}" data-active="${state.slimeScopeMode === mode}">${label}</button>`).join("")}
+        </div>
+        <div class="terminal-quick-buy-bar">
+          <label>
+            Quick Buy SOL
+            <input data-quick-buy-amount type="number" min="0" step="0.01" placeholder="${escapeHtml(activeQuickBuyAmount() || "0.10")}" value="${escapeHtml(state.quickBuyAmountOverride)}">
+          </label>
+          <label>
+            Preset
+            <select data-fast-trade-preset="slime-scope">
+              ${presetOptionsHtml("trade", state.selectedTradePresetId)}
+            </select>
+          </label>
+        </div>
+        <button class="primary" data-refresh-live-pairs>Refresh Scope</button>
+      </div>
+      <article class="terminal-panel slime-scope-list-panel">
+        ${compactSignalRowsHtml(rows, {
+          layout: "terminal",
+          limit: 30,
+          actionLabel: activePresetButtonLabel(),
+          emptyTitle: "No Slime Scope pairs yet",
+          emptyMessage: "Feeds are refreshing. Try a different scope mode if this stays empty."
+        })}
+      </article>
+    </section>
+  `;
+}
+
 function terminalHtml() {
   const liveFeed = currentLivePairs();
   const liveRows = uniqueSignalRows(liveFeed?.rows || []);
@@ -5229,6 +5370,19 @@ function terminalHtml() {
               ${LIVE_PAIR_SORTS.map(([value, label]) => `<option value="${value}" ${state.terminalSort === value ? "selected" : ""}>${label}</option>`).join("")}
             </select>
           </label>
+          <div class="terminal-quick-buy-bar" aria-label="Quick buy settings">
+            <label>
+              Quick Buy SOL
+              <input data-quick-buy-amount type="number" min="0" step="0.01" placeholder="${escapeHtml(activeQuickBuyAmount() || "0.10")}" value="${escapeHtml(state.quickBuyAmountOverride)}">
+            </label>
+            <label>
+              Preset
+              <select data-fast-trade-preset="terminal-top">
+                ${presetOptionsHtml("trade", state.selectedTradePresetId)}
+              </select>
+            </label>
+          </div>
+          <button class="trade-panel-top-button" data-toggle-terminal-ticket>${collapsed ? "Trade Panel" : "Hide Panel"}</button>
           <button class="primary" data-refresh-live-pairs>${bucketLoading ? "Refreshing..." : "Refresh Feeds"}</button>
           <button data-top-refresh-wallet>${state.walletRefreshing ? "Refreshing Wallet..." : "Refresh Wallet"}</button>
         </div>
@@ -5258,7 +5412,9 @@ function terminalHtml() {
 }
 
 function activePresetButtonLabel() {
-  const preset = presetById("trade", state.selectedTradePresetId);
+  const amount = activeQuickBuyAmount();
+  if (amount) return `Buy ${amount} SOL`;
+  const preset = activeTradePreset();
   return tradeActionLabelFromPreset(preset, "Trade");
 }
 
@@ -6605,7 +6761,16 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-browse-guest]")) {
     state.loginCollapsed = true;
+    state.route = "terminal";
+    state.activeTab = "terminal";
+    window.history.pushState({}, "", "/terminal");
     render();
+    await Promise.allSettled([
+      refreshLivePairBuckets({ silent: true }),
+      loadKolScan(state.kolMode, "", { silent: true })
+    ]);
+    render();
+    return;
   }
   if (target.matches("[data-logout]")) await logout();
   if (target.matches("[data-connect-x]")) await connectXAccount();
@@ -6860,13 +7025,15 @@ document.addEventListener("click", async (event) => {
     }
     if (state.activeTab === "smartChart") {
       window.history.pushState({}, "", "/terminal/chart");
-    } else if (window.location.pathname.includes("/terminal/chart")) {
+    } else if (state.activeTab === "slimeScope") {
+      window.history.pushState({}, "", "/terminal/slime-scope");
+    } else if (window.location.pathname.includes("/terminal/chart") || window.location.pathname.includes("/terminal/slime-scope")) {
       window.history.pushState({}, "", "/terminal");
     }
     if (state.activeTab === "sniper" && !state.scan) {
       await loadScan().catch((error) => setError(error.message));
     }
-    if ((state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "smartChart") && !state.livePairsByBucket[state.livePairBucket]) {
+    if ((state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "smartChart" || state.activeTab === "slimeScope") && !state.livePairsByBucket[state.livePairBucket]) {
       await refreshLivePairBuckets().catch((error) => setError(error.message));
     }
     if ((state.activeTab === "kol" || state.activeTab === "terminal" || state.activeTab === "smartChart") && !state.kolScan) {
@@ -6898,6 +7065,13 @@ document.addEventListener("click", async (event) => {
     await refreshLivePairBuckets({ force: true }).catch((error) => setError(error.message));
   }
 
+  if (target.matches("[data-slime-scope-mode]")) {
+    state.slimeScopeMode = target.dataset.slimeScopeMode || "new";
+    state.activeTab = "slimeScope";
+    render();
+    await refreshLivePairBuckets({ force: true }).catch((error) => setError(error.message));
+  }
+
   if (target.matches("[data-scan-mode]")) {
     await loadScan(target.dataset.scanMode).catch((error) => setError(error.message));
   }
@@ -6922,6 +7096,10 @@ document.addEventListener("change", async (event) => {
     state.fastTradePresetStatus = state.selectedTradePresetId === "custom"
       ? ""
       : "Trade preset selected. Tap Trade or Buy on a token row to use it.";
+    render();
+  }
+  if (target?.matches?.("[data-quick-buy-amount]")) {
+    state.quickBuyAmountOverride = normalizedQuickBuyAmount(target.value);
     render();
   }
   if (target?.matches?.("[data-fast-bundle-preset]")) {
@@ -6959,6 +7137,10 @@ document.addEventListener("focusout", () => {
 
 document.addEventListener("input", (event) => {
   const target = event.target;
+  if (target?.matches?.("[data-quick-buy-amount]")) {
+    state.quickBuyAmountOverride = String(target.value || "").replace(/[^0-9.]/g, "").slice(0, 12);
+    return;
+  }
   if (!target?.matches?.("[data-ogre-tek-field]")) return;
   updateOgreTekDraftFromDom();
   if (target.type === "range") render({ force: true });

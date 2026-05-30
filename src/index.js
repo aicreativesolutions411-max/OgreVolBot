@@ -5872,12 +5872,26 @@ async function collectSolFee(signer, feeLamports, options = {}) {
   }
   if (!tx.instructions.length) return null;
 
-  return sendLegacyTransaction(tx, [signer]);
+  const signature = await sendLegacyTransaction(tx, [signer]);
+  if (targets.referrerUserId && targets.referralWallet && referralLamports > 0) {
+    await recordReferralFeePayout({
+      userId: options.userId,
+      referrerUserId: targets.referrerUserId,
+      referralWallet: targets.referralWallet,
+      lamports: referralLamports,
+      signature
+    }).catch((error) => audit("referral_fee_record_failed", {
+      userId: options.userId,
+      referrerUserId: targets.referrerUserId,
+      error: friendlyError(error)
+    }));
+  }
+  return signature;
 }
 
 async function referralFeeTargets(userId, feeLamports) {
   const total = BigInt(feeLamports);
-  const fallback = { ownerLamports: total, referralLamports: 0n, referralWallet: "" };
+  const fallback = { ownerLamports: total, referralLamports: 0n, referralWallet: "", referrerUserId: "" };
   if (!userId || CONFIG.bundleFeeBps <= 0 || CONFIG.referralFeeBps <= 0) return fallback;
 
   try {
@@ -5892,11 +5906,84 @@ async function referralFeeTargets(userId, feeLamports) {
     return {
       ownerLamports: total - referralLamports,
       referralLamports,
-      referralWallet
+      referralWallet,
+      referrerUserId: String(profile.referredByUserId || "")
     };
   } catch {
     return fallback;
   }
+}
+
+function referralSolString(lamports) {
+  const value = Number(lamports || "0") / LAMPORTS_PER_SOL;
+  if (!Number.isFinite(value)) return "0";
+  return value.toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function normalizeReferralStats(stats = {}) {
+  const totalLamports = String(stats.totalLamports || "0");
+  const referralsObj = stats.referrals && typeof stats.referrals === "object" ? stats.referrals : {};
+  const referrals = Object.entries(referralsObj).map(([id, row]) => {
+    const lamports = String(row?.lamports || "0");
+    return {
+      userId: id,
+      lamports,
+      sol: referralSolString(lamports),
+      payoutCount: Number(row?.payoutCount || 0),
+      lastSignature: row?.lastSignature || "",
+      lastPaidAt: row?.lastPaidAt || ""
+    };
+  }).sort((a, b) => Number(b.lamports) - Number(a.lamports));
+
+  return {
+    totalLamports,
+    totalSol: referralSolString(totalLamports),
+    payoutCount: Number(stats.payoutCount || 0),
+    referralWallet: stats.referralWallet || "",
+    lastSignature: stats.lastSignature || "",
+    lastPaidAt: stats.lastPaidAt || "",
+    referrals
+  };
+}
+
+async function recordReferralFeePayout({ userId, referrerUserId, referralWallet, lamports, signature }) {
+  if (!referrerUserId || !lamports) return;
+  const payoutLamports = BigInt(lamports);
+  if (payoutLamports <= 0n) return;
+
+  const store = await readWebAuthStore();
+  const key = String(referrerUserId);
+  const profile = store.profiles[key] || {};
+  const currentStats = profile.referralStats && typeof profile.referralStats === "object" ? profile.referralStats : {};
+  const currentTotal = BigInt(currentStats.totalLamports || "0");
+  const referrals = currentStats.referrals && typeof currentStats.referrals === "object" ? { ...currentStats.referrals } : {};
+  const childKey = String(userId || "unknown");
+  const child = referrals[childKey] || {};
+  referrals[childKey] = {
+    lamports: String(BigInt(child.lamports || "0") + payoutLamports),
+    payoutCount: Number(child.payoutCount || 0) + 1,
+    lastSignature: signature || "",
+    lastPaidAt: new Date().toISOString()
+  };
+
+  profile.referralStats = {
+    totalLamports: String(currentTotal + payoutLamports),
+    payoutCount: Number(currentStats.payoutCount || 0) + 1,
+    referralWallet,
+    lastSignature: signature || "",
+    lastPaidAt: new Date().toISOString(),
+    referrals
+  };
+  profile.updatedAt = new Date().toISOString();
+  store.profiles[key] = profile;
+  await writeWebAuthStore(store);
+  await audit("referral_fee_recorded", {
+    userId,
+    referrerUserId,
+    referralWallet,
+    lamports: String(payoutLamports),
+    signature
+  });
 }
 
 async function getSolBalanceCached(owner, options = {}) {
@@ -10605,6 +10692,10 @@ function ensureWebProfileDefaults(store, userId) {
     profile.referralPayoutWallet = "";
     changed = true;
   }
+  if (!profile.referralStats || typeof profile.referralStats !== "object") {
+    profile.referralStats = { totalLamports: "0", payoutCount: 0, referrals: {} };
+    changed = true;
+  }
 
   if (changed || !store.profiles[key]) {
     profile.updatedAt = profile.updatedAt || new Date().toISOString();
@@ -11028,6 +11119,7 @@ async function webUserSummary(userId) {
     referralCode: profile.referralCode || "",
     referralLink: profile.referralCode ? webReferralLink(profile.referralCode) : "",
     referralPayoutWallet: profile.referralPayoutWallet || "",
+    referralStats: normalizeReferralStats(profile.referralStats),
     referredByCode: profile.referredByCode || "",
     showOnTraderBoard: Boolean(profile.showOnTraderBoard),
     traderBoardWalletMode: ["all", "manual"].includes(String(profile.traderBoardWalletMode || "")) ? profile.traderBoardWalletMode : "all",
