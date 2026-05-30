@@ -175,8 +175,8 @@ const state = {
   presets: { trade: [], bundle: [] },
   watchlist: { rows: [], count: 0 },
   watchlistLoading: false,
-  selectedTradePresetId: "trade-default-scalp",
-  selectedBundlePresetId: "bundle-default-six",
+  selectedTradePresetId: "",
+  selectedBundlePresetId: "",
   quickBuyAmountOverride: "",
   terminalTradeCollapsed: true,
   ogreTek: {
@@ -909,8 +909,8 @@ function syncHealthLabel() {
 function activePresetSummary() {
   const trade = presetById("trade", state.selectedTradePresetId);
   const bundle = presetById("bundle", state.selectedBundlePresetId);
-  const tradeLabel = trade ? `${trade.name} ${trade.amountSol || ""} SOL` : "Trade custom";
-  const bundleLabel = bundle ? bundle.name : "Bundle custom";
+  const tradeLabel = trade ? `${trade.name} ${trade.amountSol || ""} SOL` : "No trade preset";
+  const bundleLabel = bundle ? bundle.name : "No bundle preset";
   return `Preset: ${tradeLabel} | ${bundleLabel}`;
 }
 
@@ -2181,10 +2181,18 @@ function fieldValue(selectSelector, customSelector, fallback = "") {
 
 function presetOptionsHtml(kind, selectedId = "") {
   const presets = state.presets?.[kind] || [];
-  if (!presets.length) return `<option value="custom" selected>Custom / manual</option>`;
+  const manualSelected = !selectedId || selectedId === "none" || selectedId === "manual";
+  const createLabel = kind === "bundle" ? "Create / edit bundle preset" : "Create / edit trade preset";
+  if (!presets.length) {
+    return `
+      <option value="" ${manualSelected ? "selected" : ""}>No preset / manual</option>
+      <option value="custom" ${selectedId === "custom" ? "selected" : ""}>${createLabel}</option>
+    `;
+  }
   return `
+    <option value="" ${manualSelected ? "selected" : ""}>No preset / manual</option>
     ${presets.map((preset) => `<option value="${escapeHtml(preset.id)}" ${preset.id === selectedId ? "selected" : ""}>${escapeHtml(preset.name)}</option>`).join("")}
-    <option value="custom" ${selectedId === "custom" ? "selected" : ""}>Custom / manual</option>
+    <option value="custom" ${selectedId === "custom" ? "selected" : ""}>${createLabel}</option>
   `;
 }
 
@@ -2827,8 +2835,8 @@ function launchCoinHtml() {
               Action After Launch
               <select data-launch-coin-action>
                 <option value="watch" ${draft.action === "watch" ? "selected" : ""}>Watch only</option>
-                <option value="trade" ${draft.action === "trade" ? "selected" : ""}>Auto Trade with preset</option>
-                <option value="bundle" ${draft.action === "bundle" ? "selected" : ""}>Auto Bundle with preset</option>
+                <option value="trade" ${draft.action === "trade" ? "selected" : ""}>Auto Trade with one-time setup</option>
+                <option value="bundle" ${draft.action === "bundle" ? "selected" : ""}>Auto Bundle with one-time setup</option>
                 <option value="launch-watch" ${draft.action === "launch-watch" ? "selected" : ""}>Arm Launch Snipe watcher</option>
               </select>
             </label>
@@ -2843,6 +2851,14 @@ function launchCoinHtml() {
               <select data-launch-coin-bundle-preset>
                 ${presetOptionsHtml("bundle", draft.bundlePresetId || state.selectedBundlePresetId)}
               </select>
+            </label>
+            <label>
+              Buy SOL Per Wallet
+              <input data-launch-coin-amount type="text" inputmode="decimal" autocomplete="off" placeholder="0.1" value="${escapeHtml(draft.amountSol || activeQuickBuyAmount() || "0.1")}">
+            </label>
+            <label>
+              Sell Percent
+              <input data-launch-coin-sell-percent type="number" min="1" max="100" step="1" value="${escapeHtml(draft.sellPercent || "100")}">
             </label>
             <label>
               Stop Loss
@@ -2881,6 +2897,14 @@ function launchCoinHtml() {
               </select>
               <input data-launch-coin-slippage-custom data-custom-for="launch-coin-slippage" type="number" min="1" max="5000" step="1" placeholder="Custom bps" hidden>
             </label>
+            <label class="full-span launch-inline-wallets">
+              Wallets / Groups For Post-Launch Buy
+              <span class="muted">Use these for this launch only, or pick a saved preset above.</span>
+              <div class="wallet-checks preset-wallets">
+                ${state.wallets.length ? walletChecksHtml("launch-coin", draft.walletIndexes || null) : `<p class="muted">Create or restore managed wallets first, or use Watch only.</p>`}
+              </div>
+            </label>
+            ${walletGroupHtml("launch-coin", draft.walletGroup || "")}
           </div>
         </details>
 
@@ -2925,8 +2949,12 @@ function readLaunchCoinDraft() {
     telegram: ($("[data-launch-coin-telegram]")?.value || "").trim(),
     tokenMint: ($("[data-launch-coin-ca]")?.value || "").trim(),
     action: $("[data-launch-coin-action]")?.value || "watch",
-    tradePresetId: $("[data-launch-coin-trade-preset]")?.value || state.selectedTradePresetId,
-    bundlePresetId: $("[data-launch-coin-bundle-preset]")?.value || state.selectedBundlePresetId,
+    tradePresetId: $("[data-launch-coin-trade-preset]")?.value || "",
+    bundlePresetId: $("[data-launch-coin-bundle-preset]")?.value || "",
+    amountSol: normalizedQuickBuyAmount($("[data-launch-coin-amount]")?.value || draft.amountSol || "0.1") || "0.1",
+    sellPercent: $("[data-launch-coin-sell-percent]")?.value || draft.sellPercent || "100",
+    walletIndexes: checkedWalletIndexes("launch-coin"),
+    walletGroup: $("[data-launch-coin-group]")?.value?.trim() || "",
     stopLossPct: fieldValue("[data-launch-coin-sl]", "[data-launch-coin-sl-custom]", "8"),
     takeProfitPct: fieldValue("[data-launch-coin-tp]", "[data-launch-coin-tp-custom]", "40"),
     sellDelay: fieldValue("[data-launch-coin-delay]", "[data-launch-coin-delay-custom]", "off"),
@@ -3001,6 +3029,37 @@ function applyLaunchCoinMint(draft, tokenMint) {
   state.smartChartToken = normalizedMint;
   if (draft?.tradePresetId) state.selectedTradePresetId = draft.tradePresetId;
   if (draft?.bundlePresetId) state.selectedBundlePresetId = draft.bundlePresetId;
+  if (draft?.amountSol) state.quickBuyAmountOverride = normalizedQuickBuyAmount(draft.amountSol);
+}
+
+function launchCoinTradePresetFromDraft(draft = {}) {
+  const saved = draft.tradePresetId ? presetById("trade", draft.tradePresetId) : null;
+  const walletIndex = (draft.walletIndexes || [])[0] || saved?.walletIndex || saved?.walletIndexes?.[0] || "1";
+  return {
+    ...(saved || {}),
+    walletIndex,
+    amountSol: normalizedQuickBuyAmount(draft.amountSol || saved?.amountSol || "0.1") || "0.1",
+    takeProfitPct: draft.takeProfitPct ?? saved?.takeProfitPct ?? "40",
+    stopLossPct: draft.stopLossPct ?? saved?.stopLossPct ?? "8",
+    sellDelay: draft.sellDelay || saved?.sellDelay || "off",
+    sellPercent: draft.sellPercent || saved?.sellPercent || "100",
+    slippageBps: draft.slippageBps || saved?.slippageBps || "300"
+  };
+}
+
+function launchCoinBundlePresetFromDraft(draft = {}) {
+  const saved = draft.bundlePresetId ? presetById("bundle", draft.bundlePresetId) : null;
+  return {
+    ...(saved || {}),
+    walletIndexes: (draft.walletIndexes?.length ? draft.walletIndexes : saved?.walletIndexes) || [],
+    walletGroup: draft.walletGroup || saved?.walletGroup || "",
+    amountSol: normalizedQuickBuyAmount(draft.amountSol || saved?.amountSol || "0.1") || "0.1",
+    takeProfitPct: draft.takeProfitPct ?? saved?.takeProfitPct ?? "60",
+    stopLossPct: draft.stopLossPct ?? saved?.stopLossPct ?? "10",
+    sellDelay: draft.sellDelay || saved?.sellDelay || "off",
+    sellPercent: draft.sellPercent || saved?.sellPercent || "100",
+    slippageBps: draft.slippageBps || saved?.slippageBps || "300"
+  };
 }
 
 async function useLaunchCoinMint() {
@@ -3061,11 +3120,11 @@ async function submitLaunchCoin() {
     writeText(status, state.launchCoinStatus);
 
     if (draft.action === "trade") {
-      await quickPresetTrade(tokenMint);
+      await quickPresetTrade(tokenMint, launchCoinTradePresetFromDraft(draft));
       return;
     }
     if (draft.action === "bundle") {
-      await quickPresetBundle(tokenMint);
+      await quickPresetBundle(tokenMint, launchCoinBundlePresetFromDraft(draft));
       return;
     }
     if (draft.action === "launch-watch") {
@@ -4322,11 +4381,11 @@ function presetById(kind, id) {
 }
 
 function ensureSelectedPresetsStillExist() {
-  if (!presetById("trade", state.selectedTradePresetId)) {
-    state.selectedTradePresetId = state.presets?.trade?.[0]?.id || "custom";
+  if (state.selectedTradePresetId === "custom" || (state.selectedTradePresetId && !presetById("trade", state.selectedTradePresetId))) {
+    state.selectedTradePresetId = "";
   }
-  if (!presetById("bundle", state.selectedBundlePresetId)) {
-    state.selectedBundlePresetId = state.presets?.bundle?.[0]?.id || "custom";
+  if (state.selectedBundlePresetId === "custom" || (state.selectedBundlePresetId && !presetById("bundle", state.selectedBundlePresetId))) {
+    state.selectedBundlePresetId = "";
   }
   if (state.editingTradePresetId && !presetById("trade", state.editingTradePresetId)) {
     state.editingTradePresetId = "";
@@ -4336,22 +4395,35 @@ function ensureSelectedPresetsStillExist() {
   }
 }
 
-async function quickPresetTrade(tokenMint) {
-  const preset = presetById("trade", state.selectedTradePresetId);
-  if (!preset || state.selectedTradePresetId === "custom") {
-    setError("Save the custom fast trade preset first, then tap Trade again.");
+function openManualTradeForToken(tokenMint, tab = "trade", message = "") {
+  if (tab === "bundle") {
+    state.bundleToken = tokenMint;
+  } else {
+    state.tradeToken = tokenMint;
+  }
+  state.activeTab = tab;
+  if (message) setError(message);
+  window.history.pushState({}, "", "/terminal");
+  render({ force: true });
+}
+
+async function quickPresetTrade(tokenMint, presetOverride = null) {
+  const preset = presetOverride || presetById("trade", state.selectedTradePresetId);
+  if (!preset) {
+    openManualTradeForToken(tokenMint, "trade", "No fast trade preset selected. Review the manual Trade form, then buy or sell.");
     return;
   }
   try {
     await ensureWebAccount(null, "Opening secure web profile...");
-    if (!state.wallets.some((wallet) => String(wallet.index) === String(preset.walletIndex || "1"))) {
+    const walletIndex = preset.walletIndex || (preset.walletIndexes || [])[0] || "1";
+    if (!state.wallets.some((wallet) => String(wallet.index) === String(walletIndex))) {
       throw new Error("This trade preset wallet is not loaded. Edit it in the Trade tab.");
     }
-    const amountSol = activeQuickBuyAmount(preset);
+    const amountSol = presetOverride ? normalizedQuickBuyAmount(preset.amountSol) : activeQuickBuyAmount(preset);
     if (!amountSol) throw new Error("Set a quick buy amount first.");
     const payload = {
       tokenMint,
-      walletIndex: preset.walletIndex || "1",
+      walletIndex,
       amountSol,
       slippageBps: preset.slippageBps,
       autoExit: true,
@@ -4376,10 +4448,10 @@ async function quickPresetTrade(tokenMint) {
   }
 }
 
-async function quickPresetBundle(tokenMint) {
-  const preset = presetById("bundle", state.selectedBundlePresetId);
-  if (!preset || state.selectedBundlePresetId === "custom") {
-    setError("Save the custom fast bundle preset first, then tap Bundle again.");
+async function quickPresetBundle(tokenMint, presetOverride = null) {
+  const preset = presetOverride || presetById("bundle", state.selectedBundlePresetId);
+  if (!preset) {
+    openManualTradeForToken(tokenMint, "bundle", "No fast bundle preset selected. Review the Bundle form, then submit.");
     return;
   }
   try {
@@ -4388,7 +4460,7 @@ async function quickPresetBundle(tokenMint) {
       tokenMint,
       walletIndexes: (preset.walletIndexes || []).filter((index) => state.wallets.some((wallet) => String(wallet.index) === String(index))),
       walletGroup: preset.walletGroup || "",
-      amountSol: preset.amountSol,
+      amountSol: normalizedQuickBuyAmount(preset.amountSol) || "0.1",
       percent: "100",
       slippageBps: preset.slippageBps,
       sellDelay: preset.sellDelay || "off",
@@ -4519,10 +4591,10 @@ function selectNewestUserPreset(kind, presets) {
 function selectPresetId(kind, id) {
   const exists = Boolean(id && presetById(kind, id));
   if (kind === "trade") {
-    state.selectedTradePresetId = exists ? id : (state.presets?.trade?.[0]?.id || "custom");
+    state.selectedTradePresetId = exists ? id : "";
   }
   if (kind === "bundle") {
-    state.selectedBundlePresetId = exists ? id : (state.presets?.bundle?.[0]?.id || "custom");
+    state.selectedBundlePresetId = exists ? id : "";
   }
 }
 
@@ -5521,13 +5593,11 @@ function terminalHtml() {
   const newestLiveRows = [...liveRows].sort(compareNewestLiveRows);
   const kolRows = mergeMarketDataIntoRows(state.kolScan?.rows || []).filter((row) => !isUiMayhemRow(row));
   const bestRows = terminalBestPickRows(liveRows, kolRows);
-  const token = selectedTerminalTokenRow();
   const bucketLoading = Boolean(state.livePairsLoadingByBucket[state.livePairBucket]);
   const lastUpdated = currentLivePairsUpdatedAt();
-  const collapsed = Boolean(state.terminalTradeCollapsed);
   const rowTradeLabel = activePresetButtonLabel();
   return `
-    <section class="command-terminal ${collapsed ? "trade-panel-collapsed" : ""}">
+    <section class="command-terminal no-live-ticket">
       <main class="command-workspace">
         <div class="terminal-title-row command-title">
           <div>
@@ -5573,17 +5643,15 @@ function terminalHtml() {
 
         ${terminalBottomTablesHtml()}
       </main>
-      <aside class="trade-side order-ticket-stack terminal-dock ${collapsed ? "is-collapsed" : ""}">
-        ${terminalTradePanelHtml(token, collapsed)}
-      </aside>
     </section>
   `;
 }
 
 function activePresetButtonLabel() {
-  const amount = activeQuickBuyAmount();
-  if (amount) return `Buy ${amount} SOL`;
   const preset = activeTradePreset();
+  if (!preset) return "Trade";
+  const amount = activeQuickBuyAmount(preset);
+  if (amount) return `Buy ${amount} SOL`;
   return tradeActionLabelFromPreset(preset, "Trade");
 }
 
@@ -7287,15 +7355,15 @@ document.addEventListener("change", async (event) => {
     syncTimerSellNoTimer(target);
   }
   if (target?.matches?.("[data-fast-trade-preset]")) {
-    const nextPresetId = target.value || "custom";
+    const nextPresetId = target.value || "";
     if (nextPresetId === "custom") {
       openPresetEditorTab("trade");
       return;
     }
     state.selectedTradePresetId = nextPresetId;
-    state.fastTradePresetStatus = state.selectedTradePresetId === "custom"
-      ? ""
-      : "Trade preset selected. Tap Trade or Buy on a token row to use it.";
+    state.fastTradePresetStatus = state.selectedTradePresetId
+      ? "Trade preset selected. Tap Trade or Buy on a token row to use it."
+      : "No fast trade preset selected. Token rows open the manual Trade form.";
     render();
   }
   if (target?.matches?.("[data-quick-buy-amount]")) {
@@ -7304,15 +7372,15 @@ document.addEventListener("change", async (event) => {
     syncQuickBuyActionLabels();
   }
   if (target?.matches?.("[data-fast-bundle-preset]")) {
-    const nextPresetId = target.value || "custom";
+    const nextPresetId = target.value || "";
     if (nextPresetId === "custom") {
       openPresetEditorTab("bundle");
       return;
     }
     state.selectedBundlePresetId = nextPresetId;
-    state.fastBundlePresetStatus = state.selectedBundlePresetId === "custom"
-      ? ""
-      : "Bundle preset selected. It will not buy until you tap a Bundle button.";
+    state.fastBundlePresetStatus = state.selectedBundlePresetId
+      ? "Bundle preset selected. It will not buy until you tap a Bundle button."
+      : "No fast bundle preset selected. Bundle rows open the manual Bundle form.";
     render();
   }
   if (target?.matches?.("[data-terminal-sort]")) {
