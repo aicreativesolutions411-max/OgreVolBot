@@ -1182,6 +1182,7 @@ button:disabled {
 .tabs button[data-tab="volume"]::before { background-image: url("./assets/slimewire/svg/icons/volume.svg"); }
 .tabs button[data-tab="live"]::before { background-image: url("./assets/slimewire/svg/icons/live-pairs.svg"); }
 .tabs button[data-tab="liveTrades"]::before { background-image: url("./assets/slimewire/svg/icons/live-trades.svg"); }
+.tabs button[data-tab="slimeScope"]::before { background-image: url("./assets/slimewire/svg/icons/slime-scope.svg"); }
 .tabs button[data-tab="watchlist"]::before { background-image: url("./assets/slimewire/svg/icons/watchlist.svg"); }
 .tabs button[data-tab="launch"]::before { background-image: url("./assets/slimewire/svg/icons/launch.svg"); }
 .tabs button[data-tab="kol"]::before { background-image: url("./assets/slimewire/svg/icons/kol.svg"); }
@@ -6190,6 +6191,7 @@ button[data-position-sell][data-position-sell-percent="100"],
 [data-app][data-route="terminal"] .tabs button[data-tab="volume"]::before { background-image: url("./assets/slimewire/png/icons/volume.png") !important; }
 [data-app][data-route="terminal"] .tabs button[data-tab="live"]::before { background-image: url("./assets/slimewire/png/icons/live-pairs.png") !important; }
 [data-app][data-route="terminal"] .tabs button[data-tab="liveTrades"]::before { background-image: url("./assets/slimewire/png/icons/live-trades.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="slimeScope"]::before { background-image: url("./assets/slimewire/svg/icons/slime-scope.svg") !important; }
 [data-app][data-route="terminal"] .tabs button[data-tab="watchlist"]::before { background-image: url("./assets/slimewire/png/icons/watchlist.png") !important; }
 [data-app][data-route="terminal"] .tabs button[data-tab="launch"]::before { background-image: url("./assets/slimewire/png/icons/launch.png") !important; }
 [data-app][data-route="terminal"] .tabs button[data-tab="kol"]::before { background-image: url("./assets/slimewire/png/icons/kol.png") !important; }

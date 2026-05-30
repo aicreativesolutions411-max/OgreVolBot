@@ -5379,36 +5379,103 @@ function rowAgeSeconds(row = {}) {
   return Number.POSITIVE_INFINITY;
 }
 
-function slimeScopeRows(mode = state.slimeScopeMode) {
-  const rows = uniqueSignalRows([
+const SLIME_SCOPE_LIMIT = 30;
+
+function slimeScopeSourceRows() {
+  const marketByMint = marketDataRowsByMint();
+  return uniqueSignalRows([
+    ...(state.livePairs?.rows || []),
     ...(state.livePairsByBucket.live?.rows || []),
     ...(state.livePairsByBucket.under1h?.rows || []),
     ...(state.livePairsByBucket.under3h?.rows || []),
     ...(state.livePairsByBucket.under1d?.rows || []),
     ...(state.scan?.rows || []),
     ...(state.kolScan?.rows || [])
-  ]).map((row) => mergeMarketData(row, marketDataRowsByMint().get(String(row?.tokenMint || ""))));
+  ])
+    .map((row) => mergeMarketData(row, marketByMint.get(String(row?.tokenMint || ""))))
+    .filter((row) => row?.tokenMint && !isUiMayhemRow(row));
+}
 
-  const withMarket = rows.filter((row) => !isUiMayhemRow(row));
-  const sortedBest = (items) => [...items].sort((a, b) => (
-    Number(b.bestPickScore || b.score || 0) - Number(a.bestPickScore || a.score || 0)
-    || firstUsefulNumber(b.volumeM15, b.volumeM30, b.volumeH1, b.volumeH24) - firstUsefulNumber(a.volumeM15, a.volumeM30, a.volumeH1, a.volumeH24)
+function slimeScopeMarketCap(row = {}) {
+  return firstUsefulNumber(row.marketCap, row.fdv);
+}
+
+function slimeScopeLiquidity(row = {}) {
+  return firstUsefulNumber(row.liquidityUsd);
+}
+
+function slimeScopeVolume(row = {}) {
+  return firstUsefulNumber(row.volumeM5, row.volume5m, row.volumeM15, row.volumeM30, row.volumeH1, row.volumeH24, row.volumeUsd);
+}
+
+function slimeScopePulseScore(row = {}) {
+  const score = Number(row.bestPickScore || row.score || 0);
+  const volume = slimeScopeVolume(row);
+  const liquidity = slimeScopeLiquidity(row);
+  const marketCap = slimeScopeMarketCap(row);
+  const age = rowAgeSeconds(row);
+  const freshness = Number.isFinite(age) ? Math.max(0, 86_400 - age) / 86_400 : 0;
+  return (
+    score * 1000
+    + Math.log10(volume + 1) * 160
+    + Math.log10(liquidity + 1) * 120
+    + Math.log10(marketCap + 1) * 80
+    + freshness * 100
+  );
+}
+
+function sortSlimeScopeRows(items = []) {
+  return [...items].sort((a, b) => (
+    slimeScopePulseScore(b) - slimeScopePulseScore(a)
     || compareNewestLiveRows(a, b)
   ));
+}
+
+function backfillSlimeScopeRows(primary = [], fallback = [], limit = SLIME_SCOPE_LIMIT) {
+  const seen = new Set();
+  const output = [];
+  for (const row of [...primary, ...fallback]) {
+    const mint = String(row?.tokenMint || "");
+    if (!mint || seen.has(mint)) continue;
+    seen.add(mint);
+    output.push(row);
+    if (output.length >= limit) break;
+  }
+  return output;
+}
+
+function slimeScopeRows(mode = state.slimeScopeMode) {
+  const withMarket = slimeScopeSourceRows();
+  const bestFallback = sortSlimeScopeRows(withMarket);
+  const recentFallback = [...withMarket].filter((row) => rowAgeSeconds(row) <= 86_400).sort(compareNewestLiveRows);
 
   if (mode === "graduated") {
-    const graduated = withMarket.filter((row) => firstUsefulNumber(row.marketCap, row.fdv) >= 69_000 || firstUsefulNumber(row.liquidityUsd) >= 30_000);
-    return sortedBest(graduated.length ? graduated : withMarket.filter((row) => rowAgeSeconds(row) <= 86_400));
+    const graduated = sortSlimeScopeRows(withMarket.filter((row) => {
+      const marketCap = slimeScopeMarketCap(row);
+      const liquidity = slimeScopeLiquidity(row);
+      const volume = slimeScopeVolume(row);
+      return marketCap >= 7_000 || liquidity >= 1_000 || volume >= 1_000 || Boolean(row.dexUrl && !row.isPump);
+    }));
+    return backfillSlimeScopeRows(graduated, [...recentFallback, ...bestFallback]);
   }
   if (mode === "graduating") {
-    const graduating = withMarket.filter((row) => {
-      const mc = firstUsefulNumber(row.marketCap, row.fdv);
-      const volume = firstUsefulNumber(row.volumeM15, row.volumeM30, row.volumeH1, row.volumeH24);
-      return mc >= 7_000 && mc < 69_000 && (volume > 0 || firstUsefulNumber(row.liquidityUsd) > 2_000);
-    });
-    return sortedBest(graduating.length ? graduating : withMarket.filter((row) => rowAgeSeconds(row) <= 10_800));
+    const graduating = sortSlimeScopeRows(withMarket.filter((row) => {
+      const marketCap = slimeScopeMarketCap(row);
+      const liquidity = slimeScopeLiquidity(row);
+      const volume = slimeScopeVolume(row);
+      const age = rowAgeSeconds(row);
+      return (
+        (marketCap >= 2_000 && marketCap < 120_000)
+        || (liquidity >= 500 && liquidity < 60_000)
+        || (volume > 0 && marketCap < 200_000)
+        || (Number.isFinite(age) && age <= 21_600 && (marketCap > 0 || liquidity > 0 || volume > 0))
+      );
+    }));
+    const earlyFallback = sortSlimeScopeRows(withMarket.filter((row) => rowAgeSeconds(row) <= 21_600 || slimeScopeMarketCap(row) < 200_000));
+    return backfillSlimeScopeRows(graduating, [...earlyFallback, ...bestFallback]);
   }
-  return [...withMarket].filter((row) => rowAgeSeconds(row) <= 3_600).sort(compareNewestLiveRows);
+  const newest = [...withMarket].filter((row) => rowAgeSeconds(row) <= 3_600).sort(compareNewestLiveRows);
+  return backfillSlimeScopeRows(newest, [...recentFallback, ...bestFallback]);
 }
 
 function slimeScopeHtml() {
@@ -5420,7 +5487,8 @@ function slimeScopeHtml() {
   const rows = slimeScopeRows();
   return `
     <section class="slime-scope-page">
-      <div class="terminal-title-row">
+      <div class="terminal-title-row slime-scope-title-row">
+        <img class="slime-scope-title-icon" src="./assets/slimewire/svg/icons/slime-scope.svg" alt="" aria-hidden="true">
         <div>
           <h3>Slime Scope</h3>
           <p>Fast pump-style view for new, graduating, and graduated pairs. Mayhem-mode rows stay filtered out.</p>
@@ -5432,7 +5500,7 @@ function slimeScopeHtml() {
           ${modes.map(([mode, label]) => `<button data-slime-scope-mode="${mode}" data-active="${state.slimeScopeMode === mode}">${label}</button>`).join("")}
         </div>
         ${quickBuyPresetBarHtml("slime-scope")}
-        <button class="primary" data-refresh-live-pairs>Refresh Scope</button>
+        <button class="primary slime-scope-refresh-button" data-refresh-live-pairs>Refresh Scope</button>
       </div>
       <article class="terminal-panel slime-scope-list-panel">
         ${compactSignalRowsHtml(rows, {
@@ -7158,7 +7226,9 @@ document.addEventListener("click", async (event) => {
     if (state.activeTab === "sniper" && !state.scan) {
       await loadScan().catch((error) => setError(error.message));
     }
-    if ((state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "smartChart" || state.activeTab === "slimeScope") && !state.livePairsByBucket[state.livePairBucket]) {
+    if (state.activeTab === "slimeScope") {
+      await refreshLivePairBuckets({ silent: true }).catch((error) => setError(error.message));
+    } else if ((state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "smartChart") && !state.livePairsByBucket[state.livePairBucket]) {
       await refreshLivePairBuckets().catch((error) => setError(error.message));
     }
     if ((state.activeTab === "kol" || state.activeTab === "terminal" || state.activeTab === "smartChart") && !state.kolScan) {

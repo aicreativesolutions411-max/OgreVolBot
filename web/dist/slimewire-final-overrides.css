@@ -1424,3 +1424,74 @@
     font-size: 9.2px !important;
   }
 }
+
+[data-app][data-route="terminal"] .tabs button[data-tab="slimeScope"]::before {
+  background-image: url("./assets/slimewire/svg/icons/slime-scope.svg") !important;
+}
+
+.slime-scope-title-row {
+  display: grid !important;
+  grid-template-columns: auto minmax(0, 1fr) auto !important;
+  align-items: center !important;
+}
+
+.slime-scope-title-icon {
+  width: 42px;
+  height: 42px;
+  object-fit: contain;
+  filter: drop-shadow(0 0 12px rgba(145, 255, 55, 0.68));
+}
+
+[data-app][data-route="terminal"] .command-controls.slime-scope-controls {
+  grid-template-columns: minmax(260px, 1fr) minmax(238px, auto) minmax(148px, 180px) !important;
+}
+
+[data-app][data-route="terminal"] .slime-scope-controls .terminal-quick-buy-bar {
+  justify-self: end !important;
+}
+
+[data-app][data-route="terminal"] .slime-scope-refresh-button {
+  justify-self: end !important;
+  width: 100% !important;
+  max-width: 180px !important;
+}
+
+@media (max-width: 1180px) {
+  [data-app][data-route="terminal"] .command-controls.slime-scope-controls {
+    grid-template-columns: 1fr auto !important;
+  }
+
+  [data-app][data-route="terminal"] .slime-scope-controls .slime-scope-tabs {
+    grid-column: 1 / -1 !important;
+  }
+
+  [data-app][data-route="terminal"] .slime-scope-controls .terminal-quick-buy-bar {
+    grid-column: 1 / 2 !important;
+    justify-self: stretch !important;
+  }
+
+  [data-app][data-route="terminal"] .slime-scope-refresh-button {
+    grid-column: 2 / 3 !important;
+    align-self: end !important;
+  }
+}
+
+@media (max-width: 760px) {
+  .slime-scope-title-row {
+    grid-template-columns: auto minmax(0, 1fr) !important;
+  }
+
+  .slime-scope-title-row > span {
+    grid-column: 1 / -1;
+  }
+
+  [data-app][data-route="terminal"] .command-controls.slime-scope-controls {
+    grid-template-columns: 1fr !important;
+  }
+
+  [data-app][data-route="terminal"] .slime-scope-controls .terminal-quick-buy-bar,
+  [data-app][data-route="terminal"] .slime-scope-refresh-button {
+    grid-column: auto !important;
+    max-width: none !important;
+  }
+}
