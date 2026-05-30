@@ -844,6 +844,44 @@
   box-shadow: 0 0 20px rgba(137, 255, 58, 0.16);
 }
 
+.launch-pill-icon {
+  position: relative;
+  display: inline-block;
+  width: 34px;
+  height: 20px;
+  margin-right: 8px;
+  vertical-align: -4px;
+  border: 3px solid rgba(18, 62, 45, 0.95);
+  border-radius: 999px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.95) 0 47%, transparent 48%),
+    linear-gradient(135deg, #f4fff8 0 47%, #67dd90 48% 100%);
+  box-shadow: 0 0 16px rgba(137, 255, 58, 0.5);
+  transform: rotate(-34deg);
+}
+
+.launch-pill-icon::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 50%;
+  width: 3px;
+  background: rgba(18, 62, 45, 0.95);
+  transform: translateX(-50%);
+}
+
+[data-app][data-route="terminal"] .tabs button[data-tab="launchCoin"]::before {
+  content: "";
+  width: 20px;
+  height: 12px;
+  border: 2px solid rgba(18, 62, 45, 0.95);
+  border-radius: 999px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.95) 0 47%, transparent 48%),
+    linear-gradient(135deg, #f4fff8 0 47%, #67dd90 48% 100%);
+  box-shadow: 0 0 10px rgba(137, 255, 58, 0.45);
+  transform: rotate(-34deg);
+}
+
 .launch-credit-list {
   display: grid;
   gap: 8px;
@@ -1122,6 +1160,7 @@
 
 .smart-chart-frame {
   margin-top: 12px;
+  height: min(68vh, 660px);
   min-height: 520px;
   overflow: hidden;
   border: 1px solid rgba(125, 255, 45, 0.28);
@@ -1132,10 +1171,38 @@
 }
 
 .smart-chart-frame iframe {
-  width: 100%;
-  height: 520px;
+  width: calc(100% / var(--smart-chart-scale, 0.8));
+  height: calc(680px / var(--smart-chart-scale, 0.8));
+  min-height: calc(620px / var(--smart-chart-scale, 0.8));
+  transform: scale(var(--smart-chart-scale, 0.8));
+  transform-origin: top left;
   border: 0;
   display: block;
+}
+
+.smart-chart-zoom {
+  display: grid;
+  grid-template-columns: auto minmax(160px, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(137, 255, 58, 0.22);
+  border-radius: 999px;
+  background: rgba(5, 14, 6, 0.72);
+  color: var(--slime-text);
+  font-weight: 900;
+}
+
+.smart-chart-zoom input {
+  width: 100%;
+  accent-color: var(--slime-green, #89ff3a);
+}
+
+.smart-chart-zoom strong {
+  color: var(--slime-green, #89ff3a);
+  min-width: 44px;
+  text-align: right;
 }
 
 .smart-chart-suggestion {
@@ -1202,9 +1269,158 @@
     justify-content: flex-start;
   }
 
-  .smart-chart-frame,
-  .smart-chart-frame iframe {
+  .smart-chart-frame {
     min-height: 420px;
     height: 420px;
+  }
+
+  .smart-chart-frame iframe {
+    height: calc(600px / var(--smart-chart-scale, 0.8));
+    min-height: calc(560px / var(--smart-chart-scale, 0.8));
+  }
+}
+
+/* Terminal controls cleanup: slim bars, no clipped row actions, and stable editing. */
+[data-app][data-route="terminal"] .command-controls {
+  grid-template-columns: minmax(390px, 1.2fr) minmax(120px, 150px) minmax(220px, 270px) minmax(126px, 154px) minmax(126px, 154px) !important;
+  gap: 8px !important;
+  align-items: end !important;
+  padding: 8px 12px !important;
+}
+
+[data-app][data-route="terminal"] .command-controls label,
+[data-app][data-route="terminal"] .preset-toolbar label {
+  gap: 3px !important;
+  font-size: 10.5px !important;
+  line-height: 1.1 !important;
+}
+
+[data-app][data-route="terminal"] .terminal-modes {
+  gap: 8px !important;
+}
+
+[data-app][data-route="terminal"] .terminal-modes button,
+[data-app][data-route="terminal"] .command-controls > button,
+[data-app][data-route="terminal"] .preset-toolbar button {
+  min-height: 34px !important;
+  padding: 0 10px !important;
+  border-radius: 10px !important;
+  font-size: 12px !important;
+  line-height: 1.05 !important;
+}
+
+[data-app][data-route="terminal"] .terminal-quick-buy-bar {
+  grid-template-columns: minmax(96px, 118px) minmax(128px, 168px) !important;
+  gap: 6px !important;
+  align-items: end !important;
+}
+
+[data-app][data-route="terminal"] .terminal-quick-buy-bar input,
+[data-app][data-route="terminal"] .terminal-quick-buy-bar select,
+[data-app][data-route="terminal"] .preset-toolbar input,
+[data-app][data-route="terminal"] .preset-toolbar select {
+  min-height: 34px !important;
+  padding: 0 10px !important;
+  border-radius: 10px !important;
+  font-size: 12px !important;
+}
+
+[data-app][data-route="terminal"] .preset-toolbar {
+  grid-template-columns: minmax(112px, 0.75fr) minmax(150px, 1fr) minmax(150px, 1fr) minmax(132px, 0.75fr) minmax(132px, 0.75fr) !important;
+  gap: 8px !important;
+  padding: 8px 10px !important;
+  align-items: end !important;
+}
+
+[data-app][data-route="terminal"] .quick-buy-label {
+  min-width: 0 !important;
+}
+
+@media (min-width: 1181px) {
+  [data-app][data-route="terminal"] .terminal-token-row,
+  [data-app][data-route="terminal"] .best-picks-panel .terminal-token-row,
+  [data-app][data-route="terminal"] .live-pairs-panel .terminal-token-row,
+  [data-app][data-route="terminal"] .kol-panel .terminal-token-row,
+  [data-app][data-route="terminal"] .slime-scope-list-panel .terminal-token-row {
+    grid-template-columns: 42px minmax(170px, 0.9fr) minmax(280px, 1.12fr) 54px minmax(286px, 0.86fr) !important;
+    gap: 8px 10px !important;
+    padding: 9px 10px !important;
+  }
+
+  [data-app][data-route="terminal"] .command-terminal.trade-panel-collapsed .terminal-token-row,
+  [data-app][data-route="terminal"] .command-terminal.trade-panel-collapsed .best-picks-panel .terminal-token-row,
+  [data-app][data-route="terminal"] .command-terminal.trade-panel-collapsed .live-pairs-panel .terminal-token-row,
+  [data-app][data-route="terminal"] .command-terminal.trade-panel-collapsed .kol-panel .terminal-token-row {
+    grid-template-columns: 42px minmax(190px, 0.92fr) minmax(340px, 1.28fr) 54px minmax(306px, 0.9fr) !important;
+  }
+}
+
+[data-app][data-route="terminal"] .terminal-token-stats {
+  gap: 4px !important;
+}
+
+[data-app][data-route="terminal"] .terminal-token-actions,
+[data-app][data-route="terminal"] .compact-row-actions {
+  grid-template-columns: minmax(96px, 1fr) minmax(64px, 0.7fr) minmax(58px, 0.62fr) minmax(64px, 0.68fr) !important;
+  gap: 5px !important;
+  min-width: 0 !important;
+}
+
+[data-app][data-route="terminal"] .terminal-token-actions button,
+[data-app][data-route="terminal"] .compact-row-actions button {
+  min-height: 31px !important;
+  padding: 0 6px !important;
+  border-radius: 8px !important;
+  font-size: 10.8px !important;
+  line-height: 1 !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+
+[data-app][data-route="terminal"] .terminal-token-actions .watch-action,
+[data-app][data-route="terminal"] .compact-row-actions .watch-action {
+  min-width: 58px !important;
+}
+
+@media (max-width: 1180px) {
+  [data-app][data-route="terminal"] .command-controls,
+  [data-app][data-route="terminal"] .preset-toolbar {
+    grid-template-columns: 1fr 1fr !important;
+  }
+
+  [data-app][data-route="terminal"] .live-pair-buckets,
+  [data-app][data-route="terminal"] .terminal-quick-buy-bar {
+    grid-column: 1 / -1 !important;
+  }
+}
+
+@media (max-width: 760px) {
+  [data-app][data-route="terminal"] .command-controls,
+  [data-app][data-route="terminal"] .preset-toolbar {
+    grid-template-columns: 1fr !important;
+    gap: 7px !important;
+    padding: 8px !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-quick-buy-bar {
+    grid-template-columns: 1fr 1fr !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-modes {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-token-actions,
+  [data-app][data-route="terminal"] .compact-row-actions {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    gap: 4px !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-token-actions button,
+  [data-app][data-route="terminal"] .compact-row-actions button {
+    min-height: 28px !important;
+    padding: 0 3px !important;
+    font-size: 9.2px !important;
   }
 }

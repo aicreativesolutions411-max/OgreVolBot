@@ -129,6 +129,7 @@ const state = {
   terminalSort: "best",
   terminalToken: "",
   smartChartToken: "",
+  smartChartZoom: 80,
   terminalAutoToken: "",
   terminalTxSignature: "",
   terminalTxAudit: null,
@@ -947,7 +948,7 @@ function shouldDeferTerminalRender() {
   const tag = String(active.tagName || "").toLowerCase();
   const editable = active.isContentEditable || ["input", "textarea", "select"].includes(tag);
   if (!editable) return false;
-  return Boolean(active.closest(".fast-preset-builder, .preset-toolbar, .terminal-preset-strip, .preset-card, .order-ticket, .order-ticket-stack, .terminal-dock, .trade-side, .volume-grid, .sniper-setup, .wallet-exit-grid"));
+  return Boolean(active.closest(".fast-preset-builder, .preset-toolbar, .terminal-quick-buy-bar, .command-controls, .live-control-strip, .terminal-preset-strip, .preset-card, .order-ticket, .order-ticket-stack, .terminal-dock, .trade-side, .volume-grid, .sniper-setup, .wallet-exit-grid"));
 }
 
 function requestDeferredRender() {
@@ -2187,6 +2188,27 @@ function presetOptionsHtml(kind, selectedId = "") {
   `;
 }
 
+function quickBuyInputHtml() {
+  return `<input data-quick-buy-amount type="text" inputmode="decimal" autocomplete="off" placeholder="${escapeHtml(activeQuickBuyAmount() || "0.10")}" value="${escapeHtml(state.quickBuyAmountOverride)}">`;
+}
+
+function quickBuyPresetBarHtml(context = "scanner") {
+  return `
+    <div class="terminal-quick-buy-bar" aria-label="Quick buy settings">
+      <label>
+        Quick Buy SOL
+        ${quickBuyInputHtml()}
+      </label>
+      <label>
+        Preset
+        <select data-fast-trade-preset="${escapeHtml(context)}">
+          ${presetOptionsHtml("trade", state.selectedTradePresetId)}
+        </select>
+      </label>
+    </div>
+  `;
+}
+
 const FALLBACK_TIMER_OPTIONS = [
   ["off", "No timer"],
   ["5s", "5 sec"],
@@ -2256,6 +2278,10 @@ function repeatWaitSelectHtml(customFor, dataAttr, selected = "0") {
 function fastPresetToolbarHtml(context = "scanner") {
   return `
     <section class="preset-toolbar">
+      <label class="quick-buy-label">
+        Quick Buy SOL
+        ${quickBuyInputHtml()}
+      </label>
       <label>
         Fast Trade Preset
         <select data-fast-trade-preset="${escapeHtml(context)}">
@@ -2270,8 +2296,6 @@ function fastPresetToolbarHtml(context = "scanner") {
       </label>
       <button type="button" data-tab="trade">Edit Trade Presets</button>
       <button type="button" data-tab="bundle">Edit Bundle Presets</button>
-      ${state.selectedTradePresetId === "custom" ? fastTradePresetBuilderHtml() : ""}
-      ${state.selectedBundlePresetId === "custom" ? fastBundlePresetBuilderHtml() : ""}
     </section>
   `;
 }
@@ -2752,8 +2776,8 @@ function launchCoinHtml() {
       <article class="trade-card launch-coin-card">
         <div class="trade-head">
           <div>
-            <h3>Launch Coin</h3>
-            <p>Build the launch sheet here, open the official Pump create flow, then paste the live CA back into SlimeWire for Trade, Bundle, Snipe, or Volume presets.</p>
+            <h3><span class="launch-pill-icon" aria-hidden="true"></span>Launch Pump Coin</h3>
+            <p>Create the Pump launch from SlimeWire when the launch connector is enabled, then auto-load the returned CA into Trade, Bundle, Snipe, or Volume presets.</p>
           </div>
           <span class="pill">Ogre TeK</span>
         </div>
@@ -2797,14 +2821,14 @@ function launchCoinHtml() {
           <div class="volume-grid">
             <label>
               Live CA After Launch
-              <input data-launch-coin-ca type="text" placeholder="Paste CA once official launch is live" value="${escapeHtml(draft.tokenMint || "")}">
+              <input data-launch-coin-ca type="text" placeholder="Auto-filled after launch, or paste CA manually" value="${escapeHtml(draft.tokenMint || "")}">
             </label>
             <label>
-              Action After CA
+              Action After Launch
               <select data-launch-coin-action>
                 <option value="watch" ${draft.action === "watch" ? "selected" : ""}>Watch only</option>
-                <option value="trade" ${draft.action === "trade" ? "selected" : ""}>Send to Trade preset</option>
-                <option value="bundle" ${draft.action === "bundle" ? "selected" : ""}>Send to Bundle preset</option>
+                <option value="trade" ${draft.action === "trade" ? "selected" : ""}>Auto Trade with preset</option>
+                <option value="bundle" ${draft.action === "bundle" ? "selected" : ""}>Auto Bundle with preset</option>
                 <option value="launch-watch" ${draft.action === "launch-watch" ? "selected" : ""}>Arm Launch Snipe watcher</option>
               </select>
             </label>
@@ -2861,18 +2885,19 @@ function launchCoinHtml() {
         </details>
 
         <div class="quick-grid launch-coin-actions">
-          <button class="primary" type="button" data-launch-coin-save>Save Launch Sheet</button>
+          <button class="primary" type="button" data-launch-coin-submit>Launch on Pump</button>
+          <button type="button" data-launch-coin-save>Save Launch Sheet</button>
           <button type="button" data-launch-coin-use-ca>Use Live CA</button>
           <a href="https://pump.fun/create" target="_blank" rel="noreferrer">Open Pump Create</a>
           <a href="https://marketplace.dexscreener.com/" target="_blank" rel="noreferrer">Pay Dex / Edit Metadata</a>
         </div>
-        <p class="trade-status" data-launch-coin-status>${escapeHtml(state.launchCoinStatus || "Ready. Official Pump/Dex actions open in their own secure pages; SlimeWire stores only your launch draft and trading presets.")}</p>
+        <p class="trade-status" data-launch-coin-status>${escapeHtml(state.launchCoinStatus || "Ready. Launch on Pump submits through the SlimeWire launch connector when enabled. The official Pump and Dex links remain available as fallback tools.")}</p>
       </article>
 
       <aside class="trade-side">
         <article>
           <h3>How It Works</h3>
-          <p>SlimeWire prepares the details, presets, and post-launch CA workflow. Until a verified launch API is added, Pump creation and Dex marketplace payment stay on the official pages.</p>
+          <p>SlimeWire sends the token details to the configured launch connector, waits for the returned CA, then can route that CA into your selected preset. If the connector is not enabled, save the sheet and use the official fallback links.</p>
         </article>
         <article>
           <h3>Credit Use</h3>
@@ -2923,7 +2948,7 @@ function saveLaunchCoinDraft({ silent = false } = {}) {
     state.launchCoinDraft = draft;
     setStoredLaunchCoinDraft(draft);
     const label = draft.name || draft.symbol || "launch";
-    state.launchCoinStatus = `Saved ${label}. Open Pump Create, launch on the official page, then paste the live CA here to route into ${launchCoinActionLabel(draft.action)}.`;
+    state.launchCoinStatus = `Saved ${label}. Launch on Pump will use the SlimeWire launch connector when enabled; you can also paste a live CA to route into ${launchCoinActionLabel(draft.action)}.`;
     if (!silent) writeText($("[data-launch-coin-status]"), state.launchCoinStatus);
     return draft;
   } catch (error) {
@@ -2931,6 +2956,51 @@ function saveLaunchCoinDraft({ silent = false } = {}) {
     writeText($("[data-launch-coin-status]"), error.message);
     throw error;
   }
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    if (!file) {
+      resolve("");
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      reject(new Error("Image is over 5MB. Use a smaller PNG, JPG, WEBP, or GIF."));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("Could not read that image file."));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function launchCoinImagePayload() {
+  const imageFile = $("[data-launch-coin-image]")?.files?.[0];
+  if (!imageFile) return {};
+  return {
+    imageName: imageFile.name,
+    imageType: imageFile.type || "application/octet-stream",
+    imageDataUrl: await readFileAsDataUrl(imageFile)
+  };
+}
+
+function applyLaunchCoinMint(draft, tokenMint) {
+  const normalizedMint = String(tokenMint || "").trim();
+  state.launchCoinDraft = {
+    ...(draft || {}),
+    tokenMint: normalizedMint,
+    updatedAt: new Date().toISOString()
+  };
+  setStoredLaunchCoinDraft(state.launchCoinDraft);
+  state.terminalToken = normalizedMint;
+  state.terminalAutoToken = normalizedMint;
+  state.tradeToken = normalizedMint;
+  state.bundleToken = normalizedMint;
+  state.volumeToken = normalizedMint;
+  state.smartChartToken = normalizedMint;
+  if (draft?.tradePresetId) state.selectedTradePresetId = draft.tradePresetId;
+  if (draft?.bundlePresetId) state.selectedBundlePresetId = draft.bundlePresetId;
 }
 
 async function useLaunchCoinMint() {
@@ -2943,13 +3013,7 @@ async function useLaunchCoinMint() {
     return;
   }
 
-  state.terminalToken = tokenMint;
-  state.terminalAutoToken = tokenMint;
-  state.tradeToken = tokenMint;
-  state.bundleToken = tokenMint;
-  state.volumeToken = tokenMint;
-  if (draft.tradePresetId) state.selectedTradePresetId = draft.tradePresetId;
-  if (draft.bundlePresetId) state.selectedBundlePresetId = draft.bundlePresetId;
+  applyLaunchCoinMint(draft, tokenMint);
 
   const nextTab = draft.action === "bundle"
     ? "bundle"
@@ -2961,6 +3025,63 @@ async function useLaunchCoinMint() {
   state.launchCoinStatus = `Loaded ${shortAddress(tokenMint)} into ${launchCoinActionLabel(draft.action)}. Review the selected preset before sending any trade.`;
   navigateTo("/terminal", nextTab);
   render({ force: true });
+}
+
+async function submitLaunchCoin() {
+  const status = $("[data-launch-coin-status]");
+  try {
+    const draft = saveLaunchCoinDraft({ silent: true });
+    if (!draft.name) throw new Error("Enter the token name before launching.");
+    if (!draft.symbol) throw new Error("Enter the ticker before launching.");
+
+    state.launchCoinStatus = "Submitting launch through SlimeWire...";
+    writeText(status, state.launchCoinStatus);
+
+    const imagePayload = await launchCoinImagePayload();
+    const data = await api("/api/web/launch/coin", {
+      method: "POST",
+      body: JSON.stringify({
+        ...draft,
+        ...imagePayload
+      })
+    });
+
+    const launch = data.launch || {};
+    const tokenMint = String(launch.tokenMint || launch.mint || launch.ca || launch.contractAddress || "").trim();
+    const signature = launch.signature ? ` Signature: ${shortAddress(launch.signature)}.` : "";
+
+    if (!tokenMint) {
+      state.launchCoinStatus = `Launch submitted, but the launch connector did not return a CA yet.${signature} Paste the CA above when it appears, then tap Use Live CA.`;
+      writeText(status, state.launchCoinStatus);
+      return;
+    }
+
+    applyLaunchCoinMint(draft, tokenMint);
+    state.launchCoinStatus = `Launch returned ${shortAddress(tokenMint)}.${signature} Routing into ${launchCoinActionLabel(draft.action)}...`;
+    writeText(status, state.launchCoinStatus);
+
+    if (draft.action === "trade") {
+      await quickPresetTrade(tokenMint);
+      return;
+    }
+    if (draft.action === "bundle") {
+      await quickPresetBundle(tokenMint);
+      return;
+    }
+    if (draft.action === "launch-watch") {
+      state.activeTab = "launch";
+      navigateTo("/terminal", "launch");
+      render({ force: true });
+      return;
+    }
+
+    navigateTo("/terminal/chart", "smartChart");
+    render({ force: true });
+  } catch (error) {
+    state.launchCoinStatus = error.message || "Launch failed.";
+    writeText(status, state.launchCoinStatus);
+    setError(state.launchCoinStatus);
+  }
 }
 
 function launchScanSeconds() {
@@ -3640,7 +3761,12 @@ async function connectBrowserWallet(providerId) {
     };
     writeText(status, `Connected ${shortAddress(publicKeyText)}.`);
     navigateTo("/terminal", "terminal");
-    loadAll().catch((error) => setError(`Connected wallet saved. Balance refresh failed: ${error.message}`));
+    await Promise.allSettled([
+      loadAll(),
+      refreshLivePairBuckets({ silent: true }),
+      loadKolScan(state.kolMode, "", { silent: true })
+    ]);
+    render({ force: true });
   } catch (error) {
     writeText(status, error.message || "Wallet connection was cancelled.");
   }
@@ -5215,8 +5341,6 @@ function terminalPresetStripHtml() {
           <button type="button" data-tab="volume">Volume</button>
           <button type="button" data-tab="launch">Launch Snipe</button>
         </div>
-        ${state.selectedTradePresetId === "custom" ? fastTradePresetBuilderHtml() : ""}
-        ${state.selectedBundlePresetId === "custom" ? fastBundlePresetBuilderHtml() : ""}
       </details>
     </section>
   `;
@@ -5307,18 +5431,7 @@ function slimeScopeHtml() {
         <div class="mode-row terminal-modes slime-scope-tabs">
           ${modes.map(([mode, label]) => `<button data-slime-scope-mode="${mode}" data-active="${state.slimeScopeMode === mode}">${label}</button>`).join("")}
         </div>
-        <div class="terminal-quick-buy-bar">
-          <label>
-            Quick Buy SOL
-            <input data-quick-buy-amount type="number" min="0" step="0.01" placeholder="${escapeHtml(activeQuickBuyAmount() || "0.10")}" value="${escapeHtml(state.quickBuyAmountOverride)}">
-          </label>
-          <label>
-            Preset
-            <select data-fast-trade-preset="slime-scope">
-              ${presetOptionsHtml("trade", state.selectedTradePresetId)}
-            </select>
-          </label>
-        </div>
+        ${quickBuyPresetBarHtml("slime-scope")}
         <button class="primary" data-refresh-live-pairs>Refresh Scope</button>
       </div>
       <article class="terminal-panel slime-scope-list-panel">
@@ -5370,19 +5483,7 @@ function terminalHtml() {
               ${LIVE_PAIR_SORTS.map(([value, label]) => `<option value="${value}" ${state.terminalSort === value ? "selected" : ""}>${label}</option>`).join("")}
             </select>
           </label>
-          <div class="terminal-quick-buy-bar" aria-label="Quick buy settings">
-            <label>
-              Quick Buy SOL
-              <input data-quick-buy-amount type="number" min="0" step="0.01" placeholder="${escapeHtml(activeQuickBuyAmount() || "0.10")}" value="${escapeHtml(state.quickBuyAmountOverride)}">
-            </label>
-            <label>
-              Preset
-              <select data-fast-trade-preset="terminal-top">
-                ${presetOptionsHtml("trade", state.selectedTradePresetId)}
-              </select>
-            </label>
-          </div>
-          <button class="trade-panel-top-button" data-toggle-terminal-ticket>${collapsed ? "Trade Panel" : "Hide Panel"}</button>
+          ${quickBuyPresetBarHtml("terminal-top")}
           <button class="primary" data-refresh-live-pairs>${bucketLoading ? "Refreshing..." : "Refresh Feeds"}</button>
           <button data-top-refresh-wallet>${state.walletRefreshing ? "Refreshing Wallet..." : "Refresh Wallet"}</button>
         </div>
@@ -5416,6 +5517,22 @@ function activePresetButtonLabel() {
   if (amount) return `Buy ${amount} SOL`;
   const preset = activeTradePreset();
   return tradeActionLabelFromPreset(preset, "Trade");
+}
+
+function syncQuickBuyActionLabels() {
+  const label = activePresetButtonLabel();
+  document.querySelectorAll("[data-quick-trade-token]").forEach((button) => {
+    writeText(button, label);
+  });
+}
+
+function openPresetEditorTab(kind) {
+  const nextTab = kind === "bundle" ? "bundle" : "trade";
+  state.activeTab = nextTab;
+  if (nextTab === "trade") state.editingTradePresetId = "";
+  if (nextTab === "bundle") state.editingBundlePresetId = "";
+  window.history.pushState({}, "", "/terminal");
+  render({ force: true });
 }
 
 function tokenPreviewHtml(token) {
@@ -5460,6 +5577,7 @@ function smartChartHtml() {
       ]).filter(Boolean).slice(0, 5)
     : terminalBestPickRows().slice(0, 5);
   const suggestion = smartChartSuggestion(token || {});
+  const chartZoom = Math.min(120, Math.max(65, Number(state.smartChartZoom) || 80));
   if (!mint) {
     return `
       <section class="smart-chart-terminal">
@@ -5514,9 +5632,14 @@ function smartChartHtml() {
               ${miniTokenLinksHtml(token)}
             </div>
           </div>
-          <div class="smart-chart-frame">
+          <div class="smart-chart-frame" style="--smart-chart-scale: ${chartZoom / 100};">
             <iframe title="DexScreener chart for ${escapeHtml(token.symbol || shortAddress(mint))}" src="${escapeHtml(dexChartEmbedUrl(mint))}" loading="lazy"></iframe>
           </div>
+          <label class="smart-chart-zoom">
+            <span>Zoom</span>
+            <input data-smart-chart-zoom type="range" min="65" max="120" step="5" value="${escapeHtml(chartZoom)}">
+            <strong>${escapeHtml(chartZoom)}%</strong>
+          </label>
           <small class="score-breakdown">If the embedded chart does not load, use the DEX link above.</small>
         </article>
         <aside class="terminal-panel smart-chart-side">
@@ -5612,8 +5735,6 @@ function terminalTradePanelHtml(token, collapsed = false) {
               <button type="button" data-edit-selected-preset="trade">Edit Trade Preset</button>
               <button type="button" data-edit-selected-preset="bundle">Edit Bundle Preset</button>
             </div>
-            ${state.selectedTradePresetId === "custom" ? fastTradePresetBuilderHtml() : ""}
-            ${state.selectedBundlePresetId === "custom" ? fastBundlePresetBuilderHtml() : ""}
           </details>
 
           <div class="ticket-balance-row">
@@ -6697,9 +6818,10 @@ document.addEventListener("click", async (event) => {
       state.tradeToken = token;
       state.bundleToken = token;
       state.volumeToken = token;
-      state.activeTab = "terminal";
+      state.smartChartToken = token;
+      state.activeTab = "smartChart";
       state.route = "terminal";
-      window.history.pushState({}, "", "/terminal");
+      window.history.pushState({}, "", "/terminal/chart");
       render();
     }
     return;
@@ -6799,6 +6921,10 @@ document.addEventListener("click", async (event) => {
     saveLaunchCoinDraft();
     return;
   }
+  if (target.matches("[data-launch-coin-submit]")) {
+    await submitLaunchCoin();
+    return;
+  }
   if (target.matches("[data-launch-coin-use-ca]")) {
     await useLaunchCoinMint();
     return;
@@ -6830,8 +6956,7 @@ document.addEventListener("click", async (event) => {
     if (id && id !== "custom") {
       editPreset(kind, id);
     } else {
-      state.activeTab = kind === "bundle" ? "bundle" : "trade";
-      render({ force: true });
+      openPresetEditorTab(kind);
     }
     return;
   }
@@ -7092,7 +7217,12 @@ document.addEventListener("change", async (event) => {
     syncTimerSellNoTimer(target);
   }
   if (target?.matches?.("[data-fast-trade-preset]")) {
-    state.selectedTradePresetId = target.value || "custom";
+    const nextPresetId = target.value || "custom";
+    if (nextPresetId === "custom") {
+      openPresetEditorTab("trade");
+      return;
+    }
+    state.selectedTradePresetId = nextPresetId;
     state.fastTradePresetStatus = state.selectedTradePresetId === "custom"
       ? ""
       : "Trade preset selected. Tap Trade or Buy on a token row to use it.";
@@ -7100,10 +7230,16 @@ document.addEventListener("change", async (event) => {
   }
   if (target?.matches?.("[data-quick-buy-amount]")) {
     state.quickBuyAmountOverride = normalizedQuickBuyAmount(target.value);
-    render();
+    target.value = state.quickBuyAmountOverride;
+    syncQuickBuyActionLabels();
   }
   if (target?.matches?.("[data-fast-bundle-preset]")) {
-    state.selectedBundlePresetId = target.value || "custom";
+    const nextPresetId = target.value || "custom";
+    if (nextPresetId === "custom") {
+      openPresetEditorTab("bundle");
+      return;
+    }
+    state.selectedBundlePresetId = nextPresetId;
     state.fastBundlePresetStatus = state.selectedBundlePresetId === "custom"
       ? ""
       : "Bundle preset selected. It will not buy until you tap a Bundle button.";
@@ -7139,6 +7275,15 @@ document.addEventListener("input", (event) => {
   const target = event.target;
   if (target?.matches?.("[data-quick-buy-amount]")) {
     state.quickBuyAmountOverride = String(target.value || "").replace(/[^0-9.]/g, "").slice(0, 12);
+    syncQuickBuyActionLabels();
+    return;
+  }
+  if (target?.matches?.("[data-smart-chart-zoom]")) {
+    state.smartChartZoom = Math.min(120, Math.max(65, Number(target.value) || 80));
+    const label = target.closest(".smart-chart-zoom")?.querySelector("strong");
+    if (label) writeText(label, `${state.smartChartZoom}%`);
+    const frame = target.closest(".smart-chart-main")?.querySelector(".smart-chart-frame");
+    if (frame) frame.style.setProperty("--smart-chart-scale", String(state.smartChartZoom / 100));
     return;
   }
   if (!target?.matches?.("[data-ogre-tek-field]")) return;

@@ -416,6 +416,10 @@ function loadConfig() {
     jupiterApiBase: (process.env.JUPITER_API_BASE || "https://api.jup.ag/swap/v2").replace(/\/$/, ""),
     pumpFunApiBase: (process.env.PUMPFUN_API_BASE || "https://frontend-api-v3.pump.fun").replace(/\/$/, ""),
     pumpFunApiToken: process.env.PUMPFUN_API_TOKEN || "",
+    pumpLaunchEnabled: parseBoolean(process.env.PUMP_LAUNCH_ENABLED || "false"),
+    pumpLaunchApiUrl: (process.env.PUMP_LAUNCH_API_URL || process.env.PUMP_LAUNCH_API_BASE || "").trim(),
+    pumpLaunchApiKey: process.env.PUMP_LAUNCH_API_KEY || "",
+    pumpLaunchTimeoutMs: Number.parseInt(process.env.PUMP_LAUNCH_TIMEOUT_MS || "30000", 10),
     photonNewPairsUrl: (process.env.PHOTON_NEW_PAIRS_URL || "").trim(),
     photonApiKey: process.env.PHOTON_API_KEY || "",
     livePairsRpcSafety,
@@ -637,7 +641,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
         telegramBotUsername: CONFIG.telegramBotUsername,
         telegramBotUrl: telegramBotStartUrl(),
         socials: brandSocialLinks(),
-        features: ["wallets", "balances", "positions", "pnl", "sniper-scan", "kol-tracker", "one-wallet-trade", "volume-plans", "bundle", "launch-watch"]
+        features: ["wallets", "balances", "positions", "pnl", "sniper-scan", "kol-tracker", "one-wallet-trade", "volume-plans", "bundle", "launch-watch", "launch-coin"]
       });
       return;
     }
@@ -999,6 +1003,16 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendWebJson(request, response, 200, {
         ok: true,
         watch: result
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/launch/coin") {
+      const body = await readJsonRequestBody(request, 6_000_000);
+      const result = await webLaunchPumpCoin(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        launch: result
       });
       return;
     }
@@ -12630,6 +12644,117 @@ function webBundleResult(type, tokenMint, walletCount, successCount, results) {
     dexUrl: dexScreenerUrl(tokenMint),
     results,
     message: `${type === "bundle_buy" ? "Bundle buy" : "Bundle sell"} complete: ${successCount}/${walletCount} wallet(s) succeeded.`
+  };
+}
+
+function cleanLaunchText(value, maxLength = 256) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength);
+}
+
+function cleanLaunchUrl(value) {
+  const text = String(value || "").trim();
+  if (!text || text.startsWith("@")) return "";
+  try {
+    const url = new URL(text);
+    if (!["http:", "https:"].includes(url.protocol)) return "";
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
+function normalizeLaunchResponseMint(data = {}) {
+  return firstString(
+    data.tokenMint,
+    data.mint,
+    data.ca,
+    data.address,
+    data.contractAddress,
+    data.token?.mint,
+    data.token?.address,
+    data.result?.tokenMint,
+    data.result?.mint,
+    data.result?.ca,
+    data.result?.address
+  );
+}
+
+async function webLaunchPumpCoin(userId, body = {}) {
+  if (!CONFIG.pumpLaunchEnabled || !CONFIG.pumpLaunchApiUrl) {
+    const error = new Error("Direct Pump launch is not enabled yet. Save the launch sheet or use the official Pump fallback link.");
+    error.statusCode = 501;
+    throw error;
+  }
+
+  const name = cleanLaunchText(body.name, 64);
+  const symbol = cleanTickerSymbol(body.symbol || body.ticker || "");
+  const description = cleanLaunchText(body.description, 800);
+  if (!name) {
+    const error = new Error("Token name is required.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const imageDataUrl = String(body.imageDataUrl || "");
+  if (imageDataUrl && !/^data:image\/(png|jpe?g|webp|gif);base64,/i.test(imageDataUrl)) {
+    const error = new Error("Upload a PNG, JPG, WEBP, or GIF token image.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const payload = {
+    name,
+    symbol,
+    description,
+    website: cleanLaunchUrl(body.website),
+    twitter: cleanLaunchUrl(body.x) || cleanLaunchUrl(body.twitter),
+    telegram: cleanLaunchUrl(body.telegram),
+    imageDataUrl,
+    imageName: cleanLaunchText(body.imageName, 120),
+    imageType: cleanLaunchText(body.imageType, 80),
+    clientRequestId: crypto.randomUUID(),
+    source: "slimewire_web"
+  };
+
+  const headers = { "Content-Type": "application/json" };
+  if (CONFIG.pumpLaunchApiKey) headers.Authorization = `Bearer ${CONFIG.pumpLaunchApiKey}`;
+  const timeoutMs = Number.isFinite(CONFIG.pumpLaunchTimeoutMs) && CONFIG.pumpLaunchTimeoutMs > 0
+    ? CONFIG.pumpLaunchTimeoutMs
+    : 30000;
+  const providerResult = await fetchJson(CONFIG.pumpLaunchApiUrl, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload),
+    timeoutMs
+  });
+  const tokenMint = normalizeLaunchResponseMint(providerResult);
+  const status = firstString(providerResult.status, providerResult.state, tokenMint ? "launched" : "submitted");
+
+  await audit("web_launch_pump_coin", {
+    userId,
+    symbol,
+    status,
+    tokenMint: tokenMint ? shortMint(tokenMint) : "",
+    hasImage: Boolean(imageDataUrl)
+  });
+
+  return {
+    status,
+    tokenMint,
+    signature: firstString(
+      providerResult.signature,
+      providerResult.txSignature,
+      providerResult.transactionSignature,
+      providerResult.txid,
+      providerResult.result?.signature
+    ),
+    requestId: firstString(providerResult.requestId, providerResult.id, providerResult.result?.requestId, payload.clientRequestId),
+    pumpUrl: tokenMint ? pumpFunUrl(tokenMint) : "",
+    dexUrl: tokenMint ? dexScreenerUrl(tokenMint) : "",
+    message: tokenMint ? `Pump launch returned ${shortMint(tokenMint)}.` : "Pump launch submitted. Waiting for token CA."
   };
 }
 

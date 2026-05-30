@@ -28,6 +28,14 @@ services:
         value: https://frontend-api-v3.pump.fun
       - key: PUMPFUN_API_TOKEN
         sync: false
+      - key: PUMP_LAUNCH_ENABLED
+        value: false
+      - key: PUMP_LAUNCH_API_URL
+        sync: false
+      - key: PUMP_LAUNCH_API_KEY
+        sync: false
+      - key: PUMP_LAUNCH_TIMEOUT_MS
+        value: 30000
       - key: PHOTON_NEW_PAIRS_URL
         sync: false
       - key: PHOTON_API_KEY
