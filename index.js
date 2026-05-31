@@ -7,13 +7,16 @@ import { fileURLToPath } from "node:url";
 import bs58 from "bs58";
 import sharp from "sharp";
 import {
+  classifySlimeScopePair,
   computeBestPickScore,
   formatLivePairAge as formatLivePairAgeFromData,
+  isGraduatedSlimeScopePair,
   isLivePairInBucket as isLivePairInBucketWindow,
   livePairBucketLabel as livePairBucketLabelCore,
   normalizeLivePairBucket as normalizeLivePairBucketCore,
   normalizePairTimestamp,
   pairAgeMinutes as pairAgeMinutesFromData,
+  slimeScopeProgressPct,
   sortLivePairs
 } from "./lib/liveTerminal.js";
 import {
@@ -416,6 +419,10 @@ function loadConfig() {
     jupiterApiBase: (process.env.JUPITER_API_BASE || "https://api.jup.ag/swap/v2").replace(/\/$/, ""),
     pumpFunApiBase: (process.env.PUMPFUN_API_BASE || "https://frontend-api-v3.pump.fun").replace(/\/$/, ""),
     pumpFunApiToken: process.env.PUMPFUN_API_TOKEN || "",
+    pumpLaunchEnabled: parseBoolean(process.env.PUMP_LAUNCH_ENABLED || "false"),
+    pumpLaunchApiUrl: (process.env.PUMP_LAUNCH_API_URL || process.env.PUMP_LAUNCH_API_BASE || "").trim(),
+    pumpLaunchApiKey: process.env.PUMP_LAUNCH_API_KEY || "",
+    pumpLaunchTimeoutMs: Number.parseInt(process.env.PUMP_LAUNCH_TIMEOUT_MS || "30000", 10),
     photonNewPairsUrl: (process.env.PHOTON_NEW_PAIRS_URL || "").trim(),
     photonApiKey: process.env.PHOTON_API_KEY || "",
     livePairsRpcSafety,
@@ -510,9 +517,13 @@ function startKeepAlivePinger() {
 function startTradePlanRunner() {
   setTimeout(() => void processTradePlans().catch((error) => {
     console.error("Trade plan runner failed:", error.message);
-  }), 10_000);
+  }), Math.max(1_000, Math.min(10_000, CONFIG.stopLossCheckIntervalMs)));
 
-  const intervalMs = Math.max(500, Math.min(5_000, CONFIG.manualLaunchScanIntervalMs));
+  const intervalMs = Math.max(500, Math.min(
+    5_000,
+    CONFIG.manualLaunchScanIntervalMs,
+    CONFIG.stopLossCheckIntervalMs
+  ));
   setInterval(() => void processTradePlans().catch((error) => {
     console.error("Trade plan runner failed:", error.message);
   }), intervalMs);
@@ -637,7 +648,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
         telegramBotUsername: CONFIG.telegramBotUsername,
         telegramBotUrl: telegramBotStartUrl(),
         socials: brandSocialLinks(),
-        features: ["wallets", "balances", "positions", "pnl", "sniper-scan", "kol-tracker", "one-wallet-trade", "volume-plans", "bundle", "launch-watch"]
+        features: ["wallets", "balances", "positions", "pnl", "sniper-scan", "kol-tracker", "one-wallet-trade", "volume-plans", "bundle", "launch-watch", "launch-coin"]
       });
       return;
     }
@@ -999,6 +1010,16 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendWebJson(request, response, 200, {
         ok: true,
         watch: result
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/launch/coin") {
+      const body = await readJsonRequestBody(request, 6_000_000);
+      const result = await webLaunchPumpCoin(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        launch: result
       });
       return;
     }
@@ -4003,7 +4024,9 @@ async function createTimedTradePlanFlow(chatId, session) {
       planWallets.push({
         label: wallet.label,
         publicKey: wallet.publicKey,
-        basisLamports: amountLamports,
+        basisLamports: Number(result.swapLamports || amountLamports),
+        grossLamports: amountLamports,
+        feeLamports: result.feeLamports,
         tokenOutAmount: result.tokenDeltaAmount || result.outputAmount || null,
         buySignature: result.signature,
         currentLoop: 1,
@@ -4793,6 +4816,10 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
   let triggerReason = null;
   let triggerMeta = null;
   const now = Date.now();
+  const retryAfterAt = Date.parse(planWallet.retryAfterAt || "");
+  if (Number.isFinite(retryAfterAt) && now < retryAfterAt) {
+    return { changed: false, message: null };
+  }
 
   if (!triggerReason && planHasPriceExit(plan, planWallet)) {
     const lastCheckedAt = Date.parse(planWallet.lastCheckedAt || "");
@@ -4808,9 +4835,14 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
       const estimateSellPercent = stopLossPct
         ? 100
         : (ladderLevel?.sellPercent ?? planWallet.triggerSellPercent ?? plan.triggerSellPercent ?? 100);
+      invalidateWalletReadCache(wallet.publicKey);
       const estimate = await estimatePlanWalletMove(plan, wallet, estimateSellPercent);
       planWallet.lastCheckedAt = new Date().toISOString();
       planWallet.lastMovePct = estimate.movePct;
+      planWallet.lastEstimateSource = estimate.source || "jupiter";
+      planWallet.lastEstimatedNetOut = estimate.estimatedNetOut?.toString?.() || null;
+      planWallet.lastBasisLamports = estimate.basis?.toString?.() || null;
+      planWallet.lastError = estimate.quoteError ? `Jupiter quote fallback: ${estimate.quoteError}` : null;
 
       const stopLossTriggerPct = stopLossPct
         ? Math.max(0.1, Number(stopLossPct) - CONFIG.stopLossTriggerBufferPct)
@@ -4836,7 +4868,11 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
     } catch (error) {
       planWallet.lastCheckedAt = new Date().toISOString();
       planWallet.lastError = friendlyError(error);
-      return { changed: true, message: null };
+      if (timerDue) {
+        triggerReason = "timer";
+      } else {
+        return { changed: true, message: null };
+      }
     }
   }
 
@@ -4849,11 +4885,20 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
   }
 
   try {
+    const triggeredAt = new Date().toISOString();
+    planWallet.status = "submitting";
+    planWallet.exitStatus = "submitting";
+    planWallet.triggeredAt = planWallet.triggeredAt || triggeredAt;
+    planWallet.triggerReason = triggerReason;
+    planWallet.lastSellAttemptAt = triggeredAt;
+    planWallet.updatedAt = triggeredAt;
+    invalidateWalletReadCache(wallet.publicKey);
     const sellPercent = effectiveTimedSellPercent(plan, planWallet, triggerReason, triggerMeta);
     const sell = await sellTokenFromWallet(wallet, plan.tokenMint, sellPercent, plan.slippageBps, {
       baseRawAmount: planWallet.tokenOutAmount,
       userId: plan.userId
     });
+    invalidateWalletReadCache(wallet.publicKey);
     sell.sellPercent = sellPercent;
     await recordTradeEvents([{
       userId: plan.userId,
@@ -4879,12 +4924,16 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
       });
       planWallet.triggerReason = `${triggerReason} (ladder ${formatTakeProfitTarget(triggerMeta.targetPct)})`;
       planWallet.failures = 0;
+      planWallet.error = null;
+      planWallet.lastError = null;
+      planWallet.retryAfterAt = null;
       planWallet.sellFeeStatus = sell.feeStatus;
       planWallet.updatedAt = new Date().toISOString();
 
       const nextLevel = nextTakeProfitLadderLevel(plan, planWallet);
       if (nextLevel) {
         planWallet.status = "watching";
+        planWallet.exitStatus = "watching";
         return {
           changed: true,
           message: `${formatTimedSellSuccessLine(planWallet, sell, planWallet.triggerReason, plan.loopCount || 1)}; next ladder target ${formatTakeProfitTarget(nextLevel.pct)} sells ${nextLevel.sellPercent}%`
@@ -4892,6 +4941,7 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
       }
 
       planWallet.status = "sold";
+      planWallet.exitStatus = "confirmed";
       planWallet.soldAt = new Date().toISOString();
       return {
         changed: true,
@@ -4903,6 +4953,10 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
     planWallet.completedLoops = Number.parseInt(planWallet.completedLoops || 0, 10) + 1;
     planWallet.triggerReason = triggerReason;
     planWallet.failures = 0;
+    planWallet.error = null;
+    planWallet.lastError = null;
+    planWallet.retryAfterAt = null;
+    planWallet.exitStatus = "confirmed";
     planWallet.sellSignature = sell.signature;
     planWallet.sellFeeStatus = sell.feeStatus;
     planWallet.soldAt = new Date().toISOString();
@@ -4929,14 +4983,21 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
     };
   } catch (error) {
     const failures = Number.parseInt(planWallet.failures || 0, 10) + 1;
+    const priceExit = isPriceExitTrigger(triggerReason);
+    const maxFailures = priceExit ? 20 : 5;
+    const retryDelayMs = failures >= maxFailures ? 0 : Math.min(30_000, 1_500 * failures);
     planWallet.failures = failures;
-    planWallet.status = failures >= 5 ? "failed" : "watching";
+    planWallet.status = failures >= maxFailures ? "failed" : "watching";
+    planWallet.exitStatus = failures >= maxFailures ? "failed" : "watching";
     planWallet.triggerReason = triggerReason;
     planWallet.error = friendlyError(error);
+    planWallet.lastError = friendlyError(error);
+    planWallet.lastFailedAt = new Date().toISOString();
+    planWallet.retryAfterAt = retryDelayMs > 0 ? new Date(Date.now() + retryDelayMs).toISOString() : null;
     planWallet.updatedAt = new Date().toISOString();
     return {
       changed: true,
-      message: `${planWallet.label}: sell failed by ${triggerReason} (${failures}/5) - ${friendlyError(error)}${failures < 5 ? ". Will retry." : ""}`
+      message: `${planWallet.label}: sell failed by ${triggerReason} (${failures}/${maxFailures}) - ${friendlyError(error)}${failures < maxFailures ? `. Will retry in ${Math.ceil(retryDelayMs / 1000)}s.` : ""}`
     };
   }
 }
@@ -5003,7 +5064,9 @@ async function processCopyWalletWatchPlan(plan, walletStore) {
     try {
       const buy = await buyTokenForPlan(wallet, tokenMint, amountLamports, plan.slippageBps, { trackTokenDelta: true, userId: plan.userId });
       Object.assign(planWallet, {
-        basisLamports: amountLamports,
+        basisLamports: Number(buy.swapLamports || amountLamports),
+        grossLamports: amountLamports,
+        feeLamports: buy.feeLamports,
         tokenOutAmount: buy.tokenDeltaAmount || buy.outputAmount || null,
         buySignature: buy.signature,
         currentLoop: 1,
@@ -5094,7 +5157,9 @@ async function processLaunchWatchPlan(plan, walletStore) {
     try {
       const buy = await buyTokenForPlan(wallet, match.tokenMint, amountLamports, plan.slippageBps, { trackTokenDelta: true, userId: plan.userId });
       Object.assign(planWallet, {
-        basisLamports: amountLamports,
+        basisLamports: Number(buy.swapLamports || amountLamports),
+        grossLamports: amountLamports,
+        feeLamports: buy.feeLamports,
         tokenOutAmount: buy.tokenDeltaAmount || buy.outputAmount || null,
         buySignature: buy.signature,
         currentLoop: 1,
@@ -5174,7 +5239,9 @@ async function restartTimedPlanLoop(plan, planWallet, wallet, sell, triggerReaso
 
     planWallet.status = "watching";
     planWallet.currentLoop = planWallet.completedLoops + 1;
-    planWallet.basisLamports = amountLamports;
+    planWallet.basisLamports = Number(buy.swapLamports || amountLamports);
+    planWallet.grossLamports = amountLamports;
+    planWallet.feeLamports = buy.feeLamports;
     planWallet.tokenOutAmount = buy.tokenDeltaAmount || buy.outputAmount || null;
     planWallet.buySignature = buy.signature;
     planWallet.lastCheckedAt = null;
@@ -5222,7 +5289,9 @@ async function startDelayedTimedPlanLoop(plan, planWallet, wallet) {
 
     planWallet.status = "watching";
     planWallet.currentLoop = planWallet.completedLoops + 1;
-    planWallet.basisLamports = amountLamports;
+    planWallet.basisLamports = Number(buy.swapLamports || amountLamports);
+    planWallet.grossLamports = amountLamports;
+    planWallet.feeLamports = buy.feeLamports;
     planWallet.tokenOutAmount = buy.tokenDeltaAmount || buy.outputAmount || null;
     planWallet.buySignature = buy.signature;
     planWallet.lastCheckedAt = null;
@@ -5408,7 +5477,7 @@ async function processDcaPlanWallet(plan, planWallet, walletStore) {
 
 async function estimatePlanWalletMove(plan, wallet, sellPercentOverride = null) {
   const keypair = decryptWallet(wallet);
-  const token = await getTokenBalanceForMintCached(keypair.publicKey, new PublicKey(plan.tokenMint));
+  const token = await getTokenBalanceForMintCached(keypair.publicKey, new PublicKey(plan.tokenMint), { force: true });
   if (!token || token.rawAmount === 0n) {
     throw new Error("no token balance");
   }
@@ -5420,24 +5489,63 @@ async function estimatePlanWalletMove(plan, wallet, sellPercentOverride = null) 
     throw new Error("sell amount rounded to zero");
   }
 
-  const order = await createJupiterOrder({
-    taker: keypair.publicKey,
-    inputMint: plan.tokenMint,
-    outputMint: SOL_MINT,
-    amount: amount.toString(),
-    slippageBps: plan.slippageBps
-  });
-
-  const estimatedOut = BigInt(order.outAmount || order.outputAmount || 0);
-  const estimatedFee = BigInt(calculateFeeLamports(estimatedOut));
-  const estimatedNetOut = estimatedOut > estimatedFee ? estimatedOut - estimatedFee : 0n;
-  const basis = (BigInt(planWallet?.basisLamports || 0) * BigInt(triggerSellPercent)) / 100n;
+  const basisLamports = BigInt(planWallet?.basisLamports || planWallet?.swapLamports || planWallet?.grossLamports || 0);
+  const basis = (basisLamports * BigInt(Math.round(triggerSellPercent))) / 100n;
   if (basis <= 0n) {
     throw new Error("missing plan basis");
   }
 
+  let order;
+  try {
+    order = await createJupiterOrder({
+      taker: keypair.publicKey,
+      inputMint: plan.tokenMint,
+      outputMint: SOL_MINT,
+      amount: amount.toString(),
+      slippageBps: plan.slippageBps
+    });
+  } catch (quoteError) {
+    return estimatePlanWalletMoveFromDexPair(plan, token, amount, basis, quoteError);
+  }
+
+  const estimatedOut = BigInt(order.outAmount || order.outputAmount || 0);
+  const estimatedFee = BigInt(calculateFeeLamports(estimatedOut));
+  const estimatedNetOut = estimatedOut > estimatedFee ? estimatedOut - estimatedFee : 0n;
   const movePct = (Number(estimatedNetOut - basis) / Number(basis)) * 100;
-  return { estimatedOut, estimatedNetOut, basis, movePct };
+  return { estimatedOut, estimatedNetOut, basis, movePct, source: "jupiter" };
+}
+
+async function estimatePlanWalletMoveFromDexPair(plan, token, amount, basis, quoteError) {
+  const pairs = await fetchDexScreenerTokenPairsBatch([plan.tokenMint], { timeoutMs: 1_800 }).catch(() => []);
+  const pair = bestDexPairForToken(plan.tokenMint, pairs);
+  const tokenIsBase = pair?.baseToken?.address === plan.tokenMint;
+  const quoteIsSol = pair?.quoteToken?.address === SOL_MINT || /^w?sol$/i.test(String(pair?.quoteToken?.symbol || ""));
+  const priceNative = Number(pair?.priceNative);
+  const decimals = Number(token?.decimals);
+
+  if (!tokenIsBase || !quoteIsSol || !Number.isFinite(priceNative) || priceNative <= 0 || !Number.isInteger(decimals)) {
+    throw quoteError;
+  }
+
+  const tokenUnits = Number(amount) / (10 ** decimals);
+  const estimatedOutNumber = tokenUnits * priceNative * LAMPORTS_PER_SOL;
+  if (!Number.isFinite(estimatedOutNumber) || estimatedOutNumber <= 0) {
+    throw quoteError;
+  }
+
+  const estimatedOut = BigInt(Math.max(0, Math.floor(estimatedOutNumber)));
+  const estimatedFee = BigInt(calculateFeeLamports(estimatedOut));
+  const estimatedNetOut = estimatedOut > estimatedFee ? estimatedOut - estimatedFee : 0n;
+  const movePct = (Number(estimatedNetOut - basis) / Number(basis)) * 100;
+
+  return {
+    estimatedOut,
+    estimatedNetOut,
+    basis,
+    movePct,
+    source: "dexscreener",
+    quoteError: friendlyError(quoteError)
+  };
 }
 
 async function sweepSolFlow(chatId, session) {
@@ -5872,12 +5980,26 @@ async function collectSolFee(signer, feeLamports, options = {}) {
   }
   if (!tx.instructions.length) return null;
 
-  return sendLegacyTransaction(tx, [signer]);
+  const signature = await sendLegacyTransaction(tx, [signer]);
+  if (targets.referrerUserId && targets.referralWallet && referralLamports > 0) {
+    await recordReferralFeePayout({
+      userId: options.userId,
+      referrerUserId: targets.referrerUserId,
+      referralWallet: targets.referralWallet,
+      lamports: referralLamports,
+      signature
+    }).catch((error) => audit("referral_fee_record_failed", {
+      userId: options.userId,
+      referrerUserId: targets.referrerUserId,
+      error: friendlyError(error)
+    }));
+  }
+  return signature;
 }
 
 async function referralFeeTargets(userId, feeLamports) {
   const total = BigInt(feeLamports);
-  const fallback = { ownerLamports: total, referralLamports: 0n, referralWallet: "" };
+  const fallback = { ownerLamports: total, referralLamports: 0n, referralWallet: "", referrerUserId: "" };
   if (!userId || CONFIG.bundleFeeBps <= 0 || CONFIG.referralFeeBps <= 0) return fallback;
 
   try {
@@ -5892,11 +6014,84 @@ async function referralFeeTargets(userId, feeLamports) {
     return {
       ownerLamports: total - referralLamports,
       referralLamports,
-      referralWallet
+      referralWallet,
+      referrerUserId: String(profile.referredByUserId || "")
     };
   } catch {
     return fallback;
   }
+}
+
+function referralSolString(lamports) {
+  const value = Number(lamports || "0") / LAMPORTS_PER_SOL;
+  if (!Number.isFinite(value)) return "0";
+  return value.toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function normalizeReferralStats(stats = {}) {
+  const totalLamports = String(stats.totalLamports || "0");
+  const referralsObj = stats.referrals && typeof stats.referrals === "object" ? stats.referrals : {};
+  const referrals = Object.entries(referralsObj).map(([id, row]) => {
+    const lamports = String(row?.lamports || "0");
+    return {
+      userId: id,
+      lamports,
+      sol: referralSolString(lamports),
+      payoutCount: Number(row?.payoutCount || 0),
+      lastSignature: row?.lastSignature || "",
+      lastPaidAt: row?.lastPaidAt || ""
+    };
+  }).sort((a, b) => Number(b.lamports) - Number(a.lamports));
+
+  return {
+    totalLamports,
+    totalSol: referralSolString(totalLamports),
+    payoutCount: Number(stats.payoutCount || 0),
+    referralWallet: stats.referralWallet || "",
+    lastSignature: stats.lastSignature || "",
+    lastPaidAt: stats.lastPaidAt || "",
+    referrals
+  };
+}
+
+async function recordReferralFeePayout({ userId, referrerUserId, referralWallet, lamports, signature }) {
+  if (!referrerUserId || !lamports) return;
+  const payoutLamports = BigInt(lamports);
+  if (payoutLamports <= 0n) return;
+
+  const store = await readWebAuthStore();
+  const key = String(referrerUserId);
+  const profile = store.profiles[key] || {};
+  const currentStats = profile.referralStats && typeof profile.referralStats === "object" ? profile.referralStats : {};
+  const currentTotal = BigInt(currentStats.totalLamports || "0");
+  const referrals = currentStats.referrals && typeof currentStats.referrals === "object" ? { ...currentStats.referrals } : {};
+  const childKey = String(userId || "unknown");
+  const child = referrals[childKey] || {};
+  referrals[childKey] = {
+    lamports: String(BigInt(child.lamports || "0") + payoutLamports),
+    payoutCount: Number(child.payoutCount || 0) + 1,
+    lastSignature: signature || "",
+    lastPaidAt: new Date().toISOString()
+  };
+
+  profile.referralStats = {
+    totalLamports: String(currentTotal + payoutLamports),
+    payoutCount: Number(currentStats.payoutCount || 0) + 1,
+    referralWallet,
+    lastSignature: signature || "",
+    lastPaidAt: new Date().toISOString(),
+    referrals
+  };
+  profile.updatedAt = new Date().toISOString();
+  store.profiles[key] = profile;
+  await writeWebAuthStore(store);
+  await audit("referral_fee_recorded", {
+    userId,
+    referrerUserId,
+    referralWallet,
+    lamports: String(payoutLamports),
+    signature
+  });
 }
 
 async function getSolBalanceCached(owner, options = {}) {
@@ -7250,8 +7445,8 @@ async function renderPnlCard(row, metadata = {}) {
   ${borderLayer}
   <rect x="42" y="86" width="1116" height="510" rx="42" fill="${PNL_CARD_STYLE.panel}" filter="url(#shadow)" stroke="rgba(255,255,255,0.09)"/>
   ${art}
-  <text x="555" y="162" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="54" font-weight="900" fill="${PNL_CARD_STYLE.white}" letter-spacing="0">SlimeWire.com</text>
-  <text x="555" y="215" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="34" font-weight="800" fill="${PNL_CARD_STYLE.muted}">PNL CARD</text>
+  <text x="555" y="168" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="62" font-weight="900" fill="${PNL_CARD_STYLE.slime}" letter-spacing="0" filter="url(#slimeGlow)">www.SlimeWire.org</text>
+  <text x="555" y="222" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="34" font-weight="800" fill="${PNL_CARD_STYLE.muted}">PNL CARD</text>
   <text x="555" y="392" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="170" font-weight="900" fill="${accent}" letter-spacing="0">${escapeSvg(multiple)}X</text>
   <text x="555" y="450" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="38" font-weight="900" fill="${PNL_CARD_STYLE.white}">${escapeSvg(symbol)} / ${escapeSvg(name)}</text>
   <text x="555" y="500" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="34" font-weight="800" fill="${accent}">Profit ${escapeSvg(profitLabel)}</text>
@@ -7428,6 +7623,13 @@ function compareDexPairsForSniper(a, b) {
 function metadataFromDexPair(tokenMint, best = null) {
   const token = best?.baseToken?.address === tokenMint ? best.baseToken : best?.quoteToken || best?.baseToken || {};
   const links = dexPairLinks(best);
+  const dexId = firstString(best?.dexId, best?.dexName);
+  const pairAddress = firstString(best?.pairAddress, best?.address);
+  const raydiumPool = /raydium|meteora|orca/i.test(dexId) ? pairAddress : "";
+  const graduated = Boolean(
+    raydiumPool
+    && isPumpStyleToken({ tokenMint, symbol: token.symbol, name: token.name })
+  );
 
   return {
     symbol: token.symbol || "",
@@ -7442,7 +7644,14 @@ function metadataFromDexPair(tokenMint, best = null) {
     liquidityUsd: firstNumber(best?.liquidity?.usd),
     volume: best?.volume || null,
     txns: best?.txns || null,
-    pairCreatedAt: best?.pairCreatedAt || null
+    pairCreatedAt: best?.pairCreatedAt || null,
+    dexId,
+    dexName: dexId,
+    pairAddress,
+    pairUrl: firstString(best?.url),
+    raydiumPool,
+    graduated,
+    isGraduated: graduated
   };
 }
 
@@ -7476,20 +7685,41 @@ async function getPumpFunTokenMetadata(tokenMint, options = {}) {
   const volume = typeof coin?.volume === "object" && coin.volume !== null ? coin.volume : {};
   const txns = typeof coin?.txns === "object" && coin.txns !== null ? coin.txns : {};
   const transactions = typeof coin?.transactions === "object" && coin.transactions !== null ? coin.transactions : {};
+  const raydiumPool = firstString(coin?.raydium_pool, coin?.raydiumPool, coin?.poolAddress, coin?.pool, coin?.amm_pool);
+  const bondingProgressPct = firstMeaningfulNumber(
+    coin?.bondingProgressPct,
+    coin?.bondingProgress,
+    coin?.bonding_curve_progress,
+    coin?.bondingCurveProgress,
+    coin?.progress,
+    coin?.pumpProgress,
+    coin?.graduationProgress,
+    coin?.completion,
+    coin?.completePct
+  ) || 0;
+  const graduated = Boolean(
+    coin?.complete
+    || coin?.completed
+    || coin?.bonded
+    || coin?.isBonded
+    || coin?.graduated
+    || coin?.isGraduated
+    || raydiumPool
+  );
 
   return {
     symbol: coin?.symbol || "",
     name: coin?.name || "",
     imageUrl: coin?.image_uri || coin?.image || coin?.metadata?.image || "",
-    marketCap: firstNumber(coin?.usd_market_cap, coin?.market_cap, coin?.marketCap, coin?.fdv) || null,
-    fdv: firstNumber(coin?.fdv, coin?.marketCap, coin?.usd_market_cap, coin?.market_cap) || null,
-    liquidityUsd: firstNumber(coin?.liquidity_usd, coin?.liquidityUsd, coin?.liquidity?.usd, coin?.liquidity) || null,
+    marketCap: firstMeaningfulNumber(coin?.usd_market_cap, coin?.market_cap, coin?.marketCap, coin?.fdv, coin?.mcap, coin?.mc) || null,
+    fdv: firstMeaningfulNumber(coin?.fdv, coin?.marketCap, coin?.usd_market_cap, coin?.market_cap, coin?.mcap, coin?.mc) || null,
+    liquidityUsd: firstMeaningfulNumber(coin?.liquidity_usd, coin?.liquidityUsd, coin?.liquidity?.usd, coin?.liquidity, coin?.currentLiquidityUsd) || null,
     volume: {
-      m5: firstNumber(volume.m5, coin?.volume5m, coin?.volume_5m) || 0,
-      m15: firstNumber(volume.m15, volume.m15m, coin?.volume15m, coin?.volume_15m, coin?.volumeM15) || 0,
-      m30: firstNumber(volume.m30, volume.m30m, coin?.volume30m, coin?.volume_30m, coin?.volumeM30) || 0,
-      h1: firstNumber(volume.h1, coin?.volumeH1, coin?.volume_h1, coin?.volume_1h, coin?.volume) || 0,
-      h24: firstNumber(volume.h24, volume.d1, coin?.volume24h, coin?.volume_h24, coin?.volume_24h) || 0
+      m5: firstMeaningfulNumber(volume.m5, volume["5m"], coin?.volume5m, coin?.volume_5m) || 0,
+      m15: firstMeaningfulNumber(volume.m15, volume.m15m, volume["15m"], coin?.volume15m, coin?.volume_15m, coin?.volumeM15) || 0,
+      m30: firstMeaningfulNumber(volume.m30, volume.m30m, volume["30m"], coin?.volume30m, coin?.volume_30m, coin?.volumeM30) || 0,
+      h1: firstMeaningfulNumber(volume.h1, volume["1h"], coin?.volumeH1, coin?.volume_h1, coin?.volume_1h, coin?.volume) || 0,
+      h24: firstMeaningfulNumber(volume.h24, volume.d1, volume["24h"], coin?.volume24h, coin?.volume_h24, coin?.volume_24h) || 0
     },
     txns: {
       m5: {
@@ -7507,7 +7737,11 @@ async function getPumpFunTokenMetadata(tokenMint, options = {}) {
       h6: normalizePercentLike(coin?.priceChange?.h6 ?? coin?.price_change_h6 ?? coin?.h6) || 0,
       h24: normalizePercentLike(coin?.priceChange?.h24 ?? coin?.price_change_h24 ?? coin?.h24) || 0
     },
-    pairCreatedAt: normalizePairCreatedAt(firstString(coin?.created_timestamp, coin?.createdAt, coin?.created_at, coin?.timestamp))
+    pairCreatedAt: normalizePairCreatedAt(firstString(coin?.created_timestamp, coin?.createdAt, coin?.created_at, coin?.timestamp)),
+    bondingProgressPct,
+    graduated,
+    isGraduated: graduated,
+    raydiumPool
   };
 }
 
@@ -7807,7 +8041,7 @@ async function fetchPumpFunLatestCandidates(options = {}) {
 
   const requestOptions = { headers, timeoutMs: options.timeoutMs || 2_500 };
   const latestUrl = `${CONFIG.pumpFunApiBase}/coins/latest`;
-  const listUrl = `${CONFIG.pumpFunApiBase}/coins?offset=0&limit=50&sort=created_timestamp&order=DESC&includeNsfw=false`;
+  const listUrl = `${CONFIG.pumpFunApiBase}/coins?offset=0&limit=100&sort=created_timestamp&order=DESC&includeNsfw=false`;
   const [latest, list] = await Promise.all([
     fetchJson(latestUrl, requestOptions).catch(() => null),
     fetchJson(listUrl, requestOptions).catch(() => [])
@@ -7822,6 +8056,27 @@ function sniperCandidatesFromPumpFunData(items, source = "pumpfun") {
       if (!coin || typeof coin !== "object") return null;
       const tokenMint = firstString(coin.mint, coin.address, coin.tokenAddress, coin.token_address, coin.ca, coin.contractAddress);
       if (!tokenMint) return null;
+      const raydiumPool = firstString(coin.raydium_pool, coin.raydiumPool, coin.poolAddress, coin.pool, coin.amm_pool);
+      const bondingProgressPct = firstMeaningfulNumber(
+        coin.bondingProgressPct,
+        coin.bondingProgress,
+        coin.bonding_curve_progress,
+        coin.bondingCurveProgress,
+        coin.progress,
+        coin.pumpProgress,
+        coin.graduationProgress,
+        coin.completion,
+        coin.completePct
+      ) || 0;
+      const graduated = Boolean(
+        coin.complete
+        || coin.completed
+        || coin.bonded
+        || coin.isBonded
+        || coin.graduated
+        || coin.isGraduated
+        || raydiumPool
+      );
       return {
         tokenMint,
         source,
@@ -7832,9 +8087,21 @@ function sniperCandidatesFromPumpFunData(items, source = "pumpfun") {
           icon: firstString(coin.image_uri, coin.image, coin.imageUrl, coin.metadata?.image),
           pairCreatedAt: normalizePairCreatedAt(firstString(coin.created_timestamp, coin.createdAt, coin.created_at, coin.timestamp)),
           marketCap: firstNumber(coin.usd_market_cap, coin.market_cap, coin.marketCap, coin.fdv),
-          volume: firstNumber(coin.volume, coin.volumeUsd, coin.volume_usd),
+          fdv: firstNumber(coin.fdv, coin.marketCap, coin.usd_market_cap, coin.market_cap),
+          liquidityUsd: firstNumber(coin.liquidity_usd, coin.liquidityUsd, coin.liquidity?.usd, coin.liquidity, coin.currentLiquidityUsd),
+          volume: typeof coin.volume === "object" && coin.volume !== null ? coin.volume : firstNumber(coin.volume, coin.volumeUsd, coin.volume_usd),
+          volume5m: firstNumber(coin.volume5m, coin.volume_5m, coin.volume?.m5, coin.volume?.["5m"]),
+          volume15m: firstNumber(coin.volume15m, coin.volume_15m, coin.volumeM15, coin.volume?.m15, coin.volume?.["15m"]),
+          volume30m: firstNumber(coin.volume30m, coin.volume_30m, coin.volumeM30, coin.volume?.m30, coin.volume?.["30m"]),
+          volumeH1: firstNumber(coin.volumeH1, coin.volume_h1, coin.volume_1h, coin.volume?.h1, coin.volume?.["1h"]),
+          volume24h: firstNumber(coin.volume24h, coin.volume_h24, coin.volume_24h, coin.volume?.h24, coin.volume?.["24h"]),
+          txns: coin.txns || coin.transactions || null,
           virtualSolReserves: firstNumber(coin.virtual_sol_reserves),
-          virtualTokenReserves: firstNumber(coin.virtual_token_reserves)
+          virtualTokenReserves: firstNumber(coin.virtual_token_reserves),
+          bondingProgressPct,
+          graduated,
+          isGraduated: graduated,
+          raydiumPool
         }
       };
     })
@@ -7876,6 +8143,12 @@ function sniperCandidatesFromDexPairs(pairs, source) {
           websiteUrl: links.websiteUrl,
           twitterUrl: links.twitterUrl,
           telegramUrl: links.telegramUrl,
+          dexId: pair?.dexId || pair?.dexName || "",
+          dexName: pair?.dexId || pair?.dexName || "",
+          pairAddress: pair?.pairAddress || "",
+          pairUrl: pair?.url || "",
+          raydiumPool: /raydium|meteora|orca/i.test(String(pair?.dexId || pair?.dexName || "")) ? (pair?.pairAddress || "") : "",
+          graduated: Boolean(/raydium|meteora|orca/i.test(String(pair?.dexId || pair?.dexName || "")) && String(token.address || "").toLowerCase().endsWith("pump")),
           pairCreatedAt: pair?.pairCreatedAt || null,
           marketCap: firstNumber(pair?.marketCap, pair?.fdv),
           fdv: pair?.fdv || null,
@@ -10605,6 +10878,10 @@ function ensureWebProfileDefaults(store, userId) {
     profile.referralPayoutWallet = "";
     changed = true;
   }
+  if (!profile.referralStats || typeof profile.referralStats !== "object") {
+    profile.referralStats = { totalLamports: "0", payoutCount: 0, referrals: {} };
+    changed = true;
+  }
 
   if (changed || !store.profiles[key]) {
     profile.updatedAt = profile.updatedAt || new Date().toISOString();
@@ -11028,6 +11305,7 @@ async function webUserSummary(userId) {
     referralCode: profile.referralCode || "",
     referralLink: profile.referralCode ? webReferralLink(profile.referralCode) : "",
     referralPayoutWallet: profile.referralPayoutWallet || "",
+    referralStats: normalizeReferralStats(profile.referralStats),
     referredByCode: profile.referredByCode || "",
     showOnTraderBoard: Boolean(profile.showOnTraderBoard),
     traderBoardWalletMode: ["all", "manual"].includes(String(profile.traderBoardWalletMode || "")) ? profile.traderBoardWalletMode : "all",
@@ -12076,6 +12354,7 @@ async function webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, buyRe
   const stopLossPct = parseOptionalTriggerPercent(String(body.stopLossPct || "0"));
   const sellDelaySeconds = parseOptionalSellDelaySeconds(firstString(body.sellDelay, body.sellDelaySeconds, "off"));
   const sellPercent = parsePercent(String(body.sellPercent || "100"));
+  const triggerSellPercent = (takeProfitPct || stopLossPct) ? 100 : sellPercent;
 
   if (!takeProfitPct && !stopLossPct && sellDelaySeconds <= 0) {
     return null;
@@ -12084,13 +12363,16 @@ async function webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, buyRe
   const now = Date.now();
   const sellAfterAt = planSellAfterAtFromNow({ sellDelaySeconds }, now);
   const amountLamports = Number(buyResult.amountLamports || 0);
+  const basisLamports = Number(buyResult.swapLamports || amountLamports);
   const tokenAmount = buyResult.tokenDeltaAmount || buyResult.outputAmount || null;
   const walletIndex = parseWebWalletIndex(body.walletIndex || "1");
   const planWallet = {
     label: wallet.label,
     publicKey: wallet.publicKey,
     walletIndex,
-    basisLamports: amountLamports,
+    basisLamports,
+    grossLamports: amountLamports,
+    feeLamports: buyResult.feeLamports,
     tokenOutAmount: tokenAmount,
     buySignature: buyResult.signature,
     currentLoop: 1,
@@ -12099,6 +12381,8 @@ async function webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, buyRe
     stopLossPct: null,
     completedTakeProfitLevels: [],
     sellAfterAt,
+    triggerSellPercent,
+    exitStatus: "watching",
     status: "watching",
     lastCheckedAt: null,
     lastMovePct: null
@@ -12116,7 +12400,7 @@ async function webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, buyRe
     sellDelaySeconds,
     sellAfterAt,
     sellPercent,
-    triggerSellPercent: sellPercent,
+    triggerSellPercent,
     loopCount: 1,
     loopDelaySeconds: 0,
     takeProfitPct,
@@ -12141,6 +12425,7 @@ async function webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, buyRe
     wallet: publicWallet(wallet),
     sellDelaySeconds,
     sellPercent,
+    triggerSellPercent,
     takeProfitPct,
     stopLossPct,
     slippageBps,
@@ -12164,6 +12449,7 @@ async function webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, buyRe
     sellAfterAt,
     sellDelaySeconds,
     sellPercent,
+    triggerSellPercent,
     takeProfitPct,
     stopLossPct,
     takeProfitSummary: formatPlanTakeProfitSummary(plan),
@@ -12244,7 +12530,9 @@ async function webCreateManagedBuyPlan(userId, wallets, body = {}, options = {})
         label: wallet.label,
         publicKey: wallet.publicKey,
         walletIndex,
-        basisLamports: amountLamports,
+        basisLamports: Number(result.swapLamports || amountLamports),
+        grossLamports: amountLamports,
+        feeLamports: result.feeLamports,
         tokenOutAmount: tokenAmount,
         buySignature: result.signature,
         currentLoop: 1,
@@ -12538,6 +12826,117 @@ function webBundleResult(type, tokenMint, walletCount, successCount, results) {
     dexUrl: dexScreenerUrl(tokenMint),
     results,
     message: `${type === "bundle_buy" ? "Bundle buy" : "Bundle sell"} complete: ${successCount}/${walletCount} wallet(s) succeeded.`
+  };
+}
+
+function cleanLaunchText(value, maxLength = 256) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength);
+}
+
+function cleanLaunchUrl(value) {
+  const text = String(value || "").trim();
+  if (!text || text.startsWith("@")) return "";
+  try {
+    const url = new URL(text);
+    if (!["http:", "https:"].includes(url.protocol)) return "";
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
+function normalizeLaunchResponseMint(data = {}) {
+  return firstString(
+    data.tokenMint,
+    data.mint,
+    data.ca,
+    data.address,
+    data.contractAddress,
+    data.token?.mint,
+    data.token?.address,
+    data.result?.tokenMint,
+    data.result?.mint,
+    data.result?.ca,
+    data.result?.address
+  );
+}
+
+async function webLaunchPumpCoin(userId, body = {}) {
+  if (!CONFIG.pumpLaunchEnabled || !CONFIG.pumpLaunchApiUrl) {
+    const error = new Error("Direct Pump launch is not enabled yet. Save the launch sheet or use the official Pump fallback link.");
+    error.statusCode = 501;
+    throw error;
+  }
+
+  const name = cleanLaunchText(body.name, 64);
+  const symbol = cleanTickerSymbol(body.symbol || body.ticker || "");
+  const description = cleanLaunchText(body.description, 800);
+  if (!name) {
+    const error = new Error("Token name is required.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const imageDataUrl = String(body.imageDataUrl || "");
+  if (imageDataUrl && !/^data:image\/(png|jpe?g|webp|gif);base64,/i.test(imageDataUrl)) {
+    const error = new Error("Upload a PNG, JPG, WEBP, or GIF token image.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const payload = {
+    name,
+    symbol,
+    description,
+    website: cleanLaunchUrl(body.website),
+    twitter: cleanLaunchUrl(body.x) || cleanLaunchUrl(body.twitter),
+    telegram: cleanLaunchUrl(body.telegram),
+    imageDataUrl,
+    imageName: cleanLaunchText(body.imageName, 120),
+    imageType: cleanLaunchText(body.imageType, 80),
+    clientRequestId: crypto.randomUUID(),
+    source: "slimewire_web"
+  };
+
+  const headers = { "Content-Type": "application/json" };
+  if (CONFIG.pumpLaunchApiKey) headers.Authorization = `Bearer ${CONFIG.pumpLaunchApiKey}`;
+  const timeoutMs = Number.isFinite(CONFIG.pumpLaunchTimeoutMs) && CONFIG.pumpLaunchTimeoutMs > 0
+    ? CONFIG.pumpLaunchTimeoutMs
+    : 30000;
+  const providerResult = await fetchJson(CONFIG.pumpLaunchApiUrl, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload),
+    timeoutMs
+  });
+  const tokenMint = normalizeLaunchResponseMint(providerResult);
+  const status = firstString(providerResult.status, providerResult.state, tokenMint ? "launched" : "submitted");
+
+  await audit("web_launch_pump_coin", {
+    userId,
+    symbol,
+    status,
+    tokenMint: tokenMint ? shortMint(tokenMint) : "",
+    hasImage: Boolean(imageDataUrl)
+  });
+
+  return {
+    status,
+    tokenMint,
+    signature: firstString(
+      providerResult.signature,
+      providerResult.txSignature,
+      providerResult.transactionSignature,
+      providerResult.txid,
+      providerResult.result?.signature
+    ),
+    requestId: firstString(providerResult.requestId, providerResult.id, providerResult.result?.requestId, payload.clientRequestId),
+    pumpUrl: tokenMint ? pumpFunUrl(tokenMint) : "",
+    dexUrl: tokenMint ? dexScreenerUrl(tokenMint) : "",
+    message: tokenMint ? `Pump launch returned ${shortMint(tokenMint)}.` : "Pump launch submitted. Waiting for token CA."
   };
 }
 
@@ -13632,11 +14031,27 @@ function needsKolMetadataHydration(row) {
     || !row.imageUrl;
 }
 
+function parseNumericValue(value) {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  const compact = raw.replace(/[$,%_\s,]/g, "");
+  const match = compact.match(/^([-+]?\d*\.?\d+)([kmb])?$/i);
+  if (!match) return null;
+  const number = Number(match[1]);
+  if (!Number.isFinite(number)) return null;
+  const suffix = String(match[2] || "").toLowerCase();
+  if (suffix === "k") return number * 1_000;
+  if (suffix === "m") return number * 1_000_000;
+  if (suffix === "b") return number * 1_000_000_000;
+  return number;
+}
+
 function firstMeaningfulNumber(...values) {
   const finite = [];
   for (const value of values) {
-    if (value === null || value === undefined || value === "") continue;
-    const number = Number(value);
+    const number = parseNumericValue(value);
     if (Number.isFinite(number)) finite.push(number);
   }
   return finite.find((number) => number !== 0) ?? finite[0] ?? null;
@@ -14520,8 +14935,7 @@ function firstString(...values) {
 
 function firstNumber(...values) {
   for (const value of values) {
-    if (value === null || value === undefined || value === "") continue;
-    const number = Number(value);
+    const number = parseNumericValue(value);
     if (Number.isFinite(number)) return number;
   }
   return null;
@@ -14535,8 +14949,10 @@ function firstArray(...values) {
 }
 
 function normalizePercentLike(value) {
-  if (!Number.isFinite(Number(value))) return null;
-  const number = Number(value);
+  const number = parseNumericValue(value);
+  if (!Number.isFinite(number)) return null;
+  const raw = String(value ?? "");
+  if (raw.includes("%")) return number;
   if (Math.abs(number) <= 1) return number * 100;
   return number;
 }
@@ -14630,6 +15046,20 @@ async function webLivePairs(userId, bucket = "live", options = {}) {
       livePairsSharedCache.set(cacheKey, { cachedAt: Date.now(), value, promise: null });
     }
     return value;
+  } catch (error) {
+    if (cached.value) {
+      const staleValue = {
+        ...cached.value,
+        stale: true,
+        refreshError: error?.message || "Live feed refresh failed.",
+        message: `Showing last good ${livePairBucketLabel(safeBucket)} feed. Refresh failed, retrying automatically.`
+      };
+      if (CONFIG.livePairsSharedCacheMs > 0) {
+        livePairsSharedCache.set(cacheKey, { cachedAt: cached.cachedAt || Date.now(), value: staleValue, promise: null });
+      }
+      return staleValue;
+    }
+    throw error;
   } finally {
     const current = livePairsSharedCache.get(cacheKey);
     if (current?.promise === promise) {
@@ -14653,9 +15083,10 @@ async function buildWebLivePairs(userId, bucket = "live", options = {}) {
   const baseRows = uniqueSniperScoreRows(candidates.map(livePairCandidateToRow).filter(Boolean))
     .sort(compareWebLivePairs)
     .slice(0, isLive ? 110 : 240);
-  const enrichedRows = safeBucket !== "live" || CONFIG.livePairsImageEnrich
-    ? await enrichWebLivePairsForImages(baseRows)
-    : baseRows;
+  let enrichedRows = baseRows;
+  if (safeBucket !== "live" || CONFIG.livePairsImageEnrich) {
+    enrichedRows = await enrichWebLivePairsForImages(baseRows).catch(() => baseRows);
+  }
   const targetLimit = livePairBucketLimit(safeBucket);
   let liveRows = uniqueSniperScoreRows(enrichedRows)
     .filter((row) => isWebLivePairCandidate(row, safeBucket))
@@ -14679,9 +15110,11 @@ async function buildWebLivePairs(userId, bucket = "live", options = {}) {
     liveRows = uniqueSniperScoreRows([...liveRows, ...relaxedRows]).sort((a, b) => compareWebLivePairs(a, b, sort));
   }
   const safety = await maybeFilterWebLivePairsForSafety(liveRows, targetLimit);
-  const safeRows = sortLivePairs(CONFIG.livePairsImageEnrich && safeBucket === "live"
-    ? await enrichWebLivePairsForImages(safety.rows)
-    : safety.rows, sort).slice(0, targetLimit);
+  let rowsForSort = safety.rows;
+  if (CONFIG.livePairsImageEnrich && safeBucket === "live") {
+    rowsForSort = await enrichWebLivePairsForImages(safety.rows).catch(() => safety.rows);
+  }
+  const safeRows = sortLivePairs(rowsForSort, sort).slice(0, targetLimit);
   rememberSniperScanRows(`web:${userId}`, `livepairs:${safeBucket}`, safeRows);
 
   return {
@@ -14748,13 +15181,32 @@ function livePairCandidateToRow(candidate) {
   const pairAgeSeconds = pairCreatedAt ? Math.max(0, Math.floor((Date.now() - Number(pairCreatedAt)) / 1000)) : null;
   const volumeObject = typeof profile.volume === "object" && profile.volume !== null ? profile.volume : {};
   const volumeNumber = typeof profile.volume === "object" ? null : firstNumber(profile.volume);
-  const marketCap = firstNumber(profile.marketCap, profile.usd_market_cap, profile.market_cap, profile.fdv) || 0;
-  const liquidityUsd = firstNumber(profile.liquidityUsd, profile.liquidity_usd, profile.liquidity?.usd, profile.liquidity) || 0;
-  const volume5m = firstNumber(volumeObject.m5, profile.volume5m, profile.volume_5m) || 0;
-  const volumeM15 = firstNumber(volumeObject.m15, volumeObject.m15m, profile.volume15m, profile.volume_15m, profile.volumeM15) || 0;
-  const volumeM30 = firstNumber(volumeObject.m30, volumeObject.m30m, profile.volume30m, profile.volume_30m, profile.volumeM30) || 0;
-  const volumeH1 = firstNumber(volumeObject.h1, profile.volumeH1, profile.volume_h1, volumeNumber) || 0;
-  const volumeH24 = firstNumber(volumeObject.h24, volumeObject.d1, profile.volume24h, profile.volume_h24, profile.volumeH24) || 0;
+  const marketCap = firstMeaningfulNumber(
+    profile.marketCap,
+    profile.usd_market_cap,
+    profile.usdMarketCap,
+    profile.market_cap,
+    profile.mcap,
+    profile.mc,
+    profile.fdv,
+    profile.fdvUsd,
+    profile.fdv_usd
+  ) || 0;
+  const liquidityUsd = firstMeaningfulNumber(
+    profile.liquidityUsd,
+    profile.liquidityUSD,
+    profile.currentLiquidityUsd,
+    profile.current_liquidity_usd,
+    profile.poolLiquidityUsd,
+    profile.liquidity_usd,
+    profile.liquidity?.usd,
+    profile.liquidity
+  ) || 0;
+  const volume5m = firstMeaningfulNumber(volumeObject.m5, volumeObject["5m"], profile.volume5m, profile.volume_5m, profile.volumeM5) || 0;
+  const volumeM15 = firstMeaningfulNumber(volumeObject.m15, volumeObject.m15m, volumeObject["15m"], profile.volume15m, profile.volume_15m, profile.volumeM15) || 0;
+  const volumeM30 = firstMeaningfulNumber(volumeObject.m30, volumeObject.m30m, volumeObject["30m"], profile.volume30m, profile.volume_30m, profile.volumeM30) || 0;
+  const volumeH1 = firstMeaningfulNumber(volumeObject.h1, volumeObject["1h"], profile.volumeH1, profile.volume_h1, profile.volume_1h, volumeNumber) || 0;
+  const volumeH24 = firstMeaningfulNumber(volumeObject.h24, volumeObject.d1, volumeObject["24h"], profile.volume24h, profile.volume_h24, profile.volume_24h, profile.volumeH24) || 0;
   const m5 = normalizePercentLike(profile.priceChange?.m5 ?? profile.price_change_m5 ?? profile.m5) || 0;
   const h1 = normalizePercentLike(profile.priceChange?.h1 ?? profile.price_change_h1 ?? profile.h1) || 0;
   const txns5m = profile.txns?.m5 || profile.transactions?.m5 || {};
@@ -14771,6 +15223,16 @@ function livePairCandidateToRow(candidate) {
     profile.sniperWallets,
     profile.sniper_wallets
   ) || 0);
+  const bondingProgressPct = firstMeaningfulNumber(
+    profile.bondingProgressPct,
+    profile.bondingProgress,
+    profile.bonding_curve_progress,
+    profile.bondingCurveProgress,
+    profile.pumpProgress,
+    profile.graduationProgress,
+    profile.completion,
+    profile.completePct
+  ) || 0;
   const source = candidate.source || "live";
   const symbol = firstString(profile.symbol, profile.ticker) || shortMint(candidate.tokenMint);
   const name = firstString(profile.name) || "Fresh Launch";
@@ -14787,12 +15249,30 @@ function livePairCandidateToRow(candidate) {
   const websiteUrl = firstString(profile.websiteUrl, profile.website_url, profile.website, profile.url, profile.links?.website);
   const twitterUrl = firstString(profile.twitterUrl, profile.twitter_url, profile.twitter, profile.xUrl, profile.links?.twitter, profile.links?.x);
   const telegramUrl = firstString(profile.telegramUrl, profile.telegram_url, profile.telegram, profile.links?.telegram);
+  const dexId = firstString(profile.dexId, profile.dexName, profile.market, profile.platform);
+  const dexName = firstString(profile.dexName, dexId);
+  const pairAddress = firstString(profile.pairAddress, profile.address);
+  const pairUrl = firstString(profile.pairUrl, profile.url);
+  const raydiumPool = firstString(profile.raydiumPool, profile.raydium_pool, profile.poolAddress);
   const isPump = String(source).toLowerCase().includes("pump") || isPumpStyleToken({
     tokenMint: candidate.tokenMint,
     symbol,
     name,
-    source
+    source,
+    dexId,
+    dexName
   });
+  const graduated = Boolean(
+    profile.graduated
+    || profile.isGraduated
+    || profile.bonded
+    || profile.isBonded
+    || profile.complete
+    || profile.completed
+    || profile.bondingComplete
+    || raydiumPool
+    || (isPump && /\b(raydium|meteora|orca)\b/i.test(`${dexId} ${dexName} ${source}`))
+  );
 
   const row = {
     tokenMint: candidate.tokenMint,
@@ -14835,7 +15315,15 @@ function livePairCandidateToRow(candidate) {
     websiteUrl,
     twitterUrl,
     telegramUrl,
+    dexId,
+    dexName,
+    pairAddress,
+    pairUrl,
     sniperCount,
+    bondingProgressPct,
+    graduated,
+    isGraduated: graduated,
+    raydiumPool,
     isPump,
     pumpUrl: isPump ? pumpFunUrl(candidate.tokenMint) : ""
   };
@@ -14845,6 +15333,7 @@ function livePairCandidateToRow(candidate) {
   const bestPick = computeBestPickScore(row);
   return {
     ...row,
+    slimeScopeCategory: classifySlimeScopePair(row),
     bestPickScore: bestPick.score,
     bestPickLabel: bestPick.label,
     bestPickInputs: bestPick.inputs,
@@ -14916,24 +15405,46 @@ async function enrichWebLivePairsForImages(rows) {
     const websiteUrl = firstString(dexMeta.websiteUrl, row.websiteUrl);
     const twitterUrl = firstString(dexMeta.twitterUrl, row.twitterUrl);
     const telegramUrl = firstString(dexMeta.telegramUrl, row.telegramUrl);
+    let dexId = firstString(dexMeta.dexId, row.dexId, row.dexName);
+    let dexName = firstString(dexMeta.dexName, row.dexName, dexId);
+    let pairAddress = firstString(dexMeta.pairAddress, row.pairAddress);
+    let pairUrl = firstString(dexMeta.pairUrl, row.pairUrl);
+    let raydiumPool = firstString(dexMeta.raydiumPool, row.raydiumPool);
+    let bondingProgressPct = firstMeaningfulNumber(dexMeta.bondingProgressPct, row.bondingProgressPct, row.bondingProgress) || 0;
+    let graduated = Boolean(row.graduated || row.isGraduated || dexMeta.graduated || dexMeta.isGraduated || isGraduatedSlimeScopePair({ ...row, ...dexMeta }));
 
-    if (webLivePairIsPump(row) && (!imageUrl || !marketCap || !liquidityUsd || !volumeH1 || !volumeM15)) {
+    if (webLivePairIsPump(row) && (!imageUrl || !marketCap || !liquidityUsd || !volumeH1 || !volumeM15 || !bondingProgressPct || !graduated)) {
       const pumpMeta = await getPumpFunTokenMetadata(row.tokenMint, { timeoutMs: 900 }).catch(() => ({}));
       imageUrl = firstString(pumpMeta.imageUrl, imageUrl);
       symbol = symbol && symbol !== shortMint(row.tokenMint) ? symbol : firstString(pumpMeta.symbol, symbol);
       name = name && name !== "Fresh Launch" ? name : firstString(pumpMeta.name, name);
-      marketCap = Number(marketCap) > 0 ? marketCap : firstNumber(pumpMeta.marketCap, marketCap) || 0;
-      liquidityUsd = Number(liquidityUsd) > 0 ? liquidityUsd : firstNumber(pumpMeta.liquidityUsd, liquidityUsd) || 0;
-      volume5m = Number(volume5m) > 0 ? volume5m : firstNumber(pumpMeta.volume?.m5, volume5m) || 0;
-      volumeM15 = Number(volumeM15) > 0 ? volumeM15 : firstNumber(pumpMeta.volume?.m15, volumeM15) || 0;
-      volumeM30 = Number(volumeM30) > 0 ? volumeM30 : firstNumber(pumpMeta.volume?.m30, volumeM30) || 0;
-      volumeH1 = Number(volumeH1) > 0 ? volumeH1 : firstNumber(pumpMeta.volume?.h1, volumeH1) || 0;
-      volumeH24 = Number(volumeH24) > 0 ? volumeH24 : firstNumber(pumpMeta.volume?.h24, volumeH24) || 0;
+      marketCap = Number(marketCap) > 0 ? marketCap : firstMeaningfulNumber(pumpMeta.marketCap, marketCap) || 0;
+      liquidityUsd = Number(liquidityUsd) > 0 ? liquidityUsd : firstMeaningfulNumber(pumpMeta.liquidityUsd, liquidityUsd) || 0;
+      volume5m = Number(volume5m) > 0 ? volume5m : firstMeaningfulNumber(pumpMeta.volume?.m5, volume5m) || 0;
+      volumeM15 = Number(volumeM15) > 0 ? volumeM15 : firstMeaningfulNumber(pumpMeta.volume?.m15, volumeM15) || 0;
+      volumeM30 = Number(volumeM30) > 0 ? volumeM30 : firstMeaningfulNumber(pumpMeta.volume?.m30, volumeM30) || 0;
+      volumeH1 = Number(volumeH1) > 0 ? volumeH1 : firstMeaningfulNumber(pumpMeta.volume?.h1, volumeH1) || 0;
+      volumeH24 = Number(volumeH24) > 0 ? volumeH24 : firstMeaningfulNumber(pumpMeta.volume?.h24, volumeH24) || 0;
       pairCreatedAt = firstNumber(pairCreatedAt, pumpMeta.pairCreatedAt) || null;
+      bondingProgressPct = Number(bondingProgressPct) > 0 ? bondingProgressPct : firstMeaningfulNumber(pumpMeta.bondingProgressPct, bondingProgressPct) || 0;
+      graduated = Boolean(graduated || pumpMeta.graduated || pumpMeta.isGraduated);
+      raydiumPool = firstString(raydiumPool, pumpMeta.raydiumPool);
     }
 
     const pairAgeSeconds = pairCreatedAt ? Math.max(0, Math.floor((Date.now() - Number(pairCreatedAt)) / 1000)) : row.pairAgeSeconds;
     const isPump = webLivePairIsPump({ ...row, symbol, name });
+    const scopeProbe = {
+      ...row,
+      dexId,
+      dexName,
+      marketCap,
+      bondingProgressPct,
+      graduated,
+      isGraduated: graduated,
+      raydiumPool,
+      isPump
+    };
+    graduated = Boolean(graduated || isGraduatedSlimeScopePair(scopeProbe));
 
     const nextRow = {
       ...row,
@@ -14954,8 +15465,17 @@ async function enrichWebLivePairsForImages(rows) {
       pairAgeSeconds,
       pairAgeMinutes: Number.isFinite(Number(pairAgeSeconds)) ? Math.floor(Number(pairAgeSeconds) / 60) : row.pairAgeMinutes,
       isPump,
-      pumpUrl: isPump ? pumpFunUrl(row.tokenMint) : ""
+      pumpUrl: isPump ? pumpFunUrl(row.tokenMint) : "",
+      dexId,
+      dexName,
+      pairAddress,
+      pairUrl,
+      raydiumPool,
+      bondingProgressPct: slimeScopeProgressPct({ ...scopeProbe, bondingProgressPct }),
+      graduated,
+      isGraduated: graduated
     };
+    nextRow.slimeScopeCategory = classifySlimeScopePair(nextRow);
     if (isPumpMayhemToken({ ...row, ...nextRow, metadata: dexMeta })) {
       enriched[index] = null;
       return;
@@ -15109,6 +15629,10 @@ function webLivePairRow(row) {
     bestPickWarnings: bestPick.warnings,
     scoreBreakdown: bestPick.inputs,
     scoreWarnings: bestPick.warnings,
+    bondingProgressPct: slimeScopeProgressPct(row),
+    slimeScopeCategory: row.slimeScopeCategory || classifySlimeScopePair(row),
+    graduated: Boolean(row.graduated || row.isGraduated || isGraduatedSlimeScopePair(row)),
+    isGraduated: Boolean(row.graduated || row.isGraduated || isGraduatedSlimeScopePair(row)),
     safetyNote: row.safetyNote || "Mint/freeze safety passed",
     liveLabel: Number.isFinite(Number(row.pairAgeSeconds)) && Number(row.pairAgeSeconds) <= 60 ? "Seconds Old" : row.pairAgeMinutes !== null && Number(row.pairAgeMinutes) <= 30 ? "Just Listed" : isPumpStyleToken(row) ? "Pump Feed" : "Live Pair"
   };
@@ -15151,6 +15675,15 @@ function webSniperRow(row) {
     websiteUrl: row.websiteUrl || "",
     twitterUrl: row.twitterUrl || "",
     telegramUrl: row.telegramUrl || "",
+    dexId: row.dexId || "",
+    dexName: row.dexName || "",
+    pairAddress: row.pairAddress || "",
+    pairUrl: row.pairUrl || "",
+    raydiumPool: row.raydiumPool || "",
+    bondingProgressPct: slimeScopeProgressPct(row),
+    slimeScopeCategory: row.slimeScopeCategory || classifySlimeScopePair(row),
+    graduated: Boolean(row.graduated || row.isGraduated || isGraduatedSlimeScopePair(row)),
+    isGraduated: Boolean(row.graduated || row.isGraduated || isGraduatedSlimeScopePair(row)),
     isPump,
     pumpUrl: row.pumpUrl || (isPump ? pumpFunUrl(row.tokenMint) : ""),
     score: row.score,
