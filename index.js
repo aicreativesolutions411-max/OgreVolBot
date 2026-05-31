@@ -262,6 +262,7 @@ function loadConfig() {
   const minExitLiquidityUsd = Number.parseInt(process.env.MIN_EXIT_LIQUIDITY_USD || "250", 10);
   const stopLossCheckIntervalMs = Number.parseInt(process.env.STOP_LOSS_CHECK_INTERVAL_MS || "2000", 10);
   const stopLossTriggerBufferPct = Number.parseFloat(process.env.STOP_LOSS_TRIGGER_BUFFER_PCT || "1.5");
+  const stopLossExitSlippageBps = Number.parseInt(process.env.STOP_LOSS_EXIT_SLIPPAGE_BPS || "1500", 10);
 
   if (!Number.isInteger(bundleFeeBps) || bundleFeeBps < 0 || bundleFeeBps > 1000) {
     throw new Error("TRADE_FEE_BPS/BUNDLE_FEE_BPS must be an integer from 0 to 1000.");
@@ -395,6 +396,10 @@ function loadConfig() {
     throw new Error("STOP_LOSS_TRIGGER_BUFFER_PCT must be from 0 to 5.");
   }
 
+  if (!Number.isInteger(stopLossExitSlippageBps) || stopLossExitSlippageBps < 1 || stopLossExitSlippageBps > 5000) {
+    throw new Error("STOP_LOSS_EXIT_SLIPPAGE_BPS must be an integer from 1 to 5000.");
+  }
+
   try {
     new PublicKey(feeWallet);
   } catch {
@@ -423,6 +428,8 @@ function loadConfig() {
     pumpLaunchApiUrl: (process.env.PUMP_LAUNCH_API_URL || process.env.PUMP_LAUNCH_API_BASE || "").trim(),
     pumpLaunchApiKey: process.env.PUMP_LAUNCH_API_KEY || "",
     pumpLaunchTimeoutMs: Number.parseInt(process.env.PUMP_LAUNCH_TIMEOUT_MS || "30000", 10),
+    pumpLaunchBodyLimitBytes: Number.parseInt(process.env.PUMP_LAUNCH_BODY_LIMIT_BYTES || "12000000", 10),
+    pumpLaunchImageMaxBytes: Number.parseInt(process.env.PUMP_LAUNCH_IMAGE_MAX_BYTES || "2800000", 10),
     photonNewPairsUrl: (process.env.PHOTON_NEW_PAIRS_URL || "").trim(),
     photonApiKey: process.env.PHOTON_API_KEY || "",
     livePairsRpcSafety,
@@ -433,6 +440,7 @@ function loadConfig() {
     minExitLiquidityUsd,
     stopLossCheckIntervalMs,
     stopLossTriggerBufferPct,
+    stopLossExitSlippageBps,
     solanaTrackerApiKey: process.env.SOLANA_TRACKER_API_KEY || "",
     solanaTrackerApiBase: (process.env.SOLANA_TRACKER_API_BASE || "https://data.solanatracker.io").replace(/\/$/, ""),
     solanaTrackerKolLimit,
@@ -1015,7 +1023,10 @@ async function handleWebApiRequest(request, response, requestUrl) {
     }
 
     if (request.method === "POST" && pathname === "/api/web/launch/coin") {
-      const body = await readJsonRequestBody(request, 6_000_000);
+      const bodyLimit = Number.isFinite(CONFIG.pumpLaunchBodyLimitBytes) && CONFIG.pumpLaunchBodyLimitBytes > 0
+        ? CONFIG.pumpLaunchBodyLimitBytes
+        : 12_000_000;
+      const body = await readJsonRequestBody(request, bodyLimit);
       const result = await webLaunchPumpCoin(auth.userId, body);
       sendWebJson(request, response, 200, {
         ok: true,
@@ -1284,18 +1295,26 @@ function readRequestBody(request, maxBytes = 0) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let totalBytes = 0;
+    let tooLarge = false;
     request.on("data", (chunk) => {
       totalBytes += chunk.length;
       if (maxBytes > 0 && totalBytes > maxBytes) {
-        const error = new Error("Request body is too large.");
-        error.statusCode = 413;
-        reject(error);
-        request.destroy();
+        tooLarge = true;
+        chunks.length = 0;
         return;
       }
+      if (tooLarge) return;
       chunks.push(chunk);
     });
-    request.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    request.on("end", () => {
+      if (tooLarge) {
+        const error = new Error("Upload is too large. Use a smaller image or compress it before launching.");
+        error.statusCode = 413;
+        reject(error);
+        return;
+      }
+      resolve(Buffer.concat(chunks).toString("utf8"));
+    });
     request.on("error", reject);
   });
 }
@@ -4821,6 +4840,21 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
     return { changed: false, message: null };
   }
 
+  if (
+    !triggerReason
+    && isPriceExitTrigger(planWallet.triggerReason)
+    && Number.parseInt(planWallet.failures || 0, 10) > 0
+    && !["sold", "confirmed", "failed", "cancelled"].includes(String(planWallet.exitStatus || planWallet.status || "").toLowerCase())
+  ) {
+    triggerReason = planWallet.triggerReason;
+    triggerMeta = {
+      kind: /^stop-loss\b/i.test(String(planWallet.triggerReason || "")) ? "stop-loss" : "take-profit",
+      sellPercent: /^stop-loss\b/i.test(String(planWallet.triggerReason || ""))
+        ? 100
+        : (planWallet.triggerSellPercent ?? plan.triggerSellPercent ?? 100)
+    };
+  }
+
   if (!triggerReason && planHasPriceExit(plan, planWallet)) {
     const lastCheckedAt = Date.parse(planWallet.lastCheckedAt || "");
     const timerDue = now >= Date.parse(planWallet.sellAfterAt || plan.sellAfterAt);
@@ -4894,7 +4928,11 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
     planWallet.updatedAt = triggeredAt;
     invalidateWalletReadCache(wallet.publicKey);
     const sellPercent = effectiveTimedSellPercent(plan, planWallet, triggerReason, triggerMeta);
-    const sell = await sellTokenFromWallet(wallet, plan.tokenMint, sellPercent, plan.slippageBps, {
+    const exitSlippageBps = isPriceExitTrigger(triggerReason)
+      ? Math.max(Number(plan.slippageBps || 0), CONFIG.stopLossExitSlippageBps)
+      : plan.slippageBps;
+    planWallet.exitSlippageBps = exitSlippageBps;
+    const sell = await sellTokenFromWallet(wallet, plan.tokenMint, sellPercent, exitSlippageBps, {
       baseRawAmount: planWallet.tokenOutAmount,
       userId: plan.userId
     });
@@ -4976,6 +5014,8 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
     }
 
     planWallet.status = "sold";
+    planWallet.exitStatus = "confirmed";
+    planWallet.soldAt = new Date().toISOString();
     return {
       changed: true,
       message: `${formatTimedSellSuccessLine(planWallet, sell, triggerReason, plan.loopCount || 1)}`,
@@ -5505,7 +5545,11 @@ async function estimatePlanWalletMove(plan, wallet, sellPercentOverride = null) 
       slippageBps: plan.slippageBps
     });
   } catch (quoteError) {
-    return estimatePlanWalletMoveFromDexPair(plan, token, amount, basis, quoteError);
+    try {
+      return await estimatePlanWalletMoveFromPumpFun(plan, token, amount, basis, quoteError);
+    } catch {
+      return estimatePlanWalletMoveFromDexPair(plan, token, amount, basis, quoteError);
+    }
   }
 
   const estimatedOut = BigInt(order.outAmount || order.outputAmount || 0);
@@ -5513,6 +5557,62 @@ async function estimatePlanWalletMove(plan, wallet, sellPercentOverride = null) 
   const estimatedNetOut = estimatedOut > estimatedFee ? estimatedOut - estimatedFee : 0n;
   const movePct = (Number(estimatedNetOut - basis) / Number(basis)) * 100;
   return { estimatedOut, estimatedNetOut, basis, movePct, source: "jupiter" };
+}
+
+async function estimatePlanWalletMoveFromPumpFun(plan, token, amount, basis, quoteError) {
+  const metadata = await getPumpFunTokenMetadata(plan.tokenMint, { timeoutMs: 1_800 });
+  const decimals = Number(token?.decimals);
+  const priceSol = pumpFunPriceSol(metadata, decimals);
+
+  if (!Number.isFinite(priceSol) || priceSol <= 0 || !Number.isInteger(decimals)) {
+    throw quoteError;
+  }
+
+  const tokenUnits = Number(amount) / (10 ** decimals);
+  const estimatedOutNumber = tokenUnits * priceSol * LAMPORTS_PER_SOL;
+  if (!Number.isFinite(estimatedOutNumber) || estimatedOutNumber <= 0) {
+    throw quoteError;
+  }
+
+  const estimatedOut = BigInt(Math.max(0, Math.floor(estimatedOutNumber)));
+  const estimatedFee = BigInt(calculateFeeLamports(estimatedOut));
+  const estimatedNetOut = estimatedOut > estimatedFee ? estimatedOut - estimatedFee : 0n;
+  const movePct = (Number(estimatedNetOut - basis) / Number(basis)) * 100;
+
+  return {
+    estimatedOut,
+    estimatedNetOut,
+    basis,
+    movePct,
+    source: "pumpfun",
+    quoteError: friendlyError(quoteError)
+  };
+}
+
+function pumpFunPriceSol(metadata = {}, tokenDecimals = 6) {
+  const direct = firstMeaningfulNumber(
+    metadata.priceSol,
+    metadata.priceNative,
+    metadata.priceInSol,
+    metadata.price_sol,
+    metadata.price_native
+  );
+  if (Number.isFinite(direct) && direct > 0) return direct;
+
+  const virtualSolReserves = firstMeaningfulNumber(metadata.virtualSolReserves, metadata.virtual_sol_reserves);
+  const virtualTokenReserves = firstMeaningfulNumber(metadata.virtualTokenReserves, metadata.virtual_token_reserves);
+  const decimals = Number.isInteger(Number(tokenDecimals)) ? Number(tokenDecimals) : 6;
+  if (!Number.isFinite(virtualSolReserves) || virtualSolReserves <= 0 || !Number.isFinite(virtualTokenReserves) || virtualTokenReserves <= 0) {
+    return null;
+  }
+
+  const solUnits = virtualSolReserves > 10_000 ? virtualSolReserves / LAMPORTS_PER_SOL : virtualSolReserves;
+  const tokenUnits = virtualTokenReserves / (10 ** decimals);
+  if (!Number.isFinite(solUnits) || !Number.isFinite(tokenUnits) || tokenUnits <= 0) {
+    return null;
+  }
+
+  return solUnits / tokenUnits;
 }
 
 async function estimatePlanWalletMoveFromDexPair(plan, token, amount, basis, quoteError) {
@@ -7711,6 +7811,9 @@ async function getPumpFunTokenMetadata(tokenMint, options = {}) {
     symbol: coin?.symbol || "",
     name: coin?.name || "",
     imageUrl: coin?.image_uri || coin?.image || coin?.metadata?.image || "",
+    priceSol: firstMeaningfulNumber(coin?.priceSol, coin?.price_sol, coin?.priceNative, coin?.price_native, coin?.priceInSol) || null,
+    virtualSolReserves: firstMeaningfulNumber(coin?.virtual_sol_reserves, coin?.virtualSolReserves) || null,
+    virtualTokenReserves: firstMeaningfulNumber(coin?.virtual_token_reserves, coin?.virtualTokenReserves) || null,
     marketCap: firstMeaningfulNumber(coin?.usd_market_cap, coin?.market_cap, coin?.marketCap, coin?.fdv, coin?.mcap, coin?.mc) || null,
     fdv: firstMeaningfulNumber(coin?.fdv, coin?.marketCap, coin?.usd_market_cap, coin?.market_cap, coin?.mcap, coin?.mc) || null,
     liquidityUsd: firstMeaningfulNumber(coin?.liquidity_usd, coin?.liquidityUsd, coin?.liquidity?.usd, coin?.liquidity, coin?.currentLiquidityUsd) || null,
@@ -12848,6 +12951,18 @@ function cleanLaunchUrl(value) {
   }
 }
 
+function cleanLaunchBoolean(value) {
+  if (typeof value === "boolean") return value;
+  const text = String(value || "").trim().toLowerCase();
+  return ["1", "true", "yes", "on"].includes(text);
+}
+
+function cleanLaunchNumber(value, fallback = 0, min = 0, max = 10000) {
+  const parsed = Number.parseFloat(String(value ?? "").replace(/,/g, "").trim());
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
+}
+
 function normalizeLaunchResponseMint(data = {}) {
   return firstString(
     data.tokenMint,
@@ -12886,6 +13001,17 @@ async function webLaunchPumpCoin(userId, body = {}) {
     error.statusCode = 400;
     throw error;
   }
+  const imageMaxBytes = Number.isFinite(CONFIG.pumpLaunchImageMaxBytes) && CONFIG.pumpLaunchImageMaxBytes > 0
+    ? CONFIG.pumpLaunchImageMaxBytes
+    : 2_800_000;
+  if (imageDataUrl && Buffer.byteLength(imageDataUrl, "utf8") > imageMaxBytes) {
+    const error = new Error("Token image is still too large after compression. Use a smaller square JPG, PNG, or WEBP and try again.");
+    error.statusCode = 413;
+    throw error;
+  }
+
+  const creatorFeeBps = cleanLaunchNumber(body.creatorFeeBps, 0, 0, 1000);
+  const devBuyEnabled = cleanLaunchBoolean(body.devBuyEnabled);
 
   const payload = {
     name,
@@ -12897,6 +13023,14 @@ async function webLaunchPumpCoin(userId, body = {}) {
     imageDataUrl,
     imageName: cleanLaunchText(body.imageName, 120),
     imageType: cleanLaunchText(body.imageType, 80),
+    creatorFeeBps,
+    burnCreatorFees: cleanLaunchBoolean(body.burnCreatorFees),
+    creatorFeeRecipient: cleanLaunchText(body.creatorFeeRecipient || body.feeRecipient, 64),
+    devBuy: {
+      enabled: devBuyEnabled,
+      amountSol: cleanLaunchNumber(body.devBuySol, 0, 0, 1000),
+      walletIndex: cleanLaunchText(body.devWalletIndex, 24)
+    },
     clientRequestId: crypto.randomUUID(),
     source: "slimewire_web"
   };
@@ -15129,7 +15263,7 @@ async function buildWebLivePairs(userId, bucket = "live", options = {}) {
     refreshSeconds: CONFIG.livePairsRefreshSeconds,
     message: safeRows.length
       ? livePairStatusMessage(safeRows.length, safety.stats, safeBucket)
-      : `${livePairBucketLabel(safeBucket)} did not find matching pairs right now. It will refresh while this tab is open.`
+      : `${livePairBucketLabel(safeBucket)} has no rows in this window yet. The feed keeps scanning and will fill as fresh pairs qualify.`
   };
 }
 
@@ -15345,17 +15479,16 @@ function livePairCandidateToRow(candidate) {
 function livePairStatusMessage(count, stats = {}, bucket = "live") {
   const label = livePairBucketLabel(bucket);
   if (stats.relaxedAge) {
-    return `${label} found ${count} nearby age-match pair(s). Trade safety runs before any buy.`;
+    return `${label}: ${count} nearby pair(s). Auto-refreshing with the closest fresh matches.`;
   }
   if (stats.rpcSafetySkipped) {
-    return `${label} found ${count} pair(s). Trade safety runs before any buy.`;
+    return `${label}: ${count} live pair(s). Auto-refreshing.`;
   }
-  const checked = Number(stats.accepted || 0);
   const pending = Number(stats.pending || 0);
   if (pending > 0) {
-    return `${label} found ${count} pair(s). ${checked} mint/freeze checked; ${pending} still settling on-chain.`;
+    return `${label}: ${count} pair(s). ${pending} still settling while the feed keeps updating.`;
   }
-  return `${label} found ${count} mint/freeze checked pair(s).`;
+  return `${label}: ${count} pair(s). Auto-refreshing.`;
 }
 
 async function maybeFilterWebLivePairsForSafety(rows, limit = 12) {

@@ -6,6 +6,10 @@ import {
   shouldShowOgreTekNav,
   validatePerpOrder
 } from "./perps.js";
+import {
+  smartChartSuggestion,
+  tradeActionLabelFromPreset
+} from "./liveTerminalUi.js";
 
 const config = window.OGRE_PORTAL_CONFIG || {};
 const ogreTekConfig = resolveOgreTekConfig(config);
@@ -110,6 +114,10 @@ const state = {
       : "intro",
   activeTab: window.location.pathname.includes("/ogre-tek")
     ? "ogreTek"
+    : window.location.pathname.includes("/chart")
+      ? "smartChart"
+    : window.location.pathname.includes("/slime-scope")
+      ? "slimeScope"
     : window.location.pathname.includes("/tx-audit")
     ? "txAudit"
     : window.location.pathname.includes("/trade")
@@ -120,6 +128,8 @@ const state = {
   terminalSubtab: "positions",
   terminalSort: "best",
   terminalToken: "",
+  smartChartToken: "",
+  smartChartZoom: 80,
   terminalAutoToken: "",
   terminalTxSignature: "",
   terminalTxAudit: null,
@@ -149,7 +159,9 @@ const state = {
   livePairsLoadingByBucket: {},
   livePairsLastUpdatedAt: "",
   livePairsLastUpdatedByBucket: {},
+  livePairsRefreshErrorByBucket: {},
   livePairBucket: "live",
+  slimeScopeMode: "new",
   launchResult: null,
   launchCoinDraft: getStoredLaunchCoinDraft(),
   launchCoinStatus: "",
@@ -164,9 +176,13 @@ const state = {
   presets: { trade: [], bundle: [] },
   watchlist: { rows: [], count: 0 },
   watchlistLoading: false,
-  selectedTradePresetId: "trade-default-scalp",
-  selectedBundlePresetId: "bundle-default-six",
-  terminalTradeCollapsed: false,
+  selectedTradePresetId: "",
+  selectedBundlePresetId: "",
+  quickBuyAmountOverride: "",
+  terminalTradeCollapsed: true,
+  walletConnectMenuOpen: false,
+  walletConnectReturnPath: "/terminal",
+  walletConnectStatus: "",
   ogreTek: {
     loading: false,
     error: "",
@@ -252,7 +268,9 @@ function routeForPath(pathname = window.location.pathname) {
 
 function tabForPath(pathname = window.location.pathname) {
   if (pathname.includes("/ogre-tek")) return "ogreTek";
+  if (pathname.includes("/chart")) return "smartChart";
   if (pathname.includes("/tx-audit")) return "txAudit";
+  if (pathname.includes("/slime-scope")) return "slimeScope";
   if (pathname.includes("/trade")) return "trade";
   if (pathname.includes("/kol")) return "kol";
   if (pathname.includes("/live-pairs")) return "live";
@@ -447,7 +465,13 @@ function visibleElement(selector) {
 }
 
 function walletConnectStatusElement() {
-  return visibleElement("[data-wallet-connect-status]");
+  return visibleElement("[data-wallet-connect-modal] [data-wallet-connect-status]")
+    || visibleElement("[data-wallet-connect-status]");
+}
+
+function setWalletConnectStatus(message = "") {
+  state.walletConnectStatus = String(message || "");
+  writeText(walletConnectStatusElement(), state.walletConnectStatus);
 }
 
 function loginCredentialsFromForm({ requirePassword = false } = {}) {
@@ -562,14 +586,10 @@ async function createAccountAndConnectWallet() {
       state.loginCollapsed = true;
       await loadAll();
     }
-    state.activeTab = "profile";
-    render();
-    await connectBrowserWallet("solana");
-    if (state.user) {
-      state.route = "terminal";
-      window.history.pushState({}, "", "/terminal");
-      render();
-    }
+    state.activeTab = "terminal";
+    state.route = "terminal";
+    window.history.pushState({}, "", "/terminal");
+    openWalletConnectChooser({ returnPath: "/terminal" });
   } catch (error) {
     setError(error.message);
   }
@@ -725,14 +745,53 @@ async function loadLivePairs({ silent = false, bucket = state.livePairBucket, re
   try {
     const forceQuery = force ? "&force=true" : "";
     const data = await api(`/api/web/live-pairs?bucket=${encodeURIComponent(safeBucket)}&sort=${encodeURIComponent(state.terminalSort || "best")}${forceQuery}`);
-    const value = data.livePairs;
+    const label = LIVE_PAIR_BUCKETS.find(([id]) => id === safeBucket)?.[1] || "Live";
+    const value = data.livePairs || {
+      bucket: safeBucket,
+      rows: [],
+      refreshedAt: new Date().toISOString(),
+      refreshSeconds: 5,
+      message: `${label} feed returned no rows yet. Retrying automatically.`
+    };
     const updatedAt = value?.refreshedAt || new Date().toISOString();
+    const nextErrors = { ...(state.livePairsRefreshErrorByBucket || {}) };
+    delete nextErrors[safeBucket];
+    state.livePairsRefreshErrorByBucket = nextErrors;
     state.livePairsByBucket = { ...state.livePairsByBucket, [safeBucket]: value };
     state.livePairsLastUpdatedByBucket = { ...state.livePairsLastUpdatedByBucket, [safeBucket]: updatedAt };
     if (isActiveBucket) {
       state.livePairs = value;
       state.livePairsLastUpdatedAt = updatedAt;
     }
+    return value;
+  } catch (error) {
+    const message = publicErrorMessage(error?.message || "Live feed refresh failed.");
+    const label = LIVE_PAIR_BUCKETS.find(([id]) => id === safeBucket)?.[1] || "Live";
+    const previous = state.livePairsByBucket[safeBucket] || (isActiveBucket ? state.livePairs : null);
+    const staleValue = previous
+      ? {
+          ...previous,
+          stale: true,
+          refreshError: message,
+          message: `Showing last good ${label} feed. Refresh failed, retrying automatically.`
+        }
+      : {
+          bucket: safeBucket,
+          rows: [],
+          refreshedAt: new Date().toISOString(),
+          refreshSeconds: 5,
+          stale: true,
+          refreshError: message,
+          message: `${label} refresh failed. Retrying automatically.`
+        };
+    state.livePairsRefreshErrorByBucket = { ...(state.livePairsRefreshErrorByBucket || {}), [safeBucket]: message };
+    state.livePairsByBucket = { ...state.livePairsByBucket, [safeBucket]: staleValue };
+    state.livePairsLastUpdatedByBucket = { ...state.livePairsLastUpdatedByBucket, [safeBucket]: staleValue.refreshedAt };
+    if (isActiveBucket) {
+      state.livePairs = staleValue;
+      state.livePairsLastUpdatedAt = staleValue.refreshedAt;
+    }
+    return staleValue;
   } finally {
     const nextLoading = { ...state.livePairsLoadingByBucket };
     delete nextLoading[safeBucket];
@@ -751,7 +810,7 @@ async function refreshLivePairBuckets({ silent = false, force = false } = {}) {
   await Promise.allSettled(otherBuckets.map((bucket) => (
     loadLivePairs({ silent: true, bucket, renderOnComplete: false, force })
   )));
-  if (state.activeTab === "live" || state.activeTab === "terminal") render();
+  if (state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "slimeScope") render();
 }
 
 function scheduleLivePairsAutoRefresh() {
@@ -760,12 +819,23 @@ function scheduleLivePairsAutoRefresh() {
     livePairsTimer = null;
   }
 
-  if (state.activeTab !== "live" && state.activeTab !== "terminal") return;
+  if (state.activeTab !== "live" && state.activeTab !== "terminal" && state.activeTab !== "slimeScope") return;
   const refreshSeconds = Number(currentLivePairs()?.refreshSeconds || 30);
   const delayMs = Math.max(3, refreshSeconds) * 1000;
-  livePairsTimer = setTimeout(() => {
-    if ((state.activeTab !== "live" && state.activeTab !== "terminal") || state.livePairsLoading) return;
-    refreshLivePairBuckets({ silent: true }).catch((error) => setError(error.message));
+  livePairsTimer = setTimeout(async () => {
+    const onLiveFeed = state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "slimeScope";
+    if (!onLiveFeed) return;
+    if (state.livePairsLoading) {
+      scheduleLivePairsAutoRefresh();
+      return;
+    }
+    try {
+      await refreshLivePairBuckets({ silent: true, force: true });
+    } catch {
+      // Keep the last good feed visible; the next timer retry reports status inline.
+    } finally {
+      scheduleLivePairsAutoRefresh();
+    }
   }, delayMs);
 }
 
@@ -775,9 +845,19 @@ function scheduleScannerAutoRefresh() {
     scanTimer = null;
   }
   if (state.activeTab !== "sniper") return;
-  scanTimer = setTimeout(() => {
-    if (state.activeTab !== "sniper" || state.loading) return;
-    loadScan(state.scanMode, { silent: true }).catch((error) => setError(error.message));
+  scanTimer = setTimeout(async () => {
+    if (state.activeTab !== "sniper") return;
+    if (state.loading) {
+      scheduleScannerAutoRefresh();
+      return;
+    }
+    try {
+      await loadScan(state.scanMode, { silent: true });
+    } catch (error) {
+      setError(error.message);
+    } finally {
+      scheduleScannerAutoRefresh();
+    }
   }, 20_000);
 }
 
@@ -787,9 +867,19 @@ function scheduleKolAutoRefresh() {
     kolTimer = null;
   }
   if ((state.activeTab !== "kol" && state.activeTab !== "terminal") || state.kolWallet) return;
-  kolTimer = setTimeout(() => {
-    if ((state.activeTab !== "kol" && state.activeTab !== "terminal") || state.kolLoading || state.kolWallet) return;
-    loadKolScan(state.kolMode, "", { silent: true }).catch((error) => setError(error.message));
+  kolTimer = setTimeout(async () => {
+    if ((state.activeTab !== "kol" && state.activeTab !== "terminal") || state.kolWallet) return;
+    if (state.kolLoading) {
+      scheduleKolAutoRefresh();
+      return;
+    }
+    try {
+      await loadKolScan(state.kolMode, "", { silent: true });
+    } catch (error) {
+      setError(error.message);
+    } finally {
+      scheduleKolAutoRefresh();
+    }
   }, 60_000);
 }
 
@@ -799,9 +889,15 @@ function scheduleWatchlistAutoRefresh() {
     watchlistTimer = null;
   }
   if ((state.activeTab !== "watchlist" && state.activeTab !== "terminal") || !state.user || !state.token) return;
-  watchlistTimer = setTimeout(() => {
+  watchlistTimer = setTimeout(async () => {
     if (state.activeTab !== "watchlist" && state.activeTab !== "terminal") return;
-    loadWatchlist({ silent: true }).catch((error) => setError(error.message));
+    try {
+      await loadWatchlist({ silent: true });
+    } catch (error) {
+      setError(error.message);
+    } finally {
+      scheduleWatchlistAutoRefresh();
+    }
   }, 30_000);
 }
 
@@ -895,8 +991,8 @@ function syncHealthLabel() {
 function activePresetSummary() {
   const trade = presetById("trade", state.selectedTradePresetId);
   const bundle = presetById("bundle", state.selectedBundlePresetId);
-  const tradeLabel = trade ? `${trade.name} ${trade.amountSol || ""} SOL` : "Trade custom";
-  const bundleLabel = bundle ? bundle.name : "Bundle custom";
+  const tradeLabel = trade ? `${trade.name} ${trade.amountSol || ""} SOL` : "No trade preset";
+  const bundleLabel = bundle ? bundle.name : "No bundle preset";
   return `Preset: ${tradeLabel} | ${bundleLabel}`;
 }
 
@@ -934,7 +1030,7 @@ function shouldDeferTerminalRender() {
   const tag = String(active.tagName || "").toLowerCase();
   const editable = active.isContentEditable || ["input", "textarea", "select"].includes(tag);
   if (!editable) return false;
-  return Boolean(active.closest(".fast-preset-builder, .preset-toolbar, .terminal-preset-strip, .preset-card, .order-ticket, .order-ticket-stack, .terminal-dock, .trade-side, .volume-grid, .sniper-setup, .wallet-exit-grid"));
+  return Boolean(active.closest(".fast-preset-builder, .preset-toolbar, .terminal-quick-buy-bar, .command-controls, .live-control-strip, .terminal-preset-strip, .preset-card, .order-ticket, .order-ticket-stack, .terminal-dock, .trade-side, .volume-grid, .sniper-setup, .wallet-exit-grid"));
 }
 
 function requestDeferredRender() {
@@ -996,6 +1092,7 @@ function render(options = {}) {
     writeText(logoutButton, "Log Out");
   }
   if (state.route === "terminal") renderTabs();
+  renderWalletConnectModal();
 }
 
 function renderTabs() {
@@ -1020,7 +1117,9 @@ function renderTabs() {
   if (state.activeTab === "volume") panel.innerHTML = volumeHtml();
   if (state.activeTab === "live") panel.innerHTML = livePairsHtml();
   if (state.activeTab === "liveTrades") panel.innerHTML = liveTradesHtml();
+  if (state.activeTab === "slimeScope") panel.innerHTML = slimeScopeHtml();
   if (state.activeTab === "watchlist") panel.innerHTML = watchlistHtml();
+  if (state.activeTab === "smartChart") panel.innerHTML = smartChartHtml();
   if (state.activeTab === "launchCoin") panel.innerHTML = launchCoinHtml();
   if (state.activeTab === "launch") panel.innerHTML = launchHtml();
   if (state.activeTab === "kol") panel.innerHTML = kolHtml();
@@ -1279,7 +1378,7 @@ function createWalletSection() {
               <button type="button" data-copy="${escapeHtml(connected.publicKey)}">Copy</button>
               <a href="https://solscan.io/account/${encodeURIComponent(connected.publicKey)}" target="_blank" rel="noreferrer">Solscan</a>
               <button type="button" data-connect-wallet="solana">Reconnect</button>
-              <button type="button" data-disconnect-wallet>Remove</button>
+              <button type="button" data-disconnect-wallet>Disconnect</button>
             </div>
           ` : `<small>No wallet connected yet.</small>`}
         </div>
@@ -1346,7 +1445,7 @@ function connectWalletSection() {
             <button type="button" data-copy="${escapeHtml(connected.publicKey)}">Copy</button>
             <a href="https://solscan.io/account/${encodeURIComponent(connected.publicKey)}" target="_blank" rel="noreferrer">Solscan</a>
             <button type="button" data-connect-wallet="solana">Reconnect</button>
-            <button type="button" data-disconnect-wallet>Remove</button>
+            <button type="button" data-disconnect-wallet>Disconnect</button>
           </div>
         ` : `
           <span>No browser wallet connected yet.</span>
@@ -1354,6 +1453,60 @@ function connectWalletSection() {
         `}
       </div>
       <small data-wallet-connect-status>${connected ? `Connected ${escapeHtml(connected.shortPublicKey || shortAddress(connected.publicKey))}.` : "Pick a wallet above. The wallet extension will ask you to approve the connection."}</small>
+    </section>
+  `;
+}
+
+function openWalletConnectChooser({ returnPath = "/terminal" } = {}) {
+  state.walletConnectMenuOpen = true;
+  state.walletConnectReturnPath = returnPath || "/terminal";
+  state.walletConnectStatus = state.user?.connectedWallet
+    ? `Connected ${shortAddress(state.user.connectedWallet.publicKey)}. Pick a provider to reconnect or switch.`
+    : "Pick a wallet. Your extension will ask you to approve.";
+  render({ force: true });
+}
+
+function renderWalletConnectModal() {
+  const modal = $("[data-wallet-connect-modal]");
+  if (!modal) return;
+  if (!state.walletConnectMenuOpen) {
+    modal.hidden = true;
+    modal.innerHTML = "";
+    return;
+  }
+
+  const connected = state.user?.connectedWallet || state.connectedWalletBalance;
+  modal.hidden = false;
+  modal.innerHTML = `
+    <div class="wallet-connect-backdrop" data-wallet-connect-close></div>
+    <section class="wallet-connect-dialog" role="dialog" aria-modal="true" aria-label="Connect wallet">
+      <div class="wallet-connect-dialog-head">
+        <div>
+          <h3>${connected ? "Reconnect Wallet" : "Connect Wallet"}</h3>
+          <p>${connected ? "Switch to a different wallet or disconnect the current public wallet." : "Connect Phantom, Solflare, Backpack, or another Solana wallet. Private keys never leave your wallet."}</p>
+        </div>
+        <button type="button" class="icon-button" data-wallet-connect-close aria-label="Close wallet connection panel">x</button>
+      </div>
+      ${connected ? `
+        <div class="connected-wallet-box modal-connected-wallet">
+          <span>${escapeHtml(connected.provider || "Solana Wallet")}</span>
+          <code>${escapeHtml(connected.publicKey || "")}</code>
+          <div class="card-actions compact">
+            <button type="button" data-copy="${escapeHtml(connected.publicKey || "")}">Copy</button>
+            <a href="https://solscan.io/account/${encodeURIComponent(connected.publicKey || "")}" target="_blank" rel="noreferrer">Solscan</a>
+            <button type="button" data-disconnect-wallet>Disconnect</button>
+          </div>
+        </div>
+      ` : ""}
+      <div class="wallet-provider-buttons modal-wallet-provider-buttons">
+        ${browserWalletChoices().map((wallet) => `
+          <button type="button" data-connect-wallet-provider="${wallet.id}" ${wallet.detected ? "" : `title="${escapeHtml(wallet.label)} extension not detected"`}>
+            <strong>${escapeHtml(connected ? `Switch to ${wallet.label}` : wallet.label)}</strong>
+            <small>${wallet.detected ? "Detected" : "Not detected"}</small>
+          </button>
+        `).join("")}
+      </div>
+      <small class="connect-status" data-wallet-connect-status>${escapeHtml(state.walletConnectStatus || "")}</small>
     </section>
   `;
 }
@@ -1400,12 +1553,30 @@ function xConnectSection() {
 function referralSection() {
   const code = state.user?.referralCode || "";
   const link = state.user?.referralLink || (code ? `${shareSiteUrl}?ref=${encodeURIComponent(code)}` : "");
+  const stats = state.user?.referralStats || {};
+  const referralRows = Array.isArray(stats.referrals) ? stats.referrals : [];
   return `
     <section class="create-wallet-card referral-card">
       <div>
         <h3>Referral</h3>
         <p>Share SlimeWire and optionally earn the referral split on users you bring in. This is separate from the trader board.</p>
       </div>
+      <div class="referral-stats-grid">
+        <span><small>Total earned</small><strong>${escapeHtml(stats.totalSol || "0")} SOL</strong></span>
+        <span><small>Payouts</small><strong>${escapeHtml(stats.payoutCount || 0)}</strong></span>
+        <span><small>Referral users</small><strong>${escapeHtml(referralRows.length)}</strong></span>
+      </div>
+      ${referralRows.length ? `
+        <div class="referral-breakdown">
+          ${referralRows.slice(0, 6).map((row) => `
+            <div class="referral-breakdown-row">
+              <span>${escapeHtml(row.userId || "user")}</span>
+              <strong>${escapeHtml(row.sol || "0")} SOL</strong>
+              <small>${escapeHtml(row.payoutCount || 0)} payout${Number(row.payoutCount || 0) === 1 ? "" : "s"}</small>
+            </div>
+          `).join("")}
+        </div>
+      ` : `<small>No referral payouts yet. They will appear here when referred users trade and referral fees are paid.</small>`}
       <label>
         Referral Payout Wallet
         <input data-referral-wallet type="text" placeholder="Wallet for referral fees" value="${escapeHtml(state.user?.referralPayoutWallet || "")}">
@@ -2137,6 +2308,15 @@ function walletGroupHtml(prefix, value = "") {
   `;
 }
 
+function walletSelectOptionsHtml(selectedIndex = "") {
+  if (!state.wallets.length) return `<option value="">No managed wallets loaded</option>`;
+  return state.wallets.map((wallet, index) => {
+    const value = String(wallet.index ?? index + 1);
+    const label = `${value}. ${wallet.label || "Wallet"} ${wallet.shortPublicKey || shortAddress(wallet.publicKey || "")}`;
+    return `<option value="${escapeHtml(value)}" ${String(selectedIndex) === value ? "selected" : ""}>${escapeHtml(label)}</option>`;
+  }).join("");
+}
+
 function fieldValue(selectSelector, customSelector, fallback = "") {
   const selected = $(selectSelector)?.value || fallback;
   if (selected !== "custom") return selected;
@@ -2147,10 +2327,39 @@ function fieldValue(selectSelector, customSelector, fallback = "") {
 
 function presetOptionsHtml(kind, selectedId = "") {
   const presets = state.presets?.[kind] || [];
-  if (!presets.length) return `<option value="custom" selected>Custom / manual</option>`;
+  const manualSelected = !selectedId || selectedId === "none" || selectedId === "manual";
+  const createLabel = kind === "bundle" ? "Create / edit bundle preset" : "Create / edit trade preset";
+  if (!presets.length) {
+    return `
+      <option value="" ${manualSelected ? "selected" : ""}>No preset / manual</option>
+      <option value="custom" ${selectedId === "custom" ? "selected" : ""}>${createLabel}</option>
+    `;
+  }
   return `
+    <option value="" ${manualSelected ? "selected" : ""}>No preset / manual</option>
     ${presets.map((preset) => `<option value="${escapeHtml(preset.id)}" ${preset.id === selectedId ? "selected" : ""}>${escapeHtml(preset.name)}</option>`).join("")}
-    <option value="custom" ${selectedId === "custom" ? "selected" : ""}>Custom / manual</option>
+    <option value="custom" ${selectedId === "custom" ? "selected" : ""}>${createLabel}</option>
+  `;
+}
+
+function quickBuyInputHtml() {
+  return `<input data-quick-buy-amount type="text" inputmode="decimal" autocomplete="off" placeholder="${escapeHtml(activeQuickBuyAmount() || "0.10")}" value="${escapeHtml(state.quickBuyAmountOverride)}">`;
+}
+
+function quickBuyPresetBarHtml(context = "scanner") {
+  return `
+    <div class="terminal-quick-buy-bar" aria-label="Quick buy settings">
+      <label>
+        Quick Buy SOL
+        ${quickBuyInputHtml()}
+      </label>
+      <label>
+        Preset
+        <select data-fast-trade-preset="${escapeHtml(context)}">
+          ${presetOptionsHtml("trade", state.selectedTradePresetId)}
+        </select>
+      </label>
+    </div>
   `;
 }
 
@@ -2223,6 +2432,10 @@ function repeatWaitSelectHtml(customFor, dataAttr, selected = "0") {
 function fastPresetToolbarHtml(context = "scanner") {
   return `
     <section class="preset-toolbar">
+      <label class="quick-buy-label">
+        Quick Buy SOL
+        ${quickBuyInputHtml()}
+      </label>
       <label>
         Fast Trade Preset
         <select data-fast-trade-preset="${escapeHtml(context)}">
@@ -2237,8 +2450,6 @@ function fastPresetToolbarHtml(context = "scanner") {
       </label>
       <button type="button" data-tab="trade">Edit Trade Presets</button>
       <button type="button" data-tab="bundle">Edit Bundle Presets</button>
-      ${state.selectedTradePresetId === "custom" ? fastTradePresetBuilderHtml() : ""}
-      ${state.selectedBundlePresetId === "custom" ? fastBundlePresetBuilderHtml() : ""}
     </section>
   `;
 }
@@ -2719,8 +2930,8 @@ function launchCoinHtml() {
       <article class="trade-card launch-coin-card">
         <div class="trade-head">
           <div>
-            <h3>Launch Coin</h3>
-            <p>Build the launch sheet here, open the official Pump create flow, then paste the live CA back into SlimeWire for Trade, Bundle, Snipe, or Volume presets.</p>
+            <h3><span class="launch-pill-icon" aria-hidden="true"></span>Launch Pump Coin</h3>
+            <p>Create the Pump launch from SlimeWire when the launch connector is enabled, then auto-load the returned CA into Trade, Bundle, Snipe, or Volume presets.</p>
           </div>
           <span class="pill">Ogre TeK</span>
         </div>
@@ -2742,7 +2953,8 @@ function launchCoinHtml() {
             </label>
             <label>
               Image
-              <input data-launch-coin-image type="file" accept="image/png,image/jpeg,image/webp,gif">
+              <input data-launch-coin-image type="file" accept="image/png,image/jpeg,image/webp,image/gif">
+              <span class="muted">Large images are compressed before upload so Render does not reject the launch.</span>
             </label>
             <label>
               Website
@@ -2760,18 +2972,56 @@ function launchCoinHtml() {
         </details>
 
         <details open class="launch-coin-section">
+          <summary>Creator / Dev Wallet</summary>
+          <div class="volume-grid">
+            <label>
+              Creator Fee
+              <select data-launch-coin-creator-fee>
+                <option value="0" ${String(draft.creatorFeeBps || "0") === "0" ? "selected" : ""}>None</option>
+                <option value="50" ${String(draft.creatorFeeBps || "") === "50" ? "selected" : ""}>0.5%</option>
+                <option value="100" ${String(draft.creatorFeeBps || "") === "100" ? "selected" : ""}>1%</option>
+                <option value="200" ${String(draft.creatorFeeBps || "") === "200" ? "selected" : ""}>2%</option>
+              </select>
+            </label>
+            <label>
+              Creator Fee Wallet
+              <input data-launch-coin-fee-recipient type="text" placeholder="Optional wallet address" value="${escapeHtml(draft.creatorFeeRecipient || "")}">
+            </label>
+            <label class="switch-row">
+              <input data-launch-coin-burn-creator-fees type="checkbox" ${draft.burnCreatorFees ? "checked" : ""}>
+              <span>Burn creator fees when supported by the launch connector</span>
+            </label>
+            <label class="switch-row">
+              <input data-launch-coin-dev-buy-enabled type="checkbox" ${draft.devBuyEnabled ? "checked" : ""}>
+              <span>Run Dev Wallet Initial Buy before the post-launch preset</span>
+            </label>
+            <label>
+              Dev Wallet
+              <select data-launch-coin-dev-wallet>
+                ${walletSelectOptionsHtml(draft.devWalletIndex || (draft.walletIndexes || [])[0] || "")}
+              </select>
+            </label>
+            <label>
+              Dev Buy SOL
+              <input data-launch-coin-dev-buy-sol type="text" inputmode="decimal" autocomplete="off" placeholder="0.05" value="${escapeHtml(draft.devBuySol || "")}">
+            </label>
+            <p class="muted full-span">If your Pump connector supports true creator/dev-buy launch settings, SlimeWire passes these fields through. Otherwise SlimeWire waits for the returned CA, runs the Dev Wallet Initial Buy first, then runs the selected post-launch action.</p>
+          </div>
+        </details>
+
+        <details open class="launch-coin-section">
           <summary>Post-Launch Presets</summary>
           <div class="volume-grid">
             <label>
               Live CA After Launch
-              <input data-launch-coin-ca type="text" placeholder="Paste CA once official launch is live" value="${escapeHtml(draft.tokenMint || "")}">
+              <input data-launch-coin-ca type="text" placeholder="Auto-filled after launch, or paste CA manually" value="${escapeHtml(draft.tokenMint || "")}">
             </label>
             <label>
-              Action After CA
+              Action After Launch
               <select data-launch-coin-action>
                 <option value="watch" ${draft.action === "watch" ? "selected" : ""}>Watch only</option>
-                <option value="trade" ${draft.action === "trade" ? "selected" : ""}>Send to Trade preset</option>
-                <option value="bundle" ${draft.action === "bundle" ? "selected" : ""}>Send to Bundle preset</option>
+                <option value="trade" ${draft.action === "trade" ? "selected" : ""}>Auto Trade with one-time setup</option>
+                <option value="bundle" ${draft.action === "bundle" ? "selected" : ""}>Auto Bundle with one-time setup</option>
                 <option value="launch-watch" ${draft.action === "launch-watch" ? "selected" : ""}>Arm Launch Snipe watcher</option>
               </select>
             </label>
@@ -2786,6 +3036,14 @@ function launchCoinHtml() {
               <select data-launch-coin-bundle-preset>
                 ${presetOptionsHtml("bundle", draft.bundlePresetId || state.selectedBundlePresetId)}
               </select>
+            </label>
+            <label>
+              Buy SOL Per Wallet
+              <input data-launch-coin-amount type="text" inputmode="decimal" autocomplete="off" placeholder="0.1" value="${escapeHtml(draft.amountSol || activeQuickBuyAmount() || "0.1")}">
+            </label>
+            <label>
+              Sell Percent
+              <input data-launch-coin-sell-percent type="number" min="1" max="100" step="1" value="${escapeHtml(draft.sellPercent || "100")}">
             </label>
             <label>
               Stop Loss
@@ -2824,22 +3082,31 @@ function launchCoinHtml() {
               </select>
               <input data-launch-coin-slippage-custom data-custom-for="launch-coin-slippage" type="number" min="1" max="5000" step="1" placeholder="Custom bps" hidden>
             </label>
+            <label class="full-span launch-inline-wallets">
+              Wallets / Groups For Post-Launch Buy
+              <span class="muted">Use these for this launch only, or pick a saved preset above.</span>
+              <div class="wallet-checks preset-wallets">
+                ${state.wallets.length ? walletChecksHtml("launch-coin", draft.walletIndexes || null) : `<p class="muted">Create or restore managed wallets first, or use Watch only.</p>`}
+              </div>
+            </label>
+            ${walletGroupHtml("launch-coin", draft.walletGroup || "")}
           </div>
         </details>
 
         <div class="quick-grid launch-coin-actions">
-          <button class="primary" type="button" data-launch-coin-save>Save Launch Sheet</button>
+          <button class="primary" type="button" data-launch-coin-submit>Launch on Pump</button>
+          <button type="button" data-launch-coin-save>Save Launch Sheet</button>
           <button type="button" data-launch-coin-use-ca>Use Live CA</button>
           <a href="https://pump.fun/create" target="_blank" rel="noreferrer">Open Pump Create</a>
           <a href="https://marketplace.dexscreener.com/" target="_blank" rel="noreferrer">Pay Dex / Edit Metadata</a>
         </div>
-        <p class="trade-status" data-launch-coin-status>${escapeHtml(state.launchCoinStatus || "Ready. Official Pump/Dex actions open in their own secure pages; SlimeWire stores only your launch draft and trading presets.")}</p>
+        <p class="trade-status" data-launch-coin-status>${escapeHtml(state.launchCoinStatus || "Ready. Launch on Pump submits through the SlimeWire launch connector when enabled. The official Pump and Dex links remain available as fallback tools.")}</p>
       </article>
 
       <aside class="trade-side">
         <article>
           <h3>How It Works</h3>
-          <p>SlimeWire prepares the details, presets, and post-launch CA workflow. Until a verified launch API is added, Pump creation and Dex marketplace payment stay on the official pages.</p>
+          <p>SlimeWire sends the token details to the configured launch connector, waits for the returned CA, then can route that CA into your selected preset. If the connector is not enabled, save the sheet and use the official fallback links.</p>
         </article>
         <article>
           <h3>Credit Use</h3>
@@ -2865,10 +3132,20 @@ function readLaunchCoinDraft() {
     website: ($("[data-launch-coin-website]")?.value || "").trim(),
     x: ($("[data-launch-coin-x]")?.value || "").trim(),
     telegram: ($("[data-launch-coin-telegram]")?.value || "").trim(),
+    creatorFeeBps: $("[data-launch-coin-creator-fee]")?.value || draft.creatorFeeBps || "0",
+    creatorFeeRecipient: ($("[data-launch-coin-fee-recipient]")?.value || "").trim(),
+    burnCreatorFees: Boolean($("[data-launch-coin-burn-creator-fees]")?.checked),
+    devBuyEnabled: Boolean($("[data-launch-coin-dev-buy-enabled]")?.checked),
+    devWalletIndex: $("[data-launch-coin-dev-wallet]")?.value || draft.devWalletIndex || "",
+    devBuySol: normalizedQuickBuyAmount($("[data-launch-coin-dev-buy-sol]")?.value || draft.devBuySol || "") || "",
     tokenMint: ($("[data-launch-coin-ca]")?.value || "").trim(),
     action: $("[data-launch-coin-action]")?.value || "watch",
-    tradePresetId: $("[data-launch-coin-trade-preset]")?.value || state.selectedTradePresetId,
-    bundlePresetId: $("[data-launch-coin-bundle-preset]")?.value || state.selectedBundlePresetId,
+    tradePresetId: $("[data-launch-coin-trade-preset]")?.value || "",
+    bundlePresetId: $("[data-launch-coin-bundle-preset]")?.value || "",
+    amountSol: normalizedQuickBuyAmount($("[data-launch-coin-amount]")?.value || draft.amountSol || "0.1") || "0.1",
+    sellPercent: $("[data-launch-coin-sell-percent]")?.value || draft.sellPercent || "100",
+    walletIndexes: checkedWalletIndexes("launch-coin"),
+    walletGroup: $("[data-launch-coin-group]")?.value?.trim() || "",
     stopLossPct: fieldValue("[data-launch-coin-sl]", "[data-launch-coin-sl-custom]", "8"),
     takeProfitPct: fieldValue("[data-launch-coin-tp]", "[data-launch-coin-tp-custom]", "40"),
     sellDelay: fieldValue("[data-launch-coin-delay]", "[data-launch-coin-delay-custom]", "off"),
@@ -2890,7 +3167,7 @@ function saveLaunchCoinDraft({ silent = false } = {}) {
     state.launchCoinDraft = draft;
     setStoredLaunchCoinDraft(draft);
     const label = draft.name || draft.symbol || "launch";
-    state.launchCoinStatus = `Saved ${label}. Open Pump Create, launch on the official page, then paste the live CA here to route into ${launchCoinActionLabel(draft.action)}.`;
+    state.launchCoinStatus = `Saved ${label}. Launch on Pump will use the SlimeWire launch connector when enabled; you can also paste a live CA to route into ${launchCoinActionLabel(draft.action)}.`;
     if (!silent) writeText($("[data-launch-coin-status]"), state.launchCoinStatus);
     return draft;
   } catch (error) {
@@ -2898,6 +3175,141 @@ function saveLaunchCoinDraft({ silent = false } = {}) {
     writeText($("[data-launch-coin-status]"), error.message);
     throw error;
   }
+}
+
+function readRawFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    if (!file) {
+      resolve("");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("Could not read that image file."));
+    reader.readAsDataURL(file);
+  });
+}
+
+function imageFromDataUrl(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Could not preview that image for compression."));
+    image.src = dataUrl;
+  });
+}
+
+async function readFileAsDataUrl(file) {
+  if (!file) return "";
+  const maxRawBytes = 12 * 1024 * 1024;
+  const maxPayloadBytes = 900_000;
+  if (file.size > maxRawBytes) {
+    throw new Error("Image is over 12MB. Use a smaller PNG, JPG, WEBP, or GIF.");
+  }
+
+  const rawDataUrl = await readRawFileAsDataUrl(file);
+  if (file.type === "image/gif") {
+    if (rawDataUrl.length > maxPayloadBytes) {
+      throw new Error("Animated GIF is too large for upload. Use a smaller GIF or a PNG/JPG/WEBP.");
+    }
+    return rawDataUrl;
+  }
+
+  try {
+    const image = await imageFromDataUrl(rawDataUrl);
+    const maxSide = 512;
+    const scale = Math.min(1, maxSide / Math.max(image.width || maxSide, image.height || maxSide));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round((image.width || maxSide) * scale));
+    canvas.height = Math.max(1, Math.round((image.height || maxSide) * scale));
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+    let compressed = canvas.toDataURL("image/webp", 0.72);
+    if (compressed.length > maxPayloadBytes) compressed = canvas.toDataURL("image/jpeg", 0.62);
+    if (compressed.length > maxPayloadBytes) compressed = canvas.toDataURL("image/jpeg", 0.48);
+    if (compressed.length <= maxPayloadBytes) return compressed;
+  } catch {
+    if (rawDataUrl.length <= maxPayloadBytes) return rawDataUrl;
+  }
+
+  throw new Error("Token image is too large after compression. Use a smaller square image and try again.");
+}
+
+async function launchCoinImagePayload() {
+  const imageFile = $("[data-launch-coin-image]")?.files?.[0];
+  if (!imageFile) return {};
+  const imageDataUrl = await readFileAsDataUrl(imageFile);
+  return {
+    imageName: imageFile.name,
+    imageType: imageDataUrl.startsWith("data:image/webp") ? "image/webp" : (imageFile.type || "application/octet-stream"),
+    imageDataUrl
+  };
+}
+
+function applyLaunchCoinMint(draft, tokenMint) {
+  const normalizedMint = String(tokenMint || "").trim();
+  state.launchCoinDraft = {
+    ...(draft || {}),
+    tokenMint: normalizedMint,
+    updatedAt: new Date().toISOString()
+  };
+  setStoredLaunchCoinDraft(state.launchCoinDraft);
+  state.terminalToken = normalizedMint;
+  state.terminalAutoToken = normalizedMint;
+  state.tradeToken = normalizedMint;
+  state.bundleToken = normalizedMint;
+  state.volumeToken = normalizedMint;
+  state.smartChartToken = normalizedMint;
+  if (draft?.tradePresetId) state.selectedTradePresetId = draft.tradePresetId;
+  if (draft?.bundlePresetId) state.selectedBundlePresetId = draft.bundlePresetId;
+  if (draft?.amountSol) state.quickBuyAmountOverride = normalizedQuickBuyAmount(draft.amountSol);
+}
+
+function launchCoinTradePresetFromDraft(draft = {}) {
+  const saved = draft.tradePresetId ? presetById("trade", draft.tradePresetId) : null;
+  const walletIndex = (draft.walletIndexes || [])[0] || saved?.walletIndex || saved?.walletIndexes?.[0] || "1";
+  return {
+    ...(saved || {}),
+    walletIndex,
+    amountSol: normalizedQuickBuyAmount(draft.amountSol || saved?.amountSol || "0.1") || "0.1",
+    takeProfitPct: draft.takeProfitPct ?? saved?.takeProfitPct ?? "40",
+    stopLossPct: draft.stopLossPct ?? saved?.stopLossPct ?? "8",
+    sellDelay: draft.sellDelay || saved?.sellDelay || "off",
+    sellPercent: draft.sellPercent || saved?.sellPercent || "100",
+    slippageBps: draft.slippageBps || saved?.slippageBps || "300"
+  };
+}
+
+function launchCoinDevBuyPresetFromDraft(draft = {}) {
+  const saved = draft.tradePresetId ? presetById("trade", draft.tradePresetId) : null;
+  const walletIndex = draft.devWalletIndex || (draft.walletIndexes || [])[0] || saved?.walletIndex || saved?.walletIndexes?.[0] || "1";
+  return {
+    ...(saved || {}),
+    walletIndex,
+    walletIndexes: [walletIndex],
+    amountSol: normalizedQuickBuyAmount(draft.devBuySol || draft.amountSol || saved?.amountSol || "0.05") || "0.05",
+    takeProfitPct: draft.takeProfitPct ?? saved?.takeProfitPct ?? "40",
+    stopLossPct: draft.stopLossPct ?? saved?.stopLossPct ?? "8",
+    sellDelay: draft.sellDelay || saved?.sellDelay || "off",
+    sellPercent: draft.sellPercent || saved?.sellPercent || "100",
+    slippageBps: draft.slippageBps || saved?.slippageBps || "300"
+  };
+}
+
+function launchCoinBundlePresetFromDraft(draft = {}) {
+  const saved = draft.bundlePresetId ? presetById("bundle", draft.bundlePresetId) : null;
+  return {
+    ...(saved || {}),
+    walletIndexes: (draft.walletIndexes?.length ? draft.walletIndexes : saved?.walletIndexes) || [],
+    walletGroup: draft.walletGroup || saved?.walletGroup || "",
+    amountSol: normalizedQuickBuyAmount(draft.amountSol || saved?.amountSol || "0.1") || "0.1",
+    takeProfitPct: draft.takeProfitPct ?? saved?.takeProfitPct ?? "60",
+    stopLossPct: draft.stopLossPct ?? saved?.stopLossPct ?? "10",
+    sellDelay: draft.sellDelay || saved?.sellDelay || "off",
+    sellPercent: draft.sellPercent || saved?.sellPercent || "100",
+    slippageBps: draft.slippageBps || saved?.slippageBps || "300"
+  };
 }
 
 async function useLaunchCoinMint() {
@@ -2910,13 +3322,7 @@ async function useLaunchCoinMint() {
     return;
   }
 
-  state.terminalToken = tokenMint;
-  state.terminalAutoToken = tokenMint;
-  state.tradeToken = tokenMint;
-  state.bundleToken = tokenMint;
-  state.volumeToken = tokenMint;
-  if (draft.tradePresetId) state.selectedTradePresetId = draft.tradePresetId;
-  if (draft.bundlePresetId) state.selectedBundlePresetId = draft.bundlePresetId;
+  applyLaunchCoinMint(draft, tokenMint);
 
   const nextTab = draft.action === "bundle"
     ? "bundle"
@@ -2928,6 +3334,71 @@ async function useLaunchCoinMint() {
   state.launchCoinStatus = `Loaded ${shortAddress(tokenMint)} into ${launchCoinActionLabel(draft.action)}. Review the selected preset before sending any trade.`;
   navigateTo("/terminal", nextTab);
   render({ force: true });
+}
+
+async function submitLaunchCoin() {
+  const status = $("[data-launch-coin-status]");
+  try {
+    const draft = saveLaunchCoinDraft({ silent: true });
+    if (!draft.name) throw new Error("Enter the token name before launching.");
+    if (!draft.symbol) throw new Error("Enter the ticker before launching.");
+
+    state.launchCoinStatus = "Submitting launch through SlimeWire...";
+    writeText(status, state.launchCoinStatus);
+
+    const imagePayload = await launchCoinImagePayload();
+    const data = await api("/api/web/launch/coin", {
+      method: "POST",
+      body: JSON.stringify({
+        ...draft,
+        ...imagePayload
+      })
+    });
+
+    const launch = data.launch || {};
+    const tokenMint = String(launch.tokenMint || launch.mint || launch.ca || launch.contractAddress || "").trim();
+    const signature = launch.signature ? ` Signature: ${shortAddress(launch.signature)}.` : "";
+
+    if (!tokenMint) {
+      state.launchCoinStatus = `Launch submitted, but the launch connector did not return a CA yet.${signature} Paste the CA above when it appears, then tap Use Live CA.`;
+      writeText(status, state.launchCoinStatus);
+      return;
+    }
+
+    applyLaunchCoinMint(draft, tokenMint);
+    state.launchCoinStatus = `Launch returned ${shortAddress(tokenMint)}.${signature} Routing into ${launchCoinActionLabel(draft.action)}...`;
+    writeText(status, state.launchCoinStatus);
+
+    if (draft.devBuyEnabled) {
+      state.launchCoinStatus = `Launch returned ${shortAddress(tokenMint)}.${signature} Running Dev Wallet Initial Buy first...`;
+      writeText(status, state.launchCoinStatus);
+      await quickPresetTrade(tokenMint, launchCoinDevBuyPresetFromDraft(draft));
+      state.launchCoinStatus = `Dev Wallet Initial Buy submitted. Continuing post-launch ${launchCoinActionLabel(draft.action)} setup...`;
+      writeText(status, state.launchCoinStatus);
+    }
+
+    if (draft.action === "trade") {
+      await quickPresetTrade(tokenMint, launchCoinTradePresetFromDraft(draft));
+      return;
+    }
+    if (draft.action === "bundle") {
+      await quickPresetBundle(tokenMint, launchCoinBundlePresetFromDraft(draft));
+      return;
+    }
+    if (draft.action === "launch-watch") {
+      state.activeTab = "launch";
+      navigateTo("/terminal", "launch");
+      render({ force: true });
+      return;
+    }
+
+    navigateTo("/terminal/chart", "smartChart");
+    render({ force: true });
+  } catch (error) {
+    state.launchCoinStatus = error.message || "Launch failed.";
+    writeText(status, state.launchCoinStatus);
+    setError(state.launchCoinStatus);
+  }
 }
 
 function launchScanSeconds() {
@@ -3573,16 +4044,34 @@ async function useXProfileAvatar() {
   await updateProfileAvatar({ avatarUrl: url, avatarSource: "x" }, "Saving X PFP...");
 }
 
-async function connectBrowserWallet(providerId) {
+async function connectBrowserWallet(providerId, options = {}) {
   const status = walletConnectStatusElement();
   const provider = walletProviderById(providerId);
   if (!provider) {
-    writeText(status, `${walletProviderLabel(providerId)} is not detected in this browser. Install/open the wallet extension, then refresh.`);
+    setWalletConnectStatus(`${walletProviderLabel(providerId)} is not detected in this browser. Install/open the wallet extension, then refresh.`);
     return;
   }
 
   try {
-    writeText(status, `Opening ${walletProviderLabel(providerId, provider)}...`);
+    const existingWallet = state.user?.connectedWallet?.publicKey || state.connectedWalletBalance?.publicKey || "";
+    if (existingWallet) {
+      const shouldReconnect = options.confirmSwitch === false
+        ? true
+        : window.confirm(
+            `Reconnect or switch wallet?\n\nCurrent wallet: ${shortAddress(existingWallet)}\n\nYour wallet extension will open so you can approve the wallet to use on Live Terminal.`
+          );
+      if (!shouldReconnect) {
+        setWalletConnectStatus("Wallet connection unchanged.");
+        navigateTo("/terminal", "terminal");
+        return;
+      }
+      try {
+        await Promise.resolve(provider.disconnect?.());
+      } catch {
+        // Some providers either do not expose disconnect or reject until the extension is focused.
+      }
+    }
+    setWalletConnectStatus(`Opening ${walletProviderLabel(providerId, provider)}...`);
     const result = await provider.connect?.({ onlyIfTrusted: false });
     const publicKey = result?.publicKey || provider.publicKey;
     const publicKeyText = publicKey?.toBase58?.() || publicKey?.toString?.() || "";
@@ -3605,11 +4094,17 @@ async function connectBrowserWallet(providerId) {
       provider: walletProviderLabel(providerId, provider),
       tokens: []
     };
-    writeText(status, `Connected ${shortAddress(publicKeyText)}.`);
-    navigateTo("/terminal", "terminal");
-    loadAll().catch((error) => setError(`Connected wallet saved. Balance refresh failed: ${error.message}`));
+    state.walletConnectMenuOpen = false;
+    setWalletConnectStatus(`Connected ${shortAddress(publicKeyText)}. Opening Live Terminal...`);
+    navigateTo(options.returnPath || state.walletConnectReturnPath || "/terminal", "terminal");
+    await Promise.allSettled([
+      loadAll(),
+      refreshLivePairBuckets({ silent: true, force: true }),
+      loadKolScan(state.kolMode, "", { silent: true })
+    ]);
+    render({ force: true });
   } catch (error) {
-    writeText(status, error.message || "Wallet connection was cancelled.");
+    setWalletConnectStatus(error.message || "Wallet connection was cancelled.");
   }
 }
 
@@ -3617,8 +4112,8 @@ async function disconnectBrowserWallet() {
   const status = walletConnectStatusElement();
   if (!state.user || !state.token) {
     state.connectedWalletBalance = null;
-    writeText(status, "Connected wallet removed.");
-    render();
+    setWalletConnectStatus("Connected wallet disconnected.");
+    render({ force: true });
     return;
   }
   try {
@@ -3645,10 +4140,10 @@ async function disconnectBrowserWallet() {
       connectedWallet: null
     });
     state.connectedWalletBalance = null;
-    writeText(status, "Connected wallet removed.");
-    render();
+    setWalletConnectStatus("Connected wallet disconnected.");
+    render({ force: true });
   } catch (error) {
-    writeText(status, error.message);
+    setWalletConnectStatus(error.message);
     setError(error.message);
   }
 }
@@ -3833,7 +4328,7 @@ async function executeWebBuy(amountSol, amountMode = "fixed") {
     if (data.trade?.autoExitPlan) {
       state.tradePlanResult = data.trade.autoExitPlan;
     }
-    await refreshAfterTrade(firstResultSignature(data.bundle));
+    await refreshAfterTrade(data.trade?.signature);
     state.activeTab = "trade";
     render();
   } catch (error) {
@@ -4163,11 +4658,11 @@ function presetById(kind, id) {
 }
 
 function ensureSelectedPresetsStillExist() {
-  if (!presetById("trade", state.selectedTradePresetId)) {
-    state.selectedTradePresetId = state.presets?.trade?.[0]?.id || "custom";
+  if (state.selectedTradePresetId === "custom" || (state.selectedTradePresetId && !presetById("trade", state.selectedTradePresetId))) {
+    state.selectedTradePresetId = "";
   }
-  if (!presetById("bundle", state.selectedBundlePresetId)) {
-    state.selectedBundlePresetId = state.presets?.bundle?.[0]?.id || "custom";
+  if (state.selectedBundlePresetId === "custom" || (state.selectedBundlePresetId && !presetById("bundle", state.selectedBundlePresetId))) {
+    state.selectedBundlePresetId = "";
   }
   if (state.editingTradePresetId && !presetById("trade", state.editingTradePresetId)) {
     state.editingTradePresetId = "";
@@ -4177,21 +4672,36 @@ function ensureSelectedPresetsStillExist() {
   }
 }
 
-async function quickPresetTrade(tokenMint) {
-  const preset = presetById("trade", state.selectedTradePresetId);
-  if (!preset || state.selectedTradePresetId === "custom") {
-    setError("Save the custom fast trade preset first, then tap Trade again.");
+function openManualTradeForToken(tokenMint, tab = "trade", message = "") {
+  if (tab === "bundle") {
+    state.bundleToken = tokenMint;
+  } else {
+    state.tradeToken = tokenMint;
+  }
+  state.activeTab = tab;
+  if (message) setError(message);
+  window.history.pushState({}, "", "/terminal");
+  render({ force: true });
+}
+
+async function quickPresetTrade(tokenMint, presetOverride = null) {
+  const preset = presetOverride || presetById("trade", state.selectedTradePresetId);
+  if (!preset) {
+    openManualTradeForToken(tokenMint, "trade", "No fast trade preset selected. Review the manual Trade form, then buy or sell.");
     return;
   }
   try {
     await ensureWebAccount(null, "Opening secure web profile...");
-    if (!state.wallets.some((wallet) => String(wallet.index) === String(preset.walletIndex || "1"))) {
+    const walletIndex = preset.walletIndex || (preset.walletIndexes || [])[0] || "1";
+    if (!state.wallets.some((wallet) => String(wallet.index) === String(walletIndex))) {
       throw new Error("This trade preset wallet is not loaded. Edit it in the Trade tab.");
     }
+    const amountSol = presetOverride ? normalizedQuickBuyAmount(preset.amountSol) : activeQuickBuyAmount(preset);
+    if (!amountSol) throw new Error("Set a quick buy amount first.");
     const payload = {
       tokenMint,
-      walletIndex: preset.walletIndex || "1",
-      amountSol: preset.amountSol,
+      walletIndex,
+      amountSol,
       slippageBps: preset.slippageBps,
       autoExit: true,
       takeProfitPct: preset.takeProfitPct,
@@ -4215,10 +4725,10 @@ async function quickPresetTrade(tokenMint) {
   }
 }
 
-async function quickPresetBundle(tokenMint) {
-  const preset = presetById("bundle", state.selectedBundlePresetId);
-  if (!preset || state.selectedBundlePresetId === "custom") {
-    setError("Save the custom fast bundle preset first, then tap Bundle again.");
+async function quickPresetBundle(tokenMint, presetOverride = null) {
+  const preset = presetOverride || presetById("bundle", state.selectedBundlePresetId);
+  if (!preset) {
+    openManualTradeForToken(tokenMint, "bundle", "No fast bundle preset selected. Review the Bundle form, then submit.");
     return;
   }
   try {
@@ -4227,7 +4737,9 @@ async function quickPresetBundle(tokenMint) {
       tokenMint,
       walletIndexes: (preset.walletIndexes || []).filter((index) => state.wallets.some((wallet) => String(wallet.index) === String(index))),
       walletGroup: preset.walletGroup || "",
-      amountSol: preset.amountSol,
+      amountSol: presetOverride
+        ? (normalizedQuickBuyAmount(preset.amountSol) || "0.1")
+        : activeBundleQuickBuyAmount(preset),
       percent: "100",
       slippageBps: preset.slippageBps,
       sellDelay: preset.sellDelay || "off",
@@ -4358,10 +4870,10 @@ function selectNewestUserPreset(kind, presets) {
 function selectPresetId(kind, id) {
   const exists = Boolean(id && presetById(kind, id));
   if (kind === "trade") {
-    state.selectedTradePresetId = exists ? id : (state.presets?.trade?.[0]?.id || "custom");
+    state.selectedTradePresetId = exists ? id : "";
   }
   if (kind === "bundle") {
-    state.selectedBundlePresetId = exists ? id : (state.presets?.bundle?.[0]?.id || "custom");
+    state.selectedBundlePresetId = exists ? id : "";
   }
 }
 
@@ -4559,7 +5071,10 @@ function walletsHtml() {
   const create = `${createWalletSection()}${importWalletSection()}${backupRestoreSection()}${downloadsHtml()}`;
   const walletTools = `
     <details class="wallet-tools-details">
-      <summary>Wallet Tools / Backup / Import</summary>
+      <summary>
+        <span>Wallet Tools / Backup / Import</span>
+        <span class="wallet-tools-drop-action">Drop <span class="wallet-tools-caret" aria-hidden="true">v</span></span>
+      </summary>
       ${create}
     </details>
   `;
@@ -4631,6 +5146,8 @@ function connectedWalletCardHtml() {
       <div class="card-actions">
         <button data-refresh-all>Refresh</button>
         <button data-copy="${escapeHtml(connected.publicKey)}">Copy</button>
+        <button type="button" data-connect-wallet="solana">Reconnect</button>
+        <button type="button" data-disconnect-wallet>Disconnect</button>
         <button data-tab="txAudit">Tx Audit</button>
         <a href="https://solscan.io/account/${encodeURIComponent(connected.publicKey)}" target="_blank" rel="noreferrer">Solscan</a>
       </div>
@@ -4812,6 +5329,25 @@ function selectedTerminalTokenRow() {
   return firstRow;
 }
 
+function selectedSmartChartTokenRow() {
+  const allRows = allVisibleSignalRows();
+  const rowForMint = (mint) => allRows.find((row) => String(row.tokenMint || "") === mint) || {
+    tokenMint: mint,
+    shortMint: shortAddress(mint),
+    symbol: shortAddress(mint),
+    name: "Custom Token",
+    dexUrl: dexUrl(mint),
+    pumpUrl: mint.toLowerCase().endsWith("pump") ? `https://pump.fun/coin/${encodeURIComponent(mint)}` : ""
+  };
+  const explicitMint = String(state.smartChartToken || state.terminalToken || state.tradeToken || "").trim();
+  if (explicitMint) return rowForMint(explicitMint);
+  return selectedTerminalTokenRow();
+}
+
+function dexChartEmbedUrl(mint) {
+  return `https://dexscreener.com/solana/${encodeURIComponent(mint)}?embed=1&theme=dark`;
+}
+
 function marketDataRowsByMint() {
   const rows = [
     ...Object.values(state.livePairsByBucket || {}).flatMap((feed) => feed?.rows || []),
@@ -4851,13 +5387,30 @@ function mergeMarketDataIntoRows(rows = []) {
   return (rows || []).map((row) => mergeMarketData(row, marketByMint.get(String(row?.tokenMint || ""))));
 }
 
+function parseUiNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  const compact = raw.replace(/[$,%_\s,]/g, "");
+  const match = compact.match(/^([-+]?\d*\.?\d+)([kmb])?$/i);
+  if (!match) return null;
+  const number = Number(match[1]);
+  if (!Number.isFinite(number)) return null;
+  const suffix = String(match[2] || "").toLowerCase();
+  if (suffix === "k") return number * 1_000;
+  if (suffix === "m") return number * 1_000_000;
+  if (suffix === "b") return number * 1_000_000_000;
+  return number;
+}
+
 function firstUsefulNumber(...values) {
   for (const value of values) {
-    const number = Number(value);
+    const number = parseUiNumber(value);
     if (Number.isFinite(number) && number > 0) return number;
   }
   for (const value of values) {
-    const number = Number(value);
+    const number = parseUiNumber(value);
     if (Number.isFinite(number)) return number;
   }
   return 0;
@@ -5064,8 +5617,9 @@ function terminalSignalRowsHtml(rows, options = {}) {
               <small>score</small>
             </span>
             <div class="terminal-token-actions">
-              <button type="button" class="primary" data-quick-trade-token="${escapeHtml(row.tokenMint)}">${escapeHtml(actionLabel)}</button>
+              <button type="button" class="primary" data-quick-trade-token="${escapeHtml(row.tokenMint)}" title="Buy with active preset">${escapeHtml(actionLabel)}</button>
               <button type="button" data-quick-bundle-token="${escapeHtml(row.tokenMint)}">Bundle</button>
+              <button type="button" data-smart-chart-token="${escapeHtml(row.tokenMint)}">Chart</button>
               <button type="button" class="watch-action" data-watch-token="${escapeHtml(row.tokenMint)}" data-watch-symbol="${escapeHtml(row.symbol || "")}" data-watch-name="${escapeHtml(row.name || "")}" data-watch-image="${escapeHtml(row.imageUrl || "")}">${isTokenWatched(row.tokenMint) ? "Saved" : "Watch"}</button>
             </div>
           </article>
@@ -5102,8 +5656,9 @@ function compactSignalRowsHtml(rows, options = {}) {
           </div>
           ${scoreBadgeHtml(row)}
           <div class="compact-row-actions">
-            <button type="button" class="primary" data-quick-trade-token="${escapeHtml(row.tokenMint)}">${escapeHtml(actionLabel)}</button>
+            <button type="button" class="primary" data-quick-trade-token="${escapeHtml(row.tokenMint)}" title="Buy with active preset">${escapeHtml(actionLabel)}</button>
             <button type="button" data-quick-bundle-token="${escapeHtml(row.tokenMint)}">Bundle</button>
+            <button type="button" data-smart-chart-token="${escapeHtml(row.tokenMint)}">Chart</button>
             <button type="button" class="watch-action" data-watch-token="${escapeHtml(row.tokenMint)}" data-watch-symbol="${escapeHtml(row.symbol || "")}" data-watch-name="${escapeHtml(row.name || "")}" data-watch-image="${escapeHtml(row.imageUrl || "")}">${isTokenWatched(row.tokenMint) ? "Saved" : "Watch"}</button>
           </div>
         </article>
@@ -5156,9 +5711,234 @@ function terminalPresetStripHtml() {
           <button type="button" data-tab="volume">Volume</button>
           <button type="button" data-tab="launch">Launch Snipe</button>
         </div>
-        ${state.selectedTradePresetId === "custom" ? fastTradePresetBuilderHtml() : ""}
-        ${state.selectedBundlePresetId === "custom" ? fastBundlePresetBuilderHtml() : ""}
       </details>
+    </section>
+  `;
+}
+
+function formatQuickBuyAmount(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) return "";
+  return number >= 1 ? number.toFixed(2).replace(/\.?0+$/, "") : number.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function normalizedQuickBuyAmount(value = state.quickBuyAmountOverride) {
+  const clean = String(value || "").replace(/[^0-9.]/g, "");
+  if (!clean) return "";
+  const number = Number(clean);
+  if (!Number.isFinite(number) || number <= 0) return "";
+  return formatQuickBuyAmount(number);
+}
+
+function activeTradePreset() {
+  return presetById("trade", state.selectedTradePresetId);
+}
+
+function activeBundlePreset() {
+  return presetById("bundle", state.selectedBundlePresetId);
+}
+
+function activeQuickBuyAmount(preset = activeTradePreset()) {
+  return normalizedQuickBuyAmount() || formatQuickBuyAmount(preset?.amountSol);
+}
+
+function activeBundleQuickBuyAmount(preset = activeBundlePreset()) {
+  return normalizedQuickBuyAmount() || formatQuickBuyAmount(preset?.amountSol) || "0.1";
+}
+
+function rowAgeSeconds(row = {}) {
+  const value = Number(row.pairAgeSeconds);
+  if (Number.isFinite(value) && value >= 0) return value;
+  const created = Number(row.pairCreatedAt || row.createdAt || 0);
+  if (created > 0) {
+    const timestamp = created < 10_000_000_000 ? created * 1000 : created;
+    return Math.max(0, Math.round((Date.now() - timestamp) / 1000));
+  }
+  return Number.POSITIVE_INFINITY;
+}
+
+const SLIME_SCOPE_LIMIT = 30;
+
+function slimeScopeSourceRows() {
+  const marketByMint = marketDataRowsByMint();
+  return uniqueSignalRows([
+    ...(state.livePairs?.rows || []),
+    ...(state.livePairsByBucket.live?.rows || []),
+    ...(state.livePairsByBucket.under1h?.rows || []),
+    ...(state.livePairsByBucket.under3h?.rows || []),
+    ...(state.livePairsByBucket.under1d?.rows || []),
+    ...(state.scan?.rows || []),
+    ...(state.kolScan?.rows || [])
+  ])
+    .map((row) => mergeMarketData(row, marketByMint.get(String(row?.tokenMint || ""))))
+    .filter((row) => row?.tokenMint && !isUiMayhemRow(row));
+}
+
+function slimeScopeMarketCap(row = {}) {
+  return firstUsefulNumber(row.marketCap, row.fdv);
+}
+
+function slimeScopeLiquidity(row = {}) {
+  return firstUsefulNumber(row.liquidityUsd);
+}
+
+function slimeScopeVolume(row = {}) {
+  return firstUsefulNumber(row.volumeM5, row.volume5m, row.volumeM15, row.volumeM30, row.volumeH1, row.volumeH24, row.volumeUsd);
+}
+
+function slimeScopeTextBlob(row = {}) {
+  return [
+    row.tokenMint,
+    row.symbol,
+    row.name,
+    row.source,
+    row.category,
+    row.dexId,
+    row.dexName,
+    row.poolType,
+    row.platform,
+    row.raydiumPool,
+    row.pairUrl,
+    ...(row.riskFlags || []),
+    ...(row.reasons || [])
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+
+function slimeScopeProgressPct(row = {}) {
+  const direct = firstUsefulNumber(
+    row.bondingProgressPct,
+    row.bondingProgress,
+    row.bonding_curve_progress,
+    row.bondingCurveProgress,
+    row.pumpProgress,
+    row.graduationProgress,
+    row.completion,
+    row.completePct
+  );
+  if (direct > 0) return direct <= 1 ? direct * 100 : direct;
+  const marketCap = slimeScopeMarketCap(row);
+  const text = slimeScopeTextBlob(row);
+  const isPump = Boolean(row.isPump) || text.includes("pump") || String(row.tokenMint || "").toLowerCase().endsWith("pump");
+  if (isPump && marketCap > 0) return Math.max(1, Math.min(99, (marketCap / 69_000) * 100));
+  return 0;
+}
+
+function isGraduatedSlimeScopeRow(row = {}) {
+  if (row.isGraduated || row.graduated || row.bonded || row.isBonded || row.complete || row.completed || row.bondingComplete) return true;
+  if (row.raydiumPool || row.raydium_pool || row.poolAddress) return true;
+  const text = slimeScopeTextBlob(row);
+  if (/\b(graduated|bonded|bonding complete|complete)\b/.test(text)) return true;
+  const isPump = Boolean(row.isPump) || text.includes("pump") || String(row.tokenMint || "").toLowerCase().endsWith("pump");
+  return Boolean(isPump && /\b(raydium|meteora|orca)\b/.test(text));
+}
+
+function classifySlimeScopeRow(row = {}) {
+  if (isGraduatedSlimeScopeRow(row)) return "graduated";
+  const explicit = String(row.slimeScopeCategory || "").trim().toLowerCase();
+  if (["new", "graduating"].includes(explicit)) return explicit;
+  const progress = slimeScopeProgressPct(row);
+  const marketCap = slimeScopeMarketCap(row);
+  if (progress >= 70 || marketCap >= 45_000) return "graduating";
+  const text = slimeScopeTextBlob(row);
+  const age = rowAgeSeconds(row);
+  const isPump = Boolean(row.isPump) || text.includes("pump") || String(row.tokenMint || "").toLowerCase().endsWith("pump");
+  if (isPump || !Number.isFinite(age) || age <= 3_600) return "new";
+  return "unknown";
+}
+
+function slimeScopePulseScore(row = {}) {
+  const score = Number(row.bestPickScore || row.score || 0);
+  const volume = slimeScopeVolume(row);
+  const liquidity = slimeScopeLiquidity(row);
+  const marketCap = slimeScopeMarketCap(row);
+  const age = rowAgeSeconds(row);
+  const freshness = Number.isFinite(age) ? Math.max(0, 86_400 - age) / 86_400 : 0;
+  return (
+    score * 1000
+    + Math.log10(volume + 1) * 160
+    + Math.log10(liquidity + 1) * 120
+    + Math.log10(marketCap + 1) * 80
+    + freshness * 100
+  );
+}
+
+function sortSlimeScopeRows(items = []) {
+  return [...items].sort((a, b) => (
+    slimeScopePulseScore(b) - slimeScopePulseScore(a)
+    || compareNewestLiveRows(a, b)
+  ));
+}
+
+function backfillSlimeScopeRows(primary = [], fallback = [], limit = SLIME_SCOPE_LIMIT) {
+  const seen = new Set();
+  const output = [];
+  for (const row of [...primary, ...fallback]) {
+    const mint = String(row?.tokenMint || "");
+    if (!mint || seen.has(mint)) continue;
+    seen.add(mint);
+    output.push(row);
+    if (output.length >= limit) break;
+  }
+  return output;
+}
+
+function slimeScopeRows(mode = state.slimeScopeMode) {
+  const withMarket = slimeScopeSourceRows();
+  const category = mode === "graduated" ? "graduated" : mode === "graduating" ? "graduating" : "new";
+  const primary = withMarket.filter((row) => classifySlimeScopeRow(row) === category);
+  const fallback = withMarket.filter((row) => {
+    const rowCategory = classifySlimeScopeRow(row);
+    const progress = slimeScopeProgressPct(row);
+    const marketCap = slimeScopeMarketCap(row);
+    const age = rowAgeSeconds(row);
+    if (category === "graduated") return isGraduatedSlimeScopeRow(row) || rowCategory === "graduated";
+    if (category === "graduating") {
+      return rowCategory !== "graduated"
+        && !isGraduatedSlimeScopeRow(row)
+        && (progress >= 55 || (marketCap >= 30_000 && marketCap < 90_000));
+    }
+    return rowCategory !== "graduated"
+      && !isGraduatedSlimeScopeRow(row)
+      && (rowCategory === "new" || !Number.isFinite(age) || age <= 7_200 || progress < 60);
+  });
+  const sortedPrimary = category === "new" ? [...primary].sort(compareNewestLiveRows) : sortSlimeScopeRows(primary);
+  const sortedFallback = category === "new" ? [...fallback].sort(compareNewestLiveRows) : sortSlimeScopeRows(fallback);
+  return backfillSlimeScopeRows(sortedPrimary, sortedFallback);
+}
+
+function slimeScopeHtml() {
+  const modes = [
+    ["new", "New"],
+    ["graduating", "Graduating"],
+    ["graduated", "Graduated"]
+  ];
+  const rows = slimeScopeRows();
+  return `
+    <section class="slime-scope-page">
+      <div class="terminal-title-row slime-scope-title-row">
+        <span class="slime-scope-title-icon" aria-hidden="true"></span>
+        <div>
+          <h3>Slime Scope</h3>
+          <p>Fast pump-style view for new, graduating, and graduated pairs. Mayhem-mode rows stay filtered out.</p>
+        </div>
+        <span>${rows.length} shown</span>
+      </div>
+      <div class="command-controls slime-scope-controls">
+        <div class="mode-row terminal-modes slime-scope-tabs">
+          ${modes.map(([mode, label]) => `<button data-slime-scope-mode="${mode}" data-active="${state.slimeScopeMode === mode}">${label}</button>`).join("")}
+        </div>
+        ${quickBuyPresetBarHtml("slime-scope")}
+        <button class="primary slime-scope-refresh-button" data-refresh-live-pairs>Refresh Scope</button>
+      </div>
+      <article class="terminal-panel slime-scope-list-panel">
+        ${compactSignalRowsHtml(rows, {
+          layout: "terminal",
+          limit: 30,
+          actionLabel: activePresetButtonLabel(),
+          emptyTitle: "No Slime Scope pairs yet",
+          emptyMessage: "Feeds are refreshing. Try a different scope mode if this stays empty."
+        })}
+      </article>
     </section>
   `;
 }
@@ -5169,12 +5949,11 @@ function terminalHtml() {
   const newestLiveRows = [...liveRows].sort(compareNewestLiveRows);
   const kolRows = mergeMarketDataIntoRows(state.kolScan?.rows || []).filter((row) => !isUiMayhemRow(row));
   const bestRows = terminalBestPickRows(liveRows, kolRows);
-  const token = selectedTerminalTokenRow();
   const bucketLoading = Boolean(state.livePairsLoadingByBucket[state.livePairBucket]);
   const lastUpdated = currentLivePairsUpdatedAt();
-  const collapsed = Boolean(state.terminalTradeCollapsed);
+  const rowTradeLabel = activePresetButtonLabel();
   return `
-    <section class="command-terminal ${collapsed ? "trade-panel-collapsed" : ""}">
+    <section class="command-terminal no-live-ticket">
       <main class="command-workspace">
         <div class="terminal-title-row command-title">
           <div>
@@ -5198,6 +5977,7 @@ function terminalHtml() {
               ${LIVE_PAIR_SORTS.map(([value, label]) => `<option value="${value}" ${state.terminalSort === value ? "selected" : ""}>${label}</option>`).join("")}
             </select>
           </label>
+          ${quickBuyPresetBarHtml("terminal-top")}
           <button class="primary" data-refresh-live-pairs>${bucketLoading ? "Refreshing..." : "Refresh Feeds"}</button>
           <button data-top-refresh-wallet>${state.walletRefreshing ? "Refreshing Wallet..." : "Refresh Wallet"}</button>
         </div>
@@ -5205,30 +5985,46 @@ function terminalHtml() {
         <section class="command-grid">
           <article class="terminal-panel best-picks-panel">
             <header><h4>Best Picks</h4><span>Score + reasons</span></header>
-            ${compactSignalRowsHtml(bestRows, { layout: "terminal", limit: 8, actionLabel: "Trade", emptyTitle: "No Best Picks yet", emptyMessage: "Refresh Live Pairs to score current pairs." })}
+            ${compactSignalRowsHtml(bestRows, { layout: "terminal", limit: 8, actionLabel: rowTradeLabel, emptyTitle: "No Best Picks yet", emptyMessage: "Refresh Live Pairs to score current pairs." })}
           </article>
           <article class="terminal-panel live-pairs-panel">
             <header><h4>Live Pairs</h4><button data-tab="live">Open</button></header>
-            ${compactSignalRowsHtml(newestLiveRows, { layout: "terminal", limit: 12, actionLabel: "Trade" })}
+            ${compactSignalRowsHtml(newestLiveRows, { layout: "terminal", limit: 12, actionLabel: rowTradeLabel })}
           </article>
           <article class="terminal-panel kol-panel">
             <header><h4>KOL Signals</h4><button data-kol-refresh>${state.kolLoading ? "Loading..." : "Refresh"}</button></header>
-            ${compactSignalRowsHtml(kolRows, { layout: "terminal", limit: 12, actionLabel: "Trade", emptyTitle: "No KOL signals loaded", emptyMessage: "Refresh KOL Tracker to load signals." })}
+            ${compactSignalRowsHtml(kolRows, { layout: "terminal", limit: 12, actionLabel: rowTradeLabel, emptyTitle: "No KOL signals loaded", emptyMessage: "Refresh KOL Tracker to load signals." })}
           </article>
         </section>
 
         ${terminalBottomTablesHtml()}
       </main>
-      <aside class="trade-side order-ticket-stack terminal-dock ${collapsed ? "is-collapsed" : ""}">
-        ${terminalTradePanelHtml(token, collapsed)}
-      </aside>
     </section>
   `;
 }
 
 function activePresetButtonLabel() {
-  const preset = presetById("trade", state.selectedTradePresetId);
-  return preset?.amountSol ? `Buy ${preset.amountSol} SOL` : "Buy Preset";
+  const preset = activeTradePreset();
+  if (!preset) return "Trade";
+  const amount = activeQuickBuyAmount(preset);
+  if (amount) return `Buy ${amount} SOL`;
+  return tradeActionLabelFromPreset(preset, "Trade");
+}
+
+function syncQuickBuyActionLabels() {
+  const label = activePresetButtonLabel();
+  document.querySelectorAll("[data-quick-trade-token]").forEach((button) => {
+    writeText(button, label);
+  });
+}
+
+function openPresetEditorTab(kind) {
+  const nextTab = kind === "bundle" ? "bundle" : "trade";
+  state.activeTab = nextTab;
+  if (nextTab === "trade") state.editingTradePresetId = "";
+  if (nextTab === "bundle") state.editingBundlePresetId = "";
+  window.history.pushState({}, "", "/terminal");
+  render({ force: true });
 }
 
 function tokenPreviewHtml(token) {
@@ -5259,6 +6055,124 @@ function tokenPreviewHtml(token) {
       ${hasPosition ? `<button data-position-sell="${escapeHtml(token.tokenMint)}" data-position-sell-percent="100">Exit 100%</button>` : ""}
     </div>
     <small class="score-breakdown">Why: ${escapeHtml(scoreWhyText(token))}</small>
+  `;
+}
+
+function smartChartHtml() {
+  const token = selectedSmartChartTokenRow();
+  const mint = String(token?.tokenMint || "").trim();
+  const heldPosition = mint ? state.positions.find((position) => String(position.tokenMint) === mint) : null;
+  const relatedRows = mint
+    ? uniqueSignalRows([
+        token,
+        ...allVisibleSignalRows().filter((row) => String(row.tokenMint || "") === mint)
+      ]).filter(Boolean).slice(0, 5)
+    : terminalBestPickRows().slice(0, 5);
+  const suggestion = smartChartSuggestion(token || {});
+  const chartZoom = Math.min(120, Math.max(65, Number(state.smartChartZoom) || 80));
+  if (!mint) {
+    return `
+      <section class="smart-chart-terminal">
+        <div class="terminal-title-row">
+          <div>
+            <h3>Smart Chart</h3>
+            <p>Paste a token CA or open Chart from any row to load a focused chart workspace.</p>
+          </div>
+        </div>
+        <div class="smart-chart-search">
+          <input data-smart-chart-input placeholder="Paste token CA" autocomplete="off">
+          <button class="primary" type="button" data-smart-chart-open>Open Chart</button>
+        </div>
+        <div class="terminal-panel">
+          <div class="terminal-title-row">
+            <h3>Suggested tokens</h3>
+          </div>
+          ${compactSignalRowsHtml(relatedRows, {
+            layout: "terminal",
+            limit: 5,
+            actionLabel: activePresetButtonLabel(),
+            emptyTitle: "No chart picks loaded",
+            emptyMessage: "Refresh feeds, then open Smart Chart again."
+          })}
+        </div>
+      </section>
+    `;
+  }
+  return `
+    <section class="smart-chart-terminal">
+      <div class="terminal-title-row">
+        <div>
+          <h3>Smart Chart</h3>
+          <p>Chart, scanner stats, live signals, and preset actions for the selected token.</p>
+        </div>
+        <button type="button" data-tab="terminal">Back to Live Terminal</button>
+      </div>
+      <div class="smart-chart-search">
+        <input data-smart-chart-input value="${escapeHtml(mint)}" placeholder="Paste token CA" autocomplete="off">
+        <button class="primary" type="button" data-smart-chart-open>Open Chart</button>
+      </div>
+      <div class="smart-chart-grid">
+        <article class="terminal-panel smart-chart-main">
+          <div class="smart-chart-token-header">
+            ${livePairAvatarHtml(token)}
+            <div>
+              <strong>${escapeHtml(token.symbol || token.shortMint || shortAddress(mint))}</strong>
+              <small>${escapeHtml(token.name || token.category || "Token")}</small>
+              <button type="button" class="ca-copy" data-copy="${escapeHtml(mint)}">${escapeHtml(shortAddress(mint))}</button>
+            </div>
+            <div class="smart-chart-links">
+              ${miniTokenLinksHtml(token)}
+            </div>
+          </div>
+          <div class="smart-chart-frame" style="--smart-chart-scale: ${chartZoom / 100};">
+            <iframe title="DexScreener chart for ${escapeHtml(token.symbol || shortAddress(mint))}" src="${escapeHtml(dexChartEmbedUrl(mint))}" loading="lazy"></iframe>
+          </div>
+          <label class="smart-chart-zoom">
+            <span>Zoom</span>
+            <input data-smart-chart-zoom type="range" min="65" max="120" step="5" value="${escapeHtml(chartZoom)}">
+            <strong>${escapeHtml(chartZoom)}%</strong>
+          </label>
+          <small class="score-breakdown">If the embedded chart does not load, use the DEX link above.</small>
+        </article>
+        <aside class="terminal-panel smart-chart-side">
+          <h3>${escapeHtml(token.symbol || "Token")} setup</h3>
+          ${terminalTokenStatsHtml(token)}
+          <div class="smart-chart-suggestion">
+            <strong>Smart read</strong>
+            <p>${escapeHtml(suggestion)}</p>
+          </div>
+          <div class="smart-chart-actions">
+            <button class="primary" type="button" data-quick-trade-token="${escapeHtml(mint)}">${escapeHtml(activePresetButtonLabel())}</button>
+            <button type="button" data-quick-bundle-token="${escapeHtml(mint)}">Bundle</button>
+            <button type="button" data-use-token-volume="${escapeHtml(mint)}">Volume</button>
+            <button type="button" data-watch-token="${escapeHtml(mint)}">${isTokenWatched(mint) ? "Saved" : "Watch"}</button>
+            ${heldPosition ? `<button type="button" class="danger" data-position-sell="${escapeHtml(mint)}" data-position-sell-percent="100">Exit 100%</button>` : ""}
+          </div>
+        </aside>
+      </div>
+      <div class="smart-chart-bottom-grid">
+        <article class="terminal-panel">
+          <div class="terminal-title-row">
+            <h3>Related signals</h3>
+            <button type="button" data-refresh-feeds>Refresh</button>
+          </div>
+          ${compactSignalRowsHtml(relatedRows, {
+            layout: "terminal",
+            limit: 5,
+            actionLabel: activePresetButtonLabel(),
+            emptyTitle: "No related signals",
+            emptyMessage: "This token is loaded from CA. Refresh feeds to look for matching signals."
+          })}
+        </article>
+        <article class="terminal-panel">
+          <div class="terminal-title-row">
+            <h3>Position</h3>
+            <button type="button" data-refresh-wallet>Refresh Wallet</button>
+          </div>
+          ${heldPosition ? `<div class="table-list compact-table">${positionRowHtml(heldPosition)}</div>` : emptyState("No position", "No current SlimeWire position is tracked for this token.")}
+        </article>
+      </div>
+    </section>
   `;
 }
 
@@ -5313,8 +6227,6 @@ function terminalTradePanelHtml(token, collapsed = false) {
               <button type="button" data-edit-selected-preset="trade">Edit Trade Preset</button>
               <button type="button" data-edit-selected-preset="bundle">Edit Bundle Preset</button>
             </div>
-            ${state.selectedTradePresetId === "custom" ? fastTradePresetBuilderHtml() : ""}
-            ${state.selectedBundlePresetId === "custom" ? fastBundlePresetBuilderHtml() : ""}
           </details>
 
           <div class="ticket-balance-row">
@@ -5324,8 +6236,9 @@ function terminalTradePanelHtml(token, collapsed = false) {
           ${token?.tokenMint ? `
             <code>${escapeHtml(token.tokenMint)}</code>
             <div class="quick-grid">
-              <button class="primary" data-quick-trade-token="${escapeHtml(token.tokenMint)}">Trade</button>
+              <button class="primary" data-quick-trade-token="${escapeHtml(token.tokenMint)}">${escapeHtml(activePresetButtonLabel())}</button>
               <button data-quick-bundle-token="${escapeHtml(token.tokenMint)}">Bundle</button>
+              <button data-smart-chart-token="${escapeHtml(token.tokenMint)}">Chart</button>
               <button data-use-token-volume="${escapeHtml(token.tokenMint)}">Volume</button>
               <button data-tab="sniper">Snipe</button>
             </div>
@@ -6315,7 +7228,10 @@ function formatDate(value) {
 }
 
 document.addEventListener("click", async (event) => {
-  const target = event.target.closest("button, a, [data-preview-token]");
+  const source = event.target instanceof Element
+    ? event.target
+    : event.target?.parentElement;
+  const target = source?.closest?.("button, a, [data-preview-token]");
   if (!target) return;
 
   if (target.matches("[data-nav-route]")) {
@@ -6397,9 +7313,10 @@ document.addEventListener("click", async (event) => {
       state.tradeToken = token;
       state.bundleToken = token;
       state.volumeToken = token;
-      state.activeTab = "terminal";
+      state.smartChartToken = token;
+      state.activeTab = "smartChart";
       state.route = "terminal";
-      window.history.pushState({}, "", "/terminal");
+      window.history.pushState({}, "", "/terminal/chart");
       render();
     }
     return;
@@ -6461,7 +7378,16 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-browse-guest]")) {
     state.loginCollapsed = true;
+    state.route = "terminal";
+    state.activeTab = "terminal";
+    window.history.pushState({}, "", "/terminal");
     render();
+    await Promise.allSettled([
+      refreshLivePairBuckets({ silent: true, force: true }),
+      loadKolScan(state.kolMode, "", { silent: true })
+    ]);
+    render();
+    return;
   }
   if (target.matches("[data-logout]")) await logout();
   if (target.matches("[data-connect-x]")) await connectXAccount();
@@ -6490,12 +7416,33 @@ document.addEventListener("click", async (event) => {
     saveLaunchCoinDraft();
     return;
   }
+  if (target.matches("[data-launch-coin-submit]")) {
+    await submitLaunchCoin();
+    return;
+  }
   if (target.matches("[data-launch-coin-use-ca]")) {
     await useLaunchCoinMint();
     return;
   }
-  if (target.matches("[data-connect-wallet]")) await connectBrowserWallet(target.dataset.connectWallet);
-  if (target.matches("[data-disconnect-wallet]")) await disconnectBrowserWallet();
+  if (target.matches("[data-connect-wallet]")) {
+    const providerId = target.dataset.connectWallet || "solana";
+    if (providerId === "solana") openWalletConnectChooser({ returnPath: "/terminal" });
+    else await connectBrowserWallet(providerId, { returnPath: "/terminal" });
+    return;
+  }
+  if (target.matches("[data-connect-wallet-provider]")) {
+    await connectBrowserWallet(target.dataset.connectWalletProvider || "solana", { returnPath: "/terminal" });
+    return;
+  }
+  if (target.matches("[data-wallet-connect-close]")) {
+    state.walletConnectMenuOpen = false;
+    render({ force: true });
+    return;
+  }
+  if (target.matches("[data-disconnect-wallet]")) {
+    await disconnectBrowserWallet();
+    return;
+  }
   if (target.matches("[data-share-x]")) openXShare(target.dataset.shareText || "");
   if (target.matches("[data-share-watch-token-btn]")) shareManualWatch("token");
   if (target.matches("[data-share-watch-kol-btn]")) shareManualWatch("kol");
@@ -6521,8 +7468,7 @@ document.addEventListener("click", async (event) => {
     if (id && id !== "custom") {
       editPreset(kind, id);
     } else {
-      state.activeTab = kind === "bundle" ? "bundle" : "trade";
-      render({ force: true });
+      openPresetEditorTab(kind);
     }
     return;
   }
@@ -6537,6 +7483,41 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-quick-trade-token]")) await quickPresetTrade(target.dataset.quickTradeToken || "");
   if (target.matches("[data-quick-bundle-token]")) await quickPresetBundle(target.dataset.quickBundleToken || "");
+  if (target.matches("[data-smart-chart-token]")) {
+    const tokenMint = target.dataset.smartChartToken || "";
+    state.smartChartToken = tokenMint;
+    state.terminalToken = tokenMint;
+    state.tradeToken = tokenMint;
+    state.bundleToken = tokenMint;
+    state.volumeToken = tokenMint;
+    state.activeTab = "smartChart";
+    state.route = "terminal";
+    window.history.pushState({}, "", "/terminal/chart");
+    render();
+    return;
+  }
+  if (target.matches("[data-smart-chart-open]")) {
+    const tokenMint = String($("[data-smart-chart-input]")?.value || "").trim();
+    if (!tokenMint) {
+      setError("Paste a token CA first.");
+      return;
+    }
+    state.smartChartToken = tokenMint;
+    state.terminalToken = tokenMint;
+    state.tradeToken = tokenMint;
+    state.bundleToken = tokenMint;
+    state.volumeToken = tokenMint;
+    state.activeTab = "smartChart";
+    state.route = "terminal";
+    window.history.pushState({}, "", "/terminal/chart");
+    render();
+    return;
+  }
+  if (target.matches("[data-refresh-feeds]")) {
+    await refreshLivePairBuckets({ force: true }).catch((error) => setError(error.message));
+    if (!state.kolScan) await loadKolScan().catch((error) => setError(error.message));
+    return;
+  }
   if (target.matches("[data-watch-token]")) await updateWatchlist("add", target);
   if (target.matches("[data-unwatch-token]")) await updateWatchlist("remove", target);
   if (target.matches("[data-pnl-card]")) {
@@ -6657,7 +7638,7 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-refresh-all]")) {
     if (!state.user || !state.token) {
-      if (state.activeTab === "live" || state.activeTab === "terminal") await refreshLivePairBuckets({ silent: true }).catch((error) => setError(error.message));
+      if (state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "slimeScope") await refreshLivePairBuckets({ silent: true, force: true }).catch((error) => setError(error.message));
       else if (state.activeTab === "sniper") await loadScan().catch((error) => setError(error.message));
       else if (state.activeTab === "kol") await loadKolScan().catch((error) => setError(error.message));
       else setError("Browsing is open. Create or connect a profile when you want saved wallets, balances, or trades.");
@@ -6679,13 +7660,22 @@ document.addEventListener("click", async (event) => {
       state.route = "terminal";
       window.history.pushState({}, "", "/terminal");
     }
+    if (state.activeTab === "smartChart") {
+      window.history.pushState({}, "", "/terminal/chart");
+    } else if (state.activeTab === "slimeScope") {
+      window.history.pushState({}, "", "/terminal/slime-scope");
+    } else if (window.location.pathname.includes("/terminal/chart") || window.location.pathname.includes("/terminal/slime-scope")) {
+      window.history.pushState({}, "", "/terminal");
+    }
     if (state.activeTab === "sniper" && !state.scan) {
       await loadScan().catch((error) => setError(error.message));
     }
-    if ((state.activeTab === "live" || state.activeTab === "terminal") && !state.livePairsByBucket[state.livePairBucket]) {
-      await refreshLivePairBuckets().catch((error) => setError(error.message));
+    if (state.activeTab === "slimeScope") {
+      await refreshLivePairBuckets({ silent: true, force: true }).catch((error) => setError(error.message));
+    } else if ((state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "smartChart") && !state.livePairsByBucket[state.livePairBucket]) {
+      await refreshLivePairBuckets({ force: true }).catch((error) => setError(error.message));
     }
-    if ((state.activeTab === "kol" || state.activeTab === "terminal") && !state.kolScan) {
+    if ((state.activeTab === "kol" || state.activeTab === "terminal" || state.activeTab === "smartChart") && !state.kolScan) {
       await loadKolScan().catch((error) => setError(error.message));
     }
     if (state.activeTab === "watchlist" && state.user && state.token) {
@@ -6714,6 +7704,13 @@ document.addEventListener("click", async (event) => {
     await refreshLivePairBuckets({ force: true }).catch((error) => setError(error.message));
   }
 
+  if (target.matches("[data-slime-scope-mode]")) {
+    state.slimeScopeMode = target.dataset.slimeScopeMode || "new";
+    state.activeTab = "slimeScope";
+    render();
+    await refreshLivePairBuckets({ force: true }).catch((error) => setError(error.message));
+  }
+
   if (target.matches("[data-scan-mode]")) {
     await loadScan(target.dataset.scanMode).catch((error) => setError(error.message));
   }
@@ -6734,22 +7731,37 @@ document.addEventListener("change", async (event) => {
     syncTimerSellNoTimer(target);
   }
   if (target?.matches?.("[data-fast-trade-preset]")) {
-    state.selectedTradePresetId = target.value || "custom";
-    state.fastTradePresetStatus = state.selectedTradePresetId === "custom"
-      ? ""
-      : "Trade preset selected. Tap Trade or Buy on a token row to use it.";
+    const nextPresetId = target.value || "";
+    if (nextPresetId === "custom") {
+      openPresetEditorTab("trade");
+      return;
+    }
+    state.selectedTradePresetId = nextPresetId;
+    state.fastTradePresetStatus = state.selectedTradePresetId
+      ? "Trade preset selected. Tap Trade or Buy on a token row to use it."
+      : "No fast trade preset selected. Token rows open the manual Trade form.";
     render();
   }
+  if (target?.matches?.("[data-quick-buy-amount]")) {
+    state.quickBuyAmountOverride = normalizedQuickBuyAmount(target.value);
+    target.value = state.quickBuyAmountOverride;
+    syncQuickBuyActionLabels();
+  }
   if (target?.matches?.("[data-fast-bundle-preset]")) {
-    state.selectedBundlePresetId = target.value || "custom";
-    state.fastBundlePresetStatus = state.selectedBundlePresetId === "custom"
-      ? ""
-      : "Bundle preset selected. It will not buy until you tap a Bundle button.";
+    const nextPresetId = target.value || "";
+    if (nextPresetId === "custom") {
+      openPresetEditorTab("bundle");
+      return;
+    }
+    state.selectedBundlePresetId = nextPresetId;
+    state.fastBundlePresetStatus = state.selectedBundlePresetId
+      ? "Bundle preset selected. It will not buy until you tap a Bundle button."
+      : "No fast bundle preset selected. Bundle rows open the manual Bundle form.";
     render();
   }
   if (target?.matches?.("[data-terminal-sort]")) {
     state.terminalSort = target.value || "best";
-    await refreshLivePairBuckets({ silent: true }).catch((error) => setError(error.message));
+    await refreshLivePairBuckets({ silent: true, force: true }).catch((error) => setError(error.message));
     render();
   }
   if (target?.matches?.("[data-ogre-tek-field]")) {
@@ -6775,16 +7787,51 @@ document.addEventListener("focusout", () => {
 
 document.addEventListener("input", (event) => {
   const target = event.target;
+  if (target?.matches?.("[data-quick-buy-amount]")) {
+    state.quickBuyAmountOverride = String(target.value || "").replace(/[^0-9.]/g, "").slice(0, 12);
+    syncQuickBuyActionLabels();
+    return;
+  }
+  if (target?.matches?.("[data-smart-chart-zoom]")) {
+    state.smartChartZoom = Math.min(120, Math.max(65, Number(target.value) || 80));
+    const label = target.closest(".smart-chart-zoom")?.querySelector("strong");
+    if (label) writeText(label, `${state.smartChartZoom}%`);
+    const frame = target.closest(".smart-chart-main")?.querySelector(".smart-chart-frame");
+    if (frame) frame.style.setProperty("--smart-chart-scale", String(state.smartChartZoom / 100));
+    return;
+  }
   if (!target?.matches?.("[data-ogre-tek-field]")) return;
   updateOgreTekDraftFromDom();
   if (target.type === "range") render({ force: true });
 });
 
+function resumeLiveFeeds() {
+  if (state.route !== "terminal") return;
+  if (state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "slimeScope") {
+    refreshLivePairBuckets({ silent: true, force: true }).catch((error) => setError(error.message));
+    scheduleLivePairsAutoRefresh();
+  }
+  if ((state.activeTab === "kol" || state.activeTab === "terminal") && !state.kolWallet) {
+    loadKolScan(state.kolMode, "", { silent: true }).catch((error) => setError(error.message));
+    scheduleKolAutoRefresh();
+  }
+  if ((state.activeTab === "watchlist" || state.activeTab === "terminal") && state.user && state.token) {
+    loadWatchlist({ silent: true }).catch((error) => setError(error.message));
+    scheduleWatchlistAutoRefresh();
+  }
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) resumeLiveFeeds();
+});
+
+window.addEventListener("focus", resumeLiveFeeds);
+
 async function initializeApp() {
   await loadSession();
   if (state.route === "terminal") {
     await Promise.allSettled([
-      refreshLivePairBuckets({ silent: true }),
+      refreshLivePairBuckets({ silent: true, force: true }),
       loadKolScan(state.kolMode, "", { silent: true })
     ]);
     if (state.activeTab === "ogreTek") {

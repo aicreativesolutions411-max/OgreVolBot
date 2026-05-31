@@ -1426,7 +1426,12 @@
 }
 
 [data-app][data-route="terminal"] .tabs button[data-tab="slimeScope"]::before {
-  background-image: url("./assets/slimewire/svg/icons/slime-scope.svg") !important;
+  background-image: none !important;
+  border: 2px solid rgba(151, 255, 51, 0.95) !important;
+  border-radius: 999px !important;
+  box-shadow:
+    0 0 10px rgba(151, 255, 51, 0.75),
+    inset 0 0 8px rgba(151, 255, 51, 0.25) !important;
 }
 
 .slime-scope-title-row {
@@ -1436,10 +1441,45 @@
 }
 
 .slime-scope-title-icon {
-  width: 42px;
-  height: 42px;
-  object-fit: contain;
-  filter: drop-shadow(0 0 12px rgba(145, 255, 55, 0.68));
+  position: relative !important;
+  display: inline-grid !important;
+  place-items: center !important;
+  width: 58px !important;
+  height: 58px !important;
+  border: 1px solid rgba(151, 255, 51, 0.72) !important;
+  border-radius: 18px !important;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(151, 255, 51, 0.25), rgba(151, 255, 51, 0.08) 42%, rgba(5, 12, 8, 0.96) 70%),
+    linear-gradient(135deg, rgba(151, 255, 51, 0.15), rgba(5, 12, 8, 0.9)) !important;
+  box-shadow:
+    0 0 18px rgba(151, 255, 51, 0.38),
+    inset 0 0 18px rgba(151, 255, 51, 0.13) !important;
+  filter: none !important;
+  flex: 0 0 auto !important;
+}
+
+.slime-scope-title-icon::before {
+  content: "" !important;
+  width: 30px !important;
+  height: 30px !important;
+  border: 3px solid rgba(151, 255, 51, 0.95) !important;
+  border-radius: 50% !important;
+  box-shadow:
+    0 0 10px rgba(151, 255, 51, 0.75),
+    inset 0 0 8px rgba(151, 255, 51, 0.25) !important;
+}
+
+.slime-scope-title-icon::after {
+  content: "" !important;
+  position: absolute !important;
+  width: 44px !important;
+  height: 44px !important;
+  background:
+    linear-gradient(rgba(151, 255, 51, 0.9), rgba(151, 255, 51, 0.9)) center / 2px 100% no-repeat,
+    linear-gradient(90deg, rgba(151, 255, 51, 0.9), rgba(151, 255, 51, 0.9)) center / 100% 2px no-repeat !important;
+  opacity: 0.86 !important;
+  filter: drop-shadow(0 0 7px rgba(151, 255, 51, 0.72)) !important;
+  pointer-events: none !important;
 }
 
 [data-app][data-route="terminal"] .command-controls.slime-scope-controls {
