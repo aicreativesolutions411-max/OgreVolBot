@@ -129,7 +129,8 @@ const state = {
   terminalSort: "best",
   terminalToken: "",
   smartChartToken: "",
-  smartChartZoom: 80,
+  smartChartZoom: 72,
+  smartChartView: "chartTxns",
   terminalAutoToken: "",
   terminalTxSignature: "",
   terminalTxAudit: null,
@@ -389,11 +390,15 @@ async function readApiJson(response) {
   try {
     return JSON.parse(text);
   } catch {
+    const normalizedText = text.toLowerCase();
+    const oversized = response.status === 413 || normalizedText.includes("payload too large") || normalizedText.includes("request entity too large");
     return {
       ok: false,
-      error: "invalid_api_response",
-      message: contentType.includes("text/html")
-        ? "SlimeWire received an unexpected page response. Refresh and try again."
+      error: oversized ? "payload_too_large" : "invalid_api_response",
+      message: oversized
+        ? "Launch upload is too large. Use a smaller token image and try again."
+        : contentType.includes("text/html")
+          ? "SlimeWire received an unexpected page response. Refresh and try again."
         : "SlimeWire received an unexpected response. Refresh and try again."
     };
   }
@@ -830,7 +835,7 @@ function scheduleLivePairsAutoRefresh() {
       return;
     }
     try {
-      await refreshLivePairBuckets({ silent: true });
+      await refreshLivePairBuckets({ silent: true, force: true });
     } catch {
       // Keep the last good feed visible; the next timer retry reports status inline.
     } finally {
@@ -2308,6 +2313,15 @@ function walletGroupHtml(prefix, value = "") {
   `;
 }
 
+function walletSelectOptionsHtml(selectedIndex = "") {
+  if (!state.wallets.length) return `<option value="">No managed wallets loaded</option>`;
+  return state.wallets.map((wallet, index) => {
+    const value = String(wallet.index ?? index + 1);
+    const label = `${value}. ${wallet.label || "Wallet"} ${wallet.shortPublicKey || shortAddress(wallet.publicKey || "")}`;
+    return `<option value="${escapeHtml(value)}" ${String(selectedIndex) === value ? "selected" : ""}>${escapeHtml(label)}</option>`;
+  }).join("");
+}
+
 function fieldValue(selectSelector, customSelector, fallback = "") {
   const selected = $(selectSelector)?.value || fallback;
   if (selected !== "custom") return selected;
@@ -2944,7 +2958,8 @@ function launchCoinHtml() {
             </label>
             <label>
               Image
-              <input data-launch-coin-image type="file" accept="image/png,image/jpeg,image/webp,gif">
+              <input data-launch-coin-image type="file" accept="image/png,image/jpeg,image/webp,image/gif">
+              <span class="muted">Images are compressed before upload. Use a clear square JPG, PNG, or WEBP for best results.</span>
             </label>
             <label>
               Website
@@ -2958,6 +2973,58 @@ function launchCoinHtml() {
               Telegram
               <input data-launch-coin-telegram type="url" placeholder="https://t.me/..." value="${escapeHtml(draft.telegram || "")}">
             </label>
+          </div>
+        </details>
+
+        <details open class="launch-coin-section">
+          <summary>Creator / Dev Wallet</summary>
+          <div class="volume-grid">
+            <label>
+              Creator Fee
+              <select data-launch-coin-creator-fee>
+                <option value="0" ${String(draft.creatorFeeBps || "0") === "0" ? "selected" : ""}>None</option>
+                <option value="50" ${String(draft.creatorFeeBps || "") === "50" ? "selected" : ""}>0.5%</option>
+                <option value="100" ${String(draft.creatorFeeBps || "") === "100" ? "selected" : ""}>1%</option>
+                <option value="200" ${String(draft.creatorFeeBps || "") === "200" ? "selected" : ""}>2%</option>
+              </select>
+            </label>
+            <label>
+              Creator Fee Wallet
+              <input data-launch-coin-fee-recipient type="text" placeholder="Optional wallet address" value="${escapeHtml(draft.creatorFeeRecipient || "")}">
+            </label>
+            <label>
+              Fee Handling
+              <select data-launch-coin-fee-mode>
+                <option value="standard" ${(draft.feeMode || "standard") === "standard" ? "selected" : ""}>Standard</option>
+                <option value="dev" ${draft.feeMode === "dev" ? "selected" : ""}>Send creator fees to dev wallet</option>
+                <option value="buyback" ${draft.feeMode === "buyback" ? "selected" : ""}>Route creator fees to buyback wallet</option>
+                <option value="burn" ${draft.feeMode === "burn" ? "selected" : ""}>Burn creator fees when supported</option>
+                <option value="split" ${draft.feeMode === "split" ? "selected" : ""}>Split dev / buyback</option>
+              </select>
+            </label>
+            <label>
+              Buyback Wallet
+              <input data-launch-coin-buyback-wallet type="text" placeholder="Optional buyback wallet" value="${escapeHtml(draft.buybackWallet || "")}">
+            </label>
+            <label class="switch-row">
+              <input data-launch-coin-burn-creator-fees type="checkbox" ${draft.burnCreatorFees ? "checked" : ""}>
+              <span>Burn creator fees when supported by the launch connector</span>
+            </label>
+            <label class="switch-row">
+              <input data-launch-coin-dev-buy-enabled type="checkbox" ${draft.devBuyEnabled ? "checked" : ""}>
+              <span>Run Dev Wallet Initial Buy before the post-launch preset</span>
+            </label>
+            <label>
+              Dev Wallet
+              <select data-launch-coin-dev-wallet>
+                ${walletSelectOptionsHtml(draft.devWalletIndex || (draft.walletIndexes || [])[0] || "")}
+              </select>
+            </label>
+            <label>
+              Dev Buy SOL (launch amount)
+              <input data-launch-coin-dev-buy-sol type="text" inputmode="decimal" autocomplete="off" placeholder="0.05" value="${escapeHtml(draft.devBuySol || "")}">
+            </label>
+            <p class="muted full-span">Set the dev wallet buy amount here. After launch, SlimeWire can run the Dev Wallet Initial Buy first, then continue into your selected post-launch action.</p>
           </div>
         </details>
 
@@ -3061,8 +3128,8 @@ function launchCoinHtml() {
           <p>SlimeWire sends the token details to the configured launch connector, waits for the returned CA, then can route that CA into your selected preset. If the connector is not enabled, save the sheet and use the official fallback links.</p>
         </article>
         <article>
-          <h3>Credit Use</h3>
-          <p>Saving a draft and opening Pump/Dex links does not use Helius or Jupiter credits. Credits are used later for wallet balance refreshes, quotes, buys, sells, bundles, and active exit monitoring.</p>
+          <h3>Launch Checklist</h3>
+          <p>Confirm the token details, image, dev buy amount, fee handling, and post-launch action before submitting. If direct launch is unavailable, save the sheet and use the fallback links.</p>
         </article>
         <article>
           <h3>Active Launch Watches</h3>
@@ -3084,6 +3151,14 @@ function readLaunchCoinDraft() {
     website: ($("[data-launch-coin-website]")?.value || "").trim(),
     x: ($("[data-launch-coin-x]")?.value || "").trim(),
     telegram: ($("[data-launch-coin-telegram]")?.value || "").trim(),
+    creatorFeeBps: $("[data-launch-coin-creator-fee]")?.value || draft.creatorFeeBps || "0",
+    creatorFeeRecipient: ($("[data-launch-coin-fee-recipient]")?.value || "").trim(),
+    feeMode: $("[data-launch-coin-fee-mode]")?.value || draft.feeMode || "standard",
+    buybackWallet: ($("[data-launch-coin-buyback-wallet]")?.value || "").trim(),
+    burnCreatorFees: Boolean($("[data-launch-coin-burn-creator-fees]")?.checked),
+    devBuyEnabled: Boolean($("[data-launch-coin-dev-buy-enabled]")?.checked),
+    devWalletIndex: $("[data-launch-coin-dev-wallet]")?.value || draft.devWalletIndex || "",
+    devBuySol: normalizedQuickBuyAmount($("[data-launch-coin-dev-buy-sol]")?.value || draft.devBuySol || "") || "",
     tokenMint: ($("[data-launch-coin-ca]")?.value || "").trim(),
     action: $("[data-launch-coin-action]")?.value || "watch",
     tradePresetId: $("[data-launch-coin-trade-preset]")?.value || "",
@@ -3123,14 +3198,10 @@ function saveLaunchCoinDraft({ silent = false } = {}) {
   }
 }
 
-function readFileAsDataUrl(file) {
+function readRawFileAsDataUrl(file) {
   return new Promise((resolve, reject) => {
     if (!file) {
       resolve("");
-      return;
-    }
-    if (file.size > 5 * 1024 * 1024) {
-      reject(new Error("Image is over 5MB. Use a smaller PNG, JPG, WEBP, or GIF."));
       return;
     }
     const reader = new FileReader();
@@ -3140,13 +3211,75 @@ function readFileAsDataUrl(file) {
   });
 }
 
+function imageFromDataUrl(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Could not preview that image for compression."));
+    image.src = dataUrl;
+  });
+}
+
+function dataUrlMimeType(dataUrl, fallback = "application/octet-stream") {
+  const match = String(dataUrl || "").match(/^data:([^;,]+)[;,]/i);
+  return match?.[1] || fallback;
+}
+
+async function readFileAsDataUrl(file) {
+  if (!file) return "";
+  const maxRawBytes = 12 * 1024 * 1024;
+  const maxPayloadBytes = 320_000;
+  if (file.size > maxRawBytes) {
+    throw new Error("Image is over 12MB. Use a smaller PNG, JPG, WEBP, or GIF.");
+  }
+
+  const rawDataUrl = await readRawFileAsDataUrl(file);
+  if (file.type === "image/gif") {
+    if (rawDataUrl.length > maxPayloadBytes) {
+      throw new Error("Animated GIF is too large for upload. Use a smaller GIF or a PNG/JPG/WEBP.");
+    }
+    return rawDataUrl;
+  }
+
+  try {
+    const image = await imageFromDataUrl(rawDataUrl);
+    const maxSide = 384;
+    const scale = Math.min(1, maxSide / Math.max(image.width || maxSide, image.height || maxSide));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round((image.width || maxSide) * scale));
+    canvas.height = Math.max(1, Math.round((image.height || maxSide) * scale));
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+    const attempts = [
+      ["image/webp", 0.76],
+      ["image/webp", 0.64],
+      ["image/webp", 0.52],
+      ["image/webp", 0.42],
+      ["image/jpeg", 0.72],
+      ["image/jpeg", 0.58],
+      ["image/jpeg", 0.46],
+      ["image/jpeg", 0.36]
+    ];
+    for (const [type, quality] of attempts) {
+      const compressed = canvas.toDataURL(type, quality);
+      if (compressed.length <= maxPayloadBytes) return compressed;
+    }
+  } catch {
+    if (rawDataUrl.length <= maxPayloadBytes) return rawDataUrl;
+  }
+
+  throw new Error("Token image is too large after compression. Use a smaller square JPG, PNG, or WEBP and try again.");
+}
+
 async function launchCoinImagePayload() {
   const imageFile = $("[data-launch-coin-image]")?.files?.[0];
   if (!imageFile) return {};
+  const imageDataUrl = await readFileAsDataUrl(imageFile);
   return {
     imageName: imageFile.name,
-    imageType: imageFile.type || "application/octet-stream",
-    imageDataUrl: await readFileAsDataUrl(imageFile)
+    imageType: dataUrlMimeType(imageDataUrl, imageFile.type || "application/octet-stream"),
+    imageDataUrl
   };
 }
 
@@ -3176,6 +3309,22 @@ function launchCoinTradePresetFromDraft(draft = {}) {
     ...(saved || {}),
     walletIndex,
     amountSol: normalizedQuickBuyAmount(draft.amountSol || saved?.amountSol || "0.1") || "0.1",
+    takeProfitPct: draft.takeProfitPct ?? saved?.takeProfitPct ?? "40",
+    stopLossPct: draft.stopLossPct ?? saved?.stopLossPct ?? "8",
+    sellDelay: draft.sellDelay || saved?.sellDelay || "off",
+    sellPercent: draft.sellPercent || saved?.sellPercent || "100",
+    slippageBps: draft.slippageBps || saved?.slippageBps || "300"
+  };
+}
+
+function launchCoinDevBuyPresetFromDraft(draft = {}) {
+  const saved = draft.tradePresetId ? presetById("trade", draft.tradePresetId) : null;
+  const walletIndex = draft.devWalletIndex || (draft.walletIndexes || [])[0] || saved?.walletIndex || saved?.walletIndexes?.[0] || "1";
+  return {
+    ...(saved || {}),
+    walletIndex,
+    walletIndexes: [walletIndex],
+    amountSol: normalizedQuickBuyAmount(draft.devBuySol || draft.amountSol || saved?.amountSol || "0.05") || "0.05",
     takeProfitPct: draft.takeProfitPct ?? saved?.takeProfitPct ?? "40",
     stopLossPct: draft.stopLossPct ?? saved?.stopLossPct ?? "8",
     sellDelay: draft.sellDelay || saved?.sellDelay || "off",
@@ -3230,16 +3379,24 @@ async function submitLaunchCoin() {
     if (!draft.name) throw new Error("Enter the token name before launching.");
     if (!draft.symbol) throw new Error("Enter the ticker before launching.");
 
-    state.launchCoinStatus = "Submitting launch through SlimeWire...";
+    state.launchCoinStatus = "Compressing image and preparing launch...";
     writeText(status, state.launchCoinStatus);
 
     const imagePayload = await launchCoinImagePayload();
+    const requestPayload = {
+      ...draft,
+      ...imagePayload
+    };
+    const requestBody = JSON.stringify(requestPayload);
+    if (requestBody.length > 650_000) {
+      throw new Error("Launch upload is still too large. Use a smaller square JPG, PNG, or WEBP and try again.");
+    }
+    state.launchCoinStatus = "Submitting launch through SlimeWire...";
+    writeText(status, state.launchCoinStatus);
+
     const data = await api("/api/web/launch/coin", {
       method: "POST",
-      body: JSON.stringify({
-        ...draft,
-        ...imagePayload
-      })
+      body: requestBody
     });
 
     const launch = data.launch || {};
@@ -3255,6 +3412,14 @@ async function submitLaunchCoin() {
     applyLaunchCoinMint(draft, tokenMint);
     state.launchCoinStatus = `Launch returned ${shortAddress(tokenMint)}.${signature} Routing into ${launchCoinActionLabel(draft.action)}...`;
     writeText(status, state.launchCoinStatus);
+
+    if (draft.devBuyEnabled) {
+      state.launchCoinStatus = `Launch returned ${shortAddress(tokenMint)}.${signature} Running Dev Wallet Initial Buy first...`;
+      writeText(status, state.launchCoinStatus);
+      await quickPresetTrade(tokenMint, launchCoinDevBuyPresetFromDraft(draft));
+      state.launchCoinStatus = `Dev Wallet Initial Buy submitted. Continuing post-launch ${launchCoinActionLabel(draft.action)} setup...`;
+      writeText(status, state.launchCoinStatus);
+    }
 
     if (draft.action === "trade") {
       await quickPresetTrade(tokenMint, launchCoinTradePresetFromDraft(draft));
@@ -4616,7 +4781,9 @@ async function quickPresetBundle(tokenMint, presetOverride = null) {
       tokenMint,
       walletIndexes: (preset.walletIndexes || []).filter((index) => state.wallets.some((wallet) => String(wallet.index) === String(index))),
       walletGroup: preset.walletGroup || "",
-      amountSol: normalizedQuickBuyAmount(preset.amountSol) || "0.1",
+      amountSol: presetOverride
+        ? (normalizedQuickBuyAmount(preset.amountSol) || "0.1")
+        : activeBundleQuickBuyAmount(preset),
       percent: "100",
       slippageBps: preset.slippageBps,
       sellDelay: preset.sellDelay || "off",
@@ -5419,13 +5586,24 @@ function compactMetricsLineHtml(row = {}) {
   `;
 }
 
+function pumpUrlForRow(row = {}) {
+  const existing = String(row.pumpUrl || "").trim();
+  if (existing) return existing;
+  const mint = String(row.tokenMint || row.mint || "").trim();
+  if (!mint) return "";
+  return Boolean(row.isPump) || mint.toLowerCase().endsWith("pump")
+    ? `https://pump.fun/coin/${encodeURIComponent(mint)}`
+    : "";
+}
+
 function miniTokenLinksHtml(row = {}, shareText = "") {
   const text = shareText || livePairShareText(row);
   const sniperCount = Number(row.sniperCount || row.snipers || 0);
+  const pumpUrl = pumpUrlForRow(row);
   return `
     <div class="compact-link-row">
       <a href="${escapeHtml(row.dexUrl || dexUrl(row.tokenMint))}" target="_blank" rel="noreferrer" title="DexScreener">DEX</a>
-      ${row.pumpUrl ? `<a href="${escapeHtml(row.pumpUrl)}" target="_blank" rel="noreferrer" title="Pump">PUMP</a>` : ""}
+      ${pumpUrl ? `<a href="${escapeHtml(pumpUrl)}" target="_blank" rel="noreferrer" title="Pump">PUMP</a>` : ""}
       ${row.twitterUrl ? `<a href="${escapeHtml(row.twitterUrl)}" target="_blank" rel="noreferrer" title="X">X</a>` : ""}
       ${row.telegramUrl ? `<a href="${escapeHtml(row.telegramUrl)}" target="_blank" rel="noreferrer" title="Telegram">TG</a>` : ""}
       ${row.websiteUrl ? `<a href="${escapeHtml(row.websiteUrl)}" target="_blank" rel="noreferrer" title="Website">WEB</a>` : ""}
@@ -5443,6 +5621,53 @@ function compareNewestLiveRows(a = {}, b = {}) {
   const bCreated = Number(b.pairCreatedAt || 0);
   if (aCreated || bCreated) return bCreated - aCreated;
   return Number(b.bestPickScore || 0) - Number(a.bestPickScore || 0);
+}
+
+function hashStringToInt(value = "") {
+  let hash = 0;
+  for (let i = 0; i < String(value).length; i += 1) {
+    hash = ((hash << 5) - hash) + String(value).charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash);
+}
+
+function tokenMintKey(row = {}) {
+  return String(row.tokenMint || row.mint || row.address || row.pairAddress || "").trim().toLowerCase();
+}
+
+function terminalRotationKey(scope = "") {
+  const feed = currentLivePairs();
+  return [
+    scope,
+    state.livePairBucket,
+    state.terminalSort,
+    feed?.refreshCount || "",
+    state.livePairsLastUpdatedByBucket[state.livePairBucket] || state.livePairsLastUpdatedAt || "",
+    state.kolScan?.refreshCount || "",
+    state.kolScan?.refreshedAt || state.kolLastUpdatedAt || ""
+  ].join(":");
+}
+
+function rotatedDisplayRows(rows = [], limit = 12, rotateKey = "", stickyCount = 0) {
+  const uniqueRows = uniqueSignalRows(rows || []);
+  const max = Math.max(0, Number(limit) || uniqueRows.length);
+  if (!max) return [];
+  if (!rotateKey || uniqueRows.length <= max) return uniqueRows.slice(0, max);
+  const stickySize = Math.min(Math.max(0, Number(stickyCount) || 0), Math.max(0, max - 1), uniqueRows.length);
+  const stickyRows = uniqueRows.slice(0, stickySize);
+  const pool = uniqueRows.slice(stickySize);
+  if (!pool.length) return stickyRows.slice(0, max);
+  const offset = hashStringToInt(rotateKey) % pool.length;
+  const rotated = [...pool.slice(offset), ...pool.slice(0, offset)];
+  return [...stickyRows, ...rotated].slice(0, max);
+}
+
+function removeRowsByMints(rows = [], mintSet = new Set()) {
+  return (rows || []).filter((row) => {
+    const key = tokenMintKey(row);
+    return !key || !mintSet.has(key);
+  });
 }
 
 function terminalTokenStatsHtml(row = {}) {
@@ -5467,7 +5692,7 @@ function terminalSignalRowsHtml(rows, options = {}) {
   const actionLabel = options.actionLabel || "Buy";
   const emptyTitle = options.emptyTitle || "No signals loaded";
   const emptyMessage = options.emptyMessage || "Refresh the feed to load current signals.";
-  const visibleRows = (rows || []).slice(0, limit);
+  const visibleRows = rotatedDisplayRows(rows || [], limit, options.rotateKey || "", options.stickyCount || 0);
   if (!visibleRows.length) return emptyState(emptyTitle, emptyMessage);
   return `
     <div class="terminal-token-list">
@@ -5514,7 +5739,7 @@ function compactSignalRowsHtml(rows, options = {}) {
   const actionLabel = options.actionLabel || "Buy Preset";
   const emptyTitle = options.emptyTitle || "No signals loaded";
   const emptyMessage = options.emptyMessage || "Refresh the feed to load current signals.";
-  const visibleRows = (rows || []).slice(0, limit);
+  const visibleRows = rotatedDisplayRows(rows || [], limit, options.rotateKey || "", options.stickyCount || 0);
   if (!visibleRows.length) return emptyState(emptyTitle, emptyMessage);
   return `
     <div class="compact-signal-list">
@@ -5611,8 +5836,16 @@ function activeTradePreset() {
   return presetById("trade", state.selectedTradePresetId);
 }
 
+function activeBundlePreset() {
+  return presetById("bundle", state.selectedBundlePresetId);
+}
+
 function activeQuickBuyAmount(preset = activeTradePreset()) {
   return normalizedQuickBuyAmount() || formatQuickBuyAmount(preset?.amountSol);
+}
+
+function activeBundleQuickBuyAmount(preset = activeBundlePreset()) {
+  return normalizedQuickBuyAmount() || formatQuickBuyAmount(preset?.amountSol) || "0.1";
 }
 
 function rowAgeSeconds(row = {}) {
@@ -5785,7 +6018,7 @@ function slimeScopeHtml() {
   return `
     <section class="slime-scope-page">
       <div class="terminal-title-row slime-scope-title-row">
-        <img class="slime-scope-title-icon" src="./assets/slimewire/svg/icons/slime-scope.svg" alt="" aria-hidden="true">
+        <span class="slime-scope-title-icon" aria-hidden="true"></span>
         <div>
           <h3>Slime Scope</h3>
           <p>Fast pump-style view for new, graduating, and graduated pairs. Mayhem-mode rows stay filtered out.</p>
@@ -5804,6 +6037,8 @@ function slimeScopeHtml() {
           layout: "terminal",
           limit: 30,
           actionLabel: activePresetButtonLabel(),
+          rotateKey: terminalRotationKey(`slime-scope:${state.slimeScopeMode}`),
+          stickyCount: 1,
           emptyTitle: "No Slime Scope pairs yet",
           emptyMessage: "Feeds are refreshing. Try a different scope mode if this stays empty."
         })}
@@ -5818,6 +6053,26 @@ function terminalHtml() {
   const newestLiveRows = [...liveRows].sort(compareNewestLiveRows);
   const kolRows = mergeMarketDataIntoRows(state.kolScan?.rows || []).filter((row) => !isUiMayhemRow(row));
   const bestRows = terminalBestPickRows(liveRows, kolRows);
+  const bestDisplayRows = rotatedDisplayRows(bestRows, 8, terminalRotationKey("best-picks"), 2);
+  const bestMintSet = new Set(bestDisplayRows.map(tokenMintKey).filter(Boolean));
+  const liveDisplaySource = removeRowsByMints(newestLiveRows, bestMintSet);
+  const liveDisplayRows = rotatedDisplayRows(
+    liveDisplaySource.length ? liveDisplaySource : newestLiveRows,
+    12,
+    terminalRotationKey("live-pairs"),
+    0
+  );
+  const usedMintSet = new Set([
+    ...bestMintSet,
+    ...liveDisplayRows.map(tokenMintKey).filter(Boolean)
+  ]);
+  const kolDisplaySource = removeRowsByMints(kolRows, usedMintSet);
+  const kolDisplayRows = rotatedDisplayRows(
+    kolDisplaySource.length ? kolDisplaySource : kolRows,
+    12,
+    terminalRotationKey("kol-signals"),
+    1
+  );
   const bucketLoading = Boolean(state.livePairsLoadingByBucket[state.livePairBucket]);
   const lastUpdated = currentLivePairsUpdatedAt();
   const rowTradeLabel = activePresetButtonLabel();
@@ -5854,15 +6109,15 @@ function terminalHtml() {
         <section class="command-grid">
           <article class="terminal-panel best-picks-panel">
             <header><h4>Best Picks</h4><span>Score + reasons</span></header>
-            ${compactSignalRowsHtml(bestRows, { layout: "terminal", limit: 8, actionLabel: rowTradeLabel, emptyTitle: "No Best Picks yet", emptyMessage: "Refresh Live Pairs to score current pairs." })}
+            ${compactSignalRowsHtml(bestDisplayRows, { layout: "terminal", limit: 8, actionLabel: rowTradeLabel, emptyTitle: "No Best Picks yet", emptyMessage: "Refresh Live Pairs to score current pairs." })}
           </article>
           <article class="terminal-panel live-pairs-panel">
             <header><h4>Live Pairs</h4><button data-tab="live">Open</button></header>
-            ${compactSignalRowsHtml(newestLiveRows, { layout: "terminal", limit: 12, actionLabel: rowTradeLabel })}
+            ${compactSignalRowsHtml(liveDisplayRows, { layout: "terminal", limit: 12, actionLabel: rowTradeLabel })}
           </article>
           <article class="terminal-panel kol-panel">
             <header><h4>KOL Signals</h4><button data-kol-refresh>${state.kolLoading ? "Loading..." : "Refresh"}</button></header>
-            ${compactSignalRowsHtml(kolRows, { layout: "terminal", limit: 12, actionLabel: rowTradeLabel, emptyTitle: "No KOL signals loaded", emptyMessage: "Refresh KOL Tracker to load signals." })}
+            ${compactSignalRowsHtml(kolDisplayRows, { layout: "terminal", limit: 12, actionLabel: rowTradeLabel, emptyTitle: "No KOL signals loaded", emptyMessage: "Refresh KOL Tracker to load signals." })}
           </article>
         </section>
 
@@ -5918,12 +6173,25 @@ function tokenPreviewHtml(token) {
     </dl>
     <div class="card-actions compact">
       <a href="${escapeHtml(token.dexUrl || dexUrl(token.tokenMint))}" target="_blank" rel="noreferrer">Dex</a>
-      ${token.pumpUrl ? `<a href="${escapeHtml(token.pumpUrl)}" target="_blank" rel="noreferrer">Pump</a>` : ""}
+      ${pumpUrlForRow(token) ? `<a href="${escapeHtml(pumpUrlForRow(token))}" target="_blank" rel="noreferrer">Pump</a>` : ""}
       <button class="primary" data-quick-trade-token="${escapeHtml(token.tokenMint)}">${escapeHtml(activePresetButtonLabel())}</button>
       <button data-quick-bundle-token="${escapeHtml(token.tokenMint)}">Bundle</button>
       ${hasPosition ? `<button data-position-sell="${escapeHtml(token.tokenMint)}" data-position-sell-percent="100">Exit 100%</button>` : ""}
     </div>
     <small class="score-breakdown">Why: ${escapeHtml(scoreWhyText(token))}</small>
+  `;
+}
+
+function smartChartViewTabsHtml(activeView = "chartTxns") {
+  const tabs = [
+    ["chartTxns", "Chart + Txns"],
+    ["chart", "Chart"],
+    ["txns", "Transactions"]
+  ];
+  return `
+    <div class="smart-chart-mode-tabs" role="tablist" aria-label="Smart Chart view">
+      ${tabs.map(([value, label]) => `<button type="button" data-smart-chart-view="${value}" data-active="${activeView === value}">${label}</button>`).join("")}
+    </div>
   `;
 }
 
@@ -5936,9 +6204,12 @@ function smartChartHtml() {
         token,
         ...allVisibleSignalRows().filter((row) => String(row.tokenMint || "") === mint)
       ]).filter(Boolean).slice(0, 5)
-    : terminalBestPickRows().slice(0, 5);
+    : rotatedDisplayRows(terminalBestPickRows(), 5, terminalRotationKey("smart-chart-suggest"), 1);
   const suggestion = smartChartSuggestion(token || {});
-  const chartZoom = Math.min(120, Math.max(65, Number(state.smartChartZoom) || 80));
+  const chartZoom = Math.min(115, Math.max(60, Number(state.smartChartZoom) || 72));
+  const chartView = ["chartTxns", "chart", "txns"].includes(state.smartChartView) ? state.smartChartView : "chartTxns";
+  const showChart = chartView !== "txns";
+  const showTxns = chartView !== "chart";
   if (!mint) {
     return `
       <section class="smart-chart-terminal">
@@ -5960,6 +6231,8 @@ function smartChartHtml() {
             layout: "terminal",
             limit: 5,
             actionLabel: activePresetButtonLabel(),
+            rotateKey: terminalRotationKey("smart-chart-empty"),
+            stickyCount: 1,
             emptyTitle: "No chart picks loaded",
             emptyMessage: "Refresh feeds, then open Smart Chart again."
           })}
@@ -5993,15 +6266,24 @@ function smartChartHtml() {
               ${miniTokenLinksHtml(token)}
             </div>
           </div>
-          <div class="smart-chart-frame" style="--smart-chart-scale: ${chartZoom / 100};">
-            <iframe title="DexScreener chart for ${escapeHtml(token.symbol || shortAddress(mint))}" src="${escapeHtml(dexChartEmbedUrl(mint))}" loading="lazy"></iframe>
-          </div>
-          <label class="smart-chart-zoom">
-            <span>Zoom</span>
-            <input data-smart-chart-zoom type="range" min="65" max="120" step="5" value="${escapeHtml(chartZoom)}">
-            <strong>${escapeHtml(chartZoom)}%</strong>
-          </label>
-          <small class="score-breakdown">If the embedded chart does not load, use the DEX link above.</small>
+          ${showChart ? `
+            <div class="smart-chart-frame" style="--smart-chart-scale: ${chartZoom / 100};">
+              <iframe title="DexScreener chart for ${escapeHtml(token.symbol || shortAddress(mint))}" src="${escapeHtml(dexChartEmbedUrl(mint))}" loading="lazy"></iframe>
+            </div>
+            <label class="smart-chart-zoom">
+              <span>Zoom</span>
+              <input data-smart-chart-zoom type="range" min="60" max="115" step="5" value="${escapeHtml(chartZoom)}">
+              <strong>${escapeHtml(chartZoom)}%</strong>
+            </label>
+            <small class="score-breakdown">If the embedded chart does not load, use the DEX link above.</small>
+          ` : `
+            <div class="smart-chart-transactions-panel">
+              <strong>Transactions</strong>
+              <p>Open the DEX transaction feed for live fills, then use the related SlimeWire signals below.</p>
+              <a href="${escapeHtml(token.dexUrl || dexUrl(mint))}" target="_blank" rel="noreferrer">Open DEX Transactions</a>
+            </div>
+          `}
+          ${smartChartViewTabsHtml(chartView)}
         </article>
         <aside class="terminal-panel smart-chart-side">
           <h3>${escapeHtml(token.symbol || "Token")} setup</h3>
@@ -6019,7 +6301,7 @@ function smartChartHtml() {
           </div>
         </aside>
       </div>
-      <div class="smart-chart-bottom-grid">
+      ${showTxns ? `<div class="smart-chart-bottom-grid">
         <article class="terminal-panel">
           <div class="terminal-title-row">
             <h3>Related signals</h3>
@@ -6040,7 +6322,7 @@ function smartChartHtml() {
           </div>
           ${heldPosition ? `<div class="table-list compact-table">${positionRowHtml(heldPosition)}</div>` : emptyState("No position", "No current SlimeWire position is tracked for this token.")}
         </article>
-      </div>
+      </div>` : ""}
     </section>
   `;
 }
@@ -6151,7 +6433,15 @@ function terminalSubtabHtml() {
   if (state.terminalSubtab === "orders") return stopLossAuditHtml();
   if (state.terminalSubtab === "history") return liveTradeRowsHtml(12);
   if (state.terminalSubtab === "wallets") return walletBalanceSummaryHtml();
-  if (state.terminalSubtab === "kol") return compactSignalRowsHtml(mergeMarketDataIntoRows(state.kolScan?.rows || []), { layout: "terminal", limit: 12 });
+  if (state.terminalSubtab === "kol") {
+    const rows = mergeMarketDataIntoRows(state.kolScan?.rows || []).filter((row) => !isUiMayhemRow(row));
+    return compactSignalRowsHtml(rows, {
+      layout: "terminal",
+      limit: 12,
+      rotateKey: terminalRotationKey("bottom-kol"),
+      stickyCount: 1
+    });
+  }
   if (state.terminalSubtab === "sniper") return state.scan ? tokenSignalRowsHtml(state.scan.rows || [], { context: "sniper", primaryAction: "snipe", primaryActionLabel: "Snipe", hideToolbar: true }) : emptyState("No sniper scan loaded", "Open Sniper or refresh a scan mode.");
   if (state.terminalSubtab === "tx") return txAuditHtml(true);
   if (state.terminalSubtab === "reconcile") return balanceReconciliationHtml();
@@ -7252,7 +7542,7 @@ document.addEventListener("click", async (event) => {
     window.history.pushState({}, "", "/terminal");
     render();
     await Promise.allSettled([
-      refreshLivePairBuckets({ silent: true }),
+      refreshLivePairBuckets({ silent: true, force: true }),
       loadKolScan(state.kolMode, "", { silent: true })
     ]);
     render();
@@ -7362,6 +7652,12 @@ document.addEventListener("click", async (event) => {
     state.activeTab = "smartChart";
     state.route = "terminal";
     window.history.pushState({}, "", "/terminal/chart");
+    render();
+    return;
+  }
+  if (target.matches("[data-smart-chart-view]")) {
+    const nextView = target.dataset.smartChartView || "chartTxns";
+    state.smartChartView = ["chartTxns", "chart", "txns"].includes(nextView) ? nextView : "chartTxns";
     render();
     return;
   }
@@ -7507,7 +7803,7 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-refresh-all]")) {
     if (!state.user || !state.token) {
-      if (state.activeTab === "live" || state.activeTab === "terminal") await refreshLivePairBuckets({ silent: true }).catch((error) => setError(error.message));
+      if (state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "slimeScope") await refreshLivePairBuckets({ silent: true, force: true }).catch((error) => setError(error.message));
       else if (state.activeTab === "sniper") await loadScan().catch((error) => setError(error.message));
       else if (state.activeTab === "kol") await loadKolScan().catch((error) => setError(error.message));
       else setError("Browsing is open. Create or connect a profile when you want saved wallets, balances, or trades.");
@@ -7540,9 +7836,9 @@ document.addEventListener("click", async (event) => {
       await loadScan().catch((error) => setError(error.message));
     }
     if (state.activeTab === "slimeScope") {
-      await refreshLivePairBuckets({ silent: true }).catch((error) => setError(error.message));
+      await refreshLivePairBuckets({ silent: true, force: true }).catch((error) => setError(error.message));
     } else if ((state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "smartChart") && !state.livePairsByBucket[state.livePairBucket]) {
-      await refreshLivePairBuckets().catch((error) => setError(error.message));
+      await refreshLivePairBuckets({ force: true }).catch((error) => setError(error.message));
     }
     if ((state.activeTab === "kol" || state.activeTab === "terminal" || state.activeTab === "smartChart") && !state.kolScan) {
       await loadKolScan().catch((error) => setError(error.message));
@@ -7630,7 +7926,7 @@ document.addEventListener("change", async (event) => {
   }
   if (target?.matches?.("[data-terminal-sort]")) {
     state.terminalSort = target.value || "best";
-    await refreshLivePairBuckets({ silent: true }).catch((error) => setError(error.message));
+    await refreshLivePairBuckets({ silent: true, force: true }).catch((error) => setError(error.message));
     render();
   }
   if (target?.matches?.("[data-ogre-tek-field]")) {
@@ -7662,7 +7958,7 @@ document.addEventListener("input", (event) => {
     return;
   }
   if (target?.matches?.("[data-smart-chart-zoom]")) {
-    state.smartChartZoom = Math.min(120, Math.max(65, Number(target.value) || 80));
+    state.smartChartZoom = Math.min(115, Math.max(60, Number(target.value) || 72));
     const label = target.closest(".smart-chart-zoom")?.querySelector("strong");
     if (label) writeText(label, `${state.smartChartZoom}%`);
     const frame = target.closest(".smart-chart-main")?.querySelector(".smart-chart-frame");
@@ -7677,7 +7973,7 @@ document.addEventListener("input", (event) => {
 function resumeLiveFeeds() {
   if (state.route !== "terminal") return;
   if (state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "slimeScope") {
-    refreshLivePairBuckets({ silent: true }).catch((error) => setError(error.message));
+    refreshLivePairBuckets({ silent: true, force: true }).catch((error) => setError(error.message));
     scheduleLivePairsAutoRefresh();
   }
   if ((state.activeTab === "kol" || state.activeTab === "terminal") && !state.kolWallet) {
@@ -7700,7 +7996,7 @@ async function initializeApp() {
   await loadSession();
   if (state.route === "terminal") {
     await Promise.allSettled([
-      refreshLivePairBuckets({ silent: true }),
+      refreshLivePairBuckets({ silent: true, force: true }),
       loadKolScan(state.kolMode, "", { silent: true })
     ]);
     if (state.activeTab === "ogreTek") {
