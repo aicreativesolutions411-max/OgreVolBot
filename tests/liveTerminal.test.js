@@ -2,10 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   computeBestPickScore,
+  classifySlimeScopePair,
   formatLivePairAge,
+  isGraduatedSlimeScopePair,
   isLivePairInBucket,
   normalizePairTimestamp,
   pairAgeMinutes,
+  slimeScopeProgressPct,
   sortLivePairs
 } from "../src/lib/liveTerminal.js";
 
@@ -82,4 +85,35 @@ test("newest sort uses pair creation timestamp, not trade time", () => {
   };
 
   assert.equal(sortLivePairs([olderPairRecentTrade, newerPairOldTrade], "newest", NOW)[0], newerPairOldTrade);
+});
+
+test("slime scope separates fresh, graduating, and graduated pump pairs", () => {
+  const fresh = { tokenMint: "abcPump", isPump: true, pairCreatedAt: minutesAgo(5), marketCap: 2_500 };
+  const almostBonded = { tokenMint: "defPump", isPump: true, pairCreatedAt: minutesAgo(20), marketCap: 60_000 };
+  const bonded = { tokenMint: "ghiPump", isPump: true, graduated: true, pairCreatedAt: minutesAgo(120), marketCap: 80_000 };
+
+  assert.equal(classifySlimeScopePair(fresh, NOW), "new");
+  assert.equal(classifySlimeScopePair(almostBonded, NOW), "graduating");
+  assert.equal(classifySlimeScopePair(bonded, NOW), "graduated");
+  assert.ok(slimeScopeProgressPct(almostBonded) >= 70);
+});
+
+test("slime scope parses compact market-cap and progress strings", () => {
+  const almostBonded = { tokenMint: "defPump", isPump: true, marketCap: "$60K" };
+  const percentProgress = { tokenMint: "abcPump", isPump: true, bondingProgressPct: "87%" };
+
+  assert.equal(classifySlimeScopePair(almostBonded, NOW), "graduating");
+  assert.equal(slimeScopeProgressPct(percentProgress), 87);
+});
+
+test("slime scope treats pump pairs on graduation DEXes as graduated", () => {
+  const raydiumPump = {
+    tokenMint: "rayPump",
+    isPump: true,
+    dexId: "raydium",
+    source: "raydium"
+  };
+
+  assert.equal(isGraduatedSlimeScopePair(raydiumPump), true);
+  assert.equal(classifySlimeScopePair(raydiumPump, NOW), "graduated");
 });

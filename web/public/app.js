@@ -159,6 +159,7 @@ const state = {
   livePairsLoadingByBucket: {},
   livePairsLastUpdatedAt: "",
   livePairsLastUpdatedByBucket: {},
+  livePairsRefreshErrorByBucket: {},
   livePairBucket: "live",
   slimeScopeMode: "new",
   launchResult: null,
@@ -179,6 +180,9 @@ const state = {
   selectedBundlePresetId: "",
   quickBuyAmountOverride: "",
   terminalTradeCollapsed: true,
+  walletConnectMenuOpen: false,
+  walletConnectReturnPath: "/terminal",
+  walletConnectStatus: "",
   ogreTek: {
     loading: false,
     error: "",
@@ -461,7 +465,13 @@ function visibleElement(selector) {
 }
 
 function walletConnectStatusElement() {
-  return visibleElement("[data-wallet-connect-status]");
+  return visibleElement("[data-wallet-connect-modal] [data-wallet-connect-status]")
+    || visibleElement("[data-wallet-connect-status]");
+}
+
+function setWalletConnectStatus(message = "") {
+  state.walletConnectStatus = String(message || "");
+  writeText(walletConnectStatusElement(), state.walletConnectStatus);
 }
 
 function loginCredentialsFromForm({ requirePassword = false } = {}) {
@@ -576,14 +586,10 @@ async function createAccountAndConnectWallet() {
       state.loginCollapsed = true;
       await loadAll();
     }
-    state.activeTab = "profile";
-    render();
-    await connectBrowserWallet("solana");
-    if (state.user) {
-      state.route = "terminal";
-      window.history.pushState({}, "", "/terminal");
-      render();
-    }
+    state.activeTab = "terminal";
+    state.route = "terminal";
+    window.history.pushState({}, "", "/terminal");
+    openWalletConnectChooser({ returnPath: "/terminal" });
   } catch (error) {
     setError(error.message);
   }
@@ -739,14 +745,53 @@ async function loadLivePairs({ silent = false, bucket = state.livePairBucket, re
   try {
     const forceQuery = force ? "&force=true" : "";
     const data = await api(`/api/web/live-pairs?bucket=${encodeURIComponent(safeBucket)}&sort=${encodeURIComponent(state.terminalSort || "best")}${forceQuery}`);
-    const value = data.livePairs;
+    const label = LIVE_PAIR_BUCKETS.find(([id]) => id === safeBucket)?.[1] || "Live";
+    const value = data.livePairs || {
+      bucket: safeBucket,
+      rows: [],
+      refreshedAt: new Date().toISOString(),
+      refreshSeconds: 5,
+      message: `${label} feed returned no rows yet. Retrying automatically.`
+    };
     const updatedAt = value?.refreshedAt || new Date().toISOString();
+    const nextErrors = { ...(state.livePairsRefreshErrorByBucket || {}) };
+    delete nextErrors[safeBucket];
+    state.livePairsRefreshErrorByBucket = nextErrors;
     state.livePairsByBucket = { ...state.livePairsByBucket, [safeBucket]: value };
     state.livePairsLastUpdatedByBucket = { ...state.livePairsLastUpdatedByBucket, [safeBucket]: updatedAt };
     if (isActiveBucket) {
       state.livePairs = value;
       state.livePairsLastUpdatedAt = updatedAt;
     }
+    return value;
+  } catch (error) {
+    const message = publicErrorMessage(error?.message || "Live feed refresh failed.");
+    const label = LIVE_PAIR_BUCKETS.find(([id]) => id === safeBucket)?.[1] || "Live";
+    const previous = state.livePairsByBucket[safeBucket] || (isActiveBucket ? state.livePairs : null);
+    const staleValue = previous
+      ? {
+          ...previous,
+          stale: true,
+          refreshError: message,
+          message: `Showing last good ${label} feed. Refresh failed, retrying automatically.`
+        }
+      : {
+          bucket: safeBucket,
+          rows: [],
+          refreshedAt: new Date().toISOString(),
+          refreshSeconds: 5,
+          stale: true,
+          refreshError: message,
+          message: `${label} refresh failed. Retrying automatically.`
+        };
+    state.livePairsRefreshErrorByBucket = { ...(state.livePairsRefreshErrorByBucket || {}), [safeBucket]: message };
+    state.livePairsByBucket = { ...state.livePairsByBucket, [safeBucket]: staleValue };
+    state.livePairsLastUpdatedByBucket = { ...state.livePairsLastUpdatedByBucket, [safeBucket]: staleValue.refreshedAt };
+    if (isActiveBucket) {
+      state.livePairs = staleValue;
+      state.livePairsLastUpdatedAt = staleValue.refreshedAt;
+    }
+    return staleValue;
   } finally {
     const nextLoading = { ...state.livePairsLoadingByBucket };
     delete nextLoading[safeBucket];
@@ -786,8 +831,8 @@ function scheduleLivePairsAutoRefresh() {
     }
     try {
       await refreshLivePairBuckets({ silent: true });
-    } catch (error) {
-      setError(error.message);
+    } catch {
+      // Keep the last good feed visible; the next timer retry reports status inline.
     } finally {
       scheduleLivePairsAutoRefresh();
     }
@@ -1047,6 +1092,7 @@ function render(options = {}) {
     writeText(logoutButton, "Log Out");
   }
   if (state.route === "terminal") renderTabs();
+  renderWalletConnectModal();
 }
 
 function renderTabs() {
@@ -1332,7 +1378,7 @@ function createWalletSection() {
               <button type="button" data-copy="${escapeHtml(connected.publicKey)}">Copy</button>
               <a href="https://solscan.io/account/${encodeURIComponent(connected.publicKey)}" target="_blank" rel="noreferrer">Solscan</a>
               <button type="button" data-connect-wallet="solana">Reconnect</button>
-              <button type="button" data-disconnect-wallet>Remove</button>
+              <button type="button" data-disconnect-wallet>Disconnect</button>
             </div>
           ` : `<small>No wallet connected yet.</small>`}
         </div>
@@ -1399,7 +1445,7 @@ function connectWalletSection() {
             <button type="button" data-copy="${escapeHtml(connected.publicKey)}">Copy</button>
             <a href="https://solscan.io/account/${encodeURIComponent(connected.publicKey)}" target="_blank" rel="noreferrer">Solscan</a>
             <button type="button" data-connect-wallet="solana">Reconnect</button>
-            <button type="button" data-disconnect-wallet>Remove</button>
+            <button type="button" data-disconnect-wallet>Disconnect</button>
           </div>
         ` : `
           <span>No browser wallet connected yet.</span>
@@ -1407,6 +1453,60 @@ function connectWalletSection() {
         `}
       </div>
       <small data-wallet-connect-status>${connected ? `Connected ${escapeHtml(connected.shortPublicKey || shortAddress(connected.publicKey))}.` : "Pick a wallet above. The wallet extension will ask you to approve the connection."}</small>
+    </section>
+  `;
+}
+
+function openWalletConnectChooser({ returnPath = "/terminal" } = {}) {
+  state.walletConnectMenuOpen = true;
+  state.walletConnectReturnPath = returnPath || "/terminal";
+  state.walletConnectStatus = state.user?.connectedWallet
+    ? `Connected ${shortAddress(state.user.connectedWallet.publicKey)}. Pick a provider to reconnect or switch.`
+    : "Pick a wallet. Your extension will ask you to approve.";
+  render({ force: true });
+}
+
+function renderWalletConnectModal() {
+  const modal = $("[data-wallet-connect-modal]");
+  if (!modal) return;
+  if (!state.walletConnectMenuOpen) {
+    modal.hidden = true;
+    modal.innerHTML = "";
+    return;
+  }
+
+  const connected = state.user?.connectedWallet || state.connectedWalletBalance;
+  modal.hidden = false;
+  modal.innerHTML = `
+    <div class="wallet-connect-backdrop" data-wallet-connect-close></div>
+    <section class="wallet-connect-dialog" role="dialog" aria-modal="true" aria-label="Connect wallet">
+      <div class="wallet-connect-dialog-head">
+        <div>
+          <h3>${connected ? "Reconnect Wallet" : "Connect Wallet"}</h3>
+          <p>${connected ? "Switch to a different wallet or disconnect the current public wallet." : "Connect Phantom, Solflare, Backpack, or another Solana wallet. Private keys never leave your wallet."}</p>
+        </div>
+        <button type="button" class="icon-button" data-wallet-connect-close aria-label="Close wallet connection panel">x</button>
+      </div>
+      ${connected ? `
+        <div class="connected-wallet-box modal-connected-wallet">
+          <span>${escapeHtml(connected.provider || "Solana Wallet")}</span>
+          <code>${escapeHtml(connected.publicKey || "")}</code>
+          <div class="card-actions compact">
+            <button type="button" data-copy="${escapeHtml(connected.publicKey || "")}">Copy</button>
+            <a href="https://solscan.io/account/${encodeURIComponent(connected.publicKey || "")}" target="_blank" rel="noreferrer">Solscan</a>
+            <button type="button" data-disconnect-wallet>Disconnect</button>
+          </div>
+        </div>
+      ` : ""}
+      <div class="wallet-provider-buttons modal-wallet-provider-buttons">
+        ${browserWalletChoices().map((wallet) => `
+          <button type="button" data-connect-wallet-provider="${wallet.id}" ${wallet.detected ? "" : `title="${escapeHtml(wallet.label)} extension not detected"`}>
+            <strong>${escapeHtml(connected ? `Switch to ${wallet.label}` : wallet.label)}</strong>
+            <small>${wallet.detected ? "Detected" : "Not detected"}</small>
+          </button>
+        `).join("")}
+      </div>
+      <small class="connect-status" data-wallet-connect-status>${escapeHtml(state.walletConnectStatus || "")}</small>
     </section>
   `;
 }
@@ -3823,22 +3923,24 @@ async function useXProfileAvatar() {
   await updateProfileAvatar({ avatarUrl: url, avatarSource: "x" }, "Saving X PFP...");
 }
 
-async function connectBrowserWallet(providerId) {
+async function connectBrowserWallet(providerId, options = {}) {
   const status = walletConnectStatusElement();
   const provider = walletProviderById(providerId);
   if (!provider) {
-    writeText(status, `${walletProviderLabel(providerId)} is not detected in this browser. Install/open the wallet extension, then refresh.`);
+    setWalletConnectStatus(`${walletProviderLabel(providerId)} is not detected in this browser. Install/open the wallet extension, then refresh.`);
     return;
   }
 
   try {
     const existingWallet = state.user?.connectedWallet?.publicKey || state.connectedWalletBalance?.publicKey || "";
     if (existingWallet) {
-      const shouldReconnect = window.confirm(
-        `Reconnect or switch wallet?\n\nCurrent wallet: ${shortAddress(existingWallet)}\n\nYour wallet extension will open so you can approve the wallet to use on Live Terminal.`
-      );
+      const shouldReconnect = options.confirmSwitch === false
+        ? true
+        : window.confirm(
+            `Reconnect or switch wallet?\n\nCurrent wallet: ${shortAddress(existingWallet)}\n\nYour wallet extension will open so you can approve the wallet to use on Live Terminal.`
+          );
       if (!shouldReconnect) {
-        writeText(status, "Wallet connection unchanged.");
+        setWalletConnectStatus("Wallet connection unchanged.");
         navigateTo("/terminal", "terminal");
         return;
       }
@@ -3848,7 +3950,7 @@ async function connectBrowserWallet(providerId) {
         // Some providers either do not expose disconnect or reject until the extension is focused.
       }
     }
-    writeText(status, `Opening ${walletProviderLabel(providerId, provider)}...`);
+    setWalletConnectStatus(`Opening ${walletProviderLabel(providerId, provider)}...`);
     const result = await provider.connect?.({ onlyIfTrusted: false });
     const publicKey = result?.publicKey || provider.publicKey;
     const publicKeyText = publicKey?.toBase58?.() || publicKey?.toString?.() || "";
@@ -3871,8 +3973,9 @@ async function connectBrowserWallet(providerId) {
       provider: walletProviderLabel(providerId, provider),
       tokens: []
     };
-    writeText(status, `Connected ${shortAddress(publicKeyText)}. Opening Live Terminal...`);
-    navigateTo("/terminal", "terminal");
+    state.walletConnectMenuOpen = false;
+    setWalletConnectStatus(`Connected ${shortAddress(publicKeyText)}. Opening Live Terminal...`);
+    navigateTo(options.returnPath || state.walletConnectReturnPath || "/terminal", "terminal");
     await Promise.allSettled([
       loadAll(),
       refreshLivePairBuckets({ silent: true, force: true }),
@@ -3880,7 +3983,7 @@ async function connectBrowserWallet(providerId) {
     ]);
     render({ force: true });
   } catch (error) {
-    writeText(status, error.message || "Wallet connection was cancelled.");
+    setWalletConnectStatus(error.message || "Wallet connection was cancelled.");
   }
 }
 
@@ -3888,8 +3991,8 @@ async function disconnectBrowserWallet() {
   const status = walletConnectStatusElement();
   if (!state.user || !state.token) {
     state.connectedWalletBalance = null;
-    writeText(status, "Connected wallet removed.");
-    render();
+    setWalletConnectStatus("Connected wallet disconnected.");
+    render({ force: true });
     return;
   }
   try {
@@ -3916,10 +4019,10 @@ async function disconnectBrowserWallet() {
       connectedWallet: null
     });
     state.connectedWalletBalance = null;
-    writeText(status, "Connected wallet removed.");
-    render();
+    setWalletConnectStatus("Connected wallet disconnected.");
+    render({ force: true });
   } catch (error) {
-    writeText(status, error.message);
+    setWalletConnectStatus(error.message);
     setError(error.message);
   }
 }
@@ -4920,6 +5023,8 @@ function connectedWalletCardHtml() {
       <div class="card-actions">
         <button data-refresh-all>Refresh</button>
         <button data-copy="${escapeHtml(connected.publicKey)}">Copy</button>
+        <button type="button" data-connect-wallet="solana">Reconnect</button>
+        <button type="button" data-disconnect-wallet>Disconnect</button>
         <button data-tab="txAudit">Tx Audit</button>
         <a href="https://solscan.io/account/${encodeURIComponent(connected.publicKey)}" target="_blank" rel="noreferrer">Solscan</a>
       </div>
@@ -5159,13 +5264,30 @@ function mergeMarketDataIntoRows(rows = []) {
   return (rows || []).map((row) => mergeMarketData(row, marketByMint.get(String(row?.tokenMint || ""))));
 }
 
+function parseUiNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  const compact = raw.replace(/[$,%_\s,]/g, "");
+  const match = compact.match(/^([-+]?\d*\.?\d+)([kmb])?$/i);
+  if (!match) return null;
+  const number = Number(match[1]);
+  if (!Number.isFinite(number)) return null;
+  const suffix = String(match[2] || "").toLowerCase();
+  if (suffix === "k") return number * 1_000;
+  if (suffix === "m") return number * 1_000_000;
+  if (suffix === "b") return number * 1_000_000_000;
+  return number;
+}
+
 function firstUsefulNumber(...values) {
   for (const value of values) {
-    const number = Number(value);
+    const number = parseUiNumber(value);
     if (Number.isFinite(number) && number > 0) return number;
   }
   for (const value of values) {
-    const number = Number(value);
+    const number = parseUiNumber(value);
     if (Number.isFinite(number)) return number;
   }
   return 0;
@@ -5533,6 +5655,66 @@ function slimeScopeVolume(row = {}) {
   return firstUsefulNumber(row.volumeM5, row.volume5m, row.volumeM15, row.volumeM30, row.volumeH1, row.volumeH24, row.volumeUsd);
 }
 
+function slimeScopeTextBlob(row = {}) {
+  return [
+    row.tokenMint,
+    row.symbol,
+    row.name,
+    row.source,
+    row.category,
+    row.dexId,
+    row.dexName,
+    row.poolType,
+    row.platform,
+    row.raydiumPool,
+    row.pairUrl,
+    ...(row.riskFlags || []),
+    ...(row.reasons || [])
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+
+function slimeScopeProgressPct(row = {}) {
+  const direct = firstUsefulNumber(
+    row.bondingProgressPct,
+    row.bondingProgress,
+    row.bonding_curve_progress,
+    row.bondingCurveProgress,
+    row.pumpProgress,
+    row.graduationProgress,
+    row.completion,
+    row.completePct
+  );
+  if (direct > 0) return direct <= 1 ? direct * 100 : direct;
+  const marketCap = slimeScopeMarketCap(row);
+  const text = slimeScopeTextBlob(row);
+  const isPump = Boolean(row.isPump) || text.includes("pump") || String(row.tokenMint || "").toLowerCase().endsWith("pump");
+  if (isPump && marketCap > 0) return Math.max(1, Math.min(99, (marketCap / 69_000) * 100));
+  return 0;
+}
+
+function isGraduatedSlimeScopeRow(row = {}) {
+  if (row.isGraduated || row.graduated || row.bonded || row.isBonded || row.complete || row.completed || row.bondingComplete) return true;
+  if (row.raydiumPool || row.raydium_pool || row.poolAddress) return true;
+  const text = slimeScopeTextBlob(row);
+  if (/\b(graduated|bonded|bonding complete|complete)\b/.test(text)) return true;
+  const isPump = Boolean(row.isPump) || text.includes("pump") || String(row.tokenMint || "").toLowerCase().endsWith("pump");
+  return Boolean(isPump && /\b(raydium|meteora|orca)\b/.test(text));
+}
+
+function classifySlimeScopeRow(row = {}) {
+  if (isGraduatedSlimeScopeRow(row)) return "graduated";
+  const explicit = String(row.slimeScopeCategory || "").trim().toLowerCase();
+  if (["new", "graduating"].includes(explicit)) return explicit;
+  const progress = slimeScopeProgressPct(row);
+  const marketCap = slimeScopeMarketCap(row);
+  if (progress >= 70 || marketCap >= 45_000) return "graduating";
+  const text = slimeScopeTextBlob(row);
+  const age = rowAgeSeconds(row);
+  const isPump = Boolean(row.isPump) || text.includes("pump") || String(row.tokenMint || "").toLowerCase().endsWith("pump");
+  if (isPump || !Number.isFinite(age) || age <= 3_600) return "new";
+  return "unknown";
+}
+
 function slimeScopePulseScore(row = {}) {
   const score = Number(row.bestPickScore || row.score || 0);
   const volume = slimeScopeVolume(row);
@@ -5571,36 +5753,26 @@ function backfillSlimeScopeRows(primary = [], fallback = [], limit = SLIME_SCOPE
 
 function slimeScopeRows(mode = state.slimeScopeMode) {
   const withMarket = slimeScopeSourceRows();
-  const bestFallback = sortSlimeScopeRows(withMarket);
-  const recentFallback = [...withMarket].filter((row) => rowAgeSeconds(row) <= 86_400).sort(compareNewestLiveRows);
-
-  if (mode === "graduated") {
-    const graduated = sortSlimeScopeRows(withMarket.filter((row) => {
-      const marketCap = slimeScopeMarketCap(row);
-      const liquidity = slimeScopeLiquidity(row);
-      const volume = slimeScopeVolume(row);
-      return marketCap >= 7_000 || liquidity >= 1_000 || volume >= 1_000 || Boolean(row.dexUrl && !row.isPump);
-    }));
-    return backfillSlimeScopeRows(graduated, [...recentFallback, ...bestFallback]);
-  }
-  if (mode === "graduating") {
-    const graduating = sortSlimeScopeRows(withMarket.filter((row) => {
-      const marketCap = slimeScopeMarketCap(row);
-      const liquidity = slimeScopeLiquidity(row);
-      const volume = slimeScopeVolume(row);
-      const age = rowAgeSeconds(row);
-      return (
-        (marketCap >= 2_000 && marketCap < 120_000)
-        || (liquidity >= 500 && liquidity < 60_000)
-        || (volume > 0 && marketCap < 200_000)
-        || (Number.isFinite(age) && age <= 21_600 && (marketCap > 0 || liquidity > 0 || volume > 0))
-      );
-    }));
-    const earlyFallback = sortSlimeScopeRows(withMarket.filter((row) => rowAgeSeconds(row) <= 21_600 || slimeScopeMarketCap(row) < 200_000));
-    return backfillSlimeScopeRows(graduating, [...earlyFallback, ...bestFallback]);
-  }
-  const newest = [...withMarket].filter((row) => rowAgeSeconds(row) <= 3_600).sort(compareNewestLiveRows);
-  return backfillSlimeScopeRows(newest, [...recentFallback, ...bestFallback]);
+  const category = mode === "graduated" ? "graduated" : mode === "graduating" ? "graduating" : "new";
+  const primary = withMarket.filter((row) => classifySlimeScopeRow(row) === category);
+  const fallback = withMarket.filter((row) => {
+    const rowCategory = classifySlimeScopeRow(row);
+    const progress = slimeScopeProgressPct(row);
+    const marketCap = slimeScopeMarketCap(row);
+    const age = rowAgeSeconds(row);
+    if (category === "graduated") return isGraduatedSlimeScopeRow(row) || rowCategory === "graduated";
+    if (category === "graduating") {
+      return rowCategory !== "graduated"
+        && !isGraduatedSlimeScopeRow(row)
+        && (progress >= 55 || (marketCap >= 30_000 && marketCap < 90_000));
+    }
+    return rowCategory !== "graduated"
+      && !isGraduatedSlimeScopeRow(row)
+      && (rowCategory === "new" || !Number.isFinite(age) || age <= 7_200 || progress < 60);
+  });
+  const sortedPrimary = category === "new" ? [...primary].sort(compareNewestLiveRows) : sortSlimeScopeRows(primary);
+  const sortedFallback = category === "new" ? [...fallback].sort(compareNewestLiveRows) : sortSlimeScopeRows(fallback);
+  return backfillSlimeScopeRows(sortedPrimary, sortedFallback);
 }
 
 function slimeScopeHtml() {
@@ -7121,8 +7293,25 @@ document.addEventListener("click", async (event) => {
     await useLaunchCoinMint();
     return;
   }
-  if (target.matches("[data-connect-wallet]")) await connectBrowserWallet(target.dataset.connectWallet);
-  if (target.matches("[data-disconnect-wallet]")) await disconnectBrowserWallet();
+  if (target.matches("[data-connect-wallet]")) {
+    const providerId = target.dataset.connectWallet || "solana";
+    if (providerId === "solana") openWalletConnectChooser({ returnPath: "/terminal" });
+    else await connectBrowserWallet(providerId, { returnPath: "/terminal" });
+    return;
+  }
+  if (target.matches("[data-connect-wallet-provider]")) {
+    await connectBrowserWallet(target.dataset.connectWalletProvider || "solana", { returnPath: "/terminal" });
+    return;
+  }
+  if (target.matches("[data-wallet-connect-close]")) {
+    state.walletConnectMenuOpen = false;
+    render({ force: true });
+    return;
+  }
+  if (target.matches("[data-disconnect-wallet]")) {
+    await disconnectBrowserWallet();
+    return;
+  }
   if (target.matches("[data-share-x]")) openXShare(target.dataset.shareText || "");
   if (target.matches("[data-share-watch-token-btn]")) shareManualWatch("token");
   if (target.matches("[data-share-watch-kol-btn]")) shareManualWatch("kol");

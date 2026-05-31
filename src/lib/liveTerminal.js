@@ -83,6 +83,92 @@ export function formatLivePairAge(row, now = Date.now()) {
   return `${Math.floor(seconds / 86_400)}d`;
 }
 
+function parseLiveNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  const compact = raw.replace(/[$,%_\s,]/g, "");
+  const match = compact.match(/^([-+]?\d*\.?\d+)([kmb])?$/i);
+  if (!match) return null;
+  const number = Number(match[1]);
+  if (!Number.isFinite(number)) return null;
+  const suffix = String(match[2] || "").toLowerCase();
+  if (suffix === "k") return number * 1_000;
+  if (suffix === "m") return number * 1_000_000;
+  if (suffix === "b") return number * 1_000_000_000;
+  return number;
+}
+
+function firstPositiveNumber(...values) {
+  for (const value of values) {
+    const number = parseLiveNumber(value);
+    if (Number.isFinite(number) && number > 0) return number;
+  }
+  return 0;
+}
+
+function textBlob(row = {}) {
+  return [
+    row.source,
+    row.category,
+    row.status,
+    row.dexId,
+    row.dexName,
+    row.market,
+    row.platform,
+    row.profileSource,
+    row.labels,
+    row.riskFlags
+  ].flat().filter(Boolean).join(" ").toLowerCase();
+}
+
+export function slimeScopeProgressPct(row = {}) {
+  const direct = firstPositiveNumber(
+    row.bondingProgressPct,
+    row.bondingProgress,
+    row.bonding_curve_progress,
+    row.bondingCurveProgress,
+    row.pumpProgress,
+    row.graduationProgress,
+    row.completion,
+    row.completePct
+  );
+  if (direct > 0) {
+    return Math.max(0, Math.min(100, direct <= 1 ? direct * 100 : direct));
+  }
+
+  const marketCap = firstPositiveNumber(row.marketCap, row.fdv);
+  const isPump = Boolean(row.isPump) || /pump/.test(textBlob(row)) || String(row.tokenMint || "").toLowerCase().endsWith("pump");
+  if (isPump && marketCap > 0) {
+    return Math.max(0, Math.min(99, (marketCap / 69_000) * 100));
+  }
+  return 0;
+}
+
+export function isGraduatedSlimeScopePair(row = {}) {
+  if (row.isGraduated === true || row.graduated === true || row.bonded === true || row.isBonded === true) return true;
+  if (row.complete === true || row.completed === true || row.bondingComplete === true) return true;
+  if (row.raydiumPool || row.raydium_pool || row.poolAddress) return true;
+  const text = textBlob(row);
+  if (/\b(graduated|bonded|bonding complete|complete)\b/.test(text)) return true;
+  const isPump = Boolean(row.isPump) || String(row.tokenMint || "").toLowerCase().endsWith("pump") || text.includes("pump");
+  return isPump && /\b(raydium|meteora|orca)\b/.test(text);
+}
+
+export function classifySlimeScopePair(row = {}, now = Date.now()) {
+  if (isGraduatedSlimeScopePair(row)) return "graduated";
+
+  const progress = slimeScopeProgressPct(row);
+  const marketCap = firstPositiveNumber(row.marketCap, row.fdv);
+  if (progress >= 70 || marketCap >= 45_000) return "graduating";
+
+  const age = pairAgeMinutes(row, now);
+  const isPump = Boolean(row.isPump) || /pump/.test(textBlob(row)) || String(row.tokenMint || "").toLowerCase().endsWith("pump");
+  if (isPump || age === null || age <= 60) return "new";
+  return "unknown";
+}
+
 export function computeBestPickScore(row = {}, now = Date.now()) {
   const age = pairAgeMinutes(row, now);
   const liquidityUsd = Number(row.liquidityUsd || 0);
