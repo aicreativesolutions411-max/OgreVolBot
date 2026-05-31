@@ -1850,3 +1850,49 @@
     min-height: 56px;
   }
 }
+
+/* Mobile terminal stack fix: keep the navigation card in normal flow so it
+   cannot cover the Live / Last 1h / Last 3h / Last 24h filter controls. */
+@media (max-width: 760px) {
+  [data-app][data-route="terminal"] .dashboard {
+    align-items: stretch !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs {
+    position: static !important;
+    top: auto !important;
+    z-index: auto !important;
+    grid-column: 1 / -1 !important;
+    grid-row: auto !important;
+    margin: 6px 0 12px !important;
+    overflow: visible !important;
+    transform: none !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs .nav-tool-group,
+  [data-app][data-route="terminal"] .tabs .nav-tool-group summary,
+  [data-app][data-route="terminal"] .tabs .nav-tool-group button {
+    position: static !important;
+    transform: none !important;
+  }
+
+  [data-app][data-route="terminal"] .panel-host,
+  [data-app][data-route="terminal"] .command-terminal,
+  [data-app][data-route="terminal"] .command-workspace,
+  [data-app][data-route="terminal"] .command-controls {
+    position: relative !important;
+    z-index: 0 !important;
+    margin-top: 0 !important;
+  }
+
+  [data-app][data-route="terminal"] .command-controls {
+    clear: both !important;
+    padding-top: 8px !important;
+  }
+
+  [data-app][data-route="terminal"] .live-pair-buckets {
+    position: relative !important;
+    z-index: 1 !important;
+    margin-top: 0 !important;
+  }
+}
