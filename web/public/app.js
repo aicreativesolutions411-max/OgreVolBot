@@ -3832,6 +3832,22 @@ async function connectBrowserWallet(providerId) {
   }
 
   try {
+    const existingWallet = state.user?.connectedWallet?.publicKey || state.connectedWalletBalance?.publicKey || "";
+    if (existingWallet) {
+      const shouldReconnect = window.confirm(
+        `Reconnect or switch wallet?\n\nCurrent wallet: ${shortAddress(existingWallet)}\n\nYour wallet extension will open so you can approve the wallet to use on Live Terminal.`
+      );
+      if (!shouldReconnect) {
+        writeText(status, "Wallet connection unchanged.");
+        navigateTo("/terminal", "terminal");
+        return;
+      }
+      try {
+        await Promise.resolve(provider.disconnect?.());
+      } catch {
+        // Some providers either do not expose disconnect or reject until the extension is focused.
+      }
+    }
     writeText(status, `Opening ${walletProviderLabel(providerId, provider)}...`);
     const result = await provider.connect?.({ onlyIfTrusted: false });
     const publicKey = result?.publicKey || provider.publicKey;
@@ -3855,11 +3871,11 @@ async function connectBrowserWallet(providerId) {
       provider: walletProviderLabel(providerId, provider),
       tokens: []
     };
-    writeText(status, `Connected ${shortAddress(publicKeyText)}.`);
+    writeText(status, `Connected ${shortAddress(publicKeyText)}. Opening Live Terminal...`);
     navigateTo("/terminal", "terminal");
     await Promise.allSettled([
       loadAll(),
-      refreshLivePairBuckets({ silent: true }),
+      refreshLivePairBuckets({ silent: true, force: true }),
       loadKolScan(state.kolMode, "", { silent: true })
     ]);
     render({ force: true });

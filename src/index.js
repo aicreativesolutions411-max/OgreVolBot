@@ -7355,8 +7355,8 @@ async function renderPnlCard(row, metadata = {}) {
   ${borderLayer}
   <rect x="42" y="86" width="1116" height="510" rx="42" fill="${PNL_CARD_STYLE.panel}" filter="url(#shadow)" stroke="rgba(255,255,255,0.09)"/>
   ${art}
-  <text x="555" y="162" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="54" font-weight="900" fill="${PNL_CARD_STYLE.white}" letter-spacing="0">SlimeWire.com</text>
-  <text x="555" y="215" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="34" font-weight="800" fill="${PNL_CARD_STYLE.muted}">PNL CARD</text>
+  <text x="555" y="168" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="62" font-weight="900" fill="${PNL_CARD_STYLE.slime}" letter-spacing="0" filter="url(#slimeGlow)">www.SlimeWire.org</text>
+  <text x="555" y="222" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="34" font-weight="800" fill="${PNL_CARD_STYLE.muted}">PNL CARD</text>
   <text x="555" y="392" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="170" font-weight="900" fill="${accent}" letter-spacing="0">${escapeSvg(multiple)}X</text>
   <text x="555" y="450" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="38" font-weight="900" fill="${PNL_CARD_STYLE.white}">${escapeSvg(symbol)} / ${escapeSvg(name)}</text>
   <text x="555" y="500" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="34" font-weight="800" fill="${accent}">Profit ${escapeSvg(profitLabel)}</text>
