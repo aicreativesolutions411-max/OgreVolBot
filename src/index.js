@@ -514,9 +514,13 @@ function startKeepAlivePinger() {
 function startTradePlanRunner() {
   setTimeout(() => void processTradePlans().catch((error) => {
     console.error("Trade plan runner failed:", error.message);
-  }), 10_000);
+  }), Math.max(1_000, Math.min(10_000, CONFIG.stopLossCheckIntervalMs)));
 
-  const intervalMs = Math.max(500, Math.min(5_000, CONFIG.manualLaunchScanIntervalMs));
+  const intervalMs = Math.max(500, Math.min(
+    5_000,
+    CONFIG.manualLaunchScanIntervalMs,
+    CONFIG.stopLossCheckIntervalMs
+  ));
   setInterval(() => void processTradePlans().catch((error) => {
     console.error("Trade plan runner failed:", error.message);
   }), intervalMs);

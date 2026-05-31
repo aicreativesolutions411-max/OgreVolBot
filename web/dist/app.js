@@ -777,9 +777,20 @@ function scheduleLivePairsAutoRefresh() {
   if (state.activeTab !== "live" && state.activeTab !== "terminal" && state.activeTab !== "slimeScope") return;
   const refreshSeconds = Number(currentLivePairs()?.refreshSeconds || 30);
   const delayMs = Math.max(3, refreshSeconds) * 1000;
-  livePairsTimer = setTimeout(() => {
-    if ((state.activeTab !== "live" && state.activeTab !== "terminal" && state.activeTab !== "slimeScope") || state.livePairsLoading) return;
-    refreshLivePairBuckets({ silent: true }).catch((error) => setError(error.message));
+  livePairsTimer = setTimeout(async () => {
+    const onLiveFeed = state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "slimeScope";
+    if (!onLiveFeed) return;
+    if (state.livePairsLoading) {
+      scheduleLivePairsAutoRefresh();
+      return;
+    }
+    try {
+      await refreshLivePairBuckets({ silent: true });
+    } catch (error) {
+      setError(error.message);
+    } finally {
+      scheduleLivePairsAutoRefresh();
+    }
   }, delayMs);
 }
 
@@ -789,9 +800,19 @@ function scheduleScannerAutoRefresh() {
     scanTimer = null;
   }
   if (state.activeTab !== "sniper") return;
-  scanTimer = setTimeout(() => {
-    if (state.activeTab !== "sniper" || state.loading) return;
-    loadScan(state.scanMode, { silent: true }).catch((error) => setError(error.message));
+  scanTimer = setTimeout(async () => {
+    if (state.activeTab !== "sniper") return;
+    if (state.loading) {
+      scheduleScannerAutoRefresh();
+      return;
+    }
+    try {
+      await loadScan(state.scanMode, { silent: true });
+    } catch (error) {
+      setError(error.message);
+    } finally {
+      scheduleScannerAutoRefresh();
+    }
   }, 20_000);
 }
 
@@ -801,9 +822,19 @@ function scheduleKolAutoRefresh() {
     kolTimer = null;
   }
   if ((state.activeTab !== "kol" && state.activeTab !== "terminal") || state.kolWallet) return;
-  kolTimer = setTimeout(() => {
-    if ((state.activeTab !== "kol" && state.activeTab !== "terminal") || state.kolLoading || state.kolWallet) return;
-    loadKolScan(state.kolMode, "", { silent: true }).catch((error) => setError(error.message));
+  kolTimer = setTimeout(async () => {
+    if ((state.activeTab !== "kol" && state.activeTab !== "terminal") || state.kolWallet) return;
+    if (state.kolLoading) {
+      scheduleKolAutoRefresh();
+      return;
+    }
+    try {
+      await loadKolScan(state.kolMode, "", { silent: true });
+    } catch (error) {
+      setError(error.message);
+    } finally {
+      scheduleKolAutoRefresh();
+    }
   }, 60_000);
 }
 
@@ -813,9 +844,15 @@ function scheduleWatchlistAutoRefresh() {
     watchlistTimer = null;
   }
   if ((state.activeTab !== "watchlist" && state.activeTab !== "terminal") || !state.user || !state.token) return;
-  watchlistTimer = setTimeout(() => {
+  watchlistTimer = setTimeout(async () => {
     if (state.activeTab !== "watchlist" && state.activeTab !== "terminal") return;
-    loadWatchlist({ silent: true }).catch((error) => setError(error.message));
+    try {
+      await loadWatchlist({ silent: true });
+    } catch (error) {
+      setError(error.message);
+    } finally {
+      scheduleWatchlistAutoRefresh();
+    }
   }, 30_000);
 }
 
@@ -4051,7 +4088,7 @@ async function executeWebBuy(amountSol, amountMode = "fixed") {
     if (data.trade?.autoExitPlan) {
       state.tradePlanResult = data.trade.autoExitPlan;
     }
-    await refreshAfterTrade(firstResultSignature(data.bundle));
+    await refreshAfterTrade(data.trade?.signature);
     state.activeTab = "trade";
     render();
   } catch (error) {
@@ -6872,7 +6909,10 @@ function formatDate(value) {
 }
 
 document.addEventListener("click", async (event) => {
-  const target = event.target.closest("button, a, [data-preview-token]");
+  const source = event.target instanceof Element
+    ? event.target
+    : event.target?.parentElement;
+  const target = source?.closest?.("button, a, [data-preview-token]");
   if (!target) return;
 
   if (target.matches("[data-nav-route]")) {
@@ -7428,6 +7468,28 @@ document.addEventListener("input", (event) => {
   updateOgreTekDraftFromDom();
   if (target.type === "range") render({ force: true });
 });
+
+function resumeLiveFeeds() {
+  if (state.route !== "terminal") return;
+  if (state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "slimeScope") {
+    refreshLivePairBuckets({ silent: true }).catch((error) => setError(error.message));
+    scheduleLivePairsAutoRefresh();
+  }
+  if ((state.activeTab === "kol" || state.activeTab === "terminal") && !state.kolWallet) {
+    loadKolScan(state.kolMode, "", { silent: true }).catch((error) => setError(error.message));
+    scheduleKolAutoRefresh();
+  }
+  if ((state.activeTab === "watchlist" || state.activeTab === "terminal") && state.user && state.token) {
+    loadWatchlist({ silent: true }).catch((error) => setError(error.message));
+    scheduleWatchlistAutoRefresh();
+  }
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) resumeLiveFeeds();
+});
+
+window.addEventListener("focus", resumeLiveFeeds);
 
 async function initializeApp() {
   await loadSession();
