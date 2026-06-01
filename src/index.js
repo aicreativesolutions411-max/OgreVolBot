@@ -429,7 +429,9 @@ function loadConfig() {
     pumpLaunchApiKey: process.env.PUMP_LAUNCH_API_KEY || "",
     pumpLaunchTimeoutMs: Number.parseInt(process.env.PUMP_LAUNCH_TIMEOUT_MS || "30000", 10),
     pumpLaunchBodyLimitBytes: Number.parseInt(process.env.PUMP_LAUNCH_BODY_LIMIT_BYTES || "12000000", 10),
-    pumpLaunchImageMaxBytes: Number.parseInt(process.env.PUMP_LAUNCH_IMAGE_MAX_BYTES || "2800000", 10),
+    pumpLaunchImageMaxBytes: Number.parseInt(process.env.PUMP_LAUNCH_IMAGE_MAX_BYTES || "650000", 10),
+    pumpLaunchApiFormat: (process.env.PUMP_LAUNCH_API_FORMAT || "minimal").trim().toLowerCase(),
+    pumpLaunchImageField: (process.env.PUMP_LAUNCH_IMAGE_FIELD || "").trim(),
     photonNewPairsUrl: (process.env.PHOTON_NEW_PAIRS_URL || "").trim(),
     photonApiKey: process.env.PHOTON_API_KEY || "",
     livePairsRpcSafety,
@@ -4575,7 +4577,7 @@ async function buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps, o
 
 async function sellTokenFromWallet(wallet, tokenMint, percent, slippageBps, options = {}) {
   const keypair = decryptWallet(wallet);
-  const token = await getTokenBalanceForMintCached(keypair.publicKey, new PublicKey(tokenMint), { force: true });
+  const token = await getReliableTokenBalanceForMint(keypair.publicKey, new PublicKey(tokenMint), { throwOnError: true });
   if (!token || token.rawAmount === 0n) {
     throw new Error("no token balance");
   }
@@ -4623,6 +4625,123 @@ async function sellTokenAmountFromWallet(wallet, tokenMint, amount, slippageBps,
   };
 }
 
+async function getReliableTokenBalanceForMint(owner, mint, options = {}) {
+  const ownerKey = owner instanceof PublicKey ? owner : new PublicKey(owner);
+  const mintKey = mint instanceof PublicKey ? mint : new PublicKey(mint);
+  let lastError = null;
+  let lastBalance = null;
+
+  try {
+    const direct = await getTokenBalanceForMintCached(ownerKey, mintKey, { force: true });
+    if (direct?.rawAmount > 0n) return direct;
+    lastBalance = direct || lastBalance;
+  } catch (error) {
+    lastError = error;
+  }
+
+  try {
+    const lookup = await getOwnedTokenAccountsWithWarningsCached(ownerKey, { force: true });
+    const aggregate = aggregateTokenAccountsForMint(lookup.accounts || [], mintKey);
+    if (aggregate?.rawAmount > 0n) {
+      setTimedCache(tokenBalanceCache, `${ownerKey.toBase58()}:${mintKey.toBase58()}`, aggregate);
+      return aggregate;
+    }
+    lastBalance = aggregate || lastBalance;
+    if (lookup.warnings?.length && !lastError) {
+      lastError = new Error(lookup.warnings.join(" | "));
+    }
+  } catch (error) {
+    lastError = error;
+  }
+
+  if (options.throwOnError && lastError) {
+    throw lastError;
+  }
+  return lastBalance;
+}
+
+async function getPlanWalletTokenBalance(plan, wallet, planWallet, options = {}) {
+  const attempts = Math.max(1, Math.min(6, Number.parseInt(options.attempts || 1, 10) || 1));
+  const keypair = decryptWallet(wallet);
+  const mintKey = new PublicKey(plan.tokenMint);
+  let lastError = null;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (attempt > 0) {
+      invalidateWalletReadCache(wallet.publicKey);
+      await sleep(Math.min(1_500, 250 + attempt * 250));
+    }
+
+    try {
+      const token = await getReliableTokenBalanceForMint(keypair.publicKey, mintKey, { throwOnError: false });
+      if (token?.rawAmount > 0n) {
+        recoverPlanWalletTokenOutAmount(planWallet, token);
+        return token;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  if (options.throwOnMissing) {
+    throw lastError || new Error("no live token balance");
+  }
+  return null;
+}
+
+function exitSlippageAttemptList(baseSlippageBps, priceExit = false) {
+  const maxSlippageBps = 5_000;
+  const defaultSlippageBps = Number(CONFIG.defaultSlippageBps || 400);
+  const base = Math.max(1, Math.min(maxSlippageBps, Number.parseInt(baseSlippageBps || defaultSlippageBps, 10) || defaultSlippageBps));
+  if (!priceExit) return [base];
+  return [...new Set([
+    base,
+    Math.max(base, CONFIG.stopLossExitSlippageBps),
+    Math.max(base, 2_500),
+    Math.max(base, 4_000),
+    maxSlippageBps
+  ].map((value) => Math.max(1, Math.min(maxSlippageBps, Number.parseInt(value, 10) || base))))];
+}
+
+async function sellTradePlanWalletWithRetries(plan, planWallet, wallet, sellPercent, baseSlippageBps, options = {}) {
+  const priceExit = Boolean(options.priceExit);
+  const slippageAttempts = exitSlippageAttemptList(baseSlippageBps, priceExit);
+  const attemptLog = [];
+  let lastError = null;
+
+  for (const slippageBps of slippageAttempts) {
+    try {
+      invalidateWalletReadCache(wallet.publicKey);
+      const token = await getPlanWalletTokenBalance(plan, wallet, planWallet, {
+        attempts: priceExit ? 4 : 2,
+        throwOnMissing: true
+      });
+      const tokenBaseRawAmount = recoverPlanWalletTokenOutAmount(planWallet, token);
+      const amount = sellAmountForPercent(token.rawAmount, sellPercent, tokenBaseRawAmount);
+      if (amount === 0n) {
+        throw new Error("sell amount rounded to zero");
+      }
+
+      const sell = await sellTokenAmountFromWallet(wallet, plan.tokenMint, amount, slippageBps, { userId: options.userId });
+      sell.sellSlippageBps = slippageBps;
+      planWallet.exitSlippageAttempts = attemptLog;
+      return sell;
+    } catch (error) {
+      lastError = error;
+      attemptLog.push({
+        at: new Date().toISOString(),
+        slippageBps,
+        error: friendlyError(error)
+      });
+      if (!priceExit) break;
+      await sleep(350);
+    }
+  }
+
+  planWallet.exitSlippageAttempts = attemptLog;
+  throw lastError || new Error("sell failed");
+}
+
 function formatSwapAttemptSuffix(result) {
   return result?.attempts > 1 ? `, landed after ${result.attempts} attempts` : "";
 }
@@ -4644,6 +4763,56 @@ function sellAmountForPercent(currentRawAmount, percent, baseRawAmount = null) {
 
   const targetAmount = (targetBase * BigInt(percent)) / 100n;
   return targetAmount > current ? current : targetAmount;
+}
+
+function positiveBigIntOrZero(value) {
+  if (value === null || value === undefined || value === "") return 0n;
+  try {
+    const amount = BigInt(String(value));
+    return amount > 0n ? amount : 0n;
+  } catch {
+    return 0n;
+  }
+}
+
+function positiveRawString(value) {
+  const amount = positiveBigIntOrZero(value);
+  return amount > 0n ? amount.toString() : null;
+}
+
+function planWalletBasisLamports(plan, planWallet) {
+  for (const key of ["basisLamports", "basisLamportsRaw", "swapLamports", "grossLamports", "amountLamports"]) {
+    const amount = positiveBigIntOrZero(planWallet?.[key]);
+    if (amount > 0n) return amount;
+  }
+
+  const fallbackSol = Number.parseFloat(String(planWallet?.amountSol ?? plan?.amountSol ?? plan?.buyAmountSol ?? 0));
+  if (Number.isFinite(fallbackSol) && fallbackSol > 0) {
+    return BigInt(Math.floor(fallbackSol * LAMPORTS_PER_SOL));
+  }
+
+  return 0n;
+}
+
+function recoverPlanWalletTokenOutAmount(planWallet, token) {
+  const existing = positiveRawString(planWallet?.tokenOutAmount);
+  if (existing) return existing;
+
+  const rawAmount = positiveRawString(token?.rawAmount);
+  if (planWallet && rawAmount) {
+    planWallet.tokenOutAmount = rawAmount;
+    planWallet.recoveredTokenOutAmountAt = new Date().toISOString();
+    planWallet.lastRecoveryNote = "Recovered token amount from on-chain balance.";
+  }
+  return rawAmount;
+}
+
+function scheduleTradePlanProcessing(label = "trade plan", delays = [500, 1500, 4000, 10000, 20000]) {
+  for (const delay of delays) {
+    setTimeout(() => void processTradePlans().catch((error) => {
+      console.error(`${label} processing failed:`, error.message);
+    }), delay);
+  }
 }
 
 function isPriceExitTrigger(triggerReason) {
@@ -4932,10 +5101,11 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
       ? Math.max(Number(plan.slippageBps || 0), CONFIG.stopLossExitSlippageBps)
       : plan.slippageBps;
     planWallet.exitSlippageBps = exitSlippageBps;
-    const sell = await sellTokenFromWallet(wallet, plan.tokenMint, sellPercent, exitSlippageBps, {
-      baseRawAmount: planWallet.tokenOutAmount,
-      userId: plan.userId
+    const sell = await sellTradePlanWalletWithRetries(plan, planWallet, wallet, sellPercent, exitSlippageBps, {
+      userId: plan.userId,
+      priceExit: isPriceExitTrigger(triggerReason)
     });
+    planWallet.exitSlippageBps = sell.sellSlippageBps || exitSlippageBps;
     invalidateWalletReadCache(wallet.publicKey);
     sell.sellPercent = sellPercent;
     await recordTradeEvents([{
@@ -5024,8 +5194,8 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
   } catch (error) {
     const failures = Number.parseInt(planWallet.failures || 0, 10) + 1;
     const priceExit = isPriceExitTrigger(triggerReason);
-    const maxFailures = priceExit ? 20 : 5;
-    const retryDelayMs = failures >= maxFailures ? 0 : Math.min(30_000, 1_500 * failures);
+    const maxFailures = priceExit ? 90 : 5;
+    const retryDelayMs = failures >= maxFailures ? 0 : Math.min(12_000, 750 * failures);
     planWallet.failures = failures;
     planWallet.status = failures >= maxFailures ? "failed" : "watching";
     planWallet.exitStatus = failures >= maxFailures ? "failed" : "watching";
@@ -5517,19 +5687,20 @@ async function processDcaPlanWallet(plan, planWallet, walletStore) {
 
 async function estimatePlanWalletMove(plan, wallet, sellPercentOverride = null) {
   const keypair = decryptWallet(wallet);
-  const token = await getTokenBalanceForMintCached(keypair.publicKey, new PublicKey(plan.tokenMint), { force: true });
+  const planWallet = plan.wallets.find((item) => item.publicKey === wallet.publicKey);
+  const token = await getPlanWalletTokenBalance(plan, wallet, planWallet, { attempts: 2, throwOnMissing: true });
   if (!token || token.rawAmount === 0n) {
     throw new Error("no token balance");
   }
 
-  const planWallet = plan.wallets.find((item) => item.publicKey === wallet.publicKey);
   const triggerSellPercent = Math.max(1, Math.min(100, Number.parseFloat(sellPercentOverride || effectiveTimedSellPercent(plan, planWallet, "take-profit")) || 100));
-  const amount = sellAmountForPercent(token.rawAmount, triggerSellPercent, planWallet?.tokenOutAmount);
+  const tokenBaseRawAmount = recoverPlanWalletTokenOutAmount(planWallet, token);
+  const amount = sellAmountForPercent(token.rawAmount, triggerSellPercent, tokenBaseRawAmount);
   if (amount === 0n) {
     throw new Error("sell amount rounded to zero");
   }
 
-  const basisLamports = BigInt(planWallet?.basisLamports || planWallet?.swapLamports || planWallet?.grossLamports || 0);
+  const basisLamports = planWalletBasisLamports(plan, planWallet);
   const basis = (basisLamports * BigInt(Math.round(triggerSellPercent))) / 100n;
   if (basis <= 0n) {
     throw new Error("missing plan basis");
@@ -5615,20 +5786,52 @@ function pumpFunPriceSol(metadata = {}, tokenDecimals = 6) {
   return solUnits / tokenUnits;
 }
 
+function tokenAddressEquals(left, right) {
+  return String(left || "").trim() === String(right || "").trim();
+}
+
+function dexTokenIsSol(token = {}) {
+  return tokenAddressEquals(token.address, SOL_MINT)
+    || /^w?sol$/i.test(String(token.symbol || ""))
+    || /^solana$/i.test(String(token.name || ""));
+}
+
+function dexPairTokenPriceSol(pair, tokenMint) {
+  const base = pair?.baseToken || {};
+  const quote = pair?.quoteToken || {};
+  const priceNative = Number(pair?.priceNative);
+  if (!Number.isFinite(priceNative) || priceNative <= 0) return null;
+
+  const baseIsTarget = tokenAddressEquals(base.address, tokenMint);
+  const quoteIsTarget = tokenAddressEquals(quote.address, tokenMint);
+  const baseIsSol = dexTokenIsSol(base);
+  const quoteIsSol = dexTokenIsSol(quote);
+
+  if (baseIsTarget && quoteIsSol) return priceNative;
+  if (quoteIsTarget && baseIsSol) return 1 / priceNative;
+  return null;
+}
+
+function bestDexPairWithSolPrice(tokenMint, pairs) {
+  return (pairs || [])
+    .filter((pair) => pairMatchesToken(pair, tokenMint))
+    .map((pair) => ({ pair, priceSol: dexPairTokenPriceSol(pair, tokenMint) }))
+    .filter((item) => Number.isFinite(item.priceSol) && item.priceSol > 0)
+    .sort((a, b) => compareDexPairsForSniper(a.pair, b.pair))[0] || null;
+}
+
 async function estimatePlanWalletMoveFromDexPair(plan, token, amount, basis, quoteError) {
   const pairs = await fetchDexScreenerTokenPairsBatch([plan.tokenMint], { timeoutMs: 1_800 }).catch(() => []);
-  const pair = bestDexPairForToken(plan.tokenMint, pairs);
-  const tokenIsBase = pair?.baseToken?.address === plan.tokenMint;
-  const quoteIsSol = pair?.quoteToken?.address === SOL_MINT || /^w?sol$/i.test(String(pair?.quoteToken?.symbol || ""));
-  const priceNative = Number(pair?.priceNative);
+  const pricedPair = bestDexPairWithSolPrice(plan.tokenMint, pairs);
+  const priceSol = pricedPair?.priceSol;
   const decimals = Number(token?.decimals);
 
-  if (!tokenIsBase || !quoteIsSol || !Number.isFinite(priceNative) || priceNative <= 0 || !Number.isInteger(decimals)) {
+  if (!Number.isFinite(priceSol) || priceSol <= 0 || !Number.isInteger(decimals)) {
     throw quoteError;
   }
 
   const tokenUnits = Number(amount) / (10 ** decimals);
-  const estimatedOutNumber = tokenUnits * priceNative * LAMPORTS_PER_SOL;
+  const estimatedOutNumber = tokenUnits * priceSol * LAMPORTS_PER_SOL;
   if (!Number.isFinite(estimatedOutNumber) || estimatedOutNumber <= 0) {
     throw quoteError;
   }
@@ -5644,6 +5847,7 @@ async function estimatePlanWalletMoveFromDexPair(plan, token, amount, basis, quo
     basis,
     movePct,
     source: "dexscreener",
+    pairAddress: firstString(pricedPair?.pair?.pairAddress, pricedPair?.pair?.address),
     quoteError: friendlyError(quoteError)
   };
 }
@@ -6243,7 +6447,7 @@ async function getTokenBalanceForMintCached(owner, mint, options = {}) {
 
 async function safeTokenRawBalance(owner, mint) {
   try {
-    const token = await getTokenBalanceForMintCached(owner, mint, { force: true });
+    const token = await getReliableTokenBalanceForMint(owner, mint, { throwOnError: false });
     return BigInt(token?.rawAmount || 0);
   } catch {
     return 0n;
@@ -6252,12 +6456,16 @@ async function safeTokenRawBalance(owner, mint) {
 
 async function readTokenDeltaAfterBuy(owner, mint, beforeRaw) {
   const before = BigInt(beforeRaw || 0);
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  const ownerText = owner instanceof PublicKey ? owner.toBase58() : String(owner || "");
+  for (let attempt = 0; attempt < 9; attempt += 1) {
+    if (attempt > 0) {
+      if (ownerText) invalidateWalletReadCache(ownerText);
+      await sleep(Math.min(1800, 350 + attempt * 275));
+    }
     const after = await safeTokenRawBalance(owner, mint);
     if (after > before) {
       return (after - before).toString();
     }
-    await sleep(450);
   }
   return null;
 }
@@ -10670,6 +10878,35 @@ async function fetchTelegramFileText(fileId) {
   return response.text();
 }
 
+function providerErrorValue(value) {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    return value.map(providerErrorValue).filter(Boolean).join("; ");
+  }
+  if (typeof value === "object") {
+    return firstString(
+      value.message,
+      value.error,
+      value.description,
+      value.reason,
+      value.detail,
+      value.details,
+      providerErrorValue(value.errors),
+      providerErrorValue(value.result?.error)
+    );
+  }
+  return String(value);
+}
+
+function fetchJsonErrorMessage(data, text, status) {
+  const message = providerErrorValue(data);
+  if (message) return message.slice(0, 500);
+  const fallback = String(text || "").replace(/\s+/g, " ").trim();
+  if (fallback) return fallback.slice(0, 500);
+  return `HTTP ${status}`;
+}
+
 async function fetchJson(url, init = {}) {
   const { timeoutMs, ...fetchInit } = init || {};
   let timeout = null;
@@ -10705,9 +10942,11 @@ async function fetchJson(url, init = {}) {
   }
 
   if (!response.ok) {
-    const error = new Error(data.error || data.description || `HTTP ${response.status}`);
+    const error = new Error(fetchJsonErrorMessage(data, text, response.status));
     error.status = response.status;
     error.retryAfter = response.headers.get("retry-after");
+    error.responseBody = String(text || "").slice(0, 1000);
+    error.providerData = data;
     throw error;
   }
 
@@ -12350,6 +12589,21 @@ function webBackupDownloadsForWallets(userId, wallets, groupLabel, note) {
   };
 }
 
+function webAutoExitRequested(body = {}) {
+  if (cleanLaunchBoolean(body.autoExit)) return true;
+
+  const hasExitFields = body.takeProfitPct !== undefined
+    || body.stopLossPct !== undefined
+    || body.sellDelay !== undefined
+    || body.sellDelaySeconds !== undefined;
+  if (!hasExitFields) return false;
+
+  const takeProfitPct = parseTakeProfitPercent(String(body.takeProfitPct || "0"));
+  const stopLossPct = parseOptionalTriggerPercent(String(body.stopLossPct || "0"));
+  const sellDelaySeconds = parseOptionalSellDelaySeconds(firstString(body.sellDelay, body.sellDelaySeconds, "off"));
+  return Boolean(takeProfitPct || stopLossPct || sellDelaySeconds > 0);
+}
+
 async function webTradeBuy(userId, body = {}) {
   const store = await readWalletStore();
   const wallet = getWalletAt(store, parseWebWalletIndex(body.walletIndex), userId);
@@ -12380,7 +12634,7 @@ async function webTradeBuy(userId, body = {}) {
     signature: result.signature
   });
 
-  const autoExitPlan = body.autoExit
+  const autoExitPlan = webAutoExitRequested(body)
     ? await webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, result, body, slippageBps)
     : null;
   const baseMessage = `${wallet.label} bought ${shortMint(tokenMint)} with ${lamportsToSol(result.amountLamports)} SOL.`;
@@ -12465,9 +12719,10 @@ async function webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, buyRe
 
   const now = Date.now();
   const sellAfterAt = planSellAfterAtFromNow({ sellDelaySeconds }, now);
-  const amountLamports = Number(buyResult.amountLamports || 0);
-  const basisLamports = Number(buyResult.swapLamports || amountLamports);
-  const tokenAmount = buyResult.tokenDeltaAmount || buyResult.outputAmount || null;
+  const amountLamports = positiveRawString(buyResult.amountLamports) || "0";
+  const basisLamports = positiveRawString(buyResult.swapLamports) || amountLamports;
+  const feeLamports = positiveRawString(buyResult.feeLamports) || "0";
+  const tokenAmount = positiveRawString(buyResult.tokenDeltaAmount) || positiveRawString(buyResult.outputAmount);
   const walletIndex = parseWebWalletIndex(body.walletIndex || "1");
   const planWallet = {
     label: wallet.label,
@@ -12475,7 +12730,7 @@ async function webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, buyRe
     walletIndex,
     basisLamports,
     grossLamports: amountLamports,
-    feeLamports: buyResult.feeLamports,
+    feeLamports,
     tokenOutAmount: tokenAmount,
     buySignature: buyResult.signature,
     currentLoop: 1,
@@ -12488,7 +12743,8 @@ async function webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, buyRe
     exitStatus: "watching",
     status: "watching",
     lastCheckedAt: null,
-    lastMovePct: null
+    lastMovePct: null,
+    lastError: tokenAmount ? null : "Waiting for token account indexing before TP/SL checks."
   };
   const plan = {
     id: crypto.randomUUID(),
@@ -12498,7 +12754,7 @@ async function webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, buyRe
     tokenMint,
     source: "web_trade_auto_exit",
     walletSelector: String(walletIndex),
-    amountSol: lamportsToSol(amountLamports),
+    amountSol: lamportsBigToSol(amountLamports),
     sellDelayMinutes: sellDelaySeconds / 60,
     sellDelaySeconds,
     sellAfterAt,
@@ -12535,9 +12791,7 @@ async function webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, buyRe
     buySignature: buyResult.signature
   });
 
-  setTimeout(() => void processTradePlans().catch((error) => {
-    console.error("Single trade auto-exit immediate run failed:", error.message);
-  }), 1_000);
+  scheduleTradePlanProcessing("single trade auto-exit");
 
   const timerSummary = sellDelaySeconds > 0 ? formatDelay(sellDelaySeconds) : "timer off";
   return {
@@ -12548,7 +12802,7 @@ async function webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, buyRe
     walletCount: 1,
     successCount: 1,
     failedCount: 0,
-    amountSol: lamportsToSol(amountLamports),
+    amountSol: lamportsBigToSol(amountLamports),
     sellAfterAt,
     sellDelaySeconds,
     sellPercent,
@@ -12979,6 +13233,73 @@ function normalizeLaunchResponseMint(data = {}) {
   );
 }
 
+function compactLaunchPayload(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map(compactLaunchPayload)
+      .filter((item) => item !== null && item !== undefined && item !== "");
+  }
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value)
+      .map(([key, entry]) => [key, compactLaunchPayload(entry)])
+      .filter(([, entry]) => {
+        if (entry === null || entry === undefined || entry === "") return false;
+        if (Array.isArray(entry)) return entry.length > 0;
+        if (entry && typeof entry === "object") return Object.keys(entry).length > 0;
+        return true;
+      });
+    return Object.fromEntries(entries);
+  }
+  return value;
+}
+
+function buildPumpLaunchPayload(basePayload) {
+  if (["minimal", "flat", "pump"].includes(CONFIG.pumpLaunchApiFormat)) {
+    const flat = compactLaunchPayload({
+      name: basePayload.name,
+      symbol: basePayload.symbol,
+      ticker: basePayload.symbol,
+      description: basePayload.description,
+      website: basePayload.website,
+      twitter: basePayload.twitter,
+      x: basePayload.twitter,
+      telegram: basePayload.telegram,
+      imageName: basePayload.imageName,
+      imageType: basePayload.imageType,
+      creatorFeeBps: basePayload.creatorFeeBps,
+      creatorFeeRecipient: basePayload.creatorFeeRecipient,
+      buybackWallet: basePayload.buybackWallet,
+      burnCreatorFees: basePayload.burnCreatorFees,
+      feeMode: basePayload.feeMode,
+      devBuySol: basePayload.devBuy?.amountSol,
+      initialBuySol: basePayload.devBuy?.amountSol,
+      devBuyEnabled: basePayload.devBuy?.enabled,
+      devWalletIndex: basePayload.devBuy?.walletIndex,
+      clientRequestId: basePayload.clientRequestId,
+      source: basePayload.source
+    });
+    const imageField = CONFIG.pumpLaunchImageField
+      || (CONFIG.pumpLaunchApiFormat === "minimal" ? "imageDataUrl" : "image");
+    if (basePayload.imageDataUrl && !/^none$/i.test(imageField)) {
+      flat[imageField] = basePayload.imageDataUrl;
+    }
+    if (CONFIG.pumpLaunchApiFormat !== "pump") return flat;
+    return compactLaunchPayload({
+      action: "create",
+      ...flat,
+      denominatedInSol: "true",
+      amount: flat.initialBuySol || 0,
+      pool: "pump"
+    });
+  }
+  return compactLaunchPayload(basePayload);
+}
+
+function launchProviderErrorDetail(error) {
+  const detail = fetchJsonErrorMessage(error?.providerData || {}, error?.responseBody || error?.message || "", error?.status || error?.statusCode || 0);
+  return detail ? detail.replace(/\s+/g, " ").trim().slice(0, 500) : "";
+}
+
 async function webLaunchPumpCoin(userId, body = {}) {
   if (!CONFIG.pumpLaunchEnabled || !CONFIG.pumpLaunchApiUrl) {
     const error = new Error("Direct Pump launch is not enabled yet. Save the launch sheet or use the official Pump fallback link.");
@@ -12994,6 +13315,11 @@ async function webLaunchPumpCoin(userId, body = {}) {
     error.statusCode = 400;
     throw error;
   }
+  if (!symbol) {
+    const error = new Error("Token ticker/symbol is required.");
+    error.statusCode = 400;
+    throw error;
+  }
 
   const imageDataUrl = String(body.imageDataUrl || "");
   if (imageDataUrl && !/^data:image\/(png|jpe?g|webp|gif);base64,/i.test(imageDataUrl)) {
@@ -13003,7 +13329,7 @@ async function webLaunchPumpCoin(userId, body = {}) {
   }
   const imageMaxBytes = Number.isFinite(CONFIG.pumpLaunchImageMaxBytes) && CONFIG.pumpLaunchImageMaxBytes > 0
     ? CONFIG.pumpLaunchImageMaxBytes
-    : 2_800_000;
+    : 650_000;
   if (imageDataUrl && Buffer.byteLength(imageDataUrl, "utf8") > imageMaxBytes) {
     const error = new Error("Token image is still too large after compression. Use a smaller square JPG, PNG, or WEBP and try again.");
     error.statusCode = 413;
@@ -13020,7 +13346,7 @@ async function webLaunchPumpCoin(userId, body = {}) {
   const buybackWallet = cleanLaunchText(body.buybackWallet, 64);
   const burnCreatorFees = cleanLaunchBoolean(body.burnCreatorFees) || feeMode === "burn";
 
-  const payload = {
+  const basePayload = {
     name,
     symbol,
     description,
@@ -13050,18 +13376,33 @@ async function webLaunchPumpCoin(userId, body = {}) {
     clientRequestId: crypto.randomUUID(),
     source: "slimewire_web"
   };
+  const payload = buildPumpLaunchPayload(basePayload);
 
   const headers = { "Content-Type": "application/json" };
   if (CONFIG.pumpLaunchApiKey) headers.Authorization = `Bearer ${CONFIG.pumpLaunchApiKey}`;
   const timeoutMs = Number.isFinite(CONFIG.pumpLaunchTimeoutMs) && CONFIG.pumpLaunchTimeoutMs > 0
     ? CONFIG.pumpLaunchTimeoutMs
     : 30000;
-  const providerResult = await fetchJson(CONFIG.pumpLaunchApiUrl, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(payload),
-    timeoutMs
-  });
+  let providerResult;
+  try {
+    providerResult = await fetchJson(CONFIG.pumpLaunchApiUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+      timeoutMs
+    });
+  } catch (error) {
+    const status = Number(error.status || error.statusCode || 502);
+    const detail = launchProviderErrorDetail(error);
+    const message = status === 413
+      ? "Pump launch provider rejected the upload because the image/payload is too large. Compress the image or lower PUMP_LAUNCH_IMAGE_MAX_BYTES."
+      : `Pump launch provider rejected the request${detail ? `: ${detail}` : `: ${friendlyError(error)}`}`;
+    const wrapped = new Error(message);
+    wrapped.statusCode = status >= 400 && status < 500 ? status : 502;
+    wrapped.providerStatus = status;
+    wrapped.providerResponseBody = error.responseBody;
+    throw wrapped;
+  }
   const tokenMint = normalizeLaunchResponseMint(providerResult);
   const status = firstString(providerResult.status, providerResult.state, tokenMint ? "launched" : "submitted");
 
@@ -15274,8 +15615,8 @@ async function buildWebLivePairs(userId, bucket = "live", options = {}) {
   const isLive = safeBucket === "live";
   const scanState = nextSniperScanState(`web:${userId}`, `livepairs:${safeBucket}`);
   const candidates = await fetchLivePairCandidates({
-    ttlMs: isLive ? 500 : 1_500,
-    timeoutMs: isLive ? 1_300 : 2_800,
+    ttlMs: isLive ? 800 : 2_000,
+    timeoutMs: isLive ? 2_500 : 4_200,
     scanState,
     bucket: safeBucket,
     force: Boolean(options.force)
@@ -15314,8 +15655,8 @@ async function buildWebLivePairs(userId, bucket = "live", options = {}) {
   if (CONFIG.livePairsImageEnrich && safeBucket === "live") {
     rowsForSort = await enrichWebLivePairsForImages(safety.rows).catch(() => safety.rows);
   }
-  const stickyCount = sort === "best"
-    ? Math.min(2, Math.max(0, Math.floor(targetLimit / 8)))
+  const stickyCount = sort === "best" && safeBucket !== "live"
+    ? Math.min(1, Math.max(0, Math.floor(targetLimit / 12)))
     : 0;
   const safeRows = rotateRowsForRefresh(
     sortLivePairs(rowsForSort, sort),
@@ -15593,7 +15934,7 @@ async function maybeFilterWebLivePairsForSafety(rows, limit = 12) {
 
 async function enrichWebLivePairsForImages(rows) {
   if (!rows.length) return rows;
-  const pairs = await fetchDexScreenerTokenPairsBatch(rows.map((row) => row.tokenMint), { timeoutMs: 1_200 }).catch(() => []);
+  const pairs = await fetchDexScreenerTokenPairsBatch(rows.map((row) => row.tokenMint), { timeoutMs: 2_500 }).catch(() => []);
   const enriched = [...rows];
 
   await runWithConcurrency(rows.map((row, index) => ({ row, index })), 4, async ({ row, index }) => {
@@ -15621,7 +15962,7 @@ async function enrichWebLivePairsForImages(rows) {
     let graduated = Boolean(row.graduated || row.isGraduated || dexMeta.graduated || dexMeta.isGraduated || isGraduatedSlimeScopePair({ ...row, ...dexMeta }));
 
     if (webLivePairIsPump(row) && (!imageUrl || !marketCap || !liquidityUsd || !volumeH1 || !volumeM15 || !bondingProgressPct || !graduated)) {
-      const pumpMeta = await getPumpFunTokenMetadata(row.tokenMint, { timeoutMs: 900 }).catch(() => ({}));
+      const pumpMeta = await getPumpFunTokenMetadata(row.tokenMint, { timeoutMs: 1_800 }).catch(() => ({}));
       imageUrl = firstString(pumpMeta.imageUrl, imageUrl);
       symbol = symbol && symbol !== shortMint(row.tokenMint) ? symbol : firstString(pumpMeta.symbol, symbol);
       name = name && name !== "Fresh Launch" ? name : firstString(pumpMeta.name, name);
