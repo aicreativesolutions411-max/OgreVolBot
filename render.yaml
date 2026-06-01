@@ -2,7 +2,7 @@ services:
   - type: web
     name: solana-telegram-wallet-ops-bot
     env: node
-    plan: starter
+    plan: standard
     autoDeploy: true
     buildCommand: npm ci && npm run build:web
     startCommand: npm run render-start
@@ -36,6 +36,16 @@ services:
         sync: false
       - key: PUMP_LAUNCH_TIMEOUT_MS
         value: 30000
+      - key: WORKER_TICK_ENABLED
+        value: true
+      - key: WORKER_SECRET
+        sync: false
+      - key: WORKER_TICK_RUN_TRADE_PLANS
+        value: true
+      - key: WORKER_TICK_RUN_DCA_PLANS
+        value: true
+      - key: WORKER_TICK_WARM_FEEDS
+        value: true
       - key: PHOTON_NEW_PAIRS_URL
         sync: false
       - key: PHOTON_API_KEY
@@ -140,3 +150,33 @@ services:
         sync: false
       - key: TELEGRAM_ADMIN_USER_IDS
         sync: false
+  - type: worker
+    name: solana-telegram-wallet-ops-worker
+    env: node
+    plan: starter
+    autoDeploy: true
+    buildCommand: npm ci
+    startCommand: npm run worker
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: WORKER_TICK_URL
+        value: https://ogrevolbot.onrender.com/api/internal/worker/tick
+      - key: WORKER_SECRET
+        sync: false
+      - key: WORKER_TICK_INTERVAL_MS
+        value: 2000
+      - key: WORKER_TICK_TIMEOUT_MS
+        value: 20000
+      - key: WORKER_TICK_RUN_TRADE_PLANS
+        value: true
+      - key: WORKER_TICK_RUN_DCA_PLANS
+        value: true
+      - key: WORKER_TICK_WARM_FEEDS
+        value: true
+      - key: WORKER_TICK_BUCKETS
+        value: live,under1h,under3h,under1d
+      - key: WORKER_TICK_SORTS
+        value: best,newest
+      - key: WORKER_TICK_FORCE_FEEDS
+        value: false

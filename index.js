@@ -265,6 +265,11 @@ function loadConfig() {
   const stopLossExitSlippageBps = Number.parseInt(process.env.STOP_LOSS_EXIT_SLIPPAGE_BPS || "1500", 10);
   const pumpLaunchBodyLimitBytes = Number.parseInt(process.env.PUMP_LAUNCH_BODY_LIMIT_BYTES || "12000000", 10);
   const pumpLaunchRequestMode = (process.env.PUMP_LAUNCH_REQUEST_MODE || "json").trim().toLowerCase();
+  const workerTickEnabled = parseBoolean(process.env.WORKER_TICK_ENABLED || "false");
+  const workerTickRunTradePlans = parseBoolean(process.env.WORKER_TICK_RUN_TRADE_PLANS || "true");
+  const workerTickRunDcaPlans = parseBoolean(process.env.WORKER_TICK_RUN_DCA_PLANS || "true");
+  const workerTickWarmFeeds = parseBoolean(process.env.WORKER_TICK_WARM_FEEDS || "true");
+  const workerSecret = process.env.WORKER_SECRET || "";
 
   if (!Number.isInteger(bundleFeeBps) || bundleFeeBps < 0 || bundleFeeBps > 1000) {
     throw new Error("TRADE_FEE_BPS/BUNDLE_FEE_BPS must be an integer from 0 to 1000.");
@@ -410,6 +415,10 @@ function loadConfig() {
     throw new Error("PUMP_LAUNCH_BODY_LIMIT_BYTES must be an integer from 100000 to 25000000.");
   }
 
+  if (workerTickEnabled && (!workerSecret || workerSecret.length < 24)) {
+    throw new Error("WORKER_SECRET must be set to a long random value of at least 24 characters when WORKER_TICK_ENABLED=true.");
+  }
+
   try {
     new PublicKey(feeWallet);
   } catch {
@@ -454,6 +463,11 @@ function loadConfig() {
     stopLossCheckIntervalMs,
     stopLossTriggerBufferPct,
     stopLossExitSlippageBps,
+    workerTickEnabled,
+    workerTickRunTradePlans,
+    workerTickRunDcaPlans,
+    workerTickWarmFeeds,
+    workerSecret,
     solanaTrackerApiKey: process.env.SOLANA_TRACKER_API_KEY || "",
     solanaTrackerApiBase: (process.env.SOLANA_TRACKER_API_BASE || "https://data.solanatracker.io").replace(/\/$/, ""),
     solanaTrackerKolLimit,
@@ -660,6 +674,11 @@ function startHealthServer() {
 async function handleWebApiRequest(request, response, requestUrl) {
   try {
     const pathname = requestUrl.pathname;
+
+    if (request.method === "POST" && pathname === "/api/internal/worker/tick") {
+      await handleInternalWorkerTick(request, response);
+      return;
+    }
 
     if (request.method === "GET" && pathname === "/api/web/config") {
       sendWebJson(request, response, 200, {
@@ -1286,6 +1305,130 @@ function sendWebBinary(request, response, status, buffer, contentType, filename 
     ...webCorsHeaders(request)
   });
   response.end(buffer);
+}
+
+async function handleInternalWorkerTick(request, response) {
+  if (!CONFIG.workerTickEnabled) {
+    sendWebJson(request, response, 503, {
+      ok: false,
+      error: "worker_tick_disabled"
+    });
+    return;
+  }
+
+  const providedSecret = workerTickSecretFromRequest(request);
+  if (!constantTimeStringEquals(providedSecret, CONFIG.workerSecret)) {
+    sendWebJson(request, response, 401, {
+      ok: false,
+      error: "unauthorized_worker_tick"
+    });
+    return;
+  }
+
+  const body = await readJsonRequestBody(request, 64_000);
+  const result = await runInternalWorkerTick(body);
+  sendWebJson(request, response, 200, {
+    ok: true,
+    ...result
+  });
+}
+
+function workerTickSecretFromRequest(request) {
+  const direct = request.headers["x-worker-secret"] || request.headers["x-ogre-worker-secret"];
+  if (Array.isArray(direct)) return direct[0] || "";
+  if (direct) return String(direct);
+
+  const authorization = request.headers.authorization || "";
+  const match = String(authorization).match(/^Bearer\s+(.+)$/i);
+  return match ? match[1].trim() : "";
+}
+
+function constantTimeStringEquals(a, b) {
+  const left = Buffer.from(String(a || ""));
+  const right = Buffer.from(String(b || ""));
+  if (left.length !== right.length || left.length === 0) return false;
+  try {
+    return crypto.timingSafeEqual(left, right);
+  } catch {
+    return false;
+  }
+}
+
+async function runInternalWorkerTick(body = {}) {
+  const startedAt = Date.now();
+  const result = {
+    ranAt: new Date(startedAt).toISOString(),
+    tradePlans: { skipped: true },
+    dcaPlans: { skipped: true },
+    feeds: { skipped: true }
+  };
+
+  if (CONFIG.workerTickRunTradePlans && body.runTradePlans !== false) {
+    result.tradePlans = await runWorkerTask("tradePlans", () => processTradePlans());
+  }
+
+  if (CONFIG.workerTickRunDcaPlans && body.runDcaPlans !== false) {
+    result.dcaPlans = await runWorkerTask("dcaPlans", () => processDcaPlans());
+  }
+
+  if (CONFIG.workerTickWarmFeeds && body.warmLivePairs !== false) {
+    result.feeds = await runWorkerTask("feeds", () => warmWorkerLivePairFeeds(body));
+  }
+
+  result.durationMs = Date.now() - startedAt;
+  return result;
+}
+
+async function runWorkerTask(name, fn) {
+  const startedAt = Date.now();
+  try {
+    const value = await fn();
+    return {
+      ok: true,
+      durationMs: Date.now() - startedAt,
+      value: value && typeof value === "object" ? value : undefined
+    };
+  } catch (error) {
+    console.warn(`Worker ${name} tick failed: ${error.message}`);
+    return {
+      ok: false,
+      durationMs: Date.now() - startedAt,
+      error: error.message
+    };
+  }
+}
+
+async function warmWorkerLivePairFeeds(body = {}) {
+  const buckets = normalizeWorkerList(body.buckets, ["live", "under1h", "under3h", "under1d"])
+    .map(normalizeLivePairBucket)
+    .filter((value, index, list) => list.indexOf(value) === index);
+  const sorts = normalizeWorkerList(body.sorts, ["best", "newest"])
+    .map((sort) => String(sort || "best").trim().toLowerCase())
+    .filter(Boolean);
+  const force = Boolean(body.forceFeeds);
+  const warmed = [];
+
+  for (const bucket of buckets) {
+    for (const sort of sorts) {
+      const livePairs = await webLivePairs("worker", bucket, { sort, force });
+      warmed.push({
+        bucket,
+        sort,
+        rows: Array.isArray(livePairs?.rows) ? livePairs.rows.length : 0,
+        stale: Boolean(livePairs?.stale)
+      });
+    }
+  }
+
+  return { warmed };
+}
+
+function normalizeWorkerList(value, fallback) {
+  if (Array.isArray(value)) return value.map(String).filter(Boolean);
+  if (typeof value === "string") {
+    return value.split(",").map((item) => item.trim()).filter(Boolean);
+  }
+  return [...fallback];
 }
 
 async function readJsonRequestBody(request, maxBytes = 0) {
