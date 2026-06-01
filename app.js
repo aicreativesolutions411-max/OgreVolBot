@@ -129,7 +129,8 @@ const state = {
   terminalSort: "best",
   terminalToken: "",
   smartChartToken: "",
-  smartChartZoom: 80,
+  smartChartZoom: 72,
+  smartChartView: "chartTxns",
   terminalAutoToken: "",
   terminalTxSignature: "",
   terminalTxAudit: null,
@@ -219,6 +220,8 @@ let livePairsTimer = null;
 let scanTimer = null;
 let kolTimer = null;
 let watchlistTimer = null;
+let walletBackgroundRefreshTimer = null;
+let postTradeRefreshTimer = null;
 
 const $ = (selector) => document.querySelector(selector);
 const writeText = (element, value) => {
@@ -389,11 +392,15 @@ async function readApiJson(response) {
   try {
     return JSON.parse(text);
   } catch {
+    const normalizedText = text.toLowerCase();
+    const oversized = response.status === 413 || normalizedText.includes("payload too large") || normalizedText.includes("request entity too large");
     return {
       ok: false,
-      error: "invalid_api_response",
-      message: contentType.includes("text/html")
-        ? "SlimeWire received an unexpected page response. Refresh and try again."
+      error: oversized ? "payload_too_large" : "invalid_api_response",
+      message: oversized
+        ? "Launch upload is too large. Use a smaller token image and try again."
+        : contentType.includes("text/html")
+          ? "SlimeWire received an unexpected page response. Refresh and try again."
         : "SlimeWire received an unexpected response. Refresh and try again."
     };
   }
@@ -996,7 +1003,23 @@ function activePresetSummary() {
   return `Preset: ${tradeLabel} | ${bundleLabel}`;
 }
 
-async function refreshWalletState({ force = true } = {}) {
+function scheduleWalletBackgroundRefresh(delayMs = 900) {
+  if (walletBackgroundRefreshTimer) {
+    window.clearTimeout(walletBackgroundRefreshTimer);
+  }
+  walletBackgroundRefreshTimer = window.setTimeout(async () => {
+    walletBackgroundRefreshTimer = null;
+    if (!state.user || !state.token) return;
+    try {
+      await loadAll({ force: false, skipCore: true, silent: true });
+    } catch (error) {
+      state.walletRefreshError = error.message || "Background refresh failed.";
+      render();
+    }
+  }, delayMs);
+}
+
+async function refreshWalletState({ force = true, deep = true } = {}) {
   if (!state.user || !state.token) {
     setError("Create or log in before refreshing wallet balances.");
     return;
@@ -1009,7 +1032,11 @@ async function refreshWalletState({ force = true } = {}) {
     await loadWalletCore({ force });
     state.lastWalletRefreshAt = new Date().toISOString();
     render();
-    await loadAll({ force, skipCore: true, silent: true });
+    if (deep) {
+      await loadAll({ force, skipCore: true, silent: true });
+    } else {
+      scheduleWalletBackgroundRefresh(900);
+    }
   } catch (error) {
     state.walletRefreshError = error.message || "Refresh failed.";
     setError(state.walletRefreshError);
@@ -1021,7 +1048,18 @@ async function refreshWalletState({ force = true } = {}) {
 
 async function refreshAfterTrade(signature = "") {
   if (signature) state.lastTradeSignature = signature;
-  await refreshWalletState({ force: true });
+  if (postTradeRefreshTimer) {
+    window.clearTimeout(postTradeRefreshTimer);
+    postTradeRefreshTimer = null;
+  }
+  await refreshWalletState({ force: true, deep: false });
+  postTradeRefreshTimer = window.setTimeout(() => {
+    postTradeRefreshTimer = null;
+    void refreshWalletState({ force: true, deep: false }).catch((error) => {
+      state.walletRefreshError = error.message || "Post-trade refresh failed.";
+      render();
+    });
+  }, 3500);
 }
 
 function shouldDeferTerminalRender() {
@@ -1030,7 +1068,7 @@ function shouldDeferTerminalRender() {
   const tag = String(active.tagName || "").toLowerCase();
   const editable = active.isContentEditable || ["input", "textarea", "select"].includes(tag);
   if (!editable) return false;
-  return Boolean(active.closest(".fast-preset-builder, .preset-toolbar, .terminal-quick-buy-bar, .command-controls, .live-control-strip, .terminal-preset-strip, .preset-card, .order-ticket, .order-ticket-stack, .terminal-dock, .trade-side, .volume-grid, .sniper-setup, .wallet-exit-grid"));
+  return Boolean(active.closest(".fast-preset-builder, .preset-toolbar, .terminal-quick-buy-bar, .command-controls, .live-control-strip, .terminal-preset-strip, .preset-card, .order-ticket, .order-ticket-stack, .terminal-dock, .trade-side, .volume-grid, .sniper-setup, .wallet-exit-grid, .pump-launch-form, .launch-coin-form, .profile-grid, .preset-manager, .trade-panel, .terminal-side-panel, [data-preserve-focus]"));
 }
 
 function requestDeferredRender() {
@@ -1754,11 +1792,11 @@ function manualKolWatchShareText(value) {
 }
 
 function userAvatarHtml(fallback = "SW") {
-  const avatar = String(state.user?.avatar || "").trim();
+  const avatar = normalizeImageUrl(state.user?.avatar || "");
   if (isSafeAvatarSrc(avatar)) {
-    return `<img src="${escapeHtml(avatar)}" alt="">`;
+    return `<img src="${escapeHtml(avatar)}" alt="" referrerpolicy="no-referrer" onerror="this.onerror=null;this.src='${tokenMascotSrc("ogre")}';">`;
   }
-  const ogreAvatar = "./assets/slimewire/png/token-mascots/token-mascot-1.png";
+  const ogreAvatar = tokenMascotSrc("ogre");
   if (fallback === "SW" || fallback === "OG") {
     return `<img src="${ogreAvatar}" alt="">`;
   }
@@ -1768,7 +1806,20 @@ function userAvatarHtml(fallback = "SW") {
 
 function isSafeAvatarSrc(value) {
   const text = String(value || "").trim();
-  return /^data:image\/(png|jpe?g|webp);base64,/i.test(text) || /^https:\/\/[^\s"'<>]+$/i.test(text);
+  return /^data:image\/(png|jpe?g|webp|gif);base64,/i.test(text) || /^https?:\/\/[^\s"'<>]+$/i.test(text);
+}
+
+function normalizeImageUrl(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (/^ipfs:\/\//i.test(text)) {
+    const path = text.replace(/^ipfs:\/\//i, "").replace(/^ipfs\//i, "");
+    return path ? `https://ipfs.io/ipfs/${encodeURIComponent(path).replace(/%2F/g, "/")}` : "";
+  }
+  if (/^\/\//.test(text)) return `https:${text}`;
+  if (/^https?:\/\/[^\s"'<>]+$/i.test(text)) return text;
+  if (/^data:image\/(png|jpe?g|webp|gif);base64,/i.test(text)) return text;
+  return "";
 }
 
 function xAvatarUrl(handle) {
@@ -1782,7 +1833,7 @@ function xProfileUrl(handle = state.xHandle) {
 }
 
 function kolAvatarSrc(kol = {}) {
-  const avatar = String(kol.avatar || kol.image || "").trim();
+  const avatar = normalizeImageUrl(kol.avatar || kol.image || "");
   if (isSafeAvatarSrc(avatar)) return avatar;
   const directHandle = cleanXHandle(kol.twitter || kol.x || kol.username || "");
   if (directHandle) return xAvatarUrl(directHandle);
@@ -1798,7 +1849,7 @@ function kolAvatarLabel(kol = {}) {
 function kolAvatarMarkup(kol = {}, className = "kol-avatar") {
   const src = kolAvatarSrc(kol);
   return src
-    ? `<img class="${escapeHtml(className)}" src="${escapeHtml(src)}" alt="">`
+    ? `<img class="${escapeHtml(className)}" src="${escapeHtml(src)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.hidden=true;">`
     : `<div class="${escapeHtml(className)} kol-avatar-fallback" aria-hidden="true">${escapeHtml(kolAvatarLabel(kol))}</div>`;
 }
 
@@ -2954,7 +3005,7 @@ function launchCoinHtml() {
             <label>
               Image
               <input data-launch-coin-image type="file" accept="image/png,image/jpeg,image/webp,image/gif">
-              <span class="muted">Large images are compressed before upload so Render does not reject the launch.</span>
+              <span class="muted">Images are compressed before upload. Use a clear square JPG, PNG, or WEBP for best results.</span>
             </label>
             <label>
               Website
@@ -2987,6 +3038,20 @@ function launchCoinHtml() {
               Creator Fee Wallet
               <input data-launch-coin-fee-recipient type="text" placeholder="Optional wallet address" value="${escapeHtml(draft.creatorFeeRecipient || "")}">
             </label>
+            <label>
+              Fee Handling
+              <select data-launch-coin-fee-mode>
+                <option value="standard" ${(draft.feeMode || "standard") === "standard" ? "selected" : ""}>Standard</option>
+                <option value="dev" ${draft.feeMode === "dev" ? "selected" : ""}>Send creator fees to dev wallet</option>
+                <option value="buyback" ${draft.feeMode === "buyback" ? "selected" : ""}>Route creator fees to buyback wallet</option>
+                <option value="burn" ${draft.feeMode === "burn" ? "selected" : ""}>Burn creator fees when supported</option>
+                <option value="split" ${draft.feeMode === "split" ? "selected" : ""}>Split dev / buyback</option>
+              </select>
+            </label>
+            <label>
+              Buyback Wallet
+              <input data-launch-coin-buyback-wallet type="text" placeholder="Optional buyback wallet" value="${escapeHtml(draft.buybackWallet || "")}">
+            </label>
             <label class="switch-row">
               <input data-launch-coin-burn-creator-fees type="checkbox" ${draft.burnCreatorFees ? "checked" : ""}>
               <span>Burn creator fees when supported by the launch connector</span>
@@ -3002,10 +3067,10 @@ function launchCoinHtml() {
               </select>
             </label>
             <label>
-              Dev Buy SOL
+              Dev Buy SOL (launch amount)
               <input data-launch-coin-dev-buy-sol type="text" inputmode="decimal" autocomplete="off" placeholder="0.05" value="${escapeHtml(draft.devBuySol || "")}">
             </label>
-            <p class="muted full-span">If your Pump connector supports true creator/dev-buy launch settings, SlimeWire passes these fields through. Otherwise SlimeWire waits for the returned CA, runs the Dev Wallet Initial Buy first, then runs the selected post-launch action.</p>
+            <p class="muted full-span">Set the dev wallet buy amount here. After launch, SlimeWire can run the Dev Wallet Initial Buy first, then continue into your selected post-launch action.</p>
           </div>
         </details>
 
@@ -3109,8 +3174,8 @@ function launchCoinHtml() {
           <p>SlimeWire sends the token details to the configured launch connector, waits for the returned CA, then can route that CA into your selected preset. If the connector is not enabled, save the sheet and use the official fallback links.</p>
         </article>
         <article>
-          <h3>Credit Use</h3>
-          <p>Saving a draft and opening Pump/Dex links does not use Helius or Jupiter credits. Credits are used later for wallet balance refreshes, quotes, buys, sells, bundles, and active exit monitoring.</p>
+          <h3>Launch Checklist</h3>
+          <p>Confirm the token details, image, dev buy amount, fee handling, and post-launch action before submitting. If direct launch is unavailable, save the sheet and use the fallback links.</p>
         </article>
         <article>
           <h3>Active Launch Watches</h3>
@@ -3134,6 +3199,8 @@ function readLaunchCoinDraft() {
     telegram: ($("[data-launch-coin-telegram]")?.value || "").trim(),
     creatorFeeBps: $("[data-launch-coin-creator-fee]")?.value || draft.creatorFeeBps || "0",
     creatorFeeRecipient: ($("[data-launch-coin-fee-recipient]")?.value || "").trim(),
+    feeMode: $("[data-launch-coin-fee-mode]")?.value || draft.feeMode || "standard",
+    buybackWallet: ($("[data-launch-coin-buyback-wallet]")?.value || "").trim(),
     burnCreatorFees: Boolean($("[data-launch-coin-burn-creator-fees]")?.checked),
     devBuyEnabled: Boolean($("[data-launch-coin-dev-buy-enabled]")?.checked),
     devWalletIndex: $("[data-launch-coin-dev-wallet]")?.value || draft.devWalletIndex || "",
@@ -3199,10 +3266,15 @@ function imageFromDataUrl(dataUrl) {
   });
 }
 
+function dataUrlMimeType(dataUrl, fallback = "application/octet-stream") {
+  const match = String(dataUrl || "").match(/^data:([^;,]+)[;,]/i);
+  return match?.[1] || fallback;
+}
+
 async function readFileAsDataUrl(file) {
   if (!file) return "";
   const maxRawBytes = 12 * 1024 * 1024;
-  const maxPayloadBytes = 900_000;
+  const maxPayloadBytes = 320_000;
   if (file.size > maxRawBytes) {
     throw new Error("Image is over 12MB. Use a smaller PNG, JPG, WEBP, or GIF.");
   }
@@ -3217,7 +3289,7 @@ async function readFileAsDataUrl(file) {
 
   try {
     const image = await imageFromDataUrl(rawDataUrl);
-    const maxSide = 512;
+    const maxSide = 384;
     const scale = Math.min(1, maxSide / Math.max(image.width || maxSide, image.height || maxSide));
     const canvas = document.createElement("canvas");
     canvas.width = Math.max(1, Math.round((image.width || maxSide) * scale));
@@ -3225,15 +3297,25 @@ async function readFileAsDataUrl(file) {
     const ctx = canvas.getContext("2d");
     ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
 
-    let compressed = canvas.toDataURL("image/webp", 0.72);
-    if (compressed.length > maxPayloadBytes) compressed = canvas.toDataURL("image/jpeg", 0.62);
-    if (compressed.length > maxPayloadBytes) compressed = canvas.toDataURL("image/jpeg", 0.48);
-    if (compressed.length <= maxPayloadBytes) return compressed;
+    const attempts = [
+      ["image/webp", 0.76],
+      ["image/webp", 0.64],
+      ["image/webp", 0.52],
+      ["image/webp", 0.42],
+      ["image/jpeg", 0.72],
+      ["image/jpeg", 0.58],
+      ["image/jpeg", 0.46],
+      ["image/jpeg", 0.36]
+    ];
+    for (const [type, quality] of attempts) {
+      const compressed = canvas.toDataURL(type, quality);
+      if (compressed.length <= maxPayloadBytes) return compressed;
+    }
   } catch {
     if (rawDataUrl.length <= maxPayloadBytes) return rawDataUrl;
   }
 
-  throw new Error("Token image is too large after compression. Use a smaller square image and try again.");
+  throw new Error("Token image is too large after compression. Use a smaller square JPG, PNG, or WEBP and try again.");
 }
 
 async function launchCoinImagePayload() {
@@ -3242,7 +3324,7 @@ async function launchCoinImagePayload() {
   const imageDataUrl = await readFileAsDataUrl(imageFile);
   return {
     imageName: imageFile.name,
-    imageType: imageDataUrl.startsWith("data:image/webp") ? "image/webp" : (imageFile.type || "application/octet-stream"),
+    imageType: dataUrlMimeType(imageDataUrl, imageFile.type || "application/octet-stream"),
     imageDataUrl
   };
 }
@@ -3343,16 +3425,24 @@ async function submitLaunchCoin() {
     if (!draft.name) throw new Error("Enter the token name before launching.");
     if (!draft.symbol) throw new Error("Enter the ticker before launching.");
 
-    state.launchCoinStatus = "Submitting launch through SlimeWire...";
+    state.launchCoinStatus = "Compressing image and preparing launch...";
     writeText(status, state.launchCoinStatus);
 
     const imagePayload = await launchCoinImagePayload();
+    const requestPayload = {
+      ...draft,
+      ...imagePayload
+    };
+    const requestBody = JSON.stringify(requestPayload);
+    if (requestBody.length > 650_000) {
+      throw new Error("Launch upload is still too large. Use a smaller square JPG, PNG, or WEBP and try again.");
+    }
+    state.launchCoinStatus = "Submitting launch through SlimeWire...";
+    writeText(status, state.launchCoinStatus);
+
     const data = await api("/api/web/launch/coin", {
       method: "POST",
-      body: JSON.stringify({
-        ...draft,
-        ...imagePayload
-      })
+      body: requestBody
     });
 
     const launch = data.launch || {};
@@ -5542,13 +5632,24 @@ function compactMetricsLineHtml(row = {}) {
   `;
 }
 
+function pumpUrlForRow(row = {}) {
+  const existing = String(row.pumpUrl || "").trim();
+  if (existing) return existing;
+  const mint = String(row.tokenMint || row.mint || "").trim();
+  if (!mint) return "";
+  return Boolean(row.isPump) || mint.toLowerCase().endsWith("pump")
+    ? `https://pump.fun/coin/${encodeURIComponent(mint)}`
+    : "";
+}
+
 function miniTokenLinksHtml(row = {}, shareText = "") {
   const text = shareText || livePairShareText(row);
   const sniperCount = Number(row.sniperCount || row.snipers || 0);
+  const pumpUrl = pumpUrlForRow(row);
   return `
     <div class="compact-link-row">
       <a href="${escapeHtml(row.dexUrl || dexUrl(row.tokenMint))}" target="_blank" rel="noreferrer" title="DexScreener">DEX</a>
-      ${row.pumpUrl ? `<a href="${escapeHtml(row.pumpUrl)}" target="_blank" rel="noreferrer" title="Pump">PUMP</a>` : ""}
+      ${pumpUrl ? `<a href="${escapeHtml(pumpUrl)}" target="_blank" rel="noreferrer" title="Pump">PUMP</a>` : ""}
       ${row.twitterUrl ? `<a href="${escapeHtml(row.twitterUrl)}" target="_blank" rel="noreferrer" title="X">X</a>` : ""}
       ${row.telegramUrl ? `<a href="${escapeHtml(row.telegramUrl)}" target="_blank" rel="noreferrer" title="Telegram">TG</a>` : ""}
       ${row.websiteUrl ? `<a href="${escapeHtml(row.websiteUrl)}" target="_blank" rel="noreferrer" title="Website">WEB</a>` : ""}
@@ -5566,6 +5667,53 @@ function compareNewestLiveRows(a = {}, b = {}) {
   const bCreated = Number(b.pairCreatedAt || 0);
   if (aCreated || bCreated) return bCreated - aCreated;
   return Number(b.bestPickScore || 0) - Number(a.bestPickScore || 0);
+}
+
+function hashStringToInt(value = "") {
+  let hash = 0;
+  for (let i = 0; i < String(value).length; i += 1) {
+    hash = ((hash << 5) - hash) + String(value).charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash);
+}
+
+function tokenMintKey(row = {}) {
+  return String(row.tokenMint || row.mint || row.address || row.pairAddress || "").trim().toLowerCase();
+}
+
+function terminalRotationKey(scope = "") {
+  const feed = currentLivePairs();
+  return [
+    scope,
+    state.livePairBucket,
+    state.terminalSort,
+    feed?.refreshCount || "",
+    state.livePairsLastUpdatedByBucket[state.livePairBucket] || state.livePairsLastUpdatedAt || "",
+    state.kolScan?.refreshCount || "",
+    state.kolScan?.refreshedAt || state.kolLastUpdatedAt || ""
+  ].join(":");
+}
+
+function rotatedDisplayRows(rows = [], limit = 12, rotateKey = "", stickyCount = 0) {
+  const uniqueRows = uniqueSignalRows(rows || []);
+  const max = Math.max(0, Number(limit) || uniqueRows.length);
+  if (!max) return [];
+  if (!rotateKey || uniqueRows.length <= max) return uniqueRows.slice(0, max);
+  const stickySize = Math.min(Math.max(0, Number(stickyCount) || 0), Math.max(0, max - 1), uniqueRows.length);
+  const stickyRows = uniqueRows.slice(0, stickySize);
+  const pool = uniqueRows.slice(stickySize);
+  if (!pool.length) return stickyRows.slice(0, max);
+  const offset = hashStringToInt(rotateKey) % pool.length;
+  const rotated = [...pool.slice(offset), ...pool.slice(0, offset)];
+  return [...stickyRows, ...rotated].slice(0, max);
+}
+
+function removeRowsByMints(rows = [], mintSet = new Set()) {
+  return (rows || []).filter((row) => {
+    const key = tokenMintKey(row);
+    return !key || !mintSet.has(key);
+  });
 }
 
 function terminalTokenStatsHtml(row = {}) {
@@ -5590,7 +5738,7 @@ function terminalSignalRowsHtml(rows, options = {}) {
   const actionLabel = options.actionLabel || "Buy";
   const emptyTitle = options.emptyTitle || "No signals loaded";
   const emptyMessage = options.emptyMessage || "Refresh the feed to load current signals.";
-  const visibleRows = (rows || []).slice(0, limit);
+  const visibleRows = rotatedDisplayRows(rows || [], limit, options.rotateKey || "", options.stickyCount || 0);
   if (!visibleRows.length) return emptyState(emptyTitle, emptyMessage);
   return `
     <div class="terminal-token-list">
@@ -5637,7 +5785,7 @@ function compactSignalRowsHtml(rows, options = {}) {
   const actionLabel = options.actionLabel || "Buy Preset";
   const emptyTitle = options.emptyTitle || "No signals loaded";
   const emptyMessage = options.emptyMessage || "Refresh the feed to load current signals.";
-  const visibleRows = (rows || []).slice(0, limit);
+  const visibleRows = rotatedDisplayRows(rows || [], limit, options.rotateKey || "", options.stickyCount || 0);
   if (!visibleRows.length) return emptyState(emptyTitle, emptyMessage);
   return `
     <div class="compact-signal-list">
@@ -5935,6 +6083,8 @@ function slimeScopeHtml() {
           layout: "terminal",
           limit: 30,
           actionLabel: activePresetButtonLabel(),
+          rotateKey: terminalRotationKey(`slime-scope:${state.slimeScopeMode}`),
+          stickyCount: 1,
           emptyTitle: "No Slime Scope pairs yet",
           emptyMessage: "Feeds are refreshing. Try a different scope mode if this stays empty."
         })}
@@ -5949,6 +6099,26 @@ function terminalHtml() {
   const newestLiveRows = [...liveRows].sort(compareNewestLiveRows);
   const kolRows = mergeMarketDataIntoRows(state.kolScan?.rows || []).filter((row) => !isUiMayhemRow(row));
   const bestRows = terminalBestPickRows(liveRows, kolRows);
+  const bestDisplayRows = rotatedDisplayRows(bestRows, 8, terminalRotationKey("best-picks"), 2);
+  const bestMintSet = new Set(bestDisplayRows.map(tokenMintKey).filter(Boolean));
+  const liveDisplaySource = removeRowsByMints(newestLiveRows, bestMintSet);
+  const liveDisplayRows = rotatedDisplayRows(
+    liveDisplaySource.length ? liveDisplaySource : newestLiveRows,
+    12,
+    terminalRotationKey("live-pairs"),
+    0
+  );
+  const usedMintSet = new Set([
+    ...bestMintSet,
+    ...liveDisplayRows.map(tokenMintKey).filter(Boolean)
+  ]);
+  const kolDisplaySource = removeRowsByMints(kolRows, usedMintSet);
+  const kolDisplayRows = rotatedDisplayRows(
+    kolDisplaySource.length ? kolDisplaySource : kolRows,
+    12,
+    terminalRotationKey("kol-signals"),
+    1
+  );
   const bucketLoading = Boolean(state.livePairsLoadingByBucket[state.livePairBucket]);
   const lastUpdated = currentLivePairsUpdatedAt();
   const rowTradeLabel = activePresetButtonLabel();
@@ -5985,15 +6155,15 @@ function terminalHtml() {
         <section class="command-grid">
           <article class="terminal-panel best-picks-panel">
             <header><h4>Best Picks</h4><span>Score + reasons</span></header>
-            ${compactSignalRowsHtml(bestRows, { layout: "terminal", limit: 8, actionLabel: rowTradeLabel, emptyTitle: "No Best Picks yet", emptyMessage: "Refresh Live Pairs to score current pairs." })}
+            ${compactSignalRowsHtml(bestDisplayRows, { layout: "terminal", limit: 8, actionLabel: rowTradeLabel, emptyTitle: "No Best Picks yet", emptyMessage: "Refresh Live Pairs to score current pairs." })}
           </article>
           <article class="terminal-panel live-pairs-panel">
             <header><h4>Live Pairs</h4><button data-tab="live">Open</button></header>
-            ${compactSignalRowsHtml(newestLiveRows, { layout: "terminal", limit: 12, actionLabel: rowTradeLabel })}
+            ${compactSignalRowsHtml(liveDisplayRows, { layout: "terminal", limit: 12, actionLabel: rowTradeLabel })}
           </article>
           <article class="terminal-panel kol-panel">
             <header><h4>KOL Signals</h4><button data-kol-refresh>${state.kolLoading ? "Loading..." : "Refresh"}</button></header>
-            ${compactSignalRowsHtml(kolRows, { layout: "terminal", limit: 12, actionLabel: rowTradeLabel, emptyTitle: "No KOL signals loaded", emptyMessage: "Refresh KOL Tracker to load signals." })}
+            ${compactSignalRowsHtml(kolDisplayRows, { layout: "terminal", limit: 12, actionLabel: rowTradeLabel, emptyTitle: "No KOL signals loaded", emptyMessage: "Refresh KOL Tracker to load signals." })}
           </article>
         </section>
 
@@ -6049,12 +6219,25 @@ function tokenPreviewHtml(token) {
     </dl>
     <div class="card-actions compact">
       <a href="${escapeHtml(token.dexUrl || dexUrl(token.tokenMint))}" target="_blank" rel="noreferrer">Dex</a>
-      ${token.pumpUrl ? `<a href="${escapeHtml(token.pumpUrl)}" target="_blank" rel="noreferrer">Pump</a>` : ""}
+      ${pumpUrlForRow(token) ? `<a href="${escapeHtml(pumpUrlForRow(token))}" target="_blank" rel="noreferrer">Pump</a>` : ""}
       <button class="primary" data-quick-trade-token="${escapeHtml(token.tokenMint)}">${escapeHtml(activePresetButtonLabel())}</button>
       <button data-quick-bundle-token="${escapeHtml(token.tokenMint)}">Bundle</button>
       ${hasPosition ? `<button data-position-sell="${escapeHtml(token.tokenMint)}" data-position-sell-percent="100">Exit 100%</button>` : ""}
     </div>
     <small class="score-breakdown">Why: ${escapeHtml(scoreWhyText(token))}</small>
+  `;
+}
+
+function smartChartViewTabsHtml(activeView = "chartTxns") {
+  const tabs = [
+    ["chartTxns", "Chart + Txns"],
+    ["chart", "Chart"],
+    ["txns", "Transactions"]
+  ];
+  return `
+    <div class="smart-chart-mode-tabs" role="tablist" aria-label="Smart Chart view">
+      ${tabs.map(([value, label]) => `<button type="button" data-smart-chart-view="${value}" data-active="${activeView === value}">${label}</button>`).join("")}
+    </div>
   `;
 }
 
@@ -6067,9 +6250,12 @@ function smartChartHtml() {
         token,
         ...allVisibleSignalRows().filter((row) => String(row.tokenMint || "") === mint)
       ]).filter(Boolean).slice(0, 5)
-    : terminalBestPickRows().slice(0, 5);
+    : rotatedDisplayRows(terminalBestPickRows(), 5, terminalRotationKey("smart-chart-suggest"), 1);
   const suggestion = smartChartSuggestion(token || {});
-  const chartZoom = Math.min(120, Math.max(65, Number(state.smartChartZoom) || 80));
+  const chartZoom = Math.min(115, Math.max(60, Number(state.smartChartZoom) || 72));
+  const chartView = ["chartTxns", "chart", "txns"].includes(state.smartChartView) ? state.smartChartView : "chartTxns";
+  const showChart = chartView !== "txns";
+  const showTxns = chartView !== "chart";
   if (!mint) {
     return `
       <section class="smart-chart-terminal">
@@ -6091,6 +6277,8 @@ function smartChartHtml() {
             layout: "terminal",
             limit: 5,
             actionLabel: activePresetButtonLabel(),
+            rotateKey: terminalRotationKey("smart-chart-empty"),
+            stickyCount: 1,
             emptyTitle: "No chart picks loaded",
             emptyMessage: "Refresh feeds, then open Smart Chart again."
           })}
@@ -6124,15 +6312,24 @@ function smartChartHtml() {
               ${miniTokenLinksHtml(token)}
             </div>
           </div>
-          <div class="smart-chart-frame" style="--smart-chart-scale: ${chartZoom / 100};">
-            <iframe title="DexScreener chart for ${escapeHtml(token.symbol || shortAddress(mint))}" src="${escapeHtml(dexChartEmbedUrl(mint))}" loading="lazy"></iframe>
-          </div>
-          <label class="smart-chart-zoom">
-            <span>Zoom</span>
-            <input data-smart-chart-zoom type="range" min="65" max="120" step="5" value="${escapeHtml(chartZoom)}">
-            <strong>${escapeHtml(chartZoom)}%</strong>
-          </label>
-          <small class="score-breakdown">If the embedded chart does not load, use the DEX link above.</small>
+          ${showChart ? `
+            <div class="smart-chart-frame" style="--smart-chart-scale: ${chartZoom / 100};">
+              <iframe title="DexScreener chart for ${escapeHtml(token.symbol || shortAddress(mint))}" src="${escapeHtml(dexChartEmbedUrl(mint))}" loading="lazy"></iframe>
+            </div>
+            <label class="smart-chart-zoom">
+              <span>Zoom</span>
+              <input data-smart-chart-zoom type="range" min="60" max="115" step="5" value="${escapeHtml(chartZoom)}">
+              <strong>${escapeHtml(chartZoom)}%</strong>
+            </label>
+            <small class="score-breakdown">If the embedded chart does not load, use the DEX link above.</small>
+          ` : `
+            <div class="smart-chart-transactions-panel">
+              <strong>Transactions</strong>
+              <p>Open the DEX transaction feed for live fills, then use the related SlimeWire signals below.</p>
+              <a href="${escapeHtml(token.dexUrl || dexUrl(mint))}" target="_blank" rel="noreferrer">Open DEX Transactions</a>
+            </div>
+          `}
+          ${smartChartViewTabsHtml(chartView)}
         </article>
         <aside class="terminal-panel smart-chart-side">
           <h3>${escapeHtml(token.symbol || "Token")} setup</h3>
@@ -6150,7 +6347,7 @@ function smartChartHtml() {
           </div>
         </aside>
       </div>
-      <div class="smart-chart-bottom-grid">
+      ${showTxns ? `<div class="smart-chart-bottom-grid">
         <article class="terminal-panel">
           <div class="terminal-title-row">
             <h3>Related signals</h3>
@@ -6171,7 +6368,7 @@ function smartChartHtml() {
           </div>
           ${heldPosition ? `<div class="table-list compact-table">${positionRowHtml(heldPosition)}</div>` : emptyState("No position", "No current SlimeWire position is tracked for this token.")}
         </article>
-      </div>
+      </div>` : ""}
     </section>
   `;
 }
@@ -6282,7 +6479,15 @@ function terminalSubtabHtml() {
   if (state.terminalSubtab === "orders") return stopLossAuditHtml();
   if (state.terminalSubtab === "history") return liveTradeRowsHtml(12);
   if (state.terminalSubtab === "wallets") return walletBalanceSummaryHtml();
-  if (state.terminalSubtab === "kol") return compactSignalRowsHtml(mergeMarketDataIntoRows(state.kolScan?.rows || []), { layout: "terminal", limit: 12 });
+  if (state.terminalSubtab === "kol") {
+    const rows = mergeMarketDataIntoRows(state.kolScan?.rows || []).filter((row) => !isUiMayhemRow(row));
+    return compactSignalRowsHtml(rows, {
+      layout: "terminal",
+      limit: 12,
+      rotateKey: terminalRotationKey("bottom-kol"),
+      stickyCount: 1
+    });
+  }
   if (state.terminalSubtab === "sniper") return state.scan ? tokenSignalRowsHtml(state.scan.rows || [], { context: "sniper", primaryAction: "snipe", primaryActionLabel: "Snipe", hideToolbar: true }) : emptyState("No sniper scan loaded", "Open Sniper or refresh a scan mode.");
   if (state.terminalSubtab === "tx") return txAuditHtml(true);
   if (state.terminalSubtab === "reconcile") return balanceReconciliationHtml();
@@ -6651,11 +6856,13 @@ function formatChangeHtml(value) {
 
 function livePairAvatarHtml(row) {
   const label = String(row.symbol || row.name || row.shortMint || "?").trim().slice(0, 2).toUpperCase() || "?";
-  if (row.imageUrl) {
-    return `<div class="live-pair-avatar"><img src="${escapeHtml(row.imageUrl)}" alt="${escapeHtml(row.symbol || row.name || "Token")}" loading="lazy" onerror="this.hidden=true;"><span>${escapeHtml(label)}</span></div>`;
+  const fallbackSrc = tokenMascotSrc(row.tokenMint || row.symbol || row.name);
+  const safeFallbackSrc = escapeHtml(fallbackSrc);
+  const imageUrl = normalizeImageUrl(row.imageUrl);
+  if (imageUrl) {
+    return `<div class="live-pair-avatar"><img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(row.symbol || row.name || "Token")}" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.src='${safeFallbackSrc}';"><span>${escapeHtml(label)}</span></div>`;
   }
-  const mascot = tokenMascotIndex(row.tokenMint || row.symbol || row.name);
-  return `<div class="live-pair-avatar fallback with-mascot"><img src="./assets/slimewire/png/token-mascots/token-mascot-${mascot}.png" alt="" aria-hidden="true"><span>${escapeHtml(label)}</span></div>`;
+  return `<div class="live-pair-avatar fallback with-mascot"><img src="${safeFallbackSrc}" alt="" aria-hidden="true" onerror="this.hidden=true;"><span>${escapeHtml(label)}</span></div>`;
 }
 
 function tokenMascotIndex(value = "") {
@@ -6663,6 +6870,10 @@ function tokenMascotIndex(value = "") {
   let total = 0;
   for (let index = 0; index < text.length; index += 1) total += text.charCodeAt(index);
   return (total % 5) + 1;
+}
+
+function tokenMascotSrc(value = "") {
+  return `./assets/slimewire/png/token-mascots/token-mascot-${tokenMascotIndex(value)}.png`;
 }
 
 function livePairShareText(row) {
@@ -7496,6 +7707,12 @@ document.addEventListener("click", async (event) => {
     render();
     return;
   }
+  if (target.matches("[data-smart-chart-view]")) {
+    const nextView = target.dataset.smartChartView || "chartTxns";
+    state.smartChartView = ["chartTxns", "chart", "txns"].includes(nextView) ? nextView : "chartTxns";
+    render();
+    return;
+  }
   if (target.matches("[data-smart-chart-open]")) {
     const tokenMint = String($("[data-smart-chart-input]")?.value || "").trim();
     if (!tokenMint) {
@@ -7793,7 +8010,7 @@ document.addEventListener("input", (event) => {
     return;
   }
   if (target?.matches?.("[data-smart-chart-zoom]")) {
-    state.smartChartZoom = Math.min(120, Math.max(65, Number(target.value) || 80));
+    state.smartChartZoom = Math.min(115, Math.max(60, Number(target.value) || 72));
     const label = target.closest(".smart-chart-zoom")?.querySelector("strong");
     if (label) writeText(label, `${state.smartChartZoom}%`);
     const frame = target.closest(".smart-chart-main")?.querySelector(".smart-chart-frame");
