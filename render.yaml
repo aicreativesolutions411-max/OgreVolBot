@@ -37,13 +37,13 @@ services:
       - key: PUMP_LAUNCH_TIMEOUT_MS
         value: 30000
       - key: PUMP_LAUNCH_REQUEST_MODE
-        value: multipart
+        value: json
       - key: PUMP_LAUNCH_API_FORMAT
-        value: pump
+        value: minimal
       - key: PUMP_LAUNCH_IMAGE_FIELD
-        value: image
+        value: none
       - key: PUMP_LAUNCH_IMAGE_MAX_BYTES
-        value: 450000
+        value: 650000
       - key: PUMP_LAUNCH_BODY_LIMIT_BYTES
         value: 12000000
       - key: WORKER_TICK_ENABLED

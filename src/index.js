@@ -265,7 +265,7 @@ function loadConfig() {
   const stopLossExitSlippageBps = Number.parseInt(process.env.STOP_LOSS_EXIT_SLIPPAGE_BPS || "1500", 10);
   const stopLossMonitorSlippageBps = Number.parseInt(process.env.STOP_LOSS_MONITOR_SLIPPAGE_BPS || "2500", 10);
   const pumpLaunchBodyLimitBytes = Number.parseInt(process.env.PUMP_LAUNCH_BODY_LIMIT_BYTES || "12000000", 10);
-  const pumpLaunchRequestMode = (process.env.PUMP_LAUNCH_REQUEST_MODE || "multipart").trim().toLowerCase();
+  const pumpLaunchRequestMode = (process.env.PUMP_LAUNCH_REQUEST_MODE || "json").trim().toLowerCase();
   const workerTickEnabled = parseBoolean(process.env.WORKER_TICK_ENABLED || (process.env.WORKER_SECRET ? "true" : "false"));
   const workerTickRunTradePlans = parseBoolean(process.env.WORKER_TICK_RUN_TRADE_PLANS || "true");
   const workerTickRunDcaPlans = parseBoolean(process.env.WORKER_TICK_RUN_DCA_PLANS || "true");
@@ -605,7 +605,10 @@ function startHealthServer() {
       return;
     }
 
-    if (requestUrl.pathname.startsWith("/api/web/")) {
+    if (requestUrl.pathname.startsWith("/api/")
+      || requestUrl.pathname.startsWith("/internal/")
+      || requestUrl.pathname === "/worker/tick"
+      || requestUrl.pathname === "/worker/health") {
       await handleWebApiRequest(request, response, requestUrl);
       return;
     }
@@ -5280,6 +5283,8 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
       planWallet.lastBasisLamports = estimate.basis?.toString?.() || null;
       planWallet.lastMonitorSlippageBps = estimate.monitorSlippageBps || CONFIG.stopLossMonitorSlippageBps;
       planWallet.lastError = estimate.quoteError ? `Jupiter quote fallback: ${estimate.quoteError}` : null;
+      planWallet.estimateFailures = 0;
+      planWallet.lastPriceEstimateError = null;
       planWallet.triggerStatus = "watching";
       planWallet.lastTriggerCheckAt = planWallet.lastCheckedAt;
       planWallet.triggerCheckIntervalMs = CONFIG.stopLossCheckIntervalMs;
@@ -5316,7 +5321,9 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
     } catch (error) {
       planWallet.lastCheckedAt = new Date().toISOString();
       planWallet.lastError = friendlyError(error);
-      planWallet.triggerStatus = timerDue ? "timer-triggered" : "watching";
+      planWallet.estimateFailures = Number.parseInt(planWallet.estimateFailures || 0, 10) + 1;
+      planWallet.lastPriceEstimateError = planWallet.lastError;
+      planWallet.triggerStatus = timerDue ? "timer-triggered" : "price-unavailable";
       planWallet.lastTriggerCheckAt = planWallet.lastCheckedAt;
       if (timerDue) {
         triggerReason = "timer";
@@ -5945,6 +5952,72 @@ async function processDcaPlanWallet(plan, planWallet, walletStore) {
   }
 }
 
+const SOL_USD_PRICE_CACHE_TTL_MS = 60_000;
+let solUsdPriceCache = { cachedAt: 0, value: null, promise: null };
+
+async function getSolUsdPrice(options = {}) {
+  const now = Date.now();
+  if (!options.force && Number.isFinite(solUsdPriceCache.value) && solUsdPriceCache.value > 0 && now - solUsdPriceCache.cachedAt < SOL_USD_PRICE_CACHE_TTL_MS) {
+    return solUsdPriceCache.value;
+  }
+  if (!options.force && solUsdPriceCache.promise) {
+    return solUsdPriceCache.promise;
+  }
+
+  solUsdPriceCache.promise = (async () => {
+    const pairs = await fetchDexScreenerTokenPairsBatch([SOL_MINT], { timeoutMs: options.timeoutMs || 1_800 }).catch(() => []);
+    const priceUsd = firstMeaningfulNumber(...(pairs || []).map((pair) => pair?.priceUsd));
+    if (!Number.isFinite(priceUsd) || priceUsd <= 0) {
+      throw new Error("SOL/USD price unavailable");
+    }
+    solUsdPriceCache = { cachedAt: Date.now(), value: priceUsd, promise: null };
+    return priceUsd;
+  })();
+
+  try {
+    return await solUsdPriceCache.promise;
+  } catch (error) {
+    solUsdPriceCache = { ...solUsdPriceCache, promise: null };
+    throw error;
+  }
+}
+
+function pumpFunPriceUsd(metadata = {}, tokenDecimals = 6) {
+  const direct = firstMeaningfulNumber(
+    metadata.priceUsd,
+    metadata.price_usd,
+    metadata.usdPrice,
+    metadata.priceUSD,
+    metadata.price
+  );
+  if (Number.isFinite(direct) && direct > 0) return direct;
+
+  const marketCapUsd = firstMeaningfulNumber(
+    metadata.marketCap,
+    metadata.usdMarketCap,
+    metadata.fdv,
+    metadata.mcap,
+    metadata.mc
+  );
+  const supply = firstMeaningfulNumber(
+    metadata.totalSupply,
+    metadata.tokenSupply,
+    metadata.supply,
+    metadata.total_supply,
+    metadata.token_supply
+  );
+  const decimals = Number.isInteger(Number(tokenDecimals)) ? Number(tokenDecimals) : 6;
+  if (!Number.isFinite(marketCapUsd) || marketCapUsd <= 0 || !Number.isFinite(supply) || supply <= 0) {
+    return null;
+  }
+
+  const normalizedSupply = supply > 1_000_000_000_000 ? supply / (10 ** decimals) : supply;
+  if (!Number.isFinite(normalizedSupply) || normalizedSupply <= 0) {
+    return null;
+  }
+  return marketCapUsd / normalizedSupply;
+}
+
 async function estimatePlanWalletMove(plan, wallet, sellPercentOverride = null) {
   const keypair = decryptWallet(wallet);
   const planWallet = plan.wallets.find((item) => item.publicKey === wallet.publicKey);
@@ -5998,7 +6071,16 @@ async function estimatePlanWalletMove(plan, wallet, sellPercentOverride = null) 
 async function estimatePlanWalletMoveFromPumpFun(plan, token, amount, basis, quoteError, monitorSlippageBps = null) {
   const metadata = await getPumpFunTokenMetadata(plan.tokenMint, { timeoutMs: 1_800 });
   const decimals = Number(token?.decimals);
-  const priceSol = pumpFunPriceSol(metadata, decimals);
+  let priceSol = pumpFunPriceSol(metadata, decimals);
+  if (!Number.isFinite(priceSol) || priceSol <= 0) {
+    const priceUsd = pumpFunPriceUsd(metadata, decimals);
+    if (Number.isFinite(priceUsd) && priceUsd > 0) {
+      const solUsd = await getSolUsdPrice({ timeoutMs: 1_800 }).catch(() => null);
+      if (Number.isFinite(solUsd) && solUsd > 0) {
+        priceSol = priceUsd / solUsd;
+      }
+    }
+  }
 
   if (!Number.isFinite(priceSol) || priceSol <= 0 || !Number.isInteger(decimals)) {
     throw quoteError;
@@ -6062,33 +6144,66 @@ function dexTokenIsSol(token = {}) {
     || /^solana$/i.test(String(token.name || ""));
 }
 
-function dexPairTokenPriceSol(pair, tokenMint) {
+function dexPairTokenPriceUsd(pair, tokenMint) {
+  const base = pair?.baseToken || {};
+  const quote = pair?.quoteToken || {};
+  const priceUsd = Number(pair?.priceUsd);
+  if (!Number.isFinite(priceUsd) || priceUsd <= 0) return null;
+
+  const baseIsTarget = tokenAddressEquals(base.address, tokenMint);
+  const quoteIsTarget = tokenAddressEquals(quote.address, tokenMint);
+  if (baseIsTarget) return priceUsd;
+
+  const priceNative = Number(pair?.priceNative);
+  if (quoteIsTarget && Number.isFinite(priceNative) && priceNative > 0) {
+    return priceUsd / priceNative;
+  }
+  return null;
+}
+
+function dexPairTokenPriceSol(pair, tokenMint, solUsdPrice = null) {
   const base = pair?.baseToken || {};
   const quote = pair?.quoteToken || {};
   const priceNative = Number(pair?.priceNative);
-  if (!Number.isFinite(priceNative) || priceNative <= 0) return null;
 
   const baseIsTarget = tokenAddressEquals(base.address, tokenMint);
   const quoteIsTarget = tokenAddressEquals(quote.address, tokenMint);
   const baseIsSol = dexTokenIsSol(base);
   const quoteIsSol = dexTokenIsSol(quote);
 
-  if (baseIsTarget && quoteIsSol) return priceNative;
-  if (quoteIsTarget && baseIsSol) return 1 / priceNative;
+  if (Number.isFinite(priceNative) && priceNative > 0) {
+    if (baseIsTarget && quoteIsSol) return priceNative;
+    if (quoteIsTarget && baseIsSol) return 1 / priceNative;
+  }
+
+  const priceUsd = dexPairTokenPriceUsd(pair, tokenMint);
+  if (Number.isFinite(priceUsd) && priceUsd > 0 && Number.isFinite(solUsdPrice) && solUsdPrice > 0) {
+    return priceUsd / solUsdPrice;
+  }
   return null;
 }
 
-function bestDexPairWithSolPrice(tokenMint, pairs) {
-  return (pairs || [])
+async function bestDexPairWithSolPrice(tokenMint, pairs) {
+  const matchingPairs = (pairs || [])
     .filter((pair) => pairMatchesToken(pair, tokenMint))
+    .sort(compareDexPairsForSniper);
+  const direct = matchingPairs
     .map((pair) => ({ pair, priceSol: dexPairTokenPriceSol(pair, tokenMint) }))
+    .filter((item) => Number.isFinite(item.priceSol) && item.priceSol > 0)
+    .sort((a, b) => compareDexPairsForSniper(a.pair, b.pair))[0] || null;
+  if (direct) return direct;
+
+  const solUsdPrice = await getSolUsdPrice({ timeoutMs: 1_800 }).catch(() => null);
+  if (!Number.isFinite(solUsdPrice) || solUsdPrice <= 0) return null;
+  return matchingPairs
+    .map((pair) => ({ pair, priceSol: dexPairTokenPriceSol(pair, tokenMint, solUsdPrice) }))
     .filter((item) => Number.isFinite(item.priceSol) && item.priceSol > 0)
     .sort((a, b) => compareDexPairsForSniper(a.pair, b.pair))[0] || null;
 }
 
 async function estimatePlanWalletMoveFromDexPair(plan, token, amount, basis, quoteError, monitorSlippageBps = null) {
   const pairs = await fetchDexScreenerTokenPairsBatch([plan.tokenMint], { timeoutMs: 1_800 }).catch(() => []);
-  const pricedPair = bestDexPairWithSolPrice(plan.tokenMint, pairs);
+  const pricedPair = await bestDexPairWithSolPrice(plan.tokenMint, pairs);
   const priceSol = pricedPair?.priceSol;
   const decimals = Number(token?.decimals);
 
@@ -8287,10 +8402,15 @@ async function getPumpFunTokenMetadata(tokenMint, options = {}) {
     name: coin?.name || "",
     imageUrl: coin?.image_uri || coin?.image || coin?.metadata?.image || "",
     priceSol: firstMeaningfulNumber(coin?.priceSol, coin?.price_sol, coin?.priceNative, coin?.price_native, coin?.priceInSol) || null,
+    priceUsd: firstMeaningfulNumber(coin?.priceUsd, coin?.price_usd, coin?.usdPrice, coin?.priceUSD, coin?.price) || null,
     virtualSolReserves: firstMeaningfulNumber(coin?.virtual_sol_reserves, coin?.virtualSolReserves) || null,
     virtualTokenReserves: firstMeaningfulNumber(coin?.virtual_token_reserves, coin?.virtualTokenReserves) || null,
     marketCap: firstMeaningfulNumber(coin?.usd_market_cap, coin?.market_cap, coin?.marketCap, coin?.fdv, coin?.mcap, coin?.mc) || null,
+    usdMarketCap: firstMeaningfulNumber(coin?.usd_market_cap, coin?.market_cap, coin?.marketCap, coin?.fdv, coin?.mcap, coin?.mc) || null,
     fdv: firstMeaningfulNumber(coin?.fdv, coin?.marketCap, coin?.usd_market_cap, coin?.market_cap, coin?.mcap, coin?.mc) || null,
+    totalSupply: firstMeaningfulNumber(coin?.total_supply, coin?.totalSupply, coin?.supply, coin?.tokenSupply, coin?.token_supply) || null,
+    tokenSupply: firstMeaningfulNumber(coin?.tokenSupply, coin?.token_supply, coin?.totalSupply, coin?.total_supply, coin?.supply) || null,
+    supply: firstMeaningfulNumber(coin?.supply, coin?.total_supply, coin?.totalSupply, coin?.tokenSupply, coin?.token_supply) || null,
     liquidityUsd: firstMeaningfulNumber(coin?.liquidity_usd, coin?.liquidityUsd, coin?.liquidity?.usd, coin?.liquidity, coin?.currentLiquidityUsd) || null,
     volume: {
       m5: firstMeaningfulNumber(volume.m5, volume["5m"], coin?.volume5m, coin?.volume_5m) || 0,
@@ -13526,16 +13646,31 @@ function compactLaunchPayload(value) {
 }
 
 function buildPumpLaunchPayload(basePayload) {
-  if (["minimal", "flat", "pump"].includes(CONFIG.pumpLaunchApiFormat)) {
-    const flat = compactLaunchPayload({
+  const format = CONFIG.pumpLaunchApiFormat;
+  const imageField = CONFIG.pumpLaunchImageField
+    || (CONFIG.pumpLaunchRequestMode === "multipart" ? "image" : "imageDataUrl");
+  const attachImage = (payload) => {
+    if (basePayload.imageDataUrl && CONFIG.pumpLaunchRequestMode !== "multipart" && !/^none$/i.test(imageField)) {
+      payload[imageField] = basePayload.imageDataUrl;
+    }
+    return payload;
+  };
+
+  if (["minimal", "flat", "pump"].includes(format)) {
+    const minimal = attachImage(compactLaunchPayload({
       name: basePayload.name,
-      symbol: basePayload.symbol,
-      ticker: basePayload.symbol,
+      symbol: basePayload.symbol || basePayload.ticker,
       description: basePayload.description,
       website: basePayload.website,
       twitter: basePayload.twitter,
+      telegram: basePayload.telegram
+    }));
+    if (format === "minimal") return minimal;
+
+    const flat = attachImage(compactLaunchPayload({
+      ...minimal,
+      ticker: basePayload.symbol,
       x: basePayload.twitter,
-      telegram: basePayload.telegram,
       imageName: basePayload.imageName,
       imageType: basePayload.imageType,
       creatorFeeBps: basePayload.creatorFeeBps,
@@ -13549,13 +13684,8 @@ function buildPumpLaunchPayload(basePayload) {
       devWalletIndex: basePayload.devBuy?.walletIndex,
       clientRequestId: basePayload.clientRequestId,
       source: basePayload.source
-    });
-    const imageField = CONFIG.pumpLaunchImageField
-      || (CONFIG.pumpLaunchApiFormat === "minimal" ? "imageDataUrl" : "image");
-    if (basePayload.imageDataUrl && !/^none$/i.test(imageField)) {
-      flat[imageField] = basePayload.imageDataUrl;
-    }
-    if (CONFIG.pumpLaunchApiFormat !== "pump") return flat;
+    }));
+    if (format !== "pump") return flat;
     return compactLaunchPayload({
       action: "create",
       ...flat,
@@ -13596,12 +13726,21 @@ function appendPumpLaunchFormValue(form, key, value) {
   form.append(key, String(value));
 }
 
+function appendPumpLaunchSearchValue(search, key, value) {
+  if (value === null || value === undefined || value === "") return;
+  if (Array.isArray(value) || (value && typeof value === "object")) {
+    search.append(key, JSON.stringify(value));
+    return;
+  }
+  search.append(key, String(value));
+}
+
 function buildPumpLaunchRequestOptions(basePayload, payload, timeoutMs) {
   const mode = CONFIG.pumpLaunchRequestMode || "json";
   const headers = {};
   if (CONFIG.pumpLaunchApiKey) headers.Authorization = `Bearer ${CONFIG.pumpLaunchApiKey}`;
 
-  if (mode === "multipart" || mode === "form") {
+  if (mode === "multipart") {
     if (typeof FormData === "undefined" || typeof Blob === "undefined") {
       throw new Error("This Node runtime does not support multipart launch uploads. Use Node 20+ or set PUMP_LAUNCH_REQUEST_MODE=json.");
     }
@@ -13609,7 +13748,7 @@ function buildPumpLaunchRequestOptions(basePayload, payload, timeoutMs) {
     const imageField = CONFIG.pumpLaunchImageField || "image";
     const textPayload = compactLaunchPayload({ ...payload });
     for (const key of ["image", "imageDataUrl", "file", "media", imageField]) {
-      if (key) delete textPayload[key];
+      if (key && !/^none$/i.test(key)) delete textPayload[key];
     }
 
     const form = new FormData();
@@ -13632,6 +13771,22 @@ function buildPumpLaunchRequestOptions(basePayload, payload, timeoutMs) {
     };
   }
 
+  if (mode === "form") {
+    const search = new URLSearchParams();
+    for (const [key, value] of Object.entries(compactLaunchPayload(payload))) {
+      appendPumpLaunchSearchValue(search, key, value);
+    }
+    return {
+      method: "POST",
+      headers: {
+        ...headers,
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: search.toString(),
+      timeoutMs
+    };
+  }
+
   return {
     method: "POST",
     headers: {
@@ -13646,10 +13801,13 @@ function buildPumpLaunchRequestOptions(basePayload, payload, timeoutMs) {
 function pumpLaunchProviderHint(status) {
   const mode = CONFIG.pumpLaunchRequestMode || "json";
   if (mode === "json" && [400, 413, 415].includes(Number(status))) {
-    return " If your launch API expects an image file upload, set PUMP_LAUNCH_REQUEST_MODE=multipart and set PUMP_LAUNCH_IMAGE_FIELD to the provider's file field name, usually image or file.";
+    return " Provider rejected the JSON fields. Try PUMP_LAUNCH_API_FORMAT=minimal first; if the docs require file upload, set PUMP_LAUNCH_REQUEST_MODE=multipart and set PUMP_LAUNCH_IMAGE_FIELD to the provider's image field.";
   }
-  if (mode !== "json" && Number(status) === 400) {
-    return " Check PUMP_LAUNCH_API_FORMAT and PUMP_LAUNCH_IMAGE_FIELD against the launch provider docs; multipart is enabled but the provider rejected one of the fields.";
+  if (mode === "form" && Number(status) === 400) {
+    return " Provider rejected the form fields. Check PUMP_LAUNCH_API_FORMAT and field names, or switch PUMP_LAUNCH_REQUEST_MODE to json or multipart based on the provider docs.";
+  }
+  if (mode === "multipart" && Number(status) === 400) {
+    return " Provider rejected the multipart fields. Check PUMP_LAUNCH_IMAGE_FIELD and remove unsupported launch fields by using PUMP_LAUNCH_API_FORMAT=minimal.";
   }
   return "";
 }
@@ -16273,7 +16431,19 @@ async function webLivePairs(userId, bucket = "live", options = {}) {
   }
 
   try {
-    const value = await promise;
+    let value = await promise;
+    const rows = Array.isArray(value?.rows) ? value.rows : [];
+    const cachedRows = Array.isArray(cached.value?.rows) ? cached.value.rows : [];
+    if (rows.length === 0 && cachedRows.length > 0) {
+      value = {
+        ...cached.value,
+        ...value,
+        rows: cached.value.rows,
+        stale: true,
+        emptyRefresh: true,
+        message: `${livePairBucketLabel(safeBucket)} is scanning for fresh rows. Showing last good feed until the next qualifying refresh.`
+      };
+    }
     if (CONFIG.livePairsSharedCacheMs > 0) {
       livePairsSharedCache.set(cacheKey, { cachedAt: Date.now(), value, promise: null });
     }

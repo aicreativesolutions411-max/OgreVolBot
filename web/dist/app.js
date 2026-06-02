@@ -755,13 +755,26 @@ async function loadLivePairs({ silent = false, bucket = state.livePairBucket, re
     const forceQuery = force ? "&force=true" : "";
     const data = await api(`/api/web/live-pairs?bucket=${encodeURIComponent(safeBucket)}&sort=${encodeURIComponent(state.terminalSort || "best")}${forceQuery}`);
     const label = LIVE_PAIR_BUCKETS.find(([id]) => id === safeBucket)?.[1] || "Live";
-    const value = data.livePairs || {
+    const previous = state.livePairsByBucket[safeBucket] || (isActiveBucket ? state.livePairs : null);
+    let value = data.livePairs || {
       bucket: safeBucket,
       rows: [],
       refreshedAt: new Date().toISOString(),
       refreshSeconds: 5,
       message: `${label} feed returned no rows yet. Retrying automatically.`
     };
+    const valueRows = Array.isArray(value?.rows) ? value.rows : [];
+    const previousRows = Array.isArray(previous?.rows) ? previous.rows : [];
+    if (valueRows.length === 0 && previousRows.length > 0) {
+      value = {
+        ...previous,
+        ...value,
+        rows: previous.rows,
+        stale: true,
+        emptyRefresh: true,
+        message: `${label} is scanning for fresh rows. Showing the last good feed until the next qualifying refresh.`
+      };
+    }
     const updatedAt = value?.refreshedAt || new Date().toISOString();
     const nextErrors = { ...(state.livePairsRefreshErrorByBucket || {}) };
     delete nextErrors[safeBucket];
@@ -4036,11 +4049,40 @@ function walletSweepSelectionPayload() {
 }
 
 function walletSendManyPayload() {
+  const sourceIndex = String($("[data-wallet-send-from]")?.value || "1").trim();
+  const managedTargetText = String($("[data-wallet-send-managed-targets]")?.value || "").trim();
+  const managedGroup = String($("[data-wallet-send-group]")?.value || "").trim().toLowerCase();
+  const pastedDestinations = String($("[data-wallet-send-destinations]")?.value || "").trim();
+  const managedIndexes = managedTargetText.toLowerCase() === "all"
+    ? state.wallets
+      .map((wallet) => Number(wallet.index))
+      .filter((index) => Number.isFinite(index) && String(index) !== sourceIndex)
+    : managedTargetText
+      .split(/[,\s]+/)
+      .map((item) => Number.parseInt(item, 10))
+      .filter((index) => Number.isInteger(index) && index > 0 && String(index) !== sourceIndex);
+  const groupIndexes = managedGroup
+    ? state.wallets
+      .filter((wallet) => {
+        const label = String(wallet.label || "").toLowerCase();
+        return label === managedGroup || label.startsWith(`${managedGroup} `);
+      })
+      .map((wallet) => Number(wallet.index))
+      .filter((index) => Number.isFinite(index) && String(index) !== sourceIndex)
+    : [];
+  const managedDestinations = [...new Set([...managedIndexes, ...groupIndexes])]
+    .map((index) => state.wallets.find((wallet) => Number(wallet.index) === index)?.publicKey)
+    .filter(Boolean);
+  const destinations = [
+    pastedDestinations,
+    managedDestinations.join("\n")
+  ].filter(Boolean).join("\n");
+
   return {
-    fromWalletIndex: String($("[data-wallet-send-from]")?.value || "1").trim(),
+    fromWalletIndex: sourceIndex,
     amountSol: String($("[data-wallet-send-amount]")?.value || "").trim(),
     splitAll: Boolean($("[data-wallet-send-all]")?.checked),
-    destinations: String($("[data-wallet-send-destinations]")?.value || "").trim()
+    destinations
   };
 }
 
@@ -5319,10 +5361,10 @@ async function cancelLaunchWatch(planId) {
 
 function walletSweepToolsHtml() {
   return `
-    <section class="account-check-card wallet-sweep-card">
+    <section class="account-check-card wallet-sweep-card wallet-command-card">
       <div>
-        <h3>Recovery / Sweep</h3>
-        <p>Move funds from managed wallets. Use <code>all</code>, wallet numbers like <code>1,2,3</code>, or a group label.</p>
+        <h3>Sweep / Exit / Recover</h3>
+        <p>Sell or transfer from saved managed wallets, then send SOL or tokens to any wallet address you paste.</p>
       </div>
       <label>Wallet numbers
         <input data-wallet-sweep-indexes value="all" placeholder="all or 1,2,3">
@@ -5340,24 +5382,30 @@ function walletSweepToolsHtml() {
         <input data-wallet-sweep-slippage type="number" min="50" max="5000" step="50" value="1500">
       </label>
       <div class="card-actions compact">
-        <button data-wallet-sweep-action="sweep-sol">Send All SOL</button>
-        <button data-wallet-sweep-action="sweep-tokens">Transfer Tokens</button>
+        <button class="primary" data-wallet-sweep-action="sell-all-sweep">Sell All + Send SOL</button>
         <button data-wallet-sweep-action="sell-all">Sell All Tokens</button>
-        <button data-wallet-sweep-action="sell-all-sweep">Sell Tokens + Send SOL</button>
+        <button data-wallet-sweep-action="sweep-sol">Sweep SOL</button>
+        <button data-wallet-sweep-action="sweep-tokens">Send Tokens</button>
       </div>
-      <small>Sell-all uses the existing swap route, then force-refreshes balances and positions. Token transfer keeps tokens as tokens.</small>
+      <small>Use Sell All + Send SOL to exit tokens across selected wallets and drain SOL to one destination. Token transfer keeps tokens as tokens. Browser-only wallets still require wallet approval and are not swept by this managed-wallet tool.</small>
       <small data-wallet-sweep-status>${escapeHtml(state.walletSweepStatus || "")}</small>
     </section>
-    <section class="account-check-card wallet-sweep-card">
+    <section class="account-check-card wallet-sweep-card wallet-command-card">
       <div>
-        <h3>Send SOL One-To-Many</h3>
-        <p>Send the same SOL amount from one managed wallet to several destination wallets, or split available SOL evenly.</p>
+        <h3>Fund / Split SOL</h3>
+        <p>Fund many wallets from one managed source wallet. Paste any destination wallets, one per line.</p>
       </div>
       <label>Source wallet #
         <input data-wallet-send-from type="number" min="1" step="1" value="1">
       </label>
       <label>Amount per wallet
         <input data-wallet-send-amount inputmode="decimal" placeholder="0.05">
+      </label>
+      <label>Managed destination wallet numbers
+        <input data-wallet-send-managed-targets placeholder="all or 2,3,4">
+      </label>
+      <label>Managed destination group
+        <input data-wallet-send-group placeholder="Optional group name">
       </label>
       <label class="inline-check">
         <input data-wallet-send-all type="checkbox">
@@ -5367,19 +5415,19 @@ function walletSweepToolsHtml() {
         <textarea data-wallet-send-destinations rows="4" placeholder="One wallet per line"></textarea>
       </label>
       <div class="card-actions compact">
-        <button data-wallet-sweep-action="send-sol-many">Send SOL To Many</button>
+        <button class="primary" data-wallet-sweep-action="send-sol-many">Fund Wallets</button>
       </div>
-      <small>Split mode keeps the configured safety reserve and estimated network fees in the source wallet.</small>
+      <small>Use managed destination numbers/groups to fund saved wallets, or paste outside wallets. Split mode keeps the configured safety reserve and estimated network fees in the source wallet.</small>
     </section>
   `;
 }
 
 function walletsHtml() {
-  const create = `${createWalletSection()}${importWalletSection()}${walletSweepToolsHtml()}${backupRestoreSection()}${downloadsHtml()}`;
+  const create = `${walletSweepToolsHtml()}${createWalletSection()}${importWalletSection()}${backupRestoreSection()}${downloadsHtml()}`;
   const walletTools = `
-    <details class="wallet-tools-details">
+    <details class="wallet-tools-details" open>
       <summary>
-        <span>Wallet Tools / Backup / Import</span>
+        <span>Sweep / Fund / Backup / Import</span>
         <span class="wallet-tools-drop-action">Drop <span class="wallet-tools-caret" aria-hidden="true">v</span></span>
       </summary>
       ${create}
