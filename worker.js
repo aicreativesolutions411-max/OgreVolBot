@@ -43,7 +43,7 @@ function loadWorkerConfig() {
     warmFeeds: parseBoolean(process.env.WORKER_TICK_WARM_FEEDS || "true"),
     buckets,
     sorts,
-    forceFeeds: parseBoolean(process.env.WORKER_TICK_FORCE_FEEDS || "false")
+    forceFeeds: parseBoolean(process.env.WORKER_TICK_FORCE_FEEDS || "true")
   };
 }
 

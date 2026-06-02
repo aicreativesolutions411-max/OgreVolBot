@@ -29,13 +29,23 @@ services:
       - key: PUMPFUN_API_TOKEN
         sync: false
       - key: PUMP_LAUNCH_ENABLED
-        value: false
+        value: true
       - key: PUMP_LAUNCH_API_URL
         sync: false
       - key: PUMP_LAUNCH_API_KEY
         sync: false
       - key: PUMP_LAUNCH_TIMEOUT_MS
         value: 30000
+      - key: PUMP_LAUNCH_REQUEST_MODE
+        value: multipart
+      - key: PUMP_LAUNCH_API_FORMAT
+        value: pump
+      - key: PUMP_LAUNCH_IMAGE_FIELD
+        value: image
+      - key: PUMP_LAUNCH_IMAGE_MAX_BYTES
+        value: 450000
+      - key: PUMP_LAUNCH_BODY_LIMIT_BYTES
+        value: 12000000
       - key: WORKER_TICK_ENABLED
         value: true
       - key: WORKER_SECRET
@@ -110,6 +120,14 @@ services:
         value: 5000
       - key: DEFAULT_SLIPPAGE_BPS
         value: 400
+      - key: STOP_LOSS_CHECK_INTERVAL_MS
+        value: 2000
+      - key: STOP_LOSS_TRIGGER_BUFFER_PCT
+        value: 1.5
+      - key: STOP_LOSS_EXIT_SLIPPAGE_BPS
+        value: 2500
+      - key: STOP_LOSS_MONITOR_SLIPPAGE_BPS
+        value: 2500
       - key: SNIPER_DEFAULT_SLIPPAGE_BPS
         value: 400
       - key: JUPITER_SWAP_MAX_ATTEMPTS
@@ -179,4 +197,4 @@ services:
       - key: WORKER_TICK_SORTS
         value: best,newest
       - key: WORKER_TICK_FORCE_FEEDS
-        value: false
+        value: true

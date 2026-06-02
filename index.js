@@ -263,9 +263,10 @@ function loadConfig() {
   const stopLossCheckIntervalMs = Number.parseInt(process.env.STOP_LOSS_CHECK_INTERVAL_MS || "2000", 10);
   const stopLossTriggerBufferPct = Number.parseFloat(process.env.STOP_LOSS_TRIGGER_BUFFER_PCT || "1.5");
   const stopLossExitSlippageBps = Number.parseInt(process.env.STOP_LOSS_EXIT_SLIPPAGE_BPS || "1500", 10);
+  const stopLossMonitorSlippageBps = Number.parseInt(process.env.STOP_LOSS_MONITOR_SLIPPAGE_BPS || "2500", 10);
   const pumpLaunchBodyLimitBytes = Number.parseInt(process.env.PUMP_LAUNCH_BODY_LIMIT_BYTES || "12000000", 10);
-  const pumpLaunchRequestMode = (process.env.PUMP_LAUNCH_REQUEST_MODE || "json").trim().toLowerCase();
-  const workerTickEnabled = parseBoolean(process.env.WORKER_TICK_ENABLED || "false");
+  const pumpLaunchRequestMode = (process.env.PUMP_LAUNCH_REQUEST_MODE || "multipart").trim().toLowerCase();
+  const workerTickEnabled = parseBoolean(process.env.WORKER_TICK_ENABLED || (process.env.WORKER_SECRET ? "true" : "false"));
   const workerTickRunTradePlans = parseBoolean(process.env.WORKER_TICK_RUN_TRADE_PLANS || "true");
   const workerTickRunDcaPlans = parseBoolean(process.env.WORKER_TICK_RUN_DCA_PLANS || "true");
   const workerTickWarmFeeds = parseBoolean(process.env.WORKER_TICK_WARM_FEEDS || "true");
@@ -407,6 +408,10 @@ function loadConfig() {
     throw new Error("STOP_LOSS_EXIT_SLIPPAGE_BPS must be an integer from 1 to 5000.");
   }
 
+  if (!Number.isInteger(stopLossMonitorSlippageBps) || stopLossMonitorSlippageBps < 1 || stopLossMonitorSlippageBps > 5000) {
+    throw new Error("STOP_LOSS_MONITOR_SLIPPAGE_BPS must be an integer from 1 to 5000.");
+  }
+
   if (!["json", "multipart", "form"].includes(pumpLaunchRequestMode)) {
     throw new Error("PUMP_LAUNCH_REQUEST_MODE must be json, multipart, or form.");
   }
@@ -448,7 +453,7 @@ function loadConfig() {
     pumpLaunchApiKey: process.env.PUMP_LAUNCH_API_KEY || "",
     pumpLaunchTimeoutMs: Number.parseInt(process.env.PUMP_LAUNCH_TIMEOUT_MS || "30000", 10),
     pumpLaunchBodyLimitBytes,
-    pumpLaunchImageMaxBytes: Number.parseInt(process.env.PUMP_LAUNCH_IMAGE_MAX_BYTES || "650000", 10),
+    pumpLaunchImageMaxBytes: Number.parseInt(process.env.PUMP_LAUNCH_IMAGE_MAX_BYTES || "450000", 10),
     pumpLaunchApiFormat: (process.env.PUMP_LAUNCH_API_FORMAT || "minimal").trim().toLowerCase(),
     pumpLaunchImageField: (process.env.PUMP_LAUNCH_IMAGE_FIELD || "").trim(),
     pumpLaunchRequestMode,
@@ -463,6 +468,7 @@ function loadConfig() {
     stopLossCheckIntervalMs,
     stopLossTriggerBufferPct,
     stopLossExitSlippageBps,
+    stopLossMonitorSlippageBps,
     workerTickEnabled,
     workerTickRunTradePlans,
     workerTickRunDcaPlans,
@@ -677,6 +683,11 @@ async function handleWebApiRequest(request, response, requestUrl) {
 
     if (request.method === "POST" && pathname === "/api/internal/worker/tick") {
       await handleInternalWorkerTick(request, response);
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/internal/worker/health") {
+      handleInternalWorkerHealth(request, response);
       return;
     }
 
@@ -962,6 +973,46 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendWebJson(request, response, 200, {
         ok: true,
         removed: result
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/wallets/sweep-sol") {
+      const body = await readJsonRequestBody(request);
+      const result = await webSweepSol(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        sweep: result
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/wallets/sweep-tokens") {
+      const body = await readJsonRequestBody(request);
+      const result = await webSweepTokens(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        sweep: result
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/wallets/sell-all-tokens") {
+      const body = await readJsonRequestBody(request);
+      const result = await webSellAllTokens(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        sweep: result
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/wallets/send-sol") {
+      const body = await readJsonRequestBody(request);
+      const result = await webSendSolMany(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        sweep: result
       });
       return;
     }
@@ -1330,6 +1381,19 @@ async function handleInternalWorkerTick(request, response) {
   sendWebJson(request, response, 200, {
     ok: true,
     ...result
+  });
+}
+
+function handleInternalWorkerHealth(request, response) {
+  sendWebJson(request, response, 200, {
+    ok: true,
+    workerTickEnabled: CONFIG.workerTickEnabled,
+    workerSecretConfigured: Boolean(CONFIG.workerSecret && CONFIG.workerSecret.length >= 24),
+    runTradePlans: CONFIG.workerTickRunTradePlans,
+    runDcaPlans: CONFIG.workerTickRunDcaPlans,
+    warmFeeds: CONFIG.workerTickWarmFeeds,
+    livePairRefreshSeconds: CONFIG.livePairsRefreshSeconds,
+    stopLossCheckIntervalMs: CONFIG.stopLossCheckIntervalMs
   });
 }
 
@@ -5201,6 +5265,7 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
       planWallet.lastEstimateSource = estimate.source || "jupiter";
       planWallet.lastEstimatedNetOut = estimate.estimatedNetOut?.toString?.() || null;
       planWallet.lastBasisLamports = estimate.basis?.toString?.() || null;
+      planWallet.lastMonitorSlippageBps = estimate.monitorSlippageBps || CONFIG.stopLossMonitorSlippageBps;
       planWallet.lastError = estimate.quoteError ? `Jupiter quote fallback: ${estimate.quoteError}` : null;
       planWallet.triggerStatus = "watching";
       planWallet.lastTriggerCheckAt = planWallet.lastCheckedAt;
@@ -5888,6 +5953,11 @@ async function estimatePlanWalletMove(plan, wallet, sellPercentOverride = null) 
     throw new Error("missing plan basis");
   }
 
+  const monitorSlippageBps = Math.max(
+    Number.parseInt(plan.slippageBps || CONFIG.defaultSlippageBps, 10) || CONFIG.defaultSlippageBps,
+    CONFIG.stopLossMonitorSlippageBps
+  );
+
   let order;
   try {
     order = await createJupiterOrder({
@@ -5895,13 +5965,13 @@ async function estimatePlanWalletMove(plan, wallet, sellPercentOverride = null) 
       inputMint: plan.tokenMint,
       outputMint: SOL_MINT,
       amount: amount.toString(),
-      slippageBps: plan.slippageBps
+      slippageBps: monitorSlippageBps
     });
   } catch (quoteError) {
     try {
-      return await estimatePlanWalletMoveFromPumpFun(plan, token, amount, basis, quoteError);
+      return await estimatePlanWalletMoveFromPumpFun(plan, token, amount, basis, quoteError, monitorSlippageBps);
     } catch {
-      return estimatePlanWalletMoveFromDexPair(plan, token, amount, basis, quoteError);
+      return estimatePlanWalletMoveFromDexPair(plan, token, amount, basis, quoteError, monitorSlippageBps);
     }
   }
 
@@ -5909,10 +5979,10 @@ async function estimatePlanWalletMove(plan, wallet, sellPercentOverride = null) 
   const estimatedFee = BigInt(calculateFeeLamports(estimatedOut));
   const estimatedNetOut = estimatedOut > estimatedFee ? estimatedOut - estimatedFee : 0n;
   const movePct = (Number(estimatedNetOut - basis) / Number(basis)) * 100;
-  return { estimatedOut, estimatedNetOut, basis, movePct, source: "jupiter" };
+  return { estimatedOut, estimatedNetOut, basis, movePct, source: "jupiter", monitorSlippageBps };
 }
 
-async function estimatePlanWalletMoveFromPumpFun(plan, token, amount, basis, quoteError) {
+async function estimatePlanWalletMoveFromPumpFun(plan, token, amount, basis, quoteError, monitorSlippageBps = null) {
   const metadata = await getPumpFunTokenMetadata(plan.tokenMint, { timeoutMs: 1_800 });
   const decimals = Number(token?.decimals);
   const priceSol = pumpFunPriceSol(metadata, decimals);
@@ -5938,6 +6008,7 @@ async function estimatePlanWalletMoveFromPumpFun(plan, token, amount, basis, quo
     basis,
     movePct,
     source: "pumpfun",
+    monitorSlippageBps,
     quoteError: friendlyError(quoteError)
   };
 }
@@ -6002,7 +6073,7 @@ function bestDexPairWithSolPrice(tokenMint, pairs) {
     .sort((a, b) => compareDexPairsForSniper(a.pair, b.pair))[0] || null;
 }
 
-async function estimatePlanWalletMoveFromDexPair(plan, token, amount, basis, quoteError) {
+async function estimatePlanWalletMoveFromDexPair(plan, token, amount, basis, quoteError, monitorSlippageBps = null) {
   const pairs = await fetchDexScreenerTokenPairsBatch([plan.tokenMint], { timeoutMs: 1_800 }).catch(() => []);
   const pricedPair = bestDexPairWithSolPrice(plan.tokenMint, pairs);
   const priceSol = pricedPair?.priceSol;
@@ -6029,6 +6100,7 @@ async function estimatePlanWalletMoveFromDexPair(plan, token, amount, basis, quo
     basis,
     movePct,
     source: "dexscreener",
+    monitorSlippageBps,
     pairAddress: firstString(pricedPair?.pair?.pairAddress, pricedPair?.pair?.address),
     quoteError: friendlyError(quoteError)
   };
@@ -13081,10 +13153,15 @@ async function webCreateManagedBuyPlan(userId, wallets, body = {}, options = {})
         takeProfitPct: walletTakeProfitTargets ? walletTakeProfitTargets[String(walletIndex)] || null : null,
         stopLossPct: walletStopLossTargets ? walletStopLossTargets[String(walletIndex)] || null : null,
         completedTakeProfitLevels: [],
+        triggerSellPercent: 100,
+        triggerStatus: takeProfitPct || stopLossPct || walletTakeProfitTargets || walletStopLossTargets ? "armed" : "timer-only",
+        exitStatus: "watching",
+        armedAt: new Date(now).toISOString(),
         sellAfterAt,
         status: "watching",
         lastCheckedAt: null,
-        lastMovePct: null
+        lastMovePct: null,
+        lastError: tokenAmount ? null : "Waiting for token account indexing before TP/SL checks."
       });
       results.push({
         ok: true,
@@ -13164,9 +13241,7 @@ async function webCreateManagedBuyPlan(userId, wallets, body = {}, options = {})
     slippageBps
   });
 
-  setTimeout(() => void processTradePlans().catch((error) => {
-    console.error(`${label} immediate run failed:`, error.message);
-  }), 1_000);
+  scheduleTradePlanProcessing(`${label} auto-exit`, [500, 1200, 2500, 5000, 8000, 12000, 20000, 30000]);
 
   return {
     id: plan.id,
@@ -13606,7 +13681,7 @@ async function webLaunchPumpCoin(userId, body = {}) {
   }
   const imageMaxBytes = Number.isFinite(CONFIG.pumpLaunchImageMaxBytes) && CONFIG.pumpLaunchImageMaxBytes > 0
     ? CONFIG.pumpLaunchImageMaxBytes
-    : 650_000;
+    : 450_000;
   if (decodedLaunchImage && decodedLaunchImage.buffer.length > imageMaxBytes) {
     const actualKb = Math.ceil(decodedLaunchImage.buffer.length / 1024);
     const maxKb = Math.floor(imageMaxBytes / 1024);
@@ -13876,6 +13951,337 @@ function webSelectedWallets(store, userId, walletIndexes, walletGroup = "") {
     ...getWalletAt(store, index, userId),
     webIndex: index
   }));
+}
+
+function webWalletRef(wallet) {
+  return {
+    walletIndex: wallet.webIndex,
+    walletLabel: wallet.label,
+    walletPublicKey: wallet.publicKey,
+    shortPublicKey: shortMint(wallet.publicKey)
+  };
+}
+
+function parseWebDestination(value, label = "destination wallet") {
+  const text = String(value || "").trim();
+  if (!text) {
+    throw new Error(`Enter a ${label}.`);
+  }
+  try {
+    return new PublicKey(text);
+  } catch {
+    throw new Error(`Invalid ${label}.`);
+  }
+}
+
+function parseOptionalWebMint(value) {
+  const text = String(value || "").trim();
+  if (!text || text.toLowerCase() === "all") return "";
+  try {
+    return new PublicKey(text).toBase58();
+  } catch {
+    throw new Error("Invalid token mint. Leave blank for all tokens.");
+  }
+}
+
+function splitWebDestinationList(value) {
+  const rows = Array.isArray(value)
+    ? value
+    : String(value || "").split(/[\s,]+/);
+  const destinations = rows.map((item) => String(item || "").trim()).filter(Boolean);
+  const unique = [...new Set(destinations)];
+  if (unique.length === 0) {
+    throw new Error("Enter at least one destination wallet.");
+  }
+  if (unique.length > 20) {
+    throw new Error("Use 20 destination wallets or fewer.");
+  }
+  return unique.map((address) => parseWebDestination(address, "destination wallet"));
+}
+
+function selectedWebSweepWallets(store, userId, body = {}) {
+  return webSelectedWallets(
+    store,
+    userId,
+    body.walletIndexes || body.wallets || "all",
+    body.walletGroup || body.group || ""
+  );
+}
+
+function solTransferResultRow(wallet, result) {
+  return {
+    ...webWalletRef(wallet),
+    ok: Boolean(result.signature),
+    signature: result.signature || null,
+    sentSol: result.sentLamports ? lamportsToSol(result.sentLamports) : "0",
+    feeSol: result.feeLamports ? lamportsToSol(result.feeLamports) : "0",
+    message: result.message || (result.signature ? "SOL sent." : "No sweepable SOL.")
+  };
+}
+
+async function webSweepSol(userId, body = {}) {
+  const store = await readWalletStore();
+  const destination = parseWebDestination(body.destination || body.destinationWallet);
+  const wallets = selectedWebSweepWallets(store, userId, body);
+  const rows = [];
+
+  for (const wallet of wallets) {
+    try {
+      const keypair = decryptWallet(wallet);
+      const result = await drainSolFromWallet(keypair, destination);
+      invalidateWalletReadCache(wallet.publicKey);
+      rows.push(solTransferResultRow(wallet, result));
+    } catch (error) {
+      rows.push({
+        ...webWalletRef(wallet),
+        ok: false,
+        signature: null,
+        sentSol: "0",
+        feeSol: "0",
+        message: friendlyError(error)
+      });
+    }
+  }
+
+  invalidateWalletReadCache(destination.toBase58());
+  await audit("web_sweep_sol", { userId, destination: destination.toBase58(), walletCount: wallets.length, successCount: rows.filter((row) => row.ok).length });
+  return {
+    action: "sweep-sol",
+    destination: destination.toBase58(),
+    rows,
+    summary: `${rows.filter((row) => row.ok).length}/${rows.length} wallet(s) swept SOL.`
+  };
+}
+
+async function webSweepTokens(userId, body = {}) {
+  const store = await readWalletStore();
+  const destination = parseWebDestination(body.destination || body.destinationWallet);
+  const tokenMint = parseOptionalWebMint(body.tokenMint || body.mint);
+  const wallets = selectedWebSweepWallets(store, userId, body);
+  const rows = [];
+
+  for (const wallet of wallets) {
+    const walletRow = {
+      ...webWalletRef(wallet),
+      ok: false,
+      transfers: [],
+      message: ""
+    };
+
+    try {
+      const keypair = decryptWallet(wallet);
+      const lookup = await getOwnedTokenAccountsWithWarningsCached(keypair.publicKey, { force: true });
+      const accounts = (lookup.accounts || []).filter((account) => account.rawAmount > 0n && (!tokenMint || account.mint === tokenMint));
+
+      if (!accounts.length) {
+        walletRow.message = tokenMint ? "No balance for that token." : "No sweepable tokens.";
+        rows.push(walletRow);
+        continue;
+      }
+
+      for (const account of accounts) {
+        const mint = new PublicKey(account.mint);
+        const decimals = Number.isInteger(account.decimals) ? account.decimals : await getMintDecimals(mint);
+        const sourceAta = new PublicKey(account.pubkey);
+        const tokenProgramId = new PublicKey(account.tokenProgramId || TOKEN_PROGRAM_ID);
+        const destinationAta = getAssociatedTokenAddress(mint, destination, tokenProgramId);
+        const tx = new Transaction();
+        const destinationInfo = await rpcWithRetry("check destination token account", () => connection.getAccountInfo(destinationAta, "confirmed"));
+
+        if (!destinationInfo) {
+          tx.add(createAssociatedTokenAccountInstruction(keypair.publicKey, destinationAta, destination, mint, tokenProgramId));
+        }
+
+        tx.add(createTransferCheckedInstruction(
+          sourceAta,
+          mint,
+          destinationAta,
+          keypair.publicKey,
+          account.rawAmount,
+          decimals,
+          [],
+          tokenProgramId
+        ));
+
+        const signature = await sendLegacyTransaction(tx, [keypair]);
+        walletRow.transfers.push({
+          mint: account.mint,
+          uiAmount: rawTokenAmountToUi(account.rawAmount, decimals),
+          rawAmount: account.rawAmount.toString(),
+          signature
+        });
+      }
+
+      walletRow.ok = walletRow.transfers.length > 0;
+      walletRow.message = `Transferred ${walletRow.transfers.length} token account(s).`;
+      invalidateWalletReadCache(wallet.publicKey);
+      rows.push(walletRow);
+    } catch (error) {
+      walletRow.message = friendlyError(error);
+      rows.push(walletRow);
+    }
+  }
+
+  invalidateWalletReadCache(destination.toBase58());
+  await audit("web_sweep_tokens", { userId, destination: destination.toBase58(), tokenMint: tokenMint || "all", walletCount: wallets.length, successCount: rows.filter((row) => row.ok).length });
+  return {
+    action: "sweep-tokens",
+    destination: destination.toBase58(),
+    tokenMint: tokenMint || "all",
+    rows,
+    summary: `${rows.filter((row) => row.ok).length}/${rows.length} wallet(s) transferred tokens.`
+  };
+}
+
+async function webSellAllTokens(userId, body = {}) {
+  const store = await readWalletStore();
+  const tokenMint = parseOptionalWebMint(body.tokenMint || body.mint);
+  const destination = String(body.destination || body.destinationWallet || "").trim()
+    ? parseWebDestination(body.destination || body.destinationWallet)
+    : null;
+  const slippageBps = parseWebSlippage(body.slippageBps || body.slippage || CONFIG.stopLossExitSlippageBps);
+  const wallets = selectedWebSweepWallets(store, userId, body);
+  const rows = [];
+  const tradeEvents = [];
+
+  for (const wallet of wallets) {
+    const walletRow = {
+      ...webWalletRef(wallet),
+      ok: false,
+      sells: [],
+      solSweep: null,
+      message: ""
+    };
+
+    try {
+      const keypair = decryptWallet(wallet);
+      const lookup = await getOwnedTokenAccountsWithWarningsCached(keypair.publicKey, { force: true });
+      const tokens = sellableTokensFromAccounts(lookup.accounts || []).filter((token) => !tokenMint || token.mint === tokenMint);
+
+      if (!tokens.length) {
+        walletRow.message = tokenMint ? "No sellable balance for that token." : "No sellable token balances.";
+      }
+
+      for (const token of tokens) {
+        try {
+          const sell = await sellTokenAmountFromWallet(wallet, token.mint, token.rawAmount, slippageBps, { userId });
+          walletRow.sells.push({
+            ok: true,
+            mint: token.mint,
+            uiAmount: rawTokenAmountToUi(token.rawAmount, token.decimals),
+            outputSol: lamportsToSol(sell.outputLamports),
+            signature: sell.signature,
+            feeSol: lamportsToSol(sell.feeLamports || "0")
+          });
+          tradeEvents.push({
+            userId,
+            type: "sell",
+            source: "web_sell_all_tokens",
+            tokenMint: token.mint,
+            walletLabel: wallet.label,
+            walletPublicKey: wallet.publicKey,
+            tokenAmount: sell.tokenAmount,
+            solLamportsReceived: sell.outputLamports,
+            signature: sell.signature
+          });
+          await sleep(CONFIG.rpcDelayMs);
+        } catch (sellError) {
+          walletRow.sells.push({
+            ok: false,
+            mint: token.mint,
+            uiAmount: rawTokenAmountToUi(token.rawAmount, token.decimals),
+            message: friendlyError(sellError)
+          });
+        }
+      }
+
+      if (destination && walletRow.sells.some((sell) => sell.ok)) {
+        await sleep(800);
+        const sweep = await drainSolFromWallet(keypair, destination);
+        walletRow.solSweep = solTransferResultRow(wallet, sweep);
+      }
+
+      walletRow.ok = walletRow.sells.some((sell) => sell.ok) || Boolean(walletRow.solSweep?.ok);
+      walletRow.message = walletRow.message || `Sold ${walletRow.sells.filter((sell) => sell.ok).length}/${walletRow.sells.length} token(s).`;
+      invalidateWalletReadCache(wallet.publicKey);
+      rows.push(walletRow);
+    } catch (error) {
+      walletRow.message = friendlyError(error);
+      rows.push(walletRow);
+    }
+  }
+
+  if (tradeEvents.length) {
+    await recordTradeEvents(tradeEvents);
+  }
+  if (destination) {
+    invalidateWalletReadCache(destination.toBase58());
+  }
+  await audit("web_sell_all_tokens", { userId, tokenMint: tokenMint || "all", destination: destination?.toBase58?.() || null, walletCount: wallets.length, successCount: rows.filter((row) => row.ok).length });
+  return {
+    action: destination ? "sell-all-and-sweep-sol" : "sell-all-tokens",
+    destination: destination?.toBase58?.() || null,
+    tokenMint: tokenMint || "all",
+    rows,
+    summary: `${rows.filter((row) => row.ok).length}/${rows.length} wallet(s) sold token balances.`
+  };
+}
+
+async function webSendSolMany(userId, body = {}) {
+  const store = await readWalletStore();
+  const walletIndex = parseWebWalletIndex(body.fromWalletIndex || body.walletIndex);
+  const wallet = {
+    ...getWalletAt(store, walletIndex, userId),
+    webIndex: walletIndex
+  };
+  const destinations = splitWebDestinationList(body.destinations || body.destinationWallets || body.destination);
+  const keypair = decryptWallet(wallet);
+  const splitAll = Boolean(body.splitAll || body.amountMode === "splitAll");
+  let amountLamports;
+
+  if (splitAll) {
+    const balance = await getSolBalanceCached(keypair.publicKey, { force: true });
+    const estimatedFeeLamports = 5000 * Math.max(1, destinations.length);
+    const reserveLamports = CONFIG.buyReserveLamports + estimatedFeeLamports;
+    const sendableLamports = balance - reserveLamports;
+    if (sendableLamports <= 0) {
+      throw new Error(`Not enough SOL after keeping ${lamportsToSol(reserveLamports)} SOL for reserve and fees.`);
+    }
+    amountLamports = Math.floor(sendableLamports / destinations.length);
+  } else {
+    amountLamports = solToLamports(parsePositiveNumber(String(body.amountSol || "")));
+  }
+
+  if (amountLamports <= 0) {
+    throw new Error("Enter a SOL amount greater than zero.");
+  }
+
+  const tx = new Transaction();
+  for (const destination of destinations) {
+    if (keypair.publicKey.equals(destination)) {
+      throw new Error("A destination matches the source wallet.");
+    }
+    await assertDestinationCanReceiveSol(destination, amountLamports);
+    tx.add(SystemProgram.transfer({
+      fromPubkey: keypair.publicKey,
+      toPubkey: destination,
+      lamports: amountLamports
+    }));
+  }
+
+  const signature = await sendLegacyTransaction(tx, [keypair]);
+  invalidateWalletReadCache(wallet.publicKey);
+  destinations.forEach((destination) => invalidateWalletReadCache(destination.toBase58()));
+  await audit("web_send_sol_many", { userId, walletIndex, destinationCount: destinations.length, amountSol: lamportsToSol(amountLamports), signature });
+  return {
+    action: "send-sol-many",
+    source: webWalletRef(wallet),
+    amountSol: lamportsToSol(amountLamports),
+    destinationCount: destinations.length,
+    destinations: destinations.map((destination) => destination.toBase58()),
+    signature,
+    summary: `Sent ${lamportsToSol(amountLamports)} SOL to ${destinations.length} wallet(s).`
+  };
 }
 
 function parseWebWalletIndex(value) {
