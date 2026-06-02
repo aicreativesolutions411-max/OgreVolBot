@@ -605,7 +605,10 @@ function startHealthServer() {
       return;
     }
 
-    if (requestUrl.pathname.startsWith("/api/web/")) {
+    if (requestUrl.pathname.startsWith("/api/")
+      || requestUrl.pathname.startsWith("/internal/")
+      || requestUrl.pathname === "/worker/tick"
+      || requestUrl.pathname === "/worker/health") {
       await handleWebApiRequest(request, response, requestUrl);
       return;
     }
@@ -681,12 +684,25 @@ async function handleWebApiRequest(request, response, requestUrl) {
   try {
     const pathname = requestUrl.pathname;
 
-    if (request.method === "POST" && pathname === "/api/internal/worker/tick") {
+    const workerTickPaths = new Set([
+      "/api/internal/worker/tick",
+      "/api/worker/tick",
+      "/internal/worker/tick",
+      "/worker/tick"
+    ]);
+    const workerHealthPaths = new Set([
+      "/api/internal/worker/health",
+      "/api/worker/health",
+      "/internal/worker/health",
+      "/worker/health"
+    ]);
+
+    if (request.method === "POST" && workerTickPaths.has(pathname)) {
       await handleInternalWorkerTick(request, response);
       return;
     }
 
-    if (request.method === "GET" && pathname === "/api/internal/worker/health") {
+    if (request.method === "GET" && workerHealthPaths.has(pathname)) {
       handleInternalWorkerHealth(request, response);
       return;
     }

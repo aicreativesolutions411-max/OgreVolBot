@@ -1182,6 +1182,7 @@ button:disabled {
 .tabs button[data-tab="volume"]::before { background-image: url("./assets/slimewire/svg/icons/volume.svg"); }
 .tabs button[data-tab="live"]::before { background-image: url("./assets/slimewire/svg/icons/live-pairs.svg"); }
 .tabs button[data-tab="liveTrades"]::before { background-image: url("./assets/slimewire/svg/icons/live-trades.svg"); }
+.tabs button[data-tab="slimeScope"]::before { background-image: url("./assets/slimewire/svg/icons/slime-scope.svg"); }
 .tabs button[data-tab="watchlist"]::before { background-image: url("./assets/slimewire/svg/icons/watchlist.svg"); }
 .tabs button[data-tab="launch"]::before { background-image: url("./assets/slimewire/svg/icons/launch.svg"); }
 .tabs button[data-tab="kol"]::before { background-image: url("./assets/slimewire/svg/icons/kol.svg"); }
@@ -1357,7 +1358,7 @@ button:disabled {
 }
 
 .setup-hub-card {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
   align-items: stretch;
 }
 
@@ -1366,6 +1367,7 @@ button:disabled {
   align-content: start;
   gap: 10px;
   min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .setup-hub-panel + .setup-hub-panel {
@@ -1381,6 +1383,57 @@ button:disabled {
 .setup-hub-panel p {
   color: #c7d7c2;
   line-height: 1.45;
+}
+
+.automation-delegation-card {
+  grid-column: span 2;
+  border: 1px solid rgba(145, 255, 57, 0.34);
+  border-radius: var(--radius);
+  background:
+    linear-gradient(135deg, rgba(45, 255, 0, 0.08), rgba(0, 0, 0, 0.12)),
+    rgba(6, 18, 9, 0.64);
+  padding: 14px;
+}
+
+.automation-delegation-card.compact {
+  grid-column: 1 / -1;
+  margin-top: 12px;
+}
+
+.automation-delegation-card p,
+.automation-delegation-card li,
+.automation-delegation-card small {
+  max-width: 72ch;
+}
+
+.delegation-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.delegation-mode-badge {
+  border: 1px solid rgba(145, 255, 57, 0.42);
+  border-radius: 999px;
+  color: var(--green);
+  background: rgba(145, 255, 57, 0.08);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  padding: 5px 8px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.delegation-steps {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+  color: #c7d7c2;
+  line-height: 1.35;
 }
 
 .x-connect-card {
@@ -4020,6 +4073,44 @@ code {
   margin-top: 14px;
 }
 
+.wallet-tools-details[open] {
+  padding-bottom: 2px;
+}
+
+.wallet-command-card {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 12px;
+}
+
+.wallet-command-card > div:first-child,
+.wallet-command-card .card-actions,
+.wallet-command-card small {
+  grid-column: 1 / -1;
+}
+
+.wallet-command-card label {
+  min-width: 0;
+}
+
+.wallet-command-card input,
+.wallet-command-card textarea {
+  width: 100%;
+}
+
+.wallet-command-card .card-actions.compact {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.wallet-command-card small[data-wallet-sweep-status] {
+  display: block;
+  min-height: 1.4em;
+  white-space: pre-line;
+  color: var(--green-2);
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 640px) {
   .portfolio-metrics {
     grid-template-columns: 1fr 1fr;
@@ -4034,6 +4125,14 @@ code {
   .connected-wallet-card .card-actions > * {
     min-width: 0;
     padding-inline: 8px;
+  }
+
+  .wallet-command-card {
+    grid-template-columns: 1fr;
+  }
+
+  .wallet-command-card .card-actions.compact {
+    grid-template-columns: 1fr 1fr;
   }
 }
 
@@ -6190,6 +6289,7 @@ button[data-position-sell][data-position-sell-percent="100"],
 [data-app][data-route="terminal"] .tabs button[data-tab="volume"]::before { background-image: url("./assets/slimewire/png/icons/volume.png") !important; }
 [data-app][data-route="terminal"] .tabs button[data-tab="live"]::before { background-image: url("./assets/slimewire/png/icons/live-pairs.png") !important; }
 [data-app][data-route="terminal"] .tabs button[data-tab="liveTrades"]::before { background-image: url("./assets/slimewire/png/icons/live-trades.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="slimeScope"]::before { background-image: url("./assets/slimewire/svg/icons/slime-scope.svg") !important; }
 [data-app][data-route="terminal"] .tabs button[data-tab="watchlist"]::before { background-image: url("./assets/slimewire/png/icons/watchlist.png") !important; }
 [data-app][data-route="terminal"] .tabs button[data-tab="launch"]::before { background-image: url("./assets/slimewire/png/icons/launch.png") !important; }
 [data-app][data-route="terminal"] .tabs button[data-tab="kol"]::before { background-image: url("./assets/slimewire/png/icons/kol.png") !important; }
@@ -7491,6 +7591,10 @@ button[data-position-sell][data-position-sell-percent="100"],
 }
 
 @media (max-width: 900px) {
+  .automation-delegation-card {
+    grid-column: 1 / -1;
+  }
+
   body {
     overflow-x: hidden;
   }

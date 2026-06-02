@@ -12,6 +12,9 @@ let activeTick = false;
 let tickCount = 0;
 
 console.log(`SlimeWire worker starting. Tick URL: ${CONFIG.tickUrl}`);
+if (CONFIG.tickUrls.length > 1) {
+  console.log(`Worker fallback tick URLs: ${CONFIG.tickUrls.slice(1).join(", ")}`);
+}
 console.log(`Worker interval: ${CONFIG.intervalMs}ms. Feeds: ${CONFIG.warmFeeds ? "on" : "off"}. Trade plans: ${CONFIG.runTradePlans ? "on" : "off"}.`);
 
 setTimeout(() => void tick(), 500);
@@ -35,6 +38,7 @@ function loadWorkerConfig() {
 
   return {
     tickUrl,
+    tickUrls: deriveTickUrls(tickUrl),
     secret,
     intervalMs,
     timeoutMs,
@@ -60,36 +64,52 @@ async function tick() {
   const timer = setTimeout(() => controller.abort(), CONFIG.timeoutMs);
 
   try {
-    const response = await fetch(CONFIG.tickUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Worker-Secret": CONFIG.secret,
-        "User-Agent": "slimewire-render-worker"
-      },
-      body: JSON.stringify({
-        runTradePlans: CONFIG.runTradePlans,
-        runDcaPlans: CONFIG.runDcaPlans,
-        warmLivePairs: CONFIG.warmFeeds,
-        buckets: CONFIG.buckets,
-        sorts: CONFIG.sorts,
-        forceFeeds: CONFIG.forceFeeds
-      }),
-      signal: controller.signal
-    });
-    const raw = await response.text();
-    const data = parseJson(raw);
+    let lastFailure = null;
+    for (let index = 0; index < CONFIG.tickUrls.length; index += 1) {
+      const tickUrl = CONFIG.tickUrls[index];
+      const response = await fetch(tickUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Worker-Secret": CONFIG.secret,
+          "User-Agent": "slimewire-render-worker"
+        },
+        body: JSON.stringify({
+          runTradePlans: CONFIG.runTradePlans,
+          runDcaPlans: CONFIG.runDcaPlans,
+          warmLivePairs: CONFIG.warmFeeds,
+          buckets: CONFIG.buckets,
+          sorts: CONFIG.sorts,
+          forceFeeds: CONFIG.forceFeeds
+        }),
+        signal: controller.signal
+      });
+      const raw = await response.text();
+      const data = parseJson(raw);
 
-    if (!response.ok || data?.ok === false) {
-      console.warn(`Worker tick ${tickCount} failed (${response.status}): ${data?.error || raw.slice(0, 240)}`);
+      if (response.status === 404 && index < CONFIG.tickUrls.length - 1) {
+        lastFailure = `404 at ${tickUrl}: ${data?.error || raw.slice(0, 120)}`;
+        console.warn(`Worker tick ${tickCount} endpoint not found at ${tickUrl}; trying fallback endpoint.`);
+        continue;
+      }
+
+      if (!response.ok || data?.ok === false) {
+        const detail = data?.error || raw.slice(0, 240);
+        const hint = response.status === 404
+          ? " Check WORKER_TICK_URL points to the Render web service, not Cloudflare Pages, and confirm the web service finished deploying this code."
+          : "";
+        console.warn(`Worker tick ${tickCount} failed (${response.status}) at ${tickUrl}: ${detail}${hint}`);
+        return;
+      }
+
+      const feeds = data?.feeds?.value?.warmed || data?.feeds?.warmed || [];
+      const feedSummary = Array.isArray(feeds)
+        ? feeds.map((item) => `${item.bucket}/${item.sort}:${item.rows}`).join(" ")
+        : "feeds:n/a";
+      const fallbackNote = lastFailure ? ` Recovered after ${lastFailure}.` : "";
+      console.log(`Worker tick ${tickCount} ok in ${Date.now() - startedAt}ms. ${feedSummary}${fallbackNote}`);
       return;
     }
-
-    const feeds = data?.feeds?.value?.warmed || data?.feeds?.warmed || [];
-    const feedSummary = Array.isArray(feeds)
-      ? feeds.map((item) => `${item.bucket}/${item.sort}:${item.rows}`).join(" ")
-      : "feeds:n/a";
-    console.log(`Worker tick ${tickCount} ok in ${Date.now() - startedAt}ms. ${feedSummary}`);
   } catch (error) {
     const reason = error?.name === "AbortError" ? `timed out after ${CONFIG.timeoutMs}ms` : error.message;
     console.warn(`Worker tick ${tickCount} failed: ${reason}`);
@@ -105,6 +125,27 @@ function parseJson(raw) {
   } catch {
     return null;
   }
+}
+
+function deriveTickUrls(tickUrl) {
+  const urls = [tickUrl];
+  try {
+    const parsed = new URL(tickUrl);
+    for (const pathname of [
+      "/api/internal/worker/tick",
+      "/api/worker/tick",
+      "/internal/worker/tick",
+      "/worker/tick"
+    ]) {
+      const next = new URL(parsed.toString());
+      next.pathname = pathname;
+      next.search = "";
+      urls.push(next.toString());
+    }
+  } catch {
+    // If the URL is malformed, startup validation and the first fetch will surface it.
+  }
+  return [...new Set(urls)];
 }
 
 function loadDotEnv() {
