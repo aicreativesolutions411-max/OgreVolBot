@@ -1358,7 +1358,7 @@ button:disabled {
 }
 
 .setup-hub-card {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   align-items: stretch;
 }
 
@@ -1382,6 +1382,48 @@ button:disabled {
 .setup-hub-panel p {
   color: #c7d7c2;
   line-height: 1.45;
+}
+
+.automation-delegation-card {
+  border: 1px solid rgba(145, 255, 57, 0.34);
+  border-radius: var(--radius);
+  background:
+    linear-gradient(135deg, rgba(45, 255, 0, 0.08), rgba(0, 0, 0, 0.12)),
+    rgba(6, 18, 9, 0.64);
+  padding: 14px;
+}
+
+.automation-delegation-card.compact {
+  margin-top: 12px;
+}
+
+.delegation-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.delegation-mode-badge {
+  border: 1px solid rgba(145, 255, 57, 0.42);
+  border-radius: 999px;
+  color: var(--green);
+  background: rgba(145, 255, 57, 0.08);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  padding: 5px 8px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.delegation-steps {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+  color: #c7d7c2;
+  line-height: 1.35;
 }
 
 .x-connect-card {

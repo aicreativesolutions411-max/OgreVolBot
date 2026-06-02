@@ -184,6 +184,7 @@ const state = {
   walletConnectMenuOpen: false,
   walletConnectReturnPath: "/terminal",
   walletConnectStatus: "",
+  automationDelegationStatus: "",
   ogreTek: {
     loading: false,
     error: "",
@@ -209,6 +210,7 @@ const state = {
   editingTradePresetId: "",
   editingBundlePresetId: "",
   walletRemoveStatus: "",
+  walletSweepStatus: "",
   restoreResult: null,
   importResult: null,
   backupResult: null,
@@ -220,6 +222,8 @@ let livePairsTimer = null;
 let scanTimer = null;
 let kolTimer = null;
 let watchlistTimer = null;
+let walletBackgroundRefreshTimer = null;
+let postTradeRefreshTimer = null;
 
 const $ = (selector) => document.querySelector(selector);
 const writeText = (element, value) => {
@@ -1001,7 +1005,23 @@ function activePresetSummary() {
   return `Preset: ${tradeLabel} | ${bundleLabel}`;
 }
 
-async function refreshWalletState({ force = true } = {}) {
+function scheduleWalletBackgroundRefresh(delayMs = 900) {
+  if (walletBackgroundRefreshTimer) {
+    window.clearTimeout(walletBackgroundRefreshTimer);
+  }
+  walletBackgroundRefreshTimer = window.setTimeout(async () => {
+    walletBackgroundRefreshTimer = null;
+    if (!state.user || !state.token) return;
+    try {
+      await loadAll({ force: false, skipCore: true, silent: true });
+    } catch (error) {
+      state.walletRefreshError = error.message || "Background refresh failed.";
+      render();
+    }
+  }, delayMs);
+}
+
+async function refreshWalletState({ force = true, deep = true } = {}) {
   if (!state.user || !state.token) {
     setError("Create or log in before refreshing wallet balances.");
     return;
@@ -1014,7 +1034,11 @@ async function refreshWalletState({ force = true } = {}) {
     await loadWalletCore({ force });
     state.lastWalletRefreshAt = new Date().toISOString();
     render();
-    await loadAll({ force, skipCore: true, silent: true });
+    if (deep) {
+      await loadAll({ force, skipCore: true, silent: true });
+    } else {
+      scheduleWalletBackgroundRefresh(900);
+    }
   } catch (error) {
     state.walletRefreshError = error.message || "Refresh failed.";
     setError(state.walletRefreshError);
@@ -1026,7 +1050,18 @@ async function refreshWalletState({ force = true } = {}) {
 
 async function refreshAfterTrade(signature = "") {
   if (signature) state.lastTradeSignature = signature;
-  await refreshWalletState({ force: true });
+  if (postTradeRefreshTimer) {
+    window.clearTimeout(postTradeRefreshTimer);
+    postTradeRefreshTimer = null;
+  }
+  await refreshWalletState({ force: true, deep: false });
+  postTradeRefreshTimer = window.setTimeout(() => {
+    postTradeRefreshTimer = null;
+    void refreshWalletState({ force: true, deep: false }).catch((error) => {
+      state.walletRefreshError = error.message || "Post-trade refresh failed.";
+      render();
+    });
+  }, 3500);
 }
 
 function shouldDeferTerminalRender() {
@@ -1035,7 +1070,7 @@ function shouldDeferTerminalRender() {
   const tag = String(active.tagName || "").toLowerCase();
   const editable = active.isContentEditable || ["input", "textarea", "select"].includes(tag);
   if (!editable) return false;
-  return Boolean(active.closest(".fast-preset-builder, .preset-toolbar, .terminal-quick-buy-bar, .command-controls, .live-control-strip, .terminal-preset-strip, .preset-card, .order-ticket, .order-ticket-stack, .terminal-dock, .trade-side, .volume-grid, .sniper-setup, .wallet-exit-grid"));
+  return Boolean(active.closest(".fast-preset-builder, .preset-toolbar, .terminal-quick-buy-bar, .command-controls, .live-control-strip, .terminal-preset-strip, .preset-card, .order-ticket, .order-ticket-stack, .terminal-dock, .trade-side, .volume-grid, .sniper-setup, .wallet-exit-grid, .pump-launch-form, .launch-coin-form, .profile-grid, .preset-manager, .trade-panel, .terminal-side-panel, [data-preserve-focus]"));
 }
 
 function requestDeferredRender() {
@@ -1390,6 +1425,8 @@ function createWalletSection() {
         <small data-wallet-connect-status>${connected ? `Connected ${escapeHtml(connected.shortPublicKey || shortAddress(connected.publicKey))}.` : "Pick a wallet. Your extension will ask you to approve."}</small>
       </article>
 
+      ${automationDelegationHtml()}
+
       <article class="setup-hub-panel">
         <div class="pfp-row compact">
           <div class="user-avatar mini" aria-hidden="true">${userAvatarHtml("SW")}</div>
@@ -1459,6 +1496,35 @@ function connectWalletSection() {
       </div>
       <small data-wallet-connect-status>${connected ? `Connected ${escapeHtml(connected.shortPublicKey || shortAddress(connected.publicKey))}.` : "Pick a wallet above. The wallet extension will ask you to approve the connection."}</small>
     </section>
+    ${automationDelegationHtml({ compact: true })}
+  `;
+}
+
+function automationDelegationHtml({ compact = false } = {}) {
+  const connected = state.user?.connectedWallet;
+  const managedCount = Array.isArray(state.wallets) ? state.wallets.length : 0;
+  const status = state.automationDelegationStatus || (managedCount
+    ? `${managedCount} managed automation wallet(s) available for server TP/SL.`
+    : "Create one automation wallet before relying on server-side exits.");
+  return `
+    <article class="setup-hub-panel automation-delegation-card ${compact ? "compact" : ""}">
+      <div class="delegation-heading">
+        <span class="delegation-mode-badge">TP/SL Automation</span>
+        <h3>Automation Wallet</h3>
+      </div>
+      <p>Phantom and Solflare connections stay manual-sign for safety. Server-side stop-loss and take-profit can only run from managed automation wallets SlimeWire can sign for.</p>
+      <ul class="delegation-steps">
+        <li>Connect your wallet for identity and funding.</li>
+        <li>Create an automation wallet and save its backup.</li>
+        <li>Fund it, then trade from it when you want TP/SL to fire while you are away.</li>
+      </ul>
+      <div class="profile-actions">
+        <button class="primary" type="button" data-create-automation-wallet>${managedCount ? "Create Another" : "Create Automation Wallet"}</button>
+        <button type="button" data-tab="wallets">Manage Wallets</button>
+        ${connected ? `<button type="button" data-connect-wallet="solana">Switch Connected Wallet</button>` : ""}
+      </div>
+      <small data-automation-delegation-status>${escapeHtml(status)}</small>
+    </article>
   `;
 }
 
@@ -1759,11 +1825,11 @@ function manualKolWatchShareText(value) {
 }
 
 function userAvatarHtml(fallback = "SW") {
-  const avatar = String(state.user?.avatar || "").trim();
+  const avatar = normalizeImageUrl(state.user?.avatar || "");
   if (isSafeAvatarSrc(avatar)) {
-    return `<img src="${escapeHtml(avatar)}" alt="">`;
+    return `<img src="${escapeHtml(avatar)}" alt="" referrerpolicy="no-referrer" onerror="this.onerror=null;this.src='${tokenMascotSrc("ogre")}';">`;
   }
-  const ogreAvatar = "./assets/slimewire/png/token-mascots/token-mascot-1.png";
+  const ogreAvatar = tokenMascotSrc("ogre");
   if (fallback === "SW" || fallback === "OG") {
     return `<img src="${ogreAvatar}" alt="">`;
   }
@@ -1773,7 +1839,20 @@ function userAvatarHtml(fallback = "SW") {
 
 function isSafeAvatarSrc(value) {
   const text = String(value || "").trim();
-  return /^data:image\/(png|jpe?g|webp);base64,/i.test(text) || /^https:\/\/[^\s"'<>]+$/i.test(text);
+  return /^data:image\/(png|jpe?g|webp|gif);base64,/i.test(text) || /^https?:\/\/[^\s"'<>]+$/i.test(text);
+}
+
+function normalizeImageUrl(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (/^ipfs:\/\//i.test(text)) {
+    const path = text.replace(/^ipfs:\/\//i, "").replace(/^ipfs\//i, "");
+    return path ? `https://ipfs.io/ipfs/${encodeURIComponent(path).replace(/%2F/g, "/")}` : "";
+  }
+  if (/^\/\//.test(text)) return `https:${text}`;
+  if (/^https?:\/\/[^\s"'<>]+$/i.test(text)) return text;
+  if (/^data:image\/(png|jpe?g|webp|gif);base64,/i.test(text)) return text;
+  return "";
 }
 
 function xAvatarUrl(handle) {
@@ -1787,7 +1866,7 @@ function xProfileUrl(handle = state.xHandle) {
 }
 
 function kolAvatarSrc(kol = {}) {
-  const avatar = String(kol.avatar || kol.image || "").trim();
+  const avatar = normalizeImageUrl(kol.avatar || kol.image || "");
   if (isSafeAvatarSrc(avatar)) return avatar;
   const directHandle = cleanXHandle(kol.twitter || kol.x || kol.username || "");
   if (directHandle) return xAvatarUrl(directHandle);
@@ -1803,7 +1882,7 @@ function kolAvatarLabel(kol = {}) {
 function kolAvatarMarkup(kol = {}, className = "kol-avatar") {
   const src = kolAvatarSrc(kol);
   return src
-    ? `<img class="${escapeHtml(className)}" src="${escapeHtml(src)}" alt="">`
+    ? `<img class="${escapeHtml(className)}" src="${escapeHtml(src)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.hidden=true;">`
     : `<div class="${escapeHtml(className)} kol-avatar-fallback" aria-hidden="true">${escapeHtml(kolAvatarLabel(kol))}</div>`;
 }
 
@@ -3754,6 +3833,54 @@ async function createWalletSet() {
   }
 }
 
+async function createAutomationWallet() {
+  const status = $("[data-automation-delegation-status]");
+  const buttons = [...document.querySelectorAll("[data-create-automation-wallet]")];
+  setError("");
+  state.automationDelegationStatus = "Creating automation wallet...";
+  writeText(status, state.automationDelegationStatus);
+  buttons.forEach((button) => {
+    button.disabled = true;
+    writeText(button, "Creating...");
+  });
+
+  try {
+    await ensureWebAccount(status, "Creating secure web profile for automation wallet backups...");
+    const connected = state.user?.connectedWallet;
+    const label = connected?.publicKey
+      ? `Automation ${shortAddress(connected.publicKey)}`
+      : "Automation Wallet";
+    const data = await api("/api/web/wallets/create", {
+      method: "POST",
+      body: JSON.stringify({ label, count: 1 })
+    });
+    const wallets = Array.isArray(data.wallets) ? data.wallets : [];
+    if (!wallets.length) {
+      throw new Error(data.message || "Automation wallet create did not return wallet data. Refresh and try again.");
+    }
+    state.downloads = data.downloads || null;
+    if (data.downloads?.encryptedBackup?.text) {
+      downloadText(data.downloads.encryptedBackup.filename, data.downloads.encryptedBackup.text);
+    }
+    if (data.downloads?.recoveryKeys?.text) {
+      downloadText(data.downloads.recoveryKeys.filename, data.downloads.recoveryKeys.text);
+    }
+    state.automationDelegationStatus = "Automation wallet created. Backup downloads started. Fund it before using server-side TP/SL.";
+    await refreshAfterTrade(firstResultSignature(data.plan));
+    state.activeTab = "wallets";
+    render({ force: true });
+  } catch (error) {
+    state.automationDelegationStatus = error.message;
+    writeText(status, error.message);
+    setError(error.message);
+  } finally {
+    buttons.forEach((button) => {
+      button.disabled = false;
+      writeText(button, "Create Automation Wallet");
+    });
+  }
+}
+
 async function restoreWalletBackup() {
   const textarea = $("[data-restore-text]");
   const status = $("[data-restore-status]");
@@ -3889,6 +4016,85 @@ async function removeManagedWallet(walletIndex, walletLabel = "this wallet") {
     render();
   } catch (error) {
     state.walletRemoveStatus = error.message;
+    writeText(status, error.message);
+    setError(error.message);
+  }
+}
+
+function walletSweepSelectionPayload() {
+  const indexes = String($("[data-wallet-sweep-indexes]")?.value || "all").trim() || "all";
+  const walletIndexes = indexes.toLowerCase() === "all"
+    ? "all"
+    : indexes.split(/[,\s]+/).map((item) => item.trim()).filter(Boolean);
+  return {
+    walletIndexes,
+    walletGroup: String($("[data-wallet-sweep-group]")?.value || "").trim(),
+    destination: String($("[data-wallet-sweep-destination]")?.value || "").trim(),
+    tokenMint: String($("[data-wallet-sweep-token]")?.value || "").trim(),
+    slippageBps: String($("[data-wallet-sweep-slippage]")?.value || "1500").trim()
+  };
+}
+
+function walletSendManyPayload() {
+  return {
+    fromWalletIndex: String($("[data-wallet-send-from]")?.value || "1").trim(),
+    amountSol: String($("[data-wallet-send-amount]")?.value || "").trim(),
+    splitAll: Boolean($("[data-wallet-send-all]")?.checked),
+    destinations: String($("[data-wallet-send-destinations]")?.value || "").trim()
+  };
+}
+
+function summarizeSweepResult(result) {
+  if (!result) return "Action complete.";
+  const lines = [result.summary || "Action complete."];
+  if (Array.isArray(result.rows)) {
+    const detail = result.rows.slice(0, 6).map((row) => {
+      const label = row.walletLabel || `Wallet ${row.walletIndex || "?"}`;
+      const status = row.ok ? "ok" : "failed";
+      return `${label}: ${status} - ${row.message || row.signature || "done"}`;
+    });
+    lines.push(...detail);
+    if (result.rows.length > detail.length) lines.push(`...${result.rows.length - detail.length} more wallet(s).`);
+  }
+  if (result.signature) lines.push(`Tx: ${result.signature}`);
+  return lines.join("\n");
+}
+
+async function runWalletSweepAction(action) {
+  const status = $("[data-wallet-sweep-status]");
+  state.walletSweepStatus = "Running wallet action...";
+  writeText(status, state.walletSweepStatus);
+  setError("");
+
+  try {
+    await ensureWebAccount(status, "Opening secure web profile...");
+    const endpointByAction = {
+      "sweep-sol": "/api/web/wallets/sweep-sol",
+      "sweep-tokens": "/api/web/wallets/sweep-tokens",
+      "sell-all": "/api/web/wallets/sell-all-tokens",
+      "sell-all-sweep": "/api/web/wallets/sell-all-tokens",
+      "send-sol-many": "/api/web/wallets/send-sol"
+    };
+    const endpoint = endpointByAction[action];
+    if (!endpoint) throw new Error("Unknown wallet action.");
+
+    const payload = action === "send-sol-many" ? walletSendManyPayload() : walletSweepSelectionPayload();
+    if (action === "sell-all") payload.destination = "";
+    if (action === "sell-all-sweep" && !payload.destination) {
+      throw new Error("Enter a destination wallet for Sell Tokens + Send SOL.");
+    }
+
+    const data = await api(endpoint, {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    state.walletSweepStatus = summarizeSweepResult(data.sweep);
+    writeText(status, state.walletSweepStatus);
+    await refreshWalletState({ force: true, deep: true });
+    state.activeTab = "wallets";
+    render();
+  } catch (error) {
+    state.walletSweepStatus = error.message;
     writeText(status, error.message);
     setError(error.message);
   }
@@ -5111,8 +5317,65 @@ async function cancelLaunchWatch(planId) {
   }
 }
 
+function walletSweepToolsHtml() {
+  return `
+    <section class="account-check-card wallet-sweep-card">
+      <div>
+        <h3>Recovery / Sweep</h3>
+        <p>Move funds from managed wallets. Use <code>all</code>, wallet numbers like <code>1,2,3</code>, or a group label.</p>
+      </div>
+      <label>Wallet numbers
+        <input data-wallet-sweep-indexes value="all" placeholder="all or 1,2,3">
+      </label>
+      <label>Group label
+        <input data-wallet-sweep-group placeholder="Optional group name">
+      </label>
+      <label>Destination wallet
+        <input data-wallet-sweep-destination placeholder="Wallet to receive SOL or tokens">
+      </label>
+      <label>Token mint
+        <input data-wallet-sweep-token placeholder="Optional: leave blank for all tokens">
+      </label>
+      <label>Sell slippage bps
+        <input data-wallet-sweep-slippage type="number" min="50" max="5000" step="50" value="1500">
+      </label>
+      <div class="card-actions compact">
+        <button data-wallet-sweep-action="sweep-sol">Send All SOL</button>
+        <button data-wallet-sweep-action="sweep-tokens">Transfer Tokens</button>
+        <button data-wallet-sweep-action="sell-all">Sell All Tokens</button>
+        <button data-wallet-sweep-action="sell-all-sweep">Sell Tokens + Send SOL</button>
+      </div>
+      <small>Sell-all uses the existing swap route, then force-refreshes balances and positions. Token transfer keeps tokens as tokens.</small>
+      <small data-wallet-sweep-status>${escapeHtml(state.walletSweepStatus || "")}</small>
+    </section>
+    <section class="account-check-card wallet-sweep-card">
+      <div>
+        <h3>Send SOL One-To-Many</h3>
+        <p>Send the same SOL amount from one managed wallet to several destination wallets, or split available SOL evenly.</p>
+      </div>
+      <label>Source wallet #
+        <input data-wallet-send-from type="number" min="1" step="1" value="1">
+      </label>
+      <label>Amount per wallet
+        <input data-wallet-send-amount inputmode="decimal" placeholder="0.05">
+      </label>
+      <label class="inline-check">
+        <input data-wallet-send-all type="checkbox">
+        Split available SOL evenly
+      </label>
+      <label>Destination wallets
+        <textarea data-wallet-send-destinations rows="4" placeholder="One wallet per line"></textarea>
+      </label>
+      <div class="card-actions compact">
+        <button data-wallet-sweep-action="send-sol-many">Send SOL To Many</button>
+      </div>
+      <small>Split mode keeps the configured safety reserve and estimated network fees in the source wallet.</small>
+    </section>
+  `;
+}
+
 function walletsHtml() {
-  const create = `${createWalletSection()}${importWalletSection()}${backupRestoreSection()}${downloadsHtml()}`;
+  const create = `${createWalletSection()}${importWalletSection()}${walletSweepToolsHtml()}${backupRestoreSection()}${downloadsHtml()}`;
   const walletTools = `
     <details class="wallet-tools-details">
       <summary>
@@ -6528,7 +6791,7 @@ function liveTradesHtml() {
 function stopLossAuditHtml() {
   const plans = [state.tradePlanResult, state.bundleResult, state.volumeResult, state.sniperResult, state.kolResult, state.launchResult].filter(Boolean);
   if (!plans.length) {
-    return emptyState("No active audit item loaded", "Managed exits show status here after you create a trade, bundle, volume, sniper, KOL, or launch plan. Browser wallets are manual-only; managed wallets can be watched by SlimeWire while your session is active.");
+    return emptyState("No active audit item loaded", "Managed exits show status here after you create a trade, bundle, volume, sniper, KOL, or launch plan. Server-side TP/SL only auto-executes from managed automation wallets. Phantom and Solflare browser wallets require manual approval unless a future audited delegation/session feature is enabled.");
   }
   return `
     <div class="table-list compact-table">
@@ -6537,7 +6800,7 @@ function stopLossAuditHtml() {
           <div class="row-main">
             <strong>${escapeHtml(plan.label || plan.type || "Managed Exit")}</strong>
             <span>Status: ${escapeHtml(plan.status || "watching")} | TP ${escapeHtml(plan.takeProfitSummary || plan.takeProfitPct || "off")} | SL ${escapeHtml(plan.stopLossSummary || plan.stopLossPct || "off")}</span>
-            <small>Execution mode: managed wallet watcher when SlimeWire is active. Browser-connected wallets require manual signing.</small>
+            <small>Execution mode: managed automation wallet watcher. Connected Phantom/Solflare wallets are manual-sign only and cannot be sold by the worker without explicit future delegation.</small>
             ${plan.message ? `<small>${escapeHtml(plan.message)}</small>` : ""}
           </div>
           <div class="card-actions compact">
@@ -6810,11 +7073,13 @@ function formatChangeHtml(value) {
 
 function livePairAvatarHtml(row) {
   const label = String(row.symbol || row.name || row.shortMint || "?").trim().slice(0, 2).toUpperCase() || "?";
-  if (row.imageUrl) {
-    return `<div class="live-pair-avatar"><img src="${escapeHtml(row.imageUrl)}" alt="${escapeHtml(row.symbol || row.name || "Token")}" loading="lazy" onerror="this.hidden=true;"><span>${escapeHtml(label)}</span></div>`;
+  const fallbackSrc = tokenMascotSrc(row.tokenMint || row.symbol || row.name);
+  const safeFallbackSrc = escapeHtml(fallbackSrc);
+  const imageUrl = normalizeImageUrl(row.imageUrl);
+  if (imageUrl) {
+    return `<div class="live-pair-avatar"><img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(row.symbol || row.name || "Token")}" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.src='${safeFallbackSrc}';"><span>${escapeHtml(label)}</span></div>`;
   }
-  const mascot = tokenMascotIndex(row.tokenMint || row.symbol || row.name);
-  return `<div class="live-pair-avatar fallback with-mascot"><img src="./assets/slimewire/png/token-mascots/token-mascot-${mascot}.png" alt="" aria-hidden="true"><span>${escapeHtml(label)}</span></div>`;
+  return `<div class="live-pair-avatar fallback with-mascot"><img src="${safeFallbackSrc}" alt="" aria-hidden="true" onerror="this.hidden=true;"><span>${escapeHtml(label)}</span></div>`;
 }
 
 function tokenMascotIndex(value = "") {
@@ -6822,6 +7087,10 @@ function tokenMascotIndex(value = "") {
   let total = 0;
   for (let index = 0; index < text.length; index += 1) total += text.charCodeAt(index);
   return (total % 5) + 1;
+}
+
+function tokenMascotSrc(value = "") {
+  return `./assets/slimewire/png/token-mascots/token-mascot-${tokenMascotIndex(value)}.png`;
 }
 
 function livePairShareText(row) {
@@ -7696,10 +7965,12 @@ document.addEventListener("click", async (event) => {
     await sharePnlCard(target.dataset.sharePnlCard, target.dataset.shareText || "");
   }
   if (target.matches("[data-create-wallets]")) await createWalletSet();
+  if (target.matches("[data-create-automation-wallet]")) await createAutomationWallet();
   if (target.matches("[data-restore-backup]")) await restoreWalletBackup();
   if (target.matches("[data-export-backup]")) await exportWalletBackup();
   if (target.matches("[data-import-wallet]")) await importWallet();
   if (target.matches("[data-remove-wallet]")) await removeManagedWallet(target.dataset.removeWallet || "", target.dataset.walletLabel || "");
+  if (target.matches("[data-wallet-sweep-action]")) await runWalletSweepAction(target.dataset.walletSweepAction || "");
   if (target.matches("[data-download]")) {
     const file = state.downloads?.[target.dataset.download];
     if (file) downloadText(file.filename, file.text);
