@@ -600,6 +600,53 @@
   }
 }
 
+.ogre-ai-terminal .trade-card,
+.ogre-ai-terminal .trade-side > article {
+  border-color: rgba(88, 255, 122, 0.24);
+}
+
+.ogre-ai-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.ogre-ai-pick-list {
+  display: grid;
+  gap: 8px;
+}
+
+.ogre-ai-pick-card {
+  display: grid;
+  gap: 3px;
+  padding: 10px;
+  border: 1px solid rgba(88, 255, 122, 0.18);
+  border-radius: 10px;
+  background: rgba(5, 12, 7, 0.72);
+}
+
+.ogre-ai-pick-card strong {
+  color: var(--slime-green, #58ff7a);
+}
+
+.ogre-ai-pick-card span,
+.ogre-ai-pick-card small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 860px) {
+  .ogre-ai-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .ogre-ai-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .wallet-tools-details > summary {
   display: flex;
   align-items: center;

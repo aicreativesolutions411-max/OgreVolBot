@@ -154,6 +154,9 @@ const state = {
   volumeToken: "",
   volumeResult: null,
   sniperResult: null,
+  ogreAiResult: null,
+  ogreAiStatus: "",
+  ogreAiLoading: false,
   connectedWalletBalance: null,
   livePairs: null,
   livePairsByBucket: {},
@@ -1184,6 +1187,7 @@ function renderTabs() {
   if (state.activeTab === "launchCoin") panel.innerHTML = launchCoinHtml();
   if (state.activeTab === "launch") panel.innerHTML = launchHtml();
   if (state.activeTab === "kol") panel.innerHTML = kolHtml();
+  if (state.activeTab === "ogreAi") panel.innerHTML = ogreAiHtml();
   if (state.activeTab === "wallets") panel.innerHTML = walletsHtml();
   if (state.activeTab === "positions") panel.innerHTML = positionsHtml();
   if (state.activeTab === "pnl") panel.innerHTML = pnlHtml();
@@ -2224,6 +2228,172 @@ function tradePlanResultHtml() {
         <a href="${escapeHtml(row.dexUrl)}" target="_blank" rel="noreferrer">Dex</a>
       </div>
     </article>
+  `;
+}
+
+function ogreAiResultHtml() {
+  if (!state.ogreAiResult) {
+    return `
+      <article class="latest-trade ogre-ai-result-card">
+        <h3>Ogre A.I. Orders</h3>
+        <p>Start an automation run to scan best picks, buy with selected managed wallets, and arm TP/SL exits.</p>
+      </article>
+    `;
+  }
+
+  const row = state.ogreAiResult;
+  const plans = Array.isArray(row.plans) ? row.plans : [];
+  const errors = Array.isArray(row.errors) ? row.errors : [];
+  return `
+    <article class="latest-trade ogre-ai-result-card">
+      <h3>Ogre A.I. Armed</h3>
+      <p>${escapeHtml(row.message || "")}</p>
+      <dl>
+        <div><dt>Mode</dt><dd>${escapeHtml(row.mode || "quick")}</dd></div>
+        <div><dt>Scanned</dt><dd>${escapeHtml(row.scanned || 0)}</dd></div>
+        <div><dt>Qualified</dt><dd>${escapeHtml(row.qualified || 0)}</dd></div>
+        <div><dt>Plans</dt><dd>${escapeHtml(row.armedCount || plans.length)}</dd></div>
+      </dl>
+      <div class="ogre-ai-pick-list">
+        ${plans.map((plan) => {
+          const pick = plan.pick || {};
+          return `
+            <div class="ogre-ai-pick-card">
+              <strong>${escapeHtml(pick.symbol || plan.shortMint || "Pick")}</strong>
+              <span>${escapeHtml(pick.name || plan.tokenMint || "")}</span>
+              <small>Score ${escapeHtml(pick.score || "n/a")} | MC ${escapeHtml(pick.marketCapLabel || "n/a")} | Liq ${escapeHtml(pick.liquidityLabel || "n/a")} | Age ${escapeHtml(pick.ageLabel || "n/a")}</small>
+              <small>${escapeHtml(plan.message || "")}</small>
+              <div class="card-actions compact">
+                <button data-copy="${escapeHtml(plan.tokenMint)}">Copy CA</button>
+                <a href="${escapeHtml(pick.dexUrl || plan.dexUrl || dexUrl(plan.tokenMint))}" target="_blank" rel="noreferrer">Dex</a>
+                ${pick.pumpUrl ? `<a href="${escapeHtml(pick.pumpUrl)}" target="_blank" rel="noreferrer">Pump</a>` : ""}
+              </div>
+            </div>
+          `;
+        }).join("")}
+      </div>
+      ${errors.length ? `<div class="mini-results">${errors.map((item) => `<span data-ok="false">${escapeHtml(item.shortMint || item.tokenMint)}: ${escapeHtml(item.message || "failed")}</span>`).join("")}</div>` : ""}
+    </article>
+  `;
+}
+
+function ogreAiHtml() {
+  if (!state.wallets.length) {
+    return `${createWalletSection()}${emptyState("No managed wallets loaded", "Ogre A.I. needs managed/imported SlimeWire wallets so the server can submit TP/SL and timer exits after it buys.")}`;
+  }
+
+  return `
+    <section class="trade-layout ogre-ai-terminal">
+      <article class="trade-card">
+        <div class="trade-head">
+          <div>
+            <h3>Ogre A.I.</h3>
+            <p>Automation mode for managed wallets: scan best-pick feeds, buy selected setups, and arm exits from one command panel.</p>
+          </div>
+          <span class="sync-pill">Managed server exits</span>
+        </div>
+
+        <div class="ogre-ai-grid" data-preserve-focus>
+          <label>
+            Mode
+            <select data-ogre-ai-mode>
+              <option value="quick">Quick Scalp</option>
+              <option value="fresh">Fresh Launches</option>
+              <option value="safer">Safer Flow</option>
+            </select>
+          </label>
+          <label>
+            SOL per wallet
+            <input data-ogre-ai-amount inputmode="decimal" placeholder="0.1" value="0.1">
+          </label>
+          <label>
+            Orders to stack
+            <select data-ogre-ai-runs>
+              <option value="1">1 order</option>
+              <option value="2">2 orders</option>
+              <option value="3">3 orders</option>
+              <option value="5">5 orders</option>
+            </select>
+          </label>
+          ${selectWithCustomHtml({
+            selectAttr: "data-ogre-ai-tp",
+            customAttr: "data-ogre-ai-tp-custom",
+            customFor: "ogre-ai-tp",
+            selected: "25",
+            customType: "number",
+            customPlaceholder: "Custom TP %",
+            options: [
+              ["15", "+15%"],
+              ["25", "+25%"],
+              ["40", "+40%"],
+              ["60", "+60%"],
+              ["100", "+100%"],
+              ["custom", "Custom"]
+            ]
+          })}
+          ${selectWithCustomHtml({
+            selectAttr: "data-ogre-ai-sl",
+            customAttr: "data-ogre-ai-sl-custom",
+            customFor: "ogre-ai-sl",
+            selected: "8",
+            customType: "number",
+            customPlaceholder: "Custom SL %",
+            options: [
+              ["8", "-8%"],
+              ["10", "-10%"],
+              ["15", "-15%"],
+              ["off", "No stop loss"],
+              ["custom", "Custom"]
+            ]
+          })}
+          ${fallbackTimerSelectHtml("ogre-ai-delay", "data-ogre-ai-delay", "5")}
+          ${selectWithCustomHtml({
+            selectAttr: "data-ogre-ai-slippage",
+            customAttr: "data-ogre-ai-slippage-custom",
+            customFor: "ogre-ai-slippage",
+            selected: "400",
+            customType: "number",
+            customPlaceholder: "Custom bps",
+            options: [
+              ["300", "3%"],
+              ["400", "4%"],
+              ["500", "5%"],
+              ["custom", "Custom"]
+            ]
+          })}
+          <label>
+            Min score
+            <input data-ogre-ai-min-score type="number" min="1" max="100" step="1" placeholder="Auto">
+          </label>
+        </div>
+
+        <div class="wallet-grid">
+          ${walletChecksHtml("ogre-ai")}
+        </div>
+        ${walletGroupHtml("ogre-ai")}
+
+        <div class="card-actions">
+          <button class="primary" type="button" data-ogre-ai-start ${state.ogreAiLoading ? "disabled" : ""}>${state.ogreAiLoading ? "Scanning..." : "Start Ogre A.I."}</button>
+          <button type="button" data-tab="live">Review Live Pairs</button>
+          <button type="button" data-tab="positions">Positions</button>
+        </div>
+        <small data-ogre-ai-status>${escapeHtml(state.ogreAiStatus || "No guarantees. Best-pick automation can lose money in fast meme markets; TP/SL execution depends on route/liquidity and managed-wallet server exits.")}</small>
+      </article>
+
+      <aside class="trade-side">
+        ${automationDelegationHtml({ compact: true })}
+        <article>
+          <h3>How It Runs</h3>
+          <p>Ogre A.I. pulls from live best-pick feeds, filters obvious high-risk setups, buys with your selected managed wallets, and arms 100% bag exits using the TP/SL/timer settings above.</p>
+          <ul class="delegation-steps">
+            <li>Use small sizing first.</li>
+            <li>Server exits require managed/imported wallets.</li>
+            <li>Stop orders are triggers, not guaranteed prices.</li>
+          </ul>
+        </article>
+        ${ogreAiResultHtml()}
+      </aside>
+    </section>
   `;
 }
 
@@ -4875,6 +5045,65 @@ async function createSniperEntry(tokenMint) {
     render();
   } catch (error) {
     setSniperStatus(error.message);
+  }
+}
+
+function readOgreAiForm() {
+  const walletIndexes = checkedWalletIndexes("ogre-ai");
+  const walletGroup = $("[data-ogre-ai-group]")?.value?.trim() || "";
+  const amountSol = $("[data-ogre-ai-amount]")?.value?.trim() || "";
+  const mode = $("[data-ogre-ai-mode]")?.value || "quick";
+  const runCount = $("[data-ogre-ai-runs]")?.value || "1";
+  const sellDelay = fieldValue("[data-ogre-ai-delay]", "[data-ogre-ai-delay-custom]", "5");
+  const takeProfitPct = fieldValue("[data-ogre-ai-tp]", "[data-ogre-ai-tp-custom]", "25");
+  const stopLossPct = fieldValue("[data-ogre-ai-sl]", "[data-ogre-ai-sl-custom]", "8");
+  const slippageBps = fieldValue("[data-ogre-ai-slippage]", "[data-ogre-ai-slippage-custom]", "400");
+  const minScore = $("[data-ogre-ai-min-score]")?.value?.trim() || "";
+  if (!walletIndexes.length && !walletGroup) throw new Error("Choose at least one managed wallet or enter a group label.");
+  if (!amountSol) throw new Error("Enter SOL per wallet for Ogre A.I.");
+  return {
+    walletIndexes,
+    walletGroup,
+    mode,
+    amountSol,
+    runCount,
+    sellDelay,
+    takeProfitPct,
+    stopLossPct,
+    sellPercent: "100",
+    slippageBps,
+    minScore
+  };
+}
+
+function setOgreAiStatus(message) {
+  state.ogreAiStatus = message || "";
+  const status = $("[data-ogre-ai-status]");
+  writeText(status, state.ogreAiStatus);
+}
+
+async function startOgreAiRun() {
+  try {
+    const payload = readOgreAiForm();
+    state.ogreAiLoading = true;
+    setOgreAiStatus("Scanning live feeds and arming managed exits...");
+    render();
+    const data = await api("/api/web/ogre-ai/start", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    state.ogreAiResult = data.ogreAi;
+    state.tradePlanResult = data.ogreAi?.plans?.[0] || state.tradePlanResult;
+    setOgreAiStatus(data.ogreAi?.message || "Ogre A.I. run armed.");
+    await refreshAfterTrade(firstResultSignature(data.ogreAi?.plans?.[0]));
+    state.activeTab = "ogreAi";
+    render();
+  } catch (error) {
+    setOgreAiStatus(error.message);
+    setError(error.message);
+  } finally {
+    state.ogreAiLoading = false;
+    render();
   }
 }
 
@@ -7839,6 +8068,10 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-ogre-tek-refresh]")) {
     await loadOgreTekData({ force: true }).catch((error) => setError(error.message));
+    return;
+  }
+  if (target.matches("[data-ogre-ai-start]")) {
+    await startOgreAiRun();
     return;
   }
   if (target.matches("[data-ogre-tek-market]")) {
