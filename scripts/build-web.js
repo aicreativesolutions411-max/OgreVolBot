@@ -45,7 +45,12 @@ function envList(name, fallback) {
   return items.length ? items : fallback;
 }
 
-await fs.rm(distDir, { recursive: true, force: true });
+try {
+  await fs.rm(distDir, { recursive: true, force: true });
+} catch (error) {
+  if (error?.code !== "EBUSY" && error?.code !== "EPERM") throw error;
+  console.warn(`Could not fully clear ${path.relative(rootDir, distDir)} (${error.code}); copying over existing files.`);
+}
 await copyDir(publicDir, distDir);
 
 const buildId = String(process.env.WEB_BUILD_ID || new Date().toISOString().replace(/[-:.TZ]/g, "")).slice(0, 14);

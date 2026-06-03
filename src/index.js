@@ -20,6 +20,11 @@ import {
   sortLivePairs
 } from "./lib/liveTerminal.js";
 import {
+  calculateMoveSnapshot,
+  priceExitDecision,
+  stopLossTriggerPercent
+} from "./lib/tradePlanExit.js";
+import {
   Connection,
   Keypair,
   LAMPORTS_PER_SOL,
@@ -910,6 +915,14 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendWebJson(request, response, 200, {
         ok: true,
         presets: await webPresetRows(auth.userId)
+      });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/trade/plans") {
+      sendWebJson(request, response, 200, {
+        ok: true,
+        plans: await webTradePlanRows(auth.userId)
       });
       return;
     }
@@ -5158,18 +5171,37 @@ function isActiveTimedWalletStatus(status) {
 }
 
 async function processTradePlans() {
-  if (tradePlanRunnerActive) return;
+  if (tradePlanRunnerActive) {
+    return {
+      skipped: true,
+      reason: "trade_plan_runner_active"
+    };
+  }
   tradePlanRunnerActive = true;
+  const summary = {
+    checkedPlans: 0,
+    checkedWallets: 0,
+    changedWallets: 0,
+    triggeredWallets: 0,
+    soldWallets: 0,
+    failedWallets: 0,
+    messages: []
+  };
 
   try {
     const state = await readState();
-    if (state.paused) return;
+    if (state.paused) {
+      summary.skipped = true;
+      summary.reason = "bot_paused";
+      return summary;
+    }
 
     const planStore = await readTradePlans();
     const walletStore = await readWalletStore();
     let changed = false;
 
     for (const plan of planStore.plans) {
+      summary.checkedPlans += 1;
       if (plan.status === "launch_watch") {
         const result = await processLaunchWatchPlan(plan, walletStore);
         if (result.changed) changed = true;
@@ -5194,9 +5226,19 @@ async function processTradePlans() {
       const pnlCardTokens = new Set();
       for (const planWallet of plan.wallets) {
         if (!isActiveTimedWalletStatus(planWallet.status)) continue;
+        summary.checkedWallets += 1;
         const result = await processTradePlanWallet(plan, planWallet, walletStore);
-        if (result.changed) changed = true;
-        if (result.message) walletMessages.push(result.message);
+        if (result.changed) {
+          changed = true;
+          summary.changedWallets += 1;
+        }
+        if (result.triggered) summary.triggeredWallets += 1;
+        if (result.sold) summary.soldWallets += 1;
+        if (result.failed) summary.failedWallets += 1;
+        if (result.message) {
+          walletMessages.push(result.message);
+          summary.messages.push(result.message);
+        }
         if (result.pnlCardToken) pnlCardTokens.add(result.pnlCardToken);
       }
 
@@ -5221,6 +5263,8 @@ async function processTradePlans() {
     if (changed) {
       await writeTradePlans(planStore);
     }
+    summary.messages = summary.messages.slice(-20);
+    return summary;
   } finally {
     tradePlanRunnerActive = false;
   }
@@ -5286,8 +5330,11 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
       const estimate = await estimatePlanWalletMove(plan, wallet, estimateSellPercent);
       planWallet.lastCheckedAt = new Date().toISOString();
       planWallet.lastMovePct = estimate.movePct;
+      planWallet.lastGrossMovePct = estimate.grossMovePct ?? estimate.movePct;
+      planWallet.lastNetMovePct = estimate.netMovePct ?? estimate.movePct;
       planWallet.lastEstimateSource = estimate.source || "jupiter";
       planWallet.lastEstimatedNetOut = estimate.estimatedNetOut?.toString?.() || null;
+      planWallet.lastEstimatedOut = estimate.estimatedOut?.toString?.() || null;
       planWallet.lastBasisLamports = estimate.basis?.toString?.() || null;
       planWallet.lastMonitorSlippageBps = estimate.monitorSlippageBps || CONFIG.stopLossMonitorSlippageBps;
       planWallet.lastError = estimate.quoteError ? `Jupiter quote fallback: ${estimate.quoteError}` : null;
@@ -5297,19 +5344,24 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
       planWallet.lastTriggerCheckAt = planWallet.lastCheckedAt;
       planWallet.triggerCheckIntervalMs = CONFIG.stopLossCheckIntervalMs;
 
-      const stopLossTriggerPct = stopLossPct
-        ? Math.max(0.1, Number(stopLossPct) - CONFIG.stopLossTriggerBufferPct)
-        : 0;
+      const stopLossTriggerPct = stopLossTriggerPercent(stopLossPct, CONFIG.stopLossTriggerBufferPct);
+      const decision = priceExitDecision({
+        movePct: estimate.movePct,
+        takeProfitPct,
+        stopLossPct,
+        stopLossBufferPct: CONFIG.stopLossTriggerBufferPct
+      });
 
-      if (stopLossPct && estimate.movePct <= -stopLossTriggerPct) {
+      if (decision?.kind === "stop-loss") {
         const armedPct = Number(stopLossPct).toFixed(2).replace(/\.00$/, "");
         triggerReason = `stop-loss ${estimate.movePct.toFixed(2)}% (armed ${armedPct}%)`;
         triggerMeta = { kind: "stop-loss", sellPercent: 100 };
         planWallet.triggerStatus = "triggered";
         planWallet.triggerKind = "stop-loss";
         planWallet.triggerTargetPct = stopLossPct;
+        planWallet.triggerThresholdPct = stopLossTriggerPct;
         planWallet.triggerSellPercent = 100;
-      } else if (takeProfitPct && estimate.movePct >= takeProfitPct) {
+      } else if (decision?.kind === "take-profit") {
         triggerReason = `take-profit +${estimate.movePct.toFixed(2)}%`;
         triggerMeta = ladderLevel
           ? {
@@ -5414,6 +5466,8 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
         planWallet.triggerKind = null;
         return {
           changed: true,
+          triggered: true,
+          sold: true,
           message: `${formatTimedSellSuccessLine(planWallet, sell, planWallet.triggerReason, plan.loopCount || 1)}; next ladder target ${formatTakeProfitTarget(nextLevel.pct)} sells ${nextLevel.sellPercent}%`
         };
       }
@@ -5424,6 +5478,8 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
       planWallet.soldAt = new Date().toISOString();
       return {
         changed: true,
+        triggered: true,
+        sold: true,
         message: `${formatTimedSellSuccessLine(planWallet, sell, planWallet.triggerReason, plan.loopCount || 1)}; ladder complete`,
         pnlCardToken: plan.tokenMint
       };
@@ -5450,6 +5506,8 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
         planWallet.updatedAt = new Date().toISOString();
         return {
           changed: true,
+          triggered: priceExitTrigger,
+          sold: true,
           message: `${formatTimedSellSuccessLine(planWallet, sell, triggerReason, plan.loopCount || 1)}; next loop starts in ${formatDelay(loopDelaySeconds)}`
         };
       }
@@ -5461,6 +5519,8 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
     planWallet.soldAt = new Date().toISOString();
     return {
       changed: true,
+      triggered: priceExitTrigger,
+      sold: true,
       message: `${formatTimedSellSuccessLine(planWallet, sell, triggerReason, plan.loopCount || 1)}`,
       pnlCardToken: plan.tokenMint
     };
@@ -5482,6 +5542,8 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
     planWallet.updatedAt = new Date().toISOString();
     return {
       changed: true,
+      triggered: priceExit,
+      failed: failures >= maxFailures,
       message: `${planWallet.label}: sell failed by ${triggerReason} (${failures}/${maxFailures}) - ${friendlyError(error)}${failures < maxFailures ? `. Will retry in ${Math.ceil(retryDelayMs / 1000)}s.` : ""}`
     };
   }
@@ -6071,9 +6133,8 @@ async function estimatePlanWalletMove(plan, wallet, sellPercentOverride = null) 
 
   const estimatedOut = BigInt(order.outAmount || order.outputAmount || 0);
   const estimatedFee = BigInt(calculateFeeLamports(estimatedOut));
-  const estimatedNetOut = estimatedOut > estimatedFee ? estimatedOut - estimatedFee : 0n;
-  const movePct = (Number(estimatedNetOut - basis) / Number(basis)) * 100;
-  return { estimatedOut, estimatedNetOut, basis, movePct, source: "jupiter", monitorSlippageBps };
+  const snapshot = calculateMoveSnapshot({ estimatedOut, basis, feeLamports: estimatedFee });
+  return { ...snapshot, source: "jupiter", monitorSlippageBps };
 }
 
 async function estimatePlanWalletMoveFromPumpFun(plan, token, amount, basis, quoteError, monitorSlippageBps = null) {
@@ -6102,14 +6163,10 @@ async function estimatePlanWalletMoveFromPumpFun(plan, token, amount, basis, quo
 
   const estimatedOut = BigInt(Math.max(0, Math.floor(estimatedOutNumber)));
   const estimatedFee = BigInt(calculateFeeLamports(estimatedOut));
-  const estimatedNetOut = estimatedOut > estimatedFee ? estimatedOut - estimatedFee : 0n;
-  const movePct = (Number(estimatedNetOut - basis) / Number(basis)) * 100;
+  const snapshot = calculateMoveSnapshot({ estimatedOut, basis, feeLamports: estimatedFee });
 
   return {
-    estimatedOut,
-    estimatedNetOut,
-    basis,
-    movePct,
+    ...snapshot,
     source: "pumpfun",
     monitorSlippageBps,
     quoteError: friendlyError(quoteError)
@@ -6227,14 +6284,10 @@ async function estimatePlanWalletMoveFromDexPair(plan, token, amount, basis, quo
 
   const estimatedOut = BigInt(Math.max(0, Math.floor(estimatedOutNumber)));
   const estimatedFee = BigInt(calculateFeeLamports(estimatedOut));
-  const estimatedNetOut = estimatedOut > estimatedFee ? estimatedOut - estimatedFee : 0n;
-  const movePct = (Number(estimatedNetOut - basis) / Number(basis)) * 100;
+  const snapshot = calculateMoveSnapshot({ estimatedOut, basis, feeLamports: estimatedFee });
 
   return {
-    estimatedOut,
-    estimatedNetOut,
-    basis,
-    movePct,
+    ...snapshot,
     source: "dexscreener",
     monitorSlippageBps,
     pairAddress: firstString(pricedPair?.pair?.pairAddress, pricedPair?.pair?.address),
@@ -6440,6 +6493,7 @@ async function executeJupiterSwap({ signer, inputMint, outputMint, amount, slipp
       tx.sign([signer]);
 
       const execute = await jupiterFetchJson(`${CONFIG.jupiterApiBase}/execute`, {
+        timeoutMs: 20_000,
         method: "POST",
         headers: jupiterHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
@@ -6493,6 +6547,7 @@ async function createJupiterOrder({ taker, inputMint, outputMint, amount, slippa
   }
 
   const order = await jupiterFetchJson(orderUrl, {
+    timeoutMs: 8_000,
     headers: jupiterHeaders()
   }, "Jupiter order");
 
@@ -11455,6 +11510,76 @@ async function readTradePlans() {
 
 async function writeTradePlans(store) {
   await writeJsonFile(tradePlansPath(), store);
+}
+
+async function webTradePlanRows(userId) {
+  const store = await readTradePlans();
+  return (store.plans || [])
+    .filter((plan) => String(plan.userId || "") === String(userId || ""))
+    .sort((a, b) => Date.parse(b.createdAt || b.updatedAt || 0) - Date.parse(a.createdAt || a.updatedAt || 0))
+    .slice(0, 100)
+    .map(webTradePlanRow);
+}
+
+function webTradePlanRow(plan = {}) {
+  const wallets = (plan.wallets || []).map((wallet) => ({
+    label: wallet.label || "Wallet",
+    publicKey: wallet.publicKey || "",
+    shortPublicKey: shortMint(wallet.publicKey || ""),
+    status: wallet.status || "",
+    exitStatus: wallet.exitStatus || "",
+    triggerStatus: wallet.triggerStatus || "",
+    triggerKind: wallet.triggerKind || "",
+    triggerReason: wallet.triggerReason || "",
+    triggerTargetPct: wallet.triggerTargetPct || null,
+    triggerSellPercent: wallet.triggerSellPercent || plan.triggerSellPercent || "",
+    lastMovePct: wallet.lastMovePct ?? null,
+    lastGrossMovePct: wallet.lastGrossMovePct ?? null,
+    lastNetMovePct: wallet.lastNetMovePct ?? null,
+    lastCheckedAt: wallet.lastCheckedAt || "",
+    lastTriggerCheckAt: wallet.lastTriggerCheckAt || "",
+    lastSellAttemptAt: wallet.lastSellAttemptAt || "",
+    triggeredAt: wallet.triggeredAt || "",
+    soldAt: wallet.soldAt || "",
+    sellSignature: wallet.sellSignature || "",
+    buySignature: wallet.buySignature || "",
+    failures: Number.parseInt(wallet.failures || 0, 10) || 0,
+    retryAfterAt: wallet.retryAfterAt || wallet.nextRetryAt || "",
+    lastError: wallet.lastError || wallet.error || "",
+    lastEstimateSource: wallet.lastEstimateSource || "",
+    lastPriceEstimateError: wallet.lastPriceEstimateError || "",
+    exitSlippageBps: wallet.exitSlippageBps || "",
+    exitSlippageAttempts: Array.isArray(wallet.exitSlippageAttempts) ? wallet.exitSlippageAttempts.slice(-5) : []
+  }));
+  const activeWallets = wallets.filter((wallet) => isActiveTimedWalletStatus(wallet.status)).length;
+  return {
+    id: plan.id || "",
+    status: plan.status || "",
+    source: plan.source || "",
+    tokenMint: plan.tokenMint || "",
+    shortMint: shortMint(plan.tokenMint || ""),
+    createdAt: plan.createdAt || "",
+    completedAt: plan.completedAt || "",
+    walletSelector: plan.walletSelector || "",
+    walletCount: wallets.length,
+    activeWallets,
+    amountSol: String(plan.amountSol || ""),
+    sellDelaySeconds: Number(plan.sellDelaySeconds || 0),
+    sellAfterAt: plan.sellAfterAt || "",
+    sellPercent: plan.sellPercent || "",
+    triggerSellPercent: plan.triggerSellPercent || "",
+    takeProfitPct: plan.takeProfitPct || "",
+    stopLossPct: plan.stopLossPct || "",
+    takeProfitSummary: formatPlanTakeProfitSummary(plan),
+    stopLossSummary: formatPlanStopLossSummary(plan),
+    slippageBps: plan.slippageBps || "",
+    loopCount: plan.loopCount || 1,
+    loopDelaySeconds: plan.loopDelaySeconds || 0,
+    results: Array.isArray(plan.results) ? plan.results.slice(-12) : [],
+    wallets,
+    dexUrl: plan.tokenMint ? dexScreenerUrl(plan.tokenMint) : "",
+    message: `${plan.source || "Plan"} ${plan.status || "watching"}: ${activeWallets}/${wallets.length} wallet(s) active.`
+  };
 }
 
 async function readDcaPlans() {

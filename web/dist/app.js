@@ -148,6 +148,7 @@ const state = {
   tradeToken: "",
   tradeResult: null,
   tradePlanResult: null,
+  tradePlans: [],
   bundleToken: "",
   bundleResult: null,
   volumeToken: "",
@@ -657,6 +658,7 @@ async function loadAll(options = {}) {
     state.connectedWalletBalance = null;
     state.launchWatches = [];
     state.presets = { trade: [], bundle: [] };
+    state.tradePlans = [];
     state.watchlist = { rows: [], count: 0 };
     render();
     return;
@@ -671,27 +673,30 @@ async function loadAll(options = {}) {
   try {
     const forceQuery = options.force ? "?force=true" : "";
     if (options.skipCore) {
-      const [pnl, launchWatches, presets, watchlist] = await Promise.all([
+      const [pnl, launchWatches, presets, watchlist, tradePlans] = await Promise.all([
         api("/api/web/pnl"),
         api("/api/web/launch/watches"),
         api("/api/web/presets"),
-        api("/api/web/watchlist")
+        api("/api/web/watchlist"),
+        api("/api/web/trade/plans")
       ]);
       state.pnl = pnl.pnl || null;
       state.launchWatches = launchWatches.watches || [];
       state.presets = presets.presets || { trade: [], bundle: [] };
       ensureSelectedPresetsStillExist();
       state.watchlist = watchlist.watchlist || { rows: [], count: 0 };
+      state.tradePlans = tradePlans.plans || [];
       return;
     }
-    const [wallets, balances, positions, pnl, launchWatches, presets, watchlist] = await Promise.all([
+    const [wallets, balances, positions, pnl, launchWatches, presets, watchlist, tradePlans] = await Promise.all([
       api("/api/web/wallets"),
       api(`/api/web/balances${forceQuery}`),
       api(`/api/web/positions${forceQuery}`),
       api("/api/web/pnl"),
       api("/api/web/launch/watches"),
       api("/api/web/presets"),
-      api("/api/web/watchlist")
+      api("/api/web/watchlist"),
+      api("/api/web/trade/plans")
     ]);
     state.wallets = wallets.wallets || [];
     state.balances = balances.balances || [];
@@ -702,6 +707,7 @@ async function loadAll(options = {}) {
     state.presets = presets.presets || { trade: [], bundle: [] };
     ensureSelectedPresetsStillExist();
     state.watchlist = watchlist.watchlist || { rows: [], count: 0 };
+    state.tradePlans = tradePlans.plans || [];
     if (options.force) {
       state.lastWalletRefreshAt = new Date().toISOString();
       state.walletRefreshError = "";
@@ -717,15 +723,17 @@ async function loadAll(options = {}) {
 async function loadWalletCore(options = {}) {
   if (!state.user || !state.token) return;
   const forceQuery = options.force ? "?force=true" : "";
-  const [wallets, balances, positions] = await Promise.all([
+  const [wallets, balances, positions, tradePlans] = await Promise.all([
     api("/api/web/wallets"),
     api(`/api/web/balances${forceQuery}`),
-    api(`/api/web/positions${forceQuery}`)
+    api(`/api/web/positions${forceQuery}`),
+    api("/api/web/trade/plans")
   ]);
   state.wallets = wallets.wallets || [];
   state.balances = balances.balances || [];
   state.connectedWalletBalance = balances.connectedWallet || null;
   state.positions = positions.positions || [];
+  state.tradePlans = tradePlans.plans || [];
   state.lastWalletRefreshAt = new Date().toISOString();
   state.walletRefreshError = "";
 }
@@ -6836,26 +6844,59 @@ function liveTradesHtml() {
 }
 
 function stopLossAuditHtml() {
-  const plans = [state.tradePlanResult, state.bundleResult, state.volumeResult, state.sniperResult, state.kolResult, state.launchResult].filter(Boolean);
+  const serverPlans = Array.isArray(state.tradePlans) ? state.tradePlans : [];
+  const localPlans = [state.tradePlanResult, state.bundleResult, state.volumeResult, state.sniperResult, state.kolResult, state.launchResult]
+    .filter(Boolean)
+    .map((plan) => ({ ...plan, localOnly: true }));
+  const plans = serverPlans.length ? serverPlans : localPlans;
   if (!plans.length) {
     return emptyState("No active audit item loaded", "Managed exits show status here after you create a trade, bundle, volume, sniper, KOL, or launch plan. Server-side TP/SL only auto-executes from managed automation wallets. Phantom and Solflare browser wallets require manual approval unless a future audited delegation/session feature is enabled.");
   }
   return `
     <div class="table-list compact-table">
       ${plans.map((plan) => `
-        <article class="row-card">
+        <article class="row-card stop-loss-audit-card">
           <div class="row-main">
-            <strong>${escapeHtml(plan.label || plan.type || "Managed Exit")}</strong>
-            <span>Status: ${escapeHtml(plan.status || "watching")} | TP ${escapeHtml(plan.takeProfitSummary || plan.takeProfitPct || "off")} | SL ${escapeHtml(plan.stopLossSummary || plan.stopLossPct || "off")}</span>
+            <strong>${escapeHtml(plan.label || plan.type || plan.source || "Managed Exit")} ${plan.shortMint ? `<code>${escapeHtml(plan.shortMint)}</code>` : ""}</strong>
+            <span>Status: ${escapeHtml(plan.status || "watching")} | Active wallets: ${escapeHtml(plan.activeWallets ?? "?")}/${escapeHtml(plan.walletCount ?? "?")} | TP ${escapeHtml(plan.takeProfitSummary || plan.takeProfitPct || "off")} | SL ${escapeHtml(plan.stopLossSummary || plan.stopLossPct || "off")}</span>
             <small>Execution mode: managed automation wallet watcher. Connected Phantom/Solflare wallets are manual-sign only and cannot be sold by the worker without explicit future delegation.</small>
+            ${plan.localOnly ? `<small class="warning-text">Latest local result only. Refresh Status to load server watcher rows.</small>` : ""}
             ${plan.message ? `<small>${escapeHtml(plan.message)}</small>` : ""}
+            ${plan.wallets?.length ? `<div class="audit-wallet-list">${plan.wallets.map(stopLossAuditWalletHtml).join("")}</div>` : ""}
           </div>
           <div class="card-actions compact">
             <button data-top-refresh-wallet>Refresh Status</button>
             <button data-tab="positions">Positions</button>
+            ${plan.tokenMint ? `<button data-copy="${escapeHtml(plan.tokenMint)}">Copy CA</button>` : ""}
+            ${plan.dexUrl ? `<a class="button-like" href="${escapeHtml(plan.dexUrl)}" target="_blank" rel="noreferrer">Dex</a>` : ""}
           </div>
         </article>
       `).join("")}
+    </div>
+  `;
+}
+
+function stopLossAuditWalletHtml(wallet = {}) {
+  const lastCheck = wallet.lastTriggerCheckAt || wallet.lastCheckedAt || "";
+  const status = wallet.triggerStatus || wallet.exitStatus || wallet.status || "watching";
+  const move = wallet.lastMovePct ?? wallet.lastGrossMovePct;
+  const moveLabel = Number.isFinite(Number(move)) ? `${Number(move).toFixed(2)}%` : "not checked";
+  const netMove = Number.isFinite(Number(wallet.lastNetMovePct)) ? ` net ${Number(wallet.lastNetMovePct).toFixed(2)}%` : "";
+  const retry = wallet.retryAfterAt ? ` | retry ${ageTextFromSeconds(secondsSince(wallet.retryAfterAt))}` : "";
+  const lastError = wallet.lastError || wallet.lastPriceEstimateError || "";
+  return `
+    <div class="audit-wallet-row">
+      <div>
+        <strong>${escapeHtml(wallet.label || "Wallet")}</strong>
+        <span>${escapeHtml(wallet.shortPublicKey || "")}</span>
+      </div>
+      <div>
+        <span>${escapeHtml(status)}${wallet.triggerKind ? ` / ${escapeHtml(wallet.triggerKind)}` : ""}</span>
+        <small>Move ${escapeHtml(moveLabel)}${escapeHtml(netMove)} | checked ${escapeHtml(ageTextFromSeconds(secondsSince(lastCheck)))}${escapeHtml(retry)}</small>
+        ${wallet.triggerReason ? `<small>Reason: ${escapeHtml(wallet.triggerReason)}</small>` : ""}
+        ${wallet.sellSignature ? `<small>Sell tx: ${escapeHtml(wallet.sellSignature)}</small>` : ""}
+        ${lastError ? `<small class="warning-text">Error: ${escapeHtml(lastError)}</small>` : ""}
+      </div>
     </div>
   `;
 }

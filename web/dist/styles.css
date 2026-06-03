@@ -1553,6 +1553,32 @@ code {
   margin-top: 4px;
 }
 
+.stop-loss-audit-card {
+  align-items: flex-start;
+}
+
+.audit-wallet-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.audit-wallet-row {
+  display: grid;
+  grid-template-columns: minmax(90px, 0.55fr) minmax(0, 1fr);
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid rgba(103, 255, 78, 0.16);
+  border-radius: 10px;
+  background: rgba(2, 8, 4, 0.44);
+}
+
+.audit-wallet-row strong,
+.audit-wallet-row span,
+.audit-wallet-row small {
+  overflow-wrap: anywhere;
+}
+
 .trade-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(340px, 420px);
