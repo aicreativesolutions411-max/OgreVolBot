@@ -3241,9 +3241,14 @@
 
 [data-app][data-route="terminal"] .tabs button::before,
 [data-app][data-route="terminal"] .tabs .nav-tool-group summary::before {
+  content: "" !important;
+  display: block !important;
   width: 24px !important;
   height: 24px !important;
   flex: 0 0 24px !important;
+  -webkit-mask: none !important;
+  mask: none !important;
+  background-color: transparent !important;
   background-size: contain !important;
   background-position: center !important;
   background-repeat: no-repeat !important;
