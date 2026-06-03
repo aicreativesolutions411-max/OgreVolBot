@@ -55,6 +55,10 @@ export function pairAgeMinutes(row, now = Date.now()) {
     if (createdAt) return Math.max(0, (now - createdAt) / 60_000);
   }
 
+  const trustedFallback = row?.trustPairAge === true
+    || ["source-age", "trusted-source-age"].includes(String(row?.pairAgeSource || "").toLowerCase());
+  if (!trustedFallback) return null;
+
   const seconds = Number(row?.pairAgeSeconds);
   if (Number.isFinite(seconds) && seconds >= 0) return seconds / 60;
 

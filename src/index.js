@@ -16264,12 +16264,13 @@ async function hydrateKolSignalMetadata(rows) {
     const buysH1 = firstMeaningfulNumber(row.buysH1, txnsH1.buys) || 0;
     const sellsH1 = firstMeaningfulNumber(row.sellsH1, txnsH1.sells) || 0;
     const pairCreatedAt = firstMeaningfulNumber(normalizePairCreatedAt(row.pairCreatedAt), normalizePairCreatedAt(metadata.pairCreatedAt)) || null;
+    const trustedSourceAge = ["source-age", "trusted-source-age"].includes(String(row.pairAgeSource || "").toLowerCase());
     const pairAgeSeconds = pairCreatedAt
       ? Math.max(0, Math.floor((Date.now() - pairCreatedAt) / 1000))
-      : Number.isFinite(Number(row.pairAgeSeconds)) ? Number(row.pairAgeSeconds) : null;
+      : trustedSourceAge && Number.isFinite(Number(row.pairAgeSeconds)) ? Number(row.pairAgeSeconds) : null;
     const pairAgeMinutes = Number.isFinite(Number(pairAgeSeconds))
       ? Math.floor(Number(pairAgeSeconds) / 60)
-      : Number.isFinite(Number(row.pairAgeMinutes)) ? Number(row.pairAgeMinutes) : null;
+      : null;
     const isPump = Boolean(row.isPump) || isPumpStyleToken({
       tokenMint: row.tokenMint,
       symbol,
@@ -16315,7 +16316,8 @@ async function hydrateKolSignalMetadata(rows) {
       pairCreatedAt,
       pairAgeSeconds,
       pairAgeMinutes,
-      pairAgeLabel: Number.isFinite(Number(pairAgeSeconds)) ? formatLivePairAgeLabel(pairAgeSeconds, pairAgeMinutes) : row.pairAgeLabel,
+      pairAgeLabel: Number.isFinite(Number(pairAgeSeconds)) ? formatLivePairAgeLabel(pairAgeSeconds, pairAgeMinutes) : "age unknown",
+      pairAgeSource: pairCreatedAt ? "pair-created-at" : trustedSourceAge ? row.pairAgeSource : "unknown",
       isPump,
       pumpUrl: row.pumpUrl || (isPump ? pumpFunUrl(row.tokenMint) : ""),
       valueLabel: row.valueLabel && row.valueLabel !== "n/a" ? row.valueLabel : primaryVolumeLabel ? `${primaryVolumeLabel} vol` : row.valueLabel,
@@ -17454,9 +17456,10 @@ async function buildWebLivePairs(userId, bucket = "live", options = {}) {
     .slice(0, isLive ? 110 : 240);
   const enrichedRows = await enrichWebLivePairsForImages(baseRows).catch(() => baseRows);
   const targetLimit = livePairBucketLimit(safeBucket);
-  let liveRows = uniqueSniperScoreRows(enrichedRows)
+  const ageVerifiedRows = uniqueSniperScoreRows(enrichedRows)
     .filter((row) => isWebLivePairCandidate(row, safeBucket))
     .sort((a, b) => compareWebLivePairs(a, b, sort));
+  let liveRows = ageVerifiedRows;
   if (!isLive && liveRows.length < targetLimit) {
     const currentMints = new Set(liveRows.map((row) => row.tokenMint));
     const backfillRows = uniqueSniperScoreRows(enrichedRows)
@@ -17689,6 +17692,7 @@ function livePairCandidateToRow(candidate) {
     pairCreatedAt,
     pairAgeSeconds,
     pairAgeMinutes: pairAgeSeconds === null ? null : Math.floor(pairAgeSeconds / 60),
+    pairAgeSource: pairCreatedAt ? "pair-created-at" : "unknown",
     riskFlags: [],
     momentum: volume5m > 0 || volumeH1 > 0 ? "Fresh flow" : "Just listed",
     smartMoney: "Live",
@@ -17821,7 +17825,12 @@ async function enrichWebLivePairsForImages(rows) {
       raydiumPool = firstString(raydiumPool, pumpMeta.raydiumPool);
     }
 
-    const pairAgeSeconds = pairCreatedAt ? Math.max(0, Math.floor((Date.now() - Number(pairCreatedAt)) / 1000)) : row.pairAgeSeconds;
+    const trustedSourceAge = ["source-age", "trusted-source-age"].includes(String(row.pairAgeSource || "").toLowerCase());
+    const pairAgeSeconds = pairCreatedAt
+      ? Math.max(0, Math.floor((Date.now() - Number(pairCreatedAt)) / 1000))
+      : trustedSourceAge && Number.isFinite(Number(row.pairAgeSeconds))
+        ? Number(row.pairAgeSeconds)
+        : null;
     const isPump = webLivePairIsPump({ ...row, symbol, name }) || pumpLike;
     const scopeProbe = {
       ...row,
@@ -17853,7 +17862,8 @@ async function enrichWebLivePairsForImages(rows) {
       volumeH24,
       pairCreatedAt,
       pairAgeSeconds,
-      pairAgeMinutes: Number.isFinite(Number(pairAgeSeconds)) ? Math.floor(Number(pairAgeSeconds) / 60) : row.pairAgeMinutes,
+      pairAgeMinutes: Number.isFinite(Number(pairAgeSeconds)) ? Math.floor(Number(pairAgeSeconds) / 60) : null,
+      pairAgeSource: pairCreatedAt ? "pair-created-at" : trustedSourceAge ? row.pairAgeSource : "unknown",
       isPump,
       pumpUrl: isPump ? pumpFunUrl(row.tokenMint) : "",
       dexId,
@@ -18039,7 +18049,7 @@ function formatLivePairAgeLabel(pairAgeSeconds, pairAgeMinutes) {
   }
   const minutes = Number(pairAgeMinutes);
   if (Number.isFinite(minutes)) return `${Math.max(0, Math.round(minutes))}m`;
-  return "new";
+  return "age unknown";
 }
 
 function normalizeSniperMode(mode) {

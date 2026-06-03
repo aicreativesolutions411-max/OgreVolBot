@@ -104,6 +104,22 @@ function setStoredLaunchCoinDraft(draft) {
   }
 }
 
+function getStoredNavTekOpen() {
+  try {
+    return window.localStorage?.getItem("slimewireNavTekOpen") === "true";
+  } catch {
+    return false;
+  }
+}
+
+function setStoredNavTekOpen(open) {
+  try {
+    window.localStorage?.setItem("slimewireNavTekOpen", open ? "true" : "false");
+  } catch {
+    // Navigation preference is convenience-only.
+  }
+}
+
 const state = {
   token: getStoredToken(),
   user: null,
@@ -185,7 +201,7 @@ const state = {
   selectedBundlePresetId: "",
   quickBuyAmountOverride: "",
   terminalTradeCollapsed: true,
-  navTekOpen: false,
+  navTekOpen: getStoredNavTekOpen(),
   walletConnectMenuOpen: false,
   walletConnectReturnPath: "/terminal",
   walletConnectStatus: "",
@@ -6483,13 +6499,14 @@ function activeBundleQuickBuyAmount(preset = activeBundlePreset()) {
 }
 
 function rowAgeSeconds(row = {}) {
-  const value = Number(row.pairAgeSeconds);
-  if (Number.isFinite(value) && value >= 0) return value;
   const created = Number(row.pairCreatedAt || row.createdAt || 0);
   if (created > 0) {
     const timestamp = created < 10_000_000_000 ? created * 1000 : created;
     return Math.max(0, Math.round((Date.now() - timestamp) / 1000));
   }
+  const trustedSourceAge = ["source-age", "trusted-source-age"].includes(String(row.pairAgeSource || "").toLowerCase());
+  const value = Number(row.pairAgeSeconds);
+  if (trustedSourceAge && Number.isFinite(value) && value >= 0) return value;
   return Number.POSITIVE_INFINITY;
 }
 
@@ -7435,7 +7452,7 @@ function tokenSignalRowHtml(row, index, options = {}) {
           </div>
         </div>
       </div>
-      <div class="signal-cell"><span>${escapeHtml(row.pairAgeLabel || formatAgeFromRow(row) || "new")}</span><small>${escapeHtml(row.scalpSetup || row.momentum || `#${index + 1}`)}</small></div>
+      <div class="signal-cell"><span>${escapeHtml(row.pairAgeLabel || formatAgeFromRow(row) || "age unknown")}</span><small>${escapeHtml(row.scalpSetup || row.momentum || `#${index + 1}`)}</small></div>
       <div class="signal-cell"><span>${escapeHtml(firstStatLabel(row.liquidityLabel, compactUsd(row.liquidityUsd)))}</span><small>${formatChangeHtml(row.h1)}</small></div>
       <div class="signal-cell"><span>${escapeHtml(firstStatLabel(row.marketCapLabel, compactUsd(row.marketCap)))}</span><small>${escapeHtml(row.category || row.signalType || "signal")}</small></div>
       <div class="signal-cell"><span>${escapeHtml(row.txnsLabel || row.winRateLabel || "n/a")}</span><small>${escapeHtml(row.bestPickScore ? `Score ${row.bestPickScore}/100` : row.valueLabel || row.smartMoney || "")}</small></div>
@@ -7458,13 +7475,14 @@ function isTokenWatched(tokenMint) {
 }
 
 function formatAgeFromRow(row) {
-  const seconds = Number(row.pairAgeSeconds);
+  const seconds = rowAgeSeconds(row);
   if (Number.isFinite(seconds)) {
     if (seconds < 60) return `${Math.max(1, Math.floor(seconds))}s`;
     if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
     return `${Math.floor(seconds / 3600)}h`;
   }
-  const minutes = Number(row.pairAgeMinutes);
+  const trustedSourceAge = ["source-age", "trusted-source-age"].includes(String(row.pairAgeSource || "").toLowerCase());
+  const minutes = trustedSourceAge ? Number(row.pairAgeMinutes) : Number.NaN;
   if (Number.isFinite(minutes)) return `${Math.max(0, Math.round(minutes))}m`;
   return "";
 }
@@ -7499,7 +7517,7 @@ function tokenMascotSrc(value = "") {
 }
 
 function livePairShareText(row) {
-  return `Live pair ${row.symbol || shortAddress(row.tokenMint)} spotted on SlimeWire: MC ${row.marketCapLabel || "n/a"}, liq ${row.liquidityLabel || "n/a"}, age ${row.pairAgeLabel || "new"}.`;
+  return `Live pair ${row.symbol || shortAddress(row.tokenMint)} spotted on SlimeWire: MC ${row.marketCapLabel || "n/a"}, liq ${row.liquidityLabel || "n/a"}, age ${row.pairAgeLabel || formatAgeFromRow(row) || "age unknown"}.`;
 }
 
 function sniperHtml() {
@@ -8069,6 +8087,7 @@ document.addEventListener("click", async (event) => {
     event.preventDefault();
     const group = tekSummary.closest(".nav-tool-group");
     state.navTekOpen = !Boolean(group?.open);
+    setStoredNavTekOpen(state.navTekOpen);
     if (group) group.open = state.navTekOpen;
     return;
   }

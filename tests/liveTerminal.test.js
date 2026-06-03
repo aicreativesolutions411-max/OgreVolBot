@@ -45,6 +45,22 @@ test("age badge reports unknown when no pair timestamp is available", () => {
   assert.equal(formatLivePairAge({}, NOW), "age unknown");
 });
 
+test("untrusted source age does not fake a fresh listing", () => {
+  const sourceClaimedFresh = { pairAgeSeconds: 0, pairAgeMinutes: 0 };
+
+  assert.equal(pairAgeMinutes(sourceClaimedFresh, NOW), null);
+  assert.equal(formatLivePairAge(sourceClaimedFresh, NOW), "age unknown");
+  assert.equal(isLivePairInBucket(sourceClaimedFresh, "live", NOW), false);
+});
+
+test("explicit trusted source age can be used as fallback", () => {
+  const trustedFresh = { pairAgeSeconds: 30, pairAgeSource: "source-age" };
+
+  assert.equal(pairAgeMinutes(trustedFresh, NOW), 0.5);
+  assert.equal(formatLivePairAge(trustedFresh, NOW), "30s");
+  assert.equal(isLivePairInBucket(trustedFresh, "live", NOW), true);
+});
+
 test("best picks rank stronger candidates above weak or risky candidates", () => {
   const strong = {
     pairCreatedAt: minutesAgo(12),
