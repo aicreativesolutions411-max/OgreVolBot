@@ -3221,7 +3221,7 @@
   }
 }
 
-/* Final nav icon/label override from uploaded SlimeWire icon sheets. */
+/* Final nav icon/label override with clean SlimeWire SVG nav glyphs. */
 [data-app][data-route="terminal"] .dashboard {
   grid-template-columns: 112px minmax(0, 1fr) !important;
 }
@@ -3275,26 +3275,26 @@
   white-space: nowrap !important;
 }
 
-[data-app][data-route="terminal"] .tabs button[data-tab="terminal"]::before { background-image: url("./assets/slimewire/png/nav-icons/trade-terminal.png") !important; }
-[data-app][data-route="terminal"] .tabs button[data-tab="profile"]::before { background-image: url("./assets/slimewire/png/nav-icons/target.png") !important; }
-[data-app][data-route="terminal"] .tabs button[data-tab="smartChart"]::before { background-image: url("./assets/slimewire/png/nav-icons/chart.png") !important; }
-[data-app][data-route="terminal"] .tabs button[data-tab="trade"]::before { background-image: url("./assets/slimewire/png/nav-icons/candles.png") !important; }
-[data-app][data-route="terminal"] .tabs button[data-tab="live"]::before { background-image: url("./assets/slimewire/png/nav-icons/slime-drop.png") !important; }
-[data-app][data-route="terminal"] .tabs button[data-tab="liveTrades"]::before { background-image: url("./assets/slimewire/png/nav-icons/signal.png") !important; }
-[data-app][data-route="terminal"] .tabs button[data-tab="slimeScope"]::before { background-image: url("./assets/slimewire/png/nav-icons/radar.png") !important; }
-[data-app][data-route="terminal"] .tabs button[data-tab="watchlist"]::before { background-image: url("./assets/slimewire/png/nav-icons/star.png") !important; }
-[data-app][data-route="terminal"] .tabs button[data-tab="kol"]::before { background-image: url("./assets/slimewire/png/nav-icons/target.png") !important; }
-[data-app][data-route="terminal"] .tabs .nav-tool-group summary::before { background-image: url("./assets/slimewire/png/nav-icons/grid.png") !important; }
-[data-app][data-route="terminal"] .tabs button[data-tab="ogreAi"]::before { background-image: url("./assets/slimewire/png/nav-icons/ogre-ai.png") !important; }
-[data-app][data-route="terminal"] .tabs button[data-tab="launchCoin"]::before { background-image: url("./assets/slimewire/png/nav-icons/slime-drop.png") !important; }
-[data-app][data-route="terminal"] .tabs button[data-tab="bundle"]::before { background-image: url("./assets/slimewire/png/nav-icons/bundle-volume.png") !important; }
-[data-app][data-route="terminal"] .tabs button[data-tab="volume"]::before { background-image: url("./assets/slimewire/png/nav-icons/clock.png") !important; }
-[data-app][data-route="terminal"] .tabs button[data-tab="launch"]::before { background-image: url("./assets/slimewire/png/nav-icons/radar.png") !important; }
-[data-app][data-route="terminal"] .tabs button[data-tab="sniper"]::before { background-image: url("./assets/slimewire/png/nav-icons/target.png") !important; }
-[data-app][data-route="terminal"] .tabs button[data-tab="ogreTek"]::before { background-image: url("./assets/slimewire/png/nav-icons/shield.png") !important; }
-[data-app][data-route="terminal"] .tabs button[data-tab="wallets"]::before { background-image: url("./assets/slimewire/png/nav-icons/wallets-pnl.png") !important; }
-[data-app][data-route="terminal"] .tabs button[data-tab="positions"]::before { background-image: url("./assets/slimewire/png/nav-icons/document.png") !important; }
-[data-app][data-route="terminal"] .tabs button[data-tab="pnl"]::before { background-image: url("./assets/slimewire/png/nav-icons/doc-check.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="terminal"]::before { background-image: url("./assets/slimewire/svg/nav-icons/terminal.svg") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="profile"]::before { background-image: url("./assets/slimewire/svg/nav-icons/profile.svg") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="smartChart"]::before { background-image: url("./assets/slimewire/svg/nav-icons/chart.svg") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="trade"]::before { background-image: url("./assets/slimewire/svg/nav-icons/trade.svg") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="live"]::before { background-image: url("./assets/slimewire/svg/nav-icons/pairs.svg") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="liveTrades"]::before { background-image: url("./assets/slimewire/svg/nav-icons/trades.svg") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="slimeScope"]::before { background-image: url("./assets/slimewire/svg/nav-icons/scope.svg") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="watchlist"]::before { background-image: url("./assets/slimewire/svg/nav-icons/watch.svg") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="kol"]::before { background-image: url("./assets/slimewire/svg/nav-icons/kol.svg") !important; }
+[data-app][data-route="terminal"] .tabs .nav-tool-group summary::before { background-image: url("./assets/slimewire/svg/nav-icons/tek.svg") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="ogreAi"]::before { background-image: url("./assets/slimewire/svg/nav-icons/ai.svg") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="launchCoin"]::before { background-image: url("./assets/slimewire/svg/nav-icons/pump.svg") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="bundle"]::before { background-image: url("./assets/slimewire/svg/nav-icons/bundle.svg") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="volume"]::before { background-image: url("./assets/slimewire/svg/nav-icons/volume.svg") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="launch"]::before { background-image: url("./assets/slimewire/svg/nav-icons/launch.svg") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="sniper"]::before { background-image: url("./assets/slimewire/svg/nav-icons/sniper.svg") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="ogreTek"]::before { background-image: url("./assets/slimewire/svg/nav-icons/perps.svg") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="wallets"]::before { background-image: url("./assets/slimewire/svg/nav-icons/wallets.svg") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="positions"]::before { background-image: url("./assets/slimewire/svg/nav-icons/positions.svg") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="pnl"]::before { background-image: url("./assets/slimewire/svg/nav-icons/pnl.svg") !important; }
 
 @media (max-width: 1180px) {
   [data-app][data-route="terminal"] .dashboard {
@@ -3350,29 +3350,32 @@
 
 @media (max-width: 760px) {
   [data-app][data-route="terminal"] .tabs {
-    display: grid !important;
-    grid-auto-flow: column !important;
-    grid-auto-columns: minmax(58px, 64px) !important;
+    display: flex !important;
+    flex-wrap: nowrap !important;
     align-items: stretch !important;
     gap: 6px !important;
     padding: 7px !important;
     overflow-x: auto !important;
-    overflow-y: hidden !important;
+    overflow-y: visible !important;
     scroll-snap-type: x proximity !important;
+    position: relative !important;
+    z-index: 40 !important;
   }
 
   [data-app][data-route="terminal"] .tabs .nav-tool-group {
-    display: contents !important;
-  }
-
-  [data-app][data-route="terminal"] .tabs .nav-tool-group[open] {
-    display: contents !important;
+    display: block !important;
+    flex: 0 0 64px !important;
+    width: 64px !important;
+    min-width: 64px !important;
+    position: relative !important;
+    overflow: visible !important;
   }
 
   [data-app][data-route="terminal"] .tabs button,
   [data-app][data-route="terminal"] .tabs .nav-tool-group summary,
   [data-app][data-route="terminal"] .tabs .nav-tool-group button {
-    width: 100% !important;
+    width: 64px !important;
+    flex: 0 0 64px !important;
     min-width: 0 !important;
     min-height: 46px !important;
     height: 46px !important;
@@ -3380,6 +3383,36 @@
     gap: 3px !important;
     scroll-snap-align: start !important;
   }
+
+  [data-app][data-route="terminal"] .tabs .nav-tool-group:not([open]) button {
+    display: none !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs .nav-tool-group[open] {
+    z-index: 100 !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs .nav-tool-group[open] summary {
+    box-shadow: 0 0 0 1px rgba(173, 255, 47, 0.55), 0 0 18px rgba(114, 255, 35, 0.22) !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs .nav-tool-group[open] button {
+    position: absolute !important;
+    left: 0 !important;
+    top: calc(50px + (var(--tek-i, 0) * 50px)) !important;
+    display: flex !important;
+    background: rgba(7, 18, 7, 0.98) !important;
+    border-color: rgba(132, 255, 42, 0.42) !important;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.42), 0 0 12px rgba(114, 255, 35, 0.12) !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs .nav-tool-group[open] button:nth-of-type(1) { --tek-i: 0; }
+  [data-app][data-route="terminal"] .tabs .nav-tool-group[open] button:nth-of-type(2) { --tek-i: 1; }
+  [data-app][data-route="terminal"] .tabs .nav-tool-group[open] button:nth-of-type(3) { --tek-i: 2; }
+  [data-app][data-route="terminal"] .tabs .nav-tool-group[open] button:nth-of-type(4) { --tek-i: 3; }
+  [data-app][data-route="terminal"] .tabs .nav-tool-group[open] button:nth-of-type(5) { --tek-i: 4; }
+  [data-app][data-route="terminal"] .tabs .nav-tool-group[open] button:nth-of-type(6) { --tek-i: 5; }
+  [data-app][data-route="terminal"] .tabs .nav-tool-group[open] button:nth-of-type(7) { --tek-i: 6; }
 
   [data-app][data-route="terminal"] .tabs button::before,
   [data-app][data-route="terminal"] .tabs .nav-tool-group summary::before {
