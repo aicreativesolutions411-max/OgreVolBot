@@ -20,6 +20,12 @@ import {
   sortLivePairs
 } from "./lib/liveTerminal.js";
 import {
+  buildOgreAiCandidatePool,
+  ogreAiSignalKey,
+  compareOgreAiCandidates,
+  isOgreAiBlockedRisk
+} from "./lib/ogreAi.js";
+import {
   calculateMoveSnapshot,
   priceExitDecision,
   stopLossTriggerPercent
@@ -116,10 +122,9 @@ const BRAND_FOOTER = [
 
 const PUBLIC_MENU = [
   [{ text: "🐎 How To Use", callback_data: "quick_start" }],
-  [{ text: "Web App", callback_data: "web_portal" }],
+  [{ text: "Web App", callback_data: "web_portal" }, { text: "Ogre A.I.", callback_data: "ogre_ai_menu" }],
+  [{ text: "💱 Trade", callback_data: "trade_menu" }, { text: "🎯 OgreSniper", callback_data: "sniper_menu" }],
   [{ text: "KOL Tracker", callback_data: "kol_tracker_menu" }],
-  [{ text: "💱 Trade", callback_data: "trade_menu" }],
-  [{ text: "🎯 OgreSniper", callback_data: "sniper_menu" }],
   [{ text: "💳 Wallet", callback_data: "wallet_menu" }, { text: "🧲 Bundle", callback_data: "bundle_menu" }],
   [{ text: "📊📈 Volume", callback_data: "timed_trade_plans" }, { text: "🔍 Check Balances", callback_data: "check_balances" }],
   [{ text: "💾 Backup / Restore", callback_data: "backup_menu" }, { text: "🏦 Withdrawal", callback_data: "withdrawal_menu" }]
@@ -169,6 +174,7 @@ const PRIVATE_CHAT_ACTIONS = new Set([
   "pnl_card_by_ca",
   "positions_overview",
   "copy_trade_info",
+  "ogre_ai_menu",
   "quick_start",
   "main_menu",
   "backup_menu",
@@ -1967,6 +1973,9 @@ async function handleCallback(query, userId) {
       break;
     case "web_portal":
       await sendWebLoginCode(chatId, userId, messageId);
+      break;
+    case "ogre_ai_menu":
+      await showOgreAiMenu(chatId, messageId);
       break;
     case "main_menu":
       await showMenu(chatId, userId, messageId);
@@ -7479,6 +7488,29 @@ async function showKolTrackerMenu(chatId, messageId = null) {
   });
 }
 
+async function showOgreAiMenu(chatId, messageId = null) {
+  await sendOrEditMessage(chatId, messageId, withBrandFooter([
+    "Ogre A.I.",
+    "",
+    "Ogre A.I. is managed from the SlimeWire web terminal. It scans live best-pick feeds, buys with selected managed wallets, and arms TP/SL/timer exits from one panel.",
+    "",
+    "Use it when you want an automation order like 0.10 SOL, 0.50 SOL, or custom sizing across one or more managed wallets.",
+    "",
+    "Important:",
+    "- Use small sizing first.",
+    "- Server-side exits require managed/imported SlimeWire wallets.",
+    "- Stop-loss and take-profit are trigger rules, not guaranteed exit prices.",
+    "- Browser-connected wallets still need wallet approval unless a separate delegation provider is added."
+  ].join("\n")), {
+    inline_keyboard: [
+      [{ text: "Open Web App", callback_data: "web_portal" }],
+      [{ text: "OgreSniper", callback_data: "sniper_menu" }, { text: "Volume Plans", callback_data: "timed_trade_plans" }],
+      [{ text: "Positions", callback_data: "positions_overview" }, { text: "Wallets", callback_data: "wallet_menu" }],
+      [{ text: "Main Menu", callback_data: "main_menu" }]
+    ]
+  });
+}
+
 async function showKolScan(chatId, userId, mode = "hot", messageId = null, wallet = "") {
   const scan = await buildKolScan(userId, mode, wallet);
   if (!scan.configured) {
@@ -10843,6 +10875,7 @@ async function showHowToPage(chatId, topic, messageId = null) {
 
 function howToMenuKeyboard() {
   return [
+    [{ text: "Ogre A.I.", callback_data: "howto_ogre_ai" }],
     [{ text: "KOL Tracker", callback_data: "howto_kol" }],
     [{ text: "💱 Trade", callback_data: "howto_trade" }],
     [{ text: "🎯 OgreSniper", callback_data: "howto_sniper" }],
@@ -10868,6 +10901,35 @@ function howToPageKeyboard(openAction) {
 
 function howToPage(topic) {
   const pages = {
+    ogre_ai: {
+      openAction: "ogre_ai_menu",
+      text: [
+        "How To Use: Ogre A.I.",
+        "",
+        "Ogre A.I. lives in the SlimeWire web terminal. It is for managed-wallet automation, not guaranteed profit.",
+        "",
+        "What it does:",
+        "- Scans live best-pick feeds.",
+        "- Filters obvious risky/mayhem/below-exit-floor rows.",
+        "- Buys with selected managed wallets.",
+        "- Arms take-profit, stop-loss, and timer exits from the same managed-plan engine used by the web trade tools.",
+        "",
+        "Settings:",
+        "- Mode: Quick Scalp, Fresh Launches, or Safer Flow.",
+        "- SOL per wallet: the size for each selected wallet.",
+        "- Orders to stack: how many different picks to arm, up to 5.",
+        "- TP / SL: preset or custom profit and loss triggers.",
+        "- Timer: optional fallback exit.",
+        "- Slippage: default 4%, with custom available.",
+        "- Wallets / Group: choose managed wallets that SlimeWire can sign for.",
+        "",
+        "Important:",
+        "- Use small size first.",
+        "- Browser-connected Phantom/Solflare wallets cannot silently auto-sell later from normal wallet connect approval.",
+        "- Server-side TP/SL works for managed/imported SlimeWire wallets after server exits are enabled.",
+        "- Stop-loss triggers can still fill worse than the trigger on fast or illiquid tokens."
+      ].join("\n")
+    },
     trade: {
       openAction: "trade_menu",
       text: [
@@ -11260,7 +11322,7 @@ async function walletPrompt(userId, prefix) {
 async function showMenu(chatId, userId, messageId = null) {
   const state = await readState();
   const menu = isAdmin(userId) ? [...PUBLIC_MENU, ...ADMIN_MENU] : PUBLIC_MENU;
-  await sendOrEditMessage(chatId, messageId, withBrandFooter(`${state.paused ? "Status: emergency stop active.\n\n" : ""}Choose a wallet operation:`), {
+  await sendOrEditMessage(chatId, messageId, withBrandFooter(`${state.paused ? "Status: emergency stop active.\n\n" : ""}Choose a SlimeWire tool:`), {
     inline_keyboard: menu
   });
 }
@@ -13925,52 +13987,6 @@ function ogreAiModeDefaults(mode) {
   };
 }
 
-function ogreAiSignalKey(row) {
-  return String(row?.tokenMint || row?.mint || row?.address || "").trim();
-}
-
-function ogreAiRiskText(row) {
-  return [
-    ...(Array.isArray(row?.riskFlags) ? row.riskFlags : []),
-    ...(Array.isArray(row?.bestPickWarnings) ? row.bestPickWarnings : []),
-    row?.rugRisk,
-    row?.exitRisk,
-    row?.safetyNote
-  ].filter(Boolean).join(" ").toLowerCase();
-}
-
-function isOgreAiCandidate(row, defaults, mode) {
-  const tokenMint = ogreAiSignalKey(row);
-  if (!tokenMint) return false;
-  if (isPumpMayhemToken(row) || isKnownBelowExitFloor(row)) return false;
-  const riskText = ogreAiRiskText(row);
-  if (/\b(hard dump|sell pressure|honeypot|blocked|no route|rug|token-2022)\b/i.test(riskText)) return false;
-  const score = Number(firstMeaningfulNumber(row.bestPickScore, row.score) || 0);
-  const marketCap = Number(firstMeaningfulNumber(row.marketCap, row.fdv) || 0);
-  const liquidityUsd = Number(row.liquidityUsd || 0);
-  const volume5m = Number(row.volume5m || 0);
-  const volumeH1 = Number(row.volumeH1 || 0);
-  const ageMinutes = livePairAgeMinutesValue(row);
-  const hasActivity = volume5m > 0 || volumeH1 > 0 || liquidityUsd > 0 || isPumpStyleToken(row);
-  if (!hasActivity) return false;
-  if (score < defaults.minScore) return false;
-  if (marketCap > defaults.maxMarketCap) return false;
-  if (mode !== "fresh" && marketCap > 0 && marketCap < CONFIG.minExitMarketCapUsd) return false;
-  if (liquidityUsd > 0 && liquidityUsd < defaults.minLiquidityUsd) return false;
-  if (mode === "fresh") {
-    return ageMinutes === null || ageMinutes <= 90 || isPumpStyleToken(row);
-  }
-  return ageMinutes === null || ageMinutes <= 1440;
-}
-
-function compareOgreAiCandidates(a, b) {
-  return (Number(b.bestPickScore || b.score || 0) - Number(a.bestPickScore || a.score || 0))
-    || (Number(b.volume5m || 0) - Number(a.volume5m || 0))
-    || (Number(b.volumeH1 || 0) - Number(a.volumeH1 || 0))
-    || (Number(b.liquidityUsd || 0) - Number(a.liquidityUsd || 0))
-    || (Number(b.pairCreatedAt || 0) - Number(a.pairCreatedAt || 0));
-}
-
 async function selectOgreAiPicks(userId, body = {}, limit = 1) {
   const mode = normalizeOgreAiMode(body.mode);
   const defaults = ogreAiModeDefaults(mode);
@@ -13991,21 +14007,20 @@ async function selectOgreAiPicks(userId, body = {}, limit = 1) {
     }
   }
 
-  const seen = new Set();
-  const filtered = uniqueSniperScoreRows(rows)
-    .filter((row) => {
-      const tokenMint = ogreAiSignalKey(row);
-      if (!tokenMint || seen.has(tokenMint)) return false;
-      seen.add(tokenMint);
-      return isOgreAiCandidate(row, defaults, mode);
-    })
-    .sort(compareOgreAiCandidates);
+  const baseRows = uniqueSniperScoreRows(rows)
+    .filter((row) => !isPumpMayhemToken(row))
+    .filter((row) => !isKnownBelowExitFloor(row))
+    .filter((row) => !isOgreAiBlockedRisk(row));
+  const pool = buildOgreAiCandidatePool(baseRows, defaults, mode);
+  const filtered = pool.candidates.sort(compareOgreAiCandidates);
 
   const scanState = nextSniperScanState(`web:${userId}`, `ogre-ai:${mode}`);
   const rotated = rotateRowsForRefresh(filtered, Math.max(1, limit), scanState.refreshCount, { stickyCount: 0 });
   return {
     mode,
     defaults,
+    selectedTier: pool.selectedTier,
+    tierCounts: pool.tierCounts,
     refreshCount: scanState.refreshCount,
     scanned: rows.length,
     qualified: filtered.length,
@@ -14043,7 +14058,8 @@ async function webStartOgreAiRun(userId, body = {}) {
   const mode = normalizeOgreAiMode(body.mode);
   const selection = await selectOgreAiPicks(userId, body, runCount);
   if (!selection.rows.length) {
-    throw new Error(`Ogre A.I. did not find a strong enough ${mode} setup right now. Scanned ${selection.scanned}, qualified ${selection.qualified}. Try lowering min score or refresh again.`);
+    const counts = selection.tierCounts || {};
+    throw new Error(`Ogre A.I. did not find a route-worthy ${mode} setup right now. Scanned ${selection.scanned}; strict ${counts.strict || 0}, balanced ${counts.balanced || 0}, available ${counts.available || 0}. Try refresh again or review Live Pairs manually.`);
   }
 
   const plans = [];
@@ -14100,10 +14116,12 @@ async function webStartOgreAiRun(userId, body = {}) {
     walletCount: wallets.length,
     armedCount: plans.length,
     failedCount: errors.length,
+    selectedTier: selection.selectedTier,
+    tierCounts: selection.tierCounts,
     executionMode: "managed_server",
     plans,
     errors,
-    message: `Ogre A.I. armed ${plans.length} managed plan(s) from ${selection.qualified} qualified ${mode} setup(s). TP/SL watchers are running for managed wallets.`
+    message: `Ogre A.I. armed ${plans.length} managed plan(s) from ${selection.qualified} ${selection.selectedTier} ${mode} setup(s). TP/SL watchers are running for managed wallets.`
   };
 }
 

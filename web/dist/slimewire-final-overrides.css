@@ -3134,15 +3134,19 @@
 
   [data-app][data-route="terminal"] .tabs {
     gap: 3px !important;
+    display: grid !important;
+    grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+    align-items: start !important;
   }
 
   [data-app][data-route="terminal"] .tabs button,
   [data-app][data-route="terminal"] .tabs .nav-tool-group summary,
   [data-app][data-route="terminal"] .tabs .nav-tool-group button {
-    min-width: 43px !important;
-    min-height: 38px !important;
-    height: 38px !important;
+    min-width: 0 !important;
+    min-height: 40px !important;
+    height: 40px !important;
     gap: 1px !important;
+    width: 100% !important;
   }
 
   [data-app][data-route="terminal"] .tabs button::before,
@@ -3155,6 +3159,166 @@
   [data-app][data-route="terminal"] .tabs button::after,
   [data-app][data-route="terminal"] .tabs .nav-tool-group summary::after,
   [data-app][data-route="terminal"] .tabs .nav-tool-group button::after {
-    font-size: 7px !important;
+    content: attr(data-label) !important;
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    font-size: 7.4px !important;
+    line-height: 1 !important;
+    max-width: 100% !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs .nav-tool-group {
+    grid-column: span 2 !important;
+    position: relative !important;
+    min-width: 0 !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs .nav-tool-group summary {
+    justify-content: center !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs .nav-tool-group summary::after {
+    content: "Tek" !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs .nav-tool-group[open] {
+    grid-column: 1 / -1 !important;
+    padding: 4px !important;
+    border: 1px solid rgba(117, 255, 45, 0.18) !important;
+    border-radius: 12px !important;
+    background: rgba(2, 8, 3, 0.78) !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs .nav-tool-group[open] summary {
+    width: 100% !important;
+    margin-bottom: 4px !important;
+    min-height: 34px !important;
+    height: 34px !important;
+    flex-direction: row !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs .nav-tool-group[open] button {
+    display: inline-flex !important;
+    width: calc(33.333% - 4px) !important;
+    min-height: 36px !important;
+    height: 36px !important;
+    margin: 2px !important;
+    vertical-align: top !important;
+  }
+}
+
+@media (max-width: 430px) {
+  [data-app][data-route="terminal"] .tabs {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs .nav-tool-group[open] button {
+    width: calc(50% - 4px) !important;
+  }
+}
+
+/* Final nav icon/label override from uploaded SlimeWire icon sheets. */
+[data-app][data-route="terminal"] .dashboard {
+  grid-template-columns: 112px minmax(0, 1fr) !important;
+}
+
+[data-app][data-route="terminal"] .tabs {
+  width: 112px !important;
+}
+
+[data-app][data-route="terminal"] .tabs button,
+[data-app][data-route="terminal"] .tabs .nav-tool-group summary,
+[data-app][data-route="terminal"] .tabs .nav-tool-group button {
+  min-height: 50px !important;
+  height: 50px !important;
+  gap: 3px !important;
+  padding: 5px 4px !important;
+}
+
+[data-app][data-route="terminal"] .tabs button::before,
+[data-app][data-route="terminal"] .tabs .nav-tool-group summary::before {
+  width: 24px !important;
+  height: 24px !important;
+  flex: 0 0 24px !important;
+  background-size: contain !important;
+  background-position: center !important;
+  background-repeat: no-repeat !important;
+  filter: drop-shadow(0 0 7px rgba(135, 255, 34, 0.42)) !important;
+}
+
+[data-app][data-route="terminal"] .tabs button::after,
+[data-app][data-route="terminal"] .tabs .nav-tool-group summary::after,
+[data-app][data-route="terminal"] .tabs .nav-tool-group button::after {
+  content: attr(data-label) !important;
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  color: rgba(235, 255, 226, 0.9) !important;
+  font-size: 9.8px !important;
+  font-weight: 900 !important;
+  line-height: 1.08 !important;
+  letter-spacing: 0 !important;
+  text-transform: none !important;
+  text-align: center !important;
+  max-width: 100% !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+[data-app][data-route="terminal"] .tabs button[data-tab="terminal"]::before { background-image: url("./assets/slimewire/png/nav-icons/trade-terminal.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="profile"]::before { background-image: url("./assets/slimewire/png/nav-icons/target.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="smartChart"]::before { background-image: url("./assets/slimewire/png/nav-icons/chart.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="trade"]::before { background-image: url("./assets/slimewire/png/nav-icons/candles.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="live"]::before { background-image: url("./assets/slimewire/png/nav-icons/live-pairs.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="liveTrades"]::before { background-image: url("./assets/slimewire/png/nav-icons/live-trades.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="slimeScope"]::before { background-image: url("./assets/slimewire/png/nav-icons/radar.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="watchlist"]::before { background-image: url("./assets/slimewire/png/nav-icons/star.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="kol"]::before { background-image: url("./assets/slimewire/png/nav-icons/snipe-kol.png") !important; }
+[data-app][data-route="terminal"] .tabs .nav-tool-group summary::before { background-image: url("./assets/slimewire/png/nav-icons/grid.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="ogreAi"]::before { background-image: url("./assets/slimewire/png/nav-icons/ogre-ai.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="launchCoin"]::before { background-image: url("./assets/slimewire/png/nav-icons/slime-drop.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="bundle"]::before { background-image: url("./assets/slimewire/png/nav-icons/bundle-volume.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="volume"]::before { background-image: url("./assets/slimewire/png/nav-icons/clock.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="launch"]::before { background-image: url("./assets/slimewire/png/nav-icons/radar.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="sniper"]::before { background-image: url("./assets/slimewire/png/nav-icons/target.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="ogreTek"]::before { background-image: url("./assets/slimewire/png/nav-icons/shield.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="wallets"]::before { background-image: url("./assets/slimewire/png/nav-icons/wallets-pnl.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="positions"]::before { background-image: url("./assets/slimewire/png/nav-icons/document.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="pnl"]::before { background-image: url("./assets/slimewire/png/nav-icons/doc-check.png") !important; }
+
+@media (max-width: 1180px) {
+  [data-app][data-route="terminal"] .dashboard {
+    grid-template-columns: 1fr !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs {
+    width: 100% !important;
+  }
+}
+
+@media (max-width: 760px) {
+  [data-app][data-route="terminal"] .tabs button,
+  [data-app][data-route="terminal"] .tabs .nav-tool-group summary,
+  [data-app][data-route="terminal"] .tabs .nav-tool-group button {
+    min-height: 42px !important;
+    height: 42px !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs button::before,
+  [data-app][data-route="terminal"] .tabs .nav-tool-group summary::before {
+    width: 17px !important;
+    height: 17px !important;
+    flex-basis: 17px !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs button::after,
+  [data-app][data-route="terminal"] .tabs .nav-tool-group summary::after,
+  [data-app][data-route="terminal"] .tabs .nav-tool-group button::after {
+    font-size: 7.4px !important;
   }
 }

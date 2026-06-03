@@ -1172,6 +1172,9 @@ function renderTabs() {
   document.querySelectorAll(".tabs [data-tab]").forEach((button) => {
     button.dataset.active = button.dataset.tab === state.activeTab ? "true" : "false";
   });
+  document.querySelectorAll(".tabs .nav-tool-group").forEach((group) => {
+    group.open = Boolean(group.querySelector('[data-active="true"]'));
+  });
 
   if (state.activeTab === "terminal") panel.innerHTML = terminalHtml();
   if (state.activeTab === "dashboard") panel.innerHTML = dashboardHtml();
@@ -2250,10 +2253,12 @@ function ogreAiResultHtml() {
       <p>${escapeHtml(row.message || "")}</p>
       <dl>
         <div><dt>Mode</dt><dd>${escapeHtml(row.mode || "quick")}</dd></div>
+        <div><dt>Tier</dt><dd>${escapeHtml(row.selectedTier || "n/a")}</dd></div>
         <div><dt>Scanned</dt><dd>${escapeHtml(row.scanned || 0)}</dd></div>
         <div><dt>Qualified</dt><dd>${escapeHtml(row.qualified || 0)}</dd></div>
         <div><dt>Plans</dt><dd>${escapeHtml(row.armedCount || plans.length)}</dd></div>
       </dl>
+      ${row.tierCounts ? `<small>Strict ${escapeHtml(row.tierCounts.strict || 0)} | Balanced ${escapeHtml(row.tierCounts.balanced || 0)} | Available ${escapeHtml(row.tierCounts.available || 0)}</small>` : ""}
       <div class="ogre-ai-pick-list">
         ${plans.map((plan) => {
           const pick = plan.pick || {};
