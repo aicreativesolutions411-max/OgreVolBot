@@ -263,6 +263,8 @@ function loadConfig() {
   const livePairsRefreshSeconds = Number.parseInt(process.env.LIVE_PAIRS_REFRESH_SECONDS || "4", 10);
   const livePairsSharedCacheMs = Number.parseInt(process.env.LIVE_PAIRS_SHARED_CACHE_MS || "4000", 10);
   const livePairsImageEnrich = parseBoolean(process.env.LIVE_PAIRS_IMAGE_ENRICH || "true");
+  const pumpPortalSellFallbackEnabled = parseBoolean(process.env.PUMPPORTAL_SELL_FALLBACK_ENABLED || "true");
+  const pumpPortalTradeLocalUrl = (process.env.PUMPPORTAL_TRADE_LOCAL_URL || "https://pumpportal.fun/api/trade-local").trim();
   const minExitMarketCapUsd = Number.parseInt(process.env.MIN_EXIT_MARKET_CAP_USD || "2000", 10);
   const minExitLiquidityUsd = Number.parseInt(process.env.MIN_EXIT_LIQUIDITY_USD || "250", 10);
   const stopLossCheckIntervalMs = Number.parseInt(process.env.STOP_LOSS_CHECK_INTERVAL_MS || "2000", 10);
@@ -476,6 +478,8 @@ function loadConfig() {
     livePairsRefreshSeconds,
     livePairsSharedCacheMs,
     livePairsImageEnrich,
+    pumpPortalSellFallbackEnabled,
+    pumpPortalTradeLocalUrl,
     minExitMarketCapUsd,
     minExitLiquidityUsd,
     stopLossCheckIntervalMs,
@@ -933,6 +937,16 @@ async function handleWebApiRequest(request, response, requestUrl) {
     if (request.method === "GET" && pathname === "/api/web/trade/plans") {
       sendWebJson(request, response, 200, {
         ok: true,
+        plans: await webTradePlanRows(auth.userId)
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/trade/plans/run") {
+      const result = await processTradePlans();
+      sendWebJson(request, response, 200, {
+        ok: true,
+        runner: result,
         plans: await webTradePlanRows(auth.userId)
       });
       return;
@@ -4853,7 +4867,10 @@ async function sellTokenFromWallet(wallet, tokenMint, percent, slippageBps, opti
     throw new Error("sell amount rounded to zero");
   }
 
-  return sellTokenAmountFromWallet(wallet, tokenMint, amount, slippageBps, options);
+  return sellTokenAmountFromWallet(wallet, tokenMint, amount, slippageBps, {
+    ...options,
+    sellPercent: percent
+  });
 }
 
 async function sellTokenAmountFromWallet(wallet, tokenMint, amount, slippageBps, options = {}) {
@@ -4863,13 +4880,23 @@ async function sellTokenAmountFromWallet(wallet, tokenMint, amount, slippageBps,
     throw new Error("sell amount rounded to zero");
   }
 
-  const result = await executeJupiterSwap({
-    signer: keypair,
-    inputMint: tokenMint,
-    outputMint: SOL_MINT,
-    amount: sellAmount.toString(),
-    slippageBps
-  });
+  let result;
+  let exitProvider = "jupiter";
+  try {
+    result = await executeJupiterSwap({
+      signer: keypair,
+      inputMint: tokenMint,
+      outputMint: SOL_MINT,
+      amount: sellAmount.toString(),
+      slippageBps
+    });
+  } catch (jupiterError) {
+    if (!CONFIG.pumpPortalSellFallbackEnabled) {
+      throw jupiterError;
+    }
+    result = await sellTokenAmountFromWalletViaPumpPortal(wallet, tokenMint, sellAmount, slippageBps, options, jupiterError);
+    exitProvider = result.provider || "pumpportal";
+  }
   const outputLamports = BigInt(result.outputAmount || 0);
   const feeLamports = calculateFeeLamports(outputLamports);
   let feeStatus = "";
@@ -4887,8 +4914,70 @@ async function sellTokenAmountFromWallet(wallet, tokenMint, amount, slippageBps,
     outputLamports: outputLamports.toString(),
     feeLamports: feeLamports.toString(),
     attempts: result.attempts,
+    provider: exitProvider,
     feeStatus
   };
+}
+
+async function sellTokenAmountFromWalletViaPumpPortal(wallet, tokenMint, sellAmount, slippageBps, options = {}, jupiterError = null) {
+  const keypair = decryptWallet(wallet);
+  const timeoutMs = Number.isFinite(CONFIG.pumpLaunchTimeoutMs) && CONFIG.pumpLaunchTimeoutMs > 0
+    ? CONFIG.pumpLaunchTimeoutMs
+    : 30000;
+  const percent = Number.parseFloat(String(options.sellPercent || ""));
+  let sellPercent = Number.isFinite(percent) && percent > 0
+    ? Math.max(0.01, Math.min(100, percent))
+    : null;
+  if (sellPercent === null) {
+    const token = await getReliableTokenBalanceForMint(keypair.publicKey, new PublicKey(tokenMint), { throwOnError: true });
+    const currentRaw = BigInt(token?.rawAmount || 0);
+    if (currentRaw <= 0n) {
+      throw new Error("no token balance");
+    }
+    const bps = Number((sellAmount * 10_000n) / currentRaw) / 100;
+    sellPercent = Math.max(0.01, Math.min(100, bps));
+  }
+  const slippagePct = Math.max(0.01, Math.min(50, (Number.parseInt(slippageBps, 10) || CONFIG.defaultSlippageBps) / 100));
+  const beforeSol = await rpcWithRetry("read SOL before PumpPortal sell", () => connection.getBalance(keypair.publicKey, "confirmed")).catch(() => null);
+  const requestPayload = {
+    publicKey: keypair.publicKey.toBase58(),
+    action: "sell",
+    mint: tokenMint,
+    denominatedInSol: "false",
+    amount: sellPercent >= 99.999 ? "100%" : `${sellPercent}%`,
+    slippage: slippagePct,
+    priorityFee: CONFIG.pumpLaunchPriorityFeeSol,
+    pool: "auto"
+  };
+
+  try {
+    const tx = await requestPumpPortalLocalTransaction(requestPayload, timeoutMs, {
+      url: CONFIG.pumpPortalTradeLocalUrl
+    });
+    let signature;
+    if (tx?.signature) {
+      signature = tx.signature;
+    } else {
+      tx.sign([keypair]);
+      signature = await sendVersionedTransaction(tx, "send PumpPortal sell transaction");
+    }
+
+    invalidateWalletReadCache(wallet.publicKey);
+    const afterSol = await rpcWithRetry("read SOL after PumpPortal sell", () => connection.getBalance(keypair.publicKey, "confirmed")).catch(() => null);
+    const grossOutLamports = Number.isFinite(beforeSol) && Number.isFinite(afterSol)
+      ? Math.max(0, Number(afterSol) - Number(beforeSol))
+      : 0;
+    return {
+      signature,
+      outputAmount: String(Math.floor(grossOutLamports)),
+      tokenAmount: sellAmount.toString(),
+      attempts: 1,
+      provider: "pumpportal"
+    };
+  } catch (pumpError) {
+    const jupiterMessage = jupiterError ? friendlyError(jupiterError) : "not attempted";
+    throw new Error(`Jupiter sell failed: ${jupiterMessage}. PumpPortal sell fallback failed: ${friendlyError(pumpError)}`);
+  }
 }
 
 async function getReliableTokenBalanceForMint(owner, mint, options = {}) {
@@ -4988,7 +5077,10 @@ async function sellTradePlanWalletWithRetries(plan, planWallet, wallet, sellPerc
         throw new Error("sell amount rounded to zero");
       }
 
-      const sell = await sellTokenAmountFromWallet(wallet, plan.tokenMint, amount, slippageBps, { userId: options.userId });
+      const sell = await sellTokenAmountFromWallet(wallet, plan.tokenMint, amount, slippageBps, {
+        userId: options.userId,
+        sellPercent
+      });
       sell.sellSlippageBps = slippageBps;
       planWallet.exitSlippageAttempts = attemptLog;
       return sell;
@@ -8398,17 +8490,44 @@ function metadataFromDexPair(tokenMint, best = null) {
   return {
     symbol: token.symbol || "",
     name: token.name || "",
-    imageUrl: best?.info?.imageUrl || "",
+    imageUrl: firstString(
+      best?.info?.imageUrl,
+      best?.info?.image,
+      best?.info?.logo,
+      best?.imageUrl,
+      best?.image,
+      token.imageUrl,
+      token.image,
+      token.logoURI,
+      token.logo
+    ),
     websiteUrl: links.websiteUrl,
     twitterUrl: links.twitterUrl,
     telegramUrl: links.telegramUrl,
-    marketCap: firstNumber(best?.marketCap, best?.fdv),
+    marketCap: firstMeaningfulNumber(
+      best?.marketCap,
+      best?.marketCapUsd,
+      best?.market_cap_usd,
+      best?.fdv,
+      token.marketCap,
+      token.marketCapUsd,
+      token.fdv
+    ),
     fdv: firstNumber(best?.fdv),
     priceChange: best?.priceChange || null,
     liquidityUsd: firstNumber(best?.liquidity?.usd),
     volume: best?.volume || null,
     txns: best?.txns || null,
-    pairCreatedAt: best?.pairCreatedAt || null,
+    pairCreatedAt: normalizePairCreatedAt(firstString(
+      best?.pairCreatedAt,
+      best?.pairCreatedTimestamp,
+      best?.createdAt,
+      best?.created_at,
+      best?.poolCreatedAt,
+      best?.pool_created_at,
+      best?.listedAt,
+      best?.listed_at
+    )) || null,
     dexId,
     dexName: dexId,
     pairAddress,
@@ -9717,17 +9836,47 @@ function mergeSniperMetadata(dexValue, profile = {}, source = "profile") {
     ...dexValue,
     symbol: dexValue.symbol || profile.symbol || "",
     name: dexValue.name || profile.name || "",
-    imageUrl: dexValue.imageUrl || profile.icon || "",
+    imageUrl: firstString(
+      dexValue.imageUrl,
+      profile.imageUrl,
+      profile.image_url,
+      profile.icon,
+      profile.image,
+      profile.image_uri,
+      profile.logoURI,
+      profile.logo,
+      profile.metadata?.image
+    ),
     description: profile.description || "",
-    marketCap: dexValue.marketCap || profile.marketCap || profile.fdv || null,
-    fdv: dexValue.fdv || profile.fdv || null,
+    marketCap: firstMeaningfulNumber(
+      dexValue.marketCap,
+      profile.marketCap,
+      profile.usdMarketCap,
+      profile.usd_market_cap,
+      profile.market_cap_usd,
+      profile.market_cap,
+      profile.mcap,
+      profile.mc,
+      profile.fdv
+    ),
+    fdv: firstMeaningfulNumber(dexValue.fdv, profile.fdv, profile.fdvUsd, profile.fdv_usd),
     volume: dexValue.volume || (profileVolume > 0 ? { h1: profileVolume } : null),
     volume5m: dexValue.volume?.m5 || profile.volume5m || profile.volume_5m || null,
     volumeM15: dexValue.volume?.m15 || dexValue.volume?.m15m || profile.volumeM15 || profile.volume15m || profile.volume_15m || null,
     volumeM30: dexValue.volume?.m30 || dexValue.volume?.m30m || profile.volumeM30 || profile.volume30m || profile.volume_30m || null,
     volumeH1: dexValue.volume?.h1 || profile.volumeH1 || profile.volume_h1 || null,
     volumeH24: dexValue.volume?.h24 || dexValue.volume?.d1 || profile.volumeH24 || profile.volume24h || profile.volume_h24 || null,
-    pairCreatedAt: dexValue.pairCreatedAt || normalizePairCreatedAt(profile.pairCreatedAt || profile.created_timestamp || profile.createdAt),
+    pairCreatedAt: dexValue.pairCreatedAt || normalizePairCreatedAt(firstString(
+      profile.pairCreatedAt,
+      profile.pair_created_at,
+      profile.pairCreatedTimestamp,
+      profile.created_timestamp,
+      profile.createdAt,
+      profile.created_at,
+      profile.poolCreatedAt,
+      profile.listedAt,
+      profile.launchTimestamp
+    )),
     profileSource: source,
     websiteUrl: dexValue.websiteUrl || profile.websiteUrl || profile.website_url || profile.website || profile.url || profile.links?.website || "",
     twitterUrl: dexValue.twitterUrl || profile.twitterUrl || profile.twitter_url || profile.twitter || profile.xUrl || profile.links?.twitter || profile.links?.x || "",
@@ -14196,8 +14345,8 @@ function decodePumpPortalTransaction(value) {
   return null;
 }
 
-async function requestPumpPortalLocalTransaction(requestPayload, timeoutMs) {
-  const url = CONFIG.pumpLaunchApiUrl || "https://pumpportal.fun/api/trade-local";
+async function requestPumpPortalLocalTransaction(requestPayload, timeoutMs, options = {}) {
+  const url = options.url || CONFIG.pumpLaunchApiUrl || "https://pumpportal.fun/api/trade-local";
   const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -17013,10 +17162,7 @@ async function buildWebLivePairs(userId, bucket = "live", options = {}) {
   const baseRows = uniqueSniperScoreRows(candidates.map(livePairCandidateToRow).filter(Boolean))
     .sort(compareWebLivePairs)
     .slice(0, isLive ? 110 : 240);
-  let enrichedRows = baseRows;
-  if (safeBucket !== "live" || CONFIG.livePairsImageEnrich) {
-    enrichedRows = await enrichWebLivePairsForImages(baseRows).catch(() => baseRows);
-  }
+  const enrichedRows = await enrichWebLivePairsForImages(baseRows).catch(() => baseRows);
   const targetLimit = livePairBucketLimit(safeBucket);
   let liveRows = uniqueSniperScoreRows(enrichedRows)
     .filter((row) => isWebLivePairCandidate(row, safeBucket))
@@ -17121,8 +17267,12 @@ function livePairCandidateToRow(candidate) {
   const volumeNumber = typeof profile.volume === "object" ? null : firstNumber(profile.volume);
   const marketCap = firstMeaningfulNumber(
     profile.marketCap,
+    profile.marketCapUsd,
+    profile.market_cap_usd,
     profile.usd_market_cap,
     profile.usdMarketCap,
+    profile.usd_marketcap,
+    profile.fullyDilutedValuation,
     profile.market_cap,
     profile.mcap,
     profile.mc,
@@ -17133,6 +17283,8 @@ function livePairCandidateToRow(candidate) {
   const liquidityUsd = firstMeaningfulNumber(
     profile.liquidityUsd,
     profile.liquidityUSD,
+    profile.current_liquidity,
+    profile.currentLiquidity,
     profile.currentLiquidityUsd,
     profile.current_liquidity_usd,
     profile.poolLiquidityUsd,
@@ -17180,9 +17332,12 @@ function livePairCandidateToRow(candidate) {
     profile.icon,
     profile.image,
     profile.image_uri,
+    profile.metadata?.image,
+    profile.metadata?.imageUrl,
     profile.logoURI,
     profile.logo,
-    profile.metadata?.image
+    profile.tokenLogo,
+    profile.logoUrl
   );
   const websiteUrl = firstString(profile.websiteUrl, profile.website_url, profile.website, profile.url, profile.links?.website);
   const twitterUrl = firstString(profile.twitterUrl, profile.twitter_url, profile.twitter, profile.xUrl, profile.links?.twitter, profile.links?.x);
@@ -17350,7 +17505,15 @@ async function enrichWebLivePairsForImages(rows) {
     let bondingProgressPct = firstMeaningfulNumber(dexMeta.bondingProgressPct, row.bondingProgressPct, row.bondingProgress) || 0;
     let graduated = Boolean(row.graduated || row.isGraduated || dexMeta.graduated || dexMeta.isGraduated || isGraduatedSlimeScopePair({ ...row, ...dexMeta }));
 
-    if (webLivePairIsPump(row) && (!imageUrl || !marketCap || !liquidityUsd || !volumeH1 || !volumeM15 || !bondingProgressPct || !graduated)) {
+    const pumpLike = webLivePairIsPump({
+      ...row,
+      symbol,
+      name,
+      source: firstString(row.source, dexMeta.source),
+      dexId,
+      dexName
+    });
+    if (pumpLike && (!imageUrl || !marketCap || !liquidityUsd || !volumeH1 || !volumeM15 || !bondingProgressPct || !graduated)) {
       const pumpMeta = await getPumpFunTokenMetadata(row.tokenMint, { timeoutMs: 1_800 }).catch(() => ({}));
       imageUrl = firstString(pumpMeta.imageUrl, imageUrl);
       symbol = symbol && symbol !== shortMint(row.tokenMint) ? symbol : firstString(pumpMeta.symbol, symbol);
@@ -17369,7 +17532,7 @@ async function enrichWebLivePairsForImages(rows) {
     }
 
     const pairAgeSeconds = pairCreatedAt ? Math.max(0, Math.floor((Date.now() - Number(pairCreatedAt)) / 1000)) : row.pairAgeSeconds;
-    const isPump = webLivePairIsPump({ ...row, symbol, name });
+    const isPump = webLivePairIsPump({ ...row, symbol, name }) || pumpLike;
     const scopeProbe = {
       ...row,
       dexId,

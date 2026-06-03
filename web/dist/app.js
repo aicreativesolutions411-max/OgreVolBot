@@ -3944,6 +3944,35 @@ async function updateAutomationPermission(action = "enable") {
   }
 }
 
+async function runTradePlanCheck() {
+  if (!state.user || !state.token) {
+    setError("Log in or create a web account before checking server exits.");
+    return;
+  }
+  state.walletRefreshing = true;
+  render();
+  try {
+    const data = await api("/api/web/trade/plans/run", {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    state.tradePlans = data.plans || state.tradePlans || [];
+    const runner = data.runner || {};
+    const sold = Number(runner.soldWallets || 0);
+    const triggered = Number(runner.triggeredWallets || 0);
+    const failed = Number(runner.failedWallets || 0);
+    state.automationDelegationStatus = `TP/SL check complete: ${triggered} triggered, ${sold} sold, ${failed} failed.`;
+    await loadWalletCore({ force: true });
+  } catch (error) {
+    state.automationDelegationStatus = error.message;
+    state.walletRefreshError = error.message;
+    setError(error.message);
+  } finally {
+    state.walletRefreshing = false;
+    render();
+  }
+}
+
 async function restoreWalletBackup() {
   const textarea = $("[data-restore-text]");
   const status = $("[data-restore-status]");
@@ -6909,6 +6938,7 @@ function stopLossAuditHtml() {
           </div>
           <div class="card-actions compact">
             <button data-top-refresh-wallet>Refresh Status</button>
+            <button data-run-trade-plans>${state.walletRefreshing ? "Checking..." : "Run TP/SL Check"}</button>
             <button data-tab="positions">Positions</button>
             ${plan.tokenMint ? `<button data-copy="${escapeHtml(plan.tokenMint)}">Copy CA</button>` : ""}
             ${plan.dexUrl ? `<a class="button-like" href="${escapeHtml(plan.dexUrl)}" target="_blank" rel="noreferrer">Dex</a>` : ""}
@@ -8098,6 +8128,7 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-create-wallets]")) await createWalletSet();
   if (target.matches("[data-create-automation-wallet]")) await createAutomationWallet();
   if (target.matches("[data-automation-permission]")) await updateAutomationPermission(target.dataset.automationPermission || "enable");
+  if (target.matches("[data-run-trade-plans]")) await runTradePlanCheck();
   if (target.matches("[data-restore-backup]")) await restoreWalletBackup();
   if (target.matches("[data-export-backup]")) await exportWalletBackup();
   if (target.matches("[data-import-wallet]")) await importWallet();
