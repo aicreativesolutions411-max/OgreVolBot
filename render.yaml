@@ -134,6 +134,8 @@ services:
         value: 2500
       - key: STOP_LOSS_MONITOR_SLIPPAGE_BPS
         value: 2500
+      - key: STOP_LOSS_PRICE_FAILURE_SELL_AFTER
+        value: 2
       - key: SNIPER_DEFAULT_SLIPPAGE_BPS
         value: 400
       - key: JUPITER_SWAP_MAX_ATTEMPTS

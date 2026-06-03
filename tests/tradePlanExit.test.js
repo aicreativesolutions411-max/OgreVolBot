@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   calculateMoveSnapshot,
   priceExitDecision,
+  shouldEmergencySellOnPriceFailure,
   stopLossTriggerPercent
 } from "../src/lib/tradePlanExit.js";
 
@@ -75,4 +76,32 @@ test("stop-loss buffer cannot make trigger zero", () => {
     targetPct: 1,
     sellPercent: 100
   });
+});
+
+test("stop-loss emergency sell arms after repeated price estimate failures", () => {
+  assert.equal(shouldEmergencySellOnPriceFailure({
+    stopLossPct: 8,
+    estimateFailures: 1,
+    minFailures: 2
+  }), false);
+
+  assert.equal(shouldEmergencySellOnPriceFailure({
+    stopLossPct: 8,
+    estimateFailures: 2,
+    minFailures: 2
+  }), true);
+});
+
+test("price estimate failure emergency does not trigger without stop-loss", () => {
+  assert.equal(shouldEmergencySellOnPriceFailure({
+    stopLossPct: 0,
+    estimateFailures: 10,
+    minFailures: 2
+  }), false);
+
+  assert.equal(shouldEmergencySellOnPriceFailure({
+    stopLossPct: 8,
+    estimateFailures: 0,
+    minFailures: 2
+  }), false);
 });

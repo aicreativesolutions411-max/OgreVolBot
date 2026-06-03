@@ -28,6 +28,7 @@ import {
 import {
   calculateMoveSnapshot,
   priceExitDecision,
+  shouldEmergencySellOnPriceFailure,
   stopLossTriggerPercent
 } from "./lib/tradePlanExit.js";
 import {
@@ -277,6 +278,7 @@ function loadConfig() {
   const stopLossTriggerBufferPct = Number.parseFloat(process.env.STOP_LOSS_TRIGGER_BUFFER_PCT || "1.5");
   const stopLossExitSlippageBps = Number.parseInt(process.env.STOP_LOSS_EXIT_SLIPPAGE_BPS || "1500", 10);
   const stopLossMonitorSlippageBps = Number.parseInt(process.env.STOP_LOSS_MONITOR_SLIPPAGE_BPS || "2500", 10);
+  const stopLossPriceFailureSellAfter = Number.parseInt(process.env.STOP_LOSS_PRICE_FAILURE_SELL_AFTER || "2", 10);
   const pumpLaunchBodyLimitBytes = Number.parseInt(process.env.PUMP_LAUNCH_BODY_LIMIT_BYTES || "12000000", 10);
   const pumpLaunchRequestMode = (process.env.PUMP_LAUNCH_REQUEST_MODE || "json").trim().toLowerCase();
   const pumpLaunchPriorityFeeSol = Number.parseFloat(process.env.PUMP_LAUNCH_PRIORITY_FEE_SOL || "0.00005");
@@ -426,6 +428,10 @@ function loadConfig() {
     throw new Error("STOP_LOSS_MONITOR_SLIPPAGE_BPS must be an integer from 1 to 5000.");
   }
 
+  if (!Number.isInteger(stopLossPriceFailureSellAfter) || stopLossPriceFailureSellAfter < 1 || stopLossPriceFailureSellAfter > 20) {
+    throw new Error("STOP_LOSS_PRICE_FAILURE_SELL_AFTER must be an integer from 1 to 20.");
+  }
+
   if (!["json", "multipart", "form"].includes(pumpLaunchRequestMode)) {
     throw new Error("PUMP_LAUNCH_REQUEST_MODE must be json, multipart, or form.");
   }
@@ -492,6 +498,7 @@ function loadConfig() {
     stopLossTriggerBufferPct,
     stopLossExitSlippageBps,
     stopLossMonitorSlippageBps,
+    stopLossPriceFailureSellAfter,
     workerTickEnabled,
     workerTickRunTradePlans,
     workerTickRunDcaPlans,
@@ -1471,7 +1478,8 @@ function handleInternalWorkerHealth(request, response) {
     runDcaPlans: CONFIG.workerTickRunDcaPlans,
     warmFeeds: CONFIG.workerTickWarmFeeds,
     livePairRefreshSeconds: CONFIG.livePairsRefreshSeconds,
-    stopLossCheckIntervalMs: CONFIG.stopLossCheckIntervalMs
+    stopLossCheckIntervalMs: CONFIG.stopLossCheckIntervalMs,
+    stopLossPriceFailureSellAfter: CONFIG.stopLossPriceFailureSellAfter
   });
 }
 
@@ -5505,12 +5513,36 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
       planWallet.lastError = friendlyError(error);
       planWallet.estimateFailures = Number.parseInt(planWallet.estimateFailures || 0, 10) + 1;
       planWallet.lastPriceEstimateError = planWallet.lastError;
-      planWallet.triggerStatus = timerDue ? "timer-triggered" : "price-unavailable";
       planWallet.lastTriggerCheckAt = planWallet.lastCheckedAt;
       if (timerDue) {
+        planWallet.triggerStatus = "timer-triggered";
         triggerReason = "timer";
       } else {
-        return { changed: true, message: null };
+        const stopLossPct = walletStopLossPct(plan, planWallet);
+        const stopLossTriggerPct = stopLossTriggerPercent(stopLossPct, CONFIG.stopLossTriggerBufferPct);
+        if (shouldEmergencySellOnPriceFailure({
+          stopLossPct,
+          estimateFailures: planWallet.estimateFailures,
+          minFailures: CONFIG.stopLossPriceFailureSellAfter
+        })) {
+          const failures = Number.parseInt(planWallet.estimateFailures || 0, 10);
+          const armedPct = Number(stopLossPct).toFixed(2).replace(/\.00$/, "");
+          triggerReason = `stop-loss quote-failure emergency (${failures} checks, armed ${armedPct}%)`;
+          triggerMeta = {
+            kind: "stop-loss",
+            sellPercent: 100,
+            quoteFailureEmergency: true
+          };
+          planWallet.triggerStatus = "triggered";
+          planWallet.triggerKind = "stop-loss";
+          planWallet.triggerTargetPct = stopLossPct;
+          planWallet.triggerThresholdPct = stopLossTriggerPct;
+          planWallet.triggerSellPercent = 100;
+          planWallet.lastEmergencyExitReason = planWallet.lastError;
+        } else {
+          planWallet.triggerStatus = "price-unavailable";
+          return { changed: true, message: null };
+        }
       }
     }
   }
@@ -13524,6 +13556,8 @@ async function webTradeBuy(userId, body = {}) {
     signature: result.signature,
     attempts: result.attempts,
     dexUrl: dexScreenerUrl(tokenMint),
+    autoExitRequested: webAutoExitRequested(body),
+    autoExitArmed: Boolean(autoExitPlan),
     autoExitPlan,
     message: autoExitPlan ? `${baseMessage} ${autoExitPlan.shortMessage}` : baseMessage
   };

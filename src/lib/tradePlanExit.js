@@ -57,3 +57,13 @@ export function priceExitDecision({ movePct, takeProfitPct = 0, stopLossPct = 0,
 
   return null;
 }
+
+export function shouldEmergencySellOnPriceFailure({ stopLossPct = 0, estimateFailures = 0, minFailures = 2 } = {}) {
+  const stop = Number(stopLossPct || 0);
+  const failures = Number.parseInt(estimateFailures || 0, 10);
+  const threshold = Number.parseInt(minFailures || 2, 10);
+  if (!Number.isFinite(stop) || stop <= 0) return false;
+  if (!Number.isInteger(failures) || failures <= 0) return false;
+  const safeThreshold = Number.isInteger(threshold) && threshold > 0 ? threshold : 2;
+  return failures >= safeThreshold;
+}

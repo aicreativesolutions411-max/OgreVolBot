@@ -4875,6 +4875,9 @@ async function executeWebBuy(amountSol, amountMode = "fixed") {
     state.tradeResult = data.trade;
     if (data.trade?.autoExitPlan) {
       state.tradePlanResult = data.trade.autoExitPlan;
+      setTradeStatus(data.trade.autoExitPlan.shortMessage || "Buy landed and auto-exit is armed.");
+    } else if (data.trade?.autoExitRequested) {
+      setTradeStatus("Buy landed, but auto-exit was not armed. Use Positions to exit manually or create a managed plan.");
     }
     await refreshAfterTrade(data.trade?.signature);
     state.activeTab = "trade";
@@ -5322,7 +5325,12 @@ async function quickPresetTrade(tokenMint, presetOverride = null) {
       body: JSON.stringify(payload)
     });
     state.tradeResult = data.trade;
-    if (data.trade?.autoExitPlan) state.tradePlanResult = data.trade.autoExitPlan;
+    if (data.trade?.autoExitPlan) {
+      state.tradePlanResult = data.trade.autoExitPlan;
+      setError(data.trade.autoExitPlan.shortMessage || "Quick buy landed and auto-exit is armed.");
+    } else if (data.trade?.autoExitRequested) {
+      setError("Quick buy landed, but auto-exit was not armed. Use Positions to exit manually or create a managed plan.");
+    }
     state.tradeToken = tokenMint;
     await refreshAfterTrade(data.trade?.signature);
     state.activeTab = "trade";
