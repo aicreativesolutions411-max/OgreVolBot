@@ -248,7 +248,7 @@ const errorBox = $("[data-error]");
 const dashboardErrorBox = $("[data-dashboard-error]");
 
 const LIVE_PAIR_BUCKETS = [
-  ["live", "Live"],
+  ["live", "Fresh"],
   ["under1h", "Last 1h"],
   ["under3h", "Last 3h"],
   ["under1d", "Last 24h"]
@@ -6248,14 +6248,12 @@ function isGraduatedSlimeScopeRow(row = {}) {
 function classifySlimeScopeRow(row = {}) {
   if (isGraduatedSlimeScopeRow(row)) return "graduated";
   const explicit = String(row.slimeScopeCategory || "").trim().toLowerCase();
-  if (["new", "graduating"].includes(explicit)) return explicit;
+  if (explicit === "graduating") return explicit;
   const progress = slimeScopeProgressPct(row);
   const marketCap = slimeScopeMarketCap(row);
   if (progress >= 70 || marketCap >= 45_000) return "graduating";
-  const text = slimeScopeTextBlob(row);
   const age = rowAgeSeconds(row);
-  const isPump = Boolean(row.isPump) || text.includes("pump") || String(row.tokenMint || "").toLowerCase().endsWith("pump");
-  if (isPump || !Number.isFinite(age) || age <= 3_600) return "new";
+  if (Number.isFinite(age) && age <= 60) return "new";
   return "unknown";
 }
 
@@ -6312,7 +6310,8 @@ function slimeScopeRows(mode = state.slimeScopeMode) {
     }
     return rowCategory !== "graduated"
       && !isGraduatedSlimeScopeRow(row)
-      && (rowCategory === "new" || !Number.isFinite(age) || age <= 7_200 || progress < 60);
+      && Number.isFinite(age)
+      && age <= 60;
   });
   const sortedPrimary = category === "new" ? [...primary].sort(compareNewestLiveRows) : sortSlimeScopeRows(primary);
   const sortedFallback = category === "new" ? [...fallback].sort(compareNewestLiveRows) : sortSlimeScopeRows(fallback);
@@ -6980,7 +6979,7 @@ function livePairsHtml() {
 
 function livePairBucketDescription(bucket) {
   const descriptions = {
-    live: "Fresh launch feed. Focuses on pairs that just appeared, usually under 10 minutes old.",
+    live: "Fresh launch feed. Focuses on pairs that just appeared, usually under 60 seconds old.",
     under1h: "Pairs created in the last 60 minutes, with lower-quality tiny caps pushed down.",
     under3h: "Pairs created in the last 3 hours, refreshed with broader liquidity and volume data.",
     under1d: "Pairs created in the last 24 hours, ranked by current liquidity, volume, momentum, and risk."
