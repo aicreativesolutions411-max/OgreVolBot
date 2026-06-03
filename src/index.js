@@ -266,6 +266,7 @@ function loadConfig() {
   const stopLossMonitorSlippageBps = Number.parseInt(process.env.STOP_LOSS_MONITOR_SLIPPAGE_BPS || "2500", 10);
   const pumpLaunchBodyLimitBytes = Number.parseInt(process.env.PUMP_LAUNCH_BODY_LIMIT_BYTES || "12000000", 10);
   const pumpLaunchRequestMode = (process.env.PUMP_LAUNCH_REQUEST_MODE || "json").trim().toLowerCase();
+  const pumpLaunchPriorityFeeSol = Number.parseFloat(process.env.PUMP_LAUNCH_PRIORITY_FEE_SOL || "0.00005");
   const workerTickEnabled = parseBoolean(process.env.WORKER_TICK_ENABLED || (process.env.WORKER_SECRET ? "true" : "false"));
   const workerTickRunTradePlans = parseBoolean(process.env.WORKER_TICK_RUN_TRADE_PLANS || "true");
   const workerTickRunDcaPlans = parseBoolean(process.env.WORKER_TICK_RUN_DCA_PLANS || "true");
@@ -420,6 +421,10 @@ function loadConfig() {
     throw new Error("PUMP_LAUNCH_BODY_LIMIT_BYTES must be an integer from 100000 to 25000000.");
   }
 
+  if (!Number.isFinite(pumpLaunchPriorityFeeSol) || pumpLaunchPriorityFeeSol < 0 || pumpLaunchPriorityFeeSol > 0.1) {
+    throw new Error("PUMP_LAUNCH_PRIORITY_FEE_SOL must be from 0 to 0.1.");
+  }
+
   if (workerTickEnabled && (!workerSecret || workerSecret.length < 24)) {
     throw new Error("WORKER_SECRET must be set to a long random value of at least 24 characters when WORKER_TICK_ENABLED=true.");
   }
@@ -457,6 +462,8 @@ function loadConfig() {
     pumpLaunchApiFormat: (process.env.PUMP_LAUNCH_API_FORMAT || "minimal").trim().toLowerCase(),
     pumpLaunchImageField: (process.env.PUMP_LAUNCH_IMAGE_FIELD || "").trim(),
     pumpLaunchRequestMode,
+    pumpLaunchMetadataUrl: (process.env.PUMP_LAUNCH_METADATA_URL || "https://pump.fun/api/ipfs").trim(),
+    pumpLaunchPriorityFeeSol,
     photonNewPairsUrl: (process.env.PHOTON_NEW_PAIRS_URL || "").trim(),
     photonApiKey: process.env.PHOTON_API_KEY || "",
     livePairsRpcSafety,
@@ -13798,6 +13805,199 @@ function buildPumpLaunchRequestOptions(basePayload, payload, timeoutMs) {
   };
 }
 
+function isPumpPortalLocalLaunch() {
+  const format = String(CONFIG.pumpLaunchApiFormat || "").toLowerCase();
+  const url = String(CONFIG.pumpLaunchApiUrl || "").toLowerCase();
+  return ["pumpportal", "pumpportal-local", "trade-local"].includes(format) || url.includes("pumpportal.fun/api/trade-local");
+}
+
+async function launchDefaultImageBuffer(symbol = "SW") {
+  const safeSymbol = cleanTickerSymbol(symbol || "SW").slice(0, 8) || "SW";
+  const svg = `
+    <svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+      <rect width="512" height="512" rx="96" fill="#050705"/>
+      <circle cx="256" cy="256" r="190" fill="#10230d" stroke="#72ff23" stroke-width="18"/>
+      <text x="256" y="286" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="86" font-weight="900" fill="#bbff63">${safeSymbol}</text>
+    </svg>`;
+  return sharp(Buffer.from(svg)).png().toBuffer();
+}
+
+async function launchImageBufferForUpload(basePayload = {}) {
+  const decoded = decodeLaunchImageDataUrl(basePayload.imageDataUrl, basePayload);
+  if (decoded) {
+    return decoded;
+  }
+  return {
+    buffer: await launchDefaultImageBuffer(basePayload.symbol || basePayload.name || "SW"),
+    contentType: "image/png",
+    filename: `${cleanTickerSymbol(basePayload.symbol || "SW").toLowerCase() || "token"}-slimewire.png`
+  };
+}
+
+async function uploadPumpLaunchMetadata(basePayload = {}) {
+  if (!CONFIG.pumpLaunchMetadataUrl) {
+    throw new Error("PUMP_LAUNCH_METADATA_URL is missing. For PumpPortal local launch, set it to https://pump.fun/api/ipfs.");
+  }
+  if (typeof FormData === "undefined" || typeof Blob === "undefined") {
+    throw new Error("This Node runtime does not support metadata uploads. Use Node 20+ on Render.");
+  }
+
+  const image = await launchImageBufferForUpload(basePayload);
+  const form = new FormData();
+  form.append("file", new Blob([image.buffer], { type: image.contentType }), image.filename);
+  form.append("name", basePayload.name);
+  form.append("symbol", basePayload.symbol);
+  form.append("description", basePayload.description || "");
+  form.append("twitter", basePayload.twitter || "");
+  form.append("telegram", basePayload.telegram || "");
+  form.append("website", basePayload.website || "");
+  form.append("showName", "true");
+
+  const result = await fetchJson(CONFIG.pumpLaunchMetadataUrl, {
+    method: "POST",
+    body: form,
+    timeoutMs: CONFIG.pumpLaunchTimeoutMs
+  });
+  const uri = firstString(
+    result.metadataUri,
+    result.metadata_uri,
+    result.uri,
+    result.data?.metadataUri,
+    result.data?.uri,
+    result.data?.cid ? `https://ipfs.io/ipfs/${result.data.cid}` : ""
+  );
+  if (!uri) {
+    throw new Error("Pump metadata upload did not return a metadata URI.");
+  }
+  return {
+    uri,
+    imageBytes: image.buffer.length,
+    imageContentType: image.contentType
+  };
+}
+
+function decodePumpPortalTransaction(value) {
+  if (!value) return null;
+  if (value instanceof Uint8Array || Buffer.isBuffer(value)) {
+    return VersionedTransaction.deserialize(new Uint8Array(value));
+  }
+  const encoded = String(value || "").trim();
+  if (!encoded) return null;
+
+  const decoders = [
+    () => Buffer.from(encoded, "base64"),
+    () => Buffer.from(bs58.decode(encoded))
+  ];
+  for (const decode of decoders) {
+    try {
+      return VersionedTransaction.deserialize(new Uint8Array(decode()));
+    } catch {
+      // Try the next encoding.
+    }
+  }
+  return null;
+}
+
+async function requestPumpPortalLocalTransaction(requestPayload, timeoutMs) {
+  const url = CONFIG.pumpLaunchApiUrl || "https://pumpportal.fun/api/trade-local";
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(requestPayload),
+    signal: AbortSignal.timeout ? AbortSignal.timeout(timeoutMs) : undefined
+  });
+  const raw = Buffer.from(await response.arrayBuffer());
+  const text = raw.toString("utf8").trim();
+
+  if (!response.ok) {
+    let detail = response.statusText || `HTTP ${response.status}`;
+    try {
+      detail = fetchJsonErrorMessage(JSON.parse(text), text, response.status);
+    } catch {
+      if (text) detail = text.replace(/\s+/g, " ").slice(0, 500);
+    }
+    const error = new Error(detail);
+    error.status = response.status;
+    error.responseBody = text.slice(0, 1000);
+    throw error;
+  }
+
+  if (text.startsWith("{") || text.startsWith("[")) {
+    const parsed = JSON.parse(text);
+    const encoded = Array.isArray(parsed)
+      ? parsed[0]
+      : firstString(parsed.transaction, parsed.tx, parsed.serializedTransaction, parsed.result?.transaction);
+    const tx = decodePumpPortalTransaction(encoded);
+    if (tx) return tx;
+    if (parsed.signature) return { signature: parsed.signature };
+  }
+
+  const tx = decodePumpPortalTransaction(raw);
+  if (!tx) {
+    throw new Error("PumpPortal did not return a readable create transaction.");
+  }
+  return tx;
+}
+
+async function sendVersionedTransaction(tx, label = "send versioned transaction") {
+  const signature = await rpcWithRetry(label, () => connection.sendRawTransaction(tx.serialize(), {
+    skipPreflight: false,
+    maxRetries: 10
+  }));
+  await rpcWithRetry("confirm versioned transaction", () => connection.confirmTransaction(signature, "confirmed"));
+  return signature;
+}
+
+async function webLaunchPumpPortalLocal(userId, body, basePayload) {
+  const store = await readWalletStore();
+  const selectedIndex = basePayload.devBuy.walletIndex || (Array.isArray(body.walletIndexes) ? body.walletIndexes[0] : "");
+  const selectedWallets = webSelectedWallets(store, userId, selectedIndex ? [selectedIndex] : body.walletIndexes, body.walletGroup);
+  const creatorWallet = selectedWallets[0];
+  const creatorKeypair = decryptWallet(creatorWallet);
+  const mintKeypair = Keypair.generate();
+  const metadata = await uploadPumpLaunchMetadata(basePayload);
+  const slippageBps = cleanLaunchNumber(body.slippageBps, 300, 1, 5000);
+  const requestPayload = {
+    publicKey: creatorKeypair.publicKey.toBase58(),
+    action: "create",
+    tokenMetadata: {
+      name: basePayload.name,
+      symbol: basePayload.symbol,
+      uri: metadata.uri
+    },
+    mint: mintKeypair.publicKey.toBase58(),
+    denominatedInSol: "true",
+    amount: Math.max(0.0001, Number(basePayload.devBuy.amountSol || body.amountSol || 0.0001)),
+    slippage: Math.max(0.01, slippageBps / 100),
+    priorityFee: CONFIG.pumpLaunchPriorityFeeSol,
+    pool: "pump"
+  };
+
+  const timeoutMs = Number.isFinite(CONFIG.pumpLaunchTimeoutMs) && CONFIG.pumpLaunchTimeoutMs > 0
+    ? CONFIG.pumpLaunchTimeoutMs
+    : 30000;
+  const tx = await requestPumpPortalLocalTransaction(requestPayload, timeoutMs);
+  if (tx?.signature) {
+    return {
+      status: "submitted",
+      tokenMint: mintKeypair.publicKey.toBase58(),
+      signature: tx.signature,
+      requestId: basePayload.clientRequestId,
+      provider: "pumpportal-local"
+    };
+  }
+  tx.sign([mintKeypair, creatorKeypair]);
+  const signature = await sendVersionedTransaction(tx, "send pump launch transaction");
+  return {
+    status: "launched",
+    tokenMint: mintKeypair.publicKey.toBase58(),
+    signature,
+    requestId: basePayload.clientRequestId,
+    provider: "pumpportal-local",
+    metadataUri: metadata.uri
+  };
+}
+
 function pumpLaunchProviderHint(status) {
   const mode = CONFIG.pumpLaunchRequestMode || "json";
   if (mode === "json" && [400, 413, 415].includes(Number(status))) {
@@ -13898,9 +14098,35 @@ async function webLaunchPumpCoin(userId, body = {}) {
       amountSol: cleanLaunchNumber(body.devBuySol, 0, 0, 1000),
       walletIndex: cleanLaunchText(body.devWalletIndex, 24)
     },
+    slippageBps: cleanLaunchNumber(body.slippageBps, 300, 1, 5000),
     clientRequestId: crypto.randomUUID(),
     source: "slimewire_web"
   };
+
+  if (isPumpPortalLocalLaunch()) {
+    try {
+      const result = await webLaunchPumpPortalLocal(userId, body, basePayload);
+      await audit("web_launch_pump_coin", {
+        userId,
+        symbol,
+        status: result.status,
+        tokenMint: shortMint(result.tokenMint),
+        hasImage: Boolean(imageDataUrl),
+        provider: result.provider
+      });
+      return {
+        ...result,
+        pumpUrl: pumpFunUrl(result.tokenMint),
+        dexUrl: dexScreenerUrl(result.tokenMint),
+        message: `Pump launch returned ${shortMint(result.tokenMint)}.`
+      };
+    } catch (error) {
+      const wrapped = new Error(`PumpPortal local launch failed: ${friendlyError(error)}. Check that the selected dev wallet is a managed SlimeWire wallet with enough SOL for the dev buy and network fees, and set PUMP_LAUNCH_API_URL=https://pumpportal.fun/api/trade-local.`);
+      wrapped.statusCode = Number(error.status || error.statusCode || 502);
+      throw wrapped;
+    }
+  }
+
   const payload = buildPumpLaunchPayload(basePayload);
 
   const timeoutMs = Number.isFinite(CONFIG.pumpLaunchTimeoutMs) && CONFIG.pumpLaunchTimeoutMs > 0
