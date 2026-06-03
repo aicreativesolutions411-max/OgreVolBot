@@ -185,6 +185,7 @@ const state = {
   selectedBundlePresetId: "",
   quickBuyAmountOverride: "",
   terminalTradeCollapsed: true,
+  navTekOpen: false,
   walletConnectMenuOpen: false,
   walletConnectReturnPath: "/terminal",
   walletConnectStatus: "",
@@ -1173,7 +1174,8 @@ function renderTabs() {
     button.dataset.active = button.dataset.tab === state.activeTab ? "true" : "false";
   });
   document.querySelectorAll(".tabs .nav-tool-group").forEach((group) => {
-    group.open = Boolean(group.querySelector('[data-active="true"]'));
+    const hasActiveChild = Boolean(group.querySelector('[data-active="true"]'));
+    group.open = hasActiveChild || Boolean(state.navTekOpen);
   });
 
   if (state.activeTab === "terminal") panel.innerHTML = terminalHtml();
@@ -8054,6 +8056,14 @@ document.addEventListener("click", async (event) => {
   const source = event.target instanceof Element
     ? event.target
     : event.target?.parentElement;
+  const tekSummary = source?.closest?.(".tabs .nav-tool-group summary");
+  if (tekSummary) {
+    event.preventDefault();
+    const group = tekSummary.closest(".nav-tool-group");
+    state.navTekOpen = !Boolean(group?.open);
+    if (group) group.open = state.navTekOpen;
+    return;
+  }
   const target = source?.closest?.("button, a, [data-preview-token]");
   if (!target) return;
 

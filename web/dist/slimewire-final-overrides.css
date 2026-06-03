@@ -3429,3 +3429,70 @@
     max-width: 54px !important;
   }
 }
+
+@media (max-width: 760px) {
+  [data-app][data-route="terminal"] .tabs {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    align-items: flex-start !important;
+    overflow-x: auto !important;
+    overflow-y: visible !important;
+    padding-bottom: 8px !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs > button,
+  [data-app][data-route="terminal"] .tabs .nav-tool-group > summary {
+    flex: 0 0 64px !important;
+    width: 64px !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs .nav-tool-group {
+    display: flex !important;
+    flex: 0 0 64px !important;
+    width: 64px !important;
+    min-width: 64px !important;
+    position: static !important;
+    overflow: visible !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs .nav-tool-group:not([open]) button {
+    display: none !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs .nav-tool-group[open] {
+    flex: 1 0 100% !important;
+    width: 100% !important;
+    min-width: 100% !important;
+    display: grid !important;
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    gap: 6px !important;
+    padding: 6px !important;
+    border-color: rgba(132, 255, 42, 0.36) !important;
+    background: rgba(5, 15, 7, 0.96) !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs .nav-tool-group[open] summary {
+    grid-column: 1 / -1 !important;
+    width: 100% !important;
+    flex-basis: auto !important;
+    min-height: 42px !important;
+    height: 42px !important;
+    margin: 0 !important;
+    box-shadow: 0 0 0 1px rgba(173, 255, 47, 0.55), 0 0 18px rgba(114, 255, 35, 0.18) !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs .nav-tool-group[open] button {
+    position: static !important;
+    left: auto !important;
+    top: auto !important;
+    display: flex !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    flex: 1 1 auto !important;
+    min-height: 44px !important;
+    height: 44px !important;
+    margin: 0 !important;
+    background: rgba(7, 18, 7, 0.98) !important;
+    border-color: rgba(132, 255, 42, 0.36) !important;
+  }
+}
