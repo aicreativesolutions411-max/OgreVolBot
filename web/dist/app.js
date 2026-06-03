@@ -1524,22 +1524,26 @@ function connectWalletSection() {
 function automationDelegationHtml({ compact = false } = {}) {
   const connected = state.user?.connectedWallet;
   const managedCount = Array.isArray(state.wallets) ? state.wallets.length : 0;
+  const permission = state.user?.automationPermission || {};
+  const permissionActive = Boolean(state.user?.automationPermissionActive);
+  const expires = permission.expiresAt ? formatDate(permission.expiresAt) : "";
   const status = state.automationDelegationStatus || (managedCount
-    ? `${managedCount} managed automation wallet(s) available for server TP/SL.`
+    ? `${managedCount} managed automation wallet(s) available. ${permissionActive ? `Server exits enabled until ${expires}.` : "Enable permission before using auto TP/SL."}`
     : "Create one automation wallet before relying on server-side exits.");
   return `
     <article class="setup-hub-panel automation-delegation-card ${compact ? "compact" : ""}">
       <div class="delegation-heading">
-        <span class="delegation-mode-badge">TP/SL Automation</span>
+        <span class="delegation-mode-badge">${permissionActive ? "Automation Enabled" : "TP/SL Permission Required"}</span>
         <h3>Automation Wallet</h3>
       </div>
-      <p>Phantom and Solflare connections stay manual-sign for safety. Server-side stop-loss and take-profit can only run from managed automation wallets SlimeWire can sign for.</p>
+      <p>Server-side stop-loss, take-profit, and timer exits run only from managed/imported SlimeWire wallets after you enable this permission. Browser-connected Phantom/Solflare wallets still require wallet approval unless a separate audited session-key provider is added later.</p>
       <ul class="delegation-steps">
-        <li>Connect your wallet for identity and funding.</li>
-        <li>Create an automation wallet and save its backup.</li>
-        <li>Fund it, then trade from it when you want TP/SL to fire while you are away.</li>
+        <li>Scope: managed/imported SlimeWire wallets only.</li>
+        <li>Allowed actions: TP/SL exits and timer exits.</li>
+        <li>Limit: sells up to 100% of the tracked position; revoke anytime.</li>
       </ul>
       <div class="profile-actions">
+        ${permissionActive ? `<button type="button" class="danger-lite" data-automation-permission="revoke">Revoke Server Exits</button>` : `<button class="primary" type="button" data-automation-permission="enable">Enable Server Exits</button>`}
         <button class="primary" type="button" data-create-automation-wallet>${managedCount ? "Create Another" : "Create Automation Wallet"}</button>
         <button type="button" data-tab="wallets">Manage Wallets</button>
         ${connected ? `<button type="button" data-connect-wallet="solana">Switch Connected Wallet</button>` : ""}
@@ -3898,6 +3902,44 @@ async function createAutomationWallet() {
     buttons.forEach((button) => {
       button.disabled = false;
       writeText(button, "Create Automation Wallet");
+    });
+  }
+}
+
+async function updateAutomationPermission(action = "enable") {
+  const status = $("[data-automation-delegation-status]");
+  const buttons = [...document.querySelectorAll("[data-automation-permission]")];
+  const enable = action !== "revoke";
+  state.automationDelegationStatus = enable ? "Enabling server exits..." : "Revoking server exits...";
+  writeText(status, state.automationDelegationStatus);
+  buttons.forEach((button) => {
+    button.disabled = true;
+    writeText(button, enable ? "Enabling..." : "Revoking...");
+  });
+
+  try {
+    await ensureWebAccount(status, "Creating secure web profile for automation permission...");
+    const data = await api("/api/web/profile/automation", {
+      method: "POST",
+      body: JSON.stringify({ action: enable ? "enable" : "revoke", ttlHours: 720 })
+    });
+    applyUserFromApi(data.user || {
+      ...state.user,
+      automationPermission: data.profile?.automationPermission || null
+    });
+    const permission = state.user?.automationPermission || {};
+    state.automationDelegationStatus = enable
+      ? `Server exits enabled for managed wallets until ${formatDate(permission.expiresAt)}.`
+      : "Server exits revoked. Existing plans stay visible but new auto-exit plans require permission again.";
+    render({ force: true });
+  } catch (error) {
+    state.automationDelegationStatus = error.message;
+    writeText(status, error.message);
+    setError(error.message);
+  } finally {
+    buttons.forEach((button) => {
+      button.disabled = false;
+      writeText(button, button.dataset.automationPermission === "revoke" ? "Revoke Server Exits" : "Enable Server Exits");
     });
   }
 }
@@ -6859,7 +6901,8 @@ function stopLossAuditHtml() {
           <div class="row-main">
             <strong>${escapeHtml(plan.label || plan.type || plan.source || "Managed Exit")} ${plan.shortMint ? `<code>${escapeHtml(plan.shortMint)}</code>` : ""}</strong>
             <span>Status: ${escapeHtml(plan.status || "watching")} | Active wallets: ${escapeHtml(plan.activeWallets ?? "?")}/${escapeHtml(plan.walletCount ?? "?")} | TP ${escapeHtml(plan.takeProfitSummary || plan.takeProfitPct || "off")} | SL ${escapeHtml(plan.stopLossSummary || plan.stopLossPct || "off")}</span>
-            <small>Execution mode: managed automation wallet watcher. Connected Phantom/Solflare wallets are manual-sign only and cannot be sold by the worker without explicit future delegation.</small>
+            <small>Execution mode: ${escapeHtml(plan.executionMode || "managed_server")} ${plan.automationPermissionExpiresAt ? `| permission expires ${escapeHtml(formatDate(plan.automationPermissionExpiresAt))}` : ""}</small>
+            ${plan.automationPermissionExpiresAt && !plan.automationPermissionActive ? `<small class="warning-text">Automation permission is expired. New auto-exit plans require enabling server exits again.</small>` : ""}
             ${plan.localOnly ? `<small class="warning-text">Latest local result only. Refresh Status to load server watcher rows.</small>` : ""}
             ${plan.message ? `<small>${escapeHtml(plan.message)}</small>` : ""}
             ${plan.wallets?.length ? `<div class="audit-wallet-list">${plan.wallets.map(stopLossAuditWalletHtml).join("")}</div>` : ""}
@@ -8054,6 +8097,7 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-create-wallets]")) await createWalletSet();
   if (target.matches("[data-create-automation-wallet]")) await createAutomationWallet();
+  if (target.matches("[data-automation-permission]")) await updateAutomationPermission(target.dataset.automationPermission || "enable");
   if (target.matches("[data-restore-backup]")) await restoreWalletBackup();
   if (target.matches("[data-export-backup]")) await exportWalletBackup();
   if (target.matches("[data-import-wallet]")) await importWallet();

@@ -889,6 +889,17 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "POST" && pathname === "/api/web/profile/automation") {
+      const body = await readJsonRequestBody(request);
+      const result = await updateWebAutomationPermission(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        profile: result.profile,
+        user: await webUserSummary(auth.userId)
+      });
+      return;
+    }
+
     if (request.method === "POST" && pathname === "/api/web/profile/x") {
       const body = await readJsonRequestBody(request);
       const result = await updateWebProfileXHandle(auth.userId, body);
@@ -11556,6 +11567,11 @@ function webTradePlanRow(plan = {}) {
     id: plan.id || "",
     status: plan.status || "",
     source: plan.source || "",
+    executionMode: plan.executionMode || "",
+    automationPermissionExpiresAt: plan.automationPermission?.expiresAt || "",
+    automationPermissionActive: plan.automationPermission?.enabled
+      ? (Number.isFinite(Date.parse(plan.automationPermission.expiresAt || "")) && Date.parse(plan.automationPermission.expiresAt || "") > Date.now())
+      : false,
     tokenMint: plan.tokenMint || "",
     shortMint: shortMint(plan.tokenMint || ""),
     createdAt: plan.createdAt || "",
@@ -11747,12 +11763,70 @@ function ensureWebProfileDefaults(store, userId) {
     profile.referralStats = { totalLamports: "0", payoutCount: 0, referrals: {} };
     changed = true;
   }
+  if (!profile.automationPermission || typeof profile.automationPermission !== "object") {
+    profile.automationPermission = defaultWebAutomationPermission();
+    changed = true;
+  } else {
+    const normalized = normalizeWebAutomationPermission(profile.automationPermission);
+    if (JSON.stringify(normalized) !== JSON.stringify(profile.automationPermission)) {
+      profile.automationPermission = normalized;
+      changed = true;
+    }
+  }
 
   if (changed || !store.profiles[key]) {
     profile.updatedAt = profile.updatedAt || new Date().toISOString();
     store.profiles[key] = profile;
   }
   return { profile, changed };
+}
+
+function defaultWebAutomationPermission() {
+  return {
+    enabled: false,
+    grantedAt: "",
+    expiresAt: "",
+    revokedAt: "",
+    walletScope: "managed",
+    maxSellPercent: 100,
+    allowedActions: ["tp_sl_exit", "timer_exit"],
+    connectedWalletPublicKey: ""
+  };
+}
+
+function normalizeWebAutomationPermission(value = {}) {
+  const enabled = Boolean(value.enabled);
+  const maxSellPercent = Math.max(1, Math.min(100, Number.parseFloat(value.maxSellPercent || "100") || 100));
+  const allowedActions = Array.isArray(value.allowedActions) && value.allowedActions.length
+    ? uniqueStrings(value.allowedActions.map((item) => String(item || "").trim()).filter(Boolean)).slice(0, 10)
+    : ["tp_sl_exit", "timer_exit"];
+  return {
+    enabled,
+    grantedAt: value.grantedAt || "",
+    expiresAt: value.expiresAt || "",
+    revokedAt: enabled ? "" : (value.revokedAt || ""),
+    walletScope: "managed",
+    maxSellPercent,
+    allowedActions,
+    connectedWalletPublicKey: value.connectedWalletPublicKey || ""
+  };
+}
+
+function webAutomationPermissionActive(profile = {}) {
+  const permission = normalizeWebAutomationPermission(profile.automationPermission || {});
+  if (!permission.enabled) return false;
+  const expiresAt = Date.parse(permission.expiresAt || "");
+  return Number.isFinite(expiresAt) && expiresAt > Date.now();
+}
+
+async function requireWebAutomationPermission(userId, context = "server-side TP/SL") {
+  const profile = await webProfileForUser(userId);
+  if (!webAutomationPermissionActive(profile)) {
+    const error = new Error(`Enable TP/SL Automation permission before using ${context}. This permission only applies to managed/imported SlimeWire wallets and can be revoked from Profile or Wallets.`);
+    error.statusCode = 403;
+    throw error;
+  }
+  return normalizeWebAutomationPermission(profile.automationPermission);
 }
 
 function generateWebReferralCode(store, seed = "sw") {
@@ -11914,6 +11988,7 @@ async function createWebAccount(options = {}) {
     bundlePresets: [],
     hiddenWebPresetIds: [],
     watchedTokens: [],
+    automationPermission: defaultWebAutomationPermission(),
     xHandle: "",
     xConnectedAt: "",
     avatarDataUrl: "",
@@ -12167,6 +12242,8 @@ async function webUserSummary(userId) {
     avatarSource: profile.avatarSource || "",
     avatarUpdatedAt: profile.avatarUpdatedAt || "",
     connectedWallet: profile.connectedWallet || null,
+    automationPermission: normalizeWebAutomationPermission(profile.automationPermission || {}),
+    automationPermissionActive: webAutomationPermissionActive(profile),
     referralCode: profile.referralCode || "",
     referralLink: profile.referralCode ? webReferralLink(profile.referralCode) : "",
     referralPayoutWallet: profile.referralPayoutWallet || "",
@@ -12305,6 +12382,54 @@ async function updateWebConnectedWallet(userId, body = {}) {
     provider: connectedWallet?.provider || "",
     publicKey: connectedWallet?.publicKey || "",
     connected: Boolean(connectedWallet)
+  });
+  return { profile };
+}
+
+async function updateWebAutomationPermission(userId, body = {}) {
+  const store = await readWebAuthStore();
+  const key = String(userId);
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
+  const { profile: existing } = ensureWebProfileDefaults(store, userId);
+  const action = String(body.action || (body.enabled === false ? "revoke" : "enable")).trim().toLowerCase();
+  let automationPermission;
+
+  if (action === "revoke" || body.clear) {
+    automationPermission = {
+      ...normalizeWebAutomationPermission(existing.automationPermission || {}),
+      enabled: false,
+      revokedAt: now,
+      expiresAt: ""
+    };
+  } else {
+    const ttlHours = Math.max(1, Math.min(24 * 30, Number.parseFloat(body.ttlHours || "720") || 720));
+    const connectedWalletPublicKey = existing.connectedWallet?.publicKey || "";
+    automationPermission = {
+      enabled: true,
+      grantedAt: now,
+      expiresAt: new Date(nowMs + ttlHours * 60 * 60 * 1000).toISOString(),
+      revokedAt: "",
+      walletScope: "managed",
+      maxSellPercent: 100,
+      allowedActions: ["tp_sl_exit", "timer_exit"],
+      connectedWalletPublicKey
+    };
+  }
+
+  const profile = {
+    ...existing,
+    automationPermission: normalizeWebAutomationPermission(automationPermission),
+    updatedAt: now
+  };
+  store.profiles[key] = profile;
+  await writeWebAuthStore(store);
+  await audit("web_automation_permission_update", {
+    userId,
+    enabled: profile.automationPermission.enabled,
+    expiresAt: profile.automationPermission.expiresAt,
+    walletScope: profile.automationPermission.walletScope,
+    connectedWalletPublicKey: profile.automationPermission.connectedWalletPublicKey || ""
   });
   return { profile };
 }
@@ -13132,6 +13257,9 @@ async function webTradeBuy(userId, body = {}) {
   const wallet = getWalletAt(store, parseWebWalletIndex(body.walletIndex), userId);
   const tokenMint = parsePublicKey(String(body.tokenMint || "")).toBase58();
   const slippageBps = parseWebSlippage(body.slippageBps);
+  const autoExitPermission = webAutoExitRequested(body)
+    ? await requireWebAutomationPermission(userId, "quick-buy auto exits")
+    : null;
   const amountLamports = await webBuyAmountLamports(wallet, body);
   const result = await buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps, { trackTokenDelta: true, userId });
   const tokenAmount = result.tokenDeltaAmount || result.outputAmount || null;
@@ -13158,7 +13286,7 @@ async function webTradeBuy(userId, body = {}) {
   });
 
   const autoExitPlan = webAutoExitRequested(body)
-    ? await webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, result, body, slippageBps)
+    ? await webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, result, body, slippageBps, autoExitPermission)
     : null;
   const baseMessage = `${wallet.label} bought ${shortMint(tokenMint)} with ${lamportsToSol(result.amountLamports)} SOL.`;
 
@@ -13229,7 +13357,7 @@ async function webTradeSell(userId, body = {}) {
   };
 }
 
-async function webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, buyResult, body = {}, slippageBps = CONFIG.defaultSlippageBps) {
+async function webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, buyResult, body = {}, slippageBps = CONFIG.defaultSlippageBps, automationPermission = null) {
   const takeProfitPct = parseTakeProfitPercent(String(body.takeProfitPct || "0"));
   const stopLossPct = parseOptionalTriggerPercent(String(body.stopLossPct || "0"));
   const sellDelaySeconds = parseOptionalSellDelaySeconds(firstString(body.sellDelay, body.sellDelaySeconds, "off"));
@@ -13239,6 +13367,7 @@ async function webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, buyRe
   if (!takeProfitPct && !stopLossPct && sellDelaySeconds <= 0) {
     return null;
   }
+  const permission = automationPermission || await requireWebAutomationPermission(userId, "quick-buy auto exits");
 
   const now = Date.now();
   const sellAfterAt = planSellAfterAtFromNow({ sellDelaySeconds }, now);
@@ -13278,6 +13407,8 @@ async function webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, buyRe
     chatId: null,
     tokenMint,
     source: "web_trade_auto_exit",
+    executionMode: "managed_server",
+    automationPermission: permission,
     walletSelector: String(walletIndex),
     amountSol: lamportsBigToSol(amountLamports),
     sellDelayMinutes: sellDelaySeconds / 60,
@@ -13339,6 +13470,7 @@ async function webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, buyRe
     loopCount: 1,
     loopDelaySeconds: 0,
     slippageBps,
+    executionMode: "managed_server",
     source: "web_trade_auto_exit",
     results: [{ ok: true, message: `${wallet.label}: auto-exit armed` }],
     dexUrl: dexScreenerUrl(tokenMint),
@@ -13389,6 +13521,7 @@ async function webCreateManagedBuyPlan(userId, wallets, body = {}, options = {})
     walletTakeProfitTargets,
     walletStopLossTargets
   });
+  const automationPermission = await requireWebAutomationPermission(userId, `${label} server exits`);
 
   const now = Date.now();
   const sellAfterAt = planSellAfterAtFromNow({ sellDelaySeconds }, now);
@@ -13462,6 +13595,8 @@ async function webCreateManagedBuyPlan(userId, wallets, body = {}, options = {})
     chatId: null,
     tokenMint,
     source,
+    executionMode: "managed_server",
+    automationPermission,
     walletSelector: String(body.walletGroup || "").trim()
       ? `group:${String(body.walletGroup).trim()}`
       : Array.isArray(body.walletIndexes)
@@ -13532,6 +13667,7 @@ async function webCreateManagedBuyPlan(userId, wallets, body = {}, options = {})
     loopDelaySeconds,
     slippageBps,
     source,
+    executionMode: "managed_server",
     results,
     dexUrl: dexScreenerUrl(tokenMint),
     message: `${label} armed: ${planWallets.length}/${wallets.length} wallet(s) bought ${shortMint(tokenMint)}. Watching TP ${formatPlanTakeProfitSummary(plan)}, SL ${formatPlanStopLossSummary(plan)}${sellDelaySeconds > 0 ? `, timer ${formatSellTimerSummary(sellDelaySeconds)}` : ""}.`
