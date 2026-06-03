@@ -49,6 +49,25 @@ test("Ogre A.I. can use best available momentum when strict and balanced are emp
   assert.equal(pool.candidates[0].tokenMint, "AvailableMint");
 });
 
+test("Ogre A.I. falls back to scout rows when live stats are incomplete", () => {
+  const rows = [
+    {
+      tokenMint: "ScoutMint",
+      bestPickScore: 18,
+      marketCap: 95_000,
+      liquidityUsd: 0,
+      volume5m: 0,
+      pairAgeMinutes: 15,
+      bestPickInputs: ["fresh listing"]
+    }
+  ];
+
+  const pool = buildOgreAiCandidatePool(rows, defaults, "quick");
+  assert.equal(pool.selectedTier, "scout");
+  assert.equal(pool.tierCounts.scout, 1);
+  assert.equal(pool.candidates[0].tokenMint, "ScoutMint");
+});
+
 test("Ogre A.I. still blocks high risk and mayhem rows", () => {
   assert.equal(isOgreAiBlockedRisk({ riskFlags: ["hard dump"] }), true);
   assert.equal(isOgreAiBlockedRisk({ category: "Pump Mayhem" }), true);

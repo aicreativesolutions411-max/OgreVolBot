@@ -124,7 +124,8 @@ export function buildOgreAiCandidatePool(rows = [], defaults = {}, mode = "quick
   const tiers = {
     strict: [],
     balanced: [],
-    available: []
+    available: [],
+    scout: []
   };
   let blocked = 0;
   let duplicate = 0;
@@ -142,6 +143,20 @@ export function buildOgreAiCandidatePool(rows = [], defaults = {}, mode = "quick
     seen.add(key);
     const tier = ogreAiTierForCandidate(row, defaults, mode);
     if (!tier) {
+      const stats = ogreAiCandidateStats(row);
+      const maxMarketCap = Number(defaults.maxMarketCap || 750_000);
+      const ageOk = stats.ageMinutes === null
+        || stats.ageMinutes <= (mode === "fresh" ? 180 : 1440)
+        || stats.isPump;
+      const capOk = !stats.marketCap || stats.marketCap <= maxMarketCap * 3;
+      const hasSomeSignal = stats.hasActivity
+        || stats.score > 0
+        || Array.isArray(row.bestPickInputs) && row.bestPickInputs.length > 0
+        || Array.isArray(row.reasons) && row.reasons.length > 0;
+      if (ageOk && capOk && hasSomeSignal) {
+        tiers.scout.push({ ...row, ogreAiTier: "scout" });
+        continue;
+      }
       blocked += 1;
       continue;
     }
@@ -152,7 +167,7 @@ export function buildOgreAiCandidatePool(rows = [], defaults = {}, mode = "quick
     tiers[tier].sort(compareOgreAiCandidates);
   }
 
-  const selectedTier = tiers.strict.length ? "strict" : tiers.balanced.length ? "balanced" : tiers.available.length ? "available" : "none";
+  const selectedTier = tiers.strict.length ? "strict" : tiers.balanced.length ? "balanced" : tiers.available.length ? "available" : tiers.scout.length ? "scout" : "none";
   const candidates = selectedTier === "none" ? [] : tiers[selectedTier];
   return {
     selectedTier,
@@ -161,6 +176,7 @@ export function buildOgreAiCandidatePool(rows = [], defaults = {}, mode = "quick
       strict: tiers.strict.length,
       balanced: tiers.balanced.length,
       available: tiers.available.length,
+      scout: tiers.scout.length,
       blocked,
       duplicate
     }

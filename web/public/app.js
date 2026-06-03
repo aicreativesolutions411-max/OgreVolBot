@@ -2258,7 +2258,7 @@ function ogreAiResultHtml() {
         <div><dt>Qualified</dt><dd>${escapeHtml(row.qualified || 0)}</dd></div>
         <div><dt>Plans</dt><dd>${escapeHtml(row.armedCount || plans.length)}</dd></div>
       </dl>
-      ${row.tierCounts ? `<small>Strict ${escapeHtml(row.tierCounts.strict || 0)} | Balanced ${escapeHtml(row.tierCounts.balanced || 0)} | Available ${escapeHtml(row.tierCounts.available || 0)}</small>` : ""}
+      ${row.tierCounts ? `<small>Strict ${escapeHtml(row.tierCounts.strict || 0)} | Balanced ${escapeHtml(row.tierCounts.balanced || 0)} | Available ${escapeHtml(row.tierCounts.available || 0)} | Scout ${escapeHtml(row.tierCounts.scout || 0)}</small>` : ""}
       <div class="ogre-ai-pick-list">
         ${plans.map((plan) => {
           const pick = plan.pick || {};

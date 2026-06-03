@@ -14059,7 +14059,7 @@ async function webStartOgreAiRun(userId, body = {}) {
   const selection = await selectOgreAiPicks(userId, body, runCount);
   if (!selection.rows.length) {
     const counts = selection.tierCounts || {};
-    throw new Error(`Ogre A.I. did not find a route-worthy ${mode} setup right now. Scanned ${selection.scanned}; strict ${counts.strict || 0}, balanced ${counts.balanced || 0}, available ${counts.available || 0}. Try refresh again or review Live Pairs manually.`);
+    throw new Error(`Ogre A.I. did not find a route-worthy ${mode} setup right now. Scanned ${selection.scanned}; strict ${counts.strict || 0}, balanced ${counts.balanced || 0}, available ${counts.available || 0}, scout ${counts.scout || 0}. Try refresh again or review Live Pairs manually.`);
   }
 
   const plans = [];

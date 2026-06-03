@@ -3279,11 +3279,11 @@
 [data-app][data-route="terminal"] .tabs button[data-tab="profile"]::before { background-image: url("./assets/slimewire/png/nav-icons/target.png") !important; }
 [data-app][data-route="terminal"] .tabs button[data-tab="smartChart"]::before { background-image: url("./assets/slimewire/png/nav-icons/chart.png") !important; }
 [data-app][data-route="terminal"] .tabs button[data-tab="trade"]::before { background-image: url("./assets/slimewire/png/nav-icons/candles.png") !important; }
-[data-app][data-route="terminal"] .tabs button[data-tab="live"]::before { background-image: url("./assets/slimewire/png/nav-icons/live-pairs.png") !important; }
-[data-app][data-route="terminal"] .tabs button[data-tab="liveTrades"]::before { background-image: url("./assets/slimewire/png/nav-icons/live-trades.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="live"]::before { background-image: url("./assets/slimewire/png/nav-icons/slime-drop.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="liveTrades"]::before { background-image: url("./assets/slimewire/png/nav-icons/signal.png") !important; }
 [data-app][data-route="terminal"] .tabs button[data-tab="slimeScope"]::before { background-image: url("./assets/slimewire/png/nav-icons/radar.png") !important; }
 [data-app][data-route="terminal"] .tabs button[data-tab="watchlist"]::before { background-image: url("./assets/slimewire/png/nav-icons/star.png") !important; }
-[data-app][data-route="terminal"] .tabs button[data-tab="kol"]::before { background-image: url("./assets/slimewire/png/nav-icons/snipe-kol.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="kol"]::before { background-image: url("./assets/slimewire/png/nav-icons/target.png") !important; }
 [data-app][data-route="terminal"] .tabs .nav-tool-group summary::before { background-image: url("./assets/slimewire/png/nav-icons/grid.png") !important; }
 [data-app][data-route="terminal"] .tabs button[data-tab="ogreAi"]::before { background-image: url("./assets/slimewire/png/nav-icons/ogre-ai.png") !important; }
 [data-app][data-route="terminal"] .tabs button[data-tab="launchCoin"]::before { background-image: url("./assets/slimewire/png/nav-icons/slime-drop.png") !important; }
@@ -3325,5 +3325,74 @@
   [data-app][data-route="terminal"] .tabs .nav-tool-group summary::after,
   [data-app][data-route="terminal"] .tabs .nav-tool-group button::after {
     font-size: 7.4px !important;
+  }
+}
+
+[data-app][data-route="terminal"] .tabs {
+  gap: 8px !important;
+}
+
+[data-app][data-route="terminal"] .tabs button,
+[data-app][data-route="terminal"] .tabs .nav-tool-group summary,
+[data-app][data-route="terminal"] .tabs .nav-tool-group button {
+  border-radius: 12px !important;
+  overflow: hidden !important;
+}
+
+@media (min-width: 761px) {
+  [data-app][data-route="terminal"] .tabs button,
+  [data-app][data-route="terminal"] .tabs .nav-tool-group summary,
+  [data-app][data-route="terminal"] .tabs .nav-tool-group button {
+    min-height: 56px !important;
+    height: 56px !important;
+  }
+}
+
+@media (max-width: 760px) {
+  [data-app][data-route="terminal"] .tabs {
+    display: grid !important;
+    grid-auto-flow: column !important;
+    grid-auto-columns: minmax(58px, 64px) !important;
+    align-items: stretch !important;
+    gap: 6px !important;
+    padding: 7px !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    scroll-snap-type: x proximity !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs .nav-tool-group {
+    display: contents !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs .nav-tool-group[open] {
+    display: contents !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs button,
+  [data-app][data-route="terminal"] .tabs .nav-tool-group summary,
+  [data-app][data-route="terminal"] .tabs .nav-tool-group button {
+    width: 100% !important;
+    min-width: 0 !important;
+    min-height: 46px !important;
+    height: 46px !important;
+    padding: 5px 4px !important;
+    gap: 3px !important;
+    scroll-snap-align: start !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs button::before,
+  [data-app][data-route="terminal"] .tabs .nav-tool-group summary::before {
+    width: 19px !important;
+    height: 19px !important;
+    flex: 0 0 19px !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs button::after,
+  [data-app][data-route="terminal"] .tabs .nav-tool-group summary::after,
+  [data-app][data-route="terminal"] .tabs .nav-tool-group button::after {
+    font-size: 7.2px !important;
+    line-height: 1 !important;
+    max-width: 54px !important;
   }
 }
