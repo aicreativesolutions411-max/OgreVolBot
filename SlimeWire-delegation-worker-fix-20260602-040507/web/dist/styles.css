@@ -1358,7 +1358,7 @@ button:disabled {
 }
 
 .setup-hub-card {
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   align-items: stretch;
 }
 
@@ -1367,7 +1367,6 @@ button:disabled {
   align-content: start;
   gap: 10px;
   min-width: 0;
-  overflow-wrap: anywhere;
 }
 
 .setup-hub-panel + .setup-hub-panel {
@@ -1386,7 +1385,6 @@ button:disabled {
 }
 
 .automation-delegation-card {
-  grid-column: span 2;
   border: 1px solid rgba(145, 255, 57, 0.34);
   border-radius: var(--radius);
   background:
@@ -1396,14 +1394,7 @@ button:disabled {
 }
 
 .automation-delegation-card.compact {
-  grid-column: 1 / -1;
   margin-top: 12px;
-}
-
-.automation-delegation-card p,
-.automation-delegation-card li,
-.automation-delegation-card small {
-  max-width: 72ch;
 }
 
 .delegation-heading {
@@ -1411,7 +1402,6 @@ button:disabled {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  flex-wrap: wrap;
 }
 
 .delegation-mode-badge {
@@ -4073,44 +4063,6 @@ code {
   margin-top: 14px;
 }
 
-.wallet-tools-details[open] {
-  padding-bottom: 2px;
-}
-
-.wallet-command-card {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-items: start;
-  gap: 12px;
-}
-
-.wallet-command-card > div:first-child,
-.wallet-command-card .card-actions,
-.wallet-command-card small {
-  grid-column: 1 / -1;
-}
-
-.wallet-command-card label {
-  min-width: 0;
-}
-
-.wallet-command-card input,
-.wallet-command-card textarea {
-  width: 100%;
-}
-
-.wallet-command-card .card-actions.compact {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-}
-
-.wallet-command-card small[data-wallet-sweep-status] {
-  display: block;
-  min-height: 1.4em;
-  white-space: pre-line;
-  color: var(--green-2);
-  overflow-wrap: anywhere;
-}
-
 @media (max-width: 640px) {
   .portfolio-metrics {
     grid-template-columns: 1fr 1fr;
@@ -4125,14 +4077,6 @@ code {
   .connected-wallet-card .card-actions > * {
     min-width: 0;
     padding-inline: 8px;
-  }
-
-  .wallet-command-card {
-    grid-template-columns: 1fr;
-  }
-
-  .wallet-command-card .card-actions.compact {
-    grid-template-columns: 1fr 1fr;
   }
 }
 
@@ -7591,10 +7535,6 @@ button[data-position-sell][data-position-sell-percent="100"],
 }
 
 @media (max-width: 900px) {
-  .automation-delegation-card {
-    grid-column: 1 / -1;
-  }
-
   body {
     overflow-x: hidden;
   }

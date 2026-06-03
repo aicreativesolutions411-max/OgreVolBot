@@ -263,14 +263,6 @@ function loadConfig() {
   const stopLossCheckIntervalMs = Number.parseInt(process.env.STOP_LOSS_CHECK_INTERVAL_MS || "2000", 10);
   const stopLossTriggerBufferPct = Number.parseFloat(process.env.STOP_LOSS_TRIGGER_BUFFER_PCT || "1.5");
   const stopLossExitSlippageBps = Number.parseInt(process.env.STOP_LOSS_EXIT_SLIPPAGE_BPS || "1500", 10);
-  const stopLossMonitorSlippageBps = Number.parseInt(process.env.STOP_LOSS_MONITOR_SLIPPAGE_BPS || "2500", 10);
-  const pumpLaunchBodyLimitBytes = Number.parseInt(process.env.PUMP_LAUNCH_BODY_LIMIT_BYTES || "12000000", 10);
-  const pumpLaunchRequestMode = (process.env.PUMP_LAUNCH_REQUEST_MODE || "json").trim().toLowerCase();
-  const workerTickEnabled = parseBoolean(process.env.WORKER_TICK_ENABLED || (process.env.WORKER_SECRET ? "true" : "false"));
-  const workerTickRunTradePlans = parseBoolean(process.env.WORKER_TICK_RUN_TRADE_PLANS || "true");
-  const workerTickRunDcaPlans = parseBoolean(process.env.WORKER_TICK_RUN_DCA_PLANS || "true");
-  const workerTickWarmFeeds = parseBoolean(process.env.WORKER_TICK_WARM_FEEDS || "true");
-  const workerSecret = process.env.WORKER_SECRET || "";
 
   if (!Number.isInteger(bundleFeeBps) || bundleFeeBps < 0 || bundleFeeBps > 1000) {
     throw new Error("TRADE_FEE_BPS/BUNDLE_FEE_BPS must be an integer from 0 to 1000.");
@@ -408,22 +400,6 @@ function loadConfig() {
     throw new Error("STOP_LOSS_EXIT_SLIPPAGE_BPS must be an integer from 1 to 5000.");
   }
 
-  if (!Number.isInteger(stopLossMonitorSlippageBps) || stopLossMonitorSlippageBps < 1 || stopLossMonitorSlippageBps > 5000) {
-    throw new Error("STOP_LOSS_MONITOR_SLIPPAGE_BPS must be an integer from 1 to 5000.");
-  }
-
-  if (!["json", "multipart", "form"].includes(pumpLaunchRequestMode)) {
-    throw new Error("PUMP_LAUNCH_REQUEST_MODE must be json, multipart, or form.");
-  }
-
-  if (!Number.isInteger(pumpLaunchBodyLimitBytes) || pumpLaunchBodyLimitBytes < 100_000 || pumpLaunchBodyLimitBytes > 25_000_000) {
-    throw new Error("PUMP_LAUNCH_BODY_LIMIT_BYTES must be an integer from 100000 to 25000000.");
-  }
-
-  if (workerTickEnabled && (!workerSecret || workerSecret.length < 24)) {
-    throw new Error("WORKER_SECRET must be set to a long random value of at least 24 characters when WORKER_TICK_ENABLED=true.");
-  }
-
   try {
     new PublicKey(feeWallet);
   } catch {
@@ -452,11 +428,8 @@ function loadConfig() {
     pumpLaunchApiUrl: (process.env.PUMP_LAUNCH_API_URL || process.env.PUMP_LAUNCH_API_BASE || "").trim(),
     pumpLaunchApiKey: process.env.PUMP_LAUNCH_API_KEY || "",
     pumpLaunchTimeoutMs: Number.parseInt(process.env.PUMP_LAUNCH_TIMEOUT_MS || "30000", 10),
-    pumpLaunchBodyLimitBytes,
-    pumpLaunchImageMaxBytes: Number.parseInt(process.env.PUMP_LAUNCH_IMAGE_MAX_BYTES || "450000", 10),
-    pumpLaunchApiFormat: (process.env.PUMP_LAUNCH_API_FORMAT || "minimal").trim().toLowerCase(),
-    pumpLaunchImageField: (process.env.PUMP_LAUNCH_IMAGE_FIELD || "").trim(),
-    pumpLaunchRequestMode,
+    pumpLaunchBodyLimitBytes: Number.parseInt(process.env.PUMP_LAUNCH_BODY_LIMIT_BYTES || "12000000", 10),
+    pumpLaunchImageMaxBytes: Number.parseInt(process.env.PUMP_LAUNCH_IMAGE_MAX_BYTES || "2800000", 10),
     photonNewPairsUrl: (process.env.PHOTON_NEW_PAIRS_URL || "").trim(),
     photonApiKey: process.env.PHOTON_API_KEY || "",
     livePairsRpcSafety,
@@ -468,12 +441,6 @@ function loadConfig() {
     stopLossCheckIntervalMs,
     stopLossTriggerBufferPct,
     stopLossExitSlippageBps,
-    stopLossMonitorSlippageBps,
-    workerTickEnabled,
-    workerTickRunTradePlans,
-    workerTickRunDcaPlans,
-    workerTickWarmFeeds,
-    workerSecret,
     solanaTrackerApiKey: process.env.SOLANA_TRACKER_API_KEY || "",
     solanaTrackerApiBase: (process.env.SOLANA_TRACKER_API_BASE || "https://data.solanatracker.io").replace(/\/$/, ""),
     solanaTrackerKolLimit,
@@ -605,10 +572,7 @@ function startHealthServer() {
       return;
     }
 
-    if (requestUrl.pathname.startsWith("/api/")
-      || requestUrl.pathname.startsWith("/internal/")
-      || requestUrl.pathname === "/worker/tick"
-      || requestUrl.pathname === "/worker/health") {
+    if (requestUrl.pathname.startsWith("/api/web/")) {
       await handleWebApiRequest(request, response, requestUrl);
       return;
     }
@@ -683,29 +647,6 @@ function startHealthServer() {
 async function handleWebApiRequest(request, response, requestUrl) {
   try {
     const pathname = requestUrl.pathname;
-
-    const workerTickPaths = new Set([
-      "/api/internal/worker/tick",
-      "/api/worker/tick",
-      "/internal/worker/tick",
-      "/worker/tick"
-    ]);
-    const workerHealthPaths = new Set([
-      "/api/internal/worker/health",
-      "/api/worker/health",
-      "/internal/worker/health",
-      "/worker/health"
-    ]);
-
-    if (request.method === "POST" && workerTickPaths.has(pathname)) {
-      await handleInternalWorkerTick(request, response);
-      return;
-    }
-
-    if (request.method === "GET" && workerHealthPaths.has(pathname)) {
-      handleInternalWorkerHealth(request, response);
-      return;
-    }
 
     if (request.method === "GET" && pathname === "/api/web/config") {
       sendWebJson(request, response, 200, {
@@ -989,46 +930,6 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendWebJson(request, response, 200, {
         ok: true,
         removed: result
-      });
-      return;
-    }
-
-    if (request.method === "POST" && pathname === "/api/web/wallets/sweep-sol") {
-      const body = await readJsonRequestBody(request);
-      const result = await webSweepSol(auth.userId, body);
-      sendWebJson(request, response, 200, {
-        ok: true,
-        sweep: result
-      });
-      return;
-    }
-
-    if (request.method === "POST" && pathname === "/api/web/wallets/sweep-tokens") {
-      const body = await readJsonRequestBody(request);
-      const result = await webSweepTokens(auth.userId, body);
-      sendWebJson(request, response, 200, {
-        ok: true,
-        sweep: result
-      });
-      return;
-    }
-
-    if (request.method === "POST" && pathname === "/api/web/wallets/sell-all-tokens") {
-      const body = await readJsonRequestBody(request);
-      const result = await webSellAllTokens(auth.userId, body);
-      sendWebJson(request, response, 200, {
-        ok: true,
-        sweep: result
-      });
-      return;
-    }
-
-    if (request.method === "POST" && pathname === "/api/web/wallets/send-sol") {
-      const body = await readJsonRequestBody(request);
-      const result = await webSendSolMany(auth.userId, body);
-      sendWebJson(request, response, 200, {
-        ok: true,
-        sweep: result
       });
       return;
     }
@@ -1372,143 +1273,6 @@ function sendWebBinary(request, response, status, buffer, contentType, filename 
     ...webCorsHeaders(request)
   });
   response.end(buffer);
-}
-
-async function handleInternalWorkerTick(request, response) {
-  if (!CONFIG.workerTickEnabled) {
-    sendWebJson(request, response, 503, {
-      ok: false,
-      error: "worker_tick_disabled"
-    });
-    return;
-  }
-
-  const providedSecret = workerTickSecretFromRequest(request);
-  if (!constantTimeStringEquals(providedSecret, CONFIG.workerSecret)) {
-    sendWebJson(request, response, 401, {
-      ok: false,
-      error: "unauthorized_worker_tick"
-    });
-    return;
-  }
-
-  const body = await readJsonRequestBody(request, 64_000);
-  const result = await runInternalWorkerTick(body);
-  sendWebJson(request, response, 200, {
-    ok: true,
-    ...result
-  });
-}
-
-function handleInternalWorkerHealth(request, response) {
-  sendWebJson(request, response, 200, {
-    ok: true,
-    workerTickEnabled: CONFIG.workerTickEnabled,
-    workerSecretConfigured: Boolean(CONFIG.workerSecret && CONFIG.workerSecret.length >= 24),
-    runTradePlans: CONFIG.workerTickRunTradePlans,
-    runDcaPlans: CONFIG.workerTickRunDcaPlans,
-    warmFeeds: CONFIG.workerTickWarmFeeds,
-    livePairRefreshSeconds: CONFIG.livePairsRefreshSeconds,
-    stopLossCheckIntervalMs: CONFIG.stopLossCheckIntervalMs
-  });
-}
-
-function workerTickSecretFromRequest(request) {
-  const direct = request.headers["x-worker-secret"] || request.headers["x-ogre-worker-secret"];
-  if (Array.isArray(direct)) return direct[0] || "";
-  if (direct) return String(direct);
-
-  const authorization = request.headers.authorization || "";
-  const match = String(authorization).match(/^Bearer\s+(.+)$/i);
-  return match ? match[1].trim() : "";
-}
-
-function constantTimeStringEquals(a, b) {
-  const left = Buffer.from(String(a || ""));
-  const right = Buffer.from(String(b || ""));
-  if (left.length !== right.length || left.length === 0) return false;
-  try {
-    return crypto.timingSafeEqual(left, right);
-  } catch {
-    return false;
-  }
-}
-
-async function runInternalWorkerTick(body = {}) {
-  const startedAt = Date.now();
-  const result = {
-    ranAt: new Date(startedAt).toISOString(),
-    tradePlans: { skipped: true },
-    dcaPlans: { skipped: true },
-    feeds: { skipped: true }
-  };
-
-  if (CONFIG.workerTickRunTradePlans && body.runTradePlans !== false) {
-    result.tradePlans = await runWorkerTask("tradePlans", () => processTradePlans());
-  }
-
-  if (CONFIG.workerTickRunDcaPlans && body.runDcaPlans !== false) {
-    result.dcaPlans = await runWorkerTask("dcaPlans", () => processDcaPlans());
-  }
-
-  if (CONFIG.workerTickWarmFeeds && body.warmLivePairs !== false) {
-    result.feeds = await runWorkerTask("feeds", () => warmWorkerLivePairFeeds(body));
-  }
-
-  result.durationMs = Date.now() - startedAt;
-  return result;
-}
-
-async function runWorkerTask(name, fn) {
-  const startedAt = Date.now();
-  try {
-    const value = await fn();
-    return {
-      ok: true,
-      durationMs: Date.now() - startedAt,
-      value: value && typeof value === "object" ? value : undefined
-    };
-  } catch (error) {
-    console.warn(`Worker ${name} tick failed: ${error.message}`);
-    return {
-      ok: false,
-      durationMs: Date.now() - startedAt,
-      error: error.message
-    };
-  }
-}
-
-async function warmWorkerLivePairFeeds(body = {}) {
-  const buckets = normalizeWorkerList(body.buckets, ["live", "under1h", "under3h", "under1d"])
-    .map(normalizeLivePairBucket)
-    .filter((value, index, list) => list.indexOf(value) === index);
-  const sorts = normalizeWorkerList(body.sorts, ["best", "newest"])
-    .map((sort) => String(sort || "best").trim().toLowerCase())
-    .filter(Boolean);
-  const force = Boolean(body.forceFeeds);
-  const warmed = [];
-
-  for (const bucket of buckets) {
-    for (const sort of sorts) {
-      const livePairs = await webLivePairs("worker", bucket, { sort, force });
-      warmed.push({
-        bucket,
-        sort,
-        rows: Array.isArray(livePairs?.rows) ? livePairs.rows.length : 0,
-        stale: Boolean(livePairs?.stale)
-      });
-    }
-  }
-
-  return { warmed };
-}
-
-function normalizeWorkerList(value, fallback) {
-  if (Array.isArray(value)) return value.map(String).filter(Boolean);
-  if (typeof value === "string") {
-    return value.split(",").map((item) => item.trim()).filter(Boolean);
-  }
-  return [...fallback];
 }
 
 async function readJsonRequestBody(request, maxBytes = 0) {
@@ -4811,7 +4575,7 @@ async function buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps, o
 
 async function sellTokenFromWallet(wallet, tokenMint, percent, slippageBps, options = {}) {
   const keypair = decryptWallet(wallet);
-  const token = await getReliableTokenBalanceForMint(keypair.publicKey, new PublicKey(tokenMint), { throwOnError: true });
+  const token = await getTokenBalanceForMintCached(keypair.publicKey, new PublicKey(tokenMint), { force: true });
   if (!token || token.rawAmount === 0n) {
     throw new Error("no token balance");
   }
@@ -4859,123 +4623,6 @@ async function sellTokenAmountFromWallet(wallet, tokenMint, amount, slippageBps,
   };
 }
 
-async function getReliableTokenBalanceForMint(owner, mint, options = {}) {
-  const ownerKey = owner instanceof PublicKey ? owner : new PublicKey(owner);
-  const mintKey = mint instanceof PublicKey ? mint : new PublicKey(mint);
-  let lastError = null;
-  let lastBalance = null;
-
-  try {
-    const direct = await getTokenBalanceForMintCached(ownerKey, mintKey, { force: true });
-    if (direct?.rawAmount > 0n) return direct;
-    lastBalance = direct || lastBalance;
-  } catch (error) {
-    lastError = error;
-  }
-
-  try {
-    const lookup = await getOwnedTokenAccountsWithWarningsCached(ownerKey, { force: true });
-    const aggregate = aggregateTokenAccountsForMint(lookup.accounts || [], mintKey);
-    if (aggregate?.rawAmount > 0n) {
-      setTimedCache(tokenBalanceCache, `${ownerKey.toBase58()}:${mintKey.toBase58()}`, aggregate);
-      return aggregate;
-    }
-    lastBalance = aggregate || lastBalance;
-    if (lookup.warnings?.length && !lastError) {
-      lastError = new Error(lookup.warnings.join(" | "));
-    }
-  } catch (error) {
-    lastError = error;
-  }
-
-  if (options.throwOnError && lastError) {
-    throw lastError;
-  }
-  return lastBalance;
-}
-
-async function getPlanWalletTokenBalance(plan, wallet, planWallet, options = {}) {
-  const attempts = Math.max(1, Math.min(6, Number.parseInt(options.attempts || 1, 10) || 1));
-  const keypair = decryptWallet(wallet);
-  const mintKey = new PublicKey(plan.tokenMint);
-  let lastError = null;
-
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    if (attempt > 0) {
-      invalidateWalletReadCache(wallet.publicKey);
-      await sleep(Math.min(1_500, 250 + attempt * 250));
-    }
-
-    try {
-      const token = await getReliableTokenBalanceForMint(keypair.publicKey, mintKey, { throwOnError: false });
-      if (token?.rawAmount > 0n) {
-        recoverPlanWalletTokenOutAmount(planWallet, token);
-        return token;
-      }
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  if (options.throwOnMissing) {
-    throw lastError || new Error("no live token balance");
-  }
-  return null;
-}
-
-function exitSlippageAttemptList(baseSlippageBps, priceExit = false) {
-  const maxSlippageBps = 5_000;
-  const defaultSlippageBps = Number(CONFIG.defaultSlippageBps || 400);
-  const base = Math.max(1, Math.min(maxSlippageBps, Number.parseInt(baseSlippageBps || defaultSlippageBps, 10) || defaultSlippageBps));
-  if (!priceExit) return [base];
-  return [...new Set([
-    base,
-    Math.max(base, CONFIG.stopLossExitSlippageBps),
-    Math.max(base, 2_500),
-    Math.max(base, 4_000),
-    maxSlippageBps
-  ].map((value) => Math.max(1, Math.min(maxSlippageBps, Number.parseInt(value, 10) || base))))];
-}
-
-async function sellTradePlanWalletWithRetries(plan, planWallet, wallet, sellPercent, baseSlippageBps, options = {}) {
-  const priceExit = Boolean(options.priceExit);
-  const slippageAttempts = exitSlippageAttemptList(baseSlippageBps, priceExit);
-  const attemptLog = [];
-  let lastError = null;
-
-  for (const slippageBps of slippageAttempts) {
-    try {
-      invalidateWalletReadCache(wallet.publicKey);
-      const token = await getPlanWalletTokenBalance(plan, wallet, planWallet, {
-        attempts: priceExit ? 4 : 2,
-        throwOnMissing: true
-      });
-      const tokenBaseRawAmount = recoverPlanWalletTokenOutAmount(planWallet, token);
-      const amount = sellAmountForPercent(token.rawAmount, sellPercent, tokenBaseRawAmount);
-      if (amount === 0n) {
-        throw new Error("sell amount rounded to zero");
-      }
-
-      const sell = await sellTokenAmountFromWallet(wallet, plan.tokenMint, amount, slippageBps, { userId: options.userId });
-      sell.sellSlippageBps = slippageBps;
-      planWallet.exitSlippageAttempts = attemptLog;
-      return sell;
-    } catch (error) {
-      lastError = error;
-      attemptLog.push({
-        at: new Date().toISOString(),
-        slippageBps,
-        error: friendlyError(error)
-      });
-      if (!priceExit) break;
-      await sleep(350);
-    }
-  }
-
-  planWallet.exitSlippageAttempts = attemptLog;
-  throw lastError || new Error("sell failed");
-}
-
 function formatSwapAttemptSuffix(result) {
   return result?.attempts > 1 ? `, landed after ${result.attempts} attempts` : "";
 }
@@ -4997,56 +4644,6 @@ function sellAmountForPercent(currentRawAmount, percent, baseRawAmount = null) {
 
   const targetAmount = (targetBase * BigInt(percent)) / 100n;
   return targetAmount > current ? current : targetAmount;
-}
-
-function positiveBigIntOrZero(value) {
-  if (value === null || value === undefined || value === "") return 0n;
-  try {
-    const amount = BigInt(String(value));
-    return amount > 0n ? amount : 0n;
-  } catch {
-    return 0n;
-  }
-}
-
-function positiveRawString(value) {
-  const amount = positiveBigIntOrZero(value);
-  return amount > 0n ? amount.toString() : null;
-}
-
-function planWalletBasisLamports(plan, planWallet) {
-  for (const key of ["basisLamports", "basisLamportsRaw", "swapLamports", "grossLamports", "amountLamports"]) {
-    const amount = positiveBigIntOrZero(planWallet?.[key]);
-    if (amount > 0n) return amount;
-  }
-
-  const fallbackSol = Number.parseFloat(String(planWallet?.amountSol ?? plan?.amountSol ?? plan?.buyAmountSol ?? 0));
-  if (Number.isFinite(fallbackSol) && fallbackSol > 0) {
-    return BigInt(Math.floor(fallbackSol * LAMPORTS_PER_SOL));
-  }
-
-  return 0n;
-}
-
-function recoverPlanWalletTokenOutAmount(planWallet, token) {
-  const existing = positiveRawString(planWallet?.tokenOutAmount);
-  if (existing) return existing;
-
-  const rawAmount = positiveRawString(token?.rawAmount);
-  if (planWallet && rawAmount) {
-    planWallet.tokenOutAmount = rawAmount;
-    planWallet.recoveredTokenOutAmountAt = new Date().toISOString();
-    planWallet.lastRecoveryNote = "Recovered token amount from on-chain balance.";
-  }
-  return rawAmount;
-}
-
-function scheduleTradePlanProcessing(label = "trade plan", delays = [500, 1500, 4000, 10000, 20000]) {
-  for (const delay of delays) {
-    setTimeout(() => void processTradePlans().catch((error) => {
-      console.error(`${label} processing failed:`, error.message);
-    }), delay);
-  }
 }
 
 function isPriceExitTrigger(triggerReason) {
@@ -5146,7 +4743,7 @@ function timedPlanExitSource(plan) {
 }
 
 function isActiveTimedWalletStatus(status) {
-  return ["armed", "watching", "retrying", "submitting", "waiting_next_loop", "timer-only"].includes(String(status || "").toLowerCase());
+  return ["watching", "waiting_next_loop"].includes(String(status || ""));
 }
 
 async function processTradePlans() {
@@ -5256,8 +4853,6 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
         ? 100
         : (planWallet.triggerSellPercent ?? plan.triggerSellPercent ?? 100)
     };
-    planWallet.triggerStatus = "retrying";
-    planWallet.lastTriggerCheckAt = new Date().toISOString();
   }
 
   if (!triggerReason && planHasPriceExit(plan, planWallet)) {
@@ -5281,13 +4876,7 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
       planWallet.lastEstimateSource = estimate.source || "jupiter";
       planWallet.lastEstimatedNetOut = estimate.estimatedNetOut?.toString?.() || null;
       planWallet.lastBasisLamports = estimate.basis?.toString?.() || null;
-      planWallet.lastMonitorSlippageBps = estimate.monitorSlippageBps || CONFIG.stopLossMonitorSlippageBps;
       planWallet.lastError = estimate.quoteError ? `Jupiter quote fallback: ${estimate.quoteError}` : null;
-      planWallet.estimateFailures = 0;
-      planWallet.lastPriceEstimateError = null;
-      planWallet.triggerStatus = "watching";
-      planWallet.lastTriggerCheckAt = planWallet.lastCheckedAt;
-      planWallet.triggerCheckIntervalMs = CONFIG.stopLossCheckIntervalMs;
 
       const stopLossTriggerPct = stopLossPct
         ? Math.max(0.1, Number(stopLossPct) - CONFIG.stopLossTriggerBufferPct)
@@ -5297,10 +4886,6 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
         const armedPct = Number(stopLossPct).toFixed(2).replace(/\.00$/, "");
         triggerReason = `stop-loss ${estimate.movePct.toFixed(2)}% (armed ${armedPct}%)`;
         triggerMeta = { kind: "stop-loss", sellPercent: 100 };
-        planWallet.triggerStatus = "triggered";
-        planWallet.triggerKind = "stop-loss";
-        planWallet.triggerTargetPct = stopLossPct;
-        planWallet.triggerSellPercent = 100;
       } else if (takeProfitPct && estimate.movePct >= takeProfitPct) {
         triggerReason = `take-profit +${estimate.movePct.toFixed(2)}%`;
         triggerMeta = ladderLevel
@@ -5311,20 +4896,12 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
               sellPercent: ladderLevel.sellPercent
             }
           : { kind: "take-profit", sellPercent: planWallet.triggerSellPercent ?? plan.triggerSellPercent ?? 100 };
-        planWallet.triggerStatus = "triggered";
-        planWallet.triggerKind = "take-profit";
-        planWallet.triggerTargetPct = ladderLevel?.pct ?? takeProfitPct;
-        planWallet.triggerSellPercent = triggerMeta.sellPercent;
       } else {
         return { changed: true, message: null };
       }
     } catch (error) {
       planWallet.lastCheckedAt = new Date().toISOString();
       planWallet.lastError = friendlyError(error);
-      planWallet.estimateFailures = Number.parseInt(planWallet.estimateFailures || 0, 10) + 1;
-      planWallet.lastPriceEstimateError = planWallet.lastError;
-      planWallet.triggerStatus = timerDue ? "timer-triggered" : "price-unavailable";
-      planWallet.lastTriggerCheckAt = planWallet.lastCheckedAt;
       if (timerDue) {
         triggerReason = "timer";
       } else {
@@ -5350,22 +4927,15 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
     planWallet.lastSellAttemptAt = triggeredAt;
     planWallet.updatedAt = triggeredAt;
     invalidateWalletReadCache(wallet.publicKey);
-    const priceExitTrigger = isPriceExitTrigger(triggerReason);
     const sellPercent = effectiveTimedSellPercent(plan, planWallet, triggerReason, triggerMeta);
-    if (priceExitTrigger) {
-      planWallet.triggerStatus = "submitting";
-      planWallet.triggerKind = triggerMeta?.kind || (/^stop-loss\b/i.test(String(triggerReason || "")) ? "stop-loss" : "take-profit");
-      planWallet.triggerSellPercent = sellPercent;
-    }
-    const exitSlippageBps = priceExitTrigger
+    const exitSlippageBps = isPriceExitTrigger(triggerReason)
       ? Math.max(Number(plan.slippageBps || 0), CONFIG.stopLossExitSlippageBps)
       : plan.slippageBps;
     planWallet.exitSlippageBps = exitSlippageBps;
-    const sell = await sellTradePlanWalletWithRetries(plan, planWallet, wallet, sellPercent, exitSlippageBps, {
-      userId: plan.userId,
-      priceExit: priceExitTrigger
+    const sell = await sellTokenFromWallet(wallet, plan.tokenMint, sellPercent, exitSlippageBps, {
+      baseRawAmount: planWallet.tokenOutAmount,
+      userId: plan.userId
     });
-    planWallet.exitSlippageBps = sell.sellSlippageBps || exitSlippageBps;
     invalidateWalletReadCache(wallet.publicKey);
     sell.sellPercent = sellPercent;
     await recordTradeEvents([{
@@ -5402,8 +4972,6 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
       if (nextLevel) {
         planWallet.status = "watching";
         planWallet.exitStatus = "watching";
-        planWallet.triggerStatus = "watching";
-        planWallet.triggerKind = null;
         return {
           changed: true,
           message: `${formatTimedSellSuccessLine(planWallet, sell, planWallet.triggerReason, plan.loopCount || 1)}; next ladder target ${formatTakeProfitTarget(nextLevel.pct)} sells ${nextLevel.sellPercent}%`
@@ -5412,7 +4980,6 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
 
       planWallet.status = "sold";
       planWallet.exitStatus = "confirmed";
-      planWallet.triggerStatus = "confirmed";
       planWallet.soldAt = new Date().toISOString();
       return {
         changed: true,
@@ -5428,7 +4995,6 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
     planWallet.lastError = null;
     planWallet.retryAfterAt = null;
     planWallet.exitStatus = "confirmed";
-    planWallet.triggerStatus = priceExitTrigger ? "confirmed" : (planWallet.triggerStatus || "timer-confirmed");
     planWallet.sellSignature = sell.signature;
     planWallet.sellFeeStatus = sell.feeStatus;
     planWallet.soldAt = new Date().toISOString();
@@ -5437,7 +5003,6 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
       const loopDelaySeconds = Number(plan.loopDelaySeconds || 0);
       if (loopDelaySeconds > 0) {
         planWallet.status = "waiting_next_loop";
-        planWallet.triggerStatus = "waiting_next_loop";
         planWallet.nextLoopAt = new Date(Date.now() + loopDelaySeconds * 1000).toISOString();
         planWallet.updatedAt = new Date().toISOString();
         return {
@@ -5459,18 +5024,16 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
   } catch (error) {
     const failures = Number.parseInt(planWallet.failures || 0, 10) + 1;
     const priceExit = isPriceExitTrigger(triggerReason);
-    const maxFailures = priceExit ? 90 : 5;
-    const retryDelayMs = failures >= maxFailures ? 0 : (priceExit ? Math.min(6_000, 500 * failures) : Math.min(12_000, 750 * failures));
+    const maxFailures = priceExit ? 20 : 5;
+    const retryDelayMs = failures >= maxFailures ? 0 : Math.min(30_000, 1_500 * failures);
     planWallet.failures = failures;
-    planWallet.status = failures >= maxFailures ? "failed" : (priceExit ? "retrying" : "watching");
-    planWallet.exitStatus = failures >= maxFailures ? "failed" : (priceExit ? "retrying" : "watching");
-    planWallet.triggerStatus = failures >= maxFailures ? "failed" : (priceExit ? "retrying" : "watching");
+    planWallet.status = failures >= maxFailures ? "failed" : "watching";
+    planWallet.exitStatus = failures >= maxFailures ? "failed" : "watching";
     planWallet.triggerReason = triggerReason;
     planWallet.error = friendlyError(error);
     planWallet.lastError = friendlyError(error);
     planWallet.lastFailedAt = new Date().toISOString();
     planWallet.retryAfterAt = retryDelayMs > 0 ? new Date(Date.now() + retryDelayMs).toISOString() : null;
-    planWallet.nextRetryAt = planWallet.retryAfterAt;
     planWallet.updatedAt = new Date().toISOString();
     return {
       changed: true,
@@ -5952,97 +5515,25 @@ async function processDcaPlanWallet(plan, planWallet, walletStore) {
   }
 }
 
-const SOL_USD_PRICE_CACHE_TTL_MS = 60_000;
-let solUsdPriceCache = { cachedAt: 0, value: null, promise: null };
-
-async function getSolUsdPrice(options = {}) {
-  const now = Date.now();
-  if (!options.force && Number.isFinite(solUsdPriceCache.value) && solUsdPriceCache.value > 0 && now - solUsdPriceCache.cachedAt < SOL_USD_PRICE_CACHE_TTL_MS) {
-    return solUsdPriceCache.value;
-  }
-  if (!options.force && solUsdPriceCache.promise) {
-    return solUsdPriceCache.promise;
-  }
-
-  solUsdPriceCache.promise = (async () => {
-    const pairs = await fetchDexScreenerTokenPairsBatch([SOL_MINT], { timeoutMs: options.timeoutMs || 1_800 }).catch(() => []);
-    const priceUsd = firstMeaningfulNumber(...(pairs || []).map((pair) => pair?.priceUsd));
-    if (!Number.isFinite(priceUsd) || priceUsd <= 0) {
-      throw new Error("SOL/USD price unavailable");
-    }
-    solUsdPriceCache = { cachedAt: Date.now(), value: priceUsd, promise: null };
-    return priceUsd;
-  })();
-
-  try {
-    return await solUsdPriceCache.promise;
-  } catch (error) {
-    solUsdPriceCache = { ...solUsdPriceCache, promise: null };
-    throw error;
-  }
-}
-
-function pumpFunPriceUsd(metadata = {}, tokenDecimals = 6) {
-  const direct = firstMeaningfulNumber(
-    metadata.priceUsd,
-    metadata.price_usd,
-    metadata.usdPrice,
-    metadata.priceUSD,
-    metadata.price
-  );
-  if (Number.isFinite(direct) && direct > 0) return direct;
-
-  const marketCapUsd = firstMeaningfulNumber(
-    metadata.marketCap,
-    metadata.usdMarketCap,
-    metadata.fdv,
-    metadata.mcap,
-    metadata.mc
-  );
-  const supply = firstMeaningfulNumber(
-    metadata.totalSupply,
-    metadata.tokenSupply,
-    metadata.supply,
-    metadata.total_supply,
-    metadata.token_supply
-  );
-  const decimals = Number.isInteger(Number(tokenDecimals)) ? Number(tokenDecimals) : 6;
-  if (!Number.isFinite(marketCapUsd) || marketCapUsd <= 0 || !Number.isFinite(supply) || supply <= 0) {
-    return null;
-  }
-
-  const normalizedSupply = supply > 1_000_000_000_000 ? supply / (10 ** decimals) : supply;
-  if (!Number.isFinite(normalizedSupply) || normalizedSupply <= 0) {
-    return null;
-  }
-  return marketCapUsd / normalizedSupply;
-}
-
 async function estimatePlanWalletMove(plan, wallet, sellPercentOverride = null) {
   const keypair = decryptWallet(wallet);
-  const planWallet = plan.wallets.find((item) => item.publicKey === wallet.publicKey);
-  const token = await getPlanWalletTokenBalance(plan, wallet, planWallet, { attempts: 2, throwOnMissing: true });
+  const token = await getTokenBalanceForMintCached(keypair.publicKey, new PublicKey(plan.tokenMint), { force: true });
   if (!token || token.rawAmount === 0n) {
     throw new Error("no token balance");
   }
 
+  const planWallet = plan.wallets.find((item) => item.publicKey === wallet.publicKey);
   const triggerSellPercent = Math.max(1, Math.min(100, Number.parseFloat(sellPercentOverride || effectiveTimedSellPercent(plan, planWallet, "take-profit")) || 100));
-  const tokenBaseRawAmount = recoverPlanWalletTokenOutAmount(planWallet, token);
-  const amount = sellAmountForPercent(token.rawAmount, triggerSellPercent, tokenBaseRawAmount);
+  const amount = sellAmountForPercent(token.rawAmount, triggerSellPercent, planWallet?.tokenOutAmount);
   if (amount === 0n) {
     throw new Error("sell amount rounded to zero");
   }
 
-  const basisLamports = planWalletBasisLamports(plan, planWallet);
+  const basisLamports = BigInt(planWallet?.basisLamports || planWallet?.swapLamports || planWallet?.grossLamports || 0);
   const basis = (basisLamports * BigInt(Math.round(triggerSellPercent))) / 100n;
   if (basis <= 0n) {
     throw new Error("missing plan basis");
   }
-
-  const monitorSlippageBps = Math.max(
-    Number.parseInt(plan.slippageBps || CONFIG.defaultSlippageBps, 10) || CONFIG.defaultSlippageBps,
-    CONFIG.stopLossMonitorSlippageBps
-  );
 
   let order;
   try {
@@ -6051,13 +5542,13 @@ async function estimatePlanWalletMove(plan, wallet, sellPercentOverride = null) 
       inputMint: plan.tokenMint,
       outputMint: SOL_MINT,
       amount: amount.toString(),
-      slippageBps: monitorSlippageBps
+      slippageBps: plan.slippageBps
     });
   } catch (quoteError) {
     try {
-      return await estimatePlanWalletMoveFromPumpFun(plan, token, amount, basis, quoteError, monitorSlippageBps);
+      return await estimatePlanWalletMoveFromPumpFun(plan, token, amount, basis, quoteError);
     } catch {
-      return estimatePlanWalletMoveFromDexPair(plan, token, amount, basis, quoteError, monitorSlippageBps);
+      return estimatePlanWalletMoveFromDexPair(plan, token, amount, basis, quoteError);
     }
   }
 
@@ -6065,22 +5556,13 @@ async function estimatePlanWalletMove(plan, wallet, sellPercentOverride = null) 
   const estimatedFee = BigInt(calculateFeeLamports(estimatedOut));
   const estimatedNetOut = estimatedOut > estimatedFee ? estimatedOut - estimatedFee : 0n;
   const movePct = (Number(estimatedNetOut - basis) / Number(basis)) * 100;
-  return { estimatedOut, estimatedNetOut, basis, movePct, source: "jupiter", monitorSlippageBps };
+  return { estimatedOut, estimatedNetOut, basis, movePct, source: "jupiter" };
 }
 
-async function estimatePlanWalletMoveFromPumpFun(plan, token, amount, basis, quoteError, monitorSlippageBps = null) {
+async function estimatePlanWalletMoveFromPumpFun(plan, token, amount, basis, quoteError) {
   const metadata = await getPumpFunTokenMetadata(plan.tokenMint, { timeoutMs: 1_800 });
   const decimals = Number(token?.decimals);
-  let priceSol = pumpFunPriceSol(metadata, decimals);
-  if (!Number.isFinite(priceSol) || priceSol <= 0) {
-    const priceUsd = pumpFunPriceUsd(metadata, decimals);
-    if (Number.isFinite(priceUsd) && priceUsd > 0) {
-      const solUsd = await getSolUsdPrice({ timeoutMs: 1_800 }).catch(() => null);
-      if (Number.isFinite(solUsd) && solUsd > 0) {
-        priceSol = priceUsd / solUsd;
-      }
-    }
-  }
+  const priceSol = pumpFunPriceSol(metadata, decimals);
 
   if (!Number.isFinite(priceSol) || priceSol <= 0 || !Number.isInteger(decimals)) {
     throw quoteError;
@@ -6103,7 +5585,6 @@ async function estimatePlanWalletMoveFromPumpFun(plan, token, amount, basis, quo
     basis,
     movePct,
     source: "pumpfun",
-    monitorSlippageBps,
     quoteError: friendlyError(quoteError)
   };
 }
@@ -6134,85 +5615,20 @@ function pumpFunPriceSol(metadata = {}, tokenDecimals = 6) {
   return solUnits / tokenUnits;
 }
 
-function tokenAddressEquals(left, right) {
-  return String(left || "").trim() === String(right || "").trim();
-}
-
-function dexTokenIsSol(token = {}) {
-  return tokenAddressEquals(token.address, SOL_MINT)
-    || /^w?sol$/i.test(String(token.symbol || ""))
-    || /^solana$/i.test(String(token.name || ""));
-}
-
-function dexPairTokenPriceUsd(pair, tokenMint) {
-  const base = pair?.baseToken || {};
-  const quote = pair?.quoteToken || {};
-  const priceUsd = Number(pair?.priceUsd);
-  if (!Number.isFinite(priceUsd) || priceUsd <= 0) return null;
-
-  const baseIsTarget = tokenAddressEquals(base.address, tokenMint);
-  const quoteIsTarget = tokenAddressEquals(quote.address, tokenMint);
-  if (baseIsTarget) return priceUsd;
-
-  const priceNative = Number(pair?.priceNative);
-  if (quoteIsTarget && Number.isFinite(priceNative) && priceNative > 0) {
-    return priceUsd / priceNative;
-  }
-  return null;
-}
-
-function dexPairTokenPriceSol(pair, tokenMint, solUsdPrice = null) {
-  const base = pair?.baseToken || {};
-  const quote = pair?.quoteToken || {};
-  const priceNative = Number(pair?.priceNative);
-
-  const baseIsTarget = tokenAddressEquals(base.address, tokenMint);
-  const quoteIsTarget = tokenAddressEquals(quote.address, tokenMint);
-  const baseIsSol = dexTokenIsSol(base);
-  const quoteIsSol = dexTokenIsSol(quote);
-
-  if (Number.isFinite(priceNative) && priceNative > 0) {
-    if (baseIsTarget && quoteIsSol) return priceNative;
-    if (quoteIsTarget && baseIsSol) return 1 / priceNative;
-  }
-
-  const priceUsd = dexPairTokenPriceUsd(pair, tokenMint);
-  if (Number.isFinite(priceUsd) && priceUsd > 0 && Number.isFinite(solUsdPrice) && solUsdPrice > 0) {
-    return priceUsd / solUsdPrice;
-  }
-  return null;
-}
-
-async function bestDexPairWithSolPrice(tokenMint, pairs) {
-  const matchingPairs = (pairs || [])
-    .filter((pair) => pairMatchesToken(pair, tokenMint))
-    .sort(compareDexPairsForSniper);
-  const direct = matchingPairs
-    .map((pair) => ({ pair, priceSol: dexPairTokenPriceSol(pair, tokenMint) }))
-    .filter((item) => Number.isFinite(item.priceSol) && item.priceSol > 0)
-    .sort((a, b) => compareDexPairsForSniper(a.pair, b.pair))[0] || null;
-  if (direct) return direct;
-
-  const solUsdPrice = await getSolUsdPrice({ timeoutMs: 1_800 }).catch(() => null);
-  if (!Number.isFinite(solUsdPrice) || solUsdPrice <= 0) return null;
-  return matchingPairs
-    .map((pair) => ({ pair, priceSol: dexPairTokenPriceSol(pair, tokenMint, solUsdPrice) }))
-    .filter((item) => Number.isFinite(item.priceSol) && item.priceSol > 0)
-    .sort((a, b) => compareDexPairsForSniper(a.pair, b.pair))[0] || null;
-}
-
-async function estimatePlanWalletMoveFromDexPair(plan, token, amount, basis, quoteError, monitorSlippageBps = null) {
+async function estimatePlanWalletMoveFromDexPair(plan, token, amount, basis, quoteError) {
   const pairs = await fetchDexScreenerTokenPairsBatch([plan.tokenMint], { timeoutMs: 1_800 }).catch(() => []);
-  const pricedPair = await bestDexPairWithSolPrice(plan.tokenMint, pairs);
-  const priceSol = pricedPair?.priceSol;
+  const pair = bestDexPairForToken(plan.tokenMint, pairs);
+  const tokenIsBase = pair?.baseToken?.address === plan.tokenMint;
+  const quoteIsSol = pair?.quoteToken?.address === SOL_MINT || /^w?sol$/i.test(String(pair?.quoteToken?.symbol || ""));
+  const priceNative = Number(pair?.priceNative);
   const decimals = Number(token?.decimals);
 
-  if (!Number.isFinite(priceSol) || priceSol <= 0 || !Number.isInteger(decimals)) {
+  if (!tokenIsBase || !quoteIsSol || !Number.isFinite(priceNative) || priceNative <= 0 || !Number.isInteger(decimals)) {
     throw quoteError;
   }
 
   const tokenUnits = Number(amount) / (10 ** decimals);
-  const estimatedOutNumber = tokenUnits * priceSol * LAMPORTS_PER_SOL;
+  const estimatedOutNumber = tokenUnits * priceNative * LAMPORTS_PER_SOL;
   if (!Number.isFinite(estimatedOutNumber) || estimatedOutNumber <= 0) {
     throw quoteError;
   }
@@ -6228,8 +5644,6 @@ async function estimatePlanWalletMoveFromDexPair(plan, token, amount, basis, quo
     basis,
     movePct,
     source: "dexscreener",
-    monitorSlippageBps,
-    pairAddress: firstString(pricedPair?.pair?.pairAddress, pricedPair?.pair?.address),
     quoteError: friendlyError(quoteError)
   };
 }
@@ -6829,7 +6243,7 @@ async function getTokenBalanceForMintCached(owner, mint, options = {}) {
 
 async function safeTokenRawBalance(owner, mint) {
   try {
-    const token = await getReliableTokenBalanceForMint(owner, mint, { throwOnError: false });
+    const token = await getTokenBalanceForMintCached(owner, mint, { force: true });
     return BigInt(token?.rawAmount || 0);
   } catch {
     return 0n;
@@ -6838,16 +6252,12 @@ async function safeTokenRawBalance(owner, mint) {
 
 async function readTokenDeltaAfterBuy(owner, mint, beforeRaw) {
   const before = BigInt(beforeRaw || 0);
-  const ownerText = owner instanceof PublicKey ? owner.toBase58() : String(owner || "");
-  for (let attempt = 0; attempt < 9; attempt += 1) {
-    if (attempt > 0) {
-      if (ownerText) invalidateWalletReadCache(ownerText);
-      await sleep(Math.min(1800, 350 + attempt * 275));
-    }
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     const after = await safeTokenRawBalance(owner, mint);
     if (after > before) {
       return (after - before).toString();
     }
+    await sleep(450);
   }
   return null;
 }
@@ -8402,15 +7812,10 @@ async function getPumpFunTokenMetadata(tokenMint, options = {}) {
     name: coin?.name || "",
     imageUrl: coin?.image_uri || coin?.image || coin?.metadata?.image || "",
     priceSol: firstMeaningfulNumber(coin?.priceSol, coin?.price_sol, coin?.priceNative, coin?.price_native, coin?.priceInSol) || null,
-    priceUsd: firstMeaningfulNumber(coin?.priceUsd, coin?.price_usd, coin?.usdPrice, coin?.priceUSD, coin?.price) || null,
     virtualSolReserves: firstMeaningfulNumber(coin?.virtual_sol_reserves, coin?.virtualSolReserves) || null,
     virtualTokenReserves: firstMeaningfulNumber(coin?.virtual_token_reserves, coin?.virtualTokenReserves) || null,
     marketCap: firstMeaningfulNumber(coin?.usd_market_cap, coin?.market_cap, coin?.marketCap, coin?.fdv, coin?.mcap, coin?.mc) || null,
-    usdMarketCap: firstMeaningfulNumber(coin?.usd_market_cap, coin?.market_cap, coin?.marketCap, coin?.fdv, coin?.mcap, coin?.mc) || null,
     fdv: firstMeaningfulNumber(coin?.fdv, coin?.marketCap, coin?.usd_market_cap, coin?.market_cap, coin?.mcap, coin?.mc) || null,
-    totalSupply: firstMeaningfulNumber(coin?.total_supply, coin?.totalSupply, coin?.supply, coin?.tokenSupply, coin?.token_supply) || null,
-    tokenSupply: firstMeaningfulNumber(coin?.tokenSupply, coin?.token_supply, coin?.totalSupply, coin?.total_supply, coin?.supply) || null,
-    supply: firstMeaningfulNumber(coin?.supply, coin?.total_supply, coin?.totalSupply, coin?.tokenSupply, coin?.token_supply) || null,
     liquidityUsd: firstMeaningfulNumber(coin?.liquidity_usd, coin?.liquidityUsd, coin?.liquidity?.usd, coin?.liquidity, coin?.currentLiquidityUsd) || null,
     volume: {
       m5: firstMeaningfulNumber(volume.m5, volume["5m"], coin?.volume5m, coin?.volume_5m) || 0,
@@ -11265,35 +10670,6 @@ async function fetchTelegramFileText(fileId) {
   return response.text();
 }
 
-function providerErrorValue(value) {
-  if (!value) return "";
-  if (typeof value === "string") return value;
-  if (Array.isArray(value)) {
-    return value.map(providerErrorValue).filter(Boolean).join("; ");
-  }
-  if (typeof value === "object") {
-    return firstString(
-      value.message,
-      value.error,
-      value.description,
-      value.reason,
-      value.detail,
-      value.details,
-      providerErrorValue(value.errors),
-      providerErrorValue(value.result?.error)
-    );
-  }
-  return String(value);
-}
-
-function fetchJsonErrorMessage(data, text, status) {
-  const message = providerErrorValue(data);
-  if (message) return message.slice(0, 500);
-  const fallback = String(text || "").replace(/\s+/g, " ").trim();
-  if (fallback) return fallback.slice(0, 500);
-  return `HTTP ${status}`;
-}
-
 async function fetchJson(url, init = {}) {
   const { timeoutMs, ...fetchInit } = init || {};
   let timeout = null;
@@ -11329,11 +10705,9 @@ async function fetchJson(url, init = {}) {
   }
 
   if (!response.ok) {
-    const error = new Error(fetchJsonErrorMessage(data, text, response.status));
+    const error = new Error(data.error || data.description || `HTTP ${response.status}`);
     error.status = response.status;
     error.retryAfter = response.headers.get("retry-after");
-    error.responseBody = String(text || "").slice(0, 1000);
-    error.providerData = data;
     throw error;
   }
 
@@ -12976,21 +12350,6 @@ function webBackupDownloadsForWallets(userId, wallets, groupLabel, note) {
   };
 }
 
-function webAutoExitRequested(body = {}) {
-  if (cleanLaunchBoolean(body.autoExit)) return true;
-
-  const hasExitFields = body.takeProfitPct !== undefined
-    || body.stopLossPct !== undefined
-    || body.sellDelay !== undefined
-    || body.sellDelaySeconds !== undefined;
-  if (!hasExitFields) return false;
-
-  const takeProfitPct = parseTakeProfitPercent(String(body.takeProfitPct || "0"));
-  const stopLossPct = parseOptionalTriggerPercent(String(body.stopLossPct || "0"));
-  const sellDelaySeconds = parseOptionalSellDelaySeconds(firstString(body.sellDelay, body.sellDelaySeconds, "off"));
-  return Boolean(takeProfitPct || stopLossPct || sellDelaySeconds > 0);
-}
-
 async function webTradeBuy(userId, body = {}) {
   const store = await readWalletStore();
   const wallet = getWalletAt(store, parseWebWalletIndex(body.walletIndex), userId);
@@ -13021,7 +12380,7 @@ async function webTradeBuy(userId, body = {}) {
     signature: result.signature
   });
 
-  const autoExitPlan = webAutoExitRequested(body)
+  const autoExitPlan = body.autoExit
     ? await webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, result, body, slippageBps)
     : null;
   const baseMessage = `${wallet.label} bought ${shortMint(tokenMint)} with ${lamportsToSol(result.amountLamports)} SOL.`;
@@ -13106,10 +12465,9 @@ async function webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, buyRe
 
   const now = Date.now();
   const sellAfterAt = planSellAfterAtFromNow({ sellDelaySeconds }, now);
-  const amountLamports = positiveRawString(buyResult.amountLamports) || "0";
-  const basisLamports = positiveRawString(buyResult.swapLamports) || amountLamports;
-  const feeLamports = positiveRawString(buyResult.feeLamports) || "0";
-  const tokenAmount = positiveRawString(buyResult.tokenDeltaAmount) || positiveRawString(buyResult.outputAmount);
+  const amountLamports = Number(buyResult.amountLamports || 0);
+  const basisLamports = Number(buyResult.swapLamports || amountLamports);
+  const tokenAmount = buyResult.tokenDeltaAmount || buyResult.outputAmount || null;
   const walletIndex = parseWebWalletIndex(body.walletIndex || "1");
   const planWallet = {
     label: wallet.label,
@@ -13117,23 +12475,20 @@ async function webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, buyRe
     walletIndex,
     basisLamports,
     grossLamports: amountLamports,
-    feeLamports,
+    feeLamports: buyResult.feeLamports,
     tokenOutAmount: tokenAmount,
     buySignature: buyResult.signature,
     currentLoop: 1,
     completedLoops: 0,
-    takeProfitPct,
-    stopLossPct,
+    takeProfitPct: null,
+    stopLossPct: null,
     completedTakeProfitLevels: [],
     sellAfterAt,
     triggerSellPercent,
     exitStatus: "watching",
     status: "watching",
     lastCheckedAt: null,
-    lastMovePct: null,
-    armedAt: new Date(now).toISOString(),
-    triggerStatus: takeProfitPct || stopLossPct ? "armed" : "timer-only",
-    lastError: tokenAmount ? null : "Waiting for token account indexing before TP/SL checks."
+    lastMovePct: null
   };
   const plan = {
     id: crypto.randomUUID(),
@@ -13143,7 +12498,7 @@ async function webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, buyRe
     tokenMint,
     source: "web_trade_auto_exit",
     walletSelector: String(walletIndex),
-    amountSol: lamportsBigToSol(amountLamports),
+    amountSol: lamportsToSol(amountLamports),
     sellDelayMinutes: sellDelaySeconds / 60,
     sellDelaySeconds,
     sellAfterAt,
@@ -13180,7 +12535,9 @@ async function webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, buyRe
     buySignature: buyResult.signature
   });
 
-  scheduleTradePlanProcessing("single trade auto-exit", [500, 1200, 2500, 5000, 8000, 12000, 20000, 30000]);
+  setTimeout(() => void processTradePlans().catch((error) => {
+    console.error("Single trade auto-exit immediate run failed:", error.message);
+  }), 1_000);
 
   const timerSummary = sellDelaySeconds > 0 ? formatDelay(sellDelaySeconds) : "timer off";
   return {
@@ -13191,7 +12548,7 @@ async function webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, buyRe
     walletCount: 1,
     successCount: 1,
     failedCount: 0,
-    amountSol: lamportsBigToSol(amountLamports),
+    amountSol: lamportsToSol(amountLamports),
     sellAfterAt,
     sellDelaySeconds,
     sellPercent,
@@ -13286,15 +12643,10 @@ async function webCreateManagedBuyPlan(userId, wallets, body = {}, options = {})
         takeProfitPct: walletTakeProfitTargets ? walletTakeProfitTargets[String(walletIndex)] || null : null,
         stopLossPct: walletStopLossTargets ? walletStopLossTargets[String(walletIndex)] || null : null,
         completedTakeProfitLevels: [],
-        triggerSellPercent: 100,
-        triggerStatus: takeProfitPct || stopLossPct || walletTakeProfitTargets || walletStopLossTargets ? "armed" : "timer-only",
-        exitStatus: "watching",
-        armedAt: new Date(now).toISOString(),
         sellAfterAt,
         status: "watching",
         lastCheckedAt: null,
-        lastMovePct: null,
-        lastError: tokenAmount ? null : "Waiting for token account indexing before TP/SL checks."
+        lastMovePct: null
       });
       results.push({
         ok: true,
@@ -13374,7 +12726,9 @@ async function webCreateManagedBuyPlan(userId, wallets, body = {}, options = {})
     slippageBps
   });
 
-  scheduleTradePlanProcessing(`${label} auto-exit`, [500, 1200, 2500, 5000, 8000, 12000, 20000, 30000]);
+  setTimeout(() => void processTradePlans().catch((error) => {
+    console.error(`${label} immediate run failed:`, error.message);
+  }), 1_000);
 
   return {
     id: plan.id,
@@ -13625,198 +12979,6 @@ function normalizeLaunchResponseMint(data = {}) {
   );
 }
 
-function compactLaunchPayload(value) {
-  if (Array.isArray(value)) {
-    return value
-      .map(compactLaunchPayload)
-      .filter((item) => item !== null && item !== undefined && item !== "");
-  }
-  if (value && typeof value === "object") {
-    const entries = Object.entries(value)
-      .map(([key, entry]) => [key, compactLaunchPayload(entry)])
-      .filter(([, entry]) => {
-        if (entry === null || entry === undefined || entry === "") return false;
-        if (Array.isArray(entry)) return entry.length > 0;
-        if (entry && typeof entry === "object") return Object.keys(entry).length > 0;
-        return true;
-      });
-    return Object.fromEntries(entries);
-  }
-  return value;
-}
-
-function buildPumpLaunchPayload(basePayload) {
-  const format = CONFIG.pumpLaunchApiFormat;
-  const imageField = CONFIG.pumpLaunchImageField
-    || (CONFIG.pumpLaunchRequestMode === "multipart" ? "image" : "imageDataUrl");
-  const attachImage = (payload) => {
-    if (basePayload.imageDataUrl && CONFIG.pumpLaunchRequestMode !== "multipart" && !/^none$/i.test(imageField)) {
-      payload[imageField] = basePayload.imageDataUrl;
-    }
-    return payload;
-  };
-
-  if (["minimal", "flat", "pump"].includes(format)) {
-    const minimal = attachImage(compactLaunchPayload({
-      name: basePayload.name,
-      symbol: basePayload.symbol || basePayload.ticker,
-      description: basePayload.description,
-      website: basePayload.website,
-      twitter: basePayload.twitter,
-      telegram: basePayload.telegram
-    }));
-    if (format === "minimal") return minimal;
-
-    const flat = attachImage(compactLaunchPayload({
-      ...minimal,
-      ticker: basePayload.symbol,
-      x: basePayload.twitter,
-      imageName: basePayload.imageName,
-      imageType: basePayload.imageType,
-      creatorFeeBps: basePayload.creatorFeeBps,
-      creatorFeeRecipient: basePayload.creatorFeeRecipient,
-      buybackWallet: basePayload.buybackWallet,
-      burnCreatorFees: basePayload.burnCreatorFees,
-      feeMode: basePayload.feeMode,
-      devBuySol: basePayload.devBuy?.amountSol,
-      initialBuySol: basePayload.devBuy?.amountSol,
-      devBuyEnabled: basePayload.devBuy?.enabled,
-      devWalletIndex: basePayload.devBuy?.walletIndex,
-      clientRequestId: basePayload.clientRequestId,
-      source: basePayload.source
-    }));
-    if (format !== "pump") return flat;
-    return compactLaunchPayload({
-      action: "create",
-      ...flat,
-      denominatedInSol: "true",
-      amount: flat.initialBuySol || 0,
-      pool: "pump"
-    });
-  }
-  return compactLaunchPayload(basePayload);
-}
-
-function launchImageExtension(contentType = "") {
-  const type = String(contentType || "").toLowerCase();
-  if (type.includes("jpeg") || type.includes("jpg")) return "jpg";
-  if (type.includes("webp")) return "webp";
-  if (type.includes("gif")) return "gif";
-  return "png";
-}
-
-function decodeLaunchImageDataUrl(dataUrl, basePayload = {}) {
-  const text = String(dataUrl || "");
-  const match = /^data:(image\/(?:png|jpe?g|webp|gif));base64,([a-z0-9+/=]+)$/i.exec(text);
-  if (!match) return null;
-  const contentType = match[1].toLowerCase();
-  const buffer = Buffer.from(match[2], "base64");
-  const cleanSymbol = cleanTickerSymbol(basePayload.symbol || basePayload.name || "token") || "token";
-  const filename = cleanLaunchText(basePayload.imageName, 96)
-    || `${cleanSymbol.toLowerCase()}-${Date.now()}.${launchImageExtension(contentType)}`;
-  return { buffer, contentType, filename };
-}
-
-function appendPumpLaunchFormValue(form, key, value) {
-  if (value === null || value === undefined || value === "") return;
-  if (Array.isArray(value) || (value && typeof value === "object")) {
-    form.append(key, JSON.stringify(value));
-    return;
-  }
-  form.append(key, String(value));
-}
-
-function appendPumpLaunchSearchValue(search, key, value) {
-  if (value === null || value === undefined || value === "") return;
-  if (Array.isArray(value) || (value && typeof value === "object")) {
-    search.append(key, JSON.stringify(value));
-    return;
-  }
-  search.append(key, String(value));
-}
-
-function buildPumpLaunchRequestOptions(basePayload, payload, timeoutMs) {
-  const mode = CONFIG.pumpLaunchRequestMode || "json";
-  const headers = {};
-  if (CONFIG.pumpLaunchApiKey) headers.Authorization = `Bearer ${CONFIG.pumpLaunchApiKey}`;
-
-  if (mode === "multipart") {
-    if (typeof FormData === "undefined" || typeof Blob === "undefined") {
-      throw new Error("This Node runtime does not support multipart launch uploads. Use Node 20+ or set PUMP_LAUNCH_REQUEST_MODE=json.");
-    }
-
-    const imageField = CONFIG.pumpLaunchImageField || "image";
-    const textPayload = compactLaunchPayload({ ...payload });
-    for (const key of ["image", "imageDataUrl", "file", "media", imageField]) {
-      if (key && !/^none$/i.test(key)) delete textPayload[key];
-    }
-
-    const form = new FormData();
-    for (const [key, value] of Object.entries(textPayload)) {
-      appendPumpLaunchFormValue(form, key, value);
-    }
-
-    if (basePayload.imageDataUrl && !/^none$/i.test(imageField)) {
-      const image = decodeLaunchImageDataUrl(basePayload.imageDataUrl, basePayload);
-      if (image) {
-        form.append(imageField, new Blob([image.buffer], { type: image.contentType }), image.filename);
-      }
-    }
-
-    return {
-      method: "POST",
-      headers,
-      body: form,
-      timeoutMs
-    };
-  }
-
-  if (mode === "form") {
-    const search = new URLSearchParams();
-    for (const [key, value] of Object.entries(compactLaunchPayload(payload))) {
-      appendPumpLaunchSearchValue(search, key, value);
-    }
-    return {
-      method: "POST",
-      headers: {
-        ...headers,
-        "Content-Type": "application/x-www-form-urlencoded"
-      },
-      body: search.toString(),
-      timeoutMs
-    };
-  }
-
-  return {
-    method: "POST",
-    headers: {
-      ...headers,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(payload),
-    timeoutMs
-  };
-}
-
-function pumpLaunchProviderHint(status) {
-  const mode = CONFIG.pumpLaunchRequestMode || "json";
-  if (mode === "json" && [400, 413, 415].includes(Number(status))) {
-    return " Provider rejected the JSON fields. Try PUMP_LAUNCH_API_FORMAT=minimal first; if the docs require file upload, set PUMP_LAUNCH_REQUEST_MODE=multipart and set PUMP_LAUNCH_IMAGE_FIELD to the provider's image field.";
-  }
-  if (mode === "form" && Number(status) === 400) {
-    return " Provider rejected the form fields. Check PUMP_LAUNCH_API_FORMAT and field names, or switch PUMP_LAUNCH_REQUEST_MODE to json or multipart based on the provider docs.";
-  }
-  if (mode === "multipart" && Number(status) === 400) {
-    return " Provider rejected the multipart fields. Check PUMP_LAUNCH_IMAGE_FIELD and remove unsupported launch fields by using PUMP_LAUNCH_API_FORMAT=minimal.";
-  }
-  return "";
-}
-
-function launchProviderErrorDetail(error) {
-  const detail = fetchJsonErrorMessage(error?.providerData || {}, error?.responseBody || error?.message || "", error?.status || error?.statusCode || 0);
-  return detail ? detail.replace(/\s+/g, " ").trim().slice(0, 500) : "";
-}
-
 async function webLaunchPumpCoin(userId, body = {}) {
   if (!CONFIG.pumpLaunchEnabled || !CONFIG.pumpLaunchApiUrl) {
     const error = new Error("Direct Pump launch is not enabled yet. Save the launch sheet or use the official Pump fallback link.");
@@ -13832,11 +12994,6 @@ async function webLaunchPumpCoin(userId, body = {}) {
     error.statusCode = 400;
     throw error;
   }
-  if (!symbol) {
-    const error = new Error("Token ticker/symbol is required.");
-    error.statusCode = 400;
-    throw error;
-  }
 
   const imageDataUrl = String(body.imageDataUrl || "");
   if (imageDataUrl && !/^data:image\/(png|jpe?g|webp|gif);base64,/i.test(imageDataUrl)) {
@@ -13844,19 +13001,11 @@ async function webLaunchPumpCoin(userId, body = {}) {
     error.statusCode = 400;
     throw error;
   }
-  const decodedLaunchImage = imageDataUrl ? decodeLaunchImageDataUrl(imageDataUrl, { symbol, name, imageName: body.imageName }) : null;
-  if (imageDataUrl && !decodedLaunchImage) {
-    const error = new Error("Token image could not be decoded. Upload a smaller square PNG, JPG, WEBP, or GIF.");
-    error.statusCode = 400;
-    throw error;
-  }
   const imageMaxBytes = Number.isFinite(CONFIG.pumpLaunchImageMaxBytes) && CONFIG.pumpLaunchImageMaxBytes > 0
     ? CONFIG.pumpLaunchImageMaxBytes
-    : 450_000;
-  if (decodedLaunchImage && decodedLaunchImage.buffer.length > imageMaxBytes) {
-    const actualKb = Math.ceil(decodedLaunchImage.buffer.length / 1024);
-    const maxKb = Math.floor(imageMaxBytes / 1024);
-    const error = new Error(`Token image is ${actualKb}KB after compression. Limit is ${maxKb}KB. Use a smaller square JPG, PNG, WEBP, or GIF and try again.`);
+    : 2_800_000;
+  if (imageDataUrl && Buffer.byteLength(imageDataUrl, "utf8") > imageMaxBytes) {
+    const error = new Error("Token image is still too large after compression. Use a smaller square JPG, PNG, or WEBP and try again.");
     error.statusCode = 413;
     throw error;
   }
@@ -13871,7 +13020,7 @@ async function webLaunchPumpCoin(userId, body = {}) {
   const buybackWallet = cleanLaunchText(body.buybackWallet, 64);
   const burnCreatorFees = cleanLaunchBoolean(body.burnCreatorFees) || feeMode === "burn";
 
-  const basePayload = {
+  const payload = {
     name,
     symbol,
     description,
@@ -13901,26 +13050,18 @@ async function webLaunchPumpCoin(userId, body = {}) {
     clientRequestId: crypto.randomUUID(),
     source: "slimewire_web"
   };
-  const payload = buildPumpLaunchPayload(basePayload);
 
+  const headers = { "Content-Type": "application/json" };
+  if (CONFIG.pumpLaunchApiKey) headers.Authorization = `Bearer ${CONFIG.pumpLaunchApiKey}`;
   const timeoutMs = Number.isFinite(CONFIG.pumpLaunchTimeoutMs) && CONFIG.pumpLaunchTimeoutMs > 0
     ? CONFIG.pumpLaunchTimeoutMs
     : 30000;
-  let providerResult;
-  try {
-    providerResult = await fetchJson(CONFIG.pumpLaunchApiUrl, buildPumpLaunchRequestOptions(basePayload, payload, timeoutMs));
-  } catch (error) {
-    const status = Number(error.status || error.statusCode || 502);
-    const detail = launchProviderErrorDetail(error);
-    const message = status === 413
-      ? `Pump launch provider rejected the upload because the image/payload is too large. Compress the image or switch to multipart upload.${pumpLaunchProviderHint(status)}`
-      : `Pump launch provider rejected the request${detail ? `: ${detail}` : `: ${friendlyError(error)}`}${pumpLaunchProviderHint(status)}`;
-    const wrapped = new Error(message);
-    wrapped.statusCode = status >= 400 && status < 500 ? status : 502;
-    wrapped.providerStatus = status;
-    wrapped.providerResponseBody = error.responseBody;
-    throw wrapped;
-  }
+  const providerResult = await fetchJson(CONFIG.pumpLaunchApiUrl, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload),
+    timeoutMs
+  });
   const tokenMint = normalizeLaunchResponseMint(providerResult);
   const status = firstString(providerResult.status, providerResult.state, tokenMint ? "launched" : "submitted");
 
@@ -14122,337 +13263,6 @@ function webSelectedWallets(store, userId, walletIndexes, walletGroup = "") {
     ...getWalletAt(store, index, userId),
     webIndex: index
   }));
-}
-
-function webWalletRef(wallet) {
-  return {
-    walletIndex: wallet.webIndex,
-    walletLabel: wallet.label,
-    walletPublicKey: wallet.publicKey,
-    shortPublicKey: shortMint(wallet.publicKey)
-  };
-}
-
-function parseWebDestination(value, label = "destination wallet") {
-  const text = String(value || "").trim();
-  if (!text) {
-    throw new Error(`Enter a ${label}.`);
-  }
-  try {
-    return new PublicKey(text);
-  } catch {
-    throw new Error(`Invalid ${label}.`);
-  }
-}
-
-function parseOptionalWebMint(value) {
-  const text = String(value || "").trim();
-  if (!text || text.toLowerCase() === "all") return "";
-  try {
-    return new PublicKey(text).toBase58();
-  } catch {
-    throw new Error("Invalid token mint. Leave blank for all tokens.");
-  }
-}
-
-function splitWebDestinationList(value) {
-  const rows = Array.isArray(value)
-    ? value
-    : String(value || "").split(/[\s,]+/);
-  const destinations = rows.map((item) => String(item || "").trim()).filter(Boolean);
-  const unique = [...new Set(destinations)];
-  if (unique.length === 0) {
-    throw new Error("Enter at least one destination wallet.");
-  }
-  if (unique.length > 20) {
-    throw new Error("Use 20 destination wallets or fewer.");
-  }
-  return unique.map((address) => parseWebDestination(address, "destination wallet"));
-}
-
-function selectedWebSweepWallets(store, userId, body = {}) {
-  return webSelectedWallets(
-    store,
-    userId,
-    body.walletIndexes || body.wallets || "all",
-    body.walletGroup || body.group || ""
-  );
-}
-
-function solTransferResultRow(wallet, result) {
-  return {
-    ...webWalletRef(wallet),
-    ok: Boolean(result.signature),
-    signature: result.signature || null,
-    sentSol: result.sentLamports ? lamportsToSol(result.sentLamports) : "0",
-    feeSol: result.feeLamports ? lamportsToSol(result.feeLamports) : "0",
-    message: result.message || (result.signature ? "SOL sent." : "No sweepable SOL.")
-  };
-}
-
-async function webSweepSol(userId, body = {}) {
-  const store = await readWalletStore();
-  const destination = parseWebDestination(body.destination || body.destinationWallet);
-  const wallets = selectedWebSweepWallets(store, userId, body);
-  const rows = [];
-
-  for (const wallet of wallets) {
-    try {
-      const keypair = decryptWallet(wallet);
-      const result = await drainSolFromWallet(keypair, destination);
-      invalidateWalletReadCache(wallet.publicKey);
-      rows.push(solTransferResultRow(wallet, result));
-    } catch (error) {
-      rows.push({
-        ...webWalletRef(wallet),
-        ok: false,
-        signature: null,
-        sentSol: "0",
-        feeSol: "0",
-        message: friendlyError(error)
-      });
-    }
-  }
-
-  invalidateWalletReadCache(destination.toBase58());
-  await audit("web_sweep_sol", { userId, destination: destination.toBase58(), walletCount: wallets.length, successCount: rows.filter((row) => row.ok).length });
-  return {
-    action: "sweep-sol",
-    destination: destination.toBase58(),
-    rows,
-    summary: `${rows.filter((row) => row.ok).length}/${rows.length} wallet(s) swept SOL.`
-  };
-}
-
-async function webSweepTokens(userId, body = {}) {
-  const store = await readWalletStore();
-  const destination = parseWebDestination(body.destination || body.destinationWallet);
-  const tokenMint = parseOptionalWebMint(body.tokenMint || body.mint);
-  const wallets = selectedWebSweepWallets(store, userId, body);
-  const rows = [];
-
-  for (const wallet of wallets) {
-    const walletRow = {
-      ...webWalletRef(wallet),
-      ok: false,
-      transfers: [],
-      message: ""
-    };
-
-    try {
-      const keypair = decryptWallet(wallet);
-      const lookup = await getOwnedTokenAccountsWithWarningsCached(keypair.publicKey, { force: true });
-      const accounts = (lookup.accounts || []).filter((account) => account.rawAmount > 0n && (!tokenMint || account.mint === tokenMint));
-
-      if (!accounts.length) {
-        walletRow.message = tokenMint ? "No balance for that token." : "No sweepable tokens.";
-        rows.push(walletRow);
-        continue;
-      }
-
-      for (const account of accounts) {
-        const mint = new PublicKey(account.mint);
-        const decimals = Number.isInteger(account.decimals) ? account.decimals : await getMintDecimals(mint);
-        const sourceAta = new PublicKey(account.pubkey);
-        const tokenProgramId = new PublicKey(account.tokenProgramId || TOKEN_PROGRAM_ID);
-        const destinationAta = getAssociatedTokenAddress(mint, destination, tokenProgramId);
-        const tx = new Transaction();
-        const destinationInfo = await rpcWithRetry("check destination token account", () => connection.getAccountInfo(destinationAta, "confirmed"));
-
-        if (!destinationInfo) {
-          tx.add(createAssociatedTokenAccountInstruction(keypair.publicKey, destinationAta, destination, mint, tokenProgramId));
-        }
-
-        tx.add(createTransferCheckedInstruction(
-          sourceAta,
-          mint,
-          destinationAta,
-          keypair.publicKey,
-          account.rawAmount,
-          decimals,
-          [],
-          tokenProgramId
-        ));
-
-        const signature = await sendLegacyTransaction(tx, [keypair]);
-        walletRow.transfers.push({
-          mint: account.mint,
-          uiAmount: rawTokenAmountToUi(account.rawAmount, decimals),
-          rawAmount: account.rawAmount.toString(),
-          signature
-        });
-      }
-
-      walletRow.ok = walletRow.transfers.length > 0;
-      walletRow.message = `Transferred ${walletRow.transfers.length} token account(s).`;
-      invalidateWalletReadCache(wallet.publicKey);
-      rows.push(walletRow);
-    } catch (error) {
-      walletRow.message = friendlyError(error);
-      rows.push(walletRow);
-    }
-  }
-
-  invalidateWalletReadCache(destination.toBase58());
-  await audit("web_sweep_tokens", { userId, destination: destination.toBase58(), tokenMint: tokenMint || "all", walletCount: wallets.length, successCount: rows.filter((row) => row.ok).length });
-  return {
-    action: "sweep-tokens",
-    destination: destination.toBase58(),
-    tokenMint: tokenMint || "all",
-    rows,
-    summary: `${rows.filter((row) => row.ok).length}/${rows.length} wallet(s) transferred tokens.`
-  };
-}
-
-async function webSellAllTokens(userId, body = {}) {
-  const store = await readWalletStore();
-  const tokenMint = parseOptionalWebMint(body.tokenMint || body.mint);
-  const destination = String(body.destination || body.destinationWallet || "").trim()
-    ? parseWebDestination(body.destination || body.destinationWallet)
-    : null;
-  const slippageBps = parseWebSlippage(body.slippageBps || body.slippage || CONFIG.stopLossExitSlippageBps);
-  const wallets = selectedWebSweepWallets(store, userId, body);
-  const rows = [];
-  const tradeEvents = [];
-
-  for (const wallet of wallets) {
-    const walletRow = {
-      ...webWalletRef(wallet),
-      ok: false,
-      sells: [],
-      solSweep: null,
-      message: ""
-    };
-
-    try {
-      const keypair = decryptWallet(wallet);
-      const lookup = await getOwnedTokenAccountsWithWarningsCached(keypair.publicKey, { force: true });
-      const tokens = sellableTokensFromAccounts(lookup.accounts || []).filter((token) => !tokenMint || token.mint === tokenMint);
-
-      if (!tokens.length) {
-        walletRow.message = tokenMint ? "No sellable balance for that token." : "No sellable token balances.";
-      }
-
-      for (const token of tokens) {
-        try {
-          const sell = await sellTokenAmountFromWallet(wallet, token.mint, token.rawAmount, slippageBps, { userId });
-          walletRow.sells.push({
-            ok: true,
-            mint: token.mint,
-            uiAmount: rawTokenAmountToUi(token.rawAmount, token.decimals),
-            outputSol: lamportsToSol(sell.outputLamports),
-            signature: sell.signature,
-            feeSol: lamportsToSol(sell.feeLamports || "0")
-          });
-          tradeEvents.push({
-            userId,
-            type: "sell",
-            source: "web_sell_all_tokens",
-            tokenMint: token.mint,
-            walletLabel: wallet.label,
-            walletPublicKey: wallet.publicKey,
-            tokenAmount: sell.tokenAmount,
-            solLamportsReceived: sell.outputLamports,
-            signature: sell.signature
-          });
-          await sleep(CONFIG.rpcDelayMs);
-        } catch (sellError) {
-          walletRow.sells.push({
-            ok: false,
-            mint: token.mint,
-            uiAmount: rawTokenAmountToUi(token.rawAmount, token.decimals),
-            message: friendlyError(sellError)
-          });
-        }
-      }
-
-      if (destination && walletRow.sells.some((sell) => sell.ok)) {
-        await sleep(800);
-        const sweep = await drainSolFromWallet(keypair, destination);
-        walletRow.solSweep = solTransferResultRow(wallet, sweep);
-      }
-
-      walletRow.ok = walletRow.sells.some((sell) => sell.ok) || Boolean(walletRow.solSweep?.ok);
-      walletRow.message = walletRow.message || `Sold ${walletRow.sells.filter((sell) => sell.ok).length}/${walletRow.sells.length} token(s).`;
-      invalidateWalletReadCache(wallet.publicKey);
-      rows.push(walletRow);
-    } catch (error) {
-      walletRow.message = friendlyError(error);
-      rows.push(walletRow);
-    }
-  }
-
-  if (tradeEvents.length) {
-    await recordTradeEvents(tradeEvents);
-  }
-  if (destination) {
-    invalidateWalletReadCache(destination.toBase58());
-  }
-  await audit("web_sell_all_tokens", { userId, tokenMint: tokenMint || "all", destination: destination?.toBase58?.() || null, walletCount: wallets.length, successCount: rows.filter((row) => row.ok).length });
-  return {
-    action: destination ? "sell-all-and-sweep-sol" : "sell-all-tokens",
-    destination: destination?.toBase58?.() || null,
-    tokenMint: tokenMint || "all",
-    rows,
-    summary: `${rows.filter((row) => row.ok).length}/${rows.length} wallet(s) sold token balances.`
-  };
-}
-
-async function webSendSolMany(userId, body = {}) {
-  const store = await readWalletStore();
-  const walletIndex = parseWebWalletIndex(body.fromWalletIndex || body.walletIndex);
-  const wallet = {
-    ...getWalletAt(store, walletIndex, userId),
-    webIndex: walletIndex
-  };
-  const destinations = splitWebDestinationList(body.destinations || body.destinationWallets || body.destination);
-  const keypair = decryptWallet(wallet);
-  const splitAll = Boolean(body.splitAll || body.amountMode === "splitAll");
-  let amountLamports;
-
-  if (splitAll) {
-    const balance = await getSolBalanceCached(keypair.publicKey, { force: true });
-    const estimatedFeeLamports = 5000 * Math.max(1, destinations.length);
-    const reserveLamports = CONFIG.buyReserveLamports + estimatedFeeLamports;
-    const sendableLamports = balance - reserveLamports;
-    if (sendableLamports <= 0) {
-      throw new Error(`Not enough SOL after keeping ${lamportsToSol(reserveLamports)} SOL for reserve and fees.`);
-    }
-    amountLamports = Math.floor(sendableLamports / destinations.length);
-  } else {
-    amountLamports = solToLamports(parsePositiveNumber(String(body.amountSol || "")));
-  }
-
-  if (amountLamports <= 0) {
-    throw new Error("Enter a SOL amount greater than zero.");
-  }
-
-  const tx = new Transaction();
-  for (const destination of destinations) {
-    if (keypair.publicKey.equals(destination)) {
-      throw new Error("A destination matches the source wallet.");
-    }
-    await assertDestinationCanReceiveSol(destination, amountLamports);
-    tx.add(SystemProgram.transfer({
-      fromPubkey: keypair.publicKey,
-      toPubkey: destination,
-      lamports: amountLamports
-    }));
-  }
-
-  const signature = await sendLegacyTransaction(tx, [keypair]);
-  invalidateWalletReadCache(wallet.publicKey);
-  destinations.forEach((destination) => invalidateWalletReadCache(destination.toBase58()));
-  await audit("web_send_sol_many", { userId, walletIndex, destinationCount: destinations.length, amountSol: lamportsToSol(amountLamports), signature });
-  return {
-    action: "send-sol-many",
-    source: webWalletRef(wallet),
-    amountSol: lamportsToSol(amountLamports),
-    destinationCount: destinations.length,
-    destinations: destinations.map((destination) => destination.toBase58()),
-    signature,
-    summary: `Sent ${lamportsToSol(amountLamports)} SOL to ${destinations.length} wallet(s).`
-  };
 }
 
 function parseWebWalletIndex(value) {
@@ -16431,19 +15241,7 @@ async function webLivePairs(userId, bucket = "live", options = {}) {
   }
 
   try {
-    let value = await promise;
-    const rows = Array.isArray(value?.rows) ? value.rows : [];
-    const cachedRows = Array.isArray(cached.value?.rows) ? cached.value.rows : [];
-    if (rows.length === 0 && cachedRows.length > 0) {
-      value = {
-        ...cached.value,
-        ...value,
-        rows: cached.value.rows,
-        stale: true,
-        emptyRefresh: true,
-        message: `${livePairBucketLabel(safeBucket)} is scanning for fresh rows. Showing last good feed until the next qualifying refresh.`
-      };
-    }
+    const value = await promise;
     if (CONFIG.livePairsSharedCacheMs > 0) {
       livePairsSharedCache.set(cacheKey, { cachedAt: Date.now(), value, promise: null });
     }
@@ -16476,8 +15274,8 @@ async function buildWebLivePairs(userId, bucket = "live", options = {}) {
   const isLive = safeBucket === "live";
   const scanState = nextSniperScanState(`web:${userId}`, `livepairs:${safeBucket}`);
   const candidates = await fetchLivePairCandidates({
-    ttlMs: isLive ? 800 : 2_000,
-    timeoutMs: isLive ? 2_500 : 4_200,
+    ttlMs: isLive ? 500 : 1_500,
+    timeoutMs: isLive ? 1_300 : 2_800,
     scanState,
     bucket: safeBucket,
     force: Boolean(options.force)
@@ -16516,8 +15314,8 @@ async function buildWebLivePairs(userId, bucket = "live", options = {}) {
   if (CONFIG.livePairsImageEnrich && safeBucket === "live") {
     rowsForSort = await enrichWebLivePairsForImages(safety.rows).catch(() => safety.rows);
   }
-  const stickyCount = sort === "best" && safeBucket !== "live"
-    ? Math.min(1, Math.max(0, Math.floor(targetLimit / 12)))
+  const stickyCount = sort === "best"
+    ? Math.min(2, Math.max(0, Math.floor(targetLimit / 8)))
     : 0;
   const safeRows = rotateRowsForRefresh(
     sortLivePairs(rowsForSort, sort),
@@ -16795,7 +15593,7 @@ async function maybeFilterWebLivePairsForSafety(rows, limit = 12) {
 
 async function enrichWebLivePairsForImages(rows) {
   if (!rows.length) return rows;
-  const pairs = await fetchDexScreenerTokenPairsBatch(rows.map((row) => row.tokenMint), { timeoutMs: 2_500 }).catch(() => []);
+  const pairs = await fetchDexScreenerTokenPairsBatch(rows.map((row) => row.tokenMint), { timeoutMs: 1_200 }).catch(() => []);
   const enriched = [...rows];
 
   await runWithConcurrency(rows.map((row, index) => ({ row, index })), 4, async ({ row, index }) => {
@@ -16823,7 +15621,7 @@ async function enrichWebLivePairsForImages(rows) {
     let graduated = Boolean(row.graduated || row.isGraduated || dexMeta.graduated || dexMeta.isGraduated || isGraduatedSlimeScopePair({ ...row, ...dexMeta }));
 
     if (webLivePairIsPump(row) && (!imageUrl || !marketCap || !liquidityUsd || !volumeH1 || !volumeM15 || !bondingProgressPct || !graduated)) {
-      const pumpMeta = await getPumpFunTokenMetadata(row.tokenMint, { timeoutMs: 1_800 }).catch(() => ({}));
+      const pumpMeta = await getPumpFunTokenMetadata(row.tokenMint, { timeoutMs: 900 }).catch(() => ({}));
       imageUrl = firstString(pumpMeta.imageUrl, imageUrl);
       symbol = symbol && symbol !== shortMint(row.tokenMint) ? symbol : firstString(pumpMeta.symbol, symbol);
       name = name && name !== "Fresh Launch" ? name : firstString(pumpMeta.name, name);
@@ -18883,4 +17681,3 @@ main().catch((error) => {
   console.error(error);
   process.exit(1);
 });
-
