@@ -36,6 +36,7 @@ import {
 } from "@solana/web3.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DEFAULT_MANUAL_LAUNCH_SCAN_INTERVAL_MS = 1500;
 
 const CONFIG = loadConfig();
 const connection = new Connection(CONFIG.rpcUrl, "confirmed");
@@ -83,7 +84,6 @@ const PUMPSNIPE_TAKE_PROFIT_PCT = 40;
 const PUMPSNIPE_STOP_LOSS_PCT = 8;
 const PUMPSNIPE_SLIPPAGE_BPS = 300;
 const PUMPSNIPE_SELL_DELAY_SECONDS = 180;
-const DEFAULT_MANUAL_LAUNCH_SCAN_INTERVAL_MS = 1500;
 const SNIPER_ROUTE_PROBE_LAMPORTS = 50_000_000;
 const AUTO_BUNDLE_TAKE_PROFIT_PCT = 60;
 const AUTO_BUNDLE_STOP_LOSS_PCT = 10;

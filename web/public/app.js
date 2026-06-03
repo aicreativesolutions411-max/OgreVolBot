@@ -1021,9 +1021,9 @@ function syncHealthLabel() {
 function activePresetSummary() {
   const trade = presetById("trade", state.selectedTradePresetId);
   const bundle = presetById("bundle", state.selectedBundlePresetId);
-  const tradeLabel = trade ? `${trade.name} ${trade.amountSol || ""} SOL` : "No trade preset";
-  const bundleLabel = bundle ? bundle.name : "No bundle preset";
-  return `Preset: ${tradeLabel} | ${bundleLabel}`;
+  const tradeLabel = trade ? `${trade.name || "Trade"} ${trade.amountSol || ""} SOL`.trim() : "Manual";
+  const bundleLabel = bundle ? (bundle.name || "Bundle") : "No bundle";
+  return `Preset ${tradeLabel} | ${bundleLabel}`;
 }
 
 function scheduleWalletBackgroundRefresh(delayMs = 900) {

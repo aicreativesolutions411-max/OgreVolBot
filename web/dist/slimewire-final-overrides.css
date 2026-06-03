@@ -2886,3 +2886,228 @@
     font-size: 7.7px !important;
   }
 }
+
+/* 2026-06-03 compact terminal labels + slimmer wallet/position strip.
+   Visual-only: keep existing trading handlers and API hooks intact. */
+[data-app][data-route="terminal"] .dashboard {
+  grid-template-columns: 86px minmax(0, 1fr) !important;
+}
+
+[data-app][data-route="terminal"] .metrics {
+  gap: 4px !important;
+  align-items: stretch !important;
+}
+
+[data-app][data-route="terminal"] .metrics article {
+  min-height: 34px !important;
+  padding: 5px 8px !important;
+  border-radius: 9px !important;
+}
+
+[data-app][data-route="terminal"] .metrics span {
+  font-size: 8.5px !important;
+  line-height: 1 !important;
+  opacity: 0.72 !important;
+}
+
+[data-app][data-route="terminal"] .metrics strong {
+  margin-top: 1px !important;
+  font-size: clamp(12px, 1.05vw, 16px) !important;
+  line-height: 1.05 !important;
+  max-width: 100% !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+
+[data-app][data-route="terminal"] [data-top-sync-strip],
+[data-app][data-route="terminal"] .top-sync-strip {
+  min-height: 27px !important;
+  padding: 3px 6px !important;
+  gap: 5px !important;
+  font-size: 9.5px !important;
+}
+
+[data-app][data-route="terminal"] [data-top-sync-strip] > span,
+[data-app][data-route="terminal"] .top-sync-strip > span {
+  min-height: 20px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  max-width: min(32vw, 210px) !important;
+  padding: 2px 6px !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+  border-radius: 999px !important;
+  background: rgba(117, 255, 45, 0.045) !important;
+  border: 1px solid rgba(117, 255, 45, 0.1) !important;
+}
+
+[data-app][data-route="terminal"] [data-active-preset-label] {
+  max-width: min(36vw, 260px) !important;
+}
+
+[data-app][data-route="terminal"] [data-top-sync-strip] button,
+[data-app][data-route="terminal"] .top-sync-strip button {
+  min-height: 24px !important;
+  padding: 0 7px !important;
+  font-size: 9.5px !important;
+}
+
+[data-app][data-route="terminal"] .tabs {
+  width: 86px !important;
+  padding: 5px !important;
+}
+
+[data-app][data-route="terminal"] .tabs button,
+[data-app][data-route="terminal"] .tabs .nav-tool-group summary,
+[data-app][data-route="terminal"] .tabs .nav-tool-group button {
+  min-height: 44px !important;
+  height: 44px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 2px !important;
+  padding: 4px 2px !important;
+}
+
+[data-app][data-route="terminal"] .tabs button::before,
+[data-app][data-route="terminal"] .tabs .nav-tool-group summary::before {
+  width: 18px !important;
+  height: 18px !important;
+  flex: 0 0 18px !important;
+}
+
+[data-app][data-route="terminal"] .tabs button::after,
+[data-app][data-route="terminal"] .tabs .nav-tool-group summary::after,
+[data-app][data-route="terminal"] .tabs .nav-tool-group button::after {
+  content: attr(data-label) !important;
+  display: block !important;
+  max-width: 100% !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+  color: rgba(223, 255, 211, 0.82) !important;
+  font-size: 8.2px !important;
+  font-weight: 800 !important;
+  line-height: 1 !important;
+  letter-spacing: 0 !important;
+  text-transform: none !important;
+}
+
+[data-app][data-route="terminal"] .tabs button[data-active="true"]::after,
+[data-app][data-route="terminal"] .tabs .nav-tool-group:has(button[data-active="true"]) summary::after {
+  color: #cfff7a !important;
+}
+
+[data-app][data-route="terminal"] .tabs .nav-tool-group span {
+  display: none !important;
+}
+
+[data-app][data-route="terminal"] .panel-host {
+  min-width: 0 !important;
+}
+
+[data-app][data-route="terminal"] .automation-delegation-card.compact,
+[data-app][data-route="terminal"] .automation-delegation-card {
+  padding: 8px !important;
+  gap: 7px !important;
+}
+
+[data-app][data-route="terminal"] .automation-delegation-card li,
+[data-app][data-route="terminal"] .automation-delegation-card small {
+  font-size: 10.5px !important;
+  line-height: 1.35 !important;
+}
+
+@media (max-width: 1180px) {
+  [data-app][data-route="terminal"] .dashboard {
+    grid-template-columns: 1fr !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs {
+    width: 100% !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs button,
+  [data-app][data-route="terminal"] .tabs .nav-tool-group summary,
+  [data-app][data-route="terminal"] .tabs .nav-tool-group button {
+    min-width: 48px !important;
+    height: 42px !important;
+    min-height: 42px !important;
+    padding: 4px 5px !important;
+  }
+}
+
+@media (max-width: 760px) {
+  [data-app][data-route="terminal"] .metrics {
+    gap: 4px !important;
+    padding: 0 !important;
+  }
+
+  [data-app][data-route="terminal"] .metrics article {
+    flex: 0 0 78px !important;
+    min-height: 30px !important;
+    padding: 4px 6px !important;
+  }
+
+  [data-app][data-route="terminal"] .metrics span {
+    font-size: 7.5px !important;
+  }
+
+  [data-app][data-route="terminal"] .metrics strong {
+    font-size: 11.5px !important;
+  }
+
+  [data-app][data-route="terminal"] [data-top-sync-strip],
+  [data-app][data-route="terminal"] .top-sync-strip {
+    min-height: 24px !important;
+    padding: 2px 4px !important;
+    gap: 4px !important;
+  }
+
+  [data-app][data-route="terminal"] [data-top-sync-strip] > span,
+  [data-app][data-route="terminal"] .top-sync-strip > span {
+    max-width: 116px !important;
+    min-height: 18px !important;
+    padding: 1px 5px !important;
+    font-size: 8px !important;
+  }
+
+  [data-app][data-route="terminal"] [data-active-preset-label] {
+    max-width: 150px !important;
+  }
+
+  [data-app][data-route="terminal"] [data-top-sync-strip] button,
+  [data-app][data-route="terminal"] .top-sync-strip button {
+    min-height: 21px !important;
+    padding: 0 5px !important;
+    font-size: 8px !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs {
+    gap: 3px !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs button,
+  [data-app][data-route="terminal"] .tabs .nav-tool-group summary,
+  [data-app][data-route="terminal"] .tabs .nav-tool-group button {
+    min-width: 43px !important;
+    min-height: 38px !important;
+    height: 38px !important;
+    gap: 1px !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs button::before,
+  [data-app][data-route="terminal"] .tabs .nav-tool-group summary::before {
+    width: 16px !important;
+    height: 16px !important;
+    flex-basis: 16px !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs button::after,
+  [data-app][data-route="terminal"] .tabs .nav-tool-group summary::after,
+  [data-app][data-route="terminal"] .tabs .nav-tool-group button::after {
+    font-size: 7px !important;
+  }
+}
