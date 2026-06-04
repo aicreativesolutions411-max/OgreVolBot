@@ -37,6 +37,7 @@ import {
   openLotsFromTradeEvents,
   tpSlLogEntry
 } from "./lib/tradeExecutionService.js";
+import { workerTickTaskFlags } from "./lib/workerTickTasks.js";
 import {
   Connection,
   Keypair,
@@ -648,12 +649,12 @@ function startWebExitGuardRunner() {
 }
 
 function startWebPortfolioExitRunner() {
-  const initialDelayMs = Math.max(750, Math.min(4_000, CONFIG.stopLossCheckIntervalMs + 250));
+  const initialDelayMs = Math.max(2_000, Math.min(8_000, CONFIG.stopLossCheckIntervalMs * 3));
   setTimeout(() => void processWebPortfolioExits({ forcePriceCheck: true }).catch((error) => {
     console.error("Web portfolio exit runner failed:", error.message);
   }), initialDelayMs);
 
-  const intervalMs = Math.max(750, Math.min(2_000, CONFIG.stopLossCheckIntervalMs));
+  const intervalMs = Math.max(15_000, CONFIG.stopLossCheckIntervalMs * 6);
   setInterval(() => void processWebPortfolioExits({ forcePriceCheck: true }).catch((error) => {
     console.error("Web portfolio exit runner failed:", error.message);
   }), intervalMs);
@@ -1024,9 +1025,9 @@ async function handleWebApiRequest(request, response, requestUrl) {
     }
 
     if (request.method === "POST" && pathname === "/api/web/trade/plans/run") {
-      const portfolioResult = await processWebPortfolioExits({ forcePriceCheck: true });
       const guardResult = await processWebExitGuards({ forcePriceCheck: true });
       const result = await processTradePlans({ forcePriceCheck: true });
+      const portfolioResult = await processWebPortfolioExits({ forcePriceCheck: true });
       sendWebJson(request, response, 200, {
         ok: true,
         portfolioExits: portfolioResult,
@@ -1587,14 +1588,24 @@ async function runInternalWorkerTick(body = {}) {
     feeds: { skipped: true }
   };
 
-  if (CONFIG.workerTickRunTradePlans && body.runTradePlans !== false) {
-    result.portfolioExits = await runWorkerTask("portfolioExits", () => processWebPortfolioExits({
-      forcePriceCheck: body.forceTradePlans !== false
-    }));
+  const tradeTaskFlags = workerTickTaskFlags(body, {
+    workerTickRunTradePlans: CONFIG.workerTickRunTradePlans
+  });
+
+  if (tradeTaskFlags.webExitGuards) {
     result.webExitGuards = await runWorkerTask("webExitGuards", () => processWebExitGuards({
       forcePriceCheck: body.forceTradePlans !== false
     }));
+  }
+
+  if (tradeTaskFlags.tradePlans) {
     result.tradePlans = await runWorkerTask("tradePlans", () => processTradePlans({
+      forcePriceCheck: body.forceTradePlans !== false
+    }));
+  }
+
+  if (tradeTaskFlags.portfolioExits) {
+    result.portfolioExits = await runWorkerTask("portfolioExits", () => processWebPortfolioExits({
       forcePriceCheck: body.forceTradePlans !== false
     }));
   }
@@ -13876,6 +13887,17 @@ async function recordTradeEvents(events) {
     ...event
   })));
   await writeJsonFile(tradeHistoryPath(), store);
+
+  const hasWebBuyNeedingGuard = events.some((event) => (
+    event?.type === "buy"
+    && event?.userId
+    && event?.walletPublicKey
+    && event?.tokenMint
+    && eligibleWebDefaultExitSource(event.source)
+  ));
+  if (hasWebBuyNeedingGuard) {
+    scheduleWebExitGuardProcessing("web buy recorded", [250, 750, 1500, 3000, 6000, 12000]);
+  }
 }
 
 async function readSniperSettings() {
