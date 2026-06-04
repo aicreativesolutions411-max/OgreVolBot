@@ -18097,19 +18097,26 @@ async function requestPumpPortalLocalTransaction(requestPayload, timeoutMs, opti
 
   if (!response.ok) {
     const text = (await response.text()).trim();
-    let detail = response.statusText || `HTTP ${response.status}`;
+    const statusText = String(response.statusText || "").trim();
+    let detail = statusText || `HTTP ${response.status}`;
     try {
       detail = fetchJsonErrorMessage(JSON.parse(text), text, response.status);
     } catch {
       if (/^<!doctype html|<html[\s>]/i.test(text)) {
         detail = `HTTP ${response.status}: PumpPortal returned an HTML page instead of a transaction. Check PUMP_LAUNCH_API_URL and provider access.`;
       } else if (text) {
-        detail = text.replace(/\s+/g, " ").slice(0, 500);
+        const compactText = text.replace(/\s+/g, " ").slice(0, 500);
+        detail = statusText && statusText !== compactText
+          ? `${compactText}: ${statusText}`.slice(0, 500)
+          : compactText;
       }
     }
     const error = new Error(detail);
     error.status = response.status;
-    error.responseBody = text.slice(0, 1000);
+    error.responseBody = statusText && !text.includes(statusText)
+      ? `statusText=${statusText}\nbody=${text}`.slice(0, 1000)
+      : text.slice(0, 1000);
+    error.providerStatusText = statusText;
     error.responseContentType = responseContentType;
     error.requestMeta = requestMeta;
     throw error;

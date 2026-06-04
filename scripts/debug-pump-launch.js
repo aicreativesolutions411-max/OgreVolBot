@@ -249,6 +249,7 @@ if (!selectedAttempt) {
   console.log(`pumpPortalRequestMeta=${JSON.stringify(selectedAttempt.requestMeta || null)}`);
   console.log(`pumpPortalRequestBody=${JSON.stringify(sanitizePumpPortalCreateRequest(selectedAttempt.requestBody || {}))}`);
   console.log(`pumpPortalStatus=${selectedAttempt.providerStatus || ""}`);
+  console.log(`pumpPortalStatusText=${String(selectedAttempt.providerStatusText || "").replace(/\s+/g, " ").slice(0, 300)}`);
   console.log(`pumpPortalContentType=${selectedAttempt.providerResponseContentType || ""}`);
   console.log(`pumpPortalBodySnippet=${String(selectedAttempt.providerResponseBody || "").replace(/\s+/g, " ").slice(0, 300)}`);
   console.log(`txSignature=${selectedAttempt.txSignature || ""}`);

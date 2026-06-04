@@ -152,5 +152,6 @@ if (!validationOk) console.log(`payloadValidationError=${validationError}`);
 console.log(`sanitizedRequest=${JSON.stringify(sanitizePumpPortalCreateRequest(requestBody))}`);
 if (normalizedRequest) console.log(`normalizedRequest=${JSON.stringify(sanitizePumpPortalCreateRequest(normalizedRequest))}`);
 console.log(`lastPumpPortalStatus=${selectedAttempt.providerStatus || ""}`);
+console.log(`lastPumpPortalStatusText=${compact(selectedAttempt.providerStatusText || "", 500)}`);
 console.log(`lastPumpPortalContentType=${selectedAttempt.providerResponseContentType || ""}`);
 console.log(`lastPumpPortalBodySnippet=${compact(selectedAttempt.providerResponseBody || "", 500)}`);

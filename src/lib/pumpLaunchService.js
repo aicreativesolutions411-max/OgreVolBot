@@ -986,6 +986,7 @@ export class PumpLaunchService {
         failureReason,
         txSignature: error.txSignature || submittedSignature || undefined,
         providerStatus: error.providerStatus || error.status || error.statusCode || null,
+        providerStatusText: error.providerStatusText || "",
         providerResponseContentType: error.providerResponseContentType || error.responseContentType || "",
         providerResponseBody: sanitizeProviderBody(error.providerResponseBody || error.responseBody || ""),
         requestMeta: error.requestMeta || undefined,
@@ -1005,6 +1006,7 @@ export class PumpLaunchService {
         failureReason,
         txSignature: error.txSignature || submittedSignature || undefined,
         providerStatus: error.providerStatus || error.status || error.statusCode || null,
+        providerStatusText: error.providerStatusText || "",
         providerResponseContentType: error.providerResponseContentType || error.responseContentType || "",
         providerResponseBody: error.providerResponseBody || error.responseBody || ""
       });
