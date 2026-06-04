@@ -17331,17 +17331,23 @@ async function uploadPumpFunIpfsLaunchMetadata(basePayload = {}) {
 
   let response;
   let text = "";
-  try {
-    response = await fetch(CONFIG.pumpLaunchPumpFunIpfsUrl, {
-      method: "POST",
-      body: form,
-      signal: AbortSignal.timeout ? AbortSignal.timeout(CONFIG.pumpLaunchTimeoutMs || 30000) : undefined
-    });
-    text = await response.text();
-  } catch (error) {
-    throw createPumpLaunchError(`Pump.fun metadata upload failed: ${friendlyError(error)}`, "PUMP_METADATA_PUMPFUN_UPLOAD_FAILED", 502, {
-      stage: PUMP_LAUNCH_STAGE.METADATA_UPLOAD
-    });
+  const delays = [0, 5_000, 15_000, 30_000];
+  for (let attempt = 0; attempt < delays.length; attempt += 1) {
+    if (delays[attempt] > 0) await sleep(delays[attempt]);
+    try {
+      response = await fetch(CONFIG.pumpLaunchPumpFunIpfsUrl, {
+        method: "POST",
+        body: form,
+        signal: AbortSignal.timeout ? AbortSignal.timeout(CONFIG.pumpLaunchTimeoutMs || 30000) : undefined
+      });
+      text = await response.text();
+    } catch (error) {
+      if (attempt < delays.length - 1) continue;
+      throw createPumpLaunchError(`Pump.fun metadata upload failed: ${friendlyError(error)}`, "PUMP_METADATA_PUMPFUN_UPLOAD_FAILED", 502, {
+        stage: PUMP_LAUNCH_STAGE.METADATA_UPLOAD
+      });
+    }
+    if (response.ok || response.status !== 429 || attempt === delays.length - 1) break;
   }
 
   let data = {};
