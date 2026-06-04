@@ -120,6 +120,7 @@ console.log("PUMP PINATA DEBUG");
 console.log(`NODE_ENV=${process.env.NODE_ENV || "(not set)"}`);
 console.log(`RENDER_SERVICE_NAME=${process.env.RENDER_SERVICE_NAME || process.env.RENDER_SERVICE_ID || "(not set)"}`);
 console.log(`RENDER_EXTERNAL_HOSTNAME=${process.env.RENDER_EXTERNAL_HOSTNAME || "(not set)"}`);
+console.log("metadataProvider=pinata");
 console.log(`dataDir=${dataDir}`);
 console.log(`PUMP_LAUNCH_PINATA_JWT_PRESENT=${diagnostics.tokenPresent}`);
 console.log(`PUMP_LAUNCH_PINATA_JWT_LENGTH=${diagnostics.tokenLength}`);

@@ -9,7 +9,9 @@ import {
   cleanToken,
   makePinataAuthHeader,
   pinataProviderError,
-  safePinataDiagnostics
+  safePinataDiagnostics,
+  uploadImage,
+  uploadJsonMetadata
 } from "../src/lib/pinataMetadata.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -110,14 +112,15 @@ test("safe Pinata diagnostics never include the secret token", () => {
 
 test("Pump metadata image and JSON uploads use the shared cleaned auth helper", async () => {
   const source = await fs.readFile(path.join(rootDir, "src", "index.js"), "utf8");
+  const helperSource = await fs.readFile(path.join(rootDir, "src", "lib", "pinataMetadata.js"), "utf8");
 
   assert.match(source, /const pinataConfig = assertPinataConfigured/);
   assert.match(source, /await assertPinataAuthWorks/);
-  assert.match(source, /const uploadHeaders = pinataConfig\.authHeader/);
+  assert.match(source, /await uploadImage/);
+  assert.match(source, /await uploadJsonMetadata/);
   assert.doesNotMatch(source, /Authorization:\s*`Bearer \$\{CONFIG\.pumpLaunchPinataJwt\}`/);
-  assert.equal((source.match(/headers: uploadHeaders/g) || []).length, 2);
-  assert.equal((source.match(/metadataForm\.append\("network", "public"\)/g) || []).length, 1);
-  assert.equal((source.match(/imageForm\.append\("network", "public"\)/g) || []).length, 1);
+  assert.equal((helperSource.match(/headers: config\.authHeader/g) || []).length, 1);
+  assert.equal((helperSource.match(/form\.append\("network", "public"\)/g) || []).length, 1);
 });
 
 test("Pinata debug and smoke commands are available", async () => {
@@ -126,7 +129,59 @@ test("Pinata debug and smoke commands are available", async () => {
 
   assert.equal(packageJson.scripts["debug:pump-pinata"], "node scripts/debug-pump-metadata.js");
   assert.equal(packageJson.scripts["smoke:pump-pinata-upload"], "node scripts/smoke-pump-pinata-upload.js");
+  assert.equal(packageJson.scripts["debug:metadata-provider"], "node scripts/debug-pump-metadata.js");
+  assert.equal(packageJson.scripts["smoke:metadata-upload"], "node scripts/smoke-pump-pinata-upload.js");
   assert.match(smokeSource, /assertPinataAuthWorks/);
-  assert.match(smokeSource, /form\.append\("network", "public"\)/);
+  assert.match(smokeSource, /uploadJsonMetadata/);
   assert.doesNotMatch(smokeSource, /console\.log\(.*tokenValue/);
+});
+
+test("Pinata JSON metadata upload returns CID and public metadata URI", async () => {
+  let observed = null;
+  const result = await uploadJsonMetadata({
+    metadata: { name: "Smoke", symbol: "SMK" },
+    filename: "smoke.json",
+    tokenValue: "Bearer abc.def.ghi",
+    metadataUrl: "https://uploads.pinata.cloud/v3/files",
+    fetchImpl: async (url, options) => {
+      observed = { url, options };
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ data: { cid: "bafybeismoke" } })
+      };
+    }
+  });
+
+  assert.equal(observed.url, "https://uploads.pinata.cloud/v3/files");
+  assert.equal(observed.options.headers.Authorization, "Bearer abc.def.ghi");
+  assert.equal(observed.options.body.get("network"), "public");
+  assert.equal(result.cid, "bafybeismoke");
+  assert.equal(result.uri, "https://ipfs.io/ipfs/bafybeismoke");
+});
+
+test("Pinata image upload uses same auth helper and public network", async () => {
+  let observed = null;
+  const result = await uploadImage({
+    image: {
+      buffer: Buffer.from("png"),
+      filename: "token.png",
+      contentType: "image/png"
+    },
+    tokenValue: "Bearer abc.def.ghi",
+    metadataUrl: "https://uploads.pinata.cloud/v3/files",
+    fetchImpl: async (url, options) => {
+      observed = { url, options };
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ data: { cid: "bafybeiimage" } })
+      };
+    }
+  });
+
+  assert.equal(observed.options.headers.Authorization, "Bearer abc.def.ghi");
+  assert.equal(observed.options.body.get("network"), "public");
+  assert.equal(result.imageUri, "https://ipfs.io/ipfs/bafybeiimage");
+  assert.equal(result.imageBytes, 3);
 });

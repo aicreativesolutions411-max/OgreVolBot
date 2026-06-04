@@ -1,6 +1,9 @@
 export const DEFAULT_PINATA_METADATA_URL = "https://uploads.pinata.cloud/v3/files";
 export const DEFAULT_PINATA_AUTH_TEST_URL = "https://api.pinata.cloud/data/testAuthentication";
 export const PINATA_METADATA_STAGE = "metadata_upload";
+export const METADATA_PROVIDER = Object.freeze({
+  PINATA: "pinata"
+});
 const PINATA_PLACEHOLDER_PATTERN = /^(?:your[-_\s]?)?(?:pinata[-_\s]?)?(?:jwt|token|api[-_\s]?key|secret)$|placeholder|change[-_\s]?me|replace[-_\s]?me|example|dummy|test[-_\s]?token/i;
 
 function stripMatchingQuotes(value) {
@@ -62,6 +65,10 @@ export function createPinataMetadataError(message, code, statusCode = 500, extra
   error.stage = PINATA_METADATA_STAGE;
   Object.assign(error, extra);
   return error;
+}
+
+export function cleanSecret(raw = "") {
+  return cleanToken(raw);
 }
 
 export function getPinataJwt(env = process.env) {
@@ -142,6 +149,16 @@ export function assertPinataConfigured({
   };
 }
 
+function assertUploadRuntime() {
+  if (typeof FormData === "undefined" || typeof Blob === "undefined") {
+    throw createPinataMetadataError(
+      "This Node runtime does not support metadata uploads. Use Node 20+ on Render.",
+      "PUMP_METADATA_RUNTIME_UNSUPPORTED",
+      500
+    );
+  }
+}
+
 export function sanitizePinataProviderBody(value = "") {
   return String(value || "")
     .replace(/(Bearer\s+)[A-Za-z0-9._-]+/gi, "$1[redacted]")
@@ -220,6 +237,131 @@ export async function assertPinataAuthWorks({
   }
 
   return result;
+}
+
+async function readProviderJson(response) {
+  const text = await response.text();
+  let data = {};
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { error: sanitizePinataProviderBody(text) };
+    }
+  }
+  if (!response.ok) {
+    const error = new Error(sanitizePinataProviderBody(text) || `HTTP ${response.status}`);
+    error.status = response.status;
+    error.responseBody = sanitizePinataProviderBody(text);
+    error.providerData = data;
+    throw error;
+  }
+  return data;
+}
+
+export async function uploadPinataFile({
+  content,
+  filename,
+  contentType = "application/octet-stream",
+  tokenValue = process.env.PUMP_LAUNCH_PINATA_JWT,
+  metadataUrl = process.env.PUMP_LAUNCH_METADATA_URL || DEFAULT_PINATA_METADATA_URL,
+  timeoutMs = 30000,
+  fetchImpl = globalThis.fetch
+} = {}) {
+  assertUploadRuntime();
+  const config = assertPinataConfigured({
+    tokenValue,
+    metadataUrl
+  });
+  if (typeof fetchImpl !== "function") {
+    throw createPinataMetadataError(
+      "Pinata upload cannot run because fetch is unavailable.",
+      "PUMP_METADATA_UPLOAD_UNAVAILABLE",
+      500
+    );
+  }
+  if (content == null) {
+    throw createPinataMetadataError(
+      "Pinata upload content is missing.",
+      "PUMP_METADATA_UPLOAD_CONTENT_MISSING",
+      400
+    );
+  }
+
+  const form = new FormData();
+  form.append("network", "public");
+  form.append("file", new Blob([content], { type: contentType }), filename || "metadata.json");
+
+  try {
+    const response = await fetchImpl(config.metadataUrl, {
+      method: "POST",
+      headers: config.authHeader,
+      body: form,
+      signal: AbortSignal.timeout ? AbortSignal.timeout(timeoutMs) : undefined
+    });
+    const upload = await readProviderJson(response);
+    const cid = upload?.data?.cid || upload?.cid || upload?.IpfsHash || upload?.ipfsHash || "";
+    const uri = pinataPublicUriFromUpload(upload);
+    if (!cid || !uri) {
+      throw createPinataMetadataError(
+        "Pinata upload did not return a CID.",
+        "PUMP_METADATA_UPLOAD_NO_CID",
+        502
+      );
+    }
+    return {
+      cid,
+      uri,
+      upload,
+      network: "public",
+      metadataUrl: config.metadataUrl
+    };
+  } catch (error) {
+    throw pinataProviderError(error, "Pinata metadata upload failed.");
+  }
+}
+
+export async function uploadImage({
+  image,
+  tokenValue,
+  metadataUrl,
+  timeoutMs,
+  fetchImpl
+} = {}) {
+  const result = await uploadPinataFile({
+    content: image?.buffer,
+    filename: image?.filename || "token-image.png",
+    contentType: image?.contentType || "image/png",
+    tokenValue,
+    metadataUrl,
+    timeoutMs,
+    fetchImpl
+  });
+  return {
+    ...result,
+    imageUri: result.uri,
+    imageBytes: image?.buffer?.length || 0,
+    imageContentType: image?.contentType || "image/png"
+  };
+}
+
+export async function uploadJsonMetadata({
+  metadata,
+  filename = "metadata.json",
+  tokenValue,
+  metadataUrl,
+  timeoutMs,
+  fetchImpl
+} = {}) {
+  return uploadPinataFile({
+    content: JSON.stringify(metadata || {}),
+    filename,
+    contentType: "application/json",
+    tokenValue,
+    metadataUrl,
+    timeoutMs,
+    fetchImpl
+  });
 }
 
 export function pinataProviderError(error, fallbackMessage = "Pinata metadata upload failed.") {

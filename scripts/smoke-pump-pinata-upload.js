@@ -5,9 +5,9 @@ import {
   assertPinataAuthWorks,
   assertPinataConfigured,
   DEFAULT_PINATA_METADATA_URL,
-  pinataPublicUriFromUpload,
   sanitizePinataProviderBody,
-  safePinataDiagnostics
+  safePinataDiagnostics,
+  uploadJsonMetadata
 } from "../src/lib/pinataMetadata.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -33,30 +33,11 @@ function loadDotEnv(envPath) {
   }
 }
 
-async function fetchJson(url, init = {}) {
-  const response = await fetch(url, init);
-  const text = await response.text();
-  let data = {};
-  if (text) {
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = { error: sanitizePinataProviderBody(text) };
-    }
-  }
-  if (!response.ok) {
-    const error = new Error(sanitizePinataProviderBody(text) || `HTTP ${response.status}`);
-    error.status = response.status;
-    error.responseBody = sanitizePinataProviderBody(text);
-    throw error;
-  }
-  return data;
-}
-
 const diagnostics = safePinataDiagnostics(tokenValue);
 console.log("PUMP PINATA UPLOAD SMOKE");
 console.log(`NODE_ENV=${process.env.NODE_ENV || "(not set)"}`);
 console.log(`RENDER_SERVICE_NAME=${process.env.RENDER_SERVICE_NAME || process.env.RENDER_SERVICE_ID || "(not set)"}`);
+console.log("metadataProvider=pinata");
 console.log(`PUMP_LAUNCH_PINATA_JWT_PRESENT=${diagnostics.tokenPresent}`);
 console.log(`PUMP_LAUNCH_PINATA_JWT_LENGTH=${diagnostics.tokenLength}`);
 console.log(`PUMP_LAUNCH_PINATA_JWT_CLEANED=${diagnostics.cleaned}`);
@@ -86,22 +67,15 @@ try {
     createdAt: new Date().toISOString()
   };
 
-  const form = new FormData();
-  form.append("network", "public");
-  form.append(
-    "file",
-    new Blob([JSON.stringify(metadata)], { type: "application/json" }),
-    `slimewire-pinata-smoke-${Date.now()}.json`
-  );
-
-  const upload = await fetchJson(config.metadataUrl, {
-    method: "POST",
-    headers: config.authHeader,
-    body: form,
-    signal: AbortSignal.timeout ? AbortSignal.timeout(timeoutMs) : undefined
+  const upload = await uploadJsonMetadata({
+    metadata,
+    filename: `slimewire-pinata-smoke-${Date.now()}.json`,
+    tokenValue,
+    metadataUrl: config.metadataUrl,
+    timeoutMs
   });
-  const metadataUri = pinataPublicUriFromUpload(upload);
-  const cid = upload?.data?.cid || upload?.cid || upload?.IpfsHash || upload?.ipfsHash || "";
+  const metadataUri = upload.uri;
+  const cid = upload.cid;
   if (!cid || !metadataUri) {
     console.log(`uploadOk=false reason="Pinata upload succeeded but response did not include a CID."`);
     process.exitCode = 1;
