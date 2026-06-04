@@ -283,6 +283,7 @@ function loadConfig() {
   const stopLossMonitorSlippageBps = Number.parseInt(process.env.STOP_LOSS_MONITOR_SLIPPAGE_BPS || "2500", 10);
   const stopLossPriceFailureSellAfter = Number.parseInt(process.env.STOP_LOSS_PRICE_FAILURE_SELL_AFTER || "2", 10);
   const stopLossSubmitStaleMs = Number.parseInt(process.env.STOP_LOSS_SUBMIT_STALE_MS || "15000", 10);
+  const tradePlanRunnerStaleMs = Number.parseInt(process.env.TRADE_PLAN_RUNNER_STALE_MS || "45000", 10);
   const pumpLaunchBodyLimitBytes = Number.parseInt(process.env.PUMP_LAUNCH_BODY_LIMIT_BYTES || "12000000", 10);
   const pumpLaunchRequestMode = (process.env.PUMP_LAUNCH_REQUEST_MODE || "json").trim().toLowerCase();
   const pumpLaunchPriorityFeeSol = Number.parseFloat(process.env.PUMP_LAUNCH_PRIORITY_FEE_SOL || "0.00005");
@@ -440,6 +441,10 @@ function loadConfig() {
     throw new Error("STOP_LOSS_SUBMIT_STALE_MS must be an integer from 5000 to 120000.");
   }
 
+  if (!Number.isInteger(tradePlanRunnerStaleMs) || tradePlanRunnerStaleMs < 15_000 || tradePlanRunnerStaleMs > 300_000) {
+    throw new Error("TRADE_PLAN_RUNNER_STALE_MS must be an integer from 15000 to 300000.");
+  }
+
   if (!["json", "multipart", "form"].includes(pumpLaunchRequestMode)) {
     throw new Error("PUMP_LAUNCH_REQUEST_MODE must be json, multipart, or form.");
   }
@@ -508,6 +513,7 @@ function loadConfig() {
     stopLossMonitorSlippageBps,
     stopLossPriceFailureSellAfter,
     stopLossSubmitStaleMs,
+    tradePlanRunnerStaleMs,
     workerTickEnabled,
     workerTickRunTradePlans,
     workerTickRunDcaPlans,
@@ -4373,9 +4379,9 @@ async function createTimedTradePlanFlow(chatId, session) {
       planWallets.push({
         label: wallet.label,
         publicKey: wallet.publicKey,
-        basisLamports: Number(result.swapLamports || amountLamports),
-        grossLamports: amountLamports,
-        feeLamports: result.feeLamports,
+        basisLamports: positiveRawString(result.swapLamports) || String(amountLamports),
+        grossLamports: String(amountLamports),
+        feeLamports: positiveRawString(result.feeLamports) || "0",
         tokenOutAmount: result.tokenDeltaAmount || result.outputAmount || null,
         buySignature: result.signature,
         currentLoop: 1,
@@ -5321,12 +5327,19 @@ function isActiveTimedWalletStatus(status) {
 
 async function processTradePlans() {
   if (tradePlanRunnerActive) {
-    return {
-      skipped: true,
-      reason: "trade_plan_runner_active",
-      activeSince: tradePlanRunnerActiveSince ? new Date(tradePlanRunnerActiveSince).toISOString() : null,
-      activeForMs: tradePlanRunnerActiveSince ? Date.now() - tradePlanRunnerActiveSince : null
-    };
+    const activeForMs = tradePlanRunnerActiveSince ? Date.now() - tradePlanRunnerActiveSince : 0;
+    if (activeForMs > CONFIG.tradePlanRunnerStaleMs) {
+      console.warn(`Trade plan runner was active for ${activeForMs}ms; clearing stale runner lock so TP/SL checks can continue.`);
+      tradePlanRunnerActive = false;
+      tradePlanRunnerActiveSince = 0;
+    } else {
+      return {
+        skipped: true,
+        reason: "trade_plan_runner_active",
+        activeSince: tradePlanRunnerActiveSince ? new Date(tradePlanRunnerActiveSince).toISOString() : null,
+        activeForMs
+      };
+    }
   }
   tradePlanRunnerActive = true;
   tradePlanRunnerActiveSince = Date.now();
@@ -5859,9 +5872,9 @@ async function processCopyWalletWatchPlan(plan, walletStore) {
     try {
       const buy = await buyTokenForPlan(wallet, tokenMint, amountLamports, plan.slippageBps, { trackTokenDelta: true, userId: plan.userId });
       Object.assign(planWallet, {
-        basisLamports: Number(buy.swapLamports || amountLamports),
-        grossLamports: amountLamports,
-        feeLamports: buy.feeLamports,
+        basisLamports: positiveRawString(buy.swapLamports) || String(amountLamports),
+        grossLamports: String(amountLamports),
+        feeLamports: positiveRawString(buy.feeLamports) || "0",
         tokenOutAmount: buy.tokenDeltaAmount || buy.outputAmount || null,
         buySignature: buy.signature,
         currentLoop: 1,
@@ -5952,9 +5965,9 @@ async function processLaunchWatchPlan(plan, walletStore) {
     try {
       const buy = await buyTokenForPlan(wallet, match.tokenMint, amountLamports, plan.slippageBps, { trackTokenDelta: true, userId: plan.userId });
       Object.assign(planWallet, {
-        basisLamports: Number(buy.swapLamports || amountLamports),
-        grossLamports: amountLamports,
-        feeLamports: buy.feeLamports,
+        basisLamports: positiveRawString(buy.swapLamports) || String(amountLamports),
+        grossLamports: String(amountLamports),
+        feeLamports: positiveRawString(buy.feeLamports) || "0",
         tokenOutAmount: buy.tokenDeltaAmount || buy.outputAmount || null,
         buySignature: buy.signature,
         currentLoop: 1,
@@ -6034,9 +6047,9 @@ async function restartTimedPlanLoop(plan, planWallet, wallet, sell, triggerReaso
 
     planWallet.status = "watching";
     planWallet.currentLoop = planWallet.completedLoops + 1;
-    planWallet.basisLamports = Number(buy.swapLamports || amountLamports);
-    planWallet.grossLamports = amountLamports;
-    planWallet.feeLamports = buy.feeLamports;
+    planWallet.basisLamports = positiveRawString(buy.swapLamports) || String(amountLamports);
+    planWallet.grossLamports = String(amountLamports);
+    planWallet.feeLamports = positiveRawString(buy.feeLamports) || "0";
     planWallet.tokenOutAmount = buy.tokenDeltaAmount || buy.outputAmount || null;
     planWallet.buySignature = buy.signature;
     planWallet.lastCheckedAt = null;
@@ -6084,9 +6097,9 @@ async function startDelayedTimedPlanLoop(plan, planWallet, wallet) {
 
     planWallet.status = "watching";
     planWallet.currentLoop = planWallet.completedLoops + 1;
-    planWallet.basisLamports = Number(buy.swapLamports || amountLamports);
-    planWallet.grossLamports = amountLamports;
-    planWallet.feeLamports = buy.feeLamports;
+    planWallet.basisLamports = positiveRawString(buy.swapLamports) || String(amountLamports);
+    planWallet.grossLamports = String(amountLamports);
+    planWallet.feeLamports = positiveRawString(buy.feeLamports) || "0";
     planWallet.tokenOutAmount = buy.tokenDeltaAmount || buy.outputAmount || null;
     planWallet.buySignature = buy.signature;
     planWallet.lastCheckedAt = null;
@@ -13800,7 +13813,7 @@ async function webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, buyRe
     publicKey: wallet.publicKey,
     walletIndex,
     basisLamports,
-    grossLamports: amountLamports,
+    grossLamports: String(amountLamports),
     feeLamports,
     tokenOutAmount: tokenAmount,
     buySignature: buyResult.signature,
@@ -13964,9 +13977,9 @@ async function webCreateManagedBuyPlan(userId, wallets, body = {}, options = {})
         label: wallet.label,
         publicKey: wallet.publicKey,
         walletIndex,
-        basisLamports: Number(result.swapLamports || amountLamports),
-        grossLamports: amountLamports,
-        feeLamports: result.feeLamports,
+        basisLamports: positiveRawString(result.swapLamports) || String(amountLamports),
+        grossLamports: String(amountLamports),
+        feeLamports: positiveRawString(result.feeLamports) || "0",
         tokenOutAmount: tokenAmount,
         buySignature: result.signature,
         currentLoop: 1,
