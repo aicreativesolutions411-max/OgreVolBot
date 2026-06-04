@@ -14,6 +14,7 @@ export const PUMP_LAUNCH_STATUS = Object.freeze({
   CONFIRMING: "CONFIRMING",
   REGISTERING_TOKEN: "REGISTERING_TOKEN",
   COMPLETE: "COMPLETE",
+  FAILED_METADATA_AUTH: "FAILED_METADATA_AUTH",
   FAILED: "FAILED",
   STARTED: "PENDING",
   PREFLIGHT: "VALIDATING",
@@ -45,11 +46,11 @@ export function createPumpLaunchError(message, code, statusCode = 400, extra = {
 
 export function pumpLaunchStageError(stage, code, cause, statusCode = 502, extra = {}) {
   const message = cause?.message || String(cause || "Unknown launch error");
-  const error = createPumpLaunchError(message, code, Number(cause?.status || cause?.statusCode || statusCode), {
+  const error = createPumpLaunchError(message, code, Number(cause?.statusCode || statusCode), {
     stage,
     cause,
-    providerStatus: cause?.status || cause?.statusCode || null,
-    providerResponseBody: cause?.responseBody || "",
+    providerStatus: cause?.providerStatus || cause?.status || cause?.statusCode || null,
+    providerResponseBody: cause?.providerResponseBody || cause?.responseBody || "",
     ...extra
   });
   return error;
@@ -329,6 +330,8 @@ export function formatPumpLaunchUserError(error) {
 
   if (code === "PUMP_LAUNCH_NOT_ENABLED") return `Direct Pump launch is not enabled on the backend.${launchAttemptId}`;
   if (code === "PUMP_LAUNCH_API_URL_INVALID") return `${message}${launchAttemptId}`;
+  if (code === "PUMP_METADATA_CONFIG_MISSING") return `Metadata upload is not configured. Contact support with${launchAttemptId || " the launch attempt ID"}.`;
+  if (code === "PUMP_METADATA_AUTH_FAILED") return `Metadata upload provider rejected authorization. Contact support with${launchAttemptId || " the launch attempt ID"}.`;
   if (code === "MISSING_DEV_WALLET") return "Choose a managed SlimeWire dev wallet before launching.";
   if (code === "DEV_WALLET_NOT_AUTHORIZED") return message;
   if (code === "DEV_WALLET_NOT_FOUND") return message;
@@ -337,7 +340,7 @@ export function formatPumpLaunchUserError(error) {
   if (code === "DEV_WALLET_DECRYPT_FAILED") return `Selected dev wallet could not be decrypted for signing.${launchAttemptId}`;
   if (code === "DEV_WALLET_INSUFFICIENT_SOL") return message;
   if (stage === PUMP_LAUNCH_STAGE.METADATA_UPLOAD && (status === 401 || status === 403 || /not authorized|unauthorized/i.test(message))) {
-    return `Metadata upload is not authorized. Check PUMP_LAUNCH_PINATA_JWT on Render, then retry. Provider said: ${message}${launchAttemptId}`;
+    return `Metadata upload provider rejected authorization. Contact support with${launchAttemptId || " the launch attempt ID"}.`;
   }
   if (stage === PUMP_LAUNCH_STAGE.METADATA_UPLOAD) {
     return `Metadata upload failed before PumpPortal was called: ${message}${launchAttemptId}`;
@@ -498,7 +501,7 @@ export class PumpLaunchService {
         });
         metadata = await this.uploadMetadata(basePayload);
       } catch (error) {
-        throw pumpLaunchStageError(PUMP_LAUNCH_STAGE.METADATA_UPLOAD, "PUMP_LAUNCH_METADATA_UPLOAD_FAILED", error);
+        throw pumpLaunchStageError(PUMP_LAUNCH_STAGE.METADATA_UPLOAD, error.code || "PUMP_LAUNCH_METADATA_UPLOAD_FAILED", error);
       }
       await this.saveAttempt({
         id: attemptId,
@@ -673,9 +676,12 @@ export class PumpLaunchService {
       error.launchAttemptId = error.launchAttemptId || attemptId;
       if (submittedSignature && !error.txSignature) error.txSignature = submittedSignature;
       const failureReason = formatPumpLaunchUserError(error);
+      const failureStatus = ["PUMP_METADATA_AUTH_FAILED", "PUMP_METADATA_CONFIG_MISSING"].includes(error.code)
+        ? PUMP_LAUNCH_STATUS.FAILED_METADATA_AUTH
+        : PUMP_LAUNCH_STATUS.FAILED;
       await this.saveAttempt({
         id: attemptId,
-        status: PUMP_LAUNCH_STATUS.FAILED,
+        status: failureStatus,
         stage: error.stage || PUMP_LAUNCH_STAGE.STORE_RESULT,
         errorCode: error.code || "PUMP_LAUNCH_FAILED",
         errorMessage: String(error.message || error).slice(0, 500),
@@ -692,7 +698,7 @@ export class PumpLaunchService {
         selectedDevWalletId,
         devWalletPublicKey,
         mintPublicKey,
-        status: PUMP_LAUNCH_STATUS.FAILED,
+        status: failureStatus,
         stage: error.stage || "",
         errorCode: error.code || "PUMP_LAUNCH_FAILED",
         errorMessage: String(error.message || error).slice(0, 500),

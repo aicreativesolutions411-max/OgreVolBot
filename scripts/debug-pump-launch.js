@@ -15,6 +15,9 @@ import {
   sanitizePumpPortalCreateRequest,
   selectPumpLaunchWallet
 } from "../src/lib/pumpLaunchService.js";
+import {
+  safePinataDiagnostics
+} from "../src/lib/pinataMetadata.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 loadDotEnv(path.join(rootDir, ".env"));
@@ -23,6 +26,7 @@ const dataDir = path.resolve(process.env.DATA_DIR || path.join(rootDir, "data"))
 const apiUrl = (process.env.PUMP_LAUNCH_API_URL || process.env.PUMP_LAUNCH_API_BASE || "").trim();
 const metadataUrl = (process.env.PUMP_LAUNCH_METADATA_URL || "https://uploads.pinata.cloud/v3/files").trim();
 const pinataJwt = process.env.PUMP_LAUNCH_PINATA_JWT || "";
+const pinataDiagnostics = safePinataDiagnostics(pinataJwt);
 const rpcUrl = process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
 const userId = String(process.env.DEBUG_PUMP_LAUNCH_USER_ID || "").trim();
 const selectedDevWalletId = String(process.env.DEBUG_PUMP_LAUNCH_DEV_WALLET || process.env.DEBUG_PUMP_LAUNCH_DEV_WALLET_ID || "").trim();
@@ -144,7 +148,9 @@ console.log("PUMP LAUNCH DEBUG");
 console.log(`dataDir=${dataDir}`);
 console.log(`PUMP_LAUNCH_API_URL=${apiUrl || "(missing)"}`);
 console.log(`PUMP_LAUNCH_METADATA_URL=${metadataUrl || "(missing)"}`);
-console.log(`PUMP_LAUNCH_PINATA_JWT_CONFIGURED=${Boolean(pinataJwt)}`);
+console.log(`PUMP_LAUNCH_PINATA_JWT_CONFIGURED=${pinataDiagnostics.tokenPresent}`);
+console.log(`PUMP_LAUNCH_PINATA_JWT_LENGTH=${pinataDiagnostics.tokenLength}`);
+console.log(`PUMP_LAUNCH_PINATA_JWT_CLEANED=${pinataDiagnostics.cleaned}`);
 console.log(`SOLANA_RPC_URL_CONFIGURED=${Boolean(rpcUrl)}`);
 console.log(`DEBUG_PUMP_LAUNCH_USER_ID=${userId || "(not set)"}`);
 console.log(`DEBUG_PUMP_LAUNCH_DEV_WALLET=${selectedDevWalletId || "(not set)"}`);
@@ -159,8 +165,8 @@ if (apiUrl !== "https://pumpportal.fun/api/trade-local") {
   console.log("apiUrlValid=true");
 }
 
-console.log(`metadataConfigValid=${Boolean(metadataUrl && pinataJwt)}`);
-if (!pinataJwt) {
+console.log(`metadataConfigValid=${Boolean(metadataUrl && pinataDiagnostics.tokenPresent)}`);
+if (!pinataDiagnostics.tokenPresent) {
   console.log("metadataConfigReason=PUMP_LAUNCH_PINATA_JWT is missing; metadata upload will fail before PumpPortal is called.");
 }
 

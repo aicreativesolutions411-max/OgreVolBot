@@ -51,6 +51,11 @@ import {
   validatePumpPortalLocalApiUrl
 } from "./lib/pumpLaunchService.js";
 import {
+  assertPinataConfigured,
+  pinataProviderError,
+  pinataPublicUriFromUpload
+} from "./lib/pinataMetadata.js";
+import {
   Connection,
   Keypair,
   LAMPORTS_PER_SOL,
@@ -16900,30 +16905,31 @@ async function launchImageBufferForUpload(basePayload = {}) {
 }
 
 async function uploadPumpLaunchMetadata(basePayload = {}) {
-  if (!CONFIG.pumpLaunchPinataJwt) {
-    throw new Error("Missing PUMP_LAUNCH_PINATA_JWT. PumpPortal no longer supports pump.fun/api/ipfs uploads; create a free Pinata API JWT and add it to Render.");
-  }
-  if (!CONFIG.pumpLaunchMetadataUrl) {
-    throw new Error("PUMP_LAUNCH_METADATA_URL is missing. Set it to https://uploads.pinata.cloud/v3/files.");
-  }
+  const pinataConfig = assertPinataConfigured({
+    tokenValue: CONFIG.pumpLaunchPinataJwt,
+    metadataUrl: CONFIG.pumpLaunchMetadataUrl
+  });
   if (typeof FormData === "undefined" || typeof Blob === "undefined") {
     throw new Error("This Node runtime does not support metadata uploads. Use Node 20+ on Render.");
   }
 
   const image = await launchImageBufferForUpload(basePayload);
-  const uploadHeaders = {
-    Authorization: `Bearer ${CONFIG.pumpLaunchPinataJwt}`
-  };
+  const uploadHeaders = pinataConfig.authHeader;
 
   const imageForm = new FormData();
   imageForm.append("network", "public");
   imageForm.append("file", new Blob([image.buffer], { type: image.contentType }), image.filename);
-  const imageUpload = await fetchJson(CONFIG.pumpLaunchMetadataUrl, {
-    method: "POST",
-    headers: uploadHeaders,
-    body: imageForm,
-    timeoutMs: CONFIG.pumpLaunchTimeoutMs
-  });
+  let imageUpload;
+  try {
+    imageUpload = await fetchJson(pinataConfig.metadataUrl, {
+      method: "POST",
+      headers: uploadHeaders,
+      body: imageForm,
+      timeoutMs: CONFIG.pumpLaunchTimeoutMs
+    });
+  } catch (error) {
+    throw pinataProviderError(error, "Pinata image upload failed.");
+  }
   const imageCid = firstString(imageUpload.data?.cid, imageUpload.cid, imageUpload.IpfsHash, imageUpload.ipfsHash);
   if (!imageCid) {
     throw new Error("Pinata image upload did not return a CID.");
@@ -16947,21 +16953,24 @@ async function uploadPumpLaunchMetadata(basePayload = {}) {
     new Blob([JSON.stringify(metadata)], { type: "application/json" }),
     `${cleanTickerSymbol(basePayload.symbol || "token").toLowerCase() || "token"}-metadata.json`
   );
-  const metadataUpload = await fetchJson(CONFIG.pumpLaunchMetadataUrl, {
-    method: "POST",
-    headers: uploadHeaders,
-    body: metadataForm,
-    timeoutMs: CONFIG.pumpLaunchTimeoutMs
-  });
+  let metadataUpload;
+  try {
+    metadataUpload = await fetchJson(pinataConfig.metadataUrl, {
+      method: "POST",
+      headers: uploadHeaders,
+      body: metadataForm,
+      timeoutMs: CONFIG.pumpLaunchTimeoutMs
+    });
+  } catch (error) {
+    throw pinataProviderError(error, "Pinata metadata JSON upload failed.");
+  }
   const uri = firstString(
     metadataUpload.metadataUri,
     metadataUpload.metadata_uri,
     metadataUpload.uri,
     metadataUpload.data?.metadataUri,
     metadataUpload.data?.uri,
-    metadataUpload.data?.cid ? `https://ipfs.io/ipfs/${metadataUpload.data.cid}` : "",
-    metadataUpload.cid ? `https://ipfs.io/ipfs/${metadataUpload.cid}` : "",
-    metadataUpload.IpfsHash ? `https://ipfs.io/ipfs/${metadataUpload.IpfsHash}` : ""
+    pinataPublicUriFromUpload(metadataUpload)
   );
   if (!uri) {
     throw new Error("Pinata metadata upload did not return a metadata URI.");

@@ -276,7 +276,10 @@ test("metadata upload failure records a specific metadata error", async () => {
   const harness = serviceHarness({
     uploadMetadata: async () => {
       const error = new Error("Pinata token expired");
-      error.status = 401;
+      error.code = "PUMP_METADATA_AUTH_FAILED";
+      error.statusCode = 502;
+      error.providerStatus = 401;
+      error.responseBody = "Not Authorized";
       throw error;
     }
   });
@@ -287,10 +290,13 @@ test("metadata upload failure records a specific metadata error", async () => {
   );
 
   const attempt = harness.attempts.get("attempt-1");
-  assert.equal(attempt.status, PUMP_LAUNCH_STATUS.FAILED);
+  assert.equal(attempt.status, PUMP_LAUNCH_STATUS.FAILED_METADATA_AUTH);
   assert.equal(attempt.stage, PUMP_LAUNCH_STAGE.METADATA_UPLOAD);
-  assert.equal(attempt.errorCode, "PUMP_LAUNCH_METADATA_UPLOAD_FAILED");
-  assert.match(attempt.failureReason, /Metadata upload/);
+  assert.equal(attempt.errorCode, "PUMP_METADATA_AUTH_FAILED");
+  assert.equal(attempt.providerStatus, 401);
+  assert.match(attempt.failureReason, /Metadata upload provider rejected authorization/);
+  assert.match(attempt.failureReason, /launchAttemptId=attempt-1/);
+  assert.doesNotMatch(attempt.failureReason, /PUMP_LAUNCH_PINATA_JWT/);
   assert.equal(harness.requestBody(), null);
 });
 

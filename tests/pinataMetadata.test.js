@@ -1,0 +1,75 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  assertPinataConfigured,
+  cleanToken,
+  makePinataAuthHeader,
+  pinataProviderError,
+  safePinataDiagnostics
+} from "../src/lib/pinataMetadata.js";
+
+const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+test("missing PUMP_LAUNCH_PINATA_JWT returns config error before provider call", () => {
+  assert.throws(
+    () => assertPinataConfigured({ tokenValue: "", metadataUrl: "https://uploads.pinata.cloud/v3/files" }),
+    (error) => error.code === "PUMP_METADATA_CONFIG_MISSING"
+  );
+});
+
+test("Pinata token with accidental quotes is cleaned", () => {
+  assert.equal(cleanToken('"abc.def.ghi"'), "abc.def.ghi");
+  assert.equal(makePinataAuthHeader('"abc.def.ghi"').Authorization, "Bearer abc.def.ghi");
+});
+
+test("Pinata token with whitespace or newline is cleaned", () => {
+  assert.equal(cleanToken(" \nabc.def.ghi\r\n "), "abc.def.ghi");
+  assert.equal(makePinataAuthHeader(" \nabc.def.ghi\r\n ").Authorization, "Bearer abc.def.ghi");
+});
+
+test("Pinata token with Bearer prefix does not create duplicate Bearer header", () => {
+  assert.equal(cleanToken("Bearer abc.def.ghi"), "abc.def.ghi");
+  assert.equal(makePinataAuthHeader("Bearer abc.def.ghi").Authorization, "Bearer abc.def.ghi");
+});
+
+test("Pinata auth header is exactly Authorization Bearer token", () => {
+  assert.deepEqual(makePinataAuthHeader("abc.def.ghi"), {
+    Authorization: "Bearer abc.def.ghi"
+  });
+});
+
+test("Pinata provider 401/403 is classified as metadata auth failure", () => {
+  const providerError = new Error("Not Authorized");
+  providerError.status = 401;
+  providerError.responseBody = '{"error":"Not Authorized"}';
+
+  const error = pinataProviderError(providerError);
+
+  assert.equal(error.code, "PUMP_METADATA_AUTH_FAILED");
+  assert.equal(error.providerStatus, 401);
+  assert.equal(error.stage, "metadata_upload");
+});
+
+test("safe Pinata diagnostics never include the secret token", () => {
+  const diagnostics = safePinataDiagnostics("Bearer secret.jwt.value");
+  const serialized = JSON.stringify(diagnostics);
+
+  assert.equal(diagnostics.tokenPresent, true);
+  assert.equal(diagnostics.tokenLength, "secret.jwt.value".length);
+  assert.doesNotMatch(serialized, /secret\.jwt\.value/);
+  assert.doesNotMatch(serialized, /Bearer secret/);
+});
+
+test("Pump metadata image and JSON uploads use the shared cleaned auth helper", async () => {
+  const source = await fs.readFile(path.join(rootDir, "src", "index.js"), "utf8");
+
+  assert.match(source, /const pinataConfig = assertPinataConfigured/);
+  assert.match(source, /const uploadHeaders = pinataConfig\.authHeader/);
+  assert.doesNotMatch(source, /Authorization:\s*`Bearer \$\{CONFIG\.pumpLaunchPinataJwt\}`/);
+  assert.equal((source.match(/headers: uploadHeaders/g) || []).length, 2);
+  assert.equal((source.match(/metadataForm\.append\("network", "public"\)/g) || []).length, 1);
+  assert.equal((source.match(/imageForm\.append\("network", "public"\)/g) || []).length, 1);
+});
