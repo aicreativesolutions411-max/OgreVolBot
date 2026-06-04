@@ -4197,3 +4197,96 @@
     gap: 7px !important;
   }
 }
+
+/* 2026-06-04 mobile topbar rescue. */
+@media (max-width: 760px) {
+  .topbar {
+    position: relative !important;
+    inset: auto !important;
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    align-items: stretch !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    overflow: visible !important;
+    padding: 8px 10px !important;
+    gap: 7px !important;
+    z-index: 20 !important;
+  }
+
+  .topbar .powered {
+    justify-self: center !important;
+    max-width: 160px !important;
+  }
+
+  .topbar .powered img {
+    max-height: 28px !important;
+    width: auto !important;
+    object-fit: contain !important;
+  }
+
+  .topbar .social-links {
+    display: none !important;
+  }
+
+  .topbar-right,
+  .top-auth-actions,
+  .top-auth-group {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .top-auth-group {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 7px !important;
+  }
+
+  .top-auth-group button,
+  .top-auth-group .top-profile-button {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    min-height: 36px !important;
+    padding: 8px 10px !important;
+    border-radius: 10px !important;
+    font-size: 11px !important;
+    line-height: 1.05 !important;
+    white-space: normal !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
+
+  .top-auth-group [data-web-signup-connect],
+  .top-auth-group .top-profile-button {
+    grid-column: 1 / -1 !important;
+  }
+
+  .top-profile-avatar {
+    width: 22px !important;
+    height: 22px !important;
+    min-width: 22px !important;
+  }
+
+  .top-sync-strip {
+    order: 4 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    justify-content: center !important;
+    flex-wrap: wrap !important;
+    gap: 5px !important;
+    font-size: 10px !important;
+  }
+
+  .terminal-global-search {
+    width: 100% !important;
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto !important;
+    gap: 6px !important;
+  }
+
+  .terminal-global-search[hidden] {
+    display: none !important;
+  }
+}

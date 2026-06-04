@@ -971,7 +971,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
     }
 
     if (request.method === "POST" && pathname === "/api/web/trade/plans/run") {
-      const result = await processTradePlans();
+      const result = await processTradePlans({ forcePriceCheck: true });
       sendWebJson(request, response, 200, {
         ok: true,
         runner: result,
@@ -1529,7 +1529,9 @@ async function runInternalWorkerTick(body = {}) {
   };
 
   if (CONFIG.workerTickRunTradePlans && body.runTradePlans !== false) {
-    result.tradePlans = await runWorkerTask("tradePlans", () => processTradePlans());
+    result.tradePlans = await runWorkerTask("tradePlans", () => processTradePlans({
+      forcePriceCheck: body.forceTradePlans !== false
+    }));
   }
 
   if (CONFIG.workerTickRunDcaPlans && body.runDcaPlans !== false) {
@@ -5325,7 +5327,7 @@ function isActiveTimedWalletStatus(status) {
   return ["armed", "watching", "retrying", "submitting", "waiting_next_loop", "timer-only"].includes(String(status || "").toLowerCase());
 }
 
-async function processTradePlans() {
+async function processTradePlans(options = {}) {
   if (tradePlanRunnerActive) {
     const activeForMs = tradePlanRunnerActiveSince ? Date.now() - tradePlanRunnerActiveSince : 0;
     if (activeForMs > CONFIG.tradePlanRunnerStaleMs) {
@@ -5397,6 +5399,7 @@ async function processTradePlans() {
         let result;
         try {
           result = await processTradePlanWallet(plan, planWallet, walletStore, {
+            forcePriceCheck: Boolean(options.forcePriceCheck),
             persistCheckpoint: async () => {
               await writeTradePlans(planStore);
             }
@@ -5536,7 +5539,7 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
   if (!triggerReason && planHasPriceExit(plan, planWallet)) {
     const lastCheckedAt = Date.parse(planWallet.lastCheckedAt || "");
     const timerDue = now >= Date.parse(planWallet.sellAfterAt || plan.sellAfterAt);
-    if (!timerDue && Number.isFinite(lastCheckedAt) && now - lastCheckedAt < CONFIG.stopLossCheckIntervalMs) {
+    if (!options.forcePriceCheck && !timerDue && Number.isFinite(lastCheckedAt) && now - lastCheckedAt < CONFIG.stopLossCheckIntervalMs) {
       return { changed: false, message: null };
     }
 

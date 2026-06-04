@@ -9,22 +9,32 @@ loadDotEnv();
 
 const CONFIG = loadWorkerConfig();
 let activeTick = false;
+let activeTradePlanTick = false;
 let tickCount = 0;
+let tradePlanTickCount = 0;
 
 console.log(`SlimeWire worker starting. Tick URL: ${CONFIG.tickUrl}`);
 if (CONFIG.tickUrls.length > 1) {
   console.log(`Worker fallback tick URLs: ${CONFIG.tickUrls.slice(1).join(", ")}`);
 }
 console.log(`Worker interval: ${CONFIG.intervalMs}ms. Feeds: ${CONFIG.warmFeeds ? "on" : "off"}. Trade plans: ${CONFIG.runTradePlans ? "on" : "off"}.`);
+if (CONFIG.runTradePlans) {
+  console.log(`Fast TP/SL worker interval: ${CONFIG.tradePlanIntervalMs}ms.`);
+}
 
 setTimeout(() => void tick(), 500);
 setInterval(() => void tick(), CONFIG.intervalMs);
+if (CONFIG.runTradePlans) {
+  setTimeout(() => void tradePlanTick(), 1000);
+  setInterval(() => void tradePlanTick(), CONFIG.tradePlanIntervalMs);
+}
 
 function loadWorkerConfig() {
   const baseUrl = (process.env.WORKER_TICK_BASE_URL || process.env.TELEGRAM_WEBHOOK_URL || process.env.KEEPALIVE_URL || "").replace(/\/$/, "");
   const tickUrl = process.env.WORKER_TICK_URL || (baseUrl ? `${baseUrl}/api/internal/worker/tick` : "");
   const secret = process.env.WORKER_SECRET || "";
   const intervalMs = clampInteger(process.env.WORKER_TICK_INTERVAL_MS, 2_000, 1_000, 60_000);
+  const tradePlanIntervalMs = clampInteger(process.env.WORKER_TRADE_PLAN_INTERVAL_MS, 1_500, 750, 30_000);
   const timeoutMs = clampInteger(process.env.WORKER_TICK_TIMEOUT_MS, 20_000, 5_000, 120_000);
   const buckets = normalizeList(process.env.WORKER_TICK_BUCKETS || "live,under1h,under3h,under1d");
   const sorts = normalizeList(process.env.WORKER_TICK_SORTS || "best,newest");
@@ -41,6 +51,7 @@ function loadWorkerConfig() {
     tickUrls: deriveTickUrls(tickUrl),
     secret,
     intervalMs,
+    tradePlanIntervalMs,
     timeoutMs,
     runTradePlans: parseBoolean(process.env.WORKER_TICK_RUN_TRADE_PLANS || "true"),
     runDcaPlans: parseBoolean(process.env.WORKER_TICK_RUN_DCA_PLANS || "true"),
@@ -49,6 +60,70 @@ function loadWorkerConfig() {
     sorts,
     forceFeeds: parseBoolean(process.env.WORKER_TICK_FORCE_FEEDS || "true")
   };
+}
+
+async function tradePlanTick() {
+  if (activeTradePlanTick) {
+    console.log("Fast TP/SL worker tick skipped because the previous TP/SL tick is still running.");
+    return;
+  }
+
+  activeTradePlanTick = true;
+  tradePlanTickCount += 1;
+  const startedAt = Date.now();
+  const controller = new AbortController();
+  const timeoutMs = Math.min(CONFIG.timeoutMs, 15_000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    let lastFailure = null;
+    for (let index = 0; index < CONFIG.tickUrls.length; index += 1) {
+      const tickUrl = CONFIG.tickUrls[index];
+      const response = await fetch(tickUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Worker-Secret": CONFIG.secret,
+          "User-Agent": "slimewire-render-worker-tpsl"
+        },
+        body: JSON.stringify({
+          runTradePlans: true,
+          forceTradePlans: true,
+          runDcaPlans: false,
+          warmLivePairs: false
+        }),
+        signal: controller.signal
+      });
+      const raw = await response.text();
+      const data = parseJson(raw);
+
+      if (response.status === 404 && index < CONFIG.tickUrls.length - 1) {
+        lastFailure = `404 at ${tickUrl}: ${data?.error || raw.slice(0, 120)}`;
+        console.warn(`Fast TP/SL worker tick ${tradePlanTickCount} endpoint not found at ${tickUrl}; trying fallback endpoint.`);
+        continue;
+      }
+
+      if (!response.ok || data?.ok === false) {
+        const detail = data?.error || raw.slice(0, 240);
+        console.warn(`Fast TP/SL worker tick ${tradePlanTickCount} failed (${response.status}) at ${tickUrl}: ${detail}`);
+        return;
+      }
+
+      const tradePlans = data?.tradePlans?.value || data?.tradePlans || {};
+      const tradePlanSummary = tradePlans?.skipped
+        ? `skipped:${tradePlans.reason || "unknown"}`
+        : `checked:${tradePlans.checkedWallets ?? 0} triggered:${tradePlans.triggeredWallets ?? 0} sold:${tradePlans.soldWallets ?? 0} failed:${tradePlans.failedWallets ?? 0}`;
+      const fallbackNote = lastFailure ? ` Recovered after ${lastFailure}.` : "";
+      console.log(`Fast TP/SL worker tick ${tradePlanTickCount} ok in ${Date.now() - startedAt}ms. ${tradePlanSummary}.${fallbackNote}`);
+      return;
+    }
+  } catch (error) {
+    const reason = error?.name === "AbortError" ? `timed out after ${timeoutMs}ms` : error.message;
+    console.warn(`Fast TP/SL worker tick ${tradePlanTickCount} failed: ${reason}`);
+  } finally {
+    clearTimeout(timer);
+    activeTradePlanTick = false;
+  }
 }
 
 async function tick() {
@@ -76,6 +151,7 @@ async function tick() {
         },
         body: JSON.stringify({
           runTradePlans: CONFIG.runTradePlans,
+          forceTradePlans: CONFIG.runTradePlans,
           runDcaPlans: CONFIG.runDcaPlans,
           warmLivePairs: CONFIG.warmFeeds,
           buckets: CONFIG.buckets,
@@ -102,12 +178,16 @@ async function tick() {
         return;
       }
 
+      const tradePlans = data?.tradePlans?.value || data?.tradePlans || {};
+      const tradePlanSummary = tradePlans?.skipped
+        ? `TP/SL skipped:${tradePlans.reason || "unknown"}`
+        : `TP/SL checked:${tradePlans.checkedWallets ?? 0} triggered:${tradePlans.triggeredWallets ?? 0} sold:${tradePlans.soldWallets ?? 0} failed:${tradePlans.failedWallets ?? 0}`;
       const feeds = data?.feeds?.value?.warmed || data?.feeds?.warmed || [];
       const feedSummary = Array.isArray(feeds)
         ? feeds.map((item) => `${item.bucket}/${item.sort}:${item.rows}`).join(" ")
         : "feeds:n/a";
       const fallbackNote = lastFailure ? ` Recovered after ${lastFailure}.` : "";
-      console.log(`Worker tick ${tickCount} ok in ${Date.now() - startedAt}ms. ${feedSummary}${fallbackNote}`);
+      console.log(`Worker tick ${tickCount} ok in ${Date.now() - startedAt}ms. ${tradePlanSummary}. ${feedSummary}${fallbackNote}`);
       return;
     }
   } catch (error) {

@@ -196,6 +196,8 @@ services:
         sync: false
       - key: WORKER_TICK_INTERVAL_MS
         value: 2000
+      - key: WORKER_TRADE_PLAN_INTERVAL_MS
+        value: 1500
       - key: WORKER_TICK_TIMEOUT_MS
         value: 20000
       - key: WORKER_TICK_RUN_TRADE_PLANS
