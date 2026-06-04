@@ -53,6 +53,7 @@ import {
 import {
   assertPinataAuthWorks,
   assertPinataConfigured,
+  safePinataDiagnostics,
   pinataProviderError,
   uploadImage,
   uploadJsonMetadata
@@ -108,6 +109,27 @@ let lastKeepAliveStatus = {
   lastPingAt: null,
   lastStatus: null,
   lastError: null
+};
+let metadataProviderHealth = {
+  provider: "pinata",
+  checkedAt: null,
+  status: "pending",
+  authStatus: null,
+  authOk: false,
+  authBodySnippet: "",
+  uploadOk: false,
+  uploadStatus: null,
+  metadataUri: "",
+  cid: "",
+  publicFetchOk: false,
+  publicFetchStatus: null,
+  errorCode: "",
+  errorMessage: "",
+  tokenPresent: false,
+  tokenLength: 0,
+  tokenCleaned: false,
+  tokenPlaceholder: false,
+  endpoint: ""
 };
 let tradePlanRunnerActive = false;
 let tradePlanRunnerActiveSince = 0;
@@ -247,6 +269,7 @@ const PRIVATE_CHAT_ACTIONS = new Set([
 async function main() {
   await ensureDataFiles();
   startHealthServer();
+  scheduleMetadataProviderStartupSmoke();
   startKeepAlivePinger();
   startTradePlanRunner();
   startWebExitGuardRunner();
@@ -772,6 +795,7 @@ function startHealthServer() {
           priorityFeeSol: CONFIG.pumpLaunchPriorityFeeSol,
           requiredBufferSol: CONFIG.pumpLaunchRequiredBufferSol
         },
+        metadataProvider: metadataProviderHealth,
         keepAlive: lastKeepAliveStatus
       }));
       return;
@@ -806,6 +830,139 @@ function startHealthServer() {
   server.listen(CONFIG.port, () => {
     console.log(`Health server listening on port ${CONFIG.port}.`);
   });
+}
+
+function metadataProviderDiagnosticsFields() {
+  const diagnostics = safePinataDiagnostics(CONFIG.pumpLaunchPinataJwt);
+  return {
+    provider: "pinata",
+    endpoint: CONFIG.pumpLaunchMetadataUrl,
+    tokenPresent: diagnostics.tokenPresent,
+    tokenLength: diagnostics.tokenLength,
+    tokenCleaned: diagnostics.cleaned,
+    tokenPlaceholder: diagnostics.placeholder,
+    hadOuterWhitespace: diagnostics.hadOuterWhitespace,
+    hadSurroundingQuotes: diagnostics.hadSurroundingQuotes,
+    hadAuthorizationPrefix: diagnostics.hadAuthorizationPrefix,
+    hadBearerPrefix: diagnostics.hadBearerPrefix,
+    hadTokenWhitespace: diagnostics.hadTokenWhitespace
+  };
+}
+
+function updateMetadataProviderHealth(fields = {}) {
+  metadataProviderHealth = {
+    ...metadataProviderHealth,
+    ...metadataProviderDiagnosticsFields(),
+    checkedAt: new Date().toISOString(),
+    ...fields
+  };
+}
+
+function scheduleMetadataProviderStartupSmoke() {
+  updateMetadataProviderHealth({
+    status: CONFIG.pumpLaunchPinataJwt ? "scheduled" : "config_missing",
+    errorCode: CONFIG.pumpLaunchPinataJwt ? "" : "PUMP_METADATA_CONFIG_MISSING",
+    errorMessage: CONFIG.pumpLaunchPinataJwt ? "" : "Pinata JWT is not configured on this backend runtime."
+  });
+
+  if (!CONFIG.pumpLaunchPinataJwt) return;
+
+  setTimeout(() => {
+    void runMetadataProviderStartupSmoke().catch((error) => {
+      updateMetadataProviderHealth({
+        status: "failed",
+        authStatus: error?.authTest?.status || error?.providerStatus || error?.status || error?.statusCode || null,
+        authOk: false,
+        uploadOk: false,
+        uploadStatus: error?.providerStatus || error?.status || error?.statusCode || null,
+        errorCode: error?.code || "PUMP_METADATA_STARTUP_SMOKE_FAILED",
+        errorMessage: sanitizeProviderBody(error?.message || "Metadata provider startup smoke test failed.")
+      });
+      logPumpLaunchEvent("metadata_provider_startup_smoke_failed", metadataProviderHealth);
+    });
+  }, 3_000);
+}
+
+async function runMetadataProviderStartupSmoke() {
+  updateMetadataProviderHealth({
+    status: "checking_auth",
+    authStatus: null,
+    authOk: false,
+    authBodySnippet: "",
+    uploadOk: false,
+    uploadStatus: null,
+    metadataUri: "",
+    cid: "",
+    publicFetchOk: false,
+    publicFetchStatus: null,
+    errorCode: "",
+    errorMessage: ""
+  });
+
+  const config = assertPinataConfigured({
+    tokenValue: CONFIG.pumpLaunchPinataJwt,
+    metadataUrl: CONFIG.pumpLaunchMetadataUrl
+  });
+
+  const auth = await assertPinataAuthWorks({
+    tokenValue: CONFIG.pumpLaunchPinataJwt,
+    timeoutMs: Math.min(CONFIG.pumpLaunchTimeoutMs || 30000, 15000)
+  });
+  updateMetadataProviderHealth({
+    status: "auth_ok",
+    authStatus: auth.status,
+    authOk: auth.ok,
+    authBodySnippet: sanitizeProviderBody(auth.bodySnippet || "")
+  });
+
+  const metadata = {
+    name: "SlimeWire Render metadata smoke test",
+    symbol: "SLIMETEST",
+    description: "Temporary backend metadata upload smoke test",
+    image: "https://example.com/slimewire-render-smoke.png",
+    external_url: "https://slimewire.org"
+  };
+  updateMetadataProviderHealth({
+    status: "uploading_metadata"
+  });
+
+  const upload = await uploadJsonMetadata({
+    metadata,
+    filename: `slimewire-render-metadata-smoke-${Date.now()}.json`,
+    tokenValue: CONFIG.pumpLaunchPinataJwt,
+    metadataUrl: config.metadataUrl,
+    timeoutMs: CONFIG.pumpLaunchTimeoutMs
+  });
+
+  let publicFetchOk = false;
+  let publicFetchStatus = null;
+  if (upload.uri && typeof fetch === "function") {
+    try {
+      const response = await fetch(upload.uri, {
+        method: "GET",
+        signal: AbortSignal.timeout ? AbortSignal.timeout(10_000) : undefined
+      });
+      publicFetchOk = Boolean(response.ok);
+      publicFetchStatus = response.status;
+    } catch (error) {
+      publicFetchStatus = 0;
+    }
+  }
+
+  updateMetadataProviderHealth({
+    status: "uploaded",
+    authStatus: auth.status,
+    authOk: auth.ok,
+    uploadOk: true,
+    uploadStatus: 200,
+    metadataUri: upload.uri,
+    cid: upload.cid,
+    publicFetchOk,
+    publicFetchStatus,
+    errorCode: "",
+    errorMessage: ""
+  });
+  logPumpLaunchEvent("metadata_provider_startup_smoke_uploaded", metadataProviderHealth);
 }
 
 async function handleWebApiRequest(request, response, requestUrl) {
