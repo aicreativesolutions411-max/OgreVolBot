@@ -1133,6 +1133,8 @@ function render(options = {}) {
   state.pendingRender = false;
   app.dataset.loading = state.loading ? "true" : "false";
   app.dataset.route = state.route;
+  const hasWalletContext = Boolean(state.user?.connectedWallet || state.wallets.length);
+  app.dataset.walletConnected = hasWalletContext ? "true" : "false";
   loginView.hidden = state.route !== "intro";
   if (connectView) connectView.hidden = state.route !== "connect";
   if (topLoginPanel) topLoginPanel.hidden = Boolean(state.user) || state.loginCollapsed;
@@ -1151,7 +1153,7 @@ function render(options = {}) {
   setText("[data-realized]", state.pnl?.totals?.realizedSol || "+0 SOL");
   setText("[data-top-sol]", `${totalSol().toFixed(4)} SOL`);
   setText("[data-top-portfolio]", `${state.positions.length} position${state.positions.length === 1 ? "" : "s"}`);
-  setText("[data-sync-health]", syncHealthLabel());
+  setText("[data-sync-health]", hasWalletContext ? syncHealthLabel() : "Status: Wallet not connected");
   setText("[data-active-preset-label]", activePresetSummary());
   setHidden("[data-refresh-spinner]", !state.walletRefreshing);
   document.querySelectorAll('[data-feature="ogre-tek"]').forEach((element) => {
@@ -7254,6 +7256,13 @@ function stopLossAuditWalletHtml(wallet = {}) {
   const netMove = Number.isFinite(Number(wallet.lastNetMovePct)) ? ` net ${Number(wallet.lastNetMovePct).toFixed(2)}%` : "";
   const retry = wallet.retryAfterAt ? ` | retry ${ageTextFromSeconds(secondsSince(wallet.retryAfterAt))}` : "";
   const lastError = wallet.lastError || wallet.lastPriceEstimateError || "";
+  const stopLossLine = Number.isFinite(Number(wallet.lastStopLossPct))
+    ? `SL ${Number(wallet.lastStopLossPct).toFixed(2).replace(/\.00$/, "")}% triggers at -${Number(wallet.lastStopLossTriggerPct || wallet.lastStopLossPct).toFixed(2).replace(/\.00$/, "")}%`
+    : "SL off";
+  const takeProfitLine = Number.isFinite(Number(wallet.lastTakeProfitPct))
+    ? `TP +${Number(wallet.lastTakeProfitPct).toFixed(2).replace(/\.00$/, "")}%`
+    : "TP off";
+  const triggerReadout = `should SL: ${wallet.lastShouldTriggerStopLoss === true ? "yes" : "no"} | should TP: ${wallet.lastShouldTriggerTakeProfit === true ? "yes" : "no"}`;
   return `
     <div class="audit-wallet-row">
       <div>
@@ -7263,6 +7272,7 @@ function stopLossAuditWalletHtml(wallet = {}) {
       <div>
         <span>${escapeHtml(status)}${wallet.triggerKind ? ` / ${escapeHtml(wallet.triggerKind)}` : ""}</span>
         <small>Move ${escapeHtml(moveLabel)}${escapeHtml(netMove)} | checked ${escapeHtml(ageTextFromSeconds(secondsSince(lastCheck)))}${escapeHtml(retry)}</small>
+        <small>${escapeHtml(stopLossLine)} | ${escapeHtml(takeProfitLine)} | ${escapeHtml(triggerReadout)} | Source: ${escapeHtml(wallet.lastTriggerPriceSource || wallet.lastEstimateSource || "unknown")}</small>
         ${wallet.triggerReason ? `<small>Reason: ${escapeHtml(wallet.triggerReason)}</small>` : ""}
         ${wallet.sellSignature ? `<small>Sell tx: ${escapeHtml(wallet.sellSignature)}</small>` : ""}
         ${lastError ? `<small class="warning-text">Error: ${escapeHtml(lastError)}</small>` : ""}

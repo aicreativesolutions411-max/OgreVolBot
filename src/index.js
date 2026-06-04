@@ -5553,6 +5553,12 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
       planWallet.triggerCheckIntervalMs = CONFIG.stopLossCheckIntervalMs;
 
       const stopLossTriggerPct = stopLossTriggerPercent(stopLossPct, CONFIG.stopLossTriggerBufferPct);
+      planWallet.lastStopLossPct = stopLossPct || null;
+      planWallet.lastTakeProfitPct = takeProfitPct || null;
+      planWallet.lastStopLossTriggerPct = stopLossTriggerPct || null;
+      planWallet.lastTriggerPriceSource = estimate.source || "jupiter";
+      planWallet.lastShouldTriggerStopLoss = stopLossTriggerPct > 0 && estimate.movePct <= -stopLossTriggerPct;
+      planWallet.lastShouldTriggerTakeProfit = Number.isFinite(Number(takeProfitPct)) && Number(takeProfitPct) > 0 && estimate.movePct >= Number(takeProfitPct);
       const decision = priceExitDecision({
         movePct: estimate.movePct,
         takeProfitPct,

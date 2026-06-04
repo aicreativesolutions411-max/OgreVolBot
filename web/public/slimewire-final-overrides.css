@@ -3841,3 +3841,177 @@
     line-height: 1.2 !important;
   }
 }
+
+/* 2026-06-04 visual auth and terminal clarity cleanup.
+   Presentation-only: keeps existing data hooks and actions intact. */
+.top-auth-actions {
+  align-items: center !important;
+}
+
+.top-auth-group {
+  gap: 8px !important;
+}
+
+.top-auth-group button,
+.connect-actions button,
+.connect-secondary-actions button,
+.connect-form-actions button {
+  min-height: 36px !important;
+}
+
+.top-auth-group [data-open-login] {
+  border-color: rgba(153, 255, 41, 0.3) !important;
+  background: rgba(8, 26, 8, 0.56) !important;
+}
+
+.top-sync-strip {
+  align-items: center !important;
+  min-height: 34px !important;
+}
+
+.top-wallet-disconnected {
+  display: none;
+  color: rgba(232, 255, 220, 0.86);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+[data-app][data-wallet-connected="false"] .top-sync-strip {
+  padding: 4px 8px !important;
+}
+
+[data-app][data-wallet-connected="false"] .top-wallet-disconnected {
+  display: inline-flex;
+}
+
+[data-app][data-wallet-connected="false"] .top-sync-strip [data-top-sol],
+[data-app][data-wallet-connected="false"] .top-sync-strip [data-top-portfolio],
+[data-app][data-wallet-connected="false"] .top-sync-strip [data-active-preset-label] {
+  display: none !important;
+}
+
+.connect-card {
+  gap: 10px !important;
+}
+
+.connect-card .connect-subtitle {
+  margin-top: 2px !important;
+}
+
+.connect-provider-row {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 10px !important;
+}
+
+.connect-card .provider-orb {
+  min-height: 92px !important;
+  padding: 12px !important;
+  border-radius: 18px !important;
+  background:
+    linear-gradient(180deg, rgba(20, 54, 12, 0.78), rgba(4, 14, 4, 0.92)) !important;
+  border: 1px solid rgba(153, 255, 41, 0.42) !important;
+}
+
+.connect-card .provider-orb img {
+  width: 44px !important;
+  height: 44px !important;
+  object-fit: contain !important;
+}
+
+.connect-card .provider-orb span {
+  font-size: 13px !important;
+  font-weight: 900 !important;
+}
+
+.connect-next-step,
+.connect-login-heading {
+  display: block;
+  color: rgba(226, 255, 214, 0.8);
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: center;
+}
+
+.connect-login-heading {
+  color: var(--slime-green, #99ff29);
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.connect-actions {
+  grid-template-columns: 1.35fr 1fr 0.85fr !important;
+  gap: 8px !important;
+}
+
+.connect-secondary-actions {
+  display: grid;
+  grid-template-columns: 0.85fr 1.35fr;
+  gap: 8px;
+  width: 100%;
+}
+
+.connect-secondary-actions button {
+  border-color: rgba(153, 255, 41, 0.24) !important;
+  background: rgba(3, 12, 5, 0.58) !important;
+  color: rgba(226, 255, 214, 0.82) !important;
+  font-size: 11px !important;
+}
+
+.remember-device-row {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 7px !important;
+  color: rgba(226, 255, 214, 0.72) !important;
+  font-size: 11px !important;
+  margin-top: 2px !important;
+}
+
+.remember-device-row input {
+  width: 13px !important;
+  height: 13px !important;
+  accent-color: var(--slime-green, #99ff29);
+}
+
+[data-app][data-route="terminal"] .tabs [title] {
+  cursor: pointer;
+}
+
+@media (max-width: 760px) {
+  .topbar-right {
+    gap: 6px !important;
+  }
+
+  .top-auth-group {
+    width: 100% !important;
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 6px !important;
+  }
+
+  .top-auth-group button {
+    min-width: 0 !important;
+    padding: 8px 7px !important;
+    font-size: 10px !important;
+    white-space: normal !important;
+  }
+
+  .top-sync-strip {
+    width: 100% !important;
+    justify-content: center !important;
+  }
+
+  .connect-provider-row,
+  .connect-actions,
+  .connect-secondary-actions {
+    grid-template-columns: 1fr !important;
+  }
+
+  .connect-card .provider-orb {
+    min-height: 68px !important;
+    flex-direction: row !important;
+    justify-content: center !important;
+  }
+}
