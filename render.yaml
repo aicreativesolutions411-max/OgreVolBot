@@ -46,6 +46,8 @@ services:
         sync: false
       - key: PUMP_LAUNCH_PRIORITY_FEE_SOL
         value: 0.00005
+      - key: PUMP_LAUNCH_REQUIRED_BUFFER_SOL
+        value: 0.01
       - key: PUMP_LAUNCH_IMAGE_FIELD
         value: none
       - key: PUMP_LAUNCH_IMAGE_MAX_BYTES

@@ -1,0 +1,615 @@
+import bs58 from "bs58";
+import {
+  LAMPORTS_PER_SOL,
+  VersionedTransaction
+} from "@solana/web3.js";
+
+export const PUMP_LAUNCH_STATUS = Object.freeze({
+  STARTED: "started",
+  PREFLIGHT: "preflight",
+  METADATA_UPLOADED: "metadata_uploaded",
+  PUMPPORTAL_REQUESTED: "pumpportal_requested",
+  SIGNED: "signed",
+  SUBMITTED: "submitted",
+  LAUNCHED: "launched",
+  FAILED: "failed"
+});
+
+export const PUMP_LAUNCH_STAGE = Object.freeze({
+  WALLET_AUTH: "wallet_auth",
+  BALANCE_CHECK: "balance_check",
+  METADATA_UPLOAD: "metadata_upload",
+  PUMPPORTAL_LOCAL: "pumpportal_local",
+  SIGNING: "signing",
+  SEND_TRANSACTION: "send_transaction",
+  STORE_RESULT: "store_result"
+});
+
+export function createPumpLaunchError(message, code, statusCode = 400, extra = {}) {
+  const error = new Error(message);
+  error.code = code;
+  error.statusCode = statusCode;
+  Object.assign(error, extra);
+  return error;
+}
+
+export function pumpLaunchStageError(stage, code, cause, statusCode = 502) {
+  const message = cause?.message || String(cause || "Unknown launch error");
+  const error = createPumpLaunchError(message, code, Number(cause?.status || cause?.statusCode || statusCode), {
+    stage,
+    cause,
+    providerStatus: cause?.status || cause?.statusCode || null,
+    providerResponseBody: cause?.responseBody || ""
+  });
+  return error;
+}
+
+export function isServerSignableWallet(wallet) {
+  const secret = wallet?.secret;
+  return Boolean(
+    secret
+    && typeof secret === "object"
+    && !Array.isArray(secret)
+    && secret.salt
+    && secret.iv
+    && secret.tag
+    && secret.data
+  );
+}
+
+export function selectPumpLaunchWallet(store, userId, selectedDevWalletId, options = {}) {
+  const raw = String(selectedDevWalletId || "").trim();
+  const wallets = Array.isArray(store?.wallets) ? store.wallets : [];
+  const allowedOwnerIds = new Set([
+    String(userId),
+    ...(Array.isArray(options.allowedOwnerIds) ? options.allowedOwnerIds.map(String) : [])
+  ].filter(Boolean));
+  const ownerWallets = wallets.filter((wallet) => allowedOwnerIds.has(String(wallet.ownerId)));
+
+  if (!raw) {
+    throw createPumpLaunchError("Choose a managed SlimeWire dev wallet before launching.", "MISSING_DEV_WALLET", 400, {
+      stage: PUMP_LAUNCH_STAGE.WALLET_AUTH
+    });
+  }
+
+  let wallet = null;
+  let webIndex = null;
+  if (/^\d+$/.test(raw)) {
+    webIndex = Number.parseInt(raw, 10);
+    wallet = ownerWallets[webIndex - 1] || null;
+  } else {
+    const normalized = raw.toLowerCase();
+    const matchIndex = ownerWallets.findIndex((candidate) => (
+      String(candidate.publicKey || "") === raw
+      || String(candidate.id || "") === raw
+      || String(candidate.label || "").toLowerCase() === normalized
+    ));
+    if (matchIndex >= 0) {
+      wallet = ownerWallets[matchIndex];
+      webIndex = matchIndex + 1;
+    }
+  }
+
+  if (!wallet) {
+    const walletFromOtherOwner = wallets.find((candidate) => (
+      String(candidate.publicKey || "") === raw
+      || String(candidate.id || "") === raw
+      || String(candidate.label || "").toLowerCase() === raw.toLowerCase()
+    ));
+    if (walletFromOtherOwner && !allowedOwnerIds.has(String(walletFromOtherOwner.ownerId))) {
+      throw createPumpLaunchError("Not Authorized: that dev wallet is not owned by this logged-in SlimeWire account.", "DEV_WALLET_NOT_AUTHORIZED", 403, {
+        stage: PUMP_LAUNCH_STAGE.WALLET_AUTH,
+        selectedDevWalletId: raw,
+        ownerId: walletFromOtherOwner.ownerId
+      });
+    }
+    throw createPumpLaunchError(`Dev wallet ${raw} was not found for this SlimeWire account.`, "DEV_WALLET_NOT_FOUND", 404, {
+      stage: PUMP_LAUNCH_STAGE.WALLET_AUTH,
+      selectedDevWalletId: raw
+    });
+  }
+
+  if (!isServerSignableWallet(wallet)) {
+    throw createPumpLaunchError("Selected dev wallet is not a managed SlimeWire/server-signable wallet.", "DEV_WALLET_NOT_MANAGED", 400, {
+      stage: PUMP_LAUNCH_STAGE.WALLET_AUTH,
+      selectedDevWalletId: raw,
+      devWalletPublicKey: wallet.publicKey
+    });
+  }
+
+  return {
+    wallet: {
+      ...wallet,
+      webIndex
+    },
+    selectedDevWalletId: raw,
+    devWalletPublicKey: wallet.publicKey,
+    walletType: "managed_slimewire",
+    walletManaged: true,
+    authResult: "authorized",
+    ownerWalletCount: ownerWallets.length
+  };
+}
+
+export function solToLamportsNumber(sol) {
+  const value = Number(sol);
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  return Math.ceil(value * LAMPORTS_PER_SOL);
+}
+
+export function pumpLaunchRequiredSol({ devBuySol = 0, priorityFeeSol = 0, bufferSol = 0.01 } = {}) {
+  const devBuy = Math.max(0, Number(devBuySol) || 0);
+  const priorityFee = Math.max(0, Number(priorityFeeSol) || 0);
+  const buffer = Math.max(0, Number(bufferSol) || 0);
+  return devBuy + priorityFee + buffer;
+}
+
+export function assertPumpLaunchBalance({ balanceSol, requiredSol }) {
+  if (!Number.isFinite(balanceSol)) {
+    throw createPumpLaunchError("Could not read the selected dev wallet SOL balance.", "DEV_WALLET_BALANCE_UNKNOWN", 502, {
+      stage: PUMP_LAUNCH_STAGE.BALANCE_CHECK
+    });
+  }
+  if (balanceSol + 1e-9 < requiredSol) {
+    throw createPumpLaunchError(
+      `Selected dev wallet has ${balanceSol.toFixed(6)} SOL, but launch needs at least ${requiredSol.toFixed(6)} SOL for dev buy, priority fee, rent/network fees, and safety buffer.`,
+      "DEV_WALLET_INSUFFICIENT_SOL",
+      400,
+      {
+        stage: PUMP_LAUNCH_STAGE.BALANCE_CHECK,
+        balanceSol,
+        requiredSol
+      }
+    );
+  }
+}
+
+export function buildPumpPortalLocalCreateRequest({
+  creatorPublicKey,
+  mintPublicKey,
+  name,
+  symbol,
+  metadataUri,
+  devBuySol,
+  slippageBps,
+  priorityFeeSol,
+  pool = "pump"
+}) {
+  if (!creatorPublicKey) throw createPumpLaunchError("Missing creator wallet public key.", "MISSING_CREATOR_PUBLIC_KEY");
+  if (!mintPublicKey) throw createPumpLaunchError("Missing generated mint public key.", "MISSING_MINT_PUBLIC_KEY");
+  if (!metadataUri) throw createPumpLaunchError("Missing token metadata URI.", "MISSING_METADATA_URI");
+  return {
+    publicKey: creatorPublicKey,
+    action: "create",
+    tokenMetadata: {
+      name,
+      symbol,
+      uri: metadataUri
+    },
+    mint: mintPublicKey,
+    denominatedInSol: "true",
+    amount: Math.max(0.0001, Number(devBuySol || 0.0001)),
+    slippage: Math.max(0.01, Number(slippageBps || 0) / 100),
+    priorityFee: Math.max(0, Number(priorityFeeSol || 0)),
+    pool
+  };
+}
+
+export function firstPumpPortalTransactionValue(value = {}) {
+  if (!value || typeof value !== "object") return value;
+  for (const candidate of [
+    value.transaction,
+    value.tx,
+    value.serializedTransaction,
+    value.signedTransaction,
+    value.rawTransaction,
+    value.data,
+    value.result?.transaction,
+    value.result?.tx,
+    value.result?.serializedTransaction,
+    value.result?.data
+  ]) {
+    if (candidate) return candidate;
+  }
+  return null;
+}
+
+export function decodePumpPortalTransaction(value) {
+  if (!value) return null;
+  if (value instanceof Uint8Array || Buffer.isBuffer(value)) {
+    return VersionedTransaction.deserialize(new Uint8Array(value));
+  }
+  if (Array.isArray(value) && value.every((item) => Number.isInteger(item) && item >= 0 && item <= 255)) {
+    return VersionedTransaction.deserialize(Uint8Array.from(value));
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const tx = decodePumpPortalTransaction(item);
+      if (tx) return tx;
+    }
+    return null;
+  }
+  if (typeof value === "object") {
+    return decodePumpPortalTransaction(firstPumpPortalTransactionValue(value));
+  }
+  const encoded = String(value || "").trim();
+  if (!encoded) return null;
+
+  for (const decode of [
+    () => Buffer.from(encoded, "base64"),
+    () => Buffer.from(bs58.decode(encoded))
+  ]) {
+    try {
+      return VersionedTransaction.deserialize(new Uint8Array(decode()));
+    } catch {
+      // Try the next encoding.
+    }
+  }
+  return null;
+}
+
+export function sanitizePumpPortalCreateRequest(payload = {}) {
+  return {
+    publicKey: payload.publicKey || "",
+    action: payload.action || "",
+    mint: payload.mint || "",
+    tokenMetadata: {
+      name: payload.tokenMetadata?.name || "",
+      symbol: payload.tokenMetadata?.symbol || "",
+      uri: payload.tokenMetadata?.uri || ""
+    },
+    denominatedInSol: payload.denominatedInSol,
+    amount: payload.amount,
+    slippage: payload.slippage,
+    priorityFee: payload.priorityFee,
+    pool: payload.pool
+  };
+}
+
+export function sanitizeProviderBody(value) {
+  return String(value || "")
+    .replace(/([A-Za-z0-9_-]*api[-_ ]?key[A-Za-z0-9_-]*["']?\s*[:=]\s*["']?)[^"',\s]+/gi, "$1[redacted]")
+    .replace(/(Bearer\s+)[A-Za-z0-9._-]+/gi, "$1[redacted]")
+    .slice(0, 1000);
+}
+
+export function pumpLaunchLogEntry(event, fields = {}) {
+  const entry = {
+    event,
+    kind: "pump_launch",
+    at: new Date().toISOString(),
+    ...fields
+  };
+  delete entry.secret;
+  delete entry.privateKey;
+  delete entry.private_key;
+  delete entry.secretKey;
+  delete entry.secret_key;
+  delete entry.encryptedMintSecret;
+  delete entry.encryptedSecret;
+  if (entry.providerResponseBody) {
+    entry.providerResponseBody = sanitizeProviderBody(entry.providerResponseBody);
+  }
+  return entry;
+}
+
+export function formatPumpLaunchUserError(error) {
+  const stage = error?.stage || error?.cause?.stage || "";
+  const code = error?.code || "";
+  const message = String(error?.message || "Pump launch failed").replace(/\s+/g, " ").trim();
+  const status = Number(error?.providerStatus || error?.status || error?.statusCode || 0);
+
+  if (code === "MISSING_DEV_WALLET") return "Choose a managed SlimeWire dev wallet before launching.";
+  if (code === "DEV_WALLET_NOT_AUTHORIZED") return message;
+  if (code === "DEV_WALLET_NOT_FOUND") return message;
+  if (code === "DEV_WALLET_NOT_MANAGED") return message;
+  if (code === "DEV_WALLET_INSUFFICIENT_SOL") return message;
+  if (stage === PUMP_LAUNCH_STAGE.METADATA_UPLOAD && (status === 401 || status === 403 || /not authorized|unauthorized/i.test(message))) {
+    return `Metadata upload is not authorized. Check PUMP_LAUNCH_PINATA_JWT on Render, then retry. Provider said: ${message}`;
+  }
+  if (stage === PUMP_LAUNCH_STAGE.METADATA_UPLOAD) {
+    return `Metadata upload failed before PumpPortal was called: ${message}`;
+  }
+  if (stage === PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL) {
+    return `PumpPortal Local API rejected the create request: ${message}`;
+  }
+  if (stage === PUMP_LAUNCH_STAGE.SEND_TRANSACTION) {
+    return `Pump launch transaction was signed but failed to send or confirm: ${message}`;
+  }
+  return message;
+}
+
+export class PumpLaunchService {
+  constructor(deps = {}) {
+    this.getBalanceLamports = deps.getBalanceLamports;
+    this.uploadMetadata = deps.uploadMetadata;
+    this.requestLocalTransaction = deps.requestLocalTransaction;
+    this.sendTransaction = deps.sendTransaction;
+    this.generateMintKeypair = deps.generateMintKeypair;
+    this.encryptMintSecret = deps.encryptMintSecret || null;
+    this.saveAttempt = deps.saveAttempt || (async () => {});
+    this.recordTradeEvent = deps.recordTradeEvent || (async () => {});
+    this.log = deps.log || (() => {});
+    this.now = deps.now || (() => new Date());
+  }
+
+  async launch({
+    launchAttemptId,
+    userId,
+    wallet,
+    walletKeypair,
+    basePayload,
+    body = {},
+    config = {}
+  }) {
+    if (!this.getBalanceLamports || !this.uploadMetadata || !this.requestLocalTransaction || !this.sendTransaction || !this.generateMintKeypair) {
+      throw createPumpLaunchError("PumpLaunchService is missing required backend dependencies.", "PUMP_LAUNCH_SERVICE_MISCONFIGURED", 500);
+    }
+    if (!wallet || !walletKeypair) {
+      throw createPumpLaunchError("Selected dev wallet could not be loaded for signing.", "DEV_WALLET_LOAD_FAILED", 400, {
+        stage: PUMP_LAUNCH_STAGE.WALLET_AUTH
+      });
+    }
+    if (!isServerSignableWallet(wallet)) {
+      throw createPumpLaunchError("Selected dev wallet is not a managed SlimeWire/server-signable wallet.", "DEV_WALLET_NOT_MANAGED", 400, {
+        stage: PUMP_LAUNCH_STAGE.WALLET_AUTH,
+        devWalletPublicKey: wallet.publicKey
+      });
+    }
+
+    const attemptId = launchAttemptId || basePayload?.clientRequestId;
+    const mintKeypair = this.generateMintKeypair();
+    const mintPublicKey = mintKeypair.publicKey.toBase58();
+    const devWalletPublicKey = walletKeypair.publicKey.toBase58();
+    const selectedDevWalletId = String(wallet.webIndex || body.devWalletIndex || wallet.publicKey || "").trim();
+    const devBuySol = Math.max(0.0001, Number(basePayload?.devBuy?.amountSol || body.amountSol || 0.0001));
+    const priorityFeeSol = Math.max(0, Number(config.priorityFeeSol || 0));
+    const requiredSol = pumpLaunchRequiredSol({
+      devBuySol,
+      priorityFeeSol,
+      bufferSol: config.requiredBufferSol
+    });
+
+    if (wallet.publicKey && wallet.publicKey !== devWalletPublicKey) {
+      throw createPumpLaunchError("Decrypted dev wallet key does not match the selected wallet public key.", "DEV_WALLET_KEY_MISMATCH", 500, {
+        stage: PUMP_LAUNCH_STAGE.WALLET_AUTH,
+        devWalletPublicKey: wallet.publicKey
+      });
+    }
+
+    const baseAttempt = {
+      id: attemptId,
+      launchAttemptId: attemptId,
+      userId,
+      selectedDevWalletId,
+      devWalletPublicKey,
+      walletType: "managed_slimewire",
+      walletManaged: true,
+      authResult: "authorized",
+      tokenName: basePayload?.name || "",
+      symbol: basePayload?.symbol || "",
+      mintPublicKey,
+      mintSecretStored: Boolean(this.encryptMintSecret),
+      encryptedMintSecret: this.encryptMintSecret ? this.encryptMintSecret(mintKeypair) : null,
+      devBuySol,
+      priorityFeeSol,
+      requiredSol,
+      apiUrl: config.apiUrl || "",
+      status: PUMP_LAUNCH_STATUS.PREFLIGHT,
+      createdAt: this.now().toISOString(),
+      updatedAt: this.now().toISOString()
+    };
+    await this.saveAttempt(baseAttempt);
+    this.log("pump_launch_wallet_validated", {
+      launchAttemptId: attemptId,
+      userId,
+      selectedDevWalletId,
+      devWalletPublicKey,
+      walletType: "managed_slimewire",
+      walletManaged: true,
+      authResult: "authorized",
+      tokenName: basePayload?.name || "",
+      symbol: basePayload?.symbol || "",
+      mintPublicKey,
+      mintSecretStored: Boolean(this.encryptMintSecret),
+      devBuySol,
+      priorityFeeSol,
+      requiredSol,
+      apiUrl: config.apiUrl || "",
+      status: PUMP_LAUNCH_STATUS.PREFLIGHT
+    });
+
+    try {
+      const balanceLamports = await this.getBalanceLamports(walletKeypair.publicKey);
+      const balanceSol = Number(balanceLamports || 0) / LAMPORTS_PER_SOL;
+      assertPumpLaunchBalance({ balanceSol, requiredSol });
+      await this.saveAttempt({
+        id: attemptId,
+        status: PUMP_LAUNCH_STATUS.PREFLIGHT,
+        balanceSol,
+        requiredSol,
+        updatedAt: this.now().toISOString()
+      });
+      this.log("pump_launch_preflight_passed", {
+        launchAttemptId: attemptId,
+        userId,
+        selectedDevWalletId,
+        devWalletPublicKey,
+        balanceSol,
+        requiredSol
+      });
+
+      let metadata;
+      try {
+        metadata = await this.uploadMetadata(basePayload);
+      } catch (error) {
+        throw pumpLaunchStageError(PUMP_LAUNCH_STAGE.METADATA_UPLOAD, "PUMP_LAUNCH_METADATA_UPLOAD_FAILED", error);
+      }
+      await this.saveAttempt({
+        id: attemptId,
+        status: PUMP_LAUNCH_STATUS.METADATA_UPLOADED,
+        metadataUri: metadata.uri,
+        imageUri: metadata.imageUri || "",
+        imageBytes: metadata.imageBytes || 0,
+        updatedAt: this.now().toISOString()
+      });
+      this.log("pump_launch_metadata_uploaded", {
+        launchAttemptId: attemptId,
+        userId,
+        selectedDevWalletId,
+        devWalletPublicKey,
+        metadataUri: metadata.uri,
+        imageBytes: metadata.imageBytes || 0
+      });
+
+      const requestPayload = buildPumpPortalLocalCreateRequest({
+        creatorPublicKey: devWalletPublicKey,
+        mintPublicKey,
+        name: basePayload?.name,
+        symbol: basePayload?.symbol,
+        metadataUri: metadata.uri,
+        devBuySol,
+        slippageBps: basePayload?.slippageBps || body.slippageBps,
+        priorityFeeSol,
+        pool: config.pool || "pump"
+      });
+      const sanitizedRequest = sanitizePumpPortalCreateRequest(requestPayload);
+      await this.saveAttempt({
+        id: attemptId,
+        status: PUMP_LAUNCH_STATUS.PUMPPORTAL_REQUESTED,
+        requestBody: sanitizedRequest,
+        updatedAt: this.now().toISOString()
+      });
+      this.log("pump_launch_pumpportal_request", {
+        launchAttemptId: attemptId,
+        userId,
+        selectedDevWalletId,
+        devWalletPublicKey,
+        apiUrl: config.apiUrl || "",
+        requestBody: sanitizedRequest
+      });
+
+      let tx;
+      try {
+        tx = await this.requestLocalTransaction(requestPayload, config.timeoutMs);
+      } catch (error) {
+        throw pumpLaunchStageError(PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL, "PUMPPORTAL_LOCAL_CREATE_FAILED", error);
+      }
+
+      if (tx?.signature) {
+        await this.saveAttempt({
+          id: attemptId,
+          status: PUMP_LAUNCH_STATUS.SUBMITTED,
+          txSignature: tx.signature,
+          updatedAt: this.now().toISOString()
+        });
+        this.log("pump_launch_transaction_signature", {
+          launchAttemptId: attemptId,
+          userId,
+          mintPublicKey,
+          txSignature: tx.signature,
+          status: PUMP_LAUNCH_STATUS.SUBMITTED
+        });
+        return {
+          status: PUMP_LAUNCH_STATUS.SUBMITTED,
+          tokenMint: mintPublicKey,
+          signature: tx.signature,
+          requestId: attemptId,
+          provider: "pumpportal-local",
+          metadataUri: metadata.uri
+        };
+      }
+
+      try {
+        tx.sign([mintKeypair, walletKeypair]);
+      } catch (error) {
+        throw pumpLaunchStageError(PUMP_LAUNCH_STAGE.SIGNING, "PUMP_LAUNCH_SIGNING_FAILED", error, 500);
+      }
+      await this.saveAttempt({
+        id: attemptId,
+        status: PUMP_LAUNCH_STATUS.SIGNED,
+        updatedAt: this.now().toISOString()
+      });
+      this.log("pump_launch_transaction_signed", {
+        launchAttemptId: attemptId,
+        userId,
+        mintPublicKey,
+        devWalletPublicKey,
+        signerCount: 2,
+        status: PUMP_LAUNCH_STATUS.SIGNED
+      });
+
+      let signature;
+      try {
+        signature = await this.sendTransaction(tx);
+      } catch (error) {
+        throw pumpLaunchStageError(PUMP_LAUNCH_STAGE.SEND_TRANSACTION, "PUMP_LAUNCH_SEND_FAILED", error);
+      }
+
+      await this.recordTradeEvent({
+        userId,
+        type: "buy",
+        source: "pumpfun_launch",
+        tokenMint: mintPublicKey,
+        tokenName: basePayload?.name || "",
+        symbol: basePayload?.symbol || "",
+        walletLabel: wallet.label,
+        walletPublicKey: devWalletPublicKey,
+        solLamportsSpent: String(solToLamportsNumber(devBuySol)),
+        tokenAmount: null,
+        signature,
+        metadataUri: metadata.uri
+      });
+      await this.saveAttempt({
+        id: attemptId,
+        status: PUMP_LAUNCH_STATUS.LAUNCHED,
+        txSignature: signature,
+        metadataUri: metadata.uri,
+        completedAt: this.now().toISOString(),
+        updatedAt: this.now().toISOString()
+      });
+      this.log("pump_launch_transaction_signature", {
+        launchAttemptId: attemptId,
+        userId,
+        mintPublicKey,
+        txSignature: signature,
+        status: PUMP_LAUNCH_STATUS.LAUNCHED
+      });
+
+      return {
+        status: PUMP_LAUNCH_STATUS.LAUNCHED,
+        tokenMint: mintPublicKey,
+        signature,
+        requestId: attemptId,
+        provider: "pumpportal-local",
+        metadataUri: metadata.uri
+      };
+    } catch (error) {
+      await this.saveAttempt({
+        id: attemptId,
+        status: PUMP_LAUNCH_STATUS.FAILED,
+        stage: error.stage || PUMP_LAUNCH_STAGE.STORE_RESULT,
+        errorCode: error.code || "PUMP_LAUNCH_FAILED",
+        errorMessage: String(error.message || error).slice(0, 500),
+        providerStatus: error.providerStatus || error.status || error.statusCode || null,
+        providerResponseBody: sanitizeProviderBody(error.providerResponseBody || error.responseBody || ""),
+        failedAt: this.now().toISOString(),
+        updatedAt: this.now().toISOString()
+      });
+      this.log("pump_launch_failed", {
+        launchAttemptId: attemptId,
+        userId,
+        selectedDevWalletId,
+        devWalletPublicKey,
+        mintPublicKey,
+        status: PUMP_LAUNCH_STATUS.FAILED,
+        stage: error.stage || "",
+        errorCode: error.code || "PUMP_LAUNCH_FAILED",
+        errorMessage: String(error.message || error).slice(0, 500),
+        providerStatus: error.providerStatus || error.status || error.statusCode || null,
+        providerResponseBody: error.providerResponseBody || error.responseBody || ""
+      });
+      throw error;
+    }
+  }
+}

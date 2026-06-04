@@ -40,6 +40,12 @@ import {
 } from "./lib/tradeExecutionService.js";
 import { workerTickTaskFlags } from "./lib/workerTickTasks.js";
 import {
+  formatPumpLaunchUserError,
+  pumpLaunchLogEntry,
+  PumpLaunchService,
+  selectPumpLaunchWallet
+} from "./lib/pumpLaunchService.js";
+import {
   Connection,
   Keypair,
   LAMPORTS_PER_SOL,
@@ -310,6 +316,7 @@ function loadConfig() {
   const pumpLaunchBodyLimitBytes = Number.parseInt(process.env.PUMP_LAUNCH_BODY_LIMIT_BYTES || "12000000", 10);
   const pumpLaunchRequestMode = (process.env.PUMP_LAUNCH_REQUEST_MODE || "json").trim().toLowerCase();
   const pumpLaunchPriorityFeeSol = Number.parseFloat(process.env.PUMP_LAUNCH_PRIORITY_FEE_SOL || "0.00005");
+  const pumpLaunchRequiredBufferSol = Number.parseFloat(process.env.PUMP_LAUNCH_REQUIRED_BUFFER_SOL || "0.01");
   const workerTickEnabled = parseBoolean(process.env.WORKER_TICK_ENABLED || (process.env.WORKER_SECRET ? "true" : "false"));
   const workerTickRunTradePlans = parseBoolean(process.env.WORKER_TICK_RUN_TRADE_PLANS || "true");
   const workerTickRunDcaPlans = parseBoolean(process.env.WORKER_TICK_RUN_DCA_PLANS || "true");
@@ -483,6 +490,9 @@ function loadConfig() {
   if (!Number.isFinite(pumpLaunchPriorityFeeSol) || pumpLaunchPriorityFeeSol < 0 || pumpLaunchPriorityFeeSol > 0.1) {
     throw new Error("PUMP_LAUNCH_PRIORITY_FEE_SOL must be from 0 to 0.1.");
   }
+  if (!Number.isFinite(pumpLaunchRequiredBufferSol) || pumpLaunchRequiredBufferSol < 0 || pumpLaunchRequiredBufferSol > 1) {
+    throw new Error("PUMP_LAUNCH_REQUIRED_BUFFER_SOL must be from 0 to 1.");
+  }
 
   if (workerTickEnabled && (!workerSecret || workerSecret.length < 24)) {
     throw new Error("WORKER_SECRET must be set to a long random value of at least 24 characters when WORKER_TICK_ENABLED=true.");
@@ -524,6 +534,7 @@ function loadConfig() {
     pumpLaunchMetadataUrl: (process.env.PUMP_LAUNCH_METADATA_URL || "https://uploads.pinata.cloud/v3/files").trim(),
     pumpLaunchPinataJwt: process.env.PUMP_LAUNCH_PINATA_JWT || "",
     pumpLaunchPriorityFeeSol,
+    pumpLaunchRequiredBufferSol,
     photonNewPairsUrl: (process.env.PHOTON_NEW_PAIRS_URL || "").trim(),
     photonApiKey: process.env.PHOTON_API_KEY || "",
     livePairsRpcSafety,
@@ -1810,6 +1821,7 @@ async function ensureDataFiles() {
   await writeJsonIfMissing(dcaPlansPath(), { plans: [] });
   await writeJsonIfMissing(sniperSettingsPath(), { users: {} });
   await writeJsonIfMissing(tradeHistoryPath(), { trades: [] });
+  await writeJsonIfMissing(pumpLaunchAttemptsPath(), { attempts: [] });
   await writeJsonIfMissing(webAuthPath(), { codes: [], sessions: [] });
   await ensureAppSecretFingerprint();
   await assignUnownedWalletsToSingleAdmin();
@@ -1888,6 +1900,10 @@ function sniperSettingsPath() {
 
 function tradeHistoryPath() {
   return path.join(CONFIG.dataDir, "trade-history.json");
+}
+
+function pumpLaunchAttemptsPath() {
+  return path.join(CONFIG.dataDir, "pump-launch-attempts.json");
 }
 
 function webAuthPath() {
@@ -5436,6 +5452,14 @@ function logTpSlEvent(event, fields = {}) {
     console.log(JSON.stringify(tpSlLogEntry(event, fields)));
   } catch (error) {
     console.warn(`TP/SL log failed: ${error.message}`);
+  }
+}
+
+function logPumpLaunchEvent(event, fields = {}) {
+  try {
+    console.log(JSON.stringify(pumpLaunchLogEntry(event, fields)));
+  } catch (error) {
+    console.warn(`Pump launch log failed: ${error.message}`);
   }
 }
 
@@ -14050,6 +14074,38 @@ async function readTradeHistory() {
   return store;
 }
 
+async function readPumpLaunchAttempts() {
+  const store = await readJson(pumpLaunchAttemptsPath());
+  if (!Array.isArray(store.attempts)) store.attempts = [];
+  return store;
+}
+
+async function writePumpLaunchAttempts(store) {
+  store.attempts = Array.isArray(store.attempts) ? store.attempts.slice(-100) : [];
+  await writeJsonFile(pumpLaunchAttemptsPath(), store);
+}
+
+async function upsertPumpLaunchAttempt(update = {}) {
+  if (!update.id && !update.launchAttemptId) return;
+  const id = String(update.id || update.launchAttemptId);
+  const store = await readPumpLaunchAttempts();
+  const index = store.attempts.findIndex((attempt) => String(attempt.id || attempt.launchAttemptId) === id);
+  const next = {
+    ...(index >= 0 ? store.attempts[index] : {}),
+    ...update,
+    id,
+    launchAttemptId: id,
+    updatedAt: update.updatedAt || new Date().toISOString()
+  };
+  if (next.encryptedMintSecret) next.mintSecretStored = true;
+  if (index >= 0) {
+    store.attempts[index] = next;
+  } else {
+    store.attempts.push(next);
+  }
+  await writePumpLaunchAttempts(store);
+}
+
 async function recordTradeEvents(events) {
   if (!events.length) return;
   for (const event of events) {
@@ -17010,52 +17066,105 @@ async function sendVersionedTransaction(tx, label = "send versioned transaction"
 
 async function webLaunchPumpPortalLocal(userId, body, basePayload) {
   const store = await readWalletStore();
-  const selectedIndex = basePayload.devBuy.walletIndex || (Array.isArray(body.walletIndexes) ? body.walletIndexes[0] : "");
-  const selectedWallets = webSelectedWallets(store, userId, selectedIndex ? [selectedIndex] : body.walletIndexes, body.walletGroup);
-  const creatorWallet = selectedWallets[0];
-  const creatorKeypair = decryptWallet(creatorWallet);
-  const mintKeypair = Keypair.generate();
-  const metadata = await uploadPumpLaunchMetadata(basePayload);
-  const slippageBps = cleanLaunchNumber(body.slippageBps, 300, 1, 5000);
-  const requestPayload = {
-    publicKey: creatorKeypair.publicKey.toBase58(),
-    action: "create",
-    tokenMetadata: {
-      name: basePayload.name,
+  const selectedDevWalletId = firstString(
+    basePayload.devBuy.walletIndex,
+    body.selectedDevWalletId,
+    body.devWalletPublicKey,
+    Array.isArray(body.walletIndexes) ? body.walletIndexes[0] : ""
+  );
+  let walletSelection;
+  try {
+    walletSelection = selectPumpLaunchWallet(store, userId, selectedDevWalletId);
+  } catch (error) {
+    await upsertPumpLaunchAttempt({
+      id: basePayload.clientRequestId,
+      userId,
+      selectedDevWalletId,
+      tokenName: basePayload.name,
       symbol: basePayload.symbol,
-      uri: metadata.uri
-    },
-    mint: mintKeypair.publicKey.toBase58(),
-    denominatedInSol: "true",
-    amount: Math.max(0.0001, Number(basePayload.devBuy.amountSol || body.amountSol || 0.0001)),
-    slippage: Math.max(0.01, slippageBps / 100),
-    priorityFee: CONFIG.pumpLaunchPriorityFeeSol,
-    pool: "pump"
-  };
-
+      status: "failed",
+      stage: error.stage || "wallet_auth",
+      errorCode: error.code || "DEV_WALLET_AUTH_FAILED",
+      errorMessage: friendlyError(error),
+      failedAt: new Date().toISOString()
+    });
+    logPumpLaunchEvent("pump_launch_failed", {
+      launchAttemptId: basePayload.clientRequestId,
+      userId,
+      selectedDevWalletId,
+      tokenName: basePayload.name,
+      symbol: basePayload.symbol,
+      status: "failed",
+      stage: error.stage || "wallet_auth",
+      errorCode: error.code || "DEV_WALLET_AUTH_FAILED",
+      errorMessage: friendlyError(error)
+    });
+    throw error;
+  }
+  const creatorWallet = walletSelection.wallet;
+  let creatorKeypair;
+  try {
+    creatorKeypair = decryptWallet(creatorWallet);
+  } catch (error) {
+    await upsertPumpLaunchAttempt({
+      id: basePayload.clientRequestId,
+      userId,
+      selectedDevWalletId,
+      devWalletPublicKey: creatorWallet.publicKey,
+      tokenName: basePayload.name,
+      symbol: basePayload.symbol,
+      status: "failed",
+      stage: "wallet_auth",
+      errorCode: "DEV_WALLET_DECRYPT_FAILED",
+      errorMessage: friendlyError(error),
+      failedAt: new Date().toISOString()
+    });
+    logPumpLaunchEvent("pump_launch_failed", {
+      launchAttemptId: basePayload.clientRequestId,
+      userId,
+      selectedDevWalletId,
+      devWalletPublicKey: creatorWallet.publicKey,
+      tokenName: basePayload.name,
+      symbol: basePayload.symbol,
+      status: "failed",
+      stage: "wallet_auth",
+      errorCode: "DEV_WALLET_DECRYPT_FAILED",
+      errorMessage: friendlyError(error)
+    });
+    throw error;
+  }
   const timeoutMs = Number.isFinite(CONFIG.pumpLaunchTimeoutMs) && CONFIG.pumpLaunchTimeoutMs > 0
     ? CONFIG.pumpLaunchTimeoutMs
     : 30000;
-  const tx = await requestPumpPortalLocalTransaction(requestPayload, timeoutMs);
-  if (tx?.signature) {
-    return {
-      status: "submitted",
-      tokenMint: mintKeypair.publicKey.toBase58(),
-      signature: tx.signature,
-      requestId: basePayload.clientRequestId,
-      provider: "pumpportal-local"
-    };
-  }
-  tx.sign([mintKeypair, creatorKeypair]);
-  const signature = await sendVersionedTransaction(tx, "send pump launch transaction");
-  return {
-    status: "launched",
-    tokenMint: mintKeypair.publicKey.toBase58(),
-    signature,
-    requestId: basePayload.clientRequestId,
-    provider: "pumpportal-local",
-    metadataUri: metadata.uri
-  };
+  const service = new PumpLaunchService({
+    getBalanceLamports: (publicKey) => rpcWithRetry("read pump launch dev wallet SOL", () => connection.getBalance(publicKey, "confirmed"), CONFIG.rpcRetries),
+    uploadMetadata: uploadPumpLaunchMetadata,
+    requestLocalTransaction: (requestPayload, requestTimeoutMs) => requestPumpPortalLocalTransaction(requestPayload, requestTimeoutMs, {
+      url: CONFIG.pumpLaunchApiUrl
+    }),
+    sendTransaction: (tx) => sendVersionedTransaction(tx, "send pump launch transaction"),
+    generateMintKeypair: () => Keypair.generate(),
+    encryptMintSecret: (keypair) => encryptSecret(Buffer.from(keypair.secretKey)),
+    saveAttempt: upsertPumpLaunchAttempt,
+    recordTradeEvent: async (event) => recordTradeEvents([event]),
+    log: logPumpLaunchEvent
+  });
+
+  return service.launch({
+    launchAttemptId: basePayload.clientRequestId,
+    userId,
+    wallet: creatorWallet,
+    walletKeypair: creatorKeypair,
+    basePayload,
+    body,
+    config: {
+      apiUrl: CONFIG.pumpLaunchApiUrl,
+      timeoutMs,
+      priorityFeeSol: CONFIG.pumpLaunchPriorityFeeSol,
+      requiredBufferSol: CONFIG.pumpLaunchRequiredBufferSol,
+      pool: "pump"
+    }
+  });
 }
 
 function pumpLaunchProviderHint(status) {
@@ -17156,7 +17265,7 @@ async function webLaunchPumpCoin(userId, body = {}) {
     devBuy: {
       enabled: devBuyEnabled,
       amountSol: cleanLaunchNumber(body.devBuySol, 0, 0, 1000),
-      walletIndex: cleanLaunchText(body.devWalletIndex, 24)
+      walletIndex: cleanLaunchText(body.devWalletIndex || body.selectedDevWalletId || body.devWalletPublicKey, 64)
     },
     slippageBps: cleanLaunchNumber(body.slippageBps, 300, 1, 5000),
     clientRequestId: crypto.randomUUID(),
@@ -17181,8 +17290,10 @@ async function webLaunchPumpCoin(userId, body = {}) {
         message: `Pump launch returned ${shortMint(result.tokenMint)}.`
       };
     } catch (error) {
-      const wrapped = new Error(`PumpPortal local launch failed: ${friendlyError(error)}. Check that the selected dev wallet is a managed SlimeWire wallet with enough SOL for the dev buy and network fees, and set PUMP_LAUNCH_API_URL=https://pumpportal.fun/api/trade-local.`);
+      const wrapped = new Error(formatPumpLaunchUserError(error));
       wrapped.statusCode = Number(error.status || error.statusCode || 502);
+      wrapped.providerStatus = error.providerStatus || error.status || error.statusCode || null;
+      wrapped.providerResponseBody = error.providerResponseBody || error.responseBody || "";
       throw wrapped;
     }
   }
