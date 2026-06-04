@@ -29,6 +29,7 @@ import {
   calculateMoveSnapshot,
   priceExitDecision,
   shouldEmergencySellOnPriceFailure,
+  staleSubmittingExit,
   stopLossTriggerPercent
 } from "./lib/tradePlanExit.js";
 import {
@@ -281,6 +282,7 @@ function loadConfig() {
   const stopLossExitSlippageBps = Number.parseInt(process.env.STOP_LOSS_EXIT_SLIPPAGE_BPS || "1500", 10);
   const stopLossMonitorSlippageBps = Number.parseInt(process.env.STOP_LOSS_MONITOR_SLIPPAGE_BPS || "2500", 10);
   const stopLossPriceFailureSellAfter = Number.parseInt(process.env.STOP_LOSS_PRICE_FAILURE_SELL_AFTER || "2", 10);
+  const stopLossSubmitStaleMs = Number.parseInt(process.env.STOP_LOSS_SUBMIT_STALE_MS || "15000", 10);
   const pumpLaunchBodyLimitBytes = Number.parseInt(process.env.PUMP_LAUNCH_BODY_LIMIT_BYTES || "12000000", 10);
   const pumpLaunchRequestMode = (process.env.PUMP_LAUNCH_REQUEST_MODE || "json").trim().toLowerCase();
   const pumpLaunchPriorityFeeSol = Number.parseFloat(process.env.PUMP_LAUNCH_PRIORITY_FEE_SOL || "0.00005");
@@ -434,6 +436,10 @@ function loadConfig() {
     throw new Error("STOP_LOSS_PRICE_FAILURE_SELL_AFTER must be an integer from 1 to 20.");
   }
 
+  if (!Number.isInteger(stopLossSubmitStaleMs) || stopLossSubmitStaleMs < 5_000 || stopLossSubmitStaleMs > 120_000) {
+    throw new Error("STOP_LOSS_SUBMIT_STALE_MS must be an integer from 5000 to 120000.");
+  }
+
   if (!["json", "multipart", "form"].includes(pumpLaunchRequestMode)) {
     throw new Error("PUMP_LAUNCH_REQUEST_MODE must be json, multipart, or form.");
   }
@@ -501,6 +507,7 @@ function loadConfig() {
     stopLossExitSlippageBps,
     stopLossMonitorSlippageBps,
     stopLossPriceFailureSellAfter,
+    stopLossSubmitStaleMs,
     workerTickEnabled,
     workerTickRunTradePlans,
     workerTickRunDcaPlans,
@@ -5376,7 +5383,11 @@ async function processTradePlans() {
         planWallet.runnerStartedAt = new Date(runnerStarted).toISOString();
         let result;
         try {
-          result = await processTradePlanWallet(plan, planWallet, walletStore);
+          result = await processTradePlanWallet(plan, planWallet, walletStore, {
+            persistCheckpoint: async () => {
+              await writeTradePlans(planStore);
+            }
+          });
         } catch (error) {
           const errorMessage = friendlyError(error);
           const failures = Number.parseInt(planWallet.failures || 0, 10) + 1;
@@ -5442,7 +5453,7 @@ async function processTradePlans() {
   }
 }
 
-async function processTradePlanWallet(plan, planWallet, walletStore) {
+async function processTradePlanWallet(plan, planWallet, walletStore, options = {}) {
   const wallet = walletsForOwner(walletStore, plan.userId).find((item) => item.publicKey === planWallet.publicKey);
   if (!wallet) {
     planWallet.status = "failed";
@@ -5465,6 +5476,31 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
   const retryAfterAt = Date.parse(planWallet.retryAfterAt || "");
   if (Number.isFinite(retryAfterAt) && now < retryAfterAt) {
     return { changed: false, message: null };
+  }
+
+  if (!triggerReason && staleSubmittingExit({
+    status: planWallet.status,
+    exitStatus: planWallet.exitStatus,
+    triggerReason: planWallet.triggerReason,
+    lastSellAttemptAt: planWallet.lastSellAttemptAt,
+    now,
+    staleMs: CONFIG.stopLossSubmitStaleMs
+  })) {
+    triggerReason = planWallet.triggerReason;
+    triggerMeta = {
+      kind: /^stop-loss\b/i.test(String(planWallet.triggerReason || "")) ? "stop-loss" : "take-profit",
+      sellPercent: /^stop-loss\b/i.test(String(planWallet.triggerReason || ""))
+        ? 100
+        : (planWallet.triggerSellPercent ?? plan.triggerSellPercent ?? 100),
+      staleSubmitRetry: true
+    };
+    planWallet.triggerStatus = "retrying";
+    planWallet.exitStatus = "retrying";
+    planWallet.status = "retrying";
+    planWallet.retryAfterAt = null;
+    planWallet.nextRetryAt = null;
+    planWallet.lastTriggerCheckAt = new Date().toISOString();
+    planWallet.lastError = "Previous price-exit sell stayed submitting too long; retrying now.";
   }
 
   if (
@@ -5617,6 +5653,10 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
       ? Math.max(Number(plan.slippageBps || 0), CONFIG.stopLossExitSlippageBps)
       : plan.slippageBps;
     planWallet.exitSlippageBps = exitSlippageBps;
+    if (priceExitTrigger && typeof options.persistCheckpoint === "function") {
+      planWallet.preSellCheckpointAt = new Date().toISOString();
+      await options.persistCheckpoint();
+    }
     const sell = await sellTradePlanWalletWithRetries(plan, planWallet, wallet, sellPercent, exitSlippageBps, {
       userId: plan.userId,
       priceExit: priceExitTrigger
@@ -5736,6 +5776,12 @@ async function processTradePlanWallet(plan, planWallet, walletStore) {
     planWallet.retryAfterAt = retryDelayMs > 0 ? new Date(Date.now() + retryDelayMs).toISOString() : null;
     planWallet.nextRetryAt = planWallet.retryAfterAt;
     planWallet.updatedAt = new Date().toISOString();
+    if (priceExit) {
+      if (typeof options.persistCheckpoint === "function") {
+        await options.persistCheckpoint();
+      }
+      scheduleTradePlanProcessing("price-exit retry", [500, 1500, 3000, 6000]);
+    }
     return {
       changed: true,
       triggered: priceExit,

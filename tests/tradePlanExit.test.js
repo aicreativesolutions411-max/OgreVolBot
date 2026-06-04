@@ -4,6 +4,7 @@ import {
   calculateMoveSnapshot,
   priceExitDecision,
   shouldEmergencySellOnPriceFailure,
+  staleSubmittingExit,
   stopLossTriggerPercent
 } from "../src/lib/tradePlanExit.js";
 
@@ -103,5 +104,32 @@ test("price estimate failure emergency does not trigger without stop-loss", () =
     stopLossPct: 8,
     estimateFailures: 0,
     minFailures: 2
+  }), false);
+});
+
+test("stale submitting price exits are eligible for retry", () => {
+  const now = Date.parse("2026-06-04T12:00:00.000Z");
+  assert.equal(staleSubmittingExit({
+    status: "submitting",
+    triggerReason: "stop-loss -8.25% (armed 8%)",
+    lastSellAttemptAt: "2026-06-04T11:59:40.000Z",
+    now,
+    staleMs: 15000
+  }), true);
+
+  assert.equal(staleSubmittingExit({
+    status: "submitting",
+    triggerReason: "take-profit +25.00%",
+    lastSellAttemptAt: "2026-06-04T11:59:58.000Z",
+    now,
+    staleMs: 15000
+  }), false);
+
+  assert.equal(staleSubmittingExit({
+    status: "submitting",
+    triggerReason: "timer",
+    lastSellAttemptAt: "2026-06-04T11:59:00.000Z",
+    now,
+    staleMs: 15000
   }), false);
 });

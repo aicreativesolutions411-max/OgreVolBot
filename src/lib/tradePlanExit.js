@@ -67,3 +67,22 @@ export function shouldEmergencySellOnPriceFailure({ stopLossPct = 0, estimateFai
   const safeThreshold = Number.isInteger(threshold) && threshold > 0 ? threshold : 2;
   return failures >= safeThreshold;
 }
+
+export function staleSubmittingExit({
+  status,
+  exitStatus,
+  triggerReason,
+  lastSellAttemptAt,
+  now = Date.now(),
+  staleMs = 15000
+} = {}) {
+  const normalizedStatus = String(exitStatus || status || "").toLowerCase();
+  if (normalizedStatus !== "submitting") return false;
+  if (!/^stop-loss\b|^take-profit\b/i.test(String(triggerReason || ""))) return false;
+
+  const safeNow = Number.isFinite(Number(now)) ? Number(now) : Date.now();
+  const safeStaleMs = Number.isFinite(Number(staleMs)) && Number(staleMs) > 0 ? Number(staleMs) : 15000;
+  const attemptedAt = Date.parse(lastSellAttemptAt || "");
+  if (!Number.isFinite(attemptedAt)) return true;
+  return safeNow - attemptedAt >= safeStaleMs;
+}

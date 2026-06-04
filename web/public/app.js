@@ -4176,6 +4176,30 @@ async function runTradePlanCheck() {
   }
 }
 
+async function runTradePlanCheckSilently() {
+  if (!state.user || !state.token) return;
+  try {
+    const data = await api("/api/web/trade/plans/run", {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    state.tradePlans = data.plans || state.tradePlans || [];
+    await loadWalletCore({ force: true });
+    render();
+  } catch (error) {
+    state.automationDelegationStatus = `Auto-exit check failed: ${error.message}`;
+    render();
+  }
+}
+
+function scheduleAutoExitChecks() {
+  [1200, 3000, 6500, 12000, 22000].forEach((delay) => {
+    window.setTimeout(() => {
+      void runTradePlanCheckSilently();
+    }, delay);
+  });
+}
+
 async function restoreWalletBackup() {
   const textarea = $("[data-restore-text]");
   const status = $("[data-restore-status]");
@@ -4902,6 +4926,7 @@ async function executeWebBuy(amountSol, amountMode = "fixed") {
     if (data.trade?.autoExitPlan) {
       state.tradePlanResult = data.trade.autoExitPlan;
       setTradeStatus(data.trade.autoExitPlan.shortMessage || "Buy landed and auto-exit is armed.");
+      scheduleAutoExitChecks();
     } else if (data.trade?.autoExitRequested) {
       setTradeStatus("Buy landed, but auto-exit was not armed. Use Positions to exit manually or create a managed plan.");
     }
@@ -5354,6 +5379,7 @@ async function quickPresetTrade(tokenMint, presetOverride = null) {
     if (data.trade?.autoExitPlan) {
       state.tradePlanResult = data.trade.autoExitPlan;
       setError(data.trade.autoExitPlan.shortMessage || "Quick buy landed and auto-exit is armed.");
+      scheduleAutoExitChecks();
     } else if (data.trade?.autoExitRequested) {
       setError("Quick buy landed, but auto-exit was not armed. Use Positions to exit manually or create a managed plan.");
     }
