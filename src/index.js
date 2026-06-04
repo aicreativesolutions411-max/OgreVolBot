@@ -963,7 +963,6 @@ async function handleWebApiRequest(request, response, requestUrl) {
     }
 
     if (request.method === "GET" && pathname === "/api/web/trade/plans") {
-      scheduleTradePlanProcessing("web trade plan poll", [0]);
       sendWebJson(request, response, 200, {
         ok: true,
         plans: await webTradePlanRows(auth.userId)
@@ -1221,7 +1220,6 @@ async function handleWebApiRequest(request, response, requestUrl) {
 
     if (request.method === "GET" && pathname === "/api/web/balances") {
       const force = parseBoolean(requestUrl.searchParams.get("force") || "false");
-      scheduleTradePlanProcessing("web balance refresh", [0]);
       const [balances, connectedWallet] = await Promise.all([
         webBalanceRows(auth.userId, { force }),
         webConnectedWalletBalance(auth.userId, { force })
@@ -1236,7 +1234,6 @@ async function handleWebApiRequest(request, response, requestUrl) {
 
     if (request.method === "GET" && pathname === "/api/web/positions") {
       const force = parseBoolean(requestUrl.searchParams.get("force") || "false");
-      scheduleTradePlanProcessing("web position refresh", [0]);
       sendWebJson(request, response, 200, {
         ok: true,
         positions: await webPositionRows(auth.userId, { force })

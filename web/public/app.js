@@ -241,6 +241,7 @@ const state = {
   loginCollapsed: true
 };
 let livePairsTimer = null;
+const livePairsWarmupKeys = new Set();
 let scanTimer = null;
 let kolTimer = null;
 let watchlistTimer = null;
@@ -665,7 +666,11 @@ async function loadSession() {
   try {
     const data = await api("/api/web/me");
     applyUserFromApi(data.user);
-    await refreshAfterTrade(firstResultSignature(data.plan));
+    render();
+    void refreshWalletState({ force: true, deep: false }).catch((error) => {
+      state.walletRefreshError = error.message || "Wallet refresh failed.";
+      render();
+    });
   } catch {
     state.token = "";
     clearStoredToken();
@@ -906,6 +911,25 @@ function scheduleLivePairsAutoRefresh() {
       scheduleLivePairsAutoRefresh();
     }
   }, delayMs);
+}
+
+function ensureLivePairsWarmup({ force = false } = {}) {
+  const onLiveFeed = state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "slimeScope" || state.activeTab === "smartChart";
+  if (!onLiveFeed) return;
+  const bucket = normalizeLivePairBucket(state.livePairBucket);
+  const key = `${bucket}:${state.terminalSort || "best"}`;
+  if (livePairsWarmupKeys.has(key) || state.livePairsLoadingByBucket[bucket]) return;
+  if (!force && state.livePairsByBucket[bucket]) return;
+
+  livePairsWarmupKeys.add(key);
+  window.setTimeout(() => {
+    void refreshLivePairBuckets({ silent: true, force: true })
+      .catch((error) => setError(error.message))
+      .finally(() => {
+        livePairsWarmupKeys.delete(key);
+        scheduleLivePairsAutoRefresh();
+      });
+  }, 0);
 }
 
 function scheduleScannerAutoRefresh() {
@@ -1253,6 +1277,7 @@ function renderTabs() {
       if (nextDock) nextDock.scrollTop = terminalDockScrollTop;
     });
   }
+  ensureLivePairsWarmup();
   scheduleLivePairsAutoRefresh();
   scheduleScannerAutoRefresh();
   scheduleKolAutoRefresh();
@@ -8820,12 +8845,18 @@ document.addEventListener("visibilitychange", () => {
 window.addEventListener("focus", resumeLiveFeeds);
 
 async function initializeApp() {
+  render();
+  if (state.route === "terminal") {
+    ensureLivePairsWarmup({ force: true });
+    void loadKolScan(state.kolMode, "", { silent: true }).catch((error) => setError(error.message));
+  }
+
   await loadSession();
   if (state.route === "terminal") {
-    await Promise.allSettled([
-      refreshLivePairBuckets({ silent: true, force: true }),
-      loadKolScan(state.kolMode, "", { silent: true })
-    ]);
+    ensureLivePairsWarmup();
+    if (!state.kolScan) {
+      void loadKolScan(state.kolMode, "", { silent: true }).catch((error) => setError(error.message));
+    }
     if (state.activeTab === "ogreTek") {
       await loadOgreTekData({ silent: true }).catch((error) => setError(error.message));
     }
