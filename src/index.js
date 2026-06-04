@@ -90,6 +90,10 @@ let tradePlanRunnerActiveSince = 0;
 let webExitGuardRunnerActive = false;
 let webExitGuardRunnerActiveSince = 0;
 let webExitGuardLiveBackfillAt = 0;
+let webPortfolioExitRunnerActive = false;
+let webPortfolioExitRunnerActiveSince = 0;
+const activeExitSellKeys = new Set();
+const webPortfolioExitState = new Map();
 let dcaPlanRunnerActive = false;
 const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const TOKEN_2022_PROGRAM_ID = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
@@ -222,6 +226,7 @@ async function main() {
   startKeepAlivePinger();
   startTradePlanRunner();
   startWebExitGuardRunner();
+  startWebPortfolioExitRunner();
   startDcaPlanRunner();
 
   if (CONFIG.webhookUrl) {
@@ -638,6 +643,18 @@ function startWebExitGuardRunner() {
   }), intervalMs);
 }
 
+function startWebPortfolioExitRunner() {
+  const initialDelayMs = Math.max(750, Math.min(4_000, CONFIG.stopLossCheckIntervalMs + 250));
+  setTimeout(() => void processWebPortfolioExits({ forcePriceCheck: true }).catch((error) => {
+    console.error("Web portfolio exit runner failed:", error.message);
+  }), initialDelayMs);
+
+  const intervalMs = Math.max(750, Math.min(2_000, CONFIG.stopLossCheckIntervalMs));
+  setInterval(() => void processWebPortfolioExits({ forcePriceCheck: true }).catch((error) => {
+    console.error("Web portfolio exit runner failed:", error.message);
+  }), intervalMs);
+}
+
 function startDcaPlanRunner() {
   setTimeout(() => void processDcaPlans().catch((error) => {
     console.error("DCA plan runner failed:", error.message);
@@ -996,16 +1013,19 @@ async function handleWebApiRequest(request, response, requestUrl) {
     if (request.method === "GET" && pathname === "/api/web/exit-guards") {
       sendWebJson(request, response, 200, {
         ok: true,
-        guards: await webExitGuardRows(auth.userId)
+        guards: await webExitGuardRows(auth.userId),
+        portfolioWatchdog: webPortfolioExitRows(auth.userId)
       });
       return;
     }
 
     if (request.method === "POST" && pathname === "/api/web/trade/plans/run") {
+      const portfolioResult = await processWebPortfolioExits({ forcePriceCheck: true });
       const guardResult = await processWebExitGuards({ forcePriceCheck: true });
       const result = await processTradePlans({ forcePriceCheck: true });
       sendWebJson(request, response, 200, {
         ok: true,
+        portfolioExits: portfolioResult,
         webExitGuards: guardResult,
         runner: result,
         plans: await webTradePlanRows(auth.userId)
@@ -1556,6 +1576,7 @@ async function runInternalWorkerTick(body = {}) {
   const startedAt = Date.now();
   const result = {
     ranAt: new Date(startedAt).toISOString(),
+    portfolioExits: { skipped: true },
     webExitGuards: { skipped: true },
     tradePlans: { skipped: true },
     dcaPlans: { skipped: true },
@@ -1563,6 +1584,9 @@ async function runInternalWorkerTick(body = {}) {
   };
 
   if (CONFIG.workerTickRunTradePlans && body.runTradePlans !== false) {
+    result.portfolioExits = await runWorkerTask("portfolioExits", () => processWebPortfolioExits({
+      forcePriceCheck: body.forceTradePlans !== false
+    }));
     result.webExitGuards = await runWorkerTask("webExitGuards", () => processWebExitGuards({
       forcePriceCheck: body.forceTradePlans !== false
     }));
@@ -5177,7 +5201,37 @@ function exitSlippageAttemptList(baseSlippageBps, priceExit = false) {
   ].map((value) => Math.max(1, Math.min(maxSlippageBps, Number.parseInt(value, 10) || base))))];
 }
 
+function exitSellLockKey(userId, walletPublicKey, tokenMint) {
+  return [
+    String(userId || "").trim(),
+    String(walletPublicKey || "").trim(),
+    String(tokenMint || "").trim()
+  ].join(":");
+}
+
+async function withExitSellLock(userId, walletPublicKey, tokenMint, fn) {
+  const key = exitSellLockKey(userId, walletPublicKey, tokenMint);
+  if (activeExitSellKeys.has(key)) {
+    const error = new Error("exit sell already submitting for this wallet/token");
+    error.exitSellLocked = true;
+    throw error;
+  }
+
+  activeExitSellKeys.add(key);
+  try {
+    return await fn();
+  } finally {
+    activeExitSellKeys.delete(key);
+  }
+}
+
 async function sellTradePlanWalletWithRetries(plan, planWallet, wallet, sellPercent, baseSlippageBps, options = {}) {
+  return withExitSellLock(options.userId || plan.userId, wallet.publicKey, plan.tokenMint, () => (
+    sellTradePlanWalletWithRetriesUnlocked(plan, planWallet, wallet, sellPercent, baseSlippageBps, options)
+  ));
+}
+
+async function sellTradePlanWalletWithRetriesUnlocked(plan, planWallet, wallet, sellPercent, baseSlippageBps, options = {}) {
   const priceExit = Boolean(options.priceExit);
   const slippageAttempts = exitSlippageAttemptList(baseSlippageBps, priceExit);
   const attemptLog = [];
@@ -5466,7 +5520,15 @@ function activeWebExitGuardCovers(guard, userId, walletPublicKey, tokenMint) {
 
 function eligibleWebDefaultExitSource(source) {
   const text = String(source || "").toLowerCase();
-  return text.startsWith("web_") || text === "ogre_ai";
+  return [
+    "web_trade",
+    "web_trade_plan",
+    "web_trade_auto_exit",
+    "web_volume",
+    "web_bundle_plan",
+    "ogre_ai",
+    "web_portfolio_exit_watchdog"
+  ].includes(text);
 }
 
 function shouldArmWebExitGuardForWallet(plan, planWallet) {
@@ -5731,6 +5793,397 @@ async function backfillWebExitGuardsFromLiveWebPositions(guardStore, walletStore
   });
 
   return { added, updated: 0 };
+}
+
+function webPortfolioPositionKey(entry) {
+  return webWalletTokenGuardKey(entry.userId, entry.walletPublicKey, entry.tokenMint);
+}
+
+function webPortfolioExitSettings(entry, planStore, guardStore) {
+  const defaults = defaultWebExitGuardSettings();
+  const planMatch = (planStore.plans || [])
+    .filter((plan) => isWebManagedExitPlan(plan) || eligibleWebDefaultExitSource(plan.source))
+    .map((plan) => ({
+      plan,
+      planWallet: (plan.wallets || []).find((wallet) => wallet.publicKey === entry.walletPublicKey)
+    }))
+    .find(({ plan, planWallet }) => (
+      planWallet
+      && String(plan.userId || "") === String(entry.userId || "")
+      && String(plan.tokenMint || "") === String(entry.tokenMint || "")
+      && isActiveTimedWalletStatus(planWallet.status)
+    ));
+  const guardMatch = (guardStore.guards || []).find((guard) => (
+    activeWebExitGuardCovers(guard, entry.userId, entry.walletPublicKey, entry.tokenMint)
+  ));
+
+  const plan = planMatch?.plan || null;
+  const planWallet = planMatch?.planWallet || null;
+  const guardTakeProfitPct = guardMatch ? Number(guardMatch.takeProfitPct || 0) : null;
+  const guardStopLossPct = guardMatch ? Number(guardMatch.stopLossPct || 0) : null;
+  const planTakeProfitPct = plan ? walletTakeProfitPct(plan, planWallet) : null;
+  const planStopLossPct = plan ? walletStopLossPct(plan, planWallet) : null;
+  return {
+    takeProfitPct: guardMatch ? guardTakeProfitPct : plan ? planTakeProfitPct : defaults.takeProfitPct,
+    stopLossPct: guardMatch ? guardStopLossPct : plan ? planStopLossPct : defaults.stopLossPct,
+    sellPercent: guardMatch?.sellPercent || planWallet?.triggerSellPercent || plan?.triggerSellPercent || plan?.sellPercent || defaults.sellPercent,
+    slippageBps: guardMatch?.slippageBps || plan?.slippageBps || defaults.slippageBps,
+    sourcePlanId: plan?.id || guardMatch?.planId || null,
+    source: plan?.source || guardMatch?.planSource || entry.lastSource || "web_trade"
+  };
+}
+
+function buildWebPortfolioExitPlan(entry, token, settings) {
+  const openBasis = entry.spent > entry.received ? entry.spent - entry.received : entry.spent;
+  const planWallet = {
+    label: entry.walletLabel || "Wallet",
+    publicKey: entry.walletPublicKey,
+    basisLamports: openBasis.toString(),
+    grossLamports: openBasis.toString(),
+    feeLamports: "0",
+    tokenOutAmount: token.rawAmount.toString(),
+    buySignature: entry.lastBuySignature || "",
+    currentLoop: 1,
+    completedLoops: 0,
+    takeProfitPct: settings.takeProfitPct,
+    stopLossPct: settings.stopLossPct,
+    triggerSellPercent: settings.sellPercent || 100,
+    sellAfterAt: null,
+    status: "watching",
+    exitStatus: "watching",
+    triggerStatus: "armed"
+  };
+
+  return {
+    id: settings.sourcePlanId || `portfolio:${webPortfolioPositionKey(entry)}`,
+    userId: entry.userId,
+    chatId: null,
+    tokenMint: entry.tokenMint,
+    source: "web_portfolio_exit_watchdog",
+    executionMode: "managed_server",
+    amountSol: lamportsBigToSol(openBasis),
+    sellDelaySeconds: 0,
+    sellAfterAt: null,
+    sellPercent: settings.sellPercent || 100,
+    triggerSellPercent: settings.sellPercent || 100,
+    loopCount: 1,
+    loopDelaySeconds: 0,
+    takeProfitPct: settings.takeProfitPct,
+    stopLossPct: settings.stopLossPct,
+    takeProfitMode: "single",
+    stopLossMode: "single",
+    takeProfitLadder: [],
+    slippageBps: settings.slippageBps || CONFIG.defaultSlippageBps,
+    wallets: [planWallet]
+  };
+}
+
+async function markWebPortfolioPositionClosed(entry, sell, triggerReason) {
+  const now = new Date().toISOString();
+  const [planStore, guardStore] = await Promise.all([
+    readTradePlans(),
+    readWebExitGuards()
+  ]);
+  let plansChanged = false;
+  let guardsChanged = false;
+
+  for (const plan of planStore.plans || []) {
+    if (String(plan.userId || "") !== String(entry.userId || "")) continue;
+    if (String(plan.tokenMint || "") !== String(entry.tokenMint || "")) continue;
+    if (!isWebManagedExitPlan(plan) && !eligibleWebDefaultExitSource(plan.source)) continue;
+
+    for (const planWallet of plan.wallets || []) {
+      if (planWallet.publicKey !== entry.walletPublicKey) continue;
+      if (!isActiveTimedWalletStatus(planWallet.status)) continue;
+      planWallet.status = "sold";
+      planWallet.exitStatus = "confirmed";
+      planWallet.triggerStatus = isPriceExitTrigger(triggerReason) ? "confirmed" : (planWallet.triggerStatus || "confirmed");
+      planWallet.triggerReason = triggerReason;
+      planWallet.triggerKind = /^stop-loss\b/i.test(String(triggerReason || "")) ? "stop-loss" : /^take-profit\b/i.test(String(triggerReason || "")) ? "take-profit" : null;
+      planWallet.sellSignature = sell.signature || "";
+      planWallet.sellFeeStatus = sell.feeStatus || "";
+      planWallet.soldAt = now;
+      planWallet.updatedAt = now;
+      planWallet.failures = 0;
+      planWallet.error = null;
+      planWallet.lastError = null;
+      plansChanged = true;
+    }
+
+    if ((plan.wallets || []).every((wallet) => !isActiveTimedWalletStatus(wallet.status))) {
+      plan.status = "completed";
+      plan.completedAt = plan.completedAt || now;
+      plansChanged = true;
+    }
+  }
+
+  for (const guard of guardStore.guards || []) {
+    if (!activeWebExitGuardCovers(guard, entry.userId, entry.walletPublicKey, entry.tokenMint)) continue;
+    guard.status = "sold";
+    guard.exitStatus = "confirmed";
+    guard.triggerStatus = "confirmed";
+    guard.triggerReason = triggerReason;
+    guard.sellSignature = sell.signature || "";
+    guard.sellFeeStatus = sell.feeStatus || "";
+    guard.soldAt = now;
+    guard.updatedAt = now;
+    guard.failures = 0;
+    guard.error = null;
+    guard.lastError = null;
+    guardsChanged = true;
+  }
+
+  if (plansChanged) await writeTradePlans(planStore);
+  if (guardsChanged) await writeWebExitGuards(guardStore);
+  return { plansChanged, guardsChanged };
+}
+
+async function processWebPortfolioExits(options = {}) {
+  if (webPortfolioExitRunnerActive) {
+    const activeForMs = webPortfolioExitRunnerActiveSince ? Date.now() - webPortfolioExitRunnerActiveSince : 0;
+    if (activeForMs > CONFIG.tradePlanRunnerStaleMs) {
+      console.warn(`Web portfolio exit runner was active for ${activeForMs}ms; clearing stale lock so live-position TP/SL checks can continue.`);
+      webPortfolioExitRunnerActive = false;
+      webPortfolioExitRunnerActiveSince = 0;
+    } else {
+      return {
+        skipped: true,
+        reason: "web_portfolio_exit_runner_active",
+        activeSince: webPortfolioExitRunnerActiveSince ? new Date(webPortfolioExitRunnerActiveSince).toISOString() : null,
+        activeForMs
+      };
+    }
+  }
+
+  webPortfolioExitRunnerActive = true;
+  webPortfolioExitRunnerActiveSince = Date.now();
+  const summary = {
+    checkedPositions: 0,
+    triggeredPositions: 0,
+    soldPositions: 0,
+    estimateFailures: 0,
+    sellFailures: 0,
+    messages: []
+  };
+
+  try {
+    const state = await readState();
+    if (state.paused) {
+      summary.skipped = true;
+      summary.reason = "bot_paused";
+      return summary;
+    }
+
+    const [history, walletStore, planStore, guardStore] = await Promise.all([
+      readTradeHistory(),
+      readWalletStore(),
+      readTradePlans(),
+      readWebExitGuards()
+    ]);
+    const entries = new Map();
+    for (const trade of history.trades || []) {
+      if (!eligibleWebDefaultExitSource(trade.source)) continue;
+      if (!trade.userId || !trade.walletPublicKey || !trade.tokenMint) continue;
+      const key = webWalletTokenGuardKey(trade.userId, trade.walletPublicKey, trade.tokenMint);
+      const entry = entries.get(key) || {
+        userId: trade.userId,
+        walletPublicKey: trade.walletPublicKey,
+        walletLabel: trade.walletLabel || "Wallet",
+        tokenMint: trade.tokenMint,
+        spent: 0n,
+        received: 0n,
+        buyCount: 0,
+        sellCount: 0,
+        lastSource: trade.source || "web_trade",
+        lastTradeAt: trade.timestamp || null,
+        lastBuySignature: ""
+      };
+      if (trade.type === "buy") {
+        entry.spent += positiveBigIntOrZero(trade.solLamportsSpent);
+        entry.buyCount += 1;
+        entry.lastSource = trade.source || entry.lastSource;
+        entry.lastBuySignature = trade.signature || entry.lastBuySignature;
+      } else if (trade.type === "sell") {
+        entry.received += positiveBigIntOrZero(trade.solLamportsReceived);
+        entry.sellCount += 1;
+      }
+      entry.walletLabel = trade.walletLabel || entry.walletLabel;
+      entry.lastTradeAt = trade.timestamp || entry.lastTradeAt;
+      entries.set(key, entry);
+    }
+
+    const candidates = [...entries.values()].filter((entry) => entry.buyCount > 0 && entry.spent > 0n);
+    await runWithConcurrency(candidates, Math.min(2, Math.max(1, CONFIG.balanceConcurrency)), async (entry) => {
+      const key = webPortfolioPositionKey(entry);
+      const memory = webPortfolioExitState.get(key) || {};
+      const lastCheckedAt = Date.parse(memory.lastCheckedAt || "");
+      if (!options.forcePriceCheck && Number.isFinite(lastCheckedAt) && Date.now() - lastCheckedAt < CONFIG.stopLossCheckIntervalMs) {
+        return;
+      }
+
+      const wallet = walletsForOwner(walletStore, entry.userId).find((item) => item.publicKey === entry.walletPublicKey);
+      if (!wallet) return;
+
+      let token;
+      try {
+        token = await getReliableTokenBalanceForMint(new PublicKey(wallet.publicKey), new PublicKey(entry.tokenMint), {
+          throwOnError: false,
+          priority: true
+        });
+      } catch (error) {
+        memory.lastError = friendlyError(error);
+        memory.userId = entry.userId;
+        memory.walletPublicKey = entry.walletPublicKey;
+        memory.walletLabel = entry.walletLabel;
+        memory.tokenMint = entry.tokenMint;
+        memory.updatedAt = new Date().toISOString();
+        webPortfolioExitState.set(key, memory);
+        return;
+      }
+      if (!token || token.rawAmount <= 0n) {
+        webPortfolioExitState.delete(key);
+        return;
+      }
+
+      const settings = webPortfolioExitSettings(entry, planStore, guardStore);
+      const plan = buildWebPortfolioExitPlan(entry, token, settings);
+      const planWallet = plan.wallets[0];
+      summary.checkedPositions += 1;
+      let triggerReason = null;
+      let triggerMeta = null;
+      let estimate = null;
+
+      try {
+        estimate = await estimatePlanWalletMove(plan, wallet, settings.sellPercent || 100, {
+          priority: true
+        });
+        const checkedAt = new Date().toISOString();
+        const stopLossPct = walletStopLossPct(plan, planWallet);
+        const takeProfitPct = walletTakeProfitPct(plan, planWallet);
+        const decision = priceExitDecision({
+          movePct: estimate.movePct,
+          takeProfitPct,
+          stopLossPct,
+          stopLossBufferPct: CONFIG.stopLossTriggerBufferPct
+        });
+        const trigger = applyPriceExitTrigger(plan, planWallet, decision, estimate.movePct);
+        webPortfolioExitState.set(key, {
+          userId: entry.userId,
+          walletPublicKey: entry.walletPublicKey,
+          walletLabel: entry.walletLabel,
+          tokenMint: entry.tokenMint,
+          lastCheckedAt: checkedAt,
+          lastMovePct: estimate.movePct,
+          lastEstimatedOut: estimate.estimatedOut?.toString?.() || "",
+          lastBasisLamports: estimate.basis?.toString?.() || "",
+          lastSource: estimate.source || "",
+          estimateFailures: 0,
+          lastError: estimate.quoteError ? `Quote fallback: ${estimate.quoteError}` : null,
+          updatedAt: checkedAt
+        });
+        if (!trigger) return;
+        triggerReason = trigger.triggerReason;
+        triggerMeta = trigger.triggerMeta;
+      } catch (error) {
+        const failures = Number.parseInt(memory.estimateFailures || 0, 10) + 1;
+        memory.estimateFailures = failures;
+        memory.lastCheckedAt = new Date().toISOString();
+        memory.lastError = friendlyError(error);
+        memory.userId = entry.userId;
+        memory.walletPublicKey = entry.walletPublicKey;
+        memory.walletLabel = entry.walletLabel;
+        memory.tokenMint = entry.tokenMint;
+        memory.updatedAt = memory.lastCheckedAt;
+        webPortfolioExitState.set(key, memory);
+        summary.estimateFailures += 1;
+        const stopLossPct = walletStopLossPct(plan, planWallet);
+        if (!shouldEmergencySellOnPriceFailure({
+          stopLossPct,
+          estimateFailures: failures,
+          minFailures: CONFIG.stopLossPriceFailureSellAfter
+        })) {
+          return;
+        }
+        const armedPct = Number(stopLossPct).toFixed(2).replace(/\.00$/, "");
+        triggerReason = `stop-loss portfolio quote-failure emergency (${failures} checks, armed ${armedPct}%)`;
+        triggerMeta = {
+          kind: "stop-loss",
+          sellPercent: settings.sellPercent || 100,
+          quoteFailureEmergency: true
+        };
+      }
+
+      if (!triggerReason) return;
+      summary.triggeredPositions += 1;
+
+      try {
+        const priceExit = isPriceExitTrigger(triggerReason);
+        const sellPercent = effectiveTimedSellPercent(plan, planWallet, triggerReason, triggerMeta);
+        const amount = sellAmountForPercent(token.rawAmount, sellPercent, token.rawAmount.toString());
+        if (amount <= 0n) throw new Error("sell amount rounded to zero");
+        const exitSlippageBps = priceExit
+          ? Math.max(Number(settings.slippageBps || 0), CONFIG.stopLossExitSlippageBps)
+          : settings.slippageBps;
+        const sell = await withExitSellLock(entry.userId, wallet.publicKey, entry.tokenMint, async () => (
+          sellTokenAmountFromWallet(wallet, entry.tokenMint, amount, exitSlippageBps, {
+            userId: entry.userId,
+            priceExit,
+            priority: priceExit,
+            sellPercent
+          })
+        ));
+        sell.sellPercent = sellPercent;
+        invalidateWalletReadCache(wallet.publicKey);
+        await recordTradeEvents([{
+          userId: entry.userId,
+          type: "sell",
+          source: "web_portfolio_exit_watchdog",
+          tokenMint: entry.tokenMint,
+          walletLabel: wallet.label,
+          walletPublicKey: wallet.publicKey,
+          tokenAmount: sell.tokenAmount,
+          solLamportsReceived: sell.outputLamports,
+          signature: sell.signature
+        }]);
+        await audit("web_portfolio_exit_watchdog_sell", {
+          userId: entry.userId,
+          tokenMint: entry.tokenMint,
+          walletPublicKey: wallet.publicKey,
+          triggerReason,
+          movePct: estimate?.movePct ?? memory.lastMovePct ?? null,
+          sellPercent,
+          tokenAmount: sell.tokenAmount,
+          outputLamports: sell.outputLamports,
+          signature: sell.signature
+        });
+        await markWebPortfolioPositionClosed(entry, sell, triggerReason);
+        webPortfolioExitState.delete(key);
+        summary.soldPositions += 1;
+        summary.messages.push(`${wallet.label}: portfolio watchdog sold ${shortMint(entry.tokenMint)} by ${triggerReason}`);
+      } catch (error) {
+        const failures = Number.parseInt(memory.sellFailures || 0, 10) + 1;
+        webPortfolioExitState.set(key, {
+          ...memory,
+          userId: entry.userId,
+          walletPublicKey: entry.walletPublicKey,
+          walletLabel: entry.walletLabel,
+          tokenMint: entry.tokenMint,
+          sellFailures: failures,
+          lastSellError: friendlyError(error),
+          lastFailedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        });
+        summary.sellFailures += 1;
+        summary.messages.push(`${entry.walletLabel}: portfolio watchdog sell failed by ${triggerReason} - ${friendlyError(error)}`);
+      }
+    });
+
+    summary.messages = summary.messages.slice(-20);
+    return summary;
+  } finally {
+    webPortfolioExitRunnerActive = false;
+    webPortfolioExitRunnerActiveSince = 0;
+  }
 }
 
 function mergeWebExitGuardUpdate(previous, next) {
@@ -13167,6 +13620,30 @@ async function webExitGuardRows(userId) {
       backfilledFromLivePosition: Boolean(guard.backfilledFromLivePosition),
       createdAt: guard.createdAt || "",
       updatedAt: guard.updatedAt || ""
+    }));
+}
+
+function webPortfolioExitRows(userId) {
+  return [...webPortfolioExitState.values()]
+    .filter((row) => String(row.userId || "") === String(userId || ""))
+    .sort((a, b) => Date.parse(b.updatedAt || b.lastCheckedAt || 0) - Date.parse(a.updatedAt || a.lastCheckedAt || 0))
+    .slice(0, 100)
+    .map((row) => ({
+      tokenMint: row.tokenMint || "",
+      shortMint: row.tokenMint ? shortMint(row.tokenMint) : "",
+      walletLabel: row.walletLabel || "Wallet",
+      walletPublicKey: row.walletPublicKey || "",
+      shortPublicKey: row.walletPublicKey ? shortMint(row.walletPublicKey) : "",
+      lastCheckedAt: row.lastCheckedAt || "",
+      lastMovePct: row.lastMovePct ?? null,
+      lastEstimatedOut: row.lastEstimatedOut || "",
+      lastBasisLamports: row.lastBasisLamports || "",
+      lastSource: row.lastSource || "",
+      estimateFailures: row.estimateFailures || 0,
+      sellFailures: row.sellFailures || 0,
+      lastError: row.lastError || "",
+      lastSellError: row.lastSellError || "",
+      updatedAt: row.updatedAt || row.lastCheckedAt || ""
     }));
 }
 
