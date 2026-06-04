@@ -752,6 +752,14 @@ function startHealthServer() {
           rpcMinIntervalMs: CONFIG.rpcMinIntervalMs,
           jupiterMinIntervalMs: CONFIG.jupiterMinIntervalMs
         },
+        pumpLaunch: {
+          enabled: CONFIG.pumpLaunchEnabled,
+          apiUrl: CONFIG.pumpLaunchApiUrl,
+          metadataUrl: CONFIG.pumpLaunchMetadataUrl,
+          pinataJwtConfigured: Boolean(CONFIG.pumpLaunchPinataJwt),
+          priorityFeeSol: CONFIG.pumpLaunchPriorityFeeSol,
+          requiredBufferSol: CONFIG.pumpLaunchRequiredBufferSol
+        },
         keepAlive: lastKeepAliveStatus
       }));
       return;
