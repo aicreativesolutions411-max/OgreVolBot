@@ -123,13 +123,10 @@ const BRAND_FOOTER = [
 ].join("\n");
 
 const PUBLIC_MENU = [
-  [{ text: "🐎 How To Use", callback_data: "quick_start" }],
-  [{ text: "Web App", callback_data: "web_portal" }, { text: "Ogre A.I.", callback_data: "ogre_ai_menu" }],
-  [{ text: "💱 Trade", callback_data: "trade_menu" }, { text: "🎯 OgreSniper", callback_data: "sniper_menu" }],
-  [{ text: "KOL Tracker", callback_data: "kol_tracker_menu" }],
-  [{ text: "💳 Wallet", callback_data: "wallet_menu" }, { text: "🧲 Bundle", callback_data: "bundle_menu" }],
-  [{ text: "📊📈 Volume", callback_data: "timed_trade_plans" }, { text: "🔍 Check Balances", callback_data: "check_balances" }],
-  [{ text: "💾 Backup / Restore", callback_data: "backup_menu" }, { text: "🏦 Withdrawal", callback_data: "withdrawal_menu" }]
+  [{ text: "How To Use", callback_data: "quick_start" }, { text: "Web App", callback_data: "web_portal" }],
+  [{ text: "Terminal", callback_data: "terminal_menu" }, { text: "Market Intel", callback_data: "market_intel_menu" }],
+  [{ text: "Ogre Tools", callback_data: "ogre_tools_menu" }, { text: "Portfolio", callback_data: "portfolio_menu" }],
+  [{ text: "Trade Now", callback_data: "trade_menu" }, { text: "Ogre A.I.", callback_data: "ogre_ai_menu" }]
 ];
 
 const ADMIN_MENU = [
@@ -177,6 +174,10 @@ const PRIVATE_CHAT_ACTIONS = new Set([
   "positions_overview",
   "copy_trade_info",
   "ogre_ai_menu",
+  "terminal_menu",
+  "market_intel_menu",
+  "ogre_tools_menu",
+  "portfolio_menu",
   "quick_start",
   "main_menu",
   "backup_menu",
@@ -1985,6 +1986,18 @@ async function handleCallback(query, userId) {
       break;
     case "ogre_ai_menu":
       await showOgreAiMenu(chatId, messageId);
+      break;
+    case "terminal_menu":
+      await showTelegramTerminalMenu(chatId, messageId);
+      break;
+    case "market_intel_menu":
+      await showTelegramMarketIntelMenu(chatId, messageId);
+      break;
+    case "ogre_tools_menu":
+      await showTelegramOgreToolsMenu(chatId, messageId);
+      break;
+    case "portfolio_menu":
+      await showTelegramPortfolioMenu(chatId, messageId);
       break;
     case "main_menu":
       await showMenu(chatId, userId, messageId);
@@ -7432,6 +7445,67 @@ async function exportAudit(chatId) {
   await say(chatId, latest.length ? `Last ${latest.length} audit entries:\n\n${latest.join("\n")}` : "Audit log is empty.");
 }
 
+async function showTelegramTerminalMenu(chatId, messageId = null) {
+  await sendOrEditMessage(chatId, messageId, withBrandFooter([
+    "Terminal",
+    "",
+    "Fast single-wallet actions, positions, balances, and the web command center."
+  ].join("\n")), {
+    inline_keyboard: [
+      [{ text: "Trade", callback_data: "trade_menu" }, { text: "Check Balances", callback_data: "check_balances" }],
+      [{ text: "Positions", callback_data: "positions_overview" }, { text: "PnL Cards", callback_data: "pnl_results" }],
+      [{ text: "Open Web Terminal", callback_data: "web_portal" }],
+      [{ text: "Main Menu", callback_data: "main_menu" }]
+    ]
+  });
+}
+
+async function showTelegramMarketIntelMenu(chatId, messageId = null) {
+  await sendOrEditMessage(chatId, messageId, withBrandFooter([
+    "Market Intel",
+    "",
+    "Scan early plays, KOL signals, and quick setups before choosing Trade or Bundle."
+  ].join("\n")), {
+    inline_keyboard: [
+      [{ text: "OgreSniper", callback_data: "sniper_menu" }, { text: "Scan Early Plays", callback_data: "sniper_scan" }],
+      [{ text: "KOL Tracker", callback_data: "kol_tracker_menu" }, { text: "Fresh KOL Activity", callback_data: "kol_scan_fresh" }],
+      [{ text: "AutoSnipe", callback_data: "sniper_auto" }, { text: "PumpSnipe", callback_data: "sniper_pumpsnipe" }],
+      [{ text: "Main Menu", callback_data: "main_menu" }]
+    ]
+  });
+}
+
+async function showTelegramOgreToolsMenu(chatId, messageId = null) {
+  await sendOrEditMessage(chatId, messageId, withBrandFooter([
+    "Ogre Tools",
+    "",
+    "Automation and power tools: Ogre A.I., bundle workflows, timed volume plans, launch watches, and sniper modes."
+  ].join("\n")), {
+    inline_keyboard: [
+      [{ text: "Ogre A.I.", callback_data: "ogre_ai_menu" }, { text: "Auto Bundle", callback_data: "auto_bundle" }],
+      [{ text: "Bundle", callback_data: "bundle_menu" }, { text: "Volume Plans", callback_data: "timed_trade_plans" }],
+      [{ text: "Launch Snipe", callback_data: "sniper_manual_launch" }, { text: "Active Watches", callback_data: "manual_launch_watches" }],
+      [{ text: "Sniper Modes", callback_data: "sniper_modes" }],
+      [{ text: "Main Menu", callback_data: "main_menu" }]
+    ]
+  });
+}
+
+async function showTelegramPortfolioMenu(chatId, messageId = null) {
+  await sendOrEditMessage(chatId, messageId, withBrandFooter([
+    "Portfolio",
+    "",
+    "Wallets, balances, backups, sweeps, funding, exits, and restore tools."
+  ].join("\n")), {
+    inline_keyboard: [
+      [{ text: "Wallets", callback_data: "wallet_menu" }, { text: "Balances", callback_data: "check_balances" }],
+      [{ text: "Positions", callback_data: "positions_overview" }, { text: "PnL / Results", callback_data: "pnl_results" }],
+      [{ text: "Backup / Restore", callback_data: "backup_menu" }, { text: "Withdraw / Sweep", callback_data: "withdrawal_menu" }],
+      [{ text: "Main Menu", callback_data: "main_menu" }]
+    ]
+  });
+}
+
 async function showWalletMenu(chatId, messageId = null) {
   await sendOrEditMessage(chatId, messageId, withBrandFooter("Wallet tools:"), {
     inline_keyboard: [
@@ -11383,7 +11457,16 @@ async function walletPrompt(userId, prefix) {
 async function showMenu(chatId, userId, messageId = null) {
   const state = await readState();
   const menu = isAdmin(userId) ? [...PUBLIC_MENU, ...ADMIN_MENU] : PUBLIC_MENU;
-  await sendOrEditMessage(chatId, messageId, withBrandFooter(`${state.paused ? "Status: emergency stop active.\n\n" : ""}Choose a SlimeWire tool:`), {
+  await sendOrEditMessage(chatId, messageId, withBrandFooter([
+    state.paused ? "Status: emergency stop active." : "SlimeWire Command Center",
+    "",
+    "Pick a lane. Each menu keeps the same tools, just grouped so you can move faster.",
+    "",
+    "Terminal: trade, balances, positions, PnL.",
+    "Market Intel: sniper scans and KOL signals.",
+    "Ogre Tools: Ogre A.I., bundle, volume, launch tools.",
+    "Portfolio: wallets, backups, sweeps, exits."
+  ].join("\n")), {
     inline_keyboard: menu
   });
 }
