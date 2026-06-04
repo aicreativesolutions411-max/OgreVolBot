@@ -78,6 +78,7 @@ let lastKeepAliveStatus = {
   lastError: null
 };
 let tradePlanRunnerActive = false;
+let tradePlanRunnerActiveSince = 0;
 let dcaPlanRunnerActive = false;
 const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const TOKEN_2022_PROGRAM_ID = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
@@ -5076,11 +5077,9 @@ function exitSlippageAttemptList(baseSlippageBps, priceExit = false) {
   const defaultSlippageBps = Number(CONFIG.defaultSlippageBps || 400);
   const base = Math.max(1, Math.min(maxSlippageBps, Number.parseInt(baseSlippageBps || defaultSlippageBps, 10) || defaultSlippageBps));
   if (!priceExit) return [base];
+  const emergency = Math.max(base, CONFIG.stopLossExitSlippageBps);
   return [...new Set([
-    base,
-    Math.max(base, CONFIG.stopLossExitSlippageBps),
-    Math.max(base, 2_500),
-    Math.max(base, 4_000),
+    emergency,
     maxSlippageBps
   ].map((value) => Math.max(1, Math.min(maxSlippageBps, Number.parseInt(value, 10) || base))))];
 }
@@ -5304,10 +5303,13 @@ async function processTradePlans() {
   if (tradePlanRunnerActive) {
     return {
       skipped: true,
-      reason: "trade_plan_runner_active"
+      reason: "trade_plan_runner_active",
+      activeSince: tradePlanRunnerActiveSince ? new Date(tradePlanRunnerActiveSince).toISOString() : null,
+      activeForMs: tradePlanRunnerActiveSince ? Date.now() - tradePlanRunnerActiveSince : null
     };
   }
   tradePlanRunnerActive = true;
+  tradePlanRunnerActiveSince = Date.now();
   const summary = {
     checkedPlans: 0,
     checkedWallets: 0,
@@ -5357,7 +5359,33 @@ async function processTradePlans() {
       for (const planWallet of plan.wallets) {
         if (!isActiveTimedWalletStatus(planWallet.status)) continue;
         summary.checkedWallets += 1;
-        const result = await processTradePlanWallet(plan, planWallet, walletStore);
+        const runnerStarted = Date.now();
+        planWallet.runnerStartedAt = new Date(runnerStarted).toISOString();
+        let result;
+        try {
+          result = await processTradePlanWallet(plan, planWallet, walletStore);
+        } catch (error) {
+          const errorMessage = friendlyError(error);
+          const failures = Number.parseInt(planWallet.failures || 0, 10) + 1;
+          planWallet.failures = failures;
+          planWallet.status = isPriceExitTrigger(planWallet.triggerReason) ? "retrying" : (planWallet.status || "watching");
+          planWallet.exitStatus = isPriceExitTrigger(planWallet.triggerReason) ? "retrying" : (planWallet.exitStatus || "watching");
+          planWallet.triggerStatus = isPriceExitTrigger(planWallet.triggerReason) ? "retrying" : (planWallet.triggerStatus || "watching");
+          planWallet.error = errorMessage;
+          planWallet.lastError = errorMessage;
+          planWallet.lastRunnerError = errorMessage;
+          planWallet.lastFailedAt = new Date().toISOString();
+          planWallet.updatedAt = planWallet.lastFailedAt;
+          result = {
+            changed: true,
+            failed: false,
+            message: `${planWallet.label || planWallet.publicKey}: TP/SL check error - ${errorMessage}. The plan stayed armed and the runner continued.`
+          };
+        } finally {
+          const runnerFinished = Date.now();
+          planWallet.runnerFinishedAt = new Date(runnerFinished).toISOString();
+          planWallet.runnerDurationMs = runnerFinished - runnerStarted;
+        }
         if (result.changed) {
           changed = true;
           summary.changedWallets += 1;
@@ -5397,6 +5425,7 @@ async function processTradePlans() {
     return summary;
   } finally {
     tradePlanRunnerActive = false;
+    tradePlanRunnerActiveSince = 0;
   }
 }
 

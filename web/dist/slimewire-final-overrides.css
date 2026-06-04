@@ -3496,3 +3496,144 @@
     border-color: rgba(132, 255, 42, 0.36) !important;
   }
 }
+
+/* Clean UI asset pack integration and entry-flow cleanup */
+.connect-card .connect-helper,
+.connect-card .connect-existing-user,
+.connect-card .connect-trust,
+.metrics article small {
+  color: rgba(222, 255, 214, 0.66) !important;
+  font-size: 11px !important;
+  line-height: 1.35 !important;
+}
+
+.connect-card .connect-trust {
+  display: block !important;
+  margin-top: 6px !important;
+  color: rgba(176, 255, 122, 0.78) !important;
+}
+
+.connect-card .connect-provider-row {
+  gap: 12px !important;
+}
+
+.connect-card .provider-orb {
+  width: min(142px, 45%) !important;
+  min-height: 92px !important;
+  border-radius: 18px !important;
+  padding: 10px 8px !important;
+  gap: 8px !important;
+}
+
+.connect-card .provider-orb img {
+  width: 44px !important;
+  height: 44px !important;
+  object-fit: contain !important;
+  border-radius: 14px !important;
+}
+
+.connect-card .provider-orb span {
+  font-size: 12px !important;
+  letter-spacing: 0 !important;
+  white-space: nowrap !important;
+}
+
+.connect-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 8px !important;
+}
+
+.connect-actions .primary {
+  grid-column: 1 / -1 !important;
+}
+
+.policy-copy a {
+  text-decoration-thickness: 1px !important;
+  text-underline-offset: 3px !important;
+}
+
+.metrics article {
+  min-height: 86px !important;
+  align-content: start !important;
+  gap: 4px !important;
+}
+
+.metrics article small {
+  display: block !important;
+  max-width: 140px !important;
+}
+
+[data-app][data-route="terminal"] .tabs .nav-section-label {
+  display: block !important;
+  margin: 8px 6px 3px !important;
+  color: rgba(176, 255, 117, 0.78) !important;
+  font-size: 9px !important;
+  font-weight: 900 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.08em !important;
+  line-height: 1 !important;
+  pointer-events: none !important;
+}
+
+[data-app][data-route="terminal"] .tabs button,
+[data-app][data-route="terminal"] .tabs .nav-tool-group summary,
+[data-app][data-route="terminal"] .tabs .nav-tool-group button {
+  gap: 7px !important;
+}
+
+[data-app][data-route="terminal"] .tabs button::before,
+[data-app][data-route="terminal"] .tabs .nav-tool-group summary::before,
+[data-app][data-route="terminal"] .tabs .nav-tool-group button::before {
+  background-size: contain !important;
+  background-repeat: no-repeat !important;
+  background-position: center !important;
+  filter: drop-shadow(0 0 6px rgba(146, 255, 34, 0.44)) !important;
+}
+
+[data-app][data-route="terminal"] .tabs button[data-active="true"]::before,
+[data-app][data-route="terminal"] .tabs .nav-tool-group:has(button[data-active="true"]) summary::before {
+  filter: drop-shadow(0 0 10px rgba(168, 255, 42, 0.82)) !important;
+}
+
+[data-app][data-route="terminal"] .tabs button[data-tab="terminal"]::before { background-image: url("./assets/slimewire/clean-ui/side_nav_icons/default/live_terminal.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="profile"]::before { background-image: url("./assets/slimewire/clean-ui/side_nav_icons/default/home_profile.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="smartChart"]::before { background-image: url("./assets/slimewire/clean-ui/side_nav_icons/default/smart_chart.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="trade"]::before { background-image: url("./assets/slimewire/clean-ui/side_nav_icons/default/trade.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="live"]::before { background-image: url("./assets/slimewire/clean-ui/side_nav_icons/default/live_pairs.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="liveTrades"]::before { background-image: url("./assets/slimewire/clean-ui/side_nav_icons/default/live_trades.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="slimeScope"]::before { background-image: url("./assets/slimewire/clean-ui/side_nav_icons/default/slime_scope.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="watchlist"]::before { background-image: url("./assets/slimewire/clean-ui/side_nav_icons/default/watchlist.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="kol"]::before { background-image: url("./assets/slimewire/clean-ui/side_nav_icons/default/kol_tracker.png") !important; }
+[data-app][data-route="terminal"] .tabs .nav-tool-group summary::before { background-image: url("./assets/slimewire/clean-ui/side_nav_icons/default/ogre_tek.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="ogreAi"]::before { background-image: url("./assets/slimewire/clean-ui/side_nav_icons/default/ogre_ai.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="launchCoin"]::before { background-image: url("./assets/slimewire/clean-ui/side_nav_icons/default/pump_launch.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="bundle"]::before { background-image: url("./assets/slimewire/clean-ui/side_nav_icons/default/bundle_volume.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="volume"]::before { background-image: url("./assets/slimewire/clean-ui/side_nav_icons/default/bundle_volume.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="launch"]::before { background-image: url("./assets/slimewire/clean-ui/side_nav_icons/default/launch_snipe.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="sniper"]::before { background-image: url("./assets/slimewire/clean-ui/side_nav_icons/default/sniper.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="ogreTek"]::before { background-image: url("./assets/slimewire/clean-ui/side_nav_icons/default/perp_mode.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="wallets"]::before { background-image: url("./assets/slimewire/clean-ui/side_nav_icons/default/wallets_balances.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="positions"]::before { background-image: url("./assets/slimewire/clean-ui/side_nav_icons/default/positions.png") !important; }
+[data-app][data-route="terminal"] .tabs button[data-tab="pnl"]::before { background-image: url("./assets/slimewire/clean-ui/side_nav_icons/default/pnl.png") !important; }
+
+@media (min-width: 761px) {
+  [data-app][data-route="terminal"] .tabs .nav-section-label {
+    width: 100% !important;
+  }
+}
+
+@media (max-width: 760px) {
+  .connect-actions {
+    grid-template-columns: 1fr !important;
+  }
+
+  .connect-card .provider-orb {
+    width: 100% !important;
+    min-height: 74px !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs .nav-section-label {
+    flex: 1 0 100% !important;
+    margin: 6px 2px 0 !important;
+  }
+}

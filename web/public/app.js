@@ -4151,10 +4151,20 @@ async function runTradePlanCheck() {
     });
     state.tradePlans = data.plans || state.tradePlans || [];
     const runner = data.runner || {};
+    if (runner.skipped) {
+      const activeFor = Number(runner.activeForMs || 0);
+      const activeText = activeFor > 0 ? ` for ${Math.ceil(activeFor / 1000)}s` : "";
+      state.automationDelegationStatus = runner.reason === "trade_plan_runner_active"
+        ? `TP/SL runner is already checking exits${activeText}. It will keep retrying without starting a duplicate sell.`
+        : `TP/SL check skipped: ${runner.reason || "runner busy"}.`;
+      await loadWalletCore({ force: true });
+      return;
+    }
     const sold = Number(runner.soldWallets || 0);
     const triggered = Number(runner.triggeredWallets || 0);
     const failed = Number(runner.failedWallets || 0);
-    state.automationDelegationStatus = `TP/SL check complete: ${triggered} triggered, ${sold} sold, ${failed} failed.`;
+    const checked = Number(runner.checkedWallets || 0);
+    state.automationDelegationStatus = `TP/SL check complete: ${checked} checked, ${triggered} triggered, ${sold} sold, ${failed} failed.`;
     await loadWalletCore({ force: true });
   } catch (error) {
     state.automationDelegationStatus = error.message;

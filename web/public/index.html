@@ -40,12 +40,11 @@
           </div>
           <div class="top-auth-actions" data-auth-actions>
             <div class="top-auth-group" data-guest-actions>
+              <button class="primary" type="button" data-web-signup-connect>Connect Wallet</button>
+              <button type="button" data-web-signup>Create Account</button>
               <button type="button" data-open-login>Log In</button>
-              <button class="primary" type="button" data-web-signup>Create Account</button>
-              <button type="button" data-web-signup-connect>Connect Wallet</button>
             </div>
             <div class="top-auth-group" data-session-actions hidden>
-              <button type="button" data-tab="wallets">Create Wallet</button>
               <button type="button" data-connect-wallet="solana">Connect Wallet</button>
               <button class="top-profile-button" type="button" data-tab="profile">
                 <span class="top-profile-avatar" data-top-avatar aria-hidden="true"><span>SW</span></span>
@@ -97,11 +96,12 @@
           <section class="connect-card">
             <img class="connect-logo" src="./assets/slimewire-panel-wordmark-clean.png" alt="SlimeWire">
             <h2>Start Sliming</h2>
-            <p>Be in control of your swamp 24-7.</p>
-            <span class="connect-subtitle">Continue with</span>
+            <p>Track Solana pairs, wallet balances, live trades, and sniper tools from one swamp terminal.</p>
+            <span class="connect-subtitle">Connect your wallet</span>
+            <small class="connect-helper">Connect Phantom or Solflare to start tracking trades.</small>
             <div class="connect-provider-row" aria-label="Connection methods">
-              <button class="provider-orb provider-phantom" type="button" data-connect-wallet="phantom" aria-label="Connect Phantom wallet"><img src="./assets/slimewire/png/providers/phantom-orb.jpg" alt=""><span>PH</span></button>
-              <button class="provider-orb provider-solflare" type="button" data-connect-wallet="solflare" aria-label="Connect Solflare wallet"><img src="./assets/slimewire/png/providers/solflare-orb.jpg" alt=""><span>SF</span></button>
+              <button class="provider-orb provider-phantom" type="button" data-connect-wallet="phantom" aria-label="Connect Phantom wallet"><img src="./assets/slimewire/clean-ui/wallet_icons/default/phantom.png" alt=""><span>Phantom</span></button>
+              <button class="provider-orb provider-solflare" type="button" data-connect-wallet="solflare" aria-label="Connect Solflare wallet"><img src="./assets/slimewire/clean-ui/wallet_icons/default/solflare.png" alt=""><span>Solflare</span></button>
             </div>
             <form class="connect-login-panel" data-connect-login-panel onsubmit="return false;" hidden>
               <label>
@@ -119,18 +119,20 @@
             </form>
             <div class="connect-actions">
               <button class="primary slime-login-button" type="button" data-web-signup-connect>Connect Wallet</button>
-              <button type="button" data-connect-create-wallet>Create Wallet</button>
-              <button type="button" data-connect-login-toggle>Lock In</button>
               <button type="button" data-connect-create-account>Create Account</button>
+              <button type="button" data-connect-login-toggle>Lock In</button>
+              <button type="button" data-connect-create-wallet>Create Wallet</button>
               <button type="button" data-nav-route="/terminal">Browse Terminal</button>
             </div>
+            <small class="connect-existing-user">Already have an account? Use Lock In.</small>
+            <small class="connect-trust">We never ask for your seed phrase. Review wallet permissions before signing.</small>
             <small data-connected-wallet-summary>Connect a wallet or create an account when you are ready to trade.</small>
             <small class="connect-status" data-connect-status data-wallet-connect-status></small>
             <p class="policy-copy">
               By signing in you agree to
-              <a href="#slimeness" data-policy="terms">Slimeness</a>
+              <a href="#slimeness" data-policy="terms">Slimeness (Terms)</a>
               and
-              <a href="#slime-policy" data-policy="privacy">Slime Policy</a>.
+              <a href="#slime-policy" data-policy="privacy">Slime Policy (Privacy)</a>.
             </p>
           </section>
           <span class="connect-powered">Powered by Ogres</span>
@@ -142,31 +144,38 @@
           <article>
             <span>Wallets</span>
             <strong data-wallet-count>0</strong>
+            <small>Connect a wallet to sync balances.</small>
           </article>
           <article>
             <span>Total SOL</span>
             <strong data-total-sol>0</strong>
+            <small>Portfolio SOL appears here.</small>
           </article>
           <article>
             <span>Positions</span>
             <strong data-position-count>0</strong>
+            <small>No open positions yet.</small>
           </article>
           <article>
             <span>Realized PnL</span>
             <strong data-realized>+0 SOL</strong>
+            <small>Realized PnL appears after completed trades.</small>
           </article>
         </section>
 
         <nav class="tabs" aria-label="Portal views">
+          <span class="nav-section-label">Terminal</span>
           <button data-tab="terminal" data-active="true" data-label="Live">Live Terminal</button>
           <button data-tab="profile" data-label="Home">Home / Profile</button>
           <button data-tab="smartChart" data-label="Chart">Smart Chart</button>
           <button data-tab="trade" data-label="Trade">Trade</button>
+          <span class="nav-section-label">Market Intel</span>
           <button data-tab="live" data-label="Pairs">Live Pairs</button>
           <button data-tab="liveTrades" data-label="Trades">Live Trades</button>
           <button data-tab="slimeScope" data-label="Scope">Slime Scope</button>
           <button data-tab="watchlist" data-label="Watch">Watchlist</button>
           <button data-tab="kol" data-label="KOL">KOL Tracker</button>
+          <span class="nav-section-label">Ogre Tools</span>
           <details class="nav-tool-group">
             <summary data-label="Tek">Ogre TeK</summary>
             <button data-tab="ogreAi" data-label="AI">Ogre A.I.</button>
@@ -177,6 +186,7 @@
             <button data-tab="sniper" data-label="Snipe">Sniper</button>
             <button data-tab="ogreTek" data-feature="ogre-tek" data-label="Perps" hidden>Perp Mode</button>
           </details>
+          <span class="nav-section-label">Portfolio</span>
           <button data-tab="wallets" data-label="Wallets">Wallets / Balances</button>
           <button data-tab="positions" data-label="Pos">Positions</button>
           <button data-tab="pnl" data-label="PnL">PnL</button>
