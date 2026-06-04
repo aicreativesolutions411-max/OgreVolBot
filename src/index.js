@@ -762,7 +762,7 @@ function startHealthServer() {
       return;
     }
 
-    if (request.method === "GET" && requestUrl.pathname.startsWith("/pump/metadata/")) {
+    if ((request.method === "GET" || request.method === "HEAD") && requestUrl.pathname.startsWith("/pump/metadata/")) {
       await serveHostedPumpMetadata(request, response, requestUrl);
       return;
     }
@@ -1757,6 +1757,10 @@ async function serveHostedPumpMetadata(request, response, requestUrl) {
       "Cache-Control": "public, max-age=31536000, immutable",
       ...webCorsHeaders(request)
     });
+    if (request.method === "HEAD") {
+      response.end();
+      return;
+    }
     response.end(data);
   } catch {
     response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8", ...webCorsHeaders(request) });
