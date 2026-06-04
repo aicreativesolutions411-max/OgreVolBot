@@ -24,7 +24,8 @@ const apiCandidates = [
   defaultRenderApiBase
 ].filter(Boolean);
 let apiBase = apiCandidates[0] || defaultRenderApiBase;
-const API_CONNECT_TIMEOUT_MS = 18_000;
+const API_CONNECT_TIMEOUT_MS = 60_000;
+const API_LONG_ACTION_TIMEOUT_MS = 180_000;
 
 function getStoredToken() {
   try {
@@ -358,29 +359,30 @@ async function wakeApi(base) {
 }
 
 async function api(path, options = {}) {
+  const { timeoutMs = API_CONNECT_TIMEOUT_MS, ...fetchOptions } = options || {};
   const headers = {
     "Content-Type": "application/json",
-    ...(options.headers || {})
+    ...(fetchOptions.headers || {})
   };
   if (state.token) headers.Authorization = `Bearer ${state.token}`;
 
   let response;
   let lastError = null;
   try {
-    response = await fetchWithTimeout(apiUrl(path), { ...options, headers, cache: "no-store" });
+    response = await fetchWithTimeout(apiUrl(path), { ...fetchOptions, headers, cache: "no-store" }, timeoutMs);
   } catch (error) {
     lastError = error;
     await wakeApi(apiBase);
     await sleep(900);
     try {
-      response = await fetchWithTimeout(apiUrl(path), { ...options, headers, cache: "no-store" });
+      response = await fetchWithTimeout(apiUrl(path), { ...fetchOptions, headers, cache: "no-store" }, timeoutMs);
     } catch (retryError) {
       lastError = retryError;
       for (const fallbackBase of apiCandidates) {
         if (fallbackBase === apiBase) continue;
         try {
           await wakeApi(fallbackBase);
-          response = await fetchWithTimeout(`${fallbackBase}${path}`, { ...options, headers, cache: "no-store" });
+          response = await fetchWithTimeout(`${fallbackBase}${path}`, { ...fetchOptions, headers, cache: "no-store" }, timeoutMs);
           apiBase = fallbackBase;
           break;
         } catch (fallbackError) {
@@ -708,6 +710,7 @@ async function loadAll(options = {}) {
       ensureSelectedPresetsStillExist();
       state.watchlist = watchlist.watchlist || { rows: [], count: 0 };
       state.tradePlans = tradePlans.plans || [];
+      ensureAutoExitWatchForActivePlans();
       return;
     }
     const [wallets, balances, positions, pnl, launchWatches, presets, watchlist, tradePlans] = await Promise.all([
@@ -730,6 +733,7 @@ async function loadAll(options = {}) {
     ensureSelectedPresetsStillExist();
     state.watchlist = watchlist.watchlist || { rows: [], count: 0 };
     state.tradePlans = tradePlans.plans || [];
+    ensureAutoExitWatchForActivePlans();
     if (options.force) {
       state.lastWalletRefreshAt = new Date().toISOString();
       state.walletRefreshError = "";
@@ -758,6 +762,7 @@ async function loadWalletCore(options = {}) {
   state.balances = balances.balances || [];
   state.connectedWalletBalance = balances.connectedWallet || null;
   state.tradePlans = tradePlans.plans || [];
+  ensureAutoExitWatchForActivePlans();
   state.lastWalletRefreshAt = new Date().toISOString();
   state.walletRefreshError = "";
   if (options.progress !== false) render();
@@ -3712,7 +3717,8 @@ async function submitLaunchCoin() {
 
     const data = await api("/api/web/launch/coin", {
       method: "POST",
-      body: requestBody
+      body: requestBody,
+      timeoutMs: API_LONG_ACTION_TIMEOUT_MS
     });
 
     const launch = data.launch || {};
@@ -4210,6 +4216,7 @@ async function runTradePlanCheckSilently({ refreshCore = true } = {}) {
     });
     state.tradePlans = data.plans || state.tradePlans || [];
     state.automationDelegationStatus = autoExitRunnerSummary(data.runner || {});
+    ensureAutoExitWatchForActivePlans();
     if (refreshCore) await loadWalletCore({ force: true });
     render();
   } catch (error) {
@@ -4218,11 +4225,35 @@ async function runTradePlanCheckSilently({ refreshCore = true } = {}) {
   }
 }
 
+function hasActiveAutoExitPlans() {
+  const activeWalletStatuses = new Set(["armed", "watching", "retrying", "submitting", "waiting_next_loop", "timer-only"]);
+  return (state.tradePlans || []).some((plan) => {
+    const status = String(plan.status || "").toLowerCase();
+    if (status === "launch_watch") return true;
+    if (status !== "watching") return false;
+    if (Number(plan.activeWallets || 0) > 0) return true;
+    return (plan.wallets || []).some((wallet) => activeWalletStatuses.has(String(wallet.status || wallet.exitStatus || "").toLowerCase()));
+  });
+}
+
+function ensureAutoExitWatchForActivePlans() {
+  if (hasActiveAutoExitPlans()) startAutoExitWatchLoop(5 * 60_000);
+}
+
 function startAutoExitWatchLoop(durationMs = 90_000) {
   autoExitWatchUntil = Math.max(autoExitWatchUntil || 0, Date.now() + durationMs);
   if (autoExitWatchTimer) return;
   autoExitWatchTimer = window.setInterval(() => {
-    if (!state.user || !state.token || Date.now() > autoExitWatchUntil) {
+    if (!state.user || !state.token) {
+      window.clearInterval(autoExitWatchTimer);
+      autoExitWatchTimer = null;
+      autoExitWatchUntil = 0;
+      return;
+    }
+    if (hasActiveAutoExitPlans()) {
+      autoExitWatchUntil = Math.max(autoExitWatchUntil || 0, Date.now() + 30_000);
+    }
+    if (Date.now() > autoExitWatchUntil) {
       window.clearInterval(autoExitWatchTimer);
       autoExitWatchTimer = null;
       autoExitWatchUntil = 0;
@@ -4475,7 +4506,8 @@ async function runWalletSweepAction(action) {
 
     const data = await api(endpoint, {
       method: "POST",
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      timeoutMs: API_LONG_ACTION_TIMEOUT_MS
     });
     state.walletSweepStatus = summarizeSweepResult(data.sweep);
     writeText(status, state.walletSweepStatus);
@@ -5498,7 +5530,8 @@ async function sellPositionPercent(tokenMint, percentText = "100") {
         walletIndexes: "all",
         percent,
         slippageBps: "400"
-      })
+      }),
+      timeoutMs: API_LONG_ACTION_TIMEOUT_MS
     });
     state.bundleResult = data.bundle;
     state.bundleToken = tokenMint;

@@ -963,6 +963,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
     }
 
     if (request.method === "GET" && pathname === "/api/web/trade/plans") {
+      scheduleTradePlanProcessing("web trade plan poll", [0]);
       sendWebJson(request, response, 200, {
         ok: true,
         plans: await webTradePlanRows(auth.userId)
@@ -1220,6 +1221,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
 
     if (request.method === "GET" && pathname === "/api/web/balances") {
       const force = parseBoolean(requestUrl.searchParams.get("force") || "false");
+      scheduleTradePlanProcessing("web balance refresh", [0]);
       const [balances, connectedWallet] = await Promise.all([
         webBalanceRows(auth.userId, { force }),
         webConnectedWalletBalance(auth.userId, { force })
@@ -1234,6 +1236,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
 
     if (request.method === "GET" && pathname === "/api/web/positions") {
       const force = parseBoolean(requestUrl.searchParams.get("force") || "false");
+      scheduleTradePlanProcessing("web position refresh", [0]);
       sendWebJson(request, response, 200, {
         ok: true,
         positions: await webPositionRows(auth.userId, { force })
@@ -5238,10 +5241,6 @@ function effectiveTimedSellPercent(plan, planWallet, triggerReason, triggerMeta 
     return clamp(Number.parseInt(triggerMeta.sellPercent, 10), 1, 100);
   }
 
-  if (/^stop-loss\b/i.test(String(triggerReason || ""))) {
-    return 100;
-  }
-
   const configured = isPriceExitTrigger(triggerReason)
     ? planWallet?.triggerSellPercent ?? plan.triggerSellPercent ?? 100
     : plan.sellPercent ?? 100;
@@ -5506,11 +5505,10 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
     staleMs: CONFIG.stopLossSubmitStaleMs
   })) {
     triggerReason = planWallet.triggerReason;
+    const storedSellPercent = planWallet.triggerSellPercent ?? plan.triggerSellPercent ?? 100;
     triggerMeta = {
       kind: /^stop-loss\b/i.test(String(planWallet.triggerReason || "")) ? "stop-loss" : "take-profit",
-      sellPercent: /^stop-loss\b/i.test(String(planWallet.triggerReason || ""))
-        ? 100
-        : (planWallet.triggerSellPercent ?? plan.triggerSellPercent ?? 100),
+      sellPercent: storedSellPercent,
       staleSubmitRetry: true
     };
     planWallet.triggerStatus = "retrying";
@@ -5529,11 +5527,10 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
     && !["sold", "confirmed", "failed", "cancelled"].includes(String(planWallet.exitStatus || planWallet.status || "").toLowerCase())
   ) {
     triggerReason = planWallet.triggerReason;
+    const storedSellPercent = planWallet.triggerSellPercent ?? plan.triggerSellPercent ?? 100;
     triggerMeta = {
       kind: /^stop-loss\b/i.test(String(planWallet.triggerReason || "")) ? "stop-loss" : "take-profit",
-      sellPercent: /^stop-loss\b/i.test(String(planWallet.triggerReason || ""))
-        ? 100
-        : (planWallet.triggerSellPercent ?? plan.triggerSellPercent ?? 100)
+      sellPercent: storedSellPercent
     };
     planWallet.triggerStatus = "retrying";
     planWallet.lastTriggerCheckAt = new Date().toISOString();
@@ -5550,9 +5547,7 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
       const stopLossPct = walletStopLossPct(plan, planWallet);
       const ladderLevel = nextTakeProfitLadderLevel(plan, planWallet);
       const takeProfitPct = ladderLevel ? Number(ladderLevel.pct) : walletTakeProfitPct(plan, planWallet);
-      const estimateSellPercent = stopLossPct
-        ? 100
-        : (ladderLevel?.sellPercent ?? planWallet.triggerSellPercent ?? plan.triggerSellPercent ?? 100);
+      const estimateSellPercent = ladderLevel?.sellPercent ?? planWallet.triggerSellPercent ?? plan.triggerSellPercent ?? 100;
       invalidateWalletReadCache(wallet.publicKey);
       const estimate = await estimatePlanWalletMove(plan, wallet, estimateSellPercent);
       planWallet.lastCheckedAt = new Date().toISOString();
@@ -5587,13 +5582,14 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
 
       if (decision?.kind === "stop-loss") {
         const armedPct = Number(stopLossPct).toFixed(2).replace(/\.00$/, "");
+        const stopLossSellPercent = planWallet.triggerSellPercent ?? plan.triggerSellPercent ?? 100;
         triggerReason = `stop-loss ${estimate.movePct.toFixed(2)}% (armed ${armedPct}%)`;
-        triggerMeta = { kind: "stop-loss", sellPercent: 100 };
+        triggerMeta = { kind: "stop-loss", sellPercent: stopLossSellPercent };
         planWallet.triggerStatus = "triggered";
         planWallet.triggerKind = "stop-loss";
         planWallet.triggerTargetPct = stopLossPct;
         planWallet.triggerThresholdPct = stopLossTriggerPct;
-        planWallet.triggerSellPercent = 100;
+        planWallet.triggerSellPercent = stopLossSellPercent;
       } else if (decision?.kind === "take-profit") {
         triggerReason = `take-profit +${estimate.movePct.toFixed(2)}%`;
         triggerMeta = ladderLevel
@@ -5630,17 +5626,18 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
         })) {
           const failures = Number.parseInt(planWallet.estimateFailures || 0, 10);
           const armedPct = Number(stopLossPct).toFixed(2).replace(/\.00$/, "");
+          const stopLossSellPercent = planWallet.triggerSellPercent ?? plan.triggerSellPercent ?? 100;
           triggerReason = `stop-loss quote-failure emergency (${failures} checks, armed ${armedPct}%)`;
           triggerMeta = {
             kind: "stop-loss",
-            sellPercent: 100,
+            sellPercent: stopLossSellPercent,
             quoteFailureEmergency: true
           };
           planWallet.triggerStatus = "triggered";
           planWallet.triggerKind = "stop-loss";
           planWallet.triggerTargetPct = stopLossPct;
           planWallet.triggerThresholdPct = stopLossTriggerPct;
-          planWallet.triggerSellPercent = 100;
+          planWallet.triggerSellPercent = stopLossSellPercent;
           planWallet.lastEmergencyExitReason = planWallet.lastError;
         } else {
           planWallet.triggerStatus = "price-unavailable";
@@ -11782,16 +11779,23 @@ function providerErrorValue(value) {
     return value.map(providerErrorValue).filter(Boolean).join("; ");
   }
   if (typeof value === "object") {
-    return firstString(
+    const nested = [
       value.message,
       value.error,
       value.description,
       value.reason,
       value.detail,
       value.details,
-      providerErrorValue(value.errors),
-      providerErrorValue(value.result?.error)
-    );
+      value.errors,
+      value.result?.error
+    ].map(providerErrorValue).find(Boolean);
+    if (nested) return nested;
+
+    try {
+      return JSON.stringify(value).replace(/\s+/g, " ").slice(0, 500);
+    } catch {
+      return "";
+    }
   }
   return String(value);
 }
@@ -13585,37 +13589,96 @@ async function importWebWallet(userId, body = {}) {
     throw error;
   }
 
-  const keypair = keypairFromSecret(secret);
-  const publicKey = keypair.publicKey.toBase58();
   const store = await readWalletStore();
-  const existing = walletsForOwner(store, userId).find((wallet) => wallet.publicKey === publicKey);
-  if (existing) {
-    const error = new Error(`That wallet is already imported as ${existing.label}.`);
-    error.statusCode = 409;
+  const existing = new Map(walletsForOwner(store, userId).map((wallet) => [wallet.publicKey, wallet]));
+  const candidates = webImportSecretCandidates(secret);
+  const importedRecords = [];
+  const skippedExisting = [];
+  const errors = [];
+
+  for (const [index, candidate] of candidates.entries()) {
+    let keypair;
+    try {
+      keypair = keypairFromSecret(candidate);
+    } catch (error) {
+      errors.push(`Key ${index + 1}: ${friendlyError(error)}`);
+      continue;
+    }
+
+    const publicKey = keypair.publicKey.toBase58();
+    if (existing.has(publicKey)) {
+      skippedExisting.push(`${existing.get(publicKey).label}: ${publicKey}`);
+      continue;
+    }
+
+    const recordLabel = candidates.length === 1 ? label : cleanLabel(`${label} ${importedRecords.length + 1}`);
+    const record = walletRecord(recordLabel, keypair, userId);
+    store.wallets.push(record);
+    existing.set(publicKey, record);
+    importedRecords.push(record);
+  }
+
+  if (importedRecords.length === 0) {
+    const detail = [
+      skippedExisting.length ? `${skippedExisting.length} already imported` : "",
+      errors.length ? errors.slice(0, 3).join(" ") : ""
+    ].filter(Boolean).join(". ");
+    const error = new Error(detail ? `No new wallets were imported. ${detail}` : "No valid wallet private keys were found.");
+    error.statusCode = skippedExisting.length && !errors.length ? 409 : 400;
     throw error;
   }
 
-  const record = walletRecord(label, keypair, userId);
-  store.wallets.push(record);
   await writeWalletStore(store);
   await audit("web_import_wallet", {
     userId,
     label,
-    publicKey
+    imported: importedRecords.length,
+    skippedExisting: skippedExisting.length,
+    errors: errors.slice(0, 5),
+    publicKeys: importedRecords.map((record) => record.publicKey)
   });
 
+  const downloads = webBackupDownloadsForWallets(
+    userId,
+    importedRecords,
+    label,
+    "Automatic web backup after wallet import."
+  );
+
+  const firstRecord = importedRecords[0];
   return {
-    label: record.label,
-    publicKey,
-    shortPublicKey: shortMint(publicKey),
-    downloads: webBackupDownloadsForWallets(
-      userId,
-      [record],
-      label,
-      "Automatic web backup after wallet import."
-    ),
-    message: `Imported ${record.label}: ${publicKey}`
+    label: firstRecord.label,
+    publicKey: firstRecord.publicKey,
+    shortPublicKey: shortMint(firstRecord.publicKey),
+    importedCount: importedRecords.length,
+    skippedCount: skippedExisting.length + errors.length,
+    skippedExisting: skippedExisting.slice(0, 25),
+    errors: errors.slice(0, 10),
+    wallets: importedRecords.map((record, index) => ({
+      index: index + 1,
+      label: record.label,
+      publicKey: record.publicKey,
+      shortPublicKey: shortMint(record.publicKey)
+    })),
+    downloads,
+    message: `Imported ${importedRecords.length} wallet(s)${skippedExisting.length || errors.length ? `, skipped ${skippedExisting.length + errors.length}` : ""}.`
   };
+}
+
+function webImportSecretCandidates(secretText) {
+  const text = String(secretText || "")
+    .trim()
+    .replace(/^```(?:json)?/i, "")
+    .replace(/```$/i, "")
+    .trim();
+  const candidates = [
+    ...looseSecretCandidates(text),
+    ...[...text.matchAll(/\b[1-9A-HJ-NP-Za-km-z]{80,120}\b/g)].map((match) => match[0]),
+    ...[...text.matchAll(/\[(?:\s*\d+\s*,){31,}\s*\d+\s*\]/g)].map((match) => match[0])
+  ];
+
+  if (!candidates.length) candidates.push(text);
+  return [...new Set(candidates.map((item) => String(item || "").trim()).filter(Boolean))];
 }
 
 async function removeWebWallets(userId, body = {}) {
@@ -13822,7 +13885,7 @@ async function webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, buyRe
   const stopLossPct = parseOptionalTriggerPercent(String(body.stopLossPct || "0"));
   const sellDelaySeconds = parseOptionalSellDelaySeconds(firstString(body.sellDelay, body.sellDelaySeconds, "off"));
   const sellPercent = parsePercent(String(body.sellPercent || "100"));
-  const triggerSellPercent = (takeProfitPct || stopLossPct) ? 100 : sellPercent;
+  const triggerSellPercent = sellPercent;
 
   if (!takeProfitPct && !stopLossPct && sellDelaySeconds <= 0) {
     return null;
@@ -13966,6 +14029,7 @@ async function webCreateManagedBuyPlan(userId, wallets, body = {}, options = {})
   const loopCount = parseLoopCount(String(body.loopCount || "1"));
   const loopDelaySeconds = parseLoopDelaySeconds(String(body.loopDelay || body.loopDelaySeconds || "0"));
   const slippageBps = parseWebSlippage(body.slippageBps || options.defaultSlippageBps);
+  const triggerSellPercent = sellPercent;
   const source = options.source || "web_volume";
   const label = options.label || "Plan";
   const results = [];
@@ -14015,7 +14079,7 @@ async function webCreateManagedBuyPlan(userId, wallets, body = {}, options = {})
         takeProfitPct: walletTakeProfitTargets ? walletTakeProfitTargets[String(walletIndex)] || null : null,
         stopLossPct: walletStopLossTargets ? walletStopLossTargets[String(walletIndex)] || null : null,
         completedTakeProfitLevels: [],
-        triggerSellPercent: 100,
+        triggerSellPercent,
         triggerStatus: takeProfitPct || stopLossPct || walletTakeProfitTargets || walletStopLossTargets ? "armed" : "timer-only",
         exitStatus: "watching",
         armedAt: new Date(now).toISOString(),
@@ -14067,7 +14131,7 @@ async function webCreateManagedBuyPlan(userId, wallets, body = {}, options = {})
     sellDelaySeconds,
     sellAfterAt,
     sellPercent,
-    triggerSellPercent: 100,
+    triggerSellPercent,
     loopCount,
     loopDelaySeconds,
     takeProfitPct,
@@ -14823,6 +14887,19 @@ function decodePumpPortalTransaction(value) {
   if (value instanceof Uint8Array || Buffer.isBuffer(value)) {
     return VersionedTransaction.deserialize(new Uint8Array(value));
   }
+  if (Array.isArray(value) && value.every((item) => Number.isInteger(item) && item >= 0 && item <= 255)) {
+    return VersionedTransaction.deserialize(Uint8Array.from(value));
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const tx = decodePumpPortalTransaction(item);
+      if (tx) return tx;
+    }
+    return null;
+  }
+  if (typeof value === "object") {
+    return decodePumpPortalTransaction(firstPumpPortalTransactionValue(value));
+  }
   const encoded = String(value || "").trim();
   if (!encoded) return null;
 
@@ -14836,6 +14913,25 @@ function decodePumpPortalTransaction(value) {
     } catch {
       // Try the next encoding.
     }
+  }
+  return null;
+}
+
+function firstPumpPortalTransactionValue(value = {}) {
+  if (!value || typeof value !== "object") return value;
+  for (const candidate of [
+    value.transaction,
+    value.tx,
+    value.serializedTransaction,
+    value.signedTransaction,
+    value.rawTransaction,
+    value.data,
+    value.result?.transaction,
+    value.result?.tx,
+    value.result?.serializedTransaction,
+    value.result?.data
+  ]) {
+    if (candidate) return candidate;
   }
   return null;
 }
@@ -14870,12 +14966,13 @@ async function requestPumpPortalLocalTransaction(requestPayload, timeoutMs, opti
 
   if (text.startsWith("{") || text.startsWith("[")) {
     const parsed = JSON.parse(text);
-    const encoded = Array.isArray(parsed)
-      ? parsed[0]
-      : firstString(parsed.transaction, parsed.tx, parsed.serializedTransaction, parsed.result?.transaction);
-    const tx = decodePumpPortalTransaction(encoded);
+    const tx = decodePumpPortalTransaction(parsed);
     if (tx) return tx;
-    if (parsed.signature) return { signature: parsed.signature };
+    const signature = Array.isArray(parsed)
+      ? firstString(...parsed.map((item) => item?.signature || item?.txid))
+      : firstString(parsed.signature, parsed.txid, parsed.result?.signature, parsed.result?.txid);
+    if (signature) return { signature };
+    throw new Error(`PumpPortal JSON response did not include a readable transaction. Response: ${providerErrorValue(parsed) || text.replace(/\s+/g, " ").slice(0, 500)}`);
   }
 
   const tx = decodePumpPortalTransaction(raw);
@@ -15484,10 +15581,10 @@ async function webSellAllTokens(userId, body = {}) {
     : null;
   const slippageBps = parseWebSlippage(body.slippageBps || body.slippage || CONFIG.stopLossExitSlippageBps);
   const wallets = selectedWebSweepWallets(store, userId, body);
-  const rows = [];
+  const rows = Array.from({ length: wallets.length });
   const tradeEvents = [];
 
-  for (const wallet of wallets) {
+  await runWithConcurrency(wallets, Math.max(1, Math.min(CONFIG.bundleConcurrency || 3, wallets.length)), async (wallet, index) => {
     const walletRow = {
       ...webWalletRef(wallet),
       ok: false,
@@ -15527,7 +15624,6 @@ async function webSellAllTokens(userId, body = {}) {
             solLamportsReceived: sell.outputLamports,
             signature: sell.signature
           });
-          await sleep(CONFIG.rpcDelayMs);
         } catch (sellError) {
           walletRow.sells.push({
             ok: false,
@@ -15539,7 +15635,6 @@ async function webSellAllTokens(userId, body = {}) {
       }
 
       if (destination && walletRow.sells.some((sell) => sell.ok)) {
-        await sleep(800);
         const sweep = await drainSolFromWallet(keypair, destination);
         walletRow.solSweep = solTransferResultRow(wallet, sweep);
       }
@@ -15547,12 +15642,12 @@ async function webSellAllTokens(userId, body = {}) {
       walletRow.ok = walletRow.sells.some((sell) => sell.ok) || Boolean(walletRow.solSweep?.ok);
       walletRow.message = walletRow.message || `Sold ${walletRow.sells.filter((sell) => sell.ok).length}/${walletRow.sells.length} token(s).`;
       invalidateWalletReadCache(wallet.publicKey);
-      rows.push(walletRow);
+      rows[index] = walletRow;
     } catch (error) {
       walletRow.message = friendlyError(error);
-      rows.push(walletRow);
+      rows[index] = walletRow;
     }
-  }
+  });
 
   if (tradeEvents.length) {
     await recordTradeEvents(tradeEvents);
