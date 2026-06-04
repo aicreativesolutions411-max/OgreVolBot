@@ -87,6 +87,8 @@ let lastKeepAliveStatus = {
 };
 let tradePlanRunnerActive = false;
 let tradePlanRunnerActiveSince = 0;
+let webExitGuardRunnerActive = false;
+let webExitGuardRunnerActiveSince = 0;
 let dcaPlanRunnerActive = false;
 const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const TOKEN_2022_PROGRAM_ID = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
@@ -218,6 +220,7 @@ async function main() {
   startHealthServer();
   startKeepAlivePinger();
   startTradePlanRunner();
+  startWebExitGuardRunner();
   startDcaPlanRunner();
 
   if (CONFIG.webhookUrl) {
@@ -622,6 +625,18 @@ function startTradePlanRunner() {
   }), intervalMs);
 }
 
+function startWebExitGuardRunner() {
+  const initialDelayMs = Math.max(500, Math.min(3_000, CONFIG.stopLossCheckIntervalMs));
+  setTimeout(() => void processWebExitGuards({ forcePriceCheck: true }).catch((error) => {
+    console.error("Web exit guard runner failed:", error.message);
+  }), initialDelayMs);
+
+  const intervalMs = Math.max(500, Math.min(1_500, CONFIG.stopLossCheckIntervalMs));
+  setInterval(() => void processWebExitGuards({ forcePriceCheck: true }).catch((error) => {
+    console.error("Web exit guard runner failed:", error.message);
+  }), intervalMs);
+}
+
 function startDcaPlanRunner() {
   setTimeout(() => void processDcaPlans().catch((error) => {
     console.error("DCA plan runner failed:", error.message);
@@ -978,9 +993,11 @@ async function handleWebApiRequest(request, response, requestUrl) {
     }
 
     if (request.method === "POST" && pathname === "/api/web/trade/plans/run") {
+      const guardResult = await processWebExitGuards({ forcePriceCheck: true });
       const result = await processTradePlans({ forcePriceCheck: true });
       sendWebJson(request, response, 200, {
         ok: true,
+        webExitGuards: guardResult,
         runner: result,
         plans: await webTradePlanRows(auth.userId)
       });
@@ -1530,12 +1547,16 @@ async function runInternalWorkerTick(body = {}) {
   const startedAt = Date.now();
   const result = {
     ranAt: new Date(startedAt).toISOString(),
+    webExitGuards: { skipped: true },
     tradePlans: { skipped: true },
     dcaPlans: { skipped: true },
     feeds: { skipped: true }
   };
 
   if (CONFIG.workerTickRunTradePlans && body.runTradePlans !== false) {
+    result.webExitGuards = await runWorkerTask("webExitGuards", () => processWebExitGuards({
+      forcePriceCheck: body.forceTradePlans !== false
+    }));
     result.tradePlans = await runWorkerTask("tradePlans", () => processTradePlans({
       forcePriceCheck: body.forceTradePlans !== false
     }));
@@ -1729,6 +1750,7 @@ async function ensureDataFiles() {
   await writeJsonIfMissing(auditPath(), { entries: [] });
   await writeJsonIfMissing(statePath(), { paused: false });
   await writeJsonIfMissing(tradePlansPath(), { plans: [] });
+  await writeJsonIfMissing(webExitGuardsPath(), { guards: [] });
   await writeJsonIfMissing(dcaPlansPath(), { plans: [] });
   await writeJsonIfMissing(sniperSettingsPath(), { users: {} });
   await writeJsonIfMissing(tradeHistoryPath(), { trades: [] });
@@ -1794,6 +1816,10 @@ function statePath() {
 
 function tradePlansPath() {
   return path.join(CONFIG.dataDir, "trade-plans.json");
+}
+
+function webExitGuardsPath() {
+  return path.join(CONFIG.dataDir, "web-exit-guards.json");
 }
 
 function dcaPlansPath() {
@@ -5260,6 +5286,14 @@ function scheduleTradePlanProcessing(label = "trade plan", delays = [500, 1500, 
   }
 }
 
+function scheduleWebExitGuardProcessing(label = "web exit guard", delays = [500, 1500, 4000, 10000, 20000]) {
+  for (const delay of delays) {
+    setTimeout(() => void processWebExitGuards({ forcePriceCheck: true }).catch((error) => {
+      console.error(`${label} processing failed:`, error.message);
+    }), delay);
+  }
+}
+
 function isPriceExitTrigger(triggerReason) {
   return /^(take-profit|stop-loss)\b/i.test(String(triggerReason || ""));
 }
@@ -5390,6 +5424,202 @@ function isActiveTimedWalletStatus(status) {
   return ["armed", "watching", "retrying", "submitting", "waiting_next_loop", "timer-only"].includes(String(status || "").toLowerCase());
 }
 
+function isActiveWebExitGuardStatus(status) {
+  return ["armed", "watching", "retrying", "submitting", "timer-only", "price-unavailable"].includes(String(status || "").toLowerCase());
+}
+
+function isTerminalWebExitGuardStatus(status) {
+  return ["sold", "confirmed", "failed", "canceled", "cancelled", "skipped"].includes(String(status || "").toLowerCase());
+}
+
+function webExitGuardKey(planId, walletPublicKey, buySignature = "") {
+  return [
+    String(planId || "").trim(),
+    String(walletPublicKey || "").trim(),
+    String(buySignature || "active").trim()
+  ].join(":");
+}
+
+function shouldArmWebExitGuardForWallet(plan, planWallet) {
+  if (!plan?.id || !plan?.userId || !plan?.tokenMint || !planWallet?.publicKey) return false;
+
+  const loopCount = Number.parseInt(plan.loopCount || 1, 10);
+  if (Number.isInteger(loopCount) && loopCount > 1) return false;
+
+  const sellAfterAt = Date.parse(planWallet.sellAfterAt || plan.sellAfterAt || "");
+  const hasTimer = Number.isFinite(sellAfterAt) || Number(plan.sellDelaySeconds || 0) > 0;
+  return planHasPriceExit(plan, planWallet) || hasTimer;
+}
+
+function isWebManagedExitPlan(plan) {
+  const hasChatId = plan?.chatId !== null && plan?.chatId !== undefined && String(plan.chatId || "").trim() !== "";
+  if (!plan || hasChatId || plan.status !== "watching") return false;
+  const source = String(plan.source || "").toLowerCase();
+  return source.startsWith("web_")
+    || ["autosnipe", "pumpsnipe", "ogre_ai", "manual_launch_snipe"].includes(source);
+}
+
+function buildWebExitGuardFromPlanWallet(plan, planWallet) {
+  const buySignature = String(planWallet.buySignature || "").trim();
+  const sellPercent = clamp(Number.parseInt(
+    planWallet.triggerSellPercent ?? plan.triggerSellPercent ?? plan.sellPercent ?? 100,
+    10
+  ) || 100, 1, 100);
+  const basisLamports = positiveRawString(planWallet.basisLamports || planWallet.swapLamports || planWallet.grossLamports || planWallet.amountLamports) || "0";
+  const grossLamports = positiveRawString(planWallet.grossLamports || planWallet.amountLamports || basisLamports) || basisLamports;
+  const feeLamports = positiveRawString(planWallet.feeLamports) || "0";
+  const takeProfitPct = walletTakeProfitPct(plan, planWallet);
+  const stopLossPct = walletStopLossPct(plan, planWallet);
+  const sellAfterAt = planWallet.sellAfterAt || plan.sellAfterAt || null;
+  const status = isActiveTimedWalletStatus(planWallet.status) ? planWallet.status : "watching";
+  const key = webExitGuardKey(plan.id, planWallet.publicKey, buySignature);
+
+  return {
+    id: crypto.randomUUID(),
+    key,
+    planId: plan.id,
+    userId: plan.userId,
+    source: "web_exit_guard",
+    planSource: plan.source || "web",
+    tokenMint: plan.tokenMint,
+    walletPublicKey: planWallet.publicKey,
+    walletLabel: planWallet.label || "Wallet",
+    walletIndex: planWallet.walletIndex || null,
+    basisLamports,
+    grossLamports,
+    feeLamports,
+    tokenOutAmount: positiveRawString(planWallet.tokenOutAmount) || null,
+    buySignature,
+    takeProfitPct,
+    stopLossPct,
+    sellPercent,
+    sellDelaySeconds: Number(plan.sellDelaySeconds || 0),
+    sellAfterAt,
+    slippageBps: plan.slippageBps || CONFIG.defaultSlippageBps,
+    status,
+    exitStatus: planWallet.exitStatus || "watching",
+    triggerStatus: takeProfitPct || stopLossPct ? "armed" : "timer-only",
+    triggerReason: null,
+    failures: 0,
+    estimateFailures: 0,
+    lastCheckedAt: null,
+    lastMovePct: null,
+    lastError: planWallet.lastError || null,
+    armedAt: new Date().toISOString(),
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+async function safeArmWebExitGuardsForPlan(plan, planWallets) {
+  try {
+    return await upsertWebExitGuardsForPlan(plan, planWallets);
+  } catch (error) {
+    console.warn(`Web exit guard arm failed for plan ${plan?.id || "unknown"}: ${error.message}`);
+    await audit("web_exit_guard_arm_failed", {
+      userId: plan?.userId || null,
+      planId: plan?.id || null,
+      tokenMint: plan?.tokenMint || null,
+      error: friendlyError(error)
+    }).catch(() => {});
+    return { added: 0, updated: 0, error: friendlyError(error) };
+  }
+}
+
+async function upsertWebExitGuardsForPlan(plan, planWallets = []) {
+  const candidates = (Array.isArray(planWallets) ? planWallets : [])
+    .filter((wallet) => shouldArmWebExitGuardForWallet(plan, wallet));
+  if (candidates.length === 0) {
+    return { added: 0, updated: 0 };
+  }
+
+  const store = await readWebExitGuards();
+  const existing = new Map((store.guards || []).map((guard) => [
+    guard.key || webExitGuardKey(guard.planId, guard.walletPublicKey, guard.buySignature),
+    guard
+  ]));
+  let added = 0;
+  let updated = 0;
+
+  for (const planWallet of candidates) {
+    const next = buildWebExitGuardFromPlanWallet(plan, planWallet);
+    const previous = existing.get(next.key);
+    if (!previous) {
+      store.guards.push(next);
+      existing.set(next.key, next);
+      added += 1;
+      continue;
+    }
+
+    if (isTerminalWebExitGuardStatus(previous.status)) continue;
+
+    mergeWebExitGuardUpdate(previous, next);
+    updated += 1;
+  }
+
+  if (added || updated) {
+    await writeWebExitGuards(store);
+    await audit("web_exit_guard_armed", {
+      userId: plan.userId,
+      planId: plan.id,
+      tokenMint: plan.tokenMint,
+      added,
+      updated,
+      wallets: candidates.map((wallet) => wallet.publicKey)
+    });
+    scheduleWebExitGuardProcessing("web exit guard armed", [500, 1000, 2000, 4000, 8000, 15000, 30000]);
+  }
+
+  return { added, updated };
+}
+
+function mergeWebExitGuardUpdate(previous, next) {
+  Object.assign(previous, {
+    ...next,
+    id: previous.id || next.id,
+    key: previous.key || next.key,
+    status: isActiveWebExitGuardStatus(previous.status) ? previous.status : next.status,
+    exitStatus: previous.exitStatus || next.exitStatus,
+    triggerStatus: previous.triggerStatus || next.triggerStatus,
+    triggerReason: previous.triggerReason || next.triggerReason,
+    failures: Number.parseInt(previous.failures || 0, 10) || 0,
+    estimateFailures: Number.parseInt(previous.estimateFailures || 0, 10) || 0,
+    lastCheckedAt: previous.lastCheckedAt || next.lastCheckedAt,
+    lastMovePct: previous.lastMovePct ?? next.lastMovePct,
+    lastError: previous.lastError || next.lastError,
+    armedAt: previous.armedAt || next.armedAt,
+    createdAt: previous.createdAt || next.createdAt,
+    updatedAt: new Date().toISOString()
+  });
+}
+
+function backfillWebExitGuardsFromPlanStore(guardStore, planStore) {
+  const existing = new Map((guardStore.guards || []).map((guard) => [
+    guard.key || webExitGuardKey(guard.planId, guard.walletPublicKey, guard.buySignature),
+    guard
+  ]));
+  let added = 0;
+  let updated = 0;
+
+  for (const plan of planStore.plans || []) {
+    if (!isWebManagedExitPlan(plan)) continue;
+    for (const planWallet of plan.wallets || []) {
+      if (!isActiveTimedWalletStatus(planWallet.status)) continue;
+      if (!shouldArmWebExitGuardForWallet(plan, planWallet)) continue;
+
+      const next = buildWebExitGuardFromPlanWallet(plan, planWallet);
+      const previous = existing.get(next.key);
+      if (!previous) {
+        guardStore.guards.push(next);
+        existing.set(next.key, next);
+        added += 1;
+      }
+    }
+  }
+
+  return { added, updated };
+}
+
 function applyPriceExitTrigger(plan, planWallet, decision, movePct, options = {}) {
   if (!decision) return null;
 
@@ -5464,6 +5694,597 @@ function recentPlanWalletPriceExitFallback(plan, planWallet, now = Date.now(), c
     ladderLevel,
     storedPriceFallback: true
   });
+}
+
+function webExitGuardPlanWallet(guard) {
+  return {
+    label: guard.walletLabel || "Wallet",
+    publicKey: guard.walletPublicKey,
+    walletIndex: guard.walletIndex || null,
+    basisLamports: positiveRawString(guard.basisLamports) || positiveRawString(guard.grossLamports) || "0",
+    grossLamports: positiveRawString(guard.grossLamports) || positiveRawString(guard.basisLamports) || "0",
+    feeLamports: positiveRawString(guard.feeLamports) || "0",
+    tokenOutAmount: positiveRawString(guard.tokenOutAmount) || null,
+    buySignature: guard.buySignature || "",
+    currentLoop: 1,
+    completedLoops: Number.parseInt(guard.completedLoops || 0, 10) || 0,
+    takeProfitPct: Number(guard.takeProfitPct || 0) || null,
+    stopLossPct: Number(guard.stopLossPct || 0) || null,
+    completedTakeProfitLevels: [],
+    sellAfterAt: guard.sellAfterAt || null,
+    triggerSellPercent: guard.sellPercent || 100,
+    triggerStatus: guard.triggerStatus || (guard.takeProfitPct || guard.stopLossPct ? "armed" : "timer-only"),
+    triggerReason: guard.triggerReason || null,
+    triggerKind: guard.triggerKind || null,
+    triggerTargetPct: guard.triggerTargetPct || null,
+    triggerThresholdPct: guard.triggerThresholdPct || null,
+    exitStatus: guard.exitStatus || "watching",
+    status: guard.status || "watching",
+    failures: Number.parseInt(guard.failures || 0, 10) || 0,
+    estimateFailures: Number.parseInt(guard.estimateFailures || 0, 10) || 0,
+    lastCheckedAt: guard.lastCheckedAt || null,
+    lastTriggerCheckAt: guard.lastTriggerCheckAt || guard.lastCheckedAt || null,
+    lastMovePct: guard.lastMovePct ?? null,
+    lastGrossMovePct: guard.lastGrossMovePct ?? guard.lastMovePct ?? null,
+    lastNetMovePct: guard.lastNetMovePct ?? guard.lastMovePct ?? null,
+    lastEstimatedOut: guard.lastEstimatedOut || null,
+    lastEstimatedNetOut: guard.lastEstimatedNetOut || null,
+    lastBasisLamports: guard.lastBasisLamports || guard.basisLamports || null,
+    lastError: guard.lastError || null,
+    retryAfterAt: guard.retryAfterAt || null,
+    nextRetryAt: guard.nextRetryAt || guard.retryAfterAt || null,
+    lastSellAttemptAt: guard.lastSellAttemptAt || null
+  };
+}
+
+function webExitGuardPlan(guard, planWallet = null) {
+  const wallet = planWallet || webExitGuardPlanWallet(guard);
+  const gross = positiveBigIntOrZero(guard.grossLamports || guard.basisLamports);
+  return {
+    id: guard.planId || guard.id,
+    userId: guard.userId,
+    chatId: null,
+    tokenMint: guard.tokenMint,
+    source: "web_exit_guard",
+    executionMode: "managed_server",
+    amountSol: gross > 0n ? lamportsBigToSol(gross) : "0",
+    sellDelaySeconds: Number(guard.sellDelaySeconds || 0),
+    sellAfterAt: guard.sellAfterAt || null,
+    sellPercent: guard.sellPercent || 100,
+    triggerSellPercent: guard.sellPercent || 100,
+    loopCount: 1,
+    loopDelaySeconds: 0,
+    takeProfitPct: Number(guard.takeProfitPct || 0) || 0,
+    stopLossPct: Number(guard.stopLossPct || 0) || 0,
+    takeProfitMode: "single",
+    stopLossMode: "single",
+    takeProfitLadder: [],
+    slippageBps: guard.slippageBps || CONFIG.defaultSlippageBps,
+    wallets: [wallet]
+  };
+}
+
+function copyWebExitGuardFieldsFromPlanWallet(guard, planWallet) {
+  for (const key of [
+    "tokenOutAmount",
+    "lastCheckedAt",
+    "lastTriggerCheckAt",
+    "lastMovePct",
+    "lastGrossMovePct",
+    "lastNetMovePct",
+    "lastEstimatedOut",
+    "lastEstimatedNetOut",
+    "lastBasisLamports",
+    "lastMonitorSlippageBps",
+    "lastStopLossPct",
+    "lastTakeProfitPct",
+    "lastStopLossTriggerPct",
+    "lastTriggerPriceSource",
+    "lastShouldTriggerStopLoss",
+    "lastShouldTriggerTakeProfit",
+    "triggerStatus",
+    "triggerKind",
+    "triggerTargetPct",
+    "triggerThresholdPct",
+    "triggerSellPercent",
+    "lastEmergencyExitReason",
+    "lastError",
+    "estimateFailures",
+    "lastPriceEstimateError"
+  ]) {
+    if (planWallet[key] !== undefined) guard[key] = planWallet[key];
+  }
+  guard.updatedAt = new Date().toISOString();
+}
+
+function findTradePlanWalletForGuard(planStore, guard) {
+  const plan = (planStore.plans || []).find((item) => item.id === guard.planId);
+  if (!plan) return null;
+  const wallets = Array.isArray(plan.wallets) ? plan.wallets : [];
+  const exact = wallets.find((wallet) => (
+    wallet.publicKey === guard.walletPublicKey
+    && (!guard.buySignature || !wallet.buySignature || wallet.buySignature === guard.buySignature)
+  ));
+  const fallback = exact || wallets.find((wallet) => wallet.publicKey === guard.walletPublicKey);
+  return fallback ? { plan, planWallet: fallback } : null;
+}
+
+function tradePlanWalletConfirmedExit(planWallet) {
+  const status = String(planWallet?.status || "").toLowerCase();
+  const exitStatus = String(planWallet?.exitStatus || "").toLowerCase();
+  return ["sold", "confirmed"].includes(status)
+    || ["sold", "confirmed"].includes(exitStatus);
+}
+
+function tradePlanWalletCanceled(planWallet) {
+  const status = String(planWallet?.status || "").toLowerCase();
+  const exitStatus = String(planWallet?.exitStatus || "").toLowerCase();
+  return ["canceled", "cancelled"].includes(status)
+    || ["canceled", "cancelled"].includes(exitStatus);
+}
+
+function syncWebExitGuardFromPlanStore(guard, planStore) {
+  const match = findTradePlanWalletForGuard(planStore, guard);
+  if (!match) return false;
+
+  let changed = false;
+  if (!guard.tokenOutAmount && match.planWallet.tokenOutAmount) {
+    guard.tokenOutAmount = match.planWallet.tokenOutAmount;
+    changed = true;
+  }
+
+  if (tradePlanWalletConfirmedExit(match.planWallet)) {
+    guard.status = "sold";
+    guard.exitStatus = "confirmed";
+    guard.triggerStatus = "confirmed";
+    guard.triggerReason = guard.triggerReason || match.planWallet.triggerReason || "closed by trade plan";
+    guard.sellSignature = guard.sellSignature || match.planWallet.sellSignature || "";
+    guard.soldAt = guard.soldAt || match.planWallet.soldAt || new Date().toISOString();
+    guard.updatedAt = new Date().toISOString();
+    changed = true;
+  }
+
+  if (tradePlanWalletCanceled(match.planWallet)) {
+    guard.status = "canceled";
+    guard.exitStatus = "canceled";
+    guard.triggerStatus = "canceled";
+    guard.triggerReason = guard.triggerReason || "trade plan canceled";
+    guard.updatedAt = new Date().toISOString();
+    changed = true;
+  }
+
+  return changed;
+}
+
+function webExitGuardSold(guard) {
+  const status = String(guard?.status || "").toLowerCase();
+  const exitStatus = String(guard?.exitStatus || "").toLowerCase();
+  return ["sold", "confirmed"].includes(status) || ["sold", "confirmed"].includes(exitStatus);
+}
+
+async function markTradePlanWalletExitedFromGuard(guard, sell = {}, triggerReason = "web exit guard") {
+  if (!guard?.planId || !guard?.walletPublicKey) return false;
+
+  const store = await readTradePlans();
+  const match = findTradePlanWalletForGuard(store, guard);
+  if (!match) return false;
+
+  const { plan, planWallet } = match;
+  if (tradePlanWalletConfirmedExit(planWallet) && planWallet.sellSignature) return false;
+
+  const now = new Date().toISOString();
+  const priceExit = isPriceExitTrigger(triggerReason);
+  planWallet.status = "sold";
+  planWallet.exitStatus = "confirmed";
+  planWallet.triggerStatus = priceExit ? "confirmed" : (planWallet.triggerStatus || "timer-confirmed");
+  planWallet.triggerReason = triggerReason;
+  planWallet.triggerKind = guard.triggerKind || (priceExit ? (/^stop-loss\b/i.test(String(triggerReason)) ? "stop-loss" : "take-profit") : null);
+  planWallet.triggerTargetPct = guard.triggerTargetPct ?? planWallet.triggerTargetPct ?? null;
+  planWallet.triggerThresholdPct = guard.triggerThresholdPct ?? planWallet.triggerThresholdPct ?? null;
+  planWallet.triggerSellPercent = guard.triggerSellPercent || guard.sellPercent || planWallet.triggerSellPercent || plan.triggerSellPercent || 100;
+  planWallet.sellSignature = sell.signature || guard.sellSignature || planWallet.sellSignature || "";
+  planWallet.sellFeeStatus = sell.feeStatus || planWallet.sellFeeStatus || "";
+  planWallet.completedLoops = Math.max(1, Number.parseInt(planWallet.completedLoops || 0, 10) || 0);
+  planWallet.failures = 0;
+  planWallet.error = null;
+  planWallet.lastError = null;
+  planWallet.retryAfterAt = null;
+  planWallet.nextRetryAt = null;
+  planWallet.lastMovePct = guard.lastMovePct ?? planWallet.lastMovePct ?? null;
+  planWallet.lastGrossMovePct = guard.lastGrossMovePct ?? planWallet.lastGrossMovePct ?? null;
+  planWallet.lastNetMovePct = guard.lastNetMovePct ?? planWallet.lastNetMovePct ?? null;
+  planWallet.soldAt = guard.soldAt || now;
+  planWallet.updatedAt = now;
+  plan.results = appendLimited(plan.results, `${planWallet.label || guard.walletLabel}: closed by web exit guard - ${triggerReason}`);
+
+  if ((plan.wallets || []).every((wallet) => !isActiveTimedWalletStatus(wallet.status))) {
+    plan.status = "completed";
+    plan.completedAt = plan.completedAt || now;
+  }
+
+  await writeTradePlans(store);
+  return true;
+}
+
+async function processWebExitGuards(options = {}) {
+  if (webExitGuardRunnerActive) {
+    const activeForMs = webExitGuardRunnerActiveSince ? Date.now() - webExitGuardRunnerActiveSince : 0;
+    if (activeForMs > CONFIG.tradePlanRunnerStaleMs) {
+      console.warn(`Web exit guard runner was active for ${activeForMs}ms; clearing stale lock so web TP/SL checks can continue.`);
+      webExitGuardRunnerActive = false;
+      webExitGuardRunnerActiveSince = 0;
+    } else {
+      return {
+        skipped: true,
+        reason: "web_exit_guard_runner_active",
+        activeSince: webExitGuardRunnerActiveSince ? new Date(webExitGuardRunnerActiveSince).toISOString() : null,
+        activeForMs
+      };
+    }
+  }
+
+  webExitGuardRunnerActive = true;
+  webExitGuardRunnerActiveSince = Date.now();
+  const summary = {
+    checkedGuards: 0,
+    changedGuards: 0,
+    triggeredGuards: 0,
+    soldGuards: 0,
+    failedGuards: 0,
+    messages: []
+  };
+
+  try {
+    const state = await readState();
+    if (state.paused) {
+      summary.skipped = true;
+      summary.reason = "bot_paused";
+      return summary;
+    }
+
+    const guardStore = await readWebExitGuards();
+    const planStore = await readTradePlans();
+    let changed = false;
+    const backfill = backfillWebExitGuardsFromPlanStore(guardStore, planStore);
+    if (backfill.added || backfill.updated) {
+      changed = true;
+      summary.backfilledGuards = backfill;
+      await audit("web_exit_guard_backfilled", {
+        added: backfill.added,
+        updated: backfill.updated
+      }).catch(() => {});
+      scheduleWebExitGuardProcessing("web exit guard backfill", [500, 1500, 3000, 6000]);
+    }
+
+    const walletStore = await readWalletStore();
+
+    for (const guard of guardStore.guards) {
+      if (syncWebExitGuardFromPlanStore(guard, planStore)) {
+        changed = true;
+      }
+
+      if (webExitGuardSold(guard)) {
+        if (await markTradePlanWalletExitedFromGuard(guard, {
+          signature: guard.sellSignature || "",
+          feeStatus: guard.sellFeeStatus || ""
+        }, guard.triggerReason || "web exit guard")) {
+          changed = true;
+        }
+        continue;
+      }
+
+      if (!isActiveWebExitGuardStatus(guard.status)) continue;
+
+      summary.checkedGuards += 1;
+      const result = await processWebExitGuard(guard, walletStore, {
+        forcePriceCheck: Boolean(options.forcePriceCheck),
+        persistCheckpoint: async () => {
+          await writeWebExitGuards(guardStore);
+        }
+      });
+
+      if (result.changed) {
+        changed = true;
+        summary.changedGuards += 1;
+      }
+      if (result.triggered) summary.triggeredGuards += 1;
+      if (result.sold) summary.soldGuards += 1;
+      if (result.failed) summary.failedGuards += 1;
+      if (result.message) {
+        summary.messages.push(result.message);
+      }
+    }
+
+    if (changed) {
+      await writeWebExitGuards(guardStore);
+    }
+    summary.messages = summary.messages.slice(-20);
+    return summary;
+  } finally {
+    webExitGuardRunnerActive = false;
+    webExitGuardRunnerActiveSince = 0;
+  }
+}
+
+async function processWebExitGuard(guard, walletStore, options = {}) {
+  const now = Date.now();
+  const retryAfterAt = Date.parse(guard.retryAfterAt || guard.nextRetryAt || "");
+  if (Number.isFinite(retryAfterAt) && now < retryAfterAt) {
+    return { changed: false, message: null };
+  }
+
+  const wallet = walletsForOwner(walletStore, guard.userId).find((item) => item.publicKey === guard.walletPublicKey);
+  if (!wallet) {
+    guard.status = "failed";
+    guard.exitStatus = "failed";
+    guard.lastError = "wallet not found";
+    guard.updatedAt = new Date().toISOString();
+    return { changed: true, failed: true, message: `${guard.walletLabel || guard.walletPublicKey}: web exit guard failed - wallet not found` };
+  }
+
+  const planWallet = webExitGuardPlanWallet(guard);
+  const plan = webExitGuardPlan(guard, planWallet);
+  const timerAt = Date.parse(guard.sellAfterAt || "");
+  const timerDue = Number.isFinite(timerAt) && now >= timerAt;
+  let triggerReason = null;
+  let triggerMeta = null;
+
+  if (!triggerReason && staleSubmittingExit({
+    status: guard.status,
+    exitStatus: guard.exitStatus,
+    triggerReason: guard.triggerReason,
+    lastSellAttemptAt: guard.lastSellAttemptAt,
+    now,
+    staleMs: CONFIG.stopLossSubmitStaleMs
+  })) {
+    triggerReason = guard.triggerReason;
+    triggerMeta = {
+      kind: /^stop-loss\b/i.test(String(guard.triggerReason || "")) ? "stop-loss" : "take-profit",
+      sellPercent: guard.triggerSellPercent || guard.sellPercent || 100,
+      staleSubmitRetry: true
+    };
+    guard.status = "retrying";
+    guard.exitStatus = "retrying";
+    guard.triggerStatus = "retrying";
+    guard.retryAfterAt = null;
+    guard.nextRetryAt = null;
+    guard.lastError = "Previous web price-exit sell stayed submitting too long; retrying now.";
+  }
+
+  if (
+    !triggerReason
+    && isPriceExitTrigger(guard.triggerReason)
+    && Number.parseInt(guard.failures || 0, 10) > 0
+    && !isTerminalWebExitGuardStatus(guard.status)
+  ) {
+    triggerReason = guard.triggerReason;
+    triggerMeta = {
+      kind: /^stop-loss\b/i.test(String(guard.triggerReason || "")) ? "stop-loss" : "take-profit",
+      sellPercent: guard.triggerSellPercent || guard.sellPercent || 100
+    };
+    guard.triggerStatus = "retrying";
+  }
+
+  if (!triggerReason && planHasPriceExit(plan, planWallet)) {
+    const lastCheckedAt = Date.parse(guard.lastCheckedAt || "");
+    const previousPriceCheckAt = guard.lastTriggerCheckAt || guard.lastCheckedAt;
+    if (!options.forcePriceCheck && !timerDue && Number.isFinite(lastCheckedAt) && now - lastCheckedAt < CONFIG.stopLossCheckIntervalMs) {
+      return { changed: false, message: null };
+    }
+
+    try {
+      const stopLossPct = walletStopLossPct(plan, planWallet);
+      const takeProfitPct = walletTakeProfitPct(plan, planWallet);
+      const estimateSellPercent = guard.triggerSellPercent || guard.sellPercent || 100;
+      invalidateWalletReadCache(wallet.publicKey);
+      const estimate = await estimatePlanWalletMove(plan, wallet, estimateSellPercent, {
+        priority: true
+      });
+      planWallet.lastCheckedAt = new Date().toISOString();
+      planWallet.lastMovePct = estimate.movePct;
+      planWallet.lastGrossMovePct = estimate.grossMovePct ?? estimate.movePct;
+      planWallet.lastNetMovePct = estimate.netMovePct ?? estimate.movePct;
+      planWallet.lastEstimateSource = estimate.source || "jupiter";
+      planWallet.lastEstimatedNetOut = estimate.estimatedNetOut?.toString?.() || null;
+      planWallet.lastEstimatedOut = estimate.estimatedOut?.toString?.() || null;
+      planWallet.lastBasisLamports = estimate.basis?.toString?.() || null;
+      planWallet.lastMonitorSlippageBps = estimate.monitorSlippageBps || CONFIG.stopLossMonitorSlippageBps;
+      planWallet.lastError = estimate.quoteError ? `Jupiter quote fallback: ${estimate.quoteError}` : null;
+      planWallet.estimateFailures = 0;
+      planWallet.lastPriceEstimateError = null;
+      planWallet.triggerStatus = "watching";
+      planWallet.lastTriggerCheckAt = planWallet.lastCheckedAt;
+      planWallet.triggerCheckIntervalMs = CONFIG.stopLossCheckIntervalMs;
+
+      const stopLossTriggerPct = stopLossTriggerPercent(stopLossPct, CONFIG.stopLossTriggerBufferPct);
+      planWallet.lastStopLossPct = stopLossPct || null;
+      planWallet.lastTakeProfitPct = takeProfitPct || null;
+      planWallet.lastStopLossTriggerPct = stopLossTriggerPct || null;
+      planWallet.lastTriggerPriceSource = estimate.source || "jupiter";
+      planWallet.lastShouldTriggerStopLoss = stopLossTriggerPct > 0 && estimate.movePct <= -stopLossTriggerPct;
+      planWallet.lastShouldTriggerTakeProfit = Number.isFinite(Number(takeProfitPct)) && Number(takeProfitPct) > 0 && estimate.movePct >= Number(takeProfitPct);
+      const decision = priceExitDecision({
+        movePct: estimate.movePct,
+        takeProfitPct,
+        stopLossPct,
+        stopLossBufferPct: CONFIG.stopLossTriggerBufferPct
+      });
+      const trigger = applyPriceExitTrigger(plan, planWallet, decision, estimate.movePct);
+      copyWebExitGuardFieldsFromPlanWallet(guard, planWallet);
+      guard.status = "watching";
+      guard.exitStatus = "watching";
+      if (trigger) {
+        triggerReason = trigger.triggerReason;
+        triggerMeta = trigger.triggerMeta;
+      } else {
+        return { changed: true, message: null };
+      }
+    } catch (error) {
+      planWallet.lastCheckedAt = new Date().toISOString();
+      planWallet.lastError = friendlyError(error);
+      planWallet.estimateFailures = Number.parseInt(guard.estimateFailures || 0, 10) + 1;
+      planWallet.lastPriceEstimateError = planWallet.lastError;
+      planWallet.lastTriggerCheckAt = planWallet.lastCheckedAt;
+
+      if (timerDue) {
+        planWallet.triggerStatus = "timer-triggered";
+        triggerReason = "timer";
+      } else {
+        const movePct = Number(guard.lastMovePct ?? guard.lastGrossMovePct);
+        const decision = recentStoredPriceExitDecision({
+          movePct,
+          lastCheckedAt: previousPriceCheckAt,
+          now,
+          maxAgeMs: Math.max(30_000, Math.min(300_000, CONFIG.stopLossCheckIntervalMs * 150)),
+          takeProfitPct: walletTakeProfitPct(plan, planWallet),
+          stopLossPct: walletStopLossPct(plan, planWallet),
+          stopLossBufferPct: CONFIG.stopLossTriggerBufferPct
+        });
+        const fallbackTrigger = applyPriceExitTrigger(plan, planWallet, decision, movePct, {
+          storedPriceFallback: true
+        });
+        if (fallbackTrigger) {
+          triggerReason = fallbackTrigger.triggerReason;
+          triggerMeta = fallbackTrigger.triggerMeta;
+          planWallet.lastEmergencyExitReason = `Fresh quote failed after a recent web guard trigger-level check: ${planWallet.lastError}`;
+        }
+      }
+
+      if (!triggerReason && !timerDue) {
+        const stopLossPct = walletStopLossPct(plan, planWallet);
+        const stopLossTriggerPct = stopLossTriggerPercent(stopLossPct, CONFIG.stopLossTriggerBufferPct);
+        if (shouldEmergencySellOnPriceFailure({
+          stopLossPct,
+          estimateFailures: planWallet.estimateFailures,
+          minFailures: CONFIG.stopLossPriceFailureSellAfter
+        })) {
+          const failures = Number.parseInt(planWallet.estimateFailures || 0, 10);
+          const armedPct = Number(stopLossPct).toFixed(2).replace(/\.00$/, "");
+          const stopLossSellPercent = guard.triggerSellPercent || guard.sellPercent || 100;
+          triggerReason = `stop-loss quote-failure emergency (${failures} checks, armed ${armedPct}%)`;
+          triggerMeta = {
+            kind: "stop-loss",
+            sellPercent: stopLossSellPercent,
+            quoteFailureEmergency: true
+          };
+          planWallet.triggerStatus = "triggered";
+          planWallet.triggerKind = "stop-loss";
+          planWallet.triggerTargetPct = stopLossPct;
+          planWallet.triggerThresholdPct = stopLossTriggerPct;
+          planWallet.triggerSellPercent = stopLossSellPercent;
+          planWallet.lastEmergencyExitReason = planWallet.lastError;
+        } else {
+          planWallet.triggerStatus = "price-unavailable";
+          copyWebExitGuardFieldsFromPlanWallet(guard, planWallet);
+          return { changed: true, message: null };
+        }
+      }
+
+      copyWebExitGuardFieldsFromPlanWallet(guard, planWallet);
+    }
+  }
+
+  if (!triggerReason && timerDue) {
+    triggerReason = "timer";
+    guard.triggerStatus = "timer-triggered";
+  }
+
+  if (!triggerReason) {
+    return { changed: false, message: null };
+  }
+
+  try {
+    const triggeredAt = new Date().toISOString();
+    guard.status = "submitting";
+    guard.exitStatus = "submitting";
+    guard.triggeredAt = guard.triggeredAt || triggeredAt;
+    guard.triggerReason = triggerReason;
+    guard.lastSellAttemptAt = triggeredAt;
+    guard.updatedAt = triggeredAt;
+    invalidateWalletReadCache(wallet.publicKey);
+    const priceExitTrigger = isPriceExitTrigger(triggerReason);
+    const sellPercent = effectiveTimedSellPercent(plan, planWallet, triggerReason, triggerMeta);
+    if (priceExitTrigger) {
+      guard.triggerStatus = "submitting";
+      guard.triggerKind = triggerMeta?.kind || (/^stop-loss\b/i.test(String(triggerReason || "")) ? "stop-loss" : "take-profit");
+      guard.triggerSellPercent = sellPercent;
+    }
+    const exitSlippageBps = priceExitTrigger
+      ? Math.max(Number(plan.slippageBps || 0), CONFIG.stopLossExitSlippageBps)
+      : plan.slippageBps;
+    guard.exitSlippageBps = exitSlippageBps;
+    if (typeof options.persistCheckpoint === "function") {
+      guard.preSellCheckpointAt = new Date().toISOString();
+      await options.persistCheckpoint();
+    }
+
+    const sell = await sellTradePlanWalletWithRetries(plan, planWallet, wallet, sellPercent, exitSlippageBps, {
+      userId: guard.userId,
+      priceExit: priceExitTrigger
+    });
+    invalidateWalletReadCache(wallet.publicKey);
+    sell.sellPercent = sellPercent;
+    planWallet.completedLoops = 1;
+    await recordTradeEvents([{
+      userId: guard.userId,
+      type: "sell",
+      source: "web_exit_guard",
+      tokenMint: guard.tokenMint,
+      walletLabel: wallet.label,
+      walletPublicKey: wallet.publicKey,
+      tokenAmount: sell.tokenAmount,
+      solLamportsReceived: sell.outputLamports,
+      signature: sell.signature
+    }]);
+
+    guard.status = "sold";
+    guard.exitStatus = "confirmed";
+    guard.triggerStatus = priceExitTrigger ? "confirmed" : (guard.triggerStatus || "timer-confirmed");
+    guard.sellSignature = sell.signature;
+    guard.sellFeeStatus = sell.feeStatus;
+    guard.failures = 0;
+    guard.error = null;
+    guard.lastError = null;
+    guard.retryAfterAt = null;
+    guard.nextRetryAt = null;
+    guard.soldAt = new Date().toISOString();
+    guard.updatedAt = guard.soldAt;
+    await markTradePlanWalletExitedFromGuard(guard, sell, triggerReason);
+    return {
+      changed: true,
+      triggered: priceExitTrigger,
+      sold: true,
+      message: formatTimedSellSuccessLine(planWallet, sell, triggerReason, 1)
+    };
+  } catch (error) {
+    const failures = Number.parseInt(guard.failures || 0, 10) + 1;
+    const priceExit = isPriceExitTrigger(triggerReason);
+    const maxFailures = priceExit ? 90 : 30;
+    const retryDelayMs = failures >= maxFailures ? 0 : (priceExit ? Math.min(6_000, 500 * failures) : Math.min(12_000, 750 * failures));
+    guard.failures = failures;
+    guard.status = failures >= maxFailures ? "failed" : (priceExit ? "retrying" : "watching");
+    guard.exitStatus = failures >= maxFailures ? "failed" : (priceExit ? "retrying" : "watching");
+    guard.triggerStatus = failures >= maxFailures ? "failed" : (priceExit ? "retrying" : "watching");
+    guard.triggerReason = triggerReason;
+    guard.error = friendlyError(error);
+    guard.lastError = friendlyError(error);
+    guard.lastFailedAt = new Date().toISOString();
+    guard.retryAfterAt = retryDelayMs > 0 ? new Date(Date.now() + retryDelayMs).toISOString() : null;
+    guard.nextRetryAt = guard.retryAfterAt;
+    guard.updatedAt = new Date().toISOString();
+    if (priceExit) {
+      if (typeof options.persistCheckpoint === "function") {
+        await options.persistCheckpoint();
+      }
+      scheduleWebExitGuardProcessing("web price-exit guard retry", [500, 1500, 3000, 6000]);
+    }
+    return {
+      changed: true,
+      triggered: priceExit,
+      failed: failures >= maxFailures,
+      message: `${guard.walletLabel || guard.walletPublicKey}: web exit guard sell failed by ${triggerReason} (${failures}/${maxFailures}) - ${friendlyError(error)}${failures < maxFailures ? `. Will retry in ${Math.ceil(retryDelayMs / 1000)}s.` : ""}`
+    };
+  }
 }
 
 async function processTradePlans(options = {}) {
@@ -12070,6 +12891,8 @@ function defaultJsonForPath(filePath) {
     case "trade-plans.json":
     case "dca-plans.json":
       return { plans: [] };
+    case "web-exit-guards.json":
+      return { guards: [] };
     case "sniper-settings.json":
       return { users: {} };
     case "trade-history.json":
@@ -12123,6 +12946,16 @@ async function writeTradePlansPreservingNewPlans(store, initialPlanIds = new Set
     ? { ...store, plans: [...(store.plans || []), ...newPlans] }
     : store;
   await writeTradePlans(merged);
+}
+
+async function readWebExitGuards() {
+  const store = await readJson(webExitGuardsPath());
+  if (!Array.isArray(store.guards)) store.guards = [];
+  return store;
+}
+
+async function writeWebExitGuards(store) {
+  await writeJsonFile(webExitGuardsPath(), store);
 }
 
 async function webTradePlanRows(userId) {
@@ -14120,6 +14953,7 @@ async function webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, buyRe
   });
 
   scheduleTradePlanProcessing("single trade auto-exit", [500, 1200, 2500, 5000, 8000, 12000, 20000, 30000]);
+  await safeArmWebExitGuardsForPlan(plan, [planWallet]);
 
   const timerSummary = sellDelaySeconds > 0 ? formatDelay(sellDelaySeconds) : "timer off";
   return {
@@ -14319,6 +15153,7 @@ async function webCreateManagedBuyPlan(userId, wallets, body = {}, options = {})
   });
 
   scheduleTradePlanProcessing(`${label} auto-exit`, [500, 1200, 2500, 5000, 8000, 12000, 20000, 30000]);
+  await safeArmWebExitGuardsForPlan(plan, planWallets);
 
   return {
     id: plan.id,
