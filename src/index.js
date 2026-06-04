@@ -89,6 +89,7 @@ let tradePlanRunnerActive = false;
 let tradePlanRunnerActiveSince = 0;
 let webExitGuardRunnerActive = false;
 let webExitGuardRunnerActiveSince = 0;
+let webExitGuardLiveBackfillAt = 0;
 let dcaPlanRunnerActive = false;
 const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const TOKEN_2022_PROGRAM_ID = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
@@ -988,6 +989,14 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendWebJson(request, response, 200, {
         ok: true,
         plans: await webTradePlanRows(auth.userId)
+      });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/exit-guards") {
+      sendWebJson(request, response, 200, {
+        ok: true,
+        guards: await webExitGuardRows(auth.userId)
       });
       return;
     }
@@ -5440,6 +5449,26 @@ function webExitGuardKey(planId, walletPublicKey, buySignature = "") {
   ].join(":");
 }
 
+function webWalletTokenGuardKey(userId, walletPublicKey, tokenMint) {
+  return [
+    String(userId || "").trim(),
+    String(walletPublicKey || "").trim(),
+    String(tokenMint || "").trim()
+  ].join(":");
+}
+
+function activeWebExitGuardCovers(guard, userId, walletPublicKey, tokenMint) {
+  if (!guard || !isActiveWebExitGuardStatus(guard.status)) return false;
+  return String(guard.userId || "") === String(userId || "")
+    && String(guard.walletPublicKey || "") === String(walletPublicKey || "")
+    && String(guard.tokenMint || "") === String(tokenMint || "");
+}
+
+function eligibleWebDefaultExitSource(source) {
+  const text = String(source || "").toLowerCase();
+  return text.startsWith("web_") || text === "ogre_ai";
+}
+
 function shouldArmWebExitGuardForWallet(plan, planWallet) {
   if (!plan?.id || !plan?.userId || !plan?.tokenMint || !planWallet?.publicKey) return false;
 
@@ -5449,6 +5478,16 @@ function shouldArmWebExitGuardForWallet(plan, planWallet) {
   const sellAfterAt = Date.parse(planWallet.sellAfterAt || plan.sellAfterAt || "");
   const hasTimer = Number.isFinite(sellAfterAt) || Number(plan.sellDelaySeconds || 0) > 0;
   return planHasPriceExit(plan, planWallet) || hasTimer;
+}
+
+function defaultWebExitGuardSettings() {
+  return {
+    takeProfitPct: 25,
+    stopLossPct: 8,
+    sellPercent: 100,
+    sellDelaySeconds: 0,
+    slippageBps: CONFIG.defaultSlippageBps
+  };
 }
 
 function isWebManagedExitPlan(plan) {
@@ -5571,6 +5610,127 @@ async function upsertWebExitGuardsForPlan(plan, planWallets = []) {
   }
 
   return { added, updated };
+}
+
+async function backfillWebExitGuardsFromLiveWebPositions(guardStore, walletStore) {
+  const history = await readTradeHistory();
+  const entries = new Map();
+
+  for (const trade of history.trades || []) {
+    if (!eligibleWebDefaultExitSource(trade.source)) continue;
+    if (!trade.userId || !trade.walletPublicKey || !trade.tokenMint) continue;
+    const key = webWalletTokenGuardKey(trade.userId, trade.walletPublicKey, trade.tokenMint);
+    const entry = entries.get(key) || {
+      userId: trade.userId,
+      walletPublicKey: trade.walletPublicKey,
+      walletLabel: trade.walletLabel || "Wallet",
+      tokenMint: trade.tokenMint,
+      spent: 0n,
+      received: 0n,
+      tokenAmount: 0n,
+      buyCount: 0,
+      sellCount: 0,
+      lastSource: trade.source || "web_trade",
+      lastTradeAt: trade.timestamp || null,
+      lastBuySignature: ""
+    };
+
+    if (trade.type === "buy") {
+      entry.spent += positiveBigIntOrZero(trade.solLamportsSpent);
+      entry.tokenAmount += positiveBigIntOrZero(trade.tokenAmount);
+      entry.buyCount += 1;
+      entry.lastSource = trade.source || entry.lastSource;
+      entry.lastBuySignature = trade.signature || entry.lastBuySignature;
+    } else if (trade.type === "sell") {
+      entry.received += positiveBigIntOrZero(trade.solLamportsReceived);
+      entry.sellCount += 1;
+    }
+
+    entry.walletLabel = trade.walletLabel || entry.walletLabel;
+    entry.lastTradeAt = trade.timestamp || entry.lastTradeAt;
+    entries.set(key, entry);
+  }
+
+  const activeGuardKeys = new Set((guardStore.guards || [])
+    .filter((guard) => isActiveWebExitGuardStatus(guard.status))
+    .map((guard) => webWalletTokenGuardKey(guard.userId, guard.walletPublicKey, guard.tokenMint)));
+  const existingTerminalKeys = new Set((guardStore.guards || [])
+    .filter((guard) => isTerminalWebExitGuardStatus(guard.status))
+    .map((guard) => guard.key || ""));
+  const candidates = [...entries.values()].filter((entry) => (
+    entry.buyCount > 0
+    && entry.spent > 0n
+    && !activeGuardKeys.has(webWalletTokenGuardKey(entry.userId, entry.walletPublicKey, entry.tokenMint))
+  ));
+  let added = 0;
+  const settings = defaultWebExitGuardSettings();
+
+  await runWithConcurrency(candidates, Math.min(2, Math.max(1, CONFIG.balanceConcurrency)), async (entry) => {
+    const ownerWallets = walletsForOwner(walletStore, entry.userId);
+    const wallet = ownerWallets.find((item) => item.publicKey === entry.walletPublicKey);
+    if (!wallet) return;
+
+    let token;
+    try {
+      token = await getReliableTokenBalanceForMint(new PublicKey(wallet.publicKey), new PublicKey(entry.tokenMint), {
+        throwOnError: false,
+        priority: true
+      });
+    } catch {
+      token = null;
+    }
+    if (!token || token.rawAmount <= 0n) return;
+
+    const openBasis = entry.spent > entry.received ? entry.spent - entry.received : entry.spent;
+    if (openBasis <= 0n) return;
+
+    const key = `position:${webWalletTokenGuardKey(entry.userId, entry.walletPublicKey, entry.tokenMint)}:${entry.lastBuySignature || entry.buyCount}`;
+    if (existingTerminalKeys.has(key)) return;
+
+    guardStore.guards.push({
+      id: crypto.randomUUID(),
+      key,
+      planId: null,
+      userId: entry.userId,
+      source: "web_position_default_guard",
+      planSource: entry.lastSource,
+      tokenMint: entry.tokenMint,
+      walletPublicKey: entry.walletPublicKey,
+      walletLabel: entry.walletLabel || wallet.label || "Wallet",
+      walletIndex: wallet.webIndex || null,
+      basisLamports: openBasis.toString(),
+      grossLamports: openBasis.toString(),
+      feeLamports: "0",
+      tokenOutAmount: token.rawAmount.toString(),
+      buySignature: entry.lastBuySignature || "position-backfill",
+      takeProfitPct: settings.takeProfitPct,
+      stopLossPct: settings.stopLossPct,
+      sellPercent: settings.sellPercent,
+      sellDelaySeconds: settings.sellDelaySeconds,
+      sellAfterAt: null,
+      slippageBps: settings.slippageBps,
+      status: "watching",
+      exitStatus: "watching",
+      triggerStatus: "armed",
+      triggerReason: null,
+      failures: 0,
+      estimateFailures: 0,
+      lastCheckedAt: null,
+      lastMovePct: null,
+      lastError: null,
+      backfilledFromLivePosition: true,
+      buyCount: entry.buyCount,
+      sellCount: entry.sellCount,
+      lastTradeAt: entry.lastTradeAt,
+      armedAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
+    activeGuardKeys.add(webWalletTokenGuardKey(entry.userId, entry.walletPublicKey, entry.tokenMint));
+    added += 1;
+  });
+
+  return { added, updated: 0 };
 }
 
 function mergeWebExitGuardUpdate(previous, next) {
@@ -5944,6 +6104,7 @@ async function processWebExitGuards(options = {}) {
 
     const guardStore = await readWebExitGuards();
     const planStore = await readTradePlans();
+    const walletStore = await readWalletStore();
     let changed = false;
     const backfill = backfillWebExitGuardsFromPlanStore(guardStore, planStore);
     if (backfill.added || backfill.updated) {
@@ -5956,7 +6117,22 @@ async function processWebExitGuards(options = {}) {
       scheduleWebExitGuardProcessing("web exit guard backfill", [500, 1500, 3000, 6000]);
     }
 
-    const walletStore = await readWalletStore();
+    const shouldLiveBackfill = options.forceBackfill
+      || !webExitGuardLiveBackfillAt
+      || Date.now() - webExitGuardLiveBackfillAt > 30_000;
+    if (shouldLiveBackfill) {
+      webExitGuardLiveBackfillAt = Date.now();
+      const liveBackfill = await backfillWebExitGuardsFromLiveWebPositions(guardStore, walletStore);
+      if (liveBackfill.added || liveBackfill.updated) {
+        changed = true;
+        summary.liveBackfilledGuards = liveBackfill;
+        await audit("web_exit_guard_live_position_backfilled", {
+          added: liveBackfill.added,
+          updated: liveBackfill.updated
+        }).catch(() => {});
+        scheduleWebExitGuardProcessing("web live position guard backfill", [500, 1500, 3000, 6000]);
+      }
+    }
 
     for (const guard of guardStore.guards) {
       if (syncWebExitGuardFromPlanStore(guard, planStore)) {
@@ -12958,6 +13134,42 @@ async function writeWebExitGuards(store) {
   await writeJsonFile(webExitGuardsPath(), store);
 }
 
+async function webExitGuardRows(userId) {
+  const store = await readWebExitGuards();
+  return (store.guards || [])
+    .filter((guard) => String(guard.userId || "") === String(userId || ""))
+    .sort((a, b) => Date.parse(b.updatedAt || b.createdAt || 0) - Date.parse(a.updatedAt || a.createdAt || 0))
+    .slice(0, 100)
+    .map((guard) => ({
+      id: guard.id || "",
+      key: guard.key || "",
+      planId: guard.planId || null,
+      source: guard.source || "",
+      planSource: guard.planSource || "",
+      tokenMint: guard.tokenMint || "",
+      shortMint: guard.tokenMint ? shortMint(guard.tokenMint) : "",
+      walletLabel: guard.walletLabel || "Wallet",
+      walletPublicKey: guard.walletPublicKey || "",
+      shortPublicKey: guard.walletPublicKey ? shortMint(guard.walletPublicKey) : "",
+      status: guard.status || "",
+      exitStatus: guard.exitStatus || "",
+      triggerStatus: guard.triggerStatus || "",
+      triggerReason: guard.triggerReason || "",
+      takeProfitPct: guard.takeProfitPct || "",
+      stopLossPct: guard.stopLossPct || "",
+      sellPercent: guard.sellPercent || "",
+      lastMovePct: guard.lastMovePct ?? null,
+      lastCheckedAt: guard.lastCheckedAt || "",
+      lastError: guard.lastError || guard.error || "",
+      failures: guard.failures || 0,
+      estimateFailures: guard.estimateFailures || 0,
+      sellSignature: guard.sellSignature || "",
+      backfilledFromLivePosition: Boolean(guard.backfilledFromLivePosition),
+      createdAt: guard.createdAt || "",
+      updatedAt: guard.updatedAt || ""
+    }));
+}
+
 async function webTradePlanRows(userId) {
   const store = await readTradePlans();
   return (store.plans || [])
@@ -14741,6 +14953,7 @@ function webBackupDownloadsForWallets(userId, wallets, groupLabel, note) {
 }
 
 function webAutoExitRequested(body = {}) {
+  if (webAutoExitExplicitlyDisabled(body)) return false;
   if (cleanLaunchBoolean(body.autoExit)) return true;
 
   const hasExitFields = body.takeProfitPct !== undefined
@@ -14755,12 +14968,40 @@ function webAutoExitRequested(body = {}) {
   return Boolean(takeProfitPct || stopLossPct || sellDelaySeconds > 0);
 }
 
+function webAutoExitExplicitlyDisabled(body = {}) {
+  if (body.disableAutoExit !== undefined && cleanLaunchBoolean(body.disableAutoExit)) return true;
+  if (body.autoExit === undefined) return false;
+  const text = String(body.autoExit).trim().toLowerCase();
+  return ["0", "false", "no", "off", "disabled"].includes(text) || body.autoExit === false;
+}
+
+function webQuickBuyAutoExitBody(body = {}) {
+  if (webAutoExitExplicitlyDisabled(body)) return body;
+
+  const requested = webAutoExitRequested(body);
+  const hasExitFields = body.takeProfitPct !== undefined
+    || body.stopLossPct !== undefined
+    || body.sellDelay !== undefined
+    || body.sellDelaySeconds !== undefined;
+  return {
+    ...body,
+    autoExit: true,
+    takeProfitPct: firstString(body.takeProfitPct, hasExitFields ? "0" : "25"),
+    stopLossPct: firstString(body.stopLossPct, hasExitFields ? "0" : "8"),
+    sellDelay: firstString(body.sellDelay, body.sellDelaySeconds, "off"),
+    sellPercent: firstString(body.sellPercent, "100"),
+    defaultAutoExit: !requested
+  };
+}
+
 async function webTradeBuy(userId, body = {}) {
   const store = await readWalletStore();
   const wallet = getWalletAt(store, parseWebWalletIndex(body.walletIndex), userId);
   const tokenMint = parsePublicKey(String(body.tokenMint || "")).toBase58();
   const slippageBps = parseWebSlippage(body.slippageBps);
-  const autoExitPermission = webAutoExitRequested(body)
+  const autoExitBody = webQuickBuyAutoExitBody(body);
+  const autoExitRequested = webAutoExitRequested(autoExitBody);
+  const autoExitPermission = autoExitRequested
     ? await requireWebAutomationPermission(userId, "quick-buy auto exits")
     : null;
   const amountLamports = await webBuyAmountLamports(wallet, body);
@@ -14788,8 +15029,8 @@ async function webTradeBuy(userId, body = {}) {
     signature: result.signature
   });
 
-  const autoExitPlan = webAutoExitRequested(body)
-    ? await webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, result, body, slippageBps, autoExitPermission)
+  const autoExitPlan = autoExitRequested
+    ? await webCreateSingleTradeAutoExitPlan(userId, wallet, tokenMint, result, autoExitBody, slippageBps, autoExitPermission)
     : null;
   const baseMessage = `${wallet.label} bought ${shortMint(tokenMint)} with ${lamportsToSol(result.amountLamports)} SOL.`;
 
@@ -14806,7 +15047,8 @@ async function webTradeBuy(userId, body = {}) {
     signature: result.signature,
     attempts: result.attempts,
     dexUrl: dexScreenerUrl(tokenMint),
-    autoExitRequested: webAutoExitRequested(body),
+    autoExitRequested,
+    autoExitDefaulted: Boolean(autoExitBody.defaultAutoExit),
     autoExitArmed: Boolean(autoExitPlan),
     autoExitPlan,
     message: autoExitPlan ? `${baseMessage} ${autoExitPlan.shortMessage}` : baseMessage

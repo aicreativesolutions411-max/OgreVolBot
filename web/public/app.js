@@ -2056,7 +2056,7 @@ function tradeHtml() {
         <div class="trade-block">
           <div>
             <h4>Buy</h4>
-            <p>Quick SOL amounts include the bot fee and keep the safety reserve. Optional auto-exit arms only the selected wallet.</p>
+            <p>Quick SOL amounts include the bot fee and keep the safety reserve. Auto-exit defaults to TP +25% and SL -8% for the selected wallet.</p>
           </div>
           <div class="quick-grid">
             <button class="primary" data-trade-buy-quick="0.1">Buy .10 SOL</button>
@@ -2072,9 +2072,9 @@ function tradeHtml() {
             <label>
               Take Profit
               <select data-trade-auto-tp data-custom-select="trade-auto-tp">
-                <option value="0" selected>Off</option>
+                <option value="0">Off</option>
                 <option value="15">+15%</option>
-                <option value="25">+25%</option>
+                <option value="25" selected>+25%</option>
                 <option value="50">+50%</option>
                 <option value="100">+100%</option>
                 <option value="custom">Custom</option>
@@ -2084,8 +2084,8 @@ function tradeHtml() {
             <label>
               Stop Loss
               <select data-trade-auto-sl data-custom-select="trade-auto-sl">
-                <option value="0" selected>Off</option>
-                <option value="8">-8%</option>
+                <option value="0">Off</option>
+                <option value="8" selected>-8%</option>
                 <option value="10">-10%</option>
                 <option value="15">-15%</option>
                 <option value="25">-25%</option>
@@ -4986,8 +4986,8 @@ function normalizeTimerSellSettings(sellDelay, sellPercent) {
 }
 
 function readSingleTradeAutoExit() {
-  const takeProfitPct = fieldValue("[data-trade-auto-tp]", "[data-trade-auto-tp-custom]", "0");
-  const stopLossPct = fieldValue("[data-trade-auto-sl]", "[data-trade-auto-sl-custom]", "0");
+  const takeProfitPct = fieldValue("[data-trade-auto-tp]", "[data-trade-auto-tp-custom]", "25");
+  const stopLossPct = fieldValue("[data-trade-auto-sl]", "[data-trade-auto-sl-custom]", "8");
   let sellDelay = fieldValue("[data-trade-auto-delay]", "[data-trade-auto-delay-custom]", "off");
   let sellPercent = fieldValue("[data-trade-auto-sell-percent]", "[data-trade-auto-sell-percent-custom]", "100");
   ({ sellDelay, sellPercent } = normalizeTimerSellSettings(sellDelay, sellPercent));
