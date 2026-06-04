@@ -3,10 +3,11 @@ import fsSync from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  assertPinataAuthWorks,
   assertPinataConfigured,
   DEFAULT_PINATA_AUTH_TEST_URL,
   DEFAULT_PINATA_METADATA_URL,
-  makePinataAuthHeader,
+  sanitizePinataProviderBody,
   safePinataDiagnostics
 } from "../src/lib/pinataMetadata.js";
 
@@ -50,9 +51,7 @@ function compact(value = "") {
 }
 
 function safeProviderSnippet(value = "") {
-  return compact(value)
-    .replace(/(Bearer\s+)[A-Za-z0-9._-]+/gi, "$1[redacted]")
-    .replace(/([A-Za-z0-9_-]*token[A-Za-z0-9_-]*["']?\s*[:=]\s*["']?)[^"',\s]+/gi, "$1[redacted]");
+  return sanitizePinataProviderBody(compact(value));
 }
 
 function attemptLine(attempt) {
@@ -68,35 +67,20 @@ function attemptLine(attempt) {
 }
 
 async function providerAuthTest() {
-  let headers;
   try {
-    headers = makePinataAuthHeader(tokenValue);
-  } catch (error) {
-    return {
-      ok: false,
-      skipped: true,
-      reason: error.message
-    };
-  }
-
-  try {
-    const response = await fetch(authTestUrl, {
-      method: "GET",
-      headers,
-      signal: AbortSignal.timeout ? AbortSignal.timeout(10000) : undefined
+    return await assertPinataAuthWorks({
+      tokenValue,
+      authTestUrl,
+      timeoutMs: 10000
     });
-    const text = await response.text();
-    return {
-      ok: response.ok,
-      skipped: false,
-      status: response.status,
-      bodySnippet: safeProviderSnippet(text)
-    };
   } catch (error) {
     return {
       ok: false,
-      skipped: false,
-      reason: error.message || "provider auth test failed"
+      skipped: error.code === "PUMP_METADATA_CONFIG_MISSING" || error.code === "PUMP_METADATA_CONFIG_PLACEHOLDER",
+      code: error.code || "",
+      status: error.providerStatus || error.status || error.statusCode || "",
+      bodySnippet: safeProviderSnippet(error.providerResponseBody || error.responseBody || ""),
+      reason: error.message
     };
   }
 }
@@ -132,7 +116,7 @@ const authResult = configured
   ? await providerAuthTest()
   : { ok: false, skipped: true, reason: configReason || "Pinata config missing" };
 
-console.log("PUMP METADATA DEBUG");
+console.log("PUMP PINATA DEBUG");
 console.log(`NODE_ENV=${process.env.NODE_ENV || "(not set)"}`);
 console.log(`RENDER_SERVICE_NAME=${process.env.RENDER_SERVICE_NAME || process.env.RENDER_SERVICE_ID || "(not set)"}`);
 console.log(`RENDER_EXTERNAL_HOSTNAME=${process.env.RENDER_EXTERNAL_HOSTNAME || "(not set)"}`);
@@ -140,12 +124,16 @@ console.log(`dataDir=${dataDir}`);
 console.log(`PUMP_LAUNCH_PINATA_JWT_PRESENT=${diagnostics.tokenPresent}`);
 console.log(`PUMP_LAUNCH_PINATA_JWT_LENGTH=${diagnostics.tokenLength}`);
 console.log(`PUMP_LAUNCH_PINATA_JWT_CLEANED=${diagnostics.cleaned}`);
+console.log(`PUMP_LAUNCH_PINATA_JWT_PLACEHOLDER=${diagnostics.placeholder}`);
 console.log(`tokenHadQuotes=${diagnostics.hadSurroundingQuotes}`);
 console.log(`tokenHadWhitespace=${diagnostics.hadOuterWhitespace || diagnostics.hadTokenWhitespace}`);
 console.log(`tokenHadBearerPrefix=${diagnostics.hadBearerPrefix}`);
+console.log(`authHeaderShapeValid=${Boolean(configured && diagnostics.tokenPresent && !diagnostics.placeholder)}`);
 console.log(`PUMP_LAUNCH_METADATA_URL=${metadataUrl || "(missing)"}`);
 console.log(`imageUploadConfigExists=${Boolean(configured && typeof FormData !== "undefined" && typeof Blob !== "undefined")}`);
 console.log(`metadataJsonUploadConfigExists=${Boolean(configured && typeof FormData !== "undefined" && typeof Blob !== "undefined")}`);
+console.log("imageUploadUsesSameAuthHelper=true");
+console.log("metadataJsonUploadUsesSameAuthHelper=true");
 console.log(`pinataNetwork=public`);
 console.log(`providerAuthTest=${JSON.stringify(authResult)}`);
 

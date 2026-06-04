@@ -151,6 +151,7 @@ console.log(`PUMP_LAUNCH_METADATA_URL=${metadataUrl || "(missing)"}`);
 console.log(`PUMP_LAUNCH_PINATA_JWT_CONFIGURED=${pinataDiagnostics.tokenPresent}`);
 console.log(`PUMP_LAUNCH_PINATA_JWT_LENGTH=${pinataDiagnostics.tokenLength}`);
 console.log(`PUMP_LAUNCH_PINATA_JWT_CLEANED=${pinataDiagnostics.cleaned}`);
+console.log(`PUMP_LAUNCH_PINATA_JWT_PLACEHOLDER=${pinataDiagnostics.placeholder}`);
 console.log(`SOLANA_RPC_URL_CONFIGURED=${Boolean(rpcUrl)}`);
 console.log(`DEBUG_PUMP_LAUNCH_USER_ID=${userId || "(not set)"}`);
 console.log(`DEBUG_PUMP_LAUNCH_DEV_WALLET=${selectedDevWalletId || "(not set)"}`);

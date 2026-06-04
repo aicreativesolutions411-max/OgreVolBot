@@ -1,6 +1,7 @@
 export const DEFAULT_PINATA_METADATA_URL = "https://uploads.pinata.cloud/v3/files";
 export const DEFAULT_PINATA_AUTH_TEST_URL = "https://api.pinata.cloud/data/testAuthentication";
 export const PINATA_METADATA_STAGE = "metadata_upload";
+const PINATA_PLACEHOLDER_PATTERN = /^(?:your[-_\s]?)?(?:pinata[-_\s]?)?(?:jwt|token|api[-_\s]?key|secret)$|placeholder|change[-_\s]?me|replace[-_\s]?me|example|dummy|test[-_\s]?token/i;
 
 function stripMatchingQuotes(value) {
   let token = String(value || "").trim();
@@ -40,12 +41,18 @@ export function pinataTokenDiagnostics(value = "") {
     hadBearerPrefix,
     hadTokenWhitespace,
     cleaned: hadOuterWhitespace || hadSurroundingQuotes || hadAuthorizationPrefix || hadBearerPrefix || hadTokenWhitespace,
+    placeholder: isPlaceholderPinataJwt(token),
     cleanToken: token
   };
 }
 
 export function cleanToken(value = "") {
   return pinataTokenDiagnostics(value).cleanToken;
+}
+
+export function isPlaceholderPinataJwt(value = "") {
+  const token = String(value || "").trim();
+  return !token || PINATA_PLACEHOLDER_PATTERN.test(token);
 }
 
 export function createPinataMetadataError(message, code, statusCode = 500, extra = {}) {
@@ -62,16 +69,23 @@ export function getPinataJwt(env = process.env) {
 }
 
 export function makePinataAuthHeader(tokenValue = process.env.PUMP_LAUNCH_PINATA_JWT) {
-  const token = cleanToken(tokenValue);
-  if (!token) {
+  const diagnostics = pinataTokenDiagnostics(tokenValue);
+  if (!diagnostics.tokenPresent) {
     throw createPinataMetadataError(
       "Pinata metadata upload JWT is missing.",
       "PUMP_METADATA_CONFIG_MISSING",
       500
     );
   }
+  if (diagnostics.placeholder) {
+    throw createPinataMetadataError(
+      "Pinata metadata upload JWT is a placeholder.",
+      "PUMP_METADATA_CONFIG_PLACEHOLDER",
+      500
+    );
+  }
   return {
-    Authorization: `Bearer ${token}`
+    Authorization: `Bearer ${diagnostics.cleanToken}`
   };
 }
 
@@ -87,6 +101,17 @@ export function assertPinataConfigured({
       500,
       {
         tokenPresent: false
+      }
+    );
+  }
+  if (diagnostics.placeholder) {
+    throw createPinataMetadataError(
+      "Pinata metadata upload JWT is a placeholder.",
+      "PUMP_METADATA_CONFIG_PLACEHOLDER",
+      500,
+      {
+        tokenPresent: true,
+        tokenLength: diagnostics.tokenLength
       }
     );
   }
@@ -111,9 +136,90 @@ export function assertPinataConfigured({
     hadAuthorizationPrefix: diagnostics.hadAuthorizationPrefix,
     hadBearerPrefix: diagnostics.hadBearerPrefix,
     hadTokenWhitespace: diagnostics.hadTokenWhitespace,
+    placeholder: diagnostics.placeholder,
     metadataUrl: endpoint,
     authHeader: makePinataAuthHeader(diagnostics.cleanToken)
   };
+}
+
+export function sanitizePinataProviderBody(value = "") {
+  return String(value || "")
+    .replace(/(Bearer\s+)[A-Za-z0-9._-]+/gi, "$1[redacted]")
+    .replace(/([A-Za-z0-9_-]*(?:jwt|token|secret|api[-_ ]?key)[A-Za-z0-9_-]*["']?\s*[:=]\s*["']?)[^"',\s]+/gi, "$1[redacted]")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 1000);
+}
+
+export async function assertPinataAuthWorks({
+  tokenValue = process.env.PUMP_LAUNCH_PINATA_JWT,
+  authTestUrl = DEFAULT_PINATA_AUTH_TEST_URL,
+  fetchImpl = globalThis.fetch,
+  timeoutMs = 10000
+} = {}) {
+  const headers = makePinataAuthHeader(tokenValue);
+  if (typeof fetchImpl !== "function") {
+    throw createPinataMetadataError(
+      "Pinata auth test cannot run because fetch is unavailable.",
+      "PUMP_METADATA_AUTH_TEST_UNAVAILABLE",
+      500
+    );
+  }
+
+  const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const timer = controller && Number.isFinite(Number(timeoutMs)) && Number(timeoutMs) > 0
+    ? setTimeout(() => controller.abort(), Number(timeoutMs))
+    : null;
+  let response;
+  let text = "";
+  try {
+    response = await fetchImpl(authTestUrl, {
+      method: "GET",
+      headers,
+      signal: controller?.signal
+    });
+    text = await response.text();
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw createPinataMetadataError(
+        `Pinata auth test timed out after ${timeoutMs}ms.`,
+        "PUMP_METADATA_AUTH_TEST_FAILED",
+        502,
+        { cause: error }
+      );
+    }
+    throw createPinataMetadataError(
+      error?.message || "Pinata auth test failed.",
+      "PUMP_METADATA_AUTH_TEST_FAILED",
+      502,
+      { cause: error }
+    );
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+
+  const result = {
+    ok: Boolean(response?.ok),
+    status: response?.status || 0,
+    bodySnippet: sanitizePinataProviderBody(text)
+  };
+
+  if (!response?.ok) {
+    throw createPinataMetadataError(
+      "Pinata metadata upload provider rejected authorization.",
+      response?.status === 401 || response?.status === 403
+        ? "PUMP_METADATA_AUTH_FAILED"
+        : "PUMP_METADATA_AUTH_TEST_FAILED",
+      502,
+      {
+        providerStatus: response?.status || 0,
+        providerResponseBody: result.bodySnippet,
+        authTest: result
+      }
+    );
+  }
+
+  return result;
 }
 
 export function pinataProviderError(error, fallbackMessage = "Pinata metadata upload failed.") {
@@ -129,8 +235,8 @@ export function pinataProviderError(error, fallbackMessage = "Pinata metadata up
       cause: error,
       status,
       providerStatus: status,
-      responseBody: error?.responseBody || "",
-      providerResponseBody: error?.responseBody || ""
+      responseBody: sanitizePinataProviderBody(error?.responseBody || ""),
+      providerResponseBody: sanitizePinataProviderBody(error?.responseBody || "")
     }
   );
 }

@@ -51,6 +51,7 @@ import {
   validatePumpPortalLocalApiUrl
 } from "./lib/pumpLaunchService.js";
 import {
+  assertPinataAuthWorks,
   assertPinataConfigured,
   pinataProviderError,
   pinataPublicUriFromUpload
@@ -16911,6 +16912,14 @@ async function uploadPumpLaunchMetadata(basePayload = {}) {
   });
   if (typeof FormData === "undefined" || typeof Blob === "undefined") {
     throw new Error("This Node runtime does not support metadata uploads. Use Node 20+ on Render.");
+  }
+  try {
+    await assertPinataAuthWorks({
+      tokenValue: CONFIG.pumpLaunchPinataJwt,
+      timeoutMs: Math.min(CONFIG.pumpLaunchTimeoutMs || 30000, 15000)
+    });
+  } catch (error) {
+    throw pinataProviderError(error, "Pinata auth preflight failed.");
   }
 
   const image = await launchImageBufferForUpload(basePayload);

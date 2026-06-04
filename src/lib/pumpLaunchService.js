@@ -8,6 +8,7 @@ export const PUMP_LAUNCH_STATUS = Object.freeze({
   PENDING: "PENDING",
   VALIDATING: "VALIDATING",
   UPLOADING_METADATA: "UPLOADING_METADATA",
+  METADATA_UPLOADED: "METADATA_UPLOADED",
   BUILDING_TX: "BUILDING_TX",
   SIGNING: "SIGNING",
   SENDING: "SENDING",
@@ -18,7 +19,6 @@ export const PUMP_LAUNCH_STATUS = Object.freeze({
   FAILED: "FAILED",
   STARTED: "PENDING",
   PREFLIGHT: "VALIDATING",
-  METADATA_UPLOADED: "UPLOADING_METADATA",
   PUMPPORTAL_REQUESTED: "BUILDING_TX",
   SIGNED: "SIGNING",
   SUBMITTED: "SENDING",
@@ -331,6 +331,7 @@ export function formatPumpLaunchUserError(error) {
   if (code === "PUMP_LAUNCH_NOT_ENABLED") return `Direct Pump launch is not enabled on the backend.${launchAttemptId}`;
   if (code === "PUMP_LAUNCH_API_URL_INVALID") return `${message}${launchAttemptId}`;
   if (code === "PUMP_METADATA_CONFIG_MISSING") return `Metadata upload is not configured. Contact support with${launchAttemptId || " the launch attempt ID"}.`;
+  if (code === "PUMP_METADATA_CONFIG_PLACEHOLDER") return `Metadata upload is not configured. Contact support with${launchAttemptId || " the launch attempt ID"}.`;
   if (code === "PUMP_METADATA_AUTH_FAILED") return `Metadata upload provider rejected authorization. Contact support with${launchAttemptId || " the launch attempt ID"}.`;
   if (code === "MISSING_DEV_WALLET") return "Choose a managed SlimeWire dev wallet before launching.";
   if (code === "DEV_WALLET_NOT_AUTHORIZED") return message;
@@ -505,7 +506,7 @@ export class PumpLaunchService {
       }
       await this.saveAttempt({
         id: attemptId,
-        status: PUMP_LAUNCH_STATUS.UPLOADING_METADATA,
+        status: PUMP_LAUNCH_STATUS.METADATA_UPLOADED,
         stage: PUMP_LAUNCH_STAGE.METADATA_UPLOAD,
         metadataUri: metadata.uri,
         imageUri: metadata.imageUri || "",
@@ -676,7 +677,7 @@ export class PumpLaunchService {
       error.launchAttemptId = error.launchAttemptId || attemptId;
       if (submittedSignature && !error.txSignature) error.txSignature = submittedSignature;
       const failureReason = formatPumpLaunchUserError(error);
-      const failureStatus = ["PUMP_METADATA_AUTH_FAILED", "PUMP_METADATA_CONFIG_MISSING"].includes(error.code)
+      const failureStatus = ["PUMP_METADATA_AUTH_FAILED", "PUMP_METADATA_CONFIG_MISSING", "PUMP_METADATA_CONFIG_PLACEHOLDER"].includes(error.code)
         ? PUMP_LAUNCH_STATUS.FAILED_METADATA_AUTH
         : PUMP_LAUNCH_STATUS.FAILED;
       await this.saveAttempt({
