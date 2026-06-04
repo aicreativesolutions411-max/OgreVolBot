@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   calculateMoveSnapshot,
   priceExitDecision,
+  recentStoredPriceExitDecision,
   shouldEmergencySellOnPriceFailure,
   staleSubmittingExit,
   stopLossTriggerPercent
@@ -105,6 +106,46 @@ test("price estimate failure emergency does not trigger without stop-loss", () =
     estimateFailures: 0,
     minFailures: 2
   }), false);
+});
+
+test("recent stored price breach can rescue a failed fresh quote", () => {
+  const now = Date.parse("2026-06-04T12:00:00.000Z");
+  assert.deepEqual(recentStoredPriceExitDecision({
+    movePct: -50,
+    lastCheckedAt: "2026-06-04T11:59:58.000Z",
+    now,
+    maxAgeMs: 300000,
+    stopLossPct: 8,
+    stopLossBufferPct: 1.5
+  }), {
+    kind: "stop-loss",
+    triggerPct: 6.5,
+    targetPct: 8,
+    sellPercent: 100
+  });
+
+  assert.deepEqual(recentStoredPriceExitDecision({
+    movePct: 50,
+    lastCheckedAt: "2026-06-04T11:59:58.000Z",
+    now,
+    maxAgeMs: 300000,
+    takeProfitPct: 25
+  }), {
+    kind: "take-profit",
+    triggerPct: 25,
+    targetPct: 25
+  });
+});
+
+test("stale stored price breach is ignored", () => {
+  assert.equal(recentStoredPriceExitDecision({
+    movePct: -50,
+    lastCheckedAt: "2026-06-04T11:00:00.000Z",
+    now: Date.parse("2026-06-04T12:00:00.000Z"),
+    maxAgeMs: 300000,
+    stopLossPct: 8,
+    stopLossBufferPct: 1.5
+  }), null);
 });
 
 test("stale submitting price exits are eligible for retry", () => {

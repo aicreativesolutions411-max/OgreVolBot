@@ -249,6 +249,7 @@ let walletBackgroundRefreshTimer = null;
 let postTradeRefreshTimers = [];
 let autoExitWatchTimer = null;
 let autoExitWatchUntil = 0;
+let autoExitCheckInFlight = false;
 
 const $ = (selector) => document.querySelector(selector);
 const writeText = (element, value) => {
@@ -4192,12 +4193,19 @@ async function runTradePlanCheck() {
     setError("Log in or create a web account before checking server exits.");
     return;
   }
+  if (autoExitCheckInFlight) {
+    state.automationDelegationStatus = "TP/SL check is already running. Keeping the existing sell check active.";
+    render();
+    return;
+  }
+  autoExitCheckInFlight = true;
   state.walletRefreshing = true;
   render();
   try {
     const data = await api("/api/web/trade/plans/run", {
       method: "POST",
-      body: JSON.stringify({})
+      body: JSON.stringify({}),
+      timeoutMs: API_LONG_ACTION_TIMEOUT_MS
     });
     state.tradePlans = data.plans || state.tradePlans || [];
     const runner = data.runner || {};
@@ -4217,6 +4225,7 @@ async function runTradePlanCheck() {
     state.walletRefreshError = error.message;
     setError(error.message);
   } finally {
+    autoExitCheckInFlight = false;
     state.walletRefreshing = false;
     render();
   }
@@ -4234,10 +4243,13 @@ function autoExitRunnerSummary(runner = {}) {
 
 async function runTradePlanCheckSilently({ refreshCore = true } = {}) {
   if (!state.user || !state.token) return;
+  if (autoExitCheckInFlight) return;
+  autoExitCheckInFlight = true;
   try {
     const data = await api("/api/web/trade/plans/run", {
       method: "POST",
-      body: JSON.stringify({})
+      body: JSON.stringify({}),
+      timeoutMs: API_LONG_ACTION_TIMEOUT_MS
     });
     state.tradePlans = data.plans || state.tradePlans || [];
     state.automationDelegationStatus = autoExitRunnerSummary(data.runner || {});
@@ -4247,6 +4259,8 @@ async function runTradePlanCheckSilently({ refreshCore = true } = {}) {
   } catch (error) {
     state.automationDelegationStatus = `Auto-exit check failed: ${error.message}`;
     render();
+  } finally {
+    autoExitCheckInFlight = false;
   }
 }
 

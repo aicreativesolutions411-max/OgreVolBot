@@ -28,6 +28,7 @@ import {
 import {
   calculateMoveSnapshot,
   priceExitDecision,
+  recentStoredPriceExitDecision,
   shouldEmergencySellOnPriceFailure,
   staleSubmittingExit,
   stopLossTriggerPercent
@@ -49,7 +50,13 @@ const DEFAULT_MANUAL_LAUNCH_SCAN_INTERVAL_MS = 1500;
 const CONFIG = loadConfig();
 const connection = new Connection(CONFIG.rpcUrl, "confirmed");
 const rpcLimiter = createRpcLimiter();
+const priorityRpcLimiter = createRpcLimiter({
+  minIntervalMs: Math.min(CONFIG.rpcMinIntervalMs, 75)
+});
 const jupiterLimiter = createJupiterLimiter();
+const priorityJupiterLimiter = createJupiterLimiter({
+  minIntervalMs: Math.min(CONFIG.jupiterMinIntervalMs, 75)
+});
 const sessions = new Map();
 const mintProgramCache = new Map();
 const dexMetadataCache = new Map();
@@ -4915,7 +4922,10 @@ async function buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps, o
 
 async function sellTokenFromWallet(wallet, tokenMint, percent, slippageBps, options = {}) {
   const keypair = decryptWallet(wallet);
-  const token = await getReliableTokenBalanceForMint(keypair.publicKey, new PublicKey(tokenMint), { throwOnError: true });
+  const token = await getReliableTokenBalanceForMint(keypair.publicKey, new PublicKey(tokenMint), {
+    throwOnError: true,
+    priority: Boolean(options.priority)
+  });
   if (!token || token.rawAmount === 0n) {
     throw new Error("no token balance");
   }
@@ -4946,7 +4956,8 @@ async function sellTokenAmountFromWallet(wallet, tokenMint, amount, slippageBps,
       inputMint: tokenMint,
       outputMint: SOL_MINT,
       amount: sellAmount.toString(),
-      slippageBps
+      slippageBps,
+      priority: Boolean(options.priority || options.priceExit)
     });
   } catch (jupiterError) {
     if (!CONFIG.pumpPortalSellFallbackEnabled) {
@@ -4987,7 +4998,10 @@ async function sellTokenAmountFromWalletViaPumpPortal(wallet, tokenMint, sellAmo
     ? Math.max(0.01, Math.min(100, percent))
     : null;
   if (sellPercent === null) {
-    const token = await getReliableTokenBalanceForMint(keypair.publicKey, new PublicKey(tokenMint), { throwOnError: true });
+    const token = await getReliableTokenBalanceForMint(keypair.publicKey, new PublicKey(tokenMint), {
+      throwOnError: true,
+      priority: Boolean(options.priority || options.priceExit)
+    });
     const currentRaw = BigInt(token?.rawAmount || 0);
     if (currentRaw <= 0n) {
       throw new Error("no token balance");
@@ -4996,7 +5010,10 @@ async function sellTokenAmountFromWalletViaPumpPortal(wallet, tokenMint, sellAmo
     sellPercent = Math.max(0.01, Math.min(100, bps));
   }
   const slippagePct = Math.max(0.01, Math.min(50, (Number.parseInt(slippageBps, 10) || CONFIG.defaultSlippageBps) / 100));
-  const beforeSol = await rpcWithRetry("read SOL before PumpPortal sell", () => connection.getBalance(keypair.publicKey, "confirmed")).catch(() => null);
+  const priority = Boolean(options.priority || options.priceExit);
+  const beforeSol = await rpcWithRetry("read SOL before PumpPortal sell", () => connection.getBalance(keypair.publicKey, "confirmed"), CONFIG.rpcRetries, {
+    priority
+  }).catch(() => null);
   const requestPayload = {
     publicKey: keypair.publicKey.toBase58(),
     action: "sell",
@@ -5021,7 +5038,9 @@ async function sellTokenAmountFromWalletViaPumpPortal(wallet, tokenMint, sellAmo
     }
 
     invalidateWalletReadCache(wallet.publicKey);
-    const afterSol = await rpcWithRetry("read SOL after PumpPortal sell", () => connection.getBalance(keypair.publicKey, "confirmed")).catch(() => null);
+    const afterSol = await rpcWithRetry("read SOL after PumpPortal sell", () => connection.getBalance(keypair.publicKey, "confirmed"), CONFIG.rpcRetries, {
+      priority
+    }).catch(() => null);
     const grossOutLamports = Number.isFinite(beforeSol) && Number.isFinite(afterSol)
       ? Math.max(0, Number(afterSol) - Number(beforeSol))
       : 0;
@@ -5045,7 +5064,10 @@ async function getReliableTokenBalanceForMint(owner, mint, options = {}) {
   let lastBalance = null;
 
   try {
-    const direct = await getTokenBalanceForMintCached(ownerKey, mintKey, { force: true });
+    const direct = await getTokenBalanceForMintCached(ownerKey, mintKey, {
+      force: true,
+      priority: Boolean(options.priority)
+    });
     if (direct?.rawAmount > 0n) return direct;
     lastBalance = direct || lastBalance;
   } catch (error) {
@@ -5053,7 +5075,10 @@ async function getReliableTokenBalanceForMint(owner, mint, options = {}) {
   }
 
   try {
-    const lookup = await getOwnedTokenAccountsWithWarningsCached(ownerKey, { force: true });
+    const lookup = await getOwnedTokenAccountsWithWarningsCached(ownerKey, {
+      force: true,
+      priority: Boolean(options.priority)
+    });
     const aggregate = aggregateTokenAccountsForMint(lookup.accounts || [], mintKey);
     if (aggregate?.rawAmount > 0n) {
       setTimedCache(tokenBalanceCache, `${ownerKey.toBase58()}:${mintKey.toBase58()}`, aggregate);
@@ -5086,7 +5111,10 @@ async function getPlanWalletTokenBalance(plan, wallet, planWallet, options = {})
     }
 
     try {
-      const token = await getReliableTokenBalanceForMint(keypair.publicKey, mintKey, { throwOnError: false });
+      const token = await getReliableTokenBalanceForMint(keypair.publicKey, mintKey, {
+        throwOnError: false,
+        priority: Boolean(options.priority)
+      });
       if (token?.rawAmount > 0n) {
         recoverPlanWalletTokenOutAmount(planWallet, token);
         return token;
@@ -5125,7 +5153,8 @@ async function sellTradePlanWalletWithRetries(plan, planWallet, wallet, sellPerc
       invalidateWalletReadCache(wallet.publicKey);
       const token = await getPlanWalletTokenBalance(plan, wallet, planWallet, {
         attempts: priceExit ? 4 : 2,
-        throwOnMissing: true
+        throwOnMissing: true,
+        priority: priceExit
       });
       const tokenBaseRawAmount = recoverPlanWalletTokenOutAmount(planWallet, token);
       const amount = sellAmountForPercent(token.rawAmount, sellPercent, tokenBaseRawAmount);
@@ -5135,7 +5164,9 @@ async function sellTradePlanWalletWithRetries(plan, planWallet, wallet, sellPerc
 
       const sell = await sellTokenAmountFromWallet(wallet, plan.tokenMint, amount, slippageBps, {
         userId: options.userId,
-        sellPercent
+        sellPercent,
+        priceExit,
+        priority: priceExit
       });
       sell.sellSlippageBps = slippageBps;
       planWallet.exitSlippageAttempts = attemptLog;
@@ -5321,8 +5352,118 @@ function timedPlanExitSource(plan) {
   return "timed_plan";
 }
 
+function activePriceExitWalletCount(plan = {}) {
+  if (plan.status !== "watching") return 0;
+  return (plan.wallets || []).filter((wallet) => (
+    isActiveTimedWalletStatus(wallet.status)
+    && planHasPriceExit(plan, wallet)
+  )).length;
+}
+
+function pendingPriceExitRetryCount(plan = {}) {
+  if (plan.status !== "watching") return 0;
+  return (plan.wallets || []).filter((wallet) => (
+    isActiveTimedWalletStatus(wallet.status)
+    && isPriceExitTrigger(wallet.triggerReason)
+  )).length;
+}
+
+function tradePlanPriorityScore(plan = {}) {
+  let score = 0;
+  if (plan.status === "watching") score += 1000;
+  score += activePriceExitWalletCount(plan) * 200;
+  score += pendingPriceExitRetryCount(plan) * 300;
+  if (/^web_/i.test(String(plan.source || ""))) score += 75;
+  if (plan.status === "launch_watch" || plan.status === "copy_wallet_watch") score += 25;
+  return score;
+}
+
+function prioritizedTradePlans(plans = []) {
+  return [...plans].sort((left, right) => (
+    tradePlanPriorityScore(right) - tradePlanPriorityScore(left)
+  ) || (
+    Date.parse(right.createdAt || right.updatedAt || 0) - Date.parse(left.createdAt || left.updatedAt || 0)
+  ));
+}
+
 function isActiveTimedWalletStatus(status) {
   return ["armed", "watching", "retrying", "submitting", "waiting_next_loop", "timer-only"].includes(String(status || "").toLowerCase());
+}
+
+function applyPriceExitTrigger(plan, planWallet, decision, movePct, options = {}) {
+  if (!decision) return null;
+
+  if (decision.kind === "stop-loss") {
+    const stopLossPct = walletStopLossPct(plan, planWallet);
+    const armedPct = Number(stopLossPct).toFixed(2).replace(/\.00$/, "");
+    const stopLossSellPercent = planWallet.triggerSellPercent ?? plan.triggerSellPercent ?? 100;
+    const suffix = options.storedPriceFallback ? ", recent check" : "";
+    planWallet.triggerStatus = "triggered";
+    planWallet.triggerKind = "stop-loss";
+    planWallet.triggerTargetPct = stopLossPct;
+    planWallet.triggerThresholdPct = decision.triggerPct;
+    planWallet.triggerSellPercent = stopLossSellPercent;
+    return {
+      triggerReason: `stop-loss ${movePct.toFixed(2)}% (armed ${armedPct}%${suffix})`,
+      triggerMeta: {
+        kind: "stop-loss",
+        sellPercent: stopLossSellPercent,
+        storedPriceFallback: Boolean(options.storedPriceFallback)
+      }
+    };
+  }
+
+  if (decision.kind === "take-profit") {
+    const ladderLevel = options.ladderLevel || nextTakeProfitLadderLevel(plan, planWallet);
+    const sign = movePct >= 0 ? "+" : "";
+    const suffix = options.storedPriceFallback ? " (recent check)" : "";
+    const triggerMeta = ladderLevel
+      ? {
+          kind: "take-profit",
+          ladderLevelIndex: ladderLevel.index,
+          targetPct: ladderLevel.pct,
+          sellPercent: ladderLevel.sellPercent,
+          storedPriceFallback: Boolean(options.storedPriceFallback)
+        }
+      : {
+          kind: "take-profit",
+          sellPercent: planWallet.triggerSellPercent ?? plan.triggerSellPercent ?? 100,
+          storedPriceFallback: Boolean(options.storedPriceFallback)
+        };
+    planWallet.triggerStatus = "triggered";
+    planWallet.triggerKind = "take-profit";
+    planWallet.triggerTargetPct = ladderLevel?.pct ?? decision.targetPct;
+    planWallet.triggerSellPercent = triggerMeta.sellPercent;
+    return {
+      triggerReason: `take-profit ${sign}${movePct.toFixed(2)}%${suffix}`,
+      triggerMeta
+    };
+  }
+
+  return null;
+}
+
+function recentPlanWalletPriceExitFallback(plan, planWallet, now = Date.now(), checkedAtOverride = null) {
+  const movePct = Number(planWallet.lastMovePct ?? planWallet.lastGrossMovePct);
+  if (!Number.isFinite(movePct)) return null;
+
+  const ladderLevel = nextTakeProfitLadderLevel(plan, planWallet);
+  const takeProfitPct = ladderLevel ? Number(ladderLevel.pct) : walletTakeProfitPct(plan, planWallet);
+  const stopLossPct = walletStopLossPct(plan, planWallet);
+  const decision = recentStoredPriceExitDecision({
+    movePct,
+    lastCheckedAt: checkedAtOverride || planWallet.lastTriggerCheckAt || planWallet.lastCheckedAt,
+    now,
+    maxAgeMs: Math.max(30_000, Math.min(300_000, CONFIG.stopLossCheckIntervalMs * 150)),
+    takeProfitPct,
+    stopLossPct,
+    stopLossBufferPct: CONFIG.stopLossTriggerBufferPct
+  });
+
+  return applyPriceExitTrigger(plan, planWallet, decision, movePct, {
+    ladderLevel,
+    storedPriceFallback: true
+  });
 }
 
 async function processTradePlans(options = {}) {
@@ -5366,7 +5507,7 @@ async function processTradePlans(options = {}) {
     const walletStore = await readWalletStore();
     let changed = false;
 
-    for (const plan of planStore.plans) {
+    for (const plan of prioritizedTradePlans(planStore.plans)) {
       summary.checkedPlans += 1;
       if (plan.status === "launch_watch") {
         const result = await processLaunchWatchPlan(plan, walletStore);
@@ -5535,6 +5676,7 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
 
   if (!triggerReason && planHasPriceExit(plan, planWallet)) {
     const lastCheckedAt = Date.parse(planWallet.lastCheckedAt || "");
+    const previousPriceCheckAt = planWallet.lastTriggerCheckAt || planWallet.lastCheckedAt;
     const timerDue = now >= Date.parse(planWallet.sellAfterAt || plan.sellAfterAt);
     if (!options.forcePriceCheck && !timerDue && Number.isFinite(lastCheckedAt) && now - lastCheckedAt < CONFIG.stopLossCheckIntervalMs) {
       return { changed: false, message: null };
@@ -5546,7 +5688,9 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
       const takeProfitPct = ladderLevel ? Number(ladderLevel.pct) : walletTakeProfitPct(plan, planWallet);
       const estimateSellPercent = ladderLevel?.sellPercent ?? planWallet.triggerSellPercent ?? plan.triggerSellPercent ?? 100;
       invalidateWalletReadCache(wallet.publicKey);
-      const estimate = await estimatePlanWalletMove(plan, wallet, estimateSellPercent);
+      const estimate = await estimatePlanWalletMove(plan, wallet, estimateSellPercent, {
+        priority: true
+      });
       planWallet.lastCheckedAt = new Date().toISOString();
       planWallet.lastMovePct = estimate.movePct;
       planWallet.lastGrossMovePct = estimate.grossMovePct ?? estimate.movePct;
@@ -5577,30 +5721,10 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
         stopLossBufferPct: CONFIG.stopLossTriggerBufferPct
       });
 
-      if (decision?.kind === "stop-loss") {
-        const armedPct = Number(stopLossPct).toFixed(2).replace(/\.00$/, "");
-        const stopLossSellPercent = planWallet.triggerSellPercent ?? plan.triggerSellPercent ?? 100;
-        triggerReason = `stop-loss ${estimate.movePct.toFixed(2)}% (armed ${armedPct}%)`;
-        triggerMeta = { kind: "stop-loss", sellPercent: stopLossSellPercent };
-        planWallet.triggerStatus = "triggered";
-        planWallet.triggerKind = "stop-loss";
-        planWallet.triggerTargetPct = stopLossPct;
-        planWallet.triggerThresholdPct = stopLossTriggerPct;
-        planWallet.triggerSellPercent = stopLossSellPercent;
-      } else if (decision?.kind === "take-profit") {
-        triggerReason = `take-profit +${estimate.movePct.toFixed(2)}%`;
-        triggerMeta = ladderLevel
-          ? {
-              kind: "take-profit",
-              ladderLevelIndex: ladderLevel.index,
-              targetPct: ladderLevel.pct,
-              sellPercent: ladderLevel.sellPercent
-            }
-          : { kind: "take-profit", sellPercent: planWallet.triggerSellPercent ?? plan.triggerSellPercent ?? 100 };
-        planWallet.triggerStatus = "triggered";
-        planWallet.triggerKind = "take-profit";
-        planWallet.triggerTargetPct = ladderLevel?.pct ?? takeProfitPct;
-        planWallet.triggerSellPercent = triggerMeta.sellPercent;
+      const trigger = applyPriceExitTrigger(plan, planWallet, decision, estimate.movePct, { ladderLevel });
+      if (trigger) {
+        triggerReason = trigger.triggerReason;
+        triggerMeta = trigger.triggerMeta;
       } else {
         return { changed: true, message: null };
       }
@@ -5614,6 +5738,15 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
         planWallet.triggerStatus = "timer-triggered";
         triggerReason = "timer";
       } else {
+        const fallbackTrigger = recentPlanWalletPriceExitFallback(plan, planWallet, now, previousPriceCheckAt);
+        if (fallbackTrigger) {
+          triggerReason = fallbackTrigger.triggerReason;
+          triggerMeta = fallbackTrigger.triggerMeta;
+          planWallet.lastEmergencyExitReason = `Fresh quote failed after a recent trigger-level check: ${planWallet.lastError}`;
+        }
+      }
+
+      if (!triggerReason && !timerDue) {
         const stopLossPct = walletStopLossPct(plan, planWallet);
         const stopLossTriggerPct = stopLossTriggerPercent(stopLossPct, CONFIG.stopLossTriggerBufferPct);
         if (shouldEmergencySellOnPriceFailure({
@@ -6349,10 +6482,15 @@ function pumpFunPriceUsd(metadata = {}, tokenDecimals = 6) {
   return marketCapUsd / normalizedSupply;
 }
 
-async function estimatePlanWalletMove(plan, wallet, sellPercentOverride = null) {
+async function estimatePlanWalletMove(plan, wallet, sellPercentOverride = null, options = {}) {
   const keypair = decryptWallet(wallet);
   const planWallet = plan.wallets.find((item) => item.publicKey === wallet.publicKey);
-  const token = await getPlanWalletTokenBalance(plan, wallet, planWallet, { attempts: 2, throwOnMissing: true });
+  const priority = options.priority !== false;
+  const token = await getPlanWalletTokenBalance(plan, wallet, planWallet, {
+    attempts: 2,
+    throwOnMissing: true,
+    priority
+  });
   if (!token || token.rawAmount === 0n) {
     throw new Error("no token balance");
   }
@@ -6382,7 +6520,8 @@ async function estimatePlanWalletMove(plan, wallet, sellPercentOverride = null) 
       inputMint: plan.tokenMint,
       outputMint: SOL_MINT,
       amount: amount.toString(),
-      slippageBps: monitorSlippageBps
+      slippageBps: monitorSlippageBps,
+      priority
     });
   } catch (quoteError) {
     try {
@@ -6732,7 +6871,7 @@ async function closeEmptyAccountsFlow(chatId, session) {
   await showMenu(chatId, session.userId);
 }
 
-async function executeJupiterSwap({ signer, inputMint, outputMint, amount, slippageBps, prebuiltOrder = null }) {
+async function executeJupiterSwap({ signer, inputMint, outputMint, amount, slippageBps, prebuiltOrder = null, priority = false }) {
   if (!CONFIG.jupiterApiKey) {
     throw new Error("Missing JUPITER_API_KEY. Swaps require a Jupiter API key.");
   }
@@ -6747,13 +6886,15 @@ async function executeJupiterSwap({ signer, inputMint, outputMint, amount, slipp
         inputMint,
         outputMint,
         amount,
-        slippageBps
+        slippageBps,
+        priority
       });
 
       const tx = VersionedTransaction.deserialize(Buffer.from(order.transaction, "base64"));
       tx.sign([signer]);
 
       const execute = await jupiterFetchJson(`${CONFIG.jupiterApiBase}/execute`, {
+        priority,
         timeoutMs: 20_000,
         method: "POST",
         headers: jupiterHeaders({ "Content-Type": "application/json" }),
@@ -6791,7 +6932,7 @@ async function executeJupiterSwap({ signer, inputMint, outputMint, amount, slipp
   throw lastError;
 }
 
-async function createJupiterOrder({ taker, inputMint, outputMint, amount, slippageBps }) {
+async function createJupiterOrder({ taker, inputMint, outputMint, amount, slippageBps, priority = false }) {
   if (!CONFIG.jupiterApiKey) {
     throw new Error("Missing JUPITER_API_KEY. Swaps and timed trade plans require a Jupiter API key.");
   }
@@ -6808,6 +6949,7 @@ async function createJupiterOrder({ taker, inputMint, outputMint, amount, slippa
   }
 
   const order = await jupiterFetchJson(orderUrl, {
+    priority,
     timeoutMs: 8_000,
     headers: jupiterHeaders()
   }, "Jupiter order");
@@ -7110,22 +7252,28 @@ async function getSolBalanceCached(owner, options = {}) {
   const cached = getTimedCache(solBalanceCache, cacheKey, options.ttlMs);
   if (!options.force && cached !== undefined) return cached;
 
-  const balance = await rpcWithRetry("get wallet SOL balance", () => connection.getBalance(ownerKey, "confirmed"));
+  const balance = await rpcWithRetry("get wallet SOL balance", () => connection.getBalance(ownerKey, "confirmed"), CONFIG.rpcRetries, {
+    priority: Boolean(options.priority)
+  });
   setTimedCache(solBalanceCache, cacheKey, balance);
   return balance;
 }
 
-async function getTokenBalanceForMint(owner, mint) {
+async function getTokenBalanceForMint(owner, mint, options = {}) {
   const ownerKey = owner instanceof PublicKey ? owner : new PublicKey(owner);
   const mintKey = mint instanceof PublicKey ? mint : new PublicKey(mint);
-  const tokenProgramId = await getMintTokenProgramId(mintKey);
+  const tokenProgramId = await getMintTokenProgramId(mintKey, options);
   let accounts = [];
 
   if (tokenProgramId.equals(TOKEN_2022_PROGRAM_ID)) {
-    const response = await rpcWithRetry("get Token-2022 accounts for selected mint", () => connection.getParsedTokenAccountsByOwner(ownerKey, { programId: TOKEN_2022_PROGRAM_ID }, "confirmed"));
+    const response = await rpcWithRetry("get Token-2022 accounts for selected mint", () => connection.getParsedTokenAccountsByOwner(ownerKey, { programId: TOKEN_2022_PROGRAM_ID }, "confirmed"), CONFIG.rpcRetries, {
+      priority: Boolean(options.priority)
+    });
     accounts = parseTokenAccountResponse(response, TOKEN_2022_PROGRAM_ID).filter((account) => account.mint === mintKey.toBase58());
   } else {
-    const response = await rpcWithRetry("get token accounts for selected mint", () => connection.getParsedTokenAccountsByOwner(ownerKey, { mint: mintKey }, "confirmed"));
+    const response = await rpcWithRetry("get token accounts for selected mint", () => connection.getParsedTokenAccountsByOwner(ownerKey, { mint: mintKey }, "confirmed"), CONFIG.rpcRetries, {
+      priority: Boolean(options.priority)
+    });
     accounts = parseTokenAccountResponse(response, tokenProgramId).filter((account) => account.mint === mintKey.toBase58());
   }
 
@@ -7146,7 +7294,7 @@ async function getTokenBalanceForMintCached(owner, mint, options = {}) {
   const cached = getTimedCache(tokenBalanceCache, cacheKey, options.ttlMs);
   if (!options.force && cached !== undefined) return cached;
 
-  const balance = await getTokenBalanceForMint(ownerKey, mintKey);
+  const balance = await getTokenBalanceForMint(ownerKey, mintKey, options);
   setTimedCache(tokenBalanceCache, cacheKey, balance);
   return balance;
 }
@@ -7176,13 +7324,15 @@ async function readTokenDeltaAfterBuy(owner, mint, beforeRaw) {
   return null;
 }
 
-async function getMintTokenProgramId(mint) {
+async function getMintTokenProgramId(mint, options = {}) {
   const mintKey = mint instanceof PublicKey ? mint : new PublicKey(mint);
   const cacheKey = mintKey.toBase58();
   const cached = mintProgramCache.get(cacheKey);
   if (cached) return cached;
 
-  const account = await rpcWithRetry("get mint owner program", () => connection.getAccountInfo(mintKey, "confirmed"));
+  const account = await rpcWithRetry("get mint owner program", () => connection.getAccountInfo(mintKey, "confirmed"), CONFIG.rpcRetries, {
+    priority: Boolean(options.priority)
+  });
   if (!account?.owner) {
     throw new Error(`Could not read mint account ${cacheKey}.`);
   }
@@ -7215,7 +7365,7 @@ async function getOwnedTokenAccounts(owner) {
   return accounts;
 }
 
-async function getOwnedTokenAccountsWithWarnings(owner) {
+async function getOwnedTokenAccountsWithWarnings(owner, options = {}) {
   const ownerKey = owner instanceof PublicKey ? owner : new PublicKey(owner);
   const lookups = [
     { label: "SPL", programId: TOKEN_PROGRAM_ID },
@@ -7227,7 +7377,9 @@ async function getOwnedTokenAccountsWithWarnings(owner) {
 
   await Promise.all(lookups.map(async (lookup) => {
     try {
-      const response = await rpcWithRetry(`get ${lookup.label} token accounts`, () => connection.getParsedTokenAccountsByOwner(ownerKey, { programId: lookup.programId }, "confirmed"));
+      const response = await rpcWithRetry(`get ${lookup.label} token accounts`, () => connection.getParsedTokenAccountsByOwner(ownerKey, { programId: lookup.programId }, "confirmed"), CONFIG.rpcRetries, {
+        priority: Boolean(options.priority)
+      });
       successes += 1;
       accounts.push(...parseTokenAccountResponse(response, lookup.programId));
     } catch (error) {
@@ -7244,7 +7396,7 @@ async function getOwnedTokenAccountsWithWarningsCached(owner, options = {}) {
   const cached = getTimedCache(tokenAccountsCache, cacheKey, options.ttlMs);
   if (!options.force && cached) return cached;
 
-  const result = await getOwnedTokenAccountsWithWarnings(ownerKey);
+  const result = await getOwnedTokenAccountsWithWarnings(ownerKey, options);
   setTimedCache(tokenAccountsCache, cacheKey, result);
   return result;
 }
@@ -20051,17 +20203,18 @@ function looksLikeBackupDocument(filename, text) {
     || sample.includes("encrypted");
 }
 
-async function rpcWithRetry(label, operation, retries = CONFIG.rpcRetries) {
+async function rpcWithRetry(label, operation, retries = CONFIG.rpcRetries, options = {}) {
   let lastError;
+  const limiter = options.priority ? priorityRpcLimiter : rpcLimiter;
 
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     try {
-      return await rpcLimiter.schedule(label, operation);
+      return await limiter.schedule(label, operation);
     } catch (error) {
       lastError = error;
       if (!isRetryableRpcError(error) || attempt === retries) break;
       if (CONFIG.rpc429CooldownMs > 0) {
-        rpcLimiter.cooldown(CONFIG.rpc429CooldownMs);
+        limiter.cooldown(CONFIG.rpc429CooldownMs);
       }
       const jitterMs = Math.floor(Math.random() * 250);
       const delayMs = CONFIG.rpcDelayMs * (attempt + 1) + jitterMs;
@@ -20075,16 +20228,18 @@ async function rpcWithRetry(label, operation, retries = CONFIG.rpcRetries) {
 
 async function jupiterFetchJson(url, init, label, retries = CONFIG.jupiterRetries) {
   let lastError;
+  const { priority = false, ...fetchInit } = init || {};
+  const limiter = priority ? priorityJupiterLimiter : jupiterLimiter;
 
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     try {
-      return await jupiterLimiter.schedule(label, () => fetchJson(url, init));
+      return await limiter.schedule(label, () => fetchJson(url, fetchInit));
     } catch (error) {
       lastError = error;
       if (!isRetryableServiceError(error) || attempt === retries) break;
       const retryAfterMs = parseRetryAfterMs(error.retryAfter);
       if (CONFIG.jupiter429CooldownMs > 0) {
-        jupiterLimiter.cooldown(Math.max(CONFIG.jupiter429CooldownMs, retryAfterMs));
+        limiter.cooldown(Math.max(CONFIG.jupiter429CooldownMs, retryAfterMs));
       }
       const jitterMs = Math.floor(Math.random() * 250);
       const delayMs = Math.max(CONFIG.jupiterMinIntervalMs, retryAfterMs) + (CONFIG.jupiterMinIntervalMs * attempt) + jitterMs;
@@ -20096,10 +20251,13 @@ async function jupiterFetchJson(url, init, label, retries = CONFIG.jupiterRetrie
   throw lastError;
 }
 
-function createRpcLimiter() {
+function createRpcLimiter(options = {}) {
   let gate = Promise.resolve();
   let nextStartAt = 0;
   let cooldownUntil = 0;
+  const minIntervalMs = Number.isFinite(Number(options.minIntervalMs))
+    ? Math.max(0, Number(options.minIntervalMs))
+    : CONFIG.rpcMinIntervalMs;
 
   return {
     async schedule(_label, operation) {
@@ -20108,7 +20266,7 @@ function createRpcLimiter() {
         if (waitMs > 0) {
           await sleep(waitMs);
         }
-        nextStartAt = Date.now() + CONFIG.rpcMinIntervalMs;
+        nextStartAt = Date.now() + minIntervalMs;
       });
       gate = waitTurn.catch(() => {});
       await waitTurn;
@@ -20120,10 +20278,13 @@ function createRpcLimiter() {
   };
 }
 
-function createJupiterLimiter() {
+function createJupiterLimiter(options = {}) {
   let gate = Promise.resolve();
   let nextStartAt = 0;
   let cooldownUntil = 0;
+  const minIntervalMs = Number.isFinite(Number(options.minIntervalMs))
+    ? Math.max(0, Number(options.minIntervalMs))
+    : CONFIG.jupiterMinIntervalMs;
 
   return {
     async schedule(_label, operation) {
@@ -20132,7 +20293,7 @@ function createJupiterLimiter() {
         if (waitMs > 0) {
           await sleep(waitMs);
         }
-        nextStartAt = Date.now() + CONFIG.jupiterMinIntervalMs;
+        nextStartAt = Date.now() + minIntervalMs;
       });
       gate = waitTurn.catch(() => {});
       await waitTurn;

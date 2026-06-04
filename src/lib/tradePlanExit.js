@@ -58,6 +58,32 @@ export function priceExitDecision({ movePct, takeProfitPct = 0, stopLossPct = 0,
   return null;
 }
 
+export function recentStoredPriceExitDecision({
+  movePct,
+  lastCheckedAt,
+  now = Date.now(),
+  maxAgeMs = 300000,
+  takeProfitPct = 0,
+  stopLossPct = 0,
+  stopLossBufferPct = 0
+} = {}) {
+  const checkedAt = Date.parse(lastCheckedAt || "");
+  if (!Number.isFinite(checkedAt)) return null;
+
+  const safeNow = Number.isFinite(Number(now)) ? Number(now) : Date.now();
+  const safeMaxAgeMs = Number.isFinite(Number(maxAgeMs)) && Number(maxAgeMs) > 0
+    ? Number(maxAgeMs)
+    : 300000;
+  if (safeNow - checkedAt > safeMaxAgeMs) return null;
+
+  return priceExitDecision({
+    movePct,
+    takeProfitPct,
+    stopLossPct,
+    stopLossBufferPct
+  });
+}
+
 export function shouldEmergencySellOnPriceFailure({ stopLossPct = 0, estimateFailures = 0, minFailures = 2 } = {}) {
   const stop = Number(stopLossPct || 0);
   const failures = Number.parseInt(estimateFailures || 0, 10);
