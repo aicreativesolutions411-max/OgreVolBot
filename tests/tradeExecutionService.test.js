@@ -6,6 +6,7 @@ import {
   createMemoryTradeStore,
   createCloseOrderRecorder,
   evaluatePercentMoveCandidates,
+  exitProviderOrder,
   openLotsFromTradeEvents,
   TRADE_STATUS,
   TP_SL_REASON
@@ -239,4 +240,18 @@ test("open lot basis ignores prior profitable round trip before new stop loss", 
 
   assert.equal(open.basisLamports, 100000000n);
   assert.equal(open.tokenAmount, 2000n);
+});
+
+test("price-exit sells prefer PumpPortal before Jupiter to avoid slow stop-loss exits", () => {
+  assert.deepEqual(exitProviderOrder({
+    priceExit: true,
+    pumpPortalSellFallbackEnabled: true
+  }), ["pumpportal", "jupiter"]);
+});
+
+test("non-price sells keep Jupiter first with PumpPortal fallback", () => {
+  assert.deepEqual(exitProviderOrder({
+    priceExit: false,
+    pumpPortalSellFallbackEnabled: true
+  }), ["jupiter", "pumpportal"]);
 });

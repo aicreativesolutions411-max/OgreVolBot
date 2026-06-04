@@ -299,6 +299,12 @@ export function tpSlLogEntry(event, fields = {}) {
   };
 }
 
+export function exitProviderOrder({ priceExit = false, pumpPortalSellFallbackEnabled = true } = {}) {
+  if (priceExit && pumpPortalSellFallbackEnabled) return ["pumpportal", "jupiter"];
+  if (pumpPortalSellFallbackEnabled) return ["jupiter", "pumpportal"];
+  return ["jupiter"];
+}
+
 export function formatTpSlDebugRow(evaluation = {}) {
   const trigger = evaluation.trigger || "NONE";
   return [

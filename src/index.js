@@ -34,6 +34,7 @@ import {
 } from "./lib/tradePlanExit.js";
 import {
   evaluatePercentMoveCandidates,
+  exitProviderOrder,
   openLotsFromTradeEvents,
   tpSlLogEntry
 } from "./lib/tradeExecutionService.js";
@@ -5022,24 +5023,63 @@ async function sellTokenAmountFromWallet(wallet, tokenMint, amount, slippageBps,
     throw new Error("sell amount rounded to zero");
   }
 
-  let result;
-  let exitProvider = "jupiter";
-  try {
-    result = await executeJupiterSwap({
-      signer: keypair,
-      inputMint: tokenMint,
-      outputMint: SOL_MINT,
-      amount: sellAmount.toString(),
-      slippageBps,
-      priority: Boolean(options.priority || options.priceExit)
-    });
-  } catch (jupiterError) {
-    if (!CONFIG.pumpPortalSellFallbackEnabled) {
-      throw jupiterError;
+  const priceExit = Boolean(options.priceExit);
+  const providers = exitProviderOrder({
+    priceExit,
+    pumpPortalSellFallbackEnabled: CONFIG.pumpPortalSellFallbackEnabled
+  });
+  let result = null;
+  let exitProvider = "";
+  let jupiterError = null;
+  let pumpPortalError = null;
+
+  for (const provider of providers) {
+    if (provider === "pumpportal") {
+      try {
+        result = await sellTokenAmountFromWalletViaPumpPortal(wallet, tokenMint, sellAmount, slippageBps, {
+          ...options,
+          timeoutMs: options.timeoutMs || (priceExit ? 12_000 : undefined)
+        });
+        exitProvider = result.provider || "pumpportal";
+        break;
+      } catch (error) {
+        pumpPortalError = error;
+        continue;
+      }
     }
-    result = await sellTokenAmountFromWalletViaPumpPortal(wallet, tokenMint, sellAmount, slippageBps, options, jupiterError);
-    exitProvider = result.provider || "pumpportal";
+
+    if (provider === "jupiter") {
+      try {
+        result = await executeJupiterSwap({
+          signer: keypair,
+          inputMint: tokenMint,
+          outputMint: SOL_MINT,
+          amount: sellAmount.toString(),
+          slippageBps,
+          priority: Boolean(options.priority || priceExit),
+          maxAttempts: priceExit ? 1 : undefined,
+          orderTimeoutMs: priceExit ? 3_500 : undefined,
+          executeTimeoutMs: priceExit ? 8_000 : undefined,
+          orderRetries: priceExit ? 1 : undefined,
+          executeRetries: priceExit ? 1 : undefined
+        });
+        exitProvider = "jupiter";
+        break;
+      } catch (error) {
+        jupiterError = error;
+        continue;
+      }
+    }
   }
+
+  if (!result) {
+    const errors = [
+      pumpPortalError ? `PumpPortal: ${friendlyError(pumpPortalError)}` : "",
+      jupiterError ? `Jupiter: ${friendlyError(jupiterError)}` : ""
+    ].filter(Boolean);
+    throw new Error(errors.length ? errors.join(" | ") : "sell failed before a provider returned a transaction");
+  }
+
   const outputLamports = BigInt(result.outputAmount || 0);
   const feeLamports = calculateFeeLamports(outputLamports);
   let feeStatus = "";
@@ -5064,7 +5104,9 @@ async function sellTokenAmountFromWallet(wallet, tokenMint, amount, slippageBps,
 
 async function sellTokenAmountFromWalletViaPumpPortal(wallet, tokenMint, sellAmount, slippageBps, options = {}, jupiterError = null) {
   const keypair = decryptWallet(wallet);
-  const timeoutMs = Number.isFinite(CONFIG.pumpLaunchTimeoutMs) && CONFIG.pumpLaunchTimeoutMs > 0
+  const timeoutMs = Number.isFinite(Number(options.timeoutMs)) && Number(options.timeoutMs) > 0
+    ? Number(options.timeoutMs)
+    : Number.isFinite(CONFIG.pumpLaunchTimeoutMs) && CONFIG.pumpLaunchTimeoutMs > 0
     ? CONFIG.pumpLaunchTimeoutMs
     : 30000;
   const percent = Number.parseFloat(String(options.sellPercent || ""));
@@ -5126,8 +5168,10 @@ async function sellTokenAmountFromWalletViaPumpPortal(wallet, tokenMint, sellAmo
       provider: "pumpportal"
     };
   } catch (pumpError) {
-    const jupiterMessage = jupiterError ? friendlyError(jupiterError) : "not attempted";
-    throw new Error(`Jupiter sell failed: ${jupiterMessage}. PumpPortal sell fallback failed: ${friendlyError(pumpError)}`);
+    if (!jupiterError) {
+      throw new Error(`PumpPortal sell failed: ${friendlyError(pumpError)}`);
+    }
+    throw new Error(`Jupiter sell failed: ${friendlyError(jupiterError)}. PumpPortal sell fallback failed: ${friendlyError(pumpError)}`);
   }
 }
 
@@ -5501,6 +5545,7 @@ function walletStopLossPct(plan, planWallet) {
 function timedPlanExitSource(plan) {
   if (plan.source === "autosnipe") return "autosnipe_exit";
   if (plan.source === "pumpsnipe") return "pumpsnipe_exit";
+  if (plan.source === "ogre_ai") return "ogre_ai_exit";
   if (plan.source === "manual_launch_snipe") return "manual_launch_snipe_exit";
   if (plan.source === "kol_copy_wallet") return "kol_copy_wallet_exit";
   if (plan.source === "auto_bundle") return "auto_bundle_exit";
@@ -5644,11 +5689,22 @@ function eligibleWebDefaultExitSource(source) {
   const text = String(source || "").toLowerCase();
   return [
     "web_trade",
+    "web_bundle",
     "web_trade_plan",
+    "web_trade_plan_exit",
     "web_trade_auto_exit",
     "web_volume",
+    "web_volume_exit",
     "web_bundle_plan",
+    "web_bundle_plan_exit",
     "ogre_ai",
+    "ogre_ai_exit",
+    "web_exit_guard",
+    "timed_plan",
+    "autosnipe_exit",
+    "pumpsnipe_exit",
+    "manual_launch_snipe_exit",
+    "kol_copy_wallet_exit",
     "web_portfolio_exit_watchdog"
   ].includes(text);
 }
@@ -8439,13 +8495,27 @@ async function closeEmptyAccountsFlow(chatId, session) {
   await showMenu(chatId, session.userId);
 }
 
-async function executeJupiterSwap({ signer, inputMint, outputMint, amount, slippageBps, prebuiltOrder = null, priority = false }) {
+async function executeJupiterSwap({
+  signer,
+  inputMint,
+  outputMint,
+  amount,
+  slippageBps,
+  prebuiltOrder = null,
+  priority = false,
+  maxAttempts = CONFIG.jupiterSwapMaxAttempts,
+  orderTimeoutMs = 8_000,
+  executeTimeoutMs = 20_000,
+  orderRetries = CONFIG.jupiterRetries,
+  executeRetries = CONFIG.jupiterRetries
+}) {
   if (!CONFIG.jupiterApiKey) {
     throw new Error("Missing JUPITER_API_KEY. Swaps require a Jupiter API key.");
   }
 
   let lastError;
-  for (let attempt = 0; attempt < CONFIG.jupiterSwapMaxAttempts; attempt += 1) {
+  const attempts = Math.max(1, Math.min(CONFIG.jupiterSwapMaxAttempts, Number.parseInt(maxAttempts, 10) || CONFIG.jupiterSwapMaxAttempts));
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
       const order = attempt === 0 && prebuiltOrder
         ? prebuiltOrder
@@ -8455,7 +8525,9 @@ async function executeJupiterSwap({ signer, inputMint, outputMint, amount, slipp
         outputMint,
         amount,
         slippageBps,
-        priority
+        priority,
+        timeoutMs: orderTimeoutMs,
+        retries: orderRetries
       });
 
       const tx = VersionedTransaction.deserialize(Buffer.from(order.transaction, "base64"));
@@ -8463,7 +8535,7 @@ async function executeJupiterSwap({ signer, inputMint, outputMint, amount, slipp
 
       const execute = await jupiterFetchJson(`${CONFIG.jupiterApiBase}/execute`, {
         priority,
-        timeoutMs: 20_000,
+        timeoutMs: executeTimeoutMs,
         method: "POST",
         headers: jupiterHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
@@ -8471,7 +8543,7 @@ async function executeJupiterSwap({ signer, inputMint, outputMint, amount, slipp
           requestId: order.requestId,
           lastValidBlockHeight: order.lastValidBlockHeight
         })
-      }, "Jupiter execute");
+      }, "Jupiter execute", executeRetries);
 
       if (execute.status && execute.status !== "Success") {
         throw new Error(execute.error || `Jupiter execute failed with code ${execute.code ?? "unknown"}.`);
@@ -8490,7 +8562,7 @@ async function executeJupiterSwap({ signer, inputMint, outputMint, amount, slipp
       };
     } catch (error) {
       lastError = error;
-      if (attempt >= CONFIG.jupiterSwapMaxAttempts - 1 || !isRetryableSwapError(error)) {
+      if (attempt >= attempts - 1 || !isRetryableSwapError(error)) {
         break;
       }
       await sleep(Math.min(900, 250 + attempt * 250));
@@ -8500,7 +8572,7 @@ async function executeJupiterSwap({ signer, inputMint, outputMint, amount, slipp
   throw lastError;
 }
 
-async function createJupiterOrder({ taker, inputMint, outputMint, amount, slippageBps, priority = false }) {
+async function createJupiterOrder({ taker, inputMint, outputMint, amount, slippageBps, priority = false, timeoutMs = 8_000, retries = CONFIG.jupiterRetries }) {
   if (!CONFIG.jupiterApiKey) {
     throw new Error("Missing JUPITER_API_KEY. Swaps and timed trade plans require a Jupiter API key.");
   }
@@ -8518,9 +8590,9 @@ async function createJupiterOrder({ taker, inputMint, outputMint, amount, slippa
 
   const order = await jupiterFetchJson(orderUrl, {
     priority,
-    timeoutMs: 8_000,
+    timeoutMs,
     headers: jupiterHeaders()
-  }, "Jupiter order");
+  }, "Jupiter order", retries);
 
   if (!order?.transaction) {
     throw new Error(order?.errorMessage || order?.error || "Jupiter could not build a quote/order. Check the token mint, liquidity, slippage, API key/rate limits, and wallet SOL balance.");
