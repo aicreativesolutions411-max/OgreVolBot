@@ -33,7 +33,7 @@ import {
   stopLossTriggerPercent
 } from "./lib/tradePlanExit.js";
 import {
-  evaluatePercentMoveTpSl,
+  evaluatePercentMoveCandidates,
   tpSlLogEntry
 } from "./lib/tradeExecutionService.js";
 import {
@@ -5381,14 +5381,23 @@ function evaluatePlanWalletPriceExit(plan, planWallet, estimate, {
   stopLossPct = 0,
   status = null
 } = {}) {
-  const evaluation = evaluatePercentMoveTpSl({
+  const moves = [
+    { source: estimate?.source || "quote", movePct: estimate?.movePct }
+  ];
+  if (Number.isFinite(Number(estimate?.marketMovePct))) {
+    moves.push({
+      source: estimate.marketSource || "market",
+      movePct: estimate.marketMovePct
+    });
+  }
+  const evaluation = evaluatePercentMoveCandidates({
     tradeId: tradePlanWalletTradeId(plan, planWallet),
     userId: plan?.userId,
     source: plan?.source || "trade_plan",
     symbol: plan?.tokenMint,
     side: "LONG",
     status: status || planWallet?.exitStatus || planWallet?.status || plan?.status || "OPEN",
-    movePct: estimate?.movePct,
+    moves,
     takeProfitPct,
     stopLossPct,
     stopLossBufferPct: CONFIG.stopLossTriggerBufferPct,
@@ -6106,7 +6115,8 @@ async function processWebPortfolioExits(options = {}) {
           stopLossPct
         });
         const decision = evaluation.decision;
-        const trigger = applyPriceExitTrigger(plan, planWallet, decision, estimate.movePct);
+        const triggerMovePct = Number.isFinite(Number(evaluation.triggerMovePct)) ? Number(evaluation.triggerMovePct) : estimate.movePct;
+        const trigger = applyPriceExitTrigger(plan, planWallet, decision, triggerMovePct);
         webPortfolioExitState.set(key, {
           userId: entry.userId,
           walletPublicKey: entry.walletPublicKey,
@@ -6114,7 +6124,11 @@ async function processWebPortfolioExits(options = {}) {
           tokenMint: entry.tokenMint,
           lastCheckedAt: checkedAt,
           lastMovePct: estimate.movePct,
+          lastMarketMovePct: estimate.marketMovePct ?? null,
+          lastMarketPriceSource: estimate.marketSource || null,
+          lastTriggerMovePct: trigger ? triggerMovePct : null,
           lastEstimatedOut: estimate.estimatedOut?.toString?.() || "",
+          lastMarketEstimatedOut: estimate.marketEstimatedOut || "",
           lastBasisLamports: estimate.basis?.toString?.() || "",
           lastSource: estimate.source || "",
           estimateFailures: 0,
@@ -6435,6 +6449,9 @@ function copyWebExitGuardFieldsFromPlanWallet(guard, planWallet) {
     "lastEstimatedNetOut",
     "lastBasisLamports",
     "lastMonitorSlippageBps",
+    "lastMarketMovePct",
+    "lastMarketPriceSource",
+    "lastTriggerMovePct",
     "lastStopLossPct",
     "lastTakeProfitPct",
     "lastStopLossTriggerPct",
@@ -6764,6 +6781,9 @@ async function processWebExitGuard(guard, walletStore, options = {}) {
       planWallet.lastEstimatedOut = estimate.estimatedOut?.toString?.() || null;
       planWallet.lastBasisLamports = estimate.basis?.toString?.() || null;
       planWallet.lastMonitorSlippageBps = estimate.monitorSlippageBps || CONFIG.stopLossMonitorSlippageBps;
+      planWallet.lastMarketMovePct = estimate.marketMovePct ?? null;
+      planWallet.lastMarketPriceSource = estimate.marketSource || null;
+      planWallet.lastTriggerMovePct = null;
       planWallet.lastError = estimate.quoteError ? `Jupiter quote fallback: ${estimate.quoteError}` : null;
       planWallet.estimateFailures = 0;
       planWallet.lastPriceEstimateError = null;
@@ -6775,7 +6795,6 @@ async function processWebExitGuard(guard, walletStore, options = {}) {
       planWallet.lastStopLossPct = stopLossPct || null;
       planWallet.lastTakeProfitPct = takeProfitPct || null;
       planWallet.lastStopLossTriggerPct = stopLossTriggerPct || null;
-      planWallet.lastTriggerPriceSource = estimate.source || "jupiter";
       planWallet.lastShouldTriggerStopLoss = stopLossTriggerPct > 0 && estimate.movePct <= -stopLossTriggerPct;
       planWallet.lastShouldTriggerTakeProfit = Number.isFinite(Number(takeProfitPct)) && Number(takeProfitPct) > 0 && estimate.movePct >= Number(takeProfitPct);
       const evaluation = evaluatePlanWalletPriceExit(plan, planWallet, estimate, {
@@ -6784,11 +6803,16 @@ async function processWebExitGuard(guard, walletStore, options = {}) {
         status: guard.status
       });
       const decision = evaluation.decision;
-      const trigger = applyPriceExitTrigger(plan, planWallet, decision, estimate.movePct);
+      const triggerMovePct = Number.isFinite(Number(evaluation.triggerMovePct)) ? Number(evaluation.triggerMovePct) : estimate.movePct;
+      planWallet.lastTriggerPriceSource = evaluation.priceSource || estimate.source || "jupiter";
+      planWallet.lastShouldTriggerStopLoss = stopLossTriggerPct > 0 && triggerMovePct <= -stopLossTriggerPct;
+      planWallet.lastShouldTriggerTakeProfit = Number.isFinite(Number(takeProfitPct)) && Number(takeProfitPct) > 0 && triggerMovePct >= Number(takeProfitPct);
+      const trigger = applyPriceExitTrigger(plan, planWallet, decision, triggerMovePct);
       copyWebExitGuardFieldsFromPlanWallet(guard, planWallet);
       guard.status = "watching";
       guard.exitStatus = "watching";
       if (trigger) {
+        planWallet.lastTriggerMovePct = triggerMovePct;
         triggerReason = trigger.triggerReason;
         triggerMeta = trigger.triggerMeta;
         logTpSlEvent("tp_sl_trade_triggered", {
@@ -7202,6 +7226,9 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
       planWallet.lastEstimatedOut = estimate.estimatedOut?.toString?.() || null;
       planWallet.lastBasisLamports = estimate.basis?.toString?.() || null;
       planWallet.lastMonitorSlippageBps = estimate.monitorSlippageBps || CONFIG.stopLossMonitorSlippageBps;
+      planWallet.lastMarketMovePct = estimate.marketMovePct ?? null;
+      planWallet.lastMarketPriceSource = estimate.marketSource || null;
+      planWallet.lastTriggerMovePct = null;
       planWallet.lastError = estimate.quoteError ? `Jupiter quote fallback: ${estimate.quoteError}` : null;
       planWallet.estimateFailures = 0;
       planWallet.lastPriceEstimateError = null;
@@ -7213,7 +7240,6 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
       planWallet.lastStopLossPct = stopLossPct || null;
       planWallet.lastTakeProfitPct = takeProfitPct || null;
       planWallet.lastStopLossTriggerPct = stopLossTriggerPct || null;
-      planWallet.lastTriggerPriceSource = estimate.source || "jupiter";
       planWallet.lastShouldTriggerStopLoss = stopLossTriggerPct > 0 && estimate.movePct <= -stopLossTriggerPct;
       planWallet.lastShouldTriggerTakeProfit = Number.isFinite(Number(takeProfitPct)) && Number(takeProfitPct) > 0 && estimate.movePct >= Number(takeProfitPct);
       const evaluation = evaluatePlanWalletPriceExit(plan, planWallet, estimate, {
@@ -7222,8 +7248,13 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
       });
       const decision = evaluation.decision;
 
-      const trigger = applyPriceExitTrigger(plan, planWallet, decision, estimate.movePct, { ladderLevel });
+      const triggerMovePct = Number.isFinite(Number(evaluation.triggerMovePct)) ? Number(evaluation.triggerMovePct) : estimate.movePct;
+      planWallet.lastTriggerPriceSource = evaluation.priceSource || estimate.source || "jupiter";
+      planWallet.lastShouldTriggerStopLoss = stopLossTriggerPct > 0 && triggerMovePct <= -stopLossTriggerPct;
+      planWallet.lastShouldTriggerTakeProfit = Number.isFinite(Number(takeProfitPct)) && Number(takeProfitPct) > 0 && triggerMovePct >= Number(takeProfitPct);
+      const trigger = applyPriceExitTrigger(plan, planWallet, decision, triggerMovePct, { ladderLevel });
       if (trigger) {
+        planWallet.lastTriggerMovePct = triggerMovePct;
         triggerReason = trigger.triggerReason;
         triggerMeta = trigger.triggerMeta;
         logTpSlEvent("tp_sl_trade_triggered", {
@@ -8041,7 +8072,30 @@ async function estimatePlanWalletMove(plan, wallet, sellPercentOverride = null, 
   const estimatedOut = BigInt(order.outAmount || order.outputAmount || 0);
   const estimatedFee = BigInt(calculateFeeLamports(estimatedOut));
   const snapshot = calculateMoveSnapshot({ estimatedOut, basis, feeLamports: estimatedFee });
-  return { ...snapshot, source: "jupiter", monitorSlippageBps };
+  let market = null;
+  try {
+    market = await estimatePlanWalletMoveFromMarketPrice(plan, token, amount, basis, monitorSlippageBps);
+  } catch {
+    market = null;
+  }
+  return {
+    ...snapshot,
+    source: "jupiter",
+    monitorSlippageBps,
+    marketMovePct: market?.movePct ?? null,
+    marketGrossMovePct: market?.grossMovePct ?? null,
+    marketEstimatedOut: market?.estimatedOut?.toString?.() || null,
+    marketSource: market?.source || null,
+    marketPriceSol: market?.priceSol ?? null
+  };
+}
+
+async function estimatePlanWalletMoveFromMarketPrice(plan, token, amount, basis, monitorSlippageBps = null) {
+  try {
+    return await estimatePlanWalletMoveFromPumpFun(plan, token, amount, basis, new Error("market price check"), monitorSlippageBps);
+  } catch (pumpError) {
+    return estimatePlanWalletMoveFromDexPair(plan, token, amount, basis, pumpError, monitorSlippageBps);
+  }
 }
 
 async function estimatePlanWalletMoveFromPumpFun(plan, token, amount, basis, quoteError, monitorSlippageBps = null) {
@@ -8075,6 +8129,7 @@ async function estimatePlanWalletMoveFromPumpFun(plan, token, amount, basis, quo
   return {
     ...snapshot,
     source: "pumpfun",
+    priceSol,
     monitorSlippageBps,
     quoteError: friendlyError(quoteError)
   };
@@ -8196,6 +8251,7 @@ async function estimatePlanWalletMoveFromDexPair(plan, token, amount, basis, quo
   return {
     ...snapshot,
     source: "dexscreener",
+    priceSol,
     monitorSlippageBps,
     pairAddress: firstString(pricedPair?.pair?.pairAddress, pricedPair?.pair?.address),
     quoteError: friendlyError(quoteError)
@@ -13669,6 +13725,9 @@ async function webExitGuardRows(userId) {
       stopLossPct: guard.stopLossPct || "",
       sellPercent: guard.sellPercent || "",
       lastMovePct: guard.lastMovePct ?? null,
+      lastMarketMovePct: guard.lastMarketMovePct ?? null,
+      lastMarketPriceSource: guard.lastMarketPriceSource || "",
+      lastTriggerMovePct: guard.lastTriggerMovePct ?? null,
       lastCheckedAt: guard.lastCheckedAt || "",
       lastError: guard.lastError || guard.error || "",
       failures: guard.failures || 0,
@@ -13693,7 +13752,11 @@ function webPortfolioExitRows(userId) {
       shortPublicKey: row.walletPublicKey ? shortMint(row.walletPublicKey) : "",
       lastCheckedAt: row.lastCheckedAt || "",
       lastMovePct: row.lastMovePct ?? null,
+      lastMarketMovePct: row.lastMarketMovePct ?? null,
+      lastMarketPriceSource: row.lastMarketPriceSource || "",
+      lastTriggerMovePct: row.lastTriggerMovePct ?? null,
       lastEstimatedOut: row.lastEstimatedOut || "",
+      lastMarketEstimatedOut: row.lastMarketEstimatedOut || "",
       lastBasisLamports: row.lastBasisLamports || "",
       lastSource: row.lastSource || "",
       estimateFailures: row.estimateFailures || 0,
@@ -13737,6 +13800,9 @@ function webTradePlanRow(plan = {}) {
     lastMovePct: wallet.lastMovePct ?? null,
     lastGrossMovePct: wallet.lastGrossMovePct ?? null,
     lastNetMovePct: wallet.lastNetMovePct ?? null,
+    lastMarketMovePct: wallet.lastMarketMovePct ?? null,
+    lastMarketPriceSource: wallet.lastMarketPriceSource || "",
+    lastTriggerMovePct: wallet.lastTriggerMovePct ?? null,
     lastCheckedAt: wallet.lastCheckedAt || "",
     lastTriggerCheckAt: wallet.lastTriggerCheckAt || "",
     lastSellAttemptAt: wallet.lastSellAttemptAt || "",

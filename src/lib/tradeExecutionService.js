@@ -198,6 +198,69 @@ export function evaluatePercentMoveTpSl({
   };
 }
 
+export function evaluatePercentMoveCandidates({
+  moves = [],
+  tradeId,
+  userId,
+  source,
+  symbol,
+  side = TRADE_SIDE.LONG,
+  status = TRADE_STATUS.OPEN,
+  takeProfitPct = 0,
+  stopLossPct = 0,
+  stopLossBufferPct = 0,
+  monitoringEnabled = true
+} = {}) {
+  const candidates = (moves || [])
+    .map((move) => ({
+      priceSource: String(move?.source || move?.priceSource || "unknown"),
+      movePct: numericOrNull(move?.movePct ?? move)
+    }))
+    .filter((move) => Number.isFinite(move.movePct));
+
+  if (!candidates.length) {
+    return evaluatePercentMoveTpSl({
+      tradeId,
+      userId,
+      source,
+      symbol,
+      side,
+      status,
+      movePct: null,
+      takeProfitPct,
+      stopLossPct,
+      stopLossBufferPct,
+      monitoringEnabled
+    });
+  }
+
+  let firstEvaluation = null;
+  for (const candidate of candidates) {
+    const evaluation = evaluatePercentMoveTpSl({
+      tradeId,
+      userId,
+      source,
+      symbol,
+      side,
+      status,
+      movePct: candidate.movePct,
+      takeProfitPct,
+      stopLossPct,
+      stopLossBufferPct,
+      monitoringEnabled
+    });
+    evaluation.priceSource = candidate.priceSource;
+    evaluation.triggerMovePct = candidate.movePct;
+    evaluation.reason = evaluation.reason
+      ? `${evaluation.reason} via ${candidate.priceSource}`
+      : `checked via ${candidate.priceSource}`;
+    firstEvaluation ||= evaluation;
+    if (evaluation.wouldClose) return evaluation;
+  }
+
+  return firstEvaluation;
+}
+
 export function tpSlLogEntry(event, fields = {}) {
   const normalized = normalizeTradeInput({
     id: fields.tradeId || fields.id,
@@ -226,6 +289,8 @@ export function tpSlLogEntry(event, fields = {}) {
     status: normalized.status,
     reason: fields.reason || "",
     trigger: fields.trigger || null,
+    priceSource: fields.priceSource || null,
+    triggerMovePct: numericOrNull(fields.triggerMovePct),
     eligible: Boolean(fields.eligible),
     wouldClose: Boolean(fields.wouldClose),
     closed: Boolean(fields.closed),
@@ -249,6 +314,7 @@ export function formatTpSlDebugRow(evaluation = {}) {
     `status=${evaluation.status || ""}`,
     `eligible=${Boolean(evaluation.eligible)}`,
     `trigger=${trigger}`,
+    `priceSource=${evaluation.priceSource || "n/a"}`,
     `wouldClose=${Boolean(evaluation.wouldClose)}`,
     `reason=${evaluation.reason || ""}`
   ].join(" ");

@@ -5,6 +5,7 @@ import {
   createFakePriceProvider,
   createMemoryTradeStore,
   createCloseOrderRecorder,
+  evaluatePercentMoveCandidates,
   TRADE_STATUS,
   TP_SL_REASON
 } from "../src/lib/tradeExecutionService.js";
@@ -136,4 +137,50 @@ test("duplicate trigger submits close order exactly once", async () => {
   assert.equal(closeOrders.calls[0].tradeId, "web-duplicate-stop");
   assert.equal(closeOrders.calls[0].reason, TP_SL_REASON.STOP_LOSS);
   assert.equal(store.get("web-duplicate-stop").status, TRADE_STATUS.CLOSED);
+});
+
+test("market move candidate triggers take profit when quote move lags chart", () => {
+  const evaluation = evaluatePercentMoveCandidates({
+    tradeId: "ogre-market-profit",
+    userId: "user-7",
+    source: "ogre_ai",
+    symbol: "PUMPUSDC",
+    side: "LONG",
+    status: TRADE_STATUS.OPEN,
+    takeProfitPct: 25,
+    stopLossPct: 8,
+    stopLossBufferPct: 1.5,
+    moves: [
+      { source: "jupiter", movePct: 12 },
+      { source: "dexscreener", movePct: 50 }
+    ]
+  });
+
+  assert.equal(evaluation.wouldClose, true);
+  assert.equal(evaluation.trigger, TP_SL_REASON.TAKE_PROFIT);
+  assert.equal(evaluation.priceSource, "dexscreener");
+  assert.equal(evaluation.triggerMovePct, 50);
+});
+
+test("quote move candidate still triggers stop loss when chart lags quote", () => {
+  const evaluation = evaluatePercentMoveCandidates({
+    tradeId: "ogre-quote-stop",
+    userId: "user-7",
+    source: "ogre_ai",
+    symbol: "PUMPUSDC",
+    side: "LONG",
+    status: TRADE_STATUS.OPEN,
+    takeProfitPct: 25,
+    stopLossPct: 8,
+    stopLossBufferPct: 1.5,
+    moves: [
+      { source: "jupiter", movePct: -10 },
+      { source: "dexscreener", movePct: -3 }
+    ]
+  });
+
+  assert.equal(evaluation.wouldClose, true);
+  assert.equal(evaluation.trigger, TP_SL_REASON.STOP_LOSS);
+  assert.equal(evaluation.priceSource, "jupiter");
+  assert.equal(evaluation.triggerMovePct, -10);
 });

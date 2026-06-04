@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  evaluatePercentMoveCandidates,
   evaluateTpSlTrade,
   formatTpSlDebugRow,
   normalizeTradeStatus,
@@ -61,12 +62,32 @@ function planStopLossPct(plan, wallet) {
   return numberOrNull(plan?.stopLossPct);
 }
 
-function planWalletCurrentMove(wallet) {
-  return numberOrNull(wallet?.lastMovePct ?? wallet?.lastGrossMovePct ?? wallet?.lastNetMovePct);
+function planWalletMoveCandidates(wallet) {
+  return [
+    { source: wallet?.lastEstimateSource || "quote", movePct: numberOrNull(wallet?.lastMovePct ?? wallet?.lastGrossMovePct ?? wallet?.lastNetMovePct) },
+    { source: wallet?.lastMarketPriceSource || "market", movePct: numberOrNull(wallet?.lastMarketMovePct) }
+  ].filter((move) => Number.isFinite(move.movePct));
 }
 
-function evaluatePercentPlanTrade({ id, userId, source, symbol, status, currentMovePct, stopLossPct, takeProfitPct }) {
+function evaluatePercentPlanTrade({ id, userId, source, symbol, status, moves, currentMovePct, stopLossPct, takeProfitPct }) {
   const stopTrigger = stopLossTriggerPct(stopLossPct);
+  const candidates = Array.isArray(moves) && moves.length
+    ? moves
+    : [{ source: "quote", movePct: currentMovePct }];
+  const evaluation = evaluatePercentMoveCandidates({
+    tradeId: id,
+    userId,
+    source,
+    symbol,
+    side: "LONG",
+    status,
+    moves: candidates,
+    stopLossPct,
+    takeProfitPct,
+    stopLossBufferPct,
+    monitoringEnabled: true
+  });
+  if (evaluation.reason !== "missing current price") return evaluation;
   return evaluateTpSlTrade({
     id,
     userId,
@@ -97,7 +118,7 @@ function tradePlanRows(planStore) {
         source: plan.source || "trade_plan",
         symbol: plan.tokenMint,
         status: wallet.exitStatus || wallet.status || plan.status,
-        currentMovePct: planWalletCurrentMove(wallet),
+        moves: planWalletMoveCandidates(wallet),
         stopLossPct,
         takeProfitPct
       }));
@@ -119,7 +140,10 @@ function guardRows(guardStore) {
       source: guard.planSource || guard.source || "web_exit_guard",
       symbol: guard.tokenMint,
       status: guard.exitStatus || guard.status,
-      currentMovePct: numberOrNull(guard.lastMovePct ?? guard.lastGrossMovePct ?? guard.lastNetMovePct),
+      moves: [
+        { source: guard.lastEstimateSource || "quote", movePct: numberOrNull(guard.lastMovePct ?? guard.lastGrossMovePct ?? guard.lastNetMovePct) },
+        { source: guard.lastMarketPriceSource || "market", movePct: numberOrNull(guard.lastMarketMovePct) }
+      ],
       stopLossPct,
       takeProfitPct
     }));
