@@ -3616,6 +3616,537 @@
 [data-app][data-route="terminal"] .tabs button[data-tab="positions"]::before { background-image: url("./assets/slimewire/clean-ui/side_nav_icons/default/positions.png") !important; }
 [data-app][data-route="terminal"] .tabs button[data-tab="pnl"]::before { background-image: url("./assets/slimewire/clean-ui/side_nav_icons/default/pnl.png") !important; }
 
+/* 2026-06-04 connect visual cleanup.
+   Visual-only: preserves existing data hooks, form names, routes, and click handlers. */
+:root {
+  --slime-clean-bg: #050805;
+  --slime-clean-panel: #0a120a;
+  --slime-clean-green: #8dff3e;
+  --slime-clean-glow: #39ff14;
+  --slime-clean-muted: #a2bb9b;
+  --slime-clean-border: #539c3f;
+}
+
+[data-app][data-route="connect"] .top-auth-group button,
+[data-app][data-route="connect"] .connect-actions button,
+[data-app][data-route="connect"] .connect-secondary-actions button,
+[data-app][data-route="connect"] .connect-form-actions button,
+[data-app][data-route="terminal"] .top-sync-strip button,
+[data-app][data-route="terminal"] .mode-row button,
+[data-app][data-route="terminal"] .card-actions button,
+[data-app][data-route="terminal"] .card-actions a,
+[data-app][data-route="terminal"] .terminal-panel header button,
+[data-app][data-route="terminal"] .command-controls > button {
+  min-height: 42px !important;
+  border-radius: 8px !important;
+  padding: 0 14px !important;
+  border: 1px solid rgba(141, 255, 62, 0.34) !important;
+  color: #f3ffe8 !important;
+  font-size: 13px !important;
+  font-weight: 900 !important;
+  line-height: 1.1 !important;
+  letter-spacing: 0 !important;
+  text-align: center !important;
+  background:
+    linear-gradient(180deg, rgba(19, 38, 14, 0.9), rgba(5, 14, 6, 0.94)) !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(141, 255, 62, 0.06),
+    0 0 16px rgba(57, 255, 20, 0.08) !important;
+}
+
+[data-app][data-route="connect"] .connect-actions .primary,
+[data-app][data-route="connect"] .connect-form-actions .primary,
+[data-app][data-route="terminal"] .primary,
+[data-app][data-route="terminal"] .mode-row button[data-active="true"] {
+  border-color: rgba(141, 255, 62, 0.78) !important;
+  color: #061006 !important;
+  background:
+    linear-gradient(180deg, #a8ff4d 0%, #72ff23 100%) !important;
+  box-shadow:
+    0 0 0 1px rgba(141, 255, 62, 0.34),
+    0 0 22px rgba(57, 255, 20, 0.2),
+    inset 0 -8px 16px rgba(18, 72, 4, 0.16) !important;
+}
+
+[data-app][data-route="connect"] .connect-view {
+  min-height: calc(100svh - 94px) !important;
+  padding: 18px 16px 28px !important;
+  place-items: center !important;
+}
+
+[data-app][data-route="connect"] .swamp-connect-shell {
+  width: min(1180px, 100%) !important;
+  min-height: min(680px, calc(100svh - 130px)) !important;
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 430px) !important;
+  align-items: center !important;
+  gap: 32px !important;
+  padding: 40px 48px 58px !important;
+  border: 1px solid rgba(141, 255, 62, 0.34) !important;
+  border-radius: 24px !important;
+  background:
+    linear-gradient(115deg, rgba(2, 5, 2, 0.96), rgba(5, 12, 6, 0.9)),
+    var(--slime-grid),
+    var(--slime-clean-bg) !important;
+  background-size: auto, 420px 420px, auto !important;
+  box-shadow:
+    0 0 0 1px rgba(141, 255, 62, 0.08),
+    0 28px 90px rgba(0, 0, 0, 0.42),
+    inset 0 0 70px rgba(57, 255, 20, 0.04) !important;
+  overflow: hidden !important;
+}
+
+[data-app][data-route="connect"] .swamp-connect-shell::before {
+  inset: 8px !important;
+  z-index: 0 !important;
+  opacity: 0.36 !important;
+  background: var(--slime-frame) center / 100% 100% no-repeat !important;
+  filter: drop-shadow(0 0 16px rgba(57, 255, 20, 0.12)) !important;
+  pointer-events: none !important;
+}
+
+[data-app][data-route="connect"] .connect-hero-side,
+[data-app][data-route="connect"] .connect-card,
+[data-app][data-route="connect"] .connect-powered {
+  position: relative !important;
+  z-index: 1 !important;
+}
+
+[data-app][data-route="connect"] .connect-hero-side {
+  min-height: 0 !important;
+  display: grid !important;
+  align-content: center !important;
+  justify-items: center !important;
+  gap: 8px !important;
+  padding: 0 0 18px !important;
+  text-align: center !important;
+  overflow: visible !important;
+}
+
+[data-app][data-route="connect"] .connect-hero-side .connect-mark {
+  width: 74px !important;
+  height: 74px !important;
+  margin: 0 !important;
+  object-fit: contain !important;
+  filter: drop-shadow(0 0 16px rgba(141, 255, 62, 0.42)) !important;
+}
+
+[data-app][data-route="connect"] .connect-hero-side p {
+  margin: 8px 0 0 !important;
+  color: rgba(245, 255, 242, 0.76) !important;
+  font-size: 16px !important;
+  font-weight: 900 !important;
+  letter-spacing: 0 !important;
+  text-transform: uppercase !important;
+}
+
+[data-app][data-route="connect"] .connect-hero-side h1 {
+  max-width: 100% !important;
+  margin: 0 0 8px !important;
+  color: var(--slime-clean-green) !important;
+  font-size: 88px !important;
+  font-weight: 950 !important;
+  letter-spacing: 0 !important;
+  line-height: 0.92 !important;
+  text-transform: uppercase !important;
+  text-shadow: 0 0 24px rgba(57, 255, 20, 0.42) !important;
+}
+
+[data-app][data-route="connect"] .connect-method-showcase {
+  position: relative !important;
+  width: min(530px, 100%) !important;
+  aspect-ratio: 16 / 9 !important;
+  min-height: 0 !important;
+  margin: 4px auto 0 !important;
+  border: 1px solid rgba(141, 255, 62, 0.36) !important;
+  border-radius: 12px !important;
+  background:
+    linear-gradient(rgba(0, 0, 0, 0.2), rgba(0, 0, 0, 0.26)),
+    url("./assets/slimewire/references/chart-preview.jpg") center / cover no-repeat !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(141, 255, 62, 0.08),
+    0 0 28px rgba(57, 255, 20, 0.12) !important;
+  overflow: hidden !important;
+}
+
+[data-app][data-route="connect"] .connect-method-card {
+  display: none !important;
+}
+
+[data-app][data-route="connect"] .connect-ogre {
+  position: absolute !important;
+  left: 50% !important;
+  bottom: 18px !important;
+  width: min(240px, 44%) !important;
+  max-height: 220px !important;
+  transform: translateX(-50%) !important;
+  opacity: 0.78 !important;
+  object-fit: contain !important;
+  pointer-events: none !important;
+  filter:
+    drop-shadow(0 0 20px rgba(57, 255, 20, 0.2))
+    drop-shadow(0 18px 30px rgba(0, 0, 0, 0.36)) !important;
+}
+
+[data-app][data-route="connect"] .connect-card {
+  justify-self: stretch !important;
+  width: 100% !important;
+  max-width: 430px !important;
+  display: grid !important;
+  gap: 8px !important;
+  justify-items: center !important;
+  padding: 24px !important;
+  border: 1px solid rgba(141, 255, 62, 0.3) !important;
+  border-radius: 18px !important;
+  background:
+    linear-gradient(180deg, rgba(10, 18, 10, 0.88), rgba(3, 8, 4, 0.68)),
+    radial-gradient(circle at 50% 0%, rgba(57, 255, 20, 0.08), transparent 190px) !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(141, 255, 62, 0.04),
+    0 0 32px rgba(57, 255, 20, 0.08) !important;
+  text-align: center !important;
+}
+
+[data-app][data-route="connect"] .connect-card .connect-logo {
+  width: 250px !important;
+  max-width: 86% !important;
+  max-height: 58px !important;
+  margin: 0 auto 2px !important;
+  object-fit: contain !important;
+  filter: drop-shadow(0 0 14px rgba(141, 255, 62, 0.34)) !important;
+}
+
+[data-app][data-route="connect"] .connect-card h2 {
+  max-width: 100% !important;
+  margin: 0 auto 2px !important;
+  color: var(--slime-clean-green) !important;
+  font-size: 58px !important;
+  font-weight: 950 !important;
+  line-height: 0.94 !important;
+  letter-spacing: 0 !important;
+  text-wrap: balance !important;
+  text-shadow: 0 0 20px rgba(57, 255, 20, 0.36) !important;
+  white-space: normal !important;
+}
+
+[data-app][data-route="connect"] .connect-card > p {
+  max-width: 360px !important;
+  margin: 2px auto 6px !important;
+  color: rgba(245, 255, 242, 0.84) !important;
+  font-size: 15px !important;
+  line-height: 1.34 !important;
+}
+
+[data-app][data-route="connect"] .connect-subtitle {
+  margin: 0 !important;
+  color: var(--slime-clean-green) !important;
+  font-size: 13px !important;
+  font-weight: 900 !important;
+  letter-spacing: 0 !important;
+  text-transform: uppercase !important;
+}
+
+[data-app][data-route="connect"] .connect-helper,
+[data-app][data-route="connect"] .connect-next-step,
+[data-app][data-route="connect"] .connect-existing-user,
+[data-app][data-route="connect"] .connect-trust,
+[data-app][data-route="connect"] [data-connected-wallet-summary],
+[data-app][data-route="connect"] .connect-status,
+[data-app][data-route="connect"] .policy-copy {
+  max-width: 360px !important;
+  margin: 0 auto !important;
+  color: rgba(162, 187, 155, 0.9) !important;
+  font-size: 11px !important;
+  line-height: 1.35 !important;
+  letter-spacing: 0 !important;
+  text-align: center !important;
+}
+
+[data-app][data-route="connect"] .connect-trust {
+  color: rgba(176, 255, 122, 0.8) !important;
+}
+
+[data-app][data-route="connect"] .connect-provider-row {
+  width: 100% !important;
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 12px !important;
+  margin: 8px 0 6px !important;
+}
+
+[data-app][data-route="connect"] .connect-card .provider-orb {
+  width: 100% !important;
+  min-width: 0 !important;
+  height: auto !important;
+  min-height: 104px !important;
+  display: inline-flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 8px !important;
+  padding: 12px !important;
+  border: 1px solid rgba(141, 255, 62, 0.36) !important;
+  border-radius: 12px !important;
+  background:
+    linear-gradient(180deg, rgba(13, 32, 10, 0.84), rgba(4, 13, 5, 0.94)) !important;
+  color: #f3ffe8 !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(141, 255, 62, 0.05),
+    0 0 16px rgba(57, 255, 20, 0.08) !important;
+  text-decoration: none !important;
+}
+
+[data-app][data-route="connect"] .connect-card .provider-orb::after {
+  display: none !important;
+}
+
+[data-app][data-route="connect"] .connect-card .provider-orb img {
+  flex: 0 0 auto !important;
+  width: 42px !important;
+  height: 42px !important;
+  min-width: 42px !important;
+  max-width: 42px !important;
+  object-fit: contain !important;
+  border-radius: 10px !important;
+  filter: drop-shadow(0 0 12px rgba(141, 255, 62, 0.34)) !important;
+}
+
+[data-app][data-route="connect"] .connect-card .provider-orb span {
+  display: block !important;
+  color: #f3ffe8 !important;
+  font-size: 13px !important;
+  font-weight: 900 !important;
+  line-height: 1.1 !important;
+  letter-spacing: 0 !important;
+}
+
+[data-app][data-route="connect"] .connect-card .provider-orb:hover,
+[data-app][data-route="connect"] .connect-card .provider-orb:focus-visible {
+  border-color: rgba(141, 255, 62, 0.72) !important;
+  box-shadow:
+    0 0 0 1px rgba(141, 255, 62, 0.18),
+    0 0 22px rgba(57, 255, 20, 0.18) !important;
+}
+
+[data-app][data-route="connect"] .connect-actions {
+  width: 100% !important;
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 8px !important;
+  margin-top: 4px !important;
+}
+
+[data-app][data-route="connect"] .connect-actions .slime-login-button {
+  grid-column: 1 / -1 !important;
+  min-height: 48px !important;
+  width: 100% !important;
+  font-size: 15px !important;
+  text-transform: uppercase !important;
+}
+
+[data-app][data-route="connect"] .connect-actions button:not(.slime-login-button) {
+  width: 100% !important;
+  min-width: 0 !important;
+  font-size: 13px !important;
+}
+
+[data-app][data-route="connect"] .connect-secondary-actions {
+  width: 100% !important;
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 8px !important;
+  margin-top: 0 !important;
+}
+
+[data-app][data-route="connect"] .connect-secondary-actions button {
+  min-width: 0 !important;
+  min-height: 38px !important;
+  padding: 8px 10px !important;
+  color: rgba(226, 255, 214, 0.78) !important;
+  font-size: 11px !important;
+  background: rgba(3, 12, 5, 0.56) !important;
+  border-color: rgba(141, 255, 62, 0.22) !important;
+  box-shadow: none !important;
+}
+
+[data-app][data-route="connect"] .connect-login-panel {
+  width: 100% !important;
+  max-width: 380px !important;
+  display: grid !important;
+  gap: 10px !important;
+  padding: 12px !important;
+  border: 1px solid rgba(141, 255, 62, 0.28) !important;
+  border-radius: 12px !important;
+  background: rgba(3, 10, 4, 0.78) !important;
+}
+
+[data-app][data-route="connect"] .connect-login-panel[hidden] {
+  display: none !important;
+}
+
+[data-app][data-route="connect"] .connect-login-panel label {
+  color: rgba(245, 255, 242, 0.82) !important;
+  font-size: 12px !important;
+  letter-spacing: 0 !important;
+  text-align: left !important;
+}
+
+[data-app][data-route="connect"] .connect-login-panel input {
+  min-height: 42px !important;
+  border-radius: 8px !important;
+}
+
+[data-app][data-route="connect"] .connect-form-actions {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 8px !important;
+}
+
+[data-app][data-route="connect"] .remember-device-row {
+  letter-spacing: 0 !important;
+}
+
+[data-app][data-route="connect"] .connect-powered {
+  left: 50% !important;
+  bottom: 18px !important;
+  transform: translateX(-50%) !important;
+  color: rgba(245, 255, 242, 0.72) !important;
+  font-size: 12px !important;
+  letter-spacing: 0 !important;
+  pointer-events: none !important;
+}
+
+@media (max-width: 980px) {
+  [data-app][data-route="connect"] .connect-view {
+    min-height: auto !important;
+    padding: 12px !important;
+  }
+
+  [data-app][data-route="connect"] .swamp-connect-shell {
+    width: min(720px, 100%) !important;
+    min-height: auto !important;
+    grid-template-columns: 1fr !important;
+    gap: 18px !important;
+    padding: 28px 22px 46px !important;
+    border-radius: 20px !important;
+  }
+
+  [data-app][data-route="connect"] .swamp-connect-shell::before {
+    inset: 6px !important;
+    opacity: 0.28 !important;
+  }
+
+  [data-app][data-route="connect"] .connect-hero-side {
+    display: grid !important;
+    padding-bottom: 0 !important;
+  }
+
+  [data-app][data-route="connect"] .connect-hero-side .connect-mark {
+    width: 58px !important;
+    height: 58px !important;
+  }
+
+  [data-app][data-route="connect"] .connect-hero-side p {
+    font-size: 13px !important;
+  }
+
+  [data-app][data-route="connect"] .connect-hero-side h1 {
+    font-size: 56px !important;
+    margin-bottom: 2px !important;
+  }
+
+  [data-app][data-route="connect"] .connect-method-showcase {
+    width: min(460px, 100%) !important;
+    aspect-ratio: 16 / 6 !important;
+  }
+
+  [data-app][data-route="connect"] .connect-ogre {
+    display: none !important;
+  }
+
+  [data-app][data-route="connect"] .connect-card {
+    justify-self: center !important;
+  }
+}
+
+@media (max-width: 620px) {
+  [data-app][data-route="connect"] .connect-view {
+    padding: 8px !important;
+  }
+
+  [data-app][data-route="connect"] .swamp-connect-shell {
+    width: 100% !important;
+    gap: 12px !important;
+    padding: 20px 12px 38px !important;
+    border-radius: 16px !important;
+  }
+
+  [data-app][data-route="connect"] .connect-hero-side {
+    gap: 4px !important;
+  }
+
+  [data-app][data-route="connect"] .connect-hero-side .connect-mark {
+    width: 46px !important;
+    height: 46px !important;
+  }
+
+  [data-app][data-route="connect"] .connect-hero-side p {
+    margin-top: 4px !important;
+    font-size: 12px !important;
+  }
+
+  [data-app][data-route="connect"] .connect-hero-side h1 {
+    font-size: 44px !important;
+  }
+
+  [data-app][data-route="connect"] .connect-method-showcase {
+    display: none !important;
+  }
+
+  [data-app][data-route="connect"] .connect-card {
+    max-width: none !important;
+    gap: 7px !important;
+    padding: 16px 12px !important;
+  }
+
+  [data-app][data-route="connect"] .connect-card .connect-logo {
+    width: 210px !important;
+    max-height: 48px !important;
+  }
+
+  [data-app][data-route="connect"] .connect-card h2 {
+    font-size: 40px !important;
+  }
+
+  [data-app][data-route="connect"] .connect-card > p {
+    font-size: 13px !important;
+  }
+
+  [data-app][data-route="connect"] .connect-card .provider-orb {
+    min-height: 78px !important;
+    padding: 10px 8px !important;
+  }
+
+  [data-app][data-route="connect"] .connect-card .provider-orb img {
+    width: 34px !important;
+    height: 34px !important;
+    min-width: 34px !important;
+    max-width: 34px !important;
+  }
+
+  [data-app][data-route="connect"] .connect-actions,
+  [data-app][data-route="connect"] .connect-secondary-actions,
+  [data-app][data-route="connect"] .connect-form-actions {
+    grid-template-columns: 1fr !important;
+  }
+
+  [data-app][data-route="connect"] .connect-actions .slime-login-button,
+  [data-app][data-route="connect"] .connect-actions button:not(.slime-login-button),
+  [data-app][data-route="connect"] .connect-secondary-actions button {
+    width: 100% !important;
+  }
+}
+
 @media (min-width: 761px) {
   [data-app][data-route="terminal"] .tabs .nav-section-label {
     width: 100% !important;
@@ -4350,5 +4881,135 @@
     width: 18px !important;
     height: 18px !important;
     min-width: 18px !important;
+  }
+}
+
+/* 2026-06-04 connect visual proof fixes.
+   Visual-only: restores wallet labels and prevents narrow viewport clipping. */
+[data-app][data-route="connect"] .connect-view .connect-provider-row > .provider-orb img + span,
+[data-app][data-route="connect"] .connect-view .connect-method-card img + span {
+  position: static !important;
+  width: auto !important;
+  height: auto !important;
+  min-width: 0 !important;
+  overflow: visible !important;
+  clip: auto !important;
+  clip-path: none !important;
+  white-space: normal !important;
+}
+
+@media (max-width: 760px) {
+  [data-app][data-route="connect"],
+  [data-app][data-route="connect"] .connect-view,
+  [data-app][data-route="connect"] .swamp-connect-shell,
+  [data-app][data-route="connect"] .connect-card,
+  [data-app][data-route="connect"] .connect-card * {
+    box-sizing: border-box !important;
+    min-width: 0 !important;
+  }
+
+  [data-app][data-route="connect"] {
+    width: 100% !important;
+    max-width: 100vw !important;
+    overflow-x: hidden !important;
+  }
+
+  [data-app][data-route="connect"] .connect-view {
+    width: 100% !important;
+    max-width: 100vw !important;
+    padding: 8px !important;
+    overflow-x: hidden !important;
+  }
+
+  [data-app][data-route="connect"] .swamp-connect-shell {
+    width: min(100%, calc(100vw - 16px)) !important;
+    max-width: calc(100vw - 16px) !important;
+    padding: 16px 10px 28px !important;
+    gap: 12px !important;
+    overflow: hidden !important;
+  }
+
+  [data-app][data-route="connect"] .connect-hero-side {
+    width: 100% !important;
+    max-width: 100% !important;
+    gap: 5px !important;
+  }
+
+  [data-app][data-route="connect"] .connect-hero-side .connect-mark {
+    width: 44px !important;
+    height: 44px !important;
+  }
+
+  [data-app][data-route="connect"] .connect-hero-side h1 {
+    max-width: 100% !important;
+    font-size: clamp(34px, 12vw, 48px) !important;
+    line-height: 0.94 !important;
+    overflow-wrap: anywhere !important;
+  }
+
+  [data-app][data-route="connect"] .connect-card {
+    width: 100% !important;
+    max-width: 100% !important;
+    padding: 16px 10px !important;
+    gap: 8px !important;
+  }
+
+  [data-app][data-route="connect"] .connect-card .connect-logo {
+    width: min(220px, 82vw) !important;
+  }
+
+  [data-app][data-route="connect"] .connect-card h2 {
+    max-width: 100% !important;
+    font-size: clamp(31px, 9.8vw, 42px) !important;
+    line-height: 0.95 !important;
+    overflow-wrap: normal !important;
+    white-space: normal !important;
+    text-wrap: balance !important;
+  }
+
+  [data-app][data-route="connect"] .connect-card > p,
+  [data-app][data-route="connect"] .connect-helper,
+  [data-app][data-route="connect"] .connect-next-step,
+  [data-app][data-route="connect"] .connect-existing-user,
+  [data-app][data-route="connect"] .connect-trust,
+  [data-app][data-route="connect"] .policy-copy {
+    width: 100% !important;
+    max-width: 100% !important;
+    overflow-wrap: anywhere !important;
+    white-space: normal !important;
+  }
+
+  [data-app][data-route="connect"] .connect-provider-row {
+    grid-template-columns: 1fr !important;
+    gap: 8px !important;
+  }
+
+  [data-app][data-route="connect"] .connect-provider-row > .provider-orb {
+    min-height: 58px !important;
+    padding: 10px 12px !important;
+  }
+
+  [data-app][data-route="connect"] .connect-provider-row > .provider-orb img {
+    flex-basis: 34px !important;
+    width: 34px !important;
+    height: 34px !important;
+    min-width: 34px !important;
+    max-width: 34px !important;
+  }
+
+  [data-app][data-route="connect"] .connect-actions,
+  [data-app][data-route="connect"] .connect-secondary-actions {
+    grid-template-columns: 1fr !important;
+    gap: 7px !important;
+  }
+
+  [data-app][data-route="connect"] .connect-actions button,
+  [data-app][data-route="connect"] .connect-secondary-actions button {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-height: 42px !important;
+    font-size: 12px !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
   }
 }
