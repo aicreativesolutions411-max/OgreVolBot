@@ -40,10 +40,15 @@ import {
 } from "./lib/tradeExecutionService.js";
 import { workerTickTaskFlags } from "./lib/workerTickTasks.js";
 import {
+  createPumpLaunchError,
   formatPumpLaunchUserError,
   pumpLaunchLogEntry,
   PumpLaunchService,
-  selectPumpLaunchWallet
+  PUMP_LAUNCH_STAGE,
+  PUMP_LAUNCH_STATUS,
+  sanitizeProviderBody,
+  selectPumpLaunchWallet,
+  validatePumpPortalLocalApiUrl
 } from "./lib/pumpLaunchService.js";
 import {
   Connection,
@@ -1283,12 +1288,18 @@ async function handleWebApiRequest(request, response, requestUrl) {
       const bodyLimit = Number.isFinite(CONFIG.pumpLaunchBodyLimitBytes) && CONFIG.pumpLaunchBodyLimitBytes > 0
         ? CONFIG.pumpLaunchBodyLimitBytes
         : 12_000_000;
-      const body = await readJsonRequestBody(request, bodyLimit);
-      const result = await webLaunchPumpCoin(auth.userId, body);
-      sendWebJson(request, response, 200, {
-        ok: true,
-        launch: result
-      });
+      let body = {};
+      try {
+        body = await readJsonRequestBody(request, bodyLimit);
+        const result = await webLaunchPumpCoin(auth.userId, body);
+        sendWebJson(request, response, 200, {
+          ok: true,
+          launch: result
+        });
+      } catch (error) {
+        const status = Number(error.statusCode || error.status || 500);
+        sendWebJson(request, response, status >= 400 && status < 600 ? status : 500, pumpLaunchWebErrorPayload(error, body));
+      }
       return;
     }
 
@@ -17017,6 +17028,78 @@ function firstPumpPortalTransactionValue(value = {}) {
   return null;
 }
 
+function pumpLaunchAttemptIdFrom(body = {}, error = {}) {
+  return firstString(
+    error.launchAttemptId,
+    error.requestId,
+    body.launchAttemptId,
+    body.clientRequestId
+  );
+}
+
+function pumpLaunchWebErrorPayload(error, body = {}) {
+  const launchAttemptId = pumpLaunchAttemptIdFrom(body, error);
+  if (launchAttemptId && !error.launchAttemptId) error.launchAttemptId = launchAttemptId;
+  const safeMessage = formatPumpLaunchUserError(error);
+  const errorCode = error.code || error.errorCode || "PUMP_LAUNCH_FAILED";
+  const stage = error.stage || error.cause?.stage || "";
+  const providerStatus = error.providerStatus || error.status || error.statusCode || null;
+  const providerBodySnippet = sanitizeProviderBody(error.providerResponseBody || error.responseBody || "");
+  return {
+    ok: false,
+    error: errorCode,
+    errorCode,
+    message: safeMessage,
+    launchAttemptId,
+    stage,
+    providerStatus,
+    providerBodySnippet,
+    launch: {
+      launchAttemptId,
+      status: PUMP_LAUNCH_STATUS.FAILED,
+      stage,
+      errorCode,
+      failureReason: safeMessage,
+      providerStatus,
+      providerBodySnippet,
+      txSignature: error.txSignature || ""
+    }
+  };
+}
+
+async function recordPumpLaunchEarlyFailure({
+  launchAttemptId,
+  userId,
+  body = {},
+  name = "",
+  symbol = "",
+  selectedDevWalletId = "",
+  error
+}) {
+  const id = String(launchAttemptId || body.launchAttemptId || body.clientRequestId || "").trim();
+  if (!id || !error) return;
+  if (!error.launchAttemptId) error.launchAttemptId = id;
+  const safeMessage = formatPumpLaunchUserError(error);
+  const attempt = {
+    id,
+    launchAttemptId: id,
+    userId,
+    selectedDevWalletId: selectedDevWalletId || firstString(body.selectedDevWalletId, body.devWalletIndex, body.devWalletPublicKey),
+    tokenName: name || cleanLaunchText(body.name, 64),
+    symbol: symbol || cleanTickerSymbol(body.symbol || body.ticker || ""),
+    status: PUMP_LAUNCH_STATUS.FAILED,
+    stage: error.stage || PUMP_LAUNCH_STAGE.CONFIG,
+    errorCode: error.code || "PUMP_LAUNCH_FAILED",
+    errorMessage: friendlyError(error),
+    failureReason: safeMessage,
+    providerStatus: error.providerStatus || error.status || error.statusCode || null,
+    providerResponseBody: sanitizeProviderBody(error.providerResponseBody || error.responseBody || ""),
+    failedAt: new Date().toISOString()
+  };
+  await upsertPumpLaunchAttempt(attempt);
+  logPumpLaunchEvent("pump_launch_failed", attempt);
+}
+
 async function requestPumpPortalLocalTransaction(requestPayload, timeoutMs, options = {}) {
   const url = options.url || CONFIG.pumpLaunchApiUrl || "https://pumpportal.fun/api/trade-local";
   const response = await fetch(url, {
@@ -17084,16 +17167,18 @@ async function webLaunchPumpPortalLocal(userId, body, basePayload) {
   try {
     walletSelection = selectPumpLaunchWallet(store, userId, selectedDevWalletId);
   } catch (error) {
+    error.launchAttemptId = error.launchAttemptId || basePayload.clientRequestId;
     await upsertPumpLaunchAttempt({
       id: basePayload.clientRequestId,
       userId,
       selectedDevWalletId,
       tokenName: basePayload.name,
       symbol: basePayload.symbol,
-      status: "failed",
-      stage: error.stage || "wallet_auth",
+      status: PUMP_LAUNCH_STATUS.FAILED,
+      stage: error.stage || PUMP_LAUNCH_STAGE.WALLET_AUTH,
       errorCode: error.code || "DEV_WALLET_AUTH_FAILED",
       errorMessage: friendlyError(error),
+      failureReason: formatPumpLaunchUserError(error),
       failedAt: new Date().toISOString()
     });
     logPumpLaunchEvent("pump_launch_failed", {
@@ -17102,10 +17187,11 @@ async function webLaunchPumpPortalLocal(userId, body, basePayload) {
       selectedDevWalletId,
       tokenName: basePayload.name,
       symbol: basePayload.symbol,
-      status: "failed",
-      stage: error.stage || "wallet_auth",
+      status: PUMP_LAUNCH_STATUS.FAILED,
+      stage: error.stage || PUMP_LAUNCH_STAGE.WALLET_AUTH,
       errorCode: error.code || "DEV_WALLET_AUTH_FAILED",
-      errorMessage: friendlyError(error)
+      errorMessage: friendlyError(error),
+      failureReason: formatPumpLaunchUserError(error)
     });
     throw error;
   }
@@ -17114,6 +17200,12 @@ async function webLaunchPumpPortalLocal(userId, body, basePayload) {
   try {
     creatorKeypair = decryptWallet(creatorWallet);
   } catch (error) {
+    const wrapped = createPumpLaunchError("Selected dev wallet could not be decrypted for signing.", "DEV_WALLET_DECRYPT_FAILED", 500, {
+      stage: PUMP_LAUNCH_STAGE.WALLET_AUTH,
+      cause: error,
+      launchAttemptId: basePayload.clientRequestId,
+      devWalletPublicKey: creatorWallet.publicKey
+    });
     await upsertPumpLaunchAttempt({
       id: basePayload.clientRequestId,
       userId,
@@ -17121,10 +17213,11 @@ async function webLaunchPumpPortalLocal(userId, body, basePayload) {
       devWalletPublicKey: creatorWallet.publicKey,
       tokenName: basePayload.name,
       symbol: basePayload.symbol,
-      status: "failed",
-      stage: "wallet_auth",
-      errorCode: "DEV_WALLET_DECRYPT_FAILED",
-      errorMessage: friendlyError(error),
+      status: PUMP_LAUNCH_STATUS.FAILED,
+      stage: PUMP_LAUNCH_STAGE.WALLET_AUTH,
+      errorCode: wrapped.code,
+      errorMessage: friendlyError(wrapped),
+      failureReason: formatPumpLaunchUserError(wrapped),
       failedAt: new Date().toISOString()
     });
     logPumpLaunchEvent("pump_launch_failed", {
@@ -17134,12 +17227,13 @@ async function webLaunchPumpPortalLocal(userId, body, basePayload) {
       devWalletPublicKey: creatorWallet.publicKey,
       tokenName: basePayload.name,
       symbol: basePayload.symbol,
-      status: "failed",
-      stage: "wallet_auth",
-      errorCode: "DEV_WALLET_DECRYPT_FAILED",
-      errorMessage: friendlyError(error)
+      status: PUMP_LAUNCH_STATUS.FAILED,
+      stage: PUMP_LAUNCH_STAGE.WALLET_AUTH,
+      errorCode: wrapped.code,
+      errorMessage: friendlyError(wrapped),
+      failureReason: formatPumpLaunchUserError(wrapped)
     });
-    throw error;
+    throw wrapped;
   }
   const timeoutMs = Number.isFinite(CONFIG.pumpLaunchTimeoutMs) && CONFIG.pumpLaunchTimeoutMs > 0
     ? CONFIG.pumpLaunchTimeoutMs
@@ -17195,9 +17289,18 @@ function launchProviderErrorDetail(error) {
 }
 
 async function webLaunchPumpCoin(userId, body = {}) {
+  const launchAttemptId = firstString(body.launchAttemptId, body.clientRequestId) || crypto.randomUUID();
   if (!CONFIG.pumpLaunchEnabled || !CONFIG.pumpLaunchApiUrl) {
-    const error = new Error("Direct Pump launch is not enabled yet. Save the launch sheet or use the official Pump fallback link.");
-    error.statusCode = 501;
+    const error = createPumpLaunchError(
+      "Direct Pump launch is not enabled yet. Set PUMP_LAUNCH_ENABLED=true and PUMP_LAUNCH_API_URL=https://pumpportal.fun/api/trade-local on Render.",
+      "PUMP_LAUNCH_NOT_ENABLED",
+      501,
+      {
+        stage: PUMP_LAUNCH_STAGE.CONFIG,
+        launchAttemptId
+      }
+    );
+    await recordPumpLaunchEarlyFailure({ launchAttemptId, userId, body, error });
     throw error;
   }
 
@@ -17205,26 +17308,38 @@ async function webLaunchPumpCoin(userId, body = {}) {
   const symbol = cleanTickerSymbol(body.symbol || body.ticker || "");
   const description = cleanLaunchText(body.description, 800);
   if (!name) {
-    const error = new Error("Token name is required.");
-    error.statusCode = 400;
+    const error = createPumpLaunchError("Token name is required.", "PUMP_LAUNCH_NAME_REQUIRED", 400, {
+      stage: PUMP_LAUNCH_STAGE.CONFIG,
+      launchAttemptId
+    });
+    await recordPumpLaunchEarlyFailure({ launchAttemptId, userId, body, error });
     throw error;
   }
   if (!symbol) {
-    const error = new Error("Token ticker/symbol is required.");
-    error.statusCode = 400;
+    const error = createPumpLaunchError("Token ticker/symbol is required.", "PUMP_LAUNCH_SYMBOL_REQUIRED", 400, {
+      stage: PUMP_LAUNCH_STAGE.CONFIG,
+      launchAttemptId
+    });
+    await recordPumpLaunchEarlyFailure({ launchAttemptId, userId, body, name, error });
     throw error;
   }
 
   const imageDataUrl = String(body.imageDataUrl || "");
   if (imageDataUrl && !/^data:image\/(png|jpe?g|webp|gif);base64,/i.test(imageDataUrl)) {
-    const error = new Error("Upload a PNG, JPG, WEBP, or GIF token image.");
-    error.statusCode = 400;
+    const error = createPumpLaunchError("Upload a PNG, JPG, WEBP, or GIF token image.", "PUMP_LAUNCH_IMAGE_TYPE_INVALID", 400, {
+      stage: PUMP_LAUNCH_STAGE.CONFIG,
+      launchAttemptId
+    });
+    await recordPumpLaunchEarlyFailure({ launchAttemptId, userId, body, name, symbol, error });
     throw error;
   }
   const decodedLaunchImage = imageDataUrl ? decodeLaunchImageDataUrl(imageDataUrl, { symbol, name, imageName: body.imageName }) : null;
   if (imageDataUrl && !decodedLaunchImage) {
-    const error = new Error("Token image could not be decoded. Upload a smaller square PNG, JPG, WEBP, or GIF.");
-    error.statusCode = 400;
+    const error = createPumpLaunchError("Token image could not be decoded. Upload a smaller square PNG, JPG, WEBP, or GIF.", "PUMP_LAUNCH_IMAGE_DECODE_FAILED", 400, {
+      stage: PUMP_LAUNCH_STAGE.CONFIG,
+      launchAttemptId
+    });
+    await recordPumpLaunchEarlyFailure({ launchAttemptId, userId, body, name, symbol, error });
     throw error;
   }
   const imageMaxBytes = Number.isFinite(CONFIG.pumpLaunchImageMaxBytes) && CONFIG.pumpLaunchImageMaxBytes > 0
@@ -17233,8 +17348,11 @@ async function webLaunchPumpCoin(userId, body = {}) {
   if (decodedLaunchImage && decodedLaunchImage.buffer.length > imageMaxBytes) {
     const actualKb = Math.ceil(decodedLaunchImage.buffer.length / 1024);
     const maxKb = Math.floor(imageMaxBytes / 1024);
-    const error = new Error(`Token image is ${actualKb}KB after compression. Limit is ${maxKb}KB. Use a smaller square JPG, PNG, WEBP, or GIF and try again.`);
-    error.statusCode = 413;
+    const error = createPumpLaunchError(`Token image is ${actualKb}KB after compression. Limit is ${maxKb}KB. Use a smaller square JPG, PNG, WEBP, or GIF and try again.`, "PUMP_LAUNCH_IMAGE_TOO_LARGE", 413, {
+      stage: PUMP_LAUNCH_STAGE.CONFIG,
+      launchAttemptId
+    });
+    await recordPumpLaunchEarlyFailure({ launchAttemptId, userId, body, name, symbol, error });
     throw error;
   }
 
@@ -17276,11 +17394,18 @@ async function webLaunchPumpCoin(userId, body = {}) {
       walletIndex: cleanLaunchText(body.devWalletIndex || body.selectedDevWalletId || body.devWalletPublicKey, 64)
     },
     slippageBps: cleanLaunchNumber(body.slippageBps, 300, 1, 5000),
-    clientRequestId: crypto.randomUUID(),
+    clientRequestId: launchAttemptId,
     source: "slimewire_web"
   };
 
   if (isPumpPortalLocalLaunch()) {
+    try {
+      validatePumpPortalLocalApiUrl(CONFIG.pumpLaunchApiUrl);
+    } catch (error) {
+      error.launchAttemptId = launchAttemptId;
+      await recordPumpLaunchEarlyFailure({ launchAttemptId, userId, body, name, symbol, error });
+      throw error;
+    }
     try {
       const result = await webLaunchPumpPortalLocal(userId, body, basePayload);
       await audit("web_launch_pump_coin", {
@@ -17293,6 +17418,7 @@ async function webLaunchPumpCoin(userId, body = {}) {
       });
       return {
         ...result,
+        launchAttemptId,
         pumpUrl: pumpFunUrl(result.tokenMint),
         dexUrl: dexScreenerUrl(result.tokenMint),
         message: `Pump launch returned ${shortMint(result.tokenMint)}.`
@@ -17300,8 +17426,12 @@ async function webLaunchPumpCoin(userId, body = {}) {
     } catch (error) {
       const wrapped = new Error(formatPumpLaunchUserError(error));
       wrapped.statusCode = Number(error.status || error.statusCode || 502);
+      wrapped.code = error.code || "PUMP_LAUNCH_FAILED";
+      wrapped.stage = error.stage || error.cause?.stage || "";
+      wrapped.launchAttemptId = error.launchAttemptId || launchAttemptId;
+      wrapped.txSignature = error.txSignature || "";
       wrapped.providerStatus = error.providerStatus || error.status || error.statusCode || null;
-      wrapped.providerResponseBody = error.providerResponseBody || error.responseBody || "";
+      wrapped.providerResponseBody = sanitizeProviderBody(error.providerResponseBody || error.responseBody || "");
       throw wrapped;
     }
   }
@@ -17322,8 +17452,12 @@ async function webLaunchPumpCoin(userId, body = {}) {
       : `Pump launch provider rejected the request${detail ? `: ${detail}` : `: ${friendlyError(error)}`}${pumpLaunchProviderHint(status)}`;
     const wrapped = new Error(message);
     wrapped.statusCode = status >= 400 && status < 500 ? status : 502;
+    wrapped.code = "PUMP_LAUNCH_PROVIDER_FAILED";
+    wrapped.stage = PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL;
+    wrapped.launchAttemptId = launchAttemptId;
     wrapped.providerStatus = status;
-    wrapped.providerResponseBody = error.responseBody;
+    wrapped.providerResponseBody = sanitizeProviderBody(error.responseBody || "");
+    await recordPumpLaunchEarlyFailure({ launchAttemptId, userId, body, name, symbol, error: wrapped });
     throw wrapped;
   }
   const tokenMint = normalizeLaunchResponseMint(providerResult);
@@ -17348,6 +17482,7 @@ async function webLaunchPumpCoin(userId, body = {}) {
       providerResult.result?.signature
     ),
     requestId: firstString(providerResult.requestId, providerResult.id, providerResult.result?.requestId, payload.clientRequestId),
+    launchAttemptId,
     pumpUrl: tokenMint ? pumpFunUrl(tokenMint) : "",
     dexUrl: tokenMint ? dexScreenerUrl(tokenMint) : "",
     message: tokenMint ? `Pump launch returned ${shortMint(tokenMint)}.` : "Pump launch submitted. Waiting for token CA."

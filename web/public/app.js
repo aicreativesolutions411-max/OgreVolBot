@@ -329,8 +329,9 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function publicErrorMessage(message = "") {
+function publicErrorMessage(message = "", options = {}) {
   const text = String(message || "");
+  if (options.preserveSafeError) return text;
   if (/OGRE_API|WEB_ALLOWED|Render|Cloudflare|backend|API returned|invalid JSON|Jupiter|RPC|Helius|MadeOnSol|Solana Tracker|API key/i.test(text)) {
     return "SlimeWire could not complete that request right now. Refresh and try again, or contact support if it continues.";
   }
@@ -359,7 +360,7 @@ async function wakeApi(base) {
 }
 
 async function api(path, options = {}) {
-  const { timeoutMs = API_CONNECT_TIMEOUT_MS, ...fetchOptions } = options || {};
+  const { timeoutMs = API_CONNECT_TIMEOUT_MS, preserveSafeError = false, ...fetchOptions } = options || {};
   const headers = {
     "Content-Type": "application/json",
     ...(fetchOptions.headers || {})
@@ -398,10 +399,17 @@ async function api(path, options = {}) {
   const data = await readApiJson(response);
 
   if (!response.ok || data.ok === false) {
-    const message = publicErrorMessage(data.message || data.error || `HTTP ${response.status}`);
+    const isLaunchError = preserveSafeError || path === "/api/web/launch/coin" || Boolean(data.launchAttemptId || data.launch?.launchAttemptId);
+    const message = publicErrorMessage(data.message || data.launch?.failureReason || data.error || `HTTP ${response.status}`, {
+      preserveSafeError: isLaunchError
+    });
     const error = new Error(message);
     error.status = response.status;
     error.data = data;
+    error.code = data.errorCode || data.launch?.errorCode || data.error || "";
+    error.stage = data.stage || data.launch?.stage || "";
+    error.launchAttemptId = data.launchAttemptId || data.launch?.launchAttemptId || "";
+    error.providerStatus = data.providerStatus || data.launch?.providerStatus || null;
     if (response.status === 401) {
       resetWebSession(message);
     }
@@ -3728,21 +3736,31 @@ async function submitLaunchCoin() {
     writeText(status, state.launchCoinStatus);
 
     const imagePayload = await launchCoinImagePayload();
+    const launchAttemptId = globalThis.crypto?.randomUUID?.()
+      || `launch-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     const requestPayload = {
       ...draft,
-      ...imagePayload
+      ...imagePayload,
+      launchAttemptId
     };
     const requestBody = JSON.stringify(requestPayload);
     if (requestBody.length > 650_000) {
       throw new Error("Launch upload is still too large. Use a smaller square JPG, PNG, or WEBP and try again.");
     }
-    state.launchCoinStatus = "Submitting launch through SlimeWire...";
+    console.info("[SlimeWire pump launch]", {
+      launchAttemptId,
+      step: "frontend_submit",
+      symbol: draft.symbol,
+      selectedDevWalletId: draft.selectedDevWalletId || draft.devWalletIndex || draft.devWalletPublicKey || ""
+    });
+    state.launchCoinStatus = `Submitting launch through SlimeWire... Launch ID: ${launchAttemptId}`;
     writeText(status, state.launchCoinStatus);
 
     const data = await api("/api/web/launch/coin", {
       method: "POST",
       body: requestBody,
-      timeoutMs: API_LONG_ACTION_TIMEOUT_MS
+      timeoutMs: API_LONG_ACTION_TIMEOUT_MS,
+      preserveSafeError: true
     });
 
     const launch = data.launch || {};
@@ -3785,7 +3803,17 @@ async function submitLaunchCoin() {
     navigateTo("/terminal/chart", "smartChart");
     render({ force: true });
   } catch (error) {
-    state.launchCoinStatus = error.message || "Launch failed.";
+    const suffix = error.launchAttemptId && !String(error.message || "").includes(error.launchAttemptId)
+      ? ` Launch ID: ${error.launchAttemptId}.`
+      : "";
+    state.launchCoinStatus = `${error.message || "Launch failed."}${suffix}`;
+    console.error("[SlimeWire pump launch]", {
+      launchAttemptId: error.launchAttemptId || "",
+      stage: error.stage || "",
+      code: error.code || "",
+      providerStatus: error.providerStatus || null,
+      message: error.message || "Launch failed."
+    });
     writeText(status, state.launchCoinStatus);
     setError(state.launchCoinStatus);
   }

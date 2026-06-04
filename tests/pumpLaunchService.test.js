@@ -9,10 +9,13 @@ import {
 } from "@solana/web3.js";
 import {
   decodePumpPortalTransaction,
+  formatPumpLaunchUserError,
   PUMP_LAUNCH_STATUS,
+  PUMP_LAUNCH_STAGE,
   pumpLaunchLogEntry,
   PumpLaunchService,
-  selectPumpLaunchWallet
+  selectPumpLaunchWallet,
+  validatePumpPortalLocalApiUrl
 } from "../src/lib/pumpLaunchService.js";
 
 function managedWallet(ownerId, keypair = Keypair.generate(), overrides = {}) {
@@ -91,9 +94,9 @@ function serviceHarness(overrides = {}) {
         launchAttemptId: id
       });
     },
-    recordTradeEvent: async (event) => {
+    recordTradeEvent: overrides.recordTradeEvent || (async (event) => {
       tradeEvents.push(event);
-    },
+    }),
     log: (event, fields) => logs.push({ event, fields })
   });
   return {
@@ -146,6 +149,38 @@ test("managed wallet with too little SOL fails before metadata or PumpPortal", a
   assert.equal(harness.requestBody(), null);
   assert.equal(harness.attempts.get("attempt-1").status, PUMP_LAUNCH_STATUS.FAILED);
   assert.equal(harness.attempts.get("attempt-1").errorCode, "DEV_WALLET_INSUFFICIENT_SOL");
+});
+
+test("wrong or missing PumpPortal Local API URL fails with a config error", async () => {
+  assert.throws(
+    () => validatePumpPortalLocalApiUrl("https://pumpportal.fun/api/trade"),
+    /must be exactly/
+  );
+
+  const keypair = Keypair.generate();
+  const wallet = managedWallet("user-7", keypair);
+  const harness = serviceHarness({
+    uploadMetadata: async () => {
+      throw new Error("should not upload metadata with bad config");
+    }
+  });
+
+  await assert.rejects(
+    () => harness.service.launch({
+      ...launchInput({ wallet, walletKeypair: keypair }),
+      config: {
+        ...launchInput().config,
+        apiUrl: ""
+      }
+    }),
+    /PUMP_LAUNCH_API_URL/
+  );
+
+  const attempt = harness.attempts.get("attempt-1");
+  assert.equal(attempt.status, PUMP_LAUNCH_STATUS.FAILED);
+  assert.equal(attempt.stage, PUMP_LAUNCH_STAGE.CONFIG);
+  assert.equal(attempt.errorCode, "PUMP_LAUNCH_API_URL_INVALID");
+  assert.equal(harness.requestBody(), null);
 });
 
 test("managed funded wallet builds the correct PumpPortal Local create body", async () => {
@@ -233,6 +268,106 @@ test("PumpPortal non-200 failure is recorded with status and body", async () => 
   assert.equal(attempt.stage, "pumpportal_local");
   assert.equal(attempt.providerStatus, 401);
   assert.equal(attempt.providerResponseBody, "Not Authorized");
+});
+
+test("metadata upload failure records a specific metadata error", async () => {
+  const keypair = Keypair.generate();
+  const wallet = managedWallet("user-7", keypair);
+  const harness = serviceHarness({
+    uploadMetadata: async () => {
+      const error = new Error("Pinata token expired");
+      error.status = 401;
+      throw error;
+    }
+  });
+
+  await assert.rejects(
+    () => harness.service.launch(launchInput({ wallet, walletKeypair: keypair })),
+    /Pinata token expired/
+  );
+
+  const attempt = harness.attempts.get("attempt-1");
+  assert.equal(attempt.status, PUMP_LAUNCH_STATUS.FAILED);
+  assert.equal(attempt.stage, PUMP_LAUNCH_STAGE.METADATA_UPLOAD);
+  assert.equal(attempt.errorCode, "PUMP_LAUNCH_METADATA_UPLOAD_FAILED");
+  assert.match(attempt.failureReason, /Metadata upload/);
+  assert.equal(harness.requestBody(), null);
+});
+
+test("Local transaction signing failure records a signing error", async () => {
+  const keypair = Keypair.generate();
+  const wallet = managedWallet("user-7", keypair);
+  const harness = serviceHarness({
+    tx: {
+      sign() {
+        throw new Error("missing mint signer");
+      }
+    }
+  });
+
+  await assert.rejects(
+    () => harness.service.launch(launchInput({ wallet, walletKeypair: keypair })),
+    /missing mint signer/
+  );
+
+  const attempt = harness.attempts.get("attempt-1");
+  assert.equal(attempt.status, PUMP_LAUNCH_STATUS.FAILED);
+  assert.equal(attempt.stage, PUMP_LAUNCH_STAGE.SIGNING);
+  assert.equal(attempt.errorCode, "PUMP_LAUNCH_SIGNING_FAILED");
+  assert.match(attempt.failureReason, /could not sign/);
+});
+
+test("RPC send failure records a send error and keeps scanning details", async () => {
+  const keypair = Keypair.generate();
+  const wallet = managedWallet("user-7", keypair);
+  const harness = serviceHarness({
+    sendTransaction: async () => {
+      throw new Error("simulation failed: custom program error");
+    }
+  });
+
+  await assert.rejects(
+    () => harness.service.launch(launchInput({ wallet, walletKeypair: keypair })),
+    /simulation failed/
+  );
+
+  const attempt = harness.attempts.get("attempt-1");
+  assert.equal(attempt.status, PUMP_LAUNCH_STATUS.FAILED);
+  assert.equal(attempt.stage, PUMP_LAUNCH_STAGE.SEND_TRANSACTION);
+  assert.equal(attempt.errorCode, "PUMP_LAUNCH_SEND_FAILED");
+  assert.match(attempt.failureReason, /failed to send or confirm/);
+});
+
+test("successful chain send but failed SlimeWire token save returns a recoverable support message", async () => {
+  const keypair = Keypair.generate();
+  const wallet = managedWallet("user-7", keypair);
+  const harness = serviceHarness({
+    sendTransaction: async () => "txsig-chain-success",
+    recordTradeEvent: async () => {
+      throw new Error("trade-history write failed");
+    }
+  });
+
+  let capturedError = null;
+  await assert.rejects(
+    async () => {
+      try {
+        await harness.service.launch(launchInput({ wallet, walletKeypair: keypair }));
+      } catch (error) {
+        capturedError = error;
+        throw error;
+      }
+    },
+    /trade-history write failed/
+  );
+
+  const attempt = harness.attempts.get("attempt-1");
+  assert.equal(attempt.status, PUMP_LAUNCH_STATUS.FAILED);
+  assert.equal(attempt.stage, PUMP_LAUNCH_STAGE.STORE_RESULT);
+  assert.equal(attempt.errorCode, "PUMP_LAUNCH_TOKEN_REGISTRATION_FAILED");
+  assert.equal(attempt.txSignature, "txsig-chain-success");
+  assert.match(attempt.failureReason, /Token launched on-chain but failed to save in SlimeWire/);
+  assert.match(formatPumpLaunchUserError(capturedError), /txSignature=txsig-chain-success/);
 });
 
 test("successful launch stores token record fields and transaction signature", async () => {

@@ -26,6 +26,7 @@ const pinataJwt = process.env.PUMP_LAUNCH_PINATA_JWT || "";
 const rpcUrl = process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
 const userId = String(process.env.DEBUG_PUMP_LAUNCH_USER_ID || "").trim();
 const selectedDevWalletId = String(process.env.DEBUG_PUMP_LAUNCH_DEV_WALLET || process.env.DEBUG_PUMP_LAUNCH_DEV_WALLET_ID || "").trim();
+const debugLaunchAttemptId = String(process.env.DEBUG_PUMP_LAUNCH_ATTEMPT_ID || "").trim();
 const devBuySol = numberOrDefault(process.env.DEBUG_PUMP_LAUNCH_DEV_BUY_SOL, 0.0001);
 const priorityFeeSol = numberOrDefault(process.env.PUMP_LAUNCH_PRIORITY_FEE_SOL, 0.00005);
 const requiredBufferSol = numberOrDefault(process.env.PUMP_LAUNCH_REQUIRED_BUFFER_SOL, 0.01);
@@ -110,13 +111,33 @@ function attemptLine(attempt) {
     `mintSecretStored=${Boolean(attempt.mintSecretStored || attempt.encryptedMintSecret)}`,
     `tx=${short(attempt.txSignature)}`,
     `errorCode=${attempt.errorCode || ""}`,
-    `error=${String(attempt.errorMessage || "").replace(/\s+/g, " ").slice(0, 160)}`
+    `error=${String(attempt.failureReason || attempt.errorMessage || "").replace(/\s+/g, " ").slice(0, 220)}`
   ].join(" ");
 }
 
-const [walletStore, attemptStore] = await Promise.all([
+function tokenFeatureStatus(attempt, tradeStore) {
+  const mint = String(attempt?.mintPublicKey || attempt?.tokenMint || "").trim();
+  const signature = String(attempt?.txSignature || "").trim();
+  const trades = Array.isArray(tradeStore?.trades) ? tradeStore.trades : [];
+  const launchTrade = trades.find((trade) => (
+    String(trade.tokenMint || "") === mint
+    || (signature && String(trade.signature || "") === signature)
+  ));
+  return {
+    tokenPageStatus: mint ? "registered-by-mint" : "missing-mint",
+    buySell: Boolean(mint),
+    walletBalances: Boolean(attempt?.devWalletPublicKey),
+    tradeLogs: Boolean(launchTrade),
+    positionsPnl: Boolean(launchTrade),
+    alertsStatus: Boolean(attempt?.status),
+    tradeEventId: launchTrade?.id || ""
+  };
+}
+
+const [walletStore, attemptStore, tradeStore] = await Promise.all([
   readJsonIfExists("wallets.json", { wallets: [] }),
-  readJsonIfExists("pump-launch-attempts.json", { attempts: [] })
+  readJsonIfExists("pump-launch-attempts.json", { attempts: [] }),
+  readJsonIfExists("trade-history.json", { trades: [] })
 ]);
 
 console.log("PUMP LAUNCH DEBUG");
@@ -127,11 +148,12 @@ console.log(`PUMP_LAUNCH_PINATA_JWT_CONFIGURED=${Boolean(pinataJwt)}`);
 console.log(`SOLANA_RPC_URL_CONFIGURED=${Boolean(rpcUrl)}`);
 console.log(`DEBUG_PUMP_LAUNCH_USER_ID=${userId || "(not set)"}`);
 console.log(`DEBUG_PUMP_LAUNCH_DEV_WALLET=${selectedDevWalletId || "(not set)"}`);
+console.log(`DEBUG_PUMP_LAUNCH_ATTEMPT_ID=${debugLaunchAttemptId || "(not set)"}`);
 
 const requiredSol = pumpLaunchRequiredSol({ devBuySol, priorityFeeSol, bufferSol: requiredBufferSol });
 console.log(`requiredSol=${requiredSol.toFixed(6)} devBuySol=${devBuySol} priorityFeeSol=${priorityFeeSol} bufferSol=${requiredBufferSol}`);
 
-if (!apiUrl || !apiUrl.includes("pumpportal.fun/api/trade-local")) {
+if (apiUrl !== "https://pumpportal.fun/api/trade-local") {
   console.log("apiUrlValid=false reason=PUMP_LAUNCH_API_URL should be https://pumpportal.fun/api/trade-local for Local API signing.");
 } else {
   console.log("apiUrlValid=true");
@@ -186,4 +208,29 @@ if (!attempts.length) {
   for (const attempt of attempts) {
     console.log(attemptLine(attempt));
   }
+}
+
+const allAttempts = Array.isArray(attemptStore.attempts) ? attemptStore.attempts : [];
+const selectedAttempt = debugLaunchAttemptId
+  ? allAttempts.find((attempt) => String(attempt.launchAttemptId || attempt.id || "") === debugLaunchAttemptId)
+  : allAttempts.at(-1);
+
+console.log("SELECTED LAUNCH ATTEMPT DETAIL");
+if (!selectedAttempt) {
+  console.log(debugLaunchAttemptId
+    ? `No launch attempt found for ${debugLaunchAttemptId}.`
+    : "No launch attempt selected.");
+} else {
+  const features = tokenFeatureStatus(selectedAttempt, tradeStore);
+  console.log(attemptLine(selectedAttempt));
+  console.log(`selectedDevWalletId=${selectedAttempt.selectedDevWalletId || ""}`);
+  console.log(`devWalletPublicKey=${selectedAttempt.devWalletPublicKey || ""}`);
+  console.log(`balanceSol=${selectedAttempt.balanceSol ?? "unknown"} requiredSol=${selectedAttempt.requiredSol ?? "unknown"}`);
+  console.log(`metadataUri=${selectedAttempt.metadataUri || ""}`);
+  console.log(`mintPublicKey=${selectedAttempt.mintPublicKey || ""}`);
+  console.log(`pumpPortalStatus=${selectedAttempt.providerStatus || ""}`);
+  console.log(`pumpPortalBodySnippet=${String(selectedAttempt.providerResponseBody || "").replace(/\s+/g, " ").slice(0, 300)}`);
+  console.log(`txSignature=${selectedAttempt.txSignature || ""}`);
+  console.log(`dbTokenStatus=${features.tradeLogs ? "trade-history-registered" : "not-found-in-trade-history"}`);
+  console.log(`siteFeatures=${JSON.stringify(features)}`);
 }

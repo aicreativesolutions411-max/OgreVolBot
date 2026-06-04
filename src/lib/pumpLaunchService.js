@@ -5,17 +5,27 @@ import {
 } from "@solana/web3.js";
 
 export const PUMP_LAUNCH_STATUS = Object.freeze({
-  STARTED: "started",
-  PREFLIGHT: "preflight",
-  METADATA_UPLOADED: "metadata_uploaded",
-  PUMPPORTAL_REQUESTED: "pumpportal_requested",
-  SIGNED: "signed",
-  SUBMITTED: "submitted",
-  LAUNCHED: "launched",
-  FAILED: "failed"
+  PENDING: "PENDING",
+  VALIDATING: "VALIDATING",
+  UPLOADING_METADATA: "UPLOADING_METADATA",
+  BUILDING_TX: "BUILDING_TX",
+  SIGNING: "SIGNING",
+  SENDING: "SENDING",
+  CONFIRMING: "CONFIRMING",
+  REGISTERING_TOKEN: "REGISTERING_TOKEN",
+  COMPLETE: "COMPLETE",
+  FAILED: "FAILED",
+  STARTED: "PENDING",
+  PREFLIGHT: "VALIDATING",
+  METADATA_UPLOADED: "UPLOADING_METADATA",
+  PUMPPORTAL_REQUESTED: "BUILDING_TX",
+  SIGNED: "SIGNING",
+  SUBMITTED: "SENDING",
+  LAUNCHED: "COMPLETE"
 });
 
 export const PUMP_LAUNCH_STAGE = Object.freeze({
+  CONFIG: "config",
   WALLET_AUTH: "wallet_auth",
   BALANCE_CHECK: "balance_check",
   METADATA_UPLOAD: "metadata_upload",
@@ -33,15 +43,32 @@ export function createPumpLaunchError(message, code, statusCode = 400, extra = {
   return error;
 }
 
-export function pumpLaunchStageError(stage, code, cause, statusCode = 502) {
+export function pumpLaunchStageError(stage, code, cause, statusCode = 502, extra = {}) {
   const message = cause?.message || String(cause || "Unknown launch error");
   const error = createPumpLaunchError(message, code, Number(cause?.status || cause?.statusCode || statusCode), {
     stage,
     cause,
     providerStatus: cause?.status || cause?.statusCode || null,
-    providerResponseBody: cause?.responseBody || ""
+    providerResponseBody: cause?.responseBody || "",
+    ...extra
   });
   return error;
+}
+
+export function validatePumpPortalLocalApiUrl(apiUrl) {
+  const clean = String(apiUrl || "").trim();
+  if (clean !== "https://pumpportal.fun/api/trade-local") {
+    throw createPumpLaunchError(
+      "PUMP_LAUNCH_API_URL must be exactly https://pumpportal.fun/api/trade-local for PumpPortal Local API launches.",
+      "PUMP_LAUNCH_API_URL_INVALID",
+      500,
+      {
+        stage: PUMP_LAUNCH_STAGE.CONFIG,
+        apiUrl: clean
+      }
+    );
+  }
+  return clean;
 }
 
 export function isServerSignableWallet(wallet) {
@@ -298,25 +325,36 @@ export function formatPumpLaunchUserError(error) {
   const code = error?.code || "";
   const message = String(error?.message || "Pump launch failed").replace(/\s+/g, " ").trim();
   const status = Number(error?.providerStatus || error?.status || error?.statusCode || 0);
+  const launchAttemptId = error?.launchAttemptId ? ` launchAttemptId=${error.launchAttemptId}` : "";
 
+  if (code === "PUMP_LAUNCH_NOT_ENABLED") return `Direct Pump launch is not enabled on the backend.${launchAttemptId}`;
+  if (code === "PUMP_LAUNCH_API_URL_INVALID") return `${message}${launchAttemptId}`;
   if (code === "MISSING_DEV_WALLET") return "Choose a managed SlimeWire dev wallet before launching.";
   if (code === "DEV_WALLET_NOT_AUTHORIZED") return message;
   if (code === "DEV_WALLET_NOT_FOUND") return message;
   if (code === "DEV_WALLET_NOT_MANAGED") return message;
+  if (code === "DEV_WALLET_LOAD_FAILED") return `${message}${launchAttemptId}`;
+  if (code === "DEV_WALLET_DECRYPT_FAILED") return `Selected dev wallet could not be decrypted for signing.${launchAttemptId}`;
   if (code === "DEV_WALLET_INSUFFICIENT_SOL") return message;
   if (stage === PUMP_LAUNCH_STAGE.METADATA_UPLOAD && (status === 401 || status === 403 || /not authorized|unauthorized/i.test(message))) {
-    return `Metadata upload is not authorized. Check PUMP_LAUNCH_PINATA_JWT on Render, then retry. Provider said: ${message}`;
+    return `Metadata upload is not authorized. Check PUMP_LAUNCH_PINATA_JWT on Render, then retry. Provider said: ${message}${launchAttemptId}`;
   }
   if (stage === PUMP_LAUNCH_STAGE.METADATA_UPLOAD) {
-    return `Metadata upload failed before PumpPortal was called: ${message}`;
+    return `Metadata upload failed before PumpPortal was called: ${message}${launchAttemptId}`;
   }
   if (stage === PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL) {
-    return `PumpPortal Local API rejected the create request: ${message}`;
+    return `PumpPortal Local API rejected the create request: ${message}${launchAttemptId}`;
+  }
+  if (stage === PUMP_LAUNCH_STAGE.SIGNING) {
+    return `PumpPortal returned a transaction, but SlimeWire could not sign it with the mint and dev wallet: ${message}${launchAttemptId}`;
   }
   if (stage === PUMP_LAUNCH_STAGE.SEND_TRANSACTION) {
-    return `Pump launch transaction was signed but failed to send or confirm: ${message}`;
+    return `Pump launch transaction was signed but failed to send or confirm: ${message}${launchAttemptId}`;
   }
-  return message;
+  if (stage === PUMP_LAUNCH_STAGE.STORE_RESULT && error?.txSignature) {
+    return `Token launched on-chain but failed to save in SlimeWire. Contact support with launchAttemptId=${error.launchAttemptId || ""} txSignature=${error.txSignature}.`;
+  }
+  return `${message}${launchAttemptId}`;
 }
 
 export class PumpLaunchService {
@@ -369,6 +407,7 @@ export class PumpLaunchService {
       priorityFeeSol,
       bufferSol: config.requiredBufferSol
     });
+    let submittedSignature = "";
 
     if (wallet.publicKey && wallet.publicKey !== devWalletPublicKey) {
       throw createPumpLaunchError("Decrypted dev wallet key does not match the selected wallet public key.", "DEV_WALLET_KEY_MISMATCH", 500, {
@@ -395,7 +434,8 @@ export class PumpLaunchService {
       priorityFeeSol,
       requiredSol,
       apiUrl: config.apiUrl || "",
-      status: PUMP_LAUNCH_STATUS.PREFLIGHT,
+      status: PUMP_LAUNCH_STATUS.PENDING,
+      stage: PUMP_LAUNCH_STAGE.WALLET_AUTH,
       createdAt: this.now().toISOString(),
       updatedAt: this.now().toISOString()
     };
@@ -416,16 +456,25 @@ export class PumpLaunchService {
       priorityFeeSol,
       requiredSol,
       apiUrl: config.apiUrl || "",
-      status: PUMP_LAUNCH_STATUS.PREFLIGHT
+      status: PUMP_LAUNCH_STATUS.PENDING,
+      stage: PUMP_LAUNCH_STAGE.WALLET_AUTH
     });
 
     try {
+      validatePumpPortalLocalApiUrl(config.apiUrl);
+      await this.saveAttempt({
+        id: attemptId,
+        status: PUMP_LAUNCH_STATUS.VALIDATING,
+        stage: PUMP_LAUNCH_STAGE.BALANCE_CHECK,
+        updatedAt: this.now().toISOString()
+      });
       const balanceLamports = await this.getBalanceLamports(walletKeypair.publicKey);
       const balanceSol = Number(balanceLamports || 0) / LAMPORTS_PER_SOL;
       assertPumpLaunchBalance({ balanceSol, requiredSol });
       await this.saveAttempt({
         id: attemptId,
-        status: PUMP_LAUNCH_STATUS.PREFLIGHT,
+        status: PUMP_LAUNCH_STATUS.VALIDATING,
+        stage: PUMP_LAUNCH_STAGE.BALANCE_CHECK,
         balanceSol,
         requiredSol,
         updatedAt: this.now().toISOString()
@@ -441,13 +490,20 @@ export class PumpLaunchService {
 
       let metadata;
       try {
+        await this.saveAttempt({
+          id: attemptId,
+          status: PUMP_LAUNCH_STATUS.UPLOADING_METADATA,
+          stage: PUMP_LAUNCH_STAGE.METADATA_UPLOAD,
+          updatedAt: this.now().toISOString()
+        });
         metadata = await this.uploadMetadata(basePayload);
       } catch (error) {
         throw pumpLaunchStageError(PUMP_LAUNCH_STAGE.METADATA_UPLOAD, "PUMP_LAUNCH_METADATA_UPLOAD_FAILED", error);
       }
       await this.saveAttempt({
         id: attemptId,
-        status: PUMP_LAUNCH_STATUS.METADATA_UPLOADED,
+        status: PUMP_LAUNCH_STATUS.UPLOADING_METADATA,
+        stage: PUMP_LAUNCH_STAGE.METADATA_UPLOAD,
         metadataUri: metadata.uri,
         imageUri: metadata.imageUri || "",
         imageBytes: metadata.imageBytes || 0,
@@ -476,7 +532,8 @@ export class PumpLaunchService {
       const sanitizedRequest = sanitizePumpPortalCreateRequest(requestPayload);
       await this.saveAttempt({
         id: attemptId,
-        status: PUMP_LAUNCH_STATUS.PUMPPORTAL_REQUESTED,
+        status: PUMP_LAUNCH_STATUS.BUILDING_TX,
+        stage: PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL,
         requestBody: sanitizedRequest,
         updatedAt: this.now().toISOString()
       });
@@ -521,13 +578,20 @@ export class PumpLaunchService {
       }
 
       try {
+        await this.saveAttempt({
+          id: attemptId,
+          status: PUMP_LAUNCH_STATUS.SIGNING,
+          stage: PUMP_LAUNCH_STAGE.SIGNING,
+          updatedAt: this.now().toISOString()
+        });
         tx.sign([mintKeypair, walletKeypair]);
       } catch (error) {
         throw pumpLaunchStageError(PUMP_LAUNCH_STAGE.SIGNING, "PUMP_LAUNCH_SIGNING_FAILED", error, 500);
       }
       await this.saveAttempt({
         id: attemptId,
-        status: PUMP_LAUNCH_STATUS.SIGNED,
+        status: PUMP_LAUNCH_STATUS.SIGNING,
+        stage: PUMP_LAUNCH_STAGE.SIGNING,
         updatedAt: this.now().toISOString()
       });
       this.log("pump_launch_transaction_signed", {
@@ -541,28 +605,49 @@ export class PumpLaunchService {
 
       let signature;
       try {
+        await this.saveAttempt({
+          id: attemptId,
+          status: PUMP_LAUNCH_STATUS.SENDING,
+          stage: PUMP_LAUNCH_STAGE.SEND_TRANSACTION,
+          updatedAt: this.now().toISOString()
+        });
         signature = await this.sendTransaction(tx);
       } catch (error) {
         throw pumpLaunchStageError(PUMP_LAUNCH_STAGE.SEND_TRANSACTION, "PUMP_LAUNCH_SEND_FAILED", error);
       }
+      submittedSignature = signature;
 
-      await this.recordTradeEvent({
-        userId,
-        type: "buy",
-        source: "pumpfun_launch",
-        tokenMint: mintPublicKey,
-        tokenName: basePayload?.name || "",
-        symbol: basePayload?.symbol || "",
-        walletLabel: wallet.label,
-        walletPublicKey: devWalletPublicKey,
-        solLamportsSpent: String(solToLamportsNumber(devBuySol)),
-        tokenAmount: null,
-        signature,
-        metadataUri: metadata.uri
-      });
       await this.saveAttempt({
         id: attemptId,
-        status: PUMP_LAUNCH_STATUS.LAUNCHED,
+        status: PUMP_LAUNCH_STATUS.REGISTERING_TOKEN,
+        stage: PUMP_LAUNCH_STAGE.STORE_RESULT,
+        txSignature: signature,
+        updatedAt: this.now().toISOString()
+      });
+      try {
+        await this.recordTradeEvent({
+          userId,
+          type: "buy",
+          source: "pumpfun_launch",
+          tokenMint: mintPublicKey,
+          tokenName: basePayload?.name || "",
+          symbol: basePayload?.symbol || "",
+          walletLabel: wallet.label,
+          walletPublicKey: devWalletPublicKey,
+          solLamportsSpent: String(solToLamportsNumber(devBuySol)),
+          tokenAmount: null,
+          signature,
+          metadataUri: metadata.uri
+        });
+      } catch (error) {
+        throw pumpLaunchStageError(PUMP_LAUNCH_STAGE.STORE_RESULT, "PUMP_LAUNCH_TOKEN_REGISTRATION_FAILED", error, 500, {
+          txSignature: signature
+        });
+      }
+      await this.saveAttempt({
+        id: attemptId,
+        status: PUMP_LAUNCH_STATUS.COMPLETE,
+        stage: PUMP_LAUNCH_STAGE.STORE_RESULT,
         txSignature: signature,
         metadataUri: metadata.uri,
         completedAt: this.now().toISOString(),
@@ -577,7 +662,7 @@ export class PumpLaunchService {
       });
 
       return {
-        status: PUMP_LAUNCH_STATUS.LAUNCHED,
+        status: PUMP_LAUNCH_STATUS.COMPLETE,
         tokenMint: mintPublicKey,
         signature,
         requestId: attemptId,
@@ -585,12 +670,17 @@ export class PumpLaunchService {
         metadataUri: metadata.uri
       };
     } catch (error) {
+      error.launchAttemptId = error.launchAttemptId || attemptId;
+      if (submittedSignature && !error.txSignature) error.txSignature = submittedSignature;
+      const failureReason = formatPumpLaunchUserError(error);
       await this.saveAttempt({
         id: attemptId,
         status: PUMP_LAUNCH_STATUS.FAILED,
         stage: error.stage || PUMP_LAUNCH_STAGE.STORE_RESULT,
         errorCode: error.code || "PUMP_LAUNCH_FAILED",
         errorMessage: String(error.message || error).slice(0, 500),
+        failureReason,
+        txSignature: error.txSignature || submittedSignature || undefined,
         providerStatus: error.providerStatus || error.status || error.statusCode || null,
         providerResponseBody: sanitizeProviderBody(error.providerResponseBody || error.responseBody || ""),
         failedAt: this.now().toISOString(),
@@ -606,6 +696,8 @@ export class PumpLaunchService {
         stage: error.stage || "",
         errorCode: error.code || "PUMP_LAUNCH_FAILED",
         errorMessage: String(error.message || error).slice(0, 500),
+        failureReason,
+        txSignature: error.txSignature || submittedSignature || undefined,
         providerStatus: error.providerStatus || error.status || error.statusCode || null,
         providerResponseBody: error.providerResponseBody || error.responseBody || ""
       });
