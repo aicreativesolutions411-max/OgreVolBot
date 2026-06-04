@@ -84,6 +84,7 @@ function serviceHarness(overrides = {}) {
       imageUri: "https://ipfs.io/ipfs/test-image",
       imageBytes: 100
     })),
+    validateMetadataUri: overrides.validateMetadataUri || (async () => ({ ok: true })),
     requestLocalTransaction: overrides.requestLocalTransaction || (async (body) => {
       requestBody = body;
       return tx;
@@ -399,6 +400,29 @@ test("managed funded wallet builds the correct PumpPortal Local create body", as
   });
 });
 
+test("validated fast metadata URI is the URI sent to PumpPortal", async () => {
+  const keypair = Keypair.generate();
+  const wallet = managedWallet("user-7", keypair);
+  const mintKeypair = Keypair.generate();
+  const harness = serviceHarness({
+    generateMintKeypair: () => mintKeypair,
+    uploadMetadata: async () => ({
+      uri: "https://ipfs.io/ipfs/test-meta",
+      imageUri: "https://ipfs.io/ipfs/test-image",
+      imageBytes: 100
+    }),
+    validateMetadataUri: async () => ({
+      ok: true,
+      uri: "https://gateway.pinata.cloud/ipfs/test-meta"
+    })
+  });
+
+  await harness.service.launch(launchInput({ wallet, walletKeypair: keypair }));
+
+  assert.equal(harness.requestBody().tokenMetadata.uri, "https://gateway.pinata.cloud/ipfs/test-meta");
+  assert.equal(harness.attempts.get("attempt-1").metadataUri, "https://gateway.pinata.cloud/ipfs/test-meta");
+});
+
 test("Local API transaction is signed by mint keypair and dev wallet keypair", async () => {
   const keypair = Keypair.generate();
   const mintKeypair = Keypair.generate();
@@ -486,6 +510,30 @@ test("metadata upload failure records a specific metadata error", async () => {
   assert.match(attempt.failureReason, /Metadata upload provider rejected authorization/);
   assert.match(attempt.failureReason, /launchAttemptId=attempt-1/);
   assert.doesNotMatch(attempt.failureReason, /PUMP_LAUNCH_PINATA_JWT/);
+  assert.equal(harness.requestBody(), null);
+});
+
+test("metadata public fetch timeout records a specific timeout status and avoids PumpPortal", async () => {
+  const keypair = Keypair.generate();
+  const wallet = managedWallet("user-7", keypair);
+  const harness = serviceHarness({
+    validateMetadataUri: async () => {
+      const error = new Error("Token metadata URI is not publicly fetchable: The operation was aborted due to timeout");
+      error.code = "PUMPPORTAL_CREATE_METADATA_URI_TIMEOUT";
+      error.statusCode = 400;
+      throw error;
+    }
+  });
+
+  await assert.rejects(
+    () => harness.service.launch(launchInput({ wallet, walletKeypair: keypair })),
+    /timeout/
+  );
+
+  const attempt = harness.attempts.get("attempt-1");
+  assert.equal(attempt.status, PUMP_LAUNCH_STATUS.FAILED_METADATA_FETCH_TIMEOUT);
+  assert.equal(attempt.stage, PUMP_LAUNCH_STAGE.METADATA_UPLOAD);
+  assert.equal(attempt.errorCode, "PUMPPORTAL_CREATE_METADATA_URI_TIMEOUT");
   assert.equal(harness.requestBody(), null);
 });
 

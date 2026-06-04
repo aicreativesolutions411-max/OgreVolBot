@@ -277,6 +277,7 @@ async function main() {
   startTradePlanRunner();
   startWebExitGuardRunner();
   startWebPortfolioExitRunner();
+  startTpSlStartupReconcile();
   startDcaPlanRunner();
 
   if (CONFIG.webhookUrl) {
@@ -728,6 +729,43 @@ function startWebPortfolioExitRunner() {
   setInterval(() => void processWebPortfolioExits({ forcePriceCheck: true }).catch((error) => {
     console.error("Web portfolio exit runner failed:", error.message);
   }), intervalMs);
+}
+
+function startTpSlStartupReconcile() {
+  scheduleTpSlBackendReconcile("startup", [250, 2_500, 10_000]);
+}
+
+let tpSlReconcileScheduledAt = 0;
+
+function scheduleTpSlBackendReconcile(reason = "scheduled", delays = [250]) {
+  const now = Date.now();
+  if (now - tpSlReconcileScheduledAt < 3_000) return;
+  tpSlReconcileScheduledAt = now;
+  for (const delay of delays) {
+    setTimeout(() => void runTpSlBackendReconcile(reason).catch((error) => {
+      console.warn(`TP/SL backend reconcile failed (${reason}): ${friendlyError(error)}`);
+    }), Math.max(0, Number(delay) || 0));
+  }
+}
+
+async function runTpSlBackendReconcile(reason = "manual") {
+  const startedAt = new Date().toISOString();
+  await recordTpSlWorkerHeartbeat("reconcile_started", { reason, startedAt });
+  const [webExitGuards, tradePlans, portfolioExits] = await Promise.all([
+    processWebExitGuards({ forcePriceCheck: true, forceBackfill: true }),
+    processTradePlans({ forcePriceCheck: true }),
+    processWebPortfolioExits({ forcePriceCheck: true })
+  ]);
+  const result = {
+    reason,
+    startedAt,
+    completedAt: new Date().toISOString(),
+    webExitGuards,
+    tradePlans,
+    portfolioExits
+  };
+  await recordTpSlWorkerHeartbeat("reconcile_completed", result);
+  return result;
 }
 
 function startDcaPlanRunner() {
@@ -1227,6 +1265,16 @@ async function handleWebApiRequest(request, response, requestUrl) {
     }
 
     const auth = await authenticateWebRequest(request);
+    if (request.method === "GET" && [
+      "/api/web/me",
+      "/api/web/wallets",
+      "/api/web/balances",
+      "/api/web/positions",
+      "/api/web/trade/plans",
+      "/api/web/exit-guards"
+    ].includes(pathname)) {
+      scheduleTpSlBackendReconcile(`web_view:${auth.userId}:${pathname}`, [250]);
+    }
 
     if (request.method === "POST" && pathname === "/api/web/logout") {
       await revokeWebSession(auth.tokenHash);
@@ -1950,6 +1998,13 @@ function constantTimeStringEquals(a, b) {
 
 async function runInternalWorkerTick(body = {}) {
   const startedAt = Date.now();
+  await recordTpSlWorkerHeartbeat("worker_tick_started", {
+    requested: {
+      runTradePlans: body.runTradePlans !== false,
+      runWebExitGuards: body.runWebExitGuards !== false,
+      runPortfolioExits: body.runPortfolioExits !== false
+    }
+  }).catch(() => {});
   const result = {
     ranAt: new Date(startedAt).toISOString(),
     portfolioExits: { skipped: true },
@@ -1990,6 +2045,7 @@ async function runInternalWorkerTick(body = {}) {
   }
 
   result.durationMs = Date.now() - startedAt;
+  await recordTpSlWorkerHeartbeat("worker_tick_completed", result).catch(() => {});
   return result;
 }
 
@@ -2183,6 +2239,7 @@ async function ensureDataFiles() {
   await writeJsonIfMissing(statePath(), { paused: false });
   await writeJsonIfMissing(tradePlansPath(), { plans: [] });
   await writeJsonIfMissing(webExitGuardsPath(), { guards: [] });
+  await writeJsonIfMissing(tpSlWorkerStatePath(), defaultTpSlWorkerState());
   await writeJsonIfMissing(dcaPlansPath(), { plans: [] });
   await writeJsonIfMissing(sniperSettingsPath(), { users: {} });
   await writeJsonIfMissing(tradeHistoryPath(), { trades: [] });
@@ -2254,6 +2311,10 @@ function tradePlansPath() {
 
 function webExitGuardsPath() {
   return path.join(CONFIG.dataDir, "web-exit-guards.json");
+}
+
+function tpSlWorkerStatePath() {
+  return path.join(CONFIG.dataDir, "tpsl-worker-state.json");
 }
 
 function dcaPlansPath() {
@@ -5819,7 +5880,11 @@ function tradePlanWalletTradeId(plan, planWallet) {
 
 function logTpSlEvent(event, fields = {}) {
   try {
-    console.log(JSON.stringify(tpSlLogEntry(event, fields)));
+    const entry = tpSlLogEntry(event, fields);
+    console.log(JSON.stringify(entry));
+    void recordTpSlWorkerEvent(event, entry).catch((error) => {
+      console.warn(`TP/SL state log failed: ${error.message}`);
+    });
   } catch (error) {
     console.warn(`TP/SL log failed: ${error.message}`);
   }
@@ -5910,6 +5975,26 @@ function effectiveTimedSellPercent(plan, planWallet, triggerReason, triggerMeta 
     : plan.sellPercent ?? 100;
   const percent = Number.parseInt(configured, 10);
   return Number.isInteger(percent) ? clamp(percent, 1, 100) : 100;
+}
+
+function logTradePlanExitEvent(event, plan, planWallet, sell = {}, triggerReason = "", extra = {}) {
+  logTpSlEvent(event, {
+    tradeId: tradePlanWalletTradeId(plan, planWallet),
+    userId: plan?.userId,
+    walletPublicKey: planWallet?.publicKey,
+    source: plan?.source || "trade_plan",
+    symbol: plan?.tokenMint,
+    side: "LONG",
+    status: event === "tp_sl_trade_closed" ? "CLOSED" : event === "tp_sl_trade_failed" ? "FAILED" : (planWallet?.status || plan?.status || "OPEN"),
+    currentPrice: planWallet?.lastTriggerMovePct ?? planWallet?.lastMovePct ?? null,
+    stopLoss: walletStopLossPct(plan, planWallet) ? -stopLossTriggerPercent(walletStopLossPct(plan, planWallet), CONFIG.stopLossTriggerBufferPct) : null,
+    takeProfit: walletTakeProfitPct(plan, planWallet) || null,
+    trigger: /^stop-loss\b/i.test(String(triggerReason || "")) ? "STOP_LOSS" : /^take-profit\b/i.test(String(triggerReason || "")) ? "TAKE_PROFIT" : null,
+    reason: triggerReason,
+    closed: event === "tp_sl_trade_closed",
+    signature: sell?.signature || null,
+    ...extra
+  });
 }
 
 function planHasPriceExit(plan, planWallet) {
@@ -6711,10 +6796,38 @@ async function processWebPortfolioExits(options = {}) {
           signature: sell.signature
         });
         await markWebPortfolioPositionClosed(entry, sell, triggerReason);
+        logTpSlEvent("tp_sl_trade_closed", {
+          tradeId: webPortfolioPositionKey(entry),
+          userId: entry.userId,
+          source: "web_portfolio_exit_watchdog",
+          symbol: entry.tokenMint,
+          side: "LONG",
+          status: "CLOSED",
+          currentPrice: estimate?.movePct ?? memory.lastMovePct ?? null,
+          stopLoss: walletStopLossPct(plan, planWallet) ? -stopLossTriggerPercent(walletStopLossPct(plan, planWallet), CONFIG.stopLossTriggerBufferPct) : null,
+          takeProfit: walletTakeProfitPct(plan, planWallet) || null,
+          trigger: /^stop-loss\b/i.test(String(triggerReason || "")) ? "STOP_LOSS" : /^take-profit\b/i.test(String(triggerReason || "")) ? "TAKE_PROFIT" : null,
+          reason: triggerReason,
+          closed: true,
+          signature: sell.signature || null
+        });
         webPortfolioExitState.delete(key);
         summary.soldPositions += 1;
         summary.messages.push(`${wallet.label}: portfolio watchdog sold ${shortMint(entry.tokenMint)} by ${triggerReason}`);
       } catch (error) {
+        logTpSlEvent("tp_sl_trade_failed", {
+          tradeId: webPortfolioPositionKey(entry),
+          userId: entry.userId,
+          source: "web_portfolio_exit_watchdog",
+          symbol: entry.tokenMint,
+          side: "LONG",
+          status: "FAILED",
+          currentPrice: estimate?.movePct ?? memory.lastMovePct ?? null,
+          stopLoss: walletStopLossPct(plan, planWallet) ? -stopLossTriggerPercent(walletStopLossPct(plan, planWallet), CONFIG.stopLossTriggerBufferPct) : null,
+          takeProfit: walletTakeProfitPct(plan, planWallet) || null,
+          trigger: /^stop-loss\b/i.test(String(triggerReason || "")) ? "STOP_LOSS" : /^take-profit\b/i.test(String(triggerReason || "")) ? "TAKE_PROFIT" : null,
+          reason: friendlyError(error)
+        });
         const failures = Number.parseInt(memory.sellFailures || 0, 10) + 1;
         webPortfolioExitState.set(key, {
           ...memory,
@@ -7482,6 +7595,22 @@ async function processWebExitGuard(guard, walletStore, options = {}) {
     guard.soldAt = new Date().toISOString();
     guard.updatedAt = guard.soldAt;
     await markTradePlanWalletExitedFromGuard(guard, sell, triggerReason);
+    logTpSlEvent("tp_sl_trade_closed", {
+      tradeId: guard.key || guard.id,
+      userId: guard.userId,
+      walletPublicKey: guard.walletPublicKey,
+      source: guard.planSource || guard.source || "web_exit_guard",
+      symbol: guard.tokenMint,
+      side: "LONG",
+      status: "CLOSED",
+      currentPrice: guard.lastTriggerMovePct ?? guard.lastMovePct ?? null,
+      stopLoss: guard.stopLossPct ? -stopLossTriggerPercent(guard.stopLossPct, CONFIG.stopLossTriggerBufferPct) : null,
+      takeProfit: guard.takeProfitPct || null,
+      trigger: /^stop-loss\b/i.test(String(triggerReason || "")) ? "STOP_LOSS" : /^take-profit\b/i.test(String(triggerReason || "")) ? "TAKE_PROFIT" : null,
+      reason: triggerReason,
+      closed: true,
+      signature: sell.signature || null
+    });
     return {
       changed: true,
       triggered: priceExitTrigger,
@@ -7491,6 +7620,20 @@ async function processWebExitGuard(guard, walletStore, options = {}) {
   } catch (error) {
     const failures = Number.parseInt(guard.failures || 0, 10) + 1;
     const priceExit = isPriceExitTrigger(triggerReason);
+    logTpSlEvent("tp_sl_trade_failed", {
+      tradeId: guard.key || guard.id,
+      userId: guard.userId,
+      walletPublicKey: guard.walletPublicKey,
+      source: guard.planSource || guard.source || "web_exit_guard",
+      symbol: guard.tokenMint,
+      side: "LONG",
+      status: "FAILED",
+      currentPrice: guard.lastTriggerMovePct ?? guard.lastMovePct ?? null,
+      stopLoss: guard.stopLossPct ? -stopLossTriggerPercent(guard.stopLossPct, CONFIG.stopLossTriggerBufferPct) : null,
+      takeProfit: guard.takeProfitPct || null,
+      trigger: /^stop-loss\b/i.test(String(triggerReason || "")) ? "STOP_LOSS" : /^take-profit\b/i.test(String(triggerReason || "")) ? "TAKE_PROFIT" : null,
+      reason: friendlyError(error)
+    });
     const maxFailures = priceExit ? 90 : 30;
     const retryDelayMs = failures >= maxFailures ? 0 : (priceExit ? Math.min(6_000, 500 * failures) : Math.min(12_000, 750 * failures));
     guard.failures = failures;
@@ -7948,6 +8091,9 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
         planWallet.exitStatus = "watching";
         planWallet.triggerStatus = "watching";
         planWallet.triggerKind = null;
+        logTradePlanExitEvent("tp_sl_trade_closed", plan, planWallet, sell, planWallet.triggerReason, {
+          reason: `${planWallet.triggerReason}; ladder continues`
+        });
         return {
           changed: true,
           triggered: true,
@@ -7960,6 +8106,7 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
       planWallet.exitStatus = "confirmed";
       planWallet.triggerStatus = "confirmed";
       planWallet.soldAt = new Date().toISOString();
+      logTradePlanExitEvent("tp_sl_trade_closed", plan, planWallet, sell, planWallet.triggerReason);
       return {
         changed: true,
         triggered: true,
@@ -7988,6 +8135,9 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
         planWallet.triggerStatus = "waiting_next_loop";
         planWallet.nextLoopAt = new Date(Date.now() + loopDelaySeconds * 1000).toISOString();
         planWallet.updatedAt = new Date().toISOString();
+        logTradePlanExitEvent("tp_sl_trade_closed", plan, planWallet, sell, triggerReason, {
+          reason: `${triggerReason}; next loop starts in ${formatDelay(loopDelaySeconds)}`
+        });
         return {
           changed: true,
           triggered: priceExitTrigger,
@@ -7995,12 +8145,16 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
           message: `${formatTimedSellSuccessLine(planWallet, sell, triggerReason, plan.loopCount || 1)}; next loop starts in ${formatDelay(loopDelaySeconds)}`
         };
       }
+      logTradePlanExitEvent("tp_sl_trade_closed", plan, planWallet, sell, triggerReason, {
+        reason: `${triggerReason}; restarting next loop`
+      });
       return restartTimedPlanLoop(plan, planWallet, wallet, sell, triggerReason);
     }
 
     planWallet.status = "sold";
     planWallet.exitStatus = "confirmed";
     planWallet.soldAt = new Date().toISOString();
+    logTradePlanExitEvent("tp_sl_trade_closed", plan, planWallet, sell, triggerReason);
     return {
       changed: true,
       triggered: priceExitTrigger,
@@ -8011,6 +8165,9 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
   } catch (error) {
     const failures = Number.parseInt(planWallet.failures || 0, 10) + 1;
     const priceExit = isPriceExitTrigger(triggerReason);
+    logTradePlanExitEvent("tp_sl_trade_failed", plan, planWallet, null, triggerReason, {
+      reason: friendlyError(error)
+    });
     const maxFailures = priceExit ? 90 : 5;
     const retryDelayMs = failures >= maxFailures ? 0 : (priceExit ? Math.min(6_000, 500 * failures) : Math.min(12_000, 750 * failures));
     planWallet.failures = failures;
@@ -14209,6 +14366,8 @@ function defaultJsonForPath(filePath) {
       return { plans: [] };
     case "web-exit-guards.json":
       return { guards: [] };
+    case "tpsl-worker-state.json":
+      return defaultTpSlWorkerState();
     case "sniper-settings.json":
       return { users: {} };
     case "trade-history.json":
@@ -14272,6 +14431,86 @@ async function readWebExitGuards() {
 
 async function writeWebExitGuards(store) {
   await writeJsonFile(webExitGuardsPath(), store);
+}
+
+function defaultTpSlWorkerState() {
+  return {
+    workerRunning: false,
+    lastHeartbeatAt: "",
+    lastHeartbeatReason: "",
+    startupReconcileRanAt: "",
+    lastReconcile: null,
+    lastEvaluatedTrades: [],
+    lastCloseAttempts: []
+  };
+}
+
+function normalizeTpSlWorkerState(store = {}) {
+  return {
+    ...defaultTpSlWorkerState(),
+    ...store,
+    lastEvaluatedTrades: Array.isArray(store.lastEvaluatedTrades) ? store.lastEvaluatedTrades.slice(-20) : [],
+    lastCloseAttempts: Array.isArray(store.lastCloseAttempts) ? store.lastCloseAttempts.slice(-20) : []
+  };
+}
+
+async function readTpSlWorkerState() {
+  return normalizeTpSlWorkerState(await readJson(tpSlWorkerStatePath()));
+}
+
+async function writeTpSlWorkerState(store) {
+  await writeJsonFile(tpSlWorkerStatePath(), normalizeTpSlWorkerState(store));
+}
+
+async function recordTpSlWorkerHeartbeat(reason = "heartbeat", detail = {}) {
+  const now = new Date().toISOString();
+  const store = await readTpSlWorkerState();
+  store.workerRunning = true;
+  store.lastHeartbeatAt = now;
+  store.lastHeartbeatReason = reason;
+  if (reason === "reconcile_completed" || reason === "startup") {
+    store.startupReconcileRanAt = now;
+  }
+  if (String(reason).includes("reconcile")) {
+    store.lastReconcile = {
+      reason,
+      at: now,
+      ...detail
+    };
+  }
+  await writeTpSlWorkerState(store);
+}
+
+async function recordTpSlWorkerEvent(event, entry = {}) {
+  const now = entry.at || new Date().toISOString();
+  const store = await readTpSlWorkerState();
+  store.workerRunning = true;
+  store.lastHeartbeatAt = now;
+  store.lastHeartbeatReason = event;
+  const row = {
+    event,
+    at: now,
+    tradeId: entry.tradeId || "",
+    userId: entry.userId || "",
+    walletPublicKey: entry.walletPublicKey || "",
+    symbol: entry.symbol || "",
+    side: entry.side || "LONG",
+    status: entry.status || "",
+    entryPrice: entry.entryPrice ?? null,
+    currentPrice: entry.currentPrice ?? null,
+    stopLoss: entry.stopLoss ?? null,
+    takeProfit: entry.takeProfit ?? null,
+    trigger: entry.trigger || null,
+    reason: entry.reason || "",
+    signature: entry.signature || null
+  };
+  if (/monitored|skipped|triggered/i.test(event)) {
+    store.lastEvaluatedTrades = appendLimited(store.lastEvaluatedTrades, row, 20);
+  }
+  if (/triggered|closed|failed/i.test(event)) {
+    store.lastCloseAttempts = appendLimited(store.lastCloseAttempts, row, 20);
+  }
+  await writeTpSlWorkerState(store);
 }
 
 async function webExitGuardRows(userId) {
@@ -17308,6 +17547,8 @@ async function uploadHostedPumpLaunchMetadata(basePayload = {}) {
 
 function cidFromIpfsUri(uri = "") {
   const text = String(uri || "").trim();
+  const protocolMatch = /^ipfs:\/\/([^/?#]+)/i.exec(text);
+  if (protocolMatch) return protocolMatch[1];
   const match = /\/ipfs\/([^/?#]+)/i.exec(text);
   return match ? match[1] : "";
 }
@@ -17462,8 +17703,148 @@ async function uploadPumpLaunchMetadata(basePayload = {}) {
   }
 }
 
+function metadataUriGatewayCandidates(uri) {
+  const clean = String(uri || "").trim();
+  const cid = cidFromIpfsUri(clean);
+  if (!cid) return [clean].filter(Boolean);
+  return [...new Set([
+    /^ipfs:\/\//i.test(clean) ? "" : clean,
+    `https://gateway.pinata.cloud/ipfs/${cid}`,
+    `https://ipfs.io/ipfs/${cid}`,
+    `https://cloudflare-ipfs.com/ipfs/${cid}`
+  ].filter(Boolean))];
+}
+
+function imageUriGatewayCandidates(uri) {
+  const clean = String(uri || "").trim();
+  const cid = cidFromIpfsUri(clean);
+  if (!cid) return [clean].filter(Boolean);
+  return [...new Set([
+    /^ipfs:\/\//i.test(clean) ? "" : clean,
+    `https://gateway.pinata.cloud/ipfs/${cid}`,
+    `https://ipfs.io/ipfs/${cid}`,
+    `https://cloudflare-ipfs.com/ipfs/${cid}`
+  ].filter(Boolean))];
+}
+
+function isAbortOrTimeoutError(error) {
+  return error?.name === "AbortError" || /abort|timeout|timed out/i.test(String(error?.message || error || ""));
+}
+
+async function fetchTextWithBackoff(url, { timeoutMs = 20_000, retries = 2 } = {}) {
+  const attempts = [];
+  let lastError = null;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    if (attempt > 0) await sleep(Math.min(6_000, 1_500 * attempt));
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        headers: { "Accept": "application/json,text/plain,*/*" },
+        signal: AbortSignal.timeout ? AbortSignal.timeout(timeoutMs) : undefined
+      });
+      const text = await response.text();
+      attempts.push({
+        attempt: attempt + 1,
+        status: response.status,
+        contentType: response.headers.get("content-type") || "",
+        ok: response.ok
+      });
+      if (response.ok) {
+        return {
+          url,
+          response,
+          text,
+          attempts
+        };
+      }
+      lastError = createPumpLaunchError(`HTTP ${response.status}`, "PUMPPORTAL_CREATE_METADATA_URI_UNFETCHABLE", 400, {
+        providerStatus: response.status,
+        providerResponseBody: sanitizeProviderBody(text)
+      });
+    } catch (error) {
+      attempts.push({
+        attempt: attempt + 1,
+        status: "fetch_error",
+        contentType: "",
+        ok: false,
+        error: friendlyError(error)
+      });
+      lastError = error;
+    }
+  }
+  const timedOut = attempts.some((attempt) => /abort|timeout|timed out/i.test(String(attempt.error || ""))) || isAbortOrTimeoutError(lastError);
+  throw createPumpLaunchError(
+    timedOut
+      ? "Token metadata URI is not publicly fetchable: The operation was aborted due to timeout"
+      : `Token metadata URI is not publicly fetchable: ${friendlyError(lastError)}`,
+    timedOut ? "PUMPPORTAL_CREATE_METADATA_URI_TIMEOUT" : "PUMPPORTAL_CREATE_METADATA_URI_UNFETCHABLE",
+    400,
+    {
+      stage: PUMP_LAUNCH_STAGE.METADATA_UPLOAD,
+      metadataUri: url,
+      metadataFetchAttempts: attempts,
+      providerStatus: lastError?.providerStatus || lastError?.status || lastError?.statusCode || null,
+      providerResponseBody: sanitizeProviderBody(lastError?.providerResponseBody || lastError?.responseBody || "")
+    }
+  );
+}
+
+async function fetchPublicImageWithBackoff(url, { timeoutMs = 20_000, retries = 2 } = {}) {
+  const attempts = [];
+  let lastError = null;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    if (attempt > 0) await sleep(Math.min(6_000, 1_500 * attempt));
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        headers: { "Accept": "image/*,*/*" },
+        signal: AbortSignal.timeout ? AbortSignal.timeout(timeoutMs) : undefined
+      });
+      attempts.push({
+        attempt: attempt + 1,
+        status: response.status,
+        contentType: response.headers.get("content-type") || "",
+        ok: response.ok
+      });
+      if (response.ok) {
+        await response.arrayBuffer().catch(() => null);
+        return {
+          url,
+          status: response.status,
+          contentType: response.headers.get("content-type") || "",
+          attempts
+        };
+      }
+      lastError = new Error(`HTTP ${response.status}`);
+      lastError.status = response.status;
+    } catch (error) {
+      attempts.push({
+        attempt: attempt + 1,
+        status: "fetch_error",
+        contentType: "",
+        ok: false,
+        error: friendlyError(error)
+      });
+      lastError = error;
+    }
+  }
+  const timedOut = attempts.some((attempt) => /abort|timeout|timed out/i.test(String(attempt.error || ""))) || isAbortOrTimeoutError(lastError);
+  throw createPumpLaunchError(
+    timedOut
+      ? "Token metadata image is not publicly fetchable fast enough for PumpPortal."
+      : `Token metadata image is not publicly fetchable: ${friendlyError(lastError)}`,
+    timedOut ? "PUMP_METADATA_IMAGE_FETCH_TIMEOUT" : "PUMP_METADATA_IMAGE_UNFETCHABLE",
+    400,
+    {
+      stage: PUMP_LAUNCH_STAGE.METADATA_UPLOAD,
+      imageUri: url,
+      imageFetchAttempts: attempts
+    }
+  );
+}
+
 async function validatePumpPortalMetadataUri(metadataUri) {
-  const uri = String(metadataUri || "").trim();
+  let uri = String(metadataUri || "").trim();
   if (!uri) {
     throw createPumpLaunchError("Token metadata URI is missing before PumpPortal create.", "PUMPPORTAL_CREATE_METADATA_URI_INVALID", 400, {
       stage: PUMP_LAUNCH_STAGE.METADATA_UPLOAD
@@ -17477,6 +17858,11 @@ async function validatePumpPortalMetadataUri(metadataUri) {
       stage: PUMP_LAUNCH_STAGE.METADATA_UPLOAD
     });
   }
+  if (parsed.protocol === "ipfs:") {
+    const cid = cidFromIpfsUri(uri);
+    uri = cid ? `https://gateway.pinata.cloud/ipfs/${cid}` : uri;
+    parsed = new URL(uri);
+  }
   if (!["http:", "https:"].includes(parsed.protocol)) {
     throw createPumpLaunchError("Token metadata URI must be a public http(s) URL before PumpPortal create.", "PUMPPORTAL_CREATE_METADATA_URI_INVALID", 400, {
       stage: PUMP_LAUNCH_STAGE.METADATA_UPLOAD
@@ -17488,37 +17874,34 @@ async function validatePumpPortalMetadataUri(metadataUri) {
     });
   }
 
-  let response;
-  let text = "";
-  try {
-    response = await fetch(uri, {
-      method: "GET",
-      signal: AbortSignal.timeout ? AbortSignal.timeout(Math.min(CONFIG.pumpLaunchTimeoutMs || 30000, 10000)) : undefined
-    });
-    text = await response.text();
-  } catch (error) {
-    throw createPumpLaunchError(`Token metadata URI is not publicly fetchable: ${friendlyError(error)}`, "PUMPPORTAL_CREATE_METADATA_URI_UNFETCHABLE", 400, {
-      stage: PUMP_LAUNCH_STAGE.METADATA_UPLOAD,
-      metadataUri: uri
-    });
+  let fetched = null;
+  let lastError = null;
+  for (const candidate of metadataUriGatewayCandidates(uri)) {
+    try {
+      fetched = await fetchTextWithBackoff(candidate, {
+        timeoutMs: Math.max(15_000, Math.min(CONFIG.pumpLaunchTimeoutMs || 30_000, 30_000)),
+        retries: 2
+      });
+      break;
+    } catch (error) {
+      lastError = error;
+    }
   }
+  if (!fetched) throw lastError;
 
+  const response = fetched.response;
+  const text = fetched.text;
   const contentType = response.headers.get("content-type") || "";
-  if (!response.ok) {
-    throw createPumpLaunchError(`Token metadata URI returned HTTP ${response.status}.`, "PUMPPORTAL_CREATE_METADATA_URI_UNFETCHABLE", 400, {
-      stage: PUMP_LAUNCH_STAGE.METADATA_UPLOAD,
-      providerStatus: response.status,
-      providerResponseBody: sanitizeProviderBody(text)
-    });
-  }
   if (/^image\//i.test(contentType)) {
     throw createPumpLaunchError("Token metadata URI returned an image content type, not metadata JSON.", "PUMPPORTAL_CREATE_METADATA_URI_IMAGE", 400, {
       stage: PUMP_LAUNCH_STAGE.METADATA_UPLOAD,
+      metadataUri: fetched.url,
       providerResponseBody: sanitizeProviderBody(text.slice(0, 120))
     });
   }
+  let metadata;
   try {
-    const metadata = JSON.parse(text);
+    metadata = JSON.parse(text);
     if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
       throw new Error("metadata is not an object");
     }
@@ -17531,11 +17914,44 @@ async function validatePumpPortalMetadataUri(metadataUri) {
       providerResponseBody: sanitizeProviderBody(text)
     });
   }
+
+  let imageValidation = null;
+  let imageUri = String(metadata.image || "").trim();
+  if (/^ipfs:\/\//i.test(imageUri)) {
+    const imageCid = cidFromIpfsUri(imageUri);
+    imageUri = imageCid ? `https://gateway.pinata.cloud/ipfs/${imageCid}` : imageUri;
+  }
+  if (!/^https?:\/\//i.test(imageUri)) {
+    throw createPumpLaunchError("Token metadata image must be a public http(s) URL.", "PUMP_METADATA_IMAGE_UNFETCHABLE", 400, {
+      stage: PUMP_LAUNCH_STAGE.METADATA_UPLOAD,
+      metadataUri: fetched.url,
+      providerResponseBody: sanitizeProviderBody(text)
+    });
+  }
+  let imageError = null;
+  for (const candidate of imageUriGatewayCandidates(imageUri)) {
+    try {
+      imageValidation = await fetchPublicImageWithBackoff(candidate, {
+        timeoutMs: Math.max(15_000, Math.min(CONFIG.pumpLaunchTimeoutMs || 30_000, 30_000)),
+        retries: 2
+      });
+      break;
+    } catch (error) {
+      imageError = error;
+    }
+  }
+  if (!imageValidation) throw imageError;
   return {
     ok: true,
+    uri: fetched.url,
     status: response.status,
     contentType,
-    bodySnippet: sanitizeProviderBody(text)
+    bodySnippet: sanitizeProviderBody(text),
+    metadataFetchAttempts: fetched.attempts,
+    imageUri: imageValidation.url,
+    imageFetchStatus: imageValidation.status,
+    imageContentType: imageValidation.contentType,
+    imageFetchAttempts: imageValidation.attempts
   };
 }
 

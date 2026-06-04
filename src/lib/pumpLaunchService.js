@@ -17,6 +17,7 @@ export const PUMP_LAUNCH_STATUS = Object.freeze({
   REGISTERING_TOKEN: "REGISTERING_TOKEN",
   COMPLETE: "COMPLETE",
   FAILED_METADATA_AUTH: "FAILED_METADATA_AUTH",
+  FAILED_METADATA_FETCH_TIMEOUT: "FAILED_METADATA_FETCH_TIMEOUT",
   FAILED: "FAILED",
   STARTED: "PENDING",
   PREFLIGHT: "VALIDATING",
@@ -610,6 +611,9 @@ export function formatPumpLaunchUserError(error) {
   if (code === "PUMP_METADATA_CONFIG_MISSING") return `Metadata upload is not configured. Contact support with${launchAttemptId || " the launch attempt ID"}.`;
   if (code === "PUMP_METADATA_CONFIG_PLACEHOLDER") return `Metadata upload is not configured. Contact support with${launchAttemptId || " the launch attempt ID"}.`;
   if (code === "PUMP_METADATA_AUTH_FAILED") return `Metadata upload provider rejected authorization. Contact support with${launchAttemptId || " the launch attempt ID"}.`;
+  if (code === "PUMPPORTAL_CREATE_METADATA_URI_TIMEOUT" || code === "PUMP_METADATA_FETCH_TIMEOUT" || code === "PUMP_METADATA_IMAGE_FETCH_TIMEOUT") {
+    return `Metadata upload failed before PumpPortal was called: Token metadata URI is not publicly fetchable fast enough for PumpPortal. Retry in a moment or contact support with${launchAttemptId || " the launch attempt ID"}.`;
+  }
   if (code === "MISSING_DEV_WALLET") return "Choose a managed SlimeWire dev wallet before launching.";
   if (code === "DEV_WALLET_NOT_AUTHORIZED") return message;
   if (code === "DEV_WALLET_NOT_FOUND") return message;
@@ -779,7 +783,16 @@ export class PumpLaunchService {
           updatedAt: this.now().toISOString()
         });
         metadata = await this.uploadMetadata(basePayload);
-        await this.validateMetadataUri(metadata.uri);
+        const metadataValidation = await this.validateMetadataUri(metadata.uri);
+        if (metadataValidation?.uri) {
+          metadata.uri = metadataValidation.uri;
+        }
+        await this.saveAttempt({
+          id: attemptId,
+          metadataValidation,
+          metadataValidatedAt: this.now().toISOString(),
+          updatedAt: this.now().toISOString()
+        });
       } catch (error) {
         throw pumpLaunchStageError(PUMP_LAUNCH_STAGE.METADATA_UPLOAD, error.code || "PUMP_LAUNCH_METADATA_UPLOAD_FAILED", error);
       }
@@ -961,7 +974,9 @@ export class PumpLaunchService {
       const failureReason = formatPumpLaunchUserError(error);
       const failureStatus = ["PUMP_METADATA_AUTH_FAILED", "PUMP_METADATA_CONFIG_MISSING", "PUMP_METADATA_CONFIG_PLACEHOLDER"].includes(error.code)
         ? PUMP_LAUNCH_STATUS.FAILED_METADATA_AUTH
-        : PUMP_LAUNCH_STATUS.FAILED;
+        : ["PUMPPORTAL_CREATE_METADATA_URI_TIMEOUT", "PUMP_METADATA_FETCH_TIMEOUT", "PUMP_METADATA_IMAGE_FETCH_TIMEOUT"].includes(error.code)
+          ? PUMP_LAUNCH_STATUS.FAILED_METADATA_FETCH_TIMEOUT
+          : PUMP_LAUNCH_STATUS.FAILED;
       await this.saveAttempt({
         id: attemptId,
         status: failureStatus,

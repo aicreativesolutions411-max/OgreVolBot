@@ -1208,6 +1208,7 @@ function render(options = {}) {
   setText("[data-top-portfolio]", `${state.positions.length} position${state.positions.length === 1 ? "" : "s"}`);
   setText("[data-sync-health]", hasWalletContext ? syncHealthLabel() : "Status: Wallet not connected");
   setText("[data-active-preset-label]", activePresetSummary());
+  updateTopTpSlStatus();
   setHidden("[data-refresh-spinner]", !state.walletRefreshing);
   document.querySelectorAll('[data-feature="ogre-tek"]').forEach((element) => {
     element.hidden = !shouldShowOgreTekNav(ogreTekConfig);
@@ -1229,6 +1230,29 @@ function render(options = {}) {
   }
   if (state.route === "terminal") renderTabs();
   renderWalletConnectModal();
+}
+
+function updateTopTpSlStatus() {
+  const button = $("[data-tpsl-status-button]");
+  if (!button) return;
+  const label = $("[data-tpsl-status-label]");
+  const permission = state.user?.automationPermission || {};
+  const permissionActive = Boolean(state.user?.automationPermissionActive);
+  const revoked = Boolean(permission.revokedAt);
+  const expiresAt = Date.parse(permission.expiresAt || "");
+  const expired = Boolean(permission.enabled) && Number.isFinite(expiresAt) && expiresAt <= Date.now();
+  const stateName = permissionActive ? "enabled" : revoked || expired ? "invalid" : "disabled";
+  button.dataset.tpslState = stateName;
+  const text = stateName === "enabled"
+    ? "TP/SL Enabled"
+    : stateName === "invalid"
+      ? "Re-enable TP/SL"
+      : "Enable TP/SL";
+  writeText(label, text);
+  button.setAttribute("aria-label", `${text}. Stop loss and take profit require wallet auto-sell approval.`);
+  button.title = stateName === "enabled"
+    ? `Server exits enabled${permission.expiresAt ? ` until ${formatDate(permission.expiresAt)}` : ""}.`
+    : "Stop loss and take profit require wallet auto-sell approval.";
 }
 
 function renderTabs() {
@@ -8537,6 +8561,17 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-create-wallets]")) await createWalletSet();
   if (target.matches("[data-create-automation-wallet]")) await createAutomationWallet();
+  if (target.matches("[data-tpsl-status-button]")) {
+    if (target.dataset.tpslState === "enabled") {
+      state.activeTab = "profile";
+      navigateTo("/terminal", "profile");
+      state.automationDelegationStatus = state.automationDelegationStatus || "Server exits are enabled for managed wallets.";
+      render({ force: true });
+    } else {
+      await updateAutomationPermission("enable");
+    }
+    return;
+  }
   if (target.matches("[data-automation-permission]")) await updateAutomationPermission(target.dataset.automationPermission || "enable");
   if (target.matches("[data-run-trade-plans]")) await runTradePlanCheck();
   if (target.matches("[data-restore-backup]")) await restoreWalletBackup();

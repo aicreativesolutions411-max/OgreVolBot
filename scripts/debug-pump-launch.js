@@ -30,7 +30,7 @@ const pinataDiagnostics = safePinataDiagnostics(pinataJwt);
 const rpcUrl = process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
 const userId = String(process.env.DEBUG_PUMP_LAUNCH_USER_ID || "").trim();
 const selectedDevWalletId = String(process.env.DEBUG_PUMP_LAUNCH_DEV_WALLET || process.env.DEBUG_PUMP_LAUNCH_DEV_WALLET_ID || "").trim();
-const debugLaunchAttemptId = String(process.env.DEBUG_PUMP_LAUNCH_ATTEMPT_ID || "").trim();
+const debugLaunchAttemptId = String(argValue("--launchAttemptId") || process.env.DEBUG_PUMP_LAUNCH_ATTEMPT_ID || "").trim();
 const devBuySol = numberOrDefault(process.env.DEBUG_PUMP_LAUNCH_DEV_BUY_SOL, 0.0001);
 const priorityFeeSol = numberOrDefault(process.env.PUMP_LAUNCH_PRIORITY_FEE_SOL, 0.00005);
 const requiredBufferSol = numberOrDefault(process.env.PUMP_LAUNCH_REQUIRED_BUFFER_SOL, 0.01);
@@ -50,6 +50,13 @@ function loadDotEnv(envPath) {
   } catch {
     // .env is optional on Render.
   }
+}
+
+function argValue(name) {
+  const exact = process.argv.find((item) => item.startsWith(`${name}=`));
+  if (exact) return exact.slice(name.length + 1).trim();
+  const index = process.argv.indexOf(name);
+  return index >= 0 ? String(process.argv[index + 1] || "").trim() : "";
 }
 
 async function readJsonIfExists(fileName, fallback) {
@@ -112,6 +119,7 @@ function attemptLine(attempt) {
     `devWallet=${short(attempt.devWalletPublicKey)}`,
     `mint=${short(attempt.mintPublicKey)}`,
     `metadataUri=${attempt.metadataUri ? "yes" : "no"}`,
+    `metadataValidation=${attempt.metadataValidation?.ok ? "ok" : "n/a"}`,
     `mintSecretStored=${Boolean(attempt.mintSecretStored || attempt.encryptedMintSecret)}`,
     `tx=${short(attempt.txSignature)}`,
     `errorCode=${attempt.errorCode || ""}`,
@@ -234,8 +242,14 @@ if (!selectedAttempt) {
   console.log(`devWalletPublicKey=${selectedAttempt.devWalletPublicKey || ""}`);
   console.log(`balanceSol=${selectedAttempt.balanceSol ?? "unknown"} requiredSol=${selectedAttempt.requiredSol ?? "unknown"}`);
   console.log(`metadataUri=${selectedAttempt.metadataUri || ""}`);
+  console.log(`imageUri=${selectedAttempt.imageUri || ""}`);
+  console.log(`metadataValidation=${JSON.stringify(selectedAttempt.metadataValidation || null)}`);
   console.log(`mintPublicKey=${selectedAttempt.mintPublicKey || ""}`);
+  console.log(`pumpPortalEndpoint=${selectedAttempt.apiUrl || selectedAttempt.requestMeta?.endpoint || apiUrl || ""}`);
+  console.log(`pumpPortalRequestMeta=${JSON.stringify(selectedAttempt.requestMeta || null)}`);
+  console.log(`pumpPortalRequestBody=${JSON.stringify(sanitizePumpPortalCreateRequest(selectedAttempt.requestBody || {}))}`);
   console.log(`pumpPortalStatus=${selectedAttempt.providerStatus || ""}`);
+  console.log(`pumpPortalContentType=${selectedAttempt.providerResponseContentType || ""}`);
   console.log(`pumpPortalBodySnippet=${String(selectedAttempt.providerResponseBody || "").replace(/\s+/g, " ").slice(0, 300)}`);
   console.log(`txSignature=${selectedAttempt.txSignature || ""}`);
   console.log(`dbTokenStatus=${features.tradeLogs ? "trade-history-registered" : "not-found-in-trade-history"}`);

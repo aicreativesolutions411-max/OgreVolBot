@@ -9,10 +9,10 @@
     <link rel="preload" as="image" href="./assets/slimewire/references/enter-swamp-reference.jpg">
     <link rel="preload" as="image" href="./assets/slimewire/png/slime-border-frame-rich.png">
     <link rel="stylesheet" href="./tailwind.css?v=20260603-tailwind-v1">
-    <link rel="stylesheet" href="./styles.css?v=20260604195434">
+    <link rel="stylesheet" href="./styles.css?v=20260604234430">
     <link rel="stylesheet" href="./slimewire-final-overrides.css?v=20260604-rich-border-v1">
     <script src="./config.js"></script>
-    <script type="module" src="./app.js?v=20260604195434"></script>
+    <script type="module" src="./app.js?v=20260604234430"></script>
   </head>
   <body>
     <main class="shell" data-app>
@@ -29,6 +29,10 @@
             <button type="button" data-global-token-open>Open</button>
           </form>
           <div class="top-sync-strip" data-top-sync-strip hidden>
+            <button type="button" class="top-tpsl-status" data-tpsl-status-button title="Stop loss and take profit require wallet auto-sell approval.">
+              <span class="top-tpsl-icon" aria-hidden="true">[ ]</span>
+              <span data-tpsl-status-label>Enable TP/SL</span>
+            </button>
             <button type="button" data-top-refresh-wallet>
               <span data-refresh-spinner hidden></span>
               Refresh
