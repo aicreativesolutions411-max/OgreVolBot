@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import bs58 from "bs58";
 import {
   Keypair,
   LAMPORTS_PER_SOL,
@@ -8,13 +9,18 @@ import {
   VersionedTransaction
 } from "@solana/web3.js";
 import {
+  buildPumpPortalLocalCreateRequest,
   decodePumpPortalTransaction,
   formatPumpLaunchUserError,
+  looksLikeSecretKey,
+  normalizePumpPortalCreatePayload,
   PUMP_LAUNCH_STATUS,
   PUMP_LAUNCH_STAGE,
   pumpLaunchLogEntry,
+  pumpPortalCreateDebugSummary,
   PumpLaunchService,
   selectPumpLaunchWallet,
+  validatePumpPortalCreatePayload,
   validatePumpPortalLocalApiUrl
 } from "../src/lib/pumpLaunchService.js";
 
@@ -181,6 +187,189 @@ test("wrong or missing PumpPortal Local API URL fails with a config error", asyn
   assert.equal(attempt.stage, PUMP_LAUNCH_STAGE.CONFIG);
   assert.equal(attempt.errorCode, "PUMP_LAUNCH_API_URL_INVALID");
   assert.equal(harness.requestBody(), null);
+});
+
+test("correct PumpPortal create payload exactly matches official local shape", () => {
+  const dev = Keypair.generate();
+  const mint = Keypair.generate();
+  const payload = buildPumpPortalLocalCreateRequest({
+    creatorPublicKey: dev.publicKey.toBase58(),
+    mintPublicKey: mint.publicKey.toBase58(),
+    name: "Ogre Test",
+    symbol: "og t",
+    metadataUri: "https://ogrevolbot.onrender.com/pump/metadata/abc123abc123abc123abc123abc123ab/metadata.json",
+    devBuySol: "0.0001",
+    slippageBps: undefined,
+    priorityFeeSol: undefined,
+    pool: undefined
+  });
+
+  assert.deepEqual(Object.keys(payload).sort(), [
+    "action",
+    "amount",
+    "denominatedInSol",
+    "mint",
+    "pool",
+    "priorityFee",
+    "publicKey",
+    "slippage",
+    "tokenMetadata"
+  ].sort());
+  assert.deepEqual(Object.keys(payload.tokenMetadata).sort(), ["name", "symbol", "uri"]);
+  assert.deepEqual(payload, {
+    publicKey: dev.publicKey.toBase58(),
+    action: "create",
+    tokenMetadata: {
+      name: "Ogre Test",
+      symbol: "OGT",
+      uri: "https://ogrevolbot.onrender.com/pump/metadata/abc123abc123abc123abc123abc123ab/metadata.json"
+    },
+    mint: mint.publicKey.toBase58(),
+    denominatedInSol: "true",
+    amount: 0.0001,
+    slippage: 10,
+    priorityFee: 0.00001,
+    pool: "pump"
+  });
+});
+
+test("PumpPortal create payload is object, not array", () => {
+  assert.throws(
+    () => validatePumpPortalCreatePayload([]),
+    (error) => error.code === "PUMPPORTAL_CREATE_BODY_INVALID"
+  );
+});
+
+test("invalid publicKey is rejected locally", () => {
+  const mint = Keypair.generate();
+  assert.throws(
+    () => normalizePumpPortalCreatePayload({
+      publicKey: "not-a-key",
+      mint: mint.publicKey.toBase58(),
+      tokenMetadata: { name: "Ogre Test", symbol: "OGT", uri: "https://example.com/metadata.json" }
+    }),
+    (error) => error.code === "PUMPPORTAL_CREATE_PUBLIC_KEY_INVALID"
+  );
+});
+
+test("invalid mint and mint secret key are rejected locally", () => {
+  const dev = Keypair.generate();
+  assert.throws(
+    () => normalizePumpPortalCreatePayload({
+      publicKey: dev.publicKey.toBase58(),
+      mint: "not-a-mint",
+      tokenMetadata: { name: "Ogre Test", symbol: "OGT", uri: "https://example.com/metadata.json" }
+    }),
+    (error) => error.code === "PUMPPORTAL_CREATE_MINT_INVALID"
+  );
+  assert.equal(looksLikeSecretKey(bs58.encode(dev.secretKey)), true);
+  assert.throws(
+    () => normalizePumpPortalCreatePayload({
+      publicKey: dev.publicKey.toBase58(),
+      mint: bs58.encode(dev.secretKey),
+      tokenMetadata: { name: "Ogre Test", symbol: "OGT", uri: "https://example.com/metadata.json" }
+    }),
+    (error) => error.code === "PUMPPORTAL_CREATE_SECRET_KEY_REJECTED"
+  );
+});
+
+test("missing or image metadata uri is rejected locally", () => {
+  const dev = Keypair.generate();
+  const mint = Keypair.generate();
+  assert.throws(
+    () => normalizePumpPortalCreatePayload({
+      publicKey: dev.publicKey.toBase58(),
+      mint: mint.publicKey.toBase58(),
+      tokenMetadata: { name: "Ogre Test", symbol: "OGT", uri: "" }
+    }),
+    (error) => error.code === "MISSING_METADATA_URI"
+  );
+  assert.throws(
+    () => normalizePumpPortalCreatePayload({
+      publicKey: dev.publicKey.toBase58(),
+      mint: mint.publicKey.toBase58(),
+      tokenMetadata: { name: "Ogre Test", symbol: "OGT", uri: "https://example.com/image.png" }
+    }),
+    (error) => error.code === "PUMPPORTAL_CREATE_METADATA_URI_IMAGE"
+  );
+});
+
+test("empty or too-long token name is rejected locally", () => {
+  const dev = Keypair.generate();
+  const mint = Keypair.generate();
+  assert.throws(
+    () => normalizePumpPortalCreatePayload({
+      publicKey: dev.publicKey.toBase58(),
+      mint: mint.publicKey.toBase58(),
+      tokenMetadata: { name: "", symbol: "OGT", uri: "https://example.com/metadata.json" }
+    }),
+    (error) => error.code === "PUMPPORTAL_CREATE_NAME_INVALID"
+  );
+  assert.throws(
+    () => normalizePumpPortalCreatePayload({
+      publicKey: dev.publicKey.toBase58(),
+      mint: mint.publicKey.toBase58(),
+      tokenMetadata: { name: "x".repeat(33), symbol: "OGT", uri: "https://example.com/metadata.json" }
+    }),
+    (error) => error.code === "PUMPPORTAL_CREATE_NAME_INVALID"
+  );
+});
+
+test("symbol is normalized safely and invalid symbol is rejected locally", () => {
+  const dev = Keypair.generate();
+  const mint = Keypair.generate();
+  const payload = normalizePumpPortalCreatePayload({
+    publicKey: dev.publicKey.toBase58(),
+    mint: mint.publicKey.toBase58(),
+    tokenMetadata: { name: "Ogre Test", symbol: "$og t", uri: "https://example.com/metadata.json" }
+  });
+  assert.equal(payload.tokenMetadata.symbol, "OGT");
+  assert.throws(
+    () => normalizePumpPortalCreatePayload({
+      publicKey: dev.publicKey.toBase58(),
+      mint: mint.publicKey.toBase58(),
+      tokenMetadata: { name: "Ogre Test", symbol: "!", uri: "https://example.com/metadata.json" }
+    }),
+    (error) => error.code === "PUMPPORTAL_CREATE_SYMBOL_INVALID"
+  );
+});
+
+test("denominatedInSol and numeric fields normalize to PumpPortal-safe types", () => {
+  const dev = Keypair.generate();
+  const mint = Keypair.generate();
+  const payload = normalizePumpPortalCreatePayload({
+    publicKey: dev.publicKey.toBase58(),
+    mint: mint.publicKey.toBase58(),
+    tokenMetadata: { name: "Ogre Test", symbol: "OGT", uri: "https://example.com/metadata.json" },
+    denominatedInSol: true,
+    amount: "bad",
+    slippage: "bad",
+    priorityFee: "bad",
+    pool: ""
+  });
+  assert.equal(payload.denominatedInSol, "true");
+  assert.equal(typeof payload.amount, "number");
+  assert.equal(payload.amount, 0.0001);
+  assert.equal(payload.slippage, 10);
+  assert.equal(payload.priorityFee, 0.00001);
+  assert.equal(payload.pool, "pump");
+});
+
+test("PumpPortal create debug summary reports body diagnostics", () => {
+  const dev = Keypair.generate();
+  const mint = Keypair.generate();
+  const payload = normalizePumpPortalCreatePayload({
+    publicKey: dev.publicKey.toBase58(),
+    mint: mint.publicKey.toBase58(),
+    tokenMetadata: { name: "Ogre Test", symbol: "OGT", uri: "https://example.com/metadata.json" }
+  });
+  const summary = pumpPortalCreateDebugSummary(payload);
+  assert.equal(summary.bodyIsArray, false);
+  assert.equal(summary.publicKeyValid, true);
+  assert.equal(summary.mintValid, true);
+  assert.equal(summary.mintLooksLikeSecret, false);
+  assert.equal(summary.denominatedInSolType, "string");
+  assert.equal(summary.amountType, "number");
 });
 
 test("managed funded wallet builds the correct PumpPortal Local create body", async () => {

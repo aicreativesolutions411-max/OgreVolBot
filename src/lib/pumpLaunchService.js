@@ -1,6 +1,7 @@
 import bs58 from "bs58";
 import {
   LAMPORTS_PER_SOL,
+  PublicKey,
   VersionedTransaction
 } from "@solana/web3.js";
 
@@ -50,7 +51,9 @@ export function pumpLaunchStageError(stage, code, cause, statusCode = 502, extra
     stage,
     cause,
     providerStatus: cause?.providerStatus || cause?.status || cause?.statusCode || null,
+    providerResponseContentType: cause?.providerResponseContentType || cause?.responseContentType || "",
     providerResponseBody: cause?.providerResponseBody || cause?.responseBody || "",
+    requestMeta: cause?.requestMeta || null,
     ...extra
   });
   return error;
@@ -203,10 +206,7 @@ export function buildPumpPortalLocalCreateRequest({
   priorityFeeSol,
   pool = "pump"
 }) {
-  if (!creatorPublicKey) throw createPumpLaunchError("Missing creator wallet public key.", "MISSING_CREATOR_PUBLIC_KEY");
-  if (!mintPublicKey) throw createPumpLaunchError("Missing generated mint public key.", "MISSING_MINT_PUBLIC_KEY");
-  if (!metadataUri) throw createPumpLaunchError("Missing token metadata URI.", "MISSING_METADATA_URI");
-  return {
+  return normalizePumpPortalCreatePayload({
     publicKey: creatorPublicKey,
     action: "create",
     tokenMetadata: {
@@ -216,10 +216,287 @@ export function buildPumpPortalLocalCreateRequest({
     },
     mint: mintPublicKey,
     denominatedInSol: "true",
-    amount: Math.max(0.0001, Number(devBuySol || 0.0001)),
-    slippage: Math.max(0.01, Number(slippageBps || 0) / 100),
-    priorityFee: Math.max(0, Number(priorityFeeSol || 0)),
+    amount: devBuySol,
+    slippageBps,
+    priorityFee: priorityFeeSol,
     pool
+  });
+}
+
+function normalizePumpPortalName(value) {
+  const name = String(value || "").replace(/\s+/g, " ").trim();
+  if (!name) {
+    throw createPumpLaunchError("Token name is required for PumpPortal create.", "PUMPPORTAL_CREATE_NAME_INVALID", 400, {
+      stage: PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL
+    });
+  }
+  if (name.length > 32) {
+    throw createPumpLaunchError("Token name must be 32 characters or fewer for PumpPortal create.", "PUMPPORTAL_CREATE_NAME_INVALID", 400, {
+      stage: PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL,
+      nameLength: name.length
+    });
+  }
+  return name;
+}
+
+function normalizePumpPortalSymbol(value) {
+  const symbol = String(value || "")
+    .trim()
+    .replace(/^\$/, "")
+    .replace(/[^a-z0-9]/gi, "")
+    .toUpperCase();
+  if (!symbol || symbol.length < 2) {
+    throw createPumpLaunchError("Token symbol must be at least 2 letters/numbers for PumpPortal create.", "PUMPPORTAL_CREATE_SYMBOL_INVALID", 400, {
+      stage: PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL
+    });
+  }
+  if (symbol.length > 10) {
+    throw createPumpLaunchError("Token symbol must be 10 characters or fewer for PumpPortal create.", "PUMPPORTAL_CREATE_SYMBOL_INVALID", 400, {
+      stage: PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL,
+      symbolLength: symbol.length
+    });
+  }
+  return symbol;
+}
+
+function normalizePumpPortalNumber(value, fallback, min = 0) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < min) return fallback;
+  return number;
+}
+
+function normalizePumpPortalSlippage(input = {}) {
+  if (input.slippage !== undefined) {
+    return normalizePumpPortalNumber(input.slippage, 10, 0.01);
+  }
+  if (input.slippageBps !== undefined) {
+    return normalizePumpPortalNumber(Number(input.slippageBps) / 100, 10, 0.01);
+  }
+  return 10;
+}
+
+function normalizePumpPortalMetadataUri(value) {
+  const uri = String(value || "").trim();
+  if (!uri) {
+    throw createPumpLaunchError("Missing token metadata URI.", "MISSING_METADATA_URI", 400, {
+      stage: PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL
+    });
+  }
+  let parsed;
+  try {
+    parsed = new URL(uri);
+  } catch {
+    throw createPumpLaunchError("Token metadata URI must be a public http(s) URL.", "PUMPPORTAL_CREATE_METADATA_URI_INVALID", 400, {
+      stage: PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL
+    });
+  }
+  if (!["http:", "https:"].includes(parsed.protocol)) {
+    throw createPumpLaunchError("Token metadata URI must be a public http(s) URL.", "PUMPPORTAL_CREATE_METADATA_URI_INVALID", 400, {
+      stage: PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL
+    });
+  }
+  if (/\.(?:png|jpe?g|gif|webp|svg)(?:$|[?#])/i.test(parsed.pathname)) {
+    throw createPumpLaunchError("Token metadata URI must point to metadata JSON, not an image.", "PUMPPORTAL_CREATE_METADATA_URI_IMAGE", 400, {
+      stage: PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL
+    });
+  }
+  return uri;
+}
+
+export function looksLikeSecretKey(value) {
+  if (Array.isArray(value)) return value.length >= 64;
+  if (value && typeof value === "object") {
+    if (Array.isArray(value.secretKey)) return true;
+    if (Array.isArray(value._keypair?.secretKey)) return true;
+    return false;
+  }
+  const text = String(value || "").trim();
+  if (!text) return false;
+  if (/^\[\s*\d+[\s,\d]*\]$/.test(text)) {
+    try {
+      return JSON.parse(text).length >= 64;
+    } catch {
+      return true;
+    }
+  }
+  try {
+    return bs58.decode(text).length > 32;
+  } catch {
+    return false;
+  }
+}
+
+function normalizePumpPortalPublicKey(value, code, message) {
+  const text = String(value || "").trim();
+  if (!text) {
+    throw createPumpLaunchError(message, code, 400, {
+      stage: PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL
+    });
+  }
+  if (looksLikeSecretKey(value)) {
+    throw createPumpLaunchError("PumpPortal create payload cannot include a secret key.", "PUMPPORTAL_CREATE_SECRET_KEY_REJECTED", 400, {
+      stage: PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL
+    });
+  }
+  try {
+    return new PublicKey(text).toBase58();
+  } catch {
+    throw createPumpLaunchError(message, code, 400, {
+      stage: PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL
+    });
+  }
+}
+
+export function normalizePumpPortalCreatePayload(input = {}) {
+  const tokenMetadata = input.tokenMetadata || {};
+  const amount = normalizePumpPortalNumber(input.amount, 0.0001, 0.0001);
+  const slippage = normalizePumpPortalSlippage(input);
+  const priorityFee = normalizePumpPortalNumber(input.priorityFee, 0.00001, 0.000001);
+  const payload = {
+    publicKey: normalizePumpPortalPublicKey(
+      input.publicKey,
+      "PUMPPORTAL_CREATE_PUBLIC_KEY_INVALID",
+      "PumpPortal create publicKey must be the selected dev wallet public key."
+    ),
+    action: "create",
+    tokenMetadata: {
+      name: normalizePumpPortalName(tokenMetadata.name ?? input.name),
+      symbol: normalizePumpPortalSymbol(tokenMetadata.symbol ?? input.symbol),
+      uri: normalizePumpPortalMetadataUri(tokenMetadata.uri ?? input.metadataUri)
+    },
+    mint: normalizePumpPortalPublicKey(
+      input.mint,
+      "PUMPPORTAL_CREATE_MINT_INVALID",
+      "PumpPortal create mint must be the generated mint public key."
+    ),
+    denominatedInSol: String(input.denominatedInSol ?? "true").toLowerCase() === "false" ? "false" : "true",
+    amount,
+    slippage,
+    priorityFee,
+    pool: String(input.pool || "pump").trim() || "pump"
+  };
+  validatePumpPortalCreatePayload(payload);
+  return payload;
+}
+
+export function validatePumpPortalCreatePayload(payload = {}) {
+  if (Array.isArray(payload) || !payload || typeof payload !== "object") {
+    throw createPumpLaunchError("PumpPortal create payload must be a JSON object, not an array.", "PUMPPORTAL_CREATE_BODY_INVALID", 400, {
+      stage: PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL
+    });
+  }
+  const keys = Object.keys(payload).sort();
+  const expectedKeys = ["action", "amount", "denominatedInSol", "mint", "pool", "priorityFee", "publicKey", "slippage", "tokenMetadata"].sort();
+  if (JSON.stringify(keys) !== JSON.stringify(expectedKeys)) {
+    throw createPumpLaunchError("PumpPortal create payload has unexpected fields.", "PUMPPORTAL_CREATE_BODY_INVALID", 400, {
+      stage: PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL,
+      keys
+    });
+  }
+  if (payload.action !== "create") {
+    throw createPumpLaunchError("PumpPortal create action must be create.", "PUMPPORTAL_CREATE_ACTION_INVALID", 400, {
+      stage: PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL
+    });
+  }
+  normalizePumpPortalPublicKey(payload.publicKey, "PUMPPORTAL_CREATE_PUBLIC_KEY_INVALID", "PumpPortal create publicKey must be valid.");
+  normalizePumpPortalPublicKey(payload.mint, "PUMPPORTAL_CREATE_MINT_INVALID", "PumpPortal create mint must be valid.");
+  if (payload.mint === payload.publicKey) {
+    throw createPumpLaunchError("PumpPortal create mint must be different from the dev wallet public key.", "PUMPPORTAL_CREATE_MINT_INVALID", 400, {
+      stage: PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL
+    });
+  }
+  const metadataKeys = Object.keys(payload.tokenMetadata || {}).sort();
+  if (JSON.stringify(metadataKeys) !== JSON.stringify(["name", "symbol", "uri"])) {
+    throw createPumpLaunchError("PumpPortal tokenMetadata must contain only name, symbol, and uri.", "PUMPPORTAL_CREATE_METADATA_INVALID", 400, {
+      stage: PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL
+    });
+  }
+  normalizePumpPortalName(payload.tokenMetadata.name);
+  normalizePumpPortalSymbol(payload.tokenMetadata.symbol);
+  normalizePumpPortalMetadataUri(payload.tokenMetadata.uri);
+  if (!["true", "false"].includes(payload.denominatedInSol) || typeof payload.denominatedInSol !== "string") {
+    throw createPumpLaunchError("PumpPortal denominatedInSol must be the string true or false.", "PUMPPORTAL_CREATE_DENOMINATED_INVALID", 400, {
+      stage: PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL
+    });
+  }
+  for (const key of ["amount", "slippage", "priorityFee"]) {
+    if (typeof payload[key] !== "number" || !Number.isFinite(payload[key])) {
+      throw createPumpLaunchError(`PumpPortal ${key} must be a finite number.`, "PUMPPORTAL_CREATE_NUMBER_INVALID", 400, {
+        stage: PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL,
+        field: key
+      });
+    }
+  }
+  if (payload.amount < 0.0001) {
+    throw createPumpLaunchError("PumpPortal amount must be at least 0.0001 SOL.", "PUMPPORTAL_CREATE_AMOUNT_INVALID", 400, {
+      stage: PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL
+    });
+  }
+  if (payload.slippage <= 0) {
+    throw createPumpLaunchError("PumpPortal slippage must be positive.", "PUMPPORTAL_CREATE_SLIPPAGE_INVALID", 400, {
+      stage: PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL
+    });
+  }
+  if (payload.priorityFee < 0.000001) {
+    throw createPumpLaunchError("PumpPortal priorityFee must be at least 0.000001 SOL.", "PUMPPORTAL_CREATE_PRIORITY_FEE_INVALID", 400, {
+      stage: PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL
+    });
+  }
+  if (payload.pool !== "pump") {
+    throw createPumpLaunchError("PumpPortal create pool must be pump.", "PUMPPORTAL_CREATE_POOL_INVALID", 400, {
+      stage: PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL,
+      pool: payload.pool
+    });
+  }
+  return true;
+}
+
+export function pumpPortalCreateDebugSummary(payload = {}) {
+  const body = payload || {};
+  const tokenMetadata = body.tokenMetadata || {};
+  let publicKeyValid = false;
+  let mintValid = false;
+  try {
+    publicKeyValid = new PublicKey(String(body.publicKey || "")).toBase58() === String(body.publicKey || "");
+  } catch {
+    publicKeyValid = false;
+  }
+  try {
+    mintValid = new PublicKey(String(body.mint || "")).toBase58() === String(body.mint || "");
+  } catch {
+    mintValid = false;
+  }
+  return {
+    method: "POST",
+    contentType: "application/json",
+    bodyIsArray: Array.isArray(body),
+    bodyKeys: Object.keys(body).sort(),
+    publicKeyValid,
+    mintValid,
+    mintLooksLikeSecret: looksLikeSecretKey(body.mint),
+    nameLength: String(tokenMetadata.name || "").length,
+    symbol: String(tokenMetadata.symbol || ""),
+    symbolLength: String(tokenMetadata.symbol || "").length,
+    metadataUri: String(tokenMetadata.uri || ""),
+    denominatedInSolType: typeof body.denominatedInSol,
+    denominatedInSol: body.denominatedInSol,
+    amountType: typeof body.amount,
+    amount: body.amount,
+    slippageType: typeof body.slippage,
+    slippage: body.slippage,
+    priorityFeeType: typeof body.priorityFee,
+    priorityFee: body.priorityFee,
+    pool: body.pool
+  };
+}
+
+export function pumpPortalRequestMeta(payload = {}) {
+  return {
+    endpointType: "pumpportal-local",
+    method: "POST",
+    contentType: "application/json",
+    bodyIsArray: Array.isArray(payload),
+    bodyKeys: Object.keys(payload || {}).sort()
   };
 }
 
@@ -368,6 +645,7 @@ export class PumpLaunchService {
     this.requestLocalTransaction = deps.requestLocalTransaction;
     this.sendTransaction = deps.sendTransaction;
     this.generateMintKeypair = deps.generateMintKeypair;
+    this.validateMetadataUri = deps.validateMetadataUri || (async () => {});
     this.encryptMintSecret = deps.encryptMintSecret || null;
     this.saveAttempt = deps.saveAttempt || (async () => {});
     this.recordTradeEvent = deps.recordTradeEvent || (async () => {});
@@ -501,6 +779,7 @@ export class PumpLaunchService {
           updatedAt: this.now().toISOString()
         });
         metadata = await this.uploadMetadata(basePayload);
+        await this.validateMetadataUri(metadata.uri);
       } catch (error) {
         throw pumpLaunchStageError(PUMP_LAUNCH_STAGE.METADATA_UPLOAD, error.code || "PUMP_LAUNCH_METADATA_UPLOAD_FAILED", error);
       }
@@ -534,11 +813,13 @@ export class PumpLaunchService {
         pool: config.pool || "pump"
       });
       const sanitizedRequest = sanitizePumpPortalCreateRequest(requestPayload);
+      const requestMeta = pumpPortalRequestMeta(requestPayload);
       await this.saveAttempt({
         id: attemptId,
         status: PUMP_LAUNCH_STATUS.BUILDING_TX,
         stage: PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL,
         requestBody: sanitizedRequest,
+        requestMeta,
         updatedAt: this.now().toISOString()
       });
       this.log("pump_launch_pumpportal_request", {
@@ -547,6 +828,7 @@ export class PumpLaunchService {
         selectedDevWalletId,
         devWalletPublicKey,
         apiUrl: config.apiUrl || "",
+        requestMeta,
         requestBody: sanitizedRequest
       });
 
@@ -689,7 +971,9 @@ export class PumpLaunchService {
         failureReason,
         txSignature: error.txSignature || submittedSignature || undefined,
         providerStatus: error.providerStatus || error.status || error.statusCode || null,
+        providerResponseContentType: error.providerResponseContentType || error.responseContentType || "",
         providerResponseBody: sanitizeProviderBody(error.providerResponseBody || error.responseBody || ""),
+        requestMeta: error.requestMeta || undefined,
         failedAt: this.now().toISOString(),
         updatedAt: this.now().toISOString()
       });
@@ -706,6 +990,7 @@ export class PumpLaunchService {
         failureReason,
         txSignature: error.txSignature || submittedSignature || undefined,
         providerStatus: error.providerStatus || error.status || error.statusCode || null,
+        providerResponseContentType: error.providerResponseContentType || error.responseContentType || "",
         providerResponseBody: error.providerResponseBody || error.responseBody || ""
       });
       throw error;
