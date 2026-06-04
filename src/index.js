@@ -111,7 +111,8 @@ let lastKeepAliveStatus = {
   lastError: null
 };
 let metadataProviderHealth = {
-  provider: "pinata",
+  provider: "auto",
+  activeProvider: "",
   checkedAt: null,
   status: "pending",
   authStatus: null,
@@ -129,7 +130,8 @@ let metadataProviderHealth = {
   tokenLength: 0,
   tokenCleaned: false,
   tokenPlaceholder: false,
-  endpoint: ""
+  endpoint: "",
+  hostedBaseUrl: ""
 };
 let tradePlanRunnerActive = false;
 let tradePlanRunnerActiveSince = 0;
@@ -352,6 +354,16 @@ function loadConfig() {
   const pumpLaunchRequestMode = (process.env.PUMP_LAUNCH_REQUEST_MODE || "json").trim().toLowerCase();
   const pumpLaunchPriorityFeeSol = Number.parseFloat(process.env.PUMP_LAUNCH_PRIORITY_FEE_SOL || "0.00005");
   const pumpLaunchRequiredBufferSol = Number.parseFloat(process.env.PUMP_LAUNCH_REQUIRED_BUFFER_SOL || "0.01");
+  const pumpLaunchMetadataProvider = normalizeMetadataProvider(process.env.METADATA_PROVIDER || process.env.PUMP_LAUNCH_METADATA_PROVIDER || "auto");
+  const renderExternalHostname = String(process.env.RENDER_EXTERNAL_HOSTNAME || "").trim();
+  const pumpLaunchHostedMetadataBaseUrl = (
+    process.env.PUMP_LAUNCH_HOSTED_METADATA_BASE_URL
+    || process.env.PUMP_LAUNCH_METADATA_PUBLIC_BASE_URL
+    || process.env.TELEGRAM_WEBHOOK_URL
+    || (renderExternalHostname ? `https://${renderExternalHostname}` : "")
+    || process.env.WEB_PORTAL_URL
+    || ""
+  ).replace(/\/$/, "");
   const workerTickEnabled = parseBoolean(process.env.WORKER_TICK_ENABLED || (process.env.WORKER_SECRET ? "true" : "false"));
   const workerTickRunTradePlans = parseBoolean(process.env.WORKER_TICK_RUN_TRADE_PLANS || "true");
   const workerTickRunDcaPlans = parseBoolean(process.env.WORKER_TICK_RUN_DCA_PLANS || "true");
@@ -566,8 +578,10 @@ function loadConfig() {
     pumpLaunchApiFormat: (process.env.PUMP_LAUNCH_API_FORMAT || "minimal").trim().toLowerCase(),
     pumpLaunchImageField: (process.env.PUMP_LAUNCH_IMAGE_FIELD || "").trim(),
     pumpLaunchRequestMode,
+    pumpLaunchMetadataProvider,
     pumpLaunchMetadataUrl: (process.env.PUMP_LAUNCH_METADATA_URL || "https://uploads.pinata.cloud/v3/files").trim(),
     pumpLaunchPinataJwt: process.env.PUMP_LAUNCH_PINATA_JWT || "",
+    pumpLaunchHostedMetadataBaseUrl,
     pumpLaunchPriorityFeeSol,
     pumpLaunchRequiredBufferSol,
     photonNewPairsUrl: (process.env.PHOTON_NEW_PAIRS_URL || "").trim(),
@@ -748,6 +762,11 @@ function startHealthServer() {
       return;
     }
 
+    if (request.method === "GET" && requestUrl.pathname.startsWith("/pump/metadata/")) {
+      await serveHostedPumpMetadata(request, response, requestUrl);
+      return;
+    }
+
     if (requestUrl.pathname.startsWith("/api/")
       || requestUrl.pathname.startsWith("/internal/")
       || requestUrl.pathname === "/worker/tick"
@@ -790,7 +809,9 @@ function startHealthServer() {
         pumpLaunch: {
           enabled: CONFIG.pumpLaunchEnabled,
           apiUrl: CONFIG.pumpLaunchApiUrl,
+          metadataProvider: CONFIG.pumpLaunchMetadataProvider,
           metadataUrl: CONFIG.pumpLaunchMetadataUrl,
+          hostedMetadataBaseUrl: CONFIG.pumpLaunchHostedMetadataBaseUrl,
           pinataJwtConfigured: Boolean(CONFIG.pumpLaunchPinataJwt),
           priorityFeeSol: CONFIG.pumpLaunchPriorityFeeSol,
           requiredBufferSol: CONFIG.pumpLaunchRequiredBufferSol
@@ -835,8 +856,9 @@ function startHealthServer() {
 function metadataProviderDiagnosticsFields() {
   const diagnostics = safePinataDiagnostics(CONFIG.pumpLaunchPinataJwt);
   return {
-    provider: "pinata",
+    provider: CONFIG.pumpLaunchMetadataProvider,
     endpoint: CONFIG.pumpLaunchMetadataUrl,
+    hostedBaseUrl: CONFIG.pumpLaunchHostedMetadataBaseUrl,
     tokenPresent: diagnostics.tokenPresent,
     tokenLength: diagnostics.tokenLength,
     tokenCleaned: diagnostics.cleaned,
@@ -859,13 +881,14 @@ function updateMetadataProviderHealth(fields = {}) {
 }
 
 function scheduleMetadataProviderStartupSmoke() {
+  const needsPinataJwt = CONFIG.pumpLaunchMetadataProvider === "pinata";
   updateMetadataProviderHealth({
-    status: CONFIG.pumpLaunchPinataJwt ? "scheduled" : "config_missing",
-    errorCode: CONFIG.pumpLaunchPinataJwt ? "" : "PUMP_METADATA_CONFIG_MISSING",
-    errorMessage: CONFIG.pumpLaunchPinataJwt ? "" : "Pinata JWT is not configured on this backend runtime."
+    status: needsPinataJwt && !CONFIG.pumpLaunchPinataJwt ? "config_missing" : "scheduled",
+    errorCode: needsPinataJwt && !CONFIG.pumpLaunchPinataJwt ? "PUMP_METADATA_CONFIG_MISSING" : "",
+    errorMessage: needsPinataJwt && !CONFIG.pumpLaunchPinataJwt ? "Pinata JWT is not configured on this backend runtime." : ""
   });
 
-  if (!CONFIG.pumpLaunchPinataJwt) return;
+  if (needsPinataJwt && !CONFIG.pumpLaunchPinataJwt) return;
 
   setTimeout(() => {
     void runMetadataProviderStartupSmoke().catch((error) => {
@@ -886,6 +909,7 @@ function scheduleMetadataProviderStartupSmoke() {
 async function runMetadataProviderStartupSmoke() {
   updateMetadataProviderHealth({
     status: "checking_auth",
+    activeProvider: "",
     authStatus: null,
     authOk: false,
     authBodySnippet: "",
@@ -899,6 +923,38 @@ async function runMetadataProviderStartupSmoke() {
     errorMessage: ""
   });
 
+  if (CONFIG.pumpLaunchMetadataProvider === "slimewire-hosted") {
+    await runHostedMetadataStartupSmoke("uploaded");
+    return;
+  }
+
+  if (CONFIG.pumpLaunchMetadataProvider === "auto" && !CONFIG.pumpLaunchPinataJwt) {
+    await runHostedMetadataStartupSmoke("uploaded_fallback");
+    return;
+  }
+
+  try {
+    await runPinataMetadataStartupSmoke();
+  } catch (error) {
+    if (CONFIG.pumpLaunchMetadataProvider !== "auto" || !String(error?.code || "").startsWith("PUMP_METADATA_")) {
+      throw error;
+    }
+    updateMetadataProviderHealth({
+      status: "pinata_failed_falling_back",
+      activeProvider: "pinata",
+      authStatus: error?.authTest?.status || error?.providerStatus || error?.status || error?.statusCode || null,
+      authOk: false,
+      uploadOk: false,
+      uploadStatus: error?.providerStatus || error?.status || error?.statusCode || null,
+      errorCode: error?.code || "PUMP_METADATA_PINATA_FAILED",
+      errorMessage: sanitizeProviderBody(error?.message || "Pinata metadata provider failed.")
+    });
+    logPumpLaunchEvent("metadata_provider_startup_pinata_fallback", metadataProviderHealth);
+    await runHostedMetadataStartupSmoke("uploaded_fallback");
+  }
+}
+
+async function runPinataMetadataStartupSmoke() {
   const config = assertPinataConfigured({
     tokenValue: CONFIG.pumpLaunchPinataJwt,
     metadataUrl: CONFIG.pumpLaunchMetadataUrl
@@ -910,6 +966,7 @@ async function runMetadataProviderStartupSmoke() {
   });
   updateMetadataProviderHealth({
     status: "auth_ok",
+    activeProvider: "pinata",
     authStatus: auth.status,
     authOk: auth.ok,
     authBodySnippet: sanitizeProviderBody(auth.bodySnippet || "")
@@ -934,35 +991,63 @@ async function runMetadataProviderStartupSmoke() {
     timeoutMs: CONFIG.pumpLaunchTimeoutMs
   });
 
-  let publicFetchOk = false;
-  let publicFetchStatus = null;
-  if (upload.uri && typeof fetch === "function") {
-    try {
-      const response = await fetch(upload.uri, {
-        method: "GET",
-        signal: AbortSignal.timeout ? AbortSignal.timeout(10_000) : undefined
-      });
-      publicFetchOk = Boolean(response.ok);
-      publicFetchStatus = response.status;
-    } catch (error) {
-      publicFetchStatus = 0;
-    }
-  }
+  const publicFetch = await verifyPublicMetadataUri(upload.uri);
 
   updateMetadataProviderHealth({
     status: "uploaded",
+    activeProvider: "pinata",
     authStatus: auth.status,
     authOk: auth.ok,
     uploadOk: true,
     uploadStatus: 200,
     metadataUri: upload.uri,
     cid: upload.cid,
-    publicFetchOk,
-    publicFetchStatus,
+    publicFetchOk: publicFetch.ok,
+    publicFetchStatus: publicFetch.status,
     errorCode: "",
     errorMessage: ""
   });
   logPumpLaunchEvent("metadata_provider_startup_smoke_uploaded", metadataProviderHealth);
+}
+
+async function runHostedMetadataStartupSmoke(status = "uploaded") {
+  updateMetadataProviderHealth({
+    status: "uploading_metadata",
+    activeProvider: "slimewire-hosted"
+  });
+  const upload = await uploadHostedPumpLaunchMetadata({
+    name: "SlimeWire Render metadata smoke test",
+    symbol: "SLIMETEST",
+    description: "Temporary backend metadata upload smoke test",
+    website: "https://slimewire.org"
+  });
+  const publicFetch = await verifyPublicMetadataUri(upload.uri);
+  updateMetadataProviderHealth({
+    status,
+    activeProvider: "slimewire-hosted",
+    uploadOk: true,
+    uploadStatus: 200,
+    metadataUri: upload.uri,
+    cid: upload.cidOrId,
+    publicFetchOk: publicFetch.ok,
+    publicFetchStatus: publicFetch.status,
+    errorCode: "",
+    errorMessage: ""
+  });
+  logPumpLaunchEvent("metadata_provider_startup_smoke_uploaded", metadataProviderHealth);
+}
+
+async function verifyPublicMetadataUri(uri) {
+  if (!uri || typeof fetch !== "function") return { ok: false, status: null };
+  try {
+    const response = await fetch(uri, {
+      method: "GET",
+      signal: AbortSignal.timeout ? AbortSignal.timeout(10_000) : undefined
+    });
+    return { ok: Boolean(response.ok), status: response.status };
+  } catch {
+    return { ok: false, status: 0 };
+  }
 }
 
 async function handleWebApiRequest(request, response, requestUrl) {
@@ -1635,6 +1720,44 @@ async function serveWebPortal(requestUrl, response) {
   }
 }
 
+async function serveHostedPumpMetadata(request, response, requestUrl) {
+  const rawRelativePath = decodeURIComponent(requestUrl.pathname.replace(/^\/pump\/metadata\/?/, ""));
+  const segments = rawRelativePath.split("/").filter(Boolean);
+  if (segments.length !== 2) {
+    response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8", ...webCorsHeaders(request) });
+    response.end("Not found");
+    return;
+  }
+
+  const [launchId, filename] = segments;
+  if (!/^[a-f0-9-]{32,64}$/i.test(launchId) || !/^[a-z0-9_.-]{1,80}$/i.test(filename)) {
+    response.writeHead(403, { "Content-Type": "text/plain; charset=utf-8", ...webCorsHeaders(request) });
+    response.end("Forbidden");
+    return;
+  }
+
+  const root = path.resolve(pumpLaunchHostedMetadataRoot());
+  const filePath = path.resolve(root, launchId, filename);
+  if (filePath !== root && !filePath.startsWith(`${root}${path.sep}`)) {
+    response.writeHead(403, { "Content-Type": "text/plain; charset=utf-8", ...webCorsHeaders(request) });
+    response.end("Forbidden");
+    return;
+  }
+
+  try {
+    const data = await fs.readFile(filePath);
+    response.writeHead(200, {
+      "Content-Type": webContentType(filePath),
+      "Cache-Control": "public, max-age=31536000, immutable",
+      ...webCorsHeaders(request)
+    });
+    response.end(data);
+  } catch {
+    response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8", ...webCorsHeaders(request) });
+    response.end("Not found");
+  }
+}
+
 function webContentType(filePath) {
   const ext = path.extname(filePath).toLowerCase();
   const types = {
@@ -1646,6 +1769,7 @@ function webContentType(filePath) {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
     ".webp": "image/webp",
+    ".gif": "image/gif",
     ".svg": "image/svg+xml; charset=utf-8"
   };
   return types[ext] || "application/octet-stream";
@@ -1935,6 +2059,16 @@ function parseBoolean(value) {
   return ["1", "true", "yes", "on"].includes(String(value).toLowerCase());
 }
 
+function normalizeMetadataProvider(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized || normalized === "auto") return "auto";
+  if (normalized === "pinata") return "pinata";
+  if (["hosted", "slimewire", "slimewire-hosted", "backend", "backend-hosted"].includes(normalized)) {
+    return "slimewire-hosted";
+  }
+  throw new Error("METADATA_PROVIDER/PUMP_LAUNCH_METADATA_PROVIDER must be auto, pinata, or slimewire-hosted.");
+}
+
 function parseTradingSpeedPreset(value) {
   const normalized = String(value || "").trim().toLowerCase();
   if (["safe", "balanced", "fast"].includes(normalized)) {
@@ -2006,6 +2140,7 @@ async function ensureDataFiles() {
   await writeJsonIfMissing(tradeHistoryPath(), { trades: [] });
   await writeJsonIfMissing(pumpLaunchAttemptsPath(), { attempts: [] });
   await writeJsonIfMissing(webAuthPath(), { codes: [], sessions: [] });
+  await fs.mkdir(pumpLaunchHostedMetadataRoot(), { recursive: true });
   await ensureAppSecretFingerprint();
   await assignUnownedWalletsToSingleAdmin();
   await validateStoredWalletSecrets();
@@ -2087,6 +2222,10 @@ function tradeHistoryPath() {
 
 function pumpLaunchAttemptsPath() {
   return path.join(CONFIG.dataDir, "pump-launch-attempts.json");
+}
+
+function pumpLaunchHostedMetadataRoot() {
+  return path.join(CONFIG.dataDir, "pump-launch-metadata");
 }
 
 function webAuthPath() {
@@ -17063,7 +17202,63 @@ async function launchImageBufferForUpload(basePayload = {}) {
   };
 }
 
-async function uploadPumpLaunchMetadata(basePayload = {}) {
+function hostedPumpMetadataBaseUrl() {
+  const baseUrl = String(CONFIG.pumpLaunchHostedMetadataBaseUrl || "").trim().replace(/\/$/, "");
+  if (!baseUrl) {
+    throw createPumpLaunchError(
+      "Hosted metadata fallback needs PUMP_LAUNCH_HOSTED_METADATA_BASE_URL or TELEGRAM_WEBHOOK_URL on Render.",
+      "PUMP_METADATA_HOSTED_BASE_URL_MISSING",
+      500,
+      {
+        stage: PUMP_LAUNCH_STAGE.METADATA_UPLOAD
+      }
+    );
+  }
+  return baseUrl;
+}
+
+function hostedPumpMetadataUrl(launchId, filename) {
+  return `${hostedPumpMetadataBaseUrl()}/pump/metadata/${encodeURIComponent(launchId)}/${encodeURIComponent(filename)}`;
+}
+
+function hostedImageFilename(image = {}) {
+  return `image.${launchImageExtension(image.contentType || "image/png")}`;
+}
+
+async function uploadHostedPumpLaunchMetadata(basePayload = {}) {
+  const image = await launchImageBufferForUpload(basePayload);
+  const launchId = crypto.randomUUID();
+  const directory = path.join(pumpLaunchHostedMetadataRoot(), launchId);
+  await fs.mkdir(directory, { recursive: true });
+
+  const imageFilename = hostedImageFilename(image);
+  const metadataFilename = "metadata.json";
+  const imageUri = hostedPumpMetadataUrl(launchId, imageFilename);
+  const metadata = compactLaunchPayload({
+    name: basePayload.name,
+    symbol: basePayload.symbol,
+    description: basePayload.description || "",
+    image: imageUri,
+    twitter: basePayload.twitter || "",
+    telegram: basePayload.telegram || "",
+    website: basePayload.website || "",
+    showName: true
+  });
+
+  await fs.writeFile(path.join(directory, imageFilename), image.buffer);
+  await fs.writeFile(path.join(directory, metadataFilename), JSON.stringify(metadata, null, 2));
+
+  return {
+    uri: hostedPumpMetadataUrl(launchId, metadataFilename),
+    imageUri,
+    imageBytes: image.buffer.length,
+    imageContentType: image.contentType,
+    provider: "slimewire-hosted",
+    cidOrId: launchId
+  };
+}
+
+async function uploadPinataPumpLaunchMetadata(basePayload = {}) {
   const pinataConfig = assertPinataConfigured({
     tokenValue: CONFIG.pumpLaunchPinataJwt,
     metadataUrl: CONFIG.pumpLaunchMetadataUrl
@@ -17110,8 +17305,35 @@ async function uploadPumpLaunchMetadata(basePayload = {}) {
     uri,
     imageUri,
     imageBytes: image.buffer.length,
-    imageContentType: image.contentType
+    imageContentType: image.contentType,
+    provider: "pinata",
+    cidOrId: metadataUpload.cid
   };
+}
+
+function shouldFallbackToHostedMetadata(error) {
+  const code = String(error?.code || "");
+  return CONFIG.pumpLaunchMetadataProvider === "auto" && code.startsWith("PUMP_METADATA_");
+}
+
+async function uploadPumpLaunchMetadata(basePayload = {}) {
+  if (CONFIG.pumpLaunchMetadataProvider === "slimewire-hosted") {
+    return uploadHostedPumpLaunchMetadata(basePayload);
+  }
+
+  try {
+    return await uploadPinataPumpLaunchMetadata(basePayload);
+  } catch (error) {
+    if (!shouldFallbackToHostedMetadata(error)) throw error;
+    logPumpLaunchEvent("pump_launch_metadata_pinata_fallback", {
+      provider: "pinata",
+      fallbackProvider: "slimewire-hosted",
+      errorCode: error.code || "PUMP_METADATA_FAILED",
+      providerStatus: error.providerStatus || error.status || error.statusCode || null,
+      reason: sanitizeProviderBody(error.message)
+    });
+    return uploadHostedPumpLaunchMetadata(basePayload);
+  }
 }
 
 function decodePumpPortalTransaction(value) {
