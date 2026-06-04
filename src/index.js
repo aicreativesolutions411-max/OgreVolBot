@@ -27,12 +27,15 @@ import {
 } from "./lib/ogreAi.js";
 import {
   calculateMoveSnapshot,
-  priceExitDecision,
   recentStoredPriceExitDecision,
   shouldEmergencySellOnPriceFailure,
   staleSubmittingExit,
   stopLossTriggerPercent
 } from "./lib/tradePlanExit.js";
+import {
+  evaluatePercentMoveTpSl,
+  tpSlLogEntry
+} from "./lib/tradeExecutionService.js";
 import {
   Connection,
   Keypair,
@@ -5357,6 +5360,44 @@ function scheduleWebExitGuardProcessing(label = "web exit guard", delays = [500,
   }
 }
 
+function tradePlanWalletTradeId(plan, planWallet) {
+  return [
+    plan?.id || "plan",
+    planWallet?.publicKey || "wallet",
+    planWallet?.buySignature || planWallet?.walletIndex || "active"
+  ].map((value) => String(value || "").trim()).join(":");
+}
+
+function logTpSlEvent(event, fields = {}) {
+  try {
+    console.log(JSON.stringify(tpSlLogEntry(event, fields)));
+  } catch (error) {
+    console.warn(`TP/SL log failed: ${error.message}`);
+  }
+}
+
+function evaluatePlanWalletPriceExit(plan, planWallet, estimate, {
+  takeProfitPct = 0,
+  stopLossPct = 0,
+  status = null
+} = {}) {
+  const evaluation = evaluatePercentMoveTpSl({
+    tradeId: tradePlanWalletTradeId(plan, planWallet),
+    userId: plan?.userId,
+    source: plan?.source || "trade_plan",
+    symbol: plan?.tokenMint,
+    side: "LONG",
+    status: status || planWallet?.exitStatus || planWallet?.status || plan?.status || "OPEN",
+    movePct: estimate?.movePct,
+    takeProfitPct,
+    stopLossPct,
+    stopLossBufferPct: CONFIG.stopLossTriggerBufferPct,
+    monitoringEnabled: true
+  });
+  logTpSlEvent("tp_sl_trade_monitored", evaluation);
+  return evaluation;
+}
+
 function isPriceExitTrigger(triggerReason) {
   return /^(take-profit|stop-loss)\b/i.test(String(triggerReason || ""));
 }
@@ -6060,12 +6101,11 @@ async function processWebPortfolioExits(options = {}) {
         const checkedAt = new Date().toISOString();
         const stopLossPct = walletStopLossPct(plan, planWallet);
         const takeProfitPct = walletTakeProfitPct(plan, planWallet);
-        const decision = priceExitDecision({
-          movePct: estimate.movePct,
+        const evaluation = evaluatePlanWalletPriceExit(plan, planWallet, estimate, {
           takeProfitPct,
-          stopLossPct,
-          stopLossBufferPct: CONFIG.stopLossTriggerBufferPct
+          stopLossPct
         });
+        const decision = evaluation.decision;
         const trigger = applyPriceExitTrigger(plan, planWallet, decision, estimate.movePct);
         webPortfolioExitState.set(key, {
           userId: entry.userId,
@@ -6084,6 +6124,12 @@ async function processWebPortfolioExits(options = {}) {
         if (!trigger) return;
         triggerReason = trigger.triggerReason;
         triggerMeta = trigger.triggerMeta;
+        logTpSlEvent("tp_sl_trade_triggered", {
+          ...evaluation,
+          trigger: evaluation.trigger,
+          wouldClose: true,
+          reason: triggerReason
+        });
       } catch (error) {
         const failures = Number.parseInt(memory.estimateFailures || 0, 10) + 1;
         memory.estimateFailures = failures;
@@ -6732,12 +6778,12 @@ async function processWebExitGuard(guard, walletStore, options = {}) {
       planWallet.lastTriggerPriceSource = estimate.source || "jupiter";
       planWallet.lastShouldTriggerStopLoss = stopLossTriggerPct > 0 && estimate.movePct <= -stopLossTriggerPct;
       planWallet.lastShouldTriggerTakeProfit = Number.isFinite(Number(takeProfitPct)) && Number(takeProfitPct) > 0 && estimate.movePct >= Number(takeProfitPct);
-      const decision = priceExitDecision({
-        movePct: estimate.movePct,
+      const evaluation = evaluatePlanWalletPriceExit(plan, planWallet, estimate, {
         takeProfitPct,
         stopLossPct,
-        stopLossBufferPct: CONFIG.stopLossTriggerBufferPct
+        status: guard.status
       });
+      const decision = evaluation.decision;
       const trigger = applyPriceExitTrigger(plan, planWallet, decision, estimate.movePct);
       copyWebExitGuardFieldsFromPlanWallet(guard, planWallet);
       guard.status = "watching";
@@ -6745,6 +6791,12 @@ async function processWebExitGuard(guard, walletStore, options = {}) {
       if (trigger) {
         triggerReason = trigger.triggerReason;
         triggerMeta = trigger.triggerMeta;
+        logTpSlEvent("tp_sl_trade_triggered", {
+          ...evaluation,
+          trigger: evaluation.trigger,
+          wouldClose: true,
+          reason: triggerReason
+        });
       } else {
         return { changed: true, message: null };
       }
@@ -7164,17 +7216,22 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
       planWallet.lastTriggerPriceSource = estimate.source || "jupiter";
       planWallet.lastShouldTriggerStopLoss = stopLossTriggerPct > 0 && estimate.movePct <= -stopLossTriggerPct;
       planWallet.lastShouldTriggerTakeProfit = Number.isFinite(Number(takeProfitPct)) && Number(takeProfitPct) > 0 && estimate.movePct >= Number(takeProfitPct);
-      const decision = priceExitDecision({
-        movePct: estimate.movePct,
+      const evaluation = evaluatePlanWalletPriceExit(plan, planWallet, estimate, {
         takeProfitPct,
-        stopLossPct,
-        stopLossBufferPct: CONFIG.stopLossTriggerBufferPct
+        stopLossPct
       });
+      const decision = evaluation.decision;
 
       const trigger = applyPriceExitTrigger(plan, planWallet, decision, estimate.movePct, { ladderLevel });
       if (trigger) {
         triggerReason = trigger.triggerReason;
         triggerMeta = trigger.triggerMeta;
+        logTpSlEvent("tp_sl_trade_triggered", {
+          ...evaluation,
+          trigger: evaluation.trigger,
+          wouldClose: true,
+          reason: triggerReason
+        });
       } else {
         return { changed: true, message: null };
       }

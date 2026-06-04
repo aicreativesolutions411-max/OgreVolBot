@@ -247,8 +247,6 @@ let kolTimer = null;
 let watchlistTimer = null;
 let walletBackgroundRefreshTimer = null;
 let postTradeRefreshTimers = [];
-let autoExitWatchTimer = null;
-let autoExitWatchUntil = 0;
 let autoExitCheckInFlight = false;
 
 const $ = (selector) => document.querySelector(selector);
@@ -4241,29 +4239,6 @@ function autoExitRunnerSummary(runner = {}) {
   return `TP/SL checked ${checked}, triggered ${triggered}, sold ${sold}, failed ${failed}.${lastMessage}`;
 }
 
-async function runTradePlanCheckSilently({ refreshCore = true } = {}) {
-  if (!state.user || !state.token) return;
-  if (autoExitCheckInFlight) return;
-  autoExitCheckInFlight = true;
-  try {
-    const data = await api("/api/web/trade/plans/run", {
-      method: "POST",
-      body: JSON.stringify({}),
-      timeoutMs: API_LONG_ACTION_TIMEOUT_MS
-    });
-    state.tradePlans = data.plans || state.tradePlans || [];
-    state.automationDelegationStatus = autoExitRunnerSummary(data.runner || {});
-    ensureAutoExitWatchForActivePlans();
-    if (refreshCore) await loadWalletCore({ force: true });
-    render();
-  } catch (error) {
-    state.automationDelegationStatus = `Auto-exit check failed: ${error.message}`;
-    render();
-  } finally {
-    autoExitCheckInFlight = false;
-  }
-}
-
 function hasActiveAutoExitPlans() {
   const activeWalletStatuses = new Set(["armed", "watching", "retrying", "submitting", "waiting_next_loop", "timer-only"]);
   return (state.tradePlans || []).some((plan) => {
@@ -4276,39 +4251,14 @@ function hasActiveAutoExitPlans() {
 }
 
 function ensureAutoExitWatchForActivePlans() {
-  if (hasActiveAutoExitPlans()) startAutoExitWatchLoop(5 * 60_000);
-}
-
-function startAutoExitWatchLoop(durationMs = 90_000) {
-  autoExitWatchUntil = Math.max(autoExitWatchUntil || 0, Date.now() + durationMs);
-  if (autoExitWatchTimer) return;
-  autoExitWatchTimer = window.setInterval(() => {
-    if (!state.user || !state.token) {
-      window.clearInterval(autoExitWatchTimer);
-      autoExitWatchTimer = null;
-      autoExitWatchUntil = 0;
-      return;
-    }
-    if (hasActiveAutoExitPlans()) {
-      autoExitWatchUntil = Math.max(autoExitWatchUntil || 0, Date.now() + 30_000);
-    }
-    if (Date.now() > autoExitWatchUntil) {
-      window.clearInterval(autoExitWatchTimer);
-      autoExitWatchTimer = null;
-      autoExitWatchUntil = 0;
-      return;
-    }
-    void runTradePlanCheckSilently({ refreshCore: false });
-  }, 2_000);
+  if (hasActiveAutoExitPlans()) {
+    state.automationDelegationStatus = state.automationDelegationStatus
+      || "Server TP/SL worker is monitoring active plans.";
+  }
 }
 
 function scheduleAutoExitChecks() {
-  startAutoExitWatchLoop();
-  [500, 1200, 2500, 4500, 7000, 10000, 15000, 22000, 32000, 45000, 60000].forEach((delay) => {
-    window.setTimeout(() => {
-      void runTradePlanCheckSilently({ refreshCore: delay >= 4500 });
-    }, delay);
-  });
+  state.automationDelegationStatus = "Server TP/SL worker armed. Monitoring continues even if this browser closes.";
 }
 
 async function restoreWalletBackup() {
