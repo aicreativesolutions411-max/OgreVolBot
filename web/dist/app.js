@@ -4270,7 +4270,7 @@ async function restoreWalletBackup() {
     }
     textarea.value = "";
     writeText(status, data.restore?.message || "Restore complete.");
-    await refreshAfterTrade(firstResultSignature(data.plan));
+    await refreshWalletState({ force: true, deep: true });
     state.activeTab = "wallets";
     render();
   } catch (error) {
@@ -4337,7 +4337,7 @@ async function importWallet() {
     }
     secretInput.value = "";
     writeText(status, data.imported?.message || "Import complete.");
-    await refreshAfterTrade(firstResultSignature(data.plan));
+    await refreshWalletState({ force: true, deep: true });
     state.activeTab = "wallets";
     render();
   } catch (error) {

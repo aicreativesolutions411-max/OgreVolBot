@@ -4454,6 +4454,8 @@ async function createTimedTradePlanFlow(chatId, session) {
     stopLossPct: plan.stopLossPct
   });
 
+  scheduleTradePlanProcessing(`${plan.autoBundle ? "auto bundle" : "timed trade"} auto-exit`, [500, 1200, 2500, 5000, 8000, 12000, 20000, 30000]);
+
   clearSession(chatId);
   await say(chatId, withBrandFooter([
     `${plan.autoBundle ? "Auto Bundle plan created." : "Timed trade plan created."}`,
@@ -5364,6 +5366,7 @@ async function processTradePlans(options = {}) {
     }
 
     const planStore = await readTradePlans();
+    const initialPlanIds = new Set(planStore.plans.map((plan) => plan.id).filter(Boolean));
     const walletStore = await readWalletStore();
     let changed = false;
 
@@ -5401,7 +5404,7 @@ async function processTradePlans(options = {}) {
           result = await processTradePlanWallet(plan, planWallet, walletStore, {
             forcePriceCheck: Boolean(options.forcePriceCheck),
             persistCheckpoint: async () => {
-              await writeTradePlans(planStore);
+              await writeTradePlansPreservingNewPlans(planStore, initialPlanIds);
             }
           });
         } catch (error) {
@@ -5459,7 +5462,7 @@ async function processTradePlans(options = {}) {
     }
 
     if (changed) {
-      await writeTradePlans(planStore);
+      await writeTradePlansPreservingNewPlans(planStore, initialPlanIds);
     }
     summary.messages = summary.messages.slice(-20);
     return summary;
@@ -11956,6 +11959,19 @@ async function writeTradePlans(store) {
   await writeJsonFile(tradePlansPath(), store);
 }
 
+async function writeTradePlansPreservingNewPlans(store, initialPlanIds = new Set()) {
+  const latest = await readTradePlans();
+  const incomingIds = new Set((store.plans || []).map((plan) => plan.id).filter(Boolean));
+  const newPlans = (latest.plans || []).filter((plan) => {
+    if (!plan?.id || incomingIds.has(plan.id)) return false;
+    return !initialPlanIds.has(plan.id);
+  });
+  const merged = newPlans.length
+    ? { ...store, plans: [...(store.plans || []), ...newPlans] }
+    : store;
+  await writeTradePlans(merged);
+}
+
 async function webTradePlanRows(userId) {
   const store = await readTradePlans();
   return (store.plans || [])
@@ -18440,10 +18456,20 @@ function keypairFromSecret(text) {
   try {
     return keypairFromBytes([...bs58.decode(compact)], { allowSeed: false });
   } catch {
+    for (const candidate of looseSecretCandidates(trimmed)) {
+      const candidateText = String(candidate || "").trim();
+      if (!candidateText || candidateText === trimmed) continue;
+      try {
+        return keypairFromSecret(candidateText);
+      } catch {
+        // Keep scanning; import/export files can include labels and other addresses.
+      }
+    }
+
     throw new Error([
       "Could not import that private key.",
       "Use a base58 private key or a JSON byte array like [12,34,...].",
-      "Do not paste a public address, seed phrase, or text with extra labels."
+      "You can paste the raw key or a labeled recovery line such as `Base58 secret key: ...`."
     ].join(" "));
   }
 }
@@ -18568,19 +18594,17 @@ function tryAddLooseWallet(wallets, seen, secretText, label, declaredPublicKey) 
   const keypair = keypairFromSecret(secretText);
   const publicKey = keypair.publicKey.toBase58();
 
-  if (declaredPublicKey && declaredPublicKey !== publicKey) {
-    return;
-  }
-
   if (seen.has(publicKey)) {
     return;
   }
 
+  const declared = String(declaredPublicKey || "").trim();
   seen.add(publicKey);
   wallets.push({
     label,
     publicKey,
-    secretKey: bs58.encode(keypair.secretKey)
+    secretKey: bs58.encode(keypair.secretKey),
+    ...(declared && declared !== publicKey ? { declaredPublicKey: declared, declaredPublicKeyMismatch: true } : {})
   });
 }
 
@@ -18602,22 +18626,34 @@ function walletRecordFromBackup(wallet, ownerId, index) {
   }
 
   const encryptedSecret = encryptedSecretFromBackup(wallet);
+  let encryptedError = null;
   if (encryptedSecret) {
-    const keypair = decryptWallet({ secret: encryptedSecret });
-    const publicKey = keypair.publicKey.toBase58();
-    assertBackupPublicKey(wallet, publicKey);
-    return {
-      ownerId,
-      label: cleanLabel(wallet.label || wallet.name || `Restored Wallet ${index + 1}`),
-      publicKey,
-      secret: encryptedSecret
-    };
+    try {
+      const keypair = decryptWallet({ secret: encryptedSecret });
+      const publicKey = keypair.publicKey.toBase58();
+      assertBackupPublicKey(wallet, publicKey);
+      return {
+        ownerId,
+        label: cleanLabel(wallet.label || wallet.name || `Restored Wallet ${index + 1}`),
+        publicKey,
+        secret: encryptedSecret
+      };
+    } catch (error) {
+      encryptedError = error;
+    }
   }
 
-  const keypair = keypairFromBackupWallet(wallet);
-  const publicKey = keypair.publicKey.toBase58();
-  assertBackupPublicKey(wallet, publicKey);
-  return walletRecord(cleanLabel(wallet.label || wallet.name || `Restored Wallet ${index + 1}`), keypair, ownerId);
+  try {
+    const keypair = keypairFromBackupWallet(wallet);
+    const publicKey = keypair.publicKey.toBase58();
+    assertBackupPublicKey(wallet, publicKey);
+    return walletRecord(cleanLabel(wallet.label || wallet.name || `Restored Wallet ${index + 1}`), keypair, ownerId);
+  } catch (error) {
+    if (encryptedError) {
+      throw new Error(`Encrypted backup key could not be opened (${formatError(encryptedError)}) and raw-key fallback also failed (${formatError(error)}).`);
+    }
+    throw error;
+  }
 }
 
 function encryptedSecretFromBackup(wallet) {
