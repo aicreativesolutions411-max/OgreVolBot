@@ -385,7 +385,7 @@ export function pinataProviderError(error, fallbackMessage = "Pinata metadata up
 
 export function pinataPublicUriFromUpload(upload = {}) {
   const cid = upload?.data?.cid || upload?.cid || upload?.IpfsHash || upload?.ipfsHash || "";
-  return cid ? `https://ipfs.io/ipfs/${cid}` : "";
+  return cid ? `https://gateway.pinata.cloud/ipfs/${cid}` : "";
 }
 
 export function safePinataDiagnostics(value = "") {

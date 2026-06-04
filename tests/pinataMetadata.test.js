@@ -157,7 +157,7 @@ test("Pinata JSON metadata upload returns CID and public metadata URI", async ()
   assert.equal(observed.options.headers.Authorization, "Bearer abc.def.ghi");
   assert.equal(observed.options.body.get("network"), "public");
   assert.equal(result.cid, "bafybeismoke");
-  assert.equal(result.uri, "https://ipfs.io/ipfs/bafybeismoke");
+  assert.equal(result.uri, "https://gateway.pinata.cloud/ipfs/bafybeismoke");
 });
 
 test("Pinata image upload uses same auth helper and public network", async () => {
@@ -182,6 +182,6 @@ test("Pinata image upload uses same auth helper and public network", async () =>
 
   assert.equal(observed.options.headers.Authorization, "Bearer abc.def.ghi");
   assert.equal(observed.options.body.get("network"), "public");
-  assert.equal(result.imageUri, "https://ipfs.io/ipfs/bafybeiimage");
+  assert.equal(result.imageUri, "https://gateway.pinata.cloud/ipfs/bafybeiimage");
   assert.equal(result.imageBytes, 3);
 });
