@@ -601,7 +601,7 @@ function startKeepAlivePinger() {
 }
 
 function startTradePlanRunner() {
-  setTimeout(() => void processTradePlans().catch((error) => {
+  setTimeout(() => void processTradePlans({ forcePriceCheck: true }).catch((error) => {
     console.error("Trade plan runner failed:", error.message);
   }), Math.max(1_000, Math.min(10_000, CONFIG.stopLossCheckIntervalMs)));
 
@@ -610,7 +610,7 @@ function startTradePlanRunner() {
     CONFIG.manualLaunchScanIntervalMs,
     CONFIG.stopLossCheckIntervalMs
   ));
-  setInterval(() => void processTradePlans().catch((error) => {
+  setInterval(() => void processTradePlans({ forcePriceCheck: true }).catch((error) => {
     console.error("Trade plan runner failed:", error.message);
   }), intervalMs);
 }
@@ -5221,7 +5221,7 @@ function recoverPlanWalletTokenOutAmount(planWallet, token) {
 
 function scheduleTradePlanProcessing(label = "trade plan", delays = [500, 1500, 4000, 10000, 20000]) {
   for (const delay of delays) {
-    setTimeout(() => void processTradePlans().catch((error) => {
+    setTimeout(() => void processTradePlans({ forcePriceCheck: true }).catch((error) => {
       console.error(`${label} processing failed:`, error.message);
     }), delay);
   }
@@ -11977,6 +11977,15 @@ function webTradePlanRow(plan = {}) {
     triggerReason: wallet.triggerReason || "",
     triggerTargetPct: wallet.triggerTargetPct || null,
     triggerSellPercent: wallet.triggerSellPercent || plan.triggerSellPercent || "",
+    lastStopLossPct: wallet.lastStopLossPct ?? wallet.stopLossPct ?? plan.stopLossPct ?? null,
+    lastTakeProfitPct: wallet.lastTakeProfitPct ?? wallet.takeProfitPct ?? plan.takeProfitPct ?? null,
+    lastStopLossTriggerPct: wallet.lastStopLossTriggerPct ?? null,
+    lastShouldTriggerStopLoss: wallet.lastShouldTriggerStopLoss ?? null,
+    lastShouldTriggerTakeProfit: wallet.lastShouldTriggerTakeProfit ?? null,
+    lastBasisLamports: wallet.lastBasisLamports || wallet.basisLamports || "",
+    lastEstimatedOut: wallet.lastEstimatedOut || "",
+    lastEstimatedNetOut: wallet.lastEstimatedNetOut || "",
+    triggerCheckIntervalMs: wallet.triggerCheckIntervalMs || CONFIG.stopLossCheckIntervalMs,
     lastMovePct: wallet.lastMovePct ?? null,
     lastGrossMovePct: wallet.lastGrossMovePct ?? null,
     lastNetMovePct: wallet.lastNetMovePct ?? null,

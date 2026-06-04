@@ -23,7 +23,7 @@ services:
       - key: SOLANA_RPC_URL
         sync: false
       - key: TRADING_SPEED_PRESET
-        value: balanced
+        value: fast
       - key: PUMPFUN_API_BASE
         value: https://frontend-api-v3.pump.fun
       - key: PUMPFUN_API_TOKEN
@@ -97,7 +97,7 @@ services:
       - key: JUPITER_API_BASE
         value: https://api.jup.ag/swap/v2
       - key: JUPITER_MIN_INTERVAL_MS
-        value: 350
+        value: 250
       - key: JUPITER_RETRIES
         value: 5
       - key: JUPITER_429_COOLDOWN_MS
@@ -111,15 +111,15 @@ services:
       - key: BUNDLE_CONCURRENCY
         value: 2
       - key: BALANCE_CONCURRENCY
-        value: 5
+        value: 8
       - key: BALANCE_CACHE_TTL_MS
-        value: 8000
+        value: 3000
       - key: BUY_RESERVE_SOL
         value: 0.01
       - key: RPC_MIN_INTERVAL_MS
-        value: 250
+        value: 150
       - key: RPC_DELAY_MS
-        value: 250
+        value: 100
       - key: RPC_RETRIES
         value: 10
       - key: RPC_429_COOLDOWN_MS

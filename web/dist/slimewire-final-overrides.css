@@ -4290,3 +4290,65 @@
     display: none !important;
   }
 }
+
+/* 2026-06-04 compact terminal header on narrow mobile. */
+@media (max-width: 560px) {
+  .topbar {
+    padding: 6px 8px !important;
+    gap: 5px !important;
+  }
+
+  .topbar .powered {
+    max-width: 118px !important;
+  }
+
+  .topbar .powered img {
+    max-height: 22px !important;
+  }
+
+  .top-sync-strip {
+    display: grid !important;
+    grid-template-columns: auto minmax(0, 1fr) !important;
+    align-items: center !important;
+    justify-content: stretch !important;
+    padding: 4px 5px !important;
+  }
+
+  .top-sync-strip [data-top-portfolio],
+  .top-sync-strip [data-sync-health],
+  .top-sync-strip [data-active-preset-label] {
+    display: none !important;
+  }
+
+  .top-sync-strip [data-top-sol],
+  .top-sync-strip .top-wallet-disconnected {
+    min-width: 0 !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+
+  .top-sync-strip button {
+    min-height: 28px !important;
+    padding: 5px 8px !important;
+    font-size: 10px !important;
+  }
+
+  .top-auth-group {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 5px !important;
+  }
+
+  .top-auth-group button,
+  .top-auth-group .top-profile-button {
+    min-height: 30px !important;
+    padding: 6px 7px !important;
+    font-size: 10px !important;
+  }
+
+  .top-profile-avatar {
+    width: 18px !important;
+    height: 18px !important;
+    min-width: 18px !important;
+  }
+}

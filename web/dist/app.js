@@ -244,7 +244,9 @@ let scanTimer = null;
 let kolTimer = null;
 let watchlistTimer = null;
 let walletBackgroundRefreshTimer = null;
-let postTradeRefreshTimer = null;
+let postTradeRefreshTimers = [];
+let autoExitWatchTimer = null;
+let autoExitWatchUntil = 0;
 
 const $ = (selector) => document.querySelector(selector);
 const writeText = (element, value) => {
@@ -743,19 +745,31 @@ async function loadAll(options = {}) {
 async function loadWalletCore(options = {}) {
   if (!state.user || !state.token) return;
   const forceQuery = options.force ? "?force=true" : "";
-  const [wallets, balances, positions, tradePlans] = await Promise.all([
-    api("/api/web/wallets"),
-    api(`/api/web/balances${forceQuery}`),
-    api(`/api/web/positions${forceQuery}`),
-    api("/api/web/trade/plans")
+  const walletsPromise = api("/api/web/wallets");
+  const balancesPromise = api(`/api/web/balances${forceQuery}`);
+  const positionsPromise = api(`/api/web/positions${forceQuery}`).catch((error) => ({ __error: error }));
+  const tradePlansPromise = api("/api/web/trade/plans");
+  const [wallets, balances, tradePlans] = await Promise.all([
+    walletsPromise,
+    balancesPromise,
+    tradePlansPromise
   ]);
   state.wallets = wallets.wallets || [];
   state.balances = balances.balances || [];
   state.connectedWalletBalance = balances.connectedWallet || null;
-  state.positions = positions.positions || [];
   state.tradePlans = tradePlans.plans || [];
   state.lastWalletRefreshAt = new Date().toISOString();
   state.walletRefreshError = "";
+  if (options.progress !== false) render();
+  try {
+    const positions = await positionsPromise;
+    if (positions?.__error) throw positions.__error;
+    state.positions = positions.positions || [];
+    state.lastWalletRefreshAt = new Date().toISOString();
+    state.walletRefreshError = "";
+  } catch (error) {
+    state.walletRefreshError = error.message || "Position refresh failed.";
+  }
 }
 
 function normalizeLivePairBucket(bucket) {
@@ -1091,18 +1105,21 @@ async function refreshWalletState({ force = true, deep = true } = {}) {
 
 async function refreshAfterTrade(signature = "") {
   if (signature) state.lastTradeSignature = signature;
-  if (postTradeRefreshTimer) {
-    window.clearTimeout(postTradeRefreshTimer);
-    postTradeRefreshTimer = null;
+  if (postTradeRefreshTimers.length) {
+    postTradeRefreshTimers.forEach((timer) => window.clearTimeout(timer));
+    postTradeRefreshTimers = [];
   }
   await refreshWalletState({ force: true, deep: false });
-  postTradeRefreshTimer = window.setTimeout(() => {
-    postTradeRefreshTimer = null;
-    void refreshWalletState({ force: true, deep: false }).catch((error) => {
-      state.walletRefreshError = error.message || "Post-trade refresh failed.";
-      render();
-    });
-  }, 3500);
+  [1500, 3500, 8000].forEach((delay) => {
+    const timer = window.setTimeout(() => {
+      postTradeRefreshTimers = postTradeRefreshTimers.filter((item) => item !== timer);
+      void refreshWalletState({ force: true, deep: false }).catch((error) => {
+        state.walletRefreshError = error.message || "Post-trade refresh failed.";
+        render();
+      });
+    }, delay);
+    postTradeRefreshTimers.push(timer);
+  });
 }
 
 function shouldDeferTerminalRender() {
@@ -4162,11 +4179,7 @@ async function runTradePlanCheck() {
       await loadWalletCore({ force: true });
       return;
     }
-    const sold = Number(runner.soldWallets || 0);
-    const triggered = Number(runner.triggeredWallets || 0);
-    const failed = Number(runner.failedWallets || 0);
-    const checked = Number(runner.checkedWallets || 0);
-    state.automationDelegationStatus = `TP/SL check complete: ${checked} checked, ${triggered} triggered, ${sold} sold, ${failed} failed.`;
+    state.automationDelegationStatus = autoExitRunnerSummary(runner);
     await loadWalletCore({ force: true });
   } catch (error) {
     state.automationDelegationStatus = error.message;
@@ -4178,7 +4191,17 @@ async function runTradePlanCheck() {
   }
 }
 
-async function runTradePlanCheckSilently() {
+function autoExitRunnerSummary(runner = {}) {
+  if (runner.skipped) return `TP/SL skipped: ${runner.reason || "runner busy"}.`;
+  const checked = Number(runner.checkedWallets || 0);
+  const triggered = Number(runner.triggeredWallets || 0);
+  const sold = Number(runner.soldWallets || 0);
+  const failed = Number(runner.failedWallets || 0);
+  const lastMessage = Array.isArray(runner.messages) && runner.messages.length ? ` Last: ${runner.messages[runner.messages.length - 1]}` : "";
+  return `TP/SL checked ${checked}, triggered ${triggered}, sold ${sold}, failed ${failed}.${lastMessage}`;
+}
+
+async function runTradePlanCheckSilently({ refreshCore = true } = {}) {
   if (!state.user || !state.token) return;
   try {
     const data = await api("/api/web/trade/plans/run", {
@@ -4186,7 +4209,8 @@ async function runTradePlanCheckSilently() {
       body: JSON.stringify({})
     });
     state.tradePlans = data.plans || state.tradePlans || [];
-    await loadWalletCore({ force: true });
+    state.automationDelegationStatus = autoExitRunnerSummary(data.runner || {});
+    if (refreshCore) await loadWalletCore({ force: true });
     render();
   } catch (error) {
     state.automationDelegationStatus = `Auto-exit check failed: ${error.message}`;
@@ -4194,10 +4218,25 @@ async function runTradePlanCheckSilently() {
   }
 }
 
+function startAutoExitWatchLoop(durationMs = 90_000) {
+  autoExitWatchUntil = Math.max(autoExitWatchUntil || 0, Date.now() + durationMs);
+  if (autoExitWatchTimer) return;
+  autoExitWatchTimer = window.setInterval(() => {
+    if (!state.user || !state.token || Date.now() > autoExitWatchUntil) {
+      window.clearInterval(autoExitWatchTimer);
+      autoExitWatchTimer = null;
+      autoExitWatchUntil = 0;
+      return;
+    }
+    void runTradePlanCheckSilently({ refreshCore: false });
+  }, 2_000);
+}
+
 function scheduleAutoExitChecks() {
-  [1200, 3000, 6500, 12000, 22000].forEach((delay) => {
+  startAutoExitWatchLoop();
+  [500, 1200, 2500, 4500, 7000, 10000, 15000, 22000, 32000, 45000, 60000].forEach((delay) => {
     window.setTimeout(() => {
-      void runTradePlanCheckSilently();
+      void runTradePlanCheckSilently({ refreshCore: delay >= 4500 });
     }, delay);
   });
 }
