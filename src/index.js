@@ -305,6 +305,7 @@ function loadConfig() {
   const stopLossMonitorSlippageBps = Number.parseInt(process.env.STOP_LOSS_MONITOR_SLIPPAGE_BPS || "2500", 10);
   const stopLossPriceFailureSellAfter = Number.parseInt(process.env.STOP_LOSS_PRICE_FAILURE_SELL_AFTER || "2", 10);
   const stopLossSubmitStaleMs = Number.parseInt(process.env.STOP_LOSS_SUBMIT_STALE_MS || "15000", 10);
+  const tpSlMonitorStepTimeoutMs = Number.parseInt(process.env.TP_SL_MONITOR_STEP_TIMEOUT_MS || "12000", 10);
   const tradePlanRunnerStaleMs = Number.parseInt(process.env.TRADE_PLAN_RUNNER_STALE_MS || "45000", 10);
   const pumpLaunchBodyLimitBytes = Number.parseInt(process.env.PUMP_LAUNCH_BODY_LIMIT_BYTES || "12000000", 10);
   const pumpLaunchRequestMode = (process.env.PUMP_LAUNCH_REQUEST_MODE || "json").trim().toLowerCase();
@@ -463,6 +464,10 @@ function loadConfig() {
     throw new Error("STOP_LOSS_SUBMIT_STALE_MS must be an integer from 5000 to 120000.");
   }
 
+  if (!Number.isInteger(tpSlMonitorStepTimeoutMs) || tpSlMonitorStepTimeoutMs < 3_000 || tpSlMonitorStepTimeoutMs > 60_000) {
+    throw new Error("TP_SL_MONITOR_STEP_TIMEOUT_MS must be an integer from 3000 to 60000.");
+  }
+
   if (!Number.isInteger(tradePlanRunnerStaleMs) || tradePlanRunnerStaleMs < 15_000 || tradePlanRunnerStaleMs > 300_000) {
     throw new Error("TRADE_PLAN_RUNNER_STALE_MS must be an integer from 15000 to 300000.");
   }
@@ -535,6 +540,7 @@ function loadConfig() {
     stopLossMonitorSlippageBps,
     stopLossPriceFailureSellAfter,
     stopLossSubmitStaleMs,
+    tpSlMonitorStepTimeoutMs,
     tradePlanRunnerStaleMs,
     workerTickEnabled,
     workerTickRunTradePlans,
@@ -1553,7 +1559,8 @@ function handleInternalWorkerHealth(request, response) {
     warmFeeds: CONFIG.workerTickWarmFeeds,
     livePairRefreshSeconds: CONFIG.livePairsRefreshSeconds,
     stopLossCheckIntervalMs: CONFIG.stopLossCheckIntervalMs,
-    stopLossPriceFailureSellAfter: CONFIG.stopLossPriceFailureSellAfter
+    stopLossPriceFailureSellAfter: CONFIG.stopLossPriceFailureSellAfter,
+    tpSlMonitorStepTimeoutMs: CONFIG.tpSlMonitorStepTimeoutMs
   });
 }
 
@@ -5432,6 +5439,38 @@ function logTpSlEvent(event, fields = {}) {
   }
 }
 
+async function runTpSlMonitorStep(label, work, onTimeout = null) {
+  let timedOut = false;
+  let timeoutHandle = null;
+  const timeoutMs = CONFIG.tpSlMonitorStepTimeoutMs;
+  const task = Promise.resolve().then(work);
+  task.catch((error) => {
+    if (timedOut) {
+      console.warn(`${label} finished after timeout with error: ${friendlyError(error)}`);
+    }
+  });
+
+  const timeout = new Promise((resolve) => {
+    timeoutHandle = setTimeout(() => {
+      timedOut = true;
+      try {
+        if (typeof onTimeout === "function") onTimeout(timeoutMs);
+      } catch (error) {
+        console.warn(`${label} timeout bookkeeping failed: ${friendlyError(error)}`);
+      }
+      resolve({
+        changed: true,
+        timedOut: true,
+        message: `${label}: TP/SL monitor step timed out after ${timeoutMs}ms; stayed armed for retry.`
+      });
+    }, timeoutMs);
+  });
+
+  const result = await Promise.race([task, timeout]);
+  if (!timedOut && timeoutHandle) clearTimeout(timeoutHandle);
+  return result;
+}
+
 function evaluatePlanWalletPriceExit(plan, planWallet, estimate, {
   takeProfitPct = 0,
   stopLossPct = 0,
@@ -6668,6 +6707,7 @@ async function processWebExitGuards(options = {}) {
     triggeredGuards: 0,
     soldGuards: 0,
     failedGuards: 0,
+    timedOutGuards: 0,
     messages: []
   };
 
@@ -6729,17 +6769,49 @@ async function processWebExitGuards(options = {}) {
       if (!isActiveWebExitGuardStatus(guard.status)) continue;
 
       summary.checkedGuards += 1;
-      const result = await processWebExitGuard(guard, walletStore, {
-        forcePriceCheck: Boolean(options.forcePriceCheck),
-        persistCheckpoint: async () => {
-          await writeWebExitGuards(guardStore);
+      const result = await runTpSlMonitorStep(
+        `${guard.walletLabel || guard.walletPublicKey || "Wallet"} ${shortMint(guard.tokenMint || "")} web guard`,
+        () => processWebExitGuard(guard, walletStore, {
+          forcePriceCheck: Boolean(options.forcePriceCheck),
+          persistCheckpoint: async () => {
+            await writeWebExitGuards(guardStore);
+          }
+        }),
+        (timeoutMs) => {
+          const nowIso = new Date().toISOString();
+          const message = `TP/SL web guard timed out after ${timeoutMs}ms; retrying without blocking other trades.`;
+          guard.lastError = message;
+          guard.lastFailedAt = nowIso;
+          guard.updatedAt = nowIso;
+          guard.failures = Number.parseInt(guard.failures || 0, 10) + 1;
+          if (isPriceExitTrigger(guard.triggerReason)) {
+            guard.status = "retrying";
+            guard.exitStatus = "retrying";
+            guard.triggerStatus = "retrying";
+            guard.retryAfterAt = new Date(Date.now() + 1_000).toISOString();
+            guard.nextRetryAt = guard.retryAfterAt;
+          }
+          logTpSlEvent("tp_sl_trade_skipped", {
+            tradeId: guard.key || guard.id,
+            userId: guard.userId,
+            source: guard.planSource || guard.source || "web_exit_guard",
+            symbol: guard.tokenMint,
+            side: "LONG",
+            status: guard.status || guard.exitStatus || "watching",
+            currentPrice: guard.lastTriggerMovePct ?? guard.lastMovePct ?? null,
+            stopLoss: guard.stopLossPct ? -stopLossTriggerPercent(guard.stopLossPct, CONFIG.stopLossTriggerBufferPct) : null,
+            takeProfit: guard.takeProfitPct || null,
+            reason: message
+          });
+          scheduleWebExitGuardProcessing("web guard timeout retry", [500, 1500, 3000, 6000]);
         }
-      });
+      );
 
       if (result.changed) {
         changed = true;
         summary.changedGuards += 1;
       }
+      if (result.timedOut) summary.timedOutGuards += 1;
       if (result.triggered) summary.triggeredGuards += 1;
       if (result.sold) summary.soldGuards += 1;
       if (result.failed) summary.failedGuards += 1;
@@ -7078,6 +7150,7 @@ async function processTradePlans(options = {}) {
     triggeredWallets: 0,
     soldWallets: 0,
     failedWallets: 0,
+    timedOutWallets: 0,
     messages: []
   };
 
@@ -7125,12 +7198,41 @@ async function processTradePlans(options = {}) {
         planWallet.runnerStartedAt = new Date(runnerStarted).toISOString();
         let result;
         try {
-          result = await processTradePlanWallet(plan, planWallet, walletStore, {
-            forcePriceCheck: Boolean(options.forcePriceCheck),
-            persistCheckpoint: async () => {
-              await writeTradePlansPreservingNewPlans(planStore, initialPlanIds);
+          result = await runTpSlMonitorStep(
+            `${planWallet.label || planWallet.publicKey || "Wallet"} ${shortMint(plan.tokenMint || "")} trade plan`,
+            () => processTradePlanWallet(plan, planWallet, walletStore, {
+              forcePriceCheck: Boolean(options.forcePriceCheck),
+              persistCheckpoint: async () => {
+                await writeTradePlansPreservingNewPlans(planStore, initialPlanIds);
+              }
+            }),
+            (timeoutMs) => {
+              const nowIso = new Date().toISOString();
+              const message = `TP/SL trade plan timed out after ${timeoutMs}ms; retrying without blocking other trades.`;
+              planWallet.failures = Number.parseInt(planWallet.failures || 0, 10) + 1;
+              planWallet.status = isPriceExitTrigger(planWallet.triggerReason) ? "retrying" : (planWallet.status || "watching");
+              planWallet.exitStatus = isPriceExitTrigger(planWallet.triggerReason) ? "retrying" : (planWallet.exitStatus || "watching");
+              planWallet.triggerStatus = isPriceExitTrigger(planWallet.triggerReason) ? "retrying" : (planWallet.triggerStatus || "watching");
+              planWallet.lastError = message;
+              planWallet.lastRunnerError = message;
+              planWallet.lastFailedAt = nowIso;
+              planWallet.updatedAt = nowIso;
+              planWallet.retryAfterAt = new Date(Date.now() + 1_000).toISOString();
+              logTpSlEvent("tp_sl_trade_skipped", {
+                tradeId: tradePlanWalletTradeId(plan, planWallet),
+                userId: plan.userId,
+                source: plan.source || "trade_plan",
+                symbol: plan.tokenMint,
+                side: "LONG",
+                status: planWallet.status || planWallet.exitStatus || plan.status || "watching",
+                currentPrice: planWallet.lastTriggerMovePct ?? planWallet.lastMovePct ?? null,
+                stopLoss: walletStopLossPct(plan, planWallet) ? -stopLossTriggerPercent(walletStopLossPct(plan, planWallet), CONFIG.stopLossTriggerBufferPct) : null,
+                takeProfit: walletTakeProfitPct(plan, planWallet) || null,
+                reason: message
+              });
+              scheduleTradePlanProcessing("trade plan timeout retry", [500, 1500, 3000, 6000]);
             }
-          });
+          );
         } catch (error) {
           const errorMessage = friendlyError(error);
           const failures = Number.parseInt(planWallet.failures || 0, 10) + 1;
@@ -7157,6 +7259,7 @@ async function processTradePlans(options = {}) {
           changed = true;
           summary.changedWallets += 1;
         }
+        if (result.timedOut) summary.timedOutWallets += 1;
         if (result.triggered) summary.triggeredWallets += 1;
         if (result.sold) summary.soldWallets += 1;
         if (result.failed) summary.failedWallets += 1;

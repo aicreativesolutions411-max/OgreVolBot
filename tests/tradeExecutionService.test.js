@@ -141,6 +141,85 @@ test("duplicate trigger submits close order exactly once", async () => {
   assert.equal(store.get("web-duplicate-stop").status, TRADE_STATUS.CLOSED);
 });
 
+test("after one take profit closes, another web trade still triggers", async () => {
+  const first = openWebTrade({
+    id: "web-first-profit",
+    symbol: "FIRSTUSDT",
+    takeProfit: 110
+  });
+  const second = openWebTrade({
+    id: "web-second-profit",
+    symbol: "SECONDUSDT",
+    takeProfit: 110
+  });
+  const store = createMemoryTradeStore([first, second]);
+  const prices = createFakePriceProvider({
+    FIRSTUSDT: 111,
+    SECONDUSDT: 100
+  });
+  const closeOrders = createCloseOrderRecorder();
+  const service = new TradeExecutionService({
+    store,
+    priceProvider: prices,
+    closeOrder: closeOrders,
+    logger: { info() {}, warn() {}, error() {} }
+  });
+
+  await service.scanOpenTrades();
+  assert.equal(closeOrders.calls.length, 1);
+  assert.equal(closeOrders.calls[0].tradeId, "web-first-profit");
+  assert.equal(closeOrders.calls[0].reason, TP_SL_REASON.TAKE_PROFIT);
+
+  prices.set("SECONDUSDT", 111);
+  await service.scanOpenTrades();
+
+  assert.equal(closeOrders.calls.length, 2);
+  assert.equal(closeOrders.calls[1].tradeId, "web-second-profit");
+  assert.equal(closeOrders.calls[1].reason, TP_SL_REASON.TAKE_PROFIT);
+});
+
+test("close-order error does not stop monitor from scanning other web trades", async () => {
+  const failing = openWebTrade({
+    id: "web-close-error",
+    symbol: "FAILUSDT",
+    stopLoss: 95
+  });
+  const succeeding = openWebTrade({
+    id: "web-close-after-error",
+    symbol: "OKUSDT",
+    stopLoss: 95
+  });
+  const store = createMemoryTradeStore([failing, succeeding]);
+  const prices = createFakePriceProvider({
+    FAILUSDT: 94,
+    OKUSDT: 94
+  });
+  const calls = [];
+  const service = new TradeExecutionService({
+    store,
+    priceProvider: prices,
+    closeOrder: {
+      async closeTrade(trade, evaluation) {
+        calls.push(evaluation.tradeId);
+        if (evaluation.tradeId === "web-close-error") {
+          throw new Error("simulated close failure");
+        }
+        return { signature: "fake-success" };
+      }
+    },
+    logger: { info() {}, warn() {}, error() {} }
+  });
+
+  const result = await service.scanOpenTrades();
+
+  assert.equal(result.triggered, 2);
+  assert.equal(result.failed, 1);
+  assert.equal(result.closed, 1);
+  assert.deepEqual(calls, ["web-close-error", "web-close-after-error"]);
+  assert.equal(store.get("web-close-error").status, TRADE_STATUS.FAILED);
+  assert.equal(store.get("web-close-after-error").status, TRADE_STATUS.CLOSED);
+});
+
 test("market move candidate triggers take profit when quote move lags chart", () => {
   const evaluation = evaluatePercentMoveCandidates({
     tradeId: "ogre-market-profit",

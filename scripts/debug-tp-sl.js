@@ -44,6 +44,15 @@ function activeStatus(value) {
   return normalizeTradeStatus(value) === TRADE_STATUS.OPEN;
 }
 
+function debugStatus(value) {
+  const status = normalizeTradeStatus(value);
+  return [
+    TRADE_STATUS.OPEN,
+    TRADE_STATUS.CLOSING,
+    TRADE_STATUS.FAILED
+  ].includes(status);
+}
+
 function planWalletTradeId(plan, wallet) {
   return [
     plan?.id || "plan",
@@ -106,9 +115,9 @@ function evaluatePercentPlanTrade({ id, userId, source, symbol, status, moves, c
 function tradePlanRows(planStore) {
   const rows = [];
   for (const plan of planStore.plans || []) {
-    if (!activeStatus(plan.status)) continue;
+    if (!debugStatus(plan.status)) continue;
     for (const wallet of plan.wallets || []) {
-      if (!activeStatus(wallet.status || wallet.exitStatus)) continue;
+      if (!debugStatus(wallet.status || wallet.exitStatus)) continue;
       const takeProfitPct = planTakeProfitPct(plan, wallet);
       const stopLossPct = planStopLossPct(plan, wallet);
       if (!Number.isFinite(takeProfitPct) && !Number.isFinite(stopLossPct)) continue;
@@ -130,7 +139,7 @@ function tradePlanRows(planStore) {
 function guardRows(guardStore) {
   const rows = [];
   for (const guard of guardStore.guards || []) {
-    if (!activeStatus(guard.status || guard.exitStatus)) continue;
+    if (!debugStatus(guard.status || guard.exitStatus)) continue;
     const takeProfitPct = numberOrNull(guard.takeProfitPct);
     const stopLossPct = numberOrNull(guard.stopLossPct);
     if (!Number.isFinite(takeProfitPct) && !Number.isFinite(stopLossPct)) continue;
