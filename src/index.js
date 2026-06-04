@@ -1039,15 +1039,21 @@ async function runHostedMetadataStartupSmoke(status = "uploaded") {
 
 async function verifyPublicMetadataUri(uri) {
   if (!uri || typeof fetch !== "function") return { ok: false, status: null };
-  try {
-    const response = await fetch(uri, {
-      method: "GET",
-      signal: AbortSignal.timeout ? AbortSignal.timeout(10_000) : undefined
-    });
-    return { ok: Boolean(response.ok), status: response.status };
-  } catch {
-    return { ok: false, status: 0 };
+  let lastStatus = 0;
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    try {
+      const response = await fetch(uri, {
+        method: "GET",
+        signal: AbortSignal.timeout ? AbortSignal.timeout(10_000) : undefined
+      });
+      lastStatus = response.status;
+      if (response.ok) return { ok: true, status: response.status };
+    } catch {
+      lastStatus = 0;
+    }
+    if (attempt < 5) await sleep(2_000);
   }
+  return { ok: false, status: lastStatus };
 }
 
 async function handleWebApiRequest(request, response, requestUrl) {
