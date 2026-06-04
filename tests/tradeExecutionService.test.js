@@ -6,6 +6,7 @@ import {
   createMemoryTradeStore,
   createCloseOrderRecorder,
   evaluatePercentMoveCandidates,
+  openLotsFromTradeEvents,
   TRADE_STATUS,
   TP_SL_REASON
 } from "../src/lib/tradeExecutionService.js";
@@ -183,4 +184,59 @@ test("quote move candidate still triggers stop loss when chart lags quote", () =
   assert.equal(evaluation.trigger, TP_SL_REASON.STOP_LOSS);
   assert.equal(evaluation.priceSource, "jupiter");
   assert.equal(evaluation.triggerMovePct, -10);
+});
+
+test("market move candidate triggers stop loss when quote move lags chart", () => {
+  const evaluation = evaluatePercentMoveCandidates({
+    tradeId: "ogre-market-stop",
+    userId: "user-7",
+    source: "ogre_ai",
+    symbol: "PUMPUSDC",
+    side: "LONG",
+    status: TRADE_STATUS.OPEN,
+    takeProfitPct: 25,
+    stopLossPct: 8,
+    stopLossBufferPct: 1.5,
+    moves: [
+      { source: "jupiter", movePct: -2 },
+      { source: "dexscreener", movePct: -12 }
+    ]
+  });
+
+  assert.equal(evaluation.wouldClose, true);
+  assert.equal(evaluation.trigger, TP_SL_REASON.STOP_LOSS);
+  assert.equal(evaluation.priceSource, "dexscreener");
+  assert.equal(evaluation.triggerMovePct, -12);
+});
+
+test("open lot basis ignores prior profitable round trip before new stop loss", () => {
+  const open = openLotsFromTradeEvents([
+    {
+      type: "buy",
+      timestamp: "2026-06-04T10:00:00.000Z",
+      solLamportsSpent: "100000000",
+      tokenAmount: "1000",
+      source: "ogre_ai",
+      signature: "buy-1"
+    },
+    {
+      type: "sell",
+      timestamp: "2026-06-04T10:02:00.000Z",
+      solLamportsReceived: "130000000",
+      tokenAmount: "1000",
+      source: "ogre_ai_exit",
+      signature: "sell-1"
+    },
+    {
+      type: "buy",
+      timestamp: "2026-06-04T10:05:00.000Z",
+      solLamportsSpent: "100000000",
+      tokenAmount: "2000",
+      source: "ogre_ai",
+      signature: "buy-2"
+    }
+  ]);
+
+  assert.equal(open.basisLamports, 100000000n);
+  assert.equal(open.tokenAmount, 2000n);
 });

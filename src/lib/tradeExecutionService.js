@@ -320,6 +320,65 @@ export function formatTpSlDebugRow(evaluation = {}) {
   ].join(" ");
 }
 
+export function reduceOpenLots(lots, sellTokenAmount) {
+  let remaining = BigInt(sellTokenAmount || 0);
+  if (remaining <= 0n) return;
+
+  while (remaining > 0n && lots.length) {
+    const lot = lots[0];
+    if (lot.remainingTokens <= remaining) {
+      remaining -= lot.remainingTokens;
+      lots.shift();
+      continue;
+    }
+
+    const keptTokens = lot.remainingTokens - remaining;
+    lot.basisLamports = (lot.basisLamports * keptTokens) / lot.remainingTokens;
+    lot.remainingTokens = keptTokens;
+    remaining = 0n;
+  }
+}
+
+export function summarizeOpenLots(lots) {
+  return lots.reduce((summary, lot) => ({
+    basisLamports: summary.basisLamports + lot.basisLamports,
+    tokenAmount: summary.tokenAmount + lot.remainingTokens
+  }), { basisLamports: 0n, tokenAmount: 0n });
+}
+
+export function openLotsFromTradeEvents(events = []) {
+  const lots = [];
+  let fallbackBasisLamports = 0n;
+
+  for (const event of [...events].sort((left, right) => Date.parse(left.timestamp || "") - Date.parse(right.timestamp || ""))) {
+    if (event.type === "buy") {
+      const basisLamports = BigInt(event.solLamportsSpent || 0);
+      const tokenAmount = BigInt(event.tokenAmount || 0);
+      if (basisLamports <= 0n) continue;
+      if (tokenAmount > 0n) {
+        lots.push({
+          basisLamports,
+          originalTokens: tokenAmount,
+          remainingTokens: tokenAmount,
+          signature: event.signature || "",
+          source: event.source || ""
+        });
+      } else {
+        fallbackBasisLamports += basisLamports;
+      }
+    } else if (event.type === "sell") {
+      reduceOpenLots(lots, BigInt(event.tokenAmount || 0));
+    }
+  }
+
+  const open = summarizeOpenLots(lots);
+  return {
+    basisLamports: open.basisLamports > 0n ? open.basisLamports : fallbackBasisLamports,
+    tokenAmount: open.tokenAmount,
+    lots
+  };
+}
+
 export class TradeExecutionService {
   constructor({ store, priceProvider, closeOrder, logger = console } = {}) {
     if (!store) throw new Error("TradeExecutionService requires a store");

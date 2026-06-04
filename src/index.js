@@ -34,6 +34,7 @@ import {
 } from "./lib/tradePlanExit.js";
 import {
   evaluatePercentMoveCandidates,
+  openLotsFromTradeEvents,
   tpSlLogEntry
 } from "./lib/tradeExecutionService.js";
 import {
@@ -5568,6 +5569,66 @@ function activeWebExitGuardCovers(guard, userId, walletPublicKey, tokenMint) {
     && String(guard.tokenMint || "") === String(tokenMint || "");
 }
 
+function webOpenTradeEntriesFromHistory(history = {}) {
+  const groups = new Map();
+  const trades = [...(history.trades || [])]
+    .filter((trade) => eligibleWebDefaultExitSource(trade.source))
+    .filter((trade) => trade.userId && trade.walletPublicKey && trade.tokenMint)
+    .sort((left, right) => Date.parse(left.timestamp || "") - Date.parse(right.timestamp || ""));
+
+  for (const trade of trades) {
+    const key = webWalletTokenGuardKey(trade.userId, trade.walletPublicKey, trade.tokenMint);
+    const entry = groups.get(key) || {
+      userId: trade.userId,
+      walletPublicKey: trade.walletPublicKey,
+      walletLabel: trade.walletLabel || "Wallet",
+      tokenMint: trade.tokenMint,
+      spent: 0n,
+      received: 0n,
+      tokenAmount: 0n,
+      buyCount: 0,
+      sellCount: 0,
+      lastSource: trade.source || "web_trade",
+      lastTradeAt: trade.timestamp || null,
+      lastBuySignature: "",
+      events: []
+    };
+
+    if (trade.type === "buy") {
+      const basisLamports = positiveBigIntOrZero(trade.solLamportsSpent);
+      const tokenAmount = positiveBigIntOrZero(trade.tokenAmount);
+      if (basisLamports > 0n) {
+        entry.buyCount += 1;
+        entry.lastSource = trade.source || entry.lastSource;
+        entry.lastBuySignature = trade.signature || entry.lastBuySignature;
+        if (tokenAmount <= 0n) {
+          entry.spent += basisLamports;
+        }
+        entry.events.push(trade);
+      }
+    } else if (trade.type === "sell") {
+      entry.sellCount += 1;
+      entry.received += positiveBigIntOrZero(trade.solLamportsReceived);
+      entry.events.push(trade);
+    }
+
+    entry.walletLabel = trade.walletLabel || entry.walletLabel;
+    entry.lastTradeAt = trade.timestamp || entry.lastTradeAt;
+    groups.set(key, entry);
+  }
+
+  return [...groups.values()].map((entry) => {
+    const open = openLotsFromTradeEvents(entry.events);
+    if (open.basisLamports > 0n) {
+      entry.spent = open.basisLamports;
+      entry.received = 0n;
+      entry.tokenAmount = open.tokenAmount;
+    }
+    delete entry.events;
+    return entry;
+  });
+}
+
 function eligibleWebDefaultExitSource(source) {
   const text = String(source || "").toLowerCase();
   return [
@@ -5726,42 +5787,7 @@ async function upsertWebExitGuardsForPlan(plan, planWallets = []) {
 
 async function backfillWebExitGuardsFromLiveWebPositions(guardStore, walletStore) {
   const history = await readTradeHistory();
-  const entries = new Map();
-
-  for (const trade of history.trades || []) {
-    if (!eligibleWebDefaultExitSource(trade.source)) continue;
-    if (!trade.userId || !trade.walletPublicKey || !trade.tokenMint) continue;
-    const key = webWalletTokenGuardKey(trade.userId, trade.walletPublicKey, trade.tokenMint);
-    const entry = entries.get(key) || {
-      userId: trade.userId,
-      walletPublicKey: trade.walletPublicKey,
-      walletLabel: trade.walletLabel || "Wallet",
-      tokenMint: trade.tokenMint,
-      spent: 0n,
-      received: 0n,
-      tokenAmount: 0n,
-      buyCount: 0,
-      sellCount: 0,
-      lastSource: trade.source || "web_trade",
-      lastTradeAt: trade.timestamp || null,
-      lastBuySignature: ""
-    };
-
-    if (trade.type === "buy") {
-      entry.spent += positiveBigIntOrZero(trade.solLamportsSpent);
-      entry.tokenAmount += positiveBigIntOrZero(trade.tokenAmount);
-      entry.buyCount += 1;
-      entry.lastSource = trade.source || entry.lastSource;
-      entry.lastBuySignature = trade.signature || entry.lastBuySignature;
-    } else if (trade.type === "sell") {
-      entry.received += positiveBigIntOrZero(trade.solLamportsReceived);
-      entry.sellCount += 1;
-    }
-
-    entry.walletLabel = trade.walletLabel || entry.walletLabel;
-    entry.lastTradeAt = trade.timestamp || entry.lastTradeAt;
-    entries.set(key, entry);
-  }
+  const entries = webOpenTradeEntriesFromHistory(history);
 
   const activeGuardKeys = new Set((guardStore.guards || [])
     .filter((guard) => isActiveWebExitGuardStatus(guard.status))
@@ -5769,7 +5795,7 @@ async function backfillWebExitGuardsFromLiveWebPositions(guardStore, walletStore
   const existingTerminalKeys = new Set((guardStore.guards || [])
     .filter((guard) => isTerminalWebExitGuardStatus(guard.status))
     .map((guard) => guard.key || ""));
-  const candidates = [...entries.values()].filter((entry) => (
+  const candidates = entries.filter((entry) => (
     entry.buyCount > 0
     && entry.spent > 0n
     && !activeGuardKeys.has(webWalletTokenGuardKey(entry.userId, entry.walletPublicKey, entry.tokenMint))
@@ -6030,39 +6056,7 @@ async function processWebPortfolioExits(options = {}) {
       readTradePlans(),
       readWebExitGuards()
     ]);
-    const entries = new Map();
-    for (const trade of history.trades || []) {
-      if (!eligibleWebDefaultExitSource(trade.source)) continue;
-      if (!trade.userId || !trade.walletPublicKey || !trade.tokenMint) continue;
-      const key = webWalletTokenGuardKey(trade.userId, trade.walletPublicKey, trade.tokenMint);
-      const entry = entries.get(key) || {
-        userId: trade.userId,
-        walletPublicKey: trade.walletPublicKey,
-        walletLabel: trade.walletLabel || "Wallet",
-        tokenMint: trade.tokenMint,
-        spent: 0n,
-        received: 0n,
-        buyCount: 0,
-        sellCount: 0,
-        lastSource: trade.source || "web_trade",
-        lastTradeAt: trade.timestamp || null,
-        lastBuySignature: ""
-      };
-      if (trade.type === "buy") {
-        entry.spent += positiveBigIntOrZero(trade.solLamportsSpent);
-        entry.buyCount += 1;
-        entry.lastSource = trade.source || entry.lastSource;
-        entry.lastBuySignature = trade.signature || entry.lastBuySignature;
-      } else if (trade.type === "sell") {
-        entry.received += positiveBigIntOrZero(trade.solLamportsReceived);
-        entry.sellCount += 1;
-      }
-      entry.walletLabel = trade.walletLabel || entry.walletLabel;
-      entry.lastTradeAt = trade.timestamp || entry.lastTradeAt;
-      entries.set(key, entry);
-    }
-
-    const candidates = [...entries.values()].filter((entry) => entry.buyCount > 0 && entry.spent > 0n);
+    const candidates = webOpenTradeEntriesFromHistory(history).filter((entry) => entry.buyCount > 0 && entry.spent > 0n);
     await runWithConcurrency(candidates, Math.min(2, Math.max(1, CONFIG.balanceConcurrency)), async (entry) => {
       const key = webPortfolioPositionKey(entry);
       const memory = webPortfolioExitState.get(key) || {};
