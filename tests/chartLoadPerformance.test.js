@@ -34,6 +34,9 @@ test("chart bootstrap is cached, deduped, and served through a dedicated endpoin
   assert.match(serverSource, /let chartBootstrapSharedCache = new Map/);
   assert.match(functionBody(serverSource, "webChartBootstrap"), /CacheService\.getJson/);
   assert.match(functionBody(serverSource, "webChartBootstrap"), /DedupeService\.run/);
+  assert.match(functionBody(serverSource, "buildWebChartBootstrap"), /fetchDexScreenerTokenPairsBatch/);
+  assert.match(functionBody(serverSource, "buildWebChartBootstrap"), /fetchDexScreenerTokenPairsFallback/);
+  assert.match(serverSource, /https:\/\/api\.dexscreener\.com\/latest\/dex\/tokens/);
   assert.match(functionBody(serverSource, "storeWebChartBootstrap"), /CacheService\.setJson/);
   assert.match(serverSource, /pathname === "\/api\/web\/chart\/bootstrap"/);
 });

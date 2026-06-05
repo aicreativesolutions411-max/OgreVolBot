@@ -11849,6 +11849,16 @@ async function fetchDexScreenerTokenPairsBatch(tokenMints, options = {}) {
   return Array.isArray(data) ? data : [];
 }
 
+async function fetchDexScreenerTokenPairsFallback(tokenMint, options = {}) {
+  const mint = String(tokenMint || "").trim();
+  if (!mint) return [];
+  const data = await fetchJson(`https://api.dexscreener.com/latest/dex/tokens/${encodeURIComponent(mint)}`, {
+    headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" },
+    timeoutMs: options.timeoutMs || 3_500
+  });
+  return Array.isArray(data?.pairs) ? data.pairs : [];
+}
+
 function bestDexPairForToken(tokenMint, pairs) {
   return (pairs || [])
     .filter((pair) => pairMatchesToken(pair, tokenMint))
@@ -23466,12 +23476,18 @@ function chartBootstrapFromDexPair(mint = "", best = null, timings = {}) {
 async function buildWebChartBootstrap(tokenMint = "") {
   const mint = String(tokenMint || "").trim();
   const started = Date.now();
-  const pairs = await fetchDexScreenerTokenPairsBatch([mint], { timeoutMs: 2_500 }).catch(() => []);
+  let providerSource = "tokens-v1";
+  let pairs = await fetchDexScreenerTokenPairsBatch([mint], { timeoutMs: 2_500 }).catch(() => []);
+  if (!pairs.length) {
+    providerSource = "latest-dex-tokens";
+    pairs = await fetchDexScreenerTokenPairsFallback(mint, { timeoutMs: 3_500 }).catch(() => []);
+  }
   const pairResolveMs = Date.now() - started;
   const best = bestDexPairForToken(mint, pairs);
   const chart = chartBootstrapFromDexPair(mint, best, { pairResolveMs, metadataMs: pairResolveMs });
   chart.rawProviderCount = pairs.length;
   chart.pairResolutionMs = pairResolveMs;
+  chart.providerSource = providerSource;
   return chart;
 }
 
