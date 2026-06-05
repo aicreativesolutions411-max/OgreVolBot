@@ -7913,14 +7913,6 @@ function applyTokenRefToState(tokenRef = {}) {
   return mint;
 }
 
-function currentReturnPath() {
-  try {
-    return `${window.location.pathname || "/terminal"}${window.location.search || ""}`;
-  } catch {
-    return "/terminal";
-  }
-}
-
 function buildTokenChartPath(mint, options = {}) {
   const params = new URLSearchParams();
   params.set("token", mint);

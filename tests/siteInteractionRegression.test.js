@@ -21,6 +21,10 @@ test("site does not install a broad inline capture click blocker", () => {
   assert.match(appSource, /document\.addEventListener\("click", async \(event\) =>/);
 });
 
+test("browser app bundle has one return-path helper declaration", () => {
+  assert.equal([...appSource.matchAll(/function currentReturnPath\(\)/g)].length, 1);
+});
+
 test("decorative and closed overlay layers cannot capture clicks", () => {
   assert.match(overridesSource, /\.wallet-connect-modal\[hidden\][\s\S]*display: none !important;[\s\S]*pointer-events: none !important/);
   assert.match(overridesSource, /\.login-modal\[hidden\][\s\S]*display: none !important;[\s\S]*pointer-events: none !important/);
