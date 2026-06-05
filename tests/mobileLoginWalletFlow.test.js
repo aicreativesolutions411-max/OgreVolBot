@@ -74,6 +74,11 @@ test("mobile Lock In modal is fixed above the terminal header and remains tappab
   assert.match(overridesSource, /\.login-modal-section input\s*\{[\s\S]*font-size: 16px !important/);
 });
 
+test("Lock In modal can open after a wallet-created web profile exists", () => {
+  assert.match(appSource, /const loginModalVisible = Boolean\(hasLoginModal && state\.loginModalOpen\)/);
+  assert.doesNotMatch(appSource, /const loginModalVisible = Boolean\(hasLoginModal && !state\.user && state\.loginModalOpen\)/);
+});
+
 test("Lock In click instrumentation and debug command are present without sensitive fields", () => {
   assert.match(serverSource, /pathname === "\/api\/web\/lock-in-clicked"/);
   assert.match(serverSource, /function recordLockInClickedEvent/);

@@ -1840,7 +1840,7 @@ function render(options = {}) {
   loginView.hidden = !["intro", "login"].includes(state.route);
   if (connectView) connectView.hidden = state.route !== "connect";
   const hasLoginModal = Boolean(loginModal);
-  const loginModalVisible = Boolean(hasLoginModal && !state.user && state.loginModalOpen);
+  const loginModalVisible = Boolean(hasLoginModal && state.loginModalOpen);
   if (topLoginPanel) topLoginPanel.hidden = hasLoginModal || Boolean(state.user) || state.loginCollapsed;
   setHidden("[data-connect-login-panel]", hasLoginModal || Boolean(state.user) || state.loginCollapsed);
   if (loginModal) {

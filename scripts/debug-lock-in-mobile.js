@@ -47,7 +47,8 @@ const report = {
     pointerupCaptureWired: present(app, /addEventListener\("pointerup"[\s\S]*data-open-login/),
     clickFallbackWired: present(app, /target\.matches\("\[data-open-login\]"\)[\s\S]*openLoginPanel/),
     lockInClickedLog: present(app, /LOCK_IN_CLICKED/) && present(server, /LOCK_IN_CLICKED/),
-    fallbackLoginRoute: present(app, /function loginFallbackRoute/) && present(app, /\/login\?returnTo=/)
+    fallbackLoginRoute: present(app, /function loginFallbackRoute/) && present(app, /\/login\?returnTo=/),
+    opensAfterWalletProfile: present(app, /const loginModalVisible = Boolean\(hasLoginModal && state\.loginModalOpen\)/)
   },
   modalProvider: {
     mountedInHtml: present(html, /data-login-modal/),
