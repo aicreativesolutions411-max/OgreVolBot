@@ -516,6 +516,49 @@ function setWalletConnectStatus(message = "") {
   writeText(walletConnectStatusElement(), state.walletConnectStatus);
 }
 
+function walletInstallGuidance(providerId = "solana") {
+  const label = walletProviderLabel(providerId);
+  const mobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || "");
+  if (mobile) {
+    return `${label} is not available in this browser. Open SlimeWire inside the ${label} in-app browser, or install/open the wallet app and try again.`;
+  }
+  return `${label} is not detected in this browser. Install or unlock the extension, then refresh SlimeWire and try again.`;
+}
+
+function logWalletConnectFailure(providerId = "solana", error = null, extra = {}) {
+  const provider = walletProviderById(providerId);
+  const detail = {
+    walletName: walletProviderLabel(providerId, provider),
+    userId: state.user?.id || "",
+    route: state.route,
+    adapterReadyState: provider ? "detected" : "not_detected",
+    errorName: error?.name || "",
+    errorMessage: String(error?.message || error || "").slice(0, 240),
+    ...extra
+  };
+  try {
+    console.warn("[slimewire_wallet_connect]", detail);
+  } catch {
+    // Console logging should never block wallet connection.
+  }
+}
+
+function focusLoginField(connectPanel = state.route === "connect") {
+  window.setTimeout(() => {
+    const selector = connectPanel
+      ? "[data-connect-login-username], [data-connect-login-password]"
+      : "[data-login-username], [data-login-password]";
+    const input = visibleElement(selector);
+    input?.focus?.();
+  }, 0);
+}
+
+function openLoginPanel({ connectPanel = state.route === "connect" } = {}) {
+  state.loginCollapsed = false;
+  render({ force: true });
+  focusLoginField(connectPanel);
+}
+
 function loginCredentialsFromForm({ requirePassword = false } = {}) {
   const username = firstFormValue(["[data-connect-login-username]", "[data-login-username]"]).trim();
   const password = firstFormValue(["[data-connect-login-password]", "[data-login-password]"]);
@@ -613,26 +656,12 @@ async function passwordLogin() {
 
 async function createAccountAndConnectWallet() {
   setError("");
-  const status = loginStatusElement();
+  const status = walletConnectStatusElement() || loginStatusElement();
   try {
-    if (!state.user) {
-      const credentials = loginCredentialsFromForm();
-      writeText(status, credentials.username ? "Creating saved login..." : "Creating account...");
-      const data = await api("/api/web/signup", {
-        method: "POST",
-        body: JSON.stringify({ ...credentials, referralCode: storedReferralCode() })
-      });
-      state.token = data.token;
-      applyUserFromApi(data.user);
-      setStoredToken(state.token);
-      state.loginCollapsed = true;
-      await loadAll();
-    }
-    state.activeTab = "terminal";
-    state.route = "terminal";
-    window.history.pushState({}, "", "/terminal");
+    writeText(status, "Choose a wallet provider to connect.");
     openWalletConnectChooser({ returnPath: "/terminal" });
   } catch (error) {
+    writeText(status, error.message);
     setError(error.message);
   }
 }
@@ -4760,7 +4789,9 @@ async function connectBrowserWallet(providerId, options = {}) {
   const status = walletConnectStatusElement();
   const provider = walletProviderById(providerId);
   if (!provider) {
-    setWalletConnectStatus(`${walletProviderLabel(providerId)} is not detected in this browser. Install/open the wallet extension, then refresh.`);
+    const message = walletInstallGuidance(providerId);
+    setWalletConnectStatus(message);
+    logWalletConnectFailure(providerId, new Error(message), { action: "provider_missing" });
     return;
   }
 
@@ -4816,7 +4847,9 @@ async function connectBrowserWallet(providerId, options = {}) {
     ]);
     render({ force: true });
   } catch (error) {
-    setWalletConnectStatus(error.message || "Wallet connection was cancelled.");
+    const message = error.message || "Wallet connection was cancelled.";
+    setWalletConnectStatus(message);
+    logWalletConnectFailure(providerId, error, { action: "connect_failed" });
   }
 }
 
@@ -8376,8 +8409,7 @@ document.addEventListener("click", async (event) => {
   }
 
   if (target.matches("[data-connect-login-toggle]")) {
-    state.loginCollapsed = !state.loginCollapsed;
-    render();
+    openLoginPanel({ connectPanel: true });
     return;
   }
   if (target.matches("[data-connect-password-login]")) {
@@ -8394,10 +8426,13 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-web-signup]")) await createWebAccount();
   if (target.matches("[data-web-password-login]")) await passwordLogin();
-  if (target.matches("[data-web-signup-connect]")) await createAccountAndConnectWallet();
+  if (target.matches("[data-web-signup-connect]")) {
+    await createAccountAndConnectWallet();
+    return;
+  }
   if (target.matches("[data-open-login]")) {
-    state.loginCollapsed = !state.loginCollapsed;
-    render();
+    openLoginPanel({ connectPanel: false });
+    return;
   }
   if (target.matches("[data-browse-guest]")) {
     state.loginCollapsed = true;

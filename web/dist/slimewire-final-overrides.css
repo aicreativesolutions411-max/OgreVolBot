@@ -5509,3 +5509,65 @@
     overflow: visible !important;
   }
 }
+
+/* 2026-06-05 entry/connect behavior and smoothness repair.
+   Functional surface only: keep wallet/auth handlers intact while making the chooser/login layers clickable. */
+.topbar {
+  z-index: 80 !important;
+}
+
+.top-login-panel {
+  z-index: 1200 !important;
+  pointer-events: auto !important;
+}
+
+.wallet-connect-modal {
+  z-index: 5000 !important;
+  pointer-events: auto !important;
+}
+
+.wallet-connect-dialog {
+  z-index: 1 !important;
+  pointer-events: auto !important;
+}
+
+.wallet-connect-backdrop {
+  pointer-events: auto !important;
+}
+
+.modal-wallet-provider-buttons button,
+[data-app][data-route="connect"] [data-connect-wallet],
+[data-app][data-route="connect"] [data-web-signup-connect],
+[data-app][data-route="connect"] [data-connect-login-toggle] {
+  touch-action: manipulation !important;
+}
+
+[data-app][data-route="connect"] .connect-login-panel {
+  position: relative !important;
+  z-index: 3 !important;
+  pointer-events: auto !important;
+}
+
+@media (max-width: 760px), (prefers-reduced-motion: reduce) {
+  body {
+    background-attachment: scroll !important;
+  }
+
+  body::before,
+  .login-view.swamp-splash::before,
+  [data-app][data-route="connect"] .swamp-connect-shell::before {
+    filter: none !important;
+  }
+
+  .wallet-connect-backdrop {
+    backdrop-filter: none !important;
+    background: rgba(0, 0, 0, 0.82) !important;
+  }
+
+  .modal-wallet-provider-buttons button,
+  [data-app][data-route="connect"] .connect-card .provider-orb,
+  [data-app][data-route="connect"] .connect-method-card {
+    box-shadow: inset 0 0 12px rgba(116, 255, 44, 0.04) !important;
+    transition: border-color 120ms ease, background-color 120ms ease !important;
+  }
+}
