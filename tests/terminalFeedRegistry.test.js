@@ -127,9 +127,13 @@ test("smart chart refresh stays selected-token scoped", () => {
 
 test("terminal load, tab switch, focus return, and manual refresh all use the shared feed refresh path", () => {
   assert.match(functionBody("initializeApp"), /refreshVisibleTerminalFeeds\(\{[\s\S]*reason: "site-load"/);
-  assert.match(functionBody("initializeApp"), /state\.activeTab === "terminal" \|\| state\.activeTab === "kol"/);
+  assert.doesNotMatch(functionBody("initializeApp"), /ensureLivePairsWarmup\(\{ force: true \}\)/);
+  assert.doesNotMatch(functionBody("initializeApp"), /loadKolScan\(state\.kolMode, "", \{ silent: true \}\)/);
   assert.match(appSource, /target\.matches\("\[data-tab\]"\)[\s\S]*refreshTerminalFeed\(state\.activeTab,[\s\S]*reason: "tab-switch"/);
   assert.match(functionBody("resumeLiveFeeds"), /refreshTerminalFeed\(state\.activeTab,[\s\S]*reason: "visibility-focus-return"/);
+  assert.doesNotMatch(functionBody("resumeLiveFeeds"), /refreshLivePairBuckets\(/);
+  assert.match(functionBody("refreshTerminalEntryInBackground"), /refreshVisibleTerminalFeeds\(\{ silent: true, ifStale: true/);
+  assert.match(functionBody("refreshTerminalEntryInBackground"), /refreshWalletState\(\{ force: true, deep: false/);
   assert.match(appSource, /target\.matches\("\[data-refresh-feeds\]"\)[\s\S]*refreshVisibleTerminalFeeds\(\{ force: true, reason: "manual-refresh-feeds"/);
   assert.match(appSource, /target\.matches\("\[data-refresh-all\]"\)[\s\S]*refreshTerminalFeed\(state\.activeTab,[\s\S]*reason: "manual-refresh-all"/);
 });
@@ -141,8 +145,11 @@ test("active tab poller avoids hidden-page and duplicate heavy-tab polling", () 
   assert.match(body, /Math\.max\(5_000, Number\(feed\.refreshMs \|\| 30_000\)\)/);
   assert.match(body, /clearTimeout\(terminalFeedTimer\)/);
   assert.match(functionBody("scheduleLivePairsAutoRefresh"), /loadLivePairs\(\{ silent: true, bucket: state\.livePairBucket, force: false \}\)/);
-  assert.match(functionBody("scheduleLivePairsAutoRefresh"), /livePairsBackgroundWarmupTick % 3 === 0/);
-  assert.match(functionBody("scheduleLivePairsAutoRefresh"), /renderOnComplete: false, force: false/);
+  assert.doesNotMatch(appSource, /livePairsBackgroundWarmupTick/);
+  assert.match(appSource, /async function refreshLivePairBuckets\(\{ silent = false, force = false, warmAll = false \}/);
+  assert.match(functionBody("refreshLivePairBuckets"), /if \(warmAll\)/);
+  assert.match(appSource, /function scheduleLivePairsRender/);
+  assert.match(appSource, /batched-live-render/);
   assert.doesNotMatch(functionBody("scheduleLivePairsAutoRefresh"), /refreshLivePairBuckets\(\{ silent: true, force: true \}\)/);
   assert.doesNotMatch(functionBody("ensureLivePairsWarmup"), /smartChart/);
 });

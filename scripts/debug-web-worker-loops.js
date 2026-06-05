@@ -56,6 +56,8 @@ const report = {
   browserPollingLoops,
   allowedBrowserLoops: {
     liveFeedUiPolling: matches(appSource, /scheduleLivePairsAutoRefresh/),
+    liveFeedRenderBatched: matches(appSource, /function scheduleLivePairsRender/) && matches(appSource, /batched-live-render/),
+    hiddenBucketWarmupsDisabled: !matches(appSource, /livePairsBackgroundWarmupTick/) && matches(appSource, /warmAll = false/),
     activeTabPollingGuarded: matches(appSource, /function scheduleActiveTerminalFeedRefresh/) && matches(appSource, /document\.hidden/),
     hiddenHeavyTabsPaused: matches(appSource, /\["terminal", "live", "slimeScope", "kol", "watchlist", "sniper"\]\.includes\(state\.activeTab\)/),
     walletRefreshIsDedupeNotWorkerLoop: matches(appSource, /let walletRefreshPromise = null/)

@@ -78,6 +78,10 @@ test("Helius RPC is the explicit backend provider path and public fallback is di
   assert.match(serverSource, /Public Solana RPC fallback is disabled/);
   assert.match(serverSource, /rpcProviderName: CONFIG\.rpcProviderName/);
   assert.match(serverSource, /rpcUrlHost: CONFIG\.rpcUrlHost/);
+  assert.match(serverSource, /RPC_RPS_LIMIT/);
+  assert.match(serverSource, /DAS_RPS_LIMIT/);
+  assert.match(serverSource, /rpcMinIntervalFromRpsMs/);
+  assert.match(serverSource, /event: "helius_rpc_call"/);
   assert.match(serverSource, /function rpcStatsSnapshot/);
   assert.match(serverSource, /function recordRpcMetric/);
   assert.doesNotMatch(functionBodyFromSource(serverSource, "loadConfig"), /rpcUrl:\s*process\.env\.SOLANA_RPC_URL \|\| "https:\/\/api\.mainnet-beta\.solana\.com"/);
@@ -139,6 +143,7 @@ test("worker refresh jobs use short cache locks and dedupe without making Redis 
   assert.match(serverSource, /DedupeService\.run\(`worker-feed:\$\{bucket\}:\$\{sort\}`/);
   assert.match(serverSource, /CACHE_CONNECT_TIMEOUT_MS/);
   assert.match(serverSource, /CACHE_CIRCUIT_BREAKER_MS/);
+  assert.match(serverSource, /CACHE_ENABLED/);
   assert.match(serverSource, /kvCircuitOpenUntil/);
   assert.match(functionBodyFromSource(serverSource, "redisKv"), /connectTimeout: CONFIG\.cacheConnectTimeoutMs/);
   assert.match(functionBodyFromSource(serverSource, "redisKv"), /kvCircuitOpenUntil = Date\.now\(\) \+ CONFIG\.cacheCircuitBreakerMs/);

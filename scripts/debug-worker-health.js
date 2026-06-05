@@ -75,6 +75,11 @@ const report = {
     workerDisplayCacheLock: bool(serverSource, /worker-display-caches/),
     staleLocksSelfExpire: bool(serverSource, /expiresAt <= now/) && bool(serverSource, /EX/)
   },
+  serviceConfigSignals: {
+    workerHealthReportsCacheEnabled: bool(serverSource, /cacheEnabled: CONFIG\.cacheEnabled/),
+    workerHealthReportsConcurrency: bool(serverSource, /workerConcurrency: CONFIG\.workerConcurrency/),
+    workerHealthReportsRpcLimits: bool(serverSource, /rpcRpsLimit: CONFIG\.rpcRpsLimit/) && bool(serverSource, /dasRpsLimit: CONFIG\.dasRpsLimit/)
+  },
   cacheLockEvents: lockEvents,
   workerProcessGuards: {
     refusesWebRole: bool(workerSource, /SERVICE_ROLE=web or WORKER_DISABLED=true/),

@@ -86,7 +86,7 @@ const CONFIG = loadConfig();
 const connection = new Connection(CONFIG.rpcUrl, "confirmed");
 const rpcLimiter = createRpcLimiter();
 const priorityRpcLimiter = createRpcLimiter({
-  minIntervalMs: Math.min(CONFIG.rpcMinIntervalMs, 75)
+  minIntervalMs: Math.max(Math.min(CONFIG.rpcMinIntervalMs, 75), CONFIG.rpcMinIntervalFromRpsMs)
 });
 const jupiterLimiter = createJupiterLimiter();
 const priorityJupiterLimiter = createJupiterLimiter({
@@ -367,7 +367,13 @@ function loadConfig() {
   const buyReserveSol = Number.parseFloat(process.env.BUY_RESERVE_SOL || "0.01");
   const rpcDelayMs = Number.parseInt(process.env.RPC_DELAY_MS || String(speedDefaults.rpcDelayMs), 10);
   const rpcRetries = Number.parseInt(process.env.RPC_RETRIES || "10", 10);
-  const rpcMinIntervalMs = Number.parseInt(process.env.RPC_MIN_INTERVAL_MS || String(speedDefaults.rpcMinIntervalMs), 10);
+  const configuredRpcRpsLimit = Number.parseInt(process.env.RPC_RPS_LIMIT || "40", 10);
+  const configuredDasRpsLimit = Number.parseInt(process.env.DAS_RPS_LIMIT || "8", 10);
+  const rpcRpsLimit = Number.isFinite(configuredRpcRpsLimit) ? Math.min(40, Math.max(1, configuredRpcRpsLimit)) : 40;
+  const dasRpsLimit = Number.isFinite(configuredDasRpsLimit) ? Math.min(8, Math.max(1, configuredDasRpsLimit)) : 8;
+  const rpcMinIntervalFromRpsMs = Math.ceil(1000 / rpcRpsLimit);
+  const configuredRpcMinIntervalMs = Number.parseInt(process.env.RPC_MIN_INTERVAL_MS || String(speedDefaults.rpcMinIntervalMs), 10);
+  const rpcMinIntervalMs = Math.max(configuredRpcMinIntervalMs, rpcMinIntervalFromRpsMs);
   const rpc429CooldownMs = Number.parseInt(process.env.RPC_429_COOLDOWN_MS || String(speedDefaults.rpc429CooldownMs), 10);
   const jupiterMinIntervalMs = Number.parseInt(process.env.JUPITER_MIN_INTERVAL_MS || String(speedDefaults.jupiterMinIntervalMs), 10);
   const jupiterRetries = Number.parseInt(process.env.JUPITER_RETRIES || "5", 10);
@@ -434,6 +440,7 @@ function loadConfig() {
   const workerTickWarmFeeds = parseBoolean(process.env.WORKER_TICK_WARM_FEEDS || "true");
   const workerTickWarmDisplayCaches = parseBoolean(process.env.WORKER_TICK_WARM_DISPLAY_CACHES || "true");
   const workerDisplayCacheUserLimit = Number.parseInt(process.env.WORKER_DISPLAY_CACHE_USER_LIMIT || "8", 10);
+  const workerConcurrency = Number.parseInt(process.env.WORKER_CONCURRENCY || "2", 10);
   const defaultWebInternalRunners = serviceRole === "web" || workerTickEnabled ? "false" : "true";
   const webInternalTpSlRunnersEnabled = parseBoolean(
     process.env.WEB_INTERNAL_TP_SL_RUNNERS_ENABLED
@@ -445,7 +452,8 @@ function loadConfig() {
       || process.env.INTERNAL_DCA_RUNNER_ENABLED
       || defaultWebInternalRunners
   );
-  const cacheProvider = normalizeCacheProvider(process.env.CACHE_PROVIDER || process.env.KV_PROVIDER || "");
+  const cacheEnabled = parseOptionalBoolean(process.env.CACHE_ENABLED, true);
+  const cacheProvider = cacheEnabled ? normalizeCacheProvider(process.env.CACHE_PROVIDER || process.env.KV_PROVIDER || "") : "memory";
   const redisUrl = String(
     process.env.REDIS_URL
       || process.env.RENDER_KEY_VALUE_URL
@@ -463,6 +471,7 @@ function loadConfig() {
   const displayCacheStaleMs = Number.parseInt(process.env.DISPLAY_CACHE_STALE_MS || "90000", 10);
   const cacheConnectTimeoutMs = Number.parseInt(process.env.CACHE_CONNECT_TIMEOUT_MS || "800", 10);
   const cacheCircuitBreakerMs = Number.parseInt(process.env.CACHE_CIRCUIT_BREAKER_MS || "15000", 10);
+  const heliusWsUrl = String(process.env.HELIUS_WS_URL || process.env.HELIUS_WEBSOCKET_URL || "").trim();
 
   if (!Number.isInteger(bundleFeeBps) || bundleFeeBps < 0 || bundleFeeBps > 1000) {
     throw new Error("TRADE_FEE_BPS/BUNDLE_FEE_BPS must be an integer from 0 to 1000.");
@@ -486,6 +495,14 @@ function loadConfig() {
 
   if (!Number.isInteger(rpcRetries) || rpcRetries < 0 || rpcRetries > 20) {
     throw new Error("RPC_RETRIES must be an integer from 0 to 20.");
+  }
+
+  if (!Number.isInteger(rpcRpsLimit) || rpcRpsLimit < 1 || rpcRpsLimit > 40) {
+    throw new Error("RPC_RPS_LIMIT must be an integer from 1 to 40.");
+  }
+
+  if (!Number.isInteger(dasRpsLimit) || dasRpsLimit < 1 || dasRpsLimit > 8) {
+    throw new Error("DAS_RPS_LIMIT must be an integer from 1 to 8.");
   }
 
   if (!Number.isInteger(rpcMinIntervalMs) || rpcMinIntervalMs < 0 || rpcMinIntervalMs > 30_000) {
@@ -643,6 +660,10 @@ function loadConfig() {
     throw new Error("WORKER_DISPLAY_CACHE_USER_LIMIT must be an integer from 0 to 50.");
   }
 
+  if (!Number.isInteger(workerConcurrency) || workerConcurrency < 1 || workerConcurrency > 20) {
+    throw new Error("WORKER_CONCURRENCY must be an integer from 1 to 20.");
+  }
+
   if (!Number.isInteger(displayCacheFreshMs) || displayCacheFreshMs < 500 || displayCacheFreshMs > 60_000) {
     throw new Error("DISPLAY_CACHE_FRESH_MS must be an integer from 500 to 60000.");
   }
@@ -672,6 +693,7 @@ function loadConfig() {
     rpcUrlHost: rpcConfig.host,
     rpcEnvSource: rpcConfig.envSource,
     publicRpcFallbackAllowed: rpcConfig.publicFallbackAllowed,
+    heliusWsUrl,
     appSecret: secret,
     dataDir: path.resolve(process.cwd(), process.env.DATA_DIR || path.join(__dirname, "..", "data")),
     allowEphemeralStorage: parseBoolean(process.env.ALLOW_EPHEMERAL_STORAGE || "false"),
@@ -729,10 +751,12 @@ function loadConfig() {
     workerTickWarmFeeds,
     workerTickWarmDisplayCaches,
     workerDisplayCacheUserLimit,
+    workerConcurrency,
     webInternalTpSlRunnersEnabled,
     webInternalDcaRunnerEnabled,
     workerSecret,
     cacheProvider,
+    cacheEnabled,
     redisUrl,
     kvRestUrl,
     kvRestToken,
@@ -771,6 +795,9 @@ function loadConfig() {
     buyReserveSol,
     rpcDelayMs,
     rpcRetries,
+    rpcRpsLimit,
+    dasRpsLimit,
+    rpcMinIntervalFromRpsMs,
     rpcMinIntervalMs,
     rpc429CooldownMs,
     jupiterMinIntervalMs,
@@ -984,8 +1011,16 @@ function startHealthServer() {
         tradeSpeed: {
           preset: CONFIG.tradingSpeedPreset,
           bundleConcurrency: CONFIG.bundleConcurrency,
+          rpcRpsLimit: CONFIG.rpcRpsLimit,
+          dasRpsLimit: CONFIG.dasRpsLimit,
           rpcMinIntervalMs: CONFIG.rpcMinIntervalMs,
+          rpcMinIntervalFromRpsMs: CONFIG.rpcMinIntervalFromRpsMs,
           jupiterMinIntervalMs: CONFIG.jupiterMinIntervalMs
+        },
+        cache: {
+          enabled: CONFIG.cacheEnabled,
+          provider: kvProviderName(),
+          configured: kvConfigured()
         },
         pumpLaunch: {
           enabled: CONFIG.pumpLaunchEnabled,
@@ -2239,14 +2274,18 @@ function handleInternalWorkerHealth(request, response) {
     warmFeeds: CONFIG.workerTickWarmFeeds,
     warmDisplayCaches: CONFIG.workerTickWarmDisplayCaches,
     displayCacheUserLimit: CONFIG.workerDisplayCacheUserLimit,
+    workerConcurrency: CONFIG.workerConcurrency,
     webInternalTpSlRunnersEnabled: CONFIG.webInternalTpSlRunnersEnabled,
     webInternalDcaRunnerEnabled: CONFIG.webInternalDcaRunnerEnabled,
+    cacheEnabled: CONFIG.cacheEnabled,
     cacheProvider: kvProviderName(),
     cacheConfigured: kvConfigured(),
     cacheStats: cacheStatsSnapshot(),
     activeCacheLocks: activeCacheLockSnapshot(),
     rpcProviderName: CONFIG.rpcProviderName,
     rpcUrlHost: CONFIG.rpcUrlHost,
+    rpcRpsLimit: CONFIG.rpcRpsLimit,
+    dasRpsLimit: CONFIG.dasRpsLimit,
     rpcStats: rpcStatsSnapshot(),
     deployId: process.env.RENDER_GIT_COMMIT || process.env.RENDER_SERVICE_ID || "",
     livePairRefreshSeconds: CONFIG.livePairsRefreshSeconds,
@@ -16656,6 +16695,9 @@ function rpcStatsSnapshot() {
   return {
     rpcProviderName: CONFIG.rpcProviderName,
     rpcUrlHost: CONFIG.rpcUrlHost,
+    rpcRpsLimit: CONFIG.rpcRpsLimit,
+    dasRpsLimit: CONFIG.dasRpsLimit,
+    rpcMinIntervalMs: CONFIG.rpcMinIntervalMs,
     callCount: rpcStats.callCount,
     errorCount: rpcStats.errorCount,
     rateLimitCount: rpcStats.rateLimitCount,
@@ -25938,7 +25980,7 @@ async function rpcWithRetry(label, operation, retries = CONFIG.rpcRetries, optio
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     try {
       const result = await limiter.schedule(label, operation);
-      recordRpcMetric(Date.now() - startedAt, null);
+      recordRpcMetric(Date.now() - startedAt, null, label);
       return result;
     } catch (error) {
       lastError = error;
@@ -25956,11 +25998,11 @@ async function rpcWithRetry(label, operation, retries = CONFIG.rpcRetries, optio
     }
   }
 
-  recordRpcMetric(Date.now() - startedAt, lastError);
+  recordRpcMetric(Date.now() - startedAt, lastError, label);
   throw lastError;
 }
 
-function recordRpcMetric(durationMs, error = null) {
+function recordRpcMetric(durationMs, error = null, label = "rpc") {
   const safeDuration = Number.isFinite(Number(durationMs)) ? Math.max(0, Math.round(Number(durationMs))) : 0;
   rpcStats.callCount += 1;
   rpcStats.totalMs += safeDuration;
@@ -25972,6 +26014,27 @@ function recordRpcMetric(durationMs, error = null) {
     rpcStats.lastErrorAt = rpcStats.lastCallAt;
     rpcStats.lastError = safePerfEventText(error?.message || "RPC error", 120);
     if (isRetryableRpcError(error)) rpcStats.rateLimitCount += 1;
+  }
+  logRpcMetric({ label, durationMs: safeDuration, error });
+}
+
+function logRpcMetric({ label = "rpc", durationMs = 0, error = null } = {}) {
+  const rateLimited = Boolean(error && isRetryableRpcError(error));
+  if (!error && durationMs < 250) return;
+  try {
+    console.info(JSON.stringify({
+      event: "helius_rpc_call",
+      rpcProviderName: CONFIG.rpcProviderName,
+      rpcUrlHost: CONFIG.rpcUrlHost,
+      method: safePerfEventText(label, 80),
+      duration_ms: Math.max(0, Math.round(Number(durationMs) || 0)),
+      status: error ? (rateLimited ? "rate_limited" : "error") : "ok",
+      rate_limited: rateLimited,
+      errorCode: error ? safePerfEventText(error?.name || "RpcError", 60) : "",
+      errorMessage: error ? safePerfEventText(error?.message || "RPC error", 120) : ""
+    }));
+  } catch {
+    // RPC observability must never affect trading or display paths.
   }
 }
 

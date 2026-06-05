@@ -30,8 +30,16 @@ services:
         sync: false
       - key: HELIUS_RPC_URL
         sync: false
+      - key: HELIUS_WS_URL
+        sync: false
+      - key: RPC_RPS_LIMIT
+        value: 40
+      - key: DAS_RPS_LIMIT
+        value: 8
       - key: TRADING_SPEED_PRESET
         value: fast
+      - key: CACHE_ENABLED
+        value: true
       - key: CACHE_PROVIDER
         value: redis
       - key: REDIS_URL
@@ -218,6 +226,16 @@ services:
         value: true
       - key: WORKER_DISABLED
         value: false
+      - key: HELIUS_RPC_URL
+        sync: false
+      - key: HELIUS_WS_URL
+        sync: false
+      - key: RPC_RPS_LIMIT
+        value: 40
+      - key: DAS_RPS_LIMIT
+        value: 8
+      - key: CACHE_ENABLED
+        value: true
       - key: CACHE_PROVIDER
         value: redis
       - key: REDIS_URL
@@ -238,6 +256,8 @@ services:
         value: true
       - key: WORKER_TICK_TIMEOUT_MS
         value: 20000
+      - key: WORKER_CONCURRENCY
+        value: 2
       - key: WORKER_TICK_RUN_TRADE_PLANS
         value: true
       - key: WORKER_TICK_RUN_DCA_PLANS

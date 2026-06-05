@@ -29,6 +29,7 @@ function normalizeServiceRole(value) {
 }
 
 function configuredCacheBackend() {
+  if (!optionalBoolean(process.env.CACHE_ENABLED, true)) return "memory";
   const provider = String(process.env.CACHE_PROVIDER || process.env.KV_PROVIDER || "auto").trim().toLowerCase();
   const hasRedis = envPresent("REDIS_URL", "RENDER_KEY_VALUE_URL", "RENDER_KEY_VALUE_INTERNAL_URL", "RENDER_REDIS_URL", "REDIS_INTERNAL_URL", "KV_REDIS_URL", "SLIMEWIRE_REDIS_URL");
   const hasRest = envPresent("KV_REST_API_URL", "UPSTASH_REDIS_REST_URL", "SLIMEWIRE_KV_REST_URL") && envPresent("KV_REST_API_TOKEN", "UPSTASH_REDIS_REST_TOKEN", "SLIMEWIRE_KV_REST_TOKEN");
@@ -60,7 +61,10 @@ function rpcConfig() {
     envSource: found?.[0] || "",
     providerName: host.includes("helius") ? "helius" : host === "api.mainnet-beta.solana.com" ? "public-solana" : host ? "custom" : "missing",
     rpcUrlHost: host,
-    publicFallbackDisabled: !envPresent("ALLOW_PUBLIC_RPC_FALLBACK")
+    publicFallbackDisabled: !envPresent("ALLOW_PUBLIC_RPC_FALLBACK"),
+    rpcRpsLimit: Math.min(40, Math.max(1, Number.parseInt(process.env.RPC_RPS_LIMIT || "40", 10) || 40)),
+    dasRpsLimit: Math.min(8, Math.max(1, Number.parseInt(process.env.DAS_RPS_LIMIT || "8", 10) || 8)),
+    heliusWsConfigured: envPresent("HELIUS_WS_URL", "HELIUS_WEBSOCKET_URL")
   };
 }
 
@@ -114,6 +118,7 @@ const report = {
   },
   cacheBackend: configuredCacheBackend(),
   cacheEnv: {
+    cacheEnabled: optionalBoolean(process.env.CACHE_ENABLED, true),
     redisPresent: envPresent("REDIS_URL", "RENDER_KEY_VALUE_URL", "RENDER_KEY_VALUE_INTERNAL_URL", "RENDER_REDIS_URL", "REDIS_INTERNAL_URL", "KV_REDIS_URL", "SLIMEWIRE_REDIS_URL"),
     renderKeyValuePresent: envPresent("RENDER_KEY_VALUE_URL", "RENDER_KEY_VALUE_INTERNAL_URL"),
     restKvPresent: envPresent("KV_REST_API_URL", "UPSTASH_REDIS_REST_URL", "SLIMEWIRE_KV_REST_URL")

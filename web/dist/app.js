@@ -298,7 +298,6 @@ const state = {
 };
 let livePairsTimer = null;
 const livePairsWarmupKeys = new Set();
-let livePairsBackgroundWarmupTick = 0;
 let scanTimer = null;
 let kolTimer = null;
 let watchlistTimer = null;
@@ -311,6 +310,29 @@ let walletRefreshPromise = null;
 const apiInFlight = new Map();
 const pendingPerfPosts = [];
 let perfPostTimer = null;
+let livePairsRenderTimer = null;
+let livePairsRenderRaf = 0;
+
+function scheduleLivePairsRender(reason = "live-pairs-batch") {
+  if (livePairsRenderTimer || livePairsRenderRaf) return;
+  const flush = () => {
+    livePairsRenderTimer = null;
+    livePairsRenderRaf = 0;
+    if (state.route !== "terminal") return;
+    if (!["terminal", "live", "slimeScope"].includes(state.activeTab)) return;
+    recordPerfEvent({
+      component: "livePairs",
+      action: "batched-live-render",
+      durationMs: 0,
+      resultCount: Array.isArray(currentLivePairs()?.rows) ? currentLivePairs().rows.length : 0,
+      details: reason
+    });
+    render();
+  };
+  livePairsRenderTimer = window.setTimeout(() => {
+    livePairsRenderRaf = window.requestAnimationFrame(flush);
+  }, 120);
+}
 
 const $ = (selector) => document.querySelector(selector);
 const writeText = (element, value) => {
@@ -1763,12 +1785,8 @@ async function completeMobileWalletConnection(providerId = "", connection = {}) 
   state.walletConnectMenuOpen = false;
   setWalletConnectStatus(`Connected ${shortAddress(connection.publicKey)}. Opening Live Terminal...`);
   navigateTo(connection.returnPath || state.walletConnectReturnPath || "/terminal", "terminal");
-  await Promise.allSettled([
-    loadAll(),
-    refreshLivePairBuckets({ silent: true, force: true }),
-    loadKolScan(state.kolMode, "", { silent: true })
-  ]);
   render({ force: true });
+  refreshTerminalEntryInBackground("mobile-wallet-connect");
 }
 
 function mobileWalletCallbackBody(providerId = "", params = new URLSearchParams()) {
@@ -1808,12 +1826,8 @@ async function applyServerMobileWalletFinalization(providerId = "", data = {}) {
   state.walletConnectMenuOpen = false;
   setWalletConnectStatus(publicKey ? `Connected ${shortAddress(publicKey)}. Opening Live Terminal...` : "Wallet connected. Opening Live Terminal...");
   navigateTo(data.finalRedirectRoute || state.walletConnectReturnPath || "/terminal", "terminal");
-  await Promise.allSettled([
-    loadAll(),
-    refreshLivePairBuckets({ silent: true, force: true }),
-    loadKolScan(state.kolMode, "", { silent: true })
-  ]);
   render({ force: true });
+  refreshTerminalEntryInBackground("mobile-wallet-callback");
 }
 
 async function completeServerMobileWalletCallback(providerId = "", params = new URLSearchParams()) {
@@ -2373,10 +2387,6 @@ async function refreshTerminalFeed(tabKey = state.activeTab, options = {}) {
         refreshLivePairBuckets({ silent: true, force: Boolean(options.force) })
       ];
       if (!state.kolWallet) tasks.push(loadKolScan(state.kolMode, "", { silent: true }));
-      if (state.user && state.token) {
-        tasks.push(loadWatchlist({ silent: true }));
-        tasks.push(loadAll({ silent: true, skipCore: true, force: Boolean(options.force) }));
-      }
       await Promise.allSettled(tasks);
     } else if (tabKey === "live") {
       await loadLivePairs({ silent: options.silent !== false, bucket: state.livePairBucket, force: Boolean(options.force) });
@@ -2437,16 +2447,19 @@ async function refreshTerminalFeed(tabKey = state.activeTab, options = {}) {
 async function refreshVisibleTerminalFeeds(options = {}) {
   const active = state.activeTab || "terminal";
   const tasks = [refreshTerminalFeed(active, { ...options, reason: options.reason || "visible-refresh" })];
-  if (active === "terminal") {
-    tasks.push(refreshTerminalFeed("live", { ...options, silent: true, reason: "terminal-visible-live" }));
-    tasks.push(refreshTerminalFeed("kol", { ...options, silent: true, reason: "terminal-visible-kol" }));
-    if (state.user && state.token) {
-      tasks.push(refreshTerminalFeed("watchlist", { ...options, silent: true, reason: "terminal-visible-watchlist" }));
-      tasks.push(refreshTerminalFeed("liveTrades", { ...options, silent: true, reason: "terminal-visible-trades" }));
-    }
-  }
   const results = await Promise.allSettled(tasks);
   return results;
+}
+
+function refreshTerminalEntryInBackground(reason = "terminal-entry") {
+  if (state.route !== "terminal") return;
+  void refreshVisibleTerminalFeeds({ silent: true, ifStale: true, reason }).catch((error) => setError(error.message));
+  if (state.user && state.token) {
+    void refreshWalletState({ force: true, deep: false, reason }).catch((error) => {
+      state.walletRefreshError = error.message || "Wallet refresh failed.";
+      render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
+    });
+  }
 }
 
 function scheduleActiveTerminalFeedRefresh() {
@@ -2569,19 +2582,29 @@ async function loadLivePairs({ silent = false, bucket = state.livePairBucket, re
     state.livePairsLoadingByBucket = nextLoading;
     state.livePairsLoading = Boolean(nextLoading[state.livePairBucket]);
     if (!silent && isActiveBucket) state.loading = false;
-    if (renderOnComplete) render();
+    if (renderOnComplete) {
+      if (isActiveBucket && ["terminal", "live", "slimeScope"].includes(state.activeTab)) {
+        scheduleLivePairsRender("load-live-pairs-complete");
+      } else {
+        render();
+      }
+    }
   }
 }
 
-async function refreshLivePairBuckets({ silent = false, force = false } = {}) {
+async function refreshLivePairBuckets({ silent = false, force = false, warmAll = false } = {}) {
   await loadLivePairs({ silent, bucket: state.livePairBucket, force });
-  const otherBuckets = LIVE_PAIR_BUCKETS
-    .map(([bucket]) => bucket)
-    .filter((bucket) => bucket !== state.livePairBucket);
-  await Promise.allSettled(otherBuckets.map((bucket) => (
-    loadLivePairs({ silent: true, bucket, renderOnComplete: false, force })
-  )));
-  if (state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "slimeScope") render();
+  if (warmAll) {
+    const otherBuckets = LIVE_PAIR_BUCKETS
+      .map(([bucket]) => bucket)
+      .filter((bucket) => bucket !== state.livePairBucket);
+    await Promise.allSettled(otherBuckets.map((bucket) => (
+      loadLivePairs({ silent: true, bucket, renderOnComplete: false, force })
+    )));
+  }
+  if (state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "slimeScope") {
+    scheduleLivePairsRender(warmAll ? "live-pair-buckets-warm-all" : "live-pair-active-bucket");
+  }
 }
 
 function scheduleLivePairsAutoRefresh() {
@@ -2603,17 +2626,6 @@ function scheduleLivePairsAutoRefresh() {
     }
     try {
       await loadLivePairs({ silent: true, bucket: state.livePairBucket, force: false });
-      livePairsBackgroundWarmupTick += 1;
-      if (livePairsBackgroundWarmupTick % 3 === 0) {
-        const backgroundBuckets = LIVE_PAIR_BUCKETS
-          .map(([bucket]) => bucket)
-          .filter((bucket) => bucket !== state.livePairBucket && !state.livePairsLoadingByBucket[bucket]);
-        void Promise.allSettled(backgroundBuckets.map((bucket) => (
-          loadLivePairs({ silent: true, bucket, renderOnComplete: false, force: false })
-        ))).then(() => {
-          if (state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "slimeScope") render();
-        });
-      }
     } catch {
       // Keep the last good feed visible; the next timer retry reports status inline.
     } finally {
@@ -2633,7 +2645,7 @@ function ensureLivePairsWarmup({ force = false } = {}) {
 
   livePairsWarmupKeys.add(key);
   window.setTimeout(() => {
-    void refreshLivePairBuckets({ silent: true, force: true })
+    void refreshLivePairBuckets({ silent: true, force: true, warmAll: false })
       .catch((error) => setError(error.message))
       .finally(() => {
         livePairsWarmupKeys.delete(key);
@@ -6941,12 +6953,8 @@ async function connectBrowserWallet(providerId, options = {}) {
     state.walletConnectMenuOpen = false;
     setWalletConnectStatus(`Connected ${shortAddress(publicKeyText)}. Opening Live Terminal...`);
     navigateTo(options.returnPath || state.walletConnectReturnPath || "/terminal", "terminal");
-    await Promise.allSettled([
-      loadAll(),
-      refreshLivePairBuckets({ silent: true, force: true }),
-      loadKolScan(state.kolMode, "", { silent: true })
-    ]);
     render({ force: true });
+    refreshTerminalEntryInBackground("browser-wallet-connect");
   } catch (error) {
     const message = error.message || "Wallet connection was cancelled.";
     setWalletConnectStatus(message);
@@ -11738,11 +11746,7 @@ document.addEventListener("click", async (event) => {
     state.activeTab = "terminal";
     window.history.pushState({}, "", "/terminal");
     render();
-    await Promise.allSettled([
-      refreshLivePairBuckets({ silent: true, force: true }),
-      loadKolScan(state.kolMode, "", { silent: true })
-    ]);
-    render();
+    refreshTerminalEntryInBackground("browse-terminal");
     return;
   }
   if (target.matches("[data-logout]")) await logout();
@@ -12295,18 +12299,9 @@ function resumeLiveFeeds() {
     force: terminalFeedIsStale(state.activeTab),
     reason: "visibility-focus-return"
   }).catch((error) => setError(error.message));
-  if (state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "slimeScope") {
-    refreshLivePairBuckets({ silent: true, force: terminalFeedIsStale(state.activeTab) }).catch((error) => setError(error.message));
-    scheduleLivePairsAutoRefresh();
-  }
-  if ((state.activeTab === "kol" || state.activeTab === "terminal") && !state.kolWallet) {
-    loadKolScan(state.kolMode, "", { silent: true }).catch((error) => setError(error.message));
-    scheduleKolAutoRefresh();
-  }
-  if ((state.activeTab === "watchlist" || state.activeTab === "terminal") && state.user && state.token) {
-    loadWatchlist({ silent: true }).catch((error) => setError(error.message));
-    scheduleWatchlistAutoRefresh();
-  }
+  scheduleLivePairsAutoRefresh();
+  scheduleKolAutoRefresh();
+  scheduleWatchlistAutoRefresh();
 }
 
 document.addEventListener("visibilitychange", () => {
@@ -12323,11 +12318,6 @@ async function initializeApp() {
   applyChartRouteFromLocation();
   await handleMobileWalletReturn();
   render();
-  if (state.route === "terminal" && (state.activeTab === "terminal" || state.activeTab === "kol")) {
-    ensureLivePairsWarmup({ force: true });
-    void loadKolScan(state.kolMode, "", { silent: true }).catch((error) => setError(error.message));
-  }
-
   await loadSession();
   if (state.route === "terminal") {
     void refreshVisibleTerminalFeeds({
@@ -12335,12 +12325,6 @@ async function initializeApp() {
       ifStale: true,
       reason: "site-load"
     }).catch((error) => setError(error.message));
-  }
-  if (state.route === "terminal") {
-    ensureLivePairsWarmup();
-    if ((state.activeTab === "terminal" || state.activeTab === "kol") && !state.kolScan) {
-      void loadKolScan(state.kolMode, "", { silent: true }).catch((error) => setError(error.message));
-    }
     if (state.activeTab === "ogreTek") {
       await loadOgreTekData({ silent: true }).catch((error) => setError(error.message));
     }

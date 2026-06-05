@@ -75,7 +75,13 @@ const report = {
   hiddenPolling: {
     documentHiddenGuard: bool(appSource, /document\.hidden/),
     activeHeavyFeedOnly: bool(appSource, /state\.activeTab/) && bool(appSource, /scheduleActiveTerminalFeedRefresh/),
-    hiddenTabsPausedOrSlowed: bool(appSource, /document\.hidden/) && bool(appSource, /return/)
+    hiddenTabsPausedOrSlowed: bool(appSource, /document\.hidden/) && bool(appSource, /return/),
+    hiddenLivePairBucketsNotWarmedByDefault: bool(appSource, /warmAll = false/) && !bool(appSource, /livePairsBackgroundWarmupTick/)
+  },
+  liveRendering: {
+    batchedLivePairRender: bool(appSource, /function scheduleLivePairsRender/) && bool(appSource, /batched-live-render/),
+    activeBucketOnlyRefresh: bool(appSource, /async function refreshLivePairBuckets\(\{ silent = false, force = false, warmAll = false \}/),
+    visibilityResumeSingleOwner: bool(appSource, /visibility-focus-return/) && !bool(appSource, /resumeLiveFeeds\(\)[\s\S]*refreshLivePairBuckets\(/)
   },
   slowComponents: [...events]
     .sort((a, b) => Number(b.durationMs || 0) - Number(a.durationMs || 0))
