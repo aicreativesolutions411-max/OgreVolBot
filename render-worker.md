@@ -47,17 +47,21 @@ Worker service:
 ```env
 WORKER_TICK_URL=https://ogrevolbot.onrender.com/api/internal/worker/tick
 WORKER_SECRET=use-the-same-value-as-the-web-service
-WORKER_TICK_INTERVAL_MS=2000
+WORKER_TICK_INTERVAL_MS=15000
+WORKER_TRADE_PLAN_INTERVAL_MS=1500
+WORKER_FAST_TP_SL_ENABLED=true
 WORKER_TICK_TIMEOUT_MS=20000
 WORKER_TICK_RUN_TRADE_PLANS=true
 WORKER_TICK_RUN_DCA_PLANS=true
 WORKER_TICK_WARM_FEEDS=true
+WORKER_TICK_WARM_DISPLAY_CACHES=true
+WORKER_DISPLAY_CACHE_USER_LIMIT=8
 WORKER_TICK_BUCKETS=live,under1h,under3h,under1d
 WORKER_TICK_SORTS=best,newest
 WORKER_TICK_FORCE_FEEDS=false
 ```
 
-Leave `WORKER_TICK_FORCE_FEEDS=false` unless you intentionally want more aggressive feed refreshes. False keeps shared cache protection on and is cheaper/smoother.
+Leave `WORKER_TICK_FORCE_FEEDS=false` unless you intentionally want more aggressive feed refreshes. False keeps shared cache protection on and is cheaper/smoother. Keep `WORKER_TRADE_PLAN_INTERVAL_MS` low for fast TP/SL checks, and keep the broad `WORKER_TICK_INTERVAL_MS` slower so feed/cache warming cannot overlap and crowd user actions.
 
 ## What This Fixes
 

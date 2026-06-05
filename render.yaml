@@ -20,10 +20,26 @@ services:
         value: false
       - key: AUTO_SEND_RECOVERY_KEY_FILE
         value: true
+      - key: SERVICE_ROLE
+        value: web
+      - key: RUN_WORKER
+        value: false
+      - key: WORKER_DISABLED
+        value: false
       - key: SOLANA_RPC_URL
+        sync: false
+      - key: HELIUS_RPC_URL
         sync: false
       - key: TRADING_SPEED_PRESET
         value: fast
+      - key: CACHE_PROVIDER
+        value: redis
+      - key: REDIS_URL
+        sync: false
+      - key: CACHE_CONNECT_TIMEOUT_MS
+        value: 800
+      - key: CACHE_CIRCUIT_BREAKER_MS
+        value: 15000
       - key: PUMPFUN_API_BASE
         value: https://frontend-api-v3.pump.fun
       - key: PUMPFUN_API_TOKEN
@@ -55,6 +71,8 @@ services:
       - key: PUMP_LAUNCH_BODY_LIMIT_BYTES
         value: 12000000
       - key: WORKER_TICK_ENABLED
+        value: true
+      - key: WORKER_TICK_ENDPOINT_ENABLED
         value: true
       - key: WORKER_SECRET
         sync: false
@@ -187,21 +205,37 @@ services:
   - type: worker
     name: solana-telegram-wallet-ops-worker
     env: node
-    plan: starter
+    plan: standard
     autoDeploy: true
     buildCommand: npm ci
     startCommand: npm run worker
     envVars:
       - key: NODE_VERSION
         value: 20
+      - key: SERVICE_ROLE
+        value: worker
+      - key: RUN_WORKER
+        value: true
+      - key: WORKER_DISABLED
+        value: false
+      - key: CACHE_PROVIDER
+        value: redis
+      - key: REDIS_URL
+        sync: false
+      - key: CACHE_CONNECT_TIMEOUT_MS
+        value: 800
+      - key: CACHE_CIRCUIT_BREAKER_MS
+        value: 15000
       - key: WORKER_TICK_URL
         value: https://ogrevolbot.onrender.com/api/internal/worker/tick
       - key: WORKER_SECRET
         sync: false
       - key: WORKER_TICK_INTERVAL_MS
-        value: 2000
+        value: 15000
       - key: WORKER_TRADE_PLAN_INTERVAL_MS
         value: 1500
+      - key: WORKER_FAST_TP_SL_ENABLED
+        value: true
       - key: WORKER_TICK_TIMEOUT_MS
         value: 20000
       - key: WORKER_TICK_RUN_TRADE_PLANS
@@ -210,9 +244,13 @@ services:
         value: true
       - key: WORKER_TICK_WARM_FEEDS
         value: true
+      - key: WORKER_TICK_WARM_DISPLAY_CACHES
+        value: true
+      - key: WORKER_DISPLAY_CACHE_USER_LIMIT
+        value: 8
       - key: WORKER_TICK_BUCKETS
         value: live,under1h,under3h,under1d
       - key: WORKER_TICK_SORTS
         value: best,newest
       - key: WORKER_TICK_FORCE_FEEDS
-        value: true
+        value: false
