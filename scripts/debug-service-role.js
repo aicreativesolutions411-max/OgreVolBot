@@ -94,12 +94,13 @@ const report = {
   },
   jobsStarted: serviceRole === "worker" && runWorker
     ? ["worker tick", "fast TP/SL tick", "feed warmers", "display cache warmers"]
-    : ["web server", "startup TP/SL reconcile"],
+    : ["web server"],
   jobsBlockedByRole: serviceRole === "web" || !runWorker
-    ? ["web internal TP/SL intervals", "web internal DCA interval", "feed refresh loops", "wallet/positions refresh loops"]
+    ? ["web internal TP/SL intervals", "web startup/view TP/SL reconcile", "web internal DCA interval", "feed refresh loops", "wallet/positions refresh loops"]
     : [],
   activeIntervals: {
     webInternalTpSlDefaultOffWithWorker: bool(serverSource, /defaultWebInternalRunners/) && bool(serverSource, /serviceRole === "web"/),
+    webLocalTpSlReconcileGated: bool(serverSource, /function webLocalTpSlReconcileEnabled/) && bool(serverSource, /Web startup TP\/SL reconcile disabled/),
     separateWorkerEndpointFlag: bool(serverSource, /WORKER_TICK_ENDPOINT_ENABLED/) && bool(serverSource, /parseOptionalBoolean/),
     workerBroadTick: bool(workerSource, /setInterval\(\(\) => void tick\(\), CONFIG\.intervalMs\)/),
     workerFastTpSlTick: bool(workerSource, /setInterval\(\(\) => void tradePlanTick\(\), CONFIG\.tradePlanIntervalMs\)/),

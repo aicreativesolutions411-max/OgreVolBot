@@ -67,7 +67,8 @@ const report = {
   tpSlReconcile: {
     startupReconcileRanAt: workerState.startupReconcileRanAt || "",
     lastReconcile: workerState.lastReconcile || null,
-    startupReconcileConfigured: bool(serverSource, /startTpSlStartupReconcile\(\)/) && bool(serverSource, /scheduleTpSlBackendReconcile\("startup"/)
+    startupReconcileConfigured: bool(serverSource, /startTpSlStartupReconcile\(\)/) && bool(serverSource, /scheduleTpSlBackendReconcile\("startup"/),
+    webLocalReconcileGated: bool(serverSource, /function webLocalTpSlReconcileEnabled/) && bool(serverSource, /Web startup TP\/SL reconcile disabled/)
   },
   locks: {
     lockServiceImplemented: bool(serverSource, /const LockService = Object\.freeze/) && bool(serverSource, /async function withCacheLock/),

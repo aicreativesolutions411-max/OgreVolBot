@@ -47,7 +47,7 @@ const forbiddenWorkerSignals = [
 
 const browserWorkerSignals = forbiddenWorkerSignals.filter((signal) => appSource.includes(signal));
 const browserTimers = timerNames(appSource);
-const browserPollingLoops = browserTimers.filter((name) => !/livePairs|scan|kol|watchlist|terminalFeed|walletBackground|postTrade|perfPost/i.test(name));
+const browserPollingLoops = browserTimers.filter((name) => !/livePairs|scan|kol|watchlist|terminalFeed|walletBackground|postTrade|perfPost|positionRefreshVisual/i.test(name));
 
 const report = {
   webRunsWorkerLoops: browserWorkerSignals.length > 0 || browserPollingLoops.length > 0,
@@ -69,7 +69,7 @@ const report = {
   webServiceInternalLoops: {
     tpSlIntervalsGated: matches(serverSource, /CONFIG\.webInternalTpSlRunnersEnabled/) && matches(serverSource, /WEB_INTERNAL_TP_SL_RUNNERS_ENABLED/),
     defaultOffWhenWorkerTickEnabled: matches(serverSource, /workerTickEnabled \? "false" : "true"/),
-    startupReconcileStillRuns: matches(serverSource, /startTpSlStartupReconcile\(\)/)
+    startupReconcileGated: matches(serverSource, /function webLocalTpSlReconcileEnabled/) && matches(serverSource, /Web startup TP\/SL reconcile disabled/)
   },
   renderWorkerProcess: {
     standaloneWorkerIntervals: matches(workerSource, /setInterval\(\(\) => void tick\(\), CONFIG\.intervalMs\)/),
@@ -82,7 +82,7 @@ const report = {
     debugRegistered: matches(packageSource, /"debug:web-worker-loops": "node scripts\/debug-web-worker-loops\.js"/)
   },
   conclusion: browserWorkerSignals.length === 0 && browserPollingLoops.length === 0
-    ? "Browser/web UI has display polling only. Web-service interval runners are gated off when external worker tick is enabled. Worker loops run in the Render worker process."
+    ? "Browser/web UI has display polling only. Web-service interval runners and local startup/view TP/SL reconcile are gated off when the Render worker owns ticks. Worker loops run in the Render worker process."
     : "Review browserWorkerSignals/browserPollingLoops before deploy."
 };
 

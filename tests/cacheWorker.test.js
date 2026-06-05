@@ -117,6 +117,8 @@ test("backend worker warms display caches and keeps TP/SL DB-backed", () => {
   assert.match(serverSource, /serviceRole === "web"/);
   assert.match(serverSource, /defaultWebInternalRunners/);
   assert.match(serverSource, /WEB_INTERNAL_TP_SL_RUNNERS_ENABLED/);
+  assert.match(serverSource, /function webLocalTpSlReconcileEnabled/);
+  assert.match(serverSource, /Web startup TP\/SL reconcile disabled/);
   assert.match(serverSource, /processWebExitGuards/);
   assert.match(serverSource, /processTradePlans/);
   assert.match(serverSource, /processWebPortfolioExits/);
@@ -171,6 +173,8 @@ test("web app has display polling only and debug command proves worker loops sta
   assert.match(debugLoopsSource, /displayCacheWarmPath/);
   assert.match(debugServiceRoleSource, /SERVICE ROLE DEBUG/);
   assert.match(debugServiceRoleSource, /jobsBlockedByRole/);
+  assert.match(debugServiceRoleSource, /web startup\/view TP\/SL reconcile/);
+  assert.match(debugLoopsSource, /startupReconcileGated/);
   assert.match(debugServiceRoleSource, /workerTickEndpointEnabled/);
   assert.match(debugServiceRoleSource, /staleHeartbeatRisk/);
   assert.match(debugServiceRoleSource, /rpcProvider/);

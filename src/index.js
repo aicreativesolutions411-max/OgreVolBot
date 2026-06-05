@@ -861,12 +861,21 @@ function startWebPortfolioExitRunner() {
 }
 
 function startTpSlStartupReconcile() {
+  if (!webLocalTpSlReconcileEnabled()) {
+    console.log("Web startup TP/SL reconcile disabled; Render worker tick owns startup/catch-up checks.");
+    return;
+  }
   scheduleTpSlBackendReconcile("startup", [250, 2_500, 10_000]);
 }
 
 let tpSlReconcileScheduledAt = 0;
 
+function webLocalTpSlReconcileEnabled() {
+  return CONFIG.webInternalTpSlRunnersEnabled || CONFIG.runWorker || CONFIG.serviceRole === "worker";
+}
+
 function scheduleTpSlBackendReconcile(reason = "scheduled", delays = [250]) {
+  if (!webLocalTpSlReconcileEnabled()) return;
   const now = Date.now();
   if (now - tpSlReconcileScheduledAt < 3_000) return;
   tpSlReconcileScheduledAt = now;
