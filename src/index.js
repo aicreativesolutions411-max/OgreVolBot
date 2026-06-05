@@ -1426,6 +1426,15 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "GET" && pathname === "/api/web/dex-token") {
+      const tokenMint = requestUrl.searchParams.get("token") || requestUrl.searchParams.get("tokenMint") || requestUrl.searchParams.get("mint") || "";
+      sendWebJson(request, response, 200, {
+        ok: true,
+        dexToken: await webDexToken(tokenMint)
+      });
+      return;
+    }
+
     if (request.method === "GET" && pathname === "/api/web/kol/scan") {
       const auth = await authenticateOptionalWebRequest(request);
       const mode = requestUrl.searchParams.get("mode") || "hot";
@@ -1941,6 +1950,15 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendWebJson(request, response, 200, {
         ok: true,
         livePairs: await webLivePairs(auth.userId, bucket, { sort, force })
+      });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/dex-token") {
+      const tokenMint = requestUrl.searchParams.get("token") || requestUrl.searchParams.get("tokenMint") || requestUrl.searchParams.get("mint") || "";
+      sendWebJson(request, response, 200, {
+        ok: true,
+        dexToken: await webDexToken(tokenMint)
       });
       return;
     }
@@ -23342,6 +23360,42 @@ async function buildWebLivePairs(userId, bucket = "live", options = {}) {
     message: safeRows.length
       ? livePairStatusMessage(safeRows.length, safety.stats, safeBucket)
       : `${livePairBucketLabel(safeBucket)} has no rows in this window yet. The feed keeps scanning and will fill as fresh pairs qualify.`
+  };
+}
+
+async function webDexToken(tokenMint = "") {
+  const mint = String(tokenMint || "").trim();
+  if (!mint || mint.length < 32 || mint.length > 64) {
+    return {
+      tokenMint: mint,
+      pairAddress: "",
+      dexUrl: "",
+      source: "dexscreener",
+      errorCode: "INVALID_TOKEN"
+    };
+  }
+
+  const pairs = await fetchDexScreenerTokenPairsBatch([mint], { timeoutMs: 3_500 }).catch(() => []);
+  const best = bestDexPairForToken(mint, pairs);
+  const meta = metadataFromDexPair(mint, best);
+  const pairAddress = firstString(meta.pairAddress, best?.pairAddress, best?.address);
+  return {
+    tokenMint: mint,
+    pairAddress,
+    dexUrl: firstString(best?.url, meta.pairUrl, pairAddress ? `https://dexscreener.com/solana/${pairAddress}` : ""),
+    pairUrl: firstString(best?.url, meta.pairUrl),
+    dexId: meta.dexId || firstString(best?.dexId, best?.dexName),
+    dexName: meta.dexName || firstString(best?.dexId, best?.dexName),
+    symbol: meta.symbol || "",
+    name: meta.name || "",
+    imageUrl: meta.imageUrl || "",
+    marketCap: meta.marketCap || 0,
+    fdv: meta.fdv || 0,
+    liquidityUsd: meta.liquidityUsd || 0,
+    volume: meta.volume || null,
+    txns: meta.txns || null,
+    source: "dexscreener",
+    resolvedAt: new Date().toISOString()
   };
 }
 

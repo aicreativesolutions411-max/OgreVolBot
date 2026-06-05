@@ -177,6 +177,8 @@ const state = {
   terminalToken: "",
   smartChartToken: "",
   smartChartTokenRef: null,
+  smartChartDexResolution: {},
+  smartChartDexResolving: {},
   smartChartZoom: 100,
   smartChartView: "chart",
   chartTradeTab: new URLSearchParams(window.location.search || "").get("tab") === "sell" ? "sell" : "buy",
@@ -7957,6 +7959,7 @@ function applyTokenRefToState(tokenRef = {}) {
     tokenAddress: mint,
     mint
   };
+  rememberSmartChartDexResolution(state.smartChartTokenRef);
   state.terminalToken = mint;
   state.terminalAutoToken = mint;
   state.tradeToken = mint;
@@ -8946,8 +8949,8 @@ function selectedSmartChartTokenRow() {
     pumpUrl: mint.toLowerCase().endsWith("pump") ? `https://pump.fun/coin/${encodeURIComponent(mint)}` : ""
   };
   const explicitMint = String(state.smartChartToken || state.terminalToken || state.tradeToken || "").trim();
-  if (explicitMint) return rowForMint(explicitMint);
-  return selectedTerminalTokenRow();
+  if (explicitMint) return mergeSmartChartDexResolution(rowForMint(explicitMint));
+  return mergeSmartChartDexResolution(selectedTerminalTokenRow());
 }
 
 function chartAddressForToken(tokenOrMint = {}) {
@@ -8961,6 +8964,121 @@ function chartAddressForToken(tokenOrMint = {}) {
     || tokenOrMint?.mint
     || ""
   ).trim();
+}
+
+const SMART_CHART_DEX_RESOLVE_TTL_MS = 5 * 60 * 1000;
+const SMART_CHART_DEX_RESOLVE_RETRY_MS = 45 * 1000;
+
+function smartChartResolvedDex(tokenMint = "") {
+  const mint = String(tokenMint || "").trim();
+  const cached = mint ? state.smartChartDexResolution?.[mint] : null;
+  if (!cached) return null;
+  const ageMs = Date.now() - Number(cached.resolvedAt || 0);
+  if (cached.status === "failed") return ageMs < SMART_CHART_DEX_RESOLVE_RETRY_MS ? cached : null;
+  return ageMs < SMART_CHART_DEX_RESOLVE_TTL_MS ? cached : null;
+}
+
+function mergeSmartChartDexResolution(row = null) {
+  if (!row) return row;
+  const mint = String(row.tokenMint || row.mint || row.tokenAddress || "").trim();
+  const resolved = smartChartResolvedDex(mint);
+  if (!resolved || resolved.status === "failed") return row;
+  return {
+    ...row,
+    pairAddress: row.pairAddress || resolved.pairAddress || "",
+    pairId: row.pairId || resolved.pairAddress || "",
+    dexUrl: row.dexUrl || resolved.dexUrl || resolved.pairUrl || "",
+    dexId: row.dexId || resolved.dexId || "",
+    dexName: row.dexName || resolved.dexName || resolved.dexId || "",
+    symbol: row.symbol || resolved.symbol || shortAddress(mint),
+    name: row.name || resolved.name || "Token",
+    imageUrl: row.imageUrl || resolved.imageUrl || "",
+    marketCap: row.marketCap || resolved.marketCap || 0,
+    fdv: row.fdv || resolved.fdv || 0,
+    liquidityUsd: row.liquidityUsd || resolved.liquidityUsd || 0,
+    volume: row.volume || resolved.volume || null,
+    txns: row.txns || resolved.txns || null
+  };
+}
+
+function rememberSmartChartDexResolution(tokenRef = {}) {
+  const mint = String(tokenRef.tokenMint || tokenRef.mint || tokenRef.tokenAddress || "").trim();
+  const pairAddress = String(tokenRef.pairAddress || tokenRef.pairId || "").trim();
+  if (!mint || !pairAddress) return;
+  state.smartChartDexResolution = {
+    ...(state.smartChartDexResolution || {}),
+    [mint]: {
+      ...(state.smartChartDexResolution?.[mint] || {}),
+      tokenMint: mint,
+      pairAddress,
+      dexUrl: tokenRef.dexUrl || dexUrl(pairAddress),
+      dexId: tokenRef.dex || tokenRef.dexId || "",
+      symbol: tokenRef.symbol || "",
+      name: tokenRef.name || "",
+      imageUrl: tokenRef.imageUri || tokenRef.imageUrl || "",
+      status: "resolved",
+      resolvedAt: Date.now()
+    }
+  };
+}
+
+function queueSmartChartDexResolution(token = {}) {
+  const mint = String(token?.tokenMint || state.smartChartToken || "").trim();
+  if (!mint) return false;
+  const pairAddress = String(token?.pairAddress || token?.pairId || "").trim();
+  if (pairAddress) {
+    rememberSmartChartDexResolution({ ...token, tokenMint: mint, pairAddress });
+    return false;
+  }
+  const cached = smartChartResolvedDex(mint);
+  if (cached?.pairAddress) return false;
+  if (cached?.status === "failed") return false;
+  if (state.smartChartDexResolving?.[mint]) return true;
+  state.smartChartDexResolving = { ...(state.smartChartDexResolving || {}), [mint]: true };
+  window.setTimeout(() => {
+    void resolveSmartChartDexPair(mint).catch(() => {});
+  }, 0);
+  return true;
+}
+
+async function resolveSmartChartDexPair(mint = "") {
+  const tokenMint = String(mint || "").trim();
+  if (!tokenMint) return null;
+  try {
+    const data = await api(`/api/web/dex-token?token=${encodeURIComponent(tokenMint)}`, { timeoutMs: 6_000 });
+    const resolved = data.dexToken || {};
+    state.smartChartDexResolution = {
+      ...(state.smartChartDexResolution || {}),
+      [tokenMint]: {
+        ...resolved,
+        tokenMint,
+        status: resolved.pairAddress ? "resolved" : "failed",
+        resolvedAt: Date.now()
+      }
+    };
+    if (state.route === "terminal" && state.activeTab === "smartChart" && String(state.smartChartToken || "") === tokenMint) {
+      render({ force: true });
+    }
+    return resolved;
+  } catch (error) {
+    state.smartChartDexResolution = {
+      ...(state.smartChartDexResolution || {}),
+      [tokenMint]: {
+        tokenMint,
+        status: "failed",
+        error: publicErrorMessage(error?.message || "DEX pair lookup failed."),
+        resolvedAt: Date.now()
+      }
+    };
+    if (state.route === "terminal" && state.activeTab === "smartChart" && String(state.smartChartToken || "") === tokenMint) {
+      render({ force: true });
+    }
+    return null;
+  } finally {
+    const nextResolving = { ...(state.smartChartDexResolving || {}) };
+    delete nextResolving[tokenMint];
+    state.smartChartDexResolving = nextResolving;
+  }
 }
 
 function dexChartEmbedUrl(tokenOrMint, options = {}) {
@@ -8978,6 +9096,17 @@ function smartChartDexFrameHtml(token = {}, mode = "chart") {
   const mint = String(token?.tokenMint || state.smartChartToken || "").trim();
   const isTransactions = mode === "chartTxns" || mode === "txns";
   const isInfo = mode === "info";
+  const resolvingPair = queueSmartChartDexResolution(token);
+  if (resolvingPair && chartAddressForToken(token) === mint) {
+    return `
+      <div class="smart-chart-frame smart-chart-dex-frame smart-chart-pair-resolving" data-chart-frame-loading="Finding fastest DEX pair...">
+        <div class="smart-chart-resolve-card">
+          <strong>Finding fastest DEX pair...</strong>
+          <span>SlimeWire is resolving the best DexScreener pair before loading the iframe.</span>
+        </div>
+      </div>
+    `;
+  }
   const title = isInfo
     ? `DexScreener info for ${token.symbol || shortAddress(mint)}`
     : isTransactions

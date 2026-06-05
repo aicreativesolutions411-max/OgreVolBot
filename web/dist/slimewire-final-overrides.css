@@ -1207,7 +1207,6 @@
 }
 
 [data-app][data-route="terminal"][data-active-tab="smartChart"] [data-dashboard] > .metrics,
-[data-app][data-route="terminal"][data-active-tab="smartChart"] [data-dashboard] > .tabs,
 [data-app][data-route="terminal"][data-active-tab="smartChart"] [data-dashboard-error] {
   display: none !important;
 }
@@ -1296,6 +1295,36 @@
   min-height: 100%;
   border: 0;
   display: block;
+}
+
+.smart-chart-pair-resolving {
+  display: grid;
+  place-items: center;
+}
+
+.smart-chart-resolve-card {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 8px;
+  width: min(92%, 440px);
+  padding: 18px;
+  border: 1px solid rgba(139, 255, 54, 0.32);
+  border-radius: 14px;
+  background: rgba(3, 12, 5, 0.88);
+  text-align: center;
+  box-shadow: 0 0 22px rgba(113, 255, 34, 0.16);
+}
+
+.smart-chart-resolve-card strong {
+  color: var(--slime-green, #89ff3a);
+  font-size: 18px;
+}
+
+.smart-chart-resolve-card span {
+  color: rgba(238, 255, 230, 0.82);
+  font-weight: 700;
+  line-height: 1.35;
 }
 
 .smart-chart-transactions-frame {
@@ -6665,5 +6694,67 @@ textarea,
     height: auto !important;
     max-height: none !important;
     overflow-y: visible !important;
+  }
+}
+
+[data-app][data-route="terminal"][data-active-tab="smartChart"] [data-dashboard] > .tabs {
+  display: flex !important;
+  flex-wrap: nowrap !important;
+  gap: 8px !important;
+  position: sticky !important;
+  top: max(6px, env(safe-area-inset-top)) !important;
+  z-index: 220 !important;
+  margin: 8px 0 12px !important;
+  padding: 8px !important;
+  overflow-x: auto !important;
+  overflow-y: visible !important;
+  -webkit-overflow-scrolling: touch !important;
+  scroll-snap-type: x proximity !important;
+  border: 1px solid rgba(137, 255, 58, 0.26) !important;
+  border-radius: 16px !important;
+  background: rgba(2, 10, 4, 0.94) !important;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.32), 0 0 18px rgba(99, 255, 30, 0.12) !important;
+  backdrop-filter: none !important;
+}
+
+[data-app][data-route="terminal"][data-active-tab="smartChart"] [data-dashboard] > .tabs .nav-section-label {
+  display: none !important;
+}
+
+[data-app][data-route="terminal"][data-active-tab="smartChart"] [data-dashboard] > .tabs > button,
+[data-app][data-route="terminal"][data-active-tab="smartChart"] [data-dashboard] > .tabs .nav-tool-group > summary {
+  flex: 0 0 74px !important;
+  width: 74px !important;
+  min-width: 74px !important;
+  min-height: 50px !important;
+  height: 50px !important;
+  padding: 5px 6px !important;
+  scroll-snap-align: start !important;
+}
+
+[data-app][data-route="terminal"][data-active-tab="smartChart"] [data-dashboard] > .tabs .nav-tool-group {
+  flex: 0 0 74px !important;
+  width: 74px !important;
+  min-width: 74px !important;
+}
+
+[data-app][data-route="terminal"][data-active-tab="smartChart"] [data-dashboard] > .tabs button::before,
+[data-app][data-route="terminal"][data-active-tab="smartChart"] [data-dashboard] > .tabs .nav-tool-group summary::before {
+  width: 20px !important;
+  height: 20px !important;
+  flex: 0 0 20px !important;
+}
+
+[data-app][data-route="terminal"][data-active-tab="smartChart"] [data-dashboard] > .tabs button::after,
+[data-app][data-route="terminal"][data-active-tab="smartChart"] [data-dashboard] > .tabs .nav-tool-group summary::after {
+  max-width: 66px !important;
+  font-size: 8px !important;
+  line-height: 1.05 !important;
+}
+
+@media (min-width: 761px) {
+  [data-app][data-route="terminal"][data-active-tab="smartChart"] [data-dashboard] > .tabs {
+    justify-content: center !important;
+    top: 8px !important;
   }
 }

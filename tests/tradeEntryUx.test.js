@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 
 const appSource = fs.readFileSync(new URL("../web/public/app.js", import.meta.url), "utf8");
+const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
 const chartCssSource = fs.readFileSync(new URL("../web/public/slimewire-final-overrides.css", import.meta.url), "utf8");
 const publicIndexSource = fs.readFileSync(new URL("../web/public/index.html", import.meta.url), "utf8");
 const packageSource = fs.readFileSync(new URL("../package.json", import.meta.url), "utf8");
@@ -92,8 +93,13 @@ test("Chart page uses full chart view with transactions and info tabs", () => {
   assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /data-chart-frame-loading/);
   assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /fetchpriority="high"/);
   assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /setAttribute\('data-loaded','true'\)/);
+  assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /queueSmartChartDexResolution\(token\)/);
+  assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /Finding fastest DEX pair/);
+  assert.match(functionBody(appSource, "resolveSmartChartDexPair"), /\/api\/web\/dex-token\?token=/);
+  assert.match(functionBody(appSource, "mergeSmartChartDexResolution"), /pairAddress: row\.pairAddress \|\| resolved\.pairAddress/);
   assert.match(functionBody(appSource, "chartAddressForToken"), /pairAddress/);
   assert.match(functionBody(appSource, "applyTokenRefToState"), /smartChartTokenRef/);
+  assert.match(functionBody(appSource, "applyTokenRefToState"), /rememberSmartChartDexResolution/);
   assert.match(functionBody(appSource, "requestSmartChartScrollIntoView"), /window\.scrollTo\(\{ top, behavior: "auto" \}\)/);
   assert.match(functionBody(appSource, "renderTabs"), /chartScrollIntoView[\s\S]*requestSmartChartScrollIntoView\(panel\)/);
   assert.match(functionBody(appSource, "render"), /app\.dataset\.activeTab = state\.activeTab \|\| ""/);
@@ -101,13 +107,24 @@ test("Chart page uses full chart view with transactions and info tabs", () => {
   assert.match(functionBody(appSource, "refreshTerminalFeed"), /preserveSmartChartFrame: state\.activeTab === "smartChart" && tabKey === "smartChart"/);
   assert.match(functionBody(appSource, "refreshWalletState"), /preserveSmartChartFrame: state\.activeTab === "smartChart"/);
   assert.match(chartCssSource, /\[data-active-tab="smartChart"\][\s\S]*\[data-dashboard\] > \.metrics/);
-  assert.match(chartCssSource, /\[data-active-tab="smartChart"\][\s\S]*\[data-dashboard\] > \.tabs/);
+  assert.doesNotMatch(chartCssSource, /\[data-active-tab="smartChart"\]\s+\[data-dashboard\] > \.tabs,[\s\S]*display: none/);
+  assert.match(chartCssSource, /\[data-active-tab="smartChart"\][\s\S]*\[data-dashboard\] > \.tabs[\s\S]*position: sticky/);
   assert.match(chartCssSource, /\[data-active-tab="smartChart"\][\s\S]*\.terminal-global-search/);
   assert.match(chartCssSource, /\[data-active-tab="smartChart"\][\s\S]*\.top-sync-strip/);
   assert.match(chartCssSource, /\.smart-chart-frame::before/);
+  assert.match(chartCssSource, /\.smart-chart-pair-resolving/);
   assert.match(chartCssSource, /\.smart-chart-frame\[data-loaded="true"\]::before/);
   assert.match(publicIndexSource, /preconnect" href="https:\/\/dexscreener\.com"/);
   assert.match(publicIndexSource, /preconnect" href="https:\/\/api\.dexscreener\.com"/);
+});
+
+test("Chart pair resolver is exposed through a safe backend endpoint", () => {
+  assert.match(serverSource, /pathname === "\/api\/web\/dex-token"/);
+  assert.match(serverSource, /async function webDexToken/);
+  assert.match(serverSource, /fetchDexScreenerTokenPairsBatch\(\[mint\]/);
+  assert.match(serverSource, /bestDexPairForToken\(mint, pairs\)/);
+  assert.match(serverSource, /pairAddress/);
+  assert.doesNotMatch(functionBody(serverSource, "webDexToken"), /privateKey|secretKey|JWT|sessionToken/i);
 });
 
 test("Debug commands are wired and sanitized", () => {
