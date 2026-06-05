@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 
 const appSource = fs.readFileSync(new URL("../web/public/app.js", import.meta.url), "utf8");
+const chartCssSource = fs.readFileSync(new URL("../web/public/slimewire-final-overrides.css", import.meta.url), "utf8");
 const packageSource = fs.readFileSync(new URL("../package.json", import.meta.url), "utf8");
 const debugEntrySource = fs.readFileSync(new URL("../scripts/debug-trade-entrypoints.js", import.meta.url), "utf8");
 const debugChartSource = fs.readFileSync(new URL("../scripts/debug-chart-route.js", import.meta.url), "utf8");
@@ -20,6 +21,7 @@ test("Trade and token-card clicks open chart route instead of buying", () => {
   const openChart = functionBody(appSource, "openTokenChart");
   assert.match(openChart, /window\.history\.pushState\(\{\}, "", path\)/);
   assert.match(openChart, /buildTokenChartPath/);
+  assert.match(openChart, /chartScrollIntoView = true/);
   assert.doesNotMatch(openChart, /quickPresetTrade|executeWebBuy|\/api\/web\/trade\/buy/);
 
   const clickHandlerSlice = appSource.slice(appSource.indexOf('document.addEventListener("click"'));
@@ -88,6 +90,13 @@ test("Chart page uses full chart view with transactions and info tabs", () => {
   assert.match(functionBody(appSource, "smartChartInfoPanelHtml"), /smartChartDexFrameHtml\(token, "info"\)/);
   assert.match(functionBody(appSource, "chartAddressForToken"), /pairAddress/);
   assert.match(functionBody(appSource, "applyTokenRefToState"), /smartChartTokenRef/);
+  assert.match(functionBody(appSource, "requestSmartChartScrollIntoView"), /window\.scrollTo\(\{ top, behavior: "auto" \}\)/);
+  assert.match(functionBody(appSource, "renderTabs"), /chartScrollIntoView[\s\S]*requestSmartChartScrollIntoView\(panel\)/);
+  assert.match(functionBody(appSource, "render"), /app\.dataset\.activeTab = state\.activeTab \|\| ""/);
+  assert.match(chartCssSource, /\[data-active-tab="smartChart"\][\s\S]*\[data-dashboard\] > \.metrics/);
+  assert.match(chartCssSource, /\[data-active-tab="smartChart"\][\s\S]*\[data-dashboard\] > \.tabs/);
+  assert.match(chartCssSource, /\[data-active-tab="smartChart"\][\s\S]*\.terminal-global-search/);
+  assert.match(chartCssSource, /\[data-active-tab="smartChart"\][\s\S]*\.top-sync-strip/);
 });
 
 test("Debug commands are wired and sanitized", () => {

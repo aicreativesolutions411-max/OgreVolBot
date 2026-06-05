@@ -181,6 +181,7 @@ const state = {
   smartChartView: "chart",
   chartTradeTab: new URLSearchParams(window.location.search || "").get("tab") === "sell" ? "sell" : "buy",
   chartFocusAmountInput: new URLSearchParams(window.location.search || "").get("focusAmount") === "1",
+  chartScrollIntoView: window.location.pathname.includes("/terminal/chart"),
   terminalAutoToken: "",
   terminalTxSignature: "",
   terminalTxAudit: null,
@@ -2589,7 +2590,7 @@ function scheduleLivePairsAutoRefresh() {
 
 function ensureLivePairsWarmup({ force = false } = {}) {
   if (isPostTradeRefreshActive()) return;
-  const onLiveFeed = state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "slimeScope" || state.activeTab === "smartChart";
+  const onLiveFeed = state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "slimeScope";
   if (!onLiveFeed) return;
   const bucket = normalizeLivePairBucket(state.livePairBucket);
   const key = `${bucket}:${state.terminalSort || "best"}`;
@@ -3048,6 +3049,7 @@ function render(options = {}) {
   state.pendingRender = false;
   const hasWalletContext = Boolean(state.user?.connectedWallet || state.wallets.length);
   syncShellRouteVisibility();
+  app.dataset.activeTab = state.activeTab || "";
   const hasLoginModal = Boolean(loginModal);
   const loginModalVisible = Boolean(hasLoginModal && state.loginModalOpen);
   if (topLoginPanel) topLoginPanel.hidden = hasLoginModal || Boolean(state.user) || state.loginCollapsed;
@@ -3163,6 +3165,21 @@ function updateTopTpSlStatus() {
     : "Stop loss and take profit require wallet auto-sell approval.";
 }
 
+function requestSmartChartScrollIntoView(panel = document) {
+  const scrollToChart = () => {
+    const chart = panel.querySelector?.(".smart-chart-terminal") || document.querySelector(".smart-chart-terminal");
+    if (!chart) return;
+    const top = Math.max(0, chart.getBoundingClientRect().top + window.scrollY);
+    window.scrollTo({ top, behavior: "auto" });
+  };
+  requestAnimationFrame(() => {
+    scrollToChart();
+    window.setTimeout(scrollToChart, 80);
+    window.setTimeout(scrollToChart, 280);
+    window.setTimeout(scrollToChart, 800);
+  });
+}
+
 function renderTabs() {
   const panel = $("[data-panel]");
   if (!panel) return;
@@ -3212,6 +3229,10 @@ function renderTabs() {
       if (input) input.focus();
       state.chartFocusAmountInput = false;
     });
+  }
+  if (state.activeTab === "smartChart" && state.chartScrollIntoView) {
+    requestSmartChartScrollIntoView(panel);
+    state.chartScrollIntoView = false;
   }
   if (state.activeTab === "terminal") {
     const dock = panel.querySelector(".terminal-dock");
@@ -7942,6 +7963,7 @@ function openTokenChart(tokenRef = {}, options = {}) {
   state.chartTradeTab = options.defaultTab === "sell" ? "sell" : options.defaultTab === "chart" ? "buy" : "buy";
   state.smartChartView = "chart";
   state.chartFocusAmountInput = Boolean(options.focusAmountInput);
+  state.chartScrollIntoView = true;
   state.activeTab = "smartChart";
   state.route = "terminal";
   state.quickBuyModal = { ...state.quickBuyModal, open: false, status: "", error: "" };
@@ -7963,6 +7985,7 @@ function applyChartRouteFromLocation() {
   state.chartTradeTab = params.get("tab") === "sell" ? "sell" : "buy";
   state.smartChartView = ["chartTxns", "txns", "info"].includes(params.get("view")) ? params.get("view") : "chart";
   state.chartFocusAmountInput = params.get("focusAmount") === "1";
+  state.chartScrollIntoView = true;
   state.route = "terminal";
   state.activeTab = "smartChart";
 }
@@ -11994,7 +12017,7 @@ async function initializeApp() {
   applyChartRouteFromLocation();
   await handleMobileWalletReturn();
   render();
-  if (state.route === "terminal") {
+  if (state.route === "terminal" && (state.activeTab === "terminal" || state.activeTab === "kol")) {
     ensureLivePairsWarmup({ force: true });
     void loadKolScan(state.kolMode, "", { silent: true }).catch((error) => setError(error.message));
   }

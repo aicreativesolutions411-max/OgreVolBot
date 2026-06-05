@@ -127,6 +127,7 @@ test("smart chart refresh stays selected-token scoped", () => {
 
 test("terminal load, tab switch, focus return, and manual refresh all use the shared feed refresh path", () => {
   assert.match(functionBody("initializeApp"), /refreshVisibleTerminalFeeds\(\{[\s\S]*reason: "site-load"/);
+  assert.match(functionBody("initializeApp"), /state\.activeTab === "terminal" \|\| state\.activeTab === "kol"/);
   assert.match(appSource, /target\.matches\("\[data-tab\]"\)[\s\S]*refreshTerminalFeed\(state\.activeTab,[\s\S]*reason: "tab-switch"/);
   assert.match(functionBody("resumeLiveFeeds"), /refreshTerminalFeed\(state\.activeTab,[\s\S]*reason: "visibility-focus-return"/);
   assert.match(appSource, /target\.matches\("\[data-refresh-feeds\]"\)[\s\S]*refreshVisibleTerminalFeeds\(\{ force: true, reason: "manual-refresh-feeds"/);
@@ -141,6 +142,7 @@ test("active tab poller avoids hidden-page and duplicate heavy-tab polling", () 
   assert.match(body, /clearTimeout\(terminalFeedTimer\)/);
   assert.match(functionBody("scheduleLivePairsAutoRefresh"), /loadLivePairs\(\{ silent: true, bucket: state\.livePairBucket, force: true \}\)/);
   assert.doesNotMatch(functionBody("scheduleLivePairsAutoRefresh"), /refreshLivePairBuckets\(\{ silent: true, force: true \}\)/);
+  assert.doesNotMatch(functionBody("ensureLivePairsWarmup"), /smartChart/);
 });
 
 test("full terminal feed tabs use page-sized windows instead of tiny preview caps", () => {
