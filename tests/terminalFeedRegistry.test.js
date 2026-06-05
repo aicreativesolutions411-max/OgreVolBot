@@ -118,6 +118,13 @@ test("core terminal tabs map to the requested feed categories", () => {
   assert.equal(byTab("ogreTek").category, "perps:ogre-tek");
 });
 
+test("smart chart refresh stays selected-token scoped", () => {
+  assert.equal(byTab("smartChart").endpoint, "composite:/api/web/positions");
+  const refreshBody = functionBody("refreshTerminalFeed");
+  assert.match(refreshBody, /tabKey === "smartChart"[\s\S]*refreshWalletState\(\{ force: Boolean\(options\.force\), deep: false \}\)/);
+  assert.doesNotMatch(refreshBody.match(/tabKey === "smartChart"[\s\S]*?\} else if/)?.[0] || "", /refreshLivePairBuckets/);
+});
+
 test("terminal load, tab switch, focus return, and manual refresh all use the shared feed refresh path", () => {
   assert.match(functionBody("initializeApp"), /refreshVisibleTerminalFeeds\(\{[\s\S]*reason: "site-load"/);
   assert.match(appSource, /target\.matches\("\[data-tab\]"\)[\s\S]*refreshTerminalFeed\(state\.activeTab,[\s\S]*reason: "tab-switch"/);

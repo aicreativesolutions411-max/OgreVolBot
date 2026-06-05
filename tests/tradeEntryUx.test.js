@@ -77,11 +77,15 @@ test("Chart route has professional Buy and Sell panel", () => {
 test("Chart page uses full chart view with transactions and info tabs", () => {
   const chart = functionBody(appSource, "smartChartHtml");
   assert.match(functionBody(appSource, "smartChartViewTabsHtml"), /\["chart", "Chart"\]/);
+  assert.match(functionBody(appSource, "smartChartViewTabsHtml"), /\["chartTxns", "Chart \+ Txns"\]/);
   assert.match(functionBody(appSource, "smartChartViewTabsHtml"), /\["txns", "Transactions"\]/);
   assert.match(functionBody(appSource, "smartChartViewTabsHtml"), /\["info", "Info"\]/);
-  assert.match(chart, /chartView === "chart"[\s\S]*smartChartTransactionsHtml\(token, heldPosition\)/);
+  assert.match(chart, /chartView === "chart"[\s\S]*smartChartDexFrameHtml\(token, "chart"\)/);
+  assert.match(chart, /chartView === "chartTxns"[\s\S]*smartChartDexFrameHtml\(token, "chartTxns"\)/);
   assert.match(chart, /chartView === "txns"[\s\S]*smartChartTransactionsHtml\(token, heldPosition\)/);
   assert.match(chart, /smartChartInfoPanelHtml\(token, heldPosition\)/);
+  assert.match(functionBody(appSource, "smartChartTransactionsHtml"), /smartChartDexFrameHtml\(token, "txns"\)/);
+  assert.match(functionBody(appSource, "smartChartInfoPanelHtml"), /smartChartDexFrameHtml\(token, "info"\)/);
   assert.match(functionBody(appSource, "chartAddressForToken"), /pairAddress/);
   assert.match(functionBody(appSource, "applyTokenRefToState"), /smartChartTokenRef/);
 });

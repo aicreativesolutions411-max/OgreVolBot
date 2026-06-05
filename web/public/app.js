@@ -357,7 +357,7 @@ const TERMINAL_FEEDS = [
   { tabKey: "slimeScope", label: "Slime Scope - Scanner Picks", component: "slimeScopeHtml", endpoint: "composite:/api/web/live-pairs+/api/web/sniper/scan", category: "scanner:slime-scope", refreshMs: 20_000, staleMs: 45_000, cacheKey: "scanner:slime-scope:{scopeMode}", pageSize: 50, maxPageSize: 100, previewLimit: 12, supportsPagination: true },
   { tabKey: "kol", label: "KOL Tracker - Social/KOL Signals", component: "kolHtml", endpoint: "/api/web/kol/scan", category: "signals:kol", refreshMs: 60_000, staleMs: 120_000, cacheKey: "signals:kol:{kolMode}:{kolWallet}", pageSize: 36, maxPageSize: 72, previewLimit: 12, supportsPagination: true },
   { tabKey: "watchlist", label: "Watchlist - Your Saved Pairs", component: "watchlistHtml", endpoint: "/api/web/watchlist", category: "user:watchlist", refreshMs: 20_000, staleMs: 45_000, cacheKey: "user:watchlist", pageSize: 50, maxPageSize: 100, previewLimit: 12, supportsPagination: true },
-  { tabKey: "smartChart", label: "Smart Chart - Selected Token", component: "smartChartHtml", endpoint: "composite:/api/web/live-pairs+/api/web/positions", category: "token:selected-chart", refreshMs: 20_000, staleMs: 45_000, cacheKey: "token:selected-chart:{tokenMint}", pageSize: 5, maxPageSize: 10, previewLimit: 5, supportsPagination: false },
+  { tabKey: "smartChart", label: "Smart Chart - Selected Token", component: "smartChartHtml", endpoint: "composite:/api/web/positions", category: "token:selected-chart", refreshMs: 30_000, staleMs: 60_000, cacheKey: "token:selected-chart:{tokenMint}", pageSize: 5, maxPageSize: 10, previewLimit: 5, supportsPagination: false },
   { tabKey: "trade", label: "Trade - Selected Token Panel", component: "tradeHtml", endpoint: "composite:/api/web/balances+/api/web/positions", category: "trade:selected-token", refreshMs: 20_000, staleMs: 45_000, cacheKey: "trade:selected-token:{tokenMint}", pageSize: 1, maxPageSize: 1, previewLimit: 1, supportsPagination: false },
   { tabKey: "bundle", label: "Bundle Volume - Bundle Actions", component: "bundleHtml", endpoint: "composite:/api/web/balances+/api/web/positions", category: "bundle:volume", refreshMs: 25_000, staleMs: 60_000, cacheKey: "bundle:volume:{tokenMint}", pageSize: 1, maxPageSize: 1, previewLimit: 1, supportsPagination: false },
   { tabKey: "volume", label: "Bundle Volume - Volume Flags", component: "volumeHtml", endpoint: "composite:/api/web/live-pairs+/api/web/balances", category: "signals:bundle-volume", refreshMs: 25_000, staleMs: 60_000, cacheKey: "signals:bundle-volume:{tokenMint}", pageSize: 1, maxPageSize: 1, previewLimit: 1, supportsPagination: false },
@@ -2374,7 +2374,9 @@ async function refreshTerminalFeed(tabKey = state.activeTab, options = {}) {
       await loadScan(state.scanMode, { silent: options.silent !== false });
     } else if (["wallets", "positions", "pnl"].includes(tabKey)) {
       if (state.user && state.token) await refreshWalletState({ force: Boolean(options.force), deep: false });
-    } else if (["trade", "bundle", "volume", "smartChart"].includes(tabKey)) {
+    } else if (tabKey === "smartChart") {
+      if (state.user && state.token) await refreshWalletState({ force: Boolean(options.force), deep: false });
+    } else if (["trade", "bundle", "volume"].includes(tabKey)) {
       const tasks = [refreshLivePairBuckets({ silent: true, force: Boolean(options.force) })];
       if (state.user && state.token) tasks.push(loadAll({ silent: true, skipCore: true, force: Boolean(options.force) }));
       await Promise.allSettled(tasks);
@@ -7959,7 +7961,7 @@ function applyChartRouteFromLocation() {
   const token = String(params.get("token") || params.get("mint") || "").trim();
   if (token) applyTokenRefToState(tokenRefFromMint(token, { source: params.get("source") || "route" }));
   state.chartTradeTab = params.get("tab") === "sell" ? "sell" : "buy";
-  state.smartChartView = ["txns", "info"].includes(params.get("view")) ? params.get("view") : "chart";
+  state.smartChartView = ["chartTxns", "txns", "info"].includes(params.get("view")) ? params.get("view") : "chart";
   state.chartFocusAmountInput = params.get("focusAmount") === "1";
   state.route = "terminal";
   state.activeTab = "smartChart";
@@ -8926,6 +8928,29 @@ function dexChartEmbedUrl(tokenOrMint, options = {}) {
   return `https://dexscreener.com/solana/${encodeURIComponent(address)}?${params.toString()}`;
 }
 
+function smartChartDexFrameHtml(token = {}, mode = "chart") {
+  const mint = String(token?.tokenMint || state.smartChartToken || "").trim();
+  const isTransactions = mode === "chartTxns" || mode === "txns";
+  const isInfo = mode === "info";
+  const title = isInfo
+    ? `DexScreener info for ${token.symbol || shortAddress(mint)}`
+    : isTransactions
+      ? `DexScreener chart and transactions for ${token.symbol || shortAddress(mint)}`
+      : `DexScreener chart for ${token.symbol || shortAddress(mint)}`;
+  const className = [
+    "smart-chart-frame",
+    "smart-chart-dex-frame",
+    isTransactions ? "smart-chart-transactions-frame" : "",
+    mode === "chartTxns" ? "smart-chart-combined-frame" : "",
+    isInfo ? "smart-chart-info-frame" : ""
+  ].filter(Boolean).join(" ");
+  return `
+    <div class="${escapeHtml(className)}">
+      <iframe title="${escapeHtml(title)}" src="${escapeHtml(dexChartEmbedUrl(token, { trades: isTransactions, info: isInfo }))}" loading="eager" allowfullscreen></iframe>
+    </div>
+  `;
+}
+
 function marketDataRowsByMint() {
   const rows = [
     ...Object.values(state.livePairsByBucket || {}).flatMap((feed) => feed?.rows || []),
@@ -9728,6 +9753,7 @@ function tokenPreviewHtml(token) {
 function smartChartViewTabsHtml(activeView = "chart") {
   const tabs = [
     ["chart", "Chart"],
+    ["chartTxns", "Chart + Txns"],
     ["txns", "Transactions"],
     ["info", "Info"]
   ];
@@ -9752,15 +9778,21 @@ function smartChartTransactionsHtml(token = {}, heldPosition = null) {
     <section class="smart-chart-transactions-panel" data-smart-chart-transactions>
       <div class="terminal-title-row">
         <div>
-          <h4>Transactions</h4>
-          <p>${trades.length ? "Recent SlimeWire trade history for this token." : "No SlimeWire trade history yet. Use the DEX feed for live market fills."}</p>
+          <h4>DEX Transactions</h4>
+          <p>Live market fills from DexScreener. SlimeWire trade history appears below when this wallet has traded the token.</p>
         </div>
         <a href="${escapeHtml(dexLink)}" target="_blank" rel="noreferrer">Open DEX Feed</a>
       </div>
-      ${trades.length ? liveTradeRowsHtml(Math.max(6, trades.length), trades) : `
+      ${smartChartDexFrameHtml(token, "txns")}
+      ${trades.length ? `
+        <div class="smart-chart-local-trades">
+          <h4>SlimeWire Trades</h4>
+          ${liveTradeRowsHtml(Math.max(6, trades.length), trades)}
+        </div>
+      ` : `
         <div class="smart-chart-empty-transactions">
           <strong>${heldPosition ? "Position loaded" : "Watching live market"}</strong>
-          <span>Chart data stays above. Transactions appear here after SlimeWire buys/sells refresh.</span>
+          <span>DEX transactions are loaded above. SlimeWire wallet trades appear here after buys/sells refresh.</span>
         </div>
       `}
     </section>
@@ -9778,6 +9810,7 @@ function smartChartInfoPanelHtml(token = {}, heldPosition = null) {
           <p>Stats, links, and SlimeWire context for ${escapeHtml(token.symbol || shortAddress(mint))}.</p>
         </div>
       </div>
+      ${smartChartDexFrameHtml(token, "info")}
       ${terminalTokenStatsHtml(token)}
       <div class="smart-chart-suggestion">
         <strong>Smart read</strong>
@@ -9871,7 +9904,7 @@ function smartChartHtml() {
       ]).filter(Boolean).slice(0, 5)
     : rotatedDisplayRows(terminalBestPickRows(), 5, terminalRotationKey("smart-chart-suggest"), 1);
   const rawChartView = String(state.smartChartView || "chart");
-  const chartView = rawChartView === "chartTxns" ? "chart" : (["chart", "txns", "info"].includes(rawChartView) ? rawChartView : "chart");
+  const chartView = ["chart", "chartTxns", "txns", "info"].includes(rawChartView) ? rawChartView : "chart";
   if (!mint) {
     return `
       <section class="smart-chart-terminal">
@@ -9930,11 +9963,11 @@ function smartChartHtml() {
           </div>
           ${smartChartViewTabsHtml(chartView)}
           ${chartView === "chart" ? `
-            <div class="smart-chart-frame">
-              <iframe title="DexScreener chart for ${escapeHtml(token.symbol || shortAddress(mint))}" src="${escapeHtml(dexChartEmbedUrl(token))}" loading="lazy" allowfullscreen></iframe>
-            </div>
+            ${smartChartDexFrameHtml(token, "chart")}
             <small class="score-breakdown">If the embedded chart does not load, use the DEX link above.</small>
-            ${smartChartTransactionsHtml(token, heldPosition)}
+          ` : chartView === "chartTxns" ? `
+            ${smartChartDexFrameHtml(token, "chartTxns")}
+            <small class="score-breakdown">Chart + Txns loads the DexScreener transaction feed inside the chart frame. Use Transactions for the dedicated DEX feed view.</small>
           ` : chartView === "txns" ? `
             ${smartChartTransactionsHtml(token, heldPosition)}
           ` : `
@@ -9947,7 +9980,7 @@ function smartChartHtml() {
           ${chartTradePanelHtml(token, heldPosition)}
         </aside>
       </div>
-      ${chartView !== "txns" ? `<div class="smart-chart-bottom-grid">
+      ${chartView !== "txns" && chartView !== "info" ? `<div class="smart-chart-bottom-grid">
         <article class="terminal-panel">
           <div class="terminal-title-row">
             <h3>Related signals</h3>
@@ -11496,7 +11529,7 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-smart-chart-view]")) {
     const nextView = target.dataset.smartChartView || "chart";
-    state.smartChartView = ["chart", "txns", "info"].includes(nextView) ? nextView : "chart";
+    state.smartChartView = ["chart", "chartTxns", "txns", "info"].includes(nextView) ? nextView : "chart";
     render();
     return;
   }
