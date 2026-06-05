@@ -126,7 +126,7 @@ test("backend worker warms display caches and keeps TP/SL DB-backed", () => {
   assert.match(workerSource, /runTimedTradePlans: CONFIG\.runTradePlans && !CONFIG\.fastTpSlEnabled/);
   assert.match(workerSource, /warmDisplayCaches: CONFIG\.warmDisplayCaches/);
   assert.match(workerSource, /displayCacheUserLimit: CONFIG\.displayCacheUserLimit/);
-  assert.match(workerSource, /SERVICE_ROLE=web or RUN_WORKER=false/);
+  assert.match(workerSource, /SERVICE_ROLE=web or WORKER_DISABLED=true/);
   assert.match(workerSource, /Display cache: \$/);
   assert.match(workerSource, /tradePlanTick/);
 });
@@ -135,6 +135,11 @@ test("worker refresh jobs use short cache locks and dedupe without making Redis 
   assert.match(serverSource, /worker-display-caches/);
   assert.match(serverSource, /LockService\.withLock\("worker-display-caches"/);
   assert.match(serverSource, /DedupeService\.run\(`worker-feed:\$\{bucket\}:\$\{sort\}`/);
+  assert.match(serverSource, /CACHE_CONNECT_TIMEOUT_MS/);
+  assert.match(serverSource, /CACHE_CIRCUIT_BREAKER_MS/);
+  assert.match(serverSource, /kvCircuitOpenUntil/);
+  assert.match(functionBodyFromSource(serverSource, "redisKv"), /connectTimeout: CONFIG\.cacheConnectTimeoutMs/);
+  assert.match(functionBodyFromSource(serverSource, "redisKv"), /kvCircuitOpenUntil = Date\.now\(\) \+ CONFIG\.cacheCircuitBreakerMs/);
   assert.match(serverSource, /display_cache_lock_active/);
   assert.doesNotMatch(functionBodyFromSource(serverSource, "recordTpSlWorkerEvent"), /cacheSetJson|redisKv|restKvCommand/);
   assert.match(debugWorkerHealthSource, /WORKER HEALTH DEBUG/);
@@ -166,5 +171,7 @@ test("web app has display polling only and debug command proves worker loops sta
   assert.match(debugLoopsSource, /displayCacheWarmPath/);
   assert.match(debugServiceRoleSource, /SERVICE ROLE DEBUG/);
   assert.match(debugServiceRoleSource, /jobsBlockedByRole/);
+  assert.match(debugServiceRoleSource, /workerTickEndpointEnabled/);
+  assert.match(debugServiceRoleSource, /staleHeartbeatRisk/);
   assert.match(debugServiceRoleSource, /rpcProvider/);
 });

@@ -52,6 +52,8 @@ test("frontend records performance marks, long tasks, render counts, and safe pe
   assert.match(appSource, /function installPerformanceInstrumentation/);
   assert.match(functionBody("installPerformanceInstrumentation"), /PerformanceObserver/);
   assert.match(functionBody("installPerformanceInstrumentation"), /longtask/);
+  assert.match(functionBody("installPerformanceInstrumentation"), /interaction-delay/);
+  assert.match(functionBody("installPerformanceInstrumentation"), /durationThreshold:\s*80/);
   assert.match(functionBody("render"), /state\.perfRenderCounts/);
   assert.match(functionBody("render"), /recordPerfEvent\(\{[\s\S]*action: "render"/);
   assert.doesNotMatch(functionBody("recordPerfEvent"), /privateKey|seed|Authorization|password/i);
@@ -111,11 +113,14 @@ test("debug and profile commands are registered and syntax-checked", () => {
   assert.match(debugWalletSource, /WALLET REFRESH DEBUG/);
   assert.match(debugWalletSource, /cachedMs/);
   assert.match(debugWalletSource, /backgroundRefreshMs/);
+  assert.match(debugWalletSource, /p95Ms/);
   assert.match(debugPositionsSource, /POSITIONS REFRESH DEBUG/);
   assert.match(debugPositionsSource, /priceCalls/);
+  assert.match(debugPositionsSource, /p95Ms/);
   assert.match(debugFrontendPerfSource, /FRONTEND PERF DEBUG/);
   assert.match(debugFrontendPerfSource, /duplicateIntervals/);
   assert.match(debugFrontendPerfSource, /hiddenPolling/);
+  assert.match(debugFrontendPerfSource, /webApiP95Ms/);
   assert.match(profileTerminalSource, /TERMINAL PROFILE/);
 });
 

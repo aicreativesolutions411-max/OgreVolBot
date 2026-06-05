@@ -26,6 +26,7 @@ if (CONFIG.fastTpSlEnabled) {
   console.log(`Broad portfolio TP/SL fallback interval: ${CONFIG.portfolioExitIntervalMs}ms.`);
 }
 
+setTimeout(() => void workerHealthProbe(), 250);
 setTimeout(() => void tick(), 500);
 setInterval(() => void tick(), CONFIG.intervalMs);
 if (CONFIG.fastTpSlEnabled) {
@@ -45,7 +46,8 @@ function loadWorkerConfig() {
   const sorts = normalizeList(process.env.WORKER_TICK_SORTS || "best,newest");
   const runTradePlans = parseBoolean(process.env.WORKER_TICK_RUN_TRADE_PLANS || "true");
   const serviceRole = normalizeServiceRole(process.env.SERVICE_ROLE || process.env.RENDER_SERVICE_ROLE || "worker");
-  const runWorker = parseBoolean(process.env.RUN_WORKER || "true");
+  const workerDisabled = parseBoolean(process.env.WORKER_DISABLED || "false");
+  const runWorker = serviceRole === "worker" && !workerDisabled;
 
   if (!tickUrl) {
     throw new Error("WORKER_TICK_URL or WORKER_TICK_BASE_URL must be set for the worker service.");
@@ -54,13 +56,14 @@ function loadWorkerConfig() {
     throw new Error("WORKER_SECRET must be set to the same long random value on the web service and worker service.");
   }
   if (!runWorker || serviceRole === "web") {
-    throw new Error("Worker process refused to start because SERVICE_ROLE=web or RUN_WORKER=false. Set SERVICE_ROLE=worker and RUN_WORKER=true on the Render background worker.");
+    throw new Error("Worker process refused to start because SERVICE_ROLE=web or WORKER_DISABLED=true. Set SERVICE_ROLE=worker on the Render background worker.");
   }
 
   return {
     serviceRole,
     runWorker,
     tickUrl,
+    healthUrls: deriveHealthUrls(tickUrl),
     tickUrls: deriveTickUrls(tickUrl),
     secret,
     intervalMs,
@@ -77,6 +80,43 @@ function loadWorkerConfig() {
     sorts,
     forceFeeds: parseBoolean(process.env.WORKER_TICK_FORCE_FEEDS || "true")
   };
+}
+
+async function workerHealthProbe() {
+  for (const healthUrl of CONFIG.healthUrls) {
+    let timer = null;
+    try {
+      const controller = new AbortController();
+      timer = setTimeout(() => controller.abort(), Math.min(CONFIG.timeoutMs, 5_000));
+      const response = await fetch(healthUrl, {
+        method: "GET",
+        headers: {
+          "User-Agent": "slimewire-render-worker-health-probe"
+        },
+        signal: controller.signal
+      });
+      const raw = await response.text();
+      const data = parseJson(raw);
+      if (!response.ok || data?.ok === false) {
+        console.warn(`Worker health probe failed (${response.status}) at ${healthUrl}: ${(data?.error || raw || "").slice(0, 180)}`);
+        continue;
+      }
+      const role = data?.serviceRole || "unknown";
+      const enabled = data?.workerTickEnabled;
+      const cacheProvider = data?.cacheProvider || "unknown";
+      const rpcProvider = data?.rpcProviderName || "unknown";
+      console.log(`Worker health probe ok. webRole=${role} workerTickEnabled=${enabled} cache=${cacheProvider} rpc=${rpcProvider}.`);
+      if (!enabled) {
+        console.warn("Worker tick endpoint is disabled on the web service. Set WORKER_TICK_ENABLED=true or WORKER_TICK_ENDPOINT_ENABLED=true on the Render web service; RUN_WORKER=false only blocks web loops.");
+      }
+      return;
+    } catch (error) {
+      const reason = error?.name === "AbortError" ? "timed out" : error.message;
+      console.warn(`Worker health probe failed at ${healthUrl}: ${reason}`);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
 }
 
 async function tradePlanTick() {
@@ -268,6 +308,27 @@ function deriveTickUrls(tickUrl) {
     }
   } catch {
     // If the URL is malformed, startup validation and the first fetch will surface it.
+  }
+  return [...new Set(urls)];
+}
+
+function deriveHealthUrls(tickUrl) {
+  const urls = [];
+  try {
+    const parsed = new URL(tickUrl);
+    for (const pathname of [
+      "/api/internal/worker/health",
+      "/api/worker/health",
+      "/internal/worker/health",
+      "/worker/health"
+    ]) {
+      const next = new URL(parsed.toString());
+      next.pathname = pathname;
+      next.search = "";
+      urls.push(next.toString());
+    }
+  } catch {
+    // Startup validation and the tick request will surface malformed URLs.
   }
   return [...new Set(urls)];
 }

@@ -76,7 +76,9 @@ const report = {
   },
   cacheLockEvents: lockEvents,
   workerProcessGuards: {
-    refusesWebRole: bool(workerSource, /SERVICE_ROLE=web or RUN_WORKER=false/),
+    refusesWebRole: bool(workerSource, /SERVICE_ROLE=web or WORKER_DISABLED=true/),
+    sharedRunWorkerFalseCannotKillWorker: bool(workerSource, /const runWorker = serviceRole === "worker" && !workerDisabled/),
+    healthProbeConfigured: bool(workerSource, /workerHealthProbe/) && bool(workerSource, /Worker health probe ok/),
     broadTickOverlapGuard: bool(workerSource, /if \(activeTick\)/),
     fastTpSlOverlapGuard: bool(workerSource, /if \(activeTradePlanTick\)/),
     broadTickSkipsFastPlanLoops: bool(workerSource, /runWebExitGuards: CONFIG\.runTradePlans && !CONFIG\.fastTpSlEnabled/) && bool(workerSource, /runTimedTradePlans: CONFIG\.runTradePlans && !CONFIG\.fastTpSlEnabled/)

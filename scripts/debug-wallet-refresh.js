@@ -22,6 +22,16 @@ function bool(text, pattern) {
   return pattern.test(text);
 }
 
+function percentileMs(events, quantile = 0.95) {
+  const values = events
+    .map((event) => Number(event.durationMs || 0))
+    .filter((value) => Number.isFinite(value) && value >= 0)
+    .sort((a, b) => a - b);
+  if (!values.length) return null;
+  const index = Math.min(values.length - 1, Math.ceil(values.length * quantile) - 1);
+  return values[index];
+}
+
 function functionSource(source = "", name = "") {
   const syncMatch = new RegExp(`function\\s+${name}\\s*\\(`).exec(source);
   const asyncMatch = new RegExp(`async\\s+function\\s+${name}\\s*\\(`).exec(source);
@@ -72,6 +82,7 @@ const report = {
   timings: {
     cachedMs: cacheHitEvents.at(-1)?.durationMs ?? null,
     backgroundRefreshMs: networkRefreshEvents.at(-1)?.durationMs ?? null,
+    p95Ms: percentileMs(walletEvents),
     cacheHit: Boolean(cacheHitEvents.length),
     dedupeHit: events.some((event) => event.action === "wallet-refresh-dedupe"),
     partialErrors: walletEvents.filter((event) => event.errorCode).slice(-5)

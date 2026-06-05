@@ -105,6 +105,7 @@ const report = {
     cacheServiceWrapper: bool(serverSource, /const CacheService = Object\.freeze/),
     lockServiceWrapper: bool(serverSource, /const LockService = Object\.freeze/) && bool(serverSource, /async function withCacheLock/),
     dedupeServiceWrapper: bool(serverSource, /const DedupeService = Object\.freeze/) && bool(serverSource, /async function withCacheDedupe/),
+    redisCircuitBreaker: bool(serverSource, /kvCircuitOpenUntil/) && bool(serverSource, /CACHE_CONNECT_TIMEOUT_MS/) && bool(serverSource, /CACHE_CIRCUIT_BREAKER_MS/),
     staleWhileRevalidate: bool(serverSource, /memory-stale-hit-background-refresh/) && bool(serverSource, /kv-stale-hit-background-refresh/),
     balancesCached: bool(serverSource, /cachedWebSummary\("web:balances"/),
     positionsCached: bool(serverSource, /cachedWebSummary\("web:positions"/),

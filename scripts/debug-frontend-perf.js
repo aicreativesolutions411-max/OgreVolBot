@@ -34,6 +34,16 @@ function groupCounts(events, keyFn) {
     .map(([key, count]) => ({ key, count }));
 }
 
+function percentileMs(events, quantile = 0.95) {
+  const values = events
+    .map((event) => Number(event.durationMs || 0))
+    .filter((value) => Number.isFinite(value) && value >= 0)
+    .sort((a, b) => a - b);
+  if (!values.length) return null;
+  const index = Math.min(values.length - 1, Math.ceil(values.length * quantile) - 1);
+  return values[index];
+}
+
 const [appSource, cssSource, perfStore] = await Promise.all([
   readText("web/public/app.js"),
   readText("web/public/slimewire-final-overrides.css"),
@@ -50,8 +60,10 @@ const report = {
   longTasks: {
     count: longTasks.length,
     latest: longTasks.at(-1) || null,
-    over100ms: longTasks.filter((event) => Number(event.durationMs || 0) >= 100).length
+    over100ms: longTasks.filter((event) => Number(event.durationMs || 0) >= 100).length,
+    p95Ms: percentileMs(longTasks)
   },
+  webApiP95Ms: percentileMs(events.filter((event) => event.component === "api" || /api|refresh|load-all/.test(event.action || ""))),
   excessiveRenders: groupCounts(renderEvents, (event) => event.details || event.component || "render"),
   duplicateIntervals: {
     terminalFeedTimerSingleton: bool(appSource, /let terminalFeedTimer = null/) && bool(appSource, /clearTimeout\(terminalFeedTimer\)/),

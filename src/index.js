@@ -112,6 +112,7 @@ const webLoginAttemptLimits = new Map();
 const webSummaryCache = new Map();
 let redisKvClientPromise = null;
 let redisKvClient = null;
+let kvCircuitOpenUntil = 0;
 const cacheDedupePromises = new Map();
 const cacheLockMemory = new Map();
 const cacheLockRecent = [];
@@ -423,7 +424,10 @@ function loadConfig() {
   const workerSecret = process.env.WORKER_SECRET || "";
   const serviceRole = normalizeServiceRole(process.env.SERVICE_ROLE || process.env.RENDER_SERVICE_ROLE || "");
   const runWorker = parseBoolean(process.env.RUN_WORKER || (serviceRole === "worker" ? "true" : "false"));
-  const workerTickEnabled = parseBoolean(process.env.WORKER_TICK_ENABLED || (workerSecret ? "true" : (runWorker ? "true" : "false")));
+  const workerTickEnabled = parseOptionalBoolean(
+    process.env.WORKER_TICK_ENDPOINT_ENABLED,
+    parseOptionalBoolean(process.env.WORKER_TICK_ENABLED, Boolean(workerSecret || runWorker))
+  );
   const workerTickRunTradePlans = parseBoolean(process.env.WORKER_TICK_RUN_TRADE_PLANS || "true");
   const workerTickRunDcaPlans = parseBoolean(process.env.WORKER_TICK_RUN_DCA_PLANS || "true");
   const workerTickWarmFeeds = parseBoolean(process.env.WORKER_TICK_WARM_FEEDS || "true");
@@ -456,6 +460,8 @@ function loadConfig() {
   const cacheNamespace = String(process.env.CACHE_NAMESPACE || process.env.KV_CACHE_NAMESPACE || "slimewire").trim().replace(/[^\w:-]/g, "").slice(0, 40) || "slimewire";
   const displayCacheFreshMs = Number.parseInt(process.env.DISPLAY_CACHE_FRESH_MS || "2500", 10);
   const displayCacheStaleMs = Number.parseInt(process.env.DISPLAY_CACHE_STALE_MS || "90000", 10);
+  const cacheConnectTimeoutMs = Number.parseInt(process.env.CACHE_CONNECT_TIMEOUT_MS || "800", 10);
+  const cacheCircuitBreakerMs = Number.parseInt(process.env.CACHE_CIRCUIT_BREAKER_MS || "15000", 10);
 
   if (!Number.isInteger(bundleFeeBps) || bundleFeeBps < 0 || bundleFeeBps > 1000) {
     throw new Error("TRADE_FEE_BPS/BUNDLE_FEE_BPS must be an integer from 0 to 1000.");
@@ -644,6 +650,14 @@ function loadConfig() {
     throw new Error("DISPLAY_CACHE_STALE_MS must be >= DISPLAY_CACHE_FRESH_MS and <= 900000.");
   }
 
+  if (!Number.isInteger(cacheConnectTimeoutMs) || cacheConnectTimeoutMs < 100 || cacheConnectTimeoutMs > 5_000) {
+    throw new Error("CACHE_CONNECT_TIMEOUT_MS must be an integer from 100 to 5000.");
+  }
+
+  if (!Number.isInteger(cacheCircuitBreakerMs) || cacheCircuitBreakerMs < 1_000 || cacheCircuitBreakerMs > 120_000) {
+    throw new Error("CACHE_CIRCUIT_BREAKER_MS must be an integer from 1000 to 120000.");
+  }
+
   try {
     new PublicKey(feeWallet);
   } catch {
@@ -724,6 +738,8 @@ function loadConfig() {
     cacheNamespace,
     displayCacheFreshMs,
     displayCacheStaleMs,
+    cacheConnectTimeoutMs,
+    cacheCircuitBreakerMs,
     solanaTrackerApiKey: process.env.SOLANA_TRACKER_API_KEY || "",
     solanaTrackerApiBase: (process.env.SOLANA_TRACKER_API_BASE || "https://data.solanatracker.io").replace(/\/$/, ""),
     solanaTrackerKolLimit,
@@ -2442,6 +2458,11 @@ function normalizeTelegramUsername(value) {
 
 function parseBoolean(value) {
   return ["1", "true", "yes", "on"].includes(String(value).toLowerCase());
+}
+
+function parseOptionalBoolean(value, fallback) {
+  if (value === undefined || value === null || String(value).trim() === "") return Boolean(fallback);
+  return parseBoolean(value);
 }
 
 function normalizeServiceRole(value) {
@@ -16128,22 +16149,46 @@ function displayCacheEnvelope(value, cachedAt = Date.now()) {
 
 async function redisKv() {
   if (kvProviderName() !== "redis") return null;
+  if (kvCircuitOpenUntil > Date.now()) {
+    kvCacheStats.lastError = `Redis circuit open until ${new Date(kvCircuitOpenUntil).toISOString()}`;
+    return null;
+  }
   if (redisKvClient?.isOpen) return redisKvClient;
   if (!redisKvClientPromise) {
     redisKvClientPromise = import("redis")
       .then(({ createClient }) => {
-        const client = createClient({ url: CONFIG.redisUrl });
+        const client = createClient({
+          url: CONFIG.redisUrl,
+          socket: {
+            connectTimeout: CONFIG.cacheConnectTimeoutMs,
+            reconnectStrategy: (retries) => Math.min(5_000, 250 * Math.max(1, retries))
+          }
+        });
         client.on("error", (error) => {
           kvCacheStats.errors += 1;
           kvCacheStats.lastError = safePerfEventText(error?.message || "Redis error", 140);
         });
-        return client.connect().then(() => {
+        const connectPromise = client.connect();
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => reject(new Error(`Redis connect timed out after ${CONFIG.cacheConnectTimeoutMs}ms`)), CONFIG.cacheConnectTimeoutMs);
+        });
+        return Promise.race([connectPromise, timeoutPromise]).then(() => {
           redisKvClient = client;
+          kvCircuitOpenUntil = 0;
           return client;
+        }).catch(async (error) => {
+          try {
+            await client.disconnect();
+          } catch {
+            // Ignore disconnect cleanup after failed connect.
+          }
+          throw error;
         });
       })
       .catch((error) => {
         redisKvClientPromise = null;
+        redisKvClient = null;
+        kvCircuitOpenUntil = Date.now() + CONFIG.cacheCircuitBreakerMs;
         kvCacheStats.errors += 1;
         kvCacheStats.lastError = safePerfEventText(error?.message || "Redis connect failed", 140);
         return null;
@@ -16417,6 +16462,8 @@ function activeCacheLockSnapshot() {
 function cacheStatsSnapshot() {
   return {
     ...kvCacheStats,
+    circuitOpen: kvCircuitOpenUntil > Date.now(),
+    circuitOpenUntil: kvCircuitOpenUntil > Date.now() ? new Date(kvCircuitOpenUntil).toISOString() : "",
     activeDedupeCount: cacheDedupePromises.size,
     activeMemoryLocks: cacheLockMemory.size
   };
@@ -25072,6 +25119,9 @@ async function rpcWithRetry(label, operation, retries = CONFIG.rpcRetries, optio
       return result;
     } catch (error) {
       lastError = error;
+      if (isRetryableRpcError(error)) {
+        rpcStats.rateLimitCount += 1;
+      }
       if (!isRetryableRpcError(error) || attempt === retries) break;
       if (CONFIG.rpc429CooldownMs > 0) {
         limiter.cooldown(CONFIG.rpc429CooldownMs);

@@ -600,6 +600,24 @@ function installPerformanceInstrumentation() {
   } catch {
     // Some browsers do not expose long task timing.
   }
+  try {
+    if (!("PerformanceObserver" in window)) return;
+    const eventObserver = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        const duration = Number(entry.duration || 0);
+        if (duration < 80) continue;
+        recordPerfEvent({
+          component: "input",
+          action: "interaction-delay",
+          durationMs: duration,
+          details: entry.name || entry.entryType || "event"
+        });
+      }
+    });
+    eventObserver.observe({ type: "event", buffered: true, durationThreshold: 80 });
+  } catch {
+    // Event Timing is not available in every browser.
+  }
 }
 
 function sleep(ms) {

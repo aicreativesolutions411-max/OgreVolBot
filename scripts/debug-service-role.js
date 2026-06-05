@@ -16,6 +16,11 @@ function envPresent(...names) {
   return names.some((name) => Boolean(String(process.env[name] || "").trim()));
 }
 
+function optionalBoolean(value, fallback) {
+  if (value === undefined || value === null || String(value).trim() === "") return Boolean(fallback);
+  return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
+}
+
 function normalizeServiceRole(value) {
   const normalized = String(value || "").trim().toLowerCase();
   if (["worker", "background", "job", "jobs"].includes(normalized)) return "worker";
@@ -67,9 +72,22 @@ const [serverSource, workerSource, packageSource] = await Promise.all([
 
 const serviceRole = normalizeServiceRole(process.env.SERVICE_ROLE || process.env.RENDER_SERVICE_ROLE || "");
 const runWorker = ["1", "true", "yes", "on"].includes(String(process.env.RUN_WORKER || (serviceRole === "worker" ? "true" : "false")).trim().toLowerCase());
+const workerSecretPresent = envPresent("WORKER_SECRET");
+const workerTickEndpointEnabled = optionalBoolean(
+  process.env.WORKER_TICK_ENDPOINT_ENABLED,
+  optionalBoolean(process.env.WORKER_TICK_ENABLED, workerSecretPresent || runWorker)
+);
 const report = {
   serviceRole,
   runWorker,
+  workerTickEndpointEnabled,
+  staleHeartbeatRisk: {
+    workerSecretPresent,
+    workerTickEndpointDisabled: !workerTickEndpointEnabled,
+    likelyCause: !workerTickEndpointEnabled
+      ? "Render worker cannot update heartbeat because the web tick endpoint is disabled. Set WORKER_TICK_ENDPOINT_ENABLED=true on the web service."
+      : ""
+  },
   expectedRenderSettings: {
     web: { SERVICE_ROLE: "web", RUN_WORKER: "false" },
     worker: { SERVICE_ROLE: "worker", RUN_WORKER: "true" }
@@ -82,9 +100,11 @@ const report = {
     : [],
   activeIntervals: {
     webInternalTpSlDefaultOffWithWorker: bool(serverSource, /defaultWebInternalRunners/) && bool(serverSource, /serviceRole === "web"/),
+    separateWorkerEndpointFlag: bool(serverSource, /WORKER_TICK_ENDPOINT_ENABLED/) && bool(serverSource, /parseOptionalBoolean/),
     workerBroadTick: bool(workerSource, /setInterval\(\(\) => void tick\(\), CONFIG\.intervalMs\)/),
     workerFastTpSlTick: bool(workerSource, /setInterval\(\(\) => void tradePlanTick\(\), CONFIG\.tradePlanIntervalMs\)/),
-    workerRefusesWebRole: bool(workerSource, /SERVICE_ROLE=web or RUN_WORKER=false/)
+    workerRefusesWebRole: bool(workerSource, /SERVICE_ROLE=web or WORKER_DISABLED=true/),
+    sharedRunWorkerFalseCannotKillWorker: bool(workerSource, /const runWorker = serviceRole === "worker" && !workerDisabled/)
   },
   activeLocks: {
     cacheLocksImplemented: bool(serverSource, /async function withCacheLock/) && bool(serverSource, /const LockService = Object\.freeze/),
