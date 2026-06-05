@@ -202,7 +202,7 @@ export function buildPumpPortalLocalCreateRequest({
   name,
   symbol,
   metadataUri,
-  devBuySol,
+  createAmountSol = 0,
   slippageBps,
   priorityFeeSol,
   pool = "pump"
@@ -217,7 +217,9 @@ export function buildPumpPortalLocalCreateRequest({
     },
     mint: mintPublicKey,
     denominatedInSol: "true",
-    amount: devBuySol,
+    // PumpPortal's current Local create endpoint returns Bad Request for any
+    // positive create amount. Create first; a dev buy must be handled separately.
+    amount: createAmountSol,
     slippageBps,
     priorityFee: priorityFeeSol,
     pool
@@ -350,7 +352,7 @@ function normalizePumpPortalPublicKey(value, code, message) {
 
 export function normalizePumpPortalCreatePayload(input = {}) {
   const tokenMetadata = input.tokenMetadata || {};
-  const amount = normalizePumpPortalNumber(input.amount, 0.0001, 0.0001);
+  const amount = normalizePumpPortalNumber(input.amount, 0, 0);
   const slippage = normalizePumpPortalSlippage(input);
   const priorityFee = normalizePumpPortalNumber(input.priorityFee, 0.00001, 0.000001);
   const payload = {
@@ -428,8 +430,8 @@ export function validatePumpPortalCreatePayload(payload = {}) {
       });
     }
   }
-  if (payload.amount < 0.0001) {
-    throw createPumpLaunchError("PumpPortal amount must be at least 0.0001 SOL.", "PUMPPORTAL_CREATE_AMOUNT_INVALID", 400, {
+  if (payload.amount < 0) {
+    throw createPumpLaunchError("PumpPortal create amount cannot be negative.", "PUMPPORTAL_CREATE_AMOUNT_INVALID", 400, {
       stage: PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL
     });
   }
@@ -833,6 +835,8 @@ export class PumpLaunchService {
         stage: PUMP_LAUNCH_STAGE.PUMPPORTAL_LOCAL,
         requestBody: sanitizedRequest,
         requestMeta,
+        requestedDevBuySol: devBuySol,
+        createAmountSol: requestPayload.amount,
         updatedAt: this.now().toISOString()
       });
       this.log("pump_launch_pumpportal_request", {
@@ -842,7 +846,9 @@ export class PumpLaunchService {
         devWalletPublicKey,
         apiUrl: config.apiUrl || "",
         requestMeta,
-        requestBody: sanitizedRequest
+        requestBody: sanitizedRequest,
+        requestedDevBuySol: devBuySol,
+        createAmountSol: requestPayload.amount
       });
 
       let tx;
@@ -926,14 +932,15 @@ export class PumpLaunchService {
       try {
         await this.recordTradeEvent({
           userId,
-          type: "buy",
+          type: "launch",
           source: "pumpfun_launch",
           tokenMint: mintPublicKey,
           tokenName: basePayload?.name || "",
           symbol: basePayload?.symbol || "",
           walletLabel: wallet.label,
           walletPublicKey: devWalletPublicKey,
-          solLamportsSpent: String(solToLamportsNumber(devBuySol)),
+          solLamportsSpent: String(solToLamportsNumber(requestPayload.amount)),
+          requestedDevBuySol: devBuySol,
           tokenAmount: null,
           signature,
           metadataUri: metadata.uri

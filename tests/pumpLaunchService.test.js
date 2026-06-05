@@ -227,7 +227,7 @@ test("correct PumpPortal create payload exactly matches official local shape", (
     },
     mint: mint.publicKey.toBase58(),
     denominatedInSol: "true",
-    amount: 0.0001,
+    amount: 0,
     slippage: 10,
     priorityFee: 0.00001,
     pool: "pump"
@@ -350,7 +350,7 @@ test("denominatedInSol and numeric fields normalize to PumpPortal-safe types", (
   });
   assert.equal(payload.denominatedInSol, "true");
   assert.equal(typeof payload.amount, "number");
-  assert.equal(payload.amount, 0.0001);
+  assert.equal(payload.amount, 0);
   assert.equal(payload.slippage, 10);
   assert.equal(payload.priorityFee, 0.00001);
   assert.equal(payload.pool, "pump");
@@ -393,11 +393,13 @@ test("managed funded wallet builds the correct PumpPortal Local create body", as
     },
     mint: mintKeypair.publicKey.toBase58(),
     denominatedInSol: "true",
-    amount: 0.1,
+    amount: 0,
     slippage: 3,
     priorityFee: 0.00005,
     pool: "pump"
   });
+  assert.equal(harness.attempts.get("attempt-1").requestedDevBuySol, 0.1);
+  assert.equal(harness.attempts.get("attempt-1").createAmountSol, 0);
 });
 
 test("validated fast metadata URI is the URI sent to PumpPortal", async () => {
@@ -629,8 +631,11 @@ test("successful launch stores token record fields and transaction signature", a
   assert.equal(result.signature, "txsig-success");
   assert.equal(harness.tradeEvents.length, 1);
   assert.equal(harness.tradeEvents[0].source, "pumpfun_launch");
+  assert.equal(harness.tradeEvents[0].type, "launch");
   assert.equal(harness.tradeEvents[0].tokenMint, mintKeypair.publicKey.toBase58());
   assert.equal(harness.tradeEvents[0].signature, "txsig-success");
+  assert.equal(harness.tradeEvents[0].solLamportsSpent, "0");
+  assert.equal(harness.tradeEvents[0].requestedDevBuySol, 0.1);
   assert.equal(harness.attempts.get("attempt-1").txSignature, "txsig-success");
 });
 
