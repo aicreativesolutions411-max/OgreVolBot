@@ -2981,8 +2981,29 @@ function flushDeferredRender() {
   render({ force: true });
 }
 
+function setRouteSectionHidden(element, hidden) {
+  if (!element) return;
+  element.hidden = hidden;
+  element.dataset.routeViewHidden = hidden ? "true" : "false";
+  element.setAttribute("aria-hidden", hidden ? "true" : "false");
+}
+
+function syncShellRouteVisibility() {
+  if (!app || !loginView || !dashboardView) return;
+  const hasWalletContext = Boolean(state.user?.connectedWallet || state.wallets.length);
+  app.dataset.loading = state.loading ? "true" : "false";
+  app.dataset.route = state.route;
+  app.dataset.walletConnected = hasWalletContext ? "true" : "false";
+  setRouteSectionHidden(loginView, !["intro", "login"].includes(state.route));
+  setRouteSectionHidden(connectView, state.route !== "connect");
+  setRouteSectionHidden(dashboardView, state.route !== "terminal");
+  setHidden("[data-terminal-global-search]", state.route !== "terminal");
+  setHidden("[data-top-sync-strip]", state.route !== "terminal");
+}
+
 function render(options = {}) {
   if (!app || !loginView || !dashboardView) return;
+  syncShellRouteVisibility();
   if (!options.force && shouldDeferTerminalRender()) {
     requestDeferredRender();
     return;
@@ -2995,12 +3016,8 @@ function render(options = {}) {
     [renderKey]: (state.perfRenderCounts?.[renderKey] || 0) + 1
   };
   state.pendingRender = false;
-  app.dataset.loading = state.loading ? "true" : "false";
-  app.dataset.route = state.route;
   const hasWalletContext = Boolean(state.user?.connectedWallet || state.wallets.length);
-  app.dataset.walletConnected = hasWalletContext ? "true" : "false";
-  loginView.hidden = !["intro", "login"].includes(state.route);
-  if (connectView) connectView.hidden = state.route !== "connect";
+  syncShellRouteVisibility();
   const hasLoginModal = Boolean(loginModal);
   const loginModalVisible = Boolean(hasLoginModal && state.loginModalOpen);
   if (topLoginPanel) topLoginPanel.hidden = hasLoginModal || Boolean(state.user) || state.loginCollapsed;
@@ -3022,9 +3039,7 @@ function render(options = {}) {
   if (authActions) authActions.hidden = false;
   if (guestActions) guestActions.hidden = Boolean(state.user);
   if (sessionActions) sessionActions.hidden = !state.user;
-  dashboardView.hidden = state.route !== "terminal";
-  setHidden("[data-terminal-global-search]", state.route !== "terminal");
-  setHidden("[data-top-sync-strip]", state.route !== "terminal");
+  syncShellRouteVisibility();
 
   setText("[data-user-id]", state.user?.id || "guest");
   setText("[data-wallet-count]", state.wallets.length);
@@ -3070,6 +3085,7 @@ function render(options = {}) {
     });
   }
   } catch (error) {
+    syncShellRouteVisibility();
     recordCrashEvent({
       component: "render-boundary",
       errorCode: error?.name || "RENDER_FAILED",

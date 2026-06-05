@@ -1,4 +1,19 @@
 /* SlimeWire final terminal polish loaded after the main stylesheet. */
+[data-route-view-hidden="true"],
+[data-app][data-route="terminal"] [data-login],
+[data-app][data-route="terminal"] [data-connect],
+[data-app][data-route="intro"] [data-connect],
+[data-app][data-route="intro"] [data-dashboard],
+[data-app][data-route="connect"] [data-login],
+[data-app][data-route="connect"] [data-dashboard] {
+  display: none !important;
+  pointer-events: none !important;
+}
+
+[data-app][data-route="terminal"] [data-dashboard] {
+  display: block;
+}
+
 .tabs .nav-tool-group {
   border: 1px solid rgba(114, 255, 35, 0.22) !important;
   border-radius: 9px !important;

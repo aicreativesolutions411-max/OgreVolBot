@@ -65,3 +65,12 @@ test("terminal disconnected status is not duplicated visually in the sync card",
   assert.match(appSource, /setText\("\[data-sync-health\]", hasWalletContext \? syncHealthLabel\(\) : "Sync idle"\)/);
   assert.match(htmlSource, /<span class="top-wallet-disconnected">Status: Wallet not connected<\/span>/);
 });
+
+test("terminal route cannot show the intro splash underneath the header", () => {
+  assert.match(appSource, /function syncShellRouteVisibility\(\)/);
+  assert.match(appSource, /syncShellRouteVisibility\(\);\s*if \(!options\.force && shouldDeferTerminalRender\(\)\)/);
+  assert.match(appSource, /setRouteSectionHidden\(loginView, !\["intro", "login"\]\.includes\(state\.route\)\)/);
+  assert.match(overridesSource, /\[data-app\]\[data-route="terminal"\] \[data-login\]/);
+  assert.match(overridesSource, /\[data-app\]\[data-route="terminal"\] \[data-connect\]/);
+  assert.match(overridesSource, /\[data-route-view-hidden="true"\]/);
+});
