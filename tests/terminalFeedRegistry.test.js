@@ -7,6 +7,7 @@ const htmlSource = fs.readFileSync(new URL("../web/public/index.html", import.me
 const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
 const packageSource = fs.readFileSync(new URL("../package.json", import.meta.url), "utf8");
 const debugSource = fs.readFileSync(new URL("../scripts/debug-terminal-feeds.js", import.meta.url), "utf8");
+const singleDebugSource = fs.readFileSync(new URL("../scripts/debug-terminal-feed.js", import.meta.url), "utf8");
 
 function parseNumberLiteral(value = "0") {
   return Number(String(value).replaceAll("_", ""));
@@ -19,17 +20,24 @@ function terminalFeeds() {
   assert.notEqual(end, -1, "TERMINAL_FEEDS registry is not closed");
   const block = appSource.slice(start, end);
   const feeds = [];
-  const pattern = /\{\s*tabKey:\s*"([^"]+)",\s*label:\s*"([^"]+)",\s*component:\s*"([^"]+)",\s*endpoint:\s*"([^"]+)",\s*category:\s*"([^"]+)",\s*refreshMs:\s*([0-9_]+),\s*staleMs:\s*([0-9_]+),\s*cacheKey:\s*"([^"]+)"/g;
+  const pattern = /\{[^\n]*tabKey:\s*"([^"]+)"[^\n]*\}/g;
   for (const match of block.matchAll(pattern)) {
+    const item = match[0];
+    const value = (field) => item.match(new RegExp(`${field}:\\s*"([^"]*)"`))?.[1] || "";
+    const number = (field) => parseNumberLiteral(item.match(new RegExp(`${field}:\\s*([0-9_]+)`))?.[1] || "0");
     feeds.push({
       tabKey: match[1],
-      label: match[2],
-      component: match[3],
-      endpoint: match[4],
-      category: match[5],
-      refreshMs: parseNumberLiteral(match[6]),
-      staleMs: parseNumberLiteral(match[7]),
-      cacheKey: match[8]
+      label: value("label"),
+      component: value("component"),
+      endpoint: value("endpoint"),
+      category: value("category"),
+      refreshMs: number("refreshMs"),
+      staleMs: number("staleMs"),
+      cacheKey: value("cacheKey"),
+      pageSize: number("pageSize"),
+      maxPageSize: number("maxPageSize"),
+      previewLimit: number("previewLimit"),
+      supportsPagination: /supportsPagination:\s*true/.test(item)
     });
   }
   return feeds;
@@ -40,15 +48,19 @@ function byTab(tabKey) {
 }
 
 function functionBody(name) {
-  const syncStart = appSource.indexOf(`function ${name}`);
-  const asyncStart = appSource.indexOf(`async function ${name}`);
+  return functionBodyFromSource(appSource, name);
+}
+
+function functionBodyFromSource(source, name) {
+  const syncStart = source.indexOf(`function ${name}`);
+  const asyncStart = source.indexOf(`async function ${name}`);
   const start = syncStart >= 0 && (asyncStart < 0 || syncStart < asyncStart) ? syncStart : asyncStart;
   assert.notEqual(start, -1, `${name} is missing`);
-  const paramsStart = appSource.indexOf("(", start);
+  const paramsStart = source.indexOf("(", start);
   let paramsDepth = 0;
   let paramsEnd = -1;
-  for (let index = paramsStart; index < appSource.length; index += 1) {
-    const char = appSource[index];
+  for (let index = paramsStart; index < source.length; index += 1) {
+    const char = source[index];
     if (char === "(") paramsDepth += 1;
     if (char === ")") {
       paramsDepth -= 1;
@@ -58,14 +70,14 @@ function functionBody(name) {
       }
     }
   }
-  const bodyStart = appSource.indexOf("{", paramsEnd);
+  const bodyStart = source.indexOf("{", paramsEnd);
   let depth = 0;
-  for (let index = bodyStart; index < appSource.length; index += 1) {
-    const char = appSource[index];
+  for (let index = bodyStart; index < source.length; index += 1) {
+    const char = source[index];
     if (char === "{") depth += 1;
     if (char === "}") {
       depth -= 1;
-      if (depth === 0) return appSource.slice(bodyStart + 1, index);
+      if (depth === 0) return source.slice(bodyStart + 1, index);
     }
   }
   return "";
@@ -83,6 +95,8 @@ test("terminal feed registry gives every section a category, endpoint, interval,
     assert.ok(feed.category.includes(":"));
     assert.ok(feed.refreshMs >= 5_000);
     assert.ok(feed.staleMs >= feed.refreshMs);
+    assert.ok(feed.pageSize > 0, `${feed.tabKey} needs pageSize`);
+    assert.ok(feed.maxPageSize >= feed.pageSize, `${feed.tabKey} maxPageSize must cover pageSize`);
   }
 });
 
@@ -118,6 +132,35 @@ test("active tab poller avoids hidden-page and duplicate heavy-tab polling", () 
   assert.match(body, /\["terminal", "live", "slimeScope", "kol", "watchlist", "sniper"\]\.includes\(state\.activeTab\)/);
   assert.match(body, /Math\.max\(5_000, Number\(feed\.refreshMs \|\| 30_000\)\)/);
   assert.match(body, /clearTimeout\(terminalFeedTimer\)/);
+  assert.match(functionBody("scheduleLivePairsAutoRefresh"), /loadLivePairs\(\{ silent: true, bucket: state\.livePairBucket, force: true \}\)/);
+  assert.doesNotMatch(functionBody("scheduleLivePairsAutoRefresh"), /refreshLivePairBuckets\(\{ silent: true, force: true \}\)/);
+});
+
+test("full terminal feed tabs use page-sized windows instead of tiny preview caps", () => {
+  assert.ok(byTab("live").pageSize >= 50);
+  assert.ok(byTab("live").supportsPagination);
+  assert.ok(byTab("slimeScope").pageSize >= 50);
+  assert.ok(byTab("slimeScope").supportsPagination);
+  assert.ok(byTab("sniper").pageSize >= 36);
+  assert.ok(byTab("sniper").supportsPagination);
+  assert.ok(byTab("kol").pageSize >= 36);
+  assert.ok(byTab("kol").supportsPagination);
+  assert.ok(byTab("terminal").previewLimit <= 8);
+  assert.match(appSource, /data-terminal-load-more/);
+  assert.match(functionBody("livePairsHtml"), /terminalFeedRowsWindow\("live", allRows\)/);
+  assert.match(functionBody("slimeScopeHtml"), /terminalFeedRowsWindow\("slimeScope", allRows\)/);
+  assert.match(functionBody("sniperRowsHtml"), /terminalFeedRowsWindow\("sniper", allRows\)/);
+  assert.match(functionBody("kolRowsHtml"), /terminalFeedRowsWindow\("kol", allRows\)/);
+  assert.doesNotMatch(functionBody("slimeScopeHtml"), /limit:\s*30/);
+});
+
+test("backend feed endpoints return useful page-sized lists with bounded provider work", () => {
+  assert.match(serverSource, /if \(safeBucket === "live"\) return 50/);
+  assert.match(serverSource, /if \(safeBucket === "under1h"\) return 60/);
+  assert.match(serverSource, /return 75/);
+  assert.match(functionBodyFromSource(serverSource, "webSniperScan"), /limit:\s*36/);
+  assert.match(functionBodyFromSource(serverSource, "buildWebLivePairs"), /backendReturnedCount:\s*safeRows\.length/);
+  assert.match(functionBodyFromSource(serverSource, "filterWebLivePairsForSafety"), /Math\.min\(rows\.length, Math\.max\(limit \* 2, 32\), 120\)/);
 });
 
 test("backend stores sanitized terminal feed diagnostics without secrets", () => {
@@ -131,12 +174,19 @@ test("backend stores sanitized terminal feed diagnostics without secrets", () =>
 
 test("debug command reports registry, polling, stale data, and feed event state", () => {
   assert.match(packageSource, /"debug:terminal-feeds": "node scripts\/debug-terminal-feeds\.js"/);
+  assert.match(packageSource, /"debug:terminal-feed": "node scripts\/debug-terminal-feed\.js"/);
   assert.match(packageSource, /node --check scripts\/debug-terminal-feeds\.js/);
+  assert.match(packageSource, /node --check scripts\/debug-terminal-feed\.js/);
   assert.match(debugSource, /parseTerminalFeeds/);
   assert.match(debugSource, /duplicateCacheKeys/);
   assert.match(debugSource, /recentTerminalFeedEvents/);
   assert.match(debugSource, /pollingSignals/);
   assert.match(debugSource, /staticDataSignals/);
+  assert.match(debugSource, /pageSize/);
+  assert.match(debugSource, /lastRenderedCount/);
+  assert.match(singleDebugSource, /TERMINAL FEED DEBUG/);
+  assert.match(singleDebugSource, /frontendRenderedCount/);
+  assert.match(singleDebugSource, /hasMore/);
 });
 
 test("critical icons preload and all runtime images have a global fallback path", () => {

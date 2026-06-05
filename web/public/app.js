@@ -193,6 +193,7 @@ const state = {
   slimeScopeMode: "new",
   terminalFeeds: {},
   terminalFeedLog: [],
+  terminalFeedVisibleLimits: {},
   launchResult: null,
   launchCoinDraft: getStoredLaunchCoinDraft(),
   launchCoinStatus: "",
@@ -309,24 +310,24 @@ cannot accidentally display or refresh another tab's data.
 tabKey | label | component | endpoint | category | refreshMs | staleMs | cacheKey
 */
 const TERMINAL_FEEDS = [
-  { tabKey: "terminal", label: "Live Terminal", component: "terminalHtml", endpoint: "composite:/api/web/live-pairs+/api/web/kol/scan+/api/web/watchlist", category: "overview:terminal", refreshMs: 15_000, staleMs: 30_000, cacheKey: "terminal:overview" },
-  { tabKey: "live", label: "Live Pairs - New Solana Pairs", component: "livePairsHtml", endpoint: "/api/web/live-pairs", category: "pairs:new", refreshMs: 15_000, staleMs: 30_000, cacheKey: "pairs:{bucket}:{sort}" },
-  { tabKey: "liveTrades", label: "Live Trades - Recent Swaps", component: "liveTradesHtml", endpoint: "/api/web/pnl", category: "trades:recent", refreshMs: 8_000, staleMs: 20_000, cacheKey: "trades:recent" },
-  { tabKey: "slimeScope", label: "Slime Scope - Scanner Picks", component: "slimeScopeHtml", endpoint: "composite:/api/web/live-pairs+/api/web/sniper/scan", category: "scanner:slime-scope", refreshMs: 20_000, staleMs: 45_000, cacheKey: "scanner:slime-scope:{scopeMode}" },
-  { tabKey: "kol", label: "KOL Tracker - Social/KOL Signals", component: "kolHtml", endpoint: "/api/web/kol/scan", category: "signals:kol", refreshMs: 60_000, staleMs: 120_000, cacheKey: "signals:kol:{kolMode}:{kolWallet}" },
-  { tabKey: "watchlist", label: "Watchlist - Your Saved Pairs", component: "watchlistHtml", endpoint: "/api/web/watchlist", category: "user:watchlist", refreshMs: 20_000, staleMs: 45_000, cacheKey: "user:watchlist" },
-  { tabKey: "smartChart", label: "Smart Chart - Selected Token", component: "smartChartHtml", endpoint: "composite:/api/web/live-pairs+/api/web/positions", category: "token:selected-chart", refreshMs: 20_000, staleMs: 45_000, cacheKey: "token:selected-chart:{tokenMint}" },
-  { tabKey: "trade", label: "Trade - Selected Token Panel", component: "tradeHtml", endpoint: "composite:/api/web/balances+/api/web/positions", category: "trade:selected-token", refreshMs: 20_000, staleMs: 45_000, cacheKey: "trade:selected-token:{tokenMint}" },
-  { tabKey: "bundle", label: "Bundle Volume - Bundle Actions", component: "bundleHtml", endpoint: "composite:/api/web/balances+/api/web/positions", category: "bundle:volume", refreshMs: 25_000, staleMs: 60_000, cacheKey: "bundle:volume:{tokenMint}" },
-  { tabKey: "volume", label: "Bundle Volume - Volume Flags", component: "volumeHtml", endpoint: "composite:/api/web/live-pairs+/api/web/balances", category: "signals:bundle-volume", refreshMs: 25_000, staleMs: 60_000, cacheKey: "signals:bundle-volume:{tokenMint}" },
-  { tabKey: "sniper", label: "Sniper - Launch Snipe Candidates", component: "sniperHtml", endpoint: "/api/web/sniper/scan", category: "scanner:launch-snipe", refreshMs: 20_000, staleMs: 45_000, cacheKey: "scanner:launch-snipe:{scanMode}" },
-  { tabKey: "launch", label: "Launch Snipe - Launch Watches", component: "launchHtml", endpoint: "/api/web/launch/watches", category: "launch:watches", refreshMs: 15_000, staleMs: 35_000, cacheKey: "launch:watches" },
-  { tabKey: "launchCoin", label: "Pump Launch - Launch Status", component: "launchCoinHtml", endpoint: "/api/web/launch/watches", category: "pump-launch:status", refreshMs: 20_000, staleMs: 60_000, cacheKey: "pump-launch:status" },
-  { tabKey: "wallets", label: "Wallets/Balances", component: "walletsHtml", endpoint: "composite:/api/web/wallets+/api/web/balances", category: "portfolio:wallets-balances", refreshMs: 20_000, staleMs: 45_000, cacheKey: "portfolio:wallets-balances" },
-  { tabKey: "positions", label: "Positions", component: "positionsHtml", endpoint: "/api/web/positions", category: "portfolio:positions", refreshMs: 12_000, staleMs: 30_000, cacheKey: "portfolio:positions" },
-  { tabKey: "pnl", label: "PnL", component: "pnlHtml", endpoint: "/api/web/pnl", category: "portfolio:pnl", refreshMs: 20_000, staleMs: 45_000, cacheKey: "portfolio:pnl" },
-  { tabKey: "ogreAi", label: "Ogre A.I.", component: "ogreAiHtml", endpoint: "local:ogre-ai-results", category: "tool:ogre-ai", refreshMs: 30_000, staleMs: 90_000, cacheKey: "tool:ogre-ai" },
-  { tabKey: "ogreTek", label: "Ogre TeK / Perp Mode", component: "ogreTekHtml", endpoint: "local:perps-provider", category: "perps:ogre-tek", refreshMs: 30_000, staleMs: 90_000, cacheKey: "perps:ogre-tek" }
+  { tabKey: "terminal", label: "Live Terminal", component: "terminalHtml", endpoint: "composite:/api/web/live-pairs+/api/web/kol/scan+/api/web/watchlist", category: "overview:terminal", refreshMs: 15_000, staleMs: 30_000, cacheKey: "terminal:overview", pageSize: 12, maxPageSize: 24, previewLimit: 8, supportsPagination: false },
+  { tabKey: "live", label: "Live Pairs - New Solana Pairs", component: "livePairsHtml", endpoint: "/api/web/live-pairs", category: "pairs:new", refreshMs: 15_000, staleMs: 30_000, cacheKey: "pairs:{bucket}:{sort}", pageSize: 50, maxPageSize: 100, previewLimit: 12, supportsPagination: true },
+  { tabKey: "liveTrades", label: "Live Trades - Recent Swaps", component: "liveTradesHtml", endpoint: "/api/web/pnl", category: "trades:recent", refreshMs: 8_000, staleMs: 20_000, cacheKey: "trades:recent", pageSize: 50, maxPageSize: 100, previewLimit: 10, supportsPagination: true },
+  { tabKey: "slimeScope", label: "Slime Scope - Scanner Picks", component: "slimeScopeHtml", endpoint: "composite:/api/web/live-pairs+/api/web/sniper/scan", category: "scanner:slime-scope", refreshMs: 20_000, staleMs: 45_000, cacheKey: "scanner:slime-scope:{scopeMode}", pageSize: 50, maxPageSize: 100, previewLimit: 12, supportsPagination: true },
+  { tabKey: "kol", label: "KOL Tracker - Social/KOL Signals", component: "kolHtml", endpoint: "/api/web/kol/scan", category: "signals:kol", refreshMs: 60_000, staleMs: 120_000, cacheKey: "signals:kol:{kolMode}:{kolWallet}", pageSize: 36, maxPageSize: 72, previewLimit: 12, supportsPagination: true },
+  { tabKey: "watchlist", label: "Watchlist - Your Saved Pairs", component: "watchlistHtml", endpoint: "/api/web/watchlist", category: "user:watchlist", refreshMs: 20_000, staleMs: 45_000, cacheKey: "user:watchlist", pageSize: 50, maxPageSize: 100, previewLimit: 12, supportsPagination: true },
+  { tabKey: "smartChart", label: "Smart Chart - Selected Token", component: "smartChartHtml", endpoint: "composite:/api/web/live-pairs+/api/web/positions", category: "token:selected-chart", refreshMs: 20_000, staleMs: 45_000, cacheKey: "token:selected-chart:{tokenMint}", pageSize: 5, maxPageSize: 10, previewLimit: 5, supportsPagination: false },
+  { tabKey: "trade", label: "Trade - Selected Token Panel", component: "tradeHtml", endpoint: "composite:/api/web/balances+/api/web/positions", category: "trade:selected-token", refreshMs: 20_000, staleMs: 45_000, cacheKey: "trade:selected-token:{tokenMint}", pageSize: 1, maxPageSize: 1, previewLimit: 1, supportsPagination: false },
+  { tabKey: "bundle", label: "Bundle Volume - Bundle Actions", component: "bundleHtml", endpoint: "composite:/api/web/balances+/api/web/positions", category: "bundle:volume", refreshMs: 25_000, staleMs: 60_000, cacheKey: "bundle:volume:{tokenMint}", pageSize: 1, maxPageSize: 1, previewLimit: 1, supportsPagination: false },
+  { tabKey: "volume", label: "Bundle Volume - Volume Flags", component: "volumeHtml", endpoint: "composite:/api/web/live-pairs+/api/web/balances", category: "signals:bundle-volume", refreshMs: 25_000, staleMs: 60_000, cacheKey: "signals:bundle-volume:{tokenMint}", pageSize: 1, maxPageSize: 1, previewLimit: 1, supportsPagination: false },
+  { tabKey: "sniper", label: "Sniper - Launch Snipe Candidates", component: "sniperHtml", endpoint: "/api/web/sniper/scan", category: "scanner:launch-snipe", refreshMs: 20_000, staleMs: 45_000, cacheKey: "scanner:launch-snipe:{scanMode}", pageSize: 36, maxPageSize: 72, previewLimit: 12, supportsPagination: true },
+  { tabKey: "launch", label: "Launch Snipe - Launch Watches", component: "launchHtml", endpoint: "/api/web/launch/watches", category: "launch:watches", refreshMs: 15_000, staleMs: 35_000, cacheKey: "launch:watches", pageSize: 20, maxPageSize: 40, previewLimit: 8, supportsPagination: false },
+  { tabKey: "launchCoin", label: "Pump Launch - Launch Status", component: "launchCoinHtml", endpoint: "/api/web/launch/watches", category: "pump-launch:status", refreshMs: 20_000, staleMs: 60_000, cacheKey: "pump-launch:status", pageSize: 10, maxPageSize: 20, previewLimit: 5, supportsPagination: false },
+  { tabKey: "wallets", label: "Wallets/Balances", component: "walletsHtml", endpoint: "composite:/api/web/wallets+/api/web/balances", category: "portfolio:wallets-balances", refreshMs: 20_000, staleMs: 45_000, cacheKey: "portfolio:wallets-balances", pageSize: 25, maxPageSize: 50, previewLimit: 8, supportsPagination: false },
+  { tabKey: "positions", label: "Positions", component: "positionsHtml", endpoint: "/api/web/positions", category: "portfolio:positions", refreshMs: 12_000, staleMs: 30_000, cacheKey: "portfolio:positions", pageSize: 25, maxPageSize: 50, previewLimit: 8, supportsPagination: false },
+  { tabKey: "pnl", label: "PnL", component: "pnlHtml", endpoint: "/api/web/pnl", category: "portfolio:pnl", refreshMs: 20_000, staleMs: 45_000, cacheKey: "portfolio:pnl", pageSize: 50, maxPageSize: 100, previewLimit: 10, supportsPagination: false },
+  { tabKey: "ogreAi", label: "Ogre A.I.", component: "ogreAiHtml", endpoint: "local:ogre-ai-results", category: "tool:ogre-ai", refreshMs: 30_000, staleMs: 90_000, cacheKey: "tool:ogre-ai", pageSize: 10, maxPageSize: 20, previewLimit: 5, supportsPagination: false },
+  { tabKey: "ogreTek", label: "Ogre TeK / Perp Mode", component: "ogreTekHtml", endpoint: "local:perps-provider", category: "perps:ogre-tek", refreshMs: 30_000, staleMs: 90_000, cacheKey: "perps:ogre-tek", pageSize: 25, maxPageSize: 50, previewLimit: 8, supportsPagination: false }
 ];
 const TERMINAL_FEED_MAP = Object.fromEntries(TERMINAL_FEEDS.map((feed) => [feed.tabKey, feed]));
 
@@ -1588,6 +1589,84 @@ function terminalFeedCacheKey(feed = terminalFeedDefinition()) {
     .replace("{tokenMint}", selectedTerminalFeedToken() ? shortAddress(selectedTerminalFeedToken()) : "none");
 }
 
+function terminalFeedNumber(tabKey = state.activeTab, field = "pageSize", fallback = 25) {
+  const feed = terminalFeedDefinition(tabKey);
+  const number = Number(feed?.[field]);
+  return Number.isFinite(number) && number > 0 ? number : fallback;
+}
+
+function terminalFeedPageSize(tabKey = state.activeTab) {
+  return terminalFeedNumber(tabKey, "pageSize", 25);
+}
+
+function terminalFeedMaxPageSize(tabKey = state.activeTab) {
+  return Math.max(terminalFeedPageSize(tabKey), terminalFeedNumber(tabKey, "maxPageSize", terminalFeedPageSize(tabKey)));
+}
+
+function terminalFeedSupportsPagination(tabKey = state.activeTab) {
+  return Boolean(terminalFeedDefinition(tabKey)?.supportsPagination);
+}
+
+function terminalFeedVisibleLimitKey(tabKey = state.activeTab) {
+  const feed = terminalFeedDefinition(tabKey) || { tabKey };
+  return `${tabKey}:${terminalFeedCacheKey(feed)}`;
+}
+
+function terminalFeedVisibleLimit(tabKey = state.activeTab, total = 0) {
+  const key = terminalFeedVisibleLimitKey(tabKey);
+  const pageSize = terminalFeedPageSize(tabKey);
+  const maxPageSize = terminalFeedMaxPageSize(tabKey);
+  const saved = Number(state.terminalFeedVisibleLimits?.[key] || 0);
+  const desired = Number.isFinite(saved) && saved > 0 ? saved : pageSize;
+  const totalNumber = Number(total || 0);
+  const bounded = Math.min(Math.max(pageSize, desired), maxPageSize);
+  return totalNumber > 0 ? Math.min(bounded, totalNumber) : bounded;
+}
+
+function resetTerminalFeedVisibleLimit(tabKey = state.activeTab) {
+  const key = terminalFeedVisibleLimitKey(tabKey);
+  if (!state.terminalFeedVisibleLimits?.[key]) return;
+  const next = { ...(state.terminalFeedVisibleLimits || {}) };
+  delete next[key];
+  state.terminalFeedVisibleLimits = next;
+}
+
+function increaseTerminalFeedVisibleLimit(tabKey = state.activeTab, total = 0) {
+  const key = terminalFeedVisibleLimitKey(tabKey);
+  const current = terminalFeedVisibleLimit(tabKey, total);
+  const pageSize = terminalFeedPageSize(tabKey);
+  const maxPageSize = terminalFeedMaxPageSize(tabKey);
+  const totalNumber = Number(total || 0);
+  const nextLimit = Math.min(maxPageSize, totalNumber > 0 ? totalNumber : maxPageSize, current + pageSize);
+  state.terminalFeedVisibleLimits = {
+    ...(state.terminalFeedVisibleLimits || {}),
+    [key]: nextLimit
+  };
+  return nextLimit;
+}
+
+function terminalFeedRowsWindow(tabKey = state.activeTab, rows = []) {
+  const list = Array.isArray(rows) ? rows : [];
+  return list.slice(0, terminalFeedVisibleLimit(tabKey, list.length));
+}
+
+function terminalFeedHasMoreRows(tabKey = state.activeTab, rows = []) {
+  const list = Array.isArray(rows) ? rows : [];
+  return terminalFeedSupportsPagination(tabKey) && list.length > terminalFeedVisibleLimit(tabKey, list.length);
+}
+
+function terminalFeedLoadMoreHtml(tabKey = state.activeTab, rows = [], label = "rows") {
+  const list = Array.isArray(rows) ? rows : [];
+  if (!terminalFeedHasMoreRows(tabKey, list)) return "";
+  const shown = terminalFeedVisibleLimit(tabKey, list.length);
+  return `
+    <div class="feed-load-more-row">
+      <small>${escapeHtml(shown)} of ${escapeHtml(list.length)} ${escapeHtml(label)} shown</small>
+      <button type="button" data-terminal-load-more="${escapeHtml(tabKey)}">Load More</button>
+    </div>
+  `;
+}
+
 function terminalFeedRuntime(tabKey = state.activeTab) {
   return state.terminalFeeds[tabKey] || {};
 }
@@ -1625,6 +1704,14 @@ function terminalFeedResultCount(tabKey = state.activeTab) {
   return 0;
 }
 
+function terminalFeedRenderedCount(tabKey = state.activeTab) {
+  const resultCount = terminalFeedResultCount(tabKey);
+  if (["live", "liveTrades", "slimeScope", "kol", "watchlist", "sniper"].includes(tabKey)) {
+    return Math.min(resultCount, terminalFeedVisibleLimit(tabKey, resultCount));
+  }
+  return resultCount;
+}
+
 function terminalFeedIsStale(tabKey = state.activeTab) {
   const feed = terminalFeedDefinition(tabKey);
   if (!feed) return false;
@@ -1649,6 +1736,12 @@ function terminalFeedEventPayload(tabKey = state.activeTab, event = {}) {
     status: event.status || "unknown",
     reason: event.reason || "",
     resultCount: Number(event.resultCount || 0),
+    renderedCount: Number(event.renderedCount ?? terminalFeedRenderedCount(tabKey) ?? 0),
+    pageSize: terminalFeedPageSize(tabKey),
+    maxPageSize: terminalFeedMaxPageSize(tabKey),
+    supportsPagination: terminalFeedSupportsPagination(tabKey),
+    hasMore: Boolean(event.hasMore ?? (terminalFeedResultCount(tabKey) > terminalFeedRenderedCount(tabKey))),
+    nextCursor: String(event.nextCursor || "").slice(0, 80),
     stale: Boolean(event.stale),
     errorCode: String(event.errorCode || "").slice(0, 80),
     errorMessage: String(event.errorMessage || "").slice(0, 160),
@@ -1695,6 +1788,9 @@ function markTerminalFeedStart(tabKey = state.activeTab, options = {}) {
       cacheKey: terminalFeedCacheKey(feed),
       refreshMs: feed.refreshMs,
       staleMs: feed.staleMs,
+      pageSize: feed.pageSize,
+      maxPageSize: feed.maxPageSize,
+      supportsPagination: Boolean(feed.supportsPagination),
       inFlight: true,
       lastRequestId: requestId,
       lastReason: options.reason || "refresh",
@@ -1708,6 +1804,7 @@ function markTerminalFeedDone(tabKey = state.activeTab, requestId = "", status =
   const feed = terminalFeedDefinition(tabKey);
   if (!feed) return;
   const resultCount = terminalFeedResultCount(tabKey);
+  const renderedCount = terminalFeedRenderedCount(tabKey);
   const nextRuntime = {
     ...terminalFeedRuntime(tabKey),
     label: feed.label,
@@ -1716,11 +1813,16 @@ function markTerminalFeedDone(tabKey = state.activeTab, requestId = "", status =
     cacheKey: terminalFeedCacheKey(feed),
     refreshMs: feed.refreshMs,
     staleMs: feed.staleMs,
+    pageSize: feed.pageSize,
+    maxPageSize: feed.maxPageSize,
+    supportsPagination: Boolean(feed.supportsPagination),
     inFlight: false,
     lastRequestId: requestId,
     lastStatus: status,
     lastFetchAt: new Date().toISOString(),
     resultCount,
+    renderedCount,
+    hasMore: resultCount > renderedCount,
     stale: status !== "success" || terminalFeedIsStale(tabKey),
     errorCode: extra.errorCode || "",
     errorMessage: extra.errorMessage || ""
@@ -1734,6 +1836,8 @@ function markTerminalFeedDone(tabKey = state.activeTab, requestId = "", status =
     status,
     reason: nextRuntime.lastReason,
     resultCount,
+    renderedCount,
+    hasMore: nextRuntime.hasMore,
     stale: nextRuntime.stale,
     errorCode: nextRuntime.errorCode,
     errorMessage: nextRuntime.errorMessage
@@ -1964,7 +2068,7 @@ function scheduleLivePairsAutoRefresh() {
       return;
     }
     try {
-      await refreshLivePairBuckets({ silent: true, force: true });
+      await loadLivePairs({ silent: true, bucket: state.livePairBucket, force: true });
     } catch {
       // Keep the last good feed visible; the next timer retry reports status inline.
     } finally {
@@ -5185,18 +5289,30 @@ function kolRowsHtml() {
   if (scan.configured === false) {
     return emptyState("KOL Tracker is not connected yet", scan.message || "Use Scan Wallet for a public wallet, or try again later.");
   }
-  if (!scan.rows?.length) {
+  const allRows = scan.rows || [];
+  const rows = terminalFeedRowsWindow("kol", allRows);
+  if (!allRows.length) {
     return emptyState(
       scan.kols?.length ? "No token signals on this refresh" : "No KOL signals found",
       scan.message || "Try Refresh or another mode."
     );
   }
-  return tokenSignalRowsHtml(scan.rows.slice(0, 18), {
-    context: "kol",
-    primaryAction: "quickTrade",
-    primaryActionLabel: "Trade",
-    shareBuilder: kolShareText
-  });
+  return `
+    <div class="terminal-title-row feed-depth-title">
+      <div>
+        <h3>${escapeHtml(kolModeLabel(state.kolMode))} Signals</h3>
+        <p>KOL Tracker - Social/KOL Signals</p>
+      </div>
+      <span>${rows.length}/${allRows.length} signals shown</span>
+    </div>
+    ${tokenSignalRowsHtml(rows, {
+      context: "kol",
+      primaryAction: "quickTrade",
+      primaryActionLabel: "Trade",
+      shareBuilder: kolShareText
+    })}
+    ${terminalFeedLoadMoreHtml("kol", allRows, "KOL signals")}
+  `;
 }
 
 async function createWalletSet() {
@@ -7771,7 +7887,7 @@ function rowAgeSeconds(row = {}) {
   return Number.POSITIVE_INFINITY;
 }
 
-const SLIME_SCOPE_LIMIT = 30;
+const SLIME_SCOPE_LIMIT = 100;
 
 function slimeScopeSourceRows() {
   const marketByMint = marketDataRowsByMint();
@@ -7925,7 +8041,8 @@ function slimeScopeHtml() {
     ["graduating", "Graduating"],
     ["graduated", "Graduated"]
   ];
-  const rows = slimeScopeRows();
+  const allRows = slimeScopeRows();
+  const rows = terminalFeedRowsWindow("slimeScope", allRows);
   return `
     <section class="slime-scope-page">
       <div class="terminal-title-row slime-scope-title-row">
@@ -7934,7 +8051,7 @@ function slimeScopeHtml() {
           <h3>Slime Scope</h3>
           <p>Fast pump-style view for new, graduating, and graduated pairs. Mayhem-mode rows stay filtered out.</p>
         </div>
-        <span>${rows.length} shown</span>
+        <span>${rows.length}/${allRows.length} shown</span>
       </div>
       <div class="command-controls slime-scope-controls">
         <div class="mode-row terminal-modes slime-scope-tabs">
@@ -7946,13 +8063,12 @@ function slimeScopeHtml() {
       <article class="terminal-panel slime-scope-list-panel">
         ${compactSignalRowsHtml(rows, {
           layout: "terminal",
-          limit: 30,
+          limit: Math.max(1, rows.length),
           actionLabel: activePresetButtonLabel(),
-          rotateKey: terminalRotationKey(`slime-scope:${state.slimeScopeMode}`),
-          stickyCount: 1,
           emptyTitle: "No Slime Scope pairs yet",
           emptyMessage: "Feeds are refreshing. Try a different scope mode if this stays empty."
         })}
+        ${terminalFeedLoadMoreHtml("slimeScope", allRows, "Slime Scope pairs")}
       </article>
     </section>
   `;
@@ -8391,8 +8507,8 @@ function positionRowHtml(position) {
   `;
 }
 
-function liveTradeRowsHtml(limit = 10) {
-  const trades = state.pnl?.trades || [];
+function liveTradeRowsHtml(limit = 10, sourceTrades = null) {
+  const trades = Array.isArray(sourceTrades) ? sourceTrades : state.pnl?.trades || [];
   if (!trades.length) return emptyState("No live trade history yet", "Submitted web trades will appear here after refresh.");
   return `
     <div class="live-trade-list">
@@ -8412,6 +8528,8 @@ function liveTradeRowsHtml(limit = 10) {
 }
 
 function liveTradesHtml() {
+  const allTrades = state.pnl?.trades || [];
+  const trades = terminalFeedRowsWindow("liveTrades", allTrades);
   return `
     <section class="terminal-layout live-trades-terminal">
       <main class="terminal-main">
@@ -8420,14 +8538,15 @@ function liveTradesHtml() {
             <h3>Live Trades</h3>
             <p>Recent web trade activity, fast token preview, and active preset buys stay connected to the terminal.</p>
           </div>
-          <span>${state.pnl?.trades?.length || 0} trades</span>
+          <span>${trades.length}/${allTrades.length} trades shown</span>
         </div>
         <div class="section-actions terminal-actions">
           <button class="primary" data-top-refresh-wallet>Refresh Trades</button>
           <button data-tab="terminal">Command Center</button>
           <button data-tab="pnl">PnL</button>
         </div>
-        ${liveTradeRowsHtml(25)}
+        ${liveTradeRowsHtml(trades.length || terminalFeedPageSize("liveTrades"), trades)}
+        ${terminalFeedLoadMoreHtml("liveTrades", allTrades, "trades")}
       </main>
       <aside class="trade-side order-ticket-stack">
         ${terminalTradePanelHtml(selectedTerminalTokenRow())}
@@ -8573,7 +8692,8 @@ function txAuditResultHtml(audit) {
 
 function livePairsHtml() {
   const activeLivePairs = currentLivePairs();
-  const rows = activeLivePairs?.rows || [];
+  const allRows = activeLivePairs?.rows || [];
+  const rows = terminalFeedRowsWindow("live", allRows);
   const activeBucketLabel = LIVE_PAIR_BUCKETS.find(([bucket]) => bucket === state.livePairBucket)?.[1] || "Live";
   const lastUpdatedAt = currentLivePairsUpdatedAt();
   const bucketLoading = Boolean(state.livePairsLoadingByBucket[state.livePairBucket]);
@@ -8588,7 +8708,7 @@ function livePairsHtml() {
             <h3>Live Pairs</h3>
             <p>Newest Pump/new-pair listings with fast metadata refresh. Trade safety checks run before any buy.</p>
           </div>
-          <span>${escapeHtml(activeBucketLabel)} | ${escapeHtml(rows.length)} shown</span>
+          <span>${escapeHtml(activeBucketLabel)} | ${escapeHtml(rows.length)}/${escapeHtml(allRows.length)} shown</span>
         </div>
         <div class="mode-row terminal-modes live-pair-buckets">
           ${LIVE_PAIR_BUCKETS.map(([bucket, label]) => {
@@ -8616,6 +8736,7 @@ function livePairsHtml() {
           <small>${escapeHtml(status)}${lastUpdatedAt ? ` Updated ${escapeHtml(formatDate(lastUpdatedAt))}.` : ""}</small>
         </div>
         ${rows.length ? livePairRowsHtml(rows) : emptyState("No live pairs yet", "Keep this tab open or tap Refresh Live. Trade safety checks run before any buy.")}
+        ${terminalFeedLoadMoreHtml("live", allRows, `${activeBucketLabel} pairs`)}
       </main>
     </section>
   `;
@@ -8635,7 +8756,8 @@ function watchlistHtml() {
   if (!state.user || !state.token) {
     return `${createWalletSection()}${emptyState("Create or log in to save a watchlist", "You can browse scanners as a guest. Tap Watch after creating an account to save coins here.")}`;
   }
-  const rows = state.watchlist?.rows || [];
+  const allRows = state.watchlist?.rows || [];
+  const rows = terminalFeedRowsWindow("watchlist", allRows);
   return `
     <section class="terminal-layout watchlist-terminal">
       <main class="terminal-main">
@@ -8644,7 +8766,7 @@ function watchlistHtml() {
             <h3>Watchlist</h3>
             <p>Saved coins refresh while this tab is open. Use Trade or Bundle presets when you are ready.</p>
           </div>
-          <span>${rows.length} watched</span>
+          <span>${rows.length}/${allRows.length} watched</span>
         </div>
         <div class="section-actions terminal-actions">
           <button class="primary" data-refresh-watchlist>${state.watchlistLoading ? "Refreshing..." : "Refresh Watchlist"}</button>
@@ -8653,6 +8775,7 @@ function watchlistHtml() {
           <button data-tab="kol">KOL Tracker</button>
         </div>
         ${rows.length ? tokenSignalRowsHtml(rows, { context: "watchlist", shareBuilder: (row) => manualCoinWatchShareText(row.tokenMint) }) : emptyState("No watched coins yet", "Tap Watch on Live Pairs, Sniper, or KOL signals to save coins here.")}
+        ${terminalFeedLoadMoreHtml("watchlist", allRows, "watched pairs")}
       </main>
       <aside class="trade-side order-ticket-stack">
         <article class="order-ticket">
@@ -8769,9 +8892,9 @@ function livePairAvatarHtml(row) {
   const safeFallbackSrc = escapeHtml(fallbackSrc);
   const imageUrl = normalizeImageUrl(row.imageUrl);
   if (imageUrl) {
-    return `<div class="live-pair-avatar"><img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(row.symbol || row.name || "Token")}" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.src='${safeFallbackSrc}';"><span>${escapeHtml(label)}</span></div>`;
+    return `<div class="live-pair-avatar"><img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(row.symbol || row.name || "Token")}" loading="lazy" decoding="async" fetchpriority="low" width="42" height="42" referrerpolicy="no-referrer" onerror="this.onerror=null;this.src='${safeFallbackSrc}';"><span>${escapeHtml(label)}</span></div>`;
   }
-  return `<div class="live-pair-avatar fallback with-mascot"><img src="${safeFallbackSrc}" alt="" aria-hidden="true" onerror="this.hidden=true;"><span>${escapeHtml(label)}</span></div>`;
+  return `<div class="live-pair-avatar fallback with-mascot"><img src="${safeFallbackSrc}" alt="" aria-hidden="true" loading="lazy" decoding="async" fetchpriority="low" width="42" height="42" onerror="this.hidden=true;"><span>${escapeHtml(label)}</span></div>`;
 }
 
 function tokenMascotIndex(value = "") {
@@ -8932,12 +9055,15 @@ function sniperResultHtml() {
 }
 
 function sniperRowsHtml() {
-  if (!state.scan.rows.length) {
+  const allRows = state.scan.rows || [];
+  const rows = terminalFeedRowsWindow("sniper", allRows);
+  if (!allRows.length) {
     return emptyState("No usable picks", "Refresh again or choose a different mode.");
   }
   return `
-    <p class="scan-meta">${escapeHtml(state.scan.label)} | scored ${state.scan.scanned} | qualified ${state.scan.qualified} | mode-fit ${state.scan.modeFit} | display pool ${state.scan.displayPool || 0}</p>
-    ${tokenSignalRowsHtml(state.scan.rows, { context: "sniper", primaryAction: "snipe", primaryActionLabel: "Snipe", shareBuilder: sniperShareText })}
+    <p class="scan-meta">${escapeHtml(state.scan.label)} | ${rows.length}/${allRows.length} shown | scored ${state.scan.scanned} | qualified ${state.scan.qualified} | mode-fit ${state.scan.modeFit} | display pool ${state.scan.displayPool || 0}</p>
+    ${tokenSignalRowsHtml(rows, { context: "sniper", primaryAction: "snipe", primaryActionLabel: "Snipe", shareBuilder: sniperShareText })}
+    ${terminalFeedLoadMoreHtml("sniper", allRows, "snipe candidates")}
   `;
 }
 
@@ -9714,6 +9840,23 @@ document.addEventListener("click", async (event) => {
     await refreshVisibleTerminalFeeds({ force: true, reason: "manual-refresh-feeds" }).catch((error) => setError(error.message));
     return;
   }
+  if (target.matches("[data-terminal-load-more]")) {
+    const tabKey = target.dataset.terminalLoadMore || state.activeTab;
+    increaseTerminalFeedVisibleLimit(tabKey, terminalFeedResultCount(tabKey));
+    recordTerminalFeedEvent(tabKey, {
+      requestId: terminalFeedRuntime(tabKey).lastRequestId || "",
+      status: terminalFeedRuntime(tabKey).lastStatus || "render",
+      reason: "load-more",
+      resultCount: terminalFeedResultCount(tabKey),
+      renderedCount: terminalFeedRenderedCount(tabKey),
+      hasMore: terminalFeedResultCount(tabKey) > terminalFeedRenderedCount(tabKey),
+      stale: terminalFeedIsStale(tabKey),
+      errorCode: terminalFeedRuntime(tabKey).errorCode || "",
+      errorMessage: terminalFeedRuntime(tabKey).errorMessage || ""
+    });
+    render({ force: true });
+    return;
+  }
   if (target.matches("[data-watch-token]")) await updateWatchlist("add", target);
   if (target.matches("[data-unwatch-token]")) await updateWatchlist("remove", target);
   if (target.matches("[data-pnl-card]")) {
@@ -9777,6 +9920,7 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-kol-mode]")) {
     state.kolWallet = "";
     state.kolMode = target.dataset.kolMode || state.kolMode;
+    resetTerminalFeedVisibleLimit("kol");
     await refreshTerminalFeed("kol", { force: true, reason: "kol-mode-switch" }).catch((error) => setError(error.message));
     return;
   }
@@ -9786,11 +9930,13 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-kol-wallet-scan]")) {
     state.kolWallet = String($("[data-kol-wallet]")?.value || "").trim();
+    resetTerminalFeedVisibleLimit("kol");
     await refreshTerminalFeed("kol", { force: true, reason: "kol-wallet-scan" }).catch((error) => setError(error.message));
     return;
   }
   if (target.matches("[data-kol-scan-wallet]")) {
     state.kolWallet = String(target.dataset.kolScanWallet || "").trim();
+    resetTerminalFeedVisibleLimit("kol");
     await refreshTerminalFeed("kol", { force: true, reason: "kol-signal-wallet-scan" }).catch((error) => setError(error.message));
     return;
   }
@@ -9905,6 +10051,8 @@ document.addEventListener("click", async (event) => {
     state.livePairBucket = target.dataset.livePairBucket || "live";
     state.livePairs = currentLivePairs();
     state.livePairsLastUpdatedAt = currentLivePairsUpdatedAt();
+    resetTerminalFeedVisibleLimit("live");
+    resetTerminalFeedVisibleLimit("slimeScope");
     render();
     await refreshTerminalFeed(state.activeTab === "terminal" ? "terminal" : "live", { force: true, reason: "live-bucket-switch" }).catch((error) => setError(error.message));
   }
@@ -9912,11 +10060,13 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-slime-scope-mode]")) {
     state.slimeScopeMode = target.dataset.slimeScopeMode || "new";
     state.activeTab = "slimeScope";
+    resetTerminalFeedVisibleLimit("slimeScope");
     render();
     await refreshTerminalFeed("slimeScope", { force: true, reason: "slime-scope-mode-switch" }).catch((error) => setError(error.message));
   }
 
   if (target.matches("[data-scan-mode]")) {
+    resetTerminalFeedVisibleLimit("sniper");
     await loadScan(target.dataset.scanMode).catch((error) => setError(error.message));
   }
 
@@ -9979,6 +10129,8 @@ document.addEventListener("change", async (event) => {
   }
   if (target?.matches?.("[data-terminal-sort]")) {
     state.terminalSort = target.value || "best";
+    resetTerminalFeedVisibleLimit("live");
+    resetTerminalFeedVisibleLimit("slimeScope");
     await refreshLivePairBuckets({ silent: true, force: true }).catch((error) => setError(error.message));
     render();
   }

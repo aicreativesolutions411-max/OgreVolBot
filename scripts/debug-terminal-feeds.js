@@ -35,17 +35,24 @@ function parseTerminalFeeds(appSource = "") {
   if (end < 0) return [];
   const block = appSource.slice(start, end);
   const feeds = [];
-  const pattern = /\{\s*tabKey:\s*"([^"]+)",\s*label:\s*"([^"]+)",\s*component:\s*"([^"]+)",\s*endpoint:\s*"([^"]+)",\s*category:\s*"([^"]+)",\s*refreshMs:\s*([0-9_]+),\s*staleMs:\s*([0-9_]+),\s*cacheKey:\s*"([^"]+)"/g;
+  const pattern = /\{[^\n]*tabKey:\s*"([^"]+)"[^\n]*\}/g;
   for (const match of block.matchAll(pattern)) {
+    const item = match[0];
+    const value = (field) => item.match(new RegExp(`${field}:\\s*"([^"]*)"`))?.[1] || "";
+    const number = (field) => parseNumberLiteral(item.match(new RegExp(`${field}:\\s*([0-9_]+)`))?.[1] || "0");
     feeds.push({
       tabKey: match[1],
-      label: match[2],
-      component: match[3],
-      endpoint: match[4],
-      category: match[5],
-      refreshMs: parseNumberLiteral(match[6]),
-      staleMs: parseNumberLiteral(match[7]),
-      cacheKey: match[8]
+      label: value("label"),
+      component: value("component"),
+      endpoint: value("endpoint"),
+      category: value("category"),
+      refreshMs: number("refreshMs"),
+      staleMs: number("staleMs"),
+      cacheKey: value("cacheKey"),
+      pageSize: number("pageSize"),
+      maxPageSize: number("maxPageSize"),
+      previewLimit: number("previewLimit"),
+      supportsPagination: /supportsPagination:\s*true/.test(item)
     });
   }
   return feeds;
@@ -115,9 +122,25 @@ const [appSource, serverSource, packageSource] = await Promise.all([
 const eventsStore = await readJsonIfExists("terminal-feed-events.json", { events: [] });
 const feeds = parseTerminalFeeds(appSource);
 const recordTerminalFeedEventSource = functionSource(serverSource, "recordTerminalFeedEvent");
+const recentEvents = (eventsStore.events || []).slice(-20);
+const latestEventByTab = new Map();
+for (const event of eventsStore.events || []) {
+  if (event?.tabKey) latestEventByTab.set(event.tabKey, event);
+}
 
 const report = {
-  feedRegistry: feeds,
+  feedRegistry: feeds.map((feed) => {
+    const latest = latestEventByTab.get(feed.tabKey) || {};
+    return {
+      ...feed,
+      lastFetchTime: latest.at || null,
+      lastStatus: latest.status || null,
+      lastResultCount: latest.resultCount ?? null,
+      lastRenderedCount: latest.renderedCount ?? null,
+      hasMore: latest.hasMore ?? null,
+      nextCursor: latest.nextCursor || null
+    };
+  }),
   registryChecks: {
     feedCount: feeds.length,
     duplicateCacheKeys: duplicates(feeds, "cacheKey"),
@@ -139,6 +162,13 @@ const report = {
     visibilityFocusRefresh: bool(appSource, /reason:\s*"visibility-focus-return"/),
     manualRefreshRoutesThroughRegistry: bool(appSource, /data-refresh-feeds[\s\S]*refreshVisibleTerminalFeeds/) && bool(appSource, /data-refresh-all[\s\S]*refreshTerminalFeed/)
   },
+  feedDepth: {
+    fullTabsUseLoadMore: bool(appSource, /data-terminal-load-more/) && bool(appSource, /terminalFeedRowsWindow/),
+    livePairsPageSize: feeds.find((feed) => feed.tabKey === "live")?.pageSize || 0,
+    slimeScopePageSize: feeds.find((feed) => feed.tabKey === "slimeScope")?.pageSize || 0,
+    sniperPageSize: feeds.find((feed) => feed.tabKey === "sniper")?.pageSize || 0,
+    kolPageSize: feeds.find((feed) => feed.tabKey === "kol")?.pageSize || 0
+  },
   backendDiagnostics: {
     terminalFeedEventEndpoint: bool(serverSource, /\/api\/web\/terminal-feed-event/),
     terminalFeedEventsFile: bool(serverSource, /terminal-feed-events\.json/),
@@ -153,7 +183,9 @@ const report = {
   staticDataSignals: staticDataSignals(appSource, serverSource),
   pollingSignals: pollingSignals(appSource),
   packageScriptPresent: bool(packageSource, /"debug:terminal-feeds"/),
-  recentTerminalFeedEvents: (eventsStore.events || []).slice(-20)
+  activePollingIntervals: pollingSignals(appSource),
+  hiddenTabPollingStatus: bool(appSource, /document\.hidden/) ? "paused-or-slowed" : "unknown",
+  recentTerminalFeedEvents: recentEvents
 };
 
 console.log("TERMINAL FEEDS DEBUG");

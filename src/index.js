@@ -15533,6 +15533,9 @@ function safeTerminalFeedText(value = "", max = 120) {
 
 async function recordTerminalFeedEvent(body = {}, request = {}) {
   const resultCount = Number.parseInt(body.resultCount || "0", 10);
+  const renderedCount = Number.parseInt(body.renderedCount || "0", 10);
+  const pageSize = Number.parseInt(body.pageSize || "0", 10);
+  const maxPageSize = Number.parseInt(body.maxPageSize || "0", 10);
   const event = {
     at: new Date().toISOString(),
     tabKey: safeTerminalFeedText(body.tabKey || "", 40),
@@ -15544,6 +15547,12 @@ async function recordTerminalFeedEvent(body = {}, request = {}) {
     status: safeTerminalFeedText(body.status || "", 40),
     reason: safeTerminalFeedText(body.reason || "", 80),
     resultCount: Number.isFinite(resultCount) && resultCount >= 0 ? Math.min(resultCount, 100_000) : 0,
+    renderedCount: Number.isFinite(renderedCount) && renderedCount >= 0 ? Math.min(renderedCount, 100_000) : 0,
+    pageSize: Number.isFinite(pageSize) && pageSize >= 0 ? Math.min(pageSize, 1_000) : 0,
+    maxPageSize: Number.isFinite(maxPageSize) && maxPageSize >= 0 ? Math.min(maxPageSize, 1_000) : 0,
+    supportsPagination: Boolean(body.supportsPagination),
+    hasMore: Boolean(body.hasMore),
+    nextCursor: safeTerminalFeedText(body.nextCursor || "", 80),
     stale: Boolean(body.stale),
     errorCode: safeTerminalFeedText(body.errorCode || "", 60),
     errorMessage: safeTerminalFeedText(body.errorMessage || "", 140),
@@ -15561,6 +15570,8 @@ async function recordTerminalFeedEvent(body = {}, request = {}) {
       cacheKey: event.cacheKey,
       status: event.status,
       resultCount: event.resultCount,
+      renderedCount: event.renderedCount,
+      hasMore: event.hasMore,
       stale: event.stale
     });
   } catch {
@@ -20210,9 +20221,9 @@ async function buildKolScan(userId, mode = "hot", wallet = "") {
         ...solanaPositionRows,
         ...solanaRows,
         ...(localPart.rows || [])
-      ]).sort(compareKolSignals), 36);
-      const hydratedRows = diversifyKolSignals((await hydrateKolSignalMetadata(customCandidates)).sort(compareKolSignals), 24);
-      const rows = rotateRowsForRefresh(hydratedRows, 12, scanState.refreshCount, { stickyCount: 1 });
+      ]).sort(compareKolSignals), 72);
+      const hydratedRows = diversifyKolSignals((await hydrateKolSignalMetadata(customCandidates)).sort(compareKolSignals), 48);
+      const rows = rotateRowsForRefresh(hydratedRows, 36, scanState.refreshCount, { stickyCount: 2 });
       return {
         ...base,
         configured: true,
@@ -20259,9 +20270,9 @@ async function buildKolScan(userId, mode = "hot", wallet = "") {
     const signalCandidates = diversifyKolSignals(uniqueKolSignals([
       ...(madePart.rows || []),
       ...(solanaPart.rows || [])
-    ]).sort(compareKolSignals), 36);
-    const sortedPool = diversifyKolSignals((await hydrateKolSignalMetadata(signalCandidates)).sort(compareKolSignals), 24);
-    const sorted = rotateRowsForRefresh(sortedPool, 12, scanState.refreshCount, { stickyCount: 2 });
+    ]).sort(compareKolSignals), 72);
+    const sortedPool = diversifyKolSignals((await hydrateKolSignalMetadata(signalCandidates)).sort(compareKolSignals), 48);
+    const sorted = rotateRowsForRefresh(sortedPool, 36, scanState.refreshCount, { stickyCount: 2 });
     const kols = uniqueKolSummaries([
       ...(madePart.kols || []),
       ...(solanaPart.kols || [])
@@ -20340,7 +20351,7 @@ async function buildMadeOnSolKolPart(mode) {
     ? await fetchMadeOnSolHotKolTokens(safeMode)
     : await fetchMadeOnSolKolFeedSignals(safeMode);
   return {
-    rows: rows.slice(0, 12),
+    rows: rows.slice(0, 24),
     kols: uniqueKolSummaries(rows
       .filter((row) => row.kolWallet || row.twitter)
       .map((row) => webKolSummaryRow({
@@ -20350,7 +20361,7 @@ async function buildMadeOnSolKolPart(mode) {
         avatar: row.avatar,
         lastTradeAt: row.lastTradeAt,
         trades: row.kolCount || null
-      }))).slice(0, 12),
+      }))).slice(0, 24),
     calls: 1
   };
 }
@@ -20359,7 +20370,7 @@ async function buildSolanaTrackerKolPart(mode) {
   const safeMode = normalizeKolMode(mode);
   const kols = await fetchKolLeaderboard(safeMode);
   const signals = [];
-  const topKols = kols.slice(0, Math.min(CONFIG.solanaTrackerKolLimit, 12));
+  const topKols = kols.slice(0, Math.min(CONFIG.solanaTrackerKolLimit, 24));
   const signalKols = topKols.slice(0, Math.min(CONFIG.solanaTrackerKolSignalLookups, topKols.length));
 
   await runWithConcurrency(signalKols, CONFIG.solanaTrackerKolPositionConcurrency, async (kol) => {
@@ -20371,7 +20382,7 @@ async function buildSolanaTrackerKolPart(mode) {
   });
 
   return {
-    rows: uniqueKolSignals(signals).sort(compareKolSignals).slice(0, 12),
+    rows: uniqueKolSignals(signals).sort(compareKolSignals).slice(0, 24),
     kols: topKols.map((kol) => webKolSummaryRow(kol)),
     calls: 1 + signalKols.length,
     signalWalletsChecked: signalKols.length
@@ -21559,9 +21570,9 @@ async function webSniperScan(userId, mode) {
   });
 
   const { qualifiedRows } = buildQualifiedSniperRows(scored, settings);
-  const display = buildSniperModeDisplay(qualifiedRows, safeMode, scanState, { limit: 12 });
+  const display = buildSniperModeDisplay(qualifiedRows, safeMode, scanState, { limit: 36 });
   const modeRows = display.modeRows;
-  const rows = display.rows.slice(0, 12);
+  const rows = display.rows.slice(0, 36);
   rememberSniperScanRows(`web:${userId}`, safeMode, rows);
 
   return {
@@ -21572,7 +21583,15 @@ async function webSniperScan(userId, mode) {
     qualified: qualifiedRows.length,
     modeFit: modeRows.length,
     displayPool: display.displayRows.length,
-    rows: rows.map(webSniperRow)
+    rows: rows.map(webSniperRow),
+    count: rows.length,
+    pageSize: 36,
+    maxPageSize: 72,
+    hasMore: display.rows.length > rows.length,
+    nextCursor: null,
+    category: "scanner:launch-snipe",
+    source: "backend:sniper-scan",
+    lastUpdatedAt: new Date().toISOString()
   };
 }
 
@@ -21649,7 +21668,7 @@ async function buildWebLivePairs(userId, bucket = "live", options = {}) {
   });
   const baseRows = uniqueSniperScoreRows(candidates.map(livePairCandidateToRow).filter(Boolean))
     .sort(compareWebLivePairs)
-    .slice(0, isLive ? 110 : 240);
+    .slice(0, isLive ? 180 : 320);
   const enrichedRows = await enrichWebLivePairsForImages(baseRows).catch(() => baseRows);
   const targetLimit = livePairBucketLimit(safeBucket);
   const ageVerifiedRows = uniqueSniperScoreRows(enrichedRows)
@@ -21697,6 +21716,17 @@ async function buildWebLivePairs(userId, bucket = "live", options = {}) {
     refreshCount: scanState.refreshCount,
     scanned: candidates.length,
     qualified: liveRows.length,
+    count: safeRows.length,
+    rawProviderCount: candidates.length,
+    backendReturnedCount: safeRows.length,
+    pageSize: targetLimit,
+    maxPageSize: targetLimit,
+    hasMore: liveRows.length > safeRows.length,
+    nextCursor: null,
+    category: "pairs:new",
+    source: "backend:live-pairs",
+    providerStatus: safety.stats?.rpcSafetySkipped ? "rpc-safety-skipped" : "ok",
+    filteredOutCount: Math.max(0, liveRows.length - safeRows.length),
     rows: safeRows.map(webLivePairRow),
     refreshedAt: new Date().toISOString(),
     refreshSeconds: CONFIG.livePairsRefreshSeconds,
@@ -21716,7 +21746,10 @@ function livePairBucketLabel(bucket) {
 }
 
 function livePairBucketLimit(bucket) {
-  return normalizeLivePairBucket(bucket) === "live" ? 18 : 30;
+  const safeBucket = normalizeLivePairBucket(bucket);
+  if (safeBucket === "live") return 50;
+  if (safeBucket === "under1h") return 60;
+  return 75;
 }
 
 function livePairAgeMinutesValue(item) {
@@ -22178,7 +22211,7 @@ async function filterWebLivePairsForSafety(rows, limit = 12) {
     blocked: 0,
     token2022: 0
   };
-  const candidates = rows.slice(0, Math.max(limit * 4, 32));
+  const candidates = rows.slice(0, Math.min(rows.length, Math.max(limit * 2, 32), 120));
 
   await runWithConcurrency(candidates, Math.min(8, Math.max(3, CONFIG.balanceConcurrency)), async (row) => {
     try {
