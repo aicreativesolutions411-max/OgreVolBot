@@ -67,6 +67,7 @@ import {
   processLaunchImage,
   safeLaunchImageDiagnostics
 } from "./lib/launchImageProcessor.js";
+import { createTokenMetadataResolver } from "./lib/tokenMetadataResolver.js";
 import {
   Connection,
   Keypair,
@@ -11104,35 +11105,41 @@ function pnlSlimeBorderSvg() {
   </g>`;
 }
 
-async function getDexTokenMetadata(tokenMint) {
-  const cached = dexMetadataCache.get(tokenMint);
-  if (cached && Date.now() - cached.cachedAt < 5 * 60 * 1000) {
+let tokenMetadataResolverInstance = null;
+
+function getTokenMetadataResolver() {
+  if (tokenMetadataResolverInstance) return tokenMetadataResolverInstance;
+  tokenMetadataResolverInstance = createTokenMetadataResolver({
+    ttlMs: 5 * 60 * 1000,
+    getSlimeWireMetadata: ({ mint }) => slimeWireLaunchMetadataForMint(mint),
+    getDexMetadata: (mint) => getDexScreenerTokenMetadata(mint).catch(() => ({})),
+    getPumpMetadata: (mint, options = {}) => getPumpFunTokenMetadata(mint, {
+      timeoutMs: options.pumpTimeoutMs || options.timeoutMs || 1_500
+    }).catch(() => ({})),
+    getOnchainMetadata: () => ({}),
+    fetchMetadataJson: fetchTokenMetadataJsonForResolver,
+    verifyImageUri: verifyTokenImageForResolver,
+    log: logTokenMetadataResolution
+  });
+  return tokenMetadataResolverInstance;
+}
+
+function invalidateTokenMetadataCache(tokenMint = "") {
+  const mint = String(tokenMint || "").trim();
+  if (!mint) return;
+  dexMetadataCache.delete(mint);
+  tokenMetadataResolverInstance?.invalidate(mint);
+}
+
+async function getDexTokenMetadata(tokenMint, options = {}) {
+  const mint = String(tokenMint || "").trim();
+  if (!mint) return {};
+  const cached = dexMetadataCache.get(mint);
+  if (!options.force && cached && Date.now() - cached.cachedAt < 5 * 60 * 1000) {
     return cached.value;
   }
-
-  const dexValue = await getDexScreenerTokenMetadata(tokenMint).catch(() => ({}));
-  const needsPumpFallback = !dexValue.imageUrl || !dexValue.symbol || !dexValue.name;
-  const pumpValue = needsPumpFallback
-    ? await getPumpFunTokenMetadata(tokenMint).catch(() => ({}))
-    : {};
-  const value = {
-    symbol: dexValue.symbol || pumpValue.symbol || "",
-    name: dexValue.name || pumpValue.name || "",
-    imageUrl: dexValue.imageUrl || pumpValue.imageUrl || "",
-    websiteUrl: dexValue.websiteUrl || "",
-    twitterUrl: dexValue.twitterUrl || "",
-    telegramUrl: dexValue.telegramUrl || "",
-    marketCap: dexValue.marketCap || pumpValue.marketCap || null,
-    fdv: dexValue.fdv || null,
-    priceChange: dexValue.priceChange || null,
-    liquidityUsd: dexValue.liquidityUsd || null,
-    volume: dexValue.volume || null,
-    txns: dexValue.txns || null,
-    pairCreatedAt: dexValue.pairCreatedAt || null,
-    source: dexValue.imageUrl ? "dexscreener" : pumpValue.imageUrl ? "pumpfun" : "fallback"
-  };
-
-  dexMetadataCache.set(tokenMint, { cachedAt: Date.now(), value });
+  const value = await getTokenMetadataResolver().resolveTokenMetadata({ mint }, options);
+  dexMetadataCache.set(mint, { cachedAt: Date.now(), value });
   return value;
 }
 
@@ -11143,7 +11150,7 @@ async function tokenMetadataMapForMints(tokenMints, options = {}) {
 
   for (const mint of addresses) {
     const cached = dexMetadataCache.get(mint);
-    if (cached && Date.now() - cached.cachedAt < 5 * 60 * 1000) {
+    if (!options.force && cached && Date.now() - cached.cachedAt < 5 * 60 * 1000) {
       metadataByMint.set(mint, cached.value);
     } else {
       uncached.push(mint);
@@ -11155,36 +11162,135 @@ async function tokenMetadataMapForMints(tokenMints, options = {}) {
   const pairs = await fetchDexScreenerTokenPairsBatch(uncached, { timeoutMs: options.timeoutMs || 3_500 }).catch(() => []);
   await runWithConcurrency(uncached, options.concurrency || 3, async (mint) => {
     const dexValue = metadataFromDexPair(mint, bestDexPairForToken(mint, pairs));
-    const needsPumpFallback = options.pumpFallback !== false && (
-      !dexValue.symbol
-      || !dexValue.name
-      || !dexValue.imageUrl
-      || !dexValue.marketCap
-      || !dexValue.liquidityUsd
-      || !dexValue.volume?.h1
-    );
-    const pumpValue = needsPumpFallback
-      ? await getPumpFunTokenMetadata(mint, { timeoutMs: options.pumpTimeoutMs || 1_500 }).catch(() => ({}))
-      : {};
-    const value = {
-      ...dexValue,
-      symbol: dexValue.symbol || pumpValue.symbol || "",
-      name: dexValue.name || pumpValue.name || "",
-      imageUrl: dexValue.imageUrl || pumpValue.imageUrl || "",
-      marketCap: dexValue.marketCap || pumpValue.marketCap || null,
-      fdv: dexValue.fdv || pumpValue.fdv || null,
-      liquidityUsd: dexValue.liquidityUsd || pumpValue.liquidityUsd || null,
-      volume: dexValue.volume || pumpValue.volume || null,
-      txns: dexValue.txns || pumpValue.txns || null,
-      priceChange: dexValue.priceChange || pumpValue.priceChange || null,
-      pairCreatedAt: dexValue.pairCreatedAt || pumpValue.pairCreatedAt || null,
-      source: dexValue.imageUrl ? "dexscreener" : pumpValue.imageUrl ? "pumpfun" : "fallback"
-    };
+    const value = await getTokenMetadataResolver().resolveTokenMetadata({ mint }, {
+      ...options,
+      dexMetadata: dexValue,
+      metadataTimeoutMs: options.metadataTimeoutMs || 1_500,
+      imageTimeoutMs: options.imageTimeoutMs || 1_500
+    }).catch(() => ({
+      symbol: dexValue.symbol || "",
+      name: dexValue.name || "",
+      imageUrl: dexValue.imageUrl || "",
+      imageUri: dexValue.imageUrl || "",
+      metadataSourceUsed: dexValue.imageUrl ? "dex" : "placeholder",
+      source: dexValue.imageUrl ? "dex" : "placeholder",
+      metadataMissing: !dexValue.imageUrl,
+      warnings: ["metadata resolver failed"]
+    }));
     dexMetadataCache.set(mint, { cachedAt: Date.now(), value });
     metadataByMint.set(mint, value);
   });
 
   return metadataByMint;
+}
+
+async function slimeWireLaunchMetadataForMint(tokenMint = "") {
+  const mint = String(tokenMint || "").trim();
+  if (!mint) return {};
+  const [attemptStore, tradeStore] = await Promise.all([
+    readPumpLaunchAttempts().catch(() => ({ attempts: [] })),
+    readTradeHistory().catch(() => ({ trades: [] }))
+  ]);
+  const attempts = (attemptStore.attempts || [])
+    .filter((attempt) => String(firstString(attempt.mintPublicKey, attempt.tokenMint, attempt.mint, attempt.requestBody?.mint)) === mint)
+    .sort((a, b) => tradeTimestampMs(b.completedAt || b.updatedAt || b.createdAt) - tradeTimestampMs(a.completedAt || a.updatedAt || a.createdAt));
+  const preferredAttempt = attempts.find((attempt) => (
+    String(attempt.status || "").toUpperCase() === PUMP_LAUNCH_STATUS.COMPLETE
+    && (attempt.imageUri || attempt.metadataUri || attempt.metadataJson)
+  )) || attempts.find((attempt) => attempt.imageUri || attempt.metadataUri || attempt.metadataJson);
+  if (preferredAttempt) {
+    return {
+      tokenMint: mint,
+      source: "pumpfun",
+      tokenName: firstString(preferredAttempt.tokenName, preferredAttempt.name, preferredAttempt.metadataJson?.name, preferredAttempt.requestBody?.tokenMetadata?.name),
+      symbol: firstString(preferredAttempt.symbol, preferredAttempt.metadataJson?.symbol, preferredAttempt.requestBody?.tokenMetadata?.symbol),
+      imageUri: firstString(preferredAttempt.imageUri, preferredAttempt.metadataJson?.image, preferredAttempt.metadataValidation?.imageUri),
+      metadataUri: firstString(preferredAttempt.metadataUri, preferredAttempt.requestBody?.tokenMetadata?.uri),
+      metadataJson: preferredAttempt.metadataJson || null,
+      launchAttemptId: preferredAttempt.launchAttemptId || preferredAttempt.id || "",
+      completedAt: firstString(preferredAttempt.completedAt, preferredAttempt.updatedAt, preferredAttempt.createdAt),
+      confidence: String(preferredAttempt.status || "").toUpperCase() === PUMP_LAUNCH_STATUS.COMPLETE ? "high" : "medium"
+    };
+  }
+
+  const launchTrade = (tradeStore.trades || [])
+    .filter((trade) => String(trade.tokenMint || "") === mint && /pump|launch/i.test(String(trade.source || trade.type || "")))
+    .sort((a, b) => tradeTimestampMs(b.timestamp) - tradeTimestampMs(a.timestamp))[0];
+  if (!launchTrade) return {};
+  return {
+    tokenMint: mint,
+    source: "pumpfun",
+    tokenName: firstString(launchTrade.tokenName, launchTrade.name),
+    symbol: firstString(launchTrade.symbol, launchTrade.ticker),
+    imageUri: firstString(launchTrade.imageUri, launchTrade.imageUrl),
+    metadataUri: firstString(launchTrade.metadataUri),
+    completedAt: launchTrade.timestamp || "",
+    confidence: "medium"
+  };
+}
+
+async function fetchTokenMetadataJsonForResolver(uri, options = {}) {
+  let lastError = null;
+  for (const candidate of metadataUriGatewayCandidates(uri)) {
+    try {
+      const fetched = await fetchTextWithBackoff(candidate, {
+        timeoutMs: Math.max(900, Math.min(Number(options.timeoutMs || 1_500), 4_000)),
+        retries: Number.isFinite(Number(options.retries)) ? Number(options.retries) : 1
+      });
+      const json = JSON.parse(fetched.text);
+      return {
+        json,
+        uri: fetched.url,
+        status: fetched.response?.status || 200,
+        contentType: fetched.response?.headers?.get?.("content-type") || "",
+        attempts: fetched.attempts || []
+      };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (lastError) throw lastError;
+  return null;
+}
+
+async function verifyTokenImageForResolver(uri, options = {}) {
+  let lastError = null;
+  for (const candidate of imageUriGatewayCandidates(uri)) {
+    try {
+      const result = await fetchPublicImageWithBackoff(candidate, {
+        timeoutMs: Math.max(900, Math.min(Number(options.timeoutMs || 1_500), 4_000)),
+        retries: Number.isFinite(Number(options.retries)) ? Number(options.retries) : 1
+      });
+      return {
+        ok: true,
+        status: result.status || 200,
+        uri: result.url || candidate,
+        contentType: result.contentType || ""
+      };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  return {
+    ok: false,
+    status: lastError?.providerStatus || lastError?.status || lastError?.statusCode || null,
+    uri: String(uri || "")
+  };
+}
+
+function logTokenMetadataResolution(event, payload = {}) {
+  try {
+    console.info("TOKEN_METADATA_RESOLVED", {
+      event,
+      tokenAddress: shortMint(payload.tokenAddress || ""),
+      metadataSourceUsed: payload.metadataSourceUsed || "",
+      imagePresent: Boolean(payload.imagePresent),
+      metadataMissing: Boolean(payload.metadataMissing),
+      warningCount: Number(payload.warningCount || 0)
+    });
+  } catch {
+    // PnL display metadata diagnostics must never block rendering.
+  }
 }
 
 async function getDexScreenerTokenMetadata(tokenMint) {
@@ -11338,6 +11444,9 @@ async function getPumpFunTokenMetadata(tokenMint, options = {}) {
     symbol: coin?.symbol || "",
     name: coin?.name || "",
     imageUrl: coin?.image_uri || coin?.image || coin?.metadata?.image || "",
+    imageUri: coin?.image_uri || coin?.image || coin?.metadata?.image || "",
+    metadataUri: firstString(coin?.metadata_uri, coin?.metadataUri, coin?.uri, coin?.metadata?.uri),
+    source: "pumpfun",
     priceSol: firstMeaningfulNumber(coin?.priceSol, coin?.price_sol, coin?.priceNative, coin?.price_native, coin?.priceInSol) || null,
     priceUsd: firstMeaningfulNumber(coin?.priceUsd, coin?.price_usd, coin?.usdPrice, coin?.priceUSD, coin?.price) || null,
     virtualSolReserves: firstMeaningfulNumber(coin?.virtual_sol_reserves, coin?.virtualSolReserves) || null,
@@ -14779,6 +14888,9 @@ async function recordTradeEvents(events) {
   if (!events.length) return;
   for (const event of events) {
     invalidateWalletReadCache(event.walletPublicKey);
+    if (event?.tokenMint && /pump|launch/i.test(String(event.source || event.type || ""))) {
+      invalidateTokenMetadataCache(event.tokenMint);
+    }
   }
   const store = await readTradeHistory();
   store.trades.push(...events.map((event) => ({
@@ -19606,7 +19718,11 @@ async function webConnectedWalletBalance(userId, options = {}) {
         ...token,
         symbol: metadata.symbol || token.shortMint,
         name: metadata.name || "",
-        imageUrl: metadata.imageUrl || ""
+        imageUrl: metadata.imageUrl || metadata.imageUri || "",
+        imageUri: metadata.imageUri || metadata.imageUrl || "",
+        metadataUri: metadata.metadataUri || "",
+        metadataSourceUsed: metadata.metadataSourceUsed || metadata.source || "",
+        metadataMissing: Boolean(metadata.metadataMissing)
       };
     });
   } catch (error) {
@@ -19634,7 +19750,11 @@ async function webPositionRows(userId, options = {}) {
       shortMint: shortMint(position.tokenMint),
       symbol: metadata.symbol || shortMint(position.tokenMint),
       name: metadata.name || "",
-      imageUrl: metadata.imageUrl || "",
+      imageUrl: metadata.imageUrl || metadata.imageUri || "",
+      imageUri: metadata.imageUri || metadata.imageUrl || "",
+      metadataUri: metadata.metadataUri || "",
+      metadataSourceUsed: metadata.metadataSourceUsed || metadata.source || "",
+      metadataMissing: Boolean(metadata.metadataMissing),
       dexUrl: dexScreenerUrl(position.tokenMint),
       uiAmount: formatTokenAmount(position.uiAmount),
       walletCount: position.walletCount,
@@ -19686,7 +19806,15 @@ async function webPnlSummary(userId) {
         shortMint: shortMint(row.tokenMint),
         symbol: metadata.symbol || shortMint(row.tokenMint),
         name: metadata.name || "",
-        imageUrl: metadata.imageUrl || "",
+        imageUrl: metadata.imageUrl || metadata.imageUri || "",
+        imageUri: metadata.imageUri || metadata.imageUrl || "",
+        metadataUri: metadata.metadataUri || "",
+        metadataSourceUsed: metadata.metadataSourceUsed || metadata.source || "",
+        dexImagePresent: Boolean(metadata.dexImagePresent),
+        pumpMetadataPresent: Boolean(metadata.pumpMetadataPresent),
+        imageFetchStatus: metadata.imageFetchStatus || "",
+        metadataMissing: Boolean(metadata.metadataMissing),
+        metadataWarnings: Array.isArray(metadata.warnings) ? metadata.warnings.slice(0, 5) : [],
         walletLabel: row.walletLabel,
         buys: row.buys,
         sells: row.sells,
