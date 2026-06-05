@@ -1320,6 +1320,159 @@
   color: rgba(238, 255, 230, 0.78);
 }
 
+.chart-trade-panel {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.chart-trade-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.chart-trade-tabs button,
+.quick-buy-presets button {
+  min-height: 40px;
+  border: 1px solid rgba(125, 255, 45, 0.28);
+  border-radius: 10px;
+  background: rgba(5, 20, 8, 0.78);
+  color: rgba(238, 255, 230, 0.9);
+  font-weight: 900;
+}
+
+.chart-trade-tabs button[data-active="true"] {
+  background: linear-gradient(135deg, #62ff20, #b9ff63);
+  color: #061200;
+  box-shadow: 0 0 18px rgba(125, 255, 45, 0.25);
+}
+
+.chart-trade-form {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(125, 255, 45, 0.22);
+  border-radius: 14px;
+  background: rgba(2, 10, 4, 0.78);
+}
+
+.chart-trade-form label {
+  display: grid;
+  gap: 6px;
+  color: rgba(238, 255, 230, 0.82);
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.chart-trade-form input,
+.chart-trade-form select,
+.quick-buy-dialog input,
+.quick-buy-dialog select {
+  min-height: 44px;
+  width: 100%;
+}
+
+.quick-buy-presets,
+.chart-trade-links {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.chart-confirm-button,
+.chart-trade-form .danger {
+  min-height: 46px;
+}
+
+.chart-position-summary {
+  margin: 0;
+  color: rgba(238, 255, 230, 0.8);
+}
+
+.quick-buy-modal-open {
+  overflow: hidden;
+}
+
+[data-quick-buy-modal-root] {
+  position: fixed;
+  inset: 0;
+  z-index: 100000;
+  pointer-events: none;
+}
+
+[data-quick-buy-modal-root]:not([hidden]) {
+  pointer-events: auto;
+}
+
+.quick-buy-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(5px);
+}
+
+.quick-buy-dialog {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: min(440px, calc(100vw - 24px));
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  transform: translate(-50%, -50%);
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgba(125, 255, 45, 0.42);
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(7, 18, 7, 0.98), rgba(1, 6, 2, 0.98));
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.65), 0 0 34px rgba(125, 255, 45, 0.18);
+  color: var(--slime-text, #efffe8);
+}
+
+.quick-buy-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: start;
+}
+
+.quick-buy-head .with-avatar {
+  display: flex;
+  min-width: 0;
+  gap: 10px;
+  align-items: center;
+}
+
+.quick-buy-head h3,
+.quick-buy-head p {
+  margin: 0;
+}
+
+.quick-buy-head p {
+  color: rgba(238, 255, 230, 0.72);
+  font-size: 0.86rem;
+  overflow-wrap: anywhere;
+}
+
+.quick-buy-dialog label {
+  display: grid;
+  gap: 6px;
+  color: rgba(238, 255, 230, 0.82);
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.quick-buy-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+}
+
+.quick-buy-actions button {
+  min-height: 44px;
+}
+
 .smart-chart-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1388,6 +1541,21 @@
   .smart-chart-frame iframe {
     height: calc(600px / var(--smart-chart-scale, 0.8));
     min-height: calc(560px / var(--smart-chart-scale, 0.8));
+  }
+
+  .quick-buy-presets,
+  .chart-trade-links,
+  .quick-buy-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .quick-buy-dialog {
+    top: auto;
+    bottom: max(10px, env(safe-area-inset-bottom));
+    transform: translateX(-50%);
+    width: min(480px, calc(100vw - 16px));
+    max-height: min(86dvh, 720px);
+    border-radius: 18px;
   }
 }
 

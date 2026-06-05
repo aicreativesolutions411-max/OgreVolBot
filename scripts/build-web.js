@@ -78,6 +78,7 @@ await fs.writeFile(
   indexPath,
   indexHtml
     .replace(/styles\.css(?:\?v=[^"]*)?/g, `styles.css?v=${buildId}`)
+    .replace(/slimewire-final-overrides\.css(?:\?v=[^"]*)?/g, `slimewire-final-overrides.css?v=${buildId}`)
     .replace(/app\.js(?:\?v=[^"]*)?/g, `app.js?v=${buildId}`),
   "utf8"
 );

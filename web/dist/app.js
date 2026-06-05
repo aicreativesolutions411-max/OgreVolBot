@@ -178,6 +178,8 @@ const state = {
   smartChartToken: "",
   smartChartZoom: 72,
   smartChartView: "chartTxns",
+  chartTradeTab: new URLSearchParams(window.location.search || "").get("tab") === "sell" ? "sell" : "buy",
+  chartFocusAmountInput: new URLSearchParams(window.location.search || "").get("focusAmount") === "1",
   terminalAutoToken: "",
   terminalTxSignature: "",
   terminalTxAudit: null,
@@ -242,6 +244,8 @@ const state = {
   selectedTradePresetId: "",
   selectedBundlePresetId: "",
   quickBuyAmountOverride: "",
+  quickBuyModal: { open: false, tokenMint: "", amountSol: "", walletIndex: "", slippageBps: "400", status: "", source: "", error: "", tradeAttemptId: "" },
+  quickBuyLast: null,
   terminalTradeCollapsed: true,
   navTekOpen: getStoredNavTekOpen(),
   walletConnectMenuOpen: false,
@@ -494,6 +498,7 @@ function navigateTo(pathname, tab = null) {
   if (state.route === "login") state.loginModalOpen = true;
   if (state.route === "terminal") state.activeTab = tab || tabForPath(nextPath);
   window.history.pushState({}, "", nextPath);
+  applyChartRouteFromLocation();
   render();
   perfMeasure("route-change", startedAt, {
     component: "router",
@@ -504,6 +509,7 @@ function navigateTo(pathname, tab = null) {
 window.addEventListener("popstate", () => {
   state.route = routeForPath();
   state.activeTab = tabForPath();
+  applyChartRouteFromLocation();
   render();
 });
 
@@ -3051,6 +3057,7 @@ function render(options = {}) {
   }
   if (state.route === "terminal") renderTabs();
   renderWalletConnectModal();
+  renderQuickBuyModal();
   applyActionButtonStates();
   const durationMs = perfNow() - startedAt;
   if (durationMs >= 16 || state.perfRenderCounts[renderKey] % 20 === 0) {
@@ -3151,6 +3158,13 @@ function renderTabs() {
     ensureOgreTekData();
   }
   syncCustomFields(panel);
+  if (state.activeTab === "smartChart" && state.chartFocusAmountInput) {
+    requestAnimationFrame(() => {
+      const input = $("[data-chart-buy-amount]");
+      if (input) input.focus();
+      state.chartFocusAmountInput = false;
+    });
+  }
   if (state.activeTab === "terminal") {
     const dock = panel.querySelector(".terminal-dock");
     if (dock) dock.scrollTop = terminalDockScrollTop;
@@ -3574,6 +3588,73 @@ function renderWalletConnectModal() {
       <small class="connect-status" data-wallet-connect-status>${escapeHtml(state.walletConnectStatus || "")}</small>
     </section>
   `;
+}
+
+function quickBuyModalHtml() {
+  const modal = state.quickBuyModal || {};
+  const token = selectedSmartChartTokenRow()?.tokenMint === modal.tokenMint
+    ? selectedSmartChartTokenRow()
+    : tokenRefFromMint(modal.tokenMint, { source: modal.source || "quick-buy-modal" });
+  return `
+    <div class="quick-buy-backdrop" data-quick-buy-close></div>
+    <section class="quick-buy-dialog" role="dialog" aria-modal="true" aria-label="Quick Buy">
+      <div class="quick-buy-head">
+        <div class="with-avatar">
+          ${livePairAvatarHtml(token)}
+          <div>
+            <h3>Quick Buy</h3>
+            <p>${escapeHtml(token.symbol || shortAddress(modal.tokenMint))} - ${escapeHtml(shortAddress(modal.tokenMint))}</p>
+          </div>
+        </div>
+        <button type="button" class="icon-button" data-quick-buy-close aria-label="Close Quick Buy">x</button>
+      </div>
+      <label>
+        Wallet
+        <select data-quick-buy-modal-wallet>
+          ${walletOptionsHtml(modal.walletIndex || (connectedBrowserWallet()?.publicKey ? "connected" : ""))}
+        </select>
+      </label>
+      <label>
+        SOL amount
+        <input data-quick-buy-modal-amount type="number" min="0" step="0.01" inputmode="decimal" value="${escapeHtml(modal.amountSol || "")}" placeholder="0.10">
+      </label>
+      <label>
+        Slippage
+        <select data-quick-buy-modal-slippage>
+          <option value="300" ${String(modal.slippageBps || "400") === "300" ? "selected" : ""}>3%</option>
+          <option value="400" ${String(modal.slippageBps || "400") === "400" ? "selected" : ""}>4%</option>
+          <option value="500" ${String(modal.slippageBps || "400") === "500" ? "selected" : ""}>5%</option>
+        </select>
+      </label>
+      <div class="quick-buy-presets">
+        ${["0.1", "0.25", "0.5", "1"].map((amount) => `<button type="button" data-quick-buy-modal-preset="${amount}">${amount} SOL</button>`).join("")}
+      </div>
+      <div class="quick-buy-actions">
+        <button type="button" data-token-trade="${escapeHtml(modal.tokenMint || "")}" data-token-trade-source="quick-buy-modal">Open Full Trade</button>
+        <button type="button" class="primary" data-quick-buy-confirm>Confirm Buy</button>
+      </div>
+      ${modal.status ? `<small class="connect-status">${escapeHtml(modal.status)}</small>` : ""}
+      ${modal.error ? `<small class="warning-text">${escapeHtml(modal.error)}</small>` : ""}
+    </section>
+  `;
+}
+
+function renderQuickBuyModal() {
+  let modal = $("[data-quick-buy-modal-root]");
+  if (!modal) {
+    modal = document.createElement("div");
+    modal.setAttribute("data-quick-buy-modal-root", "");
+    document.body.appendChild(modal);
+  }
+  if (!state.quickBuyModal?.open) {
+    modal.hidden = true;
+    modal.innerHTML = "";
+    document.body.classList.remove("quick-buy-modal-open");
+    return;
+  }
+  modal.hidden = false;
+  modal.innerHTML = quickBuyModalHtml();
+  document.body.classList.add("quick-buy-modal-open");
 }
 
 function xConnectSection() {
@@ -7742,10 +7823,246 @@ function openManualTradeForToken(tokenMint, tab = "trade", message = "") {
   render({ force: true });
 }
 
+function tokenRefFromMint(tokenMint = "", extra = {}) {
+  const mint = String(tokenMint || "").trim();
+  const row = mint
+    ? allVisibleSignalRows().find((item) => String(item?.tokenMint || "") === mint)
+    : null;
+  return {
+    chain: "solana",
+    tokenMint: mint,
+    tokenAddress: mint,
+    mint,
+    pairAddress: row?.pairAddress || row?.pairId || extra.pairAddress || "",
+    symbol: row?.symbol || extra.symbol || shortAddress(mint),
+    name: row?.name || extra.name || "Token",
+    imageUri: row?.imageUrl || extra.imageUri || "",
+    source: extra.source || row?.source || row?.category || "",
+    dex: row?.dexId || extra.dex || "",
+    pool: row?.pool || extra.pool || ""
+  };
+}
+
+function tokenRefFromRow(row = {}, extra = {}) {
+  return tokenRefFromMint(row?.tokenMint || row?.mint || row?.tokenAddress || "", {
+    ...extra,
+    pairAddress: row?.pairAddress || row?.pairId || extra.pairAddress || "",
+    symbol: row?.symbol || extra.symbol || "",
+    name: row?.name || extra.name || "",
+    imageUri: row?.imageUrl || row?.imageUri || extra.imageUri || "",
+    source: extra.source || row?.source || row?.category || "",
+    dex: row?.dexId || extra.dex || "",
+    pool: row?.pool || extra.pool || ""
+  });
+}
+
+function applyTokenRefToState(tokenRef = {}) {
+  const mint = String(tokenRef.tokenMint || tokenRef.mint || tokenRef.tokenAddress || "").trim();
+  if (!mint) return "";
+  state.terminalToken = mint;
+  state.terminalAutoToken = mint;
+  state.tradeToken = mint;
+  state.bundleToken = mint;
+  state.volumeToken = mint;
+  state.smartChartToken = mint;
+  return mint;
+}
+
+function currentReturnPath() {
+  try {
+    return `${window.location.pathname || "/terminal"}${window.location.search || ""}`;
+  } catch {
+    return "/terminal";
+  }
+}
+
+function buildTokenChartPath(mint, options = {}) {
+  const params = new URLSearchParams();
+  params.set("token", mint);
+  const tab = options.defaultTab === "sell" ? "sell" : options.defaultTab === "chart" ? "chart" : "buy";
+  params.set("tab", tab);
+  if (options.focusAmountInput) params.set("focusAmount", "1");
+  if (options.source) params.set("source", String(options.source).slice(0, 40));
+  if (options.returnTo) params.set("returnTo", options.returnTo);
+  return `/terminal/chart?${params.toString()}`;
+}
+
+function openTokenChart(tokenRef = {}, options = {}) {
+  const mint = applyTokenRefToState(tokenRef);
+  if (!mint) {
+    setError("Select a token before opening the chart.");
+    return;
+  }
+  state.chartTradeTab = options.defaultTab === "sell" ? "sell" : options.defaultTab === "chart" ? "buy" : "buy";
+  state.chartFocusAmountInput = Boolean(options.focusAmountInput);
+  state.activeTab = "smartChart";
+  state.route = "terminal";
+  state.quickBuyModal = { ...state.quickBuyModal, open: false, status: "", error: "" };
+  const path = buildTokenChartPath(mint, {
+    defaultTab: options.defaultTab || "buy",
+    focusAmountInput: options.focusAmountInput,
+    source: options.source || "token-entry",
+    returnTo: options.returnTo || currentReturnPath()
+  });
+  window.history.pushState({}, "", path);
+  render({ force: true });
+}
+
+function applyChartRouteFromLocation() {
+  if (!window.location.pathname.includes("/terminal/chart")) return;
+  const params = new URLSearchParams(window.location.search || "");
+  const token = String(params.get("token") || params.get("mint") || "").trim();
+  if (token) applyTokenRefToState(tokenRefFromMint(token, { source: params.get("source") || "route" }));
+  state.chartTradeTab = params.get("tab") === "sell" ? "sell" : "buy";
+  state.chartFocusAmountInput = params.get("focusAmount") === "1";
+  state.route = "terminal";
+  state.activeTab = "smartChart";
+}
+
+function openQuickBuy(tokenRef = {}, options = {}) {
+  const mint = applyTokenRefToState(tokenRef);
+  if (!mint) {
+    setError("Select a token before quick buying.");
+    return;
+  }
+  const preset = options.preset || activeTradePreset();
+  const amount = preset && !options.forceModal ? activeQuickBuyAmount(preset) : "";
+  const hasPresetWallet = preset?.walletIndex || (preset?.walletIndexes || [])[0];
+  if (preset && amount && hasPresetWallet && !options.forceModal) {
+    void quickPresetTrade(mint, options.preset || null);
+    return;
+  }
+  const connected = connectedBrowserWallet();
+  state.quickBuyModal = {
+    open: true,
+    tokenMint: mint,
+    amountSol: amount || state.quickBuyAmountOverride || "",
+    walletIndex: connected?.publicKey ? "connected" : (state.wallets[0]?.index ? String(state.wallets[0].index) : ""),
+    slippageBps: "400",
+    status: amount ? `Preset ${amount} SOL loaded. Confirm when ready.` : "Enter a SOL amount to quick buy.",
+    source: options.source || "quick-buy",
+    error: "",
+    tradeAttemptId: ""
+  };
+  render({ force: true });
+  requestAnimationFrame(() => $("[data-quick-buy-modal-amount]")?.focus());
+}
+
+function closeQuickBuyModal() {
+  state.quickBuyModal = { ...state.quickBuyModal, open: false, status: "", error: "" };
+  render({ force: true });
+}
+
+function readQuickBuyModalForm() {
+  const tokenMint = String(state.quickBuyModal?.tokenMint || "").trim();
+  const walletIndex = String($("[data-quick-buy-modal-wallet]")?.value || state.quickBuyModal?.walletIndex || "").trim();
+  const amountSol = normalizedQuickBuyAmount($("[data-quick-buy-modal-amount]")?.value || state.quickBuyModal?.amountSol || "");
+  const slippageBps = String($("[data-quick-buy-modal-slippage]")?.value || state.quickBuyModal?.slippageBps || "400").trim();
+  if (!tokenMint) throw new Error("Select a token before quick buying.");
+  if (!walletIndex) throw new Error("Choose a wallet before quick buying.");
+  if (!amountSol) throw new Error("Enter a SOL amount greater than zero.");
+  return { tokenMint, walletIndex, amountSol, slippageBps };
+}
+
+async function executeQuickBuyAmount({ tokenMint, walletIndex, amountSol, slippageBps = "400", source = "quick-buy" }) {
+  const value = Number(amountSol);
+  if (!Number.isFinite(value) || value <= 0) throw new Error("Enter a SOL amount greater than zero.");
+  const tradeAttemptId = createClientAttemptId("quick-buy");
+  state.quickBuyLast = {
+    source,
+    tokenMint,
+    walletConnected: isConnectedTradeWallet(walletIndex),
+    customAmountValid: true,
+    presetAmount: "",
+    tradeAttemptId,
+    status: "submitting",
+    error: ""
+  };
+  setTradeAction("trade-buy", tokenMint, String(amountSol), {
+    state: "clicked",
+    tradeAttemptId,
+    clickedAt: new Date().toISOString()
+  });
+  state.quickBuyModal = {
+    ...state.quickBuyModal,
+    status: "Submitting quick buy...",
+    error: "",
+    tradeAttemptId
+  };
+  render({ force: true });
+
+  const form = { tokenMint, walletIndex, slippageBps };
+  if (isConnectedTradeWallet(walletIndex)) {
+    const trade = await executeConnectedBrowserTrade({
+      side: "buy",
+      form,
+      actionDetail: String(amountSol),
+      amountSol: String(value),
+      amountMode: "fixed",
+      attemptId: tradeAttemptId
+    });
+    state.quickBuyLast = { ...state.quickBuyLast, status: "submitted" };
+    return trade;
+  }
+
+  const data = await api("/api/web/trade/buy", {
+    method: "POST",
+    body: JSON.stringify({
+      tokenMint,
+      walletIndex,
+      amountSol: String(value),
+      slippageBps,
+      tradeAttemptId
+    }),
+    dedupe: false,
+    timeoutMs: API_LONG_ACTION_TIMEOUT_MS
+  });
+  state.tradeResult = data.trade;
+  queuePostTradeRefresh(data.trade?.signature, "quick-buy-custom", { tradeAttemptId });
+  setTradeAction("trade-buy", tokenMint, String(amountSol), {
+    state: "submitted",
+    signature: data.trade?.signature || ""
+  });
+  state.quickBuyLast = { ...state.quickBuyLast, status: "submitted" };
+  return data.trade;
+}
+
+async function confirmQuickBuyModal() {
+  try {
+    const form = readQuickBuyModalForm();
+    state.quickBuyModal = { ...state.quickBuyModal, ...form, status: "Validating quick buy...", error: "" };
+    const trade = await executeQuickBuyAmount({ ...form, source: state.quickBuyModal?.source || "quick-buy-modal" });
+    state.quickBuyModal = {
+      ...state.quickBuyModal,
+      open: false,
+      status: trade?.message || "Quick buy submitted.",
+      error: ""
+    };
+    state.activeTab = "smartChart";
+    render({ force: true });
+    clearTradeActionLater("trade-buy", form.tokenMint, form.amountSol, 3000);
+  } catch (error) {
+    state.quickBuyLast = {
+      ...(state.quickBuyLast || {}),
+      status: "failed",
+      error: publicErrorMessage(error.message || "Quick buy failed.")
+    };
+    state.quickBuyModal = {
+      ...state.quickBuyModal,
+      status: "",
+      error: publicErrorMessage(error.message || "Quick buy failed.")
+    };
+    render({ force: true });
+  }
+}
+
 async function quickPresetTrade(tokenMint, presetOverride = null) {
   const preset = presetOverride || presetById("trade", state.selectedTradePresetId);
   if (!preset) {
-    openManualTradeForToken(tokenMint, "trade", "No fast trade preset selected. Review the manual Trade form, then buy or sell.");
+    openQuickBuy(tokenRefFromMint(tokenMint, { source: "missing-preset" }), {
+      source: "missing-preset",
+      forceModal: true
+    });
     return;
   }
   try {
@@ -8836,7 +9153,7 @@ function terminalTokenStatsHtml(row = {}) {
 
 function terminalSignalRowsHtml(rows, options = {}) {
   const limit = options.limit || 6;
-  const actionLabel = options.actionLabel || "Buy";
+  const actionLabel = options.actionLabel || "Trade";
   const emptyTitle = options.emptyTitle || "No signals loaded";
   const emptyMessage = options.emptyMessage || "Refresh the feed to load current signals.";
   const visibleRows = rotatedDisplayRows(rows || [], limit, options.rotateKey || "", options.stickyCount || 0);
@@ -8848,11 +9165,11 @@ function terminalSignalRowsHtml(rows, options = {}) {
         const scoreLabel = score ? `${score}` : "n/a";
         const setup = row.scalpSetup || row.momentum || row.category || "live";
         return `
-          <article class="terminal-token-row" data-preview-token="${escapeHtml(row.tokenMint)}">
+          <article class="terminal-token-row" data-token-chart="${escapeHtml(row.tokenMint)}" data-token-chart-source="terminal-row">
             ${livePairAvatarHtml(row)}
             <div class="terminal-token-main">
               <div class="terminal-token-title">
-                <strong>${escapeHtml(row.symbol || row.shortMint || shortAddress(row.tokenMint))}</strong>
+                <strong data-token-chart="${escapeHtml(row.tokenMint)}" data-token-chart-source="terminal-title">${escapeHtml(row.symbol || row.shortMint || shortAddress(row.tokenMint))}</strong>
                 <small>${escapeHtml(row.name || row.category || "Token")}</small>
                 <em class="mobile-score-mini" title="${escapeHtml(scoreWhyText(row))}">${escapeHtml(scoreLabel)} score</em>
               </div>
@@ -8866,7 +9183,8 @@ function terminalSignalRowsHtml(rows, options = {}) {
               <small>score</small>
             </span>
             <div class="terminal-token-actions">
-              <button type="button" class="primary" data-quick-trade-token="${escapeHtml(row.tokenMint)}" title="Buy with active preset">${escapeHtml(actionLabel)}</button>
+              <button type="button" class="primary" data-token-trade="${escapeHtml(row.tokenMint)}" data-token-trade-source="terminal-row" title="Open chart and buy/sell panel">${escapeHtml(actionLabel)}</button>
+              <button type="button" data-quick-buy-token="${escapeHtml(row.tokenMint)}" data-quick-buy-source="terminal-row" title="Quick buy with preset or custom SOL amount">${escapeHtml(quickBuyButtonLabel())}</button>
               <button type="button" data-quick-bundle-token="${escapeHtml(row.tokenMint)}">Bundle</button>
               <button type="button" data-smart-chart-token="${escapeHtml(row.tokenMint)}">Chart</button>
               <button type="button" class="watch-action" data-watch-token="${escapeHtml(row.tokenMint)}" data-watch-symbol="${escapeHtml(row.symbol || "")}" data-watch-name="${escapeHtml(row.name || "")}" data-watch-image="${escapeHtml(row.imageUrl || "")}">${isTokenWatched(row.tokenMint) ? "Saved" : "Watch"}</button>
@@ -8883,7 +9201,7 @@ function compactSignalRowsHtml(rows, options = {}) {
     return terminalSignalRowsHtml(rows, options);
   }
   const limit = options.limit || 6;
-  const actionLabel = options.actionLabel || "Buy Preset";
+  const actionLabel = options.actionLabel || "Trade";
   const emptyTitle = options.emptyTitle || "No signals loaded";
   const emptyMessage = options.emptyMessage || "Refresh the feed to load current signals.";
   const visibleRows = rotatedDisplayRows(rows || [], limit, options.rotateKey || "", options.stickyCount || 0);
@@ -8891,11 +9209,11 @@ function compactSignalRowsHtml(rows, options = {}) {
   return `
     <div class="compact-signal-list">
       ${visibleRows.map((row) => `
-        <article class="compact-signal-row" data-preview-token="${escapeHtml(row.tokenMint)}">
+        <article class="compact-signal-row" data-token-chart="${escapeHtml(row.tokenMint)}" data-token-chart-source="compact-row">
           ${livePairAvatarHtml(row)}
           <div class="compact-signal-main">
             <div>
-              <strong>${escapeHtml(row.symbol || row.shortMint || shortAddress(row.tokenMint))}</strong>
+              <strong data-token-chart="${escapeHtml(row.tokenMint)}" data-token-chart-source="compact-title">${escapeHtml(row.symbol || row.shortMint || shortAddress(row.tokenMint))}</strong>
               <small>${escapeHtml(row.name || row.category || "Token")}</small>
             </div>
             <button type="button" class="ca-copy" data-copy="${escapeHtml(row.tokenMint)}">${escapeHtml(shortAddress(row.tokenMint))}</button>
@@ -8905,7 +9223,8 @@ function compactSignalRowsHtml(rows, options = {}) {
           </div>
           ${scoreBadgeHtml(row)}
           <div class="compact-row-actions">
-            <button type="button" class="primary" data-quick-trade-token="${escapeHtml(row.tokenMint)}" title="Buy with active preset">${escapeHtml(actionLabel)}</button>
+            <button type="button" class="primary" data-token-trade="${escapeHtml(row.tokenMint)}" data-token-trade-source="compact-row" title="Open chart and buy/sell panel">${escapeHtml(actionLabel)}</button>
+            <button type="button" data-quick-buy-token="${escapeHtml(row.tokenMint)}" data-quick-buy-source="compact-row" title="Quick buy with preset or custom SOL amount">${escapeHtml(quickBuyButtonLabel())}</button>
             <button type="button" data-quick-bundle-token="${escapeHtml(row.tokenMint)}">Bundle</button>
             <button type="button" data-smart-chart-token="${escapeHtml(row.tokenMint)}">Chart</button>
             <button type="button" class="watch-action" data-watch-token="${escapeHtml(row.tokenMint)}" data-watch-symbol="${escapeHtml(row.symbol || "")}" data-watch-name="${escapeHtml(row.name || "")}" data-watch-image="${escapeHtml(row.imageUrl || "")}">${isTokenWatched(row.tokenMint) ? "Saved" : "Watch"}</button>
@@ -9184,7 +9503,7 @@ function slimeScopeHtml() {
         ${compactSignalRowsHtml(rows, {
           layout: "terminal",
           limit: Math.max(1, rows.length),
-          actionLabel: activePresetButtonLabel(),
+          actionLabel: "Trade",
           emptyTitle: "No Slime Scope pairs yet",
           emptyMessage: "Feeds are refreshing. Try a different scope mode if this stays empty."
         })}
@@ -9222,7 +9541,7 @@ function terminalHtml() {
   );
   const bucketLoading = Boolean(state.livePairsLoadingByBucket[state.livePairBucket]);
   const lastUpdated = currentLivePairsUpdatedAt();
-  const rowTradeLabel = activePresetButtonLabel();
+  const rowTradeLabel = "Trade";
   return `
     <section class="command-terminal no-live-ticket">
       <main class="command-workspace">
@@ -9282,9 +9601,15 @@ function activePresetButtonLabel() {
   return tradeActionLabelFromPreset(preset, "Trade");
 }
 
+function quickBuyButtonLabel() {
+  const preset = activeTradePreset();
+  const amount = activeQuickBuyAmount(preset);
+  return amount ? `Quick Buy ${amount}` : "Quick Buy";
+}
+
 function syncQuickBuyActionLabels() {
-  const label = activePresetButtonLabel();
-  document.querySelectorAll("[data-quick-trade-token]").forEach((button) => {
+  const label = quickBuyButtonLabel();
+  document.querySelectorAll("[data-quick-buy-token]").forEach((button) => {
     writeText(button, label);
   });
 }
@@ -9321,7 +9646,8 @@ function tokenPreviewHtml(token) {
     <div class="card-actions compact">
       <a href="${escapeHtml(token.dexUrl || dexUrl(token.tokenMint))}" target="_blank" rel="noreferrer">Dex</a>
       ${pumpUrlForRow(token) ? `<a href="${escapeHtml(pumpUrlForRow(token))}" target="_blank" rel="noreferrer">Pump</a>` : ""}
-      <button class="primary" data-quick-trade-token="${escapeHtml(token.tokenMint)}">${escapeHtml(activePresetButtonLabel())}</button>
+      <button class="primary" data-token-trade="${escapeHtml(token.tokenMint)}" data-token-trade-source="token-preview">Trade</button>
+      <button data-quick-buy-token="${escapeHtml(token.tokenMint)}" data-quick-buy-source="token-preview">${escapeHtml(quickBuyButtonLabel())}</button>
       <button data-quick-bundle-token="${escapeHtml(token.tokenMint)}">Bundle</button>
       ${hasPosition ? `<button data-position-sell="${escapeHtml(token.tokenMint)}" data-position-sell-percent="100">Exit 100%</button>` : ""}
     </div>
@@ -9338,6 +9664,71 @@ function smartChartViewTabsHtml(activeView = "chartTxns") {
   return `
     <div class="smart-chart-mode-tabs" role="tablist" aria-label="Smart Chart view">
       ${tabs.map(([value, label]) => `<button type="button" data-smart-chart-view="${value}" data-active="${activeView === value}">${label}</button>`).join("")}
+    </div>
+  `;
+}
+
+function chartTradePanelHtml(token = {}, heldPosition = null) {
+  const mint = String(token?.tokenMint || state.smartChartToken || "").trim();
+  const activeTab = state.chartTradeTab === "sell" ? "sell" : "buy";
+  const connected = connectedBrowserWallet();
+  const walletSelected = connected?.publicKey ? "connected" : "";
+  const positionSummary = heldPosition
+    ? `${escapeHtml(heldPosition.uiAmount || "Position")} tokens | ${escapeHtml(heldPosition.estimatedValueSol || "value n/a")} SOL`
+    : "No SlimeWire position tracked for this token.";
+  return `
+    <div class="chart-trade-panel">
+      <div class="chart-trade-tabs" role="tablist" aria-label="Token trade panel">
+        <button type="button" data-chart-trade-tab="buy" data-active="${activeTab === "buy"}">Buy</button>
+        <button type="button" data-chart-trade-tab="sell" data-active="${activeTab === "sell"}">Sell</button>
+      </div>
+      ${activeTab === "buy" ? `
+        <div class="chart-trade-form" data-chart-trade-panel="buy">
+          <label>
+            Wallet
+            <select data-chart-buy-wallet>
+              ${walletOptionsHtml(walletSelected)}
+            </select>
+          </label>
+          <label>
+            Buy SOL
+            <input data-chart-buy-amount type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.10" value="${escapeHtml(state.quickBuyAmountOverride || "")}">
+          </label>
+          <div class="quick-buy-presets chart-buy-presets">
+            ${["0.1", "0.25", "0.5", "1"].map((amount) => `<button type="button" data-chart-buy-preset="${amount}">${amount} SOL</button>`).join("")}
+          </div>
+          <label>
+            Slippage
+            <select data-chart-buy-slippage>
+              <option value="300">3%</option>
+              <option value="400" selected>4%</option>
+              <option value="500">5%</option>
+            </select>
+          </label>
+          <small>${connected?.publicKey ? `${escapeHtml(connected.provider || "Browser wallet")} approval opens in wallet.` : "Choose a connected browser wallet or managed wallet."}</small>
+          <button type="button" class="primary chart-confirm-button" data-chart-confirm-buy="${escapeHtml(mint)}">Confirm Buy</button>
+          <button type="button" data-quick-buy-token="${escapeHtml(mint)}" data-quick-buy-source="chart-panel">Quick Buy Drawer</button>
+        </div>
+      ` : `
+        <div class="chart-trade-form" data-chart-trade-panel="sell">
+          <p class="chart-position-summary">${positionSummary}</p>
+          <div class="quick-grid">
+            <button type="button" data-position-sell="${escapeHtml(mint)}" data-position-sell-percent="25" ${heldPosition ? "" : "disabled"}>Sell 25%</button>
+            <button type="button" data-position-sell="${escapeHtml(mint)}" data-position-sell-percent="50" ${heldPosition ? "" : "disabled"}>Sell 50%</button>
+            <button type="button" class="danger" data-position-sell="${escapeHtml(mint)}" data-position-sell-percent="100" ${heldPosition ? "" : "disabled"}>Sell 100%</button>
+          </div>
+          <label>
+            Custom sell %
+            <input data-chart-sell-percent type="number" min="1" max="100" step="1" inputmode="numeric" placeholder="100" ${heldPosition ? "" : "disabled"}>
+          </label>
+          <button type="button" data-chart-confirm-sell="${escapeHtml(mint)}" ${heldPosition ? "" : "disabled"}>Confirm Custom Sell</button>
+        </div>
+      `}
+      <div class="chart-trade-links">
+        <button type="button" data-quick-bundle-token="${escapeHtml(mint)}">Bundle</button>
+        <button type="button" data-use-token-volume="${escapeHtml(mint)}">Volume</button>
+        <button type="button" data-watch-token="${escapeHtml(mint)}">${isTokenWatched(mint) ? "Saved" : "Watch"}</button>
+      </div>
     </div>
   `;
 }
@@ -9377,7 +9768,7 @@ function smartChartHtml() {
           ${compactSignalRowsHtml(relatedRows, {
             layout: "terminal",
             limit: 5,
-            actionLabel: activePresetButtonLabel(),
+            actionLabel: "Trade",
             rotateKey: terminalRotationKey("smart-chart-empty"),
             stickyCount: 1,
             emptyTitle: "No chart picks loaded",
@@ -9439,13 +9830,7 @@ function smartChartHtml() {
             <strong>Smart read</strong>
             <p>${escapeHtml(suggestion)}</p>
           </div>
-          <div class="smart-chart-actions">
-            <button class="primary" type="button" data-quick-trade-token="${escapeHtml(mint)}">${escapeHtml(activePresetButtonLabel())}</button>
-            <button type="button" data-quick-bundle-token="${escapeHtml(mint)}">Bundle</button>
-            <button type="button" data-use-token-volume="${escapeHtml(mint)}">Volume</button>
-            <button type="button" data-watch-token="${escapeHtml(mint)}">${isTokenWatched(mint) ? "Saved" : "Watch"}</button>
-            ${heldPosition ? `<button type="button" class="danger" data-position-sell="${escapeHtml(mint)}" data-position-sell-percent="100">Exit 100%</button>` : ""}
-          </div>
+          ${chartTradePanelHtml(token, heldPosition)}
         </aside>
       </div>
       ${showTxns ? `<div class="smart-chart-bottom-grid">
@@ -9457,7 +9842,7 @@ function smartChartHtml() {
           ${compactSignalRowsHtml(relatedRows, {
             layout: "terminal",
             limit: 5,
-            actionLabel: activePresetButtonLabel(),
+            actionLabel: "Trade",
             emptyTitle: "No related signals",
             emptyMessage: "This token is loaded from CA. Refresh feeds to look for matching signals."
           })}
@@ -9498,7 +9883,7 @@ function terminalTradePanelHtml(token, collapsed = false) {
         <button type="button" class="terminal-ticket-toggle" data-toggle-terminal-ticket aria-label="Hide trade panel">›</button>
       </div>
         <div class="ticket-collapse-body">
-          <p>Row trades use the active preset. Managed wallets can run saved fast actions; browser wallets still ask for approval.</p>
+          <p>Trade opens the full chart page. Quick Buy uses a saved preset or asks for a custom SOL amount.</p>
           <div class="segmented-control">
             <button data-tab="trade">Buy / Sell</button>
             <button data-tab="trade">Manual CA</button>
@@ -9534,7 +9919,8 @@ function terminalTradePanelHtml(token, collapsed = false) {
           ${token?.tokenMint ? `
             <code>${escapeHtml(token.tokenMint)}</code>
             <div class="quick-grid">
-              <button class="primary" data-quick-trade-token="${escapeHtml(token.tokenMint)}">${escapeHtml(activePresetButtonLabel())}</button>
+              <button class="primary" data-token-trade="${escapeHtml(token.tokenMint)}" data-token-trade-source="terminal-ticket">Trade</button>
+              <button data-quick-buy-token="${escapeHtml(token.tokenMint)}" data-quick-buy-source="terminal-ticket">${escapeHtml(quickBuyButtonLabel())}</button>
               <button data-quick-bundle-token="${escapeHtml(token.tokenMint)}">Bundle</button>
               <button data-smart-chart-token="${escapeHtml(token.tokenMint)}">Chart</button>
               <button data-use-token-volume="${escapeHtml(token.tokenMint)}">Volume</button>
@@ -9638,7 +10024,7 @@ function liveTradeRowsHtml(limit = 10, sourceTrades = null) {
           <span>${escapeHtml(trade.walletLabel || "wallet")} | ${escapeHtml(trade.solAmount || "0")} SOL</span>
           <small>${escapeHtml(formatDate(trade.timestamp))}</small>
           <div class="card-actions compact">
-            ${trade.tokenMint ? `<button data-preview-token="${escapeHtml(trade.tokenMint)}">Preview</button><button data-quick-trade-token="${escapeHtml(trade.tokenMint)}">${escapeHtml(activePresetButtonLabel())}</button>` : ""}
+            ${trade.tokenMint ? `<button data-token-chart="${escapeHtml(trade.tokenMint)}" data-token-chart-source="live-trades">Chart</button><button data-quick-buy-token="${escapeHtml(trade.tokenMint)}" data-quick-buy-source="live-trades">${escapeHtml(quickBuyButtonLabel())}</button>` : ""}
             ${trade.signature ? `<a href="https://solscan.io/tx/${encodeURIComponent(trade.signature)}" target="_blank" rel="noreferrer">Tx</a>` : ""}
           </div>
         </article>
@@ -9884,7 +10270,7 @@ function watchlistHtml() {
         <div class="terminal-title-row">
           <div>
             <h3>Watchlist</h3>
-            <p>Saved coins refresh while this tab is open. Use Trade or Bundle presets when you are ready.</p>
+            <p>Saved coins refresh while this tab is open. Use Trade for the chart page or Quick Buy for fast preset/custom buys.</p>
           </div>
           <span>${rows.length}/${allRows.length} watched</span>
         </div>
@@ -9900,7 +10286,7 @@ function watchlistHtml() {
       <aside class="trade-side order-ticket-stack">
         <article class="order-ticket">
           <h3>Fast Actions</h3>
-          <p>Rows use your saved Trade and Bundle presets. Edit presets from the Trade or Bundle tabs any time.</p>
+          <p>Quick Buy uses your saved preset when available, or asks for a custom SOL amount.</p>
           <div class="card-actions action-grid">
             <button data-tab="trade">Trade Presets</button>
             <button data-tab="bundle">Bundle Presets</button>
@@ -9943,12 +10329,12 @@ function tokenSignalRowHtml(row, index, options = {}) {
     ? `<button type="button" data-unwatch-token="${escapeHtml(row.tokenMint)}">Remove</button>`
     : `<button type="button" class="watch-action" data-watch-token="${escapeHtml(row.tokenMint)}" data-watch-symbol="${escapeHtml(row.symbol || "")}" data-watch-name="${escapeHtml(row.name || "")}" data-watch-image="${escapeHtml(row.imageUrl || "")}">${watched ? "Saved" : "Watch"}</button>`;
   return `
-    <article class="signal-row">
+    <article class="signal-row" data-token-chart="${escapeHtml(row.tokenMint)}" data-token-chart-source="${escapeHtml(options.context || "signal-row")}">
       <div class="signal-token">
         ${livePairAvatarHtml(row)}
         <div>
           <div class="signal-name-row">
-            <strong>${escapeHtml(row.symbol || row.shortMint || shortAddress(row.tokenMint))}</strong>
+            <strong data-token-chart="${escapeHtml(row.tokenMint)}" data-token-chart-source="${escapeHtml(options.context || "signal-title")}">${escapeHtml(row.symbol || row.shortMint || shortAddress(row.tokenMint))}</strong>
             <small>${escapeHtml(row.name || row.category || "Token")}</small>
           </div>
           <button type="button" class="ca-copy" data-copy="${escapeHtml(row.tokenMint)}">${escapeHtml(shortAddress(row.tokenMint))}</button>
@@ -9973,7 +10359,7 @@ function tokenSignalRowHtml(row, index, options = {}) {
         <small>${volumeWindowItems(row).map(([label, value]) => `${label} ${value}`).join(" | ")}</small>
       </div>
       <div class="signal-actions">
-        ${primaryAction === "snipe" ? `<button type="button" class="primary" data-sniper-buy="${escapeHtml(row.tokenMint)}">${escapeHtml(actionLabel)}</button>` : `<button type="button" class="primary" data-quick-trade-token="${escapeHtml(row.tokenMint)}">${escapeHtml(actionLabel)}</button>`}
+        ${primaryAction === "snipe" ? `<button type="button" class="primary" data-sniper-buy="${escapeHtml(row.tokenMint)}">${escapeHtml(actionLabel)}</button>` : `<button type="button" class="primary" data-token-trade="${escapeHtml(row.tokenMint)}" data-token-trade-source="${escapeHtml(options.context || "signal-row")}">Trade</button><button type="button" data-quick-buy-token="${escapeHtml(row.tokenMint)}" data-quick-buy-source="${escapeHtml(options.context || "signal-row")}">${escapeHtml(quickBuyButtonLabel())}</button>`}
         <button type="button" data-quick-bundle-token="${escapeHtml(row.tokenMint)}">Bundle</button>
         ${watchButton}
       </div>
@@ -10621,7 +11007,11 @@ document.addEventListener("pointerup", (event) => {
 }, { capture: true });
 
 document.addEventListener("keydown", (event) => {
-  if (event.key !== "Escape" || !state.loginModalOpen) return;
+  if (event.key !== "Escape" || (!state.loginModalOpen && !state.quickBuyModal?.open)) return;
+  if (state.quickBuyModal?.open) {
+    closeQuickBuyModal();
+    return;
+  }
   state.loginCollapsed = true;
   state.loginModalOpen = false;
   render({ force: true });
@@ -10640,7 +11030,7 @@ document.addEventListener("click", async (event) => {
     if (group) group.open = state.navTekOpen;
     return;
   }
-  const target = source?.closest?.("button, a, [data-preview-token]");
+  const target = source?.closest?.("button, a, [data-preview-token], [data-token-chart], [data-token-trade], [data-quick-buy-token], [data-quick-trade-token]");
   if (!target) return;
 
   if (target.matches("[data-nav-route]")) {
@@ -10729,28 +11119,75 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-global-token-open]")) {
     const token = $("[data-global-token-search]")?.value?.trim() || "";
     if (token) {
-      state.terminalToken = token;
-      state.terminalAutoToken = token;
-      state.tradeToken = token;
-      state.bundleToken = token;
-      state.volumeToken = token;
-      state.smartChartToken = token;
-      state.activeTab = "smartChart";
-      state.route = "terminal";
-      window.history.pushState({}, "", "/terminal/chart");
-      render();
+      openTokenChart(tokenRefFromMint(token, { source: "global-search" }), {
+        defaultTab: "buy",
+        focusAmountInput: true,
+        source: "global-search"
+      });
     }
+    return;
+  }
+  if (target.matches("[data-token-chart]")) {
+    event.preventDefault();
+    openTokenChart(tokenRefFromMint(target.dataset.tokenChart || target.dataset.previewToken || "", {
+      source: target.dataset.tokenChartSource || "token-card"
+    }), {
+      defaultTab: target.dataset.tokenChartTab || "chart",
+      focusAmountInput: false,
+      source: target.dataset.tokenChartSource || "token-card"
+    });
+    return;
+  }
+  if (target.matches("[data-token-trade]")) {
+    event.preventDefault();
+    event.stopPropagation();
+    openTokenChart(tokenRefFromMint(target.dataset.tokenTrade || "", {
+      source: target.dataset.tokenTradeSource || "trade-button"
+    }), {
+      defaultTab: "buy",
+      focusAmountInput: true,
+      source: target.dataset.tokenTradeSource || "trade-button"
+    });
+    return;
+  }
+  if (target.matches("[data-quick-buy-token]")) {
+    event.preventDefault();
+    event.stopPropagation();
+    openQuickBuy(tokenRefFromMint(target.dataset.quickBuyToken || "", {
+      source: target.dataset.quickBuySource || "quick-buy-button"
+    }), {
+      source: target.dataset.quickBuySource || "quick-buy-button"
+    });
+    return;
+  }
+  if (target.matches("[data-quick-buy-close]")) {
+    event.preventDefault();
+    closeQuickBuyModal();
+    return;
+  }
+  if (target.matches("[data-quick-buy-modal-preset]")) {
+    event.preventDefault();
+    state.quickBuyModal = {
+      ...state.quickBuyModal,
+      amountSol: target.dataset.quickBuyModalPreset || "",
+      status: `${target.dataset.quickBuyModalPreset || ""} SOL selected.`,
+      error: ""
+    };
+    render({ force: true });
+    return;
+  }
+  if (target.matches("[data-quick-buy-confirm]")) {
+    event.preventDefault();
+    await confirmQuickBuyModal();
     return;
   }
   if (target.matches("[data-preview-token]")) {
     const token = target.dataset.previewToken || "";
     if (token) {
-      state.terminalToken = token;
-      state.terminalAutoToken = token;
-      state.tradeToken = token;
-      state.bundleToken = token;
-      state.volumeToken = token;
-      render();
+      openTokenChart(tokenRefFromMint(token, { source: "preview-card" }), {
+        defaultTab: "chart",
+        source: "preview-card"
+      });
     }
     return;
   }
@@ -10926,19 +11363,20 @@ document.addEventListener("click", async (event) => {
     await deletePreset(target.dataset.deletePreset, target.dataset.presetId || "");
     return;
   }
-  if (target.matches("[data-quick-trade-token]")) await quickPresetTrade(target.dataset.quickTradeToken || "");
+  if (target.matches("[data-quick-trade-token]")) {
+    event.preventDefault();
+    event.stopPropagation();
+    openQuickBuy(tokenRefFromMint(target.dataset.quickTradeToken || "", { source: "legacy-quick-trade" }), {
+      source: "legacy-quick-trade"
+    });
+    return;
+  }
   if (target.matches("[data-quick-bundle-token]")) await quickPresetBundle(target.dataset.quickBundleToken || "");
   if (target.matches("[data-smart-chart-token]")) {
-    const tokenMint = target.dataset.smartChartToken || "";
-    state.smartChartToken = tokenMint;
-    state.terminalToken = tokenMint;
-    state.tradeToken = tokenMint;
-    state.bundleToken = tokenMint;
-    state.volumeToken = tokenMint;
-    state.activeTab = "smartChart";
-    state.route = "terminal";
-    window.history.pushState({}, "", "/terminal/chart");
-    render();
+    openTokenChart(tokenRefFromMint(target.dataset.smartChartToken || "", { source: "chart-button" }), {
+      defaultTab: "chart",
+      source: "chart-button"
+    });
     return;
   }
   if (target.matches("[data-smart-chart-view]")) {
@@ -10947,21 +11385,52 @@ document.addEventListener("click", async (event) => {
     render();
     return;
   }
+  if (target.matches("[data-chart-trade-tab]")) {
+    state.chartTradeTab = target.dataset.chartTradeTab === "sell" ? "sell" : "buy";
+    render({ force: true });
+    if (state.chartTradeTab === "buy") requestAnimationFrame(() => $("[data-chart-buy-amount]")?.focus());
+    return;
+  }
+  if (target.matches("[data-chart-buy-preset]")) {
+    const input = $("[data-chart-buy-amount]");
+    if (input) input.value = target.dataset.chartBuyPreset || "";
+    state.quickBuyAmountOverride = normalizedQuickBuyAmount(target.dataset.chartBuyPreset || "");
+    syncQuickBuyActionLabels();
+    return;
+  }
+  if (target.matches("[data-chart-confirm-buy]")) {
+    const tokenMint = target.dataset.chartConfirmBuy || state.smartChartToken || "";
+    try {
+      await executeQuickBuyAmount({
+        tokenMint,
+        walletIndex: $("[data-chart-buy-wallet]")?.value || "",
+        amountSol: normalizedQuickBuyAmount($("[data-chart-buy-amount]")?.value || ""),
+        slippageBps: $("[data-chart-buy-slippage]")?.value || "400",
+        source: "chart-buy-panel"
+      });
+      state.chartTradeTab = "buy";
+      render({ force: true });
+    } catch (error) {
+      setError(error.message);
+    }
+    return;
+  }
+  if (target.matches("[data-chart-confirm-sell]")) {
+    const percent = $("[data-chart-sell-percent]")?.value || "";
+    if (percent) await sellPositionPercent(target.dataset.chartConfirmSell || "", percent);
+    return;
+  }
   if (target.matches("[data-smart-chart-open]")) {
     const tokenMint = String($("[data-smart-chart-input]")?.value || "").trim();
     if (!tokenMint) {
       setError("Paste a token CA first.");
       return;
     }
-    state.smartChartToken = tokenMint;
-    state.terminalToken = tokenMint;
-    state.tradeToken = tokenMint;
-    state.bundleToken = tokenMint;
-    state.volumeToken = tokenMint;
-    state.activeTab = "smartChart";
-    state.route = "terminal";
-    window.history.pushState({}, "", "/terminal/chart");
-    render();
+    openTokenChart(tokenRefFromMint(tokenMint, { source: "smart-chart-search" }), {
+      defaultTab: "buy",
+      focusAmountInput: true,
+      source: "smart-chart-search"
+    });
     return;
   }
   if (target.matches("[data-refresh-feeds]")) {
@@ -11233,6 +11702,10 @@ document.addEventListener("click", async (event) => {
 
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
+  if (state.quickBuyModal?.open) {
+    closeQuickBuyModal();
+    return;
+  }
   if (state.walletConnectMenuOpen) {
     state.walletConnectMenuOpen = false;
     render({ force: true });
@@ -11370,6 +11843,7 @@ async function initializeApp() {
   installCrashInstrumentation();
   installSlimewireImageFallbacks();
   prewarmSlimewireImageAssets();
+  applyChartRouteFromLocation();
   await handleMobileWalletReturn();
   render();
   if (state.route === "terminal") {
