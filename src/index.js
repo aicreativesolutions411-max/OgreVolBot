@@ -1725,6 +1725,26 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "POST" && pathname === "/api/web/browser-trade/order") {
+      const body = await readJsonRequestBody(request, 64_000);
+      const result = await webBrowserTradeOrder(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        order: result
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/browser-trade/execute") {
+      const body = await readJsonRequestBody(request, 1_250_000);
+      const result = await webBrowserTradeExecute(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        trade: result
+      });
+      return;
+    }
+
     if (request.method === "POST" && pathname === "/api/web/trade/sell") {
       const routeReceivedAt = Date.now();
       const body = await readJsonRequestBody(request);
@@ -15018,7 +15038,7 @@ function defaultJsonForPath(filePath) {
     case "trade-history.json":
       return { trades: [] };
     case "web-auth.json":
-      return { codes: [], sessions: [], profiles: {} };
+      return { codes: [], sessions: [], profiles: {}, browserTradeOrders: [] };
     case "lock-in-events.json":
       return { events: [] };
     case "terminal-feed-events.json":
@@ -15432,6 +15452,7 @@ async function readWebAuthStore() {
   if (!Array.isArray(store.sessions)) store.sessions = [];
   if (!store.profiles || typeof store.profiles !== "object") store.profiles = {};
   if (!store.mobileWalletConnects || typeof store.mobileWalletConnects !== "object") store.mobileWalletConnects = {};
+  if (!Array.isArray(store.browserTradeOrders)) store.browserTradeOrders = [];
   return store;
 }
 
@@ -18320,6 +18341,298 @@ async function webTradeBuy(userId, body = {}) {
     autoExitPlan,
     message: autoExitPlan ? `${baseMessage} ${autoExitPlan.shortMessage}` : baseMessage
   };
+}
+
+function normalizeBrowserTradeSide(value) {
+  const side = String(value || "").trim().toLowerCase();
+  if (side !== "buy" && side !== "sell") {
+    const error = new Error("Browser wallet trade side must be buy or sell.");
+    error.statusCode = 400;
+    throw error;
+  }
+  return side;
+}
+
+async function connectedWalletForBrowserTrade(userId, body = {}) {
+  const profile = await webProfileForUser(userId);
+  const connected = profile.connectedWallet || null;
+  if (!connected?.publicKey) {
+    const error = new Error("Connect Phantom, Solflare, or another browser wallet before trading.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const publicKey = parsePublicKey(connected.publicKey).toBase58();
+  const requested = String(body.walletPublicKey || "").trim();
+  if (requested && parsePublicKey(requested).toBase58() !== publicKey) {
+    const error = new Error("Connected wallet changed. Reconnect the wallet you want to trade with.");
+    error.statusCode = 409;
+    throw error;
+  }
+  return {
+    ...connected,
+    publicKey,
+    provider: cleanConnectedWalletProvider(connected.provider || body.provider || "Browser Wallet")
+  };
+}
+
+async function browserBuyAmountLamports(publicKey, body = {}) {
+  if (String(body.amountMode || "").trim().toLowerCase() === "max") {
+    const balance = await getSolBalanceCached(new PublicKey(publicKey), { force: true });
+    const amountLamports = balance - CONFIG.buyReserveLamports;
+    if (amountLamports <= 0) {
+      throw new Error(`Not enough SOL after keeping ${CONFIG.buyReserveSol} SOL safety reserve.`);
+    }
+    return amountLamports;
+  }
+  return solToLamports(parsePositiveNumber(String(body.amountSol || "")));
+}
+
+async function browserSellAmountRaw(publicKey, tokenMint, percent) {
+  const token = await getReliableTokenBalanceForMint(new PublicKey(publicKey), new PublicKey(tokenMint), {
+    throwOnError: true,
+    priority: true
+  });
+  if (!token || token.rawAmount <= 0n) {
+    throw new Error("No live token balance for this connected wallet.");
+  }
+  const amount = sellAmountForPercent(token.rawAmount, percent, token.rawAmount.toString());
+  if (amount <= 0n) throw new Error("Sell amount rounded to zero.");
+  return { token, amount };
+}
+
+function pruneBrowserTradeOrders(orders = []) {
+  const now = Date.now();
+  return (Array.isArray(orders) ? orders : [])
+    .filter((order) => Number(Date.parse(order.expiresAt || "")) > now || ["submitted", "complete"].includes(order.status))
+    .slice(-100);
+}
+
+async function saveBrowserTradeOrder(order) {
+  const store = await readWebAuthStore();
+  store.browserTradeOrders = pruneBrowserTradeOrders(store.browserTradeOrders);
+  const index = store.browserTradeOrders.findIndex((item) => item.browserTradeAttemptId === order.browserTradeAttemptId);
+  if (index >= 0) store.browserTradeOrders[index] = { ...store.browserTradeOrders[index], ...order };
+  else store.browserTradeOrders.push(order);
+  await writeWebAuthStore(store);
+}
+
+async function takePendingBrowserTradeOrder(userId, browserTradeAttemptId) {
+  const store = await readWebAuthStore();
+  store.browserTradeOrders = pruneBrowserTradeOrders(store.browserTradeOrders);
+  const order = store.browserTradeOrders.find((item) => (
+    item.browserTradeAttemptId === browserTradeAttemptId
+    && String(item.userId || "") === String(userId || "")
+  ));
+  if (!order) {
+    const error = new Error("Browser wallet trade approval expired. Build the trade again.");
+    error.statusCode = 404;
+    throw error;
+  }
+  if (order.status !== "pending") {
+    const error = new Error("This browser wallet trade was already submitted.");
+    error.statusCode = 409;
+    throw error;
+  }
+  if (Date.parse(order.expiresAt || "") <= Date.now()) {
+    order.status = "expired";
+    await writeWebAuthStore(store);
+    const error = new Error("Browser wallet trade approval expired. Build the trade again.");
+    error.statusCode = 410;
+    throw error;
+  }
+  order.status = "submitting";
+  order.submittingAt = new Date().toISOString();
+  await writeWebAuthStore(store);
+  return order;
+}
+
+async function completePendingBrowserTradeOrder(order, patch = {}) {
+  await saveBrowserTradeOrder({
+    ...order,
+    ...patch,
+    updatedAt: new Date().toISOString()
+  });
+}
+
+async function webBrowserTradeOrder(userId, body = {}) {
+  const side = normalizeBrowserTradeSide(body.side);
+  const connected = await connectedWalletForBrowserTrade(userId, body);
+  const tokenMint = parsePublicKey(String(body.tokenMint || "")).toBase58();
+  const slippageBps = parseWebSlippage(body.slippageBps);
+  const browserTradeAttemptId = String(body.tradeAttemptId || crypto.randomUUID()).slice(0, 96) || crypto.randomUUID();
+  let inputMint;
+  let outputMint;
+  let inputAmount;
+  let order;
+  let tokenAmount = "";
+
+  if (side === "buy") {
+    inputMint = SOL_MINT;
+    outputMint = tokenMint;
+    inputAmount = String(await browserBuyAmountLamports(connected.publicKey, body));
+    order = await assertTokenBuySafety({
+      tokenMint,
+      taker: new PublicKey(connected.publicKey),
+      buyLamports: inputAmount,
+      slippageBps
+    });
+  } else {
+    const percent = parsePercent(String(body.percent || "100"));
+    const sell = await browserSellAmountRaw(connected.publicKey, tokenMint, percent);
+    inputMint = tokenMint;
+    outputMint = SOL_MINT;
+    inputAmount = sell.amount.toString();
+    tokenAmount = inputAmount;
+    order = await createJupiterOrder({
+      taker: new PublicKey(connected.publicKey),
+      inputMint,
+      outputMint,
+      amount: inputAmount,
+      slippageBps,
+      priority: true,
+      timeoutMs: 8_000,
+      retries: CONFIG.jupiterRetries
+    });
+  }
+
+  const now = new Date();
+  const pending = {
+    browserTradeAttemptId,
+    userId,
+    status: "pending",
+    side,
+    provider: connected.provider || "Browser Wallet",
+    walletPublicKey: connected.publicKey,
+    tokenMint,
+    inputMint,
+    outputMint,
+    inputAmount,
+    outputAmount: String(order.outAmount || order.outputAmount || ""),
+    tokenAmount,
+    slippageBps,
+    requestId: order.requestId || "",
+    lastValidBlockHeight: order.lastValidBlockHeight || null,
+    router: order.router || "",
+    mode: order.mode || "",
+    createdAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + 10 * 60 * 1000).toISOString()
+  };
+  await saveBrowserTradeOrder(pending);
+  await audit("web_browser_trade_order", {
+    userId,
+    side,
+    tokenMint,
+    walletPublicKey: connected.publicKey,
+    slippageBps,
+    browserTradeAttemptId,
+    router: pending.router,
+    mode: pending.mode
+  });
+
+  return {
+    browserTradeAttemptId,
+    side,
+    provider: pending.provider,
+    walletPublicKey: pending.walletPublicKey,
+    tokenMint,
+    inputMint,
+    outputMint,
+    inputAmount,
+    outputAmount: pending.outputAmount,
+    requestId: pending.requestId,
+    lastValidBlockHeight: pending.lastValidBlockHeight,
+    transaction: order.transaction,
+    message: `Approve ${side === "buy" ? "buy" : "sell"} in ${pending.provider}.`
+  };
+}
+
+async function webBrowserTradeExecute(userId, body = {}) {
+  const browserTradeAttemptId = String(body.browserTradeAttemptId || "").trim();
+  if (!browserTradeAttemptId) {
+    const error = new Error("Missing browser trade attempt ID.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const signedTransaction = String(body.signedTransaction || "").trim();
+  if (!/^[a-z0-9+/=]+$/i.test(signedTransaction) || signedTransaction.length < 100 || signedTransaction.length > 1_200_000) {
+    const error = new Error("Signed wallet transaction is missing or invalid.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const pending = await takePendingBrowserTradeOrder(userId, browserTradeAttemptId);
+  try {
+    const execute = await jupiterFetchJson(`${CONFIG.jupiterApiBase}/execute`, {
+      priority: true,
+      timeoutMs: 20_000,
+      method: "POST",
+      headers: jupiterHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        signedTransaction,
+        requestId: pending.requestId,
+        lastValidBlockHeight: pending.lastValidBlockHeight
+      })
+    }, "Jupiter browser wallet execute", CONFIG.jupiterRetries);
+
+    if (execute.status && execute.status !== "Success") {
+      throw new Error(execute.error || `Jupiter execute failed with code ${execute.code ?? "unknown"}.`);
+    }
+    if (!execute.signature) {
+      throw new Error("Jupiter execute did not return a transaction signature.");
+    }
+
+    const outputAmount = String(execute.outputAmountResult || pending.outputAmount || "");
+    await recordTradeEvents([{
+      userId,
+      type: pending.side,
+      source: "web_browser_wallet_trade",
+      tokenMint: pending.tokenMint,
+      walletLabel: pending.provider || "Browser Wallet",
+      walletPublicKey: pending.walletPublicKey,
+      solLamportsSpent: pending.side === "buy" ? pending.inputAmount : undefined,
+      solLamportsReceived: pending.side === "sell" ? outputAmount : undefined,
+      tokenAmount: pending.side === "buy" ? outputAmount : pending.tokenAmount,
+      signature: execute.signature
+    }]);
+    await audit("web_browser_trade_execute", {
+      userId,
+      side: pending.side,
+      tokenMint: pending.tokenMint,
+      walletPublicKey: pending.walletPublicKey,
+      browserTradeAttemptId,
+      signature: execute.signature,
+      router: pending.router,
+      mode: pending.mode
+    });
+    await completePendingBrowserTradeOrder(pending, {
+      status: "submitted",
+      signature: execute.signature,
+      outputAmount,
+      completedAt: new Date().toISOString()
+    });
+    invalidateWalletReadCache(pending.walletPublicKey);
+    return {
+      type: pending.side,
+      source: "browser-wallet",
+      tokenMint: pending.tokenMint,
+      shortMint: shortMint(pending.tokenMint),
+      walletLabel: pending.provider || "Browser Wallet",
+      walletPublicKey: pending.walletPublicKey,
+      shortPublicKey: shortMint(pending.walletPublicKey),
+      spentSol: pending.side === "buy" ? lamportsBigToSol(pending.inputAmount || "0") : undefined,
+      receivedSol: pending.side === "sell" && outputAmount ? lamportsBigToSol(outputAmount || "0") : undefined,
+      tokenAmount: pending.side === "buy" ? outputAmount : pending.tokenAmount,
+      signature: execute.signature,
+      dexUrl: dexScreenerUrl(pending.tokenMint),
+      message: `${pending.provider || "Browser wallet"} ${pending.side === "buy" ? "buy" : "sell"} submitted for ${shortMint(pending.tokenMint)}.`
+    };
+  } catch (error) {
+    await completePendingBrowserTradeOrder(pending, {
+      status: "failed",
+      lastError: friendlyError(error)
+    });
+    throw error;
+  }
 }
 
 async function webTradeSell(userId, body = {}, options = {}) {

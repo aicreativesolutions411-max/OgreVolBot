@@ -1,0 +1,86 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+
+const appSource = fs.readFileSync(new URL("../web/public/app.js", import.meta.url), "utf8");
+const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
+const htmlSource = fs.readFileSync(new URL("../web/public/index.html", import.meta.url), "utf8");
+const web3BundleSource = fs.readFileSync(new URL("../web/public/vendor/solana-web3.iife.min.js", import.meta.url), "utf8");
+
+function functionBody(source, name) {
+  const syncMatch = new RegExp(`function\\s+${name}\\s*\\(`).exec(source);
+  const asyncMatch = new RegExp(`async\\s+function\\s+${name}\\s*\\(`).exec(source);
+  const syncStart = syncMatch?.index ?? -1;
+  const asyncStart = asyncMatch?.index ?? -1;
+  const start = syncStart >= 0 && (asyncStart < 0 || syncStart < asyncStart) ? syncStart : asyncStart;
+  assert.notEqual(start, -1, `${name} is missing`);
+  const paramsStart = source.indexOf("(", start);
+  let paramsDepth = 0;
+  let paramsEnd = -1;
+  for (let index = paramsStart; index < source.length; index += 1) {
+    if (source[index] === "(") paramsDepth += 1;
+    if (source[index] === ")") {
+      paramsDepth -= 1;
+      if (paramsDepth === 0) {
+        paramsEnd = index;
+        break;
+      }
+    }
+  }
+  const bodyStart = source.indexOf("{", paramsEnd);
+  let depth = 0;
+  for (let index = bodyStart; index < source.length; index += 1) {
+    if (source[index] === "{") depth += 1;
+    if (source[index] === "}") {
+      depth -= 1;
+      if (depth === 0) return source.slice(bodyStart + 1, index);
+    }
+  }
+  return "";
+}
+
+test("Trade tab treats a connected Phantom/Solflare wallet as a usable trade wallet", () => {
+  assert.match(appSource, /function connectedBrowserWallet/);
+  assert.match(appSource, /function connectedBrowserWalletOptionHtml/);
+  assert.match(appSource, /<option value="connected"/);
+  assert.match(functionBody(appSource, "tradeHtml"), /Connect to Trade/);
+  assert.match(functionBody(appSource, "tradeHtml"), /Connected browser wallets open your wallet approval prompt/);
+  assert.match(functionBody(appSource, "tradeHtml"), /Automation Wallets/);
+  assert.doesNotMatch(functionBody(appSource, "tradeHtml"), /return `\$\{createWalletSection\(\)\}/);
+});
+
+test("browser wallet buy and sell sign locally instead of entering managed-wallet setup", () => {
+  assert.match(htmlSource, /vendor\/solana-web3\.iife\.min\.js/);
+  assert.match(web3BundleSource.slice(0, 80), /window\.solanaWeb3=/);
+  assert.match(appSource, /window\.solanaWeb3\.VersionedTransaction\.deserialize/);
+  assert.match(functionBody(appSource, "executeWebBuy"), /isConnectedTradeWallet\(form\.walletIndex\)/);
+  assert.match(functionBody(appSource, "executeWebBuy"), /executeConnectedBrowserTrade\(\{[\s\S]*side: "buy"/);
+  assert.match(functionBody(appSource, "executeWebSell"), /isConnectedTradeWallet\(form\.walletIndex\)/);
+  assert.match(functionBody(appSource, "executeWebSell"), /executeConnectedBrowserTrade\(\{[\s\S]*side: "sell"/);
+  assert.match(functionBody(appSource, "executeConnectedBrowserTrade"), /\/api\/web\/browser-trade\/order/);
+  assert.match(functionBody(appSource, "executeConnectedBrowserTrade"), /\/api\/web\/browser-trade\/execute/);
+  assert.doesNotMatch(functionBody(appSource, "executeConnectedBrowserTrade"), /JUPITER_API_KEY|privateKey|secretKey|seed/i);
+});
+
+test("backend builds a short-lived browser wallet Jupiter order and executes signed transactions", () => {
+  assert.match(serverSource, /pathname === "\/api\/web\/browser-trade\/order"/);
+  assert.match(serverSource, /pathname === "\/api\/web\/browser-trade\/execute"/);
+  assert.match(serverSource, /async function webBrowserTradeOrder/);
+  assert.match(serverSource, /async function webBrowserTradeExecute/);
+  assert.match(functionBody(serverSource, "connectedWalletForBrowserTrade"), /profile\.connectedWallet/);
+  assert.match(functionBody(serverSource, "webBrowserTradeOrder"), /assertTokenBuySafety/);
+  assert.match(functionBody(serverSource, "webBrowserTradeOrder"), /createJupiterOrder/);
+  assert.match(functionBody(serverSource, "webBrowserTradeOrder"), /saveBrowserTradeOrder/);
+  assert.match(functionBody(serverSource, "webBrowserTradeExecute"), /signedTransaction/);
+  assert.match(functionBody(serverSource, "webBrowserTradeExecute"), /Jupiter browser wallet execute/);
+  assert.match(functionBody(serverSource, "webBrowserTradeExecute"), /source: "web_browser_wallet_trade"/);
+});
+
+test("browser trade approvals are initialized in the server auth store and never use managed private keys", () => {
+  assert.match(functionBody(serverSource, "defaultJsonForPath"), /browserTradeOrders: \[\]/);
+  assert.match(functionBody(serverSource, "readWebAuthStore"), /browserTradeOrders/);
+  assert.match(functionBody(serverSource, "takePendingBrowserTradeOrder"), /status !== "pending"/);
+  assert.match(functionBody(serverSource, "takePendingBrowserTradeOrder"), /status = "submitting"/);
+  assert.doesNotMatch(functionBody(serverSource, "webBrowserTradeOrder"), /decryptWallet|secretKey|privateKey|Keypair\.fromSecretKey/i);
+  assert.doesNotMatch(functionBody(serverSource, "webBrowserTradeExecute"), /decryptWallet|secretKey|privateKey|Keypair\.fromSecretKey/i);
+});

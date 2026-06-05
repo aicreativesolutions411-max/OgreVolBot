@@ -3908,14 +3908,43 @@ function walletProviderLabel(id, provider) {
   return "Solana Wallet";
 }
 
+function connectedBrowserWallet() {
+  return state.user?.connectedWallet || state.connectedWalletBalance || null;
+}
+
+function connectedBrowserWalletOptionHtml(selectedIndex = "") {
+  const connected = connectedBrowserWallet();
+  if (!connected?.publicKey) return "";
+  const selected = String(selectedIndex || "") === "connected" || (!selectedIndex && !state.wallets.length);
+  const provider = connected.provider || "Browser Wallet";
+  return `<option value="connected" ${selected ? "selected" : ""}>${escapeHtml(provider)} - ${escapeHtml(shortAddress(connected.publicKey))}</option>`;
+}
+
 function shortAddress(value) {
   const text = String(value || "");
   return text.length > 10 ? `${text.slice(0, 4)}...${text.slice(-4)}` : text || "token";
 }
 
 function tradeHtml() {
-  if (!state.wallets.length) {
-    return `${createWalletSection()}${emptyState("No wallets loaded yet", "Create a wallet set above, restore a backup, or import a wallet. After one wallet is saved, the Trade buttons unlock automatically.")}`;
+  const connected = connectedBrowserWallet();
+  const hasManagedWallets = state.wallets.length > 0;
+  if (!hasManagedWallets && !connected?.publicKey) {
+    return `
+      <section class="trade-layout">
+        <article class="trade-card">
+          <div class="trade-head">
+            <div>
+              <h3>Connect to Trade</h3>
+              <p>Connect Phantom, Solflare, Backpack, or another Solana wallet to open the manual trade panel immediately.</p>
+            </div>
+          </div>
+          <div class="card-actions">
+            <button class="primary" type="button" data-web-signup-connect>Connect Wallet</button>
+            <button type="button" data-connect-create-wallet>Create Managed Wallet</button>
+          </div>
+        </article>
+      </section>
+    `;
   }
 
   return `
@@ -3924,15 +3953,16 @@ function tradeHtml() {
         <div class="trade-head">
           <div>
             <h3>One-Wallet Trade</h3>
-            <p>Paste a token CA, pick a wallet, then use fast buy and sell buttons from the webpage.</p>
+            <p>${connected?.publicKey ? "Connected browser wallets open your wallet approval prompt. Managed wallets stay available for server-side automation." : "Paste a token CA, pick a wallet, then use fast buy and sell buttons from the webpage."}</p>
           </div>
         </div>
         <label>
           Wallet
           <select data-trade-wallet>
-            ${walletOptionsHtml()}
+            ${walletOptionsHtml(connected?.publicKey && !hasManagedWallets ? "connected" : "")}
           </select>
         </label>
+        ${connected?.publicKey ? `<small class="trade-wallet-note">Browser wallet trades require wallet approval and do not expose private keys. TP/SL automation still requires managed SlimeWire wallets.</small>` : ""}
         <label>
           Token CA
           <input data-trade-token type="text" placeholder="Paste Solana token mint" value="${escapeHtml(state.tradeToken)}">
@@ -4022,7 +4052,7 @@ function tradeHtml() {
           </div>
         </div>
 
-        <div class="trade-block managed-trade-block">
+        ${hasManagedWallets ? `<div class="trade-block managed-trade-block">
           <div>
             <h4>Managed Buy + Auto Exit</h4>
             <p>Use one wallet, multiple wallets, or a saved group. The bot buys, then watches take-profit, stop-loss, or timer.</p>
@@ -4095,7 +4125,15 @@ function tradeHtml() {
           </div>
           ${walletExitTargetsHtml("trade-plan")}
           <button class="primary" data-trade-plan-start>Buy + Watch Exit</button>
-        </div>
+        </div>` : `<div class="trade-block managed-trade-block">
+          <div>
+            <h4>Automation Wallets</h4>
+            <p>Optional: create a managed SlimeWire wallet only when you want backend TP/SL, timed exits, bundle, sniper, or Ogre A.I. automation.</p>
+          </div>
+          <div class="card-actions">
+            <button type="button" data-connect-create-wallet>Create Managed Wallet</button>
+          </div>
+        </div>`}
         <p class="trade-status" data-trade-status>${state.tradeResult ? escapeHtml(state.tradeResult.message || "Trade complete.") : "Ready."}</p>
       </article>
 
@@ -4126,14 +4164,14 @@ function tradeHtml() {
 }
 
 function walletOptionsHtml(selectedIndex = "") {
-  if (!state.wallets.length) {
-    return `<option value="1">No managed wallets loaded</option>`;
-  }
-  return state.wallets.map((wallet) => {
+  const connectedOption = connectedBrowserWalletOptionHtml(selectedIndex);
+  const managedOptions = state.wallets.map((wallet) => {
     const balance = state.balances.find((row) => Number(row.index) === Number(wallet.index));
     const sol = balance?.sol !== null && balance?.sol !== undefined ? `${Number(balance.sol).toFixed(4)} SOL` : "balance loading";
     return `<option value="${wallet.index}" ${String(wallet.index) === String(selectedIndex || "") ? "selected" : ""}>${wallet.index}. ${escapeHtml(wallet.label)} - ${sol}</option>`;
   }).join("");
+  if (connectedOption || managedOptions) return `${connectedOption}${managedOptions}`;
+  return `<option value="">No wallet connected</option>`;
 }
 
 function tradeResultHtml() {
@@ -6880,6 +6918,108 @@ function readTradeForm() {
   return { walletIndex, tokenMint, slippageBps };
 }
 
+function isConnectedTradeWallet(walletIndex = "") {
+  return String(walletIndex || "").trim().toLowerCase() === "connected";
+}
+
+function bytesToBase64(bytes) {
+  const chunks = [];
+  const size = 0x8000;
+  for (let index = 0; index < bytes.length; index += size) {
+    chunks.push(String.fromCharCode(...bytes.subarray(index, index + size)));
+  }
+  return btoa(chunks.join(""));
+}
+
+function base64ToBytes(value = "") {
+  const binary = atob(String(value || ""));
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
+function providerIdForConnectedWallet(connected = connectedBrowserWallet()) {
+  const provider = String(connected?.provider || "").trim().toLowerCase();
+  if (provider.includes("phantom")) return "phantom";
+  if (provider.includes("solflare")) return "solflare";
+  if (provider.includes("backpack")) return "backpack";
+  return "solana";
+}
+
+async function connectedTradeProvider() {
+  const connected = connectedBrowserWallet();
+  if (!connected?.publicKey) throw new Error("Connect Phantom, Solflare, or another wallet before trading.");
+  const providerId = providerIdForConnectedWallet(connected);
+  const provider = walletProviderById(providerId) || walletProviderById("solana");
+  if (!provider) {
+    openWalletConnectModal({ returnPath: "/terminal/trade" });
+    throw new Error(`${connected.provider || "Connected wallet"} is not available in this browser. Reconnect it or choose another wallet.`);
+  }
+  const providerKey = provider.publicKey?.toBase58?.() || provider.publicKey?.toString?.() || "";
+  if (providerKey !== connected.publicKey) {
+    const result = await provider.connect?.({ onlyIfTrusted: false });
+    const nextKey = result?.publicKey?.toBase58?.() || result?.publicKey?.toString?.() || provider.publicKey?.toBase58?.() || provider.publicKey?.toString?.() || "";
+    if (nextKey !== connected.publicKey) {
+      throw new Error(`Wallet mismatch. SlimeWire has ${shortAddress(connected.publicKey)} connected, but the browser returned ${shortAddress(nextKey)}. Reconnect the wallet you want to trade with.`);
+    }
+  }
+  return { provider, connected };
+}
+
+async function signBrowserTradeTransaction(transactionBase64, provider) {
+  if (!transactionBase64 || typeof transactionBase64 !== "string") {
+    throw new Error("SlimeWire could not build a wallet approval transaction. Try again or choose another token.");
+  }
+  if (!window.solanaWeb3?.VersionedTransaction) {
+    throw new Error("Solana wallet signing library did not load. Refresh the page and try again.");
+  }
+  if (typeof provider.signTransaction !== "function") {
+    throw new Error("This wallet does not expose signTransaction here. Reconnect with Phantom/Solflare or use the wallet in-app browser.");
+  }
+  const tx = window.solanaWeb3.VersionedTransaction.deserialize(base64ToBytes(transactionBase64));
+  const signed = await provider.signTransaction(tx);
+  return bytesToBase64(signed.serialize());
+}
+
+async function executeConnectedBrowserTrade({ side, form, actionDetail, amountSol = "", amountMode = "", percent = "", attemptId }) {
+  const { provider, connected } = await connectedTradeProvider();
+  const order = await api("/api/web/browser-trade/order", {
+    method: "POST",
+    body: JSON.stringify({
+      side,
+      tokenMint: form.tokenMint,
+      walletPublicKey: connected.publicKey,
+      slippageBps: form.slippageBps,
+      amountSol,
+      amountMode,
+      percent,
+      tradeAttemptId: attemptId
+    }),
+    dedupe: false,
+    timeoutMs: API_LONG_ACTION_TIMEOUT_MS
+  });
+  setTradeStatus(`Approve ${side} in ${connected.provider || "your wallet"}...`);
+  const signedTransaction = await signBrowserTradeTransaction(order.order?.transaction, provider);
+  setTradeStatus("Submitting signed trade...");
+  const result = await api("/api/web/browser-trade/execute", {
+    method: "POST",
+    body: JSON.stringify({
+      browserTradeAttemptId: order.order?.browserTradeAttemptId,
+      signedTransaction
+    }),
+    dedupe: false,
+    timeoutMs: API_LONG_ACTION_TIMEOUT_MS
+  });
+  state.tradeResult = result.trade;
+  setTradeStatus(result.trade?.message || `${side === "buy" ? "Buy" : "Sell"} submitted from connected wallet.`);
+  setTradeAction(side === "buy" ? "trade-buy" : "trade-sell", form.tokenMint, actionDetail, {
+    state: "submitted",
+    signature: result.trade?.signature || ""
+  });
+  queuePostTradeRefresh(result.trade?.signature, `browser-${side}`, { tradeAttemptId: attemptId });
+  return result.trade;
+}
+
 function isEnabledTradeTarget(value) {
   const normalized = String(value || "").trim().toLowerCase();
   return Boolean(normalized) && !["0", "off", "none", "no", "disabled"].includes(normalized);
@@ -6942,6 +7082,35 @@ async function executeWebBuy(amountSol, amountMode = "fixed") {
       const value = Number(amountSol);
       if (!Number.isFinite(value) || value <= 0) throw new Error("Enter a buy amount greater than zero.");
       payload.amountSol = String(value);
+    }
+
+    if (isConnectedTradeWallet(form.walletIndex)) {
+      setTradeAction("trade-buy", form.tokenMint, actionDetail, {
+        state: "clicked",
+        tradeAttemptId,
+        clickedAt: new Date().toISOString()
+      });
+      recordPerfEvent({
+        component: "post-trade",
+        action: "browser-trade-click-to-ui",
+        durationMs: perfNow() - clickStartedAt,
+        requestId: tradeAttemptId,
+        details: `browser-buy:${shortAddress(form.tokenMint)}:${actionDetail}`
+      });
+      render();
+      setTradeStatus("Building wallet-approved buy...");
+      await executeConnectedBrowserTrade({
+        side: "buy",
+        form,
+        actionDetail,
+        amountSol: payload.amountSol || "",
+        amountMode: payload.amountMode || "fixed",
+        attemptId: tradeAttemptId
+      });
+      state.activeTab = "trade";
+      render();
+      clearTradeActionLater("trade-buy", form.tokenMint, actionDetail, 3000);
+      return;
     }
 
     const autoExit = readSingleTradeAutoExit();
@@ -7064,6 +7233,19 @@ async function executeWebSell(percent) {
     render();
     const requestStartedAt = perfNow();
     setTradeAction("trade-sell", form.tokenMint, detail, { state: "submitting" });
+    if (isConnectedTradeWallet(form.walletIndex)) {
+      await executeConnectedBrowserTrade({
+        side: "sell",
+        form,
+        actionDetail: detail,
+        percent: String(value),
+        attemptId: manualSellAttemptId
+      });
+      state.activeTab = "trade";
+      render();
+      clearTradeActionLater("trade-sell", form.tokenMint, detail, 3000);
+      return;
+    }
     const data = await api("/api/web/trade/sell", {
       method: "POST",
       body: JSON.stringify({
