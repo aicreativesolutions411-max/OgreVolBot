@@ -1295,7 +1295,7 @@ function render(options = {}) {
   setText("[data-realized]", state.pnl?.totals?.realizedSol || "+0 SOL");
   setText("[data-top-sol]", `${totalSol().toFixed(4)} SOL`);
   setText("[data-top-portfolio]", `${state.positions.length} position${state.positions.length === 1 ? "" : "s"}`);
-  setText("[data-sync-health]", hasWalletContext ? syncHealthLabel() : "Status: Wallet not connected");
+  setText("[data-sync-health]", hasWalletContext ? syncHealthLabel() : "Sync idle");
   setText("[data-active-preset-label]", activePresetSummary());
   updateTopTpSlStatus();
   setHidden("[data-refresh-spinner]", !state.walletRefreshing);
