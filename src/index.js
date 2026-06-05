@@ -1240,6 +1240,13 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "POST" && pathname === "/api/web/terminal-feed-event") {
+      const body = await readJsonRequestBody(request, 8_000);
+      await recordTerminalFeedEvent(body, request);
+      sendWebJson(request, response, 200, { ok: true });
+      return;
+    }
+
     if (request.method === "POST" && pathname === "/api/web/mobile-wallet/start") {
       const auth = await authenticateOptionalWebRequest(request);
       const body = await readJsonRequestBody(request);
@@ -2285,6 +2292,7 @@ async function ensureDataFiles() {
   await writeJsonIfMissing(pumpLaunchAttemptsPath(), { attempts: [] });
   await writeJsonIfMissing(webAuthPath(), { codes: [], sessions: [] });
   await writeJsonIfMissing(lockInEventsPath(), { events: [] });
+  await writeJsonIfMissing(terminalFeedEventsPath(), { events: [] });
   await fs.mkdir(pumpLaunchHostedMetadataRoot(), { recursive: true });
   await ensureAppSecretFingerprint();
   await assignUnownedWalletsToSingleAdmin();
@@ -2383,6 +2391,10 @@ function webAuthPath() {
 
 function lockInEventsPath() {
   return path.join(CONFIG.dataDir, "lock-in-events.json");
+}
+
+function terminalFeedEventsPath() {
+  return path.join(CONFIG.dataDir, "terminal-feed-events.json");
 }
 
 function appSecretFingerprintPath() {
@@ -14420,6 +14432,8 @@ function defaultJsonForPath(filePath) {
       return { codes: [], sessions: [], profiles: {} };
     case "lock-in-events.json":
       return { events: [] };
+    case "terminal-feed-events.json":
+      return { events: [] };
     case "app-secret.json":
       return {};
     default:
@@ -15393,6 +15407,52 @@ async function recordLockInClickedEvent(body = {}, request = {}) {
     });
   } catch {
     // Login diagnostics must never block the login flow.
+  }
+  return event;
+}
+
+function safeTerminalFeedText(value = "", max = 120) {
+  return String(value || "")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/[^\w .:/?&=#@,+-]/g, "")
+    .trim()
+    .slice(0, max);
+}
+
+async function recordTerminalFeedEvent(body = {}, request = {}) {
+  const resultCount = Number.parseInt(body.resultCount || "0", 10);
+  const event = {
+    at: new Date().toISOString(),
+    tabKey: safeTerminalFeedText(body.tabKey || "", 40),
+    label: safeTerminalFeedText(body.label || "", 80),
+    category: safeTerminalFeedText(body.category || "", 80),
+    endpoint: safeTerminalFeedText(body.endpoint || "", 140),
+    cacheKey: safeTerminalFeedText(body.cacheKey || "", 100),
+    requestId: safeTerminalFeedText(body.requestId || "", 80),
+    status: safeTerminalFeedText(body.status || "", 40),
+    reason: safeTerminalFeedText(body.reason || "", 80),
+    resultCount: Number.isFinite(resultCount) && resultCount >= 0 ? Math.min(resultCount, 100_000) : 0,
+    stale: Boolean(body.stale),
+    errorCode: safeTerminalFeedText(body.errorCode || "", 60),
+    errorMessage: safeTerminalFeedText(body.errorMessage || "", 140),
+    client: safeTerminalFeedText(webClientKey(request), 80)
+  };
+  const store = await readJson(terminalFeedEventsPath());
+  if (!Array.isArray(store.events)) store.events = [];
+  store.events.push(event);
+  store.events = store.events.slice(-100);
+  await writeJsonFile(terminalFeedEventsPath(), store);
+  try {
+    console.info("TERMINAL_FEED_EVENT", {
+      tabKey: event.tabKey,
+      category: event.category,
+      cacheKey: event.cacheKey,
+      status: event.status,
+      resultCount: event.resultCount,
+      stale: event.stale
+    });
+  } catch {
+    // Feed diagnostics must never block the web app.
   }
   return event;
 }

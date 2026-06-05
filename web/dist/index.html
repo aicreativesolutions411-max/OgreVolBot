@@ -8,17 +8,21 @@
     <link rel="preload" as="image" href="./assets/slimewire/png/slimewire-mark.png">
     <link rel="preload" as="image" href="./assets/slimewire/references/enter-swamp-reference.jpg">
     <link rel="preload" as="image" href="./assets/slimewire/png/slime-border-frame-rich.png">
+    <link rel="preload" as="image" href="./assets/slimewire/clean-ui/wallet_icons/default/phantom.png">
+    <link rel="preload" as="image" href="./assets/slimewire/clean-ui/wallet_icons/default/solflare.png">
+    <link rel="preload" as="image" href="./assets/slimewire/svg/icons/wallet.svg">
+    <link rel="preload" as="image" href="./assets/slimewire/svg/powered-by-ogres-badge.svg">
     <link rel="stylesheet" href="./tailwind.css?v=20260603-tailwind-v1">
-    <link rel="stylesheet" href="./styles.css?v=20260605025247">
+    <link rel="stylesheet" href="./styles.css?v=20260605033712">
     <link rel="stylesheet" href="./slimewire-final-overrides.css?v=20260605-mobile-login-wallet-v1">
     <script src="./config.js"></script>
     <script src="./vendor/tweetnacl-fast.min.js"></script>
-    <script type="module" src="./app.js?v=20260605025247"></script>
+    <script type="module" src="./app.js?v=20260605033712"></script>
   </head>
   <body>
     <main class="shell" data-app>
       <header class="topbar">
-        <span class="powered"><img src="./assets/slimewire/svg/powered-by-ogres-badge.svg" alt="Powered by Ogres"></span>
+        <span class="powered"><img src="./assets/slimewire/svg/powered-by-ogres-badge.svg" data-fallback-src="./assets/slimewire/png/slimewire-mark.png" alt="Powered by Ogres"></span>
         <div class="topbar-right">
           <nav class="social-links" aria-label="Ogre links">
             <a href="https://t.me/ogrecoinonsol" target="_blank" rel="noreferrer">Telegram</a>
@@ -148,37 +152,37 @@
 
       <section class="login-view swamp-splash" data-login>
         <button class="swamp-splash-button" type="button" data-nav-route="/connect" aria-label="Enter the Swamp">
-          <img class="swamp-splash-reference" src="./assets/slimewire/references/enter-swamp-reference.jpg" alt="Enter the Swamp">
+          <img class="swamp-splash-reference" src="./assets/slimewire/references/enter-swamp-reference.jpg" data-fallback-src="./assets/slimewire/png/slimewire-mark.png" alt="Enter the Swamp">
         </button>
       </section>
 
       <section class="connect-view" data-connect hidden>
         <article class="swamp-connect-shell">
           <section class="connect-hero-side" aria-label="SlimeWire trader terminal preview">
-            <img class="connect-mark" src="./assets/slimewire/png/slimewire-mark.png" alt="" aria-hidden="true">
+            <img class="connect-mark" src="./assets/slimewire/png/slimewire-mark.png" data-fallback-src="./assets/slimewire/svg/icons/wallet.svg" alt="" aria-hidden="true">
             <p>Built for</p>
             <h1>Traders</h1>
             <div class="connect-method-showcase" aria-label="Connection options">
               <button class="connect-method-card" type="button" data-connect-wallet="phantom">
-                <img src="./assets/slimewire/png/providers/phantom-orb.jpg" alt="">
+                <img src="./assets/slimewire/png/providers/phantom-orb.jpg" data-fallback-src="./assets/slimewire/clean-ui/wallet_icons/default/phantom.png" alt="">
                 <span>Phantom</span>
               </button>
               <button class="connect-method-card" type="button" data-connect-wallet="solflare">
-                <img src="./assets/slimewire/png/providers/solflare-orb.jpg" alt="">
+                <img src="./assets/slimewire/png/providers/solflare-orb.jpg" data-fallback-src="./assets/slimewire/clean-ui/wallet_icons/default/solflare.png" alt="">
                 <span>Solflare</span>
               </button>
             </div>
-            <img class="connect-ogre" src="./assets/slimewire/png/slimewire-ogre-hero-cutout.png" alt="" aria-hidden="true">
+            <img class="connect-ogre" src="./assets/slimewire/png/slimewire-ogre-hero-cutout.png" data-fallback-src="./assets/slimewire/png/slimewire-mark.png" alt="" aria-hidden="true">
           </section>
           <section class="connect-card">
-            <img class="connect-logo" src="./assets/slimewire-panel-wordmark-clean.png" alt="SlimeWire">
+            <img class="connect-logo" src="./assets/slimewire-panel-wordmark-clean.png" data-fallback-src="./assets/slimewire/png/slimewire-mark.png" alt="SlimeWire">
             <h2>Start Sliming</h2>
             <p>Track Solana pairs, wallet balances, live trades, and sniper tools from one swamp terminal.</p>
             <span class="connect-subtitle">Connect your wallet</span>
             <small class="connect-helper">Connect Phantom or Solflare to start tracking trades.</small>
             <div class="connect-provider-row" aria-label="Connection methods">
-              <button class="provider-orb provider-phantom" type="button" data-connect-wallet="phantom" aria-label="Connect Phantom wallet"><img src="./assets/slimewire/clean-ui/wallet_icons/default/phantom.png" alt=""><span>Phantom</span></button>
-              <button class="provider-orb provider-solflare" type="button" data-connect-wallet="solflare" aria-label="Connect Solflare wallet"><img src="./assets/slimewire/clean-ui/wallet_icons/default/solflare.png" alt=""><span>Solflare</span></button>
+              <button class="provider-orb provider-phantom" type="button" data-connect-wallet="phantom" aria-label="Connect Phantom wallet"><img src="./assets/slimewire/clean-ui/wallet_icons/default/phantom.png" data-fallback-src="./assets/slimewire/svg/icons/wallet.svg" alt=""><span>Phantom</span></button>
+              <button class="provider-orb provider-solflare" type="button" data-connect-wallet="solflare" aria-label="Connect Solflare wallet"><img src="./assets/slimewire/clean-ui/wallet_icons/default/solflare.png" data-fallback-src="./assets/slimewire/svg/icons/wallet.svg" alt=""><span>Solflare</span></button>
             </div>
             <small class="connect-next-step">After connecting, balances, open positions, watchlist, and PnL sync automatically.</small>
             <form class="connect-login-panel" data-connect-login-panel onsubmit="return false;" hidden>

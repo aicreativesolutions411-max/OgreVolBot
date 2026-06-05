@@ -191,6 +191,8 @@ const state = {
   livePairsRefreshErrorByBucket: {},
   livePairBucket: "live",
   slimeScopeMode: "new",
+  terminalFeeds: {},
+  terminalFeedLog: [],
   launchResult: null,
   launchCoinDraft: getStoredLaunchCoinDraft(),
   launchCoinStatus: "",
@@ -256,6 +258,7 @@ const livePairsWarmupKeys = new Set();
 let scanTimer = null;
 let kolTimer = null;
 let watchlistTimer = null;
+let terminalFeedTimer = null;
 let walletBackgroundRefreshTimer = null;
 let postTradeRefreshTimers = [];
 let autoExitCheckInFlight = false;
@@ -299,6 +302,133 @@ const LIVE_PAIR_SORTS = [
   ["momentum", "Highest Momentum"],
   ["risk", "Highest Risk"]
 ];
+
+/*
+Terminal feed registry. Keep each tab/category/cacheKey distinct so one tab
+cannot accidentally display or refresh another tab's data.
+tabKey | label | component | endpoint | category | refreshMs | staleMs | cacheKey
+*/
+const TERMINAL_FEEDS = [
+  { tabKey: "terminal", label: "Live Terminal", component: "terminalHtml", endpoint: "composite:/api/web/live-pairs+/api/web/kol/scan+/api/web/watchlist", category: "overview:terminal", refreshMs: 15_000, staleMs: 30_000, cacheKey: "terminal:overview" },
+  { tabKey: "live", label: "Live Pairs - New Solana Pairs", component: "livePairsHtml", endpoint: "/api/web/live-pairs", category: "pairs:new", refreshMs: 15_000, staleMs: 30_000, cacheKey: "pairs:{bucket}:{sort}" },
+  { tabKey: "liveTrades", label: "Live Trades - Recent Swaps", component: "liveTradesHtml", endpoint: "/api/web/pnl", category: "trades:recent", refreshMs: 8_000, staleMs: 20_000, cacheKey: "trades:recent" },
+  { tabKey: "slimeScope", label: "Slime Scope - Scanner Picks", component: "slimeScopeHtml", endpoint: "composite:/api/web/live-pairs+/api/web/sniper/scan", category: "scanner:slime-scope", refreshMs: 20_000, staleMs: 45_000, cacheKey: "scanner:slime-scope:{scopeMode}" },
+  { tabKey: "kol", label: "KOL Tracker - Social/KOL Signals", component: "kolHtml", endpoint: "/api/web/kol/scan", category: "signals:kol", refreshMs: 60_000, staleMs: 120_000, cacheKey: "signals:kol:{kolMode}:{kolWallet}" },
+  { tabKey: "watchlist", label: "Watchlist - Your Saved Pairs", component: "watchlistHtml", endpoint: "/api/web/watchlist", category: "user:watchlist", refreshMs: 20_000, staleMs: 45_000, cacheKey: "user:watchlist" },
+  { tabKey: "smartChart", label: "Smart Chart - Selected Token", component: "smartChartHtml", endpoint: "composite:/api/web/live-pairs+/api/web/positions", category: "token:selected-chart", refreshMs: 20_000, staleMs: 45_000, cacheKey: "token:selected-chart:{tokenMint}" },
+  { tabKey: "trade", label: "Trade - Selected Token Panel", component: "tradeHtml", endpoint: "composite:/api/web/balances+/api/web/positions", category: "trade:selected-token", refreshMs: 20_000, staleMs: 45_000, cacheKey: "trade:selected-token:{tokenMint}" },
+  { tabKey: "bundle", label: "Bundle Volume - Bundle Actions", component: "bundleHtml", endpoint: "composite:/api/web/balances+/api/web/positions", category: "bundle:volume", refreshMs: 25_000, staleMs: 60_000, cacheKey: "bundle:volume:{tokenMint}" },
+  { tabKey: "volume", label: "Bundle Volume - Volume Flags", component: "volumeHtml", endpoint: "composite:/api/web/live-pairs+/api/web/balances", category: "signals:bundle-volume", refreshMs: 25_000, staleMs: 60_000, cacheKey: "signals:bundle-volume:{tokenMint}" },
+  { tabKey: "sniper", label: "Sniper - Launch Snipe Candidates", component: "sniperHtml", endpoint: "/api/web/sniper/scan", category: "scanner:launch-snipe", refreshMs: 20_000, staleMs: 45_000, cacheKey: "scanner:launch-snipe:{scanMode}" },
+  { tabKey: "launch", label: "Launch Snipe - Launch Watches", component: "launchHtml", endpoint: "/api/web/launch/watches", category: "launch:watches", refreshMs: 15_000, staleMs: 35_000, cacheKey: "launch:watches" },
+  { tabKey: "launchCoin", label: "Pump Launch - Launch Status", component: "launchCoinHtml", endpoint: "/api/web/launch/watches", category: "pump-launch:status", refreshMs: 20_000, staleMs: 60_000, cacheKey: "pump-launch:status" },
+  { tabKey: "wallets", label: "Wallets/Balances", component: "walletsHtml", endpoint: "composite:/api/web/wallets+/api/web/balances", category: "portfolio:wallets-balances", refreshMs: 20_000, staleMs: 45_000, cacheKey: "portfolio:wallets-balances" },
+  { tabKey: "positions", label: "Positions", component: "positionsHtml", endpoint: "/api/web/positions", category: "portfolio:positions", refreshMs: 12_000, staleMs: 30_000, cacheKey: "portfolio:positions" },
+  { tabKey: "pnl", label: "PnL", component: "pnlHtml", endpoint: "/api/web/pnl", category: "portfolio:pnl", refreshMs: 20_000, staleMs: 45_000, cacheKey: "portfolio:pnl" },
+  { tabKey: "ogreAi", label: "Ogre A.I.", component: "ogreAiHtml", endpoint: "local:ogre-ai-results", category: "tool:ogre-ai", refreshMs: 30_000, staleMs: 90_000, cacheKey: "tool:ogre-ai" },
+  { tabKey: "ogreTek", label: "Ogre TeK / Perp Mode", component: "ogreTekHtml", endpoint: "local:perps-provider", category: "perps:ogre-tek", refreshMs: 30_000, staleMs: 90_000, cacheKey: "perps:ogre-tek" }
+];
+const TERMINAL_FEED_MAP = Object.fromEntries(TERMINAL_FEEDS.map((feed) => [feed.tabKey, feed]));
+
+const SLIMEWIRE_CRITICAL_IMAGE_ASSETS = [
+  "./assets/slimewire/png/slimewire-mark.png",
+  "./assets/slimewire/svg/icons/wallet.svg",
+  "./assets/slimewire/svg/icons/terminal.svg",
+  "./assets/slimewire/svg/icons/chart.svg",
+  "./assets/slimewire/svg/icons/refresh.svg",
+  "./assets/slimewire/svg/powered-by-ogres-badge.svg",
+  "./assets/slimewire/clean-ui/wallet_icons/default/phantom.png",
+  "./assets/slimewire/clean-ui/wallet_icons/default/solflare.png",
+  "./assets/slimewire/png/providers/phantom-orb.jpg",
+  "./assets/slimewire/png/providers/solflare-orb.jpg",
+  "./assets/slimewire/png/token-mascots/token-mascot-1.png",
+  "./assets/slimewire/png/token-mascots/token-mascot-2.png",
+  "./assets/slimewire/png/token-mascots/token-mascot-3.png"
+];
+
+function absoluteAssetUrl(value = "") {
+  try {
+    return new URL(value, window.location.href).href;
+  } catch {
+    return String(value || "");
+  }
+}
+
+function imageSourceMatches(image, fallbackSrc = "") {
+  const current = image?.currentSrc || image?.src || image?.getAttribute?.("src") || "";
+  return absoluteAssetUrl(current) === absoluteAssetUrl(fallbackSrc);
+}
+
+function fallbackImageForSource(image) {
+  const explicit = image?.dataset?.fallbackSrc || image?.getAttribute?.("data-fallback-src") || "";
+  if (explicit && !imageSourceMatches(image, explicit)) return explicit;
+  const source = String(image?.currentSrc || image?.src || image?.getAttribute?.("src") || "").toLowerCase();
+  if (source.includes("phantom")) return walletChoiceIcon("phantom");
+  if (source.includes("solflare")) return walletChoiceIcon("solflare");
+  if (source.includes("wallet") || source.includes("/icons/")) return "./assets/slimewire/svg/icons/wallet.svg";
+  if (source.includes("powered-by") || source.includes("wordmark") || source.includes("slimewire-mark")) return "./assets/slimewire/png/slimewire-mark.png";
+  return tokenMascotSrc(image?.alt || source || "slimewire");
+}
+
+function logImageFallback(image, fallbackSrc = "", action = "fallback") {
+  try {
+    console.info("[slimewire_image_fallback]", {
+      action,
+      className: String(image?.className || "").slice(0, 80),
+      fallbackKind: fallbackSrc.includes("phantom")
+        ? "phantom"
+        : fallbackSrc.includes("solflare")
+          ? "solflare"
+          : fallbackSrc.includes("wallet.svg")
+            ? "wallet"
+            : fallbackSrc.includes("token-mascot")
+              ? "token-mascot"
+              : "brand"
+    });
+  } catch {
+    // Visual fallback logging is best-effort only.
+  }
+}
+
+function handleSlimewireImageError(event) {
+  const image = event?.target;
+  if (typeof HTMLImageElement !== "undefined" && !(image instanceof HTMLImageElement)) return;
+  if (!image || image.dataset?.fallbackApplied === "true") {
+    if (image) image.hidden = true;
+    return;
+  }
+  const fallbackSrc = fallbackImageForSource(image);
+  if (!fallbackSrc || imageSourceMatches(image, fallbackSrc)) {
+    image.hidden = true;
+    logImageFallback(image, "", "hidden");
+    return;
+  }
+  image.dataset.fallbackApplied = "true";
+  image.loading = image.loading || "eager";
+  image.src = fallbackSrc;
+  logImageFallback(image, fallbackSrc, "fallback");
+}
+
+function installSlimewireImageFallbacks() {
+  if (installSlimewireImageFallbacks.installed) return;
+  installSlimewireImageFallbacks.installed = true;
+  document.addEventListener("error", handleSlimewireImageError, true);
+}
+
+function prewarmSlimewireImageAssets() {
+  if (prewarmSlimewireImageAssets.started) return;
+  prewarmSlimewireImageAssets.started = true;
+  for (const src of SLIMEWIRE_CRITICAL_IMAGE_ASSETS) {
+    try {
+      const image = new Image();
+      image.decoding = "async";
+      image.loading = "eager";
+      image.src = src;
+    } catch {
+      // Preloading critical icons should never block the app.
+    }
+  }
+}
 
 function routeForPath(pathname = window.location.pathname) {
   if (pathname.startsWith("/login") || pathname.startsWith("/account/login")) return "login";
@@ -1438,6 +1568,280 @@ async function loadWalletCore(options = {}) {
   }
 }
 
+function selectedTerminalFeedToken() {
+  return String(state.smartChartToken || state.tradeToken || state.bundleToken || state.volumeToken || state.terminalToken || "").trim();
+}
+
+function terminalFeedDefinition(tabKey = state.activeTab) {
+  return TERMINAL_FEED_MAP[tabKey] || null;
+}
+
+function terminalFeedCacheKey(feed = terminalFeedDefinition()) {
+  const template = String(feed?.cacheKey || feed?.tabKey || "terminal:unknown");
+  return template
+    .replace("{bucket}", normalizeLivePairBucket(state.livePairBucket))
+    .replace("{sort}", String(state.terminalSort || "best"))
+    .replace("{scopeMode}", String(state.slimeScopeMode || "new"))
+    .replace("{kolMode}", String(state.kolMode || "hot"))
+    .replace("{kolWallet}", state.kolWallet ? shortAddress(state.kolWallet) : "global")
+    .replace("{scanMode}", String(state.scanMode || "safe"))
+    .replace("{tokenMint}", selectedTerminalFeedToken() ? shortAddress(selectedTerminalFeedToken()) : "none");
+}
+
+function terminalFeedRuntime(tabKey = state.activeTab) {
+  return state.terminalFeeds[tabKey] || {};
+}
+
+function terminalFeedLastUpdatedAt(tabKey = state.activeTab) {
+  if (tabKey === "live" || tabKey === "terminal") return currentLivePairsUpdatedAt();
+  if (tabKey === "slimeScope") return currentLivePairsUpdatedAt();
+  if (tabKey === "kol") return state.kolLastUpdatedAt || "";
+  if (tabKey === "watchlist") return terminalFeedRuntime("watchlist").lastFetchAt || "";
+  if (["wallets", "positions", "trade", "bundle", "volume", "smartChart"].includes(tabKey)) return state.lastWalletRefreshAt || terminalFeedRuntime(tabKey).lastFetchAt || "";
+  if (tabKey === "liveTrades" || tabKey === "pnl") return terminalFeedRuntime(tabKey).lastFetchAt || "";
+  if (tabKey === "launch" || tabKey === "launchCoin") return terminalFeedRuntime(tabKey).lastFetchAt || "";
+  if (tabKey === "sniper") return terminalFeedRuntime(tabKey).lastFetchAt || "";
+  if (tabKey === "ogreTek") return terminalFeedRuntime(tabKey).lastFetchAt || "";
+  return terminalFeedRuntime(tabKey).lastFetchAt || "";
+}
+
+function terminalFeedResultCount(tabKey = state.activeTab) {
+  if (tabKey === "terminal") return Number(currentLivePairs()?.rows?.length || 0) + Number(state.kolScan?.rows?.length || 0);
+  if (tabKey === "live") return Number(currentLivePairs()?.rows?.length || 0);
+  if (tabKey === "liveTrades") return Number(state.pnl?.trades?.length || 0);
+  if (tabKey === "slimeScope") return Number(slimeScopeRows?.(state.slimeScopeMode)?.length || 0);
+  if (tabKey === "kol") return Number(state.kolScan?.rows?.length || 0);
+  if (tabKey === "watchlist") return Number(state.watchlist?.rows?.length || 0);
+  if (tabKey === "smartChart") return selectedTerminalFeedToken() ? 1 : Number(terminalBestPickRows?.()?.length || 0);
+  if (tabKey === "trade") return selectedTerminalFeedToken() ? 1 : 0;
+  if (tabKey === "bundle" || tabKey === "volume") return selectedTerminalFeedToken() ? 1 : 0;
+  if (tabKey === "sniper") return Number(state.scan?.rows?.length || 0);
+  if (tabKey === "launch" || tabKey === "launchCoin") return Number(state.launchWatches?.length || 0);
+  if (tabKey === "wallets") return Number(state.wallets?.length || 0) + Number(state.balances?.length || 0);
+  if (tabKey === "positions") return Number(state.positions?.length || 0);
+  if (tabKey === "pnl") return Number(state.pnl?.trades?.length || 0);
+  if (tabKey === "ogreAi") return state.ogreAiResult ? 1 : 0;
+  if (tabKey === "ogreTek") return Number(state.ogreTek?.markets?.length || 0) + Number(state.ogreTek?.positions?.length || 0);
+  return 0;
+}
+
+function terminalFeedIsStale(tabKey = state.activeTab) {
+  const feed = terminalFeedDefinition(tabKey);
+  if (!feed) return false;
+  const lastUpdated = Date.parse(terminalFeedLastUpdatedAt(tabKey) || "");
+  if (!Number.isFinite(lastUpdated)) return true;
+  return Date.now() - lastUpdated > Number(feed.staleMs || 30_000);
+}
+
+function terminalFeedHasData(tabKey = state.activeTab) {
+  return terminalFeedResultCount(tabKey) > 0 || Boolean(terminalFeedLastUpdatedAt(tabKey));
+}
+
+function terminalFeedEventPayload(tabKey = state.activeTab, event = {}) {
+  const feed = terminalFeedDefinition(tabKey) || {};
+  return {
+    tabKey,
+    label: feed.label || tabKey,
+    category: feed.category || "unknown",
+    endpoint: feed.endpoint || "",
+    cacheKey: terminalFeedCacheKey(feed),
+    requestId: event.requestId || "",
+    status: event.status || "unknown",
+    reason: event.reason || "",
+    resultCount: Number(event.resultCount || 0),
+    stale: Boolean(event.stale),
+    errorCode: String(event.errorCode || "").slice(0, 80),
+    errorMessage: String(event.errorMessage || "").slice(0, 160),
+    at: new Date().toISOString()
+  };
+}
+
+function recordTerminalFeedEvent(tabKey = state.activeTab, event = {}) {
+  const payload = terminalFeedEventPayload(tabKey, event);
+  state.terminalFeedLog = [...(state.terminalFeedLog || []), payload].slice(-20);
+  try {
+    window.localStorage?.setItem("slimewireTerminalFeedLog", JSON.stringify(state.terminalFeedLog));
+  } catch {
+    // Feed logs are diagnostics only.
+  }
+  try {
+    console.info("[slimewire_terminal_feed]", payload);
+  } catch {
+    // Diagnostics must not block data refresh.
+  }
+  try {
+    void api("/api/web/terminal-feed-event", {
+      method: "POST",
+      timeoutMs: 3000,
+      body: JSON.stringify(payload)
+    }).catch(() => {});
+  } catch {
+    // Server-side debug history is best-effort.
+  }
+  return payload;
+}
+
+function markTerminalFeedStart(tabKey = state.activeTab, options = {}) {
+  const feed = terminalFeedDefinition(tabKey);
+  if (!feed) return "";
+  const requestId = globalThis.crypto?.randomUUID?.() || `feed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  state.terminalFeeds = {
+    ...state.terminalFeeds,
+    [tabKey]: {
+      ...terminalFeedRuntime(tabKey),
+      label: feed.label,
+      category: feed.category,
+      endpoint: feed.endpoint,
+      cacheKey: terminalFeedCacheKey(feed),
+      refreshMs: feed.refreshMs,
+      staleMs: feed.staleMs,
+      inFlight: true,
+      lastRequestId: requestId,
+      lastReason: options.reason || "refresh",
+      lastStartedAt: new Date().toISOString()
+    }
+  };
+  return requestId;
+}
+
+function markTerminalFeedDone(tabKey = state.activeTab, requestId = "", status = "success", extra = {}) {
+  const feed = terminalFeedDefinition(tabKey);
+  if (!feed) return;
+  const resultCount = terminalFeedResultCount(tabKey);
+  const nextRuntime = {
+    ...terminalFeedRuntime(tabKey),
+    label: feed.label,
+    category: feed.category,
+    endpoint: feed.endpoint,
+    cacheKey: terminalFeedCacheKey(feed),
+    refreshMs: feed.refreshMs,
+    staleMs: feed.staleMs,
+    inFlight: false,
+    lastRequestId: requestId,
+    lastStatus: status,
+    lastFetchAt: new Date().toISOString(),
+    resultCount,
+    stale: status !== "success" || terminalFeedIsStale(tabKey),
+    errorCode: extra.errorCode || "",
+    errorMessage: extra.errorMessage || ""
+  };
+  state.terminalFeeds = {
+    ...state.terminalFeeds,
+    [tabKey]: nextRuntime
+  };
+  recordTerminalFeedEvent(tabKey, {
+    requestId,
+    status,
+    reason: nextRuntime.lastReason,
+    resultCount,
+    stale: nextRuntime.stale,
+    errorCode: nextRuntime.errorCode,
+    errorMessage: nextRuntime.errorMessage
+  });
+}
+
+function tabNeedsAccountFeed(tabKey = state.activeTab) {
+  return ["watchlist", "wallets", "positions", "pnl", "liveTrades", "trade", "bundle", "volume", "smartChart", "launch", "launchCoin"].includes(tabKey);
+}
+
+async function refreshTerminalFeed(tabKey = state.activeTab, options = {}) {
+  const feed = terminalFeedDefinition(tabKey);
+  if (!feed) return null;
+  if (options.ifStale && terminalFeedHasData(tabKey) && !terminalFeedIsStale(tabKey)) return terminalFeedRuntime(tabKey);
+  if (terminalFeedRuntime(tabKey).inFlight && !options.force) return terminalFeedRuntime(tabKey);
+  if (tabNeedsAccountFeed(tabKey) && !state.user && !["smartChart", "trade", "bundle", "volume"].includes(tabKey)) {
+    markTerminalFeedDone(tabKey, "", "skipped", { errorCode: "ACCOUNT_REQUIRED", errorMessage: "Account or wallet required." });
+    return terminalFeedRuntime(tabKey);
+  }
+
+  const requestId = markTerminalFeedStart(tabKey, options);
+  try {
+    if (tabKey === "terminal") {
+      const tasks = [
+        refreshLivePairBuckets({ silent: true, force: Boolean(options.force) })
+      ];
+      if (!state.kolWallet) tasks.push(loadKolScan(state.kolMode, "", { silent: true }));
+      if (state.user && state.token) {
+        tasks.push(loadWatchlist({ silent: true }));
+        tasks.push(loadAll({ silent: true, skipCore: true, force: Boolean(options.force) }));
+      }
+      await Promise.allSettled(tasks);
+    } else if (tabKey === "live") {
+      await loadLivePairs({ silent: options.silent !== false, bucket: state.livePairBucket, force: Boolean(options.force) });
+    } else if (tabKey === "liveTrades") {
+      if (state.user && state.token) await loadAll({ silent: true, skipCore: true, force: Boolean(options.force) });
+    } else if (tabKey === "slimeScope") {
+      await refreshLivePairBuckets({ silent: true, force: Boolean(options.force) });
+      if (!state.scan && options.force) await loadScan(state.scanMode, { silent: true }).catch(() => {});
+    } else if (tabKey === "kol") {
+      await loadKolScan(state.kolMode, state.kolWallet, { silent: options.silent !== false });
+    } else if (tabKey === "watchlist") {
+      await loadWatchlist({ silent: options.silent !== false });
+    } else if (tabKey === "sniper") {
+      await loadScan(state.scanMode, { silent: options.silent !== false });
+    } else if (["wallets", "positions", "pnl"].includes(tabKey)) {
+      if (state.user && state.token) await refreshWalletState({ force: Boolean(options.force), deep: false });
+    } else if (["trade", "bundle", "volume", "smartChart"].includes(tabKey)) {
+      const tasks = [refreshLivePairBuckets({ silent: true, force: Boolean(options.force) })];
+      if (state.user && state.token) tasks.push(loadAll({ silent: true, skipCore: true, force: Boolean(options.force) }));
+      await Promise.allSettled(tasks);
+    } else if (tabKey === "launch" || tabKey === "launchCoin") {
+      if (state.user && state.token) await loadAll({ silent: true, skipCore: true, force: Boolean(options.force) });
+    } else if (tabKey === "ogreTek") {
+      await loadOgreTekData({ silent: true }).catch((error) => {
+        state.ogreTek.error = error.message;
+      });
+    }
+    markTerminalFeedDone(tabKey, requestId, "success");
+    return terminalFeedRuntime(tabKey);
+  } catch (error) {
+    markTerminalFeedDone(tabKey, requestId, "error", {
+      errorCode: error?.code || error?.name || "REFRESH_FAILED",
+      errorMessage: publicErrorMessage(error?.message || "Feed refresh failed.")
+    });
+    if (options.throwOnError) throw error;
+    return terminalFeedRuntime(tabKey);
+  } finally {
+    if (options.render !== false) render({ force: true });
+  }
+}
+
+async function refreshVisibleTerminalFeeds(options = {}) {
+  const active = state.activeTab || "terminal";
+  const tasks = [refreshTerminalFeed(active, { ...options, reason: options.reason || "visible-refresh" })];
+  if (active === "terminal") {
+    tasks.push(refreshTerminalFeed("live", { ...options, silent: true, reason: "terminal-visible-live" }));
+    tasks.push(refreshTerminalFeed("kol", { ...options, silent: true, reason: "terminal-visible-kol" }));
+    if (state.user && state.token) {
+      tasks.push(refreshTerminalFeed("watchlist", { ...options, silent: true, reason: "terminal-visible-watchlist" }));
+      tasks.push(refreshTerminalFeed("liveTrades", { ...options, silent: true, reason: "terminal-visible-trades" }));
+    }
+  }
+  const results = await Promise.allSettled(tasks);
+  return results;
+}
+
+function scheduleActiveTerminalFeedRefresh() {
+  if (terminalFeedTimer) {
+    clearTimeout(terminalFeedTimer);
+    terminalFeedTimer = null;
+  }
+  if (state.route !== "terminal" || document.hidden) return;
+  const feed = terminalFeedDefinition(state.activeTab);
+  if (!feed) return;
+  if (["terminal", "live", "slimeScope", "kol", "watchlist", "sniper"].includes(state.activeTab)) return;
+  terminalFeedTimer = setTimeout(async () => {
+    if (state.route !== "terminal" || document.hidden) return;
+    await refreshTerminalFeed(state.activeTab, {
+      silent: true,
+      force: true,
+      ifStale: true,
+      reason: "active-tab-auto"
+    }).catch((error) => setError(error.message));
+    scheduleActiveTerminalFeedRefresh();
+  }, Math.max(5_000, Number(feed.refreshMs || 30_000)));
+}
+
 function normalizeLivePairBucket(bucket) {
   const value = String(bucket || "live");
   return LIVE_PAIR_BUCKETS.some(([id]) => id === value) ? value : "live";
@@ -1978,6 +2382,7 @@ function renderTabs() {
   scheduleScannerAutoRefresh();
   scheduleKolAutoRefresh();
   scheduleWatchlistAutoRefresh();
+  scheduleActiveTerminalFeedRefresh();
 }
 
 function dashboardHtml() {
@@ -9306,8 +9711,7 @@ document.addEventListener("click", async (event) => {
     return;
   }
   if (target.matches("[data-refresh-feeds]")) {
-    await refreshLivePairBuckets({ force: true }).catch((error) => setError(error.message));
-    if (!state.kolScan) await loadKolScan().catch((error) => setError(error.message));
+    await refreshVisibleTerminalFeeds({ force: true, reason: "manual-refresh-feeds" }).catch((error) => setError(error.message));
     return;
   }
   if (target.matches("[data-watch-token]")) await updateWatchlist("add", target);
@@ -9372,19 +9776,22 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-kol-mode]")) {
     state.kolWallet = "";
-    await loadKolScan(target.dataset.kolMode).catch((error) => setError(error.message));
+    state.kolMode = target.dataset.kolMode || state.kolMode;
+    await refreshTerminalFeed("kol", { force: true, reason: "kol-mode-switch" }).catch((error) => setError(error.message));
     return;
   }
   if (target.matches("[data-kol-refresh]")) {
-    await loadKolScan(state.kolMode, state.kolWallet).catch((error) => setError(error.message));
+    await refreshTerminalFeed("kol", { force: true, reason: "manual-kol-refresh" }).catch((error) => setError(error.message));
     return;
   }
   if (target.matches("[data-kol-wallet-scan]")) {
-    await loadKolScan(state.kolMode, $("[data-kol-wallet]")?.value || "").catch((error) => setError(error.message));
+    state.kolWallet = String($("[data-kol-wallet]")?.value || "").trim();
+    await refreshTerminalFeed("kol", { force: true, reason: "kol-wallet-scan" }).catch((error) => setError(error.message));
     return;
   }
   if (target.matches("[data-kol-scan-wallet]")) {
-    await loadKolScan(state.kolMode, target.dataset.kolScanWallet || "").catch((error) => setError(error.message));
+    state.kolWallet = String(target.dataset.kolScanWallet || "").trim();
+    await refreshTerminalFeed("kol", { force: true, reason: "kol-signal-wallet-scan" }).catch((error) => setError(error.message));
     return;
   }
   if (target.matches("[data-kol-copy]")) {
@@ -9445,12 +9852,10 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-refresh-all]")) {
     if (!state.user || !state.token) {
-      if (state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "slimeScope") await refreshLivePairBuckets({ silent: true, force: true }).catch((error) => setError(error.message));
-      else if (state.activeTab === "sniper") await loadScan().catch((error) => setError(error.message));
-      else if (state.activeTab === "kol") await loadKolScan().catch((error) => setError(error.message));
+      if (terminalFeedDefinition(state.activeTab)) await refreshTerminalFeed(state.activeTab, { force: true, reason: "manual-refresh-all" }).catch((error) => setError(error.message));
       else setError("Browsing is open. Create or connect a profile when you want saved wallets, balances, or trades.");
     } else {
-      refreshWalletState({ force: true }).catch((error) => setError(error.message));
+      refreshVisibleTerminalFeeds({ force: true, reason: "manual-refresh-all" }).catch((error) => setError(error.message));
     }
   }
 
@@ -9474,33 +9879,26 @@ document.addEventListener("click", async (event) => {
     } else if (window.location.pathname.includes("/terminal/chart") || window.location.pathname.includes("/terminal/slime-scope")) {
       window.history.pushState({}, "", "/terminal");
     }
-    if (state.activeTab === "sniper" && !state.scan) {
-      await loadScan().catch((error) => setError(error.message));
-    }
-    if (state.activeTab === "slimeScope") {
-      await refreshLivePairBuckets({ silent: true, force: true }).catch((error) => setError(error.message));
-    } else if ((state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "smartChart") && !state.livePairsByBucket[state.livePairBucket]) {
-      await refreshLivePairBuckets({ force: true }).catch((error) => setError(error.message));
-    }
-    if ((state.activeTab === "kol" || state.activeTab === "terminal" || state.activeTab === "smartChart") && !state.kolScan) {
-      await loadKolScan().catch((error) => setError(error.message));
-    }
-    if (state.activeTab === "watchlist" && state.user && state.token) {
-      await loadWatchlist({ silent: true }).catch((error) => setError(error.message));
-    }
+    await refreshTerminalFeed(state.activeTab, {
+      silent: true,
+      ifStale: true,
+      force: !terminalFeedHasData(state.activeTab),
+      reason: "tab-switch"
+    }).catch((error) => setError(error.message));
     render();
   }
 
   if (target.matches("[data-refresh-scan]")) {
-    await loadScan().catch((error) => setError(error.message));
+    await refreshTerminalFeed("sniper", { force: true, reason: "manual-sniper-refresh" }).catch((error) => setError(error.message));
   }
 
   if (target.matches("[data-refresh-live-pairs]")) {
-    await refreshLivePairBuckets({ force: true }).catch((error) => setError(error.message));
+    const feedKey = state.activeTab === "slimeScope" ? "slimeScope" : state.activeTab === "terminal" ? "terminal" : "live";
+    await refreshTerminalFeed(feedKey, { force: true, reason: "manual-live-refresh" }).catch((error) => setError(error.message));
   }
 
   if (target.matches("[data-refresh-watchlist]")) {
-    await loadWatchlist().catch((error) => setError(error.message));
+    await refreshTerminalFeed("watchlist", { force: true, reason: "manual-watchlist-refresh" }).catch((error) => setError(error.message));
   }
 
   if (target.matches("[data-live-pair-bucket]")) {
@@ -9508,14 +9906,14 @@ document.addEventListener("click", async (event) => {
     state.livePairs = currentLivePairs();
     state.livePairsLastUpdatedAt = currentLivePairsUpdatedAt();
     render();
-    await refreshLivePairBuckets({ force: true }).catch((error) => setError(error.message));
+    await refreshTerminalFeed(state.activeTab === "terminal" ? "terminal" : "live", { force: true, reason: "live-bucket-switch" }).catch((error) => setError(error.message));
   }
 
   if (target.matches("[data-slime-scope-mode]")) {
     state.slimeScopeMode = target.dataset.slimeScopeMode || "new";
     state.activeTab = "slimeScope";
     render();
-    await refreshLivePairBuckets({ force: true }).catch((error) => setError(error.message));
+    await refreshTerminalFeed("slimeScope", { force: true, reason: "slime-scope-mode-switch" }).catch((error) => setError(error.message));
   }
 
   if (target.matches("[data-scan-mode]")) {
@@ -9627,6 +10025,12 @@ document.addEventListener("input", (event) => {
 
 function resumeLiveFeeds() {
   if (state.route !== "terminal") return;
+  refreshTerminalFeed(state.activeTab, {
+    silent: true,
+    ifStale: true,
+    force: terminalFeedIsStale(state.activeTab),
+    reason: "visibility-focus-return"
+  }).catch((error) => setError(error.message));
   if (state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "slimeScope") {
     refreshLivePairBuckets({ silent: true, force: true }).catch((error) => setError(error.message));
     scheduleLivePairsAutoRefresh();
@@ -9648,6 +10052,8 @@ document.addEventListener("visibilitychange", () => {
 window.addEventListener("focus", resumeLiveFeeds);
 
 async function initializeApp() {
+  installSlimewireImageFallbacks();
+  prewarmSlimewireImageAssets();
   await handleMobileWalletReturn();
   render();
   if (state.route === "terminal") {
@@ -9656,6 +10062,13 @@ async function initializeApp() {
   }
 
   await loadSession();
+  if (state.route === "terminal") {
+    void refreshVisibleTerminalFeeds({
+      silent: true,
+      ifStale: true,
+      reason: "site-load"
+    }).catch((error) => setError(error.message));
+  }
   if (state.route === "terminal") {
     ensureLivePairsWarmup();
     if (!state.kolScan) {
