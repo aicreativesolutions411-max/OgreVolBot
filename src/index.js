@@ -1717,8 +1717,9 @@ async function handleWebApiRequest(request, response, requestUrl) {
     }
 
     if (request.method === "POST" && pathname === "/api/web/trade/sell") {
+      const routeReceivedAt = Date.now();
       const body = await readJsonRequestBody(request);
-      const result = await webTradeSell(auth.userId, body);
+      const result = await webTradeSell(auth.userId, body, { request, routeReceivedAt });
       sendWebJson(request, response, 200, {
         ok: true,
         trade: result
@@ -1767,8 +1768,9 @@ async function handleWebApiRequest(request, response, requestUrl) {
     }
 
     if (request.method === "POST" && pathname === "/api/web/bundle/sell") {
+      const routeReceivedAt = Date.now();
       const body = await readJsonRequestBody(request);
-      const result = await webBundleSell(auth.userId, body);
+      const result = await webBundleSell(auth.userId, body, { request, routeReceivedAt });
       sendWebJson(request, response, 200, {
         ok: true,
         bundle: result
@@ -16121,6 +16123,106 @@ async function recordPerformanceEvent(body = {}, request = {}) {
   return event;
 }
 
+function normalizeManualSellAttemptId(value = "") {
+  const text = String(value || "").trim().replace(/[^\w:-]/g, "").slice(0, 96);
+  return text.length >= 8 ? text : "";
+}
+
+function manualSellUserHash(userId = "") {
+  return crypto.createHash("sha256").update(String(userId || "")).digest("hex").slice(0, 16);
+}
+
+function manualSellTimingSummary(timings = {}) {
+  const entries = Object.entries(timings)
+    .filter(([, value]) => Number.isFinite(Number(value)) && Number(value) >= 0)
+    .map(([key, value]) => [key, Math.round(Number(value))]);
+  const slowest = entries.sort((a, b) => b[1] - a[1])[0] || ["none", 0];
+  return Object.fromEntries([
+    ...entries,
+    ["slowestStep", slowest[0]],
+    ["slowestStepMs", slowest[1]]
+  ]);
+}
+
+async function recordManualSellTimingEvent(event = {}, request = {}) {
+  await recordPerformanceEvent({
+    route: "terminal",
+    component: "manual-sell",
+    action: event.action || "manual-sell-backend",
+    durationMs: event.durationMs || 0,
+    resultCount: event.resultCount || 0,
+    cacheHit: Boolean(event.cacheHit),
+    stale: false,
+    requestId: event.manualSellAttemptId || "",
+    errorCode: event.errorCode || "",
+    details: [
+      event.priority ? `priority=${event.priority}` : "priority=critical",
+      event.slowestStep ? `slowest=${event.slowestStep}` : "",
+      Number.isFinite(Number(event.queueWaitMs)) ? `queueWaitMs=${Math.round(Number(event.queueWaitMs))}` : "queueWaitMs=0",
+      event.status ? `status=${event.status}` : ""
+    ].filter(Boolean).join(";")
+  }, request || {});
+}
+
+async function runManualSellCriticalAttempt(userId, body = {}, options = {}, task) {
+  const manualSellAttemptId = normalizeManualSellAttemptId(firstString(body.manualSellAttemptId, body.clientRequestId));
+  const request = options.request || {};
+  if (!manualSellAttemptId) {
+    return task({ manualSellAttemptId: "", queueWaitMs: 0, duplicate: false });
+  }
+
+  const resultKey = externalCacheKey(`manual-sell-result:${manualSellAttemptId}`, userId);
+  const cached = await cacheGetJson(resultKey).catch(() => null);
+  if (cached?.result) {
+    const result = { ...cached.result, duplicate: true, status: "SUBMITTED" };
+    await recordManualSellTimingEvent({
+      action: "manual-sell-backend-duplicate-result",
+      manualSellAttemptId,
+      durationMs: 0,
+      resultCount: result.successCount || (result.signature ? 1 : 0),
+      cacheHit: true,
+      queueWaitMs: 0,
+      status: "duplicate-result"
+    }, request).catch(() => {});
+    return result;
+  }
+
+  const lockWaitStarted = Date.now();
+  const lockName = `manual-sell:${manualSellUserHash(userId)}:${manualSellAttemptId}`;
+  return LockService.withLock(lockName, 90_000, async () => {
+    const duplicate = await cacheGetJson(resultKey).catch(() => null);
+    if (duplicate?.result) return { ...duplicate.result, duplicate: true, status: "SUBMITTED" };
+    const result = await task({
+      manualSellAttemptId,
+      queueWaitMs: Date.now() - lockWaitStarted,
+      duplicate: false
+    });
+    await cacheSetJson(resultKey, { result }, 120_000).catch(() => false);
+    return result;
+  }, async () => {
+    const skipped = {
+      type: "bundle_sell",
+      manualSellAttemptId,
+      duplicate: true,
+      status: "SUBMITTING",
+      successCount: 0,
+      failedCount: 0,
+      results: [],
+      message: "Sell is already submitting for this attempt. SlimeWire will not send a duplicate order."
+    };
+    await recordManualSellTimingEvent({
+      action: "manual-sell-backend-dedupe-active",
+      manualSellAttemptId,
+      durationMs: Date.now() - lockWaitStarted,
+      resultCount: 0,
+      cacheHit: true,
+      queueWaitMs: Date.now() - lockWaitStarted,
+      status: "dedupe-active"
+    }, request).catch(() => {});
+    return skipped;
+  });
+}
+
 function kvProviderName() {
   if (CONFIG.cacheProvider === "memory") return "memory";
   if (CONFIG.cacheProvider === "redis") return CONFIG.redisUrl ? "redis" : "memory";
@@ -18211,17 +18313,26 @@ async function webTradeBuy(userId, body = {}) {
   };
 }
 
-async function webTradeSell(userId, body = {}) {
+async function webTradeSell(userId, body = {}, options = {}) {
+  return runManualSellCriticalAttempt(userId, body, options, (attempt) => webTradeSellCore(userId, body, options, attempt));
+}
+
+async function webTradeSellCore(userId, body = {}, options = {}, attempt = {}) {
+  const backendStartedAt = Date.now();
   const store = await readWalletStore();
   const wallet = getWalletAt(store, parseWebWalletIndex(body.walletIndex), userId);
   const tokenMint = parsePublicKey(String(body.tokenMint || "")).toBase58();
   const percent = parsePercent(String(body.percent || "100"));
   const slippageBps = parseWebSlippage(body.slippageBps);
+  const validationMs = Date.now() - backendStartedAt;
+  const submitStartedAt = Date.now();
   const result = await sellTokenFromWallet(wallet, tokenMint, percent, slippageBps, { userId });
+  const submitMs = Date.now() - submitStartedAt;
   const outputLamports = BigInt(result.outputLamports || 0);
   const feeLamports = BigInt(result.feeLamports || 0);
   const netLamports = outputLamports > feeLamports ? outputLamports - feeLamports : 0n;
 
+  const recordStartedAt = Date.now();
   await recordTradeEvents([{
     userId,
     type: "sell",
@@ -18241,9 +18352,29 @@ async function webTradeSell(userId, body = {}) {
     slippageBps,
     signature: result.signature
   });
+  const recordMs = Date.now() - recordStartedAt;
+  const backendMs = Date.now() - backendStartedAt;
+  const manualSellTiming = manualSellTimingSummary({
+    backendMs,
+    validationMs,
+    queueWaitMs: attempt.queueWaitMs || 0,
+    submitMs,
+    recordMs
+  });
+  await recordManualSellTimingEvent({
+    action: "manual-sell-backend",
+    manualSellAttemptId: attempt.manualSellAttemptId || "",
+    durationMs: backendMs,
+    resultCount: 1,
+    queueWaitMs: attempt.queueWaitMs || 0,
+    slowestStep: manualSellTiming.slowestStep,
+    status: "submitted"
+  }, options.request).catch(() => {});
 
   return {
     type: "sell",
+    manualSellAttemptId: attempt.manualSellAttemptId || "",
+    manualSellTiming,
     tokenMint,
     shortMint: shortMint(tokenMint),
     walletLabel: wallet.label,
@@ -18867,7 +18998,12 @@ async function webBundleBuy(userId, body = {}) {
   return webBundleResult("bundle_buy", tokenMint, wallets.length, tradeEvents.length, results);
 }
 
-async function webBundleSell(userId, body = {}) {
+async function webBundleSell(userId, body = {}, options = {}) {
+  return runManualSellCriticalAttempt(userId, body, options, (attempt) => webBundleSellCore(userId, body, options, attempt));
+}
+
+async function webBundleSellCore(userId, body = {}, options = {}, attempt = {}) {
+  const backendStartedAt = Date.now();
   const store = await readWalletStore();
   const wallets = webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup);
   const tokenMint = parsePublicKey(String(body.tokenMint || "")).toBase58();
@@ -18875,7 +19011,9 @@ async function webBundleSell(userId, body = {}) {
   const slippageBps = parseWebSlippage(body.slippageBps);
   const results = [];
   const tradeEvents = [];
+  const validationMs = Date.now() - backendStartedAt;
 
+  const submitStartedAt = Date.now();
   await runWithConcurrency(wallets, CONFIG.bundleConcurrency, async (wallet) => {
     try {
       const sell = await sellTokenFromWallet(wallet, tokenMint, percent, slippageBps, { userId });
@@ -18912,7 +19050,9 @@ async function webBundleSell(userId, body = {}) {
       });
     }
   });
+  const submitMs = Date.now() - submitStartedAt;
 
+  const recordStartedAt = Date.now();
   await recordTradeEvents(tradeEvents);
   await audit("web_bundle_sell", {
     userId,
@@ -18922,8 +19062,31 @@ async function webBundleSell(userId, body = {}) {
     percent,
     slippageBps
   });
+  const recordMs = Date.now() - recordStartedAt;
+  const backendMs = Date.now() - backendStartedAt;
 
-  return webBundleResult("bundle_sell", tokenMint, wallets.length, tradeEvents.length, results);
+  const result = webBundleResult("bundle_sell", tokenMint, wallets.length, tradeEvents.length, results);
+  const manualSellTiming = manualSellTimingSummary({
+    backendMs,
+    validationMs,
+    queueWaitMs: attempt.queueWaitMs || 0,
+    submitMs,
+    recordMs
+  });
+  result.manualSellAttemptId = attempt.manualSellAttemptId || "";
+  result.manualSellTiming = manualSellTiming;
+  result.status = tradeEvents.length ? "SUBMITTED" : "FAILED";
+  await recordManualSellTimingEvent({
+    action: "manual-sell-backend",
+    manualSellAttemptId: attempt.manualSellAttemptId || "",
+    durationMs: backendMs,
+    resultCount: tradeEvents.length,
+    queueWaitMs: attempt.queueWaitMs || 0,
+    slowestStep: manualSellTiming.slowestStep,
+    status: result.status.toLowerCase()
+  }, options.request).catch(() => {});
+
+  return result;
 }
 
 function webBundleResult(type, tokenMint, walletCount, successCount, results) {

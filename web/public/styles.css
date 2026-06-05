@@ -6122,6 +6122,61 @@ button[data-position-sell][data-position-sell-percent="100"],
   text-shadow: 0 0 10px rgba(255, 40, 40, 0.42);
 }
 
+button[data-action-state="clicked"],
+button[data-action-state="refreshing"],
+button[data-action-state="success"] {
+  border-color: rgba(201, 255, 162, 0.92) !important;
+  background:
+    linear-gradient(180deg, rgba(203, 255, 161, 0.94), rgba(121, 255, 74, 0.84)) !important;
+  color: #051105 !important;
+  box-shadow:
+    0 0 0 1px rgba(203, 255, 161, 0.45),
+    0 0 18px rgba(137, 255, 67, 0.42),
+    inset 0 1px 0 rgba(255, 255, 255, 0.45) !important;
+  text-shadow: none !important;
+}
+
+button[data-action-state="clicked"],
+button[data-action-state="refreshing"] {
+  animation: slime-action-pulse 0.82s ease-in-out infinite alternate;
+}
+
+button[data-action-state="submitting"],
+button[data-action-state="submitted"],
+button[data-action-state="confirming"] {
+  border-color: rgba(201, 255, 162, 0.84) !important;
+  background:
+    linear-gradient(180deg, rgba(137, 255, 67, 0.95), rgba(57, 255, 20, 0.76)) !important;
+  color: #041004 !important;
+  box-shadow: 0 0 16px rgba(137, 255, 67, 0.46) !important;
+  text-shadow: none !important;
+}
+
+button[data-action-state="error"] {
+  border-color: rgba(255, 120, 88, 0.72) !important;
+  background:
+    linear-gradient(180deg, rgba(84, 18, 8, 0.88), rgba(32, 8, 4, 0.92)) !important;
+  color: #ff9a7d !important;
+}
+
+@keyframes slime-action-pulse {
+  from {
+    filter: saturate(1);
+    transform: translateY(0);
+  }
+  to {
+    filter: saturate(1.16) brightness(1.05);
+    transform: translateY(-1px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button[data-action-state="clicked"],
+  button[data-action-state="refreshing"] {
+    animation: none !important;
+  }
+}
+
 [data-app][data-route="terminal"] .tabs button::before {
   width: 22px;
   height: 22px;
