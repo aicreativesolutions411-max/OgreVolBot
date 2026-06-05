@@ -129,7 +129,9 @@ function setStoredNavTekOpen(open) {
 const state = {
   token: getStoredToken(),
   user: null,
-  route: window.location.pathname.startsWith("/connect")
+  route: window.location.pathname.startsWith("/login") || window.location.pathname.startsWith("/account/login")
+    ? "login"
+    : window.location.pathname.startsWith("/connect")
     ? "connect"
     : window.location.pathname.startsWith("/terminal") || window.location.pathname.startsWith("/ogre-tek")
       ? "terminal"
@@ -238,6 +240,10 @@ const state = {
   editingBundlePresetId: "",
   walletRemoveStatus: "",
   walletSweepStatus: "",
+  loginModalOpen: window.location.pathname.startsWith("/login") || window.location.pathname.startsWith("/account/login") || new URLSearchParams(window.location.search || "").get("login") === "1",
+  loginModalTab: "login",
+  loginReturnTo: "",
+  lastLockInClickAt: 0,
   restoreResult: null,
   importResult: null,
   backupResult: null,
@@ -269,6 +275,7 @@ const app = $("[data-app]");
 const loginView = $("[data-login]");
 const connectView = $("[data-connect]");
 const topLoginPanel = $("[data-top-login]");
+const loginModal = $("[data-login-modal]");
 const authActions = $("[data-auth-actions]");
 const guestActions = $("[data-guest-actions]");
 const sessionActions = $("[data-session-actions]");
@@ -294,6 +301,7 @@ const LIVE_PAIR_SORTS = [
 ];
 
 function routeForPath(pathname = window.location.pathname) {
+  if (pathname.startsWith("/login") || pathname.startsWith("/account/login")) return "login";
   if (pathname.startsWith("/connect")) return "connect";
   if (pathname.startsWith("/ogre-tek")) return "terminal";
   if (pathname.startsWith("/terminal")) return "terminal";
@@ -315,6 +323,7 @@ function tabForPath(pathname = window.location.pathname) {
 function navigateTo(pathname, tab = null) {
   const nextPath = pathname || "/terminal";
   state.route = routeForPath(nextPath);
+  if (state.route === "login") state.loginModalOpen = true;
   if (state.route === "terminal") state.activeTab = tab || tabForPath(nextPath);
   window.history.pushState({}, "", nextPath);
   render();
@@ -487,7 +496,7 @@ function applyUserFromApi(user) {
 
 function firstFormValue(selectors) {
   for (const selector of selectors) {
-    const element = $(selector);
+    const element = visibleElement(selector);
     if (element && !element.closest("[hidden]")) return String(element.value || "");
   }
   for (const selector of selectors) {
@@ -500,7 +509,7 @@ function firstFormValue(selectors) {
 function loginStatusElement() {
   const visibleConnectStatus = $("[data-connect-status]");
   if (visibleConnectStatus && !visibleConnectStatus.closest("[hidden]")) return visibleConnectStatus;
-  return $("[data-login-status]") || visibleConnectStatus;
+  return visibleElement("[data-login-status]") || visibleConnectStatus;
 }
 
 function visibleElement(selector) {
@@ -555,23 +564,86 @@ function logWalletConnectFailure(providerId = "solana", error = null, extra = {}
 
 function focusLoginField(connectPanel = state.route === "connect") {
   window.setTimeout(() => {
-    const selector = connectPanel
-      ? "[data-connect-login-username], [data-connect-login-password]"
-      : "[data-login-username], [data-login-password]";
+    const selector = state.loginModalOpen
+      ? `[data-login-modal-${state.loginModalTab === "create" ? "create" : "login"}-section] [data-login-username], [data-login-modal-${state.loginModalTab === "create" ? "create" : "login"}-section] [data-login-password]`
+      : connectPanel
+        ? "[data-connect-login-username], [data-connect-login-password]"
+        : "[data-login-username], [data-login-password]";
     const input = visibleElement(selector);
     input?.focus?.();
   }, 0);
 }
 
-function openLoginPanel({ connectPanel = state.route === "connect" } = {}) {
+function currentReturnPath() {
+  try {
+    return `${window.location.pathname || "/terminal"}${window.location.search || ""}${window.location.hash || ""}`;
+  } catch {
+    return "/terminal";
+  }
+}
+
+function loginFallbackRoute(returnTo = currentReturnPath()) {
+  return `/login?returnTo=${encodeURIComponent(returnTo || "/terminal")}`;
+}
+
+function safeLoginEventText(value = "", max = 80) {
+  return String(value || "")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/[^\w .:/?&=#@-]/g, "")
+    .trim()
+    .slice(0, max);
+}
+
+function recordLockInClicked(source = "unknown") {
+  const now = Date.now();
+  if (now - Number(state.lastLockInClickAt || 0) < 300) return;
+  state.lastLockInClickAt = now;
+  const detail = {
+    route: safeLoginEventText(state.route || routeForPath(), 40),
+    viewport: Math.round(window.innerWidth || 0),
+    source: safeLoginEventText(source, 60),
+    at: new Date(now).toISOString()
+  };
+  try {
+    const history = JSON.parse(window.localStorage?.getItem("slimewireLockInClicks") || "[]");
+    history.push(detail);
+    window.localStorage?.setItem("slimewireLockInClicks", JSON.stringify(history.slice(-10)));
+  } catch {
+    // Local click history is only diagnostic.
+  }
+  try {
+    console.info("LOCK_IN_CLICKED", detail);
+  } catch {
+    // Safe diagnostic logging should never block login.
+  }
+  try {
+    void api("/api/web/lock-in-clicked", {
+      method: "POST",
+      timeoutMs: 3000,
+      body: JSON.stringify(detail)
+    }).catch(() => {});
+  } catch {
+    // Server logging is best-effort.
+  }
+}
+
+function openLoginModal({ defaultTab = "login", returnTo = currentReturnPath(), source = "unknown", connectPanel = state.route === "connect" } = {}) {
+  recordLockInClicked(source);
+  state.loginModalOpen = true;
+  state.loginModalTab = defaultTab === "create" ? "create" : "login";
+  state.loginReturnTo = returnTo || currentReturnPath();
   state.loginCollapsed = false;
   state.walletConnectMenuOpen = false;
+  if (!loginModal && !topLoginPanel) {
+    window.location.assign(loginFallbackRoute(state.loginReturnTo));
+    return;
+  }
   render({ force: true });
   focusLoginField(connectPanel);
 }
 
-function openLoginModal(options = {}) {
-  openLoginPanel(options);
+function openLoginPanel(options = {}) {
+  openLoginModal(options);
 }
 
 function isMobileWalletPlatform() {
@@ -919,6 +991,7 @@ async function createWebAccount() {
     applyUserFromApi(data.user);
     setStoredToken(state.token);
     state.loginCollapsed = true;
+    state.loginModalOpen = false;
     state.activeTab = "dashboard";
     writeText(status, credentials.username ? "Account created. Login saved." : "Account created.");
     await refreshAfterTrade(data.trade?.signature);
@@ -942,6 +1015,7 @@ async function passwordLogin() {
     applyUserFromApi(data.user);
     setStoredToken(state.token);
     state.loginCollapsed = true;
+    state.loginModalOpen = false;
     state.activeTab = "dashboard";
     writeText(status, "Logged in.");
     await refreshAfterTrade(data.trade?.signature);
@@ -992,6 +1066,7 @@ async function emailCodeLogin() {
     applyUserFromApi(data.user);
     setStoredToken(state.token);
     state.loginCollapsed = true;
+    state.loginModalOpen = false;
     state.activeTab = "dashboard";
     writeText(status, "Logged in.");
     await refreshAfterTrade(data.trade?.signature);
@@ -1762,10 +1837,26 @@ function render(options = {}) {
   app.dataset.route = state.route;
   const hasWalletContext = Boolean(state.user?.connectedWallet || state.wallets.length);
   app.dataset.walletConnected = hasWalletContext ? "true" : "false";
-  loginView.hidden = state.route !== "intro";
+  loginView.hidden = !["intro", "login"].includes(state.route);
   if (connectView) connectView.hidden = state.route !== "connect";
-  if (topLoginPanel) topLoginPanel.hidden = Boolean(state.user) || state.loginCollapsed;
-  setHidden("[data-connect-login-panel]", Boolean(state.user) || state.loginCollapsed);
+  const hasLoginModal = Boolean(loginModal);
+  const loginModalVisible = Boolean(hasLoginModal && !state.user && state.loginModalOpen);
+  if (topLoginPanel) topLoginPanel.hidden = hasLoginModal || Boolean(state.user) || state.loginCollapsed;
+  setHidden("[data-connect-login-panel]", hasLoginModal || Boolean(state.user) || state.loginCollapsed);
+  if (loginModal) {
+    loginModal.hidden = !loginModalVisible;
+    loginModal.setAttribute("aria-hidden", loginModalVisible ? "false" : "true");
+    document.body.classList.toggle("login-modal-open", loginModalVisible);
+    document.querySelectorAll("[data-login-tab]").forEach((button) => {
+      const active = button.dataset.loginTab === state.loginModalTab;
+      button.dataset.active = active ? "true" : "false";
+      button.setAttribute("aria-selected", active ? "true" : "false");
+    });
+    setHidden("[data-login-modal-login-section]", state.loginModalTab !== "login");
+    setHidden("[data-login-modal-create-section]", state.loginModalTab !== "create");
+  } else {
+    document.body.classList.remove("login-modal-open");
+  }
   if (authActions) authActions.hidden = false;
   if (guestActions) guestActions.hidden = Boolean(state.user);
   if (sessionActions) sessionActions.hidden = !state.user;
@@ -8851,6 +8942,19 @@ function formatDate(value) {
   return Number.isNaN(date.getTime()) ? "unknown" : date.toLocaleString();
 }
 
+function markLockInPointerHandled(target) {
+  try {
+    target.dataset.lockInPointerHandledAt = String(Date.now());
+  } catch {
+    // Dataset markers are only to avoid duplicate touch+click handling.
+  }
+}
+
+function lockInPointerRecentlyHandled(target) {
+  const handledAt = Number(target?.dataset?.lockInPointerHandledAt || 0);
+  return Number.isFinite(handledAt) && Date.now() - handledAt < 900;
+}
+
 document.addEventListener("pointerup", (event) => {
   const source = event.target instanceof Element
     ? event.target
@@ -8858,8 +8962,19 @@ document.addEventListener("pointerup", (event) => {
   const target = source?.closest?.("[data-open-login], [data-connect-login-toggle]");
   if (!target) return;
   event.preventDefault();
-  openLoginModal({ connectPanel: target.matches("[data-connect-login-toggle]") || state.route === "connect" });
+  markLockInPointerHandled(target);
+  openLoginModal({
+    connectPanel: target.matches("[data-connect-login-toggle]") || state.route === "connect",
+    source: target.matches("[data-connect-login-toggle]") ? "connect-lock-in" : "top-lock-in"
+  });
 }, { capture: true });
+
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || !state.loginModalOpen) return;
+  state.loginCollapsed = true;
+  state.loginModalOpen = false;
+  render({ force: true });
+});
 
 document.addEventListener("click", async (event) => {
   const source = event.target instanceof Element
@@ -9000,7 +9115,13 @@ document.addEventListener("click", async (event) => {
   }
 
   if (target.matches("[data-connect-login-toggle]")) {
-    openLoginPanel({ connectPanel: true });
+    if (!lockInPointerRecentlyHandled(target)) openLoginPanel({ connectPanel: true, source: "connect-lock-in" });
+    return;
+  }
+  if (target.matches("[data-login-tab]")) {
+    state.loginModalTab = target.dataset.loginTab === "create" ? "create" : "login";
+    render({ force: true });
+    focusLoginField(false);
     return;
   }
   if (target.matches("[data-connect-password-login]")) {
@@ -9027,6 +9148,7 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-web-password-login]")) await passwordLogin();
   if (target.matches("[data-close-login]")) {
     state.loginCollapsed = true;
+    state.loginModalOpen = false;
     render({ force: true });
     return;
   }
@@ -9035,7 +9157,7 @@ document.addEventListener("click", async (event) => {
     return;
   }
   if (target.matches("[data-open-login]")) {
-    openLoginPanel({ connectPanel: state.route === "connect" });
+    if (!lockInPointerRecentlyHandled(target)) openLoginPanel({ connectPanel: state.route === "connect", source: "top-lock-in" });
     return;
   }
   if (target.matches("[data-browse-guest]")) {

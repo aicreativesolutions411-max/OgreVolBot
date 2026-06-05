@@ -9,7 +9,21 @@ const overridesSource = fs.readFileSync(new URL("../web/public/slimewire-final-o
 function functionBody(name) {
   const start = appSource.indexOf(`function ${name}`);
   if (start < 0) return "";
-  const bodyStart = appSource.indexOf("{", start);
+  const paramsStart = appSource.indexOf("(", start);
+  let paramsDepth = 0;
+  let paramsEnd = -1;
+  for (let index = paramsStart; index < appSource.length; index += 1) {
+    const char = appSource[index];
+    if (char === "(") paramsDepth += 1;
+    if (char === ")") {
+      paramsDepth -= 1;
+      if (paramsDepth === 0) {
+        paramsEnd = index;
+        break;
+      }
+    }
+  }
+  const bodyStart = appSource.indexOf("{", paramsEnd);
   let depth = 0;
   for (let index = bodyStart; index < appSource.length; index += 1) {
     const char = appSource[index];
@@ -57,8 +71,9 @@ test("Lock In opens login panels instead of toggling them closed", () => {
   assert.match(htmlSource, /data-open-login/);
   assert.match(htmlSource, /data-connect-login-toggle/);
   assert.match(appSource, /function openLoginPanel/);
-  assert.match(appSource, /target\.matches\("\[data-connect-login-toggle\]"\)[\s\S]*openLoginPanel\(\{ connectPanel: true \}\)/);
-  assert.match(appSource, /target\.matches\("\[data-open-login\]"\)[\s\S]*openLoginPanel\(\{ connectPanel: state\.route === "connect" \}\)/);
+  assert.match(appSource, /target\.matches\("\[data-connect-login-toggle\]"\)[\s\S]*openLoginPanel\(\{ connectPanel: true, source: "connect-lock-in" \}\)/);
+  assert.match(appSource, /target\.matches\("\[data-open-login\]"\)[\s\S]*openLoginPanel\(\{ connectPanel: state\.route === "connect", source: "top-lock-in" \}\)/);
+  assert.match(functionBody("openLoginPanel"), /openLoginModal\(options\)/);
 });
 
 test("wallet and login overlays stay above decorative frames and remain clickable", () => {

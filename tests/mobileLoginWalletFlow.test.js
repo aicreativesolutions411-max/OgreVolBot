@@ -6,13 +6,27 @@ const appSource = fs.readFileSync(new URL("../web/public/app.js", import.meta.ur
 const htmlSource = fs.readFileSync(new URL("../web/public/index.html", import.meta.url), "utf8");
 const overridesSource = fs.readFileSync(new URL("../web/public/slimewire-final-overrides.css", import.meta.url), "utf8");
 const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
+const packageSource = fs.readFileSync(new URL("../package.json", import.meta.url), "utf8");
 
 function functionBody(name) {
   const syncStart = appSource.indexOf(`function ${name}`);
   const asyncStart = appSource.indexOf(`async function ${name}`);
   const start = syncStart >= 0 && (asyncStart < 0 || syncStart < asyncStart) ? syncStart : asyncStart;
   if (start < 0) return "";
-  const paramsEnd = appSource.indexOf(")", start);
+  const paramsStart = appSource.indexOf("(", start);
+  let paramsDepth = 0;
+  let paramsEnd = -1;
+  for (let index = paramsStart; index < appSource.length; index += 1) {
+    const char = appSource[index];
+    if (char === "(") paramsDepth += 1;
+    if (char === ")") {
+      paramsDepth -= 1;
+      if (paramsDepth === 0) {
+        paramsEnd = index;
+        break;
+      }
+    }
+  }
   const bodyStart = appSource.indexOf("{", paramsEnd);
   let depth = 0;
   for (let index = bodyStart; index < appSource.length; index += 1) {
@@ -28,9 +42,13 @@ function functionBody(name) {
 
 test("mobile Lock In panel exposes existing password and email-code login actions", () => {
   assert.match(htmlSource, /data-open-login/);
+  assert.match(htmlSource, /data-login-modal/);
+  assert.match(htmlSource, /data-login-tab="login"/);
+  assert.match(htmlSource, /data-login-tab="create"/);
   assert.match(htmlSource, /data-login-username/);
   assert.match(htmlSource, /data-login-password/);
   assert.match(htmlSource, /data-web-password-login/);
+  assert.match(htmlSource, /data-web-signup/);
   assert.match(htmlSource, /data-login-email/);
   assert.match(htmlSource, /data-login-code/);
   assert.match(htmlSource, /data-send-email-code/);
@@ -41,15 +59,29 @@ test("mobile Lock In panel exposes existing password and email-code login action
   assert.match(functionBody("sendEmailLoginCode"), /\/api\/web\/email-code/);
   assert.match(functionBody("emailCodeLogin"), /\/api\/web\/login/);
   assert.match(appSource, /document\.addEventListener\("pointerup"[\s\S]*data-open-login/);
-  assert.match(functionBody("openLoginPanel"), /state\.walletConnectMenuOpen = false/);
+  assert.match(functionBody("openLoginModal"), /state\.walletConnectMenuOpen = false/);
+  assert.match(functionBody("openLoginModal"), /LOCK_IN_CLICKED|recordLockInClicked/);
+  assert.match(functionBody("loginFallbackRoute"), /\/login\?returnTo=/);
+  assert.match(functionBody("firstFormValue"), /visibleElement\(selector\)/);
 });
 
 test("mobile Lock In modal is fixed above the terminal header and remains tappable", () => {
-  assert.match(overridesSource, /@media \(max-width: 640px\)\s*\{[\s\S]*\.top-login-panel\s*\{[\s\S]*position: fixed !important/);
-  assert.match(overridesSource, /\.top-login-panel\s*\{[\s\S]*max-height: calc\(100dvh - 24px\) !important/);
-  assert.match(overridesSource, /\.top-login-panel\s*\{[\s\S]*overflow: auto !important/);
-  assert.match(overridesSource, /\.top-login-panel\s*\{[\s\S]*z-index: 6500 !important/);
-  assert.match(overridesSource, /\.top-login-panel input,[\s\S]*\.connect-login-panel input\s*\{[\s\S]*font-size: 16px !important/);
+  assert.match(overridesSource, /\.login-modal\s*\{[\s\S]*position: fixed !important/);
+  assert.match(overridesSource, /\.login-modal\s*\{[\s\S]*z-index: 7600 !important/);
+  assert.match(overridesSource, /\.login-modal-card\s*\{[\s\S]*max-height: calc\(100dvh - 28px\) !important/);
+  assert.match(overridesSource, /\.login-modal-card\s*\{[\s\S]*overflow: auto !important/);
+  assert.match(overridesSource, /\.login-modal-card::before\s*\{[\s\S]*pointer-events: none !important/);
+  assert.match(overridesSource, /\.login-modal-section input\s*\{[\s\S]*font-size: 16px !important/);
+});
+
+test("Lock In click instrumentation and debug command are present without sensitive fields", () => {
+  assert.match(serverSource, /pathname === "\/api\/web\/lock-in-clicked"/);
+  assert.match(serverSource, /function recordLockInClickedEvent/);
+  assert.match(serverSource, /lock-in-events\.json/);
+  assert.match(appSource, /console\.info\("LOCK_IN_CLICKED"/);
+  assert.match(appSource, /\/api\/web\/lock-in-clicked/);
+  assert.doesNotMatch(functionBody("recordLockInClicked"), /password|token|secret|code/i);
+  assert.match(packageSource, /"debug:lock-in-mobile"/);
 });
 
 test("mobile wallet options use per-wallet deeplink connect before fallback guidance", () => {

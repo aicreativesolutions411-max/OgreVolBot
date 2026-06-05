@@ -9,11 +9,11 @@
     <link rel="preload" as="image" href="./assets/slimewire/references/enter-swamp-reference.jpg">
     <link rel="preload" as="image" href="./assets/slimewire/png/slime-border-frame-rich.png">
     <link rel="stylesheet" href="./tailwind.css?v=20260603-tailwind-v1">
-    <link rel="stylesheet" href="./styles.css?v=20260605020348">
+    <link rel="stylesheet" href="./styles.css?v=20260605023805">
     <link rel="stylesheet" href="./slimewire-final-overrides.css?v=20260605-mobile-login-wallet-v1">
     <script src="./config.js"></script>
     <script src="./vendor/tweetnacl-fast.min.js"></script>
-    <script type="module" src="./app.js?v=20260605020348"></script>
+    <script type="module" src="./app.js?v=20260605023805"></script>
   </head>
   <body>
     <main class="shell" data-app>
@@ -90,6 +90,61 @@
           <p class="error" data-error hidden></p>
         </form>
       </header>
+
+      <section class="login-modal" data-login-modal role="presentation" aria-hidden="true" hidden>
+        <button class="login-modal-backdrop" type="button" data-close-login aria-label="Close login"></button>
+        <article class="login-modal-card" role="dialog" aria-modal="true" aria-labelledby="login-modal-title">
+          <div class="login-modal-head">
+            <div>
+              <strong id="login-modal-title">SlimeWire Account</strong>
+              <small>Log in or create a profile.</small>
+            </div>
+            <button type="button" class="icon-button" data-close-login aria-label="Close login panel">x</button>
+          </div>
+          <div class="login-modal-tabs" role="tablist" aria-label="Account options">
+            <button type="button" data-login-tab="login" role="tab">Log In</button>
+            <button type="button" data-login-tab="create" role="tab">Create Account</button>
+          </div>
+          <form class="login-modal-section" data-login-modal-login-section onsubmit="return false;">
+            <label>
+              Username or Email
+              <input data-login-username type="text" autocomplete="username" placeholder="slimewire">
+            </label>
+            <label>
+              Password
+              <input data-login-password type="password" autocomplete="current-password" placeholder="8+ characters">
+            </label>
+            <button class="primary" type="button" data-web-password-login>Log In</button>
+            <div class="login-divider" aria-hidden="true"><span>or email code</span></div>
+            <label>
+              Email
+              <input data-login-email type="email" autocomplete="email" placeholder="you@example.com">
+            </label>
+            <label>
+              Login Code
+              <input data-login-code type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="6 digit code">
+            </label>
+            <div class="connect-form-actions">
+              <button type="button" data-send-email-code>Send Code</button>
+              <button type="button" data-web-code-login>Use Code</button>
+            </div>
+          </form>
+          <form class="login-modal-section" data-login-modal-create-section onsubmit="return false;" hidden>
+            <p class="login-modal-copy">Create a SlimeWire profile with a saved username and password, or leave the fields blank for a quick web account.</p>
+            <label>
+              Username
+              <input data-login-username type="text" autocomplete="username" placeholder="slimewire">
+            </label>
+            <label>
+              Password
+              <input data-login-password type="password" autocomplete="new-password" placeholder="8+ characters">
+            </label>
+            <button class="primary" type="button" data-web-signup>Create Account</button>
+          </form>
+          <small data-login-status></small>
+          <p class="error" data-error hidden></p>
+        </article>
+      </section>
 
       <section class="login-view swamp-splash" data-login>
         <button class="swamp-splash-button" type="button" data-nav-route="/connect" aria-label="Enter the Swamp">

@@ -826,6 +826,7 @@ function startHealthServer() {
     }
 
     if (request.method === "GET" && (requestUrl.pathname === "/" || requestUrl.pathname === "/connect"
+      || requestUrl.pathname === "/login" || requestUrl.pathname.startsWith("/account/login")
       || requestUrl.pathname === "/portal" || requestUrl.pathname.startsWith("/portal/")
       || requestUrl.pathname === "/terminal" || requestUrl.pathname.startsWith("/terminal/"))) {
       await serveWebPortal(requestUrl, response);
@@ -1229,6 +1230,13 @@ async function handleWebApiRequest(request, response, requestUrl) {
         expiresAt: result.expiresAt,
         emailSent: result.emailSent
       });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/lock-in-clicked") {
+      const body = await readJsonRequestBody(request, 5_000);
+      await recordLockInClickedEvent(body, request);
+      sendWebJson(request, response, 200, { ok: true });
       return;
     }
 
@@ -1811,6 +1819,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
 
 async function serveWebPortal(requestUrl, response) {
   const relativePath = requestUrl.pathname === "/" || requestUrl.pathname === "/connect"
+    || requestUrl.pathname === "/login" || requestUrl.pathname.startsWith("/account/login")
     || requestUrl.pathname === "/portal" || requestUrl.pathname === "/terminal"
     ? "index.html"
     : decodeURIComponent(requestUrl.pathname.replace(/^\/(?:portal|terminal)\/?/, "")) || "index.html";
@@ -2275,6 +2284,7 @@ async function ensureDataFiles() {
   await writeJsonIfMissing(tradeHistoryPath(), { trades: [] });
   await writeJsonIfMissing(pumpLaunchAttemptsPath(), { attempts: [] });
   await writeJsonIfMissing(webAuthPath(), { codes: [], sessions: [] });
+  await writeJsonIfMissing(lockInEventsPath(), { events: [] });
   await fs.mkdir(pumpLaunchHostedMetadataRoot(), { recursive: true });
   await ensureAppSecretFingerprint();
   await assignUnownedWalletsToSingleAdmin();
@@ -2369,6 +2379,10 @@ function pumpLaunchHostedMetadataRoot() {
 
 function webAuthPath() {
   return path.join(CONFIG.dataDir, "web-auth.json");
+}
+
+function lockInEventsPath() {
+  return path.join(CONFIG.dataDir, "lock-in-events.json");
 }
 
 function appSecretFingerprintPath() {
@@ -14404,6 +14418,8 @@ function defaultJsonForPath(filePath) {
       return { trades: [] };
     case "web-auth.json":
       return { codes: [], sessions: [], profiles: {} };
+    case "lock-in-events.json":
+      return { events: [] };
     case "app-secret.json":
       return {};
     default:
@@ -15344,6 +15360,41 @@ function webClientKey(request) {
     || request.headers["x-forwarded-for"]
     || request.socket?.remoteAddress
     || "unknown").split(",")[0].trim();
+}
+
+function safeLockInText(value = "", max = 80) {
+  return String(value || "")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/[^\w .:/?&=#@-]/g, "")
+    .trim()
+    .slice(0, max);
+}
+
+async function recordLockInClickedEvent(body = {}, request = {}) {
+  const width = Number.parseInt(body.viewport || body.viewportWidth || "0", 10);
+  const event = {
+    at: new Date().toISOString(),
+    route: safeLockInText(body.route || "", 40),
+    viewport: Number.isFinite(width) && width > 0 ? Math.min(width, 4096) : 0,
+    source: safeLockInText(body.source || "", 60),
+    client: safeLockInText(webClientKey(request), 80)
+  };
+  const store = await readJson(lockInEventsPath());
+  if (!Array.isArray(store.events)) store.events = [];
+  store.events.push(event);
+  store.events = store.events.slice(-50);
+  await writeJsonFile(lockInEventsPath(), store);
+  try {
+    console.info("LOCK_IN_CLICKED", {
+      route: event.route,
+      viewport: event.viewport,
+      source: event.source,
+      at: event.at
+    });
+  } catch {
+    // Login diagnostics must never block the login flow.
+  }
+  return event;
 }
 
 async function sendWebLoginCode(chatId, userId, messageId = null) {
