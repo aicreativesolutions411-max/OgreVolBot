@@ -1,4 +1,24 @@
 /* SlimeWire final terminal polish loaded after the main stylesheet. */
+[data-app]:not([data-route="terminal"]) [data-terminal-global-search],
+[data-app]:not([data-route="terminal"]) [data-top-sync-strip],
+[data-app]:not([data-route]) [data-terminal-global-search],
+[data-app]:not([data-route]) [data-top-sync-strip],
+[data-app]:not([data-route]) [data-connect],
+[data-app]:not([data-route]) [data-dashboard] {
+  display: none !important;
+  pointer-events: none !important;
+}
+
+[hidden],
+.top-auth-group[hidden],
+[data-guest-actions][hidden],
+[data-session-actions][hidden],
+.terminal-global-search[hidden],
+.top-sync-strip[hidden] {
+  display: none !important;
+  pointer-events: none !important;
+}
+
 [data-route-view-hidden="true"],
 [data-app][data-route="terminal"] [data-login],
 [data-app][data-route="terminal"] [data-connect],

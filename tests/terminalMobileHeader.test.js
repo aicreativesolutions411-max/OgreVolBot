@@ -67,10 +67,21 @@ test("terminal disconnected status is not duplicated visually in the sync card",
 });
 
 test("terminal route cannot show the intro splash underneath the header", () => {
+  assert.match(htmlSource, /<main class="shell" data-app data-route="intro">/);
   assert.match(appSource, /function syncShellRouteVisibility\(\)/);
   assert.match(appSource, /syncShellRouteVisibility\(\);\s*if \(!options\.force && shouldDeferTerminalRender\(\)\)/);
   assert.match(appSource, /setRouteSectionHidden\(loginView, !\["intro", "login"\]\.includes\(state\.route\)\)/);
+  assert.match(overridesSource, /\[data-app\]:not\(\[data-route="terminal"\]\) \[data-terminal-global-search\]/);
+  assert.match(overridesSource, /\[data-app\]:not\(\[data-route="terminal"\]\) \[data-top-sync-strip\]/);
   assert.match(overridesSource, /\[data-app\]\[data-route="terminal"\] \[data-login\]/);
   assert.match(overridesSource, /\[data-app\]\[data-route="terminal"\] \[data-connect\]/);
   assert.match(overridesSource, /\[data-route-view-hidden="true"\]/);
+});
+
+test("mobile topbar rescue does not force hidden auth groups visible", () => {
+  assert.match(overridesSource, /\.top-auth-group\[hidden\]/);
+  assert.match(overridesSource, /\[data-guest-actions\]\[hidden\]/);
+  assert.match(overridesSource, /\[data-session-actions\]\[hidden\]/);
+  assert.match(overridesSource, /\.terminal-global-search\[hidden\]/);
+  assert.match(overridesSource, /\.top-sync-strip\[hidden\]/);
 });
