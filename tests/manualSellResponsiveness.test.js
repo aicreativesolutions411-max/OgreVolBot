@@ -59,7 +59,7 @@ test("manual sell does not wait for full position wallet refresh before updating
   assert.match(body, /queuePostTradeRefresh/);
   assert.doesNotMatch(body, /await refreshAfterTrade/);
   assert.doesNotMatch(body, /refreshVisibleTerminalFeeds/);
-  assert.match(functionBody(appSource, "queuePostTradeRefresh"), /refreshWalletState\(\{ force: true, deep: false \}\)/);
+  assert.match(functionBody(appSource, "queuePostTradeRefresh"), /refreshWalletState\(\{ force: true, deep: false, reason: "post-trade" \}\)/);
 });
 
 test("backend manual sell uses critical attempt idempotency without changing sell math", () => {

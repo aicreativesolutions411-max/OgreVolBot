@@ -30,7 +30,10 @@ const MOBILE_WALLET_PENDING_KEY = "slimewireMobileWalletPending";
 const MOBILE_WALLET_PENDING_BACKUP_KEY = "slimewireMobileWalletPendingBackup";
 const MOBILE_WALLET_SESSION_PREFIX = "slimewireMobileWalletSession:";
 const PERF_LOG_KEY = "slimewirePerfLog";
+const CRASH_LOG_KEY = "slimewireCrashLog";
 const PERF_POST_MIN_DURATION_MS = 150;
+const POST_TRADE_REFRESH_DELAYS_MS = [300, 2200, 6500];
+const POST_TRADE_AFFECTED_KEYS = ["wallet-summary", "positions", "pnl", "trade-history", "selected-token", "live-trades"];
 const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 const BASE58_LOOKUP = new Map([...BASE58_ALPHABET].map((char, index) => [char, index]));
 
@@ -86,6 +89,15 @@ function getStoredPerfLog() {
   try {
     const rows = JSON.parse(window.localStorage?.getItem(PERF_LOG_KEY) || "[]");
     return Array.isArray(rows) ? rows.slice(-100) : [];
+  } catch {
+    return [];
+  }
+}
+
+function getStoredCrashLog() {
+  try {
+    const rows = JSON.parse(window.localStorage?.getItem(CRASH_LOG_KEY) || "[]");
+    return Array.isArray(rows) ? rows.slice(-50) : [];
   } catch {
     return [];
   }
@@ -173,8 +185,10 @@ const state = {
   walletRefreshing: false,
   lastWalletRefreshAt: "",
   walletRefreshError: "",
+  postTradeRefresh: { active: false, attemptId: "", action: "", invalidatedKeys: [], refreshedKeys: [], requestCount: 0, errors: [] },
   positionRefreshAction: { state: "idle", startedAt: 0, minUntil: 0, error: "" },
   manualSellActions: {},
+  tradeActionLocks: {},
   loading: false,
   wallets: [],
   balances: [],
@@ -208,6 +222,7 @@ const state = {
   terminalFeedLog: [],
   terminalFeedVisibleLimits: {},
   perfLog: getStoredPerfLog(),
+  crashLog: getStoredCrashLog(),
   perfRenderCounts: {},
   perfInstrumentationInstalled: false,
   launchResult: null,
@@ -582,11 +597,100 @@ function perfMeasure(action, startedAt, event = {}) {
   });
 }
 
+function recordCrashEvent(event = {}) {
+  const payload = {
+    at: new Date().toISOString(),
+    route: safePerfText(event.route || state.route || routeForPath(), 40),
+    actionBeforeCrash: safePerfText(event.actionBeforeCrash || state.postTradeRefresh?.action || "", 70),
+    errorCode: safePerfText(event.errorCode || event.name || "FRONTEND_ERROR", 60),
+    message: safePerfText(event.message || "", 160),
+    component: safePerfText(event.component || "", 80),
+    requestId: safePerfText(event.requestId || state.postTradeRefresh?.attemptId || "", 80),
+    caughtByBoundary: Boolean(event.caughtByBoundary)
+  };
+  state.crashLog = [...(state.crashLog || []), payload].slice(-50);
+  try {
+    window.localStorage?.setItem(CRASH_LOG_KEY, JSON.stringify(state.crashLog));
+  } catch {
+    // Crash history is diagnostic only.
+  }
+  queuePerfPost({
+    ...payload,
+    component: payload.component || "frontend-crash",
+    action: "frontend-crash",
+    durationMs: 0,
+    details: payload.message
+  });
+  return payload;
+}
+
+function installCrashInstrumentation() {
+  if (state.crashInstrumentationInstalled) return;
+  state.crashInstrumentationInstalled = true;
+  window.addEventListener("error", (event) => {
+    if (event?.target && event.target !== window) return;
+    recordCrashEvent({
+      errorCode: event?.error?.name || "WINDOW_ERROR",
+      message: event?.message || event?.error?.message || "Window error",
+      component: "window.onerror"
+    });
+  });
+  window.addEventListener("unhandledrejection", (event) => {
+    const reason = event?.reason || {};
+    recordCrashEvent({
+      errorCode: reason?.name || "UNHANDLED_REJECTION",
+      message: reason?.message || String(reason || "Unhandled promise rejection"),
+      component: "window.unhandledrejection"
+    });
+  });
+}
+
 function createClientAttemptId(prefix = "attempt") {
   const normalized = String(prefix || "attempt").replace(/[^\w-]/g, "").slice(0, 24) || "attempt";
   return globalThis.crypto?.randomUUID?.()
     ? `${normalized}-${globalThis.crypto.randomUUID()}`
     : `${normalized}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function tradeActionKey(action = "", tokenMint = "", detail = "") {
+  return `${String(action || "").trim()}:${String(tokenMint || "").trim()}:${String(detail || "").trim()}`;
+}
+
+function activeTradeAction(action = "", tokenMint = "", detail = "") {
+  const key = tradeActionKey(action, tokenMint, detail);
+  const exact = state.tradeActionLocks?.[key];
+  if (exact && ["clicked", "submitting", "submitted", "confirming"].includes(exact.state)) return exact;
+  return null;
+}
+
+function setTradeAction(action = "", tokenMint = "", detail = "", patch = {}) {
+  const key = tradeActionKey(action, tokenMint, detail);
+  const current = state.tradeActionLocks?.[key] || {};
+  state.tradeActionLocks = {
+    ...(state.tradeActionLocks || {}),
+    [key]: {
+      ...current,
+      action,
+      tokenMint,
+      detail,
+      updatedAt: new Date().toISOString(),
+      ...patch
+    }
+  };
+  applyActionButtonStates();
+}
+
+function clearTradeActionLater(action = "", tokenMint = "", detail = "", delayMs = 2400) {
+  const key = tradeActionKey(action, tokenMint, detail);
+  window.setTimeout(() => {
+    const current = state.tradeActionLocks?.[key];
+    if (!current || ["clicked", "submitting", "confirming"].includes(current.state)) return;
+    const next = { ...(state.tradeActionLocks || {}) };
+    delete next[key];
+    state.tradeActionLocks = next;
+    applyActionButtonStates();
+    render();
+  }, delayMs);
 }
 
 function manualSellKey(tokenMint = "", percent = "") {
@@ -620,7 +724,7 @@ function clearManualSellActionLater(tokenMint, percent, delayMs = 2_400) {
   const key = manualSellKey(tokenMint, percent);
   window.setTimeout(() => {
     const current = state.manualSellActions?.[key];
-    if (!current || ["clicked", "submitting", "submitted", "confirming"].includes(current.state)) return;
+    if (!current || ["clicked", "submitting", "confirming"].includes(current.state)) return;
     const next = { ...(state.manualSellActions || {}) };
     delete next[key];
     state.manualSellActions = next;
@@ -686,6 +790,35 @@ function applyActionButtonStates() {
     } else {
       button.textContent = "Selling...";
     }
+  });
+
+  const currentTradeToken = String(state.tradeToken || $("[data-trade-token]")?.value || "").trim();
+  document.querySelectorAll("[data-trade-buy-quick], [data-trade-buy-max], [data-buy-custom]").forEach((button) => {
+    const detail = button.dataset.tradeBuyQuick || (button.matches("[data-trade-buy-max]") ? "max" : "custom");
+    const action = activeTradeAction("trade-buy", currentTradeToken, detail);
+    const base = buttonBaseLabel(button);
+    button.disabled = Boolean(action);
+    button.dataset.actionState = action?.state || "idle";
+    button.textContent = action ? (action.state === "submitted" ? "Submitted" : "Buying...") : base;
+  });
+
+  document.querySelectorAll("[data-trade-sell-quick], [data-sell-custom]").forEach((button) => {
+    const detail = button.dataset.tradeSellQuick || "custom";
+    const action = activeTradeAction("trade-sell", currentTradeToken, detail);
+    const base = buttonBaseLabel(button);
+    button.disabled = Boolean(action);
+    button.dataset.actionState = action?.state || "idle";
+    button.textContent = action ? (action.state === "submitted" ? "Submitted" : "Selling...") : base;
+  });
+
+  const currentBundleToken = String(state.bundleToken || $("[data-bundle-token]")?.value || "").trim();
+  document.querySelectorAll("[data-bundle-buy], [data-bundle-sell]").forEach((button) => {
+    const actionName = button.matches("[data-bundle-buy]") ? "bundle-buy" : "bundle-sell";
+    const action = activeTradeAction(actionName, currentBundleToken, "bundle");
+    const base = buttonBaseLabel(button);
+    button.disabled = Boolean(action);
+    button.dataset.actionState = action?.state || "idle";
+    button.textContent = action ? (action.state === "submitted" ? "Submitted" : actionName === "bundle-buy" ? "Buying..." : "Selling...") : base;
   });
 
   const refreshState = state.walletRefreshing
@@ -1436,7 +1569,7 @@ async function createWebAccount() {
     state.loginModalOpen = false;
     state.activeTab = "dashboard";
     writeText(status, credentials.username ? "Account created. Login saved." : "Account created.");
-    await refreshAfterTrade(data.trade?.signature);
+    queuePostTradeRefresh(data.trade?.signature, "account-create");
   } catch (error) {
     writeText(status, error.message);
     setError(error.message);
@@ -1460,7 +1593,7 @@ async function passwordLogin() {
     state.loginModalOpen = false;
     state.activeTab = "dashboard";
     writeText(status, "Logged in.");
-    await refreshAfterTrade(data.trade?.signature);
+    queuePostTradeRefresh(data.trade?.signature, "password-login");
   } catch (error) {
     writeText(status, error.message);
     setError(error.message);
@@ -1511,7 +1644,7 @@ async function emailCodeLogin() {
     state.loginModalOpen = false;
     state.activeTab = "dashboard";
     writeText(status, "Logged in.");
-    await refreshAfterTrade(data.trade?.signature);
+    queuePostTradeRefresh(data.trade?.signature, "email-code-login");
   } catch (error) {
     writeText(status, error.message);
     setError(error.message);
@@ -2412,6 +2545,7 @@ function scheduleLivePairsAutoRefresh() {
     livePairsTimer = null;
   }
 
+  if (isPostTradeRefreshActive()) return;
   if (state.activeTab !== "live" && state.activeTab !== "terminal" && state.activeTab !== "slimeScope") return;
   const refreshSeconds = Number(currentLivePairs()?.refreshSeconds || 30);
   const delayMs = Math.max(3, refreshSeconds) * 1000;
@@ -2433,6 +2567,7 @@ function scheduleLivePairsAutoRefresh() {
 }
 
 function ensureLivePairsWarmup({ force = false } = {}) {
+  if (isPostTradeRefreshActive()) return;
   const onLiveFeed = state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "slimeScope" || state.activeTab === "smartChart";
   if (!onLiveFeed) return;
   const bucket = normalizeLivePairBucket(state.livePairBucket);
@@ -2478,6 +2613,7 @@ function scheduleKolAutoRefresh() {
     clearTimeout(kolTimer);
     kolTimer = null;
   }
+  if (isPostTradeRefreshActive()) return;
   if ((state.activeTab !== "kol" && state.activeTab !== "terminal") || state.kolWallet) return;
   kolTimer = setTimeout(async () => {
     if ((state.activeTab !== "kol" && state.activeTab !== "terminal") || state.kolWallet) return;
@@ -2500,6 +2636,7 @@ function scheduleWatchlistAutoRefresh() {
     clearTimeout(watchlistTimer);
     watchlistTimer = null;
   }
+  if (isPostTradeRefreshActive()) return;
   if ((state.activeTab !== "watchlist" && state.activeTab !== "terminal") || !state.user || !state.token) return;
   watchlistTimer = setTimeout(async () => {
     if (state.activeTab !== "watchlist" && state.activeTab !== "terminal") return;
@@ -2626,7 +2763,34 @@ function activePresetSummary() {
   return `Preset ${tradeLabel} | ${bundleLabel}`;
 }
 
-function scheduleWalletBackgroundRefresh(delayMs = 900) {
+async function loadPostTradeSupplemental() {
+  if (!state.user || !state.token) return;
+  const startedAt = perfNow();
+  try {
+    const [pnl, tradePlans] = await Promise.allSettled([
+      api("/api/web/pnl"),
+      api("/api/web/trade/plans")
+    ]);
+    if (pnl.status === "fulfilled") state.pnl = pnl.value.pnl || state.pnl || null;
+    if (tradePlans.status === "fulfilled") {
+      state.tradePlans = tradePlans.value.plans || state.tradePlans || [];
+      ensureAutoExitWatchForActivePlans();
+    }
+    perfMeasure("post-trade-supplemental-refresh", startedAt, {
+      component: "post-trade",
+      resultCount: (state.tradePlans?.length || 0) + (state.pnl ? 1 : 0),
+      details: "pnl,trade-plans"
+    });
+  } catch (error) {
+    perfMeasure("post-trade-supplemental-refresh", startedAt, {
+      component: "post-trade",
+      errorCode: error?.code || error?.name || "POST_TRADE_SUPPLEMENTAL_FAILED",
+      details: publicErrorMessage(error?.message || "Post-trade supplemental refresh failed.")
+    });
+  }
+}
+
+function scheduleWalletBackgroundRefresh(delayMs = 900, options = {}) {
   if (walletBackgroundRefreshTimer) {
     window.clearTimeout(walletBackgroundRefreshTimer);
   }
@@ -2634,7 +2798,11 @@ function scheduleWalletBackgroundRefresh(delayMs = 900) {
     walletBackgroundRefreshTimer = null;
     if (!state.user || !state.token) return;
     try {
-      await loadAll({ force: false, skipCore: true, silent: true });
+      if (options.reason === "post-trade") {
+        await loadPostTradeSupplemental();
+      } else {
+        await loadAll({ force: false, skipCore: true, silent: true });
+      }
     } catch (error) {
       state.walletRefreshError = error.message || "Background refresh failed.";
       render();
@@ -2642,7 +2810,7 @@ function scheduleWalletBackgroundRefresh(delayMs = 900) {
   }, delayMs);
 }
 
-async function refreshWalletState({ force = true, deep = true } = {}) {
+async function refreshWalletState({ force = true, deep = true, reason = "manual" } = {}) {
   if (!state.user || !state.token) {
     setError("Create or log in before refreshing wallet balances.");
     return;
@@ -2671,12 +2839,12 @@ async function refreshWalletState({ force = true, deep = true } = {}) {
       if (deep) {
         await loadAll({ force, skipCore: true, silent: true });
       } else {
-        scheduleWalletBackgroundRefresh(900);
+        scheduleWalletBackgroundRefresh(900, { reason });
       }
       perfMeasure("wallet-refresh-total", startedAt, {
         component: "wallet",
         resultCount: (state.balances?.length || 0) + (state.positions?.length || 0),
-        details: deep ? "deep" : "core-plus-background"
+        details: deep ? "deep" : `core-plus-background:${reason}`
       });
       finishPositionRefreshAction("success", { error: "" });
     } catch (error) {
@@ -2697,48 +2865,95 @@ async function refreshWalletState({ force = true, deep = true } = {}) {
   return walletRefreshPromise;
 }
 
-async function refreshAfterTrade(signature = "") {
-  if (signature) state.lastTradeSignature = signature;
-  if (postTradeRefreshTimers.length) {
-    postTradeRefreshTimers.forEach((timer) => window.clearTimeout(timer));
-    postTradeRefreshTimers = [];
-  }
-  await refreshWalletState({ force: true, deep: false });
-  [1500, 3500, 8000].forEach((delay) => {
-    const timer = window.setTimeout(() => {
-      postTradeRefreshTimers = postTradeRefreshTimers.filter((item) => item !== timer);
-      void refreshWalletState({ force: true, deep: false }).catch((error) => {
-        state.walletRefreshError = error.message || "Post-trade refresh failed.";
-        render();
-      });
-    }, delay);
-    postTradeRefreshTimers.push(timer);
-  });
+function isPostTradeRefreshActive() {
+  return Boolean(state.postTradeRefresh?.active) && Number(state.postTradeRefresh?.activeUntil || 0) > Date.now();
 }
 
-function queuePostTradeRefresh(signature = "", reason = "manual-sell") {
+async function refreshAfterTrade(signature = "", reason = "legacy-post-trade") {
+  queuePostTradeRefresh(signature, reason);
+}
+
+function queuePostTradeRefresh(signature = "", reason = "post-trade", options = {}) {
   if (signature) state.lastTradeSignature = signature;
   if (postTradeRefreshTimers.length) {
     postTradeRefreshTimers.forEach((timer) => window.clearTimeout(timer));
     postTradeRefreshTimers = [];
   }
-  [250, 1500, 3500, 8000].forEach((delay) => {
+  const attemptId = options.tradeAttemptId || createClientAttemptId("post-trade");
+  const affectedKeys = Array.isArray(options.affectedKeys) && options.affectedKeys.length
+    ? options.affectedKeys.slice(0, 12).map((item) => safePerfText(item, 48))
+    : POST_TRADE_AFFECTED_KEYS;
+  state.postTradeRefresh = {
+    active: true,
+    attemptId,
+    action: safePerfText(reason, 70),
+    signaturePresent: Boolean(signature),
+    invalidatedKeys: affectedKeys,
+    refreshedKeys: [],
+    requestCount: 0,
+    errors: [],
+    startedAt: new Date().toISOString(),
+    activeUntil: Date.now() + 12_000
+  };
+  recordPerfEvent({
+    component: "post-trade",
+    action: "post-trade-invalidation-start",
+    durationMs: 0,
+    requestId: attemptId,
+    resultCount: affectedKeys.length,
+    details: affectedKeys.join(",")
+  });
+  POST_TRADE_REFRESH_DELAYS_MS.forEach((delay) => {
     const timer = window.setTimeout(() => {
       postTradeRefreshTimers = postTradeRefreshTimers.filter((item) => item !== timer);
-      void refreshWalletState({ force: true, deep: false }).catch((error) => {
+      state.postTradeRefresh = {
+        ...(state.postTradeRefresh || {}),
+        requestCount: Number(state.postTradeRefresh?.requestCount || 0) + 1
+      };
+      recordPerfEvent({
+        component: "post-trade",
+        action: "post-trade-refresh-start",
+        durationMs: 0,
+        requestId: attemptId,
+        resultCount: state.postTradeRefresh.requestCount,
+        details: reason
+      });
+      const startedAt = perfNow();
+      void refreshWalletState({ force: true, deep: false, reason: "post-trade" }).catch((error) => {
         state.walletRefreshError = error.message || "Post-trade refresh failed.";
+        state.postTradeRefresh = {
+          ...(state.postTradeRefresh || {}),
+          errors: [...(state.postTradeRefresh?.errors || []), publicErrorMessage(error.message || "Post-trade refresh failed.")].slice(-5)
+        };
         recordPerfEvent({
-          component: "positions",
+          component: "post-trade",
           action: "position-refresh-post-trade-error",
-          durationMs: 0,
+          durationMs: perfNow() - startedAt,
+          requestId: attemptId,
           errorCode: error?.code || error?.name || "POST_TRADE_REFRESH_FAILED",
           details: reason
         });
         render();
+      }).finally(() => {
+        state.postTradeRefresh = {
+          ...(state.postTradeRefresh || {}),
+          refreshedKeys: [...new Set([...(state.postTradeRefresh?.refreshedKeys || []), "wallet-summary", "positions", "pnl"])],
+          active: postTradeRefreshTimers.length > 0,
+          activeUntil: postTradeRefreshTimers.length > 0 ? Date.now() + 8_000 : Date.now()
+        };
+        recordPerfEvent({
+          component: "post-trade",
+          action: "post-trade-refresh-end",
+          durationMs: perfNow() - startedAt,
+          requestId: attemptId,
+          resultCount: (state.balances?.length || 0) + (state.positions?.length || 0),
+          details: state.postTradeRefresh.refreshedKeys.join(",")
+        });
       });
     }, delay);
     postTradeRefreshTimers.push(timer);
   });
+  render();
 }
 
 function shouldDeferTerminalRender() {
@@ -2768,6 +2983,7 @@ function render(options = {}) {
   }
   const startedAt = perfNow();
   const renderKey = `${state.route}:${state.activeTab || "none"}`;
+  try {
   state.perfRenderCounts = {
     ...(state.perfRenderCounts || {}),
     [renderKey]: (state.perfRenderCounts?.[renderKey] || 0) + 1
@@ -2845,6 +3061,27 @@ function render(options = {}) {
       resultCount: state.perfRenderCounts[renderKey],
       details: renderKey
     });
+  }
+  } catch (error) {
+    recordCrashEvent({
+      component: "render-boundary",
+      errorCode: error?.name || "RENDER_FAILED",
+      message: error?.message || "Render failed",
+      caughtByBoundary: true
+    });
+    if (state.route === "terminal" && dashboardView) {
+      dashboardView.hidden = false;
+      dashboardView.innerHTML = `
+        <section class="terminal-error-boundary">
+          <article class="slime-panel">
+            <h2>SlimeWire caught a display error</h2>
+            <p>Your trade state is safe. The display refresh failed, but the app did not reload or submit another order.</p>
+            <button type="button" class="primary" data-refresh-all>Retry Position Refresh</button>
+          </article>
+        </section>
+      `;
+    }
+    setError("Display refresh failed. Your trade was not resubmitted. Tap Retry Position Refresh.");
   }
 }
 
@@ -5798,7 +6035,7 @@ async function createWalletSet() {
     writeText(status, data.downloads
       ? `Created ${wallets.length} wallet(s). Backup downloads started.`
       : `Created ${wallets.length} wallet(s). Use Download Backup before funding.`);
-    await refreshAfterTrade(firstResultSignature(data.plan));
+    queuePostTradeRefresh(firstResultSignature(data.plan), "wallet-create");
     state.activeTab = "wallets";
     render();
   } catch (error) {
@@ -5845,7 +6082,7 @@ async function createAutomationWallet() {
       downloadText(data.downloads.recoveryKeys.filename, data.downloads.recoveryKeys.text);
     }
     state.automationDelegationStatus = "Automation wallet created. Backup downloads started. Fund it before using server-side TP/SL.";
-    await refreshAfterTrade(firstResultSignature(data.plan));
+    queuePostTradeRefresh(firstResultSignature(data.plan), "automation-wallet-create");
     state.activeTab = "wallets";
     render({ force: true });
   } catch (error) {
@@ -6103,7 +6340,7 @@ async function removeManagedWallet(walletIndex, walletLabel = "this wallet") {
       downloadText(result.downloads.recoveryKeys.filename, result.downloads.recoveryKeys.text);
     }
     state.walletRemoveStatus = result.message || `Removed ${label}.`;
-    await refreshAfterTrade(firstResultSignature(data.plan));
+    queuePostTradeRefresh(firstResultSignature(data.plan), "wallet-remove");
     state.activeTab = "wallets";
     render();
   } catch (error) {
@@ -6674,12 +6911,30 @@ function setTradeStatus(message) {
 }
 
 async function executeWebBuy(amountSol, amountMode = "fixed") {
+  const clickStartedAt = perfNow();
+  let actionDetail = amountMode === "max" ? "max" : String(amountSol || "custom");
+  let tradeAttemptId = "";
   try {
     const form = readTradeForm();
+    actionDetail = amountMode === "max" ? "max" : String(amountSol || "custom");
+    const active = activeTradeAction("trade-buy", form.tokenMint, actionDetail);
+    if (active) {
+      recordPerfEvent({
+        component: "post-trade",
+        action: "trade-action-dedupe",
+        durationMs: perfNow() - clickStartedAt,
+        cacheHit: true,
+        requestId: active.tradeAttemptId || "",
+        details: `trade-buy:${shortAddress(form.tokenMint)}:${actionDetail}`
+      });
+      return;
+    }
+    tradeAttemptId = createClientAttemptId("trade-buy");
     const payload = {
       tokenMint: form.tokenMint,
       walletIndex: form.walletIndex,
-      slippageBps: form.slippageBps
+      slippageBps: form.slippageBps,
+      tradeAttemptId
     };
     if (amountMode === "max") {
       payload.amountMode = "max";
@@ -6700,10 +6955,37 @@ async function executeWebBuy(amountSol, amountMode = "fixed") {
       });
     }
 
+    setTradeAction("trade-buy", form.tokenMint, actionDetail, {
+      state: "clicked",
+      tradeAttemptId,
+      clickedAt: new Date().toISOString()
+    });
+    recordPerfEvent({
+      component: "post-trade",
+      action: "trade-click-to-ui",
+      durationMs: perfNow() - clickStartedAt,
+      requestId: tradeAttemptId,
+      details: `trade-buy:${shortAddress(form.tokenMint)}:${actionDetail}`
+    });
+    render();
     setTradeStatus(autoExit.enabled ? "Sending buy and arming auto-exit..." : "Sending buy...");
+    const requestStartedAt = perfNow();
+    setTradeAction("trade-buy", form.tokenMint, actionDetail, { state: "submitting" });
     const data = await api("/api/web/trade/buy", {
       method: "POST",
-      body: JSON.stringify(payload)
+      body: JSON.stringify({
+        ...payload,
+        clientClickToUiMs: Math.round(requestStartedAt - clickStartedAt)
+      }),
+      dedupe: false
+    });
+    recordPerfEvent({
+      component: "post-trade",
+      action: "trade-backend-ack",
+      durationMs: perfNow() - requestStartedAt,
+      requestId: tradeAttemptId,
+      resultCount: data.trade?.signature ? 1 : 0,
+      details: "trade-buy"
     });
     state.tradeResult = data.trade;
     if (data.trade?.autoExitPlan) {
@@ -6713,10 +6995,30 @@ async function executeWebBuy(amountSol, amountMode = "fixed") {
     } else if (data.trade?.autoExitRequested) {
       setTradeStatus("Buy landed, but auto-exit was not armed. Use Positions to exit manually or create a managed plan.");
     }
-    await refreshAfterTrade(data.trade?.signature);
+    setTradeAction("trade-buy", form.tokenMint, actionDetail, {
+      state: "submitted",
+      signature: data.trade?.signature || ""
+    });
+    queuePostTradeRefresh(data.trade?.signature, "trade-buy", { tradeAttemptId });
     state.activeTab = "trade";
     render();
+    clearTradeActionLater("trade-buy", form.tokenMint, actionDetail, 3000);
   } catch (error) {
+    if (tradeAttemptId) {
+      setTradeAction("trade-buy", state.tradeToken || $("[data-trade-token]")?.value || "", actionDetail, {
+        state: "error",
+        error: publicErrorMessage(error.message || "Buy failed")
+      });
+      clearTradeActionLater("trade-buy", state.tradeToken || $("[data-trade-token]")?.value || "", actionDetail, 4000);
+    }
+    recordPerfEvent({
+      component: "post-trade",
+      action: "trade-action-error",
+      durationMs: perfNow() - clickStartedAt,
+      requestId: tradeAttemptId,
+      errorCode: error?.code || error?.name || "TRADE_BUY_FAILED",
+      details: publicErrorMessage(error.message || "Buy failed")
+    });
     setTradeStatus(error.message);
   }
 }
@@ -6724,13 +7026,33 @@ async function executeWebBuy(amountSol, amountMode = "fixed") {
 async function executeWebSell(percent) {
   const clickStartedAt = perfNow();
   const manualSellAttemptId = createClientAttemptId("manual-sell");
+  let form = null;
+  let detail = String(percent || "custom");
   try {
-    const form = readTradeForm();
+    form = readTradeForm();
     const value = Number.parseInt(percent, 10);
+    detail = String(value || detail);
     if (!Number.isInteger(value) || value < 1 || value > 100) {
       throw new Error("Sell percent must be from 1 to 100.");
     }
+    const active = activeTradeAction("trade-sell", form.tokenMint, detail);
+    if (active) {
+      recordPerfEvent({
+        component: "manual-sell",
+        action: "manual-sell-dedupe",
+        durationMs: perfNow() - clickStartedAt,
+        cacheHit: true,
+        requestId: active.tradeAttemptId || "",
+        details: `${shortAddress(form.tokenMint)}:${value}`
+      });
+      return;
+    }
 
+    setTradeAction("trade-sell", form.tokenMint, detail, {
+      state: "clicked",
+      tradeAttemptId: manualSellAttemptId,
+      clickedAt: new Date().toISOString()
+    });
     setTradeStatus("Sending sell...");
     recordPerfEvent({
       component: "manual-sell",
@@ -6739,7 +7061,9 @@ async function executeWebSell(percent) {
       requestId: manualSellAttemptId,
       details: `${shortAddress(form.tokenMint)}:${value}`
     });
+    render();
     const requestStartedAt = perfNow();
+    setTradeAction("trade-sell", form.tokenMint, detail, { state: "submitting" });
     const data = await api("/api/web/trade/sell", {
       method: "POST",
       body: JSON.stringify({
@@ -6763,10 +7087,22 @@ async function executeWebSell(percent) {
     });
     state.tradeResult = data.trade;
     setTradeStatus(data.trade?.signature ? "Submitted. Refreshing position in the background..." : "Sell submitted. Refreshing position in the background...");
+    setTradeAction("trade-sell", form.tokenMint, detail, {
+      state: "submitted",
+      signature: data.trade?.signature || ""
+    });
     queuePostTradeRefresh(data.trade?.signature || firstResultSignature(data.trade), "manual-sell-trade");
     state.activeTab = "trade";
     render();
+    clearTradeActionLater("trade-sell", form.tokenMint, detail, 3000);
   } catch (error) {
+    if (form?.tokenMint) {
+      setTradeAction("trade-sell", form.tokenMint, detail, {
+        state: "error",
+        error: publicErrorMessage(error.message || "Sell failed")
+      });
+      clearTradeActionLater("trade-sell", form.tokenMint, detail, 4000);
+    }
     recordPerfEvent({
       component: "manual-sell",
       action: "manual-sell-error",
@@ -6821,7 +7157,7 @@ async function createTradePlan() {
     });
     state.tradePlanResult = data.plan;
     state.tradeResult = null;
-    await refreshAfterTrade(data.trade?.signature);
+    queuePostTradeRefresh(data.trade?.signature, "trade-plan");
     state.activeTab = "trade";
     render();
   } catch (error) {
@@ -6862,7 +7198,7 @@ async function createVolumePlan() {
       body: JSON.stringify(payload)
     });
     state.volumeResult = data.plan;
-    await refreshAfterTrade(firstResultSignature(data.plan));
+    queuePostTradeRefresh(firstResultSignature(data.plan), "volume-plan");
     state.activeTab = "volume";
     render();
   } catch (error) {
@@ -6915,7 +7251,7 @@ async function createSniperEntry(tokenMint) {
       body: JSON.stringify(payload)
     });
     state.sniperResult = data.plan;
-    await refreshAfterTrade(firstResultSignature(data.plan));
+    queuePostTradeRefresh(firstResultSignature(data.plan), "sniper-entry");
     state.activeTab = "sniper";
     render();
   } catch (error) {
@@ -6970,7 +7306,7 @@ async function startOgreAiRun() {
     state.ogreAiResult = data.ogreAi;
     state.tradePlanResult = data.ogreAi?.plans?.[0] || state.tradePlanResult;
     setOgreAiStatus(data.ogreAi?.message || "Ogre A.I. run armed.");
-    await refreshAfterTrade(firstResultSignature(data.ogreAi?.plans?.[0]));
+    queuePostTradeRefresh(firstResultSignature(data.ogreAi?.plans?.[0]), "ogre-ai-run");
     state.activeTab = "ogreAi";
     render();
   } catch (error) {
@@ -7030,7 +7366,7 @@ async function createKolCopyPlan(tokenMint) {
       body: JSON.stringify(payload)
     });
     state.kolResult = data.plan;
-    await refreshAfterTrade(firstResultSignature(data.plan));
+    queuePostTradeRefresh(firstResultSignature(data.plan), "kol-copy-plan");
     state.activeTab = "kol";
     render();
   } catch (error) {
@@ -7095,18 +7431,83 @@ function readBundlePlanForm() {
 }
 
 async function executeBundle(action) {
+  const clickStartedAt = perfNow();
+  let payload = null;
+  let tradeAttemptId = "";
+  const actionName = action === "buy" ? "bundle-buy" : "bundle-sell";
   try {
-    const payload = readBundleForm();
+    payload = readBundleForm();
+    const active = activeTradeAction(actionName, payload.tokenMint, "bundle");
+    if (active) {
+      recordPerfEvent({
+        component: "post-trade",
+        action: "trade-action-dedupe",
+        durationMs: perfNow() - clickStartedAt,
+        cacheHit: true,
+        requestId: active.tradeAttemptId || "",
+        details: `${actionName}:${shortAddress(payload.tokenMint)}`
+      });
+      return;
+    }
+    tradeAttemptId = createClientAttemptId(actionName);
+    setTradeAction(actionName, payload.tokenMint, "bundle", {
+      state: "clicked",
+      tradeAttemptId,
+      clickedAt: new Date().toISOString()
+    });
+    recordPerfEvent({
+      component: "post-trade",
+      action: "trade-click-to-ui",
+      durationMs: perfNow() - clickStartedAt,
+      requestId: tradeAttemptId,
+      details: `${actionName}:${shortAddress(payload.tokenMint)}`
+    });
+    render();
     setBundleStatus(action === "buy" ? "Sending bundle buy..." : "Sending bundle sell...");
+    const requestStartedAt = perfNow();
+    setTradeAction(actionName, payload.tokenMint, "bundle", { state: "submitting" });
     const data = await api(`/api/web/bundle/${action}`, {
       method: "POST",
-      body: JSON.stringify(payload)
+      body: JSON.stringify({
+        ...payload,
+        tradeAttemptId,
+        clientClickToUiMs: Math.round(requestStartedAt - clickStartedAt)
+      }),
+      dedupe: false
+    });
+    recordPerfEvent({
+      component: "post-trade",
+      action: "trade-backend-ack",
+      durationMs: perfNow() - requestStartedAt,
+      requestId: tradeAttemptId,
+      resultCount: data.bundle?.successCount || 0,
+      details: actionName
     });
     state.bundleResult = data.bundle;
-    await refreshAfterTrade(firstResultSignature(data.bundle));
+    setTradeAction(actionName, payload.tokenMint, "bundle", {
+      state: "submitted",
+      signature: firstResultSignature(data.bundle)
+    });
+    queuePostTradeRefresh(firstResultSignature(data.bundle), `bundle-${action}`, { tradeAttemptId });
     state.activeTab = "bundle";
     render();
+    clearTradeActionLater(actionName, payload.tokenMint, "bundle", 3000);
   } catch (error) {
+    if (payload?.tokenMint) {
+      setTradeAction(actionName, payload.tokenMint, "bundle", {
+        state: "error",
+        error: publicErrorMessage(error.message || "Bundle trade failed")
+      });
+      clearTradeActionLater(actionName, payload.tokenMint, "bundle", 4000);
+    }
+    recordPerfEvent({
+      component: "post-trade",
+      action: "trade-action-error",
+      durationMs: perfNow() - clickStartedAt,
+      requestId: tradeAttemptId,
+      errorCode: error?.code || error?.name || "BUNDLE_TRADE_FAILED",
+      details: publicErrorMessage(error.message || "Bundle trade failed")
+    });
     setBundleStatus(error.message);
   }
 }
@@ -7120,7 +7521,7 @@ async function executeBundlePlan() {
       body: JSON.stringify(payload)
     });
     state.bundleResult = data.plan;
-    await refreshAfterTrade(firstResultSignature(data.plan));
+    queuePostTradeRefresh(firstResultSignature(data.plan), "bundle-plan");
     state.activeTab = "bundle";
     render();
   } catch (error) {
@@ -7198,7 +7599,7 @@ async function quickPresetTrade(tokenMint, presetOverride = null) {
       setError("Quick buy landed, but auto-exit was not armed. Use Positions to exit manually or create a managed plan.");
     }
     state.tradeToken = tokenMint;
-    await refreshAfterTrade(data.trade?.signature);
+    queuePostTradeRefresh(data.trade?.signature, "quick-preset-trade");
     state.activeTab = "trade";
     render();
   } catch (error) {
@@ -7240,7 +7641,7 @@ async function quickPresetBundle(tokenMint, presetOverride = null) {
     });
     state.bundleResult = data.plan;
     state.bundleToken = tokenMint;
-    await refreshAfterTrade(firstResultSignature(data.plan));
+    queuePostTradeRefresh(firstResultSignature(data.plan), "quick-preset-bundle");
     state.activeTab = "bundle";
     render();
   } catch (error) {
@@ -10746,6 +11147,16 @@ document.addEventListener("input", (event) => {
 
 function resumeLiveFeeds() {
   if (state.route !== "terminal") return;
+  if (isPostTradeRefreshActive()) {
+    recordPerfEvent({
+      component: "post-trade",
+      action: "hidden-feed-refresh-skipped",
+      durationMs: 0,
+      requestId: state.postTradeRefresh?.attemptId || "",
+      details: state.activeTab || "terminal"
+    });
+    return;
+  }
   refreshTerminalFeed(state.activeTab, {
     silent: true,
     ifStale: true,
@@ -10774,6 +11185,7 @@ window.addEventListener("focus", resumeLiveFeeds);
 
 async function initializeApp() {
   installPerformanceInstrumentation();
+  installCrashInstrumentation();
   installSlimewireImageFallbacks();
   prewarmSlimewireImageAssets();
   await handleMobileWalletReturn();
