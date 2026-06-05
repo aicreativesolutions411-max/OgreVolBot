@@ -6218,3 +6218,35 @@ body.login-modal-open {
     min-height: 44px !important;
   }
 }
+
+/* 2026-06-05 performance pass.
+   Keep the SlimeWire look while avoiding repeated expensive paints on mobile feeds. */
+@media (max-width: 640px), (prefers-reduced-motion: reduce) {
+  [data-app][data-route="terminal"] .terminal-dock,
+  [data-app][data-route="terminal"] .terminal-panel,
+  [data-app][data-route="terminal"] .signal-row,
+  [data-app][data-route="terminal"] .terminal-token-row,
+  [data-app][data-route="terminal"] .compact-signal-row,
+  [data-app][data-route="terminal"] .live-trade-row,
+  [data-app][data-route="terminal"] .wallet-card,
+  [data-app][data-route="terminal"] .position-card {
+    backdrop-filter: none !important;
+  }
+
+  [data-app][data-route="terminal"] .signal-row,
+  [data-app][data-route="terminal"] .terminal-token-row,
+  [data-app][data-route="terminal"] .compact-signal-row,
+  [data-app][data-route="terminal"] .live-trade-row {
+    box-shadow: inset 0 0 16px rgba(57, 255, 20, 0.05) !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-app][data-route="terminal"] *,
+  .wallet-connect-modal *,
+  .login-modal * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -29,6 +29,8 @@ const API_LONG_ACTION_TIMEOUT_MS = 180_000;
 const MOBILE_WALLET_PENDING_KEY = "slimewireMobileWalletPending";
 const MOBILE_WALLET_PENDING_BACKUP_KEY = "slimewireMobileWalletPendingBackup";
 const MOBILE_WALLET_SESSION_PREFIX = "slimewireMobileWalletSession:";
+const PERF_LOG_KEY = "slimewirePerfLog";
+const PERF_POST_MIN_DURATION_MS = 150;
 const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 const BASE58_LOOKUP = new Map([...BASE58_ALPHABET].map((char, index) => [char, index]));
 
@@ -77,6 +79,15 @@ function clearStoredXHandle() {
     window.localStorage?.removeItem("ogreXHandle");
   } catch {
     // Local share settings are optional.
+  }
+}
+
+function getStoredPerfLog() {
+  try {
+    const rows = JSON.parse(window.localStorage?.getItem(PERF_LOG_KEY) || "[]");
+    return Array.isArray(rows) ? rows.slice(-100) : [];
+  } catch {
+    return [];
   }
 }
 
@@ -194,6 +205,9 @@ const state = {
   terminalFeeds: {},
   terminalFeedLog: [],
   terminalFeedVisibleLimits: {},
+  perfLog: getStoredPerfLog(),
+  perfRenderCounts: {},
+  perfInstrumentationInstalled: false,
   launchResult: null,
   launchCoinDraft: getStoredLaunchCoinDraft(),
   launchCoinStatus: "",
@@ -263,6 +277,10 @@ let terminalFeedTimer = null;
 let walletBackgroundRefreshTimer = null;
 let postTradeRefreshTimers = [];
 let autoExitCheckInFlight = false;
+let walletRefreshPromise = null;
+const apiInFlight = new Map();
+const pendingPerfPosts = [];
+let perfPostTimer = null;
 
 const $ = (selector) => document.querySelector(selector);
 const writeText = (element, value) => {
@@ -452,12 +470,17 @@ function tabForPath(pathname = window.location.pathname) {
 }
 
 function navigateTo(pathname, tab = null) {
+  const startedAt = perfNow();
   const nextPath = pathname || "/terminal";
   state.route = routeForPath(nextPath);
   if (state.route === "login") state.loginModalOpen = true;
   if (state.route === "terminal") state.activeTab = tab || tabForPath(nextPath);
   window.history.pushState({}, "", nextPath);
   render();
+  perfMeasure("route-change", startedAt, {
+    component: "router",
+    details: nextPath
+  });
 }
 
 window.addEventListener("popstate", () => {
@@ -468,6 +491,115 @@ window.addEventListener("popstate", () => {
 
 function apiUrl(path) {
   return `${apiBase}${path}`;
+}
+
+function perfNow() {
+  try {
+    return window.performance?.now?.() || Date.now();
+  } catch {
+    return Date.now();
+  }
+}
+
+function perfMark(name) {
+  try {
+    window.performance?.mark?.(name);
+  } catch {
+    // Performance marks are diagnostic only.
+  }
+}
+
+function safePerfText(value = "", max = 90) {
+  return String(value || "")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/[^\w .:/?&=#@,+-]/g, "")
+    .trim()
+    .slice(0, max);
+}
+
+function queuePerfPost(payload = {}) {
+  pendingPerfPosts.push(payload);
+  if (pendingPerfPosts.length > 10) pendingPerfPosts.splice(0, pendingPerfPosts.length - 10);
+  if (perfPostTimer) return;
+  perfPostTimer = window.setTimeout(() => {
+    perfPostTimer = null;
+    const batch = pendingPerfPosts.splice(0, pendingPerfPosts.length);
+    for (const event of batch) {
+      try {
+        const body = JSON.stringify(event);
+        if (navigator.sendBeacon) {
+          const blob = new Blob([body], { type: "application/json" });
+          if (navigator.sendBeacon(apiUrl("/api/web/perf-event"), blob)) continue;
+        }
+        fetch(apiUrl("/api/web/perf-event"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+          keepalive: true
+        }).catch(() => {});
+      } catch {
+        // Performance reporting must never affect app behavior.
+      }
+    }
+  }, 750);
+}
+
+function recordPerfEvent(event = {}) {
+  const durationMs = Number(event.durationMs);
+  const payload = {
+    at: new Date().toISOString(),
+    route: safePerfText(event.route || state.route || routeForPath(), 40),
+    component: safePerfText(event.component || "", 60),
+    action: safePerfText(event.action || "", 70),
+    durationMs: Number.isFinite(durationMs) ? Math.max(0, Math.round(durationMs)) : 0,
+    resultCount: Number.isFinite(Number(event.resultCount)) ? Math.max(0, Math.round(Number(event.resultCount))) : 0,
+    cacheHit: Boolean(event.cacheHit),
+    stale: Boolean(event.stale),
+    requestId: safePerfText(event.requestId || "", 80),
+    errorCode: safePerfText(event.errorCode || "", 60),
+    details: safePerfText(event.details || "", 140)
+  };
+  state.perfLog = [...(state.perfLog || []), payload].slice(-100);
+  try {
+    window.localStorage?.setItem(PERF_LOG_KEY, JSON.stringify(state.perfLog));
+  } catch {
+    // Local performance history is optional.
+  }
+  if (payload.durationMs >= PERF_POST_MIN_DURATION_MS || /refresh|long-task|route|tab-switch|dedupe/i.test(payload.action)) {
+    queuePerfPost(payload);
+  }
+  return payload;
+}
+
+function perfMeasure(action, startedAt, event = {}) {
+  recordPerfEvent({
+    ...event,
+    action,
+    durationMs: perfNow() - startedAt
+  });
+}
+
+function installPerformanceInstrumentation() {
+  if (state.perfInstrumentationInstalled) return;
+  state.perfInstrumentationInstalled = true;
+  perfMark("slimewire:app-boot");
+  try {
+    if (!("PerformanceObserver" in window)) return;
+    const observer = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        if (Number(entry.duration || 0) < 50) continue;
+        recordPerfEvent({
+          component: "main-thread",
+          action: "long-task",
+          durationMs: entry.duration,
+          details: entry.name || "longtask"
+        });
+      }
+    });
+    observer.observe({ type: "longtask", buffered: true });
+  } catch {
+    // Some browsers do not expose long task timing.
+  }
 }
 
 function sleep(ms) {
@@ -505,7 +637,24 @@ async function wakeApi(base) {
 }
 
 async function api(path, options = {}) {
-  const { timeoutMs = API_CONNECT_TIMEOUT_MS, preserveSafeError = false, ...fetchOptions } = options || {};
+  const { timeoutMs = API_CONNECT_TIMEOUT_MS, preserveSafeError = false, dedupe = true, ...fetchOptions } = options || {};
+  const method = String(fetchOptions.method || "GET").toUpperCase();
+  const startedAt = perfNow();
+  const dedupeKey = dedupe && method === "GET"
+    ? `${method}:${path}:${state.token ? state.token.slice(0, 12) : "guest"}`
+    : "";
+  if (dedupeKey && apiInFlight.has(dedupeKey)) {
+    recordPerfEvent({
+      component: "api",
+      action: "api-dedupe",
+      durationMs: 0,
+      cacheHit: true,
+      details: path
+    });
+    return apiInFlight.get(dedupeKey);
+  }
+
+  const requestPromise = (async () => {
   const headers = {
     "Content-Type": "application/json",
     ...(fetchOptions.headers || {})
@@ -561,7 +710,24 @@ async function api(path, options = {}) {
     throw error;
   }
 
+  perfMeasure("api-request", startedAt, {
+    component: "api",
+    details: path,
+    resultCount: Array.isArray(data?.rows) ? data.rows.length : 0
+  });
   return data;
+  })();
+
+  if (dedupeKey) {
+    apiInFlight.set(dedupeKey, requestPromise);
+    requestPromise.then(() => {
+      if (apiInFlight.get(dedupeKey) === requestPromise) apiInFlight.delete(dedupeKey);
+    }, () => {
+      if (apiInFlight.get(dedupeKey) === requestPromise) apiInFlight.delete(dedupeKey);
+    });
+  }
+
+  return requestPromise;
 }
 
 async function readApiJson(response) {
@@ -1466,6 +1632,7 @@ async function loadSession() {
 }
 
 async function loadAll(options = {}) {
+  const startedAt = perfNow();
   if (!state.user || !state.token) {
     state.wallets = [];
     state.balances = [];
@@ -1531,6 +1698,11 @@ async function loadAll(options = {}) {
       state.walletRefreshError = "";
     }
   } finally {
+    perfMeasure("load-all", startedAt, {
+      component: "wallet",
+      resultCount: (state.balances?.length || 0) + (state.positions?.length || 0),
+      details: options.skipCore ? "skip-core" : "core"
+    });
     if (showLoading) {
       state.loading = false;
     }
@@ -1540,6 +1712,7 @@ async function loadAll(options = {}) {
 
 async function loadWalletCore(options = {}) {
   if (!state.user || !state.token) return;
+  const startedAt = perfNow();
   const forceQuery = options.force ? "?force=true" : "";
   const walletsPromise = api("/api/web/wallets");
   const balancesPromise = api(`/api/web/balances${forceQuery}`);
@@ -1557,15 +1730,33 @@ async function loadWalletCore(options = {}) {
   ensureAutoExitWatchForActivePlans();
   state.lastWalletRefreshAt = new Date().toISOString();
   state.walletRefreshError = "";
+  perfMeasure("wallet-refresh", startedAt, {
+    component: "wallet",
+    resultCount: state.balances.length,
+    cacheHit: Boolean(balances.cacheHit),
+    details: `wallets=${state.wallets.length};connected=${Boolean(state.connectedWalletBalance)}`
+  });
   if (options.progress !== false) render();
+  const positionsStartedAt = perfNow();
   try {
     const positions = await positionsPromise;
     if (positions?.__error) throw positions.__error;
     state.positions = positions.positions || [];
     state.lastWalletRefreshAt = new Date().toISOString();
     state.walletRefreshError = "";
+    perfMeasure("positions-refresh", positionsStartedAt, {
+      component: "positions",
+      resultCount: state.positions.length,
+      cacheHit: Boolean(positions.cacheHit),
+      details: `open=${state.positions.length}`
+    });
   } catch (error) {
     state.walletRefreshError = error.message || "Position refresh failed.";
+    perfMeasure("positions-refresh", positionsStartedAt, {
+      component: "positions",
+      errorCode: error?.code || error?.name || "POSITIONS_REFRESH_FAILED",
+      details: publicErrorMessage(error?.message || "Position refresh failed.")
+    });
   }
 }
 
@@ -1849,6 +2040,7 @@ function tabNeedsAccountFeed(tabKey = state.activeTab) {
 }
 
 async function refreshTerminalFeed(tabKey = state.activeTab, options = {}) {
+  const startedAt = perfNow();
   const feed = terminalFeedDefinition(tabKey);
   if (!feed) return null;
   if (options.ifStale && terminalFeedHasData(tabKey) && !terminalFeedIsStale(tabKey)) return terminalFeedRuntime(tabKey);
@@ -1906,6 +2098,15 @@ async function refreshTerminalFeed(tabKey = state.activeTab, options = {}) {
     if (options.throwOnError) throw error;
     return terminalFeedRuntime(tabKey);
   } finally {
+    perfMeasure("feed-refresh", startedAt, {
+      component: feed.component || tabKey,
+      resultCount: terminalFeedResultCount(tabKey),
+      cacheHit: Boolean(terminalFeedRuntime(tabKey).cacheHit),
+      stale: terminalFeedIsStale(tabKey),
+      requestId: terminalFeedRuntime(tabKey).lastRequestId || "",
+      errorCode: terminalFeedRuntime(tabKey).errorCode || "",
+      details: `${tabKey}:${terminalFeedCacheKey(feed)}`
+    });
     if (options.render !== false) render({ force: true });
   }
 }
@@ -1960,6 +2161,7 @@ function currentLivePairsUpdatedAt() {
 }
 
 async function loadLivePairs({ silent = false, bucket = state.livePairBucket, renderOnComplete = true, force = false } = {}) {
+  const startedAt = perfNow();
   const safeBucket = normalizeLivePairBucket(bucket);
   const isActiveBucket = safeBucket === state.livePairBucket;
   state.livePairsLoadingByBucket = { ...state.livePairsLoadingByBucket, [safeBucket]: true };
@@ -2031,6 +2233,14 @@ async function loadLivePairs({ silent = false, bucket = state.livePairBucket, re
     }
     return staleValue;
   } finally {
+    const latestRows = state.livePairsByBucket?.[safeBucket]?.rows || [];
+    perfMeasure("live-pairs-refresh", startedAt, {
+      component: "livePairs",
+      resultCount: Array.isArray(latestRows) ? latestRows.length : 0,
+      stale: Boolean(state.livePairsByBucket?.[safeBucket]?.stale),
+      errorCode: state.livePairsRefreshErrorByBucket?.[safeBucket] ? "LIVE_PAIRS_REFRESH_FAILED" : "",
+      details: `${safeBucket}:${state.terminalSort || "best"}`
+    });
     const nextLoading = { ...state.livePairsLoadingByBucket };
     delete nextLoading[safeBucket];
     state.livePairsLoadingByBucket = nextLoading;
@@ -2159,6 +2369,7 @@ function scheduleWatchlistAutoRefresh() {
 }
 
 async function loadScan(mode = state.scanMode, options = {}) {
+  const startedAt = perfNow();
   const silent = Boolean(options.silent);
   state.scanMode = mode;
   if (!silent) {
@@ -2170,12 +2381,18 @@ async function loadScan(mode = state.scanMode, options = {}) {
     const data = await api(`/api/web/sniper/scan?mode=${encodeURIComponent(mode)}`);
     state.scan = data.scan;
   } finally {
+    perfMeasure("scanner-refresh", startedAt, {
+      component: "sniper",
+      resultCount: Array.isArray(state.scan?.candidates) ? state.scan.candidates.length : 0,
+      details: mode
+    });
     if (!silent) state.loading = false;
     render();
   }
 }
 
 async function loadKolScan(mode = state.kolMode, wallet = state.kolWallet, options = {}) {
+  const startedAt = perfNow();
   const silent = Boolean(options.silent);
   state.kolMode = mode;
   state.kolWallet = String(wallet || "").trim();
@@ -2198,6 +2415,12 @@ async function loadKolScan(mode = state.kolMode, wallet = state.kolWallet, optio
     state.kolStatus = error.message || "KOL scan failed.";
     throw error;
   } finally {
+    perfMeasure("kol-refresh", startedAt, {
+      component: "kol",
+      resultCount: Array.isArray(state.kolScan?.rows) ? state.kolScan.rows.length : Array.isArray(state.kolScan?.signals) ? state.kolScan.signals.length : 0,
+      errorCode: state.kolStatus && /failed/i.test(state.kolStatus) ? "KOL_REFRESH_FAILED" : "",
+      details: state.kolWallet ? "wallet" : mode
+    });
     if (!silent) state.loading = false;
     state.kolLoading = false;
     render();
@@ -2206,6 +2429,7 @@ async function loadKolScan(mode = state.kolMode, wallet = state.kolWallet, optio
 
 async function loadWatchlist(options = {}) {
   if (!state.user || !state.token) return;
+  const startedAt = perfNow();
   const silent = Boolean(options.silent);
   state.watchlistLoading = true;
   if (!silent) render();
@@ -2213,6 +2437,10 @@ async function loadWatchlist(options = {}) {
     const data = await api("/api/web/watchlist");
     state.watchlist = data.watchlist || { rows: [], count: 0 };
   } finally {
+    perfMeasure("watchlist-refresh", startedAt, {
+      component: "watchlist",
+      resultCount: state.watchlist?.count || state.watchlist?.rows?.length || 0
+    });
     state.watchlistLoading = false;
     render();
   }
@@ -2274,26 +2502,49 @@ async function refreshWalletState({ force = true, deep = true } = {}) {
     setError("Create or log in before refreshing wallet balances.");
     return;
   }
-  if (state.walletRefreshing) return;
-  state.walletRefreshing = true;
-  state.walletRefreshError = "";
-  render();
-  try {
-    await loadWalletCore({ force });
-    state.lastWalletRefreshAt = new Date().toISOString();
-    render();
-    if (deep) {
-      await loadAll({ force, skipCore: true, silent: true });
-    } else {
-      scheduleWalletBackgroundRefresh(900);
-    }
-  } catch (error) {
-    state.walletRefreshError = error.message || "Refresh failed.";
-    setError(state.walletRefreshError);
-  } finally {
-    state.walletRefreshing = false;
-    render();
+  if (walletRefreshPromise) {
+    recordPerfEvent({
+      component: "wallet",
+      action: "wallet-refresh-dedupe",
+      durationMs: 0,
+      cacheHit: true,
+      details: force ? "force-shared" : "shared"
+    });
+    return walletRefreshPromise;
   }
+  const startedAt = perfNow();
+  walletRefreshPromise = (async () => {
+    state.walletRefreshing = true;
+    state.walletRefreshError = "";
+    render();
+    try {
+      await loadWalletCore({ force });
+      state.lastWalletRefreshAt = new Date().toISOString();
+      if (deep) {
+        await loadAll({ force, skipCore: true, silent: true });
+      } else {
+        scheduleWalletBackgroundRefresh(900);
+      }
+      perfMeasure("wallet-refresh-total", startedAt, {
+        component: "wallet",
+        resultCount: (state.balances?.length || 0) + (state.positions?.length || 0),
+        details: deep ? "deep" : "core-plus-background"
+      });
+    } catch (error) {
+      state.walletRefreshError = error.message || "Refresh failed.";
+      perfMeasure("wallet-refresh-total", startedAt, {
+        component: "wallet",
+        errorCode: error?.code || error?.name || "WALLET_REFRESH_FAILED",
+        details: publicErrorMessage(state.walletRefreshError)
+      });
+      setError(state.walletRefreshError);
+    } finally {
+      state.walletRefreshing = false;
+      walletRefreshPromise = null;
+      render();
+    }
+  })();
+  return walletRefreshPromise;
 }
 
 async function refreshAfterTrade(signature = "") {
@@ -2340,6 +2591,12 @@ function render(options = {}) {
     requestDeferredRender();
     return;
   }
+  const startedAt = perfNow();
+  const renderKey = `${state.route}:${state.activeTab || "none"}`;
+  state.perfRenderCounts = {
+    ...(state.perfRenderCounts || {}),
+    [renderKey]: (state.perfRenderCounts?.[renderKey] || 0) + 1
+  };
   state.pendingRender = false;
   app.dataset.loading = state.loading ? "true" : "false";
   app.dataset.route = state.route;
@@ -2403,6 +2660,16 @@ function render(options = {}) {
   }
   if (state.route === "terminal") renderTabs();
   renderWalletConnectModal();
+  const durationMs = perfNow() - startedAt;
+  if (durationMs >= 16 || state.perfRenderCounts[renderKey] % 20 === 0) {
+    recordPerfEvent({
+      component: "render",
+      action: "render",
+      durationMs,
+      resultCount: state.perfRenderCounts[renderKey],
+      details: renderKey
+    });
+  }
 }
 
 function updateTopTpSlStatus() {
@@ -10006,6 +10273,7 @@ document.addEventListener("click", async (event) => {
   }
 
   if (target.matches("[data-tab]")) {
+    const startedAt = perfNow();
     state.activeTab = target.dataset.tab;
     if (state.activeTab === "ogreTek") {
       state.route = "terminal";
@@ -10025,13 +10293,20 @@ document.addEventListener("click", async (event) => {
     } else if (window.location.pathname.includes("/terminal/chart") || window.location.pathname.includes("/terminal/slime-scope")) {
       window.history.pushState({}, "", "/terminal");
     }
-    await refreshTerminalFeed(state.activeTab, {
+    const hasCachedTabData = terminalFeedHasData(state.activeTab);
+    render();
+    const refreshPromise = refreshTerminalFeed(state.activeTab, {
       silent: true,
       ifStale: true,
-      force: !terminalFeedHasData(state.activeTab),
+      force: !hasCachedTabData,
       reason: "tab-switch"
     }).catch((error) => setError(error.message));
-    render();
+    if (!hasCachedTabData) await refreshPromise;
+    perfMeasure("tab-switch", startedAt, {
+      component: "terminal",
+      cacheHit: hasCachedTabData,
+      details: state.activeTab
+    });
   }
 
   if (target.matches("[data-refresh-scan]")) {
@@ -10204,6 +10479,7 @@ document.addEventListener("visibilitychange", () => {
 window.addEventListener("focus", resumeLiveFeeds);
 
 async function initializeApp() {
+  installPerformanceInstrumentation();
   installSlimewireImageFallbacks();
   prewarmSlimewireImageAssets();
   await handleMobileWalletReturn();

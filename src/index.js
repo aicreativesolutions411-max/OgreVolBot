@@ -109,6 +109,7 @@ let livePairsSharedCache = new Map();
 const solanaTrackerCache = new Map();
 const madeOnSolCache = new Map();
 const webLoginAttemptLimits = new Map();
+const webSummaryCache = new Map();
 const startedAt = new Date();
 const WEB_LOGIN_CODE_TTL_MS = 10 * 60 * 1000;
 const MOBILE_WALLET_CONNECT_TTL_MS = 20 * 60 * 1000;
@@ -1248,6 +1249,13 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "POST" && pathname === "/api/web/perf-event") {
+      const body = await readJsonRequestBody(request, 8_000);
+      await recordPerformanceEvent(body, request);
+      sendWebJson(request, response, 200, { ok: true });
+      return;
+    }
+
     if (request.method === "POST" && pathname === "/api/web/mobile-wallet/start") {
       const auth = await authenticateOptionalWebRequest(request);
       const body = await readJsonRequestBody(request);
@@ -1699,31 +1707,49 @@ async function handleWebApiRequest(request, response, requestUrl) {
 
     if (request.method === "GET" && pathname === "/api/web/balances") {
       const force = parseBoolean(requestUrl.searchParams.get("force") || "false");
-      const [balances, connectedWallet] = await Promise.all([
-        webBalanceRows(auth.userId, { force }),
-        webConnectedWalletBalance(auth.userId, { force })
-      ]);
+      const summary = await cachedWebSummary("web:balances", auth.userId, { force }, force ? 0 : 2_500, async () => {
+        const [balances, connectedWallet] = await Promise.all([
+          webBalanceRows(auth.userId, { force }),
+          webConnectedWalletBalance(auth.userId, { force })
+        ]);
+        return { balances, connectedWallet };
+      });
       sendWebJson(request, response, 200, {
         ok: true,
-        balances,
-        connectedWallet
+        ...summary.value,
+        cacheHit: summary.cacheHit,
+        refreshDurationMs: summary.durationMs,
+        lastUpdatedAt: summary.cachedAt
       });
       return;
     }
 
     if (request.method === "GET" && pathname === "/api/web/positions") {
       const force = parseBoolean(requestUrl.searchParams.get("force") || "false");
+      const summary = await cachedWebSummary("web:positions", auth.userId, { force }, force ? 0 : 2_500, async () => ({
+        positions: await webPositionRows(auth.userId, { force })
+      }));
       sendWebJson(request, response, 200, {
         ok: true,
-        positions: await webPositionRows(auth.userId, { force })
+        ...summary.value,
+        cacheHit: summary.cacheHit,
+        refreshDurationMs: summary.durationMs,
+        lastUpdatedAt: summary.cachedAt
       });
       return;
     }
 
     if (request.method === "GET" && pathname === "/api/web/pnl") {
+      const force = parseBoolean(requestUrl.searchParams.get("force") || "false");
+      const summary = await cachedWebSummary("web:pnl", auth.userId, { force }, force ? 0 : 3_500, async () => ({
+        pnl: await webPnlSummary(auth.userId)
+      }));
       sendWebJson(request, response, 200, {
         ok: true,
-        pnl: await webPnlSummary(auth.userId)
+        ...summary.value,
+        cacheHit: summary.cacheHit,
+        refreshDurationMs: summary.durationMs,
+        lastUpdatedAt: summary.cachedAt
       });
       return;
     }
@@ -2294,6 +2320,7 @@ async function ensureDataFiles() {
   await writeJsonIfMissing(webAuthPath(), { codes: [], sessions: [] });
   await writeJsonIfMissing(lockInEventsPath(), { events: [] });
   await writeJsonIfMissing(terminalFeedEventsPath(), { events: [] });
+  await writeJsonIfMissing(performanceEventsPath(), { events: [] });
   await fs.mkdir(pumpLaunchHostedMetadataRoot(), { recursive: true });
   await ensureAppSecretFingerprint();
   await assignUnownedWalletsToSingleAdmin();
@@ -2396,6 +2423,10 @@ function lockInEventsPath() {
 
 function terminalFeedEventsPath() {
   return path.join(CONFIG.dataDir, "terminal-feed-events.json");
+}
+
+function performanceEventsPath() {
+  return path.join(CONFIG.dataDir, "performance-events.json");
 }
 
 function appSecretFingerprintPath() {
@@ -14543,6 +14574,8 @@ function defaultJsonForPath(filePath) {
       return { events: [] };
     case "terminal-feed-events.json":
       return { events: [] };
+    case "performance-events.json":
+      return { events: [] };
     case "app-secret.json":
       return {};
     default:
@@ -15578,6 +15611,99 @@ async function recordTerminalFeedEvent(body = {}, request = {}) {
     // Feed diagnostics must never block the web app.
   }
   return event;
+}
+
+function safePerfEventText(value = "", max = 120) {
+  return String(value || "")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/[^\w .:/?&=#@,+-]/g, "")
+    .trim()
+    .slice(0, max);
+}
+
+async function recordPerformanceEvent(body = {}, request = {}) {
+  const durationMs = Number(body.durationMs);
+  const resultCount = Number.parseInt(body.resultCount || "0", 10);
+  const event = {
+    at: new Date().toISOString(),
+    route: safePerfEventText(body.route || "", 40),
+    component: safePerfEventText(body.component || "", 60),
+    action: safePerfEventText(body.action || "", 70),
+    durationMs: Number.isFinite(durationMs) && durationMs >= 0 ? Math.min(Math.round(durationMs), 600_000) : 0,
+    resultCount: Number.isFinite(resultCount) && resultCount >= 0 ? Math.min(resultCount, 100_000) : 0,
+    cacheHit: Boolean(body.cacheHit),
+    stale: Boolean(body.stale),
+    requestId: safePerfEventText(body.requestId || "", 80),
+    errorCode: safePerfEventText(body.errorCode || "", 60),
+    details: safePerfEventText(body.details || "", 140),
+    client: safePerfEventText(webClientKey(request), 80)
+  };
+  const store = await readJson(performanceEventsPath());
+  if (!Array.isArray(store.events)) store.events = [];
+  store.events.push(event);
+  store.events = store.events.slice(-300);
+  await writeJsonFile(performanceEventsPath(), store);
+  try {
+    if (event.durationMs >= 150 || /long-task|refresh|dedupe/i.test(event.action)) {
+      console.info("PERF_EVENT", {
+        route: event.route,
+        component: event.component,
+        action: event.action,
+        durationMs: event.durationMs,
+        resultCount: event.resultCount,
+        cacheHit: event.cacheHit,
+        errorCode: event.errorCode
+      });
+    }
+  } catch {
+    // Performance diagnostics must never block app requests.
+  }
+  return event;
+}
+
+async function cachedWebSummary(cacheName, userId, options = {}, ttlMs = 2_500, builder) {
+  const key = `${cacheName}:${String(userId || "guest")}`;
+  const force = Boolean(options.force);
+  const cached = webSummaryCache.get(key);
+  const now = Date.now();
+  if (!force && cached?.value && now - cached.cachedAt < ttlMs) {
+    return {
+      value: cached.value,
+      cacheHit: true,
+      durationMs: 0,
+      cachedAt: new Date(cached.cachedAt).toISOString()
+    };
+  }
+  if (cached?.promise) return cached.promise;
+
+  const started = Date.now();
+  const promise = Promise.resolve()
+    .then(builder)
+    .then((value) => {
+      const cachedAt = Date.now();
+      webSummaryCache.set(key, { value, cachedAt });
+      return {
+        value,
+        cacheHit: false,
+        durationMs: cachedAt - started,
+        cachedAt: new Date(cachedAt).toISOString()
+      };
+    })
+    .catch((error) => {
+      if (cached?.value) webSummaryCache.set(key, cached);
+      else webSummaryCache.delete(key);
+      throw error;
+    });
+  webSummaryCache.set(key, { ...(cached || {}), promise });
+  const clearInflight = () => {
+    const current = webSummaryCache.get(key);
+    if (current?.promise === promise) {
+      if (current.value) webSummaryCache.set(key, { value: current.value, cachedAt: current.cachedAt || Date.now() });
+      else webSummaryCache.delete(key);
+    }
+  };
+  promise.then(clearInflight, clearInflight);
+  return promise;
 }
 
 async function sendWebLoginCode(chatId, userId, messageId = null) {
