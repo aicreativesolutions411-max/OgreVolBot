@@ -168,7 +168,7 @@ test("backend stores sanitized terminal feed diagnostics without secrets", () =>
   assert.match(serverSource, /terminal-feed-events\.json/);
   assert.match(serverSource, /function safeTerminalFeedText/);
   assert.match(serverSource, /async function recordTerminalFeedEvent/);
-  const recordBody = serverSource.slice(serverSource.indexOf("async function recordTerminalFeedEvent"), serverSource.indexOf("async function sendWebLoginCode"));
+  const recordBody = functionBodyFromSource(serverSource, "recordTerminalFeedEvent");
   assert.doesNotMatch(recordBody, /password|privateKey|seed|secret|Authorization/i);
 });
 

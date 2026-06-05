@@ -19,7 +19,7 @@ console.log(`SlimeWire worker starting. Tick URL: ${CONFIG.tickUrl}`);
 if (CONFIG.tickUrls.length > 1) {
   console.log(`Worker fallback tick URLs: ${CONFIG.tickUrls.slice(1).join(", ")}`);
 }
-console.log(`Worker interval: ${CONFIG.intervalMs}ms. Feeds: ${CONFIG.warmFeeds ? "on" : "off"}. Trade plans: ${CONFIG.runTradePlans ? "on" : "off"}.`);
+console.log(`Worker interval: ${CONFIG.intervalMs}ms. Feeds: ${CONFIG.warmFeeds ? "on" : "off"}. Display cache: ${CONFIG.warmDisplayCaches ? "on" : "off"}. Trade plans: ${CONFIG.runTradePlans ? "on" : "off"}.`);
 if (CONFIG.runTradePlans) {
   console.log(`Fast TP/SL worker interval: ${CONFIG.tradePlanIntervalMs}ms.`);
   console.log(`Broad portfolio TP/SL fallback interval: ${CONFIG.portfolioExitIntervalMs}ms.`);
@@ -61,6 +61,8 @@ function loadWorkerConfig() {
     runTradePlans: parseBoolean(process.env.WORKER_TICK_RUN_TRADE_PLANS || "true"),
     runDcaPlans: parseBoolean(process.env.WORKER_TICK_RUN_DCA_PLANS || "true"),
     warmFeeds: parseBoolean(process.env.WORKER_TICK_WARM_FEEDS || "true"),
+    warmDisplayCaches: parseBoolean(process.env.WORKER_TICK_WARM_DISPLAY_CACHES || "true"),
+    displayCacheUserLimit: clampInteger(process.env.WORKER_DISPLAY_CACHE_USER_LIMIT, 8, 0, 50),
     buckets,
     sorts,
     forceFeeds: parseBoolean(process.env.WORKER_TICK_FORCE_FEEDS || "true")
@@ -172,6 +174,8 @@ async function tick() {
           runTimedTradePlans: CONFIG.runTradePlans,
           runDcaPlans: CONFIG.runDcaPlans,
           warmLivePairs: CONFIG.warmFeeds,
+          warmDisplayCaches: CONFIG.warmDisplayCaches,
+          displayCacheUserLimit: CONFIG.displayCacheUserLimit,
           buckets: CONFIG.buckets,
           sorts: CONFIG.sorts,
           forceFeeds: CONFIG.forceFeeds
@@ -212,8 +216,12 @@ async function tick() {
       const feedSummary = Array.isArray(feeds)
         ? feeds.map((item) => `${item.bucket}/${item.sort}:${item.rows}`).join(" ")
         : "feeds:n/a";
+      const displayCaches = data?.displayCaches?.value || data?.displayCaches || {};
+      const displayCacheSummary = displayCaches?.skipped
+        ? "display-cache skipped"
+        : `display-cache users:${displayCaches.users ?? 0} provider:${displayCaches.provider || "memory"}`;
       const fallbackNote = lastFailure ? ` Recovered after ${lastFailure}.` : "";
-      console.log(`Worker tick ${tickCount} ok in ${Date.now() - startedAt}ms. ${guardSummary}. ${tradePlanSummary}. ${portfolioSummary}. ${feedSummary}${fallbackNote}`);
+      console.log(`Worker tick ${tickCount} ok in ${Date.now() - startedAt}ms. ${guardSummary}. ${tradePlanSummary}. ${portfolioSummary}. ${feedSummary}. ${displayCacheSummary}${fallbackNote}`);
       return;
     }
   } catch (error) {

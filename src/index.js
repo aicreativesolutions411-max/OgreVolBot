@@ -110,6 +110,21 @@ const solanaTrackerCache = new Map();
 const madeOnSolCache = new Map();
 const webLoginAttemptLimits = new Map();
 const webSummaryCache = new Map();
+let redisKvClientPromise = null;
+let redisKvClient = null;
+const kvCacheStats = {
+  provider: "memory",
+  configured: false,
+  gets: 0,
+  hits: 0,
+  misses: 0,
+  sets: 0,
+  errors: 0,
+  lastError: "",
+  lastGetAt: "",
+  lastSetAt: "",
+  lastHitAt: ""
+};
 const startedAt = new Date();
 const WEB_LOGIN_CODE_TTL_MS = 10 * 60 * 1000;
 const MOBILE_WALLET_CONNECT_TTL_MS = 20 * 60 * 1000;
@@ -382,7 +397,16 @@ function loadConfig() {
   const workerTickRunTradePlans = parseBoolean(process.env.WORKER_TICK_RUN_TRADE_PLANS || "true");
   const workerTickRunDcaPlans = parseBoolean(process.env.WORKER_TICK_RUN_DCA_PLANS || "true");
   const workerTickWarmFeeds = parseBoolean(process.env.WORKER_TICK_WARM_FEEDS || "true");
+  const workerTickWarmDisplayCaches = parseBoolean(process.env.WORKER_TICK_WARM_DISPLAY_CACHES || "true");
+  const workerDisplayCacheUserLimit = Number.parseInt(process.env.WORKER_DISPLAY_CACHE_USER_LIMIT || "8", 10);
   const workerSecret = process.env.WORKER_SECRET || "";
+  const cacheProvider = normalizeCacheProvider(process.env.CACHE_PROVIDER || process.env.KV_PROVIDER || "");
+  const redisUrl = String(process.env.REDIS_URL || process.env.KV_REDIS_URL || process.env.SLIMEWIRE_REDIS_URL || "").trim();
+  const kvRestUrl = String(process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL || process.env.SLIMEWIRE_KV_REST_URL || "").trim().replace(/\/$/, "");
+  const kvRestToken = String(process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN || process.env.SLIMEWIRE_KV_REST_TOKEN || "").trim();
+  const cacheNamespace = String(process.env.CACHE_NAMESPACE || process.env.KV_CACHE_NAMESPACE || "slimewire").trim().replace(/[^\w:-]/g, "").slice(0, 40) || "slimewire";
+  const displayCacheFreshMs = Number.parseInt(process.env.DISPLAY_CACHE_FRESH_MS || "2500", 10);
+  const displayCacheStaleMs = Number.parseInt(process.env.DISPLAY_CACHE_STALE_MS || "90000", 10);
 
   if (!Number.isInteger(bundleFeeBps) || bundleFeeBps < 0 || bundleFeeBps > 1000) {
     throw new Error("TRADE_FEE_BPS/BUNDLE_FEE_BPS must be an integer from 0 to 1000.");
@@ -559,6 +583,18 @@ function loadConfig() {
     throw new Error("WORKER_SECRET must be set to a long random value of at least 24 characters when WORKER_TICK_ENABLED=true.");
   }
 
+  if (!Number.isInteger(workerDisplayCacheUserLimit) || workerDisplayCacheUserLimit < 0 || workerDisplayCacheUserLimit > 50) {
+    throw new Error("WORKER_DISPLAY_CACHE_USER_LIMIT must be an integer from 0 to 50.");
+  }
+
+  if (!Number.isInteger(displayCacheFreshMs) || displayCacheFreshMs < 500 || displayCacheFreshMs > 60_000) {
+    throw new Error("DISPLAY_CACHE_FRESH_MS must be an integer from 500 to 60000.");
+  }
+
+  if (!Number.isInteger(displayCacheStaleMs) || displayCacheStaleMs < displayCacheFreshMs || displayCacheStaleMs > 900_000) {
+    throw new Error("DISPLAY_CACHE_STALE_MS must be >= DISPLAY_CACHE_FRESH_MS and <= 900000.");
+  }
+
   try {
     new PublicKey(feeWallet);
   } catch {
@@ -621,7 +657,16 @@ function loadConfig() {
     workerTickRunTradePlans,
     workerTickRunDcaPlans,
     workerTickWarmFeeds,
+    workerTickWarmDisplayCaches,
+    workerDisplayCacheUserLimit,
     workerSecret,
+    cacheProvider,
+    redisUrl,
+    kvRestUrl,
+    kvRestToken,
+    cacheNamespace,
+    displayCacheFreshMs,
+    displayCacheStaleMs,
     solanaTrackerApiKey: process.env.SOLANA_TRACKER_API_KEY || "",
     solanaTrackerApiBase: (process.env.SOLANA_TRACKER_API_BASE || "https://data.solanatracker.io").replace(/\/$/, ""),
     solanaTrackerKolLimit,
@@ -1707,7 +1752,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
 
     if (request.method === "GET" && pathname === "/api/web/balances") {
       const force = parseBoolean(requestUrl.searchParams.get("force") || "false");
-      const summary = await cachedWebSummary("web:balances", auth.userId, { force }, force ? 0 : 2_500, async () => {
+      const summary = await cachedWebSummary("web:balances", auth.userId, { force }, force ? 0 : CONFIG.displayCacheFreshMs, async () => {
         const [balances, connectedWallet] = await Promise.all([
           webBalanceRows(auth.userId, { force }),
           webConnectedWalletBalance(auth.userId, { force })
@@ -1718,6 +1763,8 @@ async function handleWebApiRequest(request, response, requestUrl) {
         ok: true,
         ...summary.value,
         cacheHit: summary.cacheHit,
+        stale: summary.stale,
+        backgroundRefreshing: summary.backgroundRefreshing,
         refreshDurationMs: summary.durationMs,
         lastUpdatedAt: summary.cachedAt
       });
@@ -1726,13 +1773,15 @@ async function handleWebApiRequest(request, response, requestUrl) {
 
     if (request.method === "GET" && pathname === "/api/web/positions") {
       const force = parseBoolean(requestUrl.searchParams.get("force") || "false");
-      const summary = await cachedWebSummary("web:positions", auth.userId, { force }, force ? 0 : 2_500, async () => ({
+      const summary = await cachedWebSummary("web:positions", auth.userId, { force }, force ? 0 : CONFIG.displayCacheFreshMs, async () => ({
         positions: await webPositionRows(auth.userId, { force })
       }));
       sendWebJson(request, response, 200, {
         ok: true,
         ...summary.value,
         cacheHit: summary.cacheHit,
+        stale: summary.stale,
+        backgroundRefreshing: summary.backgroundRefreshing,
         refreshDurationMs: summary.durationMs,
         lastUpdatedAt: summary.cachedAt
       });
@@ -1741,13 +1790,15 @@ async function handleWebApiRequest(request, response, requestUrl) {
 
     if (request.method === "GET" && pathname === "/api/web/pnl") {
       const force = parseBoolean(requestUrl.searchParams.get("force") || "false");
-      const summary = await cachedWebSummary("web:pnl", auth.userId, { force }, force ? 0 : 3_500, async () => ({
+      const summary = await cachedWebSummary("web:pnl", auth.userId, { force }, force ? 0 : CONFIG.displayCacheFreshMs, async () => ({
         pnl: await webPnlSummary(auth.userId)
       }));
       sendWebJson(request, response, 200, {
         ok: true,
         ...summary.value,
         cacheHit: summary.cacheHit,
+        stale: summary.stale,
+        backgroundRefreshing: summary.backgroundRefreshing,
         refreshDurationMs: summary.durationMs,
         lastUpdatedAt: summary.cachedAt
       });
@@ -2041,6 +2092,10 @@ function handleInternalWorkerHealth(request, response) {
     runTradePlans: CONFIG.workerTickRunTradePlans,
     runDcaPlans: CONFIG.workerTickRunDcaPlans,
     warmFeeds: CONFIG.workerTickWarmFeeds,
+    warmDisplayCaches: CONFIG.workerTickWarmDisplayCaches,
+    displayCacheUserLimit: CONFIG.workerDisplayCacheUserLimit,
+    cacheProvider: kvProviderName(),
+    cacheConfigured: kvConfigured(),
     livePairRefreshSeconds: CONFIG.livePairsRefreshSeconds,
     stopLossCheckIntervalMs: CONFIG.stopLossCheckIntervalMs,
     stopLossPriceFailureSellAfter: CONFIG.stopLossPriceFailureSellAfter,
@@ -2084,7 +2139,8 @@ async function runInternalWorkerTick(body = {}) {
     webExitGuards: { skipped: true },
     tradePlans: { skipped: true },
     dcaPlans: { skipped: true },
-    feeds: { skipped: true }
+    feeds: { skipped: true },
+    displayCaches: { skipped: true }
   };
 
   const tradeTaskFlags = workerTickTaskFlags(body, {
@@ -2115,6 +2171,10 @@ async function runInternalWorkerTick(body = {}) {
 
   if (CONFIG.workerTickWarmFeeds && body.warmLivePairs !== false) {
     result.feeds = await runWorkerTask("feeds", () => warmWorkerLivePairFeeds(body));
+  }
+
+  if (CONFIG.workerTickWarmDisplayCaches && body.warmDisplayCaches !== false) {
+    result.displayCaches = await runWorkerTask("displayCaches", () => warmWorkerDisplayCaches(body));
   }
 
   result.durationMs = Date.now() - startedAt;
@@ -2164,6 +2224,81 @@ async function warmWorkerLivePairFeeds(body = {}) {
   }
 
   return { warmed };
+}
+
+async function activeWebUserIdsForDisplayCache(limit = CONFIG.workerDisplayCacheUserLimit) {
+  if (!limit) return [];
+  const store = await readWebAuthStore();
+  const now = Date.now();
+  const seen = new Set();
+  const users = [];
+  const sessionsByRecent = [...(store.sessions || [])]
+    .filter((session) => session?.userId && Date.parse(session.expiresAt || "") > now)
+    .sort((a, b) => Date.parse(b.createdAt || b.expiresAt || "") - Date.parse(a.createdAt || a.expiresAt || ""));
+  for (const session of sessionsByRecent) {
+    const userId = String(session.userId || "").trim();
+    if (!userId || seen.has(userId)) continue;
+    seen.add(userId);
+    users.push(userId);
+    if (users.length >= limit) break;
+  }
+  return users;
+}
+
+async function warmWorkerDisplayCaches(body = {}) {
+  const limit = Math.max(0, Math.min(50, Number.parseInt(body.displayCacheUserLimit || CONFIG.workerDisplayCacheUserLimit, 10) || 0));
+  const userIds = await activeWebUserIdsForDisplayCache(limit);
+  const warmed = [];
+  const force = body.forceDisplayCaches !== false;
+  await runWithConcurrency(userIds, Math.min(2, Math.max(1, CONFIG.balanceConcurrency)), async (userId) => {
+    const userResult = {
+      userId: crypto.createHash("sha256").update(String(userId)).digest("hex").slice(0, 10),
+      balances: null,
+      positions: null,
+      pnl: null
+    };
+    const tasks = [
+      ["balances", () => cachedWebSummary("web:balances", userId, { force, background: true }, 0, async () => {
+        const [balances, connectedWallet] = await Promise.all([
+          webBalanceRows(userId, { force }),
+          webConnectedWalletBalance(userId, { force })
+        ]);
+        return { balances, connectedWallet };
+      })],
+      ["positions", () => cachedWebSummary("web:positions", userId, { force, background: true }, 0, async () => ({
+        positions: await webPositionRows(userId, { force })
+      }))],
+      ["pnl", () => cachedWebSummary("web:pnl", userId, { force, background: true }, 0, async () => ({
+        pnl: await webPnlSummary(userId)
+      }))]
+    ];
+    const results = await Promise.allSettled(tasks.map(([, task]) => task()));
+    results.forEach((result, index) => {
+      const name = tasks[index][0];
+      if (result.status === "fulfilled") {
+        userResult[name] = {
+          ok: true,
+          cacheHit: Boolean(result.value.cacheHit),
+          stale: Boolean(result.value.stale),
+          rows: countSummaryRows(result.value.value),
+          durationMs: result.value.durationMs
+        };
+      } else {
+        userResult[name] = {
+          ok: false,
+          error: safePerfEventText(result.reason?.message || "Refresh failed", 120)
+        };
+      }
+    });
+    warmed.push(userResult);
+  });
+
+  return {
+    provider: kvProviderName(),
+    cacheConfigured: kvConfigured(),
+    users: userIds.length,
+    warmed
+  };
 }
 
 function normalizeWorkerList(value, fallback) {
@@ -2246,6 +2381,15 @@ function normalizeMetadataProvider(value) {
   throw new Error("METADATA_PROVIDER/PUMP_LAUNCH_METADATA_PROVIDER must be auto, pinata, pumpfun-ipfs, or slimewire-hosted.");
 }
 
+function normalizeCacheProvider(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized || normalized === "auto") return "auto";
+  if (["memory", "none", "off", "disabled"].includes(normalized)) return "memory";
+  if (["redis", "render-redis", "keyvalue", "key-value", "kv"].includes(normalized)) return "redis";
+  if (["rest", "rest-kv", "upstash", "upstash-redis"].includes(normalized)) return "rest-kv";
+  throw new Error("CACHE_PROVIDER/KV_PROVIDER must be auto, memory, redis, or rest-kv.");
+}
+
 function parseTradingSpeedPreset(value) {
   const normalized = String(value || "").trim().toLowerCase();
   if (["safe", "balanced", "fast"].includes(normalized)) {
@@ -2321,6 +2465,7 @@ async function ensureDataFiles() {
   await writeJsonIfMissing(lockInEventsPath(), { events: [] });
   await writeJsonIfMissing(terminalFeedEventsPath(), { events: [] });
   await writeJsonIfMissing(performanceEventsPath(), { events: [] });
+  await writeJsonIfMissing(cacheEventsPath(), { events: [] });
   await fs.mkdir(pumpLaunchHostedMetadataRoot(), { recursive: true });
   await ensureAppSecretFingerprint();
   await assignUnownedWalletsToSingleAdmin();
@@ -2427,6 +2572,10 @@ function terminalFeedEventsPath() {
 
 function performanceEventsPath() {
   return path.join(CONFIG.dataDir, "performance-events.json");
+}
+
+function cacheEventsPath() {
+  return path.join(CONFIG.dataDir, "cache-events.json");
 }
 
 function appSecretFingerprintPath() {
@@ -14576,6 +14725,8 @@ function defaultJsonForPath(filePath) {
       return { events: [] };
     case "performance-events.json":
       return { events: [] };
+    case "cache-events.json":
+      return { events: [] };
     case "app-secret.json":
       return {};
     default:
@@ -15661,49 +15812,291 @@ async function recordPerformanceEvent(body = {}, request = {}) {
   return event;
 }
 
-async function cachedWebSummary(cacheName, userId, options = {}, ttlMs = 2_500, builder) {
-  const key = `${cacheName}:${String(userId || "guest")}`;
-  const force = Boolean(options.force);
-  const cached = webSummaryCache.get(key);
-  const now = Date.now();
-  if (!force && cached?.value && now - cached.cachedAt < ttlMs) {
-    return {
-      value: cached.value,
-      cacheHit: true,
-      durationMs: 0,
-      cachedAt: new Date(cached.cachedAt).toISOString()
-    };
-  }
-  if (cached?.promise) return cached.promise;
+function kvProviderName() {
+  if (CONFIG.cacheProvider === "memory") return "memory";
+  if (CONFIG.cacheProvider === "redis") return CONFIG.redisUrl ? "redis" : "memory";
+  if (CONFIG.cacheProvider === "rest-kv") return CONFIG.kvRestUrl && CONFIG.kvRestToken ? "rest-kv" : "memory";
+  if (CONFIG.redisUrl) return "redis";
+  if (CONFIG.kvRestUrl && CONFIG.kvRestToken) return "rest-kv";
+  return "memory";
+}
 
+function kvConfigured() {
+  return kvProviderName() !== "memory";
+}
+
+function externalCacheKey(cacheName, userId = "") {
+  const userHash = crypto.createHash("sha256").update(String(userId || "guest")).digest("hex").slice(0, 24);
+  const name = String(cacheName || "cache").replace(/[^\w:-]/g, "_").slice(0, 80);
+  return `${CONFIG.cacheNamespace}:${name}:${userHash}`;
+}
+
+function displayCacheEnvelope(value, cachedAt = Date.now()) {
+  return {
+    cachedAt,
+    value
+  };
+}
+
+async function redisKv() {
+  if (kvProviderName() !== "redis") return null;
+  if (redisKvClient?.isOpen) return redisKvClient;
+  if (!redisKvClientPromise) {
+    redisKvClientPromise = import("redis")
+      .then(({ createClient }) => {
+        const client = createClient({ url: CONFIG.redisUrl });
+        client.on("error", (error) => {
+          kvCacheStats.errors += 1;
+          kvCacheStats.lastError = safePerfEventText(error?.message || "Redis error", 140);
+        });
+        return client.connect().then(() => {
+          redisKvClient = client;
+          return client;
+        });
+      })
+      .catch((error) => {
+        redisKvClientPromise = null;
+        kvCacheStats.errors += 1;
+        kvCacheStats.lastError = safePerfEventText(error?.message || "Redis connect failed", 140);
+        return null;
+      });
+  }
+  return redisKvClientPromise;
+}
+
+async function restKvCommand(command) {
+  if (kvProviderName() !== "rest-kv") return null;
+  const response = await fetch(CONFIG.kvRestUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${CONFIG.kvRestToken}`
+    },
+    body: JSON.stringify(command),
+    signal: AbortSignal.timeout ? AbortSignal.timeout(2_500) : undefined
+  });
+  const text = await response.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { result: text };
+  }
+  if (!response.ok) {
+    const error = new Error(`REST KV ${command?.[0] || "command"} failed with HTTP ${response.status}`);
+    error.status = response.status;
+    error.bodySnippet = String(text || "").slice(0, 180);
+    throw error;
+  }
+  return data.result ?? null;
+}
+
+async function cacheGetJson(key) {
+  const provider = kvProviderName();
+  kvCacheStats.provider = provider;
+  kvCacheStats.configured = provider !== "memory";
+  if (provider === "memory") return null;
+
+  kvCacheStats.gets += 1;
+  kvCacheStats.lastGetAt = new Date().toISOString();
+  try {
+    let raw = null;
+    if (provider === "redis") {
+      const client = await redisKv();
+      raw = client ? await client.get(key) : null;
+    } else if (provider === "rest-kv") {
+      raw = await restKvCommand(["GET", key]);
+    }
+    if (!raw) {
+      kvCacheStats.misses += 1;
+      return null;
+    }
+    kvCacheStats.hits += 1;
+    kvCacheStats.lastHitAt = new Date().toISOString();
+    return JSON.parse(raw);
+  } catch (error) {
+    kvCacheStats.errors += 1;
+    kvCacheStats.lastError = safePerfEventText(error?.message || "Cache read failed", 140);
+    logCacheEvent({ cacheName: key, action: "kv-get-error", provider, errorCode: error?.code || error?.name || "KV_GET_ERROR", details: kvCacheStats.lastError });
+    return null;
+  }
+}
+
+async function cacheSetJson(key, value, ttlMs) {
+  const provider = kvProviderName();
+  kvCacheStats.provider = provider;
+  kvCacheStats.configured = provider !== "memory";
+  if (provider === "memory") return false;
+
+  const ttlSeconds = Math.max(1, Math.ceil(Number(ttlMs || CONFIG.displayCacheStaleMs) / 1000));
+  try {
+    const raw = JSON.stringify(value);
+    if (provider === "redis") {
+      const client = await redisKv();
+      if (!client) return false;
+      await client.set(key, raw, { EX: ttlSeconds });
+    } else if (provider === "rest-kv") {
+      await restKvCommand(["SET", key, raw, "EX", ttlSeconds]);
+    }
+    kvCacheStats.sets += 1;
+    kvCacheStats.lastSetAt = new Date().toISOString();
+    return true;
+  } catch (error) {
+    kvCacheStats.errors += 1;
+    kvCacheStats.lastError = safePerfEventText(error?.message || "Cache write failed", 140);
+    logCacheEvent({ cacheName: key, action: "kv-set-error", provider, errorCode: error?.code || error?.name || "KV_SET_ERROR", details: kvCacheStats.lastError });
+    return false;
+  }
+}
+
+function safeCacheText(value = "", max = 120) {
+  return String(value || "")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/[^\w .:/?&=#@,+-]/g, "")
+    .trim()
+    .slice(0, max);
+}
+
+async function recordCacheEvent(event = {}) {
+  const item = {
+    at: new Date().toISOString(),
+    cacheName: safeCacheText(event.cacheName || "", 80),
+    action: safeCacheText(event.action || "", 60),
+    provider: safeCacheText(event.provider || kvProviderName(), 30),
+    cacheHit: Boolean(event.cacheHit),
+    stale: Boolean(event.stale),
+    background: Boolean(event.background),
+    durationMs: Number.isFinite(Number(event.durationMs)) ? Math.max(0, Math.round(Number(event.durationMs))) : 0,
+    resultCount: Number.isFinite(Number(event.resultCount)) ? Math.max(0, Math.round(Number(event.resultCount))) : 0,
+    errorCode: safeCacheText(event.errorCode || "", 60),
+    details: safeCacheText(event.details || "", 140)
+  };
+  const store = await readJson(cacheEventsPath());
+  if (!Array.isArray(store.events)) store.events = [];
+  store.events.push(item);
+  store.events = store.events.slice(-300);
+  await writeJsonFile(cacheEventsPath(), store);
+  return item;
+}
+
+function logCacheEvent(event = {}) {
+  recordCacheEvent(event).catch(() => {});
+}
+
+function countSummaryRows(value = {}) {
+  if (Array.isArray(value?.balances)) return value.balances.length;
+  if (Array.isArray(value?.positions)) return value.positions.length;
+  if (Array.isArray(value?.pnl?.tokens)) return value.pnl.tokens.length;
+  if (Array.isArray(value?.rows)) return value.rows.length;
+  return 0;
+}
+
+async function buildAndStoreWebSummary(entryKey, externalKey, cacheName, builder, ttlMs, staleMs, options = {}) {
   const started = Date.now();
-  const promise = Promise.resolve()
-    .then(builder)
-    .then((value) => {
-      const cachedAt = Date.now();
-      webSummaryCache.set(key, { value, cachedAt });
-      return {
-        value,
-        cacheHit: false,
-        durationMs: cachedAt - started,
-        cachedAt: new Date(cachedAt).toISOString()
-      };
-    })
+  const value = await builder();
+  const cachedAt = Date.now();
+  const envelope = displayCacheEnvelope(value, cachedAt);
+  webSummaryCache.set(entryKey, { value, cachedAt });
+  await cacheSetJson(externalKey, envelope, staleMs).catch(() => false);
+  const result = {
+    value,
+    cacheHit: false,
+    stale: false,
+    backgroundRefreshing: false,
+    durationMs: cachedAt - started,
+    cachedAt: new Date(cachedAt).toISOString()
+  };
+  logCacheEvent({
+    cacheName,
+    action: options.background ? "refresh-background-complete" : "refresh-complete",
+    provider: kvProviderName(),
+    background: Boolean(options.background),
+    durationMs: result.durationMs,
+    resultCount: countSummaryRows(value)
+  });
+  return result;
+}
+
+function startWebSummaryRefresh(entryKey, externalKey, cacheName, builder, ttlMs, staleMs, options = {}) {
+  const cached = webSummaryCache.get(entryKey) || {};
+  if (cached.promise) return cached.promise;
+  const promise = buildAndStoreWebSummary(entryKey, externalKey, cacheName, builder, ttlMs, staleMs, options)
     .catch((error) => {
-      if (cached?.value) webSummaryCache.set(key, cached);
-      else webSummaryCache.delete(key);
+      logCacheEvent({
+        cacheName,
+        action: options.background ? "refresh-background-error" : "refresh-error",
+        provider: kvProviderName(),
+        background: Boolean(options.background),
+        errorCode: error?.code || error?.name || "CACHE_REFRESH_ERROR",
+        details: error?.message || "Cache refresh failed"
+      });
       throw error;
     });
-  webSummaryCache.set(key, { ...(cached || {}), promise });
+  webSummaryCache.set(entryKey, { ...cached, promise });
   const clearInflight = () => {
-    const current = webSummaryCache.get(key);
+    const current = webSummaryCache.get(entryKey);
     if (current?.promise === promise) {
-      if (current.value) webSummaryCache.set(key, { value: current.value, cachedAt: current.cachedAt || Date.now() });
-      else webSummaryCache.delete(key);
+      if (current.value) webSummaryCache.set(entryKey, { value: current.value, cachedAt: current.cachedAt || Date.now() });
+      else webSummaryCache.delete(entryKey);
     }
   };
   promise.then(clearInflight, clearInflight);
   return promise;
+}
+
+function summaryFromCachedValue(cacheName, cached, stale, backgroundRefreshing = false) {
+  return {
+    value: cached.value,
+    cacheHit: true,
+    stale,
+    backgroundRefreshing,
+    durationMs: 0,
+    cachedAt: new Date(cached.cachedAt || Date.now()).toISOString()
+  };
+}
+
+async function cachedWebSummary(cacheName, userId, options = {}, ttlMs = CONFIG.displayCacheFreshMs, builder) {
+  const key = `${cacheName}:${String(userId || "guest")}`;
+  const force = Boolean(options.force);
+  const staleMs = Number(options.staleMs || CONFIG.displayCacheStaleMs);
+  const externalKey = externalCacheKey(cacheName, userId);
+  const cached = webSummaryCache.get(key);
+  const now = Date.now();
+  if (!force && cached?.value && now - cached.cachedAt < ttlMs) {
+    logCacheEvent({ cacheName, action: "memory-hit", provider: kvProviderName(), cacheHit: true, resultCount: countSummaryRows(cached.value) });
+    return summaryFromCachedValue(cacheName, cached, false);
+  }
+
+  if (!force && !cached?.value) {
+    const external = await cacheGetJson(externalKey);
+    if (external?.value && Number.isFinite(Number(external.cachedAt))) {
+      const entry = { value: external.value, cachedAt: Number(external.cachedAt) };
+      webSummaryCache.set(key, entry);
+      const externalStale = Date.now() - entry.cachedAt >= ttlMs;
+      if (!externalStale) {
+        logCacheEvent({ cacheName, action: "kv-hit", provider: kvProviderName(), cacheHit: true, resultCount: countSummaryRows(entry.value) });
+        return summaryFromCachedValue(cacheName, entry, false);
+      }
+      if (Date.now() - entry.cachedAt < staleMs) {
+        startWebSummaryRefresh(key, externalKey, cacheName, builder, ttlMs, staleMs, { background: true }).catch(() => {});
+        logCacheEvent({ cacheName, action: "kv-stale-hit-background-refresh", provider: kvProviderName(), cacheHit: true, stale: true, background: true, resultCount: countSummaryRows(entry.value) });
+        return summaryFromCachedValue(cacheName, entry, true, true);
+      }
+    }
+  }
+
+  if (!force && cached?.value && now - cached.cachedAt < staleMs) {
+    startWebSummaryRefresh(key, externalKey, cacheName, builder, ttlMs, staleMs, { background: true }).catch(() => {});
+    logCacheEvent({ cacheName, action: "memory-stale-hit-background-refresh", provider: kvProviderName(), cacheHit: true, stale: true, background: true, resultCount: countSummaryRows(cached.value) });
+    return summaryFromCachedValue(cacheName, cached, true, true);
+  }
+
+  if (cached?.promise) {
+    logCacheEvent({ cacheName, action: "inflight-shared", provider: kvProviderName(), cacheHit: true, background: Boolean(options.background) });
+    return cached.promise;
+  }
+
+  return startWebSummaryRefresh(key, externalKey, cacheName, builder, ttlMs, staleMs, { background: Boolean(options.background) });
 }
 
 async function sendWebLoginCode(chatId, userId, messageId = null) {
@@ -21726,13 +22119,61 @@ async function webLivePairs(userId, bucket = "live", options = {}) {
   const sort = String(options.sort || "best").toLowerCase();
   const force = Boolean(options.force);
   const cacheKey = `${safeBucket}:${sort}`;
+  const externalKey = externalCacheKey(`web:livePairs:${cacheKey}`, "global");
   const cached = livePairsSharedCache.get(cacheKey) || { cachedAt: 0, value: null, promise: null };
   if (!force && CONFIG.livePairsSharedCacheMs > 0 && cached.value && Date.now() - cached.cachedAt < CONFIG.livePairsSharedCacheMs) {
-    return cached.value;
+    return { ...cached.value, cacheHit: true, cacheSource: "memory" };
+  }
+
+  if (!force && CONFIG.livePairsSharedCacheMs > 0 && cached.promise && cached.value && Date.now() - cached.cachedAt < CONFIG.displayCacheStaleMs) {
+    return {
+      ...cached.value,
+      stale: true,
+      cacheHit: true,
+      cacheSource: cached.value.cacheSource || "memory",
+      backgroundRefreshing: true
+    };
   }
 
   if (!force && CONFIG.livePairsSharedCacheMs > 0 && cached.promise) {
     return cached.promise;
+  }
+
+  if (!force && !cached.value) {
+    const external = await cacheGetJson(externalKey);
+    if (external?.value && Number.isFinite(Number(external.cachedAt))) {
+      const ageMs = Date.now() - Number(external.cachedAt);
+      if (CONFIG.livePairsSharedCacheMs > 0 && ageMs < CONFIG.livePairsSharedCacheMs) {
+        livePairsSharedCache.set(cacheKey, { cachedAt: Number(external.cachedAt), value: external.value, promise: null });
+        logCacheEvent({ cacheName: `web:livePairs:${cacheKey}`, action: "kv-hit", provider: kvProviderName(), cacheHit: true, resultCount: Array.isArray(external.value?.rows) ? external.value.rows.length : 0 });
+        return { ...external.value, cacheHit: true, cacheSource: kvProviderName() };
+      }
+      if (ageMs < CONFIG.displayCacheStaleMs) {
+        const staleValue = {
+          ...external.value,
+          stale: true,
+          cacheHit: true,
+          cacheSource: kvProviderName(),
+          backgroundRefreshing: true,
+          message: `${livePairBucketLabel(safeBucket)} is refreshing in the background. Showing cached rows now.`
+        };
+        const backgroundPromise = buildWebLivePairs(userId, safeBucket, { sort, force: true })
+          .then(async (nextValue) => {
+            livePairsSharedCache.set(cacheKey, { cachedAt: Date.now(), value: nextValue, promise: null });
+            await cacheSetJson(externalKey, displayCacheEnvelope(nextValue), Math.max(CONFIG.displayCacheStaleMs, 30_000));
+            return nextValue;
+          })
+          .catch((error) => {
+            const current = livePairsSharedCache.get(cacheKey);
+            livePairsSharedCache.set(cacheKey, { cachedAt: current?.cachedAt || Number(external.cachedAt), value: staleValue, promise: null });
+            throw error;
+        });
+        livePairsSharedCache.set(cacheKey, { cachedAt: Number(external.cachedAt), value: staleValue, promise: backgroundPromise });
+        logCacheEvent({ cacheName: `web:livePairs:${cacheKey}`, action: "kv-stale-hit-background-refresh", provider: kvProviderName(), cacheHit: true, stale: true, background: true, resultCount: Array.isArray(staleValue.rows) ? staleValue.rows.length : 0 });
+        backgroundPromise.catch(() => {});
+        return staleValue;
+      }
+    }
   }
 
   const promise = buildWebLivePairs(userId, safeBucket, { sort, force });
@@ -21756,6 +22197,8 @@ async function webLivePairs(userId, bucket = "live", options = {}) {
     }
     if (CONFIG.livePairsSharedCacheMs > 0) {
       livePairsSharedCache.set(cacheKey, { cachedAt: Date.now(), value, promise: null });
+      await cacheSetJson(externalKey, displayCacheEnvelope(value), Math.max(CONFIG.displayCacheStaleMs, 30_000));
+      logCacheEvent({ cacheName: `web:livePairs:${cacheKey}`, action: "refresh-complete", provider: kvProviderName(), durationMs: 0, resultCount: Array.isArray(value?.rows) ? value.rows.length : 0 });
     }
     return value;
   } catch (error) {
