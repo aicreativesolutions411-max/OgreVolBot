@@ -190,8 +190,8 @@ test("debug command reports registry, polling, stale data, and feed event state"
 });
 
 test("critical icons preload and all runtime images have a global fallback path", () => {
-  assert.match(htmlSource, /rel="preload" as="image" href="\.\/assets\/slimewire\/clean-ui\/wallet_icons\/default\/phantom\.png"/);
-  assert.match(htmlSource, /rel="preload" as="image" href="\.\/assets\/slimewire\/clean-ui\/wallet_icons\/default\/solflare\.png"/);
+  assert.match(htmlSource, /rel="preload" as="image" href="\/assets\/slimewire\/clean-ui\/wallet_icons\/default\/phantom\.png"/);
+  assert.match(htmlSource, /rel="preload" as="image" href="\/assets\/slimewire\/clean-ui\/wallet_icons\/default\/solflare\.png"/);
   assert.match(htmlSource, /data-fallback-src="\.\/assets\/slimewire\/svg\/icons\/wallet\.svg"/);
   assert.match(appSource, /const SLIMEWIRE_CRITICAL_IMAGE_ASSETS = \[/);
   assert.match(functionBody("installSlimewireImageFallbacks"), /document\.addEventListener\("error", handleSlimewireImageError, true\)/);

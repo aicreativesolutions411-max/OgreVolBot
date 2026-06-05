@@ -74,6 +74,18 @@ test("Chart route has professional Buy and Sell panel", () => {
   assert.match(functionBody(appSource, "applyChartRouteFromLocation"), /params\.get\("token"\)/);
 });
 
+test("Chart page uses full chart view with transactions and info tabs", () => {
+  const chart = functionBody(appSource, "smartChartHtml");
+  assert.match(functionBody(appSource, "smartChartViewTabsHtml"), /\["chart", "Chart"\]/);
+  assert.match(functionBody(appSource, "smartChartViewTabsHtml"), /\["txns", "Transactions"\]/);
+  assert.match(functionBody(appSource, "smartChartViewTabsHtml"), /\["info", "Info"\]/);
+  assert.match(chart, /chartView === "chart"[\s\S]*smartChartTransactionsHtml\(token, heldPosition\)/);
+  assert.match(chart, /chartView === "txns"[\s\S]*smartChartTransactionsHtml\(token, heldPosition\)/);
+  assert.match(chart, /smartChartInfoPanelHtml\(token, heldPosition\)/);
+  assert.match(functionBody(appSource, "chartAddressForToken"), /pairAddress/);
+  assert.match(functionBody(appSource, "applyTokenRefToState"), /smartChartTokenRef/);
+});
+
 test("Debug commands are wired and sanitized", () => {
   assert.match(packageSource, /debug:trade-entrypoints/);
   assert.match(packageSource, /debug:chart-route/);

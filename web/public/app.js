@@ -176,8 +176,9 @@ const state = {
   terminalSort: "best",
   terminalToken: "",
   smartChartToken: "",
-  smartChartZoom: 72,
-  smartChartView: "chartTxns",
+  smartChartTokenRef: null,
+  smartChartZoom: 100,
+  smartChartView: "chart",
   chartTradeTab: new URLSearchParams(window.location.search || "").get("tab") === "sell" ? "sell" : "buy",
   chartFocusAmountInput: new URLSearchParams(window.location.search || "").get("focusAmount") === "1",
   terminalAutoToken: "",
@@ -7904,6 +7905,12 @@ function tokenRefFromRow(row = {}, extra = {}) {
 function applyTokenRefToState(tokenRef = {}) {
   const mint = String(tokenRef.tokenMint || tokenRef.mint || tokenRef.tokenAddress || "").trim();
   if (!mint) return "";
+  state.smartChartTokenRef = {
+    ...tokenRef,
+    tokenMint: mint,
+    tokenAddress: mint,
+    mint
+  };
   state.terminalToken = mint;
   state.terminalAutoToken = mint;
   state.tradeToken = mint;
@@ -7931,6 +7938,7 @@ function openTokenChart(tokenRef = {}, options = {}) {
     return;
   }
   state.chartTradeTab = options.defaultTab === "sell" ? "sell" : options.defaultTab === "chart" ? "buy" : "buy";
+  state.smartChartView = "chart";
   state.chartFocusAmountInput = Boolean(options.focusAmountInput);
   state.activeTab = "smartChart";
   state.route = "terminal";
@@ -7951,6 +7959,7 @@ function applyChartRouteFromLocation() {
   const token = String(params.get("token") || params.get("mint") || "").trim();
   if (token) applyTokenRefToState(tokenRefFromMint(token, { source: params.get("source") || "route" }));
   state.chartTradeTab = params.get("tab") === "sell" ? "sell" : "buy";
+  state.smartChartView = ["txns", "info"].includes(params.get("view")) ? params.get("view") : "chart";
   state.chartFocusAmountInput = params.get("focusAmount") === "1";
   state.route = "terminal";
   state.activeTab = "smartChart";
@@ -8876,12 +8885,16 @@ function selectedTerminalTokenRow() {
 
 function selectedSmartChartTokenRow() {
   const allRows = allVisibleSignalRows();
+  const savedRef = state.smartChartTokenRef || null;
   const rowForMint = (mint) => allRows.find((row) => String(row.tokenMint || "") === mint) || {
+    ...(String(savedRef?.tokenMint || "") === mint ? savedRef : {}),
     tokenMint: mint,
     shortMint: shortAddress(mint),
-    symbol: shortAddress(mint),
-    name: "Custom Token",
-    dexUrl: dexUrl(mint),
+    symbol: savedRef?.symbol || shortAddress(mint),
+    name: savedRef?.name || "Custom Token",
+    imageUrl: savedRef?.imageUrl || savedRef?.imageUri || "",
+    pairAddress: savedRef?.pairAddress || savedRef?.pairId || "",
+    dexUrl: savedRef?.dexUrl || dexUrl(savedRef?.pairAddress || mint),
     pumpUrl: mint.toLowerCase().endsWith("pump") ? `https://pump.fun/coin/${encodeURIComponent(mint)}` : ""
   };
   const explicitMint = String(state.smartChartToken || state.terminalToken || state.tradeToken || "").trim();
@@ -8889,8 +8902,28 @@ function selectedSmartChartTokenRow() {
   return selectedTerminalTokenRow();
 }
 
-function dexChartEmbedUrl(mint) {
-  return `https://dexscreener.com/solana/${encodeURIComponent(mint)}?embed=1&theme=dark`;
+function chartAddressForToken(tokenOrMint = {}) {
+  if (typeof tokenOrMint === "string") return String(tokenOrMint || "").trim();
+  return String(
+    tokenOrMint?.pairAddress
+    || tokenOrMint?.pairId
+    || tokenOrMint?.dexPair?.pairAddress
+    || tokenOrMint?.dexPair?.pairId
+    || tokenOrMint?.tokenMint
+    || tokenOrMint?.mint
+    || ""
+  ).trim();
+}
+
+function dexChartEmbedUrl(tokenOrMint, options = {}) {
+  const address = chartAddressForToken(tokenOrMint);
+  const params = new URLSearchParams({
+    embed: "1",
+    theme: "dark",
+    trades: options.trades ? "1" : "0",
+    info: options.info ? "1" : "0"
+  });
+  return `https://dexscreener.com/solana/${encodeURIComponent(address)}?${params.toString()}`;
 }
 
 function marketDataRowsByMint() {
@@ -9692,16 +9725,73 @@ function tokenPreviewHtml(token) {
   `;
 }
 
-function smartChartViewTabsHtml(activeView = "chartTxns") {
+function smartChartViewTabsHtml(activeView = "chart") {
   const tabs = [
-    ["chartTxns", "Chart + Txns"],
     ["chart", "Chart"],
-    ["txns", "Transactions"]
+    ["txns", "Transactions"],
+    ["info", "Info"]
   ];
   return `
     <div class="smart-chart-mode-tabs" role="tablist" aria-label="Smart Chart view">
       ${tabs.map(([value, label]) => `<button type="button" data-smart-chart-view="${value}" data-active="${activeView === value}">${label}</button>`).join("")}
     </div>
+  `;
+}
+
+function tradesForToken(mint = "") {
+  const key = String(mint || "").trim();
+  if (!key) return [];
+  return (state.pnl?.trades || []).filter((trade) => String(trade?.tokenMint || trade?.mint || "").trim() === key);
+}
+
+function smartChartTransactionsHtml(token = {}, heldPosition = null) {
+  const mint = String(token?.tokenMint || state.smartChartToken || "").trim();
+  const trades = tradesForToken(mint);
+  const dexLink = token.dexUrl || dexUrl(chartAddressForToken(token) || mint);
+  return `
+    <section class="smart-chart-transactions-panel" data-smart-chart-transactions>
+      <div class="terminal-title-row">
+        <div>
+          <h4>Transactions</h4>
+          <p>${trades.length ? "Recent SlimeWire trade history for this token." : "No SlimeWire trade history yet. Use the DEX feed for live market fills."}</p>
+        </div>
+        <a href="${escapeHtml(dexLink)}" target="_blank" rel="noreferrer">Open DEX Feed</a>
+      </div>
+      ${trades.length ? liveTradeRowsHtml(Math.max(6, trades.length), trades) : `
+        <div class="smart-chart-empty-transactions">
+          <strong>${heldPosition ? "Position loaded" : "Watching live market"}</strong>
+          <span>Chart data stays above. Transactions appear here after SlimeWire buys/sells refresh.</span>
+        </div>
+      `}
+    </section>
+  `;
+}
+
+function smartChartInfoPanelHtml(token = {}, heldPosition = null) {
+  const mint = String(token?.tokenMint || state.smartChartToken || "").trim();
+  const suggestion = smartChartSuggestion(token || {});
+  return `
+    <section class="smart-chart-info-panel">
+      <div class="terminal-title-row">
+        <div>
+          <h4>Token Info</h4>
+          <p>Stats, links, and SlimeWire context for ${escapeHtml(token.symbol || shortAddress(mint))}.</p>
+        </div>
+      </div>
+      ${terminalTokenStatsHtml(token)}
+      <div class="smart-chart-suggestion">
+        <strong>Smart read</strong>
+        <p>${escapeHtml(suggestion)}</p>
+      </div>
+      <dl class="mini-stats">
+        <div><dt>Mint</dt><dd><button type="button" class="ca-copy" data-copy="${escapeHtml(mint)}">${escapeHtml(shortAddress(mint))}</button></dd></div>
+        <div><dt>Position</dt><dd>${heldPosition ? "Held" : "None tracked"}</dd></div>
+        <div><dt>Source</dt><dd>${escapeHtml(token.source || token.category || token.dexId || "market")}</dd></div>
+      </dl>
+      <div class="compact-link-row">
+        ${miniTokenLinksHtml(token)}
+      </div>
+    </section>
   `;
 }
 
@@ -9780,11 +9870,8 @@ function smartChartHtml() {
         ...allVisibleSignalRows().filter((row) => String(row.tokenMint || "") === mint)
       ]).filter(Boolean).slice(0, 5)
     : rotatedDisplayRows(terminalBestPickRows(), 5, terminalRotationKey("smart-chart-suggest"), 1);
-  const suggestion = smartChartSuggestion(token || {});
-  const chartZoom = Math.min(115, Math.max(60, Number(state.smartChartZoom) || 72));
-  const chartView = ["chartTxns", "chart", "txns"].includes(state.smartChartView) ? state.smartChartView : "chartTxns";
-  const showChart = chartView !== "txns";
-  const showTxns = chartView !== "chart";
+  const rawChartView = String(state.smartChartView || "chart");
+  const chartView = rawChartView === "chartTxns" ? "chart" : (["chart", "txns", "info"].includes(rawChartView) ? rawChartView : "chart");
   if (!mint) {
     return `
       <section class="smart-chart-terminal">
@@ -9841,36 +9928,26 @@ function smartChartHtml() {
               ${miniTokenLinksHtml(token)}
             </div>
           </div>
-          ${showChart ? `
-            <div class="smart-chart-frame" style="--smart-chart-scale: ${chartZoom / 100};">
-              <iframe title="DexScreener chart for ${escapeHtml(token.symbol || shortAddress(mint))}" src="${escapeHtml(dexChartEmbedUrl(mint))}" loading="lazy"></iframe>
-            </div>
-            <label class="smart-chart-zoom">
-              <span>Zoom</span>
-              <input data-smart-chart-zoom type="range" min="60" max="115" step="5" value="${escapeHtml(chartZoom)}">
-              <strong>${escapeHtml(chartZoom)}%</strong>
-            </label>
-            <small class="score-breakdown">If the embedded chart does not load, use the DEX link above.</small>
-          ` : `
-            <div class="smart-chart-transactions-panel">
-              <strong>Transactions</strong>
-              <p>Open the DEX transaction feed for live fills, then use the related SlimeWire signals below.</p>
-              <a href="${escapeHtml(token.dexUrl || dexUrl(mint))}" target="_blank" rel="noreferrer">Open DEX Transactions</a>
-            </div>
-          `}
           ${smartChartViewTabsHtml(chartView)}
+          ${chartView === "chart" ? `
+            <div class="smart-chart-frame">
+              <iframe title="DexScreener chart for ${escapeHtml(token.symbol || shortAddress(mint))}" src="${escapeHtml(dexChartEmbedUrl(token))}" loading="lazy" allowfullscreen></iframe>
+            </div>
+            <small class="score-breakdown">If the embedded chart does not load, use the DEX link above.</small>
+            ${smartChartTransactionsHtml(token, heldPosition)}
+          ` : chartView === "txns" ? `
+            ${smartChartTransactionsHtml(token, heldPosition)}
+          ` : `
+            ${smartChartInfoPanelHtml(token, heldPosition)}
+          `}
         </article>
         <aside class="terminal-panel smart-chart-side">
           <h3>${escapeHtml(token.symbol || "Token")} setup</h3>
           ${terminalTokenStatsHtml(token)}
-          <div class="smart-chart-suggestion">
-            <strong>Smart read</strong>
-            <p>${escapeHtml(suggestion)}</p>
-          </div>
           ${chartTradePanelHtml(token, heldPosition)}
         </aside>
       </div>
-      ${showTxns ? `<div class="smart-chart-bottom-grid">
+      ${chartView !== "txns" ? `<div class="smart-chart-bottom-grid">
         <article class="terminal-panel">
           <div class="terminal-title-row">
             <h3>Related signals</h3>
@@ -11418,8 +11495,8 @@ document.addEventListener("click", async (event) => {
     return;
   }
   if (target.matches("[data-smart-chart-view]")) {
-    const nextView = target.dataset.smartChartView || "chartTxns";
-    state.smartChartView = ["chartTxns", "chart", "txns"].includes(nextView) ? nextView : "chartTxns";
+    const nextView = target.dataset.smartChartView || "chart";
+    state.smartChartView = ["chart", "txns", "info"].includes(nextView) ? nextView : "chart";
     render();
     return;
   }

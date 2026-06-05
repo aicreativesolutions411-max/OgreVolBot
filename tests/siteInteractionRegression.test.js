@@ -25,6 +25,11 @@ test("browser app bundle has one return-path helper declaration", () => {
   assert.equal([...appSource.matchAll(/function currentReturnPath\(\)/g)].length, 1);
 });
 
+test("deep terminal and chart routes load root assets", () => {
+  assert.match(htmlSource, /<base href="\/">/);
+  assert.doesNotMatch(htmlSource, /<script src="\.\/config\.js"/);
+});
+
 test("decorative and closed overlay layers cannot capture clicks", () => {
   assert.match(overridesSource, /\.wallet-connect-modal\[hidden\][\s\S]*display: none !important;[\s\S]*pointer-events: none !important/);
   assert.match(overridesSource, /\.login-modal\[hidden\][\s\S]*display: none !important;[\s\S]*pointer-events: none !important/);
