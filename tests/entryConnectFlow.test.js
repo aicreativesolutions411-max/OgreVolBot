@@ -60,11 +60,23 @@ test("wallet options use provider connect flow and safe unavailable guidance", (
   assert.match(appSource, /data-connect-create-wallet/);
 });
 
-test("entry wallet cards open the chooser instead of dead-ending on one missing provider", () => {
+test("entry wallet cards start provider connect flow while main connect opens chooser", () => {
   assert.match(htmlSource, /data-connect-wallet="phantom"/);
   assert.match(htmlSource, /data-connect-wallet="solflare"/);
+  assert.match(appSource, /target\.matches\("\[data-connect-wallet\]"\)[\s\S]*await connectBrowserWallet\(providerId, \{ returnPath: "\/terminal" \}\)/);
   assert.match(appSource, /target\.matches\("\[data-connect-wallet\]"\)[\s\S]*openWalletConnectChooser\(\{ returnPath: "\/terminal" \}\)/);
-  assert.doesNotMatch(appSource, /if \(providerId === "solana"\) openWalletConnectChooser\(\{ returnPath: "\/terminal" \}\);\s*else await connectBrowserWallet/);
+  assert.match(htmlSource, /data-web-signup-connect>Connect Wallet/);
+});
+
+test("connect page has early click fallback before app bundle is ready", () => {
+  assert.match(htmlSource, /window\.__SLIMEWIRE_EARLY_CONNECT_ACTION/);
+  assert.match(htmlSource, /window\.__SLIMEWIRE_APP_READY/);
+  assert.match(htmlSource, /\[data-web-signup-connect\], \[data-connect-wallet\], \[data-connect-create-account\], \[data-connect-login-toggle\], \[data-connect-create-wallet\], \[data-nav-route\]/);
+  assert.match(htmlSource, /document\.querySelector\("\[data-connect-login-panel\]"\)\?\.removeAttribute\("hidden"\)/);
+  assert.match(htmlSource, /window\.location\.assign\(routeTarget\)/);
+  assert.match(appSource, /async function consumeEarlyConnectAction\(\)/);
+  assert.match(appSource, /window\.__SLIMEWIRE_APP_READY = true/);
+  assert.match(appSource, /void consumeEarlyConnectAction\(\)\.catch/);
 });
 
 test("Lock In opens login panels instead of toggling them closed", () => {

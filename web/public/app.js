@@ -11322,10 +11322,11 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-connect-wallet]")) {
     const providerId = target.dataset.connectWallet || "solana";
-    openWalletConnectChooser({ returnPath: "/terminal" });
     if (providerId && providerId !== "solana") {
-      setWalletConnectStatus(`Choose ${walletProviderLabel(providerId)} below to open the wallet connect flow, or pick another wallet.`);
+      await connectBrowserWallet(providerId, { returnPath: "/terminal" });
+      return;
     }
+    openWalletConnectChooser({ returnPath: "/terminal" });
     return;
   }
   if (target.matches("[data-connect-wallet-provider]")) {
@@ -11854,7 +11855,39 @@ document.addEventListener("visibilitychange", () => {
 
 window.addEventListener("focus", resumeLiveFeeds);
 
+async function consumeEarlyConnectAction() {
+  const action = window.__SLIMEWIRE_EARLY_CONNECT_ACTION;
+  if (!action || action.consumed) return;
+  window.__SLIMEWIRE_EARLY_CONNECT_ACTION = { ...action, consumed: true };
+  try {
+    if (action.action === "login") {
+      openLoginModal({ connectPanel: true, source: "early-connect-login" });
+      return;
+    }
+    if (action.action === "create-account") {
+      await createWebAccount();
+      return;
+    }
+    if (action.action === "create-wallet") {
+      await createAccountAndOpenWallets();
+      return;
+    }
+    if (action.action === "connect-provider" && action.providerId) {
+      await connectBrowserWallet(action.providerId, { returnPath: "/terminal" });
+      return;
+    }
+    if (action.action === "open-wallet-chooser") {
+      openWalletConnectChooser({ returnPath: "/terminal" });
+    }
+  } catch (error) {
+    setError(error.message || "Action could not complete.");
+  } finally {
+    window.__SLIMEWIRE_EARLY_CONNECT_ACTION = null;
+  }
+}
+
 async function initializeApp() {
+  window.__SLIMEWIRE_APP_READY = true;
   installPerformanceInstrumentation();
   installCrashInstrumentation();
   installSlimewireImageFallbacks();
@@ -11862,6 +11895,7 @@ async function initializeApp() {
   applyChartRouteFromLocation();
   await handleMobileWalletReturn();
   render();
+  void consumeEarlyConnectAction().catch((error) => setError(error.message));
   if (state.route === "terminal") {
     ensureLivePairsWarmup({ force: true });
     void loadKolScan(state.kolMode, "", { silent: true }).catch((error) => setError(error.message));

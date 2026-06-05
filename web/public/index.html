@@ -326,6 +326,56 @@
           setRouteHidden("[data-dashboard]", route !== "terminal");
           document.querySelector("[data-terminal-global-search]")?.toggleAttribute("hidden", route !== "terminal");
           document.querySelector("[data-top-sync-strip]")?.toggleAttribute("hidden", route !== "terminal");
+          const connectStatus = () => document.querySelector("[data-connect-status], [data-wallet-connect-status]");
+          const say = (message) => {
+            const status = connectStatus();
+            if (status) status.textContent = message;
+          };
+          const queueAction = (action, target) => {
+            window.__SLIMEWIRE_EARLY_CONNECT_ACTION = {
+              action,
+              providerId: target?.dataset?.connectWallet || target?.dataset?.connectWalletProvider || "",
+              route: target?.dataset?.navRoute || "",
+              at: Date.now()
+            };
+          };
+          document.addEventListener("click", (event) => {
+            if (window.__SLIMEWIRE_APP_READY) return;
+            const source = event.target instanceof Element ? event.target : event.target?.parentElement;
+            const target = source?.closest?.("[data-web-signup-connect], [data-connect-wallet], [data-connect-create-account], [data-connect-login-toggle], [data-connect-create-wallet], [data-nav-route]");
+            if (!target) return;
+            const routeTarget = target.dataset.navRoute || "";
+            if (routeTarget) {
+              event.preventDefault();
+              window.location.assign(routeTarget);
+              return;
+            }
+            event.preventDefault();
+            if (target.matches("[data-connect-login-toggle]")) {
+              document.querySelector("[data-connect-login-panel]")?.removeAttribute("hidden");
+              say("Login is ready. Enter your account details.");
+              document.querySelector("[data-connect-login-username], [data-connect-login-email]")?.focus?.();
+              queueAction("login", target);
+              return;
+            }
+            if (target.matches("[data-connect-create-account]")) {
+              say("Loading account creation...");
+              queueAction("create-account", target);
+              return;
+            }
+            if (target.matches("[data-connect-create-wallet]")) {
+              say("Loading wallet creation...");
+              queueAction("create-wallet", target);
+              return;
+            }
+            if (target.matches("[data-connect-wallet]")) {
+              say(target.dataset.connectWallet ? `Loading ${target.dataset.connectWallet} connect...` : "Loading wallet connect...");
+              queueAction(target.dataset.connectWallet ? "connect-provider" : "open-wallet-chooser", target);
+              return;
+            }
+            say("Loading wallet options...");
+            queueAction("open-wallet-chooser", target);
+          }, { capture: true });
         })();
       </script>
 
