@@ -66,9 +66,15 @@ const report = {
     workerSecretRequired: matches(serverSource, /constantTimeStringEquals\(providedSecret, CONFIG\.workerSecret\)/),
     displayCacheWarmPath: matches(serverSource, /async function warmWorkerDisplayCaches/)
   },
+  webServiceInternalLoops: {
+    tpSlIntervalsGated: matches(serverSource, /CONFIG\.webInternalTpSlRunnersEnabled/) && matches(serverSource, /WEB_INTERNAL_TP_SL_RUNNERS_ENABLED/),
+    defaultOffWhenWorkerTickEnabled: matches(serverSource, /workerTickEnabled \? "false" : "true"/),
+    startupReconcileStillRuns: matches(serverSource, /startTpSlStartupReconcile\(\)/)
+  },
   renderWorkerProcess: {
     standaloneWorkerIntervals: matches(workerSource, /setInterval\(\(\) => void tick\(\), CONFIG\.intervalMs\)/),
     fastTpSlInterval: matches(workerSource, /setInterval\(\(\) => void tradePlanTick\(\), CONFIG\.tradePlanIntervalMs\)/),
+    broadTickSkipsFastPlanLoops: matches(workerSource, /runWebExitGuards: CONFIG\.runTradePlans && !CONFIG\.fastTpSlEnabled/) && matches(workerSource, /runTimedTradePlans: CONFIG\.runTradePlans && !CONFIG\.fastTpSlEnabled/),
     warmDisplayCachesSent: matches(workerSource, /warmDisplayCaches: CONFIG\.warmDisplayCaches/)
   },
   packageScripts: {
@@ -76,7 +82,7 @@ const report = {
     debugRegistered: matches(packageSource, /"debug:web-worker-loops": "node scripts\/debug-web-worker-loops\.js"/)
   },
   conclusion: browserWorkerSignals.length === 0 && browserPollingLoops.length === 0
-    ? "Browser/web UI has display polling only. Worker loops run in backend/worker process."
+    ? "Browser/web UI has display polling only. Web-service interval runners are gated off when external worker tick is enabled. Worker loops run in the Render worker process."
     : "Review browserWorkerSignals/browserPollingLoops before deploy."
 };
 

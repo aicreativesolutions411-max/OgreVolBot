@@ -19,15 +19,15 @@ console.log(`SlimeWire worker starting. Tick URL: ${CONFIG.tickUrl}`);
 if (CONFIG.tickUrls.length > 1) {
   console.log(`Worker fallback tick URLs: ${CONFIG.tickUrls.slice(1).join(", ")}`);
 }
-console.log(`Worker interval: ${CONFIG.intervalMs}ms. Feeds: ${CONFIG.warmFeeds ? "on" : "off"}. Display cache: ${CONFIG.warmDisplayCaches ? "on" : "off"}. Trade plans: ${CONFIG.runTradePlans ? "on" : "off"}.`);
-if (CONFIG.runTradePlans) {
+console.log(`Worker interval: ${CONFIG.intervalMs}ms. Feeds: ${CONFIG.warmFeeds ? "on" : "off"}. Display cache: ${CONFIG.warmDisplayCaches ? "on" : "off"}. Trade plans: ${CONFIG.runTradePlans ? "on" : "off"}. Fast TP/SL: ${CONFIG.fastTpSlEnabled ? "on" : "off"}.`);
+if (CONFIG.fastTpSlEnabled) {
   console.log(`Fast TP/SL worker interval: ${CONFIG.tradePlanIntervalMs}ms.`);
   console.log(`Broad portfolio TP/SL fallback interval: ${CONFIG.portfolioExitIntervalMs}ms.`);
 }
 
 setTimeout(() => void tick(), 500);
 setInterval(() => void tick(), CONFIG.intervalMs);
-if (CONFIG.runTradePlans) {
+if (CONFIG.fastTpSlEnabled) {
   setTimeout(() => void tradePlanTick(), 1000);
   setInterval(() => void tradePlanTick(), CONFIG.tradePlanIntervalMs);
 }
@@ -36,12 +36,13 @@ function loadWorkerConfig() {
   const baseUrl = (process.env.WORKER_TICK_BASE_URL || process.env.TELEGRAM_WEBHOOK_URL || process.env.KEEPALIVE_URL || "").replace(/\/$/, "");
   const tickUrl = process.env.WORKER_TICK_URL || (baseUrl ? `${baseUrl}/api/internal/worker/tick` : "");
   const secret = process.env.WORKER_SECRET || "";
-  const intervalMs = clampInteger(process.env.WORKER_TICK_INTERVAL_MS, 2_000, 1_000, 60_000);
+  const intervalMs = clampInteger(process.env.WORKER_TICK_INTERVAL_MS, 15_000, 5_000, 120_000);
   const tradePlanIntervalMs = clampInteger(process.env.WORKER_TRADE_PLAN_INTERVAL_MS, 1_500, 750, 30_000);
   const portfolioExitIntervalMs = clampInteger(process.env.WORKER_PORTFOLIO_EXIT_INTERVAL_MS, 30_000, 5_000, 300_000);
   const timeoutMs = clampInteger(process.env.WORKER_TICK_TIMEOUT_MS, 20_000, 5_000, 120_000);
   const buckets = normalizeList(process.env.WORKER_TICK_BUCKETS || "live,under1h,under3h,under1d");
   const sorts = normalizeList(process.env.WORKER_TICK_SORTS || "best,newest");
+  const runTradePlans = parseBoolean(process.env.WORKER_TICK_RUN_TRADE_PLANS || "true");
 
   if (!tickUrl) {
     throw new Error("WORKER_TICK_URL or WORKER_TICK_BASE_URL must be set for the worker service.");
@@ -58,7 +59,8 @@ function loadWorkerConfig() {
     tradePlanIntervalMs,
     portfolioExitIntervalMs,
     timeoutMs,
-    runTradePlans: parseBoolean(process.env.WORKER_TICK_RUN_TRADE_PLANS || "true"),
+    runTradePlans,
+    fastTpSlEnabled: runTradePlans && parseBoolean(process.env.WORKER_FAST_TP_SL_ENABLED || "true"),
     runDcaPlans: parseBoolean(process.env.WORKER_TICK_RUN_DCA_PLANS || "true"),
     warmFeeds: parseBoolean(process.env.WORKER_TICK_WARM_FEEDS || "true"),
     warmDisplayCaches: parseBoolean(process.env.WORKER_TICK_WARM_DISPLAY_CACHES || "true"),
@@ -170,8 +172,8 @@ async function tick() {
           runTradePlans: CONFIG.runTradePlans,
           forceTradePlans: CONFIG.runTradePlans,
           runPortfolioExits,
-          runWebExitGuards: CONFIG.runTradePlans,
-          runTimedTradePlans: CONFIG.runTradePlans,
+          runWebExitGuards: CONFIG.runTradePlans && !CONFIG.fastTpSlEnabled,
+          runTimedTradePlans: CONFIG.runTradePlans && !CONFIG.fastTpSlEnabled,
           runDcaPlans: CONFIG.runDcaPlans,
           warmLivePairs: CONFIG.warmFeeds,
           warmDisplayCaches: CONFIG.warmDisplayCaches,

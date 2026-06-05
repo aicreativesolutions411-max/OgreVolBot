@@ -300,11 +300,19 @@ async function main() {
   startHealthServer();
   scheduleMetadataProviderStartupSmoke();
   startKeepAlivePinger();
-  startTradePlanRunner();
-  startWebExitGuardRunner();
-  startWebPortfolioExitRunner();
+  if (CONFIG.webInternalTpSlRunnersEnabled) {
+    startTradePlanRunner();
+    startWebExitGuardRunner();
+    startWebPortfolioExitRunner();
+  } else {
+    console.log("Web internal TP/SL interval runners disabled; Render worker tick owns DB-backed TP/SL checks.");
+  }
   startTpSlStartupReconcile();
-  startDcaPlanRunner();
+  if (CONFIG.webInternalDcaRunnerEnabled) {
+    startDcaPlanRunner();
+  } else {
+    console.log("Web internal DCA interval runner disabled; Render worker tick owns DCA checks.");
+  }
 
   if (CONFIG.webhookUrl) {
     await setupWebhook();
@@ -399,6 +407,16 @@ function loadConfig() {
   const workerTickWarmFeeds = parseBoolean(process.env.WORKER_TICK_WARM_FEEDS || "true");
   const workerTickWarmDisplayCaches = parseBoolean(process.env.WORKER_TICK_WARM_DISPLAY_CACHES || "true");
   const workerDisplayCacheUserLimit = Number.parseInt(process.env.WORKER_DISPLAY_CACHE_USER_LIMIT || "8", 10);
+  const webInternalTpSlRunnersEnabled = parseBoolean(
+    process.env.WEB_INTERNAL_TP_SL_RUNNERS_ENABLED
+      || process.env.INTERNAL_TP_SL_RUNNERS_ENABLED
+      || (workerTickEnabled ? "false" : "true")
+  );
+  const webInternalDcaRunnerEnabled = parseBoolean(
+    process.env.WEB_INTERNAL_DCA_RUNNER_ENABLED
+      || process.env.INTERNAL_DCA_RUNNER_ENABLED
+      || (workerTickEnabled ? "false" : "true")
+  );
   const workerSecret = process.env.WORKER_SECRET || "";
   const cacheProvider = normalizeCacheProvider(process.env.CACHE_PROVIDER || process.env.KV_PROVIDER || "");
   const redisUrl = String(process.env.REDIS_URL || process.env.KV_REDIS_URL || process.env.SLIMEWIRE_REDIS_URL || "").trim();
@@ -659,6 +677,8 @@ function loadConfig() {
     workerTickWarmFeeds,
     workerTickWarmDisplayCaches,
     workerDisplayCacheUserLimit,
+    webInternalTpSlRunnersEnabled,
+    webInternalDcaRunnerEnabled,
     workerSecret,
     cacheProvider,
     redisUrl,
@@ -2094,6 +2114,8 @@ function handleInternalWorkerHealth(request, response) {
     warmFeeds: CONFIG.workerTickWarmFeeds,
     warmDisplayCaches: CONFIG.workerTickWarmDisplayCaches,
     displayCacheUserLimit: CONFIG.workerDisplayCacheUserLimit,
+    webInternalTpSlRunnersEnabled: CONFIG.webInternalTpSlRunnersEnabled,
+    webInternalDcaRunnerEnabled: CONFIG.webInternalDcaRunnerEnabled,
     cacheProvider: kvProviderName(),
     cacheConfigured: kvConfigured(),
     livePairRefreshSeconds: CONFIG.livePairsRefreshSeconds,
@@ -5821,49 +5843,76 @@ async function sellTokenAmountFromWalletViaPumpPortal(wallet, tokenMint, sellAmo
   const beforeSol = await rpcWithRetry("read SOL before PumpPortal sell", () => connection.getBalance(keypair.publicKey, "confirmed"), CONFIG.rpcRetries, {
     priority
   }).catch(() => null);
-  const requestPayload = {
+  const baseRequestPayload = {
     publicKey: keypair.publicKey.toBase58(),
     action: "sell",
     mint: tokenMint,
     denominatedInSol: "false",
     amount: sellPercent >= 99.999 ? "100%" : `${sellPercent}%`,
     slippage: slippagePct,
-    priorityFee: CONFIG.pumpLaunchPriorityFeeSol,
-    pool: "auto"
+    priorityFee: CONFIG.pumpLaunchPriorityFeeSol
   };
+  const pools = pumpPortalSellPoolAttempts(tokenMint, options);
+  const pumpErrors = [];
 
-  try {
-    const tx = await requestPumpPortalLocalTransaction(requestPayload, timeoutMs, {
-      url: CONFIG.pumpPortalTradeLocalUrl
-    });
-    let signature;
-    if (tx?.signature) {
-      signature = tx.signature;
-    } else {
-      tx.sign([keypair]);
-      signature = await sendVersionedTransaction(tx, "send PumpPortal sell transaction");
-    }
-
-    invalidateWalletReadCache(wallet.publicKey);
-    const afterSol = await rpcWithRetry("read SOL after PumpPortal sell", () => connection.getBalance(keypair.publicKey, "confirmed"), CONFIG.rpcRetries, {
-      priority
-    }).catch(() => null);
-    const grossOutLamports = Number.isFinite(beforeSol) && Number.isFinite(afterSol)
-      ? Math.max(0, Number(afterSol) - Number(beforeSol))
-      : 0;
-    return {
-      signature,
-      outputAmount: String(Math.floor(grossOutLamports)),
-      tokenAmount: sellAmount.toString(),
-      attempts: 1,
-      provider: "pumpportal"
+  for (const pool of pools) {
+    const requestPayload = {
+      ...baseRequestPayload,
+      pool
     };
-  } catch (pumpError) {
-    if (!jupiterError) {
-      throw new Error(`PumpPortal sell failed: ${friendlyError(pumpError)}`);
+
+    try {
+      const tx = await requestPumpPortalLocalTransaction(requestPayload, timeoutMs, {
+        url: CONFIG.pumpPortalTradeLocalUrl
+      });
+      let signature;
+      if (tx?.signature) {
+        signature = tx.signature;
+      } else {
+        tx.sign([keypair]);
+        signature = await sendVersionedTransaction(tx, `send PumpPortal sell transaction (${pool})`);
+      }
+
+      invalidateWalletReadCache(wallet.publicKey);
+      const afterSol = await rpcWithRetry("read SOL after PumpPortal sell", () => connection.getBalance(keypair.publicKey, "confirmed"), CONFIG.rpcRetries, {
+        priority
+      }).catch(() => null);
+      const grossOutLamports = Number.isFinite(beforeSol) && Number.isFinite(afterSol)
+        ? Math.max(0, Number(afterSol) - Number(beforeSol))
+        : 0;
+      return {
+        signature,
+        outputAmount: String(Math.floor(grossOutLamports)),
+        tokenAmount: sellAmount.toString(),
+        attempts: pools.indexOf(pool) + 1,
+        provider: `pumpportal:${pool}`
+      };
+    } catch (pumpError) {
+      pumpErrors.push(`${pool}: ${friendlyError(pumpError)}`);
     }
-    throw new Error(`Jupiter sell failed: ${friendlyError(jupiterError)}. PumpPortal sell fallback failed: ${friendlyError(pumpError)}`);
   }
+
+  const pumpMessage = pumpErrors.length ? pumpErrors.join(" | ") : "all PumpPortal pool attempts failed";
+  if (!jupiterError) {
+    throw new Error(`PumpPortal sell failed: ${pumpMessage}`);
+  }
+  throw new Error(`Jupiter sell failed: ${friendlyError(jupiterError)}. PumpPortal sell fallback failed: ${pumpMessage}`);
+}
+
+function pumpPortalSellPoolAttempts(tokenMint, options = {}) {
+  const configured = Array.isArray(options.pumpPortalPools)
+    ? options.pumpPortalPools
+    : String(options.pumpPortalPools || process.env.PUMP_PORTAL_SELL_POOLS || "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+  const mintText = String(tokenMint || "").trim().toLowerCase();
+  const defaults = mintText.endsWith("pump")
+    ? ["pump", "pump-amm", "auto"]
+    : ["auto", "pump-amm", "pump"];
+  return [...new Set([...(configured.length ? configured : defaults), ...defaults]
+    .map((pool) => String(pool || "").trim().toLowerCase())
+    .filter((pool) => ["pump", "pump-amm", "auto", "raydium"].includes(pool)))];
 }
 
 async function getReliableTokenBalanceForMint(owner, mint, options = {}) {
@@ -6355,6 +6404,11 @@ function isActiveWebExitGuardStatus(status) {
 
 function isTerminalWebExitGuardStatus(status) {
   return ["sold", "confirmed", "failed", "canceled", "cancelled", "skipped"].includes(String(status || "").toLowerCase());
+}
+
+function isNoLiveTokenBalanceError(error) {
+  const text = friendlyError(error).toLowerCase();
+  return /no live token balance|no token balance|sell amount rounded to zero/.test(text);
 }
 
 function webExitGuardKey(planId, walletPublicKey, buySignature = "") {
@@ -7052,6 +7106,24 @@ async function processWebPortfolioExits(options = {}) {
         summary.soldPositions += 1;
         summary.messages.push(`${wallet.label}: portfolio watchdog sold ${shortMint(entry.tokenMint)} by ${triggerReason}`);
       } catch (error) {
+        if (isNoLiveTokenBalanceError(error)) {
+          logTpSlEvent("tp_sl_trade_skipped", {
+            tradeId: webPortfolioPositionKey(entry),
+            userId: entry.userId,
+            source: "web_portfolio_exit_watchdog",
+            symbol: entry.tokenMint,
+            side: "LONG",
+            status: "SKIPPED",
+            currentPrice: estimate?.movePct ?? memory.lastMovePct ?? null,
+            stopLoss: walletStopLossPct(plan, planWallet) ? -stopLossTriggerPercent(walletStopLossPct(plan, planWallet), CONFIG.stopLossTriggerBufferPct) : null,
+            takeProfit: walletTakeProfitPct(plan, planWallet) || null,
+            trigger: /^stop-loss\b/i.test(String(triggerReason || "")) ? "STOP_LOSS" : /^take-profit\b/i.test(String(triggerReason || "")) ? "TAKE_PROFIT" : null,
+            reason: `no live token balance; nothing to sell after ${triggerReason}`
+          });
+          webPortfolioExitState.delete(key);
+          summary.messages.push(`${entry.walletLabel}: no live token balance for ${shortMint(entry.tokenMint)} after ${triggerReason}; watchdog skipped it.`);
+          return;
+        }
         logTpSlEvent("tp_sl_trade_failed", {
           tradeId: webPortfolioPositionKey(entry),
           userId: entry.userId,
@@ -7416,6 +7488,40 @@ async function markTradePlanWalletExitedFromGuard(guard, sell = {}, triggerReaso
   planWallet.soldAt = guard.soldAt || now;
   planWallet.updatedAt = now;
   plan.results = appendLimited(plan.results, `${planWallet.label || guard.walletLabel}: closed by web exit guard - ${triggerReason}`);
+
+  if ((plan.wallets || []).every((wallet) => !isActiveTimedWalletStatus(wallet.status))) {
+    plan.status = "completed";
+    plan.completedAt = plan.completedAt || now;
+  }
+
+  await writeTradePlans(store);
+  return true;
+}
+
+async function markTradePlanWalletNoLiveBalanceFromGuard(guard, triggerReason = "web exit guard") {
+  if (!guard?.planId || !guard?.walletPublicKey) return false;
+
+  const store = await readTradePlans();
+  const match = findTradePlanWalletForGuard(store, guard);
+  if (!match) return false;
+
+  const { plan, planWallet } = match;
+  if (!isActiveTimedWalletStatus(planWallet.status)) return false;
+
+  const now = new Date().toISOString();
+  planWallet.status = "skipped";
+  planWallet.exitStatus = "skipped";
+  planWallet.triggerStatus = "no-live-token-balance";
+  planWallet.triggerReason = triggerReason;
+  planWallet.triggerKind = guard.triggerKind || (/^stop-loss\b/i.test(String(triggerReason)) ? "stop-loss" : /^take-profit\b/i.test(String(triggerReason)) ? "take-profit" : null);
+  planWallet.failures = Number.parseInt(planWallet.failures || 0, 10) || 0;
+  planWallet.error = guard.lastError || "no live token balance";
+  planWallet.lastError = planWallet.error;
+  planWallet.retryAfterAt = null;
+  planWallet.nextRetryAt = null;
+  planWallet.noLiveTokenBalanceAt = now;
+  planWallet.updatedAt = now;
+  plan.results = appendLimited(plan.results, `${planWallet.label || guard.walletLabel}: skipped by web exit guard - no live token balance after ${triggerReason}`);
 
   if ((plan.wallets || []).every((wallet) => !isActiveTimedWalletStatus(wallet.status))) {
     plan.status = "completed";
@@ -7857,6 +7963,41 @@ async function processWebExitGuard(guard, walletStore, options = {}) {
   } catch (error) {
     const failures = Number.parseInt(guard.failures || 0, 10) + 1;
     const priceExit = isPriceExitTrigger(triggerReason);
+    if (isNoLiveTokenBalanceError(error)) {
+      const nowIso = new Date().toISOString();
+      guard.failures = failures;
+      guard.status = "skipped";
+      guard.exitStatus = "skipped";
+      guard.triggerStatus = "no-live-token-balance";
+      guard.triggerReason = triggerReason;
+      guard.error = friendlyError(error);
+      guard.lastError = friendlyError(error);
+      guard.noLiveTokenBalanceAt = nowIso;
+      guard.retryAfterAt = null;
+      guard.nextRetryAt = null;
+      guard.updatedAt = nowIso;
+      await markTradePlanWalletNoLiveBalanceFromGuard(guard, triggerReason);
+      logTpSlEvent("tp_sl_trade_skipped", {
+        tradeId: guard.key || guard.id,
+        userId: guard.userId,
+        walletPublicKey: guard.walletPublicKey,
+        source: guard.planSource || guard.source || "web_exit_guard",
+        symbol: guard.tokenMint,
+        side: "LONG",
+        status: "SKIPPED",
+        currentPrice: guard.lastTriggerMovePct ?? guard.lastMovePct ?? null,
+        stopLoss: guard.stopLossPct ? -stopLossTriggerPercent(guard.stopLossPct, CONFIG.stopLossTriggerBufferPct) : null,
+        takeProfit: guard.takeProfitPct || null,
+        trigger: /^stop-loss\b/i.test(String(triggerReason || "")) ? "STOP_LOSS" : /^take-profit\b/i.test(String(triggerReason || "")) ? "TAKE_PROFIT" : null,
+        reason: `no live token balance; nothing to sell after ${triggerReason}`
+      });
+      return {
+        changed: true,
+        triggered: priceExit,
+        failed: false,
+        message: `${guard.walletLabel || guard.walletPublicKey}: no live token balance for ${shortMint(guard.tokenMint)} after ${triggerReason}; guard marked skipped.`
+      };
+    }
     logTpSlEvent("tp_sl_trade_failed", {
       tradeId: guard.key || guard.id,
       userId: guard.userId,
@@ -8402,6 +8543,30 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
   } catch (error) {
     const failures = Number.parseInt(planWallet.failures || 0, 10) + 1;
     const priceExit = isPriceExitTrigger(triggerReason);
+    if (isNoLiveTokenBalanceError(error)) {
+      const nowIso = new Date().toISOString();
+      planWallet.failures = failures;
+      planWallet.status = "skipped";
+      planWallet.exitStatus = "skipped";
+      planWallet.triggerStatus = "no-live-token-balance";
+      planWallet.triggerReason = triggerReason;
+      planWallet.error = friendlyError(error);
+      planWallet.lastError = friendlyError(error);
+      planWallet.noLiveTokenBalanceAt = nowIso;
+      planWallet.retryAfterAt = null;
+      planWallet.nextRetryAt = null;
+      planWallet.updatedAt = nowIso;
+      logTradePlanExitEvent("tp_sl_trade_skipped", plan, planWallet, null, triggerReason, {
+        reason: `no live token balance; nothing to sell after ${triggerReason}`
+      });
+      return {
+        changed: true,
+        triggered: priceExit,
+        sold: false,
+        failed: false,
+        message: `${planWallet.label}: no live token balance for ${shortMint(plan.tokenMint)} after ${triggerReason}; marked closed so TP/SL can keep scanning other positions.`
+      };
+    }
     logTradePlanExitEvent("tp_sl_trade_failed", plan, planWallet, null, triggerReason, {
       reason: friendlyError(error)
     });

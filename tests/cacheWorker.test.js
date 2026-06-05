@@ -86,14 +86,31 @@ test("live pair feeds use shared KV cache and stale rows while background refres
 test("backend worker warms display caches and keeps TP/SL DB-backed", () => {
   assert.match(serverSource, /async function warmWorkerDisplayCaches/);
   assert.match(serverSource, /result\.displayCaches = await runWorkerTask\("displayCaches"/);
+  assert.match(serverSource, /webInternalTpSlRunnersEnabled/);
+  assert.match(serverSource, /WEB_INTERNAL_TP_SL_RUNNERS_ENABLED/);
+  assert.match(serverSource, /workerTickEnabled \? "false" : "true"/);
   assert.match(serverSource, /processWebExitGuards/);
   assert.match(serverSource, /processTradePlans/);
   assert.match(serverSource, /processWebPortfolioExits/);
   assert.match(serverSource, /constantTimeStringEquals\(providedSecret, CONFIG\.workerSecret\)/);
+  assert.match(workerSource, /fastTpSlEnabled/);
+  assert.match(workerSource, /runWebExitGuards: CONFIG\.runTradePlans && !CONFIG\.fastTpSlEnabled/);
+  assert.match(workerSource, /runTimedTradePlans: CONFIG\.runTradePlans && !CONFIG\.fastTpSlEnabled/);
   assert.match(workerSource, /warmDisplayCaches: CONFIG\.warmDisplayCaches/);
   assert.match(workerSource, /displayCacheUserLimit: CONFIG\.displayCacheUserLimit/);
   assert.match(workerSource, /Display cache: \$/);
   assert.match(workerSource, /tradePlanTick/);
+});
+
+test("TP/SL sell reliability retries PumpPortal pools and reconciles missing token balances", () => {
+  assert.match(serverSource, /function pumpPortalSellPoolAttempts/);
+  assert.match(serverSource, /\["pump", "pump-amm", "auto"\]/);
+  assert.match(serverSource, /for \(const pool of pools\)/);
+  assert.match(serverSource, /provider: `pumpportal:\$\{pool\}`/);
+  assert.match(serverSource, /function isNoLiveTokenBalanceError/);
+  assert.match(serverSource, /no-live-token-balance/);
+  assert.match(serverSource, /tp_sl_trade_skipped/);
+  assert.match(serverSource, /no live token balance; nothing to sell after/);
 });
 
 test("web app has display polling only and debug command proves worker loops stay backend-side", () => {
@@ -104,5 +121,7 @@ test("web app has display polling only and debug command proves worker loops sta
   assert.match(debugLoopsSource, /WEB WORKER LOOP DEBUG/);
   assert.match(debugLoopsSource, /forbiddenWorkerSignals/);
   assert.match(debugLoopsSource, /Browser\/web UI has display polling only/);
+  assert.match(debugLoopsSource, /webServiceInternalLoops/);
+  assert.match(debugLoopsSource, /broadTickSkipsFastPlanLoops/);
   assert.match(debugLoopsSource, /displayCacheWarmPath/);
 });
