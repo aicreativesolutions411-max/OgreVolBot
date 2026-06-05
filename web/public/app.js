@@ -491,10 +491,20 @@ function tabForPath(pathname = window.location.pathname) {
   return "terminal";
 }
 
+function closeTransientInteractionLayers({ keepLogin = false } = {}) {
+  state.walletConnectMenuOpen = false;
+  if (!keepLogin) state.loginModalOpen = false;
+  if (state.quickBuyModal?.open) {
+    state.quickBuyModal = { ...state.quickBuyModal, open: false, status: "", error: "" };
+  }
+  syncInteractionLocks();
+}
+
 function navigateTo(pathname, tab = null) {
   const startedAt = perfNow();
   const nextPath = pathname || "/terminal";
   state.route = routeForPath(nextPath);
+  closeTransientInteractionLayers({ keepLogin: state.route === "login" });
   if (state.route === "login") state.loginModalOpen = true;
   if (state.route === "terminal") state.activeTab = tab || tabForPath(nextPath);
   window.history.pushState({}, "", nextPath);
@@ -508,6 +518,8 @@ function navigateTo(pathname, tab = null) {
 
 window.addEventListener("popstate", () => {
   state.route = routeForPath();
+  closeTransientInteractionLayers({ keepLogin: state.route === "login" });
+  if (state.route === "login") state.loginModalOpen = true;
   state.activeTab = tabForPath();
   applyChartRouteFromLocation();
   render();
@@ -3001,6 +3013,21 @@ function syncShellRouteVisibility() {
   setHidden("[data-top-sync-strip]", state.route !== "terminal");
 }
 
+function syncInteractionLocks() {
+  const loginOpen = Boolean(loginModal && state.loginModalOpen);
+  const quickBuyOpen = Boolean(state.quickBuyModal?.open);
+  document.body.classList.toggle("login-modal-open", loginOpen);
+  document.body.classList.toggle("quick-buy-modal-open", quickBuyOpen);
+  if (!loginOpen && !quickBuyOpen) {
+    document.body.style.overflow = "";
+    document.documentElement.style.overflow = "";
+  }
+  const walletModal = $("[data-wallet-connect-modal]");
+  if (walletModal) walletModal.style.pointerEvents = walletModal.hidden ? "none" : "";
+  const quickBuyRoot = $("[data-quick-buy-modal-root]");
+  if (quickBuyRoot) quickBuyRoot.style.pointerEvents = quickBuyRoot.hidden ? "none" : "";
+}
+
 function render(options = {}) {
   if (!app || !loginView || !dashboardView) return;
   syncShellRouteVisibility();
@@ -3073,6 +3100,7 @@ function render(options = {}) {
   if (state.route === "terminal") renderTabs();
   renderWalletConnectModal();
   renderQuickBuyModal();
+  syncInteractionLocks();
   applyActionButtonStates();
   const durationMs = perfNow() - startedAt;
   if (durationMs >= 16 || state.perfRenderCounts[renderKey] % 20 === 0) {
@@ -3086,6 +3114,7 @@ function render(options = {}) {
   }
   } catch (error) {
     syncShellRouteVisibility();
+    syncInteractionLocks();
     recordCrashEvent({
       component: "render-boundary",
       errorCode: error?.name || "RENDER_FAILED",
@@ -11855,39 +11884,7 @@ document.addEventListener("visibilitychange", () => {
 
 window.addEventListener("focus", resumeLiveFeeds);
 
-async function consumeEarlyConnectAction() {
-  const action = window.__SLIMEWIRE_EARLY_CONNECT_ACTION;
-  if (!action || action.consumed) return;
-  window.__SLIMEWIRE_EARLY_CONNECT_ACTION = { ...action, consumed: true };
-  try {
-    if (action.action === "login") {
-      openLoginModal({ connectPanel: true, source: "early-connect-login" });
-      return;
-    }
-    if (action.action === "create-account") {
-      await createWebAccount();
-      return;
-    }
-    if (action.action === "create-wallet") {
-      await createAccountAndOpenWallets();
-      return;
-    }
-    if (action.action === "connect-provider" && action.providerId) {
-      await connectBrowserWallet(action.providerId, { returnPath: "/terminal" });
-      return;
-    }
-    if (action.action === "open-wallet-chooser") {
-      openWalletConnectChooser({ returnPath: "/terminal" });
-    }
-  } catch (error) {
-    setError(error.message || "Action could not complete.");
-  } finally {
-    window.__SLIMEWIRE_EARLY_CONNECT_ACTION = null;
-  }
-}
-
 async function initializeApp() {
-  window.__SLIMEWIRE_APP_READY = true;
   installPerformanceInstrumentation();
   installCrashInstrumentation();
   installSlimewireImageFallbacks();
@@ -11895,7 +11892,6 @@ async function initializeApp() {
   applyChartRouteFromLocation();
   await handleMobileWalletReturn();
   render();
-  void consumeEarlyConnectAction().catch((error) => setError(error.message));
   if (state.route === "terminal") {
     ensureLivePairsWarmup({ force: true });
     void loadKolScan(state.kolMode, "", { silent: true }).catch((error) => setError(error.message));

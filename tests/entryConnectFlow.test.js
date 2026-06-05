@@ -68,15 +68,15 @@ test("entry wallet cards start provider connect flow while main connect opens ch
   assert.match(htmlSource, /data-web-signup-connect>Connect Wallet/);
 });
 
-test("connect page has early click fallback before app bundle is ready", () => {
-  assert.match(htmlSource, /window\.__SLIMEWIRE_EARLY_CONNECT_ACTION/);
-  assert.match(htmlSource, /window\.__SLIMEWIRE_APP_READY/);
-  assert.match(htmlSource, /\[data-web-signup-connect\], \[data-connect-wallet\], \[data-connect-create-account\], \[data-connect-login-toggle\], \[data-connect-create-wallet\], \[data-nav-route\]/);
-  assert.match(htmlSource, /document\.querySelector\("\[data-connect-login-panel\]"\)\?\.removeAttribute\("hidden"\)/);
-  assert.match(htmlSource, /window\.location\.assign\(routeTarget\)/);
-  assert.match(appSource, /async function consumeEarlyConnectAction\(\)/);
-  assert.match(appSource, /window\.__SLIMEWIRE_APP_READY = true/);
-  assert.match(appSource, /void consumeEarlyConnectAction\(\)\.catch/);
+test("connect page has route bootstrap without a global capture click blocker", () => {
+  assert.match(htmlSource, /<a class="swamp-splash-button" href="\/connect" data-nav-route="\/connect" aria-label="Enter the Swamp">/);
+  assert.match(htmlSource, /const route = path\.startsWith\("\/login"\)/);
+  assert.match(htmlSource, /setRouteHidden\("\[data-connect\]", route !== "connect"\)/);
+  assert.doesNotMatch(htmlSource, /window\.__SLIMEWIRE_EARLY_CONNECT_ACTION/);
+  assert.doesNotMatch(htmlSource, /window\.__SLIMEWIRE_APP_READY/);
+  assert.doesNotMatch(htmlSource, /document\.addEventListener\("click"[\s\S]*\{ capture: true \}/);
+  assert.doesNotMatch(appSource, /async function consumeEarlyConnectAction\(\)/);
+  assert.doesNotMatch(appSource, /void consumeEarlyConnectAction\(\)\.catch/);
 });
 
 test("Lock In opens login panels instead of toggling them closed", () => {
@@ -103,4 +103,15 @@ test("entry/connect mobile performance avoids the heaviest frame filters", () =>
   assert.match(overridesSource, /background-attachment: scroll !important/);
   assert.match(overridesSource, /filter: none !important/);
   assert.match(overridesSource, /backdrop-filter: none !important/);
+});
+
+test("closed interaction layers cannot block clicks or keep scroll locked", () => {
+  assert.match(appSource, /function syncInteractionLocks\(\)/);
+  assert.match(appSource, /document\.body\.style\.overflow = ""/);
+  assert.match(appSource, /document\.documentElement\.style\.overflow = ""/);
+  assert.match(appSource, /function closeTransientInteractionLayers/);
+  assert.match(overridesSource, /\.wallet-connect-modal\[hidden\][\s\S]*pointer-events: none !important/);
+  assert.match(overridesSource, /\.login-modal\[hidden\][\s\S]*pointer-events: none !important/);
+  assert.match(overridesSource, /\[data-quick-buy-modal-root\]\[hidden\][\s\S]*pointer-events: none !important/);
+  assert.match(overridesSource, /body:not\(\.login-modal-open\):not\(\.quick-buy-modal-open\)\s*\{[\s\S]*overflow-y: auto !important/);
 });

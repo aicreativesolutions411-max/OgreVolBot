@@ -6453,3 +6453,126 @@ body.login-modal-open {
     scroll-behavior: auto !important;
   }
 }
+
+/* 2026-06-05 interaction regression guard.
+   Keep decorative slime art inert, closed portals unable to catch taps, and
+   route pages scrollable after modals/drawers close. */
+html {
+  min-height: 100% !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+}
+
+body:not(.login-modal-open):not(.quick-buy-modal-open) {
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+}
+
+body,
+[data-app] {
+  -webkit-overflow-scrolling: touch !important;
+}
+
+[data-app] {
+  min-height: 100dvh !important;
+  overflow: visible !important;
+}
+
+[data-app][data-route="intro"],
+[data-app][data-route="connect"] {
+  min-height: 100dvh !important;
+  height: auto !important;
+  overflow-x: hidden !important;
+  overflow-y: visible !important;
+}
+
+[data-app][data-route="intro"] .login-view.swamp-splash,
+[data-app][data-route="connect"] .connect-view {
+  min-height: 100dvh !important;
+  height: auto !important;
+  overflow-x: hidden !important;
+  overflow-y: visible !important;
+  padding-bottom: max(18px, env(safe-area-inset-bottom)) !important;
+}
+
+[data-app][data-route="connect"] .swamp-connect-shell,
+[data-app][data-route="connect"] .connect-card,
+[data-app][data-route="connect"] .connect-actions,
+[data-app][data-route="connect"] .connect-secondary-actions {
+  max-height: none !important;
+  overflow: visible !important;
+}
+
+.wallet-connect-modal[hidden],
+.login-modal[hidden],
+[data-quick-buy-modal-root][hidden] {
+  display: none !important;
+  pointer-events: none !important;
+}
+
+.wallet-connect-modal:not([hidden]),
+.login-modal:not([hidden]),
+[data-quick-buy-modal-root]:not([hidden]) {
+  pointer-events: auto !important;
+}
+
+.login-view.swamp-splash::before,
+[data-app][data-route="connect"] .swamp-connect-shell::before,
+[data-app][data-route="connect"] .connect-provider-row > .provider-orb::after,
+[data-app][data-route="connect"] .connect-method-card::after,
+.swamp-connect-shell::before,
+.swamp-connect-shell::after,
+.connect-card::before,
+.connect-card::after,
+.terminal-card::before,
+.terminal-card::after,
+.slime-card::before,
+.slime-card::after {
+  pointer-events: none !important;
+}
+
+button,
+a,
+input,
+select,
+textarea,
+[role="button"],
+[data-token-chart],
+[data-token-trade],
+[data-quick-buy-token],
+[data-web-signup-connect],
+[data-connect-wallet],
+[data-open-login],
+[data-connect-login-toggle] {
+  pointer-events: auto;
+}
+
+.chart-trade-page,
+.chart-trade-layout,
+.chart-trade-panel,
+.quick-buy-dialog,
+.wallet-connect-dialog,
+.login-modal-card {
+  touch-action: manipulation !important;
+}
+
+@media (max-width: 760px) {
+  [data-app][data-route="connect"] .connect-view {
+    display: block !important;
+  }
+
+  [data-app][data-route="connect"] .swamp-connect-shell {
+    aspect-ratio: auto !important;
+    width: min(100%, calc(100vw - 18px)) !important;
+    margin: 8px auto max(18px, env(safe-area-inset-bottom)) !important;
+  }
+
+  [data-app][data-route="terminal"] .dashboard,
+  [data-app][data-route="terminal"] .dashboard-view,
+  [data-app][data-route="terminal"] .dashboard-body,
+  [data-app][data-route="terminal"] .dashboard-content {
+    height: auto !important;
+    max-height: none !important;
+    overflow-y: visible !important;
+  }
+}
