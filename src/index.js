@@ -106,6 +106,7 @@ const dexSearchCandidatesCache = new Map();
 let photonNewPairsCache = { cachedAt: 0, value: [] };
 let manualLaunchCandidatesCache = { cachedAt: 0, value: [] };
 let livePairsSharedCache = new Map();
+let chartBootstrapSharedCache = new Map();
 const solanaTrackerCache = new Map();
 const madeOnSolCache = new Map();
 const webLoginAttemptLimits = new Map();
@@ -1435,6 +1436,16 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "GET" && pathname === "/api/web/chart/bootstrap") {
+      const tokenMint = requestUrl.searchParams.get("token") || requestUrl.searchParams.get("tokenMint") || requestUrl.searchParams.get("mint") || "";
+      const force = parseBoolean(requestUrl.searchParams.get("force") || "false");
+      sendWebJson(request, response, 200, {
+        ok: true,
+        chart: await ChartDataService.getChartBootstrap(tokenMint, { force })
+      });
+      return;
+    }
+
     if (request.method === "GET" && pathname === "/api/web/kol/scan") {
       const auth = await authenticateOptionalWebRequest(request);
       const mode = requestUrl.searchParams.get("mode") || "hot";
@@ -1959,6 +1970,16 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendWebJson(request, response, 200, {
         ok: true,
         dexToken: await webDexToken(tokenMint)
+      });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/chart/bootstrap") {
+      const tokenMint = requestUrl.searchParams.get("token") || requestUrl.searchParams.get("tokenMint") || requestUrl.searchParams.get("mint") || "";
+      const force = parseBoolean(requestUrl.searchParams.get("force") || "false");
+      sendWebJson(request, response, 200, {
+        ok: true,
+        chart: await ChartDataService.getChartBootstrap(tokenMint, { force })
       });
       return;
     }
@@ -23363,39 +23384,286 @@ async function buildWebLivePairs(userId, bucket = "live", options = {}) {
   };
 }
 
-async function webDexToken(tokenMint = "") {
-  const mint = String(tokenMint || "").trim();
-  if (!mint || mint.length < 32 || mint.length > 64) {
-    return {
-      tokenMint: mint,
-      pairAddress: "",
-      dexUrl: "",
-      source: "dexscreener",
-      errorCode: "INVALID_TOKEN"
-    };
-  }
+const CHART_BOOTSTRAP_FRESH_MS = 15 * 1000;
+const CHART_BOOTSTRAP_STALE_MS = 30 * 60 * 1000;
+const CHART_BOOTSTRAP_DEDUPE_MS = 12 * 1000;
 
-  const pairs = await fetchDexScreenerTokenPairsBatch([mint], { timeoutMs: 3_500 }).catch(() => []);
-  const best = bestDexPairForToken(mint, pairs);
+function chartBootstrapCacheName(mint = "") {
+  return `web:chart-bootstrap:${String(mint || "").trim()}`;
+}
+
+function chartCandleCacheKey(address = "", timeframe = "embed-default") {
+  const safeAddress = String(address || "").trim().replace(/[^\w-]/g, "_").slice(0, 80);
+  const safeTimeframe = String(timeframe || "embed-default").trim().replace(/[^\w:-]/g, "_").slice(0, 40);
+  return `web:chart-candles:dexscreener-embed:solana:${safeAddress}:${safeTimeframe}`;
+}
+
+function dexScreenerEmbedUrl(address = "", options = {}) {
+  const safeAddress = String(address || "").trim();
+  const params = new URLSearchParams({
+    embed: "1",
+    theme: "dark",
+    trades: options.trades ? "1" : "0",
+    info: options.info ? "1" : "0"
+  });
+  return `https://dexscreener.com/solana/${encodeURIComponent(safeAddress)}?${params.toString()}`;
+}
+
+function chartProviderStatusSnippet(best = null) {
+  if (!best) return "no-pair";
+  return firstString(best.dexId, best.dexName, best.url, best.pairAddress, best.address).slice(0, 120);
+}
+
+function chartBootstrapFromDexPair(mint = "", best = null, timings = {}) {
   const meta = metadataFromDexPair(mint, best);
   const pairAddress = firstString(meta.pairAddress, best?.pairAddress, best?.address);
+  const chartAddress = pairAddress || mint;
+  const dexUrlValue = firstString(best?.url, meta.pairUrl, pairAddress ? `https://dexscreener.com/solana/${pairAddress}` : `https://dexscreener.com/solana/${mint}`);
+  const candleKey = chartCandleCacheKey(chartAddress);
+  const nowIso = new Date().toISOString();
   return {
     tokenMint: mint,
+    tokenAddress: mint,
     pairAddress,
-    dexUrl: firstString(best?.url, meta.pairUrl, pairAddress ? `https://dexscreener.com/solana/${pairAddress}` : ""),
-    pairUrl: firstString(best?.url, meta.pairUrl),
+    dexUrl: dexUrlValue,
+    pairUrl: firstString(best?.url, meta.pairUrl, dexUrlValue),
     dexId: meta.dexId || firstString(best?.dexId, best?.dexName),
     dexName: meta.dexName || firstString(best?.dexId, best?.dexName),
-    symbol: meta.symbol || "",
-    name: meta.name || "",
+    symbol: meta.symbol || shortMint(mint),
+    name: meta.name || (mint.toLowerCase().endsWith("pump") ? "Pump.fun Token" : "Token"),
     imageUrl: meta.imageUrl || "",
     marketCap: meta.marketCap || 0,
     fdv: meta.fdv || 0,
     liquidityUsd: meta.liquidityUsd || 0,
     volume: meta.volume || null,
     txns: meta.txns || null,
-    source: "dexscreener",
-    resolvedAt: new Date().toISOString()
+    metadataSource: pairAddress ? "dexscreener" : (mint.toLowerCase().endsWith("pump") ? "pump-token-fallback" : "mint-fallback"),
+    chartProvider: "dexscreener-embed",
+    chartUrl: dexScreenerEmbedUrl(chartAddress, { trades: false, info: false }),
+    chartTxnsUrl: dexScreenerEmbedUrl(chartAddress, { trades: true, info: false }),
+    txnsUrl: dexScreenerEmbedUrl(chartAddress, { trades: true, info: false }),
+    infoUrl: dexScreenerEmbedUrl(chartAddress, { trades: false, info: true }),
+    candleCacheKey: candleKey,
+    candleCacheHit: false,
+    candleFetchMs: 0,
+    chartLibraryLoadMs: 0,
+    providerStatus: pairAddress ? "ok" : "pair-pending",
+    providerBodySnippet: chartProviderStatusSnippet(best),
+    cacheHit: false,
+    stale: false,
+    backgroundRefreshing: false,
+    timings: {
+      metadataMs: Number(timings.metadataMs || 0),
+      pairResolveMs: Number(timings.pairResolveMs || 0),
+      candleMs: 0,
+      chartLibMs: 0
+    },
+    resolvedAt: nowIso,
+    lastUpdatedAt: nowIso
+  };
+}
+
+async function buildWebChartBootstrap(tokenMint = "") {
+  const mint = String(tokenMint || "").trim();
+  const started = Date.now();
+  const pairs = await fetchDexScreenerTokenPairsBatch([mint], { timeoutMs: 2_500 }).catch(() => []);
+  const pairResolveMs = Date.now() - started;
+  const best = bestDexPairForToken(mint, pairs);
+  const chart = chartBootstrapFromDexPair(mint, best, { pairResolveMs, metadataMs: pairResolveMs });
+  chart.rawProviderCount = pairs.length;
+  chart.pairResolutionMs = pairResolveMs;
+  return chart;
+}
+
+async function storeWebChartBootstrap(mint = "", value = {}) {
+  const cachedAt = Date.now();
+  const nextValue = {
+    ...value,
+    cacheHit: false,
+    stale: false,
+    backgroundRefreshing: false,
+    lastUpdatedAt: new Date(cachedAt).toISOString()
+  };
+  chartBootstrapSharedCache.set(mint, { cachedAt, value: nextValue, promise: null });
+  await CacheService.setJson(
+    externalCacheKey(chartBootstrapCacheName(mint), "global"),
+    displayCacheEnvelope(nextValue, cachedAt),
+    CHART_BOOTSTRAP_STALE_MS
+  );
+  logCacheEvent({
+    cacheName: chartBootstrapCacheName(mint),
+    action: "refresh-complete",
+    provider: CacheService.providerName(),
+    durationMs: Number(nextValue.pairResolutionMs || 0),
+    resultCount: nextValue.pairAddress ? 1 : 0
+  });
+  return nextValue;
+}
+
+function chartBootstrapCacheValue(value = {}, patch = {}) {
+  return {
+    ...value,
+    ...patch,
+    chartProvider: value.chartProvider || "dexscreener-embed",
+    candleCacheKey: value.candleCacheKey || chartCandleCacheKey(value.pairAddress || value.tokenMint || value.tokenAddress || ""),
+    candleFetchMs: 0,
+    chartLibraryLoadMs: 0
+  };
+}
+
+async function webChartBootstrap(tokenMint = "", options = {}) {
+  const mint = String(tokenMint || "").trim();
+  const force = Boolean(options.force);
+  if (!mint || mint.length < 32 || mint.length > 64) {
+    return {
+      tokenMint: mint,
+      tokenAddress: mint,
+      pairAddress: "",
+      dexUrl: "",
+      metadataSource: "invalid",
+      chartProvider: "dexscreener-embed",
+      candleCacheKey: chartCandleCacheKey(mint || "invalid"),
+      cacheHit: false,
+      stale: false,
+      backgroundRefreshing: false,
+      errorCode: "INVALID_TOKEN"
+    };
+  }
+
+  const now = Date.now();
+  const memory = chartBootstrapSharedCache.get(mint) || { cachedAt: 0, value: null, promise: null };
+  if (!force && memory.value && now - Number(memory.cachedAt || 0) < CHART_BOOTSTRAP_FRESH_MS) {
+    return chartBootstrapCacheValue(memory.value, {
+      cacheHit: true,
+      cacheSource: "memory",
+      stale: false,
+      backgroundRefreshing: false
+    });
+  }
+  if (!force && memory.promise && memory.value && now - Number(memory.cachedAt || 0) < CHART_BOOTSTRAP_STALE_MS) {
+    return chartBootstrapCacheValue(memory.value, {
+      cacheHit: true,
+      cacheSource: memory.value.cacheSource || "memory",
+      stale: true,
+      backgroundRefreshing: true
+    });
+  }
+
+  const externalKey = externalCacheKey(chartBootstrapCacheName(mint), "global");
+  if (!force) {
+    const external = await CacheService.getJson(externalKey);
+    if (external?.value && Number.isFinite(Number(external.cachedAt))) {
+      const ageMs = now - Number(external.cachedAt);
+      if (ageMs < CHART_BOOTSTRAP_FRESH_MS) {
+        chartBootstrapSharedCache.set(mint, { cachedAt: Number(external.cachedAt), value: external.value, promise: null });
+        logCacheEvent({ cacheName: chartBootstrapCacheName(mint), action: "kv-hit", provider: CacheService.providerName(), cacheHit: true, resultCount: external.value?.pairAddress ? 1 : 0 });
+        return chartBootstrapCacheValue(external.value, {
+          cacheHit: true,
+          cacheSource: CacheService.providerName(),
+          stale: false,
+          backgroundRefreshing: false
+        });
+      }
+      if (ageMs < CHART_BOOTSTRAP_STALE_MS) {
+        const staleValue = chartBootstrapCacheValue(external.value, {
+          cacheHit: true,
+          cacheSource: CacheService.providerName(),
+          stale: true,
+          backgroundRefreshing: true
+        });
+        const backgroundPromise = DedupeService.run(`web:chart-bootstrap:${mint}`, CHART_BOOTSTRAP_DEDUPE_MS, async () => {
+          const next = await buildWebChartBootstrap(mint);
+          return storeWebChartBootstrap(mint, next);
+        }).catch((error) => {
+          const current = chartBootstrapSharedCache.get(mint);
+          chartBootstrapSharedCache.set(mint, { cachedAt: current?.cachedAt || Number(external.cachedAt), value: staleValue, promise: null });
+          throw error;
+        });
+        chartBootstrapSharedCache.set(mint, { cachedAt: Number(external.cachedAt), value: staleValue, promise: backgroundPromise });
+        logCacheEvent({ cacheName: chartBootstrapCacheName(mint), action: "kv-stale-hit-background-refresh", provider: CacheService.providerName(), cacheHit: true, stale: true, background: true, resultCount: staleValue.pairAddress ? 1 : 0 });
+        backgroundPromise.catch(() => {});
+        return staleValue;
+      }
+    }
+  }
+
+  const promise = DedupeService.run(`web:chart-bootstrap:${mint}`, CHART_BOOTSTRAP_DEDUPE_MS, async () => {
+    const next = await buildWebChartBootstrap(mint);
+    return storeWebChartBootstrap(mint, next);
+  });
+  chartBootstrapSharedCache.set(mint, { cachedAt: memory.cachedAt || 0, value: memory.value, promise });
+  try {
+    return await promise;
+  } catch (error) {
+    if (memory.value) {
+      return chartBootstrapCacheValue(memory.value, {
+        cacheHit: true,
+        stale: true,
+        backgroundRefreshing: false,
+        refreshError: safePerfEventText(error?.message || "Chart bootstrap refresh failed.", 120)
+      });
+    }
+    throw error;
+  } finally {
+    const current = chartBootstrapSharedCache.get(mint);
+    if (current?.promise === promise) chartBootstrapSharedCache.set(mint, { ...current, promise: null });
+  }
+}
+
+async function webChartCachedCandles(cacheKey = "") {
+  const key = String(cacheKey || "").trim();
+  if (!key) return null;
+  const external = await CacheService.getJson(externalCacheKey(key, "global"));
+  return external?.value || null;
+}
+
+async function webChartRevalidateCandles(cacheKey = "", payload = {}) {
+  const key = String(cacheKey || "").trim();
+  if (!key) return null;
+  const value = {
+    chartProvider: "dexscreener-embed",
+    note: "DexScreener renders candles inside the embedded chart; SlimeWire caches the resolved chart URL and provider status.",
+    refreshedAt: new Date().toISOString(),
+    ...payload
+  };
+  await CacheService.setJson(externalCacheKey(key, "global"), displayCacheEnvelope(value), 15_000);
+  return value;
+}
+
+const ChartDataService = Object.freeze({
+  getChartBootstrap: webChartBootstrap,
+  resolvePairForChart: async (tokenMint = "", options = {}) => {
+    const chart = await webChartBootstrap(tokenMint, options);
+    return chart?.pairAddress || "";
+  },
+  getCachedCandles: webChartCachedCandles,
+  revalidateCandles: webChartRevalidateCandles
+});
+
+async function webDexToken(tokenMint = "") {
+  const mint = String(tokenMint || "").trim();
+  const chart = await ChartDataService.getChartBootstrap(mint);
+  return {
+    tokenMint: mint,
+    pairAddress: chart?.pairAddress || "",
+    dexUrl: chart?.dexUrl || "",
+    pairUrl: chart?.pairUrl || "",
+    dexId: chart?.dexId || "",
+    dexName: chart?.dexName || "",
+    symbol: chart?.symbol || "",
+    name: chart?.name || "",
+    imageUrl: chart?.imageUrl || "",
+    marketCap: chart?.marketCap || 0,
+    fdv: chart?.fdv || 0,
+    liquidityUsd: chart?.liquidityUsd || 0,
+    volume: chart?.volume || null,
+    txns: chart?.txns || null,
+    source: chart?.metadataSource || "dexscreener",
+    cacheHit: Boolean(chart?.cacheHit),
+    stale: Boolean(chart?.stale),
+    backgroundRefreshing: Boolean(chart?.backgroundRefreshing),
+    errorCode: chart?.errorCode || "",
+    resolvedAt: chart?.resolvedAt || chart?.lastUpdatedAt || new Date().toISOString()
   };
 }
 

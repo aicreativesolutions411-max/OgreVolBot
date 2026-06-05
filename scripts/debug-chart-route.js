@@ -19,8 +19,8 @@ console.log(JSON.stringify({
   route,
   tokenAddress: token,
   pairAddress: null,
-  metadataSource: /selectedSmartChartTokenRow/.test(appSource) ? "selectedSmartChartTokenRow + visible feed fallback" : "unknown",
-  chartDataSource: /dexChartEmbedUrl/.test(appSource) ? "DexScreener embed by mint" : "unknown",
+  metadataSource: /selectedSmartChartTokenRow/.test(appSource) ? "selectedSmartChartTokenRow + cached chart bootstrap + visible feed fallback" : "unknown",
+  chartDataSource: /\/api\/web\/chart\/bootstrap\?token=/.test(appSource) ? "cached ChartDataService bootstrap + DexScreener embed" : "unknown",
   buyPanelLoaded: /function chartTradePanelHtml[\s\S]*data-chart-confirm-buy/.test(appSource),
   sellPanelLoaded: /function chartTradePanelHtml[\s\S]*data-chart-confirm-sell/.test(appSource),
   walletStatus: /walletOptionsHtml\(walletSelected\)/.test(appSource) ? "chart panel uses existing walletOptionsHtml" : "unknown",
@@ -28,5 +28,7 @@ console.log(JSON.stringify({
   publicRouteState: {
     usesDurableTokenParam: /token", mint/.test(appSource) || /params\.set\("token"/.test(appSource),
     parsesRouteTokenOnBoot: /applyChartRouteFromLocation\(\)/.test(appSource)
-  }
+  },
+  bootstrapEndpoint: /\/api\/web\/chart\/bootstrap\?token=/.test(appSource),
+  prefetchEnabled: /prefetchTokenChart/.test(appSource)
 }, null, 2));

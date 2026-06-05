@@ -9,6 +9,9 @@ const publicIndexSource = fs.readFileSync(new URL("../web/public/index.html", im
 const packageSource = fs.readFileSync(new URL("../package.json", import.meta.url), "utf8");
 const debugEntrySource = fs.readFileSync(new URL("../scripts/debug-trade-entrypoints.js", import.meta.url), "utf8");
 const debugChartSource = fs.readFileSync(new URL("../scripts/debug-chart-route.js", import.meta.url), "utf8");
+const debugChartLoadSource = fs.readFileSync(new URL("../scripts/debug-chart-load.js", import.meta.url), "utf8");
+const debugChartPrefetchSource = fs.readFileSync(new URL("../scripts/debug-chart-prefetch.js", import.meta.url), "utf8");
+const debugRouteRequestsSource = fs.readFileSync(new URL("../scripts/debug-route-requests.js", import.meta.url), "utf8");
 const debugQuickBuySource = fs.readFileSync(new URL("../scripts/debug-quick-buy.js", import.meta.url), "utf8");
 
 function functionBody(source, name) {
@@ -93,9 +96,14 @@ test("Chart page uses full chart view with transactions and info tabs", () => {
   assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /data-chart-frame-loading/);
   assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /fetchpriority="high"/);
   assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /setAttribute\('data-loaded','true'\)/);
-  assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /queueSmartChartDexResolution\(token\)/);
+  assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /queueSmartChartBootstrap\(token\)/);
+  assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /smartChartFrameUrl\(token, mode\)/);
   assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /Finding fastest DEX pair/);
-  assert.match(functionBody(appSource, "resolveSmartChartDexPair"), /\/api\/web\/dex-token\?token=/);
+  assert.match(functionBody(appSource, "resolveSmartChartDexPair"), /\/api\/web\/chart\/bootstrap\?token=/);
+  assert.match(functionBody(appSource, "openTokenChart"), /prefetchTokenChart\(tokenRef/);
+  assert.match(functionBody(appSource, "applyChartRouteFromLocation"), /prefetchTokenChart\(tokenRef/);
+  assert.match(appSource, /pointerenter[\s\S]*prefetchTokenChartFromElement/);
+  assert.match(appSource, /touchstart[\s\S]*prefetchTokenChartFromElement/);
   assert.match(functionBody(appSource, "mergeSmartChartDexResolution"), /pairAddress: row\.pairAddress \|\| resolved\.pairAddress/);
   assert.match(functionBody(appSource, "chartAddressForToken"), /pairAddress/);
   assert.match(functionBody(appSource, "applyTokenRefToState"), /smartChartTokenRef/);
@@ -120,7 +128,18 @@ test("Chart page uses full chart view with transactions and info tabs", () => {
 
 test("Chart pair resolver is exposed through a safe backend endpoint", () => {
   assert.match(serverSource, /pathname === "\/api\/web\/dex-token"/);
+  assert.match(serverSource, /pathname === "\/api\/web\/chart\/bootstrap"/);
+  assert.match(serverSource, /const ChartDataService = Object\.freeze/);
+  assert.match(serverSource, /getChartBootstrap: webChartBootstrap/);
+  assert.match(serverSource, /resolvePairForChart/);
+  assert.match(serverSource, /getCachedCandles/);
+  assert.match(serverSource, /revalidateCandles/);
+  assert.match(serverSource, /chartBootstrapSharedCache/);
+  assert.match(serverSource, /CacheService\.getJson/);
+  assert.match(serverSource, /CacheService\.setJson/);
+  assert.match(serverSource, /DedupeService\.run\(`web:chart-bootstrap/);
   assert.match(serverSource, /async function webDexToken/);
+  assert.match(serverSource, /async function buildWebChartBootstrap/);
   assert.match(serverSource, /fetchDexScreenerTokenPairsBatch\(\[mint\]/);
   assert.match(serverSource, /bestDexPairForToken\(mint, pairs\)/);
   assert.match(serverSource, /pairAddress/);
@@ -130,6 +149,12 @@ test("Chart pair resolver is exposed through a safe backend endpoint", () => {
 test("Debug commands are wired and sanitized", () => {
   assert.match(packageSource, /debug:trade-entrypoints/);
   assert.match(packageSource, /debug:chart-route/);
+  assert.match(packageSource, /debug:chart-load/);
+  assert.match(packageSource, /debug:chart-prefetch/);
+  assert.match(packageSource, /debug:route-requests/);
   assert.match(packageSource, /debug:quick-buy/);
-  assert.doesNotMatch(`${debugEntrySource}\n${debugChartSource}\n${debugQuickBuySource}`, /privateKey|secretKey|seed phrase|Authorization|JWT/i);
+  assert.match(debugChartLoadSource, /unrelatedFeedRefreshesTriggered/);
+  assert.match(debugChartPrefetchSource, /prefetchSources/);
+  assert.match(debugRouteRequestsSource, /terminalFeedsUnnecessarilyRefreshed/);
+  assert.doesNotMatch(`${debugEntrySource}\n${debugChartSource}\n${debugChartLoadSource}\n${debugChartPrefetchSource}\n${debugRouteRequestsSource}\n${debugQuickBuySource}`, /privateKey|secretKey|seed phrase|Authorization|JWT/i);
 });

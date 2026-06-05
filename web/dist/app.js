@@ -179,6 +179,9 @@ const state = {
   smartChartTokenRef: null,
   smartChartDexResolution: {},
   smartChartDexResolving: {},
+  smartChartBootstrap: {},
+  smartChartBootstrapLoading: {},
+  smartChartPrefetchLog: [],
   smartChartZoom: 100,
   smartChartView: "chart",
   chartTradeTab: new URLSearchParams(window.location.search || "").get("tab") === "sell" ? "sell" : "buy",
@@ -619,6 +622,18 @@ function perfMeasure(action, startedAt, event = {}) {
     durationMs: perfNow() - startedAt
   });
 }
+
+window.SlimeWireChartFrameLoaded = function SlimeWireChartFrameLoaded(mode = "chart", mint = "") {
+  perfMark("chartFirstPaint");
+  recordPerfEvent({
+    component: "smartChart",
+    action: "chart-first-paint",
+    durationMs: 0,
+    cacheHit: Boolean(smartChartBootstrapForMint(mint)?.cacheHit),
+    stale: Boolean(smartChartBootstrapForMint(mint)?.stale),
+    details: `${safePerfText(mode, 20)}:${safePerfText(mint, 60)}`
+  });
+};
 
 function recordCrashEvent(event = {}) {
   const payload = {
@@ -7981,11 +7996,14 @@ function buildTokenChartPath(mint, options = {}) {
 }
 
 function openTokenChart(tokenRef = {}, options = {}) {
+  perfMark("chartRouteStart");
+  const routeStartedAt = perfNow();
   const mint = applyTokenRefToState(tokenRef);
   if (!mint) {
     setError("Select a token before opening the chart.");
     return;
   }
+  prefetchTokenChart(tokenRef, { source: options.source || "token-entry" });
   state.chartTradeTab = options.defaultTab === "sell" ? "sell" : options.defaultTab === "chart" ? "buy" : "buy";
   state.smartChartView = "chart";
   state.chartFocusAmountInput = Boolean(options.focusAmountInput);
@@ -8001,19 +8019,35 @@ function openTokenChart(tokenRef = {}, options = {}) {
   });
   window.history.pushState({}, "", path);
   render({ force: true });
+  perfMeasure("chart-route-open", routeStartedAt, {
+    component: "smartChart",
+    cacheHit: Boolean(smartChartBootstrapForMint(mint)?.cacheHit || smartChartResolvedDex(mint)?.pairAddress),
+    details: `${mint}:${options.source || "token-entry"}`
+  });
 }
 
 function applyChartRouteFromLocation() {
   if (!window.location.pathname.includes("/terminal/chart")) return;
+  perfMark("chartRouteStart");
+  const routeStartedAt = perfNow();
   const params = new URLSearchParams(window.location.search || "");
   const token = String(params.get("token") || params.get("mint") || "").trim();
-  if (token) applyTokenRefToState(tokenRefFromMint(token, { source: params.get("source") || "route" }));
+  if (token) {
+    const tokenRef = tokenRefFromMint(token, { source: params.get("source") || "route" });
+    applyTokenRefToState(tokenRef);
+    prefetchTokenChart(tokenRef, { source: params.get("source") || "route" });
+  }
   state.chartTradeTab = params.get("tab") === "sell" ? "sell" : "buy";
   state.smartChartView = ["chartTxns", "txns", "info"].includes(params.get("view")) ? params.get("view") : "chart";
   state.chartFocusAmountInput = params.get("focusAmount") === "1";
   state.chartScrollIntoView = true;
   state.route = "terminal";
   state.activeTab = "smartChart";
+  perfMeasure("chart-route-apply", routeStartedAt, {
+    component: "smartChart",
+    cacheHit: Boolean(smartChartBootstrapForMint(token)?.cacheHit || smartChartResolvedDex(token)?.pairAddress),
+    details: token
+  });
 }
 
 function openQuickBuy(tokenRef = {}, options = {}) {
@@ -8968,10 +9002,21 @@ function chartAddressForToken(tokenOrMint = {}) {
 
 const SMART_CHART_DEX_RESOLVE_TTL_MS = 5 * 60 * 1000;
 const SMART_CHART_DEX_RESOLVE_RETRY_MS = 45 * 1000;
+const SMART_CHART_BOOTSTRAP_TTL_MS = 10 * 60 * 1000;
+
+function smartChartBootstrapForMint(tokenMint = "") {
+  const mint = String(tokenMint || "").trim();
+  if (!mint) return null;
+  const cached = state.smartChartBootstrap?.[mint] || null;
+  if (!cached) return null;
+  const ageMs = Date.now() - Number(cached.loadedAt || cached.resolvedAt || 0);
+  if (cached.status === "failed") return ageMs < SMART_CHART_DEX_RESOLVE_RETRY_MS ? cached : null;
+  return ageMs < SMART_CHART_BOOTSTRAP_TTL_MS ? cached : null;
+}
 
 function smartChartResolvedDex(tokenMint = "") {
   const mint = String(tokenMint || "").trim();
-  const cached = mint ? state.smartChartDexResolution?.[mint] : null;
+  const cached = mint ? (state.smartChartDexResolution?.[mint] || smartChartBootstrapForMint(mint)) : null;
   if (!cached) return null;
   const ageMs = Date.now() - Number(cached.resolvedAt || 0);
   if (cached.status === "failed") return ageMs < SMART_CHART_DEX_RESOLVE_RETRY_MS ? cached : null;
@@ -9001,17 +9046,43 @@ function mergeSmartChartDexResolution(row = null) {
   };
 }
 
+function rememberSmartChartBootstrap(chart = {}) {
+  const mint = String(chart.tokenMint || chart.tokenAddress || chart.mint || "").trim();
+  if (!mint) return;
+  const loadedAt = Date.now();
+  const nextChart = {
+    ...chart,
+    tokenMint: mint,
+    tokenAddress: mint,
+    status: chart.errorCode ? "failed" : "resolved",
+    loadedAt,
+    resolvedAt: loadedAt
+  };
+  state.smartChartBootstrap = {
+    ...(state.smartChartBootstrap || {}),
+    [mint]: nextChart
+  };
+  if (nextChart.pairAddress || nextChart.dexUrl || nextChart.symbol || nextChart.name) {
+    rememberSmartChartDexResolution({
+      ...nextChart,
+      mint,
+      imageUri: nextChart.imageUrl || nextChart.imageUri || "",
+      dex: nextChart.dexId || nextChart.dexName || ""
+    });
+  }
+}
+
 function rememberSmartChartDexResolution(tokenRef = {}) {
   const mint = String(tokenRef.tokenMint || tokenRef.mint || tokenRef.tokenAddress || "").trim();
   const pairAddress = String(tokenRef.pairAddress || tokenRef.pairId || "").trim();
-  if (!mint || !pairAddress) return;
+  if (!mint || (!pairAddress && !tokenRef.dexUrl && !tokenRef.symbol && !tokenRef.name)) return;
   state.smartChartDexResolution = {
     ...(state.smartChartDexResolution || {}),
     [mint]: {
       ...(state.smartChartDexResolution?.[mint] || {}),
       tokenMint: mint,
       pairAddress,
-      dexUrl: tokenRef.dexUrl || dexUrl(pairAddress),
+      dexUrl: tokenRef.dexUrl || dexUrl(pairAddress || mint),
       dexId: tokenRef.dex || tokenRef.dexId || "",
       symbol: tokenRef.symbol || "",
       name: tokenRef.name || "",
@@ -9030,6 +9101,7 @@ function queueSmartChartDexResolution(token = {}) {
     rememberSmartChartDexResolution({ ...token, tokenMint: mint, pairAddress });
     return false;
   }
+  if (smartChartBootstrapForMint(mint)?.pairAddress) return false;
   const cached = smartChartResolvedDex(mint);
   if (cached?.pairAddress) return false;
   if (cached?.status === "failed") return false;
@@ -9041,21 +9113,53 @@ function queueSmartChartDexResolution(token = {}) {
   return true;
 }
 
+function queueSmartChartBootstrap(token = {}, options = {}) {
+  const mint = String(token?.tokenMint || token?.mint || token?.tokenAddress || state.smartChartToken || "").trim();
+  if (!mint) return false;
+  if (!options.force && smartChartBootstrapForMint(mint)?.status === "resolved") return false;
+  if (state.smartChartBootstrapLoading?.[mint]) return true;
+  state.smartChartBootstrapLoading = { ...(state.smartChartBootstrapLoading || {}), [mint]: true };
+  window.setTimeout(() => {
+    void resolveSmartChartDexPair(mint, { source: options.source || "chart-bootstrap" }).catch(() => {});
+  }, 0);
+  return true;
+}
+
+function prefetchTokenChart(tokenRef = {}, options = {}) {
+  const mint = String(tokenRef?.tokenMint || tokenRef?.mint || tokenRef?.tokenAddress || "").trim();
+  if (!mint) return false;
+  rememberSmartChartDexResolution(tokenRef);
+  queueSmartChartBootstrap(tokenRef, { source: options.source || "prefetch" });
+  state.smartChartPrefetchLog = [
+    ...(state.smartChartPrefetchLog || []),
+    {
+      at: new Date().toISOString(),
+      tokenMint: mint,
+      source: options.source || "prefetch",
+      routeChunkPrefetched: true,
+      metadataPrefetched: Boolean(tokenRef.symbol || tokenRef.name || tokenRef.imageUri || tokenRef.imageUrl),
+      candlesPrefetched: false,
+      dedupeHit: Boolean(state.smartChartBootstrapLoading?.[mint] || smartChartBootstrapForMint(mint)),
+      cacheTtlMs: SMART_CHART_BOOTSTRAP_TTL_MS
+    }
+  ].slice(-20);
+  return true;
+}
+
 async function resolveSmartChartDexPair(mint = "") {
   const tokenMint = String(mint || "").trim();
   if (!tokenMint) return null;
   try {
-    const data = await api(`/api/web/dex-token?token=${encodeURIComponent(tokenMint)}`, { timeoutMs: 6_000 });
-    const resolved = data.dexToken || {};
-    state.smartChartDexResolution = {
-      ...(state.smartChartDexResolution || {}),
-      [tokenMint]: {
-        ...resolved,
-        tokenMint,
-        status: resolved.pairAddress ? "resolved" : "failed",
-        resolvedAt: Date.now()
-      }
-    };
+    const startedAt = perfNow();
+    const data = await api(`/api/web/chart/bootstrap?token=${encodeURIComponent(tokenMint)}`, { timeoutMs: 4_500 });
+    const resolved = data.chart || data.dexToken || {};
+    rememberSmartChartBootstrap(resolved);
+    perfMeasure("chart-bootstrap", startedAt, {
+      component: "smartChart",
+      cacheHit: Boolean(resolved.cacheHit),
+      stale: Boolean(resolved.stale),
+      details: `${tokenMint}:${resolved.chartProvider || "dexscreener-embed"}`
+    });
     if (state.route === "terminal" && state.activeTab === "smartChart" && String(state.smartChartToken || "") === tokenMint) {
       render({ force: true });
     }
@@ -9078,6 +9182,9 @@ async function resolveSmartChartDexPair(mint = "") {
     const nextResolving = { ...(state.smartChartDexResolving || {}) };
     delete nextResolving[tokenMint];
     state.smartChartDexResolving = nextResolving;
+    const nextLoading = { ...(state.smartChartBootstrapLoading || {}) };
+    delete nextLoading[tokenMint];
+    state.smartChartBootstrapLoading = nextLoading;
   }
 }
 
@@ -9092,11 +9199,22 @@ function dexChartEmbedUrl(tokenOrMint, options = {}) {
   return `https://dexscreener.com/solana/${encodeURIComponent(address)}?${params.toString()}`;
 }
 
+function smartChartFrameUrl(token = {}, mode = "chart") {
+  const mint = String(token?.tokenMint || state.smartChartToken || "").trim();
+  const bootstrap = smartChartBootstrapForMint(mint);
+  if (mode === "info" && bootstrap?.infoUrl) return bootstrap.infoUrl;
+  if ((mode === "chartTxns" || mode === "txns") && (bootstrap?.chartTxnsUrl || bootstrap?.txnsUrl)) {
+    return bootstrap.chartTxnsUrl || bootstrap.txnsUrl;
+  }
+  if (bootstrap?.chartUrl) return bootstrap.chartUrl;
+  return dexChartEmbedUrl(token, { trades: mode === "chartTxns" || mode === "txns", info: mode === "info" });
+}
+
 function smartChartDexFrameHtml(token = {}, mode = "chart") {
   const mint = String(token?.tokenMint || state.smartChartToken || "").trim();
   const isTransactions = mode === "chartTxns" || mode === "txns";
   const isInfo = mode === "info";
-  const resolvingPair = queueSmartChartDexResolution(token);
+  const resolvingPair = queueSmartChartBootstrap(token) || queueSmartChartDexResolution(token);
   if (resolvingPair && chartAddressForToken(token) === mint) {
     return `
       <div class="smart-chart-frame smart-chart-dex-frame smart-chart-pair-resolving" data-chart-frame-loading="Finding fastest DEX pair...">
@@ -9122,7 +9240,7 @@ function smartChartDexFrameHtml(token = {}, mode = "chart") {
   const loadingLabel = isInfo ? "Loading token info..." : isTransactions ? "Loading DEX transactions..." : "Loading DEX chart...";
   return `
     <div class="${escapeHtml(className)}" data-chart-frame-loading="${escapeHtml(loadingLabel)}">
-      <iframe title="${escapeHtml(title)}" src="${escapeHtml(dexChartEmbedUrl(token, { trades: isTransactions, info: isInfo }))}" loading="eager" fetchpriority="high" referrerpolicy="no-referrer-when-downgrade" onload="this.closest('.smart-chart-frame')?.setAttribute('data-loaded','true')" allowfullscreen></iframe>
+      <iframe title="${escapeHtml(title)}" src="${escapeHtml(smartChartFrameUrl(token, mode))}" loading="eager" fetchpriority="high" referrerpolicy="no-referrer-when-downgrade" onload="this.closest('.smart-chart-frame')?.setAttribute('data-loaded','true'); window.SlimeWireChartFrameLoaded?.('${escapeHtml(mode)}','${escapeHtml(mint)}')" allowfullscreen></iframe>
     </div>
   `;
 }
@@ -10111,6 +10229,17 @@ function smartChartHtml() {
       </section>
     `;
   }
+  perfMark("tokenHeaderRendered");
+  perfMark("chartSkeletonRendered");
+  perfMark("buyPanelReady");
+  recordPerfEvent({
+    component: "smartChart",
+    action: "chart-shell-rendered",
+    durationMs: 0,
+    cacheHit: Boolean(smartChartBootstrapForMint(mint)?.cacheHit || smartChartResolvedDex(mint)?.pairAddress),
+    stale: Boolean(smartChartBootstrapForMint(mint)?.stale),
+    details: mint
+  });
   return `
     <section class="smart-chart-terminal">
       <div class="terminal-title-row">
@@ -11339,6 +11468,30 @@ document.addEventListener("keydown", (event) => {
   state.loginModalOpen = false;
   render({ force: true });
 });
+
+function prefetchTokenChartFromElement(element = null, source = "interaction") {
+  const target = element?.closest?.("[data-token-trade], [data-token-chart], [data-preview-token]");
+  if (!target) return false;
+  const mint = target.dataset.tokenTrade || target.dataset.tokenChart || target.dataset.previewToken || "";
+  if (!mint) return false;
+  return prefetchTokenChart(tokenRefFromMint(mint, {
+    source: target.dataset.tokenTradeSource || target.dataset.tokenChartSource || source
+  }), {
+    source: target.dataset.tokenTradeSource || target.dataset.tokenChartSource || source
+  });
+}
+
+document.addEventListener("pointerenter", (event) => {
+  prefetchTokenChartFromElement(event.target instanceof Element ? event.target : null, "pointer-prefetch");
+}, true);
+
+document.addEventListener("touchstart", (event) => {
+  prefetchTokenChartFromElement(event.target instanceof Element ? event.target : null, "touch-prefetch");
+}, { capture: true, passive: true });
+
+document.addEventListener("focusin", (event) => {
+  prefetchTokenChartFromElement(event.target instanceof Element ? event.target : null, "focus-prefetch");
+}, true);
 
 document.addEventListener("click", async (event) => {
   const source = event.target instanceof Element
