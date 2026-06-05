@@ -78,6 +78,14 @@ test("terminal route cannot show the intro splash underneath the header", () => 
   assert.match(overridesSource, /\[data-route-view-hidden="true"\]/);
 });
 
+test("enter the swamp has a real connect-route fallback", () => {
+  assert.match(htmlSource, /<a class="swamp-splash-button" href="\/connect" data-nav-route="\/connect" aria-label="Enter the Swamp">/);
+  assert.match(htmlSource, /const route = path\.startsWith\("\/login"\)/);
+  assert.match(htmlSource, /path\.startsWith\("\/connect"\)\s*\?\s*"connect"/);
+  assert.match(htmlSource, /setRouteHidden\("\[data-connect\]", route !== "connect"\)/);
+  assert.match(htmlSource, /toggleAttribute\("hidden", route !== "terminal"\)/);
+});
+
 test("mobile topbar rescue does not force hidden auth groups visible", () => {
   assert.match(overridesSource, /\.top-auth-group\[hidden\]/);
   assert.match(overridesSource, /\[data-guest-actions\]\[hidden\]/);

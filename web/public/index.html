@@ -152,9 +152,9 @@
       </section>
 
       <section class="login-view swamp-splash" data-login>
-        <button class="swamp-splash-button" type="button" data-nav-route="/connect" aria-label="Enter the Swamp">
+        <a class="swamp-splash-button" href="/connect" data-nav-route="/connect" aria-label="Enter the Swamp">
           <img class="swamp-splash-reference" src="./assets/slimewire/references/enter-swamp-reference.jpg" data-fallback-src="./assets/slimewire/png/slimewire-mark.png" alt="Enter the Swamp">
-        </button>
+        </a>
       </section>
 
       <section class="connect-view" data-connect hidden>
@@ -300,6 +300,34 @@
       </section>
 
       <section class="wallet-connect-modal" data-wallet-connect-modal hidden></section>
+
+      <script>
+        (() => {
+          const app = document.querySelector("[data-app]");
+          if (!app) return;
+          const path = window.location.pathname || "/";
+          const route = path.startsWith("/login") || path.startsWith("/account/login")
+            ? "login"
+            : path.startsWith("/connect")
+              ? "connect"
+              : path.startsWith("/terminal") || path.startsWith("/ogre-tek")
+                ? "terminal"
+                : "intro";
+          const setRouteHidden = (selector, hidden) => {
+            const element = document.querySelector(selector);
+            if (!element) return;
+            element.hidden = hidden;
+            element.dataset.routeViewHidden = hidden ? "true" : "false";
+            element.setAttribute("aria-hidden", hidden ? "true" : "false");
+          };
+          app.dataset.route = route;
+          setRouteHidden("[data-login]", !(route === "intro" || route === "login"));
+          setRouteHidden("[data-connect]", route !== "connect");
+          setRouteHidden("[data-dashboard]", route !== "terminal");
+          document.querySelector("[data-terminal-global-search]")?.toggleAttribute("hidden", route !== "terminal");
+          document.querySelector("[data-top-sync-strip]")?.toggleAttribute("hidden", route !== "terminal");
+        })();
+      </script>
 
       <footer class="footer">
         <span>Powered by Ogres</span>
