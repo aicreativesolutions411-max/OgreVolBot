@@ -27,6 +27,7 @@ let apiBase = apiCandidates[0] || defaultRenderApiBase;
 const API_CONNECT_TIMEOUT_MS = 60_000;
 const API_LONG_ACTION_TIMEOUT_MS = 180_000;
 const MOBILE_WALLET_PENDING_KEY = "slimewireMobileWalletPending";
+const MOBILE_WALLET_PENDING_BACKUP_KEY = "slimewireMobileWalletPendingBackup";
 const MOBILE_WALLET_SESSION_PREFIX = "slimewireMobileWalletSession:";
 const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 const BASE58_LOOKUP = new Map([...BASE58_ALPHABET].map((char, index) => [char, index]));
@@ -564,8 +565,13 @@ function focusLoginField(connectPanel = state.route === "connect") {
 
 function openLoginPanel({ connectPanel = state.route === "connect" } = {}) {
   state.loginCollapsed = false;
+  state.walletConnectMenuOpen = false;
   render({ force: true });
   focusLoginField(connectPanel);
+}
+
+function openLoginModal(options = {}) {
+  openLoginPanel(options);
 }
 
 function isMobileWalletPlatform() {
@@ -651,10 +657,11 @@ function base58Decode(value = "") {
   return new Uint8Array(bytes);
 }
 
-function mobileWalletCallbackUrl(providerId = "phantom", stateId = "", returnPath = state.walletConnectReturnPath || "/terminal") {
+function mobileWalletCallbackUrl(providerId = "phantom", stateId = "", returnPath = state.walletConnectReturnPath || "/terminal", pendingConnectId = "") {
   const url = new URL(returnPath || window.location.pathname || "/terminal", window.location.origin);
   url.searchParams.delete("sw_wallet");
   url.searchParams.delete("sw_wallet_state");
+  url.searchParams.delete("sw_wallet_pending");
   url.searchParams.delete("phantom_encryption_public_key");
   url.searchParams.delete("solflare_encryption_public_key");
   url.searchParams.delete("nonce");
@@ -663,6 +670,7 @@ function mobileWalletCallbackUrl(providerId = "phantom", stateId = "", returnPat
   url.searchParams.delete("errorMessage");
   url.searchParams.set("sw_wallet", providerId);
   url.searchParams.set("sw_wallet_state", stateId);
+  if (pendingConnectId) url.searchParams.set("sw_wallet_pending", pendingConnectId);
   return url.toString();
 }
 
@@ -672,6 +680,7 @@ function cleanMobileWalletCallbackParams() {
     [
       "sw_wallet",
       "sw_wallet_state",
+      "sw_wallet_pending",
       "phantom_encryption_public_key",
       "solflare_encryption_public_key",
       "nonce",
@@ -687,7 +696,10 @@ function cleanMobileWalletCallbackParams() {
 
 function readMobileWalletPending() {
   try {
-    const parsed = JSON.parse(window.sessionStorage?.getItem(MOBILE_WALLET_PENDING_KEY) || "{}");
+    const raw = window.sessionStorage?.getItem(MOBILE_WALLET_PENDING_KEY)
+      || window.localStorage?.getItem(MOBILE_WALLET_PENDING_BACKUP_KEY)
+      || "{}";
+    const parsed = JSON.parse(raw);
     return parsed && typeof parsed === "object" ? parsed : {};
   } catch {
     return {};
@@ -698,7 +710,12 @@ function storeMobileWalletPending(pending) {
   try {
     window.sessionStorage?.setItem(MOBILE_WALLET_PENDING_KEY, JSON.stringify(pending));
   } catch {
-    // If sessionStorage is blocked, the redirect flow cannot be safely verified.
+    // Session storage can be blocked in some mobile hand-offs.
+  }
+  try {
+    window.localStorage?.setItem(MOBILE_WALLET_PENDING_BACKUP_KEY, JSON.stringify(pending));
+  } catch {
+    // Local backup is best-effort; server pending state is the durable path.
   }
 }
 
@@ -707,6 +724,11 @@ function clearMobileWalletPending() {
     window.sessionStorage?.removeItem(MOBILE_WALLET_PENDING_KEY);
   } catch {
     // Session cleanup is best-effort.
+  }
+  try {
+    window.localStorage?.removeItem(MOBILE_WALLET_PENDING_BACKUP_KEY);
+  } catch {
+    // Local cleanup is best-effort.
   }
 }
 
@@ -725,7 +747,7 @@ function mobileWalletConnectUrl(providerId = "", pending = {}) {
   if (!base) return "";
   const url = new URL(base);
   url.searchParams.set("app_url", appBrowseUrl());
-  url.searchParams.set("redirect_link", mobileWalletCallbackUrl(providerId, pending.stateId, pending.returnPath));
+  url.searchParams.set("redirect_link", mobileWalletCallbackUrl(providerId, pending.stateId, pending.returnPath, pending.pendingConnectId));
   url.searchParams.set("dapp_encryption_public_key", pending.dappEncryptionPublicKey);
   url.searchParams.set("cluster", "mainnet-beta");
   return url.toString();
@@ -739,25 +761,71 @@ function mobileWalletPlatformLabel() {
 
 function mobileWalletConnectAvailable(providerId = "") {
   return isMobileWalletPlatform()
-    && Boolean(mobileWalletConnectBaseUrl(providerId))
-    && Boolean(window.nacl?.box?.keyPair)
-    && Boolean(window.crypto?.getRandomValues);
+    && Boolean(mobileWalletConnectBaseUrl(providerId));
 }
 
-function startMobileWalletConnect(providerId = "", { returnPath = state.walletConnectReturnPath || "/terminal" } = {}) {
-  if (!mobileWalletConnectAvailable(providerId)) return false;
+function mobileWalletBrowserLabel() {
+  const ua = navigator.userAgent || "";
+  if (/CriOS|Chrome/i.test(ua)) return "chrome";
+  if (/Safari/i.test(ua) && !/Chrome|CriOS/i.test(ua)) return "safari";
+  if (/Firefox|FxiOS/i.test(ua)) return "firefox";
+  return "mobile-browser";
+}
+
+async function createServerMobileWalletPending(providerId = "", returnPath = "/terminal") {
+  try {
+    const data = await api("/api/web/mobile-wallet/start", {
+      method: "POST",
+      timeoutMs: API_CONNECT_TIMEOUT_MS,
+      body: JSON.stringify({
+        provider: providerId,
+        intendedRoute: returnPath,
+        platform: mobileWalletPlatformLabel(),
+        browser: mobileWalletBrowserLabel()
+      })
+    });
+    if (!data.pendingConnectId || !data.stateId || !data.dappEncryptionPublicKey) return null;
+    return {
+      providerId,
+      pendingConnectId: data.pendingConnectId,
+      stateId: data.stateId,
+      returnPath: data.intendedRoute || returnPath,
+      dappEncryptionPublicKey: data.dappEncryptionPublicKey,
+      createdAt: Date.now(),
+      expiresAt: data.expiresAt || "",
+      serverManaged: true
+    };
+  } catch (error) {
+    logWalletConnectFailure(providerId, error, {
+      action: "mobile_connect_pending_start_failed",
+      connectionFlow: "deeplink_connect",
+      platform: mobileWalletPlatformLabel()
+    });
+    return null;
+  }
+}
+
+function createLocalMobileWalletPending(providerId = "", returnPath = "/terminal") {
+  if (!window.nacl?.box?.keyPair || !window.crypto?.getRandomValues) return null;
   const keyPair = window.nacl.box.keyPair();
   const stateBytes = new Uint8Array(16);
   window.crypto.getRandomValues(stateBytes);
-  const stateId = base58Encode(stateBytes);
-  const pending = {
+  return {
     providerId,
-    stateId,
+    stateId: base58Encode(stateBytes),
     returnPath,
     dappEncryptionPublicKey: base58Encode(keyPair.publicKey),
     dappEncryptionSecretKey: base58Encode(keyPair.secretKey),
-    createdAt: Date.now()
+    createdAt: Date.now(),
+    serverManaged: false
   };
+}
+
+async function startMobileWalletConnect(providerId = "", { returnPath = state.walletConnectReturnPath || "/terminal" } = {}) {
+  if (!mobileWalletConnectAvailable(providerId)) return false;
+  const pending = await createServerMobileWalletPending(providerId, returnPath)
+    || createLocalMobileWalletPending(providerId, returnPath);
+  if (!pending) return false;
   storeMobileWalletPending(pending);
   const link = mobileWalletConnectUrl(providerId, pending);
   if (!link) return false;
@@ -1015,15 +1083,74 @@ async function completeMobileWalletConnection(providerId = "", connection = {}) 
   render({ force: true });
 }
 
+function mobileWalletCallbackBody(providerId = "", params = new URLSearchParams()) {
+  return {
+    provider: providerId,
+    pendingConnectId: params.get("sw_wallet_pending") || readMobileWalletPending().pendingConnectId || "",
+    stateId: params.get("sw_wallet_state") || "",
+    queryKeys: [...params.keys()].filter((key) => key !== "data" && key !== "nonce"),
+    walletEncryptionPublicKey: params.get(mobileWalletProviderKeyParam(providerId)) || "",
+    nonce: params.get("nonce") || "",
+    data: params.get("data") || "",
+    errorCode: params.get("errorCode") || "",
+    errorMessage: params.get("errorMessage") || ""
+  };
+}
+
+async function applyServerMobileWalletFinalization(providerId = "", data = {}) {
+  if (data.token) {
+    state.token = data.token;
+    setStoredToken(state.token);
+  }
+  applyUserFromApi(data.user || {
+    ...state.user,
+    connectedWallet: data.connectedWallet || data.profile?.connectedWallet || null
+  });
+  const publicKey = data.publicKey || data.connectedWallet?.publicKey || data.profile?.connectedWallet?.publicKey || "";
+  if (publicKey) {
+    state.connectedWalletBalance = {
+      publicKey,
+      shortPublicKey: shortAddress(publicKey),
+      provider: data.provider || walletProviderLabel(providerId),
+      tokens: []
+    };
+  }
+  clearMobileWalletPending();
+  cleanMobileWalletCallbackParams();
+  state.walletConnectMenuOpen = false;
+  setWalletConnectStatus(publicKey ? `Connected ${shortAddress(publicKey)}. Opening Live Terminal...` : "Wallet connected. Opening Live Terminal...");
+  navigateTo(data.finalRedirectRoute || state.walletConnectReturnPath || "/terminal", "terminal");
+  await Promise.allSettled([
+    loadAll(),
+    refreshLivePairBuckets({ silent: true, force: true }),
+    loadKolScan(state.kolMode, "", { silent: true })
+  ]);
+  render({ force: true });
+}
+
+async function completeServerMobileWalletCallback(providerId = "", params = new URLSearchParams()) {
+  const data = await api("/api/web/mobile-wallet/callback", {
+    method: "POST",
+    timeoutMs: API_CONNECT_TIMEOUT_MS,
+    body: JSON.stringify(mobileWalletCallbackBody(providerId, params))
+  });
+  await applyServerMobileWalletFinalization(providerId, data);
+  return true;
+}
+
 async function handleMobileWalletReturn() {
   const params = new URLSearchParams(window.location.search || "");
   const providerId = params.get("sw_wallet") || "";
   if (!["phantom", "solflare"].includes(providerId)) return false;
   state.walletConnectMenuOpen = true;
   const label = walletProviderLabel(providerId);
+  const pendingConnectId = params.get("sw_wallet_pending") || "";
   const errorCode = params.get("errorCode") || "";
   const errorMessage = params.get("errorMessage") || "";
   if (errorCode || errorMessage) {
+    if (pendingConnectId) {
+      await completeServerMobileWalletCallback(providerId, params).catch(() => {});
+    }
     clearMobileWalletPending();
     cleanMobileWalletCallbackParams();
     setWalletConnectStatus(`${label} did not connect: ${errorMessage || errorCode || "request cancelled"}. Choose another wallet or try again.`);
@@ -1037,17 +1164,37 @@ async function handleMobileWalletReturn() {
   }
   try {
     setWalletConnectStatus(`Finishing ${label} mobile connection...`);
-    const connection = decryptMobileWalletPayload(providerId, params);
-    await completeMobileWalletConnection(providerId, connection);
+    if (pendingConnectId) {
+      await completeServerMobileWalletCallback(providerId, params);
+    } else {
+      const connection = decryptMobileWalletPayload(providerId, params);
+      await completeMobileWalletConnection(providerId, connection);
+    }
   } catch (error) {
-    setWalletConnectStatus(`${label} mobile connection could not finish: ${error.message}`);
-    logWalletConnectFailure(providerId, error, {
-      action: "mobile_connect_callback_failed",
-      connectionFlow: "deeplink_connect",
-      platform: mobileWalletPlatformLabel()
-    });
-    cleanMobileWalletCallbackParams();
-    render({ force: true });
+    if (pendingConnectId) {
+      try {
+        const connection = decryptMobileWalletPayload(providerId, params);
+        await completeMobileWalletConnection(providerId, connection);
+      } catch {
+        setWalletConnectStatus(`${label} mobile connection could not finish: ${error.message}`);
+        logWalletConnectFailure(providerId, error, {
+          action: "mobile_connect_callback_failed",
+          connectionFlow: "deeplink_connect",
+          platform: mobileWalletPlatformLabel()
+        });
+        cleanMobileWalletCallbackParams();
+        render({ force: true });
+      }
+    } else {
+      setWalletConnectStatus(`${label} mobile connection could not finish: ${error.message}`);
+      logWalletConnectFailure(providerId, error, {
+        action: "mobile_connect_callback_failed",
+        connectionFlow: "deeplink_connect",
+        platform: mobileWalletPlatformLabel()
+      });
+      cleanMobileWalletCallbackParams();
+      render({ force: true });
+    }
   }
   return true;
 }
@@ -5218,7 +5365,7 @@ async function connectBrowserWallet(providerId, options = {}) {
   const status = walletConnectStatusElement();
   const provider = walletProviderById(providerId);
   if (!provider) {
-    if (startMobileWalletConnect(providerId, options)) return;
+    if (await startMobileWalletConnect(providerId, options)) return;
     if (openMobileWalletBrowse(providerId)) return;
     const message = walletInstallGuidance(providerId);
     setWalletConnectStatus(message);
@@ -8703,6 +8850,16 @@ function formatDate(value) {
   const date = new Date(value || "");
   return Number.isNaN(date.getTime()) ? "unknown" : date.toLocaleString();
 }
+
+document.addEventListener("pointerup", (event) => {
+  const source = event.target instanceof Element
+    ? event.target
+    : event.target?.parentElement;
+  const target = source?.closest?.("[data-open-login], [data-connect-login-toggle]");
+  if (!target) return;
+  event.preventDefault();
+  openLoginModal({ connectPanel: target.matches("[data-connect-login-toggle]") || state.route === "connect" });
+}, { capture: true });
 
 document.addEventListener("click", async (event) => {
   const source = event.target instanceof Element

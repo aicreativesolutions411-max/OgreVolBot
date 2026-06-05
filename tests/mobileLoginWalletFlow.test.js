@@ -5,6 +5,7 @@ import fs from "node:fs";
 const appSource = fs.readFileSync(new URL("../web/public/app.js", import.meta.url), "utf8");
 const htmlSource = fs.readFileSync(new URL("../web/public/index.html", import.meta.url), "utf8");
 const overridesSource = fs.readFileSync(new URL("../web/public/slimewire-final-overrides.css", import.meta.url), "utf8");
+const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
 
 function functionBody(name) {
   const syncStart = appSource.indexOf(`function ${name}`);
@@ -39,6 +40,8 @@ test("mobile Lock In panel exposes existing password and email-code login action
   assert.match(appSource, /target\.matches\("\[data-web-code-login\]"\)[\s\S]*emailCodeLogin\(\)/);
   assert.match(functionBody("sendEmailLoginCode"), /\/api\/web\/email-code/);
   assert.match(functionBody("emailCodeLogin"), /\/api\/web\/login/);
+  assert.match(appSource, /document\.addEventListener\("pointerup"[\s\S]*data-open-login/);
+  assert.match(functionBody("openLoginPanel"), /state\.walletConnectMenuOpen = false/);
 });
 
 test("mobile Lock In modal is fixed above the terminal header and remains tappable", () => {
@@ -56,14 +59,21 @@ test("mobile wallet options use per-wallet deeplink connect before fallback guid
   assert.match(appSource, /dapp_encryption_public_key/);
   assert.match(appSource, /redirect_link/);
   assert.match(appSource, /sw_wallet_state/);
+  assert.match(appSource, /sw_wallet_pending/);
   const connectBody = functionBody("connectBrowserWallet");
-  assert.match(connectBody, /startMobileWalletConnect\(providerId, options\)/);
+  assert.match(connectBody, /await startMobileWalletConnect\(providerId, options\)/);
   assert.match(connectBody, /openMobileWalletBrowse\(providerId\)/);
-  assert.ok(connectBody.indexOf("startMobileWalletConnect(providerId, options)") < connectBody.indexOf("openMobileWalletBrowse(providerId)"));
+  assert.ok(connectBody.indexOf("await startMobileWalletConnect(providerId, options)") < connectBody.indexOf("openMobileWalletBrowse(providerId)"));
   assert.doesNotMatch(appSource, /Open SlimeWire inside the Phantom in-app browser/);
 });
 
-test("mobile wallet callback verifies pending state and decrypts locally before saving public wallet", () => {
+test("mobile wallet callback can be finalized by the backend after returning from wallet app", () => {
+  assert.match(functionBody("createServerMobileWalletPending"), /\/api\/web\/mobile-wallet\/start/);
+  assert.match(functionBody("startMobileWalletConnect"), /createServerMobileWalletPending\(providerId, returnPath\)/);
+  assert.match(functionBody("mobileWalletCallbackUrl"), /sw_wallet_pending/);
+  assert.match(functionBody("mobileWalletCallbackBody"), /pendingConnectId/);
+  assert.match(functionBody("completeServerMobileWalletCallback"), /\/api\/web\/mobile-wallet\/callback/);
+  assert.match(functionBody("handleMobileWalletReturn"), /completeServerMobileWalletCallback\(providerId, params\)/);
   assert.match(functionBody("decryptMobileWalletPayload"), /pending\.stateId !== stateId/);
   assert.match(functionBody("decryptMobileWalletPayload"), /pending\.providerId !== providerId/);
   assert.match(functionBody("decryptMobileWalletPayload"), /nacl\.box\.before/);
@@ -73,6 +83,22 @@ test("mobile wallet callback verifies pending state and decrypts locally before 
   assert.match(functionBody("handleMobileWalletReturn"), /errorCode/);
   assert.match(functionBody("handleMobileWalletReturn"), /mobile_connect_callback_failed/);
   assert.match(appSource, /await handleMobileWalletReturn\(\);[\s\S]*render\(\);/);
+});
+
+test("backend stores pending mobile wallet connects and completes into web profile session", () => {
+  assert.match(serverSource, /import nacl from "tweetnacl"/);
+  assert.match(serverSource, /pathname === "\/api\/web\/mobile-wallet\/start"/);
+  assert.match(serverSource, /pathname === "\/api\/web\/mobile-wallet\/callback"/);
+  assert.match(serverSource, /MOBILE_WALLET_CONNECT_START/);
+  assert.match(serverSource, /MOBILE_WALLET_CALLBACK_RECEIVED/);
+  assert.match(serverSource, /MOBILE_WALLET_CALLBACK_VERIFIED/);
+  assert.match(serverSource, /MOBILE_WALLET_FINALIZED/);
+  assert.match(serverSource, /store\.mobileWalletConnects/);
+  assert.match(serverSource, /status: "PENDING"/);
+  assert.match(serverSource, /status: "COMPLETE"/);
+  assert.match(serverSource, /updateWebConnectedWallet\(userId/);
+  assert.match(serverSource, /issueWebSessionForExistingUser/);
+  assert.doesNotMatch(serverSource, /console\.(?:log|info|warn|error)\([^)]*dappEncryptionSecretKey/);
 });
 
 test("wallet modal remains readable and clickable on mobile", () => {
