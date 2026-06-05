@@ -26,6 +26,10 @@ const apiCandidates = [
 let apiBase = apiCandidates[0] || defaultRenderApiBase;
 const API_CONNECT_TIMEOUT_MS = 60_000;
 const API_LONG_ACTION_TIMEOUT_MS = 180_000;
+const MOBILE_WALLET_PENDING_KEY = "slimewireMobileWalletPending";
+const MOBILE_WALLET_SESSION_PREFIX = "slimewireMobileWalletSession:";
+const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+const BASE58_LOOKUP = new Map([...BASE58_ALPHABET].map((char, index) => [char, index]));
 
 function getStoredToken() {
   try {
@@ -519,6 +523,9 @@ function setWalletConnectStatus(message = "") {
 function walletInstallGuidance(providerId = "solana") {
   const label = walletProviderLabel(providerId);
   if (isMobileWalletPlatform()) {
+    if (mobileWalletConnectBaseUrl(providerId)) {
+      return `${label} is not injected in this browser. Tap Open ${label} to use the mobile wallet connect flow, or choose another wallet option.`;
+    }
     if (walletBrowseDeepLink(providerId)) {
       return `${label} is not injected in this browser. Use Open ${label} to continue in the wallet app, or choose another wallet option.`;
     }
@@ -605,15 +612,177 @@ function walletChoiceIcon(providerId = "") {
   return "./assets/slimewire/svg/icons/wallet.svg";
 }
 
+function base58Encode(bytes) {
+  const source = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+  if (!source.length) return "";
+  let value = 0n;
+  for (const byte of source) value = (value << 8n) + BigInt(byte);
+  let encoded = "";
+  while (value > 0n) {
+    const mod = Number(value % 58n);
+    encoded = BASE58_ALPHABET[mod] + encoded;
+    value /= 58n;
+  }
+  for (const byte of source) {
+    if (byte !== 0) break;
+    encoded = "1" + encoded;
+  }
+  return encoded || "1";
+}
+
+function base58Decode(value = "") {
+  const text = String(value || "").trim();
+  if (!text) return new Uint8Array();
+  let decoded = 0n;
+  for (const char of text) {
+    const index = BASE58_LOOKUP.get(char);
+    if (index === undefined) throw new Error("Invalid wallet callback encoding.");
+    decoded = decoded * 58n + BigInt(index);
+  }
+  const bytes = [];
+  while (decoded > 0n) {
+    bytes.unshift(Number(decoded & 255n));
+    decoded >>= 8n;
+  }
+  for (const char of text) {
+    if (char !== "1") break;
+    bytes.unshift(0);
+  }
+  return new Uint8Array(bytes);
+}
+
+function mobileWalletCallbackUrl(providerId = "phantom", stateId = "", returnPath = state.walletConnectReturnPath || "/terminal") {
+  const url = new URL(returnPath || window.location.pathname || "/terminal", window.location.origin);
+  url.searchParams.delete("sw_wallet");
+  url.searchParams.delete("sw_wallet_state");
+  url.searchParams.delete("phantom_encryption_public_key");
+  url.searchParams.delete("solflare_encryption_public_key");
+  url.searchParams.delete("nonce");
+  url.searchParams.delete("data");
+  url.searchParams.delete("errorCode");
+  url.searchParams.delete("errorMessage");
+  url.searchParams.set("sw_wallet", providerId);
+  url.searchParams.set("sw_wallet_state", stateId);
+  return url.toString();
+}
+
+function cleanMobileWalletCallbackParams() {
+  try {
+    const url = new URL(window.location.href);
+    [
+      "sw_wallet",
+      "sw_wallet_state",
+      "phantom_encryption_public_key",
+      "solflare_encryption_public_key",
+      "nonce",
+      "data",
+      "errorCode",
+      "errorMessage"
+    ].forEach((param) => url.searchParams.delete(param));
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  } catch {
+    // URL cleanup is cosmetic; never block a completed wallet callback.
+  }
+}
+
+function readMobileWalletPending() {
+  try {
+    const parsed = JSON.parse(window.sessionStorage?.getItem(MOBILE_WALLET_PENDING_KEY) || "{}");
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function storeMobileWalletPending(pending) {
+  try {
+    window.sessionStorage?.setItem(MOBILE_WALLET_PENDING_KEY, JSON.stringify(pending));
+  } catch {
+    // If sessionStorage is blocked, the redirect flow cannot be safely verified.
+  }
+}
+
+function clearMobileWalletPending() {
+  try {
+    window.sessionStorage?.removeItem(MOBILE_WALLET_PENDING_KEY);
+  } catch {
+    // Session cleanup is best-effort.
+  }
+}
+
+function mobileWalletProviderKeyParam(providerId = "") {
+  return providerId === "solflare" ? "solflare_encryption_public_key" : "phantom_encryption_public_key";
+}
+
+function mobileWalletConnectBaseUrl(providerId = "") {
+  if (providerId === "phantom") return "https://phantom.app/ul/v1/connect";
+  if (providerId === "solflare") return "https://solflare.com/ul/v1/connect";
+  return "";
+}
+
+function mobileWalletConnectUrl(providerId = "", pending = {}) {
+  const base = mobileWalletConnectBaseUrl(providerId);
+  if (!base) return "";
+  const url = new URL(base);
+  url.searchParams.set("app_url", appBrowseUrl());
+  url.searchParams.set("redirect_link", mobileWalletCallbackUrl(providerId, pending.stateId, pending.returnPath));
+  url.searchParams.set("dapp_encryption_public_key", pending.dappEncryptionPublicKey);
+  url.searchParams.set("cluster", "mainnet-beta");
+  return url.toString();
+}
+
+function mobileWalletPlatformLabel() {
+  if (/Android/i.test(navigator.userAgent || "")) return "android";
+  if (/iPhone|iPad|iPod/i.test(navigator.userAgent || "")) return "ios";
+  return isMobileWalletPlatform() ? "mobile" : "desktop";
+}
+
+function mobileWalletConnectAvailable(providerId = "") {
+  return isMobileWalletPlatform()
+    && Boolean(mobileWalletConnectBaseUrl(providerId))
+    && Boolean(window.nacl?.box?.keyPair)
+    && Boolean(window.crypto?.getRandomValues);
+}
+
+function startMobileWalletConnect(providerId = "", { returnPath = state.walletConnectReturnPath || "/terminal" } = {}) {
+  if (!mobileWalletConnectAvailable(providerId)) return false;
+  const keyPair = window.nacl.box.keyPair();
+  const stateBytes = new Uint8Array(16);
+  window.crypto.getRandomValues(stateBytes);
+  const stateId = base58Encode(stateBytes);
+  const pending = {
+    providerId,
+    stateId,
+    returnPath,
+    dappEncryptionPublicKey: base58Encode(keyPair.publicKey),
+    dappEncryptionSecretKey: base58Encode(keyPair.secretKey),
+    createdAt: Date.now()
+  };
+  storeMobileWalletPending(pending);
+  const link = mobileWalletConnectUrl(providerId, pending);
+  if (!link) return false;
+  const label = walletProviderLabel(providerId);
+  setWalletConnectStatus(`Opening ${label} mobile connect. Approve in the wallet app, then return to SlimeWire.`);
+  logWalletConnectFailure(providerId, null, {
+    action: "mobile_connect_redirect",
+    adapterReadyState: "mobile_redirect",
+    connectionFlow: "deeplink_connect",
+    platform: mobileWalletPlatformLabel()
+  });
+  window.location.assign(link);
+  return true;
+}
+
 function openMobileWalletBrowse(providerId = "") {
   const label = walletProviderLabel(providerId);
   const link = walletBrowseDeepLink(providerId);
   if (!link) return false;
-  setWalletConnectStatus(`Opening ${label} mobile wallet flow... Return to SlimeWire after approving the connection.`);
+  setWalletConnectStatus(`Opening ${label}. If mobile connect is unavailable, use the wallet browser and return to SlimeWire.`);
   logWalletConnectFailure(providerId, null, {
     action: "mobile_browse_redirect",
-    adapterReadyState: "mobile_redirect",
-    platform: /Android/i.test(navigator.userAgent || "") ? "android" : "ios"
+    adapterReadyState: "mobile_browse",
+    connectionFlow: "browse_fallback",
+    platform: mobileWalletPlatformLabel()
   });
   window.location.href = link;
   return true;
@@ -712,6 +881,175 @@ async function passwordLogin() {
     writeText(status, error.message);
     setError(error.message);
   }
+}
+
+function emailLoginValueFromForm() {
+  return firstFormValue(["[data-connect-login-email]", "[data-login-email]"]).trim();
+}
+
+function emailCodeValueFromForm() {
+  return firstFormValue(["[data-connect-login-code]", "[data-login-code]"]).trim();
+}
+
+async function sendEmailLoginCode() {
+  setError("");
+  const status = loginStatusElement();
+  try {
+    const email = emailLoginValueFromForm();
+    if (!email) throw new Error("Enter the email saved on your web account.");
+    writeText(status, "Sending login code...");
+    const data = await api("/api/web/email-code", {
+      method: "POST",
+      body: JSON.stringify({ email })
+    });
+    writeText(status, data.emailSent ? "Code sent. Check your email, then enter it here." : "Code requested. Check your email if delivery is configured.");
+  } catch (error) {
+    writeText(status, error.message);
+    setError(error.message);
+  }
+}
+
+async function emailCodeLogin() {
+  setError("");
+  const status = loginStatusElement();
+  try {
+    const code = emailCodeValueFromForm();
+    if (!code) throw new Error("Enter the login code from your email.");
+    writeText(status, "Checking login code...");
+    const data = await api("/api/web/login", {
+      method: "POST",
+      body: JSON.stringify({ code })
+    });
+    state.token = data.token;
+    applyUserFromApi(data.user);
+    setStoredToken(state.token);
+    state.loginCollapsed = true;
+    state.activeTab = "dashboard";
+    writeText(status, "Logged in.");
+    await refreshAfterTrade(data.trade?.signature);
+  } catch (error) {
+    writeText(status, error.message);
+    setError(error.message);
+  }
+}
+
+function decryptMobileWalletPayload(providerId = "", params = new URLSearchParams()) {
+  const pending = readMobileWalletPending();
+  const stateId = params.get("sw_wallet_state") || "";
+  if (!pending.stateId || pending.stateId !== stateId || pending.providerId !== providerId) {
+    throw new Error("Wallet callback did not match the pending SlimeWire connection.");
+  }
+  if (Date.now() - Number(pending.createdAt || 0) > 20 * 60 * 1000) {
+    throw new Error("Wallet connection expired. Open Connect Wallet and try again.");
+  }
+  const providerPublicKey = params.get(mobileWalletProviderKeyParam(providerId)) || "";
+  const nonce = params.get("nonce") || "";
+  const data = params.get("data") || "";
+  if (!providerPublicKey || !nonce || !data) {
+    throw new Error("Wallet approval did not return the expected connection data.");
+  }
+  const nacl = window.nacl;
+  if (!nacl?.box?.before || !nacl.box.open?.after) {
+    throw new Error("Mobile wallet connection helper did not load. Refresh and try again.");
+  }
+  const sharedSecret = nacl.box.before(
+    base58Decode(providerPublicKey),
+    base58Decode(pending.dappEncryptionSecretKey)
+  );
+  const decrypted = nacl.box.open.after(base58Decode(data), base58Decode(nonce), sharedSecret);
+  if (!decrypted) throw new Error("Unable to verify the wallet approval response.");
+  const payload = JSON.parse(new TextDecoder().decode(decrypted));
+  const publicKey = String(payload.public_key || payload.publicKey || "").trim();
+  if (!publicKey) throw new Error("Wallet approved, but no public address was returned.");
+  return {
+    publicKey,
+    session: String(payload.session || ""),
+    walletEncryptionPublicKey: providerPublicKey,
+    dappEncryptionPublicKey: pending.dappEncryptionPublicKey,
+    returnPath: pending.returnPath || "/terminal"
+  };
+}
+
+async function completeMobileWalletConnection(providerId = "", connection = {}) {
+  const status = walletConnectStatusElement();
+  await ensureWebAccount(status, "Creating secure web profile for connected wallet...");
+  const data = await api("/api/web/profile/connected-wallet", {
+    method: "POST",
+    body: JSON.stringify({
+      publicKey: connection.publicKey,
+      provider: walletProviderLabel(providerId)
+    })
+  });
+  applyUserFromApi(data.user || {
+    ...state.user,
+    connectedWallet: data.profile?.connectedWallet || null
+  });
+  state.connectedWalletBalance = {
+    publicKey: connection.publicKey,
+    shortPublicKey: shortAddress(connection.publicKey),
+    provider: walletProviderLabel(providerId),
+    tokens: []
+  };
+  try {
+    window.sessionStorage?.setItem(`${MOBILE_WALLET_SESSION_PREFIX}${providerId}`, JSON.stringify({
+      providerId,
+      publicKey: connection.publicKey,
+      session: connection.session,
+      walletEncryptionPublicKey: connection.walletEncryptionPublicKey,
+      dappEncryptionPublicKey: connection.dappEncryptionPublicKey,
+      connectedAt: new Date().toISOString()
+    }));
+  } catch {
+    // Session persistence is optional; the public wallet is already saved server-side.
+  }
+  clearMobileWalletPending();
+  cleanMobileWalletCallbackParams();
+  state.walletConnectMenuOpen = false;
+  setWalletConnectStatus(`Connected ${shortAddress(connection.publicKey)}. Opening Live Terminal...`);
+  navigateTo(connection.returnPath || state.walletConnectReturnPath || "/terminal", "terminal");
+  await Promise.allSettled([
+    loadAll(),
+    refreshLivePairBuckets({ silent: true, force: true }),
+    loadKolScan(state.kolMode, "", { silent: true })
+  ]);
+  render({ force: true });
+}
+
+async function handleMobileWalletReturn() {
+  const params = new URLSearchParams(window.location.search || "");
+  const providerId = params.get("sw_wallet") || "";
+  if (!["phantom", "solflare"].includes(providerId)) return false;
+  state.walletConnectMenuOpen = true;
+  const label = walletProviderLabel(providerId);
+  const errorCode = params.get("errorCode") || "";
+  const errorMessage = params.get("errorMessage") || "";
+  if (errorCode || errorMessage) {
+    clearMobileWalletPending();
+    cleanMobileWalletCallbackParams();
+    setWalletConnectStatus(`${label} did not connect: ${errorMessage || errorCode || "request cancelled"}. Choose another wallet or try again.`);
+    logWalletConnectFailure(providerId, new Error(errorMessage || errorCode || "Wallet connect cancelled"), {
+      action: "mobile_connect_cancelled",
+      connectionFlow: "deeplink_connect",
+      platform: mobileWalletPlatformLabel()
+    });
+    render({ force: true });
+    return true;
+  }
+  try {
+    setWalletConnectStatus(`Finishing ${label} mobile connection...`);
+    const connection = decryptMobileWalletPayload(providerId, params);
+    await completeMobileWalletConnection(providerId, connection);
+  } catch (error) {
+    setWalletConnectStatus(`${label} mobile connection could not finish: ${error.message}`);
+    logWalletConnectFailure(providerId, error, {
+      action: "mobile_connect_callback_failed",
+      connectionFlow: "deeplink_connect",
+      platform: mobileWalletPlatformLabel()
+    });
+    cleanMobileWalletCallbackParams();
+    render({ force: true });
+  }
+  return true;
 }
 
 async function createAccountAndConnectWallet() {
@@ -2118,8 +2456,8 @@ function kolAvatarMarkup(kol = {}, className = "kol-avatar") {
 function browserWalletChoices() {
   const mobile = isMobileWalletPlatform();
   return [
-    { id: "phantom", label: "Phantom", detected: Boolean(walletProviderById("phantom")), mobileRedirect: mobile && Boolean(walletBrowseDeepLink("phantom")), installUrl: walletInstallUrl("phantom"), icon: walletChoiceIcon("phantom") },
-    { id: "solflare", label: "Solflare", detected: Boolean(walletProviderById("solflare")), mobileRedirect: mobile && Boolean(walletBrowseDeepLink("solflare")), installUrl: walletInstallUrl("solflare"), icon: walletChoiceIcon("solflare") },
+    { id: "phantom", label: "Phantom", detected: Boolean(walletProviderById("phantom")), mobileRedirect: mobile && Boolean(mobileWalletConnectBaseUrl("phantom")), installUrl: walletInstallUrl("phantom"), icon: walletChoiceIcon("phantom") },
+    { id: "solflare", label: "Solflare", detected: Boolean(walletProviderById("solflare")), mobileRedirect: mobile && Boolean(mobileWalletConnectBaseUrl("solflare")), installUrl: walletInstallUrl("solflare"), icon: walletChoiceIcon("solflare") },
     { id: "backpack", label: "Backpack", detected: Boolean(walletProviderById("backpack")), mobileRedirect: false, installUrl: walletInstallUrl("backpack"), icon: walletChoiceIcon("backpack") },
     { id: "solana", label: "Detected Wallet", detected: Boolean(walletProviderById("solana")), mobileRedirect: false, installUrl: "", icon: walletChoiceIcon("solana") }
   ];
@@ -4880,6 +5218,7 @@ async function connectBrowserWallet(providerId, options = {}) {
   const status = walletConnectStatusElement();
   const provider = walletProviderById(providerId);
   if (!provider) {
+    if (startMobileWalletConnect(providerId, options)) return;
     if (openMobileWalletBrowse(providerId)) return;
     const message = walletInstallGuidance(providerId);
     setWalletConnectStatus(message);
@@ -8511,6 +8850,14 @@ document.addEventListener("click", async (event) => {
     await passwordLogin();
     return;
   }
+  if (target.matches("[data-send-email-code]")) {
+    await sendEmailLoginCode();
+    return;
+  }
+  if (target.matches("[data-web-code-login]")) {
+    await emailCodeLogin();
+    return;
+  }
   if (target.matches("[data-connect-create-account]")) {
     await createWebAccount();
     return;
@@ -8521,6 +8868,11 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-web-signup]")) await createWebAccount();
   if (target.matches("[data-web-password-login]")) await passwordLogin();
+  if (target.matches("[data-close-login]")) {
+    state.loginCollapsed = true;
+    render({ force: true });
+    return;
+  }
   if (target.matches("[data-web-signup-connect]")) {
     await createAccountAndConnectWallet();
     return;
@@ -8900,6 +9252,19 @@ document.addEventListener("click", async (event) => {
   }
 });
 
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  if (state.walletConnectMenuOpen) {
+    state.walletConnectMenuOpen = false;
+    render({ force: true });
+    return;
+  }
+  if (!state.loginCollapsed) {
+    state.loginCollapsed = true;
+    render({ force: true });
+  }
+});
+
 document.addEventListener("change", async (event) => {
   const target = event.target;
   if (target?.matches?.("[data-custom-select]")) {
@@ -9004,6 +9369,7 @@ document.addEventListener("visibilitychange", () => {
 window.addEventListener("focus", resumeLiveFeeds);
 
 async function initializeApp() {
+  await handleMobileWalletReturn();
   render();
   if (state.route === "terminal") {
     ensureLivePairsWarmup({ force: true });

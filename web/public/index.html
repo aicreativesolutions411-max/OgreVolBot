@@ -10,9 +10,10 @@
     <link rel="preload" as="image" href="./assets/slimewire/png/slime-border-frame-rich.png">
     <link rel="stylesheet" href="./tailwind.css?v=20260603-tailwind-v1">
     <link rel="stylesheet" href="./styles.css?v=20260603-tek-mobile-v1">
-    <link rel="stylesheet" href="./slimewire-final-overrides.css?v=20260605-terminal-mobile-header-v1">
+    <link rel="stylesheet" href="./slimewire-final-overrides.css?v=20260605-mobile-login-wallet-v1">
     <script src="./config.js"></script>
-    <script type="module" src="./app.js?v=20260605-terminal-mobile-header-v1"></script>
+    <script src="./vendor/tweetnacl-fast.min.js"></script>
+    <script type="module" src="./app.js?v=20260605-mobile-login-wallet-v1"></script>
   </head>
   <body>
     <main class="shell" data-app>
@@ -59,8 +60,12 @@
           </div>
         </div>
         <form class="top-login-panel" data-top-login onsubmit="return false;" hidden>
+          <div class="top-login-panel-head">
+            <strong>Lock In</strong>
+            <button type="button" class="icon-button" data-close-login aria-label="Close login panel">x</button>
+          </div>
           <label>
-            Username
+            Username or Email
             <input data-login-username type="text" autocomplete="username" placeholder="slimewire">
           </label>
           <label>
@@ -68,6 +73,19 @@
             <input data-login-password type="password" autocomplete="current-password" placeholder="8+ characters">
           </label>
           <button class="primary" type="button" data-web-password-login>Log In</button>
+          <div class="login-divider" aria-hidden="true"><span>or email code</span></div>
+          <label>
+            Email
+            <input data-login-email type="email" autocomplete="email" placeholder="you@example.com">
+          </label>
+          <label>
+            Login Code
+            <input data-login-code type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="6 digit code">
+          </label>
+          <div class="connect-form-actions">
+            <button type="button" data-send-email-code>Send Code</button>
+            <button type="button" data-web-code-login>Use Code</button>
+          </div>
           <small data-login-status></small>
           <p class="error" data-error hidden></p>
         </form>
@@ -121,6 +139,19 @@
               <div class="connect-form-actions">
                 <button class="primary" type="button" data-connect-password-login>Lock In</button>
                 <button type="button" data-connect-create-account>Create Account</button>
+              </div>
+              <div class="login-divider" aria-hidden="true"><span>or email code</span></div>
+              <label>
+                Email
+                <input data-connect-login-email type="email" autocomplete="email" placeholder="you@example.com">
+              </label>
+              <label>
+                Login Code
+                <input data-connect-login-code type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="6 digit code">
+              </label>
+              <div class="connect-form-actions">
+                <button type="button" data-send-email-code>Send Code</button>
+                <button type="button" data-web-code-login>Use Code</button>
               </div>
               <label class="remember-device-row">
                 <input type="checkbox" checked disabled>
