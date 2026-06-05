@@ -62,6 +62,8 @@ const [appSource, serverSource, perfStore] = await Promise.all([
 
 const events = Array.isArray(perfStore.events) ? perfStore.events : [];
 const positionEvents = events.filter((event) => /positions-refresh/.test(event.action || "") || event.component === "positions");
+const cacheHitEvents = positionEvents.filter((event) => event.cacheHit);
+const networkRefreshEvents = positionEvents.filter((event) => !event.cacheHit && /positions-refresh/.test(event.action || ""));
 const positionsRouteSource = serverSource.slice(serverSource.indexOf('pathname === "/api/web/positions"'), serverSource.indexOf('pathname === "/api/web/pnl"'));
 const buildPositionsSource = functionSource(serverSource, "buildPositionsOverview");
 const webPositionRowsSource = functionSource(serverSource, "webPositionRows");
@@ -69,6 +71,15 @@ const appLoadWalletCoreSource = functionSource(appSource, "loadWalletCore");
 const report = {
   latestPositionsRefresh: positionEvents.at(-1) || null,
   recentPositionsRefreshes: positionEvents.slice(-20),
+  timings: {
+    cachedMs: cacheHitEvents.at(-1)?.durationMs ?? null,
+    backgroundRefreshMs: networkRefreshEvents.at(-1)?.durationMs ?? null,
+    cacheHit: Boolean(cacheHitEvents.length),
+    positionsCount: positionEvents.at(-1)?.resultCount ?? null,
+    openCount: null,
+    priceCalls: (buildPositionsSource.match(/currentPrice|estimatedValueLamports|positionValue/g) || []).length,
+    slowestStep: [...positionEvents].sort((a, b) => Number(b.durationMs || 0) - Number(a.durationMs || 0)).at(0) || null
+  },
   sanitizedShape: {
     walletPublicKeyShortenedOnly: true,
     secretsLogged: false

@@ -16,6 +16,7 @@ let tradePlanTickCount = 0;
 let lastPortfolioExitTickAt = 0;
 
 console.log(`SlimeWire worker starting. Tick URL: ${CONFIG.tickUrl}`);
+console.log(`Worker service role: ${CONFIG.serviceRole}. RUN_WORKER=${CONFIG.runWorker ? "true" : "false"}.`);
 if (CONFIG.tickUrls.length > 1) {
   console.log(`Worker fallback tick URLs: ${CONFIG.tickUrls.slice(1).join(", ")}`);
 }
@@ -43,6 +44,8 @@ function loadWorkerConfig() {
   const buckets = normalizeList(process.env.WORKER_TICK_BUCKETS || "live,under1h,under3h,under1d");
   const sorts = normalizeList(process.env.WORKER_TICK_SORTS || "best,newest");
   const runTradePlans = parseBoolean(process.env.WORKER_TICK_RUN_TRADE_PLANS || "true");
+  const serviceRole = normalizeServiceRole(process.env.SERVICE_ROLE || process.env.RENDER_SERVICE_ROLE || "worker");
+  const runWorker = parseBoolean(process.env.RUN_WORKER || "true");
 
   if (!tickUrl) {
     throw new Error("WORKER_TICK_URL or WORKER_TICK_BASE_URL must be set for the worker service.");
@@ -50,8 +53,13 @@ function loadWorkerConfig() {
   if (!secret || secret.length < 24) {
     throw new Error("WORKER_SECRET must be set to the same long random value on the web service and worker service.");
   }
+  if (!runWorker || serviceRole === "web") {
+    throw new Error("Worker process refused to start because SERVICE_ROLE=web or RUN_WORKER=false. Set SERVICE_ROLE=worker and RUN_WORKER=true on the Render background worker.");
+  }
 
   return {
+    serviceRole,
+    runWorker,
     tickUrl,
     tickUrls: deriveTickUrls(tickUrl),
     secret,
@@ -291,6 +299,13 @@ function loadDotEnv() {
 
 function parseBoolean(value) {
   return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
+}
+
+function normalizeServiceRole(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["worker", "background", "job", "jobs"].includes(normalized)) return "worker";
+  if (["web", "server", "app", "api"].includes(normalized)) return "web";
+  return "worker";
 }
 
 function clampInteger(value, fallback, min, max) {

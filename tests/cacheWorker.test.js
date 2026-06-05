@@ -8,6 +8,8 @@ const appSource = fs.readFileSync(new URL("../web/public/app.js", import.meta.ur
 const packageSource = fs.readFileSync(new URL("../package.json", import.meta.url), "utf8");
 const debugCacheSource = fs.readFileSync(new URL("../scripts/debug-cache.js", import.meta.url), "utf8");
 const debugLoopsSource = fs.readFileSync(new URL("../scripts/debug-web-worker-loops.js", import.meta.url), "utf8");
+const debugServiceRoleSource = fs.readFileSync(new URL("../scripts/debug-service-role.js", import.meta.url), "utf8");
+const debugWorkerHealthSource = fs.readFileSync(new URL("../scripts/debug-worker-health.js", import.meta.url), "utf8");
 
 function functionBodyFromSource(source, name) {
   const syncStart = source.indexOf(`function ${name}`);
@@ -45,16 +47,40 @@ test("external Redis/KV cache provider is optional, sanitized, and command-check
   assert.match(packageSource, /"redis": "\^4\.7\.0"/);
   assert.match(packageSource, /"debug:cache": "node scripts\/debug-cache\.js"/);
   assert.match(packageSource, /"debug:web-worker-loops": "node scripts\/debug-web-worker-loops\.js"/);
+  assert.match(packageSource, /"debug:service-role": "node scripts\/debug-service-role\.js"/);
+  assert.match(packageSource, /"debug:worker-health": "node scripts\/debug-worker-health\.js"/);
   assert.match(packageSource, /node --check scripts\/debug-cache\.js/);
   assert.match(packageSource, /node --check scripts\/debug-web-worker-loops\.js/);
+  assert.match(packageSource, /node --check scripts\/debug-service-role\.js/);
+  assert.match(packageSource, /node --check scripts\/debug-worker-health\.js/);
   assert.match(serverSource, /function normalizeCacheProvider/);
   assert.match(serverSource, /async function redisKv/);
   assert.match(serverSource, /async function restKvCommand/);
   assert.match(serverSource, /async function cacheGetJson/);
   assert.match(serverSource, /async function cacheSetJson/);
+  assert.match(serverSource, /RENDER_KEY_VALUE_URL/);
   assert.match(serverSource, /CACHE_NAMESPACE|KV_CACHE_NAMESPACE/);
+  assert.match(serverSource, /const CacheService = Object\.freeze/);
+  assert.match(serverSource, /const LockService = Object\.freeze/);
+  assert.match(serverSource, /const DedupeService = Object\.freeze/);
+  assert.match(serverSource, /async function withCacheLock/);
+  assert.match(serverSource, /async function withCacheDedupe/);
   assert.doesNotMatch(debugCacheSource, /console\.log\(process\.env/i);
   assert.doesNotMatch(debugCacheSource, /redisUrl:\s*process\.env|token:\s*process\.env/i);
+  assert.match(debugCacheSource, /RENDER_KEY_VALUE_URL/);
+});
+
+test("Helius RPC is the explicit backend provider path and public fallback is disabled by default", () => {
+  assert.match(serverSource, /function resolveSolanaRpcConfig/);
+  assert.match(serverSource, /HELIUS_RPC_URL/);
+  assert.match(serverSource, /HELIUS_DEVELOPER_RPC_URL/);
+  assert.match(serverSource, /ALLOW_PUBLIC_RPC_FALLBACK/);
+  assert.match(serverSource, /Public Solana RPC fallback is disabled/);
+  assert.match(serverSource, /rpcProviderName: CONFIG\.rpcProviderName/);
+  assert.match(serverSource, /rpcUrlHost: CONFIG\.rpcUrlHost/);
+  assert.match(serverSource, /function rpcStatsSnapshot/);
+  assert.match(serverSource, /function recordRpcMetric/);
+  assert.doesNotMatch(functionBodyFromSource(serverSource, "loadConfig"), /rpcUrl:\s*process\.env\.SOLANA_RPC_URL \|\| "https:\/\/api\.mainnet-beta\.solana\.com"/);
 });
 
 test("web wallet, positions, and pnl summaries return cached data immediately and refresh in background", () => {
@@ -87,8 +113,10 @@ test("backend worker warms display caches and keeps TP/SL DB-backed", () => {
   assert.match(serverSource, /async function warmWorkerDisplayCaches/);
   assert.match(serverSource, /result\.displayCaches = await runWorkerTask\("displayCaches"/);
   assert.match(serverSource, /webInternalTpSlRunnersEnabled/);
+  assert.match(serverSource, /normalizeServiceRole/);
+  assert.match(serverSource, /serviceRole === "web"/);
+  assert.match(serverSource, /defaultWebInternalRunners/);
   assert.match(serverSource, /WEB_INTERNAL_TP_SL_RUNNERS_ENABLED/);
-  assert.match(serverSource, /workerTickEnabled \? "false" : "true"/);
   assert.match(serverSource, /processWebExitGuards/);
   assert.match(serverSource, /processTradePlans/);
   assert.match(serverSource, /processWebPortfolioExits/);
@@ -98,8 +126,20 @@ test("backend worker warms display caches and keeps TP/SL DB-backed", () => {
   assert.match(workerSource, /runTimedTradePlans: CONFIG\.runTradePlans && !CONFIG\.fastTpSlEnabled/);
   assert.match(workerSource, /warmDisplayCaches: CONFIG\.warmDisplayCaches/);
   assert.match(workerSource, /displayCacheUserLimit: CONFIG\.displayCacheUserLimit/);
+  assert.match(workerSource, /SERVICE_ROLE=web or RUN_WORKER=false/);
   assert.match(workerSource, /Display cache: \$/);
   assert.match(workerSource, /tradePlanTick/);
+});
+
+test("worker refresh jobs use short cache locks and dedupe without making Redis trade source of truth", () => {
+  assert.match(serverSource, /worker-display-caches/);
+  assert.match(serverSource, /LockService\.withLock\("worker-display-caches"/);
+  assert.match(serverSource, /DedupeService\.run\(`worker-feed:\$\{bucket\}:\$\{sort\}`/);
+  assert.match(serverSource, /display_cache_lock_active/);
+  assert.doesNotMatch(functionBodyFromSource(serverSource, "recordTpSlWorkerEvent"), /cacheSetJson|redisKv|restKvCommand/);
+  assert.match(debugWorkerHealthSource, /WORKER HEALTH DEBUG/);
+  assert.match(debugWorkerHealthSource, /startupReconcileRanAt/);
+  assert.match(debugWorkerHealthSource, /workerDisplayCacheLock/);
 });
 
 test("TP/SL sell reliability retries PumpPortal pools and reconciles missing token balances", () => {
@@ -124,4 +164,7 @@ test("web app has display polling only and debug command proves worker loops sta
   assert.match(debugLoopsSource, /webServiceInternalLoops/);
   assert.match(debugLoopsSource, /broadTickSkipsFastPlanLoops/);
   assert.match(debugLoopsSource, /displayCacheWarmPath/);
+  assert.match(debugServiceRoleSource, /SERVICE ROLE DEBUG/);
+  assert.match(debugServiceRoleSource, /jobsBlockedByRole/);
+  assert.match(debugServiceRoleSource, /rpcProvider/);
 });

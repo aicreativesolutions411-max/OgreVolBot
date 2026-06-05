@@ -9,6 +9,7 @@ const cssSource = fs.readFileSync(new URL("../web/public/slimewire-final-overrid
 const debugPerfSource = fs.readFileSync(new URL("../scripts/debug-perf.js", import.meta.url), "utf8");
 const debugWalletSource = fs.readFileSync(new URL("../scripts/debug-wallet-refresh.js", import.meta.url), "utf8");
 const debugPositionsSource = fs.readFileSync(new URL("../scripts/debug-positions-refresh.js", import.meta.url), "utf8");
+const debugFrontendPerfSource = fs.readFileSync(new URL("../scripts/debug-frontend-perf.js", import.meta.url), "utf8");
 const profileTerminalSource = fs.readFileSync(new URL("../scripts/profile-terminal.js", import.meta.url), "utf8");
 
 function functionBody(name, source = appSource) {
@@ -102,11 +103,19 @@ test("debug and profile commands are registered and syntax-checked", () => {
   assert.match(packageSource, /"profile:terminal": "node scripts\/profile-terminal\.js"/);
   assert.match(packageSource, /"debug:wallet-refresh": "node scripts\/debug-wallet-refresh\.js"/);
   assert.match(packageSource, /"debug:positions-refresh": "node scripts\/debug-positions-refresh\.js"/);
+  assert.match(packageSource, /"debug:frontend-perf": "node scripts\/debug-frontend-perf\.js"/);
   assert.match(packageSource, /node --check scripts\/debug-perf\.js/);
+  assert.match(packageSource, /node --check scripts\/debug-frontend-perf\.js/);
   assert.match(debugPerfSource, /longTasksOver50ms/);
   assert.match(debugPerfSource, /duplicatedRequests/);
   assert.match(debugWalletSource, /WALLET REFRESH DEBUG/);
+  assert.match(debugWalletSource, /cachedMs/);
+  assert.match(debugWalletSource, /backgroundRefreshMs/);
   assert.match(debugPositionsSource, /POSITIONS REFRESH DEBUG/);
+  assert.match(debugPositionsSource, /priceCalls/);
+  assert.match(debugFrontendPerfSource, /FRONTEND PERF DEBUG/);
+  assert.match(debugFrontendPerfSource, /duplicateIntervals/);
+  assert.match(debugFrontendPerfSource, /hiddenPolling/);
   assert.match(profileTerminalSource, /TERMINAL PROFILE/);
 });
 

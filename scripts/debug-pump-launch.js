@@ -27,7 +27,8 @@ const apiUrl = (process.env.PUMP_LAUNCH_API_URL || process.env.PUMP_LAUNCH_API_B
 const metadataUrl = (process.env.PUMP_LAUNCH_METADATA_URL || "https://uploads.pinata.cloud/v3/files").trim();
 const pinataJwt = process.env.PUMP_LAUNCH_PINATA_JWT || "";
 const pinataDiagnostics = safePinataDiagnostics(pinataJwt);
-const rpcUrl = process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
+const rpcConfig = resolveRpcConfig();
+const rpcUrl = rpcConfig.url;
 const userId = String(process.env.DEBUG_PUMP_LAUNCH_USER_ID || "").trim();
 const selectedDevWalletId = String(process.env.DEBUG_PUMP_LAUNCH_DEV_WALLET || process.env.DEBUG_PUMP_LAUNCH_DEV_WALLET_ID || "").trim();
 const debugLaunchAttemptId = String(argValue("--launchAttemptId") || process.env.DEBUG_PUMP_LAUNCH_ATTEMPT_ID || "").trim();
@@ -100,7 +101,7 @@ function decryptManagedWallet(wallet) {
 }
 
 async function balanceFor(publicKey) {
-  if (!rpcUrl) return { ok: false, reason: "SOLANA_RPC_URL is missing" };
+  if (!rpcUrl) return { ok: false, reason: "HELIUS_RPC_URL is missing" };
   try {
     const connection = new Connection(rpcUrl, "confirmed");
     const lamports = await connection.getBalance(new PublicKey(publicKey), "confirmed");
@@ -125,6 +126,30 @@ function attemptLine(attempt) {
     `errorCode=${attempt.errorCode || ""}`,
     `error=${String(attempt.failureReason || attempt.errorMessage || "").replace(/\s+/g, " ").slice(0, 220)}`
   ].join(" ");
+}
+
+function resolveRpcConfig() {
+  const pairs = [
+    ["HELIUS_RPC_URL", process.env.HELIUS_RPC_URL],
+    ["HELIUS_DEVELOPER_RPC_URL", process.env.HELIUS_DEVELOPER_RPC_URL],
+    ["HELIUS_HTTP_URL", process.env.HELIUS_HTTP_URL],
+    ["HELIUS_SOLANA_RPC_URL", process.env.HELIUS_SOLANA_RPC_URL],
+    ["SOLANA_RPC_URL", process.env.SOLANA_RPC_URL]
+  ];
+  const found = pairs.find(([, value]) => String(value || "").trim());
+  const url = String(found?.[1] || "").trim();
+  let host = "";
+  try {
+    host = url ? new URL(url).host.toLowerCase() : "";
+  } catch {
+    host = "";
+  }
+  return {
+    url,
+    envSource: found?.[0] || "",
+    host,
+    providerName: host.includes("helius") ? "helius" : host ? "custom" : "missing"
+  };
 }
 
 function tokenFeatureStatus(attempt, tradeStore) {
@@ -160,7 +185,10 @@ console.log(`PUMP_LAUNCH_PINATA_JWT_CONFIGURED=${pinataDiagnostics.tokenPresent}
 console.log(`PUMP_LAUNCH_PINATA_JWT_LENGTH=${pinataDiagnostics.tokenLength}`);
 console.log(`PUMP_LAUNCH_PINATA_JWT_CLEANED=${pinataDiagnostics.cleaned}`);
 console.log(`PUMP_LAUNCH_PINATA_JWT_PLACEHOLDER=${pinataDiagnostics.placeholder}`);
-console.log(`SOLANA_RPC_URL_CONFIGURED=${Boolean(rpcUrl)}`);
+console.log(`SOLANA_RPC_CONFIGURED=${Boolean(rpcUrl)}`);
+console.log(`SOLANA_RPC_PROVIDER=${rpcConfig.providerName}`);
+console.log(`SOLANA_RPC_HOST=${rpcConfig.host || "(missing)"}`);
+console.log(`SOLANA_RPC_ENV_SOURCE=${rpcConfig.envSource || "(missing)"}`);
 console.log(`DEBUG_PUMP_LAUNCH_USER_ID=${userId || "(not set)"}`);
 console.log(`DEBUG_PUMP_LAUNCH_DEV_WALLET=${selectedDevWalletId || "(not set)"}`);
 console.log(`DEBUG_PUMP_LAUNCH_ATTEMPT_ID=${debugLaunchAttemptId || "(not set)"}`);

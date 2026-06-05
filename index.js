@@ -432,7 +432,14 @@ function loadConfig() {
 
   return {
     telegramToken: token,
-    rpcUrl: process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com",
+    rpcUrl: process.env.HELIUS_RPC_URL
+      || process.env.HELIUS_DEVELOPER_RPC_URL
+      || process.env.HELIUS_HTTP_URL
+      || process.env.HELIUS_SOLANA_RPC_URL
+      || process.env.SOLANA_RPC_URL
+      || (() => {
+        throw new Error("HELIUS_RPC_URL (or another Helius RPC env var) must be set. Public Solana RPC fallback is disabled.");
+      })(),
     appSecret: secret,
     dataDir: path.resolve(process.cwd(), process.env.DATA_DIR || path.join(__dirname, "..", "data")),
     allowEphemeralStorage: parseBoolean(process.env.ALLOW_EPHEMERAL_STORAGE || "false"),

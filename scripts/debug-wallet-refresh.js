@@ -62,11 +62,20 @@ const [appSource, serverSource, perfStore] = await Promise.all([
 
 const events = Array.isArray(perfStore.events) ? perfStore.events : [];
 const walletEvents = events.filter((event) => /wallet-refresh|load-all/.test(event.action || "") || event.component === "wallet");
+const cacheHitEvents = walletEvents.filter((event) => event.cacheHit);
+const networkRefreshEvents = walletEvents.filter((event) => !event.cacheHit && /wallet-refresh|load-all/.test(event.action || ""));
 const balanceRouteSource = serverSource.slice(serverSource.indexOf('pathname === "/api/web/balances"'), serverSource.indexOf('pathname === "/api/web/positions"'));
 const webBalanceRowsSource = functionSource(serverSource, "webBalanceRows");
 const report = {
   latestWalletRefresh: walletEvents.at(-1) || null,
   recentWalletRefreshes: walletEvents.slice(-20),
+  timings: {
+    cachedMs: cacheHitEvents.at(-1)?.durationMs ?? null,
+    backgroundRefreshMs: networkRefreshEvents.at(-1)?.durationMs ?? null,
+    cacheHit: Boolean(cacheHitEvents.length),
+    dedupeHit: events.some((event) => event.action === "wallet-refresh-dedupe"),
+    partialErrors: walletEvents.filter((event) => event.errorCode).slice(-5)
+  },
   sanitizedShape: {
     walletPublicKeyShortenedOnly: true,
     secretsLogged: false
@@ -82,6 +91,7 @@ const report = {
   backendCalls: {
     solBalanceCalls: (webBalanceRowsSource.match(/getSolBalanceCached/g) || []).length,
     tokenAccountCalls: (webBalanceRowsSource.match(/getOwnedTokenAccountsWithWarningsCached/g) || []).length,
+    rpcCalls: (webBalanceRowsSource.match(/rpcWithRetry/g) || []).length,
     callsRunInParallel: bool(balanceRouteSource, /Promise\.all/) && bool(webBalanceRowsSource, /runWithConcurrency/),
     tokenMetadataSeparateFromBalances: !/tokenMetadataMapForMints/.test(webBalanceRowsSource)
   },

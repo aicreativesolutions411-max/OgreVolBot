@@ -112,6 +112,9 @@ const webLoginAttemptLimits = new Map();
 const webSummaryCache = new Map();
 let redisKvClientPromise = null;
 let redisKvClient = null;
+const cacheDedupePromises = new Map();
+const cacheLockMemory = new Map();
+const cacheLockRecent = [];
 const kvCacheStats = {
   provider: "memory",
   configured: false,
@@ -119,11 +122,26 @@ const kvCacheStats = {
   hits: 0,
   misses: 0,
   sets: 0,
+  locksAcquired: 0,
+  locksSkipped: 0,
+  dedupeHits: 0,
   errors: 0,
   lastError: "",
   lastGetAt: "",
   lastSetAt: "",
-  lastHitAt: ""
+  lastHitAt: "",
+  lastLockAt: "",
+  lastDedupeAt: ""
+};
+const rpcStats = {
+  callCount: 0,
+  errorCount: 0,
+  rateLimitCount: 0,
+  totalMs: 0,
+  samples: [],
+  lastCallAt: "",
+  lastErrorAt: "",
+  lastError: ""
 };
 const startedAt = new Date();
 const WEB_LOGIN_CODE_TTL_MS = 10 * 60 * 1000;
@@ -401,25 +419,38 @@ function loadConfig() {
     || ""
   ).replace(/\/$/, "");
   const pumpLaunchPumpFunIpfsUrl = (process.env.PUMP_LAUNCH_PUMPFUN_IPFS_URL || "https://pump.fun/api/ipfs").trim();
-  const workerTickEnabled = parseBoolean(process.env.WORKER_TICK_ENABLED || (process.env.WORKER_SECRET ? "true" : "false"));
+  const rpcConfig = resolveSolanaRpcConfig();
+  const workerSecret = process.env.WORKER_SECRET || "";
+  const serviceRole = normalizeServiceRole(process.env.SERVICE_ROLE || process.env.RENDER_SERVICE_ROLE || "");
+  const runWorker = parseBoolean(process.env.RUN_WORKER || (serviceRole === "worker" ? "true" : "false"));
+  const workerTickEnabled = parseBoolean(process.env.WORKER_TICK_ENABLED || (workerSecret ? "true" : (runWorker ? "true" : "false")));
   const workerTickRunTradePlans = parseBoolean(process.env.WORKER_TICK_RUN_TRADE_PLANS || "true");
   const workerTickRunDcaPlans = parseBoolean(process.env.WORKER_TICK_RUN_DCA_PLANS || "true");
   const workerTickWarmFeeds = parseBoolean(process.env.WORKER_TICK_WARM_FEEDS || "true");
   const workerTickWarmDisplayCaches = parseBoolean(process.env.WORKER_TICK_WARM_DISPLAY_CACHES || "true");
   const workerDisplayCacheUserLimit = Number.parseInt(process.env.WORKER_DISPLAY_CACHE_USER_LIMIT || "8", 10);
+  const defaultWebInternalRunners = serviceRole === "web" || workerTickEnabled ? "false" : "true";
   const webInternalTpSlRunnersEnabled = parseBoolean(
     process.env.WEB_INTERNAL_TP_SL_RUNNERS_ENABLED
       || process.env.INTERNAL_TP_SL_RUNNERS_ENABLED
-      || (workerTickEnabled ? "false" : "true")
+      || defaultWebInternalRunners
   );
   const webInternalDcaRunnerEnabled = parseBoolean(
     process.env.WEB_INTERNAL_DCA_RUNNER_ENABLED
       || process.env.INTERNAL_DCA_RUNNER_ENABLED
-      || (workerTickEnabled ? "false" : "true")
+      || defaultWebInternalRunners
   );
-  const workerSecret = process.env.WORKER_SECRET || "";
   const cacheProvider = normalizeCacheProvider(process.env.CACHE_PROVIDER || process.env.KV_PROVIDER || "");
-  const redisUrl = String(process.env.REDIS_URL || process.env.KV_REDIS_URL || process.env.SLIMEWIRE_REDIS_URL || "").trim();
+  const redisUrl = String(
+    process.env.REDIS_URL
+      || process.env.RENDER_KEY_VALUE_URL
+      || process.env.RENDER_KEY_VALUE_INTERNAL_URL
+      || process.env.RENDER_REDIS_URL
+      || process.env.REDIS_INTERNAL_URL
+      || process.env.KV_REDIS_URL
+      || process.env.SLIMEWIRE_REDIS_URL
+      || ""
+  ).trim();
   const kvRestUrl = String(process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL || process.env.SLIMEWIRE_KV_REST_URL || "").trim().replace(/\/$/, "");
   const kvRestToken = String(process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN || process.env.SLIMEWIRE_KV_REST_TOKEN || "").trim();
   const cacheNamespace = String(process.env.CACHE_NAMESPACE || process.env.KV_CACHE_NAMESPACE || "slimewire").trim().replace(/[^\w:-]/g, "").slice(0, 40) || "slimewire";
@@ -621,7 +652,11 @@ function loadConfig() {
 
   return {
     telegramToken: token,
-    rpcUrl: process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com",
+    rpcUrl: rpcConfig.url,
+    rpcProviderName: rpcConfig.providerName,
+    rpcUrlHost: rpcConfig.host,
+    rpcEnvSource: rpcConfig.envSource,
+    publicRpcFallbackAllowed: rpcConfig.publicFallbackAllowed,
     appSecret: secret,
     dataDir: path.resolve(process.cwd(), process.env.DATA_DIR || path.join(__dirname, "..", "data")),
     allowEphemeralStorage: parseBoolean(process.env.ALLOW_EPHEMERAL_STORAGE || "false"),
@@ -671,6 +706,8 @@ function loadConfig() {
     stopLossSubmitStaleMs,
     tpSlMonitorStepTimeoutMs,
     tradePlanRunnerStaleMs,
+    serviceRole,
+    runWorker,
     workerTickEnabled,
     workerTickRunTradePlans,
     workerTickRunDcaPlans,
@@ -2107,6 +2144,8 @@ async function handleInternalWorkerTick(request, response) {
 function handleInternalWorkerHealth(request, response) {
   sendWebJson(request, response, 200, {
     ok: true,
+    serviceRole: CONFIG.serviceRole,
+    runWorker: CONFIG.runWorker,
     workerTickEnabled: CONFIG.workerTickEnabled,
     workerSecretConfigured: Boolean(CONFIG.workerSecret && CONFIG.workerSecret.length >= 24),
     runTradePlans: CONFIG.workerTickRunTradePlans,
@@ -2118,6 +2157,12 @@ function handleInternalWorkerHealth(request, response) {
     webInternalDcaRunnerEnabled: CONFIG.webInternalDcaRunnerEnabled,
     cacheProvider: kvProviderName(),
     cacheConfigured: kvConfigured(),
+    cacheStats: cacheStatsSnapshot(),
+    activeCacheLocks: activeCacheLockSnapshot(),
+    rpcProviderName: CONFIG.rpcProviderName,
+    rpcUrlHost: CONFIG.rpcUrlHost,
+    rpcStats: rpcStatsSnapshot(),
+    deployId: process.env.RENDER_GIT_COMMIT || process.env.RENDER_SERVICE_ID || "",
     livePairRefreshSeconds: CONFIG.livePairsRefreshSeconds,
     stopLossCheckIntervalMs: CONFIG.stopLossCheckIntervalMs,
     stopLossPriceFailureSellAfter: CONFIG.stopLossPriceFailureSellAfter,
@@ -2235,7 +2280,7 @@ async function warmWorkerLivePairFeeds(body = {}) {
 
   for (const bucket of buckets) {
     for (const sort of sorts) {
-      const livePairs = await webLivePairs("worker", bucket, { sort, force });
+      const livePairs = await DedupeService.run(`worker-feed:${bucket}:${sort}`, 10_000, () => webLivePairs("worker", bucket, { sort, force }));
       warmed.push({
         bucket,
         sort,
@@ -2268,59 +2313,68 @@ async function activeWebUserIdsForDisplayCache(limit = CONFIG.workerDisplayCache
 }
 
 async function warmWorkerDisplayCaches(body = {}) {
-  const limit = Math.max(0, Math.min(50, Number.parseInt(body.displayCacheUserLimit || CONFIG.workerDisplayCacheUserLimit, 10) || 0));
-  const userIds = await activeWebUserIdsForDisplayCache(limit);
-  const warmed = [];
-  const force = body.forceDisplayCaches !== false;
-  await runWithConcurrency(userIds, Math.min(2, Math.max(1, CONFIG.balanceConcurrency)), async (userId) => {
-    const userResult = {
-      userId: crypto.createHash("sha256").update(String(userId)).digest("hex").slice(0, 10),
-      balances: null,
-      positions: null,
-      pnl: null
-    };
-    const tasks = [
-      ["balances", () => cachedWebSummary("web:balances", userId, { force, background: true }, 0, async () => {
-        const [balances, connectedWallet] = await Promise.all([
-          webBalanceRows(userId, { force }),
-          webConnectedWalletBalance(userId, { force })
-        ]);
-        return { balances, connectedWallet };
-      })],
-      ["positions", () => cachedWebSummary("web:positions", userId, { force, background: true }, 0, async () => ({
-        positions: await webPositionRows(userId, { force })
-      }))],
-      ["pnl", () => cachedWebSummary("web:pnl", userId, { force, background: true }, 0, async () => ({
-        pnl: await webPnlSummary(userId)
-      }))]
-    ];
-    const results = await Promise.allSettled(tasks.map(([, task]) => task()));
-    results.forEach((result, index) => {
-      const name = tasks[index][0];
-      if (result.status === "fulfilled") {
-        userResult[name] = {
-          ok: true,
-          cacheHit: Boolean(result.value.cacheHit),
-          stale: Boolean(result.value.stale),
-          rows: countSummaryRows(result.value.value),
-          durationMs: result.value.durationMs
-        };
-      } else {
-        userResult[name] = {
-          ok: false,
-          error: safePerfEventText(result.reason?.message || "Refresh failed", 120)
-        };
-      }
+  return LockService.withLock("worker-display-caches", 25_000, async () => {
+    const limit = Math.max(0, Math.min(50, Number.parseInt(body.displayCacheUserLimit || CONFIG.workerDisplayCacheUserLimit, 10) || 0));
+    const userIds = await activeWebUserIdsForDisplayCache(limit);
+    const warmed = [];
+    const force = body.forceDisplayCaches !== false;
+    await runWithConcurrency(userIds, Math.min(2, Math.max(1, CONFIG.balanceConcurrency)), async (userId) => {
+      const userResult = {
+        userId: crypto.createHash("sha256").update(String(userId)).digest("hex").slice(0, 10),
+        balances: null,
+        positions: null,
+        pnl: null
+      };
+      const tasks = [
+        ["balances", () => cachedWebSummary("web:balances", userId, { force, background: true }, 0, async () => {
+          const [balances, connectedWallet] = await Promise.all([
+            webBalanceRows(userId, { force }),
+            webConnectedWalletBalance(userId, { force })
+          ]);
+          return { balances, connectedWallet };
+        })],
+        ["positions", () => cachedWebSummary("web:positions", userId, { force, background: true }, 0, async () => ({
+          positions: await webPositionRows(userId, { force })
+        }))],
+        ["pnl", () => cachedWebSummary("web:pnl", userId, { force, background: true }, 0, async () => ({
+          pnl: await webPnlSummary(userId)
+        }))]
+      ];
+      const results = await Promise.allSettled(tasks.map(([, task]) => task()));
+      results.forEach((result, index) => {
+        const name = tasks[index][0];
+        if (result.status === "fulfilled") {
+          userResult[name] = {
+            ok: true,
+            cacheHit: Boolean(result.value.cacheHit),
+            stale: Boolean(result.value.stale),
+            rows: countSummaryRows(result.value.value),
+            durationMs: result.value.durationMs
+          };
+        } else {
+          userResult[name] = {
+            ok: false,
+            error: safePerfEventText(result.reason?.message || "Refresh failed", 120)
+          };
+        }
+      });
+      warmed.push(userResult);
     });
-    warmed.push(userResult);
-  });
 
-  return {
+    return {
+      provider: kvProviderName(),
+      cacheConfigured: kvConfigured(),
+      users: userIds.length,
+      warmed
+    };
+  }, () => ({
+    skipped: true,
+    reason: "display_cache_lock_active",
     provider: kvProviderName(),
     cacheConfigured: kvConfigured(),
-    users: userIds.length,
-    warmed
-  };
+    users: 0,
+    warmed: []
+  }));
 }
 
 function normalizeWorkerList(value, fallback) {
@@ -2388,6 +2442,55 @@ function normalizeTelegramUsername(value) {
 
 function parseBoolean(value) {
   return ["1", "true", "yes", "on"].includes(String(value).toLowerCase());
+}
+
+function normalizeServiceRole(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["worker", "background", "job", "jobs"].includes(normalized)) return "worker";
+  if (["web", "server", "app", "api"].includes(normalized)) return "web";
+  return "web";
+}
+
+function safeUrlHost(value = "") {
+  try {
+    return new URL(String(value || "")).host.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function resolveSolanaRpcConfig() {
+  const candidates = [
+    ["HELIUS_RPC_URL", process.env.HELIUS_RPC_URL],
+    ["HELIUS_DEVELOPER_RPC_URL", process.env.HELIUS_DEVELOPER_RPC_URL],
+    ["HELIUS_HTTP_URL", process.env.HELIUS_HTTP_URL],
+    ["HELIUS_SOLANA_RPC_URL", process.env.HELIUS_SOLANA_RPC_URL],
+    ["SOLANA_RPC_URL", process.env.SOLANA_RPC_URL]
+  ];
+  const match = candidates.find(([, value]) => String(value || "").trim());
+  const allowPublicFallback = parseBoolean(process.env.ALLOW_PUBLIC_RPC_FALLBACK || "false");
+  const envSource = match?.[0] || (allowPublicFallback ? "ALLOW_PUBLIC_RPC_FALLBACK" : "");
+  const url = String(match?.[1] || (allowPublicFallback ? "https://api.mainnet-beta.solana.com" : "")).trim();
+  const host = safeUrlHost(url);
+  if (!url || !host) {
+    throw new Error("HELIUS_RPC_URL (or another Helius RPC env var) must be set. Public Solana RPC fallback is disabled unless ALLOW_PUBLIC_RPC_FALLBACK=true.");
+  }
+  const isPublicSolana = host === "api.mainnet-beta.solana.com";
+  if (isPublicSolana && !allowPublicFallback) {
+    throw new Error("Public Solana RPC fallback is disabled. Set HELIUS_RPC_URL/HELIUS_DEVELOPER_RPC_URL to the Helius Developer RPC endpoint.");
+  }
+  const providerName = host.includes("helius")
+    ? "helius"
+    : isPublicSolana
+      ? "public-solana"
+      : "custom";
+  return {
+    url,
+    host,
+    providerName,
+    envSource,
+    publicFallbackAllowed: allowPublicFallback
+  };
 }
 
 function normalizeMetadataProvider(value) {
@@ -14986,6 +15089,26 @@ async function recordTpSlWorkerHeartbeat(reason = "heartbeat", detail = {}) {
   store.workerRunning = true;
   store.lastHeartbeatAt = now;
   store.lastHeartbeatReason = reason;
+  store.workerName = process.env.RENDER_SERVICE_NAME || process.env.SERVICE_NAME || "slimewire-worker";
+  store.serviceRole = CONFIG.serviceRole;
+  store.deployId = process.env.RENDER_GIT_COMMIT || process.env.RENDER_SERVICE_ID || "";
+  store.jobsRunning = {
+    workerTickEnabled: CONFIG.workerTickEnabled,
+    warmFeeds: CONFIG.workerTickWarmFeeds,
+    warmDisplayCaches: CONFIG.workerTickWarmDisplayCaches,
+    tradePlans: CONFIG.workerTickRunTradePlans,
+    dcaPlans: CONFIG.workerTickRunDcaPlans
+  };
+  if (reason === "worker_tick_completed") {
+    store.lastWorkerTickAt = now;
+    store.lastJobRuns = {
+      ...(store.lastJobRuns || {}),
+      workerTick: { at: now, ...detail }
+    };
+  }
+  if (reason === "worker_tick_started") {
+    store.lastWorkerTickStartedAt = now;
+  }
   if (reason === "reconcile_completed" || reason === "startup") {
     store.startupReconcileRanAt = now;
   }
@@ -16113,6 +16236,226 @@ async function cacheSetJson(key, value, ttlMs) {
     return false;
   }
 }
+
+async function cacheSetRaw(key, value, ttlMs, options = {}) {
+  const provider = kvProviderName();
+  if (provider === "memory") return false;
+  const ttlSeconds = Math.max(1, Math.ceil(Number(ttlMs || CONFIG.displayCacheStaleMs) / 1000));
+  try {
+    if (provider === "redis") {
+      const client = await redisKv();
+      if (!client) return false;
+      const result = options.nx
+        ? await client.set(key, String(value), { NX: true, EX: ttlSeconds })
+        : await client.set(key, String(value), { EX: ttlSeconds });
+      return options.nx ? result === "OK" : true;
+    }
+    if (provider === "rest-kv") {
+      const command = options.nx
+        ? ["SET", key, String(value), "NX", "EX", ttlSeconds]
+        : ["SET", key, String(value), "EX", ttlSeconds];
+      const result = await restKvCommand(command);
+      return options.nx ? String(result || "").toUpperCase() === "OK" : true;
+    }
+  } catch (error) {
+    kvCacheStats.errors += 1;
+    kvCacheStats.lastError = safePerfEventText(error?.message || "Cache raw write failed", 140);
+  }
+  return false;
+}
+
+async function cacheGetRaw(key) {
+  const provider = kvProviderName();
+  if (provider === "memory") return null;
+  try {
+    if (provider === "redis") {
+      const client = await redisKv();
+      return client ? await client.get(key) : null;
+    }
+    if (provider === "rest-kv") {
+      return await restKvCommand(["GET", key]);
+    }
+  } catch (error) {
+    kvCacheStats.errors += 1;
+    kvCacheStats.lastError = safePerfEventText(error?.message || "Cache raw read failed", 140);
+  }
+  return null;
+}
+
+async function cacheDeleteKey(key) {
+  const provider = kvProviderName();
+  if (provider === "memory") return false;
+  try {
+    if (provider === "redis") {
+      const client = await redisKv();
+      if (!client) return false;
+      await client.del(key);
+      return true;
+    }
+    if (provider === "rest-kv") {
+      await restKvCommand(["DEL", key]);
+      return true;
+    }
+  } catch (error) {
+    kvCacheStats.errors += 1;
+    kvCacheStats.lastError = safePerfEventText(error?.message || "Cache delete failed", 140);
+  }
+  return false;
+}
+
+function rememberCacheLockEvent(event) {
+  cacheLockRecent.push({
+    at: new Date().toISOString(),
+    lockName: safeCacheText(event.lockName || "", 80),
+    action: safeCacheText(event.action || "", 40),
+    provider: safeCacheText(event.provider || kvProviderName(), 30),
+    ttlMs: Number.isFinite(Number(event.ttlMs)) ? Math.max(0, Math.round(Number(event.ttlMs))) : 0
+  });
+  while (cacheLockRecent.length > 30) cacheLockRecent.shift();
+}
+
+async function acquireCacheLock(lockName, ttlMs = 15_000) {
+  const provider = kvProviderName();
+  const token = crypto.randomUUID();
+  const lockKey = externalCacheKey(`lock:${lockName}`, "global");
+  const expiresAt = Date.now() + Math.max(1_000, Number(ttlMs) || 15_000);
+  if (provider === "memory") {
+    const current = cacheLockMemory.get(lockKey);
+    if (current && current.expiresAt > Date.now()) {
+      kvCacheStats.locksSkipped += 1;
+      rememberCacheLockEvent({ lockName, action: "skip-memory-active", provider, ttlMs });
+      return null;
+    }
+    cacheLockMemory.set(lockKey, { token, expiresAt, lockName });
+    kvCacheStats.locksAcquired += 1;
+    kvCacheStats.lastLockAt = new Date().toISOString();
+    rememberCacheLockEvent({ lockName, action: "acquire-memory", provider, ttlMs });
+    return { lockKey, lockName, token, provider, expiresAt };
+  }
+  const acquired = await cacheSetRaw(lockKey, token, ttlMs, { nx: true });
+  if (!acquired) {
+    kvCacheStats.locksSkipped += 1;
+    rememberCacheLockEvent({ lockName, action: "skip-active", provider, ttlMs });
+    return null;
+  }
+  kvCacheStats.locksAcquired += 1;
+  kvCacheStats.lastLockAt = new Date().toISOString();
+  rememberCacheLockEvent({ lockName, action: "acquire", provider, ttlMs });
+  return { lockKey, lockName, token, provider, expiresAt };
+}
+
+async function releaseCacheLock(lock) {
+  if (!lock?.lockKey) return false;
+  if (lock.provider === "memory") {
+    const current = cacheLockMemory.get(lock.lockKey);
+    if (current?.token === lock.token) {
+      cacheLockMemory.delete(lock.lockKey);
+      rememberCacheLockEvent({ lockName: lock.lockName, action: "release-memory", provider: lock.provider });
+      return true;
+    }
+    return false;
+  }
+  const current = await cacheGetRaw(lock.lockKey);
+  if (current === lock.token) {
+    await cacheDeleteKey(lock.lockKey);
+    rememberCacheLockEvent({ lockName: lock.lockName, action: "release", provider: lock.provider });
+    return true;
+  }
+  return false;
+}
+
+async function withCacheLock(lockName, ttlMs, task, skippedValue = null) {
+  const lock = await acquireCacheLock(lockName, ttlMs);
+  if (!lock) {
+    return typeof skippedValue === "function" ? skippedValue() : skippedValue;
+  }
+  try {
+    return await task();
+  } finally {
+    await releaseCacheLock(lock).catch(() => {});
+  }
+}
+
+async function withCacheDedupe(key, ttlMs, task) {
+  const dedupeKey = String(key || "dedupe").slice(0, 180);
+  const existing = cacheDedupePromises.get(dedupeKey);
+  if (existing) {
+    kvCacheStats.dedupeHits += 1;
+    kvCacheStats.lastDedupeAt = new Date().toISOString();
+    return existing.promise;
+  }
+  const promise = Promise.resolve().then(task);
+  const timer = setTimeout(() => {
+    const current = cacheDedupePromises.get(dedupeKey);
+    if (current?.promise === promise) cacheDedupePromises.delete(dedupeKey);
+  }, Math.max(1_000, Number(ttlMs) || 5_000));
+  cacheDedupePromises.set(dedupeKey, { promise, timer });
+  const cleanup = () => {
+    clearTimeout(timer);
+    const current = cacheDedupePromises.get(dedupeKey);
+    if (current?.promise === promise) cacheDedupePromises.delete(dedupeKey);
+  };
+  promise.then(cleanup, cleanup);
+  return promise;
+}
+
+function activeCacheLockSnapshot() {
+  const now = Date.now();
+  for (const [key, lock] of cacheLockMemory) {
+    if (!lock || lock.expiresAt <= now) cacheLockMemory.delete(key);
+  }
+  return {
+    activeMemoryLocks: [...cacheLockMemory.values()].map((lock) => ({
+      lockName: lock.lockName,
+      expiresInMs: Math.max(0, lock.expiresAt - now)
+    })),
+    activeDedupeCount: cacheDedupePromises.size,
+    recent: cacheLockRecent.slice(-10)
+  };
+}
+
+function cacheStatsSnapshot() {
+  return {
+    ...kvCacheStats,
+    activeDedupeCount: cacheDedupePromises.size,
+    activeMemoryLocks: cacheLockMemory.size
+  };
+}
+
+function rpcStatsSnapshot() {
+  const samples = rpcStats.samples.slice().sort((a, b) => a - b);
+  const p95Index = samples.length ? Math.min(samples.length - 1, Math.ceil(samples.length * 0.95) - 1) : -1;
+  return {
+    rpcProviderName: CONFIG.rpcProviderName,
+    rpcUrlHost: CONFIG.rpcUrlHost,
+    callCount: rpcStats.callCount,
+    errorCount: rpcStats.errorCount,
+    rateLimitCount: rpcStats.rateLimitCount,
+    avgMs: rpcStats.callCount ? Math.round(rpcStats.totalMs / rpcStats.callCount) : 0,
+    p95Ms: p95Index >= 0 ? samples[p95Index] : 0,
+    lastCallAt: rpcStats.lastCallAt,
+    lastErrorAt: rpcStats.lastErrorAt,
+    lastError: rpcStats.lastError
+  };
+}
+
+const CacheService = Object.freeze({
+  getJson: cacheGetJson,
+  setJson: cacheSetJson,
+  providerName: kvProviderName,
+  configured: kvConfigured,
+  stats: cacheStatsSnapshot
+});
+
+const LockService = Object.freeze({
+  withLock: withCacheLock,
+  activeLocks: activeCacheLockSnapshot
+});
+
+const DedupeService = Object.freeze({
+  run: withCacheDedupe,
+  activeCount: () => cacheDedupePromises.size
+});
 
 function safeCacheText(value = "", max = 120) {
   return String(value || "")
@@ -24720,10 +25063,13 @@ function looksLikeBackupDocument(filename, text) {
 async function rpcWithRetry(label, operation, retries = CONFIG.rpcRetries, options = {}) {
   let lastError;
   const limiter = options.priority ? priorityRpcLimiter : rpcLimiter;
+  const startedAt = Date.now();
 
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     try {
-      return await limiter.schedule(label, operation);
+      const result = await limiter.schedule(label, operation);
+      recordRpcMetric(Date.now() - startedAt, null);
+      return result;
     } catch (error) {
       lastError = error;
       if (!isRetryableRpcError(error) || attempt === retries) break;
@@ -24737,7 +25083,23 @@ async function rpcWithRetry(label, operation, retries = CONFIG.rpcRetries, optio
     }
   }
 
+  recordRpcMetric(Date.now() - startedAt, lastError);
   throw lastError;
+}
+
+function recordRpcMetric(durationMs, error = null) {
+  const safeDuration = Number.isFinite(Number(durationMs)) ? Math.max(0, Math.round(Number(durationMs))) : 0;
+  rpcStats.callCount += 1;
+  rpcStats.totalMs += safeDuration;
+  rpcStats.samples.push(safeDuration);
+  if (rpcStats.samples.length > 500) rpcStats.samples.splice(0, rpcStats.samples.length - 500);
+  rpcStats.lastCallAt = new Date().toISOString();
+  if (error) {
+    rpcStats.errorCount += 1;
+    rpcStats.lastErrorAt = rpcStats.lastCallAt;
+    rpcStats.lastError = safePerfEventText(error?.message || "RPC error", 120);
+    if (isRetryableRpcError(error)) rpcStats.rateLimitCount += 1;
+  }
 }
 
 async function jupiterFetchJson(url, init, label, retries = CONFIG.jupiterRetries) {

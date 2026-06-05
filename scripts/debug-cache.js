@@ -30,8 +30,8 @@ function configuredProvider() {
   const provider = String(process.env.CACHE_PROVIDER || process.env.KV_PROVIDER || "auto").trim().toLowerCase();
   if (["memory", "none", "off", "disabled"].includes(provider)) return "memory";
   if (["rest", "rest-kv", "upstash", "upstash-redis"].includes(provider)) return envPresent("KV_REST_API_URL", "UPSTASH_REDIS_REST_URL", "SLIMEWIRE_KV_REST_URL") ? "rest-kv" : "memory";
-  if (["redis", "render-redis", "keyvalue", "key-value", "kv"].includes(provider)) return envPresent("REDIS_URL", "KV_REDIS_URL", "SLIMEWIRE_REDIS_URL") ? "redis" : "memory";
-  if (envPresent("REDIS_URL", "KV_REDIS_URL", "SLIMEWIRE_REDIS_URL")) return "redis";
+  if (["redis", "render-redis", "keyvalue", "key-value", "kv"].includes(provider)) return envPresent("REDIS_URL", "RENDER_KEY_VALUE_URL", "RENDER_KEY_VALUE_INTERNAL_URL", "RENDER_REDIS_URL", "REDIS_INTERNAL_URL", "KV_REDIS_URL", "SLIMEWIRE_REDIS_URL") ? "redis" : "memory";
+  if (envPresent("REDIS_URL", "RENDER_KEY_VALUE_URL", "RENDER_KEY_VALUE_INTERNAL_URL", "RENDER_REDIS_URL", "REDIS_INTERNAL_URL", "KV_REDIS_URL", "SLIMEWIRE_REDIS_URL")) return "redis";
   if (envPresent("KV_REST_API_URL", "UPSTASH_REDIS_REST_URL", "SLIMEWIRE_KV_REST_URL") && envPresent("KV_REST_API_TOKEN", "UPSTASH_REDIS_REST_TOKEN", "SLIMEWIRE_KV_REST_TOKEN")) return "rest-kv";
   return "memory";
 }
@@ -60,8 +60,8 @@ async function safeProviderPing(provider) {
     }
   }
   if (provider === "redis") {
-    const redisUrl = String(process.env.REDIS_URL || process.env.KV_REDIS_URL || process.env.SLIMEWIRE_REDIS_URL || "").trim();
-    if (!redisUrl) return { attempted: false, ok: false, reason: "REDIS_URL/KV_REDIS_URL missing." };
+    const redisUrl = String(process.env.REDIS_URL || process.env.RENDER_KEY_VALUE_URL || process.env.RENDER_KEY_VALUE_INTERNAL_URL || process.env.RENDER_REDIS_URL || process.env.REDIS_INTERNAL_URL || process.env.KV_REDIS_URL || process.env.SLIMEWIRE_REDIS_URL || "").trim();
+    if (!redisUrl) return { attempted: false, ok: false, reason: "REDIS_URL/RENDER_KEY_VALUE_URL/KV_REDIS_URL missing." };
     try {
       const { createClient } = await import("redis");
       const client = createClient({ url: redisUrl });
@@ -93,7 +93,8 @@ const report = {
   provider,
   configured: provider !== "memory",
   env: {
-    redisUrlPresent: envPresent("REDIS_URL", "KV_REDIS_URL", "SLIMEWIRE_REDIS_URL"),
+    redisUrlPresent: envPresent("REDIS_URL", "RENDER_KEY_VALUE_URL", "RENDER_KEY_VALUE_INTERNAL_URL", "RENDER_REDIS_URL", "REDIS_INTERNAL_URL", "KV_REDIS_URL", "SLIMEWIRE_REDIS_URL"),
+    renderKeyValueUrlPresent: envPresent("RENDER_KEY_VALUE_URL", "RENDER_KEY_VALUE_INTERNAL_URL"),
     restUrlPresent: envPresent("KV_REST_API_URL", "UPSTASH_REDIS_REST_URL", "SLIMEWIRE_KV_REST_URL"),
     restTokenPresent: envPresent("KV_REST_API_TOKEN", "UPSTASH_REDIS_REST_TOKEN", "SLIMEWIRE_KV_REST_TOKEN"),
     cacheNamespacePresent: envPresent("CACHE_NAMESPACE", "KV_CACHE_NAMESPACE")
@@ -101,6 +102,9 @@ const report = {
   providerPing: ping,
   webCacheFastPath: {
     cachedWebSummary: bool(serverSource, /async function cachedWebSummary/),
+    cacheServiceWrapper: bool(serverSource, /const CacheService = Object\.freeze/),
+    lockServiceWrapper: bool(serverSource, /const LockService = Object\.freeze/) && bool(serverSource, /async function withCacheLock/),
+    dedupeServiceWrapper: bool(serverSource, /const DedupeService = Object\.freeze/) && bool(serverSource, /async function withCacheDedupe/),
     staleWhileRevalidate: bool(serverSource, /memory-stale-hit-background-refresh/) && bool(serverSource, /kv-stale-hit-background-refresh/),
     balancesCached: bool(serverSource, /cachedWebSummary\("web:balances"/),
     positionsCached: bool(serverSource, /cachedWebSummary\("web:positions"/),
