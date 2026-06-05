@@ -140,7 +140,9 @@ test("active tab poller avoids hidden-page and duplicate heavy-tab polling", () 
   assert.match(body, /\["terminal", "live", "slimeScope", "kol", "watchlist", "sniper"\]\.includes\(state\.activeTab\)/);
   assert.match(body, /Math\.max\(5_000, Number\(feed\.refreshMs \|\| 30_000\)\)/);
   assert.match(body, /clearTimeout\(terminalFeedTimer\)/);
-  assert.match(functionBody("scheduleLivePairsAutoRefresh"), /loadLivePairs\(\{ silent: true, bucket: state\.livePairBucket, force: true \}\)/);
+  assert.match(functionBody("scheduleLivePairsAutoRefresh"), /loadLivePairs\(\{ silent: true, bucket: state\.livePairBucket, force: false \}\)/);
+  assert.match(functionBody("scheduleLivePairsAutoRefresh"), /livePairsBackgroundWarmupTick % 3 === 0/);
+  assert.match(functionBody("scheduleLivePairsAutoRefresh"), /renderOnComplete: false, force: false/);
   assert.doesNotMatch(functionBody("scheduleLivePairsAutoRefresh"), /refreshLivePairBuckets\(\{ silent: true, force: true \}\)/);
   assert.doesNotMatch(functionBody("ensureLivePairsWarmup"), /smartChart/);
 });

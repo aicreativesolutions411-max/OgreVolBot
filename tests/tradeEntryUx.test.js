@@ -4,6 +4,7 @@ import fs from "node:fs";
 
 const appSource = fs.readFileSync(new URL("../web/public/app.js", import.meta.url), "utf8");
 const chartCssSource = fs.readFileSync(new URL("../web/public/slimewire-final-overrides.css", import.meta.url), "utf8");
+const publicIndexSource = fs.readFileSync(new URL("../web/public/index.html", import.meta.url), "utf8");
 const packageSource = fs.readFileSync(new URL("../package.json", import.meta.url), "utf8");
 const debugEntrySource = fs.readFileSync(new URL("../scripts/debug-trade-entrypoints.js", import.meta.url), "utf8");
 const debugChartSource = fs.readFileSync(new URL("../scripts/debug-chart-route.js", import.meta.url), "utf8");
@@ -88,15 +89,25 @@ test("Chart page uses full chart view with transactions and info tabs", () => {
   assert.match(chart, /smartChartInfoPanelHtml\(token, heldPosition\)/);
   assert.match(functionBody(appSource, "smartChartTransactionsHtml"), /smartChartDexFrameHtml\(token, "txns"\)/);
   assert.match(functionBody(appSource, "smartChartInfoPanelHtml"), /smartChartDexFrameHtml\(token, "info"\)/);
+  assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /data-chart-frame-loading/);
+  assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /fetchpriority="high"/);
+  assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /setAttribute\('data-loaded','true'\)/);
   assert.match(functionBody(appSource, "chartAddressForToken"), /pairAddress/);
   assert.match(functionBody(appSource, "applyTokenRefToState"), /smartChartTokenRef/);
   assert.match(functionBody(appSource, "requestSmartChartScrollIntoView"), /window\.scrollTo\(\{ top, behavior: "auto" \}\)/);
   assert.match(functionBody(appSource, "renderTabs"), /chartScrollIntoView[\s\S]*requestSmartChartScrollIntoView\(panel\)/);
   assert.match(functionBody(appSource, "render"), /app\.dataset\.activeTab = state\.activeTab \|\| ""/);
+  assert.match(functionBody(appSource, "render"), /preserveSmartChartPanel[\s\S]*\.smart-chart-frame iframe/);
+  assert.match(functionBody(appSource, "refreshTerminalFeed"), /preserveSmartChartFrame: state\.activeTab === "smartChart" && tabKey === "smartChart"/);
+  assert.match(functionBody(appSource, "refreshWalletState"), /preserveSmartChartFrame: state\.activeTab === "smartChart"/);
   assert.match(chartCssSource, /\[data-active-tab="smartChart"\][\s\S]*\[data-dashboard\] > \.metrics/);
   assert.match(chartCssSource, /\[data-active-tab="smartChart"\][\s\S]*\[data-dashboard\] > \.tabs/);
   assert.match(chartCssSource, /\[data-active-tab="smartChart"\][\s\S]*\.terminal-global-search/);
   assert.match(chartCssSource, /\[data-active-tab="smartChart"\][\s\S]*\.top-sync-strip/);
+  assert.match(chartCssSource, /\.smart-chart-frame::before/);
+  assert.match(chartCssSource, /\.smart-chart-frame\[data-loaded="true"\]::before/);
+  assert.match(publicIndexSource, /preconnect" href="https:\/\/dexscreener\.com"/);
+  assert.match(publicIndexSource, /preconnect" href="https:\/\/api\.dexscreener\.com"/);
 });
 
 test("Debug commands are wired and sanitized", () => {

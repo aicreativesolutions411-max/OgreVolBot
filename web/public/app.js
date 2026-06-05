@@ -293,6 +293,7 @@ const state = {
 };
 let livePairsTimer = null;
 const livePairsWarmupKeys = new Set();
+let livePairsBackgroundWarmupTick = 0;
 let scanTimer = null;
 let kolTimer = null;
 let watchlistTimer = null;
@@ -1917,10 +1918,10 @@ async function loadSession() {
   try {
     const data = await api("/api/web/me");
     applyUserFromApi(data.user);
-    render();
+    render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
     void refreshWalletState({ force: true, deep: false }).catch((error) => {
       state.walletRefreshError = error.message || "Wallet refresh failed.";
-      render();
+      render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
     });
   } catch {
     state.token = "";
@@ -2034,7 +2035,7 @@ async function loadWalletCore(options = {}) {
     cacheHit: Boolean(balances.cacheHit),
     details: `wallets=${state.wallets.length};connected=${Boolean(state.connectedWalletBalance)}`
   });
-  if (options.progress !== false) render();
+  if (options.progress !== false) render({ preserveSmartChartFrame: Boolean(options.preserveSmartChartFrame) });
   const positionsStartedAt = perfNow();
   try {
     const positions = await positionsPromise;
@@ -2407,7 +2408,12 @@ async function refreshTerminalFeed(tabKey = state.activeTab, options = {}) {
       errorCode: terminalFeedRuntime(tabKey).errorCode || "",
       details: `${tabKey}:${terminalFeedCacheKey(feed)}`
     });
-    if (options.render !== false) render({ force: true });
+    if (options.render !== false) {
+      render({
+        force: true,
+        preserveSmartChartFrame: state.activeTab === "smartChart" && tabKey === "smartChart"
+      });
+    }
   }
 }
 
@@ -2579,7 +2585,18 @@ function scheduleLivePairsAutoRefresh() {
       return;
     }
     try {
-      await loadLivePairs({ silent: true, bucket: state.livePairBucket, force: true });
+      await loadLivePairs({ silent: true, bucket: state.livePairBucket, force: false });
+      livePairsBackgroundWarmupTick += 1;
+      if (livePairsBackgroundWarmupTick % 3 === 0) {
+        const backgroundBuckets = LIVE_PAIR_BUCKETS
+          .map(([bucket]) => bucket)
+          .filter((bucket) => bucket !== state.livePairBucket && !state.livePairsLoadingByBucket[bucket]);
+        void Promise.allSettled(backgroundBuckets.map((bucket) => (
+          loadLivePairs({ silent: true, bucket, renderOnComplete: false, force: false })
+        ))).then(() => {
+          if (state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "slimeScope") render();
+        });
+      }
     } catch {
       // Keep the last good feed visible; the next timer retry reports status inline.
     } finally {
@@ -2854,9 +2871,9 @@ async function refreshWalletState({ force = true, deep = true, reason = "manual"
     }
     state.walletRefreshing = true;
     state.walletRefreshError = "";
-    render();
+    render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
     try {
-      await loadWalletCore({ force });
+      await loadWalletCore({ force, preserveSmartChartFrame: state.activeTab === "smartChart" });
       state.lastWalletRefreshAt = new Date().toISOString();
       if (deep) {
         await loadAll({ force, skipCore: true, silent: true });
@@ -2881,7 +2898,7 @@ async function refreshWalletState({ force = true, deep = true, reason = "manual"
     } finally {
       state.walletRefreshing = false;
       walletRefreshPromise = null;
-      render();
+      render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
     }
   })();
   return walletRefreshPromise;
@@ -3050,6 +3067,12 @@ function render(options = {}) {
   const hasWalletContext = Boolean(state.user?.connectedWallet || state.wallets.length);
   syncShellRouteVisibility();
   app.dataset.activeTab = state.activeTab || "";
+  const preserveSmartChartPanel = Boolean(
+    options.preserveSmartChartFrame
+    && state.route === "terminal"
+    && state.activeTab === "smartChart"
+    && document.querySelector("[data-panel] .smart-chart-frame iframe")
+  );
   const hasLoginModal = Boolean(loginModal);
   const loginModalVisible = Boolean(hasLoginModal && state.loginModalOpen);
   if (topLoginPanel) topLoginPanel.hidden = hasLoginModal || Boolean(state.user) || state.loginCollapsed;
@@ -3102,7 +3125,7 @@ function render(options = {}) {
     logoutButton.hidden = !state.user;
     writeText(logoutButton, "Log Out");
   }
-  if (state.route === "terminal") renderTabs();
+  if (state.route === "terminal" && !preserveSmartChartPanel) renderTabs();
   renderWalletConnectModal();
   renderQuickBuyModal();
   syncInteractionLocks();
@@ -8967,9 +8990,10 @@ function smartChartDexFrameHtml(token = {}, mode = "chart") {
     mode === "chartTxns" ? "smart-chart-combined-frame" : "",
     isInfo ? "smart-chart-info-frame" : ""
   ].filter(Boolean).join(" ");
+  const loadingLabel = isInfo ? "Loading token info..." : isTransactions ? "Loading DEX transactions..." : "Loading DEX chart...";
   return `
-    <div class="${escapeHtml(className)}">
-      <iframe title="${escapeHtml(title)}" src="${escapeHtml(dexChartEmbedUrl(token, { trades: isTransactions, info: isInfo }))}" loading="eager" allowfullscreen></iframe>
+    <div class="${escapeHtml(className)}" data-chart-frame-loading="${escapeHtml(loadingLabel)}">
+      <iframe title="${escapeHtml(title)}" src="${escapeHtml(dexChartEmbedUrl(token, { trades: isTransactions, info: isInfo }))}" loading="eager" fetchpriority="high" referrerpolicy="no-referrer-when-downgrade" onload="this.closest('.smart-chart-frame')?.setAttribute('data-loaded','true')" allowfullscreen></iframe>
     </div>
   `;
 }
@@ -11990,7 +12014,7 @@ function resumeLiveFeeds() {
     reason: "visibility-focus-return"
   }).catch((error) => setError(error.message));
   if (state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "slimeScope") {
-    refreshLivePairBuckets({ silent: true, force: true }).catch((error) => setError(error.message));
+    refreshLivePairBuckets({ silent: true, force: terminalFeedIsStale(state.activeTab) }).catch((error) => setError(error.message));
     scheduleLivePairsAutoRefresh();
   }
   if ((state.activeTab === "kol" || state.activeTab === "terminal") && !state.kolWallet) {
@@ -12032,13 +12056,13 @@ async function initializeApp() {
   }
   if (state.route === "terminal") {
     ensureLivePairsWarmup();
-    if (!state.kolScan) {
+    if ((state.activeTab === "terminal" || state.activeTab === "kol") && !state.kolScan) {
       void loadKolScan(state.kolMode, "", { silent: true }).catch((error) => setError(error.message));
     }
     if (state.activeTab === "ogreTek") {
       await loadOgreTekData({ silent: true }).catch((error) => setError(error.message));
     }
-    render();
+    render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
   }
 }
 
