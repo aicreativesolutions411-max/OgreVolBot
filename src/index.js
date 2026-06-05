@@ -60,6 +60,13 @@ import {
   uploadJsonMetadata
 } from "./lib/pinataMetadata.js";
 import {
+  decodeLaunchImageDataUrl as decodeLaunchImageDataUrlInput,
+  defaultLaunchImageInput,
+  launchImageExtension,
+  processLaunchImage,
+  safeLaunchImageDiagnostics
+} from "./lib/launchImageProcessor.js";
+import {
   Connection,
   Keypair,
   LAMPORTS_PER_SOL,
@@ -17359,24 +17366,8 @@ function buildPumpLaunchPayload(basePayload) {
   return compactLaunchPayload(basePayload);
 }
 
-function launchImageExtension(contentType = "") {
-  const type = String(contentType || "").toLowerCase();
-  if (type.includes("jpeg") || type.includes("jpg")) return "jpg";
-  if (type.includes("webp")) return "webp";
-  if (type.includes("gif")) return "gif";
-  return "png";
-}
-
 function decodeLaunchImageDataUrl(dataUrl, basePayload = {}) {
-  const text = String(dataUrl || "");
-  const match = /^data:(image\/(?:png|jpe?g|webp|gif));base64,([a-z0-9+/=]+)$/i.exec(text);
-  if (!match) return null;
-  const contentType = match[1].toLowerCase();
-  const buffer = Buffer.from(match[2], "base64");
-  const cleanSymbol = cleanTickerSymbol(basePayload.symbol || basePayload.name || "token") || "token";
-  const filename = cleanLaunchText(basePayload.imageName, 96)
-    || `${cleanSymbol.toLowerCase()}-${Date.now()}.${launchImageExtension(contentType)}`;
-  return { buffer, contentType, filename };
+  return decodeLaunchImageDataUrlInput(dataUrl, basePayload);
 }
 
 function appendPumpLaunchFormValue(form, key, value) {
@@ -17466,26 +17457,32 @@ function isPumpPortalLocalLaunch() {
   return ["pumpportal", "pumpportal-local", "trade-local"].includes(format) || url.includes("pumpportal.fun/api/trade-local");
 }
 
-async function launchDefaultImageBuffer(symbol = "SW") {
-  const safeSymbol = cleanTickerSymbol(symbol || "SW").slice(0, 8) || "SW";
-  const svg = `
-    <svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
-      <rect width="512" height="512" rx="96" fill="#050705"/>
-      <circle cx="256" cy="256" r="190" fill="#10230d" stroke="#72ff23" stroke-width="18"/>
-      <text x="256" y="286" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="86" font-weight="900" fill="#bbff63">${safeSymbol}</text>
-    </svg>`;
-  return sharp(Buffer.from(svg)).png().toBuffer();
-}
-
 async function launchImageBufferForUpload(basePayload = {}) {
   const decoded = decodeLaunchImageDataUrl(basePayload.imageDataUrl, basePayload);
-  if (decoded) {
-    return decoded;
-  }
+  const source = decoded || await defaultLaunchImageInput(basePayload.symbol || basePayload.name || "SW");
+  const processed = await processLaunchImage(source, {
+    maxInputBytes: CONFIG.pumpLaunchBodyLimitBytes,
+    outputSize: 1000
+  });
+  const diagnostics = safeLaunchImageDiagnostics(processed);
+  logPumpLaunchEvent("pump_launch_image_processed", {
+    launchAttemptId: basePayload.clientRequestId || "",
+    originalFilename: diagnostics.originalFilename,
+    reportedMime: diagnostics.reportedMime,
+    detectedMime: diagnostics.detectedMime,
+    originalBytes: diagnostics.originalBytes,
+    originalWidth: diagnostics.originalWidth,
+    originalHeight: diagnostics.originalHeight,
+    outputMime: diagnostics.outputMime,
+    outputBytes: diagnostics.outputBytes,
+    outputWidth: diagnostics.outputWidth,
+    outputHeight: diagnostics.outputHeight,
+    warnings: diagnostics.warnings
+  });
   return {
-    buffer: await launchDefaultImageBuffer(basePayload.symbol || basePayload.name || "SW"),
-    contentType: "image/png",
-    filename: `${cleanTickerSymbol(basePayload.symbol || "SW").toLowerCase() || "token"}-slimewire.png`
+    ...processed,
+    contentType: processed.contentType,
+    imageProcessing: diagnostics
   };
 }
 
@@ -17529,7 +17526,8 @@ async function uploadHostedPumpLaunchMetadata(basePayload = {}) {
     twitter: basePayload.twitter || "",
     telegram: basePayload.telegram || "",
     website: basePayload.website || "",
-    showName: true
+    showName: true,
+    createdOn: "https://pump.fun"
   });
 
   await fs.writeFile(path.join(directory, imageFilename), image.buffer);
@@ -17540,6 +17538,8 @@ async function uploadHostedPumpLaunchMetadata(basePayload = {}) {
     imageUri,
     imageBytes: image.buffer.length,
     imageContentType: image.contentType,
+    imageProcessing: image.imageProcessing || safeLaunchImageDiagnostics(image),
+    metadata,
     provider: "slimewire-hosted",
     cidOrId: launchId
   };
@@ -17568,6 +17568,7 @@ async function uploadPumpFunIpfsLaunchMetadata(basePayload = {}) {
   form.append("telegram", String(basePayload.telegram || ""));
   form.append("website", String(basePayload.website || ""));
   form.append("showName", "true");
+  form.append("createdOn", "https://pump.fun");
   form.append("file", new Blob([image.buffer], { type: image.contentType || "image/png" }), image.filename || "token-image.png");
 
   let response;
@@ -17617,6 +17618,7 @@ async function uploadPumpFunIpfsLaunchMetadata(basePayload = {}) {
     imageUri,
     imageBytes: image.buffer.length,
     imageContentType: image.contentType,
+    imageProcessing: image.imageProcessing || safeLaunchImageDiagnostics(image),
     provider: "pumpfun-ipfs",
     cidOrId: cidFromIpfsUri(uri)
   };
@@ -17652,7 +17654,8 @@ async function uploadPinataPumpLaunchMetadata(basePayload = {}) {
     twitter: basePayload.twitter || "",
     telegram: basePayload.telegram || "",
     website: basePayload.website || "",
-    showName: true
+    showName: true,
+    createdOn: "https://pump.fun"
   });
   const metadataUpload = await uploadJsonMetadata({
     metadata,
@@ -17670,6 +17673,8 @@ async function uploadPinataPumpLaunchMetadata(basePayload = {}) {
     imageUri,
     imageBytes: image.buffer.length,
     imageContentType: image.contentType,
+    imageProcessing: image.imageProcessing || safeLaunchImageDiagnostics(image),
+    metadata,
     provider: "pinata",
     cidOrId: metadataUpload.cid
   };
@@ -18323,8 +18328,8 @@ async function webLaunchPumpCoin(userId, body = {}) {
   }
 
   const imageDataUrl = String(body.imageDataUrl || "");
-  if (imageDataUrl && !/^data:image\/(png|jpe?g|webp|gif);base64,/i.test(imageDataUrl)) {
-    const error = createPumpLaunchError("Upload a PNG, JPG, WEBP, or GIF token image.", "PUMP_LAUNCH_IMAGE_TYPE_INVALID", 400, {
+  if (imageDataUrl && !/^data:image\/(?:png|jpe?g|webp|gif|heic|heif|avif|svg\+xml);base64,/i.test(imageDataUrl)) {
+    const error = createPumpLaunchError("Upload a PNG, JPG, WEBP, GIF, HEIC/HEIF, AVIF, or phone screenshot token image.", "PUMP_LAUNCH_IMAGE_TYPE_INVALID", 400, {
       stage: PUMP_LAUNCH_STAGE.CONFIG,
       launchAttemptId
     });
@@ -18333,20 +18338,18 @@ async function webLaunchPumpCoin(userId, body = {}) {
   }
   const decodedLaunchImage = imageDataUrl ? decodeLaunchImageDataUrl(imageDataUrl, { symbol, name, imageName: body.imageName }) : null;
   if (imageDataUrl && !decodedLaunchImage) {
-    const error = createPumpLaunchError("Token image could not be decoded. Upload a smaller square PNG, JPG, WEBP, or GIF.", "PUMP_LAUNCH_IMAGE_DECODE_FAILED", 400, {
+    const error = createPumpLaunchError("Token image could not be decoded from the browser upload. Upload a smaller PNG, JPG, WEBP, GIF, HEIC/HEIF, AVIF, or phone screenshot.", "PUMP_LAUNCH_IMAGE_DECODE_FAILED", 400, {
       stage: PUMP_LAUNCH_STAGE.CONFIG,
       launchAttemptId
     });
     await recordPumpLaunchEarlyFailure({ launchAttemptId, userId, body, name, symbol, error });
     throw error;
   }
-  const imageMaxBytes = Number.isFinite(CONFIG.pumpLaunchImageMaxBytes) && CONFIG.pumpLaunchImageMaxBytes > 0
-    ? CONFIG.pumpLaunchImageMaxBytes
-    : 450_000;
+  const imageMaxBytes = Math.max(100_000, Math.min(CONFIG.pumpLaunchBodyLimitBytes, 12 * 1024 * 1024));
   if (decodedLaunchImage && decodedLaunchImage.buffer.length > imageMaxBytes) {
     const actualKb = Math.ceil(decodedLaunchImage.buffer.length / 1024);
     const maxKb = Math.floor(imageMaxBytes / 1024);
-    const error = createPumpLaunchError(`Token image is ${actualKb}KB after compression. Limit is ${maxKb}KB. Use a smaller square JPG, PNG, WEBP, or GIF and try again.`, "PUMP_LAUNCH_IMAGE_TOO_LARGE", 413, {
+    const error = createPumpLaunchError(`Token image is ${actualKb}KB. Limit is ${maxKb}KB before backend conversion. Use a smaller phone screenshot or image and try again.`, "PUMP_LAUNCH_IMAGE_TOO_LARGE", 413, {
       stage: PUMP_LAUNCH_STAGE.CONFIG,
       launchAttemptId
     });

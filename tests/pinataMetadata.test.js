@@ -126,14 +126,21 @@ test("Pump metadata image and JSON uploads use the shared cleaned auth helper", 
 test("Pinata debug and smoke commands are available", async () => {
   const packageJson = JSON.parse(await fs.readFile(path.join(rootDir, "package.json"), "utf8"));
   const smokeSource = await fs.readFile(path.join(rootDir, "scripts", "smoke-pump-pinata-upload.js"), "utf8");
+  const launchImageSmokeSource = await fs.readFile(path.join(rootDir, "scripts", "smoke-launch-image.js"), "utf8");
 
   assert.equal(packageJson.scripts["debug:pump-pinata"], "node scripts/debug-pump-metadata.js");
   assert.equal(packageJson.scripts["smoke:pump-pinata-upload"], "node scripts/smoke-pump-pinata-upload.js");
   assert.equal(packageJson.scripts["debug:metadata-provider"], "node scripts/debug-pump-metadata.js");
   assert.equal(packageJson.scripts["smoke:metadata-upload"], "node scripts/smoke-pump-pinata-upload.js");
+  assert.equal(packageJson.scripts["debug:launch-image"], "node scripts/debug-launch-image.js");
+  assert.equal(packageJson.scripts["smoke:launch-image"], "node scripts/smoke-launch-image.js");
   assert.match(smokeSource, /assertPinataAuthWorks/);
   assert.match(smokeSource, /uploadJsonMetadata/);
+  assert.match(launchImageSmokeSource, /processLaunchImage/);
+  assert.match(launchImageSmokeSource, /uploadImage/);
+  assert.match(launchImageSmokeSource, /metadataImageMatches/);
   assert.doesNotMatch(smokeSource, /console\.log\(.*tokenValue/);
+  assert.doesNotMatch(launchImageSmokeSource, /console\.log\(.*tokenValue/);
 });
 
 test("Pinata JSON metadata upload returns CID and public metadata URI", async () => {

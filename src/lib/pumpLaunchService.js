@@ -805,6 +805,9 @@ export class PumpLaunchService {
         metadataUri: metadata.uri,
         imageUri: metadata.imageUri || "",
         imageBytes: metadata.imageBytes || 0,
+        imageContentType: metadata.imageContentType || "",
+        imageProcessing: metadata.imageProcessing || null,
+        metadataJson: metadata.metadata || null,
         updatedAt: this.now().toISOString()
       });
       this.log("pump_launch_metadata_uploaded", {
@@ -813,7 +816,9 @@ export class PumpLaunchService {
         selectedDevWalletId,
         devWalletPublicKey,
         metadataUri: metadata.uri,
-        imageBytes: metadata.imageBytes || 0
+        imageUri: metadata.imageUri || "",
+        imageBytes: metadata.imageBytes || 0,
+        imageProcessing: metadata.imageProcessing || null
       });
 
       const requestPayload = buildPumpPortalLocalCreateRequest({

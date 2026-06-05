@@ -518,11 +518,13 @@ function setWalletConnectStatus(message = "") {
 
 function walletInstallGuidance(providerId = "solana") {
   const label = walletProviderLabel(providerId);
-  const mobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || "");
-  if (mobile) {
-    return `${label} is not available in this browser. Open SlimeWire inside the ${label} in-app browser, or install/open the wallet app and try again.`;
+  if (isMobileWalletPlatform()) {
+    if (walletBrowseDeepLink(providerId)) {
+      return `${label} is not injected in this browser. Use Open ${label} to continue in the wallet app, or choose another wallet option.`;
+    }
+    return `${label} is not available in this browser. Install or open the wallet app, or choose another wallet option.`;
   }
-  return `${label} is not detected in this browser. Install or unlock the extension, then refresh SlimeWire and try again.`;
+  return `${label} extension not found. Install or unlock ${label}, or choose another wallet.`;
 }
 
 function logWalletConnectFailure(providerId = "solana", error = null, extra = {}) {
@@ -557,6 +559,64 @@ function openLoginPanel({ connectPanel = state.route === "connect" } = {}) {
   state.loginCollapsed = false;
   render({ force: true });
   focusLoginField(connectPanel);
+}
+
+function isMobileWalletPlatform() {
+  return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || "");
+}
+
+function appBrowseUrl() {
+  try {
+    const url = new URL(window.location.href);
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return window.location.href;
+  }
+}
+
+function appBrowseRef() {
+  try {
+    return new URL(window.location.href).origin;
+  } catch {
+    return "https://slimewire.org";
+  }
+}
+
+function walletBrowseDeepLink(providerId = "") {
+  if (!isMobileWalletPlatform()) return "";
+  const appUrl = encodeURIComponent(appBrowseUrl());
+  const ref = encodeURIComponent(appBrowseRef());
+  if (providerId === "phantom") return `https://phantom.app/ul/browse/${appUrl}?ref=${ref}`;
+  if (providerId === "solflare") return `https://solflare.com/ul/v1/browse/${appUrl}?ref=${ref}`;
+  return "";
+}
+
+function walletInstallUrl(providerId = "") {
+  if (providerId === "phantom") return "https://phantom.app/download";
+  if (providerId === "solflare") return "https://solflare.com/download";
+  if (providerId === "backpack") return "https://backpack.app/download";
+  return "";
+}
+
+function walletChoiceIcon(providerId = "") {
+  if (providerId === "phantom") return "./assets/slimewire/clean-ui/wallet_icons/default/phantom.png";
+  if (providerId === "solflare") return "./assets/slimewire/clean-ui/wallet_icons/default/solflare.png";
+  return "./assets/slimewire/svg/icons/wallet.svg";
+}
+
+function openMobileWalletBrowse(providerId = "") {
+  const label = walletProviderLabel(providerId);
+  const link = walletBrowseDeepLink(providerId);
+  if (!link) return false;
+  setWalletConnectStatus(`Opening ${label} mobile wallet flow... Return to SlimeWire after approving the connection.`);
+  logWalletConnectFailure(providerId, null, {
+    action: "mobile_browse_redirect",
+    adapterReadyState: "mobile_redirect",
+    platform: /Android/i.test(navigator.userAgent || "") ? "android" : "ios"
+  });
+  window.location.href = link;
+  return true;
 }
 
 function loginCredentialsFromForm({ requirePassword = false } = {}) {
@@ -1730,11 +1790,21 @@ function renderWalletConnectModal() {
       ` : ""}
       <div class="wallet-provider-buttons modal-wallet-provider-buttons">
         ${browserWalletChoices().map((wallet) => `
-          <button type="button" data-connect-wallet-provider="${wallet.id}" ${wallet.detected ? "" : `title="${escapeHtml(wallet.label)} extension not detected"`}>
-            <strong>${escapeHtml(connected ? `Switch to ${wallet.label}` : wallet.label)}</strong>
-            <small>${wallet.detected ? "Detected" : "Not detected"}</small>
+          <button type="button" class="wallet-provider-choice" data-connect-wallet-provider="${wallet.id}" ${wallet.detected ? "" : `title="${escapeHtml(wallet.label)} ${wallet.mobileRedirect ? "mobile flow available" : "extension not detected"}"`}>
+            <img src="${escapeHtml(wallet.icon)}" alt="" aria-hidden="true">
+            <span>
+              <strong>${escapeHtml(connected ? `Switch to ${wallet.label}` : wallet.mobileRedirect ? `Open ${wallet.label}` : wallet.label)}</strong>
+              <small>${wallet.detected ? "Detected - connect prompt opens here" : wallet.mobileRedirect ? "Mobile wallet flow" : "Install/open wallet or choose another"}</small>
+            </span>
           </button>
         `).join("")}
+        <button type="button" class="wallet-provider-choice" data-connect-create-wallet>
+          <img src="./assets/slimewire/svg/icons/wallet.svg" alt="" aria-hidden="true">
+          <span>
+            <strong>Create Managed Wallet</strong>
+            <small>Use a SlimeWire-managed wallet for backend automation.</small>
+          </span>
+        </button>
       </div>
       <small class="connect-status" data-wallet-connect-status>${escapeHtml(state.walletConnectStatus || "")}</small>
     </section>
@@ -2046,11 +2116,12 @@ function kolAvatarMarkup(kol = {}, className = "kol-avatar") {
 }
 
 function browserWalletChoices() {
+  const mobile = isMobileWalletPlatform();
   return [
-    { id: "phantom", label: "Phantom", detected: Boolean(walletProviderById("phantom")) },
-    { id: "solflare", label: "Solflare", detected: Boolean(walletProviderById("solflare")) },
-    { id: "backpack", label: "Backpack", detected: Boolean(walletProviderById("backpack")) },
-    { id: "solana", label: "Detected Wallet", detected: Boolean(walletProviderById("solana")) }
+    { id: "phantom", label: "Phantom", detected: Boolean(walletProviderById("phantom")), mobileRedirect: mobile && Boolean(walletBrowseDeepLink("phantom")), installUrl: walletInstallUrl("phantom"), icon: walletChoiceIcon("phantom") },
+    { id: "solflare", label: "Solflare", detected: Boolean(walletProviderById("solflare")), mobileRedirect: mobile && Boolean(walletBrowseDeepLink("solflare")), installUrl: walletInstallUrl("solflare"), icon: walletChoiceIcon("solflare") },
+    { id: "backpack", label: "Backpack", detected: Boolean(walletProviderById("backpack")), mobileRedirect: false, installUrl: walletInstallUrl("backpack"), icon: walletChoiceIcon("backpack") },
+    { id: "solana", label: "Detected Wallet", detected: Boolean(walletProviderById("solana")), mobileRedirect: false, installUrl: "", icon: walletChoiceIcon("solana") }
   ];
 }
 
@@ -3364,8 +3435,8 @@ function launchCoinHtml() {
             </label>
             <label>
               Image
-              <input data-launch-coin-image type="file" accept="image/png,image/jpeg,image/webp,image/gif">
-              <span class="muted">Images are compressed before upload. Use a clear square JPG, PNG, or WEBP for best results.</span>
+              <input data-launch-coin-image type="file" accept="image/*,.png,.jpg,.jpeg,.webp,.gif,.heic,.heif,.avif">
+              <span class="muted">SlimeWire converts common phone and desktop images during launch. Use a clear square JPG, PNG, WEBP, or screenshot for best results.</span>
             </label>
             <label>
               Website
@@ -3633,16 +3704,17 @@ function dataUrlMimeType(dataUrl, fallback = "application/octet-stream") {
 
 async function readFileAsDataUrl(file) {
   if (!file) return "";
-  const maxRawBytes = 12 * 1024 * 1024;
-  const maxPayloadBytes = 320_000;
+  const maxRawBytes = 8 * 1024 * 1024;
+  const maxCompressedPayloadBytes = 420_000;
+  const maxBackendPayloadBytes = 10_750_000;
   if (file.size > maxRawBytes) {
-    throw new Error("Image is over 12MB. Use a smaller PNG, JPG, WEBP, or GIF.");
+    throw new Error("Image is over 8MB. Use a smaller phone screenshot, PNG, JPG, WEBP, GIF, HEIC/HEIF, or AVIF.");
   }
 
   const rawDataUrl = await readRawFileAsDataUrl(file);
-  if (file.type === "image/gif") {
-    if (rawDataUrl.length > maxPayloadBytes) {
-      throw new Error("Animated GIF is too large for upload. Use a smaller GIF or a PNG/JPG/WEBP.");
+  if (file.type === "image/gif" || /\.(?:gif|heic|heif|avif)$/i.test(file.name || "")) {
+    if (rawDataUrl.length > maxBackendPayloadBytes) {
+      throw new Error("Image is too large for backend conversion. Use a smaller phone screenshot, PNG, JPG, or WEBP.");
     }
     return rawDataUrl;
   }
@@ -3669,13 +3741,32 @@ async function readFileAsDataUrl(file) {
     ];
     for (const [type, quality] of attempts) {
       const compressed = canvas.toDataURL(type, quality);
-      if (compressed.length <= maxPayloadBytes) return compressed;
+      if (compressed.length <= maxCompressedPayloadBytes) return compressed;
     }
-  } catch {
-    if (rawDataUrl.length <= maxPayloadBytes) return rawDataUrl;
+  } catch (error) {
+    const status = $("[data-launch-coin-status]");
+    const message = "Preview unavailable; SlimeWire will try to convert this image during launch.";
+    state.launchCoinStatus = message;
+    writeText(status, message);
+    console.info("[SlimeWire launch image]", {
+      step: "preview_unavailable_backend_convert",
+      fileName: file.name || "",
+      reportedMime: file.type || "",
+      bytes: file.size || 0,
+      reason: error?.message || ""
+    });
+    if (rawDataUrl.length <= maxBackendPayloadBytes) return rawDataUrl;
   }
 
-  throw new Error("Token image is too large after compression. Use a smaller square JPG, PNG, or WEBP and try again.");
+  if (rawDataUrl.length <= maxBackendPayloadBytes) {
+    const status = $("[data-launch-coin-status]");
+    const message = "Image will be converted on the backend during launch.";
+    state.launchCoinStatus = message;
+    writeText(status, message);
+    return rawDataUrl;
+  }
+
+  throw new Error("Token image is too large for upload. Use a smaller phone screenshot, PNG, JPG, WEBP, or GIF and try again.");
 }
 
 async function launchCoinImagePayload() {
@@ -3785,7 +3876,7 @@ async function submitLaunchCoin() {
     if (!draft.name) throw new Error("Enter the token name before launching.");
     if (!draft.symbol) throw new Error("Enter the ticker before launching.");
 
-    state.launchCoinStatus = "Compressing image and preparing launch...";
+    state.launchCoinStatus = "Preparing image for SlimeWire backend conversion...";
     writeText(status, state.launchCoinStatus);
 
     const imagePayload = await launchCoinImagePayload();
@@ -3797,8 +3888,8 @@ async function submitLaunchCoin() {
       launchAttemptId
     };
     const requestBody = JSON.stringify(requestPayload);
-    if (requestBody.length > 650_000) {
-      throw new Error("Launch upload is still too large. Use a smaller square JPG, PNG, or WEBP and try again.");
+    if (requestBody.length > 11_500_000) {
+      throw new Error("Launch upload is still too large. Use a smaller phone screenshot, PNG, JPG, WEBP, or GIF and try again.");
     }
     console.info("[SlimeWire pump launch]", {
       launchAttemptId,
@@ -4789,9 +4880,13 @@ async function connectBrowserWallet(providerId, options = {}) {
   const status = walletConnectStatusElement();
   const provider = walletProviderById(providerId);
   if (!provider) {
+    if (openMobileWalletBrowse(providerId)) return;
     const message = walletInstallGuidance(providerId);
     setWalletConnectStatus(message);
-    logWalletConnectFailure(providerId, new Error(message), { action: "provider_missing" });
+    logWalletConnectFailure(providerId, new Error(message), {
+      action: "provider_missing",
+      platform: isMobileWalletPlatform() ? "mobile" : "desktop"
+    });
     return;
   }
 
@@ -8431,7 +8526,7 @@ document.addEventListener("click", async (event) => {
     return;
   }
   if (target.matches("[data-open-login]")) {
-    openLoginPanel({ connectPanel: false });
+    openLoginPanel({ connectPanel: state.route === "connect" });
     return;
   }
   if (target.matches("[data-browse-guest]")) {
@@ -8484,8 +8579,10 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-connect-wallet]")) {
     const providerId = target.dataset.connectWallet || "solana";
-    if (providerId === "solana") openWalletConnectChooser({ returnPath: "/terminal" });
-    else await connectBrowserWallet(providerId, { returnPath: "/terminal" });
+    openWalletConnectChooser({ returnPath: "/terminal" });
+    if (providerId && providerId !== "solana") {
+      setWalletConnectStatus(`Choose ${walletProviderLabel(providerId)} below to open the wallet connect flow, or pick another wallet.`);
+    }
     return;
   }
   if (target.matches("[data-connect-wallet-provider]")) {

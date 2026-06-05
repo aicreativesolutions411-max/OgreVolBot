@@ -411,7 +411,20 @@ test("validated fast metadata URI is the URI sent to PumpPortal", async () => {
     uploadMetadata: async () => ({
       uri: "https://ipfs.io/ipfs/test-meta",
       imageUri: "https://ipfs.io/ipfs/test-image",
-      imageBytes: 100
+      imageBytes: 100,
+      imageContentType: "image/png",
+      imageProcessing: {
+        detectedMime: "image/png",
+        outputWidth: 1000,
+        outputHeight: 1000
+      },
+      metadata: {
+        name: "Ogre Test",
+        symbol: "OGT",
+        image: "https://ipfs.io/ipfs/test-image",
+        showName: true,
+        createdOn: "https://pump.fun"
+      }
     }),
     validateMetadataUri: async () => ({
       ok: true,
@@ -423,6 +436,9 @@ test("validated fast metadata URI is the URI sent to PumpPortal", async () => {
 
   assert.equal(harness.requestBody().tokenMetadata.uri, "https://gateway.pinata.cloud/ipfs/test-meta");
   assert.equal(harness.attempts.get("attempt-1").metadataUri, "https://gateway.pinata.cloud/ipfs/test-meta");
+  assert.equal(harness.attempts.get("attempt-1").imageUri, "https://ipfs.io/ipfs/test-image");
+  assert.equal(harness.attempts.get("attempt-1").metadataJson.image, "https://ipfs.io/ipfs/test-image");
+  assert.equal(harness.attempts.get("attempt-1").imageProcessing.outputWidth, 1000);
 });
 
 test("Local API transaction is signed by mint keypair and dev wallet keypair", async () => {
