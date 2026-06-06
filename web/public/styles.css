@@ -8915,3 +8915,113 @@ body {
     min-height: 30px;
   }
 }
+
+/* SLIME_SWAMP_SUPPORT_RAILS_V7: mobile stack shows sponsors, enter, then KOLs with no giant blank frame. */
+@media (max-width: 760px) {
+  [data-app][data-route="intro"] .login-view.swamp-splash {
+    width: 100% !important;
+    height: auto !important;
+    min-height: 100svh !important;
+    max-height: none !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-areas:
+      "sponsor"
+      "enter"
+      "kol" !important;
+    align-content: start !important;
+    align-items: start !important;
+    justify-items: center !important;
+    gap: clamp(8px, 1.8svh, 13px) !important;
+    padding: calc(env(safe-area-inset-top, 0px) + 14px) 10px calc(env(safe-area-inset-bottom, 0px) + 18px) !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-sponsor-frame {
+    grid-area: sponsor !important;
+    order: 1 !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-splash-button {
+    grid-area: enter !important;
+    order: 2 !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-kol-frame {
+    grid-area: kol !important;
+    order: 3 !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-support-frame,
+  [data-app][data-route="intro"] .swamp-splash-button {
+    width: min(94vw, 430px) !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-support-frame {
+    aspect-ratio: 16 / 9 !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-splash-button {
+    aspect-ratio: 4 / 3 !important;
+    display: grid !important;
+    place-items: center !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-support-frame-art,
+  [data-app][data-route="intro"] .swamp-splash-reference {
+    width: 100% !important;
+    height: 100% !important;
+    max-height: none !important;
+    object-fit: contain !important;
+    object-position: center !important;
+    transform: none !important;
+    filter: none !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-support-content {
+    position: absolute !important;
+    inset: 0 !important;
+    padding: 25% 9% 10% !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 5px !important;
+    justify-content: flex-start !important;
+    overflow: hidden !important;
+    pointer-events: auto !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-support-bubble,
+  [data-app][data-route="intro"] .swamp-sponsor-social summary {
+    grid-template-columns: 34px minmax(0, 1fr) !important;
+    min-height: 42px !important;
+    padding: 4px 9px !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-support-bubble img,
+  [data-app][data-route="intro"] .swamp-sponsor-social summary img {
+    width: 34px !important;
+    height: 34px !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-support-bubble strong,
+  [data-app][data-route="intro"] .swamp-sponsor-social summary strong {
+    font-size: 0.82rem !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-support-bubble small,
+  [data-app][data-route="intro"] .swamp-sponsor-social summary small {
+    font-size: 0.62rem !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-support-content::after {
+    min-height: 24px !important;
+    font-size: 0.58rem !important;
+  }
+}
