@@ -35,7 +35,9 @@ const MOBILE_WALLET_PENDING_BACKUP_KEY = "slimewireMobileWalletPendingBackup";
 const MOBILE_WALLET_SESSION_PREFIX = "slimewireMobileWalletSession:";
 const PERF_LOG_KEY = "slimewirePerfLog";
 const CRASH_LOG_KEY = "slimewireCrashLog";
+const TERMINAL_FEED_LOG_KEY = "slimewireTerminalFeedLog";
 const PERF_POST_MIN_DURATION_MS = 150;
+const LOCAL_DIAGNOSTIC_WRITE_DEBOUNCE_MS = 1_500;
 const WALLET_REFRESH_FORCE_COOLDOWN_MS = 10_000;
 const LIVE_PAIRS_RENDER_DEBOUNCE_MS = 140;
 const LIVE_PAIRS_INFLIGHT_RENDER_REASON = "live-pairs-inflight";
@@ -309,11 +311,16 @@ const state = {
   loginCollapsed: true
 };
 let livePairsTimer = null;
+let livePairsTimerKey = "";
 const livePairsWarmupKeys = new Set();
 let scanTimer = null;
+let scanTimerKey = "";
 let kolTimer = null;
+let kolTimerKey = "";
 let watchlistTimer = null;
+let watchlistTimerKey = "";
 let terminalFeedTimer = null;
+let terminalFeedTimerKey = "";
 let walletBackgroundRefreshTimer = null;
 let postTradeRefreshTimers = [];
 let positionRefreshVisualTimer = null;
@@ -328,6 +335,9 @@ const livePairsLoadVersionsByBucket = {};
 const apiInFlight = new Map();
 const pendingPerfPosts = [];
 let perfPostTimer = null;
+let perfLogPersistTimer = null;
+let crashLogPersistTimer = null;
+let terminalFeedLogPersistTimer = null;
 let livePairsRenderTimer = null;
 let livePairsRenderRaf = 0;
 let livePairsRenderReasons = new Set();
@@ -651,6 +661,28 @@ function queuePerfPost(payload = {}) {
   }, 750);
 }
 
+function scheduleDiagnosticLogPersist(key, valueFactory, timerName) {
+  if (timerName === "perf" && perfLogPersistTimer) return;
+  if (timerName === "crash" && crashLogPersistTimer) return;
+  if (timerName === "feed" && terminalFeedLogPersistTimer) return;
+  const persist = () => {
+    try {
+      window.localStorage?.setItem(key, JSON.stringify(valueFactory() || []));
+    } catch {
+      // Local diagnostic history is optional.
+    }
+  };
+  const timer = window.setTimeout(() => {
+    if (timerName === "perf") perfLogPersistTimer = null;
+    if (timerName === "crash") crashLogPersistTimer = null;
+    if (timerName === "feed") terminalFeedLogPersistTimer = null;
+    persist();
+  }, LOCAL_DIAGNOSTIC_WRITE_DEBOUNCE_MS);
+  if (timerName === "perf") perfLogPersistTimer = timer;
+  if (timerName === "crash") crashLogPersistTimer = timer;
+  if (timerName === "feed") terminalFeedLogPersistTimer = timer;
+}
+
 function recordPerfEvent(event = {}) {
   const durationMs = Number(event.durationMs);
   const payload = {
@@ -667,11 +699,7 @@ function recordPerfEvent(event = {}) {
     details: safePerfText(event.details || "", 140)
   };
   state.perfLog = [...(state.perfLog || []), payload].slice(-100);
-  try {
-    window.localStorage?.setItem(PERF_LOG_KEY, JSON.stringify(state.perfLog));
-  } catch {
-    // Local performance history is optional.
-  }
+  scheduleDiagnosticLogPersist(PERF_LOG_KEY, () => state.perfLog, "perf");
   if (payload.durationMs >= PERF_POST_MIN_DURATION_MS || /refresh|long-task|route|tab-switch|dedupe|manual-sell|ui-action|interaction-delay/i.test(payload.action)) {
     queuePerfPost(payload);
   }
@@ -710,11 +738,7 @@ function recordCrashEvent(event = {}) {
     caughtByBoundary: Boolean(event.caughtByBoundary)
   };
   state.crashLog = [...(state.crashLog || []), payload].slice(-50);
-  try {
-    window.localStorage?.setItem(CRASH_LOG_KEY, JSON.stringify(state.crashLog));
-  } catch {
-    // Crash history is diagnostic only.
-  }
+  scheduleDiagnosticLogPersist(CRASH_LOG_KEY, () => state.crashLog, "crash");
   queuePerfPost({
     ...payload,
     component: payload.component || "frontend-crash",
@@ -875,6 +899,7 @@ function buttonBaseLabel(button) {
 }
 
 function applyActionButtonStates() {
+  if (document.hidden) return;
   document.querySelectorAll("[data-position-sell]").forEach((button) => {
     const tokenMint = button.dataset.positionSell || "";
     const percent = button.dataset.positionSellPercent || "";
@@ -2418,24 +2443,21 @@ function terminalFeedEventPayload(tabKey = state.activeTab, event = {}) {
 function recordTerminalFeedEvent(tabKey = state.activeTab, event = {}) {
   const payload = terminalFeedEventPayload(tabKey, event);
   state.terminalFeedLog = [...(state.terminalFeedLog || []), payload].slice(-20);
-  try {
-    window.localStorage?.setItem("slimewireTerminalFeedLog", JSON.stringify(state.terminalFeedLog));
-  } catch {
-    // Feed logs are diagnostics only.
-  }
-  try {
-    console.info("[slimewire_terminal_feed]", payload);
-  } catch {
-    // Diagnostics must not block data refresh.
-  }
-  try {
-    void api("/api/web/terminal-feed-event", {
-      method: "POST",
-      timeoutMs: 3000,
-      body: JSON.stringify(payload)
-    }).catch(() => {});
-  } catch {
-    // Server-side debug history is best-effort.
+  scheduleDiagnosticLogPersist(TERMINAL_FEED_LOG_KEY, () => state.terminalFeedLog, "feed");
+  const important = payload.status === "error"
+    || payload.status === "timeout"
+    || /manual|post-trade|visibility|resume/i.test(payload.reason || "")
+    || Boolean(payload.stale && payload.resultCount === 0);
+  if (important) {
+    try {
+      void api("/api/web/terminal-feed-event", {
+        method: "POST",
+        timeoutMs: 2500,
+        body: JSON.stringify(payload)
+      }).catch(() => {});
+    } catch {
+      // Server-side debug history is best-effort.
+    }
   }
   return payload;
 }
@@ -2625,15 +2647,28 @@ function refreshTerminalEntryInBackground(reason = "terminal-entry") {
 }
 
 function scheduleActiveTerminalFeedRefresh() {
-  if (terminalFeedTimer) {
-    clearTimeout(terminalFeedTimer);
+  const clearActiveTimer = () => {
+    if (terminalFeedTimer) clearTimeout(terminalFeedTimer);
     terminalFeedTimer = null;
+    terminalFeedTimerKey = "";
+  };
+  if (state.route !== "terminal" || document.hidden) {
+    clearActiveTimer();
+    return;
   }
-  if (state.route !== "terminal" || document.hidden) return;
   const feed = terminalFeedDefinition(state.activeTab);
-  if (!feed) return;
-  if (["terminal", "live", "slimeScope", "kol", "watchlist", "sniper"].includes(state.activeTab)) return;
+  if (!feed || ["terminal", "live", "slimeScope", "kol", "watchlist", "sniper"].includes(state.activeTab)) {
+    clearActiveTimer();
+    return;
+  }
+  const delayMs = Math.max(5_000, Number(feed.refreshMs || 30_000));
+  const nextKey = `${state.activeTab}:${terminalFeedCacheKey(feed)}:${delayMs}`;
+  if (terminalFeedTimer && terminalFeedTimerKey === nextKey) return;
+  clearActiveTimer();
+  terminalFeedTimerKey = nextKey;
   terminalFeedTimer = setTimeout(async () => {
+    terminalFeedTimer = null;
+    terminalFeedTimerKey = "";
     if (state.route !== "terminal" || document.hidden) return;
     await refreshTerminalFeed(state.activeTab, {
       silent: true,
@@ -2642,7 +2677,7 @@ function scheduleActiveTerminalFeedRefresh() {
       reason: "active-tab-auto"
     }).catch((error) => setError(error.message));
     scheduleActiveTerminalFeedRefresh();
-  }, Math.max(5_000, Number(feed.refreshMs || 30_000)));
+  }, delayMs);
 }
 
 function normalizeLivePairBucket(bucket) {
@@ -2823,18 +2858,25 @@ async function refreshLivePairBuckets({ silent = false, force = false, warmAll =
 }
 
 function scheduleLivePairsAutoRefresh() {
-  if (livePairsTimer) {
-    clearTimeout(livePairsTimer);
+  const clearLiveTimer = () => {
+    if (livePairsTimer) clearTimeout(livePairsTimer);
     livePairsTimer = null;
+    livePairsTimerKey = "";
+  };
+  if (isPostTradeRefreshActive() || document.hidden || (state.activeTab !== "live" && state.activeTab !== "terminal" && state.activeTab !== "slimeScope")) {
+    clearLiveTimer();
+    return;
   }
-
-  if (isPostTradeRefreshActive()) return;
-  if (document.hidden) return;
-  if (state.activeTab !== "live" && state.activeTab !== "terminal" && state.activeTab !== "slimeScope") return;
   const refreshSeconds = Number(currentLivePairs()?.refreshSeconds || 30);
   const minRefreshSeconds = state.activeTab === "slimeScope" ? 12 : 8;
   const delayMs = Math.max(minRefreshSeconds, refreshSeconds) * 1000;
+  const nextKey = `${state.activeTab}:${state.livePairBucket}:${state.terminalSort}:${delayMs}`;
+  if (livePairsTimer && livePairsTimerKey === nextKey) return;
+  clearLiveTimer();
+  livePairsTimerKey = nextKey;
   livePairsTimer = setTimeout(async () => {
+    livePairsTimer = null;
+    livePairsTimerKey = "";
     if (document.hidden) {
       scheduleLivePairsAutoRefresh();
       return;
@@ -2876,12 +2918,22 @@ function ensureLivePairsWarmup({ force = false } = {}) {
 }
 
 function scheduleScannerAutoRefresh() {
-  if (scanTimer) {
-    clearTimeout(scanTimer);
+  const clearScanTimer = () => {
+    if (scanTimer) clearTimeout(scanTimer);
     scanTimer = null;
+    scanTimerKey = "";
+  };
+  if (document.hidden || state.activeTab !== "sniper") {
+    clearScanTimer();
+    return;
   }
-  if (state.activeTab !== "sniper") return;
+  const nextKey = `${state.activeTab}:${state.scanMode}`;
+  if (scanTimer && scanTimerKey === nextKey) return;
+  clearScanTimer();
+  scanTimerKey = nextKey;
   scanTimer = setTimeout(async () => {
+    scanTimer = null;
+    scanTimerKey = "";
     if (document.hidden) {
       scheduleScannerAutoRefresh();
       return;
@@ -2902,14 +2954,22 @@ function scheduleScannerAutoRefresh() {
 }
 
 function scheduleKolAutoRefresh() {
-  if (kolTimer) {
-    clearTimeout(kolTimer);
+  const clearKolTimer = () => {
+    if (kolTimer) clearTimeout(kolTimer);
     kolTimer = null;
+    kolTimerKey = "";
+  };
+  if (isPostTradeRefreshActive() || document.hidden || (state.activeTab !== "kol" && state.activeTab !== "terminal") || state.kolWallet) {
+    clearKolTimer();
+    return;
   }
-  if (isPostTradeRefreshActive()) return;
-  if (document.hidden) return;
-  if ((state.activeTab !== "kol" && state.activeTab !== "terminal") || state.kolWallet) return;
+  const nextKey = `${state.activeTab}:${state.kolMode}`;
+  if (kolTimer && kolTimerKey === nextKey) return;
+  clearKolTimer();
+  kolTimerKey = nextKey;
   kolTimer = setTimeout(async () => {
+    kolTimer = null;
+    kolTimerKey = "";
     if (document.hidden) {
       scheduleKolAutoRefresh();
       return;
@@ -2930,14 +2990,22 @@ function scheduleKolAutoRefresh() {
 }
 
 function scheduleWatchlistAutoRefresh() {
-  if (watchlistTimer) {
-    clearTimeout(watchlistTimer);
+  const clearWatchlistTimer = () => {
+    if (watchlistTimer) clearTimeout(watchlistTimer);
     watchlistTimer = null;
+    watchlistTimerKey = "";
+  };
+  if (isPostTradeRefreshActive() || document.hidden || (state.activeTab !== "watchlist" && state.activeTab !== "terminal") || !state.user || !state.token) {
+    clearWatchlistTimer();
+    return;
   }
-  if (isPostTradeRefreshActive()) return;
-  if (document.hidden) return;
-  if ((state.activeTab !== "watchlist" && state.activeTab !== "terminal") || !state.user || !state.token) return;
+  const nextKey = `${state.activeTab}:${state.user?.id || "guest"}`;
+  if (watchlistTimer && watchlistTimerKey === nextKey) return;
+  clearWatchlistTimer();
+  watchlistTimerKey = nextKey;
   watchlistTimer = setTimeout(async () => {
+    watchlistTimer = null;
+    watchlistTimerKey = "";
     if (document.hidden) {
       scheduleWatchlistAutoRefresh();
       return;
@@ -3380,6 +3448,7 @@ function queuePostTradeRefresh(signature = "", reason = "post-trade", options = 
 }
 
 function shouldDeferTerminalRender() {
+  if (document.hidden && state.route === "terminal") return true;
   const active = document.activeElement;
   if (!active || state.route !== "terminal") return false;
   const tag = String(active.tagName || "").toLowerCase();
@@ -12939,6 +13008,7 @@ document.addEventListener("input", (event) => {
 function resumeLiveFeeds() {
   if (document.hidden) return;
   recoverAppShell("visibility-return");
+  flushDeferredRender();
   if (resumeLiveFeedsTimer) window.clearTimeout(resumeLiveFeedsTimer);
   resumeLiveFeedsTimer = window.setTimeout(() => {
     resumeLiveFeedsTimer = null;
