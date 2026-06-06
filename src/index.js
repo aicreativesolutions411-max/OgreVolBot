@@ -23429,6 +23429,57 @@ async function webLivePairs(userId, bucket = "live", options = {}) {
   }
 }
 
+function livePairCandidateDedupeKey(candidate) {
+  return String(
+    candidate?.tokenMint ||
+    candidate?.mint ||
+    candidate?.baseToken?.address ||
+    candidate?.pairAddress ||
+    candidate?.url ||
+    candidate?.symbol ||
+    ""
+  ).trim().toLowerCase();
+}
+
+function mergeLivePairCandidatePools(...pools) {
+  const seen = new Set();
+  const merged = [];
+  for (const pool of pools) {
+    for (const candidate of Array.isArray(pool) ? pool : []) {
+      const key = livePairCandidateDedupeKey(candidate);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      merged.push(candidate);
+    }
+  }
+  return merged;
+}
+
+function livePairThinFallbackBuckets(bucket) {
+  if (bucket === "live") return ["under1h", "under3h"];
+  if (bucket === "under1h") return ["under3h"];
+  return [];
+}
+
+async function expandLivePairCandidatesForThinBucket(userId, candidates, bucket, options = {}) {
+  const current = Array.isArray(candidates) ? candidates : [];
+  const fallbackBuckets = livePairThinFallbackBuckets(bucket);
+  if (!fallbackBuckets.length || current.length >= 220) return current;
+  const requests = fallbackBuckets.map((fallbackBucket) => fetchLivePairCandidates({
+    userId,
+    bucket: fallbackBucket,
+    limit: 220,
+    ttlMs: options.force ? 2_500 : 9_000,
+    timeoutMs: 3_200,
+    force: Boolean(options.force)
+  }));
+  const results = await Promise.allSettled(requests);
+  const fallbackCandidates = results.flatMap((result) => (
+    result.status === "fulfilled" && Array.isArray(result.value) ? result.value : []
+  ));
+  return mergeLivePairCandidatePools(current, fallbackCandidates);
+}
+
 async function buildWebLivePairs(userId, bucket = "live", options = {}) {
   const safeBucket = normalizeLivePairBucket(bucket);
   const sort = String(options.sort || "best").toLowerCase();
@@ -23441,7 +23492,8 @@ async function buildWebLivePairs(userId, bucket = "live", options = {}) {
     bucket: safeBucket,
     force: Boolean(options.force)
   });
-  const baseRows = uniqueSniperScoreRows(candidates.map(livePairCandidateToRow).filter(Boolean))
+  const feedCandidates = await expandLivePairCandidatesForThinBucket(userId, candidates, safeBucket, options);
+  const baseRows = uniqueSniperScoreRows(feedCandidates.map(livePairCandidateToRow).filter(Boolean))
     .filter((row) => !hasHardBlockedLivePairRisk(row))
     .sort(compareWebLivePairs)
     .slice(0, isLive ? 180 : 320);
@@ -23453,7 +23505,7 @@ async function buildWebLivePairs(userId, bucket = "live", options = {}) {
     .filter((row) => isWebLivePairCandidate(row, safeBucket))
     .sort((a, b) => compareWebLivePairs(a, b, sort));
   let liveRows = ageVerifiedRows;
-  if (!isLive && liveRows.length < targetLimit) {
+  if (liveRows.length < targetLimit) {
     const currentMints = new Set(liveRows.map((row) => row.tokenMint));
     const backfillRows = hardSafeEnrichedRows
       .filter((row) => !currentMints.has(row.tokenMint))
@@ -23462,7 +23514,7 @@ async function buildWebLivePairs(userId, bucket = "live", options = {}) {
       .sort((a, b) => compareWebLivePairs(a, b, sort));
     liveRows = uniqueSniperScoreRows([...liveRows, ...backfillRows]).sort((a, b) => compareWebLivePairs(a, b, sort));
   }
-  if (!isLive && liveRows.length < targetLimit) {
+  if (liveRows.length < targetLimit) {
     const currentMints = new Set(liveRows.map((row) => row.tokenMint));
     const relaxedRows = hardSafeEnrichedRows
       .filter((row) => !currentMints.has(row.tokenMint))
@@ -23831,6 +23883,7 @@ function isLivePairInRelaxedBucket(item, bucket) {
   const safeBucket = normalizeLivePairBucket(bucket);
   const ageMinutes = livePairAgeMinutesValue(item);
   if (ageMinutes === null) return false;
+  if (safeBucket === "live") return ageMinutes >= 0 && ageMinutes < 180;
   if (safeBucket === "under1h") return ageMinutes >= 5 && ageMinutes < 90;
   if (safeBucket === "under3h") return ageMinutes >= 30 && ageMinutes < 240;
   if (safeBucket === "under1d") return ageMinutes >= 60 && ageMinutes < 1440;
