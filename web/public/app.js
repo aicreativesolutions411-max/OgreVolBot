@@ -338,6 +338,20 @@ function scheduleLivePairsRender(reason = "live-pairs-batch") {
 }
 
 const $ = (selector) => document.querySelector(selector);
+
+function runDeferredUiTask(task) {
+  window.setTimeout(() => {
+    Promise.resolve()
+      .then(task)
+      .catch((error) => {
+        if (typeof setError === "function") {
+          setError(error?.message || "Action failed.");
+        } else {
+          console.warn(error);
+        }
+      });
+  }, 0);
+}
 const writeText = (element, value) => {
   if (element) element.textContent = value;
 };
@@ -2731,7 +2745,8 @@ function scheduleLivePairsAutoRefresh() {
   if (isPostTradeRefreshActive()) return;
   if (state.activeTab !== "live" && state.activeTab !== "terminal" && state.activeTab !== "slimeScope") return;
   const refreshSeconds = Number(currentLivePairs()?.refreshSeconds || 30);
-  const delayMs = Math.max(3, refreshSeconds) * 1000;
+  const minRefreshSeconds = state.activeTab === "slimeScope" ? 12 : 8;
+  const delayMs = Math.max(minRefreshSeconds, refreshSeconds) * 1000;
   livePairsTimer = setTimeout(async () => {
     const onLiveFeed = state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "slimeScope";
     if (!onLiveFeed) return;
@@ -12446,7 +12461,7 @@ document.addEventListener("click", async (event) => {
   const refreshLivePairsButton = target.closest?.("[data-refresh-live-pairs]");
   if (refreshLivePairsButton) {
     const feedKey = state.activeTab === "slimeScope" ? "slimeScope" : state.activeTab === "terminal" ? "terminal" : "live";
-    await refreshTerminalFeed(feedKey, { force: true, reason: "manual-live-refresh" }).catch((error) => setError(error.message));
+    runDeferredUiTask(() => refreshTerminalFeed(feedKey, { force: true, reason: "manual-live-refresh" }));
   }
 
   if (target.matches("[data-refresh-watchlist]")) {
@@ -12461,7 +12476,7 @@ document.addEventListener("click", async (event) => {
     resetTerminalFeedVisibleLimit("live");
     resetTerminalFeedVisibleLimit("slimeScope");
     render();
-    await refreshTerminalFeed(state.activeTab === "terminal" ? "terminal" : "live", { force: true, reason: "live-bucket-switch" }).catch((error) => setError(error.message));
+    runDeferredUiTask(() => refreshTerminalFeed(state.activeTab === "terminal" ? "terminal" : "live", { force: true, reason: "live-bucket-switch" }));
   }
 
   const slimeScopeModeButton = target.closest?.("[data-slime-scope-mode]");
@@ -12470,7 +12485,7 @@ document.addEventListener("click", async (event) => {
     state.activeTab = "slimeScope";
     resetTerminalFeedVisibleLimit("slimeScope");
     render();
-    await refreshTerminalFeed("slimeScope", { force: true, reason: "slime-scope-mode-switch" }).catch((error) => setError(error.message));
+    runDeferredUiTask(() => refreshTerminalFeed("slimeScope", { force: true, reason: "slime-scope-mode-switch" }));
   }
 
   if (target.matches("[data-scan-mode]")) {
@@ -12543,8 +12558,8 @@ document.addEventListener("change", async (event) => {
     state.terminalSort = target.value || "best";
     resetTerminalFeedVisibleLimit("live");
     resetTerminalFeedVisibleLimit("slimeScope");
-    await refreshLivePairBuckets({ silent: true, force: true }).catch((error) => setError(error.message));
     render();
+    runDeferredUiTask(() => refreshLivePairBuckets({ silent: true, force: true }));
   }
   if (target?.matches?.("[data-ogre-tek-field]")) {
     updateOgreTekDraftFromDom();
