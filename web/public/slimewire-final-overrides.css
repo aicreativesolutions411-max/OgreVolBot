@@ -7964,3 +7964,51 @@ textarea,
     width: min(332px, calc(100vw - 32px)) !important;
   }
 }
+
+/* SLIME_DESKTOP_TERMINAL_GAP_COLLAPSE_V1: keep desktop feeds tight under wallet cards. */
+@media (min-width: 921px) {
+  [data-app][data-route="terminal"] {
+    --terminal-stage-min-height: 0px !important;
+    --terminal-feed-offset: 0px !important;
+  }
+
+  [data-app][data-route="terminal"] [data-dashboard],
+  [data-app][data-route="terminal"] .dashboard,
+  [data-app][data-route="terminal"] .terminal-dashboard,
+  [data-app][data-route="terminal"] .terminal-shell,
+  [data-app][data-route="terminal"] .terminal-main,
+  [data-app][data-route="terminal"] .terminal-layout,
+  [data-app][data-route="terminal"] .terminal-grid {
+    align-content: start !important;
+    align-items: start !important;
+    gap: 10px !important;
+    row-gap: 10px !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-stage,
+  [data-app][data-route="terminal"] .terminal-view,
+  [data-app][data-route="terminal"] .terminal-content,
+  [data-app][data-route="terminal"] .tab-content,
+  [data-app][data-route="terminal"] .tab-panel,
+  [data-app][data-route="terminal"] [data-terminal-stage],
+  [data-app][data-route="terminal"] [data-terminal-content],
+  [data-app][data-route="terminal"] [data-terminal-main],
+  [data-app][data-route="terminal"] [data-tab-content],
+  [data-app][data-route="terminal"] [data-tab-panel] {
+    align-self: start !important;
+    justify-self: stretch !important;
+    min-height: 0 !important;
+    margin-top: 0 !important;
+    padding-top: 0 !important;
+  }
+
+  [data-app][data-route="terminal"] .live-terminal,
+  [data-app][data-route="terminal"] .live-terminal-panel,
+  [data-app][data-route="terminal"] .live-terminal-shell,
+  [data-app][data-route="terminal"] [data-live-terminal],
+  [data-app][data-route="terminal"] [data-live-feed],
+  [data-app][data-route="terminal"] [data-feed-panel] {
+    margin-top: 0 !important;
+    transform: translateY(0) !important;
+  }
+}
