@@ -235,6 +235,7 @@ const state = {
   ogreAgentOpen: false,
   ogreAgentLoading: false,
   ogreAgentFastMode: (() => { try { return (localStorage.getItem("ogreAgentFastMode") || "on") !== "off"; } catch { return true; } })(),
+  ogreAgentAutoTradeApproved: (() => { try { return (localStorage.getItem("ogreAgentAutoTradeApproved") || "") === "yes"; } catch { return false; } })(),
   ogreAgentStatus: "",
   ogreAgentMessages: [],
   connectedWalletBalance: null,
@@ -12567,6 +12568,7 @@ function ogreAgentInitialMessage() {
       { label: "Show Positions", type: "open_tab", tab: "positions" },
       { label: "Refresh Feeds", type: "refresh_feeds" },
       { label: "Fast Mode", type: "toggle_agent_fast_mode" },
+      { label: "Approve Auto-Trade", type: "approve_agent_auto_trade" },
       { label: "Best Picks", type: "open_tab", tab: "ogreAi" },
       { label: "Slime Scope", type: "open_tab", tab: "slimeScope" }
     ]
@@ -12585,6 +12587,7 @@ function ogreAgentContext() {
     route: state.route,
     activeTab: state.activeTab,
     agentFastMode: state.ogreAgentFastMode,
+    agentAutoTradeApproved: state.ogreAgentAutoTradeApproved,
     smartChartToken: state.smartChartToken || "",
     tradeToken: state.tradeToken || "",
     livePairBucket: state.livePairBucket || "",
@@ -12665,6 +12668,10 @@ function ogreAgentActionFromKey(key = "") {
   return message?.actions?.[Number(actionIndexText)] || null;
 }
 
+function ogreAgentStoreAutoTradeApproval(enabled) {
+  state.ogreAgentAutoTradeApproved = Boolean(enabled);
+  try { localStorage.setItem("ogreAgentAutoTradeApproved", state.ogreAgentAutoTradeApproved ? "yes" : "no"); } catch {}
+}
 function ogreAgentStoreFastMode(enabled) {
   state.ogreAgentFastMode = Boolean(enabled);
   try { localStorage.setItem("ogreAgentFastMode", state.ogreAgentFastMode ? "on" : "off"); } catch {}
@@ -12768,7 +12775,7 @@ function prepareOgreAgentActionForMessage(action = {}, message = "") {
 }
 
 function shouldAutoRunOgreAgentAction(action = {}, message = "") {
-  if (!state.ogreAgentFastMode) return false;
+  if (!state.ogreAgentFastMode || !state.ogreAgentAutoTradeApproved) return false;
   const intent = ogreAgentTradeIntent(message);
   if (!intent) return false;
   if (intent === "buy") {
@@ -12786,6 +12793,31 @@ async function runOgreAgentAction(action = {}) {
     ogreAgentStoreFastMode(!state.ogreAgentFastMode);
     state.ogreAgentStatus = state.ogreAgentFastMode ? "Fast Mode ON: clear trade requests run directly." : "Fast Mode OFF: Ogre will stage actions first.";
     pushOgreAgentMessage({ role: "assistant", text: state.ogreAgentStatus, actions: [{ label: state.ogreAgentFastMode ? "Turn Fast Mode Off" : "Turn Fast Mode On", type: "toggle_agent_fast_mode" }] });
+    renderOgreAgent();
+    return;
+  }
+
+  if (type === "approve_agent_auto_trade") {
+    ogreAgentStoreAutoTradeApproval(true);
+    ogreAgentStoreFastMode(true);
+    state.ogreAgentStatus = "Agent Auto-Trade approved for this browser/account. Clear buy/sell requests can run directly through SlimeWire trade flow.";
+    pushOgreAgentMessage({
+      role: "assistant",
+      text: `${state.ogreAgentStatus}\nExternal wallet apps may still require their own signature prompts. Managed wallets can run through the saved SlimeWire flow.`,
+      actions: [
+        { label: "Revoke Auto-Trade", type: "revoke_agent_auto_trade" },
+        { label: "Show Positions", type: "open_tab", tab: "positions" },
+        { label: "Best Picks", type: "open_tab", tab: "ogreAi" }
+      ]
+    });
+    renderOgreAgent();
+    return;
+  }
+
+  if (type === "revoke_agent_auto_trade") {
+    ogreAgentStoreAutoTradeApproval(false);
+    state.ogreAgentStatus = "Agent Auto-Trade revoked. Ogre will still help, but direct trade requests need approval again.";
+    pushOgreAgentMessage({ role: "assistant", text: state.ogreAgentStatus, actions: [{ label: "Approve Auto-Trade", type: "approve_agent_auto_trade" }] });
     renderOgreAgent();
     return;
   }
@@ -13012,6 +13044,15 @@ async function sendOgreAgentMessage() {
       actions
     });
     const clientFallbackTradeAction = prepareOgreAgentActionForMessage({ type: ogreAgentTradeIntent(message) === "buy" ? "confirm_buy" : ogreAgentTradeIntent(message) === "sell" ? "confirm_sell" : "" }, message);
+    if (ogreAgentTradeIntent(message) && state.ogreAgentFastMode && !state.ogreAgentAutoTradeApproved) {
+      pushOgreAgentMessage({
+        role: "assistant",
+        text: "Approve Auto-Trade to let Ogre run clear buy/sell requests after your first approval. You can revoke it anytime.",
+        actions: [{ label: "Approve Auto-Trade", type: "approve_agent_auto_trade" }, { label: "Fast Mode Off", type: "toggle_agent_fast_mode" }]
+      });
+      state.ogreAgentStatus = "Auto-Trade approval needed once.";
+      return;
+    }
     const autoAction = actions.find((action) => shouldAutoRunOgreAgentAction(action, message)) || (shouldAutoRunOgreAgentAction(clientFallbackTradeAction, message) ? clientFallbackTradeAction : null);
     if (autoAction) {
       state.ogreAgentStatus = "Fast Mode: sending trade request...";
@@ -14407,6 +14448,7 @@ if (!window.__slimeStablePumpChartTimer) {
     slimePumpChartRerender();
   }, 8000);
 }
+
 
 
 
