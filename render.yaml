@@ -206,6 +206,22 @@ services:
         value: 5
       - key: APP_SECRET
         sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: OGRE_AGENT_GROQ_MODEL
+        value: llama-3.1-8b-instant
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: OGRE_AGENT_GEMINI_MODEL
+        value: gemini-2.5-flash-lite
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OGRE_AGENT_OPENROUTER_MODEL
+        value: openrouter/free
+      - key: OGRE_AGENT_PROVIDER_TIMEOUT_MS
+        value: 2800
+      - key: OGRE_AGENT_OPENAI_FALLBACK
+        value: true
       - key: JUPITER_API_KEY
         sync: false
       - key: MADE_ON_SOL_API_KEY
