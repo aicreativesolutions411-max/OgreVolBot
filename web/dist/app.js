@@ -236,7 +236,7 @@ const state = {
   ogreAgentOpen: false,
   ogreAgentLoading: false,
   ogreAgentFastMode: (() => { try { return (localStorage.getItem("ogreAgentFastMode") || "on") !== "off"; } catch { return true; } })(),
-  ogreAgentVoiceEnabled: (() => { try { return (localStorage.getItem("ogreAgentVoiceEnabled") || "on") !== "off"; } catch { return true; } })(),
+  ogreAgentVoiceEnabled: (() => { try { return (localStorage.getItem("ogreAgentVoiceEnabled") || "off") === "on"; } catch { return false; } })(),
   ogreAgentSpeaking: false,
   ogreAgentListening: false,
   ogreAgentSpeechRecognizer: null,
@@ -13118,8 +13118,8 @@ function ogreAgentAvatarHtml() {
         <span class="ogre-agent-holo-scan"></span>
       </div>
       <div class="ogre-agent-holo-meta">
-        <strong>${listening ? "Ogre listening" : talking ? "Ogre speaking" : "Ogre online"}</strong>
-        <small>${listening ? "Speak your command" : voiceReady ? "Deep voice ready" : "Voice muted"}</small>
+        <strong>${listening ? "Ogre listening" : talking ? "Ogre talking" : "Ogre online"}</strong>
+        <small>${listening ? "Speak your command" : voiceReady ? "Voice ready" : "Visual mode"}</small>
       </div>
     </div>
   `;
@@ -13307,9 +13307,9 @@ function ogreAgentSpeak(text = "") {
     const utterance = new window.SpeechSynthesisUtterance(cleanText);
     const voice = ogreAgentPickVoice();
     if (voice) utterance.voice = voice;
-    utterance.pitch = 0.58;
-    utterance.rate = 0.9;
-    utterance.volume = 0.92;
+    utterance.pitch = 0.82;
+    utterance.rate = 0.94;
+    utterance.volume = 0.88;
     utterance.onstart = () => ogreAgentSetSpeaking(true);
     utterance.onend = () => ogreAgentSetSpeaking(false);
     utterance.onerror = () => ogreAgentSetSpeaking(false);

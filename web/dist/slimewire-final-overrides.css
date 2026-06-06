@@ -8705,12 +8705,12 @@ textarea,
   grid-template-columns: auto minmax(0, 1fr) !important;
   align-items: center !important;
   gap: 12px !important;
-  min-height: 110px !important;
-  padding: 9px 11px !important;
-  border: 1px solid rgba(132, 255, 48, 0.22) !important;
+  min-height: 132px !important;
+  padding: 12px 13px !important;
+  border: 1px solid rgba(146, 255, 52, 0.34) !important;
   border-radius: 16px !important;
   background:
-    radial-gradient(circle at 24% 35%, rgba(130, 255, 42, 0.16), transparent 34%),
+    radial-gradient(circle at 24% 35%, rgba(130, 255, 42, 0.24), transparent 38%),
     linear-gradient(135deg, rgba(0, 24, 8, 0.86), rgba(0, 6, 3, 0.94)) !important;
   contain: layout paint style !important;
   overflow: hidden !important;
@@ -8721,8 +8721,8 @@ textarea,
   position: relative !important;
   display: grid !important;
   place-items: center !important;
-  width: 92px !important;
-  height: 92px !important;
+  width: 116px !important;
+  height: 116px !important;
   perspective: 520px !important;
   isolation: isolate !important;
 }
@@ -8741,8 +8741,8 @@ textarea,
 .ogre-agent-holo-stage img {
   position: relative !important;
   z-index: 2 !important;
-  width: 78px !important;
-  height: 78px !important;
+  width: 104px !important;
+  height: 104px !important;
   object-fit: contain !important;
   filter:
     drop-shadow(0 0 9px rgba(145, 255, 51, 0.8))
@@ -8762,15 +8762,15 @@ textarea,
 }
 
 .ogre-agent-holo-ring.ring-one {
-  width: 78px !important;
-  height: 78px !important;
+  width: 98px !important;
+  height: 98px !important;
   bottom: 3px !important;
   animation: ogreHoloRing 3.2s linear infinite !important;
 }
 
 .ogre-agent-holo-ring.ring-two {
-  width: 56px !important;
-  height: 56px !important;
+  width: 72px !important;
+  height: 72px !important;
   bottom: 13px !important;
   opacity: 0.7 !important;
   animation: ogreHoloRing 2.4s linear infinite reverse !important;
@@ -8780,14 +8780,28 @@ textarea,
   position: absolute !important;
   z-index: 4 !important;
   left: 50% !important;
-  top: 58% !important;
-  width: 26px !important;
-  height: 5px !important;
+  top: 60% !important;
+  width: 34px !important;
+  height: 7px !important;
   border-radius: 999px !important;
   background: rgba(235, 255, 219, 0.88) !important;
   box-shadow: 0 0 9px rgba(146, 255, 56, 0.58) !important;
   opacity: 0.58 !important;
   transform: translate(-50%, -50%) scaleX(0.82) !important;
+}
+
+.ogre-agent-holo-stage::after {
+  content: "" !important;
+  position: absolute !important;
+  z-index: 3 !important;
+  left: 50% !important;
+  top: 60% !important;
+  width: 52px !important;
+  height: 28px !important;
+  border-radius: 999px !important;
+  border: 1px solid rgba(186, 255, 121, 0.22) !important;
+  opacity: 0 !important;
+  transform: translate(-50%, -50%) scale(0.72) !important;
 }
 
 .ogre-agent-holo-scan {
@@ -8831,6 +8845,10 @@ textarea,
   opacity: 0.95 !important;
 }
 
+.ogre-agent-holo.is-talking .ogre-agent-holo-stage::after {
+  animation: ogreHoloVoiceWave 0.72s ease-out infinite !important;
+}
+
 .ogre-agent-holo.is-talking .ogre-agent-holo-scan {
   animation-duration: 1.1s !important;
   opacity: 0.65 !important;
@@ -8847,8 +8865,13 @@ textarea,
 }
 
 @keyframes ogreHoloMouth {
-  0% { height: 4px; transform: translate(-50%, -50%) scaleX(0.76); }
-  100% { height: 13px; transform: translate(-50%, -50%) scaleX(1.05); }
+  0% { height: 5px; transform: translate(-50%, -50%) scaleX(0.72); }
+  100% { height: 17px; transform: translate(-50%, -50%) scaleX(1.08); }
+}
+
+@keyframes ogreHoloVoiceWave {
+  0% { opacity: 0.45; transform: translate(-50%, -50%) scale(0.62); }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(1.28); }
 }
 
 @keyframes ogreHoloRing {
@@ -8888,34 +8911,34 @@ textarea,
   }
 
   .ogre-agent-holo {
-    min-height: 82px !important;
+    min-height: 98px !important;
     grid-template-columns: auto minmax(0, 1fr) !important;
     gap: 9px !important;
     padding: 7px 9px !important;
   }
 
   .ogre-agent-holo-stage {
-    width: 68px !important;
-    height: 68px !important;
+    width: 86px !important;
+    height: 86px !important;
   }
 
   .ogre-agent-holo-stage img {
-    width: 56px !important;
-    height: 56px !important;
+    width: 76px !important;
+    height: 76px !important;
   }
 
   .ogre-agent-holo-ring.ring-one {
-    width: 60px !important;
-    height: 60px !important;
+    width: 74px !important;
+    height: 74px !important;
   }
 
   .ogre-agent-holo-ring.ring-two {
-    width: 42px !important;
-    height: 42px !important;
+    width: 54px !important;
+    height: 54px !important;
   }
 
   .ogre-agent-holo-mouth {
-    width: 18px !important;
+    width: 24px !important;
     top: 59% !important;
   }
 

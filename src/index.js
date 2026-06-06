@@ -2638,8 +2638,9 @@ async function ogreAgentTokenSocialReply(message = "", context = {}) {
     return {
       reply: [
         `${shortMint(tokenMint)} social/KOL check`,
-        "I can keep the CA in this conversation, but a true X-wide scan needs X_BEARER_TOKEN/TWITTER_BEARER_TOKEN configured on Render.",
-        "Right now I can open the live X search, open chart, and use SlimeWire-visible socials/feeds. I will not fake KOL names if X did not return them."
+        "I kept this CA as the active token for the conversation.",
+        "Live in-panel X/KOL scanning is not connected yet. Add X_BEARER_TOKEN or TWITTER_BEARER_TOKEN on Render and I can return accounts, posts, and engagement for this exact CA.",
+        "For now, use Open X Search below and I will still use SlimeWire-visible socials/feeds without inventing KOL names."
       ].join("\n"),
       actions: [
         { label: "Open X Search", type: "open_external", url: xSearchUrl },
