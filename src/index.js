@@ -84,6 +84,10 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_MANUAL_LAUNCH_SCAN_INTERVAL_MS = 1500;
+const OGRE_AI_SCAN_BATCH_SIZE = 20;
+const OGRE_AI_SCAN_BATCH_DELAY_MS = 8_000;
+const OGRE_AI_MAX_SCAN_ROWS = 140;
+const OGRE_AI_PLANS_PER_RUN_LIMIT = 25;
 
 const CONFIG = loadConfig();
 const connection = new Connection(CONFIG.rpcUrl, "confirmed");
@@ -19342,7 +19346,8 @@ async function selectOgreAiPicks(userId, body = {}, limit = 1) {
     .filter((row) => !isOgreAiBlockedRisk(row));
   const rankedBaseRows = uniqueSniperScoreRows(baseRows)
     .sort((a, b) => compareOgreAiCandidates(a, b, defaults, mode));
-  const safetyRows = await filterOgreAiRowsForHardSafety(rankedBaseRows, Math.max(80, limit * 48), defaults, mode);
+  const scanLimit = Math.max(40, Math.min(OGRE_AI_MAX_SCAN_ROWS, Math.max(limit * 20, 50)));
+  const safetyRows = await filterOgreAiRowsForHardSafety(rankedBaseRows, scanLimit, defaults, mode, { requestedRunCount: limit });
   const pool = buildOgreAiCandidatePool(safetyRows, defaults, mode);
   const filtered = pool.candidates.sort((a, b) => compareOgreAiCandidates(a, b, defaults, mode));
 
@@ -19360,33 +19365,51 @@ async function selectOgreAiPicks(userId, body = {}, limit = 1) {
   };
 }
 
-async function filterOgreAiRowsForHardSafety(rows = [], limit = 40, defaults = {}, mode = "quick") {
+async function filterOgreAiRowsForHardSafety(rows = [], limit = 40, defaults = {}, mode = "quick", options = {}) {
+  const requestedRunCount = Math.max(1, Number(options.requestedRunCount || 1) || 1);
   const accepted = [];
-  const candidates = uniqueSniperScoreRows(rows)
+  const targetKeep = Math.max(1, requestedRunCount * 2);
+  const uniqueRows = uniqueSniperScoreRows(rows);
+  const scanLimit = Math.min(
+    uniqueRows.length,
+    Math.max(40, Math.min(OGRE_AI_MAX_SCAN_ROWS, Math.max(Number(limit) || 40, requestedRunCount * OGRE_AI_SCAN_BATCH_SIZE)))
+  );
+  const candidates = uniqueRows
     .filter((row) => !hasHardBlockedLivePairRisk(row))
     .filter((row) => !isOgreAiBlockedRisk(row))
     .sort((a, b) => compareOgreAiCandidates(a, b, defaults, mode))
-    .slice(0, Math.min(rows.length, Math.max(1, limit)));
+    .slice(0, Math.min(uniqueRows.length, scanLimit));
 
-  await runWithConcurrency(candidates, Math.min(6, Math.max(2, CONFIG.balanceConcurrency)), async (row) => {
-    try {
-      const safety = await getMintSafetyInfo(row.tokenMint);
-      if (safety.tokenProgram === TOKEN_2022_PROGRAM_ID.toBase58()) return;
-      if (safety.freezeAuthority || safety.mintAuthority) return;
-      accepted.push({
-        ...row,
-        tokenProgram: safety.tokenProgram,
-        safetyNote: "Ogre A.I. mint/freeze safety passed"
-      });
-    } catch {
-      accepted.push({
-        ...row,
-        tokenProgram: row.tokenProgram || "",
-        safetyStatus: "pending",
-        safetyNote: "Safety check could not be completed yet. Trade with caution."
-      });
+  const chunkSize = OGRE_AI_SCAN_BATCH_SIZE;
+  const batchDelayMs = OGRE_AI_SCAN_BATCH_DELAY_MS;
+
+  for (let index = 0; index < candidates.length; index += chunkSize) {
+    const chunk = candidates.slice(index, index + chunkSize);
+    await runWithConcurrency(chunk, Math.min(6, Math.max(2, CONFIG.balanceConcurrency)), async (row) => {
+      try {
+        const safety = await getMintSafetyInfo(row.tokenMint);
+        if (safety.tokenProgram === TOKEN_2022_PROGRAM_ID.toBase58()) return;
+        if (safety.freezeAuthority || safety.mintAuthority) return;
+        accepted.push({
+          ...row,
+          tokenProgram: safety.tokenProgram,
+          safetyNote: "Ogre A.I. mint/freeze safety passed"
+        });
+      } catch {
+        accepted.push({
+          ...row,
+          tokenProgram: row.tokenProgram || "",
+          safetyStatus: "pending",
+          safetyNote: "Safety check could not be completed yet. Trade with caution."
+        });
+      }
+    });
+
+    if (accepted.length >= targetKeep) break;
+    if (index + chunkSize < candidates.length) {
+      await sleep(batchDelayMs);
     }
-  });
+  }
 
   return accepted.sort((a, b) => compareOgreAiCandidates(a, b, defaults, mode));
 }
@@ -19419,7 +19442,7 @@ function webOgreAiPickSummary(row = {}) {
 async function webStartOgreAiRun(userId, body = {}) {
   const store = await readWalletStore();
   const wallets = webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup);
-  const runCount = clamp(Number.parseInt(String(body.runCount || "1"), 10) || 1, 1, 25);
+  const runCount = clamp(Number.parseInt(String(body.runCount || "1"), 10) || 1, 1, OGRE_AI_PLANS_PER_RUN_LIMIT);
   const mode = normalizeOgreAiMode(body.mode);
   const selection = await selectOgreAiPicks(userId, body, runCount);
   if (!selection.rows.length) {
@@ -19427,9 +19450,11 @@ async function webStartOgreAiRun(userId, body = {}) {
     throw new Error(`Ogre A.I. did not find a route-worthy ${mode} setup right now. Scanned ${selection.scanned}; strict ${counts.strict || 0}, balanced ${counts.balanced || 0}, available ${counts.available || 0}, scout ${counts.scout || 0}. Try refresh again or review Live Pairs manually.`);
   }
 
-  const plans = [];
   const errors = [];
-  for (const pick of selection.rows) {
+  const planQueue = selection.rows.map((pick, index) => ({ pick, index }));
+  const planRows = new Array(planQueue.length);
+
+  await runWithConcurrency(planQueue, Math.min(4, Math.max(2, CONFIG.balanceConcurrency || 2)), async ({ pick, index }) => {
     try {
       const defaults = selection.defaults;
       const plan = await webCreateManagedBuyPlan(userId, wallets, {
@@ -19445,10 +19470,10 @@ async function webStartOgreAiRun(userId, body = {}) {
         defaultStopLossPct: firstString(body.stopLossPct, defaults.defaultStopLossPct),
         defaultSlippageBps: firstMeaningfulNumber(body.slippageBps, defaults.defaultSlippageBps)
       });
-      plans.push({
+      planRows[index] = {
         ...plan,
         pick: webOgreAiPickSummary(pick)
-      });
+      };
     } catch (error) {
       errors.push({
         tokenMint: pick.tokenMint,
@@ -19456,7 +19481,9 @@ async function webStartOgreAiRun(userId, body = {}) {
         message: friendlyError(error)
       });
     }
-  }
+  });
+
+  const plans = planRows.filter(Boolean);
 
   if (!plans.length) {
     throw new Error(`Ogre A.I. found ${selection.rows.length} setup(s), but no buys armed. ${errors.map((row) => `${row.shortMint}: ${row.message}`).join(" | ")}`);

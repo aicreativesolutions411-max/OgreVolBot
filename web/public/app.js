@@ -35,6 +35,8 @@ const PERF_LOG_KEY = "slimewirePerfLog";
 const CRASH_LOG_KEY = "slimewireCrashLog";
 const PERF_POST_MIN_DURATION_MS = 150;
 const WALLET_REFRESH_FORCE_COOLDOWN_MS = 10_000;
+const LIVE_PAIRS_RENDER_DEBOUNCE_MS = 140;
+const LIVE_PAIRS_INFLIGHT_RENDER_REASON = "live-pairs-inflight";
 const POST_TRADE_REFRESH_DELAYS_MS = [1200, 4500, 10000];
 const POST_TRADE_AFFECTED_KEYS = ["wallet-summary", "positions", "pnl", "trade-history", "selected-token", "live-trades"];
 const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
@@ -314,6 +316,7 @@ let autoExitCheckInFlight = false;
 let walletRefreshPromise = null;
 let lastWalletForceRefreshAt = 0;
 let walletRefreshSequence = 0;
+let ogreAiRunInFlight = null;
 const livePairsLoadInFlight = new Map();
 const livePairsLoadVersionsByBucket = {};
 const apiInFlight = new Map();
@@ -321,11 +324,17 @@ const pendingPerfPosts = [];
 let perfPostTimer = null;
 let livePairsRenderTimer = null;
 let livePairsRenderRaf = 0;
+let livePairsRenderReasons = new Set();
 
 function scheduleLivePairsRender(reason = "live-pairs-batch") {
+  if (reason) {
+    livePairsRenderReasons.add(String(reason));
+  }
   if (livePairsRenderTimer || livePairsRenderRaf) return;
   const flush = () => {
+    const details = Array.from(livePairsRenderReasons);
     livePairsRenderTimer = null;
+    livePairsRenderReasons = new Set();
     livePairsRenderRaf = 0;
     if (state.route !== "terminal") return;
     if (!["terminal", "live", "slimeScope"].includes(state.activeTab)) return;
@@ -334,13 +343,13 @@ function scheduleLivePairsRender(reason = "live-pairs-batch") {
       action: "batched-live-render",
       durationMs: 0,
       resultCount: Array.isArray(currentLivePairs()?.rows) ? currentLivePairs().rows.length : 0,
-      details: reason
+      details: details.length ? details.slice(-3).join(" | ") : reason
     });
     render();
   };
   livePairsRenderTimer = window.setTimeout(() => {
     livePairsRenderRaf = window.requestAnimationFrame(flush);
-  }, 120);
+  }, LIVE_PAIRS_RENDER_DEBOUNCE_MS);
 }
 
 const $ = (selector) => document.querySelector(selector);
@@ -2647,7 +2656,9 @@ async function loadLivePairs({ silent = false, bucket = state.livePairBucket, re
     state.livePairsLoadingByBucket = { ...state.livePairsLoadingByBucket, [safeBucket]: existingLoad.requestId };
     state.livePairsLoading = Boolean(state.livePairsLoadingByBucket[state.livePairBucket]);
     if (!silent && isActiveBucket) state.loading = true;
-    if (isActiveBucket || !silent) render();
+    if (isActiveBucket || !silent) {
+      scheduleLivePairsRender(LIVE_PAIRS_INFLIGHT_RENDER_REASON);
+    }
     return existingLoad.promise;
   }
 
@@ -2659,7 +2670,9 @@ async function loadLivePairs({ silent = false, bucket = state.livePairBucket, re
   state.livePairsLoadingByBucket = { ...state.livePairsLoadingByBucket, [safeBucket]: requestId };
   state.livePairsLoading = Boolean(state.livePairsLoadingByBucket[state.livePairBucket]);
   if (!silent && isActiveBucket) state.loading = true;
-  if (isActiveBucket || !silent) render();
+  if (isActiveBucket || !silent) {
+    scheduleLivePairsRender(LIVE_PAIRS_INFLIGHT_RENDER_REASON);
+  }
 
   const loadPromise = (async () => {
     try {
@@ -7998,14 +8011,21 @@ function setOgreAiStatus(message) {
 }
 
 async function startOgreAiRun() {
+  if (ogreAiRunInFlight) {
+    setOgreAiStatus("Ogre A.I. is already scanning. Please wait for completion.");
+    return;
+  }
+  const runToken = Symbol("ogre-ai-run");
   try {
     const payload = readOgreAiForm();
     state.ogreAiLoading = true;
+    ogreAiRunInFlight = runToken;
     setOgreAiStatus("Scanning live feeds and arming managed exits...");
     render();
     const data = await api("/api/web/ogre-ai/start", {
       method: "POST",
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      timeoutMs: API_LONG_ACTION_TIMEOUT_MS
     });
     state.ogreAiResult = data.ogreAi;
     state.tradePlanResult = data.ogreAi?.plans?.[0] || state.tradePlanResult;
@@ -8018,6 +8038,7 @@ async function startOgreAiRun() {
     setError(error.message);
   } finally {
     state.ogreAiLoading = false;
+    if (ogreAiRunInFlight === runToken) ogreAiRunInFlight = null;
     render();
   }
 }
