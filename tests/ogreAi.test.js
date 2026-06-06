@@ -159,6 +159,40 @@ test("Ogre A.I. ranks 100% target picks by fast upside fit", () => {
   assert.ok(ogreAiTargetFitScore(rows[1], targetDefaults, "quick") > ogreAiTargetFitScore(rows[0], targetDefaults, "quick"));
 });
 
+test("Ogre A.I. 100% target favors very fresh low market-cap momentum", () => {
+  const rows = [
+    {
+      tokenMint: "OlderStableMint",
+      bestPickScore: 82,
+      marketCap: 780_000,
+      liquidityUsd: 12_000,
+      volume5m: 900,
+      m5: 4,
+      h1: 7,
+      buys5m: 5,
+      sells5m: 4,
+      pairAgeMinutes: 180
+    },
+    {
+      tokenMint: "FreshLowMcMint",
+      bestPickScore: 46,
+      marketCap: 64_000,
+      liquidityUsd: 850,
+      volume5m: 6_500,
+      m5: 24,
+      h1: 31,
+      buys5m: 18,
+      sells5m: 5,
+      pairAgeMinutes: 4
+    }
+  ];
+
+  const targetDefaults = { ...defaults, takeProfitPct: 100, targetTakeProfitPct: 100, desiredPickCount: 1, maxMarketCap: 350_000, minLiquidityUsd: 120 };
+  const pool = buildOgreAiCandidatePool(rows, targetDefaults, "quick");
+  assert.equal(pool.candidates[0].tokenMint, "FreshLowMcMint");
+  assert.ok(ogreAiTargetFitScore(rows[1], targetDefaults, "quick") > ogreAiTargetFitScore(rows[0], targetDefaults, "quick"));
+});
+
 test("Ogre A.I. ranks 25% target picks toward cleaner quick exits", () => {
   const rows = [
     {
@@ -188,6 +222,40 @@ test("Ogre A.I. ranks 25% target picks toward cleaner quick exits", () => {
   const targetDefaults = { ...defaults, takeProfitPct: 25, targetTakeProfitPct: 25, desiredPickCount: 1 };
   const pool = buildOgreAiCandidatePool(rows, targetDefaults, "quick");
   assert.equal(pool.candidates[0].tokenMint, "CleanTwentyFiveMint");
+  assert.ok(ogreAiTargetFitScore(rows[1], targetDefaults, "quick") > ogreAiTargetFitScore(rows[0], targetDefaults, "quick"));
+});
+
+test("Ogre A.I. 25% target favors older stable breakout over raw fresh moonshot", () => {
+  const rows = [
+    {
+      tokenMint: "RawFreshMoonshotMint",
+      bestPickScore: 58,
+      marketCap: 28_000,
+      liquidityUsd: 260,
+      volume5m: 7_500,
+      m5: 36,
+      buys5m: 16,
+      sells5m: 6,
+      pairAgeMinutes: 2
+    },
+    {
+      tokenMint: "OlderStableBreakoutMint",
+      bestPickScore: 69,
+      marketCap: 240_000,
+      liquidityUsd: 7_500,
+      volume5m: 1_800,
+      volumeH1: 9_000,
+      m5: 5,
+      h1: 12,
+      buys5m: 9,
+      sells5m: 4,
+      pairAgeMinutes: 180
+    }
+  ];
+
+  const targetDefaults = { ...defaults, takeProfitPct: 25, targetTakeProfitPct: 25, desiredPickCount: 1, minLiquidityUsd: 800, maxMarketCap: 1_400_000 };
+  const pool = buildOgreAiCandidatePool(rows, targetDefaults, "quick");
+  assert.equal(pool.candidates[0].tokenMint, "OlderStableBreakoutMint");
   assert.ok(ogreAiTargetFitScore(rows[1], targetDefaults, "quick") > ogreAiTargetFitScore(rows[0], targetDefaults, "quick"));
 });
 

@@ -133,6 +133,8 @@ export function ogreAiTargetFitScore(row = {}, defaults = {}, mode = "quick") {
   const stats = ogreAiCandidateStats(row);
   const targetPct = ogreAiTargetProfitPct(defaults);
   const targetIntensity = clampNumber((targetPct - 25) / 100, 0, 1);
+  const highTarget = targetPct >= 80;
+  const steadyTarget = targetPct <= 30;
   const scoreSignal = clampNumber(stats.score, 0, 100) * (0.34 - targetIntensity * 0.08);
   const momentumNeed = Math.max(6, targetPct * (0.18 + targetIntensity * 0.08));
   const momentumSignal = clampNumber(stats.positivePriceMomentumPct / momentumNeed, 0, 1.35) * (18 + targetIntensity * 18);
@@ -146,24 +148,62 @@ export function ogreAiTargetFitScore(row = {}, defaults = {}, mode = "quick") {
   const maxMarketCap = Number(defaults.maxMarketCap || 750_000);
   let capFit = 8;
   if (marketCap > 0) {
-    const idealLow = targetPct >= 80 ? 8_000 : targetPct >= 50 ? 15_000 : 25_000;
-    const idealHigh = targetPct >= 80 ? Math.min(maxMarketCap, 260_000) : targetPct >= 50 ? Math.min(maxMarketCap, 550_000) : maxMarketCap;
-    if (marketCap < idealLow) capFit = targetPct >= 80 ? 5 : 2;
-    else if (marketCap <= idealHigh) capFit = 11 + targetIntensity * 8;
-    else capFit = -clampNumber((marketCap - idealHigh) / Math.max(idealHigh, 1), 0, 2) * (8 + targetIntensity * 10);
+    if (highTarget) {
+      const idealLow = 6_000;
+      const idealHigh = Math.min(maxMarketCap, 220_000);
+      if (marketCap < idealLow) capFit = 4;
+      else if (marketCap <= idealHigh) capFit = 20;
+      else if (marketCap <= maxMarketCap) capFit = 7;
+      else capFit = -clampNumber((marketCap - maxMarketCap) / Math.max(maxMarketCap, 1), 0, 2.5) * 18;
+    } else if (steadyTarget) {
+      const idealLow = 70_000;
+      const idealHigh = Math.min(Math.max(maxMarketCap, 1_200_000), 1_800_000);
+      if (marketCap < 15_000) capFit = -8;
+      else if (marketCap < idealLow) capFit = 1;
+      else if (marketCap <= idealHigh) capFit = 15;
+      else capFit = -clampNumber((marketCap - idealHigh) / Math.max(idealHigh, 1), 0, 2) * 8;
+    } else {
+      const idealLow = targetPct >= 50 ? 15_000 : 25_000;
+      const idealHigh = targetPct >= 50 ? Math.min(maxMarketCap, 550_000) : maxMarketCap;
+      if (marketCap < idealLow) capFit = 2;
+      else if (marketCap <= idealHigh) capFit = 11 + targetIntensity * 8;
+      else capFit = -clampNumber((marketCap - idealHigh) / Math.max(idealHigh, 1), 0, 2) * (8 + targetIntensity * 10);
+    }
   }
   const age = stats.ageMinutes;
   let ageSignal = 5;
   if (age !== null) {
-    const idealAge = mode === "fresh" || targetPct >= 80 ? 90 : targetPct >= 50 ? 240 : 720;
-    ageSignal = age <= idealAge ? 7 + targetIntensity * 5 : -clampNumber((age - idealAge) / idealAge, 0, 2) * (4 + targetIntensity * 7);
+    if (highTarget) {
+      if (age <= 30) ageSignal = 18;
+      else if (age <= 90) ageSignal = 12;
+      else if (age <= 240) ageSignal = 4;
+      else ageSignal = -clampNumber((age - 240) / 240, 0, 2) * 12;
+    } else if (steadyTarget) {
+      if (age < 5) ageSignal = -10;
+      else if (age < 30) ageSignal = 2;
+      else if (age <= 360) ageSignal = 14;
+      else if (age <= 1440) ageSignal = 8;
+      else ageSignal = -clampNumber((age - 1440) / 1440, 0, 2) * 6;
+    } else {
+      const idealAge = mode === "fresh" ? 90 : targetPct >= 50 ? 240 : 720;
+      ageSignal = age <= idealAge ? 7 + targetIntensity * 5 : -clampNumber((age - idealAge) / idealAge, 0, 2) * (4 + targetIntensity * 7);
+    }
   }
+  const targetShapeBonus = highTarget
+    ? (stats.marketCap > 0 && stats.marketCap <= 220_000 ? 8 : 0)
+      + (stats.ageMinutes !== null && stats.ageMinutes <= 45 ? 7 : 0)
+      + (stats.buyPressure >= 0.62 ? 5 : 0)
+    : steadyTarget
+      ? (stats.liquidityUsd >= Math.max(800, Number(defaults.minLiquidityUsd || 0)) ? 8 : 0)
+        + (stats.ageMinutes !== null && stats.ageMinutes >= 30 && stats.ageMinutes <= 1440 ? 7 : 0)
+        + (stats.positivePriceMomentumPct >= 3 && stats.positivePriceMomentumPct <= 35 ? 5 : 0)
+      : 0;
   const riskPenalty = clampNumber(stats.rugRisk / 8, 0, 12)
     + clampNumber(stats.exitRisk / 9, 0, 12)
     + (/\b(wash|bundle|mutable|unknown risk|low liquidity)\b/i.test(ogreAiRiskText(row)) ? 4 : 0);
   const modeBonus = mode === "fresh" && age !== null && age <= 45 ? 5 : mode === "safer" && stats.liquidityUsd >= liquidityNeed ? 4 : 0;
   return Math.round(clampNumber(
-    scoreSignal + momentumSignal + volumeSignal + liquiditySignal + buyPressureSignal + tradeSignal + capFit + ageSignal + modeBonus - riskPenalty,
+    scoreSignal + momentumSignal + volumeSignal + liquiditySignal + buyPressureSignal + tradeSignal + capFit + ageSignal + targetShapeBonus + modeBonus - riskPenalty,
     1,
     100
   ));
@@ -182,9 +222,10 @@ export function ogreAiTierForCandidate(row = {}, defaults = {}, mode = "quick") 
   const minLiquidityUsd = Number(defaults.minLiquidityUsd || 350);
   const highTarget = targetPct >= 80;
   const mediumTarget = targetPct >= 50;
-  const freshAgeOk = stats.ageMinutes === null || stats.ageMinutes <= 90 || stats.isPump;
+  const steadyTarget = targetPct <= 30;
+  const freshAgeOk = stats.ageMinutes === null || stats.ageMinutes <= 240 || stats.isPump;
   const normalAgeOk = stats.ageMinutes === null || stats.ageMinutes <= 1440;
-  const modeAgeOk = mode === "fresh" ? freshAgeOk : normalAgeOk;
+  const modeAgeOk = highTarget || mode === "fresh" ? freshAgeOk : normalAgeOk;
   if (!modeAgeOk) return null;
 
   const targetMomentumOk = !highTarget
@@ -197,11 +238,17 @@ export function ogreAiTierForCandidate(row = {}, defaults = {}, mode = "quick") 
   const availableFitNeed = highTarget ? 36 : mediumTarget ? 32 : 26;
   const strictLiquidityNeed = highTarget ? Math.max(90, minLiquidityUsd * 0.45) : minLiquidityUsd;
   const balancedLiquidityNeed = highTarget ? Math.max(60, minLiquidityUsd * 0.2) : Math.max(75, minLiquidityUsd * 0.35);
-  const marketCapLimit = highTarget ? maxMarketCap * 0.9 : mediumTarget ? maxMarketCap * 1.1 : maxMarketCap;
+  const marketCapLimit = highTarget ? maxMarketCap : mediumTarget ? maxMarketCap * 1.1 : maxMarketCap;
+  const targetShapeOk = highTarget
+    ? (!stats.marketCap || stats.marketCap <= maxMarketCap) && (stats.ageMinutes === null || stats.ageMinutes <= 240 || stats.isPump)
+    : steadyTarget
+      ? (stats.ageMinutes === null || stats.ageMinutes >= 12 || stats.liquidityUsd >= minLiquidityUsd * 2)
+      : true;
 
   if (
     targetFit >= strictFitNeed
     && stats.score >= Math.max(30, minScore - (highTarget ? 18 : mediumTarget ? 8 : 0))
+    && targetShapeOk
     && targetMomentumOk
     && (!stats.marketCap || stats.marketCap <= marketCapLimit)
     && (!stats.liquidityUsd || stats.liquidityUsd >= strictLiquidityNeed)
@@ -295,7 +342,12 @@ export function buildOgreAiCandidatePool(rows = [], defaults = {}, mode = "quick
         || Array.isArray(row.bestPickInputs) && row.bestPickInputs.length > 0
         || Array.isArray(row.reasons) && row.reasons.length > 0;
       if (ageOk && capOk && hasSomeSignal) {
-        tiers.scout.push({ ...row, ogreAiTier: "scout" });
+        tiers.scout.push({
+          ...row,
+          ogreAiTier: "scout",
+          ogreAiTargetFit: ogreAiTargetFitScore(row, defaults, mode),
+          ogreAiTargetPct: ogreAiTargetProfitPct(defaults)
+        });
         continue;
       }
       blocked += 1;

@@ -19315,6 +19315,79 @@ function ogreAiModeDefaults(mode) {
   };
 }
 
+function applyOgreAiTargetDefaults(defaults, targetPct, mode) {
+  const safeMode = normalizeOgreAiMode(mode);
+  const pct = Number(targetPct);
+  if (!Number.isFinite(pct) || pct <= 0) return defaults;
+  if (pct >= 80) {
+    defaults.targetBand = "fresh_low_mc";
+    defaults.buckets = [...new Set(["live", "under1h", safeMode === "safer" ? "under3h" : "live"])];
+    defaults.minScore = Math.min(Number(defaults.minScore || 54), safeMode === "safer" ? 50 : 42);
+    defaults.maxMarketCap = Math.min(Number(defaults.maxMarketCap || 350_000), safeMode === "safer" ? 450_000 : 350_000);
+    defaults.minLiquidityUsd = Math.min(Number(defaults.minLiquidityUsd || 120), 120);
+    defaults.defaultSellDelay = "3";
+    defaults.defaultSlippageBps = Math.max(Number(defaults.defaultSlippageBps || 400), 450);
+    return defaults;
+  }
+  if (pct <= 30) {
+    defaults.targetBand = "steady_breakout";
+    defaults.buckets = [...new Set(["under3h", "under1d", "under1h", "live"])];
+    defaults.minScore = Math.max(Number(defaults.minScore || 54), safeMode === "fresh" ? 52 : 56);
+    defaults.maxMarketCap = Math.max(Number(defaults.maxMarketCap || 750_000), safeMode === "safer" ? 1_800_000 : 1_400_000);
+    defaults.minLiquidityUsd = Math.max(Number(defaults.minLiquidityUsd || 350), safeMode === "fresh" ? 500 : 800);
+    defaults.defaultSellDelay = safeMode === "fresh" ? "5" : "10";
+    defaults.defaultSlippageBps = Math.min(Number(defaults.defaultSlippageBps || 400), 350);
+    return defaults;
+  }
+  if (pct >= 50) {
+    defaults.targetBand = "fast_momentum";
+    defaults.buckets = [...new Set(["live", "under1h", "under3h"])];
+    defaults.minScore = Math.min(Number(defaults.minScore || 54), 48);
+    defaults.maxMarketCap = Math.min(Number(defaults.maxMarketCap || 750_000), 650_000);
+    defaults.minLiquidityUsd = Math.min(Number(defaults.minLiquidityUsd || 250), 250);
+  }
+  return defaults;
+}
+
+function ogreAiScannerModesForTarget(defaults = {}, mode = "quick") {
+  const pct = Number(defaults.takeProfitPct || defaults.targetTakeProfitPct || defaults.defaultTakeProfitPct || 25);
+  const safeMode = normalizeOgreAiMode(mode);
+  if (pct >= 80) return safeMode === "safer" ? ["moonshot", "fast"] : ["pumpsnipe", "moonshot", "fast"];
+  if (pct <= 30) return safeMode === "fresh" ? ["fast", "smart"] : ["smart", "safe", "fast"];
+  if (pct >= 50) return ["fast", "moonshot", "pumpsnipe"];
+  return ["fast", "smart"];
+}
+
+async function withOgreAiSoftTimeout(promise, timeoutMs, fallback = null) {
+  let timer = null;
+  const guarded = Promise.resolve(promise).catch(() => fallback);
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(fallback), Math.max(500, timeoutMs));
+  });
+  const result = await Promise.race([guarded, timeout]);
+  if (timer) clearTimeout(timer);
+  return result;
+}
+
+async function ogreAiScannerRows(userId, defaults = {}, mode = "quick") {
+  const scannerModes = ogreAiScannerModesForTarget(defaults, mode);
+  const scans = await Promise.allSettled(scannerModes.map(async (scannerMode) => {
+    const scan = await withOgreAiSoftTimeout(webSniperScan(userId, scannerMode), 5_500, null);
+    return { scannerMode, scan };
+  }));
+  return scans.flatMap((result) => {
+    if (result.status !== "fulfilled") return [];
+    const { scannerMode, scan } = result.value || {};
+    return Array.isArray(scan?.rows)
+      ? scan.rows.map((row) => ({
+        ...row,
+        ogreAiBucket: `scanner:${scannerMode}`,
+        ogreAiSource: `scanner:${scannerMode}`
+      }))
+      : [];
+  });
+}
+
 async function selectOgreAiPicks(userId, body = {}, limit = 1) {
   const mode = normalizeOgreAiMode(body.mode);
   const defaults = ogreAiModeDefaults(mode);
@@ -19323,6 +19396,7 @@ async function selectOgreAiPicks(userId, body = {}, limit = 1) {
     defaults.takeProfitPct = clamp(requestedTakeProfitPct, 5, 500);
     defaults.targetTakeProfitPct = defaults.takeProfitPct;
   }
+  applyOgreAiTargetDefaults(defaults, defaults.takeProfitPct || defaults.targetTakeProfitPct || defaults.defaultTakeProfitPct, mode);
   defaults.desiredPickCount = Math.max(1, limit);
   const minScoreInput = Number.parseInt(String(body.minScore || ""), 10);
   if (Number.isFinite(minScoreInput) && minScoreInput > 0) {
@@ -19333,15 +19407,17 @@ async function selectOgreAiPicks(userId, body = {}, limit = 1) {
     defaults.maxMarketCap = maxMarketCapInput;
   }
 
-  const feedResults = await Promise.allSettled(defaults.buckets.map(async (bucket) => {
-    const feed = await webLivePairs(userId, bucket, { sort: "best", force: false });
+  const feedResultsPromise = Promise.allSettled(defaults.buckets.map(async (bucket) => {
+    const feed = await withOgreAiSoftTimeout(webLivePairs(userId, bucket, { sort: "best", force: false }), 5_500, null);
     return { bucket, feed };
   }));
+  const scannerRowsPromise = ogreAiScannerRows(userId, defaults, mode);
+  const [feedResults, scannerRows] = await Promise.all([feedResultsPromise, scannerRowsPromise]);
   const rows = feedResults.flatMap((result) => {
     if (result.status !== "fulfilled") return [];
     const { bucket, feed } = result.value || {};
     return Array.isArray(feed?.rows) ? feed.rows.map((row) => ({ ...row, ogreAiBucket: bucket })) : [];
-  });
+  }).concat(scannerRows);
 
   const baseRows = uniqueSniperScoreRows(rows)
     .filter((row) => !isPumpMayhemToken(row))
