@@ -10232,33 +10232,6 @@ function pumpChartSeries(token = {}) {
   });
 }
 
-function pumpChartSvgHtml(token = {}) {
-  const values = pumpChartSeries(token);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const spread = Math.max(1, max - min);
-  const points = values.map((value, index) => {
-    const x = (index / Math.max(1, values.length - 1)) * 100;
-    const y = 78 - ((value - min) / spread) * 58;
-    return `${x.toFixed(2)},${y.toFixed(2)}`;
-  }).join(" ");
-  const area = `0,88 ${points} 100,88`;
-  return `
-    <svg viewBox="0 0 100 92" role="img" aria-label="Pump launch chart" preserveAspectRatio="none">
-      <defs>
-        <linearGradient id="pumpChartFill" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stop-color="rgba(115,255,40,.48)"/>
-          <stop offset="100%" stop-color="rgba(115,255,40,0)"/>
-        </linearGradient>
-      </defs>
-      <path d="M0 22 H100 M0 44 H100 M0 66 H100" fill="none" stroke="rgba(127,255,86,.12)" stroke-width=".45"/>
-      <polygon points="${escapeHtml(area)}" fill="url(#pumpChartFill)"/>
-      <polyline points="${escapeHtml(points)}" fill="none" stroke="rgba(154,255,85,.98)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
-      <circle cx="100" cy="${escapeHtml(points.split(" ").at(-1)?.split(",")[1] || "22")}" r="2.6" fill="#b6ff3f"/>
-    </svg>
-  `;
-}
-
 function pumpActivityMetric(token = {}, ...keys) {
   for (const key of keys) {
     const direct = Number(token?.[key]);
@@ -10268,29 +10241,6 @@ function pumpActivityMetric(token = {}, ...keys) {
     if (Number.isFinite(nestedNumber) && nestedNumber > 0) return nestedNumber;
   }
   return 0;
-}
-
-function smartChartPumpActivityHtml(token = {}) {
-  const progress = Math.max(0, Math.min(100, slimeScopeProgressPct(token) || firstUsefulNumber(token.bondingProgressPct, token.pumpProgress, 0)));
-  const buys = pumpActivityMetric(token, "buys5m", "buys", "txns.m5.buys", "txns.h1.buys");
-  const sells = pumpActivityMetric(token, "sells5m", "sells", "txns.m5.sells", "txns.h1.sells");
-  const trades = pumpActivityMetric(token, "trades5m", "txns5m", "txns.m5.buys") + pumpActivityMetric(token, "txns.m5.sells");
-  const age = token.pairAgeLabel || formatAgeFromRow(token) || "fresh";
-  const rows = [
-    ["Bonding curve", progress ? `${progress.toFixed(progress >= 10 ? 0 : 1)}%` : "tracking"],
-    ["Launch age", age],
-    ["Buys / Sells", buys || sells ? `${buys || 0} / ${sells || 0}` : "streaming"],
-    ["5m activity", trades ? `${trades} txns` : firstStatLabel(token.volume5mLabel, compactUsd(token.volume5m))]
-  ];
-  return `
-    <div class="smart-chart-local-trades pump-native-activity">
-      <h4>Pump Activity</h4>
-      <dl class="mini-stats">
-        ${rows.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join("")}
-      </dl>
-      <small>Live launch stats update with the SlimeWire feed. Once bonded, this panel switches to the DEX chart automatically.</small>
-    </div>
-  `;
 }
 
 function smartChartPumpPanelHtml(token = {}, mode = "chart") {
@@ -13888,3 +13838,4 @@ if (!window.__slimeStablePumpChartTimer) {
     slimePumpChartRerender();
   }, 8000);
 }
+
