@@ -2570,9 +2570,121 @@ function ogreAgentTokenFromMessageOrContext(message = "", context = {}) {
     || String(context?.lastTokenMint || context?.smartChartToken || context?.tradeToken || "").trim();
 }
 
-function ogreAgentXSearchUrl(tokenMint = "") {
-  const query = encodeURIComponent(`"${String(tokenMint || "").trim()}"`);
+function ogreAgentXSearchUrl(tokenMint = "", terms = []) {
+  const uniqueTerms = [
+    String(tokenMint || "").trim(),
+    ...(Array.isArray(terms) ? terms : [terms])
+  ]
+    .map((term) => String(term || "").trim())
+    .filter((term, index, list) => term && list.findIndex((item) => item.toLowerCase() === term.toLowerCase()) === index)
+    .slice(0, 4);
+  const queryText = uniqueTerms.length
+    ? uniqueTerms.map((term) => `"${term.replace(/"/g, "")}"`).join(" OR ")
+    : `"${String(tokenMint || "").trim()}"`;
+  const query = encodeURIComponent(queryText);
   return `https://x.com/search?q=${query}&src=typed_query&f=live`;
+}
+
+function ogreAgentTokenMatch(row = {}, tokenMint = "") {
+  const needle = String(tokenMint || "").trim().toLowerCase();
+  if (!needle) return false;
+  return [
+    row.tokenMint,
+    row.mint,
+    row.baseMint,
+    row.address,
+    row.tokenAddress,
+    row.ca,
+    row.contractAddress
+  ].some((value) => String(value || "").trim().toLowerCase() === needle);
+}
+
+function ogreAgentTokenSocialLink(row = {}, key = "") {
+  const links = row.links || row.socials || {};
+  if (key === "x") return firstString(row.twitterUrl, row.xUrl, row.twitter, row.x, links.twitter, links.x, links.twitterUrl, links.xUrl);
+  if (key === "telegram") return firstString(row.telegramUrl, row.telegram, links.telegram, links.telegramUrl);
+  if (key === "website") return firstString(row.websiteUrl, row.website, row.url, links.website, links.websiteUrl);
+  return "";
+}
+
+function ogreAgentDescribeKolMatch(row = {}) {
+  return firstString(row.kolName, row.name, row.twitter ? `@${stripAt(row.twitter)}` : "", row.wallet ? shortMint(row.wallet) : "", row.kolWallet ? shortMint(row.kolWallet) : "KOL signal");
+}
+
+async function ogreAgentVisibleTokenEvidence(tokenMint = "", context = {}) {
+  const mint = String(tokenMint || "").trim();
+  const safeContext = ogreAgentSanitizedContext(context);
+  const contextRows = Array.isArray(safeContext.recentPairs) ? safeContext.recentPairs : [];
+  const timeoutValue = (value, ms = 2200) => new Promise((resolve) => setTimeout(() => resolve(value), ms));
+  const [dexResult, liveResult, kolResult] = await Promise.allSettled([
+    Promise.race([webDexToken(mint).catch(() => null), timeoutValue(null, 2200)]),
+    Promise.race([webLivePairs("guest", "live", { sort: "best", force: false }).catch(() => null), timeoutValue(null, 2200)]),
+    Promise.race([webKolScan("guest", "fresh", "").catch(() => null), timeoutValue(null, 2600)])
+  ]);
+  const dexToken = dexResult.status === "fulfilled" ? dexResult.value : null;
+  const live = liveResult.status === "fulfilled" ? liveResult.value : null;
+  const kol = kolResult.status === "fulfilled" ? kolResult.value : null;
+  const liveRows = [
+    ...contextRows,
+    ...(Array.isArray(live?.rows) ? live.rows : []),
+    ...(Array.isArray(live?.livePairs?.rows) ? live.livePairs.rows : [])
+  ].filter((row) => ogreAgentTokenMatch(row, mint));
+  const kolRows = [
+    ...(Array.isArray(kol?.rows) ? kol.rows : []),
+    ...(Array.isArray(kol?.signals) ? kol.signals : []),
+    ...(Array.isArray(kol?.data?.rows) ? kol.data.rows : [])
+  ].filter((row) => ogreAgentTokenMatch(row, mint));
+  const xUrl = firstString(
+    ogreAgentTokenSocialLink(dexToken || {}, "x"),
+    ...liveRows.map((row) => ogreAgentTokenSocialLink(row, "x")),
+    ...kolRows.map((row) => ogreAgentTokenSocialLink(row, "x"))
+  );
+  const telegramUrl = firstString(
+    ogreAgentTokenSocialLink(dexToken || {}, "telegram"),
+    ...liveRows.map((row) => ogreAgentTokenSocialLink(row, "telegram")),
+    ...kolRows.map((row) => ogreAgentTokenSocialLink(row, "telegram"))
+  );
+  const websiteUrl = firstString(
+    ogreAgentTokenSocialLink(dexToken || {}, "website"),
+    ...liveRows.map((row) => ogreAgentTokenSocialLink(row, "website")),
+    ...kolRows.map((row) => ogreAgentTokenSocialLink(row, "website"))
+  );
+  const symbol = firstString(dexToken?.symbol, dexToken?.baseSymbol, liveRows[0]?.symbol, liveRows[0]?.baseSymbol, kolRows[0]?.symbol);
+  const name = firstString(dexToken?.name, dexToken?.baseName, liveRows[0]?.name, kolRows[0]?.name, "Token");
+  return {
+    tokenMint: mint,
+    symbol,
+    name,
+    dexToken,
+    liveRows,
+    kolRows,
+    socialLinks: { xUrl, telegramUrl, websiteUrl },
+    marketCap: firstString(ogreAgentMoney(dexToken?.marketCap || dexToken?.fdv || liveRows[0]?.marketCap), ""),
+    liquidity: firstString(ogreAgentMoney(dexToken?.liquidityUsd || dexToken?.liquidity?.usd || liveRows[0]?.liquidityUsd), ""),
+    volume: firstString(ogreAgentMoney(dexToken?.volume24h || dexToken?.volume?.h24 || liveRows[0]?.volume24h || liveRows[0]?.volumeH1), "")
+  };
+}
+
+function ogreAgentTokenSocialEvidenceLines(evidence = {}, options = {}) {
+  const links = evidence.socialLinks || {};
+  const kolRows = Array.isArray(evidence.kolRows) ? evidence.kolRows : [];
+  const liveRows = Array.isArray(evidence.liveRows) ? evidence.liveRows : [];
+  const kolNames = kolRows.map(ogreAgentDescribeKolMatch).filter(Boolean).slice(0, 5);
+  const lines = [
+    `${evidence.symbol || shortMint(evidence.tokenMint)} social/KOL check for ${shortMint(evidence.tokenMint)}:`,
+    `${evidence.name || "Token"} | MC/FDV ${evidence.marketCap || "n/a"} | Liq ${evidence.liquidity || "n/a"} | Vol ${evidence.volume || "n/a"}`,
+    `Returned socials: X ${links.xUrl ? "found" : "not returned"} | Telegram ${links.telegramUrl ? "found" : "not returned"} | Website ${links.websiteUrl ? "found" : "not returned"}.`,
+    kolNames.length
+      ? `SlimeWire/KOL feed match: ${kolRows.length} signal(s) tied to this CA - ${kolNames.join(", ")}.`
+      : "SlimeWire/KOL feed match: no verified KOL row tied to this CA in the current feed yet.",
+    liveRows.length
+      ? `Live-feed match: ${liveRows.length} visible row(s) found for this CA.`
+      : "Live-feed match: not visible in the current cached fresh rows yet.",
+    options.xConfigured === false
+      ? "Deep X post lookup did not return inside this quick pass, so I am using SlimeWire-visible feeds, socials, and live search links instead of inventing callers."
+      : ""
+  ];
+  return lines.filter(Boolean);
 }
 
 async function ogreAgentXTokenMentions(tokenMint = "") {
@@ -2633,20 +2745,20 @@ async function ogreAgentTokenSocialReply(message = "", context = {}) {
   const tokenMint = ogreAgentTokenFromMessageOrContext(message, context);
   if (!tokenMint) return null;
   const x = await ogreAgentXTokenMentions(tokenMint);
-  const xSearchUrl = ogreAgentXSearchUrl(tokenMint);
+  const evidence = await ogreAgentVisibleTokenEvidence(tokenMint, context);
+  const xSearchUrl = ogreAgentXSearchUrl(tokenMint, [evidence.symbol, evidence.name].filter(Boolean));
   if (!x.configured) {
+    const lines = [
+      ...ogreAgentTokenSocialEvidenceLines(evidence, { xConfigured: false }),
+      "Action: open the X search to verify live posts/accounts. I will keep this CA active in the chat and use any SlimeWire-visible socials, feeds, KOL rows, and chart data I can see."
+    ];
     return {
-      reply: [
-        `${shortMint(tokenMint)} social/KOL check`,
-        "I kept this CA as the active token for the conversation.",
-        "Live in-panel X/KOL scanning is not connected yet. Add X_BEARER_TOKEN or TWITTER_BEARER_TOKEN on Render and I can return accounts, posts, and engagement for this exact CA.",
-        "For now, use Open X Search below and I will still use SlimeWire-visible socials/feeds without inventing KOL names."
-      ].join("\n"),
+      reply: lines.join("\n"),
       actions: [
         { label: "Open X Search", type: "open_external", url: xSearchUrl },
         { label: "Open Chart", type: "open_chart", tokenMint },
-        { label: "Refresh Feeds", type: "refresh_feeds" },
-        { label: "Slime Scope", type: "open_tab", tab: "slimeScope" }
+        evidence.socialLinks?.xUrl ? { label: "Token X", type: "open_external", url: evidence.socialLinks.xUrl } : { label: "Refresh Feeds", type: "refresh_feeds" },
+        { label: "KOL Tracker", type: "open_tab", tab: "kol" }
       ],
       intent: "token_social_scan",
       socialScan: true,
@@ -2660,6 +2772,7 @@ async function ogreAgentTokenSocialReply(message = "", context = {}) {
         `${shortMint(tokenMint)} X/KOL check`,
         "I searched recent X posts for this exact CA and did not get public posts back in the quick window.",
         x.error ? `X note: ${x.error}` : "That usually means it is not being broadly posted by accounts visible to the X recent-search API yet, or the posts are using ticker/images instead of the CA.",
+        ...ogreAgentTokenSocialEvidenceLines(evidence, { xConfigured: true }).slice(1),
         "Next move: open X search and watch for named callers/KOLs before treating it as socially confirmed."
       ].join("\n"),
       actions: [
@@ -2711,7 +2824,7 @@ async function ogreAgentTrendReply(message = "", context = {}) {
         "I can scan SlimeWire live/fresh candidates, but I do not have enough fresh rows loaded yet.",
         xTrend.configured
           ? "X recent search is configured, but it did not return usable token CAs in the quick window. Tap Refresh Feeds or ask for a specific token CA."
-          : "For a true platform-wide X ranking, add X_BEARER_TOKEN/TWITTER_BEARER_TOKEN on Render. Until then I rank SlimeWire-visible live candidates and visible social links instead of faking X data."
+          : "I did not get a platform-wide X firehose result in this quick pass. I will rank SlimeWire-visible live candidates, socials, and exact live X search links instead of faking callers."
       ].join("\n"),
       actions: [
         { label: "Refresh Feeds", type: "refresh_feeds" },
@@ -2738,7 +2851,7 @@ async function ogreAgentTrendReply(message = "", context = {}) {
     }),
     usedX
       ? "X source: recent search from the configured X bearer token. I count CAs and public engagement from returned posts, then you can open/check the top CA."
-      : "X note: I can use returned X/social links and AI reasoning, but a true X-wide trend scan needs X_BEARER_TOKEN/TWITTER_BEARER_TOKEN configured. I rank the live candidates I can actually see instead of guessing."
+      : "X note: I can use returned X/social links, SlimeWire live rows, and AI reasoning. If no verified X posts are returned, I rank the live candidates I can actually see instead of guessing."
   ];
   const first = topRows[0];
   return {

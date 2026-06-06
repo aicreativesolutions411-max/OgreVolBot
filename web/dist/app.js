@@ -14199,8 +14199,18 @@ function ogreAgentSocialIntent(message = "") {
   return /\b(x|twitter|tweet|tweets|post|posts|posting|mentions?|popular|viral|trending|trend|kols?|influencers?|callers?|community|socials?)\b/i.test(String(message || ""));
 }
 
-function ogreAgentXSearchUrl(tokenMint = "") {
-  return `https://x.com/search?q=${encodeURIComponent(`"${String(tokenMint || "").trim()}"`)}&src=typed_query&f=live`;
+function ogreAgentXSearchUrl(tokenMint = "", terms = []) {
+  const uniqueTerms = [
+    String(tokenMint || "").trim(),
+    ...(Array.isArray(terms) ? terms : [terms])
+  ]
+    .map((term) => String(term || "").trim())
+    .filter((term, index, list) => term && list.findIndex((item) => item.toLowerCase() === term.toLowerCase()) === index)
+    .slice(0, 4);
+  const queryText = uniqueTerms.length
+    ? uniqueTerms.map((term) => `"${term.replace(/"/g, "")}"`).join(" OR ")
+    : `"${String(tokenMint || "").trim()}"`;
+  return `https://x.com/search?q=${encodeURIComponent(queryText)}&src=typed_query&f=live`;
 }
 
 function ogreAgentLocalSocialReply(message = "") {
@@ -14210,12 +14220,13 @@ function ogreAgentLocalSocialReply(message = "") {
   return {
     text: [
       `${shortAddress(tokenMint)} X/KOL check`,
-      "I kept the token from this conversation. I need the server/X route to return public post data before I name accounts.",
-      "If the X route is delayed, open the live X search below. I will not invent KOL names or popularity."
+      "I kept this token active in the conversation. Server social scan is still warming, so I can use SlimeWire-visible rows and open live X search without inventing callers.",
+      "If no verified posts or KOL rows return, treat the social side as unconfirmed and check chart, liquidity, buys/sells, and risk badges before sizing."
     ].join("\n"),
     actions: [
       { label: "Open X Search", type: "open_external", url: ogreAgentXSearchUrl(tokenMint) },
       { label: "Open Chart", type: "open_chart", tokenMint },
+      { label: "KOL Tracker", type: "open_tab", tab: "kol" },
       { label: "Refresh Feeds", type: "refresh_feeds" }
     ]
   };
@@ -14241,7 +14252,7 @@ function ogreAgentLocalTrendReply(message = "") {
     return {
       text: [
         "Fast scan is ready, but I do not have fresh rows loaded in this screen yet.",
-        "Tap Refresh Feeds, then ask again. For true platform-wide X rankings, SlimeWire still needs a dedicated X/social firehose; I will not fake that data."
+        "Tap Refresh Feeds, then ask again. If a broad X result is not returned, I will rank SlimeWire-visible live candidates and exact live-search links instead of faking callers."
       ].join("\n"),
       actions: [
         { label: "Refresh Feeds", type: "refresh_feeds" },
@@ -14259,7 +14270,7 @@ function ogreAgentLocalTrendReply(message = "") {
       const risk = Array.isArray(row.riskFlags) && row.riskFlags.length ? `risk: ${row.riskFlags.slice(0, 2).join(", ")}` : "risk pending";
       return `${index + 1}. ${symbol} ${shortAddress(row.tokenMint)} | MC ${money(row.marketCap)} | Liq ${money(row.liquidityUsd)} | Vol ${money(row.volume5m || row.volume1h)} | ${age} | ${socials} | ${risk}`;
     }),
-    "X note: I can use returned X/social links and AI reasoning, but a true X-wide trend scan needs a dedicated X/social data source. I will rank the live candidates I can actually see instead of guessing."
+    "X note: I can use returned X/social links, SlimeWire rows, and AI reasoning. If verified X posts are not returned, I will rank the live candidates I can actually see instead of guessing."
   ];
   const first = rows[0];
   return {
