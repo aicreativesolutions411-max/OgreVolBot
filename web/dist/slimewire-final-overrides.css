@@ -7084,402 +7084,275 @@ textarea,
   }
 }
 
-/* SLIME_PUMP_LIVE_ACTION_CHART_V1 */
-.smart-chart-pump-frame {
-  overflow: visible;
-}
 
-.pump-live-action-chart-shell {
-  border: 1px solid rgba(112, 255, 61, 0.26);
+
+/* SLIME_STABLE_PUMP_CHART_V2 */
+.slime-pump-chart-card {
+  border: 1px solid rgba(112, 255, 61, 0.24);
   border-radius: 18px;
-  background: linear-gradient(180deg, rgba(4, 28, 8, 0.92), rgba(0, 10, 4, 0.96));
+  background: linear-gradient(180deg, rgba(2, 28, 8, 0.92), rgba(0, 11, 4, 0.96));
   display: grid;
-  gap: 10px;
-  margin: 4px 0 12px;
-  padding: 12px;
+  gap: 9px;
+  margin: 6px 0 12px;
+  padding: 10px;
 }
 
-.pump-action-toolbar {
-  align-items: center;
+.slime-pump-chart-top {
   display: grid;
-  gap: 8px;
-  grid-template-columns: minmax(130px, 0.55fr) minmax(220px, 1fr) auto;
+  gap: 7px;
 }
 
-.pump-action-control-group {
-  border: 1px solid rgba(112, 255, 61, 0.18);
-  border-radius: 13px;
-  display: grid;
-  gap: 5px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  padding: 4px;
+.slime-pump-source-row,
+.slime-pump-chart-row {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  white-space: nowrap;
 }
 
-.pump-action-control-group.timeframe {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+.slime-pump-source-row::-webkit-scrollbar,
+.slime-pump-chart-row::-webkit-scrollbar {
+  display: none;
 }
 
-.pump-action-control-group button {
-  background: rgba(0, 18, 7, 0.78);
-  border: 1px solid transparent;
+.slime-pump-source-row button,
+.slime-pump-chart-row button {
+  background: rgba(0, 18, 7, 0.82);
+  border: 1px solid rgba(112, 255, 61, 0.17);
   border-radius: 10px;
-  color: rgba(232, 255, 226, 0.78);
+  color: rgba(234, 255, 228, 0.8);
   cursor: pointer;
-  font-size: 0.8rem;
-  font-weight: 900;
-  min-height: 34px;
-  padding: 7px 8px;
+  flex: 0 0 auto;
+  font-size: 0.82rem;
+  font-weight: 950;
+  min-height: 33px;
+  min-width: 58px;
+  padding: 6px 10px;
 }
 
-.pump-action-control-group button.active {
+.slime-pump-source-row button.active,
+.slime-pump-chart-row button.active {
   background: linear-gradient(135deg, rgba(112, 255, 61, 0.98), rgba(183, 255, 83, 0.96));
-  box-shadow: 0 0 18px rgba(112, 255, 61, 0.24);
+  box-shadow: 0 0 15px rgba(112, 255, 61, 0.22);
   color: #071006;
 }
 
-.pump-action-live-pill {
+.slime-pump-live-dot {
   align-items: center;
-  border: 1px solid rgba(255, 76, 76, 0.45);
+  border: 1px solid rgba(255, 74, 74, 0.4);
   border-radius: 999px;
-  color: #ffb0a6;
+  color: #ffb1a8;
   display: inline-flex;
+  flex: 0 0 auto;
   font-size: 0.74rem;
   font-weight: 950;
   gap: 6px;
   justify-content: center;
-  letter-spacing: 0.12em;
-  min-height: 34px;
-  padding: 0 12px;
+  letter-spacing: 0.1em;
+  min-height: 33px;
+  padding: 0 10px;
   text-transform: uppercase;
 }
 
-.pump-action-live-pill::before {
+.slime-pump-live-dot::before {
   background: #ff5147;
   border-radius: 999px;
-  box-shadow: 0 0 14px rgba(255, 81, 71, 0.8);
+  box-shadow: 0 0 12px rgba(255, 81, 71, 0.82);
   content: "";
   height: 7px;
   width: 7px;
 }
 
-.pump-action-chart-canvas {
-  border: 1px solid rgba(112, 255, 61, 0.2);
-  border-radius: 18px;
-  min-height: 300px;
+.slime-pump-chart-body {
+  border: 1px solid rgba(112, 255, 61, 0.19);
+  border-radius: 16px;
+  min-height: 235px;
   overflow: hidden;
-  position: relative;
   background:
     linear-gradient(rgba(112, 255, 61, 0.055) 1px, transparent 1px),
     linear-gradient(90deg, rgba(112, 255, 61, 0.055) 1px, transparent 1px),
-    radial-gradient(circle at 72% 16%, rgba(112, 255, 61, 0.16), transparent 32%),
-    rgba(0, 16, 6, 0.92);
-  background-size: 54px 54px, 54px 54px, auto, auto;
+    radial-gradient(circle at 72% 18%, rgba(112, 255, 61, 0.15), transparent 34%),
+    rgba(0, 16, 6, 0.93);
+  background-size: 50px 50px, 50px 50px, auto, auto;
 }
 
-.pump-action-svg {
+.slime-pump-svg,
+.slime-pump-dex-frame {
+  border: 0;
   display: block;
-  height: 300px;
+  height: 235px;
   width: 100%;
 }
 
-.pump-action-grid {
-  stroke: rgba(180, 255, 145, 0.11);
-  stroke-width: 1;
+.slime-pump-area {
+  fill: url(#slimePumpArea);
 }
 
-.pump-action-area {
-  fill: url(#pumpActionArea);
-}
-
-.pump-action-line {
+.slime-pump-line {
   fill: none;
-  filter: drop-shadow(0 0 12px rgba(112, 255, 61, 0.36));
-  stroke: #84ff5c;
+  filter: drop-shadow(0 0 10px rgba(112, 255, 61, 0.35));
+  stroke: #83ff5a;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: 7;
+  stroke-width: 6;
 }
 
-.pump-action-last {
-  fill: #d6ffc2;
-  filter: drop-shadow(0 0 14px rgba(112, 255, 61, 0.8));
-  stroke: #54ff27;
-  stroke-width: 3;
-}
-
-.pump-action-candle line,
-.pump-action-candle rect {
+.slime-pump-candle line,
+.slime-pump-candle rect {
   stroke-width: 2;
 }
 
-.pump-action-candle.up line,
-.pump-action-candle.up rect {
-  fill: rgba(118, 255, 80, 0.72);
+.slime-pump-candle.up line,
+.slime-pump-candle.up rect {
+  fill: rgba(121, 255, 82, 0.72);
   stroke: #86ff61;
 }
 
-.pump-action-candle.down line,
-.pump-action-candle.down rect {
-  fill: rgba(255, 92, 78, 0.58);
-  stroke: #ff6f61;
+.slime-pump-candle.down line,
+.slime-pump-candle.down rect {
+  fill: rgba(255, 93, 78, 0.58);
+  stroke: #ff7061;
 }
 
-.pump-action-metrics {
-  display: grid;
-  gap: 8px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.pump-action-metrics div {
-  border: 1px solid rgba(112, 255, 61, 0.18);
-  border-radius: 13px;
-  background: rgba(0, 18, 7, 0.72);
-  display: grid;
-  gap: 3px;
-  padding: 10px;
-}
-
-.pump-action-metrics span,
-.pump-action-tape-grid span {
-  color: rgba(226, 255, 220, 0.54);
-  font-size: 0.7rem;
-  font-weight: 900;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.pump-action-metrics strong {
-  color: #f4ffef;
-  font-size: 0.96rem;
-  overflow-wrap: anywhere;
-}
-
-.pump-action-empty {
+.slime-pump-wait {
   align-content: center;
   display: grid;
-  gap: 8px;
+  gap: 7px;
   justify-items: center;
-  min-height: 300px;
-  padding: 22px;
+  min-height: 235px;
+  padding: 20px;
   text-align: center;
 }
 
-.pump-action-empty strong {
+.slime-pump-wait strong {
   color: #f4ffef;
-  font-size: 1.05rem;
 }
 
-.pump-action-empty span {
+.slime-pump-wait span {
   color: rgba(226, 255, 220, 0.72);
   max-width: 360px;
 }
 
-.pump-action-tape {
+.slime-pump-metrics {
   display: grid;
-  gap: 10px;
-  margin-top: 12px;
-  overflow: hidden;
+  gap: 7px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
-.pump-action-tape-head {
+.slime-pump-metrics div {
+  border: 1px solid rgba(112, 255, 61, 0.16);
+  border-radius: 12px;
+  background: rgba(0, 18, 7, 0.7);
+  display: grid;
+  gap: 3px;
+  padding: 9px;
+}
+
+.slime-pump-metrics span {
+  color: rgba(226, 255, 220, 0.54);
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.slime-pump-metrics strong {
+  color: #f4ffef;
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.slime-pump-tape {
+  display: grid;
+  gap: 9px;
+  margin-top: 10px;
+}
+
+.slime-pump-tape-head {
   align-items: center;
   display: flex;
-  gap: 12px;
   justify-content: space-between;
 }
 
-.pump-action-tape-head h4 {
-  margin: 2px 0 0;
+.slime-pump-tape-head h4 {
+  margin: 0;
 }
 
-.pump-action-tape-head > span {
-  border: 1px solid rgba(112, 255, 61, 0.25);
+.slime-pump-tape-head span {
+  border: 1px solid rgba(112, 255, 61, 0.24);
   border-radius: 999px;
-  color: rgba(226, 255, 220, 0.76);
-  font-size: 0.78rem;
+  color: rgba(226, 255, 220, 0.72);
+  font-size: 0.76rem;
   font-weight: 900;
-  padding: 6px 10px;
-}
-
-.pump-action-tape-grid,
-.pump-action-tape-row {
-  align-items: center;
-  display: grid;
-  gap: 8px;
-  grid-template-columns: 0.65fr 0.65fr 0.9fr 1fr 0.9fr 0.9fr;
-}
-
-.pump-action-tape-grid {
-  border-bottom: 1px solid rgba(112, 255, 61, 0.18);
-  padding: 0 8px 8px;
-}
-
-.pump-action-tape-list {
-  display: grid;
-  gap: 6px;
-  max-height: 270px;
-  overflow-y: auto;
-  padding-right: 4px;
-}
-
-.pump-action-tape-row {
-  border: 1px solid rgba(112, 255, 61, 0.14);
-  border-radius: 12px;
-  background: rgba(0, 18, 7, 0.62);
-  color: rgba(236, 255, 232, 0.82);
-  font-size: 0.82rem;
-  padding: 9px 8px;
-}
-
-.pump-action-tape-row strong {
-  font-size: 0.78rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.pump-action-tape-row.buy strong {
-  color: #8cff65;
-}
-
-.pump-action-tape-row.sell strong {
-  color: #ff8a7a;
-}
-
-.pump-action-empty.tape {
-  min-height: 130px;
-}
-
-@media (max-width: 700px) {
-  .pump-live-action-chart-shell {
-    border-radius: 16px;
-    margin-top: 0;
-    padding: 9px;
-  }
-
-  .pump-action-toolbar {
-    grid-template-columns: 1fr;
-  }
-
-  .pump-action-control-group,
-  .pump-action-control-group.timeframe {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .pump-action-control-group button {
-    min-height: 38px;
-  }
-
-  .pump-action-chart-canvas,
-  .pump-action-svg,
-  .pump-action-empty {
-    min-height: 245px;
-  }
-
-  .pump-action-svg {
-    height: 245px;
-  }
-
-  .pump-action-metrics {
-    grid-template-columns: 1fr;
-  }
-
-  .pump-action-tape-grid {
-    display: none;
-  }
-
-  .pump-action-tape-row {
-    grid-template-columns: 0.75fr 0.75fr 1fr;
-  }
-
-  .pump-action-tape-row span:nth-of-type(4),
-  .pump-action-tape-row span:nth-of-type(5) {
-    display: none;
-  }
-}
-
-
-/* SLIME_SAFE_CHART_SOURCE_SWITCH_V1 */
-.slime-safe-source-switch {
-  align-items: center;
-  border: 1px solid rgba(112, 255, 61, 0.2);
-  border-radius: 13px;
-  display: flex;
-  gap: 6px;
-  overflow-x: auto;
-  padding: 5px;
-  scrollbar-width: none;
-  white-space: nowrap;
-}
-
-.slime-safe-source-switch::-webkit-scrollbar {
-  display: none;
-}
-
-.slime-safe-source-switch span {
-  color: rgba(226, 255, 220, 0.62);
-  flex: 0 0 auto;
-  font-size: 0.72rem;
-  font-weight: 900;
-  letter-spacing: 0.08em;
-  padding: 0 6px;
-  text-transform: uppercase;
-}
-
-.slime-safe-source-switch button {
-  background: rgba(0, 18, 7, 0.82);
-  border: 1px solid rgba(112, 255, 61, 0.16);
-  border-radius: 10px;
-  color: rgba(232, 255, 226, 0.78);
-  cursor: pointer;
-  flex: 0 0 auto;
-  font-size: 0.82rem;
-  font-weight: 950;
-  min-height: 31px;
-  min-width: 62px;
   padding: 5px 9px;
 }
 
-.slime-safe-source-switch button.active {
-  background: linear-gradient(135deg, rgba(112, 255, 61, 0.98), rgba(183, 255, 83, 0.96));
-  box-shadow: 0 0 16px rgba(112, 255, 61, 0.2);
-  color: #071006;
+.slime-pump-tape-list {
+  display: grid;
+  gap: 6px;
+  max-height: 245px;
+  overflow-y: auto;
+}
+
+.slime-pump-tape-row {
+  align-items: center;
+  border: 1px solid rgba(112, 255, 61, 0.14);
+  border-radius: 11px;
+  background: rgba(0, 18, 7, 0.62);
+  color: rgba(236, 255, 232, 0.82);
+  display: grid;
+  font-size: 0.82rem;
+  gap: 8px;
+  grid-template-columns: 0.6fr 0.7fr 1fr 0.9fr;
+  padding: 8px;
+}
+
+.slime-pump-tape-row strong {
+  font-size: 0.76rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.slime-pump-tape-row.buy strong {
+  color: #8cff65;
+}
+
+.slime-pump-tape-row.sell strong {
+  color: #ff8a7a;
+}
+
+.slime-pump-wait.small {
+  min-height: 112px;
 }
 
 @media (max-width: 700px) {
-  .pump-action-toolbar {
-    display: flex;
-    flex-wrap: nowrap;
-    gap: 6px;
-    grid-template-columns: none;
-    overflow-x: auto;
-    scrollbar-width: none;
+  .slime-pump-chart-card {
+    border-radius: 16px;
+    gap: 7px;
+    padding: 8px;
   }
 
-  .pump-action-toolbar::-webkit-scrollbar,
-  .pump-action-control-group::-webkit-scrollbar {
-    display: none;
+  .slime-pump-source-row button,
+  .slime-pump-chart-row button {
+    min-height: 34px;
+    min-width: 54px;
+    padding: 6px 9px;
   }
 
-  .pump-action-toolbar .pump-action-control-group,
-  .pump-action-toolbar .pump-action-control-group.timeframe {
-    display: flex;
-    flex: 0 0 auto;
-    gap: 5px;
-    grid-template-columns: none;
-    overflow-x: auto;
-    padding: 4px;
+  .slime-pump-chart-body,
+  .slime-pump-svg,
+  .slime-pump-dex-frame,
+  .slime-pump-wait {
+    min-height: 220px;
   }
 
-  .pump-action-toolbar .pump-action-control-group button {
-    flex: 0 0 auto;
-    min-height: 32px;
-    min-width: 56px;
-    padding: 6px 8px;
+  .slime-pump-svg,
+  .slime-pump-dex-frame {
+    height: 220px;
   }
 
-  .pump-action-toolbar .pump-action-live-pill {
-    flex: 0 0 auto;
-    min-height: 32px;
-    padding: 0 10px;
+  .slime-pump-metrics {
+    grid-template-columns: 1fr;
   }
 }
