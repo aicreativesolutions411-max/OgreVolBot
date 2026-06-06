@@ -2112,7 +2112,9 @@ async function refreshWalletPositions(options = {}) {
   const startedAt = perfNow();
   const forceQuery = options.force ? "?force=true" : "";
   try {
-    const positions = await api(`/api/web/positions${forceQuery}`);
+    const positions = await api(`/api/web/positions${forceQuery}`, {
+      timeoutMs: options.timeoutMs || API_CONNECT_TIMEOUT_MS
+    });
     state.positions = positions.positions || [];
     state.lastWalletRefreshAt = new Date().toISOString();
     state.walletRefreshError = "";
@@ -2122,9 +2124,10 @@ async function refreshWalletPositions(options = {}) {
       cacheHit: Boolean(positions.cacheHit),
       details: `background:${options.silent ? "silent" : "refresh"}`
     });
+    return true;
   } catch (error) {
     if (options.silent) {
-      return;
+      return false;
     }
     state.walletRefreshError = error.message || "Position refresh failed.";
     perfMeasure("positions-refresh", startedAt, {
@@ -2132,6 +2135,50 @@ async function refreshWalletPositions(options = {}) {
       component: "positions",
       details: publicErrorMessage(error?.message || "Position refresh failed.")
     });
+    return false;
+  }
+}
+
+async function refreshPositionsOnly(options = {}) {
+  if (!state.user || !state.token) {
+    setError("Connect your wallet before refreshing positions.");
+    finishPositionRefreshAction("error", { error: "Wallet not connected" });
+    return;
+  }
+  const startedAt = perfNow();
+  setPositionRefreshAction("refreshing", {
+    startedAt: state.positionRefreshAction?.startedAt || startedAt
+  });
+  state.walletRefreshError = "";
+  setText("[data-sync-health]", syncHealthLabel());
+  applyActionButtonStates();
+  await sleep(20);
+  try {
+    const refreshed = await refreshWalletPositions({
+      force: Boolean(options.force),
+      silent: false,
+      timeoutMs: Math.min(API_CONNECT_TIMEOUT_MS, 20000)
+    });
+    if (!refreshed) throw new Error(state.walletRefreshError || "Position refresh failed.");
+    state.lastWalletRefreshAt = new Date().toISOString();
+    finishPositionRefreshAction("success", { error: "" });
+    perfMeasure("positions-only-refresh", startedAt, {
+      component: "positions",
+      resultCount: state.positions.length,
+      details: options.reason || "positions-only"
+    });
+  } catch (error) {
+    const message = error?.message || "Position refresh failed.";
+    state.walletRefreshError = message;
+    finishPositionRefreshAction("error", { error: publicErrorMessage(message) });
+    setError(message);
+    perfMeasure("positions-only-refresh", startedAt, {
+      errorCode: error?.code || error?.name || "POSITIONS_REFRESH_FAILED",
+      component: "positions",
+      details: publicErrorMessage(message)
+    });
+  } finally {
+    render();
   }
 }
 
@@ -2446,7 +2493,15 @@ async function refreshTerminalFeed(tabKey = state.activeTab, options = {}) {
       await loadWatchlist({ silent: options.silent !== false });
     } else if (tabKey === "sniper") {
       await loadScan(state.scanMode, { silent: options.silent !== false });
-    } else if (["wallets", "positions", "pnl"].includes(tabKey)) {
+    } else if (tabKey === "positions") {
+      if (state.user && state.token) {
+        await refreshWalletPositions({
+          force: Boolean(options.force),
+          silent: true,
+          timeoutMs: Math.min(API_CONNECT_TIMEOUT_MS, 20000)
+        });
+      }
+    } else if (["wallets", "pnl"].includes(tabKey)) {
       if (state.user && state.token) await refreshWalletState({ force: Boolean(options.force), deep: false });
     } else if (tabKey === "smartChart") {
       if (state.user && state.token) await refreshWalletState({ force: Boolean(options.force), deep: false });
@@ -3246,7 +3301,19 @@ function render(options = {}) {
       message: error?.message || "Render failed",
       caughtByBoundary: true
     });
-    if (state.route === "terminal" && dashboardView) {
+    const panel = $("[data-panel]");
+    if (state.route === "terminal" && panel) {
+      dashboardView.hidden = false;
+      panel.innerHTML = `
+        <section class="terminal-error-boundary">
+          <article class="slime-panel">
+            <h2>SlimeWire caught a display error</h2>
+            <p>Your trade state is safe. Tap retry to redraw this panel without closing the window.</p>
+            <button type="button" class="primary" data-refresh-all>Retry Position Refresh</button>
+          </article>
+        </section>
+      `;
+    } else if (state.route === "terminal" && dashboardView) {
       dashboardView.hidden = false;
       dashboardView.innerHTML = `
         <section class="terminal-error-boundary">
@@ -12209,8 +12276,16 @@ document.addEventListener("click", async (event) => {
       finishPositionRefreshAction("success");
     } else {
       const refreshStartedAt = perfNow();
-      refreshWalletState({ force: false, deep: false, reason: "refresh-all" }).catch((error) => setError(error.message));
-      refreshTerminalFeed(state.activeTab, { force: true, reason: "manual-refresh-active-tab" }).catch((error) => setError(error.message));
+      if (state.activeTab === "positions") {
+        refreshPositionsOnly({ force: false, reason: "manual-positions-refresh" }).catch((error) => {
+          finishPositionRefreshAction("error", { error: publicErrorMessage(error?.message || "Position refresh failed") });
+          setError(error.message);
+          render();
+        });
+      } else {
+        refreshWalletState({ force: false, deep: false, reason: "refresh-all" }).catch((error) => setError(error.message));
+        refreshTerminalFeed(state.activeTab, { force: true, reason: "manual-refresh-active-tab" }).catch((error) => setError(error.message));
+      }
       perfMeasure("position-refresh-request-start", refreshStartedAt, {
         component: "positions",
         cacheHit: false,
