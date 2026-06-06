@@ -26,6 +26,7 @@ const apiCandidates = [
 ].filter(Boolean);
 let apiBase = apiCandidates[0] || defaultRenderApiBase;
 const API_CONNECT_TIMEOUT_MS = 60_000;
+const WALLET_REFRESH_TIMEOUT_MS = 15_000;
 const API_LONG_ACTION_TIMEOUT_MS = 180_000;
 const MOBILE_WALLET_PENDING_KEY = "slimewireMobileWalletPending";
 const MOBILE_WALLET_PENDING_BACKUP_KEY = "slimewireMobileWalletPendingBackup";
@@ -194,6 +195,8 @@ const state = {
   terminalTxAudit: null,
   terminalTxLoading: false,
   walletRefreshing: false,
+  walletRefreshStatus: "idle",
+  walletRefreshRequestId: 0,
   lastWalletRefreshAt: "",
   walletRefreshError: "",
   postTradeRefresh: { active: false, attemptId: "", action: "", invalidatedKeys: [], refreshedKeys: [], requestCount: 0, errors: [] },
@@ -310,6 +313,7 @@ let positionRefreshVisualTimer = null;
 let autoExitCheckInFlight = false;
 let walletRefreshPromise = null;
 let lastWalletForceRefreshAt = 0;
+let walletRefreshSequence = 0;
 const apiInFlight = new Map();
 const pendingPerfPosts = [];
 let perfPostTimer = null;
@@ -2071,16 +2075,20 @@ async function loadAll(options = {}) {
 async function loadWalletCore(options = {}) {
   if (!state.user || !state.token) return;
   const startedAt = perfNow();
+  const requestId = options.requestId || 0;
+  const isStaleWalletRefresh = () => requestId && state.walletRefreshRequestId !== requestId;
   const forceQuery = options.force ? "?force=true" : "";
   const positionsForceQuery = options.force || options.deep ? "?force=true" : "";
-  const walletsPromise = api("/api/web/wallets");
-  const balancesPromise = api(`/api/web/balances${forceQuery}`);
-  const tradePlansPromise = api("/api/web/trade/plans");
+  const timeoutMs = options.timeoutMs || API_CONNECT_TIMEOUT_MS;
+  const walletsPromise = api("/api/web/wallets", { timeoutMs });
+  const balancesPromise = api(`/api/web/balances${forceQuery}`, { timeoutMs });
+  const tradePlansPromise = api("/api/web/trade/plans", { timeoutMs });
   const [wallets, balances, tradePlans] = await Promise.all([
     walletsPromise,
     balancesPromise,
     tradePlansPromise
   ]);
+  if (isStaleWalletRefresh()) return;
   state.wallets = wallets.wallets || [];
   state.balances = balances.balances || [];
   state.connectedWalletBalance = balances.connectedWallet || null;
@@ -2097,10 +2105,11 @@ async function loadWalletCore(options = {}) {
   if (options.progress !== false) render({ preserveSmartChartFrame: Boolean(options.preserveSmartChartFrame) });
   if (options.deep) {
     const positionsStartedAt = perfNow();
-    const positionsPromise = api(`/api/web/positions${positionsForceQuery}`).catch((error) => ({ __error: error }));
+    const positionsPromise = api(`/api/web/positions${positionsForceQuery}`, { timeoutMs }).catch((error) => ({ __error: error }));
     try {
       const positions = await positionsPromise;
       if (positions?.__error) throw positions.__error;
+      if (isStaleWalletRefresh()) return;
       state.positions = positions.positions || [];
       state.lastWalletRefreshAt = new Date().toISOString();
       state.walletRefreshError = "";
@@ -2576,7 +2585,7 @@ function refreshTerminalEntryInBackground(reason = "terminal-entry") {
   if (state.route !== "terminal") return;
   void refreshVisibleTerminalFeeds({ silent: true, ifStale: true, reason }).catch((error) => setError(error.message));
   if (state.user && state.token) {
-    void refreshWalletState({ force: false, deep: false, reason }).catch((error) => {
+    void refreshWalletState({ force: true, deep: false, reason }).catch((error) => {
       state.walletRefreshError = error.message || "Wallet refresh failed.";
       render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
     });
@@ -2750,11 +2759,16 @@ function scheduleLivePairsAutoRefresh() {
   }
 
   if (isPostTradeRefreshActive()) return;
+  if (document.hidden) return;
   if (state.activeTab !== "live" && state.activeTab !== "terminal" && state.activeTab !== "slimeScope") return;
   const refreshSeconds = Number(currentLivePairs()?.refreshSeconds || 30);
   const minRefreshSeconds = state.activeTab === "slimeScope" ? 12 : 8;
   const delayMs = Math.max(minRefreshSeconds, refreshSeconds) * 1000;
   livePairsTimer = setTimeout(async () => {
+    if (document.hidden) {
+      scheduleLivePairsAutoRefresh();
+      return;
+    }
     const onLiveFeed = state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "slimeScope";
     if (!onLiveFeed) return;
     if (state.livePairsLoading) {
@@ -2798,6 +2812,10 @@ function scheduleScannerAutoRefresh() {
   }
   if (state.activeTab !== "sniper") return;
   scanTimer = setTimeout(async () => {
+    if (document.hidden) {
+      scheduleScannerAutoRefresh();
+      return;
+    }
     if (state.activeTab !== "sniper") return;
     if (state.loading) {
       scheduleScannerAutoRefresh();
@@ -2819,8 +2837,13 @@ function scheduleKolAutoRefresh() {
     kolTimer = null;
   }
   if (isPostTradeRefreshActive()) return;
+  if (document.hidden) return;
   if ((state.activeTab !== "kol" && state.activeTab !== "terminal") || state.kolWallet) return;
   kolTimer = setTimeout(async () => {
+    if (document.hidden) {
+      scheduleKolAutoRefresh();
+      return;
+    }
     if ((state.activeTab !== "kol" && state.activeTab !== "terminal") || state.kolWallet) return;
     if (state.kolLoading) {
       scheduleKolAutoRefresh();
@@ -2842,8 +2865,13 @@ function scheduleWatchlistAutoRefresh() {
     watchlistTimer = null;
   }
   if (isPostTradeRefreshActive()) return;
+  if (document.hidden) return;
   if ((state.activeTab !== "watchlist" && state.activeTab !== "terminal") || !state.user || !state.token) return;
   watchlistTimer = setTimeout(async () => {
+    if (document.hidden) {
+      scheduleWatchlistAutoRefresh();
+      return;
+    }
     if (state.activeTab !== "watchlist" && state.activeTab !== "terminal") return;
     try {
       await loadWatchlist({ silent: true });
@@ -2952,12 +2980,13 @@ function ageTextFromSeconds(seconds) {
 }
 
 function syncHealthLabel() {
-  if (state.walletRefreshing) return "Refreshing...";
-  if (state.walletRefreshError) return `Sync error: ${state.walletRefreshError}`;
+  if (state.walletRefreshing || state.walletRefreshStatus === "refreshing") return "Syncing...";
+  if (state.walletRefreshStatus === "timeout") return "Sync delayed";
+  if (state.walletRefreshError || state.walletRefreshStatus === "error") return `Sync failed - retry`;
   const seconds = secondsSince(state.lastWalletRefreshAt);
   if (seconds === null) return "Sync not run";
   if (seconds > 45) return `Stale: ${ageTextFromSeconds(seconds)}`;
-  return `Synced ${ageTextFromSeconds(seconds)}`;
+  return seconds < 5 ? "Synced just now" : `Synced ${ageTextFromSeconds(seconds)}`;
 }
 
 function activePresetSummary() {
@@ -3023,12 +3052,25 @@ function scheduleWalletBackgroundRefresh(delayMs = 900, options = {}) {
 
 async function refreshWalletState({ force = false, deep = false, reason = "manual" } = {}) {
   if (!state.user || !state.token) {
-    setError("Create or log in before refreshing wallet balances.");
-    return;
+    state.walletRefreshing = false;
+    state.walletRefreshStatus = "idle";
+    state.walletRefreshError = "Wallet not connected";
+    setText("[data-sync-health]", "Wallet not connected");
+    finishPositionRefreshAction("error", { error: "Wallet not connected" });
+    render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
+    return {
+      ok: false,
+      data: null,
+      error: "Wallet not connected",
+      durationMs: 0,
+      fromCache: false,
+      degraded: true
+    };
   }
   const normalizedReason = String(reason || "").toLowerCase();
+  const isManualHeaderRefresh = normalizedReason === "manual_header_click";
   const isPostTradeRefresh = normalizedReason.includes("post-trade");
-  if (force && !deep && !isPostTradeRefresh && Date.now() - lastWalletForceRefreshAt < WALLET_REFRESH_FORCE_COOLDOWN_MS) {
+  if (force && !deep && !isPostTradeRefresh && !isManualHeaderRefresh && Date.now() - lastWalletForceRefreshAt < WALLET_REFRESH_FORCE_COOLDOWN_MS) {
     force = false;
     recordPerfEvent({
       component: "wallet",
@@ -3051,19 +3093,53 @@ async function refreshWalletState({ force = false, deep = false, reason = "manua
     return walletRefreshPromise;
   }
   const startedAt = perfNow();
+  const requestId = ++walletRefreshSequence;
+  state.walletRefreshRequestId = requestId;
   walletRefreshPromise = (async () => {
+    let result = {
+      ok: false,
+      data: null,
+      error: "",
+      durationMs: 0,
+      fromCache: false,
+      degraded: false
+    };
     if (state.positionRefreshAction?.state === "clicked") {
       setPositionRefreshAction("refreshing", { startedAt: state.positionRefreshAction.startedAt || startedAt });
     }
     state.walletRefreshing = true;
+    state.walletRefreshStatus = "refreshing";
     state.walletRefreshError = "";
     setText("[data-sync-health]", syncHealthLabel());
     setHidden("[data-refresh-spinner]", false);
     applyActionButtonStates();
     await sleep(20);
     try {
-      await loadWalletCore({ force, deep, preserveSmartChartFrame: state.activeTab === "smartChart" });
-      state.lastWalletRefreshAt = new Date().toISOString();
+      await Promise.race([
+        loadWalletCore({
+          force,
+          deep,
+          preserveSmartChartFrame: state.activeTab === "smartChart",
+          requestId,
+          timeoutMs: WALLET_REFRESH_TIMEOUT_MS
+        }),
+        new Promise((_, reject) => window.setTimeout(() => reject(Object.assign(new Error("Wallet refresh timed out."), { code: "TIMEOUT" })), WALLET_REFRESH_TIMEOUT_MS))
+      ]);
+      if (state.walletRefreshRequestId !== requestId) {
+        result = {
+          ok: false,
+          data: null,
+          error: "Stale wallet refresh ignored.",
+          durationMs: perfNow() - startedAt,
+          fromCache: false,
+          degraded: true
+        };
+        return result;
+      }
+      if (state.walletRefreshRequestId === requestId) {
+        state.lastWalletRefreshAt = new Date().toISOString();
+        state.walletRefreshStatus = "success";
+      }
       if (deep) {
         await loadAll({ force, skipCore: true, silent: true });
       } else {
@@ -3075,8 +3151,24 @@ async function refreshWalletState({ force = false, deep = false, reason = "manua
         details: deep ? "deep" : `core-plus-background:${reason}`
       });
       finishPositionRefreshAction("success", { error: "" });
+      result = {
+        ok: true,
+        data: {
+          balances: state.balances,
+          positions: state.positions,
+          pnl: state.pnl
+        },
+        error: "",
+        durationMs: perfNow() - startedAt,
+        fromCache: false,
+        degraded: false
+      };
     } catch (error) {
-      state.walletRefreshError = error.message || "Refresh failed.";
+      const isTimeout = error?.code === "TIMEOUT" || /timed out|timeout/i.test(String(error?.message || ""));
+      if (state.walletRefreshRequestId === requestId) {
+        state.walletRefreshStatus = isTimeout ? "timeout" : "error";
+        state.walletRefreshError = error.message || "Refresh failed.";
+      }
       perfMeasure("wallet-refresh-total", startedAt, {
         component: "wallet",
         errorCode: error?.code || error?.name || "WALLET_REFRESH_FAILED",
@@ -3084,13 +3176,32 @@ async function refreshWalletState({ force = false, deep = false, reason = "manua
       });
       finishPositionRefreshAction("error", { error: publicErrorMessage(state.walletRefreshError) });
       setError(state.walletRefreshError);
+      result = {
+        ok: false,
+        data: {
+          balances: state.balances,
+          positions: state.positions,
+          pnl: state.pnl
+        },
+        error: publicErrorMessage(state.walletRefreshError),
+        durationMs: perfNow() - startedAt,
+        fromCache: false,
+        degraded: true
+      };
     } finally {
-      state.walletRefreshing = false;
+      if (state.walletRefreshRequestId === requestId) {
+        state.walletRefreshing = false;
+      }
       walletRefreshPromise = null;
       render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
     }
+    return result;
   })();
   return walletRefreshPromise;
+}
+
+async function refreshWalletNow({ force = true, reason = "manual_header_click", deep = false } = {}) {
+  return refreshWalletState({ force, reason, deep });
 }
 
 function isPostTradeRefreshActive() {
@@ -3147,7 +3258,7 @@ function queuePostTradeRefresh(signature = "", reason = "post-trade", options = 
         details: reason
       });
       const startedAt = perfNow();
-      void refreshWalletState({ force: false, deep: false, reason: "post-trade" }).catch((error) => {
+      void refreshWalletState({ force: true, deep: false, reason: "post-trade" }).catch((error) => {
         state.walletRefreshError = error.message || "Post-trade refresh failed.";
         state.postTradeRefresh = {
           ...(state.postTradeRefresh || {}),
@@ -9159,7 +9270,7 @@ function blockRawSignalTokenIfUnsafe(tokenMint = "") {
 function visibleSignalRowsFromRawRows(rows = []) {
   const byMint = new Map();
   for (const row of rows || []) {
-    if (isUiBlockedSignalRow(row)) continue;
+    if (isUiFeedDisplayBlockedSignalRow(row)) continue;
     const mint = String(row?.tokenMint || "");
     if (mint && !byMint.has(mint)) byMint.set(mint, row);
   }
@@ -9169,7 +9280,7 @@ function visibleSignalRowsFromRawRows(rows = []) {
 function uniqueSignalRows(rows = []) {
   const byMint = new Map();
   for (const row of rows || []) {
-    if (isUiBlockedSignalRow(row)) continue;
+    if (isUiFeedDisplayBlockedSignalRow(row)) continue;
     const mint = String(row?.tokenMint || "");
     if (!mint) continue;
     const existing = byMint.get(mint);
@@ -9231,6 +9342,31 @@ function isUiBlockedSignalRow(row = {}) {
     row?.freezeAuthority ? "freeze authority" : ""
   ].flat().filter(Boolean).join(" ").toLowerCase();
   if (/\b(honeypot|honey\s*pot|mintable|mint authority|freeze authority|freezable|freezeable|blacklist|cannot sell|can't sell|sell disabled|sell blocked|trading disabled|no sell|no route|rug|scam|token-2022)\b/i.test(labels)) {
+    return true;
+  }
+  const marketCap = firstUsefulNumber(row.marketCap, row.fdv);
+  const liquidityUsd = firstUsefulNumber(row.liquidityUsd);
+  return marketCap >= 100_000_000 && (!liquidityUsd || liquidityUsd / marketCap < 0.01);
+}
+
+function isUiFeedDisplayBlockedSignalRow(row = {}) {
+  const labels = [
+    row?.tokenMint,
+    row?.symbol,
+    row?.name,
+    row?.source,
+    row?.category,
+    row?.platform,
+    row?.market,
+    row?.dexId,
+    row?.profileSource,
+    row?.labels,
+    row?.riskFlags,
+    row?.bestPickWarnings,
+    row?.scoreWarnings,
+    row?.safetyNote
+  ].flat().filter(Boolean).join(" ").toLowerCase();
+  if (/\b(honeypot|honey\s*pot|blacklist|cannot sell|can't sell|sell disabled|sell blocked|trading disabled|no sell|no route|rug|scam)\b/i.test(labels)) {
     return true;
   }
   const marketCap = firstUsefulNumber(row.marketCap, row.fdv);
@@ -9673,6 +9809,22 @@ function scoreWhyText(row = {}) {
   return [...parts, ...warnings.map((warning) => `warning: ${warning}`)].join(" | ") || "Score uses available liquidity, volume, age, momentum, buys/sells, KOL, and risk signals.";
 }
 
+function pairRiskBadgesHtml(row = {}) {
+  const flags = new Set((row.riskFlags || []).map((flag) => String(flag)));
+  if (row.safetyStatus === "pending") flags.add("risk check pending");
+  if (row.safetyStatus === "warning") flags.add("risk warning");
+  if (row.mintAuthority) flags.add("mint active");
+  if (row.freezeAuthority) flags.add("freeze active");
+  if (row.tokenProgram && /token-?2022/i.test(String(row.tokenProgram))) flags.add("token-2022");
+  if (!flags.size && row.safetyNote && !/passed/i.test(String(row.safetyNote))) flags.add(row.safetyNote);
+  const labels = [...flags]
+    .filter(Boolean)
+    .slice(0, 4)
+    .map((flag) => String(flag).replace(/([a-z])([A-Z])/g, "$1 $2").replace(/_/g, " ").trim());
+  if (!labels.length) return "";
+  return `<div class="signal-links risk-links">${labels.map((label) => `<span class="sniper-pill" title="Risk flag">${escapeHtml(label)}</span>`).join("")}</div>`;
+}
+
 function compactUsd(value) {
   const number = Number(value);
   if (!Number.isFinite(number) || number <= 0) return "n/a";
@@ -10003,7 +10155,7 @@ function rowAgeSeconds(row = {}) {
 }
 
 const SLIME_SCOPE_LIMIT = 100;
-const SLIME_SCOPE_NEW_MAX_AGE_SECONDS = 1800;
+const SLIME_SCOPE_NEW_MAX_AGE_SECONDS = 7200;
 const SLIME_SCOPE_FRESH_MAX_MARKET_CAP = 750_000;
 const SLIME_SCOPE_STEADY_MAX_AGE_SECONDS = 86_400;
 const SLIME_SCOPE_STEADY_MAX_MARKET_CAP = 2_000_000;
@@ -10020,7 +10172,7 @@ function slimeScopeSourceRows() {
     ...(state.kolScan?.rows || [])
   ])
     .map((row) => mergeMarketData(row, marketByMint.get(String(row?.tokenMint || ""))))
-    .filter((row) => row?.tokenMint && !isUiBlockedSignalRow(row));
+    .filter((row) => row?.tokenMint && !isUiFeedDisplayBlockedSignalRow(row));
 }
 
 function slimeScopeMarketCap(row = {}) {
@@ -11073,7 +11225,7 @@ function tokenSignalRowsHtml(rows, options = {}) {
   if (!visibleRows.length) {
     return `
       ${options.hideToolbar ? "" : fastPresetToolbarHtml(options.context || "scanner")}
-      ${emptyState("No safety-cleared signals", "Mintable, freezable, honeypot-risk, and absurd market-cap rows are blocked from this feed.")}
+      ${emptyState(options.emptyTitle || "Scanning signals", options.emptyMessage || "No rows are visible in this category yet. The feed keeps the last good data and refreshes in the background.")}
     `;
   }
   return `
@@ -11121,6 +11273,7 @@ function tokenSignalRowHtml(row, index, options = {}) {
             ${telegramShareButton(shareText, "TG")}
             ${Number(row.sniperCount || 0) > 0 ? `<span class="sniper-pill" title="Sniper count">SCOPE ${escapeHtml(row.sniperCount)}</span>` : ""}
           </div>
+          ${pairRiskBadgesHtml(row)}
         </div>
       </div>
       <div class="signal-cell"><span>${escapeHtml(row.pairAgeLabel || formatAgeFromRow(row) || "age unknown")}</span><small>${escapeHtml(row.scalpSetup || row.momentum || `#${index + 1}`)}</small></div>
@@ -11849,7 +12002,7 @@ document.addEventListener("click", async (event) => {
       durationMs: perfNow() - clickStartedAt,
       details: "top-refresh-wallet"
     });
-    refreshWalletState({ force: false, deep: false, reason: "top-refresh-wallet" }).catch((error) => setError(error.message));
+    refreshWalletNow({ force: true, deep: false, reason: "manual_header_click" }).catch((error) => setError(error.message));
     return;
   }
   if (target.matches("[data-ogre-tek-refresh]")) {
@@ -11942,7 +12095,7 @@ document.addEventListener("click", async (event) => {
     event.stopPropagation();
     const mint = target.dataset.tokenTrade || "";
     if (blockRawSignalTokenIfUnsafe(mint)) return;
-    openTokenChart(tokenRefFromMint(mint, {
+    openTokenChart(tokenRefFromMint(target.dataset.tokenTrade || "", {
       source: target.dataset.tokenTradeSource || "trade-button"
     }), {
       defaultTab: "buy",
@@ -12232,7 +12385,7 @@ document.addEventListener("click", async (event) => {
     return;
   }
   if (target.matches("[data-refresh-feeds]")) {
-    await refreshVisibleTerminalFeeds({ force: true, reason: "manual-refresh-feeds" }).catch((error) => setError(error.message));
+    runDeferredUiTask(() => refreshVisibleTerminalFeeds({ force: true, reason: "manual-refresh-feeds" }));
     return;
   }
   if (target.matches("[data-terminal-load-more]")) {
@@ -12407,14 +12560,14 @@ document.addEventListener("click", async (event) => {
     } else {
       const refreshStartedAt = perfNow();
       if (state.activeTab === "positions") {
-        refreshPositionsOnly({ force: false, reason: "manual-positions-refresh" }).catch((error) => {
+        refreshPositionsOnly({ force: true, reason: "manual-positions-refresh" }).catch((error) => {
           finishPositionRefreshAction("error", { error: publicErrorMessage(error?.message || "Position refresh failed") });
           setError(error.message);
           render();
         });
       } else {
-        refreshWalletState({ force: false, deep: false, reason: "refresh-all" }).catch((error) => setError(error.message));
-        refreshTerminalFeed(state.activeTab, { force: true, reason: "manual-refresh-active-tab" }).catch((error) => setError(error.message));
+        refreshWalletNow({ force: true, deep: false, reason: "manual_refresh_all" }).catch((error) => setError(error.message));
+        refreshTerminalFeed(state.activeTab, { force: true, reason: "manual-refresh-all" }).catch((error) => setError(error.message));
       }
       perfMeasure("position-refresh-request-start", refreshStartedAt, {
         component: "positions",
@@ -12462,7 +12615,7 @@ document.addEventListener("click", async (event) => {
   }
 
   if (target.matches("[data-refresh-scan]")) {
-    await refreshTerminalFeed("sniper", { force: true, reason: "manual-sniper-refresh" }).catch((error) => setError(error.message));
+    runDeferredUiTask(() => refreshTerminalFeed("sniper", { force: true, reason: "manual-sniper-refresh" }));
   }
 
   const refreshLivePairsButton = target.closest?.("[data-refresh-live-pairs]");
@@ -12472,7 +12625,7 @@ document.addEventListener("click", async (event) => {
   }
 
   if (target.matches("[data-refresh-watchlist]")) {
-    await refreshTerminalFeed("watchlist", { force: true, reason: "manual-watchlist-refresh" }).catch((error) => setError(error.message));
+    runDeferredUiTask(() => refreshTerminalFeed("watchlist", { force: true, reason: "manual-watchlist-refresh" }));
   }
 
   const livePairBucketButton = target.closest?.("[data-live-pair-bucket]");
@@ -12497,7 +12650,9 @@ document.addEventListener("click", async (event) => {
 
   if (target.matches("[data-scan-mode]")) {
     resetTerminalFeedVisibleLimit("sniper");
-    await loadScan(target.dataset.scanMode).catch((error) => setError(error.message));
+    state.scanMode = target.dataset.scanMode || state.scanMode;
+    render();
+    runDeferredUiTask(() => loadScan(state.scanMode));
   }
 
   const copyValue = target.getAttribute("data-copy");

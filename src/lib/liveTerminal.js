@@ -1,5 +1,5 @@
 export const LIVE_PAIR_BUCKETS = Object.freeze({
-  live: { label: "Fresh Launches", minMinutes: 0, maxMinutes: 1 },
+  live: { label: "Fresh Launches", minMinutes: 0, maxMinutes: 120 },
   under1h: { label: "Last 1h", minMinutes: 0, maxMinutes: 60 },
   under3h: { label: "Last 3h", minMinutes: 0, maxMinutes: 180 },
   under1d: { label: "Last 24h", minMinutes: 0, maxMinutes: 1440 }
@@ -112,9 +112,30 @@ function firstPositiveNumber(...values) {
   return 0;
 }
 
-const HARD_BLOCKED_PAIR_RISK_RE = /\b(honeypot|honey\s*pot|mintable|mint authority|freeze authority|freezable|freezeable|blacklist|cannot sell|can't sell|sell disabled|sell blocked|trading disabled|no sell|no route|rug|scam|mayhem)\b/i;
+export const PAIR_FILTER_MODES = Object.freeze({
+  ALL: "ALL",
+  SAFE: "SAFE",
+  MAYHEM: "MAYHEM",
+  CUSTOM: "CUSTOM"
+});
+
+export const PAIR_CATEGORIES = Object.freeze({
+  FRESH: "fresh",
+  NEW: "new",
+  LIVE: "live",
+  STEADY: "steady",
+  GRADUATING: "graduating",
+  GRADUATED: "graduated",
+  MARKET_INTEL: "marketIntel",
+  WATCHLIST: "watchlist",
+  BUNDLE_VOLUME: "bundleVolume"
+});
+
+const HARD_BLOCKED_PAIR_RISK_RE = /\b(honeypot|honey\s*pot|blacklist|cannot sell|can't sell|sell disabled|sell blocked|trading disabled|no sell|no route|rug|scam)\b/i;
 const ABSURD_THIN_LIQUIDITY_MARKET_CAP_USD = 100_000_000;
 const ABSURD_THIN_LIQUIDITY_RATIO = 0.01;
+const BROAD_NEW_WINDOW_MINUTES = 120;
+const FRESH_LAUNCH_WINDOW_MINUTES = 30;
 
 function textBlob(row = {}) {
   return [
@@ -144,6 +165,85 @@ export function hasHardBlockedLivePairRisk(row = {}) {
   const liquidityUsd = firstPositiveNumber(row.liquidityUsd);
   return marketCap >= ABSURD_THIN_LIQUIDITY_MARKET_CAP_USD
     && (!liquidityUsd || liquidityUsd / marketCap < ABSURD_THIN_LIQUIDITY_RATIO);
+}
+
+export function pairRiskFlags(row = {}) {
+  const text = textBlob(row);
+  const flags = new Set(Array.isArray(row.riskFlags) ? row.riskFlags.map((flag) => String(flag)) : []);
+  if (row.mintAuthority || /\b(mintable|mint authority|mint active)\b/i.test(text)) flags.add("mintAuthorityActive");
+  if (row.freezeAuthority || /\b(freeze authority|freezable|freezeable|freeze active)\b/i.test(text)) flags.add("freezeAuthorityActive");
+  if (row.isFreezeable || row.freezeable || row.freezable) flags.add("isFreezeable");
+  if (row.mutableMetadata || /\bmutable metadata\b/i.test(text)) flags.add("mutableMetadata");
+  if (row.tokenProgram && /token-?2022/i.test(String(row.tokenProgram))) flags.add("token2022");
+  if (/\bmayhem\b/i.test(text)) flags.add("mayhemFlag");
+  if (row.missingMetadata || (!row.name && !row.symbol && !row.imageUrl)) flags.add("missingMetadata");
+  if (row.unknownRisk || row.safetyStatus === "pending" || row.safetyStatus === "unknown") flags.add("unknownRisk");
+  if (hasHardBlockedLivePairRisk(row)) flags.add("honeypotSuspected");
+  const liquidityUsd = firstPositiveNumber(row.liquidityUsd);
+  if (liquidityUsd === 0) flags.add("lowLiquidity");
+  const volume5m = firstPositiveNumber(row.volume5m, row.volumeM5);
+  const volume1h = firstPositiveNumber(row.volumeH1, row.volume1h, row.volumeUsd);
+  if (!volume5m && !volume1h) flags.add("lowVolume");
+  return [...flags];
+}
+
+export function classifyPairCategory(row = {}, now = Date.now()) {
+  if (isGraduatedSlimeScopePair(row)) return PAIR_CATEGORIES.GRADUATED;
+  const progress = slimeScopeProgressPct(row);
+  const marketCap = firstPositiveNumber(row.marketCap, row.fdv);
+  if (progress >= 70 || marketCap >= 45_000) return PAIR_CATEGORIES.GRADUATING;
+
+  const ageMinutes = pairAgeMinutes(row, now);
+  const hints = [
+    row.category,
+    row.categoryHint,
+    row.categoryHints,
+    row.slimeScopeCategory,
+    row.liveLabel,
+    row.source,
+    row.status
+  ].flat().filter(Boolean).join(" ").toLowerCase();
+  if ((Number.isFinite(ageMinutes) && ageMinutes >= 0 && ageMinutes <= BROAD_NEW_WINDOW_MINUTES) || /\b(fresh|new|launch|just listed|seconds old)\b/.test(hints)) {
+    return PAIR_CATEGORIES.NEW;
+  }
+
+  const liquidityUsd = firstPositiveNumber(row.liquidityUsd);
+  const volume = firstPositiveNumber(row.volume5m, row.volumeM5, row.volumeH1, row.volume1h, row.volumeUsd);
+  const score = firstPositiveNumber(row.bestPickScore, row.score);
+  if (liquidityUsd || volume || score) return PAIR_CATEGORIES.STEADY;
+
+  return PAIR_CATEGORIES.STEADY;
+}
+
+export function isPairVisibleForCategory(row = {}, category = PAIR_CATEGORIES.LIVE, mode = PAIR_FILTER_MODES.ALL, now = Date.now()) {
+  if (hasHardBlockedLivePairRisk(row)) return false;
+  const safeMode = String(mode || PAIR_FILTER_MODES.ALL).toUpperCase();
+  const flags = pairRiskFlags(row);
+  if (safeMode === PAIR_FILTER_MODES.SAFE && flags.some((flag) => /mintAuthorityActive|freezeAuthorityActive|isFreezeable|mayhemFlag|honeypotSuspected|token2022/i.test(flag))) {
+    return false;
+  }
+  if (safeMode === PAIR_FILTER_MODES.MAYHEM && !flags.some((flag) => /mayhem|mintAuthority|freezeAuthority|unknownRisk|lowLiquidity|lowVolume/i.test(flag))) {
+    return false;
+  }
+  if (String(category) === PAIR_CATEGORIES.WATCHLIST) return true;
+  if (String(category) === PAIR_CATEGORIES.BUNDLE_VOLUME) return true;
+
+  const classified = classifyPairCategory(row, now);
+  const ageMinutes = pairAgeMinutes(row, now);
+  if (category === PAIR_CATEGORIES.FRESH || category === PAIR_CATEGORIES.NEW) {
+    return classified === PAIR_CATEGORIES.NEW
+      || (Number.isFinite(ageMinutes) && ageMinutes >= 0 && ageMinutes <= BROAD_NEW_WINDOW_MINUTES);
+  }
+  if (category === PAIR_CATEGORIES.GRADUATING) return classified === PAIR_CATEGORIES.GRADUATING;
+  if (category === PAIR_CATEGORIES.GRADUATED) return classified === PAIR_CATEGORIES.GRADUATED;
+  if (category === PAIR_CATEGORIES.STEADY) return classified === PAIR_CATEGORIES.STEADY;
+  if (category === PAIR_CATEGORIES.MARKET_INTEL) {
+    const liquidityUsd = firstPositiveNumber(row.liquidityUsd);
+    const volume = firstPositiveNumber(row.volume5m, row.volumeM5, row.volumeH1, row.volume1h, row.volumeUsd);
+    const score = firstPositiveNumber(row.bestPickScore, row.score);
+    return liquidityUsd >= 1_000 || volume >= 1_000 || score >= 50 || classified === PAIR_CATEGORIES.GRADUATING;
+  }
+  return true;
 }
 
 export function slimeScopeProgressPct(row = {}) {
@@ -180,18 +280,7 @@ export function isGraduatedSlimeScopePair(row = {}) {
 }
 
 export function classifySlimeScopePair(row = {}, now = Date.now()) {
-  if (isGraduatedSlimeScopePair(row)) return "graduated";
-
-  const progress = slimeScopeProgressPct(row);
-  const marketCap = firstPositiveNumber(row.marketCap, row.fdv);
-  if (progress >= 70 || marketCap >= 45_000) return "graduating";
-
-  const ageMinutes = pairAgeMinutes(row, now);
-  if (Number.isFinite(ageMinutes) && ageMinutes >= 0 && ageMinutes < 30 && (!marketCap || marketCap <= 750_000)) {
-    return "new";
-  }
-
-  return "steady";
+  return classifyPairCategory(row, now);
 }
 
 export function computeBestPickScore(row = {}, now = Date.now()) {

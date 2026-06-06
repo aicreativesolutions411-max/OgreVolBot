@@ -12,11 +12,13 @@ import {
   computeBestPickScore,
   formatLivePairAge as formatLivePairAgeFromData,
   hasHardBlockedLivePairRisk,
+  isPairVisibleForCategory,
   isGraduatedSlimeScopePair,
   isLivePairInBucket as isLivePairInBucketWindow,
   livePairBucketLabel as livePairBucketLabelCore,
   normalizeLivePairBucket as normalizeLivePairBucketCore,
   normalizePairTimestamp,
+  pairRiskFlags,
   pairAgeMinutes as pairAgeMinutesFromData,
   slimeScopeProgressPct,
   sortLivePairs
@@ -23884,7 +23886,7 @@ function isLivePairInRelaxedBucket(item, bucket) {
   const safeBucket = normalizeLivePairBucket(bucket);
   const ageMinutes = livePairAgeMinutesValue(item);
   if (ageMinutes === null) return false;
-  if (safeBucket === "live") return ageMinutes >= 0 && ageMinutes < 30;
+  if (safeBucket === "live") return ageMinutes >= 0 && ageMinutes < 120;
   if (safeBucket === "under1h") return ageMinutes >= 5 && ageMinutes < 90;
   if (safeBucket === "under3h") return ageMinutes >= 30 && ageMinutes < 240;
   if (safeBucket === "under1d") return ageMinutes >= 60 && ageMinutes < 1440;
@@ -24087,9 +24089,13 @@ function livePairStatusMessage(count, stats = {}, bucket = "live") {
   if (stats.rpcSafetySkipped) {
     return `${label}: ${count} live pair(s). Auto-refreshing.`;
   }
+  const warning = Number(stats.warning || 0);
+  if (warning > 0) {
+    return `${label}: ${count} pair(s). ${warning} risk warning(s); buy precheck still runs before trade.`;
+  }
   const pending = Number(stats.pending || 0);
   if (pending > 0) {
-    return `${label}: ${count} pair(s). ${pending} still settling while the feed keeps updating.`;
+    return `${label}: ${count} pair(s). ${pending} risk check(s) pending while the feed keeps updating.`;
   }
   return `${label}: ${count} pair(s). Auto-refreshing.`;
 }
@@ -24265,25 +24271,23 @@ function isWebLivePairCandidate(item, bucket = "live", options = {}) {
   const flags = new Set(item.riskFlags || []);
   const safeBucket = normalizeLivePairBucket(bucket);
   const ageSeconds = Number(item.pairAgeSeconds);
-  const ageMinutes = Number(item.pairAgeMinutes);
   const marketCap = Number(item.marketCap || 0);
-  const minMarketCap = safeBucket === "live" ? 0 : 7_000;
   const maxMarketCap = livePairMaxMarketCap(safeBucket);
-  const marketCapOk = safeBucket === "live"
-    ? (!marketCap || marketCap <= maxMarketCap)
-    : marketCap >= minMarketCap && marketCap <= maxMarketCap;
+  const marketCapOk = !marketCap || marketCap <= maxMarketCap;
   const hasFreshActivity = Number(item.volume5m || 0) > 0
     || Number(item.volumeH1 || 0) > 0
     || Number(item.liquidityUsd || 0) > 0
     || Number.isFinite(ageSeconds) && ageSeconds <= 300
     || isPumpStyleToken(item);
   const ageOk = options.relaxedAge ? isLivePairInRelaxedBucket(item, safeBucket) : isLivePairInBucket(item, safeBucket);
+  const categoryOk = safeBucket === "live"
+    ? isPairVisibleForCategory(item, "fresh", "ALL")
+    : true;
   return ageOk
     && marketCapOk
-    && hasFreshActivity
+    && (safeBucket === "live" || hasFreshActivity || options.relaxedAge)
+    && categoryOk
     && !hasHardBlockedLivePairRisk(item)
-    && !isPumpMayhemToken(item)
-    && !isKnownBelowExitFloor(item)
     && !flags.has("hard dump")
     && !flags.has("sell pressure");
 }
@@ -24299,13 +24303,11 @@ function isWebLivePairBackfillCandidate(item, bucket = "live", options = {}) {
   const hasMarketCap = marketCap > 0;
   const marketCapOk = options.allowUnknownMarketCap
     ? (!hasMarketCap || marketCap <= maxMarketCap)
-    : marketCap >= 7_000 && marketCap <= maxMarketCap;
+    : (!hasMarketCap || marketCap <= maxMarketCap);
   const activityOk = volume5m > 0 || volumeH1 > 0 || liquidityUsd > 0 || isPumpStyleToken(item);
   return marketCapOk
     && activityOk
     && !hasHardBlockedLivePairRisk(item)
-    && !isPumpMayhemToken(item)
-    && !isKnownBelowExitFloor(item)
     && !flags.has("hard dump")
     && !flags.has("sell pressure");
 }
@@ -24328,11 +24330,13 @@ function compareWebLivePairs(a, b, sort = "best") {
 async function filterWebLivePairsForSafety(rows, limit = 12) {
   const accepted = [];
   const pending = [];
+  const warned = [];
   const stats = {
     checked: 0,
     accepted: 0,
     pending: 0,
     blocked: 0,
+    warning: 0,
     token2022: 0
   };
   const candidates = rows
@@ -24343,24 +24347,39 @@ async function filterWebLivePairsForSafety(rows, limit = 12) {
     try {
       const safety = await getMintSafetyInfo(row.tokenMint);
       stats.checked += 1;
+      const riskFlags = new Set(pairRiskFlags(row));
       if (safety.tokenProgram === TOKEN_2022_PROGRAM_ID.toBase58()) {
+        riskFlags.add("token2022");
         stats.token2022 += 1;
-        stats.blocked += 1;
-        return;
       }
-      if (safety.freezeAuthority || safety.mintAuthority) {
-        stats.blocked += 1;
+      if (safety.freezeAuthority) riskFlags.add("freezeAuthorityActive");
+      if (safety.mintAuthority) riskFlags.add("mintAuthorityActive");
+      if (riskFlags.has("token2022") || riskFlags.has("freezeAuthorityActive") || riskFlags.has("mintAuthorityActive")) {
+        warned.push({
+          ...row,
+          tokenProgram: safety.tokenProgram || row.tokenProgram,
+          freezeAuthority: safety.freezeAuthority || row.freezeAuthority || "",
+          mintAuthority: safety.mintAuthority || row.mintAuthority || "",
+          riskFlags: [...riskFlags],
+          safetyStatus: "warning",
+          safetyNote: "Risk flagged; buy precheck required"
+        });
+        stats.warning += 1;
         return;
       }
       accepted.push({
         ...row,
+        riskFlags: [...riskFlags],
         safetyStatus: "passed",
         safetyNote: "Mint/freeze safety passed"
       });
       stats.accepted += 1;
     } catch {
+      const riskFlags = new Set(pairRiskFlags(row));
+      riskFlags.add("unknownRisk");
       pending.push({
         ...row,
+        riskFlags: [...riskFlags],
         safetyStatus: "pending",
         safetyNote: "Safety pending; buy precheck required"
       });
@@ -24368,7 +24387,7 @@ async function filterWebLivePairsForSafety(rows, limit = 12) {
     }
   });
 
-  const combined = uniqueSniperScoreRows([...accepted, ...pending]).sort(compareWebLivePairs).slice(0, limit);
+  const combined = uniqueSniperScoreRows([...accepted, ...warned, ...pending]).sort(compareWebLivePairs).slice(0, limit);
   return { rows: combined, stats };
 }
 
@@ -24381,6 +24400,7 @@ function webLivePairRow(row) {
   } : computeBestPickScore(row);
   return {
     ...webSniperRow(row),
+    riskFlags: pairRiskFlags(row),
     pairAgeLabel: formatLivePairAgeFromData(row),
     bestPickScore: bestPick.score,
     bestPickLabel: bestPick.label,

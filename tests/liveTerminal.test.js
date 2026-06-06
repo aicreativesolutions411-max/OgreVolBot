@@ -5,9 +5,13 @@ import {
   classifySlimeScopePair,
   formatLivePairAge,
   isGraduatedSlimeScopePair,
+  isPairVisibleForCategory,
   isLivePairInBucket,
   normalizePairTimestamp,
+  pairRiskFlags,
   pairAgeMinutes,
+  PAIR_CATEGORIES,
+  PAIR_FILTER_MODES,
   slimeScopeProgressPct,
   sortLivePairs
 } from "../src/lib/liveTerminal.js";
@@ -30,8 +34,9 @@ test("live-pair windows use pair creation age accurately", () => {
   const missing = {};
 
   assert.equal(isLivePairInBucket(thirtySeconds, "live", NOW), true);
-  assert.equal(isLivePairInBucket(thirtyMinutes, "live", NOW), false);
+  assert.equal(isLivePairInBucket(thirtyMinutes, "live", NOW), true);
   assert.equal(isLivePairInBucket(thirtyMinutes, "under1h", NOW), true);
+  assert.equal(isLivePairInBucket(twoHours, "live", NOW), false);
   assert.equal(isLivePairInBucket(twoHours, "under1h", NOW), false);
   assert.equal(isLivePairInBucket(twoHours, "under3h", NOW), true);
   assert.equal(isLivePairInBucket(fiveHours, "under3h", NOW), false);
@@ -108,15 +113,47 @@ test("newest sort uses pair creation timestamp, not trade time", () => {
 
 test("slime scope separates fresh, graduating, and graduated pump pairs", () => {
   const fresh = { tokenMint: "abcPump", isPump: true, pairCreatedAt: NOW - 30_000, marketCap: 2_500 };
-  const oldPump = { tokenMint: "oldPump", isPump: true, pairCreatedAt: minutesAgo(5), marketCap: 2_500 };
+  const steadyPump = { tokenMint: "oldPump", isPump: true, pairCreatedAt: minutesAgo(180), marketCap: 2_500, liquidityUsd: 12_000 };
   const almostBonded = { tokenMint: "defPump", isPump: true, pairCreatedAt: minutesAgo(20), marketCap: 60_000 };
   const bonded = { tokenMint: "ghiPump", isPump: true, graduated: true, pairCreatedAt: minutesAgo(120), marketCap: 80_000 };
 
   assert.equal(classifySlimeScopePair(fresh, NOW), "new");
-  assert.equal(classifySlimeScopePair(oldPump, NOW), "unknown");
+  assert.equal(classifySlimeScopePair(steadyPump, NOW), "steady");
   assert.equal(classifySlimeScopePair(almostBonded, NOW), "graduating");
   assert.equal(classifySlimeScopePair(bonded, NOW), "graduated");
   assert.ok(slimeScopeProgressPct(almostBonded) >= 70);
+});
+
+test("fresh/new discovery shows risky new rows in all mode but hides them in safe mode", () => {
+  const freezeableFresh = {
+    tokenMint: "freezePump",
+    isPump: true,
+    pairCreatedAt: minutesAgo(4),
+    marketCap: 8_000,
+    liquidityUsd: 400,
+    freezeAuthority: "abc",
+    mintAuthority: "def"
+  };
+  const unknownRiskFresh = {
+    tokenMint: "unknownPump",
+    isPump: true,
+    pairCreatedAt: minutesAgo(8),
+    marketCap: 6_000,
+    safetyStatus: "pending"
+  };
+  const mayhemFresh = {
+    tokenMint: "mayhemPump",
+    isPump: true,
+    pairCreatedAt: minutesAgo(12),
+    marketCap: 9_000,
+    riskFlags: ["mayhemFlag"]
+  };
+
+  assert.equal(isPairVisibleForCategory(freezeableFresh, PAIR_CATEGORIES.FRESH, PAIR_FILTER_MODES.ALL, NOW), true);
+  assert.equal(isPairVisibleForCategory(unknownRiskFresh, PAIR_CATEGORIES.NEW, PAIR_FILTER_MODES.ALL, NOW), true);
+  assert.equal(isPairVisibleForCategory(mayhemFresh, PAIR_CATEGORIES.NEW, PAIR_FILTER_MODES.ALL, NOW), true);
+  assert.equal(isPairVisibleForCategory(freezeableFresh, PAIR_CATEGORIES.FRESH, PAIR_FILTER_MODES.SAFE, NOW), false);
+  assert.deepEqual(pairRiskFlags(freezeableFresh).filter((flag) => /Authority/.test(flag)).sort(), ["freezeAuthorityActive", "mintAuthorityActive"]);
 });
 
 test("slime scope parses compact market-cap and progress strings", () => {

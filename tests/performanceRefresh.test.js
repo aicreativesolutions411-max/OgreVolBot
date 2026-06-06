@@ -64,10 +64,36 @@ test("api and wallet refresh dedupe concurrent display reads without blanking ca
   assert.match(functionBody("api"), /apiInFlight\.has\(dedupeKey\)/);
   assert.match(functionBody("api"), /action: "api-dedupe"/);
   assert.match(appSource, /let walletRefreshPromise = null/);
+  assert.match(appSource, /let walletRefreshSequence = 0/);
   assert.match(functionBody("refreshWalletState"), /walletRefreshPromise/);
+  assert.match(functionBody("refreshWalletState"), /walletRefreshRequestId/);
+  assert.match(functionBody("refreshWalletState"), /Promise\.race/);
+  assert.match(functionBody("refreshWalletState"), /WALLET_REFRESH_TIMEOUT_MS/);
   assert.match(functionBody("refreshWalletState"), /action: "wallet-refresh-dedupe"/);
   assert.doesNotMatch(functionBody("refreshWalletState"), /state\.balances\s*=\s*\[\]/);
   assert.doesNotMatch(functionBody("refreshWalletState"), /state\.positions\s*=\s*\[\]/);
+});
+
+test("manual wallet refresh has normalized status, timeout, disconnected guard, and forced header path", () => {
+  const refreshBody = functionBody("refreshWalletState");
+  assert.match(appSource, /walletRefreshStatus:\s*"idle"/);
+  assert.match(refreshBody, /Wallet not connected/);
+  assert.match(refreshBody, /ok:\s*false/);
+  assert.match(refreshBody, /state\.walletRefreshStatus = "refreshing"/);
+  assert.match(refreshBody, /state\.walletRefreshStatus = "success"/);
+  assert.match(refreshBody, /state\.walletRefreshStatus = isTimeout \? "timeout" : "error"/);
+  assert.match(refreshBody, /finally/);
+  assert.match(functionBody("refreshWalletNow"), /refreshWalletState\(\{ force, reason, deep \}\)/);
+  assert.match(appSource, /reason: "manual_header_click"/);
+  assert.match(functionBody("loadWalletCore"), /timeoutMs/);
+});
+
+test("manual feed controls update immediately and refresh in deferred background tasks", () => {
+  assert.match(appSource, /function runDeferredUiTask/);
+  assert.match(appSource, /data-refresh-live-pairs[\s\S]*runDeferredUiTask\(\(\) => refreshTerminalFeed/);
+  assert.match(appSource, /data-refresh-watchlist[\s\S]*runDeferredUiTask\(\(\) => refreshTerminalFeed/);
+  assert.match(appSource, /data-refresh-scan[\s\S]*runDeferredUiTask\(\(\) => refreshTerminalFeed/);
+  assert.match(functionBody("scheduleLivePairsAutoRefresh"), /document\.hidden/);
 });
 
 test("wallet and positions refresh run in parallel phases and report durations", () => {
