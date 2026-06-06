@@ -9979,7 +9979,7 @@ function slimeScopeSourceRows() {
     ...(state.kolScan?.rows || [])
   ])
     .map((row) => mergeMarketData(row, marketByMint.get(String(row?.tokenMint || ""))))
-    .filter((row) => row?.tokenMint && !isUiMayhemRow(row));
+    .filter((row) => row?.tokenMint && !isUiBlockedSignalRow(row));
 }
 
 function slimeScopeMarketCap(row = {}) {
@@ -10044,12 +10044,13 @@ function classifySlimeScopeRow(row = {}) {
   if (isGraduatedSlimeScopeRow(row)) return "graduated";
   const explicit = String(row.slimeScopeCategory || "").trim().toLowerCase();
   if (explicit === "graduating") return explicit;
+  if (explicit === "steady" || explicit === "unknown") return "steady";
   const progress = slimeScopeProgressPct(row);
   const marketCap = slimeScopeMarketCap(row);
   if (progress >= 70 || marketCap >= 45_000) return "graduating";
   const age = rowAgeSeconds(row);
   if (Number.isFinite(age) && age <= 60) return "new";
-  return "unknown";
+  return "steady";
 }
 
 function slimeScopePulseScore(row = {}) {
@@ -10090,7 +10091,13 @@ function backfillSlimeScopeRows(primary = [], fallback = [], limit = SLIME_SCOPE
 
 function slimeScopeRows(mode = state.slimeScopeMode) {
   const withMarket = slimeScopeSourceRows();
-  const category = mode === "graduated" ? "graduated" : mode === "graduating" ? "graduating" : "new";
+  const category = mode === "graduated"
+    ? "graduated"
+    : mode === "graduating"
+      ? "graduating"
+      : mode === "steady"
+        ? "steady"
+        : "new";
   const primary = withMarket.filter((row) => classifySlimeScopeRow(row) === category);
   const fallback = withMarket.filter((row) => {
     const rowCategory = classifySlimeScopeRow(row);
@@ -10102,6 +10109,12 @@ function slimeScopeRows(mode = state.slimeScopeMode) {
       return rowCategory !== "graduated"
         && !isGraduatedSlimeScopeRow(row)
         && (progress >= 55 || (marketCap >= 30_000 && marketCap < 90_000));
+    }
+    if (category === "steady") {
+      return rowCategory !== "new"
+        && rowCategory !== "graduating"
+        && rowCategory !== "graduated"
+        && !isGraduatedSlimeScopeRow(row);
     }
     return rowCategory !== "graduated"
       && !isGraduatedSlimeScopeRow(row)
@@ -10116,6 +10129,7 @@ function slimeScopeRows(mode = state.slimeScopeMode) {
 function slimeScopeHtml() {
   const modes = [
     ["new", "New"],
+    ["steady", "Steady"],
     ["graduating", "Graduating"],
     ["graduated", "Graduated"]
   ];
@@ -10127,7 +10141,7 @@ function slimeScopeHtml() {
         <span class="slime-scope-title-icon" aria-hidden="true"></span>
         <div>
           <h3>Slime Scope</h3>
-          <p>Fast pump-style view for new, graduating, and graduated pairs. Mayhem-mode rows stay filtered out.</p>
+          <p>Fast pump-style view for new, steady, graduating, and graduated pairs. Scam-risk rows stay filtered out.</p>
         </div>
         <span>${rows.length}/${allRows.length} shown</span>
       </div>

@@ -188,7 +188,7 @@ export function classifySlimeScopePair(row = {}, now = Date.now()) {
 
   const age = pairAgeMinutes(row, now);
   if (age !== null && age <= 1) return "new";
-  return "unknown";
+  return "steady";
 }
 
 export function computeBestPickScore(row = {}, now = Date.now()) {
