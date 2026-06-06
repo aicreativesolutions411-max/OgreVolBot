@@ -10197,30 +10197,33 @@ function smartChartPumpActivityHtml(token = {}) {
 
 function smartChartPumpPanelHtml(token = {}, mode = "chart") {
   const mint = String(token?.tokenMint || state.smartChartToken || "").trim();
+  const activityOnly = mode === "txns";
   const progress = Math.max(0, Math.min(100, slimeScopeProgressPct(token) || firstUsefulNumber(token.bondingProgressPct, token.pumpProgress, 0)));
   const mc = firstStatLabel(token.marketCapLabel, token.fdvLabel, compactUsd(token.marketCap), compactUsd(token.fdv));
   const liq = firstStatLabel(token.liquidityLabel, compactUsd(token.liquidityUsd));
   const vol = firstStatLabel(token.volumeM15Label, token.volume5mLabel, token.volumeLabel, compactUsd(token.volumeM15), compactUsd(token.volume5m), compactUsd(token.volumeH1));
   return `
-    <div class="smart-chart-frame smart-chart-dex-frame smart-chart-pump-frame" data-loaded="true" data-chart-resolving="false">
+    <div class="smart-chart-frame smart-chart-dex-frame smart-chart-pump-frame${activityOnly ? " pump-activity-only-frame" : ""}" data-loaded="true" data-chart-resolving="false">
       <div class="terminal-title-row">
         <div>
-          <h4>Pump Chart</h4>
-          <p>Native SlimeWire launch chart for unbonded Pump tokens.</p>
+          <h4>${activityOnly ? "Pump Transactions" : "Pump Chart"}</h4>
+          <p>${activityOnly ? "Native SlimeWire Pump activity view for this unbonded launch." : "Native SlimeWire launch chart for unbonded Pump tokens."}</p>
         </div>
         <span class="sniper-pill">${progress ? `${progress.toFixed(0)}% bonded` : "pre-bond"}</span>
       </div>
-      <div class="pump-native-chart">
-        ${pumpChartSvgHtml(token)}
-      </div>
-      <dl class="mini-stats">
-        <div><dt>MC / FDV</dt><dd>${escapeHtml(mc)}</dd></div>
-        <div><dt>Liquidity</dt><dd>${escapeHtml(liq)}</dd></div>
-        <div><dt>Volume</dt><dd>${escapeHtml(vol)}</dd></div>
-        <div><dt>Status</dt><dd>${isUnbondedPumpToken(token) ? "Pump curve" : "Bonded"}</dd></div>
-      </dl>
+      ${activityOnly ? "" : `
+        <div class="pump-native-chart">
+          ${pumpChartSvgHtml(token)}
+        </div>
+        <dl class="mini-stats">
+          <div><dt>MC / FDV</dt><dd>${escapeHtml(mc)}</dd></div>
+          <div><dt>Liquidity</dt><dd>${escapeHtml(liq)}</dd></div>
+          <div><dt>Volume</dt><dd>${escapeHtml(vol)}</dd></div>
+          <div><dt>Status</dt><dd>${isUnbondedPumpToken(token) ? "Pump curve" : "Bonded"}</dd></div>
+        </dl>
+      `}
       ${mode === "chart" ? "" : smartChartPumpActivityHtml(token)}
-      <small>${escapeHtml(mode === "chart" ? "Use Chart + Txns for the Pump activity panel. Trading controls stay live on the right." : "Pump activity stays inside SlimeWire; no off-site chart handoff needed.")}</small>
+      <small>${escapeHtml(mode === "chart" ? "Use Chart + Txns for the Pump activity panel. Trading controls stay live on the right." : activityOnly ? "Transactions shows Pump activity only. Use Chart + Txns when you want both together." : "Chart + Txns keeps Pump chart and activity inside SlimeWire.")}</small>
     </div>
   `;
 }

@@ -1310,6 +1310,13 @@
     var(--slime-chart-grid, transparent);
 }
 
+.smart-chart-pump-frame.pump-activity-only-frame {
+  grid-template-rows: auto auto 1fr;
+  align-content: start;
+  min-height: 360px;
+  height: auto;
+}
+
 .smart-chart-pump-frame .terminal-title-row {
   position: relative;
   z-index: 1;
