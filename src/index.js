@@ -11128,6 +11128,8 @@ async function showPositionsOverview(chatId, userId, messageId = null) {
 async function buildPositionsOverview(userId, options = {}) {
   const store = await readWalletStore();
   const wallets = walletsForOwner(store, userId);
+  const profile = await webProfileForUser(userId).catch(() => null);
+  const connectedWalletPublicKey = profile?.connectedWallet?.publicKey || "";
   const history = await readTradeHistory();
   const positions = new Map();
 
@@ -11160,6 +11162,27 @@ async function buildPositionsOverview(userId, options = {}) {
       // Keep the positions page usable even if one wallet balance lookup is rate-limited.
     }
   });
+
+  if (connectedWalletPublicKey && !wallets.some((wallet) => wallet.publicKey === connectedWalletPublicKey)) {
+    try {
+      const owner = new PublicKey(connectedWalletPublicKey);
+      const { accounts } = await getOwnedTokenAccountsWithWarningsCached(owner, { force: Boolean(options.force) });
+      for (const account of accounts.filter((item) => item.rawAmount > 0n)) {
+        const position = ensurePosition(positions, account.mint);
+        position.rawAmount += account.rawAmount;
+        position.uiAmount += Number.parseFloat(account.uiAmount || "0") || 0;
+        position.wallets.add(connectedWalletPublicKey);
+        position.connectedWallet = true;
+        position.accounts.push({
+          walletPublicKey: connectedWalletPublicKey,
+          rawAmount: account.rawAmount,
+          connectedWallet: true
+        });
+      }
+    } catch (error) {
+      // Browser wallet positions are view-only; keep managed wallet positions usable if the public wallet scan is delayed.
+    }
+  }
 
   const rows = [...positions.values()]
     .filter((position) => position.rawAmount > 0n)
@@ -21765,7 +21788,8 @@ async function webPositionRows(userId, options = {}) {
   return limited.map((position) => {
     const metadata = metadataByMint.get(position.tokenMint) || {};
     const realized = position.received - position.spent;
-    const openPnl = position.estimatedValueLamports !== null
+    const hasCostBasis = position.spent > 0n || position.received > 0n;
+    const openPnl = position.estimatedValueLamports !== null && hasCostBasis
       ? position.estimatedValueLamports + position.received - position.spent
       : null;
     return {
@@ -21789,6 +21813,8 @@ async function webPositionRows(userId, options = {}) {
       estimatedValueSol: position.estimatedValueLamports !== null ? lamportsBigToSol(position.estimatedValueLamports) : null,
       openPnlSol: openPnl !== null ? formatSignedLamports(openPnl) : null,
       openPnlPercent: openPnl !== null && position.spent > 0n ? formatPercentMove(openPnl, position.spent) : null,
+      viewOnly: Boolean(position.connectedWallet),
+      source: position.connectedWallet ? "connected-wallet" : "managed-wallet",
       valuePending: Boolean(position.valuePending),
       valueError: position.valueError || null
     };

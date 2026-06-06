@@ -1692,6 +1692,11 @@ function dexUrl(tokenMint) {
   return mint ? `https://dexscreener.com/solana/${encodeURIComponent(mint)}` : "#";
 }
 
+function pumpUrl(tokenMint) {
+  const mint = String(tokenMint || "").trim();
+  return mint ? `https://pump.fun/coin/${encodeURIComponent(mint)}` : "#";
+}
+
 function kolscanUrl(wallet) {
   const address = String(wallet || "").trim();
   return address ? `https://kolscan.io/account/${encodeURIComponent(address)}` : "https://kolscan.io";
@@ -3192,8 +3197,70 @@ async function loadWatchlist(options = {}) {
   }
 }
 
-function totalSol() {
+function managedSolTotal() {
   return state.balances.reduce((sum, row) => sum + Number(row.sol || 0), 0);
+}
+
+function connectedWalletSol() {
+  const sol = Number(state.connectedWalletBalance?.sol);
+  return Number.isFinite(sol) && sol > 0 ? sol : 0;
+}
+
+function totalSol() {
+  return managedSolTotal() + connectedWalletSol();
+}
+
+function connectedWalletTokenRows() {
+  const connected = state.connectedWalletBalance || state.user?.connectedWallet || null;
+  if (!connected?.publicKey) return [];
+  return (state.connectedWalletBalance?.tokens || []).filter((token) => token?.mint || token?.tokenMint).map((token) => {
+    const mint = String(token.mint || token.tokenMint || "").trim();
+    return {
+      tokenMint: mint,
+      shortMint: token.shortMint || shortAddress(mint),
+      symbol: token.symbol || token.shortMint || shortAddress(mint),
+      name: token.name || "",
+      imageUrl: token.imageUrl || token.imageUri || "",
+      imageUri: token.imageUri || token.imageUrl || "",
+      dexUrl: token.dexUrl || dexUrl(mint),
+      pumpUrl: pumpUrl(mint),
+      uiAmount: token.uiAmount ?? "held",
+      walletCount: 1,
+      buys: 0,
+      sells: 0,
+      spentSol: "0",
+      receivedSol: "0",
+      realizedSol: "+0",
+      estimatedValueSol: null,
+      openPnlSol: null,
+      openPnlPercent: null,
+      valuePending: false,
+      valueError: "",
+      viewOnly: true,
+      source: "connected-wallet"
+    };
+  });
+}
+
+function portfolioPositions() {
+  const seen = new Set();
+  const rows = [];
+  for (const row of [...(state.positions || []), ...connectedWalletTokenRows()]) {
+    const mint = String(row?.tokenMint || row?.mint || "").trim();
+    if (!mint || seen.has(mint)) continue;
+    seen.add(mint);
+    rows.push(row);
+  }
+  return rows;
+}
+
+function portfolioWalletCount() {
+  const connected = state.connectedWalletBalance?.publicKey || state.user?.connectedWallet?.publicKey || "";
+  return state.wallets.length + (connected ? 1 : 0);
+}
+
+function portfolioRealizedPnlLabel() {
+  return state.pnl?.totals?.realizedSol || "+0 SOL";
 }
 
 function secondsSince(isoText) {
@@ -3590,7 +3657,7 @@ function setRouteSectionHidden(element, hidden) {
 
 function syncShellRouteVisibility() {
   if (!app || !loginView || !dashboardView) return;
-  const hasWalletContext = Boolean(state.user?.connectedWallet || state.wallets.length);
+  const hasWalletContext = Boolean(state.user?.connectedWallet || state.connectedWalletBalance?.publicKey || state.wallets.length);
   app.dataset.loading = state.loading ? "true" : "false";
   app.dataset.route = state.route;
   app.dataset.walletConnected = hasWalletContext ? "true" : "false";
@@ -3714,7 +3781,7 @@ function render(options = {}) {
     [renderKey]: (state.perfRenderCounts?.[renderKey] || 0) + 1
   };
   state.pendingRender = false;
-  const hasWalletContext = Boolean(state.user?.connectedWallet || state.wallets.length);
+  const hasWalletContext = Boolean(state.user?.connectedWallet || state.connectedWalletBalance?.publicKey || state.wallets.length);
   syncShellRouteVisibility();
   app.dataset.activeTab = state.activeTab || "";
   const preserveSmartChartPanel = Boolean(
@@ -3747,12 +3814,13 @@ function render(options = {}) {
   syncShellRouteVisibility();
 
   setText("[data-user-id]", state.user?.id || "guest");
-  setText("[data-wallet-count]", state.wallets.length);
+  setText("[data-wallet-count]", portfolioWalletCount());
   setText("[data-total-sol]", totalSol().toFixed(4));
-  setText("[data-position-count]", state.positions.length);
-  setText("[data-realized]", state.pnl?.totals?.realizedSol || "+0 SOL");
+  const positionRows = portfolioPositions();
+  setText("[data-position-count]", positionRows.length);
+  setText("[data-realized]", portfolioRealizedPnlLabel());
   setText("[data-top-sol]", `${totalSol().toFixed(4)} SOL`);
-  setText("[data-top-portfolio]", `${state.positions.length} position${state.positions.length === 1 ? "" : "s"}`);
+  setText("[data-top-portfolio]", `${positionRows.length} position${positionRows.length === 1 ? "" : "s"}`);
   setText("[data-sync-health]", hasWalletContext ? syncHealthLabel() : "Sync idle");
   setText("[data-active-preset-label]", activePresetSummary());
   updateTopTpSlStatus();
@@ -9548,11 +9616,11 @@ function connectedWalletCardHtml() {
 }
 
 function walletBalanceSummaryHtml() {
-  const tokenTotal = state.balances.reduce((sum, row) => sum + Number(row.tokens?.length || 0), 0);
+  const tokenTotal = state.balances.reduce((sum, row) => sum + Number(row.tokens?.length || 0), 0) + connectedWalletTokenRows().length;
   const errorCount = state.balances.filter((row) => row.error).length;
   return `
     <section class="pnl-summary wallet-summary">
-      <div><span>Wallets</span><strong>${state.wallets.length}</strong></div>
+      <div><span>Wallets</span><strong>${portfolioWalletCount()}</strong></div>
       <div><span>Total SOL</span><strong>${totalSol().toFixed(4)}</strong></div>
       <div><span>Token Accounts</span><strong>${tokenTotal}</strong></div>
       <div><span>Balance Errors</span><strong>${errorCount}</strong></div>
@@ -9571,6 +9639,7 @@ function walletBalanceLine(wallet) {
 }
 
 function positionsHtml() {
+  const rows = portfolioPositions();
   const header = `
     <section class="account-check-card">
       <div>
@@ -9582,11 +9651,11 @@ function positionsHtml() {
       <button data-tab="pnl">PnL History</button>
     </section>
   `;
-  if (!state.positions.length) return `${header}${emptyState("No open positions", "Current token holdings will show here after a wallet holds non-zero tokens.")}`;
+  if (!rows.length) return `${header}${emptyState("No open positions", "Current token holdings will show here after a wallet holds non-zero tokens.")}`;
   return `
     ${header}
     <div class="table-list">
-      ${state.positions.map(positionRowHtml).join("")}
+      ${rows.map(positionRowHtml).join("")}
     </div>
   `;
 }
@@ -10033,8 +10102,6 @@ function dexChartEmbedUrl(tokenOrMint, options = {}) {
 
 function smartChartFrameUrl(token = {}, mode = "chart") {
   const mint = String(token?.tokenMint || state.smartChartToken || "").trim();
-  const pumpUrl = pumpUrlForRow(token);
-  if (pumpUrl && isUnbondedPumpToken(token) && ["chart", "chartTxns", "txns"].includes(mode)) return pumpUrl;
   const bootstrap = smartChartBootstrapForMint(mint);
   if (mode === "info" && bootstrap?.infoUrl) return bootstrap.infoUrl;
   if ((mode === "chartTxns" || mode === "txns") && (bootstrap?.chartTxnsUrl || bootstrap?.txnsUrl)) {
@@ -10044,11 +10111,32 @@ function smartChartFrameUrl(token = {}, mode = "chart") {
   return dexChartEmbedUrl(token, { trades: mode === "chartTxns" || mode === "txns", info: mode === "info" });
 }
 
+function smartChartPumpPanelHtml(token = {}, mode = "chart") {
+  const mint = String(token?.tokenMint || state.smartChartToken || "").trim();
+  const link = pumpUrlForRow(token) || pumpUrl(mint);
+  const dexLink = token.dexUrl || dexUrl(mint);
+  return `
+    <div class="smart-chart-frame smart-chart-dex-frame smart-chart-pump-frame" data-loaded="true" data-chart-resolving="false">
+      <div class="smart-chart-empty-transactions">
+        <strong>Pump chart opens on Pump</strong>
+        <span>This token has not bonded yet, so SlimeWire keeps trade controls here and opens the live Pump chart/transactions in the correct market page.</span>
+        <div class="card-actions compact">
+          <a class="primary" href="${escapeHtml(link)}" target="_blank" rel="noreferrer">Open Pump Chart</a>
+          <a href="${escapeHtml(dexLink)}" target="_blank" rel="noreferrer">Try DEX</a>
+          <button type="button" data-copy="${escapeHtml(mint)}">Copy CA</button>
+        </div>
+        <small>${escapeHtml(mode === "txns" || mode === "chartTxns" ? "Pump transactions and chart are available from the Pump page." : "After bonding, this chart will use the DexScreener embed automatically.")}</small>
+      </div>
+    </div>
+  `;
+}
+
 function smartChartDexFrameHtml(token = {}, mode = "chart") {
   const mint = String(token?.tokenMint || state.smartChartToken || "").trim();
   const isTransactions = mode === "chartTxns" || mode === "txns";
   const isInfo = mode === "info";
   const isPumpChart = Boolean(pumpUrlForRow(token) && isUnbondedPumpToken(token) && ["chart", "chartTxns", "txns"].includes(mode));
+  if (isPumpChart) return smartChartPumpPanelHtml(token, mode);
   const resolvingPair = queueSmartChartBootstrap(token) || queueSmartChartDexResolution(token);
   const title = isInfo
     ? `DexScreener info for ${token.symbol || shortAddress(mint)}`
@@ -10884,7 +10972,7 @@ function openPresetEditorTab(kind) {
 
 function tokenPreviewHtml(token) {
   if (!token?.tokenMint) return emptyState("No token selected", "Click any row to preview it here without leaving the live feeds.");
-  const hasPosition = state.positions.some((position) => String(position.tokenMint) === String(token.tokenMint));
+  const hasPosition = portfolioPositions().some((position) => String(position.tokenMint) === String(token.tokenMint));
   return `
     <div class="token-preview-card with-avatar">
       ${livePairAvatarHtml(token)}
@@ -11062,7 +11150,7 @@ function chartTradePanelHtml(token = {}, heldPosition = null) {
 function smartChartHtml() {
   const token = selectedSmartChartTokenRow();
   const mint = String(token?.tokenMint || "").trim();
-  const heldPosition = mint ? state.positions.find((position) => String(position.tokenMint) === mint) : null;
+  const heldPosition = mint ? portfolioPositions().find((position) => String(position.tokenMint) === mint) : null;
   const relatedRows = mint
     ? uniqueSignalRows([
         token,
@@ -11144,7 +11232,7 @@ function smartChartHtml() {
             <small class="score-breakdown">If the embedded chart does not load, use the ${isUnbondedPumpToken(token) ? "Pump" : "DEX"} link above.</small>
           ` : chartView === "chartTxns" ? `
             ${smartChartDexFrameHtml(token, "chartTxns")}
-            <small class="score-breakdown">Chart + Txns loads the DexScreener transaction feed inside the chart frame. Use Transactions for the dedicated DEX feed view.</small>
+            <small class="score-breakdown">Chart + Txns uses Pump before bonding and DexScreener after bonding. Use Transactions for the dedicated market feed view.</small>
           ` : chartView === "txns" ? `
             ${smartChartTransactionsHtml(token, heldPosition)}
           ` : `
@@ -11306,10 +11394,11 @@ function terminalSubtabHtml() {
 }
 
 function positionsTableHtml(limit = 25) {
-  if (!state.positions.length) return emptyState("No open positions", "Open token holdings will show here after refresh.");
+  const rows = portfolioPositions();
+  if (!rows.length) return emptyState("No open positions", "Open token holdings will show here after refresh.");
   return `
     <div class="table-list compact-table">
-      ${state.positions.slice(0, limit).map(positionRowHtml).join("")}
+      ${rows.slice(0, limit).map(positionRowHtml).join("")}
     </div>
   `;
 }
@@ -11318,20 +11407,27 @@ function positionRowHtml(position) {
   const hasEstimatedValue = position.estimatedValueSol !== null && position.estimatedValueSol !== undefined && position.estimatedValueSol !== "";
   const hasOpenPnl = position.openPnlSol !== null && position.openPnlSol !== undefined && position.openPnlSol !== "";
   const isValueUpdating = Boolean(position.valuePending || (!hasEstimatedValue && /refreshing|updating|background/i.test(position.valueError || "")));
+  const isConnectedWalletPosition = Boolean(position.viewOnly || position.source === "connected-wallet");
   const valueLabel = hasEstimatedValue
     ? `${position.estimatedValueSol} SOL`
     : isValueUpdating
       ? "updating"
-      : "Price unavailable";
+      : isConnectedWalletPosition
+        ? "tracking"
+        : "Price unavailable";
   const pnlLabel = hasOpenPnl
     ? position.openPnlSol
     : isValueUpdating
       ? "updating"
-      : "Price unavailable";
+      : isConnectedWalletPosition
+        ? "realized only"
+        : "Price unavailable";
   const valueStatus = position.valueError
     ? isValueUpdating
       ? "Value updating in background"
       : `Price warning: ${position.valueError}`
+    : isConnectedWalletPosition && !hasEstimatedValue
+      ? "Connected wallet holding - live value pending"
     : "";
   return `
     <article class="row-card position with-avatar">
