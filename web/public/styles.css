@@ -9150,3 +9150,63 @@ body {
     transform: translateY(15px) scale(0.988) !important;
   }
 }
+
+/* SLIME_SWAMP_SUPPORT_RAILS_V13: mobile uses support-frame borders, not the outer swamp border. */
+@media (max-width: 760px) {
+  body:has([data-app][data-route="intro"]) {
+    background: #000 !important;
+  }
+
+  body:has([data-app][data-route="intro"])::before,
+  body:has([data-app][data-route="intro"])::after,
+  [data-app][data-route="intro"]::before,
+  [data-app][data-route="intro"]::after {
+    content: none !important;
+    display: none !important;
+  }
+
+  [data-app][data-route="intro"],
+  [data-app][data-route="intro"] .login-view.swamp-splash {
+    background: #000 !important;
+    border: 0 !important;
+    box-shadow: none !important;
+  }
+
+  [data-app][data-route="intro"] .login-view.swamp-splash {
+    padding-top: calc(env(safe-area-inset-top, 0px) + 18px) !important;
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 30px) !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-support-frame {
+    width: min(91vw, 418px) !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-sponsor-frame {
+    margin-top: 4px !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-sponsor-frame .swamp-support-frame-art {
+    clip-path: inset(12px 0 0 0) !important;
+    transform: translateY(20px) scale(0.985) !important;
+    transform-origin: top center !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-sponsor-frame .swamp-support-content {
+    padding-top: clamp(100px, 24vw, 122px) !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-kol-frame .swamp-support-content {
+    padding-top: clamp(70px, 18vw, 86px) !important;
+    padding-bottom: 15% !important;
+    gap: 5px !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-kol-frame .swamp-support-bubble {
+    min-height: 38px !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-kol-frame .swamp-support-content::after {
+    content: none !important;
+    display: none !important;
+  }
+}
