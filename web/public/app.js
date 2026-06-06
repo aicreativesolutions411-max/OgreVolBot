@@ -12693,7 +12693,7 @@ function ogreAgentHtml() {
           ${state.ogreAgentLoading ? `<div class="ogre-agent-message assistant"><p>Ogre is thinking...</p></div>` : ""}
         </div>
         <div class="ogre-agent-composer">
-          <textarea data-ogre-agent-input rows="2" placeholder="Ask: buy this CA with 25% preset, show positions, how do I use TP/SL..."></textarea>
+          <textarea data-ogre-agent-input rows="2" placeholder="Ask: buy this CA with 25% preset, show positions, how do I use TP/SL...">${escapeHtml(state.ogreAgentDraft || "")}</textarea>
           <button type="button" data-ogre-agent-send ${state.ogreAgentLoading ? "disabled" : ""}>Send</button>
         </div>
         ${state.ogreAgentStatus ? `<small class="ogre-agent-status">${escapeHtml(state.ogreAgentStatus)}</small>` : ""}
@@ -12702,14 +12702,42 @@ function ogreAgentHtml() {
   `;
 }
 
-function renderOgreAgent() {
+function renderOgreAgent({ force = false } = {}) {
   let root = document.querySelector("[data-ogre-agent-mount]");
   if (!root) {
     root = document.createElement("div");
     root.dataset.ogreAgentMount = "true";
     document.body.appendChild(root);
   }
+  const inputBefore = root.querySelector("[data-ogre-agent-input]");
+  const inputActive = Boolean(inputBefore && document.activeElement === inputBefore);
+  const selectionStart = inputActive ? inputBefore.selectionStart : null;
+  const selectionEnd = inputActive ? inputBefore.selectionEnd : null;
+  if (inputBefore) state.ogreAgentDraft = inputBefore.value;
+  const messages = Array.isArray(state.ogreAgentMessages) ? state.ogreAgentMessages : [];
+  const lastMessage = messages[messages.length - 1] || {};
+  const signature = [
+    state.ogreAgentOpen ? "open" : "closed",
+    state.ogreAgentLoading ? "loading" : "idle",
+    state.ogreAgentStatus || "",
+    messages.length,
+    lastMessage.role || "",
+    lastMessage.text || "",
+    Array.isArray(lastMessage.actions) ? lastMessage.actions.length : 0
+  ].join("|");
+  if (!force && inputActive && root.dataset.ogreAgentSignature === signature) return;
   root.innerHTML = ogreAgentHtml();
+  root.dataset.ogreAgentSignature = signature;
+  const inputAfter = root.querySelector("[data-ogre-agent-input]");
+  if (inputAfter) {
+    inputAfter.value = state.ogreAgentDraft || "";
+    if (inputActive) {
+      inputAfter.focus({ preventScroll: true });
+      if (selectionStart !== null && selectionEnd !== null) {
+        inputAfter.setSelectionRange(selectionStart, selectionEnd);
+      }
+    }
+  }
   const feed = root.querySelector("[data-ogre-agent-feed]");
   if (feed) feed.scrollTop = feed.scrollHeight;
 }
@@ -13123,6 +13151,7 @@ async function sendOgreAgentMessage() {
   const message = String(input?.value || "").trim();
   if (!message || state.ogreAgentLoading) return;
   if (input) input.value = "";
+  state.ogreAgentDraft = "";
   pushOgreAgentMessage({ role: "user", text: message, actions: [] });
   state.ogreAgentLoading = true;
   state.ogreAgentStatus = "";
