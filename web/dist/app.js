@@ -12553,6 +12553,195 @@ function ogreRiskModalHtml({ validation, quote, market, confirmButtonText, confi
   `;
 }
 
+function ogreAgentInitialMessage() {
+  return {
+    role: "assistant",
+    text: "Ogre Agent ready. Ask me how to use the panel, or tell me to open charts, refresh feeds, show positions, or prepare a buy/sell for confirmation.",
+    actions: [
+      { label: "Show Positions", type: "open_tab", tab: "positions" },
+      { label: "Refresh Feeds", type: "refresh_feeds" },
+      { label: "Best Picks", type: "open_tab", tab: "ogreAi" }
+    ]
+  };
+}
+
+function ogreAgentMessages() {
+  if (!Array.isArray(state.ogreAgentMessages) || !state.ogreAgentMessages.length) {
+    state.ogreAgentMessages = [ogreAgentInitialMessage()];
+  }
+  return state.ogreAgentMessages;
+}
+
+function ogreAgentContext() {
+  return {
+    route: state.route,
+    activeTab: state.activeTab,
+    smartChartToken: state.smartChartToken || "",
+    tradeToken: state.tradeToken || "",
+    livePairBucket: state.livePairBucket || "",
+    slimeScopeMode: state.slimeScopeMode || "",
+    walletConnected: Boolean(state.user?.connectedWallet || state.connectedWalletBalance?.publicKey),
+    walletCount: portfolioWalletCount(),
+    positionCount: portfolioPositions().length,
+    totalSol: totalSol().toFixed(4),
+    selectedTradePreset: activePresetDetail("trade"),
+    selectedBundlePreset: activePresetDetail("bundle")
+  };
+}
+
+function ogreAgentActionLabel(action = {}) {
+  return String(action.label || action.type || "Run").slice(0, 40);
+}
+
+function ogreAgentMessageHtml(message = {}, messageIndex = 0) {
+  const actions = Array.isArray(message.actions) ? message.actions.slice(0, 4) : [];
+  return `
+    <div class="ogre-agent-message ${message.role === "user" ? "user" : "assistant"}">
+      <p>${escapeHtml(message.text || "")}</p>
+      ${actions.length ? `<div class="ogre-agent-actions">${actions.map((action, actionIndex) => `<button type="button" data-ogre-agent-action="${messageIndex}:${actionIndex}">${escapeHtml(ogreAgentActionLabel(action))}</button>`).join("")}</div>` : ""}
+    </div>
+  `;
+}
+
+function ogreAgentHtml() {
+  const open = Boolean(state.ogreAgentOpen);
+  const messages = ogreAgentMessages();
+  return `
+    <div class="ogre-agent-shell ${open ? "is-open" : ""}" data-ogre-agent-root>
+      <button type="button" class="ogre-agent-bubble" data-ogre-agent-toggle aria-label="Open Ogre Agent" aria-expanded="${open ? "true" : "false"}">
+        <img src="./assets/slimewire/clean-ui/side_nav_icons/active/ogre_ai.png" alt="Ogre Agent">
+        <span>Ask</span>
+      </button>
+      <section class="ogre-agent-panel" ${open ? "" : "hidden"} aria-live="polite">
+        <header>
+          <div>
+            <span>Ogre Agent</span>
+            <small>Panel help + safe task staging</small>
+          </div>
+          <button type="button" data-ogre-agent-close aria-label="Close Ogre Agent">×</button>
+        </header>
+        <div class="ogre-agent-feed" data-ogre-agent-feed>
+          ${messages.map(ogreAgentMessageHtml).join("")}
+          ${state.ogreAgentLoading ? `<div class="ogre-agent-message assistant"><p>Ogre is thinking...</p></div>` : ""}
+        </div>
+        <div class="ogre-agent-composer">
+          <textarea data-ogre-agent-input rows="2" placeholder="Ask: buy this CA with 25% preset, show positions, how do I use TP/SL..."></textarea>
+          <button type="button" data-ogre-agent-send ${state.ogreAgentLoading ? "disabled" : ""}>Send</button>
+        </div>
+        ${state.ogreAgentStatus ? `<small class="ogre-agent-status">${escapeHtml(state.ogreAgentStatus)}</small>` : ""}
+      </section>
+    </div>
+  `;
+}
+
+function renderOgreAgent() {
+  let root = document.querySelector("[data-ogre-agent-mount]");
+  if (!root) {
+    root = document.createElement("div");
+    root.dataset.ogreAgentMount = "true";
+    document.body.appendChild(root);
+  }
+  root.innerHTML = ogreAgentHtml();
+  const feed = root.querySelector("[data-ogre-agent-feed]");
+  if (feed) feed.scrollTop = feed.scrollHeight;
+}
+
+function pushOgreAgentMessage(message = {}) {
+  state.ogreAgentMessages = [...ogreAgentMessages(), message].slice(-16);
+}
+
+function ogreAgentActionFromKey(key = "") {
+  const [messageIndexText, actionIndexText] = String(key).split(":");
+  const message = ogreAgentMessages()[Number(messageIndexText)];
+  return message?.actions?.[Number(actionIndexText)] || null;
+}
+
+function runOgreAgentAction(action = {}) {
+  const type = String(action.type || "");
+  const tokenMint = String(action.tokenMint || action.mint || state.smartChartToken || state.tradeToken || "").trim();
+  if (type === "open_tab") {
+    state.route = "terminal";
+    state.activeTab = action.tab || "terminal";
+    window.history.pushState({}, "", action.path || "/terminal");
+    render({ force: true });
+    return;
+  }
+  if (type === "open_chart" || type === "prepare_buy") {
+    if (!tokenMint) {
+      state.ogreAgentStatus = "Paste a token CA in the message first.";
+      renderOgreAgent();
+      return;
+    }
+    openTokenChart(tokenRefFromMint(tokenMint, { source: "ogre-agent" }), {
+      defaultTab: type === "prepare_buy" ? "buy" : "chart",
+      focusAmountInput: type === "prepare_buy",
+      source: "ogre-agent"
+    });
+    return;
+  }
+  if (type === "prepare_sell") {
+    state.route = "terminal";
+    state.activeTab = "positions";
+    window.history.pushState({}, "", "/terminal");
+    state.ogreAgentStatus = action.percent ? `Sell ${action.percent}% staged. Use the position card confirm buttons.` : "Open Positions and use the sell confirm buttons.";
+    render({ force: true });
+    return;
+  }
+  if (type === "refresh_wallet") {
+    runDeferredUiTask(() => refreshWalletNow({ force: true, reason: "ogre_agent" }));
+    state.ogreAgentStatus = "Wallet refresh started.";
+    renderOgreAgent();
+    return;
+  }
+  if (type === "refresh_feeds") {
+    runDeferredUiTask(() => refreshVisibleTerminalFeeds({ force: true, reason: "ogre_agent" }));
+    state.ogreAgentStatus = "Feed refresh started.";
+    renderOgreAgent();
+    return;
+  }
+  state.ogreAgentStatus = "Action noted. Ask Ogre to open a panel, chart, refresh, or prepare a trade.";
+  renderOgreAgent();
+}
+
+async function sendOgreAgentMessage() {
+  const input = document.querySelector("[data-ogre-agent-input]");
+  const message = String(input?.value || "").trim();
+  if (!message || state.ogreAgentLoading) return;
+  if (input) input.value = "";
+  pushOgreAgentMessage({ role: "user", text: message, actions: [] });
+  state.ogreAgentLoading = true;
+  state.ogreAgentStatus = "";
+  renderOgreAgent();
+  try {
+    const data = await api("/api/web/ogre-agent/chat", {
+      method: "POST",
+      body: JSON.stringify({ message, context: ogreAgentContext() }),
+      timeoutMs: 14_000,
+      dedupe: false,
+      preserveSafeError: true
+    });
+    pushOgreAgentMessage({
+      role: "assistant",
+      text: data?.agent?.reply || "I can help with panel functions, charts, positions, presets, and safe task staging.",
+      actions: data?.agent?.actions || []
+    });
+    state.ogreAgentStatus = data?.agent?.modelPowered ? "AI reply" : "Fast local Ogre reply";
+  } catch (error) {
+    pushOgreAgentMessage({
+      role: "assistant",
+      text: "Ogre Agent is still here, but the server reply timed out. I can still open panels, refresh feeds, and stage chart actions.",
+      actions: [
+        { label: "Refresh Feeds", type: "refresh_feeds" },
+        { label: "Positions", type: "open_tab", tab: "positions" },
+        { label: "Live Terminal", type: "open_tab", tab: "terminal" }
+      ]
+    });
+    state.ogreAgentStatus = error?.message || "Agent reply failed.";
+  } finally {
+    state.ogreAgentLoading = false;
+    renderOgreAgent();
+  }
+}
 function emptyState(title, body) {
   return `<article class="empty"><h3>${escapeHtml(title)}</h3><p>${escapeHtml(body)}</p></article>`;
 }
@@ -13838,4 +14027,5 @@ if (!window.__slimeStablePumpChartTimer) {
     slimePumpChartRerender();
   }, 8000);
 }
+
 

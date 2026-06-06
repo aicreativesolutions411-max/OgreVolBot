@@ -7356,3 +7356,216 @@ textarea,
     grid-template-columns: 1fr;
   }
 }
+
+/* OGRE_AGENT_BUBBLE_V1 */
+[data-app][data-route="terminal"] {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding-left: clamp(6px, 1vw, 14px) !important;
+  padding-right: clamp(6px, 1vw, 14px) !important;
+}
+
+[data-app][data-route="terminal"] .dashboard {
+  width: 100% !important;
+  max-width: none !important;
+  min-height: calc(100dvh - 118px) !important;
+  grid-template-columns: 76px minmax(0, 1fr) !important;
+  align-items: start !important;
+  justify-content: stretch !important;
+}
+
+[data-app][data-route="terminal"] .tabs {
+  align-self: start !important;
+  max-height: calc(100dvh - 118px) !important;
+  overflow-y: auto !important;
+  scrollbar-width: thin !important;
+}
+
+[data-app][data-route="terminal"] [data-panel],
+[data-app][data-route="terminal"] .panel-host,
+[data-app][data-route="terminal"] .terminal-layout,
+[data-app][data-route="terminal"] .command-terminal,
+[data-app][data-route="terminal"] .command-workspace,
+[data-app][data-route="terminal"] .terminal-main {
+  width: 100% !important;
+  max-width: none !important;
+  min-width: 0 !important;
+}
+
+[data-app][data-route="terminal"] .panel-host {
+  min-height: calc(100dvh - 132px) !important;
+}
+
+@media (min-width: 1181px) {
+  [data-app][data-route="terminal"] .command-terminal.trade-panel-collapsed {
+    grid-template-columns: minmax(0, 1fr) 52px !important;
+  }
+}
+
+.ogre-agent-shell {
+  bottom: max(16px, env(safe-area-inset-bottom));
+  pointer-events: none;
+  position: fixed;
+  right: max(16px, env(safe-area-inset-right));
+  z-index: 7200;
+}
+
+.ogre-agent-bubble,
+.ogre-agent-panel {
+  pointer-events: auto;
+}
+
+.ogre-agent-bubble {
+  align-items: center;
+  background: radial-gradient(circle at 35% 22%, rgba(151, 255, 74, 0.2), rgba(0, 18, 7, 0.96));
+  border: 1px solid rgba(125, 255, 44, 0.42);
+  border-radius: 999px;
+  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.48), 0 0 24px rgba(112, 255, 61, 0.22);
+  color: #eaffdf;
+  cursor: pointer;
+  display: flex;
+  gap: 7px;
+  min-height: 58px;
+  padding: 7px 11px 7px 7px;
+}
+
+.ogre-agent-bubble img {
+  border-radius: 999px;
+  height: 44px;
+  object-fit: cover;
+  width: 44px;
+}
+
+.ogre-agent-bubble span {
+  font-size: 0.78rem;
+  font-weight: 950;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ogre-agent-panel {
+  background: linear-gradient(180deg, rgba(4, 18, 7, 0.98), rgba(0, 7, 3, 0.98));
+  border: 1px solid rgba(125, 255, 44, 0.32);
+  border-radius: 18px;
+  bottom: 72px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.62), inset 0 0 0 1px rgba(125, 255, 44, 0.05);
+  display: grid;
+  gap: 10px;
+  max-height: min(560px, calc(100dvh - 120px));
+  padding: 12px;
+  position: absolute;
+  right: 0;
+  width: min(390px, calc(100vw - 24px));
+}
+
+.ogre-agent-panel[hidden] {
+  display: none !important;
+}
+
+.ogre-agent-panel header {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.ogre-agent-panel header span {
+  color: #eaffdf;
+  display: block;
+  font-weight: 950;
+}
+
+.ogre-agent-panel header small,
+.ogre-agent-status {
+  color: rgba(226, 255, 220, 0.68);
+}
+
+.ogre-agent-panel header button {
+  border-radius: 999px;
+  min-height: 34px;
+  padding: 0 11px;
+}
+
+.ogre-agent-feed {
+  display: grid;
+  gap: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 3px;
+}
+
+.ogre-agent-message {
+  border: 1px solid rgba(125, 255, 44, 0.15);
+  border-radius: 14px;
+  background: rgba(5, 20, 7, 0.72);
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+}
+
+.ogre-agent-message.user {
+  background: rgba(112, 255, 61, 0.12);
+  border-color: rgba(112, 255, 61, 0.28);
+  margin-left: 34px;
+}
+
+.ogre-agent-message.assistant {
+  margin-right: 20px;
+}
+
+.ogre-agent-message p {
+  color: rgba(242, 255, 235, 0.92);
+  line-height: 1.35;
+  margin: 0;
+}
+
+.ogre-agent-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ogre-agent-actions button {
+  min-height: 31px;
+  padding: 0 9px;
+  font-size: 0.78rem;
+}
+
+.ogre-agent-composer {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.ogre-agent-composer textarea {
+  min-height: 48px;
+  resize: none;
+}
+
+.ogre-agent-composer button {
+  min-width: 68px;
+}
+
+@media (max-width: 760px) {
+  .ogre-agent-shell {
+    bottom: max(12px, env(safe-area-inset-bottom));
+    right: max(12px, env(safe-area-inset-right));
+  }
+
+  .ogre-agent-bubble {
+    min-height: 52px;
+    padding-right: 8px;
+  }
+
+  .ogre-agent-bubble img {
+    height: 40px;
+    width: 40px;
+  }
+
+  .ogre-agent-panel {
+    bottom: 64px;
+    max-height: min(520px, calc(100dvh - 98px));
+    width: min(360px, calc(100vw - 20px));
+  }
+}

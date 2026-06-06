@@ -1,4 +1,4 @@
-import crypto from "node:crypto";
+﻿import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import http from "node:http";
@@ -481,6 +481,8 @@ function loadConfig() {
   const cacheConnectTimeoutMs = Number.parseInt(process.env.CACHE_CONNECT_TIMEOUT_MS || "800", 10);
   const cacheCircuitBreakerMs = Number.parseInt(process.env.CACHE_CIRCUIT_BREAKER_MS || "15000", 10);
   const heliusWsUrl = String(process.env.HELIUS_WS_URL || process.env.HELIUS_WEBSOCKET_URL || "").trim();
+  const openaiApiKey = String(process.env.OPENAI_API_KEY || "").trim();
+  const ogreAgentModel = String(process.env.OGRE_AGENT_MODEL || "gpt-4.1-mini").trim();
 
   if (!Number.isInteger(bundleFeeBps) || bundleFeeBps < 0 || bundleFeeBps > 1000) {
     throw new Error("TRADE_FEE_BPS/BUNDLE_FEE_BPS must be an integer from 0 to 1000.");
@@ -1414,6 +1416,13 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "POST" && pathname === "/api/web/ogre-agent/chat") {
+      const body = await readJsonRequestBody(request, 32_000);
+      const agent = await webOgreAgentReply(body);
+      sendWebJson(request, response, 200, { ok: true, agent });
+      return;
+    }
+
     if (request.method === "POST" && pathname === "/api/web/terminal-feed-event") {
       const body = await readJsonRequestBody(request, 8_000);
       await recordTerminalFeedEvent(body, request);
@@ -2227,6 +2236,120 @@ function originFromUrl(value) {
   }
 }
 
+function ogreAgentTokenMintFromText(text = "") {
+  const match = String(text).match(/\b[A-HJ-NP-Za-km-z1-9]{32,48}\b/);
+  return match ? match[0] : "";
+}
+
+function ogreAgentFallbackReply(message = "", context = {}) {
+  const text = String(message || "").trim();
+  const lower = text.toLowerCase();
+  const tokenMint = ogreAgentTokenMintFromText(text) || String(context.smartChartToken || context.tradeToken || "").trim();
+  const actions = [];
+  let reply = "I can help with SlimeWire panel functions: charts, Live Pairs, Slime Scope, positions, wallet refresh, presets, Ogre A.I., Pump Launch, Bundle Volume, and safe trade staging.";
+
+  if (/secret|api key|env|environment|render env|source code|github|backend|security|private key|wallet seed|seed phrase|codebase|database/i.test(lower)) {
+    return {
+      reply: "I can help with user-side SlimeWire functions, but I cannot discuss secrets, security internals, code, env vars, private keys, or backend setup. Ask me how to use the panel, read positions, use presets, or stage trades safely.",
+      actions: [
+        { label: "Open Help Panels", type: "open_tab", tab: "terminal" },
+        { label: "Show Positions", type: "open_tab", tab: "positions" }
+      ],
+      intent: "blocked_internal"
+    };
+  }
+
+  if (/position|holding|wallet|balance|portfolio/.test(lower)) {
+    reply = "I can open your portfolio area. Use Refresh Wallet if a recent buy/sell has not appeared yet; existing rows stay visible while Slime refreshes in the background.";
+    actions.push({ label: "Show Positions", type: "open_tab", tab: "positions" }, { label: "Wallets", type: "open_tab", tab: "wallets" }, { label: "Refresh Wallet", type: "refresh_wallet" });
+  }
+  if (/live pair|fresh|new pair|launch|slime scope|feed/.test(lower)) {
+    reply = "Fresh launches live in Live Terminal Fresh and Slime Scope New. I can open the feed and force a refresh without changing your current presets.";
+    actions.push({ label: "Live Terminal", type: "open_tab", tab: "terminal" }, { label: "Live Pairs", type: "open_tab", tab: "live" }, { label: "Refresh Feeds", type: "refresh_feeds" });
+  }
+  if (/chart|ca|token|dex|pump/.test(lower) && tokenMint) {
+    reply = "I found a token CA. I can open the Slime chart now. Pump/Dex source buttons stay inside the chart panel; Slime is the fast default.";
+    actions.push({ label: "Open Chart", type: "open_chart", tokenMint });
+  }
+  if (/buy|ape|enter/.test(lower)) {
+    reply = tokenMint
+      ? "I can prepare that buy in the chart/trade panel. I will not submit a trade silently; you still confirm the amount, wallet, preset, and risk before it sends."
+      : "Paste the token CA with your buy request and I can stage the buy panel for confirmation.";
+    actions.push(tokenMint ? { label: "Prepare Buy", type: "prepare_buy", tokenMint } : { label: "Open Trade", type: "open_tab", tab: "trade" });
+  }
+  if (/sell|exit|close/.test(lower)) {
+    const pct = (lower.match(/(\d{1,3})\s*%/) || [])[1] || "";
+    reply = "I can take you to Positions and stage the sell workflow. You still confirm the sell button; Ogre Agent will not silently execute exits.";
+    actions.push({ label: pct ? `Sell ${pct}% Panel` : "Open Sell Panel", type: "prepare_sell", tokenMint, percent: pct });
+  }
+  if (/preset|tp|take profit|stop loss|slippage/.test(lower)) {
+    reply = "Presets control trade size, slippage, bundle settings, and TP/SL behavior. Pick or edit them before buying; TP/SL needs wallet auto-sell approval for managed wallets.";
+    actions.push({ label: "Trade Panel", type: "open_tab", tab: "trade" }, { label: "Positions", type: "open_tab", tab: "positions" });
+  }
+  if (/ogre a\.?i|best pick|pick|winner|100%|25%/.test(lower)) {
+    reply = "Ogre A.I. looks for likely candidates based on your target. Lower targets can favor steadier active pairs; bigger targets usually need earlier/lower MC candidates with stronger risk warnings.";
+    actions.push({ label: "Ogre A.I.", type: "open_tab", tab: "ogreAi" }, { label: "Slime Scope", type: "open_tab", tab: "slimeScope" });
+  }
+
+  if (!actions.length) {
+    actions.push({ label: "Live Terminal", type: "open_tab", tab: "terminal" }, { label: "Positions", type: "open_tab", tab: "positions" }, { label: "Refresh Feeds", type: "refresh_feeds" });
+  }
+
+  return { reply, actions: actions.slice(0, 4), intent: "panel_help" };
+}
+
+async function callOgreAgentModel(message = "", context = {}, fallback = {}) {
+  if (!CONFIG.openaiApiKey) return null;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${CONFIG.openaiApiKey}`
+      },
+      body: JSON.stringify({
+        model: CONFIG.ogreAgentModel || "gpt-4.1-mini",
+        temperature: 0.25,
+        max_tokens: 260,
+        messages: [
+          {
+            role: "system",
+            content: "You are Ogre Agent inside SlimeWire. Help only with user-side panel functions, navigation, charting, presets, positions, wallet refresh, feed categories, and safe trade staging. Never reveal or discuss code, security internals, env vars, API keys, private keys, backend architecture, or database details. Never claim a buy/sell was executed. For trades, say you can prepare the UI for confirmation only. Keep replies short and actionable."
+          },
+          {
+            role: "user",
+            content: JSON.stringify({ message, context, fallbackReply: fallback.reply })
+          }
+        ]
+      })
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    return String(data?.choices?.[0]?.message?.content || "").trim() || null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function webOgreAgentReply(body = {}) {
+  const message = String(body.message || "").trim().slice(0, 1200);
+  const context = body.context && typeof body.context === "object" ? body.context : {};
+  if (!message) {
+    return ogreAgentFallbackReply("help", context);
+  }
+  const fallback = ogreAgentFallbackReply(message, context);
+  const modelReply = await callOgreAgentModel(message, context, fallback);
+  return {
+    ...fallback,
+    reply: modelReply || fallback.reply,
+    modelPowered: Boolean(modelReply)
+  };
+}
 function sendWebJson(request, response, status, data) {
   response.writeHead(status, {
     "Content-Type": "application/json",
@@ -10744,10 +10867,10 @@ async function showTelegramPortfolioMenu(chatId, messageId = null) {
 async function showWalletMenu(chatId, messageId = null) {
   await sendOrEditMessage(chatId, messageId, withBrandFooter("Wallet tools:"), {
     inline_keyboard: [
-      [{ text: "💴💶💷 Create Wallet Set", callback_data: "create_wallets" }],
+      [{ text: "ðŸ’´ðŸ’¶ðŸ’· Create Wallet Set", callback_data: "create_wallets" }],
       [{ text: "Import Wallet", callback_data: "import_wallet" }],
-      [{ text: "💳 My Wallets", callback_data: "list_wallets" }],
-      [{ text: "🔍 Check Balances", callback_data: "check_balances" }],
+      [{ text: "ðŸ’³ My Wallets", callback_data: "list_wallets" }],
+      [{ text: "ðŸ” Check Balances", callback_data: "check_balances" }],
       [{ text: "Positions Overview", callback_data: "positions_overview" }],
       [{ text: "PnL / Results", callback_data: "pnl_results" }],
       [{ text: "Copy Trade / KOL Tracker", callback_data: "kol_tracker_menu" }],
@@ -11028,8 +11151,8 @@ async function showBundleMenu(chatId, messageId = null) {
   await sendOrEditMessage(chatId, messageId, withBrandFooter("Bundle tools:\n\nAuto Bundle buys selected wallets, then watches stop-loss / take-profit exits."), {
     inline_keyboard: [
       [{ text: "Auto Bundle", callback_data: "auto_bundle" }],
-      [{ text: "🧲 Bundle Buy", callback_data: "batch_buy" }],
-      [{ text: "🧲 Bundle Sell", callback_data: "batch_sell" }],
+      [{ text: "ðŸ§² Bundle Buy", callback_data: "batch_buy" }],
+      [{ text: "ðŸ§² Bundle Sell", callback_data: "batch_sell" }],
       [{ text: "DCA Buy", callback_data: "dca_buy" }, { text: "DCA Sell", callback_data: "dca_sell" }],
       [{ text: "Copy Trade / KOL Tracker", callback_data: "kol_tracker_menu" }],
       [{ text: "Copy Trade Info", callback_data: "copy_trade_info" }],
@@ -11041,7 +11164,7 @@ async function showBundleMenu(chatId, messageId = null) {
 async function showWithdrawalMenu(chatId, messageId = null) {
   await sendOrEditMessage(chatId, messageId, withBrandFooter("Withdrawal tools:"), {
     inline_keyboard: [
-      [{ text: "🏦 Withdraw SOL", callback_data: "sweep_sol" }],
+      [{ text: "ðŸ¦ Withdraw SOL", callback_data: "sweep_sol" }],
       [{ text: "Sell All Tokens to SOL", callback_data: "sell_all_tokens" }],
       [{ text: "Sweep Tokens", callback_data: "sweep_tokens" }],
       [{ text: "Fund Wallets", callback_data: "fund_wallets" }],
@@ -14395,12 +14518,12 @@ function howToMenuKeyboard() {
   return [
     [{ text: "Ogre A.I.", callback_data: "howto_ogre_ai" }],
     [{ text: "KOL Tracker", callback_data: "howto_kol" }],
-    [{ text: "💱 Trade", callback_data: "howto_trade" }],
-    [{ text: "🎯 OgreSniper", callback_data: "howto_sniper" }],
-    [{ text: "💳 Wallet", callback_data: "howto_wallet" }, { text: "🧲 Bundle", callback_data: "howto_bundle" }],
-    [{ text: "📊📈 Volume", callback_data: "howto_volume" }, { text: "🔍 Check Balances", callback_data: "howto_balances" }],
-    [{ text: "💾 Backup / Restore", callback_data: "howto_backup" }, { text: "🏦 Withdrawal", callback_data: "howto_withdrawal" }],
-    [{ text: "✅ Success Checklist", callback_data: "howto_success" }],
+    [{ text: "ðŸ’± Trade", callback_data: "howto_trade" }],
+    [{ text: "ðŸŽ¯ OgreSniper", callback_data: "howto_sniper" }],
+    [{ text: "ðŸ’³ Wallet", callback_data: "howto_wallet" }, { text: "ðŸ§² Bundle", callback_data: "howto_bundle" }],
+    [{ text: "ðŸ“ŠðŸ“ˆ Volume", callback_data: "howto_volume" }, { text: "ðŸ” Check Balances", callback_data: "howto_balances" }],
+    [{ text: "ðŸ’¾ Backup / Restore", callback_data: "howto_backup" }, { text: "ðŸ¦ Withdrawal", callback_data: "howto_withdrawal" }],
+    [{ text: "âœ… Success Checklist", callback_data: "howto_success" }],
     [{ text: "Open Main Menu", callback_data: "main_menu" }]
   ];
 }
@@ -26663,4 +26786,5 @@ main().catch((error) => {
   console.error(error);
   process.exit(1);
 });
+
 
