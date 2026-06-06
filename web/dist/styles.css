@@ -9025,3 +9025,40 @@ body {
     font-size: 0.58rem !important;
   }
 }
+
+/* SLIME_SWAMP_SUPPORT_RAILS_V8: readable mobile rail titles above busy slime artwork. */
+@media (max-width: 760px) {
+  [data-app][data-route="intro"] .swamp-support-frame::before {
+    position: absolute !important;
+    z-index: 2 !important;
+    top: clamp(18px, 4.5vw, 26px) !important;
+    left: 50% !important;
+    transform: translateX(-50%) !important;
+    padding: 2px 13px 4px !important;
+    border-radius: 999px !important;
+    background: rgba(0, 0, 0, 0.58) !important;
+    color: #cfff42 !important;
+    font-size: clamp(1.08rem, 6.2vw, 1.55rem) !important;
+    font-weight: 1000 !important;
+    letter-spacing: 0.04em !important;
+    line-height: 1 !important;
+    text-shadow:
+      0 0 8px rgba(114, 255, 35, 0.9),
+      0 2px 2px rgba(0, 0, 0, 0.95) !important;
+    pointer-events: none !important;
+    white-space: nowrap !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-sponsor-frame::before {
+    content: "Sponsors" !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-kol-frame::before {
+    content: "KOLs" !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-sponsor-frame .swamp-support-content,
+  [data-app][data-route="intro"] .swamp-kol-frame .swamp-support-content {
+    padding-top: clamp(72px, 19vw, 92px) !important;
+  }
+}
