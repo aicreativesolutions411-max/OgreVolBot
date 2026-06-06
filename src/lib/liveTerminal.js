@@ -231,7 +231,18 @@ export function isPairVisibleForCategory(row = {}, category = PAIR_CATEGORIES.LI
   const classified = classifyPairCategory(row, now);
   const ageMinutes = pairAgeMinutes(row, now);
   if (category === PAIR_CATEGORIES.FRESH || category === PAIR_CATEGORIES.NEW) {
+    const hints = [
+      row.category,
+      row.categoryHint,
+      row.categoryHints,
+      row.slimeScopeCategory,
+      row.liveLabel,
+      row.source,
+      row.status
+    ].flat().filter(Boolean).join(" ").toLowerCase();
+    const freshSignal = /\b(fresh|new|launch|just listed|seconds old|pump)\b/.test(hints);
     return classified === PAIR_CATEGORIES.NEW
+      || freshSignal
       || (Number.isFinite(ageMinutes) && ageMinutes >= 0 && ageMinutes <= BROAD_NEW_WINDOW_MINUTES);
   }
   if (category === PAIR_CATEGORIES.GRADUATING) return classified === PAIR_CATEGORIES.GRADUATING;

@@ -314,6 +314,8 @@ let autoExitCheckInFlight = false;
 let walletRefreshPromise = null;
 let lastWalletForceRefreshAt = 0;
 let walletRefreshSequence = 0;
+const livePairsLoadInFlight = new Map();
+const livePairsLoadVersionsByBucket = {};
 const apiInFlight = new Map();
 const pendingPerfPosts = [];
 let perfPostTimer = null;
@@ -2635,106 +2637,140 @@ function currentLivePairsUpdatedAt() {
 }
 
 async function loadLivePairs({ silent = false, bucket = state.livePairBucket, renderOnComplete = true, force = false } = {}) {
-  const requestId = `${Date.now()}:${Math.random().toString(16).slice(2)}`;
   const startedAt = perfNow();
   const safeBucket = normalizeLivePairBucket(bucket);
   const isActiveBucket = safeBucket === state.livePairBucket;
+  const requestSort = state.terminalSort || "best";
+  const requestKey = `${safeBucket}:${requestSort}:${force ? "force" : "poll"}`;
+  const existingLoad = livePairsLoadInFlight.get(requestKey);
+  if (existingLoad?.promise) {
+    state.livePairsLoadingByBucket = { ...state.livePairsLoadingByBucket, [safeBucket]: existingLoad.requestId };
+    state.livePairsLoading = Boolean(state.livePairsLoadingByBucket[state.livePairBucket]);
+    if (!silent && isActiveBucket) state.loading = true;
+    if (isActiveBucket || !silent) render();
+    return existingLoad.promise;
+  }
+
+  const requestId = `${Date.now()}:${Math.random().toString(16).slice(2)}`;
+  const requestVersion = (livePairsLoadVersionsByBucket[safeBucket] || 0) + 1;
+  livePairsLoadVersionsByBucket[safeBucket] = requestVersion;
+  const isCurrentRequest = () => livePairsLoadVersionsByBucket[safeBucket] === requestVersion;
+
   state.livePairsLoadingByBucket = { ...state.livePairsLoadingByBucket, [safeBucket]: requestId };
   state.livePairsLoading = Boolean(state.livePairsLoadingByBucket[state.livePairBucket]);
   if (!silent && isActiveBucket) state.loading = true;
   if (isActiveBucket || !silent) render();
 
-  try {
-    const forceQuery = force ? "&force=true" : "";
-    const livePairsUrl = `/api/web/live-pairs?bucket=${encodeURIComponent(safeBucket)}&sort=${encodeURIComponent(state.terminalSort || "best")}${forceQuery}`;
-    const data = await Promise.race([
-      api(livePairsUrl),
-      new Promise((_, reject) => window.setTimeout(() => reject(new Error("Live feed refresh timed out.")), 12_000))
-    ]);
-    const label = LIVE_PAIR_BUCKETS.find(([id]) => id === safeBucket)?.[1] || "Live";
-    const previous = state.livePairsByBucket[safeBucket] || (isActiveBucket ? state.livePairs : null);
-    let value = data.livePairs || {
-      bucket: safeBucket,
-      rows: [],
-      refreshedAt: new Date().toISOString(),
-      refreshSeconds: 5,
-      message: `${label} feed returned no rows yet. Retrying automatically.`
-    };
-    const valueRows = Array.isArray(value?.rows) ? value.rows : [];
-    const previousRows = Array.isArray(previous?.rows) ? previous.rows : [];
-    if (valueRows.length === 0 && previousRows.length > 0) {
-      value = {
-        ...previous,
-        ...value,
-        rows: previous.rows,
-        stale: true,
-        emptyRefresh: true,
-        message: `${label} is scanning for fresh rows. Showing the last good feed until the next qualifying refresh.`
+  const loadPromise = (async () => {
+    try {
+      const forceQuery = force ? "&force=true" : "";
+      const livePairsUrl = `/api/web/live-pairs?bucket=${encodeURIComponent(safeBucket)}&sort=${encodeURIComponent(requestSort)}${forceQuery}`;
+      const data = await Promise.race([
+        api(livePairsUrl),
+        new Promise((_, reject) => window.setTimeout(() => reject(new Error("Live feed refresh timed out.")), 12_000))
+      ]);
+      const label = LIVE_PAIR_BUCKETS.find(([id]) => id === safeBucket)?.[1] || "Live";
+      const previous = state.livePairsByBucket[safeBucket] || (isActiveBucket ? state.livePairs : null);
+      let value = data.livePairs || {
+        bucket: safeBucket,
+        rows: [],
+        refreshedAt: new Date().toISOString(),
+        refreshSeconds: 5,
+        message: `${label} feed returned no rows yet. Retrying automatically.`
       };
-    }
-    const updatedAt = value?.refreshedAt || new Date().toISOString();
-    const nextErrors = { ...(state.livePairsRefreshErrorByBucket || {}) };
-    delete nextErrors[safeBucket];
-    state.livePairsRefreshErrorByBucket = nextErrors;
-    state.livePairsByBucket = { ...state.livePairsByBucket, [safeBucket]: value };
-    state.livePairsLastUpdatedByBucket = { ...state.livePairsLastUpdatedByBucket, [safeBucket]: updatedAt };
-    if (isActiveBucket) {
-      state.livePairs = value;
-      state.livePairsLastUpdatedAt = updatedAt;
-    }
-    return value;
-  } catch (error) {
-    const message = publicErrorMessage(error?.message || "Live feed refresh failed.");
-    const label = LIVE_PAIR_BUCKETS.find(([id]) => id === safeBucket)?.[1] || "Live";
-    const previous = state.livePairsByBucket[safeBucket] || (isActiveBucket ? state.livePairs : null);
-    const staleValue = previous
-      ? {
+      const valueRows = Array.isArray(value?.rows) ? value.rows : [];
+      const previousRows = Array.isArray(previous?.rows) ? previous.rows : [];
+      if (valueRows.length === 0 && previousRows.length > 0) {
+        value = {
           ...previous,
+          ...value,
+          rows: previous.rows,
           stale: true,
-          refreshError: message,
-          message: `Showing last good ${label} feed. Refresh failed, retrying automatically.`
-        }
-      : {
-          bucket: safeBucket,
-          rows: [],
-          refreshedAt: new Date().toISOString(),
-          refreshSeconds: 5,
-          stale: true,
-          refreshError: message,
-          message: `${label} refresh failed. Retrying automatically.`
+          emptyRefresh: true,
+          message: `${label} is scanning for fresh rows. Showing the last good feed until the next qualifying refresh.`
         };
-    state.livePairsRefreshErrorByBucket = { ...(state.livePairsRefreshErrorByBucket || {}), [safeBucket]: message };
-    state.livePairsByBucket = { ...state.livePairsByBucket, [safeBucket]: staleValue };
-    state.livePairsLastUpdatedByBucket = { ...state.livePairsLastUpdatedByBucket, [safeBucket]: staleValue.refreshedAt };
-    if (isActiveBucket) {
-      state.livePairs = staleValue;
-      state.livePairsLastUpdatedAt = staleValue.refreshedAt;
-    }
-    return staleValue;
-  } finally {
-    const latestRows = state.livePairsByBucket?.[safeBucket]?.rows || [];
-    perfMeasure("live-pairs-refresh", startedAt, {
-      component: "livePairs",
-      resultCount: Array.isArray(latestRows) ? latestRows.length : 0,
-      stale: Boolean(state.livePairsByBucket?.[safeBucket]?.stale),
-      errorCode: state.livePairsRefreshErrorByBucket?.[safeBucket] ? "LIVE_PAIRS_REFRESH_FAILED" : "",
-      details: `${safeBucket}:${state.terminalSort || "best"}`
-    });
-    const nextLoading = { ...state.livePairsLoadingByBucket };
-    if (nextLoading[safeBucket] === requestId || nextLoading[safeBucket] === true) {
-      delete nextLoading[safeBucket];
-      state.livePairsLoadingByBucket = nextLoading;
-    }
-    state.livePairsLoading = Boolean(nextLoading[state.livePairBucket]);
-    if (!silent && isActiveBucket) state.loading = false;
-    if (renderOnComplete) {
-      if (isActiveBucket && ["terminal", "live", "slimeScope"].includes(state.activeTab)) {
-        scheduleLivePairsRender("load-live-pairs-complete");
-      } else {
-        render();
+      }
+      if (!isCurrentRequest()) return value;
+      const updatedAt = value?.refreshedAt || new Date().toISOString();
+      const nextErrors = { ...(state.livePairsRefreshErrorByBucket || {}) };
+      delete nextErrors[safeBucket];
+      state.livePairsRefreshErrorByBucket = nextErrors;
+      state.livePairsByBucket = { ...state.livePairsByBucket, [safeBucket]: value };
+      state.livePairsLastUpdatedByBucket = { ...state.livePairsLastUpdatedByBucket, [safeBucket]: updatedAt };
+      if (isActiveBucket) {
+        state.livePairs = value;
+        state.livePairsLastUpdatedAt = updatedAt;
+      }
+      return value;
+    } catch (error) {
+      const message = publicErrorMessage(error?.message || "Live feed refresh failed.");
+      const label = LIVE_PAIR_BUCKETS.find(([id]) => id === safeBucket)?.[1] || "Live";
+      const previous = state.livePairsByBucket[safeBucket] || (isActiveBucket ? state.livePairs : null);
+      const staleValue = previous
+        ? {
+            ...previous,
+            stale: true,
+            refreshError: message,
+            message: `Showing last good ${label} feed. Refresh failed, retrying automatically.`
+          }
+        : {
+            bucket: safeBucket,
+            rows: [],
+            refreshedAt: new Date().toISOString(),
+            refreshSeconds: 5,
+            stale: true,
+            refreshError: message,
+            message: `${label} refresh failed. Retrying automatically.`
+          };
+      if (!isCurrentRequest()) return staleValue;
+      state.livePairsRefreshErrorByBucket = { ...(state.livePairsRefreshErrorByBucket || {}), [safeBucket]: message };
+      state.livePairsByBucket = { ...state.livePairsByBucket, [safeBucket]: staleValue };
+      state.livePairsLastUpdatedByBucket = { ...state.livePairsLastUpdatedByBucket, [safeBucket]: staleValue.refreshedAt };
+      if (isActiveBucket) {
+        state.livePairs = staleValue;
+        state.livePairsLastUpdatedAt = staleValue.refreshedAt;
+      }
+      return staleValue;
+    } finally {
+      if (!isCurrentRequest()) return;
+      const latestRows = state.livePairsByBucket?.[safeBucket]?.rows || [];
+      perfMeasure("live-pairs-refresh", startedAt, {
+        component: "livePairs",
+        resultCount: Array.isArray(latestRows) ? latestRows.length : 0,
+        stale: Boolean(state.livePairsByBucket?.[safeBucket]?.stale),
+        errorCode: state.livePairsRefreshErrorByBucket?.[safeBucket] ? "LIVE_PAIRS_REFRESH_FAILED" : "",
+        details: `${safeBucket}:${requestSort}`
+      });
+      const nextLoading = { ...state.livePairsLoadingByBucket };
+      if (nextLoading[safeBucket] === requestId || nextLoading[safeBucket] === true) {
+        delete nextLoading[safeBucket];
+        state.livePairsLoadingByBucket = nextLoading;
+      }
+      state.livePairsLoading = Boolean(nextLoading[state.livePairBucket]);
+      if (!silent && isActiveBucket) state.loading = false;
+      if (renderOnComplete) {
+        if (isActiveBucket && ["terminal", "live", "slimeScope"].includes(state.activeTab)) {
+          scheduleLivePairsRender("load-live-pairs-complete");
+        } else {
+          render();
+        }
       }
     }
-  }
+  })();
+
+  livePairsLoadInFlight.set(requestKey, {
+    requestId,
+    requestVersion,
+    safeBucket,
+    promise: loadPromise
+  });
+  loadPromise.finally(() => {
+    const current = livePairsLoadInFlight.get(requestKey);
+    if (current?.requestId === requestId) {
+      livePairsLoadInFlight.delete(requestKey);
+    }
+  });
+  return loadPromise;
 }
 
 async function refreshLivePairBuckets({ silent = false, force = false, warmAll = false } = {}) {
@@ -4804,6 +4840,8 @@ function ogreAiHtml() {
               <option value="2">2 orders</option>
               <option value="3">3 orders</option>
               <option value="5">5 orders</option>
+              <option value="10">10 orders</option>
+              <option value="25">25 orders</option>
             </select>
           </label>
           ${selectWithCustomHtml({
@@ -9366,7 +9404,7 @@ function isUiFeedDisplayBlockedSignalRow(row = {}) {
     row?.scoreWarnings,
     row?.safetyNote
   ].flat().filter(Boolean).join(" ").toLowerCase();
-  if (/\b(honeypot|honey\s*pot|blacklist|cannot sell|can't sell|sell disabled|sell blocked|trading disabled|no sell|no route|rug|scam)\b/i.test(labels)) {
+  if (/\b(honeypot|honey\s*pot|blacklist|rug|scam)\b/i.test(labels)) {
     return true;
   }
   const marketCap = firstUsefulNumber(row.marketCap, row.fdv);
@@ -9673,7 +9711,6 @@ function marketDataRowsByMint() {
   ];
   const byMint = new Map();
   for (const row of rows) {
-    if (isUiMayhemRow(row)) continue;
     const mint = String(row?.tokenMint || "");
     if (!mint) continue;
     const existing = byMint.get(mint);
@@ -10367,7 +10404,7 @@ function terminalHtml() {
   const liveFeed = currentLivePairs();
   const liveRows = uniqueSignalRows(liveFeed?.rows || []);
   const newestLiveRows = [...liveRows].sort(compareNewestLiveRows);
-  const kolRows = mergeMarketDataIntoRows(state.kolScan?.rows || []).filter((row) => !isUiMayhemRow(row));
+  const kolRows = mergeMarketDataIntoRows(state.kolScan?.rows || []).filter((row) => !isUiFeedDisplayBlockedSignalRow(row));
   const bestRows = terminalBestPickRows(liveRows, kolRows);
   const bestDisplayRows = rotatedDisplayRows(bestRows, 8, terminalRotationKey("best-picks"), 2);
   const bestMintSet = new Set(bestDisplayRows.map(tokenMintKey).filter(Boolean));
@@ -10880,7 +10917,7 @@ function terminalSubtabHtml() {
   if (state.terminalSubtab === "history") return liveTradeRowsHtml(12);
   if (state.terminalSubtab === "wallets") return walletBalanceSummaryHtml();
   if (state.terminalSubtab === "kol") {
-    const rows = mergeMarketDataIntoRows(state.kolScan?.rows || []).filter((row) => !isUiMayhemRow(row));
+    const rows = mergeMarketDataIntoRows(state.kolScan?.rows || []).filter((row) => !isUiFeedDisplayBlockedSignalRow(row));
     return compactSignalRowsHtml(rows, {
       layout: "terminal",
       limit: 12,

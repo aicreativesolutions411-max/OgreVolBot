@@ -19336,7 +19336,12 @@ async function filterOgreAiRowsForHardSafety(rows = [], limit = 40, defaults = {
         safetyNote: "Ogre A.I. mint/freeze safety passed"
       });
     } catch {
-      // Ogre A.I. only trades candidates with a completed mint/freeze safety read.
+      accepted.push({
+        ...row,
+        tokenProgram: row.tokenProgram || "",
+        safetyStatus: "pending",
+        safetyNote: "Safety check could not be completed yet. Trade with caution."
+      });
     }
   });
 
@@ -19371,7 +19376,7 @@ function webOgreAiPickSummary(row = {}) {
 async function webStartOgreAiRun(userId, body = {}) {
   const store = await readWalletStore();
   const wallets = webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup);
-  const runCount = clamp(Number.parseInt(String(body.runCount || "1"), 10) || 1, 1, 5);
+  const runCount = clamp(Number.parseInt(String(body.runCount || "1"), 10) || 1, 1, 25);
   const mode = normalizeOgreAiMode(body.mode);
   const selection = await selectOgreAiPicks(userId, body, runCount);
   if (!selection.rows.length) {
@@ -23889,6 +23894,23 @@ function livePairAgeMinutesValue(item) {
   return pairAgeMinutesFromData(item);
 }
 
+function livePairLooksFreshSignal(item = {}) {
+  const text = [
+    item?.source,
+    item?.category,
+    item?.status,
+    item?.liveLabel,
+    item?.categoryHints,
+    item?.slimeScopeCategory,
+    item?.labels,
+    item?.profileSource,
+    item?.pairAddress,
+    item?.baseMint,
+    item?.quoteMint
+  ].flat().filter(Boolean).join(" ").toLowerCase();
+  return /\b(fresh|new|launch|just listed|seconds old|pump feed|pump)\b/.test(text);
+}
+
 function isLivePairInBucket(item, bucket) {
   return isLivePairInBucketWindow(item, bucket);
 }
@@ -23896,7 +23918,9 @@ function isLivePairInBucket(item, bucket) {
 function isLivePairInRelaxedBucket(item, bucket) {
   const safeBucket = normalizeLivePairBucket(bucket);
   const ageMinutes = livePairAgeMinutesValue(item);
-  if (ageMinutes === null) return false;
+  if (ageMinutes === null) {
+    return safeBucket === "live" && (livePairLooksFreshSignal(item) || isPumpStyleToken(item));
+  }
   if (safeBucket === "live") return ageMinutes >= 0 && ageMinutes < 120;
   if (safeBucket === "under1h") return ageMinutes >= 5 && ageMinutes < 90;
   if (safeBucket === "under3h") return ageMinutes >= 30 && ageMinutes < 240;
@@ -24078,7 +24102,7 @@ function livePairCandidateToRow(candidate) {
     pumpUrl: isPump ? pumpFunUrl(candidate.tokenMint) : ""
   };
   if (isPumpMayhemToken({ ...row, profile: candidate.profile })) {
-    return null;
+    row.riskFlags = ["mayhemFlag"];
   }
   const bestPick = computeBestPickScore(row);
   return {
@@ -24245,12 +24269,14 @@ async function enrichWebLivePairsForImages(rows) {
     };
     nextRow.slimeScopeCategory = classifySlimeScopePair(nextRow);
     if (isPumpMayhemToken({ ...row, ...nextRow, metadata: dexMeta })) {
-      enriched[index] = null;
-      return;
+      const warningFlags = new Set(Array.isArray(nextRow.riskFlags) ? nextRow.riskFlags : []);
+      warningFlags.add("mayhemFlag");
+      nextRow.riskFlags = [...warningFlags];
     }
     const bestPick = computeBestPickScore(nextRow);
     enriched[index] = {
       ...nextRow,
+      riskFlags: [...new Set(Array.isArray(nextRow.riskFlags) ? nextRow.riskFlags : [])],
       bestPickScore: bestPick.score,
       bestPickLabel: bestPick.label,
       bestPickInputs: bestPick.inputs,
@@ -24290,9 +24316,14 @@ function isWebLivePairCandidate(item, bucket = "live", options = {}) {
     || Number(item.liquidityUsd || 0) > 0
     || Number.isFinite(ageSeconds) && ageSeconds <= 300
     || isPumpStyleToken(item);
-  const ageOk = options.relaxedAge ? isLivePairInRelaxedBucket(item, safeBucket) : isLivePairInBucket(item, safeBucket);
+  const ageMinutes = livePairAgeMinutesValue(item);
+  const isAgeKnown = Number.isFinite(ageMinutes);
+  const ageOk = options.relaxedAge
+    ? isLivePairInRelaxedBucket(item, safeBucket)
+    : isLivePairInBucket(item, safeBucket)
+      || (safeBucket === "live" && !isAgeKnown && (livePairLooksFreshSignal(item) || isPumpStyleToken(item)));
   const categoryOk = safeBucket === "live"
-    ? isPairVisibleForCategory(item, "fresh", "ALL")
+    ? isPairVisibleForCategory(item, "live", "ALL")
     : true;
   return ageOk
     && marketCapOk
