@@ -9111,3 +9111,42 @@ body {
     margin-inline: auto !important;
   }
 }
+
+/* SLIME_SWAMP_SUPPORT_RAILS_V12: pull desktop side frames inside border and add cleaner mobile sponsor title crop. */
+@media (min-width: 761px) {
+  [data-app][data-route="intro"] .login-view.swamp-splash {
+    grid-template-columns: minmax(310px, 0.9fr) minmax(420px, 1.06fr) minmax(310px, 0.9fr) !important;
+    gap: clamp(18px, 2vw, 36px) !important;
+    padding-left: clamp(34px, 4vw, 76px) !important;
+    padding-right: clamp(34px, 4vw, 76px) !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-support-frame {
+    max-width: 570px !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-kol-frame {
+    justify-self: end !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-sponsor-frame {
+    justify-self: start !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-support-bubble,
+  [data-app][data-route="intro"] .swamp-sponsor-social summary,
+  [data-app][data-route="intro"] .swamp-support-content::after {
+    max-width: min(100%, 400px) !important;
+  }
+}
+
+@media (max-width: 760px) {
+  [data-app][data-route="intro"] .swamp-sponsor-frame {
+    overflow: hidden !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-sponsor-frame .swamp-support-frame-art {
+    clip-path: inset(7px 0 0 0) !important;
+    transform: translateY(15px) scale(0.988) !important;
+  }
+}
