@@ -2253,7 +2253,7 @@ function ogreAgentFallbackReply(message = "", context = {}) {
 
   if (/secret|api key|env|environment|render env|source code|github|backend|security|private key|wallet seed|seed phrase|codebase|database/i.test(lower)) {
     return {
-      reply: "I can help with user-side SlimeWire functions, but I cannot discuss secrets, security internals, code, env vars, private keys, or backend setup. Ask me how to use the panel, read positions, use presets, or stage trades safely.",
+      reply: "I can help with user-side SlimeWire functions, but I cannot discuss secrets, security internals, code, env vars, private keys, or backend setup. Ask me how to use the panel, read positions, use presets, check coins, or make trade requests.",
       actions: [
         { label: "Open Help Panels", type: "open_tab", tab: "terminal" },
         { label: "Show Positions", type: "open_tab", tab: "positions" }
@@ -2270,9 +2270,28 @@ function ogreAgentFallbackReply(message = "", context = {}) {
     reply = "Fresh launches live in Live Terminal Fresh and Slime Scope New. I can open the feed and force a refresh without changing your current presets.";
     actions.push({ label: "Live Terminal", type: "open_tab", tab: "terminal" }, { label: "Live Pairs", type: "open_tab", tab: "live" }, { label: "Refresh Feeds", type: "refresh_feeds" });
   }
-  if (/chart|ca|token|dex|pump/.test(lower) && tokenMint) {
-    reply = "I found a token CA. I can open the Slime chart now. Pump/Dex source buttons stay inside the chart panel; Slime is the fast default.";
-    actions.push({ label: "Open Chart", type: "open_chart", tokenMint });
+  if (/chart|ca|token|dex|pump|coin|rug|honeypot|community|social|website|telegram|twitter|x\.com|links?|bullish|good|safe|risky|breakdown|analy[sz]e/.test(lower) && tokenMint) {
+    const dexUrl = `https://dexscreener.com/solana/${tokenMint}`;
+    const pumpUrl = `https://pump.fun/coin/${tokenMint}`;
+    const solscanUrl = `https://solscan.io/token/${tokenMint}`;
+    reply = [
+      "I found a token CA. I can check the coin from inside Ogre Agent: chart, liquidity/MC when available, live transactions, social links, and risk clues.",
+      "Fast read: I look for age, liquidity depth, live buy/sell pressure, holder/risk badges, socials, and whether the chart is building a floor. A good-looking community can still rug, so size from risk."
+    ].join(" ");
+    actions.push(
+      { label: "Check Coin", type: "coin_breakdown", tokenMint },
+      { label: "Open Chart", type: "open_chart", tokenMint },
+      { label: "Dex", type: "open_external", url: dexUrl },
+      { label: "Pump", type: "open_external", url: pumpUrl },
+      { label: "Solscan", type: "open_external", url: solscanUrl }
+    );
+  } else if (/chart|ca|token|dex|pump|coin|rug|honeypot|community|social|website|telegram|twitter|x\.com|links?|bullish|good|safe|risky|breakdown|analy[sz]e/.test(lower)) {
+    reply = "Send me the token CA and I can check chart, links, liquidity/MC, activity, risk clues, and whether it looks like a quick trade or something to avoid.";
+    actions.push(
+      { label: "Live Pairs", type: "open_tab", tab: "live" },
+      { label: "Slime Scope", type: "open_tab", tab: "slimeScope" },
+      { label: "Fresh Launches", type: "open_tab", tab: "terminal" }
+    );
   }
   if (/buy|ape|enter|grab|snipe|purchase|get in|go in|long|take entry/.test(lower)) {
     reply = tokenMint && buyAmountSol
@@ -2333,7 +2352,7 @@ async function callOgreAgentModel(message = "", context = {}, fallback = {}) {
         messages: [
           {
             role: "system",
-            content: "You are Ogre Agent inside SlimeWire. Help only with user-side panel functions, navigation, charting, presets, positions, wallet refresh, feed categories, and fast trade requests. Never reveal or discuss code, security internals, env vars, API keys, private keys, backend architecture, or database details. Never claim a buy/sell was executed. For trades, say you can prepare the UI for confirmation only. Keep replies short and actionable."
+            content: "You are Ogre Agent inside SlimeWire, a one-stop user-side trading assistant. Help with panel functions, navigation, charting, presets, positions, wallet refresh, feed categories, coin/link questions, Solana token breakdowns, risk/community/read questions, and fast trade requests. If a token CA is present, explain useful checks: age, liquidity, MC/FDV, volume, buy/sell pressure, chart structure, socials, holder/risk badges, mint/freeze risks when visible, and whether it looks early, risky, or building a floor. Never reveal or discuss code, security internals, env vars, API keys, private keys, backend architecture, or database details. Never claim a buy/sell completed unless the site context says it did. For trades, say you can send the request through SlimeWire's existing connected-wallet/managed-wallet flow. Keep replies short, practical, and action-oriented."
           },
           {
             role: "user",

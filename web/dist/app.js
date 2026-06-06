@@ -12561,11 +12561,12 @@ function ogreRiskModalHtml({ validation, quote, market, confirmButtonText, confi
 function ogreAgentInitialMessage() {
   return {
     role: "assistant",
-    text: "Ogre Agent ready. Ask me how to use the panel, or tell me to open charts, refresh feeds, show positions, or prepare a buy/sell for confirmation.",
+    text: "Ogre Agent ready. Ask naturally: check this CA, show links, does it look risky, buy 0.1 SOL from wallet 1, sell half, refresh positions, find best picks, or explain any SlimeWire tool.",
     actions: [
       { label: "Show Positions", type: "open_tab", tab: "positions" },
       { label: "Refresh Feeds", type: "refresh_feeds" },
-      { label: "Best Picks", type: "open_tab", tab: "ogreAi" }
+      { label: "Best Picks", type: "open_tab", tab: "ogreAi" },
+      { label: "Slime Scope", type: "open_tab", tab: "slimeScope" }
     ]
   };
 }
@@ -12774,7 +12775,92 @@ async function runOgreAgentAction(action = {}) {
       renderOgreAgent();
     }
     return;
-  }  state.ogreAgentStatus = "Action noted. Ask Ogre to open a panel, chart, refresh, or prepare a trade.";
+  }
+
+  if (action.type === "open_external") {
+    const url = String(action.url || action.href || "").trim();
+    if (!/^https?:\/\//i.test(url)) {
+      state.ogreAgentStatus = "That link is not available yet. Send the token CA and ask for links.";
+      renderOgreAgent();
+      return;
+    }
+    window.open(url, "_blank", "noopener,noreferrer");
+    state.ogreAgentStatus = "Opened trusted coin link.";
+    renderOgreAgent();
+    return;
+  }
+
+  if (action.type === "coin_breakdown" || action.type === "analyze_coin") {
+    const tokenMint = String(action.tokenMint || action.mint || action.ca || state.smartChartToken || state.tradeToken || "").trim();
+    if (!tokenMint) {
+      state.ogreAgentStatus = "Paste a token CA and ask me to check it.";
+      renderOgreAgent();
+      return;
+    }
+    const money = (value) => {
+      const number = Number(value);
+      if (!Number.isFinite(number) || number <= 0) return "n/a";
+      if (number >= 1_000_000_000) return `$${(number / 1_000_000_000).toFixed(2)}B`;
+      if (number >= 1_000_000) return `$${(number / 1_000_000).toFixed(2)}M`;
+      if (number >= 1_000) return `$${(number / 1_000).toFixed(1)}K`;
+      return `$${number.toFixed(number >= 1 ? 2 : 6)}`;
+    };
+    state.ogreAgentLoading = true;
+    state.ogreAgentStatus = "Checking coin details...";
+    renderOgreAgent();
+    try {
+      const data = await api(`/api/web/dex-token?token=${encodeURIComponent(tokenMint)}`, {
+        timeoutMs: 8_000,
+        dedupe: false,
+        preserveSafeError: true
+      });
+      const token = data?.dexToken || {};
+      const symbol = token.symbol || token.baseSymbol || shortAddress(tokenMint);
+      const name = token.name || token.baseName || "Token";
+      const dexUrl = token.dexUrl || token.pairUrl || `https://dexscreener.com/solana/${tokenMint}`;
+      const pumpUrl = token.pumpUrl || (String(tokenMint).toLowerCase().endsWith("pump") ? `https://pump.fun/coin/${tokenMint}` : "");
+      const websiteUrl = token.websiteUrl || token.website || token.links?.website || "";
+      const twitterUrl = token.twitterUrl || token.xUrl || token.links?.twitter || token.links?.x || "";
+      const telegramUrl = token.telegramUrl || token.links?.telegram || "";
+      const liquidity = money(token.liquidityUsd || token.liquidity?.usd);
+      const marketCap = money(token.marketCap || token.fdv || token.marketCapUsd);
+      const volume = money(token.volume24h || token.volume?.h24 || token.volume?.m5);
+      const lines = [
+        `${symbol} breakdown`,
+        `${name} | ${shortAddress(tokenMint)}`,
+        `MC/FDV: ${marketCap} | Liquidity: ${liquidity} | Volume: ${volume}`,
+        "Read: look for live buys vs sells, liquidity depth, holder/risk badges, socials, and whether the chart is building higher lows.",
+        "Risk note: fresh Solana launches can still rug even with good socials. Size smaller until liquidity, volume, and holder distribution prove out."
+      ];
+      const actions = [
+        { label: "Open Chart", type: "open_chart", tokenMint },
+        { label: "Dex", type: "open_external", url: dexUrl }
+      ];
+      if (pumpUrl) actions.push({ label: "Pump", type: "open_external", url: pumpUrl });
+      if (websiteUrl) actions.push({ label: "Website", type: "open_external", url: websiteUrl });
+      if (twitterUrl) actions.push({ label: "X", type: "open_external", url: twitterUrl });
+      if (telegramUrl) actions.push({ label: "Telegram", type: "open_external", url: telegramUrl });
+      pushOgreAgentMessage({ role: "assistant", text: lines.join("\n"), actions });
+      state.ogreAgentStatus = "Coin breakdown ready.";
+    } catch (error) {
+      pushOgreAgentMessage({
+        role: "assistant",
+        text: `I could not pull live metadata for ${shortAddress(tokenMint)} yet, but I can still open chart, Dex, Pump, or help inspect risk badges.`,
+        actions: [
+          { label: "Open Chart", type: "open_chart", tokenMint },
+          { label: "Dex", type: "open_external", url: `https://dexscreener.com/solana/${tokenMint}` },
+          { label: "Pump", type: "open_external", url: `https://pump.fun/coin/${tokenMint}` }
+        ]
+      });
+      state.ogreAgentStatus = error?.message || "Coin check delayed.";
+    } finally {
+      state.ogreAgentLoading = false;
+      renderOgreAgent();
+    }
+    return;
+  }
+
+  state.ogreAgentStatus = "Action noted. Ask Ogre to open a panel, chart, refresh, trade, or check a coin.";
   renderOgreAgent();
 }
 
@@ -12797,14 +12883,14 @@ async function sendOgreAgentMessage() {
     });
     pushOgreAgentMessage({
       role: "assistant",
-      text: data?.agent?.reply || "I can help with panel functions, charts, positions, presets, and fast help and trade requests.",
+      text: data?.agent?.reply || "I can help with panel functions, charts, positions, presets, coin checks, links, risk reads, and fast trade requests.",
       actions: data?.agent?.actions || []
     });
     state.ogreAgentStatus = data?.agent?.modelPowered ? "AI reply" : "Fast local Ogre reply";
   } catch (error) {
     pushOgreAgentMessage({
       role: "assistant",
-      text: "Ogre Agent is still here, but the server reply timed out. I can still open panels, refresh feeds, and stage chart actions.",
+      text: "Ogre Agent is still here, but the server reply timed out. I can still open panels, refresh feeds, check coins, open links, and route trade actions.",
       actions: [
         { label: "Refresh Feeds", type: "refresh_feeds" },
         { label: "Positions", type: "open_tab", tab: "positions" },
