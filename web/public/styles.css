@@ -9082,11 +9082,32 @@ body {
 /* SLIME_SWAMP_SUPPORT_RAILS_V10: tiny sponsor-only mobile nudge for native title readability. */
 @media (max-width: 760px) {
   [data-app][data-route="intro"] .swamp-sponsor-frame .swamp-support-frame-art {
-    transform: translateY(7px) scale(0.992) !important;
+    transform: translateY(12px) scale(0.99) !important;
     transform-origin: top center !important;
   }
 
   [data-app][data-route="intro"] .swamp-sponsor-frame .swamp-support-content {
-    padding-top: clamp(88px, 22vw, 110px) !important;
+    padding-top: clamp(94px, 23vw, 118px) !important;
+  }
+}
+
+/* SLIME_SWAMP_SUPPORT_RAILS_V11: desktop rows sit below native KOL/Sponsor title art. */
+@media (min-width: 761px) {
+  [data-app][data-route="intro"] .swamp-support-content {
+    padding-top: clamp(205px, 25svh, 270px) !important;
+    padding-left: clamp(28px, 3.4vw, 68px) !important;
+    padding-right: clamp(28px, 3.4vw, 68px) !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-support-bubble,
+  [data-app][data-route="intro"] .swamp-sponsor-social summary {
+    max-width: min(100%, 440px) !important;
+    margin-inline: auto !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-support-content::after {
+    max-width: min(100%, 440px) !important;
+    width: 100% !important;
+    margin-inline: auto !important;
   }
 }
