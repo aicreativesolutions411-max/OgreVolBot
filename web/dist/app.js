@@ -234,6 +234,7 @@ const state = {
   ogreAiLoading: false,
   ogreAgentOpen: false,
   ogreAgentLoading: false,
+  ogreAgentFastMode: (() => { try { return (localStorage.getItem("ogreAgentFastMode") || "on") !== "off"; } catch { return true; } })(),
   ogreAgentStatus: "",
   ogreAgentMessages: [],
   connectedWalletBalance: null,
@@ -12565,6 +12566,7 @@ function ogreAgentInitialMessage() {
     actions: [
       { label: "Show Positions", type: "open_tab", tab: "positions" },
       { label: "Refresh Feeds", type: "refresh_feeds" },
+      { label: "Fast Mode", type: "toggle_agent_fast_mode" },
       { label: "Best Picks", type: "open_tab", tab: "ogreAi" },
       { label: "Slime Scope", type: "open_tab", tab: "slimeScope" }
     ]
@@ -12582,6 +12584,7 @@ function ogreAgentContext() {
   return {
     route: state.route,
     activeTab: state.activeTab,
+    agentFastMode: state.ogreAgentFastMode,
     smartChartToken: state.smartChartToken || "",
     tradeToken: state.tradeToken || "",
     livePairBucket: state.livePairBucket || "",
@@ -12662,9 +12665,130 @@ function ogreAgentActionFromKey(key = "") {
   return message?.actions?.[Number(actionIndexText)] || null;
 }
 
+function ogreAgentStoreFastMode(enabled) {
+  state.ogreAgentFastMode = Boolean(enabled);
+  try { localStorage.setItem("ogreAgentFastMode", state.ogreAgentFastMode ? "on" : "off"); } catch {}
+}
+
+function ogreAgentTradeIntent(message = "") {
+  const text = String(message || "").toLowerCase();
+  if (/\b(sell|exit|close|dump|cash out|take profit|tp)\b/.test(text)) return "sell";
+  if (/\b(buy|ape|enter|grab|snipe|purchase|get in|go in|long|take entry)\b/.test(text)) return "buy";
+  return "";
+}
+
+function ogreAgentAmountFromMessage(message = "") {
+  const text = String(message || "").toLowerCase();
+  const amount = (text.match(/(?:buy|ape|enter|grab|snipe|purchase|get in|go in|long|take entry)[^0-9]*(\d+(?:\.\d+)?)\s*(?:sol)?/) || text.match(/(\d+(?:\.\d+)?)\s*sol/) || [])[1];
+  return amount ? Number(amount) : 0;
+}
+
+function ogreAgentPercentFromMessage(message = "") {
+  const text = String(message || "").toLowerCase();
+  const pct = (text.match(/(\d{1,3})\s*%/) || [])[1];
+  if (pct) return pct;
+  if (/\bhalf\b/.test(text)) return "50";
+  if (/\bquarter\b/.test(text)) return "25";
+  if (/\ball\b|\bfull\b|100/.test(text)) return "100";
+  return "100";
+}
+
+function ogreAgentWalletIndexFromMessage(message = "") {
+  const walletNumber = (String(message || "").toLowerCase().match(/(?:wallet|from)\s*#?\s*(\d{1,2})/) || [])[1];
+  return walletNumber ? Math.max(0, Number(walletNumber) - 1) : undefined;
+}
+
+function ogreAgentTokenPools() {
+  const pools = [];
+  const pushRow = (row = {}) => {
+    const tokenMint = String(row.tokenMint || row.mint || row.tokenAddress || row.baseMint || row.pairAddress || "").trim();
+    if (!tokenMint) return;
+    pools.push({
+      tokenMint,
+      symbol: String(row.symbol || row.baseSymbol || row.ticker || "").trim(),
+      name: String(row.name || row.baseName || row.label || "").trim()
+    });
+  };
+  if (state.smartChartToken) pushRow({ tokenMint: state.smartChartToken, symbol: state.smartChartTokenSymbol });
+  if (state.tradeToken) pushRow({ tokenMint: state.tradeToken, symbol: state.tradeTokenSymbol });
+  [state.livePairRows, state.slimeScopeRows, state.watchlist, state.positions, state.portfolioRows, state.ogreAiResult?.candidates]
+    .filter(Array.isArray)
+    .forEach((rows) => rows.forEach(pushRow));
+  const seen = new Set();
+  return pools.filter((row) => {
+    const key = row.tokenMint.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function resolveOgreAgentTokenFromMessage(message = "") {
+  const text = String(message || "").trim();
+  const direct = (text.match(/\b[A-HJ-NP-Za-km-z1-9]{32,48}\b/) || [])[0];
+  if (direct) return direct;
+  const lower = text.toLowerCase();
+  const matches = ogreAgentTokenPools()
+    .map((row) => {
+      const symbol = row.symbol.toLowerCase();
+      const name = row.name.toLowerCase();
+      let score = 0;
+      if (symbol && new RegExp(`(^|[^a-z0-9])${symbol.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z0-9]|$)`, "i").test(lower)) score += 12 + symbol.length;
+      if (name && lower.includes(name)) score += 8 + Math.min(16, name.length);
+      return { ...row, score };
+    })
+    .filter((row) => row.score > 0)
+    .sort((a, b) => b.score - a.score);
+  return matches[0]?.tokenMint || "";
+}
+
+function prepareOgreAgentActionForMessage(action = {}, message = "") {
+  const prepared = { ...action };
+  const intent = ogreAgentTradeIntent(message);
+  if (!prepared.tokenMint && !prepared.mint && !prepared.ca) {
+    const tokenMint = resolveOgreAgentTokenFromMessage(message);
+    if (tokenMint) prepared.tokenMint = tokenMint;
+  }
+  if (prepared.type === "confirm_buy" || intent === "buy") {
+    prepared.type = prepared.type || "confirm_buy";
+    if (!prepared.amountSol) {
+      const amountSol = ogreAgentAmountFromMessage(message);
+      if (amountSol > 0) prepared.amountSol = amountSol;
+    }
+    if (prepared.walletIndex === undefined) {
+      const walletIndex = ogreAgentWalletIndexFromMessage(message);
+      if (walletIndex !== undefined) prepared.walletIndex = walletIndex;
+    }
+  }
+  if (prepared.type === "confirm_sell" || intent === "sell") {
+    prepared.type = prepared.type || "confirm_sell";
+    prepared.percent = prepared.percent || ogreAgentPercentFromMessage(message);
+  }
+  return prepared;
+}
+
+function shouldAutoRunOgreAgentAction(action = {}, message = "") {
+  if (!state.ogreAgentFastMode) return false;
+  const intent = ogreAgentTradeIntent(message);
+  if (!intent) return false;
+  if (intent === "buy") {
+    return action.type === "confirm_buy" && Boolean(action.tokenMint || action.mint || action.ca) && Number(action.amountSol || action.sol || action.amount || 0) > 0;
+  }
+  if (intent === "sell") {
+    return action.type === "confirm_sell" && Boolean(action.tokenMint || action.mint || action.ca);
+  }
+  return false;
+}
 async function runOgreAgentAction(action = {}) {
   const type = String(action.type || "");
   const tokenMint = String(action.tokenMint || action.mint || state.smartChartToken || state.tradeToken || "").trim();
+  if (type === "toggle_agent_fast_mode") {
+    ogreAgentStoreFastMode(!state.ogreAgentFastMode);
+    state.ogreAgentStatus = state.ogreAgentFastMode ? "Fast Mode ON: clear trade requests run directly." : "Fast Mode OFF: Ogre will stage actions first.";
+    pushOgreAgentMessage({ role: "assistant", text: state.ogreAgentStatus, actions: [{ label: state.ogreAgentFastMode ? "Turn Fast Mode Off" : "Turn Fast Mode On", type: "toggle_agent_fast_mode" }] });
+    renderOgreAgent();
+    return;
+  }
   if (type === "open_tab") {
     state.route = "terminal";
     state.activeTab = action.tab || "terminal";
@@ -12881,11 +13005,19 @@ async function sendOgreAgentMessage() {
       dedupe: false,
       preserveSafeError: true
     });
+    const actions = (data?.agent?.actions || []).map((action) => prepareOgreAgentActionForMessage(action, message));
     pushOgreAgentMessage({
       role: "assistant",
       text: data?.agent?.reply || "I can help with panel functions, charts, positions, presets, coin checks, links, risk reads, and fast trade requests.",
-      actions: data?.agent?.actions || []
+      actions
     });
+    const clientFallbackTradeAction = prepareOgreAgentActionForMessage({ type: ogreAgentTradeIntent(message) === "buy" ? "confirm_buy" : ogreAgentTradeIntent(message) === "sell" ? "confirm_sell" : "" }, message);
+    const autoAction = actions.find((action) => shouldAutoRunOgreAgentAction(action, message)) || (shouldAutoRunOgreAgentAction(clientFallbackTradeAction, message) ? clientFallbackTradeAction : null);
+    if (autoAction) {
+      state.ogreAgentStatus = "Fast Mode: sending trade request...";
+      await runOgreAgentAction(autoAction);
+      return;
+    }
     state.ogreAgentStatus = data?.agent?.modelPowered ? "AI reply" : "Fast local Ogre reply";
   } catch (error) {
     pushOgreAgentMessage({
@@ -14275,6 +14407,8 @@ if (!window.__slimeStablePumpChartTimer) {
     slimePumpChartRerender();
   }, 8000);
 }
+
+
 
 
 

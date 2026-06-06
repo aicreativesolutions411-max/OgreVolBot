@@ -2249,7 +2249,7 @@ function ogreAgentFallbackReply(message = "", context = {}) {
   const walletNumber = (lower.match(/(?:wallet|from)\s*#?\s*(\d{1,2})/) || [])[1] || "";
   const walletIndex = walletNumber ? Math.max(0, Number(walletNumber) - 1) : undefined;
   const actions = [];
-  let reply = "I can help with SlimeWire panel functions: charts, Live Pairs, Slime Scope, positions, wallet refresh, presets, Ogre A.I., Pump Launch, Bundle Volume, and fast trade requests.";
+  let reply = "I can be your one-stop SlimeWire command center: coin checks, links, rug/community reads, charts, positions, wallet refresh, presets, Ogre A.I., Pump Launch, Bundle Volume, and fast trade requests.";
 
   if (/secret|api key|env|environment|render env|source code|github|backend|security|private key|wallet seed|seed phrase|codebase|database/i.test(lower)) {
     return {
@@ -2295,7 +2295,7 @@ function ogreAgentFallbackReply(message = "", context = {}) {
   }
   if (/buy|ape|enter|grab|snipe|purchase|get in|go in|long|take entry/.test(lower)) {
     reply = tokenMint && buyAmountSol
-      ? `I can send a ${buyAmountSol} SOL buy request for that token through the connected wallet flow.`
+      ? `Fast Mode can send a ${buyAmountSol} SOL buy request for that token through SlimeWire as soon as the wallet flow allows it.`
       : tokenMint
         ? "Tell me the SOL amount and I can send the buy request directly, or I can open the buy panel if you want to adjust wallet/preset details."
         : "Paste the token CA with your buy request and I can open the buy panel or send the buy once you include amount.";
@@ -2311,7 +2311,7 @@ function ogreAgentFallbackReply(message = "", context = {}) {
       || (lower.includes("quarter") ? "25" : "")
       || (lower.includes("all") || lower.includes("full") ? "100" : "");
     reply = tokenMint
-      ? `I can send the ${pct || "100"}% sell request for that token through the existing position flow.`
+      ? `Fast Mode can send the ${pct || "100"}% sell request for that token through the existing position flow.`
       : "I can take you to Positions and send or open the sell workflow. You still confirm the sell button; Ogre Agent can send exits through the existing position flow.";
     actions.push(tokenMint
       ? { label: pct ? `Sell ${pct}%` : "Sell 100%", type: "confirm_sell", tokenMint, percent: pct || "100" }
@@ -26821,6 +26821,7 @@ main().catch((error) => {
   console.error(error);
   process.exit(1);
 });
+
 
 
 
