@@ -4819,6 +4819,144 @@ function manualKolWatchShareText(value) {
   return `Watching KOL ${label}.`;
 }
 
+const CURATED_KOL_PROFILES = [
+  {
+    tier: "hot",
+    pinned: true,
+    rank: 1,
+    name: "Idontpaytaxes",
+    twitter: "Idontpaytaxes",
+    wallet: "2T5NgDDidkvhJQg8AHDI74uCFwgp25pYFMRZXBaCUNBH",
+    tag: "Hot Solana memecoin wallet",
+    note: "Seeded from KOLscan-style public wallet tracking. Use Scan Positions before copying.",
+    winRateLabel: "36.8%",
+    realizedLabel: "-$28.1",
+    roiLabel: "Watch",
+    trades: 24,
+    volumeLabel: "$6.58K volume",
+    lastTradeAt: new Date(Date.now() - 17 * 60 * 60 * 1000).toISOString()
+  },
+  {
+    tier: "slimewire",
+    pinned: true,
+    rank: 1,
+    name: "MoonPieJoe",
+    twitter: "moonpiejoe",
+    tag: "SlimeWire KOL",
+    note: "Supporter profile. Add wallet later to enable scan/copy trade.",
+    winRateLabel: "Supporter",
+    realizedLabel: "n/a",
+    roiLabel: "Social",
+    trades: "Add wallet"
+  },
+  {
+    tier: "slimewire",
+    pinned: true,
+    rank: 2,
+    name: "Rezzy",
+    twitter: "zero_taxes",
+    tag: "SlimeWire KOL",
+    note: "Supporter profile. Add wallet later to enable scan/copy trade.",
+    winRateLabel: "Supporter",
+    realizedLabel: "n/a",
+    roiLabel: "Social",
+    trades: "Add wallet"
+  }
+];
+
+function curatedKolProfiles(tier = "") {
+  const wantedTier = String(tier || "").trim().toLowerCase();
+  return CURATED_KOL_PROFILES
+    .filter((kol) => !wantedTier || String(kol.tier || "").toLowerCase() === wantedTier)
+    .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || Number(a.rank || 999) - Number(b.rank || 999));
+}
+
+function kolExternalLinks(kol = {}) {
+  const wallet = String(kol.wallet || "").trim();
+  const twitter = cleanXHandle(kol.twitter || kol.x || kol.username || "");
+  return {
+    x: twitter ? xProfileUrl(twitter) : "",
+    wallet: wallet ? `https://solscan.io/account/${encodeURIComponent(wallet)}` : "",
+    kolscan: wallet ? kolscanUrl(wallet) : ""
+  };
+}
+
+function curatedKolActionsHtml(kol = {}) {
+  const wallet = String(kol.wallet || "").trim();
+  const links = kolExternalLinks(kol);
+  return `
+    <div class="curated-kol-actions">
+      ${links.x ? `<a href="${escapeHtml(links.x)}" target="_blank" rel="noreferrer">X</a>` : ""}
+      ${links.kolscan ? `<a href="${escapeHtml(links.kolscan)}" target="_blank" rel="noreferrer">KOLscan</a>` : ""}
+      ${links.wallet ? `<a href="${escapeHtml(links.wallet)}" target="_blank" rel="noreferrer">Wallet</a>` : ""}
+      ${wallet ? `<button data-kol-scan-wallet="${escapeHtml(wallet)}">Scan</button>` : ""}
+      ${wallet ? `<button data-kol-copy-wallet="${escapeHtml(wallet)}">Copy</button>` : `<span>Wallet soon</span>`}
+      ${wallet ? `<button data-copy="${escapeHtml(wallet)}">CA</button>` : ""}
+    </div>
+  `;
+}
+
+function curatedKolCardHtml(kol = {}, options = {}) {
+  const compact = Boolean(options.compact);
+  const wallet = String(kol.wallet || "").trim();
+  return `
+    <article class="curated-kol-card ${compact ? "is-compact" : ""}" data-tier="${escapeHtml(kol.tier || "hot")}">
+      <div class="curated-kol-top">
+        ${kolAvatarMarkup(kol, compact ? "kol-avatar small" : "kol-avatar")}
+        <div>
+          <span>${escapeHtml(kol.tag || "Curated wallet")}</span>
+          <h3>${escapeHtml(kol.name || kol.twitter || shortAddress(wallet) || "KOL Wallet")}</h3>
+          <p>${kol.twitter ? `@${escapeHtml(cleanXHandle(kol.twitter))}` : escapeHtml(shortAddress(wallet) || "Social pending")}</p>
+        </div>
+        <b>#${escapeHtml(kol.rank || 1)}</b>
+      </div>
+      <dl>
+        <div><dt>Win</dt><dd>${escapeHtml(kol.winRateLabel || "n/a")}</dd></div>
+        <div><dt>Realized</dt><dd>${escapeHtml(kol.realizedLabel || "n/a")}</dd></div>
+        <div><dt>Trades</dt><dd>${escapeHtml(kol.trades ?? "n/a")}</dd></div>
+      </dl>
+      <small>${escapeHtml(kol.note || kol.volumeLabel || "Curated SlimeWire KOL database entry.")}</small>
+      ${curatedKolActionsHtml(kol)}
+    </article>
+  `;
+}
+
+function curatedKolBoardHtml() {
+  const hot = curatedKolProfiles("hot");
+  const slimewire = curatedKolProfiles("slimewire");
+  return `
+    <section class="curated-kol-board">
+      <div class="trade-head curated-kol-head">
+        <div>
+          <h3>Curated KOL Copy Board</h3>
+          <p>Hosted wallet database for hot Solana memecoin traders, with pinned rows we can cherry-pick to the top.</p>
+        </div>
+        <span>${escapeHtml(hot.length + slimewire.length)} curated</span>
+      </div>
+      <div class="curated-kol-layout">
+        <article class="curated-kol-main">
+          <header>
+            <h4>Hot Solana Wallets</h4>
+            <p>Public wallets to scan, inspect, and copy-plan from your SlimeWire wallets.</p>
+          </header>
+          <div class="curated-kol-list">
+            ${hot.length ? hot.map((kol) => curatedKolCardHtml(kol)).join("") : emptyState("No curated hot wallets yet", "Add wallets to the curated database to pin them here.")}
+          </div>
+        </article>
+        <aside class="curated-kol-side">
+          <header>
+            <h4>SlimeWire KOLs</h4>
+            <p>Supporters and official SlimeWire creators stay highlighted separately.</p>
+          </header>
+          <div class="curated-kol-list">
+            ${slimewire.length ? slimewire.map((kol) => curatedKolCardHtml(kol, { compact: true })).join("") : emptyState("No SlimeWire KOLs yet", "Add official supporters here.")}
+          </div>
+        </aside>
+      </div>
+    </section>
+  `;
+}
+
 function userAvatarHtml(fallback = "SW") {
   const avatar = normalizeImageUrl(state.user?.avatar || "");
   if (isSafeAvatarSrc(avatar)) {
@@ -6914,6 +7052,7 @@ function kolHtml() {
     </section>
     <p class="scan-meta">${escapeHtml(kolModeDescription(state.kolMode))}</p>
     ${kolScanStatusHtml()}
+    ${curatedKolBoardHtml()}
     <section class="trade-layout">
       <article class="trade-card">
         <div class="trade-head">
