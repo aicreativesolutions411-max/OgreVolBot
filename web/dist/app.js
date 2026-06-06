@@ -324,11 +324,14 @@ let terminalFeedTimerKey = "";
 let walletBackgroundRefreshTimer = null;
 let postTradeRefreshTimers = [];
 let positionRefreshVisualTimer = null;
+let positionsValueRefreshTimer = null;
 let autoExitCheckInFlight = false;
 let walletRefreshPromise = null;
 let positionsRefreshPromise = null;
+let positionsRefreshPromiseKey = "";
 let lastWalletForceRefreshAt = 0;
 let walletRefreshSequence = 0;
+let positionsRefreshSequence = 0;
 let ogreAiRunInFlight = null;
 const livePairsLoadInFlight = new Map();
 const livePairsLoadVersionsByBucket = {};
@@ -958,10 +961,7 @@ function applyActionButtonStates() {
     button.textContent = action ? (action.state === "submitted" ? "Submitted" : actionName === "bundle-buy" ? "Buying..." : "Selling...") : base;
   });
 
-  const refreshState = state.walletRefreshing
-    ? "refreshing"
-    : state.positionRefreshAction?.state || "idle";
-  document.querySelectorAll("[data-refresh-all], [data-top-refresh-wallet]").forEach((button) => {
+  const paintRefreshButton = (button, refreshState) => {
     const base = buttonBaseLabel(button);
     button.dataset.actionState = refreshState;
     if (refreshState === "clicked" || refreshState === "refreshing") {
@@ -973,6 +973,14 @@ function applyActionButtonStates() {
     } else {
       button.textContent = base;
     }
+  };
+  const actionRefreshState = state.positionRefreshAction?.state || "idle";
+  document.querySelectorAll("[data-refresh-all]").forEach((button) => {
+    paintRefreshButton(button, actionRefreshState);
+  });
+  const topRefreshState = state.walletRefreshing ? "refreshing" : actionRefreshState;
+  document.querySelectorAll("[data-top-refresh-wallet]").forEach((button) => {
+    paintRefreshButton(button, topRefreshState);
   });
 }
 
@@ -2175,20 +2183,94 @@ async function loadWalletCore(options = {}) {
   }
 }
 
+function positionRowsNeedValueRefresh(rows = state.positions) {
+  return (Array.isArray(rows) ? rows : []).some((position) => {
+    const hasEstimatedValue = position?.estimatedValueSol !== null && position?.estimatedValueSol !== undefined && position?.estimatedValueSol !== "";
+    return Boolean(position?.valuePending || (!hasEstimatedValue && /refreshing|updating|background/i.test(position?.valueError || "")));
+  });
+}
+
+function schedulePositionsValueRefresh(delayMs = 300, reason = "positions-value-followup") {
+  if (!state.user || !state.token) return;
+  if (positionsValueRefreshTimer) window.clearTimeout(positionsValueRefreshTimer);
+  positionsValueRefreshTimer = window.setTimeout(() => {
+    positionsValueRefreshTimer = null;
+    refreshWalletPositions({
+      force: true,
+      fast: false,
+      silent: true,
+      followUpValues: false,
+      reason,
+      timeoutMs: POSITIONS_REFRESH_TIMEOUT_MS
+    }).then((refreshed) => {
+      if (refreshed) {
+        state.lastWalletRefreshAt = new Date().toISOString();
+        render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
+      }
+    }).catch(() => {});
+  }, Math.max(0, Number(delayMs) || 0));
+}
+
+function mergePositionRefreshRows(nextRows = [], previousRows = [], options = {}) {
+  const previousByMint = new Map((Array.isArray(previousRows) ? previousRows : []).map((row) => [String(row?.tokenMint || ""), row]));
+  return (Array.isArray(nextRows) ? nextRows : []).map((row) => {
+    const previous = previousByMint.get(String(row?.tokenMint || ""));
+    if (!previous || options.fast === false) return row;
+    const rowPending = Boolean(row?.valuePending || /refreshing|updating|background/i.test(row?.valueError || ""));
+    const previousHasValue = previous.estimatedValueSol !== null && previous.estimatedValueSol !== undefined && previous.estimatedValueSol !== "";
+    if (!rowPending || !previousHasValue) return row;
+    return {
+      ...row,
+      estimatedValueSol: previous.estimatedValueSol,
+      openPnlSol: previous.openPnlSol,
+      openPnlPercent: previous.openPnlPercent,
+      valuePending: false,
+      valueError: ""
+    };
+  });
+}
+
+function refreshPortfolioSupplemental(reason = "portfolio-supplemental") {
+  if (!state.user || !state.token) return;
+  const startedAt = perfNow();
+  Promise.allSettled([
+    api("/api/web/balances?force=true", { timeoutMs: POSITIONS_REFRESH_TIMEOUT_MS }),
+    api("/api/web/pnl?force=true", { timeoutMs: POSITIONS_REFRESH_TIMEOUT_MS })
+  ]).then(([balancesResult, pnlResult]) => {
+    if (balancesResult.status === "fulfilled") {
+      state.balances = balancesResult.value.balances || state.balances || [];
+      state.connectedWalletBalance = balancesResult.value.connectedWallet || state.connectedWalletBalance || null;
+    }
+    if (pnlResult.status === "fulfilled") {
+      state.pnl = pnlResult.value.pnl || state.pnl || null;
+    }
+    state.lastWalletRefreshAt = new Date().toISOString();
+    perfMeasure("portfolio-supplemental-refresh", startedAt, {
+      component: "wallet",
+      resultCount: (state.balances?.length || 0) + (state.positions?.length || 0),
+      details: reason
+    });
+    render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
+  }).catch(() => {});
+}
+
 async function refreshWalletPositions(options = {}) {
   if (!state.user || !state.token) return;
-  if (positionsRefreshPromise) return positionsRefreshPromise;
   const startedAt = perfNow();
   const params = new URLSearchParams();
   if (options.force) params.set("force", "true");
   if (options.fast !== false) params.set("fast", "true");
   const query = params.toString() ? `?${params.toString()}` : "";
+  const requestKey = query || "full";
+  if (positionsRefreshPromise && positionsRefreshPromiseKey === requestKey) return positionsRefreshPromise;
+  const requestId = ++positionsRefreshSequence;
+  positionsRefreshPromiseKey = requestKey;
   positionsRefreshPromise = (async () => {
     try {
       const positions = await api(`/api/web/positions${query}`, {
         timeoutMs: options.timeoutMs || (options.fast === false ? POSITIONS_REFRESH_TIMEOUT_MS : POSITIONS_FAST_REFRESH_TIMEOUT_MS)
       });
-      state.positions = positions.positions || state.positions || [];
+      state.positions = mergePositionRefreshRows(positions.positions || state.positions || [], state.positions || [], options);
       state.lastWalletRefreshAt = new Date().toISOString();
       state.walletRefreshError = "";
       perfMeasure("positions-refresh", startedAt, {
@@ -2197,6 +2279,9 @@ async function refreshWalletPositions(options = {}) {
         cacheHit: Boolean(positions.cacheHit),
         details: `${options.reason || (options.silent ? "silent" : "refresh")};fast=${options.fast !== false}`
       });
+      if (options.followUpValues && options.fast !== false && positionRowsNeedValueRefresh(state.positions)) {
+        schedulePositionsValueRefresh(350, `${options.reason || "positions"}-values`);
+      }
       return true;
     } catch (error) {
       if (!options.silent) {
@@ -2209,7 +2294,10 @@ async function refreshWalletPositions(options = {}) {
       });
       return false;
     } finally {
-      positionsRefreshPromise = null;
+      if (positionsRefreshSequence === requestId) {
+        positionsRefreshPromise = null;
+        positionsRefreshPromiseKey = "";
+      }
     }
   })();
   return positionsRefreshPromise;
@@ -2234,12 +2322,17 @@ async function refreshPositionsOnly(options = {}) {
       force: Boolean(options.force),
       fast: true,
       silent: false,
+      followUpValues: true,
       reason: options.reason || "positions-only",
       timeoutMs: POSITIONS_FAST_REFRESH_TIMEOUT_MS
     });
     if (!refreshed) throw new Error(state.walletRefreshError || "Position refresh failed.");
     state.lastWalletRefreshAt = new Date().toISOString();
     finishPositionRefreshAction("success", { error: "" });
+    refreshPortfolioSupplemental(`${options.reason || "positions-only"}-balances-pnl`);
+    if (positionRowsNeedValueRefresh(state.positions)) {
+      schedulePositionsValueRefresh(250, `${options.reason || "positions-only"}-full-values`);
+    }
     perfMeasure("positions-only-refresh", startedAt, {
       component: "positions",
       resultCount: state.positions.length,
@@ -3228,7 +3321,15 @@ async function refreshWalletState({ force = false, deep = false, reason = "manua
       cacheHit: true,
       details: force ? "force-shared" : "shared"
     });
-    return walletRefreshPromise;
+    if (state.positionRefreshAction?.state === "clicked") {
+      setPositionRefreshAction("refreshing", { startedAt: state.positionRefreshAction.startedAt || perfNow() });
+    }
+    return walletRefreshPromise.finally(() => {
+      if (["clicked", "refreshing"].includes(state.positionRefreshAction?.state)) {
+        const failed = state.walletRefreshStatus === "error" || state.walletRefreshStatus === "timeout";
+        finishPositionRefreshAction(failed ? "error" : "success", { error: failed ? publicErrorMessage(state.walletRefreshError || "Refresh delayed") : "" });
+      }
+    });
   }
   const startedAt = perfNow();
   const requestId = ++walletRefreshSequence;
@@ -3281,6 +3382,18 @@ async function refreshWalletState({ force = false, deep = false, reason = "manua
       if (deep) {
         await loadAll({ force, skipCore: true, silent: true });
       } else {
+        if (isManualHeaderRefresh || isPostTradeRefresh) {
+          void refreshWalletPositions({
+            force: true,
+            fast: true,
+            silent: true,
+            followUpValues: true,
+            reason: `${reason}-positions-fast`,
+            timeoutMs: POSITIONS_FAST_REFRESH_TIMEOUT_MS
+          }).then((refreshed) => {
+            if (refreshed) render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
+          }).catch(() => {});
+        }
         scheduleWalletBackgroundRefresh(900, { reason });
       }
       perfMeasure("wallet-refresh-total", startedAt, {
@@ -3404,6 +3517,7 @@ function queuePostTradeRefresh(signature = "", reason = "post-trade", options = 
             force: true,
             fast: true,
             silent: true,
+            followUpValues: true,
             reason: "post-trade-light",
             timeoutMs: POSITIONS_FAST_REFRESH_TIMEOUT_MS
           }),
@@ -3502,15 +3616,44 @@ function syncInteractionLocks() {
   if (quickBuyRoot) quickBuyRoot.style.pointerEvents = quickBuyRoot.hidden ? "none" : "";
 }
 
+function appShellLooksCollapsed(element, minHeight = 48) {
+  if (!element || document.hidden) return false;
+  try {
+    const rect = element.getBoundingClientRect();
+    return rect.width < 24 || rect.height < minHeight;
+  } catch (_error) {
+    return false;
+  }
+}
+
+function forceAppShellPaint(reason = "resume") {
+  if (!app || document.hidden) return;
+  syncShellRouteVisibility();
+  syncInteractionLocks();
+  const marker = `${Date.now()}:${reason}`;
+  const previousTransform = app.style.transform;
+  app.dataset.resumePaint = marker;
+  app.style.transform = previousTransform ? `${previousTransform} translateZ(0)` : "translateZ(0)";
+  void app.offsetHeight;
+  window.requestAnimationFrame(() => {
+    if (!app || app.dataset.resumePaint !== marker) return;
+    app.style.transform = previousTransform;
+    delete app.dataset.resumePaint;
+  });
+}
+
 function appShellNeedsRecovery() {
   if (!app) return false;
   if (app.dataset.route !== state.route) return true;
   const modalClassStuck = document.body.classList.contains("login-modal-open") && (!loginModal || loginModal.hidden || !state.loginModalOpen);
   const quickBuyClassStuck = document.body.classList.contains("quick-buy-modal-open") && !state.quickBuyModal?.open;
   if (modalClassStuck || quickBuyClassStuck) return true;
+  if (appShellLooksCollapsed(app, 80)) return true;
   if (state.route !== "terminal") return false;
   const panel = $("[data-panel]");
   if (dashboardView?.hidden) return true;
+  if (appShellLooksCollapsed(dashboardView, 80)) return true;
+  if (panel && appShellLooksCollapsed(panel, 32)) return true;
   if (panel && !panel.children.length && !String(panel.textContent || "").trim()) return true;
   const visibleSection = [loginView, connectView, dashboardView].some((section) => section && !section.hidden);
   return !visibleSection;
@@ -3537,9 +3680,12 @@ function recoverStaleUiLocks(reason = "watchdog") {
   applyActionButtonStates();
 }
 
-function recoverAppShell(reason = "watchdog") {
+function recoverAppShell(reason = "watchdog", options = {}) {
   recoverStaleUiLocks(reason);
-  if (!appShellNeedsRecovery()) return false;
+  if (!appShellNeedsRecovery()) {
+    if (options.forcePaint) forceAppShellPaint(reason);
+    return false;
+  }
   recordPerfEvent({
     component: "app-shell",
     action: "recover-blank-shell",
@@ -3548,6 +3694,7 @@ function recoverAppShell(reason = "watchdog") {
   });
   closeTransientInteractionLayers({ keepLogin: state.route === "login" });
   syncShellRouteVisibility();
+  forceAppShellPaint(reason);
   render({ force: true, preserveSmartChartFrame: state.activeTab === "smartChart" });
   return true;
 }
@@ -8473,7 +8620,13 @@ function tokenRefFromMint(tokenMint = "", extra = {}) {
     imageUri: row?.imageUrl || extra.imageUri || "",
     source: extra.source || row?.source || row?.category || "",
     dex: row?.dexId || extra.dex || "",
-    pool: row?.pool || extra.pool || ""
+    pool: row?.pool || extra.pool || "",
+    pumpUrl: row?.pumpUrl || extra.pumpUrl || "",
+    isPump: Boolean(row?.isPump || extra.isPump || mint.toLowerCase().endsWith("pump")),
+    graduated: Boolean(row?.graduated || row?.isGraduated || row?.bonded || row?.isBonded || extra.graduated || extra.isGraduated || extra.bonded || extra.isBonded),
+    isGraduated: Boolean(row?.isGraduated || row?.graduated || row?.bonded || row?.isBonded || extra.isGraduated || extra.graduated || extra.bonded || extra.isBonded),
+    bonded: Boolean(row?.bonded || row?.isBonded || row?.graduated || row?.isGraduated || extra.bonded || extra.isBonded || extra.graduated || extra.isGraduated),
+    isBonded: Boolean(row?.isBonded || row?.bonded || row?.graduated || row?.isGraduated || extra.isBonded || extra.bonded || extra.graduated || extra.isGraduated)
   };
 }
 
@@ -8486,7 +8639,13 @@ function tokenRefFromRow(row = {}, extra = {}) {
     imageUri: row?.imageUrl || row?.imageUri || extra.imageUri || "",
     source: extra.source || row?.source || row?.category || "",
     dex: row?.dexId || extra.dex || "",
-    pool: row?.pool || extra.pool || ""
+    pool: row?.pool || extra.pool || "",
+    pumpUrl: row?.pumpUrl || extra.pumpUrl || "",
+    isPump: row?.isPump || extra.isPump,
+    graduated: row?.graduated || row?.isGraduated || row?.bonded || row?.isBonded || extra.graduated || extra.isGraduated || extra.bonded || extra.isBonded,
+    isGraduated: row?.isGraduated || row?.graduated || row?.bonded || row?.isBonded || extra.isGraduated || extra.graduated || extra.bonded || extra.isBonded,
+    bonded: row?.bonded || row?.isBonded || row?.graduated || row?.isGraduated || extra.bonded || extra.isBonded || extra.graduated || extra.isGraduated,
+    isBonded: row?.isBonded || row?.bonded || row?.graduated || row?.isGraduated || extra.isBonded || extra.bonded || extra.graduated || extra.isGraduated
   });
 }
 
@@ -8514,10 +8673,25 @@ function buildTokenChartPath(mint, options = {}) {
   params.set("token", mint);
   const tab = options.defaultTab === "sell" ? "sell" : options.defaultTab === "chart" ? "chart" : "buy";
   params.set("tab", tab);
+  if (["chart", "chartTxns", "txns", "info"].includes(options.view)) params.set("view", options.view);
   if (options.focusAmountInput) params.set("focusAmount", "1");
   if (options.source) params.set("source", String(options.source).slice(0, 40));
   if (options.returnTo) params.set("returnTo", options.returnTo);
   return `/terminal/chart?${params.toString()}`;
+}
+
+function isUnbondedPumpToken(row = {}) {
+  const mint = String(row?.tokenMint || row?.mint || row?.tokenAddress || "").trim();
+  const text = `${row?.source || ""} ${row?.category || ""} ${row?.dex || ""} ${row?.pool || ""}`.toLowerCase();
+  const isPump = Boolean(row?.isPump || row?.pumpUrl || mint.toLowerCase().endsWith("pump") || text.includes("pump"));
+  const bonded = Boolean(row?.graduated || row?.isGraduated || row?.bonded || row?.isBonded || row?.complete || row?.completed || row?.bondingComplete || row?.raydiumPool || row?.poolAddress);
+  return Boolean(isPump && !bonded);
+}
+
+function preferredSmartChartView(tokenRef = {}, options = {}) {
+  if (["chart", "chartTxns", "txns", "info"].includes(options.view)) return options.view;
+  if (options.defaultTab === "chart" && isUnbondedPumpToken(tokenRef)) return "chartTxns";
+  return "chart";
 }
 
 function openTokenChart(tokenRef = {}, options = {}) {
@@ -8530,7 +8704,7 @@ function openTokenChart(tokenRef = {}, options = {}) {
   }
   prefetchTokenChart(tokenRef, { source: options.source || "token-entry" });
   state.chartTradeTab = options.defaultTab === "sell" ? "sell" : options.defaultTab === "chart" ? "buy" : "buy";
-  state.smartChartView = "chart";
+  state.smartChartView = preferredSmartChartView(state.smartChartTokenRef || tokenRef, options);
   state.chartFocusAmountInput = Boolean(options.focusAmountInput);
   state.chartScrollIntoView = true;
   state.activeTab = "smartChart";
@@ -8538,6 +8712,7 @@ function openTokenChart(tokenRef = {}, options = {}) {
   state.quickBuyModal = { ...state.quickBuyModal, open: false, status: "", error: "" };
   const path = buildTokenChartPath(mint, {
     defaultTab: options.defaultTab || "buy",
+    view: state.smartChartView,
     focusAmountInput: options.focusAmountInput,
     source: options.source || "token-entry",
     returnTo: options.returnTo || currentReturnPath()
@@ -9858,6 +10033,8 @@ function dexChartEmbedUrl(tokenOrMint, options = {}) {
 
 function smartChartFrameUrl(token = {}, mode = "chart") {
   const mint = String(token?.tokenMint || state.smartChartToken || "").trim();
+  const pumpUrl = pumpUrlForRow(token);
+  if (pumpUrl && isUnbondedPumpToken(token) && ["chart", "chartTxns", "txns"].includes(mode)) return pumpUrl;
   const bootstrap = smartChartBootstrapForMint(mint);
   if (mode === "info" && bootstrap?.infoUrl) return bootstrap.infoUrl;
   if ((mode === "chartTxns" || mode === "txns") && (bootstrap?.chartTxnsUrl || bootstrap?.txnsUrl)) {
@@ -9871,10 +10048,13 @@ function smartChartDexFrameHtml(token = {}, mode = "chart") {
   const mint = String(token?.tokenMint || state.smartChartToken || "").trim();
   const isTransactions = mode === "chartTxns" || mode === "txns";
   const isInfo = mode === "info";
+  const isPumpChart = Boolean(pumpUrlForRow(token) && isUnbondedPumpToken(token) && ["chart", "chartTxns", "txns"].includes(mode));
   const resolvingPair = queueSmartChartBootstrap(token) || queueSmartChartDexResolution(token);
   const title = isInfo
     ? `DexScreener info for ${token.symbol || shortAddress(mint)}`
-    : isTransactions
+    : isPumpChart
+      ? `Pump chart and transactions for ${token.symbol || shortAddress(mint)}`
+      : isTransactions
       ? `DexScreener chart and transactions for ${token.symbol || shortAddress(mint)}`
       : `DexScreener chart for ${token.symbol || shortAddress(mint)}`;
   const className = [
@@ -9884,8 +10064,8 @@ function smartChartDexFrameHtml(token = {}, mode = "chart") {
     mode === "chartTxns" ? "smart-chart-combined-frame" : "",
     isInfo ? "smart-chart-info-frame" : ""
   ].filter(Boolean).join(" ");
-  const loadingLabel = isInfo ? "Loading token info..." : isTransactions ? "Loading DEX transactions..." : "Loading DEX chart...";
-  const frameLoadingLabel = resolvingPair ? "Loading DEX chart while resolving fastest pair..." : loadingLabel;
+  const loadingLabel = isPumpChart ? "Loading Pump chart..." : isInfo ? "Loading token info..." : isTransactions ? "Loading DEX transactions..." : "Loading DEX chart...";
+  const frameLoadingLabel = resolvingPair && !isPumpChart ? "Loading DEX chart while resolving fastest pair..." : loadingLabel;
   return `
     <div class="${escapeHtml(className)}" data-chart-frame-loading="${escapeHtml(frameLoadingLabel)}" data-chart-resolving="${resolvingPair ? "true" : "false"}">
       <iframe title="${escapeHtml(title)}" src="${escapeHtml(smartChartFrameUrl(token, mode))}" loading="eager" fetchpriority="high" referrerpolicy="no-referrer-when-downgrade" onload="this.closest('.smart-chart-frame')?.setAttribute('data-loaded','true'); window.SlimeWireChartFrameLoaded?.('${escapeHtml(mode)}','${escapeHtml(mint)}')" allowfullscreen></iframe>
@@ -10757,15 +10937,17 @@ function tradesForToken(mint = "") {
 function smartChartTransactionsHtml(token = {}, heldPosition = null) {
   const mint = String(token?.tokenMint || state.smartChartToken || "").trim();
   const trades = tradesForToken(mint);
-  const dexLink = token.dexUrl || dexUrl(chartAddressForToken(token) || mint);
+  const isPumpMarket = Boolean(pumpUrlForRow(token) && isUnbondedPumpToken(token));
+  const marketLink = isPumpMarket ? pumpUrlForRow(token) : token.dexUrl || dexUrl(chartAddressForToken(token) || mint);
+  const marketLabel = isPumpMarket ? "Pump" : "DEX";
   return `
     <section class="smart-chart-transactions-panel" data-smart-chart-transactions>
       <div class="terminal-title-row">
         <div>
-          <h4>DEX Transactions</h4>
-          <p>Live market fills from DexScreener. SlimeWire trade history appears below when this wallet has traded the token.</p>
+          <h4>${escapeHtml(marketLabel)} Transactions</h4>
+          <p>Live market activity from ${escapeHtml(marketLabel)}. SlimeWire trade history appears below when this wallet has traded the token.</p>
         </div>
-        <a href="${escapeHtml(dexLink)}" target="_blank" rel="noreferrer">Open DEX Feed</a>
+        <a href="${escapeHtml(marketLink)}" target="_blank" rel="noreferrer">Open ${escapeHtml(marketLabel)} Feed</a>
       </div>
       ${smartChartDexFrameHtml(token, "txns")}
       ${trades.length ? `
@@ -10959,7 +11141,7 @@ function smartChartHtml() {
           ${smartChartViewTabsHtml(chartView)}
           ${chartView === "chart" ? `
             ${smartChartDexFrameHtml(token, "chart")}
-            <small class="score-breakdown">If the embedded chart does not load, use the DEX link above.</small>
+            <small class="score-breakdown">If the embedded chart does not load, use the ${isUnbondedPumpToken(token) ? "Pump" : "DEX"} link above.</small>
           ` : chartView === "chartTxns" ? `
             ${smartChartDexFrameHtml(token, "chartTxns")}
             <small class="score-breakdown">Chart + Txns loads the DexScreener transaction feed inside the chart frame. Use Transactions for the dedicated DEX feed view.</small>
@@ -11133,6 +11315,24 @@ function positionsTableHtml(limit = 25) {
 }
 
 function positionRowHtml(position) {
+  const hasEstimatedValue = position.estimatedValueSol !== null && position.estimatedValueSol !== undefined && position.estimatedValueSol !== "";
+  const hasOpenPnl = position.openPnlSol !== null && position.openPnlSol !== undefined && position.openPnlSol !== "";
+  const isValueUpdating = Boolean(position.valuePending || (!hasEstimatedValue && /refreshing|updating|background/i.test(position.valueError || "")));
+  const valueLabel = hasEstimatedValue
+    ? `${position.estimatedValueSol} SOL`
+    : isValueUpdating
+      ? "updating"
+      : "Price unavailable";
+  const pnlLabel = hasOpenPnl
+    ? position.openPnlSol
+    : isValueUpdating
+      ? "updating"
+      : "Price unavailable";
+  const valueStatus = position.valueError
+    ? isValueUpdating
+      ? "Value updating in background"
+      : `Price warning: ${position.valueError}`
+    : "";
   return `
     <article class="row-card position with-avatar">
       ${livePairAvatarHtml(position)}
@@ -11140,8 +11340,8 @@ function positionRowHtml(position) {
         <strong>${escapeHtml(position.symbol || position.shortMint)}</strong>
         <span>${escapeHtml(position.uiAmount)} tokens across ${escapeHtml(position.walletCount)} wallet(s)</span>
         ${position.name ? `<small>${escapeHtml(position.name)}</small>` : ""}
-        <small>Value: ${escapeHtml(position.estimatedValueSol || "Price unavailable")} SOL | PnL: ${escapeHtml(position.openPnlSol || position.realizedSol || "Price unavailable")}</small>
-        ${position.valueError ? `<small class="warning-text">Price warning: ${escapeHtml(position.valueError)}</small>` : ""}
+        <small>Value: ${escapeHtml(valueLabel)} | PnL: ${escapeHtml(pnlLabel)}</small>
+        ${valueStatus ? `<small class="${isValueUpdating ? "muted-text" : "warning-text"}">${escapeHtml(valueStatus)}</small>` : ""}
       </div>
       <div class="card-actions compact">
         <button data-position-sell="${escapeHtml(position.tokenMint)}" data-position-sell-percent="25">Sell 25%</button>
@@ -13005,10 +13205,14 @@ document.addEventListener("input", (event) => {
   if (target.type === "range") render({ force: true });
 });
 
-function resumeLiveFeeds() {
+function resumeLiveFeeds(event = null) {
   if (document.hidden) return;
-  recoverAppShell("visibility-return");
+  const resumeReason = event?.persisted ? "pageshow-bfcache" : "visibility-return";
+  const recovered = recoverAppShell(resumeReason, { forcePaint: true });
   flushDeferredRender();
+  if (!recovered && event?.persisted && state.route === "terminal") {
+    render({ force: true, preserveSmartChartFrame: state.activeTab === "smartChart" });
+  }
   if (resumeLiveFeedsTimer) window.clearTimeout(resumeLiveFeedsTimer);
   resumeLiveFeedsTimer = window.setTimeout(() => {
     resumeLiveFeedsTimer = null;
@@ -13052,6 +13256,11 @@ document.addEventListener("visibilitychange", () => {
 window.addEventListener("focus", resumeLiveFeeds);
 window.addEventListener("pageshow", resumeLiveFeeds);
 window.addEventListener("online", resumeLiveFeeds);
+window.addEventListener("pagehide", () => {
+  if (!resumeLiveFeedsTimer) return;
+  window.clearTimeout(resumeLiveFeedsTimer);
+  resumeLiveFeedsTimer = null;
+});
 
 function startAppWatchdog() {
   if (appWatchdogTimer) window.clearInterval(appWatchdogTimer);

@@ -328,8 +328,10 @@ let positionsValueRefreshTimer = null;
 let autoExitCheckInFlight = false;
 let walletRefreshPromise = null;
 let positionsRefreshPromise = null;
+let positionsRefreshPromiseKey = "";
 let lastWalletForceRefreshAt = 0;
 let walletRefreshSequence = 0;
+let positionsRefreshSequence = 0;
 let ogreAiRunInFlight = null;
 const livePairsLoadInFlight = new Map();
 const livePairsLoadVersionsByBucket = {};
@@ -2209,6 +2211,25 @@ function schedulePositionsValueRefresh(delayMs = 300, reason = "positions-value-
   }, Math.max(0, Number(delayMs) || 0));
 }
 
+function mergePositionRefreshRows(nextRows = [], previousRows = [], options = {}) {
+  const previousByMint = new Map((Array.isArray(previousRows) ? previousRows : []).map((row) => [String(row?.tokenMint || ""), row]));
+  return (Array.isArray(nextRows) ? nextRows : []).map((row) => {
+    const previous = previousByMint.get(String(row?.tokenMint || ""));
+    if (!previous || options.fast === false) return row;
+    const rowPending = Boolean(row?.valuePending || /refreshing|updating|background/i.test(row?.valueError || ""));
+    const previousHasValue = previous.estimatedValueSol !== null && previous.estimatedValueSol !== undefined && previous.estimatedValueSol !== "";
+    if (!rowPending || !previousHasValue) return row;
+    return {
+      ...row,
+      estimatedValueSol: previous.estimatedValueSol,
+      openPnlSol: previous.openPnlSol,
+      openPnlPercent: previous.openPnlPercent,
+      valuePending: false,
+      valueError: ""
+    };
+  });
+}
+
 function refreshPortfolioSupplemental(reason = "portfolio-supplemental") {
   if (!state.user || !state.token) return;
   const startedAt = perfNow();
@@ -2235,18 +2256,21 @@ function refreshPortfolioSupplemental(reason = "portfolio-supplemental") {
 
 async function refreshWalletPositions(options = {}) {
   if (!state.user || !state.token) return;
-  if (positionsRefreshPromise) return positionsRefreshPromise;
   const startedAt = perfNow();
   const params = new URLSearchParams();
   if (options.force) params.set("force", "true");
   if (options.fast !== false) params.set("fast", "true");
   const query = params.toString() ? `?${params.toString()}` : "";
+  const requestKey = query || "full";
+  if (positionsRefreshPromise && positionsRefreshPromiseKey === requestKey) return positionsRefreshPromise;
+  const requestId = ++positionsRefreshSequence;
+  positionsRefreshPromiseKey = requestKey;
   positionsRefreshPromise = (async () => {
     try {
       const positions = await api(`/api/web/positions${query}`, {
         timeoutMs: options.timeoutMs || (options.fast === false ? POSITIONS_REFRESH_TIMEOUT_MS : POSITIONS_FAST_REFRESH_TIMEOUT_MS)
       });
-      state.positions = positions.positions || state.positions || [];
+      state.positions = mergePositionRefreshRows(positions.positions || state.positions || [], state.positions || [], options);
       state.lastWalletRefreshAt = new Date().toISOString();
       state.walletRefreshError = "";
       perfMeasure("positions-refresh", startedAt, {
@@ -2270,7 +2294,10 @@ async function refreshWalletPositions(options = {}) {
       });
       return false;
     } finally {
-      positionsRefreshPromise = null;
+      if (positionsRefreshSequence === requestId) {
+        positionsRefreshPromise = null;
+        positionsRefreshPromiseKey = "";
+      }
     }
   })();
   return positionsRefreshPromise;
@@ -8593,7 +8620,13 @@ function tokenRefFromMint(tokenMint = "", extra = {}) {
     imageUri: row?.imageUrl || extra.imageUri || "",
     source: extra.source || row?.source || row?.category || "",
     dex: row?.dexId || extra.dex || "",
-    pool: row?.pool || extra.pool || ""
+    pool: row?.pool || extra.pool || "",
+    pumpUrl: row?.pumpUrl || extra.pumpUrl || "",
+    isPump: Boolean(row?.isPump || extra.isPump || mint.toLowerCase().endsWith("pump")),
+    graduated: Boolean(row?.graduated || row?.isGraduated || row?.bonded || row?.isBonded || extra.graduated || extra.isGraduated || extra.bonded || extra.isBonded),
+    isGraduated: Boolean(row?.isGraduated || row?.graduated || row?.bonded || row?.isBonded || extra.isGraduated || extra.graduated || extra.bonded || extra.isBonded),
+    bonded: Boolean(row?.bonded || row?.isBonded || row?.graduated || row?.isGraduated || extra.bonded || extra.isBonded || extra.graduated || extra.isGraduated),
+    isBonded: Boolean(row?.isBonded || row?.bonded || row?.graduated || row?.isGraduated || extra.isBonded || extra.bonded || extra.graduated || extra.isGraduated)
   };
 }
 
@@ -8606,7 +8639,13 @@ function tokenRefFromRow(row = {}, extra = {}) {
     imageUri: row?.imageUrl || row?.imageUri || extra.imageUri || "",
     source: extra.source || row?.source || row?.category || "",
     dex: row?.dexId || extra.dex || "",
-    pool: row?.pool || extra.pool || ""
+    pool: row?.pool || extra.pool || "",
+    pumpUrl: row?.pumpUrl || extra.pumpUrl || "",
+    isPump: row?.isPump || extra.isPump,
+    graduated: row?.graduated || row?.isGraduated || row?.bonded || row?.isBonded || extra.graduated || extra.isGraduated || extra.bonded || extra.isBonded,
+    isGraduated: row?.isGraduated || row?.graduated || row?.bonded || row?.isBonded || extra.isGraduated || extra.graduated || extra.bonded || extra.isBonded,
+    bonded: row?.bonded || row?.isBonded || row?.graduated || row?.isGraduated || extra.bonded || extra.isBonded || extra.graduated || extra.isGraduated,
+    isBonded: row?.isBonded || row?.bonded || row?.graduated || row?.isGraduated || extra.isBonded || extra.bonded || extra.graduated || extra.isGraduated
   });
 }
 
@@ -8634,10 +8673,25 @@ function buildTokenChartPath(mint, options = {}) {
   params.set("token", mint);
   const tab = options.defaultTab === "sell" ? "sell" : options.defaultTab === "chart" ? "chart" : "buy";
   params.set("tab", tab);
+  if (["chart", "chartTxns", "txns", "info"].includes(options.view)) params.set("view", options.view);
   if (options.focusAmountInput) params.set("focusAmount", "1");
   if (options.source) params.set("source", String(options.source).slice(0, 40));
   if (options.returnTo) params.set("returnTo", options.returnTo);
   return `/terminal/chart?${params.toString()}`;
+}
+
+function isUnbondedPumpToken(row = {}) {
+  const mint = String(row?.tokenMint || row?.mint || row?.tokenAddress || "").trim();
+  const text = `${row?.source || ""} ${row?.category || ""} ${row?.dex || ""} ${row?.pool || ""}`.toLowerCase();
+  const isPump = Boolean(row?.isPump || row?.pumpUrl || mint.toLowerCase().endsWith("pump") || text.includes("pump"));
+  const bonded = Boolean(row?.graduated || row?.isGraduated || row?.bonded || row?.isBonded || row?.complete || row?.completed || row?.bondingComplete || row?.raydiumPool || row?.poolAddress);
+  return Boolean(isPump && !bonded);
+}
+
+function preferredSmartChartView(tokenRef = {}, options = {}) {
+  if (["chart", "chartTxns", "txns", "info"].includes(options.view)) return options.view;
+  if (options.defaultTab === "chart" && isUnbondedPumpToken(tokenRef)) return "chartTxns";
+  return "chart";
 }
 
 function openTokenChart(tokenRef = {}, options = {}) {
@@ -8650,7 +8704,7 @@ function openTokenChart(tokenRef = {}, options = {}) {
   }
   prefetchTokenChart(tokenRef, { source: options.source || "token-entry" });
   state.chartTradeTab = options.defaultTab === "sell" ? "sell" : options.defaultTab === "chart" ? "buy" : "buy";
-  state.smartChartView = "chart";
+  state.smartChartView = preferredSmartChartView(state.smartChartTokenRef || tokenRef, options);
   state.chartFocusAmountInput = Boolean(options.focusAmountInput);
   state.chartScrollIntoView = true;
   state.activeTab = "smartChart";
@@ -8658,6 +8712,7 @@ function openTokenChart(tokenRef = {}, options = {}) {
   state.quickBuyModal = { ...state.quickBuyModal, open: false, status: "", error: "" };
   const path = buildTokenChartPath(mint, {
     defaultTab: options.defaultTab || "buy",
+    view: state.smartChartView,
     focusAmountInput: options.focusAmountInput,
     source: options.source || "token-entry",
     returnTo: options.returnTo || currentReturnPath()
@@ -9978,6 +10033,8 @@ function dexChartEmbedUrl(tokenOrMint, options = {}) {
 
 function smartChartFrameUrl(token = {}, mode = "chart") {
   const mint = String(token?.tokenMint || state.smartChartToken || "").trim();
+  const pumpUrl = pumpUrlForRow(token);
+  if (pumpUrl && isUnbondedPumpToken(token) && ["chart", "chartTxns", "txns"].includes(mode)) return pumpUrl;
   const bootstrap = smartChartBootstrapForMint(mint);
   if (mode === "info" && bootstrap?.infoUrl) return bootstrap.infoUrl;
   if ((mode === "chartTxns" || mode === "txns") && (bootstrap?.chartTxnsUrl || bootstrap?.txnsUrl)) {
@@ -9991,10 +10048,13 @@ function smartChartDexFrameHtml(token = {}, mode = "chart") {
   const mint = String(token?.tokenMint || state.smartChartToken || "").trim();
   const isTransactions = mode === "chartTxns" || mode === "txns";
   const isInfo = mode === "info";
+  const isPumpChart = Boolean(pumpUrlForRow(token) && isUnbondedPumpToken(token) && ["chart", "chartTxns", "txns"].includes(mode));
   const resolvingPair = queueSmartChartBootstrap(token) || queueSmartChartDexResolution(token);
   const title = isInfo
     ? `DexScreener info for ${token.symbol || shortAddress(mint)}`
-    : isTransactions
+    : isPumpChart
+      ? `Pump chart and transactions for ${token.symbol || shortAddress(mint)}`
+      : isTransactions
       ? `DexScreener chart and transactions for ${token.symbol || shortAddress(mint)}`
       : `DexScreener chart for ${token.symbol || shortAddress(mint)}`;
   const className = [
@@ -10004,8 +10064,8 @@ function smartChartDexFrameHtml(token = {}, mode = "chart") {
     mode === "chartTxns" ? "smart-chart-combined-frame" : "",
     isInfo ? "smart-chart-info-frame" : ""
   ].filter(Boolean).join(" ");
-  const loadingLabel = isInfo ? "Loading token info..." : isTransactions ? "Loading DEX transactions..." : "Loading DEX chart...";
-  const frameLoadingLabel = resolvingPair ? "Loading DEX chart while resolving fastest pair..." : loadingLabel;
+  const loadingLabel = isPumpChart ? "Loading Pump chart..." : isInfo ? "Loading token info..." : isTransactions ? "Loading DEX transactions..." : "Loading DEX chart...";
+  const frameLoadingLabel = resolvingPair && !isPumpChart ? "Loading DEX chart while resolving fastest pair..." : loadingLabel;
   return `
     <div class="${escapeHtml(className)}" data-chart-frame-loading="${escapeHtml(frameLoadingLabel)}" data-chart-resolving="${resolvingPair ? "true" : "false"}">
       <iframe title="${escapeHtml(title)}" src="${escapeHtml(smartChartFrameUrl(token, mode))}" loading="eager" fetchpriority="high" referrerpolicy="no-referrer-when-downgrade" onload="this.closest('.smart-chart-frame')?.setAttribute('data-loaded','true'); window.SlimeWireChartFrameLoaded?.('${escapeHtml(mode)}','${escapeHtml(mint)}')" allowfullscreen></iframe>
@@ -10877,15 +10937,17 @@ function tradesForToken(mint = "") {
 function smartChartTransactionsHtml(token = {}, heldPosition = null) {
   const mint = String(token?.tokenMint || state.smartChartToken || "").trim();
   const trades = tradesForToken(mint);
-  const dexLink = token.dexUrl || dexUrl(chartAddressForToken(token) || mint);
+  const isPumpMarket = Boolean(pumpUrlForRow(token) && isUnbondedPumpToken(token));
+  const marketLink = isPumpMarket ? pumpUrlForRow(token) : token.dexUrl || dexUrl(chartAddressForToken(token) || mint);
+  const marketLabel = isPumpMarket ? "Pump" : "DEX";
   return `
     <section class="smart-chart-transactions-panel" data-smart-chart-transactions>
       <div class="terminal-title-row">
         <div>
-          <h4>DEX Transactions</h4>
-          <p>Live market fills from DexScreener. SlimeWire trade history appears below when this wallet has traded the token.</p>
+          <h4>${escapeHtml(marketLabel)} Transactions</h4>
+          <p>Live market activity from ${escapeHtml(marketLabel)}. SlimeWire trade history appears below when this wallet has traded the token.</p>
         </div>
-        <a href="${escapeHtml(dexLink)}" target="_blank" rel="noreferrer">Open DEX Feed</a>
+        <a href="${escapeHtml(marketLink)}" target="_blank" rel="noreferrer">Open ${escapeHtml(marketLabel)} Feed</a>
       </div>
       ${smartChartDexFrameHtml(token, "txns")}
       ${trades.length ? `
@@ -11079,7 +11141,7 @@ function smartChartHtml() {
           ${smartChartViewTabsHtml(chartView)}
           ${chartView === "chart" ? `
             ${smartChartDexFrameHtml(token, "chart")}
-            <small class="score-breakdown">If the embedded chart does not load, use the DEX link above.</small>
+            <small class="score-breakdown">If the embedded chart does not load, use the ${isUnbondedPumpToken(token) ? "Pump" : "DEX"} link above.</small>
           ` : chartView === "chartTxns" ? `
             ${smartChartDexFrameHtml(token, "chartTxns")}
             <small class="score-breakdown">Chart + Txns loads the DexScreener transaction feed inside the chart frame. Use Transactions for the dedicated DEX feed view.</small>
