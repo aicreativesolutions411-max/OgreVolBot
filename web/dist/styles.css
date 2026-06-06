@@ -9078,3 +9078,15 @@ body {
     opacity: 0.72 !important;
   }
 }
+
+/* SLIME_SWAMP_SUPPORT_RAILS_V10: tiny sponsor-only mobile nudge for native title readability. */
+@media (max-width: 760px) {
+  [data-app][data-route="intro"] .swamp-sponsor-frame .swamp-support-frame-art {
+    transform: translateY(7px) scale(0.992) !important;
+    transform-origin: top center !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-sponsor-frame .swamp-support-content {
+    padding-top: clamp(88px, 22vw, 110px) !important;
+  }
+}
