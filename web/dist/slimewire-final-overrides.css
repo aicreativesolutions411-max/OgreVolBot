@@ -8513,3 +8513,127 @@ textarea,
     font-size: 10px !important;
   }
 }
+
+/* OGRE_MOBILE_TOOLS_GRID_DENSE_V2: Ogre Tools side-by-side, no tall single column. */
+@media (max-width: 760px) {
+  [data-app][data-route="terminal"] .tabs .nav-tool-group {
+    grid-column: 1 / -1 !important;
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 5px !important;
+    width: 100% !important;
+    max-width: none !important;
+    min-width: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    border: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs .nav-tool-group > summary {
+    display: none !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs .nav-tool-group button {
+    grid-column: auto !important;
+    width: 100% !important;
+    max-width: none !important;
+    min-width: 0 !important;
+    min-height: 36px !important;
+    padding: 4px 5px !important;
+    margin: 0 !important;
+    border-radius: 10px !important;
+    font-size: 9.8px !important;
+    line-height: 1.05 !important;
+    gap: 1px !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs .nav-tool-group button::before,
+  [data-app][data-route="terminal"] .tabs .nav-tool-group button img,
+  [data-app][data-route="terminal"] .tabs .nav-tool-group button svg {
+    width: 15px !important;
+    height: 15px !important;
+    max-width: 15px !important;
+    max-height: 15px !important;
+  }
+
+  [data-app][data-route="terminal"] .tabs .nav-tool-group button[data-tab="ogreAi"],
+  [data-app][data-route="terminal"] .tabs .nav-tool-group button[data-tab="launchCoin"] {
+    grid-column: auto !important;
+  }
+}
+
+/* OGRE_AGENT_MOBILE_TOP_SAFE_V4: keep close/header visible and internal chat scrollable. */
+@media (max-width: 760px) {
+  .ogre-agent-shell.is-open {
+    position: fixed !important;
+    inset: 0 !important;
+    z-index: 2147483000 !important;
+    overflow: hidden !important;
+    pointer-events: none !important;
+  }
+
+  .ogre-agent-shell.is-open .ogre-agent-panel {
+    position: fixed !important;
+    left: 8px !important;
+    right: 8px !important;
+    top: max(10px, env(safe-area-inset-top)) !important;
+    bottom: max(10px, env(safe-area-inset-bottom)) !important;
+    width: auto !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    display: flex !important;
+    flex-direction: column !important;
+    overflow: hidden !important;
+    transform: none !important;
+    pointer-events: auto !important;
+  }
+
+  .ogre-agent-panel header {
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 10 !important;
+    display: flex !important;
+    flex: 0 0 auto !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    min-height: 46px !important;
+    padding: 10px 12px 8px !important;
+    background: linear-gradient(180deg, rgba(0, 18, 7, 0.98), rgba(0, 11, 4, 0.94)) !important;
+    border-bottom: 1px solid rgba(137, 255, 58, 0.22) !important;
+  }
+
+  .ogre-agent-panel [data-ogre-agent-close] {
+    min-width: 38px !important;
+    min-height: 38px !important;
+    display: inline-grid !important;
+    place-items: center !important;
+    font-size: 22px !important;
+    line-height: 1 !important;
+  }
+
+  .ogre-agent-feed,
+  .ogre-agent-messages {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow-y: auto !important;
+    overscroll-behavior: contain !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+
+  .ogre-agent-composer,
+  .ogre-agent-quick-actions,
+  .ogre-agent-status {
+    flex: 0 0 auto !important;
+  }
+
+  .ogre-agent-panel:focus-within {
+    top: max(10px, env(safe-area-inset-top)) !important;
+    bottom: max(10px, env(safe-area-inset-bottom)) !important;
+    min-height: 0 !important;
+    max-height: none !important;
+  }
+}

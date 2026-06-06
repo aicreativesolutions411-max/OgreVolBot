@@ -2480,14 +2480,98 @@ async function ogreAgentTrendRows(context = {}) {
   return rows.sort((a, b) => ogreAgentTrendScore(b) - ogreAgentTrendScore(a)).slice(0, 8);
 }
 
+function ogreAgentXBearerToken() {
+  return ogreAgentEnv("X_BEARER_TOKEN")
+    || ogreAgentEnv("TWITTER_BEARER_TOKEN")
+    || ogreAgentEnv("X_API_BEARER_TOKEN")
+    || ogreAgentEnv("TWITTER_API_BEARER_TOKEN");
+}
+
+function ogreAgentExtractSolanaMints(text = "") {
+  const seen = new Set();
+  return (String(text || "").match(/\b[A-HJ-NP-Za-km-z1-9]{32,48}\b/g) || [])
+    .filter((mint) => {
+      const key = mint.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return !/^(https?|twitter|status|profile|solana|memecoin)$/i.test(mint);
+    })
+    .slice(0, 8);
+}
+
+async function ogreAgentXTrendRows(message = "") {
+  const bearer = ogreAgentXBearerToken();
+  if (!bearer || !ogreAgentTrendIntent(message)) {
+    return { configured: Boolean(bearer), rows: [], error: "" };
+  }
+  const queryParts = [
+    "(solana OR memecoin OR meme coin OR pump OR pumpfun OR ca OR contract address)",
+    "lang:en",
+    "-is:retweet"
+  ];
+  const params = new URLSearchParams({
+    query: queryParts.join(" "),
+    "tweet.fields": "created_at,public_metrics",
+    max_results: "100"
+  });
+  const data = await ogreAgentFetchJson(`https://api.x.com/2/tweets/search/recent?${params.toString()}`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${bearer}`
+    }
+  }, 3600);
+  const tweets = Array.isArray(data?.data) ? data.data : [];
+  if (!tweets.length) {
+    return { configured: true, rows: [], error: data?.errors?.[0]?.detail || "" };
+  }
+  const byMint = new Map();
+  for (const tweet of tweets) {
+    const text = String(tweet?.text || "");
+    const metrics = tweet?.public_metrics || {};
+    const engagement = ogreAgentTrendNumber(metrics.like_count)
+      + ogreAgentTrendNumber(metrics.retweet_count) * 3
+      + ogreAgentTrendNumber(metrics.quote_count) * 2
+      + ogreAgentTrendNumber(metrics.reply_count);
+    for (const tokenMint of ogreAgentExtractSolanaMints(text)) {
+      const current = byMint.get(tokenMint) || {
+        tokenMint,
+        symbol: "",
+        name: "",
+        xMentions: 0,
+        xEngagement: 0,
+        firstSeenAt: tweet?.created_at || "",
+        sampleText: "",
+        source: "x-recent-search",
+        riskFlags: []
+      };
+      current.xMentions += 1;
+      current.xEngagement += engagement;
+      if (!current.sampleText) current.sampleText = text.replace(/\s+/g, " ").slice(0, 180);
+      byMint.set(tokenMint, current);
+    }
+  }
+  const rows = [...byMint.values()]
+    .map((row) => ({
+      ...row,
+      score: row.xMentions * 18 + Math.log10(1 + row.xEngagement) * 16
+    }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 8);
+  return { configured: true, rows, error: "" };
+}
+
 async function ogreAgentTrendReply(message = "", context = {}) {
   if (!ogreAgentTrendIntent(message)) return null;
-  const rows = await ogreAgentTrendRows(context);
+  const xTrend = await ogreAgentXTrendRows(message);
+  const rows = xTrend.rows.length ? xTrend.rows : await ogreAgentTrendRows(context);
+  const usedX = xTrend.rows.length > 0;
   if (!rows.length) {
     return {
       reply: [
         "I can scan SlimeWire live/fresh candidates, but I do not have enough fresh rows loaded yet.",
-        "Tap Refresh Feeds, then ask again. For a true platform-wide X ranking, SlimeWire still needs a dedicated X/social firehose; I will not fake X data."
+        xTrend.configured
+          ? "X recent search is configured, but it did not return usable token CAs in the quick window. Tap Refresh Feeds or ask for a specific token CA."
+          : "For a true platform-wide X ranking, add X_BEARER_TOKEN/TWITTER_BEARER_TOKEN on Render. Until then I rank SlimeWire-visible live candidates and visible social links instead of faking X data."
       ].join("\n"),
       actions: [
         { label: "Refresh Feeds", type: "refresh_feeds" },
@@ -2501,15 +2585,20 @@ async function ogreAgentTrendReply(message = "", context = {}) {
   }
   const topRows = rows.slice(0, 4);
   const lines = [
-    "Fast meme scan from SlimeWire live data right now:",
+    usedX ? "Fast X recent-search CA scan right now:" : "Fast meme scan from SlimeWire live data right now:",
     ...topRows.map((row, index) => {
       const symbol = row.symbol || shortMint(row.tokenMint);
       const age = Number.isFinite(Number(row.ageMinutes)) ? `${Math.max(0, Math.round(Number(row.ageMinutes)))}m old` : "age n/a";
       const socials = row.twitterUrl || row.telegramUrl || row.websiteUrl ? "socials found" : "socials not returned";
       const risk = Array.isArray(row.riskFlags) && row.riskFlags.length ? `risk: ${row.riskFlags.slice(0, 2).join(", ")}` : "risk pending";
+      if (usedX) {
+        return `${index + 1}. ${symbol} ${shortMint(row.tokenMint)} | X posts ${row.xMentions || 0} | X action ${row.xEngagement || 0} | ${risk}`;
+      }
       return `${index + 1}. ${symbol} ${shortMint(row.tokenMint)} | MC ${ogreAgentMoney(row.marketCap)} | Liq ${ogreAgentMoney(row.liquidityUsd)} | Vol ${ogreAgentMoney(row.volume5m || row.volume1h)} | ${age} | ${socials} | ${risk}`;
     }),
-    "X note: I can use returned X/social links and AI reasoning, but a true X-wide trend scan needs a dedicated X/social data source. I will rank the live candidates I can actually see instead of guessing."
+    usedX
+      ? "X source: recent search from the configured X bearer token. I count CAs and public engagement from returned posts, then you can open/check the top CA."
+      : "X note: I can use returned X/social links and AI reasoning, but a true X-wide trend scan needs X_BEARER_TOKEN/TWITTER_BEARER_TOKEN configured. I rank the live candidates I can actually see instead of guessing."
   ];
   const first = topRows[0];
   return {
