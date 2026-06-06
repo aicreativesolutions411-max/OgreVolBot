@@ -24273,6 +24273,7 @@ function compareWebLivePairs(a, b, sort = "best") {
 
 async function filterWebLivePairsForSafety(rows, limit = 12) {
   const accepted = [];
+  const pending = [];
   const stats = {
     checked: 0,
     accepted: 0,
@@ -24288,24 +24289,32 @@ async function filterWebLivePairsForSafety(rows, limit = 12) {
     try {
       const safety = await getMintSafetyInfo(row.tokenMint);
       stats.checked += 1;
-      if (safety.tokenProgram === TOKEN_2022_PROGRAM_ID.toBase58()) stats.token2022 += 1;
+      if (safety.tokenProgram === TOKEN_2022_PROGRAM_ID.toBase58()) {
+        stats.token2022 += 1;
+        stats.blocked += 1;
+        return;
+      }
       if (safety.freezeAuthority || safety.mintAuthority) {
         stats.blocked += 1;
         return;
       }
       accepted.push({
         ...row,
-        safetyNote: safety.tokenProgram === TOKEN_2022_PROGRAM_ID.toBase58()
-          ? "Token-2022 mint/freeze clear"
-          : "Mint/freeze safety passed"
+        safetyStatus: "passed",
+        safetyNote: "Mint/freeze safety passed"
       });
       stats.accepted += 1;
     } catch {
+      pending.push({
+        ...row,
+        safetyStatus: "pending",
+        safetyNote: "Safety pending; buy precheck required"
+      });
       stats.pending += 1;
     }
   });
 
-  const combined = uniqueSniperScoreRows(accepted).sort(compareWebLivePairs).slice(0, limit);
+  const combined = uniqueSniperScoreRows([...accepted, ...pending]).sort(compareWebLivePairs).slice(0, limit);
   return { rows: combined, stats };
 }
 
