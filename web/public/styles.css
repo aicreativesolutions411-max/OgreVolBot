@@ -5984,6 +5984,45 @@ body:has([data-app][data-route="connect"])::before {
   transform: translateY(-1px);
 }
 
+/* LANDING_KOL_MOBILE_FIT_V1: keep every front-page KOL visible as the list grows. */
+@media (max-width: 760px) {
+  [data-app][data-route="intro"] .swamp-kol-frame .swamp-support-content {
+    gap: 4px !important;
+    padding-left: clamp(42px, 11vw, 58px) !important;
+    padding-right: clamp(42px, 11vw, 58px) !important;
+    padding-bottom: clamp(26px, 7vw, 36px) !important;
+    overflow: hidden !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-kol-frame .swamp-support-bubble {
+    min-height: 42px !important;
+    height: 44px !important;
+    grid-template-columns: 34px minmax(0, 1fr) !important;
+    gap: 7px !important;
+    padding: 3px 9px !important;
+    border-radius: 18px !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-kol-frame .swamp-support-bubble img {
+    width: 34px !important;
+    height: 34px !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-kol-frame .swamp-support-bubble strong {
+    font-size: 0.88rem !important;
+    line-height: 1 !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-kol-frame .swamp-support-bubble small {
+    font-size: 0.68rem !important;
+    line-height: 1 !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-kol-frame .swamp-support-content::after {
+    display: none !important;
+  }
+}
+
 .signal-name-row,
 .signal-cell span,
 .signal-cell small {
