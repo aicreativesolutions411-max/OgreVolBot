@@ -232,6 +232,10 @@ const state = {
   ogreAiResult: null,
   ogreAiStatus: "",
   ogreAiLoading: false,
+  ogreAgentOpen: false,
+  ogreAgentLoading: false,
+  ogreAgentStatus: "",
+  ogreAgentMessages: [],
   connectedWalletBalance: null,
   livePairs: null,
   livePairsByBucket: {},
@@ -3849,6 +3853,7 @@ function render(options = {}) {
   if (state.route === "terminal" && !preserveSmartChartPanel) renderTabs();
   renderWalletConnectModal();
   renderQuickBuyModal();
+  renderOgreAgent();
   syncInteractionLocks();
   applyActionButtonStates();
   const durationMs = perfNow() - startedAt;
@@ -12656,7 +12661,7 @@ function ogreAgentActionFromKey(key = "") {
   return message?.actions?.[Number(actionIndexText)] || null;
 }
 
-function runOgreAgentAction(action = {}) {
+async function runOgreAgentAction(action = {}) {
   const type = String(action.type || "");
   const tokenMint = String(action.tokenMint || action.mint || state.smartChartToken || state.tradeToken || "").trim();
   if (type === "open_tab") {
@@ -12699,7 +12704,84 @@ function runOgreAgentAction(action = {}) {
     renderOgreAgent();
     return;
   }
-  state.ogreAgentStatus = "Action noted. Ask Ogre to open a panel, chart, refresh, or prepare a trade.";
+
+  if (action.type === "open_quick_buy") {
+    const tokenMint = String(action.tokenMint || action.mint || state.selectedToken?.mint || state.selectedToken?.pairAddress || "").trim();
+    if (!tokenMint) {
+      state.ogreAgentStatus = "Send me a token address first, then I can open the buy panel.";
+      renderOgreAgent();
+      return;
+    }
+    openQuickBuy(tokenMint, { source: "ogre-agent-open-buy", forceModal: true });
+    state.ogreAgentStatus = "Buy panel opened. Review it and confirm with your wallet.";
+    renderOgreAgent();
+    return;
+  }
+
+  if (action.type === "confirm_buy") {
+    const tokenMint = String(action.tokenMint || action.mint || state.selectedToken?.mint || state.selectedToken?.pairAddress || "").trim();
+    const amountSol = Number(action.amountSol || action.sol || action.amount || 0);
+    if (!tokenMint || !Number.isFinite(amountSol) || amountSol <= 0) {
+      if (tokenMint) openQuickBuy(tokenMint, { source: "ogre-agent-buy-missing-amount", forceModal: true });
+      state.ogreAgentStatus = tokenMint
+        ? "Buy panel opened. Pick the SOL amount and confirm with your wallet."
+        : "Tell me the token address and amount, like: buy 0.1 SOL of CA.";
+      renderOgreAgent();
+      return;
+    }
+    const shortMint = typeof shortAddress === "function" ? shortAddress(tokenMint) : tokenMint;
+    const confirmed = window.confirm(`Ogre Agent will prepare a ${amountSol} SOL buy for ${shortMint}. You will still need to confirm in your wallet. Continue?`);
+    if (!confirmed) {
+      state.ogreAgentStatus = "Buy canceled.";
+      renderOgreAgent();
+      return;
+    }
+    const walletIndex = Number.isFinite(Number(action.walletIndex)) ? Number(action.walletIndex) : 0;
+    const slippageBps = Number.isFinite(Number(action.slippageBps)) ? Number(action.slippageBps) : undefined;
+    state.ogreAgentLoading = true;
+    state.ogreAgentStatus = `Preparing ${amountSol} SOL buy...`;
+    renderOgreAgent();
+    try {
+      const result = await executeQuickBuyAmount({ tokenMint, walletIndex, amountSol, slippageBps, source: "ogre-agent-confirm-buy" });
+      state.ogreAgentStatus = result?.ok === false
+        ? (result.error || result.message || "Buy failed. Check wallet/RPC status and retry.")
+        : "Buy submitted. Refreshing wallet and positions in the background.";
+      if (typeof refreshWalletNow === "function") void refreshWalletNow({ force: true, reason: "ogre_agent_buy" });
+      if (typeof refreshPositionsNow === "function") void refreshPositionsNow({ force: true, reason: "ogre_agent_buy" });
+    } catch (error) {
+      state.ogreAgentStatus = error?.message || "Buy failed. Check wallet/RPC status and retry.";
+    } finally {
+      state.ogreAgentLoading = false;
+      renderOgreAgent();
+    }
+    return;
+  }
+
+  if (action.type === "confirm_sell") {
+    const tokenMint = String(action.tokenMint || action.mint || action.ca || state.selectedToken?.mint || state.selectedToken?.pairAddress || "").trim();
+    const percent = String(action.percent || action.percentText || "100").replace(/[^0-9.]/g, "") || "100";
+    if (!tokenMint) {
+      state.activeTab = "positions";
+      state.ogreAgentStatus = "I opened Positions. Pick a token or tell me the CA to sell.";
+      render();
+      return;
+    }
+    state.ogreAgentLoading = true;
+    state.ogreAgentStatus = `Preparing sell ${percent}%...`;
+    renderOgreAgent();
+    try {
+      await sellPositionPercent(tokenMint, percent);
+      state.ogreAgentStatus = `Sell ${percent}% submitted. Refreshing wallet and positions in the background.`;
+      if (typeof refreshWalletNow === "function") void refreshWalletNow({ force: true, reason: "ogre_agent_sell" });
+      if (typeof refreshPositionsNow === "function") void refreshPositionsNow({ force: true, reason: "ogre_agent_sell" });
+    } catch (error) {
+      state.ogreAgentStatus = error?.message || "Sell failed. Check wallet/RPC status and retry.";
+    } finally {
+      state.ogreAgentLoading = false;
+      renderOgreAgent();
+    }
+    return;
+  }  state.ogreAgentStatus = "Action noted. Ask Ogre to open a panel, chart, refresh, or prepare a trade.";
   renderOgreAgent();
 }
 
@@ -12787,7 +12869,23 @@ document.addEventListener("pointerup", (event) => {
 }, { capture: true });
 
 document.addEventListener("keydown", (event) => {
-  if (event.key !== "Escape" || (!state.loginModalOpen && !state.quickBuyModal?.open)) return;
+  const agentInput = event.target?.closest?.("[data-ogre-agent-input]");
+  if (agentInput && event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    void sendOgreAgentMessage();
+    return;
+  }
+
+  if (event.key !== "Escape") return;
+
+  if (state.ogreAgentOpen) {
+    state.ogreAgentOpen = false;
+    state.ogreAgentStatus = "";
+    renderOgreAgent();
+    return;
+  }
+
+  if (!state.loginModalOpen && !state.quickBuyModal?.open) return;
   if (state.quickBuyModal?.open) {
     closeQuickBuyModal();
     return;
@@ -12850,9 +12948,36 @@ document.addEventListener("click", async (event) => {
     setStoredNavTekOpen(state.navTekOpen);
     if (group) group.open = state.navTekOpen;
     return;
-  }
-  const target = source?.closest?.("button, a, [data-preview-token], [data-token-chart], [data-token-trade], [data-quick-buy-token], [data-quick-trade-token]");
+  }  const target = source?.closest?.("button, a, [data-preview-token], [data-token-chart], [data-token-trade], [data-quick-buy-token], [data-quick-trade-token]");
   if (!target) return;
+
+  if (target.matches("[data-ogre-agent-toggle]")) {
+    state.ogreAgentOpen = !state.ogreAgentOpen;
+    state.ogreAgentStatus = state.ogreAgentOpen ? state.ogreAgentStatus : "";
+    renderOgreAgent();
+    return;
+  }
+
+  if (target.matches("[data-ogre-agent-close]")) {
+    state.ogreAgentOpen = false;
+    state.ogreAgentStatus = "";
+    renderOgreAgent();
+    return;
+  }
+
+  if (target.matches("[data-ogre-agent-send]")) {
+    void sendOgreAgentMessage();
+    return;
+  }
+
+  if (target.matches("[data-ogre-agent-action]")) {
+    const actionKey = target.dataset.ogreAgentAction;
+    const action = (state.ogreAgentMessages || [])
+      .flatMap((message) => Array.isArray(message.actions) ? message.actions : [])
+      .find((item) => item.key === actionKey || item.label === actionKey || item.type === actionKey);
+    void runOgreAgentAction(action || { type: actionKey });
+    return;
+  }
 
   if (target.matches("[data-nav-route]")) {
     event.preventDefault();
@@ -14071,6 +14196,7 @@ if (!window.__slimeStablePumpChartTimer) {
     slimePumpChartRerender();
   }, 8000);
 }
+
 
 
 

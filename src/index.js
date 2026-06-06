@@ -2272,15 +2272,25 @@ function ogreAgentFallbackReply(message = "", context = {}) {
     actions.push({ label: "Open Chart", type: "open_chart", tokenMint });
   }
   if (/buy|ape|enter/.test(lower)) {
-    reply = tokenMint
-      ? "I can prepare that buy in the chart/trade panel. I will not submit a trade silently; you still confirm the amount, wallet, preset, and risk before it sends."
-      : "Paste the token CA with your buy request and I can stage the buy panel for confirmation.";
-    actions.push(tokenMint ? { label: "Prepare Buy", type: "prepare_buy", tokenMint } : { label: "Open Trade", type: "open_tab", tab: "trade" });
+    reply = tokenMint && buyAmountSol
+      ? `I can prepare a ${buyAmountSol} SOL buy for that token. You still confirm in your wallet.`
+      : tokenMint
+        ? "I can open the buy panel for that token. I will not submit a trade silently; you still confirm the amount, wallet, preset, and risk before it sends."
+        : "Paste the token CA with your buy request and I can stage the buy panel for confirmation.";
+    actions.push(tokenMint && buyAmountSol
+      ? { label: `Buy ${buyAmountSol} SOL`, type: "confirm_buy", tokenMint, amountSol: buyAmountSol }
+      : tokenMint
+        ? { label: "Open Buy Panel", type: "open_quick_buy", tokenMint }
+        : { label: "Open Trade", type: "open_tab", tab: "trade" });
   }
   if (/sell|exit|close/.test(lower)) {
     const pct = (lower.match(/(\d{1,3})\s*%/) || [])[1] || "";
-    reply = "I can take you to Positions and stage the sell workflow. You still confirm the sell button; Ogre Agent will not silently execute exits.";
-    actions.push({ label: pct ? `Sell ${pct}% Panel` : "Open Sell Panel", type: "prepare_sell", tokenMint, percent: pct });
+    reply = tokenMint
+      ? `I can prepare the ${pct || "100"}% sell for that token. Wallet confirmation stays with you.`
+      : "I can take you to Positions and stage the sell workflow. You still confirm the sell button; Ogre Agent will not silently execute exits.";
+    actions.push(tokenMint
+      ? { label: pct ? `Sell ${pct}%` : "Sell 100%", type: "confirm_sell", tokenMint, percent: pct || "100" }
+      : { label: "Open Positions", type: "open_tab", tab: "positions" });
   }
   if (/preset|tp|take profit|stop loss|slippage/.test(lower)) {
     reply = "Presets control trade size, slippage, bundle settings, and TP/SL behavior. Pick or edit them before buying; TP/SL needs wallet auto-sell approval for managed wallets.";
@@ -26786,5 +26796,6 @@ main().catch((error) => {
   console.error(error);
   process.exit(1);
 });
+
 
 
