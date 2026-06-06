@@ -6023,6 +6023,46 @@ body:has([data-app][data-route="connect"])::before {
   }
 }
 
+/* LANDING_KOL_MOBILE_FIT_V2: lift and compact supporter chips above the bottom slime lip. */
+@media (max-width: 760px) {
+  [data-app][data-route="intro"] .swamp-kol-frame .swamp-support-content {
+    align-content: start !important;
+    gap: 2px !important;
+    padding-top: clamp(92px, 24vw, 120px) !important;
+    padding-left: clamp(54px, 13vw, 70px) !important;
+    padding-right: clamp(54px, 13vw, 70px) !important;
+    padding-bottom: clamp(52px, 13vw, 68px) !important;
+    max-height: 100% !important;
+    overflow: hidden !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-kol-frame .swamp-support-bubble {
+    min-height: 34px !important;
+    height: 36px !important;
+    grid-template-columns: 27px minmax(0, 1fr) !important;
+    gap: 6px !important;
+    padding: 2px 8px !important;
+    border-radius: 15px !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-kol-frame .swamp-support-bubble img {
+    width: 27px !important;
+    height: 27px !important;
+    min-width: 27px !important;
+    min-height: 27px !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-kol-frame .swamp-support-bubble strong {
+    font-size: 0.76rem !important;
+    line-height: 0.95 !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-kol-frame .swamp-support-bubble small {
+    font-size: 0.58rem !important;
+    line-height: 0.95 !important;
+  }
+}
+
 .signal-name-row,
 .signal-cell span,
 .signal-cell small {
