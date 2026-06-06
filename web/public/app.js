@@ -213,6 +213,7 @@ const state = {
   positionRefreshAction: { state: "idle", startedAt: 0, minUntil: 0, error: "" },
   manualSellActions: {},
   tradeActionLocks: {},
+  logoutPending: false,
   loading: false,
   wallets: [],
   balances: [],
@@ -2024,21 +2025,51 @@ async function createAccountAndOpenWallets() {
 }
 
 async function logout() {
+  if (state.logoutPending) return;
   if (!state.user) {
     state.loginCollapsed = false;
     render();
     loginView?.scrollIntoView?.({ behavior: "smooth", block: "start" });
     return;
   }
-  try {
-    await api("/api/web/logout", { method: "POST" });
-  } catch {
-    // Local logout should still work if the backend is offline.
+  const tokenBeforeLogout = String(state.token || "");
+  state.logoutPending = true;
+  const logoutButton = $("[data-logout]");
+  if (logoutButton) {
+    logoutButton.disabled = true;
+    writeText(logoutButton, "Logging out...");
   }
   state.token = "";
   state.user = null;
+  state.wallets = [];
+  state.balances = [];
+  state.positions = [];
+  state.pnl = null;
+  state.connectedWalletBalance = null;
+  state.walletRefreshing = false;
+  state.walletRefreshStatus = "idle";
+  state.walletRefreshError = "";
+  state.positionRefreshAction = { state: "idle", startedAt: 0, minUntil: 0, error: "" };
+  state.manualSellActions = {};
+  state.tradeActionLocks = {};
+  state.ogreAgentStatus = "";
+  ogreAgentClearAutoTradeSession();
   clearStoredToken();
-  render();
+  render({ force: true });
+  try {
+    if (tokenBeforeLogout) {
+      await api("/api/web/logout", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${tokenBeforeLogout}` },
+        timeoutMs: 4_000,
+        dedupe: false
+      });
+    }
+  } catch {
+    // Local logout should still work if the backend is offline.
+  } finally {
+    state.logoutPending = false;
+  }
 }
 
 async function loadSession() {
@@ -3859,7 +3890,8 @@ function render(options = {}) {
   const logoutButton = $("[data-logout]");
   if (logoutButton) {
     logoutButton.hidden = !state.user;
-    writeText(logoutButton, "Log Out");
+    logoutButton.disabled = Boolean(state.logoutPending);
+    writeText(logoutButton, state.logoutPending ? "Logging out..." : "Log Out");
   }
   if (state.route === "terminal" && !preserveSmartChartPanel) renderTabs();
   renderWalletConnectModal();
