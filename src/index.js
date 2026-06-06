@@ -2560,6 +2560,145 @@ async function ogreAgentXTrendRows(message = "") {
   return { configured: true, rows, error: "" };
 }
 
+function ogreAgentSocialIntent(message = "") {
+  const text = String(message || "").toLowerCase();
+  return /\b(x|twitter|tweet|tweets|post|posts|posting|mentions?|popular|viral|trending|trend|kols?|influencers?|callers?|community|socials?)\b/.test(text);
+}
+
+function ogreAgentTokenFromMessageOrContext(message = "", context = {}) {
+  return ogreAgentExtractSolanaMints(message)[0]
+    || String(context?.lastTokenMint || context?.smartChartToken || context?.tradeToken || "").trim();
+}
+
+function ogreAgentXSearchUrl(tokenMint = "") {
+  const query = encodeURIComponent(`"${String(tokenMint || "").trim()}"`);
+  return `https://x.com/search?q=${query}&src=typed_query&f=live`;
+}
+
+async function ogreAgentXTokenMentions(tokenMint = "") {
+  const bearer = ogreAgentXBearerToken();
+  const mint = String(tokenMint || "").trim();
+  if (!bearer || !mint) {
+    return { configured: Boolean(bearer), tokenMint: mint, posts: [], authorCount: 0, totalEngagement: 0, error: "" };
+  }
+  const params = new URLSearchParams({
+    query: `"${mint}" lang:en -is:retweet`,
+    "tweet.fields": "created_at,public_metrics,author_id",
+    expansions: "author_id",
+    "user.fields": "name,username,verified,public_metrics",
+    max_results: "20"
+  });
+  const data = await ogreAgentFetchJson(`https://api.x.com/2/tweets/search/recent?${params.toString()}`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${bearer}`
+    }
+  }, 4200);
+  const users = new Map((Array.isArray(data?.includes?.users) ? data.includes.users : []).map((user) => [String(user.id), user]));
+  const tweets = Array.isArray(data?.data) ? data.data : [];
+  const posts = tweets.map((tweet) => {
+    const metrics = tweet?.public_metrics || {};
+    const user = users.get(String(tweet?.author_id || "")) || {};
+    const engagement = ogreAgentTrendNumber(metrics.like_count)
+      + ogreAgentTrendNumber(metrics.retweet_count) * 3
+      + ogreAgentTrendNumber(metrics.quote_count) * 2
+      + ogreAgentTrendNumber(metrics.reply_count);
+    return {
+      id: String(tweet?.id || ""),
+      text: String(tweet?.text || "").replace(/\s+/g, " ").slice(0, 220),
+      createdAt: String(tweet?.created_at || ""),
+      authorName: String(user?.name || user?.username || "X account").slice(0, 80),
+      username: String(user?.username || "").slice(0, 40),
+      verified: Boolean(user?.verified),
+      followers: ogreAgentTrendNumber(user?.public_metrics?.followers_count),
+      likes: ogreAgentTrendNumber(metrics.like_count),
+      reposts: ogreAgentTrendNumber(metrics.retweet_count),
+      replies: ogreAgentTrendNumber(metrics.reply_count),
+      quotes: ogreAgentTrendNumber(metrics.quote_count),
+      engagement
+    };
+  }).sort((a, b) => (b.engagement + b.followers / 1000) - (a.engagement + a.followers / 1000));
+  return {
+    configured: true,
+    tokenMint: mint,
+    posts,
+    authorCount: new Set(posts.map((post) => post.username || post.authorName)).size,
+    totalEngagement: posts.reduce((sum, post) => sum + post.engagement, 0),
+    error: data?.errors?.[0]?.detail || ""
+  };
+}
+
+async function ogreAgentTokenSocialReply(message = "", context = {}) {
+  if (!ogreAgentSocialIntent(message)) return null;
+  const tokenMint = ogreAgentTokenFromMessageOrContext(message, context);
+  if (!tokenMint) return null;
+  const x = await ogreAgentXTokenMentions(tokenMint);
+  const xSearchUrl = ogreAgentXSearchUrl(tokenMint);
+  if (!x.configured) {
+    return {
+      reply: [
+        `${shortMint(tokenMint)} social/KOL check`,
+        "I can keep the CA in this conversation, but a true X-wide scan needs X_BEARER_TOKEN/TWITTER_BEARER_TOKEN configured on Render.",
+        "Right now I can open the live X search, open chart, and use SlimeWire-visible socials/feeds. I will not fake KOL names if X did not return them."
+      ].join("\n"),
+      actions: [
+        { label: "Open X Search", type: "open_external", url: xSearchUrl },
+        { label: "Open Chart", type: "open_chart", tokenMint },
+        { label: "Refresh Feeds", type: "refresh_feeds" },
+        { label: "Slime Scope", type: "open_tab", tab: "slimeScope" }
+      ],
+      intent: "token_social_scan",
+      socialScan: true,
+      tokenMint,
+      modelPowered: false
+    };
+  }
+  if (!x.posts.length) {
+    return {
+      reply: [
+        `${shortMint(tokenMint)} X/KOL check`,
+        "I searched recent X posts for this exact CA and did not get public posts back in the quick window.",
+        x.error ? `X note: ${x.error}` : "That usually means it is not being broadly posted by accounts visible to the X recent-search API yet, or the posts are using ticker/images instead of the CA.",
+        "Next move: open X search and watch for named callers/KOLs before treating it as socially confirmed."
+      ].join("\n"),
+      actions: [
+        { label: "Open X Search", type: "open_external", url: xSearchUrl },
+        { label: "Open Chart", type: "open_chart", tokenMint },
+        { label: "Refresh Feeds", type: "refresh_feeds" }
+      ],
+      intent: "token_social_scan",
+      socialScan: true,
+      tokenMint,
+      modelPowered: false
+    };
+  }
+  const topPosts = x.posts.slice(0, 5);
+  const lines = [
+    `${shortMint(tokenMint)} X/KOL check`,
+    `${x.posts.length} recent CA post(s) found from ${x.authorCount} account(s). Engagement score: ${x.totalEngagement}.`,
+    ...topPosts.map((post, index) => {
+      const handle = post.username ? `@${post.username}` : post.authorName;
+      const reach = post.followers ? `${post.followers.toLocaleString("en-US")} followers` : "followers n/a";
+      const action = `${post.likes} likes/${post.reposts} reposts/${post.replies} replies`;
+      return `${index + 1}. ${handle}${post.verified ? " verified" : ""} | ${reach} | ${action}`;
+    }),
+    x.posts.length >= 3 ? "Read: real CA mentions are coming in. Check if the accounts are legit callers or just low-reach spam before sizing up." : "Read: there is some CA chatter, but not enough to call it broadly popular yet."
+  ];
+  return {
+    reply: lines.join("\n"),
+    actions: [
+      { label: "Open X Search", type: "open_external", url: xSearchUrl },
+      { label: "Open Chart", type: "open_chart", tokenMint },
+      { label: "Check Coin", type: "coin_breakdown", tokenMint },
+      { label: "Refresh Feeds", type: "refresh_feeds" }
+    ],
+    intent: "token_social_scan",
+    socialScan: true,
+    tokenMint,
+    modelPowered: false
+  };
+}
+
 async function ogreAgentTrendReply(message = "", context = {}) {
   if (!ogreAgentTrendIntent(message)) return null;
   const xTrend = await ogreAgentXTrendRows(message);
@@ -2616,7 +2755,7 @@ async function ogreAgentTrendReply(message = "", context = {}) {
 }
 
 function ogreAgentModelSystemPrompt() {
-  return "You are Ogre Agent inside SlimeWire, a one-stop user-side trading assistant. Help with panel functions, navigation, charting, presets, positions, wallet refresh, feed categories, coin/link questions, Solana token breakdowns, risk/community/read questions, and fast trade requests. Use context.recentAgentMessages as conversation memory so follow-ups continue the current thread instead of starting fresh. If context.recentPairs is present, use it for fast live/fresh candidate ranking and explain what data is visible. If a token CA is present, explain useful checks: age, liquidity, MC/FDV, volume, buy/sell pressure, chart structure, socials, holder/risk badges, mint/freeze risks when visible, and whether it looks early, risky, or building a floor. If asked about X/Twitter, Telegram, website, or community, use visible token links/metadata when provided and be clear when those links are unavailable; do not pretend to have a platform-wide X firehose unless context includes that data. Never reveal or discuss code, security internals, env vars, API keys, private keys, backend architecture, or database details. Never claim a buy/sell completed unless the site context says it did. For trades, explain that Agent Auto-Trade is automatic for SlimeWire managed wallets and session-enabled after external wallet connect; external wallet providers may still require their own transaction signatures, while managed wallets can use the saved SlimeWire flow. Keep replies short, practical, and action-oriented.";
+  return "You are Ogre Agent inside SlimeWire, a one-stop user-side trading assistant. Answer the user's latest intent directly, not with a generic checklist. Use conversation memory so follow-ups continue the current token/question until the user changes topic or clears chat. Help with panel functions, navigation, charting, presets, positions, wallet refresh, feed categories, coin/link questions, Solana token breakdowns, risk/community/read questions, and fast trade requests. If the latest user asks whether KOLs/accounts/X/Twitter are posting about a token, answer only the social/KOL question with available social evidence, accounts, links, and limitations; do not list generic age/liquidity/MC checks unless asked next. If context.recentPairs is present, use it for fast live/fresh candidate ranking and explain what data is visible. If a token CA is present and the user asks a general risk/read question, explain useful checks: age, liquidity, MC/FDV, volume, buy/sell pressure, chart structure, socials, holder/risk badges, mint/freeze risks when visible, and whether it looks early, risky, or building a floor. If asked about X/Twitter, Telegram, website, or community, use visible token links/metadata when provided and be clear when those links are unavailable; do not pretend to have a platform-wide X firehose unless context includes X post data. Never reveal or discuss code, security internals, env vars, API keys, private keys, backend architecture, or database details. Never claim a buy/sell completed unless the site context says it did. Keep replies short, practical, and action-oriented.";
 }
 
 function ogreAgentEnv(name = "") {
@@ -2688,11 +2827,20 @@ function ogreAgentModelPayload(message = "", context = {}, fallback = {}) {
 }
 
 function ogreAgentChatMessages(message = "", context = {}, fallback = {}) {
+  const safeContext = ogreAgentSanitizedContext(context);
+  const memoryMessages = safeContext.recentAgentMessages
+    .slice(-6)
+    .filter((item) => item.text && item.text !== message)
+    .map((item) => ({
+      role: item.role === "user" ? "user" : "assistant",
+      content: item.text
+    }));
   return [
     {
       role: "system",
       content: ogreAgentModelSystemPrompt()
     },
+    ...memoryMessages,
     {
       role: "user",
       content: JSON.stringify(ogreAgentModelPayload(message, context, fallback))
@@ -2827,6 +2975,8 @@ async function webOgreAgentReply(body = {}) {
   if (!message) {
     return ogreAgentFallbackReply("help", context);
   }
+  const socialReply = await ogreAgentTokenSocialReply(message, context);
+  if (socialReply) return socialReply;
   const trendReply = await ogreAgentTrendReply(message, context);
   if (trendReply) return trendReply;
   const fallback = await enrichOgreAgentCoinReply(ogreAgentFallbackReply(message, context), message, context);
