@@ -2375,42 +2375,186 @@ async function enrichOgreAgentCoinReply(fallback = {}, message = "", context = {
     return fallback;
   }
 }
-async function callOgreAgentModel(message = "", context = {}, fallback = {}) {
-  if (!CONFIG.openaiApiKey) return null;
+function ogreAgentModelSystemPrompt() {
+  return "You are Ogre Agent inside SlimeWire, a one-stop user-side trading assistant. Help with panel functions, navigation, charting, presets, positions, wallet refresh, feed categories, coin/link questions, Solana token breakdowns, risk/community/read questions, and fast trade requests. Use context.recentAgentMessages as conversation memory so follow-ups continue the current thread instead of starting fresh. If a token CA is present, explain useful checks: age, liquidity, MC/FDV, volume, buy/sell pressure, chart structure, socials, holder/risk badges, mint/freeze risks when visible, and whether it looks early, risky, or building a floor. If asked about X/Twitter, Telegram, website, or community, use visible token links/metadata when provided and be clear when those links are unavailable. Never reveal or discuss code, security internals, env vars, API keys, private keys, backend architecture, or database details. Never claim a buy/sell completed unless the site context says it did. For trades, explain that Agent Auto-Trade is automatic for SlimeWire managed wallets and session-enabled after external wallet connect; external wallet providers may still require their own transaction signatures, while managed wallets can use the saved SlimeWire flow. Keep replies short, practical, and action-oriented.";
+}
+
+function ogreAgentEnv(name = "") {
+  return String(process.env[name] || "").trim();
+}
+
+function ogreAgentProviderTimeoutMs() {
+  const raw = Number(process.env.OGRE_AGENT_PROVIDER_TIMEOUT_MS || 6500);
+  if (!Number.isFinite(raw)) return 6500;
+  return Math.max(2500, Math.min(10000, raw));
+}
+
+function ogreAgentSanitizedContext(context = {}) {
+  const recentAgentMessages = Array.isArray(context.recentAgentMessages)
+    ? context.recentAgentMessages.slice(-8).map((message) => ({
+        role: message?.role === "user" ? "user" : "assistant",
+        text: String(message?.text || "").slice(0, 600)
+      }))
+    : [];
+  return {
+    route: String(context.route || "").slice(0, 40),
+    activeTab: String(context.activeTab || "").slice(0, 40),
+    agentFastMode: Boolean(context.agentFastMode),
+    agentAutoTradeApproved: Boolean(context.agentAutoTradeApproved),
+    smartChartToken: String(context.smartChartToken || "").slice(0, 80),
+    tradeToken: String(context.tradeToken || "").slice(0, 80),
+    livePairBucket: String(context.livePairBucket || "").slice(0, 40),
+    slimeScopeMode: String(context.slimeScopeMode || "").slice(0, 40),
+    walletConnected: Boolean(context.walletConnected),
+    walletCount: Number(context.walletCount || 0),
+    positionCount: Number(context.positionCount || 0),
+    totalSol: String(context.totalSol || "0").slice(0, 24),
+    selectedTradePreset: String(context.selectedTradePreset || "").slice(0, 120),
+    selectedBundlePreset: String(context.selectedBundlePreset || "").slice(0, 120),
+    recentAgentMessages
+  };
+}
+
+function ogreAgentModelPayload(message = "", context = {}, fallback = {}) {
+  return {
+    message: String(message || "").slice(0, 1200),
+    context: ogreAgentSanitizedContext(context),
+    fallbackReply: String(fallback.reply || "").slice(0, 1000)
+  };
+}
+
+function ogreAgentChatMessages(message = "", context = {}, fallback = {}) {
+  return [
+    {
+      role: "system",
+      content: ogreAgentModelSystemPrompt()
+    },
+    {
+      role: "user",
+      content: JSON.stringify(ogreAgentModelPayload(message, context, fallback))
+    }
+  ];
+}
+
+async function ogreAgentFetchJson(url, options = {}, timeoutMs = ogreAgentProviderTimeoutMs()) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10_000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      signal: controller.signal,
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${CONFIG.openaiApiKey}`
-      },
-      body: JSON.stringify({
-        model: CONFIG.ogreAgentModel || "gpt-4.1-mini",
-        temperature: 0.25,
-        max_tokens: 260,
-        messages: [
-          {
-            role: "system",
-            content: "You are Ogre Agent inside SlimeWire, a one-stop user-side trading assistant. Help with panel functions, navigation, charting, presets, positions, wallet refresh, feed categories, coin/link questions, Solana token breakdowns, risk/community/read questions, and fast trade requests. Use context.recentAgentMessages as conversation memory so follow-ups continue the current thread instead of starting fresh. If a token CA is present, explain useful checks: age, liquidity, MC/FDV, volume, buy/sell pressure, chart structure, socials, holder/risk badges, mint/freeze risks when visible, and whether it looks early, risky, or building a floor. If asked about X/Twitter, Telegram, website, or community, use visible token links/metadata when provided and be clear when those links are unavailable. Never reveal or discuss code, security internals, env vars, API keys, private keys, backend architecture, or database details. Never claim a buy/sell completed unless the site context says it did. For trades, explain that Agent Auto-Trade is automatic for SlimeWire managed wallets and session-enabled after external wallet connect; external wallet providers may still require their own transaction signatures, while managed wallets can use the saved SlimeWire flow. Keep replies short, practical, and action-oriented."
-          },
-          {
-            role: "user",
-            content: JSON.stringify({ message, context, fallbackReply: fallback.reply })
-          }
-        ]
-      })
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal
     });
     if (!response.ok) return null;
-    const data = await response.json();
-    return String(data?.choices?.[0]?.message?.content || "").trim() || null;
+    return await response.json();
   } catch {
     return null;
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function callOgreAgentGroq(message = "", context = {}, fallback = {}) {
+  const apiKey = ogreAgentEnv("GROQ_API_KEY");
+  if (!apiKey) return null;
+  const data = await ogreAgentFetchJson("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model: ogreAgentEnv("OGRE_AGENT_GROQ_MODEL") || "llama-3.1-8b-instant",
+      temperature: 0.25,
+      max_tokens: 260,
+      messages: ogreAgentChatMessages(message, context, fallback)
+    })
+  });
+  const reply = String(data?.choices?.[0]?.message?.content || "").trim();
+  return reply ? { provider: "groq", reply } : null;
+}
+
+async function callOgreAgentGemini(message = "", context = {}, fallback = {}) {
+  const apiKey = ogreAgentEnv("GEMINI_API_KEY") || ogreAgentEnv("GOOGLE_API_KEY");
+  if (!apiKey) return null;
+  const model = encodeURIComponent(ogreAgentEnv("OGRE_AGENT_GEMINI_MODEL") || "gemini-2.5-flash-lite");
+  const data = await ogreAgentFetchJson(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      systemInstruction: {
+        parts: [{ text: ogreAgentModelSystemPrompt() }]
+      },
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: JSON.stringify(ogreAgentModelPayload(message, context, fallback)) }]
+        }
+      ],
+      generationConfig: {
+        temperature: 0.25,
+        maxOutputTokens: 260
+      }
+    })
+  });
+  const reply = String(data?.candidates?.[0]?.content?.parts?.map((part) => part?.text || "").join("") || "").trim();
+  return reply ? { provider: "gemini", reply } : null;
+}
+
+async function callOgreAgentOpenRouter(message = "", context = {}, fallback = {}) {
+  const apiKey = ogreAgentEnv("OPENROUTER_API_KEY");
+  if (!apiKey) return null;
+  const data = await ogreAgentFetchJson("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+      "HTTP-Referer": ogreAgentEnv("OGRE_AGENT_SITE_URL") || "https://slimewire.org",
+      "X-Title": "SlimeWire Ogre Agent"
+    },
+    body: JSON.stringify({
+      model: ogreAgentEnv("OGRE_AGENT_OPENROUTER_MODEL") || "openrouter/free",
+      temperature: 0.25,
+      max_tokens: 260,
+      messages: ogreAgentChatMessages(message, context, fallback)
+    })
+  });
+  const reply = String(data?.choices?.[0]?.message?.content || "").trim();
+  return reply ? { provider: "openrouter", reply } : null;
+}
+
+async function callOgreAgentOpenAi(message = "", context = {}, fallback = {}) {
+  if (!CONFIG.openaiApiKey || ogreAgentEnv("OGRE_AGENT_OPENAI_FALLBACK") === "false") return null;
+  const data = await ogreAgentFetchJson("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${CONFIG.openaiApiKey}`
+    },
+    body: JSON.stringify({
+      model: CONFIG.ogreAgentModel || "gpt-4.1-mini",
+      temperature: 0.25,
+      max_tokens: 260,
+      messages: ogreAgentChatMessages(message, context, fallback)
+    })
+  });
+  const reply = String(data?.choices?.[0]?.message?.content || "").trim();
+  return reply ? { provider: "openai", reply } : null;
+}
+
+async function callOgreAgentModel(message = "", context = {}, fallback = {}) {
+  const providers = [
+    callOgreAgentGroq,
+    callOgreAgentGemini,
+    callOgreAgentOpenRouter,
+    callOgreAgentOpenAi
+  ];
+  for (const provider of providers) {
+    const result = await provider(message, context, fallback);
+    if (result?.reply) return result;
+  }
+  return null;
 }
 
 async function webOgreAgentReply(body = {}) {
@@ -2420,11 +2564,13 @@ async function webOgreAgentReply(body = {}) {
     return ogreAgentFallbackReply("help", context);
   }
   const fallback = await enrichOgreAgentCoinReply(ogreAgentFallbackReply(message, context), message, context);
-  const modelReply = fallback.coinEnriched ? null : await callOgreAgentModel(message, context, fallback);
+  const modelResult = fallback.coinEnriched ? null : await callOgreAgentModel(message, context, fallback);
+  const modelReply = typeof modelResult === "string" ? modelResult : String(modelResult?.reply || "");
   return {
     ...fallback,
     reply: modelReply || fallback.reply,
-    modelPowered: Boolean(modelReply)
+    modelPowered: Boolean(modelReply),
+    modelProvider: typeof modelResult === "object" ? String(modelResult?.provider || "") : ""
   };
 }
 function sendWebJson(request, response, status, data) {
