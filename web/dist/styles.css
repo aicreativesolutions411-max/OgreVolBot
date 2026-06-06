@@ -8479,3 +8479,93 @@ body {
     margin-top: 6px;
   }
 }
+
+/* SLIME_SWAMP_SUPPORT_RAILS_V3: make KOL/Sponsor frames equal visual weight with Enter panel. */
+[data-app][data-route="intro"] .login-view.swamp-splash {
+  grid-template-columns: minmax(360px, 560px) minmax(420px, 620px) minmax(360px, 560px) !important;
+  gap: clamp(18px, 2vw, 34px) !important;
+  padding: clamp(82px, 6vw, 112px) clamp(18px, 2.2vw, 42px) clamp(28px, 4vw, 56px) !important;
+}
+
+[data-app][data-route="intro"] .swamp-splash-button,
+[data-app][data-route="intro"] .swamp-support-frame {
+  width: min(100%, 560px) !important;
+}
+
+[data-app][data-route="intro"] .swamp-splash-button {
+  max-width: 620px !important;
+}
+
+[data-app][data-route="intro"] .swamp-support-frame {
+  max-width: 560px !important;
+}
+
+[data-app][data-route="intro"] .swamp-support-content {
+  padding: 27% 9% 9% !important;
+  gap: 8px !important;
+}
+
+[data-app][data-route="intro"] .swamp-support-bubble,
+[data-app][data-route="intro"] .swamp-sponsor-social summary {
+  grid-template-columns: 48px minmax(0, 1fr) !important;
+  min-height: 56px !important;
+  padding: 7px 12px !important;
+}
+
+[data-app][data-route="intro"] .swamp-support-bubble img,
+[data-app][data-route="intro"] .swamp-sponsor-social summary img {
+  width: 48px !important;
+  height: 48px !important;
+}
+
+[data-app][data-route="intro"] .swamp-support-bubble strong,
+[data-app][data-route="intro"] .swamp-sponsor-social summary strong {
+  font-size: clamp(0.94rem, 0.95vw, 1.1rem) !important;
+}
+
+[data-app][data-route="intro"] .swamp-support-bubble small,
+[data-app][data-route="intro"] .swamp-sponsor-social summary small {
+  font-size: clamp(0.72rem, 0.72vw, 0.86rem) !important;
+}
+
+@media (max-width: 1320px) {
+  [data-app][data-route="intro"] .login-view.swamp-splash {
+    grid-template-columns: minmax(300px, 1fr) minmax(390px, 1.15fr) minmax(300px, 1fr) !important;
+  }
+}
+
+@media (max-width: 1120px) {
+  [data-app][data-route="intro"] .login-view.swamp-splash {
+    grid-template-columns: repeat(2, minmax(280px, 1fr)) !important;
+    grid-template-areas:
+      "enter enter"
+      "kol sponsor" !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-splash-button {
+    width: min(780px, 92vw) !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-support-frame {
+    width: min(520px, 46vw) !important;
+  }
+}
+
+@media (max-width: 640px) {
+  [data-app][data-route="intro"] .swamp-support-frame,
+  [data-app][data-route="intro"] .swamp-splash-button {
+    width: min(390px, 96vw) !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-support-bubble,
+  [data-app][data-route="intro"] .swamp-sponsor-social summary {
+    grid-template-columns: 44px minmax(0, 1fr) !important;
+    min-height: 52px !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-support-bubble img,
+  [data-app][data-route="intro"] .swamp-sponsor-social summary img {
+    width: 44px !important;
+    height: 44px !important;
+  }
+}

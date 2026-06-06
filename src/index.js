@@ -2405,9 +2405,9 @@ function ogreAgentEnv(name = "") {
 }
 
 function ogreAgentProviderTimeoutMs() {
-  const raw = Number(process.env.OGRE_AGENT_PROVIDER_TIMEOUT_MS || 6500);
-  if (!Number.isFinite(raw)) return 6500;
-  return Math.max(2500, Math.min(10000, raw));
+  const raw = Number(process.env.OGRE_AGENT_PROVIDER_TIMEOUT_MS || 2800);
+  if (!Number.isFinite(raw)) return 2800;
+  return Math.max(1800, Math.min(6000, raw));
 }
 
 function ogreAgentSanitizedContext(context = {}) {

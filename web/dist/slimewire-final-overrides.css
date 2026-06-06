@@ -8251,3 +8251,75 @@ textarea,
     min-height: 320px !important;
   }
 }
+
+/* OGRE_AGENT_MOBILE_KEYBOARD_SAFE_V1: keep typed text visible above mobile keyboards. */
+.ogre-agent-shell {
+  z-index: 2147483000 !important;
+}
+
+.ogre-agent-panel textarea[data-ogre-agent-input],
+.ogre-agent-panel [data-ogre-agent-input] {
+  scroll-margin-bottom: 34dvh !important;
+}
+
+@media (max-width: 760px) {
+  .ogre-agent-shell.is-open {
+    inset: 0 !important;
+    pointer-events: none !important;
+  }
+
+  .ogre-agent-shell.is-open .ogre-agent-bubble {
+    right: 8px !important;
+    bottom: max(12px, env(safe-area-inset-bottom)) !important;
+    transform: scale(0.86) !important;
+  }
+
+  .ogre-agent-shell.is-open .ogre-agent-panel {
+    position: fixed !important;
+    left: 10px !important;
+    right: 10px !important;
+    bottom: max(10px, env(safe-area-inset-bottom)) !important;
+    top: auto !important;
+    width: auto !important;
+    min-height: min(430px, calc(100dvh - 26px)) !important;
+    max-height: min(560px, calc(100dvh - 26px)) !important;
+    transform: none !important;
+    pointer-events: auto !important;
+  }
+
+  .ogre-agent-panel:focus-within {
+    bottom: max(12px, env(safe-area-inset-bottom)) !important;
+    max-height: min(430px, calc(100dvh - 18px)) !important;
+  }
+
+  .ogre-agent-panel:focus-within .ogre-agent-panel-body {
+    min-height: 220px !important;
+  }
+
+  .ogre-agent-panel:focus-within .ogre-agent-messages,
+  .ogre-agent-panel:focus-within .ogre-agent-feed {
+    max-height: min(210px, 42dvh) !important;
+  }
+
+  .ogre-agent-panel textarea[data-ogre-agent-input],
+  .ogre-agent-panel [data-ogre-agent-input] {
+    min-height: 54px !important;
+    font-size: 16px !important;
+    line-height: 1.2 !important;
+  }
+}
+
+@media (max-height: 620px) and (max-width: 760px) {
+  .ogre-agent-shell.is-open .ogre-agent-panel {
+    min-height: calc(100dvh - 18px) !important;
+    max-height: calc(100dvh - 18px) !important;
+  }
+
+  .ogre-agent-panel header {
+    padding-bottom: 2px !important;
+  }
+
+  .ogre-agent-quick-actions button {
+    min-height: 28px !important;
+  }
+}

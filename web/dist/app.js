@@ -12854,11 +12854,18 @@ function renderOgreAgent({ force = false } = {}) {
       if (selectionStart !== null && selectionEnd !== null) {
         inputAfter.setSelectionRange(selectionStart, selectionEnd);
       }
+      setTimeout(() => inputAfter.scrollIntoView({ block: "nearest", behavior: "smooth" }), 90);
     }
   }
   const feed = root.querySelector("[data-ogre-agent-feed]");
   if (feed) feed.scrollTop = feed.scrollHeight;
 }
+
+document.addEventListener("focusin", (event) => {
+  const input = event.target?.matches?.("[data-ogre-agent-input]") ? event.target : null;
+  if (!input) return;
+  setTimeout(() => input.scrollIntoView({ block: "nearest", behavior: "smooth" }), 160);
+}, { passive: true });
 
 function pushOgreAgentMessage(message = {}) {
   state.ogreAgentMessages = [...ogreAgentMessages(), message].slice(-16);
@@ -13278,15 +13285,34 @@ async function sendOgreAgentMessage() {
   pushOgreAgentMessage({ role: "user", text: message, actions: [] });
   state.ogreAgentLoading = true;
   state.ogreAgentStatus = "";
+  const agentRequestId = `${Date.now()}:${Math.random().toString(16).slice(2)}`;
+  state.ogreAgentRequestId = agentRequestId;
+  const agentWatchdog = setTimeout(() => {
+    if (state.ogreAgentRequestId !== agentRequestId || !state.ogreAgentLoading) return;
+    state.ogreAgentRequestId = "";
+    state.ogreAgentLoading = false;
+    state.ogreAgentStatus = "Agent reply timed out.";
+    pushOgreAgentMessage({
+      role: "assistant",
+      text: "I timed out instead of staying stuck. I can still open panels, refresh feeds, check a coin, show positions, or open chart from here.",
+      actions: [
+        { label: "Show Positions", type: "open_tab", tab: "positions" },
+        { label: "Refresh Feeds", type: "refresh_feeds" },
+        { label: "Live Terminal", type: "open_tab", tab: "terminal" }
+      ]
+    });
+    renderOgreAgent({ force: true });
+  }, 11_000);
   renderOgreAgent();
   try {
     const data = await api("/api/web/ogre-agent/chat", {
       method: "POST",
       body: JSON.stringify({ message, context: ogreAgentContext() }),
-      timeoutMs: 14_000,
+      timeoutMs: 9_500,
       dedupe: false,
       preserveSafeError: true
     });
+    if (state.ogreAgentRequestId !== agentRequestId) return;
     const actions = (data?.agent?.actions || []).map((action) => prepareOgreAgentActionForMessage(action, message));
     if (data?.agent?.tokenMint) ogreAgentRememberTokenMint(data.agent.tokenMint);
     pushOgreAgentMessage({
@@ -13320,6 +13346,7 @@ async function sendOgreAgentMessage() {
     }
     state.ogreAgentStatus = data?.agent?.modelPowered ? "AI reply" : "Fast local Ogre reply";
   } catch (error) {
+    if (state.ogreAgentRequestId !== agentRequestId) return;
     pushOgreAgentMessage({
       role: "assistant",
       text: "Ogre Agent is still here, but the server reply timed out. I can still open panels, refresh feeds, check coins, open links, and route trade actions.",
@@ -13331,8 +13358,12 @@ async function sendOgreAgentMessage() {
     });
     state.ogreAgentStatus = error?.message || "Agent reply failed.";
   } finally {
-    state.ogreAgentLoading = false;
-    renderOgreAgent();
+    clearTimeout(agentWatchdog);
+    if (state.ogreAgentRequestId === agentRequestId) {
+      state.ogreAgentRequestId = "";
+      state.ogreAgentLoading = false;
+      renderOgreAgent();
+    }
   }
 }
 function emptyState(title, body) {
