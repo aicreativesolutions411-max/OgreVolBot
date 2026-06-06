@@ -2351,17 +2351,8 @@ async function ogreAgentToolRouterReply(message = "", context = {}) {
     if (wantsSocial || wantsCoinRead) {
       const kolRows = Array.isArray(evidence.kolRows) ? evidence.kolRows : [];
       const liveRows = Array.isArray(evidence.liveRows) ? evidence.liveRows : [];
-      lines.push(`Socials: X ${links.xUrl ? "found" : "not returned"} | Telegram ${links.telegramUrl ? "found" : "not returned"} | Website ${links.websiteUrl ? "found" : "not returned"}.`);
-      if (Array.isArray(xMentions?.posts) && xMentions.posts.length) {
-        const topHandles = xMentions.posts.slice(0, 4).map((post) => post.username ? `@${post.username}` : post.authorName).filter(Boolean);
-        lines.push(`X exact-CA scan: ${xMentions.posts.length} recent post(s), ${xMentions.authorCount || topHandles.length} account(s), engagement ${xMentions.totalEngagement || 0}${topHandles.length ? ` - ${topHandles.join(", ")}` : ""}.`);
-      } else if (wantsSocial) {
-        lines.push(xMentions?.configured
-          ? "X exact-CA scan: no public posts returned in the quick window."
-          : "X exact-CA scan: using live X search action plus SlimeWire-visible socials; I will not invent callers.");
-      }
-      lines.push(kolRows.length ? `KOL/feed evidence: ${kolRows.length} visible signal(s) tied to this CA.` : "KOL/feed evidence: no verified KOL row tied to this CA in the current SlimeWire feed yet.");
-      lines.push(liveRows.length ? `Live feed: ${liveRows.length} visible row(s) found for this CA.` : "Live feed: not visible in the current cached fresh rows yet.");
+      const compactEvidence = ogreAgentCompactSocialAnswer(evidence, { xPosts: xMentions?.posts || [] });
+      lines.splice(0, lines.length, ...compactEvidence);
     }
     actions.push(
       { label: "Open Chart", type: "open_chart", tokenMint },
@@ -2850,26 +2841,126 @@ async function ogreAgentVisibleTokenEvidence(tokenMint = "", context = {}) {
   };
 }
 
-function ogreAgentTokenSocialEvidenceLines(evidence = {}, options = {}) {
+function ogreAgentCompactSocialAnswer(evidence = {}, options = {}) {
   const links = evidence.socialLinks || {};
   const kolRows = Array.isArray(evidence.kolRows) ? evidence.kolRows : [];
   const liveRows = Array.isArray(evidence.liveRows) ? evidence.liveRows : [];
-  const kolNames = kolRows.map(ogreAgentDescribeKolMatch).filter(Boolean).slice(0, 5);
-  const lines = [
-    `${evidence.symbol || shortMint(evidence.tokenMint)} social/KOL check for ${shortMint(evidence.tokenMint)}:`,
-    `${evidence.name || "Token"} | MC/FDV ${evidence.marketCap || "n/a"} | Liq ${evidence.liquidity || "n/a"} | Vol ${evidence.volume || "n/a"}`,
-    `Returned socials: X ${links.xUrl ? "found" : "not returned"} | Telegram ${links.telegramUrl ? "found" : "not returned"} | Website ${links.websiteUrl ? "found" : "not returned"}.`,
-    kolNames.length
-      ? `SlimeWire/KOL feed match: ${kolRows.length} signal(s) tied to this CA - ${kolNames.join(", ")}.`
-      : "SlimeWire/KOL feed match: no verified KOL row tied to this CA in the current feed yet.",
+  const xPosts = Array.isArray(options.xPosts) ? options.xPosts : [];
+  const kolNames = kolRows.map(ogreAgentDescribeKolMatch).filter(Boolean).slice(0, 4);
+  const symbol = evidence.symbol || shortMint(evidence.tokenMint);
+  const metricBits = [
+    evidence.marketCap && evidence.marketCap !== "n/a" ? `MC ${evidence.marketCap}` : "",
+    evidence.liquidity && evidence.liquidity !== "n/a" ? `liq ${evidence.liquidity}` : "",
+    evidence.volume && evidence.volume !== "n/a" ? `vol ${evidence.volume}` : ""
+  ].filter(Boolean).join(" | ");
+  if (xPosts.length) {
+    const handles = xPosts.slice(0, 4).map((post) => post.username ? `@${post.username}` : post.authorName).filter(Boolean);
+    return [
+      `Yes — I found ${xPosts.length} recent exact-CA X post(s) for ${symbol}${handles.length ? ` from ${handles.join(", ")}` : ""}.`,
+      `${metricBits || "Market stats are still thin."} ${kolRows.length ? `SlimeWire also sees ${kolRows.length} KOL/feed signal(s).` : "I do not see extra SlimeWire KOL rows yet."}`,
+      "Read: there is some social activity, but still check chart, liquidity, and buy/sell pressure before sizing."
+    ];
+  }
+  if (kolRows.length) {
+    return [
+      `I found SlimeWire KOL/feed activity for ${symbol}${kolNames.length ? `: ${kolNames.join(", ")}` : ""}.`,
+      `${metricBits || "Market stats are still thin."} X exact-CA posts did not return in the quick scan.`,
+      "Read: this has some internal social signal, but I would still verify X search and chart strength before calling it popular."
+    ];
+  }
+  return [
+    `I do not see confirmed KOL/X activity for ${symbol} yet.`,
+    `${metricBits || "Market stats are still thin."} Social links: X ${links.xUrl ? "found" : "not returned"}, Telegram ${links.telegramUrl ? "found" : "not returned"}, Website ${links.websiteUrl ? "found" : "not returned"}.`,
     liveRows.length
-      ? `Live-feed match: ${liveRows.length} visible row(s) found for this CA.`
-      : "Live-feed match: not visible in the current cached fresh rows yet.",
-    options.xConfigured === false
-      ? "Deep X post lookup did not return inside this quick pass, so I am using SlimeWire-visible feeds, socials, and live search links instead of inventing callers."
-      : ""
+      ? `It is visible in ${liveRows.length} SlimeWire live row(s), but social proof is still unconfirmed.`
+      : "It is not showing as a strong SlimeWire/KOL social signal in the current cache.",
+    "Best move: open X search and chart before sizing."
   ];
-  return lines.filter(Boolean);
+}
+
+function ogreAgentKolTrendIntent(message = "") {
+  const text = String(message || "").toLowerCase();
+  return /\b(top|best|hot|biggest|right now|today|currently|who)\b/.test(text)
+    && /\b(kols?|callers?|influencers?|accounts?|wallets?|traders?)\b/.test(text)
+    && /\b(meme|memecoin|coin|solana|posting|posts?|x|twitter|calls?)\b/.test(text);
+}
+
+function ogreAgentNormalizeKolRow(row = {}, index = 0) {
+  if (!row || typeof row !== "object") return null;
+  const name = firstString(row.name, row.kolName, row.displayName, row.username, row.twitter, row.handle, row.label, row.wallet ? shortMint(row.wallet) : "");
+  if (!name) return null;
+  const twitter = String(row.twitter || row.xHandle || row.handle || row.username || "").replace(/^@/, "");
+  const winRate = Number(row.winRate ?? row.win ?? row.winPct ?? NaN);
+  const trades = Number(row.trades ?? row.tradeCount ?? row.totalTrades ?? NaN);
+  const realized = firstString(row.realized, row.realizedPnl, row.realizedProfit, row.pnl, "");
+  const wallet = firstString(row.wallet, row.address, row.publicKey, row.kolWallet, "");
+  const score = Number(row.score ?? row.rankScore ?? NaN);
+  return {
+    name: String(name).slice(0, 40),
+    twitter,
+    wallet,
+    winRate: Number.isFinite(winRate) ? winRate : NaN,
+    trades: Number.isFinite(trades) ? trades : NaN,
+    realized: String(realized || "").slice(0, 40),
+    score: Number.isFinite(score) ? score : 100 - index
+  };
+}
+
+async function ogreAgentKolTrendReply(message = "", context = {}) {
+  if (!ogreAgentKolTrendIntent(message)) return null;
+  const timeoutValue = (value, ms = 2600) => new Promise((resolve) => setTimeout(() => resolve(value), ms));
+  const scan = await Promise.race([
+    webKolScan("guest", "hot", "").catch(() => null),
+    timeoutValue(null, 2600)
+  ]);
+  const rawRows = [
+    ...(Array.isArray(scan?.rows) ? scan.rows : []),
+    ...(Array.isArray(scan?.kols) ? scan.kols : []),
+    ...(Array.isArray(scan?.leaders) ? scan.leaders : []),
+    ...(Array.isArray(scan?.data?.rows) ? scan.data.rows : [])
+  ];
+  const rows = rawRows
+    .map(ogreAgentNormalizeKolRow)
+    .filter(Boolean)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 5);
+  if (!rows.length) {
+    return {
+      reply: [
+        "I do not have a live X-wide KOL ranking connected yet.",
+        "What I can rank right now is SlimeWire KOL Tracker/tracked wallets. Open KOL Tracker and refresh it to see the current hot wallets and copy-trade candidates.",
+        "For true “who is posting meme coins on X today,” we need an official X/search data source or a paid social-data provider."
+      ].join("\n"),
+      actions: [
+        { label: "KOL Tracker", type: "open_tab", tab: "kol" },
+        { label: "Refresh Feeds", type: "refresh_feeds" },
+        { label: "Live Terminal", type: "open_tab", tab: "terminal" }
+      ],
+      intent: "kol_trend_scan",
+      modelPowered: false
+    };
+  }
+  return {
+    reply: [
+      "Top SlimeWire-tracked memecoin KOL/wallets right now:",
+      ...rows.map((row, index) => {
+        const stats = [
+          Number.isFinite(row.winRate) ? `${row.winRate.toFixed(1)}% win` : "",
+          Number.isFinite(row.trades) ? `${row.trades} trades` : "",
+          row.realized ? `realized ${row.realized}` : ""
+        ].filter(Boolean).join(" | ");
+        return `${index + 1}. ${row.twitter ? `@${row.twitter}` : row.name}${stats ? ` — ${stats}` : ""}`;
+      }),
+      "This is wallet/KOL-tracker based, not a full X-wide firehose ranking."
+    ].join("\n"),
+    actions: [
+      { label: "KOL Tracker", type: "open_tab", tab: "kol" },
+      { label: "Refresh KOLs", type: "refresh_feeds" },
+      { label: "Live Terminal", type: "open_tab", tab: "terminal" }
+    ],
+    intent: "kol_trend_scan",
+    modelPowered: false
+  };
 }
 
 async function ogreAgentXTokenMentions(tokenMint = "") {
@@ -2934,8 +3025,7 @@ async function ogreAgentTokenSocialReply(message = "", context = {}) {
   const xSearchUrl = ogreAgentXSearchUrl(tokenMint, [evidence.symbol, evidence.name].filter(Boolean));
   if (!x.configured) {
     const lines = [
-      ...ogreAgentTokenSocialEvidenceLines(evidence, { xConfigured: false }),
-      "Action: open the X search to verify live posts/accounts. I will keep this CA active in the chat and use any SlimeWire-visible socials, feeds, KOL rows, and chart data I can see."
+      ...ogreAgentCompactSocialAnswer(evidence, { xPosts: [] })
     ];
     return {
       reply: lines.join("\n"),
@@ -2954,11 +3044,8 @@ async function ogreAgentTokenSocialReply(message = "", context = {}) {
   if (!x.posts.length) {
     return {
       reply: [
-        `${shortMint(tokenMint)} X/KOL check`,
-        "I searched recent X posts for this exact CA and did not get public posts back in the quick window.",
-        x.error ? `X note: ${x.error}` : "That usually means it is not being broadly posted by accounts visible to the X recent-search API yet, or the posts are using ticker/images instead of the CA.",
-        ...ogreAgentTokenSocialEvidenceLines(evidence, { xConfigured: true }).slice(1),
-        "Next move: open X search and watch for named callers/KOLs before treating it as socially confirmed."
+        ...ogreAgentCompactSocialAnswer(evidence, { xPosts: [] }),
+        x.error ? `X note: ${x.error}` : ""
       ].join("\n"),
       actions: [
         { label: "Open X Search", type: "open_external", url: xSearchUrl },
@@ -2973,15 +3060,14 @@ async function ogreAgentTokenSocialReply(message = "", context = {}) {
   }
   const topPosts = x.posts.slice(0, 5);
   const lines = [
-    `${shortMint(tokenMint)} X/KOL check`,
-    `${x.posts.length} recent CA post(s) found from ${x.authorCount} account(s). Engagement score: ${x.totalEngagement}.`,
+    ...ogreAgentCompactSocialAnswer(evidence, { xPosts: x.posts }),
     ...topPosts.map((post, index) => {
       const handle = post.username ? `@${post.username}` : post.authorName;
       const reach = post.followers ? `${post.followers.toLocaleString("en-US")} followers` : "followers n/a";
       const action = `${post.likes} likes/${post.reposts} reposts/${post.replies} replies`;
       return `${index + 1}. ${handle}${post.verified ? " verified" : ""} | ${reach} | ${action}`;
     }),
-    x.posts.length >= 3 ? "Read: real CA mentions are coming in. Check if the accounts are legit callers or just low-reach spam before sizing up." : "Read: there is some CA chatter, but not enough to call it broadly popular yet."
+    x.posts.length >= 3 ? "Read: real CA mentions are coming in. Check if the accounts are legit callers or low-reach spam before sizing up." : "Read: some CA chatter, but not enough to call it broadly popular yet."
   ];
   return {
     reply: lines.join("\n"),
@@ -3275,6 +3361,8 @@ async function webOgreAgentReply(body = {}) {
   if (!message) {
     return ogreAgentFallbackReply("help", context);
   }
+  const kolTrendReply = await ogreAgentKolTrendReply(message, context);
+  if (kolTrendReply) return kolTrendReply;
   const toolRouterReply = await ogreAgentToolRouterReply(message, context);
   if (toolRouterReply) return toolRouterReply;
   const socialReply = await ogreAgentTokenSocialReply(message, context);
