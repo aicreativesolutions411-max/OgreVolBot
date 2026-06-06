@@ -2241,10 +2241,23 @@ function ogreAgentTokenMintFromText(text = "") {
   return match ? match[0] : "";
 }
 
+function ogreAgentTokenMintFromContext(message = "", context = {}) {
+  const direct = ogreAgentTokenMintFromText(message);
+  if (direct) return direct;
+  const explicit = String(context.lastTokenMint || context.smartChartToken || context.tradeToken || "").trim();
+  if (explicit) return explicit;
+  const recent = Array.isArray(context.recentAgentMessages) ? context.recentAgentMessages : [];
+  for (let index = recent.length - 1; index >= 0; index -= 1) {
+    const found = ogreAgentTokenMintFromText(recent[index]?.text || "");
+    if (found) return found;
+  }
+  return "";
+}
+
 function ogreAgentFallbackReply(message = "", context = {}) {
   const text = String(message || "").trim();
   const lower = text.toLowerCase();
-  const tokenMint = ogreAgentTokenMintFromText(text) || String(context.smartChartToken || context.tradeToken || "").trim();
+  const tokenMint = ogreAgentTokenMintFromContext(text, context);
   const buyAmountSol = (lower.match(/(?:buy|ape|enter|grab|snipe|purchase|get in|go in|long|take entry)[^0-9]*(\d+(?:\.\d+)?)\s*(?:sol)?/) || lower.match(/(\d+(?:\.\d+)?)\s*sol/) || [])[1] || "";
   const walletNumber = (lower.match(/(?:wallet|from)\s*#?\s*(\d{1,2})/) || [])[1] || "";
   const walletIndex = walletNumber ? Math.max(0, Number(walletNumber) - 1) : undefined;
@@ -2347,7 +2360,7 @@ function ogreAgentMoney(value) {
 }
 
 async function enrichOgreAgentCoinReply(fallback = {}, message = "", context = {}) {
-  const tokenMint = ogreAgentTokenMintFromText(message) || String(context.smartChartToken || context.tradeToken || "").trim();
+  const tokenMint = ogreAgentTokenMintFromContext(message, context);
   if (!tokenMint || !ogreAgentCoinIntent(message)) return fallback;
   try {
     const token = await webDexToken(tokenMint);
@@ -2357,10 +2370,15 @@ async function enrichOgreAgentCoinReply(fallback = {}, message = "", context = {
     const marketCap = ogreAgentMoney(token.marketCap || token.fdv || token.marketCapUsd);
     const volume = ogreAgentMoney(token.volume24h || token.volume?.h24 || token.volume?.m5);
     const source = token.dexName || token.dexId || token.metadataSource || "metadata";
+    const xUrl = token.twitterUrl || token.xUrl || token.links?.twitter || token.links?.x || token.socials?.twitter || token.socials?.x || "";
+    const telegramUrl = token.telegramUrl || token.links?.telegram || token.socials?.telegram || "";
+    const websiteUrl = token.websiteUrl || token.url || token.links?.website || token.socials?.website || "";
+    const wantsSocials = /\b(x|twitter|telegram|website|site|social|community|links?)\b/i.test(String(message || ""));
     const lines = [
       `${symbol} check for ${shortMint(tokenMint)}:`,
       `${name} | MC/FDV ${marketCap} | Liq ${liquidity} | Vol ${volume}`,
       token.pairAddress ? `Pair ${shortMint(token.pairAddress)} on ${source}.` : `No confirmed pair found yet from ${source}.`,
+      wantsSocials ? `Socials: X ${xUrl ? "found" : "not returned"} | Telegram ${telegramUrl ? "found" : "not returned"} | Website ${websiteUrl ? "found" : "not returned"}.` : "",
       "Read: stronger setups usually show real liquidity, steady live buys, socials that match the token, and chart structure building higher lows. Red flags are thin/no liquidity, fake socials, mint/freeze risk badges, giant FDV with no activity, and one-sided sell pressure."
     ];
     const actions = [
@@ -2370,7 +2388,10 @@ async function enrichOgreAgentCoinReply(fallback = {}, message = "", context = {
       { label: "Pump", type: "open_external", url: token.pumpUrl || `https://pump.fun/coin/${tokenMint}` },
       { label: "Solscan", type: "open_external", url: `https://solscan.io/token/${tokenMint}` }
     ];
-    return { ...fallback, reply: lines.filter(Boolean).join("\n"), actions, coinEnriched: true };
+    if (xUrl) actions.push({ label: "X", type: "open_external", url: xUrl });
+    if (telegramUrl) actions.push({ label: "Telegram", type: "open_external", url: telegramUrl });
+    if (websiteUrl) actions.push({ label: "Website", type: "open_external", url: websiteUrl });
+    return { ...fallback, reply: lines.filter(Boolean).join("\n"), actions: actions.slice(0, 4), coinEnriched: true, tokenMint, socialLinks: { xUrl, telegramUrl, websiteUrl } };
   } catch (error) {
     return fallback;
   }
@@ -2401,6 +2422,7 @@ function ogreAgentSanitizedContext(context = {}) {
     activeTab: String(context.activeTab || "").slice(0, 40),
     agentFastMode: Boolean(context.agentFastMode),
     agentAutoTradeApproved: Boolean(context.agentAutoTradeApproved),
+    lastTokenMint: String(context.lastTokenMint || "").slice(0, 80),
     smartChartToken: String(context.smartChartToken || "").slice(0, 80),
     tradeToken: String(context.tradeToken || "").slice(0, 80),
     livePairBucket: String(context.livePairBucket || "").slice(0, 40),
@@ -2564,7 +2586,7 @@ async function webOgreAgentReply(body = {}) {
     return ogreAgentFallbackReply("help", context);
   }
   const fallback = await enrichOgreAgentCoinReply(ogreAgentFallbackReply(message, context), message, context);
-  const modelResult = fallback.coinEnriched ? null : await callOgreAgentModel(message, context, fallback);
+  const modelResult = await callOgreAgentModel(message, context, fallback);
   const modelReply = typeof modelResult === "string" ? modelResult : String(modelResult?.reply || "");
   return {
     ...fallback,

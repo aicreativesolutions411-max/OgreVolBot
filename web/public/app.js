@@ -12691,9 +12691,56 @@ function ogreAgentInitialMessage() {
   };
 }
 
+const OGRE_AGENT_MESSAGES_STORAGE_KEY = "slimewire:ogreAgentMessages:v1";
+const OGRE_AGENT_LAST_TOKEN_STORAGE_KEY = "slimewire:ogreAgentLastToken:v1";
+
+function ogreAgentLoadStoredMessages() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(OGRE_AGENT_MESSAGES_STORAGE_KEY) || "[]");
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((message) => message && typeof message === "object" && String(message.text || "").trim())
+      .slice(-16)
+      .map((message) => ({
+        role: message.role === "user" ? "user" : "assistant",
+        text: String(message.text || "").slice(0, 1200),
+        actions: Array.isArray(message.actions) ? message.actions.slice(0, 4) : []
+      }));
+  } catch {
+    return [];
+  }
+}
+
+function ogreAgentSaveMessages() {
+  try {
+    localStorage.setItem(OGRE_AGENT_MESSAGES_STORAGE_KEY, JSON.stringify(ogreAgentMessages().slice(-16)));
+  } catch {}
+}
+
+function ogreAgentLastTokenMint() {
+  if (state.ogreAgentLastTokenMint) return String(state.ogreAgentLastTokenMint);
+  try {
+    state.ogreAgentLastTokenMint = String(localStorage.getItem(OGRE_AGENT_LAST_TOKEN_STORAGE_KEY) || "").trim();
+  } catch {
+    state.ogreAgentLastTokenMint = "";
+  }
+  return state.ogreAgentLastTokenMint || "";
+}
+
+function ogreAgentRememberTokenMint(tokenMint = "") {
+  const clean = String(tokenMint || "").trim();
+  if (!clean) return "";
+  state.ogreAgentLastTokenMint = clean;
+  try {
+    localStorage.setItem(OGRE_AGENT_LAST_TOKEN_STORAGE_KEY, clean);
+  } catch {}
+  return clean;
+}
+
 function ogreAgentMessages() {
   if (!Array.isArray(state.ogreAgentMessages) || !state.ogreAgentMessages.length) {
-    state.ogreAgentMessages = [ogreAgentInitialMessage()];
+    const storedMessages = ogreAgentLoadStoredMessages();
+    state.ogreAgentMessages = storedMessages.length ? storedMessages : [ogreAgentInitialMessage()];
   }
   return state.ogreAgentMessages;
 }
@@ -12704,6 +12751,7 @@ function ogreAgentContext() {
     activeTab: state.activeTab,
     agentFastMode: state.ogreAgentFastMode,
     agentAutoTradeApproved: isOgreAgentAutoTradeApproved(),
+    lastTokenMint: ogreAgentLastTokenMint(),
     recentAgentMessages: ogreAgentMessages().slice(-8).map((message) => ({
       role: message.role === "user" ? "user" : "assistant",
       text: String(message.text || "").slice(0, 600)
@@ -12814,6 +12862,7 @@ function renderOgreAgent({ force = false } = {}) {
 
 function pushOgreAgentMessage(message = {}) {
   state.ogreAgentMessages = [...ogreAgentMessages(), message].slice(-16);
+  ogreAgentSaveMessages();
 }
 
 function ogreAgentActionFromKey(key = "") {
@@ -12949,7 +12998,7 @@ function prepareOgreAgentActionForMessage(action = {}, message = "") {
   const prepared = { ...action };
   const intent = ogreAgentTradeIntent(message);
   if (!prepared.tokenMint && !prepared.mint && !prepared.ca) {
-    const tokenMint = resolveOgreAgentTokenFromMessage(message);
+    const tokenMint = resolveOgreAgentTokenFromMessage(message) || ogreAgentLastTokenMint();
     if (tokenMint) prepared.tokenMint = tokenMint;
   }
   if (prepared.type === "confirm_buy" || intent === "buy") {
@@ -13143,7 +13192,7 @@ async function runOgreAgentAction(action = {}) {
   }
 
   if (action.type === "coin_breakdown" || action.type === "analyze_coin") {
-    const tokenMint = String(action.tokenMint || action.mint || action.ca || state.smartChartToken || state.tradeToken || "").trim();
+    const tokenMint = ogreAgentRememberTokenMint(String(action.tokenMint || action.mint || action.ca || state.smartChartToken || state.tradeToken || ogreAgentLastTokenMint() || "").trim());
     if (!tokenMint) {
       state.ogreAgentStatus = "Paste a token CA and ask me to check it.";
       renderOgreAgent();
@@ -13181,6 +13230,7 @@ async function runOgreAgentAction(action = {}) {
         `${symbol} breakdown`,
         `${name} | ${shortAddress(tokenMint)}`,
         `MC/FDV: ${marketCap} | Liquidity: ${liquidity} | Volume: ${volume}`,
+        `Socials: X ${twitterUrl ? "found" : "not returned"} | Telegram ${telegramUrl ? "found" : "not returned"} | Website ${websiteUrl ? "found" : "not returned"}`,
         "Read: look for live buys vs sells, liquidity depth, holder/risk badges, socials, and whether the chart is building higher lows.",
         "Risk note: fresh Solana launches can still rug even with good socials. Size smaller until liquidity, volume, and holder distribution prove out."
       ];
@@ -13238,6 +13288,7 @@ async function sendOgreAgentMessage() {
       preserveSafeError: true
     });
     const actions = (data?.agent?.actions || []).map((action) => prepareOgreAgentActionForMessage(action, message));
+    if (data?.agent?.tokenMint) ogreAgentRememberTokenMint(data.agent.tokenMint);
     pushOgreAgentMessage({
       role: "assistant",
       text: data?.agent?.reply || "I can help with panel functions, charts, positions, presets, coin checks, links, risk reads, and fast trade requests.",
@@ -13439,6 +13490,11 @@ document.addEventListener("click", async (event) => {
       state.ogreAgentMessages = [ogreAgentInitialMessage()];
       state.ogreAgentStatus = "Chat cleared.";
       state.ogreAgentDraft = "";
+      state.ogreAgentLastTokenMint = "";
+      try {
+        localStorage.removeItem(OGRE_AGENT_MESSAGES_STORAGE_KEY);
+        localStorage.removeItem(OGRE_AGENT_LAST_TOKEN_STORAGE_KEY);
+      } catch {}
       renderOgreAgent({ force: true });
     }
     return;
