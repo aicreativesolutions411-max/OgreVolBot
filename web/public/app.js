@@ -187,6 +187,14 @@ const state = {
         : "terminal",
   terminalSubtab: "positions",
   terminalSort: "best",
+  terminalLaunchFilters: {
+    open: false,
+    keywords: "",
+    excludeKeywords: "",
+    socials: {},
+    quotes: {},
+    audits: {}
+  },
   terminalToken: "",
   smartChartToken: "",
   smartChartTokenRef: null,
@@ -364,6 +372,7 @@ let livePairsRenderRaf = 0;
 let livePairsRenderReasons = new Set();
 let appWatchdogTimer = null;
 let resumeLiveFeedsTimer = null;
+let terminalLaunchFilterRenderTimer = null;
 let lastRenderCompletedAt = Date.now();
 
 function scheduleLivePairsRender(reason = "live-pairs-batch") {
@@ -444,6 +453,32 @@ const LIVE_PAIR_SORTS = [
   ["buys", "Most Buys"],
   ["momentum", "Highest Momentum"],
   ["risk", "Highest Risk"]
+];
+
+const TERMINAL_LAUNCH_SOCIAL_FILTERS = [
+  ["twitter", "X"],
+  ["website", "Website"],
+  ["telegram", "Telegram"],
+  ["youtube", "YouTube"],
+  ["tiktok", "TikTok"],
+  ["instagram", "Instagram"],
+  ["dexPaid", "Dex paid"],
+  ["minSocial", "Min 1 social"],
+  ["pumpLive", "Pump live"]
+];
+
+const TERMINAL_LAUNCH_QUOTE_FILTERS = [
+  ["WSOL", "WSOL"],
+  ["USDC", "USDC"],
+  ["USD1", "USD1"]
+];
+
+const TERMINAL_LAUNCH_AUDIT_FILTERS = [
+  ["mintAuth", "Mint auth off"],
+  ["freezeAuth", "Freeze auth off"],
+  ["lpBurned", "LP burned"],
+  ["top10Hold", "Top 10 ok"],
+  ["showHidden", "Show hidden"]
 ];
 
 /*
@@ -6344,9 +6379,16 @@ function volumeResultHtml() {
 }
 
 function launchHtml() {
-  if (!state.wallets.length) {
-    return `${createWalletSection()}${emptyState("No wallets loaded yet", "Create or restore wallets above first. Launch Snipe needs selected wallets before it can watch and buy a ticker.")}`;
-  }
+  const launchSourceRows = uniqueSignalRows([
+    ...(state.livePairsByBucket.live?.rows || []),
+    ...(state.livePairsByBucket.under1h?.rows || []),
+    ...(currentLivePairs()?.rows || []),
+    ...(state.scan?.rows || [])
+  ]).sort(compareNewestLiveRows);
+  const launchRows = terminalLaunchFilteredRows(launchSourceRows);
+  const visibleLaunchRows = terminalFeedRowsWindow("launch", launchRows);
+  const launchFilterActive = terminalLaunchFiltersActive();
+  const firstKeyword = terminalLaunchKeywordList(terminalLaunchFilterState().keywords)[0] || "";
 
   return `
     <section class="trade-layout">
@@ -6354,12 +6396,36 @@ function launchHtml() {
         <div class="trade-head">
           <div>
             <h3>Launch Snipe</h3>
-            <p>Preset the ticker, wallets, SOL amount, exits, and slippage. The bot keeps scanning until that ticker appears.</p>
+            <p>Watch fresh live pairs by ticker/keyword before launch, then arm wallets and exits when you are ready.</p>
           </div>
+          <span class="sync-pill">${escapeHtml(visibleLaunchRows.length)}/${escapeHtml(launchSourceRows.length)} matching</span>
         </div>
+        ${terminalLaunchFilterPanelHtml("launch", { rawCount: launchSourceRows.length, visibleCount: launchRows.length })}
+        ${terminalLaunchFilterSummaryHtml(launchSourceRows, launchRows)}
+        ${visibleLaunchRows.length
+          ? tokenSignalRowsHtml(visibleLaunchRows, {
+              context: "launch-snipe",
+              hideToolbar: true,
+              primaryAction: "snipe",
+              primaryActionLabel: "Snipe",
+              shareBuilder: livePairShareText
+            })
+          : launchFilterActive
+            ? terminalLaunchFilterEmptyState(launchSourceRows, "launch candidates")
+            : emptyState("No launch filter set", "Enter a ticker keyword like cook or broscook to watch fresh live pairs before they launch.")}
+        ${terminalFeedLoadMoreHtml("launch", launchRows, "launch candidates")}
+      </article>
+
+      <aside class="trade-side">
+        <article>
+          <h3>Launch Watch Setup</h3>
+          <p>Use this only when you want SlimeWire to keep watching and buy with selected managed wallets when the ticker appears.</p>
+        </article>
+        ${state.wallets.length ? `
+        <article class="trade-card launch-watch-setup-card">
         <label>
           Ticker
-          <input data-launch-ticker type="text" placeholder="Example: OGRE">
+          <input data-launch-ticker type="text" placeholder="Example: OGRE" value="${escapeHtml(firstKeyword.toUpperCase())}">
         </label>
         <div class="wallet-checks">
           ${walletChecksHtml("launch")}
@@ -6426,9 +6492,17 @@ function launchHtml() {
         ${walletExitTargetsHtml("launch")}
         <button class="primary" data-launch-start>Start Launch Watch</button>
         <p class="trade-status" data-launch-status>${state.launchResult ? escapeHtml(state.launchResult.message || "Launch watch armed.") : "Ready."}</p>
-      </article>
-
-      <aside class="trade-side">
+        </article>
+        ` : `
+        <article class="trade-card">
+          <h3>Wallets needed to auto-buy</h3>
+          <p>You can still filter and watch launches here. Create or restore managed wallets before arming automatic Launch Watch buys.</p>
+          <div class="card-actions">
+            <button type="button" class="primary" data-tab="wallets">Open Wallets</button>
+            <button type="button" data-tab="terminal">Live Terminal</button>
+          </div>
+        </article>
+        `}
         <article>
           <h3>How It Works</h3>
           <p>It scans live launch/profile feeds about every ${escapeHtml(launchScanSeconds())} seconds while the bot is online.</p>
@@ -9834,7 +9908,7 @@ function setLaunchStatus(message) {
 }
 
 function readLaunchForm() {
-  const ticker = $("[data-launch-ticker]")?.value?.trim() || "";
+  const ticker = $("[data-launch-ticker]")?.value?.trim() || terminalLaunchKeywordList(terminalLaunchFilterState().keywords)[0] || "";
   const walletIndexes = checkedWalletIndexes("launch");
   const walletGroup = $("[data-launch-group]")?.value?.trim() || "";
   const amountSol = $("[data-launch-amount]")?.value || "";
@@ -9846,6 +9920,8 @@ function readLaunchForm() {
   const slippageBps = fieldValue("[data-launch-slippage]", "[data-launch-slippage-custom]", "300");
   if (!ticker) throw new Error("Enter a ticker to watch.");
   if (!walletIndexes.length && !walletGroup) throw new Error("Choose at least one wallet or enter a group label.");
+  terminalLaunchFilterState().keywords = ticker;
+  terminalLaunchFilterState().open = true;
   return { ticker, walletIndexes, walletGroup, amountSol, takeProfitPct, stopLossPct, sellDelay, loopCount, loopDelay, slippageBps, ...readWalletExitTargets("launch") };
 }
 
@@ -10890,6 +10966,7 @@ function terminalRotationKey(scope = "") {
     scope,
     state.livePairBucket,
     state.terminalSort,
+    terminalLaunchFilterSignature(),
     feed?.refreshCount || "",
     state.livePairsLastUpdatedByBucket[state.livePairBucket] || state.livePairsLastUpdatedAt || "",
     state.kolScan?.refreshCount || "",
@@ -11096,6 +11173,245 @@ function activeQuickBuyAmount(preset = activeTradePreset()) {
 
 function activeBundleQuickBuyAmount(preset = activeBundlePreset()) {
   return normalizedQuickBuyAmount() || formatQuickBuyAmount(preset?.amountSol) || "0.1";
+}
+
+function terminalLaunchFilterState() {
+  if (!state.terminalLaunchFilters || typeof state.terminalLaunchFilters !== "object") {
+    state.terminalLaunchFilters = {};
+  }
+  state.terminalLaunchFilters.socials = state.terminalLaunchFilters.socials || {};
+  state.terminalLaunchFilters.quotes = state.terminalLaunchFilters.quotes || {};
+  state.terminalLaunchFilters.audits = state.terminalLaunchFilters.audits || {};
+  return state.terminalLaunchFilters;
+}
+
+function terminalLaunchKeywordList(value = "") {
+  const seen = new Set();
+  return String(value || "")
+    .split(/[\n,]+/)
+    .flatMap((part) => String(part || "").trim().split(/\s+/))
+    .map((part) => part.trim().toLowerCase())
+    .filter((part) => {
+      if (!part || seen.has(part)) return false;
+      seen.add(part);
+      return true;
+    })
+    .slice(0, 3);
+}
+
+function terminalLaunchFilterSignature(filters = terminalLaunchFilterState()) {
+  const socialKeys = Object.keys(filters.socials || {}).filter((key) => filters.socials[key]).sort().join(",");
+  const quoteKeys = Object.keys(filters.quotes || {}).filter((key) => filters.quotes[key]).sort().join(",");
+  const auditKeys = Object.keys(filters.audits || {}).filter((key) => filters.audits[key]).sort().join(",");
+  return [
+    terminalLaunchKeywordList(filters.keywords).join(","),
+    terminalLaunchKeywordList(filters.excludeKeywords).join(","),
+    socialKeys,
+    quoteKeys,
+    auditKeys
+  ].join("|");
+}
+
+function terminalLaunchFiltersActive(filters = terminalLaunchFilterState()) {
+  return Boolean(terminalLaunchFilterSignature(filters).replace(/\|/g, ""));
+}
+
+function terminalLaunchRowBlob(row = {}) {
+  return [
+    row.tokenMint,
+    row.mint,
+    row.address,
+    row.pairAddress,
+    row.baseMint,
+    row.symbol,
+    row.baseSymbol,
+    row.name,
+    row.tokenName,
+    row.category,
+    row.signalType,
+    row.source,
+    row.dexId,
+    row.dexName,
+    row.platform,
+    row.quoteSymbol,
+    row.quoteMintSymbol,
+    row.quoteToken,
+    row.twitterUrl,
+    row.xUrl,
+    row.telegramUrl,
+    row.websiteUrl,
+    row.youtubeUrl,
+    row.tiktokUrl,
+    row.instagramUrl,
+    row.pairUrl,
+    row.pumpUrl,
+    row.socials,
+    row.links,
+    ...(row.riskFlags || []),
+    ...(row.reasons || []),
+    ...(row.auditFlags || [])
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+
+function terminalLaunchRowHasSocial(row = {}, type = "") {
+  const blob = terminalLaunchRowBlob(row);
+  const hasAny = Boolean(row.twitterUrl || row.xUrl || row.telegramUrl || row.websiteUrl || row.youtubeUrl || row.tiktokUrl || row.instagramUrl || /twitter|x\.com|telegram|t\.me|website|youtube|youtu\.be|tiktok|instagram/.test(blob));
+  if (type === "twitter") return Boolean(row.twitterUrl || row.xUrl || /twitter|x\.com/.test(blob));
+  if (type === "website") return Boolean(row.websiteUrl || /\bwebsite\b|https?:\/\/(?!x\.com|twitter\.com|t\.me|telegram\.org)/.test(blob));
+  if (type === "telegram") return Boolean(row.telegramUrl || /telegram|t\.me/.test(blob));
+  if (type === "youtube") return Boolean(row.youtubeUrl || /youtube|youtu\.be/.test(blob));
+  if (type === "tiktok") return Boolean(row.tiktokUrl || /tiktok/.test(blob));
+  if (type === "instagram") return Boolean(row.instagramUrl || /instagram/.test(blob));
+  if (type === "dexPaid") return Boolean(row.dexPaid || row.isDexPaid || /dex paid|paid dex|dexpaid/.test(blob));
+  if (type === "pumpLive") return Boolean(row.pumpLivestream || row.pumpLive || row.liveStreamUrl || /pump livestream|pump live|livestream/.test(blob));
+  if (type === "minSocial") return hasAny;
+  return true;
+}
+
+function terminalLaunchRowQuote(row = {}) {
+  const direct = String(row.quoteSymbol || row.quoteMintSymbol || row.quoteToken || row.quoteTicker || "").trim().toUpperCase();
+  if (direct) return direct;
+  const blob = terminalLaunchRowBlob(row).toUpperCase();
+  if (blob.includes("USDC")) return "USDC";
+  if (blob.includes("USD1")) return "USD1";
+  if (blob.includes("WSOL") || blob.includes("SOL")) return "WSOL";
+  return "";
+}
+
+function terminalLaunchRiskFlag(row = {}, patterns = []) {
+  const blob = terminalLaunchRowBlob(row);
+  return patterns.some((pattern) => pattern.test(blob));
+}
+
+function terminalLaunchRowPassesAudit(row = {}, audit = "") {
+  if (audit === "showHidden") return true;
+  if (audit === "mintAuth") {
+    if (row.mintAuthorityActive === true || row.isMintable === true) return false;
+    return !terminalLaunchRiskFlag(row, [/mintauthorityactive/i, /mint authority active/i, /\bmintable\b/i, /mint auth enabled/i]);
+  }
+  if (audit === "freezeAuth") {
+    if (row.freezeAuthorityActive === true || row.isFreezeable === true || row.isFreezable === true) return false;
+    return !terminalLaunchRiskFlag(row, [/freezeauthorityactive/i, /freeze authority active/i, /freezable/i, /freezeable/i, /freeze auth enabled/i]);
+  }
+  if (audit === "lpBurned") {
+    if (row.lpBurned === true || row.liquidityBurned === true) return true;
+    return terminalLaunchRiskFlag(row, [/lp burned/i, /liquidity burned/i, /burned lp/i]);
+  }
+  if (audit === "top10Hold") {
+    const pct = firstUsefulNumber(row.topHoldersPct, row.top10HoldersPct, row.topTenHoldersPct);
+    if (pct > 0) return pct <= 30;
+    return !terminalLaunchRiskFlag(row, [/high holder concentration/i, /top holders high/i, /top 10 high/i]);
+  }
+  return true;
+}
+
+function terminalLaunchFilteredRows(rows = [], filters = terminalLaunchFilterState()) {
+  const uniqueRows = uniqueSignalRows(rows || []);
+  if (!terminalLaunchFiltersActive(filters)) return uniqueRows;
+  const include = terminalLaunchKeywordList(filters.keywords);
+  const exclude = terminalLaunchKeywordList(filters.excludeKeywords);
+  const enabledSocials = Object.keys(filters.socials || {}).filter((key) => filters.socials[key]);
+  const enabledQuotes = Object.keys(filters.quotes || {}).filter((key) => filters.quotes[key]).map((key) => key.toUpperCase());
+  const enabledAudits = Object.keys(filters.audits || {}).filter((key) => filters.audits[key]);
+  return uniqueRows.filter((row) => {
+    const blob = terminalLaunchRowBlob(row);
+    if (include.length && !include.some((keyword) => blob.includes(keyword))) return false;
+    if (exclude.length && exclude.some((keyword) => blob.includes(keyword))) return false;
+    if (enabledSocials.some((key) => !terminalLaunchRowHasSocial(row, key))) return false;
+    if (enabledQuotes.length && !enabledQuotes.includes(terminalLaunchRowQuote(row))) return false;
+    if (enabledAudits.some((key) => !terminalLaunchRowPassesAudit(row, key))) return false;
+    return true;
+  });
+}
+
+function terminalLaunchFilterSummaryHtml(rawRows = [], filteredRows = []) {
+  const filters = terminalLaunchFilterState();
+  if (!terminalLaunchFiltersActive(filters)) return "";
+  const include = terminalLaunchKeywordList(filters.keywords);
+  const exclude = terminalLaunchKeywordList(filters.excludeKeywords);
+  const parts = [];
+  if (include.length) parts.push(`watching ${include.map((item) => `"${item}"`).join(", ")}`);
+  if (exclude.length) parts.push(`excluding ${exclude.map((item) => `"${item}"`).join(", ")}`);
+  const hidden = Math.max(0, uniqueSignalRows(rawRows).length - uniqueSignalRows(filteredRows).length);
+  return `<div class="terminal-launch-filter-summary">${escapeHtml(parts.join(" | ") || "filters active")} - ${escapeHtml(filteredRows.length)}/${escapeHtml(uniqueSignalRows(rawRows).length)} visible${hidden ? `, ${escapeHtml(hidden)} hidden` : ""}</div>`;
+}
+
+function terminalLaunchFilterEmptyState(rawRows = [], context = "pairs") {
+  const filters = terminalLaunchFilterState();
+  const keywords = terminalLaunchKeywordList(filters.keywords);
+  const label = keywords.length ? keywords.map((item) => `"${item}"`).join(", ") : "your launch filters";
+  const rawCount = uniqueSignalRows(rawRows).length;
+  return emptyState(
+    "Watching fresh launches",
+    rawCount
+      ? `No ${context} match ${label} yet. ${rawCount} fresh rows were checked; keep this open and the live refresh will surface it when it launches.`
+      : `No fresh rows are loaded yet. Keep this open or tap Refresh Feeds while watching ${label}.`
+  );
+}
+
+function terminalLaunchFilterPanelHtml(context = "terminal", counts = {}) {
+  const filters = terminalLaunchFilterState();
+  const active = terminalLaunchFiltersActive(filters);
+  const open = Boolean(filters.open || active);
+  const rawCount = Number.isFinite(Number(counts.rawCount)) ? Number(counts.rawCount) : 0;
+  const visibleCount = Number.isFinite(Number(counts.visibleCount)) ? Number(counts.visibleCount) : rawCount;
+  return `
+    <section class="terminal-launch-filter ${open ? "is-open" : ""}" data-terminal-launch-filter data-preserve-focus>
+      <div class="terminal-launch-filter-head">
+        <div>
+          <strong>Launch Filter</strong>
+          <span>${active ? `${escapeHtml(visibleCount)}/${escapeHtml(rawCount)} visible` : "Watch a known ticker before it goes live"}</span>
+        </div>
+        <button type="button" data-terminal-filter-toggle>${open ? "Hide Filters" : "Filter / Keyword Watch"}</button>
+      </div>
+      ${open ? `
+        <div class="terminal-launch-filter-grid">
+          <label class="wide">
+            Search keywords (max 3)
+            <input data-terminal-filter-field="keywords" type="text" autocomplete="off" placeholder="cook, broscook, ogre" value="${escapeHtml(filters.keywords || "")}">
+          </label>
+          <label class="wide">
+            Exclude keywords (max 3)
+            <input data-terminal-filter-field="excludeKeywords" type="text" autocomplete="off" placeholder="test, fake, old" value="${escapeHtml(filters.excludeKeywords || "")}">
+          </label>
+          <fieldset>
+            <legend>Socials</legend>
+            ${TERMINAL_LAUNCH_SOCIAL_FILTERS.map(([key, label]) => `
+              <label><input type="checkbox" data-terminal-filter-social="${escapeHtml(key)}" ${filters.socials?.[key] ? "checked" : ""}> ${escapeHtml(label)}</label>
+            `).join("")}
+          </fieldset>
+          <fieldset>
+            <legend>Quotes</legend>
+            ${TERMINAL_LAUNCH_QUOTE_FILTERS.map(([key, label]) => `
+              <label><input type="checkbox" data-terminal-filter-quote="${escapeHtml(key)}" ${filters.quotes?.[key] ? "checked" : ""}> ${escapeHtml(label)}</label>
+            `).join("")}
+          </fieldset>
+          <fieldset>
+            <legend>Audit</legend>
+            ${TERMINAL_LAUNCH_AUDIT_FILTERS.map(([key, label]) => `
+              <label><input type="checkbox" data-terminal-filter-audit="${escapeHtml(key)}" ${filters.audits?.[key] ? "checked" : ""}> ${escapeHtml(label)}</label>
+            `).join("")}
+          </fieldset>
+          <div class="terminal-launch-filter-actions">
+            <button type="button" class="primary" data-refresh-live-pairs>Refresh Feeds</button>
+            <button type="button" data-terminal-filter-clear>Clear Filters</button>
+            <button type="button" data-tab="launch">${context === "launch" ? "Launch Snipe" : "Open Launch Snipe"}</button>
+          </div>
+        </div>
+      ` : ""}
+    </section>
+  `;
+}
+
+function scheduleTerminalLaunchFilterRender() {
+  if (terminalLaunchFilterRenderTimer) window.clearTimeout(terminalLaunchFilterRenderTimer);
+  terminalLaunchFilterRenderTimer = window.setTimeout(() => {
+    terminalLaunchFilterRenderTimer = null;
+    resetTerminalFeedVisibleLimit("live");
+    resetTerminalFeedVisibleLimit("launch");
+    resetTerminalFeedVisibleLimit("sniper");
+    render();
+  }, 180);
 }
 
 function rowAgeSeconds(row = {}) {
@@ -11326,10 +11642,14 @@ function slimeScopeHtml() {
 
 function terminalHtml() {
   const liveFeed = currentLivePairs();
-  const liveRows = uniqueSignalRows(liveFeed?.rows || []);
+  const rawLiveRows = uniqueSignalRows(liveFeed?.rows || []);
+  const liveRows = terminalLaunchFilteredRows(rawLiveRows);
   const newestLiveRows = [...liveRows].sort(compareNewestLiveRows);
-  const kolRows = mergeMarketDataIntoRows(state.kolScan?.rows || []).filter((row) => !isUiFeedDisplayBlockedSignalRow(row));
-  const bestRows = terminalBestPickRows(liveRows, kolRows);
+  const rawKolRows = mergeMarketDataIntoRows(state.kolScan?.rows || []).filter((row) => !isUiFeedDisplayBlockedSignalRow(row));
+  const kolRows = terminalLaunchFilteredRows(rawKolRows);
+  const rawBestRows = terminalBestPickRows(rawLiveRows, rawKolRows);
+  const bestRows = terminalLaunchFilteredRows(rawBestRows);
+  const launchFilterActive = terminalLaunchFiltersActive();
   const bestDisplayRows = rotatedDisplayRows(bestRows, 8, terminalRotationKey("best-picks"), 2);
   const bestMintSet = new Set(bestDisplayRows.map(tokenMintKey).filter(Boolean));
   const liveDisplaySource = removeRowsByMints(newestLiveRows, bestMintSet);
@@ -11382,19 +11702,21 @@ function terminalHtml() {
           <button class="primary" data-refresh-live-pairs>${bucketLoading ? "Refreshing..." : "Refresh Feeds"}</button>
           <button data-top-refresh-wallet>${state.walletRefreshing ? "Refreshing Wallet..." : "Refresh Wallet"}</button>
         </div>
+        ${terminalLaunchFilterPanelHtml("terminal", { rawCount: rawLiveRows.length, visibleCount: liveRows.length })}
+        ${terminalLaunchFilterSummaryHtml(rawLiveRows, liveRows)}
 
         <section class="command-grid">
           <article class="terminal-panel best-picks-panel">
             <header><h4>Best Picks</h4><span>Score + reasons</span></header>
-            ${compactSignalRowsHtml(bestDisplayRows, { layout: "terminal", limit: 8, actionLabel: rowTradeLabel, emptyTitle: "No Best Picks yet", emptyMessage: "Refresh Live Pairs to score current pairs." })}
+            ${bestDisplayRows.length ? compactSignalRowsHtml(bestDisplayRows, { layout: "terminal", limit: 8, actionLabel: rowTradeLabel, emptyTitle: "No Best Picks yet", emptyMessage: "Refresh Live Pairs to score current pairs." }) : launchFilterActive ? terminalLaunchFilterEmptyState(rawBestRows, "best picks") : compactSignalRowsHtml(bestDisplayRows, { layout: "terminal", limit: 8, actionLabel: rowTradeLabel, emptyTitle: "No Best Picks yet", emptyMessage: "Refresh Live Pairs to score current pairs." })}
           </article>
           <article class="terminal-panel live-pairs-panel">
             <header><h4>Live Pairs</h4><button data-tab="live">Open</button></header>
-            ${compactSignalRowsHtml(liveDisplayRows, { layout: "terminal", limit: 12, actionLabel: rowTradeLabel })}
+            ${liveDisplayRows.length ? compactSignalRowsHtml(liveDisplayRows, { layout: "terminal", limit: 12, actionLabel: rowTradeLabel }) : launchFilterActive ? terminalLaunchFilterEmptyState(rawLiveRows, "live pairs") : compactSignalRowsHtml(liveDisplayRows, { layout: "terminal", limit: 12, actionLabel: rowTradeLabel })}
           </article>
           <article class="terminal-panel kol-panel">
             <header><h4>KOL Signals</h4><button data-kol-refresh>${state.kolLoading ? "Loading..." : "Refresh"}</button></header>
-            ${compactSignalRowsHtml(kolDisplayRows, { layout: "terminal", limit: 12, actionLabel: rowTradeLabel, emptyTitle: "No KOL signals loaded", emptyMessage: "Refresh KOL Tracker to load signals." })}
+            ${kolDisplayRows.length ? compactSignalRowsHtml(kolDisplayRows, { layout: "terminal", limit: 12, actionLabel: rowTradeLabel, emptyTitle: "No KOL signals loaded", emptyMessage: "Refresh KOL Tracker to load signals." }) : launchFilterActive ? terminalLaunchFilterEmptyState(rawKolRows, "KOL signals") : compactSignalRowsHtml(kolDisplayRows, { layout: "terminal", limit: 12, actionLabel: rowTradeLabel, emptyTitle: "No KOL signals loaded", emptyMessage: "Refresh KOL Tracker to load signals." })}
           </article>
         </section>
 
@@ -12160,11 +12482,13 @@ function txAuditResultHtml(audit) {
 
 function livePairsHtml() {
   const activeLivePairs = currentLivePairs();
-  const allRows = activeLivePairs?.rows || [];
+  const rawRows = uniqueSignalRows(activeLivePairs?.rows || []);
+  const allRows = terminalLaunchFilteredRows(rawRows);
   const rows = terminalFeedRowsWindow("live", allRows);
   const activeBucketLabel = LIVE_PAIR_BUCKETS.find(([bucket]) => bucket === state.livePairBucket)?.[1] || "Live";
   const lastUpdatedAt = currentLivePairsUpdatedAt();
   const bucketLoading = Boolean(state.livePairsLoadingByBucket[state.livePairBucket]);
+  const launchFilterActive = terminalLaunchFiltersActive();
   const status = bucketLoading
     ? "Scanning live pairs..."
     : activeLivePairs?.message || "Live Pairs refreshes while this tab is open.";
@@ -12203,7 +12527,9 @@ function livePairsHtml() {
           </div>
           <small>${escapeHtml(status)}${lastUpdatedAt ? ` Updated ${escapeHtml(formatDate(lastUpdatedAt))}.` : ""}</small>
         </div>
-        ${rows.length ? livePairRowsHtml(rows) : emptyState("No live pairs yet", "Keep this tab open or tap Refresh Live. Trade safety checks run before any buy.")}
+        ${terminalLaunchFilterPanelHtml("live", { rawCount: rawRows.length, visibleCount: allRows.length })}
+        ${terminalLaunchFilterSummaryHtml(rawRows, allRows)}
+        ${rows.length ? livePairRowsHtml(rows) : launchFilterActive ? terminalLaunchFilterEmptyState(rawRows, `${activeBucketLabel.toLowerCase()} pairs`) : emptyState("No live pairs yet", "Keep this tab open or tap Refresh Live. Trade safety checks run before any buy.")}
         ${terminalFeedLoadMoreHtml("live", allRows, `${activeBucketLabel} pairs`)}
       </main>
     </section>
@@ -14936,6 +15262,29 @@ document.addEventListener("click", async (event) => {
     runDeferredUiTask(() => refreshTerminalFeed(feedKey, { force: true, reason: "manual-live-refresh" }));
   }
 
+  if (target.closest?.("[data-terminal-filter-toggle]")) {
+    const filters = terminalLaunchFilterState();
+    filters.open = !filters.open;
+    render();
+    return;
+  }
+
+  if (target.closest?.("[data-terminal-filter-clear]")) {
+    state.terminalLaunchFilters = {
+      open: true,
+      keywords: "",
+      excludeKeywords: "",
+      socials: {},
+      quotes: {},
+      audits: {}
+    };
+    resetTerminalFeedVisibleLimit("live");
+    resetTerminalFeedVisibleLimit("launch");
+    resetTerminalFeedVisibleLimit("sniper");
+    render();
+    return;
+  }
+
   if (target.matches("[data-refresh-watchlist]")) {
     runDeferredUiTask(() => refreshTerminalFeed("watchlist", { force: true, reason: "manual-watchlist-refresh" }));
   }
@@ -15035,6 +15384,20 @@ document.addEventListener("change", async (event) => {
     render();
     runDeferredUiTask(() => refreshLivePairBuckets({ silent: true, force: true }));
   }
+  if (target?.matches?.("[data-terminal-filter-social], [data-terminal-filter-quote], [data-terminal-filter-audit]")) {
+    const filters = terminalLaunchFilterState();
+    const social = target.getAttribute("data-terminal-filter-social");
+    const quote = target.getAttribute("data-terminal-filter-quote");
+    const audit = target.getAttribute("data-terminal-filter-audit");
+    if (social) filters.socials[social] = Boolean(target.checked);
+    if (quote) filters.quotes[quote] = Boolean(target.checked);
+    if (audit) filters.audits[audit] = Boolean(target.checked);
+    filters.open = true;
+    resetTerminalFeedVisibleLimit("live");
+    resetTerminalFeedVisibleLimit("launch");
+    resetTerminalFeedVisibleLimit("sniper");
+    render();
+  }
   if (target?.matches?.("[data-ogre-tek-field]")) {
     updateOgreTekDraftFromDom();
     state.ogreTek.reviewOpen = false;
@@ -15061,6 +15424,23 @@ document.addEventListener("input", (event) => {
   if (target?.matches?.("[data-quick-buy-amount]")) {
     state.quickBuyAmountOverride = String(target.value || "").replace(/[^0-9.]/g, "").slice(0, 12);
     syncQuickBuyActionLabels();
+    return;
+  }
+  if (target?.matches?.("[data-terminal-filter-field]")) {
+    const key = target.getAttribute("data-terminal-filter-field");
+    const filters = terminalLaunchFilterState();
+    if (key === "keywords" || key === "excludeKeywords") {
+      filters[key] = String(target.value || "");
+      filters.open = true;
+      scheduleTerminalLaunchFilterRender();
+    }
+    return;
+  }
+  if (target?.matches?.("[data-launch-ticker]")) {
+    const filters = terminalLaunchFilterState();
+    filters.keywords = String(target.value || "");
+    filters.open = true;
+    scheduleTerminalLaunchFilterRender();
     return;
   }
   if (target?.matches?.("[data-smart-chart-zoom]")) {

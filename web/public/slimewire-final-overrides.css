@@ -8752,6 +8752,188 @@ textarea,
   animation: ogreHoloIdle 3.6s ease-in-out infinite !important;
 }
 
+/* SLIME_TERMINAL_LAUNCH_FILTERS_V1: lightweight client-side keyword watcher for fresh launch sniping. */
+[data-app][data-route="terminal"] .terminal-launch-filter {
+  display: grid !important;
+  gap: 8px !important;
+  border: 1px solid rgba(132, 255, 55, 0.28) !important;
+  border-radius: 14px !important;
+  padding: 8px !important;
+  background:
+    linear-gradient(180deg, rgba(91, 255, 37, 0.085), rgba(5, 12, 7, 0.9)),
+    rgba(1, 8, 4, 0.92) !important;
+  box-shadow: inset 0 0 18px rgba(114, 255, 35, 0.045) !important;
+}
+
+[data-app][data-route="terminal"] .terminal-launch-filter-head {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 10px !important;
+}
+
+[data-app][data-route="terminal"] .terminal-launch-filter-head > div {
+  display: grid !important;
+  gap: 2px !important;
+  min-width: 0 !important;
+}
+
+[data-app][data-route="terminal"] .terminal-launch-filter-head strong {
+  color: #dfffce !important;
+  font-size: 13px !important;
+  font-weight: 950 !important;
+  letter-spacing: 0.08em !important;
+  text-transform: uppercase !important;
+}
+
+[data-app][data-route="terminal"] .terminal-launch-filter-head span,
+[data-app][data-route="terminal"] .terminal-launch-filter-summary {
+  color: rgba(230, 255, 219, 0.72) !important;
+  font-size: 12px !important;
+  font-weight: 850 !important;
+}
+
+[data-app][data-route="terminal"] .terminal-launch-filter-head button {
+  min-height: 34px !important;
+  padding: 5px 12px !important;
+  white-space: nowrap !important;
+}
+
+[data-app][data-route="terminal"] .terminal-launch-filter-grid {
+  display: grid !important;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  gap: 8px !important;
+  align-items: start !important;
+}
+
+[data-app][data-route="terminal"] .terminal-launch-filter-grid label,
+[data-app][data-route="terminal"] .terminal-launch-filter-grid fieldset {
+  min-width: 0 !important;
+}
+
+[data-app][data-route="terminal"] .terminal-launch-filter-grid > label.wide {
+  grid-column: span 2 !important;
+  display: grid !important;
+  gap: 5px !important;
+  color: rgba(230, 255, 219, 0.72) !important;
+  font-size: 11px !important;
+  font-weight: 950 !important;
+  text-transform: uppercase !important;
+}
+
+[data-app][data-route="terminal"] .terminal-launch-filter-grid input[type="text"] {
+  min-height: 34px !important;
+  padding: 6px 10px !important;
+}
+
+[data-app][data-route="terminal"] .terminal-launch-filter-grid fieldset {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 6px !important;
+  margin: 0 !important;
+  padding: 8px !important;
+  border: 1px solid rgba(132, 255, 55, 0.18) !important;
+  border-radius: 11px !important;
+  background: rgba(0, 0, 0, 0.18) !important;
+}
+
+[data-app][data-route="terminal"] .terminal-launch-filter-grid legend {
+  padding: 0 5px !important;
+  color: #a9ff71 !important;
+  font-size: 10px !important;
+  font-weight: 950 !important;
+  letter-spacing: 0.08em !important;
+  text-transform: uppercase !important;
+}
+
+[data-app][data-route="terminal"] .terminal-launch-filter-grid fieldset label {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  min-height: 25px !important;
+  padding: 3px 7px !important;
+  border: 1px solid rgba(132, 255, 55, 0.18) !important;
+  border-radius: 999px !important;
+  color: rgba(238, 255, 231, 0.82) !important;
+  background: rgba(77, 255, 27, 0.045) !important;
+  font-size: 10.5px !important;
+  font-weight: 850 !important;
+  text-transform: none !important;
+}
+
+[data-app][data-route="terminal"] .terminal-launch-filter-grid input[type="checkbox"] {
+  width: 13px !important;
+  height: 13px !important;
+  accent-color: #7dff31 !important;
+}
+
+[data-app][data-route="terminal"] .terminal-launch-filter-actions {
+  grid-column: 1 / -1 !important;
+  display: grid !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  gap: 8px !important;
+}
+
+[data-app][data-route="terminal"] .terminal-launch-filter-actions button {
+  min-height: 34px !important;
+  padding: 5px 10px !important;
+}
+
+[data-app][data-route="terminal"] .terminal-launch-filter-summary {
+  margin: -2px 0 2px !important;
+  padding: 6px 10px !important;
+  border: 1px solid rgba(132, 255, 55, 0.16) !important;
+  border-radius: 999px !important;
+  background: rgba(0, 0, 0, 0.2) !important;
+}
+
+[data-app][data-route="terminal"] .launch-watch-setup-card {
+  display: grid !important;
+  gap: 10px !important;
+}
+
+@media (max-width: 760px) {
+  [data-app][data-route="terminal"] .terminal-launch-filter {
+    padding: 7px !important;
+    gap: 7px !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-launch-filter-head {
+    align-items: stretch !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-launch-filter-head button {
+    min-height: 32px !important;
+    padding: 4px 8px !important;
+    font-size: 10.5px !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-launch-filter-grid {
+    grid-template-columns: 1fr !important;
+    gap: 7px !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-launch-filter-grid > label.wide,
+  [data-app][data-route="terminal"] .terminal-launch-filter-actions {
+    grid-column: auto !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-launch-filter-grid fieldset {
+    padding: 6px !important;
+    gap: 5px !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-launch-filter-grid fieldset label {
+    min-height: 24px !important;
+    padding: 3px 6px !important;
+    font-size: 10px !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-launch-filter-actions {
+    grid-template-columns: 1fr 1fr !important;
+  }
+}
+
 .ogre-agent-holo-ring {
   position: absolute !important;
   border-radius: 50% !important;
