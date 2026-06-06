@@ -98,7 +98,8 @@ test("Chart page uses full chart view with transactions and info tabs", () => {
   assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /setAttribute\('data-loaded','true'\)/);
   assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /queueSmartChartBootstrap\(token\)/);
   assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /smartChartFrameUrl\(token, mode\)/);
-  assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /Finding fastest DEX pair/);
+  assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /data-chart-resolving/);
+  assert.doesNotMatch(functionBody(appSource, "smartChartDexFrameHtml"), /before loading the iframe/);
   assert.match(functionBody(appSource, "resolveSmartChartDexPair"), /\/api\/web\/chart\/bootstrap\?token=/);
   assert.match(functionBody(appSource, "openTokenChart"), /prefetchTokenChart\(tokenRef/);
   assert.match(functionBody(appSource, "applyChartRouteFromLocation"), /prefetchTokenChart\(tokenRef/);

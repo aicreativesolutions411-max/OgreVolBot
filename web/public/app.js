@@ -9426,6 +9426,10 @@ function chartAddressForToken(tokenOrMint = {}) {
 const SMART_CHART_DEX_RESOLVE_TTL_MS = 5 * 60 * 1000;
 const SMART_CHART_DEX_RESOLVE_RETRY_MS = 45 * 1000;
 const SMART_CHART_BOOTSTRAP_TTL_MS = 10 * 60 * 1000;
+const SMART_CHART_INTERACTION_PREFETCH_MIN_INTERVAL_MS = 700;
+const SMART_CHART_INTERACTION_PREFETCH_WINDOW_MS = 6_000;
+const SMART_CHART_INTERACTION_PREFETCH_MAX_PER_WINDOW = 4;
+const SMART_CHART_INTERACTION_PREFETCH_SAME_MINT_MS = 30_000;
 
 function smartChartBootstrapForMint(tokenMint = "") {
   const mint = String(tokenMint || "").trim();
@@ -9638,16 +9642,6 @@ function smartChartDexFrameHtml(token = {}, mode = "chart") {
   const isTransactions = mode === "chartTxns" || mode === "txns";
   const isInfo = mode === "info";
   const resolvingPair = queueSmartChartBootstrap(token) || queueSmartChartDexResolution(token);
-  if (resolvingPair && chartAddressForToken(token) === mint) {
-    return `
-      <div class="smart-chart-frame smart-chart-dex-frame smart-chart-pair-resolving" data-chart-frame-loading="Finding fastest DEX pair...">
-        <div class="smart-chart-resolve-card">
-          <strong>Finding fastest DEX pair...</strong>
-          <span>SlimeWire is resolving the best DexScreener pair before loading the iframe.</span>
-        </div>
-      </div>
-    `;
-  }
   const title = isInfo
     ? `DexScreener info for ${token.symbol || shortAddress(mint)}`
     : isTransactions
@@ -9661,8 +9655,9 @@ function smartChartDexFrameHtml(token = {}, mode = "chart") {
     isInfo ? "smart-chart-info-frame" : ""
   ].filter(Boolean).join(" ");
   const loadingLabel = isInfo ? "Loading token info..." : isTransactions ? "Loading DEX transactions..." : "Loading DEX chart...";
+  const frameLoadingLabel = resolvingPair ? "Loading DEX chart while resolving fastest pair..." : loadingLabel;
   return `
-    <div class="${escapeHtml(className)}" data-chart-frame-loading="${escapeHtml(loadingLabel)}">
+    <div class="${escapeHtml(className)}" data-chart-frame-loading="${escapeHtml(frameLoadingLabel)}" data-chart-resolving="${resolvingPair ? "true" : "false"}">
       <iframe title="${escapeHtml(title)}" src="${escapeHtml(smartChartFrameUrl(token, mode))}" loading="eager" fetchpriority="high" referrerpolicy="no-referrer-when-downgrade" onload="this.closest('.smart-chart-frame')?.setAttribute('data-loaded','true'); window.SlimeWireChartFrameLoaded?.('${escapeHtml(mode)}','${escapeHtml(mint)}')" allowfullscreen></iframe>
     </div>
   `;
@@ -11948,6 +11943,23 @@ function prefetchTokenChartFromElement(element = null, source = "interaction") {
   if (!target) return false;
   const mint = target.dataset.tokenTrade || target.dataset.tokenChart || target.dataset.previewToken || "";
   if (!mint) return false;
+  const sourceHint = String(source || "");
+  const isInteractionPrefetch = sourceHint.includes("prefetch");
+  if (isInteractionPrefetch) {
+    const now = Date.now();
+    const lastAt = Number(state.smartChartInteractionPrefetchAt || 0);
+    const seen = state.smartChartInteractionPrefetchSeen || {};
+    if (lastAt && now - lastAt < SMART_CHART_INTERACTION_PREFETCH_MIN_INTERVAL_MS) return false;
+    if (Number(seen[mint] || 0) && now - Number(seen[mint]) < SMART_CHART_INTERACTION_PREFETCH_SAME_MINT_MS) return false;
+    const recent = (state.smartChartInteractionPrefetchRecent || []).filter((at) => now - Number(at || 0) < SMART_CHART_INTERACTION_PREFETCH_WINDOW_MS);
+    if (recent.length >= SMART_CHART_INTERACTION_PREFETCH_MAX_PER_WINDOW) {
+      state.smartChartInteractionPrefetchRecent = recent;
+      return false;
+    }
+    state.smartChartInteractionPrefetchAt = now;
+    state.smartChartInteractionPrefetchRecent = [...recent, now];
+    state.smartChartInteractionPrefetchSeen = { ...seen, [mint]: now };
+  }
   return prefetchTokenChart(tokenRefFromMint(mint, {
     source: target.dataset.tokenTradeSource || target.dataset.tokenChartSource || source
   }), {

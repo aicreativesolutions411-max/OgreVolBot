@@ -45,6 +45,9 @@ test("chart iframe uses cached bootstrap URLs and does not wait on feed refresh"
   const frame = functionBody(appSource, "smartChartDexFrameHtml");
   assert.match(frame, /smartChartFrameUrl\(token, mode\)/);
   assert.match(frame, /queueSmartChartBootstrap\(token\)/);
+  assert.match(frame, /data-chart-resolving/);
+  assert.doesNotMatch(frame, /before loading the iframe/);
+  assert.doesNotMatch(frame, /smart-chart-pair-resolving/);
   assert.match(frame, /window\.SlimeWireChartFrameLoaded/);
   assert.match(functionBody(appSource, "smartChartFrameUrl"), /bootstrap\?\.chartUrl/);
 
@@ -58,6 +61,10 @@ test("chart iframe uses cached bootstrap URLs and does not wait on feed refresh"
 
 test("chart prefetch and debug commands are wired", () => {
   assert.match(functionBody(appSource, "prefetchTokenChart"), /queueSmartChartBootstrap/);
+  const interactionPrefetch = functionBody(appSource, "prefetchTokenChartFromElement");
+  assert.match(interactionPrefetch, /SMART_CHART_INTERACTION_PREFETCH_MIN_INTERVAL_MS/);
+  assert.match(interactionPrefetch, /SMART_CHART_INTERACTION_PREFETCH_MAX_PER_WINDOW/);
+  assert.match(interactionPrefetch, /smartChartInteractionPrefetchSeen/);
   assert.match(appSource, /pointerenter[\s\S]*prefetchTokenChartFromElement/);
   assert.match(appSource, /touchstart[\s\S]*prefetchTokenChartFromElement/);
   assert.match(appSource, /focusin[\s\S]*prefetchTokenChartFromElement/);
