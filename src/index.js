@@ -347,10 +347,11 @@ async function main() {
 function loadConfig() {
   loadDotEnv();
 
+  const serviceRole = normalizeServiceRole(process.env.SERVICE_ROLE || process.env.RENDER_SERVICE_ROLE || "web");
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const secret = process.env.APP_SECRET;
 
-  if (!token) {
+  if (serviceRole !== "worker" && !token) {
     throw new Error("Missing TELEGRAM_BOT_TOKEN. Copy .env.example to .env and set it.");
   }
 
@@ -429,7 +430,6 @@ function loadConfig() {
   const pumpLaunchPumpFunIpfsUrl = (process.env.PUMP_LAUNCH_PUMPFUN_IPFS_URL || "https://pump.fun/api/ipfs").trim();
   const rpcConfig = resolveSolanaRpcConfig();
   const workerSecret = process.env.WORKER_SECRET || "";
-  const serviceRole = normalizeServiceRole(process.env.SERVICE_ROLE || process.env.RENDER_SERVICE_ROLE || "");
   const runWorker = parseBoolean(process.env.RUN_WORKER || (serviceRole === "worker" ? "true" : "false"));
   const workerTickEnabled = parseOptionalBoolean(
     process.env.WORKER_TICK_ENDPOINT_ENABLED,
