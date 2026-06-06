@@ -14053,3 +14053,153 @@ if (!window.__slimePumpLiveActionChartTimer) {
     pumpLiveActionRequestRender();
   }, 7000);
 }
+
+/* SLIME_PUMP_SOURCE_SWITCH_V1: compact source switch, Slime default, live chart stays above fold on mobile. */
+function pumpLiveActionChartSource() {
+  const raw = String(state.pumpChartSource || "slime").toLowerCase();
+  return ["slime", "pump", "dex"].includes(raw) ? raw : "slime";
+}
+
+function pumpLiveActionChartMint(token) {
+  return String(
+    token.tokenMint ||
+      token.mint ||
+      token.address ||
+      token.pairAddress ||
+      token.poolAddress ||
+      token.baseMint ||
+      token.ca ||
+      ""
+  ).trim();
+}
+
+function pumpLiveActionDexEmbedHtml(token) {
+  const mint = pumpLiveActionChartMint(token);
+  if (!mint) {
+    return `<div class="pump-action-empty"><strong>Dex chart waiting for CA</strong><span>Paste or select a token first.</span></div>`;
+  }
+  const url = `https://dexscreener.com/solana/${encodeURIComponent(mint)}?embed=1&theme=dark&trades=1&info=0`;
+  return `
+    <div class="pump-action-source-frame-wrap">
+      <iframe class="pump-action-source-frame" src="${pumpLiveActionSafe(url)}" title="Dex chart" loading="lazy"></iframe>
+      <p>Dex source loads inside Slime. If the token has not bonded yet, Dex may stay empty until the pool is live.</p>
+    </div>
+  `;
+}
+
+function pumpLiveActionPumpSourceNoteHtml(token) {
+  const mint = pumpLiveActionChartMint(token);
+  return `
+    <div class="pump-action-pump-note">
+      <strong>Pump on-site mode</strong>
+      <span>${pumpLiveActionSafe(mint ? `Tracking pre-bonding Pump activity for ${pumpLiveShortMint(mint)}.` : "Paste or select a Pump CA to track pre-bonding activity.")}</span>
+    </div>
+  `;
+}
+
+function pumpLiveActionChartHtml(tokenInput = {}, options = {}) {
+  const token = pumpLiveActionToken(tokenInput);
+  const source = pumpLiveActionChartSource();
+  const mode = String(state.pumpChartMode || "line").toLowerCase() === "candles" ? "candles" : "line";
+  const timeframe = String(state.pumpChartTimeframe || "5m");
+  const candles = pumpLiveActionCandles(token, timeframe);
+  const hasSeries = candles.length >= 2;
+  const width = 760;
+  const height = 320;
+  const padX = 42;
+  const padTop = 24;
+  const padBottom = 32;
+  const plotW = width - padX * 2;
+  const plotH = height - padTop - padBottom;
+  const lows = candles.map((candle) => candle.low);
+  const highs = candles.map((candle) => candle.high);
+  let min = Math.min(...lows);
+  let max = Math.max(...highs);
+  if (!Number.isFinite(min) || !Number.isFinite(max)) {
+    min = 0;
+    max = 1;
+  }
+  if (min === max) {
+    const spread = Math.max(Math.abs(max) * 0.08, 0.000001);
+    min -= spread;
+    max += spread;
+  }
+  const scaleY = (value) => padTop + (1 - (value - min) / (max - min)) * plotH;
+  const scaleX = (index) => candles.length <= 1 ? width / 2 : padX + (index / (candles.length - 1)) * plotW;
+  const grid = Array.from({ length: 5 }, (_, index) => {
+    const y = padTop + (plotH / 4) * index;
+    return `<line x1="${padX}" y1="${y.toFixed(1)}" x2="${width - padX}" y2="${y.toFixed(1)}" class="pump-action-grid" />`;
+  }).join("");
+  const linePath = candles
+    .map((candle, index) => `${index === 0 ? "M" : "L"}${scaleX(index).toFixed(1)},${scaleY(candle.close).toFixed(1)}`)
+    .join(" ");
+  const areaPath = hasSeries ? `${linePath} L${scaleX(candles.length - 1).toFixed(1)},${height - padBottom} L${scaleX(0).toFixed(1)},${height - padBottom} Z` : "";
+  const candleWidth = Math.max(5, Math.min(15, plotW / Math.max(candles.length * 1.9, 1)));
+  const candleSvg = candles
+    .map((candle, index) => {
+      const x = scaleX(index);
+      const yOpen = scaleY(candle.open);
+      const yClose = scaleY(candle.close);
+      const yHigh = scaleY(candle.high);
+      const yLow = scaleY(candle.low);
+      const up = candle.close >= candle.open;
+      const bodyY = Math.min(yOpen, yClose);
+      const bodyH = Math.max(2, Math.abs(yClose - yOpen));
+      return `<g class="pump-action-candle ${up ? "up" : "down"}"><line x1="${x.toFixed(1)}" y1="${yHigh.toFixed(1)}" x2="${x.toFixed(1)}" y2="${yLow.toFixed(1)}" /><rect x="${(x - candleWidth / 2).toFixed(1)}" y="${bodyY.toFixed(1)}" width="${candleWidth.toFixed(1)}" height="${bodyH.toFixed(1)}" rx="2" /></g>`;
+    })
+    .join("");
+  const latest = candles[candles.length - 1];
+  const nativeChartBody = hasSeries
+    ? `<svg class="pump-action-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="Live Pump chart">
+        <defs>
+          <linearGradient id="pumpActionAreaV2" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stop-color="#7cff4f" stop-opacity="0.38" />
+            <stop offset="100%" stop-color="#7cff4f" stop-opacity="0.02" />
+          </linearGradient>
+        </defs>
+        ${grid}
+        ${mode === "candles" ? candleSvg : `<path class="pump-action-area" d="${areaPath}" /><path class="pump-action-line" d="${linePath}" />`}
+        ${latest ? `<circle class="pump-action-last" cx="${scaleX(candles.length - 1).toFixed(1)}" cy="${scaleY(latest.close).toFixed(1)}" r="6" />` : ""}
+      </svg>`
+    : `<div class="pump-action-empty"><strong>Waiting for live ticks</strong><span>Slime only draws movement from real trades/candles. Transactions still show below as they arrive.</span></div>`;
+  const chartBody = source === "dex" ? pumpLiveActionDexEmbedHtml(token) : nativeChartBody;
+  const totalTrades = candles.reduce((sum, candle) => sum + (candle.trades || 0), 0);
+  const latestValue = latest ? pumpLiveActionFormatValue(latest.close) : "n/a";
+  const rangeLabel = Number.isFinite(min) && Number.isFinite(max) ? `${pumpLiveActionFormatValue(min)} - ${pumpLiveActionFormatValue(max)}` : "n/a";
+
+  return `
+    <div class="pump-live-action-chart-shell source-${source}" data-pump-live-action-chart>
+      <div class="pump-source-switch" aria-label="Chart source">
+        <span>Chart source</span>
+        ${["slime", "pump", "dex"].map((item) => `<button type="button" class="${source === item ? "active" : ""}" data-pump-chart-source="${item}">${item === "slime" ? "Slime" : item === "pump" ? "Pump" : "Dex"}</button>`).join("")}
+      </div>
+      ${source === "pump" ? pumpLiveActionPumpSourceNoteHtml(token) : ""}
+      <div class="pump-action-toolbar compact">
+        <div class="pump-action-control-group" aria-label="Chart type">
+          <button type="button" class="${mode === "line" ? "active" : ""}" data-pump-action-chart-mode="line">Line</button>
+          <button type="button" class="${mode === "candles" ? "active" : ""}" data-pump-action-chart-mode="candles">Candles</button>
+        </div>
+        <div class="pump-action-control-group timeframe" aria-label="Timeframe">
+          ${["1m", "5m", "15m", "1h", "4h"].map((item) => `<button type="button" class="${timeframe === item ? "active" : ""}" data-pump-action-timeframe="${item}">${item}</button>`).join("")}
+        </div>
+        <span class="pump-action-live-pill">Live</span>
+      </div>
+      <div class="pump-action-chart-canvas">
+        ${chartBody}
+      </div>
+      <div class="pump-action-metrics">
+        <div><span>Latest</span><strong>${pumpLiveActionSafe(latestValue)}</strong></div>
+        <div><span>Range</span><strong>${pumpLiveActionSafe(rangeLabel)}</strong></div>
+        <div><span>Ticks</span><strong>${pumpLiveActionSafe(totalTrades || candles.length || 0)}</strong></div>
+      </div>
+    </div>
+  `;
+}
+
+document.addEventListener("click", (event) => {
+  const sourceButton = event.target.closest("[data-pump-chart-source]");
+  if (!sourceButton) return;
+  event.preventDefault();
+  state.pumpChartSource = sourceButton.getAttribute("data-pump-chart-source") || "slime";
+  pumpLiveActionRequestRender();
+});
