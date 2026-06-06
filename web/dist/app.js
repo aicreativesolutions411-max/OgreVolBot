@@ -40,6 +40,9 @@ const WALLET_REFRESH_FORCE_COOLDOWN_MS = 10_000;
 const LIVE_PAIRS_RENDER_DEBOUNCE_MS = 140;
 const LIVE_PAIRS_INFLIGHT_RENDER_REASON = "live-pairs-inflight";
 const POST_TRADE_REFRESH_DELAYS_MS = [1200, 4500, 10000];
+const APP_WATCHDOG_INTERVAL_MS = 15_000;
+const APP_RESUME_REFRESH_DEBOUNCE_MS = 650;
+const POSITION_REFRESH_STALE_LOCK_MS = 30_000;
 const POST_TRADE_AFFECTED_KEYS = ["wallet-summary", "positions", "pnl", "trade-history", "selected-token", "live-trades"];
 const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 const BASE58_LOOKUP = new Map([...BASE58_ALPHABET].map((char, index) => [char, index]));
@@ -328,6 +331,9 @@ let perfPostTimer = null;
 let livePairsRenderTimer = null;
 let livePairsRenderRaf = 0;
 let livePairsRenderReasons = new Set();
+let appWatchdogTimer = null;
+let resumeLiveFeedsTimer = null;
+let lastRenderCompletedAt = Date.now();
 
 function scheduleLivePairsRender(reason = "live-pairs-batch") {
   if (reason) {
@@ -2551,8 +2557,10 @@ async function refreshTerminalFeed(tabKey = state.activeTab, options = {}) {
       if (state.user && state.token) {
         await refreshWalletPositions({
           force: Boolean(options.force),
+          fast: true,
           silent: true,
-          timeoutMs: Math.min(API_CONNECT_TIMEOUT_MS, 20000)
+          reason: options.reason || "positions-feed-refresh",
+          timeoutMs: POSITIONS_FAST_REFRESH_TIMEOUT_MS
         });
       }
     } else if (["wallets", "pnl"].includes(tabKey)) {
@@ -3425,6 +3433,56 @@ function syncInteractionLocks() {
   if (quickBuyRoot) quickBuyRoot.style.pointerEvents = quickBuyRoot.hidden ? "none" : "";
 }
 
+function appShellNeedsRecovery() {
+  if (!app) return false;
+  if (app.dataset.route !== state.route) return true;
+  const modalClassStuck = document.body.classList.contains("login-modal-open") && (!loginModal || loginModal.hidden || !state.loginModalOpen);
+  const quickBuyClassStuck = document.body.classList.contains("quick-buy-modal-open") && !state.quickBuyModal?.open;
+  if (modalClassStuck || quickBuyClassStuck) return true;
+  if (state.route !== "terminal") return false;
+  const panel = $("[data-panel]");
+  if (dashboardView?.hidden) return true;
+  if (panel && !panel.children.length && !String(panel.textContent || "").trim()) return true;
+  const visibleSection = [loginView, connectView, dashboardView].some((section) => section && !section.hidden);
+  return !visibleSection;
+}
+
+function recoverStaleUiLocks(reason = "watchdog") {
+  const refresh = state.positionRefreshAction || {};
+  const refreshAgeMs = refresh.startedAt ? Math.max(0, perfNow() - Number(refresh.startedAt || 0)) : 0;
+  if ((refresh.state === "clicked" || refresh.state === "refreshing") && refreshAgeMs > POSITION_REFRESH_STALE_LOCK_MS) {
+    finishPositionRefreshAction("error", { error: "Refresh delayed" });
+    recordPerfEvent({
+      component: "positions",
+      action: "stale-position-refresh-lock-cleared",
+      durationMs: refreshAgeMs,
+      details: reason
+    });
+  }
+  if (state.walletRefreshing && !walletRefreshPromise) {
+    state.walletRefreshing = false;
+    state.walletRefreshStatus = state.walletRefreshStatus === "refreshing" ? "timeout" : state.walletRefreshStatus;
+    setHidden("[data-refresh-spinner]", true);
+  }
+  syncInteractionLocks();
+  applyActionButtonStates();
+}
+
+function recoverAppShell(reason = "watchdog") {
+  recoverStaleUiLocks(reason);
+  if (!appShellNeedsRecovery()) return false;
+  recordPerfEvent({
+    component: "app-shell",
+    action: "recover-blank-shell",
+    durationMs: Math.max(0, Date.now() - lastRenderCompletedAt),
+    details: `${reason}:${state.route}:${state.activeTab || ""}`
+  });
+  closeTransientInteractionLayers({ keepLogin: state.route === "login" });
+  syncShellRouteVisibility();
+  render({ force: true, preserveSmartChartFrame: state.activeTab === "smartChart" });
+  return true;
+}
+
 function render(options = {}) {
   if (!app || !loginView || !dashboardView) return;
   syncShellRouteVisibility();
@@ -3516,6 +3574,7 @@ function render(options = {}) {
       details: renderKey
     });
   }
+  lastRenderCompletedAt = Date.now();
   } catch (error) {
     syncShellRouteVisibility();
     syncInteractionLocks();
@@ -12878,26 +12937,42 @@ document.addEventListener("input", (event) => {
 });
 
 function resumeLiveFeeds() {
-  if (state.route !== "terminal") return;
-  if (isPostTradeRefreshActive()) {
-    recordPerfEvent({
-      component: "post-trade",
-      action: "hidden-feed-refresh-skipped",
-      durationMs: 0,
-      requestId: state.postTradeRefresh?.attemptId || "",
-      details: state.activeTab || "terminal"
-    });
-    return;
-  }
-  refreshTerminalFeed(state.activeTab, {
-    silent: true,
-    ifStale: true,
-    force: terminalFeedIsStale(state.activeTab),
-    reason: "visibility-focus-return"
-  }).catch((error) => setError(error.message));
-  scheduleLivePairsAutoRefresh();
-  scheduleKolAutoRefresh();
-  scheduleWatchlistAutoRefresh();
+  if (document.hidden) return;
+  recoverAppShell("visibility-return");
+  if (resumeLiveFeedsTimer) window.clearTimeout(resumeLiveFeedsTimer);
+  resumeLiveFeedsTimer = window.setTimeout(() => {
+    resumeLiveFeedsTimer = null;
+    if (document.hidden || state.route !== "terminal") return;
+    if (isPostTradeRefreshActive()) {
+      recordPerfEvent({
+        component: "post-trade",
+        action: "hidden-feed-refresh-skipped",
+        durationMs: 0,
+        requestId: state.postTradeRefresh?.attemptId || "",
+        details: state.activeTab || "terminal"
+      });
+      return;
+    }
+    refreshTerminalFeed(state.activeTab, {
+      silent: true,
+      ifStale: true,
+      force: false,
+      reason: "visibility-focus-return"
+    }).catch((error) => setError(error.message));
+    if (state.user && state.token && terminalFeedIsStale("positions")) {
+      refreshWalletPositions({
+        force: false,
+        fast: true,
+        silent: true,
+        reason: "visibility-position-resume",
+        timeoutMs: POSITIONS_FAST_REFRESH_TIMEOUT_MS
+      }).catch(() => {});
+    }
+    scheduleLivePairsAutoRefresh();
+    scheduleKolAutoRefresh();
+    scheduleWatchlistAutoRefresh();
+    scheduleActiveTerminalFeedRefresh();
+  }, APP_RESUME_REFRESH_DEBOUNCE_MS);
 }
 
 document.addEventListener("visibilitychange", () => {
@@ -12905,11 +12980,22 @@ document.addEventListener("visibilitychange", () => {
 });
 
 window.addEventListener("focus", resumeLiveFeeds);
+window.addEventListener("pageshow", resumeLiveFeeds);
+window.addEventListener("online", resumeLiveFeeds);
+
+function startAppWatchdog() {
+  if (appWatchdogTimer) window.clearInterval(appWatchdogTimer);
+  appWatchdogTimer = window.setInterval(() => {
+    if (document.hidden) return;
+    recoverAppShell("watchdog");
+  }, APP_WATCHDOG_INTERVAL_MS);
+}
 
 async function initializeApp() {
   installPerformanceInstrumentation();
   installCrashInstrumentation();
   installSlimewireImageFallbacks();
+  startAppWatchdog();
   prewarmSlimewireImageAssets();
   applyChartRouteFromLocation();
   await handleMobileWalletReturn();
