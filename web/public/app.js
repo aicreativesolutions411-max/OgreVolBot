@@ -13,6 +13,7 @@ import {
 
 const config = window.OGRE_PORTAL_CONFIG || {};
 const ogreTekConfig = resolveOgreTekConfig(config);
+const SHOW_STAGED_PERPS_NAV = false;
 const perpsProvider = createPerpsProvider(ogreTekConfig);
 const configuredApiBase = String(config.apiBase || "").trim().replace(/\/+$/, "");
 const sameOriginApiBase = window.location.origin.replace(/\/+$/, "");
@@ -2917,7 +2918,7 @@ function scheduleWalletBackgroundRefresh(delayMs = 900, options = {}) {
   }, delayMs);
 }
 
-async function refreshWalletState({ force = true, deep = true, reason = "manual" } = {}) {
+async function refreshWalletState({ force = false, deep = false, reason = "manual" } = {}) {
   if (!state.user || !state.token) {
     setError("Create or log in before refreshing wallet balances.");
     return;
@@ -3190,7 +3191,7 @@ function render(options = {}) {
   updateTopTpSlStatus();
   setHidden("[data-refresh-spinner]", !state.walletRefreshing);
   document.querySelectorAll('[data-feature="ogre-tek"]').forEach((element) => {
-    element.hidden = !shouldShowOgreTekNav(ogreTekConfig);
+    element.hidden = !SHOW_STAGED_PERPS_NAV || !shouldShowOgreTekNav(ogreTekConfig);
   });
   const avatar = $("[data-user-avatar]");
   if (avatar) avatar.innerHTML = userAvatarHtml("SW");
@@ -7482,6 +7483,7 @@ async function executeWebSell(percent) {
       details: `${shortAddress(form.tokenMint)}:${value}`
     });
     render();
+    await sleep(20);
     const requestStartedAt = perfNow();
     setTradeAction("trade-sell", form.tokenMint, detail, { state: "submitting" });
     if (isConnectedTradeWallet(form.walletIndex)) {
@@ -8383,7 +8385,10 @@ async function sellPositionPercent(tokenMint, percentText = "100") {
       requestId: manualSellAttemptId,
       details: `${shortAddress(tokenMint)}:${percent}`
     });
+    state.activeTab = "positions";
+    setError("");
     render();
+    await sleep(20);
     const requestStartedAt = perfNow();
     setManualSellAction(tokenMint, String(percent), { state: "submitting" });
     const data = await api("/api/web/bundle/sell", {
