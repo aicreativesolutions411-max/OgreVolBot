@@ -2485,8 +2485,9 @@ async function refreshTerminalFeed(tabKey = state.activeTab, options = {}) {
     } else if (tabKey === "liveTrades") {
       if (state.user && state.token) await loadAll({ silent: true, skipCore: true, force: Boolean(options.force) });
     } else if (tabKey === "slimeScope") {
-      await refreshLivePairBuckets({ silent: true, force: Boolean(options.force) });
-      if (!state.scan && options.force) await loadScan(state.scanMode, { silent: true }).catch(() => {});
+      await refreshLivePairBuckets({ silent: true, force: Boolean(options.force), warmAll: true });
+      if (options.force || !state.scan) await loadScan(state.scanMode, { silent: true, force: Boolean(options.force) }).catch(() => {});
+      if (options.force) await loadKolScan(state.kolMode, state.kolWallet, { silent: true }).catch(() => {});
     } else if (tabKey === "kol") {
       await loadKolScan(state.kolMode, state.kolWallet, { silent: options.silent !== false });
     } else if (tabKey === "watchlist") {
@@ -10122,7 +10123,21 @@ function slimeScopeRows(mode = state.slimeScopeMode) {
       && age <= 60;
   });
   const sortedPrimary = category === "new" ? [...primary].sort(compareNewestLiveRows) : sortSlimeScopeRows(primary);
-  const sortedFallback = category === "new" ? [...fallback].sort(compareNewestLiveRows) : sortSlimeScopeRows(fallback);
+  const sortedFallback = category === "new"
+    ? uniqueSignalRows([
+        ...fallback,
+        ...withMarket.filter((row) => {
+          const rowCategory = classifySlimeScopeRow(row);
+          if (rowCategory === "graduated" || rowCategory === "graduating") return false;
+          const age = rowAgeSeconds(row);
+          if (Number.isFinite(age) && age > 86_400) return false;
+          return rowCategory === "steady"
+            || slimeScopeLiquidity(row) > 0
+            || slimeScopeVolume(row) > 0
+            || Number(row.bestPickScore || row.score || 0) > 0;
+        })
+      ]).sort(compareNewestLiveRows)
+    : sortSlimeScopeRows(fallback);
   return backfillSlimeScopeRows(sortedPrimary, sortedFallback);
 }
 
@@ -12415,7 +12430,8 @@ document.addEventListener("click", async (event) => {
     await refreshTerminalFeed("sniper", { force: true, reason: "manual-sniper-refresh" }).catch((error) => setError(error.message));
   }
 
-  if (target.matches("[data-refresh-live-pairs]")) {
+  const refreshLivePairsButton = target.closest?.("[data-refresh-live-pairs]");
+  if (refreshLivePairsButton) {
     const feedKey = state.activeTab === "slimeScope" ? "slimeScope" : state.activeTab === "terminal" ? "terminal" : "live";
     await refreshTerminalFeed(feedKey, { force: true, reason: "manual-live-refresh" }).catch((error) => setError(error.message));
   }
@@ -12424,8 +12440,9 @@ document.addEventListener("click", async (event) => {
     await refreshTerminalFeed("watchlist", { force: true, reason: "manual-watchlist-refresh" }).catch((error) => setError(error.message));
   }
 
-  if (target.matches("[data-live-pair-bucket]")) {
-    state.livePairBucket = target.dataset.livePairBucket || "live";
+  const livePairBucketButton = target.closest?.("[data-live-pair-bucket]");
+  if (livePairBucketButton) {
+    state.livePairBucket = livePairBucketButton.dataset.livePairBucket || "live";
     state.livePairs = currentLivePairs();
     state.livePairsLastUpdatedAt = currentLivePairsUpdatedAt();
     resetTerminalFeedVisibleLimit("live");
@@ -12434,8 +12451,9 @@ document.addEventListener("click", async (event) => {
     await refreshTerminalFeed(state.activeTab === "terminal" ? "terminal" : "live", { force: true, reason: "live-bucket-switch" }).catch((error) => setError(error.message));
   }
 
-  if (target.matches("[data-slime-scope-mode]")) {
-    state.slimeScopeMode = target.dataset.slimeScopeMode || "new";
+  const slimeScopeModeButton = target.closest?.("[data-slime-scope-mode]");
+  if (slimeScopeModeButton) {
+    state.slimeScopeMode = slimeScopeModeButton.dataset.slimeScopeMode || "new";
     state.activeTab = "slimeScope";
     resetTerminalFeedVisibleLimit("slimeScope");
     render();

@@ -23456,15 +23456,16 @@ function mergeLivePairCandidatePools(...pools) {
 }
 
 function livePairThinFallbackBuckets(bucket) {
-  if (bucket === "live") return ["under1h", "under3h"];
-  if (bucket === "under1h") return ["under3h"];
+  if (bucket === "live") return ["under1h", "under3h", "under1d"];
+  if (bucket === "under1h") return ["under3h", "under1d"];
+  if (bucket === "under3h") return ["under1d"];
   return [];
 }
 
 async function expandLivePairCandidatesForThinBucket(userId, candidates, bucket, options = {}) {
   const current = Array.isArray(candidates) ? candidates : [];
   const fallbackBuckets = livePairThinFallbackBuckets(bucket);
-  if (!fallbackBuckets.length || current.length >= 220) return current;
+  if (!fallbackBuckets.length) return current;
   const requests = fallbackBuckets.map((fallbackBucket) => fetchLivePairCandidates({
     userId,
     bucket: fallbackBucket,
@@ -23883,7 +23884,7 @@ function isLivePairInRelaxedBucket(item, bucket) {
   const safeBucket = normalizeLivePairBucket(bucket);
   const ageMinutes = livePairAgeMinutesValue(item);
   if (ageMinutes === null) return false;
-  if (safeBucket === "live") return ageMinutes >= 0 && ageMinutes < 180;
+  if (safeBucket === "live") return ageMinutes >= 0 && ageMinutes < 360;
   if (safeBucket === "under1h") return ageMinutes >= 5 && ageMinutes < 90;
   if (safeBucket === "under3h") return ageMinutes >= 30 && ageMinutes < 240;
   if (safeBucket === "under1d") return ageMinutes >= 60 && ageMinutes < 1440;
