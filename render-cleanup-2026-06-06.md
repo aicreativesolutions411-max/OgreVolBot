@@ -35,7 +35,7 @@ Workers
   - Shared settings:
     - `RUN_WORKER=true`, `WORKER_DISABLED=false`, `SERVICE_ROLE=worker`
     - `WORKER_TICK_URL=https://ogrevolbot.onrender.com/api/internal/worker/tick`
-    - `WORKER_SECRET=BRO_GOST_IS_GOD_123456789`
+    - `WORKER_SECRET=<set-in-render-env>`
     - `WORKER_TICK_INTERVAL_MS=15000`
     - `WORKER_TRADE_PLAN_INTERVAL_MS=1500`
     - `WORKER_FAST_TP_SL_ENABLED=true`
@@ -58,7 +58,7 @@ Workers
   - `WORKER_FAST_TP_SL_ENABLED=false`
   - `WORKER_TICK_INTERVAL_MS=20000`, `WORKER_TRADE_PLAN_INTERVAL_MS=1500`
   - `WORKER_TICK_TIMEOUT_MS=20000`
-  - Shared Redis settings as above.
+- Shared Redis settings as above (`WORKER_SECRET=<same-value-as-WEB>`).
 
 Why this should feel smoother
 ------------------------------
