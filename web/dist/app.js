@@ -3195,11 +3195,16 @@ async function loadKolScan(mode = state.kolMode, wallet = state.kolWallet, optio
   const silent = Boolean(options.silent);
   state.kolMode = mode;
   state.kolWallet = String(wallet || "").trim();
+  let invalidKolWalletMessage = "";
+  if (state.kolWallet && !isSolanaPublicKeyLike(state.kolWallet)) {
+    state.kolWallet = "";
+    invalidKolWalletMessage = "Skipped invalid KOL wallet. Paste a verified Solana public wallet to scan positions.";
+  }
   if (!silent && !state.kolScan) state.loading = true;
   state.kolLoading = true;
-  state.kolStatus = state.kolWallet
+  state.kolStatus = invalidKolWalletMessage || (state.kolWallet
     ? "Scanning custom KOL wallet..."
-    : `Loading ${kolModeLabel(state.kolMode)}...`;
+    : `Loading ${kolModeLabel(state.kolMode)}...`);
   setError("");
   if (!silent) render();
 
@@ -4885,13 +4890,14 @@ const CURATED_KOL_PROFILES = [
     rank: 1,
     name: "Idontpaytaxes",
     twitter: "Idontpaytaxes",
-    wallet: "2T5NgDDidkvhJQg8AHDI74uCFwgp25pYFMRZXBaCUNBH",
-    tag: "Hot Solana memecoin wallet",
-    note: "Seeded from KOLscan-style public wallet tracking. Use Scan Positions before copying.",
+    wallet: "",
+    kolscanUrl: "https://kolscan.io/account/2T5NgDDidkvhJQg8AHDI74uCFwgp25pYFMRZXBaCUNBH",
+    tag: "External KOLscan profile",
+    note: "External public/KOLscan stats only. These are not SlimeWire trades and do not create SlimeWire fees unless copied through your SlimeWire wallets. Add a verified Solana wallet before scan/copy.",
     winRateLabel: "36.8%",
     realizedLabel: "-$28.1",
     roiLabel: "Watch",
-    trades: 24,
+    trades: "24 ext",
     volumeLabel: "$6.58K volume",
     lastTradeAt: new Date(Date.now() - 17 * 60 * 60 * 1000).toISOString()
   },
@@ -4930,28 +4936,39 @@ function curatedKolProfiles(tier = "") {
     .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || Number(a.rank || 999) - Number(b.rank || 999));
 }
 
+function isSolanaPublicKeyLike(value = "") {
+  return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(value || "").trim());
+}
+
+function safeKolWallet(value = "") {
+  const wallet = String(value || "").trim();
+  return isSolanaPublicKeyLike(wallet) ? wallet : "";
+}
+
 function kolExternalLinks(kol = {}) {
   const wallet = String(kol.wallet || "").trim();
+  const safeWallet = safeKolWallet(wallet);
   const twitter = cleanXHandle(kol.twitter || kol.x || kol.username || "");
   return {
     x: twitter ? xProfileUrl(twitter) : "",
-    wallet: wallet ? `https://solscan.io/account/${encodeURIComponent(wallet)}` : "",
-    kolscan: wallet ? kolscanUrl(wallet) : ""
+    wallet: safeWallet ? `https://solscan.io/account/${encodeURIComponent(safeWallet)}` : "",
+    kolscan: kol.kolscanUrl || kol.externalProfileUrl || (safeWallet ? kolscanUrl(safeWallet) : "")
   };
 }
 
 function curatedKolActionsHtml(kol = {}) {
   const wallet = String(kol.wallet || "").trim();
+  const safeWallet = safeKolWallet(wallet);
   const links = kolExternalLinks(kol);
   return `
     <div class="curated-kol-actions">
       ${links.x ? `<a href="${escapeHtml(links.x)}" target="_blank" rel="noreferrer">X</a>` : ""}
       ${links.kolscan ? `<a href="${escapeHtml(links.kolscan)}" target="_blank" rel="noreferrer">KOLscan</a>` : ""}
       ${links.wallet ? `<a href="${escapeHtml(links.wallet)}" target="_blank" rel="noreferrer">Wallet</a>` : ""}
-      ${wallet ? `<button class="kol-copy-bubble" data-kol-copy-setup="${escapeHtml(wallet)}">Copy Setup</button>` : ""}
-      ${wallet ? `<button data-kol-scan-wallet="${escapeHtml(wallet)}">Scan</button>` : ""}
-      ${wallet ? `<button data-kol-copy-wallet="${escapeHtml(wallet)}">Copy</button>` : `<span>Wallet soon</span>`}
-      ${wallet ? `<button data-copy="${escapeHtml(wallet)}">CA</button>` : ""}
+      ${safeWallet ? `<button class="kol-copy-bubble" data-kol-copy-setup="${escapeHtml(safeWallet)}">Copy Setup</button>` : `<button type="button" class="kol-copy-bubble" disabled title="Verified Solana wallet needed before copy setup.">Wallet Pending</button>`}
+      ${safeWallet ? `<button data-kol-scan-wallet="${escapeHtml(safeWallet)}">Scan</button>` : `<button type="button" disabled title="Verified Solana wallet needed before scan.">Scan Locked</button>`}
+      ${safeWallet ? `<button data-kol-copy-wallet="${escapeHtml(safeWallet)}">Copy</button>` : `<span>Verify wallet to copy</span>`}
+      ${safeWallet ? `<button data-copy="${escapeHtml(safeWallet)}">CA</button>` : ""}
     </div>
   `;
 }
@@ -4973,7 +4990,7 @@ function curatedKolCardHtml(kol = {}, options = {}) {
       <dl>
         <div><dt>Win</dt><dd>${escapeHtml(kol.winRateLabel || "n/a")}</dd></div>
         <div><dt>Realized</dt><dd>${escapeHtml(kol.realizedLabel || "n/a")}</dd></div>
-        <div><dt>Trades</dt><dd>${escapeHtml(kol.trades ?? "n/a")}</dd></div>
+        <div><dt>${kol.tier === "hot" ? "Ext Trades" : kol.wallet ? "Trades" : "Status"}</dt><dd>${escapeHtml(kol.trades ?? "n/a")}</dd></div>
       </dl>
       <small>${escapeHtml(kol.note || kol.volumeLabel || "Curated SlimeWire KOL database entry.")}</small>
       ${curatedKolActionsHtml(kol)}
@@ -8864,6 +8881,7 @@ function readKolWalletCopyForm(copyWallet) {
   const wallet = String(copyWallet || state.kolWallet || $("[data-kol-wallet]")?.value || "").trim();
   if (!walletIndexes.length && !walletGroup) throw new Error("Choose at least one wallet or enter a group label.");
   if (!wallet) throw new Error("Paste or choose a KOL wallet first.");
+  if (!isSolanaPublicKeyLike(wallet)) throw new Error("That KOL entry does not have a verified Solana wallet yet.");
   return { copyWallet: wallet, walletIndexes, walletGroup, amountSol, sellDelay, takeProfitPct, stopLossPct, loopCount, loopDelay, sellPercent: "100", slippageBps, ...readWalletExitTargets("kol") };
 }
 
@@ -14734,18 +14752,32 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-kol-wallet-scan]")) {
     state.kolWallet = String($("[data-kol-wallet]")?.value || "").trim();
+    if (state.kolWallet && !isSolanaPublicKeyLike(state.kolWallet)) {
+      setKolStatus("That is not a valid Solana public wallet. Paste a real wallet address before scanning.");
+      state.kolWallet = "";
+      return;
+    }
     resetTerminalFeedVisibleLimit("kol");
     await refreshTerminalFeed("kol", { force: true, reason: "kol-wallet-scan" }).catch((error) => setError(error.message));
     return;
   }
   if (target.matches("[data-kol-scan-wallet]")) {
     state.kolWallet = String(target.dataset.kolScanWallet || "").trim();
+    if (state.kolWallet && !isSolanaPublicKeyLike(state.kolWallet)) {
+      setKolStatus("This curated KOL profile does not have a verified Solana wallet yet, so Scan is locked.");
+      state.kolWallet = "";
+      return;
+    }
     resetTerminalFeedVisibleLimit("kol");
     await refreshTerminalFeed("kol", { force: true, reason: "kol-signal-wallet-scan" }).catch((error) => setError(error.message));
     return;
   }
   if (target.matches("[data-kol-copy-setup]")) {
     const wallet = String(target.dataset.kolCopySetup || "").trim();
+    if (wallet && !isSolanaPublicKeyLike(wallet)) {
+      setKolStatus("This curated KOL profile does not have a verified Solana wallet yet, so Copy Setup is locked.");
+      return;
+    }
     if (wallet) state.kolWallet = wallet;
     state.activeTab = "kol";
     render();
@@ -14768,6 +14800,11 @@ document.addEventListener("click", async (event) => {
     return;
   }
   if (target.matches("[data-kol-copy-wallet]")) {
+    const wallet = String(target.dataset.kolCopyWallet || "").trim();
+    if (wallet && !isSolanaPublicKeyLike(wallet)) {
+      setKolStatus("That KOL entry does not have a verified Solana wallet yet.");
+      return;
+    }
     await createKolCopyWallet(target.dataset.kolCopyWallet || "");
     return;
   }
