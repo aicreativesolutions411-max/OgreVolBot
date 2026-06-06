@@ -18,12 +18,12 @@
     <link rel="preload" as="image" href="/assets/slimewire/svg/icons/wallet.svg">
     <link rel="preload" as="image" href="/assets/slimewire/svg/powered-by-ogres-badge.svg">
     <link rel="stylesheet" href="/tailwind.css?v=20260603-tailwind-v1">
-    <link rel="stylesheet" href="/styles.css?v=20260606153941">
-    <link rel="stylesheet" href="/slimewire-final-overrides.css?v=20260606153941">
+    <link rel="stylesheet" href="/styles.css?v=20260606161328">
+    <link rel="stylesheet" href="/slimewire-final-overrides.css?v=20260606161328">
     <script src="/config.js"></script>
     <script src="/vendor/tweetnacl-fast.min.js"></script>
     <script src="/vendor/solana-web3.iife.min.js?v=20260605-browser-trade-v1"></script>
-    <script type="module" src="/app.js?v=20260606153941"></script>
+    <script type="module" src="/app.js?v=20260606161328"></script>
   </head>
   <body>
     <main class="shell" data-app data-route="intro">
@@ -157,9 +157,40 @@
       </section>
 
       <section class="login-view swamp-splash" data-login>
+        <aside class="swamp-support-frame swamp-kol-frame" aria-label="KOL supporters">
+          <img class="swamp-support-frame-art" src="./assets/slimewire/support/kol-frame.jpg" data-fallback-src="./assets/slimewire/png/slime-border-frame-rich.png" alt="KOLs">
+          <div class="swamp-support-content">
+            <a class="swamp-support-bubble" href="https://x.com/moonpiejoe" target="_blank" rel="noreferrer" aria-label="Open MoonPieJoe on X">
+              <img src="./assets/slimewire/support/moonpiejoe-x-pfp.jpg" data-fallback-src="https://unavatar.io/twitter/moonpiejoe" alt="MoonPieJoe X profile picture" loading="lazy" referrerpolicy="no-referrer">
+              <span>
+                <strong>MoonPieJoe</strong>
+                <small>@moonpiejoe</small>
+              </span>
+            </a>
+          </div>
+        </aside>
         <a class="swamp-splash-button" href="/connect" data-nav-route="/connect" aria-label="Enter the Swamp">
           <img class="swamp-splash-reference" src="./assets/slimewire/references/enter-swamp-reference.jpg" data-fallback-src="./assets/slimewire/png/slimewire-mark.png" alt="Enter the Swamp">
         </a>
+        <aside class="swamp-support-frame swamp-sponsor-frame" aria-label="Sponsor coins">
+          <img class="swamp-support-frame-art" src="./assets/slimewire/support/sponsor-frame.jpg" data-fallback-src="./assets/slimewire/png/slime-border-frame-rich.png" alt="Sponsors">
+          <div class="swamp-support-content">
+            <details class="swamp-sponsor-social">
+              <summary aria-label="Open Powered by Ogres social links">
+                <img src="./assets/slimewire/support/ogres-sponsor-icon.jpg" data-fallback-src="./assets/slimewire/png/slimewire-mark.png" alt="Powered by Ogres icon">
+                <span>
+                  <strong>Powered by Ogres</strong>
+                  <small>Social links</small>
+                </span>
+              </summary>
+              <div class="swamp-sponsor-links" aria-label="Powered by Ogres links">
+                <a href="https://t.me/ogrecoinonsol" target="_blank" rel="noreferrer">Telegram</a>
+                <a href="https://ogremode.com/" target="_blank" rel="noreferrer">Website</a>
+                <a href="https://twitter.com/i/communities/1930265213917425858" target="_blank" rel="noreferrer">X</a>
+              </div>
+            </details>
+          </div>
+        </aside>
       </section>
 
       <section class="connect-view" data-connect hidden>
