@@ -13633,9 +13633,9 @@ function ogreAgentSpeak(text = "") {
     const utterance = new window.SpeechSynthesisUtterance(cleanText);
     const voice = ogreAgentPickVoice();
     if (voice) utterance.voice = voice;
-    utterance.pitch = 0.82;
-    utterance.rate = 0.94;
-    utterance.volume = 0.88;
+    utterance.pitch = 0.42;
+    utterance.rate = 0.78;
+    utterance.volume = 1;
     utterance.onstart = () => ogreAgentSetSpeaking(true);
     utterance.onend = () => ogreAgentSetSpeaking(false);
     utterance.onerror = () => ogreAgentSetSpeaking(false);
@@ -13801,7 +13801,7 @@ function ogreAgentHasConnectedWallet() {
 }
 
 function isOgreAgentAutoTradeApproved() {
-  return Boolean(!ogreAgentAutoTradeRevokedThisSession() && (state.ogreAgentAutoTradeApproved || ogreAgentHasManagedWallet()));
+  return Boolean(!ogreAgentAutoTradeRevokedThisSession() && (state.ogreAgentAutoTradeApproved || ogreAgentHasManagedWallet() || ogreAgentHasConnectedWallet()));
 }
 
 function syncOgreAgentAutoApprovalFromWallet(reason = "wallet-sync") {
@@ -13845,15 +13845,65 @@ function ogreAgentStoreFastMode(enabled) {
 
 function ogreAgentTradeIntent(message = "") {
   const text = String(message || "").toLowerCase();
-  if (/\b(sell|exit|close|dump|cash out|take profit|tp)\b/.test(text)) return "sell";
-  if (/\b(buy|ape|enter|grab|snipe|purchase|get in|go in|long|take entry)\b/.test(text)) return "buy";
+  const hasBuy = /\b(buy|ape|enter|grab|snipe|purchase|get in|go in|long|take entry)\b/.test(text);
+  const hasHardSell = /\b(sell|exit|close|dump|cash out)\b/.test(text);
+  const hasProfitOnlySell = /\b(take profit|tp)\b/.test(text) && !/\b(set|with|stop loss|sl|target|preset)\b/.test(text);
+  if (hasBuy) return "buy";
+  if (hasHardSell || hasProfitOnlySell) return "sell";
   return "";
+}
+
+function ogreAgentDirectTradeCommandIntent(message = "") {
+  const text = String(message || "").toLowerCase();
+  const intent = ogreAgentTradeIntent(text);
+  if (!intent) return false;
+  const capabilityQuestion = /\b(will you|would you|can you|could you|are you able|do i have to|will it|you will be able)\b/.test(text);
+  const commandShape = intent === "buy"
+    ? /\b(buy|ape|enter|grab|snipe|purchase|get in|go in|long|take entry)\b/.test(text)
+    : /\b(sell|exit|close|dump|cash out)\b/.test(text);
+  const hasExecutionDetail = /\b(now|please|with|for|from|wallet|sol|%|all|half|quarter|this|it)\b/.test(text)
+    || /\b[A-HJ-NP-Za-km-z1-9]{32,48}\b/.test(message);
+  return Boolean(commandShape && hasExecutionDetail && !capabilityQuestion);
 }
 
 function ogreAgentAmountFromMessage(message = "") {
   const text = String(message || "").toLowerCase();
-  const amount = (text.match(/(?:buy|ape|enter|grab|snipe|purchase|get in|go in|long|take entry)[^0-9]*(\d+(?:\.\d+)?)\s*(?:sol)?/) || text.match(/(\d+(?:\.\d+)?)\s*sol/) || [])[1];
+  const amount = (
+    text.match(/(?:buy|ape|enter|grab|snipe|purchase|get in|go in|long|take entry).*?(?:with|for|using)\s*(\d+(?:\.\d+)?)\s*sol\b/)
+    || text.match(/(\d+(?:\.\d+)?)\s*sol\b/)
+    || []
+  )[1];
   return amount ? Number(amount) : 0;
+}
+
+function ogreAgentDefaultBuyAmount() {
+  const preset = typeof activeTradePreset === "function" ? activeTradePreset() : null;
+  const amount = Number(
+    state.quickBuyAmountOverride
+    || (typeof activeQuickBuyAmount === "function" ? activeQuickBuyAmount(preset) : "")
+    || preset?.amountSol
+    || "0"
+  );
+  return Number.isFinite(amount) && amount > 0 ? amount : 0;
+}
+
+function ogreAgentTradeTargetsFromMessage(message = "") {
+  const text = String(message || "").toLowerCase();
+  const takeProfitPct = (text.match(/(?:take\s*profit|profit\s*take|tp|target|profit)[^0-9]*(\d{1,4}(?:\.\d+)?)\s*%?/) || [])[1] || "";
+  const stopLossPct = (text.match(/(?:stop\s*loss|stoploss|sl)[^0-9]*(\d{1,3}(?:\.\d+)?)\s*%?/) || [])[1] || "";
+  const slippagePct = (text.match(/(?:slippage|slip)[^0-9]*(\d{1,3}(?:\.\d+)?)\s*%?/) || [])[1] || "";
+  const slippageBps = slippagePct ? Math.round(Number(slippagePct) * 100) : 0;
+  const parts = [];
+  if (takeProfitPct) parts.push(`TP +${takeProfitPct}%`);
+  if (stopLossPct) parts.push(`SL -${stopLossPct}%`);
+  if (slippagePct) parts.push(`slippage ${slippagePct}%`);
+  return {
+    takeProfitPct,
+    stopLossPct,
+    slippagePct,
+    slippageBps: Number.isFinite(slippageBps) && slippageBps > 0 ? slippageBps : 0,
+    summary: parts.join(" / ")
+  };
 }
 
 function ogreAgentPercentFromMessage(message = "") {
@@ -13919,15 +13969,19 @@ function prepareOgreAgentActionForMessage(action = {}, message = "") {
   const prepared = { ...action };
   const intent = ogreAgentTradeIntent(message);
   if (!prepared.tokenMint && !prepared.mint && !prepared.ca) {
-    const tokenMint = resolveOgreAgentTokenFromMessage(message) || ogreAgentLastTokenMint();
+    const tokenMint = resolveOgreAgentTokenFromMessage(message) || ogreAgentLastTokenMint() || state.smartChartToken || state.tradeToken;
     if (tokenMint) prepared.tokenMint = tokenMint;
   }
   if (prepared.type === "confirm_buy" || intent === "buy") {
     prepared.type = prepared.type || "confirm_buy";
     if (!prepared.amountSol) {
-      const amountSol = ogreAgentAmountFromMessage(message);
+      const amountSol = ogreAgentAmountFromMessage(message) || ogreAgentDefaultBuyAmount();
       if (amountSol > 0) prepared.amountSol = amountSol;
     }
+    const targets = ogreAgentTradeTargetsFromMessage(message);
+    if (targets.takeProfitPct && !prepared.takeProfitPct) prepared.takeProfitPct = targets.takeProfitPct;
+    if (targets.stopLossPct && !prepared.stopLossPct) prepared.stopLossPct = targets.stopLossPct;
+    if (targets.slippageBps && !prepared.slippageBps) prepared.slippageBps = targets.slippageBps;
     if (prepared.walletIndex === undefined) {
       const walletIndex = ogreAgentWalletIndexFromMessage(message);
       if (walletIndex !== undefined) prepared.walletIndex = walletIndex;
@@ -13938,6 +13992,13 @@ function prepareOgreAgentActionForMessage(action = {}, message = "") {
     prepared.percent = prepared.percent || ogreAgentPercentFromMessage(message);
   }
   return prepared;
+}
+
+function ogreAgentActionTargetSummary(action = {}) {
+  const parts = [];
+  if (action.takeProfitPct) parts.push(`TP +${action.takeProfitPct}%`);
+  if (action.stopLossPct) parts.push(`SL -${action.stopLossPct}%`);
+  return parts.length ? ` Targets noted: ${parts.join(" / ")}.` : "";
 }
 
 function shouldAutoRunOgreAgentAction(action = {}, message = "") {
@@ -13954,7 +14015,7 @@ function shouldAutoRunOgreAgentAction(action = {}, message = "") {
 }
 async function runOgreAgentAction(action = {}) {
   const type = String(action.type || "");
-  const tokenMint = String(action.tokenMint || action.mint || state.smartChartToken || state.tradeToken || "").trim();
+  const tokenMint = String(action.tokenMint || action.mint || action.ca || state.smartChartToken || state.tradeToken || ogreAgentLastTokenMint() || "").trim();
   if (type === "toggle_agent_fast_mode") {
     ogreAgentStoreFastMode(!state.ogreAgentFastMode);
     state.ogreAgentStatus = state.ogreAgentFastMode ? "Fast Mode ON: clear trade requests run directly." : "Fast Mode OFF: Ogre will stage actions first.";
@@ -14042,8 +14103,8 @@ async function runOgreAgentAction(action = {}) {
   }
 
   if (action.type === "confirm_buy") {
-    const tokenMint = String(action.tokenMint || action.mint || state.selectedToken?.mint || state.selectedToken?.pairAddress || "").trim();
-    const amountSol = Number(action.amountSol || action.sol || action.amount || 0);
+    const tokenMint = String(action.tokenMint || action.mint || action.ca || state.selectedToken?.mint || state.selectedToken?.pairAddress || state.smartChartToken || state.tradeToken || ogreAgentLastTokenMint() || "").trim();
+    const amountSol = Number(action.amountSol || action.sol || action.amount || ogreAgentDefaultBuyAmount() || 0);
     if (!tokenMint || !Number.isFinite(amountSol) || amountSol <= 0) {
       if (tokenMint) openQuickBuy(tokenMint, { source: "ogre-agent-buy-missing-amount", forceModal: true });
       state.ogreAgentStatus = tokenMint
@@ -14061,7 +14122,7 @@ async function runOgreAgentAction(action = {}) {
       const result = await executeQuickBuyAmount({ tokenMint, walletIndex, amountSol, slippageBps, source: "ogre-agent-confirm-buy" });
       state.ogreAgentStatus = result?.ok === false
         ? (result.error || result.message || "Buy failed. Check wallet/RPC status and retry.")
-        : "Buy submitted. Refreshing wallet and positions in the background.";
+        : `Buy submitted. Refreshing wallet and positions in the background.${ogreAgentActionTargetSummary(action)}`;
       if (typeof refreshWalletNow === "function") void refreshWalletNow({ force: true, reason: "ogre_agent_buy" });
       if (typeof refreshPositionsNow === "function") void refreshPositionsNow({ force: true, reason: "ogre_agent_buy" });
     } catch (error) {
@@ -14293,6 +14354,67 @@ async function sendOgreAgentMessage() {
   if (input) input.value = "";
   state.ogreAgentDraft = "";
   pushOgreAgentMessage({ role: "user", text: message, actions: [] });
+  if (ogreAgentDirectTradeCommandIntent(message)) {
+    const intent = ogreAgentTradeIntent(message);
+    const directAction = prepareOgreAgentActionForMessage({
+      type: intent === "buy" ? "confirm_buy" : "confirm_sell"
+    }, message);
+    const directToken = String(directAction.tokenMint || directAction.mint || directAction.ca || "").trim();
+    const directAmount = Number(directAction.amountSol || directAction.sol || directAction.amount || 0);
+    if (!directToken) {
+      pushOgreAgentMessage({
+        role: "assistant",
+        text: "Send the token CA first, then say the buy/sell command. I will keep that CA active for follow-up commands like \"buy it\" or \"sell half\".",
+        actions: [
+          { label: "Live Terminal", type: "open_tab", tab: "terminal" },
+          { label: "Slime Scope", type: "open_tab", tab: "slimeScope" }
+        ]
+      });
+      state.ogreAgentStatus = "Need token CA.";
+      renderOgreAgent({ force: true });
+      return;
+    }
+    if (intent === "buy" && (!Number.isFinite(directAmount) || directAmount <= 0)) {
+      pushOgreAgentMessage({
+        role: "assistant",
+        text: "I have the token, but I need a SOL amount or a saved quick-buy amount. Example: buy it with 0.1 SOL.",
+        actions: [
+          { label: "Open Buy Panel", type: "open_quick_buy", tokenMint: directToken },
+          { label: "Trade Panel", type: "open_tab", tab: "trade" }
+        ]
+      });
+      state.ogreAgentStatus = "Need buy amount.";
+      renderOgreAgent({ force: true });
+      return;
+    }
+    if (!isOgreAgentAutoTradeApproved()) {
+      pushOgreAgentMessage({
+        role: "assistant",
+        text: "Connect or create a wallet and Auto-Trade becomes ready for this session. SlimeWire managed wallets can run through the saved flow; external wallet apps may still show their own signature prompt.",
+        actions: [
+          { label: "Auto-Trade On", type: "approve_agent_auto_trade" },
+          { label: "Open Wallets", type: "open_tab", tab: "wallets" }
+        ]
+      });
+      state.ogreAgentStatus = "Wallet session needed.";
+      renderOgreAgent({ force: true });
+      return;
+    }
+    pushOgreAgentMessage({
+      role: "assistant",
+      text: intent === "buy"
+        ? `Sending ${directAmount} SOL buy for ${shortAddress(directToken)}.${ogreAgentActionTargetSummary(directAction)}`
+        : `Sending sell request for ${shortAddress(directToken)}${directAction.percent ? ` at ${directAction.percent}%` : ""}.`,
+      actions: [
+        { label: "Show Positions", type: "open_tab", tab: "positions" },
+        { label: "Open Chart", type: "open_chart", tokenMint: directToken }
+      ]
+    });
+    state.ogreAgentStatus = "Fast Mode: sending trade request...";
+    renderOgreAgent({ force: true });
+    await runOgreAgentAction(directAction);
+    return;
+  }
   state.ogreAgentLoading = true;
   state.ogreAgentStatus = "";
   const agentRequestId = `${Date.now()}:${Math.random().toString(16).slice(2)}`;

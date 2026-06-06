@@ -2254,14 +2254,43 @@ function ogreAgentTokenMintFromContext(message = "", context = {}) {
   return "";
 }
 
+function ogreAgentTradeTargetsFromText(text = "") {
+  const lower = String(text || "").toLowerCase();
+  const takeProfitPct = (
+    lower.match(/(?:take\s*profit|profit\s*take|tp|target|profit)[^0-9]*(\d{1,4}(?:\.\d+)?)\s*%?/) || []
+  )[1] || "";
+  const stopLossPct = (
+    lower.match(/(?:stop\s*loss|stoploss|sl)[^0-9]*(\d{1,3}(?:\.\d+)?)\s*%?/) || []
+  )[1] || "";
+  const slippagePct = (
+    lower.match(/(?:slippage|slip)[^0-9]*(\d{1,3}(?:\.\d+)?)\s*%?/) || []
+  )[1] || "";
+  const parts = [];
+  if (takeProfitPct) parts.push(`TP +${takeProfitPct}%`);
+  if (stopLossPct) parts.push(`SL -${stopLossPct}%`);
+  if (slippagePct) parts.push(`slippage ${slippagePct}%`);
+  return {
+    takeProfitPct,
+    stopLossPct,
+    slippagePct,
+    summary: parts.length ? parts.join(" / ") : ""
+  };
+}
+
 function ogreAgentFallbackReply(message = "", context = {}) {
   const text = String(message || "").trim();
   const lower = text.toLowerCase();
   const tokenMint = ogreAgentTokenMintFromContext(text, context);
-  const buyAmountSol = (lower.match(/(?:buy|ape|enter|grab|snipe|purchase|get in|go in|long|take entry)[^0-9]*(\d+(?:\.\d+)?)\s*(?:sol)?/) || lower.match(/(\d+(?:\.\d+)?)\s*sol/) || [])[1] || "";
+  const buyAmountSol = (
+    lower.match(/(?:buy|ape|enter|grab|snipe|purchase|get in|go in|long|take entry).*?(?:with|for|using)\s*(\d+(?:\.\d+)?)\s*sol\b/)
+    || lower.match(/(\d+(?:\.\d+)?)\s*sol\b/)
+    || []
+  )[1] || "";
+  const targets = ogreAgentTradeTargetsFromText(lower);
   const walletNumber = (lower.match(/(?:wallet|from)\s*#?\s*(\d{1,2})/) || [])[1] || "";
   const walletIndex = walletNumber ? Math.max(0, Number(walletNumber) - 1) : undefined;
   const actions = [];
+  let intent = "panel_help";
   let reply = "I can be your one-stop SlimeWire command center: coin checks, links, rug/community reads, charts, positions, wallet refresh, presets, Ogre A.I., Pump Launch, Bundle Volume, and fast trade requests.";
 
   if (/secret|api key|env|environment|render env|source code|github|backend|security|private key|wallet seed|seed phrase|codebase|database/i.test(lower)) {
@@ -2307,18 +2336,20 @@ function ogreAgentFallbackReply(message = "", context = {}) {
     );
   }
   if (/buy|ape|enter|grab|snipe|purchase|get in|go in|long|take entry/.test(lower)) {
+    intent = "trade_buy";
     reply = tokenMint && buyAmountSol
-      ? `Fast Mode can send a ${buyAmountSol} SOL buy request for that token through SlimeWire as soon as the wallet flow allows it.`
+      ? `Fast Mode can send a ${buyAmountSol} SOL buy request for ${shortMint(tokenMint)}${targets.summary ? ` with ${targets.summary}` : ""}.`
       : tokenMint
-        ? "Tell me the SOL amount and I can send the buy request directly, or I can open the buy panel if you want to adjust wallet/preset details."
+        ? `I have ${shortMint(tokenMint)} active. Say "buy" with a SOL amount, or I can use your current quick-buy amount/preset from the terminal.`
         : "Paste the token CA with your buy request and I can open the buy panel or send the buy once you include amount.";
     actions.push(tokenMint && buyAmountSol
-      ? { label: `Buy ${buyAmountSol} SOL`, type: "confirm_buy", tokenMint, amountSol: buyAmountSol, walletIndex }
+      ? { label: `Buy ${buyAmountSol} SOL`, type: "confirm_buy", tokenMint, amountSol: buyAmountSol, walletIndex, takeProfitPct: targets.takeProfitPct, stopLossPct: targets.stopLossPct }
       : tokenMint
         ? { label: "Open Buy Panel", type: "open_quick_buy", tokenMint }
         : { label: "Open Trade", type: "open_tab", tab: "trade" });
   }
-  if (/sell|exit|close|dump|take profit|cash out|tp\b/.test(lower)) {
+  if (/sell|exit|close|dump|take profit|cash out|tp\b/.test(lower) && !/buy|ape|enter|grab|snipe|purchase|get in|go in|long|take entry/.test(lower)) {
+    intent = "trade_sell";
     const pct = (lower.match(/(\d{1,3})\s*%/) || [])[1]
       || (lower.includes("half") ? "50" : "")
       || (lower.includes("quarter") ? "25" : "")
@@ -2343,7 +2374,7 @@ function ogreAgentFallbackReply(message = "", context = {}) {
     actions.push({ label: "Live Terminal", type: "open_tab", tab: "terminal" }, { label: "Positions", type: "open_tab", tab: "positions" }, { label: "Refresh Feeds", type: "refresh_feeds" });
   }
 
-  return { reply, actions: actions.slice(0, 4), intent: "panel_help" };
+  return { reply, actions: actions.slice(0, 4), intent };
 }
 
 function ogreAgentCoinIntent(message = "") {
@@ -3094,6 +3125,7 @@ async function webOgreAgentReply(body = {}) {
   const trendReply = await ogreAgentTrendReply(message, context);
   if (trendReply) return trendReply;
   const fallback = await enrichOgreAgentCoinReply(ogreAgentFallbackReply(message, context), message, context);
+  if (/^trade_/.test(String(fallback.intent || ""))) return fallback;
   const modelResult = await callOgreAgentModel(message, context, fallback);
   const modelReply = typeof modelResult === "string" ? modelResult : String(modelResult?.reply || "");
   return {

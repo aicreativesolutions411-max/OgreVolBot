@@ -8934,6 +8934,134 @@ textarea,
   }
 }
 
+/* OGRE_AGENT_SMALL_TOP_HOLO_V1: compact talking ogre, not a giant chat background. */
+.ogre-agent-holo {
+  min-height: 62px !important;
+  height: auto !important;
+  margin: 0 0 8px !important;
+  padding: 6px 9px !important;
+  grid-template-columns: auto minmax(0, 1fr) !important;
+  gap: 8px !important;
+  border-radius: 13px !important;
+  background:
+    radial-gradient(circle at 12% 50%, rgba(128, 255, 42, 0.18), transparent 38%),
+    linear-gradient(135deg, rgba(0, 21, 8, 0.94), rgba(0, 8, 3, 0.96)) !important;
+}
+
+.ogre-agent-holo-stage {
+  width: 54px !important;
+  height: 54px !important;
+  min-width: 54px !important;
+}
+
+.ogre-agent-holo-stage::before {
+  inset: 20px 7px 2px !important;
+  filter: blur(4px) !important;
+  opacity: 0.72 !important;
+}
+
+.ogre-agent-holo-stage img {
+  width: 48px !important;
+  height: 48px !important;
+}
+
+.ogre-agent-holo-ring.ring-one {
+  width: 48px !important;
+  height: 48px !important;
+  bottom: 2px !important;
+}
+
+.ogre-agent-holo-ring.ring-two {
+  width: 34px !important;
+  height: 34px !important;
+  bottom: 8px !important;
+}
+
+.ogre-agent-holo-mouth {
+  width: 16px !important;
+  height: 4px !important;
+  top: 60% !important;
+}
+
+.ogre-agent-holo-stage::after {
+  width: 28px !important;
+  height: 16px !important;
+}
+
+.ogre-agent-holo-scan {
+  opacity: 0.22 !important;
+}
+
+.ogre-agent-holo-meta {
+  align-content: center !important;
+  gap: 1px !important;
+}
+
+.ogre-agent-holo-meta strong {
+  font-size: 13px !important;
+  line-height: 1.1 !important;
+}
+
+.ogre-agent-holo-meta small {
+  font-size: 11px !important;
+  line-height: 1.15 !important;
+}
+
+.ogre-agent-holo.is-talking .ogre-agent-holo-stage img {
+  animation: ogreHoloTalkSmall 0.62s ease-in-out infinite !important;
+}
+
+.ogre-agent-holo.is-talking .ogre-agent-holo-mouth {
+  animation: ogreHoloMouthSmall 0.2s steps(2, end) infinite !important;
+}
+
+@keyframes ogreHoloTalkSmall {
+  0%, 100% { transform: rotateY(-8deg) rotateX(2deg) translateY(0) scale(1.02); }
+  50% { transform: rotateY(8deg) rotateX(-2deg) translateY(-3px) scale(1.06); }
+}
+
+@keyframes ogreHoloMouthSmall {
+  0% { height: 3px; transform: translate(-50%, -50%) scaleX(0.72); }
+  100% { height: 9px; transform: translate(-50%, -50%) scaleX(1.08); }
+}
+
+@media (max-width: 760px) {
+  .ogre-agent-holo {
+    min-height: 54px !important;
+    padding: 5px 7px !important;
+    margin-bottom: 6px !important;
+  }
+
+  .ogre-agent-holo-stage {
+    width: 46px !important;
+    height: 46px !important;
+    min-width: 46px !important;
+  }
+
+  .ogre-agent-holo-stage img {
+    width: 41px !important;
+    height: 41px !important;
+  }
+
+  .ogre-agent-holo-ring.ring-one {
+    width: 42px !important;
+    height: 42px !important;
+  }
+
+  .ogre-agent-holo-ring.ring-two {
+    width: 30px !important;
+    height: 30px !important;
+  }
+
+  .ogre-agent-holo-meta strong {
+    font-size: 12px !important;
+  }
+
+  .ogre-agent-holo-meta small {
+    font-size: 10px !important;
+  }
+}
+
 .ogre-agent-holo-ring {
   position: absolute !important;
   border-radius: 50% !important;
@@ -9288,5 +9416,87 @@ textarea,
     inset: max(8px, env(safe-area-inset-top)) 8px max(8px, env(safe-area-inset-bottom)) 8px !important;
     min-height: 0 !important;
     max-height: none !important;
+  }
+}
+
+/* OGRE_AGENT_SMALL_TOP_HOLO_FINAL_V1: final compact override wins over older hologram sizing. */
+.ogre-agent-shell .ogre-agent-holo {
+  min-height: 62px !important;
+  height: auto !important;
+  margin: 0 0 8px !important;
+  padding: 6px 9px !important;
+  grid-template-columns: auto minmax(0, 1fr) !important;
+  gap: 8px !important;
+  border-radius: 13px !important;
+  background:
+    radial-gradient(circle at 12% 50%, rgba(128, 255, 42, 0.18), transparent 38%),
+    linear-gradient(135deg, rgba(0, 21, 8, 0.94), rgba(0, 8, 3, 0.96)) !important;
+}
+
+.ogre-agent-shell .ogre-agent-holo-stage {
+  width: 54px !important;
+  height: 54px !important;
+  min-width: 54px !important;
+}
+
+.ogre-agent-shell .ogre-agent-holo-stage img {
+  width: 48px !important;
+  height: 48px !important;
+}
+
+.ogre-agent-shell .ogre-agent-holo-ring.ring-one {
+  width: 48px !important;
+  height: 48px !important;
+  bottom: 2px !important;
+}
+
+.ogre-agent-shell .ogre-agent-holo-ring.ring-two {
+  width: 34px !important;
+  height: 34px !important;
+  bottom: 8px !important;
+}
+
+.ogre-agent-shell .ogre-agent-holo-mouth {
+  width: 16px !important;
+  height: 4px !important;
+  top: 60% !important;
+}
+
+.ogre-agent-shell .ogre-agent-holo-meta strong {
+  font-size: 13px !important;
+  line-height: 1.1 !important;
+}
+
+.ogre-agent-shell .ogre-agent-holo-meta small {
+  font-size: 11px !important;
+  line-height: 1.15 !important;
+}
+
+@media (max-width: 760px) {
+  .ogre-agent-shell .ogre-agent-holo {
+    min-height: 54px !important;
+    padding: 5px 7px !important;
+    margin-bottom: 6px !important;
+  }
+
+  .ogre-agent-shell .ogre-agent-holo-stage {
+    width: 46px !important;
+    height: 46px !important;
+    min-width: 46px !important;
+  }
+
+  .ogre-agent-shell .ogre-agent-holo-stage img {
+    width: 41px !important;
+    height: 41px !important;
+  }
+
+  .ogre-agent-shell .ogre-agent-holo-ring.ring-one {
+    width: 42px !important;
+    height: 42px !important;
+  }
+
+  .ogre-agent-shell .ogre-agent-holo-ring.ring-two {
+    width: 30px !important;
+    height: 30px !important;
   }
 }
