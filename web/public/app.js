@@ -2626,17 +2626,22 @@ function currentLivePairsUpdatedAt() {
 }
 
 async function loadLivePairs({ silent = false, bucket = state.livePairBucket, renderOnComplete = true, force = false } = {}) {
+  const requestId = `${Date.now()}:${Math.random().toString(16).slice(2)}`;
   const startedAt = perfNow();
   const safeBucket = normalizeLivePairBucket(bucket);
   const isActiveBucket = safeBucket === state.livePairBucket;
-  state.livePairsLoadingByBucket = { ...state.livePairsLoadingByBucket, [safeBucket]: true };
+  state.livePairsLoadingByBucket = { ...state.livePairsLoadingByBucket, [safeBucket]: requestId };
   state.livePairsLoading = Boolean(state.livePairsLoadingByBucket[state.livePairBucket]);
   if (!silent && isActiveBucket) state.loading = true;
   if (isActiveBucket || !silent) render();
 
   try {
     const forceQuery = force ? "&force=true" : "";
-    const data = await api(`/api/web/live-pairs?bucket=${encodeURIComponent(safeBucket)}&sort=${encodeURIComponent(state.terminalSort || "best")}${forceQuery}`);
+    const livePairsUrl = `/api/web/live-pairs?bucket=${encodeURIComponent(safeBucket)}&sort=${encodeURIComponent(state.terminalSort || "best")}${forceQuery}`;
+    const data = await Promise.race([
+      api(livePairsUrl),
+      new Promise((_, reject) => window.setTimeout(() => reject(new Error("Live feed refresh timed out.")), 12_000))
+    ]);
     const label = LIVE_PAIR_BUCKETS.find(([id]) => id === safeBucket)?.[1] || "Live";
     const previous = state.livePairsByBucket[safeBucket] || (isActiveBucket ? state.livePairs : null);
     let value = data.livePairs || {
@@ -2707,8 +2712,10 @@ async function loadLivePairs({ silent = false, bucket = state.livePairBucket, re
       details: `${safeBucket}:${state.terminalSort || "best"}`
     });
     const nextLoading = { ...state.livePairsLoadingByBucket };
-    delete nextLoading[safeBucket];
-    state.livePairsLoadingByBucket = nextLoading;
+    if (nextLoading[safeBucket] === requestId || nextLoading[safeBucket] === true) {
+      delete nextLoading[safeBucket];
+      state.livePairsLoadingByBucket = nextLoading;
+    }
     state.livePairsLoading = Boolean(nextLoading[state.livePairBucket]);
     if (!silent && isActiveBucket) state.loading = false;
     if (renderOnComplete) {
@@ -9996,8 +10003,8 @@ function rowAgeSeconds(row = {}) {
 }
 
 const SLIME_SCOPE_LIMIT = 100;
-const SLIME_SCOPE_NEW_MAX_AGE_SECONDS = 120;
-const SLIME_SCOPE_FRESH_MAX_MARKET_CAP = 150_000;
+const SLIME_SCOPE_NEW_MAX_AGE_SECONDS = 1800;
+const SLIME_SCOPE_FRESH_MAX_MARKET_CAP = 750_000;
 const SLIME_SCOPE_STEADY_MAX_AGE_SECONDS = 86_400;
 const SLIME_SCOPE_STEADY_MAX_MARKET_CAP = 2_000_000;
 

@@ -187,7 +187,7 @@ export function classifySlimeScopePair(row = {}, now = Date.now()) {
   if (progress >= 70 || marketCap >= 45_000) return "graduating";
 
   const ageMinutes = pairAgeMinutes(row, now);
-  if (Number.isFinite(ageMinutes) && ageMinutes >= 0 && ageMinutes < 2 && (!marketCap || marketCap <= 150_000)) {
+  if (Number.isFinite(ageMinutes) && ageMinutes >= 0 && ageMinutes < 30 && (!marketCap || marketCap <= 750_000)) {
     return "new";
   }
 

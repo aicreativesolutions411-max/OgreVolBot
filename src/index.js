@@ -23456,8 +23456,8 @@ function mergeLivePairCandidatePools(...pools) {
 }
 
 function livePairThinFallbackBuckets(bucket) {
-  if (bucket === "live") return ["under1h"];
-  if (bucket === "under1h") return ["under3h"];
+  if (bucket === "live") return ["under1h", "under3h"];
+  if (bucket === "under1h") return ["under3h", "under1d"];
   if (bucket === "under3h") return ["under1d"];
   return [];
 }
@@ -23884,7 +23884,7 @@ function isLivePairInRelaxedBucket(item, bucket) {
   const safeBucket = normalizeLivePairBucket(bucket);
   const ageMinutes = livePairAgeMinutesValue(item);
   if (ageMinutes === null) return false;
-  if (safeBucket === "live") return ageMinutes >= 0 && ageMinutes < 2;
+  if (safeBucket === "live") return ageMinutes >= 0 && ageMinutes < 30;
   if (safeBucket === "under1h") return ageMinutes >= 5 && ageMinutes < 90;
   if (safeBucket === "under3h") return ageMinutes >= 30 && ageMinutes < 240;
   if (safeBucket === "under1d") return ageMinutes >= 60 && ageMinutes < 1440;
@@ -23893,7 +23893,7 @@ function isLivePairInRelaxedBucket(item, bucket) {
 
 function livePairMaxMarketCap(bucket) {
   const maxByBucket = {
-    live: 150_000,
+    live: 750_000,
     under1h: 1_000_000,
     under3h: 1_500_000,
     under1d: 2_000_000
