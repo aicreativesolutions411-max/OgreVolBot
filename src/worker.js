@@ -20,8 +20,8 @@ console.log(`Worker service role: ${CONFIG.serviceRole}. RUN_WORKER=${CONFIG.run
 if (CONFIG.tickUrls.length > 1) {
   console.log(`Worker fallback tick URLs: ${CONFIG.tickUrls.slice(1).join(", ")}`);
 }
-console.log(`Worker interval: ${CONFIG.intervalMs}ms. Feeds: ${CONFIG.warmFeeds ? "on" : "off"}. Display cache: ${CONFIG.warmDisplayCaches ? "on" : "off"}. Trade plans: ${CONFIG.runTradePlans ? "on" : "off"}. Fast TP/SL: ${CONFIG.fastTpSlEnabled ? "on" : "off"}.`);
-if (CONFIG.fastTpSlEnabled) {
+console.log(`Worker interval: ${CONFIG.intervalMs}ms. Task set: ${CONFIG.taskSet}. Feeds: ${CONFIG.warmFeeds ? "on" : "off"}. Display cache: ${CONFIG.warmDisplayCaches ? "on" : "off"}. Trade plans: ${CONFIG.runTradePlans ? "on" : "off"}. Fast TP/SL: ${CONFIG.fastTpSlEnabled ? "on" : "off"}.`);
+if (CONFIG.fastTpSlEnabled && CONFIG.taskSet === "all") {
   console.log(`Fast TP/SL worker interval: ${CONFIG.tradePlanIntervalMs}ms.`);
   console.log(`Broad portfolio TP/SL fallback interval: ${CONFIG.portfolioExitIntervalMs}ms.`);
 }
@@ -29,7 +29,7 @@ if (CONFIG.fastTpSlEnabled) {
 setTimeout(() => void workerHealthProbe(), 250);
 setTimeout(() => void tick(), 500);
 setInterval(() => void tick(), CONFIG.intervalMs);
-if (CONFIG.fastTpSlEnabled) {
+if (CONFIG.fastTpSlEnabled && CONFIG.taskSet === "all") {
   setTimeout(() => void tradePlanTick(), 1000);
   setInterval(() => void tradePlanTick(), CONFIG.tradePlanIntervalMs);
 }
@@ -44,7 +44,8 @@ function loadWorkerConfig() {
   const timeoutMs = clampInteger(process.env.WORKER_TICK_TIMEOUT_MS, 20_000, 5_000, 120_000);
   const buckets = normalizeList(process.env.WORKER_TICK_BUCKETS || "live,under1h,under3h,under1d");
   const sorts = normalizeList(process.env.WORKER_TICK_SORTS || "best,newest");
-  const runTradePlans = parseBoolean(process.env.WORKER_TICK_RUN_TRADE_PLANS || "true");
+  const taskSet = normalizeWorkerTaskSet(process.env.WORKER_TASK_SET || "all");
+  const runTradePlansEnabled = parseBoolean(process.env.WORKER_TICK_RUN_TRADE_PLANS || "true");
   const serviceRole = normalizeServiceRole(process.env.SERVICE_ROLE || process.env.RENDER_SERVICE_ROLE || "worker");
   const workerDisabled = parseBoolean(process.env.WORKER_DISABLED || "false");
   const runWorker = serviceRole === "worker" && !workerDisabled;
@@ -70,10 +71,11 @@ function loadWorkerConfig() {
     tradePlanIntervalMs,
     portfolioExitIntervalMs,
     timeoutMs,
-    runTradePlans,
-    fastTpSlEnabled: runTradePlans && parseBoolean(process.env.WORKER_FAST_TP_SL_ENABLED || "true"),
-    runDcaPlans: parseBoolean(process.env.WORKER_TICK_RUN_DCA_PLANS || "true"),
-    warmFeeds: parseBoolean(process.env.WORKER_TICK_WARM_FEEDS || "true"),
+    taskSet,
+    runTradePlans: taskSet === "wallets" ? false : runTradePlansEnabled,
+    fastTpSlEnabled: taskSet === "wallets" ? false : parseBoolean(process.env.WORKER_FAST_TP_SL_ENABLED || "true"),
+    runDcaPlans: taskSet === "wallets" ? false : parseBoolean(process.env.WORKER_TICK_RUN_DCA_PLANS || "true"),
+    warmFeeds: taskSet === "wallets" ? false : parseBoolean(process.env.WORKER_TICK_WARM_FEEDS || "true"),
     warmDisplayCaches: parseBoolean(process.env.WORKER_TICK_WARM_DISPLAY_CACHES || "true"),
     displayCacheUserLimit: clampInteger(process.env.WORKER_DISPLAY_CACHE_USER_LIMIT, 8, 0, 50),
     buckets,
@@ -120,6 +122,9 @@ async function workerHealthProbe() {
 }
 
 async function tradePlanTick() {
+  if (CONFIG.taskSet === "wallets") {
+    return;
+  }
   if (activeTradePlanTick) {
     console.log("Fast TP/SL worker tick skipped because the previous TP/SL tick is still running.");
     return;
@@ -144,6 +149,7 @@ async function tradePlanTick() {
           "User-Agent": "slimewire-render-worker-tpsl"
         },
         body: JSON.stringify({
+          taskSet: CONFIG.taskSet,
           runTradePlans: true,
           forceTradePlans: true,
           runPortfolioExits: false,
@@ -217,13 +223,14 @@ async function tick() {
           "User-Agent": "slimewire-render-worker"
         },
         body: JSON.stringify({
-          runTradePlans: CONFIG.runTradePlans,
-          forceTradePlans: CONFIG.runTradePlans,
-          runPortfolioExits,
-          runWebExitGuards: CONFIG.runTradePlans && !CONFIG.fastTpSlEnabled,
-          runTimedTradePlans: CONFIG.runTradePlans && !CONFIG.fastTpSlEnabled,
-          runDcaPlans: CONFIG.runDcaPlans,
-          warmLivePairs: CONFIG.warmFeeds,
+          taskSet: CONFIG.taskSet,
+          runTradePlans: CONFIG.taskSet === "all" ? CONFIG.runTradePlans : false,
+          forceTradePlans: CONFIG.taskSet === "all" ? CONFIG.runTradePlans : false,
+          runPortfolioExits: CONFIG.taskSet === "all" ? runPortfolioExits : false,
+          runWebExitGuards: CONFIG.taskSet === "all" ? (CONFIG.runTradePlans && !CONFIG.fastTpSlEnabled) : false,
+          runTimedTradePlans: CONFIG.taskSet === "all" ? (CONFIG.runTradePlans && !CONFIG.fastTpSlEnabled) : false,
+          runDcaPlans: CONFIG.taskSet === "all" ? CONFIG.runDcaPlans : false,
+          warmLivePairs: CONFIG.taskSet === "all" ? CONFIG.warmFeeds : false,
           warmDisplayCaches: CONFIG.warmDisplayCaches,
           displayCacheUserLimit: CONFIG.displayCacheUserLimit,
           buckets: CONFIG.buckets,
@@ -380,4 +387,8 @@ function normalizeList(value) {
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function normalizeWorkerTaskSet(value = "all") {
+  return String(value || "all").trim().toLowerCase() === "wallets" ? "wallets" : "all";
 }

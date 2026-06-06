@@ -1,6 +1,7 @@
 export function workerTickTaskFlags(body = {}, config = {}) {
+  const taskSet = String(config.taskSet || body.taskSet || "all").trim().toLowerCase() === "wallets" ? "wallets" : "all";
   const tradePlansEnabled = config.workerTickRunTradePlans !== false;
-  const runTradePlansRequested = body.runTradePlans !== false;
+  const runTradePlansRequested = body.runTradePlans !== false && taskSet === "all";
   const enabled = tradePlansEnabled && runTradePlansRequested;
 
   return {

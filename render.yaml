@@ -274,3 +274,60 @@ services:
         value: best,newest
       - key: WORKER_TICK_FORCE_FEEDS
         value: false
+
+  - type: worker
+    name: solana-telegram-wallet-ops-worker-wallets
+    env: node
+    plan: standard
+    autoDeploy: true
+    buildCommand: npm ci
+    startCommand: npm run worker
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: SERVICE_ROLE
+        value: worker
+      - key: RUN_WORKER
+        value: true
+      - key: WORKER_DISABLED
+        value: false
+      - key: WORKER_TASK_SET
+        value: wallets
+      - key: RPC_RPS_LIMIT
+        value: 40
+      - key: DAS_RPS_LIMIT
+        value: 8
+      - key: CACHE_ENABLED
+        value: true
+      - key: CACHE_PROVIDER
+        value: redis
+      - key: REDIS_URL
+        sync: false
+      - key: CACHE_CONNECT_TIMEOUT_MS
+        value: 800
+      - key: CACHE_CIRCUIT_BREAKER_MS
+        value: 15000
+      - key: WORKER_TICK_URL
+        value: https://ogrevolbot.onrender.com/api/internal/worker/tick
+      - key: WORKER_SECRET
+        sync: false
+      - key: WORKER_TICK_INTERVAL_MS
+        value: 20000
+      - key: WORKER_TICK_TIMEOUT_MS
+        value: 20000
+      - key: WORKER_CONCURRENCY
+        value: 2
+      - key: WORKER_TICK_RUN_TRADE_PLANS
+        value: false
+      - key: WORKER_TICK_RUN_DCA_PLANS
+        value: false
+      - key: WORKER_TICK_WARM_FEEDS
+        value: false
+      - key: WORKER_TICK_WARM_DISPLAY_CACHES
+        value: true
+      - key: WORKER_FAST_TP_SL_ENABLED
+        value: false
+      - key: WORKER_DISPLAY_CACHE_USER_LIMIT
+        value: 10
+      - key: WORKER_TICK_FORCE_FEEDS
+        value: false

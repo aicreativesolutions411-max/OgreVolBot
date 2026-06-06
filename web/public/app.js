@@ -32,6 +32,7 @@ const MOBILE_WALLET_SESSION_PREFIX = "slimewireMobileWalletSession:";
 const PERF_LOG_KEY = "slimewirePerfLog";
 const CRASH_LOG_KEY = "slimewireCrashLog";
 const PERF_POST_MIN_DURATION_MS = 150;
+const WALLET_REFRESH_FORCE_COOLDOWN_MS = 10_000;
 const POST_TRADE_REFRESH_DELAYS_MS = [300, 2200, 6500];
 const POST_TRADE_AFFECTED_KEYS = ["wallet-summary", "positions", "pnl", "trade-history", "selected-token", "live-trades"];
 const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
@@ -307,6 +308,7 @@ let postTradeRefreshTimers = [];
 let positionRefreshVisualTimer = null;
 let autoExitCheckInFlight = false;
 let walletRefreshPromise = null;
+let lastWalletForceRefreshAt = 0;
 const apiInFlight = new Map();
 const pendingPerfPosts = [];
 let perfPostTimer = null;
@@ -1950,7 +1952,7 @@ async function loadSession() {
     const data = await api("/api/web/me");
     applyUserFromApi(data.user);
     render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
-    void refreshWalletState({ force: true, deep: false }).catch((error) => {
+    void refreshWalletState({ force: false, deep: false, reason: "session-load" }).catch((error) => {
       state.walletRefreshError = error.message || "Wallet refresh failed.";
       render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
     });
@@ -2044,9 +2046,9 @@ async function loadWalletCore(options = {}) {
   if (!state.user || !state.token) return;
   const startedAt = perfNow();
   const forceQuery = options.force ? "?force=true" : "";
+  const positionsForceQuery = options.force || options.deep ? "?force=true" : "";
   const walletsPromise = api("/api/web/wallets");
   const balancesPromise = api(`/api/web/balances${forceQuery}`);
-  const positionsPromise = api(`/api/web/positions${forceQuery}`).catch((error) => ({ __error: error }));
   const tradePlansPromise = api("/api/web/trade/plans");
   const [wallets, balances, tradePlans] = await Promise.all([
     walletsPromise,
@@ -2067,24 +2069,55 @@ async function loadWalletCore(options = {}) {
     details: `wallets=${state.wallets.length};connected=${Boolean(state.connectedWalletBalance)}`
   });
   if (options.progress !== false) render({ preserveSmartChartFrame: Boolean(options.preserveSmartChartFrame) });
-  const positionsStartedAt = perfNow();
+  if (options.deep) {
+    const positionsStartedAt = perfNow();
+    const positionsPromise = api(`/api/web/positions${positionsForceQuery}`).catch((error) => ({ __error: error }));
+    try {
+      const positions = await positionsPromise;
+      if (positions?.__error) throw positions.__error;
+      state.positions = positions.positions || [];
+      state.lastWalletRefreshAt = new Date().toISOString();
+      state.walletRefreshError = "";
+      perfMeasure("positions-refresh", positionsStartedAt, {
+        component: "positions",
+        resultCount: state.positions.length,
+        cacheHit: Boolean(positions.cacheHit),
+        details: `open=${state.positions.length}`
+      });
+    } catch (error) {
+      state.walletRefreshError = error.message || "Position refresh failed.";
+      perfMeasure("positions-refresh", positionsStartedAt, {
+        errorCode: error?.code || error?.name || "POSITIONS_REFRESH_FAILED",
+        component: "positions",
+        details: publicErrorMessage(error?.message || "Position refresh failed.")
+      });
+    }
+  }
+}
+
+async function refreshWalletPositions(options = {}) {
+  if (!state.user || !state.token) return;
+  const startedAt = perfNow();
+  const forceQuery = options.force ? "?force=true" : "";
   try {
-    const positions = await positionsPromise;
-    if (positions?.__error) throw positions.__error;
+    const positions = await api(`/api/web/positions${forceQuery}`);
     state.positions = positions.positions || [];
     state.lastWalletRefreshAt = new Date().toISOString();
     state.walletRefreshError = "";
-    perfMeasure("positions-refresh", positionsStartedAt, {
+    perfMeasure("positions-refresh", startedAt, {
       component: "positions",
       resultCount: state.positions.length,
       cacheHit: Boolean(positions.cacheHit),
-      details: `open=${state.positions.length}`
+      details: `background:${options.silent ? "silent" : "refresh"}`
     });
   } catch (error) {
+    if (options.silent) {
+      return;
+    }
     state.walletRefreshError = error.message || "Position refresh failed.";
-    perfMeasure("positions-refresh", positionsStartedAt, {
-      component: "positions",
+    perfMeasure("positions-refresh", startedAt, {
       errorCode: error?.code || error?.name || "POSITIONS_REFRESH_FAILED",
+      component: "positions",
       details: publicErrorMessage(error?.message || "Position refresh failed.")
     });
   }
@@ -2455,7 +2488,7 @@ function refreshTerminalEntryInBackground(reason = "terminal-entry") {
   if (state.route !== "terminal") return;
   void refreshVisibleTerminalFeeds({ silent: true, ifStale: true, reason }).catch((error) => setError(error.message));
   if (state.user && state.token) {
-    void refreshWalletState({ force: true, deep: false, reason }).catch((error) => {
+    void refreshWalletState({ force: false, deep: false, reason }).catch((error) => {
       state.walletRefreshError = error.message || "Wallet refresh failed.";
       render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
     });
@@ -2867,9 +2900,15 @@ function scheduleWalletBackgroundRefresh(delayMs = 900, options = {}) {
     if (!state.user || !state.token) return;
     try {
       if (options.reason === "post-trade") {
-        await loadPostTradeSupplemental();
+        await Promise.all([
+          loadPostTradeSupplemental(),
+          refreshWalletPositions({ force: false })
+        ]);
       } else {
-        await loadAll({ force: false, skipCore: true, silent: true });
+        await Promise.all([
+          loadAll({ force: false, skipCore: true, silent: true }),
+          refreshWalletPositions({ force: false, silent: true })
+        ]);
       }
     } catch (error) {
       state.walletRefreshError = error.message || "Background refresh failed.";
@@ -2882,6 +2921,20 @@ async function refreshWalletState({ force = true, deep = true, reason = "manual"
   if (!state.user || !state.token) {
     setError("Create or log in before refreshing wallet balances.");
     return;
+  }
+  const normalizedReason = String(reason || "").toLowerCase();
+  const isPostTradeRefresh = normalizedReason.includes("post-trade");
+  if (force && !deep && !isPostTradeRefresh && Date.now() - lastWalletForceRefreshAt < WALLET_REFRESH_FORCE_COOLDOWN_MS) {
+    force = false;
+    recordPerfEvent({
+      component: "wallet",
+      action: "wallet-refresh-force-throttled",
+      durationMs: 0,
+      cacheHit: true,
+      details: normalizedReason || "manual"
+    });
+  } else if (force && !deep && !isPostTradeRefresh) {
+    lastWalletForceRefreshAt = Date.now();
   }
   if (walletRefreshPromise) {
     recordPerfEvent({
@@ -2902,7 +2955,7 @@ async function refreshWalletState({ force = true, deep = true, reason = "manual"
     state.walletRefreshError = "";
     render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
     try {
-      await loadWalletCore({ force, preserveSmartChartFrame: state.activeTab === "smartChart" });
+      await loadWalletCore({ force, deep, preserveSmartChartFrame: state.activeTab === "smartChart" });
       state.lastWalletRefreshAt = new Date().toISOString();
       if (deep) {
         await loadAll({ force, skipCore: true, silent: true });
@@ -2987,7 +3040,7 @@ function queuePostTradeRefresh(signature = "", reason = "post-trade", options = 
         details: reason
       });
       const startedAt = perfNow();
-      void refreshWalletState({ force: true, deep: false, reason: "post-trade" }).catch((error) => {
+      void refreshWalletState({ force: false, deep: false, reason: "post-trade" }).catch((error) => {
         state.walletRefreshError = error.message || "Post-trade refresh failed.";
         state.postTradeRefresh = {
           ...(state.postTradeRefresh || {}),
@@ -11536,7 +11589,7 @@ document.addEventListener("click", async (event) => {
       durationMs: perfNow() - clickStartedAt,
       details: "top-refresh-wallet"
     });
-    refreshWalletState({ force: true, deep: false }).catch((error) => setError(error.message));
+    refreshWalletState({ force: false, deep: false, reason: "top-refresh-wallet" }).catch((error) => setError(error.message));
     return;
   }
   if (target.matches("[data-ogre-tek-refresh]")) {
@@ -12089,7 +12142,7 @@ document.addEventListener("click", async (event) => {
       finishPositionRefreshAction("success");
     } else {
       const refreshStartedAt = perfNow();
-      refreshWalletState({ force: true, deep: false }).catch((error) => setError(error.message));
+      refreshWalletState({ force: false, deep: false, reason: "refresh-all" }).catch((error) => setError(error.message));
       refreshTerminalFeed(state.activeTab, { force: true, reason: "manual-refresh-active-tab" }).catch((error) => setError(error.message));
       perfMeasure("position-refresh-request-start", refreshStartedAt, {
         component: "positions",
@@ -12333,3 +12386,4 @@ async function initializeApp() {
 }
 
 initializeApp();
+

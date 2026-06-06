@@ -2316,10 +2316,17 @@ function constantTimeStringEquals(a, b) {
   }
 }
 
+function normalizeWorkerTaskSet(value = "all") {
+  return String(value || "all").trim().toLowerCase() === "wallets" ? "wallets" : "all";
+}
+
 async function runInternalWorkerTick(body = {}) {
+  const taskSet = normalizeWorkerTaskSet(body.taskSet || "all");
+  const includeTradeTasks = taskSet === "all";
   const startedAt = Date.now();
   await recordTpSlWorkerHeartbeat("worker_tick_started", {
     requested: {
+      taskSet,
       runTradePlans: body.runTradePlans !== false,
       runWebExitGuards: body.runWebExitGuards !== false,
       runPortfolioExits: body.runPortfolioExits !== false
@@ -2327,6 +2334,7 @@ async function runInternalWorkerTick(body = {}) {
   }).catch(() => {});
   const result = {
     ranAt: new Date(startedAt).toISOString(),
+    taskSet,
     portfolioExits: { skipped: true },
     webExitGuards: { skipped: true },
     tradePlans: { skipped: true },
@@ -2336,32 +2344,33 @@ async function runInternalWorkerTick(body = {}) {
   };
 
   const tradeTaskFlags = workerTickTaskFlags(body, {
-    workerTickRunTradePlans: CONFIG.workerTickRunTradePlans
+    workerTickRunTradePlans: CONFIG.workerTickRunTradePlans,
+    taskSet
   });
 
-  if (tradeTaskFlags.webExitGuards) {
+  if (includeTradeTasks && tradeTaskFlags.webExitGuards) {
     result.webExitGuards = await runWorkerTask("webExitGuards", () => processWebExitGuards({
       forcePriceCheck: body.forceTradePlans !== false
     }));
   }
 
-  if (tradeTaskFlags.tradePlans) {
+  if (includeTradeTasks && tradeTaskFlags.tradePlans) {
     result.tradePlans = await runWorkerTask("tradePlans", () => processTradePlans({
       forcePriceCheck: body.forceTradePlans !== false
     }));
   }
 
-  if (tradeTaskFlags.portfolioExits) {
+  if (includeTradeTasks && tradeTaskFlags.portfolioExits) {
     result.portfolioExits = await runWorkerTask("portfolioExits", () => processWebPortfolioExits({
       forcePriceCheck: body.forceTradePlans !== false
     }));
   }
 
-  if (CONFIG.workerTickRunDcaPlans && body.runDcaPlans !== false) {
+  if (includeTradeTasks && CONFIG.workerTickRunDcaPlans && body.runDcaPlans !== false) {
     result.dcaPlans = await runWorkerTask("dcaPlans", () => processDcaPlans());
   }
 
-  if (CONFIG.workerTickWarmFeeds && body.warmLivePairs !== false) {
+  if (includeTradeTasks && CONFIG.workerTickWarmFeeds && body.warmLivePairs !== false) {
     result.feeds = await runWorkerTask("feeds", () => warmWorkerLivePairFeeds(body));
   }
 
