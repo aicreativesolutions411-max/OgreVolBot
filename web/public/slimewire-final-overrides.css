@@ -8637,3 +8637,137 @@ textarea,
     max-height: none !important;
   }
 }
+
+/* OGRE_AGENT_MOBILE_VIEWPORT_LOCK_V5: force the chat into the visible mobile viewport.
+   This keeps the close/header reachable, makes only the message feed scroll, and
+   prevents the landing/terminal page from pushing the panel halfway off-screen. */
+@media (max-width: 760px) {
+  .ogre-agent-shell.is-open {
+    position: fixed !important;
+    inset: 0 !important;
+    width: 100dvw !important;
+    height: 100dvh !important;
+    max-width: 100dvw !important;
+    max-height: 100dvh !important;
+    display: block !important;
+    overflow: hidden !important;
+    pointer-events: none !important;
+    z-index: 2147483000 !important;
+    transform: none !important;
+    contain: none !important;
+  }
+
+  .ogre-agent-shell.is-open .ogre-agent-bubble {
+    position: fixed !important;
+    right: -2px !important;
+    top: 50% !important;
+    bottom: auto !important;
+    transform: translateY(-50%) !important;
+    pointer-events: auto !important;
+    z-index: 2147483001 !important;
+  }
+
+  .ogre-agent-shell.is-open .ogre-agent-panel {
+    position: fixed !important;
+    inset: max(8px, env(safe-area-inset-top)) 8px max(8px, env(safe-area-inset-bottom)) 8px !important;
+    width: auto !important;
+    height: auto !important;
+    max-width: none !important;
+    max-height: none !important;
+    min-width: 0 !important;
+    min-height: 0 !important;
+    display: grid !important;
+    grid-template-rows: auto minmax(0, 1fr) auto auto auto !important;
+    overflow: hidden !important;
+    overscroll-behavior: contain !important;
+    transform: none !important;
+    pointer-events: auto !important;
+  }
+
+  .ogre-agent-panel header {
+    position: relative !important;
+    top: auto !important;
+    z-index: 3 !important;
+    min-height: 48px !important;
+    padding: 10px 12px !important;
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) 42px !important;
+    gap: 10px !important;
+    align-items: center !important;
+    background: linear-gradient(180deg, rgba(0, 18, 7, 0.98), rgba(0, 11, 4, 0.94)) !important;
+    border-bottom: 1px solid rgba(137, 255, 58, 0.22) !important;
+  }
+
+  .ogre-agent-panel header > div {
+    min-width: 0 !important;
+  }
+
+  .ogre-agent-panel header small {
+    display: block !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+
+  .ogre-agent-panel [data-ogre-agent-close] {
+    width: 42px !important;
+    min-width: 42px !important;
+    height: 42px !important;
+    min-height: 42px !important;
+    display: grid !important;
+    place-items: center !important;
+    padding: 0 !important;
+    font-size: 24px !important;
+    line-height: 1 !important;
+  }
+
+  .ogre-agent-feed,
+  .ogre-agent-messages {
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow-y: auto !important;
+    overscroll-behavior: contain !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+
+  .ogre-agent-composer {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) 74px !important;
+    gap: 8px !important;
+    align-items: stretch !important;
+    padding: 8px 10px !important;
+  }
+
+  .ogre-agent-panel textarea[data-ogre-agent-input],
+  .ogre-agent-panel [data-ogre-agent-input] {
+    min-height: 54px !important;
+    max-height: 92px !important;
+    resize: none !important;
+  }
+
+  .ogre-agent-quick-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 6px !important;
+    padding: 6px 10px 8px !important;
+  }
+
+  .ogre-agent-quick-actions button {
+    min-height: 34px !important;
+    padding: 6px 8px !important;
+    font-size: 12px !important;
+  }
+
+  .ogre-agent-status {
+    display: block !important;
+    max-height: 54px !important;
+    overflow-y: auto !important;
+    padding: 0 12px 10px !important;
+    font-size: 12px !important;
+  }
+
+  .ogre-agent-panel:focus-within {
+    inset: max(8px, env(safe-area-inset-top)) 8px max(8px, env(safe-area-inset-bottom)) 8px !important;
+    min-height: 0 !important;
+    max-height: none !important;
+  }
+}
