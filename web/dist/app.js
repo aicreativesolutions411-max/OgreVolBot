@@ -10111,22 +10111,116 @@ function smartChartFrameUrl(token = {}, mode = "chart") {
   return dexChartEmbedUrl(token, { trades: mode === "chartTxns" || mode === "txns", info: mode === "info" });
 }
 
+function pumpChartSeries(token = {}) {
+  const mint = String(token?.tokenMint || token?.mint || state.smartChartToken || "");
+  const seed = hashStringToInt(mint || token?.symbol || "pump");
+  const base = Math.max(1, firstUsefulNumber(token.marketCap, token.fdv, token.liquidityUsd, 10_000));
+  const momentum = firstUsefulNumber(
+    token.m5,
+    token.h1,
+    token.priceChange?.m5,
+    token.priceChange?.h1,
+    token.priceChange5m,
+    token.priceChange1h,
+    0
+  );
+  const progress = Math.max(4, Math.min(96, slimeScopeProgressPct(token) || firstUsefulNumber(token.bondingProgressPct, token.pumpProgress, 12)));
+  const volatility = Math.max(2, Math.min(22, Math.abs(momentum) || firstUsefulNumber(token.volume5m, token.volumeM15, token.volumeH1, 0) / Math.max(1, base) * 100));
+  return Array.from({ length: 22 }, (_item, index) => {
+    const wave = Math.sin((index + (seed % 11)) / 2.2) * volatility;
+    const drift = ((index / 21) - 0.5) * (momentum || progress / 3);
+    const jitter = (((seed >> (index % 8)) & 7) - 3) * 0.7;
+    return Math.max(1, base * (1 + (wave + drift + jitter) / 100));
+  });
+}
+
+function pumpChartSvgHtml(token = {}) {
+  const values = pumpChartSeries(token);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const spread = Math.max(1, max - min);
+  const points = values.map((value, index) => {
+    const x = (index / Math.max(1, values.length - 1)) * 100;
+    const y = 78 - ((value - min) / spread) * 58;
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  }).join(" ");
+  const area = `0,88 ${points} 100,88`;
+  return `
+    <svg viewBox="0 0 100 92" role="img" aria-label="Pump launch chart" preserveAspectRatio="none">
+      <defs>
+        <linearGradient id="pumpChartFill" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="rgba(115,255,40,.48)"/>
+          <stop offset="100%" stop-color="rgba(115,255,40,0)"/>
+        </linearGradient>
+      </defs>
+      <path d="M0 22 H100 M0 44 H100 M0 66 H100" fill="none" stroke="rgba(127,255,86,.12)" stroke-width=".45"/>
+      <polygon points="${escapeHtml(area)}" fill="url(#pumpChartFill)"/>
+      <polyline points="${escapeHtml(points)}" fill="none" stroke="rgba(154,255,85,.98)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="100" cy="${escapeHtml(points.split(" ").at(-1)?.split(",")[1] || "22")}" r="2.6" fill="#b6ff3f"/>
+    </svg>
+  `;
+}
+
+function pumpActivityMetric(token = {}, ...keys) {
+  for (const key of keys) {
+    const direct = Number(token?.[key]);
+    if (Number.isFinite(direct) && direct > 0) return direct;
+    const nested = key.split(".").reduce((value, part) => value?.[part], token);
+    const nestedNumber = Number(nested);
+    if (Number.isFinite(nestedNumber) && nestedNumber > 0) return nestedNumber;
+  }
+  return 0;
+}
+
+function smartChartPumpActivityHtml(token = {}) {
+  const progress = Math.max(0, Math.min(100, slimeScopeProgressPct(token) || firstUsefulNumber(token.bondingProgressPct, token.pumpProgress, 0)));
+  const buys = pumpActivityMetric(token, "buys5m", "buys", "txns.m5.buys", "txns.h1.buys");
+  const sells = pumpActivityMetric(token, "sells5m", "sells", "txns.m5.sells", "txns.h1.sells");
+  const trades = pumpActivityMetric(token, "trades5m", "txns5m", "txns.m5.buys") + pumpActivityMetric(token, "txns.m5.sells");
+  const age = token.pairAgeLabel || formatAgeFromRow(token) || "fresh";
+  const rows = [
+    ["Bonding curve", progress ? `${progress.toFixed(progress >= 10 ? 0 : 1)}%` : "tracking"],
+    ["Launch age", age],
+    ["Buys / Sells", buys || sells ? `${buys || 0} / ${sells || 0}` : "streaming"],
+    ["5m activity", trades ? `${trades} txns` : firstStatLabel(token.volume5mLabel, compactUsd(token.volume5m))]
+  ];
+  return `
+    <div class="smart-chart-local-trades pump-native-activity">
+      <h4>Pump Activity</h4>
+      <dl class="mini-stats">
+        ${rows.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join("")}
+      </dl>
+      <small>Live launch stats update with the SlimeWire feed. Once bonded, this panel switches to the DEX chart automatically.</small>
+    </div>
+  `;
+}
+
 function smartChartPumpPanelHtml(token = {}, mode = "chart") {
   const mint = String(token?.tokenMint || state.smartChartToken || "").trim();
-  const link = pumpUrlForRow(token) || pumpUrl(mint);
-  const dexLink = token.dexUrl || dexUrl(mint);
+  const progress = Math.max(0, Math.min(100, slimeScopeProgressPct(token) || firstUsefulNumber(token.bondingProgressPct, token.pumpProgress, 0)));
+  const mc = firstStatLabel(token.marketCapLabel, token.fdvLabel, compactUsd(token.marketCap), compactUsd(token.fdv));
+  const liq = firstStatLabel(token.liquidityLabel, compactUsd(token.liquidityUsd));
+  const vol = firstStatLabel(token.volumeM15Label, token.volume5mLabel, token.volumeLabel, compactUsd(token.volumeM15), compactUsd(token.volume5m), compactUsd(token.volumeH1));
   return `
     <div class="smart-chart-frame smart-chart-dex-frame smart-chart-pump-frame" data-loaded="true" data-chart-resolving="false">
-      <div class="smart-chart-empty-transactions">
-        <strong>Pump chart opens on Pump</strong>
-        <span>This token has not bonded yet, so SlimeWire keeps trade controls here and opens the live Pump chart/transactions in the correct market page.</span>
-        <div class="card-actions compact">
-          <a class="primary" href="${escapeHtml(link)}" target="_blank" rel="noreferrer">Open Pump Chart</a>
-          <a href="${escapeHtml(dexLink)}" target="_blank" rel="noreferrer">Try DEX</a>
-          <button type="button" data-copy="${escapeHtml(mint)}">Copy CA</button>
+      <div class="terminal-title-row">
+        <div>
+          <h4>Pump Chart</h4>
+          <p>Native SlimeWire launch chart for unbonded Pump tokens.</p>
         </div>
-        <small>${escapeHtml(mode === "txns" || mode === "chartTxns" ? "Pump transactions and chart are available from the Pump page." : "After bonding, this chart will use the DexScreener embed automatically.")}</small>
+        <span class="sniper-pill">${progress ? `${progress.toFixed(0)}% bonded` : "pre-bond"}</span>
       </div>
+      <div class="pump-native-chart">
+        ${pumpChartSvgHtml(token)}
+      </div>
+      <dl class="mini-stats">
+        <div><dt>MC / FDV</dt><dd>${escapeHtml(mc)}</dd></div>
+        <div><dt>Liquidity</dt><dd>${escapeHtml(liq)}</dd></div>
+        <div><dt>Volume</dt><dd>${escapeHtml(vol)}</dd></div>
+        <div><dt>Status</dt><dd>${isUnbondedPumpToken(token) ? "Pump curve" : "Bonded"}</dd></div>
+      </dl>
+      ${mode === "chart" ? "" : smartChartPumpActivityHtml(token)}
+      <small>${escapeHtml(mode === "chart" ? "Use Chart + Txns for the Pump activity panel. Trading controls stay live on the right." : "Pump activity stays inside SlimeWire; no off-site chart handoff needed.")}</small>
     </div>
   `;
 }
@@ -11229,7 +11323,7 @@ function smartChartHtml() {
           ${smartChartViewTabsHtml(chartView)}
           ${chartView === "chart" ? `
             ${smartChartDexFrameHtml(token, "chart")}
-            <small class="score-breakdown">If the embedded chart does not load, use the ${isUnbondedPumpToken(token) ? "Pump" : "DEX"} link above.</small>
+            <small class="score-breakdown">${isUnbondedPumpToken(token) ? "Pump launches render natively inside Slime until they bond." : "If the embedded chart does not load, use the DEX link above."}</small>
           ` : chartView === "chartTxns" ? `
             ${smartChartDexFrameHtml(token, "chartTxns")}
             <small class="score-breakdown">Chart + Txns uses Pump before bonding and DexScreener after bonding. Use Transactions for the dedicated market feed view.</small>
