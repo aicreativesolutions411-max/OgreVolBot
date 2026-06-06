@@ -235,7 +235,7 @@ const state = {
   ogreAgentOpen: false,
   ogreAgentLoading: false,
   ogreAgentFastMode: (() => { try { return (localStorage.getItem("ogreAgentFastMode") || "on") !== "off"; } catch { return true; } })(),
-  ogreAgentAutoTradeApproved: (() => { try { return (localStorage.getItem("ogreAgentAutoTradeApproved") || "") === "yes"; } catch { return false; } })(),
+  ogreAgentAutoTradeApproved: (() => { try { localStorage.removeItem("ogreAgentAutoTradeApproved"); return (sessionStorage.getItem("ogreAgentAutoTradeApproved") || "") === "yes"; } catch { return false; } })(),
   ogreAgentStatus: "",
   ogreAgentMessages: [],
   connectedWalletBalance: null,
@@ -3671,6 +3671,7 @@ function syncShellRouteVisibility() {
   app.dataset.route = state.route;
   app.dataset.walletConnected = hasWalletContext ? "true" : "false";
   if (hasWalletContext) syncOgreAgentAutoApprovalFromWallet("shell-wallet-context");
+  else ogreAgentClearAutoTradeSession();
   setRouteSectionHidden(loginView, !["intro", "login"].includes(state.route));
   setRouteSectionHidden(connectView, state.route !== "connect");
   setRouteSectionHidden(dashboardView, state.route !== "terminal");
@@ -12678,23 +12679,42 @@ function ogreAgentHasConnectedWallet() {
 }
 
 function isOgreAgentAutoTradeApproved() {
-  return Boolean(state.ogreAgentAutoTradeApproved || ogreAgentHasManagedWallet());
+  return Boolean(!ogreAgentAutoTradeRevokedThisSession() && (state.ogreAgentAutoTradeApproved || ogreAgentHasManagedWallet()));
 }
 
 function syncOgreAgentAutoApprovalFromWallet(reason = "wallet-sync") {
-  if (ogreAgentHasManagedWallet()) {
-    state.ogreAgentAutoTradeApproved = true;
-    return true;
-  }
-  if (ogreAgentHasConnectedWallet()) {
+  if (ogreAgentAutoTradeRevokedThisSession()) return false;
+  if (ogreAgentHasManagedWallet() || ogreAgentHasConnectedWallet()) {
     ogreAgentStoreAutoTradeApproval(true);
     return true;
   }
+  ogreAgentClearAutoTradeSession();
   return false;
 }
-function ogreAgentStoreAutoTradeApproval(enabled) {
+function ogreAgentAutoTradeRevokedThisSession() {
+  try { return sessionStorage.getItem("ogreAgentAutoTradeRevoked") === "yes"; } catch { return false; }
+}
+
+function ogreAgentClearAutoTradeSession() {
+  state.ogreAgentAutoTradeApproved = false;
+  try {
+    sessionStorage.removeItem("ogreAgentAutoTradeApproved");
+    sessionStorage.removeItem("ogreAgentAutoTradeRevoked");
+    localStorage.removeItem("ogreAgentAutoTradeApproved");
+  } catch {}
+}
+function ogreAgentStoreAutoTradeApproval(enabled, options = {}) {
   state.ogreAgentAutoTradeApproved = Boolean(enabled);
-  try { localStorage.setItem("ogreAgentAutoTradeApproved", state.ogreAgentAutoTradeApproved ? "yes" : "no"); } catch {}
+  try {
+    localStorage.removeItem("ogreAgentAutoTradeApproved");
+    if (state.ogreAgentAutoTradeApproved) {
+      sessionStorage.setItem("ogreAgentAutoTradeApproved", "yes");
+      sessionStorage.removeItem("ogreAgentAutoTradeRevoked");
+    } else {
+      sessionStorage.removeItem("ogreAgentAutoTradeApproved");
+      if (options.revoked) sessionStorage.setItem("ogreAgentAutoTradeRevoked", "yes");
+    }
+  } catch {}
 }
 function ogreAgentStoreFastMode(enabled) {
   state.ogreAgentFastMode = Boolean(enabled);
@@ -12824,7 +12844,7 @@ async function runOgreAgentAction(action = {}) {
   if (type === "approve_agent_auto_trade") {
     ogreAgentStoreAutoTradeApproval(true);
     ogreAgentStoreFastMode(true);
-    state.ogreAgentStatus = "Agent Auto-Trade is enabled. SlimeWire managed wallets run directly through the saved trade flow; connected wallets use the site-level permission plus any wallet-provider signing they require.";
+    state.ogreAgentStatus = "Agent Auto-Trade is enabled for this session. SlimeWire managed wallets run directly through the saved trade flow; connected wallets stay site-approved until logout, close, or revoke.";
     pushOgreAgentMessage({
       role: "assistant",
       text: `${state.ogreAgentStatus}\nExternal wallet apps may still require their own signature prompts. Managed wallets can run through the saved SlimeWire flow.`,
@@ -12839,7 +12859,7 @@ async function runOgreAgentAction(action = {}) {
   }
 
   if (type === "revoke_agent_auto_trade") {
-    ogreAgentStoreAutoTradeApproval(false);
+    ogreAgentStoreAutoTradeApproval(false, { revoked: true });
     state.ogreAgentStatus = "Agent Auto-Trade revoked. Ogre will still help, but direct trade requests need approval again.";
     pushOgreAgentMessage({ role: "assistant", text: state.ogreAgentStatus, actions: [{ label: "Auto-Trade On", type: "approve_agent_auto_trade" }] });
     renderOgreAgent();
@@ -13071,7 +13091,7 @@ async function sendOgreAgentMessage() {
     if (ogreAgentTradeIntent(message) && state.ogreAgentFastMode && !isOgreAgentAutoTradeApproved()) {
       pushOgreAgentMessage({
         role: "assistant",
-        text: "Agent Auto-Trade is automatic for SlimeWire wallets and enabled after wallet connect. If your wallet provider still asks for a signature, that is the wallet security layer.",
+        text: "Agent Auto-Trade turns on automatically for this session when a wallet is connected or created. If an external wallet still asks for a signature, that is the wallet provider layer.",
         actions: [{ label: "Auto-Trade On", type: "approve_agent_auto_trade" }, { label: "Fast Mode Off", type: "toggle_agent_fast_mode" }]
       });
       state.ogreAgentStatus = "Auto-Trade approval needed once.";
@@ -14472,6 +14492,8 @@ if (!window.__slimeStablePumpChartTimer) {
     slimePumpChartRerender();
   }, 8000);
 }
+
+
 
 
 
