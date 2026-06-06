@@ -1021,7 +1021,7 @@ function scheduleWalletBackgroundRefresh(delayMs = 900) {
   }, delayMs);
 }
 
-async function refreshWalletState({ force = true, deep = true } = {}) {
+async function refreshWalletState({ force = false, deep = false } = {}) {
   if (!state.user || !state.token) {
     setError("Create or log in before refreshing wallet balances.");
     return;
@@ -6858,7 +6858,7 @@ function balanceReconciliationHtml() {
         <p>Compares the app wallet list against the latest on-chain SOL and SPL token refresh. Positions are kept visible even when price data is unavailable.</p>
         <small>Last updated: ${escapeHtml(ageTextFromSeconds(secondsSince(state.lastWalletRefreshAt)))} | Warnings: ${warningCount} | Errors: ${balanceErrors.length}</small>
       </div>
-      <button class="primary" data-top-refresh-wallet>${state.walletRefreshing ? "Refreshing..." : "Force Refresh"}</button>
+      <button class="primary" data-top-refresh-wallet data-top-refresh-deep>${state.walletRefreshing ? "Refreshing..." : "Force Refresh"}</button>
     </section>
     ${balanceErrors.length ? `
       <div class="table-list compact-table">
@@ -7708,7 +7708,8 @@ document.addEventListener("click", async (event) => {
     return;
   }
   if (target.matches("[data-top-refresh-wallet]")) {
-    await refreshWalletState({ force: true });
+    const deep = target.matches("[data-top-refresh-deep]");
+    await refreshWalletState({ force: true, deep });
     return;
   }
   if (target.matches("[data-ogre-tek-refresh]")) {
@@ -8114,7 +8115,7 @@ document.addEventListener("click", async (event) => {
       else if (state.activeTab === "kol") await loadKolScan().catch((error) => setError(error.message));
       else setError("Browsing is open. Create or connect a profile when you want saved wallets, balances, or trades.");
     } else {
-      refreshWalletState({ force: true }).catch((error) => setError(error.message));
+      refreshWalletState({ force: true, deep: true }).catch((error) => setError(error.message));
     }
   }
 

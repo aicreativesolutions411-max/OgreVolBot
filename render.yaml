@@ -48,6 +48,10 @@ services:
         value: 800
       - key: CACHE_CIRCUIT_BREAKER_MS
         value: 15000
+      - key: DISPLAY_CACHE_FRESH_MS
+        value: 5000
+      - key: DISPLAY_CACHE_STALE_MS
+        value: 120000
       - key: PUMPFUN_API_BASE
         value: https://frontend-api-v3.pump.fun
       - key: PUMPFUN_API_TOKEN
@@ -141,7 +145,7 @@ services:
       - key: BALANCE_CONCURRENCY
         value: 8
       - key: BALANCE_CACHE_TTL_MS
-        value: 3000
+        value: 8000
       - key: BUY_RESERVE_SOL
         value: 0.01
       - key: RPC_MIN_INTERVAL_MS
@@ -244,6 +248,10 @@ services:
         value: 800
       - key: CACHE_CIRCUIT_BREAKER_MS
         value: 15000
+      - key: DISPLAY_CACHE_FRESH_MS
+        value: 5000
+      - key: DISPLAY_CACHE_STALE_MS
+        value: 120000
       - key: WORKER_TICK_URL
         value: https://ogrevolbot.onrender.com/api/internal/worker/tick
       - key: WORKER_SECRET

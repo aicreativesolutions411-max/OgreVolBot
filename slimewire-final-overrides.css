@@ -391,13 +391,26 @@
 
 [data-app][data-route="terminal"] .tabs .nav-tool-group {
   width: 100% !important;
+  display: grid !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  gap: 5px !important;
+  align-items: stretch !important;
+  padding: 4px !important;
 }
 
 [data-app][data-route="terminal"] .tabs .nav-tool-group button {
+  grid-column: span 1 !important;
   width: 100% !important;
-  margin-top: 5px !important;
-  min-height: 32px !important;
-  padding-left: 38px !important;
+  margin: 0 !important;
+  min-height: 30px !important;
+  padding-left: 34px !important;
+  justify-self: stretch !important;
+}
+
+[data-app][data-route="terminal"] .tabs .nav-tool-group summary {
+  grid-column: 1 / -1 !important;
+  margin: 0 !important;
+  width: 100% !important;
 }
 
 .profile-row-shell {
