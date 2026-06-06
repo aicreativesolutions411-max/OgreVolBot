@@ -4889,6 +4889,7 @@ function curatedKolActionsHtml(kol = {}) {
       ${links.x ? `<a href="${escapeHtml(links.x)}" target="_blank" rel="noreferrer">X</a>` : ""}
       ${links.kolscan ? `<a href="${escapeHtml(links.kolscan)}" target="_blank" rel="noreferrer">KOLscan</a>` : ""}
       ${links.wallet ? `<a href="${escapeHtml(links.wallet)}" target="_blank" rel="noreferrer">Wallet</a>` : ""}
+      ${wallet ? `<button class="kol-copy-bubble" data-kol-copy-setup="${escapeHtml(wallet)}">Copy Setup</button>` : ""}
       ${wallet ? `<button data-kol-scan-wallet="${escapeHtml(wallet)}">Scan</button>` : ""}
       ${wallet ? `<button data-kol-copy-wallet="${escapeHtml(wallet)}">Copy</button>` : `<span>Wallet soon</span>`}
       ${wallet ? `<button data-copy="${escapeHtml(wallet)}">CA</button>` : ""}
@@ -7057,7 +7058,7 @@ function kolHtml() {
       ? state.kolScan.kols?.length ? "" : emptyState("No SlimeWire traders yet", "Traders appear here only after they opt in from Profile and have site trade history.")
       : state.kolScan ? kolRowsHtml() : emptyState("No KOL scan loaded", "Pick a KOL mode or tap Refresh.")}
     ${state.kolScan?.kols?.length ? curatedKolBoardHtml() : ""}
-    <details class="kol-management-settings">
+    <details class="kol-management-settings" data-kol-management-settings>
       <summary>
         <span>Wallet Management / Copy Settings</span>
         <small>Buy amount, TP/SL, wallet groups, copy plan, and outside KOL tools</small>
@@ -7250,6 +7251,7 @@ function kolSummaryHtml() {
               ${kol.solscanUrl ? `<a href="${escapeHtml(kol.solscanUrl)}" target="_blank" rel="noreferrer">Wallet</a>` : ""}
               ${kol.kolscanUrl || kol.wallet ? `<a href="${escapeHtml(kol.kolscanUrl || kolscanUrl(kol.wallet))}" target="_blank" rel="noreferrer">Trader Profile</a>` : ""}
               ${xShareButton(kolProfileShareText(kol), "Share Watch")}
+              ${kol.wallet ? `<button class="kol-copy-bubble" data-kol-copy-setup="${escapeHtml(kol.wallet)}">Copy Trade</button>` : ""}
               ${kol.wallet ? `<button data-kol-scan-wallet="${escapeHtml(kol.wallet)}">Scan Positions</button>` : ""}
               ${kol.wallet ? `<button data-kol-copy-wallet="${escapeHtml(kol.wallet)}">Copy Wallet</button>` : ""}
               ${kol.wallet ? `<button data-copy="${escapeHtml(kol.wallet)}">Copy Address</button>` : ""}
@@ -14359,6 +14361,25 @@ document.addEventListener("click", async (event) => {
     state.kolWallet = String(target.dataset.kolScanWallet || "").trim();
     resetTerminalFeedVisibleLimit("kol");
     await refreshTerminalFeed("kol", { force: true, reason: "kol-signal-wallet-scan" }).catch((error) => setError(error.message));
+    return;
+  }
+  if (target.matches("[data-kol-copy-setup]")) {
+    const wallet = String(target.dataset.kolCopySetup || "").trim();
+    if (wallet) state.kolWallet = wallet;
+    state.activeTab = "kol";
+    render();
+    setTimeout(() => {
+      const settings = document.querySelector("[data-kol-management-settings]");
+      if (settings) {
+        settings.open = true;
+        settings.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+      const walletInput = $("[data-kol-wallet]");
+      if (walletInput && wallet) walletInput.value = wallet;
+      const status = $("[data-kol-status]");
+      if (status) writeText(status, `Copy setup loaded for ${shortAddress(wallet)}. Choose presets, then tap Copy Wallet Next Buy.`);
+      $("[data-kol-amount]")?.focus?.({ preventScroll: true });
+    }, 40);
     return;
   }
   if (target.matches("[data-kol-copy]")) {
