@@ -224,6 +224,9 @@ let kolTimer = null;
 let watchlistTimer = null;
 let walletBackgroundRefreshTimer = null;
 let postTradeRefreshTimer = null;
+const livePairRefreshInFlight = new Map();
+const apiGetInFlight = new Map();
+const LIVE_FEED_AUTO_TABS = new Set(["live", "slimeScope", "smartChart"]);
 
 const $ = (selector) => document.querySelector(selector);
 const writeText = (element, value) => {
@@ -335,55 +338,75 @@ async function wakeApi(base) {
 }
 
 async function api(path, options = {}) {
+  const method = String(options.method || "GET").toUpperCase();
   const headers = {
     "Content-Type": "application/json",
     ...(options.headers || {})
   };
   if (state.token) headers.Authorization = `Bearer ${state.token}`;
+  const inFlightKey = method === "GET"
+    ? `${method}|${apiUrl(path)}|${state.token || "anon"}`
+    : "";
+  if (inFlightKey && apiGetInFlight.has(inFlightKey)) {
+    return apiGetInFlight.get(inFlightKey);
+  }
 
-  let response;
-  let lastError = null;
-  try {
-    response = await fetchWithTimeout(apiUrl(path), { ...options, headers, cache: "no-store" });
-  } catch (error) {
-    lastError = error;
-    await wakeApi(apiBase);
-    await sleep(900);
+  const request = (async () => {
+    let response;
+    let lastError = null;
     try {
       response = await fetchWithTimeout(apiUrl(path), { ...options, headers, cache: "no-store" });
-    } catch (retryError) {
-      lastError = retryError;
-      for (const fallbackBase of apiCandidates) {
-        if (fallbackBase === apiBase) continue;
-        try {
-          await wakeApi(fallbackBase);
-          response = await fetchWithTimeout(`${fallbackBase}${path}`, { ...options, headers, cache: "no-store" });
-          apiBase = fallbackBase;
-          break;
-        } catch (fallbackError) {
-          lastError = fallbackError;
+    } catch (error) {
+      lastError = error;
+      await wakeApi(apiBase);
+      await sleep(900);
+      try {
+        response = await fetchWithTimeout(apiUrl(path), { ...options, headers, cache: "no-store" });
+      } catch (retryError) {
+        lastError = retryError;
+        for (const fallbackBase of apiCandidates) {
+          if (fallbackBase === apiBase) continue;
+          try {
+            await wakeApi(fallbackBase);
+            response = await fetchWithTimeout(`${fallbackBase}${path}`, { ...options, headers, cache: "no-store" });
+            apiBase = fallbackBase;
+            break;
+          } catch (fallbackError) {
+            lastError = fallbackError;
+          }
+        }
+        if (!response) {
+          const detail = lastError?.name === "AbortError" ? "The request timed out." : "The browser blocked or could not open the request.";
+          throw new Error(`${detail} SlimeWire could not connect right now. Try again in a moment.`);
         }
       }
-      if (!response) {
-        const detail = lastError?.name === "AbortError" ? "The request timed out." : "The browser blocked or could not open the request.";
-        throw new Error(`${detail} SlimeWire could not connect right now. Try again in a moment.`);
+    }
+    const data = await readApiJson(response);
+
+    if (!response.ok || data.ok === false) {
+      const message = publicErrorMessage(data.message || data.error || `HTTP ${response.status}`);
+      const error = new Error(message);
+      error.status = response.status;
+      error.data = data;
+      if (response.status === 401) {
+        resetWebSession(message);
       }
+      throw error;
     }
-  }
-  const data = await readApiJson(response);
 
-  if (!response.ok || data.ok === false) {
-    const message = publicErrorMessage(data.message || data.error || `HTTP ${response.status}`);
-    const error = new Error(message);
-    error.status = response.status;
-    error.data = data;
-    if (response.status === 401) {
-      resetWebSession(message);
-    }
-    throw error;
+    return data;
+  })();
+
+  if (inFlightKey) {
+    apiGetInFlight.set(inFlightKey, request);
+    request.finally(() => {
+      if (apiGetInFlight.get(inFlightKey) === request) {
+        apiGetInFlight.delete(inFlightKey);
+      }
+    });
   }
 
-  return data;
+  return request;
 }
 
 async function readApiJson(response) {
@@ -735,6 +758,10 @@ function normalizeLivePairBucket(bucket) {
   return LIVE_PAIR_BUCKETS.some(([id]) => id === value) ? value : "live";
 }
 
+function isLiveFeedTab(tab = state.activeTab) {
+  return LIVE_FEED_AUTO_TABS.has(String(tab || ""));
+}
+
 function currentLivePairs() {
   return state.livePairsByBucket[state.livePairBucket] || state.livePairs || null;
 }
@@ -746,80 +773,97 @@ function currentLivePairsUpdatedAt() {
 async function loadLivePairs({ silent = false, bucket = state.livePairBucket, renderOnComplete = true, force = false } = {}) {
   const safeBucket = normalizeLivePairBucket(bucket);
   const isActiveBucket = safeBucket === state.livePairBucket;
+  const requestKey = `${safeBucket}|${state.terminalSort || "best"}|${force ? "force" : "cached"}`;
+  const existingRequest = livePairRefreshInFlight.get(requestKey);
+  if (existingRequest) {
+    return existingRequest;
+  }
+
   state.livePairsLoadingByBucket = { ...state.livePairsLoadingByBucket, [safeBucket]: true };
   state.livePairsLoading = Boolean(state.livePairsLoadingByBucket[state.livePairBucket]);
   if (!silent && isActiveBucket) state.loading = true;
   if (isActiveBucket || !silent) render();
 
-  try {
-    const forceQuery = force ? "&force=true" : "";
-    const data = await api(`/api/web/live-pairs?bucket=${encodeURIComponent(safeBucket)}&sort=${encodeURIComponent(state.terminalSort || "best")}${forceQuery}`);
-    const label = LIVE_PAIR_BUCKETS.find(([id]) => id === safeBucket)?.[1] || "Live";
-    const value = data.livePairs || {
-      bucket: safeBucket,
-      rows: [],
-      refreshedAt: new Date().toISOString(),
-      refreshSeconds: 5,
-      message: `${label} feed returned no rows yet. Retrying automatically.`
-    };
-    const updatedAt = value?.refreshedAt || new Date().toISOString();
-    const nextErrors = { ...(state.livePairsRefreshErrorByBucket || {}) };
-    delete nextErrors[safeBucket];
-    state.livePairsRefreshErrorByBucket = nextErrors;
-    state.livePairsByBucket = { ...state.livePairsByBucket, [safeBucket]: value };
-    state.livePairsLastUpdatedByBucket = { ...state.livePairsLastUpdatedByBucket, [safeBucket]: updatedAt };
-    if (isActiveBucket) {
-      state.livePairs = value;
-      state.livePairsLastUpdatedAt = updatedAt;
+  const refreshRequest = (async () => {
+    try {
+      const forceQuery = force ? "&force=true" : "";
+      const data = await api(`/api/web/live-pairs?bucket=${encodeURIComponent(safeBucket)}&sort=${encodeURIComponent(state.terminalSort || "best")}${forceQuery}`);
+      const label = LIVE_PAIR_BUCKETS.find(([id]) => id === safeBucket)?.[1] || "Live";
+      const value = data.livePairs || {
+        bucket: safeBucket,
+        rows: [],
+        refreshedAt: new Date().toISOString(),
+        refreshSeconds: 5,
+        message: `${label} feed returned no rows yet. Retrying automatically.`
+      };
+      const updatedAt = value?.refreshedAt || new Date().toISOString();
+      const nextErrors = { ...(state.livePairsRefreshErrorByBucket || {}) };
+      delete nextErrors[safeBucket];
+      state.livePairsRefreshErrorByBucket = nextErrors;
+      state.livePairsByBucket = { ...state.livePairsByBucket, [safeBucket]: value };
+      state.livePairsLastUpdatedByBucket = { ...state.livePairsLastUpdatedByBucket, [safeBucket]: updatedAt };
+      if (isActiveBucket) {
+        state.livePairs = value;
+        state.livePairsLastUpdatedAt = updatedAt;
+      }
+      return value;
+    } catch (error) {
+      const message = publicErrorMessage(error?.message || "Live feed refresh failed.");
+      const label = LIVE_PAIR_BUCKETS.find(([id]) => id === safeBucket)?.[1] || "Live";
+      const previous = state.livePairsByBucket[safeBucket] || (isActiveBucket ? state.livePairs : null);
+      const staleValue = previous
+        ? {
+            ...previous,
+            stale: true,
+            refreshError: message,
+            message: `Showing last good ${label} feed. Refresh failed, retrying automatically.`
+          }
+        : {
+            bucket: safeBucket,
+            rows: [],
+            refreshedAt: new Date().toISOString(),
+            refreshSeconds: 5,
+            stale: true,
+            refreshError: message,
+            message: `${label} refresh failed. Retrying automatically.`
+          };
+      state.livePairsRefreshErrorByBucket = { ...(state.livePairsRefreshErrorByBucket || {}), [safeBucket]: message };
+      state.livePairsByBucket = { ...state.livePairsByBucket, [safeBucket]: staleValue };
+      state.livePairsLastUpdatedByBucket = { ...state.livePairsLastUpdatedByBucket, [safeBucket]: staleValue.refreshedAt };
+      if (isActiveBucket) {
+        state.livePairs = staleValue;
+        state.livePairsLastUpdatedAt = staleValue.refreshedAt;
+      }
+      return staleValue;
+    } finally {
+      const nextLoading = { ...state.livePairsLoadingByBucket };
+      delete nextLoading[safeBucket];
+      state.livePairsLoadingByBucket = nextLoading;
+      state.livePairsLoading = Boolean(nextLoading[state.livePairBucket]);
+      if (!silent && isActiveBucket) state.loading = false;
+      if (renderOnComplete) render();
     }
-    return value;
-  } catch (error) {
-    const message = publicErrorMessage(error?.message || "Live feed refresh failed.");
-    const label = LIVE_PAIR_BUCKETS.find(([id]) => id === safeBucket)?.[1] || "Live";
-    const previous = state.livePairsByBucket[safeBucket] || (isActiveBucket ? state.livePairs : null);
-    const staleValue = previous
-      ? {
-          ...previous,
-          stale: true,
-          refreshError: message,
-          message: `Showing last good ${label} feed. Refresh failed, retrying automatically.`
-        }
-      : {
-          bucket: safeBucket,
-          rows: [],
-          refreshedAt: new Date().toISOString(),
-          refreshSeconds: 5,
-          stale: true,
-          refreshError: message,
-          message: `${label} refresh failed. Retrying automatically.`
-        };
-    state.livePairsRefreshErrorByBucket = { ...(state.livePairsRefreshErrorByBucket || {}), [safeBucket]: message };
-    state.livePairsByBucket = { ...state.livePairsByBucket, [safeBucket]: staleValue };
-    state.livePairsLastUpdatedByBucket = { ...state.livePairsLastUpdatedByBucket, [safeBucket]: staleValue.refreshedAt };
-    if (isActiveBucket) {
-      state.livePairs = staleValue;
-      state.livePairsLastUpdatedAt = staleValue.refreshedAt;
+  })();
+  livePairRefreshInFlight.set(requestKey, refreshRequest);
+  refreshRequest.finally(() => {
+    if (livePairRefreshInFlight.get(requestKey) === refreshRequest) {
+      livePairRefreshInFlight.delete(requestKey);
     }
-    return staleValue;
-  } finally {
-    const nextLoading = { ...state.livePairsLoadingByBucket };
-    delete nextLoading[safeBucket];
-    state.livePairsLoadingByBucket = nextLoading;
-    state.livePairsLoading = Boolean(nextLoading[state.livePairBucket]);
-    if (!silent && isActiveBucket) state.loading = false;
-    if (renderOnComplete) render();
-  }
+  });
+  return refreshRequest;
 }
 
-async function refreshLivePairBuckets({ silent = false, force = false } = {}) {
+async function refreshLivePairBuckets({ silent = false, force = false, hydrateBuckets = false } = {}) {
   await loadLivePairs({ silent, bucket: state.livePairBucket, force });
-  const otherBuckets = LIVE_PAIR_BUCKETS
-    .map(([bucket]) => bucket)
-    .filter((bucket) => bucket !== state.livePairBucket);
-  await Promise.allSettled(otherBuckets.map((bucket) => (
-    loadLivePairs({ silent: true, bucket, renderOnComplete: false, force })
-  )));
-  if (state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "slimeScope") render();
+  if (hydrateBuckets) {
+    const otherBuckets = LIVE_PAIR_BUCKETS
+      .map(([bucket]) => bucket)
+      .filter((bucket) => bucket !== state.livePairBucket);
+    await Promise.allSettled(otherBuckets.map((bucket) => (
+      loadLivePairs({ silent: true, bucket, renderOnComplete: false, force })
+    )));
+  }
+  if (isLiveFeedTab(state.activeTab)) render();
 }
 
 function scheduleLivePairsAutoRefresh() {
@@ -828,11 +872,15 @@ function scheduleLivePairsAutoRefresh() {
     livePairsTimer = null;
   }
 
-  if (state.activeTab !== "live" && state.activeTab !== "terminal" && state.activeTab !== "slimeScope") return;
+  if (!isLiveFeedTab() || document.hidden) return;
   const refreshSeconds = Number(currentLivePairs()?.refreshSeconds || 30);
   const delayMs = Math.max(3, refreshSeconds) * 1000;
   livePairsTimer = setTimeout(async () => {
-    const onLiveFeed = state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "slimeScope";
+    if (document.hidden) {
+      scheduleLivePairsAutoRefresh();
+      return;
+    }
+    const onLiveFeed = isLiveFeedTab();
     if (!onLiveFeed) return;
     if (state.livePairsLoading) {
       scheduleLivePairsAutoRefresh();
@@ -854,7 +902,12 @@ function scheduleScannerAutoRefresh() {
     scanTimer = null;
   }
   if (state.activeTab !== "sniper") return;
+  if (document.hidden) return;
   scanTimer = setTimeout(async () => {
+    if (document.hidden) {
+      scheduleScannerAutoRefresh();
+      return;
+    }
     if (state.activeTab !== "sniper") return;
     if (state.loading) {
       scheduleScannerAutoRefresh();
@@ -875,9 +928,9 @@ function scheduleKolAutoRefresh() {
     clearTimeout(kolTimer);
     kolTimer = null;
   }
-  if ((state.activeTab !== "kol" && state.activeTab !== "terminal") || state.kolWallet) return;
+  if (state.activeTab !== "kol" || state.kolWallet || document.hidden) return;
   kolTimer = setTimeout(async () => {
-    if ((state.activeTab !== "kol" && state.activeTab !== "terminal") || state.kolWallet) return;
+    if (document.hidden || state.activeTab !== "kol" || state.kolWallet) return;
     if (state.kolLoading) {
       scheduleKolAutoRefresh();
       return;
@@ -897,9 +950,9 @@ function scheduleWatchlistAutoRefresh() {
     clearTimeout(watchlistTimer);
     watchlistTimer = null;
   }
-  if ((state.activeTab !== "watchlist" && state.activeTab !== "terminal") || !state.user || !state.token) return;
+  if (state.activeTab !== "watchlist" || !state.user || !state.token || document.hidden) return;
   watchlistTimer = setTimeout(async () => {
-    if (state.activeTab !== "watchlist" && state.activeTab !== "terminal") return;
+    if (document.hidden || state.activeTab !== "watchlist") return;
     try {
       await loadWatchlist({ silent: true });
     } catch (error) {
@@ -1103,12 +1156,14 @@ function render(options = {}) {
   setHidden("[data-terminal-global-search]", state.route !== "terminal");
   setHidden("[data-top-sync-strip]", state.route !== "terminal");
 
+  const totalSolBalance = totalSol();
+
   setText("[data-user-id]", state.user?.id || "guest");
   setText("[data-wallet-count]", state.wallets.length);
-  setText("[data-total-sol]", totalSol().toFixed(4));
+  setText("[data-total-sol]", totalSolBalance.toFixed(4));
   setText("[data-position-count]", state.positions.length);
   setText("[data-realized]", state.pnl?.totals?.realizedSol || "+0 SOL");
-  setText("[data-top-sol]", `${totalSol().toFixed(4)} SOL`);
+  setText("[data-top-sol]", `${totalSolBalance.toFixed(4)} SOL`);
   setText("[data-top-portfolio]", `${state.positions.length} position${state.positions.length === 1 ? "" : "s"}`);
   setText("[data-sync-health]", syncHealthLabel());
   setText("[data-active-preset-label]", activePresetSummary());
@@ -4376,11 +4431,14 @@ async function connectBrowserWallet(providerId, options = {}) {
     state.walletConnectMenuOpen = false;
     setWalletConnectStatus(`Connected ${shortAddress(publicKeyText)}. Opening Live Terminal...`);
     navigateTo(options.returnPath || state.walletConnectReturnPath || "/terminal", "terminal");
-    await Promise.allSettled([
-      loadAll(),
-      refreshLivePairBuckets({ silent: true, force: true }),
-      loadKolScan(state.kolMode, "", { silent: true })
-    ]);
+    const startupLoads = [loadAll()];
+    if (isLiveFeedTab()) {
+      startupLoads.push(refreshLivePairBuckets({ silent: true, force: true }));
+    }
+    if (state.activeTab === "kol") {
+      startupLoads.push(loadKolScan(state.kolMode, "", { silent: true }));
+    }
+    await Promise.allSettled(startupLoads);
     render({ force: true });
   } catch (error) {
     setWalletConnectStatus(error.message || "Wallet connection was cancelled.");
@@ -7846,10 +7904,10 @@ document.addEventListener("click", async (event) => {
     state.activeTab = "terminal";
     window.history.pushState({}, "", "/terminal");
     render();
-    await Promise.allSettled([
-      refreshLivePairBuckets({ silent: true, force: true }),
-      loadKolScan(state.kolMode, "", { silent: true })
-    ]);
+    const startupLoads = [];
+    if (isLiveFeedTab()) startupLoads.push(refreshLivePairBuckets({ silent: true, force: true }));
+    if (state.activeTab === "kol") startupLoads.push(loadKolScan(state.kolMode, "", { silent: true }));
+    await Promise.allSettled(startupLoads);
     render();
     return;
   }
@@ -8110,7 +8168,7 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-refresh-all]")) {
     if (!state.user || !state.token) {
-      if (state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "slimeScope") await refreshLivePairBuckets({ silent: true, force: true }).catch((error) => setError(error.message));
+      if (isLiveFeedTab()) await refreshLivePairBuckets({ silent: true, force: true }).catch((error) => setError(error.message));
       else if (state.activeTab === "sniper") await loadScan().catch((error) => setError(error.message));
       else if (state.activeTab === "kol") await loadKolScan().catch((error) => setError(error.message));
       else setError("Browsing is open. Create or connect a profile when you want saved wallets, balances, or trades.");
@@ -8144,10 +8202,10 @@ document.addEventListener("click", async (event) => {
     }
     if (state.activeTab === "slimeScope") {
       await refreshLivePairBuckets({ silent: true, force: true }).catch((error) => setError(error.message));
-    } else if ((state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "smartChart") && !state.livePairsByBucket[state.livePairBucket]) {
+    } else if (isLiveFeedTab() && !state.livePairsByBucket[state.livePairBucket]) {
       await refreshLivePairBuckets({ force: true }).catch((error) => setError(error.message));
     }
-    if ((state.activeTab === "kol" || state.activeTab === "terminal" || state.activeTab === "smartChart") && !state.kolScan) {
+    if (state.activeTab === "kol" && !state.kolScan) {
       await loadKolScan().catch((error) => setError(error.message));
     }
     if (state.activeTab === "watchlist" && state.user && state.token) {
@@ -8279,15 +8337,15 @@ document.addEventListener("input", (event) => {
 
 function resumeLiveFeeds() {
   if (state.route !== "terminal") return;
-  if (state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "slimeScope") {
+  if (isLiveFeedTab() && !document.hidden) {
     refreshLivePairBuckets({ silent: true, force: true }).catch((error) => setError(error.message));
     scheduleLivePairsAutoRefresh();
   }
-  if ((state.activeTab === "kol" || state.activeTab === "terminal") && !state.kolWallet) {
+  if (state.activeTab === "kol" && !state.kolWallet && !document.hidden) {
     loadKolScan(state.kolMode, "", { silent: true }).catch((error) => setError(error.message));
     scheduleKolAutoRefresh();
   }
-  if ((state.activeTab === "watchlist" || state.activeTab === "terminal") && state.user && state.token) {
+  if (state.activeTab === "watchlist" && state.user && state.token && !document.hidden) {
     loadWatchlist({ silent: true }).catch((error) => setError(error.message));
     scheduleWatchlistAutoRefresh();
   }
@@ -8302,10 +8360,19 @@ window.addEventListener("focus", resumeLiveFeeds);
 async function initializeApp() {
   await loadSession();
   if (state.route === "terminal") {
-    await Promise.allSettled([
-      refreshLivePairBuckets({ silent: true, force: true }),
-      loadKolScan(state.kolMode, "", { silent: true })
-    ]);
+    const startupLoads = [];
+    if (isLiveFeedTab()) {
+      startupLoads.push(refreshLivePairBuckets({ silent: true, force: true }));
+    }
+    if (state.activeTab === "kol") {
+      startupLoads.push(loadKolScan(state.kolMode, "", { silent: true }));
+    }
+    if (state.activeTab === "watchlist" && state.user && state.token) {
+      startupLoads.push(loadWatchlist({ silent: true }));
+    }
+    if (startupLoads.length) {
+      await Promise.allSettled(startupLoads);
+    }
     if (state.activeTab === "ogreTek") {
       await loadOgreTekData({ silent: true }).catch((error) => setError(error.message));
     }
