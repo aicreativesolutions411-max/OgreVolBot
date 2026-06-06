@@ -8053,6 +8053,63 @@ textarea,
   }
 }
 
+/* SLIME_DESKTOP_PANEL_ROW_FIX_V3: wallet bar row, then nav + active page immediately below. */
+@media (min-width: 921px) {
+  [data-app][data-route="terminal"] [data-dashboard] {
+    display: grid !important;
+    grid-template-columns: 92px minmax(0, 1fr) !important;
+    grid-template-rows: min-content min-content !important;
+    grid-auto-rows: min-content !important;
+    align-content: start !important;
+    align-items: start !important;
+    column-gap: 12px !important;
+    row-gap: 8px !important;
+    min-height: 0 !important;
+    height: auto !important;
+    padding-top: 0 !important;
+  }
+
+  [data-app][data-route="terminal"] [data-dashboard] > .metrics {
+    grid-column: 1 / -1 !important;
+    grid-row: 1 !important;
+    align-self: start !important;
+    margin: 0 !important;
+    min-height: 0 !important;
+  }
+
+  [data-app][data-route="terminal"] [data-dashboard] > .tabs {
+    grid-column: 1 !important;
+    grid-row: 2 !important;
+    align-self: start !important;
+    margin-top: 0 !important;
+    max-height: calc(100dvh - 214px) !important;
+  }
+
+  [data-app][data-route="terminal"] [data-dashboard] > .panel-host,
+  [data-app][data-route="terminal"] [data-dashboard] > [data-panel],
+  [data-app][data-route="terminal"] .panel-host,
+  [data-app][data-route="terminal"] [data-panel] {
+    grid-column: 2 !important;
+    grid-row: 2 !important;
+    align-self: start !important;
+    justify-self: stretch !important;
+    display: block !important;
+    min-height: 0 !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    transform: none !important;
+  }
+
+  [data-app][data-route="terminal"] [data-panel] > *,
+  [data-app][data-route="terminal"] .panel-host > * {
+    margin-top: 0 !important;
+    padding-top: 0 !important;
+    min-height: 0 !important;
+    transform: none !important;
+  }
+}
+
 /* OGRE_AGENT_CHAT_BOX_FIX_V1: keep the side agent compact, but open as a usable chat box. */
 .ogre-agent-panel {
   display: flex !important;
