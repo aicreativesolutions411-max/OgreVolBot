@@ -236,6 +236,8 @@ const state = {
   ogreAgentOpen: false,
   ogreAgentLoading: false,
   ogreAgentFastMode: (() => { try { return (localStorage.getItem("ogreAgentFastMode") || "on") !== "off"; } catch { return true; } })(),
+  ogreAgentVoiceEnabled: (() => { try { return (localStorage.getItem("ogreAgentVoiceEnabled") || "on") !== "off"; } catch { return true; } })(),
+  ogreAgentSpeaking: false,
   ogreAgentAutoTradeApproved: (() => { try { localStorage.removeItem("ogreAgentAutoTradeApproved"); return (sessionStorage.getItem("ogreAgentAutoTradeApproved") || "") === "yes"; } catch { return false; } })(),
   ogreAgentStatus: "",
   ogreAgentMessages: [],
@@ -13080,9 +13082,30 @@ function ogreAgentMessageHtml(message = {}, messageIndex = 0) {
   `;
 }
 
+function ogreAgentAvatarHtml() {
+  const talking = Boolean(state.ogreAgentLoading || state.ogreAgentSpeaking);
+  const voiceReady = Boolean(state.ogreAgentVoiceEnabled);
+  return `
+    <div class="ogre-agent-holo ${talking ? "is-talking" : ""} ${voiceReady ? "voice-on" : "voice-off"}" aria-hidden="true">
+      <div class="ogre-agent-holo-stage">
+        <span class="ogre-agent-holo-ring ring-one"></span>
+        <span class="ogre-agent-holo-ring ring-two"></span>
+        <img src="./assets/slimewire/png/slimewire-ogre-hero-cutout.png" loading="lazy" decoding="async" alt="">
+        <span class="ogre-agent-holo-mouth"></span>
+        <span class="ogre-agent-holo-scan"></span>
+      </div>
+      <div class="ogre-agent-holo-meta">
+        <strong>${talking ? "Ogre speaking" : "Ogre online"}</strong>
+        <small>${voiceReady ? "Deep voice ready" : "Voice muted"}</small>
+      </div>
+    </div>
+  `;
+}
+
 function ogreAgentHtml() {
   const open = Boolean(state.ogreAgentOpen);
   const messages = ogreAgentMessages();
+  const voiceLabel = state.ogreAgentVoiceEnabled ? "Voice On" : "Voice Off";
   return `
     <div class="ogre-agent-shell ${open ? "is-open" : ""}" data-ogre-agent-root>
       <button type="button" class="ogre-agent-bubble" data-ogre-agent-toggle aria-label="Open Ogre Agent" aria-expanded="${open ? "true" : "false"}">
@@ -13095,8 +13118,12 @@ function ogreAgentHtml() {
             <span>Ogre Agent</span>
             <small>Ask for help or make a trade request.</small>
           </div>
-          <button type="button" data-ogre-agent-close aria-label="Close Ogre Agent">×</button>
+          <div class="ogre-agent-header-actions">
+            <button type="button" class="ogre-agent-voice-toggle" data-ogre-agent-voice aria-pressed="${state.ogreAgentVoiceEnabled ? "true" : "false"}">${escapeHtml(voiceLabel)}</button>
+            <button type="button" data-ogre-agent-close aria-label="Close Ogre Agent">×</button>
+          </div>
         </header>
+        ${open ? ogreAgentAvatarHtml() : ""}
         <div class="ogre-agent-feed" data-ogre-agent-feed>
           ${messages.map(ogreAgentMessageHtml).join("")}
           ${state.ogreAgentLoading ? `<div class="ogre-agent-message assistant"><p>Ogre is thinking...</p></div>` : ""}
@@ -13141,7 +13168,9 @@ function renderOgreAgent({ force = false } = {}) {
     messages.length,
     lastMessage.role || "",
     lastMessage.text || "",
-    Array.isArray(lastMessage.actions) ? lastMessage.actions.length : 0
+    Array.isArray(lastMessage.actions) ? lastMessage.actions.length : 0,
+    state.ogreAgentVoiceEnabled ? "voice-on" : "voice-off",
+    state.ogreAgentSpeaking ? "speaking" : "silent"
   ].join("|");
   if (!force && inputActive && root.dataset.ogreAgentSignature === signature) return;
   root.innerHTML = ogreAgentHtml();
@@ -13176,6 +13205,105 @@ document.addEventListener("focusin", (event) => {
 function pushOgreAgentMessage(message = {}) {
   state.ogreAgentMessages = [...ogreAgentMessages(), message].slice(-16);
   ogreAgentSaveMessages();
+  if (message.role === "assistant") ogreAgentSpeak(message.text || "");
+}
+
+function ogreAgentSpeechSupported() {
+  return typeof window !== "undefined"
+    && "speechSynthesis" in window
+    && "SpeechSynthesisUtterance" in window;
+}
+
+function ogreAgentPickVoice() {
+  if (!ogreAgentSpeechSupported()) return null;
+  const voices = window.speechSynthesis.getVoices?.() || [];
+  const preferred = [
+    /daniel/i,
+    /david/i,
+    /guy/i,
+    /george/i,
+    /male/i,
+    /google uk english/i,
+    /microsoft.*english/i,
+    /english/i
+  ];
+  return preferred
+    .map((pattern) => voices.find((voice) => pattern.test(`${voice.name} ${voice.lang}`) && /^en/i.test(voice.lang || "")))
+    .find(Boolean)
+    || voices.find((voice) => /^en/i.test(voice.lang || ""))
+    || voices[0]
+    || null;
+}
+
+function ogreAgentSetSpeaking(value) {
+  const speaking = Boolean(value);
+  if (state.ogreAgentSpeaking === speaking) return;
+  state.ogreAgentSpeaking = speaking;
+  renderOgreAgent();
+}
+
+function ogreAgentCancelSpeech() {
+  if (!ogreAgentSpeechSupported()) {
+    ogreAgentSetSpeaking(false);
+    return;
+  }
+  try {
+    window.speechSynthesis.cancel();
+  } catch {}
+  ogreAgentSetSpeaking(false);
+}
+
+function ogreAgentCleanSpeechText(text = "") {
+  return String(text || "")
+    .replace(/https?:\/\/\S+/gi, " link available ")
+    .replace(/[•*_`#>~|]+/g, " ")
+    .replace(/\b[A-HJ-NP-Za-km-z1-9]{32,44}\b/g, " token address ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 520);
+}
+
+function ogreAgentSpeak(text = "") {
+  if (!state.ogreAgentVoiceEnabled || !state.ogreAgentOpen || !ogreAgentSpeechSupported()) {
+    ogreAgentSetSpeaking(false);
+    return;
+  }
+  const cleanText = ogreAgentCleanSpeechText(text);
+  if (!cleanText) {
+    ogreAgentSetSpeaking(false);
+    return;
+  }
+  try {
+    window.speechSynthesis.cancel();
+    const utterance = new window.SpeechSynthesisUtterance(cleanText);
+    const voice = ogreAgentPickVoice();
+    if (voice) utterance.voice = voice;
+    utterance.pitch = 0.58;
+    utterance.rate = 0.9;
+    utterance.volume = 0.92;
+    utterance.onstart = () => ogreAgentSetSpeaking(true);
+    utterance.onend = () => ogreAgentSetSpeaking(false);
+    utterance.onerror = () => ogreAgentSetSpeaking(false);
+    ogreAgentSetSpeaking(true);
+    window.speechSynthesis.speak(utterance);
+  } catch {
+    ogreAgentSetSpeaking(false);
+  }
+}
+
+function ogreAgentSetVoiceEnabled(enabled) {
+  state.ogreAgentVoiceEnabled = Boolean(enabled);
+  try {
+    localStorage.setItem("ogreAgentVoiceEnabled", state.ogreAgentVoiceEnabled ? "on" : "off");
+  } catch {}
+  if (!state.ogreAgentVoiceEnabled) {
+    ogreAgentCancelSpeech();
+    state.ogreAgentStatus = "Ogre voice muted.";
+  } else {
+    state.ogreAgentStatus = "Ogre voice on.";
+    ogreAgentSpeak("Ogre voice online.");
+  }
+  renderOgreAgent({ force: true });
 }
 
 function ogreAgentActionFromKey(key = "") {
@@ -13793,6 +13921,7 @@ document.addEventListener("keydown", (event) => {
   if (state.ogreAgentOpen) {
     state.ogreAgentOpen = false;
     state.ogreAgentStatus = "";
+    ogreAgentCancelSpeech();
     renderOgreAgent();
     return;
   }
@@ -13866,6 +13995,7 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-ogre-agent-toggle]")) {
     state.ogreAgentOpen = !state.ogreAgentOpen;
     state.ogreAgentStatus = state.ogreAgentOpen ? state.ogreAgentStatus : "";
+    if (!state.ogreAgentOpen) ogreAgentCancelSpeech();
     renderOgreAgent();
     return;
   }
@@ -13873,7 +14003,13 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-ogre-agent-close]")) {
     state.ogreAgentOpen = false;
     state.ogreAgentStatus = "";
+    ogreAgentCancelSpeech();
     renderOgreAgent();
+    return;
+  }
+
+  if (target.matches("[data-ogre-agent-voice]")) {
+    ogreAgentSetVoiceEnabled(!state.ogreAgentVoiceEnabled);
     return;
   }
 
@@ -13888,6 +14024,7 @@ document.addEventListener("click", async (event) => {
     if (quick === "refresh_feeds") void runOgreAgentAction({ type: "refresh_feeds" });
     if (quick === "auto_trade") void runOgreAgentAction({ type: "approve_agent_auto_trade" });
     if (quick === "clear_chat") {
+      ogreAgentCancelSpeech();
       state.ogreAgentMessages = [ogreAgentInitialMessage()];
       state.ogreAgentStatus = "Chat cleared.";
       state.ogreAgentDraft = "";
