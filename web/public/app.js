@@ -14909,3 +14909,99 @@ if (!window.__slimeStablePumpChartTimer) {
 
 
 
+
+/* SLIME_TERMINAL_EMPTY_FEED_WATCHDOG_V1: self-heal empty/stale main terminal feeds without changing feed rules. */
+(function installSlimeTerminalEmptyFeedWatchdog() {
+  if (typeof window === "undefined" || window.__slimeTerminalEmptyFeedWatchdogV1) return;
+  window.__slimeTerminalEmptyFeedWatchdogV1 = true;
+  let lastKickAt = 0;
+  const ACTIVE_TABS = new Set(["terminal", "live", "liveTrades", "slimeScope"]);
+  const ROW_SELECTOR = [
+    ".terminal-token-row",
+    ".compact-signal-row",
+    ".signal-row",
+    ".live-trade-row",
+    ".slime-scope-row",
+    ".live-pair-row",
+    "[data-token-chart]"
+  ].join(",");
+
+  function agentInputFocused() {
+    return Boolean(document.activeElement?.matches?.("[data-ogre-agent-input]"));
+  }
+
+  function terminalVisible() {
+    return Boolean(state?.route === "terminal" && ACTIVE_TABS.has(String(state.activeTab || "terminal")) && !document.hidden);
+  }
+
+  function stateFeedRowCount() {
+    let count = 0;
+    const addRows = (value) => {
+      if (!value) return;
+      if (Array.isArray(value)) {
+        count += value.length;
+        return;
+      }
+      if (Array.isArray(value.rows)) {
+        count += value.rows.length;
+        return;
+      }
+      if (Array.isArray(value.data?.rows)) {
+        count += value.data.rows.length;
+      }
+    };
+    addRows(state.livePairRows);
+    addRows(state.slimeScopeRows);
+    addRows(state.liveTradeRows);
+    addRows(state.livePairs);
+    Object.values(state.livePairsByBucket || {}).forEach(addRows);
+    Object.values(state.terminalFeeds || {}).forEach(addRows);
+    return count;
+  }
+
+  function visibleFeedHasRows() {
+    const app = document.querySelector('[data-app][data-route="terminal"]');
+    return Boolean(app?.querySelector?.(ROW_SELECTOR));
+  }
+
+  function liveFeedLooksStale() {
+    const timestamps = [
+      state.livePairsLastUpdatedAt,
+      state.livePairsLastUpdatedByBucket?.[state.livePairBucket || "live"],
+      state.terminalFeeds?.[state.activeTab || "terminal"]?.updatedAt,
+      state.terminalFeeds?.[state.activeTab || "terminal"]?.lastUpdatedAt
+    ].map((value) => Date.parse(String(value || ""))).filter(Number.isFinite);
+    if (!timestamps.length) return false;
+    return Date.now() - Math.max(...timestamps) > 30_000;
+  }
+
+  function kick(reason = "empty-feed-watchdog") {
+    if (!terminalVisible() || agentInputFocused()) return;
+    const now = Date.now();
+    if (now - lastKickAt < 7_000) return;
+    const empty = stateFeedRowCount() === 0 && !visibleFeedHasRows();
+    if (!empty && !liveFeedLooksStale()) return;
+    lastKickAt = now;
+    const run = () => {
+      if (typeof refreshVisibleTerminalFeeds === "function") {
+        return refreshVisibleTerminalFeeds({ force: empty, reason });
+      }
+      if (typeof refreshTerminalFeed === "function") {
+        return refreshTerminalFeed(state.activeTab || "terminal", { force: empty, reason });
+      }
+      return null;
+    };
+    try {
+      if (typeof runDeferredUiTask === "function") runDeferredUiTask(run);
+      else Promise.resolve(run()).catch(() => {});
+    } catch {
+      // Feed self-heal must never block the terminal UI.
+    }
+  }
+
+  window.setInterval(() => kick("empty-feed-watchdog-interval"), 7_000);
+  window.addEventListener("pageshow", () => window.setTimeout(() => kick("pageshow-empty-feed-watchdog"), 450));
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) window.setTimeout(() => kick("visible-empty-feed-watchdog"), 450);
+  });
+})();
