@@ -1,4 +1,4 @@
-import fs from "node:fs/promises";
+﻿import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -69,6 +69,14 @@ const ogreTek = {
   staleMarketMs: Math.max(5_000, envNumber("OGRE_TEK_STALE_MARKET_MS", 60_000)),
   staleAccountMs: Math.max(5_000, envNumber("OGRE_TEK_STALE_ACCOUNT_MS", 60_000))
 };
+const pumpLive = {
+  enabled: envBool("PUMP_LIVE_ENABLED", false),
+  provider: String(process.env.PUMP_LIVE_PROVIDER || "").trim().toLowerCase(),
+  ingestUrl: normalizeBaseUrl(process.env.PUMP_LIVE_INGEST_URL || ""),
+  playbackBaseUrl: normalizeBaseUrl(process.env.PUMP_LIVE_PLAYBACK_BASE_URL || ""),
+  docsUrl: normalizeBaseUrl(process.env.PUMP_LIVE_DOCS_URL || ""),
+  chatEnabled: envBool("PUMP_LIVE_CHAT_ENABLED", true),
+};
 const configSource = `window.OGRE_PORTAL_CONFIG = ${JSON.stringify({ apiBase, telegramBotUsername, portalUrl, ogreTek }, null, 2)};\n`;
 await fs.writeFile(path.join(distDir, "config.js"), configSource, "utf8");
 
@@ -95,3 +103,4 @@ try {
 }
 
 console.log(`Built OgreTrade web portal at ${path.relative(rootDir, distDir)}`);
+

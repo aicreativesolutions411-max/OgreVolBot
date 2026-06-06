@@ -1,4 +1,4 @@
-import {
+﻿import {
   canSubmitPerpOrder,
   createPerpsProvider,
   ogreTekRouteStatus,
@@ -12,6 +12,7 @@ import {
 } from "./liveTerminalUi.js";
 
 const config = window.OGRE_PORTAL_CONFIG || {};
+const pumpLiveConfig = config.pumpLive || {};
 const ogreTekConfig = resolveOgreTekConfig(config);
 const SHOW_STAGED_PERPS_NAV = false;
 const perpsProvider = createPerpsProvider(ogreTekConfig);
@@ -252,6 +253,8 @@ const state = {
   launchCoinDraft: getStoredLaunchCoinDraft(),
   launchCoinStatus: "",
   launchWatches: [],
+  pumpLiveStatus: "",
+  pumpLiveLastActionAt: 0,
   kolScan: null,
   kolMode: "hot",
   kolWallet: "",
@@ -6130,6 +6133,99 @@ function launchHtml() {
   `;
 }
 
+function launchCoinLiveMint(draft = state.launchCoinDraft || {}) {
+  return String(
+    draft.tokenMint ||
+      draft.mint ||
+      draft.ca ||
+      state.launchWatches?.[0]?.tokenMint ||
+      state.launchWatches?.[0]?.mint ||
+      state.smartChartToken?.tokenMint ||
+      state.smartChartToken?.mint ||
+      ""
+  ).trim();
+}
+
+function pumpLiveProviderConfigured() {
+  return Boolean(
+    pumpLiveConfig &&
+      pumpLiveConfig.enabled &&
+      (pumpLiveConfig.provider || pumpLiveConfig.playbackBaseUrl || pumpLiveConfig.ingestUrl)
+  );
+}
+
+function pumpLiveProviderLabel() {
+  const provider = String(pumpLiveConfig.provider || "").trim();
+  return provider ? provider.toUpperCase() : "Provider not configured";
+}
+
+function pumpLivePlaybackUrl(mint) {
+  const base = String(pumpLiveConfig.playbackBaseUrl || "").trim();
+  if (!base || !mint) return "";
+  if (base.includes("{mint}")) return base.replace(/\{mint\}/g, encodeURIComponent(mint));
+  const sep = base.includes("?") ? "&" : "?";
+  return `${base}${sep}mint=${encodeURIComponent(mint)}`;
+}
+
+function pumpLiveShortMint(mint) {
+  if (!mint) return "No CA yet";
+  return mint.length > 14 ? `${mint.slice(0, 6)}...${mint.slice(-6)}` : mint;
+}
+
+function pumpLiveStreamRouteId(mint) {
+  const safe = mint ? `${mint.slice(0, 6)}-${mint.slice(-6)}` : "pending-ca";
+  return `slime-pump-live-${safe}`;
+}
+
+function pumpLivePanelHtml(draft = state.launchCoinDraft || {}) {
+  const mint = launchCoinLiveMint(draft);
+  const configured = pumpLiveProviderConfigured();
+  const playbackUrl = pumpLivePlaybackUrl(mint);
+  const status =
+    state.pumpLiveStatus ||
+    (mint
+      ? configured
+        ? "Ready to stage Pump Live for this launch."
+        : "Provider hooks ready. Add Pump Live envs to enable real video."
+      : "Launch or paste a CA to stage Pump Live.");
+  const disabled = mint ? "" : "disabled";
+  const videoFrame =
+    configured && playbackUrl
+      ? `<iframe class="pump-live-frame" src="${escapeHtml(playbackUrl)}" title="Pump Live preview" loading="lazy" allow="autoplay; fullscreen; picture-in-picture"></iframe>`
+      : `<div class="pump-live-placeholder"><span>LIVE</span><strong>Pump Live standby</strong><p>Video stays off Render until a streaming provider is configured.</p></div>`;
+
+  return `
+    <section class="launch-coin-card pump-live-panel" data-pump-live-panel>
+      <div class="pump-live-head">
+        <div>
+          <p class="panel-kicker">Pump Live</p>
+          <h4>Live launch studio</h4>
+          <p>Keep the launch, chart, transactions, and creator controls inside Slime.</p>
+        </div>
+        <span class="pump-live-pill ${configured ? "ready" : "standby"}">${escapeHtml(configured ? "provider ready" : "standby")}</span>
+      </div>
+      <div class="pump-live-grid">
+        <div class="pump-live-video">
+          ${videoFrame}
+        </div>
+        <div class="pump-live-stack">
+          <div class="pump-live-stat"><span>Launch CA</span><strong>${escapeHtml(pumpLiveShortMint(mint))}</strong></div>
+          <div class="pump-live-stat"><span>Provider</span><strong>${escapeHtml(pumpLiveProviderLabel())}</strong></div>
+          <div class="pump-live-stat"><span>Chart mode</span><strong>Pump chart + txns</strong></div>
+          <div class="pump-live-stat"><span>Stream route</span><strong>${escapeHtml(pumpLiveStreamRouteId(mint))}</strong></div>
+        </div>
+      </div>
+      <div class="quick-grid pump-live-controls">
+        <button type="button" data-pump-live-action="go" ${disabled}>Go Live</button>
+        <button type="button" data-pump-live-action="chart" ${disabled}>Chart + Txns</button>
+        <button type="button" data-pump-live-action="copy" ${disabled}>Copy Stream ID</button>
+        <button type="button" data-pump-live-action="obs" ${disabled}>OBS / Mobile Setup</button>
+        <button type="button" data-pump-live-action="end" ${disabled}>End Live</button>
+      </div>
+      <p class="pump-live-status">${escapeHtml(status)}</p>
+    </section>
+  `;
+}
 function launchCoinHtml() {
   const draft = state.launchCoinDraft || {};
   return `
@@ -6313,6 +6409,8 @@ function launchCoinHtml() {
             ${walletGroupHtml("launch-coin", draft.walletGroup || "")}
           </div>
         </details>
+
+        ${pumpLivePanelHtml(draft)}
 
         <div class="quick-grid launch-coin-actions">
           <button class="primary" type="button" data-launch-coin-submit>Launch on Pump</button>
@@ -11377,7 +11475,7 @@ function terminalTradePanelHtml(token, collapsed = false) {
       <article class="order-ticket terminal-ticket terminal-ticket-collapsed">
         <button type="button" class="terminal-ticket-collapsed-button" data-toggle-terminal-ticket aria-label="Open trade panel">
           <span>Trade</span>
-          <strong>‹</strong>
+          <strong>â€¹</strong>
         </button>
       </article>
     `;
@@ -11389,7 +11487,7 @@ function terminalTradePanelHtml(token, collapsed = false) {
           <span>Trade Panel</span>
           <small>${escapeHtml(activeTrade)}</small>
         </div>
-        <button type="button" class="terminal-ticket-toggle" data-toggle-terminal-ticket aria-label="Hide trade panel">›</button>
+        <button type="button" class="terminal-ticket-toggle" data-toggle-terminal-ticket aria-label="Hide trade panel">â€º</button>
       </div>
         <div class="ticket-collapse-body">
           <p>Trade opens the full chart page. Quick Buy uses a saved preset or asks for a custom SOL amount.</p>
@@ -13488,3 +13586,82 @@ async function initializeApp() {
 
 initializeApp();
 
+
+function setPumpLiveStatus(message) {
+  state.pumpLiveStatus = message;
+  state.pumpLiveLastActionAt = Date.now();
+  render();
+}
+
+function currentPumpLiveToken() {
+  const draft = typeof collectLaunchCoinDraft === "function" ? collectLaunchCoinDraft() : state.launchCoinDraft || {};
+  const mint = launchCoinLiveMint(draft);
+  return {
+    tokenMint: mint,
+    mint,
+    address: mint,
+    name: draft.name || draft.tokenName || "Pump launch",
+    symbol: draft.symbol || draft.ticker || "PUMP",
+    dexId: "pumpfun",
+    source: "pump-live",
+    bonded: false,
+    isBonded: false,
+    bondingStatus: "pump"
+  };
+}
+
+function handlePumpLiveClick(event) {
+  const button = event.target.closest("[data-pump-live-action]");
+  if (!button) return;
+  event.preventDefault();
+
+  const action = button.getAttribute("data-pump-live-action");
+  const token = currentPumpLiveToken();
+  const mint = token.tokenMint;
+  if (!mint) {
+    setPumpLiveStatus("Paste or launch a CA first, then Pump Live can attach to it.");
+    return;
+  }
+
+  if (action === "chart") {
+    if (typeof openTokenChart === "function") {
+      openTokenChart(token, { defaultTab: "chart", view: "chartTxns", source: "pump-live" });
+      setPumpLiveStatus("Opened Pump chart with transactions inside Slime.");
+    } else {
+      setPumpLiveStatus("Chart panel is still loading. Try again in a moment.");
+    }
+    return;
+  }
+
+  if (action === "copy") {
+    const routeId = pumpLiveStreamRouteId(mint);
+    navigator.clipboard?.writeText(routeId).then(
+      () => setPumpLiveStatus("Copied Pump Live stream route ID."),
+      () => setPumpLiveStatus("Stream route ID ready: " + routeId)
+    );
+    return;
+  }
+
+  if (action === "obs") {
+    const providerNote = pumpLiveProviderConfigured()
+      ? "Use the configured provider ingest URL for OBS or mobile live setup."
+      : "Set PUMP_LIVE_PROVIDER plus ingest/playback envs before real video goes live.";
+    setPumpLiveStatus(providerNote);
+    return;
+  }
+
+  if (action === "end") {
+    setPumpLiveStatus("Pump Live ended for this launch. Chart and transactions stay available.");
+    return;
+  }
+
+  if (action === "go") {
+    if (!pumpLiveProviderConfigured()) {
+      setPumpLiveStatus("Pump Live UI is ready. Configure provider envs to enable real video without loading Render.");
+      return;
+    }
+    setPumpLiveStatus("Pump Live staged. Start the stream from your provider, OBS, or mobile app.");
+  }
+}
+
+document.addEventListener("click", handlePumpLiveClick);
