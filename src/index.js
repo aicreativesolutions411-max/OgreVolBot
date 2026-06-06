@@ -2341,10 +2341,8 @@ async function ogreAgentToolRouterReply(message = "", context = {}) {
   let evidence = null;
   let xMentions = null;
   if (tokenMint) {
-    [evidence, xMentions] = await Promise.all([
-      ogreAgentVisibleTokenEvidence(tokenMint, context),
-      wantsSocial ? ogreAgentXTokenMentions(tokenMint).catch(() => null) : Promise.resolve(null)
-    ]);
+    evidence = await ogreAgentVisibleTokenEvidence(tokenMint, context);
+    xMentions = wantsSocial ? await ogreAgentXTokenMentions(tokenMint, [evidence.symbol, evidence.name].filter(Boolean)).catch(() => null) : null;
     const links = evidence.socialLinks || {};
     lines.push(`${evidence.symbol || shortMint(tokenMint)} tool read for ${shortMint(tokenMint)}:`);
     lines.push(`${evidence.name || "Token"} | MC/FDV ${evidence.marketCap || "n/a"} | Liq ${evidence.liquidity || "n/a"} | Vol ${evidence.volume || "n/a"}`);
@@ -2963,11 +2961,183 @@ async function ogreAgentKolTrendReply(message = "", context = {}) {
   };
 }
 
-async function ogreAgentXTokenMentions(tokenMint = "") {
+function ogreAgentFreeSocialSearchConfigured() {
+  return Boolean(ogreAgentEnv("GETXAPI_KEY") || ogreAgentEnv("JINA_API_KEY") || ogreAgentEnv("SEARXNG_BASE_URL"));
+}
+
+function ogreAgentSocialQuery(tokenMint = "", terms = []) {
+  const cleanTerms = [
+    String(tokenMint || "").trim(),
+    ...(Array.isArray(terms) ? terms : [terms])
+  ]
+    .map((term) => String(term || "").trim())
+    .filter((term, index, list) => term && list.findIndex((item) => item.toLowerCase() === term.toLowerCase()) === index)
+    .slice(0, 3);
+  const ca = cleanTerms[0] || "";
+  const named = cleanTerms.slice(1).filter((term) => term && term.toLowerCase() !== "token");
+  const namePart = named.length ? ` OR ${named.map((term) => `"${term.replace(/"/g, "")}"`).join(" OR ")}` : "";
+  return ca ? `"${ca}"${namePart} (solana OR pump OR memecoin OR meme coin OR ca OR token)` : named.join(" OR ");
+}
+
+function ogreAgentXHandleFromUrl(url = "") {
+  try {
+    const parsed = new URL(String(url || ""));
+    if (!/(^|\.)x\.com$|(^|\.)twitter\.com$/i.test(parsed.hostname)) return "";
+    const handle = parsed.pathname.split("/").filter(Boolean)[0] || "";
+    return /^i$|^search$|^home$|^intent$/i.test(handle) ? "" : handle.replace(/^@/, "").slice(0, 40);
+  } catch {
+    return "";
+  }
+}
+
+function ogreAgentFlattenSocialItems(value, depth = 0) {
+  if (!value || depth > 4) return [];
+  if (Array.isArray(value)) return value.flatMap((item) => ogreAgentFlattenSocialItems(item, depth + 1));
+  if (typeof value !== "object") return [];
+  const direct = [];
+  if (value.url || value.link || value.text || value.full_text || value.title || value.description || value.content) direct.push(value);
+  for (const key of ["data", "results", "tweets", "items", "entries", "statuses", "searchResults"]) {
+    if (value[key]) direct.push(...ogreAgentFlattenSocialItems(value[key], depth + 1));
+  }
+  return direct;
+}
+
+function ogreAgentNormalizeSocialPost(item = {}, provider = "search") {
+  if (!item || typeof item !== "object") return null;
+  const url = firstString(item.url, item.link, item.tweetUrl, item.tweet_url, item.permalink, item.href);
+  const authorObject = item.author || item.user || item.account || {};
+  const username = firstString(
+    item.username,
+    item.screen_name,
+    item.screenName,
+    item.userName,
+    item.handle,
+    authorObject.username,
+    authorObject.screen_name,
+    ogreAgentXHandleFromUrl(url)
+  ).replace(/^@/, "");
+  const authorName = firstString(item.authorName, item.name, authorObject.name, username ? `@${username}` : "X/web result");
+  const text = firstString(item.text, item.full_text, item.fullText, item.description, item.snippet, item.content, item.title).replace(/\s+/g, " ").trim();
+  if (!text && !url) return null;
+  const metrics = item.public_metrics || item.metrics || {};
+  const likes = Number(item.likes ?? item.like_count ?? item.favorite_count ?? metrics.like_count ?? NaN);
+  const reposts = Number(item.retweets ?? item.retweet_count ?? metrics.retweet_count ?? NaN);
+  const replies = Number(item.replies ?? item.reply_count ?? metrics.reply_count ?? NaN);
+  const quotes = Number(item.quotes ?? item.quote_count ?? metrics.quote_count ?? NaN);
+  const engagement = [likes, reposts, replies, quotes].filter(Number.isFinite).reduce((sum, value) => sum + value, 0);
+  return {
+    id: String(item.id || item.tweet_id || item.tweetId || url || text.slice(0, 80)),
+    text: text.slice(0, 240),
+    createdAt: String(item.created_at || item.createdAt || item.date || item.published || ""),
+    authorName: String(authorName || "X/web result").slice(0, 80),
+    username: String(username || "").slice(0, 40),
+    verified: Boolean(item.verified || authorObject.verified || authorObject.is_blue_verified),
+    followers: Number(item.followers ?? item.followers_count ?? authorObject.followers_count ?? NaN) || 0,
+    likes: Number.isFinite(likes) ? likes : 0,
+    reposts: Number.isFinite(reposts) ? reposts : 0,
+    replies: Number.isFinite(replies) ? replies : 0,
+    quotes: Number.isFinite(quotes) ? quotes : 0,
+    engagement,
+    url,
+    provider
+  };
+}
+
+function ogreAgentDedupeSocialPosts(posts = []) {
+  const seen = new Set();
+  return posts.filter((post) => {
+    if (!post) return false;
+    const key = String(post.url || post.id || `${post.username}:${post.text}`).toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).sort((a, b) => (b.engagement + b.followers / 1000) - (a.engagement + a.followers / 1000));
+}
+
+async function ogreAgentGetXApiSearch(tokenMint = "", terms = []) {
+  const key = ogreAgentEnv("GETXAPI_KEY");
+  if (!key || !tokenMint) return { configured: Boolean(key), posts: [], error: "" };
+  const query = `${ogreAgentSocialQuery(tokenMint, terms)} lang:en -filter:retweets`;
+  const params = new URLSearchParams({ q: query });
+  const data = await ogreAgentFetchJson(`https://api.getxapi.com/twitter/tweet/advanced_search?${params.toString()}`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${key}`,
+      "Content-Type": "application/json"
+    }
+  }, 4200);
+  const posts = ogreAgentFlattenSocialItems(data).map((item) => ogreAgentNormalizeSocialPost(item, "getxapi")).filter(Boolean);
+  return { configured: true, posts, error: data?.error || data?.message || "" };
+}
+
+async function ogreAgentJinaSearch(tokenMint = "", terms = []) {
+  const key = ogreAgentEnv("JINA_API_KEY");
+  if (!key || !tokenMint) return { configured: Boolean(key), posts: [], error: "" };
+  const query = `site:x.com ${ogreAgentSocialQuery(tokenMint, terms)}`;
+  const data = await ogreAgentFetchJson(`https://s.jina.ai/?q=${encodeURIComponent(query)}`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${key}`,
+      Accept: "application/json"
+    }
+  }, 4200);
+  const posts = ogreAgentFlattenSocialItems(data).map((item) => ogreAgentNormalizeSocialPost(item, "jina")).filter(Boolean);
+  return { configured: true, posts, error: data?.error || data?.message || "" };
+}
+
+async function ogreAgentSearxSearch(tokenMint = "", terms = []) {
+  const base = ogreAgentEnv("SEARXNG_BASE_URL").replace(/\/+$/, "");
+  if (!base || !tokenMint) return { configured: Boolean(base), posts: [], error: "" };
+  const query = `site:x.com ${ogreAgentSocialQuery(tokenMint, terms)}`;
+  const params = new URLSearchParams({
+    q: query,
+    format: "json",
+    categories: "general",
+    language: "en-US",
+    safesearch: "0"
+  });
+  const data = await ogreAgentFetchJson(`${base}/search?${params.toString()}`, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      "User-Agent": "SlimeWireOgreAgent/1.0"
+    }
+  }, 4200);
+  const posts = ogreAgentFlattenSocialItems(data?.results || data).map((item) => ogreAgentNormalizeSocialPost(item, "searxng")).filter(Boolean);
+  return { configured: true, posts, error: data?.error || "" };
+}
+
+async function ogreAgentFreeSocialSearch(tokenMint = "", terms = []) {
+  const providers = [
+    ogreAgentGetXApiSearch,
+    ogreAgentJinaSearch,
+    ogreAgentSearxSearch
+  ];
+  const settled = await Promise.allSettled(providers.map((provider) => provider(tokenMint, terms).catch((error) => ({ configured: false, posts: [], error: error?.message || "" }))));
+  const results = settled.map((result) => result.status === "fulfilled" ? result.value : null).filter(Boolean);
+  const posts = ogreAgentDedupeSocialPosts(results.flatMap((result) => Array.isArray(result.posts) ? result.posts : [])).slice(0, 12);
+  return {
+    configured: results.some((result) => result.configured),
+    posts,
+    providers: results.filter((result) => result.configured).length,
+    error: results.map((result) => result.error).filter(Boolean).slice(0, 2).join(" | ")
+  };
+}
+
+async function ogreAgentXTokenMentions(tokenMint = "", terms = []) {
   const bearer = ogreAgentXBearerToken();
   const mint = String(tokenMint || "").trim();
   if (!bearer || !mint) {
-    return { configured: Boolean(bearer), tokenMint: mint, posts: [], authorCount: 0, totalEngagement: 0, error: "" };
+    const free = mint ? await ogreAgentFreeSocialSearch(mint, terms) : { configured: ogreAgentFreeSocialSearchConfigured(), posts: [], error: "" };
+    return {
+      configured: Boolean(bearer) || Boolean(free.configured),
+      tokenMint: mint,
+      posts: free.posts || [],
+      authorCount: new Set((free.posts || []).map((post) => post.username || post.authorName)).size,
+      totalEngagement: (free.posts || []).reduce((sum, post) => sum + Number(post.engagement || 0), 0),
+      providers: free.providers || 0,
+      error: free.error || ""
+    };
   }
   const params = new URLSearchParams({
     query: `"${mint}" lang:en -is:retweet`,
@@ -2984,7 +3154,7 @@ async function ogreAgentXTokenMentions(tokenMint = "") {
   }, 4200);
   const users = new Map((Array.isArray(data?.includes?.users) ? data.includes.users : []).map((user) => [String(user.id), user]));
   const tweets = Array.isArray(data?.data) ? data.data : [];
-  const posts = tweets.map((tweet) => {
+  const officialPosts = tweets.map((tweet) => {
     const metrics = tweet?.public_metrics || {};
     const user = users.get(String(tweet?.author_id || "")) || {};
     const engagement = ogreAgentTrendNumber(metrics.like_count)
@@ -3006,6 +3176,8 @@ async function ogreAgentXTokenMentions(tokenMint = "") {
       engagement
     };
   }).sort((a, b) => (b.engagement + b.followers / 1000) - (a.engagement + a.followers / 1000));
+  const free = await ogreAgentFreeSocialSearch(mint, terms).catch(() => ({ configured: false, posts: [], error: "" }));
+  const posts = ogreAgentDedupeSocialPosts([...officialPosts, ...(free.posts || [])]).slice(0, 20);
   return {
     configured: true,
     tokenMint: mint,
@@ -3020,8 +3192,8 @@ async function ogreAgentTokenSocialReply(message = "", context = {}) {
   if (!ogreAgentSocialIntent(message)) return null;
   const tokenMint = ogreAgentTokenFromMessageOrContext(message, context);
   if (!tokenMint) return null;
-  const x = await ogreAgentXTokenMentions(tokenMint);
   const evidence = await ogreAgentVisibleTokenEvidence(tokenMint, context);
+  const x = await ogreAgentXTokenMentions(tokenMint, [evidence.symbol, evidence.name].filter(Boolean));
   const xSearchUrl = ogreAgentXSearchUrl(tokenMint, [evidence.symbol, evidence.name].filter(Boolean));
   if (!x.configured) {
     const lines = [
