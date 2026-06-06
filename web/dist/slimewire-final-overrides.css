@@ -8323,3 +8323,80 @@ textarea,
     min-height: 28px !important;
   }
 }
+
+/* OGRE_AGENT_MOBILE_READABLE_SCROLL_V2: larger readable chat with stable scroll on mobile. */
+.ogre-agent-feed,
+.ogre-agent-messages {
+  overscroll-behavior: contain !important;
+  -webkit-overflow-scrolling: touch !important;
+}
+
+@media (max-width: 760px) {
+  .ogre-agent-shell.is-open .ogre-agent-panel {
+    left: 8px !important;
+    right: 8px !important;
+    bottom: max(8px, env(safe-area-inset-bottom)) !important;
+    min-height: min(620px, calc(100dvh - 18px)) !important;
+    max-height: calc(100dvh - 18px) !important;
+    width: auto !important;
+  }
+
+  .ogre-agent-panel-body {
+    min-height: min(455px, calc(100dvh - 172px)) !important;
+    overflow: hidden !important;
+  }
+
+  .ogre-agent-feed,
+  .ogre-agent-messages {
+    flex: 1 1 auto !important;
+    min-height: 250px !important;
+    max-height: min(420px, calc(100dvh - 260px)) !important;
+    overflow-y: auto !important;
+    padding-right: 4px !important;
+  }
+
+  .ogre-agent-message p {
+    font-size: 0.92rem !important;
+    line-height: 1.35 !important;
+  }
+
+  .ogre-agent-composer,
+  .ogre-agent-quick-actions,
+  .ogre-agent-status {
+    flex: 0 0 auto !important;
+  }
+
+  .ogre-agent-panel:focus-within {
+    bottom: max(8px, env(safe-area-inset-bottom)) !important;
+    min-height: min(580px, calc(100dvh - 16px)) !important;
+    max-height: calc(100dvh - 16px) !important;
+  }
+
+  .ogre-agent-panel:focus-within .ogre-agent-feed,
+  .ogre-agent-panel:focus-within .ogre-agent-messages {
+    min-height: 190px !important;
+    max-height: min(330px, calc(100dvh - 300px)) !important;
+  }
+
+  .ogre-agent-panel textarea[data-ogre-agent-input],
+  .ogre-agent-panel [data-ogre-agent-input] {
+    min-height: 60px !important;
+    max-height: 128px !important;
+  }
+}
+
+@media (max-width: 420px) {
+  .ogre-agent-shell.is-open .ogre-agent-panel {
+    left: 5px !important;
+    right: 5px !important;
+  }
+
+  .ogre-agent-feed,
+  .ogre-agent-messages {
+    min-height: 220px !important;
+  }
+
+  .ogre-agent-quick-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}

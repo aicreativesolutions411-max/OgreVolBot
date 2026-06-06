@@ -13320,7 +13320,8 @@ async function sendOgreAgentMessage() {
       text: data?.agent?.reply || "I can help with panel functions, charts, positions, presets, coin checks, links, risk reads, and fast trade requests.",
       actions
     });
-    const autoCoinCheckAction = !ogreAgentTradeIntent(message) && ogreAgentCoinCheckIntent(message)
+    const serverAlreadyCheckedCoin = Boolean(data?.agent?.coinEnriched || data?.agent?.tokenMint || data?.agent?.socialLinks);
+    const autoCoinCheckAction = !serverAlreadyCheckedCoin && !ogreAgentTradeIntent(message) && ogreAgentCoinCheckIntent(message)
       ? (actions.find((action) => action.type === "coin_breakdown" || action.type === "analyze_coin") || prepareOgreAgentActionForMessage({ type: "coin_breakdown" }, message))
       : null;
     if (autoCoinCheckAction?.tokenMint || autoCoinCheckAction?.mint || autoCoinCheckAction?.ca) {

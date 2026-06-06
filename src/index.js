@@ -2381,16 +2381,23 @@ async function enrichOgreAgentCoinReply(fallback = {}, message = "", context = {
       wantsSocials ? `Socials: X ${xUrl ? "found" : "not returned"} | Telegram ${telegramUrl ? "found" : "not returned"} | Website ${websiteUrl ? "found" : "not returned"}.` : "",
       "Read: stronger setups usually show real liquidity, steady live buys, socials that match the token, and chart structure building higher lows. Red flags are thin/no liquidity, fake socials, mint/freeze risk badges, giant FDV with no activity, and one-sided sell pressure."
     ];
-    const actions = [
+    const coreActions = [
       { label: "Check Coin", type: "coin_breakdown", tokenMint },
-      { label: "Open Chart", type: "open_chart", tokenMint },
+      { label: "Open Chart", type: "open_chart", tokenMint }
+    ];
+    const socialActions = [
+      xUrl ? { label: "X", type: "open_external", url: xUrl } : null,
+      telegramUrl ? { label: "Telegram", type: "open_external", url: telegramUrl } : null,
+      websiteUrl ? { label: "Website", type: "open_external", url: websiteUrl } : null
+    ].filter(Boolean);
+    const marketActions = [
       { label: "Dex", type: "open_external", url: token.dexUrl || `https://dexscreener.com/solana/${tokenMint}` },
       { label: "Pump", type: "open_external", url: token.pumpUrl || `https://pump.fun/coin/${tokenMint}` },
       { label: "Solscan", type: "open_external", url: `https://solscan.io/token/${tokenMint}` }
     ];
-    if (xUrl) actions.push({ label: "X", type: "open_external", url: xUrl });
-    if (telegramUrl) actions.push({ label: "Telegram", type: "open_external", url: telegramUrl });
-    if (websiteUrl) actions.push({ label: "Website", type: "open_external", url: websiteUrl });
+    const actions = wantsSocials
+      ? [...coreActions, ...socialActions, ...marketActions]
+      : [...coreActions, ...marketActions, ...socialActions];
     return { ...fallback, reply: lines.filter(Boolean).join("\n"), actions: actions.slice(0, 4), coinEnriched: true, tokenMint, socialLinks: { xUrl, telegramUrl, websiteUrl } };
   } catch (error) {
     return fallback;

@@ -8790,3 +8790,128 @@ body {
     padding: 27% 9% 10% !important;
   }
 }
+
+/* SLIME_SWAMP_SUPPORT_RAILS_V6: full-height side frames with compact future-ready lists. */
+[data-app][data-route="intro"] .login-view.swamp-splash {
+  grid-template-columns: minmax(360px, 0.96fr) minmax(430px, 1.08fr) minmax(360px, 0.96fr) !important;
+  gap: clamp(10px, 1.1vw, 20px) !important;
+  align-items: center !important;
+  padding: clamp(70px, 5svh, 94px) clamp(8px, 1vw, 20px) clamp(24px, 3svh, 42px) !important;
+}
+
+[data-app][data-route="intro"] .swamp-support-frame {
+  height: min(760px, calc(100svh - 108px)) !important;
+  max-height: calc(100svh - 108px) !important;
+  width: 100% !important;
+  max-width: 640px !important;
+  overflow: hidden !important;
+  place-items: stretch !important;
+}
+
+[data-app][data-route="intro"] .swamp-support-frame-art {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: fill !important;
+  object-position: center !important;
+}
+
+[data-app][data-route="intro"] .swamp-splash-button {
+  height: min(640px, calc(100svh - 128px)) !important;
+  max-height: calc(100svh - 128px) !important;
+  width: 100% !important;
+  max-width: 640px !important;
+}
+
+[data-app][data-route="intro"] .swamp-splash-reference {
+  object-fit: contain !important;
+  transform: none !important;
+}
+
+[data-app][data-route="intro"] .swamp-support-content {
+  padding: clamp(145px, 19svh, 210px) clamp(34px, 4.2vw, 76px) clamp(72px, 10svh, 120px) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 7px !important;
+  align-content: start !important;
+  justify-content: flex-start !important;
+  overflow-y: auto !important;
+  scrollbar-width: thin !important;
+  scrollbar-color: rgba(143, 255, 48, 0.42) transparent !important;
+}
+
+[data-app][data-route="intro"] .swamp-support-content::-webkit-scrollbar {
+  width: 5px;
+}
+
+[data-app][data-route="intro"] .swamp-support-content::-webkit-scrollbar-thumb {
+  background: rgba(143, 255, 48, 0.38);
+  border-radius: 999px;
+}
+
+[data-app][data-route="intro"] .swamp-support-bubble,
+[data-app][data-route="intro"] .swamp-sponsor-social summary {
+  flex: 0 0 auto !important;
+  grid-template-columns: clamp(34px, 2.45vw, 46px) minmax(0, 1fr) !important;
+  min-height: clamp(43px, 5svh, 56px) !important;
+  padding: 5px clamp(9px, 1vw, 14px) !important;
+  border-radius: 999px !important;
+}
+
+[data-app][data-route="intro"] .swamp-support-bubble img,
+[data-app][data-route="intro"] .swamp-sponsor-social summary img {
+  width: clamp(34px, 2.45vw, 46px) !important;
+  height: clamp(34px, 2.45vw, 46px) !important;
+}
+
+[data-app][data-route="intro"] .swamp-support-bubble strong,
+[data-app][data-route="intro"] .swamp-sponsor-social summary strong {
+  font-size: clamp(0.78rem, 0.82vw, 0.98rem) !important;
+}
+
+[data-app][data-route="intro"] .swamp-support-bubble small,
+[data-app][data-route="intro"] .swamp-sponsor-social summary small {
+  font-size: clamp(0.58rem, 0.62vw, 0.76rem) !important;
+}
+
+[data-app][data-route="intro"] .swamp-support-content::after {
+  content: "More slots opening";
+  flex: 0 0 auto;
+  min-height: 34px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed rgba(143, 255, 48, 0.22);
+  border-radius: 999px;
+  color: rgba(215, 255, 196, 0.5);
+  background: rgba(0, 10, 3, 0.34);
+  font-size: clamp(0.62rem, 0.62vw, 0.76rem);
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+[data-app][data-route="intro"] .swamp-sponsor-links {
+  position: static !important;
+  margin-top: 6px !important;
+}
+
+@media (max-width: 1180px) {
+  [data-app][data-route="intro"] .swamp-support-frame {
+    width: min(640px, 96vw) !important;
+    height: auto !important;
+    aspect-ratio: 16 / 9 !important;
+    overflow: visible !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-support-frame-art {
+    object-fit: contain !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-support-content {
+    padding: 27% 9% 10% !important;
+    max-height: 100% !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-support-content::after {
+    min-height: 30px;
+  }
+}
