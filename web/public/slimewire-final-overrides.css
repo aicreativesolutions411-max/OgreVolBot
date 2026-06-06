@@ -7083,3 +7083,316 @@ textarea,
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* SLIME_PUMP_LIVE_ACTION_CHART_V1 */
+.smart-chart-pump-frame {
+  overflow: visible;
+}
+
+.pump-live-action-chart-shell {
+  border: 1px solid rgba(112, 255, 61, 0.26);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(4, 28, 8, 0.92), rgba(0, 10, 4, 0.96));
+  display: grid;
+  gap: 10px;
+  margin: 4px 0 12px;
+  padding: 12px;
+}
+
+.pump-action-toolbar {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(130px, 0.55fr) minmax(220px, 1fr) auto;
+}
+
+.pump-action-control-group {
+  border: 1px solid rgba(112, 255, 61, 0.18);
+  border-radius: 13px;
+  display: grid;
+  gap: 5px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 4px;
+}
+
+.pump-action-control-group.timeframe {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.pump-action-control-group button {
+  background: rgba(0, 18, 7, 0.78);
+  border: 1px solid transparent;
+  border-radius: 10px;
+  color: rgba(232, 255, 226, 0.78);
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 900;
+  min-height: 34px;
+  padding: 7px 8px;
+}
+
+.pump-action-control-group button.active {
+  background: linear-gradient(135deg, rgba(112, 255, 61, 0.98), rgba(183, 255, 83, 0.96));
+  box-shadow: 0 0 18px rgba(112, 255, 61, 0.24);
+  color: #071006;
+}
+
+.pump-action-live-pill {
+  align-items: center;
+  border: 1px solid rgba(255, 76, 76, 0.45);
+  border-radius: 999px;
+  color: #ffb0a6;
+  display: inline-flex;
+  font-size: 0.74rem;
+  font-weight: 950;
+  gap: 6px;
+  justify-content: center;
+  letter-spacing: 0.12em;
+  min-height: 34px;
+  padding: 0 12px;
+  text-transform: uppercase;
+}
+
+.pump-action-live-pill::before {
+  background: #ff5147;
+  border-radius: 999px;
+  box-shadow: 0 0 14px rgba(255, 81, 71, 0.8);
+  content: "";
+  height: 7px;
+  width: 7px;
+}
+
+.pump-action-chart-canvas {
+  border: 1px solid rgba(112, 255, 61, 0.2);
+  border-radius: 18px;
+  min-height: 300px;
+  overflow: hidden;
+  position: relative;
+  background:
+    linear-gradient(rgba(112, 255, 61, 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(112, 255, 61, 0.055) 1px, transparent 1px),
+    radial-gradient(circle at 72% 16%, rgba(112, 255, 61, 0.16), transparent 32%),
+    rgba(0, 16, 6, 0.92);
+  background-size: 54px 54px, 54px 54px, auto, auto;
+}
+
+.pump-action-svg {
+  display: block;
+  height: 300px;
+  width: 100%;
+}
+
+.pump-action-grid {
+  stroke: rgba(180, 255, 145, 0.11);
+  stroke-width: 1;
+}
+
+.pump-action-area {
+  fill: url(#pumpActionArea);
+}
+
+.pump-action-line {
+  fill: none;
+  filter: drop-shadow(0 0 12px rgba(112, 255, 61, 0.36));
+  stroke: #84ff5c;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 7;
+}
+
+.pump-action-last {
+  fill: #d6ffc2;
+  filter: drop-shadow(0 0 14px rgba(112, 255, 61, 0.8));
+  stroke: #54ff27;
+  stroke-width: 3;
+}
+
+.pump-action-candle line,
+.pump-action-candle rect {
+  stroke-width: 2;
+}
+
+.pump-action-candle.up line,
+.pump-action-candle.up rect {
+  fill: rgba(118, 255, 80, 0.72);
+  stroke: #86ff61;
+}
+
+.pump-action-candle.down line,
+.pump-action-candle.down rect {
+  fill: rgba(255, 92, 78, 0.58);
+  stroke: #ff6f61;
+}
+
+.pump-action-metrics {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.pump-action-metrics div {
+  border: 1px solid rgba(112, 255, 61, 0.18);
+  border-radius: 13px;
+  background: rgba(0, 18, 7, 0.72);
+  display: grid;
+  gap: 3px;
+  padding: 10px;
+}
+
+.pump-action-metrics span,
+.pump-action-tape-grid span {
+  color: rgba(226, 255, 220, 0.54);
+  font-size: 0.7rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.pump-action-metrics strong {
+  color: #f4ffef;
+  font-size: 0.96rem;
+  overflow-wrap: anywhere;
+}
+
+.pump-action-empty {
+  align-content: center;
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+  min-height: 300px;
+  padding: 22px;
+  text-align: center;
+}
+
+.pump-action-empty strong {
+  color: #f4ffef;
+  font-size: 1.05rem;
+}
+
+.pump-action-empty span {
+  color: rgba(226, 255, 220, 0.72);
+  max-width: 360px;
+}
+
+.pump-action-tape {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  overflow: hidden;
+}
+
+.pump-action-tape-head {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.pump-action-tape-head h4 {
+  margin: 2px 0 0;
+}
+
+.pump-action-tape-head > span {
+  border: 1px solid rgba(112, 255, 61, 0.25);
+  border-radius: 999px;
+  color: rgba(226, 255, 220, 0.76);
+  font-size: 0.78rem;
+  font-weight: 900;
+  padding: 6px 10px;
+}
+
+.pump-action-tape-grid,
+.pump-action-tape-row {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 0.65fr 0.65fr 0.9fr 1fr 0.9fr 0.9fr;
+}
+
+.pump-action-tape-grid {
+  border-bottom: 1px solid rgba(112, 255, 61, 0.18);
+  padding: 0 8px 8px;
+}
+
+.pump-action-tape-list {
+  display: grid;
+  gap: 6px;
+  max-height: 270px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.pump-action-tape-row {
+  border: 1px solid rgba(112, 255, 61, 0.14);
+  border-radius: 12px;
+  background: rgba(0, 18, 7, 0.62);
+  color: rgba(236, 255, 232, 0.82);
+  font-size: 0.82rem;
+  padding: 9px 8px;
+}
+
+.pump-action-tape-row strong {
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.pump-action-tape-row.buy strong {
+  color: #8cff65;
+}
+
+.pump-action-tape-row.sell strong {
+  color: #ff8a7a;
+}
+
+.pump-action-empty.tape {
+  min-height: 130px;
+}
+
+@media (max-width: 700px) {
+  .pump-live-action-chart-shell {
+    border-radius: 16px;
+    margin-top: 0;
+    padding: 9px;
+  }
+
+  .pump-action-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .pump-action-control-group,
+  .pump-action-control-group.timeframe {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .pump-action-control-group button {
+    min-height: 38px;
+  }
+
+  .pump-action-chart-canvas,
+  .pump-action-svg,
+  .pump-action-empty {
+    min-height: 245px;
+  }
+
+  .pump-action-svg {
+    height: 245px;
+  }
+
+  .pump-action-metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .pump-action-tape-grid {
+    display: none;
+  }
+
+  .pump-action-tape-row {
+    grid-template-columns: 0.75fr 0.75fr 1fr;
+  }
+
+  .pump-action-tape-row span:nth-of-type(4),
+  .pump-action-tape-row span:nth-of-type(5) {
+    display: none;
+  }
+}

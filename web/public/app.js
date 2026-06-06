@@ -10311,7 +10311,7 @@ function smartChartPumpPanelHtml(token = {}, mode = "chart") {
       </div>
       ${activityOnly ? "" : `
         <div class="pump-native-chart">
-          ${pumpChartSvgHtml(token)}
+          ${pumpLiveActionChartHtml(token)}
         </div>
         <dl class="mini-stats">
           <div><dt>MC / FDV</dt><dd>${escapeHtml(mc)}</dd></div>
@@ -10320,7 +10320,7 @@ function smartChartPumpPanelHtml(token = {}, mode = "chart") {
           <div><dt>Status</dt><dd>${isUnbondedPumpToken(token) ? "Pump curve" : "Bonded"}</dd></div>
         </dl>
       `}
-      ${mode === "chart" ? "" : smartChartPumpActivityHtml(token)}
+      ${mode === "chart" ? "" : pumpLiveActionActivityHtml(token)}
       <small>${escapeHtml(mode === "chart" ? "Use Chart + Txns for the Pump activity panel. Trading controls stay live on the right." : activityOnly ? "Transactions shows Pump activity only. Use Chart + Txns when you want both together." : "Chart + Txns keeps Pump chart and activity inside SlimeWire.")}</small>
     </div>
   `;
@@ -13665,3 +13665,391 @@ function handlePumpLiveClick(event) {
 }
 
 document.addEventListener("click", handlePumpLiveClick);
+
+/* SLIME_PUMP_LIVE_ACTION_CHART_V1: native live pump chart controls + transaction tape. */
+function pumpLiveActionSafe(value) {
+  const text = String(value ?? "");
+  if (typeof escapeHtml === "function") return escapeHtml(text);
+  return text.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
+}
+
+function pumpLiveActionNumber(value) {
+  if (value == null || value === "") return NaN;
+  if (typeof value === "number") return Number.isFinite(value) ? value : NaN;
+  const cleaned = String(value).replace(/[$,%\s,]/g, "");
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? parsed : NaN;
+}
+
+function pumpLiveActionToken(input) {
+  const token = input && typeof input === "object" ? input : state.smartChartToken || {};
+  return token.token || token.pair || token.item || token;
+}
+
+function pumpLiveActionTokenIds(token) {
+  return [
+    token.tokenMint,
+    token.mint,
+    token.address,
+    token.pairAddress,
+    token.poolAddress,
+    token.baseMint,
+    token.ca,
+    token.symbol,
+    token.baseSymbol,
+    token.name
+  ]
+    .map((value) => String(value || "").trim().toLowerCase())
+    .filter((value, index, arr) => value.length >= 3 && arr.indexOf(value) === index);
+}
+
+function pumpLiveActionTime(value) {
+  if (value == null || value === "") return Date.now();
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === "number") return value < 100000000000 ? value * 1000 : value;
+  const parsedNumber = Number(value);
+  if (Number.isFinite(parsedNumber)) return parsedNumber < 100000000000 ? parsedNumber * 1000 : parsedNumber;
+  const parsedDate = Date.parse(value);
+  return Number.isFinite(parsedDate) ? parsedDate : Date.now();
+}
+
+function pumpLiveActionArray(value) {
+  if (Array.isArray(value)) return value;
+  if (!value || typeof value !== "object") return [];
+  if (Array.isArray(value.items)) return value.items;
+  if (Array.isArray(value.rows)) return value.rows;
+  if (Array.isArray(value.data)) return value.data;
+  if (Array.isArray(value.trades)) return value.trades;
+  if (Array.isArray(value.transactions)) return value.transactions;
+  return [];
+}
+
+function pumpLiveActionMatches(row, ids) {
+  if (!ids.length) return false;
+  const text = [
+    row.tokenMint,
+    row.mint,
+    row.address,
+    row.pairAddress,
+    row.poolAddress,
+    row.baseMint,
+    row.ca,
+    row.symbol,
+    row.baseSymbol,
+    row.tokenSymbol,
+    row.name,
+    row.tokenName
+  ]
+    .map((value) => String(value || "").toLowerCase())
+    .join(" ");
+  return ids.some((id) => text.includes(id));
+}
+
+function pumpLiveActionExtractPrice(row) {
+  const direct = [
+    row.priceUsd,
+    row.priceUSD,
+    row.usdPrice,
+    row.tokenPriceUsd,
+    row.price,
+    row.close,
+    row.c,
+    row.priceNative,
+    row.marketCap,
+    row.mc,
+    row.fdv
+  ];
+  for (const value of direct) {
+    const parsed = pumpLiveActionNumber(value);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return NaN;
+}
+
+function pumpLiveActionExtractVolume(row) {
+  const direct = [row.volumeUsd, row.volume, row.amountUsd, row.usdAmount, row.amountSol, row.solAmount, row.amount, row.size];
+  for (const value of direct) {
+    const parsed = pumpLiveActionNumber(value);
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+  }
+  return NaN;
+}
+
+function pumpLiveActionCollectEvents(tokenInput, options = {}) {
+  const token = pumpLiveActionToken(tokenInput);
+  const ids = pumpLiveActionTokenIds(token);
+  const sources = [
+    { direct: true, items: token.candles },
+    { direct: true, items: token.chartCandles },
+    { direct: true, items: token.priceHistory },
+    { direct: true, items: token.trades },
+    { direct: true, items: token.transactions },
+    { direct: true, items: token.recentTrades },
+    { direct: true, items: token.sourceEvents },
+    { direct: false, items: state.liveTrades },
+    { direct: false, items: state.liveTradeRows },
+    { direct: false, items: state.tradeTape },
+    { direct: false, items: state.recentTrades },
+    { direct: false, items: state.pumpTrades },
+    { direct: false, items: state.pumpActivity },
+    { direct: false, items: state.marketTrades },
+    { direct: false, items: state.chartTrades }
+  ];
+  const events = [];
+  for (const source of sources) {
+    const rows = pumpLiveActionArray(source.items).slice(-500);
+    for (const row of rows) {
+      if (!row || typeof row !== "object") continue;
+      if (!source.direct && !pumpLiveActionMatches(row, ids)) continue;
+      const price = pumpLiveActionExtractPrice(row);
+      const volume = pumpLiveActionExtractVolume(row);
+      const sideRaw = String(row.side || row.type || row.action || row.tradeType || "").toLowerCase();
+      const side = sideRaw.includes("sell") ? "sell" : sideRaw.includes("buy") ? "buy" : sideRaw || "trade";
+      const time = pumpLiveActionTime(row.time || row.timestamp || row.blockTime || row.createdAt || row.date);
+      events.push({ row, price, volume, side, time });
+    }
+  }
+
+  const snapshotPrice = pumpLiveActionExtractPrice(token);
+  if (Number.isFinite(snapshotPrice) && snapshotPrice > 0) {
+    events.push({ row: token, price: snapshotPrice, volume: NaN, side: "snapshot", time: Date.now() });
+  }
+
+  const withPrices = options.requirePrice === false ? events : events.filter((event) => Number.isFinite(event.price) && event.price > 0);
+  return withPrices
+    .sort((a, b) => a.time - b.time)
+    .filter((event, index, arr) => index === 0 || event.time !== arr[index - 1].time || event.price !== arr[index - 1].price || event.side !== arr[index - 1].side)
+    .slice(-700);
+}
+
+function pumpLiveActionWindowMs(timeframe) {
+  const key = String(timeframe || state.pumpChartTimeframe || "5m").toLowerCase();
+  if (key === "1m") return 60 * 1000;
+  if (key === "15m") return 15 * 60 * 1000;
+  if (key === "1h") return 60 * 60 * 1000;
+  if (key === "4h") return 4 * 60 * 60 * 1000;
+  return 5 * 60 * 1000;
+}
+
+function pumpLiveActionBucketMs(timeframe) {
+  const windowMs = pumpLiveActionWindowMs(timeframe);
+  if (windowMs <= 60 * 1000) return 5 * 1000;
+  if (windowMs <= 5 * 60 * 1000) return 15 * 1000;
+  if (windowMs <= 15 * 60 * 1000) return 30 * 1000;
+  if (windowMs <= 60 * 60 * 1000) return 2 * 60 * 1000;
+  return 5 * 60 * 1000;
+}
+
+function pumpLiveActionCandles(tokenInput, timeframe) {
+  const now = Date.now();
+  const windowMs = pumpLiveActionWindowMs(timeframe);
+  const bucketMs = pumpLiveActionBucketMs(timeframe);
+  let events = pumpLiveActionCollectEvents(tokenInput).filter((event) => event.time >= now - windowMs);
+  if (!events.length) events = pumpLiveActionCollectEvents(tokenInput).slice(-80);
+  const buckets = new Map();
+  for (const event of events) {
+    const bucket = Math.floor(event.time / bucketMs) * bucketMs;
+    const existing = buckets.get(bucket);
+    if (!existing) {
+      buckets.set(bucket, {
+        time: bucket,
+        open: event.price,
+        high: event.price,
+        low: event.price,
+        close: event.price,
+        volume: Number.isFinite(event.volume) ? event.volume : 0,
+        trades: 1
+      });
+    } else {
+      existing.high = Math.max(existing.high, event.price);
+      existing.low = Math.min(existing.low, event.price);
+      existing.close = event.price;
+      existing.volume += Number.isFinite(event.volume) ? event.volume : 0;
+      existing.trades += 1;
+    }
+  }
+  return Array.from(buckets.values()).sort((a, b) => a.time - b.time).slice(-96);
+}
+
+function pumpLiveActionFormatValue(value) {
+  if (!Number.isFinite(value)) return "n/a";
+  if (value >= 1000000) return `$${(value / 1000000).toFixed(value >= 10000000 ? 1 : 2)}M`;
+  if (value >= 1000) return `$${(value / 1000).toFixed(value >= 10000 ? 1 : 2)}K`;
+  if (value >= 1) return `$${value.toFixed(value >= 100 ? 0 : 3)}`;
+  return `$${value.toPrecision(3)}`;
+}
+
+function pumpLiveActionChartHtml(tokenInput = {}, options = {}) {
+  const token = pumpLiveActionToken(tokenInput);
+  const mode = String(state.pumpChartMode || "line").toLowerCase() === "candles" ? "candles" : "line";
+  const timeframe = String(state.pumpChartTimeframe || "5m");
+  const candles = pumpLiveActionCandles(token, timeframe);
+  const hasSeries = candles.length >= 2;
+  const width = 760;
+  const height = 340;
+  const padX = 42;
+  const padTop = 26;
+  const padBottom = 34;
+  const plotW = width - padX * 2;
+  const plotH = height - padTop - padBottom;
+  const lows = candles.map((candle) => candle.low);
+  const highs = candles.map((candle) => candle.high);
+  let min = Math.min(...lows);
+  let max = Math.max(...highs);
+  if (!Number.isFinite(min) || !Number.isFinite(max)) {
+    min = 0;
+    max = 1;
+  }
+  if (min === max) {
+    const spread = Math.max(Math.abs(max) * 0.08, 0.000001);
+    min -= spread;
+    max += spread;
+  }
+  const scaleY = (value) => padTop + (1 - (value - min) / (max - min)) * plotH;
+  const scaleX = (index) => candles.length <= 1 ? width / 2 : padX + (index / (candles.length - 1)) * plotW;
+  const grid = Array.from({ length: 5 }, (_, index) => {
+    const y = padTop + (plotH / 4) * index;
+    return `<line x1="${padX}" y1="${y.toFixed(1)}" x2="${width - padX}" y2="${y.toFixed(1)}" class="pump-action-grid" />`;
+  }).join("");
+  const linePath = candles
+    .map((candle, index) => `${index === 0 ? "M" : "L"}${scaleX(index).toFixed(1)},${scaleY(candle.close).toFixed(1)}`)
+    .join(" ");
+  const areaPath = hasSeries ? `${linePath} L${scaleX(candles.length - 1).toFixed(1)},${height - padBottom} L${scaleX(0).toFixed(1)},${height - padBottom} Z` : "";
+  const candleWidth = Math.max(5, Math.min(16, plotW / Math.max(candles.length * 1.8, 1)));
+  const candleSvg = candles
+    .map((candle, index) => {
+      const x = scaleX(index);
+      const yOpen = scaleY(candle.open);
+      const yClose = scaleY(candle.close);
+      const yHigh = scaleY(candle.high);
+      const yLow = scaleY(candle.low);
+      const up = candle.close >= candle.open;
+      const bodyY = Math.min(yOpen, yClose);
+      const bodyH = Math.max(2, Math.abs(yClose - yOpen));
+      return `<g class="pump-action-candle ${up ? "up" : "down"}"><line x1="${x.toFixed(1)}" y1="${yHigh.toFixed(1)}" x2="${x.toFixed(1)}" y2="${yLow.toFixed(1)}" /><rect x="${(x - candleWidth / 2).toFixed(1)}" y="${bodyY.toFixed(1)}" width="${candleWidth.toFixed(1)}" height="${bodyH.toFixed(1)}" rx="2" /></g>`;
+    })
+    .join("");
+  const latest = candles[candles.length - 1];
+  const chartBody = hasSeries
+    ? `<svg class="pump-action-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="Live Pump chart">
+        <defs>
+          <linearGradient id="pumpActionArea" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stop-color="#7cff4f" stop-opacity="0.38" />
+            <stop offset="100%" stop-color="#7cff4f" stop-opacity="0.02" />
+          </linearGradient>
+        </defs>
+        ${grid}
+        ${mode === "candles" ? candleSvg : `<path class="pump-action-area" d="${areaPath}" /><path class="pump-action-line" d="${linePath}" />`}
+        ${latest ? `<circle class="pump-action-last" cx="${scaleX(candles.length - 1).toFixed(1)}" cy="${scaleY(latest.close).toFixed(1)}" r="6" />` : ""}
+      </svg>`
+    : `<div class="pump-action-empty"><strong>Waiting for live Pump ticks</strong><span>No trusted price sequence has arrived for this launch yet. The chart will fill from real trades/candles only.</span></div>`;
+  const totalTrades = candles.reduce((sum, candle) => sum + (candle.trades || 0), 0);
+  const latestValue = latest ? pumpLiveActionFormatValue(latest.close) : "n/a";
+  const rangeLabel = Number.isFinite(min) && Number.isFinite(max) ? `${pumpLiveActionFormatValue(min)} - ${pumpLiveActionFormatValue(max)}` : "n/a";
+
+  return `
+    <div class="pump-live-action-chart-shell" data-pump-live-action-chart>
+      <div class="pump-action-toolbar">
+        <div class="pump-action-control-group" aria-label="Chart type">
+          <button type="button" class="${mode === "line" ? "active" : ""}" data-pump-action-chart-mode="line">Line</button>
+          <button type="button" class="${mode === "candles" ? "active" : ""}" data-pump-action-chart-mode="candles">Candles</button>
+        </div>
+        <div class="pump-action-control-group timeframe" aria-label="Timeframe">
+          ${["1m", "5m", "15m", "1h", "4h"].map((item) => `<button type="button" class="${timeframe === item ? "active" : ""}" data-pump-action-timeframe="${item}">${item}</button>`).join("")}
+        </div>
+        <span class="pump-action-live-pill">Live</span>
+      </div>
+      <div class="pump-action-chart-canvas">
+        ${chartBody}
+      </div>
+      <div class="pump-action-metrics">
+        <div><span>Latest</span><strong>${pumpLiveActionSafe(latestValue)}</strong></div>
+        <div><span>Range</span><strong>${pumpLiveActionSafe(rangeLabel)}</strong></div>
+        <div><span>Ticks</span><strong>${pumpLiveActionSafe(totalTrades || candles.length || 0)}</strong></div>
+      </div>
+    </div>
+  `;
+}
+
+function pumpLiveActionAge(time) {
+  const seconds = Math.max(0, Math.floor((Date.now() - time) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  return `${Math.floor(minutes / 60)}h`;
+}
+
+function pumpLiveActionActivityHtml(tokenInput = {}) {
+  const token = pumpLiveActionToken(tokenInput);
+  const events = pumpLiveActionCollectEvents(token, { requirePrice: false }).slice(-80).reverse();
+  const rows = events.slice(0, 42).map((event) => {
+    const row = event.row || {};
+    const sideClass = event.side === "sell" ? "sell" : event.side === "buy" ? "buy" : "trade";
+    const wallet = row.wallet || row.owner || row.trader || row.signer || row.user || row.maker || "wallet";
+    const sig = row.signature || row.tx || row.txid || row.transaction || "";
+    const amount = Number.isFinite(event.volume) ? pumpLiveActionFormatValue(event.volume) : row.amount || row.size || "--";
+    const price = Number.isFinite(event.price) ? pumpLiveActionFormatValue(event.price) : "price pending";
+    return `
+      <div class="pump-action-tape-row ${sideClass}">
+        <span>${pumpLiveActionSafe(pumpLiveActionAge(event.time))}</span>
+        <strong>${pumpLiveActionSafe(event.side)}</strong>
+        <span>${pumpLiveActionSafe(amount)}</span>
+        <span>${pumpLiveActionSafe(price)}</span>
+        <span>${pumpLiveActionSafe(String(wallet).length > 12 ? `${String(wallet).slice(0, 4)}...${String(wallet).slice(-4)}` : wallet)}</span>
+        <span>${pumpLiveActionSafe(sig ? `${String(sig).slice(0, 5)}...${String(sig).slice(-5)}` : "live")}</span>
+      </div>
+    `;
+  }).join("");
+
+  return `
+    <section class="pump-native-activity pump-action-tape">
+      <div class="pump-action-tape-head">
+        <div>
+          <p class="panel-kicker">Pump Activity</p>
+          <h4>Live transactions</h4>
+        </div>
+        <span>${pumpLiveActionSafe(events.length)} events</span>
+      </div>
+      <div class="pump-action-tape-grid">
+        <span>Age</span><span>Side</span><span>Size</span><span>Price/MC</span><span>Wallet</span><span>Tx</span>
+      </div>
+      <div class="pump-action-tape-list">
+        ${rows || `<div class="pump-action-empty tape"><strong>Waiting for trades</strong><span>New buys/sells will stream here as the token feed receives them.</span></div>`}
+      </div>
+    </section>
+  `;
+}
+
+function pumpLiveActionRequestRender() {
+  if (state.pumpLiveActionRenderPending) return;
+  state.pumpLiveActionRenderPending = true;
+  requestAnimationFrame(() => {
+    state.pumpLiveActionRenderPending = false;
+    if (typeof render === "function") render();
+  });
+}
+
+document.addEventListener("click", (event) => {
+  const modeButton = event.target.closest("[data-pump-action-chart-mode]");
+  if (modeButton) {
+    event.preventDefault();
+    state.pumpChartMode = modeButton.getAttribute("data-pump-action-chart-mode") || "line";
+    pumpLiveActionRequestRender();
+    return;
+  }
+  const timeframeButton = event.target.closest("[data-pump-action-timeframe]");
+  if (timeframeButton) {
+    event.preventDefault();
+    state.pumpChartTimeframe = timeframeButton.getAttribute("data-pump-action-timeframe") || "5m";
+    pumpLiveActionRequestRender();
+  }
+});
+
+if (!window.__slimePumpLiveActionChartTimer) {
+  window.__slimePumpLiveActionChartTimer = setInterval(() => {
+    if (document.visibilityState !== "visible") return;
+    if (!document.querySelector("[data-pump-live-action-chart]")) return;
+    state.pumpLiveActionPulse = (state.pumpLiveActionPulse || 0) + 1;
+    pumpLiveActionRequestRender();
+  }, 7000);
+}
