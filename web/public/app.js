@@ -34,7 +34,7 @@ const PERF_LOG_KEY = "slimewirePerfLog";
 const CRASH_LOG_KEY = "slimewireCrashLog";
 const PERF_POST_MIN_DURATION_MS = 150;
 const WALLET_REFRESH_FORCE_COOLDOWN_MS = 10_000;
-const POST_TRADE_REFRESH_DELAYS_MS = [300, 2200, 6500];
+const POST_TRADE_REFRESH_DELAYS_MS = [1200, 4500, 10000];
 const POST_TRADE_AFFECTED_KEYS = ["wallet-summary", "positions", "pnl", "trade-history", "selected-token", "live-trades"];
 const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 const BASE58_LOOKUP = new Map([...BASE58_ALPHABET].map((char, index) => [char, index]));
@@ -859,6 +859,17 @@ function applyActionButtonStates() {
   document.querySelectorAll("[data-trade-buy-quick], [data-trade-buy-max], [data-buy-custom]").forEach((button) => {
     const detail = button.dataset.tradeBuyQuick || (button.matches("[data-trade-buy-max]") ? "max" : "custom");
     const action = activeTradeAction("trade-buy", currentTradeToken, detail);
+    const base = buttonBaseLabel(button);
+    button.disabled = Boolean(action);
+    button.dataset.actionState = action?.state || "idle";
+    button.textContent = action ? (action.state === "submitted" ? "Submitted" : "Buying...") : base;
+  });
+
+  document.querySelectorAll("[data-quick-trade-token]").forEach((button) => {
+    const tokenMint = button.dataset.quickTradeToken || "";
+    const preset = activeTradePreset();
+    const detail = activeQuickBuyAmount(preset) || preset?.amountSol || "quick";
+    const action = activeTradeAction("trade-buy", tokenMint, String(detail));
     const base = buttonBaseLabel(button);
     button.disabled = Boolean(action);
     button.dataset.actionState = action?.state || "idle";
@@ -2954,7 +2965,10 @@ async function refreshWalletState({ force = false, deep = false, reason = "manua
     }
     state.walletRefreshing = true;
     state.walletRefreshError = "";
-    render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
+    setText("[data-sync-health]", syncHealthLabel());
+    setHidden("[data-refresh-spinner]", false);
+    applyActionButtonStates();
+    await sleep(20);
     try {
       await loadWalletCore({ force, deep, preserveSmartChartFrame: state.activeTab === "smartChart" });
       state.lastWalletRefreshAt = new Date().toISOString();
@@ -3075,7 +3089,7 @@ function queuePostTradeRefresh(signature = "", reason = "post-trade", options = 
     }, delay);
     postTradeRefreshTimers.push(timer);
   });
-  render();
+  applyActionButtonStates();
 }
 
 function shouldDeferTerminalRender() {
@@ -7351,6 +7365,7 @@ async function executeWebBuy(amountSol, amountMode = "fixed") {
       });
       render();
       setTradeStatus("Building wallet-approved buy...");
+      await sleep(20);
       await executeConnectedBrowserTrade({
         side: "buy",
         form,
@@ -7390,6 +7405,7 @@ async function executeWebBuy(amountSol, amountMode = "fixed") {
     });
     render();
     setTradeStatus(autoExit.enabled ? "Sending buy and arming auto-exit..." : "Sending buy...");
+    await sleep(20);
     const requestStartedAt = perfNow();
     setTradeAction("trade-buy", form.tokenMint, actionDetail, { state: "submitting" });
     const data = await api("/api/web/trade/buy", {
@@ -7899,6 +7915,7 @@ async function executeBundle(action) {
     });
     render();
     setBundleStatus(action === "buy" ? "Sending bundle buy..." : "Sending bundle sell...");
+    await sleep(20);
     const requestStartedAt = perfNow();
     setTradeAction(actionName, payload.tokenMint, "bundle", { state: "submitting" });
     const data = await api(`/api/web/bundle/${action}`, {
@@ -8184,6 +8201,7 @@ async function executeQuickBuyAmount({ tokenMint, walletIndex, amountSol, slippa
     tradeAttemptId
   };
   render({ force: true });
+  await sleep(20);
 
   const form = { tokenMint, walletIndex, slippageBps };
   if (isConnectedTradeWallet(walletIndex)) {
@@ -8251,7 +8269,9 @@ async function confirmQuickBuyModal() {
 }
 
 async function quickPresetTrade(tokenMint, presetOverride = null) {
+  const clickStartedAt = perfNow();
   const preset = presetOverride || presetById("trade", state.selectedTradePresetId);
+  let actionDetail = "quick";
   if (!preset) {
     openQuickBuy(tokenRefFromMint(tokenMint, { source: "missing-preset" }), {
       source: "missing-preset",
@@ -8267,6 +8287,20 @@ async function quickPresetTrade(tokenMint, presetOverride = null) {
     }
     const amountSol = presetOverride ? normalizedQuickBuyAmount(preset.amountSol) : activeQuickBuyAmount(preset);
     if (!amountSol) throw new Error("Set a quick buy amount first.");
+    actionDetail = String(amountSol);
+    const active = activeTradeAction("trade-buy", tokenMint, actionDetail);
+    if (active) {
+      recordPerfEvent({
+        component: "post-trade",
+        action: "trade-action-dedupe",
+        durationMs: perfNow() - clickStartedAt,
+        cacheHit: true,
+        requestId: active.tradeAttemptId || "",
+        details: `quick-preset:${shortAddress(tokenMint)}:${amountSol}`
+      });
+      return;
+    }
+    const tradeAttemptId = createClientAttemptId("quick-trade");
     const payload = {
       tokenMint,
       walletIndex,
@@ -8278,10 +8312,26 @@ async function quickPresetTrade(tokenMint, presetOverride = null) {
       sellDelay: preset.sellDelay || "off",
       sellPercent: preset.sellPercent || "100"
     };
+    setTradeAction("trade-buy", tokenMint, actionDetail, {
+      state: "clicked",
+      tradeAttemptId,
+      clickedAt: new Date().toISOString()
+    });
     setError("");
+    state.tradeToken = tokenMint;
+    render();
+    await sleep(20);
+    const requestStartedAt = perfNow();
+    setTradeAction("trade-buy", tokenMint, actionDetail, { state: "submitting" });
     const data = await api("/api/web/trade/buy", {
       method: "POST",
-      body: JSON.stringify(payload)
+      body: JSON.stringify({
+        ...payload,
+        tradeAttemptId,
+        clientClickToUiMs: Math.round(requestStartedAt - clickStartedAt)
+      }),
+      dedupe: false,
+      timeoutMs: API_LONG_ACTION_TIMEOUT_MS
     });
     state.tradeResult = data.trade;
     if (data.trade?.autoExitPlan) {
@@ -8292,10 +8342,22 @@ async function quickPresetTrade(tokenMint, presetOverride = null) {
       setError("Quick buy landed, but auto-exit was not armed. Use Positions to exit manually or create a managed plan.");
     }
     state.tradeToken = tokenMint;
-    queuePostTradeRefresh(data.trade?.signature, "quick-preset-trade");
+    setTradeAction("trade-buy", tokenMint, actionDetail, {
+      state: "submitted",
+      signature: data.trade?.signature || ""
+    });
+    queuePostTradeRefresh(data.trade?.signature, "quick-preset-trade", { tradeAttemptId });
     state.activeTab = "trade";
     render();
+    clearTradeActionLater("trade-buy", tokenMint, actionDetail, 3000);
   } catch (error) {
+    if (tokenMint) {
+      setTradeAction("trade-buy", tokenMint, actionDetail, {
+        state: "error",
+        error: publicErrorMessage(error.message || "Quick buy failed")
+      });
+      clearTradeActionLater("trade-buy", tokenMint, actionDetail, 4000);
+    }
     setError(error.message);
   }
 }
