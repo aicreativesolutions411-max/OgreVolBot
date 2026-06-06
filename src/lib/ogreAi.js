@@ -17,7 +17,7 @@ function clampNumber(value, min, max) {
   return Math.max(min, Math.min(max, number));
 }
 
-const OGRE_AI_HARD_BLOCKED_RISK_RE = /\b(honeypot|honey\s*pot|mintable|mint authority|freeze authority|freezable|freezeable|blacklist|cannot sell|can't sell|sell disabled|sell blocked|trading disabled|no sell|no route|rug|scam|token-2022|safety pending|mint check pending)\b/i;
+const OGRE_AI_HARD_BLOCKED_RISK_RE = /\b(honeypot|honey\s*pot|mintable|mint authority|freeze authority|freezable|freezeable|blacklist|cannot sell|can't sell|sell disabled|sell blocked|trading disabled|no sell|no route|rug|scam|token-2022)\b/i;
 const OGRE_AI_ABSURD_MARKET_CAP_USD = 25_000_000;
 const OGRE_AI_THIN_LIQUIDITY_MARKET_CAP_USD = 5_000_000;
 const OGRE_AI_THIN_LIQUIDITY_RATIO = 0.01;

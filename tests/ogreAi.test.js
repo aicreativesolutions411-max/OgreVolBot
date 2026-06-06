@@ -84,6 +84,23 @@ test("Ogre A.I. still blocks high risk and mayhem rows", () => {
   }, defaults, "quick"), null);
 });
 
+test("Ogre A.I. does not starve pending safety rows before buy precheck", () => {
+  const pendingRow = {
+    tokenMint: "PendingSafetyMint",
+    bestPickScore: 58,
+    marketCap: 85_000,
+    liquidityUsd: 1_200,
+    volume5m: 4_000,
+    pairAgeMinutes: 8,
+    safetyStatus: "pending",
+    safetyNote: "Safety pending; buy precheck required",
+    riskFlags: ["unknownRisk"]
+  };
+
+  assert.equal(isOgreAiBlockedRisk(pendingRow), false);
+  assert.equal(ogreAiTierForCandidate(pendingRow, defaults, "quick"), "strict");
+});
+
 test("Ogre A.I. prefers strict candidates over fallback tiers", () => {
   const pool = buildOgreAiCandidatePool([
     {

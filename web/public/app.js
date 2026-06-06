@@ -4781,10 +4781,11 @@ function ogreAiResultHtml() {
 
   const row = state.ogreAiResult;
   const plans = Array.isArray(row.plans) ? row.plans : [];
+  const picks = Array.isArray(row.picks) ? row.picks : [];
   const errors = Array.isArray(row.errors) ? row.errors : [];
   return `
     <article class="latest-trade ogre-ai-result-card">
-      <h3>Ogre A.I. Armed</h3>
+      <h3>${plans.length ? "Ogre A.I. Armed" : picks.length ? "Ogre A.I. Picked" : "Ogre A.I. Orders"}</h3>
       <p>${escapeHtml(row.message || "")}</p>
       <dl>
         <div><dt>Mode</dt><dd>${escapeHtml(row.mode || "quick")}</dd></div>
@@ -4802,6 +4803,7 @@ function ogreAiResultHtml() {
               <strong>${escapeHtml(pick.symbol || plan.shortMint || "Pick")}</strong>
               <span>${escapeHtml(pick.name || plan.tokenMint || "")}</span>
               <small>Score ${escapeHtml(pick.score || "n/a")} | MC ${escapeHtml(pick.marketCapLabel || "n/a")} | Liq ${escapeHtml(pick.liquidityLabel || "n/a")} | Age ${escapeHtml(pick.ageLabel || "n/a")}</small>
+              ${Array.isArray(pick.reasons) && pick.reasons.length ? `<small>${pick.reasons.map((reason) => escapeHtml(reason)).join(" | ")}</small>` : ""}
               <small>${escapeHtml(plan.message || "")}</small>
               <div class="card-actions compact">
                 <button data-copy="${escapeHtml(plan.tokenMint)}">Copy CA</button>
@@ -4811,6 +4813,20 @@ function ogreAiResultHtml() {
             </div>
           `;
         }).join("")}
+        ${!plans.length ? picks.map((pick) => `
+          <div class="ogre-ai-pick-card">
+            <strong>${escapeHtml(pick.symbol || pick.shortMint || "Pick")}</strong>
+            <span>${escapeHtml(pick.name || pick.tokenMint || "")}</span>
+            <small>Score ${escapeHtml(pick.score || "n/a")} | MC ${escapeHtml(pick.marketCapLabel || "n/a")} | Liq ${escapeHtml(pick.liquidityLabel || "n/a")} | Age ${escapeHtml(pick.ageLabel || "n/a")}</small>
+            ${Array.isArray(pick.reasons) && pick.reasons.length ? `<small>${pick.reasons.map((reason) => escapeHtml(reason)).join(" | ")}</small>` : ""}
+            <small>Buy not armed. Review the error below before retrying.</small>
+            <div class="card-actions compact">
+              <button data-copy="${escapeHtml(pick.tokenMint)}">Copy CA</button>
+              <a href="${escapeHtml(pick.dexUrl || dexUrl(pick.tokenMint))}" target="_blank" rel="noreferrer">Dex</a>
+              ${pick.pumpUrl ? `<a href="${escapeHtml(pick.pumpUrl)}" target="_blank" rel="noreferrer">Pump</a>` : ""}
+            </div>
+          </div>
+        `).join("") : ""}
       </div>
       ${errors.length ? `<div class="mini-results">${errors.map((item) => `<span data-ok="false">${escapeHtml(item.shortMint || item.tokenMint)}: ${escapeHtml(item.message || "failed")}</span>`).join("")}</div>` : ""}
     </article>
