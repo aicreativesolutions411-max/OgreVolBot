@@ -3502,15 +3502,44 @@ function syncInteractionLocks() {
   if (quickBuyRoot) quickBuyRoot.style.pointerEvents = quickBuyRoot.hidden ? "none" : "";
 }
 
+function appShellLooksCollapsed(element, minHeight = 48) {
+  if (!element || document.hidden) return false;
+  try {
+    const rect = element.getBoundingClientRect();
+    return rect.width < 24 || rect.height < minHeight;
+  } catch (_error) {
+    return false;
+  }
+}
+
+function forceAppShellPaint(reason = "resume") {
+  if (!app || document.hidden) return;
+  syncShellRouteVisibility();
+  syncInteractionLocks();
+  const marker = `${Date.now()}:${reason}`;
+  const previousTransform = app.style.transform;
+  app.dataset.resumePaint = marker;
+  app.style.transform = previousTransform ? `${previousTransform} translateZ(0)` : "translateZ(0)";
+  void app.offsetHeight;
+  window.requestAnimationFrame(() => {
+    if (!app || app.dataset.resumePaint !== marker) return;
+    app.style.transform = previousTransform;
+    delete app.dataset.resumePaint;
+  });
+}
+
 function appShellNeedsRecovery() {
   if (!app) return false;
   if (app.dataset.route !== state.route) return true;
   const modalClassStuck = document.body.classList.contains("login-modal-open") && (!loginModal || loginModal.hidden || !state.loginModalOpen);
   const quickBuyClassStuck = document.body.classList.contains("quick-buy-modal-open") && !state.quickBuyModal?.open;
   if (modalClassStuck || quickBuyClassStuck) return true;
+  if (appShellLooksCollapsed(app, 80)) return true;
   if (state.route !== "terminal") return false;
   const panel = $("[data-panel]");
   if (dashboardView?.hidden) return true;
+  if (appShellLooksCollapsed(dashboardView, 80)) return true;
+  if (panel && appShellLooksCollapsed(panel, 32)) return true;
   if (panel && !panel.children.length && !String(panel.textContent || "").trim()) return true;
   const visibleSection = [loginView, connectView, dashboardView].some((section) => section && !section.hidden);
   return !visibleSection;
@@ -3537,9 +3566,12 @@ function recoverStaleUiLocks(reason = "watchdog") {
   applyActionButtonStates();
 }
 
-function recoverAppShell(reason = "watchdog") {
+function recoverAppShell(reason = "watchdog", options = {}) {
   recoverStaleUiLocks(reason);
-  if (!appShellNeedsRecovery()) return false;
+  if (!appShellNeedsRecovery()) {
+    if (options.forcePaint) forceAppShellPaint(reason);
+    return false;
+  }
   recordPerfEvent({
     component: "app-shell",
     action: "recover-blank-shell",
@@ -3548,6 +3580,7 @@ function recoverAppShell(reason = "watchdog") {
   });
   closeTransientInteractionLayers({ keepLogin: state.route === "login" });
   syncShellRouteVisibility();
+  forceAppShellPaint(reason);
   render({ force: true, preserveSmartChartFrame: state.activeTab === "smartChart" });
   return true;
 }
@@ -11133,6 +11166,24 @@ function positionsTableHtml(limit = 25) {
 }
 
 function positionRowHtml(position) {
+  const hasEstimatedValue = position.estimatedValueSol !== null && position.estimatedValueSol !== undefined && position.estimatedValueSol !== "";
+  const hasOpenPnl = position.openPnlSol !== null && position.openPnlSol !== undefined && position.openPnlSol !== "";
+  const isValueUpdating = Boolean(position.valuePending || (!hasEstimatedValue && /refreshing|updating|background/i.test(position.valueError || "")));
+  const valueLabel = hasEstimatedValue
+    ? `${position.estimatedValueSol} SOL`
+    : isValueUpdating
+      ? "updating"
+      : "Price unavailable";
+  const pnlLabel = hasOpenPnl
+    ? position.openPnlSol
+    : isValueUpdating
+      ? "updating"
+      : "Price unavailable";
+  const valueStatus = position.valueError
+    ? isValueUpdating
+      ? "Value updating in background"
+      : `Price warning: ${position.valueError}`
+    : "";
   return `
     <article class="row-card position with-avatar">
       ${livePairAvatarHtml(position)}
@@ -11140,8 +11191,8 @@ function positionRowHtml(position) {
         <strong>${escapeHtml(position.symbol || position.shortMint)}</strong>
         <span>${escapeHtml(position.uiAmount)} tokens across ${escapeHtml(position.walletCount)} wallet(s)</span>
         ${position.name ? `<small>${escapeHtml(position.name)}</small>` : ""}
-        <small>Value: ${escapeHtml(position.estimatedValueSol || "Price unavailable")} SOL | PnL: ${escapeHtml(position.openPnlSol || position.realizedSol || "Price unavailable")}</small>
-        ${position.valueError ? `<small class="warning-text">Price warning: ${escapeHtml(position.valueError)}</small>` : ""}
+        <small>Value: ${escapeHtml(valueLabel)} | PnL: ${escapeHtml(pnlLabel)}</small>
+        ${valueStatus ? `<small class="${isValueUpdating ? "muted-text" : "warning-text"}">${escapeHtml(valueStatus)}</small>` : ""}
       </div>
       <div class="card-actions compact">
         <button data-position-sell="${escapeHtml(position.tokenMint)}" data-position-sell-percent="25">Sell 25%</button>
@@ -13005,10 +13056,14 @@ document.addEventListener("input", (event) => {
   if (target.type === "range") render({ force: true });
 });
 
-function resumeLiveFeeds() {
+function resumeLiveFeeds(event = null) {
   if (document.hidden) return;
-  recoverAppShell("visibility-return");
+  const resumeReason = event?.persisted ? "pageshow-bfcache" : "visibility-return";
+  const recovered = recoverAppShell(resumeReason, { forcePaint: true });
   flushDeferredRender();
+  if (!recovered && event?.persisted && state.route === "terminal") {
+    render({ force: true, preserveSmartChartFrame: state.activeTab === "smartChart" });
+  }
   if (resumeLiveFeedsTimer) window.clearTimeout(resumeLiveFeedsTimer);
   resumeLiveFeedsTimer = window.setTimeout(() => {
     resumeLiveFeedsTimer = null;
@@ -13052,6 +13107,11 @@ document.addEventListener("visibilitychange", () => {
 window.addEventListener("focus", resumeLiveFeeds);
 window.addEventListener("pageshow", resumeLiveFeeds);
 window.addEventListener("online", resumeLiveFeeds);
+window.addEventListener("pagehide", () => {
+  if (!resumeLiveFeedsTimer) return;
+  window.clearTimeout(resumeLiveFeedsTimer);
+  resumeLiveFeedsTimer = null;
+});
 
 function startAppWatchdog() {
   if (appWatchdogTimer) window.clearInterval(appWatchdogTimer);

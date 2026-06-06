@@ -11176,7 +11176,8 @@ async function buildPositionsOverview(userId, options = {}) {
     });
   } else {
     for (const position of rows.slice(0, 25)) {
-      position.valueError = "Value refreshing in background";
+      position.valueError = "Value updating in background";
+      position.valuePending = true;
     }
   }
 
@@ -21788,6 +21789,7 @@ async function webPositionRows(userId, options = {}) {
       estimatedValueSol: position.estimatedValueLamports !== null ? lamportsBigToSol(position.estimatedValueLamports) : null,
       openPnlSol: openPnl !== null ? formatSignedLamports(openPnl) : null,
       openPnlPercent: openPnl !== null && position.spent > 0n ? formatPercentMove(openPnl, position.spent) : null,
+      valuePending: Boolean(position.valuePending),
       valueError: position.valueError || null
     };
   });
