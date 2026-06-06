@@ -4027,7 +4027,7 @@ function renderTabs() {
   if (state.activeTab === "liveTrades") panel.innerHTML = liveTradesHtml();
   if (state.activeTab === "slimeScope") panel.innerHTML = slimeScopeHtml();
   if (state.activeTab === "watchlist") panel.innerHTML = watchlistHtml();
-  if (state.activeTab === "smartChart") panel.innerHTML = smartChartHtml();
+  if (state.activeTab === "smartChart") panel.innerHTML = safeSmartChartHtml();
   if (state.activeTab === "launchCoin") panel.innerHTML = launchCoinHtml();
   if (state.activeTab === "launch") panel.innerHTML = launchHtml();
   if (state.activeTab === "kol") panel.innerHTML = kolHtml();
@@ -11355,6 +11355,66 @@ function chartTradePanelHtml(token = {}, heldPosition = null) {
   `;
 }
 
+function safeSmartChartHtml() {
+  try {
+    return smartChartHtml();
+  } catch (error) {
+    console.error("Smart Chart render failed:", error);
+    const mint = String(
+      state.smartChartToken ||
+      state.tradeToken ||
+      state.terminalToken ||
+      ""
+    ).trim();
+    const shortMint = mint ? shortAddress(mint) : "No token selected";
+    const dexSrc = mint
+      ? `https://dexscreener.com/solana/${encodeURIComponent(mint)}?embed=1&theme=dark&trades=1&info=0`
+      : "";
+    return `
+      <section class="smart-chart-terminal smart-chart-fallback">
+        <div class="terminal-title-row">
+          <div>
+            <h3>Smart Chart</h3>
+            <p>Chart recovered safely. Your trade state is safe and the terminal stayed open.</p>
+          </div>
+          <button type="button" data-tab="terminal">Back to Live Terminal</button>
+        </div>
+        <div class="smart-chart-search">
+          <input data-smart-chart-input value="${escapeHtml(mint)}" placeholder="Paste token CA" autocomplete="off">
+          <button class="primary" type="button" data-smart-chart-open>Open Chart</button>
+        </div>
+        <article class="terminal-panel smart-chart-main">
+          <div class="smart-chart-token-header">
+            <div class="avatar-fallback">SW</div>
+            <div>
+              <strong>${escapeHtml(shortMint)}</strong>
+              <small>Recovered chart view</small>
+              ${mint ? `<button type="button" class="ca-copy" data-copy="${escapeHtml(mint)}">${escapeHtml(shortMint)}</button>` : ""}
+            </div>
+            <div class="compact-link-row smart-chart-links">
+              ${mint ? `<a href="https://dexscreener.com/solana/${encodeURIComponent(mint)}" target="_blank" rel="noreferrer">Dex</a>` : ""}
+              ${mint ? `<a href="https://pump.fun/coin/${encodeURIComponent(mint)}" target="_blank" rel="noreferrer">Pump</a>` : ""}
+              ${mint ? `<a href="https://solscan.io/token/${encodeURIComponent(mint)}" target="_blank" rel="noreferrer">Solscan</a>` : ""}
+            </div>
+          </div>
+          <div class="smart-chart-mode-tabs">
+            <button type="button" data-smart-chart-view="chart" data-active="true">Chart</button>
+            <button type="button" data-smart-chart-view="chartTxns">Chart + Txns</button>
+            <button type="button" data-smart-chart-view="txns">Transactions</button>
+            <button type="button" data-smart-chart-view="info">Info</button>
+          </div>
+          ${dexSrc ? `
+            <div class="smart-chart-frame smart-chart-fallback-frame" data-chart-frame-loading="Loading live chart..." data-loaded="true">
+              <iframe src="${escapeHtml(dexSrc)}" title="SlimeWire recovered live chart" loading="lazy" referrerpolicy="no-referrer"></iframe>
+            </div>
+          ` : emptyState("Paste a token CA", "Open a token from Live Terminal or paste a CA above.")}
+          <small class="score-breakdown">Fallback chart kept the page alive after a display error. Use the tabs above or reopen the CA to refresh the full SlimeWire chart shell.</small>
+        </article>
+      </section>
+    `;
+  }
+}
+
 function smartChartHtml() {
   const token = selectedSmartChartTokenRow();
   const mint = String(token?.tokenMint || "").trim();
@@ -12644,6 +12704,10 @@ function ogreAgentContext() {
     activeTab: state.activeTab,
     agentFastMode: state.ogreAgentFastMode,
     agentAutoTradeApproved: isOgreAgentAutoTradeApproved(),
+    recentAgentMessages: ogreAgentMessages().slice(-8).map((message) => ({
+      role: message.role === "user" ? "user" : "assistant",
+      text: String(message.text || "").slice(0, 600)
+    })),
     smartChartToken: state.smartChartToken || "",
     tradeToken: state.tradeToken || "",
     livePairBucket: state.livePairBucket || "",
