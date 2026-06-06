@@ -4121,34 +4121,74 @@ function dashboardHtml() {
 }
 
 function profileHtml() {
+  const walletReady = hasProfileWalletReady();
   return `
-    <section class="profile-row-shell">
-      ${profileIntroHtml()}
+    <section class="profile-row-shell ${walletReady ? "" : "profile-wallet-gate-shell"}">
+      ${profileIntroHtml(walletReady)}
       <section class="profile-row-list">
-      ${accountProfileSection()}
-      ${loginSecuritySection()}
-      ${profilePfpSection()}
-      ${xConnectSection()}
+      ${walletReady ? `
+        ${accountProfileSection()}
+        ${loginSecuritySection()}
+        ${profilePfpSection()}
+        ${xConnectSection()}
+      ` : `
+        ${profileWalletFirstSection()}
+        ${badgeShowcaseSection()}
+      `}
       </section>
-      <details class="profile-extra-details">
+      ${walletReady ? `<details class="profile-extra-details">
         <summary>Badges, referrals, and top trader board</summary>
         <div class="profile-extra-grid">
           ${badgeShowcaseSection()}
           ${referralSection()}
           ${traderBoardSection()}
         </div>
-      </details>
+      </details>` : ""}
     </section>
   `;
 }
 
-function profileIntroHtml() {
+function hasProfileWalletReady() {
+  return Boolean(
+    connectedBrowserWallet()?.publicKey
+    || state.user?.connectedWallet?.publicKey
+    || (Array.isArray(state.wallets) && state.wallets.length)
+  );
+}
+
+function profileIntroHtml(walletReady = hasProfileWalletReady()) {
   return `
     <section class="profile-intro">
       <div>
         <h3>Profile</h3>
-        <p>Save your public wallet connection, upload a panel PFP, and connect X for sharing and PFP import.</p>
+        <p>${walletReady
+          ? "Customize your account, PFP, X profile, referrals, and trader-board settings."
+          : "Connect or create a wallet first. Profile customization, PFPs, X, referrals, and web wallet settings unlock after Wallet Ready."}</p>
       </div>
+    </section>
+  `;
+}
+
+function profileWalletFirstSection() {
+  const connected = connectedBrowserWallet();
+  return `
+    <section class="create-wallet-card profile-wallet-first-card">
+      <div class="profile-wallet-first-copy">
+        <span class="quest-chip">First quest</span>
+        <h3>Get Wallet Ready</h3>
+        <p>Connect Phantom, Solflare, Backpack, or create a SlimeWire-managed wallet before opening customization. This keeps new users focused on getting live first.</p>
+      </div>
+      <div class="wallet-provider-buttons profile-wallet-first-actions">
+        ${browserWalletChoices().slice(0, 3).map((wallet) => `
+          <button type="button" data-connect-wallet="${wallet.id}" ${wallet.detected ? "" : `title="${escapeHtml(wallet.label)} ${wallet.mobileRedirect ? "mobile flow available" : "extension not detected"}"`}>
+            ${escapeHtml(wallet.mobileRedirect ? `Open ${wallet.label}` : wallet.label)}
+          </button>
+        `).join("")}
+        <button type="button" data-connect-create-wallet>Create Managed Wallet</button>
+      </div>
+      <small data-wallet-connect-status>${connected?.publicKey
+        ? `Connected ${escapeHtml(connected.shortPublicKey || shortAddress(connected.publicKey))}.`
+        : "Wallet connection unlocks PFPs, X profile, referrals, trader settings, and account customization."}</small>
     </section>
   `;
 }
@@ -4265,25 +4305,32 @@ function pfpPresetPickerHtml() {
 
 function badgeShowcaseSection() {
   const tradeCount = Number(state.pnl?.totals?.tradeCount || 0);
-  const hasWallet = state.wallets.length > 0 || Boolean(state.user?.connectedWallet);
+  const hasWallet = hasProfileWalletReady();
+  const liveCount = Number(state.livePairRows?.length || 0)
+    + Number(state.terminalEntry?.items?.length || 0)
+    + Number(state.livePairsByBucket?.fresh?.length || 0);
+  const systemSynced = Boolean((state.lastUpdatedAt && !state.walletRefreshError) || state.walletRefreshStatus === "success");
   const badges = [
-    ["System Synced", "Earned when your wallet state is fresh.", state.lastUpdatedAt && !state.walletRefreshError, "health"],
-    ["Active Preset", "Earned after saving or selecting a fast trade preset.", Boolean(presetById("trade", state.selectedTradePresetId)), "snipe"],
-    ["Best Picks Scout", "Earned after opening Live Terminal or Sniper scans.", Boolean(state.livePairRows?.length || state.scan), "best-picks"],
-    ["Wallet Ready", "Earned after creating, importing, or connecting a wallet.", hasWallet, "wallet"],
-    ["Trader", "Earned after SlimeWire records completed trades.", tradeCount > 0, "trade"],
-    ["Live Watcher", "Earned after adding coins to your watchlist.", Boolean(state.watchlist?.length), "watchlist"]
+    { label: "Wallet Ready", detail: "Connect, create, or import a wallet to unlock the profile hub.", earned: hasWallet, icon: "./assets/slimewire/svg/icons/wallet.svg", quest: "Quest 01" },
+    { label: "Live Watcher", detail: "Open live feeds and watch fresh pairs moving in real time.", earned: liveCount > 0 || Boolean(state.watchlist?.length), icon: "./assets/slimewire/svg/icons/watchlist.svg", quest: "Quest 02" },
+    { label: "System Synched", detail: "Your wallet/feed state returned a clean recent sync.", earned: systemSynced, icon: "./assets/slimewire/svg/icons/health.svg", quest: "Quest 03" },
+    { label: "Active Preset", detail: "Save or select a fast trade preset.", earned: Boolean(presetById("trade", state.selectedTradePresetId)), icon: "./assets/slimewire/svg/icons/snipe.svg", quest: "Quest 04" },
+    { label: "Best Picks Scout", detail: "Open Live Terminal, Ogre A.I., or Sniper scans.", earned: Boolean(state.livePairRows?.length || state.scan || state.ogreAiPick), icon: "./assets/slimewire/svg/icons/best-picks.svg", quest: "Quest 05" },
+    { label: "Trader", detail: "Complete trades tracked by SlimeWire.", earned: tradeCount > 0, icon: "./assets/slimewire/svg/icons/trade.svg", quest: "Quest 06" }
   ];
   return `
     <section class="create-wallet-card badge-showcase-card">
       <div>
-        <h3>SlimeWire Badges</h3>
-        <p>Badges unlock from actions you take on the panel. They are visual status marks only and do not expose wallets, sources, or private data.</p>
+        <h3>Badge Window Hub</h3>
+        <p>Ogre-styled quest badges unlock as users get the panel ready. They are visual status marks only and never expose private wallet data.</p>
       </div>
       <div class="badge-grid">
-        ${badges.map(([label, detail, earned, icon]) => `
+        ${badges.map(({ label, detail, earned, icon, quest }) => `
           <article class="earned-badge ${earned ? "is-earned" : ""}">
-            <img src="./assets/slimewire/svg/icons/${escapeHtml(icon)}.svg" alt="" aria-hidden="true">
+            <span class="earned-badge-icon">
+              <img src="${escapeHtml(icon)}" alt="" aria-hidden="true">
+            </span>
+            <span class="earned-badge-quest">${escapeHtml(quest)}</span>
             <strong>${escapeHtml(label)}</strong>
             <small>${earned ? "Earned" : "Locked"} - ${escapeHtml(detail)}</small>
           </article>
@@ -4643,17 +4690,23 @@ function referralSection() {
           `).join("")}
         </div>
       ` : `<small>No referral payouts yet. They will appear here when referred users trade and referral fees are paid.</small>`}
+      ${link ? `
+        <label class="referral-link-field">
+          Your Referral Link
+          <input data-referral-link readonly value="${escapeHtml(link)}" aria-label="Your referral link">
+        </label>
+      ` : ""}
       <label>
         Referral Payout Wallet
         <input data-referral-wallet type="text" placeholder="Wallet for referral fees" value="${escapeHtml(state.user?.referralPayoutWallet || "")}">
       </label>
       <div class="card-actions">
         <button type="button" class="primary" data-save-referral>Save Referral</button>
-        ${link ? `<button type="button" data-copy="${escapeHtml(link)}">Copy Link</button>` : ""}
+        ${link ? `<button type="button" data-copy="${escapeHtml(link)}">Copy Referral Link</button>` : ""}
         ${link ? xShareButton(`Trade faster on SlimeWire. Referral: ${link}`, "Share X") : ""}
         ${link ? telegramShareButton(`Trade faster on SlimeWire. Referral: ${link}`, "Share TG") : ""}
       </div>
-      <small data-referral-status>${code ? `Your code: ${escapeHtml(code)}${state.user?.referredByCode ? ` | Referred by ${escapeHtml(state.user.referredByCode)}` : ""}` : "Create or log in to get a referral code."}</small>
+      <small data-referral-status>${code ? `Direct link ready. Code: ${escapeHtml(code)}${state.user?.referredByCode ? ` | Referred by ${escapeHtml(state.user.referredByCode)}` : ""}` : "Create or log in to get a referral link."}</small>
     </section>
   `;
 }
