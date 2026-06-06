@@ -13348,6 +13348,7 @@ function ogreAgentContext() {
     totalSol: totalSol().toFixed(4),
     selectedTradePreset: activePresetDetail("trade"),
     selectedBundlePreset: activePresetDetail("bundle"),
+    quickBuyAmount: String(ogreAgentDefaultBuyAmount() || ""),
     recentPairs: ogreAgentRecentMarketRows()
   };
 }
@@ -13857,12 +13858,15 @@ function ogreAgentDirectTradeCommandIntent(message = "") {
   const text = String(message || "").toLowerCase();
   const intent = ogreAgentTradeIntent(text);
   if (!intent) return false;
+  if (/\b(if|only if|unless|after you check|check first|looks good|seems good|safe enough|popular enough|passes|good choice|good pick)\b/.test(text)) return false;
   const capabilityQuestion = /\b(will you|would you|can you|could you|are you able|do i have to|will it|you will be able)\b/.test(text);
   const commandShape = intent === "buy"
     ? /\b(buy|ape|enter|grab|snipe|purchase|get in|go in|long|take entry)\b/.test(text)
     : /\b(sell|exit|close|dump|cash out)\b/.test(text);
+  const hasActiveToken = Boolean(ogreAgentLastTokenMint() || state.smartChartToken || state.tradeToken);
   const hasExecutionDetail = /\b(now|please|with|for|from|wallet|sol|%|all|half|quarter|this|it)\b/.test(text)
-    || /\b[A-HJ-NP-Za-km-z1-9]{32,48}\b/.test(message);
+    || /\b[A-HJ-NP-Za-km-z1-9]{32,48}\b/.test(message)
+    || (intent === "buy" && hasActiveToken && /\b(just\s+)?buy\b/.test(text));
   return Boolean(commandShape && hasExecutionDetail && !capabilityQuestion);
 }
 
@@ -14003,6 +14007,7 @@ function ogreAgentActionTargetSummary(action = {}) {
 
 function shouldAutoRunOgreAgentAction(action = {}, message = "") {
   if (!state.ogreAgentFastMode || !isOgreAgentAutoTradeApproved()) return false;
+  if (action.requiresReview || action.conditional) return false;
   const intent = ogreAgentTradeIntent(message);
   if (!intent) return false;
   if (intent === "buy") {
@@ -14095,6 +14100,9 @@ async function runOgreAgentAction(action = {}) {
       state.ogreAgentStatus = "Send me a token address first, then I can open the buy panel.";
       renderOgreAgent();
       return;
+    }
+    if (Number(action.amountSol || action.sol || action.amount || 0) > 0) {
+      state.quickBuyAmountOverride = String(action.amountSol || action.sol || action.amount || "");
     }
     openQuickBuy(tokenMint, { source: "ogre-agent-open-buy", forceModal: true });
     state.ogreAgentStatus = "Buy panel opened. Review it and confirm with your wallet.";

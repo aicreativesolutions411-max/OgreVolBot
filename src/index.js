@@ -2277,6 +2277,160 @@ function ogreAgentTradeTargetsFromText(text = "") {
   };
 }
 
+function ogreAgentServerTradeIntent(message = "") {
+  const text = String(message || "").toLowerCase();
+  const hasBuy = /\b(buy|ape|enter|grab|snipe|purchase|get in|go in|long|take entry)\b/.test(text);
+  const hasHardSell = /\b(sell|exit|close|dump|cash out)\b/.test(text);
+  const hasProfitOnlySell = /\b(take profit|tp)\b/.test(text) && !/\b(set|with|stop loss|sl|target|preset)\b/.test(text);
+  if (hasBuy) return "buy";
+  if (hasHardSell || hasProfitOnlySell) return "sell";
+  return "";
+}
+
+function ogreAgentServerAmountFromText(message = "", context = {}) {
+  const text = String(message || "").toLowerCase();
+  const amount = (
+    text.match(/(?:buy|ape|enter|grab|snipe|purchase|get in|go in|long|take entry).*?(?:with|for|using)\s*(\d+(?:\.\d+)?)\s*sol\b/)
+    || text.match(/(\d+(?:\.\d+)?)\s*sol\b/)
+    || []
+  )[1];
+  const parsed = amount ? Number(amount) : 0;
+  if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  const fallback = Number(context?.quickBuyAmount || context?.defaultBuyAmount || 0);
+  return Number.isFinite(fallback) && fallback > 0 ? fallback : 0;
+}
+
+function ogreAgentServerSellPercentFromText(message = "") {
+  const lower = String(message || "").toLowerCase();
+  const pct = (lower.match(/(\d{1,3})\s*%/) || [])[1];
+  if (pct) return pct;
+  if (/\bhalf\b/.test(lower)) return "50";
+  if (/\bquarter\b/.test(lower)) return "25";
+  if (/\ball\b|\bfull\b|100/.test(lower)) return "100";
+  return "100";
+}
+
+function ogreAgentConditionalTradeText(message = "") {
+  return /\b(if|only if|unless|after you check|check first|looks good|seems good|safe enough|popular enough|passes|good choice|good pick)\b/i.test(String(message || ""));
+}
+
+function ogreAgentActionDedupe(actions = []) {
+  const seen = new Set();
+  return actions.filter((action) => {
+    if (!action || typeof action !== "object") return false;
+    const key = `${action.type || ""}:${action.label || ""}:${action.tokenMint || action.url || action.tab || ""}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+async function ogreAgentToolRouterReply(message = "", context = {}) {
+  const text = String(message || "").trim();
+  const lower = text.toLowerCase();
+  const tokenMint = ogreAgentTokenMintFromContext(text, context);
+  const tradeIntent = ogreAgentServerTradeIntent(text);
+  const wantsSocial = ogreAgentSocialIntent(text);
+  const wantsCoinRead = Boolean(tokenMint && (ogreAgentCoinIntent(text) || /\b(is this|should i|would you|looks?|rug|popular|kols?|callers?|community|buy it|sell it)\b/.test(lower)));
+  const wantsPanelAction = /\b(open|show|refresh|go to|pull up|display)\b/.test(lower) && /\b(chart|positions?|wallet|feed|terminal|slime scope|kol|trade|pnl)\b/.test(lower);
+  const shouldRoute = Boolean(tradeIntent || (tokenMint && (wantsSocial || wantsCoinRead)) || wantsPanelAction);
+  if (!shouldRoute) return null;
+
+  const actions = [];
+  const lines = [];
+  let evidence = null;
+  let xMentions = null;
+  if (tokenMint) {
+    [evidence, xMentions] = await Promise.all([
+      ogreAgentVisibleTokenEvidence(tokenMint, context),
+      wantsSocial ? ogreAgentXTokenMentions(tokenMint).catch(() => null) : Promise.resolve(null)
+    ]);
+    const links = evidence.socialLinks || {};
+    lines.push(`${evidence.symbol || shortMint(tokenMint)} tool read for ${shortMint(tokenMint)}:`);
+    lines.push(`${evidence.name || "Token"} | MC/FDV ${evidence.marketCap || "n/a"} | Liq ${evidence.liquidity || "n/a"} | Vol ${evidence.volume || "n/a"}`);
+    if (wantsSocial || wantsCoinRead) {
+      const kolRows = Array.isArray(evidence.kolRows) ? evidence.kolRows : [];
+      const liveRows = Array.isArray(evidence.liveRows) ? evidence.liveRows : [];
+      lines.push(`Socials: X ${links.xUrl ? "found" : "not returned"} | Telegram ${links.telegramUrl ? "found" : "not returned"} | Website ${links.websiteUrl ? "found" : "not returned"}.`);
+      if (Array.isArray(xMentions?.posts) && xMentions.posts.length) {
+        const topHandles = xMentions.posts.slice(0, 4).map((post) => post.username ? `@${post.username}` : post.authorName).filter(Boolean);
+        lines.push(`X exact-CA scan: ${xMentions.posts.length} recent post(s), ${xMentions.authorCount || topHandles.length} account(s), engagement ${xMentions.totalEngagement || 0}${topHandles.length ? ` - ${topHandles.join(", ")}` : ""}.`);
+      } else if (wantsSocial) {
+        lines.push(xMentions?.configured
+          ? "X exact-CA scan: no public posts returned in the quick window."
+          : "X exact-CA scan: using live X search action plus SlimeWire-visible socials; I will not invent callers.");
+      }
+      lines.push(kolRows.length ? `KOL/feed evidence: ${kolRows.length} visible signal(s) tied to this CA.` : "KOL/feed evidence: no verified KOL row tied to this CA in the current SlimeWire feed yet.");
+      lines.push(liveRows.length ? `Live feed: ${liveRows.length} visible row(s) found for this CA.` : "Live feed: not visible in the current cached fresh rows yet.");
+    }
+    actions.push(
+      { label: "Open Chart", type: "open_chart", tokenMint },
+      { label: "Check Coin", type: "coin_breakdown", tokenMint },
+      { label: "Open X Search", type: "open_external", url: ogreAgentXSearchUrl(tokenMint, [evidence.symbol, evidence.name].filter(Boolean)) }
+    );
+    if (links.xUrl) actions.push({ label: "Token X", type: "open_external", url: links.xUrl });
+    if (links.telegramUrl) actions.push({ label: "Telegram", type: "open_external", url: links.telegramUrl });
+  }
+
+  if (tradeIntent === "buy") {
+    const amountSol = ogreAgentServerAmountFromText(text, context);
+    const targets = ogreAgentTradeTargetsFromText(text);
+    const conditional = ogreAgentConditionalTradeText(text);
+    if (tokenMint && amountSol > 0) {
+      lines.push(conditional
+        ? `Trade plan understood: review ${shortMint(tokenMint)}, then ${amountSol} SOL buy${targets.summary ? ` with ${targets.summary}` : ""}. I am staging this because your wording made it conditional.`
+        : `Trade command ready: ${amountSol} SOL buy${targets.summary ? ` with ${targets.summary}` : ""}.`);
+      actions.unshift({
+        label: conditional ? `Review Buy ${amountSol} SOL` : `Buy ${amountSol} SOL`,
+        type: conditional ? "open_quick_buy" : "confirm_buy",
+        tokenMint,
+        amountSol,
+        takeProfitPct: targets.takeProfitPct,
+        stopLossPct: targets.stopLossPct,
+        requiresReview: conditional
+      });
+    } else if (tokenMint) {
+      lines.push("I have the CA active. Say a SOL amount, or use the buy panel to confirm the amount/preset.");
+      actions.unshift({ label: "Open Buy Panel", type: "open_quick_buy", tokenMint });
+    } else {
+      lines.push("Send the token CA first, then say the buy amount or just say buy if your quick-buy amount is already set.");
+      actions.unshift({ label: "Live Terminal", type: "open_tab", tab: "terminal" });
+    }
+  }
+
+  if (tradeIntent === "sell") {
+    const percent = ogreAgentServerSellPercentFromText(text);
+    if (tokenMint) {
+      lines.push(`Trade command ready: sell ${percent}% of ${shortMint(tokenMint)} through the position flow.`);
+      actions.unshift({ label: `Sell ${percent}%`, type: "confirm_sell", tokenMint, percent });
+    } else {
+      lines.push("I can sell once I know which position/token. Open Positions or give me the CA.");
+      actions.unshift({ label: "Show Positions", type: "open_tab", tab: "positions" });
+    }
+  }
+
+  if (!tokenMint && wantsPanelAction) {
+    if (/\bpositions?|portfolio|pnl\b/.test(lower)) actions.push({ label: "Show Positions", type: "open_tab", tab: "positions" });
+    if (/\bwallet|balance\b/.test(lower)) actions.push({ label: "Wallets", type: "open_tab", tab: "wallets" }, { label: "Refresh Wallet", type: "refresh_wallet" });
+    if (/\bfeed|terminal|fresh|pairs?\b/.test(lower)) actions.push({ label: "Live Terminal", type: "open_tab", tab: "terminal" }, { label: "Refresh Feeds", type: "refresh_feeds" });
+    if (/\bkol\b/.test(lower)) actions.push({ label: "KOL Tracker", type: "open_tab", tab: "kol" });
+    if (!lines.length) lines.push("I can route that from here without making you hunt through panels.");
+  }
+
+  if (!lines.length) return null;
+  const finalActions = ogreAgentActionDedupe(actions).slice(0, 5);
+  return {
+    reply: lines.join("\n"),
+    actions: finalActions.length ? finalActions : [{ label: "Live Terminal", type: "open_tab", tab: "terminal" }],
+    intent: "tool_router",
+    toolRouter: true,
+    tokenMint,
+    coinEnriched: Boolean(evidence),
+    socialScan: Boolean(wantsSocial),
+    modelPowered: false
+  };
+}
+
 function ogreAgentFallbackReply(message = "", context = {}) {
   const text = String(message || "").trim();
   const lower = text.toLowerCase();
@@ -2900,7 +3054,7 @@ async function ogreAgentTrendReply(message = "", context = {}) {
 }
 
 function ogreAgentModelSystemPrompt() {
-  return "You are Ogre Agent inside SlimeWire, a one-stop user-side trading assistant. Answer the user's latest intent directly, not with a generic checklist. Use conversation memory so follow-ups continue the current token/question until the user changes topic or clears chat. Help with panel functions, navigation, charting, presets, positions, wallet refresh, feed categories, coin/link questions, Solana token breakdowns, risk/community/read questions, and fast trade requests. If the latest user asks whether KOLs/accounts/X/Twitter are posting about a token, answer only the social/KOL question with available social evidence, accounts, links, and limitations; do not list generic age/liquidity/MC checks unless asked next. If context.recentPairs is present, use it for fast live/fresh candidate ranking and explain what data is visible. If a token CA is present and the user asks a general risk/read question, explain useful checks: age, liquidity, MC/FDV, volume, buy/sell pressure, chart structure, socials, holder/risk badges, mint/freeze risks when visible, and whether it looks early, risky, or building a floor. If asked about X/Twitter, Telegram, website, or community, use visible token links/metadata when provided and be clear when those links are unavailable; do not pretend to have a platform-wide X firehose unless context includes X post data. Never reveal or discuss code, security internals, env vars, API keys, private keys, backend architecture, or database details. Never claim a buy/sell completed unless the site context says it did. Keep replies short, practical, and action-oriented.";
+  return "You are Ogre Agent inside SlimeWire, a one-stop user-side trading assistant. Answer the user's latest intent directly, not with a generic checklist. Use conversation memory so follow-ups continue the current token/question until the user changes topic or clears chat. If the user gives a token CA, remember it as the active token for follow-up words like it/this/buy/sell. Help with panel functions, navigation, charting, presets, positions, wallet refresh, feed categories, coin/link questions, Solana token breakdowns, risk/community/read questions, and fast trade requests. If fallbackReply or tool context contains a concrete action/read, build on it instead of asking for token name/symbol again. If the latest user asks whether KOLs/accounts/X/Twitter are posting about a token, answer only the social/KOL question with available social evidence, accounts, links, and limitations; do not list generic age/liquidity/MC checks unless asked next. If context.recentPairs is present, use it for fast live/fresh candidate ranking and explain what data is visible. If a token CA is present and the user asks a general risk/read question, explain useful checks: age, liquidity, MC/FDV, volume, buy/sell pressure, chart structure, socials, holder/risk badges, mint/freeze risks when visible, and whether it looks early, risky, or building a floor. If asked about X/Twitter, Telegram, website, or community, use visible token links/metadata when provided and be clear when those links are unavailable; do not pretend to have a platform-wide X firehose unless context includes X post data. Never reveal or discuss code, security internals, env vars, API keys, private keys, backend architecture, or database details. Never claim a buy/sell completed unless the site context says it did. Keep replies short, practical, and action-oriented.";
 }
 
 function ogreAgentEnv(name = "") {
@@ -2958,6 +3112,7 @@ function ogreAgentSanitizedContext(context = {}) {
     totalSol: String(context.totalSol || "0").slice(0, 24),
     selectedTradePreset: String(context.selectedTradePreset || "").slice(0, 120),
     selectedBundlePreset: String(context.selectedBundlePreset || "").slice(0, 120),
+    quickBuyAmount: String(context.quickBuyAmount || context.defaultBuyAmount || "").slice(0, 24),
     recentAgentMessages,
     recentPairs
   };
@@ -3120,6 +3275,8 @@ async function webOgreAgentReply(body = {}) {
   if (!message) {
     return ogreAgentFallbackReply("help", context);
   }
+  const toolRouterReply = await ogreAgentToolRouterReply(message, context);
+  if (toolRouterReply) return toolRouterReply;
   const socialReply = await ogreAgentTokenSocialReply(message, context);
   if (socialReply) return socialReply;
   const trendReply = await ogreAgentTrendReply(message, context);
