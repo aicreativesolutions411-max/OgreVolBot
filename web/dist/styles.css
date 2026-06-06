@@ -8708,3 +8708,85 @@ body {
     padding: 7px 10px !important;
   }
 }
+
+/* SLIME_SWAMP_SUPPORT_RAILS_V5: even three-panel composition, no cropped frame art. */
+[data-app][data-route="intro"] .login-view.swamp-splash {
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  gap: clamp(10px, 1.25vw, 22px) !important;
+  align-items: center !important;
+  justify-items: center !important;
+  padding: clamp(74px, 6svh, 104px) clamp(10px, 1.5vw, 28px) clamp(30px, 4svh, 52px) !important;
+  background: #000 !important;
+  overflow: hidden !important;
+}
+
+[data-app][data-route="intro"] .swamp-support-frame,
+[data-app][data-route="intro"] .swamp-splash-button {
+  width: 100% !important;
+  max-width: 600px !important;
+  height: clamp(430px, 62svh, 650px) !important;
+  min-height: 0 !important;
+  aspect-ratio: auto !important;
+  display: grid !important;
+  place-items: center !important;
+  overflow: visible !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  filter: none !important;
+}
+
+[data-app][data-route="intro"] .swamp-support-frame-art,
+[data-app][data-route="intro"] .swamp-splash-reference {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain !important;
+  object-position: center !important;
+  transform: none !important;
+  filter: none !important;
+  border-radius: 0 !important;
+}
+
+[data-app][data-route="intro"] .swamp-splash-reference {
+  max-height: 100% !important;
+}
+
+[data-app][data-route="intro"] .swamp-support-content {
+  padding: clamp(145px, 21svh, 215px) clamp(26px, 3vw, 58px) clamp(58px, 8svh, 92px) !important;
+  align-content: start !important;
+  justify-items: stretch !important;
+}
+
+[data-app][data-route="intro"] .swamp-support-bubble,
+[data-app][data-route="intro"] .swamp-sponsor-social summary {
+  max-width: 100% !important;
+  width: 100% !important;
+  min-height: clamp(54px, 5.8svh, 68px) !important;
+}
+
+@media (max-width: 1180px) {
+  [data-app][data-route="intro"] .login-view.swamp-splash {
+    grid-template-columns: 1fr !important;
+    grid-template-areas:
+      "enter"
+      "kol"
+      "sponsor" !important;
+    gap: 10px !important;
+    overflow-y: auto !important;
+    padding: 74px 12px 30px !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-splash-button,
+  [data-app][data-route="intro"] .swamp-support-frame {
+    width: min(640px, 96vw) !important;
+    height: auto !important;
+    aspect-ratio: 16 / 9 !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-splash-button {
+    aspect-ratio: 4 / 3 !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-support-content {
+    padding: 27% 9% 10% !important;
+  }
+}
