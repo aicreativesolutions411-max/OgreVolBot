@@ -19269,6 +19269,12 @@ function ogreAiModeDefaults(mode) {
 async function selectOgreAiPicks(userId, body = {}, limit = 1) {
   const mode = normalizeOgreAiMode(body.mode);
   const defaults = ogreAiModeDefaults(mode);
+  const requestedTakeProfitPct = Number.parseFloat(String(firstString(body.takeProfitPct, body.targetTakeProfitPct, defaults.defaultTakeProfitPct) || ""));
+  if (Number.isFinite(requestedTakeProfitPct) && requestedTakeProfitPct > 0) {
+    defaults.takeProfitPct = clamp(requestedTakeProfitPct, 5, 500);
+    defaults.targetTakeProfitPct = defaults.takeProfitPct;
+  }
+  defaults.desiredPickCount = Math.max(1, limit);
   const minScoreInput = Number.parseInt(String(body.minScore || ""), 10);
   if (Number.isFinite(minScoreInput) && minScoreInput > 0) {
     defaults.minScore = clamp(minScoreInput, 1, 100);
@@ -19291,9 +19297,11 @@ async function selectOgreAiPicks(userId, body = {}, limit = 1) {
     .filter((row) => !isKnownBelowExitFloor(row))
     .filter((row) => !hasHardBlockedLivePairRisk(row))
     .filter((row) => !isOgreAiBlockedRisk(row));
-  const safetyRows = await filterOgreAiRowsForHardSafety(baseRows, Math.max(24, limit * 16));
+  const rankedBaseRows = uniqueSniperScoreRows(baseRows)
+    .sort((a, b) => compareOgreAiCandidates(a, b, defaults, mode));
+  const safetyRows = await filterOgreAiRowsForHardSafety(rankedBaseRows, Math.max(80, limit * 48), defaults, mode);
   const pool = buildOgreAiCandidatePool(safetyRows, defaults, mode);
-  const filtered = pool.candidates.sort(compareOgreAiCandidates);
+  const filtered = pool.candidates.sort((a, b) => compareOgreAiCandidates(a, b, defaults, mode));
 
   const scanState = nextSniperScanState(`web:${userId}`, `ogre-ai:${mode}`);
   const rotated = rotateRowsForRefresh(filtered, Math.max(1, limit), scanState.refreshCount, { stickyCount: 0 });
@@ -19309,11 +19317,12 @@ async function selectOgreAiPicks(userId, body = {}, limit = 1) {
   };
 }
 
-async function filterOgreAiRowsForHardSafety(rows = [], limit = 40) {
+async function filterOgreAiRowsForHardSafety(rows = [], limit = 40, defaults = {}, mode = "quick") {
   const accepted = [];
   const candidates = uniqueSniperScoreRows(rows)
     .filter((row) => !hasHardBlockedLivePairRisk(row))
     .filter((row) => !isOgreAiBlockedRisk(row))
+    .sort((a, b) => compareOgreAiCandidates(a, b, defaults, mode))
     .slice(0, Math.min(rows.length, Math.max(1, limit)));
 
   await runWithConcurrency(candidates, Math.min(6, Math.max(2, CONFIG.balanceConcurrency)), async (row) => {
@@ -19331,7 +19340,7 @@ async function filterOgreAiRowsForHardSafety(rows = [], limit = 40) {
     }
   });
 
-  return accepted;
+  return accepted.sort((a, b) => compareOgreAiCandidates(a, b, defaults, mode));
 }
 
 function webOgreAiPickSummary(row = {}) {
@@ -19351,6 +19360,8 @@ function webOgreAiPickSummary(row = {}) {
     volumeLabel: row.volume5mLabel || row.volumeH1Label || formatUsdCompact(row.volume5m || row.volumeH1 || 0) || "n/a",
     ageLabel,
     bucket: row.ogreAiBucket || "",
+    targetFit: Number(row.ogreAiTargetFit || 0),
+    targetPct: Number(row.ogreAiTargetPct || 0),
     dexUrl: row.dexUrl || dexScreenerUrl(tokenMint),
     pumpUrl: row.pumpUrl || (webLivePairIsPump(row) ? pumpFunUrl(tokenMint) : ""),
     reasons: Array.isArray(row.bestPickInputs) ? row.bestPickInputs.slice(0, 4) : (Array.isArray(row.reasons) ? row.reasons.slice(0, 4) : [])

@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import {
   buildOgreAiCandidatePool,
   ogreAiTierForCandidate,
-  isOgreAiBlockedRisk
+  isOgreAiBlockedRisk,
+  ogreAiTargetFitScore
 } from "../src/lib/ogreAi.js";
 
 const defaults = {
@@ -106,4 +107,97 @@ test("Ogre A.I. prefers strict candidates over fallback tiers", () => {
   assert.equal(pool.selectedTier, "strict");
   assert.equal(pool.candidates.length, 1);
   assert.equal(pool.candidates[0].tokenMint, "StrictMint");
+});
+
+test("Ogre A.I. ranks 100% target picks by fast upside fit", () => {
+  const rows = [
+    {
+      tokenMint: "SaferButSleepyMint",
+      bestPickScore: 78,
+      marketCap: 650_000,
+      liquidityUsd: 8_000,
+      volume5m: 500,
+      m5: 2,
+      buys5m: 3,
+      sells5m: 3,
+      pairAgeMinutes: 45
+    },
+    {
+      tokenMint: "HundredTargetMint",
+      bestPickScore: 48,
+      marketCap: 85_000,
+      liquidityUsd: 900,
+      volume5m: 8_500,
+      m5: 22,
+      h1: 38,
+      buys5m: 17,
+      sells5m: 4,
+      pairAgeMinutes: 9
+    }
+  ];
+
+  const targetDefaults = { ...defaults, takeProfitPct: 100, targetTakeProfitPct: 100, desiredPickCount: 1 };
+  const pool = buildOgreAiCandidatePool(rows, targetDefaults, "quick");
+  assert.equal(pool.candidates[0].tokenMint, "HundredTargetMint");
+  assert.ok(ogreAiTargetFitScore(rows[1], targetDefaults, "quick") > ogreAiTargetFitScore(rows[0], targetDefaults, "quick"));
+});
+
+test("Ogre A.I. ranks 25% target picks toward cleaner quick exits", () => {
+  const rows = [
+    {
+      tokenMint: "RawMoonshotMint",
+      bestPickScore: 44,
+      marketCap: 55_000,
+      liquidityUsd: 220,
+      volume5m: 5_500,
+      m5: 20,
+      buys5m: 12,
+      sells5m: 5,
+      pairAgeMinutes: 7
+    },
+    {
+      tokenMint: "CleanTwentyFiveMint",
+      bestPickScore: 68,
+      marketCap: 180_000,
+      liquidityUsd: 3_500,
+      volume5m: 1_800,
+      m5: 7,
+      buys5m: 10,
+      sells5m: 4,
+      pairAgeMinutes: 22
+    }
+  ];
+
+  const targetDefaults = { ...defaults, takeProfitPct: 25, targetTakeProfitPct: 25, desiredPickCount: 1 };
+  const pool = buildOgreAiCandidatePool(rows, targetDefaults, "quick");
+  assert.equal(pool.candidates[0].tokenMint, "CleanTwentyFiveMint");
+  assert.ok(ogreAiTargetFitScore(rows[1], targetDefaults, "quick") > ogreAiTargetFitScore(rows[0], targetDefaults, "quick"));
+});
+
+test("Ogre A.I. fills requested stacks from fallback tiers after strict picks", () => {
+  const pool = buildOgreAiCandidatePool([
+    {
+      tokenMint: "BalancedFillMint",
+      bestPickScore: 42,
+      marketCap: 95_000,
+      liquidityUsd: 180,
+      volume5m: 1_100,
+      m5: 5,
+      pairAgeMinutes: 16
+    },
+    {
+      tokenMint: "StrictFillMint",
+      bestPickScore: 66,
+      marketCap: 90_000,
+      liquidityUsd: 2_000,
+      volume5m: 600,
+      m5: 6,
+      pairAgeMinutes: 10
+    }
+  ], { ...defaults, desiredPickCount: 2 }, "quick");
+
+  assert.equal(pool.selectedTier, "strict");
+  assert.equal(pool.candidates.length, 2);
+  assert.equal(pool.candidates[0].tokenMint, "StrictFillMint");
+  assert.equal(pool.candidates[1].tokenMint, "BalancedFillMint");
 });
