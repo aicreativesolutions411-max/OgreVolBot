@@ -6343,14 +6343,45 @@ function sellAmountForPercent(currentRawAmount, percent, baseRawAmount = null) {
   return targetAmount > current ? current : targetAmount;
 }
 
-function positiveBigIntOrZero(value) {
+function parseLooseBigInt(value) {
   if (value === null || value === undefined || value === "") return 0n;
-  try {
-    const amount = BigInt(String(value));
-    return amount > 0n ? amount : 0n;
-  } catch {
-    return 0n;
+  if (typeof value === "bigint") return value;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return 0n;
+    const rounded = Math.trunc(value);
+    return rounded <= 0 ? 0n : BigInt(rounded);
   }
+
+  const text = String(value).trim().replace(/,/g, "").replace(/_/g, "");
+  if (!text) return 0n;
+
+  const sign = text.startsWith("-") ? -1n : 1n;
+  const unsigned = text.replace(/^[+-]/, "");
+  if (/^\d+$/.test(unsigned)) {
+    return sign * BigInt(unsigned);
+  }
+  if (/^\d+\.\d+$/.test(unsigned)) {
+    return sign * BigInt(unsigned.split(".")[0]);
+  }
+
+  const floatValue = Number.parseFloat(text);
+  if (!Number.isFinite(floatValue)) return 0n;
+  const rounded = floatValue < 0 ? Math.ceil(floatValue) : Math.floor(floatValue);
+  if (!Number.isFinite(rounded) || rounded <= 0) return 0n;
+  return BigInt(rounded);
+}
+
+function positiveBigIntOrZero(value) {
+  const amount = parseLooseBigInt(value);
+  return amount > 0n ? amount : 0n;
+}
+
+function normalizeTradeHistoryAmount(value) {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (String(value).trim() === "") return "";
+  const amount = parseLooseBigInt(value);
+  return amount > 0n ? amount.toString() : "0";
 }
 
 function positiveRawString(value) {
@@ -11096,10 +11127,10 @@ async function buildPositionsOverview(userId, options = {}) {
     const position = ensurePosition(positions, trade.tokenMint);
     if (trade.type === "buy") {
       position.buys += 1;
-      position.spent += BigInt(trade.solLamportsSpent || 0);
+      position.spent += positiveBigIntOrZero(trade.solLamportsSpent);
     } else if (trade.type === "sell") {
       position.sells += 1;
-      position.received += BigInt(trade.solLamportsReceived || 0);
+      position.received += positiveBigIntOrZero(trade.solLamportsReceived);
     }
   }
 
@@ -11450,10 +11481,10 @@ async function pnlSummaryText(userId, tokenFilter = null, options = {}) {
   const totals = trades.reduce((summary, trade) => {
     if (trade.type === "buy") {
       summary.buys += 1;
-      summary.spent += BigInt(trade.solLamportsSpent || 0);
+      summary.spent += positiveBigIntOrZero(trade.solLamportsSpent);
     } else if (trade.type === "sell") {
       summary.sells += 1;
-      summary.received += BigInt(trade.solLamportsReceived || 0);
+      summary.received += positiveBigIntOrZero(trade.solLamportsReceived);
     }
     return summary;
   }, { buys: 0, sells: 0, spent: 0n, received: 0n });
@@ -11487,8 +11518,8 @@ async function tradeHistoryRows(userId, tokenFilter = null) {
 function formatTradeHistoryEntry(trade, index) {
   const isBuy = trade.type === "buy";
   const solAmount = isBuy
-    ? BigInt(trade.solLamportsSpent || 0)
-    : BigInt(trade.solLamportsReceived || 0);
+    ? positiveBigIntOrZero(trade.solLamportsSpent)
+    : positiveBigIntOrZero(trade.solLamportsReceived);
   return [
     `${index + 1}. ${formatTradeTimestamp(trade.timestamp)} - ${String(trade.type || "trade").toUpperCase()}`,
     `Wallet: ${trade.walletLabel || shortMint(trade.walletPublicKey || "")}`,
@@ -11535,13 +11566,13 @@ async function pnlRows(userId, tokenFilter = null, options = {}) {
 
     if (trade.type === "buy") {
       entry.buys += 1;
-      entry.spent += BigInt(trade.solLamportsSpent || 0);
+      entry.spent += positiveBigIntOrZero(trade.solLamportsSpent);
       if (!entry.firstBuyAt || tradeTimestampMs(trade.timestamp) < tradeTimestampMs(entry.firstBuyAt)) {
         entry.firstBuyAt = trade.timestamp || entry.firstBuyAt;
       }
     } else if (trade.type === "sell") {
       entry.sells += 1;
-      entry.received += BigInt(trade.solLamportsReceived || 0);
+      entry.received += positiveBigIntOrZero(trade.solLamportsReceived);
       if (!entry.lastSellAt || tradeTimestampMs(trade.timestamp) >= tradeTimestampMs(entry.lastSellAt)) {
         entry.lastSellAt = trade.timestamp || entry.lastSellAt;
       }
@@ -15554,8 +15585,20 @@ async function recordTradeEvents(events) {
       invalidateTokenMetadataCache(event.tokenMint);
     }
   }
+  const sanitizedEvents = events.map((event) => ({
+    ...event,
+    solLamportsSpent: Object.prototype.hasOwnProperty.call(event || {}, "solLamportsSpent")
+      ? normalizeTradeHistoryAmount(event.solLamportsSpent)
+      : event.solLamportsSpent,
+    solLamportsReceived: Object.prototype.hasOwnProperty.call(event || {}, "solLamportsReceived")
+      ? normalizeTradeHistoryAmount(event.solLamportsReceived)
+      : event.solLamportsReceived,
+    tokenAmount: Object.prototype.hasOwnProperty.call(event || {}, "tokenAmount")
+      ? normalizeTradeHistoryAmount(event.tokenAmount)
+      : event.tokenAmount
+  }));
   const store = await readTradeHistory();
-  store.trades.push(...events.map((event) => ({
+  store.trades.push(...sanitizedEvents.map((event) => ({
     id: crypto.randomUUID(),
     timestamp: new Date().toISOString(),
     ...event
@@ -17821,8 +17864,8 @@ async function webSlimewireTraders() {
     current.tradeCount += 1;
     if (String(trade.type).includes("buy")) current.buys += 1;
     if (String(trade.type).includes("sell")) current.sells += 1;
-    current.spent += BigInt(trade.solLamportsSpent || 0);
-    current.received += BigInt(trade.solLamportsReceived || 0);
+    current.spent += positiveBigIntOrZero(trade.solLamportsSpent);
+    current.received += positiveBigIntOrZero(trade.solLamportsReceived);
     if (!current.lastTradeAt || Date.parse(trade.timestamp || "") > Date.parse(current.lastTradeAt)) {
       current.lastTradeAt = trade.timestamp || "";
     }
@@ -21535,10 +21578,10 @@ async function webPnlSummary(userId) {
   const totals = trades.reduce((summary, trade) => {
     if (trade.type === "buy") {
       summary.buys += 1;
-      summary.spent += BigInt(trade.solLamportsSpent || 0);
+      summary.spent += positiveBigIntOrZero(trade.solLamportsSpent);
     } else if (trade.type === "sell") {
       summary.sells += 1;
-      summary.received += BigInt(trade.solLamportsReceived || 0);
+      summary.received += positiveBigIntOrZero(trade.solLamportsReceived);
     }
     return summary;
   }, { buys: 0, sells: 0, spent: 0n, received: 0n });
@@ -21591,8 +21634,8 @@ async function webPnlSummary(userId) {
       tokenMint: trade.tokenMint,
       shortMint: shortMint(trade.tokenMint || ""),
       solAmount: trade.type === "buy"
-        ? lamportsBigToSol(BigInt(trade.solLamportsSpent || 0))
-        : lamportsBigToSol(BigInt(trade.solLamportsReceived || 0)),
+        ? lamportsBigToSol(positiveBigIntOrZero(trade.solLamportsSpent))
+        : lamportsBigToSol(positiveBigIntOrZero(trade.solLamportsReceived)),
       tokenAmount: trade.tokenAmount || null,
       source: trade.source ? formatTradeSource(trade.source) : null,
       signature: trade.signature || null,

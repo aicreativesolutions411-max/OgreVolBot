@@ -352,14 +352,41 @@ export function summarizeOpenLots(lots) {
   }), { basisLamports: 0n, tokenAmount: 0n });
 }
 
+function parseLooseBigInt(value) {
+  if (value === null || value === undefined || value === "") return 0n;
+  if (typeof value === "bigint") return value;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return 0n;
+    const rounded = Math.trunc(value);
+    return rounded <= 0 ? 0n : BigInt(rounded);
+  }
+
+  const text = String(value).trim().replace(/,/g, "").replace(/_/g, "");
+  if (!text) return 0n;
+  const sign = text.startsWith("-") ? -1n : 1n;
+  const unsigned = text.replace(/^[+-]/, "");
+  if (/^\d+$/.test(unsigned)) {
+    return sign * BigInt(unsigned);
+  }
+  if (/^\d+\.\d+$/.test(unsigned)) {
+    return sign * BigInt(unsigned.split(".")[0]);
+  }
+
+  const floatValue = Number.parseFloat(text);
+  if (!Number.isFinite(floatValue)) return 0n;
+  const rounded = floatValue < 0 ? Math.ceil(floatValue) : Math.floor(floatValue);
+  if (!Number.isFinite(rounded) || rounded <= 0) return 0n;
+  return BigInt(rounded);
+}
+
 export function openLotsFromTradeEvents(events = []) {
   const lots = [];
   let fallbackBasisLamports = 0n;
 
   for (const event of [...events].sort((left, right) => Date.parse(left.timestamp || "") - Date.parse(right.timestamp || ""))) {
     if (event.type === "buy") {
-      const basisLamports = BigInt(event.solLamportsSpent || 0);
-      const tokenAmount = BigInt(event.tokenAmount || 0);
+      const basisLamports = parseLooseBigInt(event.solLamportsSpent);
+      const tokenAmount = parseLooseBigInt(event.tokenAmount);
       if (basisLamports <= 0n) continue;
       if (tokenAmount > 0n) {
         lots.push({
@@ -373,7 +400,7 @@ export function openLotsFromTradeEvents(events = []) {
         fallbackBasisLamports += basisLamports;
       }
     } else if (event.type === "sell") {
-      reduceOpenLots(lots, BigInt(event.tokenAmount || 0));
+      reduceOpenLots(lots, parseLooseBigInt(event.tokenAmount));
     }
   }
 
