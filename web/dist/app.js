@@ -12765,8 +12765,73 @@ function ogreAgentContext() {
     positionCount: portfolioPositions().length,
     totalSol: totalSol().toFixed(4),
     selectedTradePreset: activePresetDetail("trade"),
-    selectedBundlePreset: activePresetDetail("bundle")
+    selectedBundlePreset: activePresetDetail("bundle"),
+    recentPairs: ogreAgentRecentMarketRows()
   };
+}
+
+function ogreAgentRecentMarketRows() {
+  const rows = [];
+  const seen = new Set();
+  const addRows = (value, source = "feed") => {
+    if (!value) return;
+    if (Array.isArray(value)) {
+      value.forEach((row) => addRows(row, source));
+      return;
+    }
+    if (Array.isArray(value.rows)) {
+      value.rows.forEach((row) => addRows(row, source));
+      return;
+    }
+    if (value.data && Array.isArray(value.data.rows)) {
+      value.data.rows.forEach((row) => addRows(row, source));
+      return;
+    }
+    if (typeof value !== "object") return;
+    const tokenMint = String(value.tokenMint || value.mint || value.baseMint || value.tokenAddress || value.pairAddress || "").trim();
+    if (!tokenMint) return;
+    const key = tokenMint.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    rows.push({
+      tokenMint,
+      pairAddress: String(value.pairAddress || value.pair || "").trim(),
+      symbol: String(value.symbol || value.baseSymbol || value.ticker || "").trim().slice(0, 24),
+      name: String(value.name || value.baseName || value.label || "").trim().slice(0, 48),
+      ageMinutes: Number(value.ageMinutes ?? value.pairAgeMinutes ?? value.ageMins ?? NaN),
+      marketCap: Number(value.marketCap ?? value.marketCapUsd ?? value.fdv ?? NaN),
+      liquidityUsd: Number(value.liquidityUsd ?? value.liquidity?.usd ?? NaN),
+      volume5m: Number(value.volume5m ?? value.volume?.m5 ?? NaN),
+      volume1h: Number(value.volume1h ?? value.volumeH1 ?? value.volume?.h1 ?? NaN),
+      buys5m: Number(value.buys5m ?? value.txns?.m5?.buys ?? NaN),
+      sells5m: Number(value.sells5m ?? value.txns?.m5?.sells ?? NaN),
+      score: Number(value.score ?? value.ogreScore ?? value.sniperScore ?? NaN),
+      riskFlags: Array.isArray(value.riskFlags) ? value.riskFlags.slice(0, 6).map(String) : [],
+      riskLevel: String(value.riskLevel || value.risk || value.safetyNote || "").slice(0, 40),
+      twitterUrl: String(value.twitterUrl || value.xUrl || value.links?.twitter || value.links?.x || "").trim(),
+      telegramUrl: String(value.telegramUrl || value.links?.telegram || "").trim(),
+      websiteUrl: String(value.websiteUrl || value.website || value.links?.website || "").trim(),
+      source
+    });
+  };
+  addRows(state.livePairRows, "live-pairs");
+  addRows(state.slimeScopeRows, "slime-scope");
+  addRows(state.livePairs, "live-pairs");
+  Object.values(state.livePairsByBucket || {}).forEach((value) => addRows(value, "bucket"));
+  Object.values(state.terminalFeeds || {}).forEach((value) => addRows(value, "terminal-feed"));
+  return rows
+    .sort((a, b) => ogreAgentTrendScore(b) - ogreAgentTrendScore(a))
+    .slice(0, 24);
+}
+
+function ogreAgentTrendScore(row = {}) {
+  const safe = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
+  const age = safe(row.ageMinutes);
+  const freshBonus = age > 0 ? Math.max(0, 120 - age) / 4 : 8;
+  const buyPressure = Math.max(0, safe(row.buys5m) - safe(row.sells5m)) * 2;
+  const socialBonus = row.twitterUrl || row.telegramUrl || row.websiteUrl ? 10 : 0;
+  const riskPenalty = Array.isArray(row.riskFlags) && row.riskFlags.length ? Math.min(16, row.riskFlags.length * 3) : 0;
+  return safe(row.score) + freshBonus + Math.log10(1 + safe(row.volume5m) + safe(row.volume1h)) * 8 + Math.log10(1 + safe(row.liquidityUsd)) * 4 + buyPressure + socialBonus - riskPenalty;
 }
 
 function ogreAgentActionLabel(action = {}) {
@@ -12831,6 +12896,9 @@ function renderOgreAgent({ force = false } = {}) {
   const inputActive = Boolean(inputBefore && document.activeElement === inputBefore);
   const selectionStart = inputActive ? inputBefore.selectionStart : null;
   const selectionEnd = inputActive ? inputBefore.selectionEnd : null;
+  const feedBefore = root.querySelector("[data-ogre-agent-feed]");
+  const feedScrollTop = feedBefore ? feedBefore.scrollTop : 0;
+  const feedWasNearBottom = feedBefore ? feedBefore.scrollHeight - feedBefore.scrollTop - feedBefore.clientHeight < 64 : true;
   if (inputBefore) state.ogreAgentDraft = inputBefore.value;
   const messages = Array.isArray(state.ogreAgentMessages) ? state.ogreAgentMessages : [];
   const lastMessage = messages[messages.length - 1] || {};
@@ -12858,7 +12926,13 @@ function renderOgreAgent({ force = false } = {}) {
     }
   }
   const feed = root.querySelector("[data-ogre-agent-feed]");
-  if (feed) feed.scrollTop = feed.scrollHeight;
+  if (feed) {
+    if (force || feedWasNearBottom || state.ogreAgentLoading) {
+      feed.scrollTop = feed.scrollHeight;
+    } else {
+      feed.scrollTop = Math.min(feedScrollTop, Math.max(0, feed.scrollHeight - feed.clientHeight));
+    }
+  }
 }
 
 document.addEventListener("focusin", (event) => {
@@ -13276,6 +13350,59 @@ async function runOgreAgentAction(action = {}) {
 function ogreAgentCoinCheckIntent(message = "") {
   return /\b(check|analy[sz]e|rug|honeypot|community|social|website|telegram|twitter|x\b|links?|good choice|good pick|good buy|bullish|bearish|safe|risky|risk|will it do well|looks good|breakdown|details?)\b/i.test(String(message || ""));
 }
+
+function ogreAgentTrendIntent(message = "") {
+  const text = String(message || "").toLowerCase();
+  return /\b(top|best|hot|trending|trend|viral|runner|moving|today|now)\b/.test(text)
+    && /\b(meme|memecoin|coin|token|pair|launch|x|twitter)\b/.test(text);
+}
+
+function ogreAgentLocalTrendReply(message = "") {
+  if (!ogreAgentTrendIntent(message)) return null;
+  const rows = ogreAgentRecentMarketRows().slice(0, 4);
+  const money = (value) => {
+    const number = Number(value);
+    if (!Number.isFinite(number) || number <= 0) return "n/a";
+    if (number >= 1_000_000) return `$${(number / 1_000_000).toFixed(2)}M`;
+    if (number >= 1_000) return `$${(number / 1_000).toFixed(1)}K`;
+    return `$${number.toFixed(number >= 1 ? 2 : 6)}`;
+  };
+  if (!rows.length) {
+    return {
+      text: [
+        "Fast scan is ready, but I do not have fresh rows loaded in this screen yet.",
+        "Tap Refresh Feeds, then ask again. For true platform-wide X rankings, SlimeWire still needs a dedicated X/social firehose; I will not fake that data."
+      ].join("\n"),
+      actions: [
+        { label: "Refresh Feeds", type: "refresh_feeds" },
+        { label: "Live Terminal", type: "open_tab", tab: "terminal" },
+        { label: "Slime Scope", type: "open_tab", tab: "slimeScope" }
+      ]
+    };
+  }
+  const lines = [
+    "Fast meme scan from SlimeWire live context right now:",
+    ...rows.map((row, index) => {
+      const symbol = row.symbol || shortAddress(row.tokenMint);
+      const age = Number.isFinite(Number(row.ageMinutes)) ? `${Math.max(0, Math.round(Number(row.ageMinutes)))}m old` : "age n/a";
+      const socials = row.twitterUrl || row.telegramUrl || row.websiteUrl ? "socials found" : "socials not returned";
+      const risk = Array.isArray(row.riskFlags) && row.riskFlags.length ? `risk: ${row.riskFlags.slice(0, 2).join(", ")}` : "risk pending";
+      return `${index + 1}. ${symbol} ${shortAddress(row.tokenMint)} | MC ${money(row.marketCap)} | Liq ${money(row.liquidityUsd)} | Vol ${money(row.volume5m || row.volume1h)} | ${age} | ${socials} | ${risk}`;
+    }),
+    "X note: I can use returned X/social links and AI reasoning, but a true X-wide trend scan needs a dedicated X/social data source. I will rank the live candidates I can actually see instead of guessing."
+  ];
+  const first = rows[0];
+  return {
+    text: lines.join("\n"),
+    actions: [
+      first?.tokenMint ? { label: "Open Top Chart", type: "open_chart", tokenMint: first.tokenMint } : null,
+      { label: "Refresh Feeds", type: "refresh_feeds" },
+      { label: "Live Terminal", type: "open_tab", tab: "terminal" },
+      { label: "Slime Scope", type: "open_tab", tab: "slimeScope" }
+    ].filter(Boolean)
+  };
+}
+
 async function sendOgreAgentMessage() {
   const input = document.querySelector("[data-ogre-agent-input]");
   const message = String(input?.value || "").trim();
@@ -13302,13 +13429,13 @@ async function sendOgreAgentMessage() {
       ]
     });
     renderOgreAgent({ force: true });
-  }, 11_000);
+  }, 17_000);
   renderOgreAgent();
   try {
     const data = await api("/api/web/ogre-agent/chat", {
       method: "POST",
       body: JSON.stringify({ message, context: ogreAgentContext() }),
-      timeoutMs: 9_500,
+      timeoutMs: 15_000,
       dedupe: false,
       preserveSafeError: true
     });
@@ -13348,6 +13475,16 @@ async function sendOgreAgentMessage() {
     state.ogreAgentStatus = data?.agent?.modelPowered ? "AI reply" : "Fast local Ogre reply";
   } catch (error) {
     if (state.ogreAgentRequestId !== agentRequestId) return;
+    const localTrend = ogreAgentLocalTrendReply(message);
+    if (localTrend) {
+      pushOgreAgentMessage({
+        role: "assistant",
+        text: localTrend.text,
+        actions: localTrend.actions
+      });
+      state.ogreAgentStatus = "Fast local trend scan.";
+      return;
+    }
     pushOgreAgentMessage({
       role: "assistant",
       text: "Ogre Agent is still here, but the server reply timed out. I can still open panels, refresh feeds, check coins, open links, and route trade actions.",

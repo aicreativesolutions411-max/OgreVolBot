@@ -8335,22 +8335,37 @@ textarea,
   .ogre-agent-shell.is-open .ogre-agent-panel {
     left: 8px !important;
     right: 8px !important;
+    top: max(8px, env(safe-area-inset-top)) !important;
     bottom: max(8px, env(safe-area-inset-bottom)) !important;
-    min-height: min(620px, calc(100dvh - 18px)) !important;
-    max-height: calc(100dvh - 18px) !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
     width: auto !important;
+    display: flex !important;
+    flex-direction: column !important;
+    overflow: hidden !important;
+  }
+
+  .ogre-agent-panel header {
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 4 !important;
+    flex: 0 0 auto !important;
+    background:
+      linear-gradient(180deg, rgba(0, 18, 7, 0.98), rgba(0, 12, 5, 0.92)) !important;
   }
 
   .ogre-agent-panel-body {
-    min-height: min(455px, calc(100dvh - 172px)) !important;
+    min-height: 0 !important;
+    flex: 1 1 auto !important;
     overflow: hidden !important;
   }
 
   .ogre-agent-feed,
   .ogre-agent-messages {
     flex: 1 1 auto !important;
-    min-height: 250px !important;
-    max-height: min(420px, calc(100dvh - 260px)) !important;
+    min-height: 0 !important;
+    max-height: none !important;
     overflow-y: auto !important;
     padding-right: 4px !important;
   }
@@ -8367,15 +8382,16 @@ textarea,
   }
 
   .ogre-agent-panel:focus-within {
+    top: max(8px, env(safe-area-inset-top)) !important;
     bottom: max(8px, env(safe-area-inset-bottom)) !important;
-    min-height: min(580px, calc(100dvh - 16px)) !important;
-    max-height: calc(100dvh - 16px) !important;
+    min-height: 0 !important;
+    max-height: none !important;
   }
 
   .ogre-agent-panel:focus-within .ogre-agent-feed,
   .ogre-agent-panel:focus-within .ogre-agent-messages {
-    min-height: 190px !important;
-    max-height: min(330px, calc(100dvh - 300px)) !important;
+    min-height: 0 !important;
+    max-height: none !important;
   }
 
   .ogre-agent-panel textarea[data-ogre-agent-input],

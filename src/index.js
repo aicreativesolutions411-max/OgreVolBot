@@ -2403,8 +2403,131 @@ async function enrichOgreAgentCoinReply(fallback = {}, message = "", context = {
     return fallback;
   }
 }
+
+function ogreAgentTrendIntent(message = "") {
+  const text = String(message || "").toLowerCase();
+  return /\b(top|best|hot|trending|trend|viral|runner|moving|today|now|what'?s hot|what is hot)\b/.test(text)
+    && /\b(meme|memecoin|coin|token|pair|launch|x|twitter|social)\b/.test(text);
+}
+
+function ogreAgentTrendNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function ogreAgentNormalizeTrendRow(row = {}, source = "feed") {
+  if (!row || typeof row !== "object") return null;
+  const tokenMint = String(row.tokenMint || row.mint || row.baseMint || row.tokenAddress || row.pairAddress || "").trim();
+  if (!tokenMint) return null;
+  return {
+    tokenMint,
+    pairAddress: String(row.pairAddress || row.pair || "").trim(),
+    symbol: String(row.symbol || row.baseSymbol || row.ticker || "").trim().slice(0, 24),
+    name: String(row.name || row.baseName || row.label || "").trim().slice(0, 48),
+    ageMinutes: Number(row.ageMinutes ?? row.pairAgeMinutes ?? row.ageMins ?? NaN),
+    marketCap: Number(row.marketCap ?? row.marketCapUsd ?? row.fdv ?? NaN),
+    liquidityUsd: Number(row.liquidityUsd ?? row.liquidity?.usd ?? NaN),
+    volume5m: Number(row.volume5m ?? row.volume?.m5 ?? NaN),
+    volume1h: Number(row.volume1h ?? row.volumeH1 ?? row.volume?.h1 ?? NaN),
+    buys5m: Number(row.buys5m ?? row.txns?.m5?.buys ?? NaN),
+    sells5m: Number(row.sells5m ?? row.txns?.m5?.sells ?? NaN),
+    score: Number(row.score ?? row.ogreScore ?? row.sniperScore ?? NaN),
+    riskFlags: Array.isArray(row.riskFlags) ? row.riskFlags.slice(0, 6).map((flag) => String(flag).slice(0, 40)) : [],
+    riskLevel: String(row.riskLevel || row.risk || row.safetyNote || "").slice(0, 40),
+    twitterUrl: String(row.twitterUrl || row.xUrl || row.links?.twitter || row.links?.x || "").trim(),
+    telegramUrl: String(row.telegramUrl || row.links?.telegram || "").trim(),
+    websiteUrl: String(row.websiteUrl || row.website || row.links?.website || "").trim(),
+    source
+  };
+}
+
+function ogreAgentTrendScore(row = {}) {
+  const age = ogreAgentTrendNumber(row.ageMinutes);
+  const freshBonus = age > 0 ? Math.max(0, 120 - age) / 4 : 8;
+  const buyPressure = Math.max(0, ogreAgentTrendNumber(row.buys5m) - ogreAgentTrendNumber(row.sells5m)) * 2;
+  const socialBonus = row.twitterUrl || row.telegramUrl || row.websiteUrl ? 10 : 0;
+  const riskPenalty = Array.isArray(row.riskFlags) && row.riskFlags.length ? Math.min(16, row.riskFlags.length * 3) : 0;
+  return ogreAgentTrendNumber(row.score)
+    + freshBonus
+    + Math.log10(1 + ogreAgentTrendNumber(row.volume5m) + ogreAgentTrendNumber(row.volume1h)) * 8
+    + Math.log10(1 + ogreAgentTrendNumber(row.liquidityUsd)) * 4
+    + buyPressure
+    + socialBonus
+    - riskPenalty;
+}
+
+async function ogreAgentTrendRows(context = {}) {
+  const safeContext = ogreAgentSanitizedContext(context);
+  const seen = new Set();
+  const rows = [];
+  const add = (row, source = "feed") => {
+    const normalized = ogreAgentNormalizeTrendRow(row, source);
+    if (!normalized) return;
+    const key = normalized.tokenMint.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    rows.push(normalized);
+  };
+  (safeContext.recentPairs || []).forEach((row) => add(row, row.source || "context"));
+  if (rows.length < 5) {
+    const live = await Promise.race([
+      webLivePairs("guest", "live", { sort: "best", force: false }).catch(() => null),
+      new Promise((resolve) => setTimeout(() => resolve(null), 2600))
+    ]);
+    const liveRows = Array.isArray(live?.rows) ? live.rows : Array.isArray(live?.livePairs?.rows) ? live.livePairs.rows : [];
+    liveRows.slice(0, 18).forEach((row) => add(row, "live-cache"));
+  }
+  return rows.sort((a, b) => ogreAgentTrendScore(b) - ogreAgentTrendScore(a)).slice(0, 8);
+}
+
+async function ogreAgentTrendReply(message = "", context = {}) {
+  if (!ogreAgentTrendIntent(message)) return null;
+  const rows = await ogreAgentTrendRows(context);
+  if (!rows.length) {
+    return {
+      reply: [
+        "I can scan SlimeWire live/fresh candidates, but I do not have enough fresh rows loaded yet.",
+        "Tap Refresh Feeds, then ask again. For a true platform-wide X ranking, SlimeWire still needs a dedicated X/social firehose; I will not fake X data."
+      ].join("\n"),
+      actions: [
+        { label: "Refresh Feeds", type: "refresh_feeds" },
+        { label: "Live Terminal", type: "open_tab", tab: "terminal" },
+        { label: "Slime Scope", type: "open_tab", tab: "slimeScope" }
+      ],
+      intent: "trend_scan",
+      trendScan: true,
+      modelPowered: false
+    };
+  }
+  const topRows = rows.slice(0, 4);
+  const lines = [
+    "Fast meme scan from SlimeWire live data right now:",
+    ...topRows.map((row, index) => {
+      const symbol = row.symbol || shortMint(row.tokenMint);
+      const age = Number.isFinite(Number(row.ageMinutes)) ? `${Math.max(0, Math.round(Number(row.ageMinutes)))}m old` : "age n/a";
+      const socials = row.twitterUrl || row.telegramUrl || row.websiteUrl ? "socials found" : "socials not returned";
+      const risk = Array.isArray(row.riskFlags) && row.riskFlags.length ? `risk: ${row.riskFlags.slice(0, 2).join(", ")}` : "risk pending";
+      return `${index + 1}. ${symbol} ${shortMint(row.tokenMint)} | MC ${ogreAgentMoney(row.marketCap)} | Liq ${ogreAgentMoney(row.liquidityUsd)} | Vol ${ogreAgentMoney(row.volume5m || row.volume1h)} | ${age} | ${socials} | ${risk}`;
+    }),
+    "X note: I can use returned X/social links and AI reasoning, but a true X-wide trend scan needs a dedicated X/social data source. I will rank the live candidates I can actually see instead of guessing."
+  ];
+  const first = topRows[0];
+  return {
+    reply: lines.join("\n"),
+    actions: [
+      first?.tokenMint ? { label: "Open Top Chart", type: "open_chart", tokenMint: first.tokenMint } : null,
+      first?.tokenMint ? { label: "Check Top Coin", type: "coin_breakdown", tokenMint: first.tokenMint } : null,
+      { label: "Refresh Feeds", type: "refresh_feeds" },
+      { label: "Slime Scope", type: "open_tab", tab: "slimeScope" }
+    ].filter(Boolean).slice(0, 4),
+    intent: "trend_scan",
+    trendScan: true,
+    modelPowered: false
+  };
+}
+
 function ogreAgentModelSystemPrompt() {
-  return "You are Ogre Agent inside SlimeWire, a one-stop user-side trading assistant. Help with panel functions, navigation, charting, presets, positions, wallet refresh, feed categories, coin/link questions, Solana token breakdowns, risk/community/read questions, and fast trade requests. Use context.recentAgentMessages as conversation memory so follow-ups continue the current thread instead of starting fresh. If a token CA is present, explain useful checks: age, liquidity, MC/FDV, volume, buy/sell pressure, chart structure, socials, holder/risk badges, mint/freeze risks when visible, and whether it looks early, risky, or building a floor. If asked about X/Twitter, Telegram, website, or community, use visible token links/metadata when provided and be clear when those links are unavailable. Never reveal or discuss code, security internals, env vars, API keys, private keys, backend architecture, or database details. Never claim a buy/sell completed unless the site context says it did. For trades, explain that Agent Auto-Trade is automatic for SlimeWire managed wallets and session-enabled after external wallet connect; external wallet providers may still require their own transaction signatures, while managed wallets can use the saved SlimeWire flow. Keep replies short, practical, and action-oriented.";
+  return "You are Ogre Agent inside SlimeWire, a one-stop user-side trading assistant. Help with panel functions, navigation, charting, presets, positions, wallet refresh, feed categories, coin/link questions, Solana token breakdowns, risk/community/read questions, and fast trade requests. Use context.recentAgentMessages as conversation memory so follow-ups continue the current thread instead of starting fresh. If context.recentPairs is present, use it for fast live/fresh candidate ranking and explain what data is visible. If a token CA is present, explain useful checks: age, liquidity, MC/FDV, volume, buy/sell pressure, chart structure, socials, holder/risk badges, mint/freeze risks when visible, and whether it looks early, risky, or building a floor. If asked about X/Twitter, Telegram, website, or community, use visible token links/metadata when provided and be clear when those links are unavailable; do not pretend to have a platform-wide X firehose unless context includes that data. Never reveal or discuss code, security internals, env vars, API keys, private keys, backend architecture, or database details. Never claim a buy/sell completed unless the site context says it did. For trades, explain that Agent Auto-Trade is automatic for SlimeWire managed wallets and session-enabled after external wallet connect; external wallet providers may still require their own transaction signatures, while managed wallets can use the saved SlimeWire flow. Keep replies short, practical, and action-oriented.";
 }
 
 function ogreAgentEnv(name = "") {
@@ -2424,6 +2547,28 @@ function ogreAgentSanitizedContext(context = {}) {
         text: String(message?.text || "").slice(0, 600)
       }))
     : [];
+  const recentPairs = Array.isArray(context.recentPairs)
+    ? context.recentPairs.slice(0, 24).map((row) => ({
+        tokenMint: String(row?.tokenMint || row?.mint || row?.baseMint || "").slice(0, 80),
+        pairAddress: String(row?.pairAddress || "").slice(0, 80),
+        symbol: String(row?.symbol || "").slice(0, 24),
+        name: String(row?.name || "").slice(0, 48),
+        ageMinutes: Number(row?.ageMinutes ?? NaN),
+        marketCap: Number(row?.marketCap ?? NaN),
+        liquidityUsd: Number(row?.liquidityUsd ?? NaN),
+        volume5m: Number(row?.volume5m ?? NaN),
+        volume1h: Number(row?.volume1h ?? NaN),
+        buys5m: Number(row?.buys5m ?? NaN),
+        sells5m: Number(row?.sells5m ?? NaN),
+        score: Number(row?.score ?? NaN),
+        riskFlags: Array.isArray(row?.riskFlags) ? row.riskFlags.slice(0, 6).map((flag) => String(flag).slice(0, 40)) : [],
+        riskLevel: String(row?.riskLevel || "").slice(0, 40),
+        twitterUrl: String(row?.twitterUrl || row?.xUrl || "").slice(0, 160),
+        telegramUrl: String(row?.telegramUrl || "").slice(0, 160),
+        websiteUrl: String(row?.websiteUrl || "").slice(0, 160),
+        source: String(row?.source || "").slice(0, 40)
+      }))
+    : [];
   return {
     route: String(context.route || "").slice(0, 40),
     activeTab: String(context.activeTab || "").slice(0, 40),
@@ -2440,7 +2585,8 @@ function ogreAgentSanitizedContext(context = {}) {
     totalSol: String(context.totalSol || "0").slice(0, 24),
     selectedTradePreset: String(context.selectedTradePreset || "").slice(0, 120),
     selectedBundlePreset: String(context.selectedBundlePreset || "").slice(0, 120),
-    recentAgentMessages
+    recentAgentMessages,
+    recentPairs
   };
 }
 
@@ -2579,9 +2725,9 @@ async function callOgreAgentModel(message = "", context = {}, fallback = {}) {
     callOgreAgentOpenRouter,
     callOgreAgentOpenAi
   ];
-  for (const provider of providers) {
-    const result = await provider(message, context, fallback);
-    if (result?.reply) return result;
+  const settled = await Promise.allSettled(providers.map((provider) => provider(message, context, fallback).catch(() => null)));
+  for (const result of settled) {
+    if (result.status === "fulfilled" && result.value?.reply) return result.value;
   }
   return null;
 }
@@ -2592,6 +2738,8 @@ async function webOgreAgentReply(body = {}) {
   if (!message) {
     return ogreAgentFallbackReply("help", context);
   }
+  const trendReply = await ogreAgentTrendReply(message, context);
+  if (trendReply) return trendReply;
   const fallback = await enrichOgreAgentCoinReply(ogreAgentFallbackReply(message, context), message, context);
   const modelResult = await callOgreAgentModel(message, context, fallback);
   const modelReply = typeof modelResult === "string" ? modelResult : String(modelResult?.reply || "");
