@@ -1941,12 +1941,14 @@ async function handleWebApiRequest(request, response, requestUrl) {
 
     if (request.method === "GET" && pathname === "/api/web/positions") {
       const force = parseBoolean(requestUrl.searchParams.get("force") || "false");
-      const summary = await cachedWebSummary("web:positions", auth.userId, { force }, force ? 0 : CONFIG.displayCacheFreshMs, async () => ({
-        positions: await webPositionRows(auth.userId, { force })
+      const fast = parseBoolean(requestUrl.searchParams.get("fast") || "false");
+      const summary = await cachedWebSummary(fast ? "web:positions:fast" : "web:positions", auth.userId, { force }, force ? 0 : CONFIG.displayCacheFreshMs, async () => ({
+        positions: await webPositionRows(auth.userId, { force, fast })
       }));
       sendWebJson(request, response, 200, {
         ok: true,
         ...summary.value,
+        fast,
         cacheHit: summary.cacheHit,
         stale: summary.stale,
         backgroundRefreshing: summary.backgroundRefreshing,
@@ -11163,14 +11165,20 @@ async function buildPositionsOverview(userId, options = {}) {
     .filter((position) => position.rawAmount > 0n)
     .sort((a, b) => Number((b.spent - b.received) - (a.spent - a.received)));
 
-  await runWithConcurrency(rows.slice(0, 5), Math.min(2, CONFIG.balanceConcurrency), async (position) => {
-    try {
-      position.estimatedValueLamports = await estimatePositionValue(position);
-    } catch (error) {
-      position.estimatedValueLamports = null;
-      position.valueError = friendlyError(error);
+  if (!options.fast && !options.skipValueEstimates) {
+    await runWithConcurrency(rows.slice(0, 5), Math.min(2, CONFIG.balanceConcurrency), async (position) => {
+      try {
+        position.estimatedValueLamports = await estimatePositionValue(position);
+      } catch (error) {
+        position.estimatedValueLamports = null;
+        position.valueError = friendlyError(error);
+      }
+    });
+  } else {
+    for (const position of rows.slice(0, 25)) {
+      position.valueError = "Value refreshing in background";
     }
-  });
+  }
 
   return rows;
 }
@@ -19321,12 +19329,12 @@ function applyOgreAiTargetDefaults(defaults, targetPct, mode) {
   if (!Number.isFinite(pct) || pct <= 0) return defaults;
   if (pct >= 80) {
     defaults.targetBand = "fresh_low_mc";
-    defaults.buckets = [...new Set(["live", "under1h", safeMode === "safer" ? "under3h" : "live"])];
-    defaults.minScore = Math.min(Number(defaults.minScore || 54), safeMode === "safer" ? 50 : 42);
-    defaults.maxMarketCap = Math.min(Number(defaults.maxMarketCap || 350_000), safeMode === "safer" ? 450_000 : 350_000);
-    defaults.minLiquidityUsd = Math.min(Number(defaults.minLiquidityUsd || 120), 120);
+    defaults.buckets = [...new Set(["live", "under1h"])];
+    defaults.minScore = Math.min(Number(defaults.minScore || 54), safeMode === "safer" ? 46 : 38);
+    defaults.maxMarketCap = Math.min(Number(defaults.maxMarketCap || 220_000), safeMode === "safer" ? 300_000 : 220_000);
+    defaults.minLiquidityUsd = Math.min(Number(defaults.minLiquidityUsd || 90), 90);
     defaults.defaultSellDelay = "3";
-    defaults.defaultSlippageBps = Math.max(Number(defaults.defaultSlippageBps || 400), 450);
+    defaults.defaultSlippageBps = Math.max(Number(defaults.defaultSlippageBps || 400), 500);
     return defaults;
   }
   if (pct <= 30) {
@@ -19352,7 +19360,7 @@ function applyOgreAiTargetDefaults(defaults, targetPct, mode) {
 function ogreAiScannerModesForTarget(defaults = {}, mode = "quick") {
   const pct = Number(defaults.takeProfitPct || defaults.targetTakeProfitPct || defaults.defaultTakeProfitPct || 25);
   const safeMode = normalizeOgreAiMode(mode);
-  if (pct >= 80) return safeMode === "safer" ? ["moonshot", "fast"] : ["pumpsnipe", "moonshot", "fast"];
+  if (pct >= 80) return safeMode === "safer" ? ["moonshot", "pumpsnipe"] : ["pumpsnipe", "moonshot"];
   if (pct <= 30) return safeMode === "fresh" ? ["fast", "smart"] : ["smart", "safe", "fast"];
   if (pct >= 50) return ["fast", "moonshot", "pumpsnipe"];
   return ["fast", "smart"];
@@ -21750,8 +21758,8 @@ async function webPositionRows(userId, options = {}) {
   const positions = await buildPositionsOverview(userId, options);
   const limited = positions.slice(0, 25);
   const metadataByMint = await tokenMetadataMapForMints(limited.map((position) => position.tokenMint), {
-    timeoutMs: 2_000,
-    pumpTimeoutMs: 1_000
+    timeoutMs: options.fast ? 900 : 2_000,
+    pumpTimeoutMs: options.fast ? 650 : 1_000
   }).catch(() => new Map());
   return limited.map((position) => {
     const metadata = metadataByMint.get(position.tokenMint) || {};

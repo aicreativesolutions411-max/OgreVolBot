@@ -176,8 +176,8 @@ export function ogreAiTargetFitScore(row = {}, defaults = {}, mode = "quick") {
     if (highTarget) {
       if (age <= 30) ageSignal = 18;
       else if (age <= 90) ageSignal = 12;
-      else if (age <= 240) ageSignal = 4;
-      else ageSignal = -clampNumber((age - 240) / 240, 0, 2) * 12;
+      else if (age <= 150) ageSignal = 1;
+      else ageSignal = -clampNumber((age - 150) / 150, 0, 2) * 18;
     } else if (steadyTarget) {
       if (age < 5) ageSignal = -10;
       else if (age < 30) ageSignal = 2;
@@ -223,9 +223,10 @@ export function ogreAiTierForCandidate(row = {}, defaults = {}, mode = "quick") 
   const highTarget = targetPct >= 80;
   const mediumTarget = targetPct >= 50;
   const steadyTarget = targetPct <= 30;
+  const highTargetAgeOk = stats.ageMinutes === null || stats.ageMinutes <= 150 || stats.isPump;
   const freshAgeOk = stats.ageMinutes === null || stats.ageMinutes <= 240 || stats.isPump;
   const normalAgeOk = stats.ageMinutes === null || stats.ageMinutes <= 1440;
-  const modeAgeOk = highTarget || mode === "fresh" ? freshAgeOk : normalAgeOk;
+  const modeAgeOk = highTarget ? highTargetAgeOk : mode === "fresh" ? freshAgeOk : normalAgeOk;
   if (!modeAgeOk) return null;
 
   const targetMomentumOk = !highTarget
@@ -240,7 +241,7 @@ export function ogreAiTierForCandidate(row = {}, defaults = {}, mode = "quick") 
   const balancedLiquidityNeed = highTarget ? Math.max(60, minLiquidityUsd * 0.2) : Math.max(75, minLiquidityUsd * 0.35);
   const marketCapLimit = highTarget ? maxMarketCap : mediumTarget ? maxMarketCap * 1.1 : maxMarketCap;
   const targetShapeOk = highTarget
-    ? (!stats.marketCap || stats.marketCap <= maxMarketCap) && (stats.ageMinutes === null || stats.ageMinutes <= 240 || stats.isPump)
+    ? (!stats.marketCap || stats.marketCap <= maxMarketCap) && (stats.ageMinutes === null || stats.ageMinutes <= 120 || stats.isPump)
     : steadyTarget
       ? (stats.ageMinutes === null || stats.ageMinutes >= 12 || stats.liquidityUsd >= minLiquidityUsd * 2)
       : true;
@@ -259,6 +260,7 @@ export function ogreAiTierForCandidate(row = {}, defaults = {}, mode = "quick") 
   if (
     targetFit >= balancedFitNeed
     && stats.score >= Math.max(25, minScore - (highTarget ? 26 : 14))
+    && targetShapeOk
     && (!highTarget || targetMomentumOk || stats.volumeMomentumUsd > 0)
     && (!stats.marketCap || stats.marketCap <= maxMarketCap * (highTarget ? 1.15 : 1.4))
     && (!stats.liquidityUsd || stats.liquidityUsd >= balancedLiquidityNeed)
@@ -270,6 +272,7 @@ export function ogreAiTierForCandidate(row = {}, defaults = {}, mode = "quick") 
   if (
     targetFit >= availableFitNeed
     && stats.score >= 20
+    && targetShapeOk
     && hasMomentum
     && (!stats.marketCap || stats.marketCap <= maxMarketCap * 2)
     && (!stats.liquidityUsd || stats.liquidityUsd >= 50 || stats.isPump)
@@ -333,10 +336,11 @@ export function buildOgreAiCandidatePool(rows = [], defaults = {}, mode = "quick
       }
       const stats = ogreAiCandidateStats(row);
       const maxMarketCap = Number(defaults.maxMarketCap || 750_000);
+      const targetPct = ogreAiTargetProfitPct(defaults);
       const ageOk = stats.ageMinutes === null
-        || stats.ageMinutes <= (mode === "fresh" ? 180 : 1440)
+        || stats.ageMinutes <= (targetPct >= 80 ? 120 : mode === "fresh" ? 180 : 1440)
         || stats.isPump;
-      const capOk = !stats.marketCap || stats.marketCap <= maxMarketCap * 3;
+      const capOk = !stats.marketCap || stats.marketCap <= maxMarketCap * (targetPct >= 80 ? 1.25 : 3);
       const hasSomeSignal = stats.hasActivity
         || stats.score > 0
         || Array.isArray(row.bestPickInputs) && row.bestPickInputs.length > 0

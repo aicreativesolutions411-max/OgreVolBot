@@ -193,6 +193,38 @@ test("Ogre A.I. 100% target favors very fresh low market-cap momentum", () => {
   assert.ok(ogreAiTargetFitScore(rows[1], targetDefaults, "quick") > ogreAiTargetFitScore(rows[0], targetDefaults, "quick"));
 });
 
+test("Ogre A.I. 100% target keeps older candidates out of the early-pair lane", () => {
+  const rows = [
+    {
+      tokenMint: "OlderLowMcMint",
+      bestPickScore: 72,
+      marketCap: 90_000,
+      liquidityUsd: 1_500,
+      volume5m: 2_000,
+      m5: 8,
+      buys5m: 8,
+      sells5m: 4,
+      pairAgeMinutes: 210
+    },
+    {
+      tokenMint: "EarlyLowMcMint",
+      bestPickScore: 42,
+      marketCap: 70_000,
+      liquidityUsd: 700,
+      volume5m: 3_500,
+      m5: 17,
+      buys5m: 12,
+      sells5m: 3,
+      pairAgeMinutes: 12
+    }
+  ];
+
+  const targetDefaults = { ...defaults, takeProfitPct: 100, targetTakeProfitPct: 100, desiredPickCount: 1, maxMarketCap: 220_000, minLiquidityUsd: 90 };
+  const pool = buildOgreAiCandidatePool(rows, targetDefaults, "quick");
+  assert.equal(pool.candidates[0].tokenMint, "EarlyLowMcMint");
+  assert.equal(ogreAiTierForCandidate(rows[0], targetDefaults, "quick"), null);
+});
+
 test("Ogre A.I. ranks 25% target picks toward cleaner quick exits", () => {
   const rows = [
     {

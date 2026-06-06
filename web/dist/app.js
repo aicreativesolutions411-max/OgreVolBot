@@ -27,6 +27,8 @@ const apiCandidates = [
 let apiBase = apiCandidates[0] || defaultRenderApiBase;
 const API_CONNECT_TIMEOUT_MS = 60_000;
 const WALLET_REFRESH_TIMEOUT_MS = 15_000;
+const POSITIONS_REFRESH_TIMEOUT_MS = 10_000;
+const POSITIONS_FAST_REFRESH_TIMEOUT_MS = 8_000;
 const API_LONG_ACTION_TIMEOUT_MS = 180_000;
 const MOBILE_WALLET_PENDING_KEY = "slimewireMobileWalletPending";
 const MOBILE_WALLET_PENDING_BACKUP_KEY = "slimewireMobileWalletPendingBackup";
@@ -314,6 +316,7 @@ let postTradeRefreshTimers = [];
 let positionRefreshVisualTimer = null;
 let autoExitCheckInFlight = false;
 let walletRefreshPromise = null;
+let positionsRefreshPromise = null;
 let lastWalletForceRefreshAt = 0;
 let walletRefreshSequence = 0;
 let ogreAiRunInFlight = null;
@@ -2143,34 +2146,42 @@ async function loadWalletCore(options = {}) {
 
 async function refreshWalletPositions(options = {}) {
   if (!state.user || !state.token) return;
+  if (positionsRefreshPromise) return positionsRefreshPromise;
   const startedAt = perfNow();
-  const forceQuery = options.force ? "?force=true" : "";
-  try {
-    const positions = await api(`/api/web/positions${forceQuery}`, {
-      timeoutMs: options.timeoutMs || API_CONNECT_TIMEOUT_MS
-    });
-    state.positions = positions.positions || [];
-    state.lastWalletRefreshAt = new Date().toISOString();
-    state.walletRefreshError = "";
-    perfMeasure("positions-refresh", startedAt, {
-      component: "positions",
-      resultCount: state.positions.length,
-      cacheHit: Boolean(positions.cacheHit),
-      details: `background:${options.silent ? "silent" : "refresh"}`
-    });
-    return true;
-  } catch (error) {
-    if (options.silent) {
+  const params = new URLSearchParams();
+  if (options.force) params.set("force", "true");
+  if (options.fast !== false) params.set("fast", "true");
+  const query = params.toString() ? `?${params.toString()}` : "";
+  positionsRefreshPromise = (async () => {
+    try {
+      const positions = await api(`/api/web/positions${query}`, {
+        timeoutMs: options.timeoutMs || (options.fast === false ? POSITIONS_REFRESH_TIMEOUT_MS : POSITIONS_FAST_REFRESH_TIMEOUT_MS)
+      });
+      state.positions = positions.positions || state.positions || [];
+      state.lastWalletRefreshAt = new Date().toISOString();
+      state.walletRefreshError = "";
+      perfMeasure("positions-refresh", startedAt, {
+        component: "positions",
+        resultCount: state.positions.length,
+        cacheHit: Boolean(positions.cacheHit),
+        details: `${options.reason || (options.silent ? "silent" : "refresh")};fast=${options.fast !== false}`
+      });
+      return true;
+    } catch (error) {
+      if (!options.silent) {
+        state.walletRefreshError = error.message || "Position refresh failed.";
+      }
+      perfMeasure("positions-refresh", startedAt, {
+        errorCode: error?.code || error?.name || "POSITIONS_REFRESH_FAILED",
+        component: "positions",
+        details: publicErrorMessage(error?.message || "Position refresh failed.")
+      });
       return false;
+    } finally {
+      positionsRefreshPromise = null;
     }
-    state.walletRefreshError = error.message || "Position refresh failed.";
-    perfMeasure("positions-refresh", startedAt, {
-      errorCode: error?.code || error?.name || "POSITIONS_REFRESH_FAILED",
-      component: "positions",
-      details: publicErrorMessage(error?.message || "Position refresh failed.")
-    });
-    return false;
-  }
+  })();
+  return positionsRefreshPromise;
 }
 
 async function refreshPositionsOnly(options = {}) {
@@ -2190,8 +2201,10 @@ async function refreshPositionsOnly(options = {}) {
   try {
     const refreshed = await refreshWalletPositions({
       force: Boolean(options.force),
+      fast: true,
       silent: false,
-      timeoutMs: Math.min(API_CONNECT_TIMEOUT_MS, 20000)
+      reason: options.reason || "positions-only",
+      timeoutMs: POSITIONS_FAST_REFRESH_TIMEOUT_MS
     });
     if (!refreshed) throw new Error(state.walletRefreshError || "Position refresh failed.");
     state.lastWalletRefreshAt = new Date().toISOString();
@@ -3294,9 +3307,10 @@ function queuePostTradeRefresh(signature = "", reason = "post-trade", options = 
   POST_TRADE_REFRESH_DELAYS_MS.forEach((delay) => {
     const timer = window.setTimeout(() => {
       postTradeRefreshTimers = postTradeRefreshTimers.filter((item) => item !== timer);
+      const requestCount = Number(state.postTradeRefresh?.requestCount || 0) + 1;
       state.postTradeRefresh = {
         ...(state.postTradeRefresh || {}),
-        requestCount: Number(state.postTradeRefresh?.requestCount || 0) + 1
+        requestCount
       };
       recordPerfEvent({
         component: "post-trade",
@@ -3307,7 +3321,19 @@ function queuePostTradeRefresh(signature = "", reason = "post-trade", options = 
         details: reason
       });
       const startedAt = perfNow();
-      void refreshWalletState({ force: true, deep: false, reason: "post-trade" }).catch((error) => {
+      const refreshTask = requestCount <= 1
+        ? refreshWalletState({ force: true, deep: false, reason: "post-trade" })
+        : Promise.all([
+          refreshWalletPositions({
+            force: true,
+            fast: true,
+            silent: true,
+            reason: "post-trade-light",
+            timeoutMs: POSITIONS_FAST_REFRESH_TIMEOUT_MS
+          }),
+          loadPostTradeSupplemental()
+        ]);
+      void refreshTask.catch((error) => {
         state.walletRefreshError = error.message || "Post-trade refresh failed.";
         state.postTradeRefresh = {
           ...(state.postTradeRefresh || {}),
@@ -3337,6 +3363,7 @@ function queuePostTradeRefresh(signature = "", reason = "post-trade", options = 
           resultCount: (state.balances?.length || 0) + (state.positions?.length || 0),
           details: state.postTradeRefresh.refreshedKeys.join(",")
         });
+        render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
       });
     }, delay);
     postTradeRefreshTimers.push(timer);
