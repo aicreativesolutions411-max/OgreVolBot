@@ -3189,7 +3189,7 @@ async function loadKolScan(mode = state.kolMode, wallet = state.kolWallet, optio
   const silent = Boolean(options.silent);
   state.kolMode = mode;
   state.kolWallet = String(wallet || "").trim();
-  if (!silent) state.loading = true;
+  if (!silent && !state.kolScan) state.loading = true;
   state.kolLoading = true;
   state.kolStatus = state.kolWallet
     ? "Scanning custom KOL wallet..."
@@ -7052,8 +7052,17 @@ function kolHtml() {
     </section>
     <p class="scan-meta">${escapeHtml(kolModeDescription(state.kolMode))}</p>
     ${kolScanStatusHtml()}
-    ${curatedKolBoardHtml()}
-    <section class="trade-layout">
+    ${state.kolScan?.kols?.length ? kolSummaryHtml() : curatedKolBoardHtml()}
+    ${state.kolMode === "slimewire" && state.kolScan
+      ? state.kolScan.kols?.length ? "" : emptyState("No SlimeWire traders yet", "Traders appear here only after they opt in from Profile and have site trade history.")
+      : state.kolScan ? kolRowsHtml() : emptyState("No KOL scan loaded", "Pick a KOL mode or tap Refresh.")}
+    ${state.kolScan?.kols?.length ? curatedKolBoardHtml() : ""}
+    <details class="kol-management-settings">
+      <summary>
+        <span>Wallet Management / Copy Settings</span>
+        <small>Buy amount, TP/SL, wallet groups, copy plan, and outside KOL tools</small>
+      </summary>
+      <section class="trade-layout">
       <article class="trade-card">
         <div class="trade-head">
           <div>
@@ -7156,11 +7165,8 @@ function kolHtml() {
           </div>
         </article>
       </aside>
-    </section>
-    ${state.kolScan?.kols?.length ? kolSummaryHtml() : ""}
-    ${state.kolMode === "slimewire" && state.kolScan
-      ? state.kolScan.kols?.length ? "" : emptyState("No SlimeWire traders yet", "Traders appear here only after they opt in from Profile and have site trade history.")
-      : state.kolScan ? kolRowsHtml() : emptyState("No KOL scan loaded", "Pick a KOL mode or tap Refresh.")}
+      </section>
+    </details>
   `;
 }
 

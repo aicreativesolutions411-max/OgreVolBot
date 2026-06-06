@@ -2670,6 +2670,70 @@ code {
   padding: 10px;
 }
 
+.kol-management-settings {
+  margin: 14px 0;
+  border: 1px solid rgba(137, 255, 67, 0.2);
+  border-radius: var(--radius-lg);
+  background:
+    radial-gradient(circle at 14% 0%, rgba(137, 255, 67, 0.12), transparent 34%),
+    rgba(2, 10, 4, 0.72);
+  box-shadow: var(--shadow-soft);
+  content-visibility: auto;
+  contain-intrinsic-size: 320px;
+}
+
+.kol-management-settings > summary {
+  min-height: 48px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 12px 14px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.kol-management-settings > summary::-webkit-details-marker {
+  display: none;
+}
+
+.kol-management-settings > summary::after {
+  content: "Open";
+  border: 1px solid rgba(137, 255, 67, 0.26);
+  border-radius: 999px;
+  padding: 6px 10px;
+  color: var(--green-2);
+  background: rgba(137, 255, 67, 0.06);
+  font-size: 11px;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.kol-management-settings[open] > summary::after {
+  content: "Hide";
+}
+
+.kol-management-settings > summary span {
+  min-width: 0;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 950;
+}
+
+.kol-management-settings > summary small {
+  display: block;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.kol-management-settings .trade-layout {
+  margin: 0;
+  padding: 0 12px 12px;
+}
+
 .preset-toolbar,
 .signal-header,
 .signal-row {
@@ -6005,6 +6069,22 @@ body:has([data-app][data-route="connect"])::before {
     min-height: 28px;
     padding: 0 5px;
     font-size: 10px;
+  }
+
+  .kol-management-settings > summary {
+    grid-template-columns: 1fr auto;
+    padding: 10px;
+  }
+
+  .kol-management-settings > summary small {
+    max-width: 34ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .kol-management-settings .trade-layout {
+    padding: 0 8px 8px;
   }
 }
 
