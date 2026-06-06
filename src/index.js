@@ -11,6 +11,7 @@ import {
   classifySlimeScopePair,
   computeBestPickScore,
   formatLivePairAge as formatLivePairAgeFromData,
+  hasHardBlockedLivePairRisk,
   isGraduatedSlimeScopePair,
   isLivePairInBucket as isLivePairInBucketWindow,
   livePairBucketLabel as livePairBucketLabelCore,
@@ -397,7 +398,7 @@ function loadConfig() {
   const madeOnSolKolLimit = Number.parseInt(process.env.MADE_ON_SOL_KOL_LIMIT || "10", 10);
   const madeOnSolCacheTtlMs = Number.parseInt(process.env.MADE_ON_SOL_CACHE_TTL_MS || "900000", 10);
   const kolUseSolanaTrackerFallback = parseBoolean(process.env.KOL_USE_SOLANA_TRACKER_FALLBACK || "false");
-  const livePairsRpcSafety = parseBoolean(process.env.LIVE_PAIRS_RPC_SAFETY || "false");
+  const livePairsRpcSafety = parseBoolean(process.env.LIVE_PAIRS_RPC_SAFETY || "true");
   const livePairsRefreshSeconds = Number.parseInt(process.env.LIVE_PAIRS_REFRESH_SECONDS || "4", 10);
   const livePairsSharedCacheMs = Number.parseInt(process.env.LIVE_PAIRS_SHARED_CACHE_MS || "4000", 10);
   const livePairsImageEnrich = parseBoolean(process.env.LIVE_PAIRS_IMAGE_ENRICH || "true");
@@ -9907,6 +9908,10 @@ async function assertTokenBuySafety({ tokenMint, taker, buyLamports, slippageBps
   if (safety.mintAuthority) {
     throw new Error("Token safety check failed: mint authority is still active.");
   }
+  if (safety.tokenProgram === TOKEN_2022_PROGRAM_ID.toBase58()) {
+    throw new Error("Token safety check failed: Token-2022 mints are blocked for fast buys.");
+  }
+  await assertTokenMarketSafety(tokenMint);
 
   const buyOrder = await createJupiterOrder({
     taker,
@@ -9921,6 +9926,40 @@ async function assertTokenBuySafety({ tokenMint, taker, buyLamports, slippageBps
   }
 
   return buyOrder;
+}
+
+const HARD_BLOCKED_BUY_RISK_RE = /\b(honeypot|honey\s*pot|mintable|mint authority|freeze authority|freezable|freezeable|blacklist|cannot sell|can't sell|sell disabled|sell blocked|trading disabled|no sell|rug|scam)\b/i;
+const THIN_LIQUIDITY_MARKET_CAP_USD = 100_000_000;
+const THIN_LIQUIDITY_MARKET_CAP_RATIO = 0.01;
+
+async function assertTokenMarketSafety(tokenMint) {
+  const market = await tokenMarketSafetyInfo(tokenMint).catch(() => null);
+  if (!market) return;
+  if (HARD_BLOCKED_BUY_RISK_RE.test(market.riskText || "")) {
+    throw new Error("Token safety check failed: metadata contains honeypot/mintable/scam risk wording.");
+  }
+  if (market.marketCap >= THIN_LIQUIDITY_MARKET_CAP_USD && (!market.liquidityUsd || market.liquidityUsd / market.marketCap < THIN_LIQUIDITY_MARKET_CAP_RATIO)) {
+    throw new Error("Token safety check failed: claimed market cap is too large for available liquidity.");
+  }
+}
+
+async function tokenMarketSafetyInfo(tokenMint) {
+  const pairs = await fetchDexScreenerTokenPairsBatch([tokenMint], { timeoutMs: 1_800 }).catch(() => []);
+  const best = bestDexPairForToken(tokenMint, pairs);
+  const dex = metadataFromDexPair(tokenMint, best);
+  const marketCap = firstMeaningfulNumber(dex.marketCap, dex.fdv, best?.marketCap, best?.fdv) || 0;
+  const liquidityUsd = firstMeaningfulNumber(dex.liquidityUsd, best?.liquidity?.usd) || 0;
+  const riskText = [
+    dex.symbol,
+    dex.name,
+    dex.dexId,
+    dex.dexName,
+    best?.labels,
+    best?.boosts,
+    best?.info?.websites?.map((item) => item?.label || item?.url),
+    best?.info?.socials?.map((item) => `${item?.type || ""} ${item?.url || ""}`)
+  ].flat(Infinity).filter(Boolean).join(" ").toLowerCase();
+  return { marketCap, liquidityUsd, riskText };
 }
 
 async function getMintSafetyInfo(tokenMint) {
@@ -19248,8 +19287,10 @@ async function selectOgreAiPicks(userId, body = {}, limit = 1) {
   const baseRows = uniqueSniperScoreRows(rows)
     .filter((row) => !isPumpMayhemToken(row))
     .filter((row) => !isKnownBelowExitFloor(row))
+    .filter((row) => !hasHardBlockedLivePairRisk(row))
     .filter((row) => !isOgreAiBlockedRisk(row));
-  const pool = buildOgreAiCandidatePool(baseRows, defaults, mode);
+  const safetyRows = await filterOgreAiRowsForHardSafety(baseRows, Math.max(24, limit * 16));
+  const pool = buildOgreAiCandidatePool(safetyRows, defaults, mode);
   const filtered = pool.candidates.sort(compareOgreAiCandidates);
 
   const scanState = nextSniperScanState(`web:${userId}`, `ogre-ai:${mode}`);
@@ -19264,6 +19305,31 @@ async function selectOgreAiPicks(userId, body = {}, limit = 1) {
     qualified: filtered.length,
     rows: rotated.slice(0, limit)
   };
+}
+
+async function filterOgreAiRowsForHardSafety(rows = [], limit = 40) {
+  const accepted = [];
+  const candidates = uniqueSniperScoreRows(rows)
+    .filter((row) => !hasHardBlockedLivePairRisk(row))
+    .filter((row) => !isOgreAiBlockedRisk(row))
+    .slice(0, Math.min(rows.length, Math.max(1, limit)));
+
+  await runWithConcurrency(candidates, Math.min(6, Math.max(2, CONFIG.balanceConcurrency)), async (row) => {
+    try {
+      const safety = await getMintSafetyInfo(row.tokenMint);
+      if (safety.tokenProgram === TOKEN_2022_PROGRAM_ID.toBase58()) return;
+      if (safety.freezeAuthority || safety.mintAuthority) return;
+      accepted.push({
+        ...row,
+        tokenProgram: safety.tokenProgram,
+        safetyNote: "Ogre A.I. mint/freeze safety passed"
+      });
+    } catch {
+      // Ogre A.I. only trades candidates with a completed mint/freeze safety read.
+    }
+  });
+
+  return accepted;
 }
 
 function webOgreAiPickSummary(row = {}) {
@@ -23376,17 +23442,20 @@ async function buildWebLivePairs(userId, bucket = "live", options = {}) {
     force: Boolean(options.force)
   });
   const baseRows = uniqueSniperScoreRows(candidates.map(livePairCandidateToRow).filter(Boolean))
+    .filter((row) => !hasHardBlockedLivePairRisk(row))
     .sort(compareWebLivePairs)
     .slice(0, isLive ? 180 : 320);
   const enrichedRows = await enrichWebLivePairsForImages(baseRows).catch(() => baseRows);
   const targetLimit = livePairBucketLimit(safeBucket);
-  const ageVerifiedRows = uniqueSniperScoreRows(enrichedRows)
+  const hardSafeEnrichedRows = uniqueSniperScoreRows(enrichedRows)
+    .filter((row) => !hasHardBlockedLivePairRisk(row));
+  const ageVerifiedRows = hardSafeEnrichedRows
     .filter((row) => isWebLivePairCandidate(row, safeBucket))
     .sort((a, b) => compareWebLivePairs(a, b, sort));
   let liveRows = ageVerifiedRows;
   if (!isLive && liveRows.length < targetLimit) {
     const currentMints = new Set(liveRows.map((row) => row.tokenMint));
-    const backfillRows = uniqueSniperScoreRows(enrichedRows)
+    const backfillRows = hardSafeEnrichedRows
       .filter((row) => !currentMints.has(row.tokenMint))
       .filter((row) => isLivePairInBucket(row, safeBucket))
       .filter((row) => isWebLivePairBackfillCandidate(row, safeBucket, { allowUnknownMarketCap: true }))
@@ -23395,7 +23464,7 @@ async function buildWebLivePairs(userId, bucket = "live", options = {}) {
   }
   if (!isLive && liveRows.length < targetLimit) {
     const currentMints = new Set(liveRows.map((row) => row.tokenMint));
-    const relaxedRows = uniqueSniperScoreRows(enrichedRows)
+    const relaxedRows = hardSafeEnrichedRows
       .filter((row) => !currentMints.has(row.tokenMint))
       .filter((row) => isLivePairInRelaxedBucket(row, safeBucket))
       .filter((row) => isWebLivePairCandidate(row, safeBucket, { relaxedAge: true }))
@@ -23977,6 +24046,7 @@ async function maybeFilterWebLivePairsForSafety(rows, limit = 12) {
   }
 
   const limited = uniqueSniperScoreRows(rows)
+    .filter((row) => !hasHardBlockedLivePairRisk(row))
     .sort(compareWebLivePairs)
     .slice(0, limit)
     .map((row) => ({
@@ -24157,6 +24227,7 @@ function isWebLivePairCandidate(item, bucket = "live", options = {}) {
   return ageOk
     && marketCapOk
     && hasFreshActivity
+    && !hasHardBlockedLivePairRisk(item)
     && !isPumpMayhemToken(item)
     && !isKnownBelowExitFloor(item)
     && !flags.has("hard dump")
@@ -24178,6 +24249,7 @@ function isWebLivePairBackfillCandidate(item, bucket = "live", options = {}) {
   const activityOk = volume5m > 0 || volumeH1 > 0 || liquidityUsd > 0 || isPumpStyleToken(item);
   return marketCapOk
     && activityOk
+    && !hasHardBlockedLivePairRisk(item)
     && !isPumpMayhemToken(item)
     && !isKnownBelowExitFloor(item)
     && !flags.has("hard dump")
@@ -24201,7 +24273,6 @@ function compareWebLivePairs(a, b, sort = "best") {
 
 async function filterWebLivePairsForSafety(rows, limit = 12) {
   const accepted = [];
-  const pending = [];
   const stats = {
     checked: 0,
     accepted: 0,
@@ -24209,7 +24280,9 @@ async function filterWebLivePairsForSafety(rows, limit = 12) {
     blocked: 0,
     token2022: 0
   };
-  const candidates = rows.slice(0, Math.min(rows.length, Math.max(limit * 2, 32), 120));
+  const candidates = rows
+    .filter((row) => !hasHardBlockedLivePairRisk(row))
+    .slice(0, Math.min(rows.length, Math.max(limit * 2, 32), 120));
 
   await runWithConcurrency(candidates, Math.min(8, Math.max(3, CONFIG.balanceConcurrency)), async (row) => {
     try {
@@ -24228,15 +24301,11 @@ async function filterWebLivePairsForSafety(rows, limit = 12) {
       });
       stats.accepted += 1;
     } catch {
-      pending.push({
-        ...row,
-        safetyNote: "Mint check pending; trade precheck still runs before buy"
-      });
       stats.pending += 1;
     }
   });
 
-  const combined = uniqueSniperScoreRows([...accepted, ...pending]).sort(compareWebLivePairs).slice(0, limit);
+  const combined = uniqueSniperScoreRows(accepted).sort(compareWebLivePairs).slice(0, limit);
   return { rows: combined, stats };
 }
 

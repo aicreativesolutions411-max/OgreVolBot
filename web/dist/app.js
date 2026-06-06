@@ -8203,6 +8203,11 @@ function openQuickBuy(tokenRef = {}, options = {}) {
     setError("Select a token before quick buying.");
     return;
   }
+  const rawRow = rawSignalRowForMint(mint);
+  if (rawRow && isUiBlockedSignalRow(rawRow)) {
+    setError("Safety block: this token has mintable/freezable/honeypot-style risk signals and cannot be quick bought.");
+    return;
+  }
   const preset = options.preset || activeTradePreset();
   const amount = preset && !options.forceModal ? activeQuickBuyAmount(preset) : "";
   const hasPresetWallet = preset?.walletIndex || (preset?.walletIndexes || [])[0];
@@ -9090,13 +9095,34 @@ function pnlHtml() {
 }
 
 function allVisibleSignalRows() {
+  return visibleSignalRowsFromRawRows(allRawSignalRows());
+}
+
+function allRawSignalRows() {
   const liveRows = Object.values(state.livePairsByBucket || {}).flatMap((feed) => feed?.rows || []);
   const scanRows = state.scan?.rows || [];
   const kolRows = state.kolScan?.rows || [];
   const watchRows = state.watchlist?.rows || [];
+  return [...liveRows, ...scanRows, ...kolRows, ...watchRows];
+}
+
+function rawSignalRowForMint(tokenMint = "") {
+  const mint = String(tokenMint || "");
+  if (!mint) return null;
+  return allRawSignalRows().find((row) => String(row?.tokenMint || "") === mint) || null;
+}
+
+function blockRawSignalTokenIfUnsafe(tokenMint = "") {
+  const row = rawSignalRowForMint(tokenMint);
+  if (!row || !isUiBlockedSignalRow(row)) return false;
+  setError("Safety block: this feed token has mintable/freezable/honeypot-style risk signals.");
+  return true;
+}
+
+function visibleSignalRowsFromRawRows(rows = []) {
   const byMint = new Map();
-  for (const row of [...liveRows, ...scanRows, ...kolRows, ...watchRows]) {
-    if (isUiMayhemRow(row)) continue;
+  for (const row of rows || []) {
+    if (isUiBlockedSignalRow(row)) continue;
     const mint = String(row?.tokenMint || "");
     if (mint && !byMint.has(mint)) byMint.set(mint, row);
   }
@@ -9106,7 +9132,7 @@ function allVisibleSignalRows() {
 function uniqueSignalRows(rows = []) {
   const byMint = new Map();
   for (const row of rows || []) {
-    if (isUiMayhemRow(row)) continue;
+    if (isUiBlockedSignalRow(row)) continue;
     const mint = String(row?.tokenMint || "");
     if (!mint) continue;
     const existing = byMint.get(mint);
@@ -9144,6 +9170,35 @@ function isUiMayhemRow(row = {}) {
     row?.riskFlags
   ].flat().filter(Boolean).join(" ").toLowerCase();
   return /\bmayhem\b/.test(labels) || labels.includes("pump mayhem") || labels.includes("mayhem mode");
+}
+
+function isUiBlockedSignalRow(row = {}) {
+  if (isUiMayhemRow(row)) return true;
+  const labels = [
+    row?.tokenMint,
+    row?.symbol,
+    row?.name,
+    row?.source,
+    row?.category,
+    row?.platform,
+    row?.market,
+    row?.dexId,
+    row?.profileSource,
+    row?.labels,
+    row?.riskFlags,
+    row?.bestPickWarnings,
+    row?.scoreWarnings,
+    row?.safetyNote,
+    row?.tokenProgram,
+    row?.mintAuthority ? "mint authority" : "",
+    row?.freezeAuthority ? "freeze authority" : ""
+  ].flat().filter(Boolean).join(" ").toLowerCase();
+  if (/\b(honeypot|honey\s*pot|mintable|mint authority|freeze authority|freezable|freezeable|blacklist|cannot sell|can't sell|sell disabled|sell blocked|trading disabled|no sell|no route|rug|scam|token-2022)\b/i.test(labels)) {
+    return true;
+  }
+  const marketCap = firstUsefulNumber(row.marketCap, row.fdv);
+  const liquidityUsd = firstUsefulNumber(row.liquidityUsd);
+  return marketCap >= 100_000_000 && (!liquidityUsd || liquidityUsd / marketCap < 0.01);
 }
 
 function selectedTerminalTokenRow() {
@@ -10950,6 +11005,13 @@ function livePairRowsHtml(rows) {
 
 function tokenSignalRowsHtml(rows, options = {}) {
   const shareBuilder = options.shareBuilder || livePairShareText;
+  const visibleRows = uniqueSignalRows(rows);
+  if (!visibleRows.length) {
+    return `
+      ${options.hideToolbar ? "" : fastPresetToolbarHtml(options.context || "scanner")}
+      ${emptyState("No safety-cleared signals", "Mintable, freezable, honeypot-risk, and absurd market-cap rows are blocked from this feed.")}
+    `;
+  }
   return `
     ${options.hideToolbar ? "" : fastPresetToolbarHtml(options.context || "scanner")}
     <div class="signal-list">
@@ -10962,7 +11024,7 @@ function tokenSignalRowsHtml(rows, options = {}) {
         <span>Volume</span>
         <span>Action</span>
       </div>
-      ${rows.map((row, index) => tokenSignalRowHtml(row, index, { ...options, shareText: shareBuilder(row) })).join("")}
+      ${visibleRows.map((row, index) => tokenSignalRowHtml(row, index, { ...options, shareText: shareBuilder(row) })).join("")}
     </div>
   `;
 }
@@ -11800,6 +11862,8 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-token-chart]")) {
     event.preventDefault();
+    const mint = target.dataset.tokenChart || target.dataset.previewToken || "";
+    if (blockRawSignalTokenIfUnsafe(mint)) return;
     openTokenChart(tokenRefFromMint(target.dataset.tokenChart || target.dataset.previewToken || "", {
       source: target.dataset.tokenChartSource || "token-card"
     }), {
@@ -11812,7 +11876,9 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-token-trade]")) {
     event.preventDefault();
     event.stopPropagation();
-    openTokenChart(tokenRefFromMint(target.dataset.tokenTrade || "", {
+    const mint = target.dataset.tokenTrade || "";
+    if (blockRawSignalTokenIfUnsafe(mint)) return;
+    openTokenChart(tokenRefFromMint(mint, {
       source: target.dataset.tokenTradeSource || "trade-button"
     }), {
       defaultTab: "buy",

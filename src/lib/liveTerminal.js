@@ -112,6 +112,10 @@ function firstPositiveNumber(...values) {
   return 0;
 }
 
+const HARD_BLOCKED_PAIR_RISK_RE = /\b(honeypot|honey\s*pot|mintable|mint authority|freeze authority|freezable|freezeable|blacklist|cannot sell|can't sell|sell disabled|sell blocked|trading disabled|no sell|no route|rug|scam|mayhem)\b/i;
+const ABSURD_THIN_LIQUIDITY_MARKET_CAP_USD = 100_000_000;
+const ABSURD_THIN_LIQUIDITY_RATIO = 0.01;
+
 function textBlob(row = {}) {
   return [
     row.source,
@@ -123,8 +127,23 @@ function textBlob(row = {}) {
     row.platform,
     row.profileSource,
     row.labels,
-    row.riskFlags
+    row.riskFlags,
+    row.bestPickWarnings,
+    row.scoreWarnings,
+    row.safetyNote,
+    row.tokenProgram,
+    row.mintAuthority ? "mint authority" : "",
+    row.freezeAuthority ? "freeze authority" : ""
   ].flat().filter(Boolean).join(" ").toLowerCase();
+}
+
+export function hasHardBlockedLivePairRisk(row = {}) {
+  const text = textBlob(row);
+  if (HARD_BLOCKED_PAIR_RISK_RE.test(text)) return true;
+  const marketCap = firstPositiveNumber(row.marketCap, row.fdv);
+  const liquidityUsd = firstPositiveNumber(row.liquidityUsd);
+  return marketCap >= ABSURD_THIN_LIQUIDITY_MARKET_CAP_USD
+    && (!liquidityUsd || liquidityUsd / marketCap < ABSURD_THIN_LIQUIDITY_RATIO);
 }
 
 export function slimeScopeProgressPct(row = {}) {
@@ -185,6 +204,23 @@ export function computeBestPickScore(row = {}, now = Date.now()) {
   const kolSignals = Number(row.kolSignalCount || row.kolCount || 0);
   const riskFlags = Array.isArray(row.riskFlags) ? row.riskFlags : [];
   const warnings = [];
+  if (hasHardBlockedLivePairRisk(row)) {
+    return {
+      score: 1,
+      label: "Blocked",
+      inputs: {
+        freshness: 0,
+        liquidity: 0,
+        volume: 0,
+        momentum: 0,
+        buyPressure: 0,
+        kol: 0,
+        marketCapFit: 0,
+        riskPenalty: 100
+      },
+      warnings: ["hard safety block"]
+    };
+  }
 
   const freshness = age === null
     ? 8

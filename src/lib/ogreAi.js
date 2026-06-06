@@ -6,6 +6,11 @@ function numberValue(...values) {
   return 0;
 }
 
+const OGRE_AI_HARD_BLOCKED_RISK_RE = /\b(honeypot|honey\s*pot|mintable|mint authority|freeze authority|freezable|freezeable|blacklist|cannot sell|can't sell|sell disabled|sell blocked|trading disabled|no sell|no route|rug|scam|token-2022|safety pending|mint check pending)\b/i;
+const OGRE_AI_ABSURD_MARKET_CAP_USD = 25_000_000;
+const OGRE_AI_THIN_LIQUIDITY_MARKET_CAP_USD = 5_000_000;
+const OGRE_AI_THIN_LIQUIDITY_RATIO = 0.01;
+
 function textBlob(row = {}) {
   return [
     row.symbol,
@@ -18,7 +23,10 @@ function textBlob(row = {}) {
     ...(Array.isArray(row.bestPickWarnings) ? row.bestPickWarnings : []),
     row.rugRisk,
     row.exitRisk,
-    row.safetyNote
+    row.safetyNote,
+    row.tokenProgram,
+    row.mintAuthority ? "mint authority" : "",
+    row.freezeAuthority ? "freeze authority" : ""
   ].filter(Boolean).join(" ").toLowerCase();
 }
 
@@ -30,11 +38,20 @@ export function ogreAiRiskText(row = {}) {
   return textBlob(row);
 }
 
-export function isOgreAiBlockedRisk(row = {}) {
+export function hasOgreAiHardSafetyBlock(row = {}) {
   const text = ogreAiRiskText(row);
-  return /\b(hard dump|sell pressure|honeypot|blocked|no route|rug|token-2022|freeze authority|mint authority)\b/i.test(text)
-    || /\bmayhem\b/i.test(text)
-    || text.includes("pump mayhem");
+  if (OGRE_AI_HARD_BLOCKED_RISK_RE.test(text)) return true;
+  if (/\bmayhem\b/i.test(text) || text.includes("pump mayhem")) return true;
+  const marketCap = numberValue(row.marketCap, row.fdv);
+  const liquidityUsd = numberValue(row.liquidityUsd);
+  if (marketCap >= OGRE_AI_ABSURD_MARKET_CAP_USD) return true;
+  return marketCap >= OGRE_AI_THIN_LIQUIDITY_MARKET_CAP_USD
+    && (!liquidityUsd || liquidityUsd / marketCap < OGRE_AI_THIN_LIQUIDITY_RATIO);
+}
+
+export function isOgreAiBlockedRisk(row = {}) {
+  return hasOgreAiHardSafetyBlock(row)
+    || /\b(hard dump|sell pressure|blocked)\b/i.test(ogreAiRiskText(row));
 }
 
 export function ogreAiCandidateStats(row = {}) {
@@ -143,6 +160,10 @@ export function buildOgreAiCandidatePool(rows = [], defaults = {}, mode = "quick
     seen.add(key);
     const tier = ogreAiTierForCandidate(row, defaults, mode);
     if (!tier) {
+      if (isOgreAiBlockedRisk(row)) {
+        blocked += 1;
+        continue;
+      }
       const stats = ogreAiCandidateStats(row);
       const maxMarketCap = Number(defaults.maxMarketCap || 750_000);
       const ageOk = stats.ageMinutes === null
