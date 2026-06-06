@@ -8194,3 +8194,26 @@ textarea,
     min-height: 128px !important;
   }
 }
+
+/* OGRE_AGENT_QUICK_ACTIONS_V1: persistent compact controls under chat input. */
+.ogre-agent-quick-actions {
+  display: grid !important;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  gap: 6px !important;
+  margin-top: 7px !important;
+}
+
+.ogre-agent-quick-actions button {
+  min-height: 30px !important;
+  padding: 5px 6px !important;
+  border-radius: 10px !important;
+  font-size: 0.68rem !important;
+  line-height: 1.05 !important;
+  white-space: normal !important;
+}
+
+@media (max-width: 520px) {
+  .ogre-agent-quick-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}

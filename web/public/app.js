@@ -12696,6 +12696,12 @@ function ogreAgentHtml() {
           <textarea data-ogre-agent-input rows="2" placeholder="Ask: buy this CA with 25% preset, show positions, how do I use TP/SL...">${escapeHtml(state.ogreAgentDraft || "")}</textarea>
           <button type="button" data-ogre-agent-send ${state.ogreAgentLoading ? "disabled" : ""}>Send</button>
         </div>
+        <div class="ogre-agent-quick-actions" aria-label="Ogre Agent quick actions">
+          <button type="button" data-ogre-agent-quick="positions">Show Positions</button>
+          <button type="button" data-ogre-agent-quick="refresh_feeds">Refresh Feeds</button>
+          <button type="button" data-ogre-agent-quick="auto_trade">Auto-Trade On</button>
+          <button type="button" data-ogre-agent-quick="clear_chat">Clear</button>
+        </div>
         ${state.ogreAgentStatus ? `<small class="ogre-agent-status">${escapeHtml(state.ogreAgentStatus)}</small>` : ""}
       </section>
     </div>
@@ -13146,6 +13152,9 @@ async function runOgreAgentAction(action = {}) {
   renderOgreAgent();
 }
 
+function ogreAgentCoinCheckIntent(message = "") {
+  return /\b(check|analy[sz]e|rug|honeypot|community|social|website|telegram|twitter|x\b|links?|good choice|good pick|good buy|bullish|bearish|safe|risky|risk|will it do well|looks good|breakdown|details?)\b/i.test(String(message || ""));
+}
 async function sendOgreAgentMessage() {
   const input = document.querySelector("[data-ogre-agent-input]");
   const message = String(input?.value || "").trim();
@@ -13170,6 +13179,14 @@ async function sendOgreAgentMessage() {
       text: data?.agent?.reply || "I can help with panel functions, charts, positions, presets, coin checks, links, risk reads, and fast trade requests.",
       actions
     });
+    const autoCoinCheckAction = !ogreAgentTradeIntent(message) && ogreAgentCoinCheckIntent(message)
+      ? (actions.find((action) => action.type === "coin_breakdown" || action.type === "analyze_coin") || prepareOgreAgentActionForMessage({ type: "coin_breakdown" }, message))
+      : null;
+    if (autoCoinCheckAction?.tokenMint || autoCoinCheckAction?.mint || autoCoinCheckAction?.ca) {
+      state.ogreAgentStatus = "Checking coin now...";
+      await runOgreAgentAction(autoCoinCheckAction);
+      return;
+    }
     const clientFallbackTradeAction = prepareOgreAgentActionForMessage({ type: ogreAgentTradeIntent(message) === "buy" ? "confirm_buy" : ogreAgentTradeIntent(message) === "sell" ? "confirm_sell" : "" }, message);
     if (ogreAgentTradeIntent(message) && state.ogreAgentFastMode && !isOgreAgentAutoTradeApproved()) {
       pushOgreAgentMessage({
@@ -13349,9 +13366,24 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
+  if (target.matches("[data-ogre-agent-quick]")) {
+    const quick = target.dataset.ogreAgentQuick || "";
+    if (quick === "positions") void runOgreAgentAction({ type: "open_tab", tab: "positions" });
+    if (quick === "refresh_feeds") void runOgreAgentAction({ type: "refresh_feeds" });
+    if (quick === "auto_trade") void runOgreAgentAction({ type: "approve_agent_auto_trade" });
+    if (quick === "clear_chat") {
+      state.ogreAgentMessages = [ogreAgentInitialMessage()];
+      state.ogreAgentStatus = "Chat cleared.";
+      state.ogreAgentDraft = "";
+      renderOgreAgent({ force: true });
+    }
+    return;
+  }
+
   if (target.matches("[data-ogre-agent-action]")) {
     const actionKey = target.dataset.ogreAgentAction;
-    const action = (state.ogreAgentMessages || [])
+    const keyedAction = ogreAgentActionFromKey(actionKey);
+    const action = keyedAction || (state.ogreAgentMessages || [])
       .flatMap((message) => Array.isArray(message.actions) ? message.actions : [])
       .find((item) => item.key === actionKey || item.label === actionKey || item.type === actionKey);
     void runOgreAgentAction(action || { type: actionKey });
@@ -14575,6 +14607,7 @@ if (!window.__slimeStablePumpChartTimer) {
     slimePumpChartRerender();
   }, 8000);
 }
+
 
 
 

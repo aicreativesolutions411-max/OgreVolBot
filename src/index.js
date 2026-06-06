@@ -2333,6 +2333,48 @@ function ogreAgentFallbackReply(message = "", context = {}) {
   return { reply, actions: actions.slice(0, 4), intent: "panel_help" };
 }
 
+function ogreAgentCoinIntent(message = "") {
+  return /\b(check|analy[sz]e|rug|honeypot|community|social|website|telegram|twitter|x\b|links?|good choice|good pick|good buy|bullish|bearish|safe|risky|risk|will it do well|looks good|breakdown|details?)\b/i.test(String(message || ""));
+}
+
+function ogreAgentMoney(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) return "n/a";
+  if (number >= 1_000_000_000) return `$${(number / 1_000_000_000).toFixed(2)}B`;
+  if (number >= 1_000_000) return `$${(number / 1_000_000).toFixed(2)}M`;
+  if (number >= 1_000) return `$${(number / 1_000).toFixed(1)}K`;
+  return `$${number.toFixed(number >= 1 ? 2 : 6)}`;
+}
+
+async function enrichOgreAgentCoinReply(fallback = {}, message = "", context = {}) {
+  const tokenMint = ogreAgentTokenMintFromText(message) || String(context.smartChartToken || context.tradeToken || "").trim();
+  if (!tokenMint || !ogreAgentCoinIntent(message)) return fallback;
+  try {
+    const token = await webDexToken(tokenMint);
+    const symbol = token.symbol || shortMint(tokenMint);
+    const name = token.name || "Token";
+    const liquidity = ogreAgentMoney(token.liquidityUsd || token.liquidity?.usd);
+    const marketCap = ogreAgentMoney(token.marketCap || token.fdv || token.marketCapUsd);
+    const volume = ogreAgentMoney(token.volume24h || token.volume?.h24 || token.volume?.m5);
+    const source = token.dexName || token.dexId || token.metadataSource || "metadata";
+    const lines = [
+      `${symbol} check for ${shortMint(tokenMint)}:`,
+      `${name} | MC/FDV ${marketCap} | Liq ${liquidity} | Vol ${volume}`,
+      token.pairAddress ? `Pair ${shortMint(token.pairAddress)} on ${source}.` : `No confirmed pair found yet from ${source}.`,
+      "Read: stronger setups usually show real liquidity, steady live buys, socials that match the token, and chart structure building higher lows. Red flags are thin/no liquidity, fake socials, mint/freeze risk badges, giant FDV with no activity, and one-sided sell pressure."
+    ];
+    const actions = [
+      { label: "Check Coin", type: "coin_breakdown", tokenMint },
+      { label: "Open Chart", type: "open_chart", tokenMint },
+      { label: "Dex", type: "open_external", url: token.dexUrl || `https://dexscreener.com/solana/${tokenMint}` },
+      { label: "Pump", type: "open_external", url: token.pumpUrl || `https://pump.fun/coin/${tokenMint}` },
+      { label: "Solscan", type: "open_external", url: `https://solscan.io/token/${tokenMint}` }
+    ];
+    return { ...fallback, reply: lines.filter(Boolean).join("\n"), actions, coinEnriched: true };
+  } catch (error) {
+    return fallback;
+  }
+}
 async function callOgreAgentModel(message = "", context = {}, fallback = {}) {
   if (!CONFIG.openaiApiKey) return null;
   const controller = new AbortController();
@@ -26821,6 +26863,7 @@ main().catch((error) => {
   console.error(error);
   process.exit(1);
 });
+
 
 
 
