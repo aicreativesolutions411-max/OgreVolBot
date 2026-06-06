@@ -8013,6 +8013,46 @@ textarea,
   }
 }
 
+/* SLIME_DESKTOP_PANEL_HOST_TOP_LOCK_V2: active feed starts beside nav immediately. */
+@media (min-width: 921px) {
+  [data-app][data-route="terminal"] [data-dashboard] {
+    align-items: start !important;
+    align-content: start !important;
+    grid-auto-rows: min-content !important;
+  }
+
+  [data-app][data-route="terminal"] [data-dashboard] > .tabs {
+    grid-column: 1 !important;
+    grid-row: 1 / span 2 !important;
+    align-self: start !important;
+    justify-self: stretch !important;
+  }
+
+  [data-app][data-route="terminal"] [data-dashboard] > .panel-host,
+  [data-app][data-route="terminal"] .panel-host {
+    grid-column: 2 !important;
+    grid-row: 1 !important;
+    align-self: start !important;
+    justify-self: stretch !important;
+    min-height: 0 !important;
+    margin-top: 0 !important;
+    padding-top: 0 !important;
+    transform: none !important;
+  }
+
+  [data-app][data-route="terminal"] .panel-host > *,
+  [data-app][data-route="terminal"] .panel-host .terminal-layout,
+  [data-app][data-route="terminal"] .panel-host .terminal-main,
+  [data-app][data-route="terminal"] .panel-host .live-terminal,
+  [data-app][data-route="terminal"] .panel-host .command-center {
+    align-self: start !important;
+    min-height: 0 !important;
+    margin-top: 0 !important;
+    padding-top: 0 !important;
+    transform: none !important;
+  }
+}
+
 /* OGRE_AGENT_CHAT_BOX_FIX_V1: keep the side agent compact, but open as a usable chat box. */
 .ogre-agent-panel {
   display: flex !important;
