@@ -9200,7 +9200,7 @@ async function quickPresetBundle(tokenMint, presetOverride = null) {
   }
 }
 
-async function sellPositionPercent(tokenMint, percentText = "100") {
+async function sellPositionPercent(tokenMint, percentText = "100", options = {}) {
   const clickStartedAt = perfNow();
   let percent = Number.parseInt(percentText, 10);
   let manualSellAttemptId = "";
@@ -9222,7 +9222,7 @@ async function sellPositionPercent(tokenMint, percentText = "100") {
     }
     const position = state.positions.find((item) => String(item.tokenMint) === String(tokenMint));
     const tokenLabel = position?.symbol || position?.name || shortAddress(tokenMint);
-    const ok = window.confirm([
+    const ok = Boolean(options.skipConfirm) || window.confirm([
       `Exit ${percent}% of ${tokenLabel}?`,
       `Mint: ${tokenMint}`,
       "Wallets: all managed wallets holding this token",
@@ -12621,7 +12621,7 @@ function ogreAgentHtml() {
         <header>
           <div>
             <span>Ogre Agent</span>
-            <small>Panel help + safe task staging</small>
+            <small>Ask for help or make a trade request.</small>
           </div>
           <button type="button" data-ogre-agent-close aria-label="Close Ogre Agent">×</button>
         </header>
@@ -12729,17 +12729,10 @@ async function runOgreAgentAction(action = {}) {
       renderOgreAgent();
       return;
     }
-    const shortMint = typeof shortAddress === "function" ? shortAddress(tokenMint) : tokenMint;
-    const confirmed = window.confirm(`Ogre Agent will prepare a ${amountSol} SOL buy for ${shortMint}. You will still need to confirm in your wallet. Continue?`);
-    if (!confirmed) {
-      state.ogreAgentStatus = "Buy canceled.";
-      renderOgreAgent();
-      return;
-    }
     const walletIndex = Number.isFinite(Number(action.walletIndex)) ? Number(action.walletIndex) : 0;
     const slippageBps = Number.isFinite(Number(action.slippageBps)) ? Number(action.slippageBps) : undefined;
     state.ogreAgentLoading = true;
-    state.ogreAgentStatus = `Preparing ${amountSol} SOL buy...`;
+    state.ogreAgentStatus = `Sending ${amountSol} SOL buy request...`;
     renderOgreAgent();
     try {
       const result = await executeQuickBuyAmount({ tokenMint, walletIndex, amountSol, slippageBps, source: "ogre-agent-confirm-buy" });
@@ -12770,7 +12763,7 @@ async function runOgreAgentAction(action = {}) {
     state.ogreAgentStatus = `Preparing sell ${percent}%...`;
     renderOgreAgent();
     try {
-      await sellPositionPercent(tokenMint, percent);
+      await sellPositionPercent(tokenMint, percent, { skipConfirm: true, source: "ogre-agent-confirm-sell" });
       state.ogreAgentStatus = `Sell ${percent}% submitted. Refreshing wallet and positions in the background.`;
       if (typeof refreshWalletNow === "function") void refreshWalletNow({ force: true, reason: "ogre_agent_sell" });
       if (typeof refreshPositionsNow === "function") void refreshPositionsNow({ force: true, reason: "ogre_agent_sell" });
@@ -12804,7 +12797,7 @@ async function sendOgreAgentMessage() {
     });
     pushOgreAgentMessage({
       role: "assistant",
-      text: data?.agent?.reply || "I can help with panel functions, charts, positions, presets, and safe task staging.",
+      text: data?.agent?.reply || "I can help with panel functions, charts, positions, presets, and fast help and trade requests.",
       actions: data?.agent?.actions || []
     });
     state.ogreAgentStatus = data?.agent?.modelPowered ? "AI reply" : "Fast local Ogre reply";
@@ -14196,6 +14189,7 @@ if (!window.__slimeStablePumpChartTimer) {
     slimePumpChartRerender();
   }, 8000);
 }
+
 
 
 

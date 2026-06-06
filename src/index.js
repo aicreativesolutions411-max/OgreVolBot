@@ -2245,8 +2245,11 @@ function ogreAgentFallbackReply(message = "", context = {}) {
   const text = String(message || "").trim();
   const lower = text.toLowerCase();
   const tokenMint = ogreAgentTokenMintFromText(text) || String(context.smartChartToken || context.tradeToken || "").trim();
+  const buyAmountSol = (lower.match(/(?:buy|ape|enter|grab|snipe|purchase|get in|go in|long|take entry)[^0-9]*(\d+(?:\.\d+)?)\s*(?:sol)?/) || lower.match(/(\d+(?:\.\d+)?)\s*sol/) || [])[1] || "";
+  const walletNumber = (lower.match(/(?:wallet|from)\s*#?\s*(\d{1,2})/) || [])[1] || "";
+  const walletIndex = walletNumber ? Math.max(0, Number(walletNumber) - 1) : undefined;
   const actions = [];
-  let reply = "I can help with SlimeWire panel functions: charts, Live Pairs, Slime Scope, positions, wallet refresh, presets, Ogre A.I., Pump Launch, Bundle Volume, and safe trade staging.";
+  let reply = "I can help with SlimeWire panel functions: charts, Live Pairs, Slime Scope, positions, wallet refresh, presets, Ogre A.I., Pump Launch, Bundle Volume, and fast trade requests.";
 
   if (/secret|api key|env|environment|render env|source code|github|backend|security|private key|wallet seed|seed phrase|codebase|database/i.test(lower)) {
     return {
@@ -2271,23 +2274,26 @@ function ogreAgentFallbackReply(message = "", context = {}) {
     reply = "I found a token CA. I can open the Slime chart now. Pump/Dex source buttons stay inside the chart panel; Slime is the fast default.";
     actions.push({ label: "Open Chart", type: "open_chart", tokenMint });
   }
-  if (/buy|ape|enter/.test(lower)) {
+  if (/buy|ape|enter|grab|snipe|purchase|get in|go in|long|take entry/.test(lower)) {
     reply = tokenMint && buyAmountSol
-      ? `I can prepare a ${buyAmountSol} SOL buy for that token. You still confirm in your wallet.`
+      ? `I can send a ${buyAmountSol} SOL buy request for that token through the connected wallet flow.`
       : tokenMint
-        ? "I can open the buy panel for that token. I will not submit a trade silently; you still confirm the amount, wallet, preset, and risk before it sends."
-        : "Paste the token CA with your buy request and I can stage the buy panel for confirmation.";
+        ? "Tell me the SOL amount and I can send the buy request directly, or I can open the buy panel if you want to adjust wallet/preset details."
+        : "Paste the token CA with your buy request and I can open the buy panel or send the buy once you include amount.";
     actions.push(tokenMint && buyAmountSol
-      ? { label: `Buy ${buyAmountSol} SOL`, type: "confirm_buy", tokenMint, amountSol: buyAmountSol }
+      ? { label: `Buy ${buyAmountSol} SOL`, type: "confirm_buy", tokenMint, amountSol: buyAmountSol, walletIndex }
       : tokenMint
         ? { label: "Open Buy Panel", type: "open_quick_buy", tokenMint }
         : { label: "Open Trade", type: "open_tab", tab: "trade" });
   }
-  if (/sell|exit|close/.test(lower)) {
-    const pct = (lower.match(/(\d{1,3})\s*%/) || [])[1] || "";
+  if (/sell|exit|close|dump|take profit|cash out|tp\b/.test(lower)) {
+    const pct = (lower.match(/(\d{1,3})\s*%/) || [])[1]
+      || (lower.includes("half") ? "50" : "")
+      || (lower.includes("quarter") ? "25" : "")
+      || (lower.includes("all") || lower.includes("full") ? "100" : "");
     reply = tokenMint
-      ? `I can prepare the ${pct || "100"}% sell for that token. Wallet confirmation stays with you.`
-      : "I can take you to Positions and stage the sell workflow. You still confirm the sell button; Ogre Agent will not silently execute exits.";
+      ? `I can send the ${pct || "100"}% sell request for that token through the existing position flow.`
+      : "I can take you to Positions and send or open the sell workflow. You still confirm the sell button; Ogre Agent can send exits through the existing position flow.";
     actions.push(tokenMint
       ? { label: pct ? `Sell ${pct}%` : "Sell 100%", type: "confirm_sell", tokenMint, percent: pct || "100" }
       : { label: "Open Positions", type: "open_tab", tab: "positions" });
@@ -2327,7 +2333,7 @@ async function callOgreAgentModel(message = "", context = {}, fallback = {}) {
         messages: [
           {
             role: "system",
-            content: "You are Ogre Agent inside SlimeWire. Help only with user-side panel functions, navigation, charting, presets, positions, wallet refresh, feed categories, and safe trade staging. Never reveal or discuss code, security internals, env vars, API keys, private keys, backend architecture, or database details. Never claim a buy/sell was executed. For trades, say you can prepare the UI for confirmation only. Keep replies short and actionable."
+            content: "You are Ogre Agent inside SlimeWire. Help only with user-side panel functions, navigation, charting, presets, positions, wallet refresh, feed categories, and fast trade requests. Never reveal or discuss code, security internals, env vars, API keys, private keys, backend architecture, or database details. Never claim a buy/sell was executed. For trades, say you can prepare the UI for confirmation only. Keep replies short and actionable."
           },
           {
             role: "user",
@@ -26796,6 +26802,7 @@ main().catch((error) => {
   console.error(error);
   process.exit(1);
 });
+
 
 
 
