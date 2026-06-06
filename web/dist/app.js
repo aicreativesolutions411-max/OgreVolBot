@@ -282,6 +282,8 @@ const state = {
   walletConnectReturnPath: "/terminal",
   walletConnectStatus: "",
   automationDelegationStatus: "",
+  tpslAutoEnableInFlight: false,
+  tpslAutoEnableScheduledAt: 0,
   ogreTek: {
     loading: false,
     error: "",
@@ -3671,7 +3673,12 @@ function syncShellRouteVisibility() {
   app.dataset.route = state.route;
   app.dataset.walletConnected = hasWalletContext ? "true" : "false";
   if (hasWalletContext) syncOgreAgentAutoApprovalFromWallet("shell-wallet-context");
+  if (hasWalletContext) scheduleTpSlAutoEnable("shell-wallet-context");
   else ogreAgentClearAutoTradeSession();
+  if (!hasWalletContext) {
+    state.tpslAutoEnableInFlight = false;
+    state.tpslAutoEnableScheduledAt = 0;
+  }
   setRouteSectionHidden(loginView, !["intro", "login"].includes(state.route));
   setRouteSectionHidden(connectView, state.route !== "connect");
   setRouteSectionHidden(dashboardView, state.route !== "terminal");
@@ -3908,6 +3915,52 @@ function render(options = {}) {
   }
 }
 
+function tpslAutoRevokedThisSession() {
+  try { return sessionStorage.getItem("tpslAutoRevoked") === "yes"; } catch { return false; }
+}
+
+function setTpslAutoRevokedThisSession(revoked) {
+  try {
+    if (revoked) sessionStorage.setItem("tpslAutoRevoked", "yes");
+    else sessionStorage.removeItem("tpslAutoRevoked");
+  } catch {}
+}
+
+function hasTpSlAutomationWalletContext() {
+  return Boolean((Array.isArray(state.wallets) && state.wallets.length) || state.user?.connectedWallet || state.connectedWalletBalance?.publicKey);
+}
+
+function hasActiveTpSlPermission() {
+  const permission = state.user?.automationPermission || {};
+  const expiresAt = Date.parse(permission.expiresAt || "");
+  const expired = Boolean(permission.enabled) && Number.isFinite(expiresAt) && expiresAt <= Date.now();
+  return Boolean(state.user?.automationPermissionActive) && !expired && !permission.revokedAt;
+}
+
+function shouldAutoEnableTpSlPermission() {
+  if (!hasTpSlAutomationWalletContext()) return false;
+  if (tpslAutoRevokedThisSession()) return false;
+  if (hasActiveTpSlPermission()) return false;
+  if (state.tpslAutoEnableInFlight) return false;
+  return true;
+}
+
+function scheduleTpSlAutoEnable(reason = "wallet-session") {
+  if (!shouldAutoEnableTpSlPermission()) return;
+  const now = perfNow();
+  if (state.tpslAutoEnableScheduledAt && now - state.tpslAutoEnableScheduledAt < 2_000) return;
+  state.tpslAutoEnableScheduledAt = now;
+  state.tpslAutoEnableInFlight = true;
+  setTimeout(() => {
+    void updateAutomationPermission("enable", { auto: true, reason }).catch((error) => {
+      state.automationDelegationStatus = error?.message || "TP/SL auto-enable failed.";
+      setError(state.automationDelegationStatus);
+    }).finally(() => {
+      state.tpslAutoEnableInFlight = false;
+      updateTopTpSlStatus();
+    });
+  }, 50);
+}
 function updateTopTpSlStatus() {
   const button = $("[data-tpsl-status-button]");
   if (!button) return;
@@ -4336,22 +4389,22 @@ function automationDelegationHtml({ compact = false } = {}) {
   const permissionActive = Boolean(state.user?.automationPermissionActive);
   const expires = permission.expiresAt ? formatDate(permission.expiresAt) : "";
   const status = state.automationDelegationStatus || (managedCount
-    ? `${managedCount} managed automation wallet(s) available. ${permissionActive ? `Server exits enabled until ${expires}.` : "Enable permission before using auto TP/SL."}`
+    ? `${managedCount} managed automation wallet(s) available. ${permissionActive ? `Server exits enabled until ${expires}.` : "TP/SL auto-enables when a wallet is connected or created."}`
     : "Create one automation wallet before relying on server-side exits.");
   return `
     <article class="setup-hub-panel automation-delegation-card ${compact ? "compact" : ""}">
       <div class="delegation-heading">
-        <span class="delegation-mode-badge">${permissionActive ? "Automation Enabled" : "TP/SL Permission Required"}</span>
+        <span class="delegation-mode-badge">${permissionActive ? "Automation Enabled" : "TP/SL Auto-Enabled"}</span>
         <h3>Automation Wallet</h3>
       </div>
-      <p>Server-side stop-loss, take-profit, and timer exits run only from managed/imported SlimeWire wallets after you enable this permission. Browser-connected Phantom/Solflare wallets still require wallet approval unless a separate audited session-key provider is added later.</p>
+      <p>Server-side stop-loss, take-profit, and timer exits auto-enable for the active wallet session. Managed/imported SlimeWire wallets can run through the saved flow; browser wallets may still require provider signatures unless delegated signing is added later.</p>
       <ul class="delegation-steps">
         <li>Scope: managed/imported SlimeWire wallets only.</li>
         <li>Allowed actions: TP/SL exits and timer exits.</li>
         <li>Limit: sells up to 100% of the tracked position; revoke anytime.</li>
       </ul>
       <div class="profile-actions">
-        ${permissionActive ? `<button type="button" class="danger-lite" data-automation-permission="revoke">Revoke Server Exits</button>` : `<button class="primary" type="button" data-automation-permission="enable">Enable Server Exits</button>`}
+        ${permissionActive ? `<button type="button" class="danger-lite" data-automation-permission="revoke">Disable TP/SL</button>` : `<button class="primary" type="button" data-automation-permission="enable">Enable TP/SL Now</button>`}
         <button class="primary" type="button" data-create-automation-wallet>${managedCount ? "Create Another" : "Create Automation Wallet"}</button>
         <button type="button" data-tab="wallets">Manage Wallets</button>
         ${connected ? `<button type="button" data-connect-wallet="solana">Switch Connected Wallet</button>` : ""}
@@ -7164,11 +7217,12 @@ async function createAutomationWallet() {
   }
 }
 
-async function updateAutomationPermission(action = "enable") {
+async function updateAutomationPermission(action = "enable", options = {}) {
   const status = $("[data-automation-delegation-status]");
   const buttons = [...document.querySelectorAll("[data-automation-permission]")];
   const enable = action !== "revoke";
-  state.automationDelegationStatus = enable ? "Enabling server exits..." : "Revoking server exits...";
+  setTpslAutoRevokedThisSession(!enable);
+  state.automationDelegationStatus = enable ? (options.auto ? "TP/SL auto-enabled for this wallet session..." : "Enabling server exits...") : "Revoking server exits...";
   writeText(status, state.automationDelegationStatus);
   buttons.forEach((button) => {
     button.disabled = true;
@@ -7187,7 +7241,7 @@ async function updateAutomationPermission(action = "enable") {
     });
     const permission = state.user?.automationPermission || {};
     state.automationDelegationStatus = enable
-      ? `Server exits enabled for managed wallets until ${formatDate(permission.expiresAt)}.`
+      ? `${options.auto ? "TP/SL auto-enabled" : "Server exits enabled"} for this wallet session until ${formatDate(permission.expiresAt)}.`
       : "Server exits revoked. Existing plans stay visible but new auto-exit plans require permission again.";
     render({ force: true });
   } catch (error) {
@@ -7197,7 +7251,7 @@ async function updateAutomationPermission(action = "enable") {
   } finally {
     buttons.forEach((button) => {
       button.disabled = false;
-      writeText(button, button.dataset.automationPermission === "revoke" ? "Revoke Server Exits" : "Enable Server Exits");
+      writeText(button, button.dataset.automationPermission === "revoke" ? "Disable TP/SL" : "Enable TP/SL Now");
     });
   }
 }
@@ -14492,6 +14546,7 @@ if (!window.__slimeStablePumpChartTimer) {
     slimePumpChartRerender();
   }, 8000);
 }
+
 
 
 

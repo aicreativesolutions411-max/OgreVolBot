@@ -2318,7 +2318,7 @@ function ogreAgentFallbackReply(message = "", context = {}) {
       : { label: "Open Positions", type: "open_tab", tab: "positions" });
   }
   if (/preset|tp|take profit|stop loss|slippage/.test(lower)) {
-    reply = "Presets control trade size, slippage, bundle settings, and TP/SL behavior. Pick or edit them before buying; TP/SL needs wallet auto-sell approval for managed wallets.";
+    reply = "Presets control trade size, slippage, bundle settings, and TP/SL behavior. Pick or edit them before buying; TP/SL auto-enables for the active wallet session and can be disabled anytime.";
     actions.push({ label: "Trade Panel", type: "open_tab", tab: "trade" }, { label: "Positions", type: "open_tab", tab: "positions" });
   }
   if (/ogre a\.?i|best pick|pick|winner|100%|25%/.test(lower)) {
@@ -26821,6 +26821,7 @@ main().catch((error) => {
   console.error(error);
   process.exit(1);
 });
+
 
 
 
