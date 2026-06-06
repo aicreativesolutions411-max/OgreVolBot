@@ -2485,9 +2485,15 @@ async function refreshTerminalFeed(tabKey = state.activeTab, options = {}) {
     } else if (tabKey === "liveTrades") {
       if (state.user && state.token) await loadAll({ silent: true, skipCore: true, force: Boolean(options.force) });
     } else if (tabKey === "slimeScope") {
-      await refreshLivePairBuckets({ silent: true, force: Boolean(options.force), warmAll: true });
-      if (options.force || !state.scan) await loadScan(state.scanMode, { silent: true, force: Boolean(options.force) }).catch(() => {});
-      if (options.force) await loadKolScan(state.kolMode, state.kolWallet, { silent: true }).catch(() => {});
+      const scopeMode = String(state.slimeScopeMode || "new");
+      const scopeBucket = slimeScopeLivePairBucketForMode(scopeMode);
+      await loadLivePairs({ silent: true, bucket: scopeBucket, renderOnComplete: false, force: Boolean(options.force) });
+      if (!state.scan || scopeMode === "graduating" || scopeMode === "graduated") {
+        await loadScan(state.scanMode, { silent: true, force: Boolean(options.force) }).catch(() => {});
+      }
+      if (!state.kolScan && (scopeMode === "steady" || scopeMode === "graduating")) {
+        await loadKolScan(state.kolMode, state.kolWallet, { silent: true }).catch(() => {});
+      }
     } else if (tabKey === "kol") {
       await loadKolScan(state.kolMode, state.kolWallet, { silent: options.silent !== false });
     } else if (tabKey === "watchlist") {
@@ -2587,6 +2593,14 @@ function scheduleActiveTerminalFeedRefresh() {
 function normalizeLivePairBucket(bucket) {
   const value = String(bucket || "live");
   return LIVE_PAIR_BUCKETS.some(([id]) => id === value) ? value : "live";
+}
+
+function slimeScopeLivePairBucketForMode(mode = state.slimeScopeMode) {
+  const value = String(mode || "new");
+  if (value === "steady") return "under1h";
+  if (value === "graduating") return "under3h";
+  if (value === "graduated") return "under1d";
+  return "live";
 }
 
 function currentLivePairs() {
@@ -9967,6 +9981,10 @@ function rowAgeSeconds(row = {}) {
 }
 
 const SLIME_SCOPE_LIMIT = 100;
+const SLIME_SCOPE_NEW_MAX_AGE_SECONDS = 120;
+const SLIME_SCOPE_FRESH_MAX_MARKET_CAP = 150_000;
+const SLIME_SCOPE_STEADY_MAX_AGE_SECONDS = 86_400;
+const SLIME_SCOPE_STEADY_MAX_MARKET_CAP = 2_000_000;
 
 function slimeScopeSourceRows() {
   const marketByMint = marketDataRowsByMint();
@@ -9993,6 +10011,34 @@ function slimeScopeLiquidity(row = {}) {
 
 function slimeScopeVolume(row = {}) {
   return firstUsefulNumber(row.volumeM5, row.volume5m, row.volumeM15, row.volumeM30, row.volumeH1, row.volumeH24, row.volumeUsd);
+}
+
+function isFreshSlimeScopeRow(row = {}) {
+  if (isGraduatedSlimeScopeRow(row)) return false;
+  const age = rowAgeSeconds(row);
+  if (!Number.isFinite(age) || age < 0 || age > SLIME_SCOPE_NEW_MAX_AGE_SECONDS) return false;
+  const marketCap = slimeScopeMarketCap(row);
+  if (marketCap > SLIME_SCOPE_FRESH_MAX_MARKET_CAP) return false;
+  return slimeScopeProgressPct(row) < 70;
+}
+
+function isGraduatingSlimeScopeRow(row = {}) {
+  if (isGraduatedSlimeScopeRow(row)) return false;
+  const progress = slimeScopeProgressPct(row);
+  const marketCap = slimeScopeMarketCap(row);
+  return progress >= 70 || marketCap >= 45_000;
+}
+
+function isSteadySlimeScopeRow(row = {}) {
+  if (isFreshSlimeScopeRow(row) || isGraduatingSlimeScopeRow(row) || isGraduatedSlimeScopeRow(row)) return false;
+  const age = rowAgeSeconds(row);
+  if (Number.isFinite(age) && (age < 0 || age > SLIME_SCOPE_STEADY_MAX_AGE_SECONDS)) return false;
+  const marketCap = slimeScopeMarketCap(row);
+  if (marketCap > SLIME_SCOPE_STEADY_MAX_MARKET_CAP) return false;
+  return slimeScopeLiquidity(row) > 0
+    || slimeScopeVolume(row) > 0
+    || Number(row.bestPickScore || row.score || 0) > 0
+    || Array.isArray(row.reasons) && row.reasons.length > 0;
 }
 
 function slimeScopeTextBlob(row = {}) {
@@ -10044,13 +10090,10 @@ function isGraduatedSlimeScopeRow(row = {}) {
 function classifySlimeScopeRow(row = {}) {
   if (isGraduatedSlimeScopeRow(row)) return "graduated";
   const explicit = String(row.slimeScopeCategory || "").trim().toLowerCase();
-  if (explicit === "graduating") return explicit;
-  if (explicit === "steady" || explicit === "unknown") return "steady";
-  const progress = slimeScopeProgressPct(row);
-  const marketCap = slimeScopeMarketCap(row);
-  if (progress >= 70 || marketCap >= 45_000) return "graduating";
-  const age = rowAgeSeconds(row);
-  if (Number.isFinite(age) && age <= 60) return "new";
+  if (explicit === "graduated") return "graduated";
+  if (isGraduatingSlimeScopeRow(row) || explicit === "graduating") return "graduating";
+  if (isFreshSlimeScopeRow(row)) return "new";
+  if (explicit === "steady" || explicit === "unknown" || isSteadySlimeScopeRow(row)) return "steady";
   return "steady";
 }
 
@@ -10102,45 +10145,15 @@ function slimeScopeRows(mode = state.slimeScopeMode) {
   const primary = withMarket.filter((row) => classifySlimeScopeRow(row) === category);
   const fallback = withMarket.filter((row) => {
     const rowCategory = classifySlimeScopeRow(row);
-    const progress = slimeScopeProgressPct(row);
-    const marketCap = slimeScopeMarketCap(row);
-    const age = rowAgeSeconds(row);
-    if (category === "graduated") return isGraduatedSlimeScopeRow(row) || rowCategory === "graduated";
-    if (category === "graduating") {
-      return rowCategory !== "graduated"
-        && !isGraduatedSlimeScopeRow(row)
-        && (progress >= 55 || (marketCap >= 30_000 && marketCap < 90_000));
-    }
-    if (category === "steady") {
-      return rowCategory !== "new"
-        && rowCategory !== "graduating"
-        && rowCategory !== "graduated"
-        && !isGraduatedSlimeScopeRow(row);
-    }
-    return rowCategory !== "graduated"
-      && !isGraduatedSlimeScopeRow(row)
-      && Number.isFinite(age)
-      && age <= 60;
+    if (category === "graduated") return rowCategory === "graduated" || isGraduatedSlimeScopeRow(row);
+    if (category === "graduating") return rowCategory === "graduating" || isGraduatingSlimeScopeRow(row);
+    if (category === "steady") return rowCategory === "steady" || isSteadySlimeScopeRow(row);
+    return rowCategory === "new" || isFreshSlimeScopeRow(row);
   });
   const sortedPrimary = category === "new" ? [...primary].sort(compareNewestLiveRows) : sortSlimeScopeRows(primary);
-  const sortedFallback = category === "new"
-    ? uniqueSignalRows([
-        ...fallback,
-        ...withMarket.filter((row) => {
-          const rowCategory = classifySlimeScopeRow(row);
-          if (rowCategory === "graduated" || rowCategory === "graduating") return false;
-          const age = rowAgeSeconds(row);
-          if (Number.isFinite(age) && age > 86_400) return false;
-          return rowCategory === "steady"
-            || slimeScopeLiquidity(row) > 0
-            || slimeScopeVolume(row) > 0
-            || Number(row.bestPickScore || row.score || 0) > 0;
-        })
-      ]).sort(compareNewestLiveRows)
-    : sortSlimeScopeRows(fallback);
+  const sortedFallback = category === "new" ? uniqueSignalRows(fallback).sort(compareNewestLiveRows) : sortSlimeScopeRows(fallback);
   return backfillSlimeScopeRows(sortedPrimary, sortedFallback);
 }
-
 function slimeScopeHtml() {
   const modes = [
     ["new", "New"],
