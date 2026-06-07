@@ -2907,6 +2907,22 @@ function ogreAgentNormalizeKolRow(row = {}, index = 0) {
   };
 }
 
+function ogreAgentPublicXSearchUrl(query = "", mode = "live") {
+  const clean = String(query || "solana memecoin KOL CA today").replace(/\s+/g, " ").trim();
+  const filter = mode === "top" ? "top" : "live";
+  return `https://x.com/search?q=${encodeURIComponent(clean)}&src=typed_query&f=${filter}`;
+}
+
+function ogreAgentKolTodaySearchQuery(message = "") {
+  const text = String(message || "").toLowerCase();
+  if (/caller|callers|kol|kols|influencer|influencers/.test(text)) {
+    return 'Solana memecoin KOL calls CA pump today';
+  }
+  if (/post|posts|x|twitter/.test(text)) {
+    return 'Solana memecoin CA pump today';
+  }
+  return 'Solana memecoin KOL CA today';
+}
 async function ogreAgentKolTrendReply(message = "", context = {}) {
   if (!ogreAgentKolTrendIntent(message)) return null;
   const timeoutValue = (value, ms = 2600) => new Promise((resolve) => setTimeout(() => resolve(value), ms));
@@ -2926,24 +2942,31 @@ async function ogreAgentKolTrendReply(message = "", context = {}) {
     .sort((a, b) => b.score - a.score)
     .slice(0, 5);
   if (!rows.length) {
+    const query = ogreAgentKolTodaySearchQuery(message);
+    const liveUrl = ogreAgentPublicXSearchUrl(query, "live");
+    const topUrl = ogreAgentPublicXSearchUrl(query, "top");
     return {
       reply: [
-        "I do not have a live X-wide KOL ranking connected yet.",
-        "What I can rank right now is SlimeWire KOL Tracker/tracked wallets. Open KOL Tracker and refresh it to see the current hot wallets and copy-trade candidates.",
-        "For true “who is posting meme coins on X today,” we need an official X/search data source or a paid social-data provider."
+        "I do not have a verified X-wide firehose ranking in this quick pass, so I will not invent callers.",
+        `Use these live searches now: X Top Posts ${topUrl} | X Latest ${liveUrl}`,
+        "Inside SlimeWire, open KOL Tracker for ranked wallets/copy-trade candidates and refresh it before sizing anything."
       ].join("\n"),
       actions: [
+        { label: "X Top Posts", type: "open_external", url: topUrl },
+        { label: "X Latest Posts", type: "open_external", url: liveUrl },
         { label: "KOL Tracker", type: "open_tab", tab: "kol" },
-        { label: "Refresh Feeds", type: "refresh_feeds" },
-        { label: "Live Terminal", type: "open_tab", tab: "terminal" }
+        { label: "Refresh KOLs", type: "refresh_feeds" }
       ],
       intent: "kol_trend_scan",
       modelPowered: false
     };
   }
+  const query = ogreAgentKolTodaySearchQuery(message);
+  const liveUrl = ogreAgentPublicXSearchUrl(query, "live");
+  const topUrl = ogreAgentPublicXSearchUrl(query, "top");
   return {
     reply: [
-      "Top SlimeWire-tracked memecoin KOL/wallets right now:",
+      "Here is the clean read: these are the hottest SlimeWire-tracked wallets/KOL rows I can rank right now, plus live X searches for today’s posts.",
       ...rows.map((row, index) => {
         const stats = [
           Number.isFinite(row.winRate) ? `${row.winRate.toFixed(1)}% win` : "",
@@ -2952,12 +2975,14 @@ async function ogreAgentKolTrendReply(message = "", context = {}) {
         ].filter(Boolean).join(" | ");
         return `${index + 1}. ${row.twitter ? `@${row.twitter}` : row.name}${stats ? ` — ${stats}` : ""}`;
       }),
-      "This is wallet/KOL-tracker based, not a full X-wide firehose ranking."
+      `X links: Top Posts ${topUrl} | Latest ${liveUrl}`,
+      "I would use those X links for live posts, then KOL Tracker for wallet proof before copying a trade."
     ].join("\n"),
     actions: [
+      { label: "X Top Posts", type: "open_external", url: topUrl },
+      { label: "X Latest Posts", type: "open_external", url: liveUrl },
       { label: "KOL Tracker", type: "open_tab", tab: "kol" },
-      { label: "Refresh KOLs", type: "refresh_feeds" },
-      { label: "Live Terminal", type: "open_tab", tab: "terminal" }
+      { label: "Refresh KOLs", type: "refresh_feeds" }
     ],
     intent: "kol_trend_scan",
     modelPowered: false
@@ -28029,6 +28054,7 @@ main().catch((error) => {
   console.error(error);
   process.exit(1);
 });
+
 
 
 

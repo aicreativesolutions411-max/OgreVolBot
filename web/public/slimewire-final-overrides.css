@@ -9681,3 +9681,74 @@ textarea,
     min-height: 28px !important;
   }
 }
+
+/* OGRE_AGENT_READABLE_CHAT_V1: bigger professional chat panel and no sideways message scroll. */
+.ogre-agent-shell.is-open .ogre-agent-panel {
+  width: min(760px, calc(100vw - 28px)) !important;
+  min-height: min(720px, 82dvh) !important;
+  max-height: min(860px, 88dvh) !important;
+  grid-template-rows: auto auto minmax(260px, 1fr) auto auto auto !important;
+}
+
+.ogre-agent-shell .ogre-agent-feed,
+.ogre-agent-shell .ogre-agent-message,
+.ogre-agent-shell .ogre-agent-message p {
+  min-width: 0 !important;
+  max-width: 100% !important;
+  overflow-x: hidden !important;
+  overflow-wrap: anywhere !important;
+  word-break: normal !important;
+  white-space: pre-wrap !important;
+}
+
+.ogre-agent-shell .ogre-agent-feed {
+  min-height: min(42vh, 430px) !important;
+  padding-right: 8px !important;
+}
+
+.ogre-agent-shell .ogre-agent-message p {
+  line-height: 1.35 !important;
+}
+
+.ogre-agent-shell .ogre-agent-composer {
+  grid-template-columns: minmax(0, 1fr) 92px !important;
+}
+
+.ogre-agent-shell .ogre-agent-composer textarea[data-ogre-agent-input] {
+  min-height: 74px !important;
+  max-height: 150px !important;
+}
+
+.ogre-agent-shell .ogre-agent-composer-actions button {
+  min-height: 52px !important;
+}
+
+@media (max-width: 760px) {
+  .ogre-agent-shell.is-open .ogre-agent-panel {
+    inset: max(8px, env(safe-area-inset-top)) 8px max(8px, env(safe-area-inset-bottom)) 8px !important;
+    width: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    grid-template-rows: auto auto minmax(0, 1fr) auto auto auto !important;
+  }
+
+  .ogre-agent-shell .ogre-agent-feed {
+    min-height: min(48dvh, 390px) !important;
+  }
+
+  .ogre-agent-shell .ogre-agent-composer {
+    grid-template-columns: minmax(0, 1fr) 72px !important;
+  }
+
+  .ogre-agent-shell .ogre-agent-composer textarea[data-ogre-agent-input] {
+    min-height: 68px !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-kol-frame {
+    transform: translateY(-8px) !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-kol-frame .swamp-support-content {
+    padding-top: clamp(68px, 17vw, 84px) !important;
+  }
+}

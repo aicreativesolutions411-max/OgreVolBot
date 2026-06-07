@@ -13486,7 +13486,7 @@ function ogreAgentHtml() {
         <div class="ogre-agent-composer">
           <textarea data-ogre-agent-input rows="2" placeholder="Ask: buy this CA with 25% preset, show positions, how do I use TP/SL...">${escapeHtml(state.ogreAgentDraft || "")}</textarea>
           <div class="ogre-agent-composer-actions">
-            <button type="button" class="ogre-agent-mic ${state.ogreAgentListening ? "is-listening" : ""}" data-ogre-agent-mic ${micSupported && !state.ogreAgentLoading ? "" : "disabled"} title="${micSupported ? "Tap, speak, and Ogre will send it." : "Voice input is not supported in this browser."}">${escapeHtml(micLabel)}</button>
+            <button type="button" class="ogre-agent-mic ${state.ogreAgentListening ? "is-listening" : ""}" data-ogre-agent-mic title="${micSupported ? "Tap, speak, and Ogre will send it." : "Tap to check microphone support."}">${escapeHtml(micLabel)}</button>
             <button type="button" data-ogre-agent-send ${state.ogreAgentLoading ? "disabled" : ""}>Send</button>
           </div>
         </div>
@@ -13825,12 +13825,12 @@ function ogreAgentStartListening() {
     }
     state.ogreAgentListening = true;
     state.ogreAgentStatus = "Listening... speak your Ogre command.";
-    ogreAgentArmListenTimeout(sessionId);
+    ogreAgentArmListenTimeout(sessionId, recognizer);
     renderOgreAgent({ force: true });
   };
   recognizer.onresult = (event) => {
     if (sessionId !== ogreAgentSpeechSessionId || state.ogreAgentSpeechRecognizer !== recognizer) return;
-    ogreAgentArmListenTimeout(sessionId);
+    ogreAgentArmListenTimeout(sessionId, recognizer);
     let interim = "";
     let finalText = "";
     for (let index = event.resultIndex || 0; index < event.results.length; index += 1) {
@@ -16265,6 +16265,7 @@ if (!window.__slimeStablePumpChartTimer) {
     if (!document.hidden) window.setTimeout(() => kick("visible-empty-feed-watchdog"), 450);
   });
 })();
+
 
 
 
