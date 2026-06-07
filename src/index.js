@@ -27,6 +27,7 @@ import {
   buildOgreAiCandidatePool,
   ogreAiSignalKey,
   compareOgreAiCandidates,
+  diversifyOgreAiCandidates,
   isOgreAiBlockedRisk
 } from "./lib/ogreAi.js";
 import {
@@ -2469,9 +2470,13 @@ async function handleWebApiRequest(request, response, requestUrl) {
     if (request.method === "GET" && pathname === "/api/web/positions") {
       const force = parseBoolean(requestUrl.searchParams.get("force") || "false");
       const fast = parseBoolean(requestUrl.searchParams.get("fast") || "false");
-      const summary = await cachedWebSummary(fast ? "web:positions:fast" : "web:positions", auth.userId, { force }, force ? 0 : CONFIG.displayCacheFreshMs, async () => ({
-        positions: await webPositionRows(auth.userId, { force, fast })
-      }));
+      const profile = await webProfileForUser(auth.userId).catch(() => null);
+      const connectedScope = profile?.connectedWallet?.publicKey
+        ? crypto.createHash("sha1").update(String(profile.connectedWallet.publicKey)).digest("hex").slice(0, 12)
+        : "no-connected-wallet";
+      const summary = await cachedWebSummary(`${fast ? "web:positions:fast" : "web:positions"}:${connectedScope}`, auth.userId, { force }, force ? 0 : CONFIG.displayCacheFreshMs, async () => (
+        await webPositionSummary(auth.userId, { force, fast })
+      ));
       sendWebJson(request, response, 200, {
         ok: true,
         ...summary.value,
@@ -24476,6 +24481,44 @@ function applyOgreAiTargetDefaults(defaults, targetPct, mode) {
   return defaults;
 }
 
+function normalizeOgreAiRecentMints(input) {
+  const values = Array.isArray(input)
+    ? input
+    : String(input || "").split(/[,\s]+/);
+  const seen = new Set();
+  const mints = [];
+  for (const value of values) {
+    const mint = String(value || "").trim();
+    if (!mint || seen.has(mint)) continue;
+    seen.add(mint);
+    mints.push(mint);
+    if (mints.length >= 30) break;
+  }
+  return mints;
+}
+
+function applyOgreAiTimerIntentDefaults(defaults, body = {}, mode = "quick") {
+  const targetPct = Number(defaults.takeProfitPct || defaults.targetTakeProfitPct || defaults.defaultTakeProfitPct || 25);
+  if (!Number.isFinite(targetPct) || targetPct < 80) return defaults;
+  let sellDelaySeconds = null;
+  try {
+    sellDelaySeconds = parseOptionalSellDelaySeconds(firstString(body.sellDelay, body.sellDelaySeconds, defaults.defaultSellDelay, "3"));
+  } catch {
+    sellDelaySeconds = null;
+  }
+  if (!Number.isFinite(sellDelaySeconds) || sellDelaySeconds <= 0 || sellDelaySeconds > 10 * 60) return defaults;
+
+  const safeMode = normalizeOgreAiMode(mode);
+  defaults.targetBand = "fresh_low_mc_timer";
+  defaults.preferFreshLaunches = true;
+  defaults.diversityWindow = Math.max(Number(defaults.diversityWindow || 0), safeMode === "safer" ? 12 : 18);
+  defaults.buckets = [...new Set(["live", "under1h", "under3h"])];
+  defaults.minScore = Math.min(Number(defaults.minScore || 54), safeMode === "safer" ? 44 : 38);
+  defaults.maxMarketCap = Math.min(Number(defaults.maxMarketCap || 260_000), safeMode === "safer" ? 300_000 : 260_000);
+  defaults.minLiquidityUsd = Math.min(Number(defaults.minLiquidityUsd || 120), safeMode === "safer" ? 150 : 90);
+  return defaults;
+}
+
 function ogreAiScannerModesForTarget(defaults = {}, mode = "quick") {
   const pct = Number(defaults.takeProfitPct || defaults.targetTakeProfitPct || defaults.defaultTakeProfitPct || 25);
   const safeMode = normalizeOgreAiMode(mode);
@@ -24524,7 +24567,12 @@ async function selectOgreAiPicks(userId, body = {}, limit = 1) {
     defaults.targetTakeProfitPct = defaults.takeProfitPct;
   }
   applyOgreAiTargetDefaults(defaults, defaults.takeProfitPct || defaults.targetTakeProfitPct || defaults.defaultTakeProfitPct, mode);
-  defaults.desiredPickCount = Math.max(1, limit);
+  applyOgreAiTimerIntentDefaults(defaults, body, mode);
+  const recentMints = normalizeOgreAiRecentMints(
+    body.recentMints !== undefined && body.recentMints !== null ? body.recentMints : body.avoidMints
+  );
+  defaults.recentMints = recentMints;
+  defaults.desiredPickCount = Math.max(1, limit, Number(defaults.diversityWindow || 0));
   const minScoreInput = Number.parseInt(String(body.minScore || ""), 10);
   if (Number.isFinite(minScoreInput) && minScoreInput > 0) {
     defaults.minScore = clamp(minScoreInput, 1, 100);
@@ -24553,13 +24601,20 @@ async function selectOgreAiPicks(userId, body = {}, limit = 1) {
     .filter((row) => !isOgreAiBlockedRisk(row));
   const rankedBaseRows = uniqueSniperScoreRows(baseRows)
     .sort((a, b) => compareOgreAiCandidates(a, b, defaults, mode));
+  const requestedPlanCount = clamp(Number.parseInt(String(body.runCount || limit), 10) || 1, 1, OGRE_AI_PLANS_PER_RUN_LIMIT);
   const scanLimit = Math.max(40, Math.min(OGRE_AI_MAX_SCAN_ROWS, Math.max(limit * 20, 50)));
-  const safetyRows = await filterOgreAiRowsForHardSafety(rankedBaseRows, scanLimit, defaults, mode, { requestedRunCount: limit });
+  const safetyRows = await filterOgreAiRowsForHardSafety(rankedBaseRows, scanLimit, defaults, mode, {
+    requestedRunCount: requestedPlanCount,
+    diversityLimit: Math.max(limit, Number(defaults.diversityWindow || 0))
+  });
   const pool = buildOgreAiCandidatePool(safetyRows, defaults, mode);
-  const filtered = pool.candidates.sort((a, b) => compareOgreAiCandidates(a, b, defaults, mode));
-
   const scanState = nextSniperScanState(`web:${userId}`, `ogre-ai:${mode}`);
-  const rotated = rotateRowsForRefresh(filtered, Math.max(1, limit), scanState.refreshCount, { stickyCount: 0 });
+  const rankedCandidates = pool.candidates.sort((a, b) => compareOgreAiCandidates(a, b, defaults, mode));
+  const rotated = rotateRowsForRefresh(rankedCandidates, Math.max(1, limit), scanState.refreshCount, { stickyCount: 0 });
+  const filtered = diversifyOgreAiCandidates(rotated, defaults, mode, {
+    recentMints,
+    desiredPickCount: Math.max(1, limit)
+  });
   return {
     mode,
     defaults,
@@ -24576,7 +24631,11 @@ async function filterOgreAiRowsForHardSafety(rows = [], limit = 40, defaults = {
   const requestedRunCount = Math.max(1, Number(options.requestedRunCount || 1) || 1);
   const accepted = [];
   const acceptedKeys = new Set();
-  const targetKeep = Math.max(requestedRunCount, Math.min(OGRE_AI_PLANS_PER_RUN_LIMIT, requestedRunCount * OGRE_AI_PLAN_BACKUP_MULTIPLIER));
+  const diversityLimit = Math.max(0, Number(options.diversityLimit || 0) || 0);
+  const targetKeep = Math.min(
+    OGRE_AI_MAX_SCAN_ROWS,
+    Math.max(requestedRunCount, requestedRunCount * OGRE_AI_PLAN_BACKUP_MULTIPLIER, diversityLimit)
+  );
   const startedAt = Date.now();
   const safetyBudgetMs = Math.max(1_200, Number(options.safetyBudgetMs || OGRE_AI_SAFETY_SCAN_BUDGET_MS) || OGRE_AI_SAFETY_SCAN_BUDGET_MS);
   const uniqueRows = uniqueSniperScoreRows(rows);
@@ -24729,8 +24788,8 @@ async function webStartOgreAiRun(userId, body = {}) {
   const runCount = clamp(Number.parseInt(String(body.runCount || "1"), 10) || 1, 1, OGRE_AI_PLANS_PER_RUN_LIMIT);
   const mode = normalizeOgreAiMode(body.mode);
   const candidateLimit = Math.min(
-    OGRE_AI_PLANS_PER_RUN_LIMIT,
-    Math.max(runCount, runCount * OGRE_AI_PLAN_BACKUP_MULTIPLIER, 5)
+    OGRE_AI_MAX_SCAN_ROWS,
+    Math.max(runCount, runCount * OGRE_AI_PLAN_BACKUP_MULTIPLIER, 12)
   );
   const selection = await selectOgreAiPicks(userId, body, candidateLimit);
   if (!selection.rows.length) {
@@ -26882,6 +26941,21 @@ async function webConnectedWalletBalance(userId, options = {}) {
   }
 
   return row;
+}
+
+async function webPositionSummary(userId, options = {}) {
+  const [positions, connectedWallet] = await Promise.all([
+    webPositionRows(userId, options),
+    webConnectedWalletBalance(userId, { force: Boolean(options.force) }).catch(() => null)
+  ]);
+  const connectedWalletPositionCount = Array.isArray(connectedWallet?.tokens)
+    ? connectedWallet.tokens.filter((token) => token?.mint || token?.tokenMint).length
+    : 0;
+  return {
+    positions,
+    connectedWallet,
+    connectedWalletPositionCount
+  };
 }
 
 async function webPositionRows(userId, options = {}) {

@@ -52,6 +52,7 @@ const MOBILE_WALLET_SESSION_PREFIX = "slimewireMobileWalletSession:";
 const PERF_LOG_KEY = "slimewirePerfLog";
 const CRASH_LOG_KEY = "slimewireCrashLog";
 const TERMINAL_FEED_LOG_KEY = "slimewireTerminalFeedLog";
+const OGRE_AI_RECENT_MINTS_KEY = "slimewireOgreAiRecentMints";
 const PERF_POST_MIN_DURATION_MS = 150;
 const LOCAL_DIAGNOSTIC_WRITE_DEBOUNCE_MS = 1_500;
 const WALLET_REFRESH_FORCE_COOLDOWN_MS = 10_000;
@@ -130,6 +131,36 @@ function getStoredCrashLog() {
     return Array.isArray(rows) ? rows.slice(-50) : [];
   } catch {
     return [];
+  }
+}
+
+function getStoredOgreAiRecentMints() {
+  try {
+    const rows = JSON.parse(window.sessionStorage?.getItem(OGRE_AI_RECENT_MINTS_KEY) || "[]");
+    return Array.isArray(rows) ? rows.map((mint) => String(mint || "").trim()).filter(Boolean).slice(-30) : [];
+  } catch {
+    return [];
+  }
+}
+
+function rememberOgreAiMints(result) {
+  const rows = [
+    ...(Array.isArray(result?.plans) ? result.plans.map((plan) => plan?.tokenMint || plan?.pick?.tokenMint) : []),
+    ...(Array.isArray(result?.picks) ? result.picks.map((pick) => pick?.tokenMint) : [])
+  ].map((mint) => String(mint || "").trim()).filter(Boolean);
+  if (!rows.length) return;
+  const seen = new Set();
+  const next = [...getStoredOgreAiRecentMints(), ...rows]
+    .filter((mint) => {
+      if (seen.has(mint)) return false;
+      seen.add(mint);
+      return true;
+    })
+    .slice(-30);
+  try {
+    window.sessionStorage?.setItem(OGRE_AI_RECENT_MINTS_KEY, JSON.stringify(next));
+  } catch {
+    // Ogre A.I. variety memory is optional and session-only.
   }
 }
 
@@ -2413,7 +2444,7 @@ async function loadAll(options = {}) {
     ]);
     state.wallets = wallets.wallets || [];
     state.balances = balances.balances || [];
-    state.connectedWalletBalance = balances.connectedWallet || null;
+    state.connectedWalletBalance = balances.connectedWallet || positions.connectedWallet || null;
     state.positions = positions.positions || [];
     state.pnl = pnl.pnl || null;
     state.launchWatches = launchWatches.watches || [];
@@ -2477,6 +2508,7 @@ async function loadWalletCore(options = {}) {
       const positions = await positionsPromise;
       if (positions?.__error) throw positions.__error;
       if (isStaleWalletRefresh()) return;
+      state.connectedWalletBalance = positions.connectedWallet || state.connectedWalletBalance || null;
       state.positions = positions.positions || [];
       state.lastWalletRefreshAt = new Date().toISOString();
       state.walletRefreshError = "";
@@ -2584,6 +2616,7 @@ async function refreshWalletPositions(options = {}) {
       const positions = await api(`/api/web/positions${query}`, {
         timeoutMs: options.timeoutMs || (options.fast === false ? POSITIONS_REFRESH_TIMEOUT_MS : POSITIONS_FAST_REFRESH_TIMEOUT_MS)
       });
+      state.connectedWalletBalance = positions.connectedWallet || state.connectedWalletBalance || null;
       state.positions = mergePositionRefreshRows(positions.positions || state.positions || [], state.positions || [], options);
       state.lastWalletRefreshAt = new Date().toISOString();
       state.walletRefreshError = "";
@@ -9695,7 +9728,8 @@ function readOgreAiForm() {
     stopLossPct,
     sellPercent: "100",
     slippageBps,
-    minScore
+    minScore,
+    recentMints: getStoredOgreAiRecentMints()
   };
 }
 
@@ -9723,6 +9757,7 @@ async function startOgreAiRun() {
       timeoutMs: API_LONG_ACTION_TIMEOUT_MS
     });
     state.ogreAiResult = data.ogreAi;
+    rememberOgreAiMints(data.ogreAi);
     state.tradePlanResult = data.ogreAi?.plans?.[0] || state.tradePlanResult;
     setOgreAiStatus(data.ogreAi?.message || "Ogre A.I. run armed.");
     queuePostTradeRefresh(firstResultSignature(data.ogreAi?.plans?.[0]), "ogre-ai-run");

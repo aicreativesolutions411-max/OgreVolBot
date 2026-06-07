@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildOgreAiCandidatePool,
+  diversifyOgreAiCandidates,
   ogreAiTierForCandidate,
   isOgreAiBlockedRisk,
   ogreAiTargetFitScore
@@ -317,4 +318,48 @@ test("Ogre A.I. fills requested stacks from fallback tiers after strict picks", 
   assert.equal(pool.candidates.length, 2);
   assert.equal(pool.candidates[0].tokenMint, "StrictFillMint");
   assert.equal(pool.candidates[1].tokenMint, "BalancedFillMint");
+});
+
+test("Ogre A.I. demotes recently picked mints when alternatives exist", () => {
+  const targetDefaults = {
+    ...defaults,
+    takeProfitPct: 100,
+    targetTakeProfitPct: 100,
+    desiredPickCount: 2,
+    preferFreshLaunches: true,
+    maxMarketCap: 260_000,
+    minLiquidityUsd: 90
+  };
+  const pool = buildOgreAiCandidatePool([
+    {
+      tokenMint: "RepeatMint",
+      bestPickScore: 62,
+      marketCap: 58_000,
+      liquidityUsd: 900,
+      volume5m: 8_000,
+      m5: 28,
+      buys5m: 18,
+      sells5m: 5,
+      pairAgeMinutes: 7
+    },
+    {
+      tokenMint: "FreshAltMint",
+      bestPickScore: 58,
+      marketCap: 72_000,
+      liquidityUsd: 820,
+      volume5m: 7_200,
+      m5: 25,
+      buys5m: 16,
+      sells5m: 4,
+      pairAgeMinutes: 10
+    }
+  ], targetDefaults, "quick");
+
+  const diversified = diversifyOgreAiCandidates(pool.candidates, targetDefaults, "quick", {
+    recentMints: ["RepeatMint"],
+    desiredPickCount: 1
+  });
+
+  assert.equal(diversified[0].tokenMint, "FreshAltMint");
+  assert.equal(diversified.at(-1).tokenMint, "RepeatMint");
 });

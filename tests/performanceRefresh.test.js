@@ -104,6 +104,8 @@ test("wallet and positions refresh run in parallel phases and report durations",
   assert.match(body, /perfMeasure\("positions-refresh"/);
   assert.match(body, /cacheHit: Boolean\(balances\.cacheHit\)/);
   assert.match(body, /cacheHit: Boolean\(positions\.cacheHit\)/);
+  assert.match(body, /positions\.connectedWallet/);
+  assert.match(functionBody("refreshWalletPositions"), /positions\.connectedWallet/);
 });
 
 test("tab switches render cached content before background revalidation", () => {
@@ -119,7 +121,8 @@ test("backend performance event logging is sanitized and read-only summary endpo
   assert.match(serverSource, /function safePerfEventText/);
   assert.match(serverSource, /async function cachedWebSummary/);
   assert.match(serverSource, /cachedWebSummary\("web:balances"/);
-  assert.match(serverSource, /cachedWebSummary\("web:positions"/);
+  assert.match(serverSource, /webPositionSummary/);
+  assert.match(serverSource, /connectedScope/);
   assert.match(serverSource, /cachedWebSummary\("web:pnl"/);
   assert.match(serverSource, /cacheHit: summary\.cacheHit/);
   assert.match(serverSource, /refreshDurationMs: summary\.durationMs/);

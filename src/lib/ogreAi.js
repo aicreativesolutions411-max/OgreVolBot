@@ -306,6 +306,75 @@ function uniqueBySignalKey(rows = []) {
   return next;
 }
 
+function signalSet(values = []) {
+  const source = Array.isArray(values) ? values : String(values || "").split(/[,\s]+/);
+  const set = new Set();
+  for (const value of source) {
+    const key = String(value || "").trim();
+    if (key) set.add(key);
+  }
+  return set;
+}
+
+function ogreAiDiversityScore(row = {}, defaults = {}, mode = "quick", recentSet = new Set(), index = 0) {
+  const stats = ogreAiCandidateStats(row);
+  const targetPct = ogreAiTargetProfitPct(defaults);
+  const highTarget = targetPct >= 80;
+  let score = ogreAiTargetFitScore(row, defaults, mode)
+    + numberValue(row.bestPickScore, row.score) * 0.08
+    - index * 0.08;
+
+  if (highTarget || defaults.preferFreshLaunches) {
+    if (stats.ageMinutes !== null && stats.ageMinutes <= 20) score += 8;
+    else if (stats.ageMinutes !== null && stats.ageMinutes <= 60) score += 5;
+    if (stats.marketCap > 0 && stats.marketCap <= 220_000) score += 6;
+    if (stats.volumeMomentumUsd >= Math.max(1_200, targetPct * 45)) score += 4;
+    if (stats.buyPressure >= 0.62) score += 3;
+  }
+
+  if (recentSet.has(ogreAiSignalKey(row))) {
+    score -= highTarget || defaults.preferFreshLaunches ? 34 : 24;
+  }
+
+  return score;
+}
+
+export function diversifyOgreAiCandidates(candidates = [], defaults = {}, mode = "quick", options = {}) {
+  const desiredPickCount = Math.max(1, Number(options.desiredPickCount || defaults.desiredPickCount || 1) || 1);
+  const recentSet = signalSet(options.recentMints || options.avoidMints || defaults.recentMints || []);
+  const base = uniqueBySignalKey(candidates)
+    .sort((a, b) => compareOgreAiCandidates(a, b, defaults, mode));
+  if (!base.length) return [];
+
+  const shouldRescore = recentSet.size > 0 || defaults.preferFreshLaunches || ogreAiTargetProfitPct(defaults) >= 80;
+  if (!shouldRescore) return base;
+
+  const scored = base.map((row, index) => ({
+    row,
+    index,
+    recent: recentSet.has(ogreAiSignalKey(row)),
+    score: ogreAiDiversityScore(row, defaults, mode, recentSet, index)
+  }));
+
+  const byScore = (a, b) => (b.score - a.score)
+    || compareOgreAiCandidates(a.row, b.row, defaults, mode)
+    || (a.index - b.index);
+
+  const fresh = scored.filter((entry) => !entry.recent).sort(byScore);
+  const deferred = scored.filter((entry) => entry.recent).sort(byScore);
+  if (fresh.length >= desiredPickCount) {
+    return [...fresh, ...deferred].map((entry) => ({
+      ...entry.row,
+      ogreAiRecentlyPicked: entry.recent || undefined
+    }));
+  }
+
+  return [...scored].sort(byScore).map((entry) => ({
+    ...entry.row,
+    ogreAiRecentlyPicked: entry.recent || undefined
+  }));
+}
+
 export function buildOgreAiCandidatePool(rows = [], defaults = {}, mode = "quick") {
   const seen = new Set();
   const tiers = {
