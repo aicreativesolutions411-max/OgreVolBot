@@ -13508,6 +13508,7 @@ function pnlSlimeBorderSvg() {
 }
 
 let tokenMetadataResolverInstance = null;
+const pumpFunMetadataCache = new Map();
 
 function getTokenMetadataResolver() {
   if (tokenMetadataResolverInstance) return tokenMetadataResolverInstance;
@@ -13819,13 +13820,36 @@ function dexPairLinks(pair = null) {
 }
 
 async function getPumpFunTokenMetadata(tokenMint, options = {}) {
+  const mint = String(tokenMint || "").trim();
+  if (!mint) return {};
+  const cacheTtlMs = Number.isFinite(Number(options.cacheTtlMs)) ? Number(options.cacheTtlMs) : 30_000;
+  const cached = pumpFunMetadataCache.get(mint);
+  if (!options.force && cached && Date.now() - cached.cachedAt < cacheTtlMs) {
+    return cached.value;
+  }
+
   const headers = { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" };
   if (CONFIG.pumpFunApiToken) {
     headers.Authorization = `Bearer ${CONFIG.pumpFunApiToken}`;
   }
 
-  const url = `${CONFIG.pumpFunApiBase}/coins/${encodeURIComponent(tokenMint)}?sync=false`;
-  const response = await fetchJson(url, { headers, timeoutMs: options.timeoutMs || 3_500 });
+  const bases = [
+    CONFIG.pumpFunApiBase,
+    "https://frontend-api-v3.pump.fun",
+    "https://frontend-api.pump.fun"
+  ].filter((base, index, list) => base && list.indexOf(base) === index);
+  let response = null;
+  let lastError = null;
+  for (const base of bases) {
+    try {
+      const url = `${String(base).replace(/\/$/, "")}/coins/${encodeURIComponent(mint)}?sync=false`;
+      response = await fetchJson(url, { headers, timeoutMs: options.timeoutMs || 3_500 });
+      break;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (!response && lastError) throw lastError;
   const coin = response?.data || response;
   const volume = typeof coin?.volume === "object" && coin.volume !== null ? coin.volume : {};
   const txns = typeof coin?.txns === "object" && coin.txns !== null ? coin.txns : {};
@@ -13852,7 +13876,7 @@ async function getPumpFunTokenMetadata(tokenMint, options = {}) {
     || raydiumPool
   );
 
-  return {
+  const value = {
     symbol: coin?.symbol || "",
     name: coin?.name || "",
     imageUrl: coin?.image_uri || coin?.image || coin?.metadata?.image || "",
@@ -13899,6 +13923,8 @@ async function getPumpFunTokenMetadata(tokenMint, options = {}) {
     isGraduated: graduated,
     raydiumPool
   };
+  pumpFunMetadataCache.set(mint, { cachedAt: Date.now(), value });
+  return value;
 }
 
 async function fetchSniperCandidates(options = {}) {
@@ -25416,7 +25442,7 @@ async function webLivePairs(userId, bucket = "live", options = {}) {
   const sort = String(options.sort || "best").toLowerCase();
   const force = Boolean(options.force);
   const cacheKey = `${safeBucket}:${sort}`;
-  const externalKey = externalCacheKey(`web:livePairs:${cacheKey}`, "global");
+  const externalKey = externalCacheKey(`web:livePairs:v3:${cacheKey}`, "global");
   const cached = livePairsSharedCache.get(cacheKey) || { cachedAt: 0, value: null, promise: null };
   if (!force && CONFIG.livePairsSharedCacheMs > 0 && cached.value && Date.now() - cached.cachedAt < CONFIG.livePairsSharedCacheMs) {
     return { ...cached.value, cacheHit: true, cacheSource: "memory" };

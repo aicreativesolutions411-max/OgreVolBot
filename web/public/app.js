@@ -16486,9 +16486,9 @@ if (!window.__slimeStablePumpChartTimer) {
   var state = {
     open: false,
     query: "",
-    embedSrc: "",
+    embedSrc: "https://open.spotify.com/embed/playlist/37i9dQZF1DZ06evO3oj0lY?utm_source=slimewire&theme=0",
     openUrl: "https://open.spotify.com/playlist/37i9dQZF1DZ06evO3oj0lY",
-    status: "Paste a Spotify playlist, track, album, or podcast link.",
+    status: "Default playlist ready. Paste any Spotify playlist, track, album, show, or episode link to play it here.",
     title: "Swamp Radio",
     items: localSpotifySearch("")
   };
@@ -16516,14 +16516,14 @@ if (!window.__slimeStablePumpChartTimer) {
     });
   }
 
-  function localSpotifySearch(query) {
+  function localSpotifySearch(query, allowFallback) {
     var text = String(query || "").toLowerCase().trim();
     var items = localSpotifyItems.map(hydrateSpotifyItem);
     if (!text) return items;
     var hits = items.filter(function (item) {
       return [item.name, item.artist, item.subtitle, item.type].join(" ").toLowerCase().indexOf(text) >= 0;
     });
-    return hits.length ? hits : items;
+    return hits.length ? hits : (allowFallback ? items : []);
   }
 
   function spotifyLinkItem(value) {
@@ -16582,7 +16582,7 @@ if (!window.__slimeStablePumpChartTimer) {
       var saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
       if (saved && typeof saved === "object") {
         state.query = String(saved.query || "").slice(0, 220);
-        state.embedSrc = String(saved.embedSrc || "").slice(0, 460);
+        state.embedSrc = String(saved.embedSrc || state.embedSrc).slice(0, 460);
         state.openUrl = String(saved.openUrl || state.openUrl).slice(0, 460);
         state.title = String(saved.title || state.title).slice(0, 90);
       }
@@ -16597,16 +16597,16 @@ if (!window.__slimeStablePumpChartTimer) {
   function render() {
     var stage = state.embedSrc
       ? '<iframe title="Spotify Player" src="' + esc(state.embedSrc) + '" loading="lazy" frameborder="0" allowfullscreen allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"></iframe>'
-      : '<div class="slime-spotify-empty"><strong>Swamp Radio</strong><span>Paste a Spotify playlist, track, album, artist, show, or episode link to play in-site.</span></div>';
+      : '<div class="slime-spotify-empty"><strong>Swamp Radio</strong><span>Paste a Spotify playlist, track, album, show, or episode link to play in-site.</span></div>';
     var cards = state.items.length
       ? state.items.map(card).join("")
-      : '<div class="slime-spotify-empty is-small"><span>Paste playlist link or search artist.</span></div>';
+      : '<div class="slime-spotify-empty is-small"><span>No local preset match. Paste a Spotify link to play it here.</span></div>';
     root().innerHTML = [
       '<div class="slime-spotify-shell ' + (state.open ? 'is-open' : '') + '">',
       '<button type="button" class="slime-spotify-bubble" data-slime-spotify-toggle aria-label="Open Swamp Radio" aria-expanded="' + (state.open ? 'true' : 'false') + '"><span class="slime-spotify-mark" aria-hidden="true"><i></i><i></i><i></i></span><span>Music</span></button>',
-      '<section class="slime-spotify-panel" ' + (state.open ? '' : 'hidden') + ' aria-label="Swamp Radio music player">',
+      '<section class="slime-spotify-panel ' + (state.open ? 'is-open' : 'is-minimized') + '" aria-hidden="' + (state.open ? 'false' : 'true') + '" aria-label="Swamp Radio music player">',
       '<header><div><strong>' + esc(state.title) + '</strong><small>In-site Spotify embeds only.</small></div><button type="button" data-slime-spotify-close aria-label="Close Swamp Radio">&times;</button></header>',
-      '<div class="slime-spotify-search-row"><input data-slime-spotify-input value="' + esc(state.query) + '" placeholder="Paste Spotify link" autocomplete="off" inputmode="search"><button type="button" data-slime-spotify-search>Play</button></div>',
+      '<div class="slime-spotify-search-row"><input data-slime-spotify-input value="' + esc(state.query) + '" placeholder="Paste Spotify link or preset name" autocomplete="off" inputmode="search"><button type="button" data-slime-spotify-search>Play</button></div>',
       '<div class="slime-spotify-actions"><button type="button" data-slime-spotify-preset="37i9dQZF1DZ06evO3oj0lY">Default</button><button type="button" data-slime-spotify-preset="37i9dQZF1DX8NTLI2TtZa6">Focus</button><button type="button" data-slime-spotify-preset="37i9dQZF1DX76Wlfdnj7AP">Rap</button><button type="button" data-slime-spotify-preset="37i9dQZF1DX4dyzvuaRJ0n">EDM</button></div>',
       '<div class="slime-spotify-stage">' + stage + '</div>',
       '<div class="slime-spotify-mini-controls"><button type="button" data-slime-spotify-default>Default Playlist</button><button type="button" data-slime-spotify-clear>Clear</button></div>',
@@ -16614,6 +16614,19 @@ if (!window.__slimeStablePumpChartTimer) {
       '<small class="slime-spotify-status">' + esc(state.status) + '</small>',
       '</section></div>'
     ].join("");
+  }
+
+  function syncOpenState() {
+    var shell = document.querySelector(".slime-spotify-shell");
+    var panel = document.querySelector(".slime-spotify-panel");
+    var toggle = document.querySelector("[data-slime-spotify-toggle]");
+    if (shell) shell.classList.toggle("is-open", state.open);
+    if (panel) {
+      panel.classList.toggle("is-open", state.open);
+      panel.classList.toggle("is-minimized", !state.open);
+      panel.setAttribute("aria-hidden", state.open ? "false" : "true");
+    }
+    if (toggle) toggle.setAttribute("aria-expanded", state.open ? "true" : "false");
   }
 
   function loadItem(item) {
@@ -16624,8 +16637,7 @@ if (!window.__slimeStablePumpChartTimer) {
       state.embedSrc = item.embedUrl;
       state.status = "Loaded " + (item.type || "music") + ". Use Spotify controls for shuffle.";
     } else {
-      state.embedSrc = "";
-      state.status = "Search ready. Open Spotify to shuffle/play results.";
+      state.status = "Paste a full Spotify link to play this inside SlimeWire.";
     }
     save();
     render();
@@ -16636,21 +16648,25 @@ if (!window.__slimeStablePumpChartTimer) {
     state.query = query;
     var pasted = spotifyLinkItem(query);
     if (pasted) {
-      state.items = [pasted].concat(localSpotifySearch("playlist").slice(0, 3));
+      state.items = [pasted].concat(localSpotifySearch("playlist", true).slice(0, 3));
       loadItem(pasted);
       return;
     }
     if (query) {
-      state.items = localSpotifySearch(query).slice(0, 4);
-      state.embedSrc = "";
+      var matches = localSpotifySearch(query, false).slice(0, 4);
+      state.items = matches.length ? matches : localSpotifySearch("", true).slice(0, 4);
+      if (matches.length) {
+        loadItem(matches[0]);
+        return;
+      }
       state.title = "Swamp Radio";
-      state.status = "Paste a full Spotify link so it can play in-site. Search without dev mode cannot be controlled inside SlimeWire.";
+      state.status = "Spotify blocks generic search embeds without a dev app. Paste a Spotify link, or use the local presets below.";
       save();
       render();
       return;
     }
-    state.items = localSpotifySearch("");
-    state.status = "Paste a Spotify playlist, track, album, or podcast link.";
+    state.items = localSpotifySearch("", true);
+    state.status = "Default playlist ready. Paste a Spotify playlist, track, album, or podcast link.";
     render();
   }
 
@@ -16664,13 +16680,13 @@ if (!window.__slimeStablePumpChartTimer) {
     if (!target) return;
     event.preventDefault();
     event.stopPropagation();
-    if (target.matches("[data-slime-spotify-toggle]")) { state.open = !state.open; render(); return; }
-    if (target.matches("[data-slime-spotify-close]")) { state.open = false; render(); return; }
+    if (target.matches("[data-slime-spotify-toggle]")) { state.open = !state.open; syncOpenState(); return; }
+    if (target.matches("[data-slime-spotify-close]")) { state.open = false; syncOpenState(); return; }
     if (target.matches("[data-slime-spotify-search]")) { runInput(inputValue()); return; }
     if (target.matches("[data-slime-spotify-preset]")) { loadItem(hydrateSpotifyItem({ type: "playlist", id: target.getAttribute("data-slime-spotify-preset"), name: target.textContent + " Playlist", artist: "Spotify", subtitle: "Preset" })); return; }
     if (target.matches("[data-slime-spotify-pick]")) { loadItem(state.items[Number(target.getAttribute("data-slime-spotify-pick"))]); return; }
     if (target.matches("[data-slime-spotify-default]")) { loadItem(hydrateSpotifyItem({ type: "playlist", id: "37i9dQZF1DZ06evO3oj0lY", name: "SlimeWire Radio", artist: "Spotify", subtitle: "Default" })); return; }
-    if (target.matches("[data-slime-spotify-clear]")) { state.embedSrc = ""; state.query = ""; state.title = "Swamp Radio"; state.openUrl = spotifyUrl("playlist", "37i9dQZF1DZ06evO3oj0lY"); state.items = localSpotifySearch(""); state.status = "Paste a Spotify playlist, track, album, or podcast link."; save(); render(); }
+    if (target.matches("[data-slime-spotify-clear]")) { state.embedSrc = "https://open.spotify.com/embed/playlist/37i9dQZF1DZ06evO3oj0lY?utm_source=slimewire&theme=0"; state.query = ""; state.title = "Swamp Radio"; state.openUrl = spotifyUrl("playlist", "37i9dQZF1DZ06evO3oj0lY"); state.items = localSpotifySearch("", true); state.status = "Default playlist ready. Paste a Spotify playlist, track, album, or podcast link."; save(); render(); }
   }, true);
 
   document.addEventListener("keydown", function (event) {
