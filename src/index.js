@@ -1791,6 +1791,11 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "GET" && pathname === "/api/web/token-image") {
+      await sendWebTokenImage(request, response, requestUrl);
+      return;
+    }
+
     if (request.method === "GET" && pathname === "/api/web/dex-token") {
       const tokenMint = requestUrl.searchParams.get("token") || requestUrl.searchParams.get("tokenMint") || requestUrl.searchParams.get("mint") || "";
       sendWebJson(request, response, 200, {
@@ -2331,6 +2336,11 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "GET" && pathname === "/api/web/token-image") {
+      await sendWebTokenImage(request, response, requestUrl);
+      return;
+    }
+
     if (request.method === "GET" && pathname === "/api/web/dex-token") {
       const tokenMint = requestUrl.searchParams.get("token") || requestUrl.searchParams.get("tokenMint") || requestUrl.searchParams.get("mint") || "";
       sendWebJson(request, response, 200, {
@@ -2440,6 +2450,43 @@ async function serveWebPortal(requestUrl, response) {
     response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
     response.end("Not found");
   }
+}
+
+async function sendWebTokenImage(request, response, requestUrl) {
+  const mint = firstString(
+    requestUrl.searchParams.get("mint"),
+    requestUrl.searchParams.get("token"),
+    requestUrl.searchParams.get("tokenMint")
+  );
+  if (!mint) {
+    response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store", ...webCorsHeaders(request) });
+    response.end("Missing token mint");
+    return;
+  }
+
+  const [pumpMeta, dexMeta] = await Promise.all([
+    getPumpFunTokenMetadata(mint, { timeoutMs: 2_500, cacheTtlMs: 5 * 60 * 1000 }).catch(() => ({})),
+    getDexTokenMetadata(mint, { timeoutMs: 2_500 }).catch(() => ({}))
+  ]);
+  const imageUrl = firstString(
+    pumpMeta.imageUrl,
+    pumpMeta.imageUri,
+    dexMeta.imageUrl,
+    dexMeta.imageUri
+  );
+  const imageCandidate = imageUriGatewayCandidates(imageUrl).find((candidate) => /^https?:\/\//i.test(candidate));
+  if (!imageCandidate) {
+    response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "public, max-age=120", ...webCorsHeaders(request) });
+    response.end("Token image not found");
+    return;
+  }
+
+  response.writeHead(302, {
+    "Location": imageCandidate,
+    "Cache-Control": "public, max-age=300, stale-while-revalidate=900",
+    ...webCorsHeaders(request)
+  });
+  response.end();
 }
 
 async function serveHostedPumpMetadata(request, response, requestUrl) {
@@ -13884,27 +13931,27 @@ async function getPumpFunTokenMetadata(tokenMint, options = {}) {
   const value = {
     symbol: coin?.symbol || "",
     name: coin?.name || "",
-    imageUrl: coin?.image_uri || coin?.image || coin?.metadata?.image || "",
-    imageUri: coin?.image_uri || coin?.image || coin?.metadata?.image || "",
+    imageUrl: firstString(coin?.image_uri, coin?.imageUri, coin?.imageUrl, coin?.image_url, coin?.image, coin?.metadata?.image, coin?.metadata?.imageUrl, coin?.logoURI, coin?.logo),
+    imageUri: firstString(coin?.image_uri, coin?.imageUri, coin?.imageUrl, coin?.image_url, coin?.image, coin?.metadata?.image, coin?.metadata?.imageUrl, coin?.logoURI, coin?.logo),
     metadataUri: firstString(coin?.metadata_uri, coin?.metadataUri, coin?.uri, coin?.metadata?.uri),
     source: "pumpfun",
     priceSol: firstMeaningfulNumber(coin?.priceSol, coin?.price_sol, coin?.priceNative, coin?.price_native, coin?.priceInSol) || null,
     priceUsd: firstMeaningfulNumber(coin?.priceUsd, coin?.price_usd, coin?.usdPrice, coin?.priceUSD, coin?.price) || null,
     virtualSolReserves: firstMeaningfulNumber(coin?.virtual_sol_reserves, coin?.virtualSolReserves) || null,
     virtualTokenReserves: firstMeaningfulNumber(coin?.virtual_token_reserves, coin?.virtualTokenReserves) || null,
-    marketCap: firstMeaningfulNumber(coin?.usd_market_cap, coin?.market_cap, coin?.marketCap, coin?.fdv, coin?.mcap, coin?.mc) || null,
-    usdMarketCap: firstMeaningfulNumber(coin?.usd_market_cap, coin?.market_cap, coin?.marketCap, coin?.fdv, coin?.mcap, coin?.mc) || null,
-    fdv: firstMeaningfulNumber(coin?.fdv, coin?.marketCap, coin?.usd_market_cap, coin?.market_cap, coin?.mcap, coin?.mc) || null,
+    marketCap: firstMeaningfulNumber(coin?.usd_market_cap, coin?.usdMarketCap, coin?.marketCapUsd, coin?.market_cap_usd, coin?.market_cap, coin?.marketCap, coin?.currentMarketCap, coin?.current_market_cap, coin?.fdv, coin?.mcap, coin?.mc) || null,
+    usdMarketCap: firstMeaningfulNumber(coin?.usd_market_cap, coin?.usdMarketCap, coin?.marketCapUsd, coin?.market_cap_usd, coin?.market_cap, coin?.marketCap, coin?.currentMarketCap, coin?.current_market_cap, coin?.fdv, coin?.mcap, coin?.mc) || null,
+    fdv: firstMeaningfulNumber(coin?.fdv, coin?.fullyDilutedValuation, coin?.marketCap, coin?.marketCapUsd, coin?.usdMarketCap, coin?.usd_market_cap, coin?.market_cap_usd, coin?.market_cap, coin?.mcap, coin?.mc) || null,
     totalSupply: firstMeaningfulNumber(coin?.total_supply, coin?.totalSupply, coin?.supply, coin?.tokenSupply, coin?.token_supply) || null,
     tokenSupply: firstMeaningfulNumber(coin?.tokenSupply, coin?.token_supply, coin?.totalSupply, coin?.total_supply, coin?.supply) || null,
     supply: firstMeaningfulNumber(coin?.supply, coin?.total_supply, coin?.totalSupply, coin?.tokenSupply, coin?.token_supply) || null,
-    liquidityUsd: firstMeaningfulNumber(coin?.liquidity_usd, coin?.liquidityUsd, coin?.liquidity?.usd, coin?.liquidity, coin?.currentLiquidityUsd) || null,
+    liquidityUsd: firstMeaningfulNumber(coin?.liquidity_usd, coin?.liquidityUsd, coin?.liquidityUSD, coin?.liquidity?.usd, coin?.liquidity, coin?.currentLiquidityUsd, coin?.current_liquidity_usd, coin?.poolLiquidityUsd, coin?.pool_liquidity_usd) || null,
     volume: {
-      m5: firstMeaningfulNumber(volume.m5, volume["5m"], coin?.volume5m, coin?.volume_5m) || 0,
-      m15: firstMeaningfulNumber(volume.m15, volume.m15m, volume["15m"], coin?.volume15m, coin?.volume_15m, coin?.volumeM15) || 0,
-      m30: firstMeaningfulNumber(volume.m30, volume.m30m, volume["30m"], coin?.volume30m, coin?.volume_30m, coin?.volumeM30) || 0,
-      h1: firstMeaningfulNumber(volume.h1, volume["1h"], coin?.volumeH1, coin?.volume_h1, coin?.volume_1h, coin?.volume) || 0,
-      h24: firstMeaningfulNumber(volume.h24, volume.d1, volume["24h"], coin?.volume24h, coin?.volume_h24, coin?.volume_24h) || 0
+      m5: firstMeaningfulNumber(volume.m5, volume["5m"], coin?.volume5m, coin?.volume_5m, coin?.volumeM5, coin?.volume_m5) || 0,
+      m15: firstMeaningfulNumber(volume.m15, volume.m15m, volume["15m"], coin?.volume15m, coin?.volume_15m, coin?.volumeM15, coin?.volume_m15) || 0,
+      m30: firstMeaningfulNumber(volume.m30, volume.m30m, volume["30m"], coin?.volume30m, coin?.volume_30m, coin?.volumeM30, coin?.volume_m30) || 0,
+      h1: firstMeaningfulNumber(volume.h1, volume["1h"], coin?.volumeH1, coin?.volume_h1, coin?.volume_1h, coin?.volumeH, coin?.volume) || 0,
+      h24: firstMeaningfulNumber(volume.h24, volume.d1, volume["24h"], coin?.volume24h, coin?.volume_h24, coin?.volume_24h, coin?.volumeH24, coin?.volume_d1) || 0
     },
     txns: {
       m5: {
@@ -14221,17 +14268,30 @@ function sniperCandidatesFromPhotonData(data) {
 }
 
 async function fetchPumpFunLatestCandidates(options = {}) {
-  const headers = { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" };
+  const publicHeaders = { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" };
+  const authedHeaders = { ...publicHeaders };
   if (CONFIG.pumpFunApiToken) {
-    headers.Authorization = `Bearer ${CONFIG.pumpFunApiToken}`;
+    authedHeaders.Authorization = `Bearer ${CONFIG.pumpFunApiToken}`;
   }
 
-  const requestOptions = { headers, timeoutMs: options.timeoutMs || 2_500 };
+  const timeoutMs = options.timeoutMs || 2_500;
+  const fetchPumpJson = async (url) => {
+    const headerAttempts = CONFIG.pumpFunApiToken ? [authedHeaders, publicHeaders] : [publicHeaders];
+    let lastError = null;
+    for (const headers of headerAttempts) {
+      try {
+        return await fetchJson(url, { headers, timeoutMs });
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError || new Error("Pump metadata request failed");
+  };
   const latestUrl = `${CONFIG.pumpFunApiBase}/coins/latest`;
   const listUrl = `${CONFIG.pumpFunApiBase}/coins?offset=0&limit=100&sort=created_timestamp&order=DESC&includeNsfw=false`;
   const [latest, list] = await Promise.all([
-    fetchJson(latestUrl, requestOptions).catch(() => null),
-    fetchJson(listUrl, requestOptions).catch(() => [])
+    fetchPumpJson(latestUrl).catch(() => null),
+    fetchPumpJson(listUrl).catch(() => [])
   ]);
   return uniqueSniperCandidates(sniperCandidatesFromPumpFunData([latest, ...arrayFromApiData(list)], "pumpfun-latest"));
 }
@@ -14271,17 +14331,19 @@ function sniperCandidatesFromPumpFunData(items, source = "pumpfun") {
           symbol: firstString(coin.symbol, coin.ticker),
           name: firstString(coin.name),
           description: firstString(coin.description),
-          icon: firstString(coin.image_uri, coin.image, coin.imageUrl, coin.metadata?.image),
+          icon: firstString(coin.image_uri, coin.imageUri, coin.imageUrl, coin.image_url, coin.image, coin.metadata?.image, coin.metadata?.imageUrl, coin.logoURI, coin.logo),
+          imageUrl: firstString(coin.image_uri, coin.imageUri, coin.imageUrl, coin.image_url, coin.image, coin.metadata?.image, coin.metadata?.imageUrl, coin.logoURI, coin.logo),
+          imageUri: firstString(coin.image_uri, coin.imageUri, coin.imageUrl, coin.image_url, coin.image, coin.metadata?.image, coin.metadata?.imageUrl, coin.logoURI, coin.logo),
           pairCreatedAt: normalizePairCreatedAt(firstString(coin.created_timestamp, coin.createdAt, coin.created_at, coin.timestamp)),
-          marketCap: firstNumber(coin.usd_market_cap, coin.market_cap, coin.marketCap, coin.fdv),
-          fdv: firstNumber(coin.fdv, coin.marketCap, coin.usd_market_cap, coin.market_cap),
-          liquidityUsd: firstNumber(coin.liquidity_usd, coin.liquidityUsd, coin.liquidity?.usd, coin.liquidity, coin.currentLiquidityUsd),
+          marketCap: firstNumber(coin.usd_market_cap, coin.usdMarketCap, coin.marketCapUsd, coin.market_cap_usd, coin.market_cap, coin.marketCap, coin.currentMarketCap, coin.current_market_cap, coin.fdv),
+          fdv: firstNumber(coin.fdv, coin.fullyDilutedValuation, coin.marketCap, coin.marketCapUsd, coin.usdMarketCap, coin.usd_market_cap, coin.market_cap_usd, coin.market_cap),
+          liquidityUsd: firstNumber(coin.liquidity_usd, coin.liquidityUsd, coin.liquidityUSD, coin.liquidity?.usd, coin.liquidity, coin.currentLiquidityUsd, coin.current_liquidity_usd, coin.poolLiquidityUsd, coin.pool_liquidity_usd),
           volume: typeof coin.volume === "object" && coin.volume !== null ? coin.volume : firstNumber(coin.volume, coin.volumeUsd, coin.volume_usd),
-          volume5m: firstNumber(coin.volume5m, coin.volume_5m, coin.volume?.m5, coin.volume?.["5m"]),
-          volume15m: firstNumber(coin.volume15m, coin.volume_15m, coin.volumeM15, coin.volume?.m15, coin.volume?.["15m"]),
-          volume30m: firstNumber(coin.volume30m, coin.volume_30m, coin.volumeM30, coin.volume?.m30, coin.volume?.["30m"]),
-          volumeH1: firstNumber(coin.volumeH1, coin.volume_h1, coin.volume_1h, coin.volume?.h1, coin.volume?.["1h"]),
-          volume24h: firstNumber(coin.volume24h, coin.volume_h24, coin.volume_24h, coin.volume?.h24, coin.volume?.["24h"]),
+          volume5m: firstNumber(coin.volume5m, coin.volume_5m, coin.volumeM5, coin.volume_m5, coin.volume?.m5, coin.volume?.["5m"]),
+          volume15m: firstNumber(coin.volume15m, coin.volume_15m, coin.volumeM15, coin.volume_m15, coin.volume?.m15, coin.volume?.["15m"]),
+          volume30m: firstNumber(coin.volume30m, coin.volume_30m, coin.volumeM30, coin.volume_m30, coin.volume?.m30, coin.volume?.["30m"]),
+          volumeH1: firstNumber(coin.volumeH1, coin.volume_h1, coin.volume_1h, coin.volumeH, coin.volume?.h1, coin.volume?.["1h"]),
+          volume24h: firstNumber(coin.volume24h, coin.volume_h24, coin.volume_24h, coin.volumeH24, coin.volume_d1, coin.volume?.h24, coin.volume?.["24h"]),
           txns: coin.txns || coin.transactions || null,
           virtualSolReserves: firstNumber(coin.virtual_sol_reserves),
           virtualTokenReserves: firstNumber(coin.virtual_token_reserves),
@@ -25447,7 +25509,7 @@ async function webLivePairs(userId, bucket = "live", options = {}) {
   const sort = String(options.sort || "best").toLowerCase();
   const force = Boolean(options.force);
   const cacheKey = `${safeBucket}:${sort}`;
-  const externalKey = externalCacheKey(`web:livePairs:v4:${cacheKey}`, "global");
+  const externalKey = externalCacheKey(`web:livePairs:v5:${cacheKey}`, "global");
   const cached = livePairsSharedCache.get(cacheKey) || { cachedAt: 0, value: null, promise: null };
   if (!force && CONFIG.livePairsSharedCacheMs > 0 && cached.value && Date.now() - cached.cachedAt < CONFIG.livePairsSharedCacheMs) {
     return { ...cached.value, cacheHit: true, cacheSource: "memory" };
@@ -26112,6 +26174,8 @@ function livePairCandidateToRow(candidate) {
   const name = firstString(profile.name) || "Fresh Launch";
   const imageUrl = firstString(
     profile.imageUrl,
+    profile.imageUri,
+    profile.image_uri,
     profile.image_url,
     profile.icon,
     profile.image,
@@ -26620,20 +26684,20 @@ function webSniperRow(row) {
     smartMoney: row.smartMoney,
     scalpSetup: row.scalpSetup,
     marketCap: row.marketCap,
-    marketCapLabel: formatUsdCompact(row.marketCap || 0) || "n/a",
+    marketCapLabel: row.marketCapLabel || formatUsdCompact(row.marketCap || 0) || "checking",
     liquidityUsd: row.liquidityUsd,
-    liquidityLabel: formatUsdCompact(row.liquidityUsd || 0) || "n/a",
+    liquidityLabel: row.liquidityLabel || formatUsdCompact(row.liquidityUsd || 0) || "checking",
     volume5m: row.volume5m,
-    volume5mLabel: formatUsdCompact(row.volume5m || 0) || "n/a",
+    volume5mLabel: row.volume5mLabel || formatUsdCompact(row.volume5m || 0) || "checking",
     volumeM15: row.volumeM15,
     volumeM15Label: row.volumeM15 ? formatUsdCompact(row.volumeM15 || 0) : "",
     volumeM30: row.volumeM30,
     volumeM30Label: row.volumeM30 ? formatUsdCompact(row.volumeM30 || 0) : "",
     volumeH1: row.volumeH1,
-    volumeH1Label: formatUsdCompact(row.volumeH1 || 0) || "n/a",
+    volumeH1Label: row.volumeH1Label || formatUsdCompact(row.volumeH1 || 0) || "checking",
     volumeH24: row.volumeH24,
     volumeH24Label: row.volumeH24 ? formatUsdCompact(row.volumeH24 || 0) : "",
-    volumeLabel: formatUsdCompact(firstMeaningfulNumber(row.volumeM15, row.volumeM30, row.volumeH1, row.volume5m, row.volumeH24) || 0) || "n/a",
+    volumeLabel: row.volumeLabel || formatUsdCompact(firstMeaningfulNumber(row.volumeM15, row.volumeM30, row.volumeH1, row.volume5m, row.volumeH24) || 0) || "checking",
     sniperCount: row.sniperCount || 0,
     buys5m: row.buys5m || 0,
     sells5m: row.sells5m || 0,
@@ -28471,6 +28535,7 @@ main().catch((error) => {
   console.error(error);
   process.exit(1);
 });
+
 
 
 
