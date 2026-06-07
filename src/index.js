@@ -127,6 +127,9 @@ const dexSearchCandidatesCache = new Map();
 let photonNewPairsCache = { cachedAt: 0, value: [] };
 let manualLaunchCandidatesCache = { cachedAt: 0, value: [] };
 let livePairsSharedCache = new Map();
+let kolScanSharedCache = new Map();
+const kolDumpStatsCache = new Map();
+const KOL_DUMP_STATS_TTL_MS = 15 * 60 * 1000;
 let chartBootstrapSharedCache = new Map();
 const solanaTrackerCache = new Map();
 const madeOnSolCache = new Map();
@@ -1854,6 +1857,17 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "GET" && (pathname === "/api/web/kols/dump-stats" || /^\/api\/web\/kols\/[^/]+\/dump-stats$/.test(pathname))) {
+      const kolId = pathname === "/api/web/kols/dump-stats"
+        ? (requestUrl.searchParams.get("kolId") || requestUrl.searchParams.get("id") || "")
+        : decodeURIComponent(pathname.split("/")[4] || "");
+      sendCachedWebJson(request, response, 200, {
+        ok: true,
+        ...await webKolDumpStats(kolId)
+      }, "public, max-age=300, stale-while-revalidate=1800");
+      return;
+    }
+
     if (request.method === "GET" && pathname === "/api/web/slimewire-traders") {
       sendWebJson(request, response, 200, {
         ok: true,
@@ -2429,6 +2443,17 @@ async function handleWebApiRequest(request, response, requestUrl) {
         ok: true,
         scan: await webKolScan(auth.userId, mode, wallet)
       });
+      return;
+    }
+
+    if (request.method === "GET" && (pathname === "/api/web/kols/dump-stats" || /^\/api\/web\/kols\/[^/]+\/dump-stats$/.test(pathname))) {
+      const kolId = pathname === "/api/web/kols/dump-stats"
+        ? (requestUrl.searchParams.get("kolId") || requestUrl.searchParams.get("id") || "")
+        : decodeURIComponent(pathname.split("/")[4] || "");
+      sendCachedWebJson(request, response, 200, {
+        ok: true,
+        ...await webKolDumpStats(kolId)
+      }, "public, max-age=300, stale-while-revalidate=1800");
       return;
     }
 
@@ -24339,9 +24364,10 @@ function flattenParsedInstructions(tx) {
 }
 
 async function webKolScan(userId, mode = "hot", wallet = "") {
+  let result;
   if (String(mode || "").trim().toLowerCase() === "slimewire") {
     const traders = await webSlimewireTraders();
-    return {
+    result = {
       configured: true,
       label: "Top SlimeWire Traders",
       message: traders.length
@@ -24352,8 +24378,129 @@ async function webKolScan(userId, mode = "hot", wallet = "") {
       rows: [],
       source: "slimewire"
     };
+  } else {
+    result = await buildKolScan(userId, mode, wallet);
   }
-  return buildKolScan(userId, mode, wallet);
+  rememberKolScanResult(mode, wallet, result);
+  return result;
+}
+
+function rememberKolScanResult(mode = "hot", wallet = "", scan = {}) {
+  const key = `${String(mode || "hot").toLowerCase()}:${String(wallet || "").trim().toLowerCase() || "global"}`;
+  kolScanSharedCache.set(key, { cachedAt: Date.now(), value: scan });
+  if (kolScanSharedCache.size > 20) {
+    const oldest = [...kolScanSharedCache.entries()].sort((a, b) => Number(a[1]?.cachedAt || 0) - Number(b[1]?.cachedAt || 0))[0]?.[0];
+    if (oldest) kolScanSharedCache.delete(oldest);
+  }
+}
+
+function kolDumpStatsExternalKey(kolId = "all") {
+  return externalCacheKey(`kol:dumpstats:${String(kolId || "all").trim().toLowerCase()}`, "global");
+}
+
+function kolProfileId(kol = {}) {
+  return firstString(kol.id, kol.kolId, kol.wallet, kol.twitter, kol.handle, kol.name, kol.shortWallet).replace(/\s+/g, "_").toLowerCase();
+}
+
+function cachedKolProfiles() {
+  const profiles = [];
+  for (const cached of kolScanSharedCache.values()) {
+    if (Array.isArray(cached?.value?.kols)) profiles.push(...cached.value.kols);
+    if (Array.isArray(cached?.value?.rows)) {
+      const byWallet = new Map();
+      for (const row of cached.value.rows) {
+        const wallet = firstString(row.wallet, row.kolWallet, row.owner, row.traderWallet);
+        if (!wallet || byWallet.has(wallet)) continue;
+        byWallet.set(wallet, {
+          wallet,
+          name: firstString(row.kolName, row.name, row.twitter, shortMint(wallet)),
+          twitter: stripAt(firstString(row.twitter, row.handle)),
+          trades: row.callsTracked || row.trades || 0,
+          source: "kol_signal_row"
+        });
+      }
+      profiles.push(...byWallet.values());
+    }
+  }
+  const byId = new Map();
+  for (const profile of profiles) {
+    const id = kolProfileId(profile);
+    if (!id) continue;
+    const existing = byId.get(id);
+    if (!existing || Number(profile.trades || 0) > Number(existing.trades || 0)) byId.set(id, profile);
+  }
+  return [...byId.values()];
+}
+
+function kolDumpRiskLabel(dumpRiskPercent, callsTracked) {
+  if (Number(callsTracked || 0) < 5) return "Mixed";
+  const risk = Number(dumpRiskPercent || 0);
+  if (risk >= 50) return "High Dump Risk";
+  if (risk >= 30) return "Dump Risk";
+  if (risk <= 15) return "Trusted Flow";
+  return "Mixed";
+}
+
+function computeKolDumpStatsFromProfile(kol = {}) {
+  const kolId = kolProfileId(kol);
+  const callsTracked = Number(firstMeaningfulNumber(kol.callsTracked, kol.trades, kol.tradeCount, kol.buyCount, kol.buy_count) || 0);
+  const explicitDumpRisk = firstMeaningfulNumber(kol.dumpRiskPercent, kol.soldWithin60mPercent, kol.sold_within_60m_percent);
+  const hasExplicitDumpRisk = explicitDumpRisk !== null && Number.isFinite(Number(explicitDumpRisk));
+  const dumpRiskPercent = hasExplicitDumpRisk ? Math.max(0, Math.min(100, Math.round(Number(explicitDumpRisk)))) : 0;
+  const lowData = !hasExplicitDumpRisk || callsTracked < 5;
+  const riskLabel = lowData ? "Mixed" : kolDumpRiskLabel(dumpRiskPercent, callsTracked);
+  const reasons = lowData
+    ? ["Low local sell-window history. Wallet-based until social signal data is available."]
+    : dumpRiskPercent >= 30
+      ? ["Fast sell-window history is elevated for tracked calls."]
+      : ["Tracked sell-window history is not showing high dump pressure."];
+  return {
+    kolId,
+    displayName: firstString(kol.displayName, kol.name, kol.twitter ? `@${stripAt(kol.twitter)}` : "", kol.shortWallet, kol.wallet ? shortMint(kol.wallet) : "KOL Wallet"),
+    handle: stripAt(firstString(kol.handle, kol.twitter, kol.x)),
+    walletAddresses: uniqueStrings([kol.wallet, kol.owner, kol.address, kol.publicKey].filter(Boolean)),
+    callsTracked,
+    dumpRiskPercent,
+    medianHoldMinutes: Number(firstMeaningfulNumber(kol.medianHoldMinutes, kol.median_hold_minutes) || 0) || null,
+    soldWithin15mPercent: Number(firstMeaningfulNumber(kol.soldWithin15mPercent, kol.sold_within_15m_percent) || 0) || null,
+    soldWithin60mPercent: hasExplicitDumpRisk ? dumpRiskPercent : null,
+    medianPostSignalDrawdownPercent: Number(firstMeaningfulNumber(kol.medianPostSignalDrawdownPercent, kol.median_drawdown_percent) || 0) || null,
+    followerSurvival30mPercent: Number(firstMeaningfulNumber(kol.followerSurvival30mPercent, kol.survival30mPercent) || 0) || null,
+    followerSurvival60mPercent: Number(firstMeaningfulNumber(kol.followerSurvival60mPercent, kol.survival60mPercent) || 0) || null,
+    riskLabel,
+    confidence: lowData ? "low" : callsTracked >= 12 ? "high" : "medium",
+    lowData,
+    reasons,
+    updatedAt: new Date().toISOString()
+  };
+}
+
+async function webKolDumpStats(kolId = "") {
+  const id = String(kolId || "all").trim().toLowerCase() || "all";
+  const cached = kolDumpStatsCache.get(id);
+  if (cached?.value && Date.now() - Number(cached.cachedAt || 0) < KOL_DUMP_STATS_TTL_MS) {
+    return { ...cached.value, cacheHit: true, cacheSource: "memory" };
+  }
+  const external = await cacheGetJson(kolDumpStatsExternalKey(id)).catch(() => null);
+  if (external?.value && Number.isFinite(Number(external.cachedAt)) && Date.now() - Number(external.cachedAt) < KOL_DUMP_STATS_TTL_MS) {
+    kolDumpStatsCache.set(id, { cachedAt: Number(external.cachedAt), value: external.value });
+    return { ...external.value, cacheHit: true, cacheSource: kvProviderName() };
+  }
+  const stats = cachedKolProfiles().map(computeKolDumpStatsFromProfile);
+  const filtered = id === "all" ? stats : stats.filter((item) => String(item.kolId || "").toLowerCase() === id);
+  const value = {
+    stats: filtered,
+    count: filtered.length,
+    updatedAt: new Date().toISOString(),
+    cacheHit: false,
+    cacheSource: "local-cache",
+    message: filtered.length
+      ? "KOL Dump Detector uses cached/local wallet stats only."
+      : "No cached KOL profiles yet. Refresh KOL Tracker to warm the detector."
+  };
+  kolDumpStatsCache.set(id, { cachedAt: Date.now(), value });
+  await cacheSetJson(kolDumpStatsExternalKey(id), displayCacheEnvelope(value), KOL_DUMP_STATS_TTL_MS).catch(() => false);
+  return value;
 }
 
 async function webCreateKolEntry(userId, body = {}) {

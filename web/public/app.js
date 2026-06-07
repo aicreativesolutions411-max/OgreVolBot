@@ -302,6 +302,10 @@ const state = {
   kolStatus: "",
   kolLoading: false,
   kolLastUpdatedAt: "",
+  kolDumpStats: null,
+  kolDumpStatsLoading: false,
+  kolDumpStatsLoadedAt: 0,
+  kolDumpDetails: { open: false, kolId: "" },
   presets: { trade: [], bundle: [] },
   watchlist: { rows: [], count: 0 },
   watchlistLoading: false,
@@ -3299,6 +3303,7 @@ async function loadKolScan(mode = state.kolMode, wallet = state.kolWallet, optio
     state.kolScan = data.scan;
     state.kolLastUpdatedAt = new Date().toISOString();
     state.kolStatus = data.scan?.message || `${kolModeLabel(state.kolMode)} loaded.`;
+    state.kolDumpStatsLoadedAt = 0;
   } catch (error) {
     state.kolStatus = error.message || "KOL scan failed.";
     throw error;
@@ -3993,6 +3998,7 @@ function render(options = {}) {
   renderQuickBuyModal();
   renderProtectedBuyModal();
   renderSlimeShieldDetailsDrawer();
+  renderKolDumpDetailsDrawer();
   renderOgreAgent();
   syncInteractionLocks();
   applyActionButtonStates();
@@ -4198,6 +4204,7 @@ function renderTabs() {
   scheduleKolAutoRefresh();
   scheduleWatchlistAutoRefresh();
   scheduleActiveTerminalFeedRefresh();
+  if (state.activeTab === "kol") void ensureKolDumpStats();
 }
 
 function dashboardHtml() {
@@ -7322,6 +7329,190 @@ function launchWatchesHtml() {
   `;
 }
 
+function kolDumpProfileId(kol = {}) {
+  return String(kol.kolId || kol.id || kol.wallet || kol.twitter || kol.handle || kol.name || kol.shortWallet || "")
+    .trim()
+    .replace(/\s+/g, "_")
+    .toLowerCase();
+}
+
+function computeUiKolDumpStats(kol = {}) {
+  const callsTracked = Number(firstUsefulNumber(kol.callsTracked, kol.trades, kol.tradeCount, kol.buyCount));
+  const explicitRisk = parseUiNumber(kol.dumpRiskPercent ?? kol.soldWithin60mPercent);
+  const hasRisk = Number.isFinite(explicitRisk);
+  const dumpRiskPercent = hasRisk ? Math.max(0, Math.min(100, Math.round(explicitRisk))) : 0;
+  const lowData = !hasRisk || callsTracked < 5;
+  const riskLabel = lowData
+    ? "Mixed"
+    : dumpRiskPercent >= 50
+      ? "High Dump Risk"
+      : dumpRiskPercent >= 30
+        ? "Dump Risk"
+        : dumpRiskPercent <= 15
+          ? "Trusted Flow"
+          : "Mixed";
+  return {
+    kolId: kolDumpProfileId(kol),
+    displayName: kol.displayName || kol.name || (kol.twitter ? `@${kol.twitter}` : kol.shortWallet || shortAddress(kol.wallet || "")),
+    handle: cleanXHandle(kol.handle || kol.twitter || ""),
+    walletAddresses: [kol.wallet, kol.owner, kol.address, kol.publicKey].filter(Boolean),
+    callsTracked,
+    dumpRiskPercent,
+    medianHoldMinutes: kol.medianHoldMinutes || null,
+    soldWithin15mPercent: kol.soldWithin15mPercent || null,
+    soldWithin60mPercent: hasRisk ? dumpRiskPercent : null,
+    medianPostSignalDrawdownPercent: kol.medianPostSignalDrawdownPercent || null,
+    followerSurvival30mPercent: kol.followerSurvival30mPercent || null,
+    followerSurvival60mPercent: kol.followerSurvival60mPercent || null,
+    riskLabel,
+    lowData,
+    confidence: lowData ? "low" : callsTracked >= 12 ? "high" : "medium",
+    reasons: lowData
+      ? ["Low local sell-window history. Wallet-based until social signal data is available."]
+      : dumpRiskPercent >= 30
+        ? ["Fast sell-window history is elevated for tracked calls."]
+        : ["Tracked sell-window history is not showing high dump pressure."],
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function kolDumpStatsRows() {
+  const apiRows = Array.isArray(state.kolDumpStats?.stats) ? state.kolDumpStats.stats : [];
+  if (apiRows.length) return apiRows;
+  const kols = Array.isArray(state.kolScan?.kols) && state.kolScan.kols.length
+    ? state.kolScan.kols
+    : curatedKolProfiles();
+  return kols.map(computeUiKolDumpStats).filter((row) => row.kolId);
+}
+
+function kolDumpPercentLabel(row = {}) {
+  if (row.lowData || Number(row.callsTracked || 0) < 5) return "Low data";
+  return `${Math.round(Number(row.dumpRiskPercent || 0))}% dump risk`;
+}
+
+function kolDumpMetaLine(row = {}) {
+  const hold = Number.isFinite(Number(row.medianHoldMinutes)) ? `median hold ${Math.round(Number(row.medianHoldMinutes))}m` : "median hold n/a";
+  return `${row.riskLabel || "Mixed"} · ${kolDumpPercentLabel(row)} · ${hold}`;
+}
+
+function kolDumpDetectorPanelHtml() {
+  if (!featureEnabled("kolDumpDetectorEnabled", true)) return "";
+  const rows = kolDumpStatsRows().slice(0, 6);
+  return `
+    <section class="kol-dump-panel">
+      <div class="terminal-title-row">
+        <div>
+          <h3>KOL Dump Detector</h3>
+          <p>Tracks whether watched KOL wallets tend to sell into followers.</p>
+        </div>
+        <span>${state.kolDumpStatsLoading ? "Updating" : rows.length ? `${rows.length} tracked` : "Low data"}</span>
+      </div>
+      <small>Wallet-based until social signal data is available.</small>
+      ${rows.length ? `
+        <div class="kol-dump-list">
+          ${rows.map((row) => `
+            <article class="kol-dump-row">
+              <div>
+                <strong>${escapeHtml(row.displayName || "KOL Wallet")}</strong>
+                <span>${escapeHtml(row.handle ? `@${row.handle}` : (row.walletAddresses?.[0] ? shortAddress(row.walletAddresses[0]) : "wallet pending"))}</span>
+              </div>
+              <p>${escapeHtml(kolDumpMetaLine(row))}</p>
+              <button type="button" data-kol-dump-details="${escapeHtml(row.kolId)}">Details</button>
+            </article>
+          `).join("")}
+        </div>
+      ` : emptyState("KOL dump stats warming up", "Refresh KOL Tracker to load wallet rows. No chain scan runs from this panel.")}
+    </section>
+  `;
+}
+
+async function ensureKolDumpStats(options = {}) {
+  if (!featureEnabled("kolDumpDetectorEnabled", true)) return null;
+  const force = Boolean(options.force);
+  if (!force && state.kolDumpStatsLoadedAt && Date.now() - Number(state.kolDumpStatsLoadedAt || 0) < 15 * 60 * 1000) return state.kolDumpStats;
+  if (state.kolDumpStatsLoading) return null;
+  state.kolDumpStatsLoading = true;
+  try {
+    const data = await api("/api/web/kols/dump-stats", {
+      timeoutMs: 3000,
+      preserveSafeError: true
+    });
+    state.kolDumpStats = data;
+    state.kolDumpStatsLoadedAt = Date.now();
+    debugCounter(data.cacheHit ? "kolStatsCacheHit" : "kolStatsCacheMiss");
+    return data;
+  } catch {
+    state.kolDumpStats = state.kolDumpStats || { stats: [], message: "KOL dump stats unavailable. Showing local low-data fallback." };
+    state.kolDumpStatsLoadedAt = Date.now();
+    return null;
+  } finally {
+    state.kolDumpStatsLoading = false;
+    if (state.activeTab === "kol" || state.kolDumpDetails?.open) render({ force: true });
+  }
+}
+
+function openKolDumpDetails(kolId = "") {
+  const id = String(kolId || "").trim();
+  if (!id || !featureEnabled("kolDumpDetectorEnabled", true)) return;
+  state.kolDumpDetails = { open: true, kolId: id };
+  renderKolDumpDetailsDrawer();
+  void ensureKolDumpStats();
+}
+
+function closeKolDumpDetails() {
+  state.kolDumpDetails = { open: false, kolId: "" };
+  renderKolDumpDetailsDrawer();
+}
+
+function renderKolDumpDetailsDrawer() {
+  let root = document.querySelector("[data-kol-dump-drawer-root]");
+  if (!root) {
+    root = document.createElement("div");
+    root.dataset.kolDumpDrawerRoot = "true";
+    document.body.appendChild(root);
+  }
+  const details = state.kolDumpDetails || {};
+  const open = Boolean(details.open && details.kolId);
+  document.body.classList.toggle("kol-dump-drawer-open", open);
+  if (!open || !featureEnabled("kolDumpDetectorEnabled", true)) {
+    root.innerHTML = "";
+    return;
+  }
+  const row = kolDumpStatsRows().find((item) => String(item.kolId) === String(details.kolId)) || { displayName: "KOL Wallet", reasons: [] };
+  root.innerHTML = `
+    <div class="slimeshield-drawer-backdrop" data-kol-dump-close></div>
+    <aside class="kol-dump-drawer" role="dialog" aria-modal="true" aria-label="KOL Dump Detector details">
+      <header>
+        <div>
+          <span>KOL Dump Detector</span>
+          <h3>${escapeHtml(row.displayName || "KOL Wallet")}</h3>
+        </div>
+        <button type="button" data-kol-dump-close>Close</button>
+      </header>
+      <section class="kol-dump-detail-summary">
+        <strong>${escapeHtml(row.riskLabel || "Mixed")}</strong>
+        <p>${escapeHtml(kolDumpMetaLine(row))}</p>
+        <small>Confidence: ${escapeHtml(row.confidence || "low")} · Updated ${escapeHtml(formatDate(row.updatedAt))}</small>
+      </section>
+      <dl class="kol-dump-metrics">
+        <div><dt>Calls tracked</dt><dd>${escapeHtml(row.callsTracked ?? 0)}</dd></div>
+        <div><dt>Sold within 15m</dt><dd>${row.soldWithin15mPercent == null ? "n/a" : `${escapeHtml(row.soldWithin15mPercent)}%`}</dd></div>
+        <div><dt>Sold within 60m</dt><dd>${row.soldWithin60mPercent == null ? "n/a" : `${escapeHtml(row.soldWithin60mPercent)}%`}</dd></div>
+        <div><dt>Median hold</dt><dd>${row.medianHoldMinutes == null ? "n/a" : `${escapeHtml(row.medianHoldMinutes)}m`}</dd></div>
+        <div><dt>Median drawdown</dt><dd>${row.medianPostSignalDrawdownPercent == null ? "n/a" : `${escapeHtml(row.medianPostSignalDrawdownPercent)}%`}</dd></div>
+        <div><dt>30m survival</dt><dd>${row.followerSurvival30mPercent == null ? "n/a" : `${escapeHtml(row.followerSurvival30mPercent)}%`}</dd></div>
+      </dl>
+      <section>
+        <h4>Interpretation</h4>
+        <ul class="slimeshield-factor-list">
+          ${(row.reasons || ["No local sell-window history yet."]).map((reason) => `<li><span>${escapeHtml(reason)}</span></li>`).join("")}
+        </ul>
+      </section>
+      <p class="slimeshield-safety-copy">This is wallet-based until social signal data is available. It never scans the chain from this details drawer.</p>
+    </aside>
+  `;
+}
+
 function kolHtml() {
   const configured = state.kolScan?.configured !== false;
   const disabled = state.kolLoading ? "disabled" : "";
@@ -7337,6 +7528,7 @@ function kolHtml() {
     <p class="scan-meta">${escapeHtml(kolModeDescription(state.kolMode))}</p>
     ${kolScanStatusHtml()}
     ${state.kolScan?.kols?.length ? kolSummaryHtml() : curatedKolBoardHtml()}
+    ${kolDumpDetectorPanelHtml()}
     ${state.kolMode === "slimewire" && state.kolScan
       ? state.kolScan.kols?.length ? "" : emptyState("No SlimeWire traders yet", "Traders appear here only after they opt in from Profile and have site trade history.")
       : state.kolScan ? kolRowsHtml() : emptyState("No KOL scan loaded", "Pick a KOL mode or tap Refresh.")}
@@ -15691,6 +15883,11 @@ document.addEventListener("keydown", (event) => {
     return;
   }
 
+  if (state.kolDumpDetails?.open) {
+    closeKolDumpDetails();
+    return;
+  }
+
   if (state.protectedBuyModal?.open) {
     closeProtectedBuyModal();
     return;
@@ -15763,6 +15960,12 @@ document.addEventListener("click", async (event) => {
     closeProtectedBuyModal();
     return;
   }
+  const kolDumpCloseTarget = source?.closest?.("[data-kol-dump-close]");
+  if (kolDumpCloseTarget) {
+    event.preventDefault();
+    closeKolDumpDetails();
+    return;
+  }
   const tekSummary = source?.closest?.(".tabs .nav-tool-group summary");
   if (tekSummary) {
     event.preventDefault();
@@ -15783,6 +15986,12 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-slimeshield-refresh]")) {
     event.preventDefault();
     void loadSlimeShield(target.dataset.slimeshieldRefresh || "", { force: true });
+    return;
+  }
+
+  if (target.matches("[data-kol-dump-details]")) {
+    event.preventDefault();
+    openKolDumpDetails(target.dataset.kolDumpDetails || "");
     return;
   }
 
@@ -16630,6 +16839,10 @@ document.addEventListener("click", async (event) => {
 
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
+  if (state.kolDumpDetails?.open) {
+    closeKolDumpDetails();
+    return;
+  }
   if (state.protectedBuyModal?.open) {
     closeProtectedBuyModal();
     return;
