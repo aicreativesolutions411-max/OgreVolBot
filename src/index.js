@@ -104,6 +104,10 @@ const priorityJupiterLimiter = createJupiterLimiter({
 const sessions = new Map();
 const mintProgramCache = new Map();
 const dexMetadataCache = new Map();
+const tokenImageResponseCache = new Map();
+const TOKEN_IMAGE_RESPONSE_CACHE_TTL_MS = 30 * 60 * 1000;
+const TOKEN_IMAGE_RESPONSE_STALE_TTL_MS = 6 * 60 * 60 * 1000;
+const TOKEN_IMAGE_RESPONSE_CACHE_MAX = 500;
 const solBalanceCache = new Map();
 const tokenAccountsCache = new Map();
 const tokenBalanceCache = new Map();
@@ -2452,6 +2456,32 @@ async function serveWebPortal(requestUrl, response) {
   }
 }
 
+function pruneTokenImageResponseCache() {
+  const now = Date.now();
+  for (const [key, value] of tokenImageResponseCache.entries()) {
+    if (now - Number(value.cachedAt || 0) > TOKEN_IMAGE_RESPONSE_STALE_TTL_MS) {
+      tokenImageResponseCache.delete(key);
+    }
+  }
+  if (tokenImageResponseCache.size <= TOKEN_IMAGE_RESPONSE_CACHE_MAX) return;
+  const sorted = [...tokenImageResponseCache.entries()]
+    .sort((a, b) => Number(a[1]?.cachedAt || 0) - Number(b[1]?.cachedAt || 0));
+  for (const [key] of sorted.slice(0, Math.max(0, tokenImageResponseCache.size - TOKEN_IMAGE_RESPONSE_CACHE_MAX))) {
+    tokenImageResponseCache.delete(key);
+  }
+}
+
+function sendCachedWebTokenImage(request, response, cachedImage, cacheStatus = "HIT") {
+  response.writeHead(200, {
+    "Content-Type": cachedImage.contentType || "image/jpeg",
+    "Content-Length": cachedImage.buffer.length,
+    "Cache-Control": "public, max-age=900, stale-while-revalidate=3600",
+    "X-Slime-Avatar-Cache": cacheStatus,
+    ...webCorsHeaders(request)
+  });
+  response.end(cachedImage.buffer);
+}
+
 async function sendWebTokenImage(request, response, requestUrl) {
   const mint = firstString(
     requestUrl.searchParams.get("mint"),
@@ -2461,6 +2491,13 @@ async function sendWebTokenImage(request, response, requestUrl) {
   if (!mint) {
     response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store", ...webCorsHeaders(request) });
     response.end("Missing token mint");
+    return;
+  }
+
+  const cacheKey = String(mint).trim().toLowerCase();
+  const cachedImage = tokenImageResponseCache.get(cacheKey);
+  if (cachedImage && Date.now() - Number(cachedImage.cachedAt || 0) < TOKEN_IMAGE_RESPONSE_CACHE_TTL_MS) {
+    sendCachedWebTokenImage(request, response, cachedImage, "HIT");
     return;
   }
 
@@ -2480,7 +2517,11 @@ async function sendWebTokenImage(request, response, requestUrl) {
   }
   const imageCandidate = imageUriGatewayCandidates(imageUrl).find((candidate) => /^https?:\/\//i.test(candidate));
   if (!imageCandidate) {
-    response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "public, max-age=120", ...webCorsHeaders(request) });
+    if (cachedImage) {
+      sendCachedWebTokenImage(request, response, cachedImage, "STALE");
+      return;
+    }
+    response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store", ...webCorsHeaders(request) });
     response.end("Token image not found");
     return;
   }
@@ -2503,17 +2544,28 @@ async function sendWebTokenImage(request, response, requestUrl) {
     if (!buffer.length || buffer.length > 5_000_000) {
       throw new Error("Token image response was empty or too large");
     }
+    tokenImageResponseCache.set(cacheKey, {
+      cachedAt: Date.now(),
+      contentType,
+      buffer
+    });
+    pruneTokenImageResponseCache();
     response.writeHead(200, {
       "Content-Type": contentType,
       "Content-Length": buffer.length,
       "Cache-Control": "public, max-age=900, stale-while-revalidate=3600",
+      "X-Slime-Avatar-Cache": "MISS",
       ...webCorsHeaders(request)
     });
     response.end(buffer);
   } catch (error) {
+    if (cachedImage) {
+      sendCachedWebTokenImage(request, response, cachedImage, "STALE");
+      return;
+    }
     response.writeHead(502, {
       "Content-Type": "text/plain; charset=utf-8",
-      "Cache-Control": "public, max-age=60",
+      "Cache-Control": "no-store",
       ...webCorsHeaders(request)
     });
     response.end("Token image unavailable");

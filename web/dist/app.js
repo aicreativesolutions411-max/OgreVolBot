@@ -30,6 +30,9 @@ const API_CONNECT_TIMEOUT_MS = 60_000;
 const WALLET_REFRESH_TIMEOUT_MS = 15_000;
 const POSITIONS_REFRESH_TIMEOUT_MS = 10_000;
 const POSITIONS_FAST_REFRESH_TIMEOUT_MS = 8_000;
+const TERMINAL_BACKGROUND_REFRESH_MIN_MS = 8_000;
+const terminalFeedLastRefreshStartedAt = new Map();
+const livePairAvatarSrcMemory = new Map();
 const API_LONG_ACTION_TIMEOUT_MS = 180_000;
 const MOBILE_WALLET_PENDING_KEY = "slimewireMobileWalletPending";
 const MOBILE_WALLET_PENDING_BACKUP_KEY = "slimewireMobileWalletPendingBackup";
@@ -2720,17 +2723,33 @@ function tabNeedsAccountFeed(tabKey = state.activeTab) {
   return ["watchlist", "wallets", "positions", "pnl", "liveTrades", "trade", "bundle", "volume", "smartChart", "launch", "launchCoin"].includes(tabKey);
 }
 
+function terminalRefreshIsUserDriven(options = {}) {
+  const reason = String(options.reason || "").toLowerCase();
+  return Boolean(options.userInitiated)
+    || reason.includes("manual")
+    || reason.includes("button")
+    || reason.includes("bucket-switch")
+    || reason.includes("mode-switch");
+}
+
 async function refreshTerminalFeed(tabKey = state.activeTab, options = {}) {
   const startedAt = perfNow();
   const feed = terminalFeedDefinition(tabKey);
   if (!feed) return null;
   if (options.ifStale && terminalFeedHasData(tabKey) && !terminalFeedIsStale(tabKey)) return terminalFeedRuntime(tabKey);
-  if (terminalFeedRuntime(tabKey).inFlight && !options.force) return terminalFeedRuntime(tabKey);
+  if (terminalFeedRuntime(tabKey).inFlight) return terminalFeedRuntime(tabKey);
+  const userDriven = terminalRefreshIsUserDriven(options);
+  const now = Date.now();
+  const lastStartedAt = Number(terminalFeedLastRefreshStartedAt.get(tabKey) || 0);
+  if (!userDriven && lastStartedAt && now - lastStartedAt < TERMINAL_BACKGROUND_REFRESH_MIN_MS) {
+    return terminalFeedRuntime(tabKey);
+  }
   if (tabNeedsAccountFeed(tabKey) && !state.user && !["smartChart", "trade", "bundle", "volume"].includes(tabKey)) {
     markTerminalFeedDone(tabKey, "", "skipped", { errorCode: "ACCOUNT_REQUIRED", errorMessage: "Account or wallet required." });
     return terminalFeedRuntime(tabKey);
   }
 
+  terminalFeedLastRefreshStartedAt.set(tabKey, now);
   const requestId = markTerminalFeedStart(tabKey, options);
   try {
     if (tabKey === "terminal") {
@@ -2845,7 +2864,7 @@ function scheduleActiveTerminalFeedRefresh() {
     clearActiveTimer();
     return;
   }
-  const delayMs = Math.max(5_000, Number(feed.refreshMs || 30_000));
+  const delayMs = Math.max(TERMINAL_BACKGROUND_REFRESH_MIN_MS, Number(feed.refreshMs || 30_000));
   const nextKey = `${state.activeTab}:${terminalFeedCacheKey(feed)}:${delayMs}`;
   if (terminalFeedTimer && terminalFeedTimerKey === nextKey) return;
   clearActiveTimer();
@@ -2890,13 +2909,14 @@ async function loadLivePairs({ silent = false, bucket = state.livePairBucket, re
   const safeBucket = normalizeLivePairBucket(bucket);
   const isActiveBucket = safeBucket === state.livePairBucket;
   const requestSort = state.terminalSort || "best";
-  const requestKey = `${safeBucket}:${requestSort}:${force ? "force" : "poll"}`;
+  const requestKey = `${safeBucket}:${requestSort}`;
   const existingLoad = livePairsLoadInFlight.get(requestKey);
   if (existingLoad?.promise) {
     state.livePairsLoadingByBucket = { ...state.livePairsLoadingByBucket, [safeBucket]: existingLoad.requestId };
     state.livePairsLoading = Boolean(state.livePairsLoadingByBucket[state.livePairBucket]);
     if (!silent && isActiveBucket) state.loading = true;
-    if (isActiveBucket || !silent) {
+    const existingRows = state.livePairsByBucket?.[safeBucket]?.rows || (isActiveBucket ? state.livePairs?.rows : []);
+    if (!silent || (isActiveBucket && (!Array.isArray(existingRows) || existingRows.length === 0))) {
       scheduleLivePairsRender(LIVE_PAIRS_INFLIGHT_RENDER_REASON);
     }
     return existingLoad.promise;
@@ -2910,7 +2930,8 @@ async function loadLivePairs({ silent = false, bucket = state.livePairBucket, re
   state.livePairsLoadingByBucket = { ...state.livePairsLoadingByBucket, [safeBucket]: requestId };
   state.livePairsLoading = Boolean(state.livePairsLoadingByBucket[state.livePairBucket]);
   if (!silent && isActiveBucket) state.loading = true;
-  if (isActiveBucket || !silent) {
+  const existingRows = state.livePairsByBucket?.[safeBucket]?.rows || (isActiveBucket ? state.livePairs?.rows : []);
+  if (!silent || (isActiveBucket && (!Array.isArray(existingRows) || existingRows.length === 0))) {
     scheduleLivePairsRender(LIVE_PAIRS_INFLIGHT_RENDER_REASON);
   }
 
@@ -3098,7 +3119,7 @@ function ensureLivePairsWarmup({ force = false } = {}) {
         livePairsWarmupKeys.delete(key);
         scheduleLivePairsAutoRefresh();
       });
-  }, 0);
+  }, 900);
 }
 
 function scheduleScannerAutoRefresh() {
@@ -5109,6 +5130,33 @@ function tokenImageProxyUrl(row = {}) {
   return mint ? `/api/web/token-image?mint=${encodeURIComponent(mint)}` : "";
 }
 
+function rememberStableAvatar(key = "", src = "") {
+  const safeKey = String(key || "").trim();
+  const safeSrc = normalizeImageUrl(src);
+  if (!safeKey || !safeSrc) return "";
+  livePairAvatarSrcMemory.set(safeKey, safeSrc);
+  if (livePairAvatarSrcMemory.size > 900) {
+    for (const oldKey of livePairAvatarSrcMemory.keys()) {
+      livePairAvatarSrcMemory.delete(oldKey);
+      if (livePairAvatarSrcMemory.size <= 720) break;
+    }
+  }
+  return safeSrc;
+}
+
+function stableAvatarSrc(key = "", ...candidates) {
+  const safeKey = String(key || "").trim();
+  const remembered = safeKey ? livePairAvatarSrcMemory.get(safeKey) : "";
+  if (remembered) return remembered;
+  for (const candidate of candidates) {
+    const normalized = normalizeImageUrl(candidate);
+    if (normalized) return normalized;
+  }
+  return "";
+}
+
+window.__slimeRememberAvatar = rememberStableAvatar;
+
 function xAvatarUrl(handle) {
   const clean = cleanXHandle(handle);
   return clean ? `https://unavatar.io/twitter/${encodeURIComponent(clean)}` : "";
@@ -5134,10 +5182,12 @@ function kolAvatarLabel(kol = {}) {
 }
 
 function kolAvatarMarkup(kol = {}, className = "kol-avatar") {
-  const src = kolAvatarSrc(kol);
+  const key = `kol:${String(kol.wallet || kol.address || kol.twitter || kol.x || kol.username || kol.name || kol.kolName || "").trim().toLowerCase()}`;
+  const src = stableAvatarSrc(key, kolAvatarSrc(kol));
+  const fallback = kolAvatarLabel(kol);
   return src
-    ? `<img class="${escapeHtml(className)}" src="${escapeHtml(src)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.hidden=true;">`
-    : `<div class="${escapeHtml(className)} kol-avatar-fallback" aria-hidden="true">${escapeHtml(kolAvatarLabel(kol))}</div>`;
+    ? `<img class="${escapeHtml(className)}" src="${escapeHtml(src)}" data-avatar-key="${escapeHtml(key)}" data-avatar-fallback="${escapeHtml(fallback)}" alt="" loading="eager" decoding="async" referrerpolicy="no-referrer" onload="window.__slimeRememberAvatar&&window.__slimeRememberAvatar(this.dataset.avatarKey,this.currentSrc||this.src);" onerror="var d=document.createElement('div');d.className=this.className+' kol-avatar-fallback';d.setAttribute('aria-hidden','true');d.textContent=this.dataset.avatarFallback||'KO';this.replaceWith(d);">`
+    : `<div class="${escapeHtml(className)} kol-avatar-fallback" aria-hidden="true">${escapeHtml(fallback)}</div>`;
 }
 
 function browserWalletChoices() {
@@ -12898,12 +12948,13 @@ function livePairAvatarHtml(row) {
   const safeFallbackSrc = escapeHtml(fallbackSrc);
   const imageUrl = livePairImageUrl(row);
   const proxyUrl = normalizeImageUrl(tokenImageProxyUrl(row));
-  const src = proxyUrl || imageUrl;
+  const avatarKey = `token:${String(row.tokenMint || row.mint || row.address || row.symbol || label).trim().toLowerCase()}`;
+  const src = stableAvatarSrc(avatarKey, proxyUrl, imageUrl);
   if (src) {
     const backupAttr = proxyUrl && imageUrl && imageUrl !== proxyUrl ? ` data-backup-src="${escapeHtml(imageUrl)}"` : "";
-    return `<div class="live-pair-avatar"><img src="${escapeHtml(src)}"${backupAttr} alt="${escapeHtml(row.symbol || row.name || "Token")}" loading="eager" decoding="async" fetchpriority="auto" width="42" height="42" referrerpolicy="no-referrer" onerror="if(this.dataset.backupSrc){this.src=this.dataset.backupSrc;this.dataset.backupSrc='';}else{this.onerror=null;this.src='${safeFallbackSrc}';}"><span>${escapeHtml(label)}</span></div>`;
+    return `<div class="live-pair-avatar"><img src="${escapeHtml(src)}"${backupAttr} data-avatar-key="${escapeHtml(avatarKey)}" alt="${escapeHtml(row.symbol || row.name || "Token")}" loading="eager" decoding="async" fetchpriority="auto" width="42" height="42" referrerpolicy="no-referrer" onload="window.__slimeRememberAvatar&&window.__slimeRememberAvatar(this.dataset.avatarKey,this.currentSrc||this.src);" onerror="if(this.dataset.backupSrc){this.src=this.dataset.backupSrc;this.dataset.backupSrc='';}else{this.onerror=null;this.src='${safeFallbackSrc}';}"><span>${escapeHtml(label)}</span></div>`;
   }
-  return `<div class="live-pair-avatar fallback with-mascot"><img src="${safeFallbackSrc}" alt="" aria-hidden="true" loading="eager" decoding="async" fetchpriority="auto" width="42" height="42" onerror="this.hidden=true;"><span>${escapeHtml(label)}</span></div>`;
+  return `<div class="live-pair-avatar fallback with-mascot"><img src="${safeFallbackSrc}" data-avatar-key="${escapeHtml(avatarKey)}" alt="" aria-hidden="true" loading="eager" decoding="async" fetchpriority="auto" width="42" height="42" onload="window.__slimeRememberAvatar&&window.__slimeRememberAvatar(this.dataset.avatarKey,this.currentSrc||this.src);" onerror="this.hidden=true;"><span>${escapeHtml(label)}</span></div>`;
 }
 
 function tokenMascotIndex(value = "") {
@@ -16444,7 +16495,7 @@ if (!window.__slimeStablePumpChartTimer) {
   function kick(reason = "empty-feed-watchdog") {
     if (!terminalVisible() || agentInputFocused()) return;
     const now = Date.now();
-    if (now - lastKickAt < 7_000) return;
+    if (now - lastKickAt < TERMINAL_BACKGROUND_REFRESH_MIN_MS) return;
     const empty = stateFeedRowCount() === 0 && !visibleFeedHasRows();
     if (!empty && !liveFeedLooksStale()) return;
     lastKickAt = now;
@@ -16465,10 +16516,10 @@ if (!window.__slimeStablePumpChartTimer) {
     }
   }
 
-  window.setInterval(() => kick("empty-feed-watchdog-interval"), 7_000);
-  window.addEventListener("pageshow", () => window.setTimeout(() => kick("pageshow-empty-feed-watchdog"), 450));
+  window.setInterval(() => kick("empty-feed-watchdog-interval"), TERMINAL_BACKGROUND_REFRESH_MIN_MS);
+  window.addEventListener("pageshow", () => window.setTimeout(() => kick("pageshow-empty-feed-watchdog"), TERMINAL_BACKGROUND_REFRESH_MIN_MS));
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) window.setTimeout(() => kick("visible-empty-feed-watchdog"), 450);
+    if (!document.hidden) window.setTimeout(() => kick("visible-empty-feed-watchdog"), TERMINAL_BACKGROUND_REFRESH_MIN_MS);
   });
 })();
 
