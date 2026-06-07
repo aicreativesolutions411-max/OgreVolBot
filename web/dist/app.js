@@ -13462,7 +13462,7 @@ function ogreAgentHtml() {
   const micSupported = ogreAgentSpeechInputSupported();
   const micLabel = state.ogreAgentListening ? "Stop" : "Mic";
   return `
-    <div class="ogre-agent-shell ${open ? "is-open" : ""}" data-ogre-agent-root>
+    <div class="ogre-agent-shell ${open ? "is-open" : ""} ${state.ogreAgentLoading ? "loading" : ""} ${state.ogreAgentSpeaking ? "speaking" : ""} ${state.ogreAgentListening ? "listening" : ""}" data-ogre-agent-root>
       <button type="button" class="ogre-agent-bubble" data-ogre-agent-toggle aria-label="Open Ogre Agent" aria-expanded="${open ? "true" : "false"}">
         <img src="./assets/slimewire/clean-ui/side_nav_icons/active/ogre_ai.png" alt="Ogre Agent">
         <span>Ask</span>
@@ -13699,13 +13699,14 @@ function ogreAgentSpeak(text = "") {
     const utterance = new window.SpeechSynthesisUtterance(cleanText);
     const voice = ogreAgentPickVoice();
     if (voice) utterance.voice = voice;
-    utterance.pitch = 0.42;
-    utterance.rate = 0.78;
+    utterance.pitch = 0.72;
+    utterance.rate = 0.86;
     utterance.volume = 1;
     utterance.onstart = () => ogreAgentSetSpeaking(true);
     utterance.onend = () => ogreAgentSetSpeaking(false);
     utterance.onerror = () => ogreAgentSetSpeaking(false);
     ogreAgentSetSpeaking(true);
+    ogreAgentPlayVoiceFx("reply");
     window.speechSynthesis.speak(utterance);
   } catch {
     ogreAgentSetSpeaking(false);
@@ -13722,6 +13723,7 @@ function ogreAgentSetVoiceEnabled(enabled) {
     state.ogreAgentStatus = "Ogre voice muted.";
   } else {
     state.ogreAgentStatus = "Ogre voice on.";
+    ogreAgentPlayVoiceFx("online");
     ogreAgentSpeak("Ogre voice online.");
   }
   renderOgreAgent({ force: true });
@@ -13760,10 +13762,10 @@ function ogreAgentClearSpeechTimers() {
   }
 }
 
-function ogreAgentArmListenTimeout(sessionId) {
+function ogreAgentArmListenTimeout(sessionId, recognizer = state.ogreAgentSpeechRecognizer) {
   if (ogreAgentSpeechListenTimer) clearTimeout(ogreAgentSpeechListenTimer);
   ogreAgentSpeechListenTimer = setTimeout(() => {
-    if (sessionId !== ogreAgentSpeechSessionId || state.ogreAgentSpeechRecognizer !== state.ogreAgentSpeechRecognizer) return;
+    if (sessionId !== ogreAgentSpeechSessionId || state.ogreAgentSpeechRecognizer !== recognizer) return;
     ogreAgentStopListening("Mic timed out instead of staying open. Tap Mic again or type the command.");
   }, OGRE_AGENT_MIC_LISTEN_TIMEOUT_MS);
 }
@@ -13794,9 +13796,9 @@ function ogreAgentStartListening() {
     return;
   }
   if (state.ogreAgentLoading) {
-    state.ogreAgentStatus = "Ogre is still answering. Speak after this reply finishes.";
-    renderOgreAgent({ force: true });
-    return;
+    state.ogreAgentRequestId = "";
+    state.ogreAgentLoading = false;
+    state.ogreAgentStatus = "Cleared the stuck reply. Mic is opening...";
   }
   ogreAgentCancelSpeech();
   ogreAgentStopListening();

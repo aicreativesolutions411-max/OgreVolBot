@@ -2875,7 +2875,7 @@ function ogreAgentCompactSocialAnswer(evidence = {}, options = {}) {
     liveRows.length
       ? `It is visible in ${liveRows.length} SlimeWire live row(s), but social proof is still unconfirmed.`
       : "It is not showing as a strong SlimeWire/KOL social signal in the current cache.",
-    "Best move: open X search and chart before sizing."
+    "Best move: open the exact X search link and chart before sizing."
   ];
 }
 
@@ -2924,6 +2924,72 @@ function ogreAgentKolTodaySearchQuery(message = "") {
   return 'Solana memecoin KOL CA today';
 }
 async function ogreAgentKolTrendReply(message = "", context = {}) {
+  if (!ogreAgentKolTrendIntent(message)) return null;
+  const query = ogreAgentKolTodaySearchQuery(message);
+  const topUrl = ogreAgentPublicXSearchUrl(query, "top");
+  const liveUrl = ogreAgentPublicXSearchUrl(query, "live");
+  const timeoutValue = (value, ms = 2600) => new Promise((resolve) => setTimeout(() => resolve(value), ms));
+  const scan = await Promise.race([
+    webKolScan("guest", "hot", "").catch(() => null),
+    timeoutValue(null, 2600)
+  ]);
+  const rawRows = [
+    ...(Array.isArray(scan?.rows) ? scan.rows : []),
+    ...(Array.isArray(scan?.kols) ? scan.kols : []),
+    ...(Array.isArray(scan?.signals) ? scan.signals : [])
+  ];
+  const rows = rawRows
+    .map(ogreAgentNormalizeKolRow)
+    .filter(Boolean)
+    .sort((a, b) => {
+      const aScore = (Number(a.winRate) || 0) * 4 + Math.log10(Math.max(Number(a.trades) || 1, 1)) * 10;
+      const bScore = (Number(b.winRate) || 0) * 4 + Math.log10(Math.max(Number(b.trades) || 1, 1)) * 10;
+      return bScore - aScore;
+    })
+    .slice(0, 5);
+
+  const actions = [
+    { label: "X Top Posts", type: "open_external", url: topUrl },
+    { label: "X Latest Posts", type: "open_external", url: liveUrl },
+    { label: "KOL Tracker", type: "open_tab", tab: "kol" },
+    { label: "Refresh KOLs", type: "refresh_feeds" }
+  ];
+
+  if (!rows.length) {
+    return {
+      reply: [
+        "Straight answer: I can give you live X searches right now, but I do not have a verified full X firehose ranking inside SlimeWire yet, so I am not going to make up caller names.",
+        "Use these first:",
+        "Top X posts: " + topUrl,
+        "Latest X posts: " + liveUrl,
+        "Then open KOL Tracker to confirm wallet performance before copying or sizing a trade."
+      ].join("\n"),
+      actions,
+      intent: "kol_trend_scan",
+      modelPowered: false
+    };
+  }
+
+  return {
+    reply: [
+      "Here is the clean read: these are the strongest SlimeWire-tracked KOL/wallet rows I can rank right now, plus live X links for today's meme-coin posts.",
+      ...rows.map((row, index) => {
+        const stats = [
+          Number.isFinite(row.winRate) ? row.winRate.toFixed(1) + "% win" : "",
+          Number.isFinite(row.trades) ? row.trades + " trades" : "",
+          row.realized ? "realized " + row.realized : ""
+        ].filter(Boolean).join(" | ");
+        return (index + 1) + ". " + (row.name || row.handle || row.wallet || "Tracked wallet") + (stats ? " - " + stats : "");
+      }),
+      "Top X posts: " + topUrl,
+      "Latest X posts: " + liveUrl,
+      "My read: use the X links for live chatter, then use KOL Tracker/wallet proof before copying a trade."
+    ].join("\n"),
+    actions,
+    intent: "kol_trend_scan",
+    modelPowered: false
+  };
+}) {
   if (!ogreAgentKolTrendIntent(message)) return null;
   const timeoutValue = (value, ms = 2600) => new Promise((resolve) => setTimeout(() => resolve(value), ms));
   const scan = await Promise.race([
@@ -3283,8 +3349,9 @@ async function ogreAgentTokenSocialReply(message = "", context = {}) {
     return {
       reply: [
         ...ogreAgentCompactSocialAnswer(evidence, { xPosts: [] }),
-        x.error ? `X note: ${x.error}` : ""
-      ].join("\n"),
+        `Exact X search: ${xSearchUrl}`,
+        x.error ? `Search note: ${x.error}` : "No verified KOL posts came back in this quick pass, so I am giving you the live search instead of guessing."
+      ].filter(Boolean).join("\n"),
       actions: [
         { label: "Open X Search", type: "open_external", url: xSearchUrl },
         { label: "Open Chart", type: "open_chart", tokenMint },

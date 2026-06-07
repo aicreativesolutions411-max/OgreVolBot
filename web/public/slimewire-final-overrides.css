@@ -9752,3 +9752,111 @@ textarea,
     padding-top: clamp(68px, 17vw, 84px) !important;
   }
 }
+
+
+/* OGRE_AGENT_FINAL_CHAT_AND_KOL_V2: readable agent panel, fixed mic UX space, and cleaner mobile KOL frame. */
+@media (min-width: 761px) {
+  .ogre-agent-shell.is-open .ogre-agent-panel {
+    position: fixed !important;
+    right: 24px !important;
+    bottom: auto !important;
+    top: 50% !important;
+    transform: translateY(-50%) !important;
+    width: min(760px, calc(100vw - 48px)) !important;
+    min-height: min(700px, 82dvh) !important;
+    max-height: min(880px, 88dvh) !important;
+    display: flex !important;
+    flex-direction: column !important;
+    overflow: hidden !important;
+  }
+
+  .ogre-agent-shell.is-open .ogre-agent-feed {
+    flex: 1 1 auto !important;
+    min-height: 300px !important;
+    max-height: none !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+  }
+
+  .ogre-agent-shell.is-open .ogre-agent-message,
+  .ogre-agent-shell.is-open .ogre-agent-message p {
+    max-width: 100% !important;
+    overflow-wrap: anywhere !important;
+    word-break: normal !important;
+    white-space: pre-wrap !important;
+  }
+
+  .ogre-agent-shell.is-open .ogre-agent-composer {
+    flex: 0 0 auto !important;
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) 96px !important;
+    gap: 10px !important;
+  }
+
+  .ogre-agent-shell.is-open .ogre-agent-composer textarea[data-ogre-agent-input] {
+    min-height: 82px !important;
+    max-height: 170px !important;
+  }
+}
+
+@media (max-width: 760px) {
+  .ogre-agent-shell.is-open {
+    inset: 0 !important;
+    top: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    transform: none !important;
+  }
+
+  .ogre-agent-shell.is-open .ogre-agent-panel {
+    position: fixed !important;
+    left: 8px !important;
+    right: 8px !important;
+    top: max(8px, env(safe-area-inset-top)) !important;
+    bottom: max(8px, env(safe-area-inset-bottom)) !important;
+    transform: none !important;
+    width: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    display: flex !important;
+    flex-direction: column !important;
+    overflow: hidden !important;
+  }
+
+  .ogre-agent-shell.is-open .ogre-agent-feed {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+  }
+
+  .ogre-agent-shell.is-open .ogre-agent-message,
+  .ogre-agent-shell.is-open .ogre-agent-message p {
+    overflow-wrap: anywhere !important;
+    white-space: pre-wrap !important;
+  }
+
+  .ogre-agent-shell.is-open .ogre-agent-composer {
+    flex: 0 0 auto !important;
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) 72px !important;
+    gap: 8px !important;
+  }
+
+  .ogre-agent-shell.is-open .ogre-agent-composer textarea[data-ogre-agent-input] {
+    min-height: 76px !important;
+    max-height: 132px !important;
+    font-size: 16px !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-kol-frame {
+    transform: translateY(-14px) !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-kol-frame .swamp-support-content {
+    padding-top: clamp(74px, 18vw, 92px) !important;
+    padding-bottom: clamp(70px, 18vw, 92px) !important;
+  }
+}
