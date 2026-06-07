@@ -8,6 +8,8 @@ window.OGRE_PORTAL_CONFIG = {
     "replayBeforeBuyEnabled": true,
     "protectedBuyEnabled": true,
     "tokenAvatarFixEnabled": true,
+    "devInfoEnabled": true,
+    "postgresHydrationEnabled": true,
     "chatAiEnabled": true,
     "chatAiProviderEnabled": true,
     "siteSmoothnessFixesEnabled": true,

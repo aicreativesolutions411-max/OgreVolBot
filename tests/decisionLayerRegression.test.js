@@ -60,6 +60,8 @@ test("site-wide decision-layer feature flags are present in config, env, and Ren
     "replayBeforeBuyEnabled",
     "protectedBuyEnabled",
     "tokenAvatarFixEnabled",
+    "devInfoEnabled",
+    "postgresHydrationEnabled",
     "chatAiEnabled",
     "chatAiProviderEnabled",
     "siteSmoothnessFixesEnabled",
@@ -72,6 +74,8 @@ test("site-wide decision-layer feature flags are present in config, env, and Ren
     "VITE_REPLAY_BEFORE_BUY_ENABLED",
     "VITE_PROTECTED_BUY_ENABLED",
     "VITE_TOKEN_AVATAR_FIX_ENABLED",
+    "VITE_DEV_INFO_ENABLED",
+    "VITE_POSTGRES_HYDRATION_ENABLED",
     "VITE_CHAT_AI_ENABLED",
     "VITE_CHAT_AI_PROVIDER_ENABLED",
     "VITE_SITE_SMOOTHNESS_FIXES_ENABLED",
@@ -158,6 +162,7 @@ test("KOL Hot Buys stays a fast token-call feed", () => {
 
 test("Ogre Agent chat is contextual, retryable, copyable, and debug-instrumented", () => {
   assert.match(functionBody("ogreAgentContext"), /slimeShield/);
+  assert.match(functionBody("ogreAgentContext"), /devInfoSummary/);
   assert.match(functionBody("ogreAgentContext"), /kolDumpDetector/);
   assert.match(functionBody("ogreAgentContext"), /replayBeforeBuy/);
   assert.match(functionBody("ogreAgentContext"), /pnlSummary/);
@@ -173,6 +178,23 @@ test("Ogre Agent chat is contextual, retryable, copyable, and debug-instrumented
   assert.match(functionBody("ogreAgentStartListening"), /permissionSessionId !== ogreAgentSpeechSessionId/);
   assert.match(cssSource, /\.ogre-agent-message-tools/);
   assert.match(cssSource, /\.ogre-agent-disclaimer/);
+});
+
+test("Dev Info row pill, drawer, and endpoints are cache-first", () => {
+  assert.match(functionBody("devInfoPillHtml"), /data-dev-info/);
+  assert.match(functionBody("renderDevInfoDrawer"), /Dev Dump History/);
+  assert.match(functionBody("renderDevInfoDrawer"), /Current dev position unavailable/);
+  assert.match(functionBody("scheduleVisibleDevInfoPrefetch"), /setTimeout/);
+  assert.match(functionBody("ogreAgentContext"), /likelyDevWalletShort/);
+  assert.match(serverSource, /dev-info\\\/summary/);
+  assert.match(serverSource, /dev_info_cache/);
+  assert.match(serverSource, /dev_wallet_candidates/);
+  assert.match(serverSource, /token_metadata/);
+  assert.match(serverSource, /pair_snapshots/);
+  assertNoHotExternalCalls(functionBody("webDevInfoSummary", serverSource), "Dev Info summary endpoint");
+  assertNoHotExternalCalls(functionBody("webDevInfoDetails", serverSource), "Dev Info details endpoint");
+  assert.match(functionBody("webSlimeShield", serverSource), /webDevInfoSummary/);
+  assert.match(functionBody("computeSlimeShield", fs.readFileSync(new URL("../src/lib/slimeShield.js", import.meta.url), "utf8")), /devInfoSlimeShieldFactor/);
 });
 
 test("Slime Scope refreshes its own bucket and Details buttons stay compact green", () => {

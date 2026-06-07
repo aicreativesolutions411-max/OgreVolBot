@@ -73,6 +73,11 @@ import {
 import { createTokenMetadataResolver } from "./lib/tokenMetadataResolver.js";
 import { computeSlimeShield } from "./lib/slimeShield.js";
 import {
+  calculateDevInfoStatus,
+  calculateDevWalletStatsFromEvents,
+  devInfoSummaryFromResult
+} from "./lib/devInfo.js";
+import {
   Connection,
   Keypair,
   LAMPORTS_PER_SOL,
@@ -121,6 +126,12 @@ const slimeShieldCache = new Map();
 const SLIMESHIELD_CACHE_TTL_MS = 45 * 1000;
 const replayBeforeBuyCache = new Map();
 const REPLAY_BEFORE_BUY_TTL_MS = 30 * 60 * 1000;
+const devInfoCache = new Map();
+const devInfoHydrationInFlight = new Map();
+const DEV_INFO_SUMMARY_TTL_MS = 60 * 1000;
+const DEV_INFO_DETAILS_TTL_MS = 180 * 1000;
+const DEV_INFO_UNKNOWN_TTL_MS = 10 * 60 * 1000;
+const DEV_INFO_WALLET_HISTORY_TTL_MS = 30 * 60 * 1000;
 const solBalanceCache = new Map();
 const tokenAccountsCache = new Map();
 const tokenBalanceCache = new Map();
@@ -180,6 +191,18 @@ const postgresHistoryStats = {
   lastWriteAt: "",
   lastError: "",
   circuitOpen: false
+};
+const devInfoStats = {
+  cacheHits: 0,
+  cacheMisses: 0,
+  hydrationQueued: 0,
+  hydrationSkipped: 0,
+  unknownWallet: 0,
+  computedFromLocalData: 0,
+  postgresReads: 0,
+  postgresWrites: 0,
+  errors: 0,
+  lastError: ""
 };
 const rpcStats = {
   callCount: 0,
@@ -516,6 +539,14 @@ function loadConfig() {
   const cacheNamespace = String(process.env.CACHE_NAMESPACE || process.env.KV_CACHE_NAMESPACE || "slimewire").trim().replace(/[^\w:-]/g, "").slice(0, 40) || "slimewire";
   const databaseUrl = String(process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.RENDER_DATABASE_URL || "").trim();
   const postgresHistoryEnabled = parseOptionalBoolean(process.env.POSTGRES_HISTORY_ENABLED, Boolean(databaseUrl));
+  const devInfoEnabled = parseOptionalBoolean(process.env.VITE_DEV_INFO_ENABLED || process.env.DEV_INFO_ENABLED, true);
+  const postgresHydrationEnabled = parseOptionalBoolean(
+    process.env.POSTGRES_HYDRATION_ENABLED || process.env.VITE_POSTGRES_HYDRATION_ENABLED,
+    postgresHistoryEnabled
+  );
+  const postgresHydrationMaxConcurrency = Number.parseInt(process.env.POSTGRES_HYDRATION_MAX_CONCURRENCY || "3", 10);
+  const postgresHydrationHotPairLimit = Number.parseInt(process.env.POSTGRES_HYDRATION_HOT_PAIR_LIMIT || "100", 10);
+  const postgresHydrationDevWalletLaunchLimit = Number.parseInt(process.env.POSTGRES_HYDRATION_DEV_WALLET_LAUNCH_LIMIT || "25", 10);
   const displayCacheFreshMs = Number.parseInt(process.env.DISPLAY_CACHE_FRESH_MS || "2500", 10);
   const displayCacheStaleMs = Number.parseInt(process.env.DISPLAY_CACHE_STALE_MS || "90000", 10);
   const cacheConnectTimeoutMs = Number.parseInt(process.env.CACHE_CONNECT_TIMEOUT_MS || "800", 10);
@@ -715,6 +746,18 @@ function loadConfig() {
     throw new Error("WORKER_CONCURRENCY must be an integer from 1 to 20.");
   }
 
+  if (!Number.isInteger(postgresHydrationMaxConcurrency) || postgresHydrationMaxConcurrency < 1 || postgresHydrationMaxConcurrency > 10) {
+    throw new Error("POSTGRES_HYDRATION_MAX_CONCURRENCY must be an integer from 1 to 10.");
+  }
+
+  if (!Number.isInteger(postgresHydrationHotPairLimit) || postgresHydrationHotPairLimit < 1 || postgresHydrationHotPairLimit > 500) {
+    throw new Error("POSTGRES_HYDRATION_HOT_PAIR_LIMIT must be an integer from 1 to 500.");
+  }
+
+  if (!Number.isInteger(postgresHydrationDevWalletLaunchLimit) || postgresHydrationDevWalletLaunchLimit < 1 || postgresHydrationDevWalletLaunchLimit > 100) {
+    throw new Error("POSTGRES_HYDRATION_DEV_WALLET_LAUNCH_LIMIT must be an integer from 1 to 100.");
+  }
+
   if (!Number.isInteger(displayCacheFreshMs) || displayCacheFreshMs < 500 || displayCacheFreshMs > 60_000) {
     throw new Error("DISPLAY_CACHE_FRESH_MS must be an integer from 500 to 60000.");
   }
@@ -815,6 +858,11 @@ function loadConfig() {
     cacheNamespace,
     databaseUrl,
     postgresHistoryEnabled,
+    devInfoEnabled,
+    postgresHydrationEnabled,
+    postgresHydrationMaxConcurrency,
+    postgresHydrationHotPairLimit,
+    postgresHydrationDevWalletLaunchLimit,
     displayCacheFreshMs,
     displayCacheStaleMs,
     cacheConnectTimeoutMs,
@@ -1850,6 +1898,34 @@ async function handleWebApiRequest(request, response, requestUrl) {
         ok: true,
         replay: await webReplayBeforeBuy(mint)
       }, "public, max-age=300, stale-while-revalidate=1800");
+      return;
+    }
+
+    const devInfoSummaryMatch = request.method === "GET"
+      ? pathname.match(/^\/api(?:\/web)?\/dev-info\/summary\/([^/]+)$/)
+      : null;
+    if (devInfoSummaryMatch || (request.method === "GET" && pathname === "/api/web/dev-info/summary")) {
+      const mint = devInfoSummaryMatch
+        ? decodeURIComponent(devInfoSummaryMatch[1] || "")
+        : (requestUrl.searchParams.get("mint") || requestUrl.searchParams.get("token") || requestUrl.searchParams.get("tokenMint") || "");
+      sendCachedWebJson(request, response, 200, {
+        ok: true,
+        devInfoSummary: await webDevInfoSummary(mint)
+      }, "public, max-age=30, stale-while-revalidate=120");
+      return;
+    }
+
+    const devInfoDetailsMatch = request.method === "GET"
+      ? pathname.match(/^\/api(?:\/web)?\/dev-info\/([^/]+)$/)
+      : null;
+    if (devInfoDetailsMatch || (request.method === "GET" && pathname === "/api/web/dev-info")) {
+      const mint = devInfoDetailsMatch
+        ? decodeURIComponent(devInfoDetailsMatch[1] || "")
+        : (requestUrl.searchParams.get("mint") || requestUrl.searchParams.get("token") || requestUrl.searchParams.get("tokenMint") || "");
+      sendCachedWebJson(request, response, 200, {
+        ok: true,
+        devInfo: await webDevInfoDetails(mint)
+      }, "public, max-age=60, stale-while-revalidate=300");
       return;
     }
 
@@ -4568,6 +4644,10 @@ function handleInternalWorkerHealth(request, response) {
     cacheConfigured: kvConfigured(),
     cacheStats: cacheStatsSnapshot(),
     postgresHistory: postgresStatsSnapshot(),
+    postgresHydrationEnabled: Boolean(CONFIG.postgresHydrationEnabled),
+    postgresHydrationMaxConcurrency: CONFIG.postgresHydrationMaxConcurrency,
+    devInfoEnabled: Boolean(CONFIG.devInfoEnabled),
+    devInfoStats: { ...devInfoStats },
     activeCacheLocks: activeCacheLockSnapshot(),
     rpcProviderName: CONFIG.rpcProviderName,
     rpcUrlHost: CONFIG.rpcUrlHost,
@@ -14591,6 +14671,11 @@ async function getPumpFunTokenMetadata(tokenMint, options = {}) {
     imageUrl: firstString(coin?.image_uri, coin?.imageUri, coin?.imageUrl, coin?.image_url, coin?.image, coin?.metadata?.image, coin?.metadata?.imageUrl, coin?.logoURI, coin?.logo),
     imageUri: firstString(coin?.image_uri, coin?.imageUri, coin?.imageUrl, coin?.image_url, coin?.image, coin?.metadata?.image, coin?.metadata?.imageUrl, coin?.logoURI, coin?.logo),
     metadataUri: firstString(coin?.metadata_uri, coin?.metadataUri, coin?.uri, coin?.metadata?.uri),
+    creatorWallet: firstString(coin?.creator, coin?.creatorWallet, coin?.creator_wallet, coin?.creatorPublicKey, coin?.creator_public_key, coin?.deployer, coin?.deployerWallet, coin?.launchWallet),
+    creator: firstString(coin?.creator, coin?.creatorWallet, coin?.creator_wallet, coin?.creatorPublicKey, coin?.creator_public_key),
+    deployerWallet: firstString(coin?.deployerWallet, coin?.deployer_wallet, coin?.deployer),
+    poolCreator: firstString(coin?.poolCreator, coin?.pool_creator, coin?.pairCreator, coin?.pair_creator),
+    initialLiquidityWallet: firstString(coin?.initialLiquidityWallet, coin?.initial_liquidity_wallet, coin?.liquidityProvider, coin?.liquidity_provider),
     source: "pumpfun",
     priceSol: firstMeaningfulNumber(coin?.priceSol, coin?.price_sol, coin?.priceNative, coin?.price_native, coin?.priceInSol) || null,
     priceUsd: firstMeaningfulNumber(coin?.priceUsd, coin?.price_usd, coin?.usdPrice, coin?.priceUSD, coin?.price) || null,
@@ -19042,9 +19127,238 @@ async function ensurePostgresHistorySchema() {
         stats_json jsonb not null,
         updated_at timestamptz not null default now()
       );
+      create table if not exists token_metadata (
+        mint text primary key,
+        chain text not null default 'solana',
+        symbol text,
+        name text,
+        decimals integer,
+        avatar_url text,
+        metadata_uri text,
+        description text,
+        website_url text,
+        twitter_url text,
+        telegram_url text,
+        source text,
+        confidence text,
+        first_seen_at timestamptz not null default now(),
+        last_seen_at timestamptz not null default now(),
+        updated_at timestamptz not null default now(),
+        raw_metadata_json jsonb
+      );
+      create table if not exists token_avatar_cache (
+        mint text primary key,
+        avatar_url text,
+        source text,
+        state text,
+        failure_reason text,
+        first_seen_at timestamptz not null default now(),
+        updated_at timestamptz not null default now(),
+        failed_at timestamptz
+      );
+      create table if not exists pairs (
+        pair_address text primary key,
+        mint text,
+        chain text not null default 'solana',
+        dex text,
+        quote_token text,
+        created_at_chain timestamptz,
+        first_seen_at timestamptz not null default now(),
+        last_seen_at timestamptz not null default now(),
+        liquidity_usd numeric,
+        liquidity_sol numeric,
+        market_cap numeric,
+        fdv numeric,
+        volume_5m numeric,
+        volume_1h numeric,
+        price numeric,
+        raw_pair_json jsonb,
+        updated_at timestamptz not null default now()
+      );
+      create table if not exists pair_snapshots (
+        id bigserial primary key,
+        pair_address text,
+        mint text,
+        price numeric,
+        liquidity_usd numeric,
+        market_cap numeric,
+        volume_5m numeric,
+        volume_1h numeric,
+        txns_5m integer,
+        holders_count integer,
+        bundle_risk text,
+        dev_info_status text,
+        slimeshield_verdict text,
+        captured_at timestamptz not null default now()
+      );
+      create table if not exists processed_transactions (
+        signature text primary key,
+        chain text not null default 'solana',
+        slot bigint,
+        block_time timestamptz,
+        wallet_address text,
+        mint text,
+        pair_address text,
+        event_type text,
+        amount_token numeric,
+        amount_sol numeric,
+        price numeric,
+        source text,
+        parsed_json jsonb,
+        created_at timestamptz not null default now()
+      );
+      create table if not exists dev_wallet_candidates (
+        id bigserial primary key,
+        mint text not null,
+        pair_address text,
+        likely_dev_wallet text,
+        confidence text,
+        source text,
+        evidence_json jsonb,
+        first_seen_at timestamptz not null default now(),
+        updated_at timestamptz not null default now()
+      );
+      create table if not exists dev_wallet_events (
+        id bigserial primary key,
+        wallet_address text,
+        mint text,
+        pair_address text,
+        event_type text,
+        token_amount numeric,
+        supply_percent numeric,
+        sol_amount numeric,
+        usd_value numeric,
+        price numeric,
+        tx_signature text,
+        slot bigint,
+        event_time timestamptz,
+        created_at timestamptz not null default now()
+      );
+      create table if not exists dev_wallet_stats (
+        wallet_address text primary key,
+        launches_tracked integer not null default 0,
+        median_first_sell_minutes numeric,
+        median_hold_minutes numeric,
+        sold_more_than_50_within_15m_percent numeric,
+        sold_more_than_50_within_1h_percent numeric,
+        held_past_24h_percent numeric,
+        best_prior_launch_return_percent numeric,
+        worst_prior_launch_return_percent numeric,
+        stats_json jsonb,
+        updated_at timestamptz not null default now()
+      );
+      create table if not exists dev_info_cache (
+        mint text primary key,
+        pair_address text,
+        likely_dev_wallet text,
+        status text,
+        confidence text,
+        score integer,
+        summary text,
+        summary_json jsonb,
+        result_json jsonb,
+        updated_at timestamptz not null default now()
+      );
+      create table if not exists slimeshield_cache (
+        mint text primary key,
+        verdict text,
+        score integer,
+        confidence text,
+        summary text,
+        factors_json jsonb,
+        suggested_action text,
+        protected_buy_preset text,
+        updated_at timestamptz not null default now()
+      );
+      create table if not exists kol_profiles (
+        id text primary key,
+        display_name text,
+        handle text,
+        wallet_addresses jsonb,
+        notes text,
+        created_at timestamptz not null default now(),
+        updated_at timestamptz not null default now()
+      );
+      create table if not exists kol_token_events (
+        id bigserial primary key,
+        kol_id text,
+        wallet_address text,
+        mint text,
+        event_type text,
+        amount numeric,
+        price numeric,
+        tx_signature text,
+        event_time timestamptz,
+        created_at timestamptz not null default now()
+      );
+      create table if not exists kol_dump_stats (
+        kol_id text primary key,
+        risk_label text,
+        dump_risk_percent numeric,
+        calls_tracked integer,
+        median_hold_minutes numeric,
+        sold_within_15m_percent numeric,
+        sold_within_60m_percent numeric,
+        median_post_signal_drawdown_percent numeric,
+        follower_survival_30m_percent numeric,
+        follower_survival_60m_percent numeric,
+        stats_json jsonb,
+        updated_at timestamptz not null default now()
+      );
+      create table if not exists replay_buckets (
+        bucket_hash text primary key,
+        bucket_json jsonb,
+        sample_size integer,
+        win_rate_percent numeric,
+        median_max_upside_percent numeric,
+        median_max_drawdown_percent numeric,
+        fail_rate_percent numeric,
+        best_exit_pattern text,
+        updated_at timestamptz not null default now()
+      );
+      create table if not exists replay_results_cache (
+        mint text primary key,
+        bucket_hash text,
+        result_json jsonb,
+        sample_size integer,
+        confidence text,
+        updated_at timestamptz not null default now()
+      );
       create index if not exists kol_profile_history_last_seen_idx on kol_profile_history (last_seen_at desc);
       create index if not exists kol_signal_history_token_idx on kol_signal_history (token_mint);
       create index if not exists kol_signal_history_seen_idx on kol_signal_history (seen_at desc);
+      create index if not exists token_metadata_symbol_idx on token_metadata (symbol);
+      create index if not exists token_metadata_updated_idx on token_metadata (updated_at desc);
+      create index if not exists token_avatar_cache_state_idx on token_avatar_cache (state);
+      create index if not exists token_avatar_cache_updated_idx on token_avatar_cache (updated_at desc);
+      create index if not exists pairs_mint_idx on pairs (mint);
+      create index if not exists pairs_first_seen_idx on pairs (first_seen_at desc);
+      create index if not exists pairs_last_seen_idx on pairs (last_seen_at desc);
+      create index if not exists pairs_liquidity_idx on pairs (liquidity_usd desc);
+      create index if not exists pair_snapshots_mint_captured_idx on pair_snapshots (mint, captured_at desc);
+      create index if not exists pair_snapshots_pair_captured_idx on pair_snapshots (pair_address, captured_at desc);
+      create index if not exists processed_transactions_wallet_time_idx on processed_transactions (wallet_address, block_time desc);
+      create index if not exists processed_transactions_mint_time_idx on processed_transactions (mint, block_time desc);
+      create index if not exists processed_transactions_type_time_idx on processed_transactions (event_type, block_time desc);
+      create unique index if not exists dev_wallet_candidates_unique_idx on dev_wallet_candidates (mint, coalesce(likely_dev_wallet, ''), coalesce(source, ''));
+      create index if not exists dev_wallet_candidates_mint_idx on dev_wallet_candidates (mint);
+      create index if not exists dev_wallet_candidates_wallet_idx on dev_wallet_candidates (likely_dev_wallet);
+      create index if not exists dev_wallet_candidates_confidence_idx on dev_wallet_candidates (confidence);
+      create unique index if not exists dev_wallet_events_unique_tx_idx on dev_wallet_events (coalesce(tx_signature, ''), coalesce(wallet_address, ''), coalesce(mint, ''), coalesce(event_type, '')) where tx_signature is not null and tx_signature <> '';
+      create index if not exists dev_wallet_events_wallet_time_idx on dev_wallet_events (wallet_address, event_time desc);
+      create index if not exists dev_wallet_events_mint_time_idx on dev_wallet_events (mint, event_time desc);
+      create index if not exists dev_wallet_events_type_time_idx on dev_wallet_events (event_type, event_time desc);
+      create index if not exists dev_wallet_stats_updated_idx on dev_wallet_stats (updated_at desc);
+      create index if not exists dev_info_cache_status_idx on dev_info_cache (status);
+      create index if not exists dev_info_cache_updated_idx on dev_info_cache (updated_at desc);
+      create index if not exists slimeshield_cache_verdict_idx on slimeshield_cache (verdict);
+      create index if not exists slimeshield_cache_updated_idx on slimeshield_cache (updated_at desc);
+      create index if not exists kol_token_events_kol_time_idx on kol_token_events (kol_id, event_time desc);
+      create index if not exists kol_token_events_wallet_time_idx on kol_token_events (wallet_address, event_time desc);
+      create index if not exists kol_token_events_mint_time_idx on kol_token_events (mint, event_time desc);
+      create index if not exists kol_dump_stats_updated_idx on kol_dump_stats (updated_at desc);
+      create index if not exists replay_buckets_updated_idx on replay_buckets (updated_at desc);
+      create index if not exists replay_results_cache_updated_idx on replay_results_cache (updated_at desc);
     `)
       .then(() => true)
       .catch((error) => {
@@ -19099,6 +19413,22 @@ async function persistPostgresKolProfiles(profiles = []) {
         profile.firstSeenAt || profile.lastSeenAt || null,
         profile.lastSeenAt || new Date().toISOString()
       ]);
+      await pool.query(`
+        insert into kol_profiles (id, display_name, handle, wallet_addresses, notes, created_at, updated_at)
+        values ($1, $2, $3, $4::jsonb, $5, now(), now())
+        on conflict (id) do update set
+          display_name = coalesce(nullif(excluded.display_name, ''), kol_profiles.display_name),
+          handle = coalesce(nullif(excluded.handle, ''), kol_profiles.handle),
+          wallet_addresses = excluded.wallet_addresses,
+          notes = coalesce(nullif(excluded.notes, ''), kol_profiles.notes),
+          updated_at = now()
+      `, [
+        id,
+        firstString(profile.displayName, profile.name, profile.username, profile.twitter, profile.handle).slice(0, 160),
+        firstString(profile.handle, profile.twitter, profile.username).replace(/^@+/, "").slice(0, 80),
+        postgresJson([profile.wallet, profile.address, profile.publicKey, profile.kolWallet].filter(solanaPublicKeyLike), 8_000),
+        firstString(profile.notes, profile.description).slice(0, 500)
+      ]);
     }
     postgresHistoryStats.writes += 1;
     postgresHistoryStats.lastWriteAt = new Date().toISOString();
@@ -19141,6 +19471,19 @@ async function persistPostgresKolSignalRows(rows = []) {
         JSON.stringify(signal),
         signal.lastTradeAt || signal.createdAt || null
       ]);
+      await pool.query(`
+        insert into kol_token_events (kol_id, wallet_address, mint, event_type, amount, price, tx_signature, event_time, created_at)
+        values ($1, $2, $3, $4, $5, $6, $7, coalesce($8::timestamptz, now()), now())
+      `, [
+        kolId || null,
+        firstString(signal.kolWallet, signal.wallet, signal.owner),
+        signal.tokenMint,
+        String(signal.eventType || signal.side || "signal").toLowerCase().slice(0, 32),
+        firstMeaningfulNumber(signal.amount, signal.tokenAmount),
+        firstMeaningfulNumber(signal.price, signal.priceUsd),
+        firstString(signal.txSignature, signal.signature),
+        signal.lastTradeAt || signal.createdAt || null
+      ]);
     }
     postgresHistoryStats.writes += 1;
     postgresHistoryStats.lastWriteAt = new Date().toISOString();
@@ -19166,6 +19509,39 @@ async function persistPostgresKolDumpStats(stats = []) {
           stats_json = excluded.stats_json,
           updated_at = now()
       `, [String(row.kolId), JSON.stringify(row)]);
+      await pool.query(`
+        insert into kol_dump_stats (
+          kol_id, risk_label, dump_risk_percent, calls_tracked, median_hold_minutes,
+          sold_within_15m_percent, sold_within_60m_percent,
+          median_post_signal_drawdown_percent, follower_survival_30m_percent,
+          follower_survival_60m_percent, stats_json, updated_at
+        )
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, now())
+        on conflict (kol_id) do update set
+          risk_label = excluded.risk_label,
+          dump_risk_percent = excluded.dump_risk_percent,
+          calls_tracked = excluded.calls_tracked,
+          median_hold_minutes = excluded.median_hold_minutes,
+          sold_within_15m_percent = excluded.sold_within_15m_percent,
+          sold_within_60m_percent = excluded.sold_within_60m_percent,
+          median_post_signal_drawdown_percent = excluded.median_post_signal_drawdown_percent,
+          follower_survival_30m_percent = excluded.follower_survival_30m_percent,
+          follower_survival_60m_percent = excluded.follower_survival_60m_percent,
+          stats_json = excluded.stats_json,
+          updated_at = now()
+      `, [
+        String(row.kolId),
+        row.riskLabel || null,
+        firstMeaningfulNumber(row.dumpRiskPercent),
+        Math.max(0, Math.round(firstMeaningfulNumber(row.callsTracked) || 0)),
+        firstMeaningfulNumber(row.medianHoldMinutes),
+        firstMeaningfulNumber(row.soldWithin15mPercent),
+        firstMeaningfulNumber(row.soldWithin60mPercent),
+        firstMeaningfulNumber(row.medianPostSignalDrawdownPercent),
+        firstMeaningfulNumber(row.followerSurvival30mPercent),
+        firstMeaningfulNumber(row.followerSurvival60mPercent),
+        postgresJson(row, 24_000)
+      ]);
     }
     postgresHistoryStats.writes += 1;
     postgresHistoryStats.lastWriteAt = new Date().toISOString();
@@ -19173,6 +19549,1006 @@ async function persistPostgresKolDumpStats(stats = []) {
   } catch (error) {
     postgresHistoryStats.errors += 1;
     postgresHistoryStats.lastError = safePerfEventText(error?.message || "Postgres dump stats write failed", 140);
+    return false;
+  }
+}
+
+function postgresJson(value, maxChars = 40_000) {
+  try {
+    const raw = JSON.stringify(value ?? null);
+    if (raw.length <= maxChars) return raw;
+    return JSON.stringify({
+      truncated: true,
+      truncatedAt: new Date().toISOString(),
+      preview: raw.slice(0, Math.max(1000, maxChars - 200))
+    });
+  } catch {
+    return JSON.stringify(null);
+  }
+}
+
+function postgresDate(value) {
+  if (!value && value !== 0) return null;
+  const direct = Number(value);
+  const timestamp = Number.isFinite(direct)
+    ? direct
+    : Date.parse(String(value || ""));
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return null;
+  try {
+    return new Date(timestamp).toISOString();
+  } catch {
+    return null;
+  }
+}
+
+function solanaPublicKeyLike(value = "") {
+  return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(value || "").trim());
+}
+
+function devInfoMemoryKey(type = "summary", mint = "") {
+  return `${String(type || "summary")}:${String(mint || "").trim()}`;
+}
+
+function devInfoExternalKey(type = "summary", mint = "") {
+  return externalCacheKey(`devinfo:${String(type || "summary")}:${String(mint || "").trim().toLowerCase()}`, "global");
+}
+
+function cachedDevInfoMemory(type = "summary", mint = "", ttlMs = DEV_INFO_SUMMARY_TTL_MS) {
+  const key = devInfoMemoryKey(type, mint);
+  const cached = devInfoCache.get(key);
+  if (!cached?.value) return null;
+  if (Date.now() - Number(cached.cachedAt || 0) > ttlMs) return null;
+  devInfoStats.cacheHits += 1;
+  return {
+    ...cached.value,
+    cacheHit: true,
+    cacheSource: "memory"
+  };
+}
+
+function rememberDevInfoMemory(type = "summary", mint = "", value = null) {
+  const key = devInfoMemoryKey(type, mint);
+  if (!mint || !value) return value;
+  devInfoCache.set(key, { cachedAt: Date.now(), value });
+  return value;
+}
+
+async function readDevInfoKv(type = "summary", mint = "", ttlMs = DEV_INFO_SUMMARY_TTL_MS) {
+  if (!mint) return null;
+  const external = await cacheGetJson(devInfoExternalKey(type, mint)).catch(() => null);
+  if (!external?.value || !Number.isFinite(Number(external.cachedAt))) return null;
+  const ageMs = Date.now() - Number(external.cachedAt);
+  if (ageMs > ttlMs) return null;
+  devInfoStats.cacheHits += 1;
+  rememberDevInfoMemory(type, mint, external.value);
+  return {
+    ...external.value,
+    cacheHit: true,
+    cacheSource: kvProviderName()
+  };
+}
+
+async function writeDevInfoCaches(mint = "", result = null) {
+  const cleanMint = String(mint || result?.mint || "").trim();
+  if (!cleanMint || !result) return;
+  const summary = devInfoSummaryFromResult(result);
+  rememberDevInfoMemory("summary", cleanMint, summary);
+  rememberDevInfoMemory("details", cleanMint, result);
+  await Promise.allSettled([
+    cacheSetJson(devInfoExternalKey("summary", cleanMint), displayCacheEnvelope(summary), DEV_INFO_SUMMARY_TTL_MS),
+    cacheSetJson(devInfoExternalKey("details", cleanMint), displayCacheEnvelope(result), DEV_INFO_DETAILS_TTL_MS)
+  ]);
+}
+
+function devInfoCandidateFromRow(row = {}) {
+  const candidates = [
+    ["creator", row.creatorWallet, row.creator, row.creatorAddress, row.creatorPublicKey, row.pumpCreator, row.pumpCreatorWallet],
+    ["deployer", row.deployerWallet, row.deployer, row.deployerAddress],
+    ["launch_wallet", row.launchWallet, row.launchWalletAddress, row.launchCreatorWallet],
+    ["pool_creator", row.poolCreator, row.pairCreator, row.poolCreatorWallet, row.pairCreatorWallet],
+    ["initial_liquidity", row.initialLiquidityWallet, row.initialLiquidityProvider, row.liquidityProvider],
+    ["first_funder", row.firstFunder, row.firstFundingWallet, row.fundingWallet],
+    ["first_buyer", row.firstBuyer, row.firstBuyerWallet, row.earlyBuyer]
+  ];
+  for (const [source, ...values] of candidates) {
+    const wallet = firstString(...values);
+    if (!solanaPublicKeyLike(wallet)) continue;
+    const confidence = ["creator", "deployer", "launch_wallet"].includes(source)
+      ? "high"
+      : ["pool_creator", "initial_liquidity"].includes(source)
+        ? "medium"
+        : "low";
+    return {
+      mint: String(row.tokenMint || row.mint || "").trim(),
+      pairAddress: firstString(row.pairAddress, row.raydiumPool),
+      likelyDevWallet: wallet,
+      confidence,
+      source,
+      evidence: {
+        source,
+        symbol: row.symbol || "",
+        name: row.name || "",
+        pairAddress: firstString(row.pairAddress, row.raydiumPool),
+        seenAt: new Date().toISOString()
+      }
+    };
+  }
+  return null;
+}
+
+function devCurrentPositionFromEvents(events = [], wallet = "", mint = "") {
+  const rows = Array.isArray(events) ? events.filter(Boolean) : [];
+  if (!rows.length) return null;
+  const buys = rows.filter((row) => /^(launch|buy|liquidity_add|transfer_in)$/i.test(String(row.eventType || row.event_type || "")));
+  const sells = rows.filter((row) => /^(sell|liquidity_remove|transfer_out)$/i.test(String(row.eventType || row.event_type || "")));
+  const initialTokenAmount = buys.reduce((sum, row) => sum + Math.max(0, Number(row.tokenAmount ?? row.token_amount ?? row.amount ?? 0)), 0);
+  const soldTokenAmount = sells.reduce((sum, row) => sum + Math.max(0, Number(row.tokenAmount ?? row.token_amount ?? row.amount ?? 0)), 0);
+  const currentTokenAmount = initialTokenAmount > 0 ? Math.max(0, initialTokenAmount - soldTokenAmount) : null;
+  const estimatedSoldPercent = initialTokenAmount > 0 ? Math.min(100, (soldTokenAmount / initialTokenAmount) * 100) : null;
+  const firstEventAt = rows
+    .map((row) => Date.parse(row.eventTime || row.event_time || row.createdAt || row.created_at || ""))
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b)[0] || null;
+  const firstSell = sells
+    .map((row) => ({
+      at: row.eventTime || row.event_time || row.createdAt || row.created_at || "",
+      ts: Date.parse(row.eventTime || row.event_time || row.createdAt || row.created_at || "")
+    }))
+    .filter((row) => Number.isFinite(row.ts))
+    .sort((a, b) => a.ts - b.ts)[0] || null;
+  const lastSell = sells
+    .map((row) => ({
+      at: row.eventTime || row.event_time || row.createdAt || row.created_at || "",
+      ts: Date.parse(row.eventTime || row.event_time || row.createdAt || row.created_at || "")
+    }))
+    .filter((row) => Number.isFinite(row.ts))
+    .sort((a, b) => b.ts - a.ts)[0] || null;
+  const firstMajorSellMinutesAfterLaunch = firstSell && firstEventAt
+    ? Math.max(0, (firstSell.ts - firstEventAt) / 60_000)
+    : null;
+  const positionStatus = !Number.isFinite(Number(estimatedSoldPercent))
+    ? "unknown"
+    : estimatedSoldPercent >= 95
+      ? "exited"
+      : estimatedSoldPercent >= 70
+        ? "mostly_exited"
+        : estimatedSoldPercent >= 25
+          ? "partial_exit"
+          : "holding";
+  return {
+    mint,
+    likelyDevWallet: wallet || null,
+    initialTokenAmount: initialTokenAmount || null,
+    initialSupplyPercent: null,
+    currentTokenAmount,
+    currentSupplyPercent: null,
+    estimatedSoldPercent,
+    firstMajorSellAt: firstSell?.at || null,
+    firstMajorSellMinutesAfterLaunch,
+    lastSellAt: lastSell?.at || null,
+    positionStatus
+  };
+}
+
+function devInfoResultFromPostgresRow(row = null) {
+  if (!row) return null;
+  const result = row.result_json || null;
+  if (result && typeof result === "object") {
+    return {
+      ...result,
+      cacheHit: true,
+      cacheSource: "postgres",
+      stale: Date.now() - Date.parse(row.updated_at || result.updatedAt || "") > DEV_INFO_DETAILS_TTL_MS
+    };
+  }
+  return calculateDevInfoStatus({
+    mint: row.mint,
+    pairAddress: row.pair_address,
+    likelyDevWallet: row.likely_dev_wallet,
+    confidence: row.confidence,
+    updatedAt: row.updated_at
+  });
+}
+
+async function readPostgresDevInfoCache(mint = "") {
+  const cleanMint = String(mint || "").trim();
+  if (!cleanMint || !await ensurePostgresHistorySchema()) return null;
+  const pool = await postgresPool();
+  if (!pool) return null;
+  try {
+    const result = await pool.query("select * from dev_info_cache where mint = $1 limit 1", [cleanMint]);
+    postgresHistoryStats.reads += 1;
+    postgresHistoryStats.lastReadAt = new Date().toISOString();
+    devInfoStats.postgresReads += 1;
+    return devInfoResultFromPostgresRow(result.rows[0] || null);
+  } catch (error) {
+    postgresHistoryStats.errors += 1;
+    devInfoStats.errors += 1;
+    devInfoStats.lastError = safePerfEventText(error?.message || "Dev Info cache read failed", 140);
+    postgresHistoryStats.lastError = devInfoStats.lastError;
+    return null;
+  }
+}
+
+async function persistPostgresDevInfoResult(result = null) {
+  if (!result?.mint || !await ensurePostgresHistorySchema()) return false;
+  const pool = await postgresPool();
+  if (!pool) return false;
+  const summary = devInfoSummaryFromResult(result);
+  try {
+    await pool.query(`
+      insert into dev_info_cache (mint, pair_address, likely_dev_wallet, status, confidence, score, summary, summary_json, result_json, updated_at)
+      values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, coalesce($10::timestamptz, now()))
+      on conflict (mint) do update set
+        pair_address = excluded.pair_address,
+        likely_dev_wallet = excluded.likely_dev_wallet,
+        status = excluded.status,
+        confidence = excluded.confidence,
+        score = excluded.score,
+        summary = excluded.summary,
+        summary_json = excluded.summary_json,
+        result_json = excluded.result_json,
+        updated_at = excluded.updated_at
+    `, [
+      result.mint,
+      result.pairAddress || null,
+      result.likelyDevWallet || null,
+      result.status || "unknown",
+      result.confidence || "unknown",
+      Number.isFinite(Number(result.score)) ? Math.round(Number(result.score)) : null,
+      result.summary || "",
+      postgresJson(summary, 12_000),
+      postgresJson(result),
+      result.updatedAt || null
+    ]);
+    postgresHistoryStats.writes += 1;
+    postgresHistoryStats.lastWriteAt = new Date().toISOString();
+    devInfoStats.postgresWrites += 1;
+    return true;
+  } catch (error) {
+    postgresHistoryStats.errors += 1;
+    devInfoStats.errors += 1;
+    devInfoStats.lastError = safePerfEventText(error?.message || "Dev Info cache write failed", 140);
+    postgresHistoryStats.lastError = devInfoStats.lastError;
+    return false;
+  }
+}
+
+async function upsertPostgresDevWalletCandidate(candidate = null) {
+  if (!candidate?.mint || !candidate?.likelyDevWallet || !await ensurePostgresHistorySchema()) return false;
+  const pool = await postgresPool();
+  if (!pool) return false;
+  try {
+    await pool.query(`
+      insert into dev_wallet_candidates (mint, pair_address, likely_dev_wallet, confidence, source, evidence_json, first_seen_at, updated_at)
+      values ($1, $2, $3, $4, $5, $6::jsonb, now(), now())
+      on conflict do nothing
+    `, [
+      candidate.mint,
+      candidate.pairAddress || null,
+      candidate.likelyDevWallet,
+      candidate.confidence || "low",
+      candidate.source || "inferred",
+      postgresJson(candidate.evidence || candidate, 12_000)
+    ]);
+    await pool.query(`
+      update dev_wallet_candidates
+      set pair_address = $2,
+          confidence = $4,
+          evidence_json = $6::jsonb,
+          updated_at = now()
+      where mint = $1
+        and coalesce(likely_dev_wallet, '') = coalesce($3, '')
+        and coalesce(source, '') = coalesce($5, '')
+    `, [
+      candidate.mint,
+      candidate.pairAddress || null,
+      candidate.likelyDevWallet,
+      candidate.confidence || "low",
+      candidate.source || "inferred",
+      postgresJson(candidate.evidence || candidate, 12_000)
+    ]);
+    postgresHistoryStats.writes += 1;
+    postgresHistoryStats.lastWriteAt = new Date().toISOString();
+    return true;
+  } catch (error) {
+    postgresHistoryStats.errors += 1;
+    postgresHistoryStats.lastError = safePerfEventText(error?.message || "Dev candidate write failed", 140);
+    return false;
+  }
+}
+
+async function readPostgresDevWalletCandidate(mint = "") {
+  const cleanMint = String(mint || "").trim();
+  if (!cleanMint || !await ensurePostgresHistorySchema()) return null;
+  const pool = await postgresPool();
+  if (!pool) return null;
+  try {
+    const result = await pool.query(`
+      select * from dev_wallet_candidates
+      where mint = $1 and likely_dev_wallet is not null and likely_dev_wallet <> ''
+      order by
+        case confidence when 'high' then 3 when 'medium' then 2 when 'low' then 1 else 0 end desc,
+        updated_at desc
+      limit 1
+    `, [cleanMint]);
+    postgresHistoryStats.reads += 1;
+    postgresHistoryStats.lastReadAt = new Date().toISOString();
+    const row = result.rows[0];
+    return row ? {
+      mint: row.mint,
+      pairAddress: row.pair_address || "",
+      likelyDevWallet: row.likely_dev_wallet || "",
+      confidence: row.confidence || "low",
+      source: row.source || "postgres",
+      evidence: row.evidence_json || {}
+    } : null;
+  } catch (error) {
+    postgresHistoryStats.errors += 1;
+    postgresHistoryStats.lastError = safePerfEventText(error?.message || "Dev candidate read failed", 140);
+    return null;
+  }
+}
+
+async function readPostgresDevWalletStats(wallet = "") {
+  const cleanWallet = String(wallet || "").trim();
+  if (!cleanWallet || !await ensurePostgresHistorySchema()) return null;
+  const pool = await postgresPool();
+  if (!pool) return null;
+  try {
+    const result = await pool.query("select * from dev_wallet_stats where wallet_address = $1 limit 1", [cleanWallet]);
+    postgresHistoryStats.reads += 1;
+    postgresHistoryStats.lastReadAt = new Date().toISOString();
+    const row = result.rows[0];
+    if (!row) return null;
+    return {
+      likelyDevWallet: cleanWallet,
+      launchesTracked: Number(row.launches_tracked || 0),
+      medianFirstSellMinutes: row.median_first_sell_minutes === null ? null : Number(row.median_first_sell_minutes),
+      medianHoldMinutes: row.median_hold_minutes === null ? null : Number(row.median_hold_minutes),
+      soldMoreThan50Within15mPercent: row.sold_more_than_50_within_15m_percent === null ? null : Number(row.sold_more_than_50_within_15m_percent),
+      soldMoreThan50Within1hPercent: row.sold_more_than_50_within_1h_percent === null ? null : Number(row.sold_more_than_50_within_1h_percent),
+      heldPast24hPercent: row.held_past_24h_percent === null ? null : Number(row.held_past_24h_percent),
+      bestPriorLaunchReturnPercent: row.best_prior_launch_return_percent === null ? null : Number(row.best_prior_launch_return_percent),
+      worstPriorLaunchReturnPercent: row.worst_prior_launch_return_percent === null ? null : Number(row.worst_prior_launch_return_percent),
+      recentLaunches: Array.isArray(row.stats_json?.recentLaunches) ? row.stats_json.recentLaunches : []
+    };
+  } catch (error) {
+    postgresHistoryStats.errors += 1;
+    postgresHistoryStats.lastError = safePerfEventText(error?.message || "Dev wallet stats read failed", 140);
+    return null;
+  }
+}
+
+async function persistPostgresDevWalletStats(wallet = "", stats = null) {
+  const cleanWallet = String(wallet || stats?.likelyDevWallet || "").trim();
+  if (!cleanWallet || !stats || !await ensurePostgresHistorySchema()) return false;
+  const pool = await postgresPool();
+  if (!pool) return false;
+  try {
+    await pool.query(`
+      insert into dev_wallet_stats (
+        wallet_address, launches_tracked, median_first_sell_minutes, median_hold_minutes,
+        sold_more_than_50_within_15m_percent, sold_more_than_50_within_1h_percent,
+        held_past_24h_percent, best_prior_launch_return_percent, worst_prior_launch_return_percent,
+        stats_json, updated_at
+      )
+      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, now())
+      on conflict (wallet_address) do update set
+        launches_tracked = excluded.launches_tracked,
+        median_first_sell_minutes = excluded.median_first_sell_minutes,
+        median_hold_minutes = excluded.median_hold_minutes,
+        sold_more_than_50_within_15m_percent = excluded.sold_more_than_50_within_15m_percent,
+        sold_more_than_50_within_1h_percent = excluded.sold_more_than_50_within_1h_percent,
+        held_past_24h_percent = excluded.held_past_24h_percent,
+        best_prior_launch_return_percent = excluded.best_prior_launch_return_percent,
+        worst_prior_launch_return_percent = excluded.worst_prior_launch_return_percent,
+        stats_json = excluded.stats_json,
+        updated_at = now()
+    `, [
+      cleanWallet,
+      Number(stats.launchesTracked || 0),
+      stats.medianFirstSellMinutes ?? null,
+      stats.medianHoldMinutes ?? null,
+      stats.soldMoreThan50Within15mPercent ?? null,
+      stats.soldMoreThan50Within1hPercent ?? null,
+      stats.heldPast24hPercent ?? null,
+      stats.bestPriorLaunchReturnPercent ?? null,
+      stats.worstPriorLaunchReturnPercent ?? null,
+      postgresJson(stats, 24_000)
+    ]);
+    postgresHistoryStats.writes += 1;
+    postgresHistoryStats.lastWriteAt = new Date().toISOString();
+    return true;
+  } catch (error) {
+    postgresHistoryStats.errors += 1;
+    postgresHistoryStats.lastError = safePerfEventText(error?.message || "Dev wallet stats write failed", 140);
+    return false;
+  }
+}
+
+async function readPostgresDevWalletEvents(wallet = "", mint = "", limit = 500) {
+  const cleanWallet = String(wallet || "").trim();
+  const cleanMint = String(mint || "").trim();
+  if (!cleanWallet || !await ensurePostgresHistorySchema()) return [];
+  const pool = await postgresPool();
+  if (!pool) return [];
+  try {
+    const params = cleanMint
+      ? [cleanWallet, cleanMint, Math.max(1, Math.min(1000, Number(limit) || 500))]
+      : [cleanWallet, Math.max(1, Math.min(1000, Number(limit) || 500))];
+    const sql = cleanMint
+      ? `select wallet_address as "walletAddress", mint, pair_address as "pairAddress", event_type as "eventType",
+            token_amount as "tokenAmount", supply_percent as "supplyPercent", sol_amount as "solAmount",
+            usd_value as "usdValue", price, tx_signature as "txSignature", slot, event_time as "eventTime",
+            created_at as "createdAt"
+          from dev_wallet_events where wallet_address = $1 and mint = $2 order by event_time desc nulls last, created_at desc limit $3`
+      : `select wallet_address as "walletAddress", mint, pair_address as "pairAddress", event_type as "eventType",
+            token_amount as "tokenAmount", supply_percent as "supplyPercent", sol_amount as "solAmount",
+            usd_value as "usdValue", price, tx_signature as "txSignature", slot, event_time as "eventTime",
+            created_at as "createdAt"
+          from dev_wallet_events where wallet_address = $1 order by event_time desc nulls last, created_at desc limit $2`;
+    const result = await pool.query(sql, params);
+    postgresHistoryStats.reads += 1;
+    postgresHistoryStats.lastReadAt = new Date().toISOString();
+    return result.rows || [];
+  } catch (error) {
+    postgresHistoryStats.errors += 1;
+    postgresHistoryStats.lastError = safePerfEventText(error?.message || "Dev wallet events read failed", 140);
+    return [];
+  }
+}
+
+function localDevHistoricalStatsFromRow(row = {}, likelyDevWallet = "") {
+  const launchesTracked = firstMeaningfulNumber(row.devLaunchesTracked, row.launchesTracked, row.devInfoLaunchesTracked);
+  if (!Number.isFinite(launchesTracked)) return null;
+  return {
+    likelyDevWallet: likelyDevWallet || null,
+    launchesTracked: Math.max(0, Math.round(launchesTracked)),
+    medianFirstSellMinutes: firstMeaningfulNumber(row.devMedianFirstSellMinutes, row.medianFirstSellMinutes),
+    medianHoldMinutes: firstMeaningfulNumber(row.devMedianHoldMinutes, row.medianHoldMinutes),
+    soldMoreThan50Within15mPercent: firstMeaningfulNumber(row.devSold50Within15mPercent, row.soldMoreThan50Within15mPercent),
+    soldMoreThan50Within1hPercent: firstMeaningfulNumber(row.devSold50Within1hPercent, row.soldMoreThan50Within1hPercent),
+    heldPast24hPercent: firstMeaningfulNumber(row.devHeldPast24hPercent, row.heldPast24hPercent),
+    bestPriorLaunchReturnPercent: firstMeaningfulNumber(row.devBestPriorLaunchReturnPercent),
+    worstPriorLaunchReturnPercent: firstMeaningfulNumber(row.devWorstPriorLaunchReturnPercent),
+    recentLaunches: Array.isArray(row.devRecentLaunches) ? row.devRecentLaunches.slice(0, 10) : []
+  };
+}
+
+function localDevCurrentPositionFromRow(row = {}, likelyDevWallet = "") {
+  const estimatedSoldPercent = firstMeaningfulNumber(row.devEstimatedSoldPercent, row.devSoldPercent, row.estimatedDevSoldPercent);
+  const currentSupplyPercent = firstMeaningfulNumber(row.devCurrentSupplyPercent, row.devHoldingSupplyPercent);
+  const firstSellMinutes = firstMeaningfulNumber(row.devFirstMajorSellMinutes, row.firstMajorDevSellMinutes);
+  if (![estimatedSoldPercent, currentSupplyPercent, firstSellMinutes].some(Number.isFinite)) return null;
+  return {
+    mint: String(row.tokenMint || row.mint || "").trim(),
+    likelyDevWallet: likelyDevWallet || null,
+    initialTokenAmount: firstMeaningfulNumber(row.devInitialTokenAmount),
+    initialSupplyPercent: firstMeaningfulNumber(row.devInitialSupplyPercent),
+    currentTokenAmount: firstMeaningfulNumber(row.devCurrentTokenAmount),
+    currentSupplyPercent,
+    estimatedSoldPercent,
+    firstMajorSellAt: row.devFirstMajorSellAt || null,
+    firstMajorSellMinutesAfterLaunch: firstSellMinutes,
+    lastSellAt: row.devLastSellAt || null,
+    positionStatus: estimatedSoldPercent >= 95
+      ? "exited"
+      : estimatedSoldPercent >= 70
+        ? "mostly_exited"
+        : estimatedSoldPercent >= 25
+          ? "partial_exit"
+          : "holding"
+  };
+}
+
+async function computeDevInfoFromLocalData(mint = "", row = null, options = {}) {
+  const cleanMint = String(mint || row?.tokenMint || row?.mint || "").trim();
+  const localRow = row || localMarketRowForMint(cleanMint) || { tokenMint: cleanMint };
+  let candidate = devInfoCandidateFromRow(localRow);
+  if (!candidate) {
+    candidate = await readPostgresDevWalletCandidate(cleanMint);
+  } else if (options.persist !== false) {
+    void upsertPostgresDevWalletCandidate(candidate).catch(() => {});
+  }
+
+  if (!candidate?.likelyDevWallet) {
+    devInfoStats.unknownWallet += 1;
+    const result = calculateDevInfoStatus({
+      mint: cleanMint,
+      pairAddress: firstString(localRow.pairAddress, localRow.raydiumPool),
+      confidence: "unknown",
+      historicalStats: { launchesTracked: 0 },
+      updatedAt: new Date().toISOString()
+    });
+    return {
+      ...result,
+      dataSource: "limited-local-data",
+      hydrationQueued: Boolean(options.hydrationQueued)
+    };
+  }
+
+  const wallet = candidate.likelyDevWallet;
+  let currentPosition = localDevCurrentPositionFromRow(localRow, wallet);
+  let historicalStats = localDevHistoricalStatsFromRow(localRow, wallet);
+  if (!currentPosition) {
+    const currentEvents = await readPostgresDevWalletEvents(wallet, cleanMint, 250);
+    currentPosition = devCurrentPositionFromEvents(currentEvents, wallet, cleanMint);
+  }
+  if (!historicalStats) {
+    historicalStats = await readPostgresDevWalletStats(wallet);
+  }
+  if (!historicalStats || Number(historicalStats.launchesTracked || 0) === 0) {
+    const historyEvents = await readPostgresDevWalletEvents(wallet, "", CONFIG.postgresHydrationDevWalletLaunchLimit * 20);
+    if (historyEvents.length) {
+      historicalStats = calculateDevWalletStatsFromEvents(historyEvents, wallet);
+      void persistPostgresDevWalletStats(wallet, historicalStats).catch(() => {});
+    }
+  }
+
+  const result = calculateDevInfoStatus({
+    mint: cleanMint,
+    pairAddress: firstString(localRow.pairAddress, candidate.pairAddress, localRow.raydiumPool),
+    likelyDevWallet: wallet,
+    confidence: candidate.confidence || "low",
+    currentPosition,
+    historicalStats: historicalStats || { likelyDevWallet: wallet, launchesTracked: 0, recentLaunches: [] },
+    linkedWalletSignals: {
+      sameFundingWalletSeenBefore: Boolean(localRow.sameFundingWalletSeenBefore),
+      sameCreatorSeenBefore: Boolean(localRow.sameCreatorSeenBefore),
+      linkedWalletCount: firstMeaningfulNumber(localRow.linkedWalletCount) || 0,
+      recentLinkedWalletSellCount: firstMeaningfulNumber(localRow.recentLinkedWalletSellCount) || 0,
+      notes: Array.isArray(localRow.linkedWalletNotes) ? localRow.linkedWalletNotes : []
+    },
+    updatedAt: new Date().toISOString()
+  });
+  devInfoStats.computedFromLocalData += 1;
+  if (options.persist !== false) {
+    void persistPostgresDevInfoResult(result).catch(() => {});
+  }
+  return {
+    ...result,
+    dataSource: candidate.source ? `local:${candidate.source}` : "local-postgres"
+  };
+}
+
+async function queueDevInfoHydration(mint = "", row = null, reason = "request") {
+  const cleanMint = String(mint || row?.tokenMint || row?.mint || "").trim();
+  if (!cleanMint || !CONFIG.devInfoEnabled || !CONFIG.postgresHydrationEnabled) {
+    devInfoStats.hydrationSkipped += 1;
+    return false;
+  }
+  if (devInfoHydrationInFlight.has(cleanMint)) {
+    devInfoStats.hydrationSkipped += 1;
+    return false;
+  }
+  const task = LockService.withLock(`hydrate:devinfo:${cleanMint}`, 4 * 60 * 1000, async () => {
+    const localRow = row || localMarketRowForMint(cleanMint) || { tokenMint: cleanMint };
+    await persistPostgresLivePairRows([localRow], { reason, lock: false }).catch(() => false);
+    const result = await computeDevInfoFromLocalData(cleanMint, localRow, { persist: true, hydrationQueued: true });
+    await writeDevInfoCaches(cleanMint, result).catch(() => {});
+    return result;
+  }, false).finally(() => {
+    devInfoHydrationInFlight.delete(cleanMint);
+  });
+  devInfoHydrationInFlight.set(cleanMint, task);
+  devInfoStats.hydrationQueued += 1;
+  task.catch((error) => {
+    devInfoStats.errors += 1;
+    devInfoStats.lastError = safePerfEventText(error?.message || "Dev Info hydration failed", 140);
+  });
+  return true;
+}
+
+async function webDevInfoSummary(tokenMint = "") {
+  const mint = String(tokenMint || "").trim();
+  if (!mint) return devInfoSummaryFromResult(calculateDevInfoStatus({ mint: "", confidence: "unknown" }));
+  if (!CONFIG.devInfoEnabled) {
+    return {
+      ...devInfoSummaryFromResult(calculateDevInfoStatus({ mint, confidence: "unknown" })),
+      disabled: true,
+      summary: "Dev Info is disabled by feature flag."
+    };
+  }
+  const memory = cachedDevInfoMemory("summary", mint, DEV_INFO_SUMMARY_TTL_MS);
+  if (memory) return memory;
+  const kv = await readDevInfoKv("summary", mint, DEV_INFO_SUMMARY_TTL_MS);
+  if (kv) return kv;
+  devInfoStats.cacheMisses += 1;
+  const postgresResult = await readPostgresDevInfoCache(mint);
+  if (postgresResult) {
+    const summary = {
+      ...devInfoSummaryFromResult(postgresResult),
+      cacheHit: true,
+      cacheSource: "postgres",
+      stale: Boolean(postgresResult.stale)
+    };
+    rememberDevInfoMemory("summary", mint, summary);
+    if (postgresResult.stale) void queueDevInfoHydration(mint, localMarketRowForMint(mint), "stale-summary").catch(() => {});
+    return summary;
+  }
+  const row = localMarketRowForMint(mint) || { tokenMint: mint };
+  const result = await computeDevInfoFromLocalData(mint, row, { persist: true });
+  const summary = {
+    ...devInfoSummaryFromResult(result),
+    cacheHit: false,
+    cacheSource: result.dataSource || "local"
+  };
+  rememberDevInfoMemory("summary", mint, summary);
+  await cacheSetJson(devInfoExternalKey("summary", mint), displayCacheEnvelope(summary), result.status === "unknown" ? DEV_INFO_UNKNOWN_TTL_MS : DEV_INFO_SUMMARY_TTL_MS).catch(() => false);
+  void queueDevInfoHydration(mint, row, "summary-miss").catch(() => {});
+  return summary;
+}
+
+async function webDevInfoDetails(tokenMint = "") {
+  const mint = String(tokenMint || "").trim();
+  if (!mint) return calculateDevInfoStatus({ mint: "", confidence: "unknown" });
+  if (!CONFIG.devInfoEnabled) {
+    return {
+      ...calculateDevInfoStatus({ mint, confidence: "unknown" }),
+      disabled: true,
+      summary: "Dev Info is disabled by feature flag."
+    };
+  }
+  const memory = cachedDevInfoMemory("details", mint, DEV_INFO_DETAILS_TTL_MS);
+  if (memory) return memory;
+  const kv = await readDevInfoKv("details", mint, DEV_INFO_DETAILS_TTL_MS);
+  if (kv) return kv;
+  devInfoStats.cacheMisses += 1;
+  const postgresResult = await readPostgresDevInfoCache(mint);
+  if (postgresResult) {
+    rememberDevInfoMemory("details", mint, postgresResult);
+    if (postgresResult.stale) void queueDevInfoHydration(mint, localMarketRowForMint(mint), "stale-details").catch(() => {});
+    return postgresResult;
+  }
+  const row = localMarketRowForMint(mint) || { tokenMint: mint };
+  const result = await computeDevInfoFromLocalData(mint, row, { persist: true });
+  rememberDevInfoMemory("details", mint, result);
+  await writeDevInfoCaches(mint, result).catch(() => {});
+  void queueDevInfoHydration(mint, row, "details-miss").catch(() => {});
+  return result;
+}
+
+async function getOrHydrateTokenContext(mint = "") {
+  const cleanMint = String(mint || "").trim();
+  const row = localMarketRowForMint(cleanMint) || { tokenMint: cleanMint };
+  const devInfoSummary = cleanMint ? await webDevInfoSummary(cleanMint).catch(() => null) : null;
+  const slimeShieldSummary = cleanMint ? await webSlimeShield(cleanMint).catch(() => null) : null;
+  const replaySummary = cleanMint ? await webReplayBeforeBuy(cleanMint).catch(() => null) : null;
+  void queueDevInfoHydration(cleanMint, row, "token-context").catch(() => {});
+  return {
+    tokenMetadata: {
+      mint: cleanMint,
+      symbol: row.symbol || "",
+      name: row.name || "",
+      avatarUrl: row.avatarUrl || row.imageUrl || ""
+    },
+    pair: {
+      pairAddress: row.pairAddress || "",
+      liquidityUsd: row.liquidityUsd || null,
+      marketCap: row.marketCap || null,
+      createdAt: row.pairCreatedAt || null
+    },
+    devInfoSummary,
+    slimeShieldSummary,
+    replaySummary,
+    dataCompleteness: tokenDataCompleteness(cleanMint, row, { devInfoSummary, slimeShieldSummary, replaySummary })
+  };
+}
+
+function tokenDataCompleteness(mint = "", row = {}, context = {}) {
+  const checks = {
+    hasMetadata: Boolean(row.symbol || row.name),
+    hasAvatar: Boolean(row.avatarUrl || row.imageUrl),
+    hasPairInfo: Boolean(row.pairAddress || row.raydiumPool),
+    hasLaunchTime: Boolean(row.pairCreatedAt || Number.isFinite(Number(row.pairAgeSeconds))),
+    hasDevCandidate: Boolean(context.devInfoSummary?.likelyDevWallet || row.creatorWallet),
+    hasDevCurrentPosition: Boolean(context.devInfoSummary?.currentPositionStatus || row.devCurrentTokenAmount),
+    hasDevHistory: Boolean(Number(context.devInfoSummary?.launchesTracked || row.devLaunchesTracked || 0) > 0),
+    hasSlimeShield: Boolean(context.slimeShieldSummary?.verdict),
+    hasReplayData: Boolean(Number(context.replaySummary?.sampleSize || 0) > 0),
+    hasKolContext: Boolean(row.kolName || row.kolWallet || row.kolDumpRiskPercent)
+  };
+  const total = Object.keys(checks).length;
+  const complete = Object.values(checks).filter(Boolean).length;
+  return {
+    mint,
+    ...checks,
+    completenessPercent: Math.round((complete / total) * 100),
+    missingFields: Object.entries(checks).filter(([, value]) => !value).map(([key]) => key),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+async function persistPostgresLivePairRows(rows = [], options = {}) {
+  const cleanRows = Array.isArray(rows)
+    ? rows.filter((row) => row?.tokenMint || row?.mint).slice(0, CONFIG.postgresHydrationHotPairLimit)
+    : [];
+  if (!cleanRows.length || !CONFIG.postgresHydrationEnabled || !await ensurePostgresHistorySchema()) return false;
+  const run = async () => {
+    const pool = await postgresPool();
+    if (!pool) return false;
+    for (const row of cleanRows) {
+      const mint = String(row.tokenMint || row.mint || "").trim();
+      if (!mint) continue;
+      const pairAddress = firstString(row.pairAddress, row.raydiumPool, `mint:${mint}`);
+      await pool.query(`
+        insert into token_metadata (
+          mint, chain, symbol, name, avatar_url, metadata_uri, website_url, twitter_url,
+          telegram_url, source, confidence, first_seen_at, last_seen_at, updated_at, raw_metadata_json
+        )
+        values ($1, 'solana', $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), now(), now(), $11::jsonb)
+        on conflict (mint) do update set
+          symbol = coalesce(nullif(excluded.symbol, ''), token_metadata.symbol),
+          name = coalesce(nullif(excluded.name, ''), token_metadata.name),
+          avatar_url = coalesce(nullif(excluded.avatar_url, ''), token_metadata.avatar_url),
+          metadata_uri = coalesce(nullif(excluded.metadata_uri, ''), token_metadata.metadata_uri),
+          website_url = coalesce(nullif(excluded.website_url, ''), token_metadata.website_url),
+          twitter_url = coalesce(nullif(excluded.twitter_url, ''), token_metadata.twitter_url),
+          telegram_url = coalesce(nullif(excluded.telegram_url, ''), token_metadata.telegram_url),
+          source = coalesce(nullif(excluded.source, ''), token_metadata.source),
+          confidence = excluded.confidence,
+          last_seen_at = now(),
+          updated_at = now(),
+          raw_metadata_json = excluded.raw_metadata_json
+      `, [
+        mint,
+        String(row.symbol || "").slice(0, 80),
+        String(row.name || "").slice(0, 180),
+        firstString(row.avatarUrl, row.imageUrl),
+        firstString(row.metadataUri, row.metadata_uri),
+        row.websiteUrl || null,
+        row.twitterUrl || null,
+        row.telegramUrl || null,
+        String(row.source || row.category || "live-pairs").slice(0, 80),
+        row.symbol || row.name ? "medium" : "low",
+        postgresJson({
+          symbol: row.symbol,
+          name: row.name,
+          source: row.source,
+          category: row.category,
+          seenReason: options.reason || "live-pairs"
+        }, 16_000)
+      ]);
+      const avatarUrl = firstString(row.avatarUrl, row.imageUrl);
+      await pool.query(`
+        insert into token_avatar_cache (mint, avatar_url, source, state, first_seen_at, updated_at)
+        values ($1, $2, $3, $4, now(), now())
+        on conflict (mint) do update set
+          avatar_url = coalesce(nullif(excluded.avatar_url, ''), token_avatar_cache.avatar_url),
+          source = coalesce(nullif(excluded.source, ''), token_avatar_cache.source),
+          state = excluded.state,
+          updated_at = now()
+      `, [
+        mint,
+        avatarUrl || null,
+        row.avatarSource || row.source || "live-pairs",
+        avatarUrl ? "ready" : "pending"
+      ]);
+      await pool.query(`
+        insert into pairs (
+          pair_address, mint, chain, dex, created_at_chain, first_seen_at, last_seen_at,
+          liquidity_usd, market_cap, fdv, volume_5m, volume_1h, raw_pair_json, updated_at
+        )
+        values ($1, $2, 'solana', $3, $4, now(), now(), $5, $6, $7, $8, $9, $10::jsonb, now())
+        on conflict (pair_address) do update set
+          mint = coalesce(excluded.mint, pairs.mint),
+          dex = coalesce(nullif(excluded.dex, ''), pairs.dex),
+          created_at_chain = coalesce(excluded.created_at_chain, pairs.created_at_chain),
+          last_seen_at = now(),
+          liquidity_usd = excluded.liquidity_usd,
+          market_cap = excluded.market_cap,
+          fdv = excluded.fdv,
+          volume_5m = excluded.volume_5m,
+          volume_1h = excluded.volume_1h,
+          raw_pair_json = excluded.raw_pair_json,
+          updated_at = now()
+      `, [
+        pairAddress,
+        mint,
+        firstString(row.dexId, row.dexName, row.source),
+        postgresDate(row.pairCreatedAt),
+        firstMeaningfulNumber(row.liquidityUsd),
+        firstMeaningfulNumber(row.marketCap),
+        firstMeaningfulNumber(row.fdv, row.marketCap),
+        firstMeaningfulNumber(row.volume5m),
+        firstMeaningfulNumber(row.volumeH1),
+        postgresJson({
+          pairAddress: row.pairAddress,
+          raydiumPool: row.raydiumPool,
+          source: row.source,
+          category: row.category,
+          riskFlags: row.riskFlags,
+          scoreWarnings: row.scoreWarnings || row.bestPickWarnings
+        }, 20_000)
+      ]);
+      await pool.query(`
+        insert into pair_snapshots (
+          pair_address, mint, liquidity_usd, market_cap, volume_5m, volume_1h,
+          txns_5m, dev_info_status, slimeshield_verdict, captured_at
+        )
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+      `, [
+        pairAddress,
+        mint,
+        firstMeaningfulNumber(row.liquidityUsd),
+        firstMeaningfulNumber(row.marketCap),
+        firstMeaningfulNumber(row.volume5m),
+        firstMeaningfulNumber(row.volumeH1),
+        Math.max(0, Number(row.buys5m || 0) + Number(row.sells5m || 0)) || null,
+        row.devInfoSummary?.status || null,
+        row.slimeShield?.verdict || null
+      ]);
+      const candidate = devInfoCandidateFromRow(row);
+      if (candidate) await upsertPostgresDevWalletCandidate(candidate);
+    }
+    postgresHistoryStats.writes += 1;
+    postgresHistoryStats.lastWriteAt = new Date().toISOString();
+    return true;
+  };
+  if (options.lock === false) return run().catch((error) => {
+    postgresHistoryStats.errors += 1;
+    postgresHistoryStats.lastError = safePerfEventText(error?.message || "Live pair history write failed", 140);
+    return false;
+  });
+  return LockService.withLock("hydrate:live-pair-history", 25_000, run, false).catch((error) => {
+    postgresHistoryStats.errors += 1;
+    postgresHistoryStats.lastError = safePerfEventText(error?.message || "Live pair history write failed", 140);
+    return false;
+  });
+}
+
+async function persistPostgresSlimeShieldResult(result = null) {
+  if (!result?.mint || !await ensurePostgresHistorySchema()) return false;
+  const pool = await postgresPool();
+  if (!pool) return false;
+  try {
+    await pool.query(`
+      insert into slimeshield_cache (mint, verdict, score, confidence, summary, factors_json, suggested_action, protected_buy_preset, updated_at)
+      values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, coalesce($9::timestamptz, now()))
+      on conflict (mint) do update set
+        verdict = excluded.verdict,
+        score = excluded.score,
+        confidence = excluded.confidence,
+        summary = excluded.summary,
+        factors_json = excluded.factors_json,
+        suggested_action = excluded.suggested_action,
+        protected_buy_preset = excluded.protected_buy_preset,
+        updated_at = excluded.updated_at
+    `, [
+      result.mint,
+      result.verdict || null,
+      Number.isFinite(Number(result.score)) ? Math.round(Number(result.score)) : null,
+      result.confidence || null,
+      result.summary || "",
+      postgresJson(result.factors || [], 24_000),
+      result.suggestedAction || null,
+      result.protectedBuyPreset || null,
+      result.updatedAt || null
+    ]);
+    postgresHistoryStats.writes += 1;
+    postgresHistoryStats.lastWriteAt = new Date().toISOString();
+    return true;
+  } catch (error) {
+    postgresHistoryStats.errors += 1;
+    postgresHistoryStats.lastError = safePerfEventText(error?.message || "SlimeShield cache write failed", 140);
+    return false;
+  }
+}
+
+async function readPostgresSlimeShieldResult(mint = "") {
+  const cleanMint = String(mint || "").trim();
+  if (!cleanMint || !await ensurePostgresHistorySchema()) return null;
+  const pool = await postgresPool();
+  if (!pool) return null;
+  try {
+    const result = await pool.query("select * from slimeshield_cache where mint = $1 limit 1", [cleanMint]);
+    const row = result.rows[0];
+    postgresHistoryStats.reads += 1;
+    postgresHistoryStats.lastReadAt = new Date().toISOString();
+    if (!row) return null;
+    return {
+      mint: cleanMint,
+      verdict: row.verdict || "CAUTION",
+      score: Number(row.score || 0),
+      confidence: row.confidence || "low",
+      summary: row.summary || "SlimeShield is warming up. Trade carefully.",
+      factors: Array.isArray(row.factors_json) ? row.factors_json : [],
+      suggestedAction: row.suggested_action || "small_buy",
+      protectedBuyPreset: row.protected_buy_preset || "conservative",
+      updatedAt: row.updated_at || new Date().toISOString(),
+      cacheHit: true,
+      cacheSource: "postgres",
+      stale: Date.now() - Date.parse(row.updated_at || "") > SLIMESHIELD_CACHE_TTL_MS
+    };
+  } catch (error) {
+    postgresHistoryStats.errors += 1;
+    postgresHistoryStats.lastError = safePerfEventText(error?.message || "SlimeShield cache read failed", 140);
+    return null;
+  }
+}
+
+async function readPostgresReplayResult(mint = "", bucketHash = "") {
+  const cleanMint = String(mint || "").trim();
+  if (!cleanMint || !await ensurePostgresHistorySchema()) return null;
+  const pool = await postgresPool();
+  if (!pool) return null;
+  try {
+    const result = await pool.query("select * from replay_results_cache where mint = $1 limit 1", [cleanMint]);
+    const row = result.rows[0];
+    postgresHistoryStats.reads += 1;
+    postgresHistoryStats.lastReadAt = new Date().toISOString();
+    if (!row?.result_json) return null;
+    if (bucketHash && row.bucket_hash && row.bucket_hash !== bucketHash) return null;
+    return {
+      ...row.result_json,
+      cacheHit: true,
+      cacheSource: "postgres",
+      stale: Date.now() - Date.parse(row.updated_at || "") > REPLAY_BEFORE_BUY_TTL_MS
+    };
+  } catch (error) {
+    postgresHistoryStats.errors += 1;
+    postgresHistoryStats.lastError = safePerfEventText(error?.message || "Replay cache read failed", 140);
+    return null;
+  }
+}
+
+async function persistPostgresReplayResult(mint = "", bucketHash = "", result = null, traits = null) {
+  const cleanMint = String(mint || result?.mint || "").trim();
+  if (!cleanMint || !result || !await ensurePostgresHistorySchema()) return false;
+  const pool = await postgresPool();
+  if (!pool) return false;
+  try {
+    await pool.query(`
+      insert into replay_results_cache (mint, bucket_hash, result_json, sample_size, confidence, updated_at)
+      values ($1, $2, $3::jsonb, $4, $5, coalesce($6::timestamptz, now()))
+      on conflict (mint) do update set
+        bucket_hash = excluded.bucket_hash,
+        result_json = excluded.result_json,
+        sample_size = excluded.sample_size,
+        confidence = excluded.confidence,
+        updated_at = excluded.updated_at
+    `, [
+      cleanMint,
+      bucketHash || null,
+      postgresJson(result, 24_000),
+      Math.max(0, Math.round(firstMeaningfulNumber(result.sampleSize) || 0)),
+      result.confidence || "low",
+      result.updatedAt || null
+    ]);
+    if (bucketHash) {
+      await pool.query(`
+        insert into replay_buckets (
+          bucket_hash, bucket_json, sample_size, win_rate_percent, median_max_upside_percent,
+          median_max_drawdown_percent, fail_rate_percent, best_exit_pattern, updated_at
+        )
+        values ($1, $2::jsonb, $3, $4, $5, $6, $7, $8, now())
+        on conflict (bucket_hash) do update set
+          bucket_json = excluded.bucket_json,
+          sample_size = excluded.sample_size,
+          win_rate_percent = excluded.win_rate_percent,
+          median_max_upside_percent = excluded.median_max_upside_percent,
+          median_max_drawdown_percent = excluded.median_max_drawdown_percent,
+          fail_rate_percent = excluded.fail_rate_percent,
+          best_exit_pattern = excluded.best_exit_pattern,
+          updated_at = now()
+      `, [
+        bucketHash,
+        postgresJson(traits || {}, 12_000),
+        Math.max(0, Math.round(firstMeaningfulNumber(result.sampleSize) || 0)),
+        firstMeaningfulNumber(result.winRatePercent),
+        firstMeaningfulNumber(result.medianMaxUpsidePercent),
+        firstMeaningfulNumber(result.medianMaxDrawdownPercent),
+        firstMeaningfulNumber(result.failRatePercent),
+        result.bestExitPattern || null
+      ]);
+    }
+    postgresHistoryStats.writes += 1;
+    postgresHistoryStats.lastWriteAt = new Date().toISOString();
+    return true;
+  } catch (error) {
+    postgresHistoryStats.errors += 1;
+    postgresHistoryStats.lastError = safePerfEventText(error?.message || "Replay cache write failed", 140);
     return false;
   }
 }
@@ -26849,7 +28225,15 @@ async function webSlimeShield(tokenMint = "") {
     }
   }
 
-  const row = localMarketRowForMint(mint) || { tokenMint: mint };
+  const postgresResult = await readPostgresSlimeShieldResult(mint);
+  if (postgresResult && !postgresResult.stale) {
+    slimeShieldCache.set(mint, { cachedAt: Date.parse(postgresResult.updatedAt || "") || Date.now(), value: postgresResult });
+    return postgresResult;
+  }
+
+  const baseRow = localMarketRowForMint(mint) || { tokenMint: mint };
+  const devInfoSummary = mint ? await webDevInfoSummary(mint).catch(() => null) : null;
+  const row = devInfoSummary ? { ...baseRow, devInfoSummary } : baseRow;
   const result = {
     ...computeSlimeShield(row, { mint }),
     cacheHit: false,
@@ -26859,6 +28243,7 @@ async function webSlimeShield(tokenMint = "") {
   if (mint) {
     slimeShieldCache.set(mint, { cachedAt: Date.now(), value: result });
     await cacheSetJson(externalKey, displayCacheEnvelope(result), SLIMESHIELD_CACHE_TTL_MS).catch(() => false);
+    void persistPostgresSlimeShieldResult(result).catch(() => {});
   }
   return result;
 }
@@ -26937,6 +28322,12 @@ async function webReplayBeforeBuy(tokenMint = "") {
     return { ...external.value, cacheHit: true, cacheSource: kvProviderName() };
   }
 
+  const postgresReplay = await readPostgresReplayResult(mint, bucketHash);
+  if (postgresReplay && !postgresReplay.stale) {
+    replayBeforeBuyCache.set(cacheKey, { cachedAt: Date.parse(postgresReplay.updatedAt || "") || Date.now(), value: postgresReplay });
+    return postgresReplay;
+  }
+
   const rows = uniqueSniperScoreRows(rowsFromCachedMarketFeeds())
     .filter((candidate) => candidate?.tokenMint && String(candidate.tokenMint) !== mint)
     .map((candidate) => ({ row: candidate, traits: replayTraits(candidate) }))
@@ -26970,6 +28361,7 @@ async function webReplayBeforeBuy(tokenMint = "") {
   };
   replayBeforeBuyCache.set(cacheKey, { cachedAt: Date.now(), value });
   await cacheSetJson(replayExternalKey(mint, bucketHash), displayCacheEnvelope(value), REPLAY_BEFORE_BUY_TTL_MS).catch(() => false);
+  void persistPostgresReplayResult(mint, bucketHash, value, traits).catch(() => {});
   return value;
 }
 
@@ -27088,6 +28480,7 @@ async function buildWebLivePairs(userId, bucket = "live", options = {}) {
     { stickyCount }
   ));
   rememberSniperScanRows(`web:${userId}`, `livepairs:${safeBucket}`, safeRows);
+  void persistPostgresLivePairRows(safeRows, { reason: `live-pairs:${safeBucket}` }).catch(() => false);
 
   return {
     label: livePairBucketLabel(safeBucket),
@@ -27555,6 +28948,32 @@ function livePairCandidateToRow(candidate) {
   const websiteUrl = firstString(profile.websiteUrl, profile.website_url, profile.website, profile.url, profile.links?.website);
   const twitterUrl = firstString(profile.twitterUrl, profile.twitter_url, profile.twitter, profile.xUrl, profile.links?.twitter, profile.links?.x);
   const telegramUrl = firstString(profile.telegramUrl, profile.telegram_url, profile.telegram, profile.links?.telegram);
+  const creatorWallet = firstString(
+    profile.creatorWallet,
+    profile.creator_wallet,
+    profile.creatorPublicKey,
+    profile.creator_public_key,
+    profile.creator,
+    profile.deployerWallet,
+    profile.deployer_wallet,
+    profile.deployer,
+    profile.launchWallet,
+    profile.launch_wallet,
+    candidate.creatorWallet,
+    candidate.creator,
+    candidate.deployer,
+    candidate.launchWallet
+  );
+  const poolCreator = firstString(
+    profile.poolCreator,
+    profile.pool_creator,
+    profile.pairCreator,
+    profile.pair_creator,
+    profile.initialLiquidityWallet,
+    profile.initial_liquidity_wallet,
+    profile.liquidityProvider,
+    profile.liquidity_provider
+  );
   const dexId = firstString(profile.dexId, profile.dexName, profile.market, profile.platform);
   const dexName = firstString(profile.dexName, dexId);
   const pairAddress = firstString(profile.pairAddress, profile.address);
@@ -27622,6 +29041,8 @@ function livePairCandidateToRow(candidate) {
     websiteUrl,
     twitterUrl,
     telegramUrl,
+    creatorWallet,
+    poolCreator,
     dexId,
     dexName,
     pairAddress,
@@ -27716,6 +29137,8 @@ async function enrichWebLivePairsForImages(rows) {
     let websiteUrl = firstString(dexMeta.websiteUrl, row.websiteUrl);
     let twitterUrl = firstString(dexMeta.twitterUrl, row.twitterUrl);
     let telegramUrl = firstString(dexMeta.telegramUrl, row.telegramUrl);
+    let creatorWallet = firstString(row.creatorWallet, row.creator, row.deployerWallet, row.deployer, row.launchWallet);
+    let poolCreator = firstString(row.poolCreator, row.pairCreator, row.initialLiquidityWallet, row.liquidityProvider);
     let dexId = firstString(dexMeta.dexId, row.dexId, row.dexName);
     let dexName = firstString(dexMeta.dexName, row.dexName, dexId);
     let pairAddress = firstString(dexMeta.pairAddress, row.pairAddress);
@@ -27749,6 +29172,8 @@ async function enrichWebLivePairsForImages(rows) {
       bondingProgressPct = Number(bondingProgressPct) > 0 ? bondingProgressPct : firstMeaningfulNumber(pumpMeta.bondingProgressPct, bondingProgressPct) || 0;
       graduated = Boolean(graduated || pumpMeta.graduated || pumpMeta.isGraduated);
       raydiumPool = firstString(raydiumPool, pumpMeta.raydiumPool);
+      creatorWallet = firstString(pumpMeta.creatorWallet, pumpMeta.creator, pumpMeta.deployerWallet, pumpMeta.deployer, creatorWallet);
+      poolCreator = firstString(pumpMeta.poolCreator, pumpMeta.initialLiquidityWallet, poolCreator);
     }
 
     if (pumpLike && !graduated && pumpMeta && Object.keys(pumpMeta).length) {
@@ -27764,6 +29189,8 @@ async function enrichWebLivePairsForImages(rows) {
       volumeH24 = firstMeaningfulNumber(pumpMeta.volume?.h24, volumeH24) || 0;
       pairCreatedAt = firstNumber(pumpMeta.pairCreatedAt, pairCreatedAt) || null;
       bondingProgressPct = firstMeaningfulNumber(pumpMeta.bondingProgressPct, bondingProgressPct) || 0;
+      creatorWallet = firstString(pumpMeta.creatorWallet, pumpMeta.creator, pumpMeta.deployerWallet, pumpMeta.deployer, creatorWallet);
+      poolCreator = firstString(pumpMeta.poolCreator, pumpMeta.initialLiquidityWallet, poolCreator);
     }
 
     if (!imageUrl || !marketCap || !liquidityUsd || !volumeH1 || !volumeM15 || !websiteUrl || !twitterUrl || !telegramUrl) {
@@ -27814,6 +29241,8 @@ async function enrichWebLivePairsForImages(rows) {
       websiteUrl,
       twitterUrl,
       telegramUrl,
+      creatorWallet,
+      poolCreator,
       marketCap,
       liquidityUsd,
       volume5m,
@@ -28009,8 +29438,10 @@ function webLivePairRow(row) {
     inputs: row.bestPickInputs || {},
     warnings: row.bestPickWarnings || []
   } : computeBestPickScore(row);
+  const cachedDevInfoSummary = row.devInfoSummary || cachedDevInfoMemory("summary", row.tokenMint, DEV_INFO_SUMMARY_TTL_MS);
   return {
     ...webSniperRow(row),
+    devInfoSummary: cachedDevInfoSummary || null,
     riskFlags: pairRiskFlags(row),
     pairAgeLabel: formatLivePairAgeFromData(row),
     bestPickScore: bestPick.score,
@@ -28065,6 +29496,11 @@ function webSniperRow(row) {
     websiteUrl: row.websiteUrl || "",
     twitterUrl: row.twitterUrl || "",
     telegramUrl: row.telegramUrl || "",
+    creatorWallet: row.creatorWallet || "",
+    creator: row.creator || row.creatorWallet || "",
+    deployerWallet: row.deployerWallet || row.deployer || "",
+    poolCreator: row.poolCreator || row.pairCreator || "",
+    initialLiquidityWallet: row.initialLiquidityWallet || row.liquidityProvider || "",
     dexId: row.dexId || "",
     dexName: row.dexName || "",
     pairAddress: row.pairAddress || "",

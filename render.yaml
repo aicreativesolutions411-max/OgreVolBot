@@ -48,6 +48,14 @@ services:
         sync: false
       - key: POSTGRES_HISTORY_ENABLED
         value: true
+      - key: POSTGRES_HYDRATION_ENABLED
+        value: true
+      - key: POSTGRES_HYDRATION_MAX_CONCURRENCY
+        value: 3
+      - key: POSTGRES_HYDRATION_HOT_PAIR_LIMIT
+        value: 100
+      - key: POSTGRES_HYDRATION_DEV_WALLET_LAUNCH_LIMIT
+        value: 25
       - key: CACHE_CONNECT_TIMEOUT_MS
         value: 800
       - key: CACHE_CIRCUIT_BREAKER_MS
@@ -117,6 +125,10 @@ services:
       - key: VITE_PROTECTED_BUY_ENABLED
         value: true
       - key: VITE_TOKEN_AVATAR_FIX_ENABLED
+        value: true
+      - key: VITE_DEV_INFO_ENABLED
+        value: true
+      - key: VITE_POSTGRES_HYDRATION_ENABLED
         value: true
       - key: VITE_CHAT_AI_ENABLED
         value: true
@@ -292,6 +304,14 @@ services:
         sync: false
       - key: POSTGRES_HISTORY_ENABLED
         value: true
+      - key: POSTGRES_HYDRATION_ENABLED
+        value: true
+      - key: POSTGRES_HYDRATION_MAX_CONCURRENCY
+        value: 3
+      - key: POSTGRES_HYDRATION_HOT_PAIR_LIMIT
+        value: 100
+      - key: POSTGRES_HYDRATION_DEV_WALLET_LAUNCH_LIMIT
+        value: 25
       - key: CACHE_CONNECT_TIMEOUT_MS
         value: 800
       - key: CACHE_CIRCUIT_BREAKER_MS
@@ -363,6 +383,14 @@ services:
         sync: false
       - key: POSTGRES_HISTORY_ENABLED
         value: true
+      - key: POSTGRES_HYDRATION_ENABLED
+        value: true
+      - key: POSTGRES_HYDRATION_MAX_CONCURRENCY
+        value: 3
+      - key: POSTGRES_HYDRATION_HOT_PAIR_LIMIT
+        value: 100
+      - key: POSTGRES_HYDRATION_DEV_WALLET_LAUNCH_LIMIT
+        value: 25
       - key: CACHE_CONNECT_TIMEOUT_MS
         value: 800
       - key: CACHE_CIRCUIT_BREAKER_MS

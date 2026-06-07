@@ -83,6 +83,8 @@ const featureFlags = {
   replayBeforeBuyEnabled: envBool("VITE_REPLAY_BEFORE_BUY_ENABLED", true),
   protectedBuyEnabled: envBool("VITE_PROTECTED_BUY_ENABLED", true),
   tokenAvatarFixEnabled: envBool("VITE_TOKEN_AVATAR_FIX_ENABLED", true),
+  devInfoEnabled: envBool("VITE_DEV_INFO_ENABLED", true),
+  postgresHydrationEnabled: envBool("VITE_POSTGRES_HYDRATION_ENABLED", true),
   chatAiEnabled: envBool("VITE_CHAT_AI_ENABLED", true),
   chatAiProviderEnabled: envBool("VITE_CHAT_AI_PROVIDER_ENABLED", true),
   siteSmoothnessFixesEnabled: envBool("VITE_SITE_SMOOTHNESS_FIXES_ENABLED", true),

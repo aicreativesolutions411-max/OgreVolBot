@@ -283,6 +283,11 @@ const state = {
   slimeShieldLoading: {},
   slimeShieldDetails: { open: false, tokenMint: "" },
   slimeShieldStatus: "",
+  devInfoSummaries: {},
+  devInfoResults: {},
+  devInfoLoading: {},
+  devInfoDetails: { open: false, tokenMint: "" },
+  devInfoStatus: "",
   replayResults: {},
   replayLoading: {},
   replayDetails: { open: false, tokenMint: "" },
@@ -404,6 +409,7 @@ let livePairsRenderReasons = new Set();
 let appWatchdogTimer = null;
 let resumeLiveFeedsTimer = null;
 let terminalLaunchFilterRenderTimer = null;
+let devInfoPrefetchTimer = null;
 let lastRenderCompletedAt = Date.now();
 
 function scheduleLivePairsRender(reason = "live-pairs-batch") {
@@ -4035,10 +4041,12 @@ function render(options = {}) {
   renderWalletConnectModal();
   renderQuickBuyModal();
   renderProtectedBuyModal();
+  renderDevInfoDrawer();
   renderSlimeShieldDetailsDrawer();
   renderKolDumpDetailsDrawer();
   renderReplayBeforeBuyDrawer();
   renderOgreAgent();
+  scheduleVisibleDevInfoPrefetch("render");
   syncInteractionLocks();
   applyActionButtonStates();
   const durationMs = perfNow() - startedAt;
@@ -11539,6 +11547,67 @@ function slimeShieldSummaryForVerdict(verdict, factors = []) {
   return top?.message ? `Avoid recommended. ${top.message}` : "Avoid recommended. Multiple danger signals.";
 }
 
+const DEV_INFO_LABELS = Object.freeze({
+  unknown: "?",
+  new: "New",
+  hold: "Hold",
+  mixed: "Mixed",
+  risk: "Risk",
+  dump: "Dump"
+});
+
+function devInfoStatusClass(status = "") {
+  const clean = String(status || "unknown").trim().toLowerCase();
+  return Object.hasOwn(DEV_INFO_LABELS, clean) ? clean : "unknown";
+}
+
+function devInfoFallbackSummary(row = {}) {
+  const mint = String(row.tokenMint || row.mint || row.tokenAddress || "").trim();
+  const likelyDevWallet = String(row.creatorWallet || row.creator || row.deployerWallet || row.poolCreator || "").trim();
+  const status = likelyDevWallet ? "new" : "unknown";
+  return {
+    mint,
+    status,
+    label: DEV_INFO_LABELS[status],
+    confidence: likelyDevWallet ? "low" : "unknown",
+    summary: likelyDevWallet ? "Limited dev-wallet history. Treat this as a new launch wallet." : "No reliable creator wallet detected yet.",
+    likelyDevWallet: likelyDevWallet || null,
+    updatedAt: ""
+  };
+}
+
+function devInfoSummaryForRow(row = {}) {
+  const mint = String(row.tokenMint || row.mint || row.tokenAddress || "").trim();
+  if (!mint) return devInfoFallbackSummary(row);
+  return state.devInfoSummaries?.[mint] || row.devInfoSummary || devInfoFallbackSummary(row);
+}
+
+function devInfoSlimeShieldFactor(summary = {}) {
+  const status = devInfoStatusClass(summary.status);
+  if (status === "hold") return slimeShieldFactor("dev_info_hold", "Dev Info", "positive", "Likely dev wallet is still holding.", 6);
+  if (status === "mixed") return slimeShieldFactor("dev_info_mixed", "Dev Info", "caution", "Dev wallet history is mixed.", -8);
+  if (status === "risk") return slimeShieldFactor("dev_info_risk", "Dev Info", "risk", "Likely dev wallet has fast-sell history.", -18);
+  if (status === "dump") return slimeShieldFactor("dev_info_dump", "Dev Info", "risk", "Likely dev wallet sold quickly or has repeated dump behavior.", -30);
+  if (status === "new") return slimeShieldFactor("dev_info_limited", "Dev Info", "neutral", "Dev wallet history is limited.", -2);
+  return slimeShieldFactor("dev_info_unknown", "Dev Info", "neutral", "Dev wallet history is limited.", -4);
+}
+
+function devInfoPillHtml(row = {}, options = {}) {
+  if (!featureEnabled("devInfoEnabled", true)) return "";
+  const mint = String(row.tokenMint || row.mint || row.tokenAddress || "").trim();
+  if (!mint) return "";
+  const summary = devInfoSummaryForRow(row);
+  const status = devInfoStatusClass(summary.status);
+  const label = summary.label || DEV_INFO_LABELS[status] || "?";
+  const loading = Boolean(state.devInfoLoading?.[`summary:${mint}`]);
+  const compact = Boolean(options.compact);
+  return `
+    <button type="button" class="dev-info-pill dev-info-${escapeHtml(status)} ${compact ? "is-compact" : ""}" data-dev-info="${escapeHtml(mint)}" title="${escapeHtml(summary.summary || "Open Dev Info")}">
+      <span>Dev Info</span><strong>${escapeHtml(loading ? "..." : label)}</strong>
+    </button>
+  `;
+}
+
 function computeUiSlimeShield(row = {}) {
   const mint = String(row.tokenMint || row.mint || row.tokenAddress || "").trim();
   let score = 70;
@@ -11647,6 +11716,18 @@ function computeUiSlimeShield(row = {}) {
   if (riskText.some((text) => /mint|freeze|token-2022/.test(text))) {
     score -= 24;
     factors.push(slimeShieldFactor("authority_risk", "Authority Risk", "risk", "Mint/freeze/token-program risk is visible.", -24));
+  }
+
+  const devInfoSummary = devInfoSummaryForRow(row);
+  if (devInfoSummary) {
+    const devFactor = devInfoSlimeShieldFactor(devInfoSummary);
+    score += Number(devFactor.weight || 0);
+    factors.push(devFactor);
+    if (["hold", "mixed", "risk", "dump"].includes(devInfoStatusClass(devInfoSummary.status))) {
+      known.push("devInfo");
+    } else {
+      unknown.push("devInfo");
+    }
   }
 
   const finalScore = Math.max(0, Math.min(100, Math.round(score)));
@@ -11958,13 +12039,14 @@ function terminalSignalRowsHtml(rows, options = {}) {
               ${miniTokenLinksHtml(row)}
             </div>
             ${terminalTokenStatsHtml(row)}
-            <div class="terminal-token-actions">
+            <div class="terminal-token-actions has-dev-info">
               <button type="button" class="primary" data-token-trade="${escapeHtml(row.tokenMint)}" data-token-trade-source="terminal-row" title="Open chart and buy/sell panel">${escapeHtml(actionLabel)}</button>
               <button type="button" data-quick-buy-token="${escapeHtml(row.tokenMint)}" data-quick-buy-source="terminal-row" title="Quick buy with preset or custom SOL amount">${escapeHtml(quickBuyButtonLabel())}</button>
               <button type="button" data-quick-bundle-token="${escapeHtml(row.tokenMint)}">Bundle</button>
               <button type="button" data-smart-chart-token="${escapeHtml(row.tokenMint)}">Chart</button>
               ${isKolContext ? kolDumpSignalButtonHtml(row) : ""}
               <button type="button" class="watch-action" data-watch-token="${escapeHtml(row.tokenMint)}" data-watch-symbol="${escapeHtml(row.symbol || "")}" data-watch-name="${escapeHtml(row.name || "")}" data-watch-image="${escapeHtml(livePairImageUrl(row) || "")}">${isTokenWatched(row.tokenMint) ? "Saved" : "Watch"}</button>
+              ${devInfoPillHtml(row, { compact: true })}
             </div>
           </article>
         `;
@@ -12000,13 +12082,14 @@ function compactSignalRowsHtml(rows, options = {}) {
             ${miniTokenLinksHtml(row)}
           </div>
           ${scoreBadgeHtml(row)}
-          <div class="compact-row-actions">
+          <div class="compact-row-actions has-dev-info">
             <button type="button" class="primary" data-token-trade="${escapeHtml(row.tokenMint)}" data-token-trade-source="compact-row" title="Open chart and buy/sell panel">${escapeHtml(actionLabel)}</button>
             <button type="button" data-quick-buy-token="${escapeHtml(row.tokenMint)}" data-quick-buy-source="compact-row" title="Quick buy with preset or custom SOL amount">${escapeHtml(quickBuyButtonLabel())}</button>
             <button type="button" data-quick-bundle-token="${escapeHtml(row.tokenMint)}">Bundle</button>
             <button type="button" data-smart-chart-token="${escapeHtml(row.tokenMint)}">Chart</button>
             ${isKolContext ? kolDumpSignalButtonHtml(row) : ""}
             <button type="button" class="watch-action" data-watch-token="${escapeHtml(row.tokenMint)}" data-watch-symbol="${escapeHtml(row.symbol || "")}" data-watch-name="${escapeHtml(row.name || "")}" data-watch-image="${escapeHtml(livePairImageUrl(row) || "")}">${isTokenWatched(row.tokenMint) ? "Saved" : "Watch"}</button>
+            ${devInfoPillHtml(row, { compact: true })}
           </div>
         </article>
       `).join("")}
@@ -12852,6 +12935,299 @@ async function loadSlimeShield(tokenMint = "", options = {}) {
   }
 }
 
+function devInfoFallbackResultForMint(tokenMint = "") {
+  const row = slimeShieldRowForMint(tokenMint) || rawSignalRowForMint(tokenMint) || { tokenMint };
+  const summary = devInfoSummaryForRow(row);
+  return {
+    mint: tokenMint,
+    pairAddress: row.pairAddress || "",
+    likelyDevWallet: summary.likelyDevWallet || null,
+    confidence: summary.confidence || "unknown",
+    status: devInfoStatusClass(summary.status),
+    label: summary.label || DEV_INFO_LABELS[devInfoStatusClass(summary.status)] || "?",
+    score: 50,
+    summary: summary.summary || "Not enough dev-wallet history yet.",
+    currentPosition: null,
+    historicalStats: { likelyDevWallet: summary.likelyDevWallet || null, launchesTracked: 0, recentLaunches: [] },
+    linkedWalletSignals: { notes: [] },
+    riskReasons: summary.likelyDevWallet ? [] : ["No reliable creator wallet detected yet."],
+    positiveReasons: [],
+    suggestedAction: "Check SlimeShield and liquidity before buying.",
+    updatedAt: summary.updatedAt || new Date().toISOString(),
+    dataSource: "ui-fallback"
+  };
+}
+
+function devInfoResultForMint(tokenMint = "") {
+  const mint = String(tokenMint || "").trim();
+  return state.devInfoResults?.[mint] || devInfoFallbackResultForMint(mint);
+}
+
+function devInfoMetric(value, suffix = "") {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "n/a";
+  return `${Math.round(number * 10) / 10}${suffix}`;
+}
+
+function confidenceLabel(value = "") {
+  const clean = String(value || "unknown").trim().toLowerCase();
+  if (clean === "high") return "High confidence";
+  if (clean === "medium") return "Medium confidence";
+  if (clean === "low") return "Low confidence";
+  return "Unknown";
+}
+
+function devInfoMinutes(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "n/a";
+  if (number < 60) return `${Math.max(0, Math.round(number))}m`;
+  return `${Math.round((number / 60) * 10) / 10}h`;
+}
+
+function devInfoWalletLabel(value = "") {
+  const wallet = String(value || "").trim();
+  return wallet ? shortAddress(wallet) : "Unknown";
+}
+
+async function loadDevInfoSummary(tokenMint = "", options = {}) {
+  const mint = String(tokenMint || "").trim();
+  if (!mint || !featureEnabled("devInfoEnabled", true)) return null;
+  if (!options.force && state.devInfoSummaries?.[mint]) return state.devInfoSummaries[mint];
+  const loadingKey = `summary:${mint}`;
+  if (state.devInfoLoading?.[loadingKey]) return null;
+  state.devInfoLoading = { ...(state.devInfoLoading || {}), [loadingKey]: true };
+  try {
+    const data = await api(`/api/web/dev-info/summary/${encodeURIComponent(mint)}`, {
+      timeoutMs: 2500,
+      preserveSafeError: true
+    });
+    const summary = data?.devInfoSummary || null;
+    if (summary) {
+      state.devInfoSummaries = { ...(state.devInfoSummaries || {}), [mint]: summary };
+      debugCounter(summary.cacheHit ? "devInfoCacheHit" : "devInfoCacheMiss");
+    }
+    return summary;
+  } catch {
+    return null;
+  } finally {
+    const nextLoading = { ...(state.devInfoLoading || {}) };
+    delete nextLoading[loadingKey];
+    state.devInfoLoading = nextLoading;
+    if (!options.silent) renderDevInfoDrawer();
+  }
+}
+
+async function loadDevInfoDetails(tokenMint = "", options = {}) {
+  const mint = String(tokenMint || "").trim();
+  if (!mint || !featureEnabled("devInfoEnabled", true)) return null;
+  if (!options.force && state.devInfoResults?.[mint]) return state.devInfoResults[mint];
+  const loadingKey = `details:${mint}`;
+  if (state.devInfoLoading?.[loadingKey]) return null;
+  state.devInfoLoading = { ...(state.devInfoLoading || {}), [loadingKey]: true };
+  renderDevInfoDrawer();
+  try {
+    const data = await api(`/api/web/dev-info/${encodeURIComponent(mint)}`, {
+      timeoutMs: 3000,
+      preserveSafeError: true
+    });
+    const result = data?.devInfo || null;
+    if (result) {
+      state.devInfoResults = { ...(state.devInfoResults || {}), [mint]: result };
+      state.devInfoSummaries = { ...(state.devInfoSummaries || {}), [mint]: {
+        mint,
+        status: result.status || "unknown",
+        label: result.label || DEV_INFO_LABELS[devInfoStatusClass(result.status)] || "?",
+        confidence: result.confidence || "unknown",
+        summary: result.summary || "",
+        likelyDevWallet: result.likelyDevWallet || null,
+        updatedAt: result.updatedAt || ""
+      } };
+      state.devInfoStatus = result.cacheHit ? "Loaded from cache." : "Updated from local history.";
+      debugCounter(result.cacheHit ? "devInfoCacheHit" : "devInfoCacheMiss");
+    }
+    return result;
+  } catch (error) {
+    state.devInfoStatus = error?.message || "Dev Info is temporarily unavailable.";
+    return null;
+  } finally {
+    const nextLoading = { ...(state.devInfoLoading || {}) };
+    delete nextLoading[loadingKey];
+    state.devInfoLoading = nextLoading;
+    renderDevInfoDrawer();
+  }
+}
+
+function openDevInfoDetails(tokenMint = "") {
+  const mint = String(tokenMint || "").trim();
+  if (!mint || !featureEnabled("devInfoEnabled", true)) return;
+  state.devInfoDetails = { open: true, tokenMint: mint };
+  state.devInfoStatus = "";
+  renderDevInfoDrawer();
+  void loadDevInfoSummary(mint);
+  void loadDevInfoDetails(mint);
+}
+
+function closeDevInfoDetails() {
+  state.devInfoDetails = { open: false, tokenMint: "" };
+  state.devInfoStatus = "";
+  renderDevInfoDrawer();
+}
+
+function scheduleVisibleDevInfoPrefetch(reason = "render") {
+  if (!featureEnabled("devInfoEnabled", true) || devInfoPrefetchTimer) return;
+  if (state.route !== "terminal") return;
+  devInfoPrefetchTimer = window.setTimeout(() => {
+    devInfoPrefetchTimer = null;
+    void prefetchVisibleDevInfoSummaries(reason);
+  }, 300);
+}
+
+async function prefetchVisibleDevInfoSummaries(reason = "render") {
+  if (!featureEnabled("devInfoEnabled", true)) return;
+  const rows = allVisibleSignalRows().slice(0, 16);
+  const mints = [];
+  const seen = new Set();
+  for (const row of rows) {
+    const mint = String(row.tokenMint || row.mint || row.tokenAddress || "").trim();
+    if (!mint || seen.has(mint) || state.devInfoSummaries?.[mint] || state.devInfoLoading?.[`summary:${mint}`]) continue;
+    seen.add(mint);
+    mints.push(mint);
+    if (mints.length >= 8) break;
+  }
+  if (!mints.length) return;
+  await Promise.allSettled(mints.map((mint) => loadDevInfoSummary(mint, { silent: true })));
+  recordPerfEvent({
+    component: "dev-info",
+    action: "prefetch-visible-summaries",
+    durationMs: 0,
+    resultCount: mints.length,
+    details: reason
+  });
+  scheduleLivePairsRender("dev-info-prefetch");
+}
+
+function devInfoReasonsHtml(items = [], empty = "No strong cached signal yet.") {
+  const rows = Array.isArray(items) ? items.filter(Boolean).slice(0, 5) : [];
+  if (!rows.length) return `<p class="slimeshield-muted">${escapeHtml(empty)}</p>`;
+  return `
+    <ul class="slimeshield-factor-list">
+      ${rows.map((item) => `<li><span>${escapeHtml(item)}</span></li>`).join("")}
+    </ul>
+  `;
+}
+
+function renderDevInfoDrawer() {
+  let root = document.querySelector("[data-dev-info-drawer-root]");
+  if (!root) {
+    root = document.createElement("div");
+    root.dataset.devInfoDrawerRoot = "true";
+    document.body.appendChild(root);
+  }
+  const details = state.devInfoDetails || {};
+  const open = Boolean(details.open && details.tokenMint);
+  document.body.classList.toggle("dev-info-drawer-open", open);
+  if (!open || !featureEnabled("devInfoEnabled", true)) {
+    root.innerHTML = "";
+    return;
+  }
+  const mint = String(details.tokenMint || "").trim();
+  const row = slimeShieldRowForMint(mint) || rawSignalRowForMint(mint) || { tokenMint: mint };
+  const result = devInfoResultForMint(mint);
+  const summary = state.devInfoSummaries?.[mint] || devInfoSummaryForRow(row);
+  const status = devInfoStatusClass(result.status || summary.status);
+  const confidence = result.confidence || summary.confidence || "unknown";
+  const loading = Boolean(state.devInfoLoading?.[`details:${mint}`]);
+  const wallet = result.likelyDevWallet || summary.likelyDevWallet || "";
+  const current = result.currentPosition || null;
+  const history = result.historicalStats || {};
+  const linked = result.linkedWalletSignals || {};
+  const recentLaunches = Array.isArray(history.recentLaunches) ? history.recentLaunches.slice(0, 5) : [];
+  root.innerHTML = `
+    <div class="slimeshield-drawer-backdrop" data-dev-info-close></div>
+    <aside class="dev-info-drawer" role="dialog" aria-modal="true" aria-label="Dev Info details">
+      <header>
+        <div>
+          <span>Dev Info</span>
+          <h3>${escapeHtml(DEV_INFO_LABELS[status] || "?")} · ${escapeHtml(confidenceLabel(confidence))}</h3>
+        </div>
+        <button type="button" aria-label="Close Dev Info" data-dev-info-close>Close</button>
+      </header>
+      <section class="dev-info-summary dev-info-${escapeHtml(status)}">
+        <strong>${escapeHtml(row.symbol || row.shortMint || shortAddress(mint))}</strong>
+        <p>${escapeHtml(result.summary || summary.summary || "Not enough dev-wallet history yet.")}</p>
+        <small>${loading ? "Updating..." : `Last updated ${escapeHtml(formatDate(result.updatedAt || summary.updatedAt))}`}</small>
+      </section>
+      <section>
+        <h4>Likely Dev Wallet</h4>
+        <dl class="kol-dump-metrics">
+          <div><dt>Wallet</dt><dd>${escapeHtml(devInfoWalletLabel(wallet))}</dd></div>
+          <div><dt>Confidence</dt><dd>${escapeHtml(confidenceLabel(confidence))}</dd></div>
+          <div><dt>Source</dt><dd>${escapeHtml(result.dataSource || "cache/local")}</dd></div>
+          <div><dt>Pair</dt><dd>${escapeHtml(shortAddress(result.pairAddress || row.pairAddress || ""))}</dd></div>
+        </dl>
+        <div class="slimeshield-drawer-actions">
+          ${wallet ? `<button type="button" data-copy="${escapeHtml(wallet)}">Copy Wallet</button>` : ""}
+          <button type="button" data-copy="${escapeHtml(mint)}">Copy CA</button>
+        </div>
+      </section>
+      <section>
+        <h4>Current Token Position</h4>
+        ${current ? `
+          <dl class="kol-dump-metrics">
+            <div><dt>Started</dt><dd>${escapeHtml(devInfoMetric(current.initialSupplyPercent, "%"))}</dd></div>
+            <div><dt>Current</dt><dd>${escapeHtml(devInfoMetric(current.currentSupplyPercent, "%"))}</dd></div>
+            <div><dt>Sold</dt><dd>${escapeHtml(devInfoMetric(current.estimatedSoldPercent, "%"))}</dd></div>
+            <div><dt>Status</dt><dd>${escapeHtml(String(current.positionStatus || "unknown").replace(/_/g, " "))}</dd></div>
+            <div><dt>First sell</dt><dd>${escapeHtml(devInfoMinutes(current.firstMajorSellMinutesAfterLaunch))}</dd></div>
+            <div><dt>Last sell</dt><dd>${escapeHtml(current.lastSellAt ? formatDate(current.lastSellAt) : "n/a")}</dd></div>
+          </dl>
+        ` : `<p class="slimeshield-muted">Current dev position unavailable. SlimeWire needs more local history for this wallet.</p>`}
+      </section>
+      <section>
+        <h4>Dev Dump History</h4>
+        <dl class="kol-dump-metrics">
+          <div><dt>Past launches</dt><dd>${escapeHtml(history.launchesTracked ?? 0)}</dd></div>
+          <div><dt>Median first sell</dt><dd>${escapeHtml(devInfoMinutes(history.medianFirstSellMinutes))}</dd></div>
+          <div><dt>Median hold</dt><dd>${escapeHtml(devInfoMinutes(history.medianHoldMinutes))}</dd></div>
+          <div><dt>&gt;50% sold 15m</dt><dd>${escapeHtml(devInfoMetric(history.soldMoreThan50Within15mPercent, "%"))}</dd></div>
+          <div><dt>&gt;50% sold 1h</dt><dd>${escapeHtml(devInfoMetric(history.soldMoreThan50Within1hPercent, "%"))}</dd></div>
+          <div><dt>Held past 24h</dt><dd>${escapeHtml(devInfoMetric(history.heldPast24hPercent, "%"))}</dd></div>
+        </dl>
+        ${recentLaunches.length ? `
+          <ul class="dev-info-launches">
+            ${recentLaunches.map((launch) => `<li><span>${escapeHtml(launch.symbol || shortAddress(launch.mint || ""))}</span><small>${escapeHtml(launch.outcomeLabel || "unknown")} · first sell ${escapeHtml(devInfoMinutes(launch.firstSellMinutes))}</small></li>`).join("")}
+          </ul>
+        ` : `<p class="slimeshield-muted">Limited history. This improves as SlimeWire tracks more launches and wallet events.</p>`}
+      </section>
+      <section>
+        <h4>Risk Signals</h4>
+        ${devInfoReasonsHtml(result.riskReasons, "No cached dev-wallet risk reason yet.")}
+      </section>
+      <section>
+        <h4>Positive Signals</h4>
+        ${devInfoReasonsHtml(result.positiveReasons, "No positive dev-wallet signal is strong enough yet.")}
+      </section>
+      <section>
+        <h4>Linked Wallet Clues</h4>
+        <p class="slimeshield-muted">${escapeHtml(linked.linkedWalletCount ? `${linked.linkedWalletCount} linked wallet clue(s) cached.` : "No linked-wallet cluster detail cached yet.")}</p>
+        ${devInfoReasonsHtml(linked.notes, "No linked-wallet notes cached.")}
+      </section>
+      <section class="slimeshield-action-note">
+        <h4>Suggested Action</h4>
+        <p>${escapeHtml(result.suggestedAction || "Check SlimeShield and liquidity before buying.")}</p>
+      </section>
+      <div class="slimeshield-drawer-actions">
+        <button type="button" data-watch-token="${escapeHtml(mint)}" data-watch-symbol="${escapeHtml(row.symbol || "")}" data-watch-name="${escapeHtml(row.name || "")}" data-watch-image="${escapeHtml(livePairImageUrl(row) || "")}">${isTokenWatched(mint) ? "Saved" : "Add Watch"}</button>
+        <button type="button" data-slimeshield-details="${escapeHtml(mint)}">Open SlimeShield</button>
+        ${featureEnabled("protectedBuyEnabled", true) ? `<button type="button" class="primary" data-protected-buy-open="${escapeHtml(mint)}" data-protected-buy-source="dev-info-drawer">Protected Buy</button>` : ""}
+        <button type="button" data-dev-info-refresh="${escapeHtml(mint)}" ${loading ? "disabled" : ""}>${loading ? "Updating..." : "Refresh"}</button>
+      </div>
+      <p class="slimeshield-safety-copy">Dev Info is based on wallet behavior SlimeWire can observe. It is not financial advice and may be incomplete.</p>
+      ${state.devInfoStatus ? `<small class="slimeshield-status">${escapeHtml(state.devInfoStatus)}</small>` : ""}
+    </aside>
+  `;
+}
+
 function replayFallbackResult(tokenMint = "") {
   return {
     mint: tokenMint,
@@ -13029,6 +13405,8 @@ function renderSlimeShieldDetailsDrawer() {
     ...(Array.isArray(row.scoreWarnings) ? row.scoreWarnings : []),
     ...(Array.isArray(row.bestPickWarnings) ? row.bestPickWarnings : [])
   ].filter(Boolean).slice(0, 4);
+  const devInfo = devInfoSummaryForRow(row);
+  const devInfoStatus = devInfoStatusClass(devInfo.status);
   root.innerHTML = `
     <div class="slimeshield-drawer-backdrop" data-slimeshield-close></div>
     <aside class="slimeshield-drawer" role="dialog" aria-modal="true" aria-label="SlimeShield details">
@@ -13056,9 +13434,13 @@ function renderSlimeShieldDetailsDrawer() {
           <div><dt>Liquidity</dt><dd>${escapeHtml(row.liquidityLabel || (livePairLiquidityUsd(row) > 0 ? compactUsd(livePairLiquidityUsd(row)) : "n/a"))}</dd></div>
           <div><dt>MC / FDV</dt><dd>${escapeHtml(row.marketCapLabel || (livePairMarketCap(row) > 0 ? compactUsd(livePairMarketCap(row)) : "n/a"))}</dd></div>
           <div><dt>Volume</dt><dd>${escapeHtml(row.volumeH1Label || row.volumeLabel || "n/a")}</dd></div>
+          <div><dt>Dev Info</dt><dd>${escapeHtml(DEV_INFO_LABELS[devInfoStatus] || "?")} · ${escapeHtml(devInfo.confidence || "unknown")}</dd></div>
           <div><dt>Dev/risk notes</dt><dd>${escapeHtml(riskText.length ? riskText.join(" | ") : "no cached hard flags")}</dd></div>
         </dl>
-        ${tokenLinks.length ? `<div class="slimeshield-drawer-actions">${tokenLinks.map((link) => `<a href="${escapeHtml(link.url)}" target="_blank" rel="noreferrer">${escapeHtml(link.label)}</a>`).join("")}</div>` : ""}
+        <div class="slimeshield-drawer-actions">
+          ${tokenLinks.map((link) => `<a href="${escapeHtml(link.url)}" target="_blank" rel="noreferrer">${escapeHtml(link.label)}</a>`).join("")}
+          ${featureEnabled("devInfoEnabled", true) ? `<button type="button" data-dev-info="${escapeHtml(mint)}">Open Dev Info</button>` : ""}
+        </div>
       </section>
       <section>
         <h4>Top Risk Reasons</h4>
@@ -13997,11 +14379,12 @@ function tokenSignalRowHtml(row, index, options = {}) {
         <span>${escapeHtml(firstStatLabel(row.volumeH1Label, row.volumeLabel, livePairVolumeH1(row) > 0 ? compactUsd(livePairVolumeH1(row)) : "", "checking"))}</span>
         <small>${volumeWindowItems(row).map(([label, value]) => `${label} ${value}`).join(" | ")}</small>
       </div>
-      <div class="signal-actions">
+      <div class="signal-actions has-dev-info">
         ${primaryAction === "snipe" ? `<button type="button" class="primary" data-sniper-buy="${escapeHtml(row.tokenMint)}">${escapeHtml(actionLabel)}</button>` : `<button type="button" class="primary" data-token-trade="${escapeHtml(row.tokenMint)}" data-token-trade-source="${escapeHtml(options.context || "signal-row")}">Trade</button><button type="button" data-quick-buy-token="${escapeHtml(row.tokenMint)}" data-quick-buy-source="${escapeHtml(options.context || "signal-row")}">${escapeHtml(quickBuyButtonLabel())}</button>`}
         <button type="button" data-quick-bundle-token="${escapeHtml(row.tokenMint)}">Bundle</button>
         ${isKolContext ? kolDumpSignalButtonHtml(row) : ""}
         ${watchButton}
+        ${devInfoPillHtml(row)}
       </div>
     </article>
   `;
@@ -14879,6 +15262,7 @@ function ogreAgentContext() {
   const activeMint = String(state.smartChartToken || state.tradeToken || ogreAgentLastTokenMint() || "").trim();
   const activeRow = activeMint ? slimeShieldRowForMint(activeMint) : null;
   const shield = activeRow?.tokenMint ? slimeShieldResultForRow(activeRow) : null;
+  const devInfo = activeMint ? devInfoResultForMint(activeMint) : null;
   const replay = activeMint ? replayResultForMint(activeMint) : null;
   const kolDumpRows = kolDumpStatsRows().slice(0, 3);
   const openPosition = activeMint ? portfolioPositions().find((position) => String(position.tokenMint || "") === activeMint) : null;
@@ -14915,6 +15299,14 @@ function ogreAgentContext() {
       confidence: shield.confidence,
       suggestedAction: shield.suggestedAction,
       topFactors: (shield.factors || []).slice(0, 4).map((factor) => factor.message || factor.label || factor.key)
+    } : null,
+    devInfoSummary: devInfo ? {
+      status: devInfo.status,
+      confidence: devInfo.confidence,
+      summary: devInfo.summary,
+      likelyDevWalletShort: devInfo.likelyDevWallet ? shortAddress(devInfo.likelyDevWallet) : "",
+      currentPositionStatus: devInfo.currentPosition?.positionStatus || "unknown",
+      launchesTracked: devInfo.historicalStats?.launchesTracked || 0
     } : null,
     kolDumpDetector: kolDumpRows.length ? kolDumpRows.map((row) => ({
       displayName: row.displayName,
@@ -15084,6 +15476,7 @@ function ogreAgentHtml() {
         </div>
         <div class="ogre-agent-quick-actions" aria-label="Ogre Agent quick actions">
           <button type="button" data-ogre-agent-quick="risk">Why Risk?</button>
+          <button type="button" data-ogre-agent-quick="dev_info">Dev Info</button>
           <button type="button" data-ogre-agent-quick="protected_buy">Protected Buy?</button>
           <button type="button" data-ogre-agent-quick="replay">Replay</button>
           <button type="button" data-ogre-agent-quick="positions">Positions</button>
@@ -16534,6 +16927,7 @@ document.addEventListener("click", async (event) => {
     if (quick === "positions") void runOgreAgentAction({ type: "open_tab", tab: "positions" });
     if (quick === "refresh_feeds") void runOgreAgentAction({ type: "refresh_feeds" });
     if (quick === "risk") void sendOgreAgentMessage("Why is this token risky?");
+    if (quick === "dev_info") void sendOgreAgentMessage("Explain Dev Info for this token.");
     if (quick === "protected_buy") void sendOgreAgentMessage("Should I use Protected Buy?");
     if (quick === "replay") void sendOgreAgentMessage("Replay similar launches for this token.");
     if (quick === "auto_trade") void runOgreAgentAction({ type: "approve_agent_auto_trade" });
@@ -17028,6 +17422,21 @@ document.addEventListener("click", async (event) => {
       errorMessage: terminalFeedRuntime(tabKey).errorMessage || ""
     });
     render({ force: true });
+    return;
+  }
+  if (target.matches("[data-dev-info]")) {
+    event.preventDefault();
+    event.stopPropagation();
+    openDevInfoDetails(target.dataset.devInfo || "");
+    return;
+  }
+  if (target.matches("[data-dev-info-close]")) {
+    closeDevInfoDetails();
+    return;
+  }
+  if (target.matches("[data-dev-info-refresh]")) {
+    const mint = target.dataset.devInfoRefresh || state.devInfoDetails?.tokenMint || "";
+    await loadDevInfoDetails(mint, { force: true });
     return;
   }
   if (target.matches("[data-watch-token]")) await updateWatchlist("add", target);

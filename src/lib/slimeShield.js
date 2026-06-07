@@ -1,3 +1,5 @@
+import { devInfoSlimeShieldFactor } from "./devInfo.js";
+
 function parseNumber(value) {
   if (value === null || value === undefined || value === "") return null;
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
@@ -172,6 +174,20 @@ export function computeSlimeShield(row = {}, options = {}) {
     } else {
       score += 4;
       factors.push(factor("kol_trusted", "KOL Flow", "positive", "Tracked KOL flow is not showing high dump risk.", 4));
+    }
+  }
+
+  const devInfoSummary = row.devInfoSummary || row.devInfo || null;
+  if (devInfoSummary && typeof devInfoSummary === "object") {
+    const devFactor = devInfoSlimeShieldFactor(devInfoSummary);
+    if (devFactor) {
+      score += Number(devFactor.weight || 0);
+      factors.push(devFactor);
+      if (["hold", "mixed", "risk", "dump"].includes(String(devInfoSummary.status || "").toLowerCase())) {
+        knownSignals.push("devInfo");
+      } else {
+        unknownSignals.push("devInfo");
+      }
     }
   }
 
