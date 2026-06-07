@@ -955,6 +955,40 @@ window.addEventListener("popstate", () => {
   render();
 });
 
+let marketTickerInteractionsInstalled = false;
+
+function closeMarketTickerMenus(except = null) {
+  document.querySelectorAll("[data-market-ticker] details.swamp-ticker-item[open]").forEach((details) => {
+    if (except && details === except) return;
+    details.open = false;
+  });
+}
+
+function initializeMarketTickerInteractions() {
+  if (marketTickerInteractionsInstalled) return;
+  marketTickerInteractionsInstalled = true;
+  document.addEventListener("click", (event) => {
+    const target = event.target;
+    const tickerItem = target?.closest?.("[data-market-ticker] details.swamp-ticker-item");
+    if (!target?.closest?.("[data-market-ticker]")) {
+      closeMarketTickerMenus();
+      return;
+    }
+    if (target?.closest?.(".swamp-ticker-links a")) {
+      window.setTimeout(() => closeMarketTickerMenus(), 80);
+      return;
+    }
+    if (tickerItem && target?.closest?.("summary")) {
+      window.requestAnimationFrame(() => {
+        if (tickerItem.open) closeMarketTickerMenus(tickerItem);
+      });
+    }
+  }, true);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeMarketTickerMenus();
+  });
+}
+
 function apiUrl(path) {
   return `${apiBase}${path}`;
 }
@@ -5198,6 +5232,12 @@ function openWalletConnectChooser({ returnPath = "/terminal" } = {}) {
   render({ force: true });
 }
 
+function openWalletConnectModal(options = {}) {
+  return openWalletConnectChooser(options);
+}
+
+window.openWalletConnectModal = openWalletConnectModal;
+
 function renderWalletConnectModal() {
   const modal = $("[data-wallet-connect-modal]");
   if (!modal) return;
@@ -5258,6 +5298,7 @@ function quickBuyModalHtml() {
   const token = selectedSmartChartTokenRow()?.tokenMint === modal.tokenMint
     ? selectedSmartChartTokenRow()
     : tokenRefFromMint(modal.tokenMint, { source: modal.source || "quick-buy-modal" });
+  const submitting = /validating|submitting|opening wallet/i.test(String(modal.status || ""));
   return `
     <div class="quick-buy-backdrop" data-quick-buy-close></div>
     <section class="quick-buy-dialog" role="dialog" aria-modal="true" aria-label="Quick Buy">
@@ -5295,7 +5336,7 @@ function quickBuyModalHtml() {
       <div class="quick-buy-actions">
         <button type="button" data-token-trade="${escapeHtml(modal.tokenMint || "")}" data-token-trade-source="quick-buy-modal">Open Full Trade</button>
         ${featureEnabled("protectedBuyEnabled", true) ? `<button type="button" data-protected-buy-open="${escapeHtml(modal.tokenMint || "")}" data-protected-buy-source="quick-buy-modal">Protected Buy</button>` : ""}
-        <button type="button" class="primary" data-quick-buy-confirm>Confirm Buy</button>
+        <button type="button" class="primary" data-quick-buy-confirm ${submitting ? "disabled" : ""}>${submitting ? "Working..." : "Confirm Buy"}</button>
       </div>
       ${modal.status ? `<small class="connect-status">${escapeHtml(modal.status)}</small>` : ""}
       ${modal.error ? `<small class="warning-text">${escapeHtml(modal.error)}</small>` : ""}
@@ -13097,6 +13138,9 @@ const SLIME_SCOPE_NEW_MAX_AGE_SECONDS = 7200;
 const SLIME_SCOPE_FRESH_MAX_MARKET_CAP = 750_000;
 const SLIME_SCOPE_STEADY_MAX_AGE_SECONDS = 86_400;
 const SLIME_SCOPE_STEADY_MAX_MARKET_CAP = 2_000_000;
+const SLIME_SCOPE_GRADUATING_MIN_MARKET_CAP = 45_000;
+const SLIME_SCOPE_GRADUATING_MAX_MARKET_CAP = 180_000;
+const SLIME_SCOPE_GRADUATED_MARKET_CAP_HINT = 250_000;
 
 function slimeScopeSourceRows() {
   const marketByMint = marketDataRowsByMint();
@@ -13138,7 +13182,10 @@ function isGraduatingSlimeScopeRow(row = {}) {
   if (isGraduatedSlimeScopeRow(row)) return false;
   const progress = slimeScopeProgressPct(row);
   const marketCap = slimeScopeMarketCap(row);
-  return progress >= 70 || marketCap >= 45_000;
+  const marketCapInGraduatingBand = marketCap >= SLIME_SCOPE_GRADUATING_MIN_MARKET_CAP
+    && marketCap <= SLIME_SCOPE_GRADUATING_MAX_MARKET_CAP;
+  return (progress >= 70 && (!marketCap || marketCap <= SLIME_SCOPE_GRADUATING_MAX_MARKET_CAP))
+    || marketCapInGraduatingBand;
 }
 
 function isSteadySlimeScopeRow(row = {}) {
@@ -13196,6 +13243,8 @@ function isGraduatedSlimeScopeRow(row = {}) {
   const text = slimeScopeTextBlob(row);
   if (/\b(graduated|bonded|bonding complete|complete)\b/.test(text)) return true;
   const isPump = Boolean(row.isPump) || text.includes("pump") || String(row.tokenMint || "").toLowerCase().endsWith("pump");
+  const marketCap = slimeScopeMarketCap(row);
+  if (isPump && marketCap >= SLIME_SCOPE_GRADUATED_MARKET_CAP_HINT) return true;
   return Boolean(isPump && /\b(raydium|meteora|orca)\b/.test(text));
 }
 
@@ -18718,6 +18767,7 @@ async function initializeApp() {
   installPerformanceInstrumentation();
   installCrashInstrumentation();
   installSlimewireImageFallbacks();
+  initializeMarketTickerInteractions();
   if (state.route === "intro") initializeIntroVideoGate();
   else pauseIntroVideoGate({ reset: true });
   startAppWatchdog();

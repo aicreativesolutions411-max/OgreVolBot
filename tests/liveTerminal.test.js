@@ -175,3 +175,15 @@ test("slime scope treats pump pairs on graduation DEXes as graduated", () => {
   assert.equal(isGraduatedSlimeScopePair(raydiumPump), true);
   assert.equal(classifySlimeScopePair(raydiumPump, NOW), "graduated");
 });
+
+test("slime scope does not keep high market-cap pump tokens in graduating", () => {
+  const alreadyRunning = {
+    tokenMint: "bigPump",
+    isPump: true,
+    pairCreatedAt: minutesAgo(90),
+    marketCap: 2_000_000
+  };
+
+  assert.equal(isGraduatedSlimeScopePair(alreadyRunning), true);
+  assert.equal(classifySlimeScopePair(alreadyRunning, NOW), "graduated");
+});

@@ -136,6 +136,9 @@ const ABSURD_THIN_LIQUIDITY_MARKET_CAP_USD = 100_000_000;
 const ABSURD_THIN_LIQUIDITY_RATIO = 0.01;
 const BROAD_NEW_WINDOW_MINUTES = 120;
 const FRESH_LAUNCH_WINDOW_MINUTES = 30;
+const PUMP_GRADUATING_MIN_MARKET_CAP_USD = 45_000;
+const PUMP_GRADUATING_MAX_MARKET_CAP_USD = 180_000;
+const PUMP_GRADUATED_MARKET_CAP_HINT_USD = 250_000;
 
 function textBlob(row = {}) {
   return [
@@ -191,7 +194,11 @@ export function classifyPairCategory(row = {}, now = Date.now()) {
   if (isGraduatedSlimeScopePair(row)) return PAIR_CATEGORIES.GRADUATED;
   const progress = slimeScopeProgressPct(row);
   const marketCap = firstPositiveNumber(row.marketCap, row.fdv);
-  if (progress >= 70 || marketCap >= 45_000) return PAIR_CATEGORIES.GRADUATING;
+  const inGraduatingMarketCapBand = marketCap >= PUMP_GRADUATING_MIN_MARKET_CAP_USD
+    && marketCap <= PUMP_GRADUATING_MAX_MARKET_CAP_USD;
+  if ((progress >= 70 && (!marketCap || marketCap <= PUMP_GRADUATING_MAX_MARKET_CAP_USD)) || inGraduatingMarketCapBand) {
+    return PAIR_CATEGORIES.GRADUATING;
+  }
 
   const ageMinutes = pairAgeMinutes(row, now);
   const hints = [
@@ -287,6 +294,8 @@ export function isGraduatedSlimeScopePair(row = {}) {
   const text = textBlob(row);
   if (/\b(graduated|bonded|bonding complete|complete)\b/.test(text)) return true;
   const isPump = Boolean(row.isPump) || String(row.tokenMint || "").toLowerCase().endsWith("pump") || text.includes("pump");
+  const marketCap = firstPositiveNumber(row.marketCap, row.fdv);
+  if (isPump && marketCap >= PUMP_GRADUATED_MARKET_CAP_HINT_USD) return true;
   return isPump && /\b(raydium|meteora|orca)\b/.test(text);
 }
 

@@ -2078,6 +2078,11 @@ html body main.shell[data-app] .clip-farm-control small {
   }
 }
 
+/* TICKER_CLICKABLE_CLONES_20260607_V1: both scrolling tape copies expose links; menus close on click-off in JS. */
+html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-strip {
+  pointer-events: auto !important;
+}
+
 /* MOBILE_TERMINAL_RAIL_AND_REFRESH_STABILITY_20260607_V1: compact rail, no pair bleed, calmer refresh. */
 @media (max-width: 760px) {
   html,
@@ -13495,5 +13500,144 @@ body:has(main.shell[data-app][data-route="connect"]) [data-ogre-agent-root] {
 
   html body main.shell[data-app][data-route="terminal"] .panel-host {
     padding: 7px !important;
+  }
+}
+
+/* MOBILE_SLIM_HOTKEY_RAIL_FINAL_20260607_V1: final override after legacy mobile blocks. */
+@media (max-width: 760px) {
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] {
+    align-items: start !important;
+    display: grid !important;
+    gap: 4px !important;
+    grid-template-columns: 46px minmax(0, 1fr) !important;
+    overflow: visible !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .metrics,
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > [data-dashboard-error] {
+    grid-column: 1 / -1 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs {
+    align-self: start !important;
+    background: linear-gradient(180deg, rgba(7, 26, 9, 0.94), rgba(0, 8, 3, 0.98)) !important;
+    border: 1px solid rgba(107, 255, 43, 0.34) !important;
+    border-radius: 999px !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 6px !important;
+    grid-column: 1 !important;
+    margin: 4px 0 8px 4px !important;
+    max-height: calc(100svh - 38px) !important;
+    max-width: 42px !important;
+    min-width: 42px !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    padding: 4px 3px !important;
+    position: sticky !important;
+    scrollbar-width: none !important;
+    top: calc(28px + env(safe-area-inset-top, 0px)) !important;
+    width: 42px !important;
+    z-index: 90 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs::-webkit-scrollbar {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .panel-host,
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > [data-panel] {
+    grid-column: 2 !important;
+    min-width: 0 !important;
+    padding: 4px 4px 12px 0 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-section-label,
+  html body main.shell[data-app][data-route="terminal"] .tabs button::after,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group summary::after,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button::after {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs > button,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group > summary,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button {
+    align-items: center !important;
+    border-radius: 999px !important;
+    display: flex !important;
+    flex: 0 0 36px !important;
+    font-size: 0 !important;
+    gap: 0 !important;
+    height: 36px !important;
+    justify-content: center !important;
+    line-height: 0 !important;
+    margin: 0 !important;
+    max-height: 36px !important;
+    max-width: 36px !important;
+    min-height: 36px !important;
+    min-width: 36px !important;
+    padding: 0 !important;
+    width: 36px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs button::before,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group summary::before,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button::before,
+  html body main.shell[data-app][data-route="terminal"] .tabs button img,
+  html body main.shell[data-app][data-route="terminal"] .tabs button svg {
+    flex: 0 0 18px !important;
+    height: 18px !important;
+    margin: 0 !important;
+    width: 18px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs button[data-active="true"],
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group:has(button[data-active="true"]) > summary {
+    background: linear-gradient(180deg, #9aff35, #28d40e) !important;
+    border-color: rgba(178, 255, 73, 0.9) !important;
+    color: #031305 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group {
+    background: transparent !important;
+    border: 0 !important;
+    display: flex !important;
+    flex: 0 0 auto !important;
+    flex-direction: column !important;
+    gap: 6px !important;
+    grid-column: auto !important;
+    margin: 0 !important;
+    max-width: 36px !important;
+    min-width: 36px !important;
+    padding: 0 !important;
+    width: 36px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group[open] {
+    background: rgba(10, 40, 12, 0.82) !important;
+    border: 1px solid rgba(107, 255, 43, 0.32) !important;
+    border-radius: 999px !important;
+    margin-left: -1px !important;
+    padding: 3px !important;
+    width: 42px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group:not([open]) button {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group[open] button {
+    display: flex !important;
+    opacity: 1 !important;
+    position: relative !important;
+    transform: none !important;
+    visibility: visible !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .panel-host > *,
+  html body main.shell[data-app][data-route="terminal"] .terminal-main,
+  html body main.shell[data-app][data-route="terminal"] .terminal-layout,
+  html body main.shell[data-app][data-route="terminal"] .live-terminal {
+    min-width: 0 !important;
   }
 }

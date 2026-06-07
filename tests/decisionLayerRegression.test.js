@@ -323,12 +323,24 @@ test("landing sponsor and KOL entries use the compact top ticker", () => {
   assert.match(cssSource, /main\.shell\[data-app\] \.swamp-market-ticker\[data-market-ticker\][\s\S]*position: fixed/);
   assert.match(cssSource, /swamp-market-ticker\[data-market-ticker\][\s\S]*height: 24px !important/);
   assert.match(cssSource, /swamp-market-ticker\[data-market-ticker\][\s\S]*max-width: 18px !important/);
+  assert.match(appSource, /function initializeMarketTickerInteractions\(\)/);
+  assert.match(appSource, /closeMarketTickerMenus/);
+  assert.doesNotMatch(indexSource, /swamp-ticker-strip" aria-hidden="true" inert/);
+  assert.match(indexSource, /swamp-ticker-strip">\s*<span class="swamp-ticker-section">Sponsors<\/span>[\s\S]*Open USD2 ticker links[\s\S]*Open God's Plan ticker links/);
   assert.match(cssSource, /login-view\.swamp-splash::before[\s\S]*aspect-ratio: 4 \/ 3 !important/);
   assert.match(cssSource, /body:has\(main\.shell\[data-app\]\[data-route="intro"\]\) \[data-ogre-agent-root\][\s\S]*display: none !important/);
   assert.match(indexSource, /Stablecoin Partner/);
   assert.match(indexSource, /usd2-sponsor-logo\.jpg"[^>]*width="18" height="18"/);
   assert.doesNotMatch(indexSource, /swamp-sponsor-frame/);
   assert.doesNotMatch(indexSource, /swamp-kol-frame/);
+});
+
+test("mobile terminal nav is a slim icon rail and quick buy can open the wallet chooser", () => {
+  assert.match(cssSource, /MOBILE_SLIM_HOTKEY_RAIL_FINAL_20260607_V1/);
+  assert.match(cssSource, /grid-template-columns: 46px minmax\(0, 1fr\) !important/);
+  assert.match(cssSource, /\.tabs button::after,[\s\S]*display: none !important/);
+  assert.match(appSource, /function openWalletConnectModal\(options = \{\}\)/);
+  assert.match(appSource, /return openWalletConnectChooser\(options\)/);
 });
 
 test("dev-only performance counters include requested smoothness diagnostics", () => {
