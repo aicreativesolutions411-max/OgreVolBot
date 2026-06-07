@@ -1324,6 +1324,8 @@ const spotifyFallbackItems = [
   { type: "playlist", id: "37i9dQZF1DX4sWSpwq3LiO", name: "Peaceful Piano", artist: "Spotify", subtitle: "Low-lag focus" }
 ];
 let spotifyTokenCache = { token: "", expiresAt: 0 };
+const spotifyOauthStates = new Map();
+const spotifyUserSessions = new Map();
 
 function spotifyClientId() {
   return String(process.env.SPOTIFY_CLIENT_ID || process.env.SPOTIFY_WEB_CLIENT_ID || "").trim();
@@ -1335,6 +1337,47 @@ function spotifyClientSecret() {
 
 function spotifyConfigured() {
   return Boolean(spotifyClientId() && spotifyClientSecret());
+}
+
+function spotifyPublicBaseUrl(request) {
+  const configured = String(process.env.PUBLIC_WEB_URL || process.env.SITE_URL || process.env.SLIMEWIRE_PUBLIC_URL || "").trim();
+  if (configured) return configured.replace(/\/+$/, "");
+  const host = request.headers["x-forwarded-host"] || request.headers.host || "slimewire.org";
+  const proto = request.headers["x-forwarded-proto"] || "https";
+  return `${proto}://${host}`.replace(/\/+$/, "");
+}
+
+function spotifyRedirectUri(request) {
+  return String(process.env.SPOTIFY_REDIRECT_URI || `${spotifyPublicBaseUrl(request)}/api/web/spotify/callback`).trim();
+}
+
+function spotifyCookieValue(request, name) {
+  const cookie = String(request.headers.cookie || "");
+  for (const part of cookie.split(";")) {
+    const [rawKey, ...rawValue] = part.trim().split("=");
+    if (rawKey === name) return decodeURIComponent(rawValue.join("=") || "");
+  }
+  return "";
+}
+
+function spotifySessionCookie(sessionId) {
+  return `slime_spotify_sid=${encodeURIComponent(sessionId)}; Path=/; Max-Age=2592000; SameSite=Lax; Secure; HttpOnly`;
+}
+
+function spotifyClearSessionCookie() {
+  return "slime_spotify_sid=; Path=/; Max-Age=0; SameSite=Lax; Secure; HttpOnly";
+}
+
+function spotifySessionForRequest(request) {
+  const sessionId = spotifyCookieValue(request, "slime_spotify_sid");
+  if (!sessionId) return null;
+  const session = spotifyUserSessions.get(sessionId);
+  if (!session) return null;
+  if (session.expiresAt && session.expiresAt < Date.now() - 86_400_000) {
+    spotifyUserSessions.delete(sessionId);
+    return null;
+  }
+  return { id: sessionId, ...session };
 }
 
 function spotifyItemUrl(type, id) {
@@ -1400,14 +1443,98 @@ async function spotifyClientAccessToken() {
   return spotifyTokenCache.token;
 }
 
+async function spotifyUserAccessToken(request) {
+  const session = spotifySessionForRequest(request);
+  if (!session) return "";
+  if (session.accessToken && session.expiresAt > Date.now() + 20_000) return session.accessToken;
+  if (!session.refreshToken || !spotifyConfigured()) return "";
+  const basic = Buffer.from(`${spotifyClientId()}:${spotifyClientSecret()}`).toString("base64");
+  const tokenResponse = await fetch("https://accounts.spotify.com/api/token", {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${basic}`,
+      "Content-Type": "application/x-www-form-urlencoded"
+    },
+    body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: session.refreshToken }),
+    signal: AbortSignal.timeout ? AbortSignal.timeout(8_000) : undefined
+  });
+  if (!tokenResponse.ok) return "";
+  const token = await tokenResponse.json();
+  const refreshed = {
+    ...session,
+    accessToken: String(token.access_token || ""),
+    refreshToken: String(token.refresh_token || session.refreshToken || ""),
+    expiresAt: Date.now() + Math.max(60, Number(token.expires_in || 1800) - 60) * 1000
+  };
+  spotifyUserSessions.set(session.id, refreshed);
+  return refreshed.accessToken;
+}
+
+async function handleSpotifyLogin(request, response) {
+  if (!spotifyConfigured()) {
+    response.writeHead(302, { Location: "/terminal?spotify=needs_keys", "Cache-Control": "no-store" });
+    response.end();
+    return;
+  }
+  const state = crypto.randomBytes(16).toString("hex");
+  spotifyOauthStates.set(state, Date.now() + 10 * 60 * 1000);
+  const authUrl = new URL("https://accounts.spotify.com/authorize");
+  authUrl.searchParams.set("client_id", spotifyClientId());
+  authUrl.searchParams.set("response_type", "code");
+  authUrl.searchParams.set("redirect_uri", spotifyRedirectUri(request));
+  authUrl.searchParams.set("state", state);
+  authUrl.searchParams.set("scope", "playlist-read-private playlist-read-collaborative user-read-private");
+  response.writeHead(302, { Location: authUrl.toString(), "Cache-Control": "no-store" });
+  response.end();
+}
+
+async function handleSpotifyCallback(request, response, requestUrl) {
+  const code = String(requestUrl.searchParams.get("code") || "");
+  const state = String(requestUrl.searchParams.get("state") || "");
+  const expiry = spotifyOauthStates.get(state) || 0;
+  spotifyOauthStates.delete(state);
+  if (!code || !state || expiry < Date.now() || !spotifyConfigured()) {
+    response.writeHead(302, { Location: "/terminal?spotify=failed", "Set-Cookie": spotifyClearSessionCookie(), "Cache-Control": "no-store" });
+    response.end();
+    return;
+  }
+  try {
+    const basic = Buffer.from(`${spotifyClientId()}:${spotifyClientSecret()}`).toString("base64");
+    const tokenResponse = await fetch("https://accounts.spotify.com/api/token", {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${basic}`,
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: spotifyRedirectUri(request) }),
+      signal: AbortSignal.timeout ? AbortSignal.timeout(10_000) : undefined
+    });
+    if (!tokenResponse.ok) throw new Error(`Spotify callback token failed: ${tokenResponse.status}`);
+    const token = await tokenResponse.json();
+    const sessionId = crypto.randomBytes(20).toString("hex");
+    spotifyUserSessions.set(sessionId, {
+      accessToken: String(token.access_token || ""),
+      refreshToken: String(token.refresh_token || ""),
+      expiresAt: Date.now() + Math.max(60, Number(token.expires_in || 1800) - 60) * 1000
+    });
+    response.writeHead(302, { Location: "/terminal?spotify=connected", "Set-Cookie": spotifySessionCookie(sessionId), "Cache-Control": "no-store" });
+    response.end();
+  } catch (error) {
+    console.warn("Spotify callback failed:", friendlyError(error));
+    response.writeHead(302, { Location: "/terminal?spotify=failed", "Set-Cookie": spotifyClearSessionCookie(), "Cache-Control": "no-store" });
+    response.end();
+  }
+}
+
 async function handleSpotifyStatus(request, response) {
+  const connected = Boolean(spotifySessionForRequest(request));
   sendWebJson(request, response, 200, {
     ok: true,
     configured: spotifyConfigured(),
-    connected: false,
+    connected,
     connectReady: spotifyConfigured(),
     note: spotifyConfigured()
-      ? "Spotify catalog search is ready. Account playlist connect can be layered onto these credentials."
+      ? connected ? "Spotify is connected. Search and playlists are ready." : "Spotify catalog search is ready. Connect to load your playlists."
       : "Add SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET on Render for full catalog search/connect."
   });
 }
@@ -1415,7 +1542,8 @@ async function handleSpotifyStatus(request, response) {
 async function handleSpotifySearch(request, response, requestUrl) {
   const query = String(requestUrl.searchParams.get("q") || "trading focus playlist").trim().slice(0, 120);
   try {
-    const token = await spotifyClientAccessToken();
+    const userToken = await spotifyUserAccessToken(request);
+    const token = userToken || await spotifyClientAccessToken();
     if (token) {
       const params = new URLSearchParams({ q: query, type: "track,artist,playlist,album", limit: "12", market: "US" });
       const searchResponse = await fetch(`https://api.spotify.com/v1/search?${params}`, {
@@ -1430,7 +1558,7 @@ async function handleSpotifySearch(request, response, requestUrl) {
         ...(data.playlists?.items || []).map((item) => normalizeSpotifyItem(item, "playlist")),
         ...(data.albums?.items || []).map((item) => normalizeSpotifyItem(item, "album"))
       ].filter(Boolean).slice(0, 16);
-      sendWebJson(request, response, 200, { ok: true, configured: true, source: "spotify", query, items });
+      sendWebJson(request, response, 200, { ok: true, configured: true, connected: Boolean(userToken), source: "spotify", query, items });
       return;
     }
   } catch (error) {
@@ -1443,6 +1571,33 @@ async function handleSpotifySearch(request, response, requestUrl) {
     query,
     items: spotifyFallbackSearch(query),
     note: spotifyConfigured() ? "Spotify search fell back to curated picks." : "Using curated picks until Spotify app keys are added."
+  });
+}
+
+async function handleSpotifyPlaylists(request, response) {
+  try {
+    const token = await spotifyUserAccessToken(request);
+    if (token) {
+      const playlistResponse = await fetch("https://api.spotify.com/v1/me/playlists?limit=16", {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout ? AbortSignal.timeout(9_000) : undefined
+      });
+      if (!playlistResponse.ok) throw new Error(`Spotify playlists failed: ${playlistResponse.status}`);
+      const data = await playlistResponse.json();
+      const items = (data.items || []).map((item) => normalizeSpotifyItem(item, "playlist")).filter(Boolean);
+      sendWebJson(request, response, 200, { ok: true, configured: true, connected: true, source: "spotify", items });
+      return;
+    }
+  } catch (error) {
+    console.warn("Spotify playlists fallback:", friendlyError(error));
+  }
+  sendWebJson(request, response, 200, {
+    ok: true,
+    configured: spotifyConfigured(),
+    connected: false,
+    source: "fallback",
+    items: spotifyFallbackSearch("playlist"),
+    note: spotifyConfigured() ? "Connect Spotify to load personal playlists." : "Add Spotify app keys on Render to connect personal playlists."
   });
 }
 
@@ -1559,8 +1714,23 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "GET" && pathname === "/api/web/spotify/login") {
+      await handleSpotifyLogin(request, response);
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/spotify/callback") {
+      await handleSpotifyCallback(request, response, requestUrl);
+      return;
+    }
+
     if (request.method === "GET" && pathname === "/api/web/spotify/search") {
       await handleSpotifySearch(request, response, requestUrl);
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/spotify/playlists") {
+      await handleSpotifyPlaylists(request, response);
       return;
     }
 
@@ -24023,17 +24193,56 @@ async function hydrateKolSignalMetadata(rows) {
     const symbol = meaningfulTokenText(row.symbol, row.tokenMint) || metadata.symbol || shortMint(row.tokenMint);
     const name = meaningfulTokenText(row.name, row.tokenMint) || metadata.name || (symbol !== shortMint(row.tokenMint) ? symbol : "Unknown Token");
     const volume = metadata.volume || {};
+    const rowVolume = row.volume || {};
+    const rowLiquidity = row.liquidity || {};
+    const rowDex = row.dex || row.dexScreener || row.pair || row.dexPair || {};
+    const rowPump = row.pump || row.pumpFun || row.pumpfun || {};
+    const rowBaseToken = row.baseToken || row.base || {};
     const txns5m = metadata.txns?.m5 || {};
     const txnsH1 = metadata.txns?.h1 || {};
     const priceChange = metadata.priceChange || {};
-    const marketCap = firstMeaningfulNumber(row.marketCap, metadata.marketCap, row.fdv, metadata.fdv) || 0;
+    const marketCap = firstMeaningfulNumber(
+      row.marketCap,
+      row.marketCapUsd,
+      row.market_cap,
+      row.usdMarketCap,
+      row.usd_market_cap,
+      row.mc,
+      row.mcap,
+      metadata.marketCap,
+      metadata.marketCapUsd,
+      metadata.usdMarketCap,
+      rowDex.marketCap,
+      rowDex.marketCapUsd,
+      rowDex.fdv,
+      rowPump.marketCap,
+      rowPump.marketCapUsd,
+      rowPump.usdMarketCap,
+      rowPump.usd_market_cap,
+      rowBaseToken.marketCap,
+      row.fdv,
+      metadata.fdv
+    ) || 0;
     const fdv = firstMeaningfulNumber(row.fdv, metadata.fdv, marketCap) || 0;
-    const liquidityUsd = firstMeaningfulNumber(row.liquidityUsd, metadata.liquidityUsd) || 0;
-    const volume5m = firstMeaningfulNumber(row.volume5m, volume.m5) || 0;
-    const volumeM15 = firstMeaningfulNumber(row.volumeM15, volume.m15, volume.m15m) || 0;
-    const volumeM30 = firstMeaningfulNumber(row.volumeM30, volume.m30, volume.m30m) || 0;
-    const volumeH1 = firstMeaningfulNumber(row.volumeH1, volume.h1) || 0;
-    const volumeH24 = firstMeaningfulNumber(row.volumeH24, volume.h24, volume.d1) || 0;
+    const liquidityUsd = firstMeaningfulNumber(
+      row.liquidityUsd,
+      row.liquidity_usd,
+      row.currentLiquidityUsd,
+      rowLiquidity.usd,
+      metadata.liquidityUsd,
+      metadata.liquidity_usd,
+      metadata.liquidity?.usd,
+      rowDex.liquidityUsd,
+      rowDex.liquidity?.usd,
+      rowPump.liquidityUsd,
+      rowPump.liquidity_usd,
+      rowPump.liquidity?.usd
+    ) || 0;
+    const volume5m = firstMeaningfulNumber(row.volume5m, row.volumeM5, row.volumeUsd, rowVolume.m5, volume.m5, rowDex.volume?.m5, rowPump.volume5m) || 0;
+    const volumeM15 = firstMeaningfulNumber(row.volumeM15, row.volume15m, rowVolume.m15, rowVolume.m5, volume.m15, volume.m15m, volume.m5, rowDex.volume?.m15, rowDex.volume?.m5, rowPump.volumeM15, rowPump.volume15m, rowPump.volume5m) || 0;
+    const volumeM30 = firstMeaningfulNumber(row.volumeM30, row.volume30m, rowVolume.m30, volume.m30, volume.m30m, rowDex.volume?.m30, rowPump.volumeM30) || 0;
+    const volumeH1 = firstMeaningfulNumber(row.volumeH1, row.volume1h, row.volume_h1, rowVolume.h1, rowVolume.m30, volume.h1, rowDex.volume?.h1, rowDex.volume?.m30, rowPump.volumeH1, rowPump.volume1h) || 0;
+    const volumeH24 = firstMeaningfulNumber(row.volumeH24, row.volume24h, row.volume_h24, rowVolume.h24, rowVolume.d1, volume.h24, volume.d1, rowDex.volume?.h24, rowPump.volumeH24, rowPump.volume24h) || 0;
     const primaryVolume = firstMeaningfulNumber(volumeM15, volumeM30, volumeH1, volume5m, volumeH24) || 0;
     const primaryVolumeLabel = formatUsdCompact(primaryVolume);
     const m5 = firstMeaningfulNumber(row.m5, priceChange.m5) || 0;
@@ -24062,29 +24271,62 @@ async function hydrateKolSignalMetadata(rows) {
       ...row,
       symbol,
       name,
-      imageUrl: firstString(row.imageUrl, metadata.imageUrl),
+      imageUrl: firstString(
+        row.imageUrl,
+        row.imageUri,
+        row.image,
+        row.iconUrl,
+        row.icon,
+        row.logoURI,
+        row.logo,
+        row.logoUrl,
+        row.tokenImageUrl,
+        row.token_image_url,
+        row.pfp,
+        row.avatar,
+        rowPump.imageUrl,
+        rowPump.imageUri,
+        rowPump.image_uri,
+        rowPump.image,
+        rowDex.imageUrl,
+        rowDex.image,
+        rowDex.logoURI,
+        rowDex.logo,
+        rowDex.info?.imageUrl,
+        rowDex.baseToken?.imageUrl,
+        rowDex.baseToken?.logoURI,
+        rowBaseToken.imageUrl,
+        rowBaseToken.image,
+        rowBaseToken.logoURI,
+        metadata.imageUrl,
+        metadata.imageUri,
+        metadata.image_uri,
+        metadata.image,
+        metadata.logoURI,
+        metadata.logo
+      ),
       websiteUrl: firstString(row.websiteUrl, metadata.websiteUrl),
       twitterUrl: firstString(row.twitterUrl, metadata.twitterUrl),
       telegramUrl: firstString(row.telegramUrl, metadata.telegramUrl),
       marketCap,
       fdv,
-      marketCapLabel: formatUsdCompact(marketCap) || row.marketCapLabel || "n/a",
-      fdvLabel: formatUsdCompact(fdv) || row.fdvLabel || "n/a",
+      marketCapLabel: formatUsdCompact(marketCap) || row.marketCapLabel || "checking",
+      fdvLabel: formatUsdCompact(fdv) || row.fdvLabel || "checking",
       liquidityUsd,
-      liquidityLabel: formatUsdCompact(liquidityUsd) || row.liquidityLabel || "n/a",
+      liquidityLabel: formatUsdCompact(liquidityUsd) || row.liquidityLabel || "checking",
       volume5m,
-      volume5mLabel: formatUsdCompact(volume5m) || row.volume5mLabel || "n/a",
+      volume5mLabel: formatUsdCompact(volume5m) || row.volume5mLabel || "checking",
       volumeM15,
       volumeM15Label: formatUsdCompact(volumeM15) || row.volumeM15Label || "",
       volumeM30,
       volumeM30Label: formatUsdCompact(volumeM30) || row.volumeM30Label || "",
       volumeH1,
-      volumeH1Label: formatUsdCompact(volumeH1) || row.volumeH1Label || row.volumeLabel || "n/a",
+      volumeH1Label: formatUsdCompact(volumeH1) || row.volumeH1Label || row.volumeLabel || "checking",
       volumeH24,
       volumeH24Label: formatUsdCompact(volumeH24) || row.volumeH24Label || "",
       volumeLabel: row.volumeLabel && row.volumeLabel !== "n/a"
         ? row.volumeLabel
-        : primaryVolumeLabel ? `${primaryVolumeLabel} vol` : "n/a",
+        : primaryVolumeLabel ? `${primaryVolumeLabel} vol` : "checking",
       m5,
       h1,
       h6,
