@@ -9864,13 +9864,13 @@ textarea,
 
 
 /* SLIME_SPOTIFY_WIDGET_V2: tucked right-side music picker with selectable results. */
-.slime-spotify-shell { position: fixed !important; right: -30px !important; top: calc(52dvh + 78px) !important; transform: translateY(-50%) !important; z-index: 2147482980 !important; pointer-events: none !important; font-family: inherit !important; }
+.slime-spotify-shell { position: fixed !important; right: -30px !important; top: calc(50dvh + 24px) !important; transform: translateY(-50%) !important; z-index: 2147482980 !important; pointer-events: none !important; font-family: inherit !important; }
 .slime-spotify-bubble, .slime-spotify-panel { pointer-events: auto !important; }
 .slime-spotify-bubble { align-items: center !important; background: radial-gradient(circle at 38% 22%, rgba(30,215,96,.34), rgba(0,15,5,.96)) !important; border: 1px solid rgba(127,255,45,.48) !important; border-radius: 999px !important; box-shadow: 0 0 20px rgba(30,215,96,.34), inset 0 0 14px rgba(127,255,45,.08) !important; color: #eaffdf !important; cursor: pointer !important; display: grid !important; font-size: .56rem !important; font-weight: 950 !important; gap: 1px !important; height: 54px !important; justify-items: center !important; line-height: 1 !important; padding: 5px 28px 5px 5px !important; width: 78px !important; }
 .slime-spotify-mark { align-items: center !important; background: #1ed760 !important; border-radius: 999px !important; box-shadow: 0 0 12px rgba(30,215,96,.72) !important; display: grid !important; height: 27px !important; justify-items: center !important; padding-top: 7px !important; width: 27px !important; }
 .slime-spotify-mark i { border-top: 2px solid #021105 !important; border-radius: 999px !important; display: block !important; height: 5px !important; transform: rotate(8deg) !important; }
 .slime-spotify-mark i:nth-child(1) { width: 16px !important; } .slime-spotify-mark i:nth-child(2) { width: 13px !important; } .slime-spotify-mark i:nth-child(3) { width: 9px !important; }
-.slime-spotify-panel { background: linear-gradient(180deg, rgba(4,18,7,.985), rgba(0,7,3,.99)) !important; border: 1px solid rgba(125,255,44,.34) !important; border-radius: 18px !important; box-shadow: 0 24px 70px rgba(0,0,0,.62), inset 0 0 0 1px rgba(125,255,44,.05) !important; color: #eaffdf !important; display: flex !important; flex-direction: column !important; gap: 8px !important; max-height: min(560px,82dvh) !important; overflow: hidden !important; padding: 11px !important; position: fixed !important; right: 72px !important; top: calc(52dvh + 78px) !important; transform: translateY(-50%) !important; transform-origin: right center !important; width: min(340px, calc(100vw - 104px)) !important; }
+.slime-spotify-panel { background: linear-gradient(180deg, rgba(4,18,7,.985), rgba(0,7,3,.99)) !important; border: 1px solid rgba(125,255,44,.34) !important; border-radius: 18px !important; box-shadow: 0 24px 70px rgba(0,0,0,.62), inset 0 0 0 1px rgba(125,255,44,.05) !important; color: #eaffdf !important; display: flex !important; flex-direction: column !important; gap: 8px !important; max-height: min(520px, calc(100dvh - 28px)) !important; overflow: hidden !important; padding: 11px !important; position: fixed !important; right: 62px !important; top: 50dvh !important; transform: translateY(-50%) !important; transform-origin: right center !important; width: min(336px, calc(100vw - 82px)) !important; }
 .slime-spotify-panel[hidden] { display: none !important; }
 .slime-spotify-panel header { align-items: center !important; display: flex !important; justify-content: space-between !important; gap: 12px !important; }
 .slime-spotify-panel header strong { display: block !important; font-size: 1rem !important; font-weight: 950 !important; }
@@ -9884,7 +9884,7 @@ textarea,
 .slime-spotify-mini-controls { grid-template-columns: repeat(2,minmax(0,1fr)) !important; }
 .slime-spotify-actions button, .slime-spotify-mini-controls button { border-radius: 999px !important; font-size: .62rem !important; min-height: 30px !important; padding: 0 6px !important; }
 .slime-spotify-stage { background: rgba(0,12,4,.72) !important; border: 1px solid rgba(125,255,44,.16) !important; border-radius: 14px !important; min-height: 104px !important; overflow: hidden !important; }
-.slime-spotify-stage iframe { border: 0 !important; border-radius: 14px !important; display: block !important; height: 208px !important; width: 100% !important; }
+.slime-spotify-stage iframe { border: 0 !important; border-radius: 14px !important; display: block !important; height: 224px !important; width: 100% !important; }
 .slime-spotify-empty { align-items: center !important; display: grid !important; gap: 6px !important; min-height: 98px !important; padding: 12px !important; text-align: center !important; }
 .slime-spotify-empty.is-small { min-height: 54px !important; }
 .slime-spotify-empty strong { font-size: 1rem !important; font-weight: 950 !important; }
@@ -9895,7 +9895,27 @@ textarea,
 .slime-spotify-card img, .slime-spotify-card-icon { align-items: center !important; background: rgba(30,215,96,.18) !important; border-radius: 10px !important; display: inline-flex !important; height: 42px !important; justify-content: center !important; object-fit: cover !important; width: 42px !important; }
 .slime-spotify-card strong { display: block !important; font-size: .82rem !important; overflow: hidden !important; text-overflow: ellipsis !important; white-space: nowrap !important; }
 .slime-spotify-card small { color: rgba(226,255,214,.66) !important; display: block !important; font-size: .68rem !important; overflow: hidden !important; text-overflow: ellipsis !important; white-space: nowrap !important; }
-@media (max-width:760px) { .slime-spotify-shell { right: -30px !important; top: calc(58dvh + 68px) !important; } .slime-spotify-bubble { height: 50px !important; width: 66px !important; font-size: .52rem !important; } .slime-spotify-panel { left: auto !important; max-height: min(520px, calc(100dvh - 88px)) !important; overflow-y: auto !important; right: 58px !important; top: calc(58dvh + 68px) !important; transform: translateY(-50%) !important; width: min(304px, calc(100vw - 84px)) !important; } .slime-spotify-actions { grid-template-columns: repeat(4,minmax(0,1fr)) !important; } .slime-spotify-stage iframe { height: 190px !important; } .slime-spotify-results { max-height: 132px !important; } }
+@media (max-width:760px) { .slime-spotify-shell { right: -30px !important; top: 48dvh !important; } .slime-spotify-bubble { height: 50px !important; width: 66px !important; font-size: .52rem !important; } .slime-spotify-panel { left: auto !important; max-height: min(492px, calc(100dvh - 84px)) !important; overflow-y: auto !important; right: 54px !important; top: 48dvh !important; transform: translateY(-50%) !important; width: min(306px, calc(100vw - 76px)) !important; } .slime-spotify-actions { grid-template-columns: repeat(4,minmax(0,1fr)) !important; } .slime-spotify-stage iframe { height: 210px !important; } .slime-spotify-results { max-height: 110px !important; } }
 .ogre-agent-shell, .ogre-agent-shell.is-open, .slime-spotify-shell { touch-action: manipulation !important; }
 .ogre-agent-shell.is-open { z-index: 2147483640 !important; pointer-events: none !important; }
 .ogre-agent-shell.is-open .ogre-agent-panel, .ogre-agent-shell.is-open .ogre-agent-panel *, .ogre-agent-shell.is-open .ogre-agent-bubble, .slime-spotify-shell.is-open .slime-spotify-panel, .slime-spotify-shell.is-open .slime-spotify-panel *, .slime-spotify-bubble { pointer-events: auto !important; }
+
+/* LANDING_SPONSOR_ASML_V1: keep multiple sponsor entries readable in the sponsor frame. */
+[data-app][data-route="intro"] .swamp-sponsor-frame .swamp-support-content {
+  gap: clamp(6px, 0.8vw, 10px) !important;
+}
+
+[data-app][data-route="intro"] .swamp-sponsor-token .swamp-sponsor-links {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+}
+
+@media (max-width: 760px) {
+  [data-app][data-route="intro"] .swamp-sponsor-frame .swamp-support-content {
+    gap: 5px !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-sponsor-token summary {
+    min-height: 36px !important;
+    height: 36px !important;
+  }
+}
