@@ -239,9 +239,13 @@ test("landing sponsor and KOL entries use the compact top ticker", () => {
   assert.match(indexSource, /https:\/\/share\.google\/F9EuKDnbjbVml9zK5/);
   assert.match(indexSource, /https:\/\/t\.me\/USD2Solana/);
   assert.match(cssSource, /LANDING_MARKET_TICKER_V1/);
+  assert.match(cssSource, /LANDING_MARKET_TICKER_COMPACT_FIX_V1/);
   assert.match(cssSource, /swampMarketTickerScroll/);
   assert.match(cssSource, /swamp-ticker-item\[open\] \.swamp-ticker-links[\s\S]*position: fixed/);
+  assert.match(cssSource, /swamp-market-ticker\[data-market-ticker\][\s\S]*height: 24px !important/);
+  assert.match(cssSource, /swamp-market-ticker\[data-market-ticker\][\s\S]*max-width: 18px !important/);
   assert.match(indexSource, /Stablecoin Partner/);
+  assert.match(indexSource, /usd2-sponsor-logo\.jpg"[^>]*width="18" height="18"/);
   assert.doesNotMatch(indexSource, /swamp-sponsor-frame/);
   assert.doesNotMatch(indexSource, /swamp-kol-frame/);
 });

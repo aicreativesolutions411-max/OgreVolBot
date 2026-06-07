@@ -11670,3 +11670,164 @@ button[data-slimeshield-details].slimeshield-chip small {
     width: min(90vw, 440px) !important;
   }
 }
+
+/* LANDING_MARKET_TICKER_COMPACT_FIX_V1: true tiny top tape; hard-cap images so pfps never blow up. */
+html body main.shell[data-app][data-route="intro"] .swamp-market-ticker[data-market-ticker] {
+  background: rgba(0, 12, 4, 0.98) !important;
+  border-bottom: 1px solid rgba(107, 255, 43, 0.38) !important;
+  border-left: 0 !important;
+  border-right: 0 !important;
+  border-top: 0 !important;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.44), inset 0 -1px 0 rgba(119, 255, 61, 0.12) !important;
+  display: flex !important;
+  height: 24px !important;
+  left: 0 !important;
+  max-height: 24px !important;
+  min-height: 24px !important;
+  padding: 1px 6px !important;
+  position: fixed !important;
+  right: 0 !important;
+  top: 0 !important;
+  width: 100vw !important;
+  z-index: 2147483000 !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .topbar {
+  margin-top: 24px !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .swamp-market-ticker[data-market-ticker] .swamp-ticker-label {
+  border-radius: 3px !important;
+  font-size: 8px !important;
+  height: 18px !important;
+  letter-spacing: 0.04em !important;
+  min-height: 18px !important;
+  padding: 0 5px !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .swamp-market-ticker[data-market-ticker] .swamp-ticker-mask {
+  height: 22px !important;
+  max-height: 22px !important;
+  overflow: clip !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .swamp-market-ticker[data-market-ticker] .swamp-ticker-track,
+html body main.shell[data-app][data-route="intro"] .swamp-market-ticker[data-market-ticker] .swamp-ticker-strip {
+  height: 22px !important;
+  max-height: 22px !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .swamp-market-ticker[data-market-ticker] .swamp-ticker-track {
+  animation-duration: 38s !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .swamp-market-ticker[data-market-ticker] .swamp-ticker-strip {
+  gap: 8px !important;
+  padding-right: 14px !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .swamp-market-ticker[data-market-ticker] .swamp-ticker-section {
+  font-size: 8px !important;
+  height: 18px !important;
+  line-height: 18px !important;
+  padding: 0 2px !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .swamp-market-ticker[data-market-ticker] .swamp-ticker-item,
+html body main.shell[data-app][data-route="intro"] .swamp-market-ticker[data-market-ticker] .swamp-ticker-clone {
+  height: 20px !important;
+  max-height: 20px !important;
+  min-height: 20px !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .swamp-market-ticker[data-market-ticker] .swamp-ticker-item summary,
+html body main.shell[data-app][data-route="intro"] .swamp-market-ticker[data-market-ticker] .swamp-ticker-clone {
+  align-items: center !important;
+  border-radius: 4px !important;
+  display: inline-flex !important;
+  gap: 4px !important;
+  grid-template-columns: none !important;
+  height: 20px !important;
+  max-height: 20px !important;
+  max-width: none !important;
+  min-height: 20px !important;
+  padding: 0 6px 0 1px !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .swamp-market-ticker[data-market-ticker] img,
+html body main.shell[data-app][data-route="intro"] .swamp-market-ticker[data-market-ticker] .swamp-ticker-item img,
+html body main.shell[data-app][data-route="intro"] .swamp-market-ticker[data-market-ticker] .swamp-ticker-clone img {
+  aspect-ratio: 1 / 1 !important;
+  display: block !important;
+  flex: 0 0 18px !important;
+  grid-row: auto !important;
+  height: 18px !important;
+  max-height: 18px !important;
+  max-width: 18px !important;
+  min-height: 18px !important;
+  min-width: 18px !important;
+  object-fit: cover !important;
+  overflow: clip !important;
+  width: 18px !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .swamp-market-ticker[data-market-ticker] .swamp-ticker-item summary span {
+  align-items: baseline !important;
+  display: inline-flex !important;
+  gap: 3px !important;
+  max-height: 18px !important;
+  min-width: 0 !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .swamp-market-ticker[data-market-ticker] .swamp-ticker-item strong,
+html body main.shell[data-app][data-route="intro"] .swamp-market-ticker[data-market-ticker] .swamp-ticker-clone strong,
+html body main.shell[data-app][data-route="intro"] .swamp-market-ticker[data-market-ticker] .swamp-ticker-item small,
+html body main.shell[data-app][data-route="intro"] .swamp-market-ticker[data-market-ticker] .swamp-ticker-clone small {
+  display: inline !important;
+  font-size: 10px !important;
+  grid-column: auto !important;
+  grid-row: auto !important;
+  line-height: 18px !important;
+  max-height: 18px !important;
+  overflow: clip !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .swamp-market-ticker[data-market-ticker] .swamp-ticker-item small,
+html body main.shell[data-app][data-route="intro"] .swamp-market-ticker[data-market-ticker] .swamp-ticker-clone small {
+  color: rgba(190, 255, 169, 0.72) !important;
+  font-size: 9px !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .swamp-market-ticker[data-market-ticker] .swamp-ticker-item[open] .swamp-ticker-links {
+  top: 28px !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .login-view.swamp-splash {
+  min-height: calc(100svh - 78px) !important;
+  padding-top: 0 !important;
+}
+
+@media (max-width: 760px) {
+  html body main.shell[data-app][data-route="intro"] .swamp-market-ticker[data-market-ticker] {
+    height: 24px !important;
+    max-height: 24px !important;
+    min-height: 24px !important;
+    padding: 1px 4px !important;
+  }
+
+  html body main.shell[data-app][data-route="intro"] .swamp-market-ticker[data-market-ticker] .swamp-ticker-label {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="intro"] .swamp-market-ticker[data-market-ticker] .swamp-ticker-track {
+    animation-duration: 30s !important;
+  }
+
+  html body main.shell[data-app][data-route="intro"] .topbar {
+    margin-top: 24px !important;
+  }
+
+  html body main.shell[data-app][data-route="intro"] .login-view.swamp-splash {
+    min-height: calc(100svh - 82px) !important;
+  }
+}
