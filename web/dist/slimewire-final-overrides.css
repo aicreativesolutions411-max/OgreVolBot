@@ -1623,6 +1623,10 @@
   overflow: hidden;
 }
 
+.protected-buy-modal-open {
+  overflow: hidden;
+}
+
 [data-quick-buy-modal-root] {
   position: fixed;
   inset: 0;
@@ -1630,7 +1634,18 @@
   pointer-events: none;
 }
 
+[data-protected-buy-modal-root] {
+  position: fixed;
+  inset: 0;
+  z-index: 100001;
+  pointer-events: none;
+}
+
 [data-quick-buy-modal-root]:not([hidden]) {
+  pointer-events: auto;
+}
+
+[data-protected-buy-modal-root]:not([hidden]) {
   pointer-events: auto;
 }
 
@@ -1700,6 +1715,99 @@
 
 .quick-buy-actions button {
   min-height: 44px;
+}
+
+.protected-buy-modal {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: min(480px, calc(100vw - 24px));
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  transform: translate(-50%, -50%);
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgba(125, 255, 45, 0.38);
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(7, 18, 7, 0.99), rgba(1, 6, 2, 0.99));
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.66), 0 0 34px rgba(125, 255, 45, 0.16);
+  color: var(--slime-text, #efffe8);
+}
+
+.protected-buy-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.protected-buy-head h3,
+.protected-buy-modal p {
+  margin: 0;
+}
+
+.protected-buy-head span,
+.protected-buy-modal p,
+.protected-buy-safe-copy {
+  color: rgba(238, 255, 230, 0.76);
+}
+
+.protected-buy-head strong {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  color: #f4ffe9;
+  font-size: 0.78rem;
+  padding: 5px 9px;
+}
+
+.protected-buy-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.protected-buy-grid label,
+.protected-buy-risk-line {
+  display: grid;
+  gap: 6px;
+  color: rgba(238, 255, 230, 0.82);
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.protected-buy-preview {
+  background: rgba(57, 255, 20, 0.06);
+  border: 1px solid rgba(57, 255, 20, 0.16);
+  border-radius: 8px;
+  display: grid;
+  gap: 5px;
+  padding: 10px;
+}
+
+.protected-buy-preview strong {
+  color: #f4ffe9;
+}
+
+.protected-buy-preview span,
+.protected-buy-preview small {
+  color: rgba(238, 255, 230, 0.75);
+}
+
+.protected-buy-risk-line {
+  align-items: center;
+  background: rgba(140, 32, 45, 0.2);
+  border: 1px solid rgba(255, 86, 114, 0.24);
+  border-radius: 8px;
+  display: flex;
+  padding: 9px;
+}
+
+@media (max-width: 620px) {
+  .protected-buy-grid,
+  .protected-buy-modal .quick-buy-actions {
+    grid-template-columns: 1fr;
+  }
 }
 
 .smart-chart-actions {

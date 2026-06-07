@@ -309,6 +309,7 @@ const state = {
   selectedBundlePresetId: "",
   quickBuyAmountOverride: "",
   quickBuyModal: { open: false, tokenMint: "", amountSol: "", walletIndex: "", slippageBps: "400", status: "", source: "", error: "", tradeAttemptId: "" },
+  protectedBuyModal: { open: false, tokenMint: "", presetId: "conservative", amountSol: "", walletIndex: "", slippageBps: "400", riskAccepted: false, status: "", error: "", source: "" },
   quickBuyLast: null,
   terminalTradeCollapsed: true,
   navTekOpen: getStoredNavTekOpen(),
@@ -3990,6 +3991,7 @@ function render(options = {}) {
   if (state.route === "terminal" && !preserveSmartChartPanel) renderTabs();
   renderWalletConnectModal();
   renderQuickBuyModal();
+  renderProtectedBuyModal();
   renderSlimeShieldDetailsDrawer();
   renderOgreAgent();
   syncInteractionLocks();
@@ -4693,6 +4695,7 @@ function quickBuyModalHtml() {
       </div>
       <div class="quick-buy-actions">
         <button type="button" data-token-trade="${escapeHtml(modal.tokenMint || "")}" data-token-trade-source="quick-buy-modal">Open Full Trade</button>
+        ${featureEnabled("protectedBuyEnabled", true) ? `<button type="button" data-protected-buy-open="${escapeHtml(modal.tokenMint || "")}" data-protected-buy-source="quick-buy-modal">Protected Buy</button>` : ""}
         <button type="button" class="primary" data-quick-buy-confirm>Confirm Buy</button>
       </div>
       ${modal.status ? `<small class="connect-status">${escapeHtml(modal.status)}</small>` : ""}
@@ -9478,6 +9481,183 @@ function closeQuickBuyModal() {
   render({ force: true });
 }
 
+function openProtectedBuy(tokenRef = {}, options = {}) {
+  if (!featureEnabled("protectedBuyEnabled", true)) return;
+  const mint = applyTokenRefToState(tokenRef);
+  if (!mint) {
+    setError("Select a token before opening Protected Buy.");
+    return;
+  }
+  const rawRow = rawSignalRowForMint(mint);
+  if (rawRow && isUiBlockedSignalRow(rawRow)) {
+    setError("Safety block: this token has mintable/freezable/honeypot-style risk signals and cannot be bought from quick actions.");
+    return;
+  }
+  const row = slimeShieldRowForMint(mint) || { tokenMint: mint };
+  const shield = slimeShieldResultForRow(row);
+  const presetId = options.presetId || shield.protectedBuyPreset || protectedBuyPresetForVerdict(shield.verdict);
+  const amountNumber = Number(normalizedQuickBuyAmount(options.amountSol || state.quickBuyAmountOverride || activeQuickBuyAmount() || "0.1"));
+  const protectedAmount = presetId === "conservative" && Number.isFinite(amountNumber) && amountNumber > 0.25
+    ? "0.25"
+    : formatQuickBuyAmount(amountNumber || 0.1);
+  const connected = connectedBrowserWallet();
+  state.quickBuyModal = { ...state.quickBuyModal, open: false, status: "", error: "" };
+  state.protectedBuyModal = {
+    open: true,
+    tokenMint: mint,
+    presetId,
+    amountSol: protectedAmount,
+    walletIndex: options.walletIndex || (connected?.publicKey ? "connected" : (state.wallets[0]?.index ? String(state.wallets[0].index) : "")),
+    slippageBps: String(options.slippageBps || "400"),
+    riskAccepted: false,
+    status: shield.verdict === "AVOID" ? "Avoid recommended. Check the risk box if you still want to continue." : "Review this plan before wallet confirmation.",
+    error: "",
+    source: options.source || "protected-buy"
+  };
+  render({ force: true });
+  requestAnimationFrame(() => $("[data-protected-buy-amount]")?.focus());
+}
+
+function closeProtectedBuyModal() {
+  state.protectedBuyModal = { ...state.protectedBuyModal, open: false, status: "", error: "", riskAccepted: false };
+  render({ force: true });
+}
+
+function readProtectedBuyForm() {
+  const modal = state.protectedBuyModal || {};
+  const tokenMint = String(modal.tokenMint || "").trim();
+  const presetId = String($("[data-protected-buy-preset]")?.value || modal.presetId || "conservative").trim();
+  const walletIndex = String($("[data-protected-buy-wallet]")?.value || modal.walletIndex || "").trim();
+  const amountSol = normalizedQuickBuyAmount($("[data-protected-buy-amount]")?.value || modal.amountSol || "");
+  const slippageBps = String($("[data-protected-buy-slippage]")?.value || modal.slippageBps || "400").trim();
+  const riskAccepted = Boolean($("[data-protected-buy-risk-accept]")?.checked || modal.riskAccepted);
+  if (!tokenMint) throw new Error("Select a token before Protected Buy.");
+  if (!walletIndex) throw new Error("Choose a wallet before Protected Buy.");
+  if (!amountSol) throw new Error("Enter a SOL amount greater than zero.");
+  return { tokenMint, presetId, walletIndex, amountSol, slippageBps, riskAccepted };
+}
+
+function protectedBuyModalHtml() {
+  const modal = state.protectedBuyModal || {};
+  if (!modal.open) return "";
+  const row = slimeShieldRowForMint(modal.tokenMint) || { tokenMint: modal.tokenMint };
+  const shield = slimeShieldResultForRow(row);
+  const preset = protectedBuyPresetById(modal.presetId);
+  const connectedWalletSelected = isConnectedTradeWallet(modal.walletIndex);
+  const avoidNeedsAccept = shield.verdict === "AVOID" && !modal.riskAccepted;
+  const submitting = /submitting|opening wallet/i.test(String(modal.status || ""));
+  return `
+    <div class="quick-buy-backdrop protected-buy-backdrop" data-protected-buy-close></div>
+    <section class="protected-buy-modal" role="dialog" aria-modal="true" aria-label="Protected Buy preview">
+      <button type="button" class="modal-close" data-protected-buy-close aria-label="Close Protected Buy">x</button>
+      <div class="protected-buy-head">
+        <div>
+          <span>Protected Buy</span>
+          <h3>${escapeHtml(row.symbol || row.shortMint || shortAddress(modal.tokenMint))}</h3>
+        </div>
+        <strong class="slimeshield-${escapeHtml(slimeShieldVerdictClass(shield.verdict))}">${escapeHtml(shield.verdict || "CAUTION")}</strong>
+      </div>
+      <p>Adds a simple TP/SL plan before wallet confirmation. You still review and sign in your wallet.</p>
+      <div class="protected-buy-grid">
+        <label>
+          Wallet
+          <select data-protected-buy-wallet>
+            ${walletOptionsHtml(modal.walletIndex)}
+          </select>
+        </label>
+        <label>
+          Buy SOL
+          <input data-protected-buy-amount type="number" min="0" step="0.01" inputmode="decimal" value="${escapeHtml(modal.amountSol || "")}" placeholder="0.10">
+        </label>
+        <label>
+          Preset
+          <select data-protected-buy-preset>
+            ${PROTECTED_BUY_PRESETS.map((item) => `<option value="${item.id}" ${item.id === preset.id ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}
+          </select>
+        </label>
+        <label>
+          Slippage
+          <select data-protected-buy-slippage>
+            <option value="300" ${String(modal.slippageBps || "400") === "300" ? "selected" : ""}>3%</option>
+            <option value="400" ${String(modal.slippageBps || "400") === "400" ? "selected" : ""}>4%</option>
+            <option value="500" ${String(modal.slippageBps || "400") === "500" ? "selected" : ""}>5%</option>
+          </select>
+        </label>
+      </div>
+      <article class="protected-buy-preview">
+        <strong>${escapeHtml(preset.label)} plan</strong>
+        <span>${escapeHtml(preset.description)}</span>
+        <small>${escapeHtml(protectedBuyPresetSummary(preset))}</small>
+        <small>Wallet: ${escapeHtml(protectedBuyWalletLabel(modal.walletIndex))}</small>
+        <small>Priority fee: existing trade default.</small>
+        ${connectedWalletSelected ? `<small class="warning-text">Connected wallets still use normal wallet confirmation. Server TP/SL is only armed for managed SlimeWire wallets.</small>` : ""}
+      </article>
+      ${shield.verdict === "AVOID" ? `
+        <label class="checkbox-line protected-buy-risk-line">
+          <input data-protected-buy-risk-accept type="checkbox" ${modal.riskAccepted ? "checked" : ""}>
+          I understand SlimeShield says AVOID and still want to configure this buy.
+        </label>
+      ` : ""}
+      <div class="quick-buy-actions">
+        <button type="button" data-protected-buy-close>Cancel</button>
+        <button type="button" class="primary" data-protected-buy-confirm ${submitting || avoidNeedsAccept ? "disabled" : ""}>${submitting ? "Submitting..." : connectedWalletSelected ? "Open Wallet Confirmation" : "Submit Protected Buy"}</button>
+      </div>
+      ${modal.status ? `<small class="connect-status">${escapeHtml(modal.status)}</small>` : ""}
+      ${modal.error ? `<small class="warning-text">${escapeHtml(modal.error)}</small>` : ""}
+      <small class="protected-buy-safe-copy">Always review wallet prompts before signing. SlimeWire never needs your seed phrase.</small>
+    </section>
+  `;
+}
+
+function renderProtectedBuyModal() {
+  let modal = $("[data-protected-buy-modal-root]");
+  if (!modal) {
+    modal = document.createElement("div");
+    modal.setAttribute("data-protected-buy-modal-root", "");
+    document.body.appendChild(modal);
+  }
+  if (!state.protectedBuyModal?.open || !featureEnabled("protectedBuyEnabled", true)) {
+    modal.hidden = true;
+    modal.innerHTML = "";
+    document.body.classList.remove("protected-buy-modal-open");
+    return;
+  }
+  modal.hidden = false;
+  modal.innerHTML = protectedBuyModalHtml();
+  document.body.classList.add("protected-buy-modal-open");
+}
+
+async function confirmProtectedBuyModal() {
+  try {
+    const form = readProtectedBuyForm();
+    const row = slimeShieldRowForMint(form.tokenMint) || { tokenMint: form.tokenMint };
+    const shield = slimeShieldResultForRow(row);
+    if (shield.verdict === "AVOID" && !form.riskAccepted) {
+      throw new Error("SlimeShield says AVOID. Check the risk box if you still want to continue.");
+    }
+    const preset = protectedBuyPresetById(form.presetId);
+    state.protectedBuyModal = { ...state.protectedBuyModal, ...form, status: "Submitting protected buy...", error: "" };
+    renderProtectedBuyModal();
+    await sleep(20);
+    state.protectedBuyModal = { ...state.protectedBuyModal, open: false, status: "", error: "" };
+    render({ force: true });
+    if (isConnectedTradeWallet(form.walletIndex)) {
+      const trade = await executeQuickBuyAmount({ ...form, source: `protected-buy:${preset.id}` });
+      setError(trade?.message || "Protected Buy submitted through your wallet. Managed TP/SL was not server-armed for this connected wallet.");
+      return;
+    }
+    await quickPresetTrade(form.tokenMint, protectedBuyTradePreset(form, preset));
+  } catch (error) {
+    state.protectedBuyModal = {
+      ...(state.protectedBuyModal || {}),
+      open: true,
+      status: "",
+      error: publicErrorMessage(error.message || "Protected Buy failed.")
+    };
+    render({ force: true });
+  }
+}
+
 function readQuickBuyModalForm() {
   const tokenMint = String(state.quickBuyModal?.tokenMint || "").trim();
   const walletIndex = String($("[data-quick-buy-modal-wallet]")?.value || state.quickBuyModal?.walletIndex || "").trim();
@@ -11530,6 +11710,75 @@ function activeBundleQuickBuyAmount(preset = activeBundlePreset()) {
   return normalizedQuickBuyAmount() || formatQuickBuyAmount(preset?.amountSol) || "0.1";
 }
 
+const PROTECTED_BUY_PRESETS = Object.freeze([
+  {
+    id: "conservative",
+    label: "Conservative",
+    description: "Smaller entry with a simple 2x partial take-profit and wider stop.",
+    takeProfit: [{ percentGain: 100, sellPercent: 50 }],
+    stopLoss: { percentLoss: 25 },
+    sellPercent: "50"
+  },
+  {
+    id: "scalp",
+    label: "Scalp",
+    description: "Fast setup for smaller moves with a tighter stop.",
+    takeProfit: [{ percentGain: 35, sellPercent: 100 }],
+    stopLoss: { percentLoss: 12 },
+    sellPercent: "100"
+  },
+  {
+    id: "degen",
+    label: "Degen",
+    description: "Normal size with a partial 2x exit. Highest variance.",
+    takeProfit: [{ percentGain: 100, sellPercent: 30 }],
+    stopLoss: { percentLoss: 0 },
+    sellPercent: "30"
+  }
+]);
+
+function protectedBuyPresetById(id = "") {
+  return PROTECTED_BUY_PRESETS.find((preset) => preset.id === id) || PROTECTED_BUY_PRESETS[0];
+}
+
+function protectedBuyPresetForVerdict(verdict = "") {
+  const value = String(verdict || "").toUpperCase();
+  if (value === "BUY") return "scalp";
+  return "conservative";
+}
+
+function protectedBuyPresetSummary(preset = protectedBuyPresetById()) {
+  const firstTp = Array.isArray(preset.takeProfit) ? preset.takeProfit[0] : null;
+  const tp = firstTp ? `TP +${firstTp.percentGain}% / sell ${firstTp.sellPercent}%` : "TP off";
+  const sl = preset.stopLoss?.percentLoss ? `SL -${preset.stopLoss.percentLoss}%` : "SL off";
+  return `${tp} | ${sl}`;
+}
+
+function protectedBuyTradePreset(form = {}, preset = protectedBuyPresetById()) {
+  const firstTp = Array.isArray(preset.takeProfit) ? preset.takeProfit[0] : null;
+  return {
+    id: `protected-${preset.id}`,
+    name: `Protected ${preset.label}`,
+    amountSol: form.amountSol,
+    walletIndex: form.walletIndex,
+    walletIndexes: [form.walletIndex],
+    slippageBps: form.slippageBps || "400",
+    takeProfitPct: firstTp?.percentGain ? String(firstTp.percentGain) : "0",
+    stopLossPct: preset.stopLoss?.percentLoss ? String(preset.stopLoss.percentLoss) : "0",
+    sellDelay: "off",
+    sellPercent: firstTp?.sellPercent ? String(firstTp.sellPercent) : preset.sellPercent || "100"
+  };
+}
+
+function protectedBuyWalletLabel(walletIndex = "") {
+  if (isConnectedTradeWallet(walletIndex)) {
+    const connected = connectedBrowserWallet();
+    return `${connected?.provider || "Browser wallet"} ${connected?.publicKey ? shortAddress(connected.publicKey) : ""}`.trim();
+  }
+  const wallet = state.wallets.find((row) => String(row.index) === String(walletIndex));
+  return wallet ? `${wallet.index}. ${wallet.label || "Managed wallet"}` : "No wallet selected";
+}
+
 function terminalLaunchFilterState() {
   if (!state.terminalLaunchFilters || typeof state.terminalLaunchFilters !== "object") {
     state.terminalLaunchFilters = {};
@@ -12148,6 +12397,7 @@ function slimeShieldCardHtml(token = {}) {
       <p>${escapeHtml(result.summary || "SlimeShield is warming up. Trade carefully.")}</p>
       <div class="slimeshield-actions">
         <button type="button" data-slimeshield-details="${escapeHtml(mint)}">Why?</button>
+        ${featureEnabled("protectedBuyEnabled", true) ? `<button type="button" class="primary" data-protected-buy-open="${escapeHtml(mint)}" data-protected-buy-preset="${escapeHtml(result.protectedBuyPreset || protectedBuyPresetForVerdict(verdict))}" data-protected-buy-source="slimeshield-card">Protected Buy</button>` : ""}
       </div>
     </article>
   `;
@@ -12268,6 +12518,7 @@ function renderSlimeShieldDetailsDrawer() {
         <small>Protected Buy preset suggestion: ${escapeHtml(slimeShieldPresetLabel(result.protectedBuyPreset))}</small>
       </section>
       <div class="slimeshield-drawer-actions">
+        ${featureEnabled("protectedBuyEnabled", true) ? `<button type="button" class="primary" data-protected-buy-open="${escapeHtml(mint)}" data-protected-buy-preset="${escapeHtml(result.protectedBuyPreset || protectedBuyPresetForVerdict(verdict))}" data-protected-buy-source="slimeshield-drawer">Protected Buy</button>` : ""}
         <button type="button" data-slimeshield-refresh="${escapeHtml(mint)}" ${loading ? "disabled" : ""}>${loading ? "Updating..." : "Refresh Details"}</button>
         <button type="button" data-token-trade="${escapeHtml(mint)}" data-token-trade-source="slimeshield-drawer">Open Trade</button>
       </div>
@@ -12437,6 +12688,7 @@ function chartTradePanelHtml(token = {}, heldPosition = null) {
             </select>
           </label>
           <small>${connected?.publicKey ? `${escapeHtml(connected.provider || "Browser wallet")} approval opens in wallet.` : "Choose a connected browser wallet or managed wallet."}</small>
+          ${featureEnabled("protectedBuyEnabled", true) ? `<button type="button" data-protected-buy-open="${escapeHtml(mint)}" data-protected-buy-source="chart-buy-panel">Protected Buy</button>` : ""}
           <button type="button" class="primary chart-confirm-button" data-chart-confirm-buy="${escapeHtml(mint)}">Confirm Buy</button>
           <button type="button" data-quick-buy-token="${escapeHtml(mint)}" data-quick-buy-source="chart-panel">Quick Buy Drawer</button>
         </div>
@@ -15439,6 +15691,11 @@ document.addEventListener("keydown", (event) => {
     return;
   }
 
+  if (state.protectedBuyModal?.open) {
+    closeProtectedBuyModal();
+    return;
+  }
+
   if (!state.loginModalOpen && !state.quickBuyModal?.open) return;
   if (state.quickBuyModal?.open) {
     closeQuickBuyModal();
@@ -15498,6 +15755,12 @@ document.addEventListener("click", async (event) => {
   if (slimeShieldCloseTarget) {
     event.preventDefault();
     closeSlimeShieldDetails();
+    return;
+  }
+  const protectedBuyCloseTarget = source?.closest?.("[data-protected-buy-close]");
+  if (protectedBuyCloseTarget) {
+    event.preventDefault();
+    closeProtectedBuyModal();
     return;
   }
   const tekSummary = source?.closest?.(".tabs .nav-tool-group summary");
@@ -15716,9 +15979,47 @@ document.addEventListener("click", async (event) => {
     });
     return;
   }
+  if (target.matches("[data-protected-buy-open]")) {
+    event.preventDefault();
+    event.stopPropagation();
+    const sourceHint = target.dataset.protectedBuySource || "protected-buy";
+    const fromQuickModal = Boolean(target.closest("[data-quick-buy-modal-root]"));
+    const fromChartPanel = Boolean(target.closest(".chart-trade-panel"));
+    const tokenMint = target.dataset.protectedBuyOpen || state.quickBuyModal?.tokenMint || state.smartChartToken || state.tradeToken || "";
+    openProtectedBuy(tokenRefFromMint(tokenMint, { source: sourceHint }), {
+      source: sourceHint,
+      presetId: target.dataset.protectedBuyPreset || "",
+      amountSol: fromQuickModal
+        ? ($("[data-quick-buy-modal-amount]")?.value || state.quickBuyModal?.amountSol || "")
+        : fromChartPanel
+          ? ($("[data-chart-buy-amount]")?.value || "")
+          : "",
+      walletIndex: fromQuickModal
+        ? ($("[data-quick-buy-modal-wallet]")?.value || state.quickBuyModal?.walletIndex || "")
+        : fromChartPanel
+          ? ($("[data-chart-buy-wallet]")?.value || "")
+          : "",
+      slippageBps: fromQuickModal
+        ? ($("[data-quick-buy-modal-slippage]")?.value || state.quickBuyModal?.slippageBps || "400")
+        : fromChartPanel
+          ? ($("[data-chart-buy-slippage]")?.value || "400")
+          : "400"
+    });
+    return;
+  }
   if (target.matches("[data-quick-buy-close]")) {
     event.preventDefault();
     closeQuickBuyModal();
+    return;
+  }
+  if (target.matches("[data-protected-buy-close]")) {
+    event.preventDefault();
+    closeProtectedBuyModal();
+    return;
+  }
+  if (target.matches("[data-protected-buy-confirm]")) {
+    event.preventDefault();
+    await confirmProtectedBuyModal();
     return;
   }
   if (target.matches("[data-quick-buy-modal-preset]")) {
@@ -16329,6 +16630,10 @@ document.addEventListener("click", async (event) => {
 
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
+  if (state.protectedBuyModal?.open) {
+    closeProtectedBuyModal();
+    return;
+  }
   if (state.quickBuyModal?.open) {
     closeQuickBuyModal();
     return;
@@ -16366,6 +16671,17 @@ document.addEventListener("change", async (event) => {
     state.quickBuyAmountOverride = normalizedQuickBuyAmount(target.value);
     target.value = state.quickBuyAmountOverride;
     syncQuickBuyActionLabels();
+  }
+  if (target?.matches?.("[data-protected-buy-preset], [data-protected-buy-wallet], [data-protected-buy-slippage], [data-protected-buy-risk-accept], [data-protected-buy-amount]")) {
+    state.protectedBuyModal = {
+      ...(state.protectedBuyModal || {}),
+      presetId: $("[data-protected-buy-preset]")?.value || state.protectedBuyModal?.presetId || "conservative",
+      walletIndex: $("[data-protected-buy-wallet]")?.value || state.protectedBuyModal?.walletIndex || "",
+      amountSol: normalizedQuickBuyAmount($("[data-protected-buy-amount]")?.value || state.protectedBuyModal?.amountSol || ""),
+      slippageBps: $("[data-protected-buy-slippage]")?.value || state.protectedBuyModal?.slippageBps || "400",
+      riskAccepted: Boolean($("[data-protected-buy-risk-accept]")?.checked)
+    };
+    renderProtectedBuyModal();
   }
   if (target?.matches?.("[data-fast-bundle-preset]")) {
     const nextPresetId = target.value || "";
