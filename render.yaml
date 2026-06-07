@@ -44,6 +44,10 @@ services:
         value: redis
       - key: REDIS_URL
         sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: POSTGRES_HISTORY_ENABLED
+        value: true
       - key: CACHE_CONNECT_TIMEOUT_MS
         value: 800
       - key: CACHE_CIRCUIT_BREAKER_MS
@@ -127,7 +131,7 @@ services:
       - key: MADE_ON_SOL_API_BASE
         value: https://madeonsol.com/api/v1
       - key: MADE_ON_SOL_KOL_LIMIT
-        value: 10
+        value: 20
       - key: MADE_ON_SOL_CACHE_TTL_MS
         value: 900000
       - key: KOL_USE_SOLANA_TRACKER_FALLBACK
@@ -135,7 +139,7 @@ services:
       - key: SOLANA_TRACKER_API_BASE
         value: https://data.solanatracker.io
       - key: SOLANA_TRACKER_KOL_LIMIT
-        value: 12
+        value: 20
       - key: SOLANA_TRACKER_CACHE_TTL_MS
         value: 15000
       - key: SOLANA_TRACKER_KOL_CACHE_TTL_MS
@@ -284,6 +288,10 @@ services:
         value: redis
       - key: REDIS_URL
         sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: POSTGRES_HISTORY_ENABLED
+        value: true
       - key: CACHE_CONNECT_TIMEOUT_MS
         value: 800
       - key: CACHE_CIRCUIT_BREAKER_MS
@@ -351,6 +359,10 @@ services:
         value: redis
       - key: REDIS_URL
         sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: POSTGRES_HISTORY_ENABLED
+        value: true
       - key: CACHE_CONNECT_TIMEOUT_MS
         value: 800
       - key: CACHE_CIRCUIT_BREAKER_MS

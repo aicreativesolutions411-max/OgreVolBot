@@ -145,6 +145,10 @@ const webSummaryCache = new Map();
 let redisKvClientPromise = null;
 let redisKvClient = null;
 let kvCircuitOpenUntil = 0;
+let postgresPoolPromise = null;
+let postgresPoolClient = null;
+let postgresSchemaReadyPromise = null;
+let postgresCircuitOpenUntil = 0;
 const cacheDedupePromises = new Map();
 const cacheLockMemory = new Map();
 const cacheLockRecent = [];
@@ -165,6 +169,17 @@ const kvCacheStats = {
   lastHitAt: "",
   lastLockAt: "",
   lastDedupeAt: ""
+};
+const postgresHistoryStats = {
+  configured: false,
+  enabled: false,
+  reads: 0,
+  writes: 0,
+  errors: 0,
+  lastReadAt: "",
+  lastWriteAt: "",
+  lastError: "",
+  circuitOpen: false
 };
 const rpcStats = {
   callCount: 0,
@@ -417,7 +432,7 @@ function loadConfig() {
   const jupiterSwapMaxAttempts = Number.parseInt(process.env.JUPITER_SWAP_MAX_ATTEMPTS || "2", 10);
   const manualLaunchScanIntervalMs = Number.parseInt(process.env.MANUAL_LAUNCH_SCAN_INTERVAL_MS || String(DEFAULT_MANUAL_LAUNCH_SCAN_INTERVAL_MS), 10);
   const webSessionTtlHours = Number.parseInt(process.env.WEB_SESSION_TTL_HOURS || "720", 10);
-  const solanaTrackerKolLimit = Number.parseInt(process.env.SOLANA_TRACKER_KOL_LIMIT || "12", 10);
+  const solanaTrackerKolLimit = Number.parseInt(process.env.SOLANA_TRACKER_KOL_LIMIT || "20", 10);
   const solanaTrackerCacheTtlMs = Number.parseInt(process.env.SOLANA_TRACKER_CACHE_TTL_MS || "15000", 10);
   const solanaTrackerKolCacheTtlMs = Number.parseInt(process.env.SOLANA_TRACKER_KOL_CACHE_TTL_MS || "120000", 10);
   const solanaTrackerKolSignalLookups = Number.parseInt(process.env.SOLANA_TRACKER_KOL_SIGNAL_LOOKUPS || "2", 10);
@@ -425,7 +440,7 @@ function loadConfig() {
   const solanaTrackerKolPositionConcurrency = Number.parseInt(process.env.SOLANA_TRACKER_KOL_POSITION_CONCURRENCY || "1", 10);
   const solanaTrackerKolUsePeriodEndpoint = parseBoolean(process.env.SOLANA_TRACKER_KOL_USE_PERIOD_ENDPOINT || "false");
   const kolCopyScanIntervalMs = Number.parseInt(process.env.KOL_COPY_SCAN_INTERVAL_MS || "30000", 10);
-  const madeOnSolKolLimit = Number.parseInt(process.env.MADE_ON_SOL_KOL_LIMIT || "10", 10);
+  const madeOnSolKolLimit = Number.parseInt(process.env.MADE_ON_SOL_KOL_LIMIT || "20", 10);
   const madeOnSolCacheTtlMs = Number.parseInt(process.env.MADE_ON_SOL_CACHE_TTL_MS || "900000", 10);
   const kolUseSolanaTrackerFallback = parseBoolean(process.env.KOL_USE_SOLANA_TRACKER_FALLBACK || "false");
   const livePairsRpcSafety = parseBoolean(process.env.LIVE_PAIRS_RPC_SAFETY || "true");
@@ -499,6 +514,8 @@ function loadConfig() {
   const kvRestUrl = String(process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL || process.env.SLIMEWIRE_KV_REST_URL || "").trim().replace(/\/$/, "");
   const kvRestToken = String(process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN || process.env.SLIMEWIRE_KV_REST_TOKEN || "").trim();
   const cacheNamespace = String(process.env.CACHE_NAMESPACE || process.env.KV_CACHE_NAMESPACE || "slimewire").trim().replace(/[^\w:-]/g, "").slice(0, 40) || "slimewire";
+  const databaseUrl = String(process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.RENDER_DATABASE_URL || "").trim();
+  const postgresHistoryEnabled = parseOptionalBoolean(process.env.POSTGRES_HISTORY_ENABLED, Boolean(databaseUrl));
   const displayCacheFreshMs = Number.parseInt(process.env.DISPLAY_CACHE_FRESH_MS || "2500", 10);
   const displayCacheStaleMs = Number.parseInt(process.env.DISPLAY_CACHE_STALE_MS || "90000", 10);
   const cacheConnectTimeoutMs = Number.parseInt(process.env.CACHE_CONNECT_TIMEOUT_MS || "800", 10);
@@ -796,6 +813,8 @@ function loadConfig() {
     kvRestUrl,
     kvRestToken,
     cacheNamespace,
+    databaseUrl,
+    postgresHistoryEnabled,
     displayCacheFreshMs,
     displayCacheStaleMs,
     cacheConnectTimeoutMs,
@@ -1057,6 +1076,7 @@ function startHealthServer() {
           provider: kvProviderName(),
           configured: kvConfigured()
         },
+        postgresHistory: postgresStatsSnapshot(),
         pumpLaunch: {
           enabled: CONFIG.pumpLaunchEnabled,
           apiUrl: CONFIG.pumpLaunchApiUrl,
@@ -4547,6 +4567,7 @@ function handleInternalWorkerHealth(request, response) {
     cacheProvider: kvProviderName(),
     cacheConfigured: kvConfigured(),
     cacheStats: cacheStatsSnapshot(),
+    postgresHistory: postgresStatsSnapshot(),
     activeCacheLocks: activeCacheLockSnapshot(),
     rpcProviderName: CONFIG.rpcProviderName,
     rpcUrlHost: CONFIG.rpcUrlHost,
@@ -18932,6 +18953,230 @@ function displayCacheEnvelope(value, cachedAt = Date.now()) {
   };
 }
 
+function postgresHistoryConfigured() {
+  return Boolean(CONFIG.postgresHistoryEnabled && CONFIG.databaseUrl);
+}
+
+function postgresStatsSnapshot() {
+  return {
+    ...postgresHistoryStats,
+    configured: postgresHistoryConfigured(),
+    enabled: Boolean(CONFIG.postgresHistoryEnabled),
+    circuitOpen: postgresCircuitOpenUntil > Date.now()
+  };
+}
+
+function postgresSslConfig() {
+  try {
+    const url = new URL(CONFIG.databaseUrl);
+    const sslMode = String(url.searchParams.get("sslmode") || "").toLowerCase();
+    if (sslMode === "require" || sslMode === "verify-ca" || sslMode === "verify-full") {
+      return { rejectUnauthorized: false };
+    }
+  } catch {
+    // Invalid/missing DATABASE_URL is handled by the connection attempt below.
+  }
+  return undefined;
+}
+
+async function postgresPool() {
+  if (!postgresHistoryConfigured()) return null;
+  postgresHistoryStats.configured = true;
+  postgresHistoryStats.enabled = true;
+  if (postgresCircuitOpenUntil > Date.now()) return null;
+  if (postgresPoolClient) return postgresPoolClient;
+  if (!postgresPoolPromise) {
+    postgresPoolPromise = import("pg")
+      .then(({ Pool }) => {
+        const pool = new Pool({
+          connectionString: CONFIG.databaseUrl,
+          max: 2,
+          idleTimeoutMillis: 10_000,
+          connectionTimeoutMillis: CONFIG.cacheConnectTimeoutMs,
+          ssl: postgresSslConfig()
+        });
+        pool.on("error", (error) => {
+          postgresHistoryStats.errors += 1;
+          postgresHistoryStats.lastError = safePerfEventText(error?.message || "Postgres pool error", 140);
+        });
+        return pool.query("select 1").then(() => {
+          postgresPoolClient = pool;
+          return pool;
+        });
+      })
+      .catch((error) => {
+        postgresHistoryStats.errors += 1;
+        postgresHistoryStats.lastError = safePerfEventText(error?.message || "Postgres connect failed", 140);
+        postgresCircuitOpenUntil = Date.now() + CONFIG.cacheCircuitBreakerMs;
+        postgresPoolPromise = null;
+        postgresPoolClient = null;
+        return null;
+      });
+  }
+  return postgresPoolPromise;
+}
+
+async function ensurePostgresHistorySchema() {
+  const pool = await postgresPool();
+  if (!pool) return false;
+  if (!postgresSchemaReadyPromise) {
+    postgresSchemaReadyPromise = pool.query(`
+      create table if not exists kol_profile_history (
+        id text primary key,
+        profile_json jsonb not null,
+        first_seen_at timestamptz not null default now(),
+        last_seen_at timestamptz not null default now(),
+        updated_at timestamptz not null default now()
+      );
+      create table if not exists kol_signal_history (
+        id text primary key,
+        kol_id text,
+        token_mint text,
+        source text,
+        signal_json jsonb not null,
+        seen_at timestamptz not null default now(),
+        updated_at timestamptz not null default now()
+      );
+      create table if not exists kol_dump_stats_history (
+        kol_id text primary key,
+        stats_json jsonb not null,
+        updated_at timestamptz not null default now()
+      );
+      create index if not exists kol_profile_history_last_seen_idx on kol_profile_history (last_seen_at desc);
+      create index if not exists kol_signal_history_token_idx on kol_signal_history (token_mint);
+      create index if not exists kol_signal_history_seen_idx on kol_signal_history (seen_at desc);
+    `)
+      .then(() => true)
+      .catch((error) => {
+        postgresHistoryStats.errors += 1;
+        postgresHistoryStats.lastError = safePerfEventText(error?.message || "Postgres schema failed", 140);
+        postgresCircuitOpenUntil = Date.now() + CONFIG.cacheCircuitBreakerMs;
+        postgresSchemaReadyPromise = null;
+        return false;
+      });
+  }
+  return postgresSchemaReadyPromise;
+}
+
+async function readPostgresKolProfiles(limit = 500) {
+  if (!await ensurePostgresHistorySchema()) return [];
+  const pool = await postgresPool();
+  if (!pool) return [];
+  try {
+    const result = await pool.query(
+      "select profile_json from kol_profile_history order by last_seen_at desc limit $1",
+      [Math.max(1, Math.min(1000, Number(limit) || 500))]
+    );
+    postgresHistoryStats.reads += 1;
+    postgresHistoryStats.lastReadAt = new Date().toISOString();
+    return result.rows.map((row) => row.profile_json).filter(Boolean);
+  } catch (error) {
+    postgresHistoryStats.errors += 1;
+    postgresHistoryStats.lastError = safePerfEventText(error?.message || "Postgres profile read failed", 140);
+    return [];
+  }
+}
+
+async function persistPostgresKolProfiles(profiles = []) {
+  const rows = Array.isArray(profiles) ? profiles.filter(Boolean).slice(0, 500) : [];
+  if (!rows.length || !await ensurePostgresHistorySchema()) return false;
+  const pool = await postgresPool();
+  if (!pool) return false;
+  try {
+    for (const profile of rows) {
+      const id = kolProfileId(profile);
+      if (!id) continue;
+      await pool.query(`
+        insert into kol_profile_history (id, profile_json, first_seen_at, last_seen_at, updated_at)
+        values ($1, $2::jsonb, coalesce($3::timestamptz, now()), coalesce($4::timestamptz, now()), now())
+        on conflict (id) do update set
+          profile_json = excluded.profile_json,
+          last_seen_at = greatest(kol_profile_history.last_seen_at, excluded.last_seen_at),
+          updated_at = now()
+      `, [
+        id,
+        JSON.stringify(profile),
+        profile.firstSeenAt || profile.lastSeenAt || null,
+        profile.lastSeenAt || new Date().toISOString()
+      ]);
+    }
+    postgresHistoryStats.writes += 1;
+    postgresHistoryStats.lastWriteAt = new Date().toISOString();
+    return true;
+  } catch (error) {
+    postgresHistoryStats.errors += 1;
+    postgresHistoryStats.lastError = safePerfEventText(error?.message || "Postgres profile write failed", 140);
+    return false;
+  }
+}
+
+async function persistPostgresKolSignalRows(rows = []) {
+  const signals = Array.isArray(rows) ? rows.filter((row) => row?.tokenMint).slice(0, 250) : [];
+  if (!signals.length || !await ensurePostgresHistorySchema()) return false;
+  const pool = await postgresPool();
+  if (!pool) return false;
+  try {
+    for (const signal of signals) {
+      const kolId = kolProfileId({
+        wallet: signal.kolWallet || signal.wallet || signal.owner,
+        twitter: signal.twitter,
+        name: signal.kolName,
+        tokenMint: signal.tokenMint
+      });
+      const signalId = crypto.createHash("sha256")
+        .update(`${signal.tokenMint || ""}:${kolId}:${signal.lastTradeAt || signal.createdAt || signal.source || ""}`)
+        .digest("hex")
+        .slice(0, 40);
+      await pool.query(`
+        insert into kol_signal_history (id, kol_id, token_mint, source, signal_json, seen_at, updated_at)
+        values ($1, $2, $3, $4, $5::jsonb, coalesce($6::timestamptz, now()), now())
+        on conflict (id) do update set
+          signal_json = excluded.signal_json,
+          updated_at = now()
+      `, [
+        signalId,
+        kolId || null,
+        signal.tokenMint,
+        String(signal.source || signal.sourceLabel || "kol_signal").slice(0, 80),
+        JSON.stringify(signal),
+        signal.lastTradeAt || signal.createdAt || null
+      ]);
+    }
+    postgresHistoryStats.writes += 1;
+    postgresHistoryStats.lastWriteAt = new Date().toISOString();
+    return true;
+  } catch (error) {
+    postgresHistoryStats.errors += 1;
+    postgresHistoryStats.lastError = safePerfEventText(error?.message || "Postgres signal write failed", 140);
+    return false;
+  }
+}
+
+async function persistPostgresKolDumpStats(stats = []) {
+  const rows = Array.isArray(stats) ? stats.filter((row) => row?.kolId).slice(0, 500) : [];
+  if (!rows.length || !await ensurePostgresHistorySchema()) return false;
+  const pool = await postgresPool();
+  if (!pool) return false;
+  try {
+    for (const row of rows) {
+      await pool.query(`
+        insert into kol_dump_stats_history (kol_id, stats_json, updated_at)
+        values ($1, $2::jsonb, now())
+        on conflict (kol_id) do update set
+          stats_json = excluded.stats_json,
+          updated_at = now()
+      `, [String(row.kolId), JSON.stringify(row)]);
+    }
+    postgresHistoryStats.writes += 1;
+    postgresHistoryStats.lastWriteAt = new Date().toISOString();
+    return true;
+  } catch (error) {
+    postgresHistoryStats.errors += 1;
+    postgresHistoryStats.lastError = safePerfEventText(error?.message || "Postgres dump stats write failed", 140);
+    return false;
+  }
+}
+
 async function redisKv() {
   if (kvProviderName() !== "redis") return null;
   if (kvCircuitOpenUntil > Date.now()) {
@@ -24622,7 +24867,8 @@ async function storedKolProfiles() {
   const current = cachedKolProfiles();
   const external = await cacheGetJson(kolProfilesExternalKey()).catch(() => null);
   const externalRows = Array.isArray(external?.value?.profiles) ? external.value.profiles : Array.isArray(external?.profiles) ? external.profiles : [];
-  const merged = mergeKolProfiles(externalRows, current).slice(0, 250);
+  const postgresRows = await readPostgresKolProfiles().catch(() => []);
+  const merged = mergeKolProfiles(postgresRows, externalRows, current).slice(0, 500);
   if (merged.length) kolProfileHistoryCache = { cachedAt: Date.now(), value: merged };
   return merged;
 }
@@ -24641,6 +24887,8 @@ async function persistKolProfilesFromScan(mode = "hot", wallet = "", scan = {}) 
     updatedAt: new Date().toISOString(),
     source: "cached-kol-api-profile-rows"
   }), KOL_PROFILE_HISTORY_TTL_MS).catch(() => false);
+  void persistPostgresKolProfiles(merged).catch(() => {});
+  void persistPostgresKolSignalRows(scan?.rows || []).catch(() => {});
   return true;
 }
 
@@ -24728,6 +24976,7 @@ async function webKolDumpStats(kolId = "") {
   };
   kolDumpStatsCache.set(id, { cachedAt: Date.now(), value });
   await cacheSetJson(kolDumpStatsExternalKey(id), displayCacheEnvelope(value), KOL_DUMP_STATS_TTL_MS).catch(() => false);
+  void persistPostgresKolDumpStats(filtered).catch(() => {});
   return value;
 }
 
@@ -24968,10 +25217,12 @@ async function buildKolScan(userId, mode = "hot", wallet = "") {
     ]).sort(compareKolSignals), 72);
     const sortedPool = diversifyKolSignals((await hydrateKolSignalMetadata(signalCandidates)).sort(compareKolSignals), 48);
     const sorted = rotateRowsForRefresh(sortedPool, 36, scanState.refreshCount, { stickyCount: 2 });
-    const kols = uniqueKolSummaries([
+    const kolPool = uniqueKolSummaries([
       ...(madePart.kols || []),
       ...(solanaPart.kols || [])
-    ]).slice(0, 12);
+    ]);
+    const stickyKols = safeMode === "top" ? 4 : safeMode === "consistent" ? 3 : 2;
+    const kols = rotateRowsForRefresh(kolPool, 12, scanState.refreshCount, { stickyCount: stickyKols });
     const notes = [madePart.error ? `MadeOnSol: ${madePart.error}` : "", solanaPart.error ? `Solana Tracker: ${solanaPart.error}` : ""].filter(Boolean);
 
     return {

@@ -3231,8 +3231,10 @@ function scheduleKolAutoRefresh() {
     clearKolTimer();
     return;
   }
-  const hotBuysMode = String(state.kolMode || "hot") === "hot";
-  const kolAutoRefreshMs = hotBuysMode ? 10_000 : 60_000;
+  const kolMode = String(state.kolMode || "hot");
+  const hotBuysMode = kolMode === "hot";
+  const freshMode = kolMode === "fresh";
+  const kolAutoRefreshMs = hotBuysMode || freshMode ? 10_000 : 30_000;
   const nextKey = `${state.activeTab}:${state.kolMode}:${kolAutoRefreshMs}`;
   if (kolTimer && kolTimerKey === nextKey) return;
   clearKolTimer();
@@ -7404,14 +7406,45 @@ function launchWatchesHtml() {
 }
 
 function kolDumpProfileId(kol = {}) {
-  return String(kol.kolId || kol.id || kol.wallet || kol.twitter || kol.handle || kol.name || kol.shortWallet || "")
+  return String(kol.kolId || kol.id || kol.wallet || kol.kolWallet || kol.owner || kol.traderWallet || kol.twitter || kol.handle || kol.kolName || kol.name || kol.shortWallet || kol.tokenMint || "")
     .trim()
     .replace(/\s+/g, "_")
     .toLowerCase();
 }
 
+function kolDumpSubjectFromSignalRow(row = {}) {
+  const wallet = String(row.kolWallet || row.wallet || row.owner || row.traderWallet || "").trim();
+  const twitter = cleanXHandle(row.twitter || row.handle || row.x || "");
+  const tokenMint = String(row.tokenMint || row.mint || "").trim();
+  const kolName = String(row.kolName || row.traderName || row.kol_name || "").trim();
+  const clusterLabel = row.kolCount ? `${row.kolCount} KOL${Number(row.kolCount) === 1 ? "" : "s"}` : "";
+  return {
+    kolId: wallet || twitter || kolName || tokenMint,
+    wallet,
+    kolWallet: wallet,
+    twitter,
+    handle: twitter,
+    name: kolName || clusterLabel || row.signalType || row.symbol || shortAddress(tokenMint),
+    displayName: kolName || clusterLabel || "KOL signal",
+    shortWallet: wallet ? shortAddress(wallet) : "",
+    tokenMint,
+    symbol: row.symbol || "",
+    callsTracked: firstUsefulNumber(row.callsTracked, row.trades, row.tradeCount, row.buyCount, row.kolCount, wallet || twitter ? 1 : 0),
+    currentPositionCount: firstUsefulNumber(row.currentPositionCount, row.positionCount, row.kolCount, 1),
+    dumpRiskPercent: row.dumpRiskPercent,
+    soldWithin15mPercent: row.soldWithin15mPercent,
+    soldWithin60mPercent: row.soldWithin60mPercent,
+    medianHoldMinutes: row.medianHoldMinutes,
+    medianPostSignalDrawdownPercent: row.medianPostSignalDrawdownPercent,
+    followerSurvival30mPercent: row.followerSurvival30mPercent,
+    followerSurvival60mPercent: row.followerSurvival60mPercent,
+    source: row.source || row.sourceLabel || "kol_signal_row",
+    lastSeenAt: state.kolLastUpdatedAt || new Date().toISOString()
+  };
+}
+
 function computeUiKolDumpStats(kol = {}) {
-  const callsTracked = Number(firstUsefulNumber(kol.callsTracked, kol.trades, kol.tradeCount, kol.buyCount));
+  const callsTracked = Number(firstUsefulNumber(kol.callsTracked, kol.trades, kol.tradeCount, kol.buyCount, kol.kolCount));
   const explicitRisk = parseUiNumber(kol.dumpRiskPercent ?? kol.soldWithin60mPercent);
   const hasRisk = Number.isFinite(explicitRisk);
   const dumpRiskPercent = hasRisk ? Math.max(0, Math.min(100, Math.round(explicitRisk))) : 0;
@@ -7427,10 +7460,13 @@ function computeUiKolDumpStats(kol = {}) {
           : "Mixed";
   return {
     kolId: kolDumpProfileId(kol),
-    displayName: kol.displayName || kol.name || (kol.twitter ? `@${kol.twitter}` : kol.shortWallet || shortAddress(kol.wallet || "")),
+    displayName: kol.displayName || kol.name || kol.kolName || (kol.twitter ? `@${kol.twitter}` : kol.shortWallet || shortAddress(kol.wallet || kol.kolWallet || "")),
     handle: cleanXHandle(kol.handle || kol.twitter || ""),
-    walletAddresses: [kol.wallet, kol.owner, kol.address, kol.publicKey].filter(Boolean),
+    walletAddresses: [kol.wallet, kol.kolWallet, kol.owner, kol.traderWallet, kol.address, kol.publicKey].filter(Boolean),
     callsTracked,
+    currentPositionCount: firstUsefulNumber(kol.currentPositionCount, kol.positionsCount, kol.positionCount),
+    lastTokenMint: kol.lastTokenMint || kol.tokenMint || kol.mint || "",
+    lastTokenSymbol: kol.lastTokenSymbol || kol.symbol || "",
     dumpRiskPercent,
     medianHoldMinutes: kol.medianHoldMinutes || null,
     soldWithin15mPercent: kol.soldWithin15mPercent || null,
@@ -7441,6 +7477,9 @@ function computeUiKolDumpStats(kol = {}) {
     riskLabel,
     lowData,
     confidence: lowData ? "low" : callsTracked >= 12 ? "high" : "medium",
+    historySource: kol.source || "local-ui",
+    firstSeenAt: kol.firstSeenAt || "",
+    lastSeenAt: kol.lastSeenAt || "",
     reasons: lowData
       ? ["Low local sell-window history. Wallet-based until social signal data is available."]
       : dumpRiskPercent >= 30
@@ -7450,13 +7489,30 @@ function computeUiKolDumpStats(kol = {}) {
   };
 }
 
+function uniqueKolDumpRows(rows = []) {
+  const byId = new Map();
+  for (const row of rows.filter(Boolean)) {
+    const id = String(row.kolId || kolDumpProfileId(row) || "").trim();
+    if (!id) continue;
+    const existing = byId.get(id);
+    byId.set(id, existing ? { ...row, ...existing, kolId: id } : { ...row, kolId: id });
+  }
+  return [...byId.values()];
+}
+
 function kolDumpStatsRows() {
   const apiRows = Array.isArray(state.kolDumpStats?.stats) ? state.kolDumpStats.stats : [];
-  if (apiRows.length) return apiRows;
-  const kols = Array.isArray(state.kolScan?.kols) && state.kolScan.kols.length
-    ? state.kolScan.kols
-    : curatedKolProfiles();
-  return kols.map(computeUiKolDumpStats).filter((row) => row.kolId);
+  const scanKols = Array.isArray(state.kolScan?.kols) ? state.kolScan.kols : [];
+  const signalSubjects = Array.isArray(state.kolScan?.rows)
+    ? state.kolScan.rows.map(kolDumpSubjectFromSignalRow)
+    : [];
+  const fallbackKols = !apiRows.length && !scanKols.length && !signalSubjects.length ? curatedKolProfiles() : [];
+  return uniqueKolDumpRows([
+    ...apiRows,
+    ...scanKols.map(computeUiKolDumpStats),
+    ...signalSubjects.map(computeUiKolDumpStats),
+    ...fallbackKols.map(computeUiKolDumpStats)
+  ]).filter((row) => row.kolId);
 }
 
 function kolDumpPercentLabel(row = {}) {
@@ -7482,6 +7538,11 @@ function kolDumpDetailsButtonHtml(kol = {}, label = "Dump Info") {
   if (!id) return "";
   const title = row ? kolDumpMetaLine(row) : "Open wallet-based KOL dump breakdown";
   return `<button type="button" class="kol-dump-chip" data-kol-dump-details="${escapeHtml(id)}" title="${escapeHtml(title)}">${escapeHtml(label)}</button>`;
+}
+
+function kolDumpSignalButtonHtml(row = {}, label = "Dump") {
+  if (!featureEnabled("kolDumpDetectorEnabled", true)) return "";
+  return kolDumpDetailsButtonHtml(kolDumpSubjectFromSignalRow(row), label);
 }
 
 function kolDumpInlineSummaryHtml(kol = {}) {
@@ -11877,13 +11938,14 @@ function terminalSignalRowsHtml(rows, options = {}) {
   const emptyTitle = options.emptyTitle || "No signals loaded";
   const emptyMessage = options.emptyMessage || "Refresh the feed to load current signals.";
   const visibleRows = rotatedDisplayRows(rows || [], limit, options.rotateKey || "", options.stickyCount || 0);
+  const isKolContext = options.context === "kol";
   if (!visibleRows.length) return emptyState(emptyTitle, emptyMessage);
   return `
     <div class="terminal-token-list">
       ${visibleRows.map((row, index) => {
         const setup = row.scalpSetup || row.momentum || row.category || "live";
         return `
-          <article class="terminal-token-row" data-token-chart="${escapeHtml(row.tokenMint)}" data-token-chart-source="terminal-row">
+          <article class="terminal-token-row ${isKolContext ? "is-kol-signal" : ""}" data-token-chart="${escapeHtml(row.tokenMint)}" data-token-chart-source="terminal-row">
             ${livePairAvatarHtml(row, { priority: index < 8 })}
             <div class="terminal-token-main">
               <div class="terminal-token-title">
@@ -11901,6 +11963,7 @@ function terminalSignalRowsHtml(rows, options = {}) {
               <button type="button" data-quick-buy-token="${escapeHtml(row.tokenMint)}" data-quick-buy-source="terminal-row" title="Quick buy with preset or custom SOL amount">${escapeHtml(quickBuyButtonLabel())}</button>
               <button type="button" data-quick-bundle-token="${escapeHtml(row.tokenMint)}">Bundle</button>
               <button type="button" data-smart-chart-token="${escapeHtml(row.tokenMint)}">Chart</button>
+              ${isKolContext ? kolDumpSignalButtonHtml(row) : ""}
               <button type="button" class="watch-action" data-watch-token="${escapeHtml(row.tokenMint)}" data-watch-symbol="${escapeHtml(row.symbol || "")}" data-watch-name="${escapeHtml(row.name || "")}" data-watch-image="${escapeHtml(livePairImageUrl(row) || "")}">${isTokenWatched(row.tokenMint) ? "Saved" : "Watch"}</button>
             </div>
           </article>
@@ -11919,11 +11982,12 @@ function compactSignalRowsHtml(rows, options = {}) {
   const emptyTitle = options.emptyTitle || "No signals loaded";
   const emptyMessage = options.emptyMessage || "Refresh the feed to load current signals.";
   const visibleRows = rotatedDisplayRows(rows || [], limit, options.rotateKey || "", options.stickyCount || 0);
+  const isKolContext = options.context === "kol";
   if (!visibleRows.length) return emptyState(emptyTitle, emptyMessage);
   return `
     <div class="compact-signal-list">
       ${visibleRows.map((row, index) => `
-        <article class="compact-signal-row" data-token-chart="${escapeHtml(row.tokenMint)}" data-token-chart-source="compact-row">
+        <article class="compact-signal-row ${isKolContext ? "is-kol-signal" : ""}" data-token-chart="${escapeHtml(row.tokenMint)}" data-token-chart-source="compact-row">
           ${livePairAvatarHtml(row, { priority: index < 8 })}
           <div class="compact-signal-main">
             <div>
@@ -11941,6 +12005,7 @@ function compactSignalRowsHtml(rows, options = {}) {
             <button type="button" data-quick-buy-token="${escapeHtml(row.tokenMint)}" data-quick-buy-source="compact-row" title="Quick buy with preset or custom SOL amount">${escapeHtml(quickBuyButtonLabel())}</button>
             <button type="button" data-quick-bundle-token="${escapeHtml(row.tokenMint)}">Bundle</button>
             <button type="button" data-smart-chart-token="${escapeHtml(row.tokenMint)}">Chart</button>
+            ${isKolContext ? kolDumpSignalButtonHtml(row) : ""}
             <button type="button" class="watch-action" data-watch-token="${escapeHtml(row.tokenMint)}" data-watch-symbol="${escapeHtml(row.symbol || "")}" data-watch-name="${escapeHtml(row.name || "")}" data-watch-image="${escapeHtml(livePairImageUrl(row) || "")}">${isTokenWatched(row.tokenMint) ? "Saved" : "Watch"}</button>
           </div>
         </article>
@@ -13868,6 +13933,7 @@ function livePairRowsHtml(rows) {
 function tokenSignalRowsHtml(rows, options = {}) {
   const shareBuilder = options.shareBuilder || livePairShareText;
   const visibleRows = uniqueSignalRows(rows);
+  const listClass = `signal-list ${options.context === "kol" ? "signal-list-kol" : ""}`.trim();
   if (!visibleRows.length) {
     return `
       ${options.hideToolbar ? "" : fastPresetToolbarHtml(options.context || "scanner")}
@@ -13876,7 +13942,7 @@ function tokenSignalRowsHtml(rows, options = {}) {
   }
   return `
     ${options.hideToolbar ? "" : fastPresetToolbarHtml(options.context || "scanner")}
-    <div class="signal-list">
+    <div class="${escapeHtml(listClass)}">
       <div class="signal-header">
         <span>Pair Info</span>
         <span>Age</span>
@@ -13896,11 +13962,12 @@ function tokenSignalRowHtml(row, index, options = {}) {
   const shareText = options.shareText || livePairShareText(row);
   const actionLabel = options.primaryActionLabel || "Trade";
   const primaryAction = options.primaryAction || "quickTrade";
+  const isKolContext = options.context === "kol";
   const watchButton = options.context === "watchlist"
     ? `<button type="button" data-unwatch-token="${escapeHtml(row.tokenMint)}">Remove</button>`
     : `<button type="button" class="watch-action" data-watch-token="${escapeHtml(row.tokenMint)}" data-watch-symbol="${escapeHtml(row.symbol || "")}" data-watch-name="${escapeHtml(row.name || "")}" data-watch-image="${escapeHtml(livePairImageUrl(row) || "")}">${watched ? "Saved" : "Watch"}</button>`;
   return `
-    <article class="signal-row" data-token-chart="${escapeHtml(row.tokenMint)}" data-token-chart-source="${escapeHtml(options.context || "signal-row")}">
+    <article class="signal-row ${isKolContext ? "is-kol-signal" : ""}" data-token-chart="${escapeHtml(row.tokenMint)}" data-token-chart-source="${escapeHtml(options.context || "signal-row")}">
       <div class="signal-token">
         ${livePairAvatarHtml(row, { priority: Boolean(options.priority) })}
         <div>
@@ -13933,6 +14000,7 @@ function tokenSignalRowHtml(row, index, options = {}) {
       <div class="signal-actions">
         ${primaryAction === "snipe" ? `<button type="button" class="primary" data-sniper-buy="${escapeHtml(row.tokenMint)}">${escapeHtml(actionLabel)}</button>` : `<button type="button" class="primary" data-token-trade="${escapeHtml(row.tokenMint)}" data-token-trade-source="${escapeHtml(options.context || "signal-row")}">Trade</button><button type="button" data-quick-buy-token="${escapeHtml(row.tokenMint)}" data-quick-buy-source="${escapeHtml(options.context || "signal-row")}">${escapeHtml(quickBuyButtonLabel())}</button>`}
         <button type="button" data-quick-bundle-token="${escapeHtml(row.tokenMint)}">Bundle</button>
+        ${isKolContext ? kolDumpSignalButtonHtml(row) : ""}
         ${watchButton}
       </div>
     </article>
