@@ -10,7 +10,7 @@
     <link rel="dns-prefetch" href="https://dexscreener.com">
     <link rel="preconnect" href="https://api.dexscreener.com">
     <link rel="dns-prefetch" href="https://api.dexscreener.com">
-    <link rel="preload" as="video" href="/assets/slimewire/intro/swamp-entry.mp4" type="video/mp4">
+    <link rel="preload" as="video" href="/assets/slimewire/intro/swamp-intro-final.mp4" type="video/mp4">
     <link rel="preload" as="image" href="/assets/slimewire/png/slimewire-mark.png">
     <link rel="preload" as="image" href="/assets/slimewire/png/slime-border-frame-rich.png">
     <link rel="preload" as="image" href="/assets/slimewire/clean-ui/wallet_icons/default/phantom.png">
@@ -243,27 +243,17 @@
           <video
             class="swamp-intro-media"
             data-intro-video="entry"
-            src="./assets/slimewire/intro/swamp-entry.mp4"
+            src="./assets/slimewire/intro/swamp-intro-final.mp4"
             autoplay
             playsinline
             preload="auto"
             aria-label="SlimeWire intro video"
-          ></video>
-          <video
-            class="swamp-intro-media"
-            data-intro-video="transition"
-            src="./assets/slimewire/intro/swamp-transition.mp4"
-            playsinline
-            preload="none"
-            hidden
-            aria-label="SlimeWire transition video"
           ></video>
           <div class="swamp-intro-overlay" data-intro-overlay>
             <span data-intro-status>Tap Enter or the video to continue.</span>
             <div class="swamp-intro-actions">
               <button type="button" class="swamp-intro-sound" data-intro-sound>Sound</button>
               <button type="button" class="swamp-intro-enter" data-intro-start>Enter</button>
-              <button type="button" class="swamp-intro-skip" data-intro-skip>Skip</button>
             </div>
           </div>
         </div>

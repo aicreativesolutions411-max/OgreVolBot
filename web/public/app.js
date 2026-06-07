@@ -714,16 +714,10 @@ function initializeIntroVideoGate() {
 
   const stage = root.querySelector("[data-intro-stage]");
   const entryVideo = root.querySelector('[data-intro-video="entry"]');
-  const transitionVideo = root.querySelector('[data-intro-video="transition"]');
   const status = root.querySelector("[data-intro-status]");
   const enterButton = root.querySelector("[data-intro-start]");
   const audioButton = root.querySelector("[data-intro-sound]");
-  const skipButton = root.querySelector("[data-intro-skip]");
   let finishing = false;
-  let transitionStarted = false;
-  let transitionFallbackTimer = 0;
-  let transitionRevealTimer = 0;
-  let transitionWarmStarted = false;
   let audioUnlocked = true;
 
   const setPhase = (phase, message) => {
@@ -746,12 +740,11 @@ function initializeIntroVideoGate() {
 
   const setVideoAudio = (enabled) => {
     audioUnlocked = enabled;
-    [entryVideo, transitionVideo].forEach((video) => {
-      if (!video) return;
-      video.defaultMuted = !enabled;
-      video.muted = !enabled;
-      video.volume = enabled ? 1 : 0;
-    });
+    if (entryVideo) {
+      entryVideo.defaultMuted = !enabled;
+      entryVideo.muted = !enabled;
+      entryVideo.volume = enabled ? 1 : 0;
+    }
     setAudioUi(enabled);
   };
 
@@ -766,104 +759,45 @@ function initializeIntroVideoGate() {
     if (message) setPhase(stage?.dataset.introPhase || "entry", message);
   };
 
-  const warmTransitionVideo = () => {
-    if (!transitionVideo || transitionWarmStarted) return;
-    transitionWarmStarted = true;
-    transitionVideo.preload = "auto";
-    transitionVideo.defaultMuted = !audioUnlocked;
-    transitionVideo.muted = !audioUnlocked;
-    transitionVideo.volume = audioUnlocked ? 1 : 0;
-    try {
-      transitionVideo.load?.();
-    } catch {
-      // Video warmup is best-effort; playback still starts on Enter.
-    }
-  };
-
-  const scheduleTransitionWarmup = () => {
-    if (transitionWarmStarted) return;
-    const idle = window.requestIdleCallback || ((callback) => window.setTimeout(callback, 700));
-    idle(() => warmTransitionVideo(), { timeout: 1600 });
-  };
-
-  const revealTransitionVideo = () => {
-    if (finishing || !transitionVideo) return;
-    if (transitionRevealTimer) window.clearTimeout(transitionRevealTimer);
-    setPhase("transition", "Opening the terminal...");
-    entryVideo?.pause?.();
-    if (entryVideo) entryVideo.hidden = true;
-    transitionVideo.hidden = false;
-  };
-
   const finishIntro = () => {
     if (finishing) return;
     finishing = true;
-    if (transitionFallbackTimer) window.clearTimeout(transitionFallbackTimer);
-    if (transitionRevealTimer) window.clearTimeout(transitionRevealTimer);
     markIntroGateCompleted();
     entryVideo?.pause?.();
-    transitionVideo?.pause?.();
     navigateTo("/connect");
   };
 
-  const startTransition = () => {
+  const playIntro = (message = "") => {
     if (finishing) return;
-    if (transitionStarted) {
-      finishIntro();
-      return;
-    }
-    transitionStarted = true;
-    enableIntroAudio("Opening the terminal...");
-    if (enterButton) enterButton.textContent = "Enter";
-    if (skipButton) skipButton.textContent = "Skip";
-    if (!transitionVideo) {
-      finishIntro();
-      return;
-    }
-    setPhase("loading", "Loading next clip...");
-    transitionVideo.hidden = false;
-    transitionVideo.preload = "auto";
-    transitionVideo.defaultMuted = !audioUnlocked;
-    transitionVideo.muted = !audioUnlocked;
-    transitionVideo.volume = audioUnlocked ? 1 : 0;
-    try {
-      transitionVideo.currentTime = 0;
-    } catch {
-      // Some mobile browsers do not allow seeking until metadata is ready.
-    }
-    transitionVideo.addEventListener("playing", revealTransitionVideo, { once: true });
-    const playResult = transitionVideo.play?.();
+    if (message) setPhase("entry", message);
+    const playResult = entryVideo?.play?.();
     if (playResult?.catch) {
       playResult.catch(() => {
-        muteIntroAudio("Tap Enter to open. Sound was blocked.", true);
-        const mutedPlayResult = transitionVideo.play?.();
-        if (mutedPlayResult?.then) {
-          mutedPlayResult.then(revealTransitionVideo).catch(() => {
-            setPhase("ready", "Tap Enter to open.");
+        muteIntroAudio("Tap Sound for audio, or Enter to continue.", true);
+        const mutedPlayResult = entryVideo?.play?.();
+        if (mutedPlayResult?.catch) {
+          mutedPlayResult.catch(() => {
+            setPhase("ready", "Tap Enter to start.");
           });
         }
       });
     }
-    transitionRevealTimer = window.setTimeout(revealTransitionVideo, 420);
-    transitionFallbackTimer = window.setTimeout(finishIntro, 12_000);
   };
 
   entryVideo?.addEventListener("ended", () => {
-    setPhase("ready", "Intro complete. Tap Enter to continue.");
+    setPhase("ready", "Opening the terminal...");
+    finishIntro();
   });
   entryVideo?.addEventListener("error", () => {
     setPhase("ready", "Video could not load. Tap Enter to continue.");
   });
-  entryVideo?.addEventListener("loadeddata", scheduleTransitionWarmup, { once: true });
-  entryVideo?.addEventListener("canplay", scheduleTransitionWarmup, { once: true });
-  transitionVideo?.addEventListener("ended", finishIntro);
-  transitionVideo?.addEventListener("error", finishIntro);
+  entryVideo?.addEventListener("playing", () => setPhase("entry", "Playing intro. Enter opens the terminal."), { once: true });
 
   root.addEventListener("click", (event) => {
     const target = event.target;
     if (target?.closest?.(".swamp-intro-actions")) return;
     enableIntroAudio();
-    startTransition();
+    playIntro("Sound on. Enter opens the terminal.");
   });
   audioButton?.addEventListener("click", (event) => {
     event.preventDefault();
@@ -873,49 +807,23 @@ function initializeIntroVideoGate() {
       return;
     }
     enableIntroAudio("Sound on.");
-    scheduleTransitionWarmup();
-    const activeVideo = transitionStarted ? transitionVideo : entryVideo;
-    const playResult = activeVideo?.play?.();
-    if (playResult?.catch) {
-      playResult.catch(() => {
-        muteIntroAudio("Tap the video or Enter to enable sound.", true);
-      });
-    }
+    playIntro();
   });
   enterButton?.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
     enableIntroAudio();
-    startTransition();
-  });
-  skipButton?.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    enableIntroAudio();
-    transitionStarted ? finishIntro() : startTransition();
+    finishIntro();
   });
   document.addEventListener("keydown", (event) => {
     if (state.route !== "intro" || event.key !== "Enter") return;
     event.preventDefault();
     enableIntroAudio();
-    transitionStarted ? finishIntro() : startTransition();
+    finishIntro();
   });
 
   setVideoAudio(true);
-  const playResult = entryVideo?.play?.();
-  if (playResult?.catch) {
-    playResult.catch(() => {
-      muteIntroAudio("Tap Sound for audio, or Enter to continue.", true);
-      const mutedPlayResult = entryVideo?.play?.();
-      if (mutedPlayResult?.catch) {
-        mutedPlayResult.catch(() => {
-          setPhase("ready", "Tap Enter to start.");
-        });
-      }
-    });
-  } else {
-    scheduleTransitionWarmup();
-  }
+  playIntro("Playing intro. Enter opens the terminal.");
 }
 
 function tabForPath(pathname = window.location.pathname) {
@@ -7828,7 +7736,7 @@ function uniqueKolDumpRows(rows = []) {
     const id = String(row.kolId || kolDumpProfileId(row) || "").trim();
     if (!id) continue;
     const existing = byId.get(id);
-    byId.set(id, existing ? { ...row, ...existing, kolId: id } : { ...row, kolId: id });
+    byId.set(id, existing ? { ...existing, ...row, kolId: id } : { ...row, kolId: id });
   }
   return [...byId.values()];
 }
@@ -7862,6 +7770,40 @@ function kolDumpStatsForKol(kol = {}) {
   const id = kolDumpProfileId(kol);
   if (!id) return null;
   return kolDumpStatsRows().find((row) => String(row.kolId || "") === id) || computeUiKolDumpStats(kol);
+}
+
+function kolDumpFallbackRowForId(kolId = "") {
+  const id = String(kolId || "").trim();
+  if (!id) return { displayName: "KOL Wallet", reasons: [] };
+  const wallet = isSolanaPublicKeyLike(id) ? id : "";
+  return {
+    kolId: id,
+    displayName: wallet ? shortAddress(wallet) : id.replace(/^wallet:/, "KOL "),
+    handle: "",
+    walletAddresses: wallet ? [wallet] : [],
+    callsTracked: 0,
+    currentPositionCount: 0,
+    dumpRiskPercent: 0,
+    medianHoldMinutes: null,
+    soldWithin15mPercent: null,
+    soldWithin60mPercent: null,
+    medianPostSignalDrawdownPercent: null,
+    followerSurvival30mPercent: null,
+    followerSurvival60mPercent: null,
+    riskLabel: "Mixed",
+    lowData: true,
+    confidence: "low",
+    historySource: "clicked-kol-context",
+    externalLinks: [
+      { label: "Solscan", url: wallet ? `https://solscan.io/account/${encodeURIComponent(wallet)}` : "" },
+      { label: "KOLscan", url: wallet ? `https://kolscan.io/account/${encodeURIComponent(wallet)}` : "" }
+    ].filter((link) => /^https?:\/\//i.test(String(link.url || ""))),
+    reasons: [
+      "KOL profile history is warming up from the current KOL feed.",
+      "Refresh KOL Tracker to store the newest wallet-position rows before judging sell behavior."
+    ],
+    updatedAt: new Date().toISOString()
+  };
 }
 
 function kolDumpDetailsButtonHtml(kol = {}, label = "KOL Info") {
@@ -7979,7 +7921,7 @@ function renderKolDumpDetailsDrawer() {
     root.innerHTML = "";
     return;
   }
-  const row = kolDumpStatsRows().find((item) => String(item.kolId) === String(details.kolId)) || { displayName: "KOL Wallet", reasons: [] };
+  const row = kolDumpStatsRows().find((item) => String(item.kolId) === String(details.kolId)) || kolDumpFallbackRowForId(details.kolId);
   const loading = Boolean(state.kolDumpStatsLoading);
   const walletList = Array.isArray(row.walletAddresses) ? row.walletAddresses.filter(Boolean).slice(0, 4) : [];
   const links = Array.isArray(row.externalLinks) ? row.externalLinks.filter((link) => /^https?:\/\//i.test(String(link?.url || ""))).slice(0, 4) : [];
@@ -13409,7 +13351,7 @@ async function loadDevInfoDetails(tokenMint = "", options = {}) {
         externalLinks: Array.isArray(result.externalLinks) ? result.externalLinks.slice(0, 8) : [],
         updatedAt: result.updatedAt || ""
       } };
-      state.devInfoStatus = result.cacheHit ? "Loaded from cache." : "Updated from local history.";
+      state.devInfoStatus = result.cacheHit ? "Loaded from cache." : "Updated from public sources and local history.";
       debugCounter(result.cacheHit ? "devInfoCacheHit" : "devInfoCacheMiss");
     }
     return result;
@@ -13513,6 +13455,7 @@ function renderDevInfoDrawer() {
   const linked = result.linkedWalletSignals || {};
   const market = result.marketContext || {};
   const sourceHydration = result.sourceHydration || {};
+  const sourceEvidence = Array.isArray(result.sourceEvidence) ? result.sourceEvidence.slice(0, 8) : [];
   const marketCap = firstUsefulNumber(market.marketCap, row.marketCap, row.fdv);
   const liquidity = firstUsefulNumber(market.liquidityUsd, row.liquidityUsd);
   const volume5m = firstUsefulNumber(market.volume5m, row.volume5m, row.volumeM5);
@@ -13578,6 +13521,10 @@ function renderDevInfoDrawer() {
         ${sourceHydration.message ? `<p class="slimeshield-muted">Source refresh: ${escapeHtml(sourceHydration.message)}${sourceHydration.eventsStored ? ` · ${escapeHtml(sourceHydration.eventsStored)} stored` : ""}</p>` : ""}
       </section>
       <section>
+        <h4>Source Evidence</h4>
+        ${devInfoReasonsHtml(sourceEvidence, "Public Dex/Pump/Solscan context is warming up. Refresh once to store the newest verified fields.")}
+      </section>
+      <section>
         <h4>Current Token Position</h4>
         ${current ? `
           <dl class="kol-dump-metrics">
@@ -13588,7 +13535,7 @@ function renderDevInfoDrawer() {
             <div><dt>First sell</dt><dd>${escapeHtml(devInfoMinutes(current.firstMajorSellMinutesAfterLaunch))}</dd></div>
             <div><dt>Last sell</dt><dd>${escapeHtml(current.lastSellAt ? formatDate(current.lastSellAt) : "n/a")}</dd></div>
           </dl>
-        ` : `<p class="slimeshield-muted">Current dev position unavailable from cached local history. Use the wallet/token links above while SlimeWire continues warming this token.</p>`}
+        ` : `<p class="slimeshield-muted">Current dev position is not verified yet. SlimeWire still shows the source context above, then stores wallet balance/transaction clues when the provider can verify them.</p>`}
       </section>
       <section>
         <h4>Dev Dump History</h4>
@@ -13801,23 +13748,31 @@ function renderSlimeShieldDetailsDrawer() {
   const result = state.slimeShieldResults?.[mint] || slimeShieldResultForRow(row);
   const verdict = result.verdict || "CAUTION";
   const sourceHydration = result.sourceHydration || {};
+  const market = result.marketContext || {};
+  const sourceEvidence = Array.isArray(result.sourceEvidence) ? result.sourceEvidence.slice(0, 6) : [];
   const loading = Boolean(state.slimeShieldLoading?.[mint]);
   const riskFactors = Array.isArray(result.factors) ? result.factors : [];
+  const marketCap = firstUsefulNumber(market.marketCap, row.marketCap, row.fdv);
+  const liquidity = firstUsefulNumber(market.liquidityUsd, row.liquidityUsd);
+  const volumeH1 = firstUsefulNumber(market.volumeH1, row.volumeH1, row.volume1h);
+  const ageMinutes = firstUsefulNumber(market.pairAgeMinutes, row.pairAgeMinutes, Number(row.pairAgeSeconds) / 60);
+  const devInfo = result.devInfoSummary || devInfoSummaryForRow(row);
+  const devInfoStatus = devInfoStatusClass(devInfo.status);
   const tokenLinks = [
+    ...(Array.isArray(result.externalLinks) ? result.externalLinks : []),
     { label: "Solscan", url: mint ? `https://solscan.io/token/${encodeURIComponent(mint)}` : "" },
-    { label: "Dex", url: row.dexUrl || dexUrl(mint) },
-    { label: "Pump", url: pumpUrlForRow(row) },
-    { label: "X", url: row.twitterUrl || row.xUrl },
-    { label: "TG", url: row.telegramUrl },
-    { label: "Web", url: row.websiteUrl }
-  ].filter((link) => /^https?:\/\//i.test(String(link.url || "")));
+    { label: "Dex", url: market.dexUrl || row.dexUrl || dexUrl(mint) },
+    { label: "Pump", url: market.pumpUrl || pumpUrlForRow(row) },
+    { label: "X", url: market.twitterUrl || row.twitterUrl || row.xUrl },
+    { label: "TG", url: market.telegramUrl || row.telegramUrl },
+    { label: "Web", url: market.websiteUrl || row.websiteUrl }
+  ].filter((link, index, links) => /^https?:\/\//i.test(String(link.url || ""))
+    && links.findIndex((candidate) => String(candidate.url || "") === String(link.url || "")) === index);
   const riskText = [
     ...(Array.isArray(row.riskFlags) ? row.riskFlags : []),
     ...(Array.isArray(row.scoreWarnings) ? row.scoreWarnings : []),
     ...(Array.isArray(row.bestPickWarnings) ? row.bestPickWarnings : [])
   ].filter(Boolean).slice(0, 4);
-  const devInfo = devInfoSummaryForRow(row);
-  const devInfoStatus = devInfoStatusClass(devInfo.status);
   root.innerHTML = `
     <div class="slimeshield-drawer-backdrop" data-slimeshield-close></div>
     <aside class="slimeshield-drawer" role="dialog" aria-modal="true" aria-label="SlimeShield details">
@@ -13841,11 +13796,12 @@ function renderSlimeShieldDetailsDrawer() {
         <h4>Coin / Dev Info</h4>
         <dl class="kol-dump-metrics">
           <div><dt>CA</dt><dd>${escapeHtml(shortAddress(mint))}</dd></div>
-          <div><dt>Age</dt><dd>${escapeHtml(row.pairAgeLabel || formatAgeFromRow(row) || "unknown")}</dd></div>
-          <div><dt>Liquidity</dt><dd>${escapeHtml(row.liquidityLabel || (livePairLiquidityUsd(row) > 0 ? compactUsd(livePairLiquidityUsd(row)) : "n/a"))}</dd></div>
-          <div><dt>MC / FDV</dt><dd>${escapeHtml(row.marketCapLabel || (livePairMarketCap(row) > 0 ? compactUsd(livePairMarketCap(row)) : "n/a"))}</dd></div>
-          <div><dt>Volume</dt><dd>${escapeHtml(row.volumeH1Label || row.volumeLabel || "n/a")}</dd></div>
+          <div><dt>Age</dt><dd>${escapeHtml(Number.isFinite(ageMinutes) ? devInfoMinutes(ageMinutes) : (row.pairAgeLabel || formatAgeFromRow(row) || "warming"))}</dd></div>
+          <div><dt>Liquidity</dt><dd>${escapeHtml(Number.isFinite(liquidity) && liquidity > 0 ? compactUsd(liquidity) : (row.liquidityLabel || "warming"))}</dd></div>
+          <div><dt>MC / FDV</dt><dd>${escapeHtml(Number.isFinite(marketCap) && marketCap > 0 ? compactUsd(marketCap) : (row.marketCapLabel || "warming"))}</dd></div>
+          <div><dt>Volume</dt><dd>${escapeHtml(Number.isFinite(volumeH1) && volumeH1 > 0 ? compactUsd(volumeH1) : (row.volumeH1Label || row.volumeLabel || "warming"))}</dd></div>
           <div><dt>Dev Info</dt><dd>${escapeHtml(devInfoLabel(devInfoStatus))} · ${escapeHtml(devInfo.confidence || "unknown")}</dd></div>
+          <div><dt>Source</dt><dd>${escapeHtml(market.source || result.cacheSource || result.dataSource || "public/local")}</dd></div>
           <div><dt>Dev/risk notes</dt><dd>${escapeHtml(riskText.length ? riskText.join(" | ") : "no cached hard flags")}</dd></div>
         </dl>
         <div class="slimeshield-drawer-actions">
@@ -13853,6 +13809,7 @@ function renderSlimeShieldDetailsDrawer() {
           ${featureEnabled("devInfoEnabled", true) ? `<button type="button" data-dev-info="${escapeHtml(mint)}">Open Dev Info</button>` : ""}
         </div>
         ${sourceHydration.message ? `<p class="slimeshield-muted">Source refresh: ${escapeHtml(sourceHydration.message)}</p>` : ""}
+        ${sourceEvidence.length ? `<ul class="slimeshield-factor-list">${sourceEvidence.map((item) => `<li><span>${escapeHtml(item)}</span></li>`).join("")}</ul>` : ""}
       </section>
       <section>
         <h4>Top Risk Reasons</h4>

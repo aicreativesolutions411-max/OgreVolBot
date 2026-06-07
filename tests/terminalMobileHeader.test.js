@@ -82,7 +82,8 @@ test("intro video gate has a real connect-route fallback", () => {
   assert.match(htmlSource, /data-intro-gate/);
   assert.match(htmlSource, /data-intro-sound>Sound/);
   assert.match(htmlSource, /data-intro-start>Enter/);
-  assert.match(htmlSource, /data-intro-skip>Skip/);
+  assert.doesNotMatch(htmlSource, /data-intro-skip/);
+  assert.match(htmlSource, /swamp-intro-final\.mp4/);
   assert.match(htmlSource, /sessionStorage\?\.getItem\("slimewireIntroCompleteV1"\) === "true"/);
   assert.match(htmlSource, /window\.history\.replaceState\(\{\}, "", "\/connect"\)/);
   assert.match(htmlSource, /const route = currentPath\.startsWith\("\/login"\)/);
@@ -90,8 +91,8 @@ test("intro video gate has a real connect-route fallback", () => {
   assert.match(htmlSource, /setRouteHidden\("\[data-connect\]", route !== "connect"\)/);
   assert.match(htmlSource, /toggleAttribute\("hidden", route !== "terminal"\)/);
   assert.match(appSource, /function initializeIntroVideoGate\(\)/);
-  assert.match(appSource, /warmTransitionVideo/);
   assert.match(appSource, /setVideoAudio\(true\)/);
+  assert.match(appSource, /entryVideo\?\.addEventListener\("ended"/);
   assert.match(appSource, /navigateTo\("\/connect"\)/);
 });
 

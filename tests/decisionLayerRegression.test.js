@@ -196,9 +196,11 @@ test("Dev Info row pill, drawer, and endpoints are cache-first", () => {
   assert.match(functionBody("devInfoPillHtml"), /data-dev-info/);
   assert.match(functionBody("devInfoPillHtml"), /status === "unknown" \? ""/);
   assert.match(functionBody("renderDevInfoDrawer"), /Dev Dump History/);
-  assert.match(functionBody("renderDevInfoDrawer"), /Current dev position unavailable/);
+  assert.match(functionBody("renderDevInfoDrawer"), /Current dev position is not verified yet/);
   assert.match(functionBody("renderDevInfoDrawer"), /Token \/ Source Context/);
   assert.match(functionBody("renderDevInfoDrawer"), /marketContext/);
+  assert.match(functionBody("renderDevInfoDrawer"), /Source Evidence/);
+  assert.match(functionBody("renderDevInfoDrawer"), /sourceEvidence/);
   assert.match(functionBody("renderDevInfoDrawer"), /Solscan Token/);
   assert.match(functionBody("renderDevInfoDrawer"), /KOLscan Wallet/);
   assert.match(functionBody("scheduleVisibleDevInfoPrefetch"), /setTimeout/);
@@ -215,6 +217,7 @@ test("Dev Info row pill, drawer, and endpoints are cache-first", () => {
   assert.match(functionBody("computeDevInfoFromLocalData", serverSource), /devInfoReferenceLinks/);
   assert.match(functionBody("webDevInfoDetails", serverSource), /hydrateMarketRowFromPublicSources/);
   assert.match(functionBody("webDevInfoDetails", serverSource), /marketContext/);
+  assert.match(functionBody("webDevInfoDetails", serverSource), /sourceEvidence/);
   assert.match(functionBody("webDevInfoDetails", serverSource), /boundedDevInfoSourceHydration/);
   assert.match(functionBody("webDevInfoDetails", serverSource), /sourceHydration/);
   assert.match(functionBody("openDevInfoDetails"), /loadDevInfoDetails\(mint, \{ force: true \}\)/);
@@ -230,11 +233,16 @@ test("Details buttons force-refresh source-backed data only on click", () => {
   assert.match(functionBody("loadSlimeShield"), /params\.set\("force", "true"\)/);
   assert.match(functionBody("webSlimeShield", serverSource), /force \? "forced-refresh" : "local"/);
   assert.match(functionBody("webSlimeShield", serverSource), /hydrateMarketRowFromPublicSources/);
+  assert.match(functionBody("webSlimeShield", serverSource), /marketContext: devInfoMarketContextFromRow/);
+  assert.match(functionBody("renderSlimeShieldDetailsDrawer"), /result\.marketContext/);
+  assert.match(functionBody("renderSlimeShieldDetailsDrawer"), /sourceEvidence/);
   assert.match(serverSource, /force \? "no-store" : "public, max-age=15/);
   assert.match(functionBody("openKolDumpDetails"), /ensureKolDumpStats\(\{ force: true \}\)/);
   assert.match(functionBody("ensureKolDumpStats"), /\/api\/web\/kols\/dump-stats\?\$\{params\.toString\(\)\}/);
   assert.match(functionBody("ensureKolDumpStats"), /params\.set\("force", "true"\)/);
   assert.match(functionBody("renderKolDumpDetailsDrawer"), /data-kol-dump-refresh/);
+  assert.match(functionBody("renderKolDumpDetailsDrawer"), /kolDumpFallbackRowForId/);
+  assert.match(functionBody("uniqueKolDumpRows"), /\{ \.\.\.existing, \.\.\.row, kolId: id \}/);
   assert.match(serverSource, /webKolDumpStats\(kolId, \{\s*force,\s*userId: "guest"/);
   assert.match(functionBody("webKolDumpStats", serverSource), /webKolScan\(options\.userId \|\| "guest", mode, wallet\)/);
   assert.match(functionBody("webKolDumpStats", serverSource), /force \? "forced-kol-refresh" : "local-cache"/);

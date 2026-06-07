@@ -20707,6 +20707,8 @@ async function computeDevInfoFromLocalData(mint = "", row = null, options = {}) 
     return {
       ...result,
       dataSource: "limited-local-data",
+      marketContext: devInfoMarketContextFromRow(localRow, cleanMint),
+      sourceEvidence: devInfoSourceEvidence(localRow, null),
       externalLinks: devInfoReferenceLinks({ mint: cleanMint, pairAddress: firstString(localRow.pairAddress, localRow.raydiumPool), row: localRow }),
       hydrationQueued: Boolean(options.hydrationQueued)
     };
@@ -20749,6 +20751,8 @@ async function computeDevInfoFromLocalData(mint = "", row = null, options = {}) 
   devInfoStats.computedFromLocalData += 1;
   const resultWithLinks = {
     ...result,
+    marketContext: devInfoMarketContextFromRow(localRow, cleanMint),
+    sourceEvidence: devInfoSourceEvidence(localRow, candidate),
     externalLinks: devInfoReferenceLinks({
       mint: cleanMint,
       wallet,
@@ -20770,6 +20774,61 @@ function marketRowHasUsefulPublicInfo(row = {}) {
     firstString(row.symbol, row.name, row.avatarUrl, row.imageUrl, row.websiteUrl, row.twitterUrl, row.telegramUrl, row.dexUrl, row.pairAddress, row.raydiumPool)
     || firstMeaningfulNumber(row.marketCap, row.fdv, row.liquidityUsd, row.volume5m, row.volumeH1)
   );
+}
+
+function devInfoMarketContextFromRow(row = {}, mint = "") {
+  const cleanMint = String(mint || row.tokenMint || row.mint || "").trim();
+  const pairCreatedAt = firstMeaningfulNumber(row.pairCreatedAt);
+  const pairAgeSeconds = firstMeaningfulNumber(row.pairAgeSeconds);
+  const pairAgeMinutes = firstMeaningfulNumber(
+    row.pairAgeMinutes,
+    Number.isFinite(pairAgeSeconds) ? pairAgeSeconds / 60 : null,
+    Number.isFinite(pairCreatedAt) && pairCreatedAt > 0 ? (Date.now() - pairCreatedAt) / 60_000 : null
+  );
+  return {
+    mint: cleanMint,
+    symbol: firstString(row.symbol),
+    name: firstString(row.name),
+    imageUrl: firstString(row.avatarUrl, row.imageUrl),
+    websiteUrl: firstString(row.websiteUrl),
+    twitterUrl: firstString(row.twitterUrl, row.xUrl),
+    telegramUrl: firstString(row.telegramUrl),
+    pairAddress: firstString(row.pairAddress, row.raydiumPool),
+    dexId: firstString(row.dexId),
+    dexName: firstString(row.dexName),
+    dexUrl: firstString(row.dexUrl, cleanMint ? dexScreenerUrl(cleanMint) : ""),
+    pumpUrl: firstString(row.pumpUrl, row.isPump || String(cleanMint).toLowerCase().endsWith("pump") ? pumpFunUrl(cleanMint) : ""),
+    marketCap: firstMeaningfulNumber(row.marketCap, row.fdv),
+    fdv: firstMeaningfulNumber(row.fdv, row.marketCap),
+    liquidityUsd: firstMeaningfulNumber(row.liquidityUsd),
+    volume5m: firstMeaningfulNumber(row.volume5m),
+    volumeH1: firstMeaningfulNumber(row.volumeH1),
+    buys5m: firstMeaningfulNumber(row.buys5m),
+    sells5m: firstMeaningfulNumber(row.sells5m),
+    pairCreatedAt: Number.isFinite(pairCreatedAt) ? pairCreatedAt : null,
+    pairAgeMinutes: Number.isFinite(pairAgeMinutes) ? pairAgeMinutes : null,
+    source: firstString(row.source, row.dexName, row.dexId, "public-cache")
+  };
+}
+
+function devInfoSourceEvidence(row = {}, candidate = null, sourceHydration = null) {
+  const market = devInfoMarketContextFromRow(row, row.tokenMint || row.mint);
+  const notes = [];
+  if (market.symbol || market.name) notes.push(`Token metadata loaded${market.symbol ? ` for ${market.symbol}` : ""}.`);
+  if (Number.isFinite(Number(market.liquidityUsd)) || Number.isFinite(Number(market.marketCap))) {
+    const parts = [];
+    if (Number.isFinite(Number(market.liquidityUsd))) parts.push(`liquidity ${formatUsdCompact(Number(market.liquidityUsd))}`);
+    if (Number.isFinite(Number(market.marketCap))) parts.push(`MC/FDV ${formatUsdCompact(Number(market.marketCap))}`);
+    notes.push(`Public market context: ${parts.join(" · ")}.`);
+  }
+  if (Number.isFinite(Number(market.pairAgeMinutes))) notes.push(`Pair age source is available: ${Math.max(0, Math.round(Number(market.pairAgeMinutes)))}m.`);
+  if (candidate?.likelyDevWallet) {
+    notes.push(`Likely dev wallet candidate found from ${String(candidate.source || "cached source").replace(/_/g, " ")}.`);
+  } else {
+    notes.push("No reliable dev wallet candidate yet; source links are shown so traders can verify manually.");
+  }
+  if (sourceHydration?.message) notes.push(sourceHydration.message);
+  return uniqueStrings(notes).slice(0, 8);
 }
 
 async function hydrateMarketRowFromPublicSources(mint = "", row = null, reason = "request") {
@@ -20952,6 +21011,13 @@ async function webDevInfoDetails(tokenMint = "", options = {}) {
     ...result,
     cacheHit: false,
     cacheSource: force ? "forced-refresh" : result.cacheSource || result.dataSource || "local",
+    sourceEvidence: uniqueStrings([
+      ...(Array.isArray(result.sourceEvidence) ? result.sourceEvidence : []),
+      ...devInfoSourceEvidence(row, result.likelyDevWallet ? {
+        likelyDevWallet: result.likelyDevWallet,
+        source: result.dataSource || result.cacheSource || "local"
+      } : null, sourceHydration)
+    ]).slice(0, 8),
     sourceHydration: sourceHydration ? {
       hydrated: Boolean(sourceHydration.hydrated),
       skipped: Boolean(sourceHydration.skipped),
@@ -20962,16 +21028,7 @@ async function webDevInfoDetails(tokenMint = "", options = {}) {
       transactionsParsed: Number(sourceHydration.transactionsParsed || 0),
       message: sourceHydration.message || ""
     } : null,
-    marketContext: {
-      symbol: row.symbol || "",
-      name: row.name || "",
-      marketCap: firstMeaningfulNumber(row.marketCap, row.fdv),
-      liquidityUsd: firstMeaningfulNumber(row.liquidityUsd),
-      volume5m: firstMeaningfulNumber(row.volume5m),
-      volumeH1: firstMeaningfulNumber(row.volumeH1),
-      pairAgeMinutes: firstMeaningfulNumber(row.pairAgeMinutes, Number(row.pairAgeSeconds) / 60),
-      source: firstString(row.source, row.dexName, row.dexId)
-    }
+    marketContext: devInfoMarketContextFromRow(row, mint)
   };
   rememberDevInfoMemory("details", mint, enrichedResult);
   await writeDevInfoCaches(mint, enrichedResult).catch(() => {});
@@ -29099,6 +29156,18 @@ async function webSlimeShield(tokenMint = "", options = {}) {
     cacheHit: false,
     cacheSource: force ? "forced-refresh" : "local",
     dataSource: row?.pairAddress || row?.symbol ? "cached-market-or-postgres-row" : "low-data-fallback",
+    devInfoSummary: devInfoSummary || null,
+    marketContext: devInfoMarketContextFromRow(row, mint),
+    sourceEvidence: devInfoSourceEvidence(row, devInfoSummary?.likelyDevWallet ? {
+      likelyDevWallet: devInfoSummary.likelyDevWallet,
+      source: "dev-info-summary"
+    } : null, sourceHydration),
+    externalLinks: devInfoReferenceLinks({
+      mint,
+      wallet: devInfoSummary?.likelyDevWallet || "",
+      pairAddress: firstString(row.pairAddress, row.raydiumPool),
+      row
+    }),
     sourceHydration: sourceHydration ? {
       hydrated: Boolean(sourceHydration.hydrated),
       source: sourceHydration.source || "",

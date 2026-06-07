@@ -10,7 +10,7 @@
     <link rel="dns-prefetch" href="https://dexscreener.com">
     <link rel="preconnect" href="https://api.dexscreener.com">
     <link rel="dns-prefetch" href="https://api.dexscreener.com">
-    <link rel="preload" as="video" href="/assets/slimewire/intro/swamp-entry.mp4" type="video/mp4">
+    <link rel="preload" as="video" href="/assets/slimewire/intro/swamp-intro-final.mp4" type="video/mp4">
     <link rel="preload" as="image" href="/assets/slimewire/png/slimewire-mark.png">
     <link rel="preload" as="image" href="/assets/slimewire/png/slime-border-frame-rich.png">
     <link rel="preload" as="image" href="/assets/slimewire/clean-ui/wallet_icons/default/phantom.png">
@@ -18,12 +18,12 @@
     <link rel="preload" as="image" href="/assets/slimewire/svg/icons/wallet.svg">
     <link rel="preload" as="image" href="/assets/slimewire/svg/powered-by-ogres-badge.svg">
     <link rel="stylesheet" href="/tailwind.css?v=20260603-tailwind-v1">
-    <link rel="stylesheet" href="/styles.css?v=20260607191655">
-    <link rel="stylesheet" href="/slimewire-final-overrides.css?v=20260607191655">
+    <link rel="stylesheet" href="/styles.css?v=20260607195057">
+    <link rel="stylesheet" href="/slimewire-final-overrides.css?v=20260607195057">
     <script src="/config.js"></script>
     <script src="/vendor/tweetnacl-fast.min.js"></script>
     <script src="/vendor/solana-web3.iife.min.js?v=20260605-browser-trade-v1"></script>
-    <script type="module" src="/app.js?v=20260607191655"></script>
+    <script type="module" src="/app.js?v=20260607195057"></script>
   </head>
   <body>
     <main class="shell" data-app data-route="intro">
@@ -243,27 +243,17 @@
           <video
             class="swamp-intro-media"
             data-intro-video="entry"
-            src="./assets/slimewire/intro/swamp-entry.mp4"
+            src="./assets/slimewire/intro/swamp-intro-final.mp4"
             autoplay
             playsinline
             preload="auto"
             aria-label="SlimeWire intro video"
-          ></video>
-          <video
-            class="swamp-intro-media"
-            data-intro-video="transition"
-            src="./assets/slimewire/intro/swamp-transition.mp4"
-            playsinline
-            preload="none"
-            hidden
-            aria-label="SlimeWire transition video"
           ></video>
           <div class="swamp-intro-overlay" data-intro-overlay>
             <span data-intro-status>Tap Enter or the video to continue.</span>
             <div class="swamp-intro-actions">
               <button type="button" class="swamp-intro-sound" data-intro-sound>Sound</button>
               <button type="button" class="swamp-intro-enter" data-intro-start>Enter</button>
-              <button type="button" class="swamp-intro-skip" data-intro-skip>Skip</button>
             </div>
           </div>
         </div>
