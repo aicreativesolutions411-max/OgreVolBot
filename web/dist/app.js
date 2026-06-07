@@ -10886,8 +10886,10 @@ function volumeWindowItems(row = {}) {
 }
 
 function compactStatsHtml(row = {}) {
-  const mc = firstStatLabel(row.marketCapLabel, row.fdvLabel, compactUsd(row.marketCap));
-  const liq = firstStatLabel(row.liquidityLabel, compactUsd(row.liquidityUsd));
+  const mcValue = livePairMarketCap(row);
+  const liqValue = livePairLiquidityUsd(row);
+  const mc = firstStatLabel(row.marketCapLabel, row.fdvLabel, mcValue > 0 ? compactUsd(mcValue) : "", "checking");
+  const liq = firstStatLabel(row.liquidityLabel, liqValue > 0 ? compactUsd(liqValue) : "", "checking");
   const volume = volumeWindowItems(row);
   return `
     <div class="compact-stat-grid">
@@ -10899,8 +10901,10 @@ function compactStatsHtml(row = {}) {
 }
 
 function compactMetricsLineHtml(row = {}) {
-  const mc = firstStatLabel(row.marketCapLabel, row.fdvLabel, compactUsd(row.marketCap));
-  const liq = firstStatLabel(row.liquidityLabel, compactUsd(row.liquidityUsd));
+  const mcValue = livePairMarketCap(row);
+  const liqValue = livePairLiquidityUsd(row);
+  const mc = firstStatLabel(row.marketCapLabel, row.fdvLabel, mcValue > 0 ? compactUsd(mcValue) : "", "checking");
+  const liq = firstStatLabel(row.liquidityLabel, liqValue > 0 ? compactUsd(liqValue) : "", "checking");
   const vol15 = firstStatLabel(row.volumeM15Label, compactUsd(row.volumeM15));
   const vol1h = firstStatLabel(row.volumeH1Label, row.volumeLabel, compactUsd(row.volumeH1));
   return `
@@ -10999,11 +11003,16 @@ function removeRowsByMints(rows = [], mintSet = new Set()) {
 }
 
 function terminalTokenStatsHtml(row = {}) {
-  const mc = firstStatLabel(row.marketCapLabel, row.fdvLabel, compactUsd(row.marketCap), compactUsd(row.fdv));
-  const liq = firstStatLabel(row.liquidityLabel, compactUsd(row.liquidityUsd));
-  const vol15 = firstStatLabel(row.volumeM15Label, compactUsd(row.volumeM15));
-  const vol1h = firstStatLabel(row.volumeH1Label, row.volumeLabel, compactUsd(row.volumeH1));
-  const vol24 = firstStatLabel(row.volumeH24Label, compactUsd(row.volumeH24));
+  const mcValue = livePairMarketCap(row);
+  const liqValue = livePairLiquidityUsd(row);
+  const vol15Value = livePairVolumeM15(row);
+  const vol1hValue = livePairVolumeH1(row);
+  const vol24Value = livePairVolumeH24(row);
+  const mc = firstStatLabel(row.marketCapLabel, row.fdvLabel, mcValue > 0 ? compactUsd(mcValue) : "", "checking");
+  const liq = firstStatLabel(row.liquidityLabel, liqValue > 0 ? compactUsd(liqValue) : "", "checking");
+  const vol15 = firstStatLabel(row.volumeM15Label, vol15Value > 0 ? compactUsd(vol15Value) : "", "checking");
+  const vol1h = firstStatLabel(row.volumeH1Label, row.volumeLabel, vol1hValue > 0 ? compactUsd(vol1hValue) : "", "checking");
+  const vol24 = firstStatLabel(row.volumeH24Label, vol24Value > 0 ? compactUsd(vol24Value) : "", "checking");
   return `
     <div class="terminal-token-stats" aria-label="Market stats">
       <span><small>MC</small><strong>${escapeHtml(mc)}</strong></span>
@@ -11051,7 +11060,7 @@ function terminalSignalRowsHtml(rows, options = {}) {
               <button type="button" data-quick-buy-token="${escapeHtml(row.tokenMint)}" data-quick-buy-source="terminal-row" title="Quick buy with preset or custom SOL amount">${escapeHtml(quickBuyButtonLabel())}</button>
               <button type="button" data-quick-bundle-token="${escapeHtml(row.tokenMint)}">Bundle</button>
               <button type="button" data-smart-chart-token="${escapeHtml(row.tokenMint)}">Chart</button>
-              <button type="button" class="watch-action" data-watch-token="${escapeHtml(row.tokenMint)}" data-watch-symbol="${escapeHtml(row.symbol || "")}" data-watch-name="${escapeHtml(row.name || "")}" data-watch-image="${escapeHtml(row.imageUrl || "")}">${isTokenWatched(row.tokenMint) ? "Saved" : "Watch"}</button>
+              <button type="button" class="watch-action" data-watch-token="${escapeHtml(row.tokenMint)}" data-watch-symbol="${escapeHtml(row.symbol || "")}" data-watch-name="${escapeHtml(row.name || "")}" data-watch-image="${escapeHtml(livePairImageUrl(row) || "")}">${isTokenWatched(row.tokenMint) ? "Saved" : "Watch"}</button>
             </div>
           </article>
         `;
@@ -11091,7 +11100,7 @@ function compactSignalRowsHtml(rows, options = {}) {
             <button type="button" data-quick-buy-token="${escapeHtml(row.tokenMint)}" data-quick-buy-source="compact-row" title="Quick buy with preset or custom SOL amount">${escapeHtml(quickBuyButtonLabel())}</button>
             <button type="button" data-quick-bundle-token="${escapeHtml(row.tokenMint)}">Bundle</button>
             <button type="button" data-smart-chart-token="${escapeHtml(row.tokenMint)}">Chart</button>
-            <button type="button" class="watch-action" data-watch-token="${escapeHtml(row.tokenMint)}" data-watch-symbol="${escapeHtml(row.symbol || "")}" data-watch-name="${escapeHtml(row.name || "")}" data-watch-image="${escapeHtml(row.imageUrl || "")}">${isTokenWatched(row.tokenMint) ? "Saved" : "Watch"}</button>
+            <button type="button" class="watch-action" data-watch-token="${escapeHtml(row.tokenMint)}" data-watch-symbol="${escapeHtml(row.symbol || "")}" data-watch-name="${escapeHtml(row.name || "")}" data-watch-image="${escapeHtml(livePairImageUrl(row) || "")}">${isTokenWatched(row.tokenMint) ? "Saved" : "Watch"}</button>
           </div>
         </article>
       `).join("")}
@@ -12625,7 +12634,7 @@ function tokenSignalRowHtml(row, index, options = {}) {
   const primaryAction = options.primaryAction || "quickTrade";
   const watchButton = options.context === "watchlist"
     ? `<button type="button" data-unwatch-token="${escapeHtml(row.tokenMint)}">Remove</button>`
-    : `<button type="button" class="watch-action" data-watch-token="${escapeHtml(row.tokenMint)}" data-watch-symbol="${escapeHtml(row.symbol || "")}" data-watch-name="${escapeHtml(row.name || "")}" data-watch-image="${escapeHtml(row.imageUrl || "")}">${watched ? "Saved" : "Watch"}</button>`;
+    : `<button type="button" class="watch-action" data-watch-token="${escapeHtml(row.tokenMint)}" data-watch-symbol="${escapeHtml(row.symbol || "")}" data-watch-name="${escapeHtml(row.name || "")}" data-watch-image="${escapeHtml(livePairImageUrl(row) || "")}">${watched ? "Saved" : "Watch"}</button>`;
   return `
     <article class="signal-row" data-token-chart="${escapeHtml(row.tokenMint)}" data-token-chart-source="${escapeHtml(options.context || "signal-row")}">
       <div class="signal-token">
@@ -12650,11 +12659,11 @@ function tokenSignalRowHtml(row, index, options = {}) {
         </div>
       </div>
       <div class="signal-cell"><span>${escapeHtml(row.pairAgeLabel || formatAgeFromRow(row) || "age unknown")}</span><small>${escapeHtml(row.scalpSetup || row.momentum || `#${index + 1}`)}</small></div>
-      <div class="signal-cell"><span>${escapeHtml(firstStatLabel(row.liquidityLabel, compactUsd(row.liquidityUsd)))}</span><small>${formatChangeHtml(row.h1)}</small></div>
-      <div class="signal-cell"><span>${escapeHtml(firstStatLabel(row.marketCapLabel, compactUsd(row.marketCap)))}</span><small>${escapeHtml(row.category || row.signalType || "signal")}</small></div>
+      <div class="signal-cell"><span>${escapeHtml(firstStatLabel(row.liquidityLabel, livePairLiquidityUsd(row) > 0 ? compactUsd(livePairLiquidityUsd(row)) : "", "checking"))}</span><small>${formatChangeHtml(row.h1)}</small></div>
+      <div class="signal-cell"><span>${escapeHtml(firstStatLabel(row.marketCapLabel, livePairMarketCap(row) > 0 ? compactUsd(livePairMarketCap(row)) : "", "checking"))}</span><small>${escapeHtml(row.category || row.signalType || "signal")}</small></div>
       <div class="signal-cell"><span>${escapeHtml(row.txnsLabel || row.winRateLabel || "n/a")}</span><small>${escapeHtml(row.bestPickScore ? `Score ${row.bestPickScore}/100` : row.valueLabel || row.smartMoney || "")}</small></div>
       <div class="signal-cell volume-windows">
-        <span>${escapeHtml(firstStatLabel(row.volumeH1Label, row.volumeLabel, compactUsd(row.volumeH1)))}</span>
+        <span>${escapeHtml(firstStatLabel(row.volumeH1Label, row.volumeLabel, livePairVolumeH1(row) > 0 ? compactUsd(livePairVolumeH1(row)) : "", "checking"))}</span>
         <small>${volumeWindowItems(row).map(([label, value]) => `${label} ${value}`).join(" | ")}</small>
       </div>
       <div class="signal-actions">
@@ -12691,11 +12700,197 @@ function formatChangeHtml(value) {
   return `<span class="${number >= 0 ? "positive" : "negative"}">${sign}${number.toFixed(Math.abs(number) >= 10 ? 0 : 1)}%</span>`;
 }
 
+function livePairImageUrl(row = {}) {
+  const metadata = row.metadata || row.tokenMetadata || {};
+  const dex = row.dex || row.dexScreener || row.pair || row.dexPair || {};
+  const pump = row.pump || row.pumpFun || row.pumpfun || {};
+  const baseToken = row.baseToken || row.base || {};
+  const info = row.info || row.profile || {};
+  const candidates = [
+    row.imageUrl,
+    row.imageUri,
+    row.image,
+    row.iconUrl,
+    row.icon,
+    row.logoURI,
+    row.logo,
+    row.logoUrl,
+    row.tokenImageUrl,
+    row.token_image_url,
+    row.pfp,
+    row.avatar,
+    pump.imageUrl,
+    pump.imageUri,
+    pump.image_uri,
+    pump.image,
+    pump.logoURI,
+    dex.imageUrl,
+    dex.image,
+    dex.logoURI,
+    dex.logo,
+    dex.iconUrl,
+    dex.info?.imageUrl,
+    dex.baseToken?.imageUrl,
+    dex.baseToken?.logoURI,
+    baseToken.imageUrl,
+    baseToken.image,
+    baseToken.logoURI,
+    baseToken.logo,
+    info.imageUrl,
+    info.image,
+    metadata.imageUrl,
+    metadata.imageUri,
+    metadata.image_uri,
+    metadata.image,
+    metadata.logoURI,
+    metadata.logo,
+    metadata.iconUrl
+  ];
+  for (const candidate of candidates) {
+    const normalized = normalizeImageUrl(candidate);
+    if (normalized) return normalized;
+  }
+  return "";
+}
+
+function livePairMarketCap(row = {}) {
+  const metadata = row.metadata || row.tokenMetadata || {};
+  const dex = row.dex || row.dexScreener || row.pair || row.dexPair || {};
+  const pump = row.pump || row.pumpFun || row.pumpfun || {};
+  const baseToken = row.baseToken || row.base || {};
+  return firstUsefulNumber(
+    row.marketCap,
+    row.marketCapUsd,
+    row.market_cap,
+    row.usdMarketCap,
+    row.usd_market_cap,
+    row.mcap,
+    row.mc,
+    row.fdv,
+    row.fdvUsd,
+    dex.marketCap,
+    dex.marketCapUsd,
+    dex.market_cap,
+    dex.fdv,
+    dex.fdvUsd,
+    dex.baseToken?.marketCap,
+    dex.baseToken?.fdv,
+    pump.marketCap,
+    pump.marketCapUsd,
+    pump.usdMarketCap,
+    pump.usd_market_cap,
+    pump.market_cap,
+    pump.fdv,
+    baseToken.marketCap,
+    baseToken.fdv,
+    metadata.marketCap,
+    metadata.marketCapUsd,
+    metadata.usdMarketCap,
+    metadata.fdv
+  );
+}
+
+function livePairLiquidityUsd(row = {}) {
+  const metadata = row.metadata || row.tokenMetadata || {};
+  const dex = row.dex || row.dexScreener || row.pair || row.dexPair || {};
+  const pump = row.pump || row.pumpFun || row.pumpfun || {};
+  const liquidity = row.liquidity || {};
+  return firstUsefulNumber(
+    row.liquidityUsd,
+    row.liquidity_usd,
+    row.currentLiquidityUsd,
+    liquidity.usd,
+    liquidity.quote,
+    dex.liquidityUsd,
+    dex.liquidity_usd,
+    dex.liquidity?.usd,
+    dex.liquidity?.quote,
+    pump.liquidityUsd,
+    pump.liquidity_usd,
+    pump.liquidity?.usd,
+    metadata.liquidityUsd,
+    metadata.liquidity_usd,
+    metadata.liquidity?.usd
+  );
+}
+
+function livePairVolumeM15(row = {}) {
+  const metadata = row.metadata || row.tokenMetadata || {};
+  const dex = row.dex || row.dexScreener || row.pair || row.dexPair || {};
+  const pump = row.pump || row.pumpFun || row.pumpfun || {};
+  const volume = row.volume || {};
+  return firstUsefulNumber(
+    row.volumeM15,
+    row.volume15m,
+    row.volume5m,
+    row.volumeM5,
+    row.volumeUsd,
+    volume.m15,
+    volume.m15m,
+    volume.m5,
+    volume.h1,
+    dex.volume?.m15,
+    dex.volume?.m5,
+    dex.volume?.h1,
+    pump.volumeM15,
+    pump.volume15m,
+    pump.volume5m,
+    metadata.volume?.m15,
+    metadata.volume?.m5,
+    metadata.volumeM15,
+    metadata.volume5m
+  );
+}
+
+function livePairVolumeH1(row = {}) {
+  const metadata = row.metadata || row.tokenMetadata || {};
+  const dex = row.dex || row.dexScreener || row.pair || row.dexPair || {};
+  const pump = row.pump || row.pumpFun || row.pumpfun || {};
+  const volume = row.volume || {};
+  return firstUsefulNumber(
+    row.volumeH1,
+    row.volume1h,
+    row.volume_h1,
+    row.volumeUsd,
+    volume.h1,
+    volume.m30,
+    volume.m15,
+    dex.volume?.h1,
+    dex.volume?.m30,
+    dex.volume?.m15,
+    pump.volumeH1,
+    pump.volume1h,
+    metadata.volume?.h1,
+    metadata.volumeH1
+  );
+}
+
+function livePairVolumeH24(row = {}) {
+  const metadata = row.metadata || row.tokenMetadata || {};
+  const dex = row.dex || row.dexScreener || row.pair || row.dexPair || {};
+  const pump = row.pump || row.pumpFun || row.pumpfun || {};
+  const volume = row.volume || {};
+  return firstUsefulNumber(
+    row.volumeH24,
+    row.volume24h,
+    row.volume_h24,
+    volume.h24,
+    volume.d1,
+    dex.volume?.h24,
+    dex.volume?.d1,
+    pump.volumeH24,
+    pump.volume24h,
+    metadata.volume?.h24,
+    metadata.volume?.d1,
+    metadata.volumeH24
+  );
+}
+
 function livePairAvatarHtml(row) {
   const label = String(row.symbol || row.name || row.shortMint || "?").trim().slice(0, 2).toUpperCase() || "?";
   const fallbackSrc = tokenMascotSrc(row.tokenMint || row.symbol || row.name);
   const safeFallbackSrc = escapeHtml(fallbackSrc);
-  const imageUrl = normalizeImageUrl(row.imageUrl);
+  const imageUrl = livePairImageUrl(row);
   if (imageUrl) {
     return `<div class="live-pair-avatar"><img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(row.symbol || row.name || "Token")}" loading="lazy" decoding="async" fetchpriority="low" width="42" height="42" referrerpolicy="no-referrer" onerror="this.onerror=null;this.src='${safeFallbackSrc}';"><span>${escapeHtml(label)}</span></div>`;
   }
@@ -16274,25 +16469,234 @@ if (!window.__slimeStablePumpChartTimer) {
 
 
 
-/* SLIME_SPOTIFY_WIDGET_V2: lightweight picker with optional Spotify API search; no iframe search 404s. */
+/* SLIME_SPOTIFY_WIDGET_V2: simple paste/search music widget; no Spotify dev app required. */
 (function initSlimeSpotifyWidget() {
-  if (typeof window === 'undefined' || window.__slimeSpotifyWidgetReadyV2) return;
+  if (typeof window === "undefined" || window.__slimeSpotifyWidgetReadyV2) return;
   window.__slimeSpotifyWidgetReadyV2 = true;
-  var STORAGE_KEY = 'slimeSpotifyStateV2';
-  var state = { open:false, query:'trading focus playlist', embedSrc:'', openUrl:'https://open.spotify.com/search/trading%20focus%20playlist', status:'Pick music without touching the trading feed.', title:'Swamp Radio', loading:false, configured:false, items:[] };
-  function esc(v){return String(v||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;').replace(/'/g,'&#39;');}
-  function searchUrl(q){return 'https://open.spotify.com/search/' + encodeURIComponent(String(q||'trading focus playlist').trim() || 'trading focus playlist');}
-  function save(){try{localStorage.setItem(STORAGE_KEY,JSON.stringify({query:state.query,embedSrc:state.embedSrc,openUrl:state.openUrl,title:state.title}));}catch{}}
-  function load(){try{var s=JSON.parse(localStorage.getItem(STORAGE_KEY)||'{}'); if(s&&typeof s==='object'){state.query=String(s.query||state.query).slice(0,180);state.embedSrc=String(s.embedSrc||'').slice(0,420);state.openUrl=String(s.openUrl||state.openUrl).slice(0,420);state.title=String(s.title||state.title).slice(0,80);}}catch{}}
-  function root(){var r=document.querySelector('[data-slime-spotify-root]'); if(!r){r=document.createElement('div');r.setAttribute('data-slime-spotify-root','');document.body.appendChild(r);} return r;}
-  function card(item,i){var img=item.image?'<img src="'+esc(item.image)+'" alt="" loading="lazy" decoding="async">':'<span class="slime-spotify-card-icon">?</span>'; return '<button type="button" class="slime-spotify-card" data-slime-spotify-pick="'+i+'">'+img+'<span><strong>'+esc(item.name)+'</strong><small>'+esc((item.type||'music')+' ? '+(item.artist||item.subtitle||'Spotify'))+'</small></span></button>';}
-  function render(){var r=root(); var stage=state.embedSrc?'<iframe title="Spotify Player" src="'+esc(state.embedSrc)+'" loading="lazy" frameborder="0" allowfullscreen allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"></iframe>':'<div class="slime-spotify-empty"><strong>Select music</strong><span>Search songs, artists, or playlists. Full catalog unlocks when Spotify app keys are configured.</span></div>'; var cards=state.items.length?state.items.map(card).join(''):'<div class="slime-spotify-empty is-small"><span>'+esc(state.loading?'Loading music...':'Tap Focus, Rap, Lo-fi, EDM, or search above.')+'</span></div>'; r.innerHTML=['<div class="slime-spotify-shell '+(state.open?'is-open':'')+'">','<button type="button" class="slime-spotify-bubble" data-slime-spotify-toggle aria-label="Open Swamp Radio" aria-expanded="'+(state.open?'true':'false')+'"><span class="slime-spotify-mark" aria-hidden="true"><i></i><i></i><i></i></span><span>Music</span></button>','<section class="slime-spotify-panel" '+(state.open?'':'hidden')+' aria-label="Swamp Radio music player">','<header><div><strong>'+esc(state.title)+'</strong><small>Lightweight player ? no feed lag.</small></div><button type="button" data-slime-spotify-close aria-label="Close Swamp Radio">&times;</button></header>','<div class="slime-spotify-search-row"><input data-slime-spotify-input value="'+esc(state.query)+'" placeholder="Search songs, artists, playlists" autocomplete="off" inputmode="search"><button type="button" data-slime-spotify-search>'+(state.loading?'...':'Search')+'</button></div>','<div class="slime-spotify-actions"><button type="button" data-slime-spotify-preset="trading focus playlist">Focus</button><button type="button" data-slime-spotify-preset="rap workout playlist">Rap</button><button type="button" data-slime-spotify-preset="lofi trading playlist">Lo-fi</button><button type="button" data-slime-spotify-preset="edm trading playlist">EDM</button><button type="button" data-slime-spotify-connect>Connect</button></div>','<div class="slime-spotify-stage">'+stage+'</div>','<div class="slime-spotify-results">'+cards+'</div>','<small class="slime-spotify-status">'+esc(state.status)+'</small>','</section></div>'].join('');}
-  async function json(url){var res=await fetch(url,{headers:{Accept:'application/json'},credentials:'include'}); if(!res.ok) throw new Error('request '+res.status); return res.json();}
-  async function status(){try{var d=await json('/api/web/spotify/status'); state.configured=!!d.configured; if(!state.configured) state.status='Curated picks are ready. Add Spotify keys on Render for full search/connect.';}catch{state.status='Music panel ready. Search will use fast fallback if Spotify API is unavailable.';}}
-  async function search(q){state.query=String(q||state.query||'trading focus playlist').trim(); state.loading=true; state.status='Searching music...'; render(); try{var d=await json('/api/web/spotify/search?q='+encodeURIComponent(state.query)); state.items=Array.isArray(d.items)?d.items:[]; state.configured=!!d.configured; state.status=d.note||(d.source==='spotify'?'Pick a result to load the player.':'Showing fast curated picks. Add Spotify keys for full catalog search.');}catch{state.items=[]; state.status='Music search could not reach the server. Try a preset or refresh.';} state.loading=false; render();}
-  function pick(i){var item=state.items[Number(i)]; if(!item)return; state.embedSrc=item.embedUrl; state.openUrl=item.url||searchUrl(item.name); state.title=item.name||'Swamp Radio'; state.status='Loaded '+(item.type||'music')+'. Player is isolated from terminal refresh.'; save(); render();}
-  function input(){var el=document.querySelector('[data-slime-spotify-input]'); return el?el.value:state.query;}
-  document.addEventListener('click',function(e){var t=e.target.closest&&e.target.closest('[data-slime-spotify-toggle],[data-slime-spotify-close],[data-slime-spotify-search],[data-slime-spotify-preset],[data-slime-spotify-pick],[data-slime-spotify-connect]'); if(!t)return; e.preventDefault(); e.stopPropagation(); if(t.matches('[data-slime-spotify-toggle]')){state.open=!state.open; render(); if(state.open&&!state.items.length) void search(state.query); return;} if(t.matches('[data-slime-spotify-close]')){state.open=false; render(); return;} if(t.matches('[data-slime-spotify-search]')){void search(input()); return;} if(t.matches('[data-slime-spotify-preset]')){void search(t.getAttribute('data-slime-spotify-preset')||'trading focus playlist'); return;} if(t.matches('[data-slime-spotify-pick]')){pick(t.getAttribute('data-slime-spotify-pick')); return;} if(t.matches('[data-slime-spotify-connect]')){state.status=state.configured?'Spotify account playlist connect is ready for the next layer; search works now.':'Spotify connect needs SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET on Render first.'; render();}},true);
-  document.addEventListener('keydown',function(e){if(e.key!=='Enter')return; var el=e.target.closest&&e.target.closest('[data-slime-spotify-input]'); if(!el)return; e.preventDefault(); void search(el.value);});
-  load(); if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',function(){render();void status();},{once:true}); else{render();void status();}
+
+  var STORAGE_KEY = "slimeSpotifyStateV2";
+  var localSpotifyItems = [
+    { type: "playlist", id: "37i9dQZF1DZ06evO3oj0lY", name: "SlimeWire Radio", artist: "Spotify", subtitle: "Default SlimeWire playlist" },
+    { type: "playlist", id: "37i9dQZF1DX8NTLI2TtZa6", name: "Beast Mode", artist: "Spotify", subtitle: "High-energy focus" },
+    { type: "playlist", id: "37i9dQZF1DX76Wlfdnj7AP", name: "RapCaviar", artist: "Spotify", subtitle: "Rap playlist" },
+    { type: "playlist", id: "37i9dQZF1DX0XUsuxWHRQd", name: "Rap Workout", artist: "Spotify", subtitle: "Rap energy" },
+    { type: "playlist", id: "37i9dQZF1DX4dyzvuaRJ0n", name: "mint", artist: "Spotify", subtitle: "EDM / electronic" },
+    { type: "playlist", id: "37i9dQZF1DX4sWSpwq3LiO", name: "Peaceful Piano", artist: "Spotify", subtitle: "Low-lag focus" }
+  ];
+  var state = {
+    open: false,
+    query: "",
+    embedSrc: "https://open.spotify.com/embed/playlist/37i9dQZF1DZ06evO3oj0lY?utm_source=slimewire&theme=0",
+    openUrl: "https://open.spotify.com/playlist/37i9dQZF1DZ06evO3oj0lY",
+    status: "Default playlist ready. Paste any Spotify playlist, track, album, show, or episode link to play it here.",
+    title: "Swamp Radio",
+    items: localSpotifySearch("")
+  };
+
+  function esc(value) {
+    return String(value || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+
+  function spotifyUrl(type, id) {
+    return "https://open.spotify.com/" + encodeURIComponent(type) + "/" + encodeURIComponent(id);
+  }
+
+  function spotifyEmbedUrl(type, id) {
+    return "https://open.spotify.com/embed/" + encodeURIComponent(type) + "/" + encodeURIComponent(id) + "?utm_source=slimewire&theme=0";
+  }
+
+  function spotifySearchUrl(query) {
+    return "";
+  }
+
+  function hydrateSpotifyItem(item) {
+    return Object.assign({}, item, {
+      url: spotifyUrl(item.type, item.id),
+      embedUrl: spotifyEmbedUrl(item.type, item.id)
+    });
+  }
+
+  function localSpotifySearch(query, allowFallback) {
+    var text = String(query || "").toLowerCase().trim();
+    var items = localSpotifyItems.map(hydrateSpotifyItem);
+    if (!text) return items;
+    var hits = items.filter(function (item) {
+      return [item.name, item.artist, item.subtitle, item.type].join(" ").toLowerCase().indexOf(text) >= 0;
+    });
+    return hits.length ? hits : (allowFallback ? items : []);
+  }
+
+  function spotifyLinkItem(value) {
+    var raw = String(value || "").trim();
+    if (!raw) return null;
+    var type = "";
+    var id = "";
+    var uri = raw.match(/^spotify:(playlist|track|album|artist|episode|show):([A-Za-z0-9]+)$/i);
+    if (uri) {
+      type = uri[1].toLowerCase();
+      id = uri[2];
+    } else {
+      try {
+        var url = new URL(raw);
+        if (!/(^|\.)spotify\.com$/i.test(url.hostname)) return null;
+        var parts = url.pathname.split("/").filter(Boolean);
+        var index = parts.findIndex(function (part) { return /^(playlist|track|album|artist|episode|show)$/i.test(part); });
+        if (index >= 0 && parts[index + 1]) {
+          type = parts[index].toLowerCase();
+          id = String(parts[index + 1]).replace(/[^A-Za-z0-9]/g, "");
+        }
+      } catch (error) {
+        return null;
+      }
+    }
+    if (!type || !id) return null;
+    return {
+      type: type,
+      id: id,
+      name: type === "playlist" ? "Pasted Playlist" : "Pasted Spotify " + type,
+      artist: "Your Spotify link",
+      subtitle: "Loaded from pasted link",
+      url: spotifyUrl(type, id),
+      embedUrl: spotifyEmbedUrl(type, id)
+    };
+  }
+
+  function root() {
+    var node = document.querySelector("[data-slime-spotify-root]");
+    if (!node) {
+      node = document.createElement("div");
+      node.setAttribute("data-slime-spotify-root", "");
+      document.body.appendChild(node);
+    }
+    return node;
+  }
+
+  function save() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ query: state.query, embedSrc: state.embedSrc, openUrl: state.openUrl, title: state.title }));
+    } catch (error) {}
+  }
+
+  function load() {
+    try {
+      var saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+      if (saved && typeof saved === "object") {
+        state.query = String(saved.query || "").slice(0, 220);
+        state.embedSrc = String(saved.embedSrc || state.embedSrc).slice(0, 460);
+        state.openUrl = String(saved.openUrl || state.openUrl).slice(0, 460);
+        state.title = String(saved.title || state.title).slice(0, 90);
+      }
+    } catch (error) {}
+  }
+
+  function card(item, index) {
+    var label = item.type === "search" ? "Open" : "Play";
+    return '<button type="button" class="slime-spotify-card" data-slime-spotify-pick="' + index + '"><span class="slime-spotify-card-icon">' + esc(label.slice(0, 1)) + '</span><span><strong>' + esc(item.name) + '</strong><small>' + esc((item.type || "music") + " - " + (item.artist || item.subtitle || "Spotify")) + '</small></span></button>';
+  }
+
+  function render() {
+    var stage = state.embedSrc
+      ? '<iframe title="Spotify Player" src="' + esc(state.embedSrc) + '" loading="lazy" frameborder="0" allowfullscreen allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"></iframe>'
+      : '<div class="slime-spotify-empty"><strong>Swamp Radio</strong><span>Paste a Spotify playlist, track, album, show, or episode link to play in-site.</span></div>';
+    var cards = state.items.length
+      ? state.items.map(card).join("")
+      : '<div class="slime-spotify-empty is-small"><span>No local preset match. Paste a Spotify link to play it here.</span></div>';
+    root().innerHTML = [
+      '<div class="slime-spotify-shell ' + (state.open ? 'is-open' : '') + '">',
+      '<button type="button" class="slime-spotify-bubble" data-slime-spotify-toggle aria-label="Open Swamp Radio" aria-expanded="' + (state.open ? 'true' : 'false') + '"><span class="slime-spotify-mark" aria-hidden="true"><i></i><i></i><i></i></span><span>Music</span></button>',
+      '<section class="slime-spotify-panel ' + (state.open ? 'is-open' : 'is-minimized') + '" aria-hidden="' + (state.open ? 'false' : 'true') + '" aria-label="Swamp Radio music player">',
+      '<header><div><strong>' + esc(state.title) + '</strong><small>In-site Spotify embeds only.</small></div><button type="button" data-slime-spotify-close aria-label="Close Swamp Radio">&times;</button></header>',
+      '<div class="slime-spotify-search-row"><input data-slime-spotify-input value="' + esc(state.query) + '" placeholder="Paste Spotify link or preset name" autocomplete="off" inputmode="search"><button type="button" data-slime-spotify-search>Play</button></div>',
+      '<div class="slime-spotify-actions"><button type="button" data-slime-spotify-preset="37i9dQZF1DZ06evO3oj0lY">Default</button><button type="button" data-slime-spotify-preset="37i9dQZF1DX8NTLI2TtZa6">Focus</button><button type="button" data-slime-spotify-preset="37i9dQZF1DX76Wlfdnj7AP">Rap</button><button type="button" data-slime-spotify-preset="37i9dQZF1DX4dyzvuaRJ0n">EDM</button></div>',
+      '<div class="slime-spotify-stage">' + stage + '</div>',
+      '<div class="slime-spotify-mini-controls"><button type="button" data-slime-spotify-default>Default Playlist</button><button type="button" data-slime-spotify-clear>Clear</button></div>',
+      '<div class="slime-spotify-results">' + cards + '</div>',
+      '<small class="slime-spotify-status">' + esc(state.status) + '</small>',
+      '</section></div>'
+    ].join("");
+  }
+
+  function syncOpenState() {
+    var shell = document.querySelector(".slime-spotify-shell");
+    var panel = document.querySelector(".slime-spotify-panel");
+    var toggle = document.querySelector("[data-slime-spotify-toggle]");
+    if (shell) shell.classList.toggle("is-open", state.open);
+    if (panel) {
+      panel.classList.toggle("is-open", state.open);
+      panel.classList.toggle("is-minimized", !state.open);
+      panel.setAttribute("aria-hidden", state.open ? "false" : "true");
+    }
+    if (toggle) toggle.setAttribute("aria-expanded", state.open ? "true" : "false");
+  }
+
+  function loadItem(item) {
+    if (!item) return;
+    state.openUrl = item.url || spotifySearchUrl(item.name);
+    state.title = item.name || "Swamp Radio";
+    if (item.embedUrl) {
+      state.embedSrc = item.embedUrl;
+      state.status = "Loaded " + (item.type || "music") + ". Use Spotify controls for shuffle.";
+    } else {
+      state.status = "Paste a full Spotify link to play this inside SlimeWire.";
+    }
+    save();
+    render();
+  }
+
+  function runInput(value) {
+    var query = String(value || state.query || "").trim();
+    state.query = query;
+    var pasted = spotifyLinkItem(query);
+    if (pasted) {
+      state.items = [pasted].concat(localSpotifySearch("playlist", true).slice(0, 3));
+      loadItem(pasted);
+      return;
+    }
+    if (query) {
+      var matches = localSpotifySearch(query, false).slice(0, 4);
+      state.items = matches.length ? matches : localSpotifySearch("", true).slice(0, 4);
+      if (matches.length) {
+        loadItem(matches[0]);
+        return;
+      }
+      state.title = "Swamp Radio";
+      state.status = "Spotify blocks generic search embeds without a dev app. Paste a Spotify link, or use the local presets below.";
+      save();
+      render();
+      return;
+    }
+    state.items = localSpotifySearch("", true);
+    state.status = "Default playlist ready. Paste a Spotify playlist, track, album, or podcast link.";
+    render();
+  }
+
+  function inputValue() {
+    var input = document.querySelector("[data-slime-spotify-input]");
+    return input ? input.value : state.query;
+  }
+
+  document.addEventListener("click", function (event) {
+    var target = event.target.closest && event.target.closest("[data-slime-spotify-toggle],[data-slime-spotify-close],[data-slime-spotify-search],[data-slime-spotify-preset],[data-slime-spotify-pick],[data-slime-spotify-default],[data-slime-spotify-clear]");
+    if (!target) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (target.matches("[data-slime-spotify-toggle]")) { state.open = !state.open; syncOpenState(); return; }
+    if (target.matches("[data-slime-spotify-close]")) { state.open = false; syncOpenState(); return; }
+    if (target.matches("[data-slime-spotify-search]")) { runInput(inputValue()); return; }
+    if (target.matches("[data-slime-spotify-preset]")) { loadItem(hydrateSpotifyItem({ type: "playlist", id: target.getAttribute("data-slime-spotify-preset"), name: target.textContent + " Playlist", artist: "Spotify", subtitle: "Preset" })); return; }
+    if (target.matches("[data-slime-spotify-pick]")) { loadItem(state.items[Number(target.getAttribute("data-slime-spotify-pick"))]); return; }
+    if (target.matches("[data-slime-spotify-default]")) { loadItem(hydrateSpotifyItem({ type: "playlist", id: "37i9dQZF1DZ06evO3oj0lY", name: "SlimeWire Radio", artist: "Spotify", subtitle: "Default" })); return; }
+    if (target.matches("[data-slime-spotify-clear]")) { state.embedSrc = "https://open.spotify.com/embed/playlist/37i9dQZF1DZ06evO3oj0lY?utm_source=slimewire&theme=0"; state.query = ""; state.title = "Swamp Radio"; state.openUrl = spotifyUrl("playlist", "37i9dQZF1DZ06evO3oj0lY"); state.items = localSpotifySearch("", true); state.status = "Default playlist ready. Paste a Spotify playlist, track, album, or podcast link."; save(); render(); }
+  }, true);
+
+  document.addEventListener("keydown", function (event) {
+    var input = event.target.closest && event.target.closest("[data-slime-spotify-input]");
+    if (!input || event.key !== "Enter") return;
+    event.preventDefault();
+    runInput(input.value);
+  });
+
+  load();
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", render, { once: true });
+  else render();
 })();

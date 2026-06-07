@@ -13828,9 +13828,10 @@ async function getPumpFunTokenMetadata(tokenMint, options = {}) {
     return cached.value;
   }
 
-  const headers = { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" };
+  const publicHeaders = { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" };
+  const authedHeaders = { ...publicHeaders };
   if (CONFIG.pumpFunApiToken) {
-    headers.Authorization = `Bearer ${CONFIG.pumpFunApiToken}`;
+    authedHeaders.Authorization = `Bearer ${CONFIG.pumpFunApiToken}`;
   }
 
   const bases = [
@@ -13841,13 +13842,17 @@ async function getPumpFunTokenMetadata(tokenMint, options = {}) {
   let response = null;
   let lastError = null;
   for (const base of bases) {
-    try {
-      const url = `${String(base).replace(/\/$/, "")}/coins/${encodeURIComponent(mint)}?sync=false`;
-      response = await fetchJson(url, { headers, timeoutMs: options.timeoutMs || 3_500 });
-      break;
-    } catch (error) {
-      lastError = error;
+    const url = `${String(base).replace(/\/$/, "")}/coins/${encodeURIComponent(mint)}?sync=false`;
+    const headerAttempts = CONFIG.pumpFunApiToken ? [authedHeaders, publicHeaders] : [publicHeaders];
+    for (const headers of headerAttempts) {
+      try {
+        response = await fetchJson(url, { headers, timeoutMs: options.timeoutMs || 3_500 });
+        break;
+      } catch (error) {
+        lastError = error;
+      }
     }
+    if (response) break;
   }
   if (!response && lastError) throw lastError;
   const coin = response?.data || response;
@@ -25442,7 +25447,7 @@ async function webLivePairs(userId, bucket = "live", options = {}) {
   const sort = String(options.sort || "best").toLowerCase();
   const force = Boolean(options.force);
   const cacheKey = `${safeBucket}:${sort}`;
-  const externalKey = externalCacheKey(`web:livePairs:v3:${cacheKey}`, "global");
+  const externalKey = externalCacheKey(`web:livePairs:v4:${cacheKey}`, "global");
   const cached = livePairsSharedCache.get(cacheKey) || { cachedAt: 0, value: null, promise: null };
   if (!force && CONFIG.livePairsSharedCacheMs > 0 && cached.value && Date.now() - cached.cachedAt < CONFIG.livePairsSharedCacheMs) {
     return { ...cached.value, cacheHit: true, cacheSource: "memory" };
