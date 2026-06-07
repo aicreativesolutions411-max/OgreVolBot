@@ -531,7 +531,7 @@ const TERMINAL_FEEDS = [
   { tabKey: "live", label: "Live Pairs - New Solana Pairs", component: "livePairsHtml", endpoint: "/api/web/live-pairs", category: "pairs:new", refreshMs: 15_000, staleMs: 30_000, cacheKey: "pairs:{bucket}:{sort}", pageSize: 50, maxPageSize: 100, previewLimit: 12, supportsPagination: true },
   { tabKey: "liveTrades", label: "Live Trades - Recent Swaps", component: "liveTradesHtml", endpoint: "/api/web/pnl", category: "trades:recent", refreshMs: 8_000, staleMs: 20_000, cacheKey: "trades:recent", pageSize: 50, maxPageSize: 100, previewLimit: 10, supportsPagination: true },
   { tabKey: "slimeScope", label: "Slime Scope - Scanner Picks", component: "slimeScopeHtml", endpoint: "composite:/api/web/live-pairs+/api/web/sniper/scan", category: "scanner:slime-scope", refreshMs: 20_000, staleMs: 45_000, cacheKey: "scanner:slime-scope:{scopeMode}", pageSize: 50, maxPageSize: 100, previewLimit: 12, supportsPagination: true },
-  { tabKey: "kol", label: "KOL Tracker - Social/KOL Signals", component: "kolHtml", endpoint: "/api/web/kol/scan", category: "signals:kol", refreshMs: 60_000, staleMs: 120_000, cacheKey: "signals:kol:{kolMode}:{kolWallet}", pageSize: 36, maxPageSize: 72, previewLimit: 12, supportsPagination: true },
+  { tabKey: "kol", label: "KOL Tracker - Social/KOL Signals", component: "kolHtml", endpoint: "/api/web/kol/scan", category: "signals:kol", refreshMs: 10_000, staleMs: 30_000, cacheKey: "signals:kol:{kolMode}:{kolWallet}", pageSize: 36, maxPageSize: 72, previewLimit: 12, supportsPagination: true },
   { tabKey: "watchlist", label: "Watchlist - Your Saved Pairs", component: "watchlistHtml", endpoint: "/api/web/watchlist", category: "user:watchlist", refreshMs: 20_000, staleMs: 45_000, cacheKey: "user:watchlist", pageSize: 50, maxPageSize: 100, previewLimit: 12, supportsPagination: true },
   { tabKey: "smartChart", label: "Smart Chart - Selected Token", component: "smartChartHtml", endpoint: "composite:/api/web/positions", category: "token:selected-chart", refreshMs: 30_000, staleMs: 60_000, cacheKey: "token:selected-chart:{tokenMint}", pageSize: 5, maxPageSize: 10, previewLimit: 5, supportsPagination: false },
   { tabKey: "trade", label: "Trade - Selected Token Panel", component: "tradeHtml", endpoint: "composite:/api/web/balances+/api/web/positions", category: "trade:selected-token", refreshMs: 20_000, staleMs: 45_000, cacheKey: "trade:selected-token:{tokenMint}", pageSize: 1, maxPageSize: 1, previewLimit: 1, supportsPagination: false },
@@ -3231,7 +3231,9 @@ function scheduleKolAutoRefresh() {
     clearKolTimer();
     return;
   }
-  const nextKey = `${state.activeTab}:${state.kolMode}`;
+  const hotBuysMode = String(state.kolMode || "hot") === "hot";
+  const kolAutoRefreshMs = hotBuysMode ? 10_000 : 60_000;
+  const nextKey = `${state.activeTab}:${state.kolMode}:${kolAutoRefreshMs}`;
   if (kolTimer && kolTimerKey === nextKey) return;
   clearKolTimer();
   kolTimerKey = nextKey;
@@ -3254,7 +3256,7 @@ function scheduleKolAutoRefresh() {
     } finally {
       scheduleKolAutoRefresh();
     }
-  }, 60_000);
+  }, kolAutoRefreshMs);
 }
 
 function scheduleWatchlistAutoRefresh() {
@@ -5115,6 +5117,7 @@ function curatedKolActionsHtml(kol = {}) {
       ${safeWallet ? `<button data-kol-scan-wallet="${escapeHtml(safeWallet)}">Scan</button>` : `<button type="button" disabled title="Verified Solana wallet needed before scan.">Scan Locked</button>`}
       ${safeWallet ? `<button data-kol-copy-wallet="${escapeHtml(safeWallet)}">Copy</button>` : `<span>Verify wallet to copy</span>`}
       ${safeWallet ? `<button data-copy="${escapeHtml(safeWallet)}">CA</button>` : ""}
+      ${kolDumpDetailsButtonHtml(kol)}
     </div>
   `;
 }
@@ -7466,6 +7469,28 @@ function kolDumpMetaLine(row = {}) {
   return `${row.riskLabel || "Mixed"} · ${kolDumpPercentLabel(row)} · ${hold}`;
 }
 
+function kolDumpStatsForKol(kol = {}) {
+  const id = kolDumpProfileId(kol);
+  if (!id) return null;
+  return kolDumpStatsRows().find((row) => String(row.kolId || "") === id) || computeUiKolDumpStats(kol);
+}
+
+function kolDumpDetailsButtonHtml(kol = {}, label = "Dump Info") {
+  if (!featureEnabled("kolDumpDetectorEnabled", true)) return "";
+  const row = kolDumpStatsForKol(kol);
+  const id = String(row?.kolId || kolDumpProfileId(kol) || "").trim();
+  if (!id) return "";
+  const title = row ? kolDumpMetaLine(row) : "Open wallet-based KOL dump breakdown";
+  return `<button type="button" class="kol-dump-chip" data-kol-dump-details="${escapeHtml(id)}" title="${escapeHtml(title)}">${escapeHtml(label)}</button>`;
+}
+
+function kolDumpInlineSummaryHtml(kol = {}) {
+  if (!featureEnabled("kolDumpDetectorEnabled", true)) return "";
+  const row = kolDumpStatsForKol(kol);
+  if (!row?.kolId) return "";
+  return `<small class="kol-dump-inline">${escapeHtml(kolDumpMetaLine(row))}</small>`;
+}
+
 function kolDumpDetectorPanelHtml() {
   if (!featureEnabled("kolDumpDetectorEnabled", true)) return "";
   const rows = kolDumpStatsRows().slice(0, 6);
@@ -7604,6 +7629,11 @@ function renderKolDumpDetailsDrawer() {
 function kolHtml() {
   const configured = state.kolScan?.configured !== false;
   const disabled = state.kolLoading ? "disabled" : "";
+  const mode = String(state.kolMode || "hot");
+  const hasScan = Boolean(state.kolScan);
+  const hasKols = Boolean(state.kolScan?.kols?.length);
+  const showProfileCards = hasKols && mode !== "hot";
+  const showCuratedFallback = !hasScan && !hasKols;
   return `
     <section class="section-actions mode-row">
       <button data-kol-mode="hot" data-active="${state.kolMode === "hot"}" ${disabled}>Hot Buys</button>
@@ -7615,12 +7645,10 @@ function kolHtml() {
     </section>
     <p class="scan-meta">${escapeHtml(kolModeDescription(state.kolMode))}</p>
     ${kolScanStatusHtml()}
-    ${state.kolScan?.kols?.length ? kolSummaryHtml() : curatedKolBoardHtml()}
-    ${kolDumpDetectorPanelHtml()}
+    ${showProfileCards ? kolSummaryHtml() : showCuratedFallback ? curatedKolBoardHtml() : ""}
     ${state.kolMode === "slimewire" && state.kolScan
       ? state.kolScan.kols?.length ? "" : emptyState("No SlimeWire traders yet", "Traders appear here only after they opt in from Profile and have site trade history.")
       : state.kolScan ? kolRowsHtml() : emptyState("No KOL scan loaded", "Pick a KOL mode or tap Refresh.")}
-    ${state.kolScan?.kols?.length ? curatedKolBoardHtml() : ""}
     <details class="kol-management-settings" data-kol-management-settings>
       <summary>
         <span>Wallet Management / Copy Settings</span>
@@ -7766,7 +7794,7 @@ function kolModeLabel(mode) {
 
 function kolModeDescription(mode) {
   const map = {
-    hot: "Recent high-performing KOLs and the strongest current positions they are holding.",
+    hot: "Top coins KOL wallets are calling now. Hot Buys refreshes around every 10 seconds while the tab is open.",
     top: "Best ranked KOL wallets by realized performance, then their highest-value current token positions.",
     consistent: "KOLs ranked by consistency/win rate from the available leaderboard, then filtered into cleaner copyable positions.",
     fresh: "KOL wallets with the newest activity first, useful when you want faster signal flow.",
@@ -7810,9 +7838,11 @@ function kolSummaryHtml() {
               <div><dt>Trades</dt><dd>${escapeHtml(kol.trades ?? "n/a")}</dd></div>
             </dl>
             <small>${escapeHtml(kol.source === "slimewire" ? `Tracking ${kol.trackedWalletMode === "manual" ? `${kol.trackedWalletCount || 0} wallet(s)` : "all wallets"}` : (kol.volumeLabel || "Volume n/a"))} | Last trade: ${escapeHtml(formatDate(kol.lastTradeAt))}</small>
-            <div class="card-actions">
+            ${kolDumpInlineSummaryHtml(kol)}
+            <div class="card-actions kol-profile-actions">
               ${kol.solscanUrl ? `<a href="${escapeHtml(kol.solscanUrl)}" target="_blank" rel="noreferrer">Wallet</a>` : ""}
               ${kol.kolscanUrl || kol.wallet ? `<a href="${escapeHtml(kol.kolscanUrl || kolscanUrl(kol.wallet))}" target="_blank" rel="noreferrer">Trader Profile</a>` : ""}
+              ${kolDumpDetailsButtonHtml(kol)}
               ${xShareButton(kolProfileShareText(kol), "Share Watch")}
               ${kol.wallet ? `<button class="kol-copy-bubble" data-kol-copy-setup="${escapeHtml(kol.wallet)}">Copy Trade</button>` : ""}
               ${kol.wallet ? `<button data-kol-scan-wallet="${escapeHtml(kol.wallet)}">Scan Positions</button>` : ""}

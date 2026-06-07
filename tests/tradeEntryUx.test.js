@@ -81,11 +81,15 @@ test("Live pair action buttons stay even and visibly colored", () => {
 
 test("Live pair stats stay bold, green, and compact", () => {
   assert.match(chartCssSource, /live pair stat readability/);
+  assert.match(chartCssSource, /terminal-token-stats span[\s\S]*display: grid/);
+  assert.match(chartCssSource, /terminal-token-stats span[\s\S]*grid-template-rows: 12px 19px/);
   assert.match(chartCssSource, /terminal-token-stats span[\s\S]*height: 44px/);
   assert.match(chartCssSource, /terminal-token-stats span[\s\S]*transform: translateY\(2px\)/);
+  assert.match(chartCssSource, /terminal-token-stats small[\s\S]*grid-row: 1/);
   assert.match(chartCssSource, /terminal-token-stats small[\s\S]*color: rgba\(170, 255, 143, 0\.76\)/);
   assert.match(chartCssSource, /terminal-token-stats small[\s\S]*font-size: 9\.5px/);
   assert.match(chartCssSource, /terminal-token-stats small[\s\S]*font-weight: 950/);
+  assert.match(chartCssSource, /terminal-token-stats strong[\s\S]*grid-row: 2/);
   assert.match(chartCssSource, /terminal-token-stats strong[\s\S]*color: #ecffe6/);
   assert.match(chartCssSource, /terminal-token-stats strong[\s\S]*font-size: 13\.5px/);
   assert.match(chartCssSource, /terminal-token-stats strong[\s\S]*font-weight: 1000/);

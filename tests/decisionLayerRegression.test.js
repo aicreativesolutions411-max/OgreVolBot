@@ -137,12 +137,23 @@ test("Protected Buy is a previewed preset flow, not an auto-submit bypass", () =
 });
 
 test("KOL Dump Detector and Replay stay inside the existing decision layer UI", () => {
-  assert.match(functionBody("kolHtml"), /kolDumpDetectorPanelHtml/);
-  assert.match(functionBody("kolDumpDetectorPanelHtml"), /KOL Dump Detector/);
-  assert.match(functionBody("kolDumpDetectorPanelHtml"), /Tracks whether watched KOL wallets tend to sell into followers/);
+  assert.doesNotMatch(functionBody("kolHtml"), /kolDumpDetectorPanelHtml/);
+  assert.match(functionBody("kolSummaryHtml"), /kolDumpDetailsButtonHtml\(kol\)/);
+  assert.match(functionBody("curatedKolActionsHtml"), /kolDumpDetailsButtonHtml\(kol\)/);
+  assert.match(functionBody("kolDumpDetailsButtonHtml"), /data-kol-dump-details/);
+  assert.match(functionBody("renderKolDumpDetailsDrawer"), /KOL Dump Detector/);
   assert.match(functionBody("renderSlimeShieldDetailsDrawer"), /replayBeforeBuyCardHtml/);
   assert.match(functionBody("replayBeforeBuyCardHtml"), /Replay Before You Buy/);
   assert.match(functionBody("replayBeforeBuyCardHtml"), /Not enough local history yet/);
+});
+
+test("KOL Hot Buys stays a fast token-call feed", () => {
+  assert.match(functionBody("scheduleKolAutoRefresh"), /hotBuysMode[\s\S]*10_000/);
+  assert.match(functionBody("kolModeDescription"), /Top coins KOL wallets are calling now/);
+  assert.match(functionBody("kolHtml"), /const showProfileCards = hasKols && mode !== "hot"/);
+  assert.match(functionBody("kolHtml"), /state\.kolScan \? kolRowsHtml\(\)/);
+  assert.match(serverSource, /fetchMadeOnSolHotKolTokens/);
+  assert.match(serverSource, /callsTracked: kolCount/);
 });
 
 test("Ogre Agent chat is contextual, retryable, copyable, and debug-instrumented", () => {

@@ -10988,8 +10988,12 @@ button[data-slimeshield-details].slimeshield-chip small {
   border: 1px solid rgba(111, 255, 75, 0.08) !important;
   border-radius: 8px !important;
   box-sizing: border-box !important;
+  display: grid !important;
   gap: 3px !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  grid-template-rows: 12px 19px !important;
   height: 44px !important;
+  justify-content: start !important;
   justify-items: start !important;
   max-height: 44px !important;
   min-height: 0 !important;
@@ -10998,6 +11002,9 @@ button[data-slimeshield-details].slimeshield-chip small {
 }
 
 [data-app][data-route="terminal"] .terminal-token-stats small {
+  display: block !important;
+  grid-column: 1 !important;
+  grid-row: 1 !important;
   color: rgba(170, 255, 143, 0.76) !important;
   font-size: 9.5px !important;
   font-weight: 950 !important;
@@ -11008,12 +11015,17 @@ button[data-slimeshield-details].slimeshield-chip small {
 
 [data-app][data-route="terminal"] .terminal-token-stats strong {
   color: #ecffe6 !important;
+  display: block !important;
   font-size: 13.5px !important;
   font-weight: 1000 !important;
+  grid-column: 1 !important;
+  grid-row: 2 !important;
   letter-spacing: 0 !important;
   line-height: 1.03 !important;
   max-width: 100% !important;
+  min-width: 0 !important;
   overflow: clip !important;
+  padding-top: 1px !important;
   text-shadow: 0 0 10px rgba(107, 255, 79, 0.14) !important;
   text-overflow: clip !important;
   white-space: nowrap !important;
@@ -11025,6 +11037,7 @@ button[data-slimeshield-details].slimeshield-chip small {
   }
 
   [data-app][data-route="terminal"] .terminal-token-stats span {
+    grid-template-rows: 10px 18px !important;
     height: 40px !important;
     max-height: 40px !important;
     padding: 5px 6px 3px !important;
@@ -11036,5 +11049,71 @@ button[data-slimeshield-details].slimeshield-chip small {
 
   [data-app][data-route="terminal"] .terminal-token-stats strong {
     font-size: 12px !important;
+  }
+}
+
+/* 2026-06-07 KOL card cleanup: dump info is per-card and actions stay compact. */
+.kol-dashboard .kol-grid {
+  gap: 10px !important;
+  grid-template-columns: repeat(auto-fit, minmax(214px, 1fr)) !important;
+}
+
+.kol-profile {
+  gap: 8px !important;
+  padding: 12px !important;
+}
+
+.kol-profile .kol-dump-inline {
+  color: rgba(190, 255, 171, 0.76) !important;
+  display: block !important;
+  font-size: 11px !important;
+  line-height: 1.25 !important;
+}
+
+.kol-profile .card-actions.kol-profile-actions {
+  display: grid !important;
+  gap: 6px !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+}
+
+.kol-profile .card-actions.kol-profile-actions a,
+.kol-profile .card-actions.kol-profile-actions button,
+.curated-kol-actions a,
+.curated-kol-actions button,
+.curated-kol-actions span {
+  border-radius: 8px !important;
+  font-size: 10.5px !important;
+  line-height: 1.05 !important;
+  min-height: 30px !important;
+  padding: 0 6px !important;
+  text-overflow: clip !important;
+  white-space: normal !important;
+}
+
+.kol-profile .card-actions.kol-profile-actions .kol-copy-bubble,
+.curated-kol-actions .kol-copy-bubble {
+  grid-column: auto !important;
+  min-height: 30px !important;
+}
+
+.kol-profile .card-actions.kol-profile-actions .kol-dump-chip,
+.curated-kol-actions .kol-dump-chip {
+  background: linear-gradient(135deg, rgba(43, 180, 53, 0.94), rgba(9, 76, 20, 0.96)) !important;
+  border-color: rgba(135, 255, 72, 0.7) !important;
+  color: #efffe8 !important;
+}
+
+.curated-kol-actions {
+  gap: 5px !important;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+}
+
+@media (max-width: 760px) {
+  .kol-profile .card-actions.kol-profile-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .curated-kol-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
   }
 }

@@ -24555,8 +24555,8 @@ function kolProfilesFromScan(scan = {}, source = "kol_scan") {
           tokenMint: firstString(row.tokenMint, row.mint, row.address),
           symbol: firstString(row.symbol, row.baseSymbol),
           currentPositionCount: Number(firstMeaningfulNumber(row.currentPositionCount, row.positionsCount, row.positionCount) || 0),
-          trades: row.callsTracked || row.trades || 0,
-          callsTracked: row.callsTracked || row.trades || 0,
+          trades: firstMeaningfulNumber(row.callsTracked, row.trades, row.tradeCount, row.kolCount, row.kol_count, row.buyCount, row.buy_count) || 0,
+          callsTracked: firstMeaningfulNumber(row.callsTracked, row.trades, row.tradeCount, row.kolCount, row.kol_count, row.buyCount, row.buy_count) || 0,
           dumpRiskPercent: row.dumpRiskPercent,
           soldWithin15mPercent: row.soldWithin15mPercent,
           soldWithin60mPercent: row.soldWithin60mPercent,
@@ -25493,6 +25493,8 @@ function normalizeMadeOnSolKolTradeSignal(trade, mode) {
     winRateLabel: formatPercentNumber(winRate),
     kolRoiPct: roiPct,
     realizedLabel: "n/a",
+    callsTracked: 1,
+    currentPositionCount: 1,
     lastTradeAt,
     dexUrl: dexScreenerUrl(tokenMint),
     kolscanUrl: kolscanAccountUrl(kolWallet),
@@ -25574,6 +25576,8 @@ function normalizeMadeOnSolHotTokenSignal(tokenRow, mode) {
     kolWallet,
     kolName,
     kolCount,
+    callsTracked: kolCount || null,
+    currentPositionCount: kolCount ? 1 : null,
     twitter: topKolTwitter,
     avatar: topKolAvatar,
     valueUsd: Number(volumeUsd || buySol || 0),
@@ -25616,6 +25620,20 @@ function normalizeMadeOnSolLeaderboardKol(row) {
     roiPct: normalizePercentLike(firstNumber(row.roi, row.roiPct, row.roi_pct, stats.roi, stats.roiPct, stats.roi_pct)),
     winRatePct: normalizePercentLike(firstNumber(row.winRate, row.win_rate, row.winrate, row.winPercentage, row.win_percentage, stats.winRate, stats.win_rate, stats.winPercentage)),
     trades,
+    buyCount,
+    sellCount,
+    callsTracked: trades ?? (Number.isFinite(Number(buyCount)) || Number.isFinite(Number(sellCount)) ? Number(buyCount || 0) + Number(sellCount || 0) : null),
+    currentPositionCount: firstNumber(row.currentPositionCount, row.positionsCount, row.positionCount, stats.currentPositionCount, stats.positionsCount),
+    dumpRiskPercent: firstNumber(row.dumpRiskPercent, row.dump_risk_percent, stats.dumpRiskPercent, stats.dump_risk_percent),
+    soldWithin15mPercent: firstNumber(row.soldWithin15mPercent, row.sold_within_15m_percent, stats.soldWithin15mPercent, stats.sold_within_15m_percent),
+    soldWithin60mPercent: firstNumber(row.soldWithin60mPercent, row.sold_within_60m_percent, stats.soldWithin60mPercent, stats.sold_within_60m_percent),
+    medianHoldMinutes: firstNumber(row.medianHoldMinutes, row.median_hold_minutes, stats.medianHoldMinutes, stats.median_hold_minutes),
+    medianPostSignalDrawdownPercent: firstNumber(row.medianPostSignalDrawdownPercent, row.median_drawdown_percent, stats.medianPostSignalDrawdownPercent, stats.median_drawdown_percent),
+    followerSurvival30mPercent: firstNumber(row.followerSurvival30mPercent, row.survival30mPercent, stats.followerSurvival30mPercent, stats.survival30mPercent),
+    followerSurvival60mPercent: firstNumber(row.followerSurvival60mPercent, row.survival60mPercent, stats.followerSurvival60mPercent, stats.survival60mPercent),
+    profileUrl: firstString(row.profileUrl, row.profile_url, row.kolscanUrl, row.kolscan_url, profile.profileUrl, profile.profile_url),
+    xUrl: firstString(row.xUrl, row.x_url, row.twitterUrl, row.twitter_url, profile.xUrl, profile.x_url, profile.twitterUrl, profile.twitter_url),
+    websiteUrl: firstString(row.websiteUrl, row.website_url, row.website, profile.websiteUrl, profile.website_url, profile.website),
     volumeLabel: volumeSol !== null ? `${formatCompactNumber(volumeSol)} SOL volume` : "",
     lastTradeAt: normalizeTimestamp(firstString(row.lastTradeAt, row.last_trade_at, row.lastTrade, stats.lastTradeAt, stats.last_trade_at))
   };
@@ -25736,6 +25754,8 @@ function formatCompactNumber(value) {
 function webKolSummaryRow(kol = {}) {
   const wallet = firstString(kol.wallet, kol.owner, kol.address, kol.publicKey);
   const socials = kol.socials || kol.social || {};
+  const counts = kol.counts || kol.count || {};
+  const stats = kol.stats || kol.summary || kol.performance || {};
   const twitter = stripAt(firstString(kol.twitter, kol.x, kol.username, socials.twitter, socials.x, twitterHandleFromUrl(kol.twitterUrl || kol.twitter_url || kol.xUrl || kol.x_url), deepFindKolTwitter(kol)));
   const name = firstString(kol.name, twitter, wallet ? shortMint(wallet) : "Unknown KOL");
   const realizedUsd = firstNumber(kol.realizedUsd, kol.realized_usd);
@@ -25751,6 +25771,18 @@ function webKolSummaryRow(kol = {}) {
     : Number.isFinite(Number(kol.buyCount || kol.buy_count)) || Number.isFinite(Number(kol.sellCount || kol.sell_count))
       ? Number(kol.buyCount || kol.buy_count || 0) + Number(kol.sellCount || kol.sell_count || 0)
       : null;
+  const buyCount = firstNumber(kol.buyCount, kol.buy_count, kol.buys, counts.buyCount, counts.buy_count, stats.buyCount, stats.buy_count);
+  const sellCount = firstNumber(kol.sellCount, kol.sell_count, kol.sells, counts.sellCount, counts.sell_count, stats.sellCount, stats.sell_count);
+  const callsTracked = firstNumber(
+    kol.callsTracked,
+    kol.calls_tracked,
+    kol.callCount,
+    kol.call_count,
+    kol.tradeCount,
+    kol.trade_count,
+    trades,
+    Number.isFinite(Number(buyCount)) || Number.isFinite(Number(sellCount)) ? Number(buyCount || 0) + Number(sellCount || 0) : null
+  );
   return {
     wallet,
     shortWallet: wallet ? shortMint(wallet) : "",
@@ -25764,6 +25796,21 @@ function webKolSummaryRow(kol = {}) {
     winRatePct: kol.winRatePct ?? null,
     winRateLabel: firstString(kol.winRateLabel, formatPercentNumber(kol.winRatePct)),
     trades,
+    buyCount,
+    sellCount,
+    callsTracked,
+    currentPositionCount: firstNumber(kol.currentPositionCount, kol.positionsCount, kol.positionCount, counts.positions, stats.currentPositionCount, stats.positionsCount),
+    dumpRiskPercent: firstNumber(kol.dumpRiskPercent, kol.dump_risk_percent, stats.dumpRiskPercent, stats.dump_risk_percent),
+    soldWithin15mPercent: firstNumber(kol.soldWithin15mPercent, kol.sold_within_15m_percent, stats.soldWithin15mPercent, stats.sold_within_15m_percent),
+    soldWithin60mPercent: firstNumber(kol.soldWithin60mPercent, kol.sold_within_60m_percent, stats.soldWithin60mPercent, stats.sold_within_60m_percent),
+    medianHoldMinutes: firstNumber(kol.medianHoldMinutes, kol.median_hold_minutes, stats.medianHoldMinutes, stats.median_hold_minutes),
+    medianPostSignalDrawdownPercent: firstNumber(kol.medianPostSignalDrawdownPercent, kol.median_drawdown_percent, stats.medianPostSignalDrawdownPercent, stats.median_drawdown_percent),
+    followerSurvival30mPercent: firstNumber(kol.followerSurvival30mPercent, kol.survival30mPercent, stats.followerSurvival30mPercent, stats.survival30mPercent),
+    followerSurvival60mPercent: firstNumber(kol.followerSurvival60mPercent, kol.survival60mPercent, stats.followerSurvival60mPercent, stats.survival60mPercent),
+    profileUrl: firstString(kol.profileUrl, kol.profile_url, kol.kolscanUrl, kol.kolscan_url),
+    xUrl: firstString(kol.xUrl, kol.x_url, kol.twitterUrl, kol.twitter_url, twitter ? `https://x.com/${twitter}` : ""),
+    websiteUrl: firstString(kol.websiteUrl, kol.website_url, kol.website),
+    source: firstString(kol.source, kol.provider, kol.sourceLabel),
     volumeLabel: firstString(kol.volumeLabel, kol.volume !== undefined ? `${formatCompactNumber(kol.volume)} SOL volume` : ""),
     lastTradeAt: kol.lastTradeAt || null,
     solscanUrl: wallet ? `https://solscan.io/account/${wallet}` : "",
@@ -26217,7 +26264,7 @@ function kolModeLabel(mode) {
 
 function kolModeDescription(mode) {
   return {
-    hot: "Recent high-performing KOLs and the strongest current positions they are holding.",
+    hot: "Top coins KOL wallets are calling now, using cached KOL API hot-token rows when available.",
     top: "Best ranked KOL wallets by realized performance, then their highest-value current token positions.",
     consistent: "KOLs ranked by consistency/win rate from the available leaderboard, then filtered into cleaner copyable positions.",
     fresh: "KOL wallets with the newest activity first, useful when you want faster signal flow."
