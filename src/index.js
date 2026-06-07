@@ -2844,6 +2844,9 @@ function ogreAgentCompactSocialAnswer(evidence = {}, options = {}) {
   const kolRows = Array.isArray(evidence.kolRows) ? evidence.kolRows : [];
   const liveRows = Array.isArray(evidence.liveRows) ? evidence.liveRows : [];
   const xPosts = Array.isArray(options.xPosts) ? options.xPosts : [];
+  const providerNames = [...new Set(xPosts.map((post) => post.provider).filter(Boolean))]
+    .map((provider) => provider === "kol-sites" ? "KOL/discovery sites" : provider)
+    .slice(0, 3);
   const kolNames = kolRows.map(ogreAgentDescribeKolMatch).filter(Boolean).slice(0, 4);
   const symbol = evidence.symbol || shortMint(evidence.tokenMint);
   const metricBits = [
@@ -2854,9 +2857,9 @@ function ogreAgentCompactSocialAnswer(evidence = {}, options = {}) {
   if (xPosts.length) {
     const handles = xPosts.slice(0, 4).map((post) => post.username ? `@${post.username}` : post.authorName).filter(Boolean);
     return [
-      `Yes — I found ${xPosts.length} recent exact-CA X post(s) for ${symbol}${handles.length ? ` from ${handles.join(", ")}` : ""}.`,
-      `${metricBits || "Market stats are still thin."} ${kolRows.length ? `SlimeWire also sees ${kolRows.length} KOL/feed signal(s).` : "I do not see extra SlimeWire KOL rows yet."}`,
-      "Read: there is some social activity, but still check chart, liquidity, and buy/sell pressure before sizing."
+      `Yes — I found ${xPosts.length} social/search hit(s) for ${symbol}${handles.length ? ` from ${handles.join(", ")}` : ""}.`,
+      `${providerNames.length ? `Sources: ${providerNames.join(", ")}. ` : ""}${metricBits || "Market stats are still thin."} ${kolRows.length ? `SlimeWire also sees ${kolRows.length} KOL/feed signal(s).` : "I do not see extra SlimeWire KOL rows yet."}`,
+      "Read: it has some outside attention, but still verify chart, liquidity, and buy/sell pressure before sizing."
     ];
   }
   if (kolRows.length) {
@@ -2867,7 +2870,7 @@ function ogreAgentCompactSocialAnswer(evidence = {}, options = {}) {
     ];
   }
   return [
-    `I do not see confirmed KOL/X activity for ${symbol} yet.`,
+    `I do not see confirmed KOL/social activity for ${symbol} yet.`,
     `${metricBits || "Market stats are still thin."} Social links: X ${links.xUrl ? "found" : "not returned"}, Telegram ${links.telegramUrl ? "found" : "not returned"}, Website ${links.websiteUrl ? "found" : "not returned"}.`,
     liveRows.length
       ? `It is visible in ${liveRows.length} SlimeWire live row(s), but social proof is still unconfirmed.`
@@ -2964,6 +2967,16 @@ async function ogreAgentKolTrendReply(message = "", context = {}) {
 function ogreAgentFreeSocialSearchConfigured() {
   return Boolean(ogreAgentEnv("GETXAPI_KEY") || ogreAgentEnv("JINA_API_KEY") || ogreAgentEnv("SEARXNG_BASE_URL"));
 }
+
+const OGRE_AGENT_KOL_SITE_QUERY = [
+  "site:kolscan.io",
+  "site:gmgn.ai",
+  "site:photon-sol.tinyastro.io",
+  "site:axiom.trade",
+  "site:bullx.io",
+  "site:pump.fun",
+  "site:dexscreener.com"
+].join(" OR ");
 
 function ogreAgentSocialQuery(tokenMint = "", terms = []) {
   const cleanTerms = [
@@ -3074,6 +3087,12 @@ async function ogreAgentJinaSearch(tokenMint = "", terms = []) {
   const key = ogreAgentEnv("JINA_API_KEY");
   if (!key || !tokenMint) return { configured: Boolean(key), posts: [], error: "" };
   const query = `site:x.com ${ogreAgentSocialQuery(tokenMint, terms)}`;
+  return ogreAgentJinaSearchQuery(query, "jina");
+}
+
+async function ogreAgentJinaSearchQuery(query = "", provider = "jina") {
+  const key = ogreAgentEnv("JINA_API_KEY");
+  if (!key || !query) return { configured: Boolean(key), posts: [], error: "" };
   const data = await ogreAgentFetchJson(`https://s.jina.ai/?q=${encodeURIComponent(query)}`, {
     method: "GET",
     headers: {
@@ -3081,7 +3100,7 @@ async function ogreAgentJinaSearch(tokenMint = "", terms = []) {
       Accept: "application/json"
     }
   }, 4200);
-  const posts = ogreAgentFlattenSocialItems(data).map((item) => ogreAgentNormalizeSocialPost(item, "jina")).filter(Boolean);
+  const posts = ogreAgentFlattenSocialItems(data).map((item) => ogreAgentNormalizeSocialPost(item, provider)).filter(Boolean);
   return { configured: true, posts, error: data?.error || data?.message || "" };
 }
 
@@ -3089,6 +3108,12 @@ async function ogreAgentSearxSearch(tokenMint = "", terms = []) {
   const base = ogreAgentEnv("SEARXNG_BASE_URL").replace(/\/+$/, "");
   if (!base || !tokenMint) return { configured: Boolean(base), posts: [], error: "" };
   const query = `site:x.com ${ogreAgentSocialQuery(tokenMint, terms)}`;
+  return ogreAgentSearxSearchQuery(query, "searxng");
+}
+
+async function ogreAgentSearxSearchQuery(query = "", provider = "searxng") {
+  const base = ogreAgentEnv("SEARXNG_BASE_URL").replace(/\/+$/, "");
+  if (!base || !query) return { configured: Boolean(base), posts: [], error: "" };
   const params = new URLSearchParams({
     q: query,
     format: "json",
@@ -3103,15 +3128,31 @@ async function ogreAgentSearxSearch(tokenMint = "", terms = []) {
       "User-Agent": "SlimeWireOgreAgent/1.0"
     }
   }, 4200);
-  const posts = ogreAgentFlattenSocialItems(data?.results || data).map((item) => ogreAgentNormalizeSocialPost(item, "searxng")).filter(Boolean);
+  const posts = ogreAgentFlattenSocialItems(data?.results || data).map((item) => ogreAgentNormalizeSocialPost(item, provider)).filter(Boolean);
   return { configured: true, posts, error: data?.error || "" };
+}
+
+async function ogreAgentKolSiteSearch(tokenMint = "", terms = []) {
+  if (!tokenMint) return { configured: ogreAgentFreeSocialSearchConfigured(), posts: [], error: "" };
+  const query = `(${OGRE_AGENT_KOL_SITE_QUERY}) ${ogreAgentSocialQuery(tokenMint, terms)}`;
+  const settled = await Promise.allSettled([
+    ogreAgentJinaSearchQuery(query, "kol-sites").catch(() => null),
+    ogreAgentSearxSearchQuery(query, "kol-sites").catch(() => null)
+  ]);
+  const results = settled.map((result) => result.status === "fulfilled" ? result.value : null).filter(Boolean);
+  return {
+    configured: results.some((result) => result.configured),
+    posts: ogreAgentDedupeSocialPosts(results.flatMap((result) => Array.isArray(result.posts) ? result.posts : [])).slice(0, 8),
+    error: results.map((result) => result.error).filter(Boolean).slice(0, 2).join(" | ")
+  };
 }
 
 async function ogreAgentFreeSocialSearch(tokenMint = "", terms = []) {
   const providers = [
     ogreAgentGetXApiSearch,
     ogreAgentJinaSearch,
-    ogreAgentSearxSearch
+    ogreAgentSearxSearch,
+    ogreAgentKolSiteSearch
   ];
   const settled = await Promise.allSettled(providers.map((provider) => provider(tokenMint, terms).catch((error) => ({ configured: false, posts: [], error: error?.message || "" }))));
   const results = settled.map((result) => result.status === "fulfilled" ? result.value : null).filter(Boolean);

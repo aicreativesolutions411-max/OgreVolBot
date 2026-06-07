@@ -13610,13 +13610,21 @@ function ogreAgentCancelSpeech() {
 }
 
 function ogreAgentCleanSpeechText(text = "") {
-  return String(text || "")
+  const raw = String(text || "")
     .replace(/https?:\/\/\S+/gi, " link available ")
     .replace(/[•*_`#>~|]+/g, " ")
     .replace(/\b[A-HJ-NP-Za-km-z1-9]{32,44}\b/g, " token address ")
+    .split(/\n+/)
+    .map((line) => line.replace(/^\d+\.\s*/, "").trim())
+    .filter((line) => line && !/^(open|refresh|show|check|buy|sell|dex|pump|telegram|website|x search|kol tracker)\b/i.test(line))
+    .join(". ");
+  const sentences = raw
     .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 520);
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean)
+    .slice(0, 3);
+  return sentences.join(" ").trim().slice(0, 360);
 }
 
 function ogreAgentSpeak(text = "") {
