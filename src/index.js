@@ -4125,7 +4125,7 @@ async function ogreAgentTrendReply(message = "", context = {}) {
 }
 
 function ogreAgentModelSystemPrompt() {
-  return "You are Ogre Agent inside SlimeWire, a one-stop user-side trading assistant. Answer the user's latest intent directly, not with a generic checklist. Use conversation memory so follow-ups continue the current token/question until the user changes topic or clears chat. If the user gives a token CA, remember it as the active token for follow-up words like it/this/buy/sell. Help with panel functions, navigation, charting, presets, positions, wallet refresh, feed categories, coin/link questions, Solana token breakdowns, risk/community/read questions, and fast trade requests. If fallbackReply or tool context contains a concrete action/read, build on it instead of asking for token name/symbol again. If the latest user asks whether KOLs/accounts/X/Twitter are posting about a token, answer only the social/KOL question with available social evidence, accounts, links, and limitations; do not list generic age/liquidity/MC checks unless asked next. If context.recentPairs is present, use it for fast live/fresh candidate ranking and explain what data is visible. If a token CA is present and the user asks a general risk/read question, explain useful checks: age, liquidity, MC/FDV, volume, buy/sell pressure, chart structure, socials, holder/risk badges, mint/freeze risks when visible, and whether it looks early, risky, or building a floor. If asked about X/Twitter, Telegram, website, or community, use visible token links/metadata when provided and be clear when those links are unavailable; do not pretend to have a platform-wide X firehose unless context includes X post data. Never reveal or discuss code, security internals, env vars, API keys, private keys, backend architecture, or database details. Never claim a buy/sell completed unless the site context says it did. Keep replies short, practical, and action-oriented.";
+  return "You are Ogre Agent inside SlimeWire, a one-stop user-side trading assistant. Answer the user's latest intent directly, not with a generic checklist. Use conversation memory so follow-ups continue the current token/question until the user changes topic or clears chat. If the user gives a token CA, remember it as the active token for follow-up words like it/this/buy/sell. Help with panel functions, navigation, charting, presets, positions, wallet refresh, feed categories, coin/link questions, Solana token breakdowns, SlimeShield verdicts, Protected Buy, KOL Dump Detector, Replay Before You Buy, risk/community/read questions, and fast trade requests. If fallbackReply or tool context contains a concrete action/read, build on it instead of asking for token name/symbol again. If context.slimeShield, context.kolDumpDetector, context.replayBeforeBuy, context.pnlSummary, or context.selectedPosition are present, use those facts and say when coverage is low. If the latest user asks whether KOLs/accounts/X/Twitter are posting about a token, answer only the social/KOL question with available social evidence, accounts, links, and limitations; do not list generic age/liquidity/MC checks unless asked next. If context.recentPairs is present, use it for fast live/fresh candidate ranking and explain what data is visible. If a token CA is present and the user asks a general risk/read question, explain useful checks: age, liquidity, MC/FDV, volume, buy/sell pressure, chart structure, socials, holder/risk badges, mint/freeze risks when visible, and whether it looks early, risky, or building a floor. If asked about X/Twitter, Telegram, website, or community, use visible token links/metadata when provided and be clear when those links are unavailable; do not pretend to have a platform-wide X firehose unless context includes X post data. Never reveal or discuss code, security internals, env vars, API keys, private keys, backend architecture, or database details. Never claim a buy/sell completed unless the site context says it did. Never guarantee profits or tell the user to ignore wallet warnings. Keep replies short, practical, and action-oriented.";
 }
 
 function ogreAgentEnv(name = "") {
@@ -4167,6 +4167,31 @@ function ogreAgentSanitizedContext(context = {}) {
         source: String(row?.source || "").slice(0, 40)
       }))
     : [];
+  const slimeShield = context.slimeShield && typeof context.slimeShield === "object" ? {
+    verdict: String(context.slimeShield.verdict || "").slice(0, 16),
+    summary: String(context.slimeShield.summary || "").slice(0, 180),
+    confidence: String(context.slimeShield.confidence || "").slice(0, 16),
+    suggestedAction: String(context.slimeShield.suggestedAction || "").slice(0, 40),
+    topFactors: Array.isArray(context.slimeShield.topFactors)
+      ? context.slimeShield.topFactors.slice(0, 4).map((item) => String(item || "").slice(0, 120))
+      : []
+  } : null;
+  const replayBeforeBuy = context.replayBeforeBuy && typeof context.replayBeforeBuy === "object" ? {
+    sampleSize: Number(context.replayBeforeBuy.sampleSize || 0),
+    confidence: String(context.replayBeforeBuy.confidence || "").slice(0, 16),
+    winRatePercent: Number(context.replayBeforeBuy.winRatePercent ?? NaN),
+    medianMaxDrawdownPercent: Number(context.replayBeforeBuy.medianMaxDrawdownPercent ?? NaN),
+    summary: String(context.replayBeforeBuy.summary || "").slice(0, 180)
+  } : null;
+  const kolDumpDetector = Array.isArray(context.kolDumpDetector)
+    ? context.kolDumpDetector.slice(0, 3).map((row) => ({
+        displayName: String(row?.displayName || "").slice(0, 80),
+        riskLabel: String(row?.riskLabel || "").slice(0, 40),
+        dumpRiskPercent: Number(row?.dumpRiskPercent ?? NaN),
+        lowData: Boolean(row?.lowData),
+        summary: String(row?.summary || "").slice(0, 140)
+      }))
+    : [];
   return {
     route: String(context.route || "").slice(0, 40),
     activeTab: String(context.activeTab || "").slice(0, 40),
@@ -4184,6 +4209,27 @@ function ogreAgentSanitizedContext(context = {}) {
     selectedTradePreset: String(context.selectedTradePreset || "").slice(0, 120),
     selectedBundlePreset: String(context.selectedBundlePreset || "").slice(0, 120),
     quickBuyAmount: String(context.quickBuyAmount || context.defaultBuyAmount || "").slice(0, 24),
+    currentToken: context.currentToken && typeof context.currentToken === "object" ? {
+      tokenMint: String(context.currentToken.tokenMint || "").slice(0, 80),
+      symbol: String(context.currentToken.symbol || "").slice(0, 24),
+      name: String(context.currentToken.name || "").slice(0, 48),
+      watched: Boolean(context.currentToken.watched)
+    } : null,
+    slimeShield,
+    kolDumpDetector,
+    replayBeforeBuy,
+    pnlSummary: context.pnlSummary && typeof context.pnlSummary === "object" ? {
+      realized: String(context.pnlSummary.realized || "").slice(0, 40),
+      positions: Number(context.pnlSummary.positions || 0),
+      totalSol: String(context.pnlSummary.totalSol || "").slice(0, 24)
+    } : null,
+    selectedPosition: context.selectedPosition && typeof context.selectedPosition === "object" ? {
+      tokenMint: String(context.selectedPosition.tokenMint || "").slice(0, 80),
+      uiAmount: String(context.selectedPosition.uiAmount || "").slice(0, 40),
+      estimatedValueSol: String(context.selectedPosition.estimatedValueSol || "").slice(0, 40),
+      openPnlSol: String(context.selectedPosition.openPnlSol || "").slice(0, 40)
+    } : null,
+    walletPublicKey: String(context.walletPublicKey || "").slice(0, 80),
     recentAgentMessages,
     recentPairs
   };

@@ -779,6 +779,7 @@ function scheduleDiagnosticLogPersist(key, valueFactory, timerName) {
 
 function recordPerfEvent(event = {}) {
   const durationMs = Number(event.durationMs);
+  if (Number.isFinite(durationMs) && durationMs >= 2500) debugCounter("slowApiRequestWarning");
   const payload = {
     at: new Date().toISOString(),
     route: safePerfText(event.route || state.route || routeForPath(), 40),
@@ -1158,6 +1159,7 @@ async function api(path, options = {}) {
     ? `${method}:${path}:${state.token ? state.token.slice(0, 12) : "guest"}`
     : "";
   if (dedupeKey && apiInFlight.has(dedupeKey)) {
+    debugCounter("duplicateApiRequestsPrevented");
     recordPerfEvent({
       component: "api",
       action: "api-dedupe",
@@ -2896,7 +2898,7 @@ function scheduleActiveTerminalFeedRefresh() {
     clearActiveTimer();
     return;
   }
-  const delayMs = Math.max(TERMINAL_BACKGROUND_REFRESH_MIN_MS, Number(feed.refreshMs || 30_000));
+  const delayMs = Math.max(5_000, Number(feed.refreshMs || 30_000));
   const nextKey = `${state.activeTab}:${terminalFeedCacheKey(feed)}:${delayMs}`;
   if (terminalFeedTimer && terminalFeedTimerKey === nextKey) return;
   clearActiveTimer();
@@ -8796,6 +8798,7 @@ async function executeWebBuy(amountSol, amountMode = "fixed") {
     actionDetail = amountMode === "max" ? "max" : String(amountSol || "custom");
     const active = activeTradeAction("trade-buy", form.tokenMint, actionDetail);
     if (active) {
+      debugCounter("buttonDoubleClickPrevented");
       recordPerfEvent({
         component: "post-trade",
         action: "trade-action-dedupe",
@@ -8945,6 +8948,7 @@ async function executeWebSell(percent) {
     }
     const active = activeTradeAction("trade-sell", form.tokenMint, detail);
     if (active) {
+      debugCounter("buttonDoubleClickPrevented");
       recordPerfEvent({
         component: "manual-sell",
         action: "manual-sell-dedupe",
@@ -9370,6 +9374,7 @@ async function executeBundle(action) {
     payload = readBundleForm();
     const active = activeTradeAction(actionName, payload.tokenMint, "bundle");
     if (active) {
+      debugCounter("buttonDoubleClickPrevented");
       recordPerfEvent({
         component: "post-trade",
         action: "trade-action-dedupe",
@@ -14605,11 +14610,12 @@ function ogreAgentLoadStoredMessages() {
     if (!Array.isArray(parsed)) return [];
     return parsed
       .filter((message) => message && typeof message === "object" && String(message.text || "").trim())
-      .slice(-16)
+      .slice(-50)
       .map((message) => ({
         role: message.role === "user" ? "user" : "assistant",
         text: String(message.text || "").slice(0, 1200),
-        actions: Array.isArray(message.actions) ? message.actions.slice(0, 4) : []
+        actions: Array.isArray(message.actions) ? message.actions.slice(0, 4) : [],
+        retryText: String(message.retryText || "").slice(0, 1200)
       }));
   } catch {
     return [];
@@ -14618,7 +14624,7 @@ function ogreAgentLoadStoredMessages() {
 
 function ogreAgentSaveMessages() {
   try {
-    localStorage.setItem(OGRE_AGENT_MESSAGES_STORAGE_KEY, JSON.stringify(ogreAgentMessages().slice(-16)));
+    localStorage.setItem(OGRE_AGENT_MESSAGES_STORAGE_KEY, JSON.stringify(ogreAgentMessages().slice(-50)));
   } catch {}
 }
 
@@ -14651,6 +14657,12 @@ function ogreAgentMessages() {
 }
 
 function ogreAgentContext() {
+  const activeMint = String(state.smartChartToken || state.tradeToken || ogreAgentLastTokenMint() || "").trim();
+  const activeRow = activeMint ? slimeShieldRowForMint(activeMint) : null;
+  const shield = activeRow?.tokenMint ? slimeShieldResultForRow(activeRow) : null;
+  const replay = activeMint ? replayResultForMint(activeMint) : null;
+  const kolDumpRows = kolDumpStatsRows().slice(0, 3);
+  const openPosition = activeMint ? portfolioPositions().find((position) => String(position.tokenMint || "") === activeMint) : null;
   return {
     route: state.route,
     activeTab: state.activeTab,
@@ -14672,6 +14684,45 @@ function ogreAgentContext() {
     selectedTradePreset: activePresetDetail("trade"),
     selectedBundlePreset: activePresetDetail("bundle"),
     quickBuyAmount: String(ogreAgentDefaultBuyAmount() || ""),
+    currentToken: activeMint ? {
+      tokenMint: activeMint,
+      symbol: activeRow?.symbol || "",
+      name: activeRow?.name || "",
+      watched: isTokenWatched(activeMint)
+    } : null,
+    slimeShield: shield ? {
+      verdict: shield.verdict,
+      summary: shield.summary,
+      confidence: shield.confidence,
+      suggestedAction: shield.suggestedAction,
+      topFactors: (shield.factors || []).slice(0, 4).map((factor) => factor.message || factor.label || factor.key)
+    } : null,
+    kolDumpDetector: kolDumpRows.length ? kolDumpRows.map((row) => ({
+      displayName: row.displayName,
+      riskLabel: row.riskLabel,
+      dumpRiskPercent: row.lowData ? null : row.dumpRiskPercent,
+      lowData: Boolean(row.lowData),
+      summary: kolDumpMetaLine(row)
+    })) : [],
+    replayBeforeBuy: replay ? {
+      sampleSize: replay.sampleSize,
+      confidence: replay.confidence,
+      winRatePercent: replay.winRatePercent,
+      medianMaxDrawdownPercent: replay.medianMaxDrawdownPercent,
+      summary: replay.summary
+    } : null,
+    pnlSummary: {
+      realized: portfolioRealizedPnlLabel(),
+      positions: portfolioPositions().length,
+      totalSol: totalSol().toFixed(4)
+    },
+    selectedPosition: openPosition ? {
+      tokenMint: openPosition.tokenMint,
+      uiAmount: openPosition.uiAmount,
+      estimatedValueSol: openPosition.estimatedValueSol,
+      openPnlSol: openPosition.openPnlSol || openPosition.realizedSol || ""
+    } : null,
+    walletPublicKey: String(state.user?.connectedWallet?.publicKey || state.connectedWalletBalance?.publicKey || "").slice(0, 80),
     recentPairs: ogreAgentRecentMarketRows()
   };
 }
@@ -14746,9 +14797,11 @@ function ogreAgentActionLabel(action = {}) {
 
 function ogreAgentMessageHtml(message = {}, messageIndex = 0) {
   const actions = Array.isArray(message.actions) ? message.actions.slice(0, 4) : [];
+  const isAssistant = message.role !== "user";
   return `
     <div class="ogre-agent-message ${message.role === "user" ? "user" : "assistant"}">
       <p>${escapeHtml(message.text || "")}</p>
+      ${isAssistant ? `<div class="ogre-agent-message-tools"><button type="button" data-copy="${escapeHtml(message.text || "")}">Copy</button>${message.retryText ? `<button type="button" data-ogre-agent-retry="${messageIndex}">Retry</button>` : ""}</div>` : ""}
       ${actions.length ? `<div class="ogre-agent-actions">${actions.map((action, actionIndex) => `<button type="button" data-ogre-agent-action="${messageIndex}:${actionIndex}">${escapeHtml(ogreAgentActionLabel(action))}</button>`).join("")}</div>` : ""}
     </div>
   `;
@@ -14811,11 +14864,14 @@ function ogreAgentHtml() {
           </div>
         </div>
         <div class="ogre-agent-quick-actions" aria-label="Ogre Agent quick actions">
-          <button type="button" data-ogre-agent-quick="positions">Show Positions</button>
-          <button type="button" data-ogre-agent-quick="refresh_feeds">Refresh Feeds</button>
-          <button type="button" data-ogre-agent-quick="auto_trade">Auto-Trade On</button>
+          <button type="button" data-ogre-agent-quick="risk">Why Risk?</button>
+          <button type="button" data-ogre-agent-quick="protected_buy">Protected Buy?</button>
+          <button type="button" data-ogre-agent-quick="replay">Replay</button>
+          <button type="button" data-ogre-agent-quick="positions">Positions</button>
+          <button type="button" data-ogre-agent-quick="refresh_feeds">Refresh</button>
           <button type="button" data-ogre-agent-quick="clear_chat">Clear</button>
         </div>
+        <small class="ogre-agent-disclaimer">AI can make mistakes. Always review wallet prompts before signing.</small>
         ${state.ogreAgentStatus ? `<small class="ogre-agent-status">${escapeHtml(state.ogreAgentStatus)}</small>` : ""}
       </section>
     </div>
@@ -14882,9 +14938,15 @@ document.addEventListener("focusin", (event) => {
 }, { passive: true });
 
 function pushOgreAgentMessage(message = {}) {
-  state.ogreAgentMessages = [...ogreAgentMessages(), message].slice(-16);
+  const normalized = {
+    role: message.role === "user" ? "user" : "assistant",
+    text: String(message.text || "").slice(0, 1800),
+    actions: Array.isArray(message.actions) ? message.actions.slice(0, 4) : [],
+    retryText: String(message.retryText || "").slice(0, 1200)
+  };
+  state.ogreAgentMessages = [...ogreAgentMessages(), normalized].slice(-50);
   ogreAgentSaveMessages();
-  if (message.role === "assistant") ogreAgentSpeak(message.text || "");
+  if (normalized.role === "assistant") ogreAgentSpeak(normalized.text || "");
 }
 
 function ogreAgentSpeechSupported() {
@@ -15795,9 +15857,9 @@ function ogreAgentLocalTrendReply(message = "") {
   };
 }
 
-async function sendOgreAgentMessage() {
+async function sendOgreAgentMessage(overrideMessage = "") {
   const input = document.querySelector("[data-ogre-agent-input]");
-  const message = String(input?.value || "").trim();
+  const message = String(overrideMessage || input?.value || "").trim();
   if (!message || state.ogreAgentLoading) return;
   const messageMint = ogreAgentExtractSolanaMint(message);
   if (messageMint) ogreAgentRememberTokenMint(messageMint);
@@ -15867,6 +15929,7 @@ async function sendOgreAgentMessage() {
   }
   state.ogreAgentLoading = true;
   state.ogreAgentStatus = "";
+  debugCounter("chatRequestStarted");
   const agentRequestId = `${Date.now()}:${Math.random().toString(16).slice(2)}`;
   state.ogreAgentRequestId = agentRequestId;
   const agentWatchdog = setTimeout(() => {
@@ -15874,9 +15937,11 @@ async function sendOgreAgentMessage() {
     state.ogreAgentRequestId = "";
     state.ogreAgentLoading = false;
     state.ogreAgentStatus = "Agent reply timed out.";
+    debugCounter("chatRequestTimedOut");
     pushOgreAgentMessage({
       role: "assistant",
       text: "I timed out instead of staying stuck. I can still open panels, refresh feeds, check a coin, show positions, or open chart from here.",
+      retryText: message,
       actions: [
         { label: "Show Positions", type: "open_tab", tab: "positions" },
         { label: "Refresh Feeds", type: "refresh_feeds" },
@@ -15902,6 +15967,7 @@ async function sendOgreAgentMessage() {
       text: data?.agent?.reply || "I can help with panel functions, charts, positions, presets, coin checks, links, risk reads, and fast trade requests.",
       actions
     });
+    debugCounter("chatRequestSucceeded");
     const serverAlreadyCheckedCoin = Boolean(data?.agent?.coinEnriched || data?.agent?.tokenMint || data?.agent?.socialLinks || data?.agent?.socialScan);
     const socialIntent = ogreAgentSocialIntent(message);
     const autoCoinCheckAction = !socialIntent && !serverAlreadyCheckedCoin && !ogreAgentTradeIntent(message) && ogreAgentCoinCheckIntent(message)
@@ -15954,12 +16020,14 @@ async function sendOgreAgentMessage() {
     pushOgreAgentMessage({
       role: "assistant",
       text: "Ogre Agent is still here, but the server reply timed out. I can still open panels, refresh feeds, check coins, open links, and route trade actions.",
+      retryText: message,
       actions: [
         { label: "Refresh Feeds", type: "refresh_feeds" },
         { label: "Positions", type: "open_tab", tab: "positions" },
         { label: "Live Terminal", type: "open_tab", tab: "terminal" }
       ]
     });
+    debugCounter("chatRequestFailed");
     state.ogreAgentStatus = error?.message || "Agent reply failed.";
   } finally {
     clearTimeout(agentWatchdog);
@@ -16204,6 +16272,9 @@ document.addEventListener("click", async (event) => {
     const quick = target.dataset.ogreAgentQuick || "";
     if (quick === "positions") void runOgreAgentAction({ type: "open_tab", tab: "positions" });
     if (quick === "refresh_feeds") void runOgreAgentAction({ type: "refresh_feeds" });
+    if (quick === "risk") void sendOgreAgentMessage("Why is this token risky?");
+    if (quick === "protected_buy") void sendOgreAgentMessage("Should I use Protected Buy?");
+    if (quick === "replay") void sendOgreAgentMessage("Replay similar launches for this token.");
     if (quick === "auto_trade") void runOgreAgentAction({ type: "approve_agent_auto_trade" });
     if (quick === "clear_chat") {
       ogreAgentStopListening();
@@ -16218,6 +16289,13 @@ document.addEventListener("click", async (event) => {
       } catch {}
       renderOgreAgent({ force: true });
     }
+    return;
+  }
+
+  if (target.matches("[data-ogre-agent-retry]")) {
+    const index = Number(target.dataset.ogreAgentRetry);
+    const retryText = String(state.ogreAgentMessages?.[index]?.retryText || "").trim();
+    if (retryText) void sendOgreAgentMessage(retryText);
     return;
   }
 
