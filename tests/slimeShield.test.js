@@ -73,9 +73,14 @@ test("SlimeShield folds KOL dump risk into local scoring without external reads"
   assert.ok(highRisk.factors.some((factor) => factor.key === "kol_dump_risk"));
 });
 
-test("SlimeShield verdict thresholds keep severe risk factors above score thresholds blocked", () => {
+test("SlimeShield verdict thresholds reserve AVOID for hard or compound danger", () => {
   assert.equal(slimeShieldVerdictFromScore(78, []), "BUY");
   assert.equal(slimeShieldVerdictFromScore(67, []), "CAUTION");
   assert.equal(slimeShieldVerdictFromScore(52, []), "RISK");
-  assert.equal(slimeShieldVerdictFromScore(78, [{ severity: "risk", weight: -36 }]), "AVOID");
+  assert.equal(slimeShieldVerdictFromScore(32, [{ key: "liquidity_extreme", severity: "risk", weight: -36 }]), "RISK");
+  assert.equal(slimeShieldVerdictFromScore(78, [{ key: "hard_flag", severity: "risk", weight: -40 }]), "AVOID");
+  assert.equal(slimeShieldVerdictFromScore(32, [
+    { key: "bundle_risk", severity: "risk", weight: -18 },
+    { key: "authority_risk", severity: "risk", weight: -24 }
+  ]), "AVOID");
 });

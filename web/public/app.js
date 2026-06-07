@@ -42,6 +42,7 @@ const terminalFeedLastRefreshStartedAt = new Map();
 const livePairAvatarSrcMemory = new Map();
 const avatarSrcByMint = livePairAvatarSrcMemory;
 const failedAvatarSrc = new Set();
+const failedAvatarSrcAt = new Map();
 const pendingAvatarFetches = new Map();
 const debugPerformanceCounters = {};
 const API_LONG_ACTION_TIMEOUT_MS = 180_000;
@@ -4056,15 +4057,32 @@ function render(options = {}) {
   }
 }
 
-function tpslAutoRevokedThisSession() {
-  try { return sessionStorage.getItem("tpslAutoRevoked") === "yes"; } catch { return false; }
+function tpslAutomationSessionScope(scope = "") {
+  const explicit = String(scope || "").trim();
+  if (explicit) return explicit.toLowerCase();
+  const connected = state.user?.connectedWallet?.publicKey || state.connectedWalletBalance?.publicKey || "";
+  if (connected) return `connected:${String(connected).toLowerCase()}`;
+  const managed = Array.isArray(state.wallets) && state.wallets.length
+    ? state.wallets.map((wallet) => wallet.publicKey || wallet.address || wallet.label || "").filter(Boolean).join("|")
+    : "";
+  if (managed) return `managed:${managed.toLowerCase().slice(0, 240)}`;
+  return "wallet-session";
 }
 
-function setTpslAutoRevokedThisSession(revoked) {
+function tpslAutoRevokedThisSession(scope = "") {
+  try { return sessionStorage.getItem(`tpslAutoRevoked:${tpslAutomationSessionScope(scope)}`) === "yes"; } catch { return false; }
+}
+
+function setTpslAutoRevokedThisSession(revoked, scope = "") {
   try {
-    if (revoked) sessionStorage.setItem("tpslAutoRevoked", "yes");
-    else sessionStorage.removeItem("tpslAutoRevoked");
+    const key = `tpslAutoRevoked:${tpslAutomationSessionScope(scope)}`;
+    if (revoked) sessionStorage.setItem(key, "yes");
+    else sessionStorage.removeItem(key);
   } catch {}
+}
+
+function clearTpslAutoRevokedThisSession(scope = "") {
+  setTpslAutoRevokedThisSession(false, scope);
 }
 
 function hasTpSlAutomationWalletContext() {
@@ -5175,8 +5193,7 @@ function rememberStableAvatar(key = "", src = "") {
   const safeKey = String(key || "").trim();
   const safeSrc = normalizeImageUrl(src);
   if (!safeKey || !safeSrc) return "";
-  const failKey = avatarFailureKey(safeKey, safeSrc);
-  if (failedAvatarSrc.has(failKey)) return "";
+  if (avatarFailedRecently(safeKey, safeSrc)) return "";
   avatarSrcByMint.set(safeKey, safeSrc);
   debugCounter("avatarCacheHit");
   if (avatarSrcByMint.size > 900) {
@@ -5192,14 +5209,34 @@ function avatarFailureKey(key = "", src = "") {
   return `${String(key || "").trim()}|${normalizeImageUrl(src)}`;
 }
 
+function avatarFailureTtlMs(src = "") {
+  return /^\/api\/web\/token-image\?/i.test(String(src || "")) ? 45_000 : 30 * 60 * 1000;
+}
+
+function avatarFailedRecently(key = "", src = "") {
+  const failKey = avatarFailureKey(key, src);
+  if (!failedAvatarSrc.has(failKey)) return false;
+  const failedAt = Number(failedAvatarSrcAt.get(failKey) || 0);
+  const expired = failedAt && Date.now() - failedAt > avatarFailureTtlMs(src);
+  if (expired) {
+    failedAvatarSrc.delete(failKey);
+    failedAvatarSrcAt.delete(failKey);
+    return false;
+  }
+  return true;
+}
+
 function rememberFailedAvatar(key = "", src = "") {
   const safeKey = String(key || "").trim();
   const safeSrc = normalizeImageUrl(src);
   if (!safeKey || !safeSrc) return;
-  failedAvatarSrc.add(avatarFailureKey(safeKey, safeSrc));
+  const failKey = avatarFailureKey(safeKey, safeSrc);
+  failedAvatarSrc.add(failKey);
+  failedAvatarSrcAt.set(failKey, Date.now());
   if (failedAvatarSrc.size > 1200) {
     for (const oldKey of failedAvatarSrc) {
       failedAvatarSrc.delete(oldKey);
+      failedAvatarSrcAt.delete(oldKey);
       if (failedAvatarSrc.size <= 900) break;
     }
   }
@@ -5210,14 +5247,14 @@ function rememberFailedAvatar(key = "", src = "") {
 function stableAvatarSrc(key = "", ...candidates) {
   const safeKey = String(key || "").trim();
   const remembered = safeKey ? avatarSrcByMint.get(safeKey) : "";
-  if (remembered && !failedAvatarSrc.has(avatarFailureKey(safeKey, remembered))) {
+  if (remembered && !avatarFailedRecently(safeKey, remembered)) {
     debugCounter("avatarCacheHit");
     return remembered;
   }
   if (remembered) avatarSrcByMint.delete(safeKey);
   for (const candidate of candidates) {
     const normalized = normalizeImageUrl(candidate);
-    if (normalized && !failedAvatarSrc.has(avatarFailureKey(safeKey, normalized))) {
+    if (normalized && !avatarFailedRecently(safeKey, normalized)) {
       debugCounter("avatarCacheMiss");
       return normalized;
     }
@@ -5232,7 +5269,7 @@ window.__slimeAvatarLoadFailed = function slimeAvatarLoadFailed(image) {
   const src = image?.currentSrc || image?.src || image?.dataset?.avatarSrc || "";
   rememberFailedAvatar(key, src);
   const backup = normalizeImageUrl(image?.dataset?.backupSrc || "");
-  if (backup && !failedAvatarSrc.has(avatarFailureKey(key, backup))) {
+  if (backup && !avatarFailedRecently(key, backup)) {
     image.dataset.backupSrc = "";
     image.dataset.avatarSrc = backup;
     image.src = backup;
@@ -7413,7 +7450,7 @@ function kolDumpDetectorPanelHtml() {
         </div>
         <span>${state.kolDumpStatsLoading ? "Updating" : rows.length ? `${rows.length} tracked` : "Low data"}</span>
       </div>
-      <small>Wallet-based until social signal data is available.</small>
+      <small>${escapeHtml(state.kolDumpStats?.message || "Wallet-based until social signal data is available.")}</small>
       ${rows.length ? `
         <div class="kol-dump-list">
           ${rows.map((row) => `
@@ -7498,7 +7535,7 @@ function renderKolDumpDetailsDrawer() {
       <section class="kol-dump-detail-summary">
         <strong>${escapeHtml(row.riskLabel || "Mixed")}</strong>
         <p>${escapeHtml(kolDumpMetaLine(row))}</p>
-        <small>Confidence: ${escapeHtml(row.confidence || "low")} · Updated ${escapeHtml(formatDate(row.updatedAt))}</small>
+        <small>Confidence: ${escapeHtml(row.confidence || "low")} · Source: ${escapeHtml(String(row.historySource || "cached profile").replace(/_/g, " "))} · Updated ${escapeHtml(formatDate(row.updatedAt))}</small>
       </section>
       <dl class="kol-dump-metrics">
         <div><dt>Calls tracked</dt><dd>${escapeHtml(row.callsTracked ?? 0)}</dd></div>
@@ -7881,7 +7918,7 @@ async function updateAutomationPermission(action = "enable", options = {}) {
   const status = $("[data-automation-delegation-status]");
   const buttons = [...document.querySelectorAll("[data-automation-permission]")];
   const enable = action !== "revoke";
-  setTpslAutoRevokedThisSession(!enable);
+  setTpslAutoRevokedThisSession(!enable, options.scope || "");
   state.automationDelegationStatus = enable ? (options.auto ? "TP/SL auto-enabled for this wallet session..." : "Enabling server exits...") : "Revoking server exits...";
   writeText(status, state.automationDelegationStatus);
   buttons.forEach((button) => {
@@ -8491,10 +8528,12 @@ async function connectBrowserWallet(providerId, options = {}) {
       provider: walletProviderLabel(providerId, provider),
       tokens: []
     };
+    clearTpslAutoRevokedThisSession(`connected:${publicKeyText}`);
     state.walletConnectMenuOpen = false;
     setWalletConnectStatus(`Connected ${shortAddress(publicKeyText)}. Opening Live Terminal...`);
     navigateTo(options.returnPath || state.walletConnectReturnPath || "/terminal", "terminal");
     render({ force: true });
+    scheduleTpSlAutoEnable("browser-wallet-connect");
     refreshTerminalEntryInBackground("browser-wallet-connect");
   } catch (error) {
     const message = error.message || "Wallet connection was cancelled.";
@@ -8505,8 +8544,10 @@ async function connectBrowserWallet(providerId, options = {}) {
 
 async function disconnectBrowserWallet() {
   const status = walletConnectStatusElement();
+  const disconnectedScope = state.user?.connectedWallet?.publicKey || state.connectedWalletBalance?.publicKey || "";
   if (!state.user || !state.token) {
     state.connectedWalletBalance = null;
+    clearTpslAutoRevokedThisSession(disconnectedScope ? `connected:${disconnectedScope}` : "");
     setWalletConnectStatus("Connected wallet disconnected.");
     render({ force: true });
     return;
@@ -8535,6 +8576,7 @@ async function disconnectBrowserWallet() {
       connectedWallet: null
     });
     state.connectedWalletBalance = null;
+    clearTpslAutoRevokedThisSession(disconnectedScope ? `connected:${disconnectedScope}` : "");
     setWalletConnectStatus("Connected wallet disconnected.");
     render({ force: true });
   } catch (error) {
@@ -11345,8 +11387,9 @@ function slimeShieldAgeMinutes(row = {}) {
 }
 
 function slimeShieldVerdictFromScore(score, factors = []) {
-  const severe = (factors || []).some((item) => item.severity === "risk" && Math.abs(Number(item.weight || 0)) >= 30);
-  if (score < 40 || severe) return "AVOID";
+  const hardAvoid = (factors || []).some((item) => item.key === "hard_flag");
+  const nonLiquidityRiskCount = (factors || []).filter((item) => item.severity === "risk" && item.key !== "liquidity_extreme").length;
+  if (hardAvoid || (score < 35 && nonLiquidityRiskCount >= 2)) return "AVOID";
   if (score < 60) return "RISK";
   if (score < 75) return "CAUTION";
   return "BUY";
@@ -11503,7 +11546,7 @@ function slimeShieldPillHtml(row = {}, options = {}) {
   const compact = Boolean(options.compact);
   return `
     <button type="button" class="score-badge slimeshield-pill slimeshield-${escapeHtml(slimeShieldVerdictClass(verdict))}" data-slimeshield-details="${escapeHtml(mint)}" title="${escapeHtml(result.summary || "Open SlimeShield details")}">
-      <strong>${escapeHtml(verdict)}</strong>
+      <strong>Details</strong>
       <small>${compact ? "Shield" : "SlimeShield"}</small>
     </button>
   `;
@@ -11517,7 +11560,7 @@ function slimeShieldMiniHtml(row = {}) {
   const result = slimeShieldResultForRow(row);
   const mint = String(row.tokenMint || result.mint || "").trim();
   const verdict = result.verdict || "CAUTION";
-  return `<button type="button" class="mobile-score-mini slimeshield-mini slimeshield-${escapeHtml(slimeShieldVerdictClass(verdict))}" data-slimeshield-details="${escapeHtml(mint)}" title="${escapeHtml(result.summary || "Open SlimeShield details")}">${escapeHtml(verdict)}</button>`;
+  return `<button type="button" class="mobile-score-mini slimeshield-mini slimeshield-${escapeHtml(slimeShieldVerdictClass(verdict))}" data-slimeshield-details="${escapeHtml(mint)}" title="${escapeHtml(result.summary || "Open SlimeShield details")}">Details</button>`;
 }
 
 function slimeShieldChipHtml(row = {}) {
@@ -11536,7 +11579,7 @@ function slimeShieldChipHtml(row = {}) {
   const verdict = result.verdict || "CAUTION";
   return `
     <button type="button" class="terminal-score-chip slimeshield-chip slimeshield-${escapeHtml(slimeShieldVerdictClass(verdict))}" data-slimeshield-details="${escapeHtml(mint)}" title="${escapeHtml(result.summary || "Open SlimeShield details")}">
-      <strong>${escapeHtml(verdict)}</strong>
+      <strong>Details</strong>
       <small>Shield</small>
     </button>
   `;
@@ -13828,6 +13871,8 @@ function livePairImageUrl(row = {}) {
   const info = row.info || row.profile || {};
   const candidates = [
     row.imageUrl,
+    row.avatarUrl,
+    row.avatar_url,
     row.imageUri,
     row.image,
     row.iconUrl,
@@ -14009,17 +14054,20 @@ function livePairVolumeH24(row = {}) {
 function livePairAvatarHtml(row, options = {}) {
   const label = String(row.symbol || row.name || row.shortMint || "?").trim().slice(0, 2).toUpperCase() || "?";
   const imageUrl = livePairImageUrl(row);
-  const proxyUrl = normalizeImageUrl(tokenImageProxyUrl(row));
-  const avatarKey = `token:${String(row.tokenMint || row.mint || row.address || row.symbol || label).trim().toLowerCase()}`;
+  const mint = String(row.tokenMint || row.mint || row.tokenAddress || row.address || "").trim();
+  const avatarKey = `token:${String(mint || row.symbol || label).trim().toLowerCase()}`;
   const tokenAvatarFixOn = featureEnabled("tokenAvatarFixEnabled", true);
+  const explicitAvatarState = String(row.avatarState || "").trim().toLowerCase();
+  const cachedAvatarReady = Boolean(row.avatarUrl) && (!explicitAvatarState || explicitAvatarState === "ready");
+  const proxyUrl = cachedAvatarReady && mint ? normalizeImageUrl(tokenImageProxyUrl(row)) : "";
   const src = tokenAvatarFixOn
-    ? stableAvatarSrc(avatarKey, row.avatarUrl, imageUrl)
+    ? stableAvatarSrc(avatarKey, proxyUrl, cachedAvatarReady ? row.avatarUrl : "", explicitAvatarState ? "" : imageUrl)
     : stableAvatarSrc(avatarKey, proxyUrl, imageUrl);
-  const backupSrc = tokenAvatarFixOn && imageUrl && row.avatarUrl && imageUrl !== row.avatarUrl ? imageUrl : "";
+  const backupSrc = tokenAvatarFixOn && cachedAvatarReady && imageUrl && row.avatarUrl && imageUrl !== row.avatarUrl ? imageUrl : "";
   const priority = Boolean(options.priority);
   const loading = priority ? "eager" : "lazy";
   const fetchPriority = priority ? "high" : "low";
-  const avatarState = row.avatarState || (src ? "ready" : "missing");
+  const avatarState = explicitAvatarState || (src ? "ready" : "missing");
   if (src) {
     const backupAttr = backupSrc ? ` data-backup-src="${escapeHtml(backupSrc)}"` : "";
     return `<div class="live-pair-avatar" data-avatar-state="${escapeHtml(avatarState)}"><img src="${escapeHtml(src)}"${backupAttr} data-avatar-src="${escapeHtml(src)}" data-avatar-key="${escapeHtml(avatarKey)}" alt="${escapeHtml(row.symbol || row.name || "Token")}" loading="${loading}" decoding="async" fetchpriority="${fetchPriority}" width="42" height="42" referrerpolicy="no-referrer" onload="window.__slimeRememberAvatar&&window.__slimeRememberAvatar(this.dataset.avatarKey,this.currentSrc||this.src);" onerror="window.__slimeAvatarLoadFailed&&window.__slimeAvatarLoadFailed(this);"><span>${escapeHtml(label)}</span></div>`;
@@ -15949,13 +15997,13 @@ async function sendOgreAgentMessage(overrideMessage = "") {
       ]
     });
     renderOgreAgent({ force: true });
-  }, 17_000);
+  }, 10_000);
   renderOgreAgent();
   try {
     const data = await api("/api/web/ogre-agent/chat", {
       method: "POST",
       body: JSON.stringify({ message, context: ogreAgentContext() }),
-      timeoutMs: 15_000,
+      timeoutMs: 9_000,
       dedupe: false,
       preserveSafeError: true
     });

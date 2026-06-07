@@ -106,8 +106,10 @@ const sessions = new Map();
 const mintProgramCache = new Map();
 const dexMetadataCache = new Map();
 const tokenImageResponseCache = new Map();
+const tokenImageFailureCache = new Map();
 const TOKEN_IMAGE_RESPONSE_CACHE_TTL_MS = 30 * 60 * 1000;
 const TOKEN_IMAGE_RESPONSE_STALE_TTL_MS = 6 * 60 * 60 * 1000;
+const TOKEN_IMAGE_FAILURE_TTL_MS = 60 * 1000;
 const TOKEN_IMAGE_RESPONSE_CACHE_MAX = 500;
 const tokenAvatarCache = new Map();
 const tokenAvatarLookupInFlight = new Map();
@@ -132,6 +134,8 @@ let livePairsSharedCache = new Map();
 let kolScanSharedCache = new Map();
 const kolDumpStatsCache = new Map();
 const KOL_DUMP_STATS_TTL_MS = 15 * 60 * 1000;
+let kolProfileHistoryCache = { cachedAt: 0, value: [] };
+const KOL_PROFILE_HISTORY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 let chartBootstrapSharedCache = new Map();
 const solanaTrackerCache = new Map();
 const madeOnSolCache = new Map();
@@ -2546,6 +2550,11 @@ function pruneTokenImageResponseCache() {
       tokenImageResponseCache.delete(key);
     }
   }
+  for (const [key, value] of tokenImageFailureCache.entries()) {
+    if (now - Number(value.cachedAt || 0) > TOKEN_IMAGE_FAILURE_TTL_MS) {
+      tokenImageFailureCache.delete(key);
+    }
+  }
   if (tokenImageResponseCache.size <= TOKEN_IMAGE_RESPONSE_CACHE_MAX) return;
   const sorted = [...tokenImageResponseCache.entries()]
     .sort((a, b) => Number(a[1]?.cachedAt || 0) - Number(b[1]?.cachedAt || 0));
@@ -2776,11 +2785,20 @@ function sendCachedWebTokenImage(request, response, cachedImage, cacheStatus = "
   response.writeHead(200, {
     "Content-Type": cachedImage.contentType || "image/jpeg",
     "Content-Length": cachedImage.buffer.length,
-    "Cache-Control": "public, max-age=900, stale-while-revalidate=3600",
+    "Cache-Control": "public, max-age=86400, stale-while-revalidate=604800",
     "X-Slime-Avatar-Cache": cacheStatus,
     ...webCorsHeaders(request)
   });
   response.end(cachedImage.buffer);
+}
+
+function sendWebTokenImageUnavailable(request, response, status = 404, reason = "Token image unavailable") {
+  response.writeHead(status, {
+    "Content-Type": "text/plain; charset=utf-8",
+    "Cache-Control": "public, max-age=30, stale-while-revalidate=120",
+    ...webCorsHeaders(request)
+  });
+  response.end(reason);
 }
 
 async function sendWebTokenImage(request, response, requestUrl) {
@@ -2802,33 +2820,33 @@ async function sendWebTokenImage(request, response, requestUrl) {
     return;
   }
 
-  const [pumpMeta, dexMeta] = await Promise.all([
-    getPumpFunTokenMetadata(mint, { timeoutMs: 2_500, cacheTtlMs: 5 * 60 * 1000 }).catch(() => ({})),
-    getDexTokenMetadata(mint, { timeoutMs: 2_500 }).catch(() => ({}))
-  ]);
-  let imageUrl = firstString(
-    pumpMeta.imageUrl,
-    pumpMeta.imageUri,
-    dexMeta.imageUrl,
-    dexMeta.imageUri
-  );
-  if (!imageUrl) {
-    const geckoMeta = await getGeckoTerminalTokenMetadata(mint, { timeoutMs: 2_200 }).catch(() => ({}));
-    imageUrl = firstString(geckoMeta.imageUrl, geckoMeta.imageUri);
+  const recentFailure = tokenImageFailureCache.get(cacheKey);
+  if (recentFailure && Date.now() - Number(recentFailure.cachedAt || 0) < TOKEN_IMAGE_FAILURE_TTL_MS) {
+    if (cachedImage) {
+      sendCachedWebTokenImage(request, response, cachedImage, "STALE");
+      return;
+    }
+    sendWebTokenImageUnavailable(request, response, 404, "Token image warming up");
+    return;
   }
-  const imageCandidate = imageUriGatewayCandidates(imageUrl).find((candidate) => /^https?:\/\//i.test(candidate));
+
+  const avatar = await tokenAvatarForMint(mint, { schedule: true }).catch(() => tokenAvatarRecord(mint, { state: "pending" }));
+  const imageCandidate = avatar?.state === "ready"
+    ? imageUriGatewayCandidates(avatar.avatarUrl).find((candidate) => /^https:\/\//i.test(candidate))
+    : "";
   if (!imageCandidate) {
     if (cachedImage) {
       sendCachedWebTokenImage(request, response, cachedImage, "STALE");
       return;
     }
-    response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store", ...webCorsHeaders(request) });
-    response.end("Token image not found");
+    tokenImageFailureCache.set(cacheKey, { cachedAt: Date.now(), state: avatar?.state || "pending" });
+    pruneTokenImageResponseCache();
+    sendWebTokenImageUnavailable(request, response, 404, avatar?.state === "missing" || avatar?.state === "failed" ? "Token image not found" : "Token image warming up");
     return;
   }
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 4_000);
+  const timeout = setTimeout(() => controller.abort(), 2_500);
   try {
     const imageResponse = await fetch(imageCandidate, {
       signal: controller.signal,
@@ -2854,7 +2872,7 @@ async function sendWebTokenImage(request, response, requestUrl) {
     response.writeHead(200, {
       "Content-Type": contentType,
       "Content-Length": buffer.length,
-      "Cache-Control": "public, max-age=900, stale-while-revalidate=3600",
+      "Cache-Control": "public, max-age=86400, stale-while-revalidate=604800",
       "X-Slime-Avatar-Cache": "MISS",
       ...webCorsHeaders(request)
     });
@@ -2864,12 +2882,9 @@ async function sendWebTokenImage(request, response, requestUrl) {
       sendCachedWebTokenImage(request, response, cachedImage, "STALE");
       return;
     }
-    response.writeHead(502, {
-      "Content-Type": "text/plain; charset=utf-8",
-      "Cache-Control": "no-store",
-      ...webCorsHeaders(request)
-    });
-    response.end("Token image unavailable");
+    tokenImageFailureCache.set(cacheKey, { cachedAt: Date.now(), state: "failed" });
+    pruneTokenImageResponseCache();
+    sendWebTokenImageUnavailable(request, response, 502, "Token image unavailable");
   } finally {
     clearTimeout(timeout);
   }
@@ -4133,9 +4148,14 @@ function ogreAgentEnv(name = "") {
 }
 
 function ogreAgentProviderTimeoutMs() {
-  const raw = Number(process.env.OGRE_AGENT_PROVIDER_TIMEOUT_MS || 2800);
-  if (!Number.isFinite(raw)) return 2800;
-  return Math.max(1800, Math.min(6000, raw));
+  const raw = Number(process.env.OGRE_AGENT_PROVIDER_TIMEOUT_MS || 2200);
+  if (!Number.isFinite(raw)) return 2200;
+  return Math.max(1200, Math.min(5000, raw));
+}
+
+function ogreAgentProviderEnabled() {
+  const value = firstString(process.env.OGRE_AGENT_PROVIDER_ENABLED, process.env.VITE_CHAT_AI_PROVIDER_ENABLED, "true");
+  return !["0", "false", "no", "off", "disabled"].includes(String(value || "").trim().toLowerCase());
 }
 
 function ogreAgentSanitizedContext(context = {}) {
@@ -4282,7 +4302,7 @@ async function ogreAgentFetchJson(url, options = {}, timeoutMs = ogreAgentProvid
   }
 }
 
-async function callOgreAgentGroq(message = "", context = {}, fallback = {}) {
+async function callOgreAgentGroq(message = "", context = {}, fallback = {}, timeoutMs = ogreAgentProviderTimeoutMs()) {
   const apiKey = ogreAgentEnv("GROQ_API_KEY");
   if (!apiKey) return null;
   const data = await ogreAgentFetchJson("https://api.groq.com/openai/v1/chat/completions", {
@@ -4297,12 +4317,12 @@ async function callOgreAgentGroq(message = "", context = {}, fallback = {}) {
       max_tokens: 260,
       messages: ogreAgentChatMessages(message, context, fallback)
     })
-  });
+  }, timeoutMs);
   const reply = String(data?.choices?.[0]?.message?.content || "").trim();
   return reply ? { provider: "groq", reply } : null;
 }
 
-async function callOgreAgentGemini(message = "", context = {}, fallback = {}) {
+async function callOgreAgentGemini(message = "", context = {}, fallback = {}, timeoutMs = ogreAgentProviderTimeoutMs()) {
   const apiKey = ogreAgentEnv("GEMINI_API_KEY") || ogreAgentEnv("GOOGLE_API_KEY");
   if (!apiKey) return null;
   const model = encodeURIComponent(ogreAgentEnv("OGRE_AGENT_GEMINI_MODEL") || "gemini-2.5-flash-lite");
@@ -4326,12 +4346,12 @@ async function callOgreAgentGemini(message = "", context = {}, fallback = {}) {
         maxOutputTokens: 260
       }
     })
-  });
+  }, timeoutMs);
   const reply = String(data?.candidates?.[0]?.content?.parts?.map((part) => part?.text || "").join("") || "").trim();
   return reply ? { provider: "gemini", reply } : null;
 }
 
-async function callOgreAgentOpenRouter(message = "", context = {}, fallback = {}) {
+async function callOgreAgentOpenRouter(message = "", context = {}, fallback = {}, timeoutMs = ogreAgentProviderTimeoutMs()) {
   const apiKey = ogreAgentEnv("OPENROUTER_API_KEY");
   if (!apiKey) return null;
   const data = await ogreAgentFetchJson("https://openrouter.ai/api/v1/chat/completions", {
@@ -4348,12 +4368,12 @@ async function callOgreAgentOpenRouter(message = "", context = {}, fallback = {}
       max_tokens: 260,
       messages: ogreAgentChatMessages(message, context, fallback)
     })
-  });
+  }, timeoutMs);
   const reply = String(data?.choices?.[0]?.message?.content || "").trim();
   return reply ? { provider: "openrouter", reply } : null;
 }
 
-async function callOgreAgentOpenAi(message = "", context = {}, fallback = {}) {
+async function callOgreAgentOpenAi(message = "", context = {}, fallback = {}, timeoutMs = ogreAgentProviderTimeoutMs()) {
   if (!CONFIG.openaiApiKey || ogreAgentEnv("OGRE_AGENT_OPENAI_FALLBACK") === "false") return null;
   const data = await ogreAgentFetchJson("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -4367,21 +4387,31 @@ async function callOgreAgentOpenAi(message = "", context = {}, fallback = {}) {
       max_tokens: 260,
       messages: ogreAgentChatMessages(message, context, fallback)
     })
-  });
+  }, timeoutMs);
   const reply = String(data?.choices?.[0]?.message?.content || "").trim();
   return reply ? { provider: "openai", reply } : null;
 }
 
 async function callOgreAgentModel(message = "", context = {}, fallback = {}) {
-  const providers = [
-    callOgreAgentGroq,
-    callOgreAgentGemini,
-    callOgreAgentOpenRouter,
-    callOgreAgentOpenAi
-  ];
-  const settled = await Promise.allSettled(providers.map((provider) => provider(message, context, fallback).catch(() => null)));
-  for (const result of settled) {
-    if (result.status === "fulfilled" && result.value?.reply) return result.value;
+  if (!ogreAgentProviderEnabled()) return null;
+  const providers = new Map([
+    ["groq", callOgreAgentGroq],
+    ["openai", callOgreAgentOpenAi],
+    ["gemini", callOgreAgentGemini],
+    ["openrouter", callOgreAgentOpenRouter]
+  ]);
+  const order = String(process.env.OGRE_AGENT_PROVIDER_ORDER || "groq,openai,gemini,openrouter")
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .filter((item, index, list) => providers.has(item) && list.indexOf(item) === index);
+  const startedAt = Date.now();
+  const totalBudgetMs = Math.max(1800, Math.min(6500, Number(process.env.OGRE_AGENT_TOTAL_TIMEOUT_MS || 4500) || 4500));
+  for (const name of (order.length ? order : providers.keys())) {
+    const remainingMs = totalBudgetMs - (Date.now() - startedAt);
+    if (remainingMs < 700) break;
+    const timeoutMs = Math.min(ogreAgentProviderTimeoutMs(), remainingMs);
+    const result = await providers.get(name)(message, context, fallback, timeoutMs).catch(() => null);
+    if (result?.reply) return result;
   }
   return null;
 }
@@ -24458,23 +24488,29 @@ function rememberKolScanResult(mode = "hot", wallet = "", scan = {}) {
     const oldest = [...kolScanSharedCache.entries()].sort((a, b) => Number(a[1]?.cachedAt || 0) - Number(b[1]?.cachedAt || 0))[0]?.[0];
     if (oldest) kolScanSharedCache.delete(oldest);
   }
+  void persistKolProfilesFromScan(mode, wallet, scan).catch(() => {});
 }
 
 function kolDumpStatsExternalKey(kolId = "all") {
   return externalCacheKey(`kol:dumpstats:${String(kolId || "all").trim().toLowerCase()}`, "global");
 }
 
+function kolProfilesExternalKey() {
+  return externalCacheKey("kol:profiles:history", "global");
+}
+
 function kolProfileId(kol = {}) {
   return firstString(kol.id, kol.kolId, kol.wallet, kol.twitter, kol.handle, kol.name, kol.shortWallet).replace(/\s+/g, "_").toLowerCase();
 }
 
-function cachedKolProfiles() {
+function kolProfilesFromScan(scan = {}, source = "kol_scan") {
   const profiles = [];
-  for (const cached of kolScanSharedCache.values()) {
-    if (Array.isArray(cached?.value?.kols)) profiles.push(...cached.value.kols);
-    if (Array.isArray(cached?.value?.rows)) {
+  if (Array.isArray(scan?.kols)) {
+    profiles.push(...scan.kols.map((kol) => ({ ...kol, source: kol.source || source, lastSeenAt: new Date().toISOString() })));
+  }
+  if (Array.isArray(scan?.rows)) {
       const byWallet = new Map();
-      for (const row of cached.value.rows) {
+      for (const row of scan.rows) {
         const wallet = firstString(row.wallet, row.kolWallet, row.owner, row.traderWallet);
         if (!wallet || byWallet.has(wallet)) continue;
         byWallet.set(wallet, {
@@ -24482,20 +24518,92 @@ function cachedKolProfiles() {
           name: firstString(row.kolName, row.name, row.twitter, shortMint(wallet)),
           twitter: stripAt(firstString(row.twitter, row.handle)),
           trades: row.callsTracked || row.trades || 0,
-          source: "kol_signal_row"
+          callsTracked: row.callsTracked || row.trades || 0,
+          dumpRiskPercent: row.dumpRiskPercent,
+          soldWithin15mPercent: row.soldWithin15mPercent,
+          soldWithin60mPercent: row.soldWithin60mPercent,
+          medianHoldMinutes: row.medianHoldMinutes,
+          medianPostSignalDrawdownPercent: row.medianPostSignalDrawdownPercent,
+          followerSurvival30mPercent: row.followerSurvival30mPercent,
+          followerSurvival60mPercent: row.followerSurvival60mPercent,
+          source: row.source || "kol_signal_row",
+          lastSeenAt: new Date().toISOString()
         });
       }
       profiles.push(...byWallet.values());
-    }
   }
+  return profiles;
+}
+
+function mergeKolProfiles(...profileGroups) {
   const byId = new Map();
-  for (const profile of profiles) {
+  for (const profile of profileGroups.flat().filter(Boolean)) {
     const id = kolProfileId(profile);
     if (!id) continue;
     const existing = byId.get(id);
-    if (!existing || Number(profile.trades || 0) > Number(existing.trades || 0)) byId.set(id, profile);
+    const nextTrades = Number(profile.callsTracked || profile.trades || profile.tradeCount || 0);
+    const existingTrades = Number(existing?.callsTracked || existing?.trades || existing?.tradeCount || 0);
+    const merged = existing ? {
+      ...existing,
+      ...profile,
+      walletAddresses: uniqueStrings([
+        ...(Array.isArray(existing.walletAddresses) ? existing.walletAddresses : []),
+        ...(Array.isArray(profile.walletAddresses) ? profile.walletAddresses : []),
+        existing.wallet,
+        profile.wallet,
+        existing.address,
+        profile.address,
+        existing.publicKey,
+        profile.publicKey
+      ].filter(Boolean)),
+      callsTracked: Math.max(Number(existing.callsTracked || existing.trades || 0), Number(profile.callsTracked || profile.trades || 0)),
+      trades: Math.max(existingTrades, nextTrades),
+      firstSeenAt: existing.firstSeenAt || profile.firstSeenAt || profile.lastSeenAt || new Date().toISOString(),
+      lastSeenAt: profile.lastSeenAt || existing.lastSeenAt || new Date().toISOString()
+    } : {
+      ...profile,
+      walletAddresses: uniqueStrings([profile.wallet, profile.address, profile.publicKey, ...(Array.isArray(profile.walletAddresses) ? profile.walletAddresses : [])].filter(Boolean)),
+      firstSeenAt: profile.firstSeenAt || profile.lastSeenAt || new Date().toISOString(),
+      lastSeenAt: profile.lastSeenAt || new Date().toISOString()
+    };
+    byId.set(id, merged);
   }
   return [...byId.values()];
+}
+
+function cachedKolProfiles() {
+  const profiles = [];
+  for (const cached of kolScanSharedCache.values()) {
+    profiles.push(...kolProfilesFromScan(cached?.value, cached?.value?.source || "kol_scan"));
+  }
+  if (Array.isArray(kolProfileHistoryCache.value)) profiles.push(...kolProfileHistoryCache.value);
+  return mergeKolProfiles(profiles);
+}
+
+async function storedKolProfiles() {
+  const current = cachedKolProfiles();
+  const external = await cacheGetJson(kolProfilesExternalKey()).catch(() => null);
+  const externalRows = Array.isArray(external?.value?.profiles) ? external.value.profiles : Array.isArray(external?.profiles) ? external.profiles : [];
+  const merged = mergeKolProfiles(externalRows, current).slice(0, 250);
+  if (merged.length) kolProfileHistoryCache = { cachedAt: Date.now(), value: merged };
+  return merged;
+}
+
+async function persistKolProfilesFromScan(mode = "hot", wallet = "", scan = {}) {
+  const incoming = kolProfilesFromScan(scan, scan?.source || `kol_${mode || "scan"}`);
+  if (!incoming.length) return false;
+  const external = await cacheGetJson(kolProfilesExternalKey()).catch(() => null);
+  const externalRows = Array.isArray(external?.value?.profiles) ? external.value.profiles : Array.isArray(external?.profiles) ? external.profiles : [];
+  const merged = mergeKolProfiles(externalRows, kolProfileHistoryCache.value || [], incoming).slice(0, 250);
+  kolProfileHistoryCache = { cachedAt: Date.now(), value: merged };
+  kolDumpStatsCache.clear();
+  await cacheSetJson(kolProfilesExternalKey(), displayCacheEnvelope({
+    profiles: merged,
+    count: merged.length,
+    updatedAt: new Date().toISOString(),
+    source: "cached-kol-api-profile-rows"
+  }), KOL_PROFILE_HISTORY_TTL_MS).catch(() => false);
+  return true;
 }
 
 function kolDumpRiskLabel(dumpRiskPercent, callsTracked) {
@@ -24515,6 +24623,7 @@ function computeKolDumpStatsFromProfile(kol = {}) {
   const dumpRiskPercent = hasExplicitDumpRisk ? Math.max(0, Math.min(100, Math.round(Number(explicitDumpRisk)))) : 0;
   const lowData = !hasExplicitDumpRisk || callsTracked < 5;
   const riskLabel = lowData ? "Mixed" : kolDumpRiskLabel(dumpRiskPercent, callsTracked);
+  const sourceNote = kol.source ? `Source: ${String(kol.source).replace(/_/g, " ")}.` : "Source: cached KOL profile row.";
   const reasons = lowData
     ? ["Low local sell-window history. Wallet-based until social signal data is available."]
     : dumpRiskPercent >= 30
@@ -24536,7 +24645,10 @@ function computeKolDumpStatsFromProfile(kol = {}) {
     riskLabel,
     confidence: lowData ? "low" : callsTracked >= 12 ? "high" : "medium",
     lowData,
-    reasons,
+    historySource: String(kol.source || "cached-kol-profile").slice(0, 80),
+    firstSeenAt: kol.firstSeenAt || "",
+    lastSeenAt: kol.lastSeenAt || "",
+    reasons: [...reasons, sourceNote],
     updatedAt: new Date().toISOString()
   };
 }
@@ -24552,7 +24664,8 @@ async function webKolDumpStats(kolId = "") {
     kolDumpStatsCache.set(id, { cachedAt: Number(external.cachedAt), value: external.value });
     return { ...external.value, cacheHit: true, cacheSource: kvProviderName() };
   }
-  const stats = cachedKolProfiles().map(computeKolDumpStatsFromProfile);
+  const profiles = await storedKolProfiles();
+  const stats = profiles.map(computeKolDumpStatsFromProfile);
   const filtered = id === "all" ? stats : stats.filter((item) => String(item.kolId || "").toLowerCase() === id);
   const value = {
     stats: filtered,
@@ -24561,7 +24674,7 @@ async function webKolDumpStats(kolId = "") {
     cacheHit: false,
     cacheSource: "local-cache",
     message: filtered.length
-      ? "KOL Dump Detector uses cached/local wallet stats only."
+      ? "KOL Dump Detector uses cached KOL API/profile rows and local wallet-position signals only."
       : "No cached KOL profiles yet. Refresh KOL Tracker to warm the detector."
   };
   kolDumpStatsCache.set(id, { cachedAt: Date.now(), value });

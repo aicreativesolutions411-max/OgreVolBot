@@ -42,8 +42,9 @@ function clampScore(score) {
 }
 
 export function slimeShieldVerdictFromScore(score, factors = []) {
-  const severe = factors.some((item) => item.severity === "risk" && Math.abs(Number(item.weight || 0)) >= 30);
-  if (score < 40 || severe) return "AVOID";
+  const hardAvoid = factors.some((item) => item.key === "hard_flag");
+  const nonLiquidityRiskCount = factors.filter((item) => item.severity === "risk" && item.key !== "liquidity_extreme").length;
+  if (hardAvoid || (score < 35 && nonLiquidityRiskCount >= 2)) return "AVOID";
   if (score < 60) return "RISK";
   if (score < 75) return "CAUTION";
   return "BUY";

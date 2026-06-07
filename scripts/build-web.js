@@ -77,7 +77,19 @@ const pumpLive = {
   docsUrl: normalizeBaseUrl(process.env.PUMP_LIVE_DOCS_URL || ""),
   chatEnabled: envBool("PUMP_LIVE_CHAT_ENABLED", true),
 };
-const configSource = `window.OGRE_PORTAL_CONFIG = ${JSON.stringify({ apiBase, telegramBotUsername, portalUrl, ogreTek }, null, 2)};\n`;
+const featureFlags = {
+  slimeShieldEnabled: envBool("VITE_SLIMESHIELD_ENABLED", true),
+  kolDumpDetectorEnabled: envBool("VITE_KOL_DUMP_DETECTOR_ENABLED", true),
+  replayBeforeBuyEnabled: envBool("VITE_REPLAY_BEFORE_BUY_ENABLED", true),
+  protectedBuyEnabled: envBool("VITE_PROTECTED_BUY_ENABLED", true),
+  tokenAvatarFixEnabled: envBool("VITE_TOKEN_AVATAR_FIX_ENABLED", true),
+  chatAiEnabled: envBool("VITE_CHAT_AI_ENABLED", true),
+  chatAiProviderEnabled: envBool("VITE_CHAT_AI_PROVIDER_ENABLED", true),
+  siteSmoothnessFixesEnabled: envBool("VITE_SITE_SMOOTHNESS_FIXES_ENABLED", true),
+  disableUnfinishedButtons: envBool("VITE_DISABLE_UNFINISHED_BUTTONS", true),
+  debugPerformanceCounters: envBool("VITE_DEBUG_PERFORMANCE_COUNTERS", false)
+};
+const configSource = `window.OGRE_PORTAL_CONFIG = ${JSON.stringify({ apiBase, telegramBotUsername, portalUrl, featureFlags, ogreTek, pumpLive }, null, 2)};\n`;
 await fs.writeFile(path.join(distDir, "config.js"), configSource, "utf8");
 
 const indexPath = path.join(distDir, "index.html");

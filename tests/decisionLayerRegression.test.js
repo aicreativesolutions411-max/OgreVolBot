@@ -90,7 +90,7 @@ test("Live Pair avatars use stable cached src, lazy image loading, and broken-ur
   assert.match(appSource, /const avatarSrcByMint = livePairAvatarSrcMemory/);
   assert.match(appSource, /const failedAvatarSrc = new Set\(\)/);
   assert.match(appSource, /const pendingAvatarFetches = new Map\(\)/);
-  assert.match(functionBody("stableAvatarSrc"), /failedAvatarSrc\.has/);
+  assert.match(functionBody("stableAvatarSrc"), /avatarFailedRecently/);
   assert.match(functionBody("rememberFailedAvatar"), /failedAvatarSrc\.add/);
   const rowAvatarSlice = sourceSlice("const tokenAvatarFixOn");
   assert.match(rowAvatarSlice, /loading="\$\{loading\}"/);
@@ -113,7 +113,7 @@ test("SlimeShield, KOL Dump Detector, and Replay endpoints stay cache-first/loca
   assertNoHotExternalCalls(functionBody("webKolDumpStats", serverSource), "KOL Dump Detector endpoint");
   assert.match(functionBody("webSlimeShield", serverSource), /localMarketRowForMint/);
   assert.match(functionBody("webReplayBeforeBuy", serverSource), /rowsFromCachedMarketFeeds/);
-  assert.match(functionBody("webKolDumpStats", serverSource), /cachedKolProfiles/);
+  assert.match(functionBody("webKolDumpStats", serverSource), /storedKolProfiles/);
 });
 
 test("Protected Buy is a previewed preset flow, not an auto-submit bypass", () => {
