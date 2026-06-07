@@ -16273,187 +16273,26 @@ if (!window.__slimeStablePumpChartTimer) {
 
 
 
-/* SLIME_SPOTIFY_WIDGET_V1: lazy Spotify-style music panel; no SDK, no feed polling. */
+
+/* SLIME_SPOTIFY_WIDGET_V2: lightweight picker with optional Spotify API search; no iframe search 404s. */
 (function initSlimeSpotifyWidget() {
-  if (typeof window === "undefined" || window.__slimeSpotifyWidgetReady) return;
-  window.__slimeSpotifyWidgetReady = true;
-
-  var STORAGE_KEY = "slimeSpotifyState";
-  var SPOTIFY_TYPES = new Set(["track", "playlist", "album", "artist", "episode", "show"]);
-  var state = {
-    open: false,
-    query: "",
-    embedSrc: "",
-    openUrl: "https://open.spotify.com/search/trading%20focus%20playlist",
-    status: "Paste a Spotify link or search songs, artists, playlists.",
-    title: "Swamp Radio"
-  };
-
-  function escapeSpotifyHtml(value) {
-    return String(value || "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/\"/g, "&quot;")
-      .replace(/'/g, "&#39;");
-  }
-
-  function loadSpotifyState() {
-    try {
-      var saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
-      if (saved && typeof saved === "object") {
-        state.query = String(saved.query || "").slice(0, 180);
-        state.embedSrc = String(saved.embedSrc || "").slice(0, 420);
-        state.openUrl = String(saved.openUrl || state.openUrl).slice(0, 420);
-        state.title = String(saved.title || state.title).slice(0, 80);
-      }
-    } catch {}
-  }
-
-  function saveSpotifyState() {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({
-        query: state.query,
-        embedSrc: state.embedSrc,
-        openUrl: state.openUrl,
-        title: state.title
-      }));
-    } catch {}
-  }
-
-  function spotifySearchUrl(query) {
-    var safeQuery = String(query || "trading focus playlist").trim() || "trading focus playlist";
-    return "https://open.spotify.com/search/" + encodeURIComponent(safeQuery);
-  }
-
-  function spotifySearchEmbedUrl(query) {
-    var safeQuery = String(query || "trading focus playlist").trim() || "trading focus playlist";
-    return "https://open.spotify.com/embed/search/" + encodeURIComponent(safeQuery) + "?utm_source=slimewire";
-  }
-
-  function parseSpotifyTarget(input) {
-    var raw = String(input || "").trim();
-    if (!raw) return null;
-    var uriMatch = raw.match(/^spotify:(track|playlist|album|artist|episode|show):([A-Za-z0-9]+)$/i);
-    if (uriMatch) {
-      var uriType = uriMatch[1].toLowerCase();
-      var uriId = uriMatch[2];
-      return { type: uriType, id: uriId, url: "https://open.spotify.com/" + uriType + "/" + uriId };
-    }
-    var url;
-    try { url = new URL(raw); } catch { return null; }
-    if (!/spotify\.com$/i.test(url.hostname) && !/\.spotify\.com$/i.test(url.hostname)) return null;
-    var parts = url.pathname.split("/").filter(Boolean);
-    var type = String(parts[0] || "").toLowerCase();
-    var id = String(parts[1] || "").replace(/[^A-Za-z0-9]/g, "");
-    if (!SPOTIFY_TYPES.has(type) || !id) return null;
-    return { type: type, id: id, url: "https://open.spotify.com/" + type + "/" + id };
-  }
-
-  function spotifyEmbedForTarget(target) {
-    if (!target || !target.type || !target.id) return "";
-    return "https://open.spotify.com/embed/" + target.type + "/" + target.id + "?utm_source=slimewire";
-  }
-
-  function rootEl() {
-    var root = document.querySelector("[data-slime-spotify-root]");
-    if (!root) {
-      root = document.createElement("div");
-      root.setAttribute("data-slime-spotify-root", "");
-      document.body.appendChild(root);
-    }
-    return root;
-  }
-
-  function renderSpotifyWidget() {
-    var root = rootEl();
-    var queryValue = escapeSpotifyHtml(state.query);
-    var title = escapeSpotifyHtml(state.title);
-    var status = escapeSpotifyHtml(state.status);
-    var openUrl = escapeSpotifyHtml(state.openUrl || spotifySearchUrl(state.query));
-    var stage = state.embedSrc
-      ? '<iframe title="Spotify Embed" src="' + escapeSpotifyHtml(state.embedSrc) + '" loading="lazy" frameborder="0" allowfullscreen allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"></iframe>'
-      : '<div class="slime-spotify-empty"><strong>No music loaded yet</strong><span>Search an artist/song, or paste your Spotify playlist link to play it here.</span></div>';
-    root.innerHTML = [
-      '<div class="slime-spotify-shell ' + (state.open ? 'is-open' : '') + '">',
-        '<button type="button" class="slime-spotify-bubble" data-slime-spotify-toggle aria-label="Open Swamp Radio" aria-expanded="' + (state.open ? 'true' : 'false') + '">',
-          '<span class="slime-spotify-mark" aria-hidden="true"><i></i><i></i><i></i></span>',
-          '<span>Music</span>',
-        '</button>',
-        '<section class="slime-spotify-panel" ' + (state.open ? '' : 'hidden') + ' aria-label="Swamp Radio music player">',
-          '<header><div><strong>' + title + '</strong><small>Spotify embed loads only when you pick music.</small></div><button type="button" data-slime-spotify-close aria-label="Close Swamp Radio">&times;</button></header>',
-          '<div class="slime-spotify-search-row"><input data-slime-spotify-input value="' + queryValue + '" placeholder="Song, artist, playlist, or Spotify link" autocomplete="off" inputmode="search"><button type="button" data-slime-spotify-load>Load</button></div>',
-          '<div class="slime-spotify-actions"><button type="button" data-slime-spotify-preset="trading focus playlist">Focus</button><button type="button" data-slime-spotify-preset="pump up rap playlist">Rap</button><button type="button" data-slime-spotify-preset="lofi trading playlist">Lo-fi</button><button type="button" data-slime-spotify-preset="edm trading playlist">EDM</button><a href="' + openUrl + '" target="_blank" rel="noopener noreferrer" data-slime-spotify-open>Open Spotify</a></div>',
-          '<div class="slime-spotify-stage">' + stage + '</div>',
-          '<small class="slime-spotify-status">' + status + '</small>',
-        '</section>',
-      '</div>'
-    ].join('');
-  }
-
-  function readInputValue() {
-    var input = document.querySelector("[data-slime-spotify-input]");
-    return input ? input.value.trim() : state.query;
-  }
-
-  function loadSpotifyValue(value) {
-    var input = String(value || "").trim();
-    if (!input) {
-      state.status = "Type a song, artist, playlist, or paste a Spotify link.";
-      renderSpotifyWidget();
-      return;
-    }
-    state.query = input;
-    var target = parseSpotifyTarget(input);
-    if (target) {
-      state.embedSrc = spotifyEmbedForTarget(target);
-      state.openUrl = target.url;
-      state.title = target.type.charAt(0).toUpperCase() + target.type.slice(1);
-      state.status = "Loaded Spotify " + target.type + ". Music stays isolated from trading feeds.";
-    } else {
-      state.embedSrc = spotifySearchEmbedUrl(input);
-      state.openUrl = spotifySearchUrl(input);
-      state.title = "Spotify Search";
-      state.status = "Search loaded. If Spotify blocks embedded search, tap Open Spotify and paste a direct link here.";
-    }
-    saveSpotifyState();
-    renderSpotifyWidget();
-  }
-
-  document.addEventListener("click", function(event) {
-    var target = event.target.closest("[data-slime-spotify-toggle], [data-slime-spotify-close], [data-slime-spotify-load], [data-slime-spotify-preset]");
-    if (!target) return;
-    if (target.matches("[data-slime-spotify-toggle]")) {
-      state.open = !state.open;
-      renderSpotifyWidget();
-      return;
-    }
-    if (target.matches("[data-slime-spotify-close]")) {
-      state.open = false;
-      renderSpotifyWidget();
-      return;
-    }
-    if (target.matches("[data-slime-spotify-load]")) {
-      loadSpotifyValue(readInputValue());
-      return;
-    }
-    if (target.matches("[data-slime-spotify-preset]")) {
-      loadSpotifyValue(target.getAttribute("data-slime-spotify-preset") || "trading focus playlist");
-    }
-  }, { passive: true });
-
-  document.addEventListener("keydown", function(event) {
-    if (event.key !== "Enter") return;
-    var input = event.target.closest && event.target.closest("[data-slime-spotify-input]");
-    if (!input) return;
-    event.preventDefault();
-    loadSpotifyValue(input.value);
-  });
-
-  loadSpotifyState();
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", renderSpotifyWidget, { once: true });
-  } else {
-    renderSpotifyWidget();
-  }
+  if (typeof window === 'undefined' || window.__slimeSpotifyWidgetReadyV2) return;
+  window.__slimeSpotifyWidgetReadyV2 = true;
+  var STORAGE_KEY = 'slimeSpotifyStateV2';
+  var state = { open:false, query:'trading focus playlist', embedSrc:'', openUrl:'https://open.spotify.com/search/trading%20focus%20playlist', status:'Pick music without touching the trading feed.', title:'Swamp Radio', loading:false, configured:false, items:[] };
+  function esc(v){return String(v||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;').replace(/'/g,'&#39;');}
+  function searchUrl(q){return 'https://open.spotify.com/search/' + encodeURIComponent(String(q||'trading focus playlist').trim() || 'trading focus playlist');}
+  function save(){try{localStorage.setItem(STORAGE_KEY,JSON.stringify({query:state.query,embedSrc:state.embedSrc,openUrl:state.openUrl,title:state.title}));}catch{}}
+  function load(){try{var s=JSON.parse(localStorage.getItem(STORAGE_KEY)||'{}'); if(s&&typeof s==='object'){state.query=String(s.query||state.query).slice(0,180);state.embedSrc=String(s.embedSrc||'').slice(0,420);state.openUrl=String(s.openUrl||state.openUrl).slice(0,420);state.title=String(s.title||state.title).slice(0,80);}}catch{}}
+  function root(){var r=document.querySelector('[data-slime-spotify-root]'); if(!r){r=document.createElement('div');r.setAttribute('data-slime-spotify-root','');document.body.appendChild(r);} return r;}
+  function card(item,i){var img=item.image?'<img src="'+esc(item.image)+'" alt="" loading="lazy" decoding="async">':'<span class="slime-spotify-card-icon">?</span>'; return '<button type="button" class="slime-spotify-card" data-slime-spotify-pick="'+i+'">'+img+'<span><strong>'+esc(item.name)+'</strong><small>'+esc((item.type||'music')+' ? '+(item.artist||item.subtitle||'Spotify'))+'</small></span></button>';}
+  function render(){var r=root(); var stage=state.embedSrc?'<iframe title="Spotify Player" src="'+esc(state.embedSrc)+'" loading="lazy" frameborder="0" allowfullscreen allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"></iframe>':'<div class="slime-spotify-empty"><strong>Select music</strong><span>Search songs, artists, or playlists. Full catalog unlocks when Spotify app keys are configured.</span></div>'; var cards=state.items.length?state.items.map(card).join(''):'<div class="slime-spotify-empty is-small"><span>'+esc(state.loading?'Loading music...':'Tap Focus, Rap, Lo-fi, EDM, or search above.')+'</span></div>'; r.innerHTML=['<div class="slime-spotify-shell '+(state.open?'is-open':'')+'">','<button type="button" class="slime-spotify-bubble" data-slime-spotify-toggle aria-label="Open Swamp Radio" aria-expanded="'+(state.open?'true':'false')+'"><span class="slime-spotify-mark" aria-hidden="true"><i></i><i></i><i></i></span><span>Music</span></button>','<section class="slime-spotify-panel" '+(state.open?'':'hidden')+' aria-label="Swamp Radio music player">','<header><div><strong>'+esc(state.title)+'</strong><small>Lightweight player ? no feed lag.</small></div><button type="button" data-slime-spotify-close aria-label="Close Swamp Radio">&times;</button></header>','<div class="slime-spotify-search-row"><input data-slime-spotify-input value="'+esc(state.query)+'" placeholder="Search songs, artists, playlists" autocomplete="off" inputmode="search"><button type="button" data-slime-spotify-search>'+(state.loading?'...':'Search')+'</button></div>','<div class="slime-spotify-actions"><button type="button" data-slime-spotify-preset="trading focus playlist">Focus</button><button type="button" data-slime-spotify-preset="rap workout playlist">Rap</button><button type="button" data-slime-spotify-preset="lofi trading playlist">Lo-fi</button><button type="button" data-slime-spotify-preset="edm trading playlist">EDM</button><button type="button" data-slime-spotify-connect>Connect</button></div>','<div class="slime-spotify-stage">'+stage+'</div>','<div class="slime-spotify-results">'+cards+'</div>','<small class="slime-spotify-status">'+esc(state.status)+'</small>','</section></div>'].join('');}
+  async function json(url){var res=await fetch(url,{headers:{Accept:'application/json'},credentials:'include'}); if(!res.ok) throw new Error('request '+res.status); return res.json();}
+  async function status(){try{var d=await json('/api/web/spotify/status'); state.configured=!!d.configured; if(!state.configured) state.status='Curated picks are ready. Add Spotify keys on Render for full search/connect.';}catch{state.status='Music panel ready. Search will use fast fallback if Spotify API is unavailable.';}}
+  async function search(q){state.query=String(q||state.query||'trading focus playlist').trim(); state.loading=true; state.status='Searching music...'; render(); try{var d=await json('/api/web/spotify/search?q='+encodeURIComponent(state.query)); state.items=Array.isArray(d.items)?d.items:[]; state.configured=!!d.configured; state.status=d.note||(d.source==='spotify'?'Pick a result to load the player.':'Showing fast curated picks. Add Spotify keys for full catalog search.');}catch{state.items=[]; state.status='Music search could not reach the server. Try a preset or refresh.';} state.loading=false; render();}
+  function pick(i){var item=state.items[Number(i)]; if(!item)return; state.embedSrc=item.embedUrl; state.openUrl=item.url||searchUrl(item.name); state.title=item.name||'Swamp Radio'; state.status='Loaded '+(item.type||'music')+'. Player is isolated from terminal refresh.'; save(); render();}
+  function input(){var el=document.querySelector('[data-slime-spotify-input]'); return el?el.value:state.query;}
+  document.addEventListener('click',function(e){var t=e.target.closest&&e.target.closest('[data-slime-spotify-toggle],[data-slime-spotify-close],[data-slime-spotify-search],[data-slime-spotify-preset],[data-slime-spotify-pick],[data-slime-spotify-connect]'); if(!t)return; e.preventDefault(); e.stopPropagation(); if(t.matches('[data-slime-spotify-toggle]')){state.open=!state.open; render(); if(state.open&&!state.items.length) void search(state.query); return;} if(t.matches('[data-slime-spotify-close]')){state.open=false; render(); return;} if(t.matches('[data-slime-spotify-search]')){void search(input()); return;} if(t.matches('[data-slime-spotify-preset]')){void search(t.getAttribute('data-slime-spotify-preset')||'trading focus playlist'); return;} if(t.matches('[data-slime-spotify-pick]')){pick(t.getAttribute('data-slime-spotify-pick')); return;} if(t.matches('[data-slime-spotify-connect]')){state.status=state.configured?'Spotify account playlist connect is ready for the next layer; search works now.':'Spotify connect needs SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET on Render first.'; render();}},true);
+  document.addEventListener('keydown',function(e){if(e.key!=='Enter')return; var el=e.target.closest&&e.target.closest('[data-slime-spotify-input]'); if(!el)return; e.preventDefault(); void search(el.value);});
+  load(); if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',function(){render();void status();},{once:true}); else{render();void status();}
 })();

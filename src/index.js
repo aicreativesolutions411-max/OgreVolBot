@@ -1315,6 +1315,137 @@ async function verifyPublicMetadataUri(uri) {
   return { ok: false, status: lastStatus };
 }
 
+const spotifyFallbackItems = [
+  { type: "playlist", id: "37i9dQZF1DX8NTLI2TtZa6", name: "Beast Mode", artist: "Spotify", subtitle: "High-energy focus" },
+  { type: "playlist", id: "37i9dQZF1DX76Wlfdnj7AP", name: "RapCaviar", artist: "Spotify", subtitle: "Rap playlist" },
+  { type: "playlist", id: "37i9dQZF1DX0XUsuxWHRQd", name: "Rap Workout", artist: "Spotify", subtitle: "Rap energy" },
+  { type: "playlist", id: "37i9dQZF1DX6VdMW310YC7", name: "Chill Hits", artist: "Spotify", subtitle: "Chill focus" },
+  { type: "playlist", id: "37i9dQZF1DX4dyzvuaRJ0n", name: "mint", artist: "Spotify", subtitle: "EDM / electronic" },
+  { type: "playlist", id: "37i9dQZF1DX4sWSpwq3LiO", name: "Peaceful Piano", artist: "Spotify", subtitle: "Low-lag focus" }
+];
+let spotifyTokenCache = { token: "", expiresAt: 0 };
+
+function spotifyClientId() {
+  return String(process.env.SPOTIFY_CLIENT_ID || process.env.SPOTIFY_WEB_CLIENT_ID || "").trim();
+}
+
+function spotifyClientSecret() {
+  return String(process.env.SPOTIFY_CLIENT_SECRET || process.env.SPOTIFY_WEB_CLIENT_SECRET || "").trim();
+}
+
+function spotifyConfigured() {
+  return Boolean(spotifyClientId() && spotifyClientSecret());
+}
+
+function spotifyItemUrl(type, id) {
+  return `https://open.spotify.com/${encodeURIComponent(type)}/${encodeURIComponent(id)}`;
+}
+
+function spotifyEmbedUrl(type, id) {
+  return `https://open.spotify.com/embed/${encodeURIComponent(type)}/${encodeURIComponent(id)}?utm_source=slimewire`;
+}
+
+function normalizeSpotifyItem(item = {}, fallbackType = "track") {
+  const type = String(item.type || fallbackType || "track").toLowerCase();
+  const id = String(item.id || "").trim();
+  if (!id || !["track", "playlist", "album", "artist", "episode", "show"].includes(type)) return null;
+  const artists = Array.isArray(item.artists) ? item.artists.map((artist) => artist?.name).filter(Boolean).join(", ") : "";
+  const owner = item.owner?.display_name || item.publisher || "";
+  const images = item.album?.images || item.images || [];
+  const image = Array.isArray(images) && images.length ? String(images[0]?.url || "") : "";
+  return {
+    id,
+    type,
+    name: String(item.name || "Spotify item"),
+    artist: artists || owner || (type === "artist" ? "Artist" : "Spotify"),
+    subtitle: artists || owner || type,
+    image,
+    url: spotifyItemUrl(type, id),
+    embedUrl: spotifyEmbedUrl(type, id)
+  };
+}
+
+function spotifyFallbackSearch(query = "") {
+  const text = String(query || "").toLowerCase().trim();
+  const items = spotifyFallbackItems.map((item) => ({
+    ...item,
+    url: spotifyItemUrl(item.type, item.id),
+    embedUrl: spotifyEmbedUrl(item.type, item.id)
+  }));
+  if (!text) return items;
+  const matched = items.filter((item) => [item.name, item.artist, item.subtitle].join(" ").toLowerCase().includes(text));
+  return matched.length ? matched : items;
+}
+
+async function spotifyClientAccessToken() {
+  if (!spotifyConfigured()) return "";
+  const now = Date.now();
+  if (spotifyTokenCache.token && spotifyTokenCache.expiresAt > now + 15_000) return spotifyTokenCache.token;
+  const basic = Buffer.from(`${spotifyClientId()}:${spotifyClientSecret()}`).toString("base64");
+  const tokenResponse = await fetch("https://accounts.spotify.com/api/token", {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${basic}`,
+      "Content-Type": "application/x-www-form-urlencoded"
+    },
+    body: new URLSearchParams({ grant_type: "client_credentials" }),
+    signal: AbortSignal.timeout ? AbortSignal.timeout(8_000) : undefined
+  });
+  if (!tokenResponse.ok) throw new Error(`Spotify token failed: ${tokenResponse.status}`);
+  const token = await tokenResponse.json();
+  spotifyTokenCache = {
+    token: String(token.access_token || ""),
+    expiresAt: now + Math.max(60, Number(token.expires_in || 1800) - 60) * 1000
+  };
+  return spotifyTokenCache.token;
+}
+
+async function handleSpotifyStatus(request, response) {
+  sendWebJson(request, response, 200, {
+    ok: true,
+    configured: spotifyConfigured(),
+    connected: false,
+    connectReady: spotifyConfigured(),
+    note: spotifyConfigured()
+      ? "Spotify catalog search is ready. Account playlist connect can be layered onto these credentials."
+      : "Add SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET on Render for full catalog search/connect."
+  });
+}
+
+async function handleSpotifySearch(request, response, requestUrl) {
+  const query = String(requestUrl.searchParams.get("q") || "trading focus playlist").trim().slice(0, 120);
+  try {
+    const token = await spotifyClientAccessToken();
+    if (token) {
+      const params = new URLSearchParams({ q: query, type: "track,artist,playlist,album", limit: "12", market: "US" });
+      const searchResponse = await fetch(`https://api.spotify.com/v1/search?${params}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout ? AbortSignal.timeout(9_000) : undefined
+      });
+      if (!searchResponse.ok) throw new Error(`Spotify search failed: ${searchResponse.status}`);
+      const data = await searchResponse.json();
+      const items = [
+        ...(data.tracks?.items || []).map((item) => normalizeSpotifyItem(item, "track")),
+        ...(data.artists?.items || []).map((item) => normalizeSpotifyItem(item, "artist")),
+        ...(data.playlists?.items || []).map((item) => normalizeSpotifyItem(item, "playlist")),
+        ...(data.albums?.items || []).map((item) => normalizeSpotifyItem(item, "album"))
+      ].filter(Boolean).slice(0, 16);
+      sendWebJson(request, response, 200, { ok: true, configured: true, source: "spotify", query, items });
+      return;
+    }
+  } catch (error) {
+    console.warn("Spotify search fallback:", friendlyError(error));
+  }
+  sendWebJson(request, response, 200, {
+    ok: true,
+    configured: spotifyConfigured(),
+    source: "fallback",
+    query,
+    items: spotifyFallbackSearch(query),
+    note: spotifyConfigured() ? "Spotify search fell back to curated picks." : "Using curated picks until Spotify app keys are added."
+  });
+}
+
 async function handleWebApiRequest(request, response, requestUrl) {
   try {
     const pathname = requestUrl.pathname;
@@ -1420,6 +1551,16 @@ async function handleWebApiRequest(request, response, requestUrl) {
       const body = await readJsonRequestBody(request, 32_000);
       const agent = await webOgreAgentReply(body);
       sendWebJson(request, response, 200, { ok: true, agent });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/spotify/status") {
+      await handleSpotifyStatus(request, response);
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/spotify/search") {
+      await handleSpotifySearch(request, response, requestUrl);
       return;
     }
 
