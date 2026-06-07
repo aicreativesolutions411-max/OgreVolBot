@@ -83,9 +83,18 @@ test("site-wide decision-layer feature flags are present in config, env, and Ren
     "VITE_DISABLE_UNFINISHED_BUTTONS",
     "VITE_DEBUG_PERFORMANCE_COUNTERS"
   ];
+  const backendFlags = [
+    "DEV_INFO_SOURCE_HYDRATION_ENABLED",
+    "DEV_INFO_SOURCE_SIGNATURE_LIMIT",
+    "DEV_INFO_SOURCE_TRANSACTION_LIMIT"
+  ];
 
   for (const flag of browserFlags) assert.match(configSource, new RegExp(`"${flag}"\\s*:`));
   for (const flag of envFlags) {
+    assert.match(envSource, new RegExp(`${flag}=`));
+    assert.match(renderSource, new RegExp(`key:\\s*${flag}`));
+  }
+  for (const flag of backendFlags) {
     assert.match(envSource, new RegExp(`${flag}=`));
     assert.match(renderSource, new RegExp(`key:\\s*${flag}`));
   }
@@ -206,6 +215,8 @@ test("Dev Info row pill, drawer, and endpoints are cache-first", () => {
   assert.match(functionBody("computeDevInfoFromLocalData", serverSource), /devInfoReferenceLinks/);
   assert.match(functionBody("webDevInfoDetails", serverSource), /hydrateMarketRowFromPublicSources/);
   assert.match(functionBody("webDevInfoDetails", serverSource), /marketContext/);
+  assert.match(functionBody("webDevInfoDetails", serverSource), /hydrateDevInfoFromSourceData/);
+  assert.match(functionBody("webDevInfoDetails", serverSource), /sourceHydration/);
   assert.match(functionBody("openDevInfoDetails"), /loadDevInfoDetails\(mint, \{ force: true \}\)/);
   assert.match(functionBody("loadDevInfoDetails"), /force=true/);
   assertNoHotExternalCalls(functionBody("webDevInfoSummary", serverSource), "Dev Info summary endpoint");
@@ -227,6 +238,22 @@ test("Details buttons force-refresh source-backed data only on click", () => {
   assert.match(serverSource, /webKolDumpStats\(kolId, \{\s*force,\s*userId: "guest"/);
   assert.match(functionBody("webKolDumpStats", serverSource), /webKolScan\(options\.userId \|\| "guest", mode, wallet\)/);
   assert.match(functionBody("webKolDumpStats", serverSource), /force \? "forced-kol-refresh" : "local-cache"/);
+});
+
+test("Dev Info source hydration is capped, stored, and click scoped", () => {
+  assert.match(serverSource, /DEV_INFO_SOURCE_SIGNATURE_LIMIT/);
+  assert.match(serverSource, /DEV_INFO_SOURCE_TRANSACTION_LIMIT/);
+  assert.match(functionBody("hydrateDevInfoFromSourceData", serverSource), /getSignaturesForAddress/);
+  assert.match(functionBody("hydrateDevInfoFromSourceData", serverSource), /getParsedTransaction/);
+  assert.match(functionBody("hydrateDevInfoFromSourceData", serverSource), /persistPostgresDevWalletEvents/);
+  assert.match(functionBody("hydrateDevInfoFromSourceData", serverSource), /persistPostgresProcessedTransactionEvents/);
+  assert.match(functionBody("hydrateDevInfoFromSourceData", serverSource), /CONFIG\.devInfoSourceTransactionLimit/);
+  assert.match(functionBody("devCurrentTokenSnapshotEvent", serverSource), /getTokenBalanceForMintCached/);
+  assert.match(functionBody("devCurrentTokenSnapshotEvent", serverSource), /getTokenSupply/);
+  assert.match(functionBody("hydrateMarketRowFromPublicSources", serverSource), /getPumpFunTokenMetadata/);
+  assert.match(functionBody("renderDevInfoDrawer"), /Source refresh:/);
+  assert.match(functionBody("renderSlimeShieldDetailsDrawer"), /Source refresh:/);
+  assert.match(functionBody("loadDevInfoDetails"), /timeoutMs: options\.force \? 7000 : 3000/);
 });
 
 test("KOL and Dev Info buttons use info labels instead of dump/action-looking text", () => {

@@ -74,6 +74,20 @@ test("Dev wallet stats can be derived from stored local events", () => {
   assert.equal(stats.heldPast24hPercent, 50);
 });
 
+test("Dev wallet stats include source-backed transfer in/out events", () => {
+  const events = [
+    { mint: "C", eventType: "transfer_in", tokenAmount: 100, eventTime: "2026-06-07T04:00:00.000Z" },
+    { mint: "C", eventType: "transfer_out", tokenAmount: 60, eventTime: "2026-06-07T04:14:00.000Z" },
+    { mint: "D", eventType: "transfer_in", tokenAmount: 100, eventTime: "2026-06-07T05:00:00.000Z" },
+    { mint: "D", eventType: "transfer_out", tokenAmount: 10, eventTime: "2026-06-07T06:00:00.000Z" }
+  ];
+  const stats = calculateDevWalletStatsFromEvents(events, "Wallet2222222222222222222222222222222222");
+
+  assert.equal(stats.launchesTracked, 2);
+  assert.equal(stats.soldMoreThan50Within15mPercent, 50);
+  assert.equal(stats.soldMoreThan50Within1hPercent, 50);
+});
+
 test("Dev Info summary and SlimeShield factor stay compact", () => {
   const summary = devInfoSummaryFromResult(calculateDevInfoStatus({
     mint: "Mint444444444444444444444444444444444444",

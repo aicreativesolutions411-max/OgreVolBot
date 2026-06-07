@@ -56,6 +56,12 @@ services:
         value: 100
       - key: POSTGRES_HYDRATION_DEV_WALLET_LAUNCH_LIMIT
         value: 25
+      - key: DEV_INFO_SOURCE_HYDRATION_ENABLED
+        value: true
+      - key: DEV_INFO_SOURCE_SIGNATURE_LIMIT
+        value: 8
+      - key: DEV_INFO_SOURCE_TRANSACTION_LIMIT
+        value: 4
       - key: CACHE_CONNECT_TIMEOUT_MS
         value: 800
       - key: CACHE_CIRCUIT_BREAKER_MS
@@ -312,6 +318,12 @@ services:
         value: 100
       - key: POSTGRES_HYDRATION_DEV_WALLET_LAUNCH_LIMIT
         value: 25
+      - key: DEV_INFO_SOURCE_HYDRATION_ENABLED
+        value: true
+      - key: DEV_INFO_SOURCE_SIGNATURE_LIMIT
+        value: 8
+      - key: DEV_INFO_SOURCE_TRANSACTION_LIMIT
+        value: 4
       - key: CACHE_CONNECT_TIMEOUT_MS
         value: 800
       - key: CACHE_CIRCUIT_BREAKER_MS
@@ -391,6 +403,12 @@ services:
         value: 100
       - key: POSTGRES_HYDRATION_DEV_WALLET_LAUNCH_LIMIT
         value: 25
+      - key: DEV_INFO_SOURCE_HYDRATION_ENABLED
+        value: true
+      - key: DEV_INFO_SOURCE_SIGNATURE_LIMIT
+        value: 8
+      - key: DEV_INFO_SOURCE_TRANSACTION_LIMIT
+        value: 4
       - key: CACHE_CONNECT_TIMEOUT_MS
         value: 800
       - key: CACHE_CIRCUIT_BREAKER_MS

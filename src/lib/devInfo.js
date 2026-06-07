@@ -119,11 +119,11 @@ export function calculateDevWalletStatsFromEvents(events = [], walletAddress = "
     const timestamp = eventTime ? Date.parse(eventTime) : Number.NaN;
     const amount = numberOrNull(event.tokenAmount ?? event.token_amount ?? event.amount);
     if (eventType === "launch") bucket.launchAt = Number.isFinite(timestamp) ? timestamp : bucket.launchAt;
-    if (eventType === "buy" || eventType === "launch" || eventType === "liquidity_add") {
+    if (eventType === "buy" || eventType === "launch" || eventType === "liquidity_add" || eventType === "transfer_in") {
       bucket.buys.push({ timestamp, amount });
       if (!bucket.launchAt && Number.isFinite(timestamp)) bucket.launchAt = timestamp;
     }
-    if (eventType === "sell" || eventType === "liquidity_remove") {
+    if (eventType === "sell" || eventType === "liquidity_remove" || eventType === "transfer_out") {
       bucket.sells.push({ timestamp, amount, supplyPercent: numberOrNull(event.supplyPercent ?? event.supply_percent) });
     }
     launchesByMint.set(mint, bucket);

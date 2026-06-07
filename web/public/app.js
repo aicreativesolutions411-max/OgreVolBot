@@ -13029,7 +13029,7 @@ async function loadSlimeShield(tokenMint = "", options = {}) {
     const params = new URLSearchParams({ mint });
     if (options.force) params.set("force", "true");
     const data = await api(`/api/web/slimeshield?${params.toString()}`, {
-      timeoutMs: options.force ? 4500 : 2500,
+      timeoutMs: options.force ? 6500 : 2500,
       preserveSafeError: true
     });
     const result = data?.slimeshield || null;
@@ -13157,7 +13157,7 @@ async function loadDevInfoDetails(tokenMint = "", options = {}) {
   try {
     const query = options.force ? "?force=true" : "";
     const data = await api(`/api/web/dev-info/${encodeURIComponent(mint)}${query}`, {
-      timeoutMs: options.force ? 4500 : 3000,
+      timeoutMs: options.force ? 7000 : 3000,
       preserveSafeError: true
     });
     const result = data?.devInfo || null;
@@ -13278,6 +13278,7 @@ function renderDevInfoDrawer() {
   const history = result.historicalStats || {};
   const linked = result.linkedWalletSignals || {};
   const market = result.marketContext || {};
+  const sourceHydration = result.sourceHydration || {};
   const marketCap = firstUsefulNumber(market.marketCap, row.marketCap, row.fdv);
   const liquidity = firstUsefulNumber(market.liquidityUsd, row.liquidityUsd);
   const volume5m = firstUsefulNumber(market.volume5m, row.volume5m, row.volumeM5);
@@ -13340,6 +13341,7 @@ function renderDevInfoDrawer() {
           <div><dt>Source</dt><dd>${escapeHtml(market.source || result.cacheSource || result.dataSource || "cache/local")}</dd></div>
         </dl>
         <p class="slimeshield-muted">Click Refresh to pull the latest public pair metadata and save what SlimeWire can verify.</p>
+        ${sourceHydration.message ? `<p class="slimeshield-muted">Source refresh: ${escapeHtml(sourceHydration.message)}${sourceHydration.eventsStored ? ` · ${escapeHtml(sourceHydration.eventsStored)} stored` : ""}</p>` : ""}
       </section>
       <section>
         <h4>Current Token Position</h4>
@@ -13564,6 +13566,7 @@ function renderSlimeShieldDetailsDrawer() {
   const row = slimeShieldRowForMint(mint) || { tokenMint: mint };
   const result = state.slimeShieldResults?.[mint] || slimeShieldResultForRow(row);
   const verdict = result.verdict || "CAUTION";
+  const sourceHydration = result.sourceHydration || {};
   const loading = Boolean(state.slimeShieldLoading?.[mint]);
   const riskFactors = Array.isArray(result.factors) ? result.factors : [];
   const tokenLinks = [
@@ -13615,6 +13618,7 @@ function renderSlimeShieldDetailsDrawer() {
           ${tokenLinks.map((link) => `<a href="${escapeHtml(link.url)}" target="_blank" rel="noreferrer">${escapeHtml(link.label)}</a>`).join("")}
           ${featureEnabled("devInfoEnabled", true) ? `<button type="button" data-dev-info="${escapeHtml(mint)}">Open Dev Info</button>` : ""}
         </div>
+        ${sourceHydration.message ? `<p class="slimeshield-muted">Source refresh: ${escapeHtml(sourceHydration.message)}</p>` : ""}
       </section>
       <section>
         <h4>Top Risk Reasons</h4>
