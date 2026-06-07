@@ -151,6 +151,7 @@ test("KOL Dump Detector and Replay stay inside the existing decision layer UI", 
   assert.match(functionBody("renderSlimeShieldDetailsDrawer"), /replayBeforeBuyCardHtml/);
   assert.match(functionBody("replayBeforeBuyCardHtml"), /Replay Before You Buy/);
   assert.match(functionBody("replayBeforeBuyCardHtml"), /Not enough local history yet/);
+  assert.doesNotMatch(functionBody("replayBeforeBuyCardHtml"), /data-replay-open/);
 });
 
 test("KOL Hot Buys stays a fast token-call feed", () => {
@@ -216,6 +217,10 @@ test("KOL and Dev Info buttons use info labels instead of dump/action-looking te
 test("Slime Scope refreshes its own bucket and Details buttons stay compact green", () => {
   assert.match(functionBody("activeLivePairBucketForTab"), /tabKey === "slimeScope"/);
   assert.match(functionBody("scheduleLivePairsAutoRefresh"), /refreshTerminalFeed\("slimeScope"/);
+  assert.match(functionBody("terminalDetailsDrawerOpen"), /devInfoDetails/);
+  assert.match(functionBody("scheduleLivePairsRender"), /terminalDetailsDrawerOpen\(\)/);
+  assert.match(functionBody("scheduleLivePairsAutoRefresh"), /terminalDetailsDrawerOpen\(\)/);
+  assert.match(functionBody("prefetchVisibleDevInfoSummaries"), /terminalDetailsDrawerOpen\(\)/);
   assert.match(functionBody("slimeScopeHtml"), /scopeLoading/);
   assert.match(cssSource, /button\[data-slimeshield-details\]\.slimeshield-pill/);
   assert.match(cssSource, /button\[data-kol-dump-details\]/);
@@ -231,6 +236,9 @@ test("USD2 sponsor entry opens the same popup link menu as other sponsors", () =
   assert.match(indexSource, /https:\/\/share\.google\/F9EuKDnbjbVml9zK5/);
   assert.match(indexSource, /https:\/\/t\.me\/USD2Solana/);
   assert.match(cssSource, /LANDING_SPONSOR_TOKENS_V2/);
+  assert.match(cssSource, /LANDING_MOBILE_SPONSOR_POPUP_V1/);
+  assert.match(cssSource, /swamp-sponsor-social\[open\] \.swamp-sponsor-links[\s\S]*position: fixed/);
+  assert.match(indexSource, /Stablecoin Partner/);
   assert.match(cssSource, /swamp-sponsor-token \.swamp-sponsor-links[\s\S]*repeat\(2, minmax\(0, 1fr\)\)/);
 });
 

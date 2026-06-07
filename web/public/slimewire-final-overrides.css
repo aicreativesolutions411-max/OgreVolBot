@@ -10923,7 +10923,6 @@ button[data-slimeshield-details].slimeshield-pill,
 button[data-slimeshield-details].slimeshield-chip,
 button[data-slimeshield-details].slimeshield-mini,
 button[data-kol-dump-details],
-button[data-replay-open],
 [data-app][data-route="terminal"] button[data-slimeshield-details].terminal-score-chip,
 [data-app][data-route="terminal"] button[data-slimeshield-details].mobile-score-mini {
   align-items: center !important;
@@ -10987,6 +10986,44 @@ button[data-slimeshield-details].slimeshield-chip small {
 
 [data-app][data-route="intro"] .swamp-sponsor-links {
   z-index: 90 !important;
+}
+
+/* LANDING_MOBILE_SPONSOR_POPUP_V1: sponsor menus escape mobile frame clipping. */
+@media (max-width: 760px) {
+  [data-app][data-route="intro"] .swamp-sponsor-frame,
+  [data-app][data-route="intro"] .swamp-sponsor-frame .swamp-support-content,
+  [data-app][data-route="intro"] .swamp-sponsor-social {
+    overflow: visible !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-sponsor-frame {
+    z-index: 30 !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-sponsor-social[open] .swamp-sponsor-links {
+    position: fixed !important;
+    left: 50% !important;
+    top: clamp(104px, 28svh, 236px) !important;
+    width: min(82vw, 320px) !important;
+    max-height: min(44svh, 280px) !important;
+    transform: translateX(-50%) !important;
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+    overflow-y: auto !important;
+    padding: 10px !important;
+    z-index: 9000 !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-sponsor-social[open] .swamp-sponsor-links a {
+    min-height: 38px !important;
+    display: inline-grid !important;
+    place-items: center !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-sponsor-social summary small {
+    color: rgba(207, 255, 185, 0.82) !important;
+  }
 }
 
 .topbar,

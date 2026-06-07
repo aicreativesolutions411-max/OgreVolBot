@@ -19553,6 +19553,25 @@ async function persistPostgresKolDumpStats(stats = []) {
   }
 }
 
+async function readPostgresKolDumpStats(limit = 500) {
+  if (!await ensurePostgresHistorySchema()) return [];
+  const pool = await postgresPool();
+  if (!pool) return [];
+  try {
+    const result = await pool.query(
+      "select stats_json from kol_dump_stats_history order by updated_at desc limit $1",
+      [Math.max(1, Math.min(1000, Number(limit) || 500))]
+    );
+    postgresHistoryStats.reads += 1;
+    postgresHistoryStats.lastReadAt = new Date().toISOString();
+    return result.rows.map((row) => row.stats_json).filter(Boolean);
+  } catch (error) {
+    postgresHistoryStats.errors += 1;
+    postgresHistoryStats.lastError = safePerfEventText(error?.message || "Postgres KOL dump stats read failed", 140);
+    return [];
+  }
+}
+
 function postgresJson(value, maxChars = 40_000) {
   try {
     const raw = JSON.stringify(value ?? null);
@@ -20275,6 +20294,44 @@ async function computeDevInfoFromLocalData(mint = "", row = null, options = {}) 
   };
 }
 
+async function hydrateMarketRowFromPublicSources(mint = "", row = null, reason = "request") {
+  const cleanMint = String(mint || row?.tokenMint || row?.mint || "").trim();
+  const baseRow = row || { tokenMint: cleanMint };
+  if (!cleanMint) return baseRow;
+  const pairs = await fetchDexScreenerTokenPairsBatch([cleanMint], { timeoutMs: 1_800 }).catch(() => []);
+  const best = bestDexPairForToken(cleanMint, pairs);
+  if (!best) return baseRow;
+  const dex = metadataFromDexPair(cleanMint, best);
+  const volume = dex.volume || {};
+  const txns = dex.txns || {};
+  return {
+    ...baseRow,
+    tokenMint: cleanMint,
+    mint: cleanMint,
+    symbol: firstString(baseRow.symbol, dex.symbol),
+    name: firstString(baseRow.name, dex.name),
+    avatarUrl: firstString(baseRow.avatarUrl, baseRow.imageUrl, dex.imageUrl),
+    imageUrl: firstString(baseRow.imageUrl, baseRow.avatarUrl, dex.imageUrl),
+    websiteUrl: firstString(baseRow.websiteUrl, dex.websiteUrl),
+    twitterUrl: firstString(baseRow.twitterUrl, baseRow.xUrl, dex.twitterUrl),
+    telegramUrl: firstString(baseRow.telegramUrl, dex.telegramUrl),
+    marketCap: firstMeaningfulNumber(baseRow.marketCap, dex.marketCap),
+    fdv: firstMeaningfulNumber(baseRow.fdv, dex.fdv, dex.marketCap),
+    liquidityUsd: firstMeaningfulNumber(baseRow.liquidityUsd, dex.liquidityUsd),
+    volume5m: firstMeaningfulNumber(baseRow.volume5m, volume.m5, volume["5m"]),
+    volumeH1: firstMeaningfulNumber(baseRow.volumeH1, volume.h1, volume["1h"]),
+    buys5m: firstMeaningfulNumber(baseRow.buys5m, txns.m5?.buys, txns["5m"]?.buys),
+    sells5m: firstMeaningfulNumber(baseRow.sells5m, txns.m5?.sells, txns["5m"]?.sells),
+    pairAddress: firstString(baseRow.pairAddress, dex.pairAddress),
+    raydiumPool: firstString(baseRow.raydiumPool, dex.raydiumPool, dex.pairAddress),
+    dexId: firstString(baseRow.dexId, dex.dexId),
+    dexName: firstString(baseRow.dexName, dex.dexName),
+    dexUrl: firstString(baseRow.dexUrl, dex.pairUrl, dexScreenerUrl(cleanMint)),
+    pairCreatedAt: firstMeaningfulNumber(baseRow.pairCreatedAt, dex.pairCreatedAt),
+    source: firstString(baseRow.source, `dexscreener-hydration:${reason}`)
+  };
+}
+
 async function queueDevInfoHydration(mint = "", row = null, reason = "request") {
   const cleanMint = String(mint || row?.tokenMint || row?.mint || "").trim();
   if (!cleanMint || !CONFIG.devInfoEnabled || !CONFIG.postgresHydrationEnabled) {
@@ -20287,8 +20344,9 @@ async function queueDevInfoHydration(mint = "", row = null, reason = "request") 
   }
   const task = LockService.withLock(`hydrate:devinfo:${cleanMint}`, 4 * 60 * 1000, async () => {
     const localRow = row || localMarketRowForMint(cleanMint) || { tokenMint: cleanMint };
-    await persistPostgresLivePairRows([localRow], { reason, lock: false }).catch(() => false);
-    const result = await computeDevInfoFromLocalData(cleanMint, localRow, { persist: true, hydrationQueued: true });
+    const hydratedRow = await hydrateMarketRowFromPublicSources(cleanMint, localRow, reason).catch(() => localRow);
+    await persistPostgresLivePairRows([hydratedRow], { reason, lock: false }).catch(() => false);
+    const result = await computeDevInfoFromLocalData(cleanMint, hydratedRow, { persist: true, hydrationQueued: true });
     await writeDevInfoCaches(cleanMint, result).catch(() => {});
     return result;
   }, false).finally(() => {
@@ -26524,8 +26582,51 @@ async function webKolDumpStats(kolId = "") {
     kolDumpStatsCache.set(id, { cachedAt: Number(external.cachedAt), value: external.value });
     return { ...external.value, cacheHit: true, cacheSource: kvProviderName() };
   }
-  const profiles = await storedKolProfiles();
-  const stats = profiles.map(computeKolDumpStatsFromProfile);
+  const [profiles, persistedStats] = await Promise.all([
+    storedKolProfiles(),
+    readPostgresKolDumpStats().catch(() => [])
+  ]);
+  const persistedById = new Map((Array.isArray(persistedStats) ? persistedStats : [])
+    .filter((row) => row?.kolId)
+    .map((row) => [String(row.kolId).toLowerCase(), row]));
+  const seenStats = new Set();
+  const stats = profiles.map((profile) => {
+    const computed = computeKolDumpStatsFromProfile(profile);
+    const key = String(computed.kolId || "").toLowerCase();
+    const persisted = persistedById.get(key);
+    if (!persisted) {
+      if (key) seenStats.add(key);
+      return computed;
+    }
+    if (key) seenStats.add(key);
+    const mergedLinks = [...(Array.isArray(computed.externalLinks) ? computed.externalLinks : []), ...(Array.isArray(persisted.externalLinks) ? persisted.externalLinks : [])]
+      .filter((link, index, links) => /^https?:\/\//i.test(String(link?.url || ""))
+        && links.findIndex((candidate) => String(candidate?.url || "") === String(link?.url || "")) === index)
+      .slice(0, 6);
+    return {
+      ...computed,
+      ...persisted,
+      displayName: firstString(computed.displayName, persisted.displayName),
+      handle: firstString(computed.handle, persisted.handle),
+      walletAddresses: uniqueStrings([...(Array.isArray(computed.walletAddresses) ? computed.walletAddresses : []), ...(Array.isArray(persisted.walletAddresses) ? persisted.walletAddresses : [])]).slice(0, 6),
+      externalLinks: mergedLinks,
+      reasons: uniqueStrings([...(Array.isArray(persisted.reasons) ? persisted.reasons : []), ...(Array.isArray(computed.reasons) ? computed.reasons : [])]).slice(0, 6),
+      cacheSource: "postgres-history"
+    };
+  });
+  for (const persisted of persistedById.values()) {
+    const key = String(persisted.kolId || "").toLowerCase();
+    if (!key || seenStats.has(key)) continue;
+    seenStats.add(key);
+    stats.push({
+      ...persisted,
+      externalLinks: Array.isArray(persisted.externalLinks) ? persisted.externalLinks.slice(0, 6) : [],
+      reasons: Array.isArray(persisted.reasons) && persisted.reasons.length
+        ? persisted.reasons.slice(0, 6)
+        : ["Loaded from saved KOL dump history. Refresh KOL Tracker for the newest wallet-position rows."],
+      cacheSource: "postgres-history"
+    });
+  }
   const filtered = id === "all" ? stats : stats.filter((item) => String(item.kolId || "").toLowerCase() === id);
   const value = {
     stats: filtered,

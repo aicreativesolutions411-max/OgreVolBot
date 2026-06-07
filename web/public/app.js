@@ -412,6 +412,27 @@ let terminalLaunchFilterRenderTimer = null;
 let devInfoPrefetchTimer = null;
 let lastRenderCompletedAt = Date.now();
 
+function terminalDetailsDrawerOpen() {
+  return Boolean(
+    state.slimeShieldDetails?.open ||
+    state.devInfoDetails?.open ||
+    state.kolDumpDetails?.open ||
+    state.replayDetails?.open
+  );
+}
+
+function clearLivePairsAutoRefreshTimer() {
+  if (livePairsTimer) clearTimeout(livePairsTimer);
+  livePairsTimer = null;
+  livePairsTimerKey = "";
+}
+
+function resumeLivePairsAfterDetailsClose() {
+  if (terminalDetailsDrawerOpen()) return;
+  scheduleLivePairsAutoRefresh();
+  scheduleLivePairsRender("details-close");
+}
+
 function scheduleLivePairsRender(reason = "live-pairs-batch") {
   if (reason) {
     livePairsRenderReasons.add(String(reason));
@@ -424,6 +445,7 @@ function scheduleLivePairsRender(reason = "live-pairs-batch") {
     livePairsRenderRaf = 0;
     if (state.route !== "terminal") return;
     if (!["terminal", "live", "slimeScope"].includes(state.activeTab)) return;
+    if (terminalDetailsDrawerOpen()) return;
     recordPerfEvent({
       component: "livePairs",
       action: "batched-live-render",
@@ -3119,13 +3141,8 @@ async function refreshLivePairBuckets({ silent = false, force = false, warmAll =
 }
 
 function scheduleLivePairsAutoRefresh() {
-  const clearLiveTimer = () => {
-    if (livePairsTimer) clearTimeout(livePairsTimer);
-    livePairsTimer = null;
-    livePairsTimerKey = "";
-  };
-  if (isPostTradeRefreshActive() || document.hidden || (state.activeTab !== "live" && state.activeTab !== "terminal" && state.activeTab !== "slimeScope")) {
-    clearLiveTimer();
+  if (isPostTradeRefreshActive() || document.hidden || terminalDetailsDrawerOpen() || (state.activeTab !== "live" && state.activeTab !== "terminal" && state.activeTab !== "slimeScope")) {
+    clearLivePairsAutoRefreshTimer();
     return;
   }
   const refreshBucket = activeLivePairBucketForTab(state.activeTab);
@@ -3134,12 +3151,12 @@ function scheduleLivePairsAutoRefresh() {
   const delayMs = Math.max(minRefreshSeconds, refreshSeconds) * 1000;
   const nextKey = `${state.activeTab}:${refreshBucket}:${state.terminalSort}:${delayMs}`;
   if (livePairsTimer && livePairsTimerKey === nextKey) return;
-  clearLiveTimer();
+  clearLivePairsAutoRefreshTimer();
   livePairsTimerKey = nextKey;
   livePairsTimer = setTimeout(async () => {
     livePairsTimer = null;
     livePairsTimerKey = "";
-    if (document.hidden) {
+    if (document.hidden || terminalDetailsDrawerOpen()) {
       scheduleLivePairsAutoRefresh();
       return;
     }
@@ -7624,7 +7641,11 @@ async function ensureKolDumpStats(options = {}) {
     return null;
   } finally {
     state.kolDumpStatsLoading = false;
-    if (state.activeTab === "kol" || state.kolDumpDetails?.open) render({ force: true });
+    if (state.kolDumpDetails?.open) {
+      renderKolDumpDetailsDrawer();
+    } else if (state.activeTab === "kol") {
+      render({ force: true });
+    }
   }
 }
 
@@ -7632,6 +7653,7 @@ function openKolDumpDetails(kolId = "") {
   const id = String(kolId || "").trim();
   if (!id || !featureEnabled("kolDumpDetectorEnabled", true)) return;
   state.kolDumpDetails = { open: true, kolId: id };
+  clearLivePairsAutoRefreshTimer();
   renderKolDumpDetailsDrawer();
   void ensureKolDumpStats();
 }
@@ -7639,6 +7661,7 @@ function openKolDumpDetails(kolId = "") {
 function closeKolDumpDetails() {
   state.kolDumpDetails = { open: false, kolId: "" };
   renderKolDumpDetailsDrawer();
+  resumeLivePairsAfterDetailsClose();
 }
 
 function renderKolDumpDetailsDrawer() {
@@ -12911,6 +12934,7 @@ function openSlimeShieldDetails(tokenMint = "") {
   if (!mint || !featureEnabled("slimeShieldEnabled", true)) return;
   state.slimeShieldDetails = { open: true, tokenMint: mint };
   state.slimeShieldStatus = "";
+  clearLivePairsAutoRefreshTimer();
   renderSlimeShieldDetailsDrawer();
   void loadSlimeShield(mint);
   if (featureEnabled("replayBeforeBuyEnabled", true)) void loadReplayBeforeBuy(mint);
@@ -12920,6 +12944,7 @@ function closeSlimeShieldDetails() {
   state.slimeShieldDetails = { open: false, tokenMint: "" };
   state.slimeShieldStatus = "";
   renderSlimeShieldDetailsDrawer();
+  resumeLivePairsAfterDetailsClose();
 }
 
 async function loadSlimeShield(tokenMint = "", options = {}) {
@@ -13095,6 +13120,7 @@ function openDevInfoDetails(tokenMint = "") {
   if (!mint || !featureEnabled("devInfoEnabled", true)) return;
   state.devInfoDetails = { open: true, tokenMint: mint };
   state.devInfoStatus = "";
+  clearLivePairsAutoRefreshTimer();
   renderDevInfoDrawer();
   void loadDevInfoSummary(mint);
   void loadDevInfoDetails(mint);
@@ -13104,6 +13130,7 @@ function closeDevInfoDetails() {
   state.devInfoDetails = { open: false, tokenMint: "" };
   state.devInfoStatus = "";
   renderDevInfoDrawer();
+  resumeLivePairsAfterDetailsClose();
 }
 
 function scheduleVisibleDevInfoPrefetch(reason = "render") {
@@ -13117,6 +13144,7 @@ function scheduleVisibleDevInfoPrefetch(reason = "render") {
 
 async function prefetchVisibleDevInfoSummaries(reason = "render") {
   if (!featureEnabled("devInfoEnabled", true)) return;
+  if (terminalDetailsDrawerOpen()) return;
   const rows = allVisibleSignalRows().slice(0, 16);
   const mints = [];
   const seen = new Set();
@@ -13136,7 +13164,7 @@ async function prefetchVisibleDevInfoSummaries(reason = "render") {
     resultCount: mints.length,
     details: reason
   });
-  scheduleLivePairsRender("dev-info-prefetch");
+  if (!terminalDetailsDrawerOpen()) scheduleLivePairsRender("dev-info-prefetch");
 }
 
 function devInfoReasonsHtml(items = [], empty = "No strong cached signal yet.") {
@@ -13308,7 +13336,6 @@ function replayBeforeBuyCardHtml(tokenMint = "") {
   const mint = String(tokenMint || "").trim();
   if (!mint) return "";
   const replay = replayResultForMint(mint);
-  const loading = Boolean(state.replayLoading?.[mint]);
   return `
     <section class="replay-before-buy-card">
       <div>
@@ -13321,7 +13348,6 @@ function replayBeforeBuyCardHtml(tokenMint = "") {
         <div><dt>Median drawdown</dt><dd>${escapeHtml(replayMetricLabel(replay.medianMaxDrawdownPercent))}</dd></div>
       </dl>
       <p>${escapeHtml(replay.summary || "Not enough local history yet.")}</p>
-      <button type="button" data-replay-open="${escapeHtml(mint)}">${loading ? "Loading..." : "Open Replay"}</button>
     </section>
   `;
 }
@@ -13361,6 +13387,7 @@ function openReplayBeforeBuy(tokenMint = "") {
   const mint = String(tokenMint || "").trim();
   if (!mint || !featureEnabled("replayBeforeBuyEnabled", true)) return;
   state.replayDetails = { open: true, tokenMint: mint };
+  clearLivePairsAutoRefreshTimer();
   renderReplayBeforeBuyDrawer();
   void loadReplayBeforeBuy(mint);
 }
@@ -13368,6 +13395,7 @@ function openReplayBeforeBuy(tokenMint = "") {
 function closeReplayBeforeBuy() {
   state.replayDetails = { open: false, tokenMint: "" };
   renderReplayBeforeBuyDrawer();
+  resumeLivePairsAfterDetailsClose();
 }
 
 function renderReplayBeforeBuyDrawer() {
