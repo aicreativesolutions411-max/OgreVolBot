@@ -13580,7 +13580,8 @@ async function buildPositionsOverview(userId, options = {}) {
         position.wallets.add(wallet.publicKey);
         position.accounts.push({
           walletPublicKey: wallet.publicKey,
-          rawAmount: account.rawAmount
+          rawAmount: account.rawAmount,
+          decimals: account.decimals
         });
       }
     } catch (error) {
@@ -13601,6 +13602,7 @@ async function buildPositionsOverview(userId, options = {}) {
         position.accounts.push({
           walletPublicKey: connectedWalletPublicKey,
           rawAmount: account.rawAmount,
+          decimals: account.decimals,
           connectedWallet: true
         });
       }
@@ -13907,11 +13909,47 @@ function ensurePosition(positions, tokenMint) {
   return created;
 }
 
-async function estimatePositionValue(position) {
-  if (!CONFIG.jupiterApiKey) {
-    throw new Error("Jupiter API key missing");
+async function estimatePositionValueFromMarket(position, quoteError = null) {
+  const accounts = Array.isArray(position.accounts) ? position.accounts.slice(0, 8) : [];
+  const decimals = accounts
+    .map((account) => Number(account.decimals))
+    .find((value) => Number.isInteger(value) && value >= 0);
+  if (!Number.isInteger(decimals)) throw quoteError || new Error("Token decimals unavailable");
+
+  const rawAmount = accounts.reduce((total, account) => total + positiveBigIntOrZero(account.rawAmount), 0n);
+  if (rawAmount <= 0n) throw quoteError || new Error("No token balance");
+
+  let priceSol = null;
+  try {
+    const metadata = await getPumpFunTokenMetadata(position.tokenMint, { timeoutMs: 1_200 });
+    priceSol = pumpFunPriceSol(metadata, decimals);
+    if (!Number.isFinite(priceSol) || priceSol <= 0) {
+      const priceUsd = pumpFunPriceUsd(metadata, decimals);
+      if (Number.isFinite(priceUsd) && priceUsd > 0) {
+        const solUsd = await getSolUsdPrice({ timeoutMs: 1_200 }).catch(() => null);
+        if (Number.isFinite(solUsd) && solUsd > 0) priceSol = priceUsd / solUsd;
+      }
+    }
+  } catch {
+    priceSol = null;
   }
 
+  if (!Number.isFinite(priceSol) || priceSol <= 0) {
+    const pairs = await fetchDexScreenerTokenPairsBatch([position.tokenMint], { timeoutMs: 1_400 }).catch(() => []);
+    const pricedPair = await bestDexPairWithSolPrice(position.tokenMint, pairs);
+    priceSol = pricedPair?.priceSol ?? null;
+  }
+
+  if (!Number.isFinite(priceSol) || priceSol <= 0) throw quoteError || new Error("Market value unavailable");
+  const tokenUnits = Number(rawAmount) / (10 ** decimals);
+  const estimatedOutNumber = tokenUnits * priceSol * LAMPORTS_PER_SOL;
+  if (!Number.isFinite(estimatedOutNumber) || estimatedOutNumber <= 0) {
+    throw quoteError || new Error("Market value unavailable");
+  }
+  return BigInt(Math.max(0, Math.floor(estimatedOutNumber)));
+}
+
+async function estimatePositionValue(position) {
   const cacheKey = [
     position.tokenMint,
     ...position.accounts.slice(0, 8).map((account) => `${account.walletPublicKey}:${account.rawAmount}`)
@@ -13920,15 +13958,25 @@ async function estimatePositionValue(position) {
   if (cached !== undefined) return cached;
 
   let total = 0n;
-  for (const account of position.accounts.slice(0, 8)) {
-    const order = await createJupiterOrder({
-      taker: new PublicKey(account.walletPublicKey),
-      inputMint: position.tokenMint,
-      outputMint: SOL_MINT,
-      amount: account.rawAmount.toString(),
-      slippageBps: CONFIG.defaultSlippageBps
-    });
-    total += BigInt(order.outAmount || order.outputAmount || 0);
+  if (!CONFIG.jupiterApiKey) {
+    total = await estimatePositionValueFromMarket(position, new Error("Jupiter API key missing"));
+    setTimedCache(positionValueCache, cacheKey, total);
+    return total;
+  }
+
+  try {
+    for (const account of position.accounts.slice(0, 8)) {
+      const order = await createJupiterOrder({
+        taker: new PublicKey(account.walletPublicKey),
+        inputMint: position.tokenMint,
+        outputMint: SOL_MINT,
+        amount: account.rawAmount.toString(),
+        slippageBps: CONFIG.defaultSlippageBps
+      });
+      total += BigInt(order.outAmount || order.outputAmount || 0);
+    }
+  } catch (error) {
+    total = await estimatePositionValueFromMarket(position, error);
   }
   setTimedCache(positionValueCache, cacheKey, total);
   return total;

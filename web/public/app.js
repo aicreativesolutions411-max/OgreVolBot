@@ -957,11 +957,27 @@ window.addEventListener("popstate", () => {
 
 let marketTickerInteractionsInstalled = false;
 
+function syncMarketTickerMenuState() {
+  document.querySelectorAll("[data-market-ticker]").forEach((ticker) => {
+    const hasOpenMenu = Boolean(ticker.querySelector("details.swamp-ticker-item[open]"));
+    ticker.classList.toggle("is-ticker-menu-open", hasOpenMenu);
+  });
+}
+
 function closeMarketTickerMenus(except = null) {
   document.querySelectorAll("[data-market-ticker] details.swamp-ticker-item[open]").forEach((details) => {
     if (except && details === except) return;
     details.open = false;
   });
+  syncMarketTickerMenuState();
+}
+
+function toggleMarketTickerItem(details) {
+  if (!details) return;
+  const shouldOpen = !details.open;
+  closeMarketTickerMenus(details);
+  details.open = shouldOpen;
+  syncMarketTickerMenuState();
 }
 
 function initializeMarketTickerInteractions() {
@@ -969,7 +985,6 @@ function initializeMarketTickerInteractions() {
   marketTickerInteractionsInstalled = true;
   document.addEventListener("click", (event) => {
     const target = event.target;
-    const tickerItem = target?.closest?.("[data-market-ticker] details.swamp-ticker-item");
     if (!target?.closest?.("[data-market-ticker]")) {
       closeMarketTickerMenus();
       return;
@@ -978,10 +993,16 @@ function initializeMarketTickerInteractions() {
       window.setTimeout(() => closeMarketTickerMenus(), 80);
       return;
     }
-    if (tickerItem && target?.closest?.("summary")) {
-      window.requestAnimationFrame(() => {
-        if (tickerItem.open) closeMarketTickerMenus(tickerItem);
-      });
+    const summary = target?.closest?.("[data-market-ticker] details.swamp-ticker-item > summary");
+    if (summary) {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleMarketTickerItem(summary.closest("details.swamp-ticker-item"));
+    }
+  }, true);
+  document.addEventListener("toggle", (event) => {
+    if (event.target?.matches?.("[data-market-ticker] details.swamp-ticker-item")) {
+      syncMarketTickerMenuState();
     }
   }, true);
   document.addEventListener("keydown", (event) => {
@@ -8789,6 +8810,10 @@ function hasActiveAutoExitPlans() {
     if (Number(plan.activeWallets || 0) > 0) return true;
     return (plan.wallets || []).some((wallet) => activeWalletStatuses.has(String(wallet.status || wallet.exitStatus || "").toLowerCase()));
   });
+}
+
+function shouldRunAutoExitCheckAfterWalletRefresh() {
+  return Boolean(hasActiveTpSlPermission() && hasActiveAutoExitPlans() && !autoExitCheckInFlight);
 }
 
 function ensureAutoExitWatchForActivePlans() {
@@ -17753,7 +17778,13 @@ document.addEventListener("click", async (event) => {
       durationMs: perfNow() - clickStartedAt,
       details: "top-refresh-wallet"
     });
-    refreshWalletNow({ force: true, deep: false, reason: "manual_header_click" }).catch((error) => setError(error.message));
+    refreshWalletNow({ force: true, deep: false, reason: "manual_header_click" })
+      .then(() => {
+        if (shouldRunAutoExitCheckAfterWalletRefresh()) {
+          runDeferredUiTask(() => runTradePlanCheck());
+        }
+      })
+      .catch((error) => setError(error.message));
     return;
   }
   if (target.matches("[data-ogre-tek-refresh]")) {

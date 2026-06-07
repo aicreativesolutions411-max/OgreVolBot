@@ -1,4 +1,4 @@
-﻿/* SlimeWire final terminal polish loaded after the main stylesheet. */
+/* SlimeWire final terminal polish loaded after the main stylesheet. */
 [data-app]:not([data-route="terminal"]) [data-terminal-global-search],
 [data-app]:not([data-route="terminal"]) [data-top-sync-strip],
 [data-app]:not([data-route]) [data-terminal-global-search],
@@ -13951,5 +13951,253 @@ body:has(main.shell[data-app][data-route="connect"]) [data-ogre-agent-root] {
   html body main.shell[data-app][data-route="terminal"] .terminal-token-row {
     min-width: 0 !important;
     overflow-anchor: auto !important;
+  }
+}
+
+/* MOBILE_TERMINAL_DENSITY_FINAL_20260607_V2: final winning pass for mobile ticker links, compact account controls, and tight pair actions. */
+html body main.shell[data-app] .swamp-market-ticker[data-market-ticker].is-ticker-menu-open .swamp-ticker-mask {
+  overflow: visible !important;
+}
+
+html body main.shell[data-app] .swamp-market-ticker[data-market-ticker].is-ticker-menu-open .swamp-ticker-track {
+  animation-play-state: paused !important;
+  transform: none !important;
+}
+
+@media (max-width: 760px) {
+  html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-item[open] .swamp-ticker-links {
+    left: 8px !important;
+    min-width: 0 !important;
+    right: 8px !important;
+    top: calc(27px + env(safe-area-inset-top, 0px)) !important;
+    transform: none !important;
+    width: auto !important;
+    z-index: 2147483003 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .topbar {
+    border-radius: 0 0 12px 12px !important;
+    gap: 6px !important;
+    margin-bottom: 4px !important;
+    overflow-anchor: none !important;
+    padding: 6px max(8px, env(safe-area-inset-right)) 7px max(8px, env(safe-area-inset-left)) !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .topbar .powered,
+  html body main.shell[data-app][data-route="terminal"] .topbar .powered img {
+    max-height: 22px !important;
+    max-width: 138px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .topbar-right,
+  html body main.shell[data-app][data-route="terminal"] .top-auth-actions {
+    gap: 5px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .terminal-global-search,
+  html body main.shell[data-app][data-route="terminal"] .terminal-global-search input,
+  html body main.shell[data-app][data-route="terminal"] .terminal-global-search button {
+    min-height: 34px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .terminal-global-search {
+    gap: 6px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .terminal-global-search input,
+  html body main.shell[data-app][data-route="terminal"] .terminal-global-search button {
+    border-radius: 10px !important;
+    font-size: 12px !important;
+    padding: 6px 9px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .terminal-global-search button {
+    min-width: 54px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .top-auth-group {
+    gap: 5px !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .top-auth-group [data-web-signup-connect],
+  html body main.shell[data-app][data-route="terminal"] .top-auth-group .top-profile-button {
+    grid-column: auto !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .top-auth-group button,
+  html body main.shell[data-app][data-route="terminal"] .top-auth-group .top-profile-button {
+    border-radius: 10px !important;
+    font-size: 11px !important;
+    min-height: 31px !important;
+    padding: 5px 8px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .top-profile-avatar {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip {
+    border-radius: 12px !important;
+    gap: 5px !important;
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    overflow-anchor: none !important;
+    padding: 6px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip button {
+    border-radius: 10px !important;
+    font-size: 10.5px !important;
+    grid-column: span 2 !important;
+    min-height: 31px !important;
+    padding: 4px 6px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip > span {
+    border-radius: 999px !important;
+    font-size: 9.5px !important;
+    grid-column: span 2 !important;
+    line-height: 1.05 !important;
+    min-height: 22px !important;
+    padding: 3px 5px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip .top-wallet-disconnected,
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip [data-active-preset-label] {
+    grid-column: 1 / -1 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .metrics {
+    gap: 5px !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    margin: 4px 0 5px !important;
+    overflow-anchor: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .metrics article,
+  html body main.shell[data-app][data-route="terminal"] .metrics > div {
+    border-radius: 10px !important;
+    min-height: 39px !important;
+    padding: 6px 8px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .metrics span,
+  html body main.shell[data-app][data-route="terminal"] .metrics small {
+    font-size: 8.5px !important;
+    line-height: 1 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .metrics strong {
+    font-size: 17px !important;
+    line-height: 1.05 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .account-check-card {
+    border-radius: 12px !important;
+    display: grid !important;
+    gap: 7px !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    margin: 6px 0 !important;
+    padding: 10px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .account-check-card > div,
+  html body main.shell[data-app][data-route="terminal"] .account-check-card .primary {
+    grid-column: 1 / -1 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .account-check-card h3 {
+    font-size: 18px !important;
+    line-height: 1.05 !important;
+    margin: 0 0 4px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .account-check-card p {
+    font-size: 12px !important;
+    line-height: 1.25 !important;
+    margin: 0 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .account-check-card button,
+  html body main.shell[data-app][data-route="terminal"] .account-check-card a {
+    border-radius: 10px !important;
+    font-size: 12px !important;
+    min-height: 34px !important;
+    padding: 6px 8px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .terminal-token-row,
+  html body main.shell[data-app][data-route="terminal"] .best-picks-panel .terminal-token-row,
+  html body main.shell[data-app][data-route="terminal"] .live-pairs-panel .terminal-token-row,
+  html body main.shell[data-app][data-route="terminal"] .kol-panel .terminal-token-row,
+  html body main.shell[data-app][data-route="terminal"] .slime-scope-list-panel .terminal-token-row {
+    border-radius: 12px !important;
+    gap: 5px 7px !important;
+    padding: 7px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .terminal-token-stats {
+    gap: 4px !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .terminal-token-stats span {
+    border-radius: 8px !important;
+    gap: 1px !important;
+    grid-template-rows: 10px 16px !important;
+    min-height: 35px !important;
+    padding: 5px 7px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .terminal-token-stats small {
+    font-size: 8.5px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .terminal-token-stats strong {
+    font-size: 14px !important;
+    line-height: 1.05 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .terminal-token-actions,
+  html body main.shell[data-app][data-route="terminal"] .compact-row-actions {
+    gap: 4px !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .terminal-token-actions button,
+  html body main.shell[data-app][data-route="terminal"] .compact-row-actions button,
+  html body main.shell[data-app][data-route="terminal"] .signal-actions button {
+    border-radius: 9px !important;
+    font-size: 10px !important;
+    line-height: 1.05 !important;
+    min-height: 28px !important;
+    padding: 3px 5px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .terminal-token-actions .dev-info-pill strong,
+  html body main.shell[data-app][data-route="terminal"] .compact-row-actions .dev-info-pill strong {
+    display: inline !important;
+    font-size: 10px !important;
+    line-height: 1 !important;
+    margin: 0 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .row-card.position {
+    border-radius: 12px !important;
+    gap: 8px !important;
+    padding: 9px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .row-card.position .card-actions.compact {
+    gap: 5px !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .row-card.position .card-actions.compact button,
+  html body main.shell[data-app][data-route="terminal"] .row-card.position .card-actions.compact a {
+    border-radius: 9px !important;
+    font-size: 10px !important;
+    min-height: 28px !important;
+    padding: 4px 5px !important;
   }
 }
