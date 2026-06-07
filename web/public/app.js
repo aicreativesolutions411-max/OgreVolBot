@@ -44,8 +44,9 @@ const LIVE_PAIRS_RENDER_DEBOUNCE_MS = 140;
 const LIVE_PAIRS_INFLIGHT_RENDER_REASON = "live-pairs-inflight";
 const POST_TRADE_REFRESH_DELAYS_MS = [1200, 4500, 10000];
 const APP_WATCHDOG_INTERVAL_MS = 15_000;
-const APP_RESUME_REFRESH_DEBOUNCE_MS = 650;`r`nconst OGRE_AGENT_MIC_START_TIMEOUT_MS = 3500;`r`nconst OGRE_AGENT_MIC_LISTEN_TIMEOUT_MS = 12000;
-const POSITION_REFRESH_STALE_LOCK_MS = 30_000;
+const APP_RESUME_REFRESH_DEBOUNCE_MS = 650;
+const OGRE_AGENT_MIC_START_TIMEOUT_MS = 3500;
+const OGRE_AGENT_MIC_LISTEN_TIMEOUT_MS = 12000;const POSITION_REFRESH_STALE_LOCK_MS = 30_000;
 const POST_TRADE_AFFECTED_KEYS = ["wallet-summary", "positions", "pnl", "trade-history", "selected-token", "live-trades"];
 const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 const BASE58_LOOKUP = new Map([...BASE58_ALPHABET].map((char, index) => [char, index]));
@@ -343,7 +344,9 @@ let scanTimer = null;
 let scanTimerKey = "";
 let kolTimer = null;
 let kolTimerKey = "";
-let watchlistTimer = null;
+let ogreAgentSpeechStartTimer = null;
+let ogreAgentSpeechListenTimer = null;
+let ogreAgentSpeechSessionId = 0;let watchlistTimer = null;
 let watchlistTimerKey = "";
 let terminalFeedTimer = null;
 let terminalFeedTimerKey = "";
@@ -13890,8 +13893,18 @@ function ogreAgentStartListening() {
 }
 
 function ogreAgentToggleListening() {
-  if (state.ogreAgentListening) ogreAgentStopListening("Voice input stopped.");
+  if (state.ogreAgentListening || state.ogreAgentSpeechRecognizer) ogreAgentStopListening("Voice input stopped.");
   else ogreAgentStartListening();
+}
+
+function closeOgreAgentPanel() {
+  state.ogreAgentOpen = false;
+  state.ogreAgentStatus = "";
+  state.ogreAgentLoading = false;
+  state.ogreAgentRequestId = "";
+  ogreAgentStopListening();
+  ogreAgentCancelSpeech();
+  renderOgreAgent({ force: true });
 }
 
 function ogreAgentActionFromKey(key = "") {
@@ -14690,11 +14703,7 @@ document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
 
   if (state.ogreAgentOpen) {
-    state.ogreAgentOpen = false;
-    state.ogreAgentStatus = "";
-    ogreAgentStopListening();
-    ogreAgentCancelSpeech();
-    renderOgreAgent();
+    closeOgreAgentPanel();
     return;
   }
 
@@ -14765,22 +14774,17 @@ document.addEventListener("click", async (event) => {
   if (!target) return;
 
   if (target.matches("[data-ogre-agent-toggle]")) {
-    state.ogreAgentOpen = !state.ogreAgentOpen;
-    state.ogreAgentStatus = state.ogreAgentOpen ? state.ogreAgentStatus : "";
-    if (!state.ogreAgentOpen) {
-      ogreAgentStopListening();
-      ogreAgentCancelSpeech();
+    if (state.ogreAgentOpen) {
+      closeOgreAgentPanel();
+    } else {
+      state.ogreAgentOpen = true;
+      renderOgreAgent({ force: true });
     }
-    renderOgreAgent();
     return;
   }
 
   if (target.matches("[data-ogre-agent-close]")) {
-    state.ogreAgentOpen = false;
-    state.ogreAgentStatus = "";
-    ogreAgentStopListening();
-    ogreAgentCancelSpeech();
-    renderOgreAgent();
+    closeOgreAgentPanel();
     return;
   }
 
@@ -15749,7 +15753,19 @@ function resumeLiveFeeds(event = null) {
 }
 
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) resumeLiveFeeds();
+  if (document.hidden) {
+    if (state.ogreAgentListening || state.ogreAgentSpeechRecognizer) ogreAgentStopListening("Voice input paused while tab was hidden.");
+    return;
+  }
+  const agentInputActive = Boolean(document.activeElement?.matches?.("[data-ogre-agent-input]"));
+  if (state.ogreAgentOpen && (state.ogreAgentListening || state.ogreAgentLoading || agentInputActive)) {
+    clearTimeout(appResumeTimer);
+    appResumeTimer = setTimeout(() => {
+      if (!document.hidden && !state.ogreAgentListening && !state.ogreAgentLoading && !document.activeElement?.matches?.("[data-ogre-agent-input]")) resumeLiveFeeds();
+    }, APP_RESUME_REFRESH_DEBOUNCE_MS + 900);
+    return;
+  }
+  resumeLiveFeeds();
 });
 
 window.addEventListener("focus", resumeLiveFeeds);
@@ -16249,5 +16265,6 @@ if (!window.__slimeStablePumpChartTimer) {
     if (!document.hidden) window.setTimeout(() => kick("visible-empty-feed-watchdog"), 450);
   });
 })();
+
 
 
