@@ -12138,6 +12138,117 @@ html body main.shell[data-app][data-route="intro"] .swamp-splash-reference {
   width: 100% !important;
 }
 
+/* INTRO_VIDEO_GATE_V1: first visit is a lightweight two-clip gate before the connect landing page. */
+html body main.shell[data-app][data-route="intro"] > .topbar,
+html body main.shell[data-app][data-route="intro"] > .footer {
+  display: none !important;
+  pointer-events: none !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .login-view.swamp-splash.swamp-intro-video {
+  align-items: stretch !important;
+  background: #000 !important;
+  display: block !important;
+  justify-items: stretch !important;
+  min-height: 100svh !important;
+  overflow: clip !important;
+  padding: 24px 0 0 !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .login-view.swamp-splash.swamp-intro-video::before {
+  display: none !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .swamp-intro-stage {
+  background:
+    radial-gradient(circle at 50% 100%, rgba(81, 255, 24, 0.1), transparent 34%),
+    #000 !important;
+  height: calc(100svh - 24px) !important;
+  min-height: calc(100svh - 24px) !important;
+  overflow: clip !important;
+  position: relative !important;
+  width: 100% !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .swamp-intro-media {
+  background: #000 !important;
+  display: block !important;
+  height: 100% !important;
+  inset: 0 !important;
+  object-fit: cover !important;
+  object-position: center !important;
+  position: absolute !important;
+  width: 100% !important;
+  z-index: 1 !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .swamp-intro-media[hidden] {
+  display: none !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .swamp-intro-overlay {
+  align-items: center !important;
+  bottom: max(18px, env(safe-area-inset-bottom, 0px)) !important;
+  display: flex !important;
+  gap: 10px !important;
+  justify-content: center !important;
+  left: 50% !important;
+  max-width: calc(100vw - 24px) !important;
+  padding: 0 !important;
+  position: absolute !important;
+  transform: translateX(-50%) !important;
+  z-index: 4 !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .swamp-intro-overlay span {
+  background: rgba(0, 10, 4, 0.7) !important;
+  border: 1px solid rgba(119, 255, 61, 0.38) !important;
+  border-radius: 999px !important;
+  color: rgba(237, 255, 226, 0.82) !important;
+  font-size: 12px !important;
+  font-weight: 850 !important;
+  line-height: 1.1 !important;
+  padding: 9px 12px !important;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.7) !important;
+  white-space: nowrap !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .swamp-intro-actions {
+  display: inline-flex !important;
+  gap: 8px !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .swamp-intro-actions button {
+  align-items: center !important;
+  border-radius: 999px !important;
+  cursor: pointer !important;
+  display: inline-flex !important;
+  font-size: 13px !important;
+  font-weight: 950 !important;
+  height: 38px !important;
+  justify-content: center !important;
+  min-width: 78px !important;
+  padding: 0 15px !important;
+  text-transform: uppercase !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .swamp-intro-enter {
+  background: linear-gradient(180deg, #8dff3e, #25b51b) !important;
+  border: 1px solid rgba(191, 255, 111, 0.82) !important;
+  box-shadow: 0 0 24px rgba(87, 255, 29, 0.28) !important;
+  color: #001a04 !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .swamp-intro-skip {
+  background: rgba(4, 18, 7, 0.78) !important;
+  border: 1px solid rgba(119, 255, 61, 0.44) !important;
+  color: #edffe2 !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .swamp-intro-stage[data-intro-phase="transition"] .swamp-intro-enter {
+  min-width: 92px !important;
+}
+
 body:has(main.shell[data-app][data-route="intro"]) [data-ogre-agent-root],
 body:has(main.shell[data-app][data-route="connect"]) [data-ogre-agent-root] {
   display: none !important;
@@ -12216,6 +12327,43 @@ body:has(main.shell[data-app][data-route="connect"]) [data-ogre-agent-root] {
     max-height: calc(100svh - 160px) !important;
     max-width: calc(100vw - 66px) !important;
     width: min(54vw, 260px) !important;
+  }
+
+  html body main.shell[data-app][data-route="intro"] .login-view.swamp-splash.swamp-intro-video {
+    padding-top: calc(24px + env(safe-area-inset-top, 0px)) !important;
+  }
+
+  html body main.shell[data-app][data-route="intro"] .swamp-intro-stage {
+    height: calc(100svh - 24px - env(safe-area-inset-top, 0px)) !important;
+    min-height: calc(100svh - 24px - env(safe-area-inset-top, 0px)) !important;
+  }
+
+  html body main.shell[data-app][data-route="intro"] .swamp-intro-overlay {
+    align-items: stretch !important;
+    bottom: max(14px, env(safe-area-inset-bottom, 0px)) !important;
+    flex-direction: column !important;
+    gap: 8px !important;
+    width: min(330px, calc(100vw - 24px)) !important;
+  }
+
+  html body main.shell[data-app][data-route="intro"] .swamp-intro-overlay span {
+    font-size: 11px !important;
+    text-align: center !important;
+    white-space: normal !important;
+    width: 100% !important;
+  }
+
+  html body main.shell[data-app][data-route="intro"] .swamp-intro-actions {
+    display: grid !important;
+    gap: 8px !important;
+    grid-template-columns: 1fr 1fr !important;
+    width: 100% !important;
+  }
+
+  html body main.shell[data-app][data-route="intro"] .swamp-intro-actions button {
+    height: 40px !important;
+    min-width: 0 !important;
+    width: 100% !important;
   }
 }
 

@@ -69,8 +69,14 @@ test("entry wallet cards start provider connect flow while main connect opens ch
 });
 
 test("connect page has route bootstrap without a global capture click blocker", () => {
-  assert.match(htmlSource, /<a class="swamp-splash-button" href="\/connect" data-nav-route="\/connect" aria-label="Enter the Swamp">/);
-  assert.match(htmlSource, /const route = path\.startsWith\("\/login"\)/);
+  assert.match(htmlSource, /data-intro-gate/);
+  assert.match(htmlSource, /src="\.\/assets\/slimewire\/intro\/swamp-entry\.mp4"/);
+  assert.match(htmlSource, /src="\.\/assets\/slimewire\/intro\/swamp-transition\.mp4"[\s\S]*preload="none"/);
+  assert.match(htmlSource, /data-intro-start>Enter/);
+  assert.match(htmlSource, /data-intro-skip>Skip/);
+  assert.match(htmlSource, /sessionStorage\?\.getItem\("slimewireIntroCompleteV1"\) === "true"/);
+  assert.match(htmlSource, /window\.history\.replaceState\(\{\}, "", "\/connect"\)/);
+  assert.match(htmlSource, /const route = currentPath\.startsWith\("\/login"\)/);
   assert.match(htmlSource, /setRouteHidden\("\[data-connect\]", route !== "connect"\)/);
   assert.doesNotMatch(htmlSource, /window\.__SLIMEWIRE_EARLY_CONNECT_ACTION/);
   assert.doesNotMatch(htmlSource, /window\.__SLIMEWIRE_APP_READY/);

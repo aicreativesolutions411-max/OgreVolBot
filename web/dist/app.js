@@ -179,16 +179,28 @@ function setStoredNavTekOpen(open) {
   }
 }
 
+const INTRO_GATE_SESSION_KEY = "slimewireIntroCompleteV1";
+
+function introGateCompleted() {
+  try {
+    return window.sessionStorage?.getItem(INTRO_GATE_SESSION_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function markIntroGateCompleted() {
+  try {
+    window.sessionStorage?.setItem(INTRO_GATE_SESSION_KEY, "true");
+  } catch {
+    // The intro is cosmetic; blocked session storage should never block access.
+  }
+}
+
 const state = {
   token: getStoredToken(),
   user: null,
-  route: window.location.pathname.startsWith("/login") || window.location.pathname.startsWith("/account/login")
-    ? "login"
-    : window.location.pathname.startsWith("/connect")
-    ? "connect"
-    : window.location.pathname.startsWith("/terminal") || window.location.pathname.startsWith("/ogre-tek")
-      ? "terminal"
-      : "intro",
+  route: routeForPath(window.location.pathname),
   activeTab: window.location.pathname.includes("/ogre-tek")
     ? "ogreTek"
     : window.location.pathname.includes("/chart")
@@ -677,11 +689,118 @@ function prewarmSlimewireImageAssets() {
 }
 
 function routeForPath(pathname = window.location.pathname) {
+  if ((pathname === "/" || pathname === "") && introGateCompleted()) return "connect";
   if (pathname.startsWith("/login") || pathname.startsWith("/account/login")) return "login";
   if (pathname.startsWith("/connect")) return "connect";
   if (pathname.startsWith("/ogre-tek")) return "terminal";
   if (pathname.startsWith("/terminal")) return "terminal";
   return "intro";
+}
+
+function syncIntroGateHistory() {
+  if (!introGateCompleted()) return;
+  if (window.location.pathname !== "/" && window.location.pathname !== "") return;
+  try {
+    window.history.replaceState({}, "", "/connect");
+  } catch {
+    // History updates are best-effort only.
+  }
+}
+
+function initializeIntroVideoGate() {
+  const root = document.querySelector("[data-intro-gate]");
+  if (!root || root.dataset.introReady === "true") return;
+  root.dataset.introReady = "true";
+
+  const stage = root.querySelector("[data-intro-stage]");
+  const entryVideo = root.querySelector('[data-intro-video="entry"]');
+  const transitionVideo = root.querySelector('[data-intro-video="transition"]');
+  const status = root.querySelector("[data-intro-status]");
+  const enterButton = root.querySelector("[data-intro-start]");
+  const skipButton = root.querySelector("[data-intro-skip]");
+  let finishing = false;
+  let transitionStarted = false;
+  let transitionFallbackTimer = 0;
+
+  const setPhase = (phase, message) => {
+    if (stage) stage.dataset.introPhase = phase;
+    if (status && message) status.textContent = message;
+  };
+
+  const finishIntro = () => {
+    if (finishing) return;
+    finishing = true;
+    if (transitionFallbackTimer) window.clearTimeout(transitionFallbackTimer);
+    markIntroGateCompleted();
+    entryVideo?.pause?.();
+    transitionVideo?.pause?.();
+    navigateTo("/connect");
+  };
+
+  const startTransition = () => {
+    if (finishing) return;
+    if (transitionStarted) {
+      finishIntro();
+      return;
+    }
+    transitionStarted = true;
+    setPhase("transition", "Opening the terminal...");
+    if (enterButton) enterButton.textContent = "Enter";
+    if (skipButton) skipButton.textContent = "Skip";
+    entryVideo?.pause?.();
+    if (entryVideo) entryVideo.hidden = true;
+    if (!transitionVideo) {
+      finishIntro();
+      return;
+    }
+    transitionVideo.hidden = false;
+    transitionVideo.preload = "auto";
+    transitionVideo.currentTime = 0;
+    const playResult = transitionVideo.play?.();
+    if (playResult?.catch) {
+      playResult.catch(() => {
+        setPhase("transition", "Tap Enter to open.");
+      });
+    }
+    transitionFallbackTimer = window.setTimeout(finishIntro, 12_000);
+  };
+
+  entryVideo?.addEventListener("ended", () => {
+    setPhase("ready", "Intro complete. Tap Enter to continue.");
+  });
+  entryVideo?.addEventListener("error", () => {
+    setPhase("ready", "Video could not load. Tap Enter to continue.");
+  });
+  transitionVideo?.addEventListener("ended", finishIntro);
+  transitionVideo?.addEventListener("error", finishIntro);
+
+  root.addEventListener("click", (event) => {
+    const target = event.target;
+    if (target?.closest?.(".swamp-intro-actions")) return;
+    startTransition();
+  });
+  enterButton?.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    startTransition();
+  });
+  skipButton?.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    transitionStarted ? finishIntro() : startTransition();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (state.route !== "intro" || event.key !== "Enter") return;
+    event.preventDefault();
+    transitionStarted ? finishIntro() : startTransition();
+  });
+
+  const playResult = entryVideo?.play?.();
+  if (playResult?.catch) {
+    playResult.catch(() => {
+      setPhase("ready", "Tap Enter to start.");
+    });
+  }
 }
 
 function tabForPath(pathname = window.location.pathname) {
@@ -18175,9 +18294,11 @@ function startAppWatchdog() {
 }
 
 async function initializeApp() {
+  syncIntroGateHistory();
   installPerformanceInstrumentation();
   installCrashInstrumentation();
   installSlimewireImageFallbacks();
+  initializeIntroVideoGate();
   startAppWatchdog();
   prewarmSlimewireImageAssets();
   applyChartRouteFromLocation();

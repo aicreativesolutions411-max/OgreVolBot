@@ -78,12 +78,18 @@ test("terminal route cannot show the intro splash underneath the header", () => 
   assert.match(overridesSource, /\[data-route-view-hidden="true"\]/);
 });
 
-test("enter the swamp has a real connect-route fallback", () => {
-  assert.match(htmlSource, /<a class="swamp-splash-button" href="\/connect" data-nav-route="\/connect" aria-label="Enter the Swamp">/);
-  assert.match(htmlSource, /const route = path\.startsWith\("\/login"\)/);
-  assert.match(htmlSource, /path\.startsWith\("\/connect"\)\s*\?\s*"connect"/);
+test("intro video gate has a real connect-route fallback", () => {
+  assert.match(htmlSource, /data-intro-gate/);
+  assert.match(htmlSource, /data-intro-start>Enter/);
+  assert.match(htmlSource, /data-intro-skip>Skip/);
+  assert.match(htmlSource, /sessionStorage\?\.getItem\("slimewireIntroCompleteV1"\) === "true"/);
+  assert.match(htmlSource, /window\.history\.replaceState\(\{\}, "", "\/connect"\)/);
+  assert.match(htmlSource, /const route = currentPath\.startsWith\("\/login"\)/);
+  assert.match(htmlSource, /currentPath\.startsWith\("\/connect"\)\s*\?\s*"connect"/);
   assert.match(htmlSource, /setRouteHidden\("\[data-connect\]", route !== "connect"\)/);
   assert.match(htmlSource, /toggleAttribute\("hidden", route !== "terminal"\)/);
+  assert.match(appSource, /function initializeIntroVideoGate\(\)/);
+  assert.match(appSource, /navigateTo\("\/connect"\)/);
 });
 
 test("mobile topbar rescue does not force hidden auth groups visible", () => {

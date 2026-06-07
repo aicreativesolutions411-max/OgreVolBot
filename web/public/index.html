@@ -11,7 +11,6 @@
     <link rel="preconnect" href="https://api.dexscreener.com">
     <link rel="dns-prefetch" href="https://api.dexscreener.com">
     <link rel="preload" as="image" href="/assets/slimewire/png/slimewire-mark.png">
-    <link rel="preload" as="image" href="/assets/slimewire/references/enter-swamp-reference.jpg">
     <link rel="preload" as="image" href="/assets/slimewire/png/slime-border-frame-rich.png">
     <link rel="preload" as="image" href="/assets/slimewire/clean-ui/wallet_icons/default/phantom.png">
     <link rel="preload" as="image" href="/assets/slimewire/clean-ui/wallet_icons/default/solflare.png">
@@ -238,10 +237,36 @@
         </article>
       </section>
 
-      <section class="login-view swamp-splash" data-login>
-        <a class="swamp-splash-button" href="/connect" data-nav-route="/connect" aria-label="Enter the Swamp">
-          <img class="swamp-splash-reference" src="./assets/slimewire/references/enter-swamp-reference.jpg" data-fallback-src="./assets/slimewire/png/slimewire-mark.png" alt="Enter the Swamp">
-        </a>
+      <section class="login-view swamp-splash swamp-intro-video" data-login data-intro-gate>
+        <div class="swamp-intro-stage" data-intro-stage data-intro-phase="entry">
+          <video
+            class="swamp-intro-media"
+            data-intro-video="entry"
+            src="./assets/slimewire/intro/swamp-entry.mp4"
+            autoplay
+            muted
+            playsinline
+            preload="metadata"
+            aria-label="SlimeWire intro video"
+          ></video>
+          <video
+            class="swamp-intro-media"
+            data-intro-video="transition"
+            src="./assets/slimewire/intro/swamp-transition.mp4"
+            muted
+            playsinline
+            preload="none"
+            hidden
+            aria-label="SlimeWire transition video"
+          ></video>
+          <div class="swamp-intro-overlay" data-intro-overlay>
+            <span data-intro-status>Tap Enter or the video to continue.</span>
+            <div class="swamp-intro-actions">
+              <button type="button" class="swamp-intro-enter" data-intro-start>Enter</button>
+              <button type="button" class="swamp-intro-skip" data-intro-skip>Skip</button>
+            </div>
+          </div>
+        </div>
       </section>
 
       <section class="connect-view" data-connect hidden>
@@ -393,11 +418,22 @@
           const app = document.querySelector("[data-app]");
           if (!app) return;
           const path = window.location.pathname || "/";
-          const route = path.startsWith("/login") || path.startsWith("/account/login")
+          const introDone = (() => {
+            try {
+              return window.sessionStorage?.getItem("slimewireIntroCompleteV1") === "true";
+            } catch {
+              return false;
+            }
+          })();
+          if ((path === "/" || path === "") && introDone) {
+            window.history.replaceState({}, "", "/connect");
+          }
+          const currentPath = window.location.pathname || "/";
+          const route = currentPath.startsWith("/login") || currentPath.startsWith("/account/login")
             ? "login"
-            : path.startsWith("/connect")
+            : currentPath.startsWith("/connect")
               ? "connect"
-              : path.startsWith("/terminal") || path.startsWith("/ogre-tek")
+              : currentPath.startsWith("/terminal") || currentPath.startsWith("/ogre-tek")
                 ? "terminal"
                 : "intro";
           const setRouteHidden = (selector, hidden) => {
