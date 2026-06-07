@@ -281,6 +281,9 @@ const state = {
   slimeShieldLoading: {},
   slimeShieldDetails: { open: false, tokenMint: "" },
   slimeShieldStatus: "",
+  replayResults: {},
+  replayLoading: {},
+  replayDetails: { open: false, tokenMint: "" },
   slimeScopeMode: "new",
   terminalFeeds: {},
   terminalFeedLog: [],
@@ -3999,6 +4002,7 @@ function render(options = {}) {
   renderProtectedBuyModal();
   renderSlimeShieldDetailsDrawer();
   renderKolDumpDetailsDrawer();
+  renderReplayBeforeBuyDrawer();
   renderOgreAgent();
   syncInteractionLocks();
   applyActionButtonStates();
@@ -12619,6 +12623,7 @@ function openSlimeShieldDetails(tokenMint = "") {
   state.slimeShieldStatus = "";
   renderSlimeShieldDetailsDrawer();
   void loadSlimeShield(mint);
+  if (featureEnabled("replayBeforeBuyEnabled", true)) void loadReplayBeforeBuy(mint);
 }
 
 function closeSlimeShieldDetails() {
@@ -12655,6 +12660,151 @@ async function loadSlimeShield(tokenMint = "", options = {}) {
     state.slimeShieldLoading = nextLoading;
     renderSlimeShieldDetailsDrawer();
   }
+}
+
+function replayFallbackResult(tokenMint = "") {
+  return {
+    mint: tokenMint,
+    sampleSize: 0,
+    confidence: "low",
+    matchedTraits: [],
+    winRatePercent: null,
+    medianMaxUpsidePercent: null,
+    medianMaxDrawdownPercent: null,
+    failRatePercent: null,
+    bestExitPattern: "",
+    summary: "Not enough local history yet. Replay improves as SlimeWire tracks more launches.",
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function replayResultForMint(tokenMint = "") {
+  const mint = String(tokenMint || "").trim();
+  return state.replayResults?.[mint] || replayFallbackResult(mint);
+}
+
+function replayMetricLabel(value, suffix = "%") {
+  return Number.isFinite(Number(value)) ? `${Math.round(Number(value))}${suffix}` : "n/a";
+}
+
+function replayBeforeBuyCardHtml(tokenMint = "") {
+  if (!featureEnabled("replayBeforeBuyEnabled", true)) return "";
+  const mint = String(tokenMint || "").trim();
+  if (!mint) return "";
+  const replay = replayResultForMint(mint);
+  const loading = Boolean(state.replayLoading?.[mint]);
+  return `
+    <section class="replay-before-buy-card">
+      <div>
+        <strong>Replay Before You Buy</strong>
+        <small>Compares this setup to similar launches SlimeWire has already tracked.</small>
+      </div>
+      <dl>
+        <div><dt>Similar launches</dt><dd>${escapeHtml(replay.sampleSize ?? 0)}</dd></div>
+        <div><dt>Win rate</dt><dd>${escapeHtml(replayMetricLabel(replay.winRatePercent))}</dd></div>
+        <div><dt>Median drawdown</dt><dd>${escapeHtml(replayMetricLabel(replay.medianMaxDrawdownPercent))}</dd></div>
+      </dl>
+      <p>${escapeHtml(replay.summary || "Not enough local history yet.")}</p>
+      <button type="button" data-replay-open="${escapeHtml(mint)}">${loading ? "Loading..." : "Open Replay"}</button>
+    </section>
+  `;
+}
+
+async function loadReplayBeforeBuy(tokenMint = "", options = {}) {
+  const mint = String(tokenMint || "").trim();
+  if (!mint || !featureEnabled("replayBeforeBuyEnabled", true)) return null;
+  if (!options.force && state.replayResults?.[mint]) return state.replayResults[mint];
+  if (state.replayLoading?.[mint]) return null;
+  state.replayLoading = { ...(state.replayLoading || {}), [mint]: true };
+  renderReplayBeforeBuyDrawer();
+  renderSlimeShieldDetailsDrawer();
+  try {
+    const data = await api(`/api/web/replay-before-buy?mint=${encodeURIComponent(mint)}`, {
+      timeoutMs: 3000,
+      preserveSafeError: true
+    });
+    const replay = data?.replay || null;
+    if (replay) {
+      state.replayResults = { ...(state.replayResults || {}), [mint]: replay };
+      debugCounter(replay.cacheHit ? "replayCacheHit" : "replayCacheMiss");
+    }
+    return replay;
+  } catch {
+    state.replayResults = { ...(state.replayResults || {}), [mint]: replayFallbackResult(mint) };
+    return null;
+  } finally {
+    const nextLoading = { ...(state.replayLoading || {}) };
+    delete nextLoading[mint];
+    state.replayLoading = nextLoading;
+    renderReplayBeforeBuyDrawer();
+    renderSlimeShieldDetailsDrawer();
+  }
+}
+
+function openReplayBeforeBuy(tokenMint = "") {
+  const mint = String(tokenMint || "").trim();
+  if (!mint || !featureEnabled("replayBeforeBuyEnabled", true)) return;
+  state.replayDetails = { open: true, tokenMint: mint };
+  renderReplayBeforeBuyDrawer();
+  void loadReplayBeforeBuy(mint);
+}
+
+function closeReplayBeforeBuy() {
+  state.replayDetails = { open: false, tokenMint: "" };
+  renderReplayBeforeBuyDrawer();
+}
+
+function renderReplayBeforeBuyDrawer() {
+  let root = document.querySelector("[data-replay-drawer-root]");
+  if (!root) {
+    root = document.createElement("div");
+    root.dataset.replayDrawerRoot = "true";
+    document.body.appendChild(root);
+  }
+  const details = state.replayDetails || {};
+  const open = Boolean(details.open && details.tokenMint);
+  document.body.classList.toggle("replay-drawer-open", open);
+  if (!open || !featureEnabled("replayBeforeBuyEnabled", true)) {
+    root.innerHTML = "";
+    return;
+  }
+  const mint = String(details.tokenMint || "").trim();
+  const replay = replayResultForMint(mint);
+  const loading = Boolean(state.replayLoading?.[mint]);
+  root.innerHTML = `
+    <div class="slimeshield-drawer-backdrop" data-replay-close></div>
+    <aside class="replay-before-buy-drawer" role="dialog" aria-modal="true" aria-label="Replay Before You Buy details">
+      <header>
+        <div>
+          <span>Replay Before You Buy</span>
+          <h3>${escapeHtml(shortAddress(mint))}</h3>
+        </div>
+        <button type="button" data-replay-close>Close</button>
+      </header>
+      <section class="replay-summary">
+        <strong>${escapeHtml(replay.summary || "Not enough local history yet.")}</strong>
+        <small>${loading ? "Updating..." : `Confidence: ${escapeHtml(replay.confidence || "low")} · Updated ${escapeHtml(formatDate(replay.updatedAt))}`}</small>
+      </section>
+      <dl class="kol-dump-metrics">
+        <div><dt>Similar launches</dt><dd>${escapeHtml(replay.sampleSize ?? 0)}</dd></div>
+        <div><dt>Win rate</dt><dd>${escapeHtml(replayMetricLabel(replay.winRatePercent))}</dd></div>
+        <div><dt>Median upside</dt><dd>${escapeHtml(replayMetricLabel(replay.medianMaxUpsidePercent))}</dd></div>
+        <div><dt>Median drawdown</dt><dd>${escapeHtml(replayMetricLabel(replay.medianMaxDrawdownPercent))}</dd></div>
+        <div><dt>Fail rate</dt><dd>${escapeHtml(replayMetricLabel(replay.failRatePercent))}</dd></div>
+        <div><dt>Best exit</dt><dd>${escapeHtml(replay.bestExitPattern || "n/a")}</dd></div>
+      </dl>
+      <section>
+        <h4>Matched Traits</h4>
+        ${Array.isArray(replay.matchedTraits) && replay.matchedTraits.length ? `
+          <ul class="slimeshield-factor-list">
+            ${replay.matchedTraits.map((trait) => `<li><span>${escapeHtml(trait)}</span></li>`).join("")}
+          </ul>
+        ` : `<p class="slimeshield-muted">Not enough local coverage yet.</p>`}
+      </section>
+      <button type="button" data-replay-refresh="${escapeHtml(mint)}" ${loading ? "disabled" : ""}>${loading ? "Updating..." : "Refresh Replay"}</button>
+      <p class="slimeshield-safety-copy">Replay uses cached local SlimeWire history only. It does not fetch historical chain data from this drawer.</p>
+    </aside>
+  `;
 }
 
 function renderSlimeShieldDetailsDrawer() {
@@ -12709,6 +12859,7 @@ function renderSlimeShieldDetailsDrawer() {
         <p>${escapeHtml(slimeShieldSuggestedActionLabel(result.suggestedAction))}</p>
         <small>Protected Buy preset suggestion: ${escapeHtml(slimeShieldPresetLabel(result.protectedBuyPreset))}</small>
       </section>
+      ${replayBeforeBuyCardHtml(mint)}
       <div class="slimeshield-drawer-actions">
         ${featureEnabled("protectedBuyEnabled", true) ? `<button type="button" class="primary" data-protected-buy-open="${escapeHtml(mint)}" data-protected-buy-preset="${escapeHtml(result.protectedBuyPreset || protectedBuyPresetForVerdict(verdict))}" data-protected-buy-source="slimeshield-drawer">Protected Buy</button>` : ""}
         <button type="button" data-slimeshield-refresh="${escapeHtml(mint)}" ${loading ? "disabled" : ""}>${loading ? "Updating..." : "Refresh Details"}</button>
@@ -15888,6 +16039,11 @@ document.addEventListener("keydown", (event) => {
     return;
   }
 
+  if (state.replayDetails?.open) {
+    closeReplayBeforeBuy();
+    return;
+  }
+
   if (state.protectedBuyModal?.open) {
     closeProtectedBuyModal();
     return;
@@ -15966,6 +16122,12 @@ document.addEventListener("click", async (event) => {
     closeKolDumpDetails();
     return;
   }
+  const replayCloseTarget = source?.closest?.("[data-replay-close]");
+  if (replayCloseTarget) {
+    event.preventDefault();
+    closeReplayBeforeBuy();
+    return;
+  }
   const tekSummary = source?.closest?.(".tabs .nav-tool-group summary");
   if (tekSummary) {
     event.preventDefault();
@@ -15992,6 +16154,18 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-kol-dump-details]")) {
     event.preventDefault();
     openKolDumpDetails(target.dataset.kolDumpDetails || "");
+    return;
+  }
+
+  if (target.matches("[data-replay-open]")) {
+    event.preventDefault();
+    openReplayBeforeBuy(target.dataset.replayOpen || "");
+    return;
+  }
+
+  if (target.matches("[data-replay-refresh]")) {
+    event.preventDefault();
+    void loadReplayBeforeBuy(target.dataset.replayRefresh || "", { force: true });
     return;
   }
 
@@ -16839,6 +17013,10 @@ document.addEventListener("click", async (event) => {
 
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
+  if (state.replayDetails?.open) {
+    closeReplayBeforeBuy();
+    return;
+  }
   if (state.kolDumpDetails?.open) {
     closeKolDumpDetails();
     return;

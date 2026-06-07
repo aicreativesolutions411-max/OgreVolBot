@@ -10550,6 +10550,91 @@ textarea,
   margin: 0 !important;
 }
 
+.replay-before-buy-card {
+  background: rgba(255, 255, 255, 0.035) !important;
+  border: 1px solid rgba(57, 255, 20, 0.14) !important;
+  border-radius: 8px !important;
+  display: grid !important;
+  gap: 9px !important;
+  padding: 10px !important;
+}
+
+.replay-before-buy-card strong,
+.replay-before-buy-drawer h3,
+.replay-before-buy-drawer h4 {
+  color: #f4ffe9 !important;
+  letter-spacing: 0 !important;
+  margin: 0 !important;
+}
+
+.replay-before-buy-card small,
+.replay-before-buy-card p,
+.replay-before-buy-drawer p,
+.replay-before-buy-drawer small,
+.replay-before-buy-drawer span {
+  color: rgba(230, 255, 221, 0.74) !important;
+  margin: 0 !important;
+}
+
+.replay-before-buy-card dl {
+  display: grid !important;
+  gap: 7px !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  margin: 0 !important;
+}
+
+.replay-before-buy-card dl div {
+  background: rgba(0, 0, 0, 0.18) !important;
+  border-radius: 8px !important;
+  padding: 7px !important;
+}
+
+.replay-before-buy-card dt {
+  color: rgba(230, 255, 221, 0.58) !important;
+  font-size: 0.68rem !important;
+}
+
+.replay-before-buy-card dd {
+  color: #f4ffe9 !important;
+  font-weight: 900 !important;
+  margin: 0 !important;
+}
+
+.replay-before-buy-drawer {
+  background: linear-gradient(180deg, rgba(4, 22, 6, 0.98), rgba(1, 10, 3, 0.98)) !important;
+  border-left: 1px solid rgba(57, 255, 20, 0.28) !important;
+  bottom: 0 !important;
+  box-shadow: -16px 0 34px rgba(0, 0, 0, 0.36) !important;
+  color: #f4ffe9 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 14px !important;
+  max-width: min(460px, calc(100vw - 22px)) !important;
+  overflow-y: auto !important;
+  padding: 16px !important;
+  position: fixed !important;
+  right: 0 !important;
+  top: 0 !important;
+  width: 460px !important;
+  z-index: 903 !important;
+}
+
+.replay-before-buy-drawer header {
+  align-items: center !important;
+  display: flex !important;
+  justify-content: space-between !important;
+  gap: 12px !important;
+}
+
+.replay-summary {
+  background: rgba(57, 255, 20, 0.06) !important;
+  border: 1px solid rgba(57, 255, 20, 0.14) !important;
+  border-radius: 8px !important;
+  display: grid !important;
+  gap: 6px !important;
+  padding: 10px !important;
+}
+
 @media (max-width: 760px) {
   .slimeshield-drawer {
     border-left: 0 !important;
@@ -10567,6 +10652,21 @@ textarea,
   }
 
   .kol-dump-drawer {
+    border-left: 0 !important;
+    border-radius: 18px 18px 0 0 !important;
+    left: 0 !important;
+    max-height: min(86vh, 720px) !important;
+    max-width: 100vw !important;
+    right: 0 !important;
+    top: auto !important;
+    width: 100vw !important;
+  }
+
+  .replay-before-buy-card dl {
+    grid-template-columns: 1fr !important;
+  }
+
+  .replay-before-buy-drawer {
     border-left: 0 !important;
     border-radius: 18px 18px 0 0 !important;
     left: 0 !important;

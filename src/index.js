@@ -116,6 +116,8 @@ const TOKEN_AVATAR_FAIL_TTL_MS = 12 * 60 * 60 * 1000;
 const TOKEN_AVATAR_LOOKUP_CONCURRENCY = 5;
 const slimeShieldCache = new Map();
 const SLIMESHIELD_CACHE_TTL_MS = 45 * 1000;
+const replayBeforeBuyCache = new Map();
+const REPLAY_BEFORE_BUY_TTL_MS = 30 * 60 * 1000;
 const solBalanceCache = new Map();
 const tokenAccountsCache = new Map();
 const tokenBalanceCache = new Map();
@@ -1817,6 +1819,15 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "GET" && pathname === "/api/web/replay-before-buy") {
+      const mint = requestUrl.searchParams.get("mint") || requestUrl.searchParams.get("token") || requestUrl.searchParams.get("tokenMint") || "";
+      sendCachedWebJson(request, response, 200, {
+        ok: true,
+        replay: await webReplayBeforeBuy(mint)
+      }, "public, max-age=300, stale-while-revalidate=1800");
+      return;
+    }
+
     if (request.method === "GET" && pathname === "/api/web/token-image") {
       await sendWebTokenImage(request, response, requestUrl);
       return;
@@ -2384,6 +2395,15 @@ async function handleWebApiRequest(request, response, requestUrl) {
         ok: true,
         slimeshield: await webSlimeShield(mint)
       }, "public, max-age=15, stale-while-revalidate=60");
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/replay-before-buy") {
+      const mint = requestUrl.searchParams.get("mint") || requestUrl.searchParams.get("token") || requestUrl.searchParams.get("tokenMint") || "";
+      sendCachedWebJson(request, response, 200, {
+        ok: true,
+        replay: await webReplayBeforeBuy(mint)
+      }, "public, max-age=300, stale-while-revalidate=1800");
       return;
     }
 
@@ -26335,6 +26355,116 @@ async function webSlimeShield(tokenMint = "") {
     await cacheSetJson(externalKey, displayCacheEnvelope(result), SLIMESHIELD_CACHE_TTL_MS).catch(() => false);
   }
   return result;
+}
+
+function replayExternalKey(mint = "", bucketHash = "low-data") {
+  return externalCacheKey(`replay:${String(mint || "").trim().toLowerCase()}:${bucketHash}`, "global");
+}
+
+function replayBucket(value, bands = []) {
+  const number = firstMeaningfulNumber(value);
+  if (number === null) return "unknown";
+  for (const [label, max] of bands) {
+    if (number < max) return label;
+  }
+  return bands[bands.length - 1]?.[0] || "unknown";
+}
+
+function replayTraits(row = {}) {
+  const liquidity = firstMeaningfulNumber(row.liquidityUsd, row.currentLiquidityUsd, row.liquidity?.usd);
+  const marketCap = firstMeaningfulNumber(row.marketCap, row.fdv, row.marketCapUsd, row.usdMarketCap);
+  const ageMinutes = firstMeaningfulNumber(row.pairAgeMinutes, row.ageMinutes, Number(row.pairAgeSeconds) / 60);
+  const volume = firstMeaningfulNumber(row.volumeM15, row.volumeH1, row.volume5m, row.volumeUsd);
+  const riskText = [
+    ...(Array.isArray(row.riskFlags) ? row.riskFlags : []),
+    ...(Array.isArray(row.bestPickWarnings) ? row.bestPickWarnings : []),
+    ...(Array.isArray(row.scoreWarnings) ? row.scoreWarnings : [])
+  ].join(" ").toLowerCase();
+  return {
+    liquidity: replayBucket(liquidity, [["micro_liq", 3_000], ["thin_liq", 10_000], ["medium_liq", 50_000], ["deep_liq", Number.POSITIVE_INFINITY]]),
+    marketCap: replayBucket(marketCap, [["micro_cap", 20_000], ["small_cap", 100_000], ["mid_cap", 500_000], ["large_cap", Number.POSITIVE_INFINITY]]),
+    age: replayBucket(ageMinutes, [["seconds_old", 1], ["fresh", 10], ["young", 60], ["aged", Number.POSITIVE_INFINITY]]),
+    volume: replayBucket(volume, [["quiet", 2_000], ["moving", 10_000], ["active", 50_000], ["hot", Number.POSITIVE_INFINITY]]),
+    bundleRisk: /bundle|cluster|concentr/.test(riskText) ? "bundle_risk" : "bundle_unknown",
+    holderRisk: /holder|insider|fresh wallet|dev/.test(riskText) ? "holder_risk" : "holder_unknown"
+  };
+}
+
+function replayBucketHash(traits = {}) {
+  return [traits.liquidity, traits.marketCap, traits.age, traits.volume, traits.bundleRisk, traits.holderRisk].join("-");
+}
+
+function replayMatchScore(current = {}, candidate = {}) {
+  return ["liquidity", "marketCap", "age", "volume", "bundleRisk", "holderRisk"]
+    .reduce((score, key) => score + (current[key] && current[key] === candidate[key] ? 1 : 0), 0);
+}
+
+function replayOutcome(row = {}) {
+  const moves = [row.h1, row.h6, row.h24, row.m5, row.priceChangeH1, row.priceChangeH24]
+    .map((value) => firstMeaningfulNumber(value))
+    .filter((value) => Number.isFinite(value));
+  const best = moves.length ? Math.max(...moves) : null;
+  const worst = moves.length ? Math.min(...moves) : null;
+  return { best, worst, win: Number.isFinite(best) ? best > 0 : null };
+}
+
+function medianNumber(values = []) {
+  const sorted = values.filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
+  if (!sorted.length) return null;
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+async function webReplayBeforeBuy(tokenMint = "") {
+  const mint = String(tokenMint || "").trim();
+  const row = localMarketRowForMint(mint) || { tokenMint: mint };
+  const traits = replayTraits(row);
+  const bucketHash = replayBucketHash(traits);
+  const cacheKey = `${mint}:${bucketHash}`;
+  const cached = replayBeforeBuyCache.get(cacheKey);
+  if (cached?.value && Date.now() - Number(cached.cachedAt || 0) < REPLAY_BEFORE_BUY_TTL_MS) {
+    return { ...cached.value, cacheHit: true, cacheSource: "memory" };
+  }
+  const external = await cacheGetJson(replayExternalKey(mint, bucketHash)).catch(() => null);
+  if (external?.value && Number.isFinite(Number(external.cachedAt)) && Date.now() - Number(external.cachedAt) < REPLAY_BEFORE_BUY_TTL_MS) {
+    replayBeforeBuyCache.set(cacheKey, { cachedAt: Number(external.cachedAt), value: external.value });
+    return { ...external.value, cacheHit: true, cacheSource: kvProviderName() };
+  }
+
+  const rows = uniqueSniperScoreRows(rowsFromCachedMarketFeeds())
+    .filter((candidate) => candidate?.tokenMint && String(candidate.tokenMint) !== mint)
+    .map((candidate) => ({ row: candidate, traits: replayTraits(candidate) }))
+    .map((candidate) => ({ ...candidate, matchScore: replayMatchScore(traits, candidate.traits) }))
+    .filter((candidate) => candidate.matchScore >= 2)
+    .sort((a, b) => b.matchScore - a.matchScore)
+    .slice(0, 80);
+  const outcomes = rows.map((candidate) => replayOutcome(candidate.row));
+  const wins = outcomes.filter((outcome) => outcome.win === true).length;
+  const knownOutcomes = outcomes.filter((outcome) => outcome.win !== null).length;
+  const medianUpside = medianNumber(outcomes.map((outcome) => outcome.best));
+  const medianDrawdown = medianNumber(outcomes.map((outcome) => outcome.worst));
+  const sampleSize = rows.length;
+  const enough = sampleSize >= 8 && knownOutcomes >= 5;
+  const value = {
+    mint,
+    sampleSize,
+    confidence: enough ? sampleSize >= 25 ? "high" : "medium" : "low",
+    matchedTraits: Object.entries(traits).map(([key, value]) => `${key}: ${value}`),
+    winRatePercent: enough ? Math.round((wins / Math.max(1, knownOutcomes)) * 100) : null,
+    medianMaxUpsidePercent: enough && Number.isFinite(medianUpside) ? Math.round(medianUpside) : null,
+    medianMaxDrawdownPercent: enough && Number.isFinite(medianDrawdown) ? Math.round(medianDrawdown) : null,
+    failRatePercent: enough ? Math.round(((knownOutcomes - wins) / Math.max(1, knownOutcomes)) * 100) : null,
+    bestExitPattern: enough ? "Scale out early; keep stops tight on weak liquidity." : "",
+    summary: enough
+      ? `Matched ${sampleSize} cached local setups with similar launch traits.`
+      : "Not enough local history yet. Replay improves as SlimeWire tracks more launches.",
+    updatedAt: new Date().toISOString(),
+    cacheHit: false,
+    cacheSource: "local-cache"
+  };
+  replayBeforeBuyCache.set(cacheKey, { cachedAt: Date.now(), value });
+  await cacheSetJson(replayExternalKey(mint, bucketHash), displayCacheEnvelope(value), REPLAY_BEFORE_BUY_TTL_MS).catch(() => false);
+  return value;
 }
 
 function livePairCandidateDedupeKey(candidate) {
