@@ -20584,6 +20584,51 @@ async function hydrateDevInfoFromSourceData(mint = "", row = null, options = {})
   });
 }
 
+async function boundedDevInfoSourceHydration(mint = "", row = null, options = {}) {
+  const cleanMint = String(mint || row?.tokenMint || row?.mint || "").trim();
+  const timeoutMs = Math.max(500, Math.min(Number(options.timeoutMs || 4_000), 6_000));
+  const sourcePromise = hydrateDevInfoFromSourceData(cleanMint, row, options);
+  let timedOut = false;
+  const timeoutResult = new Promise((resolve) => {
+    setTimeout(() => {
+      timedOut = true;
+      resolve({
+        row,
+        hydrated: false,
+        pending: true,
+        message: "Source refresh is still running. Showing cached data now; stored results will appear on the next refresh."
+      });
+    }, timeoutMs);
+  });
+  const result = await Promise.race([sourcePromise, timeoutResult]);
+  if (timedOut) {
+    sourcePromise
+      .then(async (source) => {
+        if (!source || !cleanMint) return;
+        const nextRow = source.row || row || { tokenMint: cleanMint };
+        const computed = await computeDevInfoFromLocalData(cleanMint, nextRow, { persist: true });
+        await writeDevInfoCaches(cleanMint, {
+          ...computed,
+          sourceHydration: {
+            hydrated: Boolean(source.hydrated),
+            skipped: Boolean(source.skipped),
+            source: source.source || "",
+            wallet: source.wallet || source.candidate?.likelyDevWallet || computed.likelyDevWallet || "",
+            eventsStored: Number(source.eventsStored || 0),
+            signaturesScanned: Number(source.signaturesScanned || 0),
+            transactionsParsed: Number(source.transactionsParsed || 0),
+            message: source.message || ""
+          }
+        }).catch(() => {});
+      })
+      .catch((error) => {
+        devInfoStats.errors += 1;
+        devInfoStats.lastError = safePerfEventText(error?.message || "Async Dev Info source hydration failed", 140);
+      });
+  }
+  return result;
+}
+
 function localDevHistoricalStatsFromRow(row = {}, likelyDevWallet = "") {
   const launchesTracked = firstMeaningfulNumber(row.devLaunchesTracked, row.launchesTracked, row.devInfoLaunchesTracked);
   if (!Number.isFinite(launchesTracked)) return null;
@@ -20890,10 +20935,11 @@ async function webDevInfoDetails(tokenMint = "", options = {}) {
     }
   }
   const sourceHydration = force
-    ? await hydrateDevInfoFromSourceData(mint, row, {
+    ? await boundedDevInfoSourceHydration(mint, row, {
       reason: "details-force",
       signatureLimit: CONFIG.devInfoSourceSignatureLimit,
-      transactionLimit: CONFIG.devInfoSourceTransactionLimit
+      transactionLimit: CONFIG.devInfoSourceTransactionLimit,
+      timeoutMs: 4_200
     }).catch((error) => ({
       row,
       hydrated: false,
@@ -29038,10 +29084,11 @@ async function webSlimeShield(tokenMint = "", options = {}) {
     }
   }
   const sourceHydration = force
-    ? await hydrateDevInfoFromSourceData(mint, baseRow, {
+    ? await boundedDevInfoSourceHydration(mint, baseRow, {
       reason: "slimeshield-force",
       signatureLimit: Math.min(4, CONFIG.devInfoSourceSignatureLimit),
-      transactionLimit: Math.min(2, CONFIG.devInfoSourceTransactionLimit)
+      transactionLimit: Math.min(2, CONFIG.devInfoSourceTransactionLimit),
+      timeoutMs: 2_800
     }).catch(() => null)
     : null;
   if (sourceHydration?.row) baseRow = sourceHydration.row;

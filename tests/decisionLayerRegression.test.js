@@ -215,7 +215,7 @@ test("Dev Info row pill, drawer, and endpoints are cache-first", () => {
   assert.match(functionBody("computeDevInfoFromLocalData", serverSource), /devInfoReferenceLinks/);
   assert.match(functionBody("webDevInfoDetails", serverSource), /hydrateMarketRowFromPublicSources/);
   assert.match(functionBody("webDevInfoDetails", serverSource), /marketContext/);
-  assert.match(functionBody("webDevInfoDetails", serverSource), /hydrateDevInfoFromSourceData/);
+  assert.match(functionBody("webDevInfoDetails", serverSource), /boundedDevInfoSourceHydration/);
   assert.match(functionBody("webDevInfoDetails", serverSource), /sourceHydration/);
   assert.match(functionBody("openDevInfoDetails"), /loadDevInfoDetails\(mint, \{ force: true \}\)/);
   assert.match(functionBody("loadDevInfoDetails"), /force=true/);
@@ -248,6 +248,8 @@ test("Dev Info source hydration is capped, stored, and click scoped", () => {
   assert.match(functionBody("hydrateDevInfoFromSourceData", serverSource), /persistPostgresDevWalletEvents/);
   assert.match(functionBody("hydrateDevInfoFromSourceData", serverSource), /persistPostgresProcessedTransactionEvents/);
   assert.match(functionBody("hydrateDevInfoFromSourceData", serverSource), /CONFIG\.devInfoSourceTransactionLimit/);
+  assert.match(functionBody("boundedDevInfoSourceHydration", serverSource), /Promise\.race/);
+  assert.match(functionBody("boundedDevInfoSourceHydration", serverSource), /Source refresh is still running/);
   assert.match(functionBody("devCurrentTokenSnapshotEvent", serverSource), /getTokenBalanceForMintCached/);
   assert.match(functionBody("devCurrentTokenSnapshotEvent", serverSource), /getTokenSupply/);
   assert.match(functionBody("hydrateMarketRowFromPublicSources", serverSource), /getPumpFunTokenMetadata/);
