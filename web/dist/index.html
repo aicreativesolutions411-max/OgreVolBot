@@ -18,12 +18,12 @@
     <link rel="preload" as="image" href="/assets/slimewire/svg/icons/wallet.svg">
     <link rel="preload" as="image" href="/assets/slimewire/svg/powered-by-ogres-badge.svg">
     <link rel="stylesheet" href="/tailwind.css?v=20260603-tailwind-v1">
-    <link rel="stylesheet" href="/styles.css?v=20260607161509">
-    <link rel="stylesheet" href="/slimewire-final-overrides.css?v=20260607161509">
+    <link rel="stylesheet" href="/styles.css?v=20260607163143">
+    <link rel="stylesheet" href="/slimewire-final-overrides.css?v=20260607163143">
     <script src="/config.js"></script>
     <script src="/vendor/tweetnacl-fast.min.js"></script>
     <script src="/vendor/solana-web3.iife.min.js?v=20260605-browser-trade-v1"></script>
-    <script type="module" src="/app.js?v=20260607161509"></script>
+    <script type="module" src="/app.js?v=20260607163143"></script>
   </head>
   <body>
     <main class="shell" data-app data-route="intro">
@@ -101,6 +101,88 @@
         </form>
       </header>
 
+      <section class="swamp-market-ticker" data-market-ticker aria-label="Sponsors and KOLs">
+        <span class="swamp-ticker-label">Swamp Tape</span>
+        <div class="swamp-ticker-mask">
+          <div class="swamp-ticker-track">
+            <div class="swamp-ticker-strip">
+              <span class="swamp-ticker-section">Sponsors</span>
+              <details class="swamp-ticker-item is-sponsor" name="swamp-ticker">
+                <summary aria-label="Open Powered by Ogres ticker links">
+                  <img src="./assets/slimewire/support/ogres-sponsor-icon.jpg" data-fallback-src="./assets/slimewire/png/slimewire-mark.png" alt="">
+                  <span><strong>Powered by Ogres</strong><small>Ecosystem Partners</small></span>
+                </summary>
+                <div class="swamp-ticker-links" aria-label="Powered by Ogres links">
+                  <a href="https://t.me/ogrecoinonsol" target="_blank" rel="noreferrer">Telegram</a>
+                  <a href="https://ogremode.com/" target="_blank" rel="noreferrer">Website</a>
+                  <a href="https://twitter.com/i/communities/1930265213917425858" target="_blank" rel="noreferrer">X</a>
+                </div>
+              </details>
+              <details class="swamp-ticker-item is-sponsor" name="swamp-ticker">
+                <summary aria-label="Open ASML ticker links">
+                  <img src="./assets/slimewire/support/asml-x-pfp.jpg" data-fallback-src="https://unavatar.io/twitter/asmlsolana" alt="" loading="lazy" referrerpolicy="no-referrer">
+                  <span><strong>ASML</strong><small>Strategic Backer</small></span>
+                </summary>
+                <div class="swamp-ticker-links" aria-label="ASML links">
+                  <a href="https://share.google/MoGOo5mqDvAEy0iwG" target="_blank" rel="noreferrer">Dex</a>
+                  <a href="https://x.com/asmlsolana?s=21" target="_blank" rel="noreferrer">X</a>
+                </div>
+              </details>
+              <details class="swamp-ticker-item is-sponsor" name="swamp-ticker">
+                <summary aria-label="Open USD2 ticker links">
+                  <img src="./assets/slimewire/support/usd2-sponsor-logo.jpg" data-fallback-src="./assets/slimewire/png/slimewire-mark.png" alt="" loading="lazy" referrerpolicy="no-referrer">
+                  <span><strong>USD2</strong><small>Stablecoin Partner</small></span>
+                </summary>
+                <div class="swamp-ticker-links" aria-label="USD2 links">
+                  <a href="https://share.google/y94z9bxjK4RVVohnm" target="_blank" rel="noreferrer">Dex</a>
+                  <a href="https://x.com/USD2onSolana" target="_blank" rel="noreferrer">X</a>
+                  <a href="https://share.google/F9EuKDnbjbVml9zK5" target="_blank" rel="noreferrer">Website</a>
+                  <a href="https://t.me/USD2Solana" target="_blank" rel="noreferrer">Telegram</a>
+                </div>
+              </details>
+              <span class="swamp-ticker-section">KOLs</span>
+              <details class="swamp-ticker-item is-kol" name="swamp-ticker">
+                <summary aria-label="Open MoonPieJoe ticker links">
+                  <img src="./assets/slimewire/support/moonpiejoe-x-pfp.jpg" data-fallback-src="https://unavatar.io/twitter/moonpiejoe" alt="" loading="lazy" referrerpolicy="no-referrer">
+                  <span><strong>MoonPieJoe</strong><small>@moonpiejoe</small></span>
+                </summary>
+                <div class="swamp-ticker-links" aria-label="MoonPieJoe links">
+                  <a href="https://x.com/moonpiejoe" target="_blank" rel="noreferrer">X</a>
+                </div>
+              </details>
+              <details class="swamp-ticker-item is-kol" name="swamp-ticker">
+                <summary aria-label="Open Rezzy ticker links">
+                  <img src="https://unavatar.io/twitter/zero_taxes" data-fallback-src="./assets/slimewire/png/slimewire-mark.png" alt="" loading="lazy" referrerpolicy="no-referrer">
+                  <span><strong>Rezzy</strong><small>@zero_taxes</small></span>
+                </summary>
+                <div class="swamp-ticker-links" aria-label="Rezzy links">
+                  <a href="https://x.com/zero_taxes" target="_blank" rel="noreferrer">X</a>
+                </div>
+              </details>
+              <details class="swamp-ticker-item is-kol" name="swamp-ticker">
+                <summary aria-label="Open God's Plan ticker links">
+                  <img src="https://unavatar.io/twitter/makafog" data-fallback-src="./assets/slimewire/png/slimewire-mark.png" alt="" loading="lazy" referrerpolicy="no-referrer">
+                  <span><strong>God's Plan</strong><small>@makafog</small></span>
+                </summary>
+                <div class="swamp-ticker-links" aria-label="God's Plan links">
+                  <a href="https://x.com/makafog" target="_blank" rel="noreferrer">X</a>
+                </div>
+              </details>
+            </div>
+            <div class="swamp-ticker-strip" aria-hidden="true" inert>
+              <span class="swamp-ticker-section">Sponsors</span>
+              <span class="swamp-ticker-clone"><img src="./assets/slimewire/support/ogres-sponsor-icon.jpg" alt=""><strong>Powered by Ogres</strong><small>Ecosystem Partners</small></span>
+              <span class="swamp-ticker-clone"><img src="./assets/slimewire/support/asml-x-pfp.jpg" alt=""><strong>ASML</strong><small>Strategic Backer</small></span>
+              <span class="swamp-ticker-clone"><img src="./assets/slimewire/support/usd2-sponsor-logo.jpg" alt=""><strong>USD2</strong><small>Stablecoin Partner</small></span>
+              <span class="swamp-ticker-section">KOLs</span>
+              <span class="swamp-ticker-clone"><img src="./assets/slimewire/support/moonpiejoe-x-pfp.jpg" alt=""><strong>MoonPieJoe</strong><small>@moonpiejoe</small></span>
+              <span class="swamp-ticker-clone"><img src="https://unavatar.io/twitter/zero_taxes" alt=""><strong>Rezzy</strong><small>@zero_taxes</small></span>
+              <span class="swamp-ticker-clone"><img src="https://unavatar.io/twitter/makafog" alt=""><strong>God's Plan</strong><small>@makafog</small></span>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section class="login-modal" data-login-modal role="presentation" aria-hidden="true" hidden>
         <button class="login-modal-backdrop" type="button" data-close-login aria-label="Close login"></button>
         <article class="login-modal-card" role="dialog" aria-modal="true" aria-labelledby="login-modal-title">
@@ -157,82 +239,9 @@
       </section>
 
       <section class="login-view swamp-splash" data-login>
-        <aside class="swamp-support-frame swamp-kol-frame" aria-label="KOL supporters">
-          <img class="swamp-support-frame-art" src="./assets/slimewire/support/kol-frame.jpg" data-fallback-src="./assets/slimewire/png/slime-border-frame-rich.png" alt="KOLs">
-          <div class="swamp-support-content">
-            <a class="swamp-support-bubble" href="https://x.com/moonpiejoe" target="_blank" rel="noreferrer" aria-label="Open MoonPieJoe on X">
-              <img src="./assets/slimewire/support/moonpiejoe-x-pfp.jpg" data-fallback-src="https://unavatar.io/twitter/moonpiejoe" alt="MoonPieJoe X profile picture" loading="lazy" referrerpolicy="no-referrer">
-              <span>
-                <strong>MoonPieJoe</strong>
-                <small>@moonpiejoe</small>
-              </span>
-            </a>
-            <a class="swamp-support-bubble" href="https://x.com/zero_taxes" target="_blank" rel="noreferrer" aria-label="Open Rezzy on X">
-              <img src="https://unavatar.io/twitter/zero_taxes" data-fallback-src="./assets/slimewire/png/slimewire-mark.png" alt="Rezzy X profile picture" loading="lazy" referrerpolicy="no-referrer">
-              <span>
-                <strong>Rezzy</strong>
-                <small>@zero_taxes</small>
-              </span>
-            </a>
-            <a class="swamp-support-bubble" href="https://x.com/makafog" target="_blank" rel="noreferrer" aria-label="Open God's Plan on X">
-              <img src="https://unavatar.io/twitter/makafog" data-fallback-src="./assets/slimewire/png/slimewire-mark.png" alt="God's Plan X profile picture" loading="lazy" referrerpolicy="no-referrer">
-              <span>
-                <strong>God's Plan</strong>
-                <small>@makafog</small>
-              </span>
-            </a>
-          </div>
-        </aside>
         <a class="swamp-splash-button" href="/connect" data-nav-route="/connect" aria-label="Enter the Swamp">
           <img class="swamp-splash-reference" src="./assets/slimewire/references/enter-swamp-reference.jpg" data-fallback-src="./assets/slimewire/png/slimewire-mark.png" alt="Enter the Swamp">
         </a>
-        <aside class="swamp-support-frame swamp-sponsor-frame" aria-label="Sponsor coins">
-          <img class="swamp-support-frame-art" src="./assets/slimewire/support/sponsor-frame.jpg" data-fallback-src="./assets/slimewire/png/slime-border-frame-rich.png" alt="Sponsors">
-          <div class="swamp-support-content">
-            <details class="swamp-sponsor-social">
-              <summary aria-label="Open Powered by Ogres social links">
-                <img src="./assets/slimewire/support/ogres-sponsor-icon.jpg" data-fallback-src="./assets/slimewire/png/slimewire-mark.png" alt="Powered by Ogres icon">
-                <span>
-                  <strong>Powered by Ogres</strong>
-                  <small>Ecosystem Partners</small>
-                </span>
-              </summary>
-              <div class="swamp-sponsor-links" aria-label="Powered by Ogres links">
-                <a href="https://t.me/ogrecoinonsol" target="_blank" rel="noreferrer">Telegram</a>
-                <a href="https://ogremode.com/" target="_blank" rel="noreferrer">Website</a>
-                <a href="https://twitter.com/i/communities/1930265213917425858" target="_blank" rel="noreferrer">X</a>
-              </div>
-            </details>
-            <details class="swamp-sponsor-social swamp-sponsor-token">
-              <summary aria-label="Open ASML sponsor links">
-                <img src="./assets/slimewire/support/asml-x-pfp.jpg" data-fallback-src="https://unavatar.io/twitter/asmlsolana" alt="ASML X profile picture" loading="lazy" referrerpolicy="no-referrer">
-                <span>
-                  <strong>ASML</strong>
-                  <small>Strategic Backer</small>
-                </span>
-              </summary>
-              <div class="swamp-sponsor-links" aria-label="ASML links">
-                <a href="https://share.google/MoGOo5mqDvAEy0iwG" target="_blank" rel="noreferrer">Dex</a>
-                <a href="https://x.com/asmlsolana?s=21" target="_blank" rel="noreferrer">X</a>
-              </div>
-            </details>
-            <details class="swamp-sponsor-social swamp-sponsor-token">
-              <summary aria-label="Open USD2 sponsor links">
-                <img src="./assets/slimewire/support/usd2-sponsor-logo.jpg" data-fallback-src="./assets/slimewire/png/slimewire-mark.png" alt="USD2 logo" loading="lazy" referrerpolicy="no-referrer">
-                <span>
-                  <strong>USD2</strong>
-                  <small>Stablecoin Partner</small>
-                </span>
-              </summary>
-              <div class="swamp-sponsor-links" aria-label="USD2 links">
-                <a href="https://share.google/y94z9bxjK4RVVohnm" target="_blank" rel="noreferrer">Dex</a>
-                <a href="https://x.com/USD2onSolana" target="_blank" rel="noreferrer">X</a>
-                <a href="https://share.google/F9EuKDnbjbVml9zK5" target="_blank" rel="noreferrer">Website</a>
-                <a href="https://t.me/USD2Solana" target="_blank" rel="noreferrer">Telegram</a>
-              </div>
-            </details>
-          </div>
-        </aside>
       </section>
 
       <section class="connect-view" data-connect hidden>

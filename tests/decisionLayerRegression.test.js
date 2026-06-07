@@ -228,18 +228,22 @@ test("Slime Scope refreshes its own bucket and Details buttons stay compact gree
   assert.match(cssSource, /swamp-sponsor-links[\s\S]*z-index: 90/);
 });
 
-test("USD2 sponsor entry opens the same popup link menu as other sponsors", () => {
-  assert.match(indexSource, /Open USD2 sponsor links/);
+test("landing sponsor and KOL entries use the compact top ticker", () => {
+  assert.match(indexSource, /data-market-ticker/);
+  assert.match(indexSource, /Swamp Tape/);
+  assert.match(indexSource, /Open USD2 ticker links/);
+  assert.match(indexSource, /Open MoonPieJoe ticker links/);
   assert.match(indexSource, /assets\/slimewire\/support\/usd2-sponsor-logo\.jpg/);
   assert.match(indexSource, /https:\/\/share\.google\/y94z9bxjK4RVVohnm/);
   assert.match(indexSource, /https:\/\/x\.com\/USD2onSolana/);
   assert.match(indexSource, /https:\/\/share\.google\/F9EuKDnbjbVml9zK5/);
   assert.match(indexSource, /https:\/\/t\.me\/USD2Solana/);
-  assert.match(cssSource, /LANDING_SPONSOR_TOKENS_V2/);
-  assert.match(cssSource, /LANDING_MOBILE_SPONSOR_POPUP_V1/);
-  assert.match(cssSource, /swamp-sponsor-social\[open\] \.swamp-sponsor-links[\s\S]*position: fixed/);
+  assert.match(cssSource, /LANDING_MARKET_TICKER_V1/);
+  assert.match(cssSource, /swampMarketTickerScroll/);
+  assert.match(cssSource, /swamp-ticker-item\[open\] \.swamp-ticker-links[\s\S]*position: fixed/);
   assert.match(indexSource, /Stablecoin Partner/);
-  assert.match(cssSource, /swamp-sponsor-token \.swamp-sponsor-links[\s\S]*repeat\(2, minmax\(0, 1fr\)\)/);
+  assert.doesNotMatch(indexSource, /swamp-sponsor-frame/);
+  assert.doesNotMatch(indexSource, /swamp-kol-frame/);
 });
 
 test("dev-only performance counters include requested smoothness diagnostics", () => {
