@@ -12218,3 +12218,35 @@ body:has(main.shell[data-app][data-route="connect"]) [data-ogre-agent-root] {
     width: min(54vw, 260px) !important;
   }
 }
+
+/* MOBILE_LIVE_PAIRS_STABLE_REFRESH_V1: keep mobile live/scanner feeds from flashing or jumping while rows refresh in place. */
+@media (max-width: 760px) {
+  html,
+  body,
+  main.shell[data-app][data-route="terminal"] {
+    overflow-anchor: auto !important;
+    scroll-behavior: auto !important;
+  }
+
+  main.shell[data-app][data-route="terminal"][data-active-tab="live"] .panel-host,
+  main.shell[data-app][data-route="terminal"][data-active-tab="slimeScope"] .panel-host,
+  main.shell[data-app][data-route="terminal"][data-active-tab="live"] [data-panel],
+  main.shell[data-app][data-route="terminal"][data-active-tab="slimeScope"] [data-panel],
+  main.shell[data-app][data-route="terminal"][data-active-tab="live"] .terminal-main,
+  main.shell[data-app][data-route="terminal"][data-active-tab="slimeScope"] .terminal-main {
+    background-color: rgba(0, 8, 3, 0.98) !important;
+    min-height: 100svh !important;
+    overscroll-behavior: contain !important;
+    scroll-behavior: auto !important;
+  }
+
+  main.shell[data-app][data-route="terminal"][data-active-tab="live"][data-loading="true"] .panel-host,
+  main.shell[data-app][data-route="terminal"][data-active-tab="slimeScope"][data-loading="true"] .panel-host {
+    opacity: 1 !important;
+  }
+
+  main.shell[data-app][data-route="terminal"] .signal-list,
+  main.shell[data-app][data-route="terminal"] .signal-row {
+    overflow-anchor: auto !important;
+  }
+}

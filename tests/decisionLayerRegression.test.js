@@ -228,6 +228,19 @@ test("Slime Scope refreshes its own bucket and Details buttons stay compact gree
   assert.match(cssSource, /swamp-sponsor-links[\s\S]*z-index: 90/);
 });
 
+test("mobile Live Pairs and Slime Scope refresh without resetting scroll position", () => {
+  assert.match(appSource, /MOBILE_STABLE_FEED_TABS = new Set\(\["live", "slimeScope"\]\)/);
+  assert.match(functionBody("captureStableFeedScrollSnapshot"), /panel\.dataset\.renderedTab/);
+  assert.match(functionBody("captureStableFeedScrollSnapshot"), /anchorKey/);
+  assert.match(functionBody("restoreStableFeedScrollSnapshot"), /window\.scrollTo\(0, Math\.max\(0, \(window\.scrollY \|\| 0\) \+ delta\)\)/);
+  assert.match(functionBody("restoreStableFeedScrollSnapshot"), /window\.setTimeout\(restore, 240\)/);
+  assert.match(functionBody("renderTabs"), /captureStableFeedScrollSnapshot\(panel\)/);
+  assert.match(functionBody("renderTabs"), /panel\.dataset\.renderedTab = state\.activeTab \|\| ""/);
+  assert.match(functionBody("renderTabs"), /restoreStableFeedScrollSnapshot\(stableFeedScrollSnapshot, panel\)/);
+  assert.match(cssSource, /MOBILE_LIVE_PAIRS_STABLE_REFRESH_V1/);
+  assert.match(cssSource, /data-active-tab="live"[\s\S]*opacity: 1 !important/);
+});
+
 test("landing sponsor and KOL entries use the compact top ticker", () => {
   assert.match(indexSource, /data-market-ticker/);
   assert.match(indexSource, /Swamp Sponsors/);

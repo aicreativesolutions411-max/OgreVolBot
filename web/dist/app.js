@@ -4215,9 +4215,68 @@ function requestSmartChartScrollIntoView(panel = document) {
   });
 }
 
+const MOBILE_STABLE_FEED_TABS = new Set(["live", "slimeScope"]);
+const STABLE_FEED_ROW_SELECTOR = [
+  ".signal-row[data-token-chart]",
+  ".terminal-token-row[data-token-chart]",
+  ".compact-signal-row[data-token-chart]",
+  "[data-token-chart][data-token-chart-source]"
+].join(",");
+
+function stableFeedSelectorValue(value = "") {
+  return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function captureStableFeedScrollSnapshot(panel = $("[data-panel]")) {
+  if (!panel || state.route !== "terminal" || !MOBILE_STABLE_FEED_TABS.has(state.activeTab)) return null;
+  if (panel.dataset.renderedTab && panel.dataset.renderedTab !== state.activeTab) return null;
+  const rows = Array.from(panel.querySelectorAll(STABLE_FEED_ROW_SELECTOR));
+  if (!rows.length) return null;
+  const anchor = rows.find((row) => {
+    const rect = row.getBoundingClientRect();
+    return rect.bottom > 72 && rect.top < Math.min(window.innerHeight || 720, 720);
+  }) || rows[0];
+  const anchorKey = anchor?.dataset?.tokenChart || anchor?.dataset?.tokenMint || "";
+  return {
+    tab: state.activeTab,
+    windowY: window.scrollY || 0,
+    anchorKey,
+    anchorTop: anchor ? anchor.getBoundingClientRect().top : 0
+  };
+}
+
+function restoreStableFeedScrollSnapshot(snapshot, panel = $("[data-panel]")) {
+  if (!snapshot || state.route !== "terminal" || snapshot.tab !== state.activeTab) return;
+  const restore = () => {
+    const currentPanel = panel?.isConnected ? panel : $("[data-panel]");
+    let restoredAnchor = false;
+    if (snapshot.anchorKey && currentPanel) {
+      const selectorValue = stableFeedSelectorValue(snapshot.anchorKey);
+      const anchor = currentPanel.querySelector(`[data-token-chart="${selectorValue}"], [data-token-mint="${selectorValue}"]`);
+      if (anchor) {
+        const nextTop = anchor.getBoundingClientRect().top;
+        const delta = nextTop - Number(snapshot.anchorTop || 0);
+        if (Number.isFinite(delta) && Math.abs(delta) > 1) {
+          window.scrollTo(0, Math.max(0, (window.scrollY || 0) + delta));
+        }
+        restoredAnchor = true;
+      }
+    }
+    if (!restoredAnchor && Math.abs((window.scrollY || 0) - Number(snapshot.windowY || 0)) > 8) {
+      window.scrollTo(0, Math.max(0, Number(snapshot.windowY || 0)));
+    }
+  };
+  requestAnimationFrame(() => {
+    restore();
+    window.setTimeout(restore, 90);
+    window.setTimeout(restore, 240);
+  });
+}
+
 function renderTabs() {
   const panel = $("[data-panel]");
   if (!panel) return;
+  const stableFeedScrollSnapshot = captureStableFeedScrollSnapshot(panel);
   const terminalDockScrollTop = state.activeTab === "terminal"
     ? (panel.querySelector(".terminal-dock")?.scrollTop || 0)
     : 0;
@@ -4253,8 +4312,10 @@ function renderTabs() {
   if (state.activeTab === "pnl") panel.innerHTML = pnlHtml();
   if (state.activeTab === "txAudit") panel.innerHTML = txAuditHtml();
   if (state.activeTab === "sniper") panel.innerHTML = sniperHtml();
+  panel.dataset.renderedTab = state.activeTab || "";
   if (state.activeTab === "ogreTek") {
     panel.innerHTML = ogreTekHtml();
+    panel.dataset.renderedTab = state.activeTab || "";
     ensureOgreTekData();
   }
   syncCustomFields(panel);
@@ -4279,6 +4340,7 @@ function renderTabs() {
       if (nextDock) nextDock.scrollTop = terminalDockScrollTop;
     });
   }
+  restoreStableFeedScrollSnapshot(stableFeedScrollSnapshot, panel);
   ensureLivePairsWarmup();
   scheduleLivePairsAutoRefresh();
   scheduleScannerAutoRefresh();
