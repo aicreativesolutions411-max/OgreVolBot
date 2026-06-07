@@ -11831,3 +11831,390 @@ html body main.shell[data-app][data-route="intro"] .login-view.swamp-splash {
     min-height: calc(100svh - 82px) !important;
   }
 }
+
+/* LANDING_GLOBAL_SPONSOR_TICKER_AND_FRAME_FIX_V1: ticker works on every route and intro frame stays centered. */
+html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] {
+  align-items: center !important;
+  background: rgba(0, 12, 4, 0.98) !important;
+  border-bottom: 1px solid rgba(107, 255, 43, 0.4) !important;
+  border-left: 0 !important;
+  border-right: 0 !important;
+  border-top: 0 !important;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.44), inset 0 -1px 0 rgba(119, 255, 61, 0.12) !important;
+  display: flex !important;
+  gap: 6px !important;
+  height: 24px !important;
+  left: 0 !important;
+  max-height: 24px !important;
+  min-height: 24px !important;
+  overflow: visible !important;
+  padding: 1px 6px !important;
+  position: fixed !important;
+  right: 0 !important;
+  top: 0 !important;
+  width: 100vw !important;
+  z-index: 2147483000 !important;
+}
+
+html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] * {
+  box-sizing: border-box !important;
+}
+
+html body main.shell[data-app] > .topbar {
+  margin-top: 24px !important;
+}
+
+html body main.shell[data-app][data-route="connect"] .connect-view {
+  padding-top: max(24px, env(safe-area-inset-top, 0px)) !important;
+}
+
+html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-label {
+  align-items: center !important;
+  background: rgba(65, 255, 43, 0.12) !important;
+  border: 1px solid rgba(135, 255, 72, 0.36) !important;
+  border-radius: 3px !important;
+  color: #9dff5d !important;
+  display: inline-flex !important;
+  flex: 0 0 auto !important;
+  font-size: 8px !important;
+  font-weight: 950 !important;
+  height: 18px !important;
+  justify-content: center !important;
+  letter-spacing: 0.04em !important;
+  line-height: 18px !important;
+  min-height: 18px !important;
+  padding: 0 5px !important;
+  text-transform: uppercase !important;
+  white-space: nowrap !important;
+}
+
+html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-mask {
+  flex: 1 1 auto !important;
+  height: 22px !important;
+  max-height: 22px !important;
+  min-width: 0 !important;
+  overflow: clip !important;
+}
+
+html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-track {
+  align-items: center !important;
+  animation: swampMarketTickerScroll 36s linear infinite !important;
+  display: flex !important;
+  height: 22px !important;
+  max-height: 22px !important;
+  width: max-content !important;
+  will-change: transform !important;
+}
+
+html body main.shell[data-app] .swamp-market-ticker[data-market-ticker]:hover .swamp-ticker-track,
+html body main.shell[data-app] .swamp-market-ticker[data-market-ticker]:focus-within .swamp-ticker-track,
+html body main.shell[data-app] .swamp-market-ticker[data-market-ticker]:has(details[open]) .swamp-ticker-track {
+  animation-play-state: paused !important;
+}
+
+html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-strip {
+  align-items: center !important;
+  display: flex !important;
+  flex: 0 0 auto !important;
+  gap: 8px !important;
+  height: 22px !important;
+  max-height: 22px !important;
+  padding-right: 14px !important;
+}
+
+html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-section {
+  align-items: center !important;
+  color: rgba(223, 255, 206, 0.8) !important;
+  display: inline-flex !important;
+  flex: 0 0 auto !important;
+  font-size: 8px !important;
+  font-weight: 950 !important;
+  height: 18px !important;
+  line-height: 18px !important;
+  padding: 0 2px !important;
+  text-transform: uppercase !important;
+  white-space: nowrap !important;
+}
+
+html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-item,
+html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-clone {
+  flex: 0 0 auto !important;
+  height: 20px !important;
+  max-height: 20px !important;
+  min-height: 20px !important;
+  position: relative !important;
+}
+
+html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-item summary,
+html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-clone {
+  align-items: center !important;
+  background: linear-gradient(180deg, rgba(10, 35, 14, 0.92), rgba(0, 12, 4, 0.98)) !important;
+  border: 1px solid rgba(105, 255, 49, 0.38) !important;
+  border-radius: 4px !important;
+  box-shadow: inset 0 0 10px rgba(113, 255, 61, 0.08) !important;
+  color: #f2ffe9 !important;
+  cursor: pointer !important;
+  display: inline-flex !important;
+  gap: 4px !important;
+  grid-template-columns: none !important;
+  height: 20px !important;
+  list-style: none !important;
+  max-height: 20px !important;
+  max-width: none !important;
+  min-height: 20px !important;
+  min-width: 0 !important;
+  padding: 0 6px 0 1px !important;
+  white-space: nowrap !important;
+}
+
+html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-item summary::-webkit-details-marker {
+  display: none !important;
+}
+
+html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-item summary::marker {
+  content: "" !important;
+}
+
+html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-item summary:hover,
+html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-item[open] summary {
+  background: linear-gradient(180deg, rgba(31, 122, 30, 0.98), rgba(7, 48, 13, 0.99)) !important;
+  border-color: rgba(142, 255, 61, 0.7) !important;
+}
+
+html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] img,
+html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-item img,
+html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-clone img {
+  aspect-ratio: 1 / 1 !important;
+  background: rgba(0, 0, 0, 0.5) !important;
+  border: 1px solid rgba(142, 255, 61, 0.48) !important;
+  border-radius: 999px !important;
+  display: block !important;
+  flex: 0 0 18px !important;
+  grid-row: auto !important;
+  height: 18px !important;
+  max-height: 18px !important;
+  max-width: 18px !important;
+  min-height: 18px !important;
+  min-width: 18px !important;
+  object-fit: cover !important;
+  overflow: clip !important;
+  width: 18px !important;
+}
+
+html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-item summary span {
+  align-items: baseline !important;
+  display: inline-flex !important;
+  gap: 3px !important;
+  max-height: 18px !important;
+  min-width: 0 !important;
+}
+
+html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-item strong,
+html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-clone strong,
+html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-item small,
+html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-clone small {
+  display: inline !important;
+  font-size: 10px !important;
+  font-weight: 950 !important;
+  grid-column: auto !important;
+  grid-row: auto !important;
+  line-height: 18px !important;
+  max-height: 18px !important;
+  overflow: clip !important;
+  white-space: nowrap !important;
+}
+
+html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-item small,
+html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-clone small {
+  color: rgba(190, 255, 169, 0.72) !important;
+  font-size: 9px !important;
+}
+
+html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-links {
+  display: none !important;
+}
+
+html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-item[open] .swamp-ticker-links {
+  background: linear-gradient(180deg, rgba(4, 24, 7, 0.98), rgba(0, 8, 3, 0.99)) !important;
+  border: 1px solid rgba(135, 255, 72, 0.62) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.72), 0 0 26px rgba(89, 255, 43, 0.18) !important;
+  display: grid !important;
+  gap: 7px !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  left: 50% !important;
+  min-width: min(320px, 84vw) !important;
+  padding: 10px !important;
+  position: fixed !important;
+  top: 28px !important;
+  transform: translateX(-50%) !important;
+  z-index: 2147483001 !important;
+}
+
+html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-links a {
+  align-items: center !important;
+  background: rgba(65, 255, 43, 0.12) !important;
+  border: 1px solid rgba(135, 255, 72, 0.42) !important;
+  border-radius: 8px !important;
+  color: #efffe8 !important;
+  display: inline-flex !important;
+  font-size: 12px !important;
+  font-weight: 950 !important;
+  justify-content: center !important;
+  min-height: 36px !important;
+  padding: 0 10px !important;
+  text-decoration: none !important;
+}
+
+html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-strip[aria-hidden="true"] {
+  pointer-events: none !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .login-view.swamp-splash {
+  align-content: center !important;
+  align-items: center !important;
+  background: #000 !important;
+  display: grid !important;
+  grid-template-areas: "enter" !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  isolation: isolate !important;
+  justify-content: center !important;
+  justify-items: center !important;
+  min-height: calc(100svh - 24px) !important;
+  overflow: clip !important;
+  padding: clamp(42px, 7svh, 72px) clamp(12px, 3vw, 32px) clamp(20px, 4svh, 42px) !important;
+  position: relative !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .login-view.swamp-splash::before {
+  aspect-ratio: 4 / 3 !important;
+  background: var(--slime-frame-rich-image) center / 100% 100% no-repeat !important;
+  content: "" !important;
+  filter:
+    drop-shadow(0 0 18px rgba(141, 255, 62, 0.44))
+    drop-shadow(0 0 42px rgba(57, 255, 20, 0.22)) !important;
+  height: auto !important;
+  inset: auto !important;
+  left: 50% !important;
+  max-height: calc(100svh - 96px) !important;
+  max-width: calc(100vw - 24px) !important;
+  opacity: 0.96 !important;
+  pointer-events: none !important;
+  position: absolute !important;
+  top: 50% !important;
+  transform: translate(-50%, -50%) !important;
+  width: min(88vw, 780px) !important;
+  z-index: 2 !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .swamp-splash-button {
+  aspect-ratio: 4 / 3 !important;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  display: grid !important;
+  grid-area: enter !important;
+  height: auto !important;
+  justify-self: center !important;
+  max-height: calc(100svh - 150px) !important;
+  max-width: calc(100vw - 76px) !important;
+  overflow: visible !important;
+  padding: 0 !important;
+  place-items: center !important;
+  transform: none !important;
+  width: min(66vw, 560px) !important;
+  z-index: 1 !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .swamp-splash-reference {
+  border-radius: 0 !important;
+  display: block !important;
+  filter: none !important;
+  height: 100% !important;
+  max-height: 100% !important;
+  object-fit: contain !important;
+  object-position: center !important;
+  transform: none !important;
+  width: 100% !important;
+}
+
+body:has(main.shell[data-app][data-route="intro"]) [data-ogre-agent-root],
+body:has(main.shell[data-app][data-route="connect"]) [data-ogre-agent-root] {
+  display: none !important;
+  pointer-events: none !important;
+}
+
+@media (max-width: 760px) {
+  html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] {
+    gap: 4px !important;
+    height: 24px !important;
+    max-height: 24px !important;
+    min-height: 24px !important;
+    padding: 1px 4px !important;
+  }
+
+  html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-label {
+    display: inline-flex !important;
+    font-size: 6.5px !important;
+    height: 18px !important;
+    letter-spacing: 0 !important;
+    max-width: none !important;
+    padding: 0 4px !important;
+  }
+
+  html body main.shell[data-app][data-route="intro"] .swamp-market-ticker[data-market-ticker] .swamp-ticker-label {
+    display: inline-flex !important;
+    font-size: 6.5px !important;
+    letter-spacing: 0 !important;
+    max-width: none !important;
+  }
+
+  html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-track {
+    animation-duration: 30s !important;
+  }
+
+  html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-strip {
+    gap: 7px !important;
+    padding-right: 12px !important;
+  }
+
+  html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-section,
+  html body main.shell[data-app][data-route="intro"] .swamp-market-ticker[data-market-ticker] .swamp-ticker-section {
+    display: none !important;
+  }
+
+  html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-item small,
+  html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-clone small {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="intro"] .swamp-market-ticker[data-market-ticker] .swamp-ticker-item small,
+  html body main.shell[data-app][data-route="intro"] .swamp-market-ticker[data-market-ticker] .swamp-ticker-clone small {
+    display: none !important;
+  }
+
+  html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-item[open] .swamp-ticker-links {
+    top: 28px !important;
+    width: min(88vw, 320px) !important;
+  }
+
+  html body main.shell[data-app][data-route="intro"] .login-view.swamp-splash {
+    min-height: calc(100svh - 24px) !important;
+    padding: calc(env(safe-area-inset-top, 0px) + 48px) 10px calc(env(safe-area-inset-bottom, 0px) + 22px) !important;
+  }
+
+  html body main.shell[data-app][data-route="intro"] .login-view.swamp-splash::before {
+    filter:
+      drop-shadow(0 0 10px rgba(141, 255, 62, 0.38))
+      drop-shadow(0 0 22px rgba(57, 255, 20, 0.18)) !important;
+    max-height: calc(100svh - 118px) !important;
+    max-width: calc(100vw - 18px) !important;
+    width: min(72vw, 340px) !important;
+  }
+
+  html body main.shell[data-app][data-route="intro"] .swamp-splash-button {
+    max-height: calc(100svh - 160px) !important;
+    max-width: calc(100vw - 66px) !important;
+    width: min(54vw, 260px) !important;
+  }
+}

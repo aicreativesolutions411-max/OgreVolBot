@@ -230,7 +230,7 @@ test("Slime Scope refreshes its own bucket and Details buttons stay compact gree
 
 test("landing sponsor and KOL entries use the compact top ticker", () => {
   assert.match(indexSource, /data-market-ticker/);
-  assert.match(indexSource, /Swamp Tape/);
+  assert.match(indexSource, /Swamp Sponsors/);
   assert.match(indexSource, /Open USD2 ticker links/);
   assert.match(indexSource, /Open MoonPieJoe ticker links/);
   assert.match(indexSource, /assets\/slimewire\/support\/usd2-sponsor-logo\.jpg/);
@@ -240,10 +240,14 @@ test("landing sponsor and KOL entries use the compact top ticker", () => {
   assert.match(indexSource, /https:\/\/t\.me\/USD2Solana/);
   assert.match(cssSource, /LANDING_MARKET_TICKER_V1/);
   assert.match(cssSource, /LANDING_MARKET_TICKER_COMPACT_FIX_V1/);
+  assert.match(cssSource, /LANDING_GLOBAL_SPONSOR_TICKER_AND_FRAME_FIX_V1/);
   assert.match(cssSource, /swampMarketTickerScroll/);
   assert.match(cssSource, /swamp-ticker-item\[open\] \.swamp-ticker-links[\s\S]*position: fixed/);
+  assert.match(cssSource, /main\.shell\[data-app\] \.swamp-market-ticker\[data-market-ticker\][\s\S]*position: fixed/);
   assert.match(cssSource, /swamp-market-ticker\[data-market-ticker\][\s\S]*height: 24px !important/);
   assert.match(cssSource, /swamp-market-ticker\[data-market-ticker\][\s\S]*max-width: 18px !important/);
+  assert.match(cssSource, /login-view\.swamp-splash::before[\s\S]*aspect-ratio: 4 \/ 3 !important/);
+  assert.match(cssSource, /body:has\(main\.shell\[data-app\]\[data-route="intro"\]\) \[data-ogre-agent-root\][\s\S]*display: none !important/);
   assert.match(indexSource, /Stablecoin Partner/);
   assert.match(indexSource, /usd2-sponsor-logo\.jpg"[^>]*width="18" height="18"/);
   assert.doesNotMatch(indexSource, /swamp-sponsor-frame/);
