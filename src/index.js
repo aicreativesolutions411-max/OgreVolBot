@@ -1982,7 +1982,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
         ok: true,
         ...await webKolDumpStats(kolId, {
           force,
-          userId: auth?.userId || "guest",
+          userId: "guest",
           mode: requestUrl.searchParams.get("mode") || "hot",
           wallet: requestUrl.searchParams.get("wallet") || ""
         })

@@ -224,6 +224,7 @@ test("Details buttons force-refresh source-backed data only on click", () => {
   assert.match(functionBody("ensureKolDumpStats"), /\/api\/web\/kols\/dump-stats\?\$\{params\.toString\(\)\}/);
   assert.match(functionBody("ensureKolDumpStats"), /params\.set\("force", "true"\)/);
   assert.match(functionBody("renderKolDumpDetailsDrawer"), /data-kol-dump-refresh/);
+  assert.match(serverSource, /webKolDumpStats\(kolId, \{\s*force,\s*userId: "guest"/);
   assert.match(functionBody("webKolDumpStats", serverSource), /webKolScan\(options\.userId \|\| "guest", mode, wallet\)/);
   assert.match(functionBody("webKolDumpStats", serverSource), /force \? "forced-kol-refresh" : "local-cache"/);
 });
