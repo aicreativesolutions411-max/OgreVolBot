@@ -11279,7 +11279,7 @@ button[data-slimeshield-details].slimeshield-chip small {
   }
 }
 
-/* 2026-06-07 KOL signal action fit: keep Quick Buy/Dump/Bundle inside the frame. */
+/* 2026-06-07 KOL signal action fit: keep Quick Buy/KOL Info/Bundle inside the frame. */
 [data-app][data-route="terminal"] .signal-list-kol {
   overflow: clip !important;
 }

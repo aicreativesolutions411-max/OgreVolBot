@@ -7466,11 +7466,22 @@ function computeUiKolDumpStats(kol = {}) {
         : dumpRiskPercent <= 15
           ? "Trusted Flow"
           : "Mixed";
+  const wallets = [kol.wallet, kol.kolWallet, kol.owner, kol.traderWallet, kol.address, kol.publicKey].filter(Boolean);
+  const primaryWallet = wallets[0] || "";
+  const handle = cleanXHandle(kol.handle || kol.twitter || "");
+  const externalLinks = [
+    { label: "Solscan", url: primaryWallet ? `https://solscan.io/account/${encodeURIComponent(primaryWallet)}` : "" },
+    { label: "KOLscan", url: primaryWallet ? `https://kolscan.io/account/${encodeURIComponent(primaryWallet)}` : "" },
+    { label: "X", url: kol.xUrl || kol.twitterUrl || (handle ? `https://x.com/${handle}` : "") },
+    { label: "Profile", url: kol.profileUrl || kol.kolscanUrl || kol.kolScanUrl || "" },
+    { label: "Website", url: kol.websiteUrl || kol.website || "" }
+  ].filter((link, index, links) => /^https?:\/\//i.test(String(link.url || ""))
+    && links.findIndex((candidate) => String(candidate.url || "") === String(link.url || "")) === index).slice(0, 6);
   return {
     kolId: kolDumpProfileId(kol),
     displayName: kol.displayName || kol.name || kol.kolName || (kol.twitter ? `@${kol.twitter}` : kol.shortWallet || shortAddress(kol.wallet || kol.kolWallet || "")),
-    handle: cleanXHandle(kol.handle || kol.twitter || ""),
-    walletAddresses: [kol.wallet, kol.kolWallet, kol.owner, kol.traderWallet, kol.address, kol.publicKey].filter(Boolean),
+    handle,
+    walletAddresses: wallets,
     callsTracked,
     currentPositionCount: firstUsefulNumber(kol.currentPositionCount, kol.positionsCount, kol.positionCount),
     lastTokenMint: kol.lastTokenMint || kol.tokenMint || kol.mint || "",
@@ -7486,6 +7497,7 @@ function computeUiKolDumpStats(kol = {}) {
     lowData,
     confidence: lowData ? "low" : callsTracked >= 12 ? "high" : "medium",
     historySource: kol.source || "local-ui",
+    externalLinks,
     firstSeenAt: kol.firstSeenAt || "",
     lastSeenAt: kol.lastSeenAt || "",
     reasons: lowData
@@ -7539,7 +7551,7 @@ function kolDumpStatsForKol(kol = {}) {
   return kolDumpStatsRows().find((row) => String(row.kolId || "") === id) || computeUiKolDumpStats(kol);
 }
 
-function kolDumpDetailsButtonHtml(kol = {}, label = "Dump Info") {
+function kolDumpDetailsButtonHtml(kol = {}, label = "KOL Info") {
   if (!featureEnabled("kolDumpDetectorEnabled", true)) return "";
   const row = kolDumpStatsForKol(kol);
   const id = String(row?.kolId || kolDumpProfileId(kol) || "").trim();
@@ -7548,7 +7560,7 @@ function kolDumpDetailsButtonHtml(kol = {}, label = "Dump Info") {
   return `<button type="button" class="kol-dump-chip" data-kol-dump-details="${escapeHtml(id)}" title="${escapeHtml(title)}">${escapeHtml(label)}</button>`;
 }
 
-function kolDumpSignalButtonHtml(row = {}, label = "Dump") {
+function kolDumpSignalButtonHtml(row = {}, label = "KOL Info") {
   if (!featureEnabled("kolDumpDetectorEnabled", true)) return "";
   return kolDumpDetailsButtonHtml(kolDumpSubjectFromSignalRow(row), label);
 }
@@ -11548,17 +11560,22 @@ function slimeShieldSummaryForVerdict(verdict, factors = []) {
 }
 
 const DEV_INFO_LABELS = Object.freeze({
-  unknown: "?",
+  unknown: "",
   new: "New",
   hold: "Hold",
   mixed: "Mixed",
   risk: "Risk",
-  dump: "Dump"
+  dump: "Dev"
 });
 
 function devInfoStatusClass(status = "") {
   const clean = String(status || "unknown").trim().toLowerCase();
   return Object.hasOwn(DEV_INFO_LABELS, clean) ? clean : "unknown";
+}
+
+function devInfoLabel(status = "", fallback = "Unknown") {
+  const clean = devInfoStatusClass(status);
+  return DEV_INFO_LABELS[clean] || fallback;
 }
 
 function devInfoFallbackSummary(row = {}) {
@@ -11598,12 +11615,12 @@ function devInfoPillHtml(row = {}, options = {}) {
   if (!mint) return "";
   const summary = devInfoSummaryForRow(row);
   const status = devInfoStatusClass(summary.status);
-  const label = summary.label || DEV_INFO_LABELS[status] || "?";
   const loading = Boolean(state.devInfoLoading?.[`summary:${mint}`]);
+  const label = loading ? "..." : (status === "unknown" ? "" : (summary.label || DEV_INFO_LABELS[status] || ""));
   const compact = Boolean(options.compact);
   return `
     <button type="button" class="dev-info-pill dev-info-${escapeHtml(status)} ${compact ? "is-compact" : ""}" data-dev-info="${escapeHtml(mint)}" title="${escapeHtml(summary.summary || "Open Dev Info")}">
-      <span>Dev Info</span><strong>${escapeHtml(loading ? "..." : label)}</strong>
+      <span>Dev Info</span>${label ? `<strong>${escapeHtml(label)}</strong>` : ""}
     </button>
   `;
 }
@@ -12938,13 +12955,25 @@ async function loadSlimeShield(tokenMint = "", options = {}) {
 function devInfoFallbackResultForMint(tokenMint = "") {
   const row = slimeShieldRowForMint(tokenMint) || rawSignalRowForMint(tokenMint) || { tokenMint };
   const summary = devInfoSummaryForRow(row);
+  const wallet = summary.likelyDevWallet || row.creatorWallet || row.deployerWallet || row.poolCreator || "";
+  const externalLinks = [
+    ...(Array.isArray(summary.externalLinks) ? summary.externalLinks : []),
+    { label: "Solscan Token", url: tokenMint ? `https://solscan.io/token/${encodeURIComponent(tokenMint)}` : "" },
+    { label: "Dex", url: row.dexUrl || dexUrl(tokenMint) },
+    { label: "Solscan Wallet", url: wallet ? `https://solscan.io/account/${encodeURIComponent(wallet)}` : "" },
+    { label: "KOLscan Wallet", url: wallet ? `https://kolscan.io/account/${encodeURIComponent(wallet)}` : "" },
+    { label: "X", url: row.twitterUrl || row.xUrl },
+    { label: "TG", url: row.telegramUrl },
+    { label: "Website", url: row.websiteUrl }
+  ].filter((link, index, links) => /^https?:\/\//i.test(String(link.url || ""))
+    && links.findIndex((candidate) => String(candidate.url || "") === String(link.url || "")) === index).slice(0, 8);
   return {
     mint: tokenMint,
     pairAddress: row.pairAddress || "",
     likelyDevWallet: summary.likelyDevWallet || null,
     confidence: summary.confidence || "unknown",
     status: devInfoStatusClass(summary.status),
-    label: summary.label || DEV_INFO_LABELS[devInfoStatusClass(summary.status)] || "?",
+    label: summary.label || devInfoLabel(summary.status),
     score: 50,
     summary: summary.summary || "Not enough dev-wallet history yet.",
     currentPosition: null,
@@ -12954,6 +12983,7 @@ function devInfoFallbackResultForMint(tokenMint = "") {
     positiveReasons: [],
     suggestedAction: "Check SlimeShield and liquidity before buying.",
     updatedAt: summary.updatedAt || new Date().toISOString(),
+    externalLinks,
     dataSource: "ui-fallback"
   };
 }
@@ -13036,10 +13066,13 @@ async function loadDevInfoDetails(tokenMint = "", options = {}) {
       state.devInfoSummaries = { ...(state.devInfoSummaries || {}), [mint]: {
         mint,
         status: result.status || "unknown",
-        label: result.label || DEV_INFO_LABELS[devInfoStatusClass(result.status)] || "?",
+        label: result.label || devInfoLabel(result.status),
         confidence: result.confidence || "unknown",
         summary: result.summary || "",
         likelyDevWallet: result.likelyDevWallet || null,
+        currentPositionStatus: result.currentPosition?.positionStatus || "unknown",
+        launchesTracked: result.historicalStats?.launchesTracked || 0,
+        externalLinks: Array.isArray(result.externalLinks) ? result.externalLinks.slice(0, 8) : [],
         updatedAt: result.updatedAt || ""
       } };
       state.devInfoStatus = result.cacheHit ? "Loaded from cache." : "Updated from local history.";
@@ -13141,6 +13174,18 @@ function renderDevInfoDrawer() {
   const current = result.currentPosition || null;
   const history = result.historicalStats || {};
   const linked = result.linkedWalletSignals || {};
+  const referenceLinks = [
+    ...(Array.isArray(result.externalLinks) ? result.externalLinks : []),
+    ...(Array.isArray(summary.externalLinks) ? summary.externalLinks : []),
+    { label: "Solscan Token", url: mint ? `https://solscan.io/token/${encodeURIComponent(mint)}` : "" },
+    { label: "Dex", url: row.dexUrl || dexUrl(mint) },
+    { label: "Solscan Wallet", url: wallet ? `https://solscan.io/account/${encodeURIComponent(wallet)}` : "" },
+    { label: "KOLscan Wallet", url: wallet ? `https://kolscan.io/account/${encodeURIComponent(wallet)}` : "" },
+    { label: "X", url: row.twitterUrl || row.xUrl },
+    { label: "TG", url: row.telegramUrl },
+    { label: "Website", url: row.websiteUrl }
+  ].filter((link, index, links) => /^https?:\/\//i.test(String(link.url || ""))
+    && links.findIndex((candidate) => String(candidate.url || "") === String(link.url || "")) === index).slice(0, 8);
   const recentLaunches = Array.isArray(history.recentLaunches) ? history.recentLaunches.slice(0, 5) : [];
   root.innerHTML = `
     <div class="slimeshield-drawer-backdrop" data-dev-info-close></div>
@@ -13148,7 +13193,7 @@ function renderDevInfoDrawer() {
       <header>
         <div>
           <span>Dev Info</span>
-          <h3>${escapeHtml(DEV_INFO_LABELS[status] || "?")} · ${escapeHtml(confidenceLabel(confidence))}</h3>
+          <h3>${escapeHtml(devInfoLabel(status))} · ${escapeHtml(confidenceLabel(confidence))}</h3>
         </div>
         <button type="button" aria-label="Close Dev Info" data-dev-info-close>Close</button>
       </header>
@@ -13169,6 +13214,11 @@ function renderDevInfoDrawer() {
           ${wallet ? `<button type="button" data-copy="${escapeHtml(wallet)}">Copy Wallet</button>` : ""}
           <button type="button" data-copy="${escapeHtml(mint)}">Copy CA</button>
         </div>
+        ${referenceLinks.length ? `
+          <div class="slimeshield-drawer-actions dev-info-reference-links">
+            ${referenceLinks.map((link) => `<a href="${escapeHtml(link.url)}" target="_blank" rel="noreferrer">${escapeHtml(link.label || "Open")}</a>`).join("")}
+          </div>
+        ` : ""}
       </section>
       <section>
         <h4>Current Token Position</h4>
@@ -13181,7 +13231,7 @@ function renderDevInfoDrawer() {
             <div><dt>First sell</dt><dd>${escapeHtml(devInfoMinutes(current.firstMajorSellMinutesAfterLaunch))}</dd></div>
             <div><dt>Last sell</dt><dd>${escapeHtml(current.lastSellAt ? formatDate(current.lastSellAt) : "n/a")}</dd></div>
           </dl>
-        ` : `<p class="slimeshield-muted">Current dev position unavailable. SlimeWire needs more local history for this wallet.</p>`}
+        ` : `<p class="slimeshield-muted">Current dev position unavailable from cached local history. Use the wallet/token links above while SlimeWire continues warming this token.</p>`}
       </section>
       <section>
         <h4>Dev Dump History</h4>
@@ -13394,6 +13444,7 @@ function renderSlimeShieldDetailsDrawer() {
   const loading = Boolean(state.slimeShieldLoading?.[mint]);
   const riskFactors = Array.isArray(result.factors) ? result.factors : [];
   const tokenLinks = [
+    { label: "Solscan", url: mint ? `https://solscan.io/token/${encodeURIComponent(mint)}` : "" },
     { label: "Dex", url: row.dexUrl || dexUrl(mint) },
     { label: "Pump", url: pumpUrlForRow(row) },
     { label: "X", url: row.twitterUrl || row.xUrl },
@@ -13434,7 +13485,7 @@ function renderSlimeShieldDetailsDrawer() {
           <div><dt>Liquidity</dt><dd>${escapeHtml(row.liquidityLabel || (livePairLiquidityUsd(row) > 0 ? compactUsd(livePairLiquidityUsd(row)) : "n/a"))}</dd></div>
           <div><dt>MC / FDV</dt><dd>${escapeHtml(row.marketCapLabel || (livePairMarketCap(row) > 0 ? compactUsd(livePairMarketCap(row)) : "n/a"))}</dd></div>
           <div><dt>Volume</dt><dd>${escapeHtml(row.volumeH1Label || row.volumeLabel || "n/a")}</dd></div>
-          <div><dt>Dev Info</dt><dd>${escapeHtml(DEV_INFO_LABELS[devInfoStatus] || "?")} · ${escapeHtml(devInfo.confidence || "unknown")}</dd></div>
+          <div><dt>Dev Info</dt><dd>${escapeHtml(devInfoLabel(devInfoStatus))} · ${escapeHtml(devInfo.confidence || "unknown")}</dd></div>
           <div><dt>Dev/risk notes</dt><dd>${escapeHtml(riskText.length ? riskText.join(" | ") : "no cached hard flags")}</dd></div>
         </dl>
         <div class="slimeshield-drawer-actions">

@@ -19676,6 +19676,83 @@ function devInfoCandidateFromRow(row = {}) {
   return null;
 }
 
+function devInfoReferenceLinks({ mint = "", wallet = "", pairAddress = "", row = {} } = {}) {
+  const cleanMint = String(mint || row.tokenMint || row.mint || "").trim();
+  const cleanWallet = String(wallet || row.creatorWallet || row.deployerWallet || "").trim();
+  const cleanPair = firstString(pairAddress, row.pairAddress, row.raydiumPool);
+  return [
+    { label: "Solscan Token", url: cleanMint ? `https://solscan.io/token/${encodeURIComponent(cleanMint)}` : "" },
+    { label: "Dex", url: firstString(row.dexUrl, cleanMint ? dexScreenerUrl(cleanMint) : "") },
+    { label: "Solscan Wallet", url: cleanWallet ? `https://solscan.io/account/${encodeURIComponent(cleanWallet)}` : "" },
+    { label: "KOLscan Wallet", url: cleanWallet ? kolscanAccountUrl(cleanWallet) : "" },
+    { label: "Pair", url: cleanPair && !String(cleanPair).startsWith("mint:") ? `https://dexscreener.com/solana/${encodeURIComponent(cleanPair)}` : "" },
+    { label: "X", url: firstString(row.twitterUrl, row.xUrl) },
+    { label: "TG", url: firstString(row.telegramUrl) },
+    { label: "Website", url: firstString(row.websiteUrl) }
+  ].filter((link, index, links) => /^https?:\/\//i.test(String(link.url || ""))
+    && links.findIndex((candidate) => String(candidate.url || "") === String(link.url || "")) === index);
+}
+
+async function readPostgresMarketRowForMint(mint = "") {
+  const cleanMint = String(mint || "").trim();
+  if (!cleanMint || !await ensurePostgresHistorySchema()) return null;
+  const pool = await postgresPool();
+  if (!pool) return null;
+  try {
+    const [metadataResult, pairResult] = await Promise.all([
+      pool.query("select * from token_metadata where mint = $1 limit 1", [cleanMint]),
+      pool.query(`
+        select * from pairs
+        where mint = $1
+        order by last_seen_at desc nulls last, updated_at desc nulls last
+        limit 1
+      `, [cleanMint])
+    ]);
+    postgresHistoryStats.reads += 1;
+    postgresHistoryStats.lastReadAt = new Date().toISOString();
+    const meta = metadataResult.rows[0] || {};
+    const pair = pairResult.rows[0] || {};
+    if (!meta.mint && !pair.mint) return null;
+    const raw = pair.raw_pair_json && typeof pair.raw_pair_json === "object" ? pair.raw_pair_json : {};
+    const links = raw.links && typeof raw.links === "object" ? raw.links : {};
+    const row = {
+      tokenMint: cleanMint,
+      mint: cleanMint,
+      symbol: firstString(meta.symbol, raw.symbol),
+      name: firstString(meta.name, raw.name),
+      avatarUrl: firstString(meta.avatar_url, raw.avatarUrl, raw.imageUrl),
+      imageUrl: firstString(meta.avatar_url, raw.imageUrl, raw.avatarUrl),
+      metadataUri: firstString(meta.metadata_uri, raw.metadataUri),
+      websiteUrl: firstString(meta.website_url, raw.websiteUrl, links.website, links.web),
+      twitterUrl: firstString(meta.twitter_url, raw.twitterUrl, raw.xUrl, links.twitter, links.x),
+      telegramUrl: firstString(meta.telegram_url, raw.telegramUrl, links.telegram),
+      source: firstString(meta.source, pair.dex, raw.source, "postgres-history"),
+      pairAddress: firstString(pair.pair_address, raw.pairAddress, raw.raydiumPool),
+      raydiumPool: firstString(raw.raydiumPool, pair.pair_address),
+      dexId: firstString(pair.dex, raw.dexId, raw.dexName),
+      pairCreatedAt: pair.created_at_chain ? new Date(pair.created_at_chain).getTime() : null,
+      liquidityUsd: firstMeaningfulNumber(pair.liquidity_usd, raw.liquidityUsd),
+      marketCap: firstMeaningfulNumber(pair.market_cap, raw.marketCap),
+      fdv: firstMeaningfulNumber(pair.fdv, raw.fdv),
+      volume5m: firstMeaningfulNumber(pair.volume_5m, raw.volume5m),
+      volumeH1: firstMeaningfulNumber(pair.volume_1h, raw.volumeH1),
+      creatorWallet: firstString(raw.creatorWallet, raw.creator, raw.pumpCreator, raw.deployerWallet),
+      deployerWallet: firstString(raw.deployerWallet, raw.deployer),
+      poolCreator: firstString(raw.poolCreator, raw.pairCreator),
+      launchWallet: firstString(raw.launchWallet, raw.launchCreatorWallet),
+      firstFunder: firstString(raw.firstFunder, raw.firstFundingWallet),
+      riskFlags: Array.isArray(raw.riskFlags) ? raw.riskFlags.slice(0, 8) : [],
+      scoreWarnings: Array.isArray(raw.scoreWarnings) ? raw.scoreWarnings.slice(0, 8) : [],
+      bestPickWarnings: Array.isArray(raw.bestPickWarnings) ? raw.bestPickWarnings.slice(0, 8) : []
+    };
+    return row;
+  } catch (error) {
+    postgresHistoryStats.errors += 1;
+    postgresHistoryStats.lastError = safePerfEventText(error?.message || "Postgres token context read failed", 140);
+    return null;
+  }
+}
+
 function devCurrentPositionFromEvents(events = [], wallet = "", mint = "") {
   const rows = Array.isArray(events) ? events.filter(Boolean) : [];
   if (!rows.length) return null;
@@ -19736,18 +19813,33 @@ function devInfoResultFromPostgresRow(row = null) {
   if (result && typeof result === "object") {
     return {
       ...result,
+      externalLinks: Array.isArray(result.externalLinks) && result.externalLinks.length
+        ? result.externalLinks
+        : devInfoReferenceLinks({
+          mint: row.mint || result.mint,
+          wallet: row.likely_dev_wallet || result.likelyDevWallet,
+          pairAddress: row.pair_address || result.pairAddress
+        }),
       cacheHit: true,
       cacheSource: "postgres",
       stale: Date.now() - Date.parse(row.updated_at || result.updatedAt || "") > DEV_INFO_DETAILS_TTL_MS
     };
   }
-  return calculateDevInfoStatus({
+  const computed = calculateDevInfoStatus({
     mint: row.mint,
     pairAddress: row.pair_address,
     likelyDevWallet: row.likely_dev_wallet,
     confidence: row.confidence,
     updatedAt: row.updated_at
   });
+  return {
+    ...computed,
+    externalLinks: devInfoReferenceLinks({
+      mint: row.mint,
+      wallet: row.likely_dev_wallet,
+      pairAddress: row.pair_address
+    })
+  };
 }
 
 async function readPostgresDevInfoCache(mint = "") {
@@ -19886,6 +19978,54 @@ async function readPostgresDevWalletCandidate(mint = "") {
   } catch (error) {
     postgresHistoryStats.errors += 1;
     postgresHistoryStats.lastError = safePerfEventText(error?.message || "Dev candidate read failed", 140);
+    return null;
+  }
+}
+
+async function inferPostgresDevWalletCandidateFromTransactions(mint = "") {
+  const cleanMint = String(mint || "").trim();
+  if (!cleanMint || !await ensurePostgresHistorySchema()) return null;
+  const pool = await postgresPool();
+  if (!pool) return null;
+  try {
+    const result = await pool.query(`
+      select wallet_address, pair_address, event_type, source, block_time, created_at
+      from processed_transactions
+      where mint = $1
+        and wallet_address is not null
+        and wallet_address <> ''
+        and event_type in ('launch', 'liquidity_add', 'buy')
+      order by
+        case event_type when 'launch' then 0 when 'liquidity_add' then 1 else 2 end,
+        block_time asc nulls last,
+        created_at asc
+      limit 1
+    `, [cleanMint]);
+    postgresHistoryStats.reads += 1;
+    postgresHistoryStats.lastReadAt = new Date().toISOString();
+    const row = result.rows[0];
+    if (!row?.wallet_address || !solanaPublicKeyLike(row.wallet_address)) return null;
+    const source = row.event_type === "launch"
+      ? "processed_launch"
+      : row.event_type === "liquidity_add"
+        ? "processed_liquidity"
+        : "processed_first_buy";
+    return {
+      mint: cleanMint,
+      pairAddress: row.pair_address || "",
+      likelyDevWallet: row.wallet_address,
+      confidence: row.event_type === "launch" ? "medium" : "low",
+      source,
+      evidence: {
+        source,
+        eventType: row.event_type,
+        provider: row.source || "",
+        seenAt: row.block_time || row.created_at || new Date().toISOString()
+      }
+    };
+  } catch (error) {
+    postgresHistoryStats.errors += 1;
+    postgresHistoryStats.lastError = safePerfEventText(error?.message || "Processed tx dev candidate read failed", 140);
     return null;
   }
 }
@@ -20044,12 +20184,25 @@ function localDevCurrentPositionFromRow(row = {}, likelyDevWallet = "") {
 
 async function computeDevInfoFromLocalData(mint = "", row = null, options = {}) {
   const cleanMint = String(mint || row?.tokenMint || row?.mint || "").trim();
-  const localRow = row || localMarketRowForMint(cleanMint) || { tokenMint: cleanMint };
+  const postgresRow = await readPostgresMarketRowForMint(cleanMint);
+  const hotRow = row || localMarketRowForMint(cleanMint) || null;
+  const localRow = {
+    ...(postgresRow || {}),
+    ...(hotRow || {}),
+    tokenMint: cleanMint,
+    mint: cleanMint
+  };
   let candidate = devInfoCandidateFromRow(localRow);
   if (!candidate) {
     candidate = await readPostgresDevWalletCandidate(cleanMint);
   } else if (options.persist !== false) {
     void upsertPostgresDevWalletCandidate(candidate).catch(() => {});
+  }
+  if (!candidate) {
+    candidate = await inferPostgresDevWalletCandidateFromTransactions(cleanMint);
+    if (candidate && options.persist !== false) {
+      void upsertPostgresDevWalletCandidate(candidate).catch(() => {});
+    }
   }
 
   if (!candidate?.likelyDevWallet) {
@@ -20064,6 +20217,7 @@ async function computeDevInfoFromLocalData(mint = "", row = null, options = {}) 
     return {
       ...result,
       dataSource: "limited-local-data",
+      externalLinks: devInfoReferenceLinks({ mint: cleanMint, pairAddress: firstString(localRow.pairAddress, localRow.raydiumPool), row: localRow }),
       hydrationQueued: Boolean(options.hydrationQueued)
     };
   }
@@ -20103,11 +20257,20 @@ async function computeDevInfoFromLocalData(mint = "", row = null, options = {}) 
     updatedAt: new Date().toISOString()
   });
   devInfoStats.computedFromLocalData += 1;
+  const resultWithLinks = {
+    ...result,
+    externalLinks: devInfoReferenceLinks({
+      mint: cleanMint,
+      wallet,
+      pairAddress: firstString(localRow.pairAddress, candidate.pairAddress, localRow.raydiumPool),
+      row: localRow
+    })
+  };
   if (options.persist !== false) {
-    void persistPostgresDevInfoResult(result).catch(() => {});
+    void persistPostgresDevInfoResult(resultWithLinks).catch(() => {});
   }
   return {
-    ...result,
+    ...resultWithLinks,
     dataSource: candidate.source ? `local:${candidate.source}` : "local-postgres"
   };
 }
@@ -20354,12 +20517,30 @@ async function persistPostgresLivePairRows(rows = [], options = {}) {
         firstMeaningfulNumber(row.volume5m),
         firstMeaningfulNumber(row.volumeH1),
         postgresJson({
+          symbol: row.symbol,
+          name: row.name,
           pairAddress: row.pairAddress,
           raydiumPool: row.raydiumPool,
           source: row.source,
           category: row.category,
+          avatarUrl: firstString(row.avatarUrl, row.imageUrl),
+          imageUrl: firstString(row.imageUrl, row.avatarUrl),
+          websiteUrl: row.websiteUrl || null,
+          twitterUrl: row.twitterUrl || row.xUrl || null,
+          telegramUrl: row.telegramUrl || null,
+          links: {
+            website: row.websiteUrl || null,
+            twitter: row.twitterUrl || row.xUrl || null,
+            telegram: row.telegramUrl || null
+          },
+          creatorWallet: firstString(row.creatorWallet, row.creator, row.pumpCreator, row.pumpCreatorWallet),
+          deployerWallet: firstString(row.deployerWallet, row.deployer, row.deployerAddress),
+          launchWallet: firstString(row.launchWallet, row.launchWalletAddress, row.launchCreatorWallet),
+          poolCreator: firstString(row.poolCreator, row.pairCreator, row.poolCreatorWallet, row.pairCreatorWallet),
+          firstFunder: firstString(row.firstFunder, row.firstFundingWallet, row.fundingWallet),
           riskFlags: row.riskFlags,
-          scoreWarnings: row.scoreWarnings || row.bestPickWarnings
+          scoreWarnings: row.scoreWarnings || [],
+          bestPickWarnings: row.bestPickWarnings || []
         }, 20_000)
       ]);
       await pool.query(`
@@ -26298,6 +26479,7 @@ function computeKolDumpStatsFromProfile(kol = {}) {
     { label: "Website", url: firstString(kol.websiteUrl, kol.website, kol.links?.website) }
   ].filter((link) => /^https?:\/\//i.test(String(link.url || "")));
   const currentPositionCount = Number(firstMeaningfulNumber(kol.currentPositionCount, kol.positionsCount, kol.positionCount) || 0);
+  const primaryWallet = walletAddresses[0] || firstString(kol.wallet, kol.owner, kol.address, kol.publicKey);
   return {
     kolId,
     displayName: firstString(kol.displayName, kol.name, kol.twitter ? `@${stripAt(kol.twitter)}` : "", kol.shortWallet, kol.wallet ? shortMint(kol.wallet) : "KOL Wallet"),
@@ -26320,7 +26502,12 @@ function computeKolDumpStatsFromProfile(kol = {}) {
     historySource: String(kol.source || "cached-kol-profile").slice(0, 80),
     firstSeenAt: kol.firstSeenAt || "",
     lastSeenAt: kol.lastSeenAt || "",
-    externalLinks,
+    externalLinks: [
+      ...externalLinks,
+      { label: "Solscan", url: primaryWallet ? `https://solscan.io/account/${encodeURIComponent(primaryWallet)}` : "" },
+      { label: "KOLscan", url: primaryWallet ? kolscanAccountUrl(primaryWallet) : "" }
+    ].filter((link, index, links) => /^https?:\/\//i.test(String(link.url || ""))
+      && links.findIndex((candidate) => String(candidate.url || "") === String(link.url || "")) === index).slice(0, 6),
     reasons: [...reasons, sourceNote],
     updatedAt: new Date().toISOString()
   };
@@ -28231,14 +28418,14 @@ async function webSlimeShield(tokenMint = "") {
     return postgresResult;
   }
 
-  const baseRow = localMarketRowForMint(mint) || { tokenMint: mint };
+  const baseRow = localMarketRowForMint(mint) || await readPostgresMarketRowForMint(mint) || { tokenMint: mint };
   const devInfoSummary = mint ? await webDevInfoSummary(mint).catch(() => null) : null;
   const row = devInfoSummary ? { ...baseRow, devInfoSummary } : baseRow;
   const result = {
     ...computeSlimeShield(row, { mint }),
     cacheHit: false,
     cacheSource: "local",
-    dataSource: row?.tokenMint ? "cached-market-row" : "low-data-fallback"
+    dataSource: row?.pairAddress || row?.symbol ? "cached-market-or-postgres-row" : "low-data-fallback"
   };
   if (mint) {
     slimeShieldCache.set(mint, { cachedAt: Date.now(), value: result });

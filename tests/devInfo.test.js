@@ -26,7 +26,7 @@ test("Dev Info returns dump for severe current-token fast sell with medium confi
   });
 
   assert.equal(result.status, "dump");
-  assert.equal(result.label, "Dump");
+  assert.equal(result.label, "Dev");
   assert.ok(result.score < 35);
   assert.match(result.summary, /sold|dump|exited/i);
 });
@@ -38,6 +38,7 @@ test("Dev Info stays unknown when likely dev wallet and confidence are missing",
   });
 
   assert.equal(result.status, "unknown");
+  assert.equal(result.label, "");
   assert.equal(result.confidence, "unknown");
   assert.equal(result.likelyDevWallet, null);
   assert.match(result.summary, /No reliable creator wallet/i);
@@ -86,7 +87,8 @@ test("Dev Info summary and SlimeShield factor stay compact", () => {
       launchesTracked: 3,
       soldMoreThan50Within1hPercent: 0,
       heldPast24hPercent: 80
-    }
+    },
+    externalLinks: [{ label: "Solscan", url: "https://solscan.io/account/Dev1111111111111111111111111111111111111" }]
   }));
   const factor = devInfoSlimeShieldFactor(summary);
   const shield = computeSlimeShield({
@@ -99,6 +101,8 @@ test("Dev Info summary and SlimeShield factor stay compact", () => {
   });
 
   assert.equal(summary.label, "Hold");
+  assert.equal(summary.launchesTracked, 3);
+  assert.equal(summary.externalLinks[0].label, "Solscan");
   assert.equal(factor.severity, "positive");
   assert.match(shield.factors.map((item) => item.key).join(","), /dev_info_hold/);
 });

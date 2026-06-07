@@ -120,6 +120,7 @@ test("SlimeShield, KOL Dump Detector, and Replay endpoints stay cache-first/loca
   assertNoHotExternalCalls(functionBody("webReplayBeforeBuy", serverSource), "Replay Before You Buy endpoint");
   assertNoHotExternalCalls(functionBody("webKolDumpStats", serverSource), "KOL Dump Detector endpoint");
   assert.match(functionBody("webSlimeShield", serverSource), /localMarketRowForMint/);
+  assert.match(functionBody("webSlimeShield", serverSource), /readPostgresMarketRowForMint/);
   assert.match(functionBody("webReplayBeforeBuy", serverSource), /rowsFromCachedMarketFeeds/);
   assert.match(functionBody("webKolDumpStats", serverSource), /storedKolProfiles/);
 });
@@ -183,8 +184,11 @@ test("Ogre Agent chat is contextual, retryable, copyable, and debug-instrumented
 
 test("Dev Info row pill, drawer, and endpoints are cache-first", () => {
   assert.match(functionBody("devInfoPillHtml"), /data-dev-info/);
+  assert.match(functionBody("devInfoPillHtml"), /status === "unknown" \? ""/);
   assert.match(functionBody("renderDevInfoDrawer"), /Dev Dump History/);
   assert.match(functionBody("renderDevInfoDrawer"), /Current dev position unavailable/);
+  assert.match(functionBody("renderDevInfoDrawer"), /Solscan Token/);
+  assert.match(functionBody("renderDevInfoDrawer"), /KOLscan Wallet/);
   assert.match(functionBody("scheduleVisibleDevInfoPrefetch"), /setTimeout/);
   assert.match(functionBody("ogreAgentContext"), /likelyDevWalletShort/);
   assert.match(serverSource, /dev-info\\\/summary/);
@@ -192,10 +196,21 @@ test("Dev Info row pill, drawer, and endpoints are cache-first", () => {
   assert.match(serverSource, /dev_wallet_candidates/);
   assert.match(serverSource, /token_metadata/);
   assert.match(serverSource, /pair_snapshots/);
+  assert.match(functionBody("computeDevInfoFromLocalData", serverSource), /readPostgresMarketRowForMint/);
+  assert.match(functionBody("computeDevInfoFromLocalData", serverSource), /inferPostgresDevWalletCandidateFromTransactions/);
+  assert.match(functionBody("computeDevInfoFromLocalData", serverSource), /devInfoReferenceLinks/);
   assertNoHotExternalCalls(functionBody("webDevInfoSummary", serverSource), "Dev Info summary endpoint");
   assertNoHotExternalCalls(functionBody("webDevInfoDetails", serverSource), "Dev Info details endpoint");
   assert.match(functionBody("webSlimeShield", serverSource), /webDevInfoSummary/);
   assert.match(functionBody("computeSlimeShield", fs.readFileSync(new URL("../src/lib/slimeShield.js", import.meta.url), "utf8")), /devInfoSlimeShieldFactor/);
+});
+
+test("KOL and Dev Info buttons use info labels instead of dump/action-looking text", () => {
+  assert.match(appSource, /function kolDumpDetailsButtonHtml\(kol = \{\}, label = "KOL Info"\)/);
+  assert.match(appSource, /function kolDumpSignalButtonHtml\(row = \{\}, label = "KOL Info"\)/);
+  assert.doesNotMatch(functionBody("kolDumpSignalButtonHtml"), /label = "Dump"/);
+  assert.match(appSource, /dump: "Dev"/);
+  assert.match(fs.readFileSync(new URL("../src/lib/devInfo.js", import.meta.url), "utf8"), /dump: "Dev"/);
 });
 
 test("Slime Scope refreshes its own bucket and Details buttons stay compact green", () => {

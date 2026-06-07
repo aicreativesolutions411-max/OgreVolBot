@@ -1,10 +1,10 @@
 const STATUS_LABELS = Object.freeze({
-  unknown: "?",
+  unknown: "",
   new: "New",
   hold: "Hold",
   mixed: "Mixed",
   risk: "Risk",
-  dump: "Dump"
+  dump: "Dev"
 });
 
 const CONFIDENCE_ORDER = Object.freeze({
@@ -205,6 +205,7 @@ export function calculateDevInfoStatus(input = {}) {
       riskReasons: ["No reliable creator wallet detected yet."],
       positiveReasons,
       suggestedAction: suggestedActionForStatus(status),
+      externalLinks: Array.isArray(input.externalLinks) ? input.externalLinks.slice(0, 8) : [],
       updatedAt: input.updatedAt || new Date().toISOString()
     };
   }
@@ -307,6 +308,7 @@ export function calculateDevInfoStatus(input = {}) {
     riskReasons,
     positiveReasons,
     suggestedAction: suggestedActionForStatus(status),
+    externalLinks: Array.isArray(input.externalLinks) ? input.externalLinks.slice(0, 8) : [],
     updatedAt: input.updatedAt || new Date().toISOString()
   };
 }
@@ -320,6 +322,9 @@ export function devInfoSummaryFromResult(result = {}) {
     confidence: normalizeConfidence(result.confidence),
     summary: result.summary || devInfoSummaryForStatus(status, result.confidence),
     likelyDevWallet: result.likelyDevWallet || null,
+    currentPositionStatus: result.currentPosition?.positionStatus || "unknown",
+    launchesTracked: Number(result.historicalStats?.launchesTracked || 0),
+    externalLinks: Array.isArray(result.externalLinks) ? result.externalLinks.slice(0, 8) : [],
     updatedAt: result.updatedAt || new Date().toISOString()
   };
 }
