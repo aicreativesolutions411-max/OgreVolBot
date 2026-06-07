@@ -337,8 +337,11 @@ test("landing sponsor and KOL entries use the compact top ticker", () => {
 
 test("mobile terminal nav is a slim icon rail and quick buy can open the wallet chooser", () => {
   assert.match(cssSource, /MOBILE_SLIM_HOTKEY_RAIL_FINAL_20260607_V1/);
-  assert.match(cssSource, /grid-template-columns: 46px minmax\(0, 1fr\) !important/);
-  assert.match(cssSource, /\.tabs button::after,[\s\S]*display: none !important/);
+  assert.match(cssSource, /MOBILE_RIGHT_RAIL_AND_THIN_FEED_BAR_20260607_V1/);
+  assert.match(cssSource, /grid-template-columns: minmax\(0, 1fr\) 50px !important/);
+  assert.match(cssSource, /\[data-dashboard\] > \.tabs[\s\S]*grid-column: 2 !important/);
+  assert.match(cssSource, /\.tabs button::after,[\s\S]*content: attr\(data-label\) !important/);
+  assert.match(cssSource, /\.command-controls \.live-pair-buckets,[\s\S]*overflow-x: auto !important/);
   assert.match(appSource, /function openWalletConnectModal\(options = \{\}\)/);
   assert.match(appSource, /return openWalletConnectChooser\(options\)/);
 });

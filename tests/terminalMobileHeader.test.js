@@ -10,7 +10,8 @@ function finalMobileHeaderCss() {
   const marker = "/* 2026-06-05 terminal mobile header cleanup.";
   const start = overridesSource.indexOf(marker);
   assert.notEqual(start, -1, "terminal mobile header cleanup CSS marker is present");
-  return overridesSource.slice(start);
+  const nextMarker = overridesSource.indexOf("/* 2026-06-07 trader polish", start + marker.length);
+  return overridesSource.slice(start, nextMarker === -1 ? undefined : nextMarker);
 }
 
 test("terminal mobile topbar keeps every original action hook", () => {

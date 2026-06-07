@@ -2168,7 +2168,7 @@ html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-t
     line-height: 1.04 !important;
     min-height: 35px !important;
     min-width: 0 !important;
-    overflow: hidden !important;
+    overflow: clip !important;
     padding: 3px 2px !important;
     text-align: center !important;
     white-space: normal !important;
@@ -2194,7 +2194,7 @@ html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-t
     font-size: 8.6px !important;
     line-height: 1.03 !important;
     max-width: 100% !important;
-    overflow: hidden !important;
+    overflow: clip !important;
     overflow-wrap: normal !important;
     text-overflow: clip !important;
     white-space: normal !important;
@@ -2337,7 +2337,7 @@ html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-t
     font-size: 10px !important;
     line-height: 1 !important;
     max-width: 78px !important;
-    overflow: hidden !important;
+    overflow: clip !important;
     text-overflow: ellipsis !important;
     white-space: nowrap !important;
   }
@@ -6544,7 +6544,7 @@ body.login-modal-open {
     font-size: 11px !important;
     line-height: 1.05 !important;
     white-space: normal !important;
-    overflow: hidden !important;
+    overflow: clip !important;
     text-overflow: ellipsis !important;
   }
 
@@ -6613,7 +6613,7 @@ body.login-modal-open {
   .top-sync-strip [data-top-sol],
   .top-sync-strip .top-wallet-disconnected {
     min-width: 0 !important;
-    overflow: hidden !important;
+    overflow: clip !important;
     text-overflow: ellipsis !important;
     white-space: nowrap !important;
   }
@@ -13639,5 +13639,317 @@ body:has(main.shell[data-app][data-route="connect"]) [data-ogre-agent-root] {
   html body main.shell[data-app][data-route="terminal"] .terminal-layout,
   html body main.shell[data-app][data-route="terminal"] .live-terminal {
     min-width: 0 !important;
+  }
+}
+
+/* MOBILE_RIGHT_RAIL_AND_THIN_FEED_BAR_20260607_V1: keep mobile mostly pairs/coins, with compact right-side nav and slim feed controls. */
+@media (max-width: 760px) {
+  html,
+  body {
+    height: auto !important;
+    min-height: 100% !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    overscroll-behavior-y: auto !important;
+    scroll-behavior: auto !important;
+    touch-action: pan-y !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] {
+    height: auto !important;
+    min-height: 100dvh !important;
+    overflow: visible !important;
+    overscroll-behavior-y: auto !important;
+    padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] {
+    align-items: start !important;
+    display: grid !important;
+    gap: 3px !important;
+    grid-template-columns: minmax(0, 1fr) 50px !important;
+    overflow: visible !important;
+    padding: 0 5px 10px 5px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .metrics,
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > [data-dashboard-error] {
+    grid-column: 1 / -1 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs {
+    align-self: start !important;
+    background: rgba(1, 13, 4, 0.72) !important;
+    border: 1px solid rgba(107, 255, 43, 0.25) !important;
+    border-radius: 999px !important;
+    box-shadow: 0 0 18px rgba(81, 255, 35, 0.1), inset 0 0 16px rgba(84, 255, 50, 0.06) !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 4px !important;
+    grid-column: 2 !important;
+    grid-row: 2 !important;
+    justify-self: end !important;
+    margin: 3px 0 8px 0 !important;
+    max-height: calc(100dvh - 42px) !important;
+    max-width: 48px !important;
+    min-width: 48px !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    padding: 4px 3px !important;
+    position: sticky !important;
+    right: 2px !important;
+    scrollbar-width: none !important;
+    top: calc(28px + env(safe-area-inset-top, 0px)) !important;
+    width: 48px !important;
+    z-index: 92 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs::-webkit-scrollbar {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .panel-host,
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > [data-panel] {
+    grid-column: 1 !important;
+    grid-row: 2 !important;
+    height: auto !important;
+    max-height: none !important;
+    min-height: 100dvh !important;
+    min-width: 0 !important;
+    overflow: visible !important;
+    padding: 3px 3px 14px 0 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-section-label {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs > button,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group > summary,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button {
+    align-items: center !important;
+    border-radius: 999px !important;
+    display: flex !important;
+    flex: 0 0 42px !important;
+    flex-direction: column !important;
+    font-size: 0 !important;
+    gap: 1px !important;
+    height: 42px !important;
+    justify-content: center !important;
+    line-height: 1 !important;
+    margin: 0 !important;
+    max-height: 42px !important;
+    max-width: 42px !important;
+    min-height: 42px !important;
+    min-width: 42px !important;
+    overflow: clip !important;
+    padding: 2px !important;
+    text-align: center !important;
+    width: 42px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs button::before,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group summary::before,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button::before,
+  html body main.shell[data-app][data-route="terminal"] .tabs button img,
+  html body main.shell[data-app][data-route="terminal"] .tabs button svg {
+    flex: 0 0 15px !important;
+    height: 15px !important;
+    margin: 0 !important;
+    width: 15px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs button::after,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group summary::after,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button::after {
+    color: currentColor !important;
+    content: attr(data-label) !important;
+    display: block !important;
+    font-size: 6.7px !important;
+    font-weight: 950 !important;
+    letter-spacing: 0 !important;
+    line-height: 0.95 !important;
+    max-width: 34px !important;
+    overflow: clip !important;
+    text-align: center !important;
+    text-overflow: clip !important;
+    text-shadow: none !important;
+    white-space: normal !important;
+    word-break: normal !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs button[data-tab="terminal"]::after { content: "Live" !important; }
+  html body main.shell[data-app][data-route="terminal"] .tabs button[data-tab="profile"]::after { content: "Home" !important; }
+  html body main.shell[data-app][data-route="terminal"] .tabs button[data-tab="smartChart"]::after { content: "Chart" !important; }
+  html body main.shell[data-app][data-route="terminal"] .tabs button[data-tab="trade"]::after { content: "Trade" !important; }
+  html body main.shell[data-app][data-route="terminal"] .tabs button[data-tab="live"]::after { content: "Pairs" !important; }
+  html body main.shell[data-app][data-route="terminal"] .tabs button[data-tab="liveTrades"]::after { content: "Trades" !important; }
+  html body main.shell[data-app][data-route="terminal"] .tabs button[data-tab="slimeScope"]::after { content: "Scope" !important; }
+  html body main.shell[data-app][data-route="terminal"] .tabs button[data-tab="watchlist"]::after { content: "Watch" !important; }
+  html body main.shell[data-app][data-route="terminal"] .tabs button[data-tab="kol"]::after { content: "KOL" !important; }
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group summary::after { content: "Tools" !important; }
+  html body main.shell[data-app][data-route="terminal"] .tabs button[data-tab="ogreAi"]::after { content: "AI" !important; }
+  html body main.shell[data-app][data-route="terminal"] .tabs button[data-tab="launchCoin"]::after { content: "Pump" !important; }
+  html body main.shell[data-app][data-route="terminal"] .tabs button[data-tab="bundle"]::after { content: "Bundle" !important; }
+  html body main.shell[data-app][data-route="terminal"] .tabs button[data-tab="volume"]::after { content: "Vol" !important; }
+  html body main.shell[data-app][data-route="terminal"] .tabs button[data-tab="launch"]::after { content: "Snipe" !important; }
+  html body main.shell[data-app][data-route="terminal"] .tabs button[data-tab="sniper"]::after { content: "Sniper" !important; }
+  html body main.shell[data-app][data-route="terminal"] .tabs button[data-tab="wallets"]::after { content: "Wallet" !important; }
+  html body main.shell[data-app][data-route="terminal"] .tabs button[data-tab="positions"]::after { content: "Pos" !important; }
+  html body main.shell[data-app][data-route="terminal"] .tabs button[data-tab="pnl"]::after { content: "PnL" !important; }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group {
+    background: transparent !important;
+    border: 0 !important;
+    display: flex !important;
+    flex: 0 0 auto !important;
+    flex-direction: column !important;
+    gap: 4px !important;
+    margin: 0 !important;
+    max-width: 42px !important;
+    min-width: 42px !important;
+    padding: 0 !important;
+    width: 42px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group[open] {
+    background: rgba(8, 32, 10, 0.8) !important;
+    border: 1px solid rgba(107, 255, 43, 0.28) !important;
+    border-radius: 999px !important;
+    margin: 0 !important;
+    padding: 3px 0 !important;
+    width: 44px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group:not([open]) button {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group[open] button {
+    display: flex !important;
+    opacity: 1 !important;
+    position: relative !important;
+    transform: none !important;
+    visibility: visible !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .command-title,
+  html body main.shell[data-app][data-route="terminal"] .terminal-title-row {
+    gap: 6px !important;
+    margin-bottom: 5px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .command-title p,
+  html body main.shell[data-app][data-route="terminal"] .terminal-title-row p {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .command-controls {
+    align-items: center !important;
+    background: rgba(4, 18, 6, 0.8) !important;
+    border: 1px solid rgba(107, 255, 43, 0.22) !important;
+    border-radius: 12px !important;
+    display: grid !important;
+    gap: 5px !important;
+    grid-template-columns: minmax(0, 1fr) minmax(86px, 0.48fr) !important;
+    margin: 0 0 7px !important;
+    padding: 5px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .command-controls .live-pair-buckets,
+  html body main.shell[data-app][data-route="terminal"] .terminal-main > .live-pair-buckets {
+    background: rgba(0, 10, 3, 0.62) !important;
+    border: 1px solid rgba(107, 255, 43, 0.2) !important;
+    border-radius: 999px !important;
+    display: flex !important;
+    gap: 4px !important;
+    grid-column: 1 / -1 !important;
+    margin: 0 !important;
+    max-width: 100% !important;
+    min-height: 31px !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    padding: 3px !important;
+    scrollbar-width: none !important;
+    white-space: nowrap !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .command-controls .live-pair-buckets::-webkit-scrollbar,
+  html body main.shell[data-app][data-route="terminal"] .terminal-main > .live-pair-buckets::-webkit-scrollbar {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .command-controls .live-pair-buckets button,
+  html body main.shell[data-app][data-route="terminal"] .terminal-main > .live-pair-buckets button {
+    border-radius: 999px !important;
+    flex: 0 0 auto !important;
+    font-size: 10.5px !important;
+    font-weight: 950 !important;
+    height: 25px !important;
+    line-height: 1 !important;
+    min-height: 25px !important;
+    min-width: 64px !important;
+    padding: 0 9px !important;
+    white-space: nowrap !important;
+    width: auto !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .command-controls label,
+  html body main.shell[data-app][data-route="terminal"] .command-controls .quick-buy-mini,
+  html body main.shell[data-app][data-route="terminal"] .command-controls .quick-buy-preset-bar {
+    font-size: 9px !important;
+    min-width: 0 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .command-controls select,
+  html body main.shell[data-app][data-route="terminal"] .command-controls input {
+    border-radius: 10px !important;
+    font-size: 11px !important;
+    min-height: 30px !important;
+    padding: 5px 8px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .command-controls > button,
+  html body main.shell[data-app][data-route="terminal"] .live-control-strip button,
+  html body main.shell[data-app][data-route="terminal"] .live-control-strip .button-like {
+    border-radius: 10px !important;
+    font-size: 10.5px !important;
+    min-height: 30px !important;
+    padding: 5px 8px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .command-controls > button[data-top-refresh-wallet] {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .live-control-strip {
+    border-radius: 12px !important;
+    gap: 5px !important;
+    margin: 0 0 7px !important;
+    padding: 6px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .live-control-strip > div:first-child span,
+  html body main.shell[data-app][data-route="terminal"] .live-control-strip > small {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .launch-filter-card,
+  html body main.shell[data-app][data-route="terminal"] .terminal-launch-filter,
+  html body main.shell[data-app][data-route="terminal"] .terminal-filter-card {
+    border-radius: 12px !important;
+    margin: 0 0 7px !important;
+    padding: 7px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .panel-host > *,
+  html body main.shell[data-app][data-route="terminal"] .terminal-layout,
+  html body main.shell[data-app][data-route="terminal"] .terminal-main,
+  html body main.shell[data-app][data-route="terminal"] .command-terminal,
+  html body main.shell[data-app][data-route="terminal"] .command-workspace,
+  html body main.shell[data-app][data-route="terminal"] .signal-list,
+  html body main.shell[data-app][data-route="terminal"] .terminal-token-row {
+    min-width: 0 !important;
+    overflow-anchor: auto !important;
   }
 }
