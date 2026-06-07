@@ -719,10 +719,18 @@ function initializeIntroVideoGate() {
   const audioButton = root.querySelector("[data-intro-sound]");
   let finishing = false;
   let audioUnlocked = true;
+  let lastIntroPhase = "";
+  let lastIntroMessage = "";
 
   const setPhase = (phase, message) => {
-    if (stage) stage.dataset.introPhase = phase;
-    if (status && message) status.textContent = message;
+    if (stage && phase !== lastIntroPhase) {
+      stage.dataset.introPhase = phase;
+      lastIntroPhase = phase;
+    }
+    if (status && message && message !== lastIntroMessage) {
+      status.textContent = message;
+      lastIntroMessage = message;
+    }
   };
 
   const setAudioUi = (enabled, attention = false) => {
@@ -766,6 +774,12 @@ function initializeIntroVideoGate() {
     entryVideo?.pause?.();
     navigateTo("/connect");
   };
+
+  if (entryVideo) {
+    entryVideo.preload = "auto";
+    entryVideo.playsInline = true;
+    entryVideo.disablePictureInPicture = true;
+  }
 
   const playIntro = (message = "") => {
     if (finishing) return;
@@ -13461,6 +13475,10 @@ function renderDevInfoDrawer() {
   const volume5m = firstUsefulNumber(market.volume5m, row.volume5m, row.volumeM5);
   const volumeH1 = firstUsefulNumber(market.volumeH1, row.volumeH1, row.volume1h);
   const pairAgeMinutes = firstUsefulNumber(market.pairAgeMinutes, row.pairAgeMinutes, Number(row.pairAgeSeconds) / 60);
+  const metadataAuthority = market.metadataAuthority || row.metadataAuthority || row.updateAuthority || "";
+  const mintAuthority = market.mintAuthority || row.mintAuthority || "";
+  const freezeAuthority = market.freezeAuthority || row.freezeAuthority || "";
+  const authorityLoaded = Boolean(market.heliusDasIndexedAt || market.heliusDasSource || row.heliusDasSource || metadataAuthority || mintAuthority || freezeAuthority);
   const referenceLinks = [
     ...(Array.isArray(result.externalLinks) ? result.externalLinks : []),
     ...(Array.isArray(summary.externalLinks) ? summary.externalLinks : []),
@@ -13515,6 +13533,8 @@ function renderDevInfoDrawer() {
           <div><dt>5m volume</dt><dd>${escapeHtml(Number.isFinite(volume5m) && volume5m > 0 ? compactUsd(volume5m) : "warming")}</dd></div>
           <div><dt>1h volume</dt><dd>${escapeHtml(Number.isFinite(volumeH1) && volumeH1 > 0 ? compactUsd(volumeH1) : "warming")}</dd></div>
           <div><dt>Pair age</dt><dd>${escapeHtml(Number.isFinite(pairAgeMinutes) ? devInfoMinutes(pairAgeMinutes) : "warming")}</dd></div>
+          <div><dt>Metadata auth</dt><dd>${escapeHtml(metadataAuthority ? shortAddress(metadataAuthority) : (authorityLoaded ? "none cached" : "warming"))}</dd></div>
+          <div><dt>Mint / freeze</dt><dd>${escapeHtml(`${mintAuthority ? shortAddress(mintAuthority) : (authorityLoaded ? "none" : "warming")} / ${freezeAuthority ? shortAddress(freezeAuthority) : (authorityLoaded ? "none" : "warming")}`)}</dd></div>
           <div><dt>Source</dt><dd>${escapeHtml(market.source || result.cacheSource || result.dataSource || "cache/local")}</dd></div>
         </dl>
         <p class="slimeshield-muted">Click Refresh to pull the latest public pair metadata and save what SlimeWire can verify.</p>
@@ -13756,6 +13776,10 @@ function renderSlimeShieldDetailsDrawer() {
   const liquidity = firstUsefulNumber(market.liquidityUsd, row.liquidityUsd);
   const volumeH1 = firstUsefulNumber(market.volumeH1, row.volumeH1, row.volume1h);
   const ageMinutes = firstUsefulNumber(market.pairAgeMinutes, row.pairAgeMinutes, Number(row.pairAgeSeconds) / 60);
+  const metadataAuthority = market.metadataAuthority || row.metadataAuthority || row.updateAuthority || "";
+  const mintAuthority = market.mintAuthority || row.mintAuthority || "";
+  const freezeAuthority = market.freezeAuthority || row.freezeAuthority || "";
+  const authorityLoaded = Boolean(market.heliusDasIndexedAt || market.heliusDasSource || row.heliusDasSource || metadataAuthority || mintAuthority || freezeAuthority);
   const devInfo = result.devInfoSummary || devInfoSummaryForRow(row);
   const devInfoStatus = devInfoStatusClass(devInfo.status);
   const tokenLinks = [
@@ -13801,6 +13825,8 @@ function renderSlimeShieldDetailsDrawer() {
           <div><dt>MC / FDV</dt><dd>${escapeHtml(Number.isFinite(marketCap) && marketCap > 0 ? compactUsd(marketCap) : (row.marketCapLabel || "warming"))}</dd></div>
           <div><dt>Volume</dt><dd>${escapeHtml(Number.isFinite(volumeH1) && volumeH1 > 0 ? compactUsd(volumeH1) : (row.volumeH1Label || row.volumeLabel || "warming"))}</dd></div>
           <div><dt>Dev Info</dt><dd>${escapeHtml(devInfoLabel(devInfoStatus))} · ${escapeHtml(devInfo.confidence || "unknown")}</dd></div>
+          <div><dt>Metadata auth</dt><dd>${escapeHtml(metadataAuthority ? shortAddress(metadataAuthority) : (authorityLoaded ? "none cached" : "warming"))}</dd></div>
+          <div><dt>Mint / freeze</dt><dd>${escapeHtml(`${mintAuthority ? shortAddress(mintAuthority) : (authorityLoaded ? "none" : "warming")} / ${freezeAuthority ? shortAddress(freezeAuthority) : (authorityLoaded ? "none" : "warming")}`)}</dd></div>
           <div><dt>Source</dt><dd>${escapeHtml(market.source || result.cacheSource || result.dataSource || "public/local")}</dd></div>
           <div><dt>Dev/risk notes</dt><dd>${escapeHtml(riskText.length ? riskText.join(" | ") : "no cached hard flags")}</dd></div>
         </dl>

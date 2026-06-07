@@ -151,6 +151,7 @@ const KOL_PROFILE_HISTORY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 let chartBootstrapSharedCache = new Map();
 const solanaTrackerCache = new Map();
 const madeOnSolCache = new Map();
+const heliusDasAssetCache = new Map();
 const webLoginAttemptLimits = new Map();
 const webSummaryCache = new Map();
 let redisKvClientPromise = null;
@@ -556,6 +557,12 @@ function loadConfig() {
   );
   const devInfoSourceSignatureLimit = Number.parseInt(process.env.DEV_INFO_SOURCE_SIGNATURE_LIMIT || "8", 10);
   const devInfoSourceTransactionLimit = Number.parseInt(process.env.DEV_INFO_SOURCE_TRANSACTION_LIMIT || "4", 10);
+  const heliusDasEnrichmentEnabled = parseOptionalBoolean(
+    process.env.HELIUS_DAS_ENRICHMENT_ENABLED || process.env.VITE_HELIUS_DAS_ENRICHMENT_ENABLED,
+    true
+  );
+  const heliusDasCacheTtlMs = Number.parseInt(process.env.HELIUS_DAS_CACHE_TTL_MS || "900000", 10);
+  const heliusDasTimeoutMs = Number.parseInt(process.env.HELIUS_DAS_TIMEOUT_MS || "1600", 10);
   const displayCacheFreshMs = Number.parseInt(process.env.DISPLAY_CACHE_FRESH_MS || "2500", 10);
   const displayCacheStaleMs = Number.parseInt(process.env.DISPLAY_CACHE_STALE_MS || "90000", 10);
   const cacheConnectTimeoutMs = Number.parseInt(process.env.CACHE_CONNECT_TIMEOUT_MS || "800", 10);
@@ -775,6 +782,14 @@ function loadConfig() {
     throw new Error("DEV_INFO_SOURCE_TRANSACTION_LIMIT must be an integer from 1 to 20.");
   }
 
+  if (!Number.isInteger(heliusDasCacheTtlMs) || heliusDasCacheTtlMs < 60_000 || heliusDasCacheTtlMs > 86_400_000) {
+    throw new Error("HELIUS_DAS_CACHE_TTL_MS must be an integer from 60000 to 86400000.");
+  }
+
+  if (!Number.isInteger(heliusDasTimeoutMs) || heliusDasTimeoutMs < 500 || heliusDasTimeoutMs > 5_000) {
+    throw new Error("HELIUS_DAS_TIMEOUT_MS must be an integer from 500 to 5000.");
+  }
+
   if (!Number.isInteger(displayCacheFreshMs) || displayCacheFreshMs < 500 || displayCacheFreshMs > 60_000) {
     throw new Error("DISPLAY_CACHE_FRESH_MS must be an integer from 500 to 60000.");
   }
@@ -883,6 +898,9 @@ function loadConfig() {
     devInfoSourceHydrationEnabled,
     devInfoSourceSignatureLimit,
     devInfoSourceTransactionLimit,
+    heliusDasEnrichmentEnabled,
+    heliusDasCacheTtlMs,
+    heliusDasTimeoutMs,
     displayCacheFreshMs,
     displayCacheStaleMs,
     cacheConnectTimeoutMs,
@@ -1108,13 +1126,13 @@ function startHealthServer() {
       || requestUrl.pathname === "/login" || requestUrl.pathname.startsWith("/account/login")
       || requestUrl.pathname === "/portal" || requestUrl.pathname.startsWith("/portal/")
       || requestUrl.pathname === "/terminal" || requestUrl.pathname.startsWith("/terminal/"))) {
-      await serveWebPortal(requestUrl, response);
+      await serveWebPortal(requestUrl, response, request.method);
       return;
     }
 
-    if (request.method === "GET" && (requestUrl.pathname.startsWith("/assets/")
+    if ((request.method === "GET" || request.method === "HEAD") && (requestUrl.pathname.startsWith("/assets/")
       || /\.(?:css|js|png|jpe?g|svg|webp|ico)$/i.test(requestUrl.pathname))) {
-      await serveWebPortal(requestUrl, response);
+      await serveWebPortal(requestUrl, response, request.method);
       return;
     }
 
@@ -2647,7 +2665,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
   }
 }
 
-async function serveWebPortal(requestUrl, response) {
+async function serveWebPortal(requestUrl, response, method = "GET") {
   const relativePath = requestUrl.pathname === "/" || requestUrl.pathname === "/connect"
     || requestUrl.pathname === "/login" || requestUrl.pathname.startsWith("/account/login")
     || requestUrl.pathname === "/portal" || requestUrl.pathname === "/terminal"
@@ -2667,10 +2685,16 @@ async function serveWebPortal(requestUrl, response) {
     const target = stat.isDirectory() ? path.join(filePath, "index.html") : filePath;
     const data = await fs.readFile(target);
     const noStoreAsset = target.endsWith("index.html") || /\.(?:js|css)$/i.test(target);
+    const immutableAsset = /\.(?:mp4|png|jpe?g|svg|webp|ico)$/i.test(target);
     response.writeHead(200, {
       "Content-Type": webContentType(target),
-      "Cache-Control": noStoreAsset ? "no-store" : "public, max-age=3600"
+      "Content-Length": data.length,
+      "Cache-Control": noStoreAsset ? "no-store" : immutableAsset ? "public, max-age=31536000, immutable" : "public, max-age=3600"
     });
+    if (method === "HEAD") {
+      response.end();
+      return;
+    }
     response.end(data);
   } catch {
     response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
@@ -3110,7 +3134,8 @@ function webContentType(filePath) {
     ".jpeg": "image/jpeg",
     ".webp": "image/webp",
     ".gif": "image/gif",
-    ".svg": "image/svg+xml; charset=utf-8"
+    ".svg": "image/svg+xml; charset=utf-8",
+    ".mp4": "video/mp4"
   };
   return types[ext] || "application/octet-stream";
 }
@@ -14532,6 +14557,126 @@ function dexPairLinks(pair = null) {
   return { websiteUrl, twitterUrl, telegramUrl };
 }
 
+function heliusDasEnabled() {
+  if (!CONFIG.heliusDasEnrichmentEnabled || !CONFIG.rpcUrl) return false;
+  return /helius/i.test(`${CONFIG.rpcProviderName || ""} ${CONFIG.rpcUrlHost || ""} ${CONFIG.rpcUrl || ""}`);
+}
+
+function heliusDasExternalKey(mint = "") {
+  return externalCacheKey(`helius:das:${String(mint || "").trim().toLowerCase()}`, "global");
+}
+
+function metadataFromHeliusDasAsset(mint = "", asset = null) {
+  if (!asset || typeof asset !== "object") return {};
+  const content = asset.content || {};
+  const metadata = content.metadata || {};
+  const links = content.links || {};
+  const files = Array.isArray(content.files) ? content.files : [];
+  const imageFile = files.find((file) => /image/i.test(String(file?.mime || file?.type || ""))) || files[0] || {};
+  const tokenInfo = asset.token_info || {};
+  const priceInfo = tokenInfo.price_info || {};
+  const creators = Array.isArray(asset.creators) ? asset.creators : [];
+  const authorities = Array.isArray(asset.authorities) ? asset.authorities : [];
+  const verifiedCreator = creators.find((creator) => creator?.verified && solanaPublicKeyLike(creator?.address)) || creators.find((creator) => solanaPublicKeyLike(creator?.address)) || {};
+  const metadataAuthority = firstString(
+    authorities.find((authority) => solanaPublicKeyLike(authority?.address))?.address,
+    asset.update_authority,
+    asset.updateAuthority
+  );
+  const mintAuthority = firstString(tokenInfo.mint_authority, tokenInfo.mintAuthority);
+  const freezeAuthority = firstString(tokenInfo.freeze_authority, tokenInfo.freezeAuthority);
+  const riskFlags = uniqueStrings([
+    mintAuthority ? "Mint authority is still set in token metadata." : "",
+    freezeAuthority ? "Freeze authority is still set in token metadata." : "",
+    asset.mutable === true ? "Token metadata is mutable." : ""
+  ]);
+  const imageUrl = normalizeTokenAvatarUrl(firstString(
+    links.image,
+    links.imageUrl,
+    metadata.image,
+    metadata.image_url,
+    imageFile.cdn_uri,
+    imageFile.uri
+  ));
+  return {
+    tokenMint: mint,
+    mint,
+    symbol: firstString(metadata.symbol, tokenInfo.symbol, asset.symbol),
+    name: firstString(metadata.name, tokenInfo.name, asset.name),
+    description: firstString(metadata.description, content.description),
+    avatarUrl: imageUrl,
+    imageUrl,
+    metadataUri: firstString(content.json_uri, content.jsonUri, metadata.uri),
+    websiteUrl: firstString(links.external_url, links.externalUrl, links.website, links.websiteUrl, metadata.external_url, metadata.website),
+    twitterUrl: firstString(links.twitter, links.x, links.twitterUrl, metadata.twitter, metadata.x),
+    telegramUrl: firstString(links.telegram, links.telegramUrl, metadata.telegram),
+    decimals: firstMeaningfulNumber(tokenInfo.decimals),
+    totalSupply: firstMeaningfulNumber(tokenInfo.supply, asset.supply?.print_current_supply),
+    priceUsd: firstMeaningfulNumber(priceInfo.price_per_token, priceInfo.priceUsd, priceInfo.value),
+    creatorWallet: firstString(verifiedCreator.address),
+    creator: firstString(verifiedCreator.address),
+    metadataAuthority,
+    updateAuthority: metadataAuthority,
+    mintAuthority,
+    freezeAuthority,
+    riskFlags,
+    heliusDasIndexedAt: asset.last_indexed_slot ? `slot ${asset.last_indexed_slot}` : "",
+    source: "helius-das"
+  };
+}
+
+async function fetchHeliusDasTokenMetadata(mint = "", options = {}) {
+  const cleanMint = String(mint || "").trim();
+  if (!cleanMint || !solanaPublicKeyLike(cleanMint) || !heliusDasEnabled()) return {};
+  const ttlMs = Math.max(60_000, Number(options.ttlMs || CONFIG.heliusDasCacheTtlMs));
+  const cached = heliusDasAssetCache.get(cleanMint);
+  if (!options.force && cached && Date.now() - Number(cached.cachedAt || 0) < ttlMs) {
+    return cached.value || {};
+  }
+  const external = !options.force ? await cacheGetJson(heliusDasExternalKey(cleanMint)).catch(() => null) : null;
+  if (external?.value && Number.isFinite(Number(external.cachedAt)) && Date.now() - Number(external.cachedAt) < ttlMs) {
+    heliusDasAssetCache.set(cleanMint, { cachedAt: Number(external.cachedAt), value: external.value });
+    return external.value;
+  }
+  const timeoutMs = Math.max(500, Math.min(5_000, Number(options.timeoutMs || CONFIG.heliusDasTimeoutMs)));
+  try {
+    const response = await rpcWithRetry("helius das getAsset", () => fetchJson(CONFIG.rpcUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: "slimewire-devinfo",
+        method: "getAsset",
+        params: {
+          id: cleanMint
+        }
+      }),
+      timeoutMs
+    }), 1, { priority: false });
+    if (response?.error) throw new Error(providerErrorValue(response.error) || "Helius DAS returned an error");
+    const value = metadataFromHeliusDasAsset(cleanMint, response?.result);
+    if (Object.keys(value).length) {
+      heliusDasAssetCache.set(cleanMint, { cachedAt: Date.now(), value });
+      await cacheSetJson(heliusDasExternalKey(cleanMint), displayCacheEnvelope(value), ttlMs).catch(() => false);
+    }
+    return value;
+  } catch (error) {
+    const value = { tokenMint: cleanMint, mint: cleanMint, source: "helius-das", metadataMissing: true };
+    heliusDasAssetCache.set(cleanMint, { cachedAt: Date.now(), value });
+    logCacheEvent({
+      cacheName: `helius-das:${cleanMint}`,
+      action: "miss",
+      provider: "helius",
+      cacheHit: false,
+      error: safePerfEventText(error?.message || "Helius DAS metadata unavailable", 120)
+    });
+    return {};
+  }
+}
+
 function geckoTerminalHandleUrl(value = "", kind = "x") {
   const text = String(value || "").trim();
   if (!text) return "";
@@ -19709,6 +19854,8 @@ function devInfoCandidateFromRow(row = {}) {
     ["launch_wallet", row.launchWallet, row.launchWalletAddress, row.launchCreatorWallet],
     ["pool_creator", row.poolCreator, row.pairCreator, row.poolCreatorWallet, row.pairCreatorWallet],
     ["initial_liquidity", row.initialLiquidityWallet, row.initialLiquidityProvider, row.liquidityProvider],
+    ["mint_authority", row.mintAuthority],
+    ["metadata_authority", row.metadataAuthority, row.updateAuthority],
     ["first_funder", row.firstFunder, row.firstFundingWallet, row.fundingWallet],
     ["first_buyer", row.firstBuyer, row.firstBuyerWallet, row.earlyBuyer]
   ];
@@ -19717,7 +19864,7 @@ function devInfoCandidateFromRow(row = {}) {
     if (!solanaPublicKeyLike(wallet)) continue;
     const confidence = ["creator", "deployer", "launch_wallet"].includes(source)
       ? "high"
-      : ["pool_creator", "initial_liquidity"].includes(source)
+      : ["pool_creator", "initial_liquidity", "mint_authority"].includes(source)
         ? "medium"
         : "low";
     return {
@@ -19788,6 +19935,9 @@ async function readPostgresMarketRowForMint(mint = "") {
       websiteUrl: firstString(meta.website_url, raw.websiteUrl, links.website, links.web),
       twitterUrl: firstString(meta.twitter_url, raw.twitterUrl, raw.xUrl, links.twitter, links.x),
       telegramUrl: firstString(meta.telegram_url, raw.telegramUrl, links.telegram),
+      decimals: firstMeaningfulNumber(meta.decimals, raw.decimals),
+      totalSupply: firstMeaningfulNumber(raw.totalSupply),
+      priceUsd: firstMeaningfulNumber(raw.priceUsd),
       source: firstString(meta.source, pair.dex, raw.source, "postgres-history"),
       pairAddress: firstString(pair.pair_address, raw.pairAddress, raw.raydiumPool),
       raydiumPool: firstString(raw.raydiumPool, pair.pair_address),
@@ -19801,8 +19951,14 @@ async function readPostgresMarketRowForMint(mint = "") {
       creatorWallet: firstString(raw.creatorWallet, raw.creator, raw.pumpCreator, raw.deployerWallet),
       deployerWallet: firstString(raw.deployerWallet, raw.deployer),
       poolCreator: firstString(raw.poolCreator, raw.pairCreator),
+      metadataAuthority: firstString(raw.metadataAuthority, raw.updateAuthority),
+      updateAuthority: firstString(raw.updateAuthority, raw.metadataAuthority),
+      mintAuthority: firstString(raw.mintAuthority),
+      freezeAuthority: firstString(raw.freezeAuthority),
       launchWallet: firstString(raw.launchWallet, raw.launchCreatorWallet),
       firstFunder: firstString(raw.firstFunder, raw.firstFundingWallet),
+      heliusDasIndexedAt: firstString(raw.heliusDasIndexedAt),
+      heliusDasSource: firstString(raw.heliusDasSource),
       riskFlags: Array.isArray(raw.riskFlags) ? raw.riskFlags.slice(0, 8) : [],
       scoreWarnings: Array.isArray(raw.scoreWarnings) ? raw.scoreWarnings.slice(0, 8) : [],
       bestPickWarnings: Array.isArray(raw.bestPickWarnings) ? raw.bestPickWarnings.slice(0, 8) : []
@@ -20805,6 +20961,10 @@ function devInfoMarketContextFromRow(row = {}, mint = "") {
     volumeH1: firstMeaningfulNumber(row.volumeH1),
     buys5m: firstMeaningfulNumber(row.buys5m),
     sells5m: firstMeaningfulNumber(row.sells5m),
+    metadataAuthority: firstString(row.metadataAuthority, row.updateAuthority),
+    mintAuthority: firstString(row.mintAuthority),
+    freezeAuthority: firstString(row.freezeAuthority),
+    heliusDasIndexedAt: firstString(row.heliusDasIndexedAt),
     pairCreatedAt: Number.isFinite(pairCreatedAt) ? pairCreatedAt : null,
     pairAgeMinutes: Number.isFinite(pairAgeMinutes) ? pairAgeMinutes : null,
     source: firstString(row.source, row.dexName, row.dexId, "public-cache")
@@ -20822,6 +20982,11 @@ function devInfoSourceEvidence(row = {}, candidate = null, sourceHydration = nul
     notes.push(`Public market context: ${parts.join(" · ")}.`);
   }
   if (Number.isFinite(Number(market.pairAgeMinutes))) notes.push(`Pair age source is available: ${Math.max(0, Math.round(Number(market.pairAgeMinutes)))}m.`);
+  if (row.heliusDasSource || row.metadataAuthority || row.mintAuthority || row.freezeAuthority) {
+    notes.push("Helius DAS metadata/authority fields are cached for this token.");
+  }
+  if (row.metadataAuthority) notes.push("Metadata authority is available as a low-confidence dev-wallet clue.");
+  if (row.mintAuthority || row.freezeAuthority) notes.push("Mint/freeze authority status is visible for SlimeShield risk checks.");
   if (candidate?.likelyDevWallet) {
     notes.push(`Likely dev wallet candidate found from ${String(candidate.source || "cached source").replace(/_/g, " ")}.`);
   } else {
@@ -20835,29 +21000,36 @@ async function hydrateMarketRowFromPublicSources(mint = "", row = null, reason =
   const cleanMint = String(mint || row?.tokenMint || row?.mint || "").trim();
   const baseRow = row || { tokenMint: cleanMint };
   if (!cleanMint) return baseRow;
+  const forceRefresh = /force|details|slimeshield/i.test(String(reason || ""));
   const shouldTryPump = String(cleanMint).toLowerCase().endsWith("pump")
     || Boolean(baseRow.isPump || baseRow.pumpUrl || baseRow.pumpFunUrl || baseRow.pumpMetadataPresent);
-  const [pairs, pumpMeta] = await Promise.all([
+  const shouldTryHeliusDas = heliusDasEnabled() && forceRefresh;
+  const [pairs, pumpMeta, heliusMeta] = await Promise.all([
     fetchDexScreenerTokenPairsBatch([cleanMint], { timeoutMs: 1_800 }).catch(() => []),
     shouldTryPump
       ? getPumpFunTokenMetadata(cleanMint, { timeoutMs: 1_400 }).catch(() => ({}))
+      : Promise.resolve({}),
+    shouldTryHeliusDas
+      ? fetchHeliusDasTokenMetadata(cleanMint, { force: forceRefresh, timeoutMs: Math.min(2_000, CONFIG.heliusDasTimeoutMs) }).catch(() => ({}))
       : Promise.resolve({})
   ]);
   const best = bestDexPairForToken(cleanMint, pairs);
   const dex = best ? metadataFromDexPair(cleanMint, best) : {};
   const volume = dex.volume || {};
   const txns = dex.txns || {};
+  const authorityRiskFlags = Array.isArray(heliusMeta.riskFlags) ? heliusMeta.riskFlags : [];
   return {
     ...baseRow,
     tokenMint: cleanMint,
     mint: cleanMint,
-    symbol: firstString(baseRow.symbol, pumpMeta.symbol, dex.symbol),
-    name: firstString(baseRow.name, pumpMeta.name, dex.name),
-    avatarUrl: firstString(baseRow.avatarUrl, baseRow.imageUrl, pumpMeta.imageUrl, pumpMeta.imageUri, dex.imageUrl),
-    imageUrl: firstString(baseRow.imageUrl, baseRow.avatarUrl, pumpMeta.imageUrl, pumpMeta.imageUri, dex.imageUrl),
-    websiteUrl: firstString(baseRow.websiteUrl, pumpMeta.websiteUrl, dex.websiteUrl),
-    twitterUrl: firstString(baseRow.twitterUrl, baseRow.xUrl, pumpMeta.twitterUrl, dex.twitterUrl),
-    telegramUrl: firstString(baseRow.telegramUrl, pumpMeta.telegramUrl, dex.telegramUrl),
+    symbol: firstString(baseRow.symbol, pumpMeta.symbol, dex.symbol, heliusMeta.symbol),
+    name: firstString(baseRow.name, pumpMeta.name, dex.name, heliusMeta.name),
+    avatarUrl: firstString(baseRow.avatarUrl, baseRow.imageUrl, pumpMeta.imageUrl, pumpMeta.imageUri, dex.imageUrl, heliusMeta.avatarUrl, heliusMeta.imageUrl),
+    imageUrl: firstString(baseRow.imageUrl, baseRow.avatarUrl, pumpMeta.imageUrl, pumpMeta.imageUri, dex.imageUrl, heliusMeta.imageUrl, heliusMeta.avatarUrl),
+    metadataUri: firstString(baseRow.metadataUri, baseRow.metadata_uri, pumpMeta.metadataUri, heliusMeta.metadataUri),
+    websiteUrl: firstString(baseRow.websiteUrl, pumpMeta.websiteUrl, dex.websiteUrl, heliusMeta.websiteUrl),
+    twitterUrl: firstString(baseRow.twitterUrl, baseRow.xUrl, pumpMeta.twitterUrl, dex.twitterUrl, heliusMeta.twitterUrl),
+    telegramUrl: firstString(baseRow.telegramUrl, pumpMeta.telegramUrl, dex.telegramUrl, heliusMeta.telegramUrl),
     marketCap: firstMeaningfulNumber(baseRow.marketCap, pumpMeta.marketCap, dex.marketCap),
     fdv: firstMeaningfulNumber(baseRow.fdv, pumpMeta.fdv, pumpMeta.marketCap, dex.fdv, dex.marketCap),
     liquidityUsd: firstMeaningfulNumber(baseRow.liquidityUsd, pumpMeta.liquidityUsd, dex.liquidityUsd),
@@ -20865,10 +21037,17 @@ async function hydrateMarketRowFromPublicSources(mint = "", row = null, reason =
     volumeH1: firstMeaningfulNumber(baseRow.volumeH1, volume.h1, volume["1h"]),
     buys5m: firstMeaningfulNumber(baseRow.buys5m, txns.m5?.buys, txns["5m"]?.buys),
     sells5m: firstMeaningfulNumber(baseRow.sells5m, txns.m5?.sells, txns["5m"]?.sells),
-    creatorWallet: firstString(baseRow.creatorWallet, baseRow.creator, pumpMeta.creatorWallet, pumpMeta.creator),
-    creator: firstString(baseRow.creator, baseRow.creatorWallet, pumpMeta.creator, pumpMeta.creatorWallet),
+    decimals: firstMeaningfulNumber(baseRow.decimals, pumpMeta.decimals, heliusMeta.decimals),
+    totalSupply: firstMeaningfulNumber(baseRow.totalSupply, pumpMeta.totalSupply, heliusMeta.totalSupply),
+    priceUsd: firstMeaningfulNumber(baseRow.priceUsd, pumpMeta.priceUsd, dex.priceUsd, heliusMeta.priceUsd),
+    creatorWallet: firstString(baseRow.creatorWallet, baseRow.creator, pumpMeta.creatorWallet, pumpMeta.creator, heliusMeta.creatorWallet),
+    creator: firstString(baseRow.creator, baseRow.creatorWallet, pumpMeta.creator, pumpMeta.creatorWallet, heliusMeta.creator),
     deployerWallet: firstString(baseRow.deployerWallet, baseRow.deployer, pumpMeta.deployerWallet, pumpMeta.deployer),
     poolCreator: firstString(baseRow.poolCreator, baseRow.pairCreator, pumpMeta.poolCreator, pumpMeta.initialLiquidityWallet),
+    metadataAuthority: firstString(baseRow.metadataAuthority, heliusMeta.metadataAuthority),
+    updateAuthority: firstString(baseRow.updateAuthority, heliusMeta.updateAuthority, heliusMeta.metadataAuthority),
+    mintAuthority: firstString(baseRow.mintAuthority, heliusMeta.mintAuthority),
+    freezeAuthority: firstString(baseRow.freezeAuthority, heliusMeta.freezeAuthority),
     pairAddress: firstString(baseRow.pairAddress, dex.pairAddress),
     raydiumPool: firstString(baseRow.raydiumPool, dex.raydiumPool, dex.pairAddress),
     dexId: firstString(baseRow.dexId, dex.dexId),
@@ -20877,6 +21056,12 @@ async function hydrateMarketRowFromPublicSources(mint = "", row = null, reason =
     pairCreatedAt: firstMeaningfulNumber(baseRow.pairCreatedAt, pumpMeta.pairCreatedAt, dex.pairCreatedAt),
     isPump: Boolean(baseRow.isPump || shouldTryPump),
     pumpUrl: firstString(baseRow.pumpUrl, shouldTryPump ? pumpFunUrl(cleanMint) : ""),
+    riskFlags: uniqueStrings([
+      ...(Array.isArray(baseRow.riskFlags) ? baseRow.riskFlags : []),
+      ...authorityRiskFlags
+    ]).slice(0, 10),
+    heliusDasIndexedAt: firstString(baseRow.heliusDasIndexedAt, heliusMeta.heliusDasIndexedAt),
+    heliusDasSource: heliusMeta.source || "",
     source: firstString(
       baseRow.source,
       pumpMeta.creatorWallet || pumpMeta.creator ? `pump-dex-hydration:${reason}` : `dexscreener-hydration:${reason}`
@@ -21187,8 +21372,12 @@ async function persistPostgresLivePairRows(rows = [], options = {}) {
           raydiumPool: row.raydiumPool,
           source: row.source,
           category: row.category,
+          decimals: firstMeaningfulNumber(row.decimals),
+          totalSupply: firstMeaningfulNumber(row.totalSupply),
+          priceUsd: firstMeaningfulNumber(row.priceUsd),
           avatarUrl: firstString(row.avatarUrl, row.imageUrl),
           imageUrl: firstString(row.imageUrl, row.avatarUrl),
+          metadataUri: firstString(row.metadataUri, row.metadata_uri),
           websiteUrl: row.websiteUrl || null,
           twitterUrl: row.twitterUrl || row.xUrl || null,
           telegramUrl: row.telegramUrl || null,
@@ -21199,6 +21388,12 @@ async function persistPostgresLivePairRows(rows = [], options = {}) {
           },
           creatorWallet: firstString(row.creatorWallet, row.creator, row.pumpCreator, row.pumpCreatorWallet),
           deployerWallet: firstString(row.deployerWallet, row.deployer, row.deployerAddress),
+          metadataAuthority: firstString(row.metadataAuthority, row.updateAuthority),
+          updateAuthority: firstString(row.updateAuthority, row.metadataAuthority),
+          mintAuthority: firstString(row.mintAuthority),
+          freezeAuthority: firstString(row.freezeAuthority),
+          heliusDasIndexedAt: firstString(row.heliusDasIndexedAt),
+          heliusDasSource: firstString(row.heliusDasSource),
           launchWallet: firstString(row.launchWallet, row.launchWalletAddress, row.launchCreatorWallet),
           poolCreator: firstString(row.poolCreator, row.pairCreator, row.poolCreatorWallet, row.pairCreatorWallet),
           firstFunder: firstString(row.firstFunder, row.firstFundingWallet, row.fundingWallet),

@@ -83,7 +83,7 @@ test("intro video gate has a real connect-route fallback", () => {
   assert.match(htmlSource, /data-intro-sound>Sound/);
   assert.match(htmlSource, /data-intro-start>Enter/);
   assert.doesNotMatch(htmlSource, /data-intro-skip/);
-  assert.match(htmlSource, /swamp-intro-final\.mp4/);
+  assert.match(htmlSource, /swamp-intro-smooth\.mp4/);
   assert.match(htmlSource, /sessionStorage\?\.getItem\("slimewireIntroCompleteV1"\) === "true"/);
   assert.match(htmlSource, /window\.history\.replaceState\(\{\}, "", "\/connect"\)/);
   assert.match(htmlSource, /const route = currentPath\.startsWith\("\/login"\)/);

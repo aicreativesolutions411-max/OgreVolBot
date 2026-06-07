@@ -215,6 +215,7 @@ test("Dev Info row pill, drawer, and endpoints are cache-first", () => {
   assert.match(functionBody("computeDevInfoFromLocalData", serverSource), /readPostgresMarketRowForMint/);
   assert.match(functionBody("computeDevInfoFromLocalData", serverSource), /inferPostgresDevWalletCandidateFromTransactions/);
   assert.match(functionBody("computeDevInfoFromLocalData", serverSource), /devInfoReferenceLinks/);
+  assert.match(functionBody("devInfoCandidateFromRow", serverSource), /metadata_authority/);
   assert.match(functionBody("webDevInfoDetails", serverSource), /hydrateMarketRowFromPublicSources/);
   assert.match(functionBody("webDevInfoDetails", serverSource), /marketContext/);
   assert.match(functionBody("webDevInfoDetails", serverSource), /sourceEvidence/);
@@ -261,6 +262,9 @@ test("Dev Info source hydration is capped, stored, and click scoped", () => {
   assert.match(functionBody("devCurrentTokenSnapshotEvent", serverSource), /getTokenBalanceForMintCached/);
   assert.match(functionBody("devCurrentTokenSnapshotEvent", serverSource), /getTokenSupply/);
   assert.match(functionBody("hydrateMarketRowFromPublicSources", serverSource), /getPumpFunTokenMetadata/);
+  assert.match(functionBody("hydrateMarketRowFromPublicSources", serverSource), /fetchHeliusDasTokenMetadata/);
+  assert.match(functionBody("metadataFromHeliusDasAsset", serverSource), /mintAuthority/);
+  assert.match(functionBody("persistPostgresLivePairRows", serverSource), /metadataAuthority/);
   assert.match(functionBody("renderDevInfoDrawer"), /Source refresh:/);
   assert.match(functionBody("renderSlimeShieldDetailsDrawer"), /Source refresh:/);
   assert.match(functionBody("loadDevInfoDetails"), /timeoutMs: options\.force \? 7000 : 3000/);

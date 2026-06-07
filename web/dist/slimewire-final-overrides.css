@@ -12163,6 +12163,7 @@ html body main.shell[data-app][data-route="intro"] .swamp-intro-stage {
   background:
     radial-gradient(circle at 50% 100%, rgba(81, 255, 24, 0.1), transparent 34%),
     #000 !important;
+  contain: layout paint size !important;
   height: calc(100svh - 24px) !important;
   min-height: calc(100svh - 24px) !important;
   overflow: clip !important;
@@ -12181,8 +12182,8 @@ html body main.shell[data-app][data-route="intro"] .swamp-intro-media {
   opacity: 1 !important;
   position: absolute !important;
   transform: translate3d(0, 0, 0) !important;
-  transition: opacity 180ms ease-out !important;
-  will-change: opacity, transform !important;
+  transition: none !important;
+  will-change: auto !important;
   width: 100% !important;
   z-index: 1 !important;
 }
