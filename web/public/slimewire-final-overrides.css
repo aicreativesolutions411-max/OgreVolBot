@@ -9611,3 +9611,73 @@ textarea,
   0%, 100% { transform: scale(0.9); opacity: 0.45; }
   45% { transform: scale(1.2); opacity: 0.95; }
 }
+
+/* LANDING_KOL_MOBILE_SAFE_BOTTOM_V1: keep the last KOL visible above the bottom slime lip on mobile load. */
+@media (max-width: 760px) {
+  [data-app][data-route="intro"] .swamp-kol-frame {
+    aspect-ratio: 16 / 10.65 !important;
+    margin-bottom: max(16px, env(safe-area-inset-bottom)) !important;
+    overflow: visible !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-kol-frame .swamp-support-frame-art {
+    object-fit: fill !important;
+    object-position: center !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-kol-frame .swamp-support-content {
+    padding-top: clamp(62px, 16vw, 78px) !important;
+    padding-left: clamp(54px, 14vw, 70px) !important;
+    padding-right: clamp(54px, 14vw, 70px) !important;
+    padding-bottom: clamp(58px, 15vw, 76px) !important;
+    gap: 4px !important;
+    overflow: hidden !important;
+    z-index: 2 !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-kol-frame .swamp-support-bubble {
+    grid-template-columns: 30px minmax(0, 1fr) !important;
+    min-height: 34px !important;
+    height: 34px !important;
+    padding: 2px 8px !important;
+    gap: 6px !important;
+    border-radius: 999px !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-kol-frame .swamp-support-bubble img {
+    width: 30px !important;
+    height: 30px !important;
+    min-width: 30px !important;
+    min-height: 30px !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-kol-frame .swamp-support-bubble strong {
+    font-size: 0.78rem !important;
+    line-height: 0.98 !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-kol-frame .swamp-support-bubble small {
+    font-size: 0.58rem !important;
+    line-height: 0.98 !important;
+  }
+}
+
+@media (max-width: 380px) {
+  [data-app][data-route="intro"] .swamp-kol-frame .swamp-support-content {
+    padding-left: 48px !important;
+    padding-right: 48px !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-kol-frame .swamp-support-bubble {
+    grid-template-columns: 28px minmax(0, 1fr) !important;
+    min-height: 32px !important;
+    height: 32px !important;
+  }
+
+  [data-app][data-route="intro"] .swamp-kol-frame .swamp-support-bubble img {
+    width: 28px !important;
+    height: 28px !important;
+    min-width: 28px !important;
+    min-height: 28px !important;
+  }
+}
