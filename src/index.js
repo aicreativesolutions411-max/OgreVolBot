@@ -71,6 +71,7 @@ import {
   safeLaunchImageDiagnostics
 } from "./lib/launchImageProcessor.js";
 import { createTokenMetadataResolver } from "./lib/tokenMetadataResolver.js";
+import { computeSlimeShield } from "./lib/slimeShield.js";
 import {
   Connection,
   Keypair,
@@ -113,6 +114,8 @@ const tokenAvatarLookupInFlight = new Map();
 const TOKEN_AVATAR_SUCCESS_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const TOKEN_AVATAR_FAIL_TTL_MS = 12 * 60 * 60 * 1000;
 const TOKEN_AVATAR_LOOKUP_CONCURRENCY = 5;
+const slimeShieldCache = new Map();
+const SLIMESHIELD_CACHE_TTL_MS = 45 * 1000;
 const solBalanceCache = new Map();
 const tokenAccountsCache = new Map();
 const tokenBalanceCache = new Map();
@@ -1802,6 +1805,15 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "GET" && pathname === "/api/web/slimeshield") {
+      const mint = requestUrl.searchParams.get("mint") || requestUrl.searchParams.get("token") || requestUrl.searchParams.get("tokenMint") || "";
+      sendCachedWebJson(request, response, 200, {
+        ok: true,
+        slimeshield: await webSlimeShield(mint)
+      }, "public, max-age=15, stale-while-revalidate=60");
+      return;
+    }
+
     if (request.method === "GET" && pathname === "/api/web/token-image") {
       await sendWebTokenImage(request, response, requestUrl);
       return;
@@ -2349,6 +2361,15 @@ async function handleWebApiRequest(request, response, requestUrl) {
         ok: true,
         livePairs: await webLivePairs(auth.userId, bucket, { sort, force })
       });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/slimeshield") {
+      const mint = requestUrl.searchParams.get("mint") || requestUrl.searchParams.get("token") || requestUrl.searchParams.get("tokenMint") || "";
+      sendCachedWebJson(request, response, 200, {
+        ok: true,
+        slimeshield: await webSlimeShield(mint)
+      }, "public, max-age=15, stale-while-revalidate=60");
       return;
     }
 
@@ -4303,6 +4324,15 @@ function sendWebJson(request, response, status, data) {
   response.writeHead(status, {
     "Content-Type": "application/json",
     "Cache-Control": "no-store",
+    ...webCorsHeaders(request)
+  });
+  response.end(JSON.stringify(data));
+}
+
+function sendCachedWebJson(request, response, status, data, cacheControl = "public, max-age=15, stale-while-revalidate=60") {
+  response.writeHead(status, {
+    "Content-Type": "application/json",
+    "Cache-Control": cacheControl,
     ...webCorsHeaders(request)
   });
   response.end(JSON.stringify(data));
@@ -26064,6 +26094,100 @@ async function webLivePairs(userId, bucket = "live", options = {}) {
       livePairsSharedCache.set(cacheKey, { ...current, promise: null });
     }
   }
+}
+
+function slimeShieldExternalKey(mint = "") {
+  return externalCacheKey(`slimeshield:${String(mint || "").trim().toLowerCase()}`, "global");
+}
+
+function cachedSlimeShieldRecord(mint = "") {
+  const key = String(mint || "").trim();
+  if (!key) return null;
+  const cached = slimeShieldCache.get(key);
+  if (!cached?.value) return null;
+  if (Date.now() - Number(cached.cachedAt || 0) > SLIMESHIELD_CACHE_TTL_MS) return null;
+  return {
+    ...cached.value,
+    cacheHit: true,
+    cacheSource: "memory"
+  };
+}
+
+function rowsFromCachedMarketFeeds() {
+  const rows = [];
+  for (const cached of livePairsSharedCache.values()) {
+    if (Array.isArray(cached?.value?.rows)) rows.push(...cached.value.rows);
+  }
+  if (Array.isArray(sniperCandidatesCache?.value)) rows.push(...sniperCandidatesCache.value);
+  for (const cached of chartBootstrapSharedCache.values()) {
+    if (cached?.value?.tokenMint) rows.push(cached.value);
+  }
+  return rows;
+}
+
+function localMarketRowForMint(mint = "") {
+  const needle = String(mint || "").trim();
+  if (!needle) return null;
+  const rows = rowsFromCachedMarketFeeds();
+  let best = null;
+  let bestWeight = -1;
+  for (const row of rows) {
+    if (!row) continue;
+    const rowMint = String(row.tokenMint || row.mint || row.tokenAddress || "").trim();
+    if (rowMint !== needle) continue;
+    const weight = [
+      row.liquidityUsd,
+      row.marketCap,
+      row.volumeM15,
+      row.volumeH1,
+      row.bestPickScore || row.score,
+      row.pairAgeSeconds,
+      row.riskFlags?.length,
+      row.bestPickWarnings?.length || row.scoreWarnings?.length
+    ].reduce((count, value) => count + (value || value === 0 ? 1 : 0), 0);
+    if (!best || weight > bestWeight) {
+      best = row;
+      bestWeight = weight;
+    }
+  }
+  return best;
+}
+
+async function webSlimeShield(tokenMint = "") {
+  const mint = String(tokenMint || "").trim();
+  const cacheFallback = cachedSlimeShieldRecord(mint);
+  if (cacheFallback) {
+    return cacheFallback;
+  }
+
+  const externalKey = slimeShieldExternalKey(mint);
+  const external = mint ? await cacheGetJson(externalKey).catch(() => null) : null;
+  if (external?.value && Number.isFinite(Number(external.cachedAt))) {
+    const ageMs = Date.now() - Number(external.cachedAt);
+    if (ageMs < SLIMESHIELD_CACHE_TTL_MS) {
+      const value = {
+        ...external.value,
+        cacheHit: true,
+        cacheSource: kvProviderName()
+      };
+      slimeShieldCache.set(mint, { cachedAt: Number(external.cachedAt), value: external.value });
+      logCacheEvent({ cacheName: `slimeshield:${mint}`, action: "kv-hit", provider: kvProviderName(), cacheHit: true, resultCount: 1 });
+      return value;
+    }
+  }
+
+  const row = localMarketRowForMint(mint) || { tokenMint: mint };
+  const result = {
+    ...computeSlimeShield(row, { mint }),
+    cacheHit: false,
+    cacheSource: "local",
+    dataSource: row?.tokenMint ? "cached-market-row" : "low-data-fallback"
+  };
+  if (mint) {
+    slimeShieldCache.set(mint, { cachedAt: Date.now(), value: result });
+    await cacheSetJson(externalKey, displayCacheEnvelope(result), SLIMESHIELD_CACHE_TTL_MS).catch(() => false);
+  }
+  return result;
 }
 
 function livePairCandidateDedupeKey(candidate) {

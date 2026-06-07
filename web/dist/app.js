@@ -277,6 +277,10 @@ const state = {
   livePairsLastUpdatedByBucket: {},
   livePairsRefreshErrorByBucket: {},
   livePairBucket: "live",
+  slimeShieldResults: {},
+  slimeShieldLoading: {},
+  slimeShieldDetails: { open: false, tokenMint: "" },
+  slimeShieldStatus: "",
   slimeScopeMode: "new",
   terminalFeeds: {},
   terminalFeedLog: [],
@@ -3986,6 +3990,7 @@ function render(options = {}) {
   if (state.route === "terminal" && !preserveSmartChartPanel) renderTabs();
   renderWalletConnectModal();
   renderQuickBuyModal();
+  renderSlimeShieldDetailsDrawer();
   renderOgreAgent();
   syncInteractionLocks();
   applyActionButtonStates();
@@ -10947,7 +10952,224 @@ function terminalBestPickRows(currentRows = [], kolRows = []) {
   ));
 }
 
-function scoreBadgeHtml(row = {}) {
+function slimeShieldFactor(key, label, severity, message, weight) {
+  return { key, label, severity, message, weight };
+}
+
+function slimeShieldAgeMinutes(row = {}) {
+  const minutes = parseUiNumber(row.pairAgeMinutes ?? row.ageMinutes ?? row.tokenAgeMinutes);
+  if (Number.isFinite(minutes)) return minutes;
+  const seconds = parseUiNumber(row.pairAgeSeconds ?? row.ageSeconds);
+  return Number.isFinite(seconds) ? seconds / 60 : null;
+}
+
+function slimeShieldVerdictFromScore(score, factors = []) {
+  const severe = (factors || []).some((item) => item.severity === "risk" && Math.abs(Number(item.weight || 0)) >= 30);
+  if (score < 40 || severe) return "AVOID";
+  if (score < 60) return "RISK";
+  if (score < 75) return "CAUTION";
+  return "BUY";
+}
+
+function slimeShieldSummaryForVerdict(verdict, factors = []) {
+  if (verdict === "BUY") return "Clean setup. Normal size still depends on your risk.";
+  if (verdict === "CAUTION") return "Trade small or use protection.";
+  if (verdict === "RISK") return "High-risk setup. Protected Buy recommended if you enter.";
+  const top = (factors || []).find((item) => item.severity === "risk");
+  return top?.message ? `Avoid recommended. ${top.message}` : "Avoid recommended. Multiple danger signals.";
+}
+
+function computeUiSlimeShield(row = {}) {
+  const mint = String(row.tokenMint || row.mint || row.tokenAddress || "").trim();
+  let score = 70;
+  const factors = [];
+  const known = [];
+  const unknown = [];
+
+  const liquidityUsd = parseUiNumber(row.liquidityUsd ?? row.currentLiquidityUsd ?? row.liquidity?.usd);
+  if (!Number.isFinite(liquidityUsd)) {
+    score -= 6;
+    unknown.push("liquidity");
+    factors.push(slimeShieldFactor("liquidity_unknown", "Liquidity", "neutral", "Liquidity is not cached yet.", -6));
+  } else if (liquidityUsd < 750) {
+    score -= 36;
+    known.push("liquidity");
+    factors.push(slimeShieldFactor("liquidity_extreme", "Liquidity", "risk", "Liquidity is extremely thin for fast entries.", -36));
+  } else if (liquidityUsd < 3000) {
+    score -= 20;
+    known.push("liquidity");
+    factors.push(slimeShieldFactor("liquidity_thin", "Liquidity", "risk", "Liquidity is thin, so entries and exits can slip.", -20));
+  } else if (liquidityUsd >= 20000) {
+    score += 8;
+    known.push("liquidity");
+    factors.push(slimeShieldFactor("liquidity_clean", "Liquidity", "positive", "Liquidity is healthier than most fresh launches.", 8));
+  } else {
+    known.push("liquidity");
+    factors.push(slimeShieldFactor("liquidity_ok", "Liquidity", "neutral", "Liquidity is workable but still early-market risk.", 0));
+  }
+
+  const ageMinutes = slimeShieldAgeMinutes(row);
+  if (!Number.isFinite(ageMinutes)) {
+    score -= 4;
+    unknown.push("age");
+    factors.push(slimeShieldFactor("age_unknown", "Age", "neutral", "Pair age is not fully verified yet.", -4));
+  } else if (ageMinutes < 3) {
+    score -= 10;
+    known.push("age");
+    factors.push(slimeShieldFactor("very_fresh", "Age", "caution", "Very fresh launch; fake volume and exit risk are harder to read.", -10));
+  } else if (ageMinutes > 60) {
+    score += 4;
+    known.push("age");
+    factors.push(slimeShieldFactor("aged_in", "Age", "positive", "Token has more than an hour of observable trading.", 4));
+  } else {
+    known.push("age");
+  }
+
+  const volume = parseUiNumber(row.volumeM15 ?? row.volumeH1 ?? row.volume5m ?? row.volumeUsd);
+  if (!Number.isFinite(volume)) {
+    unknown.push("volume");
+  } else if (volume <= 0) {
+    score -= 5;
+    known.push("volume");
+    factors.push(slimeShieldFactor("volume_missing", "Volume", "caution", "Trading volume is not visible yet.", -5));
+  } else if (volume >= 10000) {
+    score += 6;
+    known.push("volume");
+    factors.push(slimeShieldFactor("volume_active", "Volume", "positive", "Volume is active enough to review flow.", 6));
+  } else {
+    known.push("volume");
+  }
+
+  const buys = parseUiNumber(row.buys5m ?? row.buysH1 ?? row.buys);
+  const sells = parseUiNumber(row.sells5m ?? row.sellsH1 ?? row.sells);
+  if (Number.isFinite(buys) && Number.isFinite(sells)) {
+    known.push("flow");
+    if (sells >= buys * 1.8 && sells >= 5) {
+      score -= 18;
+      factors.push(slimeShieldFactor("sell_pressure", "Flow", "risk", "Recent sell pressure is stronger than buys.", -18));
+    } else if (buys >= sells * 1.4 && buys >= 8) {
+      score += 5;
+      factors.push(slimeShieldFactor("buy_pressure", "Flow", "positive", "Buy flow is currently stronger than sell flow.", 5));
+    }
+  } else {
+    unknown.push("flow");
+  }
+
+  const oldScore = parseUiNumber(row.bestPickScore ?? row.score);
+  if (Number.isFinite(oldScore)) {
+    known.push("score");
+    if (oldScore >= 78) {
+      score += 7;
+      factors.push(slimeShieldFactor("best_pick", "Best Pick", "positive", "Existing SlimeWire score is strong.", 7));
+    } else if (oldScore < 45) {
+      score -= 10;
+      factors.push(slimeShieldFactor("weak_score", "Best Pick", "caution", "Existing SlimeWire score is weak.", -10));
+    }
+  }
+
+  const riskText = [
+    ...(Array.isArray(row.riskFlags) ? row.riskFlags : []),
+    ...(Array.isArray(row.scoreWarnings) ? row.scoreWarnings : []),
+    ...(Array.isArray(row.bestPickWarnings) ? row.bestPickWarnings : [])
+  ].map((item) => String(item || "").toLowerCase());
+  if (riskText.some((text) => /mayhem|fake|scam|honeypot|blacklist/.test(text))) {
+    score -= 40;
+    factors.push(slimeShieldFactor("hard_flag", "Hard Flag", "risk", "A severe token warning is present.", -40));
+  }
+  if (riskText.some((text) => /bundle|bundled|cluster|concentr/.test(text))) {
+    score -= 18;
+    factors.push(slimeShieldFactor("bundle_risk", "Bundle Risk", "risk", "Bundled supply or wallet clustering is flagged.", -18));
+  }
+  if (riskText.some((text) => /dev|fresh wallet|fresh-wallet|insider/.test(text))) {
+    score -= 14;
+    factors.push(slimeShieldFactor("fresh_wallets", "Fresh Wallets", "caution", "Fresh/dev wallet activity is part of the risk read.", -14));
+  }
+  if (riskText.some((text) => /mint|freeze|token-2022/.test(text))) {
+    score -= 24;
+    factors.push(slimeShieldFactor("authority_risk", "Authority Risk", "risk", "Mint/freeze/token-program risk is visible.", -24));
+  }
+
+  const finalScore = Math.max(0, Math.min(100, Math.round(score)));
+  const verdict = slimeShieldVerdictFromScore(finalScore, factors);
+  return {
+    mint,
+    verdict,
+    score: finalScore,
+    confidence: known.length >= 5 && unknown.length <= 1 ? "high" : known.length >= 3 ? "medium" : "low",
+    summary: slimeShieldSummaryForVerdict(verdict, factors),
+    factors: factors.slice(0, 10),
+    suggestedAction: verdict === "BUY" ? "normal_buy" : verdict === "CAUTION" ? "small_buy" : verdict === "RISK" ? "watch_only" : "avoid",
+    protectedBuyPreset: verdict === "BUY" ? "scalp" : "conservative",
+    updatedAt: new Date().toISOString(),
+    dataSource: "local-ui"
+  };
+}
+
+function slimeShieldResultForRow(row = {}) {
+  const mint = String(row?.tokenMint || row?.mint || row?.tokenAddress || "").trim();
+  return (mint && state.slimeShieldResults?.[mint]) || computeUiSlimeShield(row);
+}
+
+function slimeShieldVerdictClass(verdict = "") {
+  return String(verdict || "CAUTION").toLowerCase();
+}
+
+function slimeShieldPillHtml(row = {}, options = {}) {
+  if (!featureEnabled("slimeShieldEnabled", true)) return legacyScoreBadgeHtml(row);
+  const result = slimeShieldResultForRow(row);
+  const mint = String(row.tokenMint || result.mint || "").trim();
+  const verdict = result.verdict || "CAUTION";
+  const compact = Boolean(options.compact);
+  return `
+    <button type="button" class="score-badge slimeshield-pill slimeshield-${escapeHtml(slimeShieldVerdictClass(verdict))}" data-slimeshield-details="${escapeHtml(mint)}" title="${escapeHtml(result.summary || "Open SlimeShield details")}">
+      <strong>${escapeHtml(verdict)}</strong>
+      <small>${compact ? "Shield" : "SlimeShield"}</small>
+    </button>
+  `;
+}
+
+function slimeShieldMiniHtml(row = {}) {
+  if (!featureEnabled("slimeShieldEnabled", true)) {
+    const score = Number(row.bestPickScore || row.score || 0);
+    return `<em class="mobile-score-mini" title="${escapeHtml(scoreWhyText(row))}">${escapeHtml(score ? `${score}` : "n/a")} score</em>`;
+  }
+  const result = slimeShieldResultForRow(row);
+  const mint = String(row.tokenMint || result.mint || "").trim();
+  const verdict = result.verdict || "CAUTION";
+  return `<button type="button" class="mobile-score-mini slimeshield-mini slimeshield-${escapeHtml(slimeShieldVerdictClass(verdict))}" data-slimeshield-details="${escapeHtml(mint)}" title="${escapeHtml(result.summary || "Open SlimeShield details")}">${escapeHtml(verdict)}</button>`;
+}
+
+function slimeShieldChipHtml(row = {}) {
+  if (!featureEnabled("slimeShieldEnabled", true)) {
+    const score = Number(row.bestPickScore || row.score || 0);
+    const scoreLabel = score ? `${score}` : "n/a";
+    return `
+      <span class="terminal-score-chip" title="${escapeHtml(scoreWhyText(row))}">
+        <strong>${escapeHtml(scoreLabel)}</strong>
+        <small>score</small>
+      </span>
+    `;
+  }
+  const result = slimeShieldResultForRow(row);
+  const mint = String(row.tokenMint || result.mint || "").trim();
+  const verdict = result.verdict || "CAUTION";
+  return `
+    <button type="button" class="terminal-score-chip slimeshield-chip slimeshield-${escapeHtml(slimeShieldVerdictClass(verdict))}" data-slimeshield-details="${escapeHtml(mint)}" title="${escapeHtml(result.summary || "Open SlimeShield details")}">
+      <strong>${escapeHtml(verdict)}</strong>
+      <small>Shield</small>
+    </button>
+  `;
+}
+
+function slimeShieldSmallLabel(row = {}) {
+  if (!featureEnabled("slimeShieldEnabled", true)) {
+    return row.bestPickScore ? `Score ${row.bestPickScore}/100` : row.valueLabel || row.smartMoney || "";
+  }
+  const result = slimeShieldResultForRow(row);
+  return `SlimeShield ${result.verdict || "CAUTION"}`;
+}
+
+function legacyScoreBadgeHtml(row = {}) {
   const score = Number(row.bestPickScore || row.score || 0);
   const warnings = row.scoreWarnings || row.bestPickWarnings || [];
   const label = score ? `${score}/100` : "n/a";
@@ -10957,6 +11179,10 @@ function scoreBadgeHtml(row = {}) {
       <small>${warnings.length ? "warnings" : "best pick"}</small>
     </span>
   `;
+}
+
+function scoreBadgeHtml(row = {}) {
+  return slimeShieldPillHtml(row, { compact: true });
 }
 
 function scoreWhyText(row = {}) {
@@ -11156,8 +11382,6 @@ function terminalSignalRowsHtml(rows, options = {}) {
   return `
     <div class="terminal-token-list">
       ${visibleRows.map((row, index) => {
-        const score = Number(row.bestPickScore || row.score || 0);
-        const scoreLabel = score ? `${score}` : "n/a";
         const setup = row.scalpSetup || row.momentum || row.category || "live";
         return `
           <article class="terminal-token-row" data-token-chart="${escapeHtml(row.tokenMint)}" data-token-chart-source="terminal-row">
@@ -11166,17 +11390,14 @@ function terminalSignalRowsHtml(rows, options = {}) {
               <div class="terminal-token-title">
                 <strong data-token-chart="${escapeHtml(row.tokenMint)}" data-token-chart-source="terminal-title">${escapeHtml(row.symbol || row.shortMint || shortAddress(row.tokenMint))}</strong>
                 <small>${escapeHtml(row.name || row.category || "Token")}</small>
-                <em class="mobile-score-mini" title="${escapeHtml(scoreWhyText(row))}">${escapeHtml(scoreLabel)} score</em>
+                ${slimeShieldMiniHtml(row)}
               </div>
               <button type="button" class="ca-copy" data-copy="${escapeHtml(row.tokenMint)}">${escapeHtml(shortAddress(row.tokenMint))}</button>
               <span class="terminal-token-age">${escapeHtml(row.pairAgeLabel || formatAgeFromRow(row) || "age unknown")} | ${escapeHtml(setup)}</span>
               ${miniTokenLinksHtml(row)}
             </div>
             ${terminalTokenStatsHtml(row)}
-            <span class="terminal-score-chip" title="${escapeHtml(scoreWhyText(row))}">
-              <strong>${escapeHtml(scoreLabel)}</strong>
-              <small>score</small>
-            </span>
+            ${slimeShieldChipHtml(row)}
             <div class="terminal-token-actions">
               <button type="button" class="primary" data-token-trade="${escapeHtml(row.tokenMint)}" data-token-trade-source="terminal-row" title="Open chart and buy/sell panel">${escapeHtml(actionLabel)}</button>
               <button type="button" data-quick-buy-token="${escapeHtml(row.tokenMint)}" data-quick-buy-source="terminal-row" title="Quick buy with preset or custom SOL amount">${escapeHtml(quickBuyButtonLabel())}</button>
@@ -11881,6 +12102,181 @@ function syncQuickBuyActionLabels() {
   });
 }
 
+function slimeShieldRowForMint(tokenMint = "") {
+  const mint = String(tokenMint || "").trim();
+  if (!mint) return null;
+  const raw = allRawSignalRows().find((row) => String(row?.tokenMint || row?.mint || row?.tokenAddress || "").trim() === mint);
+  if (raw) return raw;
+  const ref = state.smartChartTokenRef || {};
+  if (String(ref.tokenMint || ref.mint || "").trim() === mint) return ref;
+  return { tokenMint: mint, shortMint: shortAddress(mint), symbol: shortAddress(mint), dexUrl: dexUrl(mint) };
+}
+
+function slimeShieldSuggestedActionLabel(action = "") {
+  const labels = {
+    normal_buy: "Normal buy size can be considered",
+    small_buy: "Trade small or use protection",
+    watch_only: "Watch-only unless you accept high risk",
+    avoid: "Avoid recommended"
+  };
+  return labels[action] || "Review risk before buying";
+}
+
+function slimeShieldPresetLabel(preset = "") {
+  const labels = {
+    conservative: "Conservative",
+    scalp: "Scalp",
+    degen: "Degen"
+  };
+  return labels[preset] || "Conservative";
+}
+
+function slimeShieldCardHtml(token = {}) {
+  if (!featureEnabled("slimeShieldEnabled", true)) return "";
+  const result = slimeShieldResultForRow(token);
+  const mint = String(token.tokenMint || result.mint || "").trim();
+  const verdict = result.verdict || "CAUTION";
+  return `
+    <article class="slimeshield-card slimeshield-${escapeHtml(slimeShieldVerdictClass(verdict))}">
+      <header>
+        <div>
+          <strong>SlimeShield</strong>
+          <small>Pre-trade risk read</small>
+        </div>
+        <span class="slimeshield-verdict">${escapeHtml(verdict)}</span>
+      </header>
+      <p>${escapeHtml(result.summary || "SlimeShield is warming up. Trade carefully.")}</p>
+      <div class="slimeshield-actions">
+        <button type="button" data-slimeshield-details="${escapeHtml(mint)}">Why?</button>
+      </div>
+    </article>
+  `;
+}
+
+function slimeShieldFactorListHtml(factors = [], severity = "risk", emptyText = "No strong signal cached yet.") {
+  const rows = (Array.isArray(factors) ? factors : [])
+    .filter((factor) => severity === "positive" ? factor.severity === "positive" : factor.severity !== "positive")
+    .slice(0, 5);
+  if (!rows.length) return `<p class="slimeshield-muted">${escapeHtml(emptyText)}</p>`;
+  return `
+    <ul class="slimeshield-factor-list">
+      ${rows.map((factor) => `
+        <li>
+          <strong>${escapeHtml(factor.label || factor.key || "Signal")}</strong>
+          <span>${escapeHtml(factor.message || "Cached signal available.")}</span>
+        </li>
+      `).join("")}
+    </ul>
+  `;
+}
+
+function openSlimeShieldDetails(tokenMint = "") {
+  const mint = String(tokenMint || state.smartChartToken || state.tradeToken || "").trim();
+  if (!mint || !featureEnabled("slimeShieldEnabled", true)) return;
+  state.slimeShieldDetails = { open: true, tokenMint: mint };
+  state.slimeShieldStatus = "";
+  renderSlimeShieldDetailsDrawer();
+  void loadSlimeShield(mint);
+}
+
+function closeSlimeShieldDetails() {
+  state.slimeShieldDetails = { open: false, tokenMint: "" };
+  state.slimeShieldStatus = "";
+  renderSlimeShieldDetailsDrawer();
+}
+
+async function loadSlimeShield(tokenMint = "", options = {}) {
+  const mint = String(tokenMint || "").trim();
+  if (!mint || !featureEnabled("slimeShieldEnabled", true)) return null;
+  if (!options.force && state.slimeShieldResults?.[mint]) return state.slimeShieldResults[mint];
+  if (state.slimeShieldLoading?.[mint]) return null;
+  state.slimeShieldLoading = { ...(state.slimeShieldLoading || {}), [mint]: true };
+  renderSlimeShieldDetailsDrawer();
+  try {
+    const data = await api(`/api/web/slimeshield?mint=${encodeURIComponent(mint)}`, {
+      timeoutMs: 2500,
+      preserveSafeError: true
+    });
+    const result = data?.slimeshield || null;
+    if (result) {
+      state.slimeShieldResults = { ...(state.slimeShieldResults || {}), [mint]: result };
+      debugCounter(result.cacheHit ? "slimeshieldCacheHit" : "slimeshieldCacheMiss");
+      state.slimeShieldStatus = result.cacheHit ? "Loaded from cache." : "Updated from local data.";
+    }
+    return result;
+  } catch (error) {
+    state.slimeShieldStatus = error?.message || "SlimeShield details are temporarily unavailable.";
+    return null;
+  } finally {
+    const nextLoading = { ...(state.slimeShieldLoading || {}) };
+    delete nextLoading[mint];
+    state.slimeShieldLoading = nextLoading;
+    renderSlimeShieldDetailsDrawer();
+  }
+}
+
+function renderSlimeShieldDetailsDrawer() {
+  let root = document.querySelector("[data-slimeshield-drawer-root]");
+  if (!root) {
+    root = document.createElement("div");
+    root.dataset.slimeshieldDrawerRoot = "true";
+    document.body.appendChild(root);
+  }
+  const details = state.slimeShieldDetails || {};
+  const open = Boolean(details.open && details.tokenMint);
+  document.body.classList.toggle("slimeshield-drawer-open", open);
+  if (!open || !featureEnabled("slimeShieldEnabled", true)) {
+    root.innerHTML = "";
+    return;
+  }
+  const mint = String(details.tokenMint || "").trim();
+  const row = slimeShieldRowForMint(mint) || { tokenMint: mint };
+  const result = state.slimeShieldResults?.[mint] || slimeShieldResultForRow(row);
+  const verdict = result.verdict || "CAUTION";
+  const loading = Boolean(state.slimeShieldLoading?.[mint]);
+  const riskFactors = Array.isArray(result.factors) ? result.factors : [];
+  root.innerHTML = `
+    <div class="slimeshield-drawer-backdrop" data-slimeshield-close></div>
+    <aside class="slimeshield-drawer" role="dialog" aria-modal="true" aria-label="SlimeShield details">
+      <header>
+        <div>
+          <span>SlimeShield</span>
+          <h3>${escapeHtml(verdict)}</h3>
+        </div>
+        <button type="button" aria-label="Close SlimeShield details" data-slimeshield-close>Close</button>
+      </header>
+      <section class="slimeshield-drawer-summary slimeshield-${escapeHtml(slimeShieldVerdictClass(verdict))}">
+        <strong>${escapeHtml(row.symbol || row.shortMint || shortAddress(mint))}</strong>
+        <p>${escapeHtml(result.summary || "SlimeShield is warming up. Trade carefully.")}</p>
+        <div>
+          <span>Confidence: ${escapeHtml(result.confidence || "low")}</span>
+          <span>Score: ${escapeHtml(Number.isFinite(Number(result.score)) ? `${Math.round(Number(result.score))}/100` : "n/a")}</span>
+          <span>${loading ? "Updating..." : `Updated ${escapeHtml(formatDate(result.updatedAt))}`}</span>
+        </div>
+      </section>
+      <section>
+        <h4>Top Risk Reasons</h4>
+        ${slimeShieldFactorListHtml(riskFactors, "risk", "No major cached risk reason yet. Missing data lowers confidence.")}
+      </section>
+      <section>
+        <h4>Positive Signals</h4>
+        ${slimeShieldFactorListHtml(riskFactors, "positive", "No positive signal is strong enough to highlight yet.")}
+      </section>
+      <section class="slimeshield-action-note">
+        <h4>Suggested Action</h4>
+        <p>${escapeHtml(slimeShieldSuggestedActionLabel(result.suggestedAction))}</p>
+        <small>Protected Buy preset suggestion: ${escapeHtml(slimeShieldPresetLabel(result.protectedBuyPreset))}</small>
+      </section>
+      <div class="slimeshield-drawer-actions">
+        <button type="button" data-slimeshield-refresh="${escapeHtml(mint)}" ${loading ? "disabled" : ""}>${loading ? "Updating..." : "Refresh Details"}</button>
+        <button type="button" data-token-trade="${escapeHtml(mint)}" data-token-trade-source="slimeshield-drawer">Open Trade</button>
+      </div>
+      <p class="slimeshield-safety-copy">SlimeShield is a trading-risk helper, not financial advice. Always review wallet prompts before signing. SlimeWire never needs your seed phrase.</p>
+      ${state.slimeShieldStatus ? `<small class="slimeshield-status">${escapeHtml(state.slimeShieldStatus)}</small>` : ""}
+    </aside>
+  `;
+}
+
 function openPresetEditorTab(kind) {
   const nextTab = kind === "bundle" ? "bundle" : "trade";
   state.activeTab = nextTab;
@@ -11907,9 +12303,10 @@ function tokenPreviewHtml(token) {
       <div><dt>Liquidity</dt><dd>${escapeHtml(token.liquidityLabel || "n/a")}</dd></div>
       <div><dt>MC / FDV</dt><dd>${escapeHtml(token.marketCapLabel || "n/a")}</dd></div>
       <div><dt>Volume</dt><dd>${escapeHtml(token.volumeH1Label || token.volumeLabel || "n/a")}</dd></div>
-      <div><dt>Score</dt><dd>${escapeHtml(token.bestPickScore ? `${token.bestPickScore}/100` : "n/a")}</dd></div>
+      <div><dt>${featureEnabled("slimeShieldEnabled", true) ? "Shield" : "Score"}</dt><dd>${escapeHtml(featureEnabled("slimeShieldEnabled", true) ? (slimeShieldResultForRow(token).verdict || "CAUTION") : (token.bestPickScore ? `${token.bestPickScore}/100` : "n/a"))}</dd></div>
       <div><dt>Position</dt><dd>${hasPosition ? "Held" : "None"}</dd></div>
     </dl>
+    ${slimeShieldCardHtml(token)}
     <div class="card-actions compact">
       <a href="${escapeHtml(token.dexUrl || dexUrl(token.tokenMint))}" target="_blank" rel="noreferrer">Dex</a>
       ${pumpUrlForRow(token) ? `<a href="${escapeHtml(pumpUrlForRow(token))}" target="_blank" rel="noreferrer">Pump</a>` : ""}
@@ -11918,7 +12315,6 @@ function tokenPreviewHtml(token) {
       <button data-quick-bundle-token="${escapeHtml(token.tokenMint)}">Bundle</button>
       ${hasPosition ? `<button data-position-sell="${escapeHtml(token.tokenMint)}" data-position-sell-percent="100">Exit 100%</button>` : ""}
     </div>
-    <small class="score-breakdown">Why: ${escapeHtml(scoreWhyText(token))}</small>
   `;
 }
 
@@ -11986,6 +12382,7 @@ function smartChartInfoPanelHtml(token = {}, heldPosition = null) {
       </div>
       ${smartChartDexFrameHtml(token, "info")}
       ${terminalTokenStatsHtml(token)}
+      ${slimeShieldCardHtml(token)}
       <div class="smart-chart-suggestion">
         <strong>Smart read</strong>
         <p>${escapeHtml(suggestion)}</p>
@@ -12222,6 +12619,7 @@ function smartChartHtml() {
         <aside class="terminal-panel smart-chart-side">
           <h3>${escapeHtml(token.symbol || "Token")} setup</h3>
           ${terminalTokenStatsHtml(token)}
+          ${slimeShieldCardHtml(token)}
           ${chartTradePanelHtml(token, heldPosition)}
         </aside>
       </div>
@@ -12783,7 +13181,7 @@ function tokenSignalRowHtml(row, index, options = {}) {
       <div class="signal-cell"><span>${escapeHtml(row.pairAgeLabel || formatAgeFromRow(row) || "age unknown")}</span><small>${escapeHtml(row.scalpSetup || row.momentum || `#${index + 1}`)}</small></div>
       <div class="signal-cell"><span>${escapeHtml(firstStatLabel(row.liquidityLabel, livePairLiquidityUsd(row) > 0 ? compactUsd(livePairLiquidityUsd(row)) : "", "checking"))}</span><small>${formatChangeHtml(row.h1)}</small></div>
       <div class="signal-cell"><span>${escapeHtml(firstStatLabel(row.marketCapLabel, livePairMarketCap(row) > 0 ? compactUsd(livePairMarketCap(row)) : "", "checking"))}</span><small>${escapeHtml(row.category || row.signalType || "signal")}</small></div>
-      <div class="signal-cell"><span>${escapeHtml(row.txnsLabel || row.winRateLabel || "n/a")}</span><small>${escapeHtml(row.bestPickScore ? `Score ${row.bestPickScore}/100` : row.valueLabel || row.smartMoney || "")}</small></div>
+      <div class="signal-cell"><span>${escapeHtml(row.txnsLabel || row.winRateLabel || "n/a")}</span><small>${escapeHtml(slimeShieldSmallLabel(row))}</small></div>
       <div class="signal-cell volume-windows">
         <span>${escapeHtml(firstStatLabel(row.volumeH1Label, row.volumeLabel, livePairVolumeH1(row) > 0 ? compactUsd(livePairVolumeH1(row)) : "", "checking"))}</span>
         <small>${volumeWindowItems(row).map(([label, value]) => `${label} ${value}`).join(" | ")}</small>
@@ -15036,6 +15434,11 @@ document.addEventListener("keydown", (event) => {
     return;
   }
 
+  if (state.slimeShieldDetails?.open) {
+    closeSlimeShieldDetails();
+    return;
+  }
+
   if (!state.loginModalOpen && !state.quickBuyModal?.open) return;
   if (state.quickBuyModal?.open) {
     closeQuickBuyModal();
@@ -15091,6 +15494,12 @@ document.addEventListener("click", async (event) => {
   const source = event.target instanceof Element
     ? event.target
     : event.target?.parentElement;
+  const slimeShieldCloseTarget = source?.closest?.("[data-slimeshield-close]");
+  if (slimeShieldCloseTarget) {
+    event.preventDefault();
+    closeSlimeShieldDetails();
+    return;
+  }
   const tekSummary = source?.closest?.(".tabs .nav-tool-group summary");
   if (tekSummary) {
     event.preventDefault();
@@ -15101,6 +15510,18 @@ document.addEventListener("click", async (event) => {
     return;
   }  const target = source?.closest?.("button, a, [data-preview-token], [data-token-chart], [data-token-trade], [data-quick-buy-token], [data-quick-trade-token]");
   if (!target) return;
+
+  if (target.matches("[data-slimeshield-details]")) {
+    event.preventDefault();
+    openSlimeShieldDetails(target.dataset.slimeshieldDetails || "");
+    return;
+  }
+
+  if (target.matches("[data-slimeshield-refresh]")) {
+    event.preventDefault();
+    void loadSlimeShield(target.dataset.slimeshieldRefresh || "", { force: true });
+    return;
+  }
 
   if (target.matches("[data-ogre-agent-toggle]")) {
     if (state.ogreAgentOpen) {
