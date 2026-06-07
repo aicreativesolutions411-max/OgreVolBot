@@ -2078,6 +2078,204 @@ html body main.shell[data-app] .clip-farm-control small {
   }
 }
 
+/* MOBILE_TERMINAL_RAIL_AND_REFRESH_STABILITY_20260607_V1: compact rail, no pair bleed, calmer refresh. */
+@media (max-width: 760px) {
+  html,
+  body {
+    max-width: 100vw !important;
+    overflow-x: hidden !important;
+    scroll-behavior: auto !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] {
+    box-sizing: border-box !important;
+    max-width: 100vw !important;
+    overflow-x: hidden !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+    width: 100vw !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] {
+    align-items: start !important;
+    box-sizing: border-box !important;
+    column-gap: 5px !important;
+    display: grid !important;
+    grid-template-columns: 108px minmax(0, 1fr) !important;
+    grid-template-rows: auto minmax(0, auto) !important;
+    max-width: 100vw !important;
+    overflow: visible !important;
+    padding: 0 4px 10px !important;
+    width: 100% !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .metrics {
+    grid-column: 1 / -1 !important;
+    grid-row: 1 !important;
+    margin: 4px 4px 5px !important;
+    max-width: calc(100vw - 8px) !important;
+    min-width: 0 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs {
+    align-self: start !important;
+    box-sizing: border-box !important;
+    display: grid !important;
+    gap: 4px !important;
+    grid-column: 1 !important;
+    grid-row: 2 !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    margin: 0 !important;
+    max-height: calc(100dvh - 90px) !important;
+    min-width: 0 !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    padding: 5px 4px !important;
+    position: sticky !important;
+    scrollbar-width: thin !important;
+    top: 28px !important;
+    width: 108px !important;
+    z-index: 4 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs::before {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-section-label {
+    grid-column: 1 !important;
+    letter-spacing: 0.08em !important;
+    margin: 3px 0 0 !important;
+    padding: 0 1px !important;
+    font-size: 7px !important;
+    line-height: 1 !important;
+    text-align: left !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs > button,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group > summary,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button {
+    border-radius: 9px !important;
+    box-sizing: border-box !important;
+    font-size: 8.6px !important;
+    gap: 1px !important;
+    grid-column: 1 !important;
+    line-height: 1.04 !important;
+    min-height: 35px !important;
+    min-width: 0 !important;
+    overflow: hidden !important;
+    padding: 3px 2px !important;
+    text-align: center !important;
+    white-space: normal !important;
+    width: 100% !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs button::before,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group summary::before,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button::before,
+  html body main.shell[data-app][data-route="terminal"] .tabs button img,
+  html body main.shell[data-app][data-route="terminal"] .tabs button svg {
+    height: 12px !important;
+    margin: 0 !important;
+    max-height: 12px !important;
+    max-width: 12px !important;
+    width: 12px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs button::after,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group summary::after,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button::after {
+    display: block !important;
+    font-size: 8.6px !important;
+    line-height: 1.03 !important;
+    max-width: 100% !important;
+    overflow: hidden !important;
+    overflow-wrap: normal !important;
+    text-overflow: clip !important;
+    white-space: normal !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group {
+    display: grid !important;
+    gap: 4px !important;
+    grid-column: 1 !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    margin: 0 !important;
+    min-width: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group > summary {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .panel-host,
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > [data-panel],
+  html body main.shell[data-app][data-route="terminal"] .panel-host {
+    align-self: start !important;
+    box-sizing: border-box !important;
+    grid-column: 2 !important;
+    grid-row: 2 !important;
+    margin: 0 !important;
+    min-width: 0 !important;
+    overflow-x: hidden !important;
+    padding: 0 0 10px !important;
+    position: relative !important;
+    width: 100% !important;
+    z-index: 1 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .panel-host > *,
+  html body main.shell[data-app][data-route="terminal"] .command-terminal,
+  html body main.shell[data-app][data-route="terminal"] .live-pairs-page,
+  html body main.shell[data-app][data-route="terminal"] .slime-scope-page,
+  html body main.shell[data-app][data-route="terminal"] .positions-panel,
+  html body main.shell[data-app][data-route="terminal"] .account-check-card {
+    box-sizing: border-box !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    overflow-x: hidden !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .command-controls,
+  html body main.shell[data-app][data-route="terminal"] .terminal-title-row,
+  html body main.shell[data-app][data-route="terminal"] .terminal-panel,
+  html body main.shell[data-app][data-route="terminal"] .signal-list,
+  html body main.shell[data-app][data-route="terminal"] .terminal-token-list {
+    max-width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"][data-loading="true"] .panel-host,
+  html body main.shell[data-app][data-route="terminal"][data-loading="true"] .terminal-panel,
+  html body main.shell[data-app][data-route="terminal"][data-loading="true"] .signal-list {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+
+  html body main.shell[data-app] .clip-share-actions [data-clip-clear] {
+    min-width: 56px !important;
+  }
+}
+
+@media (max-width: 390px) {
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] {
+    grid-template-columns: 102px minmax(0, 1fr) !important;
+    column-gap: 4px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs {
+    width: 102px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs > button,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button {
+    font-size: 8.1px !important;
+    min-height: 33px !important;
+  }
+}
+
 /* DESKTOP_TERMINAL_TOPBAR_SLIM_20260607_V1: keep the added recorder from forcing a giant second header row. */
 @media (min-width: 821px) {
   html body main.shell[data-app][data-route="terminal"] > .topbar {

@@ -518,7 +518,9 @@ function scheduleLivePairsRender(reason = "live-pairs-batch") {
       resultCount: Array.isArray(currentLivePairs()?.rows) ? currentLivePairs().rows.length : 0,
       details: details.length ? details.slice(-3).join(" | ") : reason
     });
+    const scrollSnapshot = captureStableFeedScrollSnapshot();
     render();
+    restoreStableFeedScrollSnapshot(scrollSnapshot);
   };
   livePairsRenderTimer = window.setTimeout(() => {
     livePairsRenderRaf = window.requestAnimationFrame(flush);
@@ -4277,7 +4279,7 @@ function updateClipFarmControl() {
           <button type="button" data-clip-download title="Download video">Save</button>
           <a href="https://twitter.com/intent/tweet?text=${encodeURIComponent("Farming SlimeWire clips at https://slimewire.org")}" target="_blank" rel="noreferrer" title="Open X">X</a>
           <a href="https://t.me/share/url?url=${encodeURIComponent(shareSiteUrl)}&text=${encodeURIComponent("Farming SlimeWire clips")}" target="_blank" rel="noreferrer" title="Open Telegram">TG</a>
-          <button type="button" data-clip-clear title="Close clip options">x</button>
+          <button type="button" data-clip-clear title="Close clip options">Cancel</button>
         </div>
       ` : ""}
       ${status ? `<small>${escapeHtml(status)}</small>` : ""}
@@ -4667,14 +4669,20 @@ function stableFeedSelectorValue(value = "") {
   return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
+function isCompactViewport() {
+  return Boolean(window.matchMedia?.("(max-width: 760px)")?.matches || (window.innerWidth || 0) <= 760);
+}
+
 function captureStableFeedScrollSnapshot(panel = $("[data-panel]")) {
   if (!panel || state.route !== "terminal" || !MOBILE_STABLE_FEED_TABS.has(state.activeTab)) return null;
-  if (panel.dataset.renderedTab && panel.dataset.renderedTab !== state.activeTab) return null;
+  const renderedTab = panel.dataset.renderedTab;
   const rows = Array.from(panel.querySelectorAll(STABLE_FEED_ROW_SELECTOR));
+  if (renderedTab && renderedTab !== state.activeTab && !rows.length) return null;
   if (!rows.length) return null;
   const anchor = rows.find((row) => {
     const rect = row.getBoundingClientRect();
-    return rect.bottom > 72 && rect.top < Math.min(window.innerHeight || 720, 720);
+    const topGuard = isCompactViewport() ? 42 : 72;
+    return rect.bottom > topGuard && rect.top < Math.min(window.innerHeight || 720, 720);
   }) || rows[0];
   const anchorKey = anchor?.dataset?.tokenChart || anchor?.dataset?.tokenMint || "";
   return {
@@ -4710,6 +4718,7 @@ function restoreStableFeedScrollSnapshot(snapshot, panel = $("[data-panel]")) {
     restore();
     window.setTimeout(restore, 90);
     window.setTimeout(restore, 240);
+    if (isCompactViewport()) window.setTimeout(restore, 520);
   });
 }
 

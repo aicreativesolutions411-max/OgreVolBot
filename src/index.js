@@ -91,12 +91,13 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_MANUAL_LAUNCH_SCAN_INTERVAL_MS = 1500;
-const OGRE_AI_SCAN_BATCH_SIZE = 20;
-const OGRE_AI_SCAN_BATCH_DELAY_MS = 250;
+const OGRE_AI_SCAN_BATCH_SIZE = 16;
+const OGRE_AI_SCAN_BATCH_DELAY_MS = 120;
 const OGRE_AI_MAX_SCAN_ROWS = 140;
 const OGRE_AI_PLANS_PER_RUN_LIMIT = 25;
 const OGRE_AI_PLAN_BACKUP_MULTIPLIER = 5;
-const OGRE_AI_SAFETY_SCAN_BUDGET_MS = 4_500;
+const OGRE_AI_SAFETY_SCAN_BUDGET_MS = 2_200;
+const OGRE_AI_SOURCE_SOFT_TIMEOUT_MS = 2_200;
 
 const CONFIG = loadConfig();
 const connection = new Connection(CONFIG.rpcUrl, "confirmed");
@@ -24542,7 +24543,7 @@ async function withOgreAiSoftTimeout(promise, timeoutMs, fallback = null) {
 async function ogreAiScannerRows(userId, defaults = {}, mode = "quick") {
   const scannerModes = ogreAiScannerModesForTarget(defaults, mode);
   const scans = await Promise.allSettled(scannerModes.map(async (scannerMode) => {
-    const scan = await withOgreAiSoftTimeout(webSniperScan(userId, scannerMode), 5_500, null);
+        const scan = await withOgreAiSoftTimeout(webSniperScan(userId, scannerMode), OGRE_AI_SOURCE_SOFT_TIMEOUT_MS, null);
     return { scannerMode, scan };
   }));
   return scans.flatMap((result) => {
@@ -24583,7 +24584,7 @@ async function selectOgreAiPicks(userId, body = {}, limit = 1) {
   }
 
   const feedResultsPromise = Promise.allSettled(defaults.buckets.map(async (bucket) => {
-    const feed = await withOgreAiSoftTimeout(webLivePairs(userId, bucket, { sort: "best", force: false }), 5_500, null);
+      const feed = await withOgreAiSoftTimeout(webLivePairs(userId, bucket, { sort: "best", force: false }), OGRE_AI_SOURCE_SOFT_TIMEOUT_MS, null);
     return { bucket, feed };
   }));
   const scannerRowsPromise = ogreAiScannerRows(userId, defaults, mode);
@@ -24623,7 +24624,7 @@ async function selectOgreAiPicks(userId, body = {}, limit = 1) {
     refreshCount: scanState.refreshCount,
     scanned: rows.length,
     qualified: filtered.length,
-    rows: rotated.slice(0, limit)
+    rows: filtered.slice(0, limit)
   };
 }
 
