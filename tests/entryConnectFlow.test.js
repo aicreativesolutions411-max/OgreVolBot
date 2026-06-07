@@ -70,10 +70,17 @@ test("entry wallet cards start provider connect flow while main connect opens ch
 
 test("connect page has route bootstrap without a global capture click blocker", () => {
   assert.match(htmlSource, /data-intro-gate/);
+  assert.match(htmlSource, /rel="preload" as="video" href="\/assets\/slimewire\/intro\/swamp-entry\.mp4" type="video\/mp4"/);
   assert.match(htmlSource, /src="\.\/assets\/slimewire\/intro\/swamp-entry\.mp4"/);
+  assert.match(htmlSource, /src="\.\/assets\/slimewire\/intro\/swamp-entry\.mp4"[\s\S]*preload="auto"/);
   assert.match(htmlSource, /src="\.\/assets\/slimewire\/intro\/swamp-transition\.mp4"[\s\S]*preload="none"/);
+  assert.match(htmlSource, /data-intro-sound>Sound/);
   assert.match(htmlSource, /data-intro-start>Enter/);
   assert.match(htmlSource, /data-intro-skip>Skip/);
+  assert.match(appSource, /function initializeIntroVideoGate\(\)/);
+  assert.match(appSource, /const setVideoAudio = \(enabled\)/);
+  assert.match(appSource, /const warmTransitionVideo = \(\)/);
+  assert.match(appSource, /muteIntroAudio\("Tap Sound for audio, or Enter to continue\."/);
   assert.match(htmlSource, /sessionStorage\?\.getItem\("slimewireIntroCompleteV1"\) === "true"/);
   assert.match(htmlSource, /window\.history\.replaceState\(\{\}, "", "\/connect"\)/);
   assert.match(htmlSource, /const route = currentPath\.startsWith\("\/login"\)/);
@@ -109,6 +116,9 @@ test("entry/connect mobile performance avoids the heaviest frame filters", () =>
   assert.match(overridesSource, /background-attachment: scroll !important/);
   assert.match(overridesSource, /filter: none !important/);
   assert.match(overridesSource, /backdrop-filter: none !important/);
+  assert.match(overridesSource, /\.swamp-intro-media\s*\{[\s\S]*object-fit: contain !important/);
+  assert.match(overridesSource, /\.swamp-intro-sound/);
+  assert.match(overridesSource, /grid-template-columns: repeat\(3, minmax\(0, 1fr\)\) !important/);
 });
 
 test("closed interaction layers cannot block clicks or keep scroll locked", () => {

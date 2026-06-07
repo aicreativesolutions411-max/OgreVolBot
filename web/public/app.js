@@ -717,20 +717,89 @@ function initializeIntroVideoGate() {
   const transitionVideo = root.querySelector('[data-intro-video="transition"]');
   const status = root.querySelector("[data-intro-status]");
   const enterButton = root.querySelector("[data-intro-start]");
+  const audioButton = root.querySelector("[data-intro-sound]");
   const skipButton = root.querySelector("[data-intro-skip]");
   let finishing = false;
   let transitionStarted = false;
   let transitionFallbackTimer = 0;
+  let transitionRevealTimer = 0;
+  let transitionWarmStarted = false;
+  let audioUnlocked = true;
 
   const setPhase = (phase, message) => {
     if (stage) stage.dataset.introPhase = phase;
     if (status && message) status.textContent = message;
   };
 
+  const setAudioUi = (enabled, attention = false) => {
+    root.dataset.introAudio = enabled ? "on" : "off";
+    if (stage) stage.dataset.introAudio = enabled ? "on" : "off";
+    if (!audioButton) return;
+    audioButton.textContent = enabled ? "Mute" : "Sound";
+    audioButton.setAttribute("aria-pressed", enabled ? "true" : "false");
+    if (attention) {
+      audioButton.dataset.introAttention = "true";
+    } else {
+      delete audioButton.dataset.introAttention;
+    }
+  };
+
+  const setVideoAudio = (enabled) => {
+    audioUnlocked = enabled;
+    [entryVideo, transitionVideo].forEach((video) => {
+      if (!video) return;
+      video.defaultMuted = !enabled;
+      video.muted = !enabled;
+      video.volume = enabled ? 1 : 0;
+    });
+    setAudioUi(enabled);
+  };
+
+  const enableIntroAudio = (message) => {
+    setVideoAudio(true);
+    if (message) setPhase(stage?.dataset.introPhase || "entry", message);
+  };
+
+  const muteIntroAudio = (message, attention = false) => {
+    setVideoAudio(false);
+    setAudioUi(false, attention);
+    if (message) setPhase(stage?.dataset.introPhase || "entry", message);
+  };
+
+  const warmTransitionVideo = () => {
+    if (!transitionVideo || transitionWarmStarted) return;
+    transitionWarmStarted = true;
+    transitionVideo.preload = "auto";
+    transitionVideo.defaultMuted = !audioUnlocked;
+    transitionVideo.muted = !audioUnlocked;
+    transitionVideo.volume = audioUnlocked ? 1 : 0;
+    try {
+      transitionVideo.load?.();
+    } catch {
+      // Video warmup is best-effort; playback still starts on Enter.
+    }
+  };
+
+  const scheduleTransitionWarmup = () => {
+    if (transitionWarmStarted) return;
+    const idle = window.requestIdleCallback || ((callback) => window.setTimeout(callback, 700));
+    idle(() => warmTransitionVideo(), { timeout: 1600 });
+  };
+
+  const revealTransitionVideo = () => {
+    if (finishing || !transitionVideo) return;
+    if (transitionRevealTimer) window.clearTimeout(transitionRevealTimer);
+    setPhase("transition", "Opening the terminal...");
+    entryVideo?.pause?.();
+    if (entryVideo) entryVideo.hidden = true;
+    transitionVideo.hidden = false;
+  };
+
   const finishIntro = () => {
     if (finishing) return;
     finishing = true;
     if (transitionFallbackTimer) window.clearTimeout(transitionFallbackTimer);
+    if (transitionRevealTimer) window.clearTimeout(transitionRevealTimer);
     markIntroGateCompleted();
     entryVideo?.pause?.();
     transitionVideo?.pause?.();
@@ -744,24 +813,38 @@ function initializeIntroVideoGate() {
       return;
     }
     transitionStarted = true;
-    setPhase("transition", "Opening the terminal...");
+    enableIntroAudio("Opening the terminal...");
     if (enterButton) enterButton.textContent = "Enter";
     if (skipButton) skipButton.textContent = "Skip";
-    entryVideo?.pause?.();
-    if (entryVideo) entryVideo.hidden = true;
     if (!transitionVideo) {
       finishIntro();
       return;
     }
+    setPhase("loading", "Loading next clip...");
     transitionVideo.hidden = false;
     transitionVideo.preload = "auto";
-    transitionVideo.currentTime = 0;
+    transitionVideo.defaultMuted = !audioUnlocked;
+    transitionVideo.muted = !audioUnlocked;
+    transitionVideo.volume = audioUnlocked ? 1 : 0;
+    try {
+      transitionVideo.currentTime = 0;
+    } catch {
+      // Some mobile browsers do not allow seeking until metadata is ready.
+    }
+    transitionVideo.addEventListener("playing", revealTransitionVideo, { once: true });
     const playResult = transitionVideo.play?.();
     if (playResult?.catch) {
       playResult.catch(() => {
-        setPhase("transition", "Tap Enter to open.");
+        muteIntroAudio("Tap Enter to open. Sound was blocked.", true);
+        const mutedPlayResult = transitionVideo.play?.();
+        if (mutedPlayResult?.then) {
+          mutedPlayResult.then(revealTransitionVideo).catch(() => {
+            setPhase("ready", "Tap Enter to open.");
+          });
+        }
       });
     }
+    transitionRevealTimer = window.setTimeout(revealTransitionVideo, 420);
     transitionFallbackTimer = window.setTimeout(finishIntro, 12_000);
   };
 
@@ -771,35 +854,67 @@ function initializeIntroVideoGate() {
   entryVideo?.addEventListener("error", () => {
     setPhase("ready", "Video could not load. Tap Enter to continue.");
   });
+  entryVideo?.addEventListener("loadeddata", scheduleTransitionWarmup, { once: true });
+  entryVideo?.addEventListener("canplay", scheduleTransitionWarmup, { once: true });
   transitionVideo?.addEventListener("ended", finishIntro);
   transitionVideo?.addEventListener("error", finishIntro);
 
   root.addEventListener("click", (event) => {
     const target = event.target;
     if (target?.closest?.(".swamp-intro-actions")) return;
+    enableIntroAudio();
     startTransition();
+  });
+  audioButton?.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (audioUnlocked) {
+      muteIntroAudio("Muted. Tap Sound for audio.");
+      return;
+    }
+    enableIntroAudio("Sound on.");
+    scheduleTransitionWarmup();
+    const activeVideo = transitionStarted ? transitionVideo : entryVideo;
+    const playResult = activeVideo?.play?.();
+    if (playResult?.catch) {
+      playResult.catch(() => {
+        muteIntroAudio("Tap the video or Enter to enable sound.", true);
+      });
+    }
   });
   enterButton?.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
+    enableIntroAudio();
     startTransition();
   });
   skipButton?.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
+    enableIntroAudio();
     transitionStarted ? finishIntro() : startTransition();
   });
   document.addEventListener("keydown", (event) => {
     if (state.route !== "intro" || event.key !== "Enter") return;
     event.preventDefault();
+    enableIntroAudio();
     transitionStarted ? finishIntro() : startTransition();
   });
 
+  setVideoAudio(true);
   const playResult = entryVideo?.play?.();
   if (playResult?.catch) {
     playResult.catch(() => {
-      setPhase("ready", "Tap Enter to start.");
+      muteIntroAudio("Tap Sound for audio, or Enter to continue.", true);
+      const mutedPlayResult = entryVideo?.play?.();
+      if (mutedPlayResult?.catch) {
+        mutedPlayResult.catch(() => {
+          setPhase("ready", "Tap Enter to start.");
+        });
+      }
     });
+  } else {
+    scheduleTransitionWarmup();
   }
 }
 

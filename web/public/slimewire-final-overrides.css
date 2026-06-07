@@ -12171,19 +12171,32 @@ html body main.shell[data-app][data-route="intro"] .swamp-intro-stage {
 }
 
 html body main.shell[data-app][data-route="intro"] .swamp-intro-media {
+  backface-visibility: hidden !important;
   background: #000 !important;
   display: block !important;
   height: 100% !important;
   inset: 0 !important;
-  object-fit: cover !important;
+  object-fit: contain !important;
   object-position: center !important;
+  opacity: 1 !important;
   position: absolute !important;
+  transform: translate3d(0, 0, 0) !important;
+  transition: opacity 180ms ease-out !important;
+  will-change: opacity, transform !important;
   width: 100% !important;
   z-index: 1 !important;
 }
 
 html body main.shell[data-app][data-route="intro"] .swamp-intro-media[hidden] {
   display: none !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .swamp-intro-media[data-intro-video="transition"]:not([hidden]) {
+  opacity: 0 !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .swamp-intro-stage[data-intro-phase="transition"] .swamp-intro-media[data-intro-video="transition"] {
+  opacity: 1 !important;
 }
 
 html body main.shell[data-app][data-route="intro"] .swamp-intro-overlay {
@@ -12239,6 +12252,23 @@ html body main.shell[data-app][data-route="intro"] .swamp-intro-enter {
   color: #001a04 !important;
 }
 
+html body main.shell[data-app][data-route="intro"] .swamp-intro-sound {
+  background: rgba(4, 18, 7, 0.82) !important;
+  border: 1px solid rgba(119, 255, 61, 0.54) !important;
+  color: #edffe2 !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .swamp-intro-sound[aria-pressed="true"] {
+  background: rgba(126, 255, 50, 0.18) !important;
+  border-color: rgba(176, 255, 100, 0.72) !important;
+  color: #baff66 !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .swamp-intro-sound[data-intro-attention="true"] {
+  animation: slime-intro-sound-pulse 1.8s ease-in-out infinite !important;
+  box-shadow: 0 0 18px rgba(126, 255, 50, 0.34) !important;
+}
+
 html body main.shell[data-app][data-route="intro"] .swamp-intro-skip {
   background: rgba(4, 18, 7, 0.78) !important;
   border: 1px solid rgba(119, 255, 61, 0.44) !important;
@@ -12247,6 +12277,16 @@ html body main.shell[data-app][data-route="intro"] .swamp-intro-skip {
 
 html body main.shell[data-app][data-route="intro"] .swamp-intro-stage[data-intro-phase="transition"] .swamp-intro-enter {
   min-width: 92px !important;
+}
+
+@keyframes slime-intro-sound-pulse {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(0, 0, 0) scale(1.035);
+  }
 }
 
 body:has(main.shell[data-app][data-route="intro"]) [data-ogre-agent-root],
@@ -12356,13 +12396,15 @@ body:has(main.shell[data-app][data-route="connect"]) [data-ogre-agent-root] {
   html body main.shell[data-app][data-route="intro"] .swamp-intro-actions {
     display: grid !important;
     gap: 8px !important;
-    grid-template-columns: 1fr 1fr !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
     width: 100% !important;
   }
 
   html body main.shell[data-app][data-route="intro"] .swamp-intro-actions button {
+    font-size: 11px !important;
     height: 40px !important;
     min-width: 0 !important;
+    padding: 0 8px !important;
     width: 100% !important;
   }
 }

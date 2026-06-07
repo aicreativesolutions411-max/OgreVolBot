@@ -80,6 +80,7 @@ test("terminal route cannot show the intro splash underneath the header", () => 
 
 test("intro video gate has a real connect-route fallback", () => {
   assert.match(htmlSource, /data-intro-gate/);
+  assert.match(htmlSource, /data-intro-sound>Sound/);
   assert.match(htmlSource, /data-intro-start>Enter/);
   assert.match(htmlSource, /data-intro-skip>Skip/);
   assert.match(htmlSource, /sessionStorage\?\.getItem\("slimewireIntroCompleteV1"\) === "true"/);
@@ -89,6 +90,8 @@ test("intro video gate has a real connect-route fallback", () => {
   assert.match(htmlSource, /setRouteHidden\("\[data-connect\]", route !== "connect"\)/);
   assert.match(htmlSource, /toggleAttribute\("hidden", route !== "terminal"\)/);
   assert.match(appSource, /function initializeIntroVideoGate\(\)/);
+  assert.match(appSource, /warmTransitionVideo/);
+  assert.match(appSource, /setVideoAudio\(true\)/);
   assert.match(appSource, /navigateTo\("\/connect"\)/);
 });
 
