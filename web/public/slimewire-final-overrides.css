@@ -1810,6 +1810,274 @@
   }
 }
 
+/* CLIP_FARM_AND_COMPACT_CONTROLS_20260607_V1: small recorder control plus tighter trader mobile surfaces. */
+html body main.shell[data-app] .clip-farm-shell {
+  align-items: center !important;
+  display: inline-flex !important;
+  flex: 0 0 auto !important;
+  min-width: 0 !important;
+  position: relative !important;
+  z-index: 92 !important;
+}
+
+html body main.shell[data-app] .clip-farm-control {
+  align-items: center !important;
+  display: inline-flex !important;
+  gap: 5px !important;
+  min-width: 0 !important;
+  position: relative !important;
+}
+
+html body main.shell[data-app] .clip-record-button,
+html body main.shell[data-app] .clip-share-actions button,
+html body main.shell[data-app] .clip-share-actions a {
+  align-items: center !important;
+  border: 1px solid rgba(117, 255, 61, 0.46) !important;
+  border-radius: 999px !important;
+  display: inline-flex !important;
+  font-size: 9px !important;
+  font-weight: 950 !important;
+  height: 24px !important;
+  justify-content: center !important;
+  line-height: 1 !important;
+  min-height: 24px !important;
+  min-width: 0 !important;
+  padding: 0 8px !important;
+  text-decoration: none !important;
+  text-transform: uppercase !important;
+  white-space: nowrap !important;
+}
+
+html body main.shell[data-app] .clip-record-button {
+  background: rgba(4, 18, 7, 0.86) !important;
+  color: #edffe2 !important;
+  gap: 4px !important;
+}
+
+html body main.shell[data-app] .clip-record-button .clip-record-dot {
+  background: #74ff2d !important;
+  border-radius: 999px !important;
+  box-shadow: 0 0 8px rgba(116, 255, 45, 0.58) !important;
+  display: inline-block !important;
+  height: 7px !important;
+  width: 7px !important;
+}
+
+html body main.shell[data-app] .clip-farm-control[data-recording="true"] .clip-record-button {
+  background: linear-gradient(180deg, rgba(255, 70, 70, 0.96), rgba(138, 15, 15, 0.96)) !important;
+  border-color: rgba(255, 160, 120, 0.72) !important;
+  color: #fff4ec !important;
+}
+
+html body main.shell[data-app] .clip-farm-control[data-recording="true"] .clip-record-button .clip-record-dot {
+  background: #fff4ec !important;
+  border-radius: 2px !important;
+  box-shadow: 0 0 8px rgba(255, 244, 236, 0.45) !important;
+}
+
+html body main.shell[data-app] .clip-share-actions {
+  align-items: center !important;
+  display: inline-flex !important;
+  gap: 4px !important;
+}
+
+html body main.shell[data-app] .clip-share-actions button,
+html body main.shell[data-app] .clip-share-actions a {
+  background: rgba(4, 18, 7, 0.9) !important;
+  color: #baff66 !important;
+  padding: 0 7px !important;
+}
+
+html body main.shell[data-app] .clip-farm-control small {
+  color: rgba(214, 255, 200, 0.72) !important;
+  font-size: 9px !important;
+  font-weight: 800 !important;
+  max-width: 120px !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+@media (min-width: 761px) {
+  html body main.shell[data-app][data-route="intro"] .swamp-intro-stage {
+    align-items: center !important;
+    display: grid !important;
+    justify-items: center !important;
+  }
+
+  html body main.shell[data-app][data-route="intro"] .swamp-intro-media {
+    height: calc(100svh - 34px) !important;
+    inset: auto !important;
+    max-height: calc(100svh - 34px) !important;
+    max-width: min(72vw, 760px) !important;
+    object-fit: contain !important;
+    object-position: center center !important;
+    position: relative !important;
+    transform: translate3d(0, 0, 0) scale(1.08) !important;
+    width: min(72vw, 760px) !important;
+  }
+}
+
+@media (max-width: 760px) {
+  html body main.shell[data-app] .topbar {
+    gap: 6px !important;
+  }
+
+  html body main.shell[data-app] .clip-farm-control small {
+    display: none !important;
+  }
+
+  html body main.shell[data-app] .clip-record-button {
+    height: 22px !important;
+    min-height: 22px !important;
+    padding: 0 7px !important;
+  }
+
+  html body main.shell[data-app] .clip-share-actions {
+    background: rgba(0, 12, 4, 0.96) !important;
+    border: 1px solid rgba(117, 255, 61, 0.45) !important;
+    border-radius: 14px !important;
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.42), 0 0 22px rgba(91, 255, 30, 0.16) !important;
+    display: grid !important;
+    gap: 5px !important;
+    grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+    left: 8px !important;
+    padding: 6px !important;
+    position: fixed !important;
+    right: 8px !important;
+    top: calc(30px + env(safe-area-inset-top, 0px)) !important;
+    z-index: 140 !important;
+  }
+
+  html body main.shell[data-app] .clip-share-actions button,
+  html body main.shell[data-app] .clip-share-actions a {
+    border-radius: 10px !important;
+    font-size: 9px !important;
+    height: 28px !important;
+    min-height: 28px !important;
+    padding: 0 4px !important;
+    width: 100% !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .metrics {
+    display: grid !important;
+    gap: 5px !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    margin: 6px 8px !important;
+    overflow: visible !important;
+    position: relative !important;
+    z-index: 1 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .metrics article {
+    border-radius: 12px !important;
+    min-height: 48px !important;
+    padding: 7px 9px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .metrics span {
+    font-size: 8.5px !important;
+    line-height: 1 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .metrics strong {
+    font-size: clamp(14px, 4.1vw, 18px) !important;
+    line-height: 1.05 !important;
+    margin-top: 3px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .metrics small {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs {
+    gap: 5px !important;
+    margin: 6px 8px !important;
+    padding: 7px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-section-label {
+    font-size: 10px !important;
+    letter-spacing: 0.12em !important;
+    margin: 5px 0 0 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs > button,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group > summary,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button {
+    border-radius: 12px !important;
+    min-height: 42px !important;
+    padding: 5px 4px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs button::before,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group summary::before,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button::before,
+  html body main.shell[data-app][data-route="terminal"] .tabs button img,
+  html body main.shell[data-app][data-route="terminal"] .tabs button svg {
+    height: 14px !important;
+    width: 14px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs button::after,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group summary::after,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button::after {
+    font-size: clamp(9px, 2.55vw, 11px) !important;
+    line-height: 1.04 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group {
+    gap: 5px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group[open] > summary {
+    min-height: 34px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .portfolio-tabs {
+    gap: 5px !important;
+    margin: 6px 8px !important;
+    padding: 6px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .portfolio-tabs button {
+    border-radius: 12px !important;
+    font-size: clamp(9.5px, 2.55vw, 11px) !important;
+    min-height: 34px !important;
+    padding: 5px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .account-check-card {
+    border-radius: 14px !important;
+    gap: 6px !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    margin: 6px 8px !important;
+    padding: 12px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .account-check-card h3 {
+    font-size: clamp(17px, 4.6vw, 22px) !important;
+    margin-bottom: 3px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .account-check-card p {
+    font-size: clamp(12px, 3.35vw, 14px) !important;
+    line-height: 1.22 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .account-check-card button,
+  html body main.shell[data-app][data-route="terminal"] .account-check-card button.primary {
+    grid-column: auto !important;
+    min-height: 34px !important;
+    padding: 6px 7px !important;
+    font-size: clamp(10px, 2.8vw, 12px) !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .panel-host {
+    padding: 7px !important;
+  }
+}
+
 .smart-chart-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -12720,5 +12988,132 @@ body:has(main.shell[data-app][data-route="connect"]) [data-ogre-agent-root] {
     min-height: 36px !important;
     padding: 7px 8px !important;
     white-space: normal !important;
+  }
+}
+
+/* FINAL_MOBILE_DENSITY_AND_INTRO_FRAME_20260607_V1: last-pass sizes after legacy overrides. */
+@media (min-width: 761px) {
+  html body main.shell[data-app][data-route="intro"] .swamp-intro-stage {
+    align-items: center !important;
+    display: grid !important;
+    justify-items: center !important;
+  }
+
+  html body main.shell[data-app][data-route="intro"] .swamp-intro-media {
+    height: calc(100svh - 34px) !important;
+    inset: auto !important;
+    max-height: calc(100svh - 34px) !important;
+    max-width: min(72vw, 760px) !important;
+    object-fit: contain !important;
+    object-position: center center !important;
+    position: relative !important;
+    transform: translate3d(0, 0, 0) scale(1.08) !important;
+    width: min(72vw, 760px) !important;
+  }
+}
+
+@media (max-width: 760px) {
+  html body main.shell[data-app][data-route="terminal"] .metrics {
+    display: grid !important;
+    gap: 5px !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    margin: 6px 8px !important;
+    overflow: visible !important;
+    position: relative !important;
+    z-index: 1 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .metrics article {
+    border-radius: 12px !important;
+    min-height: 48px !important;
+    padding: 7px 9px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .metrics span {
+    font-size: 8.5px !important;
+    line-height: 1 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .metrics strong {
+    font-size: clamp(14px, 4.1vw, 18px) !important;
+    line-height: 1.05 !important;
+    margin-top: 3px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .metrics small {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs {
+    gap: 5px !important;
+    margin: 6px 8px !important;
+    padding: 7px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs > button,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group > summary,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button {
+    border-radius: 12px !important;
+    min-height: 42px !important;
+    padding: 5px 4px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs button::before,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group summary::before,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button::before,
+  html body main.shell[data-app][data-route="terminal"] .tabs button img,
+  html body main.shell[data-app][data-route="terminal"] .tabs button svg {
+    height: 14px !important;
+    width: 14px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs button::after,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group summary::after,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button::after {
+    font-size: clamp(9px, 2.55vw, 11px) !important;
+    line-height: 1.04 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .portfolio-tabs {
+    gap: 5px !important;
+    margin: 6px 8px !important;
+    padding: 6px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .portfolio-tabs button {
+    border-radius: 12px !important;
+    font-size: clamp(9.5px, 2.55vw, 11px) !important;
+    min-height: 34px !important;
+    padding: 5px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .account-check-card {
+    border-radius: 14px !important;
+    gap: 6px !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    margin: 6px 8px !important;
+    padding: 12px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .account-check-card h3 {
+    font-size: clamp(17px, 4.6vw, 22px) !important;
+    margin-bottom: 3px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .account-check-card p {
+    font-size: clamp(12px, 3.35vw, 14px) !important;
+    line-height: 1.22 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .account-check-card button,
+  html body main.shell[data-app][data-route="terminal"] .account-check-card button.primary {
+    font-size: clamp(10px, 2.8vw, 12px) !important;
+    grid-column: auto !important;
+    min-height: 34px !important;
+    padding: 6px 7px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .panel-host {
+    padding: 7px !important;
   }
 }

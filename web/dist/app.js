@@ -228,6 +228,19 @@ function markIntroGateCompleted() {
   }
 }
 
+function pauseIntroVideoGate({ reset = false } = {}) {
+  document.querySelectorAll("[data-intro-video]").forEach((video) => {
+    try {
+      video.pause();
+      video.muted = true;
+      video.defaultMuted = true;
+      if (reset && Number.isFinite(video.duration)) video.currentTime = 0;
+    } catch {
+      // Intro playback is cosmetic and must never block terminal routes.
+    }
+  });
+}
+
 const state = {
   token: getStoredToken(),
   user: null,
@@ -301,6 +314,15 @@ const state = {
   ogreAiResult: null,
   ogreAiStatus: "",
   ogreAiLoading: false,
+  clipFarm: {
+    recording: false,
+    status: "",
+    blob: null,
+    videoUrl: "",
+    recorder: null,
+    stream: null,
+    chunks: []
+  },
   ogreAgentOpen: false,
   ogreAgentLoading: false,
   ogreAgentFastMode: (() => { try { return (localStorage.getItem("ogreAgentFastMode") || "on") !== "off"; } catch { return true; } })(),
@@ -752,6 +774,7 @@ function initializeIntroVideoGate() {
   let audioUnlocked = true;
   let lastIntroPhase = "";
   let lastIntroMessage = "";
+  const introActive = () => state.route === "intro" && !root.hidden && !root.closest("[hidden]");
 
   const setPhase = (phase, message) => {
     if (stage && phase !== lastIntroPhase) {
@@ -802,18 +825,24 @@ function initializeIntroVideoGate() {
     if (finishing) return;
     finishing = true;
     markIntroGateCompleted();
-    entryVideo?.pause?.();
+    pauseIntroVideoGate({ reset: true });
     navigateTo("/connect");
   };
 
   if (entryVideo) {
     entryVideo.preload = "auto";
     entryVideo.playsInline = true;
+    entryVideo.autoplay = false;
+    entryVideo.removeAttribute("autoplay");
     entryVideo.disablePictureInPicture = true;
   }
 
   const playIntro = (message = "") => {
     if (finishing) return;
+    if (!introActive()) {
+      pauseIntroVideoGate({ reset: true });
+      return;
+    }
     if (message) setPhase("entry", message);
     const playResult = entryVideo?.play?.();
     if (playResult?.catch) {
@@ -867,6 +896,11 @@ function initializeIntroVideoGate() {
     finishIntro();
   });
 
+  if (!introActive()) {
+    setVideoAudio(false);
+    pauseIntroVideoGate({ reset: true });
+    return;
+  }
   setVideoAudio(true);
   playIntro("Playing intro. Enter opens the terminal.");
 }
@@ -899,6 +933,7 @@ function navigateTo(pathname, tab = null) {
   closeTransientInteractionLayers({ keepLogin: state.route === "login" });
   if (state.route === "login") state.loginModalOpen = true;
   if (state.route === "terminal") state.activeTab = tab || tabForPath(nextPath);
+  if (state.route !== "intro") pauseIntroVideoGate({ reset: true });
   window.history.pushState({}, "", nextPath);
   applyChartRouteFromLocation();
   render();
@@ -913,6 +948,7 @@ window.addEventListener("popstate", () => {
   closeTransientInteractionLayers({ keepLogin: state.route === "login" });
   if (state.route === "login") state.loginModalOpen = true;
   state.activeTab = tabForPath();
+  if (state.route !== "intro") pauseIntroVideoGate({ reset: true });
   applyChartRouteFromLocation();
   render();
 });
@@ -4169,6 +4205,216 @@ function recoverAppShell(reason = "watchdog", options = {}) {
   return true;
 }
 
+function clipFarmSupported() {
+  return Boolean(navigator.mediaDevices?.getDisplayMedia && window.MediaRecorder);
+}
+
+function clipFarmMimeType() {
+  const options = [
+    "video/webm;codecs=vp9,opus",
+    "video/webm;codecs=vp8,opus",
+    "video/webm"
+  ];
+  return options.find((type) => {
+    try {
+      return MediaRecorder.isTypeSupported(type);
+    } catch {
+      return false;
+    }
+  }) || "";
+}
+
+function stopClipFarmTracks() {
+  try {
+    state.clipFarm?.stream?.getTracks?.().forEach((track) => track.stop());
+  } catch {
+    // Track cleanup is best-effort after browser recording permissions close.
+  }
+}
+
+function setClipFarmStatus(message = "") {
+  state.clipFarm = {
+    ...state.clipFarm,
+    status: String(message || "")
+  };
+  updateClipFarmControl();
+}
+
+function clearClipFarmClip() {
+  if (state.clipFarm?.videoUrl) {
+    try {
+      URL.revokeObjectURL(state.clipFarm.videoUrl);
+    } catch {
+      // Object URL cleanup is best-effort.
+    }
+  }
+  state.clipFarm = {
+    ...state.clipFarm,
+    blob: null,
+    videoUrl: "",
+    status: state.clipFarm?.recording ? "Recording..." : ""
+  };
+  updateClipFarmControl();
+}
+
+function updateClipFarmControl() {
+  const root = document.querySelector("[data-clip-farm]");
+  if (!root) return;
+  const clip = state.clipFarm || {};
+  const supported = clipFarmSupported();
+  const recording = Boolean(clip.recording);
+  const ready = Boolean(clip.blob && clip.videoUrl);
+  const status = clip.status || (recording ? "Recording" : ready ? "Clip ready" : "Clip farm");
+  root.innerHTML = `
+    <div class="clip-farm-control" data-recording="${recording ? "true" : "false"}" data-ready="${ready ? "true" : "false"}">
+      <button type="button" class="clip-record-button" data-clip-record ${supported ? "" : "disabled"} title="${supported ? "Record a shareable SlimeWire clip" : "Screen recording is not supported in this browser"}" aria-pressed="${recording ? "true" : "false"}">
+        <span class="clip-record-dot" aria-hidden="true"></span>
+        <strong>${recording ? "Stop" : "Rec"}</strong>
+      </button>
+      ${ready ? `
+        <div class="clip-share-actions" aria-label="Clip share options">
+          <button type="button" data-clip-share title="Share video">Share</button>
+          <button type="button" data-clip-download title="Download video">Save</button>
+          <a href="https://twitter.com/intent/tweet?text=${encodeURIComponent("Farming SlimeWire clips at https://slimewire.org")}" target="_blank" rel="noreferrer" title="Open X">X</a>
+          <a href="https://t.me/share/url?url=${encodeURIComponent(shareSiteUrl)}&text=${encodeURIComponent("Farming SlimeWire clips")}" target="_blank" rel="noreferrer" title="Open Telegram">TG</a>
+          <button type="button" data-clip-clear title="Close clip options">x</button>
+        </div>
+      ` : ""}
+      ${status ? `<small>${escapeHtml(status)}</small>` : ""}
+    </div>
+  `;
+}
+
+async function startClipFarmRecording() {
+  if (!clipFarmSupported()) {
+    setClipFarmStatus("Recording is not supported in this browser.");
+    return;
+  }
+  if (state.clipFarm?.recording) {
+    stopClipFarmRecording();
+    return;
+  }
+  clearClipFarmClip();
+  try {
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      video: {
+        frameRate: { ideal: 30, max: 30 },
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
+      },
+      audio: true
+    });
+    const mimeType = clipFarmMimeType();
+    const chunks = [];
+    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    recorder.addEventListener("dataavailable", (event) => {
+      if (event.data?.size > 0) chunks.push(event.data);
+    });
+    recorder.addEventListener("stop", () => {
+      stopClipFarmTracks();
+      const blob = new Blob(chunks, { type: mimeType || "video/webm" });
+      const videoUrl = blob.size > 0 ? URL.createObjectURL(blob) : "";
+      state.clipFarm = {
+        ...state.clipFarm,
+        recording: false,
+        recorder: null,
+        stream: null,
+        chunks: [],
+        blob: blob.size > 0 ? blob : null,
+        videoUrl,
+        status: blob.size > 0 ? "Clip ready." : "No clip captured."
+      };
+      updateClipFarmControl();
+    }, { once: true });
+    stream.getVideoTracks?.()[0]?.addEventListener?.("ended", () => stopClipFarmRecording(), { once: true });
+    recorder.start(1000);
+    state.clipFarm = {
+      recording: true,
+      status: "Recording...",
+      blob: null,
+      videoUrl: "",
+      recorder,
+      stream,
+      chunks
+    };
+    updateClipFarmControl();
+  } catch (error) {
+    stopClipFarmTracks();
+    state.clipFarm = {
+      ...state.clipFarm,
+      recording: false,
+      recorder: null,
+      stream: null,
+      chunks: [],
+      status: error?.name === "NotAllowedError" ? "Recording cancelled." : "Recording could not start."
+    };
+    updateClipFarmControl();
+  }
+}
+
+function stopClipFarmRecording() {
+  const recorder = state.clipFarm?.recorder;
+  if (!recorder) {
+    stopClipFarmTracks();
+    state.clipFarm = { ...state.clipFarm, recording: false, stream: null, recorder: null, chunks: [] };
+    updateClipFarmControl();
+    return;
+  }
+  try {
+    if (recorder.state !== "inactive") {
+      setClipFarmStatus("Saving clip...");
+      recorder.stop();
+      return;
+    }
+  } catch {
+    // Fall through to cleanup.
+  }
+  stopClipFarmTracks();
+  state.clipFarm = { ...state.clipFarm, recording: false, stream: null, recorder: null, chunks: [] };
+  updateClipFarmControl();
+}
+
+async function shareClipFarmRecording() {
+  const blob = state.clipFarm?.blob;
+  if (!blob) {
+    setClipFarmStatus("Record a clip first.");
+    return;
+  }
+  const file = new File([blob], "slimewire-clip.webm", { type: blob.type || "video/webm" });
+  try {
+    if (navigator.canShare?.({ files: [file] }) && navigator.share) {
+      await navigator.share({
+        title: "SlimeWire clip",
+        text: "SlimeWire clip farm",
+        files: [file]
+      });
+      setClipFarmStatus("Shared.");
+      return;
+    }
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      setClipFarmStatus("Share cancelled.");
+      return;
+    }
+  }
+  setClipFarmStatus("Use Save, then attach the clip to X or Telegram.");
+}
+
+function downloadClipFarmRecording() {
+  const url = state.clipFarm?.videoUrl;
+  if (!url) {
+    setClipFarmStatus("Record a clip first.");
+    return;
+  }
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `slimewire-clip-${Date.now()}.webm`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setClipFarmStatus("Saved.");
+}
+
 function render(options = {}) {
   if (!app || !loginView || !dashboardView) return;
   syncShellRouteVisibility();
@@ -4255,6 +4501,7 @@ function render(options = {}) {
   renderSlimeShieldDetailsDrawer();
   renderKolDumpDetailsDrawer();
   renderReplayBeforeBuyDrawer();
+  updateClipFarmControl();
   renderOgreAgent();
   scheduleVisibleDevInfoPrefetch("render");
   syncInteractionLocks();
@@ -17295,6 +17542,31 @@ document.addEventListener("click", async (event) => {
   }  const target = source?.closest?.("button, a, [data-preview-token], [data-token-chart], [data-token-trade], [data-quick-buy-token], [data-quick-trade-token]");
   if (!target) return;
 
+  if (target.matches("[data-clip-record]")) {
+    event.preventDefault();
+    if (state.clipFarm?.recording) stopClipFarmRecording();
+    else void startClipFarmRecording();
+    return;
+  }
+
+  if (target.matches("[data-clip-share]")) {
+    event.preventDefault();
+    void shareClipFarmRecording();
+    return;
+  }
+
+  if (target.matches("[data-clip-download]")) {
+    event.preventDefault();
+    downloadClipFarmRecording();
+    return;
+  }
+
+  if (target.matches("[data-clip-clear]")) {
+    event.preventDefault();
+    clearClipFarmClip();
+    return;
+  }
+
   if (target.matches("[data-slimeshield-details]")) {
     event.preventDefault();
     openSlimeShieldDetails(target.dataset.slimeshieldDetails || "");
@@ -18417,9 +18689,11 @@ window.addEventListener("focus", resumeLiveFeeds);
 window.addEventListener("pageshow", resumeLiveFeeds);
 window.addEventListener("online", resumeLiveFeeds);
 window.addEventListener("pagehide", () => {
-  if (!resumeLiveFeedsTimer) return;
-  window.clearTimeout(resumeLiveFeedsTimer);
-  resumeLiveFeedsTimer = null;
+  if (resumeLiveFeedsTimer) {
+    window.clearTimeout(resumeLiveFeedsTimer);
+    resumeLiveFeedsTimer = null;
+  }
+  if (state.clipFarm?.recording) stopClipFarmRecording();
 });
 
 function startAppWatchdog() {
@@ -18435,7 +18709,8 @@ async function initializeApp() {
   installPerformanceInstrumentation();
   installCrashInstrumentation();
   installSlimewireImageFallbacks();
-  initializeIntroVideoGate();
+  if (state.route === "intro") initializeIntroVideoGate();
+  else pauseIntroVideoGate({ reset: true });
   startAppWatchdog();
   prewarmSlimewireImageAssets();
   applyChartRouteFromLocation();
