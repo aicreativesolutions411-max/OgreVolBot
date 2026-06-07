@@ -2485,12 +2485,41 @@ async function sendWebTokenImage(request, response, requestUrl) {
     return;
   }
 
-  response.writeHead(302, {
-    "Location": imageCandidate,
-    "Cache-Control": "public, max-age=300, stale-while-revalidate=900",
-    ...webCorsHeaders(request)
-  });
-  response.end();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 4_000);
+  try {
+    const imageResponse = await fetch(imageCandidate, {
+      signal: controller.signal,
+      headers: {
+        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        "User-Agent": "solana-telegram-wallet-ops-bot"
+      }
+    });
+    if (!imageResponse.ok) {
+      throw new Error(`Token image fetch failed with ${imageResponse.status}`);
+    }
+    const contentType = imageResponse.headers.get("content-type") || "image/jpeg";
+    const buffer = Buffer.from(await imageResponse.arrayBuffer());
+    if (!buffer.length || buffer.length > 5_000_000) {
+      throw new Error("Token image response was empty or too large");
+    }
+    response.writeHead(200, {
+      "Content-Type": contentType,
+      "Content-Length": buffer.length,
+      "Cache-Control": "public, max-age=900, stale-while-revalidate=3600",
+      ...webCorsHeaders(request)
+    });
+    response.end(buffer);
+  } catch (error) {
+    response.writeHead(502, {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Cache-Control": "public, max-age=60",
+      ...webCorsHeaders(request)
+    });
+    response.end("Token image unavailable");
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function serveHostedPumpMetadata(request, response, requestUrl) {

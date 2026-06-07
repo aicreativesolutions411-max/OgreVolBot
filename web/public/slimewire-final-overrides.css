@@ -9885,3 +9885,27 @@ textarea,
   }
 }
 
+
+/* LIVE_PAIR_AVATAR_PROXY_V1: keep live token pfps visible and prevent blank avatar wells. */
+.live-pair-avatar {
+  isolation: isolate !important;
+  overflow: hidden !important;
+  position: relative !important;
+}
+
+.live-pair-avatar img {
+  display: block !important;
+  height: 100% !important;
+  inset: 0 !important;
+  object-fit: cover !important;
+  opacity: 1 !important;
+  position: absolute !important;
+  visibility: visible !important;
+  width: 100% !important;
+  z-index: 1 !important;
+}
+
+.live-pair-avatar span {
+  position: relative !important;
+  z-index: 2 !important;
+}

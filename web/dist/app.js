@@ -12898,12 +12898,12 @@ function livePairAvatarHtml(row) {
   const safeFallbackSrc = escapeHtml(fallbackSrc);
   const imageUrl = livePairImageUrl(row);
   const proxyUrl = normalizeImageUrl(tokenImageProxyUrl(row));
-  const src = imageUrl || proxyUrl;
+  const src = proxyUrl || imageUrl;
   if (src) {
-    const proxyAttr = imageUrl && proxyUrl && imageUrl !== proxyUrl ? ` data-proxy-src="${escapeHtml(proxyUrl)}"` : "";
-    return `<div class="live-pair-avatar"><img src="${escapeHtml(src)}"${proxyAttr} alt="${escapeHtml(row.symbol || row.name || "Token")}" loading="lazy" decoding="async" fetchpriority="low" width="42" height="42" referrerpolicy="no-referrer" onerror="if(this.dataset.proxySrc){this.src=this.dataset.proxySrc;this.dataset.proxySrc='';}else{this.onerror=null;this.src='${safeFallbackSrc}';}"><span>${escapeHtml(label)}</span></div>`;
+    const backupAttr = proxyUrl && imageUrl && imageUrl !== proxyUrl ? ` data-backup-src="${escapeHtml(imageUrl)}"` : "";
+    return `<div class="live-pair-avatar"><img src="${escapeHtml(src)}"${backupAttr} alt="${escapeHtml(row.symbol || row.name || "Token")}" loading="eager" decoding="async" fetchpriority="auto" width="42" height="42" referrerpolicy="no-referrer" onerror="if(this.dataset.backupSrc){this.src=this.dataset.backupSrc;this.dataset.backupSrc='';}else{this.onerror=null;this.src='${safeFallbackSrc}';}"><span>${escapeHtml(label)}</span></div>`;
   }
-  return `<div class="live-pair-avatar fallback with-mascot"><img src="${safeFallbackSrc}" alt="" aria-hidden="true" loading="lazy" decoding="async" fetchpriority="low" width="42" height="42" onerror="this.hidden=true;"><span>${escapeHtml(label)}</span></div>`;
+  return `<div class="live-pair-avatar fallback with-mascot"><img src="${safeFallbackSrc}" alt="" aria-hidden="true" loading="eager" decoding="async" fetchpriority="auto" width="42" height="42" onerror="this.hidden=true;"><span>${escapeHtml(label)}</span></div>`;
 }
 
 function tokenMascotIndex(value = "") {
