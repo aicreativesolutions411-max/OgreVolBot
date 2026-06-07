@@ -11866,7 +11866,6 @@ function terminalSignalRowsHtml(rows, options = {}) {
               ${miniTokenLinksHtml(row)}
             </div>
             ${terminalTokenStatsHtml(row)}
-            ${slimeShieldChipHtml(row)}
             <div class="terminal-token-actions">
               <button type="button" class="primary" data-token-trade="${escapeHtml(row.tokenMint)}" data-token-trade-source="terminal-row" title="Open chart and buy/sell panel">${escapeHtml(actionLabel)}</button>
               <button type="button" data-quick-buy-token="${escapeHtml(row.tokenMint)}" data-quick-buy-source="terminal-row" title="Quick buy with preset or custom SOL amount">${escapeHtml(quickBuyButtonLabel())}</button>

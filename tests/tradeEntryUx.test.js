@@ -56,16 +56,27 @@ test("Quick Buy is separate and validates custom SOL amount", () => {
 });
 
 test("Rendered feed/card rows use Trade plus Quick Buy labels, not ambiguous quick-trade markup", () => {
-  assert.match(functionBody(appSource, "terminalSignalRowsHtml"), /data-token-trade/);
-  assert.match(functionBody(appSource, "terminalSignalRowsHtml"), /data-quick-buy-token/);
+  const terminalRows = functionBody(appSource, "terminalSignalRowsHtml");
+  assert.match(terminalRows, /data-token-trade/);
+  assert.match(terminalRows, /data-quick-buy-token/);
+  assert.match(terminalRows, /slimeShieldMiniHtml\(row\)/);
+  assert.doesNotMatch(terminalRows, /slimeShieldChipHtml\(row\)/);
   assert.match(functionBody(appSource, "compactSignalRowsHtml"), /data-token-trade/);
   assert.match(functionBody(appSource, "compactSignalRowsHtml"), /data-quick-buy-token/);
   assert.match(functionBody(appSource, "tokenSignalRowHtml"), /data-token-trade/);
   assert.match(functionBody(appSource, "tokenSignalRowHtml"), /data-quick-buy-token/);
   assert.match(functionBody(appSource, "tokenPreviewHtml"), /data-token-trade/);
   assert.match(functionBody(appSource, "tokenPreviewHtml"), /data-quick-buy-token/);
-  assert.doesNotMatch(functionBody(appSource, "terminalSignalRowsHtml"), /data-quick-trade-token/);
+  assert.doesNotMatch(terminalRows, /data-quick-trade-token/);
   assert.doesNotMatch(functionBody(appSource, "tokenSignalRowHtml"), /data-quick-trade-token/);
+});
+
+test("Live pair action buttons stay even and visibly colored", () => {
+  assert.match(chartCssSource, /terminal-token-actions[\s\S]*repeat\(5, minmax\(72px, 1fr\)\)/);
+  assert.match(chartCssSource, /button\[data-quick-buy-token\][\s\S]*linear-gradient/);
+  assert.match(chartCssSource, /button\[data-quick-bundle-token\][\s\S]*linear-gradient/);
+  assert.match(chartCssSource, /button\[data-smart-chart-token\][\s\S]*linear-gradient/);
+  assert.match(chartCssSource, /terminal-token-actions button\.watch-action[\s\S]*linear-gradient/);
 });
 
 test("Chart route has professional Buy and Sell panel", () => {
