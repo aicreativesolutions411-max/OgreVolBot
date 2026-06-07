@@ -9578,3 +9578,36 @@ textarea,
     height: 52px !important;
   }
 }
+
+/* OGRE_AGENT_FREE_VOICE_FX_V1: free browser TTS polish plus clearer speaking avatar. */
+.ogre-agent-shell .ogre-agent-holo.voice-on .ogre-agent-holo-stage::after {
+  content: "";
+  position: absolute;
+  inset: 7px;
+  border-radius: 50%;
+  border: 1px solid rgba(188, 255, 96, 0.42);
+  box-shadow: 0 0 12px rgba(122, 255, 39, 0.32), inset 0 0 10px rgba(122, 255, 39, 0.16);
+  opacity: 0.68;
+  pointer-events: none;
+}
+
+.ogre-agent-shell .ogre-agent-holo.is-talking .ogre-agent-holo-stage::after,
+.ogre-agent-shell .ogre-agent-holo.is-listening .ogre-agent-holo-stage::after {
+  animation: ogreVoicePulseFreeV1 0.7s ease-in-out infinite !important;
+}
+
+.ogre-agent-shell .ogre-agent-holo.is-talking .ogre-agent-holo-meta strong {
+  color: #d8ffbd !important;
+  text-shadow: 0 0 10px rgba(141, 255, 58, 0.5) !important;
+}
+
+.ogre-agent-shell .ogre-agent-holo.is-talking .ogre-agent-holo-mouth {
+  background: linear-gradient(180deg, #e7ffc8, #7dff28 48%, #1d4d05) !important;
+  box-shadow: 0 0 10px rgba(153, 255, 68, 0.84) !important;
+  transform-origin: center !important;
+}
+
+@keyframes ogreVoicePulseFreeV1 {
+  0%, 100% { transform: scale(0.9); opacity: 0.45; }
+  45% { transform: scale(1.2); opacity: 0.95; }
+}

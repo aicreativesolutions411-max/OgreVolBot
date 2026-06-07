@@ -13573,31 +13573,85 @@ function ogreAgentSpeechSupported() {
 function ogreAgentPickVoice() {
   if (!ogreAgentSpeechSupported()) return null;
   const voices = window.speechSynthesis.getVoices?.() || [];
-  const preferred = [
-    /daniel/i,
-    /david/i,
-    /guy/i,
-    /george/i,
-    /male/i,
-    /google uk english/i,
-    /microsoft.*english/i,
-    /english/i
-  ];
-  return preferred
-    .map((pattern) => voices.find((voice) => pattern.test(`${voice.name} ${voice.lang}`) && /^en/i.test(voice.lang || "")))
-    .find(Boolean)
-    || voices.find((voice) => /^en/i.test(voice.lang || ""))
-    || voices[0]
-    || null;
+  if (!voices.length) return null;
+  const scoreVoice = (voice) => {
+    const name = `${voice.name || ""} ${voice.voiceURI || ""}`.toLowerCase();
+    const lang = String(voice.lang || "").toLowerCase();
+    let score = 0;
+    if (/^en[-_]/.test(lang) || lang === "en") score += 18;
+    if (/google|microsoft|natural|premium|enhanced|neural|online|siri|alex|daniel|guy|david|mark|george|james|fred/i.test(name)) score += 18;
+    if (/google us english|microsoft guy|microsoft david|google uk english male|daniel|alex|george|james|mark/i.test(name)) score += 14;
+    if (/female|zira|samantha|victoria|karen|moira|susan/i.test(name)) score -= 2;
+    if (/compact|eloquence|robot|novelty|whisper|bells|bubbles|organ|zarvox/i.test(name)) score -= 25;
+    if (voice.localService) score += 3;
+    return score;
+  };
+  return voices
+    .slice()
+    .sort((a, b) => scoreVoice(b) - scoreVoice(a))[0] || voices[0] || null;
 }
 
-function ogreAgentSetSpeaking(value) {
-  const speaking = Boolean(value);
-  if (state.ogreAgentSpeaking === speaking) return;
-  state.ogreAgentSpeaking = speaking;
-  renderOgreAgent();
+let ogreAgentAudioContextRef = null;
+
+function ogreAgentAudioContext() {
+  if (typeof window === "undefined") return null;
+  const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextCtor) return null;
+  try {
+    if (!ogreAgentAudioContextRef || ogreAgentAudioContextRef.state === "closed") {
+      ogreAgentAudioContextRef = new AudioContextCtor();
+    }
+    if (ogreAgentAudioContextRef.state === "suspended") void ogreAgentAudioContextRef.resume();
+    return ogreAgentAudioContextRef;
+  } catch {
+    return null;
+  }
 }
 
+function ogreAgentPlayVoiceFx(kind = "reply") {
+  if (!state.ogreAgentVoiceEnabled || !state.ogreAgentOpen) return;
+  const ctx = ogreAgentAudioContext();
+  if (!ctx) return;
+  try {
+    const now = ctx.currentTime;
+    const duration = kind === "online" ? 0.22 : 0.34;
+    const master = ctx.createGain();
+    const filter = ctx.createBiquadFilter();
+    const throat = ctx.createOscillator();
+    const chest = ctx.createOscillator();
+    const chestGain = ctx.createGain();
+
+    master.gain.setValueAtTime(0.0001, now);
+    master.gain.exponentialRampToValueAtTime(kind === "online" ? 0.08 : 0.105, now + 0.035);
+    master.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+
+    filter.type = "lowpass";
+    filter.frequency.setValueAtTime(210, now);
+    filter.frequency.exponentialRampToValueAtTime(92, now + duration);
+    filter.Q.setValueAtTime(5.2, now);
+
+    throat.type = "sawtooth";
+    throat.frequency.setValueAtTime(kind === "online" ? 92 : 68, now);
+    throat.frequency.exponentialRampToValueAtTime(kind === "online" ? 64 : 49, now + duration);
+
+    chest.type = "sine";
+    chest.frequency.setValueAtTime(kind === "online" ? 45 : 38, now);
+    chest.frequency.exponentialRampToValueAtTime(kind === "online" ? 35 : 31, now + duration);
+    chestGain.gain.setValueAtTime(0.18, now);
+    chestGain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+
+    throat.connect(filter);
+    filter.connect(master);
+    chest.connect(chestGain);
+    chestGain.connect(master);
+    master.connect(ctx.destination);
+
+    throat.start(now);
+    chest.start(now);
+    throat.stop(now + duration + 0.02);
+    chest.stop(now + duration + 0.02);
+  } catch {}
+}
 function ogreAgentCancelSpeech() {
   if (!ogreAgentSpeechSupported()) {
     ogreAgentSetSpeaking(false);
@@ -16150,3 +16204,4 @@ if (!window.__slimeStablePumpChartTimer) {
     if (!document.hidden) window.setTimeout(() => kick("visible-empty-feed-watchdog"), 450);
   });
 })();
+
