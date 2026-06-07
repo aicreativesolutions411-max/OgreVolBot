@@ -2078,6 +2078,188 @@ html body main.shell[data-app] .clip-farm-control small {
   }
 }
 
+/* DESKTOP_TERMINAL_TOPBAR_SLIM_20260607_V1: keep the added recorder from forcing a giant second header row. */
+@media (min-width: 821px) {
+  html body main.shell[data-app][data-route="terminal"] > .topbar {
+    align-items: center !important;
+    display: grid !important;
+    gap: 6px 10px !important;
+    grid-auto-rows: auto !important;
+    grid-template-columns: auto auto minmax(0, 1fr) !important;
+    height: auto !important;
+    margin-bottom: 4px !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    padding: 6px 10px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] > .topbar > .powered {
+    align-self: center !important;
+    grid-column: 1 !important;
+    grid-row: 1 !important;
+    min-width: 0 !important;
+    width: auto !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] > .topbar > .powered img {
+    height: 32px !important;
+    max-height: 32px !important;
+    max-width: 230px !important;
+    object-fit: contain !important;
+    width: auto !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] > .topbar > .clip-farm-shell {
+    align-self: center !important;
+    grid-column: 2 !important;
+    grid-row: 1 !important;
+    margin: 0 !important;
+    min-width: 0 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .clip-farm-control {
+    gap: 6px !important;
+    height: 30px !important;
+    min-height: 30px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .clip-record-button {
+    border-radius: 999px !important;
+    font-size: 10px !important;
+    min-height: 26px !important;
+    padding: 0 9px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .clip-farm-control small {
+    font-size: 10px !important;
+    line-height: 1 !important;
+    max-width: 78px !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] > .topbar > .topbar-right {
+    align-items: center !important;
+    display: grid !important;
+    gap: 6px 8px !important;
+    grid-column: 3 !important;
+    grid-row: 1 !important;
+    grid-template-columns: minmax(240px, 360px) minmax(360px, 1fr) auto !important;
+    justify-content: end !important;
+    min-width: 0 !important;
+    width: 100% !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .terminal-global-search {
+    align-items: center !important;
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    gap: 6px !important;
+    margin: 0 !important;
+    max-width: 360px !important;
+    min-height: 30px !important;
+    min-width: 0 !important;
+    order: 0 !important;
+    width: 100% !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .terminal-global-search[hidden] {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .terminal-global-search input {
+    flex: 1 1 auto !important;
+    font-size: 12px !important;
+    min-height: 30px !important;
+    min-width: 0 !important;
+    padding: 0 10px !important;
+    width: 100% !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .terminal-global-search button {
+    flex: 0 0 auto !important;
+    font-size: 11px !important;
+    min-height: 30px !important;
+    padding: 0 10px !important;
+    white-space: nowrap !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip {
+    align-items: center !important;
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    gap: 5px !important;
+    justify-content: flex-end !important;
+    margin: 0 !important;
+    min-height: 30px !important;
+    min-width: 0 !important;
+    order: 0 !important;
+    overflow-x: auto !important;
+    padding: 3px 6px !important;
+    scrollbar-width: none !important;
+    white-space: nowrap !important;
+    width: 100% !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip::-webkit-scrollbar {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip button,
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip > span {
+    align-items: center !important;
+    display: inline-flex !important;
+    flex: 0 0 auto !important;
+    font-size: 10.5px !important;
+    justify-content: center !important;
+    line-height: 1 !important;
+    min-height: 24px !important;
+    padding: 0 7px !important;
+    white-space: nowrap !important;
+    width: auto !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip button {
+    min-height: 26px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .top-auth-actions,
+  html body main.shell[data-app][data-route="terminal"] .top-auth-group {
+    align-items: center !important;
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    gap: 6px !important;
+    justify-content: flex-end !important;
+    min-width: 0 !important;
+    order: 0 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .top-auth-group[hidden] {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .top-auth-group button,
+  html body main.shell[data-app][data-route="terminal"] .top-auth-group .top-profile-button {
+    font-size: 11px !important;
+    min-height: 30px !important;
+    padding: 0 10px !important;
+    white-space: nowrap !important;
+  }
+}
+
+@media (min-width: 821px) and (max-width: 1180px) {
+  html body main.shell[data-app][data-route="terminal"] > .topbar > .topbar-right {
+    grid-template-columns: minmax(220px, 1fr) auto !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip {
+    grid-column: 1 / -1 !important;
+    grid-row: 2 !important;
+    justify-content: flex-start !important;
+  }
+}
+
 .smart-chart-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
