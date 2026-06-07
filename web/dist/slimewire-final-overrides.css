@@ -12423,3 +12423,97 @@ body:has(main.shell[data-app][data-route="connect"]) [data-ogre-agent-root] {
     overflow-anchor: auto !important;
   }
 }
+
+/* TRADER_POLISH_20260607_V1: desktop intro fills the browser better, desktop nav is tighter,
+   and mobile feed refreshes do not flash the terminal pane. */
+@media (min-width: 761px) {
+  html body main.shell[data-app][data-route="intro"] .swamp-intro-media {
+    object-fit: cover !important;
+    object-position: center center !important;
+  }
+}
+
+@media (min-width: 921px) {
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] {
+    grid-template-columns: 84px minmax(0, 1fr) !important;
+    column-gap: 10px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs {
+    max-height: calc(100dvh - 132px) !important;
+    min-height: min(690px, calc(100dvh - 132px)) !important;
+    padding: 7px 5px !important;
+    gap: 4px !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    scrollbar-width: thin !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs::before {
+    width: 70px !important;
+    height: 24px !important;
+    margin: 0 auto 4px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-section-label {
+    margin: 4px 2px 1px !important;
+    font-size: 7.4px !important;
+    letter-spacing: 0.05em !important;
+    line-height: 1 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs > button,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group > summary,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button {
+    align-items: center !important;
+    justify-content: center !important;
+    min-height: 39px !important;
+    padding: 4px 3px !important;
+    border-radius: 9px !important;
+    gap: 2px !important;
+    text-align: center !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs button::before,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group summary::before,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button::before {
+    width: 16px !important;
+    height: 16px !important;
+    flex: 0 0 16px !important;
+    margin: 0 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs button::after,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group summary::after,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button::after {
+    display: block !important;
+    max-width: 70px !important;
+    font-size: 7.7px !important;
+    line-height: 1.05 !important;
+    overflow: clip !important;
+    text-overflow: clip !important;
+    white-space: normal !important;
+  }
+}
+
+@media (max-width: 760px) {
+  main.shell[data-app][data-route="terminal"][data-active-tab="terminal"] .panel-host,
+  main.shell[data-app][data-route="terminal"][data-active-tab="terminal"] [data-panel],
+  main.shell[data-app][data-route="terminal"][data-active-tab="terminal"] .terminal-main,
+  main.shell[data-app][data-route="terminal"][data-active-tab="live"] .panel-host,
+  main.shell[data-app][data-route="terminal"][data-active-tab="live"] [data-panel],
+  main.shell[data-app][data-route="terminal"][data-active-tab="live"] .terminal-main,
+  main.shell[data-app][data-route="terminal"][data-active-tab="slimeScope"] .panel-host,
+  main.shell[data-app][data-route="terminal"][data-active-tab="slimeScope"] [data-panel],
+  main.shell[data-app][data-route="terminal"][data-active-tab="slimeScope"] .terminal-main {
+    background-color: rgba(0, 8, 3, 0.98) !important;
+    overscroll-behavior: contain !important;
+    scroll-behavior: auto !important;
+  }
+
+  main.shell[data-app][data-route="terminal"][data-active-tab="terminal"][data-loading="true"] .panel-host,
+  main.shell[data-app][data-route="terminal"][data-active-tab="live"][data-loading="true"] .panel-host,
+  main.shell[data-app][data-route="terminal"][data-active-tab="slimeScope"][data-loading="true"] .panel-host {
+    opacity: 1 !important;
+  }
+}

@@ -141,7 +141,7 @@ test("terminal load, tab switch, focus return, and manual refresh all use the sh
 test("active tab poller avoids hidden-page and duplicate heavy-tab polling", () => {
   const body = functionBody("scheduleActiveTerminalFeedRefresh");
   assert.match(body, /document\.hidden/);
-  assert.match(body, /\["terminal", "live", "slimeScope", "kol", "watchlist", "sniper"\]\.includes\(state\.activeTab\)/);
+  assert.match(body, /\["terminal", "live", "slimeScope", "kol", "watchlist", "sniper", "launchCoin"\]\.includes\(state\.activeTab\)/);
   assert.match(body, /Math\.max\(5_000, Number\(feed\.refreshMs \|\| 30_000\)\)/);
   assert.match(body, /clearTimeout\(terminalFeedTimer\)/);
   assert.match(functionBody("scheduleLivePairsAutoRefresh"), /loadLivePairs\(\{ silent: true, bucket: state\.livePairBucket, force: false \}\)/);

@@ -2964,7 +2964,7 @@ async function refreshTerminalFeed(tabKey = state.activeTab, options = {}) {
   if (!userDriven && lastStartedAt && now - lastStartedAt < TERMINAL_BACKGROUND_REFRESH_MIN_MS) {
     return terminalFeedRuntime(tabKey);
   }
-  if (tabNeedsAccountFeed(tabKey) && !state.user && !["smartChart", "trade", "bundle", "volume"].includes(tabKey)) {
+  if (tabNeedsAccountFeed(tabKey) && !state.user && !["smartChart", "trade", "bundle", "volume", "launchCoin"].includes(tabKey)) {
     markTerminalFeedDone(tabKey, "", "skipped", { errorCode: "ACCOUNT_REQUIRED", errorMessage: "Account or wallet required." });
     return terminalFeedRuntime(tabKey);
   }
@@ -3050,10 +3050,14 @@ async function refreshTerminalFeed(tabKey = state.activeTab, options = {}) {
       details: `${tabKey}:${terminalFeedCacheKey(feed)}`
     });
     if (options.render !== false) {
-      render({
-        force: true,
-        preserveSmartChartFrame: state.activeTab === "smartChart" && tabKey === "smartChart"
-      });
+      if (!userDriven && shouldDeferTerminalRender()) {
+        requestDeferredRender();
+      } else {
+        render({
+          force: true,
+          preserveSmartChartFrame: state.activeTab === "smartChart" && tabKey === "smartChart"
+        });
+      }
     }
   }
 }
@@ -3087,7 +3091,7 @@ function scheduleActiveTerminalFeedRefresh() {
     return;
   }
   const feed = terminalFeedDefinition(state.activeTab);
-  if (!feed || ["terminal", "live", "slimeScope", "kol", "watchlist", "sniper"].includes(state.activeTab)) {
+  if (!feed || ["terminal", "live", "slimeScope", "kol", "watchlist", "sniper", "launchCoin"].includes(state.activeTab)) {
     clearActiveTimer();
     return;
   }
@@ -4371,7 +4375,7 @@ function requestSmartChartScrollIntoView(panel = document) {
   });
 }
 
-const MOBILE_STABLE_FEED_TABS = new Set(["live", "slimeScope"]);
+const MOBILE_STABLE_FEED_TABS = new Set(["terminal", "live", "slimeScope"]);
 const STABLE_FEED_ROW_SELECTOR = [
   ".signal-row[data-token-chart]",
   ".terminal-token-row[data-token-chart]",
@@ -7071,7 +7075,7 @@ function pumpLivePanelHtml(draft = state.launchCoinDraft || {}) {
 function launchCoinHtml() {
   const draft = state.launchCoinDraft || {};
   return `
-    <section class="trade-layout launch-coin-layout">
+    <section class="trade-layout launch-coin-layout" data-preserve-focus>
       <article class="trade-card launch-coin-card">
         <div class="trade-head">
           <div>

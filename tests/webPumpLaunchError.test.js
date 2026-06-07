@@ -16,3 +16,12 @@ test("web Pump launch preserves safe backend errors with launchAttemptId", async
   assert.match(appJs, /launchAttemptId/);
   assert.match(appJs, /preserveSafeError: true/);
 });
+
+test("web Pump launch metadata adds SlimeWire attribution server-side", async () => {
+  const indexJs = await fs.readFile(path.join(rootDir, "src", "index.js"), "utf8");
+
+  assert.match(indexJs, /const SLIMEWIRE_LAUNCH_ATTRIBUTION = "Launched from slimewire\.org"/);
+  assert.match(indexJs, /function launchDescriptionWithSlimeWireAttribution/);
+  assert.match(indexJs, /const description = launchDescriptionWithSlimeWireAttribution\(body\.description, 800\)/);
+  assert.match(indexJs, /description: basePayload\.description \|\| ""/);
+});

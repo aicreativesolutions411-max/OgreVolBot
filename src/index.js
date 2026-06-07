@@ -25003,6 +25003,17 @@ function cleanLaunchText(value, maxLength = 256) {
     .slice(0, maxLength);
 }
 
+const SLIMEWIRE_LAUNCH_ATTRIBUTION = "Launched from slimewire.org";
+
+function launchDescriptionWithSlimeWireAttribution(value, maxLength = 800) {
+  const clean = cleanLaunchText(value, maxLength);
+  if (clean.toLowerCase().includes(SLIMEWIRE_LAUNCH_ATTRIBUTION.toLowerCase())) return clean;
+  const separator = clean ? "\n\n" : "";
+  const maxBaseLength = Math.max(0, maxLength - separator.length - SLIMEWIRE_LAUNCH_ATTRIBUTION.length);
+  const base = clean.slice(0, maxBaseLength).trim();
+  return `${base}${base ? separator : ""}${SLIMEWIRE_LAUNCH_ATTRIBUTION}`.slice(0, maxLength);
+}
+
 function cleanLaunchUrl(value) {
   const text = String(value || "").trim();
   if (!text || text.startsWith("@")) return "";
@@ -26058,7 +26069,7 @@ async function webLaunchPumpCoin(userId, body = {}) {
 
   const name = cleanLaunchText(body.name, 64);
   const symbol = cleanTickerSymbol(body.symbol || body.ticker || "");
-  const description = cleanLaunchText(body.description, 800);
+  const description = launchDescriptionWithSlimeWireAttribution(body.description, 800);
   if (!name) {
     const error = createPumpLaunchError("Token name is required.", "PUMP_LAUNCH_NAME_REQUIRED", 400, {
       stage: PUMP_LAUNCH_STAGE.CONFIG,
