@@ -79,6 +79,19 @@ test("Live pair action buttons stay even and visibly colored", () => {
   assert.match(chartCssSource, /terminal-token-actions button\.watch-action[\s\S]*linear-gradient/);
 });
 
+test("Live pair stats stay bold, green, and compact", () => {
+  assert.match(chartCssSource, /live pair stat readability/);
+  assert.match(chartCssSource, /terminal-token-stats span[\s\S]*height: 44px/);
+  assert.match(chartCssSource, /terminal-token-stats span[\s\S]*transform: translateY\(2px\)/);
+  assert.match(chartCssSource, /terminal-token-stats small[\s\S]*color: rgba\(170, 255, 143, 0\.76\)/);
+  assert.match(chartCssSource, /terminal-token-stats small[\s\S]*font-size: 9\.5px/);
+  assert.match(chartCssSource, /terminal-token-stats small[\s\S]*font-weight: 950/);
+  assert.match(chartCssSource, /terminal-token-stats strong[\s\S]*color: #ecffe6/);
+  assert.match(chartCssSource, /terminal-token-stats strong[\s\S]*font-size: 13\.5px/);
+  assert.match(chartCssSource, /terminal-token-stats strong[\s\S]*font-weight: 1000/);
+  assert.match(chartCssSource, /terminal-token-stats strong[\s\S]*text-overflow: clip/);
+});
+
 test("Chart route has professional Buy and Sell panel", () => {
   const panel = functionBody(appSource, "chartTradePanelHtml");
   assert.match(panel, /data-chart-trade-tab="buy"/);

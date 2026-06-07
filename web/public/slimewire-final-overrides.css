@@ -10975,3 +10975,66 @@ button[data-slimeshield-details].slimeshield-chip small {
     padding: 0 7px !important;
   }
 }
+
+/* 2026-06-07 live pair stat readability: bigger green stats without taller rows. */
+[data-app][data-route="terminal"] .terminal-token-stats {
+  align-items: center !important;
+  gap: 6px !important;
+}
+
+[data-app][data-route="terminal"] .terminal-token-stats span {
+  align-content: center !important;
+  background: linear-gradient(180deg, rgba(14, 32, 18, 0.92), rgba(7, 17, 10, 0.9)) !important;
+  border: 1px solid rgba(111, 255, 75, 0.08) !important;
+  border-radius: 8px !important;
+  box-sizing: border-box !important;
+  gap: 3px !important;
+  height: 44px !important;
+  justify-items: start !important;
+  max-height: 44px !important;
+  min-height: 0 !important;
+  padding: 6px 7px 4px !important;
+  transform: translateY(2px) !important;
+}
+
+[data-app][data-route="terminal"] .terminal-token-stats small {
+  color: rgba(170, 255, 143, 0.76) !important;
+  font-size: 9.5px !important;
+  font-weight: 950 !important;
+  letter-spacing: 0 !important;
+  line-height: 0.95 !important;
+  text-transform: uppercase !important;
+}
+
+[data-app][data-route="terminal"] .terminal-token-stats strong {
+  color: #ecffe6 !important;
+  font-size: 13.5px !important;
+  font-weight: 1000 !important;
+  letter-spacing: 0 !important;
+  line-height: 1.03 !important;
+  max-width: 100% !important;
+  overflow: clip !important;
+  text-shadow: 0 0 10px rgba(107, 255, 79, 0.14) !important;
+  text-overflow: clip !important;
+  white-space: nowrap !important;
+}
+
+@media (max-width: 900px) {
+  [data-app][data-route="terminal"] .terminal-token-stats {
+    gap: 4px !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-token-stats span {
+    height: 40px !important;
+    max-height: 40px !important;
+    padding: 5px 6px 3px !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-token-stats small {
+    font-size: 8.5px !important;
+  }
+
+  [data-app][data-route="terminal"] .terminal-token-stats strong {
+    font-size: 12px !important;
+  }
+}
