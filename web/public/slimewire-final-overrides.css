@@ -10203,18 +10203,26 @@ textarea,
   }
 }
 
-/* LANDING_SPONSOR_ASML_V1: keep multiple sponsor entries readable in the sponsor frame. */
+/* LANDING_SPONSOR_TOKENS_V2: keep multiple sponsor entries readable in the sponsor frame. */
 [data-app][data-route="intro"] .swamp-sponsor-frame .swamp-support-content {
-  gap: clamp(6px, 0.8vw, 10px) !important;
+  gap: clamp(4px, 0.55vw, 7px) !important;
 }
 
 [data-app][data-route="intro"] .swamp-sponsor-token .swamp-sponsor-links {
   grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
 }
 
+[data-app][data-route="intro"] .swamp-sponsor-token summary {
+  min-height: clamp(34px, 3.2vw, 40px) !important;
+}
+
+[data-app][data-route="intro"] .swamp-sponsor-token summary img {
+  object-fit: cover !important;
+}
+
 @media (max-width: 760px) {
   [data-app][data-route="intro"] .swamp-sponsor-frame .swamp-support-content {
-    gap: 5px !important;
+    gap: 4px !important;
   }
 
   [data-app][data-route="intro"] .swamp-sponsor-token summary {

@@ -4,6 +4,7 @@ import fs from "node:fs";
 
 const appSource = fs.readFileSync(new URL("../web/public/app.js", import.meta.url), "utf8");
 const cssSource = fs.readFileSync(new URL("../web/public/slimewire-final-overrides.css", import.meta.url), "utf8");
+const indexSource = fs.readFileSync(new URL("../web/public/index.html", import.meta.url), "utf8");
 const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
 const configSource = fs.readFileSync(new URL("../config.js", import.meta.url), "utf8");
 const envSource = fs.readFileSync(new URL("../.env.example", import.meta.url), "utf8");
@@ -205,6 +206,17 @@ test("Slime Scope refreshes its own bucket and Details buttons stay compact gree
   assert.match(cssSource, /button\[data-kol-dump-details\]/);
   assert.match(cssSource, /background: linear-gradient\(135deg, rgba\(43, 180, 53/);
   assert.match(cssSource, /swamp-sponsor-links[\s\S]*z-index: 90/);
+});
+
+test("USD2 sponsor entry opens the same popup link menu as other sponsors", () => {
+  assert.match(indexSource, /Open USD2 sponsor links/);
+  assert.match(indexSource, /assets\/slimewire\/support\/usd2-sponsor-logo\.jpg/);
+  assert.match(indexSource, /https:\/\/share\.google\/y94z9bxjK4RVVohnm/);
+  assert.match(indexSource, /https:\/\/x\.com\/USD2onSolana/);
+  assert.match(indexSource, /https:\/\/share\.google\/F9EuKDnbjbVml9zK5/);
+  assert.match(indexSource, /https:\/\/t\.me\/USD2Solana/);
+  assert.match(cssSource, /LANDING_SPONSOR_TOKENS_V2/);
+  assert.match(cssSource, /swamp-sponsor-token \.swamp-sponsor-links[\s\S]*repeat\(2, minmax\(0, 1fr\)\)/);
 });
 
 test("dev-only performance counters include requested smoothness diagnostics", () => {
