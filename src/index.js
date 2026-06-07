@@ -113,6 +113,7 @@ const TOKEN_IMAGE_FAILURE_TTL_MS = 60 * 1000;
 const TOKEN_IMAGE_RESPONSE_CACHE_MAX = 500;
 const tokenAvatarCache = new Map();
 const tokenAvatarLookupInFlight = new Map();
+const tokenAvatarLookupQueue = new Map();
 const TOKEN_AVATAR_SUCCESS_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const TOKEN_AVATAR_FAIL_TTL_MS = 12 * 60 * 60 * 1000;
 const TOKEN_AVATAR_LOOKUP_CONCURRENCY = 5;
@@ -2699,22 +2700,53 @@ function decorateWebLivePairAvatars(rows = []) {
   return (Array.isArray(rows) ? rows : []).map(tokenAvatarFromRow);
 }
 
+function tokenAvatarNeedsLookup(mint = "") {
+  const key = String(mint || "").trim().toLowerCase();
+  if (!key) return false;
+  const record = tokenAvatarCache.get(key);
+  if (!record) return true;
+  const timestamp = Date.parse(record.updatedAt || record.failedAt || "");
+  const ageMs = Number.isFinite(timestamp) ? Date.now() - timestamp : Number.POSITIVE_INFINITY;
+  if (record.state === "ready" && record.avatarUrl && ageMs < TOKEN_AVATAR_SUCCESS_TTL_MS) return false;
+  if ((record.state === "failed" || record.state === "missing") && ageMs < TOKEN_AVATAR_FAIL_TTL_MS) return false;
+  return true;
+}
+
+function pumpTokenAvatarLookupQueue() {
+  if (tokenAvatarLookupInFlight.size >= TOKEN_AVATAR_LOOKUP_CONCURRENCY) return;
+  const slots = TOKEN_AVATAR_LOOKUP_CONCURRENCY - tokenAvatarLookupInFlight.size;
+  const pending = [...tokenAvatarLookupQueue.entries()].slice(0, slots);
+  for (const [key, queued] of pending) {
+    tokenAvatarLookupQueue.delete(key);
+    if (!queued?.mint || tokenAvatarLookupInFlight.has(key) || !tokenAvatarNeedsLookup(queued.mint)) continue;
+    const promise = resolveTokenAvatarRecord(queued.mint, queued.row || {})
+      .then((record) => rememberTokenAvatarRecord(record))
+      .catch((error) => rememberTokenAvatarRecord({
+        mint: queued.mint,
+        avatarUrl: "",
+        source: "lookup",
+        state: "failed",
+        failureReason: friendlyError(error)
+      }))
+      .finally(() => {
+        tokenAvatarLookupInFlight.delete(key);
+        pumpTokenAvatarLookupQueue();
+      });
+    tokenAvatarLookupInFlight.set(key, promise);
+  }
+}
+
 function scheduleTokenAvatarLookup(mint = "", row = {}) {
   const key = String(mint || "").trim().toLowerCase();
-  if (!key || tokenAvatarLookupInFlight.has(key) || tokenAvatarLookupInFlight.size >= TOKEN_AVATAR_LOOKUP_CONCURRENCY) return;
-  const promise = resolveTokenAvatarRecord(mint, row)
-    .then((record) => rememberTokenAvatarRecord(record))
-    .catch((error) => rememberTokenAvatarRecord({
-      mint,
-      avatarUrl: "",
-      source: "lookup",
-      state: "failed",
-      failureReason: friendlyError(error)
-    }))
-    .finally(() => {
-      tokenAvatarLookupInFlight.delete(key);
-    });
-  tokenAvatarLookupInFlight.set(key, promise);
+  if (!key || tokenAvatarLookupInFlight.has(key) || !tokenAvatarNeedsLookup(mint)) return;
+  tokenAvatarLookupQueue.set(key, { mint, row, queuedAt: Date.now() });
+  if (tokenAvatarLookupQueue.size > 250) {
+    const oldest = [...tokenAvatarLookupQueue.entries()]
+      .sort((a, b) => Number(a[1]?.queuedAt || 0) - Number(b[1]?.queuedAt || 0))
+      .slice(0, Math.max(0, tokenAvatarLookupQueue.size - 200));
+    for (const [oldKey] of oldest) tokenAvatarLookupQueue.delete(oldKey);
+  }
+  pumpTokenAvatarLookupQueue();
 }
 
 async function resolveTokenAvatarRecord(mint = "", row = {}) {
@@ -4148,9 +4180,9 @@ function ogreAgentEnv(name = "") {
 }
 
 function ogreAgentProviderTimeoutMs() {
-  const raw = Number(process.env.OGRE_AGENT_PROVIDER_TIMEOUT_MS || 2200);
-  if (!Number.isFinite(raw)) return 2200;
-  return Math.max(1200, Math.min(5000, raw));
+  const raw = Number(process.env.OGRE_AGENT_PROVIDER_TIMEOUT_MS || 1800);
+  if (!Number.isFinite(raw)) return 1800;
+  return Math.max(900, Math.min(3500, raw));
 }
 
 function ogreAgentProviderEnabled() {
@@ -4405,7 +4437,7 @@ async function callOgreAgentModel(message = "", context = {}, fallback = {}) {
     .map((item) => item.trim().toLowerCase())
     .filter((item, index, list) => providers.has(item) && list.indexOf(item) === index);
   const startedAt = Date.now();
-  const totalBudgetMs = Math.max(1800, Math.min(6500, Number(process.env.OGRE_AGENT_TOTAL_TIMEOUT_MS || 4500) || 4500));
+  const totalBudgetMs = Math.max(1500, Math.min(4500, Number(process.env.OGRE_AGENT_TOTAL_TIMEOUT_MS || 2800) || 2800));
   for (const name of (order.length ? order : providers.keys())) {
     const remainingMs = totalBudgetMs - (Date.now() - startedAt);
     if (remainingMs < 700) break;
@@ -24517,6 +24549,12 @@ function kolProfilesFromScan(scan = {}, source = "kol_scan") {
           wallet,
           name: firstString(row.kolName, row.name, row.twitter, shortMint(wallet)),
           twitter: stripAt(firstString(row.twitter, row.handle)),
+          profileUrl: firstString(row.profileUrl, row.kolscanUrl, row.kolScanUrl, row.links?.kolscan),
+          xUrl: firstString(row.xUrl, row.twitterUrl, row.links?.x, row.twitter ? `https://x.com/${stripAt(row.twitter)}` : ""),
+          websiteUrl: firstString(row.websiteUrl, row.website, row.links?.website),
+          tokenMint: firstString(row.tokenMint, row.mint, row.address),
+          symbol: firstString(row.symbol, row.baseSymbol),
+          currentPositionCount: Number(firstMeaningfulNumber(row.currentPositionCount, row.positionsCount, row.positionCount) || 0),
           trades: row.callsTracked || row.trades || 0,
           callsTracked: row.callsTracked || row.trades || 0,
           dumpRiskPercent: row.dumpRiskPercent,
@@ -24629,12 +24667,22 @@ function computeKolDumpStatsFromProfile(kol = {}) {
     : dumpRiskPercent >= 30
       ? ["Fast sell-window history is elevated for tracked calls."]
       : ["Tracked sell-window history is not showing high dump pressure."];
+  const walletAddresses = uniqueStrings([kol.wallet, kol.owner, kol.address, kol.publicKey, ...(Array.isArray(kol.walletAddresses) ? kol.walletAddresses : [])].filter(Boolean));
+  const externalLinks = [
+    { label: "KOLscan", url: firstString(kol.kolscanUrl, kol.kolScanUrl, kol.profileUrl, kol.links?.kolscan) },
+    { label: "X", url: firstString(kol.xUrl, kol.twitterUrl, kol.links?.x, kol.twitter ? `https://x.com/${stripAt(kol.twitter)}` : "") },
+    { label: "Website", url: firstString(kol.websiteUrl, kol.website, kol.links?.website) }
+  ].filter((link) => /^https?:\/\//i.test(String(link.url || "")));
+  const currentPositionCount = Number(firstMeaningfulNumber(kol.currentPositionCount, kol.positionsCount, kol.positionCount) || 0);
   return {
     kolId,
     displayName: firstString(kol.displayName, kol.name, kol.twitter ? `@${stripAt(kol.twitter)}` : "", kol.shortWallet, kol.wallet ? shortMint(kol.wallet) : "KOL Wallet"),
     handle: stripAt(firstString(kol.handle, kol.twitter, kol.x)),
-    walletAddresses: uniqueStrings([kol.wallet, kol.owner, kol.address, kol.publicKey].filter(Boolean)),
+    walletAddresses,
     callsTracked,
+    currentPositionCount,
+    lastTokenMint: firstString(kol.tokenMint, kol.mint),
+    lastTokenSymbol: firstString(kol.symbol, kol.baseSymbol),
     dumpRiskPercent,
     medianHoldMinutes: Number(firstMeaningfulNumber(kol.medianHoldMinutes, kol.median_hold_minutes) || 0) || null,
     soldWithin15mPercent: Number(firstMeaningfulNumber(kol.soldWithin15mPercent, kol.sold_within_15m_percent) || 0) || null,
@@ -24648,6 +24696,7 @@ function computeKolDumpStatsFromProfile(kol = {}) {
     historySource: String(kol.source || "cached-kol-profile").slice(0, 80),
     firstSeenAt: kol.firstSeenAt || "",
     lastSeenAt: kol.lastSeenAt || "",
+    externalLinks,
     reasons: [...reasons, sourceNote],
     updatedAt: new Date().toISOString()
   };

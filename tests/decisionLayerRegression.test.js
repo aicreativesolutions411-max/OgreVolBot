@@ -98,6 +98,9 @@ test("Live Pair avatars use stable cached src, lazy image loading, and broken-ur
   assert.match(rowAvatarSlice, /width="42" height="42"/);
   assert.match(rowAvatarSlice, /onerror="window\.__slimeAvatarLoadFailed/);
   assert.match(serverSource, /const TOKEN_AVATAR_LOOKUP_CONCURRENCY = 5/);
+  assert.match(serverSource, /const tokenAvatarLookupQueue = new Map\(\)/);
+  assert.match(functionBody("scheduleTokenAvatarLookup", serverSource), /tokenAvatarLookupQueue\.set/);
+  assert.match(functionBody("pumpTokenAvatarLookupQueue", serverSource), /TOKEN_AVATAR_LOOKUP_CONCURRENCY - tokenAvatarLookupInFlight\.size/);
   assert.match(serverSource, /TOKEN_AVATAR_SUCCESS_TTL_MS = 30 \* 24 \* 60 \* 60 \* 1000/);
   assert.match(functionBody("sendWebTokenAvatar", serverSource), /stale-while-revalidate=604800/);
   assertNoHotExternalCalls(functionBody("tokenAvatarForMint", serverSource), "token avatar lookup request");
@@ -155,8 +158,20 @@ test("Ogre Agent chat is contextual, retryable, copyable, and debug-instrumented
   assert.match(functionBody("sendOgreAgentMessage"), /debugCounter\("chatRequestTimedOut"\)/);
   assert.match(functionBody("sendOgreAgentMessage"), /debugCounter\("chatRequestSucceeded"\)/);
   assert.match(functionBody("sendOgreAgentMessage"), /debugCounter\("chatRequestFailed"\)/);
+  assert.match(functionBody("ogreAgentStartListening"), /ogreAgentPrimeMicrophonePermission/);
+  assert.match(functionBody("ogreAgentStartListening"), /permissionSessionId !== ogreAgentSpeechSessionId/);
   assert.match(cssSource, /\.ogre-agent-message-tools/);
   assert.match(cssSource, /\.ogre-agent-disclaimer/);
+});
+
+test("Slime Scope refreshes its own bucket and Details buttons stay compact green", () => {
+  assert.match(functionBody("activeLivePairBucketForTab"), /tabKey === "slimeScope"/);
+  assert.match(functionBody("scheduleLivePairsAutoRefresh"), /refreshTerminalFeed\("slimeScope"/);
+  assert.match(functionBody("slimeScopeHtml"), /scopeLoading/);
+  assert.match(cssSource, /button\[data-slimeshield-details\]\.slimeshield-pill/);
+  assert.match(cssSource, /button\[data-kol-dump-details\]/);
+  assert.match(cssSource, /background: linear-gradient\(135deg, rgba\(43, 180, 53/);
+  assert.match(cssSource, /swamp-sponsor-links[\s\S]*z-index: 90/);
 });
 
 test("dev-only performance counters include requested smoothness diagnostics", () => {

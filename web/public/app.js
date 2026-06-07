@@ -61,7 +61,8 @@ const POST_TRADE_REFRESH_DELAYS_MS = [1200, 4500, 10000];
 const APP_WATCHDOG_INTERVAL_MS = 15_000;
 const APP_RESUME_REFRESH_DEBOUNCE_MS = 650;
 const OGRE_AGENT_MIC_START_TIMEOUT_MS = 3500;
-const OGRE_AGENT_MIC_LISTEN_TIMEOUT_MS = 12000;const POSITION_REFRESH_STALE_LOCK_MS = 30_000;
+const OGRE_AGENT_MIC_LISTEN_TIMEOUT_MS = 12000;
+const POSITION_REFRESH_STALE_LOCK_MS = 30_000;
 const POST_TRADE_AFFECTED_KEYS = ["wallet-summary", "positions", "pnl", "trade-history", "selected-token", "live-trades"];
 const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 const BASE58_LOOKUP = new Map([...BASE58_ALPHABET].map((char, index) => [char, index]));
@@ -2786,6 +2787,13 @@ async function refreshTerminalFeed(tabKey = state.activeTab, options = {}) {
 
   terminalFeedLastRefreshStartedAt.set(tabKey, now);
   const requestId = markTerminalFeedStart(tabKey, options);
+  if (userDriven && options.renderStart !== false) {
+    const preserveFrame = state.activeTab === "smartChart" && ["smartChart"].includes(tabKey);
+    render({
+      force: true,
+      preserveSmartChartFrame: preserveFrame
+    });
+  }
   try {
     if (tabKey === "terminal") {
       const tasks = [
@@ -2931,12 +2939,19 @@ function slimeScopeLivePairBucketForMode(mode = state.slimeScopeMode) {
   return "live";
 }
 
-function currentLivePairs() {
-  return state.livePairsByBucket[state.livePairBucket] || state.livePairs || null;
+function activeLivePairBucketForTab(tabKey = state.activeTab) {
+  if (tabKey === "slimeScope") return slimeScopeLivePairBucketForMode(state.slimeScopeMode);
+  return normalizeLivePairBucket(state.livePairBucket);
 }
 
-function currentLivePairsUpdatedAt() {
-  return state.livePairsLastUpdatedByBucket[state.livePairBucket] || state.livePairsLastUpdatedAt || "";
+function currentLivePairs(bucket = activeLivePairBucketForTab()) {
+  const safeBucket = normalizeLivePairBucket(bucket);
+  return state.livePairsByBucket[safeBucket] || (safeBucket === state.livePairBucket ? state.livePairs : null) || null;
+}
+
+function currentLivePairsUpdatedAt(bucket = activeLivePairBucketForTab()) {
+  const safeBucket = normalizeLivePairBucket(bucket);
+  return state.livePairsLastUpdatedByBucket[safeBucket] || (safeBucket === state.livePairBucket ? state.livePairsLastUpdatedAt : "") || "";
 }
 
 async function loadLivePairs({ silent = false, bucket = state.livePairBucket, renderOnComplete = true, force = false } = {}) {
@@ -3107,10 +3122,11 @@ function scheduleLivePairsAutoRefresh() {
     clearLiveTimer();
     return;
   }
-  const refreshSeconds = Number(currentLivePairs()?.refreshSeconds || 30);
+  const refreshBucket = activeLivePairBucketForTab(state.activeTab);
+  const refreshSeconds = Number(currentLivePairs(refreshBucket)?.refreshSeconds || 30);
   const minRefreshSeconds = state.activeTab === "slimeScope" ? 12 : 8;
   const delayMs = Math.max(minRefreshSeconds, refreshSeconds) * 1000;
-  const nextKey = `${state.activeTab}:${state.livePairBucket}:${state.terminalSort}:${delayMs}`;
+  const nextKey = `${state.activeTab}:${refreshBucket}:${state.terminalSort}:${delayMs}`;
   if (livePairsTimer && livePairsTimerKey === nextKey) return;
   clearLiveTimer();
   livePairsTimerKey = nextKey;
@@ -3123,12 +3139,21 @@ function scheduleLivePairsAutoRefresh() {
     }
     const onLiveFeed = state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "slimeScope";
     if (!onLiveFeed) return;
-    if (state.livePairsLoading) {
+    if (state.livePairsLoadingByBucket?.[refreshBucket]) {
       scheduleLivePairsAutoRefresh();
       return;
     }
     try {
-      await loadLivePairs({ silent: true, bucket: state.livePairBucket, force: false });
+      if (state.activeTab === "slimeScope") {
+        await refreshTerminalFeed("slimeScope", {
+          silent: true,
+          render: false,
+          force: false,
+          reason: "slime-scope-auto-refresh"
+        });
+      } else {
+        await loadLivePairs({ silent: true, bucket: state.livePairBucket, force: false });
+      }
     } catch {
       // Keep the last good feed visible; the next timer retry reports status inline.
     } finally {
@@ -3141,14 +3166,17 @@ function ensureLivePairsWarmup({ force = false } = {}) {
   if (isPostTradeRefreshActive()) return;
   const onLiveFeed = state.activeTab === "live" || state.activeTab === "terminal" || state.activeTab === "slimeScope";
   if (!onLiveFeed) return;
-  const bucket = normalizeLivePairBucket(state.livePairBucket);
+  const bucket = activeLivePairBucketForTab(state.activeTab);
   const key = `${bucket}:${state.terminalSort || "best"}`;
   if (livePairsWarmupKeys.has(key) || state.livePairsLoadingByBucket[bucket]) return;
   if (!force && state.livePairsByBucket[bucket]) return;
 
   livePairsWarmupKeys.add(key);
   window.setTimeout(() => {
-    void refreshLivePairBuckets({ silent: true, force: true, warmAll: false })
+    const task = state.activeTab === "slimeScope"
+      ? refreshTerminalFeed("slimeScope", { silent: true, render: false, force: true, reason: "slime-scope-warmup" })
+      : refreshLivePairBuckets({ silent: true, force: true, warmAll: false });
+    void Promise.resolve(task)
       .catch((error) => setError(error.message))
       .finally(() => {
         livePairsWarmupKeys.delete(key);
@@ -7522,6 +7550,11 @@ function renderKolDumpDetailsDrawer() {
     return;
   }
   const row = kolDumpStatsRows().find((item) => String(item.kolId) === String(details.kolId)) || { displayName: "KOL Wallet", reasons: [] };
+  const walletList = Array.isArray(row.walletAddresses) ? row.walletAddresses.filter(Boolean).slice(0, 4) : [];
+  const links = Array.isArray(row.externalLinks) ? row.externalLinks.filter((link) => /^https?:\/\//i.test(String(link?.url || ""))).slice(0, 4) : [];
+  const lastToken = row.lastTokenMint
+    ? `${row.lastTokenSymbol ? `${row.lastTokenSymbol} ` : ""}${shortAddress(row.lastTokenMint)}`
+    : "n/a";
   root.innerHTML = `
     <div class="slimeshield-drawer-backdrop" data-kol-dump-close></div>
     <aside class="kol-dump-drawer" role="dialog" aria-modal="true" aria-label="KOL Dump Detector details">
@@ -7539,12 +7572,24 @@ function renderKolDumpDetailsDrawer() {
       </section>
       <dl class="kol-dump-metrics">
         <div><dt>Calls tracked</dt><dd>${escapeHtml(row.callsTracked ?? 0)}</dd></div>
+        <div><dt>Current positions</dt><dd>${escapeHtml(row.currentPositionCount ?? 0)}</dd></div>
         <div><dt>Sold within 15m</dt><dd>${row.soldWithin15mPercent == null ? "n/a" : `${escapeHtml(row.soldWithin15mPercent)}%`}</dd></div>
         <div><dt>Sold within 60m</dt><dd>${row.soldWithin60mPercent == null ? "n/a" : `${escapeHtml(row.soldWithin60mPercent)}%`}</dd></div>
         <div><dt>Median hold</dt><dd>${row.medianHoldMinutes == null ? "n/a" : `${escapeHtml(row.medianHoldMinutes)}m`}</dd></div>
         <div><dt>Median drawdown</dt><dd>${row.medianPostSignalDrawdownPercent == null ? "n/a" : `${escapeHtml(row.medianPostSignalDrawdownPercent)}%`}</dd></div>
         <div><dt>30m survival</dt><dd>${row.followerSurvival30mPercent == null ? "n/a" : `${escapeHtml(row.followerSurvival30mPercent)}%`}</dd></div>
+        <div><dt>Last token seen</dt><dd>${escapeHtml(lastToken)}</dd></div>
       </dl>
+      <section>
+        <h4>Cached Profile Info</h4>
+        <ul class="slimeshield-factor-list">
+          <li><span>Wallets: ${escapeHtml(walletList.length ? walletList.map(shortAddress).join(", ") : "not returned")}</span></li>
+          <li><span>First seen: ${escapeHtml(row.firstSeenAt ? formatDate(row.firstSeenAt) : "n/a")}</span></li>
+          <li><span>Last seen: ${escapeHtml(row.lastSeenAt ? formatDate(row.lastSeenAt) : "n/a")}</span></li>
+          <li><span>Source: ${escapeHtml(String(row.historySource || "cached profile").replace(/_/g, " "))}</span></li>
+        </ul>
+        ${links.length ? `<div class="slimeshield-drawer-actions">${links.map((link) => `<a href="${escapeHtml(link.url)}" target="_blank" rel="noreferrer">${escapeHtml(link.label || "Open")}</a>`).join("")}</div>` : ""}
+      </section>
       <section>
         <h4>Interpretation</h4>
         <ul class="slimeshield-factor-list">
@@ -12455,6 +12500,9 @@ function slimeScopeHtml() {
     ["graduating", "Graduating"],
     ["graduated", "Graduated"]
   ];
+  const scopeBucket = slimeScopeLivePairBucketForMode(state.slimeScopeMode);
+  const scopeRuntime = terminalFeedRuntime("slimeScope");
+  const scopeLoading = Boolean(scopeRuntime.inFlight || state.livePairsLoadingByBucket?.[scopeBucket]);
   const allRows = slimeScopeRows();
   const rows = terminalFeedRowsWindow("slimeScope", allRows);
   return `
@@ -12472,7 +12520,7 @@ function slimeScopeHtml() {
           ${modes.map(([mode, label]) => `<button data-slime-scope-mode="${mode}" data-active="${state.slimeScopeMode === mode}">${label}</button>`).join("")}
         </div>
         ${quickBuyPresetBarHtml("slime-scope")}
-        <button class="primary slime-scope-refresh-button" data-refresh-live-pairs>Refresh Scope</button>
+        <button class="primary slime-scope-refresh-button" data-refresh-live-pairs ${scopeLoading ? "disabled" : ""}>${scopeLoading ? "Refreshing..." : "Refresh Scope"}</button>
       </div>
       <article class="terminal-panel slime-scope-list-panel">
         ${compactSignalRowsHtml(rows, {
@@ -12640,7 +12688,7 @@ function slimeShieldCardHtml(token = {}) {
       </header>
       <p>${escapeHtml(result.summary || "SlimeShield is warming up. Trade carefully.")}</p>
       <div class="slimeshield-actions">
-        <button type="button" data-slimeshield-details="${escapeHtml(mint)}">Why?</button>
+        <button type="button" data-slimeshield-details="${escapeHtml(mint)}">Details</button>
         ${featureEnabled("protectedBuyEnabled", true) ? `<button type="button" class="primary" data-protected-buy-open="${escapeHtml(mint)}" data-protected-buy-preset="${escapeHtml(result.protectedBuyPreset || protectedBuyPresetForVerdict(verdict))}" data-protected-buy-source="slimeshield-card">Protected Buy</button>` : ""}
       </div>
     </article>
@@ -12875,6 +12923,18 @@ function renderSlimeShieldDetailsDrawer() {
   const verdict = result.verdict || "CAUTION";
   const loading = Boolean(state.slimeShieldLoading?.[mint]);
   const riskFactors = Array.isArray(result.factors) ? result.factors : [];
+  const tokenLinks = [
+    { label: "Dex", url: row.dexUrl || dexUrl(mint) },
+    { label: "Pump", url: pumpUrlForRow(row) },
+    { label: "X", url: row.twitterUrl || row.xUrl },
+    { label: "TG", url: row.telegramUrl },
+    { label: "Web", url: row.websiteUrl }
+  ].filter((link) => /^https?:\/\//i.test(String(link.url || "")));
+  const riskText = [
+    ...(Array.isArray(row.riskFlags) ? row.riskFlags : []),
+    ...(Array.isArray(row.scoreWarnings) ? row.scoreWarnings : []),
+    ...(Array.isArray(row.bestPickWarnings) ? row.bestPickWarnings : [])
+  ].filter(Boolean).slice(0, 4);
   root.innerHTML = `
     <div class="slimeshield-drawer-backdrop" data-slimeshield-close></div>
     <aside class="slimeshield-drawer" role="dialog" aria-modal="true" aria-label="SlimeShield details">
@@ -12893,6 +12953,18 @@ function renderSlimeShieldDetailsDrawer() {
           <span>Score: ${escapeHtml(Number.isFinite(Number(result.score)) ? `${Math.round(Number(result.score))}/100` : "n/a")}</span>
           <span>${loading ? "Updating..." : `Updated ${escapeHtml(formatDate(result.updatedAt))}`}</span>
         </div>
+      </section>
+      <section>
+        <h4>Coin / Dev Info</h4>
+        <dl class="kol-dump-metrics">
+          <div><dt>CA</dt><dd>${escapeHtml(shortAddress(mint))}</dd></div>
+          <div><dt>Age</dt><dd>${escapeHtml(row.pairAgeLabel || formatAgeFromRow(row) || "unknown")}</dd></div>
+          <div><dt>Liquidity</dt><dd>${escapeHtml(row.liquidityLabel || (livePairLiquidityUsd(row) > 0 ? compactUsd(livePairLiquidityUsd(row)) : "n/a"))}</dd></div>
+          <div><dt>MC / FDV</dt><dd>${escapeHtml(row.marketCapLabel || (livePairMarketCap(row) > 0 ? compactUsd(livePairMarketCap(row)) : "n/a"))}</dd></div>
+          <div><dt>Volume</dt><dd>${escapeHtml(row.volumeH1Label || row.volumeLabel || "n/a")}</dd></div>
+          <div><dt>Dev/risk notes</dt><dd>${escapeHtml(riskText.length ? riskText.join(" | ") : "no cached hard flags")}</dd></div>
+        </dl>
+        ${tokenLinks.length ? `<div class="slimeshield-drawer-actions">${tokenLinks.map((link) => `<a href="${escapeHtml(link.url)}" target="_blank" rel="noreferrer">${escapeHtml(link.label)}</a>`).join("")}</div>` : ""}
       </section>
       <section>
         <h4>Top Risk Reasons</h4>
@@ -14061,9 +14133,11 @@ function livePairAvatarHtml(row, options = {}) {
   const cachedAvatarReady = Boolean(row.avatarUrl) && (!explicitAvatarState || explicitAvatarState === "ready");
   const proxyUrl = cachedAvatarReady && mint ? normalizeImageUrl(tokenImageProxyUrl(row)) : "";
   const src = tokenAvatarFixOn
-    ? stableAvatarSrc(avatarKey, proxyUrl, cachedAvatarReady ? row.avatarUrl : "", explicitAvatarState ? "" : imageUrl)
+    ? stableAvatarSrc(avatarKey, cachedAvatarReady ? row.avatarUrl : "", proxyUrl, explicitAvatarState ? "" : imageUrl)
     : stableAvatarSrc(avatarKey, proxyUrl, imageUrl);
-  const backupSrc = tokenAvatarFixOn && cachedAvatarReady && imageUrl && row.avatarUrl && imageUrl !== row.avatarUrl ? imageUrl : "";
+  const backupSrc = tokenAvatarFixOn && cachedAvatarReady
+    ? (proxyUrl && src !== proxyUrl ? proxyUrl : (imageUrl && row.avatarUrl && imageUrl !== row.avatarUrl ? imageUrl : ""))
+    : "";
   const priority = Boolean(options.priority);
   const loading = priority ? "eager" : "lazy";
   const fetchPriority = priority ? "high" : "low";
@@ -15168,6 +15242,24 @@ function ogreAgentSpeechInputSupported() {
   return Boolean(ogreAgentSpeechInputCtor());
 }
 
+async function ogreAgentPrimeMicrophonePermission() {
+  if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+    return "unavailable";
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream?.getTracks?.().forEach((track) => {
+      try { track.stop(); } catch {}
+    });
+    return "granted";
+  } catch (error) {
+    const name = String(error?.name || error?.message || "").toLowerCase();
+    if (/notallowed|permission|denied/.test(name)) return "denied";
+    if (/notfound|notreadable|overconstrained/.test(name)) return "unavailable";
+    return "failed";
+  }
+}
+
 function ogreAgentWriteDraft(value = "") {
   const clean = String(value || "").replace(/\s+/g, " ").trimStart();
   state.ogreAgentDraft = clean;
@@ -15219,9 +15311,12 @@ function ogreAgentStopListening(status = "") {
   if (state.ogreAgentOpen) renderOgreAgent({ force: true });
 }
 
-function ogreAgentStartListening() {
+async function ogreAgentStartListening() {
   if (!ogreAgentSpeechInputSupported()) {
-    state.ogreAgentStatus = "Voice input is not supported in this browser. Typing still works.";
+    const permission = await ogreAgentPrimeMicrophonePermission();
+    state.ogreAgentStatus = permission === "denied"
+      ? "Mic permission was denied. Allow microphone access, then use Chrome or Edge speech input."
+      : "This browser does not expose speech-to-text to SlimeWire. Typing and device keyboard dictation still work.";
     renderOgreAgent({ force: true });
     return;
   }
@@ -15232,6 +15327,27 @@ function ogreAgentStartListening() {
   }
   ogreAgentCancelSpeech();
   ogreAgentStopListening();
+  const permissionSessionId = ogreAgentSpeechSessionId;
+  state.ogreAgentStatus = "Checking microphone permission...";
+  renderOgreAgent({ force: true });
+  const permission = await ogreAgentPrimeMicrophonePermission();
+  if (permissionSessionId !== ogreAgentSpeechSessionId || !state.ogreAgentOpen) return;
+  if (permission === "denied") {
+    state.ogreAgentListening = false;
+    state.ogreAgentSpeechRecognizer = null;
+    state.ogreAgentSpeechFinal = "";
+    state.ogreAgentStatus = "Mic permission denied. Allow microphone access to talk to Ogre.";
+    renderOgreAgent({ force: true });
+    return;
+  }
+  if (permission === "unavailable") {
+    state.ogreAgentListening = false;
+    state.ogreAgentSpeechRecognizer = null;
+    state.ogreAgentSpeechFinal = "";
+    state.ogreAgentStatus = "No microphone is available to this browser. Typing still works.";
+    renderOgreAgent({ force: true });
+    return;
+  }
   const Recognition = ogreAgentSpeechInputCtor();
   const recognizer = new Recognition();
   const sessionId = ++ogreAgentSpeechSessionId;
@@ -15326,7 +15442,7 @@ function ogreAgentStartListening() {
 
 function ogreAgentToggleListening() {
   if (state.ogreAgentListening || state.ogreAgentSpeechRecognizer) ogreAgentStopListening("Voice input stopped.");
-  else ogreAgentStartListening();
+  else void ogreAgentStartListening();
 }
 
 function closeOgreAgentPanel() {
@@ -15997,13 +16113,13 @@ async function sendOgreAgentMessage(overrideMessage = "") {
       ]
     });
     renderOgreAgent({ force: true });
-  }, 10_000);
+  }, 7_500);
   renderOgreAgent();
   try {
     const data = await api("/api/web/ogre-agent/chat", {
       method: "POST",
       body: JSON.stringify({ message, context: ogreAgentContext() }),
-      timeoutMs: 9_000,
+      timeoutMs: 7_000,
       dedupe: false,
       preserveSafeError: true
     });
