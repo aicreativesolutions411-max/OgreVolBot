@@ -7689,8 +7689,13 @@ async function ensureKolDumpStats(options = {}) {
   if (state.kolDumpStatsLoading) return null;
   state.kolDumpStatsLoading = true;
   try {
-    const data = await api("/api/web/kols/dump-stats", {
-      timeoutMs: 3000,
+    const params = new URLSearchParams({
+      mode: state.kolMode || "hot"
+    });
+    if (state.kolWallet) params.set("wallet", state.kolWallet);
+    if (force) params.set("force", "true");
+    const data = await api(`/api/web/kols/dump-stats?${params.toString()}`, {
+      timeoutMs: force ? 5000 : 3000,
       preserveSafeError: true
     });
     state.kolDumpStats = data;
@@ -7717,7 +7722,7 @@ function openKolDumpDetails(kolId = "") {
   state.kolDumpDetails = { open: true, kolId: id };
   clearLivePairsAutoRefreshTimer();
   renderKolDumpDetailsDrawer();
-  void ensureKolDumpStats();
+  void ensureKolDumpStats({ force: true });
 }
 
 function closeKolDumpDetails() {
@@ -7741,6 +7746,7 @@ function renderKolDumpDetailsDrawer() {
     return;
   }
   const row = kolDumpStatsRows().find((item) => String(item.kolId) === String(details.kolId)) || { displayName: "KOL Wallet", reasons: [] };
+  const loading = Boolean(state.kolDumpStatsLoading);
   const walletList = Array.isArray(row.walletAddresses) ? row.walletAddresses.filter(Boolean).slice(0, 4) : [];
   const links = Array.isArray(row.externalLinks) ? row.externalLinks.filter((link) => /^https?:\/\//i.test(String(link?.url || ""))).slice(0, 4) : [];
   const lastToken = row.lastTokenMint
@@ -7759,7 +7765,7 @@ function renderKolDumpDetailsDrawer() {
       <section class="kol-dump-detail-summary">
         <strong>${escapeHtml(row.riskLabel || "Mixed")}</strong>
         <p>${escapeHtml(kolDumpMetaLine(row))}</p>
-        <small>Confidence: ${escapeHtml(row.confidence || "low")} · Source: ${escapeHtml(String(row.historySource || "cached profile").replace(/_/g, " "))} · Updated ${escapeHtml(formatDate(row.updatedAt))}</small>
+        <small>${loading ? "Updating from KOL sources..." : `Confidence: ${escapeHtml(row.confidence || "low")} · Source: ${escapeHtml(String(row.historySource || "cached profile").replace(/_/g, " "))} · Updated ${escapeHtml(formatDate(row.updatedAt))}`}</small>
       </section>
       <dl class="kol-dump-metrics">
         <div><dt>Calls tracked</dt><dd>${escapeHtml(row.callsTracked ?? 0)}</dd></div>
@@ -7787,6 +7793,9 @@ function renderKolDumpDetailsDrawer() {
           ${(row.reasons || ["No local sell-window history yet."]).map((reason) => `<li><span>${escapeHtml(reason)}</span></li>`).join("")}
         </ul>
       </section>
+      <div class="slimeshield-drawer-actions">
+        <button type="button" data-kol-dump-refresh="${escapeHtml(details.kolId)}" ${loading ? "disabled" : ""}>${loading ? "Updating..." : "Refresh KOL Info"}</button>
+      </div>
       <p class="slimeshield-safety-copy">This is wallet-based until social signal data is available. It never scans the chain from this details drawer.</p>
     </aside>
   `;
@@ -12998,8 +13007,8 @@ function openSlimeShieldDetails(tokenMint = "") {
   state.slimeShieldStatus = "";
   clearLivePairsAutoRefreshTimer();
   renderSlimeShieldDetailsDrawer();
-  void loadSlimeShield(mint);
-  if (featureEnabled("replayBeforeBuyEnabled", true)) void loadReplayBeforeBuy(mint);
+  void loadSlimeShield(mint, { force: true });
+  if (featureEnabled("replayBeforeBuyEnabled", true)) void loadReplayBeforeBuy(mint, { force: true });
 }
 
 function closeSlimeShieldDetails() {
@@ -13017,8 +13026,10 @@ async function loadSlimeShield(tokenMint = "", options = {}) {
   state.slimeShieldLoading = { ...(state.slimeShieldLoading || {}), [mint]: true };
   renderSlimeShieldDetailsDrawer();
   try {
-    const data = await api(`/api/web/slimeshield?mint=${encodeURIComponent(mint)}`, {
-      timeoutMs: 2500,
+    const params = new URLSearchParams({ mint });
+    if (options.force) params.set("force", "true");
+    const data = await api(`/api/web/slimeshield?${params.toString()}`, {
+      timeoutMs: options.force ? 4500 : 2500,
       preserveSafeError: true
     });
     const result = data?.slimeshield || null;
@@ -13114,8 +13125,9 @@ async function loadDevInfoSummary(tokenMint = "", options = {}) {
   if (state.devInfoLoading?.[loadingKey]) return null;
   state.devInfoLoading = { ...(state.devInfoLoading || {}), [loadingKey]: true };
   try {
-    const data = await api(`/api/web/dev-info/summary/${encodeURIComponent(mint)}`, {
-      timeoutMs: 2500,
+    const query = options.force ? "?force=true" : "";
+    const data = await api(`/api/web/dev-info/summary/${encodeURIComponent(mint)}${query}`, {
+      timeoutMs: options.force ? 4500 : 2500,
       preserveSafeError: true
     });
     const summary = data?.devInfoSummary || null;
@@ -13143,8 +13155,9 @@ async function loadDevInfoDetails(tokenMint = "", options = {}) {
   state.devInfoLoading = { ...(state.devInfoLoading || {}), [loadingKey]: true };
   renderDevInfoDrawer();
   try {
-    const data = await api(`/api/web/dev-info/${encodeURIComponent(mint)}`, {
-      timeoutMs: 3000,
+    const query = options.force ? "?force=true" : "";
+    const data = await api(`/api/web/dev-info/${encodeURIComponent(mint)}${query}`, {
+      timeoutMs: options.force ? 4500 : 3000,
       preserveSafeError: true
     });
     const result = data?.devInfo || null;
@@ -13184,8 +13197,8 @@ function openDevInfoDetails(tokenMint = "") {
   state.devInfoStatus = "";
   clearLivePairsAutoRefreshTimer();
   renderDevInfoDrawer();
-  void loadDevInfoSummary(mint);
-  void loadDevInfoDetails(mint);
+  void loadDevInfoSummary(mint, { force: true, silent: true });
+  void loadDevInfoDetails(mint, { force: true });
 }
 
 function closeDevInfoDetails() {
@@ -13264,6 +13277,12 @@ function renderDevInfoDrawer() {
   const current = result.currentPosition || null;
   const history = result.historicalStats || {};
   const linked = result.linkedWalletSignals || {};
+  const market = result.marketContext || {};
+  const marketCap = firstUsefulNumber(market.marketCap, row.marketCap, row.fdv);
+  const liquidity = firstUsefulNumber(market.liquidityUsd, row.liquidityUsd);
+  const volume5m = firstUsefulNumber(market.volume5m, row.volume5m, row.volumeM5);
+  const volumeH1 = firstUsefulNumber(market.volumeH1, row.volumeH1, row.volume1h);
+  const pairAgeMinutes = firstUsefulNumber(market.pairAgeMinutes, row.pairAgeMinutes, Number(row.pairAgeSeconds) / 60);
   const referenceLinks = [
     ...(Array.isArray(result.externalLinks) ? result.externalLinks : []),
     ...(Array.isArray(summary.externalLinks) ? summary.externalLinks : []),
@@ -13309,6 +13328,18 @@ function renderDevInfoDrawer() {
             ${referenceLinks.map((link) => `<a href="${escapeHtml(link.url)}" target="_blank" rel="noreferrer">${escapeHtml(link.label || "Open")}</a>`).join("")}
           </div>
         ` : ""}
+      </section>
+      <section>
+        <h4>Token / Source Context</h4>
+        <dl class="kol-dump-metrics">
+          <div><dt>Market cap</dt><dd>${escapeHtml(Number.isFinite(marketCap) && marketCap > 0 ? compactUsd(marketCap) : "warming")}</dd></div>
+          <div><dt>Liquidity</dt><dd>${escapeHtml(Number.isFinite(liquidity) && liquidity > 0 ? compactUsd(liquidity) : "warming")}</dd></div>
+          <div><dt>5m volume</dt><dd>${escapeHtml(Number.isFinite(volume5m) && volume5m > 0 ? compactUsd(volume5m) : "warming")}</dd></div>
+          <div><dt>1h volume</dt><dd>${escapeHtml(Number.isFinite(volumeH1) && volumeH1 > 0 ? compactUsd(volumeH1) : "warming")}</dd></div>
+          <div><dt>Pair age</dt><dd>${escapeHtml(Number.isFinite(pairAgeMinutes) ? devInfoMinutes(pairAgeMinutes) : "warming")}</dd></div>
+          <div><dt>Source</dt><dd>${escapeHtml(market.source || result.cacheSource || result.dataSource || "cache/local")}</dd></div>
+        </dl>
+        <p class="slimeshield-muted">Click Refresh to pull the latest public pair metadata and save what SlimeWire can verify.</p>
       </section>
       <section>
         <h4>Current Token Position</h4>
@@ -13423,8 +13454,10 @@ async function loadReplayBeforeBuy(tokenMint = "", options = {}) {
   renderReplayBeforeBuyDrawer();
   renderSlimeShieldDetailsDrawer();
   try {
-    const data = await api(`/api/web/replay-before-buy?mint=${encodeURIComponent(mint)}`, {
-      timeoutMs: 3000,
+    const params = new URLSearchParams({ mint });
+    if (options.force) params.set("force", "true");
+    const data = await api(`/api/web/replay-before-buy?${params.toString()}`, {
+      timeoutMs: options.force ? 4500 : 3000,
       preserveSafeError: true
     });
     const replay = data?.replay || null;
@@ -17017,6 +17050,12 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-kol-dump-details]")) {
     event.preventDefault();
     openKolDumpDetails(target.dataset.kolDumpDetails || "");
+    return;
+  }
+
+  if (target.matches("[data-kol-dump-refresh]")) {
+    event.preventDefault();
+    void ensureKolDumpStats({ force: true });
     return;
   }
 

@@ -1885,19 +1885,21 @@ async function handleWebApiRequest(request, response, requestUrl) {
 
     if (request.method === "GET" && pathname === "/api/web/slimeshield") {
       const mint = requestUrl.searchParams.get("mint") || requestUrl.searchParams.get("token") || requestUrl.searchParams.get("tokenMint") || "";
+      const force = parseBoolean(requestUrl.searchParams.get("force") || "false");
       sendCachedWebJson(request, response, 200, {
         ok: true,
-        slimeshield: await webSlimeShield(mint)
-      }, "public, max-age=15, stale-while-revalidate=60");
+        slimeshield: await webSlimeShield(mint, { force })
+      }, force ? "no-store" : "public, max-age=15, stale-while-revalidate=60");
       return;
     }
 
     if (request.method === "GET" && pathname === "/api/web/replay-before-buy") {
       const mint = requestUrl.searchParams.get("mint") || requestUrl.searchParams.get("token") || requestUrl.searchParams.get("tokenMint") || "";
+      const force = parseBoolean(requestUrl.searchParams.get("force") || "false");
       sendCachedWebJson(request, response, 200, {
         ok: true,
-        replay: await webReplayBeforeBuy(mint)
-      }, "public, max-age=300, stale-while-revalidate=1800");
+        replay: await webReplayBeforeBuy(mint, { force })
+      }, force ? "no-store" : "public, max-age=300, stale-while-revalidate=1800");
       return;
     }
 
@@ -1908,10 +1910,11 @@ async function handleWebApiRequest(request, response, requestUrl) {
       const mint = devInfoSummaryMatch
         ? decodeURIComponent(devInfoSummaryMatch[1] || "")
         : (requestUrl.searchParams.get("mint") || requestUrl.searchParams.get("token") || requestUrl.searchParams.get("tokenMint") || "");
+      const force = parseBoolean(requestUrl.searchParams.get("force") || "false");
       sendCachedWebJson(request, response, 200, {
         ok: true,
-        devInfoSummary: await webDevInfoSummary(mint)
-      }, "public, max-age=30, stale-while-revalidate=120");
+        devInfoSummary: await webDevInfoSummary(mint, { force })
+      }, force ? "no-store" : "public, max-age=30, stale-while-revalidate=120");
       return;
     }
 
@@ -1922,10 +1925,11 @@ async function handleWebApiRequest(request, response, requestUrl) {
       const mint = devInfoDetailsMatch
         ? decodeURIComponent(devInfoDetailsMatch[1] || "")
         : (requestUrl.searchParams.get("mint") || requestUrl.searchParams.get("token") || requestUrl.searchParams.get("tokenMint") || "");
+      const force = parseBoolean(requestUrl.searchParams.get("force") || "false");
       sendCachedWebJson(request, response, 200, {
         ok: true,
-        devInfo: await webDevInfoDetails(mint)
-      }, "public, max-age=60, stale-while-revalidate=300");
+        devInfo: await webDevInfoDetails(mint, { force })
+      }, force ? "no-store" : "public, max-age=60, stale-while-revalidate=300");
       return;
     }
 
@@ -1973,10 +1977,16 @@ async function handleWebApiRequest(request, response, requestUrl) {
       const kolId = pathname === "/api/web/kols/dump-stats"
         ? (requestUrl.searchParams.get("kolId") || requestUrl.searchParams.get("id") || "")
         : decodeURIComponent(pathname.split("/")[4] || "");
+      const force = parseBoolean(requestUrl.searchParams.get("force") || "false");
       sendCachedWebJson(request, response, 200, {
         ok: true,
-        ...await webKolDumpStats(kolId)
-      }, "public, max-age=300, stale-while-revalidate=1800");
+        ...await webKolDumpStats(kolId, {
+          force,
+          userId: auth?.userId || "guest",
+          mode: requestUrl.searchParams.get("mode") || "hot",
+          wallet: requestUrl.searchParams.get("wallet") || ""
+        })
+      }, force ? "no-store" : "public, max-age=300, stale-while-revalidate=1800");
       return;
     }
 
@@ -2492,19 +2502,21 @@ async function handleWebApiRequest(request, response, requestUrl) {
 
     if (request.method === "GET" && pathname === "/api/web/slimeshield") {
       const mint = requestUrl.searchParams.get("mint") || requestUrl.searchParams.get("token") || requestUrl.searchParams.get("tokenMint") || "";
+      const force = parseBoolean(requestUrl.searchParams.get("force") || "false");
       sendCachedWebJson(request, response, 200, {
         ok: true,
-        slimeshield: await webSlimeShield(mint)
-      }, "public, max-age=15, stale-while-revalidate=60");
+        slimeshield: await webSlimeShield(mint, { force })
+      }, force ? "no-store" : "public, max-age=15, stale-while-revalidate=60");
       return;
     }
 
     if (request.method === "GET" && pathname === "/api/web/replay-before-buy") {
       const mint = requestUrl.searchParams.get("mint") || requestUrl.searchParams.get("token") || requestUrl.searchParams.get("tokenMint") || "";
+      const force = parseBoolean(requestUrl.searchParams.get("force") || "false");
       sendCachedWebJson(request, response, 200, {
         ok: true,
-        replay: await webReplayBeforeBuy(mint)
-      }, "public, max-age=300, stale-while-revalidate=1800");
+        replay: await webReplayBeforeBuy(mint, { force })
+      }, force ? "no-store" : "public, max-age=300, stale-while-revalidate=1800");
       return;
     }
 
@@ -2571,10 +2583,16 @@ async function handleWebApiRequest(request, response, requestUrl) {
       const kolId = pathname === "/api/web/kols/dump-stats"
         ? (requestUrl.searchParams.get("kolId") || requestUrl.searchParams.get("id") || "")
         : decodeURIComponent(pathname.split("/")[4] || "");
+      const force = parseBoolean(requestUrl.searchParams.get("force") || "false");
       sendCachedWebJson(request, response, 200, {
         ok: true,
-        ...await webKolDumpStats(kolId)
-      }, "public, max-age=300, stale-while-revalidate=1800");
+        ...await webKolDumpStats(kolId, {
+          force,
+          userId: auth.userId,
+          mode: requestUrl.searchParams.get("mode") || "hot",
+          wallet: requestUrl.searchParams.get("wallet") || ""
+        })
+      }, force ? "no-store" : "public, max-age=300, stale-while-revalidate=1800");
       return;
     }
 
@@ -19072,8 +19090,12 @@ async function postgresPool() {
   if (postgresPoolClient) return postgresPoolClient;
   if (!postgresPoolPromise) {
     postgresPoolPromise = import("pg")
-      .then(({ Pool }) => {
-        const pool = new Pool({
+      .then((pgModule) => {
+        const PoolCtor = pgModule?.Pool || pgModule?.default?.Pool;
+        if (typeof PoolCtor !== "function") {
+          throw new Error("Postgres Pool constructor unavailable from pg module.");
+        }
+        const pool = new PoolCtor({
           connectionString: CONFIG.databaseUrl,
           max: 2,
           idleTimeoutMillis: 10_000,
@@ -19086,6 +19108,7 @@ async function postgresPool() {
         });
         return pool.query("select 1").then(() => {
           postgresPoolClient = pool;
+          postgresCircuitOpenUntil = 0;
           return pool;
         });
       })
@@ -20294,6 +20317,13 @@ async function computeDevInfoFromLocalData(mint = "", row = null, options = {}) 
   };
 }
 
+function marketRowHasUsefulPublicInfo(row = {}) {
+  return Boolean(
+    firstString(row.symbol, row.name, row.avatarUrl, row.imageUrl, row.websiteUrl, row.twitterUrl, row.telegramUrl, row.dexUrl, row.pairAddress, row.raydiumPool)
+    || firstMeaningfulNumber(row.marketCap, row.fdv, row.liquidityUsd, row.volume5m, row.volumeH1)
+  );
+}
+
 async function hydrateMarketRowFromPublicSources(mint = "", row = null, reason = "request") {
   const cleanMint = String(mint || row?.tokenMint || row?.mint || "").trim();
   const baseRow = row || { tokenMint: cleanMint };
@@ -20361,8 +20391,9 @@ async function queueDevInfoHydration(mint = "", row = null, reason = "request") 
   return true;
 }
 
-async function webDevInfoSummary(tokenMint = "") {
+async function webDevInfoSummary(tokenMint = "", options = {}) {
   const mint = String(tokenMint || "").trim();
+  const force = Boolean(options.force);
   if (!mint) return devInfoSummaryFromResult(calculateDevInfoStatus({ mint: "", confidence: "unknown" }));
   if (!CONFIG.devInfoEnabled) {
     return {
@@ -20371,13 +20402,15 @@ async function webDevInfoSummary(tokenMint = "") {
       summary: "Dev Info is disabled by feature flag."
     };
   }
-  const memory = cachedDevInfoMemory("summary", mint, DEV_INFO_SUMMARY_TTL_MS);
-  if (memory) return memory;
-  const kv = await readDevInfoKv("summary", mint, DEV_INFO_SUMMARY_TTL_MS);
-  if (kv) return kv;
+  if (!force) {
+    const memory = cachedDevInfoMemory("summary", mint, DEV_INFO_SUMMARY_TTL_MS);
+    if (memory) return memory;
+    const kv = await readDevInfoKv("summary", mint, DEV_INFO_SUMMARY_TTL_MS);
+    if (kv) return kv;
+  }
   devInfoStats.cacheMisses += 1;
-  const postgresResult = await readPostgresDevInfoCache(mint);
-  if (postgresResult) {
+  const postgresResult = force ? null : await readPostgresDevInfoCache(mint);
+  if (!force && postgresResult) {
     const summary = {
       ...devInfoSummaryFromResult(postgresResult),
       cacheHit: true,
@@ -20388,12 +20421,18 @@ async function webDevInfoSummary(tokenMint = "") {
     if (postgresResult.stale) void queueDevInfoHydration(mint, localMarketRowForMint(mint), "stale-summary").catch(() => {});
     return summary;
   }
-  const row = localMarketRowForMint(mint) || { tokenMint: mint };
+  let row = localMarketRowForMint(mint) || await readPostgresMarketRowForMint(mint) || { tokenMint: mint };
+  if (force || !marketRowHasUsefulPublicInfo(row)) {
+    row = await hydrateMarketRowFromPublicSources(mint, row, force ? "summary-force" : "summary-low-data").catch(() => row);
+    if (marketRowHasUsefulPublicInfo(row)) {
+      void persistPostgresLivePairRows([row], { reason: force ? "summary-force" : "summary-low-data", lock: false }).catch(() => false);
+    }
+  }
   const result = await computeDevInfoFromLocalData(mint, row, { persist: true });
   const summary = {
     ...devInfoSummaryFromResult(result),
     cacheHit: false,
-    cacheSource: result.dataSource || "local"
+    cacheSource: force ? "forced-refresh" : result.dataSource || "local"
   };
   rememberDevInfoMemory("summary", mint, summary);
   await cacheSetJson(devInfoExternalKey("summary", mint), displayCacheEnvelope(summary), result.status === "unknown" ? DEV_INFO_UNKNOWN_TTL_MS : DEV_INFO_SUMMARY_TTL_MS).catch(() => false);
@@ -20401,8 +20440,9 @@ async function webDevInfoSummary(tokenMint = "") {
   return summary;
 }
 
-async function webDevInfoDetails(tokenMint = "") {
+async function webDevInfoDetails(tokenMint = "", options = {}) {
   const mint = String(tokenMint || "").trim();
+  const force = Boolean(options.force);
   if (!mint) return calculateDevInfoStatus({ mint: "", confidence: "unknown" });
   if (!CONFIG.devInfoEnabled) {
     return {
@@ -20411,23 +20451,46 @@ async function webDevInfoDetails(tokenMint = "") {
       summary: "Dev Info is disabled by feature flag."
     };
   }
-  const memory = cachedDevInfoMemory("details", mint, DEV_INFO_DETAILS_TTL_MS);
-  if (memory) return memory;
-  const kv = await readDevInfoKv("details", mint, DEV_INFO_DETAILS_TTL_MS);
-  if (kv) return kv;
+  if (!force) {
+    const memory = cachedDevInfoMemory("details", mint, DEV_INFO_DETAILS_TTL_MS);
+    if (memory) return memory;
+    const kv = await readDevInfoKv("details", mint, DEV_INFO_DETAILS_TTL_MS);
+    if (kv) return kv;
+  }
   devInfoStats.cacheMisses += 1;
-  const postgresResult = await readPostgresDevInfoCache(mint);
-  if (postgresResult) {
+  const postgresResult = force ? null : await readPostgresDevInfoCache(mint);
+  if (!force && postgresResult) {
     rememberDevInfoMemory("details", mint, postgresResult);
     if (postgresResult.stale) void queueDevInfoHydration(mint, localMarketRowForMint(mint), "stale-details").catch(() => {});
     return postgresResult;
   }
-  const row = localMarketRowForMint(mint) || { tokenMint: mint };
+  let row = localMarketRowForMint(mint) || await readPostgresMarketRowForMint(mint) || { tokenMint: mint };
+  if (force || !marketRowHasUsefulPublicInfo(row)) {
+    row = await hydrateMarketRowFromPublicSources(mint, row, force ? "details-force" : "details-low-data").catch(() => row);
+    if (marketRowHasUsefulPublicInfo(row)) {
+      void persistPostgresLivePairRows([row], { reason: force ? "details-force" : "details-low-data", lock: false }).catch(() => false);
+    }
+  }
   const result = await computeDevInfoFromLocalData(mint, row, { persist: true });
-  rememberDevInfoMemory("details", mint, result);
-  await writeDevInfoCaches(mint, result).catch(() => {});
+  const enrichedResult = {
+    ...result,
+    cacheHit: false,
+    cacheSource: force ? "forced-refresh" : result.cacheSource || result.dataSource || "local",
+    marketContext: {
+      symbol: row.symbol || "",
+      name: row.name || "",
+      marketCap: firstMeaningfulNumber(row.marketCap, row.fdv),
+      liquidityUsd: firstMeaningfulNumber(row.liquidityUsd),
+      volume5m: firstMeaningfulNumber(row.volume5m),
+      volumeH1: firstMeaningfulNumber(row.volumeH1),
+      pairAgeMinutes: firstMeaningfulNumber(row.pairAgeMinutes, Number(row.pairAgeSeconds) / 60),
+      source: firstString(row.source, row.dexName, row.dexId)
+    }
+  };
+  rememberDevInfoMemory("details", mint, enrichedResult);
+  await writeDevInfoCaches(mint, enrichedResult).catch(() => {});
   void queueDevInfoHydration(mint, row, "details-miss").catch(() => {});
-  return result;
+  return enrichedResult;
 }
 
 async function getOrHydrateTokenContext(mint = "") {
@@ -26571,14 +26634,23 @@ function computeKolDumpStatsFromProfile(kol = {}) {
   };
 }
 
-async function webKolDumpStats(kolId = "") {
+async function webKolDumpStats(kolId = "", options = {}) {
   const id = String(kolId || "all").trim().toLowerCase() || "all";
-  const cached = kolDumpStatsCache.get(id);
-  if (cached?.value && Date.now() - Number(cached.cachedAt || 0) < KOL_DUMP_STATS_TTL_MS) {
+  const force = Boolean(options.force);
+  if (force) {
+    const mode = normalizeKolMode(options.mode || "hot");
+    const wallet = String(options.wallet || "").trim();
+    await Promise.race([
+      webKolScan(options.userId || "guest", mode, wallet),
+      new Promise((resolve) => setTimeout(() => resolve(null), 3_800))
+    ]).catch(() => null);
+  }
+  const cached = force ? null : kolDumpStatsCache.get(id);
+  if (!force && cached?.value && Date.now() - Number(cached.cachedAt || 0) < KOL_DUMP_STATS_TTL_MS) {
     return { ...cached.value, cacheHit: true, cacheSource: "memory" };
   }
-  const external = await cacheGetJson(kolDumpStatsExternalKey(id)).catch(() => null);
-  if (external?.value && Number.isFinite(Number(external.cachedAt)) && Date.now() - Number(external.cachedAt) < KOL_DUMP_STATS_TTL_MS) {
+  const external = force ? null : await cacheGetJson(kolDumpStatsExternalKey(id)).catch(() => null);
+  if (!force && external?.value && Number.isFinite(Number(external.cachedAt)) && Date.now() - Number(external.cachedAt) < KOL_DUMP_STATS_TTL_MS) {
     kolDumpStatsCache.set(id, { cachedAt: Number(external.cachedAt), value: external.value });
     return { ...external.value, cacheHit: true, cacheSource: kvProviderName() };
   }
@@ -26633,7 +26705,7 @@ async function webKolDumpStats(kolId = "") {
     count: filtered.length,
     updatedAt: new Date().toISOString(),
     cacheHit: false,
-    cacheSource: "local-cache",
+    cacheSource: force ? "forced-kol-refresh" : "local-cache",
     message: filtered.length
       ? "KOL Dump Detector uses cached KOL API/profile rows and local wallet-position signals only."
       : "No cached KOL profiles yet. Refresh KOL Tracker to warm the detector."
@@ -28490,16 +28562,15 @@ function localMarketRowForMint(mint = "") {
   return best;
 }
 
-async function webSlimeShield(tokenMint = "") {
+async function webSlimeShield(tokenMint = "", options = {}) {
   const mint = String(tokenMint || "").trim();
-  const cacheFallback = cachedSlimeShieldRecord(mint);
-  if (cacheFallback) {
-    return cacheFallback;
-  }
+  const force = Boolean(options.force);
+  const cacheFallback = force ? null : cachedSlimeShieldRecord(mint);
+  if (cacheFallback) return cacheFallback;
 
   const externalKey = slimeShieldExternalKey(mint);
-  const external = mint ? await cacheGetJson(externalKey).catch(() => null) : null;
-  if (external?.value && Number.isFinite(Number(external.cachedAt))) {
+  const external = !force && mint ? await cacheGetJson(externalKey).catch(() => null) : null;
+  if (!force && external?.value && Number.isFinite(Number(external.cachedAt))) {
     const ageMs = Date.now() - Number(external.cachedAt);
     if (ageMs < SLIMESHIELD_CACHE_TTL_MS) {
       const value = {
@@ -28513,19 +28584,25 @@ async function webSlimeShield(tokenMint = "") {
     }
   }
 
-  const postgresResult = await readPostgresSlimeShieldResult(mint);
-  if (postgresResult && !postgresResult.stale) {
+  const postgresResult = force ? null : await readPostgresSlimeShieldResult(mint);
+  if (!force && postgresResult && !postgresResult.stale) {
     slimeShieldCache.set(mint, { cachedAt: Date.parse(postgresResult.updatedAt || "") || Date.now(), value: postgresResult });
     return postgresResult;
   }
 
-  const baseRow = localMarketRowForMint(mint) || await readPostgresMarketRowForMint(mint) || { tokenMint: mint };
-  const devInfoSummary = mint ? await webDevInfoSummary(mint).catch(() => null) : null;
+  let baseRow = localMarketRowForMint(mint) || await readPostgresMarketRowForMint(mint) || { tokenMint: mint };
+  if (force || !marketRowHasUsefulPublicInfo(baseRow)) {
+    baseRow = await hydrateMarketRowFromPublicSources(mint, baseRow, force ? "slimeshield-force" : "slimeshield-low-data").catch(() => baseRow);
+    if (marketRowHasUsefulPublicInfo(baseRow)) {
+      void persistPostgresLivePairRows([baseRow], { reason: force ? "slimeshield-force" : "slimeshield-low-data", lock: false }).catch(() => false);
+    }
+  }
+  const devInfoSummary = mint ? await webDevInfoSummary(mint, { force }).catch(() => null) : null;
   const row = devInfoSummary ? { ...baseRow, devInfoSummary } : baseRow;
   const result = {
     ...computeSlimeShield(row, { mint }),
     cacheHit: false,
-    cacheSource: "local",
+    cacheSource: force ? "forced-refresh" : "local",
     dataSource: row?.pairAddress || row?.symbol ? "cached-market-or-postgres-row" : "low-data-fallback"
   };
   if (mint) {
@@ -28594,24 +28671,25 @@ function medianNumber(values = []) {
   return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
-async function webReplayBeforeBuy(tokenMint = "") {
+async function webReplayBeforeBuy(tokenMint = "", options = {}) {
   const mint = String(tokenMint || "").trim();
   const row = localMarketRowForMint(mint) || { tokenMint: mint };
   const traits = replayTraits(row);
   const bucketHash = replayBucketHash(traits);
   const cacheKey = `${mint}:${bucketHash}`;
-  const cached = replayBeforeBuyCache.get(cacheKey);
-  if (cached?.value && Date.now() - Number(cached.cachedAt || 0) < REPLAY_BEFORE_BUY_TTL_MS) {
+  const force = Boolean(options.force);
+  const cached = force ? null : replayBeforeBuyCache.get(cacheKey);
+  if (!force && cached?.value && Date.now() - Number(cached.cachedAt || 0) < REPLAY_BEFORE_BUY_TTL_MS) {
     return { ...cached.value, cacheHit: true, cacheSource: "memory" };
   }
-  const external = await cacheGetJson(replayExternalKey(mint, bucketHash)).catch(() => null);
-  if (external?.value && Number.isFinite(Number(external.cachedAt)) && Date.now() - Number(external.cachedAt) < REPLAY_BEFORE_BUY_TTL_MS) {
+  const external = force ? null : await cacheGetJson(replayExternalKey(mint, bucketHash)).catch(() => null);
+  if (!force && external?.value && Number.isFinite(Number(external.cachedAt)) && Date.now() - Number(external.cachedAt) < REPLAY_BEFORE_BUY_TTL_MS) {
     replayBeforeBuyCache.set(cacheKey, { cachedAt: Number(external.cachedAt), value: external.value });
     return { ...external.value, cacheHit: true, cacheSource: kvProviderName() };
   }
 
-  const postgresReplay = await readPostgresReplayResult(mint, bucketHash);
-  if (postgresReplay && !postgresReplay.stale) {
+  const postgresReplay = force ? null : await readPostgresReplayResult(mint, bucketHash);
+  if (!force && postgresReplay && !postgresReplay.stale) {
     replayBeforeBuyCache.set(cacheKey, { cachedAt: Date.parse(postgresReplay.updatedAt || "") || Date.now(), value: postgresReplay });
     return postgresReplay;
   }
@@ -28645,7 +28723,7 @@ async function webReplayBeforeBuy(tokenMint = "") {
       : "Not enough local history yet. Replay improves as SlimeWire tracks more launches.",
     updatedAt: new Date().toISOString(),
     cacheHit: false,
-    cacheSource: "local-cache"
+    cacheSource: force ? "forced-local-refresh" : "local-cache"
   };
   replayBeforeBuyCache.set(cacheKey, { cachedAt: Date.now(), value });
   await cacheSetJson(replayExternalKey(mint, bucketHash), displayCacheEnvelope(value), REPLAY_BEFORE_BUY_TTL_MS).catch(() => false);
