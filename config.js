@@ -2,6 +2,18 @@ window.OGRE_PORTAL_CONFIG = {
   "apiBase": "https://ogrevolbot.onrender.com",
   "telegramBotUsername": "OgreTradeBot",
   "portalUrl": "https://www.slimewire.org",
+  "featureFlags": {
+    "slimeShieldEnabled": true,
+    "kolDumpDetectorEnabled": true,
+    "replayBeforeBuyEnabled": true,
+    "protectedBuyEnabled": true,
+    "tokenAvatarFixEnabled": true,
+    "chatAiEnabled": true,
+    "chatAiProviderEnabled": true,
+    "siteSmoothnessFixesEnabled": true,
+    "disableUnfinishedButtons": true,
+    "debugPerformanceCounters": false
+  },
   "ogreTek": {
     "enabled": false,
     "demoMode": true,

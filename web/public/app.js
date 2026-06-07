@@ -12,6 +12,13 @@ import {
 } from "./liveTerminalUi.js";
 
 const config = window.OGRE_PORTAL_CONFIG || {};
+const featureFlags = config.featureFlags || {};
+function featureEnabled(name, fallback = true) {
+  const direct = featureFlags?.[name];
+  if (direct === undefined || direct === null || direct === "") return Boolean(fallback);
+  if (typeof direct === "boolean") return direct;
+  return ["1", "true", "yes", "on"].includes(String(direct).toLowerCase());
+}
 const pumpLiveConfig = config.pumpLive || {};
 const ogreTekConfig = resolveOgreTekConfig(config);
 const SHOW_STAGED_PERPS_NAV = false;
@@ -33,6 +40,10 @@ const POSITIONS_FAST_REFRESH_TIMEOUT_MS = 8_000;
 const TERMINAL_BACKGROUND_REFRESH_MIN_MS = 8_000;
 const terminalFeedLastRefreshStartedAt = new Map();
 const livePairAvatarSrcMemory = new Map();
+const avatarSrcByMint = livePairAvatarSrcMemory;
+const failedAvatarSrc = new Set();
+const pendingAvatarFetches = new Map();
+const debugPerformanceCounters = {};
 const API_LONG_ACTION_TIMEOUT_MS = 180_000;
 const MOBILE_WALLET_PENDING_KEY = "slimewireMobileWalletPending";
 const MOBILE_WALLET_PENDING_BACKUP_KEY = "slimewireMobileWalletPendingBackup";
@@ -443,6 +454,15 @@ const sessionActions = $("[data-session-actions]");
 const dashboardView = $("[data-dashboard]");
 const errorBox = $("[data-error]");
 const dashboardErrorBox = $("[data-dashboard-error]");
+
+function debugCounter(name) {
+  if (!featureEnabled("debugPerformanceCounters", false)) return;
+  const key = String(name || "counter");
+  debugPerformanceCounters[key] = Number(debugPerformanceCounters[key] || 0) + 1;
+  if (debugPerformanceCounters[key] <= 5 || debugPerformanceCounters[key] % 25 === 0) {
+    console.info("[slimewire_debug_counter]", key, debugPerformanceCounters[key]);
+  }
+}
 
 const LIVE_PAIR_BUCKETS = [
   ["live", "Fresh"],
@@ -5134,28 +5154,74 @@ function rememberStableAvatar(key = "", src = "") {
   const safeKey = String(key || "").trim();
   const safeSrc = normalizeImageUrl(src);
   if (!safeKey || !safeSrc) return "";
-  livePairAvatarSrcMemory.set(safeKey, safeSrc);
-  if (livePairAvatarSrcMemory.size > 900) {
-    for (const oldKey of livePairAvatarSrcMemory.keys()) {
-      livePairAvatarSrcMemory.delete(oldKey);
-      if (livePairAvatarSrcMemory.size <= 720) break;
+  const failKey = avatarFailureKey(safeKey, safeSrc);
+  if (failedAvatarSrc.has(failKey)) return "";
+  avatarSrcByMint.set(safeKey, safeSrc);
+  debugCounter("avatarCacheHit");
+  if (avatarSrcByMint.size > 900) {
+    for (const oldKey of avatarSrcByMint.keys()) {
+      avatarSrcByMint.delete(oldKey);
+      if (avatarSrcByMint.size <= 720) break;
     }
   }
   return safeSrc;
 }
 
+function avatarFailureKey(key = "", src = "") {
+  return `${String(key || "").trim()}|${normalizeImageUrl(src)}`;
+}
+
+function rememberFailedAvatar(key = "", src = "") {
+  const safeKey = String(key || "").trim();
+  const safeSrc = normalizeImageUrl(src);
+  if (!safeKey || !safeSrc) return;
+  failedAvatarSrc.add(avatarFailureKey(safeKey, safeSrc));
+  if (failedAvatarSrc.size > 1200) {
+    for (const oldKey of failedAvatarSrc) {
+      failedAvatarSrc.delete(oldKey);
+      if (failedAvatarSrc.size <= 900) break;
+    }
+  }
+  if (avatarSrcByMint.get(safeKey) === safeSrc) avatarSrcByMint.delete(safeKey);
+  debugCounter("avatarFetchFailed");
+}
+
 function stableAvatarSrc(key = "", ...candidates) {
   const safeKey = String(key || "").trim();
-  const remembered = safeKey ? livePairAvatarSrcMemory.get(safeKey) : "";
-  if (remembered) return remembered;
+  const remembered = safeKey ? avatarSrcByMint.get(safeKey) : "";
+  if (remembered && !failedAvatarSrc.has(avatarFailureKey(safeKey, remembered))) {
+    debugCounter("avatarCacheHit");
+    return remembered;
+  }
+  if (remembered) avatarSrcByMint.delete(safeKey);
   for (const candidate of candidates) {
     const normalized = normalizeImageUrl(candidate);
-    if (normalized) return normalized;
+    if (normalized && !failedAvatarSrc.has(avatarFailureKey(safeKey, normalized))) {
+      debugCounter("avatarCacheMiss");
+      return normalized;
+    }
   }
+  debugCounter("avatarFallbackShown");
   return "";
 }
 
 window.__slimeRememberAvatar = rememberStableAvatar;
+window.__slimeAvatarLoadFailed = function slimeAvatarLoadFailed(image) {
+  const key = image?.dataset?.avatarKey || "";
+  const src = image?.currentSrc || image?.src || image?.dataset?.avatarSrc || "";
+  rememberFailedAvatar(key, src);
+  const backup = normalizeImageUrl(image?.dataset?.backupSrc || "");
+  if (backup && !failedAvatarSrc.has(avatarFailureKey(key, backup))) {
+    image.dataset.backupSrc = "";
+    image.dataset.avatarSrc = backup;
+    image.src = backup;
+    return;
+  }
+  if (image) {
+    image.hidden = true;
+    image.removeAttribute("src");
+  }
+};
 
 function xAvatarUrl(handle) {
   const clean = cleanXHandle(handle);
@@ -11089,13 +11155,13 @@ function terminalSignalRowsHtml(rows, options = {}) {
   if (!visibleRows.length) return emptyState(emptyTitle, emptyMessage);
   return `
     <div class="terminal-token-list">
-      ${visibleRows.map((row) => {
+      ${visibleRows.map((row, index) => {
         const score = Number(row.bestPickScore || row.score || 0);
         const scoreLabel = score ? `${score}` : "n/a";
         const setup = row.scalpSetup || row.momentum || row.category || "live";
         return `
           <article class="terminal-token-row" data-token-chart="${escapeHtml(row.tokenMint)}" data-token-chart-source="terminal-row">
-            ${livePairAvatarHtml(row)}
+            ${livePairAvatarHtml(row, { priority: index < 8 })}
             <div class="terminal-token-main">
               <div class="terminal-token-title">
                 <strong data-token-chart="${escapeHtml(row.tokenMint)}" data-token-chart-source="terminal-title">${escapeHtml(row.symbol || row.shortMint || shortAddress(row.tokenMint))}</strong>
@@ -11137,9 +11203,9 @@ function compactSignalRowsHtml(rows, options = {}) {
   if (!visibleRows.length) return emptyState(emptyTitle, emptyMessage);
   return `
     <div class="compact-signal-list">
-      ${visibleRows.map((row) => `
+      ${visibleRows.map((row, index) => `
         <article class="compact-signal-row" data-token-chart="${escapeHtml(row.tokenMint)}" data-token-chart-source="compact-row">
-          ${livePairAvatarHtml(row)}
+          ${livePairAvatarHtml(row, { priority: index < 8 })}
           <div class="compact-signal-main">
             <div>
               <strong data-token-chart="${escapeHtml(row.tokenMint)}" data-token-chart-source="compact-title">${escapeHtml(row.symbol || row.shortMint || shortAddress(row.tokenMint))}</strong>
@@ -12678,7 +12744,7 @@ function tokenSignalRowsHtml(rows, options = {}) {
         <span>Volume</span>
         <span>Action</span>
       </div>
-      ${visibleRows.map((row, index) => tokenSignalRowHtml(row, index, { ...options, shareText: shareBuilder(row) })).join("")}
+      ${visibleRows.map((row, index) => tokenSignalRowHtml(row, index, { ...options, shareText: shareBuilder(row), priority: index < 12 })).join("")}
     </div>
   `;
 }
@@ -12694,7 +12760,7 @@ function tokenSignalRowHtml(row, index, options = {}) {
   return `
     <article class="signal-row" data-token-chart="${escapeHtml(row.tokenMint)}" data-token-chart-source="${escapeHtml(options.context || "signal-row")}">
       <div class="signal-token">
-        ${livePairAvatarHtml(row)}
+        ${livePairAvatarHtml(row, { priority: Boolean(options.priority) })}
         <div>
           <div class="signal-name-row">
             <strong data-token-chart="${escapeHtml(row.tokenMint)}" data-token-chart-source="${escapeHtml(options.context || "signal-title")}">${escapeHtml(row.symbol || row.shortMint || shortAddress(row.tokenMint))}</strong>
@@ -12942,19 +13008,25 @@ function livePairVolumeH24(row = {}) {
   );
 }
 
-function livePairAvatarHtml(row) {
+function livePairAvatarHtml(row, options = {}) {
   const label = String(row.symbol || row.name || row.shortMint || "?").trim().slice(0, 2).toUpperCase() || "?";
-  const fallbackSrc = tokenMascotSrc(row.tokenMint || row.symbol || row.name);
-  const safeFallbackSrc = escapeHtml(fallbackSrc);
   const imageUrl = livePairImageUrl(row);
   const proxyUrl = normalizeImageUrl(tokenImageProxyUrl(row));
   const avatarKey = `token:${String(row.tokenMint || row.mint || row.address || row.symbol || label).trim().toLowerCase()}`;
-  const src = stableAvatarSrc(avatarKey, proxyUrl, imageUrl);
+  const tokenAvatarFixOn = featureEnabled("tokenAvatarFixEnabled", true);
+  const src = tokenAvatarFixOn
+    ? stableAvatarSrc(avatarKey, row.avatarUrl, imageUrl)
+    : stableAvatarSrc(avatarKey, proxyUrl, imageUrl);
+  const backupSrc = tokenAvatarFixOn && imageUrl && row.avatarUrl && imageUrl !== row.avatarUrl ? imageUrl : "";
+  const priority = Boolean(options.priority);
+  const loading = priority ? "eager" : "lazy";
+  const fetchPriority = priority ? "high" : "low";
+  const avatarState = row.avatarState || (src ? "ready" : "missing");
   if (src) {
-    const backupAttr = proxyUrl && imageUrl && imageUrl !== proxyUrl ? ` data-backup-src="${escapeHtml(imageUrl)}"` : "";
-    return `<div class="live-pair-avatar"><img src="${escapeHtml(src)}"${backupAttr} data-avatar-key="${escapeHtml(avatarKey)}" alt="${escapeHtml(row.symbol || row.name || "Token")}" loading="eager" decoding="async" fetchpriority="auto" width="42" height="42" referrerpolicy="no-referrer" onload="window.__slimeRememberAvatar&&window.__slimeRememberAvatar(this.dataset.avatarKey,this.currentSrc||this.src);" onerror="if(this.dataset.backupSrc){this.src=this.dataset.backupSrc;this.dataset.backupSrc='';}else{this.onerror=null;this.src='${safeFallbackSrc}';}"><span>${escapeHtml(label)}</span></div>`;
+    const backupAttr = backupSrc ? ` data-backup-src="${escapeHtml(backupSrc)}"` : "";
+    return `<div class="live-pair-avatar" data-avatar-state="${escapeHtml(avatarState)}"><img src="${escapeHtml(src)}"${backupAttr} data-avatar-src="${escapeHtml(src)}" data-avatar-key="${escapeHtml(avatarKey)}" alt="${escapeHtml(row.symbol || row.name || "Token")}" loading="${loading}" decoding="async" fetchpriority="${fetchPriority}" width="42" height="42" referrerpolicy="no-referrer" onload="window.__slimeRememberAvatar&&window.__slimeRememberAvatar(this.dataset.avatarKey,this.currentSrc||this.src);" onerror="window.__slimeAvatarLoadFailed&&window.__slimeAvatarLoadFailed(this);"><span>${escapeHtml(label)}</span></div>`;
   }
-  return `<div class="live-pair-avatar fallback with-mascot"><img src="${safeFallbackSrc}" data-avatar-key="${escapeHtml(avatarKey)}" alt="" aria-hidden="true" loading="eager" decoding="async" fetchpriority="auto" width="42" height="42" onload="window.__slimeRememberAvatar&&window.__slimeRememberAvatar(this.dataset.avatarKey,this.currentSrc||this.src);" onerror="this.hidden=true;"><span>${escapeHtml(label)}</span></div>`;
+  return `<div class="live-pair-avatar fallback" data-avatar-state="${escapeHtml(avatarState)}"><span>${escapeHtml(label)}</span></div>`;
 }
 
 function tokenMascotIndex(value = "") {

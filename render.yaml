@@ -100,6 +100,30 @@ services:
         sync: false
       - key: MANUAL_LAUNCH_SCAN_INTERVAL_MS
         value: 500
+      - key: LIVE_PAIRS_REFRESH_SECONDS
+        value: 8
+      - key: LIVE_PAIRS_IMAGE_ENRICH
+        value: true
+      - key: VITE_SLIMESHIELD_ENABLED
+        value: true
+      - key: VITE_KOL_DUMP_DETECTOR_ENABLED
+        value: true
+      - key: VITE_REPLAY_BEFORE_BUY_ENABLED
+        value: true
+      - key: VITE_PROTECTED_BUY_ENABLED
+        value: true
+      - key: VITE_TOKEN_AVATAR_FIX_ENABLED
+        value: true
+      - key: VITE_CHAT_AI_ENABLED
+        value: true
+      - key: VITE_CHAT_AI_PROVIDER_ENABLED
+        value: true
+      - key: VITE_SITE_SMOOTHNESS_FIXES_ENABLED
+        value: true
+      - key: VITE_DISABLE_UNFINISHED_BUTTONS
+        value: true
+      - key: VITE_DEBUG_PERFORMANCE_COUNTERS
+        value: false
       - key: MADE_ON_SOL_API_BASE
         value: https://madeonsol.com/api/v1
       - key: MADE_ON_SOL_KOL_LIMIT

@@ -10112,7 +10112,18 @@ textarea,
   z-index: 1 !important;
 }
 
+.live-pair-avatar img[hidden] {
+  display: none !important;
+  visibility: hidden !important;
+}
+
 .live-pair-avatar span {
+  display: none !important;
   position: relative !important;
   z-index: 2 !important;
+}
+
+.live-pair-avatar.fallback span,
+.live-pair-avatar img[hidden] + span {
+  display: block !important;
 }

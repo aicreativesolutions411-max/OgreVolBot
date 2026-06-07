@@ -108,6 +108,11 @@ const tokenImageResponseCache = new Map();
 const TOKEN_IMAGE_RESPONSE_CACHE_TTL_MS = 30 * 60 * 1000;
 const TOKEN_IMAGE_RESPONSE_STALE_TTL_MS = 6 * 60 * 60 * 1000;
 const TOKEN_IMAGE_RESPONSE_CACHE_MAX = 500;
+const tokenAvatarCache = new Map();
+const tokenAvatarLookupInFlight = new Map();
+const TOKEN_AVATAR_SUCCESS_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const TOKEN_AVATAR_FAIL_TTL_MS = 12 * 60 * 60 * 1000;
+const TOKEN_AVATAR_LOOKUP_CONCURRENCY = 5;
 const solBalanceCache = new Map();
 const tokenAccountsCache = new Map();
 const tokenBalanceCache = new Map();
@@ -411,9 +416,10 @@ function loadConfig() {
   const madeOnSolCacheTtlMs = Number.parseInt(process.env.MADE_ON_SOL_CACHE_TTL_MS || "900000", 10);
   const kolUseSolanaTrackerFallback = parseBoolean(process.env.KOL_USE_SOLANA_TRACKER_FALLBACK || "false");
   const livePairsRpcSafety = parseBoolean(process.env.LIVE_PAIRS_RPC_SAFETY || "true");
-  const livePairsRefreshSeconds = Number.parseInt(process.env.LIVE_PAIRS_REFRESH_SECONDS || "4", 10);
+  const livePairsRefreshSeconds = Number.parseInt(process.env.LIVE_PAIRS_REFRESH_SECONDS || "8", 10);
   const livePairsSharedCacheMs = Number.parseInt(process.env.LIVE_PAIRS_SHARED_CACHE_MS || "4000", 10);
   const livePairsImageEnrich = parseBoolean(process.env.LIVE_PAIRS_IMAGE_ENRICH || "true");
+  const tokenAvatarFixEnabled = parseOptionalBoolean(process.env.VITE_TOKEN_AVATAR_FIX_ENABLED || process.env.TOKEN_AVATAR_FIX_ENABLED, true);
   const pumpPortalSellFallbackEnabled = parseBoolean(process.env.PUMPPORTAL_SELL_FALLBACK_ENABLED || "true");
   const pumpPortalTradeLocalUrl = (process.env.PUMPPORTAL_TRADE_LOCAL_URL || "https://pumpportal.fun/api/trade-local").trim();
   const minExitMarketCapUsd = Number.parseInt(process.env.MIN_EXIT_MARKET_CAP_USD || "2000", 10);
@@ -746,6 +752,7 @@ function loadConfig() {
     livePairsRefreshSeconds,
     livePairsSharedCacheMs,
     livePairsImageEnrich,
+    tokenAvatarFixEnabled,
     pumpPortalSellFallbackEnabled,
     pumpPortalTradeLocalUrl,
     minExitMarketCapUsd,
@@ -1800,6 +1807,11 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "GET" && pathname === "/api/web/token-avatar") {
+      await sendWebTokenAvatar(request, response, requestUrl);
+      return;
+    }
+
     if (request.method === "GET" && pathname === "/api/web/dex-token") {
       const tokenMint = requestUrl.searchParams.get("token") || requestUrl.searchParams.get("tokenMint") || requestUrl.searchParams.get("mint") || "";
       sendWebJson(request, response, 200, {
@@ -2345,6 +2357,11 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "GET" && pathname === "/api/web/token-avatar") {
+      await sendWebTokenAvatar(request, response, requestUrl);
+      return;
+    }
+
     if (request.method === "GET" && pathname === "/api/web/dex-token") {
       const tokenMint = requestUrl.searchParams.get("token") || requestUrl.searchParams.get("tokenMint") || requestUrl.searchParams.get("mint") || "";
       sendWebJson(request, response, 200, {
@@ -2469,6 +2486,224 @@ function pruneTokenImageResponseCache() {
   for (const [key] of sorted.slice(0, Math.max(0, tokenImageResponseCache.size - TOKEN_IMAGE_RESPONSE_CACHE_MAX))) {
     tokenImageResponseCache.delete(key);
   }
+}
+
+function tokenAvatarExternalKey(mint = "") {
+  return externalCacheKey(`token:avatar:${String(mint || "").trim().toLowerCase()}`, "global");
+}
+
+function normalizeTokenAvatarUrl(value = "") {
+  const candidate = imageUriGatewayCandidates(value).find((url) => /^https:\/\//i.test(String(url || "")));
+  if (!candidate || /[\s"'<>]/.test(candidate)) return "";
+  return candidate.slice(0, 1000);
+}
+
+function tokenAvatarRecord(mint, fields = {}) {
+  const state = ["ready", "missing", "pending", "failed"].includes(String(fields.state || ""))
+    ? String(fields.state)
+    : fields.avatarUrl ? "ready" : "pending";
+  const updatedAt = fields.updatedAt || new Date().toISOString();
+  return {
+    mint: String(mint || "").trim(),
+    avatarUrl: normalizeTokenAvatarUrl(fields.avatarUrl || ""),
+    source: String(fields.source || "").slice(0, 80),
+    state,
+    updatedAt,
+    failedAt: fields.failedAt || (state === "failed" || state === "missing" ? updatedAt : ""),
+    failureReason: String(fields.failureReason || "").slice(0, 160)
+  };
+}
+
+function tokenAvatarMemoryRecord(mint = "") {
+  const key = String(mint || "").trim().toLowerCase();
+  if (!key) return null;
+  const record = tokenAvatarCache.get(key);
+  if (!record) return null;
+  const timestamp = Date.parse(record.updatedAt || record.failedAt || "");
+  const ageMs = Number.isFinite(timestamp) ? Date.now() - timestamp : 0;
+  if (record.state === "ready" && record.avatarUrl && ageMs < TOKEN_AVATAR_SUCCESS_TTL_MS) return record;
+  if ((record.state === "failed" || record.state === "missing") && ageMs < TOKEN_AVATAR_FAIL_TTL_MS) return record;
+  if (record.state === "ready" && record.avatarUrl) {
+    scheduleTokenAvatarLookup(mint);
+    return record;
+  }
+  tokenAvatarCache.delete(key);
+  return null;
+}
+
+function rememberTokenAvatarRecord(record = {}) {
+  const mint = String(record.mint || "").trim();
+  if (!mint) return null;
+  const normalized = tokenAvatarRecord(mint, record);
+  tokenAvatarCache.set(mint.toLowerCase(), normalized);
+  const ttlMs = normalized.state === "ready" ? TOKEN_AVATAR_SUCCESS_TTL_MS : TOKEN_AVATAR_FAIL_TTL_MS;
+  void cacheSetJson(tokenAvatarExternalKey(mint), normalized, ttlMs).catch(() => {});
+  return normalized;
+}
+
+function tokenAvatarCandidateFromRow(row = {}) {
+  const metadata = row.metadata || row.tokenMetadata || {};
+  const dex = row.dex || row.dexScreener || row.pair || row.dexPair || {};
+  const pump = row.pump || row.pumpFun || row.pumpfun || {};
+  return firstString(
+    row.avatarUrl,
+    row.imageUrl,
+    row.imageUri,
+    row.image,
+    row.logoURI,
+    row.logo,
+    row.tokenImageUrl,
+    row.token_image_url,
+    pump.imageUrl,
+    pump.imageUri,
+    pump.image_uri,
+    pump.image,
+    dex.imageUrl,
+    dex.info?.imageUrl,
+    dex.baseToken?.imageUrl,
+    dex.baseToken?.logoURI,
+    metadata.imageUrl,
+    metadata.imageUri,
+    metadata.image,
+    metadata.logoURI,
+    metadata.logo
+  );
+}
+
+function tokenAvatarFromRow(row = {}) {
+  const mint = firstString(row.tokenMint, row.mint, row.tokenAddress, row.address);
+  if (!mint || !CONFIG.tokenAvatarFixEnabled) return row;
+  const inlineAvatarUrl = normalizeTokenAvatarUrl(tokenAvatarCandidateFromRow(row));
+  if (inlineAvatarUrl) {
+    const record = rememberTokenAvatarRecord({
+      mint,
+      avatarUrl: inlineAvatarUrl,
+      source: row.metadataSource || row.source || "row",
+      state: "ready"
+    });
+    return {
+      ...row,
+      tokenMint: row.tokenMint || mint,
+      avatarUrl: record.avatarUrl,
+      avatarState: "ready",
+      avatarUpdatedAt: record.updatedAt
+    };
+  }
+
+  const cached = tokenAvatarMemoryRecord(mint);
+  if (cached) {
+    if (cached.state === "ready" && cached.avatarUrl) {
+      return {
+        ...row,
+        tokenMint: row.tokenMint || mint,
+        avatarUrl: cached.avatarUrl,
+        avatarState: "ready",
+        avatarUpdatedAt: cached.updatedAt
+      };
+    }
+    return {
+      ...row,
+      tokenMint: row.tokenMint || mint,
+      avatarUrl: null,
+      avatarState: cached.state || "missing",
+      avatarUpdatedAt: cached.updatedAt
+    };
+  }
+
+  scheduleTokenAvatarLookup(mint, row);
+  return {
+    ...row,
+    tokenMint: row.tokenMint || mint,
+    avatarUrl: null,
+    avatarState: "pending"
+  };
+}
+
+function decorateWebLivePairAvatars(rows = []) {
+  if (!CONFIG.tokenAvatarFixEnabled) return rows;
+  return (Array.isArray(rows) ? rows : []).map(tokenAvatarFromRow);
+}
+
+function scheduleTokenAvatarLookup(mint = "", row = {}) {
+  const key = String(mint || "").trim().toLowerCase();
+  if (!key || tokenAvatarLookupInFlight.has(key) || tokenAvatarLookupInFlight.size >= TOKEN_AVATAR_LOOKUP_CONCURRENCY) return;
+  const promise = resolveTokenAvatarRecord(mint, row)
+    .then((record) => rememberTokenAvatarRecord(record))
+    .catch((error) => rememberTokenAvatarRecord({
+      mint,
+      avatarUrl: "",
+      source: "lookup",
+      state: "failed",
+      failureReason: friendlyError(error)
+    }))
+    .finally(() => {
+      tokenAvatarLookupInFlight.delete(key);
+    });
+  tokenAvatarLookupInFlight.set(key, promise);
+}
+
+async function resolveTokenAvatarRecord(mint = "", row = {}) {
+  const direct = normalizeTokenAvatarUrl(tokenAvatarCandidateFromRow(row));
+  if (direct) {
+    return tokenAvatarRecord(mint, { avatarUrl: direct, source: row.source || "row", state: "ready" });
+  }
+
+  const [pumpMeta, dexMeta] = await Promise.all([
+    getPumpFunTokenMetadata(mint, { timeoutMs: 1_200, cacheTtlMs: 30 * 60 * 1000 }).catch(() => ({})),
+    getDexTokenMetadata(mint, { timeoutMs: 1_200 }).catch(() => ({}))
+  ]);
+  let avatarUrl = normalizeTokenAvatarUrl(firstString(
+    pumpMeta.imageUrl,
+    pumpMeta.imageUri,
+    dexMeta.imageUrl,
+    dexMeta.imageUri
+  ));
+  let source = avatarUrl
+    ? (firstString(pumpMeta.imageUrl, pumpMeta.imageUri) ? "pump" : "dex")
+    : "";
+
+  if (!avatarUrl) {
+    const geckoMeta = await getGeckoTerminalTokenMetadata(mint, { timeoutMs: 1_200 }).catch(() => ({}));
+    avatarUrl = normalizeTokenAvatarUrl(firstString(geckoMeta.imageUrl, geckoMeta.imageUri));
+    source = avatarUrl ? "geckoterminal" : "";
+  }
+
+  if (avatarUrl) return tokenAvatarRecord(mint, { avatarUrl, source, state: "ready" });
+  return tokenAvatarRecord(mint, {
+    avatarUrl: "",
+    source: "lookup",
+    state: "missing",
+    failureReason: "No cached Pump, Dex, or Gecko avatar URL"
+  });
+}
+
+async function tokenAvatarForMint(mint = "", options = {}) {
+  const key = String(mint || "").trim().toLowerCase();
+  if (!key) return tokenAvatarRecord(mint, { state: "missing", failureReason: "Missing mint" });
+  const cached = tokenAvatarMemoryRecord(key);
+  if (cached) return cached;
+  const external = await cacheGetJson(tokenAvatarExternalKey(key));
+  if (external?.mint || external?.state) {
+    const record = rememberTokenAvatarRecord({ ...external, mint: external.mint || mint });
+    if (record) return record;
+  }
+  if (options.schedule !== false) scheduleTokenAvatarLookup(mint);
+  return tokenAvatarRecord(mint, { state: "pending" });
+}
+
+async function sendWebTokenAvatar(request, response, requestUrl) {
+  const mint = firstString(
+    requestUrl.searchParams.get("mint"),
+    requestUrl.searchParams.get("token"),
+    requestUrl.searchParams.get("tokenMint")
+  );
+  const avatar = await tokenAvatarForMint(mint);
+  response.writeHead(200, {
+    "Content-Type": "application/json",
+    "Cache-Control": "public, max-age=86400, stale-while-revalidate=604800",
+    ...webCorsHeaders(request)
+  });
+  response.end(JSON.stringify({ ok: true, avatar }));
 }
 
 function sendCachedWebTokenImage(request, response, cachedImage, cacheStatus = "HIT") {
@@ -25900,7 +26135,10 @@ async function buildWebLivePairs(userId, bucket = "live", options = {}) {
     .filter((row) => !hasHardBlockedLivePairRisk(row))
     .sort(compareWebLivePairs)
     .slice(0, isLive ? 180 : 320);
-  const enrichedRows = await enrichWebLivePairsForImages(baseRows).catch(() => baseRows);
+  const shouldBlockForImageEnrichment = CONFIG.livePairsImageEnrich && !CONFIG.tokenAvatarFixEnabled;
+  const enrichedRows = shouldBlockForImageEnrichment
+    ? await enrichWebLivePairsForImages(baseRows).catch(() => baseRows)
+    : decorateWebLivePairAvatars(baseRows);
   const targetLimit = livePairBucketLimit(safeBucket);
   const hardSafeEnrichedRows = uniqueSniperScoreRows(enrichedRows)
     .filter((row) => !hasHardBlockedLivePairRisk(row));
@@ -25928,18 +26166,20 @@ async function buildWebLivePairs(userId, bucket = "live", options = {}) {
   }
   const safety = await maybeFilterWebLivePairsForSafety(liveRows, targetLimit);
   let rowsForSort = safety.rows;
-  if (CONFIG.livePairsImageEnrich && safeBucket === "live") {
+  if (shouldBlockForImageEnrichment && safeBucket === "live") {
     rowsForSort = await enrichWebLivePairsForImages(safety.rows).catch(() => safety.rows);
+  } else {
+    rowsForSort = decorateWebLivePairAvatars(rowsForSort);
   }
   const stickyCount = sort === "best" && safeBucket !== "live"
     ? Math.min(1, Math.max(0, Math.floor(targetLimit / 12)))
     : 0;
-  const safeRows = rotateRowsForRefresh(
+  const safeRows = decorateWebLivePairAvatars(rotateRowsForRefresh(
     sortLivePairs(rowsForSort, sort),
     targetLimit,
     scanState.refreshCount,
     { stickyCount }
-  );
+  ));
   rememberSniperScanRows(`web:${userId}`, `livepairs:${safeBucket}`, safeRows);
 
   return {
