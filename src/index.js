@@ -2468,12 +2468,16 @@ async function sendWebTokenImage(request, response, requestUrl) {
     getPumpFunTokenMetadata(mint, { timeoutMs: 2_500, cacheTtlMs: 5 * 60 * 1000 }).catch(() => ({})),
     getDexTokenMetadata(mint, { timeoutMs: 2_500 }).catch(() => ({}))
   ]);
-  const imageUrl = firstString(
+  let imageUrl = firstString(
     pumpMeta.imageUrl,
     pumpMeta.imageUri,
     dexMeta.imageUrl,
     dexMeta.imageUri
   );
+  if (!imageUrl) {
+    const geckoMeta = await getGeckoTerminalTokenMetadata(mint, { timeoutMs: 2_200 }).catch(() => ({}));
+    imageUrl = firstString(geckoMeta.imageUrl, geckoMeta.imageUri);
+  }
   const imageCandidate = imageUriGatewayCandidates(imageUrl).find((candidate) => /^https?:\/\//i.test(candidate));
   if (!imageCandidate) {
     response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "public, max-age=120", ...webCorsHeaders(request) });
@@ -13556,6 +13560,7 @@ function pnlSlimeBorderSvg() {
 
 let tokenMetadataResolverInstance = null;
 const pumpFunMetadataCache = new Map();
+const geckoTerminalMetadataCache = new Map();
 
 function getTokenMetadataResolver() {
   if (tokenMetadataResolverInstance) return tokenMetadataResolverInstance;
@@ -13578,6 +13583,8 @@ function invalidateTokenMetadataCache(tokenMint = "") {
   const mint = String(tokenMint || "").trim();
   if (!mint) return;
   dexMetadataCache.delete(mint);
+  pumpFunMetadataCache.delete(mint);
+  geckoTerminalMetadataCache.delete(mint);
   tokenMetadataResolverInstance?.invalidate(mint);
 }
 
@@ -13588,7 +13595,28 @@ async function getDexTokenMetadata(tokenMint, options = {}) {
   if (!options.force && cached && Date.now() - cached.cachedAt < 5 * 60 * 1000) {
     return cached.value;
   }
-  const value = await getTokenMetadataResolver().resolveTokenMetadata({ mint }, options);
+  let value = await getTokenMetadataResolver().resolveTokenMetadata({ mint }, options);
+  if (!value?.imageUrl || !value?.imageUri || !value?.marketCap || !value?.liquidityUsd) {
+    const geckoValue = await getGeckoTerminalTokenMetadata(mint, { timeoutMs: options.geckoTimeoutMs || 1_800 }).catch(() => ({}));
+    value = {
+      ...value,
+      symbol: firstString(value?.symbol, geckoValue.symbol),
+      name: firstString(value?.name, geckoValue.name),
+      imageUrl: firstString(value?.imageUrl, value?.imageUri, geckoValue.imageUrl, geckoValue.imageUri),
+      imageUri: firstString(value?.imageUri, value?.imageUrl, geckoValue.imageUri, geckoValue.imageUrl),
+      websiteUrl: firstString(value?.websiteUrl, geckoValue.websiteUrl),
+      twitterUrl: firstString(value?.twitterUrl, geckoValue.twitterUrl),
+      telegramUrl: firstString(value?.telegramUrl, geckoValue.telegramUrl),
+      marketCap: firstMeaningfulNumber(value?.marketCap, value?.marketCapUsd, value?.fdv, geckoValue.marketCap, geckoValue.fdv) || null,
+      fdv: firstMeaningfulNumber(value?.fdv, value?.marketCap, geckoValue.fdv, geckoValue.marketCap) || null,
+      liquidityUsd: firstMeaningfulNumber(value?.liquidityUsd, geckoValue.liquidityUsd) || null,
+      volume: value?.volume || geckoValue.volume || null,
+      priceChange: value?.priceChange || geckoValue.priceChange || null,
+      pairCreatedAt: firstNumber(value?.pairCreatedAt, geckoValue.pairCreatedAt) || null,
+      metadataSourceUsed: value?.metadataSourceUsed || (geckoValue.imageUrl ? "geckoterminal" : value?.source || ""),
+      source: value?.source || geckoValue.source || ""
+    };
+  }
   dexMetadataCache.set(mint, { cachedAt: Date.now(), value });
   return value;
 }
@@ -13864,6 +13892,115 @@ function dexPairLinks(pair = null) {
     socials.find((item) => /t\.me|telegram/i.test(item?.url || ""))?.url
   );
   return { websiteUrl, twitterUrl, telegramUrl };
+}
+
+function geckoTerminalHandleUrl(value = "", kind = "x") {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (/^https?:\/\//i.test(text)) return text;
+  const handle = text.replace(/^@+/, "").replace(/^\/+/, "").trim();
+  if (!handle) return "";
+  if (kind === "telegram") return `https://t.me/${handle}`;
+  return `https://x.com/${handle}`;
+}
+
+function geckoTerminalVolumeObject(attributes = {}) {
+  const volume = attributes.volume_usd || attributes.volumeUsd || attributes.volume || {};
+  return {
+    m5: firstMeaningfulNumber(volume.m5, volume["5m"], attributes.volume5m, attributes.volume_m5) || 0,
+    m15: firstMeaningfulNumber(volume.m15, volume.m15m, volume["15m"], attributes.volume15m, attributes.volume_m15) || 0,
+    m30: firstMeaningfulNumber(volume.m30, volume.m30m, volume["30m"], attributes.volume30m, attributes.volume_m30) || 0,
+    h1: firstMeaningfulNumber(volume.h1, volume["1h"], attributes.volumeH1, attributes.volume_h1) || 0,
+    h24: firstMeaningfulNumber(volume.h24, volume.d1, volume["24h"], attributes.volumeH24, attributes.volume_h24) || 0
+  };
+}
+
+function geckoTerminalTxnsObject(attributes = {}) {
+  const transactions = attributes.transactions || attributes.txns || {};
+  return {
+    m5: {
+      buys: firstNumber(transactions.m5?.buys, transactions["5m"]?.buys, attributes.buys5m) || 0,
+      sells: firstNumber(transactions.m5?.sells, transactions["5m"]?.sells, attributes.sells5m) || 0
+    },
+    h1: {
+      buys: firstNumber(transactions.h1?.buys, transactions["1h"]?.buys, attributes.buysH1, attributes.buys) || 0,
+      sells: firstNumber(transactions.h1?.sells, transactions["1h"]?.sells, attributes.sellsH1, attributes.sells) || 0
+    }
+  };
+}
+
+async function getGeckoTerminalTokenMetadata(tokenMint, options = {}) {
+  const mint = String(tokenMint || "").trim();
+  if (!mint) return {};
+  const cacheTtlMs = Number.isFinite(Number(options.cacheTtlMs)) ? Number(options.cacheTtlMs) : 5 * 60 * 1000;
+  const cached = geckoTerminalMetadataCache.get(mint);
+  if (!options.force && cached && Date.now() - cached.cachedAt < cacheTtlMs) {
+    return cached.value;
+  }
+
+  const headers = {
+    "Accept": "application/json",
+    "User-Agent": "solana-telegram-wallet-ops-bot"
+  };
+  const baseUrl = "https://api.geckoterminal.com/api/v2/networks/solana";
+  const timeoutMs = options.timeoutMs || 2_500;
+  const [infoResult, poolsResult] = await Promise.allSettled([
+    fetchJson(`${baseUrl}/tokens/${encodeURIComponent(mint)}/info`, { headers, timeoutMs }),
+    fetchJson(`${baseUrl}/tokens/${encodeURIComponent(mint)}/pools?page=1&limit=5`, { headers, timeoutMs })
+  ]);
+  const infoData = infoResult.status === "fulfilled" ? infoResult.value : null;
+  const poolsData = poolsResult.status === "fulfilled" ? poolsResult.value : null;
+  const attributes = infoData?.data?.attributes || infoData?.attributes || {};
+  const pools = arrayFromApiData(poolsData)
+    .map((pool) => ({ pool, attributes: pool?.attributes || pool || {} }))
+    .sort((a, b) => (
+      (firstMeaningfulNumber(b.attributes.reserve_in_usd, b.attributes.reserveUsd, b.attributes.liquidity_usd, b.attributes.liquidityUsd) || 0)
+      - (firstMeaningfulNumber(a.attributes.reserve_in_usd, a.attributes.reserveUsd, a.attributes.liquidity_usd, a.attributes.liquidityUsd) || 0)
+    ) || (
+      (firstMeaningfulNumber(b.attributes.volume_usd?.h24, b.attributes.volumeUsd?.h24, b.attributes.volumeH24) || 0)
+      - (firstMeaningfulNumber(a.attributes.volume_usd?.h24, a.attributes.volumeUsd?.h24, a.attributes.volumeH24) || 0)
+    ));
+  const bestPool = pools[0]?.pool || null;
+  const poolAttributes = pools[0]?.attributes || {};
+  const websiteUrl = firstString(
+    Array.isArray(attributes.websites) ? attributes.websites[0] : "",
+    attributes.website_url,
+    attributes.websiteUrl
+  );
+  const twitterUrl = firstString(
+    geckoTerminalHandleUrl(attributes.twitter_handle || attributes.twitter || attributes.x_handle || attributes.x, "x"),
+    attributes.twitter_url,
+    attributes.x_url
+  );
+  const telegramUrl = firstString(
+    geckoTerminalHandleUrl(attributes.telegram_handle || attributes.telegram, "telegram"),
+    attributes.telegram_url
+  );
+  const volume = geckoTerminalVolumeObject(poolAttributes);
+  const value = {
+    tokenMint: mint,
+    source: "geckoterminal",
+    symbol: firstString(attributes.symbol, poolAttributes.base_token_symbol, poolAttributes.name),
+    name: firstString(attributes.name, poolAttributes.base_token_name, poolAttributes.name),
+    imageUrl: firstString(attributes.image_url, attributes.imageUrl, attributes.image, poolAttributes.image_url, poolAttributes.imageUrl),
+    imageUri: firstString(attributes.image_url, attributes.imageUrl, attributes.image, poolAttributes.image_url, poolAttributes.imageUrl),
+    websiteUrl,
+    twitterUrl,
+    telegramUrl,
+    marketCap: firstMeaningfulNumber(poolAttributes.market_cap_usd, poolAttributes.marketCapUsd, attributes.market_cap_usd, attributes.marketCapUsd, poolAttributes.fdv_usd, poolAttributes.fdvUsd) || null,
+    fdv: firstMeaningfulNumber(poolAttributes.fdv_usd, poolAttributes.fdvUsd, poolAttributes.fdv, attributes.fdv_usd, attributes.fdvUsd) || null,
+    liquidityUsd: firstMeaningfulNumber(poolAttributes.reserve_in_usd, poolAttributes.reserveUsd, poolAttributes.liquidity_usd, poolAttributes.liquidityUsd) || null,
+    priceUsd: firstMeaningfulNumber(poolAttributes.base_token_price_usd, poolAttributes.price_usd, attributes.price_usd, attributes.priceUsd) || null,
+    volume,
+    txns: geckoTerminalTxnsObject(poolAttributes),
+    priceChange: poolAttributes.price_change_percentage || poolAttributes.priceChange || null,
+    pairCreatedAt: normalizePairCreatedAt(firstString(poolAttributes.pool_created_at, poolAttributes.poolCreatedAt, poolAttributes.created_at, poolAttributes.createdAt)) || null,
+    pairAddress: firstString(bestPool?.id, poolAttributes.address, poolAttributes.pool_address, poolAttributes.pairAddress).replace(/^solana_/, ""),
+    pairUrl: firstString(poolAttributes.url, bestPool?.id ? `https://www.geckoterminal.com/solana/pools/${String(bestPool.id).replace(/^solana_/, "")}` : ""),
+    metadataMissing: !firstString(attributes.image_url, attributes.imageUrl, attributes.image)
+  };
+  geckoTerminalMetadataCache.set(mint, { cachedAt: Date.now(), value });
+  return value;
 }
 
 async function getPumpFunTokenMetadata(tokenMint, options = {}) {
@@ -25509,7 +25646,7 @@ async function webLivePairs(userId, bucket = "live", options = {}) {
   const sort = String(options.sort || "best").toLowerCase();
   const force = Boolean(options.force);
   const cacheKey = `${safeBucket}:${sort}`;
-  const externalKey = externalCacheKey(`web:livePairs:v5:${cacheKey}`, "global");
+  const externalKey = externalCacheKey(`web:livePairs:v6:${cacheKey}`, "global");
   const cached = livePairsSharedCache.get(cacheKey) || { cachedAt: 0, value: null, promise: null };
   if (!force && CONFIG.livePairsSharedCacheMs > 0 && cached.value && Date.now() - cached.cachedAt < CONFIG.livePairsSharedCacheMs) {
     return { ...cached.value, cacheHit: true, cacheSource: "memory" };
@@ -26348,9 +26485,9 @@ async function enrichWebLivePairsForImages(rows) {
     let volumeH1 = firstNumber(dexMeta.volume?.h1, row.volumeH1) || 0;
     let volumeH24 = firstNumber(dexMeta.volume?.h24, dexMeta.volume?.d1, row.volumeH24) || 0;
     let pairCreatedAt = firstNumber(dexMeta.pairCreatedAt, row.pairCreatedAt) || null;
-    const websiteUrl = firstString(dexMeta.websiteUrl, row.websiteUrl);
-    const twitterUrl = firstString(dexMeta.twitterUrl, row.twitterUrl);
-    const telegramUrl = firstString(dexMeta.telegramUrl, row.telegramUrl);
+    let websiteUrl = firstString(dexMeta.websiteUrl, row.websiteUrl);
+    let twitterUrl = firstString(dexMeta.twitterUrl, row.twitterUrl);
+    let telegramUrl = firstString(dexMeta.telegramUrl, row.telegramUrl);
     let dexId = firstString(dexMeta.dexId, row.dexId, row.dexName);
     let dexName = firstString(dexMeta.dexName, row.dexName, dexId);
     let pairAddress = firstString(dexMeta.pairAddress, row.pairAddress);
@@ -26367,9 +26504,10 @@ async function enrichWebLivePairsForImages(rows) {
       dexId,
       dexName
     });
+    let pumpMeta = {};
     if (pumpLike && (!imageUrl || !marketCap || !liquidityUsd || !volumeH1 || !volumeM15 || !bondingProgressPct || !graduated)) {
-      const pumpMeta = await getPumpFunTokenMetadata(row.tokenMint, { timeoutMs: 1_800 }).catch(() => ({}));
-      imageUrl = firstString(pumpMeta.imageUrl, imageUrl);
+      pumpMeta = await getPumpFunTokenMetadata(row.tokenMint, { timeoutMs: 1_800 }).catch(() => ({}));
+      imageUrl = firstString(pumpMeta.imageUrl, pumpMeta.imageUri, imageUrl);
       symbol = symbol && symbol !== shortMint(row.tokenMint) ? symbol : firstString(pumpMeta.symbol, symbol);
       name = name && name !== "Fresh Launch" ? name : firstString(pumpMeta.name, name);
       marketCap = Number(marketCap) > 0 ? marketCap : firstMeaningfulNumber(pumpMeta.marketCap, marketCap) || 0;
@@ -26383,6 +26521,41 @@ async function enrichWebLivePairsForImages(rows) {
       bondingProgressPct = Number(bondingProgressPct) > 0 ? bondingProgressPct : firstMeaningfulNumber(pumpMeta.bondingProgressPct, bondingProgressPct) || 0;
       graduated = Boolean(graduated || pumpMeta.graduated || pumpMeta.isGraduated);
       raydiumPool = firstString(raydiumPool, pumpMeta.raydiumPool);
+    }
+
+    if (pumpLike && !graduated && pumpMeta && Object.keys(pumpMeta).length) {
+      imageUrl = firstString(pumpMeta.imageUrl, pumpMeta.imageUri, imageUrl);
+      symbol = firstString(pumpMeta.symbol, symbol);
+      name = firstString(pumpMeta.name, name);
+      marketCap = firstMeaningfulNumber(pumpMeta.marketCap, marketCap) || 0;
+      liquidityUsd = firstMeaningfulNumber(pumpMeta.liquidityUsd, liquidityUsd) || 0;
+      volume5m = firstMeaningfulNumber(pumpMeta.volume?.m5, volume5m) || 0;
+      volumeM15 = firstMeaningfulNumber(pumpMeta.volume?.m15, volumeM15) || 0;
+      volumeM30 = firstMeaningfulNumber(pumpMeta.volume?.m30, volumeM30) || 0;
+      volumeH1 = firstMeaningfulNumber(pumpMeta.volume?.h1, volumeH1) || 0;
+      volumeH24 = firstMeaningfulNumber(pumpMeta.volume?.h24, volumeH24) || 0;
+      pairCreatedAt = firstNumber(pumpMeta.pairCreatedAt, pairCreatedAt) || null;
+      bondingProgressPct = firstMeaningfulNumber(pumpMeta.bondingProgressPct, bondingProgressPct) || 0;
+    }
+
+    if (!imageUrl || !marketCap || !liquidityUsd || !volumeH1 || !volumeM15 || !websiteUrl || !twitterUrl || !telegramUrl) {
+      const geckoMeta = await getGeckoTerminalTokenMetadata(row.tokenMint, { timeoutMs: 2_000 }).catch(() => ({}));
+      imageUrl = firstString(imageUrl, geckoMeta.imageUrl, geckoMeta.imageUri);
+      symbol = symbol && symbol !== shortMint(row.tokenMint) ? symbol : firstString(geckoMeta.symbol, symbol);
+      name = name && name !== "Fresh Launch" ? name : firstString(geckoMeta.name, name);
+      websiteUrl = firstString(websiteUrl, geckoMeta.websiteUrl);
+      twitterUrl = firstString(twitterUrl, geckoMeta.twitterUrl);
+      telegramUrl = firstString(telegramUrl, geckoMeta.telegramUrl);
+      marketCap = Number(marketCap) > 0 ? marketCap : firstMeaningfulNumber(geckoMeta.marketCap, geckoMeta.fdv, marketCap) || 0;
+      liquidityUsd = Number(liquidityUsd) > 0 ? liquidityUsd : firstMeaningfulNumber(geckoMeta.liquidityUsd, liquidityUsd) || 0;
+      volume5m = Number(volume5m) > 0 ? volume5m : firstMeaningfulNumber(geckoMeta.volume?.m5, volume5m) || 0;
+      volumeM15 = Number(volumeM15) > 0 ? volumeM15 : firstMeaningfulNumber(geckoMeta.volume?.m15, volumeM15) || 0;
+      volumeM30 = Number(volumeM30) > 0 ? volumeM30 : firstMeaningfulNumber(geckoMeta.volume?.m30, volumeM30) || 0;
+      volumeH1 = Number(volumeH1) > 0 ? volumeH1 : firstMeaningfulNumber(geckoMeta.volume?.h1, volumeH1) || 0;
+      volumeH24 = Number(volumeH24) > 0 ? volumeH24 : firstMeaningfulNumber(geckoMeta.volume?.h24, volumeH24) || 0;
+      pairCreatedAt = firstNumber(pairCreatedAt, geckoMeta.pairCreatedAt) || null;
+      pairAddress = firstString(pairAddress, geckoMeta.pairAddress);
+      pairUrl = firstString(pairUrl, geckoMeta.pairUrl);
     }
 
     const trustedSourceAge = ["source-age", "trusted-source-age"].includes(String(row.pairAgeSource || "").toLowerCase());
