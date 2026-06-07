@@ -44,7 +44,7 @@ const LIVE_PAIRS_RENDER_DEBOUNCE_MS = 140;
 const LIVE_PAIRS_INFLIGHT_RENDER_REASON = "live-pairs-inflight";
 const POST_TRADE_REFRESH_DELAYS_MS = [1200, 4500, 10000];
 const APP_WATCHDOG_INTERVAL_MS = 15_000;
-const APP_RESUME_REFRESH_DEBOUNCE_MS = 650;
+const APP_RESUME_REFRESH_DEBOUNCE_MS = 650;`r`nconst OGRE_AGENT_MIC_START_TIMEOUT_MS = 3500;`r`nconst OGRE_AGENT_MIC_LISTEN_TIMEOUT_MS = 12000;
 const POSITION_REFRESH_STALE_LOCK_MS = 30_000;
 const POST_TRADE_AFFECTED_KEYS = ["wallet-summary", "positions", "pnl", "trade-history", "selected-token", "live-trades"];
 const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
@@ -13746,23 +13746,42 @@ function ogreAgentWriteDraft(value = "") {
   }
 }
 
+function ogreAgentClearSpeechTimers() {
+  if (ogreAgentSpeechStartTimer) {
+    clearTimeout(ogreAgentSpeechStartTimer);
+    ogreAgentSpeechStartTimer = null;
+  }
+  if (ogreAgentSpeechListenTimer) {
+    clearTimeout(ogreAgentSpeechListenTimer);
+    ogreAgentSpeechListenTimer = null;
+  }
+}
+
+function ogreAgentArmListenTimeout(sessionId) {
+  if (ogreAgentSpeechListenTimer) clearTimeout(ogreAgentSpeechListenTimer);
+  ogreAgentSpeechListenTimer = setTimeout(() => {
+    if (sessionId !== ogreAgentSpeechSessionId || state.ogreAgentSpeechRecognizer !== state.ogreAgentSpeechRecognizer) return;
+    ogreAgentStopListening("Mic timed out instead of staying open. Tap Mic again or type the command.");
+  }, OGRE_AGENT_MIC_LISTEN_TIMEOUT_MS);
+}
+
 function ogreAgentStopListening(status = "") {
+  ogreAgentSpeechSessionId += 1;
+  ogreAgentClearSpeechTimers();
   const recognizer = state.ogreAgentSpeechRecognizer;
   state.ogreAgentSpeechRecognizer = null;
+  state.ogreAgentListening = false;
+  state.ogreAgentSpeechFinal = "";
   if (recognizer) {
     recognizer.onstart = null;
     recognizer.onresult = null;
     recognizer.onerror = null;
     recognizer.onend = null;
-    try {
-      recognizer.stop();
-    } catch {}
+    try { recognizer.abort?.(); } catch {}
+    try { recognizer.stop?.(); } catch {}
   }
-  if (state.ogreAgentListening) {
-    state.ogreAgentListening = false;
-    if (status) state.ogreAgentStatus = status;
-    renderOgreAgent({ force: true });
-  }
+  if (status) state.ogreAgentStatus = status;
+  if (state.ogreAgentOpen) renderOgreAgent({ force: true });
 }
 
 function ogreAgentStartListening() {
@@ -13780,18 +13799,35 @@ function ogreAgentStartListening() {
   ogreAgentStopListening();
   const Recognition = ogreAgentSpeechInputCtor();
   const recognizer = new Recognition();
+  const sessionId = ++ogreAgentSpeechSessionId;
   state.ogreAgentSpeechRecognizer = recognizer;
+  state.ogreAgentListening = true;
   state.ogreAgentSpeechBaseDraft = String(document.querySelector("[data-ogre-agent-input]")?.value || state.ogreAgentDraft || "").trim();
   state.ogreAgentSpeechFinal = "";
+  state.ogreAgentStatus = "Opening microphone...";
+  renderOgreAgent({ force: true });
   recognizer.continuous = false;
   recognizer.interimResults = true;
+  recognizer.maxAlternatives = 1;
   recognizer.lang = /^en/i.test(navigator.language || "") ? navigator.language : "en-US";
+  ogreAgentSpeechStartTimer = setTimeout(() => {
+    if (sessionId !== ogreAgentSpeechSessionId || state.ogreAgentSpeechRecognizer !== recognizer) return;
+    ogreAgentStopListening("Mic did not start. Check browser permission, then tap Mic again.");
+  }, OGRE_AGENT_MIC_START_TIMEOUT_MS);
   recognizer.onstart = () => {
+    if (sessionId !== ogreAgentSpeechSessionId || state.ogreAgentSpeechRecognizer !== recognizer) return;
+    if (ogreAgentSpeechStartTimer) {
+      clearTimeout(ogreAgentSpeechStartTimer);
+      ogreAgentSpeechStartTimer = null;
+    }
     state.ogreAgentListening = true;
     state.ogreAgentStatus = "Listening... speak your Ogre command.";
+    ogreAgentArmListenTimeout(sessionId);
     renderOgreAgent({ force: true });
   };
   recognizer.onresult = (event) => {
+    if (sessionId !== ogreAgentSpeechSessionId || state.ogreAgentSpeechRecognizer !== recognizer) return;
+    ogreAgentArmListenTimeout(sessionId);
     let interim = "";
     let finalText = "";
     for (let index = event.resultIndex || 0; index < event.results.length; index += 1) {
@@ -13810,17 +13846,24 @@ function ogreAgentStartListening() {
     ogreAgentWriteDraft(combined);
   };
   recognizer.onerror = (event) => {
+    if (sessionId !== ogreAgentSpeechSessionId || state.ogreAgentSpeechRecognizer !== recognizer) return;
+    ogreAgentClearSpeechTimers();
     const error = String(event?.error || "");
     state.ogreAgentListening = false;
     state.ogreAgentSpeechRecognizer = null;
+    state.ogreAgentSpeechFinal = "";
     state.ogreAgentStatus = error === "not-allowed"
       ? "Mic permission denied. Allow microphone access to talk to Ogre."
       : error === "no-speech"
         ? "No voice heard. Tap Mic and try again."
-        : "Voice input stopped. Typing still works.";
+        : error === "aborted"
+          ? "Voice input stopped."
+          : "Voice input stopped. Typing still works.";
     renderOgreAgent({ force: true });
   };
   recognizer.onend = () => {
+    if (sessionId !== ogreAgentSpeechSessionId || state.ogreAgentSpeechRecognizer !== recognizer) return;
+    ogreAgentClearSpeechTimers();
     const finalDraft = String(state.ogreAgentDraft || "").trim();
     const shouldAutoSend = Boolean(finalDraft && state.ogreAgentSpeechFinal && !state.ogreAgentLoading);
     state.ogreAgentListening = false;
@@ -13831,14 +13874,16 @@ function ogreAgentStartListening() {
       setTimeout(() => {
         ogreAgentWriteDraft(finalDraft);
         void sendOgreAgentMessage();
-      }, 140);
+      }, 100);
     }
   };
   try {
     recognizer.start();
   } catch {
+    ogreAgentClearSpeechTimers();
     state.ogreAgentListening = false;
     state.ogreAgentSpeechRecognizer = null;
+    state.ogreAgentSpeechFinal = "";
     state.ogreAgentStatus = "Mic could not start. Typing still works.";
     renderOgreAgent({ force: true });
   }
@@ -16204,4 +16249,5 @@ if (!window.__slimeStablePumpChartTimer) {
     if (!document.hidden) window.setTimeout(() => kick("visible-empty-feed-watchdog"), 450);
   });
 })();
+
 
