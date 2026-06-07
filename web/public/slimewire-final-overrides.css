@@ -9865,6 +9865,213 @@ textarea,
 .ogre-agent-shell.is-open { z-index: 2147483640 !important; pointer-events: none !important; }
 .ogre-agent-shell.is-open .ogre-agent-panel, .ogre-agent-shell.is-open .ogre-agent-panel *, .ogre-agent-shell.is-open .ogre-agent-bubble { pointer-events: auto !important; }
 
+/* OGRE_AGENT_READABLE_CHAT_FINAL_V1: final override so mobile chat text never collapses into ghost bars. */
+.ogre-agent-shell.is-open .ogre-agent-panel {
+  background:
+    radial-gradient(circle at 18% 8%, rgba(107, 255, 44, 0.12), transparent 30%),
+    linear-gradient(180deg, rgba(3, 18, 6, 0.985), rgba(0, 7, 3, 0.995)) !important;
+  color: #f3ffe9 !important;
+  isolation: isolate !important;
+}
+
+.ogre-agent-shell.is-open .ogre-agent-holo {
+  flex: 0 0 auto !important;
+  opacity: 0.88 !important;
+  pointer-events: none !important;
+  position: relative !important;
+  z-index: 1 !important;
+}
+
+.ogre-agent-shell.is-open .ogre-agent-feed {
+  background: rgba(0, 11, 4, 0.58) !important;
+  border: 1px solid rgba(125, 255, 44, 0.24) !important;
+  border-radius: 16px !important;
+  color: #f3ffe9 !important;
+  display: flex !important;
+  flex: 1 1 auto !important;
+  flex-direction: column !important;
+  gap: 10px !important;
+  min-height: 190px !important;
+  opacity: 1 !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  padding: 10px !important;
+  position: relative !important;
+  scrollbar-gutter: stable !important;
+  visibility: visible !important;
+  z-index: 3 !important;
+}
+
+.ogre-agent-shell.is-open .ogre-agent-message {
+  align-self: flex-start !important;
+  background: rgba(6, 32, 10, 0.94) !important;
+  border: 1px solid rgba(126, 255, 45, 0.3) !important;
+  border-radius: 14px !important;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.24) !important;
+  color: #f3ffe9 !important;
+  display: block !important;
+  flex: 0 0 auto !important;
+  font-size: 1rem !important;
+  font-weight: 700 !important;
+  line-height: 1.36 !important;
+  max-height: none !important;
+  max-width: min(94%, 620px) !important;
+  min-height: 0 !important;
+  opacity: 1 !important;
+  overflow: visible !important;
+  padding: 10px 12px !important;
+  position: relative !important;
+  text-indent: 0 !important;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.35) !important;
+  visibility: visible !important;
+  white-space: normal !important;
+  width: auto !important;
+  z-index: 4 !important;
+}
+
+.ogre-agent-shell.is-open .ogre-agent-message.user {
+  align-self: flex-end !important;
+  background: linear-gradient(135deg, rgba(48, 126, 20, 0.95), rgba(15, 54, 10, 0.95)) !important;
+}
+
+.ogre-agent-shell.is-open .ogre-agent-message.assistant {
+  align-self: flex-start !important;
+}
+
+.ogre-agent-shell.is-open .ogre-agent-message p {
+  color: inherit !important;
+  display: block !important;
+  font-size: inherit !important;
+  font-weight: inherit !important;
+  height: auto !important;
+  letter-spacing: normal !important;
+  line-height: inherit !important;
+  margin: 0 !important;
+  max-height: none !important;
+  min-height: 0 !important;
+  opacity: 1 !important;
+  overflow: visible !important;
+  padding: 0 !important;
+  position: relative !important;
+  text-indent: 0 !important;
+  transform: none !important;
+  visibility: visible !important;
+  white-space: pre-wrap !important;
+  width: auto !important;
+  word-break: normal !important;
+  overflow-wrap: anywhere !important;
+  z-index: 5 !important;
+}
+
+.ogre-agent-shell.is-open .ogre-agent-message p::before,
+.ogre-agent-shell.is-open .ogre-agent-message p::after,
+.ogre-agent-shell.is-open .ogre-agent-message::before,
+.ogre-agent-shell.is-open .ogre-agent-message::after {
+  content: none !important;
+  display: none !important;
+}
+
+.ogre-agent-shell.is-open .ogre-agent-message .ogre-agent-actions {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 8px !important;
+  margin-top: 10px !important;
+  opacity: 1 !important;
+  position: relative !important;
+  visibility: visible !important;
+  z-index: 5 !important;
+}
+
+.ogre-agent-shell.is-open .ogre-agent-message .ogre-agent-actions button,
+.ogre-agent-shell.is-open .ogre-agent-quick-actions button,
+.ogre-agent-shell.is-open .ogre-agent-composer-actions button,
+.ogre-agent-shell.is-open [data-ogre-agent-close],
+.ogre-agent-shell.is-open [data-ogre-agent-voice] {
+  color: #f4ffe9 !important;
+  opacity: 1 !important;
+  pointer-events: auto !important;
+  visibility: visible !important;
+}
+
+.ogre-agent-shell.is-open .ogre-agent-composer,
+.ogre-agent-shell.is-open .ogre-agent-quick-actions,
+.ogre-agent-shell.is-open .ogre-agent-status {
+  flex: 0 0 auto !important;
+  opacity: 1 !important;
+  position: relative !important;
+  visibility: visible !important;
+  z-index: 4 !important;
+}
+
+.ogre-agent-shell.is-open .ogre-agent-composer textarea[data-ogre-agent-input] {
+  background: rgba(0, 12, 4, 0.92) !important;
+  color: #f3ffe9 !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  -webkit-text-fill-color: #f3ffe9 !important;
+}
+
+.ogre-agent-shell.is-open .ogre-agent-composer textarea[data-ogre-agent-input]::placeholder {
+  color: rgba(243, 255, 233, 0.7) !important;
+  opacity: 1 !important;
+  -webkit-text-fill-color: rgba(243, 255, 233, 0.7) !important;
+}
+
+@media (max-width: 760px) {
+  .ogre-agent-shell.is-open .ogre-agent-panel {
+    border-radius: 18px !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 10px !important;
+    left: 8px !important;
+    max-height: none !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+    right: 8px !important;
+    top: max(8px, env(safe-area-inset-top)) !important;
+    bottom: max(8px, env(safe-area-inset-bottom)) !important;
+    width: auto !important;
+  }
+
+  .ogre-agent-shell.is-open .ogre-agent-panel header {
+    flex: 0 0 auto !important;
+    min-height: 62px !important;
+  }
+
+  .ogre-agent-shell.is-open .ogre-agent-holo {
+    min-height: 70px !important;
+  }
+
+  .ogre-agent-shell.is-open .ogre-agent-feed {
+    min-height: 220px !important;
+    padding: 9px !important;
+  }
+
+  .ogre-agent-shell.is-open .ogre-agent-message {
+    font-size: 0.96rem !important;
+    max-width: 96% !important;
+    padding: 9px 11px !important;
+  }
+
+  .ogre-agent-shell.is-open .ogre-agent-composer {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) 70px !important;
+    gap: 8px !important;
+  }
+
+  .ogre-agent-shell.is-open .ogre-agent-composer textarea[data-ogre-agent-input] {
+    font-size: 16px !important;
+    min-height: 88px !important;
+    max-height: 124px !important;
+  }
+
+  .ogre-agent-shell.is-open .ogre-agent-quick-actions {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 6px !important;
+  }
+}
+
 /* LANDING_SPONSOR_ASML_V1: keep multiple sponsor entries readable in the sponsor frame. */
 [data-app][data-route="intro"] .swamp-sponsor-frame .swamp-support-content {
   gap: clamp(6px, 0.8vw, 10px) !important;
