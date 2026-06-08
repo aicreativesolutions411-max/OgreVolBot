@@ -1474,6 +1474,44 @@ button:disabled {
   line-height: 1.35;
 }
 
+.session-wallet-controls {
+  display: grid;
+  grid-template-columns: minmax(120px, 180px) minmax(150px, auto) minmax(220px, 1fr);
+  gap: 10px;
+  align-items: end;
+  margin: 10px 0;
+}
+
+.session-wallet-controls label {
+  gap: 6px;
+  font-size: 12px;
+}
+
+.session-wallet-controls input {
+  min-height: 40px;
+}
+
+.session-wallet-controls small {
+  align-self: center;
+  color: #c7d7c2;
+}
+
+.session-wallet-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  margin-left: 6px;
+  padding: 2px 7px;
+  border: 1px solid rgba(145, 255, 57, 0.42);
+  border-radius: 999px;
+  background: rgba(145, 255, 57, 0.1);
+  color: var(--green);
+  font-size: 10px;
+  font-weight: 950;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+
 .x-connect-card {
   grid-template-columns: minmax(0, 1fr) minmax(180px, 260px) auto auto;
 }
@@ -5111,6 +5149,10 @@ body {
     align-items: stretch;
     flex-wrap: wrap;
     max-width: 100%;
+  }
+
+  .session-wallet-controls {
+    grid-template-columns: 1fr;
   }
 
   [data-app][data-route="terminal"] .terminal-title-row h2,

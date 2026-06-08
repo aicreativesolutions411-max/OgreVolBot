@@ -6,6 +6,7 @@ const appSource = fs.readFileSync(new URL("../web/public/app.js", import.meta.ur
 const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
 const htmlSource = fs.readFileSync(new URL("../web/public/index.html", import.meta.url), "utf8");
 const web3BundleSource = fs.readFileSync(new URL("../web/public/vendor/solana-web3.iife.min.js", import.meta.url), "utf8");
+const stylesSource = fs.readFileSync(new URL("../web/public/styles.css", import.meta.url), "utf8");
 
 function functionBody(source, name) {
   const syncMatch = new RegExp(`function\\s+${name}\\s*\\(`).exec(source);
@@ -104,4 +105,49 @@ test("browser trade approvals are initialized in the server auth store and never
   assert.match(functionBody(serverSource, "takePendingBrowserTradeOrder"), /status = "submitting"/);
   assert.doesNotMatch(functionBody(serverSource, "webBrowserTradeOrder"), /decryptWallet|secretKey|privateKey|Keypair\.fromSecretKey/i);
   assert.doesNotMatch(functionBody(serverSource, "webBrowserTradeExecute"), /decryptWallet|secretKey|privateKey|Keypair\.fromSecretKey/i);
+});
+
+test("connected wallets can fund a limited session wallet with one normal wallet approval", () => {
+  assert.match(appSource, /data-create-session-wallet/);
+  assert.match(functionBody(appSource, "automationDelegationHtml"), /Session Budget SOL/);
+  assert.match(functionBody(appSource, "automationDelegationHtml"), /only the SOL you approve into the session wallet can be automated/);
+  assert.match(functionBody(appSource, "createSessionWalletFromConnected"), /\/api\/web\/session-wallet\/create/);
+  assert.match(functionBody(appSource, "createSessionWalletFromConnected"), /signBrowserLegacyTransaction/);
+  assert.match(functionBody(appSource, "createSessionWalletFromConnected"), /\/api\/web\/session-wallet\/execute/);
+  assert.match(functionBody(appSource, "createSessionWalletFromConnected"), /session-wallet-funded/);
+  assert.match(functionBody(appSource, "signBrowserLegacyTransaction"), /provider\.signTransaction/);
+  assert.match(functionBody(appSource, "walletOptionsHtml"), /sessionWallet \? " Session"/);
+  assert.match(stylesSource, /\.session-wallet-controls/);
+  assert.match(stylesSource, /\.session-wallet-badge/);
+});
+
+test("backend session wallets verify the funding transaction before becoming automation wallets", () => {
+  assert.match(serverSource, /pathname === "\/api\/web\/session-wallet\/create"/);
+  assert.match(serverSource, /pathname === "\/api\/web\/session-wallet\/execute"/);
+  assert.match(functionBody(serverSource, "defaultJsonForPath"), /sessionWalletOrders: \[\]/);
+  assert.match(functionBody(serverSource, "readWebAuthStore"), /sessionWalletOrders/);
+  assert.match(functionBody(serverSource, "sessionWalletFundingAmountLamports"), /0\.005/);
+  assert.match(functionBody(serverSource, "sessionWalletFundingAmountLamports"), /10/);
+  assert.match(functionBody(serverSource, "createWebSessionWalletOrder"), /profile\.connectedWallet/);
+  assert.match(functionBody(serverSource, "createWebSessionWalletOrder"), /Keypair\.generate/);
+  assert.match(functionBody(serverSource, "createWebSessionWalletOrder"), /sessionWallet: true/);
+  assert.match(functionBody(serverSource, "createWebSessionWalletOrder"), /SystemProgram\.transfer/);
+  assert.match(functionBody(serverSource, "createWebSessionWalletOrder"), /serialize\(\{ requireAllSignatures: false, verifySignatures: false \}\)/);
+  assert.match(functionBody(serverSource, "verifySessionWalletFundingTransaction"), /feePayer/);
+  assert.match(functionBody(serverSource, "verifySessionWalletFundingTransaction"), /tx\.instructions\.length !== 1/);
+  assert.match(functionBody(serverSource, "verifySessionWalletFundingTransaction"), /SystemInstruction\.decodeTransfer/);
+  assert.match(functionBody(serverSource, "verifySessionWalletFundingTransaction"), /BigInt\(transfer\.lamports\) === amountLamports/);
+  assert.match(functionBody(serverSource, "verifySessionWalletFundingTransaction"), /signature/);
+  assert.match(functionBody(serverSource, "executeWebSessionWalletFunding"), /sendRawTransaction/);
+  assert.match(functionBody(serverSource, "executeWebSessionWalletFunding"), /confirmTransaction/);
+  assert.match(functionBody(serverSource, "executeWebSessionWalletFunding"), /sessionStatus = "funded"/);
+});
+
+test("server-side trade selectors only allow funded live session wallets", () => {
+  assert.match(functionBody(serverSource, "assertServerTradeWalletReady"), /sessionStatus !== "funded"/);
+  assert.match(functionBody(serverSource, "assertServerTradeWalletReady"), /sessionExpiresAt/);
+  assert.match(functionBody(serverSource, "getWebServerTradeWalletAt"), /assertServerTradeWalletReady/);
+  assert.match(functionBody(serverSource, "webTradeBuy"), /getWebServerTradeWalletAt/);
+  assert.match(functionBody(serverSource, "webTradeSellCore"), /getWebServerTradeWalletAt/);
+  assert.match(functionBody(serverSource, "webSelectedWallets"), /assertServerTradeWalletReady/);
 });

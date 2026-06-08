@@ -5986,6 +5986,7 @@ function connectWalletSection() {
 function automationDelegationHtml({ compact = false } = {}) {
   const connected = state.user?.connectedWallet;
   const managedCount = Array.isArray(state.wallets) ? state.wallets.length : 0;
+  const sessionWallets = state.wallets.filter((wallet) => wallet.sessionWallet);
   const permission = state.user?.automationPermission || {};
   const permissionActive = Boolean(state.user?.automationPermissionActive);
   const expires = permission.expiresAt ? formatDate(permission.expiresAt) : "";
@@ -5998,12 +5999,20 @@ function automationDelegationHtml({ compact = false } = {}) {
         <span class="delegation-mode-badge">${permissionActive ? "Automation Enabled" : "TP/SL Auto-Enabled"}</span>
         <h3>Automation Wallet</h3>
       </div>
-      <p>Server-side stop-loss, take-profit, and timer exits auto-enable for the active wallet session. Managed/imported SlimeWire wallets can run through the saved flow; browser wallets may still require provider signatures unless delegated signing is added later.</p>
+      <p>Server-side stop-loss, take-profit, and timer exits auto-enable for the active wallet session. Managed/imported SlimeWire wallets and funded session wallets can run through the saved flow.</p>
       <ul class="delegation-steps">
-        <li>Scope: managed/imported SlimeWire wallets only.</li>
+        <li>Scope: managed/imported/session SlimeWire wallets only.</li>
         <li>Allowed actions: TP/SL exits and timer exits.</li>
-        <li>Limit: sells up to 100% of the tracked position; revoke anytime.</li>
+        <li>Session limit: only the SOL you approve into the session wallet can be automated.</li>
       </ul>
+      <div class="session-wallet-controls">
+        <label>
+          Session Budget SOL
+          <input data-session-wallet-amount type="number" min="0.005" max="10" step="0.005" inputmode="decimal" value="0.10">
+        </label>
+        <button class="primary" type="button" data-create-session-wallet ${connected ? "" : "disabled"}>${sessionWallets.length ? "Fund New Session" : "Start Session Wallet"}</button>
+        <small>${connected ? "One wallet approval funds a limited session wallet for presets, Ogre A.I., TP/SL, timers, and sells." : "Connect Phantom/Solflare first to fund a session wallet."}</small>
+      </div>
       <div class="profile-actions">
         ${permissionActive ? `<button type="button" class="danger-lite" data-automation-permission="revoke">Disable TP/SL</button>` : `<button class="primary" type="button" data-automation-permission="enable">Enable TP/SL Now</button>`}
         <button class="primary" type="button" data-create-automation-wallet>${managedCount ? "Create Another" : "Create Automation Wallet"}</button>
@@ -6898,7 +6907,7 @@ function tradeHtml() {
             ${walletOptionsHtml(connected?.publicKey && !hasManagedWallets ? "connected" : "")}
           </select>
         </label>
-        ${connected?.publicKey ? `<small class="trade-wallet-note">Phantom/Solflare controls remain unlocked until signout or disconnect, but every buy/sell still requires wallet confirmation. True unattended TP/SL needs managed SlimeWire wallets.</small>` : ""}
+        ${connected?.publicKey ? `<small class="trade-wallet-note">Connected browser wallets stay ready for this session; every buy/sell still requires wallet confirmation. Use a funded session wallet for unattended TP/SL.</small>` : ""}
         <label>
           Slippage
           <select data-trade-slippage data-custom-select="trade-slippage">
@@ -7100,7 +7109,8 @@ function walletOptionsHtml(selectedIndex = "") {
   const managedOptions = state.wallets.map((wallet) => {
     const balance = state.balances.find((row) => Number(row.index) === Number(wallet.index));
     const sol = balance?.sol !== null && balance?.sol !== undefined ? `${Number(balance.sol).toFixed(4)} SOL` : "balance loading";
-    return `<option value="${wallet.index}" ${String(wallet.index) === String(selectedIndex || "") ? "selected" : ""}>${wallet.index}. ${escapeHtml(wallet.label)} - ${sol}</option>`;
+    const sessionLabel = wallet.sessionWallet ? " Session" : "";
+    return `<option value="${wallet.index}" ${String(wallet.index) === String(selectedIndex || "") ? "selected" : ""}>${wallet.index}. ${escapeHtml(wallet.label)}${sessionLabel} - ${sol}</option>`;
   }).join("");
   if (connectedOption || managedOptions) return `${connectedOption}${managedOptions}`;
   return `<option value="">No wallet connected</option>`;
@@ -9580,6 +9590,98 @@ async function createAutomationWallet() {
   }
 }
 
+function sessionWalletAmountFromTrigger(trigger = null) {
+  const root = trigger?.closest?.(".session-wallet-controls, .automation-delegation-card, .connected-wallet-card") || document;
+  const input = root.querySelector?.("[data-session-wallet-amount]") || $("[data-session-wallet-amount]");
+  const amount = normalizedQuickBuyAmount(input?.value || "0.10");
+  if (!amount) throw new Error("Enter a session wallet budget greater than zero.");
+  const numeric = Number(amount);
+  if (!Number.isFinite(numeric) || numeric < 0.005) throw new Error("Session wallet budget must be at least 0.005 SOL.");
+  if (numeric > 10) throw new Error("Session wallet budget is capped at 10 SOL per approval.");
+  return amount;
+}
+
+async function ensureConnectedWalletProfile(connected = connectedBrowserWallet()) {
+  if (!connected?.publicKey) throw new Error("Connect Phantom, Solflare, or another wallet before starting a session wallet.");
+  if (state.user?.connectedWallet?.publicKey === connected.publicKey) return;
+  const data = await api("/api/web/profile/connected-wallet", {
+    method: "POST",
+    body: JSON.stringify({
+      publicKey: connected.publicKey,
+      provider: connected.provider || "Browser Wallet"
+    })
+  });
+  applyUserFromApi(data.user || {
+    ...state.user,
+    connectedWallet: data.profile?.connectedWallet || null
+  });
+}
+
+async function createSessionWalletFromConnected(trigger = null) {
+  const status = $("[data-automation-delegation-status]") || $("[data-wallet-connect-status]");
+  const buttons = [...document.querySelectorAll("[data-create-session-wallet]")];
+  setError("");
+  buttons.forEach((button) => {
+    button.disabled = true;
+    writeText(button, "Opening...");
+  });
+  try {
+    const amountSol = sessionWalletAmountFromTrigger(trigger);
+    const { provider, connected } = await connectedTradeProvider();
+    await ensureWebAccount(status, "Creating secure web profile for session wallet...");
+    await ensureConnectedWalletProfile(connected);
+    state.automationDelegationStatus = "Creating session wallet and funding approval...";
+    writeText(status, state.automationDelegationStatus);
+    const data = await api("/api/web/session-wallet/create", {
+      method: "POST",
+      body: JSON.stringify({
+        amountSol,
+        label: `Session ${shortAddress(connected.publicKey)}`
+      }),
+      dedupe: false,
+      timeoutMs: API_LONG_ACTION_TIMEOUT_MS
+    });
+    state.wallets = Array.isArray(data.wallets) ? data.wallets : state.wallets;
+    state.downloads = data.downloads || state.downloads || null;
+    if (data.downloads?.encryptedBackup?.text) {
+      downloadText(data.downloads.encryptedBackup.filename, data.downloads.encryptedBackup.text);
+    }
+    if (data.downloads?.recoveryKeys?.text) {
+      downloadText(data.downloads.recoveryKeys.filename, data.downloads.recoveryKeys.text);
+    }
+    state.automationDelegationStatus = data.order?.message || "Approve session wallet funding in your wallet...";
+    writeText(status, state.automationDelegationStatus);
+    const signedTransaction = await signBrowserLegacyTransaction(data.order?.transaction, provider);
+    state.automationDelegationStatus = "Submitting session wallet funding...";
+    writeText(status, state.automationDelegationStatus);
+    const result = await api("/api/web/session-wallet/execute", {
+      method: "POST",
+      body: JSON.stringify({
+        sessionWalletAttemptId: data.order?.sessionWalletAttemptId,
+        signedTransaction
+      }),
+      dedupe: false,
+      timeoutMs: API_LONG_ACTION_TIMEOUT_MS
+    });
+    state.wallets = Array.isArray(result.wallets) ? result.wallets : state.wallets;
+    state.automationDelegationStatus = result.message || "Session wallet funded and ready.";
+    queuePostTradeRefresh(result.signature || "", "session-wallet-funded");
+    await refreshWalletNow({ force: true, deep: true, reason: "session-wallet-funded" });
+    state.activeTab = "wallets";
+    render({ force: true });
+  } catch (error) {
+    const message = publicErrorMessage(error.message || "Session wallet setup failed.");
+    state.automationDelegationStatus = message;
+    writeText(status, message);
+    setError(message);
+  } finally {
+    buttons.forEach((button) => {
+      button.disabled = false;
+      writeText(button, "Start Session Wallet");
+    });
+  }
+}
+
 async function updateAutomationPermission(action = "enable", options = {}) {
   const status = $("[data-automation-delegation-status]");
   const buttons = [...document.querySelectorAll("[data-automation-permission]")];
@@ -10500,6 +10602,21 @@ async function signBrowserTradeTransaction(transactionBase64, provider) {
     throw new Error("This wallet does not expose signTransaction here. Reconnect with Phantom/Solflare or use the wallet in-app browser.");
   }
   const tx = window.solanaWeb3.VersionedTransaction.deserialize(base64ToBytes(transactionBase64));
+  const signed = await provider.signTransaction(tx);
+  return bytesToBase64(signed.serialize());
+}
+
+async function signBrowserLegacyTransaction(transactionBase64, provider) {
+  if (!transactionBase64 || typeof transactionBase64 !== "string") {
+    throw new Error("SlimeWire could not build a wallet approval transaction. Try again.");
+  }
+  if (!window.solanaWeb3?.Transaction) {
+    throw new Error("Solana wallet signing library did not load. Refresh the page and try again.");
+  }
+  if (typeof provider.signTransaction !== "function") {
+    throw new Error("This wallet does not expose signTransaction here. Reconnect with Phantom/Solflare or use the wallet in-app browser.");
+  }
+  const tx = window.solanaWeb3.Transaction.from(base64ToBytes(transactionBase64));
   const signed = await provider.signTransaction(tx);
   return bytesToBase64(signed.serialize());
 }
@@ -11668,7 +11785,7 @@ function protectedBuyModalHtml() {
         <small>${escapeHtml(protectedBuyPresetSummary(preset))}</small>
         <small>Wallet: ${escapeHtml(protectedBuyWalletLabel(modal.walletIndex))}</small>
         <small>Priority fee: existing trade default.</small>
-        ${connectedWalletSelected ? `<small class="warning-text">Connected wallets still use normal wallet confirmation. Server TP/SL is only armed for managed SlimeWire wallets.</small>` : ""}
+        ${connectedWalletSelected ? `<small class="warning-text">Connected wallets still use normal wallet confirmation. Use a funded session wallet when you want server TP/SL armed like a managed wallet.</small>` : ""}
       </article>
       ${shield.verdict === "AVOID" ? `
         <label class="checkbox-line protected-buy-risk-line">
@@ -12611,9 +12728,10 @@ function walletsHtml() {
           <div class="wallet-row-main">
             <div class="user-avatar mini" aria-hidden="true">${userAvatarHtml(String(wallet.index))}</div>
             <div>
-            <strong>${wallet.index}. ${escapeHtml(wallet.label)}</strong>
+            <strong>${wallet.index}. ${escapeHtml(wallet.label)}${wallet.sessionWallet ? ` <span class="session-wallet-badge">${escapeHtml(wallet.sessionStatus === "funded" ? "Session Funded" : "Session")}</span>` : ""}</strong>
             <code>${wallet.publicKey}</code>
             ${walletBalanceLine(wallet)}
+            ${wallet.sessionWallet ? `<small>Session source: ${escapeHtml(shortAddress(wallet.sourceConnectedWallet || ""))}${wallet.fundingAmountSol ? ` | Budget ${escapeHtml(wallet.fundingAmountSol)} SOL` : ""}</small>` : ""}
             </div>
           </div>
           <div class="card-actions compact">
@@ -12652,11 +12770,12 @@ function connectedWalletCardHtml() {
         </div>
         ${balance.error ? `<small>Check failed: ${escapeHtml(balance.error)}</small>` : ""}
         ${tokenRows ? `<div class="connected-token-list">${tokenRows}</div>` : ""}
-        <small>${state.walletFastApprovalsEnabled ? "Fast approvals are on for connected-wallet prompts." : "Fast approvals are off."} Browser wallets still require wallet confirmation; managed wallets handle automated exits.</small>
+        <small>${state.walletFastApprovalsEnabled ? "Fast approvals are on for connected-wallet prompts." : "Fast approvals are off."} Start a session wallet when you want connected-wallet funds to behave like managed automation funds.</small>
       </div>
       <div class="card-actions">
         <button data-refresh-all>Refresh</button>
         <button data-copy="${escapeHtml(connected.publicKey)}">Copy</button>
+        <button type="button" data-create-session-wallet>Start Session</button>
         <button type="button" data-wallet-fast-approvals-toggle>${state.walletFastApprovalsEnabled ? "Fast Approvals On" : "Fast Approvals Off"}</button>
         <button type="button" data-connect-wallet="solana">Reconnect</button>
         <button type="button" data-disconnect-wallet>Disconnect</button>
@@ -15725,7 +15844,7 @@ function chartTradePanelHtml(token = {}, heldPosition = null) {
               })}
             </label>
           </div>
-          <small>${selectedConnectedWallet ? `${escapeHtml(connected?.provider || "Browser wallet")} approval opens in wallet. Choose a managed wallet when you need unattended TP/SL and timer exits.` : managedDefaultWallet ? "Managed wallet selected for unattended TP/SL and timer exits. Browser-wallet buys still need approval for exits." : "Choose a connected browser wallet or managed wallet. Managed wallets can arm TP/SL after buy."}</small>
+          <small>${selectedConnectedWallet ? `${escapeHtml(connected?.provider || "Browser wallet")} approval opens in wallet. Choose a funded session wallet when you need unattended TP/SL and timer exits.` : managedDefaultWallet ? "Managed/session wallet selected for unattended TP/SL and timer exits. Browser-wallet buys still need approval for exits." : "Choose a connected browser wallet or managed/session wallet. Session wallets can arm TP/SL after buy."}</small>
           <button type="button" class="primary chart-confirm-button" data-chart-confirm-buy="${escapeHtml(mint)}">Confirm Buy</button>
           <small class="chart-trade-status" data-chart-trade-status>${escapeHtml(state.chartTradeStatus || "")}</small>
         </div>
@@ -18307,7 +18426,7 @@ async function runOgreAgentAction(action = {}) {
   if (type === "approve_agent_auto_trade") {
     ogreAgentStoreAutoTradeApproval(true);
     ogreAgentStoreFastMode(true);
-    state.ogreAgentStatus = "Agent Auto-Trade is enabled for this session. SlimeWire managed wallets run directly through the saved trade flow; connected wallets stay site-approved until logout, close, or revoke.";
+    state.ogreAgentStatus = "Agent Auto-Trade is enabled for this session. SlimeWire managed/session wallets run directly through the saved trade flow; connected wallets still approve direct wallet trades.";
     pushOgreAgentMessage({
       role: "assistant",
       text: `${state.ogreAgentStatus}\nExternal wallet apps may still require their own signature prompts. Managed wallets can run through the saved SlimeWire flow.`,
@@ -18699,7 +18818,7 @@ async function sendOgreAgentMessage(overrideMessage = "") {
     if (!isOgreAgentAutoTradeApproved()) {
       pushOgreAgentMessage({
         role: "assistant",
-        text: "Connect or create a wallet and Auto-Trade becomes ready for this session. SlimeWire managed wallets can run through the saved flow; external wallet apps may still show their own signature prompt.",
+        text: "Connect or create a wallet and Auto-Trade becomes ready for this session. SlimeWire managed/session wallets can run through the saved flow; external wallet apps may still show their own signature prompt.",
         actions: [
           { label: "Auto-Trade On", type: "approve_agent_auto_trade" },
           { label: "Open Wallets", type: "open_tab", tab: "wallets" }
@@ -19722,6 +19841,12 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-create-wallets]")) await createWalletSet();
   if (target.matches("[data-create-automation-wallet]")) await createAutomationWallet();
+  if (target.matches("[data-create-session-wallet]")) {
+    event.preventDefault();
+    event.stopPropagation();
+    await createSessionWalletFromConnected(target);
+    return;
+  }
   if (target.matches("[data-tpsl-status-button]")) {
     if (target.dataset.tpslState === "enabled") {
       state.activeTab = "profile";

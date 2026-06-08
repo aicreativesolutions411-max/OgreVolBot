@@ -87,6 +87,7 @@ import {
   Keypair,
   LAMPORTS_PER_SOL,
   PublicKey,
+  SystemInstruction,
   SystemProgram,
   Transaction,
   TransactionInstruction,
@@ -2284,6 +2285,26 @@ async function handleWebApiRequest(request, response, requestUrl) {
     if (request.method === "POST" && pathname === "/api/web/wallets/create") {
       const body = await readJsonRequestBody(request);
       const result = await createWebWalletSet(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        ...result
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/session-wallet/create") {
+      const body = await readJsonRequestBody(request);
+      const result = await createWebSessionWalletOrder(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        ...result
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/session-wallet/execute") {
+      const body = await readJsonRequestBody(request);
+      const result = await executeWebSessionWalletFunding(auth.userId, body);
       sendWebJson(request, response, 200, {
         ok: true,
         ...result
@@ -18262,7 +18283,7 @@ function defaultJsonForPath(filePath) {
     case "trade-history.json":
       return { trades: [] };
     case "web-auth.json":
-      return { codes: [], sessions: [], profiles: {}, browserTradeOrders: [] };
+      return { codes: [], sessions: [], profiles: {}, browserTradeOrders: [], sessionWalletOrders: [] };
     case "lock-in-events.json":
       return { events: [] };
     case "terminal-feed-events.json":
@@ -18689,6 +18710,7 @@ async function readWebAuthStore() {
   if (!store.profiles || typeof store.profiles !== "object") store.profiles = {};
   if (!store.mobileWalletConnects || typeof store.mobileWalletConnects !== "object") store.mobileWalletConnects = {};
   if (!Array.isArray(store.browserTradeOrders)) store.browserTradeOrders = [];
+  if (!Array.isArray(store.sessionWalletOrders)) store.sessionWalletOrders = [];
   return store;
 }
 
@@ -23558,8 +23580,48 @@ async function webWalletRows(userId) {
     index: index + 1,
     label: wallet.label,
     publicKey: wallet.publicKey,
-    shortPublicKey: shortMint(wallet.publicKey)
+    shortPublicKey: shortMint(wallet.publicKey),
+    sessionWallet: Boolean(wallet.sessionWallet),
+    sessionStatus: wallet.sessionStatus || "",
+    sourceConnectedWallet: wallet.sourceConnectedWallet || "",
+    sessionExpiresAt: wallet.sessionExpiresAt || "",
+    fundingSignature: wallet.fundingSignature || "",
+    fundingAmountSol: wallet.fundingAmountLamports ? lamportsToSol(wallet.fundingAmountLamports) : ""
   }));
+}
+
+function webWalletRowFromRecord(record, index = 1) {
+  return {
+    index,
+    label: record.label,
+    publicKey: record.publicKey,
+    shortPublicKey: shortMint(record.publicKey),
+    sessionWallet: Boolean(record.sessionWallet),
+    sessionStatus: record.sessionStatus || "",
+    sourceConnectedWallet: record.sourceConnectedWallet || "",
+    sessionExpiresAt: record.sessionExpiresAt || "",
+    fundingSignature: record.fundingSignature || "",
+    fundingAmountSol: record.fundingAmountLamports ? lamportsToSol(record.fundingAmountLamports) : ""
+  };
+}
+
+function assertServerTradeWalletReady(wallet, context = "trading") {
+  if (!wallet?.secret) {
+    throw new Error(`${wallet?.label || "This wallet"} is not a server-signable SlimeWire wallet.`);
+  }
+  if (!wallet.sessionWallet) return wallet;
+  if (wallet.sessionStatus !== "funded") {
+    throw new Error(`${wallet.label || "Session wallet"} is not funded yet. Open Wallets and finish Start Session before using it for ${context}.`);
+  }
+  const expiresAt = Date.parse(wallet.sessionExpiresAt || "");
+  if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
+    throw new Error(`${wallet.label || "Session wallet"} has expired. Fund a new session wallet before using it for ${context}.`);
+  }
+  return wallet;
+}
+
+function getWebServerTradeWalletAt(store, oneBasedIndex, userId, context = "trading") {
+  return assertServerTradeWalletReady(getWalletAt(store, oneBasedIndex, userId), context);
 }
 
 async function createWebWalletSet(userId, body = {}) {
@@ -23623,6 +23685,260 @@ async function createWebWalletSet(userId, body = {}) {
       }
     }
   };
+}
+
+function pruneSessionWalletOrders(orders = []) {
+  const now = Date.now();
+  return (Array.isArray(orders) ? orders : [])
+    .filter((order) => Number(Date.parse(order.expiresAt || "")) > now || ["submitted", "complete"].includes(order.status))
+    .slice(-100);
+}
+
+async function saveSessionWalletOrder(order) {
+  const store = await readWebAuthStore();
+  store.sessionWalletOrders = pruneSessionWalletOrders(store.sessionWalletOrders);
+  const index = store.sessionWalletOrders.findIndex((item) => item.sessionWalletAttemptId === order.sessionWalletAttemptId);
+  if (index >= 0) store.sessionWalletOrders[index] = { ...store.sessionWalletOrders[index], ...order };
+  else store.sessionWalletOrders.push(order);
+  await writeWebAuthStore(store);
+}
+
+async function takePendingSessionWalletOrder(userId, sessionWalletAttemptId) {
+  const store = await readWebAuthStore();
+  store.sessionWalletOrders = pruneSessionWalletOrders(store.sessionWalletOrders);
+  const order = store.sessionWalletOrders.find((item) => (
+    item.sessionWalletAttemptId === sessionWalletAttemptId
+    && String(item.userId || "") === String(userId || "")
+  ));
+  if (!order) {
+    const error = new Error("Session wallet funding approval expired. Start a new session wallet.");
+    error.statusCode = 404;
+    throw error;
+  }
+  if (order.status !== "pending") {
+    const error = new Error("This session wallet funding approval was already submitted.");
+    error.statusCode = 409;
+    throw error;
+  }
+  if (Date.parse(order.expiresAt || "") <= Date.now()) {
+    order.status = "expired";
+    await writeWebAuthStore(store);
+    const error = new Error("Session wallet funding approval expired. Start a new session wallet.");
+    error.statusCode = 410;
+    throw error;
+  }
+  order.status = "submitting";
+  order.submittingAt = new Date().toISOString();
+  await writeWebAuthStore(store);
+  return order;
+}
+
+async function completePendingSessionWalletOrder(order, patch = {}) {
+  await saveSessionWalletOrder({
+    ...order,
+    ...patch,
+    updatedAt: new Date().toISOString()
+  });
+}
+
+function sessionWalletFundingAmountLamports(body = {}) {
+  const amountSol = parsePositiveNumber(String(body.amountSol || "0.1"));
+  if (amountSol < 0.005) {
+    throw new Error("Session wallet budget must be at least 0.005 SOL.");
+  }
+  if (amountSol > 10) {
+    throw new Error("Session wallet budget is capped at 10 SOL per approval.");
+  }
+  return solToLamports(amountSol);
+}
+
+function verifySessionWalletFundingTransaction(tx, order) {
+  const source = new PublicKey(order.sourcePublicKey);
+  const destination = new PublicKey(order.sessionWalletPublicKey);
+  const amountLamports = BigInt(order.amountLamports || 0);
+  if (!tx?.feePayer?.equals(source)) {
+    throw new Error("Session wallet funding transaction has the wrong source wallet.");
+  }
+  if (!Array.isArray(tx.instructions) || tx.instructions.length !== 1) {
+    throw new Error("Session wallet funding transaction was changed. Start a new session wallet.");
+  }
+  if (tx.recentBlockhash !== order.blockhash) {
+    throw new Error("Session wallet funding approval expired. Start a new session wallet.");
+  }
+  const signer = tx.signatures?.find((item) => item.publicKey?.equals?.(source));
+  if (!signer?.signature) {
+    throw new Error("Session wallet funding transaction is missing the connected wallet signature.");
+  }
+  const hasFundingTransfer = tx.instructions.some((instruction) => {
+    if (!instruction.programId.equals(SystemProgram.programId)) return false;
+    try {
+      const transfer = SystemInstruction.decodeTransfer(instruction);
+      return transfer.fromPubkey.equals(source)
+        && transfer.toPubkey.equals(destination)
+        && BigInt(transfer.lamports) === amountLamports;
+    } catch {
+      return false;
+    }
+  });
+  if (!hasFundingTransfer) {
+    throw new Error("Session wallet funding transaction does not match the approved budget.");
+  }
+}
+
+async function createWebSessionWalletOrder(userId, body = {}) {
+  const profile = await webProfileForUser(userId);
+  const connected = profile.connectedWallet || {};
+  if (!connected.publicKey) {
+    const error = new Error("Connect Phantom, Solflare, or another browser wallet before starting a session wallet.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const sourcePublicKey = parsePublicKey(connected.publicKey);
+  const amountLamports = sessionWalletFundingAmountLamports(body);
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + 10 * 60 * 1000).toISOString();
+  const sessionExpiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString();
+  const store = await readWalletStore();
+  const keypair = Keypair.generate();
+  const label = cleanLabel(String(body.label || `Session ${shortMint(sourcePublicKey.toBase58())}`));
+  const record = {
+    ...walletRecord(label, keypair, userId),
+    sessionWallet: true,
+    sessionStatus: "pending-funding",
+    sourceConnectedWallet: sourcePublicKey.toBase58(),
+    sessionCreatedAt: now.toISOString(),
+    sessionExpiresAt,
+    sessionBudgetLamports: String(amountLamports)
+  };
+  store.wallets.push(record);
+  const walletIndex = walletsForOwner(store, userId).findIndex((wallet) => wallet.publicKey === record.publicKey) + 1;
+  await writeWalletStore(store);
+
+  const latestBlockhash = await rpcWithRetry("get session wallet funding blockhash", () => connection.getLatestBlockhash("confirmed"), CONFIG.rpcRetries, { priority: true });
+  const tx = new Transaction({
+    recentBlockhash: latestBlockhash.blockhash,
+    feePayer: sourcePublicKey
+  }).add(SystemProgram.transfer({
+    fromPubkey: sourcePublicKey,
+    toPubkey: keypair.publicKey,
+    lamports: amountLamports
+  }));
+  const sessionWalletAttemptId = `session-wallet-${crypto.randomUUID()}`;
+  const pending = {
+    sessionWalletAttemptId,
+    userId,
+    status: "pending",
+    provider: connected.provider || "Browser Wallet",
+    sourcePublicKey: sourcePublicKey.toBase58(),
+    sessionWalletPublicKey: record.publicKey,
+    walletIndex,
+    amountLamports: String(amountLamports),
+    blockhash: latestBlockhash.blockhash,
+    lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+    createdAt: now.toISOString(),
+    expiresAt
+  };
+  await saveSessionWalletOrder(pending);
+  await audit("web_session_wallet_order", {
+    userId,
+    provider: pending.provider,
+    sourcePublicKey: pending.sourcePublicKey,
+    sessionWalletPublicKey: pending.sessionWalletPublicKey,
+    walletIndex,
+    amountSol: lamportsToSol(amountLamports)
+  });
+
+  return {
+    wallet: webWalletRowFromRecord(record, walletIndex),
+    wallets: await webWalletRows(userId),
+    downloads: webBackupDownloadsForWallets(
+      userId,
+      [record],
+      label,
+      "Automatic backup for a connected-wallet funded session trading wallet."
+    ),
+    order: {
+      sessionWalletAttemptId,
+      provider: pending.provider,
+      sourcePublicKey: pending.sourcePublicKey,
+      sessionWalletPublicKey: pending.sessionWalletPublicKey,
+      walletIndex,
+      amountSol: lamportsToSol(amountLamports),
+      expiresAt,
+      transaction: tx.serialize({ requireAllSignatures: false, verifySignatures: false }).toString("base64"),
+      message: `Approve ${lamportsToSol(amountLamports)} SOL funding in ${pending.provider}.`
+    }
+  };
+}
+
+async function executeWebSessionWalletFunding(userId, body = {}) {
+  const sessionWalletAttemptId = String(body.sessionWalletAttemptId || "").trim();
+  if (!sessionWalletAttemptId) {
+    const error = new Error("Missing session wallet funding attempt ID.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const signedTransaction = String(body.signedTransaction || "").trim();
+  if (!/^[a-z0-9+/=]+$/i.test(signedTransaction) || signedTransaction.length < 100 || signedTransaction.length > 250_000) {
+    const error = new Error("Signed session wallet funding transaction is missing or invalid.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const pending = await takePendingSessionWalletOrder(userId, sessionWalletAttemptId);
+  let tx;
+  try {
+    tx = Transaction.from(Buffer.from(signedTransaction, "base64"));
+    verifySessionWalletFundingTransaction(tx, pending);
+    const signature = await rpcWithRetry("send session wallet funding", () => connection.sendRawTransaction(tx.serialize(), {
+      skipPreflight: false,
+      maxRetries: 10
+    }), CONFIG.rpcRetries, { priority: true });
+    await rpcWithRetry("confirm session wallet funding", () => connection.confirmTransaction({
+      signature,
+      blockhash: pending.blockhash,
+      lastValidBlockHeight: pending.lastValidBlockHeight
+    }, "confirmed"), CONFIG.rpcRetries, { priority: true });
+
+    const walletStore = await readWalletStore();
+    const wallet = walletsForOwner(walletStore, userId).find((item) => item.publicKey === pending.sessionWalletPublicKey);
+    if (wallet) {
+      wallet.sessionStatus = "funded";
+      wallet.sessionFundedAt = new Date().toISOString();
+      wallet.fundingSignature = signature;
+      wallet.fundingAmountLamports = pending.amountLamports;
+      wallet.sessionBudgetLamports = pending.amountLamports;
+      await writeWalletStore(walletStore);
+      invalidateWalletReadCache(wallet.publicKey);
+    }
+    invalidateWalletReadCache(pending.sourcePublicKey);
+    await completePendingSessionWalletOrder(pending, {
+      status: "complete",
+      signature,
+      completedAt: new Date().toISOString()
+    });
+    await audit("web_session_wallet_funded", {
+      userId,
+      sourcePublicKey: pending.sourcePublicKey,
+      sessionWalletPublicKey: pending.sessionWalletPublicKey,
+      walletIndex: pending.walletIndex,
+      amountSol: lamportsToSol(pending.amountLamports),
+      signature
+    });
+    return {
+      signature,
+      wallet: wallet ? webWalletRowFromRecord(wallet, pending.walletIndex) : null,
+      wallets: await webWalletRows(userId),
+      message: `Session wallet funded with ${lamportsToSol(pending.amountLamports)} SOL. It is now available for presets, Ogre A.I., TP/SL, timer exits, and sells.`
+    };
+  } catch (error) {
+    await completePendingSessionWalletOrder(pending, {
+      status: "failed",
+      error: friendlyError(error),
+      failedAt: new Date().toISOString()
+    }).catch(() => {});
+    throw error;
+  }
 }
 
 async function restoreWebWalletBackup(userId, body = {}) {
@@ -23950,7 +24266,7 @@ function webQuickBuyAutoExitBody(body = {}) {
 
 async function webTradeBuy(userId, body = {}) {
   const store = await readWalletStore();
-  const wallet = getWalletAt(store, parseWebWalletIndex(body.walletIndex), userId);
+  const wallet = getWebServerTradeWalletAt(store, parseWebWalletIndex(body.walletIndex), userId, "quick buy");
   const tokenMint = parsePublicKey(String(body.tokenMint || "")).toBase58();
   const slippageBps = parseWebSlippage(body.slippageBps);
   const autoExitBody = webQuickBuyAutoExitBody(body);
@@ -24308,7 +24624,7 @@ async function webTradeSell(userId, body = {}, options = {}) {
 async function webTradeSellCore(userId, body = {}, options = {}, attempt = {}) {
   const backendStartedAt = Date.now();
   const store = await readWalletStore();
-  const wallet = getWalletAt(store, parseWebWalletIndex(body.walletIndex), userId);
+  const wallet = getWebServerTradeWalletAt(store, parseWebWalletIndex(body.walletIndex), userId, "manual sell");
   const tokenMint = parsePublicKey(String(body.tokenMint || "")).toBase58();
   const percent = parsePercent(String(body.percent || "100"));
   const slippageBps = parseWebSlippage(body.slippageBps);
@@ -24506,7 +24822,7 @@ async function webCreateTradePlan(userId, body = {}) {
   const store = await readWalletStore();
   const wallets = Array.isArray(body.walletIndexes) || String(body.walletGroup || "").trim()
     ? webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup)
-    : [getWalletAt(store, parseWebWalletIndex(body.walletIndex || "1"), userId)];
+    : [getWebServerTradeWalletAt(store, parseWebWalletIndex(body.walletIndex || "1"), userId, "managed trade")];
   return webCreateManagedBuyPlan(userId, wallets, body, {
     source: "web_trade_plan",
     label: "Managed trade",
@@ -24703,7 +25019,7 @@ async function webCreateVolumePlan(userId, body = {}) {
   const store = await readWalletStore();
   const wallets = Array.isArray(body.walletIndexes) || String(body.walletGroup || "").trim()
     ? webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup)
-    : [getWalletAt(store, parseWebWalletIndex(body.walletIndex), userId)];
+    : [getWebServerTradeWalletAt(store, parseWebWalletIndex(body.walletIndex), userId, "volume plan")];
   return webCreateManagedBuyPlan(userId, wallets, body, {
     source: "web_volume",
     label: "Volume plan",
@@ -26878,7 +27194,7 @@ function webSelectedWallets(store, userId, walletIndexes, walletGroup = "") {
   }
 
   return uniqueIndexes.map((index) => ({
-    ...getWalletAt(store, index, userId),
+    ...assertServerTradeWalletReady(getWalletAt(store, index, userId), "server trading"),
     webIndex: index
   }));
 }
