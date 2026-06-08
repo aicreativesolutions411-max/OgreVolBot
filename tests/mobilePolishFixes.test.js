@@ -70,6 +70,19 @@ test("final mobile density pass keeps ticker menus and trading controls small", 
   assert.match(cssSource, /tabs \.nav-tool-group\[open\] button[\s\S]*display: flex !important/);
 });
 
+test("mobile-only compression keeps wallet and controls out of the way", () => {
+  assert.match(cssSource, /MOBILE_ONLY_TERMINAL_COMPRESSION_20260607_V4/);
+  assert.match(functionBody(appSource, "toggleMarketTickerItem"), /--ticker-menu-left[\s\S]*--ticker-menu-top/);
+  assert.match(cssSource, /swamp-ticker-item\[open\] \.swamp-ticker-links[\s\S]*left: var\(--ticker-menu-left/);
+  assert.match(cssSource, /top-sync-strip \[data-top-refresh-wallet\][\s\S]*display: inline-flex !important/);
+  assert.match(cssSource, /top-sync-strip \[data-sync-health\][\s\S]*display: none !important/);
+  assert.match(cssSource, /\[data-dashboard\] > \.metrics[\s\S]*display: none !important/);
+  assert.match(cssSource, /terminal-title-row > span[\s\S]*display: none !important/);
+  assert.match(cssSource, /command-controls \.terminal-quick-buy-bar[\s\S]*display: contents !important/);
+  assert.match(cssSource, /terminal-launch-filter:not\(\.is-open\) \.terminal-launch-filter-head span[\s\S]*display: none !important/);
+  assert.match(cssSource, /tabs \.nav-tool-group\[open\] button[\s\S]*height: 36px !important/);
+});
+
 test("mobile feed refresh preserves scroll and avoids the start flicker render", () => {
   assert.match(functionBody(appSource, "captureStableFeedScrollSnapshot"), /documentY:[\s\S]*panelScrollTop:[\s\S]*dashboardScrollTop:/);
   assert.match(functionBody(appSource, "restoreStableFeedScrollSnapshot"), /restoreRawScrollPositions[\s\S]*document\.scrollingElement/);

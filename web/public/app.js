@@ -961,6 +961,10 @@ function syncMarketTickerMenuState() {
   document.querySelectorAll("[data-market-ticker]").forEach((ticker) => {
     const hasOpenMenu = Boolean(ticker.querySelector("details.swamp-ticker-item[open]"));
     ticker.classList.toggle("is-ticker-menu-open", hasOpenMenu);
+    if (!hasOpenMenu) {
+      ticker.style.removeProperty("--ticker-menu-left");
+      ticker.style.removeProperty("--ticker-menu-top");
+    }
   });
 }
 
@@ -977,6 +981,17 @@ function toggleMarketTickerItem(details) {
   const shouldOpen = !details.open;
   closeMarketTickerMenus(details);
   details.open = shouldOpen;
+  if (shouldOpen) {
+    const ticker = details.closest("[data-market-ticker]");
+    const summary = details.querySelector("summary");
+    const rect = summary?.getBoundingClientRect?.();
+    if (ticker && rect) {
+      const left = Math.max(10, Math.min(window.innerWidth - 10, rect.left + rect.width / 2));
+      const top = Math.max(30, rect.bottom + 4);
+      ticker.style.setProperty("--ticker-menu-left", `${Math.round(left)}px`);
+      ticker.style.setProperty("--ticker-menu-top", `${Math.round(top)}px`);
+    }
+  }
   syncMarketTickerMenuState();
 }
 
