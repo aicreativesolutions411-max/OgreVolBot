@@ -479,6 +479,7 @@ let positionRefreshVisualTimer = null;
 let positionsValueRefreshTimer = null;
 let autoExitCheckInFlight = false;
 let autoExitWatchTimers = [];
+let loginModalReturnFocus = null;
 let walletRefreshPromise = null;
 let positionsRefreshPromise = null;
 let positionsRefreshPromiseKey = "";
@@ -1740,6 +1741,56 @@ function focusLoginField(connectPanel = state.route === "connect") {
   }, 0);
 }
 
+function rememberLoginModalReturnFocus() {
+  const active = document.activeElement;
+  if (active instanceof HTMLElement && !active.closest("[data-login-modal]")) {
+    loginModalReturnFocus = active;
+  }
+}
+
+function restoreLoginModalReturnFocus() {
+  const target = loginModalReturnFocus;
+  loginModalReturnFocus = null;
+  window.setTimeout(() => {
+    if (target?.isConnected && typeof target.focus === "function") {
+      target.focus({ preventScroll: true });
+    }
+  }, 0);
+}
+
+function closeLoginModal({ restoreFocus = true } = {}) {
+  const wasOpen = Boolean(state.loginModalOpen);
+  state.loginCollapsed = true;
+  state.loginModalOpen = false;
+  render({ force: true });
+  if (wasOpen && restoreFocus) restoreLoginModalReturnFocus();
+}
+
+function loginModalFocusableElements() {
+  if (!loginModal || loginModal.hidden || !state.loginModalOpen) return [];
+  return [...loginModal.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+    .filter((element) => !element.closest("[hidden]") && element.offsetParent !== null);
+}
+
+function trapLoginModalFocus(event) {
+  if (!state.loginModalOpen || event.key !== "Tab" || !loginModal || loginModal.hidden) return false;
+  const focusable = loginModalFocusableElements();
+  if (!focusable.length) return false;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus({ preventScroll: true });
+    return true;
+  }
+  if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus({ preventScroll: true });
+    return true;
+  }
+  return false;
+}
+
 function currentReturnPath() {
   try {
     return `${window.location.pathname || "/terminal"}${window.location.search || ""}${window.location.hash || ""}`;
@@ -1794,6 +1845,7 @@ function recordLockInClicked(source = "unknown") {
 }
 
 function openLoginModal({ defaultTab = "login", returnTo = currentReturnPath(), source = "unknown", connectPanel = state.route === "connect" } = {}) {
+  rememberLoginModalReturnFocus();
   recordLockInClicked(source);
   state.loginModalOpen = true;
   state.loginModalTab = defaultTab === "create" ? "create" : "login";
@@ -2164,7 +2216,7 @@ async function createWebAccount() {
     state.loginCollapsed = true;
     state.loginModalOpen = false;
     state.activeTab = "dashboard";
-    writeText(status, credentials.username ? "Account created. Login saved." : "Account created.");
+    writeText(status, credentials.username ? "Account created. Login saved." : "Quick web account created.");
     queuePostTradeRefresh(data.trade?.signature, "account-create");
   } catch (error) {
     writeText(status, error.message);
@@ -2204,12 +2256,18 @@ function emailCodeValueFromForm() {
   return firstFormValue(["[data-connect-login-code]", "[data-login-code]"]).trim();
 }
 
+function validateEmailLoginValue(email = "") {
+  const value = String(email || "").trim();
+  if (!value) throw new Error("Enter the email saved on your web account.");
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) throw new Error("Enter a valid email address.");
+  return value;
+}
+
 async function sendEmailLoginCode() {
   setError("");
   const status = loginStatusElement();
   try {
-    const email = emailLoginValueFromForm();
-    if (!email) throw new Error("Enter the email saved on your web account.");
+    const email = validateEmailLoginValue(emailLoginValueFromForm());
     writeText(status, "Sending login code...");
     const data = await api("/api/web/email-code", {
       method: "POST",
@@ -2226,12 +2284,13 @@ async function emailCodeLogin() {
   setError("");
   const status = loginStatusElement();
   try {
+    const email = validateEmailLoginValue(emailLoginValueFromForm());
     const code = emailCodeValueFromForm();
     if (!code) throw new Error("Enter the login code from your email.");
     writeText(status, "Checking login code...");
     const data = await api("/api/web/login", {
       method: "POST",
-      body: JSON.stringify({ code })
+      body: JSON.stringify({ email, code })
     });
     state.token = data.token;
     applyUserFromApi(data.user);
@@ -5072,6 +5131,7 @@ function render(options = {}) {
   if (loginModal) {
     loginModal.hidden = !loginModalVisible;
     loginModal.setAttribute("aria-hidden", loginModalVisible ? "false" : "true");
+    loginModal.toggleAttribute("inert", !loginModalVisible);
     document.body.classList.toggle("login-modal-open", loginModalVisible);
     document.querySelectorAll("[data-login-tab]").forEach((button) => {
       const active = button.dataset.loginTab === state.loginModalTab;
@@ -9445,6 +9505,13 @@ async function updateAutomationPermission(action = "enable", options = {}) {
   const status = $("[data-automation-delegation-status]");
   const buttons = [...document.querySelectorAll("[data-automation-permission]")];
   const enable = action !== "revoke";
+  if (enable && !hasTpSlAutomationWalletContext()) {
+    state.automationDelegationStatus = "Connect or create a wallet before enabling TP/SL.";
+    writeText(status, state.automationDelegationStatus);
+    setError(state.automationDelegationStatus);
+    updateTopTpSlStatus();
+    return;
+  }
   setTpslAutoRevokedThisSession(!enable, options.scope || "");
   state.automationDelegationStatus = enable ? (options.auto ? "TP/SL auto-enabled for this wallet session..." : "Enabling server exits...") : "Revoking server exits...";
   writeText(status, state.automationDelegationStatus);
@@ -18606,6 +18673,8 @@ document.addEventListener("pointerup", (event) => {
 }, { capture: true });
 
 document.addEventListener("keydown", (event) => {
+  if (trapLoginModalFocus(event)) return;
+
   const agentInput = event.target?.closest?.("[data-ogre-agent-input]");
   if (agentInput && event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
@@ -18645,9 +18714,7 @@ document.addEventListener("keydown", (event) => {
     closeQuickBuyModal();
     return;
   }
-  state.loginCollapsed = true;
-  state.loginModalOpen = false;
-  render({ force: true });
+  closeLoginModal();
 });
 
 function prefetchTokenChartFromElement(element = null, source = "interaction") {
@@ -19145,9 +19212,7 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-web-signup]")) await createWebAccount();
   if (target.matches("[data-web-password-login]")) await passwordLogin();
   if (target.matches("[data-close-login]")) {
-    state.loginCollapsed = true;
-    state.loginModalOpen = false;
-    render({ force: true });
+    closeLoginModal();
     return;
   }
   if (target.matches("[data-web-signup-connect]")) {

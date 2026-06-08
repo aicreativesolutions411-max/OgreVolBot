@@ -18277,3 +18277,57 @@ html body main.shell[data-app][data-route="terminal"] .clip-record-button {
     min-height: 34px !important;
   }
 }
+
+/* FUNCTIONAL_QA_SWEEP_20260608_V1: overflow and focus hardening without changing layout direction. */
+html,
+body {
+  max-width: 100% !important;
+  overflow-x: clip !important;
+}
+
+@supports not (overflow-x: clip) {
+  html,
+  body {
+    overflow-x: hidden !important;
+  }
+}
+
+main.shell[data-app],
+main.shell[data-app] > .topbar,
+main.shell[data-app] .topbar-right,
+main.shell[data-app] .swamp-market-ticker,
+main.shell[data-app] .swamp-ticker-mask {
+  max-width: 100% !important;
+  min-width: 0 !important;
+}
+
+main.shell[data-app] .swamp-market-ticker,
+main.shell[data-app] .swamp-ticker-mask {
+  overflow-x: clip !important;
+}
+
+main.shell[data-app] .swamp-ticker-item summary,
+main.shell[data-app] .swamp-ticker-links a {
+  min-height: 30px !important;
+  touch-action: manipulation !important;
+}
+
+main.shell[data-app] .swamp-ticker-item img {
+  aspect-ratio: 1 / 1 !important;
+  object-fit: cover !important;
+}
+
+.login-modal[aria-hidden="true"],
+.login-modal[aria-hidden="true"] * {
+  pointer-events: none !important;
+}
+
+@media (max-width: 480px) {
+  main.shell[data-app] .swamp-ticker-links {
+    max-width: min(86vw, 280px) !important;
+  }
+
+  main.shell[data-app] .swamp-ticker-links a {
+    white-space: nowrap !important;
+  }
+}
