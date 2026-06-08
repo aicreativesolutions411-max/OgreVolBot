@@ -107,8 +107,10 @@ test("Chart route has professional Buy and Sell panel", () => {
   assert.match(panel, /data-chart-confirm-buy/);
   assert.match(panel, /data-chart-confirm-sell/);
   assert.match(panel, /managedDefaultWallet/);
+  assert.match(panel, /sessionDefaultWallet/);
   assert.match(panel, /presetWalletIndex/);
-  assert.match(panel, /walletSelected = state\.chartBuyWalletIndex \|\| \(connected\?\.publicKey \? "connected" : \(presetWalletIndex \|\| managedDefaultWallet\)\)/);
+  assert.match(panel, /connectedDefaultWallet/);
+  assert.match(panel, /walletSelected = state\.chartBuyWalletIndex \|\| \(connectedDefaultWallet \|\| \(sessionDefaultWallet\?\.index \? String\(sessionDefaultWallet\.index\) : ""\) \|\| presetWalletIndex \|\| managedDefaultWallet/);
   assert.match(panel, /selectedConnectedWallet/);
   assert.match(panel, /chartSlippageBps/);
   assert.match(panel, /chartTakeProfitPct/);

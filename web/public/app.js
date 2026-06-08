@@ -10529,6 +10529,54 @@ function isConnectedTradeWallet(walletIndex = "") {
   return String(walletIndex || "").trim().toLowerCase() === "connected";
 }
 
+function isFundedSessionTradeWallet(wallet = {}) {
+  if (!wallet?.sessionWallet || wallet.sessionStatus !== "funded") return false;
+  const expiresAt = Date.parse(wallet.sessionExpiresAt || "");
+  return !Number.isFinite(expiresAt) || expiresAt > Date.now();
+}
+
+function preferredFundedSessionWallet() {
+  const wallets = Array.isArray(state.wallets) ? state.wallets : [];
+  for (let index = wallets.length - 1; index >= 0; index -= 1) {
+    if (isFundedSessionTradeWallet(wallets[index])) return wallets[index];
+  }
+  return null;
+}
+
+function connectedWalletCanSignNow(connected = connectedBrowserWallet()) {
+  if (!connected?.publicKey) return false;
+  const providerId = providerIdForConnectedWallet(connected);
+  const provider = walletProviderById(providerId) || walletProviderById("solana");
+  return Boolean(provider && typeof provider.signTransaction === "function");
+}
+
+function connectedMobileCannotSignMessage(connected = connectedBrowserWallet()) {
+  const label = connected?.provider || walletProviderLabel(providerIdForConnectedWallet(connected));
+  return `${label} is connected, but this mobile browser cannot sign trades after the wallet-app handoff. Open SlimeWire inside the ${label} in-app browser, or fund a Session Wallet once so buys, sells, TP/SL, and Ogre A.I. can run without reconnect loops.`;
+}
+
+function resolveConnectedTradeForm(form = {}, { side = "trade", statusWriter = setTradeStatus, allowSessionFallback = true } = {}) {
+  if (!isConnectedTradeWallet(form.walletIndex)) {
+    return { form, sessionWallet: null };
+  }
+  if (connectedWalletCanSignNow()) {
+    return { form, sessionWallet: null };
+  }
+  const sessionWallet = allowSessionFallback ? preferredFundedSessionWallet() : null;
+  if (sessionWallet?.index) {
+    const message = `Using Session Wallet ${sessionWallet.index} for ${side}; mobile wallet signing is not available in this browser.`;
+    if (typeof statusWriter === "function") statusWriter(message);
+    return {
+      form: {
+        ...form,
+        walletIndex: String(sessionWallet.index)
+      },
+      sessionWallet
+    };
+  }
+  throw new Error(connectedMobileCannotSignMessage());
+}
+
 function bytesToBase64(bytes) {
   const chunks = [];
   const size = 0x8000;
@@ -10557,6 +10605,11 @@ async function promptConnectedWalletReconnect(connected = connectedBrowserWallet
   const providerId = providerIdForConnectedWallet(connected);
   const label = connected?.provider || walletProviderLabel(providerId);
   openWalletConnectChooser({ returnPath });
+  if (isMobileWalletPlatform() && connected?.publicKey && !walletProviderById(providerId)) {
+    const message = connectedMobileCannotSignMessage(connected);
+    setWalletConnectStatus(message);
+    return message;
+  }
   if (mobileWalletConnectAvailable(providerId)) {
     const message = `${label} needs to reconnect before it can sign here. Opening ${label} mobile connect now.`;
     setWalletConnectStatus(message);
@@ -10577,8 +10630,17 @@ async function connectedTradeProvider() {
   const providerId = providerIdForConnectedWallet(connected);
   const provider = walletProviderById(providerId) || walletProviderById("solana");
   if (!provider) {
+    if (isMobileWalletPlatform() && connected?.publicKey) {
+      throw new Error(connectedMobileCannotSignMessage(connected));
+    }
     const message = await promptConnectedWalletReconnect(connected, { returnPath: currentReturnPath() || "/terminal/trade" });
     throw new Error(message);
+  }
+  if (typeof provider.signTransaction !== "function") {
+    if (isMobileWalletPlatform() && connected?.publicKey) {
+      throw new Error(connectedMobileCannotSignMessage(connected));
+    }
+    throw new Error("This wallet does not expose signTransaction here. Reconnect with Phantom/Solflare or use the wallet in-app browser.");
   }
   const providerKey = provider.publicKey?.toBase58?.() || provider.publicKey?.toString?.() || "";
   if (providerKey !== connected.publicKey) {
@@ -10749,7 +10811,7 @@ async function executeWebBuy(amountSol, amountMode = "fixed") {
   let actionDetail = amountMode === "max" ? "max" : String(amountSol || "custom");
   let tradeAttemptId = "";
   try {
-    const form = readTradeForm("buy");
+    let form = readTradeForm("buy");
     actionDetail = amountMode === "max" ? "max" : String(amountSol || "custom");
     const active = activeTradeAction("trade-buy", form.tokenMint, actionDetail);
     if (active) {
@@ -10778,6 +10840,10 @@ async function executeWebBuy(amountSol, amountMode = "fixed") {
       if (!Number.isFinite(value) || value <= 0) throw new Error("Enter a buy amount greater than zero.");
       payload.amountSol = String(value);
     }
+
+    const resolved = resolveConnectedTradeForm(form, { side: "buy", statusWriter: setTradeStatus });
+    form = resolved.form;
+    payload.walletIndex = form.walletIndex;
 
     if (isConnectedTradeWallet(form.walletIndex)) {
       setTradeAction("trade-buy", form.tokenMint, actionDetail, {
@@ -10927,6 +10993,8 @@ async function executeWebSell(percent) {
       requestId: manualSellAttemptId,
       details: `${shortAddress(form.tokenMint)}:${value}`
     });
+    const resolved = resolveConnectedTradeForm(form, { side: "sell", statusWriter: setTradeStatus });
+    form = resolved.form;
     if (isConnectedTradeWallet(form.walletIndex)) {
       applyActionButtonStates();
       const requestStartedAt = perfNow();
@@ -11889,6 +11957,11 @@ async function executeQuickBuyAmount({
   const autoExitEnabled = isEnabledTradeTarget(takeProfitPct)
     || isEnabledTradeTarget(stopLossPct)
     || isEnabledTradeTarget(exitSettings.sellDelay);
+  let form = { tokenMint, walletIndex, slippageBps };
+  const statusWriter = state.quickBuyModal?.open ? (message) => setQuickBuyModalStatus(message, "") : setTradeStatus;
+  const resolved = resolveConnectedTradeForm(form, { side: "buy", statusWriter });
+  form = resolved.form;
+  walletIndex = form.walletIndex;
   state.quickBuyLast = {
     source,
     tokenMint,
@@ -11910,7 +11983,6 @@ async function executeQuickBuyAmount({
     error: "",
     tradeAttemptId
   };
-  const form = { tokenMint, walletIndex, slippageBps };
   if (isConnectedTradeWallet(walletIndex)) {
     setQuickBuyModalStatus("Opening wallet approval...", "");
     applyActionButtonStates();
@@ -11921,7 +11993,7 @@ async function executeQuickBuyAmount({
       amountSol: String(value),
       amountMode: "fixed",
       attemptId: tradeAttemptId,
-      statusWriter: state.quickBuyModal?.open ? (message) => setQuickBuyModalStatus(message, "") : setTradeStatus
+      statusWriter
     });
     state.quickBuyLast = { ...state.quickBuyLast, status: "submitted" };
     if (autoExitEnabled) {
@@ -11977,20 +12049,23 @@ async function executeChartConnectedBuy(tokenMint = "") {
   const value = Number(amountSol);
   if (!tokenMint) throw new Error("Select a token before buying.");
   if (!Number.isFinite(value) || value <= 0) throw new Error("Enter a buy amount greater than zero.");
-  const walletIndex = $("[data-chart-buy-wallet]")?.value || "";
-  if (!isConnectedTradeWallet(walletIndex)) throw new Error("Choose the connected wallet before using browser-wallet approval.");
+  let walletIndex = $("[data-chart-buy-wallet]")?.value || "";
+  if (!walletIndex) throw new Error("Choose a wallet before buying.");
   const tradeAttemptId = createClientAttemptId("chart-buy");
-  const form = {
+  let form = {
     tokenMint,
     walletIndex,
     slippageBps: $("[data-chart-buy-slippage]")?.value || "400"
   };
+  const resolved = resolveConnectedTradeForm(form, { side: "chart buy", statusWriter: setChartTradeStatus });
+  form = resolved.form;
+  walletIndex = form.walletIndex;
   const active = activeTradeAction("trade-buy", tokenMint, String(amountSol));
   if (active) return state.tradeResult;
   state.quickBuyLast = {
     source: "chart-buy-panel",
     tokenMint,
-    walletConnected: true,
+    walletConnected: isConnectedTradeWallet(walletIndex),
     customAmountValid: true,
     presetAmount: "",
     tradeAttemptId,
@@ -12002,29 +12077,71 @@ async function executeChartConnectedBuy(tokenMint = "") {
     tradeAttemptId,
     clickedAt: new Date().toISOString()
   });
-  setChartTradeStatus("Opening wallet approval...");
+  setChartTradeStatus(isConnectedTradeWallet(walletIndex) ? "Opening wallet approval..." : "Submitting Session Wallet buy...");
   recordPerfEvent({
     component: "post-trade",
-    action: "chart-browser-buy-click",
+    action: isConnectedTradeWallet(walletIndex) ? "chart-browser-buy-click" : "chart-session-buy-click",
     durationMs: perfNow() - clickStartedAt,
     requestId: tradeAttemptId,
-    details: `browser-buy:${shortAddress(tokenMint)}:${amountSol}`
+    details: `${isConnectedTradeWallet(walletIndex) ? "browser" : "session"}-buy:${shortAddress(tokenMint)}:${amountSol}`
   });
   applyActionButtonStates();
-  const trade = await executeConnectedBrowserTrade({
-    side: "buy",
-    form,
-    actionDetail: String(amountSol),
+  if (isConnectedTradeWallet(walletIndex)) {
+    const trade = await executeConnectedBrowserTrade({
+      side: "buy",
+      form,
+      actionDetail: String(amountSol),
+      amountSol: String(value),
+      amountMode: "fixed",
+      attemptId: tradeAttemptId,
+      statusWriter: setChartTradeStatus
+    });
+    state.quickBuyLast = { ...state.quickBuyLast, status: "submitted" };
+    state.chartTradeTab = "buy";
+    setChartTradeStatus(trade?.message || "Buy submitted from connected wallet.");
+    clearTradeActionLater("trade-buy", tokenMint, String(amountSol), 3000);
+    return trade;
+  }
+
+  const autoExit = readChartTradeAutoExit();
+  const payload = {
+    tokenMint,
+    walletIndex,
     amountSol: String(value),
-    amountMode: "fixed",
-    attemptId: tradeAttemptId,
-    statusWriter: setChartTradeStatus
+    slippageBps: form.slippageBps,
+    tradeAttemptId
+  };
+  if (autoExit.enabled) {
+    Object.assign(payload, {
+      autoExit: true,
+      takeProfitPct: autoExit.takeProfitPct,
+      stopLossPct: autoExit.stopLossPct,
+      sellDelay: autoExit.sellDelay,
+      sellPercent: autoExit.sellPercent
+    });
+  }
+  setChartTradeStatus(autoExit.enabled ? "Sending buy and arming auto-exit..." : "Sending buy...");
+  const data = await api("/api/web/trade/buy", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    dedupe: false,
+    timeoutMs: API_LONG_ACTION_TIMEOUT_MS
   });
+  state.tradeResult = data.trade;
+  if (data.trade?.autoExitPlan) {
+    state.tradePlanResult = data.trade.autoExitPlan;
+    scheduleAutoExitChecks();
+  }
   state.quickBuyLast = { ...state.quickBuyLast, status: "submitted" };
   state.chartTradeTab = "buy";
-  setChartTradeStatus(trade?.message || "Buy submitted from connected wallet.");
+  setTradeAction("trade-buy", tokenMint, String(amountSol), {
+    state: "submitted",
+    signature: data.trade?.signature || ""
+  });
+  queuePostTradeRefresh(data.trade?.signature, "chart-session-buy", { tradeAttemptId });
+  setChartTradeStatus(data.trade?.autoExitPlan?.shortMessage || data.trade?.message || "Buy submitted from Session Wallet.");
   clearTradeActionLater("trade-buy", tokenMint, String(amountSol), 3000);
-  return trade;
+  return data.trade;
 }
 
 async function confirmQuickBuyModal() {
@@ -15749,9 +15866,11 @@ function chartTradePanelHtml(token = {}, heldPosition = null) {
   const activeTab = state.chartTradeTab === "sell" ? "sell" : "buy";
   const connected = connectedBrowserWallet();
   const managedDefaultWallet = state.wallets?.length ? String(state.wallets[0]?.index || "") : "";
+  const sessionDefaultWallet = preferredFundedSessionWallet();
   const activePreset = activeTradePreset();
   const presetWalletIndex = activePreset?.walletIndex || (activePreset?.walletIndexes || [])[0] || "";
-  const walletSelected = state.chartBuyWalletIndex || (connected?.publicKey ? "connected" : (presetWalletIndex || managedDefaultWallet));
+  const connectedDefaultWallet = connected?.publicKey && connectedWalletCanSignNow(connected) ? "connected" : "";
+  const walletSelected = state.chartBuyWalletIndex || (connectedDefaultWallet || (sessionDefaultWallet?.index ? String(sessionDefaultWallet.index) : "") || presetWalletIndex || managedDefaultWallet || (connected?.publicKey ? "connected" : ""));
   const selectedConnectedWallet = isConnectedTradeWallet(walletSelected);
   const chartBuyAmount = state.quickBuyAmountOverride || activeQuickBuyAmount(activePreset) || "";
   const chartPresetSummary = activePreset ? activePresetDetail("trade") : "No preset / manual";

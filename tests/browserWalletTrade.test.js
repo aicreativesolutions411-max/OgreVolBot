@@ -69,8 +69,10 @@ test("browser wallet buy and sell sign locally instead of entering managed-walle
   assert.match(functionBody(appSource, "executeChartConnectedBuy"), /statusWriter: setChartTradeStatus/);
   assert.match(functionBody(appSource, "confirmConnectedBrowserTrade"), /window\.confirm/);
   assert.match(functionBody(appSource, "promptConnectedWalletReconnect"), /startMobileWalletConnect/);
+  assert.match(functionBody(appSource, "promptConnectedWalletReconnect"), /connectedMobileCannotSignMessage/);
   assert.match(functionBody(appSource, "promptConnectedWalletReconnect"), /openMobileWalletBrowse/);
   assert.match(functionBody(appSource, "connectedTradeProvider"), /promptConnectedWalletReconnect/);
+  assert.match(functionBody(appSource, "connectedTradeProvider"), /connectedMobileCannotSignMessage/);
   assert.doesNotMatch(functionBody(appSource, "executeConnectedBrowserTrade"), /JUPITER_API_KEY|privateKey|secretKey|seed/i);
 });
 
@@ -119,6 +121,20 @@ test("connected wallets can fund a limited session wallet with one normal wallet
   assert.match(functionBody(appSource, "walletOptionsHtml"), /sessionWallet \? " Session"/);
   assert.match(stylesSource, /\.session-wallet-controls/);
   assert.match(stylesSource, /\.session-wallet-badge/);
+});
+
+test("mobile connected wallet trades fall back to funded session wallets instead of reconnect looping", () => {
+  assert.match(appSource, /function connectedWalletCanSignNow/);
+  assert.match(appSource, /function preferredFundedSessionWallet/);
+  assert.match(appSource, /function resolveConnectedTradeForm/);
+  assert.match(functionBody(appSource, "resolveConnectedTradeForm"), /preferredFundedSessionWallet/);
+  assert.match(functionBody(appSource, "resolveConnectedTradeForm"), /mobile wallet signing is not available/);
+  assert.match(functionBody(appSource, "promptConnectedWalletReconnect"), /isMobileWalletPlatform\(\) && connected\?\.publicKey && !walletProviderById/);
+  assert.match(functionBody(appSource, "executeWebBuy"), /resolveConnectedTradeForm/);
+  assert.match(functionBody(appSource, "executeWebSell"), /resolveConnectedTradeForm/);
+  assert.match(functionBody(appSource, "executeQuickBuyAmount"), /resolveConnectedTradeForm/);
+  assert.match(functionBody(appSource, "executeChartConnectedBuy"), /resolveConnectedTradeForm/);
+  assert.match(functionBody(appSource, "executeChartConnectedBuy"), /chart-session-buy/);
 });
 
 test("backend session wallets verify the funding transaction before becoming automation wallets", () => {
