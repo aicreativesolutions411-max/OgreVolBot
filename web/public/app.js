@@ -167,12 +167,24 @@ function rememberOgreAiMints(result) {
 function storedReferralCode() {
   try {
     const url = new URL(window.location.href);
-    const fromUrl = String(url.searchParams.get("ref") || "").replace(/[^a-z0-9]/gi, "").toUpperCase();
+    const pathMatch = url.pathname.match(/^\/r\/([^/]+)/i);
+    const rawCode = url.searchParams.get("ref") || (pathMatch ? decodeURIComponent(pathMatch[1] || "") : "");
+    const fromUrl = String(rawCode || "")
+      .replace(/[^a-z0-9_-]/gi, "")
+      .replace(/[_-]{2,}/g, "-")
+      .replace(/^[-_]+|[-_]+$/g, "")
+      .toUpperCase()
+      .slice(0, 24);
     if (fromUrl) {
       window.localStorage?.setItem("slimewireReferralCode", fromUrl);
       return fromUrl;
     }
-    return String(window.localStorage?.getItem("slimewireReferralCode") || "").replace(/[^a-z0-9]/gi, "").toUpperCase();
+    return String(window.localStorage?.getItem("slimewireReferralCode") || "")
+      .replace(/[^a-z0-9_-]/gi, "")
+      .replace(/[_-]{2,}/g, "-")
+      .replace(/^[-_]+|[-_]+$/g, "")
+      .toUpperCase()
+      .slice(0, 24);
   } catch {
     return "";
   }
@@ -5469,7 +5481,7 @@ function xConnectSection() {
 
 function referralSection() {
   const code = state.user?.referralCode || "";
-  const link = state.user?.referralLink || (code ? `${shareSiteUrl}?ref=${encodeURIComponent(code)}` : "");
+  const link = state.user?.referralLink || (code ? `${shareSiteUrl.replace(/\/+$/, "")}/r/${encodeURIComponent(code)}` : "");
   const stats = state.user?.referralStats || {};
   const referralRows = Array.isArray(stats.referrals) ? stats.referrals : [];
   return `
@@ -5500,12 +5512,23 @@ function referralSection() {
           <input data-referral-link readonly value="${escapeHtml(link)}" aria-label="Your referral link">
         </label>
       ` : ""}
+      <div class="referral-code-row">
+        <label class="referral-code-field">
+          Referral Code
+          <input data-referral-code type="text" inputmode="latin" autocomplete="off" maxlength="24" placeholder="MOONPIEJOE" value="${escapeHtml(code)}" aria-label="Your referral code">
+        </label>
+        <div class="profile-actions referral-code-actions">
+          <button type="button" data-generate-referral-code>Generate</button>
+          <button type="button" class="primary" data-save-referral>Save Code</button>
+        </div>
+      </div>
+      <small class="referral-code-help">Use letters, numbers, dash, or underscore. Once saved, no other SlimeWire profile can claim the same code.</small>
       <label>
         Referral Payout Wallet
         <input data-referral-wallet type="text" placeholder="Wallet for referral fees" value="${escapeHtml(state.user?.referralPayoutWallet || "")}">
       </label>
       <div class="card-actions">
-        <button type="button" class="primary" data-save-referral>Save Referral</button>
+        <button type="button" data-save-referral>Save Payout Wallet</button>
         ${link ? `<button type="button" data-copy="${escapeHtml(link)}">Copy Referral Link</button>` : ""}
         ${link ? xShareButton(`Trade faster on SlimeWire. Referral: ${link}`, "Share X") : ""}
         ${link ? telegramShareButton(`Trade faster on SlimeWire. Referral: ${link}`, "Share TG") : ""}
@@ -6063,7 +6086,7 @@ function tradeHtml() {
         <div class="trade-head">
           <div>
             <h3>One-Wallet Trade</h3>
-            <p>${connected?.publicKey ? "Connected browser wallets open your wallet approval prompt. Managed wallets stay available for server-side automation." : "Paste a token CA, pick a wallet, then use fast buy and sell buttons from the webpage."}</p>
+            <p>${connected?.publicKey ? "Connected browser wallets stay ready for this session and open your wallet approval prompt for each trade. Managed wallets stay available for server-side automation." : "Paste a token CA, pick a wallet, then use fast buy and sell buttons from the webpage."}</p>
           </div>
         </div>
         <label>
@@ -6072,7 +6095,7 @@ function tradeHtml() {
             ${walletOptionsHtml(connected?.publicKey && !hasManagedWallets ? "connected" : "")}
           </select>
         </label>
-        ${connected?.publicKey ? `<small class="trade-wallet-note">Browser wallet trades require wallet approval and do not expose private keys. TP/SL automation still requires managed SlimeWire wallets.</small>` : ""}
+        ${connected?.publicKey ? `<small class="trade-wallet-note">Phantom/Solflare controls remain unlocked until signout or disconnect, but every buy/sell still requires wallet confirmation. True unattended TP/SL needs managed SlimeWire wallets.</small>` : ""}
         <label>
           Token CA
           <input data-trade-token type="text" placeholder="Paste Solana token mint" value="${escapeHtml(state.tradeToken)}">
@@ -11236,19 +11259,22 @@ function editPreset(kind, id) {
   });
 }
 
-async function saveReferralSettings() {
+async function saveReferralSettings(options = {}) {
   const status = $("[data-referral-status]");
   try {
     await ensureWebAccount(status, "Opening secure web profile...");
-    writeText(status, "Saving referral settings...");
+    writeText(status, options.generate ? "Generating referral code..." : "Saving referral settings...");
     const data = await api("/api/web/profile/referral", {
       method: "POST",
       body: JSON.stringify({
+        referralCode: $("[data-referral-code]")?.value || "",
+        generateReferralCode: Boolean(options.generate),
         referralPayoutWallet: $("[data-referral-wallet]")?.value || ""
       })
     });
     applyUserFromApi(data.user);
-    writeText(status, "Referral settings saved.");
+    const code = data.user?.referralCode || state.user?.referralCode || "";
+    writeText(status, options.generate ? `Generated ${code}. Link is ready.` : `Referral settings saved. Code: ${code}`);
     render();
   } catch (error) {
     writeText(status, error.message);
@@ -18090,6 +18116,7 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-clear-x]")) await disconnectXAccount();
   if (target.matches("[data-save-login-credentials]")) await saveLoginCredentials();
   if (target.matches("[data-save-referral]")) await saveReferralSettings();
+  if (target.matches("[data-generate-referral-code]")) await saveReferralSettings({ generate: true });
   if (target.matches("[data-save-trader-board]")) await saveTraderBoardSettings();
   if (target.matches("[data-use-x-avatar]")) await useXProfileAvatar();
   if (target.matches("[data-clear-avatar]")) await updateProfileAvatar({ clear: true }, "Removing PFP...");

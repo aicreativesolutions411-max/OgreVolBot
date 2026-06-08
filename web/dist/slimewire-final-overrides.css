@@ -780,6 +780,48 @@
   gap: 8px;
 }
 
+/* REFERRAL_CODE_CUSTOMIZER_20260608_V1: clean custom share tags for KOLs/sponsors without bloating profile. */
+.referral-code-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+
+.referral-code-field input {
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+}
+
+.referral-code-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(96px, auto));
+  gap: 8px;
+}
+
+.referral-code-actions button {
+  min-height: 40px;
+  white-space: nowrap;
+}
+
+.referral-code-help {
+  color: rgba(238, 255, 230, 0.68);
+}
+
+@media (max-width: 640px) {
+  .referral-code-row {
+    grid-template-columns: 1fr;
+  }
+
+  .referral-code-actions {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .referral-card .card-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 760px) {
   [data-app][data-route="terminal"] .command-terminal {
     display: block !important;

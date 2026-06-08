@@ -44,7 +44,8 @@ test("Trade tab treats a connected Phantom/Solflare wallet as a usable trade wal
   assert.match(appSource, /function connectedBrowserWalletOptionHtml/);
   assert.match(appSource, /<option value="connected"/);
   assert.match(functionBody(appSource, "tradeHtml"), /Connect to Trade/);
-  assert.match(functionBody(appSource, "tradeHtml"), /Connected browser wallets open your wallet approval prompt/);
+  assert.match(functionBody(appSource, "tradeHtml"), /Connected browser wallets stay ready for this session/);
+  assert.match(functionBody(appSource, "tradeHtml"), /every buy\/sell still requires wallet confirmation/);
   assert.match(functionBody(appSource, "tradeHtml"), /Automation Wallets/);
   assert.doesNotMatch(functionBody(appSource, "tradeHtml"), /return `\$\{createWalletSection\(\)\}/);
 });

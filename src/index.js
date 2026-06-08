@@ -1126,6 +1126,7 @@ function startHealthServer() {
 
     if (request.method === "GET" && (requestUrl.pathname === "/" || requestUrl.pathname === "/connect"
       || requestUrl.pathname === "/login" || requestUrl.pathname.startsWith("/account/login")
+      || requestUrl.pathname.startsWith("/r/")
       || requestUrl.pathname === "/portal" || requestUrl.pathname.startsWith("/portal/")
       || requestUrl.pathname === "/terminal" || requestUrl.pathname.startsWith("/terminal/"))) {
       await serveWebPortal(requestUrl, response, request.method);
@@ -18638,8 +18639,10 @@ async function requireWebAutomationPermission(userId, context = "server-side TP/
 function generateWebReferralCode(store, seed = "sw") {
   const cleanSeed = String(seed || "sw")
     .replace(/^web_/i, "")
-    .replace(/[^a-z0-9]/gi, "")
-    .slice(0, 8)
+    .replace(/[^a-z0-9_-]/gi, "")
+    .replace(/[_-]{2,}/g, "-")
+    .replace(/^[-_]+|[-_]+$/g, "")
+    .slice(0, 10)
     .toUpperCase() || "SW";
   for (let i = 0; i < 20; i += 1) {
     const suffix = crypto.randomBytes(3).toString("hex").toUpperCase();
@@ -18650,7 +18653,51 @@ function generateWebReferralCode(store, seed = "sw") {
 }
 
 function normalizeReferralCode(value) {
-  return String(value || "").trim().replace(/[^a-z0-9]/gi, "").toUpperCase().slice(0, 20);
+  return String(value || "")
+    .trim()
+    .replace(/[^a-z0-9_-]/gi, "")
+    .replace(/[_-]{2,}/g, "-")
+    .replace(/^[-_]+|[-_]+$/g, "")
+    .toUpperCase()
+    .slice(0, 24);
+}
+
+function assertReferralCodeAvailable(store, userId, codeValue) {
+  const code = normalizeReferralCode(codeValue);
+  if (code.length < 3) {
+    const error = new Error("Referral code must be at least 3 letters or numbers.");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!/[A-Z0-9]/.test(code)) {
+    const error = new Error("Referral code needs at least one letter or number.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const reserved = new Set(["API", "ADMIN", "APP", "LOGIN", "LOGOUT", "OGRE", "OGREVOLBOT", "REF", "SLIMEWIRE", "SUPPORT", "TRADE", "WALLET"]);
+  if (reserved.has(code)) {
+    const error = new Error("That referral code is reserved. Try a more personal tag.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const owner = findWebProfileByReferralCode(store, code);
+  if (owner && String(owner.userId) !== String(userId)) {
+    const error = new Error("That referral code is already taken. Try another tag.");
+    error.statusCode = 409;
+    throw error;
+  }
+  return code;
+}
+
+function generateWebReferralCodeForUser(store, userId, profile = {}) {
+  const seed = profile.username || profile.xHandle || profile.connectedWallet?.shortPublicKey || userId || "sw";
+  let code = generateWebReferralCode(store, seed);
+  for (let i = 0; i < 12; i += 1) {
+    const owner = findWebProfileByReferralCode(store, code);
+    if (!owner || String(owner.userId) === String(userId)) return code;
+    code = generateWebReferralCode(store, `${seed}${i}`);
+  }
+  return generateWebReferralCode(store, userId || "sw");
 }
 
 function findWebProfileByReferralCode(store, codeValue) {
@@ -18663,7 +18710,8 @@ function findWebProfileByReferralCode(store, codeValue) {
 function webReferralLink(code) {
   const base = CONFIG.webPortalUrl || "https://www.slimewire.org";
   const url = new URL(base);
-  url.searchParams.set("ref", normalizeReferralCode(code));
+  url.pathname = `/r/${encodeURIComponent(normalizeReferralCode(code))}`;
+  url.searchParams.delete("ref");
   return url.toString();
 }
 
@@ -22772,6 +22820,12 @@ async function updateWebReferralProfile(userId, body = {}) {
   const key = String(userId);
   const now = new Date().toISOString();
   const { profile: existing } = ensureWebProfileDefaults(store, userId);
+  let referralCode = existing.referralCode || generateWebReferralCodeForUser(store, userId, existing);
+  if (body.generateReferralCode) {
+    referralCode = generateWebReferralCodeForUser(store, userId, existing);
+  } else if (body.referralCode !== undefined || body.code !== undefined) {
+    referralCode = assertReferralCodeAvailable(store, userId, body.referralCode ?? body.code);
+  }
   const referralPayoutWallet = body.clearPayout
     ? ""
       : String(body.referralPayoutWallet || body.wallet || "").trim()
@@ -22811,6 +22865,7 @@ async function updateWebReferralProfile(userId, body = {}) {
   }
   const profile = {
     ...existing,
+    referralCode,
     referralPayoutWallet,
     showOnTraderBoard: parseBoolean(String(body.showOnTraderBoard ?? existing.showOnTraderBoard ?? "false")),
     traderBoardWalletMode,
@@ -22822,6 +22877,7 @@ async function updateWebReferralProfile(userId, body = {}) {
   await writeWebAuthStore(store);
   await audit("web_referral_profile_update", {
     userId,
+    referralCodeChanged: referralCode !== existing.referralCode,
     hasPayoutWallet: Boolean(referralPayoutWallet),
     showOnTraderBoard: profile.showOnTraderBoard,
     traderBoardWalletMode,
