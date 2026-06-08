@@ -14201,3 +14201,311 @@ html body main.shell[data-app] .swamp-market-ticker[data-market-ticker].is-ticke
     padding: 4px 5px !important;
   }
 }
+
+/* MOBILE_TRADER_DENSITY_AND_SCROLL_POLISH_20260607_V3: compact ticker menus, account chips, controls, pair actions, and Ogre Tools rail. */
+@media (max-width: 760px) {
+  html body main.shell[data-app] .swamp-market-ticker[data-market-ticker].is-ticker-menu-open .swamp-ticker-mask {
+    overflow: visible !important;
+  }
+
+  html body main.shell[data-app] .swamp-market-ticker[data-market-ticker].is-ticker-menu-open .swamp-ticker-track {
+    animation-play-state: paused !important;
+    transform: none !important;
+  }
+
+  html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-item[open] .swamp-ticker-links {
+    background:
+      linear-gradient(180deg, rgba(18, 78, 21, 0.98), rgba(2, 18, 6, 0.98)) !important;
+    border: 1px solid rgba(117, 255, 61, 0.72) !important;
+    border-radius: 12px !important;
+    box-shadow: 0 14px 32px rgba(0, 0, 0, 0.72), 0 0 18px rgba(111, 255, 40, 0.28) !important;
+    display: grid !important;
+    gap: 5px !important;
+    grid-template-columns: repeat(auto-fit, minmax(58px, 1fr)) !important;
+    left: 50% !important;
+    min-width: 0 !important;
+    padding: 6px !important;
+    position: fixed !important;
+    right: auto !important;
+    top: calc(33px + env(safe-area-inset-top, 0px)) !important;
+    transform: translateX(-50%) !important;
+    width: min(218px, calc(100vw - 22px)) !important;
+    z-index: 2147483003 !important;
+  }
+
+  html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-ticker-links a {
+    border-radius: 9px !important;
+    font-size: 9.5px !important;
+    height: 26px !important;
+    justify-content: center !important;
+    line-height: 1 !important;
+    min-height: 26px !important;
+    padding: 0 6px !important;
+    text-align: center !important;
+    white-space: nowrap !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .topbar {
+    gap: 4px !important;
+    padding: 5px max(7px, env(safe-area-inset-right)) 5px max(7px, env(safe-area-inset-left)) !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .terminal-global-search {
+    gap: 5px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .terminal-global-search input,
+  html body main.shell[data-app][data-route="terminal"] .terminal-global-search button,
+  html body main.shell[data-app][data-route="terminal"] .top-auth-group button,
+  html body main.shell[data-app][data-route="terminal"] .top-auth-group .top-profile-button {
+    border-radius: 10px !important;
+    font-size: 11px !important;
+    min-height: 30px !important;
+    padding: 5px 8px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip {
+    border-radius: 12px !important;
+    gap: 4px !important;
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    margin: 3px 0 4px !important;
+    padding: 5px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip [data-top-refresh-wallet] {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip .top-tpsl-status {
+    grid-column: span 2 !important;
+    min-height: 28px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip > span {
+    border-radius: 999px !important;
+    font-size: 9px !important;
+    line-height: 1 !important;
+    min-height: 20px !important;
+    padding: 3px 5px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip .top-wallet-disconnected,
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip [data-active-preset-label] {
+    grid-column: 1 / -1 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .metrics {
+    display: grid !important;
+    gap: 3px !important;
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    margin: 2px 0 5px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .metrics article {
+    border-radius: 8px !important;
+    min-height: 32px !important;
+    padding: 4px 5px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .metrics article small {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .metrics article span {
+    font-size: 7.5px !important;
+    line-height: 1 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .metrics article strong {
+    font-size: clamp(11px, 3.2vw, 14px) !important;
+    line-height: 1.05 !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs {
+    gap: 4px !important;
+    right: max(4px, env(safe-area-inset-right)) !important;
+    width: 44px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs > button,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group > summary,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button {
+    border-radius: 999px !important;
+    height: 38px !important;
+    min-height: 38px !important;
+    min-width: 38px !important;
+    padding: 3px !important;
+    width: 38px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group {
+    align-items: center !important;
+    border: 0 !important;
+    display: flex !important;
+    flex: 0 0 auto !important;
+    flex-direction: column !important;
+    gap: 4px !important;
+    max-width: 42px !important;
+    min-width: 42px !important;
+    overflow: visible !important;
+    padding: 0 !important;
+    width: 42px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group[open] {
+    background: rgba(4, 22, 7, 0.92) !important;
+    border: 1px solid rgba(117, 255, 61, 0.28) !important;
+    border-radius: 999px !important;
+    box-shadow: 0 0 16px rgba(102, 255, 39, 0.18) !important;
+    max-height: none !important;
+    padding: 3px 0 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group:not([open]) button {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group[open] button {
+    display: flex !important;
+    opacity: 1 !important;
+    position: relative !important;
+    transform: none !important;
+    visibility: visible !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs button::after,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group summary::after,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button::after {
+    font-size: 6.3px !important;
+    line-height: 0.95 !important;
+    max-width: 32px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .command-title,
+  html body main.shell[data-app][data-route="terminal"] .terminal-title-row {
+    margin-bottom: 4px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .command-controls {
+    border-radius: 12px !important;
+    gap: 4px !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    margin: 0 0 5px !important;
+    padding: 4px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .command-controls .live-pair-buckets {
+    gap: 3px !important;
+    min-height: 27px !important;
+    padding: 2px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .command-controls .live-pair-buckets button {
+    font-size: 9.5px !important;
+    height: 22px !important;
+    min-height: 22px !important;
+    min-width: 54px !important;
+    padding: 0 7px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .command-controls label,
+  html body main.shell[data-app][data-route="terminal"] .command-controls .quick-buy-mini,
+  html body main.shell[data-app][data-route="terminal"] .command-controls .quick-buy-preset-bar {
+    font-size: 8.5px !important;
+    gap: 2px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .command-controls select,
+  html body main.shell[data-app][data-route="terminal"] .command-controls input {
+    border-radius: 9px !important;
+    font-size: 10px !important;
+    min-height: 27px !important;
+    padding: 4px 7px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .command-controls > button[data-refresh-live-pairs] {
+    grid-column: 1 / -1 !important;
+    height: 28px !important;
+    min-height: 28px !important;
+    padding: 0 8px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .terminal-launch-filter {
+    border-radius: 11px !important;
+    margin: 0 0 5px !important;
+    padding: 6px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .terminal-launch-filter-head {
+    align-items: center !important;
+    gap: 6px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .terminal-launch-filter-head strong {
+    font-size: 12px !important;
+    letter-spacing: 0.08em !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .terminal-launch-filter-head span {
+    font-size: 11px !important;
+    line-height: 1.15 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .terminal-launch-filter-head button {
+    border-radius: 999px !important;
+    font-size: 10px !important;
+    min-height: 26px !important;
+    padding: 4px 7px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .terminal-panel {
+    border-radius: 11px !important;
+    padding: 6px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .terminal-token-row {
+    border-radius: 11px !important;
+    gap: 4px 6px !important;
+    padding: 6px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .terminal-token-actions,
+  html body main.shell[data-app][data-route="terminal"] .terminal-token-actions.has-dev-info,
+  html body main.shell[data-app][data-route="terminal"] .compact-row-actions {
+    gap: 3px !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .terminal-token-actions button,
+  html body main.shell[data-app][data-route="terminal"] .compact-row-actions button,
+  html body main.shell[data-app][data-route="terminal"] .signal-actions button {
+    border-radius: 8px !important;
+    font-size: 9px !important;
+    height: 24px !important;
+    line-height: 1 !important;
+    min-height: 24px !important;
+    padding: 0 4px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .terminal-token-actions .dev-info-pill,
+  html body main.shell[data-app][data-route="terminal"] .compact-row-actions .dev-info-pill {
+    align-items: center !important;
+    flex-direction: row !important;
+    gap: 3px !important;
+    justify-content: center !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .terminal-token-actions .dev-info-pill span,
+  html body main.shell[data-app][data-route="terminal"] .terminal-token-actions .dev-info-pill strong,
+  html body main.shell[data-app][data-route="terminal"] .compact-row-actions .dev-info-pill span,
+  html body main.shell[data-app][data-route="terminal"] .compact-row-actions .dev-info-pill strong {
+    display: inline !important;
+    font-size: 8.5px !important;
+    line-height: 1 !important;
+    margin: 0 !important;
+    white-space: nowrap !important;
+  }
+}

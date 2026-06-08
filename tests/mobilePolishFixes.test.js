@@ -60,6 +60,22 @@ test("mobile terminal account controls and pair actions stay compact", () => {
   assert.match(cssSource, /terminal-token-actions button,[\s\S]*min-height: 28px !important/);
 });
 
+test("final mobile density pass keeps ticker menus and trading controls small", () => {
+  assert.match(cssSource, /MOBILE_TRADER_DENSITY_AND_SCROLL_POLISH_20260607_V3/);
+  assert.match(cssSource, /swamp-ticker-item\[open\] \.swamp-ticker-links[\s\S]*position: fixed !important[\s\S]*width: min\(218px, calc\(100vw - 22px\)\) !important/);
+  assert.match(cssSource, /top-sync-strip \[data-top-refresh-wallet\][\s\S]*display: none !important/);
+  assert.match(cssSource, /\[data-dashboard\] > \.metrics[\s\S]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\) !important/);
+  assert.match(cssSource, /command-controls > button\[data-refresh-live-pairs\][\s\S]*height: 28px !important/);
+  assert.match(cssSource, /terminal-token-actions button,[\s\S]*height: 24px !important/);
+  assert.match(cssSource, /tabs \.nav-tool-group\[open\] button[\s\S]*display: flex !important/);
+});
+
+test("mobile feed refresh preserves scroll and avoids the start flicker render", () => {
+  assert.match(functionBody(appSource, "captureStableFeedScrollSnapshot"), /documentY:[\s\S]*panelScrollTop:[\s\S]*dashboardScrollTop:/);
+  assert.match(functionBody(appSource, "restoreStableFeedScrollSnapshot"), /restoreRawScrollPositions[\s\S]*document\.scrollingElement/);
+  assert.match(appSource, /refreshTerminalFeed\(feedKey, \{[\s\S]*renderStart: false,[\s\S]*userInitiated: true/);
+});
+
 test("top refresh can also kick active TP/SL checks after wallet state refresh", () => {
   assert.match(functionBody(appSource, "shouldRunAutoExitCheckAfterWalletRefresh"), /hasActiveTpSlPermission\(\) && hasActiveAutoExitPlans\(\) && !autoExitCheckInFlight/);
   assert.match(appSource, /refreshWalletNow\(\{ force: true, deep: false, reason: "manual_header_click" \}\)[\s\S]*shouldRunAutoExitCheckAfterWalletRefresh\(\)[\s\S]*runTradePlanCheck\(\)/);

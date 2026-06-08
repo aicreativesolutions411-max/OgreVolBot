@@ -4731,9 +4731,19 @@ function isCompactViewport() {
 function captureStableFeedScrollSnapshot(panel = $("[data-panel]")) {
   if (!panel || state.route !== "terminal" || !MOBILE_STABLE_FEED_TABS.has(state.activeTab)) return null;
   const renderedTab = panel.dataset.renderedTab;
+  const documentScroller = document.scrollingElement || document.documentElement;
+  const baseSnapshot = {
+    tab: state.activeTab,
+    windowY: window.scrollY || 0,
+    documentY: documentScroller?.scrollTop || 0,
+    panelScrollTop: panel.scrollTop || 0,
+    dashboardScrollTop: dashboardView?.scrollTop || 0,
+    anchorKey: "",
+    anchorTop: 0
+  };
   const rows = Array.from(panel.querySelectorAll(STABLE_FEED_ROW_SELECTOR));
-  if (renderedTab && renderedTab !== state.activeTab && !rows.length) return null;
-  if (!rows.length) return null;
+  if (renderedTab && renderedTab !== state.activeTab && !rows.length) return baseSnapshot;
+  if (!rows.length) return baseSnapshot;
   const anchor = rows.find((row) => {
     const rect = row.getBoundingClientRect();
     const topGuard = isCompactViewport() ? 42 : 72;
@@ -4741,8 +4751,7 @@ function captureStableFeedScrollSnapshot(panel = $("[data-panel]")) {
   }) || rows[0];
   const anchorKey = anchor?.dataset?.tokenChart || anchor?.dataset?.tokenMint || "";
   return {
-    tab: state.activeTab,
-    windowY: window.scrollY || 0,
+    ...baseSnapshot,
     anchorKey,
     anchorTop: anchor ? anchor.getBoundingClientRect().top : 0
   };
@@ -4750,6 +4759,21 @@ function captureStableFeedScrollSnapshot(panel = $("[data-panel]")) {
 
 function restoreStableFeedScrollSnapshot(snapshot, panel = $("[data-panel]")) {
   if (!snapshot || state.route !== "terminal" || snapshot.tab !== state.activeTab) return;
+  const restoreElementScroll = (element, top) => {
+    if (!element || !Number.isFinite(Number(top))) return;
+    if (element.scrollHeight <= element.clientHeight + 2) return;
+    const nextTop = Math.max(0, Math.min(Number(top), element.scrollHeight - element.clientHeight));
+    if (Math.abs((element.scrollTop || 0) - nextTop) > 4) element.scrollTop = nextTop;
+  };
+  const restoreRawScrollPositions = (currentPanel) => {
+    const documentScroller = document.scrollingElement || document.documentElement;
+    restoreElementScroll(dashboardView, snapshot.dashboardScrollTop);
+    restoreElementScroll(currentPanel, snapshot.panelScrollTop);
+    restoreElementScroll(documentScroller, snapshot.documentY);
+    if (Math.abs((window.scrollY || 0) - Number(snapshot.windowY || 0)) > 8) {
+      window.scrollTo(0, Math.max(0, Number(snapshot.windowY || 0)));
+    }
+  };
   const restore = () => {
     const currentPanel = panel?.isConnected ? panel : $("[data-panel]");
     let restoredAnchor = false;
@@ -4765,9 +4789,7 @@ function restoreStableFeedScrollSnapshot(snapshot, panel = $("[data-panel]")) {
         restoredAnchor = true;
       }
     }
-    if (!restoredAnchor && Math.abs((window.scrollY || 0) - Number(snapshot.windowY || 0)) > 8) {
-      window.scrollTo(0, Math.max(0, Number(snapshot.windowY || 0)));
-    }
+    if (!restoredAnchor) restoreRawScrollPositions(currentPanel);
   };
   requestAnimationFrame(() => {
     restore();
@@ -18494,7 +18516,12 @@ document.addEventListener("click", async (event) => {
   const refreshLivePairsButton = target.closest?.("[data-refresh-live-pairs]");
   if (refreshLivePairsButton) {
     const feedKey = state.activeTab === "slimeScope" ? "slimeScope" : state.activeTab === "terminal" ? "terminal" : "live";
-    runDeferredUiTask(() => refreshTerminalFeed(feedKey, { force: true, reason: "manual-live-refresh" }));
+    runDeferredUiTask(() => refreshTerminalFeed(feedKey, {
+      force: true,
+      reason: "manual-live-refresh",
+      renderStart: false,
+      userInitiated: true
+    }));
   }
 
   if (target.closest?.("[data-terminal-filter-toggle]")) {
