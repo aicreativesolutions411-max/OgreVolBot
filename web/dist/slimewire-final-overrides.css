@@ -18157,6 +18157,42 @@ html body main.shell[data-app][data-route="terminal"] .smart-chart-clean-main .s
   min-height: 540px !important;
 }
 
+html body main.shell[data-app][data-route="terminal"] .smart-chart-market-bar {
+  align-items: stretch !important;
+  display: grid !important;
+  gap: 5px !important;
+  grid-template-columns: repeat(6, minmax(0, 1fr)) !important;
+  margin: 6px 0 8px !important;
+}
+
+html body main.shell[data-app][data-route="terminal"] .smart-chart-market-bar span {
+  background: rgba(4, 24, 8, 0.76) !important;
+  border: 1px solid rgba(114, 255, 35, 0.2) !important;
+  border-radius: 8px !important;
+  display: grid !important;
+  gap: 2px !important;
+  min-width: 0 !important;
+  padding: 5px 7px !important;
+}
+
+html body main.shell[data-app][data-route="terminal"] .smart-chart-market-bar small {
+  color: rgba(190, 255, 166, 0.72) !important;
+  font-size: 9px !important;
+  font-weight: 950 !important;
+  line-height: 1 !important;
+  text-transform: uppercase !important;
+}
+
+html body main.shell[data-app][data-route="terminal"] .smart-chart-market-bar strong {
+  color: #f4fff0 !important;
+  font-size: 13px !important;
+  font-weight: 1000 !important;
+  line-height: 1.05 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
 html body main.shell[data-app][data-route="terminal"] .smart-chart-clean-side {
   position: sticky !important;
   top: 88px !important;
@@ -18217,6 +18253,22 @@ html body main.shell[data-app][data-route="terminal"] .clip-record-button {
   html body main.shell[data-app][data-route="terminal"] .smart-chart-clean-main .smart-chart-frame {
     height: 62vh !important;
     min-height: 430px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .smart-chart-market-bar {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .smart-chart-market-bar span {
+    padding: 4px 6px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .smart-chart-market-bar small {
+    font-size: 7.8px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .smart-chart-market-bar strong {
+    font-size: 10.5px !important;
   }
 
   html body main.shell[data-app][data-route="terminal"] .smart-chart-clean-side .chart-trade-tabs button,

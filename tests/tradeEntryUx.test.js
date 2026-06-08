@@ -124,6 +124,7 @@ test("Chart route has professional Buy and Sell panel", () => {
 test("Chart page uses a clean DEX chart and transactions workspace", () => {
   const chart = functionBody(appSource, "smartChartHtml");
   assert.match(chart, /smart-chart-clean-terminal/);
+  assert.match(chart, /smartChartMarketBarHtml\(token, heldPosition\)/);
   assert.match(chart, /smartChartDexFrameHtml\(token, "chartTxns"\)/);
   assert.match(chart, /chartTradePanelHtml\(token, heldPosition\)/);
   assert.doesNotMatch(chart, /smartChartViewTabsHtml\(chartView\)/);
@@ -138,6 +139,8 @@ test("Chart page uses a clean DEX chart and transactions workspace", () => {
   assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /queueSmartChartBootstrap\(token\)/);
   assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /smartChartFrameUrl\(token, mode\)/);
   assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /data-chart-resolving/);
+  assert.doesNotMatch(functionBody(appSource, "smartChartDexFrameHtml"), /smartChartPumpPanelHtml\(token, mode\)/);
+  assert.doesNotMatch(functionBody(appSource, "smartChartDexFrameHtml"), /data-slime-pump-source/);
   assert.doesNotMatch(functionBody(appSource, "smartChartDexFrameHtml"), /before loading the iframe/);
   assert.match(functionBody(appSource, "resolveSmartChartDexPair"), /\/api\/web\/chart\/bootstrap\?token=/);
   assert.match(functionBody(appSource, "openTokenChart"), /prefetchTokenChart\(tokenRef/);
@@ -157,6 +160,8 @@ test("Chart page uses a clean DEX chart and transactions workspace", () => {
   assert.match(chartCssSource, /WEB_WALLET_CHART_REFRESH_CLEANUP_20260608_V2/);
   assert.match(chartCssSource, /smart-chart-clean-grid[\s\S]*grid-template-columns: minmax\(0, 1fr\) minmax\(292px, 360px\)/);
   assert.match(chartCssSource, /smart-chart-clean-main \.smart-chart-frame[\s\S]*height: clamp\(540px, 70vh, 780px\)/);
+  assert.match(chartCssSource, /smart-chart-market-bar[\s\S]*grid-template-columns: repeat\(6, minmax\(0, 1fr\)\)/);
+  assert.match(chartCssSource, /smart-chart-market-bar[\s\S]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/);
   assert.match(chartCssSource, /\[data-active-tab="smartChart"\][\s\S]*\[data-dashboard\] > \.metrics/);
   assert.doesNotMatch(chartCssSource, /\[data-active-tab="smartChart"\]\s+\[data-dashboard\] > \.tabs,[\s\S]*display: none/);
   assert.match(chartCssSource, /\[data-active-tab="smartChart"\][\s\S]*\[data-dashboard\] > \.tabs[\s\S]*position: sticky/);

@@ -4514,13 +4514,30 @@ function recoverAppShell(reason = "watchdog", options = {}) {
   return true;
 }
 
-function clipFarmSupported() {
+function clipFarmScreenCaptureSupported() {
   return Boolean(navigator.mediaDevices?.getDisplayMedia && window.MediaRecorder);
+}
+
+function clipFarmMobileFallbackCanvas() {
+  try {
+    return document.createElement("canvas");
+  } catch {
+    return null;
+  }
+}
+
+function clipFarmMobileFallbackSupported() {
+  const canvas = clipFarmMobileFallbackCanvas();
+  return Boolean(canvas && (typeof canvas.toBlob === "function" || ((canvas.captureStream || canvas.mozCaptureStream) && window.MediaRecorder)));
+}
+
+function clipFarmSupported() {
+  return clipFarmScreenCaptureSupported() || clipFarmMobileFallbackSupported();
 }
 
 function showClipFarmUnsupportedMessage() {
   const message = isMobileWalletPlatform()
-    ? "Mobile browsers usually block website screen recording. Use your phone screen recorder, then share the saved clip."
+    ? "This mobile browser blocked both screen recording and SlimeWire clip fallback. Use your phone screen recorder, then share the saved clip."
     : "This browser cannot start screen recording. Use desktop Chrome/Edge or your device recorder.";
   setClipFarmStatus(message);
   if (typeof window.alert === "function") window.alert(message);
@@ -4545,6 +4562,7 @@ function clipFarmMimeType() {
 }
 
 function clipFarmExtensionForMime(mimeType = "") {
+  if (/^image\/png/i.test(String(mimeType || ""))) return "png";
   return /^video\/mp4/i.test(String(mimeType || "")) ? "mp4" : "webm";
 }
 
@@ -4559,6 +4577,8 @@ function stopClipFarmTracks() {
   } catch {
     // Track cleanup is best-effort after browser recording permissions close.
   }
+  if (state.clipFarm?.fallbackFrameTimer) clearInterval(state.clipFarm.fallbackFrameTimer);
+  if (state.clipFarm?.fallbackStopTimer) clearTimeout(state.clipFarm.fallbackStopTimer);
 }
 
 function setClipFarmStatus(message = "") {
@@ -4604,8 +4624,8 @@ function updateClipFarmControl() {
       </button>
       ${ready ? `
         <div class="clip-share-actions" aria-label="Clip share options">
-          <button type="button" data-clip-share title="Share video">Share</button>
-          <button type="button" data-clip-download title="Download video">Save</button>
+          <button type="button" data-clip-share title="Share clip">Share</button>
+          <button type="button" data-clip-download title="Download clip">Save</button>
           <a href="https://twitter.com/intent/tweet?text=${encodeURIComponent("Farming SlimeWire clips at https://slimewire.org")}" target="_blank" rel="noreferrer" title="Open X">X</a>
           <a href="https://t.me/share/url?url=${encodeURIComponent(shareSiteUrl)}&text=${encodeURIComponent("Farming SlimeWire clips")}" target="_blank" rel="noreferrer" title="Open Telegram">TG</a>
           <button type="button" data-clip-clear title="Close clip options">Cancel</button>
@@ -4616,8 +4636,216 @@ function updateClipFarmControl() {
   `;
 }
 
+function clipFarmFallbackRows() {
+  const rows = uniqueSignalRows([
+    ...(currentLivePairs()?.rows || []),
+    ...(typeof terminalBestPickRows === "function" ? terminalBestPickRows() : []),
+    ...(state.slimeScopeRows || []),
+    ...(state.livePairRows || []),
+    ...(Object.values(state.livePairsByBucket || {}).flatMap((feed) => feed?.rows || []))
+  ]).filter((row) => row?.tokenMint).slice(0, 4);
+  return rows.length ? rows : [{
+    tokenMint: state.smartChartToken || state.tradeToken || "",
+    symbol: "SlimeWire",
+    name: "Live Terminal",
+    marketCapLabel: "checking",
+    liquidityLabel: "checking",
+    volumeH1Label: "live"
+  }];
+}
+
+function drawClipFarmFallbackFrame(canvas, options = {}) {
+  const ctx = canvas?.getContext?.("2d");
+  if (!ctx) return;
+  const scale = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+  const width = 720;
+  const height = 1280;
+  if (canvas.width !== width * scale || canvas.height !== height * scale) {
+    canvas.width = width * scale;
+    canvas.height = height * scale;
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+  }
+  ctx.setTransform(scale, 0, 0, scale, 0, 0);
+  const progress = Math.max(0, Math.min(1, Number(options.progress || 0)));
+  const rows = options.rows || clipFarmFallbackRows();
+  const now = new Date();
+
+  ctx.fillStyle = "#020803";
+  ctx.fillRect(0, 0, width, height);
+  const glow = ctx.createRadialGradient(width * 0.2, height * 0.12, 20, width * 0.2, height * 0.12, 460);
+  glow.addColorStop(0, "rgba(118,255,45,0.35)");
+  glow.addColorStop(1, "rgba(118,255,45,0)");
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.strokeStyle = "rgba(118,255,45,0.38)";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(24, 24, width - 48, height - 48);
+
+  ctx.fillStyle = "#baff4d";
+  ctx.font = "900 34px Arial, sans-serif";
+  ctx.fillText("SlimeWire REC", 48, 88);
+  ctx.fillStyle = "#f4fff0";
+  ctx.font = "800 54px Arial, sans-serif";
+  ctx.fillText("Fresh Live Picks", 48, 154);
+  ctx.fillStyle = "rgba(226,255,215,0.78)";
+  ctx.font = "700 22px Arial, sans-serif";
+  ctx.fillText(`Mobile in-site clip - ${now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`, 48, 196);
+
+  const barWidth = width - 96;
+  ctx.fillStyle = "rgba(118,255,45,0.12)";
+  ctx.fillRect(48, 226, barWidth, 12);
+  ctx.fillStyle = "#78ff2d";
+  ctx.fillRect(48, 226, Math.max(24, barWidth * progress), 12);
+
+  rows.forEach((row, index) => {
+    const y = 292 + index * 188;
+    const symbol = String(row.symbol || row.baseSymbol || shortAddress(row.tokenMint || "") || "Token").slice(0, 18);
+    const name = String(row.name || row.category || "fresh pair").slice(0, 34);
+    const mc = firstStatLabel(row.marketCapLabel, row.fdvLabel, compactUsd(livePairMarketCap(row)), "checking");
+    const liq = firstStatLabel(row.liquidityLabel, compactUsd(livePairLiquidityUsd(row)), "checking");
+    const vol = firstStatLabel(row.volumeH1Label, row.volumeLabel, compactUsd(row.volumeH1), "checking");
+    const age = String(row.pairAgeLabel || formatAgeFromRow(row) || "live").slice(0, 18);
+
+    ctx.fillStyle = "rgba(4,24,8,0.92)";
+    ctx.strokeStyle = "rgba(118,255,45,0.34)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    if (typeof ctx.roundRect === "function") ctx.roundRect(48, y, width - 96, 156, 18);
+    else ctx.rect(48, y, width - 96, 156);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = "#f4fff0";
+    ctx.font = "900 32px Arial, sans-serif";
+    ctx.fillText(symbol, 76, y + 48);
+    ctx.fillStyle = "rgba(226,255,215,0.72)";
+    ctx.font = "700 18px Arial, sans-serif";
+    ctx.fillText(name, 76, y + 78);
+
+    [["MC", mc], ["LIQ", liq], ["VOL", vol], ["AGE", age]].forEach(([label, value], statIndex) => {
+      const x = 76 + statIndex * 140;
+      ctx.fillStyle = "#aaff8f";
+      ctx.font = "800 15px Arial, sans-serif";
+      ctx.fillText(label, x, y + 114);
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "900 23px Arial, sans-serif";
+      ctx.fillText(String(value).slice(0, 10), x, y + 142);
+    });
+  });
+
+  ctx.fillStyle = "rgba(226,255,215,0.72)";
+  ctx.font = "700 20px Arial, sans-serif";
+  ctx.fillText("Generated by SlimeWire Clip Farm when mobile screen capture is blocked.", 48, height - 78);
+  ctx.fillStyle = "#78ff2d";
+  ctx.font = "900 24px Arial, sans-serif";
+  ctx.fillText("slimewire.org", 48, height - 44);
+}
+
+async function createClipFarmFallbackPng(canvas) {
+  drawClipFarmFallbackFrame(canvas, { progress: 1 });
+  const blob = await new Promise((resolve) => {
+    try {
+      canvas.toBlob((value) => resolve(value), "image/png", 0.92);
+    } catch {
+      resolve(null);
+    }
+  });
+  if (!blob) {
+    showClipFarmUnsupportedMessage();
+    return;
+  }
+  const videoUrl = URL.createObjectURL(blob);
+  state.clipFarm = {
+    ...state.clipFarm,
+    recording: false,
+    recorder: null,
+    stream: null,
+    chunks: [],
+    fallbackFrameTimer: null,
+    fallbackStopTimer: null,
+    blob,
+    videoUrl,
+    mimeType: "image/png",
+    fileExtension: "png",
+    status: "Mobile clip ready (.png)."
+  };
+  updateClipFarmControl();
+}
+
+async function startClipFarmMobileFallbackRecording() {
+  const canvas = clipFarmMobileFallbackCanvas();
+  if (!canvas) {
+    showClipFarmUnsupportedMessage();
+    return;
+  }
+  const captureStream = canvas.captureStream || canvas.mozCaptureStream;
+  if (!captureStream || !window.MediaRecorder) {
+    await createClipFarmFallbackPng(canvas);
+    return;
+  }
+  clearClipFarmClip();
+  const rows = clipFarmFallbackRows();
+  const startedAt = Date.now();
+  const stream = captureStream.call(canvas, 12);
+  const mimeType = clipFarmMimeType();
+  const chunks = [];
+  const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+  const draw = () => drawClipFarmFallbackFrame(canvas, { rows, progress: (Date.now() - startedAt) / 4200 });
+  draw();
+  const fallbackFrameTimer = setInterval(draw, 1000 / 12);
+  recorder.addEventListener("dataavailable", (event) => {
+    if (event.data?.size > 0) chunks.push(event.data);
+  });
+  recorder.addEventListener("stop", () => {
+    stopClipFarmTracks();
+    const blobMimeType = mimeType || "video/webm";
+    const blob = new Blob(chunks, { type: blobMimeType });
+    const videoUrl = blob.size > 0 ? URL.createObjectURL(blob) : "";
+    const fileExtension = clipFarmExtensionForMime(blob.type || blobMimeType);
+    state.clipFarm = {
+      ...state.clipFarm,
+      recording: false,
+      recorder: null,
+      stream: null,
+      chunks: [],
+      fallbackFrameTimer: null,
+      fallbackStopTimer: null,
+      blob: blob.size > 0 ? blob : null,
+      videoUrl,
+      mimeType: blob.type || blobMimeType,
+      fileExtension,
+      status: blob.size > 0 ? `Mobile clip ready (.${fileExtension}).` : "No mobile clip captured."
+    };
+    updateClipFarmControl();
+  }, { once: true });
+  recorder.start(500);
+  const fallbackStopTimer = setTimeout(() => {
+    if (state.clipFarm?.recording) stopClipFarmRecording();
+  }, 4300);
+  state.clipFarm = {
+    recording: true,
+    status: "Recording mobile clip...",
+    blob: null,
+    videoUrl: "",
+    mimeType,
+    fileExtension: clipFarmExtensionForMime(mimeType),
+    recorder,
+    stream,
+    chunks,
+    fallbackFrameTimer,
+    fallbackStopTimer
+  };
+  updateClipFarmControl();
+}
+
 async function startClipFarmRecording() {
-  if (!clipFarmSupported()) {
+  if (!clipFarmScreenCaptureSupported()) {
+    if (clipFarmMobileFallbackSupported()) {
+      await startClipFarmMobileFallbackRecording();
+      return;
+    }
     showClipFarmUnsupportedMessage();
     return;
   }
@@ -4693,7 +4921,7 @@ function stopClipFarmRecording() {
   const recorder = state.clipFarm?.recorder;
   if (!recorder) {
     stopClipFarmTracks();
-    state.clipFarm = { ...state.clipFarm, recording: false, stream: null, recorder: null, chunks: [] };
+    state.clipFarm = { ...state.clipFarm, recording: false, stream: null, recorder: null, chunks: [], fallbackFrameTimer: null, fallbackStopTimer: null };
     updateClipFarmControl();
     return;
   }
@@ -4707,7 +4935,7 @@ function stopClipFarmRecording() {
     // Fall through to cleanup.
   }
   stopClipFarmTracks();
-  state.clipFarm = { ...state.clipFarm, recording: false, stream: null, recorder: null, chunks: [] };
+  state.clipFarm = { ...state.clipFarm, recording: false, stream: null, recorder: null, chunks: [], fallbackFrameTimer: null, fallbackStopTimer: null };
   updateClipFarmControl();
 }
 
@@ -12648,14 +12876,10 @@ function smartChartDexFrameHtml(token = {}, mode = "chart") {
   const mint = String(token?.tokenMint || state.smartChartToken || "").trim();
   const isTransactions = mode === "chartTxns" || mode === "txns";
   const isInfo = mode === "info";
-  const isPumpChart = Boolean(pumpUrlForRow(token) && isUnbondedPumpToken(token) && ["chart", "chartTxns", "txns"].includes(mode));
-  if (isPumpChart) return smartChartPumpPanelHtml(token, mode);
   const resolvingPair = queueSmartChartBootstrap(token) || queueSmartChartDexResolution(token);
   const title = isInfo
     ? `DexScreener info for ${token.symbol || shortAddress(mint)}`
-    : isPumpChart
-      ? `Pump chart and transactions for ${token.symbol || shortAddress(mint)}`
-      : isTransactions
+    : isTransactions
       ? `DexScreener chart and transactions for ${token.symbol || shortAddress(mint)}`
       : `DexScreener chart for ${token.symbol || shortAddress(mint)}`;
   const className = [
@@ -12665,8 +12889,8 @@ function smartChartDexFrameHtml(token = {}, mode = "chart") {
     mode === "chartTxns" ? "smart-chart-combined-frame" : "",
     isInfo ? "smart-chart-info-frame" : ""
   ].filter(Boolean).join(" ");
-  const loadingLabel = isPumpChart ? "Loading Pump chart..." : isInfo ? "Loading token info..." : isTransactions ? "Loading DEX transactions..." : "Loading DEX chart...";
-  const frameLoadingLabel = resolvingPair && !isPumpChart ? "Loading DEX chart while resolving fastest pair..." : loadingLabel;
+  const loadingLabel = isInfo ? "Loading token info..." : isTransactions ? "Loading DEX transactions..." : "Loading DEX chart...";
+  const frameLoadingLabel = resolvingPair ? "Loading DEX chart while resolving fastest pair..." : loadingLabel;
   return `
     <div class="${escapeHtml(className)}" data-chart-frame-loading="${escapeHtml(frameLoadingLabel)}" data-chart-resolving="${resolvingPair ? "true" : "false"}">
       <iframe title="${escapeHtml(title)}" src="${escapeHtml(smartChartFrameUrl(token, mode))}" loading="eager" fetchpriority="high" referrerpolicy="no-referrer-when-downgrade" onload="this.closest('.smart-chart-frame')?.setAttribute('data-loaded','true'); window.SlimeWireChartFrameLoaded?.('${escapeHtml(mode)}','${escapeHtml(mint)}')" allowfullscreen></iframe>
@@ -15166,6 +15390,31 @@ function smartChartQuickActionsHtml(token = {}, heldPosition = null) {
   `;
 }
 
+function smartChartMarketBarHtml(token = {}, heldPosition = null) {
+  const mint = String(token?.tokenMint || state.smartChartToken || "").trim();
+  const mcValue = livePairMarketCap(token);
+  const liqValue = livePairLiquidityUsd(token);
+  const mc = firstStatLabel(token.marketCapLabel, token.fdvLabel, mcValue > 0 ? compactUsd(mcValue) : "", "checking");
+  const liq = firstStatLabel(token.liquidityLabel, liqValue > 0 ? compactUsd(liqValue) : "", "checking");
+  const vol1h = firstStatLabel(token.volumeH1Label, token.volumeLabel, compactUsd(token.volumeH1), "checking");
+  const vol24h = firstStatLabel(token.volumeH24Label, compactUsd(token.volumeH24), "checking");
+  const status = heldPosition
+    ? "Position held"
+    : isUnbondedPumpToken(token)
+      ? "Pump curve"
+      : firstStatLabel(token.safetyStatus, token.category, token.dexId, "DEX");
+  return `
+    <div class="smart-chart-market-bar" aria-label="Selected token market stats">
+      <span><small>CA</small><strong>${escapeHtml(shortAddress(mint))}</strong></span>
+      <span><small>MC / FDV</small><strong>${escapeHtml(mc)}</strong></span>
+      <span><small>LIQ</small><strong>${escapeHtml(liq)}</strong></span>
+      <span><small>1H</small><strong>${escapeHtml(vol1h)}</strong></span>
+      <span><small>24H</small><strong>${escapeHtml(vol24h)}</strong></span>
+      <span><small>Status</small><strong>${escapeHtml(status)}</strong></span>
+    </div>
+  `;
+}
+
 function safeSmartChartHtml() {
   try {
     return smartChartHtml();
@@ -15208,18 +15457,12 @@ function safeSmartChartHtml() {
               ${mint ? `<a href="https://solscan.io/token/${encodeURIComponent(mint)}" target="_blank" rel="noreferrer">Solscan</a>` : ""}
             </div>
           </div>
-          <div class="smart-chart-mode-tabs">
-            <button type="button" data-smart-chart-view="chart" data-active="true">Chart</button>
-            <button type="button" data-smart-chart-view="chartTxns">Chart + Txns</button>
-            <button type="button" data-smart-chart-view="txns">Transactions</button>
-            <button type="button" data-smart-chart-view="info">Info</button>
-          </div>
           ${dexSrc ? `
             <div class="smart-chart-frame smart-chart-fallback-frame" data-chart-frame-loading="Loading live chart..." data-loaded="true">
               <iframe src="${escapeHtml(dexSrc)}" title="SlimeWire recovered live chart" loading="lazy" referrerpolicy="no-referrer"></iframe>
             </div>
           ` : emptyState("Paste a token CA", "Open a token from Live Terminal or paste a CA above.")}
-          <small class="score-breakdown">Fallback chart kept the page alive after a display error. Use the tabs above or reopen the CA to refresh the full SlimeWire chart shell.</small>
+          <small class="score-breakdown">Fallback chart kept the page alive after a display error. Reopen the CA to refresh the full SlimeWire chart shell.</small>
         </article>
       </section>
     `;
@@ -15236,8 +15479,6 @@ function smartChartHtml() {
         ...allVisibleSignalRows().filter((row) => String(row.tokenMint || "") === mint)
       ]).filter(Boolean).slice(0, 5)
     : rotatedDisplayRows(terminalBestPickRows(), 5, terminalRotationKey("smart-chart-suggest"), 1);
-  const rawChartView = String(state.smartChartView || "chartTxns");
-  const chartView = ["chart", "chartTxns", "txns", "info"].includes(rawChartView) ? rawChartView : "chartTxns";
   if (!mint) {
     return `
       <section class="smart-chart-terminal">
@@ -15306,10 +15547,7 @@ function smartChartHtml() {
               ${miniTokenLinksHtml(token)}
             </div>
           </div>
-          <div class="smart-chart-combined-label">
-            <strong>DEX Chart + Transactions</strong>
-            <small>Use the trade panel for wallet, preset, stop loss, take profit, and sell controls.</small>
-          </div>
+          ${smartChartMarketBarHtml(token, heldPosition)}
           ${smartChartDexFrameHtml(token, "chartTxns")}
         </article>
         <aside class="terminal-panel smart-chart-side smart-chart-clean-side">
@@ -16883,11 +17121,20 @@ function ogreAgentRecentMarketRows() {
 function ogreAgentTrendScore(row = {}) {
   const safe = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
   const age = safe(row.ageMinutes);
-  const freshBonus = age > 0 ? Math.max(0, 120 - age) / 4 : 8;
-  const buyPressure = Math.max(0, safe(row.buys5m) - safe(row.sells5m)) * 2;
+  const marketCap = safe(row.marketCap);
+  const liquidity = safe(row.liquidityUsd);
+  const volume5m = safe(row.volume5m);
+  const volume1h = safe(row.volume1h);
+  const volume = Math.max(volume5m, volume1h * 0.18);
+  const freshBonus = age > 0 ? Math.max(0, 90 - Math.min(age, 360)) / 2.5 : 12;
+  const stalePenalty = age > 120 ? Math.min(42, (age - 120) / 4) : 0;
+  const lowMcBonus = marketCap > 0 && marketCap <= 125000 ? 22 : marketCap > 0 && marketCap <= 250000 ? 11 : marketCap > 650000 ? -18 : 0;
+  const volumeToMc = marketCap > 0 ? volume / marketCap : 0;
+  const volumeMomentum = volumeToMc >= 0.08 ? 24 : volumeToMc >= 0.04 ? 16 : volumeToMc >= 0.018 ? 8 : volume > 0 ? 2 : -18;
+  const buyPressure = Math.max(0, safe(row.buys5m) - safe(row.sells5m)) * 2.6;
   const socialBonus = row.twitterUrl || row.telegramUrl || row.websiteUrl ? 10 : 0;
   const riskPenalty = Array.isArray(row.riskFlags) && row.riskFlags.length ? Math.min(16, row.riskFlags.length * 3) : 0;
-  return safe(row.score) + freshBonus + Math.log10(1 + safe(row.volume5m) + safe(row.volume1h)) * 8 + Math.log10(1 + safe(row.liquidityUsd)) * 4 + buyPressure + socialBonus - riskPenalty;
+  return safe(row.score) + freshBonus + lowMcBonus + volumeMomentum + Math.log10(1 + volume5m + volume1h) * 7 + Math.log10(1 + liquidity) * 3 + buyPressure + socialBonus - riskPenalty - stalePenalty;
 }
 
 function ogreAgentActionLabel(action = {}) {
@@ -17751,6 +17998,20 @@ async function runOgreAgentAction(action = {}) {
     return;
   }
 
+  if (type === "open_wallet_connect") {
+    openWalletConnectChooser({ returnPath: "/terminal" });
+    state.ogreAgentStatus = "Wallet connect opened.";
+    renderOgreAgent();
+    return;
+  }
+
+  if (type === "start_clip_recording") {
+    void startClipFarmRecording();
+    state.ogreAgentStatus = "REC started from Ogre Agent.";
+    renderOgreAgent();
+    return;
+  }
+
   if (action.type === "open_quick_buy") {
     const tokenMint = String(action.tokenMint || action.mint || state.selectedToken?.mint || state.selectedToken?.pairAddress || "").trim();
     if (!tokenMint) {
@@ -17972,8 +18233,8 @@ function ogreAgentLocalSocialReply(message = "") {
 
 function ogreAgentTrendIntent(message = "") {
   const text = String(message || "").toLowerCase();
-  return /\b(top|best|hot|trending|trend|viral|runner|moving|today|now)\b/.test(text)
-    && /\b(meme|memecoin|coin|token|pair|launch|x|twitter)\b/.test(text);
+  return /\b(top|best|hot|trending|trend|viral|runner|moving|today|now|low mc|low mcap|fresh|climbing|x2|2x)\b/.test(text)
+    && /\b(meme|memecoin|coin|token|pair|launch|x|twitter|volume|market cap|mc)\b/.test(text);
 }
 
 function ogreAgentLocalTrendReply(message = "") {
@@ -18000,7 +18261,7 @@ function ogreAgentLocalTrendReply(message = "") {
     };
   }
   const lines = [
-    "Fast meme scan from SlimeWire live context right now:",
+    "Fresh low-MC momentum scan from SlimeWire live context right now:",
     ...rows.map((row, index) => {
       const symbol = row.symbol || shortAddress(row.tokenMint);
       const age = Number.isFinite(Number(row.ageMinutes)) ? `${Math.max(0, Math.round(Number(row.ageMinutes)))}m old` : "age n/a";
@@ -18008,7 +18269,7 @@ function ogreAgentLocalTrendReply(message = "") {
       const risk = Array.isArray(row.riskFlags) && row.riskFlags.length ? `risk: ${row.riskFlags.slice(0, 2).join(", ")}` : "risk pending";
       return `${index + 1}. ${symbol} ${shortAddress(row.tokenMint)} | MC ${money(row.marketCap)} | Liq ${money(row.liquidityUsd)} | Vol ${money(row.volume5m || row.volume1h)} | ${age} | ${socials} | ${risk}`;
     }),
-    "X note: I can use returned X/social links, SlimeWire rows, and AI reasoning. If verified X posts are not returned, I will rank the live candidates I can actually see instead of guessing."
+    "X note: I rank visible fresh rows by low MC, real volume, buy pressure, liquidity, age, socials, and risk flags instead of guessing."
   ];
   const first = rows[0];
   return {

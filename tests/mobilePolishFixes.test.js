@@ -107,8 +107,12 @@ test("mobile REC and wallet connect controls stay tappable in one sync row", () 
   assert.match(htmlSource, /data-top-wallet-connect/);
   assert.match(functionBody(appSource, "updateClipFarmControl"), /data-clip-record data-supported=/);
   assert.doesNotMatch(functionBody(appSource, "updateClipFarmControl"), /data-clip-record \$\{supported \? "" : "disabled"\}/);
-  assert.match(functionBody(appSource, "startClipFarmRecording"), /showClipFarmUnsupportedMessage\(\)/);
-  assert.match(functionBody(appSource, "showClipFarmUnsupportedMessage"), /Mobile browsers usually block website screen recording/);
+  assert.match(functionBody(appSource, "clipFarmMobileFallbackSupported"), /canvas\.toBlob/);
+  assert.match(functionBody(appSource, "startClipFarmRecording"), /startClipFarmMobileFallbackRecording\(\)/);
+  assert.match(functionBody(appSource, "startClipFarmMobileFallbackRecording"), /Recording mobile clip/);
+  assert.match(functionBody(appSource, "drawClipFarmFallbackFrame"), /Fresh Live Picks/);
+  assert.match(functionBody(appSource, "clipFarmExtensionForMime"), /image\\\/png/);
+  assert.match(functionBody(appSource, "showClipFarmUnsupportedMessage"), /blocked both screen recording and SlimeWire clip fallback/);
   assert.match(functionBody(appSource, "showClipFarmUnsupportedMessage"), /window\.alert\(message\)/);
   assert.match(functionBody(appSource, "updateTopWalletConnectStatus"), /data-top-wallet-connect/);
   assert.match(appSource, /target\.matches\("\[data-top-wallet-connect\]"\)[\s\S]*openWalletConnectChooser\(\{ returnPath: "\/terminal" \}\)/);

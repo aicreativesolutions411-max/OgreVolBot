@@ -416,6 +416,75 @@ test("Ogre A.I. demotes recently picked mints when alternatives exist", () => {
   assert.equal(diversified.at(-1).tokenMint, "RepeatMint");
 });
 
+test("Ogre A.I. prioritizes fresh low-market-cap volume over stale sleepy repeats", () => {
+  const rows = [
+    {
+      tokenMint: "StaleSleepyMint",
+      bestPickScore: 88,
+      marketCap: 410_000,
+      liquidityUsd: 7_000,
+      volume5m: 180,
+      volumeH1: 950,
+      m5: 1.2,
+      h1: 2.5,
+      buys5m: 2,
+      sells5m: 2,
+      pairAgeMinutes: 165
+    },
+    {
+      tokenMint: "FreshClimbingMint",
+      bestPickScore: 52,
+      marketCap: 48_000,
+      liquidityUsd: 980,
+      volume5m: 5_800,
+      volumeM15: 12_400,
+      m5: 19,
+      h1: 29,
+      buys5m: 18,
+      sells5m: 4,
+      pairAgeMinutes: 8
+    }
+  ];
+
+  const targetDefaults = {
+    ...defaults,
+    takeProfitPct: 100,
+    targetTakeProfitPct: 100,
+    desiredPickCount: 1,
+    preferFreshLaunches: true,
+    maxMarketCap: 260_000,
+    minLiquidityUsd: 90
+  };
+  const pool = buildOgreAiCandidatePool(rows, targetDefaults, "quick");
+  assert.equal(pool.candidates[0].tokenMint, "FreshClimbingMint");
+  assert.ok(ogreAiTargetFitScore(rows[1], targetDefaults, "quick") > ogreAiTargetFitScore(rows[0], targetDefaults, "quick"));
+});
+
+test("Ogre A.I. rejects stale pump rows without live volume for high-upside targets", () => {
+  const targetDefaults = {
+    ...defaults,
+    takeProfitPct: 100,
+    targetTakeProfitPct: 100,
+    maxMarketCap: 260_000,
+    minLiquidityUsd: 90
+  };
+  const stalePump = {
+    tokenMint: "StalePumpMintpump",
+    bestPickScore: 76,
+    isPump: true,
+    marketCap: 92_000,
+    liquidityUsd: 1_400,
+    volume5m: 120,
+    volumeH1: 500,
+    m5: 1,
+    buys5m: 1,
+    sells5m: 1,
+    pairAgeMinutes: 240
+  };
+
+  assert.equal(ogreAiTierForCandidate(stalePump, targetDefaults, "quick"), null);
+});
+
 test("Ogre A.I. uses a fast cached-market fallback before failing empty", () => {
   assert.match(serverSource, /OGRE_AI_SOURCE_SOFT_TIMEOUT_MS = 1_500/);
   assert.match(serverSource, /OGRE_AI_SAFETY_SCAN_BUDGET_MS = 1_700/);

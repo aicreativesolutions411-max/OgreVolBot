@@ -31,6 +31,10 @@ import {
   isOgreAiBlockedRisk
 } from "./lib/ogreAi.js";
 import {
+  ogreAgentKnowledgeReply,
+  ogreAgentKnowledgeSummary
+} from "./lib/ogreAgentKnowledge.js";
+import {
   calculateMoveSnapshot,
   recentStoredPriceExitDecision,
   shouldEmergencySellOnPriceFailure,
@@ -3346,6 +3350,12 @@ function ogreAgentSiteHelpReply(message = "", context = {}) {
   const actions = [];
   let reply = "";
   let intent = "";
+  if (ogreAgentTrendIntent(text)) return null;
+  const knowledgeReply = ogreAgentKnowledgeReply(text, {
+    ...context,
+    lastTokenMint: ogreAgentTokenMintFromContext(text, context)
+  });
+  if (knowledgeReply) return knowledgeReply;
 
   if (/\b(referral|referal|refferal|refferral|referrer|ref code|invite|\/r\/|payout wallet|payouts?)\b/.test(lower)) {
     intent = "site_referral_help";
@@ -3666,8 +3676,8 @@ async function enrichOgreAgentCoinReply(fallback = {}, message = "", context = {
 
 function ogreAgentTrendIntent(message = "") {
   const text = String(message || "").toLowerCase();
-  return /\b(top|best|hot|trending|trend|viral|runner|moving|today|now|what'?s hot|what is hot)\b/.test(text)
-    && /\b(meme|memecoin|coin|token|pair|launch|x|twitter|social)\b/.test(text);
+  return /\b(top|best|hot|trending|trend|viral|runner|runners|moving|today|now|what'?s hot|what is hot|low mc|low mcap|fresh|climbing|volume coming in|x2|2x)\b/.test(text)
+    && /\b(meme|memecoin|coin|token|pair|launch|x|twitter|social|volume|market cap|mc)\b/.test(text);
 }
 
 function ogreAgentTrendNumber(value) {
@@ -3703,17 +3713,29 @@ function ogreAgentNormalizeTrendRow(row = {}, source = "feed") {
 
 function ogreAgentTrendScore(row = {}) {
   const age = ogreAgentTrendNumber(row.ageMinutes);
-  const freshBonus = age > 0 ? Math.max(0, 120 - age) / 4 : 8;
-  const buyPressure = Math.max(0, ogreAgentTrendNumber(row.buys5m) - ogreAgentTrendNumber(row.sells5m)) * 2;
+  const marketCap = ogreAgentTrendNumber(row.marketCap);
+  const liquidity = ogreAgentTrendNumber(row.liquidityUsd);
+  const volume5m = ogreAgentTrendNumber(row.volume5m);
+  const volume1h = ogreAgentTrendNumber(row.volume1h);
+  const volume = Math.max(volume5m, volume1h * 0.18);
+  const freshBonus = age > 0 ? Math.max(0, 90 - Math.min(age, 360)) / 2.5 : 12;
+  const stalePenalty = age > 120 ? Math.min(42, (age - 120) / 4) : 0;
+  const lowMcBonus = marketCap > 0 && marketCap <= 125_000 ? 22 : marketCap > 0 && marketCap <= 250_000 ? 11 : marketCap > 650_000 ? -18 : 0;
+  const volumeToMc = marketCap > 0 ? volume / marketCap : 0;
+  const volumeMomentum = volumeToMc >= 0.08 ? 24 : volumeToMc >= 0.04 ? 16 : volumeToMc >= 0.018 ? 8 : volume > 0 ? 2 : -18;
+  const buyPressure = Math.max(0, ogreAgentTrendNumber(row.buys5m) - ogreAgentTrendNumber(row.sells5m)) * 2.6;
   const socialBonus = row.twitterUrl || row.telegramUrl || row.websiteUrl ? 10 : 0;
   const riskPenalty = Array.isArray(row.riskFlags) && row.riskFlags.length ? Math.min(16, row.riskFlags.length * 3) : 0;
   return ogreAgentTrendNumber(row.score)
     + freshBonus
-    + Math.log10(1 + ogreAgentTrendNumber(row.volume5m) + ogreAgentTrendNumber(row.volume1h)) * 8
-    + Math.log10(1 + ogreAgentTrendNumber(row.liquidityUsd)) * 4
+    + lowMcBonus
+    + volumeMomentum
+    + Math.log10(1 + volume5m + volume1h) * 7
+    + Math.log10(1 + liquidity) * 3
     + buyPressure
     + socialBonus
-    - riskPenalty;
+    - riskPenalty
+    - stalePenalty;
 }
 
 async function ogreAgentTrendRows(context = {}) {
@@ -4436,7 +4458,7 @@ async function ogreAgentTrendReply(message = "", context = {}) {
   }
   const topRows = rows.slice(0, 4);
   const lines = [
-    usedX ? "Fast X recent-search CA scan right now:" : "Fast meme scan from SlimeWire live data right now:",
+    usedX ? "Fast X recent-search CA scan right now:" : "Fresh low-MC momentum scan from SlimeWire live data right now:",
     ...topRows.map((row, index) => {
       const symbol = row.symbol || shortMint(row.tokenMint);
       const age = Number.isFinite(Number(row.ageMinutes)) ? `${Math.max(0, Math.round(Number(row.ageMinutes)))}m old` : "age n/a";
@@ -4449,7 +4471,7 @@ async function ogreAgentTrendReply(message = "", context = {}) {
     }),
     usedX
       ? "X source: recent search from the configured X bearer token. I count CAs and public engagement from returned posts, then you can open/check the top CA."
-      : "X note: I can use returned X/social links, SlimeWire live rows, and AI reasoning. If no verified X posts are returned, I rank the live candidates I can actually see instead of guessing."
+      : "X note: I rank visible fresh rows by low MC, real volume, buy pressure, liquidity, age, socials, and risk flags instead of guessing."
   ];
   const first = topRows[0];
   return {
@@ -4467,7 +4489,7 @@ async function ogreAgentTrendReply(message = "", context = {}) {
 }
 
 function ogreAgentModelSystemPrompt() {
-  return "You are Ogre Agent inside SlimeWire, a one-stop user-side trading assistant. Answer the user's latest intent directly, not with a generic checklist. Use conversation memory so follow-ups continue the current token/question until the user changes topic or clears chat. If the user gives a token CA, remember it as the active token for follow-up words like it/this/buy/sell. Help with panel functions, mobile and desktop navigation, charting, presets, positions, wallet refresh, referrals, badges/quests, profile setup, feed categories, coin/link questions, Solana token breakdowns, SlimeShield verdicts, Dev Info, Protected Buy, KOL Dump Detector, Replay Before You Buy, risk/community/read questions, and fast trade requests. When the user asks where something is, give exact SlimeWire navigation: top sponsor/KOL ticker links, right-side mobile rail, Live Terminal, Slime Scope, Smart Chart, Slime Swap, Positions, Wallets, PnL, KOL Tracker, Profile, and Ogre Tools. If asked about a custom referral code, explain: open Profile, Referral card, edit only the code after /r/, Save Link, add Referral Payout Wallet, then copy/share. If fallbackReply or tool context contains a concrete action/read, build on it instead of asking for token name/symbol again. If context.slimeShield, context.devInfoSummary, context.kolDumpDetector, context.replayBeforeBuy, context.pnlSummary, or context.selectedPosition are present, use those facts and say when coverage is low. If the latest user asks whether KOLs/accounts/X/Twitter are posting about a token, answer only the social/KOL question with available social evidence, accounts, links, and limitations; do not list generic age/liquidity/MC checks unless asked next. If context.recentPairs is present, use it for fast live/fresh candidate ranking and explain what data is visible. If a token CA is present and the user asks a general risk/read question, explain useful checks: age, liquidity, MC/FDV, volume, buy/sell pressure, chart structure, socials, holder/risk badges, mint/freeze risks when visible, dev status, and whether it looks early, risky, or building a floor. If asked about X/Twitter, Telegram, website, or community, use visible token links/metadata when provided and be clear when those links are unavailable; do not pretend to have a platform-wide X firehose unless context includes X post data. Never reveal or discuss code, security internals, env vars, API keys, private keys, backend architecture, or database details. Never claim a buy/sell completed unless the site context says it did. Never guarantee profits or tell the user to ignore wallet warnings. Keep replies short, practical, and action-oriented.";
+  return `${ogreAgentKnowledgeSummary()} You are Ogre Agent inside SlimeWire, a one-stop user-side trading assistant. Answer the user's latest intent directly, not with a generic checklist. Use conversation memory so follow-ups continue the current token/question until the user changes topic or clears chat. If the user gives a token CA, remember it as the active token for follow-up words like it/this/buy/sell. Help with panel functions, mobile and desktop navigation, charting, presets, positions, wallet refresh, referrals, badges/quests, profile setup, feed categories, coin/link questions, Solana token breakdowns, SlimeShield verdicts, Dev Info, Protected Buy, KOL Dump Detector, Replay Before You Buy, risk/community/read questions, and fast trade requests. When the user asks where something is, give exact SlimeWire navigation: top sponsor/KOL ticker links, right-side mobile rail, Live Terminal, Slime Scope, Smart Chart, Slime Swap, Positions, Wallets, PnL, KOL Tracker, Profile, and Ogre Tools. If asked about a custom referral code, explain: open Profile, Referral card, edit only the code after /r/, Save Link, add Referral Payout Wallet, then copy/share. If fallbackReply or tool context contains a concrete action/read, build on it instead of asking for token name/symbol again. If context.slimeShield, context.devInfoSummary, context.kolDumpDetector, context.replayBeforeBuy, context.pnlSummary, or context.selectedPosition are present, use those facts and say when coverage is low. If the latest user asks whether KOLs/accounts/X/Twitter are posting about a token, answer only the social/KOL question with available social evidence, accounts, links, and limitations; do not list generic age/liquidity/MC checks unless asked next. If context.recentPairs is present, use it for fast live/fresh candidate ranking and explain what data is visible. If a token CA is present and the user asks a general risk/read question, explain useful checks: age, liquidity, MC/FDV, volume, buy/sell pressure, chart structure, socials, holder/risk badges, mint/freeze risks when visible, dev status, and whether it looks early, risky, or building a floor. If asked about X/Twitter, Telegram, website, or community, use visible token links/metadata when provided and be clear when those links are unavailable; do not pretend to have a platform-wide X firehose unless context includes X post data. Never reveal or discuss code, security internals, env vars, API keys, private keys, backend architecture, or database details. Never claim a buy/sell completed unless the site context says it did. Never guarantee profits or tell the user to ignore wallet warnings. Keep replies short, practical, and action-oriented.`;
 }
 
 function ogreAgentEnv(name = "") {

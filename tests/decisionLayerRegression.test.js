@@ -9,6 +9,7 @@ const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url)
 const configSource = fs.readFileSync(new URL("../config.js", import.meta.url), "utf8");
 const envSource = fs.readFileSync(new URL("../.env.example", import.meta.url), "utf8");
 const renderSource = fs.readFileSync(new URL("../render.yaml", import.meta.url), "utf8");
+const ogreAgentKnowledgeSource = fs.readFileSync(new URL("../src/lib/ogreAgentKnowledge.js", import.meta.url), "utf8");
 
 function functionBody(name, source = appSource) {
   const syncMatch = new RegExp(`function\\s+${name}\\s*\\(`).exec(source);
@@ -181,6 +182,14 @@ test("Ogre Agent chat is contextual, retryable, copyable, and debug-instrumented
   assert.match(functionBody("ogreAgentContext"), /profile/);
   assert.match(functionBody("ogreAgentSiteHelpReply", serverSource), /refferal/);
   assert.match(functionBody("ogreAgentSiteHelpReply", serverSource), /Open Profile/);
+  assert.match(functionBody("ogreAgentSiteHelpReply", serverSource), /ogreAgentKnowledgeReply/);
+  assert.match(functionBody("ogreAgentModelSystemPrompt", serverSource), /ogreAgentKnowledgeSummary/);
+  assert.match(ogreAgentKnowledgeSource, /ref code/);
+  assert.match(ogreAgentKnowledgeSource, /pfp/);
+  assert.match(ogreAgentKnowledgeSource, /stop loss/);
+  assert.match(ogreAgentKnowledgeSource, /clip farm/);
+  assert.match(ogreAgentKnowledgeSource, /fresh low-MC/);
+  assert.match(ogreAgentKnowledgeSource, /start_clip_recording/);
   assert.match(functionBody("webOgreAgentReply", serverSource), /siteHelpReply[\s\S]*ogreAgentKolTrendReply/);
   assert.match(functionBody("ogreAgentHtml"), /data-ogre-agent-send \$\{state\.ogreAgentLoading \? "disabled" : ""\}/);
   assert.match(functionBody("ogreAgentHtml"), /AI can make mistakes\. Always review wallet prompts before signing/);
