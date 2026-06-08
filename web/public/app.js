@@ -478,6 +478,7 @@ let postTradeRefreshTimers = [];
 let positionRefreshVisualTimer = null;
 let positionsValueRefreshTimer = null;
 let autoExitCheckInFlight = false;
+let autoExitWatchTimers = [];
 let walletRefreshPromise = null;
 let positionsRefreshPromise = null;
 let positionsRefreshPromiseKey = "";
@@ -9093,19 +9094,23 @@ async function updateAutomationPermission(action = "enable", options = {}) {
   }
 }
 
-async function runTradePlanCheck() {
+async function runTradePlanCheck(options = {}) {
+  const silent = Boolean(options.silent);
+  const refreshWallet = options.refreshWallet !== false;
   if (!state.user || !state.token) {
-    setError("Log in or create a web account before checking server exits.");
+    if (!silent) setError("Log in or create a web account before checking server exits.");
     return;
   }
   if (autoExitCheckInFlight) {
     state.automationDelegationStatus = "TP/SL check is already running. Keeping the existing sell check active.";
-    render();
+    if (!silent) render();
     return;
   }
   autoExitCheckInFlight = true;
-  state.walletRefreshing = true;
-  render();
+  if (!silent) {
+    state.walletRefreshing = true;
+    render();
+  }
   try {
     const data = await api("/api/web/trade/plans/run", {
       method: "POST",
@@ -9114,25 +9119,40 @@ async function runTradePlanCheck() {
     });
     state.tradePlans = data.plans || state.tradePlans || [];
     const runner = data.runner || {};
+    const guardRunner = data.webExitGuards || {};
+    const portfolioRunner = data.portfolioExits || {};
+    const exitSold = Number(runner.soldWallets || 0)
+      + Number(guardRunner.soldGuards || 0)
+      + Number(portfolioRunner.soldPositions || 0);
+    const exitTriggered = Number(runner.triggeredWallets || 0)
+      + Number(guardRunner.triggeredGuards || 0)
+      + Number(portfolioRunner.triggeredPositions || 0);
     if (runner.skipped) {
       const activeFor = Number(runner.activeForMs || 0);
       const activeText = activeFor > 0 ? ` for ${Math.ceil(activeFor / 1000)}s` : "";
       state.automationDelegationStatus = runner.reason === "trade_plan_runner_active"
         ? `TP/SL runner is already checking exits${activeText}. It will keep retrying without starting a duplicate sell.`
         : `TP/SL check skipped: ${runner.reason || "runner busy"}.`;
-      await loadWalletCore({ force: true });
+      if (refreshWallet && !silent) await loadWalletCore({ force: true });
       return;
     }
     state.automationDelegationStatus = autoExitRunnerSummary(runner);
-    await loadWalletCore({ force: true });
+    if (refreshWallet || exitSold > 0 || exitTriggered > 0) {
+      await loadWalletCore({ force: true });
+    }
+    if (silent && (exitSold > 0 || exitTriggered > 0)) {
+      render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
+    }
   } catch (error) {
     state.automationDelegationStatus = error.message;
     state.walletRefreshError = error.message;
-    setError(error.message);
+    if (!silent) setError(error.message);
   } finally {
     autoExitCheckInFlight = false;
-    state.walletRefreshing = false;
-    render();
+    if (!silent) {
+      state.walletRefreshing = false;
+      render();
+    }
   }
 }
 
@@ -9168,8 +9188,29 @@ function ensureAutoExitWatchForActivePlans() {
   }
 }
 
+function clearAutoExitWatchTimers() {
+  autoExitWatchTimers.forEach((timer) => window.clearTimeout(timer));
+  autoExitWatchTimers = [];
+}
+
 function scheduleAutoExitChecks() {
+  clearAutoExitWatchTimers();
   state.automationDelegationStatus = "Server TP/SL worker armed. Monitoring continues even if this browser closes.";
+  const delays = [750, 2_000, 5_000, 10_000, 20_000, 30_000, 45_000, 60_000, 90_000];
+  autoExitWatchTimers = delays.map((delay) => {
+    const timer = window.setTimeout(() => {
+      autoExitWatchTimers = autoExitWatchTimers.filter((item) => item !== timer);
+      if (!state.user || !state.token || !hasActiveAutoExitPlans()) return;
+      void runTradePlanCheck({
+        silent: true,
+        refreshWallet: false,
+        reason: "auto-exit-watch"
+      }).catch((error) => {
+        state.automationDelegationStatus = error.message;
+      });
+    }, delay);
+    return timer;
+  });
 }
 
 async function restoreWalletBackup() {
@@ -14835,7 +14876,8 @@ function chartTradePanelHtml(token = {}, heldPosition = null) {
   const mint = String(token?.tokenMint || state.smartChartToken || "").trim();
   const activeTab = state.chartTradeTab === "sell" ? "sell" : "buy";
   const connected = connectedBrowserWallet();
-  const walletSelected = connected?.publicKey ? "connected" : "";
+  const managedDefaultWallet = state.wallets?.length ? String(state.wallets[0]?.index || "") : "";
+  const walletSelected = managedDefaultWallet || (connected?.publicKey ? "connected" : "");
   const activePreset = activeTradePreset();
   const chartBuyAmount = state.quickBuyAmountOverride || activeQuickBuyAmount(activePreset) || "";
   const chartPresetSummary = activePreset ? activePresetDetail("trade") : "No preset / manual";
@@ -14919,7 +14961,7 @@ function chartTradePanelHtml(token = {}, heldPosition = null) {
               <input data-chart-buy-sell-percent-custom data-custom-for="chart-buy-sell-percent" type="number" min="1" max="100" step="1" placeholder="Custom %" hidden>
             </label>
           </div>
-          <small>${connected?.publicKey ? `${escapeHtml(connected.provider || "Browser wallet")} approval opens in wallet. Managed-wallet TP/SL can auto-watch; connected-wallet exits still need wallet approval.` : "Choose a connected browser wallet or managed wallet. Managed wallets can arm TP/SL after buy."}</small>
+          <small>${managedDefaultWallet ? "Managed wallet selected for unattended TP/SL and timer exits. Browser-wallet buys still need approval for exits." : connected?.publicKey ? `${escapeHtml(connected.provider || "Browser wallet")} approval opens in wallet. Create or choose a managed wallet to arm unattended TP/SL and timer exits.` : "Choose a connected browser wallet or managed wallet. Managed wallets can arm TP/SL after buy."}</small>
           ${featureEnabled("protectedBuyEnabled", true) ? `<button type="button" data-protected-buy-open="${escapeHtml(mint)}" data-protected-buy-source="chart-buy-panel">Protected Buy</button>` : ""}
           <button type="button" class="primary chart-confirm-button" data-chart-confirm-buy="${escapeHtml(mint)}">Confirm Buy</button>
           <button type="button" data-quick-buy-token="${escapeHtml(mint)}" data-quick-buy-source="chart-panel">Quick Buy Drawer</button>
@@ -18772,9 +18814,13 @@ document.addEventListener("click", async (event) => {
     const tokenMint = target.dataset.chartConfirmBuy || state.smartChartToken || "";
     try {
       const autoExit = readChartTradeAutoExit();
+      const walletIndex = $("[data-chart-buy-wallet]")?.value || "";
+      if (autoExit.enabled && isConnectedTradeWallet(walletIndex)) {
+        throw new Error("TP/SL and timer exits need a managed SlimeWire wallet for unattended selling. Pick a managed wallet or turn those exits off.");
+      }
       await executeQuickBuyAmount({
         tokenMint,
-        walletIndex: $("[data-chart-buy-wallet]")?.value || "",
+        walletIndex,
         amountSol: normalizedQuickBuyAmount($("[data-chart-buy-amount]")?.value || ""),
         slippageBps: $("[data-chart-buy-slippage]")?.value || "400",
         takeProfitPct: autoExit.takeProfitPct,

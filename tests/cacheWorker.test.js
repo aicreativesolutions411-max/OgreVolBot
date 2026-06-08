@@ -123,6 +123,10 @@ test("backend worker warms display caches and keeps TP/SL DB-backed", () => {
   assert.match(serverSource, /WEB_INTERNAL_TP_SL_RUNNERS_ENABLED/);
   assert.match(serverSource, /function webLocalTpSlReconcileEnabled/);
   assert.match(serverSource, /Web startup TP\/SL reconcile disabled/);
+  assert.match(serverSource, /function startWebCriticalTpSlSafetyRunner/);
+  assert.match(serverSource, /function activeWebCriticalTpSlWork/);
+  assert.match(serverSource, /skipLiveBackfill: true/);
+  assert.match(serverSource, /webCriticalTpSlSafetyRunnerEnabled/);
   assert.match(serverSource, /processWebExitGuards/);
   assert.match(serverSource, /processTradePlans/);
   assert.match(serverSource, /processWebPortfolioExits/);

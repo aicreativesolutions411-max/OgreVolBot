@@ -111,7 +111,20 @@ test("mobile feed refresh preserves scroll and avoids the start flicker render",
 
 test("top refresh can also kick active TP/SL checks after wallet state refresh", () => {
   assert.match(functionBody(appSource, "shouldRunAutoExitCheckAfterWalletRefresh"), /hasActiveTpSlPermission\(\) && hasActiveAutoExitPlans\(\) && !autoExitCheckInFlight/);
-  assert.match(appSource, /refreshWalletNow\(\{ force: true, deep: false, reason: "manual_header_click" \}\)[\s\S]*shouldRunAutoExitCheckAfterWalletRefresh\(\)[\s\S]*runTradePlanCheck\(\)/);
+  assert.match(appSource, /refreshWalletNow\(\{ force: true, deep: false, reason: "manual_header_click" \}\)[\s\S]*shouldRunAutoExitCheckAfterWalletRefresh\(\)[\s\S]*runTradePlanCheck\(/);
+});
+
+test("auto exit follow-up checks are quiet on mobile unless an exit fires", () => {
+  const runCheck = functionBody(appSource, "runTradePlanCheck");
+  const scheduler = functionBody(appSource, "scheduleAutoExitChecks");
+  assert.match(appSource, /let autoExitWatchTimers = \[\]/);
+  assert.match(runCheck, /const silent = Boolean\(options\.silent\)/);
+  assert.match(runCheck, /if \(!silent\) \{[\s\S]*state\.walletRefreshing = true/);
+  assert.match(runCheck, /if \(!silent\) \{[\s\S]*state\.walletRefreshing = false/);
+  assert.match(runCheck, /silent && \(exitSold > 0 \|\| exitTriggered > 0\)/);
+  assert.match(scheduler, /clearAutoExitWatchTimers\(\)/);
+  assert.match(scheduler, /runTradePlanCheck\(\{[\s\S]*silent: true,[\s\S]*refreshWallet: false/);
+  assert.match(cssSource, /MOBILE_REFRESH_NO_FLICKER_20260608_V1/);
 });
 
 test("position value estimation falls back to existing Pump and Dex market sources", () => {

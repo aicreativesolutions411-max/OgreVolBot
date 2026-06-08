@@ -17972,3 +17972,33 @@ html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs .
   pointer-events: none !important;
   visibility: hidden !important;
 }
+
+/* MOBILE_REFRESH_NO_FLICKER_20260608_V1: keep background refreshes from repainting the mobile rail/header. */
+@media (max-width: 760px) {
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip,
+  html body main.shell[data-app][data-route="terminal"] [data-top-sync-strip],
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs,
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .metrics,
+  html body main.shell[data-app][data-route="terminal"] .command-controls {
+    backface-visibility: hidden !important;
+    contain: layout paint style !important;
+    transform: translateZ(0) !important;
+    will-change: auto !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-refresh-live-pairs],
+  html body main.shell[data-app][data-route="terminal"] [data-top-refresh-wallet],
+  html body main.shell[data-app][data-route="terminal"] [data-refresh-feeds],
+  html body main.shell[data-app][data-route="terminal"] button[data-action-state="clicked"],
+  html body main.shell[data-app][data-route="terminal"] button[data-action-state="refreshing"] {
+    animation: none !important;
+    filter: none !important;
+    transform: translateZ(0) !important;
+    transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-refresh-spinner] {
+    animation: none !important;
+    transform: none !important;
+  }
+}

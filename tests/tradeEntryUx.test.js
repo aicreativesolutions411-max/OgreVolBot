@@ -106,11 +106,14 @@ test("Chart route has professional Buy and Sell panel", () => {
   assert.match(panel, /data-chart-buy-delay/);
   assert.match(panel, /data-chart-confirm-buy/);
   assert.match(panel, /data-chart-confirm-sell/);
+  assert.match(panel, /managedDefaultWallet/);
+  assert.match(panel, /walletSelected = managedDefaultWallet/);
   assert.match(panel, /Sell 25%/);
   assert.match(panel, /Sell 50%/);
   assert.match(panel, /Sell 100%/);
   assert.match(functionBody(appSource, "readChartTradeAutoExit"), /data-chart-buy-tp/);
   assert.match(functionBody(appSource, "executeQuickBuyAmount"), /autoExit[\s\S]*takeProfitPct[\s\S]*stopLossPct/);
+  assert.match(appSource, /TP\/SL and timer exits need a managed SlimeWire wallet/);
   assert.match(functionBody(appSource, "smartChartHtml"), /chartTradePanelHtml\(token, heldPosition\)/);
   assert.match(functionBody(appSource, "applyChartRouteFromLocation"), /params\.get\("token"\)/);
 });

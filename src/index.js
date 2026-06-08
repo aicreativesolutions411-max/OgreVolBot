@@ -262,6 +262,7 @@ let webExitGuardRunnerActiveSince = 0;
 let webExitGuardLiveBackfillAt = 0;
 let webPortfolioExitRunnerActive = false;
 let webPortfolioExitRunnerActiveSince = 0;
+let webCriticalTpSlSafetyRunnerActive = false;
 const activeExitSellKeys = new Set();
 const webPortfolioExitState = new Map();
 let dcaPlanRunnerActive = false;
@@ -401,6 +402,7 @@ async function main() {
     startWebPortfolioExitRunner();
   } else {
     console.log("Web internal TP/SL interval runners disabled; Render worker tick owns DB-backed TP/SL checks.");
+    startWebCriticalTpSlSafetyRunner();
   }
   startTpSlStartupReconcile();
   if (CONFIG.webInternalDcaRunnerEnabled) {
@@ -1028,6 +1030,61 @@ function startWebPortfolioExitRunner() {
   setInterval(() => void processWebPortfolioExits({ forcePriceCheck: true }).catch((error) => {
     console.error("Web portfolio exit runner failed:", error.message);
   }), intervalMs);
+}
+
+function webCriticalTpSlSafetyRunnerEnabled() {
+  return CONFIG.serviceRole === "web" && !CONFIG.webInternalTpSlRunnersEnabled;
+}
+
+function startWebCriticalTpSlSafetyRunner() {
+  if (!webCriticalTpSlSafetyRunnerEnabled()) return;
+  const intervalMs = Math.max(1_000, Math.min(2_500, CONFIG.stopLossCheckIntervalMs || 2_000));
+  const tick = (reason) => void runWebCriticalTpSlSafetyTick(reason).catch((error) => {
+    console.warn(`Web critical TP/SL safety tick failed (${reason}): ${friendlyError(error)}`);
+  });
+  console.log(`Web critical TP/SL safety runner enabled. Active exits checked every ${intervalMs}ms as worker backup.`);
+  setTimeout(() => tick("startup"), Math.min(1_000, intervalMs));
+  setInterval(() => tick("interval"), intervalMs);
+}
+
+async function activeWebCriticalTpSlWork() {
+  const [guardStore, planStore] = await Promise.all([
+    readWebExitGuards(),
+    readTradePlans()
+  ]);
+  const activeGuards = (guardStore.guards || []).filter((guard) => (
+    isActiveWebExitGuardStatus(guard.status || guard.exitStatus)
+  )).length;
+  const activePlans = (planStore.plans || []).filter((plan) => (
+    plan.status === "watching"
+    && (plan.wallets || []).some((wallet) => isActiveTimedWalletStatus(wallet.status || wallet.exitStatus))
+  )).length;
+  return { activeGuards, activePlans };
+}
+
+async function runWebCriticalTpSlSafetyTick(reason = "interval") {
+  if (!webCriticalTpSlSafetyRunnerEnabled()) return { skipped: true, reason: "disabled" };
+  if (webCriticalTpSlSafetyRunnerActive) return { skipped: true, reason: "web_critical_tp_sl_safety_runner_active" };
+  webCriticalTpSlSafetyRunnerActive = true;
+  try {
+    const active = await activeWebCriticalTpSlWork();
+    if (!active.activeGuards && !active.activePlans) {
+      return { skipped: true, reason: "no_active_tp_sl_work", ...active };
+    }
+    const result = { reason, ...active };
+    if (active.activeGuards) {
+      result.webExitGuards = await processWebExitGuards({
+        forcePriceCheck: true,
+        skipLiveBackfill: true
+      });
+    }
+    if (active.activePlans) {
+      result.tradePlans = await processTradePlans({ forcePriceCheck: true });
+    }
+    return result;
+  } finally {
+    webCriticalTpSlSafetyRunnerActive = false;
+  }
 }
 
 function startTpSlStartupReconcile() {
@@ -4798,6 +4855,7 @@ function handleInternalWorkerHealth(request, response) {
     displayCacheUserLimit: CONFIG.workerDisplayCacheUserLimit,
     workerConcurrency: CONFIG.workerConcurrency,
     webInternalTpSlRunnersEnabled: CONFIG.webInternalTpSlRunnersEnabled,
+    webCriticalTpSlSafetyRunnerEnabled: webCriticalTpSlSafetyRunnerEnabled(),
     webInternalDcaRunnerEnabled: CONFIG.webInternalDcaRunnerEnabled,
     cacheEnabled: CONFIG.cacheEnabled,
     cacheProvider: kvProviderName(),
@@ -10384,9 +10442,9 @@ async function processWebExitGuards(options = {}) {
       scheduleWebExitGuardProcessing("web exit guard backfill", [500, 1500, 3000, 6000]);
     }
 
-    const shouldLiveBackfill = options.forceBackfill
+    const shouldLiveBackfill = !options.skipLiveBackfill && (options.forceBackfill
       || !webExitGuardLiveBackfillAt
-      || Date.now() - webExitGuardLiveBackfillAt > 30_000;
+      || Date.now() - webExitGuardLiveBackfillAt > 30_000);
     if (shouldLiveBackfill) {
       webExitGuardLiveBackfillAt = Date.now();
       const liveBackfill = await backfillWebExitGuardsFromLiveWebPositions(guardStore, walletStore);
