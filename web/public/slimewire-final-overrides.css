@@ -15793,6 +15793,323 @@ html body main.shell[data-app][data-route="terminal"] .slime-scope-web-columns {
   }
 }
 
+/* SLIME_SWAP_CHART_POLISH_20260608_V1: compact swap panel, unified chart workspace, tight rows, and one-line desktop tools. */
+html body main.shell[data-app] .slime-swap-card .trade-head {
+  align-items: center !important;
+  display: flex !important;
+  gap: 12px !important;
+}
+
+html body main.shell[data-app][data-route="terminal"] .tabs button[data-tab="trade"]::after {
+  content: "Swap" !important;
+}
+
+html body main.shell[data-app] .slime-swap-icon,
+html body main.shell[data-app] .slime-swap-route-icon {
+  align-items: center !important;
+  background:
+    radial-gradient(circle at 30% 25%, rgba(238, 255, 198, 0.95), transparent 11px),
+    linear-gradient(145deg, #baff4c 0%, #42e20e 46%, #0b7c18 100%) !important;
+  border: 1px solid rgba(199, 255, 112, 0.72) !important;
+  border-radius: 999px !important;
+  box-shadow: 0 0 20px rgba(123, 255, 36, 0.42), inset 0 0 12px rgba(255, 255, 255, 0.24) !important;
+  color: #031000 !important;
+  display: inline-flex !important;
+  flex: 0 0 auto !important;
+  font-size: 22px !important;
+  font-weight: 1000 !important;
+  height: 46px !important;
+  justify-content: center !important;
+  line-height: 1 !important;
+  width: 46px !important;
+}
+
+html body main.shell[data-app] .slime-swap-icon::before,
+html body main.shell[data-app] .slime-swap-route-icon::before {
+  background: center / contain no-repeat url("./assets/slimewire/svg/icons/slime-swap.svg") !important;
+  content: "" !important;
+  filter: drop-shadow(0 1px 0 rgba(255, 255, 255, 0.38)) !important;
+  height: 74% !important;
+  width: 74% !important;
+}
+
+html body main.shell[data-app] .slime-swap-route {
+  align-items: stretch !important;
+  display: grid !important;
+  gap: 8px !important;
+  grid-template-columns: minmax(0, 1fr) 38px minmax(0, 1fr) !important;
+  margin: 8px 0 !important;
+}
+
+html body main.shell[data-app] .slime-swap-route-icon {
+  align-self: center !important;
+  font-size: 18px !important;
+  height: 34px !important;
+  justify-self: center !important;
+  width: 34px !important;
+}
+
+html body main.shell[data-app] .slime-swap-token-box {
+  background: rgba(0, 14, 5, 0.76) !important;
+  border: 1px solid rgba(118, 255, 45, 0.22) !important;
+  border-radius: 10px !important;
+  min-width: 0 !important;
+  padding: 10px !important;
+}
+
+html body main.shell[data-app] .slime-swap-token-box span,
+html body main.shell[data-app] .slime-swap-token-box small {
+  color: rgba(218, 255, 203, 0.68) !important;
+  display: block !important;
+  font-size: 10px !important;
+  line-height: 1.1 !important;
+}
+
+html body main.shell[data-app] .slime-swap-token-box strong {
+  color: #ecffe3 !important;
+  display: block !important;
+  font-size: 16px !important;
+  line-height: 1.1 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+html body main.shell[data-app] .badge-showcase-head {
+  align-items: start !important;
+  display: flex !important;
+  gap: 12px !important;
+  justify-content: space-between !important;
+}
+
+html body main.shell[data-app] .badge-showcase-head strong {
+  background: rgba(126, 255, 49, 0.12) !important;
+  border: 1px solid rgba(126, 255, 49, 0.32) !important;
+  border-radius: 999px !important;
+  color: #9dff48 !important;
+  font-size: 13px !important;
+  padding: 5px 9px !important;
+  white-space: nowrap !important;
+}
+
+html body main.shell[data-app] .badge-progress {
+  background: rgba(3, 18, 7, 0.95) !important;
+  border: 1px solid rgba(114, 255, 35, 0.2) !important;
+  border-radius: 999px !important;
+  height: 8px !important;
+  margin: 8px 0 10px !important;
+  overflow: hidden !important;
+}
+
+html body main.shell[data-app] .badge-progress span {
+  background: linear-gradient(90deg, #45f400, #baff4d) !important;
+  box-shadow: 0 0 14px rgba(114, 255, 35, 0.48) !important;
+  display: block !important;
+  height: 100% !important;
+}
+
+html body main.shell[data-app] .smart-chart-mode-tabs {
+  display: none !important;
+}
+
+html body main.shell[data-app] .smart-chart-combined-label,
+html body main.shell[data-app] .smart-chart-transactions-note {
+  align-items: center !important;
+  background: rgba(4, 24, 8, 0.72) !important;
+  border: 1px solid rgba(114, 255, 35, 0.2) !important;
+  border-radius: 8px !important;
+  display: flex !important;
+  gap: 8px !important;
+  justify-content: space-between !important;
+  margin: 6px 0 !important;
+  padding: 8px 10px !important;
+}
+
+html body main.shell[data-app] .smart-chart-combined-label small,
+html body main.shell[data-app] .smart-chart-transactions-note span {
+  color: rgba(218, 255, 204, 0.68) !important;
+  font-size: 11px !important;
+}
+
+html body main.shell[data-app] .smart-chart-inline-info {
+  display: grid !important;
+  gap: 8px !important;
+  margin-top: 8px !important;
+}
+
+@media (min-width: 761px) {
+  html body main.shell[data-app][data-route="terminal"] .smart-chart-grid {
+    align-items: start !important;
+    display: grid !important;
+    gap: 8px !important;
+    grid-template-columns: minmax(0, 1fr) minmax(280px, 340px) !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .smart-chart-main {
+    min-width: 0 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .smart-chart-frame,
+  html body main.shell[data-app][data-route="terminal"] .smart-chart-frame iframe {
+    min-height: min(58vh, 620px) !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: auto minmax(0, 1fr) !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs {
+    align-items: center !important;
+    display: flex !important;
+    gap: 5px !important;
+    grid-column: 1 !important;
+    grid-row: 1 !important;
+    height: 44px !important;
+    margin: 0 !important;
+    max-height: 44px !important;
+    min-height: 44px !important;
+    min-width: 0 !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    padding: 4px 8px !important;
+    position: sticky !important;
+    scrollbar-width: thin !important;
+    top: 24px !important;
+    width: 100% !important;
+    z-index: 90 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .panel-host,
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > [data-panel] {
+    grid-column: 1 !important;
+    grid-row: 2 !important;
+    min-width: 0 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-section-label,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group > summary {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group[open] {
+    display: contents !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group:not([open]) button,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group[open] button,
+  html body main.shell[data-app][data-route="terminal"] .tabs > button {
+    align-items: center !important;
+    border-radius: 8px !important;
+    display: inline-flex !important;
+    flex: 0 0 auto !important;
+    font-size: 10px !important;
+    gap: 4px !important;
+    height: 34px !important;
+    justify-content: center !important;
+    min-height: 34px !important;
+    min-width: 82px !important;
+    padding: 4px 8px !important;
+    position: relative !important;
+    transform: none !important;
+    visibility: visible !important;
+    width: auto !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs button::before,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button::before {
+    flex: 0 0 16px !important;
+    height: 16px !important;
+    width: 16px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs button::after,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button::after {
+    display: inline !important;
+    font-size: 10px !important;
+    line-height: 1 !important;
+    max-width: none !important;
+    white-space: nowrap !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs button[data-tab="trade"]::after {
+    content: "Swap" !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs button[data-tab="trade"]::before {
+    background: center / contain no-repeat url("./assets/slimewire/svg/icons/slime-swap.svg") !important;
+    color: transparent !important;
+    content: "" !important;
+    display: inline-flex !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .signal-row {
+    grid-template-columns: minmax(250px, 1.35fr) 86px 112px 112px 90px minmax(130px, 0.8fr) minmax(220px, 0.95fr) !important;
+    min-height: 74px !important;
+    padding: 7px 8px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .signal-actions {
+    align-content: center !important;
+    display: grid !important;
+    gap: 5px !important;
+    grid-template-columns: repeat(3, minmax(58px, 1fr)) !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .signal-actions button,
+  html body main.shell[data-app][data-route="terminal"] .signal-actions .dev-info-pill {
+    border-radius: 8px !important;
+    font-size: 10px !important;
+    min-height: 28px !important;
+    padding: 4px 6px !important;
+  }
+}
+
+@media (max-width: 760px) {
+  html body main.shell[data-app] .slime-swap-route {
+    grid-template-columns: minmax(0, 1fr) 32px minmax(0, 1fr) !important;
+  }
+
+  html body main.shell[data-app] .slime-swap-token-box {
+    padding: 8px !important;
+  }
+
+  html body main.shell[data-app] .smart-chart-grid {
+    display: grid !important;
+    gap: 8px !important;
+  }
+
+  html body main.shell[data-app] .smart-chart-combined-label,
+  html body main.shell[data-app] .smart-chart-transactions-note {
+    align-items: start !important;
+    display: grid !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .signal-row,
+  html body main.shell[data-app][data-route="terminal"] .terminal-token-row {
+    padding: 8px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .signal-actions,
+  html body main.shell[data-app][data-route="terminal"] .terminal-token-actions,
+  html body main.shell[data-app][data-route="terminal"] .compact-row-actions {
+    gap: 5px !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .signal-actions button,
+  html body main.shell[data-app][data-route="terminal"] .terminal-token-actions button,
+  html body main.shell[data-app][data-route="terminal"] .compact-row-actions button,
+  html body main.shell[data-app][data-route="terminal"] .dev-info-pill {
+    border-radius: 8px !important;
+    font-size: 10px !important;
+    min-height: 30px !important;
+    padding: 4px 6px !important;
+  }
+}
+
 @media (max-width: 760px) {
   html body main.shell[data-app][data-route="terminal"] .slime-scope-web-columns {
     display: none !important;

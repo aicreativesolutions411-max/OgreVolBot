@@ -652,7 +652,7 @@ const TERMINAL_FEEDS = [
   { tabKey: "kol", label: "KOL Tracker - Social/KOL Signals", component: "kolHtml", endpoint: "/api/web/kol/scan", category: "signals:kol", refreshMs: 10_000, staleMs: 30_000, cacheKey: "signals:kol:{kolMode}:{kolWallet}", pageSize: 36, maxPageSize: 72, previewLimit: 12, supportsPagination: true },
   { tabKey: "watchlist", label: "Watchlist - Your Saved Pairs", component: "watchlistHtml", endpoint: "/api/web/watchlist", category: "user:watchlist", refreshMs: 20_000, staleMs: 45_000, cacheKey: "user:watchlist", pageSize: 50, maxPageSize: 100, previewLimit: 12, supportsPagination: true },
   { tabKey: "smartChart", label: "Smart Chart - Selected Token", component: "smartChartHtml", endpoint: "composite:/api/web/positions", category: "token:selected-chart", refreshMs: 30_000, staleMs: 60_000, cacheKey: "token:selected-chart:{tokenMint}", pageSize: 5, maxPageSize: 10, previewLimit: 5, supportsPagination: false },
-  { tabKey: "trade", label: "Trade - Selected Token Panel", component: "tradeHtml", endpoint: "composite:/api/web/balances+/api/web/positions", category: "trade:selected-token", refreshMs: 20_000, staleMs: 45_000, cacheKey: "trade:selected-token:{tokenMint}", pageSize: 1, maxPageSize: 1, previewLimit: 1, supportsPagination: false },
+  { tabKey: "trade", label: "Slime Swap - Selected Token Panel", component: "tradeHtml", endpoint: "composite:/api/web/balances+/api/web/positions", category: "trade:selected-token", refreshMs: 20_000, staleMs: 45_000, cacheKey: "trade:selected-token:{tokenMint}", pageSize: 1, maxPageSize: 1, previewLimit: 1, supportsPagination: false },
   { tabKey: "bundle", label: "Bundle Volume - Bundle Actions", component: "bundleHtml", endpoint: "composite:/api/web/balances+/api/web/positions", category: "bundle:volume", refreshMs: 25_000, staleMs: 60_000, cacheKey: "bundle:volume:{tokenMint}", pageSize: 1, maxPageSize: 1, previewLimit: 1, supportsPagination: false },
   { tabKey: "volume", label: "Bundle Volume - Volume Flags", component: "volumeHtml", endpoint: "composite:/api/web/live-pairs+/api/web/balances", category: "signals:bundle-volume", refreshMs: 25_000, staleMs: 60_000, cacheKey: "signals:bundle-volume:{tokenMint}", pageSize: 1, maxPageSize: 1, previewLimit: 1, supportsPagination: false },
   { tabKey: "sniper", label: "Sniper - Launch Snipe Candidates", component: "sniperHtml", endpoint: "/api/web/sniper/scan", category: "scanner:launch-snipe", refreshMs: 20_000, staleMs: 45_000, cacheKey: "scanner:launch-snipe:{scanMode}", pageSize: 36, maxPageSize: 72, previewLimit: 12, supportsPagination: true },
@@ -5150,11 +5150,19 @@ function badgeShowcaseSection() {
     { label: "Best Picks Scout", detail: "Open Live Terminal, Ogre A.I., or Sniper scans.", earned: Boolean(state.livePairRows?.length || state.scan || state.ogreAiPick), icon: "./assets/slimewire/svg/icons/best-picks.svg", quest: "Quest 05" },
     { label: "Trader", detail: "Complete trades tracked by SlimeWire.", earned: tradeCount > 0, icon: "./assets/slimewire/svg/icons/trade.svg", quest: "Quest 06" }
   ];
+  const earnedCount = badges.filter((badge) => badge.earned).length;
+  const progressPct = Math.round((earnedCount / Math.max(1, badges.length)) * 100);
   return `
     <section class="create-wallet-card badge-showcase-card">
-      <div>
-        <h3>Badge Window Hub</h3>
-        <p>Ogre-styled quest badges unlock as users get the panel ready. They are visual status marks only and never expose private wallet data.</p>
+      <div class="badge-showcase-head">
+        <div>
+          <h3>Badge Window Hub</h3>
+          <p>Quest badges unlock as the account gets ready. They are visual status marks only and never expose private wallet data.</p>
+        </div>
+        <strong>${earnedCount}/${badges.length}</strong>
+      </div>
+      <div class="badge-progress" aria-label="Badge progress ${progressPct}%">
+        <span style="width:${progressPct}%"></span>
       </div>
       <div class="badge-grid">
         ${badges.map(({ label, detail, earned, icon, quest }) => `
@@ -6131,11 +6139,12 @@ function tradeHtml() {
   if (!hasManagedWallets && !connected?.publicKey) {
     return `
       <section class="trade-layout">
-        <article class="trade-card">
+        <article class="trade-card slime-swap-card">
           <div class="trade-head">
+            <span class="slime-swap-icon" aria-hidden="true"></span>
             <div>
-              <h3>Connect to Trade</h3>
-              <p>Connect Phantom, Solflare, Backpack, or another Solana wallet to open the manual trade panel immediately.</p>
+              <h3>Slime Swap</h3>
+              <p>Connect to Trade with Phantom, Solflare, Backpack, or another Solana wallet to swap SOL into tokens from one clean panel.</p>
             </div>
           </div>
           <div class="card-actions">
@@ -6149,11 +6158,25 @@ function tradeHtml() {
 
   return `
     <section class="trade-layout">
-      <article class="trade-card">
+      <article class="trade-card slime-swap-card">
         <div class="trade-head">
+          <span class="slime-swap-icon" aria-hidden="true"></span>
           <div>
-            <h3>One-Wallet Trade</h3>
-            <p>${connected?.publicKey ? "Connected browser wallets stay ready for this session and open your wallet approval prompt for each trade. Managed wallets stay available for server-side automation." : "Paste a token CA, pick a wallet, then use fast buy and sell buttons from the webpage."}</p>
+            <h3>Slime Swap</h3>
+            <p>${connected?.publicKey ? "Connected browser wallets stay ready for this session and open your wallet approval prompt for every swap." : "Paste a token CA, pick a wallet, then swap with the same safety checks used across SlimeWire."}</p>
+          </div>
+        </div>
+        <div class="slime-swap-route">
+          <div class="slime-swap-token-box">
+            <span>From</span>
+            <strong>SOL</strong>
+            <small>Wallet balance ${escapeHtml(totalSol().toFixed(4))} SOL</small>
+          </div>
+          <span class="slime-swap-route-icon" aria-hidden="true"></span>
+          <div class="slime-swap-token-box">
+            <span>To</span>
+            <strong>${escapeHtml(state.tradeToken ? shortAddress(state.tradeToken) : "Token CA")}</strong>
+            <small>${state.tradeToken ? "Selected token" : "Paste or choose a token"}</small>
           </div>
         </div>
         <label>
@@ -6180,18 +6203,18 @@ function tradeHtml() {
 
         <div class="trade-block">
           <div>
-            <h4>Buy</h4>
+            <h4>Swap SOL to Token</h4>
             <p>Quick SOL amounts include the bot fee and keep the safety reserve. Auto-exit defaults to TP +25% and SL -8% for the selected wallet.</p>
           </div>
           <div class="quick-grid">
-            <button class="primary" data-trade-buy-quick="0.1">Buy .10 SOL</button>
-            <button class="primary" data-trade-buy-quick="0.5">Buy .50 SOL</button>
-            <button class="primary" data-trade-buy-quick="1">Buy 1 SOL</button>
+            <button class="primary" data-trade-buy-quick="0.1">Swap .10 SOL</button>
+            <button class="primary" data-trade-buy-quick="0.5">Swap .50 SOL</button>
+            <button class="primary" data-trade-buy-quick="1">Swap 1 SOL</button>
             <button data-trade-buy-max>Buy Max</button>
           </div>
           <div class="inline-action">
             <input data-buy-custom type="number" min="0" step="0.01" placeholder="Custom SOL">
-            <button data-trade-buy-custom>Buy Custom</button>
+            <button data-trade-buy-custom>Swap Custom</button>
           </div>
           <div class="volume-grid compact-grid">
             <label>
@@ -6238,8 +6261,8 @@ function tradeHtml() {
 
         <div class="trade-block">
           <div>
-            <h4>Sell</h4>
-            <p>Sell buttons use the selected wallet and token CA above.</p>
+            <h4>Swap Token to SOL</h4>
+            <p>Exit buttons use the selected wallet and token CA above.</p>
           </div>
           <div class="quick-grid">
             <button data-trade-sell-quick="25">Sell 25%</button>
@@ -6254,8 +6277,8 @@ function tradeHtml() {
 
         ${hasManagedWallets ? `<div class="trade-block managed-trade-block">
           <div>
-            <h4>Managed Buy + Auto Exit</h4>
-            <p>Use one wallet, multiple wallets, or a saved group. The bot buys, then watches take-profit, stop-loss, or timer.</p>
+            <h4>Managed Swap + Auto Exit</h4>
+            <p>Use one wallet, multiple wallets, or a saved group. The bot swaps, then watches take-profit, stop-loss, or timer.</p>
           </div>
           <div class="wallet-checks">
             ${walletChecksHtml("trade-plan")}
@@ -6324,7 +6347,7 @@ function tradeHtml() {
             </label>
           </div>
           ${walletExitTargetsHtml("trade-plan")}
-          <button class="primary" data-trade-plan-start>Buy + Watch Exit</button>
+          <button class="primary" data-trade-plan-start>Swap + Watch Exit</button>
         </div>` : `<div class="trade-block managed-trade-block">
           <div>
             <h4>Automation Wallets</h4>
@@ -6339,7 +6362,7 @@ function tradeHtml() {
 
       <aside class="trade-side">
         <article>
-          <h3>Web Trading</h3>
+          <h3>Web Swapping</h3>
           <p>Uses encrypted managed wallets, route previews, safety checks, slippage settings, and the same fee logic as the Telegram bot.</p>
         </article>
         <article>
@@ -10561,8 +10584,7 @@ function isUnbondedPumpToken(row = {}) {
 
 function preferredSmartChartView(tokenRef = {}, options = {}) {
   if (["chart", "chartTxns", "txns", "info"].includes(options.view)) return options.view;
-  if (options.defaultTab === "chart" && isUnbondedPumpToken(tokenRef)) return "chartTxns";
-  return "chart";
+  return "chartTxns";
 }
 
 function openTokenChart(tokenRef = {}, options = {}) {
@@ -10609,7 +10631,7 @@ function applyChartRouteFromLocation() {
     prefetchTokenChart(tokenRef, { source: params.get("source") || "route" });
   }
   state.chartTradeTab = params.get("tab") === "sell" ? "sell" : "buy";
-  state.smartChartView = ["chartTxns", "txns", "info"].includes(params.get("view")) ? params.get("view") : "chart";
+  state.smartChartView = ["chart", "chartTxns", "txns", "info"].includes(params.get("view")) ? params.get("view") : "chartTxns";
   state.chartFocusAmountInput = params.get("focusAmount") === "1";
   state.chartScrollIntoView = true;
   state.route = "terminal";
@@ -14020,6 +14042,16 @@ function devInfoReasonsHtml(items = [], empty = "No strong cached signal yet.") 
   `;
 }
 
+function intelFieldLabel(value, fallback = "Not cached yet") {
+  const text = String(value || "").trim();
+  if (!text || text.toLowerCase() === "warming" || text.toLowerCase() === "checking") return fallback;
+  return text;
+}
+
+function intelNumberLabel(value, formatter = (number) => String(number), fallback = "Not cached yet") {
+  return Number.isFinite(value) && value > 0 ? formatter(value) : fallback;
+}
+
 function renderDevInfoDrawer() {
   let root = document.querySelector("[data-dev-info-drawer-root]");
   if (!root) {
@@ -14106,21 +14138,21 @@ function renderDevInfoDrawer() {
       <section>
         <h4>Token / Source Context</h4>
         <dl class="kol-dump-metrics">
-          <div><dt>Market cap</dt><dd>${escapeHtml(Number.isFinite(marketCap) && marketCap > 0 ? compactUsd(marketCap) : "warming")}</dd></div>
-          <div><dt>Liquidity</dt><dd>${escapeHtml(Number.isFinite(liquidity) && liquidity > 0 ? compactUsd(liquidity) : "warming")}</dd></div>
-          <div><dt>5m volume</dt><dd>${escapeHtml(Number.isFinite(volume5m) && volume5m > 0 ? compactUsd(volume5m) : "warming")}</dd></div>
-          <div><dt>1h volume</dt><dd>${escapeHtml(Number.isFinite(volumeH1) && volumeH1 > 0 ? compactUsd(volumeH1) : "warming")}</dd></div>
-          <div><dt>Pair age</dt><dd>${escapeHtml(Number.isFinite(pairAgeMinutes) ? devInfoMinutes(pairAgeMinutes) : "warming")}</dd></div>
-          <div><dt>Metadata auth</dt><dd>${escapeHtml(metadataAuthority ? shortAddress(metadataAuthority) : (authorityLoaded ? "none cached" : "warming"))}</dd></div>
-          <div><dt>Mint / freeze</dt><dd>${escapeHtml(`${mintAuthority ? shortAddress(mintAuthority) : (authorityLoaded ? "none" : "warming")} / ${freezeAuthority ? shortAddress(freezeAuthority) : (authorityLoaded ? "none" : "warming")}`)}</dd></div>
+          <div><dt>Market cap</dt><dd>${escapeHtml(intelNumberLabel(marketCap, compactUsd))}</dd></div>
+          <div><dt>Liquidity</dt><dd>${escapeHtml(intelNumberLabel(liquidity, compactUsd))}</dd></div>
+          <div><dt>5m volume</dt><dd>${escapeHtml(intelNumberLabel(volume5m, compactUsd))}</dd></div>
+          <div><dt>1h volume</dt><dd>${escapeHtml(intelNumberLabel(volumeH1, compactUsd))}</dd></div>
+          <div><dt>Pair age</dt><dd>${escapeHtml(Number.isFinite(pairAgeMinutes) ? devInfoMinutes(pairAgeMinutes) : "Not cached yet")}</dd></div>
+          <div><dt>Metadata auth</dt><dd>${escapeHtml(metadataAuthority ? shortAddress(metadataAuthority) : (authorityLoaded ? "none cached" : "Not indexed yet"))}</dd></div>
+          <div><dt>Mint / freeze</dt><dd>${escapeHtml(`${mintAuthority ? shortAddress(mintAuthority) : (authorityLoaded ? "none" : "not indexed")} / ${freezeAuthority ? shortAddress(freezeAuthority) : (authorityLoaded ? "none" : "not indexed")}`)}</dd></div>
           <div><dt>Source</dt><dd>${escapeHtml(market.source || result.cacheSource || result.dataSource || "cache/local")}</dd></div>
         </dl>
-        <p class="slimeshield-muted">Click Refresh to pull the latest public pair metadata and save what SlimeWire can verify.</p>
+        <p class="slimeshield-muted">If a field is not cached yet, Refresh asks SlimeWire for public pair/token context and stores verified values for later sessions.</p>
         ${sourceHydration.message ? `<p class="slimeshield-muted">Source refresh: ${escapeHtml(sourceHydration.message)}${sourceHydration.eventsStored ? ` · ${escapeHtml(sourceHydration.eventsStored)} stored` : ""}</p>` : ""}
       </section>
       <section>
         <h4>Source Evidence</h4>
-        ${devInfoReasonsHtml(sourceEvidence, "Public Dex/Pump/Solscan context is warming up. Refresh once to store the newest verified fields.")}
+        ${devInfoReasonsHtml(sourceEvidence, "No verified public-source evidence is stored yet. Refresh Details will save Dex/Pump/Solscan-style context when the backend can verify it.")}
       </section>
       <section>
         <h4>Current Token Position</h4>
@@ -14398,13 +14430,13 @@ function renderSlimeShieldDetailsDrawer() {
         <h4>Coin / Dev Info</h4>
         <dl class="kol-dump-metrics">
           <div><dt>CA</dt><dd>${escapeHtml(shortAddress(mint))}</dd></div>
-          <div><dt>Age</dt><dd>${escapeHtml(Number.isFinite(ageMinutes) ? devInfoMinutes(ageMinutes) : (row.pairAgeLabel || formatAgeFromRow(row) || "warming"))}</dd></div>
-          <div><dt>Liquidity</dt><dd>${escapeHtml(Number.isFinite(liquidity) && liquidity > 0 ? compactUsd(liquidity) : (row.liquidityLabel || "warming"))}</dd></div>
-          <div><dt>MC / FDV</dt><dd>${escapeHtml(Number.isFinite(marketCap) && marketCap > 0 ? compactUsd(marketCap) : (row.marketCapLabel || "warming"))}</dd></div>
-          <div><dt>Volume</dt><dd>${escapeHtml(Number.isFinite(volumeH1) && volumeH1 > 0 ? compactUsd(volumeH1) : (row.volumeH1Label || row.volumeLabel || "warming"))}</dd></div>
+          <div><dt>Age</dt><dd>${escapeHtml(Number.isFinite(ageMinutes) ? devInfoMinutes(ageMinutes) : intelFieldLabel(row.pairAgeLabel || formatAgeFromRow(row), "Not cached yet"))}</dd></div>
+          <div><dt>Liquidity</dt><dd>${escapeHtml(Number.isFinite(liquidity) && liquidity > 0 ? compactUsd(liquidity) : intelFieldLabel(row.liquidityLabel, "Not cached yet"))}</dd></div>
+          <div><dt>MC / FDV</dt><dd>${escapeHtml(Number.isFinite(marketCap) && marketCap > 0 ? compactUsd(marketCap) : intelFieldLabel(row.marketCapLabel, "Not cached yet"))}</dd></div>
+          <div><dt>Volume</dt><dd>${escapeHtml(Number.isFinite(volumeH1) && volumeH1 > 0 ? compactUsd(volumeH1) : intelFieldLabel(row.volumeH1Label || row.volumeLabel, "Not cached yet"))}</dd></div>
           <div><dt>Dev Info</dt><dd>${escapeHtml(devInfoLabel(devInfoStatus))} · ${escapeHtml(devInfo.confidence || "unknown")}</dd></div>
-          <div><dt>Metadata auth</dt><dd>${escapeHtml(metadataAuthority ? shortAddress(metadataAuthority) : (authorityLoaded ? "none cached" : "warming"))}</dd></div>
-          <div><dt>Mint / freeze</dt><dd>${escapeHtml(`${mintAuthority ? shortAddress(mintAuthority) : (authorityLoaded ? "none" : "warming")} / ${freezeAuthority ? shortAddress(freezeAuthority) : (authorityLoaded ? "none" : "warming")}`)}</dd></div>
+          <div><dt>Metadata auth</dt><dd>${escapeHtml(metadataAuthority ? shortAddress(metadataAuthority) : (authorityLoaded ? "none cached" : "Not indexed yet"))}</dd></div>
+          <div><dt>Mint / freeze</dt><dd>${escapeHtml(`${mintAuthority ? shortAddress(mintAuthority) : (authorityLoaded ? "none" : "not indexed")} / ${freezeAuthority ? shortAddress(freezeAuthority) : (authorityLoaded ? "none" : "not indexed")}`)}</dd></div>
           <div><dt>Source</dt><dd>${escapeHtml(market.source || result.cacheSource || result.dataSource || "public/local")}</dd></div>
           <div><dt>Dev/risk notes</dt><dd>${escapeHtml(riskText.length ? riskText.join(" | ") : "no cached hard flags")}</dd></div>
         </dl>
@@ -14711,8 +14743,8 @@ function smartChartHtml() {
         ...allVisibleSignalRows().filter((row) => String(row.tokenMint || "") === mint)
       ]).filter(Boolean).slice(0, 5)
     : rotatedDisplayRows(terminalBestPickRows(), 5, terminalRotationKey("smart-chart-suggest"), 1);
-  const rawChartView = String(state.smartChartView || "chart");
-  const chartView = ["chart", "chartTxns", "txns", "info"].includes(rawChartView) ? rawChartView : "chart";
+  const rawChartView = String(state.smartChartView || "chartTxns");
+  const chartView = ["chart", "chartTxns", "txns", "info"].includes(rawChartView) ? rawChartView : "chartTxns";
   if (!mint) {
     return `
       <section class="smart-chart-terminal">
@@ -14783,16 +14815,29 @@ function smartChartHtml() {
           </div>
           ${smartChartViewTabsHtml(chartView)}
           ${chartView === "chart" ? `
+            <div class="smart-chart-combined-label">
+              <strong>Chart</strong>
+              <small>Use the trade panel on the right for buy/sell controls.</small>
+            </div>
             ${smartChartDexFrameHtml(token, "chart")}
-            <small class="score-breakdown">${isUnbondedPumpToken(token) ? "Pump launches render natively inside Slime until they bond." : "If the embedded chart does not load, use the DEX link above."}</small>
           ` : chartView === "chartTxns" ? `
+            <div class="smart-chart-combined-label">
+              <strong>Chart + Transactions</strong>
+              <small>Chart, buys/sells, token info, and the buy menu stay together in one workspace.</small>
+            </div>
             ${smartChartDexFrameHtml(token, "chartTxns")}
-            <small class="score-breakdown">Chart + Txns uses Pump before bonding and DexScreener after bonding. Use Transactions for the dedicated market feed view.</small>
           ` : chartView === "txns" ? `
             ${smartChartTransactionsHtml(token, heldPosition)}
           ` : `
             ${smartChartInfoPanelHtml(token, heldPosition)}
           `}
+          ${chartView === "chartTxns" ? `<div class="smart-chart-inline-info">
+            ${terminalTokenStatsHtml(token)}
+            <section class="smart-chart-transactions-note">
+              <strong>Transactions are inside the chart window.</strong>
+              <span>SlimeWire trade history and position controls stay on this page without loading a second market iframe.</span>
+            </section>
+          </div>` : ""}
         </article>
         <aside class="terminal-panel smart-chart-side">
           <h3>${escapeHtml(token.symbol || "Token")} setup</h3>
@@ -18085,12 +18130,12 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-token-chart]")) {
     event.preventDefault();
     const mint = target.dataset.tokenChart || target.dataset.previewToken || "";
-    if (blockRawSignalTokenIfUnsafe(mint)) return;
     openTokenChart(tokenRefFromMint(target.dataset.tokenChart || target.dataset.previewToken || "", {
       source: target.dataset.tokenChartSource || "token-card"
     }), {
-      defaultTab: target.dataset.tokenChartTab || "chart",
-      focusAmountInput: false,
+      defaultTab: target.dataset.tokenChartTab || "buy",
+      view: "chartTxns",
+      focusAmountInput: target.closest?.(".live-pair-avatar") ? true : false,
       source: target.dataset.tokenChartSource || "token-card"
     });
     return;
@@ -18099,11 +18144,15 @@ document.addEventListener("click", async (event) => {
     event.preventDefault();
     event.stopPropagation();
     const mint = target.dataset.tokenTrade || "";
-    if (blockRawSignalTokenIfUnsafe(mint)) return;
+    const row = rawSignalRowForMint(mint);
+    if (row && isUiBlockedSignalRow(row)) {
+      setError("Risk flagged. Opening chart review first; fast buy safety checks still apply before any wallet prompt.");
+    }
     openTokenChart(tokenRefFromMint(target.dataset.tokenTrade || "", {
       source: target.dataset.tokenTradeSource || "trade-button"
     }), {
       defaultTab: "buy",
+      view: "chartTxns",
       focusAmountInput: true,
       source: target.dataset.tokenTradeSource || "trade-button"
     });
