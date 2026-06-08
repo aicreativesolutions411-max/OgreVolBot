@@ -54,10 +54,10 @@ const defaults = {
 
 const freshApeDefaults = {
   minScore: 12,
-  minMarketCap: 2_500,
-  preferredMaxMarketCap: 10_000,
-  maxMarketCap: 35_000,
-  maxAgeMinutes: 75,
+  minMarketCap: 1_500,
+  preferredMaxMarketCap: 5_000,
+  maxMarketCap: 8_000,
+  maxAgeMinutes: 45,
   minStartingVolumeUsd: 60,
   minLiquidityUsd: 20,
   preferFreshLaunches: true,
@@ -595,12 +595,12 @@ test("Ogre A.I. fresh ape rejects dead fresh pumps with no starting volume", () 
   assert.equal(pool.tierCounts.blocked, 1);
 });
 
-test("Ogre A.I. fresh ape allows pairs down to the 2.5k market-cap floor when flow starts", () => {
+test("Ogre A.I. fresh ape allows pairs near the 1.5k market-cap floor when flow starts", () => {
   const tinyFresh = {
     tokenMint: "TinyFreshMintpump",
     bestPickScore: 11,
     isPump: true,
-    marketCap: 2_650,
+    marketCap: 1_650,
     liquidityUsd: 22,
     volume5m: 82,
     buys5m: 2,
@@ -614,13 +614,13 @@ test("Ogre A.I. fresh ape allows pairs down to the 2.5k market-cap floor when fl
   assert.ok(["strict", "balanced", "available"].includes(tier), `expected fresh ape tier, got ${tier}`);
 });
 
-test("Ogre A.I. fresh ape prefers under-10k starting-volume pairs before bigger fallback caps", () => {
+test("Ogre A.I. fresh ape prefers under-5k starting-volume pairs before fallback caps", () => {
   const rows = [
     {
-      tokenMint: "FallbackBiggerMintpump",
+      tokenMint: "FallbackSubEightMintpump",
       bestPickScore: 82,
       isPump: true,
-      marketCap: 28_000,
+      marketCap: 7_200,
       liquidityUsd: 240,
       volume5m: 2_000,
       buys5m: 8,
@@ -629,10 +629,10 @@ test("Ogre A.I. fresh ape prefers under-10k starting-volume pairs before bigger 
       pairAgeMinutes: 3
     },
     {
-      tokenMint: "PrimaryUnderTenMintpump",
+      tokenMint: "PrimaryUnderFiveMintpump",
       bestPickScore: 12,
       isPump: true,
-      marketCap: 6_200,
+      marketCap: 4_200,
       liquidityUsd: 32,
       volume5m: 105,
       buys5m: 2,
@@ -644,13 +644,26 @@ test("Ogre A.I. fresh ape prefers under-10k starting-volume pairs before bigger 
 
   const pool = buildOgreAiCandidatePool(rows, freshApeDefaults, "fresh_ape");
   assert.equal(pool.selectedTier, "strict");
-  assert.equal(pool.candidates[0].tokenMint, "PrimaryUnderTenMintpump");
+  assert.equal(pool.candidates[0].tokenMint, "PrimaryUnderFiveMintpump");
+  assert.equal(ogreAiTierForCandidate({
+    tokenMint: "TooLateNineKMintpump",
+    bestPickScore: 99,
+    isPump: true,
+    marketCap: 9_200,
+    liquidityUsd: 260,
+    volume5m: 3_000,
+    buys5m: 12,
+    sells5m: 1,
+    trades5m: 13,
+    pairAgeMinutes: 2
+  }, freshApeDefaults, "fresh_ape"), null);
 });
 
 test("Ogre A.I. server collapses old mode names into fresh ape defaults", () => {
   assert.match(serverFunctionBody("normalizeOgreAiMode"), /return "fresh_ape"/);
-  assert.match(serverFunctionBody("ogreAiModeDefaults"), /preferredMaxMarketCap:\s*10_000/);
-  assert.match(serverFunctionBody("ogreAiModeDefaults"), /minMarketCap:\s*2_500/);
+  assert.match(serverFunctionBody("ogreAiModeDefaults"), /preferredMaxMarketCap:\s*5_000/);
+  assert.match(serverFunctionBody("ogreAiModeDefaults"), /maxMarketCap:\s*8_000/);
+  assert.match(serverFunctionBody("ogreAiModeDefaults"), /minMarketCap:\s*1_500/);
   assert.match(serverFunctionBody("ogreAiModeDefaults"), /minStartingVolumeUsd:\s*60/);
   assert.match(serverFunctionBody("ogreAiScannerModesForTarget"), /\["pumpsnipe", "moonshot", "fast"\]/);
 });

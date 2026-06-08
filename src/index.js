@@ -24751,10 +24751,10 @@ function ogreAiModeDefaults(mode) {
   return {
     buckets: ["live", "under1h"],
     minScore: 12,
-    minMarketCap: 2_500,
-    preferredMaxMarketCap: 10_000,
-    maxMarketCap: 35_000,
-    maxAgeMinutes: 75,
+    minMarketCap: 1_500,
+    preferredMaxMarketCap: 5_000,
+    maxMarketCap: 8_000,
+    maxAgeMinutes: 45,
     minStartingVolumeUsd: 60,
     minLiquidityUsd: 20,
     preferFreshLaunches: true,
@@ -24773,10 +24773,10 @@ function applyOgreAiTargetDefaults(defaults, targetPct, mode) {
     defaults.targetBand = "fresh_ape";
     defaults.buckets = [...new Set(["live", "under1h"])];
     defaults.minScore = Math.min(Number(defaults.minScore || 12), 12);
-    defaults.minMarketCap = Number(defaults.minMarketCap || 2_500);
-    defaults.preferredMaxMarketCap = Number(defaults.preferredMaxMarketCap || 10_000);
-    defaults.maxMarketCap = Math.min(Number(defaults.maxMarketCap || 35_000), 35_000);
-    defaults.maxAgeMinutes = Math.min(Number(defaults.maxAgeMinutes || 75), 75);
+    defaults.minMarketCap = Number(defaults.minMarketCap || 1_500);
+    defaults.preferredMaxMarketCap = Number(defaults.preferredMaxMarketCap || 5_000);
+    defaults.maxMarketCap = Math.min(Number(defaults.maxMarketCap || 8_000), 8_000);
+    defaults.maxAgeMinutes = Math.min(Number(defaults.maxAgeMinutes || 45), 45);
     defaults.minStartingVolumeUsd = Math.min(Number(defaults.minStartingVolumeUsd || 60), 60);
     defaults.minLiquidityUsd = Math.min(Number(defaults.minLiquidityUsd || 20), 20);
     defaults.preferFreshLaunches = true;
@@ -24841,10 +24841,10 @@ function applyOgreAiTimerIntentDefaults(defaults, body = {}, mode = "quick") {
     defaults.diversityWindow = Math.max(Number(defaults.diversityWindow || 0), 18);
     defaults.buckets = [...new Set(["live", "under1h"])];
     defaults.minScore = Math.min(Number(defaults.minScore || 12), 12);
-    defaults.minMarketCap = Number(defaults.minMarketCap || 2_500);
-    defaults.preferredMaxMarketCap = Number(defaults.preferredMaxMarketCap || 10_000);
-    defaults.maxMarketCap = Math.min(Number(defaults.maxMarketCap || 35_000), 35_000);
-    defaults.maxAgeMinutes = Math.min(Number(defaults.maxAgeMinutes || 75), 75);
+    defaults.minMarketCap = Number(defaults.minMarketCap || 1_500);
+    defaults.preferredMaxMarketCap = Number(defaults.preferredMaxMarketCap || 5_000);
+    defaults.maxMarketCap = Math.min(Number(defaults.maxMarketCap || 8_000), 8_000);
+    defaults.maxAgeMinutes = Math.min(Number(defaults.maxAgeMinutes || 45), 45);
     defaults.minStartingVolumeUsd = Math.min(Number(defaults.minStartingVolumeUsd || 60), 60);
     defaults.minLiquidityUsd = Math.min(Number(defaults.minLiquidityUsd || 20), 20);
     return defaults;

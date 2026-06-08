@@ -7184,7 +7184,7 @@ function ogreAiResultHtml() {
         <div><dt>Qualified</dt><dd>${escapeHtml(row.qualified || 0)}</dd></div>
         <div><dt>Plans</dt><dd>${escapeHtml(row.armedCount || plans.length)}</dd></div>
       </dl>
-      <small>Under $10K first | starting volume required | honeypot, mint, freeze, and no-sell blocks stay on</small>
+      <small>Under $5K first | sub-$8K fallback | starting volume required | honeypot, mint, freeze, and no-sell blocks stay on</small>
       <div class="ogre-ai-pick-list">
         ${plans.map((plan) => {
           const pick = plan.pick || {};
@@ -7317,14 +7317,14 @@ function ogreAiHtml() {
           <button type="button" data-tab="live">Review Live Pairs</button>
           <button type="button" data-tab="positions">Positions</button>
         </div>
-        <small data-ogre-ai-status>${escapeHtml(state.ogreAiStatus || "Fresh Ape scans under-$10K pairs first, requires starting volume, and blocks obvious honeypot, mint, freeze, drained-liquidity, and no-sell risk before buys.")}</small>
+        <small data-ogre-ai-status>${escapeHtml(state.ogreAiStatus || "Fresh Ape scans under-$5K pairs first, only falls back below $8K, requires starting volume, and blocks obvious honeypot, mint, freeze, drained-liquidity, and no-sell risk before buys.")}</small>
       </article>
 
       <aside class="trade-side">
         ${automationDelegationHtml({ compact: true })}
         <article>
           <h3>How It Runs</h3>
-          <p>Ogre A.I. pulls live fresh-pair feeds, favors under-$10K market caps with early buy flow, buys with your selected managed wallets, and arms 100% bag exits using the TP/SL/timer settings above.</p>
+          <p>Ogre A.I. pulls live fresh-pair feeds, favors under-$5K market caps with early buy flow, buys with your selected managed wallets, and arms 100% bag exits using the TP/SL/timer settings above.</p>
           <ul class="delegation-steps">
             <li>Use small sizing first.</li>
             <li>Server exits require managed/imported wallets.</li>
