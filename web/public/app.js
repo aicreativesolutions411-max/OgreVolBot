@@ -343,6 +343,9 @@ const state = {
     stream: null,
     chunks: []
   },
+  walletFastApprovalsEnabled: (() => {
+    try { return (localStorage.getItem("walletFastApprovalsEnabled") || "on") !== "off"; } catch { return true; }
+  })(),
   ogreAgentOpen: false,
   ogreAgentLoading: false,
   ogreAgentFastMode: (() => { try { return (localStorage.getItem("ogreAgentFastMode") || "on") !== "off"; } catch { return true; } })(),
@@ -4304,6 +4307,9 @@ function clipFarmSupported() {
 
 function clipFarmMimeType() {
   const options = [
+    "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
+    "video/mp4;codecs=h264,aac",
+    "video/mp4",
     "video/webm;codecs=vp9,opus",
     "video/webm;codecs=vp8,opus",
     "video/webm"
@@ -4315,6 +4321,15 @@ function clipFarmMimeType() {
       return false;
     }
   }) || "";
+}
+
+function clipFarmExtensionForMime(mimeType = "") {
+  return /^video\/mp4/i.test(String(mimeType || "")) ? "mp4" : "webm";
+}
+
+function clipFarmFileName() {
+  const extension = state.clipFarm?.fileExtension || clipFarmExtensionForMime(state.clipFarm?.mimeType || state.clipFarm?.blob?.type || "");
+  return `slimewire-clip-${Date.now()}.${extension}`;
 }
 
 function stopClipFarmTracks() {
@@ -4345,6 +4360,8 @@ function clearClipFarmClip() {
     ...state.clipFarm,
     blob: null,
     videoUrl: "",
+    mimeType: "",
+    fileExtension: "",
     status: state.clipFarm?.recording ? "Recording..." : ""
   };
   updateClipFarmControl();
@@ -4405,8 +4422,10 @@ async function startClipFarmRecording() {
     });
     recorder.addEventListener("stop", () => {
       stopClipFarmTracks();
-      const blob = new Blob(chunks, { type: mimeType || "video/webm" });
+      const blobMimeType = mimeType || "video/webm";
+      const blob = new Blob(chunks, { type: blobMimeType });
       const videoUrl = blob.size > 0 ? URL.createObjectURL(blob) : "";
+      const fileExtension = clipFarmExtensionForMime(blob.type || blobMimeType);
       state.clipFarm = {
         ...state.clipFarm,
         recording: false,
@@ -4415,7 +4434,9 @@ async function startClipFarmRecording() {
         chunks: [],
         blob: blob.size > 0 ? blob : null,
         videoUrl,
-        status: blob.size > 0 ? "Clip ready." : "No clip captured."
+        mimeType: blob.type || blobMimeType,
+        fileExtension,
+        status: blob.size > 0 ? `Clip ready (.${fileExtension}).` : "No clip captured."
       };
       updateClipFarmControl();
     }, { once: true });
@@ -4426,6 +4447,8 @@ async function startClipFarmRecording() {
       status: "Recording...",
       blob: null,
       videoUrl: "",
+      mimeType,
+      fileExtension: clipFarmExtensionForMime(mimeType),
       recorder,
       stream,
       chunks
@@ -4473,7 +4496,7 @@ async function shareClipFarmRecording() {
     setClipFarmStatus("Record a clip first.");
     return;
   }
-  const file = new File([blob], "slimewire-clip.webm", { type: blob.type || "video/webm" });
+  const file = new File([blob], clipFarmFileName(), { type: blob.type || state.clipFarm?.mimeType || "video/webm" });
   try {
     if (navigator.canShare?.({ files: [file] }) && navigator.share) {
       await navigator.share({
@@ -4501,7 +4524,7 @@ function downloadClipFarmRecording() {
   }
   const link = document.createElement("a");
   link.href = url;
-  link.download = `slimewire-clip-${Date.now()}.webm`;
+  link.download = clipFarmFileName();
   document.body.appendChild(link);
   link.click();
   link.remove();
@@ -5317,6 +5340,15 @@ function openWalletConnectModal(options = {}) {
 
 window.openWalletConnectModal = openWalletConnectModal;
 
+function setWalletFastApprovals(enabled) {
+  state.walletFastApprovalsEnabled = Boolean(enabled);
+  try {
+    localStorage.setItem("walletFastApprovalsEnabled", state.walletFastApprovalsEnabled ? "on" : "off");
+  } catch {
+    // Local preference persistence is optional.
+  }
+}
+
 function renderWalletConnectModal() {
   const modal = $("[data-wallet-connect-modal]");
   if (!modal) return;
@@ -5345,8 +5377,10 @@ function renderWalletConnectModal() {
           <div class="card-actions compact">
             <button type="button" data-copy="${escapeHtml(connected.publicKey || "")}">Copy</button>
             <a href="https://solscan.io/account/${encodeURIComponent(connected.publicKey || "")}" target="_blank" rel="noreferrer">Solscan</a>
+            <button type="button" data-wallet-fast-approvals-toggle>${state.walletFastApprovalsEnabled ? "Fast approvals On" : "Fast approvals Off"}</button>
             <button type="button" data-disconnect-wallet>Disconnect</button>
           </div>
+          <small>Fast approvals keeps SlimeWire ready and opens your wallet prompt immediately. Phantom/Solflare still require you to approve each transaction.</small>
         </div>
       ` : ""}
       <div class="wallet-provider-buttons modal-wallet-provider-buttons">
@@ -5380,6 +5414,7 @@ function quickBuyModalHtml() {
   const submitting = /validating|submitting|opening wallet/i.test(String(modal.status || ""));
   const safetyBlock = quickBuySafetyBlockMessage(modal.error || modal.status || "");
   const confirmDisabled = submitting || Boolean(safetyBlock);
+  const connectedWalletSelected = isConnectedTradeWallet(modal.walletIndex || "");
   return `
     <div class="quick-buy-backdrop" data-quick-buy-close></div>
     <section class="quick-buy-dialog" role="dialog" aria-modal="true" aria-label="Quick Buy">
@@ -5420,6 +5455,7 @@ function quickBuyModalHtml() {
         ${featureEnabled("protectedBuyEnabled", true) ? `<button type="button" data-protected-buy-open="${escapeHtml(modal.tokenMint || "")}" data-protected-buy-source="quick-buy-modal">Protected</button>` : ""}
         <button type="button" class="primary" data-quick-buy-confirm ${confirmDisabled ? "disabled" : ""}>${submitting ? "Working..." : safetyBlock ? "Fast Buy Blocked" : "Confirm Buy"}</button>
       </div>
+      ${connectedWalletSelected ? `<small class="quick-buy-wallet-note">${state.walletFastApprovalsEnabled ? "Fast approvals on: the wallet approval should open as soon as you confirm." : "Fast approvals off: you still approve in your wallet before the trade is sent."}</small>` : ""}
       ${modal.status ? `<small class="connect-status">${escapeHtml(modal.status)}</small>` : ""}
       ${safetyBlock ? `<small class="warning-text quick-buy-safety-block">${escapeHtml(safetyBlock)}</small>` : modal.error ? `<small class="warning-text">${escapeHtml(modal.error)}</small>` : ""}
     </section>
@@ -5525,7 +5561,7 @@ function referralSection() {
       ${link ? `
         <label class="referral-link-field">
           Your Referral Link
-          <input data-referral-link readonly value="${escapeHtml(link)}" aria-label="Your referral link">
+          <input data-referral-link type="text" inputmode="url" autocomplete="off" value="${escapeHtml(link)}" aria-label="Your editable referral link">
         </label>
       ` : ""}
       <div class="referral-code-row">
@@ -5535,10 +5571,10 @@ function referralSection() {
         </label>
         <div class="profile-actions referral-code-actions">
           <button type="button" data-generate-referral-code>Generate</button>
-          <button type="button" class="primary" data-save-referral>Save Code</button>
+          <button type="button" class="primary" data-save-referral>Save Link</button>
         </div>
       </div>
-      <small class="referral-code-help">Use letters, numbers, dash, or underscore. Once saved, no other SlimeWire profile can claim the same code.</small>
+      <small class="referral-code-help">Edit the code field or the part after /r/ in the link, then save. Use letters, numbers, dash, or underscore. Once saved, no other SlimeWire profile can claim the same code.</small>
       <label>
         Referral Payout Wallet
         <input data-referral-wallet type="text" placeholder="Wallet for referral fees" value="${escapeHtml(state.user?.referralPayoutWallet || "")}">
@@ -5552,6 +5588,21 @@ function referralSection() {
       <small data-referral-status>${code ? `Direct link ready. Code: ${escapeHtml(code)}${state.user?.referredByCode ? ` | Referred by ${escapeHtml(state.user.referredByCode)}` : ""}` : "Create or log in to get a referral link."}</small>
     </section>
   `;
+}
+
+function referralCodeFromEditableLink(value = "") {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw, shareSiteUrl);
+    const parts = parsed.pathname.split("/").map((part) => part.trim()).filter(Boolean);
+    const rIndex = parts.findIndex((part) => part.toLowerCase() === "r");
+    if (rIndex >= 0 && parts[rIndex + 1]) return decodeURIComponent(parts[rIndex + 1]);
+    if (parts.length) return decodeURIComponent(parts[parts.length - 1]);
+  } catch {
+    // Plain custom codes are allowed below.
+  }
+  return raw.replace(/^https?:\/\/[^/]+\/?/i, "").replace(/^r\//i, "").replace(/^\/+|\/+$/g, "");
 }
 
 function traderBoardSection() {
@@ -11284,10 +11335,16 @@ async function saveReferralSettings(options = {}) {
   try {
     await ensureWebAccount(status, "Opening secure web profile...");
     writeText(status, options.generate ? "Generating referral code..." : "Saving referral settings...");
+    const codeInput = String($("[data-referral-code]")?.value || "").trim();
+    const linkCode = referralCodeFromEditableLink($("[data-referral-link]")?.value || "");
+    const currentCode = String(state.user?.referralCode || "").trim();
+    const referralCode = options.generate
+      ? codeInput
+      : (linkCode && linkCode !== currentCode && (!codeInput || codeInput === currentCode) ? linkCode : (codeInput || linkCode));
     const data = await api("/api/web/profile/referral", {
       method: "POST",
       body: JSON.stringify({
-        referralCode: $("[data-referral-code]")?.value || "",
+        referralCode,
         generateReferralCode: Boolean(options.generate),
         referralPayoutWallet: $("[data-referral-wallet]")?.value || ""
       })
@@ -11539,11 +11596,12 @@ function connectedWalletCardHtml() {
         </div>
         ${balance.error ? `<small>Check failed: ${escapeHtml(balance.error)}</small>` : ""}
         ${tokenRows ? `<div class="connected-token-list">${tokenRows}</div>` : ""}
-        <small>Fast bot execution uses saved managed wallets. Browser wallets stay here as a clean portfolio view.</small>
+        <small>${state.walletFastApprovalsEnabled ? "Fast approvals are on for connected-wallet prompts." : "Fast approvals are off."} Browser wallets still require wallet confirmation; managed wallets handle automated exits.</small>
       </div>
       <div class="card-actions">
         <button data-refresh-all>Refresh</button>
         <button data-copy="${escapeHtml(connected.publicKey)}">Copy</button>
+        <button type="button" data-wallet-fast-approvals-toggle>${state.walletFastApprovalsEnabled ? "Fast Approvals On" : "Fast Approvals Off"}</button>
         <button type="button" data-connect-wallet="solana">Reconnect</button>
         <button type="button" data-disconnect-wallet>Disconnect</button>
         <button data-tab="txAudit">Tx Audit</button>
@@ -13431,6 +13489,65 @@ function slimeScopeRows(mode = state.slimeScopeMode) {
   const sortedFallback = category === "new" ? uniqueSignalRows(fallback).sort(compareNewestLiveRows) : sortSlimeScopeRows(fallback);
   return backfillSlimeScopeRows(sortedPrimary, sortedFallback);
 }
+
+function slimeScopeColumnRowsHtml(rows = [], mode = "new") {
+  const visible = terminalFeedRowsWindow(`slimeScope:${mode}`, rows).slice(0, 12);
+  if (!visible.length) {
+    return `<div class="slime-scope-column-empty">Warming up ${escapeHtml(mode)} pairs.</div>`;
+  }
+  return visible.map((row, index) => {
+    const age = row.pairAgeLabel || formatAgeFromRow(row) || "age ?";
+    const mc = firstStatLabel(row.marketCapLabel, row.fdvLabel, compactUsd(livePairMarketCap(row)), "checking");
+    const liq = firstStatLabel(row.liquidityLabel, compactUsd(livePairLiquidityUsd(row)), "checking");
+    const vol = firstStatLabel(row.volumeM15Label, compactUsd(livePairVolumeM15(row)), "checking");
+    return `
+      <article class="slime-scope-column-row" data-token-chart="${escapeHtml(row.tokenMint)}" data-token-chart-source="slime-scope-column">
+        ${livePairAvatarHtml(row, { priority: index < 4 })}
+        <div class="slime-scope-column-main">
+          <strong>${escapeHtml(row.symbol || row.shortMint || shortAddress(row.tokenMint))}</strong>
+          <small>${escapeHtml(shortAddress(row.tokenMint))} · ${escapeHtml(age)}</small>
+          <span>${escapeHtml(row.name || row.category || "Token")}</span>
+        </div>
+        <div class="slime-scope-column-metrics">
+          <span>MC <b>${escapeHtml(mc)}</b></span>
+          <span>Liq <b>${escapeHtml(liq)}</b></span>
+          <span>15m <b>${escapeHtml(vol)}</b></span>
+        </div>
+        <button type="button" data-quick-buy-token="${escapeHtml(row.tokenMint)}" data-quick-buy-source="slime-scope-column">${escapeHtml(activeQuickBuyAmount() || "0.1")}</button>
+      </article>
+    `;
+  }).join("");
+}
+
+function slimeScopeDesktopColumnsHtml() {
+  const columns = [
+    ["new", "New", "Fresh launches"],
+    ["graduating", "Graduating", "Near migration"],
+    ["graduated", "Graduated", "Moved to market"]
+  ];
+  return `
+    <div class="slime-scope-web-columns" aria-label="Slime Scope desktop columns">
+      ${columns.map(([mode, label, helper]) => {
+        const rows = slimeScopeRows(mode);
+        return `
+          <section class="slime-scope-column" data-scope-column="${escapeHtml(mode)}">
+            <header>
+              <div>
+                <h4>${escapeHtml(label)}</h4>
+                <small>${escapeHtml(helper)}</small>
+              </div>
+              <span>${escapeHtml(rows.length)} live</span>
+            </header>
+            <div class="slime-scope-column-list">
+              ${slimeScopeColumnRowsHtml(rows, mode)}
+            </div>
+          </section>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
 function slimeScopeHtml() {
   const modes = [
     ["new", "New"],
@@ -13470,6 +13587,7 @@ function slimeScopeHtml() {
         })}
         ${terminalFeedLoadMoreHtml("slimeScope", allRows, "Slime Scope pairs")}
       </article>
+      ${slimeScopeDesktopColumnsHtml()}
     </section>
   `;
 }
@@ -18195,6 +18313,14 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-wallet-connect-close]")) {
     state.walletConnectMenuOpen = false;
+    render({ force: true });
+    return;
+  }
+  if (target.matches("[data-wallet-fast-approvals-toggle]")) {
+    setWalletFastApprovals(!state.walletFastApprovalsEnabled);
+    setError(state.walletFastApprovalsEnabled
+      ? "Fast approvals on. SlimeWire will open wallet prompts immediately, but Phantom/Solflare still require approval."
+      : "Fast approvals off. Browser wallet trades still require wallet approval.");
     render({ force: true });
     return;
   }
