@@ -16723,6 +16723,11 @@ function renderOgreAgent({ force = false } = {}) {
   if (!force && inputActive && root.dataset.ogreAgentSignature === signature) return;
   root.innerHTML = ogreAgentHtml();
   root.dataset.ogreAgentSignature = signature;
+  root.querySelector("[data-ogre-agent-close]")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    closeOgreAgentPanel();
+  });
   const inputAfter = root.querySelector("[data-ogre-agent-input]");
   if (inputAfter) {
     inputAfter.value = state.ogreAgentDraft || "";
@@ -16850,6 +16855,12 @@ function ogreAgentPlayVoiceFx(kind = "reply") {
     chest.stop(now + duration + 0.02);
   } catch {}
 }
+
+function ogreAgentSetSpeaking(speaking = false) {
+  state.ogreAgentSpeaking = Boolean(speaking);
+  if (state.ogreAgentOpen) renderOgreAgent({ force: true });
+}
+
 function ogreAgentCancelSpeech() {
   if (!ogreAgentSpeechSupported()) {
     ogreAgentSetSpeaking(false);

@@ -17008,9 +17008,10 @@ html body main.shell[data-app] .slime-swap-route-note {
     align-items: center !important;
     box-sizing: border-box !important;
     display: inline-flex !important;
+    flex-direction: column !important;
     flex: none !important;
     font-size: 0 !important;
-    gap: 5px !important;
+    gap: 1px !important;
     height: 36px !important;
     justify-content: center !important;
     line-height: 1 !important;
@@ -17018,7 +17019,7 @@ html body main.shell[data-app] .slime-swap-route-note {
     min-height: 36px !important;
     min-width: 0 !important;
     overflow: hidden !important;
-    padding: 3px 6px !important;
+    padding: 2px 5px 3px !important;
     text-align: center !important;
     white-space: nowrap !important;
     width: 100% !important;
@@ -17027,12 +17028,12 @@ html body main.shell[data-app] .slime-swap-route-note {
   html body main.shell[data-app][data-route="terminal"] .tabs > button::before,
   html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group > button::before,
   html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button::before {
-    flex: 0 0 14px !important;
-    height: 14px !important;
+    flex: 0 0 13px !important;
+    height: 13px !important;
     margin: 0 !important;
-    max-height: 14px !important;
-    max-width: 14px !important;
-    width: 14px !important;
+    max-height: 13px !important;
+    max-width: 13px !important;
+    width: 13px !important;
   }
 
   html body main.shell[data-app][data-route="terminal"] .tabs > button::after,
@@ -17040,15 +17041,43 @@ html body main.shell[data-app] .slime-swap-route-note {
   html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button::after {
     color: rgba(248, 255, 238, 0.96) !important;
     content: attr(data-label) !important;
-    display: inline !important;
-    font-size: 9px !important;
+    bottom: auto !important;
+    display: block !important;
+    flex: 0 0 auto !important;
+    font-size: 7.8px !important;
     font-weight: 900 !important;
-    line-height: 1 !important;
-    max-width: calc(100% - 19px) !important;
+    left: auto !important;
+    line-height: 0.95 !important;
+    margin: 0 !important;
+    max-height: 9px !important;
+    max-width: 100% !important;
     overflow: hidden !important;
+    position: static !important;
+    right: auto !important;
     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85) !important;
     text-overflow: ellipsis !important;
+    top: auto !important;
+    transform: none !important;
     white-space: nowrap !important;
+    width: 100% !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs button[data-tab="trade"]::after {
+    bottom: auto !important;
+    content: attr(data-label) !important;
+    display: block !important;
+    flex: 0 0 auto !important;
+    font-size: 7.8px !important;
+    left: auto !important;
+    line-height: 0.95 !important;
+    margin: 0 !important;
+    max-height: 9px !important;
+    max-width: 100% !important;
+    position: static !important;
+    right: auto !important;
+    top: auto !important;
+    transform: none !important;
+    width: 100% !important;
   }
 
   html body main.shell[data-app][data-route="terminal"] .tabs > button[data-active="true"]::after,
@@ -17325,5 +17354,286 @@ html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group butt
     top: max(8px, env(safe-area-inset-top, 0px)) !important;
     bottom: max(8px, env(safe-area-inset-bottom, 0px)) !important;
     width: auto !important;
+  }
+}
+
+/* MOBILE_AGENT_RAIL_FULLPAGE_20260608_V1: keep the mobile agent off the left edge and make the rail fully reachable. */
+@media (max-width: 760px) {
+  html body:has(.ogre-agent-shell.is-open) {
+    overflow: hidden !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] > .topbar {
+    align-items: center !important;
+    display: grid !important;
+    gap: 4px 6px !important;
+    grid-template-areas:
+      ". powered clip"
+      "right right right" !important;
+    grid-template-columns: minmax(0, 1fr) auto minmax(48px, 1fr) !important;
+    min-height: 0 !important;
+    padding:
+      4px calc(48px + env(safe-area-inset-right, 0px))
+      5px max(7px, env(safe-area-inset-left, 0px)) !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] > .topbar > .powered {
+    display: inline-flex !important;
+    grid-area: powered !important;
+    justify-self: center !important;
+    margin: 0 !important;
+    max-height: 22px !important;
+    max-width: 136px !important;
+    min-height: 20px !important;
+    opacity: 1 !important;
+    overflow: visible !important;
+    visibility: visible !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] > .topbar > .powered img {
+    display: block !important;
+    max-height: 20px !important;
+    max-width: 136px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] > .topbar > .clip-farm-shell {
+    align-items: center !important;
+    display: inline-flex !important;
+    grid-area: clip !important;
+    justify-self: start !important;
+    min-height: 22px !important;
+    opacity: 1 !important;
+    overflow: visible !important;
+    visibility: visible !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .clip-farm-control {
+    display: inline-flex !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .clip-record-button {
+    display: inline-flex !important;
+    height: 22px !important;
+    min-height: 22px !important;
+    min-width: 48px !important;
+    opacity: 1 !important;
+    padding: 0 7px !important;
+    visibility: visible !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .clip-record-button strong,
+  html body main.shell[data-app][data-route="terminal"] .clip-record-button .clip-record-dot {
+    display: inline-block !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] > .topbar > .topbar-right {
+    grid-area: right !important;
+    min-width: 0 !important;
+    width: 100% !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] {
+    padding-right: calc(48px + max(4px, env(safe-area-inset-right, 0px))) !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs {
+    bottom: max(5px, env(safe-area-inset-bottom, 0px)) !important;
+    max-height: none !important;
+    max-width: 42px !important;
+    min-width: 42px !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    padding: 3px 2px !important;
+    right: max(2px, env(safe-area-inset-right, 0px)) !important;
+    scrollbar-color: rgba(128, 255, 41, 0.7) rgba(2, 18, 5, 0.5) !important;
+    scrollbar-width: thin !important;
+    top: calc(106px + env(safe-area-inset-top, 0px)) !important;
+    width: 42px !important;
+    z-index: 6100 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs::-webkit-scrollbar {
+    display: block !important;
+    width: 3px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs::-webkit-scrollbar-thumb {
+    background: rgba(128, 255, 41, 0.72) !important;
+    border-radius: 999px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs > button,
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs .nav-tool-group button {
+    align-items: center !important;
+    display: inline-flex !important;
+    flex: 0 0 34px !important;
+    gap: 1px !important;
+    height: 34px !important;
+    justify-content: center !important;
+    max-height: 34px !important;
+    max-width: 38px !important;
+    min-height: 34px !important;
+    min-width: 38px !important;
+    padding: 2px 1px !important;
+    position: relative !important;
+    visibility: visible !important;
+    width: 38px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group[open] {
+    display: grid !important;
+    gap: 3px !important;
+    max-width: 38px !important;
+    min-width: 38px !important;
+    overflow: visible !important;
+    width: 38px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group:not([open]) button,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button {
+    display: inline-flex !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs > button::before,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button::before {
+    flex: 0 0 12px !important;
+    height: 12px !important;
+    margin: 0 !important;
+    width: 12px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs > button::after,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button::after {
+    content: attr(data-label) !important;
+    display: block !important;
+    font-size: 5.7px !important;
+    font-weight: 900 !important;
+    line-height: 0.95 !important;
+    max-width: 36px !important;
+    overflow: hidden !important;
+    text-align: center !important;
+    text-overflow: ellipsis !important;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.86) !important;
+    white-space: nowrap !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs button[data-tab="trade"]::after {
+    content: attr(data-label) !important;
+    display: block !important;
+    font-size: 5.7px !important;
+    line-height: 0.95 !important;
+    max-width: 36px !important;
+    overflow: hidden !important;
+    text-align: center !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button[hidden],
+  html body main.shell[data-app][data-route="terminal"] .tabs button[hidden] {
+    display: none !important;
+  }
+
+  .ogre-agent-shell:not(.is-open) {
+    bottom: auto !important;
+    left: auto !important;
+    right: calc(48px + max(4px, env(safe-area-inset-right, 0px))) !important;
+    top: calc(106px + env(safe-area-inset-top, 0px)) !important;
+    transform: none !important;
+    z-index: 6200 !important;
+  }
+
+  .ogre-agent-shell:not(.is-open) .ogre-agent-bubble {
+    gap: 2px !important;
+    height: 38px !important;
+    justify-content: center !important;
+    min-height: 38px !important;
+    padding: 4px !important;
+    width: 42px !important;
+  }
+
+  .ogre-agent-shell:not(.is-open) .ogre-agent-bubble img {
+    height: 26px !important;
+    width: 26px !important;
+  }
+
+  .ogre-agent-shell:not(.is-open) .ogre-agent-bubble span {
+    font-size: 6px !important;
+    letter-spacing: 0 !important;
+    max-width: 12px !important;
+  }
+
+  html body .ogre-agent-shell.is-open,
+  html body main.shell[data-app] .ogre-agent-shell.is-open {
+    inset: 0 !important;
+    pointer-events: auto !important;
+    z-index: 2147483640 !important;
+  }
+
+  html body .ogre-agent-shell.is-open .ogre-agent-bubble,
+  html body main.shell[data-app] .ogre-agent-shell.is-open .ogre-agent-bubble {
+    display: none !important;
+  }
+
+  html body .ogre-agent-shell.is-open .ogre-agent-panel,
+  html body main.shell[data-app] .ogre-agent-shell.is-open .ogre-agent-panel {
+    border-radius: 0 !important;
+    bottom: 0 !important;
+    box-sizing: border-box !important;
+    display: flex !important;
+    flex-direction: column !important;
+    height: 100dvh !important;
+    left: 0 !important;
+    max-height: none !important;
+    max-width: none !important;
+    min-height: 0 !important;
+    min-width: 0 !important;
+    overflow: hidden !important;
+    padding:
+      calc(10px + env(safe-area-inset-top, 0px))
+      max(10px, env(safe-area-inset-right, 0px))
+      calc(10px + env(safe-area-inset-bottom, 0px))
+      max(10px, env(safe-area-inset-left, 0px)) !important;
+    position: fixed !important;
+    right: 0 !important;
+    top: 0 !important;
+    width: 100vw !important;
+  }
+
+  html body .ogre-agent-shell.is-open .ogre-agent-panel header,
+  html body main.shell[data-app] .ogre-agent-shell.is-open .ogre-agent-panel header {
+    flex: 0 0 auto !important;
+    min-height: 52px !important;
+  }
+
+  html body .ogre-agent-shell.is-open .ogre-agent-holo,
+  html body main.shell[data-app] .ogre-agent-shell.is-open .ogre-agent-holo {
+    flex: 0 0 auto !important;
+    min-height: 56px !important;
+  }
+
+  html body .ogre-agent-shell.is-open .ogre-agent-feed,
+  html body main.shell[data-app] .ogre-agent-shell.is-open .ogre-agent-feed {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    overflow-y: auto !important;
+  }
+
+  html body .ogre-agent-shell.is-open .ogre-agent-composer,
+  html body .ogre-agent-shell.is-open .ogre-agent-quick-actions,
+  html body .ogre-agent-shell.is-open .ogre-agent-disclaimer,
+  html body .ogre-agent-shell.is-open .ogre-agent-status,
+  html body main.shell[data-app] .ogre-agent-shell.is-open .ogre-agent-composer,
+  html body main.shell[data-app] .ogre-agent-shell.is-open .ogre-agent-quick-actions,
+  html body main.shell[data-app] .ogre-agent-shell.is-open .ogre-agent-disclaimer,
+  html body main.shell[data-app] .ogre-agent-shell.is-open .ogre-agent-status {
+    flex: 0 0 auto !important;
   }
 }
