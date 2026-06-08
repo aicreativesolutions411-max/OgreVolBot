@@ -61,7 +61,12 @@ test("browser wallet buy and sell sign locally instead of entering managed-walle
   assert.match(functionBody(appSource, "executeConnectedBrowserTrade"), /\/api\/web\/browser-trade\/order/);
   assert.match(functionBody(appSource, "executeConnectedBrowserTrade"), /\/api\/web\/browser-trade\/execute/);
   assert.match(functionBody(appSource, "executeConnectedBrowserTrade"), /confirmConnectedBrowserTrade/);
+  assert.match(functionBody(appSource, "executeConnectedBrowserTrade"), /!state\.walletFastApprovalsEnabled && !confirmConnectedBrowserTrade/);
+  assert.match(functionBody(appSource, "executeConnectedBrowserTrade"), /Building \$\{side\} approval/);
   assert.match(functionBody(appSource, "confirmConnectedBrowserTrade"), /window\.confirm/);
+  assert.match(functionBody(appSource, "promptConnectedWalletReconnect"), /startMobileWalletConnect/);
+  assert.match(functionBody(appSource, "promptConnectedWalletReconnect"), /openMobileWalletBrowse/);
+  assert.match(functionBody(appSource, "connectedTradeProvider"), /promptConnectedWalletReconnect/);
   assert.doesNotMatch(functionBody(appSource, "executeConnectedBrowserTrade"), /JUPITER_API_KEY|privateKey|secretKey|seed/i);
 });
 

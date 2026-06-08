@@ -4992,6 +4992,54 @@ function downloadClipFarmRecording() {
   setClipFarmStatus("Saved.");
 }
 
+function smartChartFrameDescriptor(token = null, mode = "chartTxns") {
+  const row = token || selectedSmartChartTokenRow();
+  const mint = String(row?.tokenMint || state.smartChartToken || "").trim();
+  if (!mint) return null;
+  return {
+    mint,
+    mode,
+    src: smartChartFrameUrl(row, mode)
+  };
+}
+
+function captureSmartChartFrameForRender(options = {}) {
+  if (options.refreshSmartChartFrame || state.route !== "terminal" || state.activeTab !== "smartChart") return null;
+  const frame = document.querySelector("[data-panel] .smart-chart-frame[data-chart-mint][data-chart-mode]");
+  const iframe = frame?.querySelector("iframe");
+  if (!frame || !iframe) return null;
+  const mode = String(frame.dataset.chartMode || "chartTxns");
+  const descriptor = smartChartFrameDescriptor(null, mode);
+  const currentSrc = String(frame.dataset.chartSrc || iframe.getAttribute("src") || "");
+  if (!descriptor || frame.dataset.chartMint !== descriptor.mint || frame.dataset.chartMode !== descriptor.mode || currentSrc !== descriptor.src) {
+    return null;
+  }
+  frame.dataset.preserving = "true";
+  return {
+    frame,
+    mint: descriptor.mint,
+    mode: descriptor.mode,
+    src: descriptor.src,
+    loaded: frame.dataset.loaded === "true"
+  };
+}
+
+function restoreSmartChartFrameAfterRender(snapshot = null) {
+  if (!snapshot?.frame || !snapshot.frame.querySelector?.("iframe")) return false;
+  const selectorMint = String(snapshot.mint || "").replace(/["\\]/g, "\\$&");
+  const selectorMode = String(snapshot.mode || "").replace(/["\\]/g, "\\$&");
+  const nextFrame = document.querySelector(`[data-panel] .smart-chart-frame[data-chart-mint="${selectorMint}"][data-chart-mode="${selectorMode}"]`);
+  const nextSrc = nextFrame?.dataset?.chartSrc || nextFrame?.querySelector?.("iframe")?.getAttribute("src") || "";
+  if (!nextFrame || nextFrame === snapshot.frame || nextSrc !== snapshot.src) {
+    snapshot.frame.removeAttribute("data-preserving");
+    return false;
+  }
+  snapshot.frame.removeAttribute("data-preserving");
+  if (snapshot.loaded) snapshot.frame.dataset.loaded = "true";
+  nextFrame.replaceWith(snapshot.frame);
+  return true;
+}
+
 function render(options = {}) {
   if (!app || !loginView || !dashboardView) return;
   syncShellRouteVisibility();
@@ -5011,11 +5059,12 @@ function render(options = {}) {
   syncShellRouteVisibility();
   app.dataset.activeTab = state.activeTab || "";
   const preserveSmartChartPanel = Boolean(
-    options.preserveSmartChartFrame
+    (options.preserveSmartChartFrame || state.activeTab === "smartChart")
     && state.route === "terminal"
     && state.activeTab === "smartChart"
     && document.querySelector("[data-panel] .smart-chart-frame iframe")
   );
+  const preservedSmartChartFrame = preserveSmartChartPanel ? captureSmartChartFrameForRender(options) : null;
   const hasLoginModal = Boolean(loginModal);
   const loginModalVisible = Boolean(hasLoginModal && state.loginModalOpen);
   if (topLoginPanel) topLoginPanel.hidden = hasLoginModal || Boolean(state.user) || state.loginCollapsed;
@@ -5071,7 +5120,8 @@ function render(options = {}) {
     logoutButton.disabled = Boolean(state.logoutPending);
     writeText(logoutButton, state.logoutPending ? "Logging out..." : "Log Out");
   }
-  if (state.route === "terminal" && !preserveSmartChartPanel) renderTabs();
+  if (state.route === "terminal") renderTabs();
+  restoreSmartChartFrameAfterRender(preservedSmartChartFrame);
   renderWalletConnectModal();
   renderQuickBuyModal();
   renderProtectedBuyModal();
@@ -10268,14 +10318,32 @@ function providerIdForConnectedWallet(connected = connectedBrowserWallet()) {
   return "solana";
 }
 
+async function promptConnectedWalletReconnect(connected = connectedBrowserWallet(), { returnPath = currentReturnPath() || "/terminal/trade" } = {}) {
+  const providerId = providerIdForConnectedWallet(connected);
+  const label = connected?.provider || walletProviderLabel(providerId);
+  openWalletConnectChooser({ returnPath });
+  if (mobileWalletConnectAvailable(providerId)) {
+    const message = `${label} needs to reconnect before it can sign here. Opening ${label} mobile connect now.`;
+    setWalletConnectStatus(message);
+    const started = await startMobileWalletConnect(providerId, { returnPath }).catch(() => false);
+    if (started) return message;
+  }
+  if (openMobileWalletBrowse(providerId)) {
+    return `Opening ${label}. Use the wallet browser to reconnect and approve the trade.`;
+  }
+  const message = walletInstallGuidance(providerId);
+  setWalletConnectStatus(message);
+  return message;
+}
+
 async function connectedTradeProvider() {
   const connected = connectedBrowserWallet();
   if (!connected?.publicKey) throw new Error("Connect Phantom, Solflare, or another wallet before trading.");
   const providerId = providerIdForConnectedWallet(connected);
   const provider = walletProviderById(providerId) || walletProviderById("solana");
   if (!provider) {
-    openWalletConnectModal({ returnPath: "/terminal/trade" });
-    throw new Error(`${connected.provider || "Connected wallet"} is not available in this browser. Reconnect it or choose another wallet.`);
+    const message = await promptConnectedWalletReconnect(connected, { returnPath: currentReturnPath() || "/terminal/trade" });
+    throw new Error(message);
   }
   const providerKey = provider.publicKey?.toBase58?.() || provider.publicKey?.toString?.() || "";
   if (providerKey !== connected.publicKey) {
@@ -10321,9 +10389,12 @@ function confirmConnectedBrowserTrade({ side, connected, form = {}, actionDetail
 
 async function executeConnectedBrowserTrade({ side, form, actionDetail, amountSol = "", amountMode = "", percent = "", attemptId }) {
   const { provider, connected } = await connectedTradeProvider();
-  if (!confirmConnectedBrowserTrade({ side, connected, form, actionDetail, amountSol, amountMode, percent })) {
+  if (!state.walletFastApprovalsEnabled && !confirmConnectedBrowserTrade({ side, connected, form, actionDetail, amountSol, amountMode, percent })) {
     throw new Error("Connected-wallet trade cancelled.");
   }
+  setTradeStatus(state.walletFastApprovalsEnabled
+    ? `Building ${side} approval for ${connected.provider || "your wallet"}...`
+    : `Preparing ${side} approval...`);
   const order = await api("/api/web/browser-trade/order", {
     method: "POST",
     body: JSON.stringify({
@@ -11218,6 +11289,8 @@ function openTokenChart(tokenRef = {}, options = {}) {
   state.activeTab = "smartChart";
   state.route = "terminal";
   state.quickBuyModal = { ...state.quickBuyModal, open: false, status: "", error: "" };
+  state.chartTradeStatus = "";
+  state.chartBuyWalletIndex = "";
   const path = buildTokenChartPath(mint, {
     defaultTab: options.defaultTab || "buy",
     view: state.smartChartView,
@@ -11240,10 +11313,15 @@ function applyChartRouteFromLocation() {
   const routeStartedAt = perfNow();
   const params = new URLSearchParams(window.location.search || "");
   const token = String(params.get("token") || params.get("mint") || "").trim();
+  const previousToken = String(state.smartChartToken || "").trim();
   if (token) {
     const tokenRef = tokenRefFromMint(token, { source: params.get("source") || "route" });
     applyTokenRefToState(tokenRef);
     prefetchTokenChart(tokenRef, { source: params.get("source") || "route" });
+    if (token !== previousToken) {
+      state.chartTradeStatus = "";
+      state.chartBuyWalletIndex = "";
+    }
   }
   state.chartTradeTab = params.get("tab") === "sell" ? "sell" : "buy";
   state.smartChartView = ["chart", "chartTxns", "txns", "info"].includes(params.get("view")) ? params.get("view") : "chartTxns";
@@ -11520,11 +11598,11 @@ async function executeQuickBuyAmount({
   });
   state.quickBuyModal = {
     ...state.quickBuyModal,
-    status: "Submitting quick buy...",
+    status: isConnectedTradeWallet(walletIndex) ? "Opening wallet approval..." : "Submitting quick buy...",
     error: "",
     tradeAttemptId
   };
-  render({ force: true });
+  render({ force: true, preserveSmartChartFrame: state.activeTab === "smartChart" });
   await sleep(20);
 
   const form = { tokenMint, walletIndex, slippageBps };
@@ -11594,7 +11672,7 @@ async function confirmQuickBuyModal() {
       error: ""
     };
     state.activeTab = "smartChart";
-    render({ force: true });
+    render({ force: true, preserveSmartChartFrame: true });
     clearTradeActionLater("trade-buy", form.tokenMint, form.amountSol, 3000);
   } catch (error) {
     const message = publicErrorMessage(error.message || "Quick buy failed.");
@@ -11609,7 +11687,7 @@ async function confirmQuickBuyModal() {
       status: safetyBlock ? "Token safety blocked fast buy." : "",
       error: safetyBlock || message
     };
-    render({ force: true });
+    render({ force: true, preserveSmartChartFrame: state.activeTab === "smartChart" });
   }
 }
 
@@ -11648,7 +11726,7 @@ async function quickPresetTrade(tokenMint, presetOverride = null) {
     });
     setError("Quick buy queued. Checking preset wallet...");
     state.tradeToken = tokenMint;
-    render();
+    render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
     await sleep(0);
     await ensureWebAccount(null, "Opening secure web profile...");
     const walletIndex = preset.walletIndex || (preset.walletIndexes || [])[0] || "1";
@@ -12910,9 +12988,10 @@ function smartChartDexFrameHtml(token = {}, mode = "chart") {
   ].filter(Boolean).join(" ");
   const loadingLabel = isInfo ? "Loading token info..." : isTransactions ? "Loading DEX transactions..." : "Loading DEX chart...";
   const frameLoadingLabel = resolvingPair ? "Loading DEX chart while resolving fastest pair..." : loadingLabel;
+  const frameSrc = smartChartFrameUrl(token, mode);
   return `
-    <div class="${escapeHtml(className)}" data-chart-frame-loading="${escapeHtml(frameLoadingLabel)}" data-chart-resolving="${resolvingPair ? "true" : "false"}">
-      <iframe title="${escapeHtml(title)}" src="${escapeHtml(smartChartFrameUrl(token, mode))}" loading="eager" fetchpriority="high" referrerpolicy="no-referrer-when-downgrade" onload="this.closest('.smart-chart-frame')?.setAttribute('data-loaded','true'); window.SlimeWireChartFrameLoaded?.('${escapeHtml(mode)}','${escapeHtml(mint)}')" allowfullscreen></iframe>
+    <div class="${escapeHtml(className)}" data-chart-frame-loading="${escapeHtml(frameLoadingLabel)}" data-chart-resolving="${resolvingPair ? "true" : "false"}" data-chart-mint="${escapeHtml(mint)}" data-chart-mode="${escapeHtml(mode)}" data-chart-src="${escapeHtml(frameSrc)}">
+      <iframe title="${escapeHtml(title)}" src="${escapeHtml(frameSrc)}" loading="eager" fetchpriority="high" referrerpolicy="no-referrer-when-downgrade" onload="this.closest('.smart-chart-frame')?.setAttribute('data-loaded','true'); window.SlimeWireChartFrameLoaded?.('${escapeHtml(mode)}','${escapeHtml(mint)}')" allowfullscreen></iframe>
     </div>
   `;
 }
@@ -15290,10 +15369,21 @@ function chartTradePanelHtml(token = {}, heldPosition = null) {
   const activeTab = state.chartTradeTab === "sell" ? "sell" : "buy";
   const connected = connectedBrowserWallet();
   const managedDefaultWallet = state.wallets?.length ? String(state.wallets[0]?.index || "") : "";
-  const walletSelected = managedDefaultWallet || (connected?.publicKey ? "connected" : "");
   const activePreset = activeTradePreset();
+  const presetWalletIndex = activePreset?.walletIndex || (activePreset?.walletIndexes || [])[0] || "";
+  const walletSelected = state.chartBuyWalletIndex || (connected?.publicKey ? "connected" : (presetWalletIndex || managedDefaultWallet));
+  const selectedConnectedWallet = isConnectedTradeWallet(walletSelected);
   const chartBuyAmount = state.quickBuyAmountOverride || activeQuickBuyAmount(activePreset) || "";
   const chartPresetSummary = activePreset ? activePresetDetail("trade") : "No preset / manual";
+  const chartSlippageBps = String(activePreset?.slippageBps || "400");
+  const chartTakeProfitPct = String(activePreset?.takeProfitPct || "25");
+  const chartStopLossPct = String(activePreset?.stopLossPct || "8");
+  const chartSellDelay = String(activePreset?.sellDelay || "off");
+  const chartSellPercent = String(activePreset?.sellPercent || "100");
+  const knownSlippage = new Set(["300", "400", "500"]);
+  const customSlippageLabel = Number.isFinite(Number(chartSlippageBps))
+    ? `${Number(chartSlippageBps) / 100}%`
+    : chartSlippageBps;
   const positionSummary = heldPosition
     ? `${escapeHtml(heldPosition.uiAmount || "Position")} tokens | ${escapeHtml(heldPosition.estimatedValueSol || "value n/a")} SOL`
     : "No SlimeWire position tracked for this token.";
@@ -15328,54 +15418,55 @@ function chartTradePanelHtml(token = {}, heldPosition = null) {
           <label>
             Slippage
             <select data-chart-buy-slippage>
-              <option value="300">3%</option>
-              <option value="400" selected>4%</option>
-              <option value="500">5%</option>
+              <option value="300" ${chartSlippageBps === "300" ? "selected" : ""}>3%</option>
+              <option value="400" ${chartSlippageBps === "400" ? "selected" : ""}>4%</option>
+              <option value="500" ${chartSlippageBps === "500" ? "selected" : ""}>5%</option>
+              ${knownSlippage.has(chartSlippageBps) ? "" : `<option value="${escapeHtml(chartSlippageBps)}" selected>${escapeHtml(customSlippageLabel)}</option>`}
             </select>
           </label>
           <div class="chart-auto-exit-grid" aria-label="Chart buy exit settings">
             <label>
               Take Profit
-              <select data-chart-buy-tp data-custom-select="chart-buy-tp">
-                <option value="0">Off</option>
-                <option value="15">+15%</option>
-                <option value="25" selected>+25%</option>
-                <option value="50">+50%</option>
-                <option value="100">+100%</option>
-                <option value="custom">Custom</option>
-              </select>
-              <input data-chart-buy-tp-custom data-custom-for="chart-buy-tp" type="text" placeholder="Custom: 500 or 5x" hidden>
+              ${selectWithCustomHtml({
+                selectAttr: "data-chart-buy-tp",
+                customAttr: "data-chart-buy-tp-custom",
+                customFor: "chart-buy-tp",
+                options: [["0", "Off"], ["15", "+15%"], ["25", "+25%"], ["50", "+50%"], ["100", "+100%"], ["custom", "Custom"]],
+                selected: chartTakeProfitPct,
+                customPlaceholder: "Custom: 500 or 5x"
+              })}
             </label>
             <label>
               Stop Loss
-              <select data-chart-buy-sl data-custom-select="chart-buy-sl">
-                <option value="0">Off</option>
-                <option value="8" selected>-8%</option>
-                <option value="10">-10%</option>
-                <option value="15">-15%</option>
-                <option value="25">-25%</option>
-                <option value="custom">Custom</option>
-              </select>
-              <input data-chart-buy-sl-custom data-custom-for="chart-buy-sl" type="text" placeholder="Custom SL %" hidden>
+              ${selectWithCustomHtml({
+                selectAttr: "data-chart-buy-sl",
+                customAttr: "data-chart-buy-sl-custom",
+                customFor: "chart-buy-sl",
+                options: [["0", "Off"], ["8", "-8%"], ["10", "-10%"], ["15", "-15%"], ["25", "-25%"], ["custom", "Custom"]],
+                selected: chartStopLossPct,
+                customPlaceholder: "Custom SL %"
+              })}
             </label>
             <label>
               Timer
-              ${fallbackTimerSelectHtml("chart-buy-delay", "data-chart-buy-delay", "off")}
+              ${fallbackTimerSelectHtml("chart-buy-delay", "data-chart-buy-delay", chartSellDelay)}
             </label>
             <label>
               Exit Size
-              <select data-chart-buy-sell-percent data-custom-select="chart-buy-sell-percent">
-                <option value="off">Off</option>
-                <option value="50">50%</option>
-                <option value="80">80%</option>
-                <option value="100" selected>100%</option>
-                <option value="custom">Custom</option>
-              </select>
-              <input data-chart-buy-sell-percent-custom data-custom-for="chart-buy-sell-percent" type="number" min="1" max="100" step="1" placeholder="Custom %" hidden>
+              ${selectWithCustomHtml({
+                selectAttr: "data-chart-buy-sell-percent",
+                customAttr: "data-chart-buy-sell-percent-custom min=\"1\" max=\"100\" step=\"1\"",
+                customFor: "chart-buy-sell-percent",
+                options: [["off", "Off"], ["50", "50%"], ["80", "80%"], ["100", "100%"], ["custom", "Custom"]],
+                selected: chartSellPercent,
+                customType: "number",
+                customPlaceholder: "Custom %"
+              })}
             </label>
           </div>
-          <small>${managedDefaultWallet ? "Managed wallet selected for unattended TP/SL and timer exits. Browser-wallet buys still need approval for exits." : connected?.publicKey ? `${escapeHtml(connected.provider || "Browser wallet")} approval opens in wallet. Create or choose a managed wallet to arm unattended TP/SL and timer exits.` : "Choose a connected browser wallet or managed wallet. Managed wallets can arm TP/SL after buy."}</small>
+          <small>${selectedConnectedWallet ? `${escapeHtml(connected?.provider || "Browser wallet")} approval opens in wallet. Choose a managed wallet when you need unattended TP/SL and timer exits.` : managedDefaultWallet ? "Managed wallet selected for unattended TP/SL and timer exits. Browser-wallet buys still need approval for exits." : "Choose a connected browser wallet or managed wallet. Managed wallets can arm TP/SL after buy."}</small>
           <button type="button" class="primary chart-confirm-button" data-chart-confirm-buy="${escapeHtml(mint)}">Confirm Buy</button>
+          <small class="chart-trade-status" data-chart-trade-status>${escapeHtml(state.chartTradeStatus || "")}</small>
         </div>
       ` : `
         <div class="chart-trade-form" data-chart-trade-panel="sell">
@@ -19222,7 +19313,7 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-chart-trade-tab]")) {
     state.chartTradeTab = target.dataset.chartTradeTab === "sell" ? "sell" : "buy";
-    render({ force: true });
+    render({ force: true, preserveSmartChartFrame: true });
     if (state.chartTradeTab === "buy") requestAnimationFrame(() => $("[data-chart-buy-amount]")?.focus());
     return;
   }
@@ -19236,25 +19327,33 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-chart-confirm-buy]")) {
     const tokenMint = target.dataset.chartConfirmBuy || state.smartChartToken || "";
     event.preventDefault();
+    state.chartTradeStatus = "Buy queued. Opening wallet approval...";
+    target.dataset.actionState = "clicked";
+    target.disabled = true;
+    writeText($("[data-chart-trade-status]"), state.chartTradeStatus);
     runDeferredUiTask(async () => {
       try {
-      const autoExit = readChartTradeAutoExit();
-      const walletIndex = $("[data-chart-buy-wallet]")?.value || "";
-      await executeQuickBuyAmount({
-        tokenMint,
-        walletIndex,
-        amountSol: normalizedQuickBuyAmount($("[data-chart-buy-amount]")?.value || ""),
-        slippageBps: $("[data-chart-buy-slippage]")?.value || "400",
-        takeProfitPct: autoExit.takeProfitPct,
-        stopLossPct: autoExit.stopLossPct,
-        sellDelay: autoExit.sellDelay,
-        sellPercent: autoExit.sellPercent,
-        source: "chart-buy-panel"
-      });
-      state.chartTradeTab = "buy";
-      render({ force: true });
+        const autoExit = readChartTradeAutoExit();
+        const walletIndex = $("[data-chart-buy-wallet]")?.value || "";
+        await executeQuickBuyAmount({
+          tokenMint,
+          walletIndex,
+          amountSol: normalizedQuickBuyAmount($("[data-chart-buy-amount]")?.value || ""),
+          slippageBps: $("[data-chart-buy-slippage]")?.value || "400",
+          takeProfitPct: autoExit.takeProfitPct,
+          stopLossPct: autoExit.stopLossPct,
+          sellDelay: autoExit.sellDelay,
+          sellPercent: autoExit.sellPercent,
+          source: "chart-buy-panel"
+        });
+        state.chartTradeTab = "buy";
+        state.chartTradeStatus = "Buy submitted. Refreshing position...";
+        render({ force: true, preserveSmartChartFrame: true });
       } catch (error) {
-        setError(error.message);
+        const message = publicErrorMessage(error.message || "Chart buy failed.");
+        state.chartTradeStatus = message;
+        setError(message);
+        render({ force: true, preserveSmartChartFrame: true });
       }
     });
     return;
@@ -19717,6 +19816,10 @@ document.addEventListener("change", async (event) => {
     render({ force: true });
     return;
   }
+  if (target?.matches?.("[data-chart-buy-wallet]")) {
+    state.chartBuyWalletIndex = String(target.value || "");
+    return;
+  }
   if (target?.matches?.("[data-fast-trade-preset]")) {
     const nextPresetId = target.value || "";
     if (nextPresetId === "custom") {
@@ -19727,6 +19830,14 @@ document.addEventListener("change", async (event) => {
     state.fastTradePresetStatus = state.selectedTradePresetId
       ? "Trade preset selected. Tap Trade or Buy on a token row to use it."
       : "No fast trade preset selected. Token rows open the manual Trade form.";
+    if ((target.dataset.fastTradePreset || "") === "chart-panel") {
+      const preset = presetById("trade", state.selectedTradePresetId);
+      state.chartBuyWalletIndex = "";
+      if (preset?.amountSol) state.quickBuyAmountOverride = normalizedQuickBuyAmount(preset.amountSol);
+      state.chartTradeStatus = preset ? `${preset.name || "Preset"} loaded.` : "";
+      render({ force: true, preserveSmartChartFrame: true });
+      return;
+    }
     render();
   }
   if (target?.matches?.("[data-quick-buy-amount]")) {

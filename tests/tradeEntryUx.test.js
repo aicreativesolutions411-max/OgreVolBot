@@ -107,7 +107,15 @@ test("Chart route has professional Buy and Sell panel", () => {
   assert.match(panel, /data-chart-confirm-buy/);
   assert.match(panel, /data-chart-confirm-sell/);
   assert.match(panel, /managedDefaultWallet/);
-  assert.match(panel, /walletSelected = managedDefaultWallet/);
+  assert.match(panel, /presetWalletIndex/);
+  assert.match(panel, /walletSelected = state\.chartBuyWalletIndex \|\| \(connected\?\.publicKey \? "connected" : \(presetWalletIndex \|\| managedDefaultWallet\)\)/);
+  assert.match(panel, /selectedConnectedWallet/);
+  assert.match(panel, /chartSlippageBps/);
+  assert.match(panel, /chartTakeProfitPct/);
+  assert.match(panel, /chartStopLossPct/);
+  assert.match(panel, /chartSellDelay/);
+  assert.match(panel, /chartSellPercent/);
+  assert.match(panel, /data-chart-trade-status/);
   assert.match(panel, /Sell 25%/);
   assert.match(panel, /Sell 50%/);
   assert.match(panel, /Sell 100%/);
@@ -135,6 +143,9 @@ test("Chart page uses a clean DEX chart and transactions workspace", () => {
   assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /data-chart-frame-loading/);
   assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /fetchpriority="high"/);
   assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /setAttribute\('data-loaded','true'\)/);
+  assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /data-chart-mint/);
+  assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /data-chart-mode/);
+  assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /data-chart-src/);
   assert.match(functionBody(appSource, "pumpChartSvgHtml"), /const snapshotMode =/);
   assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /queueSmartChartBootstrap\(token\)/);
   assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /smartChartFrameUrl\(token, mode\)/);
@@ -155,6 +166,9 @@ test("Chart page uses a clean DEX chart and transactions workspace", () => {
   assert.match(functionBody(appSource, "renderTabs"), /chartScrollIntoView[\s\S]*requestSmartChartScrollIntoView\(panel\)/);
   assert.match(functionBody(appSource, "render"), /app\.dataset\.activeTab = state\.activeTab \|\| ""/);
   assert.match(functionBody(appSource, "render"), /preserveSmartChartPanel[\s\S]*\.smart-chart-frame iframe/);
+  assert.match(functionBody(appSource, "render"), /captureSmartChartFrameForRender/);
+  assert.match(functionBody(appSource, "render"), /restoreSmartChartFrameAfterRender/);
+  assert.match(functionBody(appSource, "restoreSmartChartFrameAfterRender"), /replaceWith\(snapshot\.frame\)/);
   assert.match(functionBody(appSource, "refreshTerminalFeed"), /preserveSmartChartFrame: state\.activeTab === "smartChart" && tabKey === "smartChart"/);
   assert.match(functionBody(appSource, "refreshWalletState"), /preserveSmartChartFrame: state\.activeTab === "smartChart"/);
   assert.match(chartCssSource, /WEB_WALLET_CHART_REFRESH_CLEANUP_20260608_V2/);
