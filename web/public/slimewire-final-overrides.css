@@ -16698,6 +16698,13 @@ html body main.shell[data-app][data-route="terminal"] .tabs button[data-tab="tra
     width: 100% !important;
   }
 
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs > button,
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs .nav-tool-group > button,
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs .nav-tool-group button {
+    grid-column: auto !important;
+    grid-row: auto !important;
+  }
+
   html body main.shell[data-app] .earned-badge {
     align-items: center !important;
     border-radius: 10px !important;
@@ -16952,5 +16959,360 @@ html body main.shell[data-app] .slime-swap-route-note {
   html body main.shell[data-app] .slime-swap-reverse .slime-swap-route-icon {
     height: 28px !important;
     width: 28px !important;
+  }
+}
+
+/* NAV_SWAP_BADGE_CLEANUP_20260608_V1: two-row terminal rail, wallet-aware swap selectors, and compact profile quests. */
+@media (min-width: 761px) {
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] {
+    gap: 2px !important;
+    row-gap: 2px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs {
+    align-content: start !important;
+    align-items: stretch !important;
+    display: grid !important;
+    gap: 4px !important;
+    grid-auto-flow: row !important;
+    grid-auto-rows: 36px !important;
+    grid-template-columns: repeat(9, minmax(0, 1fr)) !important;
+    margin: 0 0 1px !important;
+    max-height: none !important;
+    min-height: 77px !important;
+    overflow: visible !important;
+    padding: 4px 8px !important;
+    width: 100% !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs::before,
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs::after,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-section-label,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group > summary {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group[open] {
+    background: transparent !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    display: contents !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs > button,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group > button,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button {
+    align-items: center !important;
+    box-sizing: border-box !important;
+    display: inline-flex !important;
+    flex: none !important;
+    font-size: 0 !important;
+    gap: 5px !important;
+    height: 36px !important;
+    justify-content: center !important;
+    line-height: 1 !important;
+    margin: 0 !important;
+    min-height: 36px !important;
+    min-width: 0 !important;
+    overflow: hidden !important;
+    padding: 3px 6px !important;
+    text-align: center !important;
+    white-space: nowrap !important;
+    width: 100% !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs > button::before,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group > button::before,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button::before {
+    flex: 0 0 14px !important;
+    height: 14px !important;
+    margin: 0 !important;
+    max-height: 14px !important;
+    max-width: 14px !important;
+    width: 14px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs > button::after,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group > button::after,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button::after {
+    display: inline !important;
+    font-size: 9px !important;
+    line-height: 1 !important;
+    max-width: calc(100% - 19px) !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .dashboard-error {
+    margin: 2px 0 5px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .panel-host,
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > [data-panel] {
+    margin-top: 0 !important;
+    padding-top: 3px !important;
+  }
+}
+
+html body main.shell[data-app] .badge-showcase-card,
+html body main.shell[data-app] .profile-row-list > .badge-showcase-card,
+html body main.shell[data-app] .profile-extra-grid > .badge-showcase-card {
+  align-items: stretch !important;
+  display: grid !important;
+  gap: 8px !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  min-height: 0 !important;
+  padding: 12px !important;
+}
+
+html body main.shell[data-app] .badge-showcase-card > .badge-showcase-head {
+  grid-row: 1 !important;
+  margin: 0 !important;
+}
+
+html body main.shell[data-app] .badge-showcase-card > .badge-grid {
+  display: grid !important;
+  gap: 8px !important;
+  grid-row: 2 !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  margin: 0 !important;
+  min-height: 0 !important;
+  width: 100% !important;
+}
+
+html body main.shell[data-app] .badge-showcase-card > .badge-progress {
+  grid-row: 3 !important;
+  margin: 1px 0 0 !important;
+}
+
+html body main.shell[data-app] .badge-showcase-card .earned-badge {
+  align-items: center !important;
+  border-radius: 10px !important;
+  gap: 4px 7px !important;
+  grid-template-columns: 30px minmax(0, 1fr) !important;
+  min-height: 62px !important;
+  padding: 8px !important;
+}
+
+html body main.shell[data-app] .badge-showcase-card .earned-badge-icon {
+  grid-row: 1 / span 3 !important;
+  height: 30px !important;
+  width: 30px !important;
+}
+
+html body main.shell[data-app] .badge-showcase-card .earned-badge-icon img {
+  height: 18px !important;
+  width: 18px !important;
+}
+
+html body main.shell[data-app] .badge-showcase-card .earned-badge-quest {
+  font-size: 8px !important;
+  line-height: 1 !important;
+  padding: 2px 5px !important;
+}
+
+html body main.shell[data-app] .badge-showcase-card .earned-badge strong {
+  font-size: 11px !important;
+  line-height: 1.05 !important;
+}
+
+html body main.shell[data-app] .badge-showcase-card .earned-badge small {
+  font-size: 9px !important;
+  line-height: 1.15 !important;
+}
+
+@media (max-width: 900px) {
+  html body main.shell[data-app] .badge-showcase-card > .badge-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+/* MOBILE_NAV_AGENT_REFRESH_FINAL_20260608_V1: restore connect scroll, flatten tools, and keep mobile refresh chrome stable. */
+html body main.shell[data-app] .tabs button[hidden],
+html body main.shell[data-app][data-route="terminal"] .tabs button[hidden],
+html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button[hidden] {
+  display: none !important;
+  pointer-events: none !important;
+  visibility: hidden !important;
+}
+
+@media (max-width: 760px) {
+  html:has(main.shell[data-app][data-route="connect"]),
+  body:has(main.shell[data-app][data-route="connect"]) {
+    height: auto !important;
+    min-height: 100% !important;
+    overflow-x: clip !important;
+    overflow-y: auto !important;
+    overscroll-behavior-y: auto !important;
+    position: static !important;
+    touch-action: pan-y !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+
+  html body main.shell[data-app][data-route="connect"] {
+    height: auto !important;
+    min-height: 100dvh !important;
+    overflow-x: clip !important;
+    overflow-y: visible !important;
+    padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px)) !important;
+    position: relative !important;
+    touch-action: pan-y !important;
+  }
+
+  html body main.shell[data-app][data-route="connect"] .connect-view,
+  html body main.shell[data-app][data-route="connect"] .swamp-connect-shell,
+  html body main.shell[data-app][data-route="connect"] .connect-hero-side,
+  html body main.shell[data-app][data-route="connect"] .connect-card {
+    height: auto !important;
+    max-height: none !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    position: relative !important;
+  }
+
+  html body main.shell[data-app][data-route="connect"] .connect-view:not([hidden]) {
+    display: block !important;
+  }
+
+  html body main.shell[data-app][data-route="connect"] .swamp-connect-shell {
+    align-content: start !important;
+    gap: 10px !important;
+    min-height: calc(100dvh - 10px) !important;
+    padding:
+      max(8px, env(safe-area-inset-top, 0px))
+      max(10px, env(safe-area-inset-right, 0px))
+      max(18px, env(safe-area-inset-bottom, 0px))
+      max(10px, env(safe-area-inset-left, 0px)) !important;
+  }
+
+  html body main.shell[data-app][data-route="connect"] .connect-powered {
+    position: static !important;
+    justify-self: center !important;
+    margin-top: 2px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] {
+    padding-right: calc(44px + max(3px, env(safe-area-inset-right, 0px))) !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group[open] {
+    display: grid !important;
+    gap: 3px !important;
+    max-height: none !important;
+    max-width: 34px !important;
+    min-width: 34px !important;
+    overflow: visible !important;
+    width: 34px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group > summary {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group:not([open]) button,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button {
+    display: inline-flex !important;
+    opacity: 1 !important;
+    position: relative !important;
+    transform: none !important;
+    visibility: visible !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button[hidden] {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button::before {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button::after {
+    display: inline !important;
+    font-size: 6.4px !important;
+    line-height: 1 !important;
+    max-width: 30px !important;
+    overflow: hidden !important;
+    text-align: center !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip,
+  html body main.shell[data-app][data-route="terminal"] [data-top-sync-strip],
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs {
+    contain: layout style !important;
+    transform: translateZ(0) !important;
+    will-change: auto !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip button,
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip > span,
+  html body main.shell[data-app][data-route="terminal"] [data-refresh-live-pairs],
+  html body main.shell[data-app][data-route="terminal"] [data-top-refresh-wallet] {
+    animation: none !important;
+    min-height: 25px !important;
+    transform: none !important;
+    transition: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] button[data-action-state="clicked"],
+  html body main.shell[data-app][data-route="terminal"] button[data-action-state="refreshing"] {
+    animation: none !important;
+    filter: none !important;
+    transform: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-refresh-spinner],
+  html body main.shell[data-app][data-route="terminal"] [data-refresh-spinner][hidden] {
+    display: inline-block !important;
+    height: 9px !important;
+    margin-right: 3px !important;
+    min-width: 9px !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+    width: 9px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-refresh-spinner][hidden] {
+    opacity: 0 !important;
+  }
+
+  .ogre-agent-shell:not(.is-open) {
+    bottom: auto !important;
+    left: max(8px, env(safe-area-inset-left, 0px)) !important;
+    right: auto !important;
+    top: calc(104px + env(safe-area-inset-top, 0px)) !important;
+    transform: none !important;
+  }
+
+  .ogre-agent-shell:not(.is-open) .ogre-agent-bubble {
+    min-height: 38px !important;
+    padding: 4px 7px 4px 4px !important;
+  }
+
+  .ogre-agent-shell:not(.is-open) .ogre-agent-bubble img {
+    height: 30px !important;
+    width: 30px !important;
+  }
+
+  .ogre-agent-shell:not(.is-open) .ogre-agent-bubble span {
+    font-size: 9px !important;
+  }
+
+  .ogre-agent-shell.is-open .ogre-agent-bubble {
+    display: none !important;
+  }
+
+  .ogre-agent-shell.is-open .ogre-agent-panel {
+    left: max(8px, env(safe-area-inset-left, 0px)) !important;
+    right: max(8px, env(safe-area-inset-right, 0px)) !important;
+    top: max(8px, env(safe-area-inset-top, 0px)) !important;
+    bottom: max(8px, env(safe-area-inset-bottom, 0px)) !important;
+    width: auto !important;
   }
 }

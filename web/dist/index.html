@@ -18,12 +18,12 @@
     <link rel="preload" as="image" href="/assets/slimewire/svg/icons/wallet.svg">
     <link rel="preload" as="image" href="/assets/slimewire/svg/powered-by-ogres-badge.svg">
     <link rel="stylesheet" href="/tailwind.css?v=20260603-tailwind-v1">
-    <link rel="stylesheet" href="/styles.css?v=20260608042803">
-    <link rel="stylesheet" href="/slimewire-final-overrides.css?v=20260608042803">
+    <link rel="stylesheet" href="/styles.css?v=20260608050205">
+    <link rel="stylesheet" href="/slimewire-final-overrides.css?v=20260608050205">
     <script src="/config.js"></script>
     <script src="/vendor/tweetnacl-fast.min.js"></script>
     <script src="/vendor/solana-web3.iife.min.js?v=20260605-browser-trade-v1"></script>
-    <script type="module" src="/app.js?v=20260608042803"></script>
+    <script type="module" src="/app.js?v=20260608050205"></script>
   </head>
   <body>
     <main class="shell" data-app data-route="intro">
@@ -435,8 +435,7 @@
           <button data-tab="watchlist" data-label="Watch" title="Watchlist - saved coins you are watching and their movement." aria-label="Watchlist">Watchlist</button>
           <button data-tab="kol" data-label="KOL" title="KOL Tracker - watch KOL wallets, public signals, and copy-trade candidates." aria-label="KOL Tracker">KOL Tracker</button>
           <span class="nav-section-label">Ogre Tools</span>
-          <details class="nav-tool-group">
-            <summary data-label="Tek" title="Ogre TeK - pro tools including Ogre A.I., pump launch, bundle, volume, launch snipe, and sniper." aria-label="Ogre TeK pro tools">Ogre TeK</summary>
+          <div class="nav-tool-group" role="group" aria-label="Ogre TeK pro tools">
             <button data-tab="ogreAi" data-label="AI" title="Ogre A.I. - AI-assisted market notes and quick setup scanning." aria-label="Ogre A.I. tools">Ogre A.I.</button>
             <button data-tab="launchCoin" data-label="Pump" title="Pump Launch - prepare and submit pump launch details from SlimeWire." aria-label="Pump Launch tools">Pump Launch</button>
             <button data-tab="bundle" data-label="Bundle" title="Bundle - multi-wallet managed trade presets and grouped execution." aria-label="Bundle trade tools">Bundle</button>
@@ -444,7 +443,7 @@
             <button data-tab="launch" data-label="Launch" title="Launch Snipe - monitor new launches for entry windows." aria-label="Launch Snipe tools">Launch Snipe</button>
             <button data-tab="sniper" data-label="Snipe" title="Sniper - fast-entry scan and trade tools." aria-label="Sniper tools">Sniper</button>
             <button data-tab="ogreTek" data-feature="ogre-tek" data-label="Perps" title="Perp Mode - futures/perpetual trading view when enabled." aria-label="Perp Mode" hidden>Perp Mode</button>
-          </details>
+          </div>
           <span class="nav-section-label">Portfolio</span>
           <button data-tab="wallets" data-label="Wallets" title="Wallets / Balances - portfolio balances, managed wallets, restore, sweep, and funding tools." aria-label="Wallets and Balances">Wallets / Balances</button>
           <button data-tab="positions" data-label="Pos" title="Positions - open holdings with manual exit controls." aria-label="Positions">Positions</button>

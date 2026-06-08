@@ -3757,7 +3757,46 @@ function normalizeSwapMint(value = "") {
   return text;
 }
 
-function swapTokenRows() {
+function walletHeldSwapTokens() {
+  const rows = new Map();
+  const add = (token = {}) => {
+    const mint = normalizeSwapMint(token.mint || token.tokenMint || "");
+    if (!mint || rows.has(mint)) return;
+    const balance = token.balance ?? token.uiAmount ?? token.amount ?? token.uiBalance ?? "";
+    rows.set(mint, {
+      mint,
+      symbol: String(token.symbol || token.shortMint || (mint === "SOL" ? "SOL" : shortAddress(mint)) || "").trim(),
+      name: String(token.name || token.label || "").trim(),
+      balance,
+      kind: "wallet"
+    });
+  };
+  add({
+    mint: "SOL",
+    symbol: "SOL",
+    name: "Solana",
+    balance: `${totalSol().toFixed(4)} SOL`
+  });
+  portfolioPositions().forEach((row) => add({
+    mint: row.tokenMint || row.mint,
+    symbol: row.symbol || row.shortMint,
+    name: row.name || "",
+    balance: row.uiAmount || row.amountToken || "",
+    kind: "wallet"
+  }));
+  (state.balances || []).forEach((walletBalance) => {
+    (walletBalance.tokens || []).forEach((token) => add({
+      mint: token.tokenMint || token.mint,
+      symbol: token.symbol || token.shortMint,
+      name: token.name || "",
+      balance: token.uiAmount || token.amount || token.balance || "",
+      kind: "wallet"
+    }));
+  });
+  return [...rows.values()];
+}
+
+function swapTokenRows(options = {}) {
   const rows = new Map();
   const add = (token = {}) => {
     const mint = normalizeSwapMint(token.mint || token.tokenMint || "");
@@ -3766,18 +3805,18 @@ function swapTokenRows() {
       mint,
       symbol: String(token.symbol || token.shortMint || (mint === "SOL" ? "SOL" : shortAddress(mint)) || "").trim(),
       name: String(token.name || token.label || "").trim(),
-      balance: token.balance || token.uiAmount || token.amount || "",
+      balance: token.balance ?? token.uiAmount ?? token.amount ?? "",
       kind: token.kind || token.source || "held"
     });
   };
-  POPULAR_SWAP_TOKENS.forEach(add);
-  portfolioPositions().forEach((row) => add({
-    mint: row.tokenMint || row.mint,
-    symbol: row.symbol || row.shortMint,
-    name: row.name || "",
-    balance: row.uiAmount || row.amountToken || "",
-    kind: "wallet"
-  }));
+  const heldTokens = walletHeldSwapTokens();
+  heldTokens.forEach(add);
+  if (!options.walletOnly) {
+    POPULAR_SWAP_TOKENS.forEach((token) => {
+      if (token.mint === "SOL") return;
+      add(token);
+    });
+  }
   return [...rows.values()];
 }
 
@@ -3789,12 +3828,12 @@ function swapTokenByMint(value = "") {
 function swapTokenSelectOptions(selectedValue = "", options = {}) {
   const selected = normalizeSwapMint(selectedValue);
   const includeCustom = options.includeCustom !== false;
-  const tokens = swapTokenRows();
+  const tokens = swapTokenRows({ walletOnly: Boolean(options.walletOnly) });
   const hasSelectedToken = tokens.some((token) => token.mint === selected);
   const tokenOptions = tokens.map((token) => {
     const label = token.mint === "SOL"
-      ? "SOL"
-      : `${token.symbol || shortAddress(token.mint)}${token.kind === "wallet" ? " - in wallet" : token.name ? ` - ${token.name}` : ""}`;
+      ? `SOL${token.balance ? ` - ${token.balance}` : ""}`
+      : `${token.symbol || shortAddress(token.mint)}${token.kind === "wallet" ? ` - ${token.balance ? `${token.balance} ` : ""}in wallet` : token.name ? ` - ${token.name}` : ""}`;
     return `<option value="${escapeHtml(token.mint)}" ${selected === token.mint ? "selected" : ""}>${escapeHtml(label)}</option>`;
   }).join("");
   const customSelected = includeCustom && (!selected || !hasSelectedToken);
@@ -3803,7 +3842,7 @@ function swapTokenSelectOptions(selectedValue = "", options = {}) {
 
 function currentSwapFrom() {
   const from = normalizeSwapMint(state.tradeSwapFrom || "SOL") || "SOL";
-  return from;
+  return swapTokenRows({ walletOnly: true }).some((token) => token.mint === from) ? from : "SOL";
 }
 
 function currentSwapTo() {
@@ -6285,7 +6324,7 @@ function tradeHtml() {
               <strong>${escapeHtml(swapFromToken.symbol || shortAddress(swapFrom))}</strong>
             </div>
             <select data-swap-from aria-label="Swap from token">
-              ${swapTokenSelectOptions(swapFrom, { includeCustom: false })}
+              ${swapTokenSelectOptions(swapFrom, { includeCustom: false, walletOnly: true })}
             </select>
             <input data-swap-amount type="number" min="0" step="0.01" inputmode="decimal" placeholder="${swapFrom === "SOL" ? "SOL amount" : "Sell %"}">
             <small>${swapFrom === "SOL" ? `Balance ${escapeHtml(totalSol().toFixed(4))} SOL` : `${escapeHtml(swapFromToken.name || "Wallet token")} ${swapFromToken.balance ? `- ${escapeHtml(String(swapFromToken.balance))}` : ""}`}</small>
