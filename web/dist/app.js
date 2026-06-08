@@ -7064,13 +7064,12 @@ function ogreAiResultHtml() {
       <h3>${plans.length ? "Ogre A.I. Armed" : picks.length ? "Ogre A.I. Picked" : "Ogre A.I. Orders"}</h3>
       <p>${escapeHtml(row.message || "")}</p>
       <dl>
-        <div><dt>Mode</dt><dd>${escapeHtml(row.mode || "quick")}</dd></div>
-        <div><dt>Tier</dt><dd>${escapeHtml(row.selectedTier || "n/a")}</dd></div>
+        <div><dt>Strategy</dt><dd>Fresh Ape</dd></div>
         <div><dt>Scanned</dt><dd>${escapeHtml(row.scanned || 0)}</dd></div>
         <div><dt>Qualified</dt><dd>${escapeHtml(row.qualified || 0)}</dd></div>
         <div><dt>Plans</dt><dd>${escapeHtml(row.armedCount || plans.length)}</dd></div>
       </dl>
-      ${row.tierCounts ? `<small>Strict ${escapeHtml(row.tierCounts.strict || 0)} | Balanced ${escapeHtml(row.tierCounts.balanced || 0)} | Available ${escapeHtml(row.tierCounts.available || 0)} | Scout ${escapeHtml(row.tierCounts.scout || 0)}</small>` : ""}
+      <small>Under $10K first | starting volume required | honeypot, mint, freeze, and no-sell blocks stay on</small>
       <div class="ogre-ai-pick-list">
         ${plans.map((plan) => {
           const pick = plan.pick || {};
@@ -7120,20 +7119,12 @@ function ogreAiHtml() {
         <div class="trade-head">
           <div>
             <h3>Ogre A.I.</h3>
-            <p>Automation mode for managed wallets: scan best-pick feeds, buy selected setups, and arm exits from one command panel.</p>
+            <p>Fresh Ape scan for managed wallets: find low-MC fresh pairs with starting flow, buy selected setups, and arm exits from one command panel.</p>
           </div>
           <span class="sync-pill">Managed server exits</span>
         </div>
 
         <div class="ogre-ai-grid" data-preserve-focus>
-          <label>
-            Mode
-            <select data-ogre-ai-mode>
-              <option value="quick">Quick Scalp</option>
-              <option value="fresh">Fresh Launches</option>
-              <option value="safer">Safer Flow</option>
-            </select>
-          </label>
           <label>
             SOL per wallet
             <input data-ogre-ai-amount inputmode="decimal" placeholder="0.1" value="0.1">
@@ -7195,10 +7186,6 @@ function ogreAiHtml() {
               ["custom", "Custom"]
             ]
           })}
-          <label>
-            Min score
-            <input data-ogre-ai-min-score type="number" min="1" max="100" step="1" placeholder="Auto">
-          </label>
         </div>
 
         <div class="wallet-grid">
@@ -7207,18 +7194,18 @@ function ogreAiHtml() {
         ${walletGroupHtml("ogre-ai")}
 
         <div class="card-actions">
-          <button class="primary" type="button" data-ogre-ai-start ${state.ogreAiLoading ? "disabled" : ""}>${state.ogreAiLoading ? "Scanning..." : "Start Ogre A.I."}</button>
+          <button class="primary" type="button" data-ogre-ai-start ${state.ogreAiLoading ? "disabled" : ""}>${state.ogreAiLoading ? "Scanning..." : "Scan &amp; Ape"}</button>
           <button type="button" data-tab="live">Review Live Pairs</button>
           <button type="button" data-tab="positions">Positions</button>
         </div>
-        <small data-ogre-ai-status>${escapeHtml(state.ogreAiStatus || "No guarantees. Best-pick automation can lose money in fast meme markets; TP/SL execution depends on route/liquidity and managed-wallet server exits.")}</small>
+        <small data-ogre-ai-status>${escapeHtml(state.ogreAiStatus || "Fresh Ape scans under-$10K pairs first, requires starting volume, and blocks obvious honeypot, mint, freeze, drained-liquidity, and no-sell risk before buys.")}</small>
       </article>
 
       <aside class="trade-side">
         ${automationDelegationHtml({ compact: true })}
         <article>
           <h3>How It Runs</h3>
-          <p>Ogre A.I. pulls from live best-pick feeds, filters obvious high-risk setups, buys with your selected managed wallets, and arms 100% bag exits using the TP/SL/timer settings above.</p>
+          <p>Ogre A.I. pulls live fresh-pair feeds, favors under-$10K market caps with early buy flow, buys with your selected managed wallets, and arms 100% bag exits using the TP/SL/timer settings above.</p>
           <ul class="delegation-steps">
             <li>Use small sizing first.</li>
             <li>Server exits require managed/imported wallets.</li>
@@ -10874,13 +10861,13 @@ function readOgreAiForm() {
   const walletIndexes = checkedWalletIndexes("ogre-ai");
   const walletGroup = $("[data-ogre-ai-group]")?.value?.trim() || "";
   const amountSol = $("[data-ogre-ai-amount]")?.value?.trim() || "";
-  const mode = $("[data-ogre-ai-mode]")?.value || "quick";
+  const mode = "fresh_ape";
   const runCount = $("[data-ogre-ai-runs]")?.value || "1";
   const sellDelay = fieldValue("[data-ogre-ai-delay]", "[data-ogre-ai-delay-custom]", "5");
   const takeProfitPct = fieldValue("[data-ogre-ai-tp]", "[data-ogre-ai-tp-custom]", "25");
   const stopLossPct = fieldValue("[data-ogre-ai-sl]", "[data-ogre-ai-sl-custom]", "8");
   const slippageBps = fieldValue("[data-ogre-ai-slippage]", "[data-ogre-ai-slippage-custom]", "400");
-  const minScore = $("[data-ogre-ai-min-score]")?.value?.trim() || "";
+  const minScore = "";
   if (!walletIndexes.length && !walletGroup) throw new Error("Choose at least one managed wallet or enter a group label.");
   if (!amountSol) throw new Error("Enter SOL per wallet for Ogre A.I.");
   return {
@@ -10915,7 +10902,7 @@ async function startOgreAiRun() {
     const payload = readOgreAiForm();
     state.ogreAiLoading = true;
     ogreAiRunInFlight = runToken;
-    setOgreAiStatus("Scanning live feeds and arming managed exits...");
+    setOgreAiStatus("Scanning fresh low-MC pairs and arming managed exits...");
     render();
     const data = await api("/api/web/ogre-ai/start", {
       method: "POST",

@@ -10,6 +10,7 @@ import {
 } from "../src/lib/ogreAi.js";
 
 const serverSource = fs.readFileSync(new URL("../src/index.js", import.meta.url), "utf8");
+const webAppSource = fs.readFileSync(new URL("../web/public/app.js", import.meta.url), "utf8");
 
 function serverFunctionBody(name) {
   const syncMatch = new RegExp(`function\\s+${name}\\s*\\(`).exec(serverSource);
@@ -49,6 +50,20 @@ const defaults = {
   minScore: 54,
   maxMarketCap: 750_000,
   minLiquidityUsd: 350
+};
+
+const freshApeDefaults = {
+  minScore: 12,
+  minMarketCap: 2_500,
+  preferredMaxMarketCap: 10_000,
+  maxMarketCap: 35_000,
+  maxAgeMinutes: 75,
+  minStartingVolumeUsd: 60,
+  minLiquidityUsd: 20,
+  preferFreshLaunches: true,
+  desiredPickCount: 1,
+  takeProfitPct: 25,
+  targetTakeProfitPct: 25
 };
 
 test("Ogre A.I. falls back to balanced picks when strict is empty", () => {
@@ -513,6 +528,96 @@ test("Ogre A.I. lets super fresh low-market-cap pump pairs through with modest e
   assert.ok(["available", "balanced", "strict"].includes(tier), `expected usable tier, got ${tier}`);
   const pool = buildOgreAiCandidatePool([superFresh], targetDefaults, "quick");
   assert.equal(pool.candidates[0].tokenMint, "SuperFreshPotentialMintpump");
+});
+
+test("Ogre A.I. web panel exposes one fresh ape scan instead of modes", () => {
+  assert.doesNotMatch(webAppSource, /data-ogre-ai-mode/);
+  assert.doesNotMatch(webAppSource, /data-ogre-ai-min-score/);
+  assert.match(webAppSource, /const mode = "fresh_ape"/);
+  assert.match(webAppSource, /Scan &amp; Ape/);
+});
+
+test("Ogre A.I. fresh ape rejects dead fresh pumps with no starting volume", () => {
+  const deadFresh = {
+    tokenMint: "DeadFreshMintpump",
+    bestPickScore: 34,
+    isPump: true,
+    marketCap: 6_200,
+    liquidityUsd: 24,
+    volume5m: 0,
+    volumeM15: 0,
+    volumeM30: 0,
+    volumeH1: 0,
+    buys5m: 0,
+    sells5m: 0,
+    trades5m: 0,
+    pairAgeMinutes: 2
+  };
+
+  assert.equal(ogreAiTierForCandidate(deadFresh, freshApeDefaults, "fresh_ape"), null);
+  const pool = buildOgreAiCandidatePool([deadFresh], freshApeDefaults, "fresh_ape");
+  assert.equal(pool.selectedTier, "none");
+  assert.equal(pool.tierCounts.blocked, 1);
+});
+
+test("Ogre A.I. fresh ape allows pairs down to the 2.5k market-cap floor when flow starts", () => {
+  const tinyFresh = {
+    tokenMint: "TinyFreshMintpump",
+    bestPickScore: 11,
+    isPump: true,
+    marketCap: 2_650,
+    liquidityUsd: 22,
+    volume5m: 82,
+    buys5m: 2,
+    sells5m: 0,
+    trades5m: 2,
+    pairAgeMinutes: 3,
+    reasons: ["fresh launch", "early buys"]
+  };
+
+  const tier = ogreAiTierForCandidate(tinyFresh, freshApeDefaults, "fresh_ape");
+  assert.ok(["strict", "balanced", "available"].includes(tier), `expected fresh ape tier, got ${tier}`);
+});
+
+test("Ogre A.I. fresh ape prefers under-10k starting-volume pairs before bigger fallback caps", () => {
+  const rows = [
+    {
+      tokenMint: "FallbackBiggerMintpump",
+      bestPickScore: 82,
+      isPump: true,
+      marketCap: 28_000,
+      liquidityUsd: 240,
+      volume5m: 2_000,
+      buys5m: 8,
+      sells5m: 1,
+      trades5m: 9,
+      pairAgeMinutes: 3
+    },
+    {
+      tokenMint: "PrimaryUnderTenMintpump",
+      bestPickScore: 12,
+      isPump: true,
+      marketCap: 6_200,
+      liquidityUsd: 32,
+      volume5m: 105,
+      buys5m: 2,
+      sells5m: 0,
+      trades5m: 2,
+      pairAgeMinutes: 4
+    }
+  ];
+
+  const pool = buildOgreAiCandidatePool(rows, freshApeDefaults, "fresh_ape");
+  assert.equal(pool.selectedTier, "strict");
+  assert.equal(pool.candidates[0].tokenMint, "PrimaryUnderTenMintpump");
+});
+
+test("Ogre A.I. server collapses old mode names into fresh ape defaults", () => {
+  assert.match(serverFunctionBody("normalizeOgreAiMode"), /return "fresh_ape"/);
+  assert.match(serverFunctionBody("ogreAiModeDefaults"), /preferredMaxMarketCap:\s*10_000/);
+  assert.match(serverFunctionBody("ogreAiModeDefaults"), /minMarketCap:\s*2_500/);
+  assert.match(serverFunctionBody("ogreAiModeDefaults"), /minStartingVolumeUsd:\s*60/);
+  assert.match(serverFunctionBody("ogreAiScannerModesForTarget"), /\["pumpsnipe", "moonshot", "fast"\]/);
 });
 
 test("Ogre A.I. uses a fast cached-market fallback before failing empty", () => {

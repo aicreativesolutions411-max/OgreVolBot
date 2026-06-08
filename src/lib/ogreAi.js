@@ -21,6 +21,16 @@ const OGRE_AI_HARD_BLOCKED_RISK_RE = /\b(honeypot|honey\s*pot|mintable|mint auth
 const OGRE_AI_ABSURD_MARKET_CAP_USD = 25_000_000;
 const OGRE_AI_THIN_LIQUIDITY_MARKET_CAP_USD = 5_000_000;
 const OGRE_AI_THIN_LIQUIDITY_RATIO = 0.01;
+const OGRE_AI_FRESH_APE_MIN_MC_USD = 2_500;
+const OGRE_AI_FRESH_APE_PRIMARY_MAX_MC_USD = 10_000;
+const OGRE_AI_FRESH_APE_FALLBACK_MAX_MC_USD = 35_000;
+const OGRE_AI_FRESH_APE_MAX_AGE_MINUTES = 75;
+const OGRE_AI_FRESH_APE_MIN_STARTING_VOLUME_USD = 60;
+
+function isFreshApeMode(mode) {
+  const value = String(mode || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  return value === "fresh_ape" || value === "freshape" || value === "ape";
+}
 
 function textBlob(row = {}) {
   return [
@@ -127,6 +137,91 @@ export function ogreAiCandidateStats(row = {}) {
   };
 }
 
+function ogreAiFreshApeCapInfo(stats = {}, defaults = {}) {
+  const minMarketCap = Number(defaults.minMarketCap || OGRE_AI_FRESH_APE_MIN_MC_USD);
+  const primaryMax = Number(defaults.preferredMaxMarketCap || OGRE_AI_FRESH_APE_PRIMARY_MAX_MC_USD);
+  const fallbackMax = Number(defaults.maxMarketCap || OGRE_AI_FRESH_APE_FALLBACK_MAX_MC_USD);
+  const marketCap = Number(stats.marketCap || 0);
+  const base = { minMarketCap, primaryMax, fallbackMax, marketCap };
+  if (!marketCap) return { ...base, band: "unknown", ok: true, primary: false };
+  if (marketCap < minMarketCap) return { ...base, band: "too_low", ok: false, primary: false };
+  if (marketCap <= primaryMax) return { ...base, band: "primary", ok: true, primary: true };
+  if (marketCap <= fallbackMax) return { ...base, band: "fallback", ok: true, primary: false };
+  return { ...base, band: "too_high", ok: false, primary: false };
+}
+
+function ogreAiFreshApeHasStartingVolume(stats = {}, defaults = {}) {
+  const minVolume = Number(defaults.minStartingVolumeUsd || OGRE_AI_FRESH_APE_MIN_STARTING_VOLUME_USD);
+  if (stats.volumeMomentumUsd >= minVolume) return true;
+  if (stats.volume5m >= minVolume * 0.65) return true;
+  if (stats.volumeToMarketCap >= 0.012 && stats.trades5m >= 1) return true;
+  if (stats.buys5m >= 2 && stats.buyPressure >= 0.45) return true;
+  if (stats.trades5m >= 2 && stats.buyPressure >= 0.5) return true;
+  return stats.positivePriceMomentumPct >= 3 && stats.trades5m >= 1;
+}
+
+function ogreAiFreshApeFitScore(row = {}, defaults = {}) {
+  const stats = ogreAiCandidateStats(row);
+  const cap = ogreAiFreshApeCapInfo(stats, defaults);
+  const minVolume = Number(defaults.minStartingVolumeUsd || OGRE_AI_FRESH_APE_MIN_STARTING_VOLUME_USD);
+  const startingVolume = ogreAiFreshApeHasStartingVolume(stats, defaults);
+  const scoreSignal = clampNumber(stats.score, 0, 100) * 0.18;
+  let capFit = 8;
+  if (cap.band === "primary") capFit = 28;
+  else if (cap.band === "fallback") capFit = 10 - clampNumber((stats.marketCap - cap.primaryMax) / Math.max(cap.fallbackMax - cap.primaryMax, 1), 0, 1) * 8;
+  else if (cap.band === "too_low") capFit = -18;
+  else if (cap.band === "too_high") capFit = -28;
+
+  let ageSignal = 8;
+  if (stats.ageMinutes !== null) {
+    if (stats.ageMinutes <= 3) ageSignal = 20;
+    else if (stats.ageMinutes <= 8) ageSignal = 17;
+    else if (stats.ageMinutes <= 20) ageSignal = 13;
+    else if (stats.ageMinutes <= 45) ageSignal = 7;
+    else if (stats.ageMinutes <= OGRE_AI_FRESH_APE_MAX_AGE_MINUTES) ageSignal = 1;
+    else ageSignal = -clampNumber((stats.ageMinutes - OGRE_AI_FRESH_APE_MAX_AGE_MINUTES) / 45, 0, 3) * 12;
+  }
+
+  const volumeSignal = clampNumber(stats.volumeMomentumUsd / Math.max(1, minVolume), 0, 1.8) * 18;
+  const relativeVolumeSignal = (
+    stats.volumeToMarketCap >= 0.1 ? 12
+      : stats.volumeToMarketCap >= 0.05 ? 9
+        : stats.volumeToMarketCap >= 0.02 ? 6
+          : stats.volumeToMarketCap >= 0.012 ? 3
+            : 0
+  );
+  const tradeSignal = clampNumber(stats.trades5m / 4, 0, 1.2) * 8;
+  const buyPressureSignal = clampNumber((stats.buyPressure - 0.45) / 0.3, -1, 1) * 8;
+  const momentumSignal = clampNumber(stats.positivePriceMomentumPct / 8, 0, 1.25) * 8;
+  const liquidityNeed = Math.max(10, Number(defaults.minLiquidityUsd || 20));
+  const liquiditySignal = stats.liquidityUsd
+    ? clampNumber(stats.liquidityUsd / liquidityNeed, 0, 1.2) * 6
+      + (stats.liquidityToMarketCap >= 0.015 ? 4 : stats.liquidityToMarketCap >= 0.006 ? 2 : 0)
+    : (stats.isPump ? 2 : 0);
+  const riskPenalty = clampNumber(stats.rugRisk / 8, 0, 12)
+    + clampNumber(stats.exitRisk / 9, 0, 12)
+    + (/\b(wash|bundle|mutable|unknown risk|low liquidity)\b/i.test(ogreAiRiskText(row)) ? 4 : 0);
+  const deadPenalty = startingVolume ? 0 : (
+    stats.ageMinutes !== null && stats.ageMinutes <= 10 ? 18 : 28
+  );
+  return Math.round(clampNumber(
+    scoreSignal
+      + capFit
+      + ageSignal
+      + volumeSignal
+      + relativeVolumeSignal
+      + tradeSignal
+      + buyPressureSignal
+      + momentumSignal
+      + liquiditySignal
+      + (startingVolume ? 8 : 0)
+      - riskPenalty
+      - deadPenalty,
+    1,
+    100
+  ));
+}
+
 export function ogreAiTargetProfitPct(defaults = {}) {
   return clampNumber(numberValue(
     defaults.takeProfitPct,
@@ -137,6 +232,7 @@ export function ogreAiTargetProfitPct(defaults = {}) {
 }
 
 export function ogreAiTargetFitScore(row = {}, defaults = {}, mode = "quick") {
+  if (isFreshApeMode(mode)) return ogreAiFreshApeFitScore(row, defaults);
   const stats = ogreAiCandidateStats(row);
   const targetPct = ogreAiTargetProfitPct(defaults);
   const targetIntensity = clampNumber((targetPct - 25) / 100, 0, 1);
@@ -247,6 +343,25 @@ export function ogreAiTierForCandidate(row = {}, defaults = {}, mode = "quick") 
   const minScore = Number(defaults.minScore || 54);
   const maxMarketCap = Number(defaults.maxMarketCap || 750_000);
   const minLiquidityUsd = Number(defaults.minLiquidityUsd || 350);
+  if (isFreshApeMode(mode)) {
+    const cap = ogreAiFreshApeCapInfo(stats, defaults);
+    const maxAgeMinutes = Number(defaults.maxAgeMinutes || OGRE_AI_FRESH_APE_MAX_AGE_MINUTES);
+    const freshOk = stats.ageMinutes === null || stats.ageMinutes <= maxAgeMinutes;
+    const startingVolume = ogreAiFreshApeHasStartingVolume(stats, defaults);
+    const buyIntentOk = stats.trades5m <= 0 || stats.buyPressure >= 0.42 || stats.buys5m >= 1;
+    const liquidityOk = !stats.liquidityUsd
+      || stats.liquidityUsd >= Number(defaults.minLiquidityUsd || 20)
+      || stats.liquidityToMarketCap >= 0.006
+      || stats.isPump;
+    const scoreOk = stats.score >= Math.max(5, Number(defaults.minScore || 12) - 6)
+      || stats.trades5m >= 2
+      || stats.volumeToMarketCap >= 0.012;
+    if (!freshOk || !cap.ok || !startingVolume || !buyIntentOk || !liquidityOk || !scoreOk) return null;
+    if (cap.band === "primary" && targetFit >= 45 && (stats.ageMinutes === null || stats.ageMinutes <= 30)) return "strict";
+    if ((cap.band === "primary" || cap.band === "unknown") && targetFit >= 30) return "balanced";
+    if ((cap.band === "primary" || cap.band === "fallback" || cap.band === "unknown") && targetFit >= Math.max(18, Number(defaults.minScore || 12))) return "available";
+    return null;
+  }
   const highTarget = targetPct >= 80;
   const mediumTarget = targetPct >= 50;
   const steadyTarget = targetPct <= 30;
@@ -327,6 +442,20 @@ export function ogreAiTierForCandidate(row = {}, defaults = {}, mode = "quick") 
 }
 
 export function compareOgreAiCandidates(a = {}, b = {}, defaults = {}, mode = "quick") {
+  if (isFreshApeMode(mode)) {
+    const aStats = ogreAiCandidateStats(a);
+    const bStats = ogreAiCandidateStats(b);
+    const aCap = ogreAiFreshApeCapInfo(aStats, defaults);
+    const bCap = ogreAiFreshApeCapInfo(bStats, defaults);
+    return (ogreAiTargetFitScore(b, defaults, mode) - ogreAiTargetFitScore(a, defaults, mode))
+      || ((bCap.primary ? 1 : 0) - (aCap.primary ? 1 : 0))
+      || (Number(ogreAiFreshApeHasStartingVolume(bStats, defaults)) - Number(ogreAiFreshApeHasStartingVolume(aStats, defaults)))
+      || (bStats.volumeToMarketCap - aStats.volumeToMarketCap)
+      || (bStats.volumeMomentumUsd - aStats.volumeMomentumUsd)
+      || (bStats.buys5m - aStats.buys5m)
+      || (numberValue(b.bestPickScore, b.score) - numberValue(a.bestPickScore, a.score))
+      || (numberValue(b.pairCreatedAt) - numberValue(a.pairCreatedAt));
+  }
   return (ogreAiTargetFitScore(b, defaults, mode) - ogreAiTargetFitScore(a, defaults, mode))
     || (numberValue(b.bestPickScore, b.score) - numberValue(a.bestPickScore, a.score))
     || (ogreAiCandidateStats(b).positivePriceMomentumPct - ogreAiCandidateStats(a).positivePriceMomentumPct)
@@ -361,6 +490,23 @@ function signalSet(values = []) {
 
 function ogreAiDiversityScore(row = {}, defaults = {}, mode = "quick", recentSet = new Set(), index = 0) {
   const stats = ogreAiCandidateStats(row);
+  if (isFreshApeMode(mode)) {
+    const cap = ogreAiFreshApeCapInfo(stats, defaults);
+    let score = ogreAiTargetFitScore(row, defaults, mode)
+      + numberValue(row.bestPickScore, row.score) * 0.06
+      - index * 0.04;
+    if (cap.band === "primary") score += 18;
+    else if (cap.band === "fallback") score -= 8;
+    else if (cap.band === "too_low") score -= 22;
+    else if (cap.band === "too_high") score -= 34;
+    if (ogreAiFreshApeHasStartingVolume(stats, defaults)) score += 14;
+    else score -= 35;
+    if (stats.ageMinutes !== null && stats.ageMinutes <= 5) score += 18;
+    else if (stats.ageMinutes !== null && stats.ageMinutes <= 15) score += 12;
+    else if (stats.ageMinutes !== null && stats.ageMinutes > OGRE_AI_FRESH_APE_MAX_AGE_MINUTES) score -= 28;
+    if (recentSet.has(ogreAiSignalKey(row))) score -= 52;
+    return score;
+  }
   const targetPct = ogreAiTargetProfitPct(defaults);
   const highTarget = targetPct >= 80;
   let score = ogreAiTargetFitScore(row, defaults, mode)
@@ -450,6 +596,29 @@ export function buildOgreAiCandidatePool(rows = [], defaults = {}, mode = "quick
         continue;
       }
       const stats = ogreAiCandidateStats(row);
+      if (isFreshApeMode(mode)) {
+        const cap = ogreAiFreshApeCapInfo(stats, defaults);
+        const maxAgeMinutes = Number(defaults.maxAgeMinutes || OGRE_AI_FRESH_APE_MAX_AGE_MINUTES);
+        const ageOk = stats.ageMinutes === null || stats.ageMinutes <= maxAgeMinutes;
+        const hasSomeSignal = ogreAiFreshApeHasStartingVolume(stats, defaults)
+          && (
+            stats.score >= 5
+            || stats.trades5m >= 1
+            || Array.isArray(row.bestPickInputs) && row.bestPickInputs.length > 0
+            || Array.isArray(row.reasons) && row.reasons.length > 0
+          );
+        if (ageOk && cap.ok && hasSomeSignal) {
+          tiers.scout.push({
+            ...row,
+            ogreAiTier: "scout",
+            ogreAiTargetFit: ogreAiTargetFitScore(row, defaults, mode),
+            ogreAiTargetPct: ogreAiTargetProfitPct(defaults)
+          });
+          continue;
+        }
+        blocked += 1;
+        continue;
+      }
       const maxMarketCap = Number(defaults.maxMarketCap || 750_000);
       const targetPct = ogreAiTargetProfitPct(defaults);
       const earlyTarget = targetPct >= 80 || defaults.preferFreshLaunches;

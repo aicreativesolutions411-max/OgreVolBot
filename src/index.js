@@ -24677,53 +24677,52 @@ async function webCreateSniperEntry(userId, body = {}) {
 }
 
 function normalizeOgreAiMode(value) {
-  const mode = String(value || "quick").trim().toLowerCase();
-  if (["fresh", "new", "launch"].includes(mode)) return "fresh";
-  if (["safer", "safe", "steady"].includes(mode)) return "safer";
-  if (["scalp", "fast", "quick"].includes(mode)) return "quick";
-  return "quick";
+  const mode = String(value || "fresh_ape").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (["fresh_ape", "freshape", "ape", "quick", "fast", "scalp", "fresh", "new", "launch", "safer", "safe", "steady"].includes(mode)) {
+    return "fresh_ape";
+  }
+  return "fresh_ape";
 }
 
 function ogreAiModeDefaults(mode) {
-  const safeMode = normalizeOgreAiMode(mode);
-  if (safeMode === "fresh") {
-    return {
-      buckets: ["live", "under1h"],
-      minScore: 50,
-      maxMarketCap: 260_000,
-      minLiquidityUsd: 150,
-      defaultSellDelay: "3",
-      defaultTakeProfitPct: "40",
-      defaultStopLossPct: "8",
-      defaultSlippageBps: 400
-    };
-  }
-  if (safeMode === "safer") {
-    return {
-      buckets: ["under1h", "under3h", "under1d"],
-      minScore: 62,
-      maxMarketCap: 1_200_000,
-      minLiquidityUsd: 1_000,
-      defaultSellDelay: "10",
-      defaultTakeProfitPct: "20",
-      defaultStopLossPct: "8",
-      defaultSlippageBps: 350
-    };
-  }
+  normalizeOgreAiMode(mode);
   return {
-    buckets: ["live", "under1h", "under3h"],
-    minScore: 54,
-    maxMarketCap: 750_000,
-    minLiquidityUsd: 350,
-    defaultSellDelay: "5",
+    buckets: ["live", "under1h"],
+    minScore: 12,
+    minMarketCap: 2_500,
+    preferredMaxMarketCap: 10_000,
+    maxMarketCap: 35_000,
+    maxAgeMinutes: 75,
+    minStartingVolumeUsd: 60,
+    minLiquidityUsd: 20,
+    preferFreshLaunches: true,
+    targetBand: "fresh_ape",
+    diversityWindow: 18,
+    defaultSellDelay: "3",
     defaultTakeProfitPct: "25",
     defaultStopLossPct: "8",
-    defaultSlippageBps: 400
+    defaultSlippageBps: 500
   };
 }
 
 function applyOgreAiTargetDefaults(defaults, targetPct, mode) {
   const safeMode = normalizeOgreAiMode(mode);
+  if (safeMode === "fresh_ape") {
+    defaults.targetBand = "fresh_ape";
+    defaults.buckets = [...new Set(["live", "under1h"])];
+    defaults.minScore = Math.min(Number(defaults.minScore || 12), 12);
+    defaults.minMarketCap = Number(defaults.minMarketCap || 2_500);
+    defaults.preferredMaxMarketCap = Number(defaults.preferredMaxMarketCap || 10_000);
+    defaults.maxMarketCap = Math.min(Number(defaults.maxMarketCap || 35_000), 35_000);
+    defaults.maxAgeMinutes = Math.min(Number(defaults.maxAgeMinutes || 75), 75);
+    defaults.minStartingVolumeUsd = Math.min(Number(defaults.minStartingVolumeUsd || 60), 60);
+    defaults.minLiquidityUsd = Math.min(Number(defaults.minLiquidityUsd || 20), 20);
+    defaults.preferFreshLaunches = true;
+    defaults.diversityWindow = Math.max(Number(defaults.diversityWindow || 0), 18);
+    defaults.defaultSellDelay = "3";
+    defaults.defaultSlippageBps = Math.max(Number(defaults.defaultSlippageBps || 500), 500);
+    return defaults;
+  }
   const pct = Number(targetPct);
   if (!Number.isFinite(pct) || pct <= 0) return defaults;
   if (pct >= 80) {
@@ -24773,6 +24772,21 @@ function normalizeOgreAiRecentMints(input) {
 }
 
 function applyOgreAiTimerIntentDefaults(defaults, body = {}, mode = "quick") {
+  const safeMode = normalizeOgreAiMode(mode);
+  if (safeMode === "fresh_ape") {
+    defaults.targetBand = "fresh_ape";
+    defaults.preferFreshLaunches = true;
+    defaults.diversityWindow = Math.max(Number(defaults.diversityWindow || 0), 18);
+    defaults.buckets = [...new Set(["live", "under1h"])];
+    defaults.minScore = Math.min(Number(defaults.minScore || 12), 12);
+    defaults.minMarketCap = Number(defaults.minMarketCap || 2_500);
+    defaults.preferredMaxMarketCap = Number(defaults.preferredMaxMarketCap || 10_000);
+    defaults.maxMarketCap = Math.min(Number(defaults.maxMarketCap || 35_000), 35_000);
+    defaults.maxAgeMinutes = Math.min(Number(defaults.maxAgeMinutes || 75), 75);
+    defaults.minStartingVolumeUsd = Math.min(Number(defaults.minStartingVolumeUsd || 60), 60);
+    defaults.minLiquidityUsd = Math.min(Number(defaults.minLiquidityUsd || 20), 20);
+    return defaults;
+  }
   const targetPct = Number(defaults.takeProfitPct || defaults.targetTakeProfitPct || defaults.defaultTakeProfitPct || 25);
   if (!Number.isFinite(targetPct) || targetPct < 80) return defaults;
   let sellDelaySeconds = null;
@@ -24783,7 +24797,6 @@ function applyOgreAiTimerIntentDefaults(defaults, body = {}, mode = "quick") {
   }
   if (!Number.isFinite(sellDelaySeconds) || sellDelaySeconds <= 0 || sellDelaySeconds > 10 * 60) return defaults;
 
-  const safeMode = normalizeOgreAiMode(mode);
   defaults.targetBand = "fresh_low_mc_timer";
   defaults.preferFreshLaunches = true;
   defaults.diversityWindow = Math.max(Number(defaults.diversityWindow || 0), safeMode === "safer" ? 12 : 18);
@@ -24797,6 +24810,7 @@ function applyOgreAiTimerIntentDefaults(defaults, body = {}, mode = "quick") {
 function ogreAiScannerModesForTarget(defaults = {}, mode = "quick") {
   const pct = Number(defaults.takeProfitPct || defaults.targetTakeProfitPct || defaults.defaultTakeProfitPct || 25);
   const safeMode = normalizeOgreAiMode(mode);
+  if (safeMode === "fresh_ape") return ["pumpsnipe", "moonshot", "fast"];
   if (pct >= 80) return safeMode === "safer" ? ["moonshot", "pumpsnipe"] : ["pumpsnipe", "moonshot"];
   if (pct <= 30) return safeMode === "fresh" ? ["fast", "smart"] : ["smart", "safe", "fast"];
   if (pct >= 50) return ["fast", "moonshot", "pumpsnipe"];
@@ -24868,11 +24882,11 @@ async function selectOgreAiPicks(userId, body = {}, limit = 1) {
   defaults.recentMints = recentMints;
   defaults.desiredPickCount = Math.max(1, limit, Number(defaults.diversityWindow || 0));
   const minScoreInput = Number.parseInt(String(body.minScore || ""), 10);
-  if (Number.isFinite(minScoreInput) && minScoreInput > 0) {
+  if (mode !== "fresh_ape" && Number.isFinite(minScoreInput) && minScoreInput > 0) {
     defaults.minScore = clamp(minScoreInput, 1, 100);
   }
   const maxMarketCapInput = Number.parseFloat(String(body.maxMarketCap || ""));
-  if (Number.isFinite(maxMarketCapInput) && maxMarketCapInput > 0) {
+  if (mode !== "fresh_ape" && Number.isFinite(maxMarketCapInput) && maxMarketCapInput > 0) {
     defaults.maxMarketCap = maxMarketCapInput;
   }
 
@@ -24898,7 +24912,9 @@ async function selectOgreAiPicks(userId, body = {}, limit = 1) {
   const rankedBaseRows = uniqueSniperScoreRows(baseRows)
     .sort((a, b) => compareOgreAiCandidates(a, b, defaults, mode));
   const requestedPlanCount = clamp(Number.parseInt(String(body.runCount || limit), 10) || 1, 1, OGRE_AI_PLANS_PER_RUN_LIMIT);
-  const scanLimit = Math.max(40, Math.min(OGRE_AI_MAX_SCAN_ROWS, Math.max(limit * 20, 50)));
+  const scanLimit = mode === "fresh_ape"
+    ? Math.max(24, Math.min(OGRE_AI_MAX_SCAN_ROWS, Math.max(requestedPlanCount * 12, Math.min(limit, 12) * 3, 32)))
+    : Math.max(40, Math.min(OGRE_AI_MAX_SCAN_ROWS, Math.max(limit * 20, 50)));
   const safetyRows = await filterOgreAiRowsForHardSafety(rankedBaseRows, scanLimit, defaults, mode, {
     requestedRunCount: requestedPlanCount,
     diversityLimit: Math.max(limit, Number(defaults.diversityWindow || 0))
@@ -25096,8 +25112,7 @@ async function webStartOgreAiRun(userId, body = {}) {
   );
   const selection = await selectOgreAiPicks(userId, body, candidateLimit);
   if (!selection.rows.length) {
-    const counts = selection.tierCounts || {};
-    throw new Error(`Ogre A.I. did not find a route-worthy ${mode} setup right now. Scanned ${selection.scanned}; strict ${counts.strict || 0}, balanced ${counts.balanced || 0}, available ${counts.available || 0}, scout ${counts.scout || 0}. Try refresh again or review Live Pairs manually.`);
+    throw new Error(`Ogre A.I. did not find a fresh low-MC pair with starting volume yet. Scanned ${selection.scanned}; try Scan & Ape again or review Live Pairs manually.`);
   }
 
   const errors = [];
@@ -25163,7 +25178,7 @@ async function webStartOgreAiRun(userId, body = {}) {
       plans: [],
       picks: attemptedPicks.slice(0, Math.max(1, runCount)),
       errors,
-      message: `Ogre A.I. picked ${Math.max(1, attemptedPicks.length)} ${mode} setup(s), but no buy was armed. ${errors[0]?.message || "Route or wallet precheck failed."}`
+      message: `Ogre A.I. picked ${Math.max(1, attemptedPicks.length)} fresh ape setup(s), but no buy was armed. ${errors[0]?.message || "Route or wallet precheck failed."}`
     };
   }
 
@@ -25192,7 +25207,7 @@ async function webStartOgreAiRun(userId, body = {}) {
     plans,
     picks: plans.map((plan) => plan.pick).filter(Boolean),
     errors,
-    message: `Ogre A.I. armed ${plans.length} managed plan(s) from ${selection.qualified} ${selection.selectedTier} ${mode} setup(s). TP/SL watchers are running for managed wallets.`
+    message: `Ogre A.I. armed ${plans.length} managed fresh ape plan(s) from ${selection.qualified} qualified setup(s). TP/SL watchers are running for managed wallets.`
   };
 }
 
