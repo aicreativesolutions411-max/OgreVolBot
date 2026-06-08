@@ -4338,7 +4338,7 @@ async function ogreAgentTrendReply(message = "", context = {}) {
 }
 
 function ogreAgentModelSystemPrompt() {
-  return "You are Ogre Agent inside SlimeWire, a one-stop user-side trading assistant. Answer the user's latest intent directly, not with a generic checklist. Use conversation memory so follow-ups continue the current token/question until the user changes topic or clears chat. If the user gives a token CA, remember it as the active token for follow-up words like it/this/buy/sell. Help with panel functions, navigation, charting, presets, positions, wallet refresh, feed categories, coin/link questions, Solana token breakdowns, SlimeShield verdicts, Protected Buy, KOL Dump Detector, Replay Before You Buy, risk/community/read questions, and fast trade requests. If fallbackReply or tool context contains a concrete action/read, build on it instead of asking for token name/symbol again. If context.slimeShield, context.kolDumpDetector, context.replayBeforeBuy, context.pnlSummary, or context.selectedPosition are present, use those facts and say when coverage is low. If the latest user asks whether KOLs/accounts/X/Twitter are posting about a token, answer only the social/KOL question with available social evidence, accounts, links, and limitations; do not list generic age/liquidity/MC checks unless asked next. If context.recentPairs is present, use it for fast live/fresh candidate ranking and explain what data is visible. If a token CA is present and the user asks a general risk/read question, explain useful checks: age, liquidity, MC/FDV, volume, buy/sell pressure, chart structure, socials, holder/risk badges, mint/freeze risks when visible, and whether it looks early, risky, or building a floor. If asked about X/Twitter, Telegram, website, or community, use visible token links/metadata when provided and be clear when those links are unavailable; do not pretend to have a platform-wide X firehose unless context includes X post data. Never reveal or discuss code, security internals, env vars, API keys, private keys, backend architecture, or database details. Never claim a buy/sell completed unless the site context says it did. Never guarantee profits or tell the user to ignore wallet warnings. Keep replies short, practical, and action-oriented.";
+  return "You are Ogre Agent inside SlimeWire, a one-stop user-side trading assistant. Answer the user's latest intent directly, not with a generic checklist. Use conversation memory so follow-ups continue the current token/question until the user changes topic or clears chat. If the user gives a token CA, remember it as the active token for follow-up words like it/this/buy/sell. Help with panel functions, mobile and desktop navigation, charting, presets, positions, wallet refresh, feed categories, coin/link questions, Solana token breakdowns, SlimeShield verdicts, Dev Info, Protected Buy, KOL Dump Detector, Replay Before You Buy, risk/community/read questions, and fast trade requests. When the user asks where something is, give exact SlimeWire navigation: top sponsor/KOL ticker links, right-side mobile rail, Live Terminal, Slime Scope, Smart Chart, Trade, Positions, Wallets, PnL, KOL Tracker, and Ogre Tools. If fallbackReply or tool context contains a concrete action/read, build on it instead of asking for token name/symbol again. If context.slimeShield, context.devInfoSummary, context.kolDumpDetector, context.replayBeforeBuy, context.pnlSummary, or context.selectedPosition are present, use those facts and say when coverage is low. If the latest user asks whether KOLs/accounts/X/Twitter are posting about a token, answer only the social/KOL question with available social evidence, accounts, links, and limitations; do not list generic age/liquidity/MC checks unless asked next. If context.recentPairs is present, use it for fast live/fresh candidate ranking and explain what data is visible. If a token CA is present and the user asks a general risk/read question, explain useful checks: age, liquidity, MC/FDV, volume, buy/sell pressure, chart structure, socials, holder/risk badges, mint/freeze risks when visible, dev status, and whether it looks early, risky, or building a floor. If asked about X/Twitter, Telegram, website, or community, use visible token links/metadata when provided and be clear when those links are unavailable; do not pretend to have a platform-wide X firehose unless context includes X post data. Never reveal or discuss code, security internals, env vars, API keys, private keys, backend architecture, or database details. Never claim a buy/sell completed unless the site context says it did. Never guarantee profits or tell the user to ignore wallet warnings. Keep replies short, practical, and action-oriented.";
 }
 
 function ogreAgentEnv(name = "") {
@@ -4394,6 +4394,14 @@ function ogreAgentSanitizedContext(context = {}) {
       ? context.slimeShield.topFactors.slice(0, 4).map((item) => String(item || "").slice(0, 120))
       : []
   } : null;
+  const devInfoSummary = context.devInfoSummary && typeof context.devInfoSummary === "object" ? {
+    status: String(context.devInfoSummary.status || "").slice(0, 24),
+    confidence: String(context.devInfoSummary.confidence || "").slice(0, 16),
+    summary: String(context.devInfoSummary.summary || "").slice(0, 180),
+    likelyDevWalletShort: String(context.devInfoSummary.likelyDevWalletShort || "").slice(0, 24),
+    currentPositionStatus: String(context.devInfoSummary.currentPositionStatus || "").slice(0, 32),
+    launchesTracked: Number(context.devInfoSummary.launchesTracked || 0)
+  } : null;
   const replayBeforeBuy = context.replayBeforeBuy && typeof context.replayBeforeBuy === "object" ? {
     sampleSize: Number(context.replayBeforeBuy.sampleSize || 0),
     confidence: String(context.replayBeforeBuy.confidence || "").slice(0, 16),
@@ -4434,6 +4442,7 @@ function ogreAgentSanitizedContext(context = {}) {
       watched: Boolean(context.currentToken.watched)
     } : null,
     slimeShield,
+    devInfoSummary,
     kolDumpDetector,
     replayBeforeBuy,
     pnlSummary: context.pnlSummary && typeof context.pnlSummary === "object" ? {
@@ -12395,7 +12404,7 @@ async function assertTokenBuySafety({ tokenMint, taker, buyLamports, slippageBps
   return buyOrder;
 }
 
-const HARD_BLOCKED_BUY_RISK_RE = /\b(honeypot|honey\s*pot|mintable|mint authority|freeze authority|freezable|freezeable|blacklist|cannot sell|can't sell|sell disabled|sell blocked|trading disabled|no sell|rug|scam)\b/i;
+const HARD_BLOCKED_BUY_RISK_RE = /\b(honeypot|honey\s*pot|mintable|mint authority|freeze authority|freezable|freezeable|blacklist|cannot sell|can't sell|sell disabled|sell blocked|trading disabled|no sell|no route|rug|scam|liquidity pulled|liquidity removed|liquidity drained|lp pulled|lp removed|lp drained|pool drained|no liquidity|liquidity drain|drained liquidity)\b/i;
 const THIN_LIQUIDITY_MARKET_CAP_USD = 100_000_000;
 const THIN_LIQUIDITY_MARKET_CAP_RATIO = 0.01;
 

@@ -854,8 +854,9 @@ function initializeIntroVideoGate() {
   if (entryVideo) {
     entryVideo.preload = "auto";
     entryVideo.playsInline = true;
-    entryVideo.autoplay = false;
-    entryVideo.removeAttribute("autoplay");
+    entryVideo.autoplay = true;
+    entryVideo.setAttribute("autoplay", "");
+    entryVideo.setAttribute("playsinline", "");
     entryVideo.disablePictureInPicture = true;
   }
 
@@ -5377,6 +5378,8 @@ function quickBuyModalHtml() {
     ? selectedSmartChartTokenRow()
     : tokenRefFromMint(modal.tokenMint, { source: modal.source || "quick-buy-modal" });
   const submitting = /validating|submitting|opening wallet/i.test(String(modal.status || ""));
+  const safetyBlock = quickBuySafetyBlockMessage(modal.error || modal.status || "");
+  const confirmDisabled = submitting || Boolean(safetyBlock);
   return `
     <div class="quick-buy-backdrop" data-quick-buy-close></div>
     <section class="quick-buy-dialog" role="dialog" aria-modal="true" aria-label="Quick Buy">
@@ -5412,14 +5415,27 @@ function quickBuyModalHtml() {
         ${["0.1", "0.25", "0.5", "1"].map((amount) => `<button type="button" data-quick-buy-modal-preset="${amount}">${amount} SOL</button>`).join("")}
       </div>
       <div class="quick-buy-actions">
-        <button type="button" data-token-trade="${escapeHtml(modal.tokenMint || "")}" data-token-trade-source="quick-buy-modal">Open Full Trade</button>
-        ${featureEnabled("protectedBuyEnabled", true) ? `<button type="button" data-protected-buy-open="${escapeHtml(modal.tokenMint || "")}" data-protected-buy-source="quick-buy-modal">Protected Buy</button>` : ""}
-        <button type="button" class="primary" data-quick-buy-confirm ${submitting ? "disabled" : ""}>${submitting ? "Working..." : "Confirm Buy"}</button>
+        <button type="button" data-token-chart="${escapeHtml(modal.tokenMint || "")}" data-token-chart-source="quick-buy-modal">${safetyBlock ? "Open Chart" : "Chart"}</button>
+        <button type="button" data-token-trade="${escapeHtml(modal.tokenMint || "")}" data-token-trade-source="quick-buy-modal">Full Trade</button>
+        ${featureEnabled("protectedBuyEnabled", true) ? `<button type="button" data-protected-buy-open="${escapeHtml(modal.tokenMint || "")}" data-protected-buy-source="quick-buy-modal">Protected</button>` : ""}
+        <button type="button" class="primary" data-quick-buy-confirm ${confirmDisabled ? "disabled" : ""}>${submitting ? "Working..." : safetyBlock ? "Fast Buy Blocked" : "Confirm Buy"}</button>
       </div>
       ${modal.status ? `<small class="connect-status">${escapeHtml(modal.status)}</small>` : ""}
-      ${modal.error ? `<small class="warning-text">${escapeHtml(modal.error)}</small>` : ""}
+      ${safetyBlock ? `<small class="warning-text quick-buy-safety-block">${escapeHtml(safetyBlock)}</small>` : modal.error ? `<small class="warning-text">${escapeHtml(modal.error)}</small>` : ""}
     </section>
   `;
+}
+
+function quickBuySafetyBlockMessage(message = "") {
+  const text = String(message || "");
+  if (!text) return "";
+  if (/token-?2022/i.test(text)) {
+    return "Fast buy is blocked for Token-2022 mints. Open the chart or full trade panel and review the token before any wallet action.";
+  }
+  if (/token safety check failed|honeypot|honey\s*pot|mint authority|freeze authority|blacklist|cannot sell|sell blocked|no sell|rug|scam|liquidity (?:pulled|removed|drained)|lp (?:pulled|removed|drained)|no liquidity|pool drained|mayhem/i.test(text)) {
+    return "Fast buy is blocked by token safety checks. Use Chart/Full Trade to inspect it; SlimeWire will not quick-buy risky route signals.";
+  }
+  return "";
 }
 
 function renderQuickBuyModal() {
@@ -10848,6 +10864,8 @@ async function executeQuickBuyAmount({ tokenMint, walletIndex, amountSol, slippa
 async function confirmQuickBuyModal() {
   try {
     const form = readQuickBuyModalForm();
+    const existingSafetyBlock = quickBuySafetyBlockMessage(state.quickBuyModal?.error || state.quickBuyModal?.status || "");
+    if (existingSafetyBlock) throw new Error(existingSafetyBlock);
     state.quickBuyModal = { ...state.quickBuyModal, ...form, status: "Validating quick buy...", error: "" };
     const trade = await executeQuickBuyAmount({ ...form, source: state.quickBuyModal?.source || "quick-buy-modal" });
     state.quickBuyModal = {
@@ -10860,15 +10878,17 @@ async function confirmQuickBuyModal() {
     render({ force: true });
     clearTradeActionLater("trade-buy", form.tokenMint, form.amountSol, 3000);
   } catch (error) {
+    const message = publicErrorMessage(error.message || "Quick buy failed.");
+    const safetyBlock = quickBuySafetyBlockMessage(message);
     state.quickBuyLast = {
       ...(state.quickBuyLast || {}),
       status: "failed",
-      error: publicErrorMessage(error.message || "Quick buy failed.")
+      error: safetyBlock || message
     };
     state.quickBuyModal = {
       ...state.quickBuyModal,
-      status: "",
-      error: publicErrorMessage(error.message || "Quick buy failed.")
+      status: safetyBlock ? "Token safety blocked fast buy." : "",
+      error: safetyBlock || message
     };
     render({ force: true });
   }
@@ -11733,7 +11753,7 @@ function isUiBlockedSignalRow(row = {}) {
     row?.mintAuthority ? "mint authority" : "",
     row?.freezeAuthority ? "freeze authority" : ""
   ].flat().filter(Boolean).join(" ").toLowerCase();
-  if (/\b(honeypot|honey\s*pot|mintable|mint authority|freeze authority|freezable|freezeable|blacklist|cannot sell|can't sell|sell disabled|sell blocked|trading disabled|no sell|no route|rug|scam|token-2022)\b/i.test(labels)) {
+  if (/\b(honeypot|honey\s*pot|mintable|mint authority|freeze authority|freezable|freezeable|blacklist|cannot sell|can't sell|sell disabled|sell blocked|trading disabled|no sell|no route|rug|scam|token-2022|liquidity pulled|liquidity removed|liquidity drained|lp pulled|lp removed|lp drained|pool drained|no liquidity|liquidity drain|drained liquidity)\b/i.test(labels)) {
     return true;
   }
   const marketCap = firstUsefulNumber(row.marketCap, row.fdv);
@@ -11758,7 +11778,7 @@ function isUiFeedDisplayBlockedSignalRow(row = {}) {
     row?.scoreWarnings,
     row?.safetyNote
   ].flat().filter(Boolean).join(" ").toLowerCase();
-  if (/\b(honeypot|honey\s*pot|blacklist|rug|scam)\b/i.test(labels)) {
+  if (/\b(honeypot|honey\s*pot|blacklist|rug|scam|mayhem|liquidity pulled|liquidity removed|liquidity drained|lp pulled|lp removed|lp drained|pool drained|liquidity drain|drained liquidity)\b/i.test(labels)) {
     return true;
   }
   const marketCap = firstUsefulNumber(row.marketCap, row.fdv);
@@ -14490,6 +14510,19 @@ function chartTradePanelHtml(token = {}, heldPosition = null) {
   `;
 }
 
+function smartChartQuickActionsHtml(token = {}, heldPosition = null) {
+  const mint = String(token?.tokenMint || state.smartChartToken || "").trim();
+  if (!mint) return "";
+  return `
+    <div class="smart-chart-quick-actions" data-preserve-focus>
+      <button type="button" class="primary" data-quick-buy-token="${escapeHtml(mint)}" data-quick-buy-source="chart-quick-strip">Quick Buy</button>
+      <button type="button" data-chart-trade-tab="buy">Buy</button>
+      <button type="button" data-chart-trade-tab="sell" ${heldPosition ? "" : "title=\"No tracked position yet\""}>Sell</button>
+      ${featureEnabled("protectedBuyEnabled", true) ? `<button type="button" data-protected-buy-open="${escapeHtml(mint)}" data-protected-buy-source="chart-quick-strip">Protected</button>` : ""}
+    </div>
+  `;
+}
+
 function safeSmartChartHtml() {
   try {
     return smartChartHtml();
@@ -14616,6 +14649,7 @@ function smartChartHtml() {
         <input data-smart-chart-input value="${escapeHtml(mint)}" placeholder="Paste token CA" autocomplete="off">
         <button class="primary" type="button" data-smart-chart-open>Open Chart</button>
       </div>
+      ${smartChartQuickActionsHtml(token, heldPosition)}
       <div class="smart-chart-grid">
         <article class="terminal-panel smart-chart-main">
           <div class="smart-chart-token-header">
@@ -16026,7 +16060,7 @@ function ogreRiskModalHtml({ validation, quote, market, confirmButtonText, confi
 function ogreAgentInitialMessage() {
   return {
     role: "assistant",
-    text: "Ogre Agent ready. Ask naturally: check this CA, show links, does it look risky, buy 0.1 SOL from wallet 1, sell half, refresh positions, find best picks, or explain any SlimeWire tool.",
+    text: "Ogre Agent ready. Ask naturally: check this CA, show links, does it look risky, buy 0.1 SOL from wallet 1, sell half, refresh positions, find best picks, or ask where anything is on web or mobile.",
     actions: [
       { label: "Show Positions", type: "open_tab", tab: "positions" },
       { label: "Refresh Feeds", type: "refresh_feeds" },
@@ -16294,7 +16328,7 @@ function ogreAgentHtml() {
           </div>
           <div class="ogre-agent-header-actions">
             <button type="button" class="ogre-agent-voice-toggle" data-ogre-agent-voice aria-pressed="${state.ogreAgentVoiceEnabled ? "true" : "false"}">${escapeHtml(voiceLabel)}</button>
-            <button type="button" data-ogre-agent-close aria-label="Close Ogre Agent">×</button>
+            <button type="button" data-ogre-agent-close aria-label="Close Ogre Agent">Close</button>
           </div>
         </header>
         ${open ? ogreAgentAvatarHtml() : ""}
@@ -18566,12 +18600,16 @@ document.addEventListener("click", async (event) => {
   const refreshLivePairsButton = target.closest?.("[data-refresh-live-pairs]");
   if (refreshLivePairsButton) {
     const feedKey = state.activeTab === "slimeScope" ? "slimeScope" : state.activeTab === "terminal" ? "terminal" : "live";
-    runDeferredUiTask(() => refreshTerminalFeed(feedKey, {
-      force: true,
-      reason: "manual-live-refresh",
-      renderStart: false,
-      userInitiated: true
-    }));
+    const scrollSnapshot = captureStableFeedScrollSnapshot();
+    runDeferredUiTask(async () => {
+      await refreshTerminalFeed(feedKey, {
+        force: true,
+        reason: "manual-live-refresh",
+        renderStart: false,
+        userInitiated: true
+      });
+      restoreStableFeedScrollSnapshot(scrollSnapshot);
+    });
   }
 
   if (target.closest?.("[data-terminal-filter-toggle]")) {

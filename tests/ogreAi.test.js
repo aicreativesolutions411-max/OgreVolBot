@@ -122,6 +122,21 @@ test("Ogre A.I. still blocks high risk and mayhem rows", () => {
   }, defaults, "quick"), null);
 });
 
+test("Ogre A.I. blocks liquidity-pulled and drained pool rows", () => {
+  const row = {
+    tokenMint: "PulledLiquidityMint",
+    bestPickScore: 95,
+    marketCap: 42_000,
+    liquidityUsd: 9_000,
+    volume5m: 22_000,
+    pairAgeMinutes: 6,
+    riskFlags: ["liquidity pulled", "pool drained"]
+  };
+
+  assert.equal(isOgreAiBlockedRisk(row), true);
+  assert.equal(ogreAiTierForCandidate(row, defaults, "quick"), null);
+});
+
 test("Ogre A.I. does not starve pending safety rows before buy precheck", () => {
   const pendingRow = {
     tokenMint: "PendingSafetyMint",
