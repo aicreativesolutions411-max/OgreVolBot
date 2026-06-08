@@ -18002,3 +18002,88 @@ html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs .
     transform: none !important;
   }
 }
+
+/* MOBILE_REC_AND_WALLET_CONNECT_ROW_20260608_V1: make REC tappable and fit TP/SL, wallet, refresh in one mobile row. */
+html body main.shell[data-app][data-route="terminal"] .top-wallet-connect {
+  align-items: center !important;
+  cursor: pointer !important;
+  display: inline-flex !important;
+  justify-content: center !important;
+  min-width: 0 !important;
+  white-space: nowrap !important;
+}
+
+html body main.shell[data-app][data-route="terminal"] .top-wallet-connect[data-wallet-state="connected"] {
+  border-color: rgba(128, 255, 41, 0.6) !important;
+  color: #dfffcb !important;
+}
+
+html body main.shell[data-app][data-route="terminal"] .clip-farm-shell,
+html body main.shell[data-app][data-route="terminal"] .clip-farm-control,
+html body main.shell[data-app][data-route="terminal"] .clip-record-button {
+  pointer-events: auto !important;
+  position: relative !important;
+  z-index: 7200 !important;
+}
+
+html body main.shell[data-app][data-route="terminal"] .clip-record-button[data-supported="false"] {
+  cursor: pointer !important;
+  opacity: 1 !important;
+}
+
+@media (max-width: 760px) {
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip {
+    align-items: stretch !important;
+    display: grid !important;
+    gap: 3px !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    margin: 3px 0 4px !important;
+    overflow: visible !important;
+    padding: 3px !important;
+    width: 100% !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip .top-tpsl-status,
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip .top-wallet-connect,
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip [data-top-refresh-wallet] {
+    border-radius: 999px !important;
+    box-sizing: border-box !important;
+    font-size: 8.1px !important;
+    font-weight: 950 !important;
+    grid-column: auto !important;
+    height: 26px !important;
+    line-height: 1 !important;
+    min-height: 26px !important;
+    min-width: 0 !important;
+    overflow: hidden !important;
+    padding: 2px 3px !important;
+    text-overflow: clip !important;
+    white-space: nowrap !important;
+    width: 100% !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip .top-tpsl-status > span,
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip .top-wallet-connect > span,
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip [data-top-refresh-wallet] {
+    min-width: 0 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip .top-wallet-disconnected,
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip [data-top-sol],
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip [data-top-portfolio],
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip [data-sync-health],
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip [data-active-preset-label] {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] > .topbar > .clip-farm-shell {
+    min-width: 52px !important;
+    pointer-events: auto !important;
+    z-index: 7200 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .clip-record-button {
+    min-width: 52px !important;
+    pointer-events: auto !important;
+  }
+}

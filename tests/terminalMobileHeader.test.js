@@ -25,6 +25,7 @@ test("terminal mobile topbar keeps every original action hook", () => {
     "data-tab=\"profile\"",
     "data-logout",
     "data-top-refresh-wallet",
+    "data-top-wallet-connect",
     "data-tpsl-status-button",
     "data-top-sync-strip"
   ]) {
@@ -55,6 +56,7 @@ test("terminal mobile topbar labels remain readable without ellipsis clipping", 
 test("terminal topbar handlers are still wired to the existing actions", () => {
   assert.match(appSource, /target\.matches\("\[data-global-token-open\]"\)/);
   assert.match(appSource, /target\.matches\("\[data-top-refresh-wallet\]"\)/);
+  assert.match(appSource, /target\.matches\("\[data-top-wallet-connect\]"\)/);
   assert.match(appSource, /target\.matches\("\[data-open-login\]"\)/);
   assert.match(appSource, /target\.matches\("\[data-web-signup-connect\]"\)/);
   assert.match(appSource, /target\.matches\("\[data-web-signup\]"\)/);

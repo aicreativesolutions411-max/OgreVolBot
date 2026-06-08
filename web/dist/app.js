@@ -1407,11 +1407,12 @@ function applyActionButtonStates() {
 
   const paintRefreshButton = (button, refreshState) => {
     const base = buttonBaseLabel(button);
+    const compact = button.matches?.("[data-top-refresh-wallet]");
     button.dataset.actionState = refreshState;
     if (refreshState === "clicked" || refreshState === "refreshing") {
-      button.textContent = "Refreshing...";
+      button.textContent = compact ? "Refresh..." : "Refreshing...";
     } else if (refreshState === "success") {
-      button.textContent = "Updated";
+      button.textContent = compact ? "Done" : "Updated";
     } else if (refreshState === "error") {
       button.textContent = "Failed";
     } else {
@@ -4537,7 +4538,7 @@ function updateClipFarmControl() {
   const status = clip.status || (recording ? "Recording" : ready ? "Clip ready" : "Clip farm");
   root.innerHTML = `
     <div class="clip-farm-control" data-recording="${recording ? "true" : "false"}" data-ready="${ready ? "true" : "false"}">
-      <button type="button" class="clip-record-button" data-clip-record ${supported ? "" : "disabled"} title="${supported ? "Record a shareable SlimeWire clip" : "Screen recording is not supported in this browser"}" aria-pressed="${recording ? "true" : "false"}">
+      <button type="button" class="clip-record-button" data-clip-record data-supported="${supported ? "true" : "false"}" title="${supported ? "Record a shareable SlimeWire clip" : "Tap for recording support details"}" aria-pressed="${recording ? "true" : "false"}">
         <span class="clip-record-dot" aria-hidden="true"></span>
         <strong>${recording ? "Stop" : "Rec"}</strong>
       </button>
@@ -4557,7 +4558,7 @@ function updateClipFarmControl() {
 
 async function startClipFarmRecording() {
   if (!clipFarmSupported()) {
-    setClipFarmStatus("Recording is not supported in this browser.");
+    setClipFarmStatus("This browser cannot start screen recording. Use desktop Chrome/Edge or your phone recorder.");
     return;
   }
   if (state.clipFarm?.recording) {
@@ -4749,6 +4750,7 @@ function render(options = {}) {
   setText("[data-sync-health]", hasWalletContext ? syncHealthLabel() : "Sync idle");
   setText("[data-active-preset-label]", activePresetSummary());
   updateTopTpSlStatus();
+  updateTopWalletConnectStatus();
   setHidden("[data-refresh-spinner]", !state.walletRefreshing);
   document.querySelectorAll('[data-feature="ogre-tek"]').forEach((element) => {
     element.hidden = !SHOW_STAGED_PERPS_NAV || !shouldShowOgreTekNav(ogreTekConfig);
@@ -4914,6 +4916,26 @@ function updateTopTpSlStatus() {
   button.title = stateName === "enabled"
     ? `Server exits enabled${permission.expiresAt ? ` until ${formatDate(permission.expiresAt)}` : ""}.`
     : "Stop loss and take profit require wallet auto-sell approval.";
+}
+
+function updateTopWalletConnectStatus() {
+  const connected = state.user?.connectedWallet || state.connectedWalletBalance || null;
+  const publicKey = String(connected?.publicKey || "").trim();
+  const managedCount = Array.isArray(state.wallets) ? state.wallets.length : 0;
+  const connectedLike = Boolean(publicKey || managedCount);
+  const label = connectedLike ? "Connected" : "Connect";
+  const title = publicKey
+    ? `${connected.provider || "Browser wallet"} connected: ${shortAddress(publicKey)}`
+    : managedCount
+      ? `${managedCount} SlimeWire wallet${managedCount === 1 ? "" : "s"} available.`
+      : "Connect a browser wallet.";
+  document.querySelectorAll("[data-top-wallet-connect]").forEach((button) => {
+    button.dataset.walletState = connectedLike ? "connected" : "disconnected";
+    button.title = title;
+    button.setAttribute("aria-label", connectedLike ? `${title} Open wallets.` : "Connect wallet");
+    const labelTarget = button.querySelector("[data-top-wallet-connect-label]") || button;
+    writeText(labelTarget, label);
+  });
 }
 
 function requestSmartChartScrollIntoView(panel = document) {
@@ -18395,6 +18417,17 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-policy]")) {
     event.preventDefault();
     window.alert(policyText(target.dataset.policy === "privacy" ? "privacy" : "terms"));
+    return;
+  }
+  if (target.matches("[data-top-wallet-connect]")) {
+    event.preventDefault();
+    const connectedLike = target.dataset.walletState === "connected"
+      || Boolean(state.user?.connectedWallet || state.connectedWalletBalance?.publicKey || state.wallets.length);
+    if (connectedLike) {
+      navigateTo("/terminal", "wallets");
+    } else {
+      openWalletConnectChooser({ returnPath: "/terminal" });
+    }
     return;
   }
   if (target.matches("[data-top-refresh-wallet]")) {

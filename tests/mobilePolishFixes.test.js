@@ -103,6 +103,18 @@ test("mobile rail exposes the full desktop tool list", () => {
   assert.deepEqual(labels, ["Live", "Home", "Chart", "Swap", "Pairs", "Trades", "Scope", "Watch", "KOL", "AI", "Pump", "Bundle", "Volume", "Launch", "Snipe", "Wallets", "Pos", "PnL"]);
 });
 
+test("mobile REC and wallet connect controls stay tappable in one sync row", () => {
+  assert.match(htmlSource, /data-top-wallet-connect/);
+  assert.match(functionBody(appSource, "updateClipFarmControl"), /data-clip-record data-supported=/);
+  assert.doesNotMatch(functionBody(appSource, "updateClipFarmControl"), /data-clip-record \$\{supported \? "" : "disabled"\}/);
+  assert.match(functionBody(appSource, "startClipFarmRecording"), /This browser cannot start screen recording/);
+  assert.match(functionBody(appSource, "updateTopWalletConnectStatus"), /data-top-wallet-connect/);
+  assert.match(appSource, /target\.matches\("\[data-top-wallet-connect\]"\)[\s\S]*openWalletConnectChooser\(\{ returnPath: "\/terminal" \}\)/);
+  assert.match(cssSource, /MOBILE_REC_AND_WALLET_CONNECT_ROW_20260608_V1/);
+  assert.match(cssSource, /top-sync-strip[\s\S]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\) !important/);
+  assert.match(cssSource, /clip-record-button\[data-supported="false"\][\s\S]*cursor: pointer !important/);
+});
+
 test("mobile feed refresh preserves scroll and avoids the start flicker render", () => {
   assert.match(functionBody(appSource, "captureStableFeedScrollSnapshot"), /documentY:[\s\S]*panelScrollTop:[\s\S]*dashboardScrollTop:/);
   assert.match(functionBody(appSource, "restoreStableFeedScrollSnapshot"), /restoreRawScrollPositions[\s\S]*document\.scrollingElement/);
