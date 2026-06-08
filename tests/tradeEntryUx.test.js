@@ -100,11 +100,17 @@ test("Chart route has professional Buy and Sell panel", () => {
   const panel = functionBody(appSource, "chartTradePanelHtml");
   assert.match(panel, /data-chart-trade-tab="buy"/);
   assert.match(panel, /data-chart-trade-tab="sell"/);
+  assert.match(panel, /data-fast-trade-preset="chart-panel"/);
+  assert.match(panel, /data-chart-buy-tp/);
+  assert.match(panel, /data-chart-buy-sl/);
+  assert.match(panel, /data-chart-buy-delay/);
   assert.match(panel, /data-chart-confirm-buy/);
   assert.match(panel, /data-chart-confirm-sell/);
   assert.match(panel, /Sell 25%/);
   assert.match(panel, /Sell 50%/);
   assert.match(panel, /Sell 100%/);
+  assert.match(functionBody(appSource, "readChartTradeAutoExit"), /data-chart-buy-tp/);
+  assert.match(functionBody(appSource, "executeQuickBuyAmount"), /autoExit[\s\S]*takeProfitPct[\s\S]*stopLossPct/);
   assert.match(functionBody(appSource, "smartChartHtml"), /chartTradePanelHtml\(token, heldPosition\)/);
   assert.match(functionBody(appSource, "applyChartRouteFromLocation"), /params\.get\("token"\)/);
 });
@@ -124,6 +130,7 @@ test("Chart page uses full chart view with transactions and info tabs", () => {
   assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /data-chart-frame-loading/);
   assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /fetchpriority="high"/);
   assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /setAttribute\('data-loaded','true'\)/);
+  assert.match(functionBody(appSource, "pumpChartSvgHtml"), /const snapshotMode =/);
   assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /queueSmartChartBootstrap\(token\)/);
   assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /smartChartFrameUrl\(token, mode\)/);
   assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /data-chart-resolving/);

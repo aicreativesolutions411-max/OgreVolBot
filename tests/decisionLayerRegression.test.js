@@ -178,6 +178,10 @@ test("Ogre Agent chat is contextual, retryable, copyable, and debug-instrumented
   assert.match(functionBody("ogreAgentContext"), /kolDumpDetector/);
   assert.match(functionBody("ogreAgentContext"), /replayBeforeBuy/);
   assert.match(functionBody("ogreAgentContext"), /pnlSummary/);
+  assert.match(functionBody("ogreAgentContext"), /profile/);
+  assert.match(functionBody("ogreAgentSiteHelpReply", serverSource), /refferal/);
+  assert.match(functionBody("ogreAgentSiteHelpReply", serverSource), /Open Profile/);
+  assert.match(functionBody("webOgreAgentReply", serverSource), /siteHelpReply[\s\S]*ogreAgentKolTrendReply/);
   assert.match(functionBody("ogreAgentHtml"), /data-ogre-agent-send \$\{state\.ogreAgentLoading \? "disabled" : ""\}/);
   assert.match(functionBody("ogreAgentHtml"), /AI can make mistakes\. Always review wallet prompts before signing/);
   assert.match(functionBody("ogreAgentMessageHtml"), /data-copy/);

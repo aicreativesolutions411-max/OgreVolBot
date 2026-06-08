@@ -3282,6 +3282,78 @@ function ogreAgentActionDedupe(actions = []) {
   });
 }
 
+function ogreAgentSiteHelpReply(message = "", context = {}) {
+  const text = String(message || "").trim();
+  const lower = text.toLowerCase();
+  const asksHow = /\b(how|where|what|make|create|change|edit|set|use|find|open|show|customi[sz]e|custom)\b/.test(lower);
+  const actions = [];
+  let reply = "";
+  let intent = "";
+
+  if (/\b(referral|referal|refferal|refferral|referrer|ref code|invite|\/r\/|payout wallet|payouts?)\b/.test(lower)) {
+    intent = "site_referral_help";
+    reply = [
+      "To make a custom referral code: open Profile, scroll to Referral, edit only the code after /r/, then tap Save Link.",
+      "Use letters, numbers, dash, or underscore. Add a Referral Payout Wallet if you want referral fee payouts, then copy/share the generated link."
+    ].join("\n");
+    actions.push(
+      { label: "Open Profile", type: "open_tab", tab: "profile" },
+      { label: "Wallets", type: "open_tab", tab: "wallets" }
+    );
+  } else if (/\b(profile|pfp|avatar|badges?|quests?|trader board|leaderboard|x profile|twitter profile|account settings?)\b/.test(lower)) {
+    intent = "site_profile_help";
+    reply = [
+      "Profile is the account hub: PFP, X profile, referrals, badges/quests, and trader-board settings.",
+      "On mobile use the right rail Home/Profile button; on desktop use Home/Profile in the top tool rows."
+    ].join("\n");
+    actions.push({ label: "Open Profile", type: "open_tab", tab: "profile" });
+  } else if (/\b(tp\/sl|tpsl|take profit|profit take|stop loss|stoploss|presets?|slippage|quick buy|auto[- ]?exit|protected buy)\b/.test(lower)) {
+    intent = "site_trade_setup_help";
+    reply = [
+      "Use Slime Swap or Smart Chart to set wallet, SOL amount, preset, slippage, take-profit, stop-loss, timer, and exit size before buying.",
+      "Managed SlimeWire wallets can arm backend TP/SL. Connected Phantom/Solflare-style wallets still require wallet approval for each trade."
+    ].join("\n");
+    actions.push(
+      { label: "Slime Swap", type: "open_tab", tab: "trade" },
+      { label: "Positions", type: "open_tab", tab: "positions" }
+    );
+  } else if (/\b(trade button|pfp|profile picture|token picture|coin picture|chart page|smart chart|ca pasted|contract address|chart button)\b/.test(lower) && asksHow) {
+    const tokenMint = ogreAgentTokenMintFromContext(text, context);
+    intent = "site_chart_help";
+    reply = [
+      "Tap a coin PFP, Chart, or Trade button to open Smart Chart with that token CA already loaded.",
+      "The chart page keeps chart/info on the left and trade setup on the right on desktop; on mobile the trade setup stacks under the chart so wallet, preset, custom amount, TP, SL, and sell controls stay reachable."
+    ].join("\n");
+    actions.push(tokenMint
+      ? { label: "Open Chart", type: "open_chart", tokenMint }
+      : { label: "Smart Chart", type: "open_tab", tab: "smartChart" });
+  } else if (/\b(mobile|phone|right rail|right bar|tools?|icons?|options?|navigation|nav)\b/.test(lower) && asksHow) {
+    intent = "site_mobile_nav_help";
+    reply = "On mobile the right rail lists the same 18 tools as desktop: Live, Home, Chart, Swap, Pairs, Trades, Scope, Watch, KOL, AI, Pump, Bundle, Volume, Launch, Snipe, Wallets, Pos, and PnL. Scroll the rail if the phone height is short.";
+    actions.push({ label: "Live Terminal", type: "open_tab", tab: "terminal" });
+  } else if (/\b(help|guide|tutorial|walk me|what can you do|how do i use)\b/.test(lower)) {
+    intent = "site_guide_help";
+    reply = [
+      "I can guide SlimeWire from here: token reads, Smart Chart, Slime Scope, Live Pairs, wallet refresh, Positions, PnL, presets, TP/SL, Protected Buy, referrals, badges, Pump Launch, Bundle, Volume, Sniper, KOL, and trade requests.",
+      "Ask naturally, like 'make a custom referral code', 'check this CA', 'buy 0.1 SOL with 25 TP 8 SL', or 'show my positions'."
+    ].join("\n");
+    actions.push(
+      { label: "Live Terminal", type: "open_tab", tab: "terminal" },
+      { label: "Profile", type: "open_tab", tab: "profile" },
+      { label: "Positions", type: "open_tab", tab: "positions" }
+    );
+  }
+
+  if (!reply) return null;
+  return {
+    reply,
+    actions: ogreAgentActionDedupe(actions).slice(0, 5),
+    intent,
+    siteHelp: true,
+    modelPowered: false
+  };
+}
+
 async function ogreAgentToolRouterReply(message = "", context = {}) {
   const text = String(message || "").trim();
   const lower = text.toLowerCase();
@@ -4338,7 +4410,7 @@ async function ogreAgentTrendReply(message = "", context = {}) {
 }
 
 function ogreAgentModelSystemPrompt() {
-  return "You are Ogre Agent inside SlimeWire, a one-stop user-side trading assistant. Answer the user's latest intent directly, not with a generic checklist. Use conversation memory so follow-ups continue the current token/question until the user changes topic or clears chat. If the user gives a token CA, remember it as the active token for follow-up words like it/this/buy/sell. Help with panel functions, mobile and desktop navigation, charting, presets, positions, wallet refresh, feed categories, coin/link questions, Solana token breakdowns, SlimeShield verdicts, Dev Info, Protected Buy, KOL Dump Detector, Replay Before You Buy, risk/community/read questions, and fast trade requests. When the user asks where something is, give exact SlimeWire navigation: top sponsor/KOL ticker links, right-side mobile rail, Live Terminal, Slime Scope, Smart Chart, Trade, Positions, Wallets, PnL, KOL Tracker, and Ogre Tools. If fallbackReply or tool context contains a concrete action/read, build on it instead of asking for token name/symbol again. If context.slimeShield, context.devInfoSummary, context.kolDumpDetector, context.replayBeforeBuy, context.pnlSummary, or context.selectedPosition are present, use those facts and say when coverage is low. If the latest user asks whether KOLs/accounts/X/Twitter are posting about a token, answer only the social/KOL question with available social evidence, accounts, links, and limitations; do not list generic age/liquidity/MC checks unless asked next. If context.recentPairs is present, use it for fast live/fresh candidate ranking and explain what data is visible. If a token CA is present and the user asks a general risk/read question, explain useful checks: age, liquidity, MC/FDV, volume, buy/sell pressure, chart structure, socials, holder/risk badges, mint/freeze risks when visible, dev status, and whether it looks early, risky, or building a floor. If asked about X/Twitter, Telegram, website, or community, use visible token links/metadata when provided and be clear when those links are unavailable; do not pretend to have a platform-wide X firehose unless context includes X post data. Never reveal or discuss code, security internals, env vars, API keys, private keys, backend architecture, or database details. Never claim a buy/sell completed unless the site context says it did. Never guarantee profits or tell the user to ignore wallet warnings. Keep replies short, practical, and action-oriented.";
+  return "You are Ogre Agent inside SlimeWire, a one-stop user-side trading assistant. Answer the user's latest intent directly, not with a generic checklist. Use conversation memory so follow-ups continue the current token/question until the user changes topic or clears chat. If the user gives a token CA, remember it as the active token for follow-up words like it/this/buy/sell. Help with panel functions, mobile and desktop navigation, charting, presets, positions, wallet refresh, referrals, badges/quests, profile setup, feed categories, coin/link questions, Solana token breakdowns, SlimeShield verdicts, Dev Info, Protected Buy, KOL Dump Detector, Replay Before You Buy, risk/community/read questions, and fast trade requests. When the user asks where something is, give exact SlimeWire navigation: top sponsor/KOL ticker links, right-side mobile rail, Live Terminal, Slime Scope, Smart Chart, Slime Swap, Positions, Wallets, PnL, KOL Tracker, Profile, and Ogre Tools. If asked about a custom referral code, explain: open Profile, Referral card, edit only the code after /r/, Save Link, add Referral Payout Wallet, then copy/share. If fallbackReply or tool context contains a concrete action/read, build on it instead of asking for token name/symbol again. If context.slimeShield, context.devInfoSummary, context.kolDumpDetector, context.replayBeforeBuy, context.pnlSummary, or context.selectedPosition are present, use those facts and say when coverage is low. If the latest user asks whether KOLs/accounts/X/Twitter are posting about a token, answer only the social/KOL question with available social evidence, accounts, links, and limitations; do not list generic age/liquidity/MC checks unless asked next. If context.recentPairs is present, use it for fast live/fresh candidate ranking and explain what data is visible. If a token CA is present and the user asks a general risk/read question, explain useful checks: age, liquidity, MC/FDV, volume, buy/sell pressure, chart structure, socials, holder/risk badges, mint/freeze risks when visible, dev status, and whether it looks early, risky, or building a floor. If asked about X/Twitter, Telegram, website, or community, use visible token links/metadata when provided and be clear when those links are unavailable; do not pretend to have a platform-wide X firehose unless context includes X post data. Never reveal or discuss code, security internals, env vars, API keys, private keys, backend architecture, or database details. Never claim a buy/sell completed unless the site context says it did. Never guarantee profits or tell the user to ignore wallet warnings. Keep replies short, practical, and action-oriented.";
 }
 
 function ogreAgentEnv(name = "") {
@@ -4449,6 +4521,13 @@ function ogreAgentSanitizedContext(context = {}) {
       realized: String(context.pnlSummary.realized || "").slice(0, 40),
       positions: Number(context.pnlSummary.positions || 0),
       totalSol: String(context.pnlSummary.totalSol || "").slice(0, 24)
+    } : null,
+    profile: context.profile && typeof context.profile === "object" ? {
+      hasReferralCode: Boolean(context.profile.hasReferralCode),
+      referralCode: String(context.profile.referralCode || "").slice(0, 32),
+      hasReferralPayoutWallet: Boolean(context.profile.hasReferralPayoutWallet),
+      hasXHandle: Boolean(context.profile.hasXHandle),
+      traderBoardEnabled: Boolean(context.profile.traderBoardEnabled)
     } : null,
     selectedPosition: context.selectedPosition && typeof context.selectedPosition === "object" ? {
       tokenMint: String(context.selectedPosition.tokenMint || "").slice(0, 80),
@@ -4629,6 +4708,8 @@ async function webOgreAgentReply(body = {}) {
   if (!message) {
     return ogreAgentFallbackReply("help", context);
   }
+  const siteHelpReply = ogreAgentSiteHelpReply(message, context);
+  if (siteHelpReply) return siteHelpReply;
   const kolTrendReply = await ogreAgentKolTrendReply(message, context);
   if (kolTrendReply) return kolTrendReply;
   const toolRouterReply = await ogreAgentToolRouterReply(message, context);

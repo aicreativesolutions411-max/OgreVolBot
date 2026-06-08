@@ -17760,3 +17760,215 @@ html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group butt
     width: 42px !important;
   }
 }
+
+/* CHART_AGENT_TRADE_RAIL_POLISH_20260608_V1: smarter chart controls, readable desktop labels, and full 18-tool mobile rail. */
+html body main.shell[data-app] .chart-auto-exit-grid {
+  display: grid !important;
+  gap: 8px !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+}
+
+html body main.shell[data-app] .chart-auto-exit-grid label,
+html body main.shell[data-app] .chart-trade-form label {
+  min-width: 0 !important;
+}
+
+html body main.shell[data-app] .chart-auto-exit-grid select,
+html body main.shell[data-app] .chart-auto-exit-grid input,
+html body main.shell[data-app] .chart-trade-form select,
+html body main.shell[data-app] .chart-trade-form input {
+  min-width: 0 !important;
+  width: 100% !important;
+}
+
+html body main.shell[data-app] .chart-preset-summary {
+  margin-top: -4px !important;
+}
+
+@media (min-width: 761px) {
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs,
+  html body main.shell[data-app][data-route="terminal"][data-active-tab="smartChart"] [data-dashboard] > .tabs {
+    align-items: stretch !important;
+    display: grid !important;
+    gap: 4px !important;
+    grid-template-columns: repeat(9, minmax(0, 1fr)) !important;
+    grid-template-rows: repeat(2, minmax(42px, auto)) !important;
+    height: auto !important;
+    margin: 4px 0 8px !important;
+    max-height: none !important;
+    min-height: 88px !important;
+    overflow: visible !important;
+    padding: 4px !important;
+    position: relative !important;
+    top: auto !important;
+    width: 100% !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs .nav-section-label,
+  html body main.shell[data-app][data-route="terminal"][data-active-tab="smartChart"] [data-dashboard] > .tabs .nav-section-label,
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs .nav-tool-group > summary,
+  html body main.shell[data-app][data-route="terminal"][data-active-tab="smartChart"] [data-dashboard] > .tabs .nav-tool-group > summary {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs .nav-tool-group,
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs .nav-tool-group[open],
+  html body main.shell[data-app][data-route="terminal"][data-active-tab="smartChart"] [data-dashboard] > .tabs .nav-tool-group,
+  html body main.shell[data-app][data-route="terminal"][data-active-tab="smartChart"] [data-dashboard] > .tabs .nav-tool-group[open] {
+    display: contents !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs > button,
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs .nav-tool-group button,
+  html body main.shell[data-app][data-route="terminal"][data-active-tab="smartChart"] [data-dashboard] > .tabs > button,
+  html body main.shell[data-app][data-route="terminal"][data-active-tab="smartChart"] [data-dashboard] > .tabs .nav-tool-group button {
+    align-items: center !important;
+    border-radius: 8px !important;
+    box-sizing: border-box !important;
+    color: transparent !important;
+    display: inline-flex !important;
+    flex: none !important;
+    font-size: 0 !important;
+    gap: 3px !important;
+    height: 42px !important;
+    justify-content: center !important;
+    line-height: 0 !important;
+    max-width: none !important;
+    min-height: 42px !important;
+    min-width: 0 !important;
+    padding: 4px 6px !important;
+    position: relative !important;
+    transform: none !important;
+    visibility: visible !important;
+    width: 100% !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs button::before {
+    flex: 0 0 15px !important;
+    height: 15px !important;
+    margin: 0 !important;
+    width: 15px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs button::after,
+  html body main.shell[data-app][data-route="terminal"][data-active-tab="smartChart"] [data-dashboard] > .tabs button::after {
+    color: rgba(248, 255, 238, 0.97) !important;
+    content: attr(data-label) !important;
+    display: block !important;
+    font-size: 9.6px !important;
+    font-weight: 950 !important;
+    line-height: 0.98 !important;
+    max-height: 10px !important;
+    max-width: 100% !important;
+    overflow: hidden !important;
+    position: static !important;
+    text-align: center !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs button[data-active="true"]::after {
+    color: #071900 !important;
+  }
+}
+
+@media (max-width: 760px) {
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] {
+    padding-right: calc(48px + max(4px, env(safe-area-inset-right, 0px))) !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs,
+  html body main.shell[data-app][data-route="terminal"][data-active-tab="smartChart"] [data-dashboard] > .tabs {
+    align-content: start !important;
+    align-items: center !important;
+    bottom: max(5px, env(safe-area-inset-bottom, 0px)) !important;
+    display: flex !important;
+    flex-direction: column !important;
+    flex-wrap: nowrap !important;
+    gap: 3px !important;
+    height: auto !important;
+    left: auto !important;
+    margin: 0 !important;
+    max-height: calc(100dvh - 150px - env(safe-area-inset-bottom, 0px)) !important;
+    max-width: 42px !important;
+    min-height: 0 !important;
+    min-width: 42px !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    padding: 3px 2px !important;
+    position: fixed !important;
+    right: max(2px, env(safe-area-inset-right, 0px)) !important;
+    top: calc(150px + env(safe-area-inset-top, 0px)) !important;
+    transform: none !important;
+    width: 42px !important;
+    z-index: 6100 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs .nav-section-label,
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs .nav-tool-group > summary {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs .nav-tool-group,
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs .nav-tool-group[open] {
+    display: contents !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs > button,
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs .nav-tool-group button {
+    align-items: center !important;
+    box-sizing: border-box !important;
+    color: transparent !important;
+    display: inline-flex !important;
+    flex: 0 0 34px !important;
+    font-size: 0 !important;
+    gap: 1px !important;
+    height: 34px !important;
+    justify-content: center !important;
+    line-height: 0 !important;
+    max-height: 34px !important;
+    max-width: 38px !important;
+    min-height: 34px !important;
+    min-width: 38px !important;
+    opacity: 1 !important;
+    padding: 2px 1px !important;
+    transform: none !important;
+    visibility: visible !important;
+    width: 38px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs button::before {
+    flex: 0 0 12px !important;
+    height: 12px !important;
+    width: 12px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs button::after {
+    color: rgba(248, 255, 238, 0.96) !important;
+    content: attr(data-label) !important;
+    display: block !important;
+    font-size: 5.9px !important;
+    font-weight: 900 !important;
+    line-height: 0.95 !important;
+    max-width: 36px !important;
+    overflow: hidden !important;
+    text-align: center !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .smart-chart-side {
+    order: 2 !important;
+  }
+
+  html body main.shell[data-app] .chart-auto-exit-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs button[hidden],
+html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs .nav-tool-group button[hidden] {
+  display: none !important;
+  pointer-events: none !important;
+  visibility: hidden !important;
+}

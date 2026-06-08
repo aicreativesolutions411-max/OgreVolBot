@@ -9977,6 +9977,18 @@ function readSingleTradeAutoExit() {
   return { enabled, takeProfitPct, stopLossPct, sellDelay, sellPercent };
 }
 
+function readChartTradeAutoExit() {
+  const takeProfitPct = fieldValue("[data-chart-buy-tp]", "[data-chart-buy-tp-custom]", "25");
+  const stopLossPct = fieldValue("[data-chart-buy-sl]", "[data-chart-buy-sl-custom]", "8");
+  let sellDelay = fieldValue("[data-chart-buy-delay]", "[data-chart-buy-delay-custom]", "off");
+  let sellPercent = fieldValue("[data-chart-buy-sell-percent]", "[data-chart-buy-sell-percent-custom]", "100");
+  ({ sellDelay, sellPercent } = normalizeTimerSellSettings(sellDelay, sellPercent));
+  const enabled = isEnabledTradeTarget(takeProfitPct)
+    || isEnabledTradeTarget(stopLossPct)
+    || isEnabledTradeTarget(sellDelay);
+  return { enabled, takeProfitPct, stopLossPct, sellDelay, sellPercent };
+}
+
 function setTradeStatus(message) {
   const status = $("[data-trade-status]");
   writeText(status, message);
@@ -11064,10 +11076,24 @@ function readQuickBuyModalForm() {
   return { tokenMint, walletIndex, amountSol, slippageBps };
 }
 
-async function executeQuickBuyAmount({ tokenMint, walletIndex, amountSol, slippageBps = "400", source = "quick-buy" }) {
+async function executeQuickBuyAmount({
+  tokenMint,
+  walletIndex,
+  amountSol,
+  slippageBps = "400",
+  source = "quick-buy",
+  takeProfitPct = "",
+  stopLossPct = "",
+  sellDelay = "off",
+  sellPercent = "100"
+}) {
   const value = Number(amountSol);
   if (!Number.isFinite(value) || value <= 0) throw new Error("Enter a SOL amount greater than zero.");
   const tradeAttemptId = createClientAttemptId("quick-buy");
+  const exitSettings = normalizeTimerSellSettings(sellDelay, sellPercent);
+  const autoExitEnabled = isEnabledTradeTarget(takeProfitPct)
+    || isEnabledTradeTarget(stopLossPct)
+    || isEnabledTradeTarget(exitSettings.sellDelay);
   state.quickBuyLast = {
     source,
     tokenMint,
@@ -11103,22 +11129,39 @@ async function executeQuickBuyAmount({ tokenMint, walletIndex, amountSol, slippa
       attemptId: tradeAttemptId
     });
     state.quickBuyLast = { ...state.quickBuyLast, status: "submitted" };
+    if (autoExitEnabled) {
+      setTradeStatus("Connected wallet buy submitted. TP/SL choices were not server-armed because browser-wallet exits still require wallet approval.");
+    }
     return trade;
   }
 
+  const payload = {
+    tokenMint,
+    walletIndex,
+    amountSol: String(value),
+    slippageBps,
+    tradeAttemptId
+  };
+  if (autoExitEnabled) {
+    Object.assign(payload, {
+      autoExit: true,
+      takeProfitPct,
+      stopLossPct,
+      sellDelay: exitSettings.sellDelay,
+      sellPercent: exitSettings.sellPercent
+    });
+  }
   const data = await api("/api/web/trade/buy", {
     method: "POST",
-    body: JSON.stringify({
-      tokenMint,
-      walletIndex,
-      amountSol: String(value),
-      slippageBps,
-      tradeAttemptId
-    }),
+    body: JSON.stringify(payload),
     dedupe: false,
     timeoutMs: API_LONG_ACTION_TIMEOUT_MS
   });
   state.tradeResult = data.trade;
+  if (data.trade?.autoExitPlan) {
+    state.tradePlanResult = data.trade.autoExitPlan;
+    scheduleAutoExitChecks();
+  }
   queuePostTradeRefresh(data.trade?.signature, "quick-buy-custom", { tradeAttemptId });
   setTradeAction("trade-buy", tokenMint, String(amountSol), {
     state: "submitted",
@@ -14793,6 +14836,9 @@ function chartTradePanelHtml(token = {}, heldPosition = null) {
   const activeTab = state.chartTradeTab === "sell" ? "sell" : "buy";
   const connected = connectedBrowserWallet();
   const walletSelected = connected?.publicKey ? "connected" : "";
+  const activePreset = activeTradePreset();
+  const chartBuyAmount = state.quickBuyAmountOverride || activeQuickBuyAmount(activePreset) || "";
+  const chartPresetSummary = activePreset ? activePresetDetail("trade") : "No preset / manual";
   const positionSummary = heldPosition
     ? `${escapeHtml(heldPosition.uiAmount || "Position")} tokens | ${escapeHtml(heldPosition.estimatedValueSol || "value n/a")} SOL`
     : "No SlimeWire position tracked for this token.";
@@ -14812,11 +14858,18 @@ function chartTradePanelHtml(token = {}, heldPosition = null) {
           </label>
           <label>
             Buy SOL
-            <input data-chart-buy-amount type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.10" value="${escapeHtml(state.quickBuyAmountOverride || "")}">
+            <input data-chart-buy-amount type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.10" value="${escapeHtml(chartBuyAmount)}">
           </label>
           <div class="quick-buy-presets chart-buy-presets">
             ${["0.1", "0.25", "0.5", "1"].map((amount) => `<button type="button" data-chart-buy-preset="${amount}">${amount} SOL</button>`).join("")}
           </div>
+          <label>
+            Preset
+            <select data-fast-trade-preset="chart-panel">
+              ${presetOptionsHtml("trade", state.selectedTradePresetId)}
+            </select>
+          </label>
+          <small class="chart-preset-summary">${escapeHtml(chartPresetSummary)}</small>
           <label>
             Slippage
             <select data-chart-buy-slippage>
@@ -14825,7 +14878,48 @@ function chartTradePanelHtml(token = {}, heldPosition = null) {
               <option value="500">5%</option>
             </select>
           </label>
-          <small>${connected?.publicKey ? `${escapeHtml(connected.provider || "Browser wallet")} approval opens in wallet.` : "Choose a connected browser wallet or managed wallet."}</small>
+          <div class="chart-auto-exit-grid" aria-label="Chart buy exit settings">
+            <label>
+              Take Profit
+              <select data-chart-buy-tp data-custom-select="chart-buy-tp">
+                <option value="0">Off</option>
+                <option value="15">+15%</option>
+                <option value="25" selected>+25%</option>
+                <option value="50">+50%</option>
+                <option value="100">+100%</option>
+                <option value="custom">Custom</option>
+              </select>
+              <input data-chart-buy-tp-custom data-custom-for="chart-buy-tp" type="text" placeholder="Custom: 500 or 5x" hidden>
+            </label>
+            <label>
+              Stop Loss
+              <select data-chart-buy-sl data-custom-select="chart-buy-sl">
+                <option value="0">Off</option>
+                <option value="8" selected>-8%</option>
+                <option value="10">-10%</option>
+                <option value="15">-15%</option>
+                <option value="25">-25%</option>
+                <option value="custom">Custom</option>
+              </select>
+              <input data-chart-buy-sl-custom data-custom-for="chart-buy-sl" type="text" placeholder="Custom SL %" hidden>
+            </label>
+            <label>
+              Timer
+              ${fallbackTimerSelectHtml("chart-buy-delay", "data-chart-buy-delay", "off")}
+            </label>
+            <label>
+              Exit Size
+              <select data-chart-buy-sell-percent data-custom-select="chart-buy-sell-percent">
+                <option value="off">Off</option>
+                <option value="50">50%</option>
+                <option value="80">80%</option>
+                <option value="100" selected>100%</option>
+                <option value="custom">Custom</option>
+              </select>
+              <input data-chart-buy-sell-percent-custom data-custom-for="chart-buy-sell-percent" type="number" min="1" max="100" step="1" placeholder="Custom %" hidden>
+            </label>
+          </div>
+          <small>${connected?.publicKey ? `${escapeHtml(connected.provider || "Browser wallet")} approval opens in wallet. Managed-wallet TP/SL can auto-watch; connected-wallet exits still need wallet approval.` : "Choose a connected browser wallet or managed wallet. Managed wallets can arm TP/SL after buy."}</small>
           ${featureEnabled("protectedBuyEnabled", true) ? `<button type="button" data-protected-buy-open="${escapeHtml(mint)}" data-protected-buy-source="chart-buy-panel">Protected Buy</button>` : ""}
           <button type="button" class="primary chart-confirm-button" data-chart-confirm-buy="${escapeHtml(mint)}">Confirm Buy</button>
           <button type="button" data-quick-buy-token="${escapeHtml(mint)}" data-quick-buy-source="chart-panel">Quick Buy Drawer</button>
@@ -16553,6 +16647,13 @@ function ogreAgentContext() {
       positions: portfolioPositions().length,
       totalSol: totalSol().toFixed(4)
     },
+    profile: {
+      hasReferralCode: Boolean(state.user?.referralCode),
+      referralCode: state.user?.referralCode || "",
+      hasReferralPayoutWallet: Boolean(state.user?.referralPayoutWallet),
+      hasXHandle: Boolean(state.xHandle || state.user?.xHandle),
+      traderBoardEnabled: state.user?.traderBoardVisible !== false
+    },
     selectedPosition: openPosition ? {
       tokenMint: openPosition.tokenMint,
       uiAmount: openPosition.uiAmount,
@@ -17499,7 +17600,7 @@ async function runOgreAgentAction(action = {}) {
     if (Number(action.amountSol || action.sol || action.amount || 0) > 0) {
       state.quickBuyAmountOverride = String(action.amountSol || action.sol || action.amount || "");
     }
-    openQuickBuy(tokenMint, { source: "ogre-agent-open-buy", forceModal: true });
+    openQuickBuy(tokenRefFromMint(tokenMint, { source: "ogre-agent-open-buy" }), { source: "ogre-agent-open-buy", forceModal: true });
     state.ogreAgentStatus = "Buy panel opened. Review it and confirm with your wallet.";
     renderOgreAgent();
     return;
@@ -17509,20 +17610,32 @@ async function runOgreAgentAction(action = {}) {
     const tokenMint = String(action.tokenMint || action.mint || action.ca || state.selectedToken?.mint || state.selectedToken?.pairAddress || state.smartChartToken || state.tradeToken || ogreAgentLastTokenMint() || "").trim();
     const amountSol = Number(action.amountSol || action.sol || action.amount || ogreAgentDefaultBuyAmount() || 0);
     if (!tokenMint || !Number.isFinite(amountSol) || amountSol <= 0) {
-      if (tokenMint) openQuickBuy(tokenMint, { source: "ogre-agent-buy-missing-amount", forceModal: true });
+      if (tokenMint) openQuickBuy(tokenRefFromMint(tokenMint, { source: "ogre-agent-buy-missing-amount" }), { source: "ogre-agent-buy-missing-amount", forceModal: true });
       state.ogreAgentStatus = tokenMint
         ? "Buy panel opened. Pick the SOL amount and confirm with your wallet."
         : "Tell me the token address and amount, like: buy 0.1 SOL of CA.";
       renderOgreAgent();
       return;
     }
-    const walletIndex = Number.isFinite(Number(action.walletIndex)) ? Number(action.walletIndex) : 0;
+    const walletIndex = action.walletIndex !== undefined
+      ? action.walletIndex
+      : connectedBrowserWallet()?.publicKey
+        ? "connected"
+        : (state.wallets[0]?.index ?? 0);
     const slippageBps = Number.isFinite(Number(action.slippageBps)) ? Number(action.slippageBps) : undefined;
     state.ogreAgentLoading = true;
     state.ogreAgentStatus = `Sending ${amountSol} SOL buy request...`;
     renderOgreAgent();
     try {
-      const result = await executeQuickBuyAmount({ tokenMint, walletIndex, amountSol, slippageBps, source: "ogre-agent-confirm-buy" });
+      const result = await executeQuickBuyAmount({
+        tokenMint,
+        walletIndex,
+        amountSol,
+        slippageBps,
+        takeProfitPct: action.takeProfitPct || "",
+        stopLossPct: action.stopLossPct || "",
+        source: "ogre-agent-confirm-buy"
+      });
       state.ogreAgentStatus = result?.ok === false
         ? (result.error || result.message || "Buy failed. Check wallet/RPC status and retry.")
         : `Buy submitted. Refreshing wallet and positions in the background.${ogreAgentActionTargetSummary(action)}`;
@@ -18658,11 +18771,16 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-chart-confirm-buy]")) {
     const tokenMint = target.dataset.chartConfirmBuy || state.smartChartToken || "";
     try {
+      const autoExit = readChartTradeAutoExit();
       await executeQuickBuyAmount({
         tokenMint,
         walletIndex: $("[data-chart-buy-wallet]")?.value || "",
         amountSol: normalizedQuickBuyAmount($("[data-chart-buy-amount]")?.value || ""),
         slippageBps: $("[data-chart-buy-slippage]")?.value || "400",
+        takeProfitPct: autoExit.takeProfitPct,
+        stopLossPct: autoExit.stopLossPct,
+        sellDelay: autoExit.sellDelay,
+        sellPercent: autoExit.sellPercent,
         source: "chart-buy-panel"
       });
       state.chartTradeTab = "buy";
@@ -19611,6 +19729,7 @@ function pumpChartSvgHtml(tokenInput = {}, options = {}) {
   const timeframe = String(state.pumpChartTimeframe || "5m");
   const events = slimePumpChartEvents(token);
   const recent = events.slice(-70);
+  const snapshotMode = !recent.length || recent.every((event) => event.side === "snapshot" || event.row?.snapshotFallback);
   const values = recent.map((event) => event.value);
   const min = values.length ? Math.min(...values) : NaN;
   const max = values.length ? Math.max(...values) : NaN;

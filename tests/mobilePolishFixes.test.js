@@ -92,6 +92,17 @@ test("mobile right rail is fixed and Ogre Tools stays user-controlled", () => {
   assert.match(cssSource, /top-sync-strip \.top-wallet-disconnected,[\s\S]*data-active-preset-label[\s\S]*display: none !important/);
 });
 
+test("mobile rail exposes the full desktop tool list", () => {
+  assert.match(cssSource, /CHART_AGENT_TRADE_RAIL_POLISH_20260608_V1/);
+  assert.match(cssSource, /\[data-dashboard\] > \.tabs,[\s\S]*\[data-active-tab="smartChart"\] \[data-dashboard\] > \.tabs[\s\S]*flex-direction: column !important/);
+  assert.match(cssSource, /\[data-dashboard\] > \.tabs \.nav-tool-group,[\s\S]*display: contents !important/);
+  assert.match(cssSource, /\[data-dashboard\] > \.tabs button\[hidden\][\s\S]*display: none !important/);
+  const labels = [...htmlSource.matchAll(/<button[^>]*data-label="([^"]+)"[^>]*>/g)]
+    .filter((match) => !/\shidden(?:\s|>|=)/.test(match[0]))
+    .map((match) => match[1]);
+  assert.deepEqual(labels, ["Live", "Home", "Chart", "Swap", "Pairs", "Trades", "Scope", "Watch", "KOL", "AI", "Pump", "Bundle", "Volume", "Launch", "Snipe", "Wallets", "Pos", "PnL"]);
+});
+
 test("mobile feed refresh preserves scroll and avoids the start flicker render", () => {
   assert.match(functionBody(appSource, "captureStableFeedScrollSnapshot"), /documentY:[\s\S]*panelScrollTop:[\s\S]*dashboardScrollTop:/);
   assert.match(functionBody(appSource, "restoreStableFeedScrollSnapshot"), /restoreRawScrollPositions[\s\S]*document\.scrollingElement/);
