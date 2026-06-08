@@ -60,7 +60,17 @@ test("browser wallet buy and sell sign locally instead of entering managed-walle
   assert.match(functionBody(appSource, "executeWebSell"), /executeConnectedBrowserTrade\(\{[\s\S]*side: "sell"/);
   assert.match(functionBody(appSource, "executeConnectedBrowserTrade"), /\/api\/web\/browser-trade\/order/);
   assert.match(functionBody(appSource, "executeConnectedBrowserTrade"), /\/api\/web\/browser-trade\/execute/);
+  assert.match(functionBody(appSource, "executeConnectedBrowserTrade"), /confirmConnectedBrowserTrade/);
+  assert.match(functionBody(appSource, "confirmConnectedBrowserTrade"), /window\.confirm/);
   assert.doesNotMatch(functionBody(appSource, "executeConnectedBrowserTrade"), /JUPITER_API_KEY|privateKey|secretKey|seed/i);
+});
+
+test("top wallet status opens connect, wallets, or disconnect", () => {
+  assert.match(htmlSource, /data-top-wallet-status/);
+  assert.match(functionBody(appSource, "updateTopWalletConnectStatus"), /data-top-wallet-status/);
+  assert.match(functionBody(appSource, "handleTopWalletStatusClick"), /disconnectBrowserWallet/);
+  assert.match(functionBody(appSource, "handleTopWalletStatusClick"), /openWalletConnectChooser\(\{ returnPath: "\/terminal" \}\)/);
+  assert.match(appSource, /target\.matches\("\[data-top-wallet-status\]"\)[\s\S]*handleTopWalletStatusClick\(\)/);
 });
 
 test("backend builds a short-lived browser wallet Jupiter order and executes signed transactions", () => {

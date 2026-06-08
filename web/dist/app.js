@@ -3335,6 +3335,53 @@ function currentLivePairsUpdatedAt(bucket = activeLivePairBucketForTab()) {
   return state.livePairsLastUpdatedByBucket[safeBucket] || (safeBucket === state.livePairBucket ? state.livePairsLastUpdatedAt : "") || "";
 }
 
+function hasLivePairRows(rows = []) {
+  return Array.isArray(rows) && rows.length > 0;
+}
+
+function livePairStableField(row = {}, previous = {}, fields = []) {
+  for (const field of fields) {
+    const value = row?.[field];
+    if (value !== null && value !== undefined && value !== "") return value;
+  }
+  for (const field of fields) {
+    const value = previous?.[field];
+    if (value !== null && value !== undefined && value !== "") return value;
+  }
+  return "";
+}
+
+function preserveLivePairRowFields(previousRows = [], nextRows = []) {
+  const previousByMint = new Map((Array.isArray(previousRows) ? previousRows : [])
+    .map((row) => [tokenMintKey(row), row])
+    .filter(([key]) => key));
+  return (Array.isArray(nextRows) ? nextRows : []).map((row) => {
+    const previous = previousByMint.get(tokenMintKey(row));
+    if (!previous) return row;
+    return {
+      ...previous,
+      ...row,
+      tokenMint: livePairStableField(row, previous, ["tokenMint", "mint", "tokenAddress", "address"]),
+      mint: livePairStableField(row, previous, ["mint", "tokenMint", "tokenAddress", "address"]),
+      symbol: livePairStableField(row, previous, ["symbol", "ticker", "shortMint"]),
+      name: livePairStableField(row, previous, ["name", "tokenName", "category"]),
+      imageUrl: livePairStableField(row, previous, ["imageUrl", "image", "icon", "logoURI", "logoUrl"]),
+      image: livePairStableField(row, previous, ["image", "imageUrl", "icon", "logoURI", "logoUrl"]),
+      avatarUrl: livePairStableField(row, previous, ["avatarUrl", "avatar_url", "avatar"]),
+      avatarState: livePairStableField(row, previous, ["avatarState"]),
+      dexUrl: livePairStableField(row, previous, ["dexUrl", "url"]),
+      pumpUrl: livePairStableField(row, previous, ["pumpUrl", "pumpFunUrl", "pumpfunUrl"]),
+      websiteUrl: livePairStableField(row, previous, ["websiteUrl", "website"]),
+      twitterUrl: livePairStableField(row, previous, ["twitterUrl", "xUrl"]),
+      telegramUrl: livePairStableField(row, previous, ["telegramUrl"]),
+      metadata: row?.metadata || previous?.metadata || row?.tokenMetadata || previous?.tokenMetadata || null,
+      tokenMetadata: row?.tokenMetadata || previous?.tokenMetadata || row?.metadata || previous?.metadata || null,
+      dex: row?.dex || previous?.dex || row?.dexScreener || previous?.dexScreener || null,
+      pump: row?.pump || previous?.pump || row?.pumpFun || previous?.pumpFun || null
+    };
+  });
+}
+
 async function loadLivePairs({ silent = false, bucket = state.livePairBucket, renderOnComplete = true, force = false } = {}) {
   const startedAt = perfNow();
   const safeBucket = normalizeLivePairBucket(bucket);
@@ -3347,7 +3394,7 @@ async function loadLivePairs({ silent = false, bucket = state.livePairBucket, re
     state.livePairsLoading = Boolean(state.livePairsLoadingByBucket[state.livePairBucket]);
     if (!silent && isActiveBucket) state.loading = true;
     const existingRows = state.livePairsByBucket?.[safeBucket]?.rows || (isActiveBucket ? state.livePairs?.rows : []);
-    if (!silent || (isActiveBucket && (!Array.isArray(existingRows) || existingRows.length === 0))) {
+    if (!silent && !hasLivePairRows(existingRows)) {
       scheduleLivePairsRender(LIVE_PAIRS_INFLIGHT_RENDER_REASON);
     }
     return existingLoad.promise;
@@ -3362,7 +3409,7 @@ async function loadLivePairs({ silent = false, bucket = state.livePairBucket, re
   state.livePairsLoading = Boolean(state.livePairsLoadingByBucket[state.livePairBucket]);
   if (!silent && isActiveBucket) state.loading = true;
   const existingRows = state.livePairsByBucket?.[safeBucket]?.rows || (isActiveBucket ? state.livePairs?.rows : []);
-  if (!silent || (isActiveBucket && (!Array.isArray(existingRows) || existingRows.length === 0))) {
+  if (!silent && !hasLivePairRows(existingRows)) {
     scheduleLivePairsRender(LIVE_PAIRS_INFLIGHT_RENDER_REASON);
   }
 
@@ -3393,6 +3440,11 @@ async function loadLivePairs({ silent = false, bucket = state.livePairBucket, re
           stale: true,
           emptyRefresh: true,
           message: `${label} is scanning for fresh rows. Showing the last good feed until the next qualifying refresh.`
+        };
+      } else if (valueRows.length > 0 && previousRows.length > 0) {
+        value = {
+          ...value,
+          rows: preserveLivePairRowFields(previousRows, valueRows)
         };
       }
       if (!isCurrentRequest()) return value;
@@ -4466,6 +4518,14 @@ function clipFarmSupported() {
   return Boolean(navigator.mediaDevices?.getDisplayMedia && window.MediaRecorder);
 }
 
+function showClipFarmUnsupportedMessage() {
+  const message = isMobileWalletPlatform()
+    ? "Mobile browsers usually block website screen recording. Use your phone screen recorder, then share the saved clip."
+    : "This browser cannot start screen recording. Use desktop Chrome/Edge or your device recorder.";
+  setClipFarmStatus(message);
+  if (typeof window.alert === "function") window.alert(message);
+}
+
 function clipFarmMimeType() {
   const options = [
     "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
@@ -4558,7 +4618,7 @@ function updateClipFarmControl() {
 
 async function startClipFarmRecording() {
   if (!clipFarmSupported()) {
-    setClipFarmStatus("This browser cannot start screen recording. Use desktop Chrome/Edge or your phone recorder.");
+    showClipFarmUnsupportedMessage();
     return;
   }
   if (state.clipFarm?.recording) {
@@ -4924,6 +4984,11 @@ function updateTopWalletConnectStatus() {
   const managedCount = Array.isArray(state.wallets) ? state.wallets.length : 0;
   const connectedLike = Boolean(publicKey || managedCount);
   const label = connectedLike ? "Connected" : "Connect";
+  const statusText = publicKey
+    ? `Wallet: ${connected.provider || "Connected"} ${shortAddress(publicKey)}`
+    : managedCount
+      ? `Wallets: ${managedCount} managed`
+      : "Status: Wallet not connected";
   const title = publicKey
     ? `${connected.provider || "Browser wallet"} connected: ${shortAddress(publicKey)}`
     : managedCount
@@ -4936,6 +5001,28 @@ function updateTopWalletConnectStatus() {
     const labelTarget = button.querySelector("[data-top-wallet-connect-label]") || button;
     writeText(labelTarget, label);
   });
+  document.querySelectorAll("[data-top-wallet-status]").forEach((button) => {
+    button.dataset.walletState = publicKey ? "browser-connected" : connectedLike ? "managed-connected" : "disconnected";
+    button.title = publicKey ? `${title} Click to disconnect.` : connectedLike ? `${title} Click to open wallets.` : "Click to connect a wallet.";
+    button.setAttribute("aria-label", publicKey ? `${title}. Disconnect wallet.` : connectedLike ? `${title} Open wallets.` : "Wallet not connected. Connect wallet.");
+    writeText(button, statusText);
+  });
+}
+
+async function handleTopWalletStatusClick() {
+  const connected = state.user?.connectedWallet || state.connectedWalletBalance || null;
+  const publicKey = String(connected?.publicKey || "").trim();
+  const managedCount = Array.isArray(state.wallets) ? state.wallets.length : 0;
+  if (publicKey) {
+    const ok = window.confirm(`Disconnect ${connected.provider || "wallet"} ${shortAddress(publicKey)}?`);
+    if (ok) await disconnectBrowserWallet();
+    return;
+  }
+  if (managedCount > 0) {
+    navigateTo("/terminal", "wallets");
+    return;
+  }
+  openWalletConnectChooser({ returnPath: "/terminal" });
 }
 
 function requestSmartChartScrollIntoView(panel = document) {
@@ -9976,8 +10063,27 @@ async function signBrowserTradeTransaction(transactionBase64, provider) {
   return bytesToBase64(signed.serialize());
 }
 
+function confirmConnectedBrowserTrade({ side, connected, form = {}, actionDetail = "", amountSol = "", amountMode = "", percent = "" } = {}) {
+  const action = side === "sell" ? "Sell" : "Buy";
+  const walletLabel = `${connected?.provider || "Connected wallet"} ${connected?.publicKey ? shortAddress(connected.publicKey) : ""}`.trim();
+  const amountLabel = side === "sell"
+    ? `${percent || actionDetail || "100"}%`
+    : amountMode === "max"
+      ? "Max SOL"
+      : `${amountSol || actionDetail || "custom"} SOL`;
+  return window.confirm([
+    `${action} with ${walletLabel}?`,
+    `Token: ${form.tokenMint || ""}`,
+    `Amount: ${amountLabel}`,
+    "Next step: approve the transaction in your wallet."
+  ].join("\n"));
+}
+
 async function executeConnectedBrowserTrade({ side, form, actionDetail, amountSol = "", amountMode = "", percent = "", attemptId }) {
   const { provider, connected } = await connectedTradeProvider();
+  if (!confirmConnectedBrowserTrade({ side, connected, form, actionDetail, amountSol, amountMode, percent })) {
+    throw new Error("Connected-wallet trade cancelled.");
+  }
   const order = await api("/api/web/browser-trade/order", {
     method: "POST",
     body: JSON.stringify({
@@ -11423,8 +11529,50 @@ async function sellPositionPercent(tokenMint, percentText = "100", options = {})
       });
       return;
     }
-    const position = state.positions.find((item) => String(item.tokenMint) === String(tokenMint));
+    const position = portfolioPositions().find((item) => String(item.tokenMint) === String(tokenMint));
     const tokenLabel = position?.symbol || position?.name || shortAddress(tokenMint);
+    const connectedPosition = Boolean(position?.source === "connected-wallet" || position?.viewOnly || String(position?.walletIndex || "").toLowerCase() === "connected");
+    const connectedPublicKey = String(connectedBrowserWallet()?.publicKey || "").trim();
+    if (connectedPosition && connectedPublicKey) {
+      manualSellAttemptId = createClientAttemptId("manual-sell");
+      setManualSellAction(tokenMint, String(percent), {
+        state: "clicked",
+        manualSellAttemptId,
+        clickedAt: new Date().toISOString()
+      });
+      recordPerfEvent({
+        component: "manual-sell",
+        action: "manual-sell-click-to-ui",
+        durationMs: perfNow() - clickStartedAt,
+        requestId: manualSellAttemptId,
+        details: `browser:${shortAddress(tokenMint)}:${percent}`
+      });
+      setError("");
+      if (state.activeTab !== "smartChart") state.activeTab = "positions";
+      render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
+      await sleep(20);
+      setManualSellAction(tokenMint, String(percent), { state: "submitting" });
+      const trade = await executeConnectedBrowserTrade({
+        side: "sell",
+        form: {
+          tokenMint,
+          walletIndex: "connected",
+          slippageBps: "400"
+        },
+        actionDetail: `${percent}%`,
+        percent: String(percent),
+        attemptId: manualSellAttemptId
+      });
+      state.tradeResult = trade;
+      setManualSellAction(tokenMint, String(percent), {
+        state: "submitted",
+        signature: trade?.signature || ""
+      });
+      queuePostTradeRefresh(trade?.signature, "browser-manual-sell", { tradeAttemptId: manualSellAttemptId });
+      render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
+      clearManualSellActionLater(tokenMint, String(percent), 3_000);
+      return;
+    }
     const ok = Boolean(options.skipConfirm) || window.confirm([
       `Exit ${percent}% of ${tokenLabel}?`,
       `Mint: ${tokenMint}`,
@@ -14984,9 +15132,7 @@ function chartTradePanelHtml(token = {}, heldPosition = null) {
             </label>
           </div>
           <small>${managedDefaultWallet ? "Managed wallet selected for unattended TP/SL and timer exits. Browser-wallet buys still need approval for exits." : connected?.publicKey ? `${escapeHtml(connected.provider || "Browser wallet")} approval opens in wallet. Create or choose a managed wallet to arm unattended TP/SL and timer exits.` : "Choose a connected browser wallet or managed wallet. Managed wallets can arm TP/SL after buy."}</small>
-          ${featureEnabled("protectedBuyEnabled", true) ? `<button type="button" data-protected-buy-open="${escapeHtml(mint)}" data-protected-buy-source="chart-buy-panel">Protected Buy</button>` : ""}
           <button type="button" class="primary chart-confirm-button" data-chart-confirm-buy="${escapeHtml(mint)}">Confirm Buy</button>
-          <button type="button" data-quick-buy-token="${escapeHtml(mint)}" data-quick-buy-source="chart-panel">Quick Buy Drawer</button>
         </div>
       ` : `
         <div class="chart-trade-form" data-chart-trade-panel="sell">
@@ -15003,11 +15149,6 @@ function chartTradePanelHtml(token = {}, heldPosition = null) {
           <button type="button" data-chart-confirm-sell="${escapeHtml(mint)}" ${heldPosition ? "" : "disabled"}>Confirm Custom Sell</button>
         </div>
       `}
-      <div class="chart-trade-links">
-        <button type="button" data-quick-bundle-token="${escapeHtml(mint)}">Bundle</button>
-        <button type="button" data-use-token-volume="${escapeHtml(mint)}">Volume</button>
-        <button type="button" data-watch-token="${escapeHtml(mint)}">${isTokenWatched(mint) ? "Saved" : "Watch"}</button>
-      </div>
     </div>
   `;
 }
@@ -15138,26 +15279,26 @@ function smartChartHtml() {
     stale: Boolean(smartChartBootstrapForMint(mint)?.stale),
     details: mint
   });
+  const tokenLabel = token.symbol || token.shortMint || shortAddress(mint);
   return `
-    <section class="smart-chart-terminal">
-      <div class="terminal-title-row">
+    <section class="smart-chart-terminal smart-chart-clean-terminal">
+      <div class="terminal-title-row smart-chart-clean-title">
         <div>
-          <h3>Smart Chart</h3>
-          <p>Chart, scanner stats, live signals, and preset actions for the selected token.</p>
+          <h3>${escapeHtml(tokenLabel)} Chart</h3>
+          <p>DEX chart, live transactions, and wallet trade controls for the selected CA.</p>
         </div>
         <button type="button" data-tab="terminal">Back to Live Terminal</button>
       </div>
-      <div class="smart-chart-search">
+      <div class="smart-chart-search smart-chart-clean-search">
         <input data-smart-chart-input value="${escapeHtml(mint)}" placeholder="Paste token CA" autocomplete="off">
         <button class="primary" type="button" data-smart-chart-open>Open Chart</button>
       </div>
-      ${smartChartQuickActionsHtml(token, heldPosition)}
-      <div class="smart-chart-grid">
-        <article class="terminal-panel smart-chart-main">
-          <div class="smart-chart-token-header">
+      <div class="smart-chart-grid smart-chart-clean-grid">
+        <article class="terminal-panel smart-chart-main smart-chart-clean-main">
+          <div class="smart-chart-token-header smart-chart-clean-token-header">
             ${livePairAvatarHtml(token)}
             <div>
-              <strong>${escapeHtml(token.symbol || token.shortMint || shortAddress(mint))}</strong>
+              <strong>${escapeHtml(tokenLabel)}</strong>
               <small>${escapeHtml(token.name || token.category || "Token")}</small>
               <button type="button" class="ca-copy" data-copy="${escapeHtml(mint)}">${escapeHtml(shortAddress(mint))}</button>
             </div>
@@ -15165,61 +15306,17 @@ function smartChartHtml() {
               ${miniTokenLinksHtml(token)}
             </div>
           </div>
-          ${smartChartViewTabsHtml(chartView)}
-          ${chartView === "chart" ? `
-            <div class="smart-chart-combined-label">
-              <strong>Chart</strong>
-              <small>Use the trade panel on the right for buy/sell controls.</small>
-            </div>
-            ${smartChartDexFrameHtml(token, "chart")}
-          ` : chartView === "chartTxns" ? `
-            <div class="smart-chart-combined-label">
-              <strong>Chart + Transactions</strong>
-              <small>Chart, buys/sells, token info, and the buy menu stay together in one workspace.</small>
-            </div>
-            ${smartChartDexFrameHtml(token, "chartTxns")}
-          ` : chartView === "txns" ? `
-            ${smartChartTransactionsHtml(token, heldPosition)}
-          ` : `
-            ${smartChartInfoPanelHtml(token, heldPosition)}
-          `}
-          ${chartView === "chartTxns" ? `<div class="smart-chart-inline-info">
-            ${terminalTokenStatsHtml(token)}
-            <section class="smart-chart-transactions-note">
-              <strong>Transactions are inside the chart window.</strong>
-              <span>SlimeWire trade history and position controls stay on this page without loading a second market iframe.</span>
-            </section>
-          </div>` : ""}
+          <div class="smart-chart-combined-label">
+            <strong>DEX Chart + Transactions</strong>
+            <small>Use the trade panel for wallet, preset, stop loss, take profit, and sell controls.</small>
+          </div>
+          ${smartChartDexFrameHtml(token, "chartTxns")}
         </article>
-        <aside class="terminal-panel smart-chart-side">
-          <h3>${escapeHtml(token.symbol || "Token")} setup</h3>
-          ${terminalTokenStatsHtml(token)}
-          ${slimeShieldCardHtml(token)}
+        <aside class="terminal-panel smart-chart-side smart-chart-clean-side">
+          <h3>Trade ${escapeHtml(tokenLabel)}</h3>
           ${chartTradePanelHtml(token, heldPosition)}
         </aside>
       </div>
-      ${chartView !== "txns" && chartView !== "info" ? `<div class="smart-chart-bottom-grid">
-        <article class="terminal-panel">
-          <div class="terminal-title-row">
-            <h3>Related signals</h3>
-            <button type="button" data-refresh-feeds>Refresh</button>
-          </div>
-          ${compactSignalRowsHtml(relatedRows, {
-            layout: "terminal",
-            limit: 5,
-            actionLabel: "Trade",
-            emptyTitle: "No related signals",
-            emptyMessage: "This token is loaded from CA. Refresh feeds to look for matching signals."
-          })}
-        </article>
-        <article class="terminal-panel">
-          <div class="terminal-title-row">
-            <h3>Position</h3>
-            <button type="button" data-refresh-wallet>Refresh Wallet</button>
-          </div>
-          ${heldPosition ? `<div class="table-list compact-table">${positionRowHtml(heldPosition)}</div>` : emptyState("No position", "No current SlimeWire position is tracked for this token.")}
-        </article>
-      </div>` : ""}
     </section>
   `;
 }
@@ -18430,6 +18527,11 @@ document.addEventListener("click", async (event) => {
     }
     return;
   }
+  if (target.matches("[data-top-wallet-status]")) {
+    event.preventDefault();
+    await handleTopWalletStatusClick();
+    return;
+  }
   if (target.matches("[data-top-refresh-wallet]")) {
     const clickStartedAt = perfNow();
     setPositionRefreshAction("clicked", { startedAt: clickStartedAt });
@@ -18848,9 +18950,6 @@ document.addEventListener("click", async (event) => {
     try {
       const autoExit = readChartTradeAutoExit();
       const walletIndex = $("[data-chart-buy-wallet]")?.value || "";
-      if (autoExit.enabled && isConnectedTradeWallet(walletIndex)) {
-        throw new Error("TP/SL and timer exits need a managed SlimeWire wallet for unattended selling. Pick a managed wallet or turn those exits off.");
-      }
       await executeQuickBuyAmount({
         tokenMint,
         walletIndex,

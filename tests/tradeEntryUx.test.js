@@ -113,21 +113,22 @@ test("Chart route has professional Buy and Sell panel", () => {
   assert.match(panel, /Sell 100%/);
   assert.match(functionBody(appSource, "readChartTradeAutoExit"), /data-chart-buy-tp/);
   assert.match(functionBody(appSource, "executeQuickBuyAmount"), /autoExit[\s\S]*takeProfitPct[\s\S]*stopLossPct/);
-  assert.match(appSource, /TP\/SL and timer exits need a managed SlimeWire wallet/);
+  assert.match(functionBody(appSource, "confirmConnectedBrowserTrade"), /Next step: approve the transaction in your wallet/);
+  assert.doesNotMatch(panel, /Quick Buy Drawer/);
+  assert.doesNotMatch(panel, /data-protected-buy-open/);
+  assert.doesNotMatch(panel, /chart-trade-links/);
   assert.match(functionBody(appSource, "smartChartHtml"), /chartTradePanelHtml\(token, heldPosition\)/);
   assert.match(functionBody(appSource, "applyChartRouteFromLocation"), /params\.get\("token"\)/);
 });
 
-test("Chart page uses full chart view with transactions and info tabs", () => {
+test("Chart page uses a clean DEX chart and transactions workspace", () => {
   const chart = functionBody(appSource, "smartChartHtml");
-  assert.match(functionBody(appSource, "smartChartViewTabsHtml"), /\["chart", "Chart"\]/);
-  assert.match(functionBody(appSource, "smartChartViewTabsHtml"), /\["chartTxns", "Chart \+ Txns"\]/);
-  assert.match(functionBody(appSource, "smartChartViewTabsHtml"), /\["txns", "Transactions"\]/);
-  assert.match(functionBody(appSource, "smartChartViewTabsHtml"), /\["info", "Info"\]/);
-  assert.match(chart, /chartView === "chart"[\s\S]*smartChartDexFrameHtml\(token, "chart"\)/);
-  assert.match(chart, /chartView === "chartTxns"[\s\S]*smartChartDexFrameHtml\(token, "chartTxns"\)/);
-  assert.match(chart, /chartView === "txns"[\s\S]*smartChartTransactionsHtml\(token, heldPosition\)/);
-  assert.match(chart, /smartChartInfoPanelHtml\(token, heldPosition\)/);
+  assert.match(chart, /smart-chart-clean-terminal/);
+  assert.match(chart, /smartChartDexFrameHtml\(token, "chartTxns"\)/);
+  assert.match(chart, /chartTradePanelHtml\(token, heldPosition\)/);
+  assert.doesNotMatch(chart, /smartChartViewTabsHtml\(chartView\)/);
+  assert.doesNotMatch(chart, /smartChartQuickActionsHtml\(token, heldPosition\)/);
+  assert.doesNotMatch(chart, /smart-chart-bottom-grid/);
   assert.match(functionBody(appSource, "smartChartTransactionsHtml"), /smartChartDexFrameHtml\(token, "txns"\)/);
   assert.match(functionBody(appSource, "smartChartInfoPanelHtml"), /smartChartDexFrameHtml\(token, "info"\)/);
   assert.match(functionBody(appSource, "smartChartDexFrameHtml"), /data-chart-frame-loading/);
@@ -153,6 +154,9 @@ test("Chart page uses full chart view with transactions and info tabs", () => {
   assert.match(functionBody(appSource, "render"), /preserveSmartChartPanel[\s\S]*\.smart-chart-frame iframe/);
   assert.match(functionBody(appSource, "refreshTerminalFeed"), /preserveSmartChartFrame: state\.activeTab === "smartChart" && tabKey === "smartChart"/);
   assert.match(functionBody(appSource, "refreshWalletState"), /preserveSmartChartFrame: state\.activeTab === "smartChart"/);
+  assert.match(chartCssSource, /WEB_WALLET_CHART_REFRESH_CLEANUP_20260608_V2/);
+  assert.match(chartCssSource, /smart-chart-clean-grid[\s\S]*grid-template-columns: minmax\(0, 1fr\) minmax\(292px, 360px\)/);
+  assert.match(chartCssSource, /smart-chart-clean-main \.smart-chart-frame[\s\S]*height: clamp\(540px, 70vh, 780px\)/);
   assert.match(chartCssSource, /\[data-active-tab="smartChart"\][\s\S]*\[data-dashboard\] > \.metrics/);
   assert.doesNotMatch(chartCssSource, /\[data-active-tab="smartChart"\]\s+\[data-dashboard\] > \.tabs,[\s\S]*display: none/);
   assert.match(chartCssSource, /\[data-active-tab="smartChart"\][\s\S]*\[data-dashboard\] > \.tabs[\s\S]*position: sticky/);

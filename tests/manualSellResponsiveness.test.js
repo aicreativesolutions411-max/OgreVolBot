@@ -62,6 +62,15 @@ test("manual sell does not wait for full position wallet refresh before updating
   assert.match(functionBody(appSource, "queuePostTradeRefresh"), /refreshWalletState\(\{ force: true, deep: false, reason: "post-trade" \}\)/);
 });
 
+test("connected wallet positions sell through browser wallet approval", () => {
+  const body = functionBody(appSource, "sellPositionPercent");
+  assert.match(body, /portfolioPositions\(\)\.find/);
+  assert.match(body, /position\?\.source === "connected-wallet"/);
+  assert.match(body, /executeConnectedBrowserTrade\(\{[\s\S]*side: "sell"/);
+  assert.match(body, /walletIndex: "connected"/);
+  assert.match(body, /browser-manual-sell/);
+});
+
 test("backend manual sell uses critical attempt idempotency without changing sell math", () => {
   assert.match(serverSource, /function normalizeManualSellAttemptId/);
   assert.match(serverSource, /async function runManualSellCriticalAttempt/);

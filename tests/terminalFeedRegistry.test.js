@@ -154,6 +154,16 @@ test("active tab poller avoids hidden-page and duplicate heavy-tab polling", () 
   assert.doesNotMatch(functionBody("ensureLivePairsWarmup"), /smartChart/);
 });
 
+test("live pair refresh keeps current rows stable while new data loads", () => {
+  const body = functionBody("loadLivePairs");
+  assert.match(appSource, /function preserveLivePairRowFields/);
+  assert.match(functionBody("preserveLivePairRowFields"), /avatarUrl/);
+  assert.match(functionBody("preserveLivePairRowFields"), /tokenMetadata/);
+  assert.match(body, /!silent && !hasLivePairRows\(existingRows\)/);
+  assert.match(body, /preserveLivePairRowFields\(previousRows, valueRows\)/);
+  assert.doesNotMatch(body, /!silent \|\| \(isActiveBucket && \(!Array\.isArray\(existingRows\)/);
+});
+
 test("full terminal feed tabs use page-sized windows instead of tiny preview caps", () => {
   assert.ok(byTab("live").pageSize >= 50);
   assert.ok(byTab("live").supportsPagination);

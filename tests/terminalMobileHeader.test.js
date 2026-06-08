@@ -26,6 +26,7 @@ test("terminal mobile topbar keeps every original action hook", () => {
     "data-logout",
     "data-top-refresh-wallet",
     "data-top-wallet-connect",
+    "data-top-wallet-status",
     "data-tpsl-status-button",
     "data-top-sync-strip"
   ]) {
@@ -66,7 +67,7 @@ test("terminal topbar handlers are still wired to the existing actions", () => {
 
 test("terminal disconnected status is not duplicated visually in the sync card", () => {
   assert.match(appSource, /setText\("\[data-sync-health\]", hasWalletContext \? syncHealthLabel\(\) : "Sync idle"\)/);
-  assert.match(htmlSource, /<span class="top-wallet-disconnected">Status: Wallet not connected<\/span>/);
+  assert.match(htmlSource, /<button type="button" class="top-wallet-status top-wallet-disconnected" data-top-wallet-status data-wallet-state="disconnected">Status: Wallet not connected<\/button>/);
 });
 
 test("terminal route cannot show the intro splash underneath the header", () => {
