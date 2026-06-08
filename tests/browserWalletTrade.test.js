@@ -63,6 +63,9 @@ test("browser wallet buy and sell sign locally instead of entering managed-walle
   assert.match(functionBody(appSource, "executeConnectedBrowserTrade"), /confirmConnectedBrowserTrade/);
   assert.match(functionBody(appSource, "executeConnectedBrowserTrade"), /!state\.walletFastApprovalsEnabled && !confirmConnectedBrowserTrade/);
   assert.match(functionBody(appSource, "executeConnectedBrowserTrade"), /Building \$\{side\} approval/);
+  assert.match(appSource, /async function executeConnectedBrowserTrade\(\{[\s\S]*statusWriter = setTradeStatus/);
+  assert.match(functionBody(appSource, "executeConnectedBrowserTrade"), /writeStatus/);
+  assert.match(functionBody(appSource, "executeChartConnectedBuy"), /statusWriter: setChartTradeStatus/);
   assert.match(functionBody(appSource, "confirmConnectedBrowserTrade"), /window\.confirm/);
   assert.match(functionBody(appSource, "promptConnectedWalletReconnect"), /startMobileWalletConnect/);
   assert.match(functionBody(appSource, "promptConnectedWalletReconnect"), /openMobileWalletBrowse/);
@@ -88,6 +91,7 @@ test("backend builds a short-lived browser wallet Jupiter order and executes sig
   assert.match(functionBody(serverSource, "webBrowserTradeOrder"), /assertTokenBuySafety/);
   assert.match(functionBody(serverSource, "webBrowserTradeOrder"), /createJupiterOrder/);
   assert.match(functionBody(serverSource, "webBrowserTradeOrder"), /saveBrowserTradeOrder/);
+  assert.match(functionBody(serverSource, "assertTokenBuySafety"), /priority: true/);
   assert.match(functionBody(serverSource, "webBrowserTradeExecute"), /signedTransaction/);
   assert.match(functionBody(serverSource, "webBrowserTradeExecute"), /Jupiter browser wallet execute/);
   assert.match(functionBody(serverSource, "webBrowserTradeExecute"), /source: "web_browser_wallet_trade"/);

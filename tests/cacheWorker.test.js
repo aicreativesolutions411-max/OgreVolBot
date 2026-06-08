@@ -72,6 +72,8 @@ test("external Redis/KV cache provider is optional, sanitized, and command-check
 
 test("Helius RPC is the explicit backend provider path and public fallback is disabled by default", () => {
   assert.match(serverSource, /function resolveSolanaRpcConfig/);
+  assert.match(serverSource, /SOLANA_VALIDATOR_RPC_URL/);
+  assert.match(serverSource, /SLIMEWIRE_VALIDATOR_RPC_URL/);
   assert.match(serverSource, /HELIUS_RPC_URL/);
   assert.match(serverSource, /HELIUS_DEVELOPER_RPC_URL/);
   assert.match(serverSource, /ALLOW_PUBLIC_RPC_FALLBACK/);

@@ -5207,6 +5207,8 @@ function safeUrlHost(value = "") {
 
 function resolveSolanaRpcConfig() {
   const candidates = [
+    ["SOLANA_VALIDATOR_RPC_URL", process.env.SOLANA_VALIDATOR_RPC_URL],
+    ["SLIMEWIRE_VALIDATOR_RPC_URL", process.env.SLIMEWIRE_VALIDATOR_RPC_URL],
     ["HELIUS_RPC_URL", process.env.HELIUS_RPC_URL],
     ["HELIUS_DEVELOPER_RPC_URL", process.env.HELIUS_DEVELOPER_RPC_URL],
     ["HELIUS_HTTP_URL", process.env.HELIUS_HTTP_URL],
@@ -5225,7 +5227,9 @@ function resolveSolanaRpcConfig() {
   if (isPublicSolana && !allowPublicFallback) {
     throw new Error("Public Solana RPC fallback is disabled. Set HELIUS_RPC_URL/HELIUS_DEVELOPER_RPC_URL to the Helius Developer RPC endpoint.");
   }
-  const providerName = host.includes("helius")
+  const providerName = String(envSource || "").includes("VALIDATOR")
+    ? "validator"
+    : host.includes("helius")
     ? "helius"
     : isPublicSolana
       ? "public-solana"
@@ -12556,7 +12560,10 @@ async function assertTokenBuySafety({ tokenMint, taker, buyLamports, slippageBps
     inputMint: SOL_MINT,
     outputMint: tokenMint,
     amount: buyLamports,
-    slippageBps
+    slippageBps,
+    priority: true,
+    timeoutMs: 8_000,
+    retries: CONFIG.jupiterRetries
   });
   const estimatedTokenOut = BigInt(buyOrder.outAmount || buyOrder.outputAmount || 0);
   if (estimatedTokenOut <= 0n) {

@@ -1292,7 +1292,7 @@ function clearTradeActionLater(action = "", tokenMint = "", detail = "", delayMs
     delete next[key];
     state.tradeActionLocks = next;
     applyActionButtonStates();
-    render();
+    render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
   }, delayMs);
 }
 
@@ -1332,7 +1332,7 @@ function clearManualSellActionLater(tokenMint, percent, delayMs = 2_400) {
     delete next[key];
     state.manualSellActions = next;
     applyActionButtonStates();
-    render();
+    render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
   }, delayMs);
 }
 
@@ -1420,6 +1420,26 @@ function applyActionButtonStates() {
   document.querySelectorAll("[data-trade-sell-quick], [data-sell-custom]").forEach((button) => {
     const detail = button.dataset.tradeSellQuick || "custom";
     const action = activeTradeAction("trade-sell", currentTradeToken, detail);
+    const base = buttonBaseLabel(button);
+    button.disabled = Boolean(action);
+    button.dataset.actionState = action?.state || "idle";
+    button.textContent = action ? (action.state === "submitted" ? "Submitted" : "Selling...") : base;
+  });
+
+  document.querySelectorAll("[data-chart-confirm-buy]").forEach((button) => {
+    const tokenMint = button.dataset.chartConfirmBuy || state.smartChartToken || "";
+    const amount = normalizedQuickBuyAmount($("[data-chart-buy-amount]")?.value || "") || "custom";
+    const action = activeTradeAction("trade-buy", tokenMint, String(amount));
+    const base = buttonBaseLabel(button);
+    button.disabled = Boolean(action);
+    button.dataset.actionState = action?.state || "idle";
+    button.textContent = action ? (action.state === "submitted" ? "Submitted" : "Buying...") : base;
+  });
+
+  document.querySelectorAll("[data-chart-confirm-sell]").forEach((button) => {
+    const tokenMint = button.dataset.chartConfirmSell || state.smartChartToken || "";
+    const percent = $("[data-chart-sell-percent]")?.value || "100";
+    const action = activeManualSellAction(tokenMint, percent);
     const base = buttonBaseLabel(button);
     button.disabled = Boolean(action);
     button.dataset.actionState = action?.state || "idle";
@@ -6126,8 +6146,8 @@ function quickBuyModalHtml() {
         <button type="button" class="primary" data-quick-buy-confirm ${confirmDisabled ? "disabled" : ""}>${submitting ? "Working..." : safetyBlock ? "Fast Buy Blocked" : "Confirm Buy"}</button>
       </div>
       ${connectedWalletSelected ? `<small class="quick-buy-wallet-note">${state.walletFastApprovalsEnabled ? "Fast approvals on: the wallet approval should open as soon as you confirm." : "Fast approvals off: you still approve in your wallet before the trade is sent."}</small>` : ""}
-      ${modal.status ? `<small class="connect-status">${escapeHtml(modal.status)}</small>` : ""}
-      ${safetyBlock ? `<small class="warning-text quick-buy-safety-block">${escapeHtml(safetyBlock)}</small>` : modal.error ? `<small class="warning-text">${escapeHtml(modal.error)}</small>` : ""}
+      <small class="connect-status" data-quick-buy-modal-status ${modal.status ? "" : "hidden"}>${escapeHtml(modal.status || "")}</small>
+      ${safetyBlock ? `<small class="warning-text quick-buy-safety-block" data-quick-buy-modal-error>${escapeHtml(safetyBlock)}</small>` : `<small class="warning-text" data-quick-buy-modal-error ${modal.error ? "" : "hidden"}>${escapeHtml(modal.error || "")}</small>`}
     </section>
   `;
 }
@@ -10500,12 +10520,13 @@ function confirmConnectedBrowserTrade({ side, connected, form = {}, actionDetail
   ].join("\n"));
 }
 
-async function executeConnectedBrowserTrade({ side, form, actionDetail, amountSol = "", amountMode = "", percent = "", attemptId }) {
+async function executeConnectedBrowserTrade({ side, form, actionDetail, amountSol = "", amountMode = "", percent = "", attemptId, statusWriter = setTradeStatus }) {
+  const writeStatus = typeof statusWriter === "function" ? statusWriter : setTradeStatus;
   const { provider, connected } = await connectedTradeProvider();
   if (!state.walletFastApprovalsEnabled && !confirmConnectedBrowserTrade({ side, connected, form, actionDetail, amountSol, amountMode, percent })) {
     throw new Error("Connected-wallet trade cancelled.");
   }
-  setTradeStatus(state.walletFastApprovalsEnabled
+  writeStatus(state.walletFastApprovalsEnabled
     ? `Building ${side} approval for ${connected.provider || "your wallet"}...`
     : `Preparing ${side} approval...`);
   const order = await api("/api/web/browser-trade/order", {
@@ -10523,9 +10544,9 @@ async function executeConnectedBrowserTrade({ side, form, actionDetail, amountSo
     dedupe: false,
     timeoutMs: API_LONG_ACTION_TIMEOUT_MS
   });
-  setTradeStatus(`Approve ${side} in ${connected.provider || "your wallet"}...`);
+  writeStatus(`Approve ${side} in ${connected.provider || "your wallet"}...`);
   const signedTransaction = await signBrowserTradeTransaction(order.order?.transaction, provider);
-  setTradeStatus("Submitting signed trade...");
+  writeStatus("Submitting signed trade...");
   const result = await api("/api/web/browser-trade/execute", {
     method: "POST",
     body: JSON.stringify({
@@ -10536,7 +10557,7 @@ async function executeConnectedBrowserTrade({ side, form, actionDetail, amountSo
     timeoutMs: API_LONG_ACTION_TIMEOUT_MS
   });
   state.tradeResult = result.trade;
-  setTradeStatus(result.trade?.message || `${side === "buy" ? "Buy" : "Sell"} submitted from connected wallet.`);
+  writeStatus(result.trade?.message || `${side === "buy" ? "Buy" : "Sell"} submitted from connected wallet.`);
   setTradeAction(side === "buy" ? "trade-buy" : "trade-sell", form.tokenMint, actionDetail, {
     state: "submitted",
     signature: result.trade?.signature || ""
@@ -10587,6 +10608,25 @@ function setTradeStatus(message) {
   writeText(status, message);
 }
 
+function setChartTradeStatus(message = "") {
+  state.chartTradeStatus = String(message || "");
+  writeText($("[data-chart-trade-status]"), state.chartTradeStatus);
+}
+
+function setQuickBuyModalStatus(message = "", error = "") {
+  state.quickBuyModal = {
+    ...state.quickBuyModal,
+    status: String(message || ""),
+    error: String(error || "")
+  };
+  const status = $("[data-quick-buy-modal-status]");
+  const errorBox = $("[data-quick-buy-modal-error]");
+  writeText(status, state.quickBuyModal.status);
+  writeText(errorBox, state.quickBuyModal.error);
+  if (status) status.hidden = !state.quickBuyModal.status;
+  if (errorBox) errorBox.hidden = !state.quickBuyModal.error;
+}
+
 async function executeWebBuy(amountSol, amountMode = "fixed") {
   const clickStartedAt = perfNow();
   let actionDetail = amountMode === "max" ? "max" : String(amountSol || "custom");
@@ -10635,9 +10675,8 @@ async function executeWebBuy(amountSol, amountMode = "fixed") {
         requestId: tradeAttemptId,
         details: `browser-buy:${shortAddress(form.tokenMint)}:${actionDetail}`
       });
-      render();
       setTradeStatus("Building wallet-approved buy...");
-      await sleep(20);
+      applyActionButtonStates();
       await executeConnectedBrowserTrade({
         side: "buy",
         form,
@@ -10647,7 +10686,7 @@ async function executeWebBuy(amountSol, amountMode = "fixed") {
         attemptId: tradeAttemptId
       });
       state.activeTab = "trade";
-      render();
+      render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
       clearTradeActionLater("trade-buy", form.tokenMint, actionDetail, 3000);
       return;
     }
@@ -10771,11 +10810,10 @@ async function executeWebSell(percent) {
       requestId: manualSellAttemptId,
       details: `${shortAddress(form.tokenMint)}:${value}`
     });
-    render();
-    await sleep(20);
-    const requestStartedAt = perfNow();
-    setTradeAction("trade-sell", form.tokenMint, detail, { state: "submitting" });
     if (isConnectedTradeWallet(form.walletIndex)) {
+      applyActionButtonStates();
+      const requestStartedAt = perfNow();
+      setTradeAction("trade-sell", form.tokenMint, detail, { state: "submitting" });
       await executeConnectedBrowserTrade({
         side: "sell",
         form,
@@ -10783,11 +10821,23 @@ async function executeWebSell(percent) {
         percent: String(value),
         attemptId: manualSellAttemptId
       });
+      recordPerfEvent({
+        component: "manual-sell",
+        action: "browser-sell-request",
+        durationMs: perfNow() - requestStartedAt,
+        requestId: manualSellAttemptId,
+        resultCount: state.tradeResult?.signature ? 1 : 0,
+        details: "browser-wallet"
+      });
       state.activeTab = "trade";
-      render();
+      render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
       clearTradeActionLater("trade-sell", form.tokenMint, detail, 3000);
       return;
     }
+    render();
+    await sleep(20);
+    const requestStartedAt = perfNow();
+    setTradeAction("trade-sell", form.tokenMint, detail, { state: "submitting" });
     const data = await api("/api/web/trade/sell", {
       method: "POST",
       body: JSON.stringify({
@@ -11664,16 +11714,23 @@ async function confirmProtectedBuyModal() {
       throw new Error("SlimeShield says AVOID. Check the risk box if you still want to continue.");
     }
     const preset = protectedBuyPresetById(form.presetId);
-    state.protectedBuyModal = { ...state.protectedBuyModal, ...form, status: "Submitting protected buy...", error: "" };
+    state.protectedBuyModal = {
+      ...state.protectedBuyModal,
+      ...form,
+      status: isConnectedTradeWallet(form.walletIndex) ? "Opening wallet approval..." : "Submitting protected buy...",
+      error: ""
+    };
     renderProtectedBuyModal();
-    await sleep(20);
-    state.protectedBuyModal = { ...state.protectedBuyModal, open: false, status: "", error: "" };
-    render({ force: true });
     if (isConnectedTradeWallet(form.walletIndex)) {
       const trade = await executeQuickBuyAmount({ ...form, source: `protected-buy:${preset.id}` });
+      state.protectedBuyModal = { ...state.protectedBuyModal, open: false, status: "", error: "" };
+      render({ force: true, preserveSmartChartFrame: state.activeTab === "smartChart" });
       setError(trade?.message || "Protected Buy submitted through your wallet. Managed TP/SL was not server-armed for this connected wallet.");
       return;
     }
+    await sleep(20);
+    state.protectedBuyModal = { ...state.protectedBuyModal, open: false, status: "", error: "" };
+    render({ force: true, preserveSmartChartFrame: state.activeTab === "smartChart" });
     await quickPresetTrade(form.tokenMint, protectedBuyTradePreset(form, preset));
   } catch (error) {
     state.protectedBuyModal = {
@@ -11736,25 +11793,30 @@ async function executeQuickBuyAmount({
     error: "",
     tradeAttemptId
   };
-  render({ force: true, preserveSmartChartFrame: state.activeTab === "smartChart" });
-  await sleep(20);
-
   const form = { tokenMint, walletIndex, slippageBps };
   if (isConnectedTradeWallet(walletIndex)) {
+    setQuickBuyModalStatus("Opening wallet approval...", "");
+    applyActionButtonStates();
     const trade = await executeConnectedBrowserTrade({
       side: "buy",
       form,
       actionDetail: String(amountSol),
       amountSol: String(value),
       amountMode: "fixed",
-      attemptId: tradeAttemptId
+      attemptId: tradeAttemptId,
+      statusWriter: state.quickBuyModal?.open ? (message) => setQuickBuyModalStatus(message, "") : setTradeStatus
     });
     state.quickBuyLast = { ...state.quickBuyLast, status: "submitted" };
     if (autoExitEnabled) {
-      setTradeStatus("Connected wallet buy submitted. TP/SL choices were not server-armed because browser-wallet exits still require wallet approval.");
+      const message = "Connected wallet buy submitted. TP/SL choices were not server-armed because browser-wallet exits still require wallet approval.";
+      if (state.quickBuyModal?.open) setQuickBuyModalStatus(message, "");
+      else setTradeStatus(message);
     }
     return trade;
   }
+
+  render({ force: true, preserveSmartChartFrame: state.activeTab === "smartChart" });
+  await sleep(20);
 
   const payload = {
     tokenMint,
@@ -11790,6 +11852,62 @@ async function executeQuickBuyAmount({
   });
   state.quickBuyLast = { ...state.quickBuyLast, status: "submitted" };
   return data.trade;
+}
+
+async function executeChartConnectedBuy(tokenMint = "") {
+  const clickStartedAt = perfNow();
+  const amountSol = normalizedQuickBuyAmount($("[data-chart-buy-amount]")?.value || "");
+  const value = Number(amountSol);
+  if (!tokenMint) throw new Error("Select a token before buying.");
+  if (!Number.isFinite(value) || value <= 0) throw new Error("Enter a buy amount greater than zero.");
+  const walletIndex = $("[data-chart-buy-wallet]")?.value || "";
+  if (!isConnectedTradeWallet(walletIndex)) throw new Error("Choose the connected wallet before using browser-wallet approval.");
+  const tradeAttemptId = createClientAttemptId("chart-buy");
+  const form = {
+    tokenMint,
+    walletIndex,
+    slippageBps: $("[data-chart-buy-slippage]")?.value || "400"
+  };
+  const active = activeTradeAction("trade-buy", tokenMint, String(amountSol));
+  if (active) return state.tradeResult;
+  state.quickBuyLast = {
+    source: "chart-buy-panel",
+    tokenMint,
+    walletConnected: true,
+    customAmountValid: true,
+    presetAmount: "",
+    tradeAttemptId,
+    status: "submitting",
+    error: ""
+  };
+  setTradeAction("trade-buy", tokenMint, String(amountSol), {
+    state: "clicked",
+    tradeAttemptId,
+    clickedAt: new Date().toISOString()
+  });
+  setChartTradeStatus("Opening wallet approval...");
+  recordPerfEvent({
+    component: "post-trade",
+    action: "chart-browser-buy-click",
+    durationMs: perfNow() - clickStartedAt,
+    requestId: tradeAttemptId,
+    details: `browser-buy:${shortAddress(tokenMint)}:${amountSol}`
+  });
+  applyActionButtonStates();
+  const trade = await executeConnectedBrowserTrade({
+    side: "buy",
+    form,
+    actionDetail: String(amountSol),
+    amountSol: String(value),
+    amountMode: "fixed",
+    attemptId: tradeAttemptId,
+    statusWriter: setChartTradeStatus
+  });
+  state.quickBuyLast = { ...state.quickBuyLast, status: "submitted" };
+  state.chartTradeTab = "buy";
+  setChartTradeStatus(trade?.message || "Buy submitted from connected wallet.");
+  clearTradeActionLater("trade-buy", tokenMint, String(amountSol), 3000);
+  return trade;
 }
 
 async function confirmQuickBuyModal() {
@@ -12008,19 +12126,23 @@ async function sellPositionPercent(tokenMint, percentText = "100", options = {})
       });
       setError("");
       if (state.activeTab !== "smartChart") state.activeTab = "positions";
-      render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
-      await sleep(20);
+      const statusWriter = state.activeTab === "smartChart"
+        ? setChartTradeStatus
+        : (message) => setError(message);
+      statusWriter("Building wallet-approved sell...");
+      applyActionButtonStates();
       setManualSellAction(tokenMint, String(percent), { state: "submitting" });
       const trade = await executeConnectedBrowserTrade({
         side: "sell",
         form: {
           tokenMint,
           walletIndex: "connected",
-          slippageBps: "400"
+          slippageBps: options.slippageBps || "400"
         },
         actionDetail: `${percent}%`,
         percent: String(percent),
-        attemptId: manualSellAttemptId
+        attemptId: manualSellAttemptId,
+        statusWriter
       });
       state.tradeResult = trade;
       setManualSellAction(tokenMint, String(percent), {
@@ -12028,7 +12150,12 @@ async function sellPositionPercent(tokenMint, percentText = "100", options = {})
         signature: trade?.signature || ""
       });
       queuePostTradeRefresh(trade?.signature, "browser-manual-sell", { tradeAttemptId: manualSellAttemptId });
-      render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
+      if (state.activeTab === "smartChart") {
+        setChartTradeStatus(trade?.message || "Sell submitted from connected wallet.");
+        applyActionButtonStates();
+      } else {
+        render({ preserveSmartChartFrame: false });
+      }
       clearManualSellActionLater(tokenMint, String(percent), 3_000);
       return;
     }
@@ -12109,7 +12236,7 @@ async function sellPositionPercent(tokenMint, percentText = "100", options = {})
       details: publicErrorMessage(error.message || "Sell failed")
     });
     setError(error.message);
-    render();
+    render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
   }
 }
 
@@ -19244,13 +19371,19 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-position-sell]")) {
     event.preventDefault();
-    runDeferredUiTask(() => sellPositionPercent(target.dataset.positionSell || "", target.dataset.positionSellPercent || "100"));
+    event.stopPropagation();
+    await sellPositionPercent(target.dataset.positionSell || "", target.dataset.positionSellPercent || "100", {
+      slippageBps: state.activeTab === "smartChart" ? ($("[data-chart-buy-slippage]")?.value || "400") : "400"
+    });
     return;
   }
   if (target.matches("[data-position-sell-custom]")) {
     event.preventDefault();
+    event.stopPropagation();
     const percent = window.prompt("Sell what percent of this position?", "100");
-    if (percent) runDeferredUiTask(() => sellPositionPercent(target.dataset.positionSellCustom || "", percent));
+    if (percent) await sellPositionPercent(target.dataset.positionSellCustom || "", percent, {
+      slippageBps: state.activeTab === "smartChart" ? ($("[data-chart-buy-slippage]")?.value || "400") : "400"
+    });
     return;
   }
   if (target.matches("[data-run-tx-audit]")) {
@@ -19459,14 +19592,33 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-chart-confirm-buy]")) {
     const tokenMint = target.dataset.chartConfirmBuy || state.smartChartToken || "";
     event.preventDefault();
-    state.chartTradeStatus = "Buy queued. Opening wallet approval...";
+    event.stopPropagation();
+    const walletIndex = $("[data-chart-buy-wallet]")?.value || "";
+    if (isConnectedTradeWallet(walletIndex)) {
+      try {
+        target.dataset.actionState = "clicked";
+        target.disabled = true;
+        await executeChartConnectedBuy(tokenMint);
+      } catch (error) {
+        const message = publicErrorMessage(error.message || "Chart buy failed.");
+        const amountSol = normalizedQuickBuyAmount($("[data-chart-buy-amount]")?.value || "") || "custom";
+        setTradeAction("trade-buy", tokenMint, String(amountSol), {
+          state: "error",
+          error: message
+        });
+        clearTradeActionLater("trade-buy", tokenMint, String(amountSol), 4000);
+        setChartTradeStatus(message);
+        setError(message);
+        applyActionButtonStates();
+      }
+      return;
+    }
+    setChartTradeStatus("Buy queued. Opening wallet approval...");
     target.dataset.actionState = "clicked";
     target.disabled = true;
-    writeText($("[data-chart-trade-status]"), state.chartTradeStatus);
     runDeferredUiTask(async () => {
       try {
         const autoExit = readChartTradeAutoExit();
-        const walletIndex = $("[data-chart-buy-wallet]")?.value || "";
         await executeQuickBuyAmount({
           tokenMint,
           walletIndex,
@@ -19479,11 +19631,11 @@ document.addEventListener("click", async (event) => {
           source: "chart-buy-panel"
         });
         state.chartTradeTab = "buy";
-        state.chartTradeStatus = "Buy submitted. Refreshing position...";
+        setChartTradeStatus("Buy submitted. Refreshing position...");
         render({ force: true, preserveSmartChartFrame: true });
       } catch (error) {
         const message = publicErrorMessage(error.message || "Chart buy failed.");
-        state.chartTradeStatus = message;
+        setChartTradeStatus(message);
         setError(message);
         render({ force: true, preserveSmartChartFrame: true });
       }
@@ -19492,8 +19644,19 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-chart-confirm-sell]")) {
     event.preventDefault();
+    event.stopPropagation();
     const percent = $("[data-chart-sell-percent]")?.value || "";
-    if (percent) runDeferredUiTask(() => sellPositionPercent(target.dataset.chartConfirmSell || "", percent));
+    if (percent) {
+      try {
+        await sellPositionPercent(target.dataset.chartConfirmSell || "", percent, {
+          slippageBps: $("[data-chart-buy-slippage]")?.value || "400"
+        });
+      } catch (error) {
+        const message = publicErrorMessage(error.message || "Chart sell failed.");
+        setChartTradeStatus(message);
+        setError(message);
+      }
+    }
     return;
   }
   if (target.matches("[data-smart-chart-open]")) {

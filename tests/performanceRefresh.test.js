@@ -96,6 +96,7 @@ test("manual feed controls update immediately and refresh in deferred background
   assert.match(appSource, /target\.matches\("\[data-quick-buy-confirm\]"\)[\s\S]*runDeferredUiTask\(\(\) => confirmQuickBuyModal\(\)\)/);
   assert.match(appSource, /target\.matches\("\[data-protected-buy-confirm\]"\)[\s\S]*runDeferredUiTask\(\(\) => confirmProtectedBuyModal\(\)\)/);
   assert.match(appSource, /target\.matches\("\[data-quick-bundle-token\]"\)[\s\S]*runDeferredUiTask\(\(\) => quickPresetBundle/);
+  assert.match(appSource, /target\.matches\("\[data-chart-confirm-buy\]"\)[\s\S]*executeChartConnectedBuy\(tokenMint\)/);
   assert.match(appSource, /target\.matches\("\[data-chart-confirm-buy\]"\)[\s\S]*runDeferredUiTask\(async \(\) =>/);
   assert.match(functionBody("scheduleLivePairsAutoRefresh"), /document\.hidden/);
   assert.match(functionBody("scheduleLivePairsAutoRefresh"), /targetRefreshSeconds = state\.activeTab === "slimeScope" \? 12 : 8/);

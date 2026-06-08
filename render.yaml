@@ -28,6 +28,8 @@ services:
         value: false
       - key: SOLANA_RPC_URL
         sync: false
+      - key: SOLANA_VALIDATOR_RPC_URL
+        sync: false
       - key: HELIUS_RPC_URL
         sync: false
       - key: HELIUS_WS_URL
