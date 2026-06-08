@@ -17038,13 +17038,24 @@ html body main.shell[data-app] .slime-swap-route-note {
   html body main.shell[data-app][data-route="terminal"] .tabs > button::after,
   html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group > button::after,
   html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button::after {
+    color: rgba(248, 255, 238, 0.96) !important;
+    content: attr(data-label) !important;
     display: inline !important;
     font-size: 9px !important;
+    font-weight: 900 !important;
     line-height: 1 !important;
     max-width: calc(100% - 19px) !important;
     overflow: hidden !important;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85) !important;
     text-overflow: ellipsis !important;
     white-space: nowrap !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs > button[data-active="true"]::after,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group > button[data-active="true"]::after,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button[data-active="true"]::after {
+    color: #082100 !important;
+    text-shadow: 0 1px 0 rgba(255, 255, 255, 0.3) !important;
   }
 
   html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .dashboard-error {
