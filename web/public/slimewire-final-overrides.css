@@ -16556,3 +16556,401 @@ html body main.shell[data-app][data-route="intro"] .login-view.swamp-splash.swam
     width: min(560px, calc(100% - 34px)) !important;
   }
 }
+
+/* MOBILE_SCROLL_BADGE_NAV_FINAL_20260608_V1: make mobile scroll native again, flatten badge quests, and clean the desktop tool hub. */
+html body main.shell[data-app][data-route="terminal"] .tabs button[data-tab="trade"]::after {
+  content: "" !important;
+  display: none !important;
+}
+
+html body main.shell[data-app][data-route="terminal"] .tabs button[data-tab="trade"] {
+  font-size: 0 !important;
+}
+
+html body main.shell[data-app][data-route="terminal"] .tabs button[data-tab="trade"]::before {
+  margin-right: 4px !important;
+}
+
+html body main.shell[data-app][data-route="terminal"] .tabs button[data-tab="trade"]::after {
+  content: "Slime Swap" !important;
+  display: inline !important;
+  font-size: 10px !important;
+  line-height: 1 !important;
+  white-space: nowrap !important;
+}
+
+@media (min-width: 761px) {
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs {
+    align-content: stretch !important;
+    align-items: stretch !important;
+    display: grid !important;
+    gap: 4px !important;
+    grid-template-columns: repeat(14, minmax(72px, 1fr)) !important;
+    height: auto !important;
+    max-height: none !important;
+    min-height: 78px !important;
+    overflow: visible !important;
+    padding: 5px 8px !important;
+    scrollbar-width: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs::-webkit-scrollbar {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-section-label {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group[open] {
+    display: contents !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group > summary {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs > button,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button {
+    align-items: center !important;
+    border-radius: 8px !important;
+    display: inline-flex !important;
+    flex: none !important;
+    font-size: 0 !important;
+    gap: 4px !important;
+    height: 34px !important;
+    justify-content: center !important;
+    min-height: 34px !important;
+    min-width: 0 !important;
+    overflow: hidden !important;
+    padding: 3px 5px !important;
+    text-align: center !important;
+    width: auto !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs > button::before,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button::before {
+    flex: 0 0 14px !important;
+    height: 14px !important;
+    margin: 0 !important;
+    width: 14px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs > button::after,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button::after {
+    display: inline !important;
+    font-size: 9px !important;
+    line-height: 1 !important;
+    max-width: 100% !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+}
+
+@media (max-width: 900px) {
+  html body main.shell[data-app] .badge-showcase-card {
+    display: grid !important;
+    gap: 7px !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    padding: 10px !important;
+  }
+
+  html body main.shell[data-app] .badge-showcase-head {
+    align-items: center !important;
+    display: grid !important;
+    gap: 6px !important;
+    grid-template-columns: minmax(0, 1fr) auto !important;
+  }
+
+  html body main.shell[data-app] .badge-showcase-head h3 {
+    font-size: 16px !important;
+    line-height: 1.05 !important;
+    margin: 0 !important;
+  }
+
+  html body main.shell[data-app] .badge-showcase-head p {
+    display: none !important;
+  }
+
+  html body main.shell[data-app] .badge-showcase-head strong {
+    font-size: 11px !important;
+    padding: 4px 8px !important;
+  }
+
+  html body main.shell[data-app] .badge-progress {
+    height: 7px !important;
+    margin: 0 0 4px !important;
+  }
+
+  html body main.shell[data-app] .badge-grid {
+    display: grid !important;
+    gap: 6px !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    margin: 0 !important;
+    max-height: none !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    padding: 0 !important;
+    width: 100% !important;
+  }
+
+  html body main.shell[data-app] .earned-badge {
+    align-items: center !important;
+    border-radius: 10px !important;
+    display: grid !important;
+    gap: 3px 6px !important;
+    grid-template-columns: 24px minmax(0, 1fr) !important;
+    min-height: 54px !important;
+    padding: 7px !important;
+  }
+
+  html body main.shell[data-app] .earned-badge-icon {
+    grid-row: 1 / span 3 !important;
+    height: 24px !important;
+    width: 24px !important;
+  }
+
+  html body main.shell[data-app] .earned-badge-icon img {
+    height: 14px !important;
+    width: 14px !important;
+  }
+
+  html body main.shell[data-app] .earned-badge-quest {
+    font-size: 7px !important;
+    line-height: 1 !important;
+    padding: 2px 5px !important;
+    width: max-content !important;
+  }
+
+  html body main.shell[data-app] .earned-badge strong {
+    font-size: 10.5px !important;
+    line-height: 1.05 !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+
+  html body main.shell[data-app] .earned-badge small {
+    display: none !important;
+  }
+}
+
+@media (max-width: 760px) {
+  html:has(main.shell[data-app][data-route="terminal"]),
+  body:has(main.shell[data-app][data-route="terminal"]) {
+    height: auto !important;
+    min-height: 100% !important;
+    overflow-x: clip !important;
+    overflow-y: auto !important;
+    overscroll-behavior-y: auto !important;
+    position: static !important;
+    scroll-behavior: auto !important;
+    touch-action: pan-y !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"],
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard],
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .panel-host,
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > [data-panel] {
+    contain: none !important;
+    height: auto !important;
+    max-height: none !important;
+    min-height: 0 !important;
+    overflow-y: visible !important;
+    scroll-behavior: auto !important;
+    transform: none !important;
+    will-change: auto !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] {
+    padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] {
+    padding-right: calc(40px + max(3px, env(safe-area-inset-right, 0px))) !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs {
+    bottom: auto !important;
+    contain: layout style !important;
+    max-height: calc(100dvh - 112px) !important;
+    max-width: 36px !important;
+    min-width: 36px !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    padding: 3px 2px !important;
+    position: fixed !important;
+    right: max(3px, env(safe-area-inset-right, 0px)) !important;
+    scrollbar-width: none !important;
+    top: calc(112px + env(safe-area-inset-top, 0px)) !important;
+    transform: none !important;
+    width: 36px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs::-webkit-scrollbar {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs > button,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group > summary,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button {
+    flex: 0 0 32px !important;
+    height: 32px !important;
+    max-height: 32px !important;
+    max-width: 32px !important;
+    min-height: 32px !important;
+    min-width: 32px !important;
+    width: 32px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs button::after,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group summary::after,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button::after {
+    font-size: 5.8px !important;
+    max-width: 28px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group[open] {
+    max-width: 32px !important;
+    min-width: 32px !important;
+    overflow: visible !important;
+    width: 32px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group:not([open]) button {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group[open] {
+    display: grid !important;
+    gap: 3px !important;
+  }
+}
+
+/* SLIME_SWAP_ROUTER_PANEL_20260608_V1: Raydium-style swap controls using local wallet/position data only. */
+html body main.shell[data-app] .slime-swap-terminal {
+  background: linear-gradient(180deg, rgba(3, 20, 7, 0.84), rgba(0, 9, 3, 0.92)) !important;
+  border: 1px solid rgba(114, 255, 35, 0.22) !important;
+  border-radius: 12px !important;
+  display: grid !important;
+  gap: 8px !important;
+  grid-template-columns: minmax(0, 1fr) 38px minmax(0, 1fr) !important;
+  margin: 8px 0 !important;
+  padding: 10px !important;
+}
+
+html body main.shell[data-app] .slime-swap-asset-box {
+  background: rgba(0, 13, 5, 0.88) !important;
+  border: 1px solid rgba(124, 255, 42, 0.24) !important;
+  border-radius: 11px !important;
+  box-shadow: inset 0 0 18px rgba(58, 255, 32, 0.05) !important;
+  display: grid !important;
+  gap: 7px !important;
+  min-width: 0 !important;
+  padding: 10px !important;
+}
+
+html body main.shell[data-app] .slime-swap-asset-box > div {
+  align-items: start !important;
+  display: flex !important;
+  justify-content: space-between !important;
+}
+
+html body main.shell[data-app] .slime-swap-asset-box span,
+html body main.shell[data-app] .slime-swap-asset-box small,
+html body main.shell[data-app] .slime-swap-route-note {
+  color: rgba(220, 255, 208, 0.68) !important;
+  font-size: 10px !important;
+  line-height: 1.2 !important;
+}
+
+html body main.shell[data-app] .slime-swap-asset-box strong {
+  color: #efffe8 !important;
+  font-size: 22px !important;
+  line-height: 1 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+html body main.shell[data-app] .slime-swap-asset-box select,
+html body main.shell[data-app] .slime-swap-asset-box input {
+  background: rgba(0, 8, 3, 0.96) !important;
+  border: 1px solid rgba(117, 255, 37, 0.28) !important;
+  border-radius: 9px !important;
+  color: #f2ffe9 !important;
+  font-size: 12px !important;
+  min-height: 34px !important;
+  min-width: 0 !important;
+  padding: 7px 9px !important;
+  width: 100% !important;
+}
+
+html body main.shell[data-app] .slime-swap-reverse {
+  align-self: center !important;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  display: grid !important;
+  height: 38px !important;
+  min-height: 38px !important;
+  padding: 0 !important;
+  place-items: center !important;
+  width: 38px !important;
+}
+
+html body main.shell[data-app] .slime-swap-reverse .slime-swap-route-icon {
+  cursor: pointer !important;
+  height: 34px !important;
+  transition: transform 140ms ease, filter 140ms ease !important;
+  width: 34px !important;
+}
+
+html body main.shell[data-app] .slime-swap-reverse:hover .slime-swap-route-icon,
+html body main.shell[data-app] .slime-swap-reverse:focus-visible .slime-swap-route-icon {
+  filter: brightness(1.18) drop-shadow(0 0 10px rgba(140, 255, 42, 0.45)) !important;
+  transform: rotate(180deg) scale(1.04) !important;
+}
+
+html body main.shell[data-app] .slime-swap-route-note {
+  grid-column: 1 / -1 !important;
+  margin: 0 !important;
+}
+
+@media (max-width: 760px) {
+  html body main.shell[data-app] .slime-swap-terminal {
+    gap: 6px !important;
+    grid-template-columns: minmax(0, 1fr) 30px minmax(0, 1fr) !important;
+    padding: 7px !important;
+  }
+
+  html body main.shell[data-app] .slime-swap-asset-box {
+    border-radius: 9px !important;
+    gap: 5px !important;
+    padding: 7px !important;
+  }
+
+  html body main.shell[data-app] .slime-swap-asset-box strong {
+    font-size: 15px !important;
+  }
+
+  html body main.shell[data-app] .slime-swap-asset-box select,
+  html body main.shell[data-app] .slime-swap-asset-box input {
+    border-radius: 8px !important;
+    font-size: 10px !important;
+    min-height: 27px !important;
+    padding: 4px 6px !important;
+  }
+
+  html body main.shell[data-app] .slime-swap-reverse,
+  html body main.shell[data-app] .slime-swap-reverse .slime-swap-route-icon {
+    height: 28px !important;
+    width: 28px !important;
+  }
+}

@@ -323,6 +323,8 @@ const state = {
   scan: null,
   scanMode: "safe",
   tradeToken: "",
+  tradeSwapFrom: "SOL",
+  tradeSwapTo: "",
   tradeResult: null,
   tradePlanResult: null,
   tradePlans: [],
@@ -3738,6 +3740,99 @@ function totalSol() {
   return managedSolTotal() + connectedWalletSol();
 }
 
+const POPULAR_SWAP_TOKENS = [
+  { symbol: "SOL", name: "Solana", mint: "SOL", kind: "native" },
+  { symbol: "USDC", name: "USD Coin", mint: "EPjFWdd5AufqSSqeM2qer6k8zQfM3qNw6ddnCGWRPpC", kind: "popular" },
+  { symbol: "USDT", name: "Tether USD", mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoE5gXn4wYwG9ksz4T8Js3", kind: "popular" },
+  { symbol: "JUP", name: "Jupiter", mint: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", kind: "popular" },
+  { symbol: "RAY", name: "Raydium", mint: "4k3Dyjzvzp8eCTuFJYgmGnN95VhWPuTsf1KfzYEU7K1k", kind: "popular" },
+  { symbol: "BONK", name: "Bonk", mint: "DezXAZ8z7PnrnRJjz3uq8NgV8Q9ddCzB9Ckr7JpPvvR", kind: "popular" },
+  { symbol: "WIF", name: "dogwifhat", mint: "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLQBkRzUPzWf", kind: "popular" }
+];
+
+function normalizeSwapMint(value = "") {
+  const text = String(value || "").trim();
+  if (!text || text.toLowerCase() === "custom") return "";
+  if (text.toUpperCase() === "SOL") return "SOL";
+  return text;
+}
+
+function swapTokenRows() {
+  const rows = new Map();
+  const add = (token = {}) => {
+    const mint = normalizeSwapMint(token.mint || token.tokenMint || "");
+    if (!mint || rows.has(mint)) return;
+    rows.set(mint, {
+      mint,
+      symbol: String(token.symbol || token.shortMint || (mint === "SOL" ? "SOL" : shortAddress(mint)) || "").trim(),
+      name: String(token.name || token.label || "").trim(),
+      balance: token.balance || token.uiAmount || token.amount || "",
+      kind: token.kind || token.source || "held"
+    });
+  };
+  POPULAR_SWAP_TOKENS.forEach(add);
+  portfolioPositions().forEach((row) => add({
+    mint: row.tokenMint || row.mint,
+    symbol: row.symbol || row.shortMint,
+    name: row.name || "",
+    balance: row.uiAmount || row.amountToken || "",
+    kind: "wallet"
+  }));
+  return [...rows.values()];
+}
+
+function swapTokenByMint(value = "") {
+  const mint = normalizeSwapMint(value);
+  return swapTokenRows().find((token) => token.mint === mint) || null;
+}
+
+function swapTokenSelectOptions(selectedValue = "", options = {}) {
+  const selected = normalizeSwapMint(selectedValue);
+  const includeCustom = options.includeCustom !== false;
+  const tokens = swapTokenRows();
+  const hasSelectedToken = tokens.some((token) => token.mint === selected);
+  const tokenOptions = tokens.map((token) => {
+    const label = token.mint === "SOL"
+      ? "SOL"
+      : `${token.symbol || shortAddress(token.mint)}${token.kind === "wallet" ? " - in wallet" : token.name ? ` - ${token.name}` : ""}`;
+    return `<option value="${escapeHtml(token.mint)}" ${selected === token.mint ? "selected" : ""}>${escapeHtml(label)}</option>`;
+  }).join("");
+  const customSelected = includeCustom && (!selected || !hasSelectedToken);
+  return `${tokenOptions}${includeCustom ? `<option value="custom" ${customSelected ? "selected" : ""}>Custom CA</option>` : ""}`;
+}
+
+function currentSwapFrom() {
+  const from = normalizeSwapMint(state.tradeSwapFrom || "SOL") || "SOL";
+  return from;
+}
+
+function currentSwapTo() {
+  const from = currentSwapFrom();
+  const explicit = normalizeSwapMint(state.tradeSwapTo || "");
+  const token = normalizeSwapMint(state.tradeToken || "");
+  if (explicit && explicit !== from) return explicit;
+  if (token && token !== from) return token;
+  return from === "SOL" ? token : "SOL";
+}
+
+function swapRouteMode() {
+  const from = currentSwapFrom();
+  const to = currentSwapTo();
+  if (from === "SOL" && to && to !== "SOL") return "buy";
+  if (from !== "SOL" && (!to || to === "SOL")) return "sell";
+  if (from !== "SOL" && to && to !== "SOL" && from !== to) return "two-step";
+  return "select";
+}
+
+function swapRouteTokenMint(side = "buy") {
+  const from = normalizeSwapMint($("[data-swap-from]")?.value || state.tradeSwapFrom || "");
+  const to = normalizeSwapMint($("[data-swap-to]")?.value || state.tradeSwapTo || "");
+  const typed = String($("[data-trade-token]")?.value || state.tradeToken || "").trim();
+  if (side === "sell" && from && from !== "SOL") return from;
+  if (to && to !== "SOL") return to;
+  return typed;
+}
+
 function connectedWalletTokenRows() {
   const connected = state.connectedWalletBalance || state.user?.connectedWallet || null;
   if (!connected?.publicKey) return [];
@@ -6158,6 +6253,21 @@ function tradeHtml() {
     `;
   }
 
+  const swapFrom = currentSwapFrom();
+  const swapTo = currentSwapTo();
+  const swapFromToken = swapTokenByMint(swapFrom) || { symbol: swapFrom === "SOL" ? "SOL" : shortAddress(swapFrom), name: swapFrom === "SOL" ? "Solana" : "" };
+  const swapToToken = swapTokenByMint(swapTo) || { symbol: swapTo ? shortAddress(swapTo) : "Custom", name: swapTo ? "Selected token" : "Paste CA below" };
+  const routeMode = swapRouteMode();
+  const routeCopy = routeMode === "buy"
+    ? "Swap SOL into the selected token."
+    : routeMode === "sell"
+      ? "Swap the selected token back to SOL."
+      : routeMode === "two-step"
+        ? "Token-to-token uses a sell-to-SOL then buy route until direct routing is enabled."
+        : "Choose a token or paste a CA to prepare the route.";
+  const routeTokenMint = routeMode === "sell" ? swapFrom : swapTo;
+  const tokenInputValue = routeTokenMint && routeTokenMint !== "SOL" ? routeTokenMint : state.tradeToken;
+
   return `
     <section class="trade-layout">
       <article class="trade-card slime-swap-card">
@@ -6168,18 +6278,33 @@ function tradeHtml() {
             <p>${connected?.publicKey ? "Connected browser wallets stay ready for this session and open your wallet approval prompt for every swap." : "Paste a token CA, pick a wallet, then swap with the same safety checks used across SlimeWire."}</p>
           </div>
         </div>
-        <div class="slime-swap-route">
-          <div class="slime-swap-token-box">
-            <span>From</span>
-            <strong>SOL</strong>
-            <small>Wallet balance ${escapeHtml(totalSol().toFixed(4))} SOL</small>
+        <div class="slime-swap-terminal">
+          <div class="slime-swap-asset-box">
+            <div>
+              <span>From</span>
+              <strong>${escapeHtml(swapFromToken.symbol || shortAddress(swapFrom))}</strong>
+            </div>
+            <select data-swap-from aria-label="Swap from token">
+              ${swapTokenSelectOptions(swapFrom, { includeCustom: false })}
+            </select>
+            <input data-swap-amount type="number" min="0" step="0.01" inputmode="decimal" placeholder="${swapFrom === "SOL" ? "SOL amount" : "Sell %"}">
+            <small>${swapFrom === "SOL" ? `Balance ${escapeHtml(totalSol().toFixed(4))} SOL` : `${escapeHtml(swapFromToken.name || "Wallet token")} ${swapFromToken.balance ? `- ${escapeHtml(String(swapFromToken.balance))}` : ""}`}</small>
           </div>
-          <span class="slime-swap-route-icon" aria-hidden="true"></span>
-          <div class="slime-swap-token-box">
-            <span>To</span>
-            <strong>${escapeHtml(state.tradeToken ? shortAddress(state.tradeToken) : "Token CA")}</strong>
-            <small>${state.tradeToken ? "Selected token" : "Paste or choose a token"}</small>
+          <button type="button" class="slime-swap-reverse" data-swap-reverse aria-label="Reverse swap route">
+            <span class="slime-swap-route-icon" aria-hidden="true"></span>
+          </button>
+          <div class="slime-swap-asset-box">
+            <div>
+              <span>To</span>
+              <strong>${escapeHtml(swapToToken.symbol || (swapTo ? shortAddress(swapTo) : "Custom CA"))}</strong>
+            </div>
+            <select data-swap-to aria-label="Swap to token">
+              ${swapTokenSelectOptions(swapTo, { includeCustom: true })}
+            </select>
+            <input data-trade-token type="text" placeholder="Paste token mint / CA" value="${escapeHtml(tokenInputValue || "")}">
+            <small>${escapeHtml(swapToToken.name || (swapTo ? "Selected token" : "Paste or choose a token"))}</small>
           </div>
+          <p class="slime-swap-route-note">${escapeHtml(routeCopy)}</p>
         </div>
         <label>
           Wallet
@@ -6188,10 +6313,6 @@ function tradeHtml() {
           </select>
         </label>
         ${connected?.publicKey ? `<small class="trade-wallet-note">Phantom/Solflare controls remain unlocked until signout or disconnect, but every buy/sell still requires wallet confirmation. True unattended TP/SL needs managed SlimeWire wallets.</small>` : ""}
-        <label>
-          Token CA
-          <input data-trade-token type="text" placeholder="Paste Solana token mint" value="${escapeHtml(state.tradeToken)}">
-        </label>
         <label>
           Slippage
           <select data-trade-slippage data-custom-select="trade-slippage">
@@ -9648,13 +9769,20 @@ async function sharePnlCard(tokenMint, shareText) {
   }
 }
 
-function readTradeForm() {
+function readTradeForm(side = "buy") {
   const walletIndex = $("[data-trade-wallet]")?.value || "";
-  const tokenMint = $("[data-trade-token]")?.value?.trim() || "";
+  const tokenMint = swapRouteTokenMint(side) || $("[data-trade-token]")?.value?.trim() || "";
   const slippageBps = fieldValue("[data-trade-slippage]", "[data-trade-slippage-custom]", "400");
   if (!walletIndex) throw new Error("Choose a wallet first.");
   if (!tokenMint) throw new Error("Paste a token CA first.");
   state.tradeToken = tokenMint;
+  if (side === "sell") {
+    state.tradeSwapFrom = tokenMint;
+    state.tradeSwapTo = "SOL";
+  } else {
+    state.tradeSwapFrom = "SOL";
+    state.tradeSwapTo = tokenMint;
+  }
   return { walletIndex, tokenMint, slippageBps };
 }
 
@@ -9795,7 +9923,7 @@ async function executeWebBuy(amountSol, amountMode = "fixed") {
   let actionDetail = amountMode === "max" ? "max" : String(amountSol || "custom");
   let tradeAttemptId = "";
   try {
-    const form = readTradeForm();
+    const form = readTradeForm("buy");
     actionDetail = amountMode === "max" ? "max" : String(amountSol || "custom");
     const active = activeTradeAction("trade-buy", form.tokenMint, actionDetail);
     if (active) {
@@ -9941,7 +10069,7 @@ async function executeWebSell(percent) {
   let form = null;
   let detail = String(percent || "custom");
   try {
-    form = readTradeForm();
+    form = readTradeForm("sell");
     const value = Number.parseInt(percent, 10);
     detail = String(value || detail);
     if (!Number.isInteger(value) || value < 1 || value > 100) {
@@ -18562,17 +18690,32 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-trade-buy-quick]")) {
     await executeWebBuy(target.dataset.tradeBuyQuick);
   }
+  if (target.matches("[data-swap-reverse]")) {
+    const from = normalizeSwapMint($("[data-swap-from]")?.value || state.tradeSwapFrom || "SOL") || "SOL";
+    const to = normalizeSwapMint($("[data-swap-to]")?.value || state.tradeSwapTo || state.tradeToken || "");
+    state.tradeSwapFrom = to && to !== "custom" ? to : "SOL";
+    state.tradeSwapTo = from || "SOL";
+    state.tradeToken = state.tradeSwapFrom !== "SOL" ? state.tradeSwapFrom : state.tradeSwapTo !== "SOL" ? state.tradeSwapTo : state.tradeToken;
+    render({ force: true });
+    return;
+  }
+  if (target.matches("[data-swap-use-custom-amount]")) {
+    const amount = String($("[data-swap-amount]")?.value || "").trim();
+    if (swapRouteMode() === "sell") await executeWebSell(amount || "100");
+    else await executeWebBuy(amount);
+    return;
+  }
   if (target.matches("[data-trade-buy-max]")) {
     await executeWebBuy(null, "max");
   }
   if (target.matches("[data-trade-buy-custom]")) {
-    await executeWebBuy($("[data-buy-custom]")?.value);
+    await executeWebBuy($("[data-buy-custom]")?.value || $("[data-swap-amount]")?.value);
   }
   if (target.matches("[data-trade-sell-quick]")) {
     await executeWebSell(target.dataset.tradeSellQuick);
   }
   if (target.matches("[data-trade-sell-custom]")) {
-    await executeWebSell($("[data-sell-custom]")?.value);
+    await executeWebSell($("[data-sell-custom]")?.value || $("[data-swap-amount]")?.value);
   }
   if (target.matches("[data-trade-plan-start]")) {
     await createTradePlan();
@@ -18887,6 +19030,30 @@ document.addEventListener("change", async (event) => {
     syncCustomFields();
     syncTimerSellNoTimer(target);
   }
+  if (target?.matches?.("[data-swap-from]")) {
+    const from = normalizeSwapMint(target.value || "SOL") || "SOL";
+    state.tradeSwapFrom = from;
+    if (from !== "SOL") {
+      state.tradeToken = from;
+      state.tradeSwapTo = "SOL";
+    } else if (!normalizeSwapMint(state.tradeSwapTo || state.tradeToken || "")) {
+      state.tradeSwapTo = "";
+    }
+    render({ force: true });
+    return;
+  }
+  if (target?.matches?.("[data-swap-to]")) {
+    const to = normalizeSwapMint(target.value || "");
+    state.tradeSwapTo = to;
+    if (to && to !== "SOL") {
+      state.tradeToken = to;
+      const input = $("[data-trade-token]");
+      if (input) input.value = to;
+    }
+    if (!to) $("[data-trade-token]")?.focus?.({ preventScroll: true });
+    render({ force: true });
+    return;
+  }
   if (target?.matches?.("[data-fast-trade-preset]")) {
     const nextPresetId = target.value || "";
     if (nextPresetId === "custom") {
@@ -18974,6 +19141,12 @@ document.addEventListener("input", (event) => {
   if (target?.matches?.("[data-quick-buy-amount]")) {
     state.quickBuyAmountOverride = String(target.value || "").replace(/[^0-9.]/g, "").slice(0, 12);
     syncQuickBuyActionLabels();
+    return;
+  }
+  if (target?.matches?.("[data-trade-token]")) {
+    const mint = String(target.value || "").trim();
+    state.tradeToken = mint;
+    state.tradeSwapTo = mint;
     return;
   }
   if (target?.matches?.("[data-terminal-filter-field]")) {
