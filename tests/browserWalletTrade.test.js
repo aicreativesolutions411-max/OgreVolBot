@@ -73,6 +73,7 @@ test("browser wallet buy and sell sign locally instead of entering managed-walle
 test("top wallet status opens connect, wallets, or disconnect", () => {
   assert.match(htmlSource, /data-top-wallet-status/);
   assert.match(functionBody(appSource, "updateTopWalletConnectStatus"), /data-top-wallet-status/);
+  assert.match(functionBody(appSource, "updateTopWalletConnectStatus"), /Wallet: Connected/);
   assert.match(functionBody(appSource, "handleTopWalletStatusClick"), /disconnectBrowserWallet/);
   assert.match(functionBody(appSource, "handleTopWalletStatusClick"), /openWalletConnectChooser\(\{ returnPath: "\/terminal" \}\)/);
   assert.match(appSource, /target\.matches\("\[data-top-wallet-status\]"\)[\s\S]*handleTopWalletStatusClick\(\)/);

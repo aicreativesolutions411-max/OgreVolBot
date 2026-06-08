@@ -94,13 +94,14 @@ test("mobile right rail is fixed and Ogre Tools stays user-controlled", () => {
 
 test("mobile rail exposes the full desktop tool list", () => {
   assert.match(cssSource, /CHART_AGENT_TRADE_RAIL_POLISH_20260608_V1/);
+  assert.match(cssSource, /OGRE_AI_POOL_AND_HEADER_POLISH_V1/);
   assert.match(cssSource, /\[data-dashboard\] > \.tabs,[\s\S]*\[data-active-tab="smartChart"\] \[data-dashboard\] > \.tabs[\s\S]*flex-direction: column !important/);
   assert.match(cssSource, /\[data-dashboard\] > \.tabs \.nav-tool-group,[\s\S]*display: contents !important/);
   assert.match(cssSource, /\[data-dashboard\] > \.tabs button\[hidden\][\s\S]*display: none !important/);
   const labels = [...htmlSource.matchAll(/<button[^>]*data-label="([^"]+)"[^>]*>/g)]
     .filter((match) => !/\shidden(?:\s|>|=)/.test(match[0]))
     .map((match) => match[1]);
-  assert.deepEqual(labels, ["Live", "Home", "Chart", "Swap", "Pairs", "Trades", "Scope", "Watch", "KOL", "AI", "Pump", "Bundle", "Volume", "Launch", "Snipe", "Wallets", "Pos", "PnL"]);
+  assert.deepEqual(labels, ["Live", "Home", "Chart", "Swap", "Pairs", "Trades", "Scope", "Watch", "KOL", "AI", "Pump", "Bundle", "Volume", "Snipe", "Snipe", "Wallets", "Pos", "PnL"]);
 });
 
 test("mobile REC and wallet connect controls stay tappable in one sync row", () => {

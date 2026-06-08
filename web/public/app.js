@@ -53,6 +53,7 @@ const PERF_LOG_KEY = "slimewirePerfLog";
 const CRASH_LOG_KEY = "slimewireCrashLog";
 const TERMINAL_FEED_LOG_KEY = "slimewireTerminalFeedLog";
 const OGRE_AI_RECENT_MINTS_KEY = "slimewireOgreAiRecentMints";
+const OGRE_AI_FORM_STORAGE_KEY = "slimewireOgreAiFormPreset";
 const PERF_POST_MIN_DURATION_MS = 150;
 const LOCAL_DIAGNOSTIC_WRITE_DEBOUNCE_MS = 1_500;
 const WALLET_REFRESH_FORCE_COOLDOWN_MS = 10_000;
@@ -161,6 +162,35 @@ function rememberOgreAiMints(result) {
     window.sessionStorage?.setItem(OGRE_AI_RECENT_MINTS_KEY, JSON.stringify(next));
   } catch {
     // Ogre A.I. variety memory is optional and session-only.
+  }
+}
+
+function readStoredOgreAiFormPreset() {
+  try {
+    const preset = JSON.parse(window.sessionStorage?.getItem(OGRE_AI_FORM_STORAGE_KEY) || "{}") || {};
+    return preset && typeof preset === "object" ? preset : {};
+  } catch {
+    return {};
+  }
+}
+
+function rememberOgreAiFormPreset(preset = {}) {
+  try {
+    window.sessionStorage?.setItem(OGRE_AI_FORM_STORAGE_KEY, JSON.stringify({
+      amountSol: String(preset.amountSol || "").slice(0, 16),
+      runCount: String(preset.runCount || "1").slice(0, 4),
+      takeProfitSelect: String(preset.takeProfitSelect || "25").slice(0, 16),
+      takeProfitCustom: String(preset.takeProfitCustom || "").slice(0, 16),
+      stopLossSelect: String(preset.stopLossSelect || "8").slice(0, 16),
+      stopLossCustom: String(preset.stopLossCustom || "").slice(0, 16),
+      delaySelect: String(preset.delaySelect || "5").slice(0, 16),
+      delayCustom: String(preset.delayCustom || "").slice(0, 16),
+      slippageSelect: String(preset.slippageSelect || "400").slice(0, 16),
+      slippageCustom: String(preset.slippageCustom || "").slice(0, 16),
+      walletGroup: String(preset.walletGroup || "").slice(0, 48)
+    }));
+  } catch {
+    // Session preset memory should never block an Ogre A.I. run.
   }
 }
 
@@ -1410,10 +1440,22 @@ function applyActionButtonStates() {
     const base = buttonBaseLabel(button);
     const compact = button.matches?.("[data-top-refresh-wallet]");
     button.dataset.actionState = refreshState;
+    button.toggleAttribute("aria-busy", refreshState === "clicked" || refreshState === "refreshing");
+    if (compact) {
+      button.title = refreshState === "clicked" || refreshState === "refreshing"
+        ? "Refreshing wallet, positions, and PnL."
+        : refreshState === "success"
+          ? "Wallet refresh completed."
+          : refreshState === "error"
+            ? "Wallet refresh failed. Tap to retry."
+            : "Refresh wallet, positions, and PnL.";
+      button.textContent = base || "Refresh";
+      return;
+    }
     if (refreshState === "clicked" || refreshState === "refreshing") {
-      button.textContent = compact ? "Refresh..." : "Refreshing...";
+      button.textContent = "Refreshing...";
     } else if (refreshState === "success") {
-      button.textContent = compact ? "Done" : "Updated";
+      button.textContent = "Updated";
     } else if (refreshState === "error") {
       button.textContent = "Failed";
     } else {
@@ -4087,13 +4129,13 @@ function ageTextFromSeconds(seconds) {
 }
 
 function syncHealthLabel() {
-  if (state.walletRefreshing || state.walletRefreshStatus === "refreshing") return "Syncing...";
-  if (state.walletRefreshStatus === "timeout") return "Sync delayed";
-  if (state.walletRefreshError || state.walletRefreshStatus === "error") return `Sync failed - retry`;
+  if (state.walletRefreshing || state.walletRefreshStatus === "refreshing") return "Syncing";
+  if (state.walletRefreshStatus === "timeout") return "Delayed";
+  if (state.walletRefreshError || state.walletRefreshStatus === "error") return "Retry";
   const seconds = secondsSince(state.lastWalletRefreshAt);
-  if (seconds === null) return "Sync not run";
-  if (seconds > 45) return `Stale: ${ageTextFromSeconds(seconds)}`;
-  return seconds < 5 ? "Synced just now" : `Synced ${ageTextFromSeconds(seconds)}`;
+  if (seconds === null) return "Idle";
+  if (seconds > 45) return "Stale";
+  return "Synced";
 }
 
 function activePresetSummary() {
@@ -5335,10 +5377,10 @@ function updateTopWalletConnectStatus() {
   const connectedLike = Boolean(publicKey || managedCount);
   const label = connectedLike ? "Connected" : "Connect";
   const statusText = publicKey
-    ? `Wallet: ${connected.provider || "Connected"} ${shortAddress(publicKey)}`
+    ? "Wallet: Connected"
     : managedCount
-      ? `Wallets: ${managedCount} managed`
-      : "Status: Wallet not connected";
+      ? `Wallets: ${managedCount}`
+      : "Wallet: Connect";
   const title = publicKey
     ? `${connected.provider || "Browser wallet"} connected: ${shortAddress(publicKey)}`
     : managedCount
@@ -6094,7 +6136,7 @@ function quickBuySafetyBlockMessage(message = "") {
   const text = String(message || "");
   if (!text) return "";
   if (/token-?2022/i.test(text)) {
-    return "Fast buy is blocked for Token-2022 mints. Open the chart or full trade panel and review the token before any wallet action.";
+    return "Token-2022 needs a trusted Pump/Bonk/Meteora/Orca/Raydium pool before fast buy can continue. Open Chart/Full Trade if you want to inspect the route first.";
   }
   if (/token safety check failed|honeypot|honey\s*pot|mint authority|freeze authority|blacklist|cannot sell|sell blocked|no sell|rug|scam|liquidity (?:pulled|removed|drained)|lp (?:pulled|removed|drained)|no liquidity|pool drained|mayhem/i.test(text)) {
     return "Fast buy is blocked by token safety checks. Use Chart/Full Trade to inspect it; SlimeWire will not quick-buy risky route signals.";
@@ -7105,6 +7147,19 @@ function tradePlanResultHtml() {
   `;
 }
 
+function ogreAiPoolBadgeHtml(pick = {}) {
+  const raw = String(pick.poolLabel || pick.dexId || "").trim();
+  if (!raw) return "";
+  const text = raw.toLowerCase();
+  const label = text.includes("bonk") ? "Bonk"
+    : text.includes("meteora") ? "Meteora"
+      : text.includes("orca") ? "Orca"
+        : text.includes("raydium") ? "Raydium"
+          : text.includes("pump") ? "Pump"
+            : raw.slice(0, 16);
+  return `<span class="ogre-ai-pool-badge" title="${escapeHtml(raw)}">${escapeHtml(label)}</span>`;
+}
+
 function ogreAiResultHtml() {
   if (!state.ogreAiResult) {
     return `
@@ -7136,6 +7191,7 @@ function ogreAiResultHtml() {
           return `
             <div class="ogre-ai-pick-card">
               <strong>${escapeHtml(pick.symbol || plan.shortMint || "Pick")}</strong>
+              ${ogreAiPoolBadgeHtml(pick)}
               <span>${escapeHtml(pick.name || plan.tokenMint || "")}</span>
               <small>Score ${escapeHtml(pick.score || "n/a")} | MC ${escapeHtml(pick.marketCapLabel || "n/a")} | Liq ${escapeHtml(pick.liquidityLabel || "n/a")} | Age ${escapeHtml(pick.ageLabel || "n/a")}</small>
               ${Array.isArray(pick.reasons) && pick.reasons.length ? `<small>${pick.reasons.map((reason) => escapeHtml(reason)).join(" | ")}</small>` : ""}
@@ -7151,6 +7207,7 @@ function ogreAiResultHtml() {
         ${!plans.length ? picks.map((pick) => `
           <div class="ogre-ai-pick-card">
             <strong>${escapeHtml(pick.symbol || pick.shortMint || "Pick")}</strong>
+            ${ogreAiPoolBadgeHtml(pick)}
             <span>${escapeHtml(pick.name || pick.tokenMint || "")}</span>
             <small>Score ${escapeHtml(pick.score || "n/a")} | MC ${escapeHtml(pick.marketCapLabel || "n/a")} | Liq ${escapeHtml(pick.liquidityLabel || "n/a")} | Age ${escapeHtml(pick.ageLabel || "n/a")}</small>
             ${Array.isArray(pick.reasons) && pick.reasons.length ? `<small>${pick.reasons.map((reason) => escapeHtml(reason)).join(" | ")}</small>` : ""}
@@ -7172,6 +7229,13 @@ function ogreAiHtml() {
   if (!state.wallets.length) {
     return `${createWalletSection()}${emptyState("No managed wallets loaded", "Ogre A.I. needs managed/imported SlimeWire wallets so the server can submit TP/SL and timer exits after it buys.")}`;
   }
+  const storedPreset = readStoredOgreAiFormPreset();
+  const amountSol = storedPreset.amountSol || "0.1";
+  const runCount = storedPreset.runCount || "1";
+  const storedSelectValue = (selectValue, customValue, fallback) => {
+    const value = String(selectValue || fallback || "");
+    return value === "custom" ? String(customValue || "custom") : value;
+  };
 
   return `
     <section class="trade-layout ogre-ai-terminal">
@@ -7187,24 +7251,19 @@ function ogreAiHtml() {
         <div class="ogre-ai-grid" data-preserve-focus>
           <label>
             SOL per wallet
-            <input data-ogre-ai-amount inputmode="decimal" placeholder="0.1" value="0.1">
+            <input data-ogre-ai-amount inputmode="decimal" placeholder="0.1" value="${escapeHtml(amountSol)}">
           </label>
           <label>
             Orders to stack
             <select data-ogre-ai-runs>
-              <option value="1">1 order</option>
-              <option value="2">2 orders</option>
-              <option value="3">3 orders</option>
-              <option value="5">5 orders</option>
-              <option value="10">10 orders</option>
-              <option value="25">25 orders</option>
+              ${["1", "2", "3", "5", "10", "25"].map((value) => `<option value="${value}" ${runCount === value ? "selected" : ""}>${value} ${value === "1" ? "order" : "orders"}</option>`).join("")}
             </select>
           </label>
           ${selectWithCustomHtml({
             selectAttr: "data-ogre-ai-tp",
             customAttr: "data-ogre-ai-tp-custom",
             customFor: "ogre-ai-tp",
-            selected: "25",
+            selected: storedSelectValue(storedPreset.takeProfitSelect, storedPreset.takeProfitCustom, "25"),
             customType: "number",
             customPlaceholder: "Custom TP %",
             options: [
@@ -7220,7 +7279,7 @@ function ogreAiHtml() {
             selectAttr: "data-ogre-ai-sl",
             customAttr: "data-ogre-ai-sl-custom",
             customFor: "ogre-ai-sl",
-            selected: "8",
+            selected: storedSelectValue(storedPreset.stopLossSelect, storedPreset.stopLossCustom, "8"),
             customType: "number",
             customPlaceholder: "Custom SL %",
             options: [
@@ -7231,12 +7290,12 @@ function ogreAiHtml() {
               ["custom", "Custom"]
             ]
           })}
-          ${fallbackTimerSelectHtml("ogre-ai-delay", "data-ogre-ai-delay", "5")}
+          ${fallbackTimerSelectHtml("ogre-ai-delay", "data-ogre-ai-delay", storedSelectValue(storedPreset.delaySelect, storedPreset.delayCustom, "5"))}
           ${selectWithCustomHtml({
             selectAttr: "data-ogre-ai-slippage",
             customAttr: "data-ogre-ai-slippage-custom",
             customFor: "ogre-ai-slippage",
-            selected: "400",
+            selected: storedSelectValue(storedPreset.slippageSelect, storedPreset.slippageCustom, "400"),
             customType: "number",
             customPlaceholder: "Custom bps",
             options: [
@@ -7251,7 +7310,7 @@ function ogreAiHtml() {
         <div class="wallet-grid">
           ${walletChecksHtml("ogre-ai")}
         </div>
-        ${walletGroupHtml("ogre-ai")}
+        ${walletGroupHtml("ogre-ai", storedPreset.walletGroup || "")}
 
         <div class="card-actions">
           <button class="primary" type="button" data-ogre-ai-start ${state.ogreAiLoading ? "disabled" : ""}>${state.ogreAiLoading ? "Scanning..." : "Scan &amp; Ape"}</button>
@@ -10930,6 +10989,27 @@ function readOgreAiForm() {
   const amountSol = $("[data-ogre-ai-amount]")?.value?.trim() || "";
   const mode = "fresh_ape";
   const runCount = $("[data-ogre-ai-runs]")?.value || "1";
+  const takeProfitSelect = $("[data-ogre-ai-tp]")?.value || "25";
+  const takeProfitCustom = $("[data-ogre-ai-tp-custom]")?.value?.trim() || "";
+  const stopLossSelect = $("[data-ogre-ai-sl]")?.value || "8";
+  const stopLossCustom = $("[data-ogre-ai-sl-custom]")?.value?.trim() || "";
+  const delaySelect = $("[data-ogre-ai-delay]")?.value || "5";
+  const delayCustom = $("[data-ogre-ai-delay-custom]")?.value?.trim() || "";
+  const slippageSelect = $("[data-ogre-ai-slippage]")?.value || "400";
+  const slippageCustom = $("[data-ogre-ai-slippage-custom]")?.value?.trim() || "";
+  rememberOgreAiFormPreset({
+    amountSol,
+    runCount,
+    takeProfitSelect,
+    takeProfitCustom,
+    stopLossSelect,
+    stopLossCustom,
+    delaySelect,
+    delayCustom,
+    slippageSelect,
+    slippageCustom,
+    walletGroup
+  });
   const sellDelay = fieldValue("[data-ogre-ai-delay]", "[data-ogre-ai-delay-custom]", "5");
   const takeProfitPct = fieldValue("[data-ogre-ai-tp]", "[data-ogre-ai-tp-custom]", "25");
   const stopLossPct = fieldValue("[data-ogre-ai-sl]", "[data-ogre-ai-sl-custom]", "8");
@@ -12660,7 +12740,7 @@ function isUiBlockedSignalRow(row = {}) {
     row?.mintAuthority ? "mint authority" : "",
     row?.freezeAuthority ? "freeze authority" : ""
   ].flat().filter(Boolean).join(" ").toLowerCase();
-  if (/\b(honeypot|honey\s*pot|mintable|mint authority|freeze authority|freezable|freezeable|blacklist|cannot sell|can't sell|sell disabled|sell blocked|trading disabled|no sell|no route|rug|scam|token-2022|liquidity pulled|liquidity removed|liquidity drained|lp pulled|lp removed|lp drained|pool drained|no liquidity|liquidity drain|drained liquidity)\b/i.test(labels)) {
+  if (/\b(honeypot|honey\s*pot|mintable|mint authority|freeze authority|freezable|freezeable|blacklist|cannot sell|can't sell|sell disabled|sell blocked|trading disabled|no sell|no route|rug|scam|liquidity pulled|liquidity removed|liquidity drained|lp pulled|lp removed|lp drained|pool drained|no liquidity|liquidity drain|drained liquidity)\b/i.test(labels)) {
     return true;
   }
   const marketCap = firstUsefulNumber(row.marketCap, row.fdv);
@@ -18980,7 +19060,7 @@ document.addEventListener("click", async (event) => {
     return;
   }
   if (target.matches("[data-ogre-ai-start]")) {
-    await startOgreAiRun();
+    runDeferredUiTask(() => startOgreAiRun());
     return;
   }
   if (target.matches("[data-ogre-tek-market]")) {

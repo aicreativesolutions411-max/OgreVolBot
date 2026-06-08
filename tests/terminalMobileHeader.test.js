@@ -67,7 +67,7 @@ test("terminal topbar handlers are still wired to the existing actions", () => {
 
 test("terminal disconnected status is not duplicated visually in the sync card", () => {
   assert.match(appSource, /setText\("\[data-sync-health\]", hasWalletContext \? syncHealthLabel\(\) : "Sync idle"\)/);
-  assert.match(htmlSource, /<button type="button" class="top-wallet-status top-wallet-disconnected" data-top-wallet-status data-wallet-state="disconnected">Status: Wallet not connected<\/button>/);
+  assert.match(htmlSource, /<button type="button" class="top-wallet-status top-wallet-disconnected" data-top-wallet-status data-wallet-state="disconnected">Wallet: Connect<\/button>/);
 });
 
 test("terminal route cannot show the intro splash underneath the header", () => {

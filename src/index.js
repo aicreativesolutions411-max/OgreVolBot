@@ -12545,10 +12545,11 @@ async function assertTokenBuySafety({ tokenMint, taker, buyLamports, slippageBps
   if (safety.mintAuthority) {
     throw new Error("Token safety check failed: mint authority is still active.");
   }
-  if (safety.tokenProgram === TOKEN_2022_PROGRAM_ID.toBase58()) {
-    throw new Error("Token safety check failed: Token-2022 mints are blocked for fast buys.");
+  const market = await tokenMarketSafetyInfo(tokenMint).catch(() => null);
+  if (safety.tokenProgram === TOKEN_2022_PROGRAM_ID.toBase58() && !market?.trustedToken2022Pool) {
+    throw new Error("Token safety check failed: Token-2022 requires a trusted Pump/Bonk/Meteora/Orca/Raydium pool for fast buys.");
   }
-  await assertTokenMarketSafety(tokenMint);
+  await assertTokenMarketSafety(tokenMint, market);
 
   const buyOrder = await createJupiterOrder({
     taker,
@@ -12568,9 +12569,51 @@ async function assertTokenBuySafety({ tokenMint, taker, buyLamports, slippageBps
 const HARD_BLOCKED_BUY_RISK_RE = /\b(honeypot|honey\s*pot|mintable|mint authority|freeze authority|freezable|freezeable|blacklist|cannot sell|can't sell|sell disabled|sell blocked|trading disabled|no sell|no route|rug|scam|liquidity pulled|liquidity removed|liquidity drained|lp pulled|lp removed|lp drained|pool drained|no liquidity|liquidity drain|drained liquidity)\b/i;
 const THIN_LIQUIDITY_MARKET_CAP_USD = 100_000_000;
 const THIN_LIQUIDITY_MARKET_CAP_RATIO = 0.01;
+const TRUSTED_TOKEN_2022_POOL_RE = /\b(pump|pumpfun|pump\.fun|pumpswap|pumpamm|bonk|bonkfun|letsbonk|meteora|orca|raydium)\b/i;
 
-async function assertTokenMarketSafety(tokenMint) {
-  const market = await tokenMarketSafetyInfo(tokenMint).catch(() => null);
+function trustedToken2022PoolText(row = {}) {
+  return [
+    row.dexId,
+    row.dexName,
+    row.source,
+    row.category,
+    row.platform,
+    row.market,
+    row.pool,
+    row.poolName,
+    row.pairLabel,
+    row.profileSource,
+    row.profile?.source,
+    row.profile?.market,
+    row.dexPair?.dexId,
+    row.dexPair?.dexName,
+    row.dexPair?.labels,
+    row.labels,
+    row.tags,
+    row.tokenMint,
+    row.pairAddress,
+    row.pairUrl,
+    row.dexUrl
+  ].flat(Infinity).filter(Boolean).join(" ").toLowerCase();
+}
+
+function trustedToken2022PoolLabel(row = {}) {
+  const text = trustedToken2022PoolText(row);
+  if (/bonkfun|letsbonk|\bbonk\b/.test(text)) return "Bonk";
+  if (/meteora/.test(text)) return "Meteora";
+  if (/\borca\b/.test(text)) return "Orca";
+  if (/raydium/.test(text)) return "Raydium";
+  if (/pump/.test(text) || String(row.tokenMint || "").toLowerCase().endsWith("pump")) return "Pump";
+  return "";
+}
+
+function hasTrustedToken2022Pool(row = {}) {
+  const text = trustedToken2022PoolText(row);
+  return TRUSTED_TOKEN_2022_POOL_RE.test(text) || String(row.tokenMint || "").toLowerCase().endsWith("pump");
+}
+
+async function assertTokenMarketSafety(tokenMint, knownMarket = null) {
+  const market = knownMarket || await tokenMarketSafetyInfo(tokenMint).catch(() => null);
   if (!market) return;
   if (HARD_BLOCKED_BUY_RISK_RE.test(market.riskText || "")) {
     throw new Error("Token safety check failed: metadata contains honeypot/mintable/scam risk wording.");
@@ -12586,6 +12629,15 @@ async function tokenMarketSafetyInfo(tokenMint) {
   const dex = metadataFromDexPair(tokenMint, best);
   const marketCap = firstMeaningfulNumber(dex.marketCap, dex.fdv, best?.marketCap, best?.fdv) || 0;
   const liquidityUsd = firstMeaningfulNumber(dex.liquidityUsd, best?.liquidity?.usd) || 0;
+  const marketRow = {
+    ...dex,
+    dexId: dex.dexId || best?.dexId,
+    dexName: dex.dexName || best?.dexName || best?.dexId,
+    pairAddress: dex.pairAddress || best?.pairAddress,
+    pairUrl: dex.pairUrl || best?.url,
+    labels: best?.labels,
+    tokenMint
+  };
   const riskText = [
     dex.symbol,
     dex.name,
@@ -12596,7 +12648,17 @@ async function tokenMarketSafetyInfo(tokenMint) {
     best?.info?.websites?.map((item) => item?.label || item?.url),
     best?.info?.socials?.map((item) => `${item?.type || ""} ${item?.url || ""}`)
   ].flat(Infinity).filter(Boolean).join(" ").toLowerCase();
-  return { marketCap, liquidityUsd, riskText };
+  return {
+    marketCap,
+    liquidityUsd,
+    riskText,
+    dexId: marketRow.dexId || "",
+    dexName: marketRow.dexName || "",
+    pairAddress: marketRow.pairAddress || "",
+    pairUrl: marketRow.pairUrl || "",
+    poolLabel: trustedToken2022PoolLabel(marketRow),
+    trustedToken2022Pool: hasTrustedToken2022Pool(marketRow)
+  };
 }
 
 async function getMintSafetyInfo(tokenMint) {
@@ -24980,19 +25042,23 @@ async function filterOgreAiRowsForHardSafety(rows = [], limit = 40, defaults = {
   for (const row of candidates) {
     const riskFlags = new Set(Array.isArray(row.riskFlags) ? row.riskFlags.map((flag) => String(flag)) : []);
     const tokenProgram = String(row.tokenProgram || "");
+    const token2022Known = riskFlags.has("token2022") || tokenProgram === TOKEN_2022_PROGRAM_ID.toBase58();
+    const trustedToken2022 = hasTrustedToken2022Pool(row);
     const knownUnsafe = row.freezeAuthority
       || row.mintAuthority
-      || riskFlags.has("token2022")
       || riskFlags.has("freezeAuthorityActive")
       || riskFlags.has("mintAuthorityActive")
-      || tokenProgram === TOKEN_2022_PROGRAM_ID.toBase58();
+      || (token2022Known && !trustedToken2022);
     if (knownUnsafe) continue;
     const knownSafe = row.safetyStatus === "passed"
       || /mint\/freeze safety passed|safety passed|trade safety runs before buy/i.test(String(row.safetyNote || ""));
-    if (knownSafe) {
+    if (knownSafe || (token2022Known && trustedToken2022)) {
       pushAccepted(row, {
         tokenProgram: row.tokenProgram || "",
-        safetyNote: row.safetyNote || "Ogre A.I. mint/freeze safety passed"
+        token2022PoolLabel: token2022Known ? trustedToken2022PoolLabel(row) : row.token2022PoolLabel || "",
+        safetyNote: row.safetyNote || (token2022Known
+          ? "Token-2022 trusted pool; buy precheck verifies route before swap."
+          : "Ogre A.I. mint/freeze safety passed")
       });
     }
     if (accepted.length >= targetKeep) {
@@ -25009,11 +25075,15 @@ async function filterOgreAiRowsForHardSafety(rows = [], limit = 40, defaults = {
       if (!key || acceptedKeys.has(key)) return;
       try {
         const safety = await getMintSafetyInfo(row.tokenMint);
-        if (safety.tokenProgram === TOKEN_2022_PROGRAM_ID.toBase58()) return;
+        const safetyToken2022 = safety.tokenProgram === TOKEN_2022_PROGRAM_ID.toBase58();
+        if (safetyToken2022 && !hasTrustedToken2022Pool(row)) return;
         if (safety.freezeAuthority || safety.mintAuthority) return;
         pushAccepted(row, {
           tokenProgram: safety.tokenProgram,
-          safetyNote: "Ogre A.I. mint/freeze safety passed"
+          token2022PoolLabel: safetyToken2022 ? trustedToken2022PoolLabel(row) : row.token2022PoolLabel || "",
+          safetyNote: safetyToken2022
+            ? "Token-2022 trusted pool; mint/freeze safety passed"
+            : "Ogre A.I. mint/freeze safety passed"
         });
       } catch {
         pushAccepted(row, {
@@ -25064,9 +25134,11 @@ function webOgreAiPickReasons(row = {}) {
   const h1 = firstMeaningfulNumber(row.h1, row.priceChangeH1, row.change1h) || 0;
   const volume = firstMeaningfulNumber(row.volume5m, row.volumeM15, row.volumeM30, row.volumeH1) || 0;
   const liquidity = firstMeaningfulNumber(row.liquidityUsd) || 0;
+  const poolLabel = row.token2022PoolLabel || trustedToken2022PoolLabel(row);
   if (m5 > 0 || h1 > 0) reasons.push(`Momentum ${m5 ? `${m5.toFixed(1)}% 5m` : ""}${h1 ? `${m5 ? " / " : ""}${h1.toFixed(1)}% 1h` : ""}`);
   if (volume > 0) reasons.push(`Recent volume ${formatUsdCompact(volume)}`);
   if (liquidity > 0) reasons.push(`Liquidity ${formatUsdCompact(liquidity)}`);
+  if (poolLabel) reasons.push(`${poolLabel} pool`);
   for (const reason of [
     ...webOgreAiReasonList(row.bestPickInputs),
     ...webOgreAiReasonList(row.reasons)
@@ -25095,6 +25167,8 @@ function webOgreAiPickSummary(row = {}) {
     bucket: row.ogreAiBucket || "",
     targetFit: Number(row.ogreAiTargetFit || 0),
     targetPct: Number(row.ogreAiTargetPct || 0),
+    dexId: row.dexId || row.dexName || "",
+    poolLabel: row.token2022PoolLabel || trustedToken2022PoolLabel(row) || row.dexName || row.dexId || "",
     dexUrl: row.dexUrl || dexScreenerUrl(tokenMint),
     pumpUrl: row.pumpUrl || (webLivePairIsPump(row) ? pumpFunUrl(tokenMint) : ""),
     reasons: webOgreAiPickReasons(row)

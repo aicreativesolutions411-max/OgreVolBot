@@ -537,6 +537,41 @@ test("Ogre A.I. web panel exposes one fresh ape scan instead of modes", () => {
   assert.match(webAppSource, /Scan &amp; Ape/);
 });
 
+test("Ogre A.I. does not blanket-block Token-2022 trusted-pool candidates", () => {
+  assert.equal(isOgreAiBlockedRisk({
+    tokenMint: "TrustedPumpToken2022Mintpump",
+    dexId: "pumpswap",
+    riskFlags: ["token2022"],
+    safetyNote: "Token-2022 trusted pool; buy precheck verifies route before swap.",
+    marketCap: 6_500,
+    liquidityUsd: 50
+  }), false);
+  assert.equal(isOgreAiBlockedRisk({
+    tokenMint: "UnsafeMint",
+    dexId: "pumpswap",
+    riskFlags: ["token2022"],
+    safetyNote: "freeze authority active",
+    marketCap: 6_500,
+    liquidityUsd: 50
+  }), true);
+});
+
+test("Ogre A.I. and buy safety use trusted-pool Token-2022 routing instead of a blanket block", () => {
+  assert.match(serverSource, /TRUSTED_TOKEN_2022_POOL_RE/);
+  assert.match(serverFunctionBody("assertTokenBuySafety"), /market\?\.trustedToken2022Pool/);
+  assert.doesNotMatch(serverFunctionBody("assertTokenBuySafety"), /Token-2022 mints are blocked for fast buys/);
+  assert.match(serverFunctionBody("filterOgreAiRowsForHardSafety"), /hasTrustedToken2022Pool\(row\)/);
+  assert.match(serverFunctionBody("webOgreAiPickSummary"), /poolLabel/);
+});
+
+test("Ogre A.I. remembers form presets and defers scan clicks for mobile responsiveness", () => {
+  assert.match(webAppSource, /OGRE_AI_FORM_STORAGE_KEY/);
+  assert.match(webAppSource, /function readStoredOgreAiFormPreset/);
+  assert.match(webAppSource, /function rememberOgreAiFormPreset/);
+  assert.match(serverFunctionBody("webOgreAiPickSummary"), /poolLabel/);
+  assert.match(webAppSource, /target\.matches\("\[data-ogre-ai-start\]"\)[\s\S]*runDeferredUiTask\(\(\) => startOgreAiRun\(\)\)/);
+});
+
 test("Ogre A.I. fresh ape rejects dead fresh pumps with no starting volume", () => {
   const deadFresh = {
     tokenMint: "DeadFreshMintpump",
