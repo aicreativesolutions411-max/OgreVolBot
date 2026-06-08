@@ -14770,3 +14770,125 @@ html body main.shell[data-app] .swamp-market-ticker[data-market-ticker].is-ticke
     width: 36px !important;
   }
 }
+
+/* MOBILE_STABLE_RIGHT_RAIL_AND_STATUS_STRIP_20260608_V1: fixed mobile rail, no offscreen tool bubbles, tighter wallet status. */
+@media (max-width: 760px) {
+  html body main.shell[data-app][data-route="terminal"] {
+    overflow-x: clip !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    max-width: 100vw !important;
+    overflow-x: clip !important;
+    padding-right: calc(48px + max(4px, env(safe-area-inset-right, 0px))) !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .panel-host,
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > [data-panel] {
+    grid-column: 1 !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    padding-right: 0 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs {
+    align-items: center !important;
+    bottom: calc(14px + env(safe-area-inset-bottom, 0px)) !important;
+    contain: layout paint style !important;
+    grid-column: auto !important;
+    grid-row: auto !important;
+    height: auto !important;
+    justify-self: auto !important;
+    margin: 0 !important;
+    max-height: none !important;
+    max-width: 44px !important;
+    min-width: 44px !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    padding: 4px 3px !important;
+    position: fixed !important;
+    right: max(4px, env(safe-area-inset-right, 0px)) !important;
+    scrollbar-width: none !important;
+    top: calc(132px + env(safe-area-inset-top, 0px)) !important;
+    transform: translateZ(0) !important;
+    width: 44px !important;
+    z-index: 180 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs::before,
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs::after {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs > button,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group > summary,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button {
+    flex: 0 0 38px !important;
+    height: 38px !important;
+    max-height: 38px !important;
+    max-width: 38px !important;
+    min-height: 38px !important;
+    min-width: 38px !important;
+    width: 38px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group[open] {
+    align-items: center !important;
+    box-sizing: border-box !important;
+    max-width: 38px !important;
+    min-width: 38px !important;
+    overflow: hidden !important;
+    width: 38px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group[open] {
+    gap: 3px !important;
+    padding: 2px 0 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group[open] button {
+    flex: 0 0 34px !important;
+    height: 34px !important;
+    max-height: 34px !important;
+    max-width: 34px !important;
+    min-height: 34px !important;
+    min-width: 34px !important;
+    width: 34px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs button::after,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group summary::after,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button::after {
+    font-size: 6px !important;
+    line-height: 0.9 !important;
+    max-width: 31px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    padding: 3px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip .top-wallet-disconnected,
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip [data-sync-health],
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip [data-active-preset-label] {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip .top-tpsl-status,
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip [data-top-refresh-wallet] {
+    grid-column: span 2 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip [data-top-sol],
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip [data-top-portfolio] {
+    grid-column: span 2 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .terminal-title-row > span {
+    display: none !important;
+  }
+}

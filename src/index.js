@@ -96,8 +96,8 @@ const OGRE_AI_SCAN_BATCH_DELAY_MS = 120;
 const OGRE_AI_MAX_SCAN_ROWS = 140;
 const OGRE_AI_PLANS_PER_RUN_LIMIT = 25;
 const OGRE_AI_PLAN_BACKUP_MULTIPLIER = 5;
-const OGRE_AI_SAFETY_SCAN_BUDGET_MS = 2_200;
-const OGRE_AI_SOURCE_SOFT_TIMEOUT_MS = 2_200;
+const OGRE_AI_SAFETY_SCAN_BUDGET_MS = 1_700;
+const OGRE_AI_SOURCE_SOFT_TIMEOUT_MS = 1_500;
 
 const CONFIG = loadConfig();
 const connection = new Connection(CONFIG.rpcUrl, "confirmed");
@@ -24607,6 +24607,25 @@ async function ogreAiScannerRows(userId, defaults = {}, mode = "quick") {
   });
 }
 
+function cachedOgreAiMarketRows(defaults = {}, mode = "quick") {
+  try {
+    return uniqueSniperScoreRows(rowsFromCachedMarketFeeds())
+      .filter((row) => !isPumpMayhemToken(row))
+      .filter((row) => !isKnownBelowExitFloor(row))
+      .filter((row) => !hasHardBlockedLivePairRisk(row))
+      .filter((row) => !isOgreAiBlockedRisk(row))
+      .map((row) => ({
+        ...row,
+        ogreAiBucket: row.ogreAiBucket || row.bucket || "cached:market",
+        ogreAiSource: row.ogreAiSource || row.source || "cached-market"
+      }))
+      .sort((a, b) => compareOgreAiCandidates(a, b, defaults, mode))
+      .slice(0, OGRE_AI_MAX_SCAN_ROWS);
+  } catch {
+    return [];
+  }
+}
+
 async function selectOgreAiPicks(userId, body = {}, limit = 1) {
   const mode = normalizeOgreAiMode(body.mode);
   const defaults = ogreAiModeDefaults(mode);
@@ -24637,11 +24656,13 @@ async function selectOgreAiPicks(userId, body = {}, limit = 1) {
   }));
   const scannerRowsPromise = ogreAiScannerRows(userId, defaults, mode);
   const [feedResults, scannerRows] = await Promise.all([feedResultsPromise, scannerRowsPromise]);
-  const rows = feedResults.flatMap((result) => {
+  const feedRows = feedResults.flatMap((result) => {
     if (result.status !== "fulfilled") return [];
     const { bucket, feed } = result.value || {};
     return Array.isArray(feed?.rows) ? feed.rows.map((row) => ({ ...row, ogreAiBucket: bucket })) : [];
-  }).concat(scannerRows);
+  });
+  const cachedRows = cachedOgreAiMarketRows(defaults, mode);
+  const rows = uniqueSniperScoreRows(feedRows.concat(scannerRows, cachedRows));
 
   const baseRows = uniqueSniperScoreRows(rows)
     .filter((row) => !isPumpMayhemToken(row))
@@ -24656,7 +24677,14 @@ async function selectOgreAiPicks(userId, body = {}, limit = 1) {
     requestedRunCount: requestedPlanCount,
     diversityLimit: Math.max(limit, Number(defaults.diversityWindow || 0))
   });
-  const pool = buildOgreAiCandidatePool(safetyRows, defaults, mode);
+  const routePrecheckFallbackRows = safetyRows.length ? safetyRows : rankedBaseRows
+    .slice(0, Math.min(rankedBaseRows.length, Math.max(requestedPlanCount, limit, 12)))
+    .map((row) => ({
+      ...row,
+      safetyStatus: row.safetyStatus || "pending",
+      safetyNote: row.safetyNote || "Safety lookup timed out; buy precheck still runs before any swap."
+    }));
+  const pool = buildOgreAiCandidatePool(routePrecheckFallbackRows, defaults, mode);
   const scanState = nextSniperScanState(`web:${userId}`, `ogre-ai:${mode}`);
   const rankedCandidates = pool.candidates.sort((a, b) => compareOgreAiCandidates(a, b, defaults, mode));
   const rotated = rotateRowsForRefresh(rankedCandidates, Math.max(1, limit), scanState.refreshCount, { stickyCount: 0 });

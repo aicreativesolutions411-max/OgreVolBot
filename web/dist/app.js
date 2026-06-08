@@ -202,6 +202,14 @@ function getStoredNavTekOpen() {
   }
 }
 
+function hasStoredNavTekPreference() {
+  try {
+    return window.localStorage?.getItem("slimewireNavTekOpen") !== null;
+  } catch {
+    return false;
+  }
+}
+
 function setStoredNavTekOpen(open) {
   try {
     window.localStorage?.setItem("slimewireNavTekOpen", open ? "true" : "false");
@@ -4830,7 +4838,7 @@ function renderTabs() {
   });
   document.querySelectorAll(".tabs .nav-tool-group").forEach((group) => {
     const hasActiveChild = Boolean(group.querySelector('[data-active="true"]'));
-    group.open = hasActiveChild || Boolean(state.navTekOpen);
+    group.open = Boolean(state.navTekOpen) || (!hasStoredNavTekPreference() && hasActiveChild);
   });
 
   if (state.activeTab === "terminal") panel.innerHTML = terminalHtml();

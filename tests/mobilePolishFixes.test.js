@@ -83,6 +83,15 @@ test("mobile-only compression keeps wallet and controls out of the way", () => {
   assert.match(cssSource, /tabs \.nav-tool-group\[open\] button[\s\S]*height: 36px !important/);
 });
 
+test("mobile right rail is fixed and Ogre Tools stays user-controlled", () => {
+  assert.match(cssSource, /MOBILE_STABLE_RIGHT_RAIL_AND_STATUS_STRIP_20260608_V1/);
+  assert.match(cssSource, /\[data-dashboard\] > \.tabs[\s\S]*position: fixed !important/);
+  assert.match(cssSource, /\[data-dashboard\] > \.tabs[\s\S]*overflow-x: hidden !important[\s\S]*overflow-y: auto !important/);
+  assert.match(cssSource, /tabs \.nav-tool-group,[\s\S]*tabs \.nav-tool-group\[open\][\s\S]*overflow: hidden !important/);
+  assert.match(functionBody(appSource, "renderTabs"), /hasStoredNavTekPreference\(\)[\s\S]*hasActiveChild/);
+  assert.match(cssSource, /top-sync-strip \.top-wallet-disconnected,[\s\S]*data-active-preset-label[\s\S]*display: none !important/);
+});
+
 test("mobile feed refresh preserves scroll and avoids the start flicker render", () => {
   assert.match(functionBody(appSource, "captureStableFeedScrollSnapshot"), /documentY:[\s\S]*panelScrollTop:[\s\S]*dashboardScrollTop:/);
   assert.match(functionBody(appSource, "restoreStableFeedScrollSnapshot"), /restoreRawScrollPositions[\s\S]*document\.scrollingElement/);
