@@ -485,6 +485,36 @@ test("Ogre A.I. rejects stale pump rows without live volume for high-upside targ
   assert.equal(ogreAiTierForCandidate(stalePump, targetDefaults, "quick"), null);
 });
 
+test("Ogre A.I. lets super fresh low-market-cap pump pairs through with modest early signals", () => {
+  const targetDefaults = {
+    ...defaults,
+    takeProfitPct: 100,
+    targetTakeProfitPct: 100,
+    desiredPickCount: 1,
+    preferFreshLaunches: true,
+    maxMarketCap: 220_000,
+    minLiquidityUsd: 90
+  };
+  const superFresh = {
+    tokenMint: "SuperFreshPotentialMintpump",
+    bestPickScore: 28,
+    isPump: true,
+    marketCap: 18_000,
+    liquidityUsd: 24,
+    volume5m: 420,
+    m5: 5.5,
+    buys5m: 2,
+    sells5m: 0,
+    pairAgeMinutes: 3,
+    reasons: ["fresh launch", "early buys"]
+  };
+
+  const tier = ogreAiTierForCandidate(superFresh, targetDefaults, "quick");
+  assert.ok(["available", "balanced", "strict"].includes(tier), `expected usable tier, got ${tier}`);
+  const pool = buildOgreAiCandidatePool([superFresh], targetDefaults, "quick");
+  assert.equal(pool.candidates[0].tokenMint, "SuperFreshPotentialMintpump");
+});
+
 test("Ogre A.I. uses a fast cached-market fallback before failing empty", () => {
   assert.match(serverSource, /OGRE_AI_SOURCE_SOFT_TIMEOUT_MS = 1_500/);
   assert.match(serverSource, /OGRE_AI_SAFETY_SCAN_BUDGET_MS = 1_700/);

@@ -648,8 +648,8 @@ cannot accidentally display or refresh another tab's data.
 tabKey | label | component | endpoint | category | refreshMs | staleMs | cacheKey
 */
 const TERMINAL_FEEDS = [
-  { tabKey: "terminal", label: "Live Terminal", component: "terminalHtml", endpoint: "composite:/api/web/live-pairs+/api/web/kol/scan+/api/web/watchlist", category: "overview:terminal", refreshMs: 15_000, staleMs: 30_000, cacheKey: "terminal:overview", pageSize: 12, maxPageSize: 24, previewLimit: 8, supportsPagination: false },
-  { tabKey: "live", label: "Live Pairs - New Solana Pairs", component: "livePairsHtml", endpoint: "/api/web/live-pairs", category: "pairs:new", refreshMs: 15_000, staleMs: 30_000, cacheKey: "pairs:{bucket}:{sort}", pageSize: 50, maxPageSize: 100, previewLimit: 12, supportsPagination: true },
+  { tabKey: "terminal", label: "Live Terminal", component: "terminalHtml", endpoint: "composite:/api/web/live-pairs+/api/web/kol/scan+/api/web/watchlist", category: "overview:terminal", refreshMs: 8_000, staleMs: 24_000, cacheKey: "terminal:overview", pageSize: 12, maxPageSize: 24, previewLimit: 8, supportsPagination: false },
+  { tabKey: "live", label: "Live Pairs - New Solana Pairs", component: "livePairsHtml", endpoint: "/api/web/live-pairs", category: "pairs:new", refreshMs: 8_000, staleMs: 24_000, cacheKey: "pairs:{bucket}:{sort}", pageSize: 50, maxPageSize: 100, previewLimit: 12, supportsPagination: true },
   { tabKey: "liveTrades", label: "Live Trades - Recent Swaps", component: "liveTradesHtml", endpoint: "/api/web/pnl", category: "trades:recent", refreshMs: 8_000, staleMs: 20_000, cacheKey: "trades:recent", pageSize: 50, maxPageSize: 100, previewLimit: 10, supportsPagination: true },
   { tabKey: "slimeScope", label: "Slime Scope - Scanner Picks", component: "slimeScopeHtml", endpoint: "composite:/api/web/live-pairs+/api/web/sniper/scan", category: "scanner:slime-scope", refreshMs: 20_000, staleMs: 45_000, cacheKey: "scanner:slime-scope:{scopeMode}", pageSize: 50, maxPageSize: 100, previewLimit: 12, supportsPagination: true },
   { tabKey: "kol", label: "KOL Tracker - Social/KOL Signals", component: "kolHtml", endpoint: "/api/web/kol/scan", category: "signals:kol", refreshMs: 10_000, staleMs: 30_000, cacheKey: "signals:kol:{kolMode}:{kolWallet}", pageSize: 36, maxPageSize: 72, previewLimit: 12, supportsPagination: true },
@@ -2617,17 +2617,10 @@ async function loadWalletCore(options = {}) {
   const walletsPromise = api("/api/web/wallets", { timeoutMs });
   const balancesPromise = api(`/api/web/balances${forceQuery}`, { timeoutMs });
   const tradePlansPromise = api("/api/web/trade/plans", { timeoutMs });
-  const [wallets, balances, tradePlans] = await Promise.all([
-    walletsPromise,
-    balancesPromise,
-    tradePlansPromise
-  ]);
+  const balances = await balancesPromise;
   if (isStaleWalletRefresh()) return;
-  state.wallets = wallets.wallets || [];
   state.balances = balances.balances || [];
   state.connectedWalletBalance = balances.connectedWallet || null;
-  state.tradePlans = tradePlans.plans || [];
-  ensureAutoExitWatchForActivePlans();
   state.lastWalletRefreshAt = new Date().toISOString();
   state.walletRefreshError = "";
   perfMeasure("wallet-refresh", startedAt, {
@@ -2637,6 +2630,19 @@ async function loadWalletCore(options = {}) {
     details: `wallets=${state.wallets.length};connected=${Boolean(state.connectedWalletBalance)}`
   });
   if (options.progress !== false) render({ preserveSmartChartFrame: Boolean(options.preserveSmartChartFrame) });
+  const [walletsResult, tradePlansResult] = await Promise.all([
+    walletsPromise.then((wallets) => ({ ok: true, wallets })).catch((error) => ({ ok: false, error })),
+    tradePlansPromise.then((tradePlans) => ({ ok: true, tradePlans })).catch((error) => ({ ok: false, error }))
+  ]);
+  if (isStaleWalletRefresh()) return;
+  if (walletsResult.ok) state.wallets = walletsResult.wallets.wallets || state.wallets || [];
+  if (tradePlansResult.ok) {
+    state.tradePlans = tradePlansResult.tradePlans.plans || state.tradePlans || [];
+    ensureAutoExitWatchForActivePlans();
+  }
+  if (options.progress !== false && (walletsResult.ok || tradePlansResult.ok)) {
+    render({ preserveSmartChartFrame: Boolean(options.preserveSmartChartFrame) });
+  }
   if (options.deep) {
     const positionsStartedAt = perfNow();
     const positionsPromise = api(`/api/web/positions${positionsForceQuery}`, { timeoutMs }).catch((error) => ({ __error: error }));
@@ -2672,7 +2678,7 @@ function positionRowsNeedValueRefresh(rows = state.positions) {
   });
 }
 
-function schedulePositionsValueRefresh(delayMs = 300, reason = "positions-value-followup") {
+function schedulePositionsValueRefresh(delayMs = 120, reason = "positions-value-followup") {
   if (!state.user || !state.token) return;
   if (positionsValueRefreshTimer) window.clearTimeout(positionsValueRefreshTimer);
   positionsValueRefreshTimer = window.setTimeout(() => {
@@ -2741,7 +2747,7 @@ function refreshPortfolioSupplemental(reason = "portfolio-supplemental") {
   const startedAt = perfNow();
   Promise.allSettled([
     api("/api/web/balances?force=true", { timeoutMs: POSITIONS_REFRESH_TIMEOUT_MS }),
-    api("/api/web/pnl?force=true", { timeoutMs: POSITIONS_REFRESH_TIMEOUT_MS })
+    api("/api/web/pnl?force=true", { timeoutMs: POSITIONS_REFRESH_TIMEOUT_MS, dedupe: false })
   ]).then(([balancesResult, pnlResult]) => {
     if (balancesResult.status === "fulfilled") {
       state.balances = balancesResult.value.balances || state.balances || [];
@@ -2787,7 +2793,10 @@ async function refreshWalletPositions(options = {}) {
         details: `${options.reason || (options.silent ? "silent" : "refresh")};fast=${options.fast !== false}`
       });
       if (options.followUpValues && options.fast !== false && positionRowsNeedValueRefresh(state.positions)) {
-        schedulePositionsValueRefresh(350, `${options.reason || "positions"}-values`);
+        schedulePositionsValueRefresh(120, `${options.reason || "positions"}-values`);
+      }
+      if (options.syncPnl) {
+        refreshPortfolioSupplemental(`${options.reason || "positions"}-sync-pnl`);
       }
       return true;
     } catch (error) {
@@ -2838,7 +2847,7 @@ async function refreshPositionsOnly(options = {}) {
     finishPositionRefreshAction("success", { error: "" });
     refreshPortfolioSupplemental(`${options.reason || "positions-only"}-balances-pnl`);
     if (positionRowsNeedValueRefresh(state.positions)) {
-      schedulePositionsValueRefresh(250, `${options.reason || "positions-only"}-full-values`);
+      schedulePositionsValueRefresh(120, `${options.reason || "positions-only"}-full-values`);
     }
     perfMeasure("positions-only-refresh", startedAt, {
       component: "positions",
@@ -3205,6 +3214,8 @@ async function refreshTerminalFeed(tabKey = state.activeTab, options = {}) {
           fast: true,
           silent: true,
           reason: options.reason || "positions-feed-refresh",
+          followUpValues: true,
+          syncPnl: Boolean(options.force),
           timeoutMs: POSITIONS_FAST_REFRESH_TIMEOUT_MS
         });
       }
@@ -3551,9 +3562,8 @@ function scheduleLivePairsAutoRefresh() {
     return;
   }
   const refreshBucket = activeLivePairBucketForTab(state.activeTab);
-  const refreshSeconds = Number(currentLivePairs(refreshBucket)?.refreshSeconds || 30);
-  const minRefreshSeconds = state.activeTab === "slimeScope" ? 12 : 8;
-  const delayMs = Math.max(minRefreshSeconds, refreshSeconds) * 1000;
+  const targetRefreshSeconds = state.activeTab === "slimeScope" ? 12 : 8;
+  const delayMs = targetRefreshSeconds * 1000;
   const nextKey = `${state.activeTab}:${refreshBucket}:${state.terminalSort}:${delayMs}`;
   if (livePairsTimer && livePairsTimerKey === nextKey) return;
   clearLivePairsAutoRefreshTimer();
@@ -4040,7 +4050,7 @@ async function loadPostTradeSupplemental() {
   const startedAt = perfNow();
   try {
     const [pnl, tradePlans] = await Promise.allSettled([
-      api("/api/web/pnl"),
+      api("/api/web/pnl?force=true", { dedupe: false }),
       api("/api/web/trade/plans")
     ]);
     if (pnl.status === "fulfilled") state.pnl = pnl.value.pnl || state.pnl || null;
@@ -4062,7 +4072,7 @@ async function loadPostTradeSupplemental() {
   }
 }
 
-function scheduleWalletBackgroundRefresh(delayMs = 900, options = {}) {
+function scheduleWalletBackgroundRefresh(delayMs = 350, options = {}) {
   if (walletBackgroundRefreshTimer) {
     window.clearTimeout(walletBackgroundRefreshTimer);
   }
@@ -4073,7 +4083,7 @@ function scheduleWalletBackgroundRefresh(delayMs = 900, options = {}) {
       if (options.reason === "post-trade") {
         await Promise.all([
           loadPostTradeSupplemental(),
-          refreshWalletPositions({ force: false, fast: false, silent: true, reason: "post-trade-background-values" })
+          refreshWalletPositions({ force: true, fast: false, silent: true, syncPnl: true, reason: "post-trade-background-values" })
         ]);
       } else {
         await Promise.all([
@@ -4195,6 +4205,7 @@ async function refreshWalletState({ force = false, deep = false, reason = "manua
             fast: false,
             silent: true,
             followUpValues: false,
+            syncPnl: true,
             reason: `${reason}-positions-values`,
             timeoutMs: POSITIONS_REFRESH_TIMEOUT_MS
           }).then((refreshed) => {
@@ -4202,7 +4213,7 @@ async function refreshWalletState({ force = false, deep = false, reason = "manua
             else clearPendingPositionValues(`${reason}-positions-values-failed`);
           }).catch(() => clearPendingPositionValues(`${reason}-positions-values-failed`));
         }
-        scheduleWalletBackgroundRefresh(900, { reason });
+        scheduleWalletBackgroundRefresh(isPostTradeRefresh ? 200 : 350, { reason });
       }
       perfMeasure("wallet-refresh-total", startedAt, {
         component: "wallet",
@@ -4326,6 +4337,7 @@ function queuePostTradeRefresh(signature = "", reason = "post-trade", options = 
             fast: false,
             silent: true,
             followUpValues: false,
+            syncPnl: true,
             reason: "post-trade-values",
             timeoutMs: POSITIONS_REFRESH_TIMEOUT_MS
           }),
@@ -11613,11 +11625,6 @@ async function quickPresetTrade(tokenMint, presetOverride = null) {
     return;
   }
   try {
-    await ensureWebAccount(null, "Opening secure web profile...");
-    const walletIndex = preset.walletIndex || (preset.walletIndexes || [])[0] || "1";
-    if (!state.wallets.some((wallet) => String(wallet.index) === String(walletIndex))) {
-      throw new Error("This trade preset wallet is not loaded. Edit it in the Trade tab.");
-    }
     const amountSol = presetOverride ? normalizedQuickBuyAmount(preset.amountSol) : activeQuickBuyAmount(preset);
     if (!amountSol) throw new Error("Set a quick buy amount first.");
     actionDetail = String(amountSol);
@@ -11634,6 +11641,20 @@ async function quickPresetTrade(tokenMint, presetOverride = null) {
       return;
     }
     const tradeAttemptId = createClientAttemptId("quick-trade");
+    setTradeAction("trade-buy", tokenMint, actionDetail, {
+      state: "clicked",
+      tradeAttemptId,
+      clickedAt: new Date().toISOString()
+    });
+    setError("Quick buy queued. Checking preset wallet...");
+    state.tradeToken = tokenMint;
+    render();
+    await sleep(0);
+    await ensureWebAccount(null, "Opening secure web profile...");
+    const walletIndex = preset.walletIndex || (preset.walletIndexes || [])[0] || "1";
+    if (!state.wallets.some((wallet) => String(wallet.index) === String(walletIndex))) {
+      throw new Error("This trade preset wallet is not loaded. Edit it in the Trade tab.");
+    }
     const payload = {
       tokenMint,
       walletIndex,
@@ -11645,14 +11666,8 @@ async function quickPresetTrade(tokenMint, presetOverride = null) {
       sellDelay: preset.sellDelay || "off",
       sellPercent: preset.sellPercent || "100"
     };
-    setTradeAction("trade-buy", tokenMint, actionDetail, {
-      state: "clicked",
-      tradeAttemptId,
-      clickedAt: new Date().toISOString()
-    });
     setError("");
     state.tradeToken = tokenMint;
-    render();
     await sleep(20);
     const requestStartedAt = perfNow();
     setTradeAction("trade-buy", tokenMint, actionDetail, { state: "submitting" });
@@ -11702,6 +11717,10 @@ async function quickPresetBundle(tokenMint, presetOverride = null) {
     return;
   }
   try {
+    state.bundleToken = tokenMint;
+    setError("Bundle preset queued. Checking wallets...");
+    render();
+    await sleep(0);
     await ensureWebAccount(null, "Opening secure web profile...");
     const payload = {
       tokenMint,
@@ -18964,7 +18983,7 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-protected-buy-confirm]")) {
     event.preventDefault();
-    await confirmProtectedBuyModal();
+    runDeferredUiTask(() => confirmProtectedBuyModal());
     return;
   }
   if (target.matches("[data-quick-buy-modal-preset]")) {
@@ -18980,7 +18999,7 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-quick-buy-confirm]")) {
     event.preventDefault();
-    await confirmQuickBuyModal();
+    runDeferredUiTask(() => confirmQuickBuyModal());
     return;
   }
   if (target.matches("[data-preview-token]")) {
@@ -18999,16 +19018,19 @@ document.addEventListener("click", async (event) => {
     return;
   }
   if (target.matches("[data-position-sell]")) {
-    await sellPositionPercent(target.dataset.positionSell || "", target.dataset.positionSellPercent || "100");
+    event.preventDefault();
+    runDeferredUiTask(() => sellPositionPercent(target.dataset.positionSell || "", target.dataset.positionSellPercent || "100"));
     return;
   }
   if (target.matches("[data-position-sell-custom]")) {
+    event.preventDefault();
     const percent = window.prompt("Sell what percent of this position?", "100");
-    if (percent) await sellPositionPercent(target.dataset.positionSellCustom || "", percent);
+    if (percent) runDeferredUiTask(() => sellPositionPercent(target.dataset.positionSellCustom || "", percent));
     return;
   }
   if (target.matches("[data-run-tx-audit]")) {
-    await runTxAudit();
+    event.preventDefault();
+    runDeferredUiTask(() => runTxAudit());
     return;
   }
 
@@ -19179,7 +19201,12 @@ document.addEventListener("click", async (event) => {
     });
     return;
   }
-  if (target.matches("[data-quick-bundle-token]")) await quickPresetBundle(target.dataset.quickBundleToken || "");
+  if (target.matches("[data-quick-bundle-token]")) {
+    event.preventDefault();
+    event.stopPropagation();
+    runDeferredUiTask(() => quickPresetBundle(target.dataset.quickBundleToken || ""));
+    return;
+  }
   if (target.matches("[data-smart-chart-token]")) {
     openTokenChart(tokenRefFromMint(target.dataset.smartChartToken || "", { source: "chart-button" }), {
       defaultTab: "chart",
@@ -19208,7 +19235,9 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-chart-confirm-buy]")) {
     const tokenMint = target.dataset.chartConfirmBuy || state.smartChartToken || "";
-    try {
+    event.preventDefault();
+    runDeferredUiTask(async () => {
+      try {
       const autoExit = readChartTradeAutoExit();
       const walletIndex = $("[data-chart-buy-wallet]")?.value || "";
       await executeQuickBuyAmount({
@@ -19224,14 +19253,16 @@ document.addEventListener("click", async (event) => {
       });
       state.chartTradeTab = "buy";
       render({ force: true });
-    } catch (error) {
-      setError(error.message);
-    }
+      } catch (error) {
+        setError(error.message);
+      }
+    });
     return;
   }
   if (target.matches("[data-chart-confirm-sell]")) {
+    event.preventDefault();
     const percent = $("[data-chart-sell-percent]")?.value || "";
-    if (percent) await sellPositionPercent(target.dataset.chartConfirmSell || "", percent);
+    if (percent) runDeferredUiTask(() => sellPositionPercent(target.dataset.chartConfirmSell || "", percent));
     return;
   }
   if (target.matches("[data-smart-chart-open]")) {
@@ -19844,6 +19875,7 @@ function resumeLiveFeeds(event = null) {
         force: false,
         fast: true,
         silent: true,
+        followUpValues: true,
         reason: "visibility-position-resume",
         timeoutMs: POSITIONS_FAST_REFRESH_TIMEOUT_MS
       }).catch(() => {});

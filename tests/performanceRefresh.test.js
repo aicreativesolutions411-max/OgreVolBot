@@ -93,7 +93,13 @@ test("manual feed controls update immediately and refresh in deferred background
   assert.match(appSource, /data-refresh-live-pairs[\s\S]*runDeferredUiTask\(\(\) => refreshTerminalFeed/);
   assert.match(appSource, /data-refresh-watchlist[\s\S]*runDeferredUiTask\(\(\) => refreshTerminalFeed/);
   assert.match(appSource, /data-refresh-scan[\s\S]*runDeferredUiTask\(\(\) => refreshTerminalFeed/);
+  assert.match(appSource, /target\.matches\("\[data-quick-buy-confirm\]"\)[\s\S]*runDeferredUiTask\(\(\) => confirmQuickBuyModal\(\)\)/);
+  assert.match(appSource, /target\.matches\("\[data-protected-buy-confirm\]"\)[\s\S]*runDeferredUiTask\(\(\) => confirmProtectedBuyModal\(\)\)/);
+  assert.match(appSource, /target\.matches\("\[data-quick-bundle-token\]"\)[\s\S]*runDeferredUiTask\(\(\) => quickPresetBundle/);
+  assert.match(appSource, /target\.matches\("\[data-chart-confirm-buy\]"\)[\s\S]*runDeferredUiTask\(async \(\) =>/);
   assert.match(functionBody("scheduleLivePairsAutoRefresh"), /document\.hidden/);
+  assert.match(functionBody("scheduleLivePairsAutoRefresh"), /targetRefreshSeconds = state\.activeTab === "slimeScope" \? 12 : 8/);
+  assert.match(functionBody("scheduleLivePairsAutoRefresh"), /delayMs = targetRefreshSeconds \* 1000/);
 });
 
 test("wallet and positions refresh run in parallel phases and report durations", () => {
@@ -106,6 +112,9 @@ test("wallet and positions refresh run in parallel phases and report durations",
   assert.match(body, /cacheHit: Boolean\(positions\.cacheHit\)/);
   assert.match(body, /positions\.connectedWallet/);
   assert.match(functionBody("refreshWalletPositions"), /positions\.connectedWallet/);
+  assert.match(functionBody("refreshWalletPositions"), /options\.syncPnl/);
+  assert.match(functionBody("refreshPortfolioSupplemental"), /\/api\/web\/pnl\?force=true/);
+  assert.match(appSource, /function schedulePositionsValueRefresh\(delayMs = 120/);
 });
 
 test("tab switches render cached content before background revalidation", () => {
@@ -124,6 +133,8 @@ test("backend performance event logging is sanitized and read-only summary endpo
   assert.match(serverSource, /webPositionSummary/);
   assert.match(serverSource, /connectedScope/);
   assert.match(serverSource, /cachedWebSummary\("web:pnl"/);
+  assert.match(serverSource, /Math\.min\(CONFIG\.displayCacheFreshMs, 1_000\)/);
+  assert.match(serverSource, /Math\.min\(CONFIG\.displayCacheFreshMs, fast \? 750 : 1_000\)/);
   assert.match(serverSource, /cacheHit: summary\.cacheHit/);
   assert.match(serverSource, /refreshDurationMs: summary\.durationMs/);
   assert.doesNotMatch(functionBody("recordPerformanceEvent", serverSource), /privateKey|seed|Authorization|password/i);

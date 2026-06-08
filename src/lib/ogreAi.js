@@ -143,9 +143,14 @@ export function ogreAiTargetFitScore(row = {}, defaults = {}, mode = "quick") {
   const highTarget = targetPct >= 80;
   const steadyTarget = targetPct <= 30;
   const scoreSignal = clampNumber(stats.score, 0, 100) * (0.34 - targetIntensity * 0.08);
-  const momentumNeed = Math.max(6, targetPct * (0.18 + targetIntensity * 0.08));
+  const earlyPair = stats.ageMinutes !== null && stats.ageMinutes <= 45;
+  const momentumNeed = Math.max(4, targetPct * (earlyPair && highTarget ? 0.11 : 0.18 + targetIntensity * 0.08));
   const momentumSignal = clampNumber(stats.positivePriceMomentumPct / momentumNeed, 0, 1.35) * (18 + targetIntensity * 18);
-  const volumeBase = Math.max(250, stats.liquidityUsd * 0.35, targetPct * 35);
+  const volumeBase = Math.max(
+    earlyPair && highTarget ? 120 : 250,
+    stats.liquidityUsd * (earlyPair && highTarget ? 0.18 : 0.35),
+    targetPct * (earlyPair && highTarget ? 12 : 35)
+  );
   const volumeSignal = clampNumber(stats.volumeMomentumUsd / volumeBase, 0, 1.25) * (12 + targetIntensity * 12);
   const liquidityNeed = Math.max(80, Number(defaults.minLiquidityUsd || 350) * (targetIntensity > 0.5 ? 0.55 : 1));
   const liquiditySignal = clampNumber(stats.liquidityUsd / liquidityNeed, 0, 1.15) * (targetIntensity > 0.5 ? 8 : 15);
@@ -207,15 +212,15 @@ export function ogreAiTargetFitScore(row = {}, defaults = {}, mode = "quick") {
       : 0;
   const earlyMomentumBonus = (highTarget || defaults.preferFreshLaunches)
     ? (
-        (stats.ageMinutes !== null && stats.ageMinutes <= 12 ? 10 : stats.ageMinutes !== null && stats.ageMinutes <= 30 ? 7 : stats.ageMinutes !== null && stats.ageMinutes <= 60 ? 4 : 0)
-        + (stats.marketCap >= 8_000 && stats.marketCap <= 125_000 ? 8 : stats.marketCap > 125_000 && stats.marketCap <= 220_000 ? 4 : 0)
+        (stats.ageMinutes !== null && stats.ageMinutes <= 5 ? 14 : stats.ageMinutes !== null && stats.ageMinutes <= 12 ? 11 : stats.ageMinutes !== null && stats.ageMinutes <= 30 ? 8 : stats.ageMinutes !== null && stats.ageMinutes <= 60 ? 4 : 0)
+        + (stats.marketCap >= 3_000 && stats.marketCap <= 125_000 ? 10 : stats.marketCap > 125_000 && stats.marketCap <= 220_000 ? 5 : 0)
         + (stats.volumeToMarketCap >= 0.08 ? 9 : stats.volumeToMarketCap >= 0.04 ? 6 : stats.volumeToMarketCap >= 0.018 ? 3 : 0)
         + (stats.trades5m >= 10 ? 4 : stats.trades5m >= 4 ? 2 : 0)
       )
     : 0;
   const staleUpsidePenalty = highTarget
     ? (
-        (stats.ageMinutes !== null && stats.ageMinutes > 120 ? clampNumber((stats.ageMinutes - 120) / 60, 0, 4) * 8 : 0)
+        (stats.ageMinutes !== null && stats.ageMinutes > 150 ? clampNumber((stats.ageMinutes - 150) / 60, 0, 4) * 8 : 0)
         + (stats.volumeMomentumUsd < Math.max(600, targetPct * 25, stats.marketCap * 0.008) && stats.positivePriceMomentumPct < Math.max(8, targetPct * 0.1) ? 14 : 0)
         + (stats.trades5m > 0 && stats.trades5m < 3 ? 5 : 0)
       )
@@ -245,32 +250,39 @@ export function ogreAiTierForCandidate(row = {}, defaults = {}, mode = "quick") 
   const highTarget = targetPct >= 80;
   const mediumTarget = targetPct >= 50;
   const steadyTarget = targetPct <= 30;
-  const highTargetAgeOk = stats.ageMinutes === null || stats.ageMinutes <= 150;
+  const earlyPair = stats.ageMinutes !== null && stats.ageMinutes <= 45;
+  const superFreshPair = stats.ageMinutes !== null && stats.ageMinutes <= 15;
+  const lowMarketCap = stats.marketCap > 0 && stats.marketCap <= Math.min(maxMarketCap, 180_000);
+  const highTargetAgeOk = stats.ageMinutes === null || stats.ageMinutes <= 180;
   const freshAgeOk = stats.ageMinutes === null || stats.ageMinutes <= 240;
   const normalAgeOk = stats.ageMinutes === null || stats.ageMinutes <= 1440;
   const modeAgeOk = highTarget ? highTargetAgeOk : mode === "fresh" ? freshAgeOk : normalAgeOk;
   if (!modeAgeOk) return null;
 
   const highTargetActivityOk = !highTarget
-    || stats.volumeMomentumUsd >= Math.max(700, targetPct * 25, stats.marketCap * 0.01)
-    || (stats.positivePriceMomentumPct >= Math.max(8, targetPct * 0.1) && stats.trades5m >= 3)
-    || (stats.buyPressure >= 0.68 && stats.trades5m >= 4);
+    || stats.volumeMomentumUsd >= Math.max(250, targetPct * 12, stats.marketCap * 0.004)
+    || stats.volumeToMarketCap >= 0.012
+    || (stats.positivePriceMomentumPct >= Math.max(4, targetPct * 0.055) && stats.trades5m >= (superFreshPair ? 1 : 2))
+    || (stats.buyPressure >= 0.58 && stats.trades5m >= (superFreshPair ? 2 : 3))
+    || (superFreshPair && lowMarketCap && (stats.isPump || stats.score >= 25));
   const pumpMomentumOk = stats.isPump
     && (stats.ageMinutes === null || stats.ageMinutes <= 180)
-    && (stats.volumeMomentumUsd >= Math.max(700, targetPct * 20) || stats.trades5m >= 4 || stats.positivePriceMomentumPct >= Math.max(8, targetPct * 0.1));
+    && (stats.volumeMomentumUsd >= Math.max(250, targetPct * 10) || stats.trades5m >= 2 || stats.positivePriceMomentumPct >= Math.max(4, targetPct * 0.05));
   const targetMomentumOk = !highTarget
-    || stats.positivePriceMomentumPct >= Math.max(8, targetPct * 0.12)
-    || stats.volumeMomentumUsd >= Math.max(1_200, targetPct * 45)
-    || stats.buyPressure >= 0.62
+    || stats.positivePriceMomentumPct >= Math.max(4, targetPct * 0.06)
+    || stats.volumeMomentumUsd >= Math.max(350, targetPct * 16)
+    || stats.volumeToMarketCap >= 0.015
+    || stats.buyPressure >= 0.58
+    || (superFreshPair && lowMarketCap && stats.score >= 25)
     || pumpMomentumOk;
-  const strictFitNeed = highTarget ? 62 : mediumTarget ? 58 : 54;
-  const balancedFitNeed = highTarget ? 48 : mediumTarget ? 44 : 40;
-  const availableFitNeed = highTarget ? 36 : mediumTarget ? 32 : 26;
-  const strictLiquidityNeed = highTarget ? Math.max(90, minLiquidityUsd * 0.45) : minLiquidityUsd;
-  const balancedLiquidityNeed = highTarget ? Math.max(60, minLiquidityUsd * 0.2) : Math.max(75, minLiquidityUsd * 0.35);
+  const strictFitNeed = highTarget ? 54 : mediumTarget ? 58 : 54;
+  const balancedFitNeed = highTarget ? 38 : mediumTarget ? 44 : 40;
+  const availableFitNeed = highTarget ? 24 : mediumTarget ? 32 : 26;
+  const strictLiquidityNeed = highTarget ? Math.max(45, minLiquidityUsd * 0.22) : minLiquidityUsd;
+  const balancedLiquidityNeed = highTarget ? Math.max(25, minLiquidityUsd * 0.12) : Math.max(75, minLiquidityUsd * 0.35);
   const marketCapLimit = highTarget ? maxMarketCap : mediumTarget ? maxMarketCap * 1.1 : maxMarketCap;
   const targetShapeOk = highTarget
-    ? (!stats.marketCap || stats.marketCap <= maxMarketCap) && (stats.ageMinutes === null || stats.ageMinutes <= 120)
+    ? (!stats.marketCap || stats.marketCap <= maxMarketCap) && (stats.ageMinutes === null || stats.ageMinutes <= 180)
     : steadyTarget
       ? (stats.ageMinutes === null || stats.ageMinutes >= 12 || stats.liquidityUsd >= minLiquidityUsd * 2)
       : true;
@@ -301,12 +313,12 @@ export function ogreAiTierForCandidate(row = {}, defaults = {}, mode = "quick") 
   const hasMomentum = stats.volume5m > 0 || stats.volumeM15 > 0 || stats.volumeM30 > 0 || stats.volumeH1 > 0 || stats.isPump;
   if (
     targetFit >= availableFitNeed
-    && stats.score >= 20
+    && stats.score >= (highTarget && earlyPair ? 12 : 20)
     && targetShapeOk
     && hasMomentum
     && (!highTarget || highTargetActivityOk)
     && (!stats.marketCap || stats.marketCap <= maxMarketCap * 2)
-    && (!stats.liquidityUsd || stats.liquidityUsd >= 50 || stats.isPump)
+    && (!stats.liquidityUsd || stats.liquidityUsd >= (highTarget && earlyPair ? 15 : 50) || stats.isPump)
   ) {
     return "available";
   }
@@ -356,12 +368,13 @@ function ogreAiDiversityScore(row = {}, defaults = {}, mode = "quick", recentSet
     - index * 0.08;
 
   if (highTarget || defaults.preferFreshLaunches) {
-    if (stats.ageMinutes !== null && stats.ageMinutes <= 15) score += 11;
+    if (stats.ageMinutes !== null && stats.ageMinutes <= 5) score += 16;
+    else if (stats.ageMinutes !== null && stats.ageMinutes <= 15) score += 12;
     else if (stats.ageMinutes !== null && stats.ageMinutes <= 60) score += 6;
     else if (stats.ageMinutes !== null && stats.ageMinutes > 120) score -= 14;
-    if (stats.marketCap >= 8_000 && stats.marketCap <= 125_000) score += 10;
+    if (stats.marketCap >= 3_000 && stats.marketCap <= 125_000) score += 12;
     else if (stats.marketCap > 125_000 && stats.marketCap <= 220_000) score += 5;
-    if (stats.volumeMomentumUsd >= Math.max(1_200, targetPct * 45) || stats.volumeToMarketCap >= 0.04) score += 6;
+    if (stats.volumeMomentumUsd >= Math.max(350, targetPct * 16) || stats.volumeToMarketCap >= 0.018) score += 7;
     if (stats.buyPressure >= 0.62 && stats.trades5m >= 4) score += 4;
   }
 
@@ -439,11 +452,13 @@ export function buildOgreAiCandidatePool(rows = [], defaults = {}, mode = "quick
       const stats = ogreAiCandidateStats(row);
       const maxMarketCap = Number(defaults.maxMarketCap || 750_000);
       const targetPct = ogreAiTargetProfitPct(defaults);
+      const earlyTarget = targetPct >= 80 || defaults.preferFreshLaunches;
       const ageOk = stats.ageMinutes === null
-        || stats.ageMinutes <= (targetPct >= 80 ? 120 : mode === "fresh" ? 180 : 1440);
-      const capOk = !stats.marketCap || stats.marketCap <= maxMarketCap * (targetPct >= 80 ? 1.25 : 3);
+        || stats.ageMinutes <= (earlyTarget ? 180 : mode === "fresh" ? 180 : 1440);
+      const capOk = !stats.marketCap || stats.marketCap <= maxMarketCap * (earlyTarget ? 1.5 : 3);
       const hasSomeSignal = stats.hasActivity
         || stats.score > 0
+        || (earlyTarget && stats.isPump && stats.ageMinutes !== null && stats.ageMinutes <= 45)
         || Array.isArray(row.bestPickInputs) && row.bestPickInputs.length > 0
         || Array.isArray(row.reasons) && row.reasons.length > 0;
       if (ageOk && capOk && hasSomeSignal) {

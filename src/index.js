@@ -2511,7 +2511,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
 
     if (request.method === "GET" && pathname === "/api/web/balances") {
       const force = parseBoolean(requestUrl.searchParams.get("force") || "false");
-      const summary = await cachedWebSummary("web:balances", auth.userId, { force }, force ? 0 : CONFIG.displayCacheFreshMs, async () => {
+      const summary = await cachedWebSummary("web:balances", auth.userId, { force }, force ? 0 : Math.min(CONFIG.displayCacheFreshMs, 1_000), async () => {
         const [balances, connectedWallet] = await Promise.all([
           webBalanceRows(auth.userId, { force }),
           webConnectedWalletBalance(auth.userId, { force })
@@ -2537,7 +2537,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
       const connectedScope = profile?.connectedWallet?.publicKey
         ? crypto.createHash("sha1").update(String(profile.connectedWallet.publicKey)).digest("hex").slice(0, 12)
         : "no-connected-wallet";
-      const summary = await cachedWebSummary(`${fast ? "web:positions:fast" : "web:positions"}:${connectedScope}`, auth.userId, { force }, force ? 0 : CONFIG.displayCacheFreshMs, async () => (
+      const summary = await cachedWebSummary(`${fast ? "web:positions:fast" : "web:positions"}:${connectedScope}`, auth.userId, { force }, force ? 0 : Math.min(CONFIG.displayCacheFreshMs, fast ? 750 : 1_000), async () => (
         await webPositionSummary(auth.userId, { force, fast })
       ));
       sendWebJson(request, response, 200, {
@@ -2555,7 +2555,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
 
     if (request.method === "GET" && pathname === "/api/web/pnl") {
       const force = parseBoolean(requestUrl.searchParams.get("force") || "false");
-      const summary = await cachedWebSummary("web:pnl", auth.userId, { force }, force ? 0 : CONFIG.displayCacheFreshMs, async () => ({
+      const summary = await cachedWebSummary("web:pnl", auth.userId, { force }, force ? 0 : Math.min(CONFIG.displayCacheFreshMs, 1_000), async () => ({
         pnl: await webPnlSummary(auth.userId)
       }));
       sendWebJson(request, response, 200, {

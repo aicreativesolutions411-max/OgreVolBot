@@ -57,7 +57,7 @@ test("post-trade refresh invalidates only affected keys and never full terminal 
 
 test("post-trade supplemental refresh does not reload watchlist, launch watches, presets, or hidden feeds", () => {
   const body = functionBody(appSource, "loadPostTradeSupplemental");
-  assert.match(body, /api\("\/api\/web\/pnl"\)/);
+  assert.match(body, /api\("\/api\/web\/pnl\?force=true", \{ dedupe: false \}\)/);
   assert.match(body, /api\("\/api\/web\/trade\/plans"\)/);
   assert.doesNotMatch(body, /watchlist|launch\/watches|presets|refreshTerminalFeed|refreshVisibleTerminalFeeds/);
 });
