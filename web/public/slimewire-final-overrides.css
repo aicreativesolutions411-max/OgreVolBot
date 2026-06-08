@@ -17637,3 +17637,126 @@ html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group butt
     flex: 0 0 auto !important;
   }
 }
+
+/* MOBILE_RAIL_POSITION_SWEEP_20260608_V1: keep nav labels single-line, rail complete, and topbar rows visible. */
+@media (min-width: 761px) {
+  html body main.shell[data-app][data-route="terminal"] .tabs > button,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button {
+    color: transparent !important;
+    font-size: 0 !important;
+    line-height: 0 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs > button::after,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button::after {
+    color: rgba(248, 255, 238, 0.96) !important;
+    content: attr(data-label) !important;
+    display: block !important;
+    font-size: 7.6px !important;
+    line-height: 0.95 !important;
+    max-height: 9px !important;
+    overflow: hidden !important;
+    position: static !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs > button[data-active="true"]::after,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button[data-active="true"]::after {
+    color: #082100 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs .nav-tool-group button {
+    color: transparent !important;
+    font-size: 0 !important;
+    line-height: 0 !important;
+  }
+}
+
+@media (max-width: 760px) {
+  html body main.shell[data-app][data-route="terminal"] {
+    display: flex !important;
+    flex-direction: column !important;
+  }
+
+  html body main.shell[data-app] .mobile-profile-shortcut {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] > .topbar {
+    grid-template-areas:
+      ". powered clip"
+      "right right right" !important;
+    grid-template-columns: minmax(0, 1fr) auto minmax(48px, 1fr) !important;
+    order: 2 !important;
+    overflow: visible !important;
+    padding:
+      4px calc(48px + env(safe-area-inset-right, 0px))
+      5px max(7px, env(safe-area-inset-left, 0px)) !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] > .swamp-market-ticker {
+    order: 1 !important;
+    position: relative !important;
+    top: auto !important;
+    z-index: 4200 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] {
+    order: 3 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs {
+    align-content: start !important;
+    bottom: max(5px, env(safe-area-inset-bottom, 0px)) !important;
+    height: auto !important;
+    max-height: calc(100dvh - 150px - env(safe-area-inset-bottom, 0px)) !important;
+    overflow-y: auto !important;
+    right: max(2px, env(safe-area-inset-right, 0px)) !important;
+    top: calc(150px + env(safe-area-inset-top, 0px)) !important;
+    width: 42px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs > button,
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs .nav-tool-group button {
+    color: transparent !important;
+    font-size: 0 !important;
+    line-height: 0 !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs > button::after,
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs .nav-tool-group button::after {
+    color: rgba(248, 255, 238, 0.96) !important;
+    content: attr(data-label) !important;
+    display: block !important;
+    font-size: 5.7px !important;
+    line-height: 0.95 !important;
+    max-width: 36px !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+
+  .ogre-agent-shell:not(.is-open) {
+    bottom: auto !important;
+    box-sizing: border-box !important;
+    left: auto !important;
+    max-width: 42px !important;
+    min-width: 42px !important;
+    right: max(2px, env(safe-area-inset-right, 0px)) !important;
+    top: calc(106px + env(safe-area-inset-top, 0px)) !important;
+    transform: none !important;
+    width: 42px !important;
+    z-index: 6200 !important;
+  }
+
+  .ogre-agent-shell:not(.is-open) .ogre-agent-bubble {
+    box-sizing: border-box !important;
+    height: 38px !important;
+    max-width: 42px !important;
+    min-height: 38px !important;
+    min-width: 42px !important;
+    padding: 4px 2px !important;
+    width: 42px !important;
+  }
+}

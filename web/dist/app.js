@@ -2686,8 +2686,10 @@ function schedulePositionsValueRefresh(delayMs = 300, reason = "positions-value-
       if (refreshed) {
         state.lastWalletRefreshAt = new Date().toISOString();
         render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
+      } else {
+        clearPendingPositionValues(`${reason}-failed`);
       }
-    }).catch(() => {});
+    }).catch(() => clearPendingPositionValues(`${reason}-failed`));
   }, Math.max(0, Number(delayMs) || 0));
 }
 
@@ -2708,6 +2710,28 @@ function mergePositionRefreshRows(nextRows = [], previousRows = [], options = {}
       valueError: ""
     };
   });
+}
+
+function clearPendingPositionValues(reason = "positions-value-refresh-delayed") {
+  let changed = false;
+  state.positions = (Array.isArray(state.positions) ? state.positions : []).map((position) => {
+    const hasEstimatedValue = position?.estimatedValueSol !== null && position?.estimatedValueSol !== undefined && position?.estimatedValueSol !== "";
+    const stuckPending = Boolean(position?.valuePending || /refreshing|updating|background/i.test(position?.valueError || ""));
+    if (!stuckPending) return position;
+    changed = true;
+    return {
+      ...position,
+      valuePending: false,
+      valueError: hasEstimatedValue ? "" : "Price refresh delayed; tap Refresh."
+    };
+  });
+  if (!changed) return false;
+  perfMeasure("positions-value-refresh-cleanup", perfNow(), {
+    component: "positions",
+    details: reason
+  });
+  render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
+  return true;
 }
 
 function refreshPortfolioSupplemental(reason = "portfolio-supplemental") {
@@ -2801,11 +2825,11 @@ async function refreshPositionsOnly(options = {}) {
   try {
     const refreshed = await refreshWalletPositions({
       force: Boolean(options.force),
-      fast: true,
+      fast: false,
       silent: false,
-      followUpValues: true,
+      followUpValues: false,
       reason: options.reason || "positions-only",
-      timeoutMs: POSITIONS_FAST_REFRESH_TIMEOUT_MS
+      timeoutMs: POSITIONS_REFRESH_TIMEOUT_MS
     });
     if (!refreshed) throw new Error(state.walletRefreshError || "Position refresh failed.");
     state.lastWalletRefreshAt = new Date().toISOString();
@@ -3995,12 +4019,12 @@ function scheduleWalletBackgroundRefresh(delayMs = 900, options = {}) {
       if (options.reason === "post-trade") {
         await Promise.all([
           loadPostTradeSupplemental(),
-          refreshWalletPositions({ force: false })
+          refreshWalletPositions({ force: false, fast: false, silent: true, reason: "post-trade-background-values" })
         ]);
       } else {
         await Promise.all([
           loadAll({ force: false, skipCore: true, silent: true }),
-          refreshWalletPositions({ force: false, silent: true })
+          refreshWalletPositions({ force: false, fast: false, silent: true, reason: "background-values" })
         ]);
       }
     } catch (error) {
@@ -4114,14 +4138,15 @@ async function refreshWalletState({ force = false, deep = false, reason = "manua
         if (isManualHeaderRefresh || isPostTradeRefresh) {
           void refreshWalletPositions({
             force: true,
-            fast: true,
+            fast: false,
             silent: true,
-            followUpValues: true,
-            reason: `${reason}-positions-fast`,
-            timeoutMs: POSITIONS_FAST_REFRESH_TIMEOUT_MS
+            followUpValues: false,
+            reason: `${reason}-positions-values`,
+            timeoutMs: POSITIONS_REFRESH_TIMEOUT_MS
           }).then((refreshed) => {
             if (refreshed) render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
-          }).catch(() => {});
+            else clearPendingPositionValues(`${reason}-positions-values-failed`);
+          }).catch(() => clearPendingPositionValues(`${reason}-positions-values-failed`));
         }
         scheduleWalletBackgroundRefresh(900, { reason });
       }
@@ -4244,11 +4269,11 @@ function queuePostTradeRefresh(signature = "", reason = "post-trade", options = 
         : Promise.all([
           refreshWalletPositions({
             force: true,
-            fast: true,
+            fast: false,
             silent: true,
-            followUpValues: true,
-            reason: "post-trade-light",
-            timeoutMs: POSITIONS_FAST_REFRESH_TIMEOUT_MS
+            followUpValues: false,
+            reason: "post-trade-values",
+            timeoutMs: POSITIONS_REFRESH_TIMEOUT_MS
           }),
           loadPostTradeSupplemental()
         ]);
