@@ -16110,6 +16110,344 @@ html body main.shell[data-app] .smart-chart-inline-info {
   }
 }
 
+/* MOBILE_INTRO_REFERRAL_NAV_FIX_20260608_V1: final cleanup for intro sizing, mobile scroll, compact account controls, referrals, and tool nav. */
+html body main.shell[data-app][data-route="intro"] .login-view.swamp-splash.swamp-intro-video {
+  align-items: center !important;
+  background: #000 !important;
+  display: grid !important;
+  inset: 0 !important;
+  justify-items: center !important;
+  min-height: 100dvh !important;
+  overflow: hidden !important;
+  padding: 0 !important;
+  place-items: center !important;
+  position: fixed !important;
+  width: 100vw !important;
+  z-index: 9999 !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .login-view.swamp-splash.swamp-intro-video::before {
+  display: none !important;
+}
+
+@media (min-width: 761px) {
+  html body main.shell[data-app][data-route="intro"] .swamp-intro-stage {
+    aspect-ratio: 16 / 9 !important;
+    background: #000 !important;
+    border: 1px solid rgba(135, 255, 40, 0.32) !important;
+    border-radius: 12px !important;
+    box-sizing: border-box !important;
+    height: auto !important;
+    margin: 0 auto !important;
+    max-height: 97dvh !important;
+    max-width: none !important;
+    min-height: 0 !important;
+    min-width: 0 !important;
+    overflow: hidden !important;
+    padding: 8px !important;
+    position: relative !important;
+    width: min(97vw, calc(97dvh * 16 / 9)) !important;
+  }
+
+  html body main.shell[data-app][data-route="intro"] .swamp-intro-media {
+    background: #000 !important;
+    height: calc(100% - 16px) !important;
+    inset: 8px !important;
+    max-height: calc(100% - 16px) !important;
+    max-width: calc(100% - 16px) !important;
+    min-height: 0 !important;
+    min-width: 0 !important;
+    object-fit: contain !important;
+    object-position: center center !important;
+    position: absolute !important;
+    width: calc(100% - 16px) !important;
+  }
+
+  html body main.shell[data-app][data-route="intro"] .swamp-intro-overlay {
+    bottom: 12px !important;
+    left: 50% !important;
+    right: auto !important;
+    transform: translateX(-50%) !important;
+    width: min(560px, calc(100% - 34px)) !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .command-terminal .terminal-title-row.command-title {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs {
+    align-content: center !important;
+    align-items: center !important;
+    display: flex !important;
+    flex-wrap: wrap !important;
+    gap: 4px !important;
+    height: auto !important;
+    max-height: 76px !important;
+    min-height: 36px !important;
+    overflow-x: hidden !important;
+    overflow-y: visible !important;
+    padding: 4px 8px !important;
+    position: sticky !important;
+    top: 24px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-section-label,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group > summary {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group[open] {
+    display: contents !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button,
+  html body main.shell[data-app][data-route="terminal"] .tabs > button {
+    border-radius: 8px !important;
+    flex: 0 0 auto !important;
+    font-size: 10px !important;
+    height: 32px !important;
+    min-height: 32px !important;
+    min-width: 80px !important;
+    padding: 3px 7px !important;
+    width: auto !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs button::before,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button::before {
+    height: 14px !important;
+    width: 14px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs button::after,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button::after {
+    font-size: 10px !important;
+    line-height: 1 !important;
+    max-width: none !important;
+    white-space: nowrap !important;
+  }
+}
+
+html body main.shell[data-app] .referral-card {
+  overflow: visible !important;
+}
+
+html body main.shell[data-app] .referral-link-builder {
+  align-items: stretch !important;
+  display: grid !important;
+  gap: 6px !important;
+  grid-template-columns: minmax(150px, auto) minmax(120px, 240px) !important;
+  margin-top: 5px !important;
+}
+
+html body main.shell[data-app] .referral-link-builder span {
+  align-items: center !important;
+  background: rgba(0, 13, 5, 0.78) !important;
+  border: 1px solid rgba(118, 255, 45, 0.24) !important;
+  border-radius: 8px !important;
+  color: rgba(231, 255, 219, 0.78) !important;
+  display: inline-flex !important;
+  font-size: 12px !important;
+  font-weight: 800 !important;
+  min-height: 34px !important;
+  overflow: hidden !important;
+  padding: 7px 9px !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+html body main.shell[data-app] .referral-link-builder input {
+  min-width: 0 !important;
+}
+
+html body main.shell[data-app] .referral-code-help {
+  color: rgba(222, 255, 211, 0.72) !important;
+  line-height: 1.35 !important;
+}
+
+@media (max-width: 760px) {
+  html:has(main.shell[data-app][data-route="terminal"]),
+  body:has(main.shell[data-app][data-route="terminal"]) {
+    height: auto !important;
+    min-height: 100dvh !important;
+    overflow-y: auto !important;
+    position: static !important;
+    scroll-behavior: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] {
+    min-height: 100dvh !important;
+    overflow-x: clip !important;
+    overflow-y: visible !important;
+    padding-bottom: calc(22px + env(safe-area-inset-bottom, 0px)) !important;
+    touch-action: pan-y !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [hidden],
+  html body main.shell[data-app][data-route="terminal"] .top-auth-group[hidden],
+  html body main.shell[data-app][data-route="terminal"] [data-guest-actions][hidden],
+  html body main.shell[data-app][data-route="terminal"] [data-session-actions][hidden] {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .topbar {
+    gap: 3px !important;
+    padding:
+      3px calc(46px + env(safe-area-inset-right, 0px))
+      4px max(6px, env(safe-area-inset-left, 0px)) !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .powered {
+    max-height: 20px !important;
+    max-width: 132px !important;
+    min-height: 20px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .topbar-right {
+    gap: 3px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .terminal-global-search {
+    gap: 4px !important;
+    grid-template-columns: minmax(0, 1fr) 46px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .terminal-global-search input,
+  html body main.shell[data-app][data-route="terminal"] .terminal-global-search button,
+  html body main.shell[data-app][data-route="terminal"] .top-auth-group button,
+  html body main.shell[data-app][data-route="terminal"] .top-auth-group .top-profile-button {
+    border-radius: 8px !important;
+    font-size: 10px !important;
+    min-height: 25px !important;
+    padding: 3px 6px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .top-auth-group:not([hidden]) {
+    display: grid !important;
+    gap: 4px !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .top-auth-group[data-session-actions]:not([hidden]) {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip {
+    border-radius: 9px !important;
+    gap: 3px !important;
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    margin: 3px 0 !important;
+    padding: 3px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip .top-tpsl-status,
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip [data-top-refresh-wallet] {
+    font-size: 8.5px !important;
+    grid-column: span 2 !important;
+    min-height: 23px !important;
+    padding: 2px 5px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] {
+    padding-right: calc(42px + max(3px, env(safe-area-inset-right, 0px))) !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs {
+    max-height: calc(100dvh - 150px) !important;
+    max-width: 38px !important;
+    min-width: 38px !important;
+    padding: 3px 2px !important;
+    right: max(3px, env(safe-area-inset-right, 0px)) !important;
+    top: calc(96px + env(safe-area-inset-top, 0px)) !important;
+    width: 38px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs > button,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group > summary,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group button {
+    flex-basis: 34px !important;
+    height: 34px !important;
+    max-width: 34px !important;
+    min-height: 34px !important;
+    min-width: 34px !important;
+    width: 34px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group,
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group[open] {
+    max-width: 34px !important;
+    min-width: 34px !important;
+    overflow: visible !important;
+    width: 34px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group:not([open]) button {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group[open] {
+    display: grid !important;
+    gap: 3px !important;
+    max-height: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .tabs .nav-tool-group[open] button {
+    display: flex !important;
+    opacity: 1 !important;
+    position: relative !important;
+    transform: none !important;
+    visibility: visible !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .command-title {
+    display: none !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .command-controls {
+    gap: 3px !important;
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    margin-bottom: 5px !important;
+    padding: 4px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .live-pair-buckets button,
+  html body main.shell[data-app][data-route="terminal"] .slime-scope-tabs button {
+    font-size: 9px !important;
+    height: 23px !important;
+    min-height: 23px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .command-controls select,
+  html body main.shell[data-app][data-route="terminal"] .command-controls input,
+  html body main.shell[data-app][data-route="terminal"] .command-controls > button[data-refresh-live-pairs] {
+    font-size: 9px !important;
+    height: 25px !important;
+    min-height: 25px !important;
+    padding: 2px 5px !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .command-controls > button[data-refresh-live-pairs] {
+    grid-column: auto !important;
+  }
+
+  html body main.shell[data-app][data-route="terminal"] .command-controls > label,
+  html body main.shell[data-app][data-route="terminal"] .command-controls .terminal-quick-buy-bar label {
+    min-width: 0 !important;
+  }
+
+  html body main.shell[data-app] .referral-link-builder {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  html body main.shell[data-app] .referral-link-builder span {
+    font-size: 10px !important;
+    min-height: 28px !important;
+  }
+}
+
 @media (max-width: 760px) {
   html body main.shell[data-app][data-route="terminal"] .slime-scope-web-columns {
     display: none !important;
@@ -16154,5 +16492,67 @@ html body main.shell[data-app] .smart-chart-inline-info {
     object-position: center center !important;
     position: absolute !important;
     width: 100% !important;
+  }
+}
+
+/* INTRO_OVERLAY_FINAL_20260608_V2: absolute cascade winner for the requested full-screen 16:9 intro overlay. */
+html body main.shell[data-app][data-route="intro"] .login-view.swamp-splash.swamp-intro-video {
+  align-items: center !important;
+  background: #000 !important;
+  display: grid !important;
+  inset: 0 !important;
+  justify-items: center !important;
+  min-height: 100dvh !important;
+  overflow: hidden !important;
+  padding: 0 !important;
+  place-items: center !important;
+  position: fixed !important;
+  width: 100vw !important;
+  z-index: 9999 !important;
+}
+
+html body main.shell[data-app][data-route="intro"] .login-view.swamp-splash.swamp-intro-video::before {
+  display: none !important;
+}
+
+@media (min-width: 761px) {
+  html body main.shell[data-app][data-route="intro"] .swamp-intro-stage {
+    aspect-ratio: 16 / 9 !important;
+    background: #000 !important;
+    border: 1px solid rgba(135, 255, 40, 0.32) !important;
+    border-radius: 12px !important;
+    box-sizing: border-box !important;
+    height: auto !important;
+    margin: 0 auto !important;
+    max-height: 97dvh !important;
+    max-width: none !important;
+    min-height: 0 !important;
+    min-width: 0 !important;
+    overflow: hidden !important;
+    padding: 8px !important;
+    position: relative !important;
+    width: min(97vw, calc(97dvh * 16 / 9)) !important;
+  }
+
+  html body main.shell[data-app][data-route="intro"] .swamp-intro-media {
+    background: #000 !important;
+    height: calc(100% - 16px) !important;
+    inset: 8px !important;
+    max-height: calc(100% - 16px) !important;
+    max-width: calc(100% - 16px) !important;
+    min-height: 0 !important;
+    min-width: 0 !important;
+    object-fit: contain !important;
+    object-position: center center !important;
+    position: absolute !important;
+    width: calc(100% - 16px) !important;
+  }
+
+  html body main.shell[data-app][data-route="intro"] .swamp-intro-overlay {
+    bottom: 12px !important;
+    left: 50% !important;
+    right: auto !important;
+    transform: translateX(-50%) !important;
+    width: min(560px, calc(100% - 34px)) !important;
   }
 }

@@ -4874,7 +4874,8 @@ function renderTabs() {
   });
   document.querySelectorAll(".tabs .nav-tool-group").forEach((group) => {
     const hasActiveChild = Boolean(group.querySelector('[data-active="true"]'));
-    group.open = Boolean(state.navTekOpen) || (!hasStoredNavTekPreference() && hasActiveChild);
+    const desktopInlineTools = typeof window !== "undefined" && window.matchMedia?.("(min-width: 761px)")?.matches;
+    group.open = Boolean(desktopInlineTools) || Boolean(state.navTekOpen) || (!hasStoredNavTekPreference() && hasActiveChild);
   });
 
   if (state.activeTab === "terminal") panel.innerHTML = terminalHtml();
@@ -5541,6 +5542,7 @@ function xConnectSection() {
 
 function referralSection() {
   const code = state.user?.referralCode || "";
+  const referralBase = `${shareSiteUrl.replace(/\/+$/, "")}/r/`;
   const link = state.user?.referralLink || (code ? `${shareSiteUrl.replace(/\/+$/, "")}/r/${encodeURIComponent(code)}` : "");
   const stats = state.user?.referralStats || {};
   const referralRows = Array.isArray(stats.referrals) ? stats.referrals : [];
@@ -5569,20 +5571,20 @@ function referralSection() {
       ${link ? `
         <label class="referral-link-field">
           Your Referral Link
-          <input data-referral-link type="text" inputmode="url" autocomplete="off" value="${escapeHtml(link)}" aria-label="Your editable referral link">
+          <div class="referral-link-builder">
+            <span>${escapeHtml(referralBase)}</span>
+            <input data-referral-code type="text" inputmode="latin" autocomplete="off" maxlength="24" placeholder="your-code" value="${escapeHtml(code)}" aria-label="Your custom referral code">
+          </div>
+          <input data-referral-link type="hidden" value="${escapeHtml(link)}">
         </label>
-      ` : ""}
+      ` : `<input data-referral-code type="text" inputmode="latin" autocomplete="off" maxlength="24" placeholder="your-code" value="${escapeHtml(code)}" aria-label="Your custom referral code">`}
       <div class="referral-code-row">
-        <label class="referral-code-field">
-          Referral Code
-          <input data-referral-code type="text" inputmode="latin" autocomplete="off" maxlength="24" placeholder="MOONPIEJOE" value="${escapeHtml(code)}" aria-label="Your referral code">
-        </label>
         <div class="profile-actions referral-code-actions">
           <button type="button" data-generate-referral-code>Generate</button>
           <button type="button" class="primary" data-save-referral>Save Link</button>
         </div>
       </div>
-      <small class="referral-code-help">Edit the code field or the part after /r/ in the link, then save. Use letters, numbers, dash, or underscore. Once saved, no other SlimeWire profile can claim the same code.</small>
+      <small class="referral-code-help">The SlimeWire link stays locked. Delete only the code after /r/, enter your custom tag, pick the payout wallet for referral fees, then Save Link. Use letters, numbers, dash, or underscore. Once saved, no other SlimeWire profile can claim the same code.</small>
       <label>
         Referral Payout Wallet
         <input data-referral-wallet type="text" placeholder="Wallet for referral fees" value="${escapeHtml(state.user?.referralPayoutWallet || "")}">
