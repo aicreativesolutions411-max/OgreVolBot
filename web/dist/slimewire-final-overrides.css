@@ -19210,10 +19210,13 @@ html body main.shell[data-app] .slime-configurator .vbot-config-bg {
   inset: 0;
   /* Prominent ogre on the right with a green laser-eye glow; controls sit on
      the darkened left so they stay readable. */
+  /* volume.jpg is a full mockup: real controls live on the LEFT, so keep the
+     left ~58% near-opaque to bury the baked-in fake config, and reveal the
+     green-laser demon + SlimeWire logo on the right. */
   background:
-    radial-gradient(120% 95% at 100% 32%, rgba(130, 255, 70, 0.18), rgba(5, 8, 5, 0) 52%),
-    linear-gradient(100deg, rgba(5, 8, 5, 0.93) 24%, rgba(5, 8, 5, 0.42) 58%, rgba(5, 8, 5, 0.1) 100%),
-    url("/assets/slimewire/tool-bg/volume.jpg") center / cover no-repeat,
+    radial-gradient(110% 95% at 100% 34%, rgba(130, 255, 70, 0.16), rgba(5, 8, 5, 0) 50%),
+    linear-gradient(100deg, rgba(5, 8, 5, 0.96) 0%, rgba(5, 8, 5, 0.95) 56%, rgba(5, 8, 5, 0.5) 74%, rgba(5, 8, 5, 0.14) 100%),
+    url("/assets/slimewire/tool-bg/volume.jpg") right center / cover no-repeat,
     url("/assets/slimewire/png/slimewire-ogre-hero-rich.png") right center / cover no-repeat;
   opacity: 1;
   pointer-events: none;
@@ -19470,12 +19473,15 @@ html body main.shell[data-app] .ogre-swap-card::before {
   inset: 0;
   z-index: 0;
   pointer-events: none;
+  /* swap.jpg is a full mockup: keep the ogre + stone frame at the top, then
+     darken hard through the middle so the baked-in YOU PAY / SWAP / numbers
+     are buried and our real (live) swap controls own the center. */
   background:
-    radial-gradient(90% 55% at 50% 0%, rgba(130, 255, 70, 0.16), rgba(5, 8, 5, 0) 60%),
-    linear-gradient(180deg, rgba(5, 8, 5, 0.18) 0%, rgba(5, 8, 5, 0.72) 38%, rgba(5, 8, 5, 0.95) 64%, #050805 100%),
+    radial-gradient(85% 52% at 50% 1%, rgba(130, 255, 70, 0.15), rgba(5, 8, 5, 0) 55%),
+    linear-gradient(180deg, rgba(5, 8, 5, 0.4) 0%, rgba(5, 8, 5, 0.6) 20%, rgba(5, 8, 5, 0.9) 44%, #050805 68%),
     url("/assets/slimewire/tool-bg/swap.jpg") center top / cover no-repeat,
     url("/assets/slimewire/png/slimewire-ogre-hero-rich.png") center top / 118% auto no-repeat;
-  opacity: 0.92;
+  opacity: 0.95;
 }
 html body main.shell[data-app] .ogre-swap-card > * {
   position: relative;
