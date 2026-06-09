@@ -8076,7 +8076,7 @@ function volumeBotStageLabel(bot) {
 function volumeBotListHtml() {
   const bots = Array.isArray(state.volumeBots) ? state.volumeBots : [];
   if (!bots.length) {
-    return `<article class="volume-bot-status"><p class="muted">No volume bots yet. Configure one above and press Start Volume Bot.</p></article>`;
+    return `<article class="volume-bot-status"><p class="muted">No SlimeBots running yet. Configure one above and press Start SlimeBot.</p></article>`;
   }
   return bots.map((bot) => {
     const stats = bot.stats || {};
@@ -8110,7 +8110,7 @@ function volumeBotPanelHtml() {
     <section class="trade-card volume-bot-card" data-preserve-focus>
       <div class="trade-head">
         <div>
-          <h3>Volume Bot</h3>
+          <h3>SlimeBot</h3>
           <p>Auto-fund wallets from a source wallet, run randomized buy/sell volume, then sweep funds back. Runs server-side and keeps going after you close the tab.</p>
         </div>
       </div>
@@ -8181,7 +8181,7 @@ function volumeBotPanelHtml() {
         <small>Manual wallet pick (used when auto-create is off):</small>
         ${walletChecksHtml("vbot")}
       </div>
-      <button class="primary" data-vbot-start ${state.volumeBotBusy ? "disabled" : ""}>${state.volumeBotBusy ? "Starting..." : "Start Volume Bot"}</button>
+      <button class="primary" data-vbot-start ${state.volumeBotBusy ? "disabled" : ""}>${state.volumeBotBusy ? "Starting..." : "Start SlimeBot"}</button>
       <p class="trade-status" data-vbot-status>${escapeHtml(state.volumeBotStatus || "Configure, then Start. The bot spends real SOL from the source wallet.")}</p>
       <div class="volume-bot-list">
         ${volumeBotListHtml()}
@@ -8239,7 +8239,7 @@ async function startVolumeBot() {
   }
   const confirmLines = form.rollingWallets
     ? [
-        "Start Rolling Volume Bot? This spends REAL SOL.",
+        "Start Rolling SlimeBot? This spends REAL SOL.",
         `Token: ${form.tokenMint}`,
         `Each round spawns a brand-new wallet, funds it from the source, buys ~${form.buyAmountSol} SOL (randomized), sells ${form.sellPercent}%, then sweeps back.`,
         `Runs up to ${form.cycles} round(s) or until you press Stop.`,
@@ -8249,7 +8249,7 @@ async function startVolumeBot() {
         const walletWord = form.autoCreateWallets ? `${form.walletCount} fresh wallet(s)` : "the selected wallet(s)";
         const fundTotal = (Number(form.fundPerWalletSol) || 0) * (Number(form.walletCount) || 0);
         return [
-          "Start Volume Bot? This spends REAL SOL.",
+          "Start SlimeBot? This spends REAL SOL.",
           `Token: ${form.tokenMint}`,
           `Funds ${walletWord} with ${form.fundPerWalletSol} SOL each` + (form.autoCreateWallets ? ` (~${fundTotal.toFixed(3)} SOL from source)` : ""),
           `Then runs ${form.cycles} cycle(s) of randomized ${form.buyAmountSol} SOL buys / ${form.sellPercent}% sells.`,
@@ -8272,7 +8272,7 @@ async function startVolumeBot() {
     if (data.bot) {
       state.volumeBots = [data.bot, ...state.volumeBots.filter((bot) => bot.id !== data.bot.id)];
     }
-    setVolumeBotStatus(data.bot?.message || "Volume bot started.");
+    setVolumeBotStatus(data.bot?.message || "SlimeBot started.");
     render();
     void loadVolumeBots();
   } catch (error) {
@@ -8305,7 +8305,7 @@ async function stopVolumeBot(planId) {
 
 function volumeHtml() {
   if (!state.wallets.length) {
-    return `${createWalletSection()}${emptyState("No wallets loaded yet", "Create or restore a managed wallet above first. The Volume Bot funds and trades from managed wallets, so it needs at least one saved source wallet.")}`;
+    return `${createWalletSection()}${emptyState("No wallets loaded yet", "Create or restore a managed wallet above first. SlimeBot funds and trades from managed wallets, so it needs at least one saved source wallet.")}`;
   }
 
   return `
@@ -8315,7 +8315,7 @@ function volumeHtml() {
         <div class="trade-head">
           <div>
             <h3>Timed Volume Plan</h3>
-            <p>Single buy, then auto-manage the exit by timer, take-profit, stop-loss, or repeat cycles. (For the multi-wallet auto-volume engine, use the Volume Bot above.)</p>
+            <p>Single buy, then auto-manage the exit by timer, take-profit, stop-loss, or repeat cycles. (For the multi-wallet auto-volume engine, use SlimeBot above.)</p>
           </div>
           <a class="mini-link" href="${state.volumeToken ? dexUrl(state.volumeToken) : "#"}" target="_blank" rel="noreferrer">Dex</a>
         </div>

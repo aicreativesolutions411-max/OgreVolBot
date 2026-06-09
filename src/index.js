@@ -25197,7 +25197,7 @@ function volumeBotRandomBuySol(targetSol) {
 async function createEphemeralVolumeWallet(userId, label) {
   const store = await readWalletStore();
   const keypair = Keypair.generate();
-  const record = walletRecord(cleanLabel(label || "Volume Bot"), keypair, userId);
+  const record = walletRecord(cleanLabel(label || "SlimeBot"), keypair, userId);
   record.ephemeral = true;
   record.volumeBot = true;
   store.wallets.push(record);
@@ -25269,18 +25269,18 @@ function webVolumeBotRow(plan) {
 
 function volumeBotMessage(plan) {
   const cfg = plan.config || {};
-  if (plan.status === "completed") return "Volume bot finished.";
+  if (plan.status === "completed") return "SlimeBot finished.";
   if (plan.botStage === "sweeping") return "Sweeping funds back to source wallet...";
   if (cfg.rollingWallets) {
     if (plan.botStage === "running") {
       return `Rolling fresh wallets: round ${Number(plan.roundsDone || 0) + 1}/${Number(cfg.maxRounds || 0)} (${plan.rollStage || "spawn"}).`;
     }
-    return "Rolling volume bot armed.";
+    return "Rolling SlimeBot armed.";
   }
   if (plan.botStage === "running") {
     return `Running cycle ${Number(plan.currentCycle || 0) + 1}/${Number(cfg.cycles || 0)} across ${Array.isArray(plan.tradingPublicKeys) ? plan.tradingPublicKeys.length : 0} wallet(s).`;
   }
-  return "Volume bot armed.";
+  return "SlimeBot armed.";
 }
 
 async function webStartVolumeBot(userId, body = {}) {
@@ -25337,7 +25337,7 @@ async function webStartVolumeBot(userId, body = {}) {
       currentRoundBuySol: 0,
       nextActionAt: new Date(now + delaySecs * 1000).toISOString(),
       stats: { buys: 0, sells: 0, errors: 0, rounds: 0, fundedSol: 0 },
-      log: [{ at: nowIso, message: `Rolling volume bot armed: fresh wallet each round, ~${buyAmountSol} SOL randomized buys, up to ${maxRounds} round(s).` }]
+      log: [{ at: nowIso, message: `Rolling SlimeBot armed: fresh wallet each round, ~${buyAmountSol} SOL randomized buys, up to ${maxRounds} round(s).` }]
     };
     planStore.plans.push(plan);
     await writeTradePlans(planStore);
@@ -25358,7 +25358,7 @@ async function webStartVolumeBot(userId, body = {}) {
   if (autoCreate) {
     const created = await createWebWalletSet(userId, {
       count: walletCount,
-      label: cleanLabel(String(body.walletGroup || "Volume Bot"))
+      label: cleanLabel(String(body.walletGroup || "SlimeBot"))
     });
     tradingPublicKeys = (created.wallets || []).map((wallet) => wallet.publicKey).filter(Boolean);
   } else {
@@ -25422,7 +25422,7 @@ async function webStopVolumeBot(userId, body = {}) {
   const plan = planStore.plans.find((entry) => entry.id === planId
     && String(entry.userId) === String(userId)
     && entry.source === "web_volume_bot");
-  if (!plan) throw volumeBotError("Volume bot not found.");
+  if (!plan) throw volumeBotError("SlimeBot not found.");
   if (plan.status === "completed" || plan.botStage === "done") return webVolumeBotRow(plan);
   const sweepBack = plan.config?.sweepBack !== false;
   plan.botStage = sweepBack ? "sweeping" : "done";
@@ -25559,7 +25559,7 @@ async function processVolumeBotPlan(plan, walletStore, persist) {
   if (plan.botStage === "done") {
     plan.status = "completed";
     plan.completedAt = new Date().toISOString();
-    volumeBotLogPush(plan, "Volume bot finished.");
+    volumeBotLogPush(plan, "SlimeBot finished.");
   }
   plan.updatedAt = new Date().toISOString();
   plan.nextActionAt = new Date(Date.now() + delayMs).toISOString();
@@ -25602,7 +25602,7 @@ async function runRollingVolumeBotStep(plan, { slippageBps, noBalance }) {
     const fundSol = Number((buySol + VOLUME_BOT_LIMITS.roundFeeBufferSol).toFixed(6));
     let record;
     try {
-      record = await createEphemeralVolumeWallet(plan.userId, `Volume Bot R${Number(plan.roundsDone || 0) + 1}`);
+      record = await createEphemeralVolumeWallet(plan.userId, `SlimeBot R${Number(plan.roundsDone || 0) + 1}`);
     } catch (error) {
       plan.stats.errors = Number(plan.stats.errors || 0) + 1;
       volumeBotLogPush(plan, `Spawn failed: ${friendlyError(error)}`);
