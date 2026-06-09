@@ -572,6 +572,32 @@ function resumeLivePairsAfterDetailsClose() {
   scheduleLivePairsRender("details-close");
 }
 
+// Steady refresh without the full-panel rebuild "shake": on the Cooks tab,
+// swap only the .signal-list rows (reusing the exact same row HTML) so the
+// controls, filters, and scroll container stay put. Returns true if patched.
+function patchLivePairsFeedInPlace() {
+  if (state.activeTab !== "live") return false;
+  const panel = $("[data-panel]");
+  const list = panel?.querySelector(".signal-list");
+  if (!panel || !list) return false;
+  const activeLivePairs = currentLivePairs();
+  const rawRows = uniqueSignalRows(activeLivePairs?.rows || []);
+  const allRows = terminalLaunchFilteredRows(rawRows);
+  const rows = terminalFeedRowsWindow("live", allRows);
+  if (!rows.length) return false; // fall back to full render for empty state
+  list.outerHTML = tokenSignalRowsHtml(rows, {
+    context: "live",
+    shareBuilder: livePairShareText,
+    hideToolbar: true
+  });
+  const countLabel = panel.querySelector(".terminal-title-row span");
+  if (countLabel) {
+    const bucketLabel = LIVE_PAIR_BUCKETS.find(([bucket]) => bucket === state.livePairBucket)?.[1] || "Live";
+    countLabel.textContent = `${bucketLabel} | ${rows.length}/${allRows.length} shown`;
+  }
+  return true;
+}
+
 function scheduleLivePairsRender(reason = "live-pairs-batch") {
   if (reason) {
     livePairsRenderReasons.add(String(reason));
@@ -592,6 +618,10 @@ function scheduleLivePairsRender(reason = "live-pairs-batch") {
       resultCount: Array.isArray(currentLivePairs()?.rows) ? currentLivePairs().rows.length : 0,
       details: details.length ? details.slice(-3).join(" | ") : reason
     });
+    // Cooks tab: patch just the rows in place to avoid the panel-rebuild shake.
+    if (state.activeTab === "live" && patchLivePairsFeedInPlace()) {
+      return;
+    }
     const scrollSnapshot = captureStableFeedScrollSnapshot();
     render();
     restoreStableFeedScrollSnapshot(scrollSnapshot);
