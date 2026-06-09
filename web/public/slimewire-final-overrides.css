@@ -19228,6 +19228,18 @@ html body main.shell[data-app] .slime-configurator .vbot-config-inner {
   display: grid;
   gap: 14px;
 }
+/* On wide panels keep the config controls on the LEFT so the demon + logo art
+   owns the right side (like the mockup); the queue/list stay full width. */
+@media (min-width: 860px) {
+  html body main.shell[data-app] .slime-configurator .vbot-config-title,
+  html body main.shell[data-app] .slime-configurator .vbot-config-field,
+  html body main.shell[data-app] .slime-configurator .vbot-config-row,
+  html body main.shell[data-app] .slime-configurator .vbot-config-toggles,
+  html body main.shell[data-app] .slime-configurator .vbot-config-start,
+  html body main.shell[data-app] .slime-configurator > .vbot-config-inner > [data-vbot-status] {
+    max-width: 60% !important;
+  }
+}
 html body main.shell[data-app] .vbot-config-title {
   margin: 0;
   font-size: 26px !important;
