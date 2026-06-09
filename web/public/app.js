@@ -433,7 +433,7 @@ const state = {
   pumpLiveStatus: "",
   pumpLiveLastActionAt: 0,
   kolScan: null,
-  kolMode: "hot",
+  kolMode: "top",
   kolWallet: "",
   kolResult: null,
   kolStatus: "",
@@ -687,7 +687,7 @@ tabKey | label | component | endpoint | category | refreshMs | staleMs | cacheKe
 */
 const TERMINAL_FEEDS = [
   { tabKey: "terminal", label: "Live Terminal", component: "terminalHtml", endpoint: "composite:/api/web/live-pairs+/api/web/kol/scan+/api/web/watchlist", category: "overview:terminal", refreshMs: 8_000, staleMs: 24_000, cacheKey: "terminal:overview", pageSize: 12, maxPageSize: 24, previewLimit: 8, supportsPagination: false },
-  { tabKey: "live", label: "Live Pairs - New Solana Pairs", component: "livePairsHtml", endpoint: "/api/web/live-pairs", category: "pairs:new", refreshMs: 8_000, staleMs: 24_000, cacheKey: "pairs:{bucket}:{sort}", pageSize: 50, maxPageSize: 100, previewLimit: 12, supportsPagination: true },
+  { tabKey: "live", label: "Cooks - New Solana Pairs", component: "livePairsHtml", endpoint: "/api/web/live-pairs", category: "pairs:new", refreshMs: 8_000, staleMs: 24_000, cacheKey: "pairs:{bucket}:{sort}", pageSize: 50, maxPageSize: 100, previewLimit: 12, supportsPagination: true },
   { tabKey: "liveTrades", label: "Live Trades - Recent Swaps", component: "liveTradesHtml", endpoint: "/api/web/pnl", category: "trades:recent", refreshMs: 8_000, staleMs: 20_000, cacheKey: "trades:recent", pageSize: 50, maxPageSize: 100, previewLimit: 10, supportsPagination: true },
   { tabKey: "slimeScope", label: "Slime Scope - Scanner Picks", component: "slimeScopeHtml", endpoint: "composite:/api/web/live-pairs+/api/web/sniper/scan", category: "scanner:slime-scope", refreshMs: 20_000, staleMs: 45_000, cacheKey: "scanner:slime-scope:{scopeMode}", pageSize: 50, maxPageSize: 100, previewLimit: 12, supportsPagination: true },
   { tabKey: "kol", label: "KOL Tracker - Social/KOL Signals", component: "kolHtml", endpoint: "/api/web/kol/scan", category: "signals:kol", refreshMs: 10_000, staleMs: 30_000, cacheKey: "signals:kol:{kolMode}:{kolWallet}", pageSize: 36, maxPageSize: 72, previewLimit: 12, supportsPagination: true },
@@ -5633,7 +5633,7 @@ function dashboardHtml() {
       ${visualCard("visual-bundle", "Bundle + Volume", "Buy or sell across selected wallets, then manage timed exits with Volume plans.", "bundle")}
       ${visualCard("visual-launch", "Launch Snipe", "Preset ticker, wallets, amount, TP/SL, and slippage, then watch live feeds until launch.", "launch")}
       ${visualCard("visual-kol", "KOL Tracker", "Follow KOL wallets, review their strongest current signals, then trade, bundle, or copy-plan from the same panel.", "kol")}
-      ${visualCard("visual-live", "Live Pairs", "Auto-refresh new Pump and fresh-pair listings while the tab is open, with safety-filtered Trade, Bundle, and Share actions.", "live-pairs")}
+      ${visualCard("visual-live", "Cooks", "Auto-refresh new Pump and fresh-pair listings cooking right now, with safety-filtered Trade, Bundle, and Share actions.", "live-pairs")}
     </section>
     ${importWalletSection()}
     ${backupRestoreSection()}
@@ -7351,7 +7351,7 @@ function ogreAiHtml() {
 
         <div class="card-actions">
           <button class="primary" type="button" data-ogre-ai-start ${state.ogreAiLoading ? "disabled" : ""}>${state.ogreAiLoading ? "Scanning..." : "Scan &amp; Ape"}</button>
-          <button type="button" data-tab="live">Review Live Pairs</button>
+          <button type="button" data-tab="live">Review Cooks</button>
           <button type="button" data-tab="positions">Positions</button>
         </div>
         <small data-ogre-ai-status>${escapeHtml(state.ogreAiStatus || "Fresh Ape scans under-$5K pairs first, only falls back below $8K, requires starting volume, and blocks obvious honeypot, mint, freeze, drained-liquidity, and no-sell risk before buys.")}</small>
@@ -9635,8 +9635,8 @@ function kolHtml() {
   const showCuratedFallback = !hasScan && !hasKols;
   return `
     <section class="section-actions mode-row">
-      <button data-kol-mode="hot" data-active="${state.kolMode === "hot"}" ${disabled}>Hot Buys</button>
       <button data-kol-mode="top" data-active="${state.kolMode === "top"}" ${disabled}>Top KOLs</button>
+      <button data-kol-mode="hot" data-active="${state.kolMode === "hot"}" ${disabled}>Hot Buys</button>
       <button data-kol-mode="consistent" data-active="${state.kolMode === "consistent"}" ${disabled}>Consistent</button>
       <button data-kol-mode="fresh" data-active="${state.kolMode === "fresh"}" ${disabled}>Fresh</button>
       <button data-kol-mode="slimewire" data-active="${state.kolMode === "slimewire"}" ${disabled}>Top SlimeWire</button>
@@ -15382,7 +15382,7 @@ function terminalHtml() {
             ${bestDisplayRows.length ? compactSignalRowsHtml(bestDisplayRows, { layout: "terminal", limit: 8, actionLabel: rowTradeLabel, emptyTitle: "No Best Picks yet", emptyMessage: "Refresh Live Pairs to score current pairs." }) : launchFilterActive ? terminalLaunchFilterEmptyState(rawBestRows, "best picks") : compactSignalRowsHtml(bestDisplayRows, { layout: "terminal", limit: 8, actionLabel: rowTradeLabel, emptyTitle: "No Best Picks yet", emptyMessage: "Refresh Live Pairs to score current pairs." })}
           </article>
           <article class="terminal-panel live-pairs-panel">
-            <header><h4>Live Pairs</h4><button data-tab="live">Open</button></header>
+            <header><h4>Cooks</h4><button data-tab="live">Open</button></header>
             ${liveDisplayRows.length ? compactSignalRowsHtml(liveDisplayRows, { layout: "terminal", limit: 12, actionLabel: rowTradeLabel }) : launchFilterActive ? terminalLaunchFilterEmptyState(rawLiveRows, "live pairs") : compactSignalRowsHtml(liveDisplayRows, { layout: "terminal", limit: 12, actionLabel: rowTradeLabel })}
           </article>
           <article class="terminal-panel kol-panel">
@@ -16973,13 +16973,13 @@ function livePairsHtml() {
   const launchFilterActive = terminalLaunchFiltersActive();
   const status = bucketLoading
     ? "Scanning live pairs..."
-    : activeLivePairs?.message || "Live Pairs refreshes while this tab is open.";
+    : activeLivePairs?.message || "Cooks refreshes while this tab is open.";
   return `
     <section class="terminal-layout live-terminal">
       <main class="terminal-main">
         <div class="terminal-title-row">
           <div>
-            <h3>Live Pairs</h3>
+            <h3>Cooks</h3>
             <p>Newest Pump/new-pair listings with fast metadata refresh. Trade safety checks run before any buy.</p>
           </div>
           <span>${escapeHtml(activeBucketLabel)} | ${escapeHtml(rows.length)}/${escapeHtml(allRows.length)} shown</span>
@@ -17046,11 +17046,11 @@ function watchlistHtml() {
         </div>
         <div class="section-actions terminal-actions">
           <button class="primary" data-refresh-watchlist>${state.watchlistLoading ? "Refreshing..." : "Refresh Watchlist"}</button>
-          <button data-tab="live">Live Pairs</button>
+          <button data-tab="live">Cooks</button>
           <button data-tab="sniper">Sniper</button>
           <button data-tab="kol">KOL Tracker</button>
         </div>
-        ${rows.length ? tokenSignalRowsHtml(rows, { context: "watchlist", shareBuilder: (row) => manualCoinWatchShareText(row.tokenMint) }) : emptyState("No watched coins yet", "Tap Watch on Live Pairs, Sniper, or KOL signals to save coins here.")}
+        ${rows.length ? tokenSignalRowsHtml(rows, { context: "watchlist", shareBuilder: (row) => manualCoinWatchShareText(row.tokenMint) }) : emptyState("No watched coins yet", "Tap Watch on Cooks, Sniper, or KOL signals to save coins here.")}
         ${terminalFeedLoadMoreHtml("watchlist", allRows, "watched pairs")}
       </main>
       <aside class="trade-side order-ticket-stack">
@@ -17431,7 +17431,7 @@ function sniperHtml() {
           <button class="primary" data-refresh-scan>Refresh ${escapeHtml(activeLabel)}</button>
           <button data-tab="trade">Trade Desk</button>
           <button data-tab="bundle">Bundle</button>
-          <button data-tab="live">Live Pairs</button>
+          <button data-tab="live">Cooks</button>
         </div>
         ${state.scan ? sniperRowsHtml() : emptyState("No scan loaded", "Pick a mode or tap Refresh Picks.")}
       </main>

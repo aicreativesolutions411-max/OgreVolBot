@@ -19046,7 +19046,7 @@ html body main.shell[data-app] .tabs button[data-tab="ogreAi"]::before { -webkit
 html body main.shell[data-app] .tabs button[data-tab="launchCoin"]::before { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/launchCoin.svg") !important; mask-image: url("/assets/slimewire/svg/icons-v2/launchCoin.svg") !important; }
 html body main.shell[data-app] .tabs button[data-tab="bundle"]::before { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/bundle.svg") !important; mask-image: url("/assets/slimewire/svg/icons-v2/bundle.svg") !important; }
 html body main.shell[data-app] .tabs button[data-tab="volume"]::before { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/volume.svg") !important; mask-image: url("/assets/slimewire/svg/icons-v2/volume.svg") !important; }
-html body main.shell[data-app] .tabs button[data-tab="launch"]::before { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/launch.svg") !important; mask-image: url("/assets/slimewire/svg/icons-v2/launch.svg") !important; }
+html body main.shell[data-app] .tabs button[data-tab="launch"]::before { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/sniper.svg") !important; mask-image: url("/assets/slimewire/svg/icons-v2/sniper.svg") !important; }
 html body main.shell[data-app] .tabs button[data-tab="sniper"]::before { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/sniper.svg") !important; mask-image: url("/assets/slimewire/svg/icons-v2/sniper.svg") !important; }
 html body main.shell[data-app] .tabs button[data-tab="wallets"]::before { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/wallets.svg") !important; mask-image: url("/assets/slimewire/svg/icons-v2/wallets.svg") !important; }
 html body main.shell[data-app] .tabs button[data-tab="positions"]::before { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/positions.svg") !important; mask-image: url("/assets/slimewire/svg/icons-v2/positions.svg") !important; }
@@ -19173,6 +19173,18 @@ html body main.shell[data-app] .terminal-token-stats dd {
   }
   html body main.shell[data-app] .terminal-token-stats dd {
     font-size: 11.5px !important;
+  }
+}
+/* Calmer mobile scrolling: stop the rubber-band bounce / scroll-chaining
+   that makes people overshoot and "get lost", and drop the long iOS fling
+   momentum so the feed settles where you let go instead of flying past. */
+@media (max-width: 760px) {
+  html body main.shell[data-app][data-route="terminal"],
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard],
+  html body main.shell[data-app][data-route="terminal"] .command-workspace,
+  html body main.shell[data-app][data-route="terminal"] .terminal-main {
+    overscroll-behavior-y: contain !important;
+    -webkit-overflow-scrolling: auto !important;
   }
 }
 /* === END SLIMEWIRE_V2_MOBILEFIX_20260608_V1 ========================== */
