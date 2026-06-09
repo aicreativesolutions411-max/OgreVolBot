@@ -19210,12 +19210,12 @@ html body main.shell[data-app] .slime-configurator .vbot-config-bg {
   inset: 0;
   /* Prominent ogre on the right with a green laser-eye glow; controls sit on
      the darkened left so they stay readable. */
-  /* volume.jpg is a full mockup: real controls live on the LEFT, so keep the
-     left ~58% near-opaque to bury the baked-in fake config, and reveal the
-     green-laser demon + SlimeWire logo on the right. */
+  /* volume-template.png is the AI-cleaned panel: demon + SlimeWire logo on the
+     right, empty atmospheric dark on the left. Our real controls fill the left;
+     a light gradient keeps their text crisp without hiding the demon. */
   background:
-    radial-gradient(110% 95% at 100% 34%, rgba(130, 255, 70, 0.16), rgba(5, 8, 5, 0) 50%),
-    linear-gradient(100deg, rgba(5, 8, 5, 0.96) 0%, rgba(5, 8, 5, 0.95) 56%, rgba(5, 8, 5, 0.5) 74%, rgba(5, 8, 5, 0.14) 100%),
+    linear-gradient(100deg, rgba(5, 8, 5, 0.84) 0%, rgba(5, 8, 5, 0.6) 48%, rgba(5, 8, 5, 0.12) 100%),
+    url("/assets/slimewire/tool-bg/volume-template.png") right center / cover no-repeat,
     url("/assets/slimewire/tool-bg/volume.jpg") right center / cover no-repeat,
     url("/assets/slimewire/png/slimewire-ogre-hero-rich.png") right center / cover no-repeat;
   opacity: 1;
@@ -19494,8 +19494,9 @@ html body main.shell[data-app] .ogre-swap-head {
   flex-direction: column;
   justify-content: flex-end;
   background:
-    linear-gradient(180deg, rgba(5, 8, 5, 0.2) 0%, rgba(5, 8, 5, 0.5) 52%, rgba(5, 8, 5, 0.9) 88%, #050805 100%),
-    url("/assets/slimewire/tool-bg/swap.jpg") center 16% / cover no-repeat,
+    linear-gradient(180deg, rgba(5, 8, 5, 0.12) 0%, rgba(5, 8, 5, 0.42) 56%, rgba(5, 8, 5, 0.88) 90%, #050805 100%),
+    url("/assets/slimewire/tool-bg/swap-template.png") center 14% / cover no-repeat,
+    url("/assets/slimewire/tool-bg/swap.jpg") center 14% / cover no-repeat,
     url("/assets/slimewire/png/slimewire-ogre-hero-rich.png") center 16% / cover no-repeat;
   box-shadow: inset 0 0 34px rgba(0, 0, 0, 0.55);
 }
