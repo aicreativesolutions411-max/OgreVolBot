@@ -7423,11 +7423,9 @@ function bundleHtml() {
             <input data-bundle-slippage-custom data-custom-for="bundle-slippage" type="number" min="1" max="5000" step="1" placeholder="Custom bps" hidden>
           </label>
         </div>
-        <div class="trade-block">
-          <div>
-            <h4>Auto Exit After Bundle Buy</h4>
-            <p>Optional timed plan for selected wallets. Use presets or type custom targets like 500 or 5x.</p>
-          </div>
+        <details class="trade-block bundle-advanced">
+          <summary><h4>Auto Exit After Bundle Buy (optional)</h4></summary>
+          <p>Optional timed plan for selected wallets. Use presets or type custom targets like 500 or 5x.</p>
           <div class="volume-grid">
             <label>
               Fallback Sell
@@ -7483,7 +7481,7 @@ function bundleHtml() {
           </div>
           ${walletExitTargetsHtml("bundle-plan")}
           <button class="primary" data-bundle-plan>Bundle Buy + Auto Exits</button>
-        </div>
+        </details>
         <div class="quick-grid two-wide">
           <button class="primary" data-bundle-buy>Bundle Buy</button>
           <button data-bundle-sell>Bundle Sell</button>
@@ -7497,14 +7495,6 @@ function bundleHtml() {
           <div class="card-actions">
             <button data-refresh-all>Refresh Balances</button>
             <button data-tab="positions">Positions</button>
-          </div>
-        </article>
-        <article>
-          <h3>Copy Trade / KOL Tracker</h3>
-          <p>Use KOL signals as trade ideas, then send them into Bundle or arm a copy plan with the exits above.</p>
-          <div class="card-actions">
-            <button data-tab="kol">Open KOL Tracker</button>
-            ${state.bundleToken ? xShareButton(manualCoinWatchShareText(state.bundleToken), "Share Token") : ""}
           </div>
         </article>
         ${bundlePresetManagerHtml()}
@@ -7536,7 +7526,6 @@ function bundleResultHtml() {
       </div>
       <div class="card-actions">
         <button data-copy="${escapeHtml(state.bundleResult.tokenMint)}">Copy CA</button>
-        ${xShareButton(bundleShareText(state.bundleResult))}
         <a href="${escapeHtml(state.bundleResult.dexUrl)}" target="_blank" rel="noreferrer">Dex</a>
       </div>
     </article>
