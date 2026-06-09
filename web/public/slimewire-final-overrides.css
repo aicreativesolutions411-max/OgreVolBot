@@ -19488,21 +19488,30 @@ html body main.shell[data-app] .oss-a11y-title {
 html body main.shell[data-app] .oss-stage {
   position: relative;
   width: 100%;
-  max-width: 820px;
+  max-width: 1080px;
   margin: 0 auto;
   aspect-ratio: 1264 / 848;
   container-type: inline-size;
   background: #050805 url("/assets/slimewire/tool-bg/swap-template.png") center / 100% 100% no-repeat;
 }
-/* Let the swap panel use the full row, not a narrow column, so it reads as a
-   full panel. The info aside drops below on the Swap tab. */
+/* Swap is a single, full-width panel: no side column, no stuff below - just the
+   OgreSwap panel (amount, tokens, reverse, SWAP, wallet + slippage pills). */
 html body main.shell[data-app] .trade-layout:has(.ogre-swap-skin) {
   grid-template-columns: 1fr !important;
 }
+html body main.shell[data-app] .trade-layout:has(.ogre-swap-skin) .trade-side {
+  display: none !important;
+}
 html body main.shell[data-app] .trade-layout:has(.ogre-swap-skin) .ogre-swap-skin {
-  max-width: 860px;
+  max-width: 1120px;
   margin: 0 auto;
   width: 100%;
+}
+html body main.shell[data-app] .ogre-swap-skin .oss-status {
+  text-align: center;
+  color: #9fb89c !important;
+  font-size: 12px !important;
+  margin: 8px 0 0 !important;
 }
 html body main.shell[data-app] .oss-slot {
   position: absolute;
@@ -19665,10 +19674,15 @@ html body main.shell[data-app] .slime-configurator.ovs-skin {
   background: #050805 !important;
   padding: 0 !important;
 }
+html body main.shell[data-app] .ovs-skin.volume-bot-card {
+  max-width: 1160px;
+  margin: 0 auto;
+  width: 100%;
+}
 html body main.shell[data-app] .ovs-stage {
   position: relative;
   width: 100%;
-  max-width: 900px;
+  max-width: 1120px;
   margin: 0 auto;
   aspect-ratio: 1264 / 848;
   container-type: inline-size;
@@ -19711,15 +19725,15 @@ html body main.shell[data-app] .ovs-stage input[type="range"]::-moz-range-thumb 
   width: 16px; height: 16px; border: 0; border-radius: 50%; background: #8bff5a; box-shadow: 0 0 10px rgba(120, 255, 60, 0.7);
 }
 html body main.shell[data-app] .ovs-mode { position: absolute; left: 2.5%; top: 46.5%; width: 30%; height: 9.5%; }
-html body main.shell[data-app] .ovs-aggr { position: absolute; left: 32.5%; top: 46.5%; width: 27.5%; height: 9.5%; }
-/* Fade the bottom (the drawn Queue Status cards) into the panel - the real,
-   live queue + list render in .ovs-below right under the stage. */
+html body main.shell[data-app] .ovs-aggr { position: absolute; left: 32.5%; top: 46.5%; width: 29%; height: 9.5%; }
+/* Fully fade out the bottom of the template (the drawn Queue Status cards) so it
+   doesn't duplicate the real, live queue + list that render in .ovs-below. */
 html body main.shell[data-app] .ovs-stage::after {
   content: "";
   position: absolute;
   left: 0; right: 0; bottom: 0;
-  height: 40%;
-  background: linear-gradient(180deg, rgba(5, 8, 5, 0) 0%, rgba(5, 8, 5, 0.86) 62%, #050805 100%);
+  height: 46%;
+  background: linear-gradient(180deg, rgba(5, 8, 5, 0) 0%, rgba(5, 8, 5, 0.92) 42%, #050805 66%);
   pointer-events: none;
 }
 html body main.shell[data-app] .ovs-stage .vbot-segment {
@@ -19736,11 +19750,31 @@ html body main.shell[data-app] .ovs-stage .vbot-segment button[data-active="true
   border-color: rgba(150, 255, 80, 0.9) !important;
   box-shadow: 0 0 10px rgba(120, 255, 60, 0.5);
 }
+/* Below the stage: spread the controls across the wide panel so the info sits
+   in that area instead of a tall scroll. Pay-From + Stagger share a row; the
+   rest span full width. */
 html body main.shell[data-app] .ovs-below {
-  display: grid; gap: 12px; padding: 14px 8px 6px; max-width: 900px; margin: 0 auto;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 18px;
+  padding: 16px 10px 6px;
+  max-width: 1120px;
+  margin: 0 auto;
 }
+html body main.shell[data-app] .ovs-below > .vbot-config-toggles,
+html body main.shell[data-app] .ovs-below > .vbot-config-start,
+html body main.shell[data-app] .ovs-below > [data-vbot-status],
+html body main.shell[data-app] .ovs-below > .vbot-queue,
+html body main.shell[data-app] .ovs-below > .volume-bot-list {
+  grid-column: 1 / -1;
+}
+html body main.shell[data-app] .ovs-below > .vbot-config-toggles {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px;
+}
+/* Mobile: stack the below-grid, keep the stage a touch taller so slots stay legible. */
 @media (max-width: 760px) {
-  html body main.shell[data-app] .ovs-stage { aspect-ratio: 1264 / 600; }
+  html body main.shell[data-app] .ovs-below { grid-template-columns: 1fr; }
+  html body main.shell[data-app] .ovs-below > .vbot-config-toggles { grid-template-columns: 1fr; }
   html body main.shell[data-app] .ovs-ca { font-size: 12px !important; }
 }
 /* === END VOLUME_SKIN_20260609_V1 ===================================== */
