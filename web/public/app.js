@@ -7004,12 +7004,12 @@ function tradeHtml() {
             </select>
           </div>
           <button type="button" class="oss-swap primary" data-swap-use-custom-amount>SWAP</button>
-          <label class="oss-pill oss-wallet">
+          <label class="oss-pill oss-wallet" data-cap="Wallet">
             <select data-trade-wallet aria-label="Wallet">
               ${walletOptionsHtml(connected?.publicKey && !hasManagedWallets ? "connected" : "")}
             </select>
           </label>
-          <label class="oss-pill oss-slip">
+          <label class="oss-pill oss-slip" data-cap="Slippage">
             <select data-trade-slippage data-custom-select="trade-slippage" aria-label="Slippage">
               <option value="300">3%</option>
               <option value="400" selected>4%</option>
@@ -8186,6 +8186,7 @@ function volumeBotPanelHtml() {
         <div class="ovs-invest">
           <input data-vbot-invest type="range" min="0.1" max="10" step="0.1" value="6" aria-label="Investment in SOL">
           <input data-vbot-invest-num type="number" min="0.1" max="10" step="0.1" value="6" class="ovs-invest-num" aria-label="Investment in SOL">
+          <span class="ovs-invest-unit">SOL</span>
         </div>
         <div class="ovs-duration">
           <input data-vbot-duration type="range" min="20" max="360" step="5" value="60" aria-label="Duration">
@@ -8218,7 +8219,10 @@ function volumeBotPanelHtml() {
           </label>
         </div>
 
-        <button class="primary vbot-config-start" data-vbot-start ${state.volumeBotBusy ? "disabled" : ""}>${state.volumeBotBusy ? "Starting..." : "Start SlimeBot"}</button>
+        <div class="ovs-actions">
+          <button class="primary vbot-config-start" data-vbot-start ${state.volumeBotBusy ? "disabled" : ""}>${state.volumeBotBusy ? "Starting..." : "Start SlimeBot"}</button>
+          ${(() => { const ab = (Array.isArray(state.volumeBots) ? state.volumeBots : []).find((b) => b && b.status !== "completed"); return ab ? `<button type="button" class="vbot-stop-sweep" data-vbot-stop="${escapeHtml(ab.id)}">&#9209; Stop &amp; Sweep Back</button>` : ""; })()}
+        </div>
         <p class="trade-status" data-vbot-status>${escapeHtml(state.volumeBotStatus || "Set a token, investment, and mode, then Start. Spends real SOL from the source wallet.")}</p>
 
         <div class="vbot-queue">
@@ -20622,7 +20626,7 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-trade-buy-quick]")) {
     await executeWebBuy(target.dataset.tradeBuyQuick);
   }
-  if (target.matches("[data-swap-reverse]")) {
+  if (target.closest?.("[data-swap-reverse]")) {
     const from = normalizeSwapMint($("[data-swap-from]")?.value || state.tradeSwapFrom || "SOL") || "SOL";
     const to = normalizeSwapMint($("[data-swap-to]")?.value || state.tradeSwapTo || state.tradeToken || "");
     state.tradeSwapFrom = to && to !== "custom" ? to : "SOL";

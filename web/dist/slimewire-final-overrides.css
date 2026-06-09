@@ -19608,17 +19608,30 @@ html body main.shell[data-app] .oss-pill select {
   background: transparent !important;
   border: 0 !important;
   outline: none !important;
-  color: #c7f7a4 !important;
-  font-size: clamp(8px, 2cqw, 12px) !important;
-  font-weight: 700 !important;
+  color: #d6ffac !important;
+  font-size: clamp(12px, 2.7cqw, 18px) !important;
+  font-weight: 800 !important;
   text-align: center;
   text-align-last: center;
   -webkit-appearance: none;
   appearance: none;
   cursor: pointer;
 }
-html body main.shell[data-app] .oss-wallet { left: 80.5%; width: 14%; }
-html body main.shell[data-app] .oss-slip { left: 64.5%; width: 15%; }
+html body main.shell[data-app] .oss-wallet { left: 79.5%; width: 16%; }
+html body main.shell[data-app] .oss-slip { left: 62%; width: 17%; }
+/* Tiny "SLIP"/"WALLET" caption above each pill so the values are clear. */
+html body main.shell[data-app] .oss-pill::before {
+  content: attr(data-cap);
+  position: absolute;
+  top: -1.6cqw;
+  left: 0; right: 0;
+  text-align: center;
+  font-size: clamp(7px, 1.5cqw, 10px);
+  letter-spacing: 0.1em;
+  color: #7fae74;
+  text-transform: uppercase;
+  pointer-events: none;
+}
 html body main.shell[data-app] .ogre-swap-skin .oss-route {
   color: #9fb89c !important;
   text-align: center;
@@ -19674,16 +19687,22 @@ html body main.shell[data-app] .slime-configurator.ovs-skin {
   background: #050805 !important;
   padding: 0 !important;
 }
+/* One wide block: the panel on the left, the live info on the RIGHT side (not a
+   tall scroll below). Collapses to a single column on narrow screens. */
 html body main.shell[data-app] .ovs-skin.volume-bot-card {
-  max-width: 1160px;
+  max-width: 1340px;
   margin: 0 auto;
   width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1.32fr) minmax(0, 1fr);
+  gap: 22px;
+  align-items: start;
 }
 html body main.shell[data-app] .ovs-stage {
   position: relative;
   width: 100%;
-  max-width: 1120px;
-  margin: 0 auto;
+  max-width: none;
+  margin: 0;
   aspect-ratio: 1264 / 848;
   container-type: inline-size;
   background: #050805 url("/assets/slimewire/tool-bg/volume-template.png") center / 100% 100% no-repeat;
@@ -19750,31 +19769,43 @@ html body main.shell[data-app] .ovs-stage .vbot-segment button[data-active="true
   border-color: rgba(150, 255, 80, 0.9) !important;
   box-shadow: 0 0 10px rgba(120, 255, 60, 0.5);
 }
-/* Below the stage: spread the controls across the wide panel so the info sits
-   in that area instead of a tall scroll. Pay-From + Stagger share a row; the
-   rest span full width. */
+/* Right-column live info: a single-column stack beside the panel so everything
+   reads as one block with little/no scroll. */
 html body main.shell[data-app] .ovs-below {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px 18px;
-  padding: 16px 10px 6px;
-  max-width: 1120px;
-  margin: 0 auto;
-}
-html body main.shell[data-app] .ovs-below > .vbot-config-toggles,
-html body main.shell[data-app] .ovs-below > .vbot-config-start,
-html body main.shell[data-app] .ovs-below > [data-vbot-status],
-html body main.shell[data-app] .ovs-below > .vbot-queue,
-html body main.shell[data-app] .ovs-below > .volume-bot-list {
-  grid-column: 1 / -1;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  padding: 0;
+  max-width: none;
+  margin: 0;
+  align-content: start;
 }
 html body main.shell[data-app] .ovs-below > .vbot-config-toggles {
-  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px;
+  display: grid; grid-template-columns: 1fr; gap: 8px;
 }
-/* Mobile: stack the below-grid, keep the stage a touch taller so slots stay legible. */
+html body main.shell[data-app] .ovs-actions {
+  display: flex; gap: 10px; flex-wrap: wrap;
+}
+html body main.shell[data-app] .ovs-actions .vbot-config-start { flex: 1 1 auto; }
+html body main.shell[data-app] .vbot-stop-sweep {
+  flex: 0 0 auto;
+  background: linear-gradient(180deg, #ff7a4f, #d23b2f) !important;
+  color: #1a0805 !important;
+  border: 1px solid rgba(255, 140, 90, 0.7) !important;
+  border-radius: 12px !important;
+  font-weight: 800 !important;
+  padding: 0 16px !important;
+  cursor: pointer;
+}
+html body main.shell[data-app] .ovs-invest-unit {
+  color: #c7f7a4 !important; font-weight: 800;
+  font-size: clamp(10px, 2.4cqw, 15px); white-space: nowrap; padding-left: 2px;
+}
+/* Stacked (single-column) below ~920px: panel on top, info underneath. */
+@media (max-width: 920px) {
+  html body main.shell[data-app] .ovs-skin.volume-bot-card { grid-template-columns: 1fr; }
+}
 @media (max-width: 760px) {
-  html body main.shell[data-app] .ovs-below { grid-template-columns: 1fr; }
-  html body main.shell[data-app] .ovs-below > .vbot-config-toggles { grid-template-columns: 1fr; }
   html body main.shell[data-app] .ovs-ca { font-size: 12px !important; }
 }
 /* === END VOLUME_SKIN_20260609_V1 ===================================== */
