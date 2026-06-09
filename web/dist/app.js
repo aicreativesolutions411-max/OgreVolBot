@@ -367,6 +367,9 @@ const state = {
   volumeBotBusy: false,
   slimeBotMode: "smart",
   slimeBotAggr: "med",
+  slimeBotStagger: "steady",
+  slimeBotKeepDust: false,
+  slimeBotOffset: false,
   distributeStatus: "",
   distributeBusy: false,
   returnFundsStatus: "",
@@ -8222,6 +8225,24 @@ function volumeBotPanelHtml() {
           </div>
         </div>
 
+        <div class="vbot-config-row">
+          <div class="vbot-config-field">
+            <span class="vbot-config-label">Stagger pattern</span>
+            ${slimeBotSegment("stagger", state.slimeBotStagger, [["steady", "Steady"], ["waves", "Waves"], ["organic", "Organic"], ["ladder", "Ladder"]])}
+          </div>
+        </div>
+
+        <div class="vbot-config-toggles">
+          <label class="vbot-toggle">
+            <input type="checkbox" data-vbot-keepdust ${state.slimeBotKeepDust ? "checked" : ""}>
+            <span><strong>Leave dust</strong> — keep 1 token in each recycled wallet (looks like a real holder)</span>
+          </label>
+          <label class="vbot-toggle">
+            <input type="checkbox" data-vbot-offset ${state.slimeBotOffset ? "checked" : ""}>
+            <span><strong>Offset sell</strong> — a different wallet sells behind each buy (no instant self-sell)</span>
+          </label>
+        </div>
+
         <button class="primary vbot-config-start" data-vbot-start ${state.volumeBotBusy ? "disabled" : ""}>${state.volumeBotBusy ? "Starting..." : "Start SlimeBot"}</button>
         <p class="trade-status" data-vbot-status>${escapeHtml(state.volumeBotStatus || "Set a token, investment, and mode, then Start. Spends real SOL from the source wallet.")}</p>
 
@@ -8277,6 +8298,9 @@ function readVolumeBotForm() {
     sweepBack: true,
     walletIndexes: [],
     walletGroup: "",
+    keepDust: Boolean($("[data-vbot-keepdust]")?.checked),
+    offsetSell: Boolean($("[data-vbot-offset]")?.checked),
+    staggerPattern: ["steady", "waves", "organic", "ladder"].includes(state.slimeBotStagger) ? state.slimeBotStagger : "steady",
     investment,
     durationMin,
     mode,
@@ -20523,6 +20547,13 @@ document.addEventListener("click", async (event) => {
     vbotAggrBtn.parentElement?.querySelectorAll("[data-vbot-set-aggr]").forEach((btn) => { btn.dataset.active = String(btn === vbotAggrBtn); });
     return;
   }
+  const vbotStaggerBtn = target.closest?.("[data-vbot-set-stagger]");
+  if (vbotStaggerBtn) {
+    event.preventDefault();
+    state.slimeBotStagger = vbotStaggerBtn.dataset.vbotSetStagger || "steady";
+    vbotStaggerBtn.parentElement?.querySelectorAll("[data-vbot-set-stagger]").forEach((btn) => { btn.dataset.active = String(btn === vbotStaggerBtn); });
+    return;
+  }
   if (target.matches("[data-vbot-start]")) {
     event.preventDefault();
     await startVolumeBot();
@@ -20843,6 +20874,12 @@ document.addEventListener("change", async (event) => {
   if (target?.matches?.("[data-vbot-autocreate]")) {
     const manual = document.querySelector("[data-vbot-manual-wallets]");
     if (manual) manual.hidden = Boolean(target.checked);
+  }
+  if (target?.matches?.("[data-vbot-keepdust]")) {
+    state.slimeBotKeepDust = Boolean(target.checked);
+  }
+  if (target?.matches?.("[data-vbot-offset]")) {
+    state.slimeBotOffset = Boolean(target.checked);
   }
   if (target?.matches?.("[data-vbot-rolling]")) {
     const rolling = Boolean(target.checked);

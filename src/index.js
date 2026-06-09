@@ -25309,6 +25309,22 @@ function volumeBotMessage(plan) {
   return "SlimeBot armed.";
 }
 
+// keepDust: leave a small holding so the recycled wallet still shows a token.
+function volumeBotSellPercent(cfg, base = 100) {
+  const pct = Number(base) || 100;
+  return cfg && cfg.keepDust ? Math.min(pct, 98) : pct;
+}
+
+// Stagger the delay between actions so the flow does not look mechanical.
+function volumeBotStaggerMs(cfg, baseMs, index = 0) {
+  const pattern = String(cfg && cfg.staggerPattern || "steady");
+  const i = Number(index) || 0;
+  if (pattern === "waves") return (i % 4 < 2) ? Math.round(baseMs * 0.5) : Math.round(baseMs * 1.6);
+  if (pattern === "organic") return Math.round(baseMs * (0.6 + Math.random() * 0.9));
+  if (pattern === "ladder") return Math.round(baseMs * (0.7 + (i % 6) * 0.12));
+  return baseMs;
+}
+
 async function webStartVolumeBot(userId, body = {}) {
   const tokenMint = parsePublicKey(String(body.tokenMint || "")).toBase58();
   const walletCount = clamp(Number.parseInt(body.walletCount || "0", 10) || 0, 1, VOLUME_BOT_LIMITS.maxWallets);
@@ -25323,6 +25339,12 @@ async function webStartVolumeBot(userId, body = {}) {
   const rollingWallets = Boolean(body.rollingWallets);
   const maxRounds = clamp(Number.parseInt(body.maxRounds || body.cycles || "0", 10) || 0, 1, VOLUME_BOT_LIMITS.maxRounds);
   const sourceIndex = parseWebWalletIndex(body.sourceWalletIndex || body.walletIndex);
+  // New SlimeBot options (all additive; defaults preserve prior behavior).
+  const keepDust = Boolean(body.keepDust); // leave a dust token in recycled wallets
+  const offsetSell = Boolean(body.offsetSell); // pool mode: a different/earlier wallet sells while a fresh one buys
+  const staggerPattern = ["steady", "waves", "organic", "ladder"].includes(String(body.staggerPattern || "").toLowerCase())
+    ? String(body.staggerPattern).toLowerCase()
+    : "steady";
 
   if (buyAmountSol > VOLUME_BOT_LIMITS.maxBuyAmountSol) {
     throw volumeBotError(`Buy amount per trade is capped at ${VOLUME_BOT_LIMITS.maxBuyAmountSol} SOL.`);
@@ -25353,7 +25375,7 @@ async function webStartVolumeBot(userId, body = {}) {
       tokenMint,
       createdAt: nowIso,
       updatedAt: nowIso,
-      config: { rollingWallets: true, maxRounds, buyAmountSol, sellPercent, buyBias, delaySecs, slippageBps, sweepBack },
+      config: { rollingWallets: true, maxRounds, buyAmountSol, sellPercent, buyBias, delaySecs, slippageBps, sweepBack, keepDust, offsetSell, staggerPattern },
       sourcePublicKey: sourceRecord.publicKey,
       tradingPublicKeys: [],
       botStage: "running",
@@ -25415,7 +25437,7 @@ async function webStartVolumeBot(userId, body = {}) {
     tokenMint,
     createdAt: nowIso,
     updatedAt: nowIso,
-    config: { walletCount: tradingPublicKeys.length, autoCreate, cycles, buyAmountSol, sellPercent, buyBias, delaySecs, slippageBps, sweepBack },
+    config: { walletCount: tradingPublicKeys.length, autoCreate, cycles, buyAmountSol, sellPercent, buyBias, delaySecs, slippageBps, sweepBack, keepDust, offsetSell, staggerPattern },
     sourcePublicKey: sourceRecord.publicKey,
     tradingPublicKeys,
     botStage: "running",
@@ -25508,12 +25530,37 @@ async function processVolumeBotPlan(plan, walletStore, persist) {
         const record = recordByPk(publicKey);
         if (!record) {
           volumeBotLogPush(plan, `Wallet ${shortMint(publicKey)} missing from store; skipping.`);
+        } else if (cfg.offsetSell && pks.length >= 2) {
+          // Offset mode: this wallet BUYS while a different, earlier wallet
+          // SELLS — never the same wallet buying then selling back-to-back.
+          try {
+            await buyTokenForPlan(record, plan.tokenMint, solToLamports(Number(cfg.buyAmountSol)), slippageBps, { userId: plan.userId });
+            plan.stats.buys = Number(plan.stats.buys || 0) + 1;
+            volumeBotLogPush(plan, `Buy ${cfg.buyAmountSol} SOL from ${shortMint(publicKey)}.`);
+          } catch (error) {
+            plan.stats.errors = Number(plan.stats.errors || 0) + 1;
+            volumeBotLogPush(plan, `Buy failed ${shortMint(publicKey)}: ${friendlyError(error)}`);
+          }
+          const sellIdx = (cursor + Math.max(1, Math.floor(pks.length / 2))) % pks.length;
+          const sellRecord = sellIdx !== cursor ? recordByPk(pks[sellIdx]) : null;
+          if (sellRecord) {
+            try {
+              await sellTokenFromWallet(sellRecord, plan.tokenMint, volumeBotSellPercent(cfg, Number(cfg.sellPercent || 100)), slippageBps, { userId: plan.userId });
+              plan.stats.sells = Number(plan.stats.sells || 0) + 1;
+              volumeBotLogPush(plan, `Sell from ${shortMint(pks[sellIdx])} (offset behind buy).`);
+            } catch (error) {
+              if (!noBalance(error)) {
+                plan.stats.errors = Number(plan.stats.errors || 0) + 1;
+                volumeBotLogPush(plan, `Offset sell failed ${shortMint(pks[sellIdx])}: ${friendlyError(error)}`);
+              }
+            }
+          }
         } else {
           const wantBuy = (Math.random() * 100) < Number(cfg.buyBias || 60);
           let didSell = false;
           if (!wantBuy) {
             try {
-              await sellTokenFromWallet(record, plan.tokenMint, Number(cfg.sellPercent || 100), slippageBps, { userId: plan.userId });
+              await sellTokenFromWallet(record, plan.tokenMint, volumeBotSellPercent(cfg, Number(cfg.sellPercent || 100)), slippageBps, { userId: plan.userId });
               plan.stats.sells = Number(plan.stats.sells || 0) + 1;
               didSell = true;
               volumeBotLogPush(plan, `Sell ${cfg.sellPercent}% from ${shortMint(publicKey)}.`);
@@ -25558,8 +25605,8 @@ async function processVolumeBotPlan(plan, walletStore, persist) {
         const record = recordByPk(publicKey);
         if (record) {
           try {
-            await sellTokenFromWallet(record, plan.tokenMint, 100, slippageBps, { userId: plan.userId });
-            volumeBotLogPush(plan, `Swept tokens from ${shortMint(publicKey)}.`);
+            await sellTokenFromWallet(record, plan.tokenMint, volumeBotSellPercent(cfg, 100), slippageBps, { userId: plan.userId });
+            volumeBotLogPush(plan, cfg.keepDust ? `Swept ${shortMint(publicKey)} (kept dust token).` : `Swept tokens from ${shortMint(publicKey)}.`);
           } catch (error) {
             if (!noBalance(error)) volumeBotLogPush(plan, `Token sweep skipped ${shortMint(publicKey)}: ${friendlyError(error)}`);
           }
@@ -25587,8 +25634,9 @@ async function processVolumeBotPlan(plan, walletStore, persist) {
     plan.completedAt = new Date().toISOString();
     volumeBotLogPush(plan, "SlimeBot finished.");
   }
+  plan.actionCount = Number(plan.actionCount || 0) + 1;
   plan.updatedAt = new Date().toISOString();
-  plan.nextActionAt = new Date(Date.now() + delayMs).toISOString();
+  plan.nextActionAt = new Date(Date.now() + volumeBotStaggerMs(cfg, delayMs, plan.actionCount)).toISOString();
   if (typeof persist === "function") await persist();
   return { changed: true };
 }
@@ -25668,9 +25716,9 @@ async function runRollingVolumeBotStep(plan, { slippageBps, noBalance }) {
     const record = byPk(plan.activeWalletPublicKey);
     if (record) {
       try {
-        await sellTokenFromWallet(record, plan.tokenMint, Number(cfg.sellPercent || 100), slippageBps, { userId: plan.userId });
+        await sellTokenFromWallet(record, plan.tokenMint, volumeBotSellPercent(cfg, Number(cfg.sellPercent || 100)), slippageBps, { userId: plan.userId });
         plan.stats.sells = Number(plan.stats.sells || 0) + 1;
-        volumeBotLogPush(plan, `Sell ${cfg.sellPercent || 100}% from ${shortMint(record.publicKey)}.`);
+        volumeBotLogPush(plan, `Sell ${volumeBotSellPercent(cfg, Number(cfg.sellPercent || 100))}% from ${shortMint(record.publicKey)}.`);
       } catch (error) {
         if (!noBalance(error)) {
           plan.stats.errors = Number(plan.stats.errors || 0) + 1;
@@ -25705,8 +25753,8 @@ async function rollingExitActiveWallet(plan, byPk, slippageBps, noBalance) {
   if (!record) return;
   const cfg = plan.config || {};
   try {
-    await sellTokenFromWallet(record, plan.tokenMint, 100, slippageBps, { userId: plan.userId });
-    volumeBotLogPush(plan, `Swept tokens from ${shortMint(publicKey)}.`);
+    await sellTokenFromWallet(record, plan.tokenMint, volumeBotSellPercent(cfg, 100), slippageBps, { userId: plan.userId });
+    volumeBotLogPush(plan, cfg.keepDust ? `Swept ${shortMint(publicKey)} (kept dust token).` : `Swept tokens from ${shortMint(publicKey)}.`);
   } catch (error) {
     if (!noBalance(error)) volumeBotLogPush(plan, `Token sweep skipped ${shortMint(publicKey)}: ${friendlyError(error)}`);
   }
@@ -25722,8 +25770,9 @@ async function rollingExitActiveWallet(plan, byPk, slippageBps, noBalance) {
       volumeBotLogPush(plan, `SOL sweep skipped ${shortMint(publicKey)}: ${friendlyError(error)}`);
     }
   }
-  // Only discard the throwaway wallet once it is empty, so funds are never stranded.
-  if (drained || cfg.sweepBack === false) {
+  // Only discard the throwaway wallet once it is empty, so funds are never
+  // stranded. With keepDust the wallet intentionally holds a token, so keep it.
+  if (!cfg.keepDust && (drained || cfg.sweepBack === false)) {
     await pruneVolumeWallet(publicKey).catch(() => {});
   }
 }

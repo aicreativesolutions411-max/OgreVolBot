@@ -19413,6 +19413,39 @@ html body main.shell[data-app] .vbot-config-start {
   html body main.shell[data-app] .vbot-config-title { font-size: 22px !important; }
   html body main.shell[data-app] .slime-configurator .vbot-config-bg { opacity: 0.5; }
 }
+html body main.shell[data-app] .vbot-config-toggles {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 640px;
+  margin: 4px 0 2px;
+}
+html body main.shell[data-app] .vbot-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 13px;
+  border: 1px solid rgba(120, 200, 90, 0.22);
+  border-radius: 12px;
+  background: rgba(12, 26, 10, 0.55);
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--slime-text-soft, #cfe8c4);
+  cursor: pointer;
+}
+html body main.shell[data-app] .vbot-toggle:hover {
+  border-color: rgba(150, 230, 110, 0.4);
+}
+html body main.shell[data-app] .vbot-toggle input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  accent-color: var(--slime-green-strong, #bbff63);
+  flex: 0 0 auto;
+}
+html body main.shell[data-app] .vbot-toggle strong {
+  color: var(--slime-green-strong, #bbff63);
+}
 /* === END SLIMEBOT_CONFIGURATOR_20260609_V1 =========================== */
 
 /* === OGRESWAP_20260609_V1 ==============================================
