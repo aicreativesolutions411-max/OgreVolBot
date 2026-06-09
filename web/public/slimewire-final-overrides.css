@@ -18595,3 +18595,190 @@ main.shell[data-app] .table-list .row-card:hover {
   border-color: var(--line-strong);
 }
 /* === END SLIMEWIRE_V2_FOUNDATION_20260608_V1 ========================= */
+
+/* === SLIMEWIRE_V2_TERMINAL_20260608_V1 =================================
+   Bold terminal restyle: kill the "bubble box" look. Flat dark panels with
+   hairline borders (no neon glow), muted ghost buttons with ONE green
+   primary, flat tab-style pills, tighter density. Verified live. */
+
+html body main.shell[data-app] {
+  /* Calmer, less-saturated accent across the terminal. */
+  --line: rgba(120, 230, 120, 0.1);
+  --line-strong: rgba(120, 230, 120, 0.24);
+  --slime-text: #e7efe5;
+  --slime-muted: #899788;
+}
+
+/* Default body/number text to neutral near-white; green becomes an ACCENT,
+   not the default — this is the single biggest "less AI / more pro" move. */
+html body main.shell[data-app] .terminal-panel,
+html body main.shell[data-app] .command-workspace,
+html body main.shell[data-app] .top-stats-strip {
+  color: #e7efe5;
+}
+html body main.shell[data-app] .top-stats-strip strong,
+html body main.shell[data-app] .terminal-token-stats dd,
+html body main.shell[data-app] .stat-value,
+html body main.shell[data-app] [class*="top-stat"] strong {
+  color: #f2f7f0 !important;
+}
+html body main.shell[data-app] .top-stats-strip span,
+html body main.shell[data-app] [class*="top-stat"] span,
+html body main.shell[data-app] .terminal-token-stats dt {
+  color: #7d8c7c !important;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10px !important;
+}
+
+/* Panels: flat dark, near-invisible hairline, no glow, tighter. */
+html body main.shell[data-app] .terminal-panel,
+html body main.shell[data-app] .command-grid > article,
+html body main.shell[data-app] .launch-filter-panel,
+html body main.shell[data-app] .terminal-bottom {
+  background: rgba(7, 11, 8, 0.96) !important;
+  border: 1px solid rgba(120, 230, 120, 0.08) !important;
+  border-radius: 10px !important;
+  box-shadow: none !important;
+}
+html body main.shell[data-app] .terminal-panel header {
+  border-bottom: 1px solid rgba(120, 230, 120, 0.08);
+  padding-bottom: 6px;
+  margin-bottom: 6px;
+}
+
+/* Section/panel titles: small muted-grey uppercase labels (Padre-style). */
+html body main.shell[data-app] .terminal-panel header h4,
+html body main.shell[data-app] .terminal-title-row h3,
+html body main.shell[data-app] .account-check-card h3 {
+  font-size: 12px !important;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #9fb29d !important;
+  font-weight: 600 !important;
+}
+html body main.shell[data-app] .terminal-panel header span,
+html body main.shell[data-app] .terminal-title-row span {
+  color: #6f7e6e !important;
+}
+
+/* Top stat tiles (.metrics): neutral near-white values, muted labels. */
+html body main.shell[data-app] .metrics article {
+  background: rgba(7, 11, 8, 0.9) !important;
+  border: 1px solid rgba(120, 230, 120, 0.08) !important;
+  border-radius: 8px !important;
+}
+html body main.shell[data-app] .metrics article strong {
+  color: #f2f7f0 !important;
+  font-weight: 650 !important;
+}
+html body main.shell[data-app] .metrics article span {
+  color: #7d8c7c !important;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+html body main.shell[data-app] .metrics article small {
+  color: #5f6e5e !important;
+}
+
+/* Refresh Feeds and other secondary command buttons: ghost, not a second
+   bright-green CTA. Reserve green for the single Connect Wallet primary. */
+html body main.shell[data-app] .command-controls button.primary,
+html body main.shell[data-app] .command-controls [data-refresh-live-pairs] {
+  background: rgba(16, 24, 18, 0.92) !important;
+  border: 1px solid rgba(120, 230, 120, 0.2) !important;
+  color: #cfe9c8 !important;
+  box-shadow: none !important;
+}
+
+/* Top control rows: flat, compact, mostly ghost buttons. */
+html body main.shell[data-app] .top-auth-group button,
+html body main.shell[data-app] .top-sync-strip button,
+html body main.shell[data-app] .command-controls > button,
+html body main.shell[data-app] .terminal-global-search button {
+  background: rgba(16, 24, 18, 0.9) !important;
+  border: 1px solid rgba(120, 230, 120, 0.16) !important;
+  border-radius: 7px !important;
+  color: #d7f5d0 !important;
+  box-shadow: none !important;
+  font-weight: 550 !important;
+  text-transform: none !important;
+}
+html body main.shell[data-app] .top-auth-group button:hover,
+html body main.shell[data-app] .top-sync-strip button:hover {
+  border-color: rgba(120, 230, 120, 0.34) !important;
+  background: rgba(22, 34, 24, 0.95) !important;
+}
+/* Exactly one green primary CTA, and a calmer green. */
+html body main.shell[data-app] .top-auth-group button.primary,
+html body main.shell[data-app] button.primary {
+  background: rgba(98, 214, 70, 0.92) !important;
+  border: 1px solid rgba(98, 214, 70, 0.9) !important;
+  color: #06140a !important;
+  box-shadow: none !important;
+}
+
+/* Stat tiles: flat, borderless, dense. */
+html body main.shell[data-app] .top-stats-strip > *,
+html body main.shell[data-app] [class*="top-stat"] {
+  background: rgba(7, 11, 8, 0.9) !important;
+  border: 1px solid rgba(120, 230, 120, 0.1) !important;
+  border-radius: 8px !important;
+  box-shadow: none !important;
+}
+
+/* Buckets / mode pills: flat tab look, not bright bubbles. */
+html body main.shell[data-app] .mode-row button,
+html body main.shell[data-app] .live-pair-buckets button {
+  border-radius: 6px !important;
+  background: rgba(14, 22, 16, 0.85) !important;
+  border: 1px solid rgba(120, 230, 120, 0.12) !important;
+  box-shadow: none !important;
+  color: #b8d8b2 !important;
+}
+html body main.shell[data-app] .mode-row button[data-active="true"],
+html body main.shell[data-app] .live-pair-buckets button[data-active="true"] {
+  background: rgba(98, 214, 70, 0.16) !important;
+  border-color: rgba(98, 214, 70, 0.55) !important;
+  color: var(--slime-green-strong, #bbff63) !important;
+}
+
+/* Search bar: flat field. */
+html body main.shell[data-app] .terminal-global-search {
+  background: rgba(7, 11, 8, 0.9) !important;
+  border: 1px solid rgba(120, 230, 120, 0.14) !important;
+  border-radius: 8px !important;
+  box-shadow: none !important;
+}
+
+/* Broad cleanup: every secondary button in the workspace becomes a flat
+   dark ghost chip. Green is reserved for primary CTAs and active states. */
+html body main.shell[data-app] .command-workspace button:not(.primary):not([data-active="true"]):not([data-tab]),
+html body main.shell[data-app] .terminal-panel button:not(.primary):not([data-active="true"]),
+html body main.shell[data-app] .card-actions button:not(.primary),
+html body main.shell[data-app] .card-actions a {
+  background: rgba(15, 23, 17, 0.88) !important;
+  border: 1px solid rgba(120, 230, 120, 0.15) !important;
+  color: #cfe9c8 !important;
+  border-radius: 7px !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+html body main.shell[data-app] .command-workspace button:not(.primary):not([data-active="true"]):hover,
+html body main.shell[data-app] .terminal-panel button:not(.primary):not([data-active="true"]):hover {
+  border-color: rgba(120, 230, 120, 0.32) !important;
+  background: rgba(22, 34, 24, 0.95) !important;
+}
+
+/* Nav rail: flatten the circular bubbles into clean square-ish chips. */
+html body main.shell[data-app] nav.tabs button {
+  border-radius: 8px !important;
+  border: 1px solid transparent !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+html body main.shell[data-app] nav.tabs button[data-active="true"] {
+  background: rgba(98, 214, 70, 0.14) !important;
+  border-color: rgba(98, 214, 70, 0.4) !important;
+}
+/* === END SLIMEWIRE_V2_TERMINAL_20260608_V1 =========================== */
