@@ -17362,11 +17362,11 @@ function tokenSignalRowHtml(row, index, options = {}) {
           ${pairRiskBadgesHtml(row)}
         </div>
       </div>
-      <div class="signal-cell"><span>${escapeHtml(row.pairAgeLabel || formatAgeFromRow(row) || "age unknown")}</span><small>${escapeHtml(row.scalpSetup || row.momentum || `#${index + 1}`)}</small></div>
-      <div class="signal-cell"><span>${escapeHtml(firstStatLabel(row.liquidityLabel, livePairLiquidityUsd(row) > 0 ? compactUsd(livePairLiquidityUsd(row)) : "", "checking"))}</span><small>${formatChangeHtml(row.h1)}</small></div>
-      <div class="signal-cell"><span>${escapeHtml(firstStatLabel(row.marketCapLabel, livePairMarketCap(row) > 0 ? compactUsd(livePairMarketCap(row)) : "", "checking"))}</span><small>${escapeHtml(row.category || row.signalType || "signal")}</small></div>
-      <div class="signal-cell"><span>${escapeHtml(row.txnsLabel || row.winRateLabel || "n/a")}</span><small>${escapeHtml(slimeShieldSmallLabel(row))}</small></div>
-      <div class="signal-cell volume-windows">
+      <div class="signal-cell" data-cell="Age"><span>${escapeHtml(row.pairAgeLabel || formatAgeFromRow(row) || "age unknown")}</span><small>${escapeHtml(row.scalpSetup || row.momentum || `#${index + 1}`)}</small></div>
+      <div class="signal-cell" data-cell="Liq"><span>${escapeHtml(firstStatLabel(row.liquidityLabel, livePairLiquidityUsd(row) > 0 ? compactUsd(livePairLiquidityUsd(row)) : "", "checking"))}</span><small>${formatChangeHtml(row.h1)}</small></div>
+      <div class="signal-cell" data-cell="MC"><span>${escapeHtml(firstStatLabel(row.marketCapLabel, livePairMarketCap(row) > 0 ? compactUsd(livePairMarketCap(row)) : "", "checking"))}</span><small>${escapeHtml(row.category || row.signalType || "signal")}</small></div>
+      <div class="signal-cell" data-cell="Txns"><span>${escapeHtml(row.txnsLabel || row.winRateLabel || "n/a")}</span><small>${escapeHtml(slimeShieldSmallLabel(row))}</small></div>
+      <div class="signal-cell volume-windows" data-cell="Vol">
         <span>${escapeHtml(firstStatLabel(row.volumeH1Label, row.volumeLabel, livePairVolumeH1(row) > 0 ? compactUsd(livePairVolumeH1(row)) : "", "checking"))}</span>
         <small>${volumeWindowItems(row).map(([label, value]) => `${label} ${value}`).join(" | ")}</small>
       </div>
