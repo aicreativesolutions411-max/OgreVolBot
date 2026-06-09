@@ -19098,3 +19098,58 @@ html body main.shell[data-app] .terminal-token-title small {
   color: #7d8c7c !important;
 }
 /* === END SLIMEWIRE_V2_ROWS_20260608_V1 =============================== */
+
+/* === SLIMEWIRE_V2_MOBILEFIX_20260608_V1 ================================
+   Fix the Ogre Tools nav icons that were display:none, and tighten the
+   sloppy stacked mobile topbar into compact chips. Verified live. */
+
+/* Ogre Tools group icons (AI, Pump, Bundle, Volume, Launch, Snipe) were
+   hidden — show them at the same size/treatment as the rest of the rail. */
+html body main.shell[data-app] .tabs .nav-tool-group button[data-tab]::before,
+html body main.shell[data-app] .tabs button[data-tab="ogreAi"]::before,
+html body main.shell[data-app] .tabs button[data-tab="launchCoin"]::before,
+html body main.shell[data-app] .tabs button[data-tab="bundle"]::before,
+html body main.shell[data-app] .tabs button[data-tab="volume"]::before,
+html body main.shell[data-app] .tabs button[data-tab="launch"]::before,
+html body main.shell[data-app] .tabs button[data-tab="sniper"]::before,
+html body main.shell[data-app] .tabs button[data-tab="ogreTek"]::before {
+  display: block !important;
+  width: 18px !important;
+  height: 16px !important;
+  margin: 0 auto 2px !important;
+}
+
+/* Tighten the mobile topbar: compact, wrapping chips instead of stacked
+   full-width buttons (the sloppy top-of-screen). */
+@media (max-width: 760px) {
+  html body main.shell[data-app][data-route="terminal"] .topbar-right {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: wrap !important;
+    gap: 5px !important;
+    align-items: center !important;
+  }
+  html body main.shell[data-app][data-route="terminal"] .terminal-global-search {
+    flex: 1 1 100% !important;
+  }
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip,
+  html body main.shell[data-app][data-route="terminal"] .top-auth-actions,
+  html body main.shell[data-app][data-route="terminal"] .top-auth-group {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: wrap !important;
+    gap: 5px !important;
+    width: 100% !important;
+  }
+  html body main.shell[data-app][data-route="terminal"] .top-sync-strip > button,
+  html body main.shell[data-app][data-route="terminal"] .top-auth-group > button {
+    flex: 1 1 30% !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    font-size: 11px !important;
+    padding: 7px 8px !important;
+    border-radius: 7px !important;
+  }
+}
+/* === END SLIMEWIRE_V2_MOBILEFIX_20260608_V1 ========================== */
