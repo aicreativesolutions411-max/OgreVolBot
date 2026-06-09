@@ -7003,7 +7003,7 @@ function tradeHtml() {
               ${swapTokenSelectOptions(swapTo, { includeCustom: true })}
             </select>
           </div>
-          <button type="button" class="oss-swap primary" data-trade-buy-custom>SWAP</button>
+          <button type="button" class="oss-swap primary" data-swap-use-custom-amount>SWAP</button>
           <label class="oss-pill oss-wallet">
             <select data-trade-wallet aria-label="Wallet">
               ${walletOptionsHtml(connected?.publicKey && !hasManagedWallets ? "connected" : "")}

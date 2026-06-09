@@ -19488,11 +19488,21 @@ html body main.shell[data-app] .oss-a11y-title {
 html body main.shell[data-app] .oss-stage {
   position: relative;
   width: 100%;
-  max-width: 560px;
+  max-width: 820px;
   margin: 0 auto;
   aspect-ratio: 1264 / 848;
   container-type: inline-size;
   background: #050805 url("/assets/slimewire/tool-bg/swap-template.png") center / 100% 100% no-repeat;
+}
+/* Let the swap panel use the full row, not a narrow column, so it reads as a
+   full panel. The info aside drops below on the Swap tab. */
+html body main.shell[data-app] .trade-layout:has(.ogre-swap-skin) {
+  grid-template-columns: 1fr !important;
+}
+html body main.shell[data-app] .trade-layout:has(.ogre-swap-skin) .ogre-swap-skin {
+  max-width: 860px;
+  margin: 0 auto;
+  width: 100%;
 }
 html body main.shell[data-app] .oss-slot {
   position: absolute;
@@ -19539,8 +19549,9 @@ html body main.shell[data-app] .oss-tok option,
 html body main.shell[data-app] .oss-pill option { color: #06140a; background: #cfeec0; }
 html body main.shell[data-app] .oss-reverse {
   position: absolute;
-  left: 44%;
-  top: 43.2%;
+  left: 50%;
+  top: 43.4%;
+  transform: translateX(-50%);
   width: 12%;
   height: 10.5%;
   display: flex !important;
