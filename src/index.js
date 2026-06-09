@@ -2292,6 +2292,16 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "POST" && pathname === "/api/web/wallets/distribute") {
+      const body = await readJsonRequestBody(request);
+      const result = await webDistributeToFreshWallets(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        ...result
+      });
+      return;
+    }
+
     if (request.method === "POST" && pathname === "/api/web/session-wallet/create") {
       const body = await readJsonRequestBody(request);
       const result = await createWebSessionWalletOrder(auth.userId, body);
@@ -23720,6 +23730,56 @@ async function createWebWalletSet(userId, body = {}) {
         text: recoveryKeys.text
       }
     }
+  };
+}
+
+// Create N fresh managed wallets and fund each from a source wallet in one
+// step (compose the tested wallet-create + send-sol-many paths). Lets a
+// trader move off their known wallet so copy-traders can't follow it.
+async function webDistributeToFreshWallets(userId, body = {}) {
+  const count = Number.parseInt(body.count || "0", 10);
+  if (!Number.isInteger(count) || count < 1 || count > 20) {
+    const error = new Error("Wallet count must be from 1 to 20.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const amountSol = parsePositiveNumber(String(body.amountSol || ""));
+  const sourceIndex = parseWebWalletIndex(body.sourceWalletIndex || body.fromWalletIndex || body.walletIndex);
+  const label = cleanLabel(String(body.label || "Fresh"));
+
+  // Confirm the source wallet exists/owned before creating anything.
+  const store = await readWalletStore();
+  const sourceRecord = getWalletAt(store, sourceIndex, userId);
+
+  const created = await createWebWalletSet(userId, { count, label });
+  const destinations = (created.wallets || []).map((wallet) => wallet.publicKey).filter(Boolean);
+  if (!destinations.length) {
+    throw new Error("Wallet creation returned no wallets. Try again.");
+  }
+
+  const fund = await webSendSolMany(userId, {
+    fromWalletIndex: sourceIndex,
+    destinations,
+    amountSol: String(amountSol)
+  });
+
+  await audit("web_distribute_fresh_wallets", {
+    userId,
+    count: destinations.length,
+    amountSol,
+    sourcePublicKey: sourceRecord.publicKey,
+    signature: fund?.signature
+  });
+
+  return {
+    action: "distribute-fresh-wallets",
+    count: destinations.length,
+    amountSol,
+    fundedSol: Number((amountSol * destinations.length).toFixed(6)),
+    wallets: created.wallets,
+    downloads: created.downloads,
+    signature: fund?.signature || "",
+    summary: `Created ${destinations.length} fresh wallet(s) and funded each with ${amountSol} SOL${fund?.signature ? ` (${fund.signature})` : ""}.`
   };
 }
 

@@ -365,6 +365,8 @@ const state = {
   volumeBots: [],
   volumeBotStatus: "",
   volumeBotBusy: false,
+  distributeStatus: "",
+  distributeBusy: false,
   sniperResult: null,
   ogreAiResult: null,
   ogreAiStatus: "",
@@ -7926,6 +7928,89 @@ function volumeBotSourceOptionsHtml() {
     .join("");
 }
 
+function distributeWalletsHtml() {
+  if (!state.wallets.length) return "";
+  return `
+    <article class="account-check-card distribute-card" data-preserve-focus>
+      <div>
+        <h3>Distribute to Fresh Wallets</h3>
+        <p>Create new managed wallets and fund them from a source wallet in one step, then trade from them so copy-traders can't follow your main address. Backup files download automatically.</p>
+      </div>
+      <div class="volume-grid">
+        <label>
+          Source wallet (funds the new set)
+          <select data-distribute-source>${volumeBotSourceOptionsHtml()}</select>
+        </label>
+        <label>
+          New wallets (1-20)
+          <input data-distribute-count type="number" min="1" max="20" step="1" value="5">
+        </label>
+        <label>
+          SOL per wallet
+          <input data-distribute-amount type="number" min="0" step="0.01" value="0.05">
+        </label>
+        <label>
+          Label
+          <input data-distribute-label type="text" value="Fresh">
+        </label>
+      </div>
+      <button class="primary" data-distribute-fresh ${state.distributeBusy ? "disabled" : ""}>${state.distributeBusy ? "Creating & funding..." : "Create & Fund Wallets"}</button>
+      <p class="trade-status" data-distribute-status>${escapeHtml(state.distributeStatus || "Sends real SOL from the source wallet to each new wallet.")}</p>
+    </article>
+  `;
+}
+
+function setDistributeStatus(message) {
+  state.distributeStatus = String(message || "");
+  const node = $("[data-distribute-status]");
+  if (node) node.textContent = state.distributeStatus;
+}
+
+async function distributeFreshWallets() {
+  if (state.distributeBusy) return;
+  const count = $("[data-distribute-count]")?.value || "5";
+  const amountSol = $("[data-distribute-amount]")?.value || "";
+  const sourceWalletIndex = $("[data-distribute-source]")?.value || "1";
+  const label = $("[data-distribute-label]")?.value?.trim() || "Fresh";
+  if (!amountSol || Number(amountSol) <= 0) {
+    setDistributeStatus("Enter SOL per wallet greater than zero.");
+    return;
+  }
+  const total = (Number(amountSol) || 0) * (Number(count) || 0);
+  const confirmed = window.confirm([
+    `Create ${count} fresh wallet(s) and fund each with ${amountSol} SOL?`,
+    `That sends about ${total.toFixed(3)} SOL total from the source wallet (real SOL).`,
+    "Backup/recovery files for the new wallets will download."
+  ].join("\n"));
+  if (!confirmed) return;
+  state.distributeBusy = true;
+  setDistributeStatus("Creating and funding wallets...");
+  render();
+  try {
+    await ensureWebAccount($("[data-distribute-status]"), "Creating secure web profile for wallet backups...");
+    const data = await api("/api/web/wallets/distribute", {
+      method: "POST",
+      body: JSON.stringify({ count, amountSol, sourceWalletIndex, label }),
+      dedupe: false,
+      timeoutMs: API_LONG_ACTION_TIMEOUT_MS
+    });
+    if (data.downloads?.encryptedBackup?.text) {
+      downloadText(data.downloads.encryptedBackup.filename, data.downloads.encryptedBackup.text);
+    }
+    if (data.downloads?.recoveryKeys?.text) {
+      downloadText(data.downloads.recoveryKeys.filename, data.downloads.recoveryKeys.text);
+    }
+    state.distributeBusy = false;
+    setDistributeStatus(data.summary || "Fresh wallets created and funded. Backups downloaded.");
+    await refreshWalletState({ force: true, deep: false, reason: "distribute-fresh-wallets" }).catch(() => {});
+    render();
+  } catch (error) {
+    state.distributeBusy = false;
+    setDistributeStatus(error.message);
+    render();
+  }
+}
+
 function volumeBotStageLabel(bot) {
   if (bot.status === "completed") return "Finished";
   if (bot.stage === "sweeping") return "Sweeping back";
@@ -13116,6 +13201,7 @@ function walletsHtml() {
       <button data-tab="txAudit">Tx Audit</button>
       <small data-wallet-remove-status>${escapeHtml(state.walletRemoveStatus || "")}</small>
     </section>
+    ${distributeWalletsHtml()}
     <div class="table-list">
       ${state.wallets.map((wallet) => `
         <article class="row-card">
@@ -20237,6 +20323,7 @@ document.addEventListener("click", async (event) => {
     await sharePnlCard(target.dataset.sharePnlCard, target.dataset.shareText || "");
   }
   if (target.matches("[data-create-wallets]")) await createWalletSet();
+  if (target.matches("[data-distribute-fresh]")) { await distributeFreshWallets(); return; }
   if (target.matches("[data-create-automation-wallet]")) await createAutomationWallet();
   if (target.matches("[data-create-session-wallet]")) {
     event.preventDefault();
