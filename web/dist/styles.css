@@ -1085,6 +1085,83 @@ button:disabled {
   border-radius: 12px;
 }
 
+.volume-bot-card {
+  margin-bottom: 16px;
+}
+
+.volume-bot-card .vbot-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.volume-bot-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.volume-bot-status {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: rgba(8, 14, 9, 0.6);
+}
+
+.volume-bot-status-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.volume-bot-stage {
+  margin-left: 8px;
+  font-size: 0.72rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--slime, #8bff6a);
+}
+
+.volume-bot-stage[data-stage="sweeping"] {
+  color: #ffd166;
+}
+
+.volume-bot-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin: 8px 0;
+}
+
+.volume-bot-metrics div {
+  display: flex;
+  flex-direction: column;
+}
+
+.volume-bot-metrics span {
+  font-size: 0.66rem;
+  opacity: 0.7;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.volume-bot-log {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 3px;
+  font-size: 0.74rem;
+  opacity: 0.8;
+}
+
+.volume-bot-log li {
+  border-left: 2px solid rgba(139, 255, 106, 0.3);
+  padding-left: 8px;
+}
+
 .row-card.is-clickable {
   cursor: pointer;
   transition: border-color 0.15s ease, transform 0.15s ease;

@@ -362,6 +362,9 @@ const state = {
   bundleResult: null,
   volumeToken: "",
   volumeResult: null,
+  volumeBots: [],
+  volumeBotStatus: "",
+  volumeBotBusy: false,
   sniperResult: null,
   ogreAiResult: null,
   ogreAiStatus: "",
@@ -7917,18 +7920,243 @@ function syncTimerSellNoTimer(select) {
   syncCustomFields();
 }
 
+function volumeBotSourceOptionsHtml() {
+  return state.wallets
+    .map((wallet) => `<option value="${escapeHtml(wallet.index)}">${escapeHtml(wallet.index)}. ${escapeHtml(wallet.label || "Wallet")}${wallet.sessionWallet ? " (session)" : ""}</option>`)
+    .join("");
+}
+
+function volumeBotStageLabel(bot) {
+  if (bot.status === "completed") return "Finished";
+  if (bot.stage === "sweeping") return "Sweeping back";
+  if (bot.stage === "running") return "Running";
+  return bot.stage || "Armed";
+}
+
+function volumeBotListHtml() {
+  const bots = Array.isArray(state.volumeBots) ? state.volumeBots : [];
+  if (!bots.length) {
+    return `<article class="volume-bot-status"><p class="muted">No volume bots yet. Configure one above and press Start Volume Bot.</p></article>`;
+  }
+  return bots.map((bot) => {
+    const stats = bot.stats || {};
+    const active = bot.status !== "completed";
+    const log = (bot.log || []).slice(0, 6);
+    return `
+      <article class="volume-bot-status">
+        <header class="volume-bot-status-head">
+          <div>
+            <strong>${escapeHtml(bot.shortMint || bot.tokenMint || "Token")}</strong>
+            <span class="volume-bot-stage" data-stage="${escapeHtml(bot.stage || "")}">${escapeHtml(volumeBotStageLabel(bot))}</span>
+          </div>
+          ${active ? `<button class="secondary" data-vbot-stop="${escapeHtml(bot.id)}">Stop & Sweep</button>` : `<a class="mini-link" href="${escapeHtml(bot.dexUrl || "#")}" target="_blank" rel="noreferrer">Dex</a>`}
+        </header>
+        <div class="volume-bot-metrics">
+          <div><span>Cycle</span><strong>${escapeHtml(Number(bot.currentCycle || 0))}/${escapeHtml(Number(bot.cycles || 0))}</strong></div>
+          <div><span>Wallets</span><strong>${escapeHtml(Number(bot.walletCount || 0))}</strong></div>
+          <div><span>Buys</span><strong>${escapeHtml(Number(stats.buys || 0))}</strong></div>
+          <div><span>Sells</span><strong>${escapeHtml(Number(stats.sells || 0))}</strong></div>
+          <div><span>Errors</span><strong>${escapeHtml(Number(stats.errors || 0))}</strong></div>
+        </div>
+        <small>${escapeHtml(bot.message || "")}</small>
+        ${log.length ? `<ul class="volume-bot-log">${log.map((entry) => `<li>${escapeHtml(entry.message || "")}</li>`).join("")}</ul>` : ""}
+      </article>
+    `;
+  }).join("");
+}
+
+function volumeBotPanelHtml() {
+  return `
+    <section class="trade-card volume-bot-card" data-preserve-focus>
+      <div class="trade-head">
+        <div>
+          <h3>Volume Bot</h3>
+          <p>Auto-fund X wallets from a source wallet, run randomized buy/sell cycles to build volume, then sweep funds back. Runs server-side and keeps going after you close the tab.</p>
+        </div>
+      </div>
+      <label>
+        Token CA
+        <input data-vbot-token type="text" placeholder="Paste Solana token mint" value="${escapeHtml(state.volumeToken || state.tradeToken || "")}">
+      </label>
+      <div class="volume-grid">
+        <label>
+          Source Wallet (funds + receives sweep)
+          <select data-vbot-source>${volumeBotSourceOptionsHtml()}</select>
+        </label>
+        <label class="vbot-check">
+          <input type="checkbox" data-vbot-autocreate checked>
+          Auto-create fresh wallets
+        </label>
+        <label>
+          Wallets (1-12)
+          <input data-vbot-wallets type="number" min="1" max="12" step="1" value="3">
+        </label>
+        <label>
+          Fund / wallet (SOL)
+          <input data-vbot-fund type="number" min="0" step="0.01" value="0.05">
+        </label>
+        <label>
+          Buy / trade (SOL)
+          <input data-vbot-buy type="number" min="0" step="0.01" value="0.02">
+        </label>
+        <label>
+          Sell size
+          <select data-vbot-sell>
+            <option value="50">50%</option>
+            <option value="75">75%</option>
+            <option value="100" selected>100%</option>
+          </select>
+        </label>
+        <label>
+          Buy bias (% buys vs sells)
+          <input data-vbot-bias type="number" min="5" max="95" step="5" value="60">
+        </label>
+        <label>
+          Cycles (1-60)
+          <input data-vbot-cycles type="number" min="1" max="60" step="1" value="5">
+        </label>
+        <label>
+          Delay between trades (sec)
+          <input data-vbot-delay type="number" min="3" max="600" step="1" value="8">
+        </label>
+        <label>
+          Slippage
+          <select data-vbot-slippage>
+            <option value="300">3%</option>
+            <option value="400" selected>4%</option>
+            <option value="500">5%</option>
+            <option value="800">8%</option>
+          </select>
+        </label>
+        <label class="vbot-check">
+          <input type="checkbox" data-vbot-sweep checked>
+          Sweep funds back to source when done
+        </label>
+      </div>
+      <div class="wallet-checks" data-vbot-manual-wallets hidden>
+        <small>Manual wallet pick (used when auto-create is off):</small>
+        ${walletChecksHtml("vbot")}
+      </div>
+      <button class="primary" data-vbot-start ${state.volumeBotBusy ? "disabled" : ""}>${state.volumeBotBusy ? "Starting..." : "Start Volume Bot"}</button>
+      <p class="trade-status" data-vbot-status>${escapeHtml(state.volumeBotStatus || "Configure, then Start. The bot spends real SOL from the source wallet.")}</p>
+      <div class="volume-bot-list">
+        ${volumeBotListHtml()}
+      </div>
+    </section>
+  `;
+}
+
+function readVolumeBotForm() {
+  const autoCreate = Boolean($("[data-vbot-autocreate]")?.checked);
+  return {
+    tokenMint: $("[data-vbot-token]")?.value?.trim() || "",
+    sourceWalletIndex: $("[data-vbot-source]")?.value || "1",
+    autoCreateWallets: autoCreate,
+    walletCount: $("[data-vbot-wallets]")?.value || "3",
+    fundPerWalletSol: $("[data-vbot-fund]")?.value || "",
+    buyAmountSol: $("[data-vbot-buy]")?.value || "",
+    sellPercent: $("[data-vbot-sell]")?.value || "100",
+    buyBias: $("[data-vbot-bias]")?.value || "60",
+    cycles: $("[data-vbot-cycles]")?.value || "5",
+    delaySecs: $("[data-vbot-delay]")?.value || "8",
+    slippageBps: $("[data-vbot-slippage]")?.value || "400",
+    sweepBack: Boolean($("[data-vbot-sweep]")?.checked),
+    walletIndexes: autoCreate ? [] : checkedWalletIndexes("vbot"),
+    walletGroup: ""
+  };
+}
+
+function setVolumeBotStatus(message) {
+  state.volumeBotStatus = String(message || "");
+  const node = $("[data-vbot-status]");
+  if (node) node.textContent = state.volumeBotStatus;
+}
+
+async function loadVolumeBots({ silent = true } = {}) {
+  try {
+    const data = await api("/api/web/volume-bot");
+    state.volumeBots = Array.isArray(data.bots) ? data.bots : [];
+    if (state.activeTab === "volume") render();
+  } catch (error) {
+    if (!silent) setError(error.message);
+  }
+}
+
+async function startVolumeBot() {
+  if (state.volumeBotBusy) return;
+  const form = readVolumeBotForm();
+  if (!form.tokenMint) {
+    setVolumeBotStatus("Paste a token CA first.");
+    return;
+  }
+  const walletWord = form.autoCreateWallets ? `${form.walletCount} fresh wallet(s)` : "the selected wallet(s)";
+  const fundTotal = (Number(form.fundPerWalletSol) || 0) * (Number(form.walletCount) || 0);
+  const confirmed = window.confirm([
+    "Start Volume Bot? This spends REAL SOL.",
+    `Token: ${form.tokenMint}`,
+    `Funds ${walletWord} with ${form.fundPerWalletSol} SOL each` + (form.autoCreateWallets ? ` (~${fundTotal.toFixed(3)} SOL from source)` : ""),
+    `Then runs ${form.cycles} cycle(s) of randomized ${form.buyAmountSol} SOL buys / ${form.sellPercent}% sells.`,
+    form.sweepBack ? "Sweeps funds back to the source wallet when done." : "Leaves funds in the trading wallets when done."
+  ].join("\n"));
+  if (!confirmed) return;
+  state.volumeBotBusy = true;
+  setVolumeBotStatus("Funding wallets and starting bot...");
+  render();
+  try {
+    const data = await api("/api/web/volume-bot/start", {
+      method: "POST",
+      body: JSON.stringify(form),
+      dedupe: false,
+      timeoutMs: API_LONG_ACTION_TIMEOUT_MS
+    });
+    state.volumeBotBusy = false;
+    if (data.bot) {
+      state.volumeBots = [data.bot, ...state.volumeBots.filter((bot) => bot.id !== data.bot.id)];
+    }
+    setVolumeBotStatus(data.bot?.message || "Volume bot started.");
+    render();
+    void loadVolumeBots();
+  } catch (error) {
+    state.volumeBotBusy = false;
+    setVolumeBotStatus(error.message);
+    render();
+  }
+}
+
+async function stopVolumeBot(planId) {
+  if (!planId) return;
+  try {
+    setVolumeBotStatus("Stopping bot...");
+    const data = await api("/api/web/volume-bot/stop", {
+      method: "POST",
+      body: JSON.stringify({ planId }),
+      dedupe: false,
+      timeoutMs: API_LONG_ACTION_TIMEOUT_MS
+    });
+    if (data.bot) {
+      state.volumeBots = state.volumeBots.map((bot) => (bot.id === data.bot.id ? data.bot : bot));
+    }
+    setVolumeBotStatus(data.bot?.message || "Stop requested.");
+    render();
+    void loadVolumeBots();
+  } catch (error) {
+    setVolumeBotStatus(error.message);
+  }
+}
+
 function volumeHtml() {
   if (!state.wallets.length) {
-    return `${createWalletSection()}${emptyState("No wallets loaded yet", "Create or restore a wallet above first. Volume plans need a saved wallet so they can buy and watch exits.")}`;
+    return `${createWalletSection()}${emptyState("No wallets loaded yet", "Create or restore a managed wallet above first. The Volume Bot funds and trades from managed wallets, so it needs at least one saved source wallet.")}`;
   }
 
   return `
+    ${volumeBotPanelHtml()}
     <section class="trade-layout">
       <article class="trade-card">
         <div class="trade-head">
           <div>
-            <h3>Volume Plan</h3>
-            <p>Buy once, then auto-manage the exit by timer, take-profit, stop-loss, or repeat cycles.</p>
+            <h3>Timed Volume Plan</h3>
+            <p>Single buy, then auto-manage the exit by timer, take-profit, stop-loss, or repeat cycles. (For the multi-wallet auto-volume engine, use the Volume Bot above.)</p>
           </div>
           <a class="mini-link" href="${state.volumeToken ? dexUrl(state.volumeToken) : "#"}" target="_blank" rel="noreferrer">Dex</a>
         </div>
@@ -20055,6 +20283,17 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-volume-start]")) {
     await createVolumePlan();
   }
+  if (target.matches("[data-vbot-start]")) {
+    event.preventDefault();
+    await startVolumeBot();
+    return;
+  }
+  const vbotStopTarget = target.closest?.("[data-vbot-stop]");
+  if (vbotStopTarget) {
+    event.preventDefault();
+    await stopVolumeBot(vbotStopTarget.dataset.vbotStop || "");
+    return;
+  }
   if (target.matches("[data-sniper-buy]")) {
     await createSniperEntry(target.dataset.sniperBuy);
   }
@@ -20211,6 +20450,9 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-tab]")) {
     const startedAt = perfNow();
     state.activeTab = target.dataset.tab;
+    if (state.activeTab === "volume") {
+      void loadVolumeBots();
+    }
     if (state.activeTab === "ogreTek") {
       state.route = "terminal";
       window.history.pushState({}, "", "/ogre-tek");
@@ -20358,6 +20600,10 @@ document.addEventListener("keydown", (event) => {
 
 document.addEventListener("change", async (event) => {
   const target = event.target;
+  if (target?.matches?.("[data-vbot-autocreate]")) {
+    const manual = document.querySelector("[data-vbot-manual-wallets]");
+    if (manual) manual.hidden = Boolean(target.checked);
+  }
   if (target?.matches?.("[data-custom-select]")) {
     syncCustomFields();
     syncTimerSellNoTimer(target);
@@ -20979,6 +21225,16 @@ if (!window.__slimeStablePumpChartTimer) {
     if (!document.querySelector("[data-slime-pump-chart]")) return;
     slimePumpChartRerender();
   }, 8000);
+}
+
+if (!window.__slimeVolumeBotTimer) {
+  window.__slimeVolumeBotTimer = setInterval(() => {
+    if (document.visibilityState !== "visible") return;
+    if (state.activeTab !== "volume") return;
+    const hasActive = (state.volumeBots || []).some((bot) => bot.status !== "completed");
+    if (!hasActive) return;
+    void loadVolumeBots();
+  }, 7000);
 }
 
 

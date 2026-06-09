@@ -2452,6 +2452,34 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "GET" && pathname === "/api/web/volume-bot") {
+      sendWebJson(request, response, 200, {
+        ok: true,
+        bots: await webVolumeBotRows(auth.userId)
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/volume-bot/start") {
+      const body = await readJsonRequestBody(request);
+      const result = await webStartVolumeBot(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        bot: result
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/volume-bot/stop") {
+      const body = await readJsonRequestBody(request);
+      const result = await webStopVolumeBot(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        bot: result
+      });
+      return;
+    }
+
     if (request.method === "POST" && pathname === "/api/web/bundle/buy") {
       const body = await readJsonRequestBody(request);
       const result = await webBundleBuy(auth.userId, body);
@@ -11004,6 +11032,14 @@ async function processTradePlans(options = {}) {
         if (result.message && plan.chatId) {
           await say(plan.chatId, withBrandFooter(result.message));
         }
+        continue;
+      }
+
+      if (plan.status === "volume_bot") {
+        const result = await processVolumeBotPlan(plan, walletStore, async () => {
+          await writeTradePlansPreservingNewPlans(planStore, initialPlanIds);
+        });
+        if (result.changed) changed = true;
         continue;
       }
 
@@ -25059,6 +25095,313 @@ async function webCreateSniperEntry(userId, body = {}) {
     defaultStopLossPct: "8",
     defaultSlippageBps: isPump ? 300 : 400
   });
+}
+
+// === Volume Bot ===========================================================
+// Persistent, server-side multi-wallet volume engine. Distinct from Bundle
+// (one grouped buy/sell) and from the timed Volume Plan (single buy + TP/SL).
+// Lifecycle: fund trading wallets from a managed source wallet, run randomized
+// buy/sell cycles across them, then optionally sweep funds back to source.
+// The worker advances ONE trade per due tick so it never starves TP/SL checks.
+const VOLUME_BOT_LIMITS = {
+  maxWallets: 12,
+  maxCycles: 60,
+  maxFundPerWalletSol: 1,
+  maxBuyAmountSol: 0.5,
+  minDelaySecs: 3,
+  maxDelaySecs: 600,
+  maxLogEntries: 60
+};
+
+function volumeBotError(message) {
+  const error = new Error(message);
+  error.statusCode = 400;
+  return error;
+}
+
+function volumeBotLogPush(plan, message) {
+  plan.log = [{ at: new Date().toISOString(), message: String(message || "") }, ...(plan.log || [])]
+    .slice(0, VOLUME_BOT_LIMITS.maxLogEntries);
+}
+
+function webVolumeBotRow(plan) {
+  const cfg = plan.config || {};
+  const tradingCount = Array.isArray(plan.tradingPublicKeys) ? plan.tradingPublicKeys.length : 0;
+  return {
+    id: plan.id,
+    tokenMint: plan.tokenMint,
+    shortMint: shortMint(plan.tokenMint || ""),
+    status: plan.status,
+    stage: plan.botStage || "",
+    currentCycle: Number(plan.currentCycle || 0),
+    cycles: Number(cfg.cycles || 0),
+    walletCount: tradingCount,
+    buyAmountSol: cfg.buyAmountSol,
+    sellPercent: cfg.sellPercent,
+    buyBias: cfg.buyBias,
+    delaySecs: cfg.delaySecs,
+    slippageBps: cfg.slippageBps,
+    sweepBack: cfg.sweepBack !== false,
+    autoCreate: Boolean(cfg.autoCreate),
+    stats: plan.stats || {},
+    log: plan.log || [],
+    createdAt: plan.createdAt,
+    updatedAt: plan.updatedAt,
+    completedAt: plan.completedAt || null,
+    dexUrl: plan.tokenMint ? `https://dexscreener.com/solana/${encodeURIComponent(plan.tokenMint)}` : "",
+    message: volumeBotMessage(plan)
+  };
+}
+
+function volumeBotMessage(plan) {
+  const cfg = plan.config || {};
+  if (plan.status === "completed") return "Volume bot finished.";
+  if (plan.botStage === "sweeping") return "Sweeping funds back to source wallet...";
+  if (plan.botStage === "running") {
+    return `Running cycle ${Number(plan.currentCycle || 0) + 1}/${Number(cfg.cycles || 0)} across ${Array.isArray(plan.tradingPublicKeys) ? plan.tradingPublicKeys.length : 0} wallet(s).`;
+  }
+  return "Volume bot armed.";
+}
+
+async function webStartVolumeBot(userId, body = {}) {
+  const tokenMint = parsePublicKey(String(body.tokenMint || "")).toBase58();
+  const walletCount = clamp(Number.parseInt(body.walletCount || "0", 10) || 0, 1, VOLUME_BOT_LIMITS.maxWallets);
+  const autoCreate = Boolean(body.autoCreateWallets);
+  const cycles = clamp(Number.parseInt(body.cycles || "0", 10) || 0, 1, VOLUME_BOT_LIMITS.maxCycles);
+  const buyAmountSol = parsePositiveNumber(String(body.buyAmountSol || ""));
+  const sellPercent = parsePercent(String(body.sellPercent || "100"));
+  const buyBias = clamp(Number.parseInt(body.buyBias ?? "60", 10) || 60, 5, 95);
+  const delaySecs = clamp(Number.parseInt(body.delaySecs || "0", 10) || 0, VOLUME_BOT_LIMITS.minDelaySecs, VOLUME_BOT_LIMITS.maxDelaySecs);
+  const slippageBps = parseWebSlippage(body.slippageBps);
+  const sweepBack = body.sweepBack === undefined ? true : Boolean(body.sweepBack);
+  const sourceIndex = parseWebWalletIndex(body.sourceWalletIndex || body.walletIndex);
+  const fundPerWalletSol = parsePositiveNumber(String(body.fundPerWalletSol || ""));
+
+  if (buyAmountSol > VOLUME_BOT_LIMITS.maxBuyAmountSol) {
+    throw volumeBotError(`Buy amount per trade is capped at ${VOLUME_BOT_LIMITS.maxBuyAmountSol} SOL.`);
+  }
+  if (fundPerWalletSol > VOLUME_BOT_LIMITS.maxFundPerWalletSol) {
+    throw volumeBotError(`Fund per wallet is capped at ${VOLUME_BOT_LIMITS.maxFundPerWalletSol} SOL.`);
+  }
+  if (fundPerWalletSol < buyAmountSol + 0.02) {
+    throw volumeBotError("Fund per wallet must cover at least the buy amount plus ~0.02 SOL for fees.");
+  }
+
+  const store = await readWalletStore();
+  const sourceRecord = getWalletAt(store, sourceIndex, userId);
+
+  let tradingPublicKeys = [];
+  if (autoCreate) {
+    const created = await createWebWalletSet(userId, {
+      count: walletCount,
+      label: cleanLabel(String(body.walletGroup || "Volume Bot"))
+    });
+    tradingPublicKeys = (created.wallets || []).map((wallet) => wallet.publicKey).filter(Boolean);
+  } else {
+    const fresh = await readWalletStore();
+    const selected = webSelectedWallets(fresh, userId, body.walletIndexes, body.walletGroup);
+    tradingPublicKeys = selected
+      .map((wallet) => wallet.publicKey)
+      .filter((publicKey) => publicKey && publicKey !== sourceRecord.publicKey)
+      .slice(0, walletCount);
+  }
+  if (!tradingPublicKeys.length) {
+    throw volumeBotError("Select at least one trading wallet (not the source), or enable auto-create wallets.");
+  }
+
+  const fundResult = await webSendSolMany(userId, {
+    fromWalletIndex: sourceIndex,
+    destinations: tradingPublicKeys,
+    amountSol: String(fundPerWalletSol)
+  });
+
+  const planStore = await readTradePlans();
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+  const plan = {
+    id: crypto.randomUUID(),
+    userId,
+    chatId: null,
+    source: "web_volume_bot",
+    status: "volume_bot",
+    executionMode: "managed_server",
+    tokenMint,
+    createdAt: nowIso,
+    updatedAt: nowIso,
+    config: { walletCount: tradingPublicKeys.length, autoCreate, cycles, buyAmountSol, sellPercent, buyBias, delaySecs, slippageBps, sweepBack },
+    sourcePublicKey: sourceRecord.publicKey,
+    tradingPublicKeys,
+    botStage: "running",
+    currentCycle: 0,
+    actionCursor: 0,
+    sweepCursor: 0,
+    nextActionAt: new Date(now + delaySecs * 1000).toISOString(),
+    stats: { buys: 0, sells: 0, errors: 0, fundedSol: Number((fundPerWalletSol * tradingPublicKeys.length).toFixed(6)) },
+    log: [{ at: nowIso, message: `Funded ${tradingPublicKeys.length} wallet(s) with ${fundPerWalletSol} SOL each${fundResult?.signature ? ` (${fundResult.signature})` : ""}.` }]
+  };
+  planStore.plans.push(plan);
+  await writeTradePlans(planStore);
+  await audit("web_volume_bot_start", {
+    userId,
+    planId: plan.id,
+    tokenMint,
+    walletCount: tradingPublicKeys.length,
+    autoCreate,
+    cycles,
+    buyAmountSol,
+    fundPerWalletSol,
+    sweepBack
+  });
+  return webVolumeBotRow(plan);
+}
+
+async function webStopVolumeBot(userId, body = {}) {
+  const planId = String(body.planId || body.id || "").trim();
+  const planStore = await readTradePlans();
+  const plan = planStore.plans.find((entry) => entry.id === planId
+    && String(entry.userId) === String(userId)
+    && entry.source === "web_volume_bot");
+  if (!plan) throw volumeBotError("Volume bot not found.");
+  if (plan.status === "completed" || plan.botStage === "done") return webVolumeBotRow(plan);
+  const sweepBack = plan.config?.sweepBack !== false;
+  plan.botStage = sweepBack ? "sweeping" : "done";
+  plan.sweepCursor = 0;
+  plan.nextActionAt = new Date().toISOString();
+  plan.updatedAt = new Date().toISOString();
+  volumeBotLogPush(plan, sweepBack ? "Stop requested. Sweeping funds back to source." : "Stop requested.");
+  if (plan.botStage === "done") {
+    plan.status = "completed";
+    plan.completedAt = new Date().toISOString();
+  }
+  await writeTradePlans(planStore);
+  await audit("web_volume_bot_stop", { userId, planId: plan.id });
+  return webVolumeBotRow(plan);
+}
+
+async function webVolumeBotRows(userId) {
+  const planStore = await readTradePlans();
+  return (planStore.plans || [])
+    .filter((plan) => plan.source === "web_volume_bot" && String(plan.userId) === String(userId))
+    .sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0))
+    .slice(0, 20)
+    .map(webVolumeBotRow);
+}
+
+// Worker handler: advance one volume-bot action per due tick.
+async function processVolumeBotPlan(plan, walletStore, persist) {
+  const now = Date.now();
+  if (!plan || plan.status !== "volume_bot") return { changed: false };
+  if (plan.botStage === "done" || plan.botStage === "stopped") {
+    plan.status = "completed";
+    plan.completedAt = plan.completedAt || new Date().toISOString();
+    if (typeof persist === "function") await persist();
+    return { changed: true };
+  }
+  const dueAt = plan.nextActionAt ? Date.parse(plan.nextActionAt) : 0;
+  if (Number.isFinite(dueAt) && now < dueAt) return { changed: false };
+
+  const cfg = plan.config || {};
+  const delayMs = clamp(Number(cfg.delaySecs || 5), VOLUME_BOT_LIMITS.minDelaySecs, VOLUME_BOT_LIMITS.maxDelaySecs) * 1000;
+  const slippageBps = Number(cfg.slippageBps || 400);
+  const owner = walletsForOwner(walletStore, plan.userId);
+  const recordByPk = (publicKey) => owner.find((wallet) => wallet.publicKey === publicKey);
+  const noBalance = (error) => /no token balance|rounded to zero|no token|insufficient token/i.test(String(error?.message || ""));
+
+  try {
+    if (plan.botStage === "running") {
+      const pks = plan.tradingPublicKeys || [];
+      if (!pks.length) {
+        plan.botStage = cfg.sweepBack === false ? "done" : "sweeping";
+        plan.sweepCursor = 0;
+      } else {
+        const cursor = Number(plan.actionCursor || 0) % pks.length;
+        const publicKey = pks[cursor];
+        const record = recordByPk(publicKey);
+        if (!record) {
+          volumeBotLogPush(plan, `Wallet ${shortMint(publicKey)} missing from store; skipping.`);
+        } else {
+          const wantBuy = (Math.random() * 100) < Number(cfg.buyBias || 60);
+          let didSell = false;
+          if (!wantBuy) {
+            try {
+              await sellTokenFromWallet(record, plan.tokenMint, Number(cfg.sellPercent || 100), slippageBps, { userId: plan.userId });
+              plan.stats.sells = Number(plan.stats.sells || 0) + 1;
+              didSell = true;
+              volumeBotLogPush(plan, `Sell ${cfg.sellPercent}% from ${shortMint(publicKey)}.`);
+            } catch (error) {
+              if (!noBalance(error)) {
+                plan.stats.errors = Number(plan.stats.errors || 0) + 1;
+                volumeBotLogPush(plan, `Sell failed ${shortMint(publicKey)}: ${friendlyError(error)}`);
+              }
+            }
+          }
+          if (wantBuy || !didSell) {
+            try {
+              await buyTokenForPlan(record, plan.tokenMint, solToLamports(Number(cfg.buyAmountSol)), slippageBps, { userId: plan.userId });
+              plan.stats.buys = Number(plan.stats.buys || 0) + 1;
+              volumeBotLogPush(plan, `Buy ${cfg.buyAmountSol} SOL from ${shortMint(publicKey)}.`);
+            } catch (error) {
+              plan.stats.errors = Number(plan.stats.errors || 0) + 1;
+              volumeBotLogPush(plan, `Buy failed ${shortMint(publicKey)}: ${friendlyError(error)}`);
+            }
+          }
+        }
+        const nextCursor = cursor + 1;
+        if (nextCursor >= pks.length) {
+          plan.actionCursor = 0;
+          plan.currentCycle = Number(plan.currentCycle || 0) + 1;
+          if (plan.currentCycle >= Number(cfg.cycles || 1)) {
+            plan.botStage = cfg.sweepBack === false ? "done" : "sweeping";
+            plan.sweepCursor = 0;
+            volumeBotLogPush(plan, plan.botStage === "sweeping" ? "Cycles complete. Sweeping funds back to source." : "Cycles complete.");
+          }
+        } else {
+          plan.actionCursor = nextCursor;
+        }
+      }
+    } else if (plan.botStage === "sweeping") {
+      const pks = plan.tradingPublicKeys || [];
+      const cursor = Number(plan.sweepCursor || 0);
+      if (cursor >= pks.length) {
+        plan.botStage = "done";
+      } else {
+        const publicKey = pks[cursor];
+        const record = recordByPk(publicKey);
+        if (record) {
+          try {
+            await sellTokenFromWallet(record, plan.tokenMint, 100, slippageBps, { userId: plan.userId });
+            volumeBotLogPush(plan, `Swept tokens from ${shortMint(publicKey)}.`);
+          } catch (error) {
+            if (!noBalance(error)) volumeBotLogPush(plan, `Token sweep skipped ${shortMint(publicKey)}: ${friendlyError(error)}`);
+          }
+          if (cfg.sweepBack !== false && plan.sourcePublicKey) {
+            try {
+              const keypair = decryptWallet(record);
+              await drainSolFromWallet(keypair, new PublicKey(plan.sourcePublicKey));
+              invalidateWalletReadCache(record.publicKey);
+              volumeBotLogPush(plan, `Swept SOL back to source from ${shortMint(publicKey)}.`);
+            } catch (error) {
+              volumeBotLogPush(plan, `SOL sweep skipped ${shortMint(publicKey)}: ${friendlyError(error)}`);
+            }
+          }
+        }
+        plan.sweepCursor = cursor + 1;
+      }
+    }
+  } catch (error) {
+    plan.stats.errors = Number(plan.stats?.errors || 0) + 1;
+    volumeBotLogPush(plan, `Tick error: ${friendlyError(error)}`);
+  }
+
+  if (plan.botStage === "done") {
+    plan.status = "completed";
+    plan.completedAt = new Date().toISOString();
+    volumeBotLogPush(plan, "Volume bot finished.");
+  }
+  plan.updatedAt = new Date().toISOString();
+  plan.nextActionAt = new Date(Date.now() + delayMs).toISOString();
+  if (typeof persist === "function") await persist();
+  return { changed: true };
 }
 
 function normalizeOgreAiMode(value) {
