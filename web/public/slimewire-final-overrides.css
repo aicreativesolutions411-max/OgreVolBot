@@ -19465,35 +19465,27 @@ html body main.shell[data-app] .ogre-swap-card {
   border-radius: 16px !important;
   background: #050805 !important;
 }
-/* Prominent ogre rising over the top of the panel, fading into the body so
-   the You Pay / You Receive boxes and SWAP button stay fully readable. */
-html body main.shell[data-app] .ogre-swap-card::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  /* swap.jpg is a full mockup: keep the ogre + stone frame at the top, then
-     darken hard through the middle so the baked-in YOU PAY / SWAP / numbers
-     are buried and our real (live) swap controls own the center. */
-  background:
-    radial-gradient(85% 52% at 50% 1%, rgba(130, 255, 70, 0.15), rgba(5, 8, 5, 0) 55%),
-    linear-gradient(180deg, rgba(5, 8, 5, 0.4) 0%, rgba(5, 8, 5, 0.6) 20%, rgba(5, 8, 5, 0.9) 44%, #050805 68%),
-    url("/assets/slimewire/tool-bg/swap.jpg") center top / cover no-repeat,
-    url("/assets/slimewire/png/slimewire-ogre-hero-rich.png") center top / 118% auto no-repeat;
-  opacity: 0.95;
-}
 html body main.shell[data-app] .ogre-swap-card > * {
   position: relative;
   z-index: 1;
 }
+/* Ogre crowns the panel as a real header banner (from swap.jpg), fading into
+   a clean dark body so the You Pay / You Receive boxes + SWAP read as a panel
+   you type in - not a wash behind the controls. */
 html body main.shell[data-app] .ogre-swap-head {
   position: relative;
-  min-height: 110px;
-  border-radius: 12px;
-  margin-bottom: 14px;
+  min-height: 138px;
+  border-radius: 14px 14px 8px 8px;
+  margin: -1px -1px 14px;
   padding: 16px 18px !important;
-  background: transparent;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  background:
+    linear-gradient(180deg, rgba(5, 8, 5, 0.2) 0%, rgba(5, 8, 5, 0.5) 52%, rgba(5, 8, 5, 0.9) 88%, #050805 100%),
+    url("/assets/slimewire/tool-bg/swap.jpg") center 16% / cover no-repeat,
+    url("/assets/slimewire/png/slimewire-ogre-hero-rich.png") center 16% / cover no-repeat;
+  box-shadow: inset 0 0 34px rgba(0, 0, 0, 0.55);
 }
 html body main.shell[data-app] .ogre-swap-title {
   margin: 0 !important;
