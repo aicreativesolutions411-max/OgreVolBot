@@ -31494,19 +31494,34 @@ async function expandLivePairCandidatesForThinBucket(userId, candidates, bucket,
   return mergeLivePairCandidatePools(current, fallbackCandidates);
 }
 
+// On the Fresh (live) bucket these sorts depend on traded metrics that a
+// sub-60s pair simply does not have yet, so ordering by them is meaningless.
+// For those sorts we source the rows from the last-hour window instead (real
+// volume/liquidity/buys), while Newest + Best Picks keep the ultra-fresh feed.
+const LIVE_PAIR_LAST_HOUR_SORTS = new Set(["volume", "liquidity", "buys", "momentum", "risk"]);
+
+function effectiveLivePairSourceBucket(bucket, sort) {
+  return bucket === "live" && LIVE_PAIR_LAST_HOUR_SORTS.has(String(sort || "").toLowerCase())
+    ? "under1h"
+    : bucket;
+}
+
 async function buildWebLivePairs(userId, bucket = "live", options = {}) {
   const safeBucket = normalizeLivePairBucket(bucket);
   const sort = String(options.sort || "best").toLowerCase();
-  const isLive = safeBucket === "live";
-  const scanState = nextSniperScanState(`web:${userId}`, `livepairs:${safeBucket}`);
+  // Display/cache stay on the requested tab; only the row source can shift to
+  // the last-hour window for data-driven sorts (see note above).
+  const sourceBucket = effectiveLivePairSourceBucket(safeBucket, sort);
+  const isLive = sourceBucket === "live";
+  const scanState = nextSniperScanState(`web:${userId}`, `livepairs:${safeBucket}:${sort}`);
   const candidates = await fetchLivePairCandidates({
     ttlMs: isLive ? 800 : 2_000,
     timeoutMs: isLive ? 2_500 : 4_200,
     scanState,
-    bucket: safeBucket,
+    bucket: sourceBucket,
     force: Boolean(options.force)
   });
-  const feedCandidates = await expandLivePairCandidatesForThinBucket(userId, candidates, safeBucket, options);
+  const feedCandidates = await expandLivePairCandidatesForThinBucket(userId, candidates, sourceBucket, options);
   const baseRows = uniqueSniperScoreRows(feedCandidates.map(livePairCandidateToRow).filter(Boolean))
     .filter((row) => !hasHardBlockedLivePairRisk(row))
     .sort(compareWebLivePairs)
@@ -31519,15 +31534,15 @@ async function buildWebLivePairs(userId, bucket = "live", options = {}) {
   const hardSafeEnrichedRows = uniqueSniperScoreRows(enrichedRows)
     .filter((row) => !hasHardBlockedLivePairRisk(row));
   const ageVerifiedRows = hardSafeEnrichedRows
-    .filter((row) => isWebLivePairCandidate(row, safeBucket))
+    .filter((row) => isWebLivePairCandidate(row, sourceBucket))
     .sort((a, b) => compareWebLivePairs(a, b, sort));
   let liveRows = ageVerifiedRows;
   if (liveRows.length < targetLimit) {
     const currentMints = new Set(liveRows.map((row) => row.tokenMint));
     const backfillRows = hardSafeEnrichedRows
       .filter((row) => !currentMints.has(row.tokenMint))
-      .filter((row) => isLivePairInBucket(row, safeBucket))
-      .filter((row) => isWebLivePairBackfillCandidate(row, safeBucket, { allowUnknownMarketCap: true }))
+      .filter((row) => isLivePairInBucket(row, sourceBucket))
+      .filter((row) => isWebLivePairBackfillCandidate(row, sourceBucket, { allowUnknownMarketCap: true }))
       .sort((a, b) => compareWebLivePairs(a, b, sort));
     liveRows = uniqueSniperScoreRows([...liveRows, ...backfillRows]).sort((a, b) => compareWebLivePairs(a, b, sort));
   }
@@ -31535,19 +31550,19 @@ async function buildWebLivePairs(userId, bucket = "live", options = {}) {
     const currentMints = new Set(liveRows.map((row) => row.tokenMint));
     const relaxedRows = hardSafeEnrichedRows
       .filter((row) => !currentMints.has(row.tokenMint))
-      .filter((row) => isLivePairInRelaxedBucket(row, safeBucket))
-      .filter((row) => isWebLivePairCandidate(row, safeBucket, { relaxedAge: true }))
+      .filter((row) => isLivePairInRelaxedBucket(row, sourceBucket))
+      .filter((row) => isWebLivePairCandidate(row, sourceBucket, { relaxedAge: true }))
       .sort((a, b) => compareWebLivePairs(a, b, sort));
     liveRows = uniqueSniperScoreRows([...liveRows, ...relaxedRows]).sort((a, b) => compareWebLivePairs(a, b, sort));
   }
   const safety = await maybeFilterWebLivePairsForSafety(liveRows, targetLimit);
   let rowsForSort = safety.rows;
-  if (shouldBlockForImageEnrichment && safeBucket === "live") {
+  if (shouldBlockForImageEnrichment && sourceBucket === "live") {
     rowsForSort = await enrichWebLivePairsForImages(safety.rows).catch(() => safety.rows);
   } else {
     rowsForSort = decorateWebLivePairAvatars(rowsForSort);
   }
-  const stickyCount = sort === "best" && safeBucket !== "live"
+  const stickyCount = sort === "best" && sourceBucket !== "live"
     ? Math.min(1, Math.max(0, Math.floor(targetLimit / 12)))
     : 0;
   const safeRows = decorateWebLivePairAvatars(rotateRowsForRefresh(

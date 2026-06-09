@@ -17337,8 +17337,8 @@ function tokenSignalRowHtml(row, index, options = {}) {
   const primaryAction = options.primaryAction || "quickTrade";
   const isKolContext = options.context === "kol";
   const watchButton = options.context === "watchlist"
-    ? `<button type="button" data-unwatch-token="${escapeHtml(row.tokenMint)}">Remove</button>`
-    : `<button type="button" class="watch-action" data-watch-token="${escapeHtml(row.tokenMint)}" data-watch-symbol="${escapeHtml(row.symbol || "")}" data-watch-name="${escapeHtml(row.name || "")}" data-watch-image="${escapeHtml(livePairImageUrl(row) || "")}">${watched ? "Saved" : "Watch"}</button>`;
+    ? `<button type="button" data-unwatch-token="${escapeHtml(row.tokenMint)}" title="Remove from watchlist">Remove</button>`
+    : `<button type="button" class="watch-action" data-watched="${watched}" title="${watched ? "Saved to watchlist" : "Watch / save coin"}" data-watch-token="${escapeHtml(row.tokenMint)}" data-watch-symbol="${escapeHtml(row.symbol || "")}" data-watch-name="${escapeHtml(row.name || "")}" data-watch-image="${escapeHtml(livePairImageUrl(row) || "")}">${watched ? "Saved" : "Watch"}</button>`;
   return `
     <article class="signal-row ${isKolContext ? "is-kol-signal" : ""}" data-token-chart="${escapeHtml(row.tokenMint)}" data-token-chart-source="${escapeHtml(options.context || "signal-row")}">
       <div class="signal-token">
@@ -17371,8 +17371,8 @@ function tokenSignalRowHtml(row, index, options = {}) {
         <small>${volumeWindowItems(row).map(([label, value]) => `${label} ${value}`).join(" | ")}</small>
       </div>
       <div class="signal-actions has-dev-info">
-        ${primaryAction === "snipe" ? `<button type="button" class="primary" data-sniper-buy="${escapeHtml(row.tokenMint)}">${escapeHtml(actionLabel)}</button>` : `<button type="button" class="primary" data-token-trade="${escapeHtml(row.tokenMint)}" data-token-trade-source="${escapeHtml(options.context || "signal-row")}">Trade</button><button type="button" data-quick-buy-token="${escapeHtml(row.tokenMint)}" data-quick-buy-source="${escapeHtml(options.context || "signal-row")}">${escapeHtml(quickBuyButtonLabel())}</button>`}
-        <button type="button" data-quick-bundle-token="${escapeHtml(row.tokenMint)}">Bundle</button>
+        ${primaryAction === "snipe" ? `<button type="button" class="primary" data-sniper-buy="${escapeHtml(row.tokenMint)}" title="Snipe buy">${escapeHtml(actionLabel)}</button>` : `<button type="button" class="primary" data-token-trade="${escapeHtml(row.tokenMint)}" data-token-trade-source="${escapeHtml(options.context || "signal-row")}" title="Open chart + buy/sell panel">Trade</button><button type="button" data-quick-buy-token="${escapeHtml(row.tokenMint)}" data-quick-buy-source="${escapeHtml(options.context || "signal-row")}" title="Quick buy with preset or custom SOL">${escapeHtml(quickBuyButtonLabel())}</button>`}
+        <button type="button" data-quick-bundle-token="${escapeHtml(row.tokenMint)}" title="Bundle buy across wallets">Bundle</button>
         ${isKolContext ? kolDumpSignalButtonHtml(row) : ""}
         ${watchButton}
         ${devInfoPillHtml(row)}

@@ -19822,3 +19822,103 @@ html body main.shell[data-app] .ogre-autopilot-grid input {
   html body main.shell[data-app] .ogre-cat-segment { grid-template-columns: 1fr 1fr; }
 }
 /* === END OGRE_AI_CATEGORIES_AUTOPILOT_20260609_V1 ==================== */
+
+/* === COOKS_COMPACT_ROW_20260609_V1 ===================================
+   Cooks pair rows were ~92px tall with a wrapping link/badge stack and a
+   2-col action grid (5 buttons -> 3 rows). Tighten to a single short line
+   and collapse the actions into a row of small icon buttons. */
+html body main.shell[data-app] .live-terminal .signal-row {
+  min-height: 0 !important;
+  padding: 7px 12px !important;
+  align-items: center !important;
+}
+html body main.shell[data-app] .live-terminal .signal-token {
+  grid-template-columns: 36px minmax(0, 1fr) !important;
+  gap: 8px !important;
+  align-items: center !important;
+}
+/* Name on its own line; CA + links + risk badges collapse onto one wrapping
+   line so the whole cell is ~2 lines instead of 4 stacked rows. */
+html body main.shell[data-app] .live-terminal .signal-token > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  min-width: 0;
+}
+html body main.shell[data-app] .live-terminal .signal-name-row { flex: 1 0 100%; }
+html body main.shell[data-app] .live-terminal .ca-copy { flex: 0 0 auto; }
+html body main.shell[data-app] .live-terminal .signal-token .signal-links { display: inline-flex; margin-top: 0 !important; }
+html body main.shell[data-app] .live-terminal .signal-token .live-pair-avatar,
+html body main.shell[data-app] .live-terminal .signal-token .live-pair-avatar img {
+  width: 36px !important;
+  height: 36px !important;
+}
+html body main.shell[data-app] .live-terminal .signal-name-row strong { font-size: 14px !important; }
+html body main.shell[data-app] .live-terminal .signal-name-row small { font-size: 11px !important; }
+html body main.shell[data-app] .live-terminal .ca-copy { margin-top: 0 !important; font-size: 11px !important; }
+/* Links + risk badges share one tight wrapping line instead of two stacks. */
+html body main.shell[data-app] .live-terminal .signal-links { margin-top: 3px !important; gap: 4px !important; }
+html body main.shell[data-app] .live-terminal .signal-links a,
+html body main.shell[data-app] .live-terminal .signal-links button {
+  min-height: 18px !important;
+  padding: 0 6px !important;
+  font-size: 9px !important;
+}
+html body main.shell[data-app] .live-terminal .signal-links .sniper-pill {
+  min-height: 18px !important;
+  font-size: 9px !important;
+  padding: 1px 6px !important;
+}
+html body main.shell[data-app] .live-terminal .signal-cell span { font-size: 12.5px !important; }
+html body main.shell[data-app] .live-terminal .signal-cell small { margin-top: 1px !important; font-size: 10.5px !important; }
+
+/* Actions: single non-wrapping row of small icon buttons. Labels are kept in
+   the DOM (screen readers + title tooltips) but hidden visually; a glyph is
+   drawn per action via ::before. */
+html body main.shell[data-app] .live-terminal .signal-actions {
+  display: flex !important;
+  flex-wrap: nowrap !important;
+  gap: 5px !important;
+  align-items: center !important;
+  justify-content: flex-end !important;
+}
+html body main.shell[data-app] .live-terminal .signal-actions > button,
+html body main.shell[data-app] .live-terminal .signal-actions > .dev-info-pill {
+  grid-column: auto !important;
+  width: 32px !important;
+  min-width: 32px !important;
+  height: 32px !important;
+  min-height: 32px !important;
+  padding: 0 !important;
+  border-radius: 9px !important;
+  font-size: 0 !important;
+  line-height: 0 !important;
+  overflow: hidden !important;
+  white-space: nowrap !important;
+}
+html body main.shell[data-app] .live-terminal .signal-actions > button::before,
+html body main.shell[data-app] .live-terminal .signal-actions > .dev-info-pill::before {
+  display: block;
+  font-size: 14px;
+  line-height: 1;
+  font-weight: 800;
+}
+html body main.shell[data-app] .live-terminal .signal-actions > button[data-token-trade]::before { content: "\21C4"; } /* ⇄ trade */
+html body main.shell[data-app] .live-terminal .signal-actions > button[data-sniper-buy]::before { content: "\26A1"; } /* ⚡ snipe */
+html body main.shell[data-app] .live-terminal .signal-actions > button[data-quick-buy-token]::before { content: "$"; }
+html body main.shell[data-app] .live-terminal .signal-actions > button[data-quick-bundle-token]::before { content: "\2263"; } /* ≣ bundle */
+html body main.shell[data-app] .live-terminal .signal-actions > button.watch-action::before { content: "\2606"; } /* ☆ watch */
+html body main.shell[data-app] .live-terminal .signal-actions > button.watch-action[data-watched="true"]::before { content: "\2605"; } /* ★ saved */
+html body main.shell[data-app] .live-terminal .signal-actions > button[data-unwatch-token]::before { content: "\2715"; } /* ✕ remove */
+html body main.shell[data-app] .live-terminal .signal-actions > .dev-info-pill::before { content: "\24D8"; } /* ⓘ dev info */
+@media (max-width: 760px) {
+  html body main.shell[data-app] .live-terminal .signal-actions > button,
+  html body main.shell[data-app] .live-terminal .signal-actions > .dev-info-pill {
+    width: 30px !important;
+    min-width: 30px !important;
+    height: 30px !important;
+    min-height: 30px !important;
+  }
+}
+/* === END COOKS_COMPACT_ROW_20260609_V1 =============================== */
