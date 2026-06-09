@@ -25106,12 +25106,54 @@ async function webCreateSniperEntry(userId, body = {}) {
 const VOLUME_BOT_LIMITS = {
   maxWallets: 12,
   maxCycles: 60,
+  maxRounds: 250,
   maxFundPerWalletSol: 1,
   maxBuyAmountSol: 0.5,
   minDelaySecs: 3,
   maxDelaySecs: 600,
-  maxLogEntries: 60
+  maxLogEntries: 60,
+  roundFeeBufferSol: 0.03
 };
+
+// Pick a randomized buy size centered on the target (60%-140%), capped.
+function volumeBotRandomBuySol(targetSol) {
+  const target = Math.max(0, Number(targetSol) || 0);
+  const factor = 0.6 + Math.random() * 0.8;
+  const size = target * factor;
+  return Math.min(VOLUME_BOT_LIMITS.maxBuyAmountSol, Math.max(0.001, Number(size.toFixed(6))));
+}
+
+// Lean throwaway wallet for rolling mode (no backup-doc generation per round).
+async function createEphemeralVolumeWallet(userId, label) {
+  const store = await readWalletStore();
+  const keypair = Keypair.generate();
+  const record = walletRecord(cleanLabel(label || "Volume Bot"), keypair, userId);
+  record.ephemeral = true;
+  record.volumeBot = true;
+  store.wallets.push(record);
+  await writeWalletStore(store);
+  return record;
+}
+
+async function pruneVolumeWallet(publicKey) {
+  if (!publicKey) return;
+  const store = await readWalletStore();
+  const before = store.wallets.length;
+  store.wallets = store.wallets.filter((wallet) => !(wallet.publicKey === publicKey && wallet.ephemeral));
+  if (store.wallets.length !== before) await writeWalletStore(store);
+}
+
+async function volumeBotTransferSol(sourceRecord, destinationPublicKey, lamports) {
+  const keypair = decryptWallet(sourceRecord);
+  const destination = new PublicKey(destinationPublicKey);
+  await assertDestinationCanReceiveSol(destination, lamports);
+  const tx = new Transaction();
+  tx.add(SystemProgram.transfer({ fromPubkey: keypair.publicKey, toPubkey: destination, lamports }));
+  const signature = await sendLegacyTransaction(tx, [keypair]);
+  invalidateWalletReadCache(sourceRecord.publicKey);
+  invalidateWalletReadCache(destinationPublicKey);
+  return signature;
+}
 
 function volumeBotError(message) {
   const error = new Error(message);
@@ -25127,15 +25169,17 @@ function volumeBotLogPush(plan, message) {
 function webVolumeBotRow(plan) {
   const cfg = plan.config || {};
   const tradingCount = Array.isArray(plan.tradingPublicKeys) ? plan.tradingPublicKeys.length : 0;
+  const rolling = Boolean(cfg.rollingWallets);
   return {
     id: plan.id,
     tokenMint: plan.tokenMint,
     shortMint: shortMint(plan.tokenMint || ""),
     status: plan.status,
     stage: plan.botStage || "",
-    currentCycle: Number(plan.currentCycle || 0),
-    cycles: Number(cfg.cycles || 0),
-    walletCount: tradingCount,
+    rolling,
+    currentCycle: rolling ? Number(plan.roundsDone || 0) : Number(plan.currentCycle || 0),
+    cycles: rolling ? Number(cfg.maxRounds || 0) : Number(cfg.cycles || 0),
+    walletCount: rolling ? Number(plan.stats?.rounds || 0) : tradingCount,
     buyAmountSol: cfg.buyAmountSol,
     sellPercent: cfg.sellPercent,
     buyBias: cfg.buyBias,
@@ -25157,6 +25201,12 @@ function volumeBotMessage(plan) {
   const cfg = plan.config || {};
   if (plan.status === "completed") return "Volume bot finished.";
   if (plan.botStage === "sweeping") return "Sweeping funds back to source wallet...";
+  if (cfg.rollingWallets) {
+    if (plan.botStage === "running") {
+      return `Rolling fresh wallets: round ${Number(plan.roundsDone || 0) + 1}/${Number(cfg.maxRounds || 0)} (${plan.rollStage || "spawn"}).`;
+    }
+    return "Rolling volume bot armed.";
+  }
   if (plan.botStage === "running") {
     return `Running cycle ${Number(plan.currentCycle || 0) + 1}/${Number(cfg.cycles || 0)} across ${Array.isArray(plan.tradingPublicKeys) ? plan.tradingPublicKeys.length : 0} wallet(s).`;
   }
@@ -25174,21 +25224,65 @@ async function webStartVolumeBot(userId, body = {}) {
   const delaySecs = clamp(Number.parseInt(body.delaySecs || "0", 10) || 0, VOLUME_BOT_LIMITS.minDelaySecs, VOLUME_BOT_LIMITS.maxDelaySecs);
   const slippageBps = parseWebSlippage(body.slippageBps);
   const sweepBack = body.sweepBack === undefined ? true : Boolean(body.sweepBack);
+  const rollingWallets = Boolean(body.rollingWallets);
+  const maxRounds = clamp(Number.parseInt(body.maxRounds || body.cycles || "0", 10) || 0, 1, VOLUME_BOT_LIMITS.maxRounds);
   const sourceIndex = parseWebWalletIndex(body.sourceWalletIndex || body.walletIndex);
-  const fundPerWalletSol = parsePositiveNumber(String(body.fundPerWalletSol || ""));
 
   if (buyAmountSol > VOLUME_BOT_LIMITS.maxBuyAmountSol) {
     throw volumeBotError(`Buy amount per trade is capped at ${VOLUME_BOT_LIMITS.maxBuyAmountSol} SOL.`);
   }
+
+  const store = await readWalletStore();
+  const sourceRecord = getWalletAt(store, sourceIndex, userId);
+  const planStore = await readTradePlans();
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+
+  // --- Rolling mode: never reuse a wallet. Each round spawns a fresh wallet,
+  // funds it from the source, buys a randomized size, sells, then sweeps back
+  // to the source and discards the wallet. Runs until Stop or maxRounds. ---
+  if (rollingWallets) {
+    const sourceBalance = await getSolBalanceCached(decryptWallet(sourceRecord).publicKey, { force: true }).catch(() => 0);
+    const perRoundSol = buyAmountSol * 1.4 + VOLUME_BOT_LIMITS.roundFeeBufferSol;
+    if (sourceBalance > 0 && lamportsToSol(sourceBalance) < perRoundSol) {
+      throw volumeBotError(`Source wallet needs about ${perRoundSol.toFixed(3)} SOL to run a round; it has ${lamportsToSol(sourceBalance)} SOL.`);
+    }
+    const plan = {
+      id: crypto.randomUUID(),
+      userId,
+      chatId: null,
+      source: "web_volume_bot",
+      status: "volume_bot",
+      executionMode: "managed_server",
+      tokenMint,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      config: { rollingWallets: true, maxRounds, buyAmountSol, sellPercent, buyBias, delaySecs, slippageBps, sweepBack },
+      sourcePublicKey: sourceRecord.publicKey,
+      tradingPublicKeys: [],
+      botStage: "running",
+      rollStage: "spawn",
+      activeWalletPublicKey: null,
+      roundsDone: 0,
+      currentRoundBuySol: 0,
+      nextActionAt: new Date(now + delaySecs * 1000).toISOString(),
+      stats: { buys: 0, sells: 0, errors: 0, rounds: 0, fundedSol: 0 },
+      log: [{ at: nowIso, message: `Rolling volume bot armed: fresh wallet each round, ~${buyAmountSol} SOL randomized buys, up to ${maxRounds} round(s).` }]
+    };
+    planStore.plans.push(plan);
+    await writeTradePlans(planStore);
+    await audit("web_volume_bot_start", { userId, planId: plan.id, tokenMint, rollingWallets: true, maxRounds, buyAmountSol, sweepBack });
+    return webVolumeBotRow(plan);
+  }
+
+  // --- Fixed-pool mode ---
+  const fundPerWalletSol = parsePositiveNumber(String(body.fundPerWalletSol || ""));
   if (fundPerWalletSol > VOLUME_BOT_LIMITS.maxFundPerWalletSol) {
     throw volumeBotError(`Fund per wallet is capped at ${VOLUME_BOT_LIMITS.maxFundPerWalletSol} SOL.`);
   }
   if (fundPerWalletSol < buyAmountSol + 0.02) {
     throw volumeBotError("Fund per wallet must cover at least the buy amount plus ~0.02 SOL for fees.");
   }
-
-  const store = await readWalletStore();
-  const sourceRecord = getWalletAt(store, sourceIndex, userId);
 
   let tradingPublicKeys = [];
   if (autoCreate) {
@@ -25215,9 +25309,6 @@ async function webStartVolumeBot(userId, body = {}) {
     amountSol: String(fundPerWalletSol)
   });
 
-  const planStore = await readTradePlans();
-  const now = Date.now();
-  const nowIso = new Date(now).toISOString();
   const plan = {
     id: crypto.randomUUID(),
     userId,
@@ -25308,7 +25399,9 @@ async function processVolumeBotPlan(plan, walletStore, persist) {
   const noBalance = (error) => /no token balance|rounded to zero|no token|insufficient token/i.test(String(error?.message || ""));
 
   try {
-    if (plan.botStage === "running") {
+    if (cfg.rollingWallets) {
+      await runRollingVolumeBotStep(plan, { slippageBps, noBalance });
+    } else if (plan.botStage === "running") {
       const pks = plan.tradingPublicKeys || [];
       if (!pks.length) {
         plan.botStage = cfg.sweepBack === false ? "done" : "sweeping";
@@ -25402,6 +25495,141 @@ async function processVolumeBotPlan(plan, walletStore, persist) {
   plan.nextActionAt = new Date(Date.now() + delayMs).toISOString();
   if (typeof persist === "function") await persist();
   return { changed: true };
+}
+
+// Rolling mode: one sub-step per due tick. spawn -> buy -> sell -> sweep,
+// each round using a brand-new wallet that is funded from the source, traded,
+// swept back, and discarded. Never reuses a wallet.
+async function runRollingVolumeBotStep(plan, { slippageBps, noBalance }) {
+  const cfg = plan.config || {};
+  const store = await readWalletStore();
+  const owner = walletsForOwner(store, plan.userId);
+  const byPk = (publicKey) => owner.find((wallet) => wallet.publicKey === publicKey);
+  const sourceRecord = byPk(plan.sourcePublicKey);
+  if (!sourceRecord) {
+    volumeBotLogPush(plan, "Source wallet missing from store; stopping bot.");
+    plan.botStage = "done";
+    return;
+  }
+
+  // Graceful stop / final sweep: clear the active wallet then finish.
+  if (plan.botStage === "sweeping") {
+    await rollingExitActiveWallet(plan, byPk, slippageBps, noBalance);
+    plan.activeWalletPublicKey = null;
+    plan.botStage = "done";
+    return;
+  }
+
+  const stage = plan.rollStage || "spawn";
+
+  if (stage === "spawn") {
+    if (Number(plan.roundsDone || 0) >= Number(cfg.maxRounds || 1)) {
+      plan.botStage = "done";
+      volumeBotLogPush(plan, "All rounds complete.");
+      return;
+    }
+    const buySol = volumeBotRandomBuySol(cfg.buyAmountSol);
+    const fundSol = Number((buySol + VOLUME_BOT_LIMITS.roundFeeBufferSol).toFixed(6));
+    let record;
+    try {
+      record = await createEphemeralVolumeWallet(plan.userId, `Volume Bot R${Number(plan.roundsDone || 0) + 1}`);
+    } catch (error) {
+      plan.stats.errors = Number(plan.stats.errors || 0) + 1;
+      volumeBotLogPush(plan, `Spawn failed: ${friendlyError(error)}`);
+      return;
+    }
+    try {
+      await volumeBotTransferSol(sourceRecord, record.publicKey, solToLamports(fundSol));
+      plan.activeWalletPublicKey = record.publicKey;
+      plan.currentRoundBuySol = buySol;
+      plan.stats.fundedSol = Number((Number(plan.stats.fundedSol || 0) + fundSol).toFixed(6));
+      plan.rollStage = "buy";
+      volumeBotLogPush(plan, `Round ${Number(plan.roundsDone || 0) + 1}: funded fresh wallet ${shortMint(record.publicKey)} with ${fundSol} SOL.`);
+    } catch (error) {
+      plan.stats.errors = Number(plan.stats.errors || 0) + 1;
+      await pruneVolumeWallet(record.publicKey).catch(() => {});
+      volumeBotLogPush(plan, `Funding failed ${shortMint(record.publicKey)}: ${friendlyError(error)}`);
+    }
+    return;
+  }
+
+  if (stage === "buy") {
+    const record = byPk(plan.activeWalletPublicKey);
+    if (!record) { plan.rollStage = "spawn"; plan.activeWalletPublicKey = null; return; }
+    try {
+      await buyTokenForPlan(record, plan.tokenMint, solToLamports(Number(plan.currentRoundBuySol || cfg.buyAmountSol)), slippageBps, { userId: plan.userId });
+      plan.stats.buys = Number(plan.stats.buys || 0) + 1;
+      volumeBotLogPush(plan, `Buy ${Number(plan.currentRoundBuySol || 0).toFixed(4)} SOL from ${shortMint(record.publicKey)}.`);
+    } catch (error) {
+      plan.stats.errors = Number(plan.stats.errors || 0) + 1;
+      volumeBotLogPush(plan, `Buy failed ${shortMint(record.publicKey)}: ${friendlyError(error)}`);
+    }
+    plan.rollStage = "sell";
+    return;
+  }
+
+  if (stage === "sell") {
+    const record = byPk(plan.activeWalletPublicKey);
+    if (record) {
+      try {
+        await sellTokenFromWallet(record, plan.tokenMint, Number(cfg.sellPercent || 100), slippageBps, { userId: plan.userId });
+        plan.stats.sells = Number(plan.stats.sells || 0) + 1;
+        volumeBotLogPush(plan, `Sell ${cfg.sellPercent || 100}% from ${shortMint(record.publicKey)}.`);
+      } catch (error) {
+        if (!noBalance(error)) {
+          plan.stats.errors = Number(plan.stats.errors || 0) + 1;
+          volumeBotLogPush(plan, `Sell failed ${shortMint(record.publicKey)}: ${friendlyError(error)}`);
+        }
+      }
+    }
+    plan.rollStage = "sweep";
+    return;
+  }
+
+  // stage === "sweep"
+  await rollingExitActiveWallet(plan, byPk, slippageBps, noBalance);
+  plan.activeWalletPublicKey = null;
+  plan.currentRoundBuySol = 0;
+  plan.roundsDone = Number(plan.roundsDone || 0) + 1;
+  plan.stats.rounds = Number(plan.stats.rounds || 0) + 1;
+  plan.rollStage = "spawn";
+  if (Number(plan.roundsDone) >= Number(cfg.maxRounds || 1)) {
+    plan.botStage = "done";
+    volumeBotLogPush(plan, "All rounds complete.");
+  } else {
+    volumeBotLogPush(plan, `Round ${plan.roundsDone} complete.`);
+  }
+}
+
+// Sell any remaining tokens, sweep SOL back to source, and discard the wallet.
+async function rollingExitActiveWallet(plan, byPk, slippageBps, noBalance) {
+  const publicKey = plan.activeWalletPublicKey;
+  if (!publicKey) return;
+  const record = byPk(publicKey);
+  if (!record) return;
+  const cfg = plan.config || {};
+  try {
+    await sellTokenFromWallet(record, plan.tokenMint, 100, slippageBps, { userId: plan.userId });
+    volumeBotLogPush(plan, `Swept tokens from ${shortMint(publicKey)}.`);
+  } catch (error) {
+    if (!noBalance(error)) volumeBotLogPush(plan, `Token sweep skipped ${shortMint(publicKey)}: ${friendlyError(error)}`);
+  }
+  let drained = false;
+  if (cfg.sweepBack !== false && plan.sourcePublicKey) {
+    try {
+      const keypair = decryptWallet(record);
+      await drainSolFromWallet(keypair, new PublicKey(plan.sourcePublicKey));
+      invalidateWalletReadCache(record.publicKey);
+      drained = true;
+      volumeBotLogPush(plan, `Swept SOL back to source from ${shortMint(publicKey)}.`);
+    } catch (error) {
+      volumeBotLogPush(plan, `SOL sweep skipped ${shortMint(publicKey)}: ${friendlyError(error)}`);
+    }
+  }
+  // Only discard the throwaway wallet once it is empty, so funds are never stranded.
+  if (drained || cfg.sweepBack === false) {
+    await pruneVolumeWallet(publicKey).catch(() => {});
+  }
 }
 
 function normalizeOgreAiMode(value) {

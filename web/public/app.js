@@ -7971,27 +7971,31 @@ function volumeBotPanelHtml() {
       <div class="trade-head">
         <div>
           <h3>Volume Bot</h3>
-          <p>Auto-fund X wallets from a source wallet, run randomized buy/sell cycles to build volume, then sweep funds back. Runs server-side and keeps going after you close the tab.</p>
+          <p>Auto-fund wallets from a source wallet, run randomized buy/sell volume, then sweep funds back. Runs server-side and keeps going after you close the tab.</p>
         </div>
       </div>
       <label>
         Token CA
         <input data-vbot-token type="text" placeholder="Paste Solana token mint" value="${escapeHtml(state.volumeToken || state.tradeToken || "")}">
       </label>
+      <label class="vbot-check vbot-mode-toggle">
+        <input type="checkbox" data-vbot-rolling>
+        Rolling wallets - spawn a brand-new wallet every round (fund &rarr; buy &rarr; sell &rarr; sweep back &rarr; discard). Never reuses a wallet. Buy sizes stay randomized.
+      </label>
       <div class="volume-grid">
         <label>
           Source Wallet (funds + receives sweep)
           <select data-vbot-source>${volumeBotSourceOptionsHtml()}</select>
         </label>
-        <label class="vbot-check">
+        <label class="vbot-check" data-vbot-pool-only>
           <input type="checkbox" data-vbot-autocreate checked>
           Auto-create fresh wallets
         </label>
-        <label>
+        <label data-vbot-pool-only>
           Wallets (1-12)
           <input data-vbot-wallets type="number" min="1" max="12" step="1" value="3">
         </label>
-        <label>
+        <label data-vbot-pool-only>
           Fund / wallet (SOL)
           <input data-vbot-fund type="number" min="0" step="0.01" value="0.05">
         </label>
@@ -8012,8 +8016,8 @@ function volumeBotPanelHtml() {
           <input data-vbot-bias type="number" min="5" max="95" step="5" value="60">
         </label>
         <label>
-          Cycles (1-60)
-          <input data-vbot-cycles type="number" min="1" max="60" step="1" value="5">
+          Cycles / Rounds
+          <input data-vbot-cycles type="number" min="1" max="250" step="1" value="5">
         </label>
         <label>
           Delay between trades (sec)
@@ -8047,21 +8051,25 @@ function volumeBotPanelHtml() {
 }
 
 function readVolumeBotForm() {
+  const rollingWallets = Boolean($("[data-vbot-rolling]")?.checked);
   const autoCreate = Boolean($("[data-vbot-autocreate]")?.checked);
+  const cycles = $("[data-vbot-cycles]")?.value || "5";
   return {
     tokenMint: $("[data-vbot-token]")?.value?.trim() || "",
     sourceWalletIndex: $("[data-vbot-source]")?.value || "1",
+    rollingWallets,
     autoCreateWallets: autoCreate,
     walletCount: $("[data-vbot-wallets]")?.value || "3",
     fundPerWalletSol: $("[data-vbot-fund]")?.value || "",
     buyAmountSol: $("[data-vbot-buy]")?.value || "",
     sellPercent: $("[data-vbot-sell]")?.value || "100",
     buyBias: $("[data-vbot-bias]")?.value || "60",
-    cycles: $("[data-vbot-cycles]")?.value || "5",
+    cycles,
+    maxRounds: cycles,
     delaySecs: $("[data-vbot-delay]")?.value || "8",
     slippageBps: $("[data-vbot-slippage]")?.value || "400",
     sweepBack: Boolean($("[data-vbot-sweep]")?.checked),
-    walletIndexes: autoCreate ? [] : checkedWalletIndexes("vbot"),
+    walletIndexes: rollingWallets || autoCreate ? [] : checkedWalletIndexes("vbot"),
     walletGroup: ""
   };
 }
@@ -8089,15 +8097,26 @@ async function startVolumeBot() {
     setVolumeBotStatus("Paste a token CA first.");
     return;
   }
-  const walletWord = form.autoCreateWallets ? `${form.walletCount} fresh wallet(s)` : "the selected wallet(s)";
-  const fundTotal = (Number(form.fundPerWalletSol) || 0) * (Number(form.walletCount) || 0);
-  const confirmed = window.confirm([
-    "Start Volume Bot? This spends REAL SOL.",
-    `Token: ${form.tokenMint}`,
-    `Funds ${walletWord} with ${form.fundPerWalletSol} SOL each` + (form.autoCreateWallets ? ` (~${fundTotal.toFixed(3)} SOL from source)` : ""),
-    `Then runs ${form.cycles} cycle(s) of randomized ${form.buyAmountSol} SOL buys / ${form.sellPercent}% sells.`,
-    form.sweepBack ? "Sweeps funds back to the source wallet when done." : "Leaves funds in the trading wallets when done."
-  ].join("\n"));
+  const confirmLines = form.rollingWallets
+    ? [
+        "Start Rolling Volume Bot? This spends REAL SOL.",
+        `Token: ${form.tokenMint}`,
+        `Each round spawns a brand-new wallet, funds it from the source, buys ~${form.buyAmountSol} SOL (randomized), sells ${form.sellPercent}%, then sweeps back.`,
+        `Runs up to ${form.cycles} round(s) or until you press Stop.`,
+        "Never reuses a wallet; throwaway wallets are discarded once emptied."
+      ]
+    : (() => {
+        const walletWord = form.autoCreateWallets ? `${form.walletCount} fresh wallet(s)` : "the selected wallet(s)";
+        const fundTotal = (Number(form.fundPerWalletSol) || 0) * (Number(form.walletCount) || 0);
+        return [
+          "Start Volume Bot? This spends REAL SOL.",
+          `Token: ${form.tokenMint}`,
+          `Funds ${walletWord} with ${form.fundPerWalletSol} SOL each` + (form.autoCreateWallets ? ` (~${fundTotal.toFixed(3)} SOL from source)` : ""),
+          `Then runs ${form.cycles} cycle(s) of randomized ${form.buyAmountSol} SOL buys / ${form.sellPercent}% sells.`,
+          form.sweepBack ? "Sweeps funds back to the source wallet when done." : "Leaves funds in the trading wallets when done."
+        ];
+      })();
+  const confirmed = window.confirm(confirmLines.join("\n"));
   if (!confirmed) return;
   state.volumeBotBusy = true;
   setVolumeBotStatus("Funding wallets and starting bot...");
@@ -20603,6 +20622,12 @@ document.addEventListener("change", async (event) => {
   if (target?.matches?.("[data-vbot-autocreate]")) {
     const manual = document.querySelector("[data-vbot-manual-wallets]");
     if (manual) manual.hidden = Boolean(target.checked);
+  }
+  if (target?.matches?.("[data-vbot-rolling]")) {
+    const rolling = Boolean(target.checked);
+    document.querySelectorAll("[data-vbot-pool-only]").forEach((node) => { node.style.display = rolling ? "none" : ""; });
+    const manual = document.querySelector("[data-vbot-manual-wallets]");
+    if (manual) manual.hidden = rolling || Boolean(document.querySelector("[data-vbot-autocreate]")?.checked);
   }
   if (target?.matches?.("[data-custom-select]")) {
     syncCustomFields();
