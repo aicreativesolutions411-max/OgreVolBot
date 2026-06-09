@@ -19011,3 +19011,46 @@ html body main.shell[data-app] .curated-card {
   box-shadow: none !important;
 }
 /* === END SLIMEWIRE_V2_MODEROW_20260608_V1 ============================ */
+
+/* === SLIMEWIRE_V2_ICONS_20260608_V1 ====================================
+   New clean monochrome nav icon set, rendered via CSS mask so each glyph
+   tints to the theme: muted when idle, bright slime when active. Replaces
+   the old mixed PNG/SVG icons for a crisp, consistent rail. */
+html body main.shell[data-app] .tabs button[data-tab]::before {
+  background-image: none !important;
+  background-color: #8fa68d !important;
+  -webkit-mask-repeat: no-repeat !important;
+  mask-repeat: no-repeat !important;
+  -webkit-mask-position: center !important;
+  mask-position: center !important;
+  -webkit-mask-size: 76% auto !important;
+  mask-size: 76% auto !important;
+  transition: background-color 0.14s ease;
+}
+html body main.shell[data-app] .tabs button[data-active="true"]::before,
+html body main.shell[data-app] .tabs button:hover::before {
+  background-color: var(--slime-green-strong, #bbff63) !important;
+}
+
+html body main.shell[data-app] .tabs button[data-tab="terminal"]::before { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/terminal.svg") !important; mask-image: url("/assets/slimewire/svg/icons-v2/terminal.svg") !important; }
+html body main.shell[data-app] .tabs button[data-tab="dashboard"]::before { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/dashboard.svg") !important; mask-image: url("/assets/slimewire/svg/icons-v2/dashboard.svg") !important; }
+html body main.shell[data-app] .tabs button[data-tab="profile"]::before { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/profile.svg") !important; mask-image: url("/assets/slimewire/svg/icons-v2/profile.svg") !important; }
+html body main.shell[data-app] .tabs button[data-tab="smartChart"]::before { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/smartChart.svg") !important; mask-image: url("/assets/slimewire/svg/icons-v2/smartChart.svg") !important; }
+html body main.shell[data-app] .tabs button[data-tab="trade"]::before { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/trade.svg") !important; mask-image: url("/assets/slimewire/svg/icons-v2/trade.svg") !important; }
+html body main.shell[data-app] .tabs button[data-tab="live"]::before { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/live.svg") !important; mask-image: url("/assets/slimewire/svg/icons-v2/live.svg") !important; }
+html body main.shell[data-app] .tabs button[data-tab="liveTrades"]::before { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/liveTrades.svg") !important; mask-image: url("/assets/slimewire/svg/icons-v2/liveTrades.svg") !important; }
+html body main.shell[data-app] .tabs button[data-tab="slimeScope"]::before { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/slimeScope.svg") !important; mask-image: url("/assets/slimewire/svg/icons-v2/slimeScope.svg") !important; }
+html body main.shell[data-app] .tabs button[data-tab="watchlist"]::before { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/watchlist.svg") !important; mask-image: url("/assets/slimewire/svg/icons-v2/watchlist.svg") !important; }
+html body main.shell[data-app] .tabs button[data-tab="kol"]::before { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/kol.svg") !important; mask-image: url("/assets/slimewire/svg/icons-v2/kol.svg") !important; }
+html body main.shell[data-app] .tabs button[data-tab="ogreAi"]::before { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/ogreAi.svg") !important; mask-image: url("/assets/slimewire/svg/icons-v2/ogreAi.svg") !important; }
+html body main.shell[data-app] .tabs button[data-tab="launchCoin"]::before { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/launchCoin.svg") !important; mask-image: url("/assets/slimewire/svg/icons-v2/launchCoin.svg") !important; }
+html body main.shell[data-app] .tabs button[data-tab="bundle"]::before { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/bundle.svg") !important; mask-image: url("/assets/slimewire/svg/icons-v2/bundle.svg") !important; }
+html body main.shell[data-app] .tabs button[data-tab="volume"]::before { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/volume.svg") !important; mask-image: url("/assets/slimewire/svg/icons-v2/volume.svg") !important; }
+html body main.shell[data-app] .tabs button[data-tab="launch"]::before { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/launch.svg") !important; mask-image: url("/assets/slimewire/svg/icons-v2/launch.svg") !important; }
+html body main.shell[data-app] .tabs button[data-tab="sniper"]::before { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/sniper.svg") !important; mask-image: url("/assets/slimewire/svg/icons-v2/sniper.svg") !important; }
+html body main.shell[data-app] .tabs button[data-tab="wallets"]::before { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/wallets.svg") !important; mask-image: url("/assets/slimewire/svg/icons-v2/wallets.svg") !important; }
+html body main.shell[data-app] .tabs button[data-tab="positions"]::before { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/positions.svg") !important; mask-image: url("/assets/slimewire/svg/icons-v2/positions.svg") !important; }
+html body main.shell[data-app] .tabs button[data-tab="pnl"]::before { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/pnl.svg") !important; mask-image: url("/assets/slimewire/svg/icons-v2/pnl.svg") !important; }
+html body main.shell[data-app] .tabs button[data-tab="ogreTek"]::before { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/ogreTek.svg") !important; mask-image: url("/assets/slimewire/svg/icons-v2/ogreTek.svg") !important; }
+html body main.shell[data-app] .tabs button[data-tab="txAudit"]::before { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/txAudit.svg") !important; mask-image: url("/assets/slimewire/svg/icons-v2/txAudit.svg") !important; }
+/* === END SLIMEWIRE_V2_ICONS_20260608_V1 ============================== */
