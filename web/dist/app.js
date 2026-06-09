@@ -2594,6 +2594,7 @@ async function logout() {
     loginView?.scrollIntoView?.({ behavior: "smooth", block: "start" });
     return;
   }
+  await maybeReturnSessionFundsBeforeLeaving("logging out");
   const tokenBeforeLogout = String(state.token || "");
   state.logoutPending = true;
   const logoutButton = $("[data-logout]");
@@ -7981,6 +7982,32 @@ function setReturnFundsStatus(message) {
   if (node) node.textContent = state.returnFundsStatus;
 }
 
+// On logout/disconnect, offer a one-tap return of session-wallet funds back
+// to the connected wallet. Never blocks leaving if the sweep fails.
+async function maybeReturnSessionFundsBeforeLeaving(action = "leaving") {
+  try {
+    const connected = state.connectedWalletBalance || state.user?.connectedWallet || null;
+    if (!connected?.publicKey) return;
+    const sessionWallets = state.wallets.filter((wallet) => wallet.sessionWallet);
+    if (!sessionWallets.length) return;
+    const walletIndexes = sessionWallets.map((wallet) => String(wallet.index));
+    const confirmed = window.confirm([
+      `Before ${action}, return tokens + SOL from your ${walletIndexes.length} session wallet(s)`,
+      `back to your connected wallet ${shortAddress(connected.publicKey)}?`
+    ].join("\n"));
+    if (!confirmed) return;
+    await api("/api/web/wallets/return-to-connected", {
+      method: "POST",
+      body: JSON.stringify({ destination: connected.publicKey, walletIndexes }),
+      dedupe: false,
+      timeoutMs: API_LONG_ACTION_TIMEOUT_MS
+    });
+  } catch (error) {
+    // Best-effort: never trap the user in the session if the sweep fails.
+    try { window.alert(`Could not return funds automatically: ${error.message}. Use the Return Funds button to retry.`); } catch (_) {}
+  }
+}
+
 async function returnFundsToConnected() {
   if (state.returnFundsBusy) return;
   const connected = state.connectedWalletBalance || state.user?.connectedWallet || null;
@@ -10749,6 +10776,7 @@ async function connectBrowserWallet(providerId, options = {}) {
 }
 
 async function disconnectBrowserWallet() {
+  await maybeReturnSessionFundsBeforeLeaving("disconnecting");
   const status = walletConnectStatusElement();
   const disconnectedScope = state.user?.connectedWallet?.publicKey || state.connectedWalletBalance?.publicKey || "";
   if (!state.user || !state.token) {
