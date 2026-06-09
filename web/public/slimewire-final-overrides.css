@@ -18989,3 +18989,25 @@ html body main.shell[data-app][data-route="terminal"] .top-sync-strip > button.t
   gap: 5px !important;
 }
 /* === END SLIMEWIRE_V2_TOPBAR_20260608_V1 ============================= */
+
+/* === SLIMEWIRE_V2_MODEROW_20260608_V1 ==================================
+   Compact the tall 2-across mode buttons (KOL modes, scanners, subtabs)
+   into tidy tab chips. Verified live. */
+html body main.shell[data-app] .mode-row button,
+html body main.shell[data-app] .terminal-modes button {
+  padding: 7px 12px !important;
+  font-size: 12px !important;
+  min-height: 0 !important;
+  border-radius: 7px !important;
+  font-weight: 550 !important;
+}
+/* Curated/profile cards: tighter, flat, consistent. */
+html body main.shell[data-app] .kol-profile,
+html body main.shell[data-app] .kol-dashboard,
+html body main.shell[data-app] .kol-card,
+html body main.shell[data-app] .curated-card {
+  padding: 12px !important;
+  border-radius: 10px !important;
+  box-shadow: none !important;
+}
+/* === END SLIMEWIRE_V2_MODEROW_20260608_V1 ============================ */
