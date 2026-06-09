@@ -20040,6 +20040,7 @@ html body main.shell[data-app] .terminal-token-row.is-cooks .terminal-token-acti
 @media (min-width: 1181px) {
   html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs {
     grid-template-columns: repeat(13, minmax(0, 1fr)) !important;
+    grid-template-rows: auto !important;
     gap: 4px !important;
   }
   html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs > button,
@@ -20049,3 +20050,32 @@ html body main.shell[data-app] .terminal-token-row.is-cooks .terminal-token-acti
   }
 }
 /* === END NAV_ONE_ROW_20260609_V1 ==================================== */
+
+/* === COOKS_BEST_PICKS_SECTIONS_20260609_V1 ==========================
+   Cooks feed = a rotating Best Picks block + the newest list below. */
+html body main.shell[data-app] .cooks-feed { display: block; }
+html body main.shell[data-app] .cooks-section + .cooks-section { margin-top: 10px; }
+html body main.shell[data-app] .cooks-section-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 4px 2px 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(120, 200, 90, 0.18);
+}
+html body main.shell[data-app] .cooks-section-label strong {
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--slime-green-strong, #bbff63);
+}
+html body main.shell[data-app] .cooks-section-label span {
+  font-size: 11px;
+  color: var(--slime-text-dim, #8aa37e);
+}
+html body main.shell[data-app] .cooks-section[data-cooks-best] .signal-list {
+  border-color: rgba(187, 255, 99, 0.3);
+  box-shadow: 0 0 0 1px rgba(187, 255, 99, 0.12);
+}
+/* === END COOKS_BEST_PICKS_SECTIONS_20260609_V1 ====================== */
