@@ -6875,18 +6875,17 @@ function tradeHtml() {
 
   return `
     <section class="trade-layout">
-      <article class="trade-card slime-swap-card">
-        <div class="trade-head">
-          <span class="slime-swap-icon" aria-hidden="true"></span>
+      <article class="trade-card slime-swap-card ogre-swap-card">
+        <div class="trade-head ogre-swap-head">
           <div>
-            <h3>Slime Swap</h3>
-            <p>${connected?.publicKey ? "Connected browser wallets stay ready for this session and open your wallet approval prompt for every swap." : "Paste a token CA, pick a wallet, then swap with the same safety checks used across SlimeWire."}</p>
+            <h3 class="ogre-swap-title">OgreSwap</h3>
+            <p class="ogre-swap-sub">Live on-chain Solana swapper</p>
           </div>
         </div>
         <div class="slime-swap-terminal">
           <div class="slime-swap-asset-box">
             <div>
-              <span>From</span>
+              <span>You Pay</span>
               <strong>${escapeHtml(swapFromToken.symbol || shortAddress(swapFrom))}</strong>
             </div>
             <select data-swap-from aria-label="Swap from token">
@@ -6900,7 +6899,7 @@ function tradeHtml() {
           </button>
           <div class="slime-swap-asset-box">
             <div>
-              <span>To</span>
+              <span>You Receive</span>
               <strong>${escapeHtml(swapToToken.symbol || (swapTo ? shortAddress(swapTo) : "Custom CA"))}</strong>
             </div>
             <select data-swap-to aria-label="Swap to token">

@@ -19409,3 +19409,136 @@ html body main.shell[data-app] .vbot-config-start {
   html body main.shell[data-app] .slime-configurator .vbot-config-bg { opacity: 0.5; }
 }
 /* === END SLIMEBOT_CONFIGURATOR_20260609_V1 =========================== */
+
+/* === OGRESWAP_20260609_V1 ==============================================
+   OgreSwap look for the Slime Swap panel: ogre header, You Pay / You
+   Receive boxes, glowing reverse, big green SWAP. Matches the reference. */
+html body main.shell[data-app] .ogre-swap-card {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(120, 230, 120, 0.22) !important;
+  border-radius: 16px !important;
+  background: #050805 !important;
+}
+html body main.shell[data-app] .ogre-swap-head {
+  position: relative;
+  min-height: 96px;
+  border-radius: 12px;
+  margin-bottom: 14px;
+  padding: 16px 18px !important;
+  background:
+    linear-gradient(180deg, rgba(5,8,5,0.35), rgba(5,8,5,0.92)),
+    url("/assets/slimewire/png/slimewire-ogre-hero-rich.png") center 20% / cover no-repeat;
+}
+html body main.shell[data-app] .ogre-swap-title {
+  margin: 0 !important;
+  font-size: 32px !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.02em;
+  color: var(--slime-green-strong, #bbff63) !important;
+  text-shadow: 0 0 18px rgba(114, 255, 35, 0.45);
+}
+html body main.shell[data-app] .ogre-swap-sub {
+  margin: 2px 0 0 !important;
+  font-size: 12px !important;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #9fb89c !important;
+}
+/* Stack You Pay above You Receive (vertical), like the reference. */
+html body main.shell[data-app] .ogre-swap-card .slime-swap-terminal {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 4px !important;
+}
+/* You Pay / You Receive boxes. */
+html body main.shell[data-app] .ogre-swap-card .slime-swap-asset-box {
+  display: grid !important;
+  gap: 8px !important;
+  background: rgba(8, 13, 9, 0.85) !important;
+  border: 1px solid rgba(120, 230, 120, 0.2) !important;
+  border-radius: 14px !important;
+  padding: 14px 16px !important;
+}
+html body main.shell[data-app] .ogre-swap-card .slime-swap-asset-box > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+html body main.shell[data-app] .ogre-swap-card .slime-swap-asset-box > div span {
+  color: var(--slime-green-strong, #bbff63) !important;
+  font-weight: 700 !important;
+  font-size: 13px !important;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+html body main.shell[data-app] .ogre-swap-card .slime-swap-asset-box > div strong {
+  margin-left: auto;
+  color: #eef6ec !important;
+}
+html body main.shell[data-app] .ogre-swap-card .slime-swap-asset-box input[data-swap-amount],
+html body main.shell[data-app] .ogre-swap-card .slime-swap-asset-box input[data-trade-token] {
+  font-size: 22px !important;
+  font-weight: 700 !important;
+  background: transparent !important;
+  border: none !important;
+  padding: 2px 0 !important;
+  color: #f4faf2 !important;
+}
+html body main.shell[data-app] .ogre-swap-card .slime-swap-asset-box select {
+  background: rgba(6, 11, 8, 0.95) !important;
+  border: 1px solid rgba(120, 230, 120, 0.28) !important;
+  border-radius: 999px !important;
+  padding: 9px 14px !important;
+  color: #eef6ec !important;
+  font-weight: 650 !important;
+}
+html body main.shell[data-app] .ogre-swap-card .slime-swap-asset-box small {
+  color: #8a988a !important;
+}
+/* Glowing reverse button between the boxes. */
+html body main.shell[data-app] .ogre-swap-card .slime-swap-reverse {
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  margin: -6px auto !important;
+  border-radius: 50% !important;
+  background: radial-gradient(circle, rgba(26,42,28,0.95), rgba(8,16,9,0.95)) !important;
+  border: 2px solid rgba(120, 230, 120, 0.45) !important;
+  box-shadow: 0 0 16px rgba(114, 255, 35, 0.3) !important;
+  position: relative;
+  z-index: 2;
+}
+html body main.shell[data-app] .ogre-swap-card .slime-swap-route-icon::before {
+  content: "\21C5";
+  color: #8bff6a;
+  font-size: 22px;
+  font-weight: 700;
+}
+html body main.shell[data-app] .ogre-swap-card .slime-swap-route-note {
+  color: #9fb89c !important;
+  text-align: center;
+  font-size: 12px !important;
+  margin: 6px 0 0 !important;
+}
+/* Big ornate green action buttons (the SWAP feel). */
+html body main.shell[data-app] .ogre-swap-card .trade-block .quick-grid button.primary,
+html body main.shell[data-app] .ogre-swap-card .inline-action button {
+  background: linear-gradient(180deg, #76e24f, #4fb733) !important;
+  color: #06140a !important;
+  border: 1px solid rgba(120, 230, 120, 0.6) !important;
+  border-radius: 12px !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  box-shadow: 0 0 16px rgba(114, 255, 35, 0.25);
+  padding: 13px !important;
+}
+html body main.shell[data-app] .ogre-swap-card .trade-block h4 {
+  color: var(--slime-green-strong, #bbff63) !important;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+/* === END OGRESWAP_20260609_V1 ======================================== */
