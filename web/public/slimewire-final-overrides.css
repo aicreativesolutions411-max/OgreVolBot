@@ -19654,6 +19654,97 @@ html body main.shell[data-app] .ogre-swap-advanced .quick-grid button.primary {
 }
 /* === END OGRESWAP_20260609_V2 ======================================== */
 
+/* === VOLUME_SKIN_20260609_V1 (positioned image-skin) ==================
+   volume-template.png IS the panel face; real controls sit in the drawn
+   slots. Stage is cropped to the config rows (top) so the drawn queue cards
+   aren't shown; the real Start/queue/list live in .ovs-below. */
+html body main.shell[data-app] .slime-configurator.ovs-skin {
+  position: relative;
+  overflow: visible;
+  border: 0 !important;
+  background: #050805 !important;
+  padding: 0 !important;
+}
+html body main.shell[data-app] .ovs-stage {
+  position: relative;
+  width: 100%;
+  max-width: 900px;
+  margin: 0 auto;
+  aspect-ratio: 1264 / 848;
+  container-type: inline-size;
+  background: #050805 url("/assets/slimewire/tool-bg/volume-template.png") center / 100% 100% no-repeat;
+  border-radius: 10px;
+  overflow: hidden;
+}
+html body main.shell[data-app] .ovs-ca {
+  position: absolute; left: 2.5%; top: 13.5%; width: 55%; height: 8%;
+  background: transparent !important; border: 0 !important; outline: none !important; box-shadow: none !important;
+  color: #eafff0 !important; font-size: clamp(11px, 2.4cqw, 16px) !important; font-weight: 600 !important;
+  padding: 0 1.5% !important; box-sizing: border-box;
+}
+html body main.shell[data-app] .ovs-invest {
+  position: absolute; left: 2.5%; top: 28%; width: 29%; height: 8%;
+  display: flex; align-items: center; gap: 6px;
+}
+html body main.shell[data-app] .ovs-duration {
+  position: absolute; left: 33%; top: 28%; width: 25%; height: 8%;
+  display: flex; align-items: center; gap: 6px;
+}
+html body main.shell[data-app] .ovs-invest input[type="range"],
+html body main.shell[data-app] .ovs-duration input[type="range"] { flex: 1 1 auto; min-width: 0; margin: 0 !important; }
+html body main.shell[data-app] .ovs-invest-num {
+  width: 30%; background: transparent !important; border: 0 !important; outline: none !important;
+  color: #c7f7a4 !important; font-weight: 800 !important; font-size: clamp(11px, 2.4cqw, 16px) !important; text-align: center;
+}
+html body main.shell[data-app] .ovs-dur-label {
+  color: #c7f7a4 !important; font-weight: 700; font-size: clamp(9px, 2cqw, 12px); white-space: nowrap;
+}
+html body main.shell[data-app] .ovs-stage input[type="range"] {
+  -webkit-appearance: none; appearance: none; height: 6px;
+  background: rgba(120, 230, 120, 0.25) !important; border-radius: 999px; outline: none; cursor: pointer; padding: 0 !important;
+}
+html body main.shell[data-app] .ovs-stage input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
+  background: #8bff5a; box-shadow: 0 0 10px rgba(120, 255, 60, 0.7); cursor: pointer;
+}
+html body main.shell[data-app] .ovs-stage input[type="range"]::-moz-range-thumb {
+  width: 16px; height: 16px; border: 0; border-radius: 50%; background: #8bff5a; box-shadow: 0 0 10px rgba(120, 255, 60, 0.7);
+}
+html body main.shell[data-app] .ovs-mode { position: absolute; left: 2.5%; top: 46.5%; width: 30%; height: 9.5%; }
+html body main.shell[data-app] .ovs-aggr { position: absolute; left: 32.5%; top: 46.5%; width: 27.5%; height: 9.5%; }
+/* Fade the bottom (the drawn Queue Status cards) into the panel - the real,
+   live queue + list render in .ovs-below right under the stage. */
+html body main.shell[data-app] .ovs-stage::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 40%;
+  background: linear-gradient(180deg, rgba(5, 8, 5, 0) 0%, rgba(5, 8, 5, 0.86) 62%, #050805 100%);
+  pointer-events: none;
+}
+html body main.shell[data-app] .ovs-stage .vbot-segment {
+  display: flex !important; gap: 2px; width: 100%; height: 100%;
+  background: transparent !important; border: 0 !important; padding: 0 !important; border-radius: 0 !important;
+}
+html body main.shell[data-app] .ovs-stage .vbot-segment button {
+  flex: 1; height: 100%; border: 1px solid rgba(120, 230, 120, 0.2) !important; border-radius: 8px !important;
+  background: rgba(7, 12, 8, 0.92) !important;
+  color: #a7d894 !important; font-weight: 800 !important; font-size: clamp(9px, 2cqw, 13px) !important; cursor: pointer;
+}
+html body main.shell[data-app] .ovs-stage .vbot-segment button[data-active="true"] {
+  color: #06140a !important; background: rgba(130, 255, 80, 0.92) !important;
+  border-color: rgba(150, 255, 80, 0.9) !important;
+  box-shadow: 0 0 10px rgba(120, 255, 60, 0.5);
+}
+html body main.shell[data-app] .ovs-below {
+  display: grid; gap: 12px; padding: 14px 8px 6px; max-width: 900px; margin: 0 auto;
+}
+@media (max-width: 760px) {
+  html body main.shell[data-app] .ovs-stage { aspect-ratio: 1264 / 600; }
+  html body main.shell[data-app] .ovs-ca { font-size: 12px !important; }
+}
+/* === END VOLUME_SKIN_20260609_V1 ===================================== */
+
 /* === PAIRS_CONTROLSTRIP_20260609_V1 ===================================
    Tidy the Cooks/Live Pairs control strip into one clean wrapping row
    (Sort + Refresh + Trade/Bundle/Volume) instead of a cramped cluster. */

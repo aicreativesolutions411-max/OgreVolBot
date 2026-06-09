@@ -8279,46 +8279,26 @@ function volumeBotQueueHtml() {
 
 function volumeBotPanelHtml() {
   return `
-    <section class="trade-card volume-bot-card slime-configurator" data-preserve-focus>
-      <div class="vbot-config-bg" aria-hidden="true"></div>
-      <div class="vbot-config-inner">
-        <h2 class="vbot-config-title">VOLUME CONFIGURATOR</h2>
-
-        <label class="vbot-config-field">
-          <span class="vbot-config-label">Contract Address</span>
-          <input data-vbot-token type="text" placeholder="e.g. H74CYmXgMkYHYuSRsZt6RJb4NYp2u72VW8BS5huApump" value="${escapeHtml(state.volumeToken || state.tradeToken || "")}">
-        </label>
-
+    <section class="trade-card volume-bot-card slime-configurator ovs-skin" data-preserve-focus>
+      <h2 class="vbot-config-title oss-a11y-title">Volume Configurator</h2>
+      <div class="ovs-stage">
+        <input class="ovs-ca" data-vbot-token type="text" placeholder="Paste contract address" value="${escapeHtml(state.volumeToken || state.tradeToken || "")}" aria-label="Contract address">
+        <div class="ovs-invest">
+          <input data-vbot-invest type="range" min="0.1" max="10" step="0.1" value="6" aria-label="Investment in SOL">
+          <input data-vbot-invest-num type="number" min="0.1" max="10" step="0.1" value="6" class="ovs-invest-num" aria-label="Investment in SOL">
+        </div>
+        <div class="ovs-duration">
+          <input data-vbot-duration type="range" min="20" max="360" step="5" value="60" aria-label="Duration">
+          <span class="ovs-dur-label" data-vbot-duration-label>1h</span>
+        </div>
+        <div class="ovs-mode">${slimeBotSegment("mode", state.slimeBotMode, [["smart", "Smart"], ["spam", "Spam"]])}</div>
+        <div class="ovs-aggr">${slimeBotSegment("aggr", state.slimeBotAggr, [["low", "Low"], ["med", "Med"], ["high", "High"]])}</div>
+      </div>
+      <div class="ovs-below">
         <label class="vbot-config-field">
           <span class="vbot-config-label">Pay From (source wallet)</span>
           <select data-vbot-source>${volumeBotSourceOptionsHtml()}</select>
         </label>
-
-        <div class="vbot-config-row">
-          <div class="vbot-config-field vbot-slider-field">
-            <span class="vbot-config-label">Investment (SOL)</span>
-            <div class="vbot-slider-row">
-              <input data-vbot-invest type="range" min="0.1" max="10" step="0.1" value="6">
-              <input data-vbot-invest-num type="number" min="0.1" max="10" step="0.1" value="6" class="vbot-slider-box" aria-label="Investment in SOL">
-            </div>
-          </div>
-          <div class="vbot-config-field vbot-slider-field">
-            <span class="vbot-config-label">Duration</span>
-            <input data-vbot-duration type="range" min="20" max="360" step="5" value="60">
-            <div class="vbot-slider-ticks"><span>Min 20m</span><span data-vbot-duration-label>1h</span><span>Max 6h</span></div>
-          </div>
-        </div>
-
-        <div class="vbot-config-row">
-          <div class="vbot-config-field">
-            <span class="vbot-config-label">Mode</span>
-            ${slimeBotSegment("mode", state.slimeBotMode, [["smart", "Smart"], ["spam", "Spam"]])}
-          </div>
-          <div class="vbot-config-field">
-            <span class="vbot-config-label">Aggressiveness</span>
-            ${slimeBotSegment("aggr", state.slimeBotAggr, [["low", "Low"], ["med", "Med"], ["high", "High"]])}
-          </div>
-        </div>
 
         <div class="vbot-config-row">
           <div class="vbot-config-field">
