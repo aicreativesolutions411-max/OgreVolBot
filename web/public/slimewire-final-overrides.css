@@ -19188,3 +19188,224 @@ html body main.shell[data-app] .terminal-token-stats dd {
   }
 }
 /* === END SLIMEWIRE_V2_MOBILEFIX_20260608_V1 ========================== */
+
+/* === SLIMEBOT_CONFIGURATOR_20260609_V1 =================================
+   SlimeBot "Volume Configurator" look: ogre/swamp background, green title,
+   slider + segmented controls, queue-status cards. Matches the reference. */
+html body main.shell[data-app] .slime-configurator {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(120, 230, 120, 0.18) !important;
+  border-radius: 14px !important;
+  background: #050805 !important;
+  padding: 0 !important;
+}
+html body main.shell[data-app] .slime-configurator .vbot-config-bg {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(100deg, rgba(5,8,5,0.97) 38%, rgba(5,8,5,0.55) 70%, rgba(5,8,5,0.85) 100%),
+    url("/assets/slimewire/png/slimewire-ogre-hero-rich.png") right center / cover no-repeat;
+  opacity: 0.9;
+  pointer-events: none;
+}
+html body main.shell[data-app] .slime-configurator .vbot-config-inner {
+  position: relative;
+  z-index: 1;
+  padding: 18px 20px 20px;
+  display: grid;
+  gap: 14px;
+}
+html body main.shell[data-app] .vbot-config-title {
+  margin: 0;
+  font-size: 26px !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.04em;
+  color: var(--slime-green-strong, #bbff63) !important;
+  text-shadow: 0 0 18px rgba(114, 255, 35, 0.35);
+  text-transform: uppercase;
+}
+html body main.shell[data-app] .vbot-config-field {
+  display: grid;
+  gap: 6px;
+  max-width: 560px;
+}
+html body main.shell[data-app] .vbot-config-label {
+  font-size: 14px !important;
+  font-weight: 650 !important;
+  color: #eaf5e6 !important;
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+}
+html body main.shell[data-app] .vbot-config-label.small {
+  font-size: 10px !important;
+  color: #7d8c7c !important;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+html body main.shell[data-app] .slime-configurator input[type="text"],
+html body main.shell[data-app] .slime-configurator select,
+html body main.shell[data-app] .slime-configurator .vbot-slider-box {
+  background: rgba(6, 11, 8, 0.85) !important;
+  border: 1px solid rgba(120, 230, 120, 0.25) !important;
+  border-radius: 10px !important;
+  padding: 11px 12px !important;
+  font-size: 14px !important;
+  color: #eef6ec !important;
+}
+html body main.shell[data-app] .vbot-config-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px 24px;
+  max-width: 640px;
+}
+html body main.shell[data-app] .vbot-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+html body main.shell[data-app] .vbot-slider-box {
+  width: 84px;
+  text-align: center;
+}
+/* Range sliders: gray track, glowing slime thumb. */
+html body main.shell[data-app] .slime-configurator input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 7px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(114,255,35,0.55), rgba(80,90,80,0.5));
+  outline: none;
+}
+html body main.shell[data-app] .slime-configurator input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #8bff6a;
+  box-shadow: 0 0 12px rgba(139, 255, 106, 0.8);
+  cursor: pointer;
+}
+html body main.shell[data-app] .slime-configurator input[type="range"]::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 50%;
+  background: #8bff6a;
+  box-shadow: 0 0 12px rgba(139, 255, 106, 0.8);
+  cursor: pointer;
+}
+html body main.shell[data-app] .vbot-slider-ticks {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: #8a988a;
+  margin-top: 2px;
+}
+/* Segmented controls (Mode / Aggressiveness). */
+html body main.shell[data-app] .vbot-segment {
+  display: inline-flex;
+  gap: 6px;
+  padding: 5px;
+  border-radius: 12px;
+  background: rgba(8, 13, 9, 0.7);
+  border: 1px solid rgba(120, 230, 120, 0.18);
+}
+html body main.shell[data-app] .vbot-segment button {
+  border: none !important;
+  background: transparent !important;
+  color: #9fb89c !important;
+  font-size: 15px !important;
+  font-weight: 700 !important;
+  padding: 9px 22px !important;
+  border-radius: 9px !important;
+  cursor: pointer;
+}
+html body main.shell[data-app] .vbot-segment button[data-active="true"] {
+  background: linear-gradient(180deg, #76e24f, #57c93a) !important;
+  color: #06140a !important;
+  box-shadow: 0 0 14px rgba(114, 255, 35, 0.35);
+}
+/* Queue status cards. */
+html body main.shell[data-app] .vbot-queue {
+  border-top: 1px solid rgba(120, 230, 120, 0.12);
+  padding-top: 12px;
+  margin-top: 4px;
+}
+html body main.shell[data-app] .vbot-queue-head strong {
+  display: block;
+  font-size: 22px;
+  color: #f2f7f0;
+  margin-top: 2px;
+}
+html body main.shell[data-app] .vbot-queue-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-top: 10px;
+  max-width: 640px;
+}
+html body main.shell[data-app] .vbot-queue-card {
+  background: rgba(8, 13, 9, 0.72);
+  border: 1px solid rgba(120, 230, 120, 0.14);
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+html body main.shell[data-app] .vbot-queue-title {
+  margin: 0;
+  font-size: 14px !important;
+  font-weight: 800 !important;
+  color: var(--slime-green-strong, #bbff63) !important;
+  letter-spacing: 0.04em;
+}
+html body main.shell[data-app] .vbot-queue-sub {
+  margin: 2px 0 8px;
+  color: #cfe0cb !important;
+  font-size: 13px;
+}
+html body main.shell[data-app] .vbot-queue-cap {
+  margin: 0 0 6px;
+  color: #cfe0cb !important;
+  font-size: 13px;
+}
+html body main.shell[data-app] .vbot-queue-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(80, 90, 80, 0.4);
+  overflow: hidden;
+}
+html body main.shell[data-app] .vbot-queue-bar span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #76e24f, #57c93a);
+}
+html body main.shell[data-app] .vbot-queue-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+}
+html body main.shell[data-app] .vbot-queue-foot span {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: #7d8c7c;
+}
+html body main.shell[data-app] .vbot-queue-foot strong {
+  font-size: 26px;
+  color: var(--slime-green-strong, #bbff63);
+}
+html body main.shell[data-app] .vbot-config-start {
+  max-width: 640px;
+  padding: 13px !important;
+  font-size: 15px !important;
+}
+@media (max-width: 760px) {
+  html body main.shell[data-app] .vbot-config-row,
+  html body main.shell[data-app] .vbot-queue-grid {
+    grid-template-columns: 1fr;
+  }
+  html body main.shell[data-app] .vbot-config-title { font-size: 22px !important; }
+  html body main.shell[data-app] .slime-configurator .vbot-config-bg { opacity: 0.5; }
+}
+/* === END SLIMEBOT_CONFIGURATOR_20260609_V1 =========================== */

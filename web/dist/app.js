@@ -365,6 +365,8 @@ const state = {
   volumeBots: [],
   volumeBotStatus: "",
   volumeBotBusy: false,
+  slimeBotMode: "smart",
+  slimeBotAggr: "med",
   distributeStatus: "",
   distributeBusy: false,
   returnFundsStatus: "",
@@ -8132,112 +8134,134 @@ function volumeBotListHtml() {
   }).join("");
 }
 
+function slimeBotSegment(group, current, options) {
+  return `<div class="vbot-segment" role="group">${options.map(([value, label]) =>
+    `<button type="button" data-vbot-set-${group}="${escapeHtml(value)}" data-active="${current === value}">${escapeHtml(label)}</button>`).join("")}</div>`;
+}
+
+function volumeBotQueueHtml() {
+  const bots = Array.isArray(state.volumeBots) ? state.volumeBots : [];
+  const active = bots.filter((bot) => bot.status !== "completed");
+  const smart = active.filter((bot) => bot.rolling);
+  const spam = active.filter((bot) => !bot.rolling);
+  const queued = (list) => list.reduce((sum, bot) => sum + Math.max(0, Number(bot.cycles || 0) - Number(bot.currentCycle || 0)), 0);
+  const card = (title, sub, used, cap, q) => `
+    <article class="vbot-queue-card">
+      <h4 class="vbot-queue-title">${escapeHtml(title)}</h4>
+      <p class="vbot-queue-sub">${escapeHtml(sub)}</p>
+      <p class="vbot-queue-cap">Capacity used <strong>${used} / ${cap}</strong> slots</p>
+      <div class="vbot-queue-bar"><span style="width:${Math.max(2, Math.min(100, (used / cap) * 100))}%"></span></div>
+      <div class="vbot-queue-foot"><span>QUEUED</span><strong>${q}</strong></div>
+    </article>`;
+  return `
+    <div class="vbot-queue-grid">
+      ${card("SMART", "Smart Mode RPC Servers", smart.length, 10, queued(smart))}
+      ${card("SPAMMER", "Spammer RPC Servers", spam.length, 1, queued(spam))}
+    </div>`;
+}
+
 function volumeBotPanelHtml() {
   return `
-    <section class="trade-card volume-bot-card" data-preserve-focus>
-      <div class="trade-head">
-        <div>
-          <h3>SlimeBot</h3>
-          <p>Auto-fund wallets from a source wallet, run randomized buy/sell volume, then sweep funds back. Runs server-side and keeps going after you close the tab.</p>
-        </div>
-      </div>
-      <label>
-        Token CA
-        <input data-vbot-token type="text" placeholder="Paste Solana token mint" value="${escapeHtml(state.volumeToken || state.tradeToken || "")}">
-      </label>
-      <label class="vbot-check vbot-mode-toggle">
-        <input type="checkbox" data-vbot-rolling>
-        Rolling wallets - spawn a brand-new wallet every round (fund &rarr; buy &rarr; sell &rarr; sweep back &rarr; discard). Never reuses a wallet. Buy sizes stay randomized.
-      </label>
-      <div class="volume-grid">
-        <label>
-          Source Wallet (funds + receives sweep)
+    <section class="trade-card volume-bot-card slime-configurator" data-preserve-focus>
+      <div class="vbot-config-bg" aria-hidden="true"></div>
+      <div class="vbot-config-inner">
+        <h2 class="vbot-config-title">VOLUME CONFIGURATOR</h2>
+
+        <label class="vbot-config-field">
+          <span class="vbot-config-label">Contract Address</span>
+          <input data-vbot-token type="text" placeholder="e.g. H74CYmXgMkYHYuSRsZt6RJb4NYp2u72VW8BS5huApump" value="${escapeHtml(state.volumeToken || state.tradeToken || "")}">
+        </label>
+
+        <label class="vbot-config-field">
+          <span class="vbot-config-label">Pay From (source wallet)</span>
           <select data-vbot-source>${volumeBotSourceOptionsHtml()}</select>
         </label>
-        <label class="vbot-check" data-vbot-pool-only>
-          <input type="checkbox" data-vbot-autocreate checked>
-          Auto-create fresh wallets
-        </label>
-        <label data-vbot-pool-only>
-          Wallets (1-12)
-          <input data-vbot-wallets type="number" min="1" max="12" step="1" value="3">
-        </label>
-        <label data-vbot-pool-only>
-          Fund / wallet (SOL)
-          <input data-vbot-fund type="number" min="0" step="0.01" value="0.05">
-        </label>
-        <label>
-          Buy / trade (SOL)
-          <input data-vbot-buy type="number" min="0" step="0.01" value="0.02">
-        </label>
-        <label>
-          Sell size
-          <select data-vbot-sell>
-            <option value="50">50%</option>
-            <option value="75">75%</option>
-            <option value="100" selected>100%</option>
-          </select>
-        </label>
-        <label>
-          Buy bias (% buys vs sells)
-          <input data-vbot-bias type="number" min="5" max="95" step="5" value="60">
-        </label>
-        <label>
-          Cycles / Rounds
-          <input data-vbot-cycles type="number" min="1" max="250" step="1" value="5">
-        </label>
-        <label>
-          Delay between trades (sec)
-          <input data-vbot-delay type="number" min="3" max="600" step="1" value="8">
-        </label>
-        <label>
-          Slippage
-          <select data-vbot-slippage>
-            <option value="300">3%</option>
-            <option value="400" selected>4%</option>
-            <option value="500">5%</option>
-            <option value="800">8%</option>
-          </select>
-        </label>
-        <label class="vbot-check">
-          <input type="checkbox" data-vbot-sweep checked>
-          Sweep funds back to source when done
-        </label>
-      </div>
-      <div class="wallet-checks" data-vbot-manual-wallets hidden>
-        <small>Manual wallet pick (used when auto-create is off):</small>
-        ${walletChecksHtml("vbot")}
-      </div>
-      <button class="primary" data-vbot-start ${state.volumeBotBusy ? "disabled" : ""}>${state.volumeBotBusy ? "Starting..." : "Start SlimeBot"}</button>
-      <p class="trade-status" data-vbot-status>${escapeHtml(state.volumeBotStatus || "Configure, then Start. The bot spends real SOL from the source wallet.")}</p>
-      <div class="volume-bot-list">
-        ${volumeBotListHtml()}
+
+        <div class="vbot-config-row">
+          <div class="vbot-config-field vbot-slider-field">
+            <span class="vbot-config-label">Investment (SOL)</span>
+            <div class="vbot-slider-row">
+              <input data-vbot-invest type="range" min="0.1" max="10" step="0.1" value="6">
+              <input data-vbot-invest-num type="number" min="0.1" max="10" step="0.1" value="6" class="vbot-slider-box" aria-label="Investment in SOL">
+            </div>
+          </div>
+          <div class="vbot-config-field vbot-slider-field">
+            <span class="vbot-config-label">Duration</span>
+            <input data-vbot-duration type="range" min="20" max="360" step="5" value="60">
+            <div class="vbot-slider-ticks"><span>Min 20m</span><span data-vbot-duration-label>1h</span><span>Max 6h</span></div>
+          </div>
+        </div>
+
+        <div class="vbot-config-row">
+          <div class="vbot-config-field">
+            <span class="vbot-config-label">Mode</span>
+            ${slimeBotSegment("mode", state.slimeBotMode, [["smart", "Smart"], ["spam", "Spam"]])}
+          </div>
+          <div class="vbot-config-field">
+            <span class="vbot-config-label">Aggressiveness</span>
+            ${slimeBotSegment("aggr", state.slimeBotAggr, [["low", "Low"], ["med", "Med"], ["high", "High"]])}
+          </div>
+        </div>
+
+        <button class="primary vbot-config-start" data-vbot-start ${state.volumeBotBusy ? "disabled" : ""}>${state.volumeBotBusy ? "Starting..." : "Start SlimeBot"}</button>
+        <p class="trade-status" data-vbot-status>${escapeHtml(state.volumeBotStatus || "Set a token, investment, and mode, then Start. Spends real SOL from the source wallet.")}</p>
+
+        <div class="vbot-queue">
+          <div class="vbot-queue-head"><span class="vbot-config-label small">GLOBAL QUEUE</span><strong>Queue Status</strong></div>
+          ${volumeBotQueueHtml()}
+        </div>
+
+        <div class="volume-bot-list">
+          ${volumeBotListHtml()}
+        </div>
       </div>
     </section>
   `;
 }
 
+// Map the simple configurator controls (investment / duration / mode /
+// aggressiveness) onto the tested SlimeBot backend params. Conservative:
+// total spend stays bounded near the chosen investment, caps preserved.
 function readVolumeBotForm() {
-  const rollingWallets = Boolean($("[data-vbot-rolling]")?.checked);
-  const autoCreate = Boolean($("[data-vbot-autocreate]")?.checked);
-  const cycles = $("[data-vbot-cycles]")?.value || "5";
+  const mode = state.slimeBotMode === "spam" ? "spam" : "smart";
+  const aggr = ["low", "med", "high"].includes(state.slimeBotAggr) ? state.slimeBotAggr : "med";
+  const investment = Math.max(0.05, Math.min(50, Number($("[data-vbot-invest-num]")?.value || $("[data-vbot-invest]")?.value || "1")));
+  const durationMin = Math.max(20, Math.min(360, Number($("[data-vbot-duration]")?.value || "60")));
+
+  const aggrMap = {
+    low: { delaySecs: 30, buyBias: 55, walletCount: 4 },
+    med: { delaySecs: 12, buyBias: 60, walletCount: 6 },
+    high: { delaySecs: 5, buyBias: 70, walletCount: 10 }
+  };
+  const a = aggrMap[aggr];
+  const rolling = mode === "smart"; // Smart = fresh wallet each round (organic)
+  const stepSec = a.delaySecs * (rolling ? 4 : 1);
+  let rounds = Math.round((durationMin * 60) / stepSec);
+  // Bound rounds so total spend never blows past the chosen investment.
+  rounds = Math.max(1, Math.min(250, rounds, Math.floor(investment / 0.01)));
+  const buyAmountSol = Math.max(0.005, Math.min(0.5, investment / rounds));
+
   return {
     tokenMint: $("[data-vbot-token]")?.value?.trim() || "",
     sourceWalletIndex: $("[data-vbot-source]")?.value || "1",
-    rollingWallets,
-    autoCreateWallets: autoCreate,
-    walletCount: $("[data-vbot-wallets]")?.value || "3",
-    fundPerWalletSol: $("[data-vbot-fund]")?.value || "",
-    buyAmountSol: $("[data-vbot-buy]")?.value || "",
-    sellPercent: $("[data-vbot-sell]")?.value || "100",
-    buyBias: $("[data-vbot-bias]")?.value || "60",
-    cycles,
-    maxRounds: cycles,
-    delaySecs: $("[data-vbot-delay]")?.value || "8",
-    slippageBps: $("[data-vbot-slippage]")?.value || "400",
-    sweepBack: Boolean($("[data-vbot-sweep]")?.checked),
-    walletIndexes: rollingWallets || autoCreate ? [] : checkedWalletIndexes("vbot"),
-    walletGroup: ""
+    rollingWallets: rolling,
+    autoCreateWallets: !rolling,
+    walletCount: String(a.walletCount),
+    fundPerWalletSol: rolling ? "" : (buyAmountSol + 0.02).toFixed(4),
+    buyAmountSol: buyAmountSol.toFixed(4),
+    sellPercent: "100",
+    buyBias: String(a.buyBias),
+    cycles: String(rounds),
+    maxRounds: String(rounds),
+    delaySecs: String(a.delaySecs),
+    slippageBps: "400",
+    sweepBack: true,
+    walletIndexes: [],
+    walletGroup: "",
+    investment,
+    durationMin,
+    mode,
+    aggr
   };
 }
 
@@ -8264,26 +8288,15 @@ async function startVolumeBot() {
     setVolumeBotStatus("Paste a token CA first.");
     return;
   }
-  const confirmLines = form.rollingWallets
-    ? [
-        "Start Rolling SlimeBot? This spends REAL SOL.",
-        `Token: ${form.tokenMint}`,
-        `Each round spawns a brand-new wallet, funds it from the source, buys ~${form.buyAmountSol} SOL (randomized), sells ${form.sellPercent}%, then sweeps back.`,
-        `Runs up to ${form.cycles} round(s) or until you press Stop.`,
-        "Never reuses a wallet; throwaway wallets are discarded once emptied."
-      ]
-    : (() => {
-        const walletWord = form.autoCreateWallets ? `${form.walletCount} fresh wallet(s)` : "the selected wallet(s)";
-        const fundTotal = (Number(form.fundPerWalletSol) || 0) * (Number(form.walletCount) || 0);
-        return [
-          "Start SlimeBot? This spends REAL SOL.",
-          `Token: ${form.tokenMint}`,
-          `Funds ${walletWord} with ${form.fundPerWalletSol} SOL each` + (form.autoCreateWallets ? ` (~${fundTotal.toFixed(3)} SOL from source)` : ""),
-          `Then runs ${form.cycles} cycle(s) of randomized ${form.buyAmountSol} SOL buys / ${form.sellPercent}% sells.`,
-          form.sweepBack ? "Sweeps funds back to the source wallet when done." : "Leaves funds in the trading wallets when done."
-        ];
-      })();
-  const confirmed = window.confirm(confirmLines.join("\n"));
+  const durLabel = form.durationMin >= 60 ? `${(form.durationMin / 60).toFixed(form.durationMin % 60 ? 1 : 0)}h` : `${form.durationMin}m`;
+  const confirmed = window.confirm([
+    "Start SlimeBot? This spends REAL SOL.",
+    `Token: ${form.tokenMint}`,
+    `${form.mode === "smart" ? "Smart" : "Spam"} mode, ${form.aggr.toUpperCase()} aggressiveness.`,
+    `Deploys up to ~${form.investment} SOL over ${durLabel} from your source wallet,`,
+    `as ${form.cycles} round(s) of randomized ~${form.buyAmountSol} SOL buys / sells.`,
+    "Sweeps funds back to the source wallet when done."
+  ].join("\n"));
   if (!confirmed) return;
   state.volumeBotBusy = true;
   setVolumeBotStatus("Funding wallets and starting bot...");
@@ -20474,6 +20487,20 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-volume-start]")) {
     await createVolumePlan();
   }
+  const vbotModeBtn = target.closest?.("[data-vbot-set-mode]");
+  if (vbotModeBtn) {
+    event.preventDefault();
+    state.slimeBotMode = vbotModeBtn.dataset.vbotSetMode || "smart";
+    vbotModeBtn.parentElement?.querySelectorAll("[data-vbot-set-mode]").forEach((btn) => { btn.dataset.active = String(btn === vbotModeBtn); });
+    return;
+  }
+  const vbotAggrBtn = target.closest?.("[data-vbot-set-aggr]");
+  if (vbotAggrBtn) {
+    event.preventDefault();
+    state.slimeBotAggr = vbotAggrBtn.dataset.vbotSetAggr || "med";
+    vbotAggrBtn.parentElement?.querySelectorAll("[data-vbot-set-aggr]").forEach((btn) => { btn.dataset.active = String(btn === vbotAggrBtn); });
+    return;
+  }
   if (target.matches("[data-vbot-start]")) {
     event.preventDefault();
     await startVolumeBot();
@@ -21433,6 +21460,26 @@ if (!window.__slimeVolumeBotTimer) {
     void loadVolumeBots();
   }, 7000);
 }
+
+// SlimeBot configurator: keep the Investment range/number in sync and live
+// label the Duration slider.
+document.addEventListener("input", (event) => {
+  const target = event.target;
+  if (!target || !target.matches) return;
+  if (target.matches("[data-vbot-invest]")) {
+    const num = document.querySelector("[data-vbot-invest-num]");
+    if (num) num.value = target.value;
+  } else if (target.matches("[data-vbot-invest-num]")) {
+    const range = document.querySelector("[data-vbot-invest]");
+    if (range) range.value = target.value;
+  } else if (target.matches("[data-vbot-duration]")) {
+    const label = document.querySelector("[data-vbot-duration-label]");
+    if (label) {
+      const m = Number(target.value);
+      label.textContent = m >= 60 ? `${(m / 60).toFixed(m % 60 ? 1 : 0)}h` : `${m}m`;
+    }
+  }
+});
 
 
 
