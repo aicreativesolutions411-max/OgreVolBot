@@ -19877,9 +19877,10 @@ html body main.shell[data-app] .signal-cell small { margin-top: 1px !important; 
 /* Actions: single non-wrapping row of small icon buttons. Labels are kept in
    the DOM (screen readers + title tooltips) but hidden visually; a glyph is
    drawn per action via ::before. */
-html body main.shell[data-app] .signal-actions {
+html body main.shell[data-app] .signal-list .signal-row .signal-actions {
   display: flex !important;
   flex-wrap: nowrap !important;
+  grid-template-columns: none !important;
   gap: 5px !important;
   align-items: center !important;
   justify-content: flex-end !important;
