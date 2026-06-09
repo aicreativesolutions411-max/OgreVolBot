@@ -18782,3 +18782,130 @@ html body main.shell[data-app] nav.tabs button[data-active="true"] {
   border-color: rgba(98, 214, 70, 0.4) !important;
 }
 /* === END SLIMEWIRE_V2_TERMINAL_20260608_V1 =========================== */
+
+/* === SLIMEWIRE_V2_GLOBAL_COMPACT_20260608_V1 ===========================
+   Whole-site compaction: tighter type, smaller flat controls, denser
+   spacing, muted palette everywhere. The "not big & bulky, super pro"
+   pass applied across every screen. Verified live. */
+
+/* Muted palette across the WHOLE shell (not just the terminal). */
+html body main.shell[data-app][data-route] {
+  --slime-text: #e7efe5;
+  --slime-muted: #8a988a;
+  --line: rgba(120, 230, 120, 0.1);
+  --line-strong: rgba(120, 230, 120, 0.24);
+  --slime-glow: none;
+}
+
+/* Tighter type scale everywhere in the app. */
+html body main.shell[data-app] .command-workspace,
+html body main.shell[data-app] .terminal-layout,
+html body main.shell[data-app] .trade-layout,
+html body main.shell[data-app] .dashboard-panel,
+html body main.shell[data-app] [data-dashboard] {
+  font-size: 13px;
+}
+html body main.shell[data-app] .command-workspace h3,
+html body main.shell[data-app] .trade-layout h3,
+html body main.shell[data-app] .account-check-card h3,
+html body main.shell[data-app] .trade-card h3 {
+  font-size: 14px !important;
+  letter-spacing: 0.02em;
+}
+html body main.shell[data-app] .command-workspace h4,
+html body main.shell[data-app] .trade-layout h4 {
+  font-size: 12px !important;
+}
+html body main.shell[data-app] .command-workspace p,
+html body main.shell[data-app] .trade-layout p,
+html body main.shell[data-app] .account-check-card p {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--slime-muted, #8a988a);
+}
+
+/* Compact, flat controls inside content areas (not nav/header chrome). */
+html body main.shell[data-app] :is(.command-workspace, .trade-layout, .trade-card, .account-check-card, .card-actions, .quick-grid, .volume-grid, .preset-toolbar, .order-ticket, .volume-bot-card, .wallet-exit-grid, .sniper-setup) button,
+html body main.shell[data-app] :is(.command-workspace, .trade-layout, .card-actions, .quick-grid) a.mini-link {
+  font-size: 12px !important;
+  padding: 6px 11px !important;
+  border-radius: 7px !important;
+  min-height: 0 !important;
+  font-weight: 550 !important;
+  letter-spacing: 0 !important;
+}
+
+/* Compact, flat inputs & selects everywhere. */
+html body main.shell[data-app] input[type="text"],
+html body main.shell[data-app] input[type="number"],
+html body main.shell[data-app] input[inputmode],
+html body main.shell[data-app] select,
+html body main.shell[data-app] textarea {
+  font-size: 12.5px !important;
+  padding: 7px 9px !important;
+  border-radius: 7px !important;
+}
+html body main.shell[data-app] label {
+  font-size: 11px !important;
+  letter-spacing: 0.02em;
+  color: var(--slime-muted, #8a988a) !important;
+}
+
+/* Denser panels, cards, and grids. */
+html body main.shell[data-app] .terminal-panel {
+  padding: 10px !important;
+}
+html body main.shell[data-app] .trade-card,
+html body main.shell[data-app] .account-check-card,
+html body main.shell[data-app] .pick-card,
+html body main.shell[data-app] .volume-bot-card,
+html body main.shell[data-app] .row-card,
+html body main.shell[data-app] .connected-wallet-card {
+  padding: 12px !important;
+  border-radius: 10px !important;
+}
+html body main.shell[data-app] .volume-grid {
+  gap: 8px !important;
+}
+html body main.shell[data-app] .card-actions,
+html body main.shell[data-app] .quick-grid {
+  gap: 6px !important;
+}
+html body main.shell[data-app] .command-grid {
+  gap: 10px !important;
+}
+
+/* Flat surfaces app-wide: kill residual neon glow/shadow. */
+html body main.shell[data-app] .trade-card,
+html body main.shell[data-app] .account-check-card,
+html body main.shell[data-app] .pick-card,
+html body main.shell[data-app] .row-card,
+html body main.shell[data-app] .connected-wallet-card,
+html body main.shell[data-app] .volume-bot-card {
+  box-shadow: none !important;
+  background: rgba(8, 12, 9, 0.96) !important;
+  border: 1px solid var(--line) !important;
+}
+
+/* Connect / "Built for Traders" page: de-bulk the hero + connect buttons. */
+html body main.shell[data-app] .connect-hero h1,
+html body main.shell[data-app] [class*="built-for"] h1,
+html body main.shell[data-app] .swamp-connect h1,
+html body main.shell[data-app] .login-hero h1 {
+  font-size: clamp(28px, 6vw, 46px) !important;
+  line-height: 1.05 !important;
+}
+html body main.shell[data-app] .swamp-connect h2,
+html body main.shell[data-app] .login-card h2,
+html body main.shell[data-app] .connect-card h2 {
+  font-size: clamp(20px, 4vw, 30px) !important;
+}
+html body main.shell[data-app] .wallet-choice,
+html body main.shell[data-app] [class*="wallet-option"],
+html body main.shell[data-app] .connect-card button,
+html body main.shell[data-app] .login-card button {
+  font-size: 13px !important;
+  padding: 10px 14px !important;
+  border-radius: 9px !important;
+}
+/* === END SLIMEWIRE_V2_GLOBAL_COMPACT_20260608_V1 ===================== */
