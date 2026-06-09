@@ -18909,3 +18909,83 @@ html body main.shell[data-app] .login-card button {
   border-radius: 9px !important;
 }
 /* === END SLIMEWIRE_V2_GLOBAL_COMPACT_20260608_V1 ===================== */
+
+/* === SLIMEWIRE_V2_TOPBAR_20260608_V1 ===================================
+   Collapse the stacked full-width control rows (search + sync + auth) into
+   one tight, wrapping strip of small chips. Verified live. */
+html body main.shell[data-app][data-route="terminal"] .topbar-right {
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: wrap !important;
+  align-items: center !important;
+  gap: 6px !important;
+  width: 100%;
+}
+html body main.shell[data-app] .terminal-global-search {
+  flex: 1 1 240px !important;
+  display: flex !important;
+  gap: 6px !important;
+  margin: 0 !important;
+  padding: 4px !important;
+}
+html body main.shell[data-app] .terminal-global-search input {
+  flex: 1 1 auto !important;
+  padding: 6px 9px !important;
+}
+html body main.shell[data-app] .top-sync-strip,
+html body main.shell[data-app] .top-auth-actions,
+html body main.shell[data-app] .top-auth-group {
+  display: inline-flex !important;
+  flex-wrap: wrap !important;
+  align-items: center !important;
+  gap: 6px !important;
+  width: auto !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+}
+/* Compact, non-stretching chips for every top-control button. */
+html body main.shell[data-app] .top-sync-strip button,
+html body main.shell[data-app] .top-auth-group button,
+html body main.shell[data-app] .terminal-global-search button {
+  flex: 0 0 auto !important;
+  font-size: 11px !important;
+  padding: 5px 10px !important;
+  border-radius: 7px !important;
+  min-height: 0 !important;
+  white-space: nowrap !important;
+}
+/* Hide the redundant text read-outs (duplicated by the stat tiles). */
+html body main.shell[data-app] .top-sync-strip [data-top-sol],
+html body main.shell[data-app] .top-sync-strip [data-top-portfolio],
+html body main.shell[data-app] .top-sync-strip [data-sync-health],
+html body main.shell[data-app] .top-sync-strip [data-active-preset-label],
+html body main.shell[data-app] .top-sync-strip [data-top-wallet-status] {
+  display: none !important;
+}
+/* Beat the [data-route]-scoped mobile grid that stretches the sync strip. */
+html body main.shell[data-app][data-route="terminal"] .top-sync-strip {
+  display: inline-flex !important;
+  grid-template-columns: none !important;
+  width: auto !important;
+}
+html body main.shell[data-app][data-route="terminal"] .top-sync-strip > button,
+html body main.shell[data-app][data-route="terminal"] .top-auth-group > button,
+html body main.shell[data-app][data-route="terminal"] .terminal-global-search > button {
+  flex: 0 0 auto !important;
+  width: fit-content !important;
+  max-width: 220px !important;
+  font-size: 11px !important;
+  padding: 5px 10px !important;
+  border-radius: 7px !important;
+  min-height: 0 !important;
+  white-space: nowrap !important;
+}
+/* The TP/SL button stacks its icon + label; keep it on one line. */
+html body main.shell[data-app][data-route="terminal"] .top-sync-strip > button.top-tpsl-status {
+  flex-direction: row !important;
+  align-items: center !important;
+  gap: 5px !important;
+}
+/* === END SLIMEWIRE_V2_TOPBAR_20260608_V1 ============================= */
