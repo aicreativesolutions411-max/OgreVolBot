@@ -6985,76 +6985,59 @@ function tradeHtml() {
 
   return `
     <section class="trade-layout">
-      <article class="trade-card slime-swap-card ogre-swap-card">
-        <div class="trade-head ogre-swap-head">
-          <div>
-            <h3 class="ogre-swap-title">OgreSwap</h3>
-            <p class="ogre-swap-sub">Live on-chain Solana swapper</p>
-          </div>
-        </div>
-        <div class="slime-swap-terminal">
-          <div class="slime-swap-asset-box">
-            <div>
-              <span>You Pay</span>
-              <strong>${escapeHtml(swapFromToken.symbol || shortAddress(swapFrom))}</strong>
-            </div>
-            <select data-swap-from aria-label="Swap from token">
+      <article class="trade-card slime-swap-card ogre-swap-card ogre-swap-skin">
+        <h3 class="ogre-swap-title oss-a11y-title">OgreSwap - live on-chain Solana swapper</h3>
+        <div class="oss-stage" role="group" aria-label="OgreSwap swap panel">
+          <div class="oss-slot oss-pay">
+            <input class="oss-amount" data-swap-amount type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.0" aria-label="${swapFrom === "SOL" ? "SOL amount to pay" : "Sell percent"}">
+            <select class="oss-tok" data-swap-from aria-label="Swap from token">
               ${swapTokenSelectOptions(swapFrom, { includeCustom: false, walletOnly: true })}
             </select>
-            <input data-swap-amount type="number" min="0" step="0.01" inputmode="decimal" placeholder="${swapFrom === "SOL" ? "SOL amount" : "Sell %"}">
-            <small>${swapFrom === "SOL" ? `Balance ${escapeHtml(totalSol().toFixed(4))} SOL` : `${escapeHtml(swapFromToken.name || "Wallet token")} ${swapFromToken.balance ? `- ${escapeHtml(String(swapFromToken.balance))}` : ""}`}</small>
           </div>
-          <button type="button" class="slime-swap-reverse" data-swap-reverse aria-label="Reverse swap route">
+          <button type="button" class="oss-reverse slime-swap-reverse" data-swap-reverse aria-label="Reverse swap route">
             <span class="slime-swap-route-icon" aria-hidden="true"></span>
           </button>
-          <div class="slime-swap-asset-box">
-            <div>
-              <span>You Receive</span>
-              <strong>${escapeHtml(swapToToken.symbol || (swapTo ? shortAddress(swapTo) : "Custom CA"))}</strong>
-            </div>
-            <select data-swap-to aria-label="Swap to token">
+          <div class="oss-slot oss-receive">
+            <input class="oss-amount oss-ca" data-trade-token type="text" placeholder="Paste token CA" value="${escapeHtml(tokenInputValue || "")}" aria-label="Token to receive">
+            <select class="oss-tok" data-swap-to aria-label="Swap to token">
               ${swapTokenSelectOptions(swapTo, { includeCustom: true })}
             </select>
-            <input data-trade-token type="text" placeholder="Paste token mint / CA" value="${escapeHtml(tokenInputValue || "")}">
-            <small>${escapeHtml(swapToToken.name || (swapTo ? "Selected token" : "Paste or choose a token"))}</small>
           </div>
-          <p class="slime-swap-route-note">${escapeHtml(routeCopy)}</p>
+          <button type="button" class="oss-swap primary" data-trade-buy-custom>SWAP</button>
+          <label class="oss-pill oss-wallet">
+            <select data-trade-wallet aria-label="Wallet">
+              ${walletOptionsHtml(connected?.publicKey && !hasManagedWallets ? "connected" : "")}
+            </select>
+          </label>
+          <label class="oss-pill oss-slip">
+            <select data-trade-slippage data-custom-select="trade-slippage" aria-label="Slippage">
+              <option value="300">3%</option>
+              <option value="400" selected>4%</option>
+              <option value="500">5%</option>
+              <option value="custom">Custom</option>
+            </select>
+            <input data-trade-slippage-custom data-custom-for="trade-slippage" type="number" min="1" max="5000" step="1" placeholder="bps" hidden>
+          </label>
         </div>
-        <label>
-          Wallet
-          <select data-trade-wallet>
-            ${walletOptionsHtml(connected?.publicKey && !hasManagedWallets ? "connected" : "")}
-          </select>
-        </label>
-        ${connected?.publicKey ? `<small class="trade-wallet-note">Connected browser wallets stay ready for this session; every buy/sell still requires wallet confirmation. Use a funded session wallet for unattended TP/SL.</small>` : ""}
-        <label>
-          Slippage
-          <select data-trade-slippage data-custom-select="trade-slippage">
-            <option value="300">3% - tighter</option>
-            <option value="400" selected>4% - default</option>
-            <option value="500">5% - faster fills</option>
-            <option value="custom">Custom</option>
-          </select>
-          <input data-trade-slippage-custom data-custom-for="trade-slippage" type="number" min="1" max="5000" step="1" placeholder="Custom bps" hidden>
-        </label>
+        <p class="slime-swap-route-note oss-route">${escapeHtml(routeCopy)}</p>
+        ${connected?.publicKey ? `<small class="trade-wallet-note">Connected wallets require confirmation per trade. Use a funded session wallet for unattended TP/SL.</small>` : ""}
 
-        <div class="trade-block ogre-swap-actions">
-          <div class="quick-grid">
-            <button class="primary" data-trade-buy-quick="0.1">Buy .10</button>
-            <button class="primary" data-trade-buy-quick="0.5">Buy .50</button>
-            <button class="primary" data-trade-buy-quick="1">Buy 1</button>
-            <button data-trade-buy-max>Buy Max</button>
+        <details class="ogre-swap-advanced">
+          <summary>Quick buys &amp; sell sizes</summary>
+          <div class="trade-block ogre-swap-actions">
+            <div class="quick-grid">
+              <button class="primary" data-trade-buy-quick="0.1">Buy .10</button>
+              <button class="primary" data-trade-buy-quick="0.5">Buy .50</button>
+              <button class="primary" data-trade-buy-quick="1">Buy 1</button>
+              <button data-trade-buy-max>Buy Max</button>
+            </div>
+            <div class="quick-grid">
+              <button data-trade-sell-quick="25">Sell 25%</button>
+              <button data-trade-sell-quick="50">Sell 50%</button>
+              <button data-trade-sell-quick="100">Sell 100%</button>
+            </div>
           </div>
-          <div class="inline-action">
-            <input data-buy-custom type="number" min="0" step="0.01" placeholder="Custom SOL">
-            <button class="primary" data-trade-buy-custom>Swap</button>
-          </div>
-          <div class="quick-grid">
-            <button data-trade-sell-quick="25">Sell 25%</button>
-            <button data-trade-sell-quick="50">Sell 50%</button>
-            <button data-trade-sell-quick="100">Sell 100%</button>
-          </div>
-        </div>
+        </details>
 
         ${hasManagedWallets ? `<div class="trade-block managed-trade-block">
           <div>
