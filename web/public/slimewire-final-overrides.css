@@ -18489,3 +18489,109 @@ code,
   }
 }
 /* === END MATRIX_SLIME_POLISH_20260608_V1 ============================= */
+
+/* === SLIMEWIRE_V2_FOUNDATION_20260608_V1 ================================
+   Bold-but-safe global elevation. Refines shared design tokens (so the
+   whole app shifts cohesively) plus mechanism-safe component polish for
+   buttons, inputs, panels, and tables. Color/border/spacing/typography
+   only — no layout reflow, no HTML/JS changes, every tool intact. */
+
+:root {
+  /* Cleaner, flatter dark glass surfaces (less busy gradient = less "AI"). */
+  --panel: rgba(9, 14, 10, 0.94);
+  --panel-2: rgba(14, 22, 16, 0.92);
+  --slime-panel: rgba(9, 14, 10, 0.95);
+  --slime-panel-soft: rgba(14, 22, 16, 0.86);
+  /* Crisper, finer hairlines. */
+  --line: rgba(126, 255, 90, 0.16);
+  --line-strong: rgba(126, 255, 90, 0.34);
+  --slime-border: rgba(126, 255, 90, 0.18);
+  /* Tighter, more pro corner radius. */
+  --slime-radius: 10px;
+  /* Calmer elevation shadow. */
+  --slime-shadow: 0 14px 44px rgba(0, 0, 0, 0.42);
+}
+
+/* Panels & cards: clean dark glass with a crisp slime hairline. */
+main.shell[data-app] .terminal-panel,
+main.shell[data-app] .row-card,
+main.shell[data-app] .trade-card,
+main.shell[data-app] .account-check-card,
+main.shell[data-app] .pick-card,
+main.shell[data-app] .volume-bot-card,
+main.shell[data-app] .connected-wallet-card {
+  border-radius: var(--slime-radius);
+  border: 1px solid var(--line);
+}
+
+/* Headings: tighter, calmer, professional. */
+main.shell[data-app] h3,
+main.shell[data-app] h4 {
+  letter-spacing: 0.01em;
+  font-weight: 650;
+}
+main.shell[data-app] .account-check-card p,
+main.shell[data-app] .trade-head p {
+  color: var(--slime-muted, #9bad96);
+}
+
+/* Buttons: one consistent, flat, professional system. */
+main.shell[data-app] .card-actions button,
+main.shell[data-app] .card-actions a,
+main.shell[data-app] .section-actions button,
+main.shell[data-app] .quick-grid button,
+main.shell[data-app] .mode-row button {
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--slime-text, #f5fff2);
+  transition: border-color 0.14s ease, background 0.14s ease, transform 0.1s ease;
+}
+main.shell[data-app] .card-actions button:hover,
+main.shell[data-app] .section-actions button:hover,
+main.shell[data-app] .quick-grid button:hover,
+main.shell[data-app] .mode-row button:hover {
+  border-color: var(--line-strong);
+  background: rgba(20, 32, 22, 0.95);
+}
+main.shell[data-app] button.primary {
+  background: linear-gradient(180deg, var(--slime-green-strong, #bbff63), var(--slime-green, #72ff23));
+  color: #06140a;
+  border: 1px solid var(--slime-green, #72ff23);
+  font-weight: 650;
+}
+main.shell[data-app] button.primary:hover {
+  filter: brightness(1.06);
+}
+main.shell[data-app] .mode-row button[data-active="true"] {
+  border-color: var(--slime-green, #72ff23);
+  background: rgba(114, 255, 35, 0.12);
+  color: var(--slime-green-strong, #bbff63);
+}
+
+/* Inputs & selects: consistent dark fields with a clean slime focus. */
+main.shell[data-app] input[type="text"],
+main.shell[data-app] input[type="number"],
+main.shell[data-app] input[inputmode],
+main.shell[data-app] select,
+main.shell[data-app] textarea {
+  background: rgba(6, 11, 8, 0.9);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--slime-text, #f5fff2);
+}
+main.shell[data-app] input:focus,
+main.shell[data-app] select:focus,
+main.shell[data-app] textarea:focus {
+  border-color: var(--slime-green, #72ff23);
+  outline: none;
+}
+
+/* Data rows: denser, with a subtle hover read. */
+main.shell[data-app] .table-list .row-card {
+  transition: border-color 0.14s ease, background 0.14s ease;
+}
+main.shell[data-app] .table-list .row-card:hover {
+  border-color: var(--line-strong);
+}
+/* === END SLIMEWIRE_V2_FOUNDATION_20260608_V1 ========================= */
