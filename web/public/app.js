@@ -10642,15 +10642,45 @@ async function connectedTradeProvider() {
     }
     throw new Error("This wallet does not expose signTransaction here. Reconnect with Phantom/Solflare or use the wallet in-app browser.");
   }
-  const providerKey = provider.publicKey?.toBase58?.() || provider.publicKey?.toString?.() || "";
+  const readProviderKey = () => provider.publicKey?.toBase58?.() || provider.publicKey?.toString?.() || "";
+  let providerKey = readProviderKey();
+  if (providerKey !== connected.publicKey) {
+    // The extension often drops its in-page publicKey after a reload even when the
+    // site is still trusted. Try a silent restore first so trading does not trigger
+    // an extra "connect to Phantom" popup on the hot path.
+    try {
+      const silent = await provider.connect?.({ onlyIfTrusted: true });
+      providerKey = silent?.publicKey?.toBase58?.() || silent?.publicKey?.toString?.() || readProviderKey();
+    } catch (_) {
+      // Not trusted yet (or silent connect unavailable); fall back to a visible connect.
+    }
+  }
   if (providerKey !== connected.publicKey) {
     const result = await provider.connect?.({ onlyIfTrusted: false });
-    const nextKey = result?.publicKey?.toBase58?.() || result?.publicKey?.toString?.() || provider.publicKey?.toBase58?.() || provider.publicKey?.toString?.() || "";
+    const nextKey = result?.publicKey?.toBase58?.() || result?.publicKey?.toString?.() || readProviderKey();
     if (nextKey !== connected.publicKey) {
       throw new Error(`Wallet mismatch. SlimeWire has ${shortAddress(connected.publicKey)} connected, but the browser returned ${shortAddress(nextKey)}. Reconnect the wallet you want to trade with.`);
     }
   }
   return { provider, connected };
+}
+
+// Best-effort silent reconnect so the injected wallet has its publicKey ready
+// before the first buy/sell, removing the "still connecting to Phantom" stall.
+async function prewarmConnectedWalletProvider() {
+  try {
+    if (isMobileWalletPlatform()) return;
+    const connected = connectedBrowserWallet();
+    if (!connected?.publicKey) return;
+    const providerId = providerIdForConnectedWallet(connected);
+    const provider = walletProviderById(providerId) || walletProviderById("solana");
+    if (!provider || typeof provider.connect !== "function") return;
+    const providerKey = provider.publicKey?.toBase58?.() || provider.publicKey?.toString?.() || "";
+    if (providerKey === connected.publicKey) return;
+    await provider.connect({ onlyIfTrusted: true }).catch(() => {});
+  } catch (_) {
+    // Pre-warm is best-effort; ignore failures.
+  }
 }
 
 async function signBrowserTradeTransaction(transactionBase64, provider) {
@@ -20587,6 +20617,7 @@ async function initializeApp() {
   await handleMobileWalletReturn();
   render();
   await loadSession();
+  void prewarmConnectedWalletProvider();
   if (state.route === "terminal") {
     void refreshVisibleTerminalFeeds({
       silent: true,
