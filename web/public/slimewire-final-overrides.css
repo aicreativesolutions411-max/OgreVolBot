@@ -19054,3 +19054,47 @@ html body main.shell[data-app] .tabs button[data-tab="pnl"]::before { -webkit-ma
 html body main.shell[data-app] .tabs button[data-tab="ogreTek"]::before { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/ogreTek.svg") !important; mask-image: url("/assets/slimewire/svg/icons-v2/ogreTek.svg") !important; }
 html body main.shell[data-app] .tabs button[data-tab="txAudit"]::before { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/txAudit.svg") !important; mask-image: url("/assets/slimewire/svg/icons-v2/txAudit.svg") !important; }
 /* === END SLIMEWIRE_V2_ICONS_20260608_V1 ============================== */
+
+/* === SLIMEWIRE_V2_ROWS_20260608_V1 =====================================
+   Cleaner, denser signal/position rows: tidy inline stat pairs (muted tiny
+   label over white value), tighter row padding, subtle separators — so the
+   feeds read like a pro data table when populated. */
+html body main.shell[data-app] .terminal-token-row,
+html body main.shell[data-app] .compact-signal-row {
+  padding: 8px 10px !important;
+  border-bottom: 1px solid rgba(120, 230, 120, 0.07) !important;
+  border-radius: 0 !important;
+  gap: 10px !important;
+}
+html body main.shell[data-app] .terminal-token-stats {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 4px 14px !important;
+  margin: 0 !important;
+}
+html body main.shell[data-app] .terminal-token-stats > div {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 0 !important;
+  min-width: 44px;
+}
+html body main.shell[data-app] .terminal-token-stats dt {
+  font-size: 9px !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.05em !important;
+  color: #6f7e6e !important;
+  margin: 0 !important;
+}
+html body main.shell[data-app] .terminal-token-stats dd {
+  font-size: 12px !important;
+  color: #f0f6ee !important;
+  margin: 0 !important;
+  font-variant-numeric: tabular-nums;
+}
+html body main.shell[data-app] .terminal-token-title strong {
+  font-size: 13px !important;
+}
+html body main.shell[data-app] .terminal-token-title small {
+  color: #7d8c7c !important;
+}
+/* === END SLIMEWIRE_V2_ROWS_20260608_V1 =============================== */
