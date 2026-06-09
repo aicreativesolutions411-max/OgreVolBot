@@ -2790,6 +2790,15 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "GET" && pathname === "/api/web/token-search") {
+      const query = requestUrl.searchParams.get("q") || requestUrl.searchParams.get("query") || "";
+      sendWebJson(request, response, 200, {
+        ok: true,
+        ...await webTokenSearch(query)
+      });
+      return;
+    }
+
     if (request.method === "GET" && pathname === "/api/web/kol/scan") {
       const mode = requestUrl.searchParams.get("mode") || "hot";
       const wallet = requestUrl.searchParams.get("wallet") || "";
@@ -15491,6 +15500,57 @@ function livePairBucketSearchQueries(bucket, scanState = {}) {
 
 function compareLivePairCandidates(a, b) {
   return Number(livePairCandidateCreatedAt(b) || 0) - Number(livePairCandidateCreatedAt(a) || 0);
+}
+
+// Resolve a free-text query ($OGRE, ogre, a name, or a raw mint) to the most
+// relevant Solana token. Used by the top search bar so users can search by
+// ticker/name, not just paste a contract address.
+async function webTokenSearch(rawQuery = "") {
+  const cleaned = String(rawQuery || "").trim().replace(/^\$+/, "").trim();
+  if (!cleaned) return { query: "", matches: [] };
+
+  // Already a valid mint -> return it directly, no lookup needed.
+  try {
+    const mint = parsePublicKey(cleaned).toBase58();
+    return { query: cleaned, matches: [{ tokenMint: mint, symbol: "", name: "", source: "mint" }] };
+  } catch {
+    // not a mint; fall through to ticker/name search
+  }
+
+  const headers = { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" };
+  const data = await fetchJson(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(cleaned)}`, {
+    headers,
+    timeoutMs: 4_000
+  }).catch(() => null);
+  const pairs = arrayFromApiData(data, ["pairs"]).filter((pair) => String(pair?.chainId || "").toLowerCase() === "solana");
+  const q = cleaned.toLowerCase();
+  const seen = new Set();
+  const matches = [];
+  for (const pair of pairs) {
+    const base = pair?.baseToken || {};
+    const mint = String(base.address || "").trim();
+    if (!mint || seen.has(mint)) continue;
+    seen.add(mint);
+    const symbol = String(base.symbol || "");
+    const name = String(base.name || "");
+    const sym = symbol.toLowerCase();
+    const nm = name.toLowerCase();
+    const liquidityUsd = Number(pair?.liquidity?.usd || 0);
+    const volumeUsd = Number(pair?.volume?.h24 || 0);
+    let score = 0;
+    if (sym === q) score += 1000;
+    else if (sym.startsWith(q)) score += 600;
+    else if (sym.includes(q)) score += 280;
+    if (nm === q) score += 480;
+    else if (nm.startsWith(q)) score += 220;
+    else if (nm.includes(q)) score += 110;
+    if (!score) continue; // no symbol/name relevance
+    score += Math.min(220, Math.log10(Math.max(1, liquidityUsd)) * 32);
+    score += Math.min(140, Math.log10(Math.max(1, volumeUsd)) * 20);
+    matches.push({ tokenMint: mint, symbol, name, liquidityUsd, volumeUsd, score: Math.round(score) });
+  }
+  matches.sort((a, b) => b.score - a.score);
+  return { query: cleaned, matches: matches.slice(0, 8) };
 }
 
 function livePairCandidateCreatedAt(candidate) {

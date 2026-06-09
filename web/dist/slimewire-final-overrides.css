@@ -19958,3 +19958,75 @@ html body main.shell[data-app] .signal-actions > .dev-info-pill::before { conten
   }
 }
 /* === END PAIR_ROW_COMPACT_20260609_V2 =============================== */
+
+/* === COOKS_STYLE_TERMINAL_ROWS_20260609_V1 ==========================
+   Live Terminal + KOL panels render .terminal-token-row with the .is-cooks
+   flag so they match the compact Cooks look (tight row, icon action buttons).
+   Slime Scope rows have NO .is-cooks and keep their 3-row style. */
+html body main.shell[data-app] .terminal-token-row.is-cooks {
+  padding: 7px 10px !important;
+  gap: 8px !important;
+  align-items: center !important;
+  min-height: 0 !important;
+}
+html body main.shell[data-app] .terminal-token-row.is-cooks .live-pair-avatar,
+html body main.shell[data-app] .terminal-token-row.is-cooks .live-pair-avatar img {
+  width: 34px !important;
+  height: 34px !important;
+}
+html body main.shell[data-app] .terminal-token-row.is-cooks .terminal-token-title strong { font-size: 14px !important; }
+html body main.shell[data-app] .terminal-token-row.is-cooks .terminal-token-stats { gap: 4px 10px !important; }
+html body main.shell[data-app] .terminal-token-row.is-cooks .terminal-token-stats span { font-size: 11px !important; }
+html body main.shell[data-app] .terminal-token-row.is-cooks .terminal-token-stats span small { font-size: 9px !important; }
+
+/* Actions -> compact icon row (override the older grid + 10px-text rules). */
+html body main.shell[data-app] .terminal-token-row.is-cooks .terminal-token-actions {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  grid-template-columns: none !important;
+  gap: 5px !important;
+  align-items: center !important;
+  justify-content: flex-end !important;
+}
+html body main.shell[data-app] .terminal-token-row.is-cooks .terminal-token-actions > button,
+html body main.shell[data-app] .terminal-token-row.is-cooks .terminal-token-actions > .dev-info-pill {
+  grid-column: auto !important;
+  width: 32px !important;
+  min-width: 32px !important;
+  height: 32px !important;
+  min-height: 32px !important;
+  padding: 0 !important;
+  border-radius: 9px !important;
+  font-size: 0 !important;
+  line-height: 0 !important;
+  overflow: hidden !important;
+  white-space: nowrap !important;
+}
+html body main.shell[data-app] .terminal-token-row.is-cooks .terminal-token-actions > button::before,
+html body main.shell[data-app] .terminal-token-row.is-cooks .terminal-token-actions > .dev-info-pill::before {
+  display: block;
+  font-size: 14px;
+  line-height: 1;
+  font-weight: 800;
+}
+html body main.shell[data-app] .terminal-token-row.is-cooks .terminal-token-actions > button[data-token-trade]::before { content: "\21C4"; }
+html body main.shell[data-app] .terminal-token-row.is-cooks .terminal-token-actions > button[data-quick-buy-token]::before { content: "$"; }
+html body main.shell[data-app] .terminal-token-row.is-cooks .terminal-token-actions > button[data-quick-bundle-token]::before { content: "\2263"; }
+html body main.shell[data-app] .terminal-token-row.is-cooks .terminal-token-actions > button[data-smart-chart-token]::before { content: "\25A6"; } /* ▦ chart */
+html body main.shell[data-app] .terminal-token-row.is-cooks .terminal-token-actions > button.watch-action::before { content: "\2606"; }
+html body main.shell[data-app] .terminal-token-row.is-cooks .terminal-token-actions > button.watch-action[data-watched="true"]::before { content: "\2605"; }
+html body main.shell[data-app] .terminal-token-row.is-cooks .terminal-token-actions > button[data-kol-dump-details]::before { content: "\24C0"; }
+html body main.shell[data-app] .terminal-token-row.is-cooks .terminal-token-actions > .dev-info-pill::before { content: "\24D8"; }
+
+@media (max-width: 760px) {
+  html body main.shell[data-app] .terminal-token-row.is-cooks .terminal-token-actions > button,
+  html body main.shell[data-app] .terminal-token-row.is-cooks .terminal-token-actions > .dev-info-pill {
+    width: 34px !important;
+    min-width: 34px !important;
+    height: 34px !important;
+    min-height: 34px !important;
+  }
+  /* Hide the longer volume windows on small screens for density. */
+  html body main.shell[data-app] .terminal-token-row.is-cooks .terminal-token-stats span:nth-child(n+4) { display: none !important; }
+}
+/* === END COOKS_STYLE_TERMINAL_ROWS_20260609_V1 ====================== */

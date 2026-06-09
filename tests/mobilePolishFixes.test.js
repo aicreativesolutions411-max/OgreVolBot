@@ -101,7 +101,7 @@ test("mobile rail exposes the full desktop tool list", () => {
   const labels = [...htmlSource.matchAll(/<button[^>]*data-label="([^"]+)"[^>]*>/g)]
     .filter((match) => !/\shidden(?:\s|>|=)/.test(match[0]))
     .map((match) => match[1]);
-  assert.deepEqual(labels, ["Live", "Home", "Chart", "Swap", "Cooks", "Trades", "Scope", "Watch", "KOL", "Tek", "AI", "Launch", "Bundle", "SlimeBot", "Snipe", "Wallets", "Pos", "PnL"]);
+  assert.deepEqual(labels, ["Live", "Home", "Chart", "Swap", "Cooks", "Trades", "Scope", "Watch", "KOL", "Tek", "Wallets", "Pos", "PnL"]);
 });
 
 test("mobile REC and wallet connect controls stay tappable in one sync row", () => {

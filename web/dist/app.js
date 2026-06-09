@@ -12213,6 +12213,34 @@ function openManualTradeForToken(tokenMint, tab = "trade", message = "") {
   render({ force: true });
 }
 
+// Resolve a top-bar search entry. A raw mint opens directly; a ticker ($ogre
+// / ogre) or name is resolved server-side to the most relevant Solana coin.
+async function openGlobalTokenSearch(rawValue = "") {
+  const value = String(rawValue || "").trim();
+  if (!value) return;
+  const bare = value.replace(/^\$+/, "").trim();
+  const looksLikeMint = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(bare);
+  const open = (mint, extra = {}) => openTokenChart(
+    tokenRefFromMint(mint, { source: "global-search", ...extra }),
+    { defaultTab: "buy", view: "chartTxns", focusAmountInput: true, source: "global-search" }
+  );
+  if (looksLikeMint) {
+    open(bare);
+    return;
+  }
+  try {
+    const data = await api(`/api/web/token-search?q=${encodeURIComponent(value)}`);
+    const best = (data.matches || [])[0];
+    if (!best?.tokenMint) {
+      setError(`No coin found for "${value}". Try the exact ticker or paste the contract address.`);
+      return;
+    }
+    open(best.tokenMint, { symbol: best.symbol, name: best.name });
+  } catch (error) {
+    setError(error.message || "Token search failed.");
+  }
+}
+
 function tokenRefFromMint(tokenMint = "", extra = {}) {
   const mint = String(tokenMint || "").trim();
   const row = mint
@@ -14782,13 +14810,15 @@ function terminalSignalRowsHtml(rows, options = {}) {
   const emptyMessage = options.emptyMessage || "Refresh the feed to load current signals.";
   const visibleRows = rotatedDisplayRows(rows || [], limit, options.rotateKey || "", options.stickyCount || 0);
   const isKolContext = options.context === "kol";
+  const cooks = options.cooksStyle ? " is-cooks" : "";
   if (!visibleRows.length) return emptyState(emptyTitle, emptyMessage);
   return `
     <div class="terminal-token-list">
       ${visibleRows.map((row, index) => {
         const setup = row.scalpSetup || row.momentum || row.category || "live";
+        const watched = isTokenWatched(row.tokenMint);
         return `
-          <article class="terminal-token-row ${isKolContext ? "is-kol-signal" : ""}" data-token-chart="${escapeHtml(row.tokenMint)}" data-token-chart-source="terminal-row">
+          <article class="terminal-token-row${cooks} ${isKolContext ? "is-kol-signal" : ""}" data-token-chart="${escapeHtml(row.tokenMint)}" data-token-chart-source="terminal-row">
             ${livePairAvatarHtml(row, { priority: index < 8 })}
             <div class="terminal-token-main">
               <div class="terminal-token-title">
@@ -14804,10 +14834,10 @@ function terminalSignalRowsHtml(rows, options = {}) {
             <div class="terminal-token-actions has-dev-info">
               <button type="button" class="primary" data-token-trade="${escapeHtml(row.tokenMint)}" data-token-trade-source="terminal-row" title="Open chart and buy/sell panel">${escapeHtml(actionLabel)}</button>
               <button type="button" data-quick-buy-token="${escapeHtml(row.tokenMint)}" data-quick-buy-source="terminal-row" title="Quick buy with preset or custom SOL amount">${escapeHtml(quickBuyButtonLabel())}</button>
-              <button type="button" data-quick-bundle-token="${escapeHtml(row.tokenMint)}">Bundle</button>
-              <button type="button" data-smart-chart-token="${escapeHtml(row.tokenMint)}">Chart</button>
+              <button type="button" data-quick-bundle-token="${escapeHtml(row.tokenMint)}" title="Bundle buy across wallets">Bundle</button>
+              <button type="button" data-smart-chart-token="${escapeHtml(row.tokenMint)}" title="Open chart">Chart</button>
               ${isKolContext ? kolDumpSignalButtonHtml(row) : ""}
-              <button type="button" class="watch-action" data-watch-token="${escapeHtml(row.tokenMint)}" data-watch-symbol="${escapeHtml(row.symbol || "")}" data-watch-name="${escapeHtml(row.name || "")}" data-watch-image="${escapeHtml(livePairImageUrl(row) || "")}">${isTokenWatched(row.tokenMint) ? "Saved" : "Watch"}</button>
+              <button type="button" class="watch-action" data-watched="${watched}" title="${watched ? "Saved to watchlist" : "Watch / save coin"}" data-watch-token="${escapeHtml(row.tokenMint)}" data-watch-symbol="${escapeHtml(row.symbol || "")}" data-watch-name="${escapeHtml(row.name || "")}" data-watch-image="${escapeHtml(livePairImageUrl(row) || "")}">${watched ? "Saved" : "Watch"}</button>
               ${devInfoPillHtml(row, { compact: true })}
             </div>
           </article>
@@ -15611,15 +15641,15 @@ function terminalHtml() {
         <section class="command-grid">
           <article class="terminal-panel best-picks-panel">
             <header><h4>Best Picks</h4><span>Score + reasons</span></header>
-            ${bestDisplayRows.length ? compactSignalRowsHtml(bestDisplayRows, { layout: "terminal", limit: 8, actionLabel: rowTradeLabel, emptyTitle: "No Best Picks yet", emptyMessage: "Refresh Live Pairs to score current pairs." }) : launchFilterActive ? terminalLaunchFilterEmptyState(rawBestRows, "best picks") : compactSignalRowsHtml(bestDisplayRows, { layout: "terminal", limit: 8, actionLabel: rowTradeLabel, emptyTitle: "No Best Picks yet", emptyMessage: "Refresh Live Pairs to score current pairs." })}
+            ${bestDisplayRows.length ? compactSignalRowsHtml(bestDisplayRows, { layout: "terminal", cooksStyle: true, limit: 8, actionLabel: rowTradeLabel, emptyTitle: "No Best Picks yet", emptyMessage: "Refresh Live Pairs to score current pairs." }) : launchFilterActive ? terminalLaunchFilterEmptyState(rawBestRows, "best picks") : compactSignalRowsHtml(bestDisplayRows, { layout: "terminal", cooksStyle: true, limit: 8, actionLabel: rowTradeLabel, emptyTitle: "No Best Picks yet", emptyMessage: "Refresh Live Pairs to score current pairs." })}
           </article>
           <article class="terminal-panel live-pairs-panel">
             <header><h4>Cooks</h4><button data-tab="live">Open</button></header>
-            ${liveDisplayRows.length ? compactSignalRowsHtml(liveDisplayRows, { layout: "terminal", limit: 12, actionLabel: rowTradeLabel }) : launchFilterActive ? terminalLaunchFilterEmptyState(rawLiveRows, "live pairs") : compactSignalRowsHtml(liveDisplayRows, { layout: "terminal", limit: 12, actionLabel: rowTradeLabel })}
+            ${liveDisplayRows.length ? compactSignalRowsHtml(liveDisplayRows, { layout: "terminal", cooksStyle: true, limit: 12, actionLabel: rowTradeLabel }) : launchFilterActive ? terminalLaunchFilterEmptyState(rawLiveRows, "live pairs") : compactSignalRowsHtml(liveDisplayRows, { layout: "terminal", cooksStyle: true, limit: 12, actionLabel: rowTradeLabel })}
           </article>
           <article class="terminal-panel kol-panel">
             <header><h4>KOL Signals</h4><button data-kol-refresh>${state.kolLoading ? "Loading..." : "Refresh"}</button></header>
-            ${kolDisplayRows.length ? compactSignalRowsHtml(kolDisplayRows, { layout: "terminal", limit: 12, actionLabel: rowTradeLabel, emptyTitle: "No KOL signals loaded", emptyMessage: "Refresh KOL Tracker to load signals." }) : launchFilterActive ? terminalLaunchFilterEmptyState(rawKolRows, "KOL signals") : compactSignalRowsHtml(kolDisplayRows, { layout: "terminal", limit: 12, actionLabel: rowTradeLabel, emptyTitle: "No KOL signals loaded", emptyMessage: "Refresh KOL Tracker to load signals." })}
+            ${kolDisplayRows.length ? compactSignalRowsHtml(kolDisplayRows, { layout: "terminal", cooksStyle: true, limit: 12, actionLabel: rowTradeLabel, emptyTitle: "No KOL signals loaded", emptyMessage: "Refresh KOL Tracker to load signals." }) : launchFilterActive ? terminalLaunchFilterEmptyState(rawKolRows, "KOL signals") : compactSignalRowsHtml(kolDisplayRows, { layout: "terminal", cooksStyle: true, limit: 12, actionLabel: rowTradeLabel, emptyTitle: "No KOL signals loaded", emptyMessage: "Refresh KOL Tracker to load signals." })}
           </article>
         </section>
 
@@ -16941,6 +16971,7 @@ function terminalSubtabHtml() {
     const rows = mergeMarketDataIntoRows(state.kolScan?.rows || []).filter((row) => !isUiFeedDisplayBlockedSignalRow(row));
     return compactSignalRowsHtml(rows, {
       layout: "terminal",
+      cooksStyle: true,
       limit: 12,
       rotateKey: terminalRotationKey("bottom-kol"),
       stickyCount: 1
@@ -19790,6 +19821,13 @@ document.addEventListener("keydown", (event) => {
     return;
   }
 
+  const searchInput = event.target?.closest?.("[data-global-token-search]");
+  if (searchInput && event.key === "Enter") {
+    event.preventDefault();
+    void openGlobalTokenSearch(searchInput.value || "");
+    return;
+  }
+
   if (event.key !== "Escape") return;
 
   if (state.ogreAgentOpen) {
@@ -20158,13 +20196,7 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-global-token-open]")) {
     const token = $("[data-global-token-search]")?.value?.trim() || "";
-    if (token) {
-      openTokenChart(tokenRefFromMint(token, { source: "global-search" }), {
-        defaultTab: "buy",
-        focusAmountInput: true,
-        source: "global-search"
-      });
-    }
+    if (token) void openGlobalTokenSearch(token);
     return;
   }
   if (target.matches("[data-token-chart]")) {
