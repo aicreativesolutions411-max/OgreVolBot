@@ -19213,6 +19213,7 @@ html body main.shell[data-app] .slime-configurator .vbot-config-bg {
   background:
     radial-gradient(120% 95% at 100% 32%, rgba(130, 255, 70, 0.18), rgba(5, 8, 5, 0) 52%),
     linear-gradient(100deg, rgba(5, 8, 5, 0.93) 24%, rgba(5, 8, 5, 0.42) 58%, rgba(5, 8, 5, 0.1) 100%),
+    url("/assets/slimewire/tool-bg/volume.jpg") center / cover no-repeat,
     url("/assets/slimewire/png/slimewire-ogre-hero-rich.png") right center / cover no-repeat;
   opacity: 1;
   pointer-events: none;
@@ -19472,6 +19473,7 @@ html body main.shell[data-app] .ogre-swap-card::before {
   background:
     radial-gradient(90% 55% at 50% 0%, rgba(130, 255, 70, 0.16), rgba(5, 8, 5, 0) 60%),
     linear-gradient(180deg, rgba(5, 8, 5, 0.18) 0%, rgba(5, 8, 5, 0.72) 38%, rgba(5, 8, 5, 0.95) 64%, #050805 100%),
+    url("/assets/slimewire/tool-bg/swap.jpg") center top / cover no-repeat,
     url("/assets/slimewire/png/slimewire-ogre-hero-rich.png") center top / 118% auto no-repeat;
   opacity: 0.92;
 }
