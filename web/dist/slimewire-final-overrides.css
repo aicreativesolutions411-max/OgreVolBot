@@ -20031,3 +20031,21 @@ html body main.shell[data-app] .terminal-token-row.is-cooks .terminal-token-acti
   html body main.shell[data-app] .terminal-token-row.is-cooks .terminal-token-stats span:nth-child(n+4) { display: none !important; }
 }
 /* === END COOKS_STYLE_TERMINAL_ROWS_20260609_V1 ====================== */
+
+/* === NAV_ONE_ROW_20260609_V1 =========================================
+   With the Tek-hub tools removed the top nav is only 13 items, so on wide
+   desktops fit them on a single row (smaller buttons) instead of wrapping to
+   two. Narrower widths keep the existing multi-row grid. Appended last so the
+   13-col template wins over the earlier repeat(9) min-width:761 rule. */
+@media (min-width: 1181px) {
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs {
+    grid-template-columns: repeat(13, minmax(0, 1fr)) !important;
+    gap: 4px !important;
+  }
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs > button,
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs .nav-tool-group > summary {
+    min-height: 38px !important;
+    padding: 4px 3px !important;
+  }
+}
+/* === END NAV_ONE_ROW_20260609_V1 ==================================== */
