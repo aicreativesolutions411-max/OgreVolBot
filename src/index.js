@@ -2381,6 +2381,16 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "POST" && pathname === "/api/web/wallets/return-to-connected") {
+      const body = await readJsonRequestBody(request);
+      const result = await webReturnFundsToConnected(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        ...result
+      });
+      return;
+    }
+
     if (request.method === "POST" && pathname === "/api/web/wallets/sell-all-tokens") {
       const body = await readJsonRequestBody(request);
       const result = await webSellAllTokens(auth.userId, body);
@@ -28099,6 +28109,48 @@ async function webSellAllTokens(userId, body = {}) {
     tokenMint: tokenMint || "all",
     rows,
     summary: `${rows.filter((row) => row.ok).length}/${rows.length} wallet(s) sold token balances.`
+  };
+}
+
+// One-tap "return funds to my wallet": sell all tokens to SOL, then send all
+// tokens' proceeds AND remaining SOL from the selected (session) wallets back
+// to the user's connected wallet. User-initiated; composes tested sweeps.
+async function webReturnFundsToConnected(userId, body = {}) {
+  const destination = parseWebDestination(body.destination || body.destinationWallet);
+  const slippageBps = parseWebSlippage(body.slippageBps || CONFIG.stopLossExitSlippageBps);
+  const selector = {
+    walletIndexes: body.walletIndexes || body.wallets || "all",
+    walletGroup: body.walletGroup || body.group || "",
+    destination: destination.toBase58(),
+    slippageBps
+  };
+
+  // 1) Sell every token to SOL and sweep the proceeds back.
+  const sell = await webSellAllTokens(userId, selector).catch((error) => ({
+    rows: [],
+    summary: `Token sell-off skipped: ${friendlyError(error)}`
+  }));
+  // 2) Sweep any remaining SOL (covers wallets that held only SOL).
+  const sweep = await webSweepSol(userId, selector).catch((error) => ({
+    rows: [],
+    summary: `SOL sweep skipped: ${friendlyError(error)}`
+  }));
+
+  const sweptSol = (sweep.rows || []).reduce((sum, row) => sum + (Number(row.sentSol) || 0), 0);
+  await audit("web_return_funds_to_connected", {
+    userId,
+    destination: destination.toBase58(),
+    walletCount: (sweep.rows || []).length,
+    sweptSol
+  });
+  return {
+    action: "return-funds-to-connected",
+    destination: destination.toBase58(),
+    shortDestination: shortMint(destination.toBase58()),
+    sell,
+    sweep,
+    sweptSol: Number(sweptSol.toFixed(6)),
+    summary: `Returned tokens + ${sweptSol.toFixed(4)} SOL to ${shortMint(destination.toBase58())}.`
   };
 }
 

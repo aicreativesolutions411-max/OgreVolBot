@@ -367,6 +367,8 @@ const state = {
   volumeBotBusy: false,
   distributeStatus: "",
   distributeBusy: false,
+  returnFundsStatus: "",
+  returnFundsBusy: false,
   sniperResult: null,
   ogreAiResult: null,
   ogreAiStatus: "",
@@ -7966,6 +7968,70 @@ function setDistributeStatus(message) {
   if (node) node.textContent = state.distributeStatus;
 }
 
+function returnFundsHtml() {
+  const connected = state.connectedWalletBalance || state.user?.connectedWallet || null;
+  if (!connected?.publicKey) return "";
+  const sessionWallets = state.wallets.filter((wallet) => wallet.sessionWallet);
+  const sourceWallets = sessionWallets.length ? sessionWallets : state.wallets;
+  if (!sourceWallets.length) return "";
+  return `
+    <article class="account-check-card return-funds-card">
+      <div>
+        <h3>Return Funds to My Wallet</h3>
+        <p>One tap: sell every token in your ${sessionWallets.length ? "session" : "managed"} wallet(s) to SOL and send all of it back to your connected wallet ${escapeHtml(shortAddress(connected.publicKey))}.</p>
+      </div>
+      <button class="primary" data-return-funds ${state.returnFundsBusy ? "disabled" : ""}>${state.returnFundsBusy ? "Returning..." : "Sweep Tokens to SOL & Return"}</button>
+      <p class="trade-status" data-return-funds-status>${escapeHtml(state.returnFundsStatus || `${sourceWallets.length} wallet(s) will be swept back to your connected wallet.`)}</p>
+    </article>
+  `;
+}
+
+function setReturnFundsStatus(message) {
+  state.returnFundsStatus = String(message || "");
+  const node = $("[data-return-funds-status]");
+  if (node) node.textContent = state.returnFundsStatus;
+}
+
+async function returnFundsToConnected() {
+  if (state.returnFundsBusy) return;
+  const connected = state.connectedWalletBalance || state.user?.connectedWallet || null;
+  if (!connected?.publicKey) {
+    setReturnFundsStatus("Connect a wallet first.");
+    return;
+  }
+  const sessionWallets = state.wallets.filter((wallet) => wallet.sessionWallet);
+  const sourceWallets = sessionWallets.length ? sessionWallets : state.wallets;
+  const walletIndexes = sourceWallets.map((wallet) => String(wallet.index));
+  if (!walletIndexes.length) {
+    setReturnFundsStatus("No managed wallets to return from.");
+    return;
+  }
+  const confirmed = window.confirm([
+    `Sell all tokens to SOL and send everything from ${walletIndexes.length} wallet(s)`,
+    `back to your connected wallet ${shortAddress(connected.publicKey)}?`
+  ].join("\n"));
+  if (!confirmed) return;
+  state.returnFundsBusy = true;
+  setReturnFundsStatus("Selling tokens and returning SOL...");
+  render();
+  try {
+    const data = await api("/api/web/wallets/return-to-connected", {
+      method: "POST",
+      body: JSON.stringify({ destination: connected.publicKey, walletIndexes }),
+      dedupe: false,
+      timeoutMs: API_LONG_ACTION_TIMEOUT_MS
+    });
+    state.returnFundsBusy = false;
+    setReturnFundsStatus(data.summary || "Funds returned to your connected wallet.");
+    await refreshWalletState({ force: true, deep: false, reason: "return-funds" }).catch(() => {});
+    render();
+  } catch (error) {
+    state.returnFundsBusy = false;
+    setReturnFundsStatus(error.message);
+    render();
+  }
+}
+
 async function distributeFreshWallets() {
   if (state.distributeBusy) return;
   const count = $("[data-distribute-count]")?.value || "5";
@@ -13201,6 +13267,7 @@ function walletsHtml() {
       <button data-tab="txAudit">Tx Audit</button>
       <small data-wallet-remove-status>${escapeHtml(state.walletRemoveStatus || "")}</small>
     </section>
+    ${returnFundsHtml()}
     ${distributeWalletsHtml()}
     <div class="table-list">
       ${state.wallets.map((wallet) => `
@@ -20324,6 +20391,7 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-create-wallets]")) await createWalletSet();
   if (target.matches("[data-distribute-fresh]")) { await distributeFreshWallets(); return; }
+  if (target.matches("[data-return-funds]")) { await returnFundsToConnected(); return; }
   if (target.matches("[data-create-automation-wallet]")) await createAutomationWallet();
   if (target.matches("[data-create-session-wallet]")) {
     event.preventDefault();
