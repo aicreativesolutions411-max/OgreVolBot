@@ -19541,8 +19541,8 @@ html body main.shell[data-app] .oss-amount {
 html body main.shell[data-app] .oss-ca { font-size: clamp(10px, 2.6cqw, 15px) !important; font-weight: 700 !important; }
 html body main.shell[data-app] .oss-tok {
   flex: 0 0 auto;
-  width: 34%;
-  max-width: 160px;
+  width: 38%;
+  max-width: 210px;
   background: transparent !important;
   border: 0 !important;
   outline: none !important;
@@ -19550,6 +19550,9 @@ html body main.shell[data-app] .oss-tok {
   font-size: clamp(12px, 3.1cqw, 18px) !important;
   font-weight: 800 !important;
   text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   -webkit-appearance: none;
   appearance: none;
   cursor: pointer;
@@ -19559,10 +19562,10 @@ html body main.shell[data-app] .oss-pill option { color: #06140a; background: #c
 html body main.shell[data-app] .oss-reverse {
   position: absolute;
   left: 50%;
-  top: 43.4%;
-  transform: translateX(-50%);
+  top: 45.5%;
+  transform: translate(-50%, -50%);
   width: 12%;
-  height: 10.5%;
+  height: 11%;
   display: flex !important;
   align-items: center;
   justify-content: center;
@@ -19609,13 +19612,20 @@ html body main.shell[data-app] .oss-pill select {
   border: 0 !important;
   outline: none !important;
   color: #d6ffac !important;
-  font-size: clamp(12px, 2.7cqw, 18px) !important;
+  font-size: clamp(12px, 2.5cqw, 16px) !important;
   font-weight: 800 !important;
   text-align: center;
   text-align-last: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   -webkit-appearance: none;
   appearance: none;
   cursor: pointer;
+}
+html body main.shell[data-app] .oss-wallet select {
+  text-align: left;
+  text-align-last: left;
 }
 html body main.shell[data-app] .oss-wallet { left: 79.5%; width: 16%; }
 html body main.shell[data-app] .oss-slip { left: 62%; width: 17%; }
@@ -19690,13 +19700,13 @@ html body main.shell[data-app] .slime-configurator.ovs-skin {
 /* One wide block: the panel on the left, the live info on the RIGHT side (not a
    tall scroll below). Collapses to a single column on narrow screens. */
 html body main.shell[data-app] .ovs-skin.volume-bot-card {
-  max-width: 1340px;
+  max-width: 1560px;
   margin: 0 auto;
   width: 100%;
   display: grid;
-  grid-template-columns: minmax(0, 1.32fr) minmax(0, 1fr);
-  gap: 22px;
-  align-items: start;
+  grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr);
+  gap: 26px;
+  align-items: stretch;
 }
 html body main.shell[data-app] .ovs-stage {
   position: relative;
@@ -19751,8 +19761,8 @@ html body main.shell[data-app] .ovs-stage::after {
   content: "";
   position: absolute;
   left: 0; right: 0; bottom: 0;
-  height: 46%;
-  background: linear-gradient(180deg, rgba(5, 8, 5, 0) 0%, rgba(5, 8, 5, 0.92) 42%, #050805 66%);
+  height: 50%;
+  background: linear-gradient(180deg, rgba(5, 8, 5, 0) 0%, rgba(5, 8, 5, 0.9) 30%, #050805 52%);
   pointer-events: none;
 }
 html body main.shell[data-app] .ovs-stage .vbot-segment {
@@ -19803,10 +19813,16 @@ html body main.shell[data-app] .ovs-invest-unit {
 }
 /* Stacked (single-column) below ~920px: panel on top, info underneath. */
 @media (max-width: 920px) {
-  html body main.shell[data-app] .ovs-skin.volume-bot-card { grid-template-columns: 1fr; }
+  html body main.shell[data-app] .ovs-skin.volume-bot-card { grid-template-columns: 1fr; gap: 14px; }
 }
+/* On phones the fixed 3:2 stage is too short and the slots overlap. Make the
+   stage taller so each row gets real room. The template stretches with the
+   stage, so the controls stay aligned to the drawn slots (same %), just with
+   more vertical space between them. */
 @media (max-width: 760px) {
-  html body main.shell[data-app] .ovs-ca { font-size: 12px !important; }
+  html body main.shell[data-app] .ovs-stage { aspect-ratio: 1264 / 1180; }
+  html body main.shell[data-app] .ovs-ca { font-size: 13px !important; }
+  html body main.shell[data-app] .ovs-stage::after { height: 44%; }
 }
 /* === END VOLUME_SKIN_20260609_V1 ===================================== */
 
