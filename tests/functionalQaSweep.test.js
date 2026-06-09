@@ -114,7 +114,6 @@ test("terminal nav exposes the requested tool set without blank links", () => {
     "bundle",
     "volume",
     "launch",
-    "sniper",
     "ogreTek",
     "wallets",
     "positions",

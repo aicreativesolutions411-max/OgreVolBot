@@ -6931,77 +6931,21 @@ function tradeHtml() {
           <input data-trade-slippage-custom data-custom-for="trade-slippage" type="number" min="1" max="5000" step="1" placeholder="Custom bps" hidden>
         </label>
 
-        <div class="trade-block">
-          <div>
-            <h4>Swap SOL to Token</h4>
-            <p>Quick SOL amounts include the bot fee and keep the safety reserve. Auto-exit defaults to TP +25% and SL -8% for the selected wallet.</p>
-          </div>
+        <div class="trade-block ogre-swap-actions">
           <div class="quick-grid">
-            <button class="primary" data-trade-buy-quick="0.1">Swap .10 SOL</button>
-            <button class="primary" data-trade-buy-quick="0.5">Swap .50 SOL</button>
-            <button class="primary" data-trade-buy-quick="1">Swap 1 SOL</button>
+            <button class="primary" data-trade-buy-quick="0.1">Buy .10</button>
+            <button class="primary" data-trade-buy-quick="0.5">Buy .50</button>
+            <button class="primary" data-trade-buy-quick="1">Buy 1</button>
             <button data-trade-buy-max>Buy Max</button>
           </div>
           <div class="inline-action">
             <input data-buy-custom type="number" min="0" step="0.01" placeholder="Custom SOL">
-            <button data-trade-buy-custom>Swap Custom</button>
-          </div>
-          <div class="volume-grid compact-grid">
-            <label>
-              Take Profit
-              <select data-trade-auto-tp data-custom-select="trade-auto-tp">
-                <option value="0">Off</option>
-                <option value="15">+15%</option>
-                <option value="25" selected>+25%</option>
-                <option value="50">+50%</option>
-                <option value="100">+100%</option>
-                <option value="custom">Custom</option>
-              </select>
-              <input data-trade-auto-tp-custom data-custom-for="trade-auto-tp" type="text" placeholder="Custom: 500 or 5x" hidden>
-            </label>
-            <label>
-              Stop Loss
-              <select data-trade-auto-sl data-custom-select="trade-auto-sl">
-                <option value="0">Off</option>
-                <option value="8" selected>-8%</option>
-                <option value="10">-10%</option>
-                <option value="15">-15%</option>
-                <option value="25">-25%</option>
-                <option value="custom">Custom</option>
-              </select>
-              <input data-trade-auto-sl-custom data-custom-for="trade-auto-sl" type="text" placeholder="Custom SL %" hidden>
-            </label>
-            <label>
-              Fallback Timer
-              ${fallbackTimerSelectHtml("trade-auto-delay", "data-trade-auto-delay", "off")}
-            </label>
-            <label>
-              Exit Size
-              <select data-trade-auto-sell-percent data-custom-select="trade-auto-sell-percent">
-                <option value="off">Off</option>
-                <option value="50">50%</option>
-                <option value="80">80%</option>
-                <option value="100" selected>100%</option>
-                <option value="custom">Custom</option>
-              </select>
-              <input data-trade-auto-sell-percent-custom data-custom-for="trade-auto-sell-percent" type="number" min="1" max="100" step="1" placeholder="Custom %" hidden>
-            </label>
-          </div>
-        </div>
-
-        <div class="trade-block">
-          <div>
-            <h4>Swap Token to SOL</h4>
-            <p>Exit buttons use the selected wallet and token CA above.</p>
+            <button class="primary" data-trade-buy-custom>Swap</button>
           </div>
           <div class="quick-grid">
             <button data-trade-sell-quick="25">Sell 25%</button>
             <button data-trade-sell-quick="50">Sell 50%</button>
             <button data-trade-sell-quick="100">Sell 100%</button>
-          </div>
-          <div class="inline-action">
-            <input data-sell-custom type="number" min="1" max="100" step="1" placeholder="Custom %">
-            <button data-trade-sell-custom>Sell Custom</button>
           </div>
         </div>
 
@@ -8350,8 +8294,11 @@ function volumeHtml() {
     return `${createWalletSection()}${emptyState("No wallets loaded yet", "Create or restore a managed wallet above first. SlimeBot funds and trades from managed wallets, so it needs at least one saved source wallet.")}`;
   }
 
+  return volumeBotPanelHtml();
+}
+
+function timedVolumePlanHtml_unused() {
   return `
-    ${volumeBotPanelHtml()}
     <section class="trade-layout">
       <article class="trade-card">
         <div class="trade-head">
