@@ -18431,3 +18431,61 @@ html body .ogre-ai-pool-badge {
     gap: 2px !important;
   }
 }
+
+/* === MATRIX_SLIME_POLISH_20260608_V1 ====================================
+   Safe, structure-free polish pass: calmer neon (less "AI" glow),
+   terminal-style monospace data, thin slime scrollbars, clean focus
+   states. No layout/HTML changes, so every existing tool keeps working. */
+
+:root {
+  /* Soften the heavy neon glow site-wide for a cleaner, more pro feel. */
+  --slime-glow: 0 0 14px rgba(114, 255, 35, 0.14) !important;
+}
+
+/* Thin slime scrollbars everywhere (Firefox + WebKit). */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(114, 255, 35, 0.38) transparent;
+}
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(114, 255, 35, 0.32);
+  border-radius: 8px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(114, 255, 35, 0.5);
+}
+
+/* Monospace, tabular numerics for addresses, codes, and data readouts —
+   the "matrix terminal" signal, applied only to clearly data-ish cells. */
+code,
+.ca-copy,
+[data-copy],
+.terminal-token-stats dd,
+.volume-bot-metrics strong,
+.smart-chart-token-header code {
+  font-family: "JetBrains Mono", "SFMono-Regular", "Consolas", ui-monospace, monospace !important;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+
+/* Consistent, accessible focus ring in slime green. */
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: 1.5px solid var(--slime-green, #72ff23);
+  outline-offset: 1px;
+  border-radius: 6px;
+}
+
+/* Smooth in-page scrolling, but respect reduced-motion users. */
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+/* === END MATRIX_SLIME_POLISH_20260608_V1 ============================= */
