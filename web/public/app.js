@@ -16327,7 +16327,7 @@ function positionRowHtml(position) {
       ? "Connected wallet holding - live value pending"
     : "";
   return `
-    <article class="row-card position with-avatar">
+    <article class="row-card position with-avatar is-clickable" data-token-chart="${escapeHtml(position.tokenMint)}" data-token-chart-source="position-row" title="Open chart, trade, and transactions on SlimeWire">
       ${livePairAvatarHtml(position)}
       <div class="row-main">
         <strong>${escapeHtml(position.symbol || position.shortMint)}</strong>
@@ -16337,6 +16337,7 @@ function positionRowHtml(position) {
         ${valueStatus ? `<small class="${isValueUpdating ? "muted-text" : "warning-text"}">${escapeHtml(valueStatus)}</small>` : ""}
       </div>
       <div class="card-actions compact">
+        <button class="primary" data-smart-chart-token="${escapeHtml(position.tokenMint)}">Chart</button>
         <button data-position-sell="${escapeHtml(position.tokenMint)}" data-position-sell-percent="25">Sell 25%</button>
         <button data-position-sell="${escapeHtml(position.tokenMint)}" data-position-sell-percent="50">Sell 50%</button>
         <button class="primary" data-position-sell="${escapeHtml(position.tokenMint)}" data-position-sell-percent="100">Exit 100%</button>

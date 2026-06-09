@@ -1085,6 +1085,22 @@ button:disabled {
   border-radius: 12px;
 }
 
+.row-card.is-clickable {
+  cursor: pointer;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.row-card.is-clickable:hover {
+  border-color: var(--slime, #8bff6a);
+  transform: translateY(-1px);
+}
+
+.row-card.is-clickable .row-main strong {
+  text-decoration: underline;
+  text-decoration-color: rgba(139, 255, 106, 0.35);
+  text-underline-offset: 2px;
+}
+
 .pfp-row,
 .wallet-row-main {
   display: flex;
