@@ -19208,10 +19208,13 @@ html body main.shell[data-app] .slime-configurator {
 html body main.shell[data-app] .slime-configurator .vbot-config-bg {
   position: absolute;
   inset: 0;
+  /* Prominent ogre on the right with a green laser-eye glow; controls sit on
+     the darkened left so they stay readable. */
   background:
-    linear-gradient(100deg, rgba(5,8,5,0.97) 38%, rgba(5,8,5,0.55) 70%, rgba(5,8,5,0.85) 100%),
+    radial-gradient(120% 95% at 100% 32%, rgba(130, 255, 70, 0.18), rgba(5, 8, 5, 0) 52%),
+    linear-gradient(100deg, rgba(5, 8, 5, 0.93) 24%, rgba(5, 8, 5, 0.42) 58%, rgba(5, 8, 5, 0.1) 100%),
     url("/assets/slimewire/png/slimewire-ogre-hero-rich.png") right center / cover no-repeat;
-  opacity: 0.9;
+  opacity: 1;
   pointer-events: none;
 }
 html body main.shell[data-app] .slime-configurator .vbot-config-inner {
@@ -19411,7 +19414,7 @@ html body main.shell[data-app] .vbot-config-start {
     grid-template-columns: 1fr;
   }
   html body main.shell[data-app] .vbot-config-title { font-size: 22px !important; }
-  html body main.shell[data-app] .slime-configurator .vbot-config-bg { opacity: 0.5; }
+  html body main.shell[data-app] .slime-configurator .vbot-config-bg { opacity: 0.72; }
 }
 html body main.shell[data-app] .vbot-config-toggles {
   display: flex;
@@ -19458,15 +19461,31 @@ html body main.shell[data-app] .ogre-swap-card {
   border-radius: 16px !important;
   background: #050805 !important;
 }
+/* Prominent ogre rising over the top of the panel, fading into the body so
+   the You Pay / You Receive boxes and SWAP button stay fully readable. */
+html body main.shell[data-app] .ogre-swap-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(90% 55% at 50% 0%, rgba(130, 255, 70, 0.16), rgba(5, 8, 5, 0) 60%),
+    linear-gradient(180deg, rgba(5, 8, 5, 0.18) 0%, rgba(5, 8, 5, 0.72) 38%, rgba(5, 8, 5, 0.95) 64%, #050805 100%),
+    url("/assets/slimewire/png/slimewire-ogre-hero-rich.png") center top / 118% auto no-repeat;
+  opacity: 0.92;
+}
+html body main.shell[data-app] .ogre-swap-card > * {
+  position: relative;
+  z-index: 1;
+}
 html body main.shell[data-app] .ogre-swap-head {
   position: relative;
-  min-height: 96px;
+  min-height: 110px;
   border-radius: 12px;
   margin-bottom: 14px;
   padding: 16px 18px !important;
-  background:
-    linear-gradient(180deg, rgba(5,8,5,0.35), rgba(5,8,5,0.92)),
-    url("/assets/slimewire/png/slimewire-ogre-hero-rich.png") center 20% / cover no-repeat;
+  background: transparent;
 }
 html body main.shell[data-app] .ogre-swap-title {
   margin: 0 !important;
