@@ -19152,4 +19152,27 @@ html body main.shell[data-app] .tabs button[data-tab="ogreTek"]::before {
     border-radius: 7px !important;
   }
 }
+/* Pairs polish: stat tiles stay compact and never truncate their values;
+   the strip scrolls cleanly on small screens instead of clipping. */
+html body main.shell[data-app] .terminal-token-stats {
+  overflow-x: auto !important;
+  scrollbar-width: none;
+}
+html body main.shell[data-app] .terminal-token-stats::-webkit-scrollbar {
+  height: 0 !important;
+}
+html body main.shell[data-app] .terminal-token-stats dd {
+  white-space: nowrap !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+}
+@media (max-width: 760px) {
+  html body main.shell[data-app] .terminal-token-stats > div {
+    min-width: 0 !important;
+    padding: 4px 7px !important;
+  }
+  html body main.shell[data-app] .terminal-token-stats dd {
+    font-size: 11.5px !important;
+  }
+}
 /* === END SLIMEWIRE_V2_MOBILEFIX_20260608_V1 ========================== */
