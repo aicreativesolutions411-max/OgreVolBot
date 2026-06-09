@@ -530,11 +530,20 @@ test("Ogre A.I. lets super fresh low-market-cap pump pairs through with modest e
   assert.equal(pool.candidates[0].tokenMint, "SuperFreshPotentialMintpump");
 });
 
-test("Ogre A.I. web panel exposes one fresh ape scan instead of modes", () => {
+test("Ogre A.I. web panel exposes sortable scan categories and the scan button", () => {
   assert.doesNotMatch(webAppSource, /data-ogre-ai-mode/);
   assert.doesNotMatch(webAppSource, /data-ogre-ai-min-score/);
-  assert.match(webAppSource, /const mode = "fresh_ape"/);
+  assert.match(webAppSource, /const category = ogreAiCategoryValue\(\)/);
+  assert.match(webAppSource, /OGRE_AI_CATEGORIES/);
+  assert.match(webAppSource, /data-ogre-cat=/);
   assert.match(webAppSource, /Scan &amp; Ape/);
+});
+
+test("Ogre A.I. web panel exposes a guarded autopilot toggle", () => {
+  assert.match(webAppSource, /data-autopilot-enabled/);
+  assert.match(webAppSource, /data-autopilot-maxspend/);
+  assert.match(webAppSource, /function saveOgreAutopilot/);
+  assert.match(webAppSource, /spend REAL SOL automatically/);
 });
 
 test("Ogre A.I. does not blanket-block Token-2022 trusted-pool candidates", () => {

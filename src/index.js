@@ -415,6 +415,7 @@ async function main() {
   } else {
     console.log("Web internal DCA interval runner disabled; Render worker tick owns DCA checks.");
   }
+  startOgreAutopilotRunner();
 
   if (CONFIG.webhookUrl) {
     await setupWebhook();
@@ -2749,6 +2750,42 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendWebJson(request, response, 200, {
         ok: true,
         ogreAi: result
+      });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/ogre-ai/autopilot") {
+      const store = await readOgreAutopilotStore();
+      const config = { ...defaultOgreAutopilotConfig(), ...(store.configs[auth.userId] || {}) };
+      sendWebJson(request, response, 200, {
+        ok: true,
+        autopilot: ogreAutopilotStatusView(config),
+        limits: OGRE_AUTOPILOT_LIMITS
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/ogre-ai/autopilot") {
+      const body = await readJsonRequestBody(request);
+      const store = await readOgreAutopilotStore();
+      const existing = store.configs[auth.userId] || defaultOgreAutopilotConfig();
+      const next = sanitizeOgreAutopilotConfig(existing, body);
+      store.configs[auth.userId] = next;
+      await writeOgreAutopilotStore(store);
+      await audit("web_ogre_ai_autopilot_config", {
+        userId: auth.userId,
+        enabled: next.enabled,
+        category: next.category,
+        amountSol: next.amountSol,
+        maxSpendPerHourSol: next.maxSpendPerHourSol,
+        maxConcurrent: next.maxConcurrent,
+        intervalMinutes: next.intervalMinutes,
+        minScore: next.minScore
+      });
+      sendWebJson(request, response, 200, {
+        ok: true,
+        autopilot: ogreAutopilotStatusView(next),
+        limits: OGRE_AUTOPILOT_LIMITS
       });
       return;
     }
@@ -5497,6 +5534,10 @@ function dcaPlansPath() {
 
 function sniperSettingsPath() {
   return path.join(CONFIG.dataDir, "sniper-settings.json");
+}
+
+function ogreAutopilotPath() {
+  return path.join(CONFIG.dataDir, "ogre-autopilot.json");
 }
 
 function tradeHistoryPath() {
@@ -18353,6 +18394,8 @@ function defaultJsonForPath(filePath) {
       return defaultTpSlWorkerState();
     case "sniper-settings.json":
       return { users: {} };
+    case "ogre-autopilot.json":
+      return { configs: {} };
     case "trade-history.json":
       return { trades: [] };
     case "web-auth.json":
@@ -18399,6 +18442,251 @@ async function readTradePlans() {
 
 async function writeTradePlans(store) {
   await writeJsonFile(tradePlansPath(), store);
+}
+
+// --- Ogre A.I. autopilot (guarded auto-buy) -----------------------------
+// Hard, conservative limits. The autopilot only ever spends inside these.
+const OGRE_AUTOPILOT_LIMITS = {
+  amountSol: { min: 0.001, max: 1, default: 0.05 },
+  minScore: { min: 0, max: 100, default: 62 },
+  maxConcurrent: { min: 1, max: 5, default: 2 },
+  maxSpendPerHourSol: { min: 0.01, max: 2, default: 0.3 },
+  intervalMinutes: { min: 3, max: 240, default: 10 }
+};
+
+function clampLimit(value, spec, fallback) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback === undefined ? spec.default : fallback;
+  return Math.min(spec.max, Math.max(spec.min, num));
+}
+
+async function readOgreAutopilotStore() {
+  const store = await readJson(ogreAutopilotPath());
+  if (!store.configs || typeof store.configs !== "object") store.configs = {};
+  return store;
+}
+
+async function writeOgreAutopilotStore(store) {
+  await writeJsonFile(ogreAutopilotPath(), store);
+}
+
+function defaultOgreAutopilotConfig() {
+  return {
+    enabled: false,
+    category: "super_fresh",
+    amountSol: OGRE_AUTOPILOT_LIMITS.amountSol.default,
+    takeProfitPct: "25",
+    stopLossPct: "8",
+    sellDelay: "5",
+    slippageBps: "400",
+    walletIndexes: [],
+    walletGroup: "",
+    minScore: OGRE_AUTOPILOT_LIMITS.minScore.default,
+    maxConcurrent: OGRE_AUTOPILOT_LIMITS.maxConcurrent.default,
+    maxSpendPerHourSol: OGRE_AUTOPILOT_LIMITS.maxSpendPerHourSol.default,
+    intervalMinutes: OGRE_AUTOPILOT_LIMITS.intervalMinutes.default,
+    spendLog: [],
+    recentMints: [],
+    lastRunAt: null,
+    nextRunAt: null,
+    lastStatus: "",
+    updatedAt: null
+  };
+}
+
+// Sanitize + clamp an incoming autopilot config from the web form. Never
+// trusts client values; every numeric guard is clamped to the hard limits.
+function sanitizeOgreAutopilotConfig(existing, body = {}) {
+  const base = { ...defaultOgreAutopilotConfig(), ...(existing || {}) };
+  const walletIndexes = Array.isArray(body.walletIndexes)
+    ? body.walletIndexes.map((value) => Number.parseInt(String(value), 10)).filter((n) => Number.isFinite(n) && n > 0).slice(0, 50)
+    : base.walletIndexes;
+  const next = {
+    ...base,
+    enabled: Boolean(body.enabled),
+    category: normalizeOgreAiCategory(firstString(body.category, base.category)),
+    amountSol: clampLimit(body.amountSol, OGRE_AUTOPILOT_LIMITS.amountSol, base.amountSol),
+    takeProfitPct: String(firstString(body.takeProfitPct, base.takeProfitPct) || "25"),
+    stopLossPct: String(firstString(body.stopLossPct, base.stopLossPct) || "8"),
+    sellDelay: String(firstString(body.sellDelay, base.sellDelay) || "5"),
+    slippageBps: String(firstString(body.slippageBps, base.slippageBps) || "400"),
+    walletIndexes,
+    walletGroup: String(body.walletGroup || base.walletGroup || "").trim(),
+    minScore: Math.round(clampLimit(body.minScore, OGRE_AUTOPILOT_LIMITS.minScore, base.minScore)),
+    maxConcurrent: Math.round(clampLimit(body.maxConcurrent, OGRE_AUTOPILOT_LIMITS.maxConcurrent, base.maxConcurrent)),
+    maxSpendPerHourSol: clampLimit(body.maxSpendPerHourSol, OGRE_AUTOPILOT_LIMITS.maxSpendPerHourSol, base.maxSpendPerHourSol),
+    intervalMinutes: Math.round(clampLimit(body.intervalMinutes, OGRE_AUTOPILOT_LIMITS.intervalMinutes, base.intervalMinutes)),
+    updatedAt: new Date().toISOString()
+  };
+  // Cannot enable without at least one wallet target.
+  if (next.enabled && !next.walletIndexes.length && !next.walletGroup) {
+    const error = new Error("Pick at least one managed wallet (or a wallet group) before enabling autopilot.");
+    error.statusCode = 400;
+    throw error;
+  }
+  // Re-enabling clears any stale schedule so the first tick can run soon.
+  if (next.enabled && !base.enabled) {
+    next.nextRunAt = null;
+    next.lastStatus = "Autopilot armed. Waiting for the next qualified pick.";
+  }
+  if (!next.enabled) {
+    next.lastStatus = "Autopilot off.";
+  }
+  return next;
+}
+
+function ogreAutopilotSpendLastHour(config, now = Date.now()) {
+  const cutoff = now - 60 * 60 * 1000;
+  const log = Array.isArray(config.spendLog) ? config.spendLog : [];
+  return log
+    .filter((entry) => Number(entry?.at) >= cutoff)
+    .reduce((sum, entry) => sum + (Number(entry?.sol) || 0), 0);
+}
+
+function prunedOgreAutopilotSpendLog(config, now = Date.now()) {
+  const cutoff = now - 60 * 60 * 1000;
+  return (Array.isArray(config.spendLog) ? config.spendLog : [])
+    .filter((entry) => Number(entry?.at) >= cutoff)
+    .slice(-200);
+}
+
+// Public-facing status (no secrets) for the web panel.
+function ogreAutopilotStatusView(config) {
+  const now = Date.now();
+  const spentLastHour = ogreAutopilotSpendLastHour(config, now);
+  return {
+    enabled: Boolean(config.enabled),
+    category: config.category,
+    categoryLabel: ogreAiCategoryLabel(config.category),
+    amountSol: config.amountSol,
+    takeProfitPct: config.takeProfitPct,
+    stopLossPct: config.stopLossPct,
+    sellDelay: config.sellDelay,
+    slippageBps: config.slippageBps,
+    walletIndexes: config.walletIndexes,
+    walletGroup: config.walletGroup,
+    minScore: config.minScore,
+    maxConcurrent: config.maxConcurrent,
+    maxSpendPerHourSol: config.maxSpendPerHourSol,
+    intervalMinutes: config.intervalMinutes,
+    spentLastHourSol: Math.round(spentLastHour * 1e6) / 1e6,
+    remainingThisHourSol: Math.max(0, Math.round((config.maxSpendPerHourSol - spentLastHour) * 1e6) / 1e6),
+    lastRunAt: config.lastRunAt,
+    nextRunAt: config.nextRunAt,
+    lastStatus: config.lastStatus,
+    updatedAt: config.updatedAt
+  };
+}
+
+async function countActiveOgreAiPlans(userId) {
+  try {
+    const store = await readTradePlans();
+    return (store.plans || []).filter((plan) => (
+      plan
+      && plan.userId === userId
+      && plan.source === "ogre_ai"
+      && !["completed", "closed", "cancelled", "canceled", "stopped", "failed"].includes(String(plan.status || "").toLowerCase())
+    )).length;
+  } catch {
+    return 0;
+  }
+}
+
+let ogreAutopilotTickActive = false;
+
+// One scheduler pass over every saved autopilot config. Self-gates on the
+// per-config schedule and enforces all hard guards before spending anything.
+async function runOgreAutopilotTick(reason = "interval") {
+  if (ogreAutopilotTickActive) return { skipped: true, reason: "tick_active" };
+  ogreAutopilotTickActive = true;
+  try {
+    const store = await readOgreAutopilotStore();
+    const userIds = Object.keys(store.configs || {});
+    if (!userIds.length) return { skipped: true, reason: "no_configs" };
+    const now = Date.now();
+    let mutated = false;
+
+    for (const userId of userIds) {
+      const config = store.configs[userId];
+      if (!config || !config.enabled) continue;
+      if (config.nextRunAt && now < Date.parse(config.nextRunAt)) continue;
+
+      const intervalMs = clampLimit(config.intervalMinutes, OGRE_AUTOPILOT_LIMITS.intervalMinutes, OGRE_AUTOPILOT_LIMITS.intervalMinutes.default) * 60 * 1000;
+      const setStatus = (message, { skip = false } = {}) => {
+        config.lastStatus = message;
+        config.spendLog = prunedOgreAutopilotSpendLog(config, now);
+        // After a skip, re-check a bit sooner than a full interval so guards
+        // (spend window / concurrency) recover quickly.
+        config.nextRunAt = new Date(now + (skip ? Math.min(intervalMs, 90_000) : intervalMs)).toISOString();
+        mutated = true;
+      };
+
+      const walletCount = config.walletIndexes.length || 1;
+      const projectedSpend = config.amountSol * walletCount;
+      const spentLastHour = ogreAutopilotSpendLastHour(config, now);
+      if (spentLastHour + projectedSpend > config.maxSpendPerHourSol + 1e-9) {
+        setStatus(`Hourly spend cap reached (${spentLastHour.toFixed(4)}/${config.maxSpendPerHourSol} SOL). Cooling down.`, { skip: true });
+        continue;
+      }
+
+      const activePlans = await countActiveOgreAiPlans(userId);
+      if (activePlans >= config.maxConcurrent) {
+        setStatus(`Holding: ${activePlans}/${config.maxConcurrent} managed Ogre A.I. plans already live.`, { skip: true });
+        continue;
+      }
+
+      try {
+        const result = await webStartOgreAiRun(userId, {
+          category: config.category,
+          amountSol: String(config.amountSol),
+          runCount: "1",
+          sellDelay: config.sellDelay,
+          takeProfitPct: config.takeProfitPct,
+          stopLossPct: config.stopLossPct,
+          sellPercent: "100",
+          slippageBps: config.slippageBps,
+          walletIndexes: config.walletIndexes,
+          walletGroup: config.walletGroup,
+          recentMints: config.recentMints,
+          minScore: String(config.minScore || ""),
+          autopilot: true
+        });
+        const armed = Number(result?.armedCount || 0) > 0;
+        if (armed) {
+          const spend = config.amountSol * Number(result.walletCount || walletCount);
+          config.spendLog = prunedOgreAutopilotSpendLog(config, now).concat([{ at: now, sol: spend }]);
+          const newMints = (result.plans || []).map((plan) => plan.tokenMint).filter(Boolean);
+          config.recentMints = normalizeOgreAiRecentMints((config.recentMints || []).concat(newMints));
+          config.lastRunAt = new Date(now).toISOString();
+          config.nextRunAt = new Date(now + intervalMs).toISOString();
+          config.lastStatus = `Aped ${ogreAiCategoryLabel(config.category)} pick ${newMints.map(shortMint).join(", ") || ""} for ${spend.toFixed(4)} SOL.`;
+          mutated = true;
+          await audit("web_ogre_ai_autopilot_buy", {
+            userId, category: config.category, spend, tokenMints: newMints, reason
+          });
+        } else {
+          setStatus(result?.message || "No qualified pick this pass.", { skip: true });
+        }
+      } catch (error) {
+        setStatus(`Skipped: ${friendlyError(error)}`, { skip: true });
+      }
+    }
+
+    if (mutated) await writeOgreAutopilotStore(store);
+    return { ok: true, reason };
+  } catch (error) {
+    console.warn(`Ogre A.I. autopilot tick failed: ${friendlyError(error)}`);
+    return { ok: false, error: friendlyError(error) };
+  } finally {
+    ogreAutopilotTickActive = false;
+  }
+}
+
+function startOgreAutopilotRunner() {
+  const intervalMs = 60_000;
+  setTimeout(() => void runOgreAutopilotTick("startup").catch(() => {}), 15_000);
+  setInterval(() => void runOgreAutopilotTick("interval").catch(() => {}), intervalMs);
+  console.log("Ogre A.I. autopilot runner enabled (guarded auto-buy; off until a user opts in).");
 }
 
 async function writeTradePlansPreservingNewPlans(store, initialPlanIds = new Set()) {
@@ -25777,12 +26065,103 @@ async function rollingExitActiveWallet(plan, byPk, slippageBps, noBalance) {
   }
 }
 
+// Ogre A.I. scan categories. super_fresh keeps the well-tuned fresh-ape
+// behavior (default + back-compat); the other three retarget the scan toward
+// runners, established/safer pairs, and larger longer-horizon plays. The
+// category is layered onto the scan defaults via applyOgreAiCategory so the
+// existing fresh-ape scoring path stays untouched for super_fresh.
+function normalizeOgreAiCategory(value) {
+  const c = String(value || "super_fresh").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (["volume", "vol", "runner", "runners", "momentum", "fast"].includes(c)) return "volume";
+  if (["safe", "safer", "secure", "low_risk"].includes(c)) return "safe";
+  if (["long_term", "longterm", "long", "hold", "established", "steady"].includes(c)) return "long_term";
+  return "super_fresh";
+}
+
+function ogreAiModeForCategory(category) {
+  switch (normalizeOgreAiCategory(category)) {
+    case "volume": return "fast";
+    case "safe": return "safer";
+    case "long_term": return "steady";
+    default: return "fresh_ape";
+  }
+}
+
+function ogreAiCategoryLabel(category) {
+  switch (normalizeOgreAiCategory(category)) {
+    case "volume": return "Volume";
+    case "safe": return "Safe";
+    case "long_term": return "Long-term";
+    default: return "Super-fresh";
+  }
+}
+
 function normalizeOgreAiMode(value) {
   const mode = String(value || "fresh_ape").trim().toLowerCase().replace(/[\s-]+/g, "_");
-  if (["fresh_ape", "freshape", "ape", "quick", "fast", "scalp", "fresh", "new", "launch", "safer", "safe", "steady"].includes(mode)) {
-    return "fresh_ape";
-  }
+  if (["volume", "vol", "runner", "runners", "momentum", "fast"].includes(mode)) return "fast";
+  if (["safe", "safer", "secure", "low_risk"].includes(mode)) return "safer";
+  if (["long_term", "longterm", "long", "hold", "established", "steady"].includes(mode)) return "steady";
+  // Everything else (quick/scalp/new/launch/ape/...) collapses to fresh ape.
   return "fresh_ape";
+}
+
+// Overlay category tuning onto the scan defaults. Only touches scan shaping
+// (buckets / market-cap band / score / liquidity / volume / age) plus a
+// scan-band takeProfit hint used purely for ranking; the real exit TP/SL the
+// user picked still flows through webStartOgreAiRun from the request body.
+function applyOgreAiCategory(defaults, category) {
+  const cat = normalizeOgreAiCategory(category);
+  defaults.category = cat;
+  defaults.categoryLabel = ogreAiCategoryLabel(cat);
+  if (cat === "super_fresh") return defaults;
+
+  const liftMin = (key, floor) => { defaults[key] = Math.max(Number(defaults[key] || 0), floor); };
+
+  if (cat === "volume") {
+    defaults.buckets = [...new Set(["live", "under1h", "under3h"])];
+    liftMin("minMarketCap", 8_000);
+    defaults.preferredMaxMarketCap = 120_000;
+    defaults.maxMarketCap = 350_000;
+    defaults.maxAgeMinutes = 240;
+    liftMin("minStartingVolumeUsd", 4_000);
+    liftMin("minLiquidityUsd", 1_500);
+    liftMin("minScore", 32);
+    defaults.preferFreshLaunches = false;
+    defaults.takeProfitPct = 55; // ranking band: fast momentum
+    defaults.targetTakeProfitPct = 55;
+    return defaults;
+  }
+  if (cat === "safe") {
+    defaults.buckets = [...new Set(["under1h", "under3h", "under1d"])];
+    liftMin("minMarketCap", 50_000);
+    defaults.preferredMaxMarketCap = 400_000;
+    defaults.maxMarketCap = 1_200_000;
+    defaults.maxAgeMinutes = 24 * 60;
+    liftMin("minStartingVolumeUsd", 8_000);
+    liftMin("minLiquidityUsd", 15_000);
+    liftMin("minScore", 56);
+    defaults.preferFreshLaunches = false;
+    defaults.defaultSlippageBps = Math.min(Number(defaults.defaultSlippageBps || 500), 300);
+    defaults.takeProfitPct = 25; // ranking band: steady breakout
+    defaults.targetTakeProfitPct = 25;
+    return defaults;
+  }
+  if (cat === "long_term") {
+    defaults.buckets = [...new Set(["under3h", "under1d"])];
+    liftMin("minMarketCap", 150_000);
+    defaults.preferredMaxMarketCap = 1_500_000;
+    defaults.maxMarketCap = 5_000_000;
+    defaults.maxAgeMinutes = 24 * 60;
+    liftMin("minStartingVolumeUsd", 20_000);
+    liftMin("minLiquidityUsd", 40_000);
+    liftMin("minScore", 60);
+    defaults.preferFreshLaunches = false;
+    defaults.defaultSlippageBps = Math.min(Number(defaults.defaultSlippageBps || 500), 250);
+    defaults.takeProfitPct = 22; // ranking band: steady breakout, larger caps
+    defaults.targetTakeProfitPct = 22;
+    return defaults;
+  }
+  return defaults;
 }
 
 function ogreAiModeDefaults(mode) {
@@ -25968,7 +26347,8 @@ function cachedOgreAiMarketRows(defaults = {}, mode = "quick") {
 }
 
 async function selectOgreAiPicks(userId, body = {}, limit = 1) {
-  const mode = normalizeOgreAiMode(body.mode);
+  const category = normalizeOgreAiCategory(firstString(body.category, body.mode));
+  const mode = ogreAiModeForCategory(category);
   const defaults = ogreAiModeDefaults(mode);
   const requestedTakeProfitPct = Number.parseFloat(String(firstString(body.takeProfitPct, body.targetTakeProfitPct, defaults.defaultTakeProfitPct) || ""));
   if (Number.isFinite(requestedTakeProfitPct) && requestedTakeProfitPct > 0) {
@@ -25977,6 +26357,7 @@ async function selectOgreAiPicks(userId, body = {}, limit = 1) {
   }
   applyOgreAiTargetDefaults(defaults, defaults.takeProfitPct || defaults.targetTakeProfitPct || defaults.defaultTakeProfitPct, mode);
   applyOgreAiTimerIntentDefaults(defaults, body, mode);
+  applyOgreAiCategory(defaults, category);
   const recentMints = normalizeOgreAiRecentMints(
     body.recentMints !== undefined && body.recentMints !== null ? body.recentMints : body.avoidMints
   );
@@ -26037,6 +26418,8 @@ async function selectOgreAiPicks(userId, body = {}, limit = 1) {
   });
   return {
     mode,
+    category,
+    categoryLabel: ogreAiCategoryLabel(category),
     defaults,
     selectedTier: pool.selectedTier,
     tierCounts: pool.tierCounts,
@@ -26218,7 +26601,8 @@ async function webStartOgreAiRun(userId, body = {}) {
   const store = await readWalletStore();
   const wallets = webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup);
   const runCount = clamp(Number.parseInt(String(body.runCount || "1"), 10) || 1, 1, OGRE_AI_PLANS_PER_RUN_LIMIT);
-  const mode = normalizeOgreAiMode(body.mode);
+  const category = normalizeOgreAiCategory(firstString(body.category, body.mode));
+  const mode = ogreAiModeForCategory(category);
   const candidateLimit = Math.min(
     OGRE_AI_MAX_SCAN_ROWS,
     Math.max(runCount, runCount * OGRE_AI_PLAN_BACKUP_MULTIPLIER, 12)
@@ -26279,6 +26663,8 @@ async function webStartOgreAiRun(userId, body = {}) {
 
     return {
       mode,
+      category,
+      categoryLabel: ogreAiCategoryLabel(category),
       refreshCount: selection.refreshCount,
       scanned: selection.scanned,
       qualified: selection.qualified,
@@ -26291,7 +26677,7 @@ async function webStartOgreAiRun(userId, body = {}) {
       plans: [],
       picks: attemptedPicks.slice(0, Math.max(1, runCount)),
       errors,
-      message: `Ogre A.I. picked ${Math.max(1, attemptedPicks.length)} fresh ape setup(s), but no buy was armed. ${errors[0]?.message || "Route or wallet precheck failed."}`
+      message: `Ogre A.I. (${ogreAiCategoryLabel(category)}) picked ${Math.max(1, attemptedPicks.length)} setup(s), but no buy was armed. ${errors[0]?.message || "Route or wallet precheck failed."}`
     };
   }
 
@@ -26308,6 +26694,8 @@ async function webStartOgreAiRun(userId, body = {}) {
 
   return {
     mode,
+    category,
+    categoryLabel: ogreAiCategoryLabel(category),
     refreshCount: selection.refreshCount,
     scanned: selection.scanned,
     qualified: selection.qualified,
@@ -26320,7 +26708,7 @@ async function webStartOgreAiRun(userId, body = {}) {
     plans,
     picks: plans.map((plan) => plan.pick).filter(Boolean),
     errors,
-    message: `Ogre A.I. armed ${plans.length} managed fresh ape plan(s) from ${selection.qualified} qualified setup(s). TP/SL watchers are running for managed wallets.`
+    message: `Ogre A.I. (${ogreAiCategoryLabel(category)}) armed ${plans.length} managed plan(s) from ${selection.qualified} qualified setup(s). TP/SL watchers are running for managed wallets.`
   };
 }
 

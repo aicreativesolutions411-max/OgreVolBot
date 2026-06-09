@@ -19718,3 +19718,107 @@ html body main.shell[data-app] .tek-tool-icon[data-tek-icon="bundle"] { -webkit-
 html body main.shell[data-app] .tek-tool-icon[data-tek-icon="launchCoin"] { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/launchCoin.svg"); mask-image: url("/assets/slimewire/svg/icons-v2/launchCoin.svg"); }
 html body main.shell[data-app] .tek-tool-icon[data-tek-icon="launch"] { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/sniper.svg"); mask-image: url("/assets/slimewire/svg/icons-v2/sniper.svg"); }
 /* === END TEK_HUB_20260609_V1 ========================================= */
+
+/* === OGRE_AI_CATEGORIES_AUTOPILOT_20260609_V1 ========================
+   Ogre A.I. scan-category selector + guarded autopilot panel. */
+html body main.shell[data-app] .ogre-cat-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+html body main.shell[data-app] .ogre-cat-label {
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--slime-text-soft, #cfe8c4);
+}
+html body main.shell[data-app] .ogre-cat-segment {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+html body main.shell[data-app] .ogre-cat-segment button {
+  padding: 9px 6px;
+  border-radius: 11px;
+  border: 1px solid rgba(120, 200, 90, 0.22);
+  background: rgba(12, 26, 10, 0.55);
+  color: var(--slime-text-soft, #cfe8c4);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+html body main.shell[data-app] .ogre-cat-segment button:hover {
+  border-color: rgba(150, 230, 110, 0.45);
+}
+html body main.shell[data-app] .ogre-cat-segment button[data-active="true"] {
+  background: linear-gradient(180deg, rgba(120, 210, 70, 0.32), rgba(60, 140, 40, 0.22));
+  border-color: var(--slime-green-strong, #bbff63);
+  color: #eaffd9;
+  box-shadow: 0 0 0 1px rgba(187, 255, 99, 0.35), 0 4px 14px rgba(120, 210, 70, 0.18);
+}
+html body main.shell[data-app] .ogre-cat-hint {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--slime-text-dim, #9fc190);
+}
+html body main.shell[data-app] .ogre-autopilot {
+  border: 1px solid rgba(120, 200, 90, 0.22);
+  border-radius: 14px;
+  padding: 14px;
+  background: rgba(10, 22, 8, 0.6);
+}
+html body main.shell[data-app] .ogre-autopilot.is-on {
+  border-color: var(--slime-green-strong, #bbff63);
+  box-shadow: 0 0 0 1px rgba(187, 255, 99, 0.28), 0 6px 18px rgba(120, 210, 70, 0.15);
+}
+html body main.shell[data-app] .ogre-autopilot-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+html body main.shell[data-app] .ogre-autopilot-head h3 { margin: 0 0 2px; }
+html body main.shell[data-app] .ogre-autopilot-head p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--slime-text-soft, #cfe8c4);
+}
+html body main.shell[data-app] .ogre-autopilot-switch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--slime-green-strong, #bbff63);
+  white-space: nowrap;
+  cursor: pointer;
+}
+html body main.shell[data-app] .ogre-autopilot-switch input { width: 18px; height: 18px; accent-color: var(--slime-green-strong, #bbff63); }
+html body main.shell[data-app] .ogre-autopilot-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 12px 0;
+}
+html body main.shell[data-app] .ogre-autopilot-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--slime-text-dim, #9fc190);
+}
+html body main.shell[data-app] .ogre-autopilot-grid input {
+  padding: 8px 10px;
+  border-radius: 9px;
+  border: 1px solid rgba(120, 200, 90, 0.22);
+  background: rgba(6, 16, 5, 0.7);
+  color: #eaffd9;
+  font-size: 13px;
+}
+@media (max-width: 760px) {
+  html body main.shell[data-app] .ogre-cat-segment { grid-template-columns: 1fr 1fr; }
+}
+/* === END OGRE_AI_CATEGORIES_AUTOPILOT_20260609_V1 ==================== */

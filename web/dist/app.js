@@ -179,6 +179,7 @@ function rememberOgreAiFormPreset(preset = {}) {
     window.sessionStorage?.setItem(OGRE_AI_FORM_STORAGE_KEY, JSON.stringify({
       amountSol: String(preset.amountSol || "").slice(0, 16),
       runCount: String(preset.runCount || "1").slice(0, 4),
+      category: String(preset.category || "super_fresh").slice(0, 16),
       takeProfitSelect: String(preset.takeProfitSelect || "25").slice(0, 16),
       takeProfitCustom: String(preset.takeProfitCustom || "").slice(0, 16),
       stopLossSelect: String(preset.stopLossSelect || "8").slice(0, 16),
@@ -378,6 +379,9 @@ const state = {
   ogreAiResult: null,
   ogreAiStatus: "",
   ogreAiLoading: false,
+  ogreAiCategory: null,
+  ogreAutopilot: null,
+  ogreAutopilotBusy: false,
   clipFarm: {
     recording: false,
     status: "",
@@ -7287,6 +7291,79 @@ function ogreAiResultHtml() {
   `;
 }
 
+const OGRE_AI_CATEGORIES = [
+  ["super_fresh", "Super-fresh", "Brand-new sub-$8K launches with starting flow — fastest, highest risk. Blocks mint/freeze/honeypot/drained-liquidity before buys."],
+  ["volume", "Volume", "Active runners with real momentum ($8K–$350K MC), heavy early volume and live trades."],
+  ["safe", "Safe", "Established small caps ($50K–$1.2M MC) with deeper liquidity and a higher score bar; tighter slippage."],
+  ["long_term", "Long-term", "Larger, deeper pairs ($150K–$5M MC) for a longer horizon; strictest score + liquidity, lowest slippage."]
+];
+
+function ogreAiCategoryValue() {
+  const isValid = (value) => OGRE_AI_CATEGORIES.some(([key]) => key === value);
+  if (state.ogreAiCategory && isValid(state.ogreAiCategory)) return state.ogreAiCategory;
+  const stored = readStoredOgreAiFormPreset().category;
+  return isValid(stored) ? stored : "super_fresh";
+}
+
+function ogreAiCategoryHint(category) {
+  const found = OGRE_AI_CATEGORIES.find(([key]) => key === category);
+  return found ? found[2] : OGRE_AI_CATEGORIES[0][2];
+}
+
+function ogreAiCategorySegmentHtml(current) {
+  return `<div class="ogre-cat-segment" role="group">${OGRE_AI_CATEGORIES.map(([value, label]) =>
+    `<button type="button" data-ogre-cat="${escapeHtml(value)}" data-active="${current === value}">${escapeHtml(label)}</button>`).join("")}</div>`;
+}
+
+function ogreAutopilotPanelHtml() {
+  const ap = state.ogreAutopilot || {};
+  const enabled = Boolean(ap.enabled);
+  const catLabel = ogreAiCategoryLabelClient(ap.category || ogreAiCategoryValue());
+  const num = (value, fallback) => (value === undefined || value === null || value === "" ? fallback : value);
+  const statusText = ap.lastStatus
+    || (enabled ? "Autopilot armed. Waiting for the next qualified pick." : "Off. Autopilot auto-apes the best pick in your category using the presets above, inside hard spend guards.");
+  const spentLine = enabled
+    ? `Spent this hour: ${Number(ap.spentLastHourSol || 0).toFixed(4)} / ${num(ap.maxSpendPerHourSol, "0.3")} SOL`
+    : "";
+  return `
+    <article class="ogre-autopilot ${enabled ? "is-on" : ""}" data-preserve-focus>
+      <div class="ogre-autopilot-head">
+        <div>
+          <h3>Autopilot</h3>
+          <p>Auto-ape the best <strong>${escapeHtml(catLabel)}</strong> pick on a timer, using the TP/SL/timer/slippage and wallets above — within hard guards.</p>
+        </div>
+        <label class="ogre-autopilot-switch">
+          <input type="checkbox" data-autopilot-enabled ${enabled ? "checked" : ""}>
+          <span>${enabled ? "On" : "Off"}</span>
+        </label>
+      </div>
+      <div class="ogre-autopilot-grid">
+        <label>Max SOL / hour
+          <input data-autopilot-maxspend inputmode="decimal" value="${escapeHtml(String(num(ap.maxSpendPerHourSol, "0.3")))}">
+        </label>
+        <label>Max live plans
+          <input data-autopilot-maxconcurrent inputmode="numeric" value="${escapeHtml(String(num(ap.maxConcurrent, "2")))}">
+        </label>
+        <label>Min score
+          <input data-autopilot-minscore inputmode="numeric" value="${escapeHtml(String(num(ap.minScore, "62")))}">
+        </label>
+        <label>Every (min)
+          <input data-autopilot-interval inputmode="numeric" value="${escapeHtml(String(num(ap.intervalMinutes, "10")))}">
+        </label>
+      </div>
+      <div class="card-actions">
+        <button type="button" class="primary" data-autopilot-save ${state.ogreAutopilotBusy ? "disabled" : ""}>${state.ogreAutopilotBusy ? "Saving..." : "Save autopilot"}</button>
+      </div>
+      <small data-autopilot-status>${escapeHtml(statusText)}${spentLine ? ` — ${escapeHtml(spentLine)}` : ""}</small>
+    </article>
+  `;
+}
+
+function ogreAiCategoryLabelClient(category) {
+  const found = OGRE_AI_CATEGORIES.find(([key]) => key === category);
+  return found ? found[1] : "Super-fresh";
+}
+
 function ogreAiHtml() {
   if (!state.wallets.length) {
     return `${createWalletSection()}${emptyState("No managed wallets loaded", "Ogre A.I. needs managed/imported SlimeWire wallets so the server can submit TP/SL and timer exits after it buys.")}`;
@@ -7298,6 +7375,7 @@ function ogreAiHtml() {
     const value = String(selectValue || fallback || "");
     return value === "custom" ? String(customValue || "custom") : value;
   };
+  const activeCategory = ogreAiCategoryValue();
 
   return `
     <section class="trade-layout ogre-ai-terminal">
@@ -7305,9 +7383,15 @@ function ogreAiHtml() {
         <div class="trade-head">
           <div>
             <h3>Ogre A.I.</h3>
-            <p>Fresh Ape scan for managed wallets: find low-MC fresh pairs with starting flow, buy selected setups, and arm exits from one command panel.</p>
+            <p>Pick a category, scan live setups for managed wallets, ape the best one, and arm exits from one command panel.</p>
           </div>
           <span class="sync-pill">Managed server exits</span>
+        </div>
+
+        <div class="ogre-cat-field" data-preserve-focus>
+          <span class="ogre-cat-label">Scan category</span>
+          ${ogreAiCategorySegmentHtml(activeCategory)}
+          <small class="ogre-cat-hint">${escapeHtml(ogreAiCategoryHint(activeCategory))}</small>
         </div>
 
         <div class="ogre-ai-grid" data-preserve-focus>
@@ -7379,14 +7463,15 @@ function ogreAiHtml() {
           <button type="button" data-tab="live">Review Cooks</button>
           <button type="button" data-tab="positions">Positions</button>
         </div>
-        <small data-ogre-ai-status>${escapeHtml(state.ogreAiStatus || "Fresh Ape scans under-$5K pairs first, only falls back below $8K, requires starting volume, and blocks obvious honeypot, mint, freeze, drained-liquidity, and no-sell risk before buys.")}</small>
+        <small data-ogre-ai-status>${escapeHtml(state.ogreAiStatus || ogreAiCategoryHint(activeCategory))}</small>
       </article>
 
       <aside class="trade-side">
         ${automationDelegationHtml({ compact: true })}
+        ${ogreAutopilotPanelHtml()}
         <article>
           <h3>How It Runs</h3>
-          <p>Ogre A.I. pulls live fresh-pair feeds, favors under-$5K market caps with early buy flow, buys with your selected managed wallets, and arms 100% bag exits using the TP/SL/timer settings above.</p>
+          <p>Ogre A.I. pulls live feeds for the chosen category, ranks the best setup, buys with your selected managed wallets, and arms 100% bag exits using the TP/SL/timer settings above.</p>
           <ul class="delegation-steps">
             <li>Use small sizing first.</li>
             <li>Server exits require managed/imported wallets.</li>
@@ -11726,7 +11811,7 @@ function readOgreAiForm() {
   const walletIndexes = checkedWalletIndexes("ogre-ai");
   const walletGroup = $("[data-ogre-ai-group]")?.value?.trim() || "";
   const amountSol = $("[data-ogre-ai-amount]")?.value?.trim() || "";
-  const mode = "fresh_ape";
+  const category = ogreAiCategoryValue();
   const runCount = $("[data-ogre-ai-runs]")?.value || "1";
   const takeProfitSelect = $("[data-ogre-ai-tp]")?.value || "25";
   const takeProfitCustom = $("[data-ogre-ai-tp-custom]")?.value?.trim() || "";
@@ -11739,6 +11824,7 @@ function readOgreAiForm() {
   rememberOgreAiFormPreset({
     amountSol,
     runCount,
+    category,
     takeProfitSelect,
     takeProfitCustom,
     stopLossSelect,
@@ -11759,7 +11845,8 @@ function readOgreAiForm() {
   return {
     walletIndexes,
     walletGroup,
-    mode,
+    category,
+    mode: category,
     amountSol,
     runCount,
     sellDelay,
@@ -11808,6 +11895,75 @@ async function startOgreAiRun() {
   } finally {
     state.ogreAiLoading = false;
     if (ogreAiRunInFlight === runToken) ogreAiRunInFlight = null;
+    render();
+  }
+}
+
+function setOgreAutopilotStatus(message) {
+  const node = $("[data-autopilot-status]");
+  if (node) node.textContent = String(message || "");
+}
+
+async function loadOgreAutopilot({ silent = true } = {}) {
+  try {
+    const data = await api("/api/web/ogre-ai/autopilot");
+    state.ogreAutopilot = data.autopilot || null;
+    if (state.activeTab === "ogreAi") render();
+  } catch (error) {
+    if (!silent) setOgreAutopilotStatus(error.message);
+  }
+}
+
+function readOgreAutopilotForm() {
+  return {
+    enabled: Boolean($("[data-autopilot-enabled]")?.checked),
+    category: ogreAiCategoryValue(),
+    amountSol: $("[data-ogre-ai-amount]")?.value?.trim() || (state.ogreAutopilot?.amountSol ?? "0.05"),
+    takeProfitPct: fieldValue("[data-ogre-ai-tp]", "[data-ogre-ai-tp-custom]", "25"),
+    stopLossPct: fieldValue("[data-ogre-ai-sl]", "[data-ogre-ai-sl-custom]", "8"),
+    sellDelay: fieldValue("[data-ogre-ai-delay]", "[data-ogre-ai-delay-custom]", "5"),
+    slippageBps: fieldValue("[data-ogre-ai-slippage]", "[data-ogre-ai-slippage-custom]", "400"),
+    walletIndexes: checkedWalletIndexes("ogre-ai"),
+    walletGroup: $("[data-ogre-ai-group]")?.value?.trim() || "",
+    maxSpendPerHourSol: $("[data-autopilot-maxspend]")?.value?.trim() || "0.3",
+    maxConcurrent: $("[data-autopilot-maxconcurrent]")?.value?.trim() || "2",
+    minScore: $("[data-autopilot-minscore]")?.value?.trim() || "62",
+    intervalMinutes: $("[data-autopilot-interval]")?.value?.trim() || "10"
+  };
+}
+
+async function saveOgreAutopilot() {
+  if (state.ogreAutopilotBusy) return;
+  const payload = readOgreAutopilotForm();
+  if (payload.enabled && !payload.walletIndexes.length && !payload.walletGroup) {
+    setOgreAutopilotStatus("Pick at least one managed wallet (or a wallet group) above before enabling autopilot.");
+    return;
+  }
+  if (payload.enabled) {
+    const ok = window.confirm([
+      "Enable Ogre A.I. Autopilot? This will spend REAL SOL automatically.",
+      `Category: ${ogreAiCategoryLabelClient(payload.category)}`,
+      `Up to ${payload.amountSol} SOL per wallet, max ${payload.maxSpendPerHourSol} SOL/hour, every ${payload.intervalMinutes} min.`,
+      `Only buys picks scoring >= ${payload.minScore}, max ${payload.maxConcurrent} live plans.`,
+      "You can turn it off any time."
+    ].join("\n"));
+    if (!ok) return;
+  }
+  state.ogreAutopilotBusy = true;
+  setOgreAutopilotStatus(payload.enabled ? "Arming autopilot..." : "Saving...");
+  render();
+  try {
+    const data = await api("/api/web/ogre-ai/autopilot", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    state.ogreAutopilot = data.autopilot || null;
+    setOgreAutopilotStatus(state.ogreAutopilot?.lastStatus || "Saved.");
+  } catch (error) {
+    setOgreAutopilotStatus(error.message);
+    setError(error.message);
+  } finally {
+    state.ogreAutopilotBusy = false;
     render();
   }
 }
@@ -19935,6 +20091,18 @@ document.addEventListener("click", async (event) => {
     runDeferredUiTask(() => startOgreAiRun());
     return;
   }
+  const ogreCatBtn = target.closest?.("[data-ogre-cat]");
+  if (ogreCatBtn) {
+    event.preventDefault();
+    state.ogreAiCategory = ogreCatBtn.dataset.ogreCat || "super_fresh";
+    render({ force: true });
+    return;
+  }
+  if (target.closest?.("[data-autopilot-save]")) {
+    event.preventDefault();
+    runDeferredUiTask(() => saveOgreAutopilot());
+    return;
+  }
   if (target.matches("[data-ogre-tek-market]")) {
     state.ogreTek.selectedMarket = target.dataset.ogreTekMarket || state.ogreTek.selectedMarket;
     state.ogreTek.reviewOpen = false;
@@ -20723,6 +20891,9 @@ document.addEventListener("click", async (event) => {
     state.activeTab = target.dataset.tab;
     if (state.activeTab === "volume") {
       void loadVolumeBots();
+    }
+    if (state.activeTab === "ogreAi") {
+      void loadOgreAutopilot();
     }
     if (state.activeTab === "ogreTek") {
       state.route = "terminal";
