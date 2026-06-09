@@ -444,6 +444,13 @@ function loadConfig() {
   const feeWallet = process.env.FEE_WALLET || "AUcSFZsCdawzfqa4KzHK1BHz1RDrBnj8CF5kxoy3NvxV";
   const bundleFeeBps = Number.parseInt(process.env.TRADE_FEE_BPS || process.env.BUNDLE_FEE_BPS || "65", 10);
   const referralFeeBps = Number.parseInt(process.env.REFERRAL_FEE_BPS || "15", 10);
+  // Connected-wallet (Phantom/Solflare) trade fee via Jupiter's referral fee,
+  // embedded in the swap the user signs. OFF until BOTH are configured:
+  // CONNECTED_TRADE_FEE_BPS (>0) and JUPITER_REFERRAL_ACCOUNT (a Jupiter
+  // referral account set up in the Jupiter referral dashboard). Test with a
+  // tiny trade before enabling; a bad referral account can reject orders.
+  const connectedTradeFeeBps = Math.max(0, Math.min(255, Number.parseInt(process.env.CONNECTED_TRADE_FEE_BPS || "0", 10) || 0));
+  const jupiterReferralAccount = String(process.env.JUPITER_REFERRAL_ACCOUNT || "").trim();
   const tradingSpeedPreset = parseTradingSpeedPreset(process.env.TRADING_SPEED_PRESET || "balanced");
   const speedDefaults = tradingSpeedDefaults(tradingSpeedPreset);
   const bundleConcurrency = Number.parseInt(process.env.BUNDLE_CONCURRENCY || String(speedDefaults.bundleConcurrency), 10);
@@ -938,6 +945,8 @@ function loadConfig() {
     tradingSpeedPreset,
     feeWallet,
     bundleFeeBps,
+    connectedTradeFeeBps,
+    jupiterReferralAccount,
     referralFeeBps,
     bundleConcurrency,
     buyReserveLamports: solToLamports(buyReserveSol),
@@ -12589,7 +12598,7 @@ async function executeJupiterSwap({
   throw lastError;
 }
 
-async function createJupiterOrder({ taker, inputMint, outputMint, amount, slippageBps, priority = false, timeoutMs = 8_000, retries = CONFIG.jupiterRetries }) {
+async function createJupiterOrder({ taker, inputMint, outputMint, amount, slippageBps, priority = false, timeoutMs = 8_000, retries = CONFIG.jupiterRetries, referralAccount = "", referralFee = 0 }) {
   if (!CONFIG.jupiterApiKey) {
     throw new Error("Missing JUPITER_API_KEY. Swaps and timed trade plans require a Jupiter API key.");
   }
@@ -12603,6 +12612,12 @@ async function createJupiterOrder({ taker, inputMint, outputMint, amount, slippa
   orderUrl.searchParams.set("slippageBps", String(slippageBps));
   if (CONFIG.priorityFeeLamports > 0) {
     orderUrl.searchParams.set("priorityFeeLamports", String(CONFIG.priorityFeeLamports));
+  }
+  // Optional connected-wallet platform fee (Jupiter referral). Only set when
+  // explicitly passed from the connected-trade path with a configured account.
+  if (referralAccount && Number(referralFee) > 0) {
+    orderUrl.searchParams.set("referralAccount", referralAccount);
+    orderUrl.searchParams.set("referralFee", String(Number(referralFee)));
   }
 
   const order = await jupiterFetchJson(orderUrl, {
@@ -12618,7 +12633,7 @@ async function createJupiterOrder({ taker, inputMint, outputMint, amount, slippa
   return order;
 }
 
-async function assertTokenBuySafety({ tokenMint, taker, buyLamports, slippageBps }) {
+async function assertTokenBuySafety({ tokenMint, taker, buyLamports, slippageBps, referralAccount = "", referralFee = 0 }) {
   const safety = await getMintSafetyInfo(tokenMint);
   if (safety.freezeAuthority) {
     throw new Error("Token safety check failed: freeze authority is still active.");
@@ -12640,7 +12655,9 @@ async function assertTokenBuySafety({ tokenMint, taker, buyLamports, slippageBps
     slippageBps,
     priority: true,
     timeoutMs: 8_000,
-    retries: CONFIG.jupiterRetries
+    retries: CONFIG.jupiterRetries,
+    referralAccount,
+    referralFee
   });
   const estimatedTokenOut = BigInt(buyOrder.outAmount || buyOrder.outputAmount || 0);
   if (estimatedTokenOut <= 0n) {
@@ -24554,6 +24571,11 @@ async function webBrowserTradeOrder(userId, body = {}) {
   let order;
   let tokenAmount = "";
 
+  // Connected-wallet platform fee (OFF unless configured). Embedded in the
+  // swap the user signs, so it works without a server-side fee transfer.
+  const referralAccount = CONFIG.connectedTradeFeeBps > 0 ? CONFIG.jupiterReferralAccount : "";
+  const referralFee = referralAccount ? CONFIG.connectedTradeFeeBps : 0;
+
   if (side === "buy") {
     inputMint = SOL_MINT;
     outputMint = tokenMint;
@@ -24562,7 +24584,9 @@ async function webBrowserTradeOrder(userId, body = {}) {
       tokenMint,
       taker: new PublicKey(connected.publicKey),
       buyLamports: inputAmount,
-      slippageBps
+      slippageBps,
+      referralAccount,
+      referralFee
     });
   } else {
     const percent = parsePercent(String(body.percent || "100"));
@@ -24579,7 +24603,9 @@ async function webBrowserTradeOrder(userId, body = {}) {
       slippageBps,
       priority: true,
       timeoutMs: 8_000,
-      retries: CONFIG.jupiterRetries
+      retries: CONFIG.jupiterRetries,
+      referralAccount,
+      referralFee
     });
   }
 

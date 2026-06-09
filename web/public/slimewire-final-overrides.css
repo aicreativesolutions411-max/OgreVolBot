@@ -19547,3 +19547,40 @@ html body main.shell[data-app] .ogre-swap-card .trade-block h4 {
   letter-spacing: 0.05em;
 }
 /* === END OGRESWAP_20260609_V1 ======================================== */
+
+/* === PAIRS_CONTROLSTRIP_20260609_V1 ===================================
+   Tidy the Cooks/Live Pairs control strip into one clean wrapping row
+   (Sort + Refresh + Trade/Bundle/Volume) instead of a cramped cluster. */
+html body main.shell[data-app] .live-control-strip {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  align-items: center !important;
+  gap: 8px 12px !important;
+}
+html body main.shell[data-app] .live-control-strip > div:first-child {
+  flex: 1 1 200px !important;
+  min-width: 0 !important;
+}
+html body main.shell[data-app] .live-control-strip .card-actions {
+  display: flex !important;
+  flex: 0 1 auto !important;
+  flex-wrap: wrap !important;
+  justify-content: flex-end !important;
+  align-items: center !important;
+  gap: 8px !important;
+}
+html body main.shell[data-app] .live-control-strip .compact-label {
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  white-space: nowrap;
+}
+html body main.shell[data-app] .live-control-strip .compact-label select {
+  width: auto !important;
+  min-width: 120px;
+}
+html body main.shell[data-app] .live-control-strip small {
+  flex: 1 1 100% !important;
+  display: block !important;
+}
+/* === END PAIRS_CONTROLSTRIP_20260609_V1 ============================== */
