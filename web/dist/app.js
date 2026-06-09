@@ -520,6 +520,7 @@ let autoExitCheckInFlight = false;
 let autoExitWatchTimers = [];
 let loginModalReturnFocus = null;
 let walletRefreshPromise = null;
+let walletRefreshWatchdog = null;
 let positionsRefreshPromise = null;
 let positionsRefreshPromiseKey = "";
 let lastWalletForceRefreshAt = 0;
@@ -4300,6 +4301,18 @@ async function refreshWalletState({ force = false, deep = false, reason = "manua
     setText("[data-sync-health]", syncHealthLabel());
     setHidden("[data-refresh-spinner]", false);
     applyActionButtonStates();
+    // Hard safety net: never let the refresh UI stay stuck, even if a promise
+    // hangs below the race timeout. Force-clears the spinner if it overruns.
+    if (walletRefreshWatchdog) window.clearTimeout(walletRefreshWatchdog);
+    walletRefreshWatchdog = window.setTimeout(() => {
+      walletRefreshWatchdog = null;
+      if (state.walletRefreshRequestId !== requestId || !state.walletRefreshing) return;
+      state.walletRefreshing = false;
+      if (state.walletRefreshStatus === "refreshing") state.walletRefreshStatus = "timeout";
+      walletRefreshPromise = null;
+      finishPositionRefreshAction("error", { error: "Refresh delayed; retrying..." });
+      render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
+    }, WALLET_REFRESH_TIMEOUT_MS + 6000);
     await sleep(20);
     try {
       await Promise.race([
@@ -4365,10 +4378,19 @@ async function refreshWalletState({ force = false, deep = false, reason = "manua
         degraded: false
       };
     } catch (error) {
-      const isTimeout = error?.code === "TIMEOUT" || /timed out|timeout/i.test(String(error?.message || ""));
+      const isTimeout = error?.code === "TIMEOUT" || /timed out|timeout|blocked or could not open/i.test(String(error?.message || ""));
       if (state.walletRefreshRequestId === requestId) {
         state.walletRefreshStatus = isTimeout ? "timeout" : "error";
         state.walletRefreshError = error.message || "Refresh failed.";
+      }
+      // Self-heal: a transient timeout/network blip auto-retries once instead
+      // of leaving the user stuck on stale data having to tap Refresh.
+      if (isTimeout && !normalizedReason.includes("auto-retry") && state.user && state.token) {
+        window.setTimeout(() => {
+          if (state.user && state.token && state.walletRefreshStatus !== "success") {
+            void refreshWalletState({ force: false, deep: false, reason: "auto-retry-timeout" }).catch(() => {});
+          }
+        }, 4000);
       }
       perfMeasure("wallet-refresh-total", startedAt, {
         component: "wallet",
@@ -4390,6 +4412,10 @@ async function refreshWalletState({ force = false, deep = false, reason = "manua
         degraded: true
       };
     } finally {
+      if (walletRefreshWatchdog) {
+        window.clearTimeout(walletRefreshWatchdog);
+        walletRefreshWatchdog = null;
+      }
       if (state.walletRefreshRequestId === requestId) {
         state.walletRefreshing = false;
       }
