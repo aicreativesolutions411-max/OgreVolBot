@@ -306,7 +306,7 @@ test("Slime Scope refreshes its own bucket and Details buttons stay compact gree
 });
 
 test("mobile Live Terminal, Live Pairs, and Slime Scope refresh without resetting scroll position", () => {
-  assert.match(appSource, /MOBILE_STABLE_FEED_TABS = new Set\(\["terminal", "live", "slimeScope"\]\)/);
+  assert.match(appSource, /MOBILE_STABLE_FEED_TABS = new Set\(\["terminal", "live", "slimeScope", "kol", "watchlist", "liveTrades", "sniper"\]\)/);
   assert.match(functionBody("captureStableFeedScrollSnapshot"), /panel\.dataset\.renderedTab/);
   assert.match(functionBody("captureStableFeedScrollSnapshot"), /anchorKey/);
   assert.match(functionBody("restoreStableFeedScrollSnapshot"), /window\.scrollTo\(0, Math\.max\(0, \(window\.scrollY \|\| 0\) \+ delta\)\)/);

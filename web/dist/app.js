@@ -691,7 +691,7 @@ const TERMINAL_FEEDS = [
   { tabKey: "terminal", label: "Live Terminal", component: "terminalHtml", endpoint: "composite:/api/web/live-pairs+/api/web/kol/scan+/api/web/watchlist", category: "overview:terminal", refreshMs: 8_000, staleMs: 24_000, cacheKey: "terminal:overview", pageSize: 12, maxPageSize: 24, previewLimit: 8, supportsPagination: false },
   { tabKey: "live", label: "Cooks - New Solana Pairs", component: "livePairsHtml", endpoint: "/api/web/live-pairs", category: "pairs:new", refreshMs: 8_000, staleMs: 24_000, cacheKey: "pairs:{bucket}:{sort}", pageSize: 50, maxPageSize: 100, previewLimit: 12, supportsPagination: true },
   { tabKey: "liveTrades", label: "Live Trades - Recent Swaps", component: "liveTradesHtml", endpoint: "/api/web/pnl", category: "trades:recent", refreshMs: 8_000, staleMs: 20_000, cacheKey: "trades:recent", pageSize: 50, maxPageSize: 100, previewLimit: 10, supportsPagination: true },
-  { tabKey: "slimeScope", label: "Slime Scope - Scanner Picks", component: "slimeScopeHtml", endpoint: "composite:/api/web/live-pairs+/api/web/sniper/scan", category: "scanner:slime-scope", refreshMs: 20_000, staleMs: 45_000, cacheKey: "scanner:slime-scope:{scopeMode}", pageSize: 50, maxPageSize: 100, previewLimit: 12, supportsPagination: true },
+  { tabKey: "slimeScope", label: "Slime Scope - Scanner Picks", component: "slimeScopeHtml", endpoint: "composite:/api/web/live-pairs+/api/web/sniper/scan", category: "scanner:slime-scope", refreshMs: 20_000, staleMs: 45_000, cacheKey: "scanner:slime-scope:{scopeMode}", pageSize: 60, maxPageSize: 120, previewLimit: 30, supportsPagination: true },
   { tabKey: "kol", label: "KOL Tracker - Social/KOL Signals", component: "kolHtml", endpoint: "/api/web/kol/scan", category: "signals:kol", refreshMs: 10_000, staleMs: 30_000, cacheKey: "signals:kol:{kolMode}:{kolWallet}", pageSize: 36, maxPageSize: 72, previewLimit: 12, supportsPagination: true },
   { tabKey: "watchlist", label: "Watchlist - Your Saved Pairs", component: "watchlistHtml", endpoint: "/api/web/watchlist", category: "user:watchlist", refreshMs: 20_000, staleMs: 45_000, cacheKey: "user:watchlist", pageSize: 50, maxPageSize: 100, previewLimit: 12, supportsPagination: true },
   { tabKey: "smartChart", label: "Smart Chart - Selected Token", component: "smartChartHtml", endpoint: "composite:/api/web/positions", category: "token:selected-chart", refreshMs: 30_000, staleMs: 60_000, cacheKey: "token:selected-chart:{tokenMint}", pageSize: 5, maxPageSize: 10, previewLimit: 5, supportsPagination: false },
@@ -5462,7 +5462,7 @@ function requestSmartChartScrollIntoView(panel = document) {
   });
 }
 
-const MOBILE_STABLE_FEED_TABS = new Set(["terminal", "live", "slimeScope"]);
+const MOBILE_STABLE_FEED_TABS = new Set(["terminal", "live", "slimeScope", "kol", "watchlist", "liveTrades", "sniper"]);
 const STABLE_FEED_ROW_SELECTOR = [
   ".signal-row[data-token-chart]",
   ".terminal-token-row[data-token-chart]",
@@ -5541,6 +5541,9 @@ function restoreStableFeedScrollSnapshot(snapshot, panel = $("[data-panel]")) {
     }
     if (!restoredAnchor) restoreRawScrollPositions(currentPanel);
   };
+  // Restore synchronously first so the browser never paints the jumped
+  // (pulled) position; the rAF/timeout passes just correct any late reflow.
+  restore();
   requestAnimationFrame(() => {
     restore();
     window.setTimeout(restore, 90);

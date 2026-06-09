@@ -17868,7 +17868,7 @@ html body main.shell[data-app] .chart-preset-summary {
   }
 
   html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs button[data-active="true"]::after {
-    color: #071900 !important;
+    color: #eaffd9 !important;
   }
 }
 
@@ -18778,8 +18778,13 @@ html body main.shell[data-app] nav.tabs button {
   box-shadow: none !important;
 }
 html body main.shell[data-app] nav.tabs button[data-active="true"] {
-  background: rgba(98, 214, 70, 0.14) !important;
-  border-color: rgba(98, 214, 70, 0.4) !important;
+  background: rgba(98, 214, 70, 0.2) !important;
+  border-color: rgba(150, 255, 90, 0.9) !important;
+  box-shadow: 0 0 12px rgba(114, 255, 35, 0.3), inset 0 0 0 1px rgba(150, 255, 90, 0.25) !important;
+}
+/* Active nav label stays bright/readable everywhere (never dark-on-dark). */
+html body main.shell[data-app] nav.tabs button[data-active="true"]::after {
+  color: #eaffd9 !important;
 }
 /* === END SLIMEWIRE_V2_TERMINAL_20260608_V1 =========================== */
 
