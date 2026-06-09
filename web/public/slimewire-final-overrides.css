@@ -19584,3 +19584,104 @@ html body main.shell[data-app] .live-control-strip small {
   display: block !important;
 }
 /* === END PAIRS_CONTROLSTRIP_20260609_V1 ============================== */
+
+/* === TEK_HUB_20260609_V1 ===============================================
+   Ogre Tek hub: nav icon + landing deck with wallet bar and tool cards. */
+html body main.shell[data-app] .tabs button[data-tab="tek"]::before {
+  -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/dashboard.svg") !important;
+  mask-image: url("/assets/slimewire/svg/icons-v2/dashboard.svg") !important;
+}
+html body main.shell[data-app] .tek-hub {
+  display: grid;
+  gap: 16px;
+}
+html body main.shell[data-app] .tek-hub-title {
+  margin: 0;
+  font-size: 24px !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.06em;
+  color: var(--slime-green-strong, #bbff63) !important;
+  text-shadow: 0 0 16px rgba(114, 255, 35, 0.3);
+}
+html body main.shell[data-app] .tek-hub-head p {
+  color: var(--slime-muted, #8a988a) !important;
+  margin: 4px 0 0;
+}
+html body main.shell[data-app] .tek-wallet-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 18px;
+  padding: 12px 14px;
+  border: 1px solid rgba(120, 230, 120, 0.14);
+  border-radius: 12px;
+  background: rgba(7, 11, 8, 0.92);
+}
+html body main.shell[data-app] .tek-stat {
+  display: flex;
+  flex-direction: column;
+}
+html body main.shell[data-app] .tek-stat span {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #7d8c7c;
+}
+html body main.shell[data-app] .tek-stat strong {
+  font-size: 16px;
+  color: #f2f7f0;
+}
+html body main.shell[data-app] .tek-wallet-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+html body main.shell[data-app] .tek-tool-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+html body main.shell[data-app] .tek-tool-card {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+  text-align: left;
+  padding: 16px !important;
+  border: 1px solid rgba(120, 230, 120, 0.16) !important;
+  border-radius: 12px !important;
+  background: rgba(9, 14, 10, 0.95) !important;
+  cursor: pointer;
+  transition: border-color 0.14s ease, transform 0.12s ease, background 0.14s ease;
+}
+html body main.shell[data-app] .tek-tool-card:hover {
+  border-color: rgba(150, 255, 90, 0.6) !important;
+  background: rgba(16, 24, 18, 0.97) !important;
+  transform: translateY(-2px);
+}
+html body main.shell[data-app] .tek-tool-card strong {
+  font-size: 16px;
+  color: var(--slime-green-strong, #bbff63);
+}
+html body main.shell[data-app] .tek-tool-card small {
+  color: #9fb89c;
+  font-size: 12px;
+  line-height: 1.4;
+}
+html body main.shell[data-app] .tek-tool-icon {
+  width: 26px;
+  height: 26px;
+  background-color: var(--slime-green-strong, #bbff63);
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+html body main.shell[data-app] .tek-tool-icon[data-tek-icon="ogreAi"] { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/ogreAi.svg"); mask-image: url("/assets/slimewire/svg/icons-v2/ogreAi.svg"); }
+html body main.shell[data-app] .tek-tool-icon[data-tek-icon="volume"] { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/volume.svg"); mask-image: url("/assets/slimewire/svg/icons-v2/volume.svg"); }
+html body main.shell[data-app] .tek-tool-icon[data-tek-icon="bundle"] { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/bundle.svg"); mask-image: url("/assets/slimewire/svg/icons-v2/bundle.svg"); }
+html body main.shell[data-app] .tek-tool-icon[data-tek-icon="launchCoin"] { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/launchCoin.svg"); mask-image: url("/assets/slimewire/svg/icons-v2/launchCoin.svg"); }
+html body main.shell[data-app] .tek-tool-icon[data-tek-icon="launch"] { -webkit-mask-image: url("/assets/slimewire/svg/icons-v2/sniper.svg"); mask-image: url("/assets/slimewire/svg/icons-v2/sniper.svg"); }
+/* === END TEK_HUB_20260609_V1 ========================================= */

@@ -5599,6 +5599,7 @@ function renderTabs() {
   });
 
   if (state.activeTab === "terminal") panel.innerHTML = terminalHtml();
+  if (state.activeTab === "tek") panel.innerHTML = tekHubHtml();
   if (state.activeTab === "dashboard") panel.innerHTML = dashboardHtml();
   if (state.activeTab === "profile") panel.innerHTML = profileHtml();
   if (state.activeTab === "trade") panel.innerHTML = tradeHtml();
@@ -5654,6 +5655,52 @@ function renderTabs() {
   scheduleWatchlistAutoRefresh();
   scheduleActiveTerminalFeedRefresh();
   if (state.activeTab === "kol") void ensureKolDumpStats();
+}
+
+function tekWalletBarHtml() {
+  const realized = state.pnl?.totals?.realizedSol || "+0 SOL";
+  return `
+    <div class="tek-wallet-bar">
+      <div class="tek-stat"><span>Wallets</span><strong>${escapeHtml(state.wallets.length)}</strong></div>
+      <div class="tek-stat"><span>Total SOL</span><strong>${escapeHtml(totalSol().toFixed(4))}</strong></div>
+      <div class="tek-stat"><span>Positions</span><strong>${escapeHtml(state.positions?.length || 0)}</strong></div>
+      <div class="tek-stat"><span>Realized</span><strong>${escapeHtml(realized)}</strong></div>
+      <div class="tek-wallet-actions">
+        <button data-tab="positions">Positions</button>
+        <button data-tab="wallets">Wallets</button>
+        <button data-tab="kol">KOL</button>
+      </div>
+    </div>
+  `;
+}
+
+function tekHubHtml() {
+  const tools = [
+    ["ogreAi", "Ogre A.I.", "Auto-scan and ape the best pick by category."],
+    ["volume", "SlimeBot", "Auto-volume engine across recycled wallets."],
+    ["bundle", "Bundle", "Buy or sell one token across many wallets."],
+    ["launchCoin", "Launch", "Create and launch a Pump.fun token."],
+    ["launch", "Snipe", "Watch known tickers and new launches for entries."]
+  ];
+  return `
+    <section class="tek-hub">
+      <div class="tek-hub-head">
+        <div>
+          <h2 class="tek-hub-title">OGRE TEK</h2>
+          <p>Your pro automation deck. Pick a tool — wallets, positions, sponsors, and KOLs stay in view.</p>
+        </div>
+      </div>
+      ${tekWalletBarHtml()}
+      <div class="tek-tool-grid">
+        ${tools.map(([tab, label, desc]) => `
+          <button type="button" class="tek-tool-card" data-tab="${tab}">
+            <span class="tek-tool-icon" data-tek-icon="${tab}" aria-hidden="true"></span>
+            <strong>${escapeHtml(label)}</strong>
+            <small>${escapeHtml(desc)}</small>
+          </button>`).join("")}
+      </div>
+    </section>
+  `;
 }
 
 function dashboardHtml() {
