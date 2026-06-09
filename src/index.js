@@ -31997,12 +31997,10 @@ function isLivePairInRelaxedBucket(item, bucket) {
   if (ageMinutes === null) {
     return safeBucket === "live" && (livePairLooksFreshSignal(item) || isPumpStyleToken(item));
   }
-  // Relaxed windows are a bit wider than the strict bands so each tab still
-  // fills steadily when the strict band is thin.
-  if (safeBucket === "live") return ageMinutes >= 0 && ageMinutes < 90;
-  if (safeBucket === "under1h") return ageMinutes >= 45 && ageMinutes < 160;
-  if (safeBucket === "under3h") return ageMinutes >= 120 && ageMinutes < 420;
-  if (safeBucket === "under1d") return ageMinutes >= 1080 && ageMinutes < 2880;
+  if (safeBucket === "live") return ageMinutes >= 0 && ageMinutes < 120;
+  if (safeBucket === "under1h") return ageMinutes >= 5 && ageMinutes < 90;
+  if (safeBucket === "under3h") return ageMinutes >= 30 && ageMinutes < 240;
+  if (safeBucket === "under1d") return ageMinutes >= 60 && ageMinutes < 1440;
   return isLivePairInBucket(item, safeBucket);
 }
 

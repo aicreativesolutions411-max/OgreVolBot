@@ -27,28 +27,21 @@ test("normalizes seconds and milliseconds timestamps", () => {
 test("live-pair windows use pair creation age accurately", () => {
   const thirtySeconds = { pairCreatedAt: NOW - 30_000 };
   const thirtyMinutes = { pairCreatedAt: minutesAgo(30) };
-  const ninetyMinutes = { pairCreatedAt: minutesAgo(90) };
   const twoHours = { pairCreatedAt: minutesAgo(120) };
-  const fourHours = { pairCreatedAt: minutesAgo(240) };
   const fiveHours = { pairCreatedAt: minutesAgo(300) };
   const twentyThreeHours = { pairCreatedAt: minutesAgo(23 * 60) };
   const twentyFiveHours = { pairCreatedAt: minutesAgo(25 * 60) };
-  const fortyHours = { pairCreatedAt: minutesAgo(40 * 60) };
   const missing = {};
 
-  // Distinct bands: live 0-60, under1h 60-120, under3h 180-360, under1d 1440-2880.
   assert.equal(isLivePairInBucket(thirtySeconds, "live", NOW), true);
   assert.equal(isLivePairInBucket(thirtyMinutes, "live", NOW), true);
-  assert.equal(isLivePairInBucket(thirtyMinutes, "under1h", NOW), false);
-  assert.equal(isLivePairInBucket(ninetyMinutes, "under1h", NOW), true);
+  assert.equal(isLivePairInBucket(thirtyMinutes, "under1h", NOW), true);
   assert.equal(isLivePairInBucket(twoHours, "live", NOW), false);
   assert.equal(isLivePairInBucket(twoHours, "under1h", NOW), false);
-  assert.equal(isLivePairInBucket(twoHours, "under3h", NOW), false);
-  assert.equal(isLivePairInBucket(fourHours, "under3h", NOW), true);
-  assert.equal(isLivePairInBucket(fiveHours, "under3h", NOW), true);
-  assert.equal(isLivePairInBucket(twentyThreeHours, "under1d", NOW), false);
-  assert.equal(isLivePairInBucket(twentyFiveHours, "under1d", NOW), true);
-  assert.equal(isLivePairInBucket(fortyHours, "under1d", NOW), true);
+  assert.equal(isLivePairInBucket(twoHours, "under3h", NOW), true);
+  assert.equal(isLivePairInBucket(fiveHours, "under3h", NOW), false);
+  assert.equal(isLivePairInBucket(twentyThreeHours, "under1d", NOW), true);
+  assert.equal(isLivePairInBucket(twentyFiveHours, "under1d", NOW), false);
   assert.equal(isLivePairInBucket(missing, "under1d", NOW), false);
 });
 

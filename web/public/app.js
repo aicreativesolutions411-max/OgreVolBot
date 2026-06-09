@@ -578,19 +578,22 @@ function resumeLivePairsAfterDetailsClose() {
 function patchLivePairsFeedInPlace() {
   if (state.activeTab !== "live") return false;
   const panel = $("[data-panel]");
-  const feed = panel?.querySelector(".cooks-feed");
-  if (!panel || !feed) return false;
+  const list = panel?.querySelector(".signal-list");
+  if (!panel || !list) return false;
   const activeLivePairs = currentLivePairs();
   const rawRows = uniqueSignalRows(activeLivePairs?.rows || []);
   const allRows = terminalLaunchFilteredRows(rawRows);
-  if (!allRows.length) return false; // fall back to full render for empty state
-  // Rebuild Best Picks + Newest in place (rotates picks, refreshes newest)
-  // without tearing down the controls or jumping scroll.
-  feed.outerHTML = cooksFeedHtml(allRows);
+  const rows = terminalFeedRowsWindow("live", allRows);
+  if (!rows.length) return false; // fall back to full render for empty state
+  list.outerHTML = tokenSignalRowsHtml(rows, {
+    context: "live",
+    shareBuilder: livePairShareText,
+    hideToolbar: true
+  });
   const countLabel = panel.querySelector(".terminal-title-row span");
   if (countLabel) {
     const bucketLabel = LIVE_PAIR_BUCKETS.find(([bucket]) => bucket === state.livePairBucket)?.[1] || "Live";
-    countLabel.textContent = `${bucketLabel} | ${allRows.length} live`;
+    countLabel.textContent = `${bucketLabel} | ${rows.length}/${allRows.length} shown`;
   }
   return true;
 }
@@ -676,9 +679,9 @@ function debugCounter(name) {
 
 const LIVE_PAIR_BUCKETS = [
   ["live", "Fresh"],
-  ["under1h", "1-2h"],
-  ["under3h", "3-6h"],
-  ["under1d", "24-48h"]
+  ["under1h", "Last 1h"],
+  ["under3h", "Last 3h"],
+  ["under1d", "Last 24h"]
 ];
 
 const LIVE_PAIR_SORTS = [
@@ -726,7 +729,7 @@ const TERMINAL_FEEDS = [
   { tabKey: "terminal", label: "Live Terminal", component: "terminalHtml", endpoint: "composite:/api/web/live-pairs+/api/web/kol/scan+/api/web/watchlist", category: "overview:terminal", refreshMs: 8_000, staleMs: 24_000, cacheKey: "terminal:overview", pageSize: 12, maxPageSize: 24, previewLimit: 8, supportsPagination: false },
   { tabKey: "live", label: "Cooks - New Solana Pairs", component: "livePairsHtml", endpoint: "/api/web/live-pairs", category: "pairs:new", refreshMs: 8_000, staleMs: 24_000, cacheKey: "pairs:{bucket}:{sort}", pageSize: 50, maxPageSize: 100, previewLimit: 12, supportsPagination: true },
   { tabKey: "liveTrades", label: "Live Trades - Recent Swaps", component: "liveTradesHtml", endpoint: "/api/web/pnl", category: "trades:recent", refreshMs: 8_000, staleMs: 20_000, cacheKey: "trades:recent", pageSize: 50, maxPageSize: 100, previewLimit: 10, supportsPagination: true },
-  { tabKey: "slimeScope", label: "Slime Scope - Scanner Picks", component: "slimeScopeHtml", endpoint: "composite:/api/web/live-pairs+/api/web/sniper/scan", category: "scanner:slime-scope", refreshMs: 10_000, staleMs: 30_000, cacheKey: "scanner:slime-scope:{scopeMode}", pageSize: 60, maxPageSize: 120, previewLimit: 30, supportsPagination: true },
+  { tabKey: "slimeScope", label: "Slime Scope - Scanner Picks", component: "slimeScopeHtml", endpoint: "composite:/api/web/live-pairs+/api/web/sniper/scan", category: "scanner:slime-scope", refreshMs: 20_000, staleMs: 45_000, cacheKey: "scanner:slime-scope:{scopeMode}", pageSize: 60, maxPageSize: 120, previewLimit: 30, supportsPagination: true },
   { tabKey: "kol", label: "KOL Tracker - Social/KOL Signals", component: "kolHtml", endpoint: "/api/web/kol/scan", category: "signals:kol", refreshMs: 10_000, staleMs: 30_000, cacheKey: "signals:kol:{kolMode}:{kolWallet}", pageSize: 36, maxPageSize: 72, previewLimit: 12, supportsPagination: true },
   { tabKey: "watchlist", label: "Watchlist - Your Saved Pairs", component: "watchlistHtml", endpoint: "/api/web/watchlist", category: "user:watchlist", refreshMs: 20_000, staleMs: 45_000, cacheKey: "user:watchlist", pageSize: 50, maxPageSize: 100, previewLimit: 12, supportsPagination: true },
   { tabKey: "smartChart", label: "Smart Chart - Selected Token", component: "smartChartHtml", endpoint: "composite:/api/web/positions", category: "token:selected-chart", refreshMs: 30_000, staleMs: 60_000, cacheKey: "token:selected-chart:{tokenMint}", pageSize: 5, maxPageSize: 10, previewLimit: 5, supportsPagination: false },
@@ -17252,37 +17255,6 @@ function txAuditResultHtml(audit) {
   `;
 }
 
-// Rotating Best Picks for the current Cooks bucket: top scored, with the #1
-// sticky so the lead is stable while the rest rotate each refresh.
-function cooksBestPickRows(allRows = []) {
-  const scored = [...allRows].sort((a, b) => (
-    Number(b.bestPickScore || b.score || 0) - Number(a.bestPickScore || a.score || 0)
-    || compareNewestLiveRows(a, b)
-  ));
-  return rotatedDisplayRows(scored, 5, terminalRotationKey("cooks-best"), 1);
-}
-
-// Cooks feed body: a rotating Best Picks 5 on top, then the newest pairs
-// below (steady refresh). Shared by livePairsHtml and the in-place patch so
-// both stay identical. Rows render in the tight Cooks .signal-row style.
-function cooksFeedHtml(allRows = []) {
-  const best = cooksBestPickRows(allRows);
-  const bestMints = new Set(best.map(tokenMintKey).filter(Boolean));
-  const newestAll = [...allRows].sort(compareNewestLiveRows).filter((row) => !bestMints.has(tokenMintKey(row)));
-  const newest = terminalFeedRowsWindow("live", newestAll);
-  return `
-    <div class="cooks-feed">
-      ${best.length ? `<div class="cooks-section" data-cooks-best>
-        <div class="cooks-section-label"><strong>Best Picks</strong><span>Top ${best.length} · rotating each refresh</span></div>
-        ${tokenSignalRowsHtml(best, { context: "live", shareBuilder: livePairShareText, hideToolbar: true })}
-      </div>` : ""}
-      <div class="cooks-section" data-cooks-newest>
-        <div class="cooks-section-label"><strong>Newest</strong><span>Live launches · steady refresh</span></div>
-        ${newest.length ? tokenSignalRowsHtml(newest, { context: "live", shareBuilder: livePairShareText, hideToolbar: true }) : emptyState("Scanning fresh pairs", "Newest launches fill here as they qualify.")}
-      </div>
-    </div>`;
-}
-
 function livePairsHtml() {
   const activeLivePairs = currentLivePairs();
   const rawRows = uniqueSignalRows(activeLivePairs?.rows || []);
@@ -17332,8 +17304,7 @@ function livePairsHtml() {
         </div>
         ${terminalLaunchFilterPanelHtml("live", { rawCount: rawRows.length, visibleCount: allRows.length })}
         ${terminalLaunchFilterSummaryHtml(rawRows, allRows)}
-        ${fastPresetToolbarHtml("live")}
-        ${allRows.length ? cooksFeedHtml(allRows) : launchFilterActive ? terminalLaunchFilterEmptyState(rawRows, `${activeBucketLabel.toLowerCase()} pairs`) : emptyState("No live pairs yet", "Keep this tab open or tap Refresh Live. Trade safety checks run before any buy.")}
+        ${rows.length ? livePairRowsHtml(rows) : launchFilterActive ? terminalLaunchFilterEmptyState(rawRows, `${activeBucketLabel.toLowerCase()} pairs`) : emptyState("No live pairs yet", "Keep this tab open or tap Refresh Live. Trade safety checks run before any buy.")}
         ${terminalFeedLoadMoreHtml("live", allRows, `${activeBucketLabel} pairs`)}
       </main>
     </section>
@@ -17342,10 +17313,10 @@ function livePairsHtml() {
 
 function livePairBucketDescription(bucket) {
   const descriptions = {
-    live: "Brand-new launches under an hour old. Best Picks rotates the strongest; Newest streams them as they appear.",
-    under1h: "Pairs aged about 1 to 2 hours - past the first-minute chaos, early momentum still forming.",
-    under3h: "Pairs aged about 3 to 6 hours - established enough to show a real volume and liquidity trend.",
-    under1d: "Pairs aged about 24 to 48 hours - day-old survivors ranked by liquidity, volume, momentum, and risk."
+    live: "Fresh launch feed. Focuses on pairs that just appeared, usually under 60 seconds old.",
+    under1h: "Pairs created in the last 60 minutes, with lower-quality tiny caps pushed down.",
+    under3h: "Pairs created in the last 3 hours, refreshed with broader liquidity and volume data.",
+    under1d: "Pairs created in the last 24 hours, ranked by current liquidity, volume, momentum, and risk."
   };
   return descriptions[bucket] || descriptions.live;
 }

@@ -1,10 +1,8 @@
-// Distinct age bands per tab (not cumulative): Fresh = brand-new launches,
-// then 1-2h, 3-6h, and 24-48h windows so each tab is its own slice.
 export const LIVE_PAIR_BUCKETS = Object.freeze({
-  live: { label: "Fresh", minMinutes: 0, maxMinutes: 60 },
-  under1h: { label: "1-2h", minMinutes: 60, maxMinutes: 120 },
-  under3h: { label: "3-6h", minMinutes: 180, maxMinutes: 360 },
-  under1d: { label: "24-48h", minMinutes: 1440, maxMinutes: 2880 }
+  live: { label: "Fresh Launches", minMinutes: 0, maxMinutes: 120 },
+  under1h: { label: "Last 1h", minMinutes: 0, maxMinutes: 60 },
+  under3h: { label: "Last 3h", minMinutes: 0, maxMinutes: 180 },
+  under1d: { label: "Last 24h", minMinutes: 0, maxMinutes: 1440 }
 });
 
 export function normalizeLivePairBucket(bucket) {
