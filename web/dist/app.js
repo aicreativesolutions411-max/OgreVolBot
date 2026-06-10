@@ -311,7 +311,8 @@ const state = {
         : "terminal",
   terminalSubtab: "positions",
   terminalSort: "best",
-  liveFeedCategory: "best",
+  liveFeedCategory: (() => { try { return localStorage.getItem("liveFeedCategory") || "best"; } catch { return "best"; } })(),
+  cookSpotCategory: (() => { try { return localStorage.getItem("cookSpotCategory") || "dexTrending"; } catch { return "dexTrending"; } })(),
   terminalLaunchFilters: {
     open: false,
     keywords: "",
@@ -617,6 +618,13 @@ function reconcileSignalListRows(liveList, nextList) {
 // Reconcile the Cooks feed (Best Picks + Newest) in place. Returns false to ask
 // for a full rebuild when the section structure changed (rare).
 function reconcileCooksFeedInPlace(liveFeed, nextFeed) {
+  // Keep the count + "updated Xs ago" line fresh without touching the dropdown,
+  // which lives in the section label and stays put across refreshes.
+  const liveMeta = liveFeed.querySelector(":scope > [data-cooks-meta]");
+  const nextMeta = nextFeed.querySelector(":scope > [data-cooks-meta]");
+  if (nextMeta && !liveMeta) liveFeed.insertBefore(nextMeta, liveFeed.firstChild);
+  else if (liveMeta && !nextMeta) liveMeta.remove();
+  else if (liveMeta && nextMeta && liveMeta.innerHTML !== nextMeta.innerHTML) liveMeta.innerHTML = nextMeta.innerHTML;
   for (const sel of ["[data-cooks-best]", "[data-cooks-newest]"]) {
     const liveSection = liveFeed.querySelector(`:scope > ${sel}`);
     const nextSection = nextFeed.querySelector(`:scope > ${sel}`);
@@ -775,6 +783,21 @@ const LIVE_FEED_CATEGORIES = [
   ["liquidity", "High Liquidity", "Deepest pools", "liquidity"],
   ["boosted", "Recently Boosted", "Paid DEX boosts + surges", "volume"],
   ["hot", "Hot Pairs", "Momentum leaders", "momentum"]
+];
+
+// Cook Spot (Slime Scope) DEX-discovery categories. [id, label, sub-caption].
+// These rank the broader scope pool toward DEX/boosted/pump discovery so Cook Spot
+// surfaces different pairs than the Live Feed.
+const COOK_SPOT_CATEGORIES = [
+  ["dexTrending", "DEX Trending", "Trending across DEX pairs"],
+  ["dexBoosted", "DEX Boosted", "Paid DEX boosts"],
+  ["pumpTrending", "Pump.fun Trending", "Hot pump-curve launches"],
+  ["dextools", "DEXTools Trending", "High-activity DEX movers"],
+  ["dexscreener", "DexScreener Trending", "Trending on DexScreener"],
+  ["memeMovers", "Meme Coin Movers", "Top meme % movers"],
+  ["earlyMomentum", "Early Momentum", "Young pairs building"],
+  ["highActivity", "High Activity", "Most transactions"],
+  ["hotNew", "Hot New Pairs", "Fresh + heating up"]
 ];
 
 const TERMINAL_LAUNCH_SOCIAL_FILTERS = [
@@ -14848,6 +14871,7 @@ function terminalSignalRowsHtml(rows, options = {}) {
               <div class="terminal-token-title">
                 <strong data-token-chart="${escapeHtml(row.tokenMint)}" data-token-chart-source="terminal-title">${escapeHtml(row.symbol || row.shortMint || shortAddress(row.tokenMint))}</strong>
                 <small>${escapeHtml(row.name || row.category || "Token")}</small>
+                ${isKolContext ? "" : liveFeedRowBadgeHtml(row)}
                 ${slimeShieldMiniHtml(row)}
               </div>
               <button type="button" class="ca-copy" data-copy="${escapeHtml(row.tokenMint)}">${escapeHtml(shortAddress(row.tokenMint))}</button>
@@ -14888,9 +14912,10 @@ function compactSignalRowsHtml(rows, options = {}) {
         <article class="compact-signal-row ${isKolContext ? "is-kol-signal" : ""}" data-token-chart="${escapeHtml(row.tokenMint)}" data-token-chart-source="compact-row">
           ${livePairAvatarHtml(row, { priority: index < 8 })}
           <div class="compact-signal-main">
-            <div>
+            <div class="compact-name-row">
               <strong data-token-chart="${escapeHtml(row.tokenMint)}" data-token-chart-source="compact-title">${escapeHtml(row.symbol || row.shortMint || shortAddress(row.tokenMint))}</strong>
               <small>${escapeHtml(row.name || row.category || "Token")}</small>
+              ${isKolContext ? "" : liveFeedRowBadgeHtml(row)}
             </div>
             <button type="button" class="ca-copy" data-copy="${escapeHtml(row.tokenMint)}">${escapeHtml(shortAddress(row.tokenMint))}</button>
             <span>${escapeHtml(row.pairAgeLabel || formatAgeFromRow(row) || "age unknown")} | ${escapeHtml(row.scalpSetup || row.momentum || row.category || "live")}</span>
@@ -15554,35 +15579,32 @@ function slimeScopeDesktopColumnsHtml() {
 }
 
 function slimeScopeHtml() {
-  const modes = [
-    ["new", "New"],
-    ["steady", "Steady"],
-    ["graduating", "Graduating"],
-    ["graduated", "Graduated"]
-  ];
+  const category = currentCookSpotCategory();
+  const [, , catSub] = category;
   const scopeBucket = slimeScopeLivePairBucketForMode(state.slimeScopeMode);
   const scopeRuntime = terminalFeedRuntime("slimeScope");
   const scopeLoading = Boolean(scopeRuntime.inFlight || state.livePairsLoadingByBucket?.[scopeBucket]);
-  const allRows = slimeScopeRows();
+  const refreshError = state.livePairsRefreshErrorByBucket?.[scopeBucket];
+  const allRows = uniqueSignalRows(rankCookSpotRows(slimeScopeSourceRows(), category[0]));
   const rows = terminalFeedRowsWindow("slimeScope", allRows);
+  const listBody = rows.length
+    ? compactSignalRowsHtml(rows, { layout: "terminal", limit: Math.max(1, rows.length), actionLabel: "Trade" })
+    : refreshError
+      ? emptyState("Unable to load pairs. Try refreshing.", "Cook Spot hit a snag — it keeps retrying, or tap Refresh Scope.")
+      : scopeLoading
+        ? emptyState("Loading Cook Spot…", "Scanning DEX, boosted, and pump pairs for this category.")
+        : emptyState("No pairs found for this filter yet", "Try another category — Cook Spot keeps scanning in the background.");
   return `
     <section class="slime-scope-page">
       <div class="command-controls slime-scope-controls">
-        <div class="mode-row terminal-modes slime-scope-tabs">
-          ${modes.map(([mode, label]) => `<button data-slime-scope-mode="${mode}" data-active="${state.slimeScopeMode === mode}">${label}</button>`).join("")}
-        </div>
+        <div class="cooks-category-label cook-spot-head">${cookSpotCategoryDropdownHtml(category)}<span>${escapeHtml(catSub)}</span></div>
+        ${cooksFeedMetaHtml(allRows.length, currentLivePairsUpdatedAt())}
         ${quickBuyPresetBarHtml("slime-scope")}
         <button class="primary slime-scope-refresh-button" data-refresh-live-pairs ${scopeLoading ? "disabled" : ""}>${scopeLoading ? "Refreshing..." : "Refresh Scope"}</button>
       </div>
       <article class="terminal-panel slime-scope-list-panel">
-        ${compactSignalRowsHtml(rows, {
-          layout: "terminal",
-          limit: Math.max(1, rows.length),
-          actionLabel: "Trade",
-          emptyTitle: "No Slime Scope pairs yet",
-          emptyMessage: "Feeds are refreshing. Try a different scope mode if this stays empty."
-        })}
-        ${terminalFeedLoadMoreHtml("slimeScope", allRows, "Slime Scope pairs")}
+        ${listBody}
+        ${terminalFeedLoadMoreHtml("slimeScope", allRows, "Cook Spot pairs")}
       </article>
       ${slimeScopeDesktopColumnsHtml()}
     </section>
@@ -17338,13 +17360,105 @@ function liveFeedCategoryDropdownHtml(category = currentLiveFeedCategory()) {
     </label>`;
 }
 
+// A small "why is this pair shown" chip, derived from the row's own real signals.
+function liveFeedRowBadge(row = {}) {
+  if (liveFeedIsBoosted(row)) return { cls: "boost", text: "⚡ Boosted" };
+  const change = liveFeedChangeScore(row);
+  if (change >= 40) return { cls: "gain", text: `▲ ${Math.round(change)}%` };
+  const ageMinutes = Number(row.pairAgeMinutes);
+  if (Number.isFinite(ageMinutes) && ageMinutes >= 0 && ageMinutes <= 10) return { cls: "fresh", text: "✨ Fresh" };
+  if (liveFeedMomentumScore(row) >= 25) return { cls: "hot", text: "🔥 Hot" };
+  if (liveFeedBuyPressure(row) >= 0.7 && liveFeedTxnCount(row) >= 24) return { cls: "active", text: "● Active" };
+  return null;
+}
+
+function liveFeedRowBadgeHtml(row = {}) {
+  const badge = liveFeedRowBadge(row);
+  return badge ? `<span class="signal-badge signal-badge-${badge.cls}">${escapeHtml(badge.text)}</span>` : "";
+}
+
+// Cook Spot (Slime Scope) discovery ranking — biased toward DEX/boosted/pump pairs.
+function cookSpotIsPump(row = {}) {
+  if (row.isPump || row.pump || row.pumpFun || row.pumpUrl) return true;
+  const tag = `${row.source || ""} ${row.category || ""} ${row.dexId || ""} ${row.dexName || ""}`.toLowerCase();
+  return tag.includes("pump");
+}
+
+function cookSpotIsMeme(row = {}) {
+  const tag = `${row.name || ""} ${row.symbol || ""} ${row.category || ""}`.toLowerCase();
+  return cookSpotIsPump(row) || /meme|dog|cat|pepe|wif|inu|elon|moon|bonk|frog|chad/.test(tag);
+}
+
+function currentCookSpotCategory() {
+  const id = state.cookSpotCategory || "dexTrending";
+  return COOK_SPOT_CATEGORIES.find(([cid]) => cid === id) || COOK_SPOT_CATEGORIES[0];
+}
+
+function rankCookSpotRows(rows = [], categoryId = "dexTrending") {
+  const list = [...rows];
+  switch (categoryId) {
+    case "dexBoosted": {
+      const boosted = list.filter(liveFeedIsBoosted).sort((a, b) => liveFeedVolumeScore(b) - liveFeedVolumeScore(a));
+      const rest = list.filter((row) => !liveFeedIsBoosted(row)).sort((a, b) => liveFeedTrendScore(b) - liveFeedTrendScore(a));
+      return [...boosted, ...rest];
+    }
+    case "pumpTrending": {
+      const pump = list.filter(cookSpotIsPump);
+      return (pump.length ? pump : list).sort((a, b) => liveFeedTrendScore(b) - liveFeedTrendScore(a));
+    }
+    case "dextools":
+    case "highActivity":
+      return list.sort((a, b) => liveFeedTxnCount(b) - liveFeedTxnCount(a));
+    case "memeMovers": {
+      const meme = list.filter(cookSpotIsMeme);
+      return (meme.length ? meme : list).sort((a, b) => liveFeedChangeScore(b) - liveFeedChangeScore(a));
+    }
+    case "earlyMomentum": {
+      const young = list.filter((row) => {
+        const age = Number(row.pairAgeMinutes);
+        return !Number.isFinite(age) || age <= 180;
+      });
+      return (young.length ? young : list).sort((a, b) => liveFeedMomentumScore(b) - liveFeedMomentumScore(a));
+    }
+    case "hotNew": {
+      const fresh = list.filter((row) => {
+        const age = Number(row.pairAgeMinutes);
+        return !Number.isFinite(age) || age <= 60;
+      });
+      return (fresh.length ? fresh : list).sort((a, b) => liveFeedTrendScore(b) - liveFeedTrendScore(a));
+    }
+    case "dexscreener":
+    case "dexTrending":
+    default:
+      return list.sort((a, b) => liveFeedTrendScore(b) - liveFeedTrendScore(a));
+  }
+}
+
+function cookSpotCategoryDropdownHtml(category = currentCookSpotCategory()) {
+  const [activeId] = category;
+  return `
+    <label class="cooks-category-select" title="Pick how Cook Spot is ranked">
+      <span class="cooks-category-cap">Discover</span>
+      <select data-cook-spot-category aria-label="Cook Spot category">
+        ${COOK_SPOT_CATEGORIES.map(([id, label]) => `<option value="${id}"${id === activeId ? " selected" : ""}>${escapeHtml(label)}</option>`).join("")}
+      </select>
+    </label>`;
+}
+
 // Cooks feed body: a rotating Best Picks 5 on top, then the newest pairs
 // below (steady refresh). Shared by livePairsHtml and the in-place patch so
 // both stay identical. Rows render in the tight Cooks .signal-row style.
+function cooksFeedMetaHtml(count = 0, updatedIso = "") {
+  const seconds = secondsSince(updatedIso);
+  const updated = seconds === null ? "live" : ageTextFromSeconds(seconds);
+  return `<div class="cooks-meta" data-cooks-meta><span><b>${count}</b> ${count === 1 ? "pair" : "pairs"}</span><span aria-hidden="true">·</span><span>updated ${escapeHtml(updated)}</span></div>`;
+}
+
 function cooksFeedHtml(allRows = []) {
   const category = currentLiveFeedCategory();
   const [catId, , catSub] = category;
   const dropdown = liveFeedCategoryDropdownHtml(category);
+  const meta = cooksFeedMetaHtml(allRows.length, currentLivePairsUpdatedAt());
   const rowOptions = { context: "live", shareBuilder: livePairShareText, hideToolbar: true };
   // "Best Picks" keeps the curated rotating-5 + Newest split. Every other category
   // is a single ranked list of pairs that reflect that category (so it never just
@@ -17356,6 +17470,7 @@ function cooksFeedHtml(allRows = []) {
     const newest = terminalFeedRowsWindow("live", newestAll);
     return `
     <div class="cooks-feed">
+      ${meta}
       <div class="cooks-section" data-cooks-best>
         <div class="cooks-section-label cooks-category-label">${dropdown}<span>Top ${best.length} · rotating each refresh</span></div>
         ${best.length ? tokenSignalRowsHtml(best, rowOptions) : emptyState("No pairs found for this filter yet", "Keep this tab open or tap Refresh — picks fill in as pairs qualify.")}
@@ -17370,6 +17485,7 @@ function cooksFeedHtml(allRows = []) {
   const primary = terminalFeedRowsWindow("live", ranked);
   return `
     <div class="cooks-feed">
+      ${meta}
       <div class="cooks-section" data-cooks-best>
         <div class="cooks-section-label cooks-category-label">${dropdown}<span>${escapeHtml(catSub)}</span></div>
         ${primary.length ? tokenSignalRowsHtml(primary, rowOptions) : emptyState("No pairs found for this filter yet", "Try another category or time window — the feed keeps scanning in the background.")}
@@ -17519,6 +17635,7 @@ function tokenSignalRowHtml(row, index, options = {}) {
           <div class="signal-name-row">
             <strong data-token-chart="${escapeHtml(row.tokenMint)}" data-token-chart-source="${escapeHtml(options.context || "signal-title")}">${escapeHtml(row.symbol || row.shortMint || shortAddress(row.tokenMint))}</strong>
             <small>${escapeHtml(row.name || row.category || "Token")}</small>
+            ${isKolContext ? "" : liveFeedRowBadgeHtml(row)}
           </div>
           <button type="button" class="ca-copy" data-copy="${escapeHtml(row.tokenMint)}">${escapeHtml(shortAddress(row.tokenMint))}</button>
           <div class="signal-links">
@@ -21320,12 +21437,20 @@ document.addEventListener("change", async (event) => {
   }
   if (target?.matches?.("[data-live-feed-category]")) {
     state.liveFeedCategory = target.value || "best";
+    try { localStorage.setItem("liveFeedCategory", state.liveFeedCategory); } catch {}
     // Warm the server pool with the closest backend sort so client ranking has
     // the right pairs to work with.
     state.terminalSort = currentLiveFeedCategory()[3] || "best";
     resetTerminalFeedVisibleLimit("live");
     render();
     runDeferredUiTask(() => refreshLivePairBuckets({ silent: true, force: true }));
+  }
+  if (target?.matches?.("[data-cook-spot-category]")) {
+    state.cookSpotCategory = target.value || "dexTrending";
+    try { localStorage.setItem("cookSpotCategory", state.cookSpotCategory); } catch {}
+    resetTerminalFeedVisibleLimit("slimeScope");
+    render();
+    runDeferredUiTask(() => refreshTerminalFeed("slimeScope", { force: true, reason: "cook-spot-category" }));
   }
   if (target?.matches?.("[data-terminal-filter-social], [data-terminal-filter-quote], [data-terminal-filter-audit]")) {
     const filters = terminalLaunchFilterState();
