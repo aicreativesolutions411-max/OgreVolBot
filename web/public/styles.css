@@ -1544,9 +1544,9 @@ button:disabled {
 .tabs button[data-tab="smartChart"]::before { background-image: url("./assets/slimewire/svg/icons/slime-scope.svg"); }
 .tabs button[data-tab="tek"]::before { background-image: url("./assets/slimewire/svg/icons/settings.svg"); }
 
-/* Desktop default: the mobile-only section bar + chips are hidden (see overrides for mobile). */
+/* Desktop default: the mobile-only bottom bar + chips are hidden (see overrides for mobile). */
 .subnav-chips { display: none; }
-.section-bar { display: none; }
+.bottom-bar { display: none; }
 
 .panel-host {
   min-height: 280px;

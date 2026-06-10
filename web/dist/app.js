@@ -947,10 +947,10 @@ function navSectionTabVisible(entry) {
   return true;
 }
 
-// Renders the mobile top section bar + the active section's chip row. Both use plain
-// data-tab / data-nav-section buttons so the existing click handler does all the routing.
+// Renders the mobile bottom bar + the active section's chip row. Both use plain data-tab /
+// data-nav-section buttons so the existing click handler does all the routing.
 function syncMobileNav() {
-  const bar = $("[data-section-bar]");
+  const bar = $("[data-bottom-bar]");
   const chips = $("[data-subnav-chips]");
   const activeSection = navSectionForTab(state.activeTab);
   if (bar) {
@@ -21539,7 +21539,7 @@ document.addEventListener("click", async (event) => {
   }
 
   if (target.matches("[data-nav-section]")) {
-    // Mobile section-bar tap: if already inside this section keep the current tab (just
+    // Mobile bottom-bar tap: if already inside this section keep the current tab (just
     // refresh the chip row); otherwise jump to the section's primary tab. The chips below
     // (plain data-tab buttons) handle switching between a section's tabs.
     const section = NAV_SECTIONS.find((entry) => entry.key === target.dataset.navSection);
