@@ -95,20 +95,20 @@ test("mobile right rail is fixed and Ogre Tools stays user-controlled", () => {
 test("mobile bottom bar + chips expose every tool without a wall of tabs", () => {
   // Mobile now uses a fixed 5-section bottom bar + a chip row instead of the long tab
   // strip, so nothing is missed (Pump Launch / Sniper / Ogre A.I. are now surfaced).
-  assert.match(htmlSource, /<nav class="bottom-bar" data-bottom-bar/);
+  assert.match(htmlSource, /<nav class="section-bar" data-section-bar/);
   assert.match(htmlSource, /<div class="subnav-chips" data-subnav-chips/);
-  // Bottom bar + chips render from the NAV_SECTIONS source of truth.
+  // Section bar + chips render from the NAV_SECTIONS source of truth.
   assert.match(appSource, /const NAV_SECTIONS = \[/);
   assert.match(appSource, /function syncMobileNav\(\)/);
-  assert.match(functionBody(appSource, "syncMobileNav"), /data-bottom-bar[\s\S]*data-subnav-chips/);
+  assert.match(functionBody(appSource, "syncMobileNav"), /data-section-bar[\s\S]*data-subnav-chips/);
   assert.match(appSource, /target\.matches\("\[data-nav-section\]"\)/);
   // The previously-buried high-value tabs are now first-class nav entries.
   for (const tab of ["launchCoin", "sniper", "ogreAi"]) {
     assert.match(appSource, new RegExp(`tab: "${tab}"`));
   }
-  // CSS: the desktop tab strip is hidden on mobile and the bottom bar takes over.
+  // CSS: the desktop tab strip is hidden on mobile and the top section bar takes over.
   assert.match(cssSource, /\[data-app\]\[data-route="terminal"\] \.tabs \{ display: none; \}/);
-  assert.match(cssSource, /\.bottom-bar \{\s*display: flex;/);
+  assert.match(cssSource, /\.section-bar \{\s*display: flex;/);
   // Every desktop nav label still exists (full tool list), just regrouped into 5 sections.
   const labels = [...htmlSource.matchAll(/<button[^>]*data-label="([^"]+)"[^>]*>/g)]
     .filter((match) => !/\shidden(?:\s|>|=)/.test(match[0]))
