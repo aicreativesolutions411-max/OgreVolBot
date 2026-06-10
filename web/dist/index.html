@@ -18,12 +18,12 @@
     <link rel="preload" as="image" href="/assets/slimewire/svg/icons/wallet.svg">
     <link rel="preload" as="image" href="/assets/slimewire/svg/powered-by-ogres-badge.svg">
     <link rel="stylesheet" href="/tailwind.css?v=20260603-tailwind-v1">
-    <link rel="stylesheet" href="/styles.css?v=20260610205429">
-    <link rel="stylesheet" href="/slimewire-final-overrides.css?v=20260610205429">
+    <link rel="stylesheet" href="/styles.css?v=20260610203710">
+    <link rel="stylesheet" href="/slimewire-final-overrides.css?v=20260610203710">
     <script defer src="/config.js"></script>
     <script defer src="/vendor/tweetnacl-fast.min.js"></script>
     <script defer src="/vendor/solana-web3.iife.min.js?v=20260605-browser-trade-v1"></script>
-    <script type="module" src="/app.js?v=20260610205429"></script>
+    <script type="module" src="/app.js?v=20260610203710"></script>
   </head>
   <body>
     <main class="shell" data-app data-route="intro">
@@ -444,38 +444,30 @@
         </section>
 
         <nav class="tabs" aria-label="Portal views">
-          <span class="nav-section-label">Discover</span>
+          <span class="nav-section-label">Terminal</span>
           <button data-tab="terminal" data-active="true" data-label="Live" title="Live Terminal - your main command center for live pairs, best picks, KOL signals, and fast trades." aria-label="Live Terminal - main command center">Live Terminal</button>
-          <button data-tab="live" data-label="Cooks" title="Cooks - scan fresh and trending token pairs cooking right now." aria-label="Cooks scanner">Cooks</button>
-          <button data-tab="slimeScope" data-label="Scope" title="Slime Scope - scan fresh, graduating, and graduated pump-style movement." aria-label="Slime Scope scanner">Slime Scope</button>
-          <button data-tab="liveTrades" data-label="Trades" title="Live Trades - review live market activity and trade flow." aria-label="Live Trades feed">Live Trades</button>
-          <button data-tab="kol" data-label="KOL" title="KOL Tracker - watch KOL wallets, public signals, and copy-trade candidates." aria-label="KOL Tracker">KOL Tracker</button>
-          <button data-tab="watchlist" data-label="Watch" title="Watchlist - saved coins you are watching and their movement." aria-label="Watchlist">Watchlist</button>
-          <span class="nav-section-label">Trade</span>
-          <button data-tab="trade" data-label="Swap" title="Slime Swap - manual single-wallet swap tools with presets." aria-label="Slime Swap tools">Slime Swap</button>
+          <button data-tab="profile" data-label="Home" title="Home / Profile - account, profile image, X handle, referral, and saved profile settings." aria-label="Home and Profile settings">Home / Profile</button>
           <button data-tab="smartChart" data-label="Chart" title="Smart Chart - open a token chart, links, transaction view, and trading context." aria-label="Smart Chart token workspace">Smart Chart</button>
-          <button data-tab="sniper" data-label="Sniper" title="Sniper - launch-snipe candidates to buy the instant they go live." aria-label="Sniper candidates">Sniper</button>
-          <span class="nav-section-label">Launch</span>
-          <button data-tab="launchCoin" data-label="Launch" title="Pump Launch - create and launch your own coin on Pump with an optional dev buy and anti-snipe bundle." aria-label="Pump Launch">Pump Launch</button>
-          <button data-tab="launch" data-label="Watches" title="Launch Watches - armed launch-snipe watchers waiting for a coin to go live." aria-label="Launch Watches">Launch Watches</button>
-          <button data-tab="bundle" data-label="Bundle" title="Bundle - buy or sell a coin across multiple wallets at once." aria-label="Bundle actions">Bundle</button>
-          <span class="nav-section-label">Tools</span>
+          <button data-tab="trade" data-label="Swap" title="Slime Swap - manual single-wallet swap tools with presets." aria-label="Slime Swap tools">Slime Swap</button>
+          <span class="nav-section-label">Market Intel</span>
+          <button data-tab="live" data-label="Cooks" title="Cooks - scan fresh and trending token pairs cooking right now." aria-label="Cooks scanner">Cooks</button>
+          <button data-tab="liveTrades" data-label="Trades" title="Live Trades - review live market activity and trade flow." aria-label="Live Trades feed">Live Trades</button>
+          <button data-tab="slimeScope" data-label="Scope" title="Slime Scope - scan fresh, graduating, and graduated pump-style movement." aria-label="Slime Scope scanner">Slime Scope</button>
+          <button data-tab="watchlist" data-label="Watch" title="Watchlist - saved coins you are watching and their movement." aria-label="Watchlist">Watchlist</button>
+          <button data-tab="kol" data-label="KOL" title="KOL Tracker - watch KOL wallets, public signals, and copy-trade candidates." aria-label="KOL Tracker">KOL Tracker</button>
+          <span class="nav-section-label">Ogre Tools</span>
           <div class="nav-tool-group" role="group" aria-label="Ogre TeK pro tools">
             <button data-tab="tek" data-label="Tek" title="Ogre Tek - automation deck: A.I, SlimeBot, Bundle, Launch, Snipe in one place." aria-label="Ogre Tek deck">Ogre Tek</button>
-            <button data-tab="ogreAi" data-label="A.I." title="Ogre A.I. - scan categories and let guarded autopilot find and buy picks." aria-label="Ogre A.I. autopilot">Ogre A.I.</button>
             <button data-tab="ogreTek" data-feature="ogre-tek" data-label="Perps" title="Perp Mode - futures/perpetual trading view when enabled." aria-label="Perp Mode" hidden>Perp Mode</button>
           </div>
-          <span class="nav-section-label">Wallet</span>
+          <span class="nav-section-label">Portfolio</span>
           <button data-tab="wallets" data-label="Wallets" title="Wallets / Balances - portfolio balances, managed wallets, restore, sweep, and funding tools." aria-label="Wallets and Balances">Wallets / Balances</button>
           <button data-tab="positions" data-label="Pos" title="Positions - open holdings with manual exit controls." aria-label="Positions">Positions</button>
           <button data-tab="pnl" data-label="PnL" title="PnL - realized and historical profit/loss cards." aria-label="PnL">PnL</button>
-          <button data-tab="profile" data-label="Home" title="Home / Profile - account, profile image, X handle, referral, and saved profile settings." aria-label="Home and Profile settings">Home / Profile</button>
         </nav>
 
         <p class="error dashboard-error" data-dashboard-error hidden></p>
-        <div class="subnav-chips" data-subnav-chips aria-label="Section views"></div>
         <section class="panel-host" data-panel></section>
-        <nav class="bottom-bar" data-bottom-bar aria-label="Main sections"></nav>
       </section>
 
       <section class="wallet-connect-modal" data-wallet-connect-modal hidden></section>
