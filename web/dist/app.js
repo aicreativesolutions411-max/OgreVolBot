@@ -7131,16 +7131,16 @@ function tradeHtml() {
   const swapFromToken = swapTokenByMint(swapFrom) || { symbol: swapFrom === "SOL" ? "SOL" : shortAddress(swapFrom), name: swapFrom === "SOL" ? "Solana" : "" };
   const swapToToken = swapTokenByMint(swapTo) || { symbol: swapTo ? shortAddress(swapTo) : "Custom", name: swapTo ? "Selected token" : "Paste CA below" };
   const routeMode = swapRouteMode();
-  const routeCopy = routeMode === "buy"
-    ? "Swap SOL into the selected token."
-    : routeMode === "sell"
-      ? "Swap the selected token back to SOL."
-      : routeMode === "two-step"
-        ? "Token-to-token uses a sell-to-SOL then buy route until direct routing is enabled."
-        : "Choose a token or paste a CA to prepare the route.";
-  const routeTokenMint = routeMode === "sell" ? swapFrom : swapTo;
+  // The green reverse button drives the layout directly so it flips even before a
+  // token is chosen. Direction also decides the route note and the SWAP action.
+  const isSellRoute = state.swapDirection === "sell";
+  const routeCopy = routeMode === "two-step"
+    ? "Token-to-token uses a sell-to-SOL then buy route until direct routing is enabled."
+    : isSellRoute
+      ? "Sell: swap the pair back to SOL. Set the percent, then hit SWAP."
+      : "Buy: swap SOL into the pair. Set the SOL amount, then hit SWAP.";
+  const routeTokenMint = isSellRoute ? swapFrom : swapTo;
   const tokenInputValue = routeTokenMint && routeTokenMint !== "SOL" ? routeTokenMint : state.tradeToken;
-  const isSellRoute = routeMode === "sell";
   // The slots are positioned by their .oss-pay (top) / .oss-receive (bottom) class
   // over the template image, so the green reverse button swaps the CONTENT between
   // the fixed top/bottom slots — the wallet/SOL controls and the token/CA controls
@@ -21133,7 +21133,8 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-swap-use-custom-amount]")) {
     const amount = String($("[data-swap-amount]")?.value || "").trim();
-    if (swapRouteMode() === "sell") await executeWebSell(amount || "100");
+    // Follow the panel's current direction: pair->SOL (sell) or SOL->pair (buy).
+    if (state.swapDirection === "sell") await executeWebSell(amount || "100");
     else await executeWebBuy(amount);
     return;
   }
