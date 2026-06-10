@@ -616,8 +616,14 @@ function scheduleLivePairsRender(reason = "live-pairs-batch") {
       details: details.length ? details.slice(-3).join(" | ") : reason
     });
     // Cooks/Live tab: patch just the rows in place to avoid the panel-rebuild shake.
-    if ((state.activeTab === "live" || state.activeTab === "terminal") && patchLivePairsFeedInPlace()) {
-      return;
+    // Anchor the scroll first so the rotating Best Picks reshuffle can't shove the
+    // row the user is reading (the "pull"/jump that showed up on the 8s refresh).
+    if (state.activeTab === "live" || state.activeTab === "terminal") {
+      const patchSnapshot = captureStableFeedScrollSnapshot();
+      if (patchLivePairsFeedInPlace()) {
+        restoreStableFeedScrollSnapshot(patchSnapshot);
+        return;
+      }
     }
     const scrollSnapshot = captureStableFeedScrollSnapshot();
     render();
@@ -17576,7 +17582,7 @@ function livePairAvatarHtml(row, options = {}) {
   const avatarState = explicitAvatarState || (src ? "ready" : "missing");
   if (src) {
     const backupAttr = backupSrc ? ` data-backup-src="${escapeHtml(backupSrc)}"` : "";
-    return `<div class="live-pair-avatar" data-avatar-state="${escapeHtml(avatarState)}"><img src="${escapeHtml(src)}"${backupAttr} data-avatar-src="${escapeHtml(src)}" data-avatar-key="${escapeHtml(avatarKey)}" alt="${escapeHtml(row.symbol || row.name || "Token")}" loading="${loading}" decoding="async" fetchpriority="${fetchPriority}" width="42" height="42" referrerpolicy="no-referrer" onload="window.__slimeRememberAvatar&&window.__slimeRememberAvatar(this.dataset.avatarKey,this.currentSrc||this.src);" onerror="window.__slimeAvatarLoadFailed&&window.__slimeAvatarLoadFailed(this);"><span>${escapeHtml(label)}</span></div>`;
+    return `<div class="live-pair-avatar" data-avatar-state="${escapeHtml(avatarState)}"><img src="${escapeHtml(src)}"${backupAttr} data-avatar-src="${escapeHtml(src)}" data-avatar-key="${escapeHtml(avatarKey)}" alt="${escapeHtml(row.symbol || row.name || "Token")}" loading="${loading}" decoding="sync" fetchpriority="${fetchPriority}" width="42" height="42" referrerpolicy="no-referrer" onload="window.__slimeRememberAvatar&&window.__slimeRememberAvatar(this.dataset.avatarKey,this.currentSrc||this.src);" onerror="window.__slimeAvatarLoadFailed&&window.__slimeAvatarLoadFailed(this);"><span>${escapeHtml(label)}</span></div>`;
   }
   return `<div class="live-pair-avatar fallback" data-avatar-state="${escapeHtml(avatarState)}"><span>${escapeHtml(label)}</span></div>`;
 }

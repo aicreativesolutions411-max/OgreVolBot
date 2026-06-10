@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import zlib from "node:zlib";
 import bs58 from "bs58";
 import sharp from "sharp";
 import nacl from "tweetnacl";
@@ -1201,13 +1202,13 @@ function startHealthServer() {
       || requestUrl.pathname.startsWith("/r/")
       || requestUrl.pathname === "/portal" || requestUrl.pathname.startsWith("/portal/")
       || requestUrl.pathname === "/terminal" || requestUrl.pathname.startsWith("/terminal/"))) {
-      await serveWebPortal(requestUrl, response, request.method);
+      await serveWebPortal(requestUrl, response, request.method, request.headers["accept-encoding"]);
       return;
     }
 
     if ((request.method === "GET" || request.method === "HEAD") && (requestUrl.pathname.startsWith("/assets/")
       || /\.(?:css|js|png|jpe?g|svg|webp|ico)$/i.test(requestUrl.pathname))) {
-      await serveWebPortal(requestUrl, response, request.method);
+      await serveWebPortal(requestUrl, response, request.method, request.headers["accept-encoding"]);
       return;
     }
 
@@ -2857,7 +2858,44 @@ async function handleWebApiRequest(request, response, requestUrl) {
   }
 }
 
-async function serveWebPortal(requestUrl, response, method = "GET") {
+// Compress text assets (js/css/html/svg/json) once per build and keep the result
+// in memory keyed by mtime+size, so we never re-compress per request or block the
+// event loop. The portal bundle and override CSS are large and very compressible.
+const STATIC_COMPRESSIBLE_RE = /\.(?:js|css|html|svg|json|map)$/i;
+const staticAssetCompressionCache = new Map();
+
+function pickStaticEncoding(acceptEncoding = "") {
+  const header = String(acceptEncoding || "").toLowerCase();
+  if (/(^|[ ,])br($|[ ,;])/.test(header)) return "br";
+  if (/(^|[ ,])gzip($|[ ,;])/.test(header)) return "gzip";
+  return "";
+}
+
+function compressedStaticAsset(target, data, stat, encoding) {
+  if (!encoding || data.length < 1024) return null;
+  const key = `${target}|${data.length}|${stat.mtimeMs}|${encoding}`;
+  const cached = staticAssetCompressionCache.get(key);
+  if (cached) return cached;
+  let body;
+  try {
+    body = encoding === "br"
+      ? zlib.brotliCompressSync(data, {
+        params: {
+          [zlib.constants.BROTLI_PARAM_QUALITY]: 6,
+          [zlib.constants.BROTLI_PARAM_SIZE_HINT]: data.length
+        }
+      })
+      : zlib.gzipSync(data, { level: 6 });
+  } catch {
+    return null;
+  }
+  if (!body || body.length >= data.length) return null; // never inflate
+  if (staticAssetCompressionCache.size > 300) staticAssetCompressionCache.clear();
+  staticAssetCompressionCache.set(key, body);
+  return body;
+}
+
+async function serveWebPortal(requestUrl, response, method = "GET", acceptEncoding = "") {
   const relativePath = requestUrl.pathname === "/" || requestUrl.pathname === "/connect"
     || requestUrl.pathname === "/login" || requestUrl.pathname.startsWith("/account/login")
     || requestUrl.pathname === "/portal" || requestUrl.pathname === "/terminal"
@@ -2876,18 +2914,40 @@ async function serveWebPortal(requestUrl, response, method = "GET") {
     const stat = await fs.stat(filePath);
     const target = stat.isDirectory() ? path.join(filePath, "index.html") : filePath;
     const data = await fs.readFile(target);
-    const noStoreAsset = target.endsWith("index.html") || /\.(?:js|css)$/i.test(target);
-    const immutableAsset = /\.(?:mp4|png|jpe?g|svg|webp|ico)$/i.test(target);
-    response.writeHead(200, {
+    const fileName = path.basename(target);
+    // index.html is the entry doc and config.js is regenerated per build without a cache-busting
+    // query, so both must always be fetched fresh.
+    const noStoreAsset = target.endsWith("index.html") || fileName === "config.js";
+    const immutableMedia = /\.(?:mp4|png|jpe?g|svg|webp|ico)$/i.test(target);
+    // build-web.js rewrites a fresh ?v=<buildId> onto app.js / styles.css / overrides every deploy,
+    // so a versioned request is safe to cache hard — a new deploy serves a brand-new URL, never stale.
+    const versionedBundle = /(?:app\.js|styles\.css|slimewire-final-overrides\.css)$/i.test(target)
+      && /[?&]v=/.test(requestUrl.search || "");
+    const revalidatingAsset = /\.(?:js|css)$/i.test(target);
+    const cacheControl = noStoreAsset
+      ? "no-store"
+      : immutableMedia || versionedBundle
+        ? "public, max-age=31536000, immutable"
+        : revalidatingAsset
+          ? "public, max-age=300, stale-while-revalidate=86400"
+          : "public, max-age=3600";
+    const compressible = STATIC_COMPRESSIBLE_RE.test(target);
+    const encoding = compressible ? pickStaticEncoding(acceptEncoding) : "";
+    const compressedBody = encoding ? compressedStaticAsset(target, data, stat, encoding) : null;
+    const body = compressedBody || data;
+    const headers = {
       "Content-Type": webContentType(target),
-      "Content-Length": data.length,
-      "Cache-Control": noStoreAsset ? "no-store" : immutableAsset ? "public, max-age=31536000, immutable" : "public, max-age=3600"
-    });
+      "Content-Length": body.length,
+      "Cache-Control": cacheControl
+    };
+    if (compressible) headers.Vary = "Accept-Encoding";
+    if (compressedBody) headers["Content-Encoding"] = encoding;
+    response.writeHead(200, headers);
     if (method === "HEAD") {
       response.end();
       return;
     }
-    response.end(data);
+    response.end(body);
   } catch {
     response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
     response.end("Not found");
