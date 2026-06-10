@@ -17187,13 +17187,6 @@ function livePairsHtml() {
   return `
     <section class="terminal-layout live-terminal">
       <main class="terminal-main">
-        <div class="terminal-title-row">
-          <div>
-            <h3>Cooks</h3>
-            <p>Newest Pump/new-pair listings with fast metadata refresh. Trade safety checks run before any buy.</p>
-          </div>
-          <span>${escapeHtml(activeBucketLabel)} | ${escapeHtml(rows.length)}/${escapeHtml(allRows.length)} shown</span>
-        </div>
         <div class="mode-row terminal-modes live-pair-buckets">
           ${LIVE_PAIR_BUCKETS.map(([bucket, label]) => {
             const count = state.livePairsByBucket[bucket]?.rows?.length;
@@ -17201,11 +17194,7 @@ function livePairsHtml() {
             return `<button data-live-pair-bucket="${bucket}" data-active="${state.livePairBucket === bucket}">${label}${suffix}</button>`;
           }).join("")}
         </div>
-        <div class="live-control-strip">
-          <div>
-            <strong>${escapeHtml(activeBucketLabel)} Feed</strong>
-            <span>${escapeHtml(livePairBucketDescription(state.livePairBucket))}</span>
-          </div>
+        <div class="live-control-strip live-control-strip-slim">
           <div class="card-actions compact">
             <label class="compact-label">Sort
               <select data-terminal-sort>
@@ -17214,7 +17203,6 @@ function livePairsHtml() {
             </label>
             <button class="primary" data-refresh-live-pairs>${bucketLoading ? "Scanning..." : "Refresh Feed"}</button>
           </div>
-          <small>${escapeHtml(status)}${lastUpdatedAt ? ` Updated ${escapeHtml(formatDate(lastUpdatedAt))}.` : ""}</small>
         </div>
         ${terminalLaunchFilterPanelHtml("live", { rawCount: rawRows.length, visibleCount: allRows.length })}
         ${terminalLaunchFilterSummaryHtml(rawRows, allRows)}
