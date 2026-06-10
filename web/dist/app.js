@@ -734,7 +734,7 @@ const TERMINAL_FEEDS = [
   { tabKey: "bundle", label: "Bundle Volume - Bundle Actions", component: "bundleHtml", endpoint: "composite:/api/web/balances+/api/web/positions", category: "bundle:volume", refreshMs: 25_000, staleMs: 60_000, cacheKey: "bundle:volume:{tokenMint}", pageSize: 1, maxPageSize: 1, previewLimit: 1, supportsPagination: false },
   { tabKey: "volume", label: "Bundle Volume - Volume Flags", component: "volumeHtml", endpoint: "composite:/api/web/live-pairs+/api/web/balances", category: "signals:bundle-volume", refreshMs: 25_000, staleMs: 60_000, cacheKey: "signals:bundle-volume:{tokenMint}", pageSize: 1, maxPageSize: 1, previewLimit: 1, supportsPagination: false },
   { tabKey: "sniper", label: "Sniper - Launch Snipe Candidates", component: "sniperHtml", endpoint: "/api/web/sniper/scan", category: "scanner:launch-snipe", refreshMs: 20_000, staleMs: 45_000, cacheKey: "scanner:launch-snipe:{scanMode}", pageSize: 36, maxPageSize: 72, previewLimit: 12, supportsPagination: true },
-  { tabKey: "launch", label: "Launch Snipe - Launch Watches", component: "launchHtml", endpoint: "/api/web/launch/watches", category: "launch:watches", refreshMs: 15_000, staleMs: 35_000, cacheKey: "launch:watches", pageSize: 20, maxPageSize: 40, previewLimit: 8, supportsPagination: false },
+  { tabKey: "launch", label: "Launch Snipe - Launch Watches", component: "launchHtml", endpoint: "/api/web/launch/watches", category: "launch:watches", refreshMs: 6_000, staleMs: 12_000, cacheKey: "launch:watches", pageSize: 20, maxPageSize: 40, previewLimit: 8, supportsPagination: false },
   { tabKey: "launchCoin", label: "Pump Launch - Launch Status", component: "launchCoinHtml", endpoint: "/api/web/launch/watches", category: "pump-launch:status", refreshMs: 20_000, staleMs: 60_000, cacheKey: "pump-launch:status", pageSize: 10, maxPageSize: 20, previewLimit: 5, supportsPagination: false },
   { tabKey: "wallets", label: "Wallets/Balances", component: "walletsHtml", endpoint: "composite:/api/web/wallets+/api/web/balances", category: "portfolio:wallets-balances", refreshMs: 20_000, staleMs: 45_000, cacheKey: "portfolio:wallets-balances", pageSize: 25, maxPageSize: 50, previewLimit: 8, supportsPagination: false },
   { tabKey: "positions", label: "Positions", component: "positionsHtml", endpoint: "/api/web/positions", category: "portfolio:positions", refreshMs: 12_000, staleMs: 30_000, cacheKey: "portfolio:positions", pageSize: 25, maxPageSize: 50, previewLimit: 8, supportsPagination: false },
@@ -6992,37 +6992,41 @@ function tradeHtml() {
     <section class="trade-layout">
       <article class="trade-card slime-swap-card ogre-swap-card ogre-swap-skin">
         <h3 class="ogre-swap-title oss-a11y-title">OgreSwap - live on-chain Solana swapper</h3>
-        <div class="oss-stage" role="group" aria-label="OgreSwap swap panel">
-          <div class="oss-slot oss-pay">
-            <input class="oss-amount" data-swap-amount type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.0" aria-label="${swapFrom === "SOL" ? "SOL amount to pay" : "Sell percent"}">
-            <select class="oss-tok" data-swap-from aria-label="Swap from token">
-              ${swapTokenSelectOptions(swapFrom, { includeCustom: false, walletOnly: true })}
-            </select>
+        <div class="oss-stage-wrap">
+          <div class="oss-stage" role="group" aria-label="OgreSwap swap panel">
+            <div class="oss-slot oss-pay">
+              <input class="oss-amount" data-swap-amount type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.0" aria-label="${swapFrom === "SOL" ? "SOL amount to pay" : "Sell percent"}">
+              <select class="oss-tok" data-swap-from aria-label="Swap from token">
+                ${swapTokenSelectOptions(swapFrom, { includeCustom: false, walletOnly: true })}
+              </select>
+            </div>
+            <button type="button" class="oss-reverse slime-swap-reverse" data-swap-reverse aria-label="Reverse swap route">
+              <span class="slime-swap-route-icon" aria-hidden="true"></span>
+            </button>
+            <div class="oss-slot oss-receive">
+              <input class="oss-amount oss-ca" data-trade-token type="text" placeholder="Paste token CA" value="${escapeHtml(tokenInputValue || "")}" aria-label="Token to receive">
+              <select class="oss-tok" data-swap-to aria-label="Swap to token">
+                ${swapTokenSelectOptions(swapTo, { includeCustom: true })}
+              </select>
+            </div>
+            <button type="button" class="oss-swap primary" data-swap-use-custom-amount>SWAP</button>
+            <label class="oss-pill oss-slip" data-cap="Slippage">
+              <select data-trade-slippage data-custom-select="trade-slippage" aria-label="Slippage">
+                <option value="300">3%</option>
+                <option value="400" selected>4%</option>
+                <option value="500">5%</option>
+                <option value="custom">Custom</option>
+              </select>
+              <input data-trade-slippage-custom data-custom-for="trade-slippage" type="number" min="1" max="5000" step="1" placeholder="bps" hidden>
+            </label>
           </div>
-          <button type="button" class="oss-reverse slime-swap-reverse" data-swap-reverse aria-label="Reverse swap route">
-            <span class="slime-swap-route-icon" aria-hidden="true"></span>
-          </button>
-          <div class="oss-slot oss-receive">
-            <input class="oss-amount oss-ca" data-trade-token type="text" placeholder="Paste token CA" value="${escapeHtml(tokenInputValue || "")}" aria-label="Token to receive">
-            <select class="oss-tok" data-swap-to aria-label="Swap to token">
-              ${swapTokenSelectOptions(swapTo, { includeCustom: true })}
-            </select>
+          <div class="oss-wallet-bar">
+            <label class="oss-pill oss-wallet" data-cap="Wallet">
+              <select data-trade-wallet aria-label="Wallet">
+                ${walletOptionsHtml(connected?.publicKey && !hasManagedWallets ? "connected" : "")}
+              </select>
+            </label>
           </div>
-          <button type="button" class="oss-swap primary" data-swap-use-custom-amount>SWAP</button>
-          <label class="oss-pill oss-wallet" data-cap="Wallet">
-            <select data-trade-wallet aria-label="Wallet">
-              ${walletOptionsHtml(connected?.publicKey && !hasManagedWallets ? "connected" : "")}
-            </select>
-          </label>
-          <label class="oss-pill oss-slip" data-cap="Slippage">
-            <select data-trade-slippage data-custom-select="trade-slippage" aria-label="Slippage">
-              <option value="300">3%</option>
-              <option value="400" selected>4%</option>
-              <option value="500">5%</option>
-              <option value="custom">Custom</option>
-            </select>
-            <input data-trade-slippage-custom data-custom-for="trade-slippage" type="number" min="1" max="5000" step="1" placeholder="bps" hidden>
-          </label>
         </div>
         <p class="slime-swap-route-note oss-route">${escapeHtml(routeCopy)}</p>
 

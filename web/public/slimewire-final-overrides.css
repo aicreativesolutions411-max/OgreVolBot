@@ -19510,14 +19510,37 @@ html body main.shell[data-app] .oss-a11y-title {
   width: 1px; height: 1px; overflow: hidden;
   clip: rect(0 0 0 0); white-space: nowrap; border: 0; padding: 0; margin: -1px;
 }
-html body main.shell[data-app] .oss-stage {
+html body main.shell[data-app] .oss-stage-wrap {
   position: relative;
   width: 100%;
   max-width: 1080px;
   margin: 0 auto;
+  container-type: inline-size;
+}
+html body main.shell[data-app] .oss-stage {
+  position: relative;
+  width: 100%;
+  max-width: none;
+  margin: 0;
   aspect-ratio: 1264 / 848;
   container-type: inline-size;
   background: #050805 url("/assets/slimewire/tool-bg/swap-template.png") center / 100% 100% no-repeat;
+}
+/* Wallet bar: on desktop it sits as the top-right pill on the stage; on mobile
+   it becomes a clean full-width bar directly under the panel (see media query). */
+html body main.shell[data-app] .oss-wallet-bar {
+  position: absolute;
+  top: 5%;
+  left: 79.5%;
+  width: 16%;
+  height: 7.6%;
+}
+html body main.shell[data-app] .oss-wallet-bar .oss-pill {
+  position: static !important;
+  top: auto;
+  left: auto;
+  width: 100%;
+  height: 100%;
 }
 /* Swap is a single, full-width panel: no side column, no stuff below - just the
    OgreSwap panel (amount, tokens, reverse, SWAP, wallet + slippage pills). */
@@ -19709,15 +19732,39 @@ html body main.shell[data-app] .ogre-swap-advanced .quick-grid button.primary {
   color: #06140a !important;
   border: 0 !important;
 }
-/* On phones, cram the wallet + slippage onto the bottom strip - wallet on the
-   left, slippage on the right, flanking POWERED BY OGRES - instead of the tiny
-   clipped top pills. */
+/* On phones: slippage stays as the top-right pill on the panel, and the wallet
+   becomes a clean full-width bar directly under the panel - tight to it, not
+   overlapping. */
 @media (max-width: 760px) {
-  html body main.shell[data-app] .oss-wallet { left: 2.5%; top: 88%; width: 33%; height: 8%; }
-  html body main.shell[data-app] .oss-slip { left: 64.5%; top: 88%; width: 33%; height: 8%; }
-  html body main.shell[data-app] .oss-pill::before { top: -1.35em !important; font-size: 8px !important; }
-  html body main.shell[data-app] .oss-pill select { font-size: 13px !important; }
-  html body main.shell[data-app] .oss-wallet select { text-align: center; text-align-last: center; }
+  html body main.shell[data-app] .oss-slip { left: 60%; width: 36%; }
+  html body main.shell[data-app] .oss-slip::before { font-size: 8px !important; }
+  html body main.shell[data-app] .oss-wallet-bar {
+    position: static !important;
+    width: 100%;
+    height: auto;
+    margin: 8px 0 0;
+  }
+  html body main.shell[data-app] .oss-wallet-bar .oss-pill {
+    height: auto;
+    padding: 9px 12px;
+    background: rgba(8, 13, 9, 0.92);
+    border: 1px solid rgba(120, 230, 120, 0.28);
+    border-radius: 12px;
+    box-sizing: border-box;
+  }
+  html body main.shell[data-app] .oss-wallet-bar .oss-pill::before {
+    position: static;
+    display: block;
+    text-align: left;
+    font-size: 9px !important;
+    margin-bottom: 2px;
+  }
+  html body main.shell[data-app] .oss-wallet-bar select {
+    font-size: 14px !important;
+    text-align: left;
+    text-align-last: left;
+    color: #eafff0 !important;
+  }
 }
 /* === END OGRESWAP_20260609_V2 ======================================== */
 
@@ -20470,7 +20517,20 @@ html body main.shell[data-app] .cooks-section[data-cooks-best] .signal-list {
   }
   html body main.shell[data-app] .signal-list .signal-cell span { font-size: 13px !important; }
   html body main.shell[data-app] .signal-list .signal-cell small { font-size: 9.5px !important; line-height: 1.2 !important; }
-  html body main.shell[data-app] .signal-list .signal-actions button { padding: 6px 8px !important; min-height: 30px !important; }
+  /* Pull the action buttons left + tighten them so all of them (incl. the last
+     one) fit in the column instead of clipping off the right edge. */
+  html body main.shell[data-app] .signal-list .signal-actions {
+    justify-content: flex-start !important;
+    gap: 4px !important;
+    flex-wrap: nowrap !important;
+    padding-right: 2px !important;
+  }
+  html body main.shell[data-app] .signal-list .signal-actions button {
+    padding: 6px 7px !important;
+    min-height: 30px !important;
+    min-width: 0 !important;
+    flex: 0 0 auto !important;
+  }
 }
 /* === END SIGNALROW_TIGHTEN_20260609_V1 ============================== */
 
