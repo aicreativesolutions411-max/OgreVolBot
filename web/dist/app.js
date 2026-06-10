@@ -773,31 +773,31 @@ const LIVE_PAIR_SORTS = [
 // [id, label, sub-caption, backendSort]. The backend sort warms the pool with the
 // right data; the client ranking (rankLiveRowsByCategory) does the final ordering
 // so categories that have no dedicated backend sort still reflect real values.
+// Live Feed = a ranked MARKET feed (quality + market metrics). Discovery/trending
+// lives on Cook Spot instead, so the two pages stay distinct. Only "Fresh Pairs"
+// is shared between them.
 const LIVE_FEED_CATEGORIES = [
   ["best", "Best Picks", "Top scored picks · rotating", "best"],
-  ["trending", "Trending", "Heating up on volume + buys", "volume"],
+  ["fresh", "Fresh Pairs", "Newest pairs first", "newest"],
   ["volume", "High Volume", "Most traded right now", "volume"],
   ["gainers", "Biggest Gainers", "Top % movers", "momentum"],
-  ["active", "Most Active", "Most transactions", "buys"],
-  ["new", "New Launches", "Freshest pairs first", "newest"],
   ["liquidity", "High Liquidity", "Deepest pools", "liquidity"],
-  ["boosted", "Recently Boosted", "Paid DEX boosts + surges", "volume"],
-  ["hot", "Hot Pairs", "Momentum leaders", "momentum"]
+  ["marketcap", "Top Market Cap", "Largest by market cap", "volume"],
+  ["active", "Most Active", "Most transactions", "buys"]
 ];
 
-// Cook Spot (Slime Scope) DEX-discovery categories. [id, label, sub-caption].
-// These rank the broader scope pool toward DEX/boosted/pump discovery so Cook Spot
-// surfaces different pairs than the Live Feed.
+// Cook Spot = a DISCOVERY/trending feed. Its categories are deliberately disjoint
+// from the Live Feed's market-metric set (only "Fresh Pairs" is shared) so the two
+// pages have different uses and surface different pairs.
 const COOK_SPOT_CATEGORIES = [
   ["dexTrending", "DEX Trending", "Trending across DEX pairs"],
+  ["fresh", "Fresh Pairs", "Newest DEX pairs"],
   ["dexBoosted", "DEX Boosted", "Paid DEX boosts"],
   ["pumpTrending", "Pump.fun Trending", "Hot pump-curve launches"],
-  ["dextools", "DEXTools Trending", "High-activity DEX movers"],
-  ["dexscreener", "DexScreener Trending", "Trending on DexScreener"],
   ["memeMovers", "Meme Coin Movers", "Top meme % movers"],
   ["earlyMomentum", "Early Momentum", "Young pairs building"],
-  ["highActivity", "High Activity", "Most transactions"],
-  ["hotNew", "Hot New Pairs", "Fresh + heating up"]
+  ["graduating", "Graduating", "Near pump migration"],
+  ["graduated", "Graduated", "Moved to the open market"]
 ];
 
 const TERMINAL_LAUNCH_SOCIAL_FILTERS = [
@@ -17325,21 +17325,14 @@ function rankLiveRowsByCategory(rows = [], categoryId = "best") {
       return list.sort((a, b) => liveFeedVolumeScore(b) - liveFeedVolumeScore(a));
     case "liquidity":
       return list.sort((a, b) => livePairLiquidityUsd(b) - livePairLiquidityUsd(a));
+    case "marketcap":
+      return list.sort((a, b) => livePairMarketCap(b) - livePairMarketCap(a));
     case "active":
       return list.sort((a, b) => liveFeedTxnCount(b) - liveFeedTxnCount(a));
-    case "new":
+    case "fresh":
       return list.sort(compareNewestLiveRows);
     case "gainers":
       return list.sort((a, b) => liveFeedChangeScore(b) - liveFeedChangeScore(a));
-    case "hot":
-      return list.sort((a, b) => liveFeedMomentumScore(b) - liveFeedMomentumScore(a));
-    case "trending":
-      return list.sort((a, b) => liveFeedTrendScore(b) - liveFeedTrendScore(a));
-    case "boosted": {
-      const boosted = list.filter(liveFeedIsBoosted).sort((a, b) => liveFeedVolumeScore(b) - liveFeedVolumeScore(a));
-      const rest = list.filter((row) => !liveFeedIsBoosted(row)).sort((a, b) => liveFeedTrendScore(b) - liveFeedTrendScore(a));
-      return [...boosted, ...rest];
-    }
     case "best":
     default:
       return list.sort((a, b) => (
@@ -17397,6 +17390,8 @@ function currentCookSpotCategory() {
 function rankCookSpotRows(rows = [], categoryId = "dexTrending") {
   const list = [...rows];
   switch (categoryId) {
+    case "fresh":
+      return list.sort(compareNewestLiveRows);
     case "dexBoosted": {
       const boosted = list.filter(liveFeedIsBoosted).sort((a, b) => liveFeedVolumeScore(b) - liveFeedVolumeScore(a));
       const rest = list.filter((row) => !liveFeedIsBoosted(row)).sort((a, b) => liveFeedTrendScore(b) - liveFeedTrendScore(a));
@@ -17406,9 +17401,6 @@ function rankCookSpotRows(rows = [], categoryId = "dexTrending") {
       const pump = list.filter(cookSpotIsPump);
       return (pump.length ? pump : list).sort((a, b) => liveFeedTrendScore(b) - liveFeedTrendScore(a));
     }
-    case "dextools":
-    case "highActivity":
-      return list.sort((a, b) => liveFeedTxnCount(b) - liveFeedTxnCount(a));
     case "memeMovers": {
       const meme = list.filter(cookSpotIsMeme);
       return (meme.length ? meme : list).sort((a, b) => liveFeedChangeScore(b) - liveFeedChangeScore(a));
@@ -17420,14 +17412,14 @@ function rankCookSpotRows(rows = [], categoryId = "dexTrending") {
       });
       return (young.length ? young : list).sort((a, b) => liveFeedMomentumScore(b) - liveFeedMomentumScore(a));
     }
-    case "hotNew": {
-      const fresh = list.filter((row) => {
-        const age = Number(row.pairAgeMinutes);
-        return !Number.isFinite(age) || age <= 60;
-      });
-      return (fresh.length ? fresh : list).sort((a, b) => liveFeedTrendScore(b) - liveFeedTrendScore(a));
+    case "graduating": {
+      const grad = list.filter((row) => isGraduatingSlimeScopeRow(row) || classifySlimeScopeRow(row) === "graduating");
+      return (grad.length ? grad : list).sort((a, b) => liveFeedTrendScore(b) - liveFeedTrendScore(a));
     }
-    case "dexscreener":
+    case "graduated": {
+      const grad = list.filter((row) => isGraduatedSlimeScopeRow(row) || classifySlimeScopeRow(row) === "graduated");
+      return (grad.length ? grad : list).sort((a, b) => liveFeedVolumeScore(b) - liveFeedVolumeScore(a));
+    }
     case "dexTrending":
     default:
       return list.sort((a, b) => liveFeedTrendScore(b) - liveFeedTrendScore(a));
