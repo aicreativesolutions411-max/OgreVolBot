@@ -572,9 +572,72 @@ function resumeLivePairsAfterDetailsClose() {
   scheduleLivePairsRender("details-close");
 }
 
-// Steady refresh without the full-panel rebuild "shake": on the Cooks tab,
-// swap only the .signal-list rows (reusing the exact same row HTML) so the
-// controls, filters, and scroll container stay put. Returns true if patched.
+// Reconcile the rows inside one .signal-list against a freshly built list, keyed
+// by token mint. Existing .signal-row elements are KEPT (only their inner content
+// is refreshed, and only when it actually changed), so the browser's native scroll
+// anchoring holds the viewport steady (no "pull") and unchanged avatars never
+// reload (no flicker). New rows are moved in, gone rows are removed.
+function reconcileSignalListRows(liveList, nextList) {
+  const rowKey = (el) => el?.dataset?.tokenChart || el?.dataset?.tokenMint || "";
+  const existing = new Map();
+  for (const el of Array.from(liveList.children)) {
+    if (el.classList?.contains("signal-row")) {
+      const key = rowKey(el);
+      if (key && !existing.has(key)) existing.set(key, el);
+    }
+  }
+  let anchor = liveList.querySelector(":scope > .signal-header") || null;
+  const used = new Set();
+  for (const nextChild of Array.from(nextList.children)) {
+    if (!nextChild.classList?.contains("signal-row")) continue; // header stays as-is
+    const key = rowKey(nextChild);
+    let live = key ? existing.get(key) : null;
+    if (live) {
+      used.add(key);
+      if (live.className !== nextChild.className) live.className = nextChild.className;
+      // Only touch the DOM when the row's content really changed — keeps the
+      // element (and its already-painted avatar) intact when nothing moved.
+      if (live.innerHTML !== nextChild.innerHTML) live.innerHTML = nextChild.innerHTML;
+    } else {
+      live = nextChild; // move the freshly built row in (nextList is discarded after)
+    }
+    if (anchor) {
+      if (anchor.nextElementSibling !== live) anchor.after(live);
+    } else if (liveList.firstElementChild !== live) {
+      liveList.insertBefore(live, liveList.firstElementChild);
+    }
+    anchor = live;
+  }
+  for (const [key, el] of existing) {
+    if (!used.has(key)) el.remove();
+  }
+}
+
+// Reconcile the Cooks feed (Best Picks + Newest) in place. Returns false to ask
+// for a full rebuild when the section structure changed (rare).
+function reconcileCooksFeedInPlace(liveFeed, nextFeed) {
+  for (const sel of ["[data-cooks-best]", "[data-cooks-newest]"]) {
+    const liveSection = liveFeed.querySelector(`:scope > ${sel}`);
+    const nextSection = nextFeed.querySelector(`:scope > ${sel}`);
+    if (!nextSection) { if (liveSection) liveSection.remove(); continue; }
+    if (!liveSection) return false; // a section appeared — let the caller rebuild for correct order
+    const liveLabel = liveSection.querySelector(":scope > .cooks-section-label");
+    const nextLabel = nextSection.querySelector(":scope > .cooks-section-label");
+    if (liveLabel && nextLabel && liveLabel.innerHTML !== nextLabel.innerHTML) liveLabel.innerHTML = nextLabel.innerHTML;
+    const liveListEl = liveSection.querySelector(":scope > .signal-list");
+    const nextListEl = nextSection.querySelector(":scope > .signal-list");
+    if (liveListEl && nextListEl) {
+      reconcileSignalListRows(liveListEl, nextListEl);
+    } else if (liveListEl !== nextListEl) {
+      liveSection.replaceWith(nextSection); // list <-> empty-state swap
+    }
+  }
+  return true;
+}
+
+// Steady refresh without the full-panel rebuild "shake": on the Cooks tab, update
+// the live rows in place (keyed by mint) so the controls, scroll position, and
+// painted avatars stay put. Returns true if patched.
 function patchLivePairsFeedInPlace() {
   if (state.activeTab !== "live") return false;
   const panel = $("[data-panel]");
@@ -584,9 +647,12 @@ function patchLivePairsFeedInPlace() {
   const rawRows = uniqueSignalRows(activeLivePairs?.rows || []);
   const allRows = terminalLaunchFilteredRows(rawRows);
   if (!allRows.length) return false; // fall back to full render for empty state
-  // Rebuild Best Picks + Newest in place (rotates picks, refreshes newest)
-  // without tearing down the controls or jumping scroll.
-  feed.outerHTML = cooksFeedHtml(allRows);
+  const template = document.createElement("div");
+  template.innerHTML = cooksFeedHtml(allRows);
+  const nextFeed = template.querySelector(".cooks-feed");
+  if (!nextFeed || !reconcileCooksFeedInPlace(feed, nextFeed)) {
+    feed.outerHTML = cooksFeedHtml(allRows);
+  }
   const countLabel = panel.querySelector(".terminal-title-row span");
   if (countLabel) {
     const bucketLabel = LIVE_PAIR_BUCKETS.find(([bucket]) => bucket === state.livePairBucket)?.[1] || "Live";
