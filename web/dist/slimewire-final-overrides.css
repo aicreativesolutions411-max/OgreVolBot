@@ -20473,3 +20473,13 @@ html body main.shell[data-app] .cooks-section[data-cooks-best] .signal-list {
   html body main.shell[data-app] .signal-list .signal-actions button { padding: 6px 8px !important; min-height: 30px !important; }
 }
 /* === END SIGNALROW_TIGHTEN_20260609_V1 ============================== */
+
+/* === HIDE_RISK_CHIPS_20260609_V1 ====================================
+   Remove the blue risk chips (low Liquidity / low Volume / token2022) from every
+   pair row to save the line and tighten - the SlimeShield RISK label in the Txns
+   cell still carries the safety signal. */
+html body main.shell[data-app] .signal-links.risk-links,
+html body main.shell[data-app] .risk-links {
+  display: none !important;
+}
+/* === END HIDE_RISK_CHIPS_20260609_V1 ================================ */
