@@ -311,6 +311,7 @@ const state = {
         : "terminal",
   terminalSubtab: "positions",
   terminalSort: "best",
+  liveFeedCategory: "best",
   terminalLaunchFilters: {
     open: false,
     keywords: "",
@@ -758,6 +759,22 @@ const LIVE_PAIR_SORTS = [
   ["buys", "Most Buys"],
   ["momentum", "Highest Momentum"],
   ["risk", "Highest Risk"]
+];
+
+// Live Feed category dropdown (sits where "Best Picks" was). Each entry:
+// [id, label, sub-caption, backendSort]. The backend sort warms the pool with the
+// right data; the client ranking (rankLiveRowsByCategory) does the final ordering
+// so categories that have no dedicated backend sort still reflect real values.
+const LIVE_FEED_CATEGORIES = [
+  ["best", "Best Picks", "Top scored picks · rotating", "best"],
+  ["trending", "Trending", "Heating up on volume + buys", "volume"],
+  ["volume", "High Volume", "Most traded right now", "volume"],
+  ["gainers", "Biggest Gainers", "Top % movers", "momentum"],
+  ["active", "Most Active", "Most transactions", "buys"],
+  ["new", "New Launches", "Freshest pairs first", "newest"],
+  ["liquidity", "High Liquidity", "Deepest pools", "liquidity"],
+  ["boosted", "Recently Boosted", "Paid DEX boosts + surges", "volume"],
+  ["hot", "Hot Pairs", "Momentum leaders", "momentum"]
 ];
 
 const TERMINAL_LAUNCH_SOCIAL_FILTERS = [
@@ -17234,23 +17251,128 @@ function cooksBestPickRows(allRows = []) {
   return rotatedDisplayRows(scored, 5, terminalRotationKey("cooks-best"), 1);
 }
 
+// --- Live Feed category ranking (client-side, from real row fields) ---------
+function liveFeedNum(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function currentLiveFeedCategory() {
+  const id = state.liveFeedCategory || "best";
+  return LIVE_FEED_CATEGORIES.find(([cid]) => cid === id) || LIVE_FEED_CATEGORIES[0];
+}
+
+function liveFeedVolumeScore(row = {}) {
+  return livePairVolumeH1(row) || livePairVolumeH24(row) || livePairVolumeM15(row) || 0;
+}
+
+function liveFeedTxnCount(row = {}) {
+  return liveFeedNum(row.buys5m) + liveFeedNum(row.buysH1) + liveFeedNum(row.sells5m) + liveFeedNum(row.sellsH1);
+}
+
+function liveFeedBuyPressure(row = {}) {
+  const buys = liveFeedNum(row.buys5m) + liveFeedNum(row.buysH1);
+  const sells = liveFeedNum(row.sells5m) + liveFeedNum(row.sellsH1);
+  const total = buys + sells;
+  return total > 0 ? buys / total : 0.5;
+}
+
+function liveFeedChangeScore(row = {}) {
+  return Math.max(liveFeedNum(row.m5), liveFeedNum(row.h1), liveFeedNum(row.h24));
+}
+
+function liveFeedMomentumScore(row = {}) {
+  return Math.max(liveFeedNum(row.m5), liveFeedNum(row.h1));
+}
+
+// "Heating up" composite: momentum, weighted by traded volume and buy pressure.
+function liveFeedTrendScore(row = {}) {
+  return liveFeedMomentumScore(row) * Math.log10(10 + liveFeedVolumeScore(row)) * (0.5 + liveFeedBuyPressure(row));
+}
+
+function liveFeedIsBoosted(row = {}) {
+  if (row.boosted || row.isBoosted || row.boost || row.boosts) return true;
+  const tag = `${row.source || ""} ${row.category || ""} ${row.liveLabel || ""} ${row.sourceLabel || ""}`.toLowerCase();
+  return tag.includes("boost");
+}
+
+function rankLiveRowsByCategory(rows = [], categoryId = "best") {
+  const list = [...rows];
+  switch (categoryId) {
+    case "volume":
+      return list.sort((a, b) => liveFeedVolumeScore(b) - liveFeedVolumeScore(a));
+    case "liquidity":
+      return list.sort((a, b) => livePairLiquidityUsd(b) - livePairLiquidityUsd(a));
+    case "active":
+      return list.sort((a, b) => liveFeedTxnCount(b) - liveFeedTxnCount(a));
+    case "new":
+      return list.sort(compareNewestLiveRows);
+    case "gainers":
+      return list.sort((a, b) => liveFeedChangeScore(b) - liveFeedChangeScore(a));
+    case "hot":
+      return list.sort((a, b) => liveFeedMomentumScore(b) - liveFeedMomentumScore(a));
+    case "trending":
+      return list.sort((a, b) => liveFeedTrendScore(b) - liveFeedTrendScore(a));
+    case "boosted": {
+      const boosted = list.filter(liveFeedIsBoosted).sort((a, b) => liveFeedVolumeScore(b) - liveFeedVolumeScore(a));
+      const rest = list.filter((row) => !liveFeedIsBoosted(row)).sort((a, b) => liveFeedTrendScore(b) - liveFeedTrendScore(a));
+      return [...boosted, ...rest];
+    }
+    case "best":
+    default:
+      return list.sort((a, b) => (
+        (liveFeedNum(b.bestPickScore || b.score) - liveFeedNum(a.bestPickScore || a.score))
+        || compareNewestLiveRows(a, b)
+      ));
+  }
+}
+
+function liveFeedCategoryDropdownHtml(category = currentLiveFeedCategory()) {
+  const [activeId] = category;
+  return `
+    <label class="cooks-category-select" title="Pick how the Live Feed is ranked">
+      <span class="cooks-category-cap">Feed</span>
+      <select data-live-feed-category aria-label="Live feed category">
+        ${LIVE_FEED_CATEGORIES.map(([id, label]) => `<option value="${id}"${id === activeId ? " selected" : ""}>${escapeHtml(label)}</option>`).join("")}
+      </select>
+    </label>`;
+}
+
 // Cooks feed body: a rotating Best Picks 5 on top, then the newest pairs
 // below (steady refresh). Shared by livePairsHtml and the in-place patch so
 // both stay identical. Rows render in the tight Cooks .signal-row style.
 function cooksFeedHtml(allRows = []) {
-  const best = cooksBestPickRows(allRows);
-  const bestMints = new Set(best.map(tokenMintKey).filter(Boolean));
-  const newestAll = [...allRows].sort(compareNewestLiveRows).filter((row) => !bestMints.has(tokenMintKey(row)));
-  const newest = terminalFeedRowsWindow("live", newestAll);
-  return `
+  const category = currentLiveFeedCategory();
+  const [catId, , catSub] = category;
+  const dropdown = liveFeedCategoryDropdownHtml(category);
+  const rowOptions = { context: "live", shareBuilder: livePairShareText, hideToolbar: true };
+  // "Best Picks" keeps the curated rotating-5 + Newest split. Every other category
+  // is a single ranked list of pairs that reflect that category (so it never just
+  // mirrors the same feed).
+  if (catId === "best") {
+    const best = cooksBestPickRows(allRows);
+    const bestMints = new Set(best.map(tokenMintKey).filter(Boolean));
+    const newestAll = [...allRows].sort(compareNewestLiveRows).filter((row) => !bestMints.has(tokenMintKey(row)));
+    const newest = terminalFeedRowsWindow("live", newestAll);
+    return `
     <div class="cooks-feed">
-      ${best.length ? `<div class="cooks-section" data-cooks-best>
-        <div class="cooks-section-label"><strong>Best Picks</strong><span>Top ${best.length} · rotating each refresh</span></div>
-        ${tokenSignalRowsHtml(best, { context: "live", shareBuilder: livePairShareText, hideToolbar: true })}
-      </div>` : ""}
+      <div class="cooks-section" data-cooks-best>
+        <div class="cooks-section-label cooks-category-label">${dropdown}<span>Top ${best.length} · rotating each refresh</span></div>
+        ${best.length ? tokenSignalRowsHtml(best, rowOptions) : emptyState("No pairs found for this filter yet", "Keep this tab open or tap Refresh — picks fill in as pairs qualify.")}
+      </div>
       <div class="cooks-section" data-cooks-newest>
         <div class="cooks-section-label"><strong>Newest</strong><span>Live launches · steady refresh</span></div>
-        ${newest.length ? tokenSignalRowsHtml(newest, { context: "live", shareBuilder: livePairShareText, hideToolbar: true }) : emptyState("Scanning fresh pairs", "Newest launches fill here as they qualify.")}
+        ${newest.length ? tokenSignalRowsHtml(newest, rowOptions) : emptyState("Scanning fresh pairs", "Newest launches fill here as they qualify.")}
+      </div>
+    </div>`;
+  }
+  const ranked = rankLiveRowsByCategory(allRows, catId);
+  const primary = terminalFeedRowsWindow("live", ranked);
+  return `
+    <div class="cooks-feed">
+      <div class="cooks-section" data-cooks-best>
+        <div class="cooks-section-label cooks-category-label">${dropdown}<span>${escapeHtml(catSub)}</span></div>
+        ${primary.length ? tokenSignalRowsHtml(primary, rowOptions) : emptyState("No pairs found for this filter yet", "Try another category or time window — the feed keeps scanning in the background.")}
       </div>
     </div>`;
 }
@@ -17264,9 +17386,19 @@ function livePairsHtml() {
   const lastUpdatedAt = currentLivePairsUpdatedAt();
   const bucketLoading = Boolean(state.livePairsLoadingByBucket[state.livePairBucket]);
   const launchFilterActive = terminalLaunchFiltersActive();
+  const refreshError = state.livePairsRefreshErrorByBucket?.[state.livePairBucket];
   const status = bucketLoading
     ? "Scanning live pairs..."
     : activeLivePairs?.message || "Cooks refreshes while this tab is open.";
+  const feedBody = allRows.length
+    ? cooksFeedHtml(allRows)
+    : launchFilterActive
+      ? terminalLaunchFilterEmptyState(rawRows, `${activeBucketLabel.toLowerCase()} pairs`)
+      : refreshError
+        ? emptyState("Unable to load pairs. Try refreshing.", "The live feed hit a snag — it keeps retrying automatically, or tap ↻ Refresh.")
+        : bucketLoading
+          ? emptyState("Loading live pairs…", "Scanning fresh pairs for this time window.")
+          : emptyState("No pairs found for this filter yet", "Keep this tab open or tap Refresh Live. Trade safety checks run before any buy.");
   return `
     <section class="terminal-layout live-terminal">
       <main class="terminal-main">
@@ -17283,7 +17415,7 @@ function livePairsHtml() {
         ${terminalLaunchFilterPanelHtml("live", { rawCount: rawRows.length, visibleCount: allRows.length })}
         ${terminalLaunchFilterSummaryHtml(rawRows, allRows)}
         ${fastPresetToolbarHtml("live")}
-        ${allRows.length ? cooksFeedHtml(allRows) : launchFilterActive ? terminalLaunchFilterEmptyState(rawRows, `${activeBucketLabel.toLowerCase()} pairs`) : emptyState("No live pairs yet", "Keep this tab open or tap Refresh Live. Trade safety checks run before any buy.")}
+        ${feedBody}
         ${terminalFeedLoadMoreHtml("live", allRows, `${activeBucketLabel} pairs`)}
       </main>
     </section>
@@ -21183,6 +21315,15 @@ document.addEventListener("change", async (event) => {
     state.terminalSort = target.value || "best";
     resetTerminalFeedVisibleLimit("live");
     resetTerminalFeedVisibleLimit("slimeScope");
+    render();
+    runDeferredUiTask(() => refreshLivePairBuckets({ silent: true, force: true }));
+  }
+  if (target?.matches?.("[data-live-feed-category]")) {
+    state.liveFeedCategory = target.value || "best";
+    // Warm the server pool with the closest backend sort so client ranking has
+    // the right pairs to work with.
+    state.terminalSort = currentLiveFeedCategory()[3] || "best";
+    resetTerminalFeedVisibleLimit("live");
     render();
     runDeferredUiTask(() => refreshLivePairBuckets({ silent: true, force: true }));
   }
