@@ -5914,28 +5914,31 @@ function dashboardHtml() {
 
 function profileHtml() {
   const walletReady = hasProfileWalletReady();
-  return `
-    <section class="profile-row-shell ${walletReady ? "" : "profile-wallet-gate-shell"}">
-      ${profileIntroHtml(walletReady)}
-      <section class="profile-row-list">
-      ${walletReady ? `
-        ${accountProfileSection()}
-        ${loginSecuritySection()}
-        ${profilePfpSection()}
-        ${xConnectSection()}
-      ` : `
-        ${profileWalletFirstSection()}
-        ${badgeShowcaseSection()}
-      `}
-      </section>
-      ${walletReady ? `<details class="profile-extra-details">
-        <summary>Badges, referrals, and top trader board</summary>
-        <div class="profile-extra-grid">
+  if (!walletReady) {
+    // Wallet-first gate: keep the simple setup prompt (not a multi-section overload).
+    return `
+      <section class="profile-row-shell profile-wallet-gate-shell">
+        ${profileIntroHtml(false)}
+        <section class="profile-row-list">
+          ${profileWalletFirstSection()}
           ${badgeShowcaseSection()}
-          ${referralSection()}
-          ${traderBoardSection()}
-        </div>
-      </details>` : ""}
+        </section>
+      </section>
+    `;
+  }
+  const sections = [
+    { key: "account", label: "Account", hint: "Profile & name", html: accountProfileSection() },
+    { key: "login", label: "Login", hint: "Security", html: loginSecuritySection() },
+    { key: "pfp", label: "PFP", hint: "Avatar", html: profilePfpSection() },
+    { key: "x", label: "X", hint: "Connect X", html: xConnectSection() },
+    { key: "badges", label: "Badges", hint: "Earned", html: badgeShowcaseSection() },
+    { key: "referral", label: "Referral", hint: "Invite & earn", html: referralSection() },
+    { key: "board", label: "Board", hint: "Top traders", html: traderBoardSection() }
+  ];
+  return `
+    <section class="profile-row-shell">
+      ${profileIntroHtml(true)}
+      ${toolPanelsHtml({ toolKey: "profile", activeKey: activeToolSection("profile", "account"), sections })}
     </section>
   `;
 }
@@ -7585,6 +7588,10 @@ function bundleHtml() {
           </div>
           <a class="mini-link" href="${state.bundleToken ? dexUrl(state.bundleToken) : "#"}" target="_blank" rel="noreferrer">Dex</a>
         </div>
+        ${toolPanelsHtml({ toolKey: "bundle", activeKey: activeToolSection("bundle", "bundle"), sections: [
+          {
+            key: "bundle", label: "Bundle", hint: "Buy / sell",
+            html: `
         <label>
           Token CA
           <input data-bundle-token type="text" placeholder="Paste Solana token mint" value="${escapeHtml(state.bundleToken || state.tradeToken)}">
@@ -7619,8 +7626,15 @@ function bundleHtml() {
             <input data-bundle-slippage-custom data-custom-for="bundle-slippage" type="number" min="1" max="5000" step="1" placeholder="Custom bps" hidden>
           </label>
         </div>
-        <details class="trade-block bundle-advanced">
-          <summary><h4>Auto Exit After Bundle Buy (optional)</h4></summary>
+        <div class="quick-grid two-wide">
+          <button class="primary" data-bundle-buy>Bundle Buy</button>
+          <button data-bundle-sell>Bundle Sell</button>
+        </div>
+        <p class="trade-status" data-bundle-status>${state.bundleResult ? escapeHtml(state.bundleResult.message || "Bundle complete.") : "Ready."}</p>`
+          },
+          {
+            key: "autoexit", label: "Auto Exit", hint: "TP / SL plan",
+            html: `
           <p>Optional timed plan for selected wallets. Use presets or type custom targets like 500 or 5x.</p>
           <div class="volume-grid">
             <label>
@@ -7676,13 +7690,9 @@ function bundleHtml() {
             </label>
           </div>
           ${walletExitTargetsHtml("bundle-plan")}
-          <button class="primary" data-bundle-plan>Bundle Buy + Auto Exits</button>
-        </details>
-        <div class="quick-grid two-wide">
-          <button class="primary" data-bundle-buy>Bundle Buy</button>
-          <button data-bundle-sell>Bundle Sell</button>
-        </div>
-        <p class="trade-status" data-bundle-status>${state.bundleResult ? escapeHtml(state.bundleResult.message || "Bundle complete.") : "Ready."}</p>
+          <button class="primary" data-bundle-plan>Bundle Buy + Auto Exits</button>`
+          }
+        ] })}
       </article>
       <aside class="trade-side">
         <article>
@@ -13772,20 +13782,8 @@ async function sweepBackgroundWallets() {
 }
 
 function walletsHtml() {
-  const create = `${walletSweepToolsHtml()}${createWalletSection()}${importWalletSection()}${backupRestoreSection()}${downloadsHtml()}`;
-  const walletTools = `
-    <details class="wallet-tools-details" open>
-      <summary>
-        <span>Sweep / Fund / Backup / Import</span>
-        <span class="wallet-tools-drop-action">Drop <span class="wallet-tools-caret" aria-hidden="true">v</span></span>
-      </summary>
-      ${create}
-    </details>
-  `;
   const connected = connectedWalletCardHtml();
-  if (!state.wallets.length) return `${connected}${walletTools}${emptyState("No managed bot wallets yet", "Connect a browser wallet for portfolio view, or open Wallet Tools when you want managed trading wallets.")}`;
-  return `
-    ${connected}
+  const balancesPanel = `
     ${walletBalanceSummaryHtml()}
     <section class="account-check-card">
       <div>
@@ -13798,9 +13796,6 @@ function walletsHtml() {
       <button data-tab="txAudit">Tx Audit</button>
       <small data-wallet-remove-status>${escapeHtml(state.walletRemoveStatus || "")}</small>
     </section>
-    ${returnFundsHtml()}
-    ${backgroundWalletsCtaHtml()}
-    ${distributeWalletsHtml()}
     <div class="table-list">
       ${displayWallets().map((wallet) => `
         <article class="row-card">
@@ -13820,7 +13815,26 @@ function walletsHtml() {
         </article>
       `).join("")}
     </div>
-    ${walletTools}
+  `;
+  const sections = [
+    { key: "balances", label: "Balances", hint: "Wallets & SOL", html: balancesPanel },
+    { key: "fund", label: "Fund / Sweep", hint: "Move SOL", html: `${returnFundsHtml()}${backgroundWalletsCtaHtml()}${distributeWalletsHtml()}${walletSweepToolsHtml()}` },
+    { key: "create", label: "Create", hint: "New wallets", html: createWalletSection() },
+    { key: "import", label: "Import", hint: "Add keys", html: importWalletSection() },
+    { key: "backup", label: "Backup", hint: "Save / restore", html: backupRestoreSection() },
+    { key: "downloads", label: "Downloads", hint: "Exports", html: downloadsHtml() }
+  ];
+  if (!state.wallets.length) {
+    const setupSections = sections.filter((section) => section.key !== "balances" && section.key !== "fund");
+    return `
+      ${connected}
+      ${emptyState("No managed bot wallets yet", "Connect a browser wallet for portfolio view, or use Create / Import below to set up managed trading wallets.")}
+      ${toolPanelsHtml({ toolKey: "wallets", activeKey: activeToolSection("wallets", "create"), sections: setupSections })}
+    `;
+  }
+  return `
+    ${connected}
+    ${toolPanelsHtml({ toolKey: "wallets", activeKey: activeToolSection("wallets", "balances"), sections })}
   `;
 }
 
