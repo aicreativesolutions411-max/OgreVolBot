@@ -567,8 +567,11 @@ test("Ogre A.I. does not blanket-block Token-2022 trusted-pool candidates", () =
 
 test("Ogre A.I. and buy safety use trusted-pool Token-2022 routing instead of a blanket block", () => {
   assert.match(serverSource, /TRUSTED_TOKEN_2022_POOL_RE/);
-  assert.match(serverFunctionBody("assertTokenBuySafety"), /market\?\.trustedToken2022Pool/);
-  assert.doesNotMatch(serverFunctionBody("assertTokenBuySafety"), /Token-2022 mints are blocked for fast buys/);
+  // The non-route safety (incl. trusted-pool Token-2022 routing) lives in the shared base
+  // helper that assertTokenBuySafety calls, so it stays enforced on the pump-pool buy path too.
+  assert.match(serverFunctionBody("assertTokenBuyBaseSafety"), /market\?\.trustedToken2022Pool/);
+  assert.match(serverFunctionBody("assertTokenBuySafety"), /assertTokenBuyBaseSafety/);
+  assert.doesNotMatch(serverFunctionBody("assertTokenBuyBaseSafety"), /Token-2022 mints are blocked for fast buys/);
   assert.match(serverFunctionBody("filterOgreAiRowsForHardSafety"), /hasTrustedToken2022Pool\(row\)/);
   assert.match(serverFunctionBody("webOgreAiPickSummary"), /poolLabel/);
 });

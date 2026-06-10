@@ -8722,6 +8722,93 @@ async function createDcaPlanFlow(chatId, session) {
   await showMenu(chatId, session.userId);
 }
 
+// True when a buy should route through the pump.fun bonding curve instead of Jupiter:
+// the mint is a pump.fun mint (conventionally ends in "pump") and the market data shows
+// it has NOT migrated to a Jupiter-routable AMM yet (no Raydium/PumpSwap/Meteora/Orca pool).
+function isPumpBondingCurveBuy(tokenMint, market = null) {
+  const mint = String(tokenMint || "").trim().toLowerCase();
+  if (!mint.endsWith("pump")) return false;
+  const venue = `${market?.dexId || ""} ${market?.dexName || ""}`.toLowerCase();
+  const migrated = /raydium|pumpswap|pump-amm|pumpamm|meteora|orca/.test(venue);
+  return !migrated;
+}
+
+// Buy a token directly off the pump.fun bonding curve via PumpPortal's local trade API,
+// mirroring sellTokenAmountFromWalletViaPumpPortal. denominatedInSol "true" means amount
+// is the SOL to spend. Tries the most likely pools in order.
+async function buyTokenViaPumpPortal(wallet, tokenMint, swapLamports, slippageBps, options = {}) {
+  const keypair = decryptWallet(wallet);
+  const amountSol = Number((Number(swapLamports) / LAMPORTS_PER_SOL).toFixed(9));
+  if (!(amountSol > 0)) {
+    throw new Error("PumpPortal buy amount rounded to zero SOL.");
+  }
+  const slippagePct = Math.max(0.01, Math.min(50, (Number.parseInt(slippageBps, 10) || CONFIG.defaultSlippageBps) / 100));
+  const priority = Boolean(options.priority);
+  const timeoutMs = options.timeoutMs || 20_000;
+  const baseRequestPayload = {
+    publicKey: keypair.publicKey.toBase58(),
+    action: "buy",
+    mint: tokenMint,
+    denominatedInSol: "true",
+    amount: amountSol,
+    slippage: slippagePct,
+    priorityFee: CONFIG.pumpLaunchPriorityFeeSol
+  };
+  const pools = pumpPortalSellPoolAttempts(tokenMint, options);
+  const pumpErrors = [];
+
+  for (const pool of pools) {
+    try {
+      const tx = await requestPumpPortalLocalTransaction({ ...baseRequestPayload, pool }, timeoutMs, {
+        url: CONFIG.pumpPortalTradeLocalUrl
+      });
+      let signature;
+      if (tx?.signature) {
+        signature = tx.signature;
+      } else {
+        tx.sign([keypair]);
+        signature = await sendVersionedTransaction(tx, `send PumpPortal buy transaction (${pool})`);
+      }
+      invalidateWalletReadCache(wallet.publicKey);
+      return {
+        signature,
+        outputAmount: null,
+        attempts: pools.indexOf(pool) + 1,
+        provider: `pumpportal:${pool}`
+      };
+    } catch (pumpError) {
+      pumpErrors.push(`${pool}: ${friendlyError(pumpError)}`);
+    }
+  }
+  throw new Error(`PumpPortal buy failed: ${pumpErrors.length ? pumpErrors.join(" | ") : "all PumpPortal pool attempts failed"}`);
+}
+
+// Jupiter buy with the full safety check (route included), used as the fallback when a
+// pump-pool buy fails because the token actually migrated to an AMM.
+async function buyViaJupiterWithSafety(keypair, tokenMint, swapLamports, slippageBps, priorError = null) {
+  try {
+    const safetyOrder = await assertTokenBuySafety({
+      tokenMint,
+      taker: keypair.publicKey,
+      buyLamports: swapLamports,
+      slippageBps
+    });
+    return await executeJupiterSwap({
+      signer: keypair,
+      inputMint: SOL_MINT,
+      outputMint: tokenMint,
+      amount: swapLamports,
+      slippageBps,
+      prebuiltOrder: safetyOrder
+    });
+  } catch (jupiterError) {
+    if (priorError) {
+      throw new Error(`Pump buy failed: ${friendlyError(priorError)}. Jupiter buy fallback failed: ${friendlyError(jupiterError)}`);
+    }
+    throw jupiterError;
+  }
+}
+
 async function buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps, options = {}) {
   const keypair = decryptWallet(wallet);
   const balance = await getSolBalanceCached(keypair.publicKey, { force: true });
@@ -8741,22 +8828,58 @@ async function buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps, o
   let result;
   let tokenBeforeRaw = null;
   try {
-    const safetyOrder = await assertTokenBuySafety({
-      tokenMint,
-      taker: keypair.publicKey,
-      buyLamports: swapLamports,
-      slippageBps
-    });
+    // Always enforce the authority / honeypot / liquidity safety checks. The Jupiter
+    // route is a separate concern: a token that just launched on the pump.fun bonding
+    // curve has no Jupiter route yet (it only gets one after it graduates to
+    // Raydium/PumpSwap), so for those we buy straight through the pump pool. This is the
+    // same bonding-curve path the sell side already falls back to.
+    const { market } = await assertTokenBuyBaseSafety(tokenMint);
+    const preferPumpPool = isPumpBondingCurveBuy(tokenMint, market);
     tokenBeforeRaw = trackMint ? await safeTokenRawBalance(keypair.publicKey, trackMint) : null;
 
-    result = await executeJupiterSwap({
-      signer: keypair,
-      inputMint: SOL_MINT,
-      outputMint: tokenMint,
-      amount: swapLamports,
-      slippageBps,
-      prebuiltOrder: safetyOrder
-    });
+    if (preferPumpPool) {
+      // Bonding-curve token: go to the pump pool first, fall back to Jupiter only if it
+      // has actually migrated since the safety read.
+      try {
+        result = await buyTokenViaPumpPortal(wallet, tokenMint, swapLamports, slippageBps, options);
+      } catch (pumpError) {
+        result = await buyViaJupiterWithSafety(keypair, tokenMint, swapLamports, slippageBps, pumpError);
+      }
+    } else {
+      // Established token: Jupiter for best price. Base safety already passed above, so a
+      // failure here is a routing/availability issue (e.g. a freshly-launched mint that does
+      // not end in "pump" and has no AMM route yet) — fall back to the pump bonding curve,
+      // which rejects genuinely untradeable tokens.
+      try {
+        const buyOrder = await createJupiterOrder({
+          taker: keypair.publicKey,
+          inputMint: SOL_MINT,
+          outputMint: tokenMint,
+          amount: swapLamports,
+          slippageBps,
+          priority: true,
+          timeoutMs: 8_000,
+          retries: CONFIG.jupiterRetries
+        });
+        if (BigInt(buyOrder.outAmount || buyOrder.outputAmount || 0) <= 0n) {
+          throw new Error("Jupiter buy route returned zero token output.");
+        }
+        result = await executeJupiterSwap({
+          signer: keypair,
+          inputMint: SOL_MINT,
+          outputMint: tokenMint,
+          amount: swapLamports,
+          slippageBps,
+          prebuiltOrder: buyOrder
+        });
+      } catch (jupiterError) {
+        try {
+          result = await buyTokenViaPumpPortal(wallet, tokenMint, swapLamports, slippageBps, options);
+        } catch (pumpError) {
+          throw new Error(`Jupiter buy failed: ${friendlyError(jupiterError)}. Pump buy fallback failed: ${friendlyError(pumpError)}`);
+        }
+      }
+    }
   } catch (error) {
     throw enrichBuyError(error, {
       balance,
@@ -12785,7 +12908,10 @@ async function createJupiterOrder({ taker, inputMint, outputMint, amount, slippa
   return order;
 }
 
-async function assertTokenBuySafety({ tokenMint, taker, buyLamports, slippageBps, referralAccount = "", referralFee = 0 }) {
+// The non-route safety checks (mint/freeze authority, honeypot wording, thin liquidity).
+// These do NOT need a Jupiter route, so they stay enforced even when a brand-new pump.fun
+// bonding-curve token has no Jupiter route yet and we buy through the pump pool instead.
+async function assertTokenBuyBaseSafety(tokenMint) {
   const safety = await getMintSafetyInfo(tokenMint);
   if (safety.freezeAuthority) {
     throw new Error("Token safety check failed: freeze authority is still active.");
@@ -12798,6 +12924,11 @@ async function assertTokenBuySafety({ tokenMint, taker, buyLamports, slippageBps
     throw new Error("Token safety check failed: Token-2022 requires a trusted Pump/Bonk/Meteora/Orca/Raydium pool for fast buys.");
   }
   await assertTokenMarketSafety(tokenMint, market);
+  return { safety, market };
+}
+
+async function assertTokenBuySafety({ tokenMint, taker, buyLamports, slippageBps, referralAccount = "", referralFee = 0 }) {
+  await assertTokenBuyBaseSafety(tokenMint);
 
   const buyOrder = await createJupiterOrder({
     taker,
