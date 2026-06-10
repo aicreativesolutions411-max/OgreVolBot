@@ -1004,7 +1004,36 @@ select:focus {
   display: flex;
   align-items: center;
   gap: 10px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+}
+/* sub-caption between the dropdown and the right-aligned refresh */
+.cooks-category-label > span {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* compact refresh, parked to the right of the category dropdown */
+.cooks-inline-refresh {
+  margin-left: auto;
+  flex: 0 0 auto;
+  width: auto;
+  min-height: 34px;
+  padding: 4px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+.cooks-inline-refresh:hover {
+  border-color: var(--green-2);
+  box-shadow: 0 0 14px rgba(114, 255, 35, 0.14);
 }
 .cooks-category-select {
   display: inline-flex;
@@ -1041,31 +1070,29 @@ select:focus {
      sub-caption text, and slim the refresh controls so the stretch from the
      wallet/TP-SL strip down to the pairs is compact. Applies to every feed that
      uses these shared classes (Cooks, Live Terminal, Slime Scope). */
-  .cooks-category-select select { min-width: 150px; min-height: 38px; }
+  .cooks-category-select select { min-width: 132px; min-height: 36px; font-size: 12px; }
   .cooks-meta { display: none !important; }
   .cooks-category-label > span,
   .cooks-section-label > span { display: none !important; }
-  .cooks-category-label { gap: 0; margin: 0 0 6px; }
+  .cooks-category-label { gap: 8px; margin: 0 0 6px; }
   .cooks-section-label { margin-bottom: 4px; }
-  .live-refresh-row { margin: 0; }
-  .live-mini-refresh,
+  .cooks-inline-refresh { min-height: 36px; padding: 4px 12px; }
   .slime-scope-refresh-button {
     width: auto !important;
     min-height: 32px !important;
     padding: 5px 14px !important;
     font-size: 12px !important;
   }
-  /* Mobile feed header: drop the time-window bar and tuck the refresh button in
-     next to the presets so the wallet -> pairs stretch is tight. Reorders the
+  /* Mobile feed header: drop the time-window bar so the wallet -> pairs stretch is
+     tight (the refresh now lives inline with the category dropdown). Reorders the
      .terminal-main grid children (Cooks + Live Terminal share this layout). */
   .live-terminal .live-pair-buckets { display: none !important; }
   .live-terminal .terminal-main { gap: 8px; }
   .live-terminal .terminal-launch-filter { order: 1; }
   .live-terminal .terminal-launch-filter-summary { order: 2; }
   .live-terminal .preset-toolbar { order: 3; }
-  .live-terminal .live-refresh-row { order: 4; justify-content: flex-end; }
-  .live-terminal .cooks-feed { order: 5; }
-  .live-terminal .feed-load-more-row { order: 6; }
+  .live-terminal .cooks-feed { order: 4; }
+  .live-terminal .feed-load-more-row { order: 5; }
 }
 .cook-spot-head { margin-bottom: 4px; }
 

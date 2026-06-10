@@ -662,17 +662,16 @@ function patchLivePairsFeedInPlace() {
   // has no wheel to fight, and there are no delayed passes. Desktop relies on native
   // overflow-anchor (no scrollTo, so it never fights the mouse wheel).
   const compact = isCompactViewport();
-  let anchorMint = "";
-  let anchorTop = 0;
+  const anchors = [];
   if (compact) {
     const viewportH = window.innerHeight || 700;
-    const anchor = Array.from(feed.querySelectorAll(".signal-row[data-token-chart]")).find((el) => {
-      const rect = el.getBoundingClientRect();
-      return rect.top >= 80 && rect.top < viewportH;
-    });
-    if (anchor) {
-      anchorMint = anchor.getAttribute("data-token-chart") || "";
-      anchorTop = anchor.getBoundingClientRect().top;
+    for (const el of feed.querySelectorAll(".signal-row[data-token-chart]")) {
+      const top = el.getBoundingClientRect().top;
+      if (top >= 80 && top < viewportH) {
+        const mint = el.getAttribute("data-token-chart") || "";
+        if (mint) anchors.push({ mint, top });
+        if (anchors.length >= 6) break;
+      }
     }
   }
   const template = document.createElement("div");
@@ -681,12 +680,17 @@ function patchLivePairsFeedInPlace() {
   if (!nextFeed || !reconcileCooksFeedInPlace(feed, nextFeed)) {
     feed.outerHTML = cooksFeedHtml(allRows);
   }
-  if (compact && anchorMint) {
+  if (compact && anchors.length) {
     const liveFeed = panel.querySelector(".cooks-feed");
-    const anchor = liveFeed?.querySelector(`.signal-row[data-token-chart="${anchorMint.replace(/["\\]/g, "\\$&")}"]`);
-    if (anchor) {
-      const delta = anchor.getBoundingClientRect().top - anchorTop;
-      if (Number.isFinite(delta) && Math.abs(delta) > 1) window.scrollBy(0, delta);
+    // Use the first captured row that survived the refresh (best picks can rotate
+    // out), and pin it with one scrollBy so nothing above pulls the page.
+    for (const a of anchors) {
+      const el = liveFeed?.querySelector(`.signal-row[data-token-chart="${a.mint.replace(/["\\]/g, "\\$&")}"]`);
+      if (el) {
+        const delta = el.getBoundingClientRect().top - a.top;
+        if (Number.isFinite(delta) && Math.abs(delta) > 1) window.scrollBy(0, delta);
+        break;
+      }
     }
   }
   const countLabel = panel.querySelector(".terminal-title-row span");
@@ -17508,6 +17512,9 @@ function cooksFeedMetaHtml(count = 0, updatedIso = "") {
 function cooksFeedHtml(allRows = []) {
   const ctx = feedCategoryContext();
   const dropdown = categoryDropdownHtml(ctx.categories, ctx.activeId, ctx.attr, ctx.cap);
+  // Inline refresh sits to the right of the dropdown. Static content keeps the
+  // reconciler from rebuilding the dropdown row each refresh.
+  const inlineRefresh = `<button type="button" class="cooks-inline-refresh" data-refresh-live-pairs title="Refresh feed">↻ Refresh</button>`;
   const meta = cooksFeedMetaHtml(allRows.length, currentLivePairsUpdatedAt());
   const rowOptions = { context: "live", shareBuilder: livePairShareText, hideToolbar: true };
   // Market "Best Picks" keeps the curated rotating-5 + Newest split. Every other
@@ -17522,7 +17529,7 @@ function cooksFeedHtml(allRows = []) {
     <div class="cooks-feed">
       ${meta}
       <div class="cooks-section" data-cooks-best>
-        <div class="cooks-section-label cooks-category-label">${dropdown}<span>Top ${best.length} · rotating each refresh</span></div>
+        <div class="cooks-section-label cooks-category-label">${dropdown}<span>Top ${best.length} · rotating each refresh</span>${inlineRefresh}</div>
         ${best.length ? tokenSignalRowsHtml(best, rowOptions) : emptyState("No pairs found for this filter yet", "Keep this tab open or tap Refresh — picks fill in as pairs qualify.")}
       </div>
       <div class="cooks-section" data-cooks-newest>
@@ -17536,7 +17543,7 @@ function cooksFeedHtml(allRows = []) {
     <div class="cooks-feed">
       ${meta}
       <div class="cooks-section" data-cooks-best>
-        <div class="cooks-section-label cooks-category-label">${dropdown}<span>${escapeHtml(ctx.sub)}</span></div>
+        <div class="cooks-section-label cooks-category-label">${dropdown}<span>${escapeHtml(ctx.sub)}</span>${inlineRefresh}</div>
         ${primary.length ? tokenSignalRowsHtml(primary, rowOptions) : emptyState("No pairs found for this filter yet", "Try another category or time window — the feed keeps scanning in the background.")}
       </div>
     </div>`;
@@ -17573,9 +17580,6 @@ function livePairsHtml() {
             const suffix = Number.isFinite(Number(count)) ? ` (${count})` : "";
             return `<button data-live-pair-bucket="${bucket}" data-active="${state.livePairBucket === bucket}">${label}${suffix}</button>`;
           }).join("")}
-        </div>
-        <div class="live-refresh-row">
-          <button class="primary live-mini-refresh" data-refresh-live-pairs>${bucketLoading ? "Scanning..." : "↻ Refresh"}</button>
         </div>
         ${terminalLaunchFilterPanelHtml("live", { rawCount: rawRows.length, visibleCount: allRows.length })}
         ${terminalLaunchFilterSummaryHtml(rawRows, allRows)}
@@ -21275,7 +21279,11 @@ document.addEventListener("click", async (event) => {
   const refreshLivePairsButton = target.closest?.("[data-refresh-live-pairs]");
   if (refreshLivePairsButton) {
     const feedKey = state.activeTab === "slimeScope" ? "slimeScope" : state.activeTab === "terminal" ? "terminal" : (state.activeTab === "launch" || state.activeTab === "launchCoin") ? "launch" : "live";
-    const scrollSnapshot = captureStableFeedScrollSnapshot();
+    // The Cooks/Live Terminal feeds refresh in place (reconciler + its own mobile
+    // anchor). Capturing/restoring a snapshot here too would double-correct and pull
+    // the page — so only snapshot for the full-render feeds (e.g. Slime Scope).
+    const reconcileTab = state.activeTab === "live" || state.activeTab === "terminal";
+    const scrollSnapshot = reconcileTab ? null : captureStableFeedScrollSnapshot();
     runDeferredUiTask(async () => {
       await refreshTerminalFeed(feedKey, {
         force: true,
@@ -21283,7 +21291,7 @@ document.addEventListener("click", async (event) => {
         renderStart: false,
         userInitiated: true
       });
-      restoreStableFeedScrollSnapshot(scrollSnapshot);
+      if (scrollSnapshot) restoreStableFeedScrollSnapshot(scrollSnapshot);
     });
   }
 
