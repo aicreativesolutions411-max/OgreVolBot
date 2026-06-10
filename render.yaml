@@ -40,6 +40,8 @@ services:
         value: 8
       - key: TRADING_SPEED_PRESET
         value: fast
+      - key: PRIORITY_FEE_LAMPORTS
+        value: 500000
       - key: CACHE_ENABLED
         value: true
       - key: CACHE_PROVIDER
