@@ -7217,9 +7217,18 @@ function tradeHtml() {
   `;
 }
 
+// Wallets the user manages directly. Background volume-bot wallets are hidden from
+// every wallet list/selector but keep their .index so trade resolution stays correct.
+function displayWallets() {
+  return (Array.isArray(state.wallets) ? state.wallets : []).filter((wallet) => !wallet?.volumeBot);
+}
+function backgroundWallets() {
+  return (Array.isArray(state.wallets) ? state.wallets : []).filter((wallet) => Boolean(wallet?.volumeBot));
+}
+
 function walletOptionsHtml(selectedIndex = "") {
   const connectedOption = connectedBrowserWalletOptionHtml(selectedIndex);
-  const managedOptions = state.wallets.map((wallet) => {
+  const managedOptions = displayWallets().map((wallet) => {
     const balance = state.balances.find((row) => Number(row.index) === Number(wallet.index));
     const sol = balance?.sol !== null && balance?.sol !== undefined ? `${Number(balance.sol).toFixed(4)} SOL` : "balance loading";
     const sessionLabel = wallet.sessionWallet ? " Session" : "";
@@ -7722,7 +7731,7 @@ function bundleResultHtml() {
 function walletChecksHtml(prefix, selectedIndexes = null) {
   const defaultCheckedCount = prefix === "trade-plan" ? 1 : 6;
   const selectedSet = Array.isArray(selectedIndexes) ? new Set(selectedIndexes.map(String)) : null;
-  return state.wallets.map((wallet, index) => `
+  return displayWallets().map((wallet, index) => `
     <label class="wallet-check">
       <input type="checkbox" data-${prefix}-wallet value="${wallet.index}" ${selectedSet ? (selectedSet.has(String(wallet.index)) ? "checked" : "") : (index < defaultCheckedCount ? "checked" : "")}>
       <span>${wallet.index}. ${escapeHtml(wallet.label)}</span>
@@ -13616,6 +13625,45 @@ function walletSweepToolsHtml() {
   `;
 }
 
+function backgroundWalletsCtaHtml() {
+  const bg = backgroundWallets();
+  if (!bg.length) return "";
+  const n = bg.length;
+  return `
+    <section class="account-check-card background-wallets-card">
+      <div>
+        <h3>Background volume wallets</h3>
+        <p>${n} temporary volume-bot wallet${n === 1 ? " is" : "s are"} running in the background, hidden from this list. They auto-return funds to your source wallet when a bot stops — if anything ever gets stuck, sweep them all back here.</p>
+      </div>
+      <div class="card-actions">
+        <button type="button" class="primary" data-sweep-background-wallets ${state.sweepBackgroundPending ? "disabled" : ""}>${state.sweepBackgroundPending ? "Sweeping..." : `Sweep ${n} background wallet${n === 1 ? "" : "s"}`}</button>
+      </div>
+      <small data-sweep-background-status>${escapeHtml(state.sweepBackgroundStatus || "")}</small>
+    </section>`;
+}
+
+async function sweepBackgroundWallets() {
+  if (state.sweepBackgroundPending) return;
+  state.sweepBackgroundPending = true;
+  state.sweepBackgroundStatus = "Sweeping background wallets back to your source wallet...";
+  render({ force: true });
+  try {
+    const data = await api("/api/web/wallets/sweep-background", {
+      method: "POST",
+      body: JSON.stringify({}),
+      dedupe: false,
+      timeoutMs: API_LONG_ACTION_TIMEOUT_MS
+    });
+    state.sweepBackgroundStatus = data?.summary || "Background wallets swept back to your source wallet.";
+    await refreshWalletNow({ force: true, deep: true, reason: "sweep-background" }).catch(() => {});
+  } catch (error) {
+    state.sweepBackgroundStatus = error?.message ? `Sweep failed: ${error.message}` : "Sweep failed. Try again.";
+  } finally {
+    state.sweepBackgroundPending = false;
+    render({ force: true });
+  }
+}
+
 function walletsHtml() {
   const create = `${walletSweepToolsHtml()}${createWalletSection()}${importWalletSection()}${backupRestoreSection()}${downloadsHtml()}`;
   const walletTools = `
@@ -13644,9 +13692,10 @@ function walletsHtml() {
       <small data-wallet-remove-status>${escapeHtml(state.walletRemoveStatus || "")}</small>
     </section>
     ${returnFundsHtml()}
+    ${backgroundWalletsCtaHtml()}
     ${distributeWalletsHtml()}
     <div class="table-list">
-      ${state.wallets.map((wallet) => `
+      ${displayWallets().map((wallet) => `
         <article class="row-card">
           <div class="wallet-row-main">
             <div class="user-avatar mini" aria-hidden="true">${userAvatarHtml(String(wallet.index))}</div>
@@ -21092,6 +21141,7 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-create-wallets]")) await createWalletSet();
   if (target.matches("[data-distribute-fresh]")) { await distributeFreshWallets(); return; }
   if (target.matches("[data-return-funds]")) { await returnFundsToConnected(); return; }
+  if (target.matches("[data-sweep-background-wallets]")) { await sweepBackgroundWallets(); return; }
   if (target.matches("[data-create-automation-wallet]")) await createAutomationWallet();
   if (target.matches("[data-create-session-wallet]")) {
     event.preventDefault();

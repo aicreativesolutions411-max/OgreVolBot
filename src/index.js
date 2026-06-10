@@ -2425,6 +2425,16 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "POST" && pathname === "/api/web/wallets/sweep-background") {
+      const body = await readJsonRequestBody(request);
+      const result = await webSweepBackgroundWallets(auth.userId, body);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        ...result
+      });
+      return;
+    }
+
     if (request.method === "POST" && pathname === "/api/web/wallets/sell-all-tokens") {
       const body = await readJsonRequestBody(request);
       const result = await webSellAllTokens(auth.userId, body);
@@ -24089,6 +24099,8 @@ async function sendEmailViaResend(email, subject, text) {
 
 async function webWalletRows(userId) {
   const store = await readWalletStore();
+  // Keep ALL wallets here (indexes must stay stable for trade wallet resolution).
+  // Volume-bot/background wallets are flagged so the UI can hide them.
   return walletsForOwner(store, userId).map((wallet, index) => ({
     index: index + 1,
     label: wallet.label,
@@ -24099,7 +24111,9 @@ async function webWalletRows(userId) {
     sourceConnectedWallet: wallet.sourceConnectedWallet || "",
     sessionExpiresAt: wallet.sessionExpiresAt || "",
     fundingSignature: wallet.fundingSignature || "",
-    fundingAmountSol: wallet.fundingAmountLamports ? lamportsToSol(wallet.fundingAmountLamports) : ""
+    fundingAmountSol: wallet.fundingAmountLamports ? lamportsToSol(wallet.fundingAmountLamports) : "",
+    volumeBot: Boolean(wallet.volumeBot || wallet.ephemeral),
+    volumeSource: wallet.volumeSource || ""
   }));
 }
 
@@ -25660,15 +25674,34 @@ function volumeBotRandomBuySol(targetSol) {
 }
 
 // Lean throwaway wallet for rolling mode (no backup-doc generation per round).
-async function createEphemeralVolumeWallet(userId, label) {
+async function createEphemeralVolumeWallet(userId, label, volumeSource = "") {
   const store = await readWalletStore();
   const keypair = Keypair.generate();
   const record = walletRecord(cleanLabel(label || "SlimeBot"), keypair, userId);
   record.ephemeral = true;
   record.volumeBot = true;
+  // Stamp the origin wallet so any sweep/stop/recovery can always return funds here
+  // without the user having to manage these background wallets.
+  if (volumeSource) record.volumeSource = String(volumeSource);
   store.wallets.push(record);
   await writeWalletStore(store);
   return record;
+}
+
+// Tag already-created wallets (fixed-pool auto-create) as background volume wallets
+// with their origin, so they are hidden from the Wallets tab and always sweepable.
+async function tagVolumeBotWallets(userId, publicKeys = [], volumeSource = "") {
+  const keys = new Set((publicKeys || []).filter(Boolean));
+  if (!keys.size) return;
+  const store = await readWalletStore();
+  let changed = false;
+  for (const wallet of store.wallets) {
+    if (wallet.ownerId === userId && keys.has(wallet.publicKey)) {
+      if (!wallet.volumeBot) { wallet.volumeBot = true; changed = true; }
+      if (volumeSource && wallet.volumeSource !== String(volumeSource)) { wallet.volumeSource = String(volumeSource); changed = true; }
+    }
+  }
+  if (changed) await writeWalletStore(store);
 }
 
 async function pruneVolumeWallet(publicKey) {
@@ -25849,6 +25882,9 @@ async function webStartVolumeBot(userId, body = {}) {
       label: cleanLabel(String(body.walletGroup || "SlimeBot"))
     });
     tradingPublicKeys = (created.wallets || []).map((wallet) => wallet.publicKey).filter(Boolean);
+    // Auto-created pool wallets are background/temporary: tag them so they stay out of
+    // the Wallets tab and always sweep back to the source.
+    await tagVolumeBotWallets(userId, tradingPublicKeys, sourceRecord.publicKey);
   } else {
     const fresh = await readWalletStore();
     const selected = webSelectedWallets(fresh, userId, body.walletIndexes, body.walletGroup);
@@ -26039,7 +26075,17 @@ async function processVolumeBotPlan(plan, walletStore, persist) {
       const pks = plan.tradingPublicKeys || [];
       const cursor = Number(plan.sweepCursor || 0);
       if (cursor >= pks.length) {
-        plan.botStage = "done";
+        // Self-heal: run up to 2 extra sweep passes so a wallet whose drain failed
+        // mid-sweep (RPC blip, restart) is retried automatically instead of being
+        // stranded. The manual "Sweep background wallets" button is the final backstop.
+        const retries = Number(plan.sweepRetries || 0);
+        if (cfg.sweepBack !== false && retries < 2) {
+          plan.sweepRetries = retries + 1;
+          plan.sweepCursor = 0;
+          volumeBotLogPush(plan, `Sweep self-heal pass ${plan.sweepRetries}/2: re-checking wallets for leftover funds.`);
+        } else {
+          plan.botStage = "done";
+        }
       } else {
         const publicKey = pks[cursor];
         const record = recordByPk(publicKey);
@@ -26116,7 +26162,7 @@ async function runRollingVolumeBotStep(plan, { slippageBps, noBalance }) {
     const fundSol = Number((buySol + VOLUME_BOT_LIMITS.roundFeeBufferSol).toFixed(6));
     let record;
     try {
-      record = await createEphemeralVolumeWallet(plan.userId, `SlimeBot R${Number(plan.roundsDone || 0) + 1}`);
+      record = await createEphemeralVolumeWallet(plan.userId, `SlimeBot R${Number(plan.roundsDone || 0) + 1}`, plan.sourcePublicKey);
     } catch (error) {
       plan.stats.errors = Number(plan.stats.errors || 0) + 1;
       volumeBotLogPush(plan, `Spawn failed: ${friendlyError(error)}`);
@@ -28766,6 +28812,70 @@ async function webReturnFundsToConnected(userId, body = {}) {
     sweep,
     sweptSol: Number(sweptSol.toFixed(6)),
     summary: `Returned tokens + ${sweptSol.toFixed(4)} SOL to ${shortMint(destination.toBase58())}.`
+  };
+}
+
+// Safety recovery: drain every background volume-bot wallet (tokens + SOL) back to
+// its stamped origin (volumeSource), or a fallback destination, then prune the ones
+// that end empty. Guarantees funds can never be stranded in hidden wallets.
+async function webSweepBackgroundWallets(userId, body = {}) {
+  const store = await readWalletStore();
+  const owned = walletsForOwner(store, userId);
+  const volumeWallets = owned.filter((wallet) => wallet.volumeBot || wallet.ephemeral);
+  if (!volumeWallets.length) {
+    return { action: "sweep-background", walletCount: 0, cleared: 0, sweptSol: 0, summary: "No background wallets to sweep." };
+  }
+  const slippageBps = parseWebSlippage(body.slippageBps || CONFIG.stopLossExitSlippageBps);
+  const explicitDest = String(body.destination || "").trim() ? parseWebDestination(body.destination) : null;
+  const firstReal = owned.find((wallet) => !wallet.volumeBot && !wallet.ephemeral);
+  const fallbackDest = explicitDest || (firstReal ? new PublicKey(firstReal.publicKey) : null);
+  const toPublicKey = (value) => { try { return value ? new PublicKey(value) : null; } catch { return null; } };
+  const emptied = [];
+  let sweptSol = 0;
+  const rows = [];
+
+  await runWithConcurrency(volumeWallets, Math.max(1, Math.min(CONFIG.bundleConcurrency || 3, volumeWallets.length)), async (wallet) => {
+    const row = { wallet: shortMint(wallet.publicKey), sells: 0, sentSol: 0, message: "" };
+    let destination = toPublicKey(wallet.volumeSource) || fallbackDest;
+    try {
+      const keypair = decryptWallet(wallet);
+      if (destination && keypair.publicKey.equals(destination)) destination = fallbackDest;
+      if (!destination) { row.message = "No destination wallet to return to."; return; }
+      const lookup = await getOwnedTokenAccountsWithWarningsCached(keypair.publicKey, { force: true }).catch(() => ({ accounts: [] }));
+      const tokens = sellableTokensFromAccounts(lookup.accounts || []);
+      for (const token of tokens) {
+        try { await sellTokenAmountFromWallet(wallet, token.mint, token.rawAmount, slippageBps, { userId }); row.sells += 1; }
+        catch { /* leave token if it cannot route; SOL drain still runs */ }
+      }
+      try {
+        const drain = await drainSolFromWallet(keypair, destination);
+        const sent = Number(lamportsToSol(drain.sentLamports || 0)) || 0;
+        sweptSol += sent;
+        row.sentSol = Number(sent.toFixed(6));
+      } catch (error) { row.message = friendlyError(error); }
+      const remaining = await getSolBalanceCached(keypair.publicKey, { force: true }).catch(() => 0);
+      const remainingTokens = await getOwnedTokenAccountsWithWarningsCached(keypair.publicKey, { force: true }).then((l) => sellableTokensFromAccounts(l.accounts || []).length).catch(() => 1);
+      if (remaining <= 20_000 && !remainingTokens) emptied.push(wallet.publicKey); // <= ~unsweepable dust + no tokens
+    } catch (error) { row.message = friendlyError(error); }
+    finally { rows.push(row); }
+  });
+
+  let cleared = 0;
+  if (emptied.length) {
+    const fresh = await readWalletStore();
+    const emptiedSet = new Set(emptied);
+    const before = fresh.wallets.length;
+    fresh.wallets = fresh.wallets.filter((wallet) => !(emptiedSet.has(wallet.publicKey) && (wallet.volumeBot || wallet.ephemeral)));
+    if (fresh.wallets.length !== before) { await writeWalletStore(fresh); cleared = before - fresh.wallets.length; }
+  }
+  await audit("web_sweep_background_wallets", { userId, walletCount: volumeWallets.length, sweptSol, cleared });
+  return {
+    action: "sweep-background",
+    walletCount: volumeWallets.length,
+    cleared,
+    sweptSol: Number(sweptSol.toFixed(6)),
+    rows,
+    summary: `Swept ${volumeWallets.length} background wallet(s) and returned ${sweptSol.toFixed(4)} SOL.${cleared ? ` Cleared ${cleared} empty wallet(s).` : ""}`
   };
 }
 
