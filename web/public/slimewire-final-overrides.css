@@ -19811,18 +19811,73 @@ html body main.shell[data-app] .ovs-invest-unit {
   color: #c7f7a4 !important; font-weight: 800;
   font-size: clamp(10px, 2.4cqw, 15px); white-space: nowrap; padding-left: 2px;
 }
+/* Mobile labels are hidden on desktop (the template art already shows them). */
+html body main.shell[data-app] .ovs-mlabel { display: none; }
 /* Stacked (single-column) below ~920px: panel on top, info underneath. */
 @media (max-width: 920px) {
   html body main.shell[data-app] .ovs-skin.volume-bot-card { grid-template-columns: 1fr; gap: 14px; }
 }
-/* On phones the fixed 3:2 stage is too short and the slots overlap. Make the
-   stage taller so each row gets real room. The template stretches with the
-   stage, so the controls stay aligned to the drawn slots (same %), just with
-   more vertical space between them. */
+/* On phones the positioned overlay is too cramped to use. Drop it: the stage
+   becomes a clean vertical stack of labelled controls over a faint demon, so
+   every field is tight, readable, and usable. */
 @media (max-width: 760px) {
-  html body main.shell[data-app] .ovs-stage { aspect-ratio: 1264 / 1180; }
-  html body main.shell[data-app] .ovs-ca { font-size: 13px !important; }
-  html body main.shell[data-app] .ovs-stage::after { height: 44%; }
+  html body main.shell[data-app] .ovs-stage {
+    aspect-ratio: auto;
+    height: auto;
+    container-type: normal;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 14px 14px 16px;
+    background:
+      linear-gradient(180deg, rgba(5, 8, 5, 0.82), rgba(5, 8, 5, 0.9)),
+      url("/assets/slimewire/tool-bg/volume-template.png") right top / cover no-repeat,
+      #050805;
+  }
+  html body main.shell[data-app] .ovs-stage::after { display: none; }
+  html body main.shell[data-app] .ovs-mlabel {
+    display: block; color: #bff79a; font-weight: 700; font-size: 12px;
+    letter-spacing: 0.02em; text-transform: uppercase;
+  }
+  html body main.shell[data-app] .ovs-mlabel:first-child {
+    color: var(--slime-green-strong, #bbff63); font-size: 18px; font-weight: 800;
+    letter-spacing: 0.05em; margin-bottom: 8px;
+  }
+  html body main.shell[data-app] .ovs-mlabel-field { margin-top: 11px; }
+  html body main.shell[data-app] .ovs-ca,
+  html body main.shell[data-app] .ovs-invest,
+  html body main.shell[data-app] .ovs-duration,
+  html body main.shell[data-app] .ovs-mode,
+  html body main.shell[data-app] .ovs-aggr {
+    position: static !important; left: auto !important; top: auto !important;
+    width: 100% !important; height: auto !important; max-width: none !important;
+  }
+  html body main.shell[data-app] .ovs-ca {
+    background: rgba(7, 12, 8, 0.92) !important; border: 1px solid rgba(120, 230, 120, 0.25) !important;
+    border-radius: 10px !important; padding: 12px !important; color: #eafff0 !important;
+    font-size: 14px !important; box-sizing: border-box !important; margin-top: 3px;
+  }
+  html body main.shell[data-app] .ovs-invest,
+  html body main.shell[data-app] .ovs-duration { display: flex !important; align-items: center; gap: 10px; padding: 6px 0 !important; }
+  html body main.shell[data-app] .ovs-invest input[type="range"],
+  html body main.shell[data-app] .ovs-duration input[type="range"] { flex: 1 1 auto; }
+  html body main.shell[data-app] .ovs-invest-num {
+    width: 58px !important; background: rgba(7, 12, 8, 0.92) !important; border: 1px solid rgba(120, 230, 120, 0.25) !important;
+    border-radius: 8px !important; padding: 7px 4px !important; color: #eafff0 !important; text-align: center; font-size: 14px !important;
+  }
+  html body main.shell[data-app] .ovs-invest-unit { color: #c7f7a4 !important; font-size: 13px !important; font-weight: 800; }
+  html body main.shell[data-app] .ovs-dur-label { color: #c7f7a4 !important; font-size: 13px !important; min-width: 34px; text-align: right; }
+  html body main.shell[data-app] .ovs-stage .vbot-segment {
+    display: flex !important; gap: 6px; width: 100%; height: auto; background: transparent !important;
+  }
+  html body main.shell[data-app] .ovs-stage .vbot-segment button {
+    flex: 1; padding: 11px 4px !important; height: auto !important; font-size: 13px !important;
+    background: rgba(7, 12, 8, 0.92) !important; border: 1px solid rgba(120, 230, 120, 0.2) !important;
+    border-radius: 9px !important; color: #a7d894 !important;
+  }
+  html body main.shell[data-app] .ovs-stage .vbot-segment button[data-active="true"] {
+    background: rgba(130, 255, 80, 0.9) !important; color: #06140a !important; border-color: rgba(150, 255, 80, 0.9) !important;
+  }
 }
 /* === END VOLUME_SKIN_20260609_V1 ===================================== */
 

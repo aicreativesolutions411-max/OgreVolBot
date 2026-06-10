@@ -8182,17 +8182,23 @@ function volumeBotPanelHtml() {
     <section class="trade-card volume-bot-card slime-configurator ovs-skin" data-preserve-focus>
       <h2 class="vbot-config-title oss-a11y-title">Volume Configurator</h2>
       <div class="ovs-stage">
+        <span class="ovs-mlabel" aria-hidden="true">VOLUME CONFIGURATOR</span>
+        <span class="ovs-mlabel ovs-mlabel-field" aria-hidden="true">Contract Address</span>
         <input class="ovs-ca" data-vbot-token type="text" placeholder="Paste contract address" value="${escapeHtml(state.volumeToken || state.tradeToken || "")}" aria-label="Contract address">
+        <span class="ovs-mlabel ovs-mlabel-field" aria-hidden="true">Investment (SOL)</span>
         <div class="ovs-invest">
           <input data-vbot-invest type="range" min="0.1" max="10" step="0.1" value="6" aria-label="Investment in SOL">
           <input data-vbot-invest-num type="number" min="0.1" max="10" step="0.1" value="6" class="ovs-invest-num" aria-label="Investment in SOL">
           <span class="ovs-invest-unit">SOL</span>
         </div>
+        <span class="ovs-mlabel ovs-mlabel-field" aria-hidden="true">Duration</span>
         <div class="ovs-duration">
           <input data-vbot-duration type="range" min="20" max="360" step="5" value="60" aria-label="Duration">
           <span class="ovs-dur-label" data-vbot-duration-label>1h</span>
         </div>
+        <span class="ovs-mlabel ovs-mlabel-field" aria-hidden="true">Mode</span>
         <div class="ovs-mode">${slimeBotSegment("mode", state.slimeBotMode, [["smart", "Smart"], ["spam", "Spam"]])}</div>
+        <span class="ovs-mlabel ovs-mlabel-field" aria-hidden="true">Aggressiveness</span>
         <div class="ovs-aggr">${slimeBotSegment("aggr", state.slimeBotAggr, [["low", "Low"], ["med", "Med"], ["high", "High"]])}</div>
       </div>
       <div class="ovs-below">
