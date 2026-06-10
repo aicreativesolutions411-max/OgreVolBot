@@ -1047,7 +1047,7 @@ select:focus {
   .cooks-section-label > span { display: none !important; }
   .cooks-category-label { gap: 0; margin: 0 0 6px; }
   .cooks-section-label { margin-bottom: 4px; }
-  .live-refresh-row { margin: 0 0 4px; }
+  .live-refresh-row { margin: 0; }
   .live-mini-refresh,
   .slime-scope-refresh-button {
     width: auto !important;
@@ -1055,6 +1055,17 @@ select:focus {
     padding: 5px 14px !important;
     font-size: 12px !important;
   }
+  /* Mobile feed header: drop the time-window bar and tuck the refresh button in
+     next to the presets so the wallet -> pairs stretch is tight. Reorders the
+     .terminal-main grid children (Cooks + Live Terminal share this layout). */
+  .live-terminal .live-pair-buckets { display: none !important; }
+  .live-terminal .terminal-main { gap: 8px; }
+  .live-terminal .terminal-launch-filter { order: 1; }
+  .live-terminal .terminal-launch-filter-summary { order: 2; }
+  .live-terminal .preset-toolbar { order: 3; }
+  .live-terminal .live-refresh-row { order: 4; justify-content: flex-end; }
+  .live-terminal .cooks-feed { order: 5; }
+  .live-terminal .feed-load-more-row { order: 6; }
 }
 .cook-spot-head { margin-bottom: 4px; }
 

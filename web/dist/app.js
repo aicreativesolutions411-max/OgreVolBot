@@ -649,7 +649,7 @@ function reconcileCooksFeedInPlace(liveFeed, nextFeed) {
 // the live rows in place (keyed by mint) so the controls, scroll position, and
 // painted avatars stay put. Returns true if patched.
 function patchLivePairsFeedInPlace() {
-  if (state.activeTab !== "live") return false;
+  if (state.activeTab !== "live" && state.activeTab !== "terminal") return false;
   const panel = $("[data-panel]");
   const feed = panel?.querySelector(".cooks-feed");
   if (!panel || !feed) return false;
@@ -657,11 +657,37 @@ function patchLivePairsFeedInPlace() {
   const rawRows = uniqueSignalRows(activeLivePairs?.rows || []);
   const allRows = terminalLaunchFilteredRows(rawRows);
   if (!allRows.length) return false; // fall back to full render for empty state
+  // Mobile: pin the viewport to a stable on-screen row across the refresh, so new or
+  // rotated rows above can't pull the page down. One synchronous correction — touch
+  // has no wheel to fight, and there are no delayed passes. Desktop relies on native
+  // overflow-anchor (no scrollTo, so it never fights the mouse wheel).
+  const compact = isCompactViewport();
+  let anchorMint = "";
+  let anchorTop = 0;
+  if (compact) {
+    const viewportH = window.innerHeight || 700;
+    const anchor = Array.from(feed.querySelectorAll(".signal-row[data-token-chart]")).find((el) => {
+      const rect = el.getBoundingClientRect();
+      return rect.top >= 80 && rect.top < viewportH;
+    });
+    if (anchor) {
+      anchorMint = anchor.getAttribute("data-token-chart") || "";
+      anchorTop = anchor.getBoundingClientRect().top;
+    }
+  }
   const template = document.createElement("div");
   template.innerHTML = cooksFeedHtml(allRows);
   const nextFeed = template.querySelector(".cooks-feed");
   if (!nextFeed || !reconcileCooksFeedInPlace(feed, nextFeed)) {
     feed.outerHTML = cooksFeedHtml(allRows);
+  }
+  if (compact && anchorMint) {
+    const liveFeed = panel.querySelector(".cooks-feed");
+    const anchor = liveFeed?.querySelector(`.signal-row[data-token-chart="${anchorMint.replace(/["\\]/g, "\\$&")}"]`);
+    if (anchor) {
+      const delta = anchor.getBoundingClientRect().top - anchorTop;
+      if (Number.isFinite(delta) && Math.abs(delta) > 1) window.scrollBy(0, delta);
+    }
   }
   const countLabel = panel.querySelector(".terminal-title-row span");
   if (countLabel) {
