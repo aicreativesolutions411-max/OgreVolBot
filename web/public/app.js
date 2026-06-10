@@ -13660,6 +13660,40 @@ function walletsHtml() {
   `;
 }
 
+function fundedSessionWalletForUi() {
+  const wallets = Array.isArray(state.wallets) ? state.wallets : [];
+  return wallets.find((wallet) => wallet?.sessionWallet && wallet?.sessionStatus === "funded") || null;
+}
+
+// Prominent, reusable "unlock automation" CTA for connected wallets. Reuses the
+// existing one-approval funding flow (data-create-session-wallet + the amount
+// input), just surfaced clearly instead of buried among action buttons.
+function sessionWalletCtaHtml() {
+  const connected = state.connectedWalletBalance || state.user?.connectedWallet || null;
+  if (!connected?.publicKey) return "";
+  const funded = fundedSessionWalletForUi();
+  if (funded) {
+    return `
+      <div class="session-wallet-cta is-ready">
+        <span class="session-wallet-cta-badge ready">✓ Automation ready</span>
+        <p>Session wallet funded${funded.fundingAmountSol ? ` · <strong>${escapeHtml(funded.fundingAmountSol)} SOL</strong>` : ""}. TP/SL, auto-sell, Ogre A.I. and bundles now run unattended from it — your connected wallet keeps your main funds.</p>
+        <div class="session-wallet-controls">
+          <label>Top up SOL<input data-session-wallet-amount type="number" min="0.005" max="10" step="0.005" inputmode="decimal" value="0.10"></label>
+          <button type="button" data-create-session-wallet>Add Funds</button>
+        </div>
+      </div>`;
+  }
+  return `
+    <div class="session-wallet-cta">
+      <span class="session-wallet-cta-badge">⚡ Unlock automation</span>
+      <p>Connected wallets trade manually only. Fund a <strong>Session Wallet</strong> with one approval to unlock <strong>TP/SL, auto-sell, Ogre A.I. and bundles</strong>. Your main funds stay in your wallet — only the SOL you approve can be auto-traded.</p>
+      <div class="session-wallet-controls">
+        <label>Session SOL<input data-session-wallet-amount type="number" min="0.005" max="10" step="0.005" inputmode="decimal" value="0.10"></label>
+        <button class="primary" type="button" data-create-session-wallet>Fund Session Wallet</button>
+      </div>
+    </div>`;
+}
+
 function connectedWalletCardHtml() {
   const connected = state.connectedWalletBalance || state.user?.connectedWallet || null;
   if (!connected?.publicKey) return "";
@@ -13685,12 +13719,12 @@ function connectedWalletCardHtml() {
         </div>
         ${balance.error ? `<small>Check failed: ${escapeHtml(balance.error)}</small>` : ""}
         ${tokenRows ? `<div class="connected-token-list">${tokenRows}</div>` : ""}
-        <small>${state.walletFastApprovalsEnabled ? "Fast approvals are on for connected-wallet prompts." : "Fast approvals are off."} Start a session wallet when you want connected-wallet funds to behave like managed automation funds.</small>
+        ${sessionWalletCtaHtml()}
+        <small>${state.walletFastApprovalsEnabled ? "Fast approvals are on for connected-wallet prompts." : "Fast approvals are off."}</small>
       </div>
       <div class="card-actions">
         <button data-refresh-all>Refresh</button>
         <button data-copy="${escapeHtml(connected.publicKey)}">Copy</button>
-        <button type="button" data-create-session-wallet>Start Session</button>
         <button type="button" data-wallet-fast-approvals-toggle>${state.walletFastApprovalsEnabled ? "Fast Approvals On" : "Fast Approvals Off"}</button>
         <button type="button" data-connect-wallet="solana">Reconnect</button>
         <button type="button" data-disconnect-wallet>Disconnect</button>

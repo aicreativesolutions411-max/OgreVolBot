@@ -1131,6 +1131,62 @@ select:focus {
 .signal-badge-fresh { background: rgba(64, 220, 255, 0.14); color: #76e3ff; border-color: rgba(64, 220, 255, 0.4); }
 .signal-badge-active { background: rgba(160, 130, 255, 0.16); color: #c0acff; border-color: rgba(160, 130, 255, 0.42); }
 
+/* Connected-wallet "unlock automation" / session-wallet call-to-action */
+.session-wallet-cta {
+  margin: 10px 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(114, 255, 35, 0.4);
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(114, 255, 35, 0.08), rgba(4, 7, 5, 0.55));
+}
+.session-wallet-cta.is-ready {
+  border-color: rgba(114, 255, 35, 0.28);
+  background: rgba(8, 18, 8, 0.5);
+}
+.session-wallet-cta-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: #071006;
+  background: linear-gradient(135deg, rgba(114, 255, 35, 0.94), rgba(187, 255, 99, 0.94));
+  padding: 3px 9px;
+  border-radius: 999px;
+}
+.session-wallet-cta-badge.ready {
+  background: rgba(114, 255, 35, 0.16);
+  color: var(--green-2);
+  border: 1px solid rgba(114, 255, 35, 0.4);
+}
+.session-wallet-cta p {
+  margin: 8px 0 10px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--ink);
+}
+.session-wallet-cta .session-wallet-controls {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.session-wallet-cta .session-wallet-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.session-wallet-cta .session-wallet-controls input {
+  width: 116px;
+  min-height: 40px;
+}
+.session-wallet-cta .session-wallet-controls button {
+  min-height: 40px;
+}
+
 .primary,
 .primary-link {
   display: inline-grid;
