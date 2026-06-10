@@ -615,8 +615,8 @@ function scheduleLivePairsRender(reason = "live-pairs-batch") {
       resultCount: Array.isArray(currentLivePairs()?.rows) ? currentLivePairs().rows.length : 0,
       details: details.length ? details.slice(-3).join(" | ") : reason
     });
-    // Cooks tab: patch just the rows in place to avoid the panel-rebuild shake.
-    if (state.activeTab === "live" && patchLivePairsFeedInPlace()) {
+    // Cooks/Live tab: patch just the rows in place to avoid the panel-rebuild shake.
+    if ((state.activeTab === "live" || state.activeTab === "terminal") && patchLivePairsFeedInPlace()) {
       return;
     }
     const scrollSnapshot = captureStableFeedScrollSnapshot();
@@ -5637,7 +5637,7 @@ function renderTabs() {
     group.open = Boolean(desktopInlineTools) || Boolean(state.navTekOpen) || (!hasStoredNavTekPreference() && hasActiveChild);
   });
 
-  if (state.activeTab === "terminal") panel.innerHTML = terminalHtml();
+  if (state.activeTab === "terminal") panel.innerHTML = livePairsHtml();
   if (state.activeTab === "tek") panel.innerHTML = tekHubHtml();
   if (state.activeTab === "dashboard") panel.innerHTML = dashboardHtml();
   if (state.activeTab === "profile") panel.innerHTML = profileHtml();
