@@ -616,14 +616,11 @@ function scheduleLivePairsRender(reason = "live-pairs-batch") {
       details: details.length ? details.slice(-3).join(" | ") : reason
     });
     // Cooks/Live tab: patch just the rows in place to avoid the panel-rebuild shake.
-    // Anchor the scroll first so the rotating Best Picks reshuffle can't shove the
-    // row the user is reading (the "pull"/jump that showed up on the 8s refresh).
-    if (state.activeTab === "live" || state.activeTab === "terminal") {
-      const patchSnapshot = captureStableFeedScrollSnapshot();
-      if (patchLivePairsFeedInPlace()) {
-        restoreStableFeedScrollSnapshot(patchSnapshot, undefined, { immediate: true });
-        return;
-      }
+    // The window scroller naturally stays put when only the inner feed HTML swaps,
+    // so the periodic patch must NOT re-anchor scroll here — doing so fights the
+    // user's own mouse-wheel/touch scrolling between refreshes.
+    if ((state.activeTab === "live" || state.activeTab === "terminal") && patchLivePairsFeedInPlace()) {
+      return;
     }
     const scrollSnapshot = captureStableFeedScrollSnapshot();
     render();
@@ -5214,17 +5211,25 @@ function captureSmartChartFrameForRender(options = {}) {
   if (!frame || !iframe) return null;
   const mode = String(frame.dataset.chartMode || "chartTxns");
   const descriptor = smartChartFrameDescriptor(null, mode);
-  const currentSrc = String(frame.dataset.chartSrc || iframe.getAttribute("src") || "");
-  if (!descriptor || frame.dataset.chartMint !== descriptor.mint || frame.dataset.chartMode !== descriptor.mode || currentSrc !== descriptor.src) {
+  if (!descriptor || frame.dataset.chartMint !== descriptor.mint || frame.dataset.chartMode !== descriptor.mode) {
     return null;
   }
+  const currentSrc = String(frame.dataset.chartSrc || iframe.getAttribute("src") || "");
+  const loaded = frame.dataset.loaded === "true";
+  // Keep an already-loaded chart for this token even when async pair-resolution would
+  // now prefer a different DexScreener URL. Swapping the iframe src forces a full
+  // reload (the "double load" that flickers hard on mobile). Only require an exact
+  // src match while the frame is still on its first load.
+  const keepByMint = loaded && currentSrc !== descriptor.src;
+  if (currentSrc !== descriptor.src && !loaded) return null;
   frame.dataset.preserving = "true";
   return {
     frame,
     mint: descriptor.mint,
     mode: descriptor.mode,
-    src: descriptor.src,
-    loaded: frame.dataset.loaded === "true"
+    src: keepByMint ? currentSrc : descriptor.src,
+    loaded,
+    keepByMint
   };
 }
 
@@ -5234,7 +5239,9 @@ function restoreSmartChartFrameAfterRender(snapshot = null) {
   const selectorMode = String(snapshot.mode || "").replace(/["\\]/g, "\\$&");
   const nextFrame = document.querySelector(`[data-panel] .smart-chart-frame[data-chart-mint="${selectorMint}"][data-chart-mode="${selectorMode}"]`);
   const nextSrc = nextFrame?.dataset?.chartSrc || nextFrame?.querySelector?.("iframe")?.getAttribute("src") || "";
-  if (!nextFrame || nextFrame === snapshot.frame || nextSrc !== snapshot.src) {
+  // keepByMint: the live frame already finished loading this token, so reuse it even
+  // though pair-resolution changed the "ideal" src — that avoids a second full reload.
+  if (!nextFrame || nextFrame === snapshot.frame || (nextSrc !== snapshot.src && !snapshot.keepByMint)) {
     snapshot.frame.removeAttribute("data-preserving");
     return false;
   }
@@ -5580,7 +5587,7 @@ function captureStableFeedScrollSnapshot(panel = $("[data-panel]")) {
   };
 }
 
-function restoreStableFeedScrollSnapshot(snapshot, panel = $("[data-panel]"), options = {}) {
+function restoreStableFeedScrollSnapshot(snapshot, panel = $("[data-panel]")) {
   if (!snapshot || state.route !== "terminal" || snapshot.tab !== state.activeTab) return;
   const restoreElementScroll = (element, top) => {
     if (!element || !Number.isFinite(Number(top))) return;
@@ -5617,10 +5624,6 @@ function restoreStableFeedScrollSnapshot(snapshot, panel = $("[data-panel]"), op
   // Restore synchronously first so the browser never paints the jumped
   // (pulled) position; the rAF/timeout passes just correct any late reflow.
   restore();
-  // The periodic in-place feed patch (every ~8s) only needs this one synchronous
-  // correction for the rotation shift. Skip the trailing rAF/timeout passes there
-  // so they can never fire mid-gesture and fight the user's own wheel/touch scroll.
-  if (options.immediate) return;
   requestAnimationFrame(() => {
     restore();
     window.setTimeout(restore, 90);
