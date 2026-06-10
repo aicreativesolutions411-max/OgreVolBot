@@ -3358,15 +3358,17 @@ async function refreshTerminalFeed(tabKey = state.activeTab, options = {}) {
     } else if (tabKey === "liveTrades") {
       if (state.user && state.token) await loadAll({ silent: true, skipCore: true, force: Boolean(options.force) });
     } else if (tabKey === "slimeScope") {
-      const scopeMode = String(state.slimeScopeMode || "new");
-      const scopeBucket = slimeScopeLivePairBucketForMode(scopeMode);
-      await loadLivePairs({ silent: true, bucket: scopeBucket, renderOnComplete: false, force: Boolean(options.force) });
-      if (!state.scan || scopeMode === "graduating" || scopeMode === "graduated") {
-        await loadScan(state.scanMode, { silent: true, force: Boolean(options.force) }).catch(() => {});
+      // Scope (esp. desktop) shows New + Graduating + Graduated at once, so load
+      // ALL live-pair buckets + the scan + KOL each refresh - not just the active
+      // mode's single bucket - so every column keeps filling steadily.
+      const tasks = [
+        refreshLivePairBuckets({ silent: true, force: Boolean(options.force) }),
+        loadScan(state.scanMode, { silent: true, force: Boolean(options.force) }).catch(() => {})
+      ];
+      if (!state.kolScan) {
+        tasks.push(loadKolScan(state.kolMode, state.kolWallet, { silent: true }).catch(() => {}));
       }
-      if (!state.kolScan && (scopeMode === "steady" || scopeMode === "graduating")) {
-        await loadKolScan(state.kolMode, state.kolWallet, { silent: true }).catch(() => {});
-      }
+      await Promise.allSettled(tasks);
     } else if (tabKey === "kol") {
       await loadKolScan(state.kolMode, state.kolWallet, { silent: options.silent !== false });
     } else if (tabKey === "watchlist") {

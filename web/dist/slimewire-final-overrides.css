@@ -15791,17 +15791,17 @@ html body main.shell[data-app][data-route="terminal"] .slime-scope-web-columns {
   }
 
   html body main.shell[data-app][data-route="terminal"] .slime-scope-column-metrics span {
-    color: rgba(157, 255, 114, 0.82) !important;
-    font-size: 8px !important;
-    line-height: 1 !important;
+    color: rgba(157, 255, 114, 0.85) !important;
+    font-size: 11px !important;
+    line-height: 1.15 !important;
     white-space: nowrap !important;
   }
 
   html body main.shell[data-app][data-route="terminal"] .slime-scope-column-metrics b {
     color: #efffe8 !important;
     display: block !important;
-    font-size: 10px !important;
-    line-height: 1.05 !important;
+    font-size: 13px !important;
+    line-height: 1.1 !important;
   }
 
   html body main.shell[data-app][data-route="terminal"] .slime-scope-column-row button {
