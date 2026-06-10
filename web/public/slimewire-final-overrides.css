@@ -20399,3 +20399,35 @@ html body main.shell[data-app] .cooks-section[data-cooks-best] .signal-list {
   }
 }
 /* === END MOBILE_FEED_FIX_20260609_V1 ================================ */
+
+/* === SIGNALROW_TIGHTEN_20260609_V1 ===================================
+   Cleaner, tighter signal-row tables on web (live pairs, watchlist, scanners):
+   shrink the stacked PAIR INFO gaps + row height so rows read compact without
+   losing any content or the action buttons. */
+@media (min-width: 760px) {
+  html body main.shell[data-app] .signal-list .signal-row {
+    min-height: 0 !important;
+    padding: 6px 12px !important;
+    align-items: center !important;
+  }
+  html body main.shell[data-app] .signal-list .signal-token { grid-template-columns: 34px minmax(0, 1fr) !important; gap: 8px !important; }
+  html body main.shell[data-app] .signal-list .signal-token > div:first-child,
+  html body main.shell[data-app] .signal-list .signal-token .live-pair-avatar { width: 34px !important; height: 34px !important; }
+  html body main.shell[data-app] .signal-list .signal-name-row strong { font-size: 14px !important; }
+  html body main.shell[data-app] .signal-list .signal-name-row small { font-size: 11px !important; }
+  html body main.shell[data-app] .signal-list .ca-copy { margin-top: 0 !important; font-size: 11px !important; }
+  html body main.shell[data-app] .signal-list .signal-links { margin-top: 2px !important; gap: 3px !important; }
+  html body main.shell[data-app] .signal-list .signal-links.risk-links { margin-top: 2px !important; }
+  html body main.shell[data-app] .signal-list .signal-links a,
+  html body main.shell[data-app] .signal-list .signal-links button,
+  html body main.shell[data-app] .signal-list .signal-links .sniper-pill {
+    min-height: 17px !important;
+    font-size: 9px !important;
+    padding: 0 5px !important;
+    letter-spacing: 0 !important;
+  }
+  html body main.shell[data-app] .signal-list .signal-cell span { font-size: 13px !important; }
+  html body main.shell[data-app] .signal-list .signal-cell small { font-size: 9.5px !important; line-height: 1.2 !important; }
+  html body main.shell[data-app] .signal-list .signal-actions button { padding: 6px 8px !important; min-height: 30px !important; }
+}
+/* === END SIGNALROW_TIGHTEN_20260609_V1 ============================== */
