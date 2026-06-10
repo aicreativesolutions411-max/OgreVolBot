@@ -312,6 +312,7 @@ const state = {
   terminalSubtab: "positions",
   terminalSort: "best",
   liveFeedCategory: (() => { try { return localStorage.getItem("liveFeedCategory") || "best"; } catch { return "best"; } })(),
+  liveTerminalCategory: (() => { try { return localStorage.getItem("liveTerminalCategory") || "dexTrending"; } catch { return "dexTrending"; } })(),
   cookSpotCategory: (() => { try { return localStorage.getItem("cookSpotCategory") || "dexTrending"; } catch { return "dexTrending"; } })(),
   terminalLaunchFilters: {
     open: false,
@@ -5322,12 +5323,10 @@ function captureSmartChartFrameForRender(options = {}) {
   }
   const currentSrc = String(frame.dataset.chartSrc || iframe.getAttribute("src") || "");
   const loaded = frame.dataset.loaded === "true";
-  // Keep an already-loaded chart for this token even when async pair-resolution would
-  // now prefer a different DexScreener URL. Swapping the iframe src forces a full
-  // reload (the "double load" that flickers hard on mobile). Only require an exact
-  // src match while the frame is still on its first load.
-  const keepByMint = loaded && currentSrc !== descriptor.src;
-  if (currentSrc !== descriptor.src && !loaded) return null;
+  // Once an iframe is mounted for this token+mode, keep its src for the life of the
+  // frame — never let async pair-resolution swap it, even mid-load. Swapping restarts
+  // the DexScreener load and is the flicker the user still sees on first open.
+  const keepByMint = currentSrc !== descriptor.src;
   frame.dataset.preserving = "true";
   return {
     frame,
@@ -17342,15 +17341,49 @@ function rankLiveRowsByCategory(rows = [], categoryId = "best") {
   }
 }
 
-function liveFeedCategoryDropdownHtml(category = currentLiveFeedCategory()) {
-  const [activeId] = category;
+function currentLiveTerminalCategory() {
+  const id = state.liveTerminalCategory || "dexTrending";
+  return COOK_SPOT_CATEGORIES.find(([cid]) => cid === id) || COOK_SPOT_CATEGORIES[0];
+}
+
+// Generic category dropdown used by both the Cooks (market) and Live Terminal
+// (discovery) feeds. The two tabs render the same cooksFeedHtml, so the context
+// below is what keeps them showing different options.
+function categoryDropdownHtml(categories, activeId, attr, cap) {
   return `
-    <label class="cooks-category-select" title="Pick how the Live Feed is ranked">
-      <span class="cooks-category-cap">Feed</span>
-      <select data-live-feed-category aria-label="Live feed category">
-        ${LIVE_FEED_CATEGORIES.map(([id, label]) => `<option value="${id}"${id === activeId ? " selected" : ""}>${escapeHtml(label)}</option>`).join("")}
+    <label class="cooks-category-select" title="Pick how this feed is ranked">
+      <span class="cooks-category-cap">${escapeHtml(cap)}</span>
+      <select ${attr} aria-label="${escapeHtml(cap)} category">
+        ${categories.map(([id, label]) => `<option value="${id}"${id === activeId ? " selected" : ""}>${escapeHtml(label)}</option>`).join("")}
       </select>
     </label>`;
+}
+
+// Cooks tab = MARKET feed; Live Terminal tab = DISCOVERY feed. Same renderer,
+// different category set/state so the two pages are distinct (only Fresh shared).
+function feedCategoryContext() {
+  if (state.activeTab === "terminal") {
+    const cat = currentLiveTerminalCategory();
+    return {
+      categories: COOK_SPOT_CATEGORIES,
+      activeId: cat[0],
+      sub: cat[2],
+      attr: "data-live-terminal-category",
+      cap: "Discover",
+      rank: (rows) => rankCookSpotRows(rows, cat[0]),
+      hasBest: false
+    };
+  }
+  const cat = currentLiveFeedCategory();
+  return {
+    categories: LIVE_FEED_CATEGORIES,
+    activeId: cat[0],
+    sub: cat[2],
+    attr: "data-live-feed-category",
+    cap: "Feed",
+    rank: (rows) => rankLiveRowsByCategory(rows, cat[0]),
+    hasBest: cat[0] === "best"
+  };
 }
 
 // A small "why is this pair shown" chip, derived from the row's own real signals.
@@ -17447,15 +17480,14 @@ function cooksFeedMetaHtml(count = 0, updatedIso = "") {
 }
 
 function cooksFeedHtml(allRows = []) {
-  const category = currentLiveFeedCategory();
-  const [catId, , catSub] = category;
-  const dropdown = liveFeedCategoryDropdownHtml(category);
+  const ctx = feedCategoryContext();
+  const dropdown = categoryDropdownHtml(ctx.categories, ctx.activeId, ctx.attr, ctx.cap);
   const meta = cooksFeedMetaHtml(allRows.length, currentLivePairsUpdatedAt());
   const rowOptions = { context: "live", shareBuilder: livePairShareText, hideToolbar: true };
-  // "Best Picks" keeps the curated rotating-5 + Newest split. Every other category
-  // is a single ranked list of pairs that reflect that category (so it never just
-  // mirrors the same feed).
-  if (catId === "best") {
+  // Market "Best Picks" keeps the curated rotating-5 + Newest split. Every other
+  // category (and the whole discovery feed) is a single ranked list reflecting the
+  // selected option, so the pages never just mirror the same feed.
+  if (ctx.hasBest) {
     const best = cooksBestPickRows(allRows);
     const bestMints = new Set(best.map(tokenMintKey).filter(Boolean));
     const newestAll = [...allRows].sort(compareNewestLiveRows).filter((row) => !bestMints.has(tokenMintKey(row)));
@@ -17473,13 +17505,12 @@ function cooksFeedHtml(allRows = []) {
       </div>
     </div>`;
   }
-  const ranked = rankLiveRowsByCategory(allRows, catId);
-  const primary = terminalFeedRowsWindow("live", ranked);
+  const primary = terminalFeedRowsWindow("live", ctx.rank(allRows));
   return `
     <div class="cooks-feed">
       ${meta}
       <div class="cooks-section" data-cooks-best>
-        <div class="cooks-section-label cooks-category-label">${dropdown}<span>${escapeHtml(catSub)}</span></div>
+        <div class="cooks-section-label cooks-category-label">${dropdown}<span>${escapeHtml(ctx.sub)}</span></div>
         ${primary.length ? tokenSignalRowsHtml(primary, rowOptions) : emptyState("No pairs found for this filter yet", "Try another category or time window — the feed keeps scanning in the background.")}
       </div>
     </div>`;
@@ -21433,6 +21464,13 @@ document.addEventListener("change", async (event) => {
     // Warm the server pool with the closest backend sort so client ranking has
     // the right pairs to work with.
     state.terminalSort = currentLiveFeedCategory()[3] || "best";
+    resetTerminalFeedVisibleLimit("live");
+    render();
+    runDeferredUiTask(() => refreshLivePairBuckets({ silent: true, force: true }));
+  }
+  if (target?.matches?.("[data-live-terminal-category]")) {
+    state.liveTerminalCategory = target.value || "dexTrending";
+    try { localStorage.setItem("liveTerminalCategory", state.liveTerminalCategory); } catch {}
     resetTerminalFeedVisibleLimit("live");
     render();
     runDeferredUiTask(() => refreshLivePairBuckets({ silent: true, force: true }));

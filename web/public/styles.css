@@ -1037,8 +1037,24 @@ select:focus {
   font-size: 11px;
 }
 @media (max-width: 760px) {
-  .cooks-category-select select { min-width: 144px; min-height: 42px; }
-  .cooks-category-label > span { width: 100%; }
+  /* Tighten the feed header on mobile: drop the count/updated line and the
+     sub-caption text, and slim the refresh controls so the stretch from the
+     wallet/TP-SL strip down to the pairs is compact. Applies to every feed that
+     uses these shared classes (Cooks, Live Terminal, Slime Scope). */
+  .cooks-category-select select { min-width: 150px; min-height: 38px; }
+  .cooks-meta { display: none !important; }
+  .cooks-category-label > span,
+  .cooks-section-label > span { display: none !important; }
+  .cooks-category-label { gap: 0; margin: 0 0 6px; }
+  .cooks-section-label { margin-bottom: 4px; }
+  .live-refresh-row { margin: 0 0 4px; }
+  .live-mini-refresh,
+  .slime-scope-refresh-button {
+    width: auto !important;
+    min-height: 32px !important;
+    padding: 5px 14px !important;
+    font-size: 12px !important;
+  }
 }
 .cook-spot-head { margin-bottom: 4px; }
 
