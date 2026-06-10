@@ -12744,86 +12744,6 @@ html body main.shell[data-app][data-route="intro"] .swamp-intro-media[hidden] {
   display: none !important;
 }
 
-html body main.shell[data-app][data-route="intro"] .swamp-intro-overlay {
-  align-items: center !important;
-  bottom: max(18px, env(safe-area-inset-bottom, 0px)) !important;
-  display: flex !important;
-  gap: 10px !important;
-  justify-content: center !important;
-  left: 50% !important;
-  max-width: calc(100vw - 24px) !important;
-  padding: 0 !important;
-  position: absolute !important;
-  transform: translateX(-50%) !important;
-  z-index: 4 !important;
-}
-
-html body main.shell[data-app][data-route="intro"] .swamp-intro-overlay span {
-  background: rgba(0, 10, 4, 0.7) !important;
-  border: 1px solid rgba(119, 255, 61, 0.38) !important;
-  border-radius: 999px !important;
-  color: rgba(237, 255, 226, 0.82) !important;
-  font-size: 12px !important;
-  font-weight: 850 !important;
-  line-height: 1.1 !important;
-  padding: 9px 12px !important;
-  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.7) !important;
-  white-space: nowrap !important;
-}
-
-html body main.shell[data-app][data-route="intro"] .swamp-intro-actions {
-  display: inline-flex !important;
-  gap: 8px !important;
-}
-
-html body main.shell[data-app][data-route="intro"] .swamp-intro-actions button {
-  align-items: center !important;
-  border-radius: 999px !important;
-  cursor: pointer !important;
-  display: inline-flex !important;
-  font-size: 13px !important;
-  font-weight: 950 !important;
-  height: 38px !important;
-  justify-content: center !important;
-  min-width: 78px !important;
-  padding: 0 15px !important;
-  text-transform: uppercase !important;
-}
-
-html body main.shell[data-app][data-route="intro"] .swamp-intro-enter {
-  background: linear-gradient(180deg, #8dff3e, #25b51b) !important;
-  border: 1px solid rgba(191, 255, 111, 0.82) !important;
-  box-shadow: 0 0 24px rgba(87, 255, 29, 0.28) !important;
-  color: #001a04 !important;
-}
-
-html body main.shell[data-app][data-route="intro"] .swamp-intro-sound {
-  background: rgba(4, 18, 7, 0.82) !important;
-  border: 1px solid rgba(119, 255, 61, 0.54) !important;
-  color: #edffe2 !important;
-}
-
-html body main.shell[data-app][data-route="intro"] .swamp-intro-sound[aria-pressed="true"] {
-  background: rgba(126, 255, 50, 0.18) !important;
-  border-color: rgba(176, 255, 100, 0.72) !important;
-  color: #baff66 !important;
-}
-
-html body main.shell[data-app][data-route="intro"] .swamp-intro-sound[data-intro-attention="true"] {
-  animation: slime-intro-sound-pulse 1.8s ease-in-out infinite !important;
-  box-shadow: 0 0 18px rgba(126, 255, 50, 0.34) !important;
-}
-
-@keyframes slime-intro-sound-pulse {
-  0%,
-  100% {
-    transform: translate3d(0, 0, 0) scale(1);
-  }
-  50% {
-    transform: translate3d(0, 0, 0) scale(1.035);
-  }
-}
-
 body:has(main.shell[data-app][data-route="intro"]) [data-ogre-agent-root],
 body:has(main.shell[data-app][data-route="connect"]) [data-ogre-agent-root] {
   display: none !important;
@@ -12911,36 +12831,6 @@ body:has(main.shell[data-app][data-route="connect"]) [data-ogre-agent-root] {
   html body main.shell[data-app][data-route="intro"] .swamp-intro-stage {
     height: calc(100svh - 24px - env(safe-area-inset-top, 0px)) !important;
     min-height: calc(100svh - 24px - env(safe-area-inset-top, 0px)) !important;
-  }
-
-  html body main.shell[data-app][data-route="intro"] .swamp-intro-overlay {
-    align-items: stretch !important;
-    bottom: max(14px, env(safe-area-inset-bottom, 0px)) !important;
-    flex-direction: column !important;
-    gap: 8px !important;
-    width: min(330px, calc(100vw - 24px)) !important;
-  }
-
-  html body main.shell[data-app][data-route="intro"] .swamp-intro-overlay span {
-    font-size: 11px !important;
-    text-align: center !important;
-    white-space: normal !important;
-    width: 100% !important;
-  }
-
-  html body main.shell[data-app][data-route="intro"] .swamp-intro-actions {
-    display: grid !important;
-    gap: 8px !important;
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-    width: 100% !important;
-  }
-
-  html body main.shell[data-app][data-route="intro"] .swamp-intro-actions button {
-    font-size: 11px !important;
-    height: 40px !important;
-    min-width: 0 !important;
-    padding: 0 8px !important;
-    width: 100% !important;
   }
 }
 
@@ -15235,10 +15125,6 @@ html body main.shell[data-app][data-route="terminal"] .slime-scope-web-columns {
     width: 100% !important;
   }
 
-  html body main.shell[data-app][data-route="intro"] .swamp-intro-overlay {
-    bottom: max(10px, env(safe-area-inset-bottom, 0px)) !important;
-  }
-
   html body main.shell[data-app][data-route="terminal"] > .topbar {
     align-items: center !important;
     display: grid !important;
@@ -16249,14 +16135,6 @@ html body main.shell[data-app][data-route="intro"] .login-view.swamp-splash.swam
     object-position: center center !important;
     position: absolute !important;
     width: calc(100% - 16px) !important;
-  }
-
-  html body main.shell[data-app][data-route="intro"] .swamp-intro-overlay {
-    bottom: 12px !important;
-    left: 50% !important;
-    right: auto !important;
-    transform: translateX(-50%) !important;
-    width: min(560px, calc(100% - 34px)) !important;
   }
 }
 
@@ -20335,6 +20213,4 @@ html body main.shell[data-app][data-route="intro"] .swamp-intro-stage[data-intro
   transform: scale(1.45) !important;
 }
 /* Buttons/overlay were removed from the intro markup; hide any leftover chrome just in case. */
-html body main.shell[data-app][data-route="intro"] .swamp-intro-overlay,
-html body main.shell[data-app][data-route="intro"] .swamp-intro-actions { display: none !important; }
 /* === END INTRO_PORTAL_VIDEO_20260610_V1 ============================= */

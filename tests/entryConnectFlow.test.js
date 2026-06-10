@@ -117,8 +117,10 @@ test("entry/connect mobile performance avoids the heaviest frame filters", () =>
   assert.match(overridesSource, /background-attachment: scroll !important/);
   assert.match(overridesSource, /filter: none !important/);
   assert.match(overridesSource, /backdrop-filter: none !important/);
-  assert.match(overridesSource, /\.swamp-intro-media\s*\{[\s\S]*object-fit: contain !important/);
-  assert.match(overridesSource, /\.swamp-intro-sound/);
+  // New portal intro: full-bleed cover fit + the portal flash element (sound/enter buttons removed).
+  assert.match(overridesSource, /\.swamp-intro-media\s*\{[\s\S]*object-fit: cover !important/);
+  assert.match(overridesSource, /\.swamp-intro-portal/);
+  assert.doesNotMatch(overridesSource, /\.swamp-intro-sound/);
   assert.match(overridesSource, /grid-template-columns: repeat\(2, minmax\(0, 1fr\)\) !important/);
 });
 
