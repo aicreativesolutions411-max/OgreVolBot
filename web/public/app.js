@@ -8953,21 +8953,43 @@ function pumpLivePanelHtml(draft = state.launchCoinDraft || {}) {
     </section>
   `;
 }
+// Reusable "side list + panel" layout for tool pages. Renders a vertical list of section
+// buttons (a horizontal chip row on mobile) next to the panels, with only the active panel
+// shown. Every panel stays in the DOM (just hidden) so switching sections never loses typed
+// input. Switching is handled by the [data-tool-section] click handler without a full re-render.
+function toolPanelsHtml({ toolKey, activeKey, sections }) {
+  const active = sections.some((section) => section.key === activeKey) ? activeKey : sections[0]?.key;
+  return `
+    <div class="tool-panels" data-tool-panels="${escapeHtml(toolKey)}">
+      <nav class="tool-panel-nav" aria-label="Sections">
+        ${sections.map((section) => `
+          <button type="button" class="tool-panel-tab" data-tool-section="${escapeHtml(toolKey)}:${escapeHtml(section.key)}" data-active="${section.key === active ? "true" : "false"}">
+            <span class="tool-panel-tab-label">${escapeHtml(section.label)}</span>
+            ${section.hint ? `<span class="tool-panel-tab-hint">${escapeHtml(section.hint)}</span>` : ""}
+          </button>`).join("")}
+      </nav>
+      <div class="tool-panel-stack">
+        ${sections.map((section) => `
+          <section class="tool-panel" data-tool-panel="${escapeHtml(toolKey)}:${escapeHtml(section.key)}"${section.key === active ? "" : " hidden"}>
+            ${section.title ? `<h4 class="tool-panel-title">${escapeHtml(section.title)}</h4>` : ""}
+            ${section.html}
+          </section>`).join("")}
+      </div>
+    </div>
+  `;
+}
+
+// Resolves the active section for a tool page, defaulting to the first section.
+function activeToolSection(toolKey, fallback) {
+  return (state.toolSections && state.toolSections[toolKey]) || fallback;
+}
+
 function launchCoinHtml() {
   const draft = state.launchCoinDraft || {};
-  return `
-    <section class="trade-layout launch-coin-layout" data-preserve-focus>
-      <article class="trade-card launch-coin-card">
-        <div class="trade-head">
-          <div>
-            <h3><span class="launch-pill-icon" aria-hidden="true"></span>Launch Pump Coin</h3>
-            <p>Create the Pump launch from SlimeWire when the launch connector is enabled, then auto-load the returned CA into Trade, Bundle, Snipe, or Volume presets.</p>
-          </div>
-          <span class="pill">Ogre TeK</span>
-        </div>
-
-        <details open class="launch-coin-section">
-          <summary>Coin Details</summary>
+  const sections = [
+    {
+      key: "coin", label: "Coin", hint: "Name & image", title: "Coin Details",
+      html: `
           <div class="volume-grid">
             <label>
               Token Name
@@ -8981,7 +9003,7 @@ function launchCoinHtml() {
               Description
               <textarea data-launch-coin-description rows="3" placeholder="Short public token description">${escapeHtml(draft.description || "")}</textarea>
             </label>
-            <label>
+            <label class="full-span">
               Image
               <input data-launch-coin-image type="file" accept="image/*,.png,.jpg,.jpeg,.webp,.gif,.heic,.heif,.avif">
               <span class="muted">SlimeWire converts common phone and desktop images during launch. Use a clear square JPG, PNG, WEBP, or screenshot for best results.</span>
@@ -8990,6 +9012,12 @@ function launchCoinHtml() {
                 <span class="launch-image-preview-meta" data-launch-image-preview-meta></span>
               </span>
             </label>
+          </div>`
+    },
+    {
+      key: "socials", label: "Socials", hint: "Optional links", title: "Socials (optional)",
+      html: `
+          <div class="volume-grid">
             <label>
               Website
               <input data-launch-coin-website type="url" placeholder="https://..." value="${escapeHtml(draft.website || "")}">
@@ -9002,11 +9030,11 @@ function launchCoinHtml() {
               Telegram
               <input data-launch-coin-telegram type="url" placeholder="https://t.me/..." value="${escapeHtml(draft.telegram || "")}">
             </label>
-          </div>
-        </details>
-
-        <details open class="launch-coin-section">
-          <summary>Creator / Dev Wallet</summary>
+          </div>`
+    },
+    {
+      key: "fees", label: "Fees", hint: "Creator fees", title: "Creator Fees (optional)",
+      html: `
           <div class="volume-grid">
             <label>
               Creator Fee
@@ -9035,11 +9063,17 @@ function launchCoinHtml() {
               Buyback Wallet
               <input data-launch-coin-buyback-wallet type="text" placeholder="Optional buyback wallet" value="${escapeHtml(draft.buybackWallet || "")}">
             </label>
-            <label class="switch-row">
+            <label class="switch-row full-span">
               <input data-launch-coin-burn-creator-fees type="checkbox" ${draft.burnCreatorFees ? "checked" : ""}>
               <span>Burn creator fees when supported by the launch connector</span>
             </label>
-            <label class="switch-row">
+          </div>`
+    },
+    {
+      key: "devbuy", label: "Dev Buy", hint: "First buy", title: "Dev Wallet Initial Buy",
+      html: `
+          <div class="volume-grid">
+            <label class="switch-row full-span">
               <input data-launch-coin-dev-buy-enabled type="checkbox" ${draft.devBuyEnabled ? "checked" : ""}>
               <span>Run Dev Wallet Initial Buy before the post-launch preset</span>
             </label>
@@ -9054,11 +9088,11 @@ function launchCoinHtml() {
               <input data-launch-coin-dev-buy-sol type="text" inputmode="decimal" autocomplete="off" placeholder="0.05" value="${escapeHtml(draft.devBuySol || "")}">
             </label>
             <p class="muted full-span">Set the dev wallet buy amount here. After launch, SlimeWire can run the Dev Wallet Initial Buy first, then continue into your selected post-launch action.</p>
-          </div>
-        </details>
-
-        <details open class="launch-coin-section">
-          <summary>Post-Launch Presets</summary>
+          </div>`
+    },
+    {
+      key: "after", label: "After Launch", hint: "Auto trade / bundle", title: "Post-Launch Action",
+      html: `
           <div class="volume-grid">
             <label>
               Live CA After Launch
@@ -9138,10 +9172,25 @@ function launchCoinHtml() {
               </div>
             </label>
             ${walletGroupHtml("launch-coin", draft.walletGroup || "")}
+          </div>`
+    },
+    {
+      key: "live", label: "Live", hint: "Status feed", title: "Live Launch Status",
+      html: pumpLivePanelHtml(draft)
+    }
+  ];
+  return `
+    <section class="trade-layout launch-coin-layout" data-preserve-focus>
+      <article class="trade-card launch-coin-card">
+        <div class="trade-head">
+          <div>
+            <h3><span class="launch-pill-icon" aria-hidden="true"></span>Launch Pump Coin</h3>
+            <p>Pick a section on the left to fill only what you need. The big buttons below stay put so you can launch from any tab.</p>
           </div>
-        </details>
+          <span class="pill">Ogre TeK</span>
+        </div>
 
-        ${pumpLivePanelHtml(draft)}
+        ${toolPanelsHtml({ toolKey: "launchCoin", activeKey: activeToolSection("launchCoin", "coin"), sections })}
 
         <div class="quick-grid launch-coin-actions">
           <button class="primary" type="button" data-launch-coin-submit>Launch on Pump</button>
@@ -20473,6 +20522,27 @@ document.addEventListener("click", async (event) => {
     return;
   }  const target = source?.closest?.("button, a, [data-preview-token], [data-token-chart], [data-token-trade], [data-quick-buy-token], [data-quick-trade-token]");
   if (!target) return;
+
+  if (target.matches("[data-tool-section]")) {
+    // Side-list / chip click on a tool page: show that section's panel, hide the rest.
+    // Panels stay in the DOM so typed input is preserved; no full re-render needed.
+    event.preventDefault();
+    const value = target.dataset.toolSection;
+    const [toolKey] = value.split(":");
+    const sectionKey = value.slice(toolKey.length + 1);
+    state.toolSections = { ...(state.toolSections || {}), [toolKey]: sectionKey };
+    const container = target.closest("[data-tool-panels]");
+    if (container) {
+      container.querySelectorAll(`[data-tool-section^="${toolKey}:"]`).forEach((button) => {
+        button.dataset.active = button.dataset.toolSection === value ? "true" : "false";
+      });
+      container.querySelectorAll(`[data-tool-panel^="${toolKey}:"]`).forEach((panel) => {
+        panel.hidden = panel.dataset.toolPanel !== value;
+      });
+      syncCustomFields(container);
+    }
+    return;
+  }
 
   if (target.matches("[data-clip-record]")) {
     event.preventDefault();

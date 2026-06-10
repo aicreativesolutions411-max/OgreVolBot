@@ -2443,6 +2443,83 @@ code {
   gap: 9px;
 }
 
+/* Side list + panel layout for tool pages: pick a section on the left, fill it on the
+   right. Only the active panel shows, so the page is not a wall of every field at once. */
+.tool-panels {
+  display: grid;
+  grid-template-columns: 188px 1fr;
+  gap: 14px;
+  align-items: start;
+  margin: 6px 0 12px;
+}
+.tool-panel-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  position: sticky;
+  top: 8px;
+}
+.tool-panel-tab {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  text-align: left;
+  padding: 9px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line, rgba(114, 255, 35, 0.18));
+  background: rgba(8, 20, 10, 0.5);
+  color: rgba(226, 255, 215, 0.82);
+  font-weight: 700;
+  cursor: pointer;
+}
+.tool-panel-tab-hint {
+  font-size: 0.7rem;
+  font-weight: 600;
+  opacity: 0.6;
+}
+.tool-panel-tab[data-active="true"] {
+  background: linear-gradient(135deg, rgba(114, 255, 35, 0.94), rgba(187, 255, 99, 0.94));
+  border-color: var(--line-strong);
+  color: #071006;
+}
+.tool-panel-tab[data-active="true"] .tool-panel-tab-hint { opacity: 0.78; }
+.tool-panel-stack { min-width: 0; }
+.tool-panel-title {
+  margin: 0 0 10px;
+  font-size: 0.96rem;
+  color: #d6ffbf;
+}
+
+@media (max-width: 760px) {
+  .tool-panels {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  .tool-panel-nav {
+    flex-direction: row;
+    gap: 6px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    position: sticky;
+    top: 0;
+    z-index: 8;
+    padding: 4px 0;
+    margin: 0 -2px;
+  }
+  .tool-panel-nav::-webkit-scrollbar { display: none; }
+  .tool-panel-tab {
+    flex: 0 0 auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  .tool-panel-tab-hint { display: none; }
+}
+
 .compact-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   margin-top: 2px;
