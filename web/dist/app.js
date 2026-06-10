@@ -3394,7 +3394,12 @@ async function refreshTerminalFeed(tabKey = state.activeTab, options = {}) {
       if (state.user && state.token) tasks.push(loadAll({ silent: true, skipCore: true, force: Boolean(options.force) }));
       await Promise.allSettled(tasks);
     } else if (tabKey === "launch" || tabKey === "launchCoin") {
-      if (state.user && state.token) await loadAll({ silent: true, skipCore: true, force: Boolean(options.force) });
+      // Launch Snipe shows live pairs (buckets + scan), so refresh those too -
+      // not just the wallet - so the feed actually updates and auto-refreshes.
+      const tasks = [refreshLivePairBuckets({ silent: true, force: Boolean(options.force) })];
+      if (!state.scan) tasks.push(loadScan(state.scanMode, { silent: true, force: Boolean(options.force) }).catch(() => {}));
+      if (state.user && state.token) tasks.push(loadAll({ silent: true, skipCore: true, force: Boolean(options.force) }));
+      await Promise.allSettled(tasks);
     } else if (tabKey === "ogreTek") {
       await loadOgreTekData({ silent: true }).catch((error) => {
         state.ogreTek.error = error.message;
@@ -8551,7 +8556,10 @@ function launchHtml() {
             <h3>Launch Snipe</h3>
             <p>Watch fresh live pairs by ticker/keyword before launch, then arm wallets and exits when you are ready.</p>
           </div>
-          <span class="sync-pill">${escapeHtml(visibleLaunchRows.length)}/${escapeHtml(launchSourceRows.length)} matching</span>
+          <div class="card-actions launch-head-actions">
+            <button type="button" class="primary" data-refresh-live-pairs>${state.livePairsLoadingByBucket[state.livePairBucket] ? "Refreshing..." : "Refresh"}</button>
+            <span class="sync-pill">${escapeHtml(visibleLaunchRows.length)}/${escapeHtml(launchSourceRows.length)} matching</span>
+          </div>
         </div>
         ${terminalLaunchFilterPanelHtml("launch", { rawCount: launchSourceRows.length, visibleCount: launchRows.length })}
         ${terminalLaunchFilterSummaryHtml(launchSourceRows, launchRows)}
@@ -20899,7 +20907,7 @@ document.addEventListener("click", async (event) => {
 
   const refreshLivePairsButton = target.closest?.("[data-refresh-live-pairs]");
   if (refreshLivePairsButton) {
-    const feedKey = state.activeTab === "slimeScope" ? "slimeScope" : state.activeTab === "terminal" ? "terminal" : "live";
+    const feedKey = state.activeTab === "slimeScope" ? "slimeScope" : state.activeTab === "terminal" ? "terminal" : (state.activeTab === "launch" || state.activeTab === "launchCoin") ? "launch" : "live";
     const scrollSnapshot = captureStableFeedScrollSnapshot();
     runDeferredUiTask(async () => {
       await refreshTerminalFeed(feedKey, {

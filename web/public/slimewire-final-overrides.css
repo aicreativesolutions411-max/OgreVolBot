@@ -640,6 +640,31 @@
   border-color: rgba(88, 255, 122, 0.24);
 }
 
+/* Ogre A.I. (web): stop the right automation panel text from clipping off the
+   edge. Grid items default to min-width:auto, so long headings/lines overflow;
+   let them shrink and wrap. */
+html body main.shell[data-app] .ogre-ai-terminal { min-width: 0; }
+html body main.shell[data-app] .ogre-ai-terminal > .trade-card,
+html body main.shell[data-app] .ogre-ai-terminal > .trade-side { min-width: 0 !important; }
+html body main.shell[data-app] .ogre-ai-terminal .trade-side > article,
+html body main.shell[data-app] .ogre-ai-terminal .automation-delegation-card,
+html body main.shell[data-app] .ogre-ai-terminal .setup-hub-panel { min-width: 0 !important; overflow: hidden; }
+html body main.shell[data-app] .ogre-ai-terminal .automation-delegation-card *,
+html body main.shell[data-app] .ogre-ai-terminal .setup-hub-panel * {
+  min-width: 0 !important;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+html body main.shell[data-app] .ogre-ai-terminal .delegation-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  row-gap: 4px;
+}
+html body main.shell[data-app] .ogre-ai-terminal .delegation-heading h3 { font-size: 17px; margin: 0; }
+
 .ogre-ai-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -19684,6 +19709,16 @@ html body main.shell[data-app] .ogre-swap-advanced .quick-grid button.primary {
   color: #06140a !important;
   border: 0 !important;
 }
+/* On phones, cram the wallet + slippage onto the bottom strip - wallet on the
+   left, slippage on the right, flanking POWERED BY OGRES - instead of the tiny
+   clipped top pills. */
+@media (max-width: 760px) {
+  html body main.shell[data-app] .oss-wallet { left: 2.5%; top: 88%; width: 33%; height: 8%; }
+  html body main.shell[data-app] .oss-slip { left: 64.5%; top: 88%; width: 33%; height: 8%; }
+  html body main.shell[data-app] .oss-pill::before { top: -1.35em !important; font-size: 8px !important; }
+  html body main.shell[data-app] .oss-pill select { font-size: 13px !important; }
+  html body main.shell[data-app] .oss-wallet select { text-align: center; text-align-last: center; }
+}
 /* === END OGRESWAP_20260609_V2 ======================================== */
 
 /* === VOLUME_SKIN_20260609_V1 (positioned image-skin) ==================
@@ -20381,21 +20416,28 @@ html body main.shell[data-app] .cooks-section[data-cooks-best] .signal-list {
 /* === END COOKS_BEST_PICKS_SECTIONS_20260609_V1 ====================== */
 
 /* === MOBILE_FEED_FIX_20260609_V1 =====================================
-   Keep the terminal command/info bar in its original clean layout (reverted the
-   2-col experiment). Only a light de-bulk of the pair rows so they read cleaner
-   while keeping the same content + the full action button set. */
+   De-bulk the pair rows on ALL pages that use them (live, cooks, launch,
+   watchlist) on phones - tighter padding, compressed PAIR INFO block, smaller
+   badge/risk chips - same content + full action buttons, just clean and tight. */
 @media (max-width: 600px) {
-  html body main.shell[data-app][data-route="terminal"] .signal-row,
-  html body main.shell[data-app][data-route="terminal"] .compact-signal-row {
+  html body main.shell[data-app] .signal-list .signal-row,
+  html body main.shell[data-app] .compact-signal-list .compact-signal-row {
     padding: 8px 9px !important;
     gap: 5px !important;
   }
-  html body main.shell[data-app][data-route="terminal"] .signal-row .pill,
-  html body main.shell[data-app][data-route="terminal"] .signal-row .chip,
-  html body main.shell[data-app][data-route="terminal"] .compact-signal-row .pill,
-  html body main.shell[data-app][data-route="terminal"] .compact-signal-row .chip {
-    padding: 2px 7px !important;
+  html body main.shell[data-app] .signal-list .signal-name-row strong { font-size: 14px !important; }
+  html body main.shell[data-app] .signal-list .ca-copy { margin-top: 1px !important; font-size: 11px !important; }
+  html body main.shell[data-app] .signal-list .signal-links { margin-top: 3px !important; gap: 4px !important; }
+  html body main.shell[data-app] .signal-list .signal-links a,
+  html body main.shell[data-app] .signal-list .signal-links button,
+  html body main.shell[data-app] .signal-list .signal-links .sniper-pill,
+  html body main.shell[data-app] .signal-row .pill,
+  html body main.shell[data-app] .signal-row .chip,
+  html body main.shell[data-app] .compact-signal-row .pill,
+  html body main.shell[data-app] .compact-signal-row .chip {
+    padding: 1px 6px !important;
     font-size: 10px !important;
+    min-height: 18px !important;
   }
 }
 /* === END MOBILE_FEED_FIX_20260609_V1 ================================ */
