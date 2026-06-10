@@ -17147,11 +17147,11 @@ function cooksFeedHtml(allRows = []) {
     <div class="cooks-feed">
       ${best.length ? `<div class="cooks-section" data-cooks-best>
         <div class="cooks-section-label"><strong>Best Picks</strong><span>Top ${best.length} · rotating each refresh</span></div>
-        ${tokenSignalRowsHtml(best, { context: "live", shareBuilder: livePairShareText, hideToolbar: true })}
+        ${compactSignalRowsHtml(best, { layout: "terminal", cooksStyle: true, context: "live", actionLabel: "Trade", limit: best.length, stickyCount: best.length })}
       </div>` : ""}
       <div class="cooks-section" data-cooks-newest>
         <div class="cooks-section-label"><strong>Newest</strong><span>Live launches · steady refresh</span></div>
-        ${newest.length ? tokenSignalRowsHtml(newest, { context: "live", shareBuilder: livePairShareText, hideToolbar: true }) : emptyState("Scanning fresh pairs", "Newest launches fill here as they qualify.")}
+        ${newest.length ? compactSignalRowsHtml(newest, { layout: "terminal", cooksStyle: true, context: "live", actionLabel: "Trade", limit: newest.length }) : emptyState("Scanning fresh pairs", "Newest launches fill here as they qualify.")}
       </div>
     </div>`;
 }
@@ -20634,7 +20634,7 @@ document.addEventListener("click", async (event) => {
   }
   if (target.closest?.("[data-swap-reverse]")) {
     const from = normalizeSwapMint($("[data-swap-from]")?.value || state.tradeSwapFrom || "SOL") || "SOL";
-    const to = normalizeSwapMint($("[data-swap-to]")?.value || state.tradeSwapTo || state.tradeToken || "");
+    const to = normalizeSwapMint($("[data-swap-to]")?.value || $("[data-trade-token]")?.value || state.tradeSwapTo || state.tradeToken || "");
     state.tradeSwapFrom = to && to !== "custom" ? to : "SOL";
     state.tradeSwapTo = from || "SOL";
     state.tradeToken = state.tradeSwapFrom !== "SOL" ? state.tradeSwapFrom : state.tradeSwapTo !== "SOL" ? state.tradeSwapTo : state.tradeToken;
