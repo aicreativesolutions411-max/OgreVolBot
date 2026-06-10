@@ -11302,6 +11302,25 @@ async function prewarmConnectedWalletProvider() {
   }
 }
 
+const WALLET_SIGN_TIMEOUT_MS = 60_000;
+
+// Wallet signTransaction has no built-in timeout: if the wallet UI hangs (or the
+// user walks away), the whole trade — and its button lock — would stick forever.
+// Race it against a timeout so the trade errors out cleanly and the button frees up.
+async function signTransactionWithTimeout(provider, tx, timeoutMs = WALLET_SIGN_TIMEOUT_MS) {
+  let timer = 0;
+  const timeout = new Promise((_, reject) => {
+    timer = window.setTimeout(() => {
+      reject(new Error("Wallet approval timed out. Reopen your wallet and try the trade again."));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([Promise.resolve(provider.signTransaction(tx)), timeout]);
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
 async function signBrowserTradeTransaction(transactionBase64, provider) {
   if (!transactionBase64 || typeof transactionBase64 !== "string") {
     throw new Error("SlimeWire could not build a wallet approval transaction. Try again or choose another token.");
@@ -11313,7 +11332,7 @@ async function signBrowserTradeTransaction(transactionBase64, provider) {
     throw new Error("This wallet does not expose signTransaction here. Reconnect with Phantom/Solflare or use the wallet in-app browser.");
   }
   const tx = window.solanaWeb3.VersionedTransaction.deserialize(base64ToBytes(transactionBase64));
-  const signed = await provider.signTransaction(tx);
+  const signed = await signTransactionWithTimeout(provider, tx);
   return bytesToBase64(signed.serialize());
 }
 
@@ -11328,7 +11347,7 @@ async function signBrowserLegacyTransaction(transactionBase64, provider) {
     throw new Error("This wallet does not expose signTransaction here. Reconnect with Phantom/Solflare or use the wallet in-app browser.");
   }
   const tx = window.solanaWeb3.Transaction.from(base64ToBytes(transactionBase64));
-  const signed = await provider.signTransaction(tx);
+  const signed = await signTransactionWithTimeout(provider, tx);
   return bytesToBase64(signed.serialize());
 }
 
