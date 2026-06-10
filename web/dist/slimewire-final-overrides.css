@@ -20596,3 +20596,30 @@ html body main.shell[data-app] .risk-links {
   html body main.shell[data-app] .live-terminal .terminal-launch-filter:not(.is-open) { padding: 8px 12px !important; margin: 6px 0 !important; }
 }
 /* === END COOKS_MOBILE_TIDY_20260609_V1 ============================== */
+
+/* === LIVE_REFRESH_OVERSCROLL_20260609_V1 ============================
+   Small refresh row above the pairs (Best Picks is the section name now), kill
+   the pull-to-refresh overscroll jump, and tighten the gap under the top bar. */
+html body main.shell[data-app] .live-refresh-row {
+  display: flex;
+  justify-content: flex-end;
+  margin: 2px 0 4px;
+  padding: 0;
+}
+html body main.shell[data-app] .live-mini-refresh {
+  width: auto !important;
+  flex: 0 0 auto !important;
+  padding: 6px 14px !important;
+  font-size: 13px !important;
+  min-height: 0 !important;
+}
+/* Stop the native pull-to-refresh / overscroll bounce that jumps the feed. */
+html, body { overscroll-behavior-y: contain; }
+html body main.shell[data-app] { overscroll-behavior: contain; }
+html body main.shell[data-app] [data-panel] { overscroll-behavior-y: contain; }
+/* Tighten the empty gap under the top nav before the feed content. */
+html body main.shell[data-app] .live-terminal,
+html body main.shell[data-app] .slime-scope-page { margin-top: 0 !important; padding-top: 6px !important; }
+html body main.shell[data-app] .live-terminal .terminal-main { padding-top: 0 !important; gap: 8px !important; }
+html body main.shell[data-app] .live-terminal .live-pair-buckets { margin-bottom: 4px !important; }
+/* === END LIVE_REFRESH_OVERSCROLL_20260609_V1 ======================== */

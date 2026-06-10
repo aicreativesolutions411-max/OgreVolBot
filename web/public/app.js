@@ -7724,8 +7724,6 @@ function fastPresetToolbarHtml(context = "scanner") {
           ${presetOptionsHtml("bundle", state.selectedBundlePresetId)}
         </select>
       </label>
-      <button type="button" data-tab="trade">Edit Trade Presets</button>
-      <button type="button" data-tab="bundle">Edit Bundle Presets</button>
     </section>
   `;
 }
@@ -15461,14 +15459,6 @@ function slimeScopeHtml() {
   const rows = terminalFeedRowsWindow("slimeScope", allRows);
   return `
     <section class="slime-scope-page">
-      <div class="terminal-title-row slime-scope-title-row">
-        <span class="slime-scope-title-icon" aria-hidden="true"></span>
-        <div>
-          <h3>Slime Scope</h3>
-          <p>Fast pump-style view for new, steady, graduating, and graduated pairs. Scam-risk rows stay filtered out.</p>
-        </div>
-        <span>${rows.length}/${allRows.length} shown</span>
-      </div>
       <div class="command-controls slime-scope-controls">
         <div class="mode-row terminal-modes slime-scope-tabs">
           ${modes.map(([mode, label]) => `<button data-slime-scope-mode="${mode}" data-active="${state.slimeScopeMode === mode}">${label}</button>`).join("")}
@@ -17196,15 +17186,8 @@ function livePairsHtml() {
             return `<button data-live-pair-bucket="${bucket}" data-active="${state.livePairBucket === bucket}">${label}${suffix}</button>`;
           }).join("")}
         </div>
-        <div class="live-control-strip live-control-strip-slim">
-          <div class="card-actions compact">
-            <label class="compact-label">Sort
-              <select data-terminal-sort>
-                ${LIVE_PAIR_SORTS.map(([value, label]) => `<option value="${value}" ${state.terminalSort === value ? "selected" : ""}>${label}</option>`).join("")}
-              </select>
-            </label>
-            <button class="primary" data-refresh-live-pairs>${bucketLoading ? "Scanning..." : "Refresh Feed"}</button>
-          </div>
+        <div class="live-refresh-row">
+          <button class="primary live-mini-refresh" data-refresh-live-pairs>${bucketLoading ? "Scanning..." : "↻ Refresh"}</button>
         </div>
         ${terminalLaunchFilterPanelHtml("live", { rawCount: rawRows.length, visibleCount: allRows.length })}
         ${terminalLaunchFilterSummaryHtml(rawRows, allRows)}
