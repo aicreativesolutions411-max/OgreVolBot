@@ -14536,6 +14536,10 @@ function scoreWhyText(row = {}) {
 }
 
 function pairRiskBadgesHtml(row = {}) {
+  // Blue risk chips (low Liquidity / low Volume / token-2022 / etc.) removed from
+  // pair rows site-wide - noisy for brand-new pairs; SlimeShield RISK still shows.
+  return "";
+  // eslint-disable-next-line no-unreachable
   const flags = new Set((row.riskFlags || []).map((flag) => String(flag)));
   if (row.safetyStatus === "pending") flags.add("risk check pending");
   if (row.safetyStatus === "warning") flags.add("risk warning");
@@ -17209,9 +17213,6 @@ function livePairsHtml() {
               </select>
             </label>
             <button class="primary" data-refresh-live-pairs>${bucketLoading ? "Scanning..." : "Refresh Feed"}</button>
-            <button data-tab="trade">Trade</button>
-            <button data-tab="bundle">Bundle</button>
-            <button data-tab="volume">Volume</button>
           </div>
           <small>${escapeHtml(status)}${lastUpdatedAt ? ` Updated ${escapeHtml(formatDate(lastUpdatedAt))}.` : ""}</small>
         </div>

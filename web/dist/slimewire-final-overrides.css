@@ -20543,3 +20543,41 @@ html body main.shell[data-app] .risk-links {
   display: none !important;
 }
 /* === END HIDE_RISK_CHIPS_20260609_V1 ================================ */
+
+/* === COOKS_MOBILE_TIDY_20260609_V1 ==================================
+   Trim the bulky stack of controls above the pairs on the Cooks/Live page on
+   mobile so the pairs are reachable fast: small inline Refresh + Sort, and a
+   compact 2-col preset toolbar instead of full-width bars. */
+@media (max-width: 760px) {
+  html body main.shell[data-app] .live-terminal .live-control-strip .card-actions {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    gap: 8px !important;
+    justify-content: flex-start !important;
+    align-items: center !important;
+  }
+  html body main.shell[data-app] .live-terminal .live-control-strip [data-refresh-live-pairs] {
+    width: auto !important;
+    flex: 0 0 auto !important;
+    padding: 8px 16px !important;
+    font-size: 13px !important;
+    min-height: 0 !important;
+  }
+  html body main.shell[data-app] .live-terminal .live-control-strip .compact-label {
+    flex: 1 1 150px;
+    min-width: 0;
+    font-size: 12px !important;
+  }
+  html body main.shell[data-app] .live-terminal .preset-toolbar {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important;
+    gap: 8px 10px !important;
+    padding: 10px !important;
+  }
+  html body main.shell[data-app] .live-terminal .preset-toolbar > * { min-width: 0; }
+  html body main.shell[data-app] .live-terminal .preset-toolbar label { font-size: 11px !important; gap: 3px !important; }
+  html body main.shell[data-app] .live-terminal .preset-toolbar select,
+  html body main.shell[data-app] .live-terminal .preset-toolbar input { padding: 8px !important; font-size: 13px !important; }
+  html body main.shell[data-app] .live-terminal .preset-toolbar button { padding: 8px 10px !important; font-size: 12px !important; min-height: 0 !important; }
+}
+/* === END COOKS_MOBILE_TIDY_20260609_V1 ============================== */
