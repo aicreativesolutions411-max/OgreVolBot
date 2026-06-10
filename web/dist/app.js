@@ -621,7 +621,7 @@ function scheduleLivePairsRender(reason = "live-pairs-batch") {
     if (state.activeTab === "live" || state.activeTab === "terminal") {
       const patchSnapshot = captureStableFeedScrollSnapshot();
       if (patchLivePairsFeedInPlace()) {
-        restoreStableFeedScrollSnapshot(patchSnapshot);
+        restoreStableFeedScrollSnapshot(patchSnapshot, undefined, { immediate: true });
         return;
       }
     }
@@ -5580,7 +5580,7 @@ function captureStableFeedScrollSnapshot(panel = $("[data-panel]")) {
   };
 }
 
-function restoreStableFeedScrollSnapshot(snapshot, panel = $("[data-panel]")) {
+function restoreStableFeedScrollSnapshot(snapshot, panel = $("[data-panel]"), options = {}) {
   if (!snapshot || state.route !== "terminal" || snapshot.tab !== state.activeTab) return;
   const restoreElementScroll = (element, top) => {
     if (!element || !Number.isFinite(Number(top))) return;
@@ -5617,6 +5617,10 @@ function restoreStableFeedScrollSnapshot(snapshot, panel = $("[data-panel]")) {
   // Restore synchronously first so the browser never paints the jumped
   // (pulled) position; the rAF/timeout passes just correct any late reflow.
   restore();
+  // The periodic in-place feed patch (every ~8s) only needs this one synchronous
+  // correction for the rotation shift. Skip the trailing rAF/timeout passes there
+  // so they can never fire mid-gesture and fight the user's own wheel/touch scroll.
+  if (options.immediate) return;
   requestAnimationFrame(() => {
     restore();
     window.setTimeout(restore, 90);
