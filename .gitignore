@@ -3,3 +3,15 @@ data/
 .env
 *.log
 *.zip
+
+# Agent / editor scratch
+.claude/
+
+# Local dev helpers (not part of the app)
+scripts/preview-app.mjs
+scripts/preview-static.cjs
+
+# Runtime + build artifacts and staging snapshots (not source)
+uploaded-assets/
+artifacts/
+.zip_stage_*/

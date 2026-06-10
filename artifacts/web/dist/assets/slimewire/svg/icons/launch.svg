@@ -1,4 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#B6FF00" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-  <defs><filter id="g" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="1.5" result="b"/><feColorMatrix in="b" type="matrix" values="0 0 0 0 .7 0 0 0 0 1 0 0 0 0 0 0 0 0 .8 0"/><feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
-  <g filter="url(#g)"><path d="M13 3c3 1 5 3 6 6l-7 7-5-5z"/><path d="M9 15l-3 3"/><path d="M5 12l-2 5 5-2"/><path d="M15 20l5-2-5-2"/><circle cx="15" cy="8" r="1"/></g>
-</svg>
