@@ -17147,11 +17147,11 @@ function cooksFeedHtml(allRows = []) {
     <div class="cooks-feed">
       ${best.length ? `<div class="cooks-section" data-cooks-best>
         <div class="cooks-section-label"><strong>Best Picks</strong><span>Top ${best.length} · rotating each refresh</span></div>
-        ${compactSignalRowsHtml(best, { layout: "terminal", cooksStyle: true, context: "live", actionLabel: "Trade", limit: best.length, stickyCount: best.length })}
+        ${tokenSignalRowsHtml(best, { context: "live", shareBuilder: livePairShareText, hideToolbar: true })}
       </div>` : ""}
       <div class="cooks-section" data-cooks-newest>
         <div class="cooks-section-label"><strong>Newest</strong><span>Live launches · steady refresh</span></div>
-        ${newest.length ? compactSignalRowsHtml(newest, { layout: "terminal", cooksStyle: true, context: "live", actionLabel: "Trade", limit: newest.length }) : emptyState("Scanning fresh pairs", "Newest launches fill here as they qualify.")}
+        ${newest.length ? tokenSignalRowsHtml(newest, { context: "live", shareBuilder: livePairShareText, hideToolbar: true }) : emptyState("Scanning fresh pairs", "Newest launches fill here as they qualify.")}
       </div>
     </div>`;
 }

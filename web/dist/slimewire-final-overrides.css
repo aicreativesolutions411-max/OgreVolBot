@@ -20381,34 +20381,10 @@ html body main.shell[data-app] .cooks-section[data-cooks-best] .signal-list {
 /* === END COOKS_BEST_PICKS_SECTIONS_20260609_V1 ====================== */
 
 /* === MOBILE_FEED_FIX_20260609_V1 =====================================
-   On phones the terminal command row was a 4-col grid, so the "Refresh Feeds"
-   button was too narrow and its text clipped out of frame. Give the controls
-   room: bucket row + sort + quick-buy span full width; the two refresh buttons
-   share the last row and never clip. Also a light de-bulk of the pair rows. */
+   Keep the terminal command/info bar in its original clean layout (reverted the
+   2-col experiment). Only a light de-bulk of the pair rows so they read cleaner
+   while keeping the same content + the full action button set. */
 @media (max-width: 600px) {
-  html body main.shell[data-app][data-route="terminal"] .command-controls {
-    display: grid !important;
-    grid-template-columns: 1fr 1fr !important;
-    gap: 6px !important;
-    align-items: stretch !important;
-  }
-  html body main.shell[data-app][data-route="terminal"] .command-controls > .live-pair-buckets,
-  html body main.shell[data-app][data-route="terminal"] .command-controls > label,
-  html body main.shell[data-app][data-route="terminal"] .command-controls > .terminal-quick-buy-bar,
-  html body main.shell[data-app][data-route="terminal"] .command-controls > [data-quick-buy-bar] {
-    grid-column: 1 / -1 !important;
-  }
-  html body main.shell[data-app][data-route="terminal"] .command-controls > button,
-  html body main.shell[data-app][data-route="terminal"] .command-controls [data-refresh-live-pairs],
-  html body main.shell[data-app][data-route="terminal"] .command-controls [data-top-refresh-wallet] {
-    white-space: nowrap !important;
-    font-size: 12px !important;
-    padding: 9px 6px !important;
-    min-width: 0 !important;
-    overflow: visible !important;
-    text-overflow: clip !important;
-  }
-  /* lighter pair rows: tighter padding + gaps so they read clean, same content */
   html body main.shell[data-app][data-route="terminal"] .signal-row,
   html body main.shell[data-app][data-route="terminal"] .compact-signal-row {
     padding: 8px 9px !important;
