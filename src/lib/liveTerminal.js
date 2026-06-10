@@ -138,9 +138,9 @@ const ABSURD_THIN_LIQUIDITY_MARKET_CAP_USD = 100_000_000;
 const ABSURD_THIN_LIQUIDITY_RATIO = 0.01;
 const BROAD_NEW_WINDOW_MINUTES = 120;
 const FRESH_LAUNCH_WINDOW_MINUTES = 30;
-const PUMP_GRADUATING_MIN_MARKET_CAP_USD = 45_000;
+const PUMP_GRADUATING_MIN_MARKET_CAP_USD = 28_000;
 const PUMP_GRADUATING_MAX_MARKET_CAP_USD = 180_000;
-const PUMP_GRADUATED_MARKET_CAP_HINT_USD = 250_000;
+const PUMP_GRADUATED_MARKET_CAP_HINT_USD = 160_000;
 
 function textBlob(row = {}) {
   return [
@@ -198,7 +198,7 @@ export function classifyPairCategory(row = {}, now = Date.now()) {
   const marketCap = firstPositiveNumber(row.marketCap, row.fdv);
   const inGraduatingMarketCapBand = marketCap >= PUMP_GRADUATING_MIN_MARKET_CAP_USD
     && marketCap <= PUMP_GRADUATING_MAX_MARKET_CAP_USD;
-  if ((progress >= 70 && (!marketCap || marketCap <= PUMP_GRADUATING_MAX_MARKET_CAP_USD)) || inGraduatingMarketCapBand) {
+  if ((progress >= 55 && (!marketCap || marketCap <= PUMP_GRADUATING_MAX_MARKET_CAP_USD)) || inGraduatingMarketCapBand) {
     return PAIR_CATEGORIES.GRADUATING;
   }
 

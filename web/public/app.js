@@ -12880,6 +12880,18 @@ async function quickPresetBundle(tokenMint, presetOverride = null) {
     openManualTradeForToken(tokenMint, "bundle", "No fast bundle preset selected. Review the Bundle form, then submit.");
     return;
   }
+  // A bundle buy fires across multiple wallets, so confirm before launching it
+  // from a pair row - or send them to the Bundle page to review first.
+  if (!presetOverride && typeof window !== "undefined" && typeof window.confirm === "function") {
+    const walletCount = (preset.walletIndexes || []).length || (preset.walletGroup ? "group" : "saved");
+    const proceed = window.confirm(
+      `Bundle buy ${shortAddress(tokenMint)} with preset "${preset.name || "Fast Bundle"}" across ${walletCount} wallet(s)?\n\nOK = buy now   ·   Cancel = open the Bundle page to review.`
+    );
+    if (!proceed) {
+      openManualTradeForToken(tokenMint, "bundle", "Review the Bundle setup, then submit.");
+      return;
+    }
+  }
   try {
     state.bundleToken = tokenMint;
     setError("Bundle preset queued. Checking wallets...");
@@ -15209,9 +15221,9 @@ const SLIME_SCOPE_NEW_MAX_AGE_SECONDS = 7200;
 const SLIME_SCOPE_FRESH_MAX_MARKET_CAP = 750_000;
 const SLIME_SCOPE_STEADY_MAX_AGE_SECONDS = 86_400;
 const SLIME_SCOPE_STEADY_MAX_MARKET_CAP = 2_000_000;
-const SLIME_SCOPE_GRADUATING_MIN_MARKET_CAP = 45_000;
+const SLIME_SCOPE_GRADUATING_MIN_MARKET_CAP = 28_000;
 const SLIME_SCOPE_GRADUATING_MAX_MARKET_CAP = 180_000;
-const SLIME_SCOPE_GRADUATED_MARKET_CAP_HINT = 250_000;
+const SLIME_SCOPE_GRADUATED_MARKET_CAP_HINT = 160_000;
 
 function slimeScopeSourceRows() {
   const marketByMint = marketDataRowsByMint();
@@ -15255,7 +15267,7 @@ function isGraduatingSlimeScopeRow(row = {}) {
   const marketCap = slimeScopeMarketCap(row);
   const marketCapInGraduatingBand = marketCap >= SLIME_SCOPE_GRADUATING_MIN_MARKET_CAP
     && marketCap <= SLIME_SCOPE_GRADUATING_MAX_MARKET_CAP;
-  return (progress >= 70 && (!marketCap || marketCap <= SLIME_SCOPE_GRADUATING_MAX_MARKET_CAP))
+  return (progress >= 55 && (!marketCap || marketCap <= SLIME_SCOPE_GRADUATING_MAX_MARKET_CAP))
     || marketCapInGraduatingBand;
 }
 
