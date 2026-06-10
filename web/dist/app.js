@@ -9442,10 +9442,25 @@ async function submitLaunchCoin() {
     const imagePayload = await launchCoinImagePayload();
     const launchAttemptId = globalThis.crypto?.randomUUID?.()
       || `launch-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    // When the atomic anti-snipe bundle is enabled server-side, the backend lands the
+    // create + dev buy + first-block wallet buys together in one Jito bundle. We hand it
+    // the bundle wallet selection here; the field is ignored when the feature is OFF, so
+    // it is safe to always send for the bundle action.
+    let bundleBuy = null;
+    if (draft.action === "bundle") {
+      const bundlePreset = launchCoinBundlePresetFromDraft(draft);
+      bundleBuy = {
+        walletIndexes: bundlePreset.walletIndexes || [],
+        walletGroup: bundlePreset.walletGroup || "",
+        amountSol: bundlePreset.amountSol || "0",
+        slippageBps: bundlePreset.slippageBps || "300"
+      };
+    }
     const requestPayload = {
       ...draft,
       ...imagePayload,
-      launchAttemptId
+      launchAttemptId,
+      ...(bundleBuy ? { bundleBuy } : {})
     };
     const requestBody = JSON.stringify(requestPayload);
     if (requestBody.length > 11_500_000) {
@@ -9478,6 +9493,21 @@ async function submitLaunchCoin() {
     }
 
     applyLaunchCoinMint(draft, tokenMint);
+
+    // If the server landed the buys atomically in a Jito bundle, the dev buy and the
+    // first-block wallet buys already executed inside the same block as the create.
+    // Re-running them here would double-buy and burn SOL, so skip straight to the chart.
+    if (launch.bundled) {
+      const bundledCount = Number(launch.bundledWalletCount || 0);
+      const devNote = launch.devBuyIncluded ? "dev buy" : "";
+      const buyNote = [devNote, bundledCount > 0 ? `${bundledCount} bundle buy${bundledCount === 1 ? "" : "s"}` : ""].filter(Boolean).join(" + ");
+      state.launchCoinStatus = `Launch bundled atomically: ${shortAddress(tokenMint)}${buyNote ? ` (${buyNote} landed in-block)` : ""}.${signature} Opening chart...`;
+      writeText(status, state.launchCoinStatus);
+      navigateTo("/terminal/chart", "smartChart");
+      render({ force: true });
+      return;
+    }
+
     state.launchCoinStatus = `Launch returned ${shortAddress(tokenMint)}.${signature} Routing into ${launchCoinActionLabel(draft.action)}...`;
     writeText(status, state.launchCoinStatus);
 

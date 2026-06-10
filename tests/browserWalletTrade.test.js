@@ -45,9 +45,10 @@ test("Trade tab treats a connected Phantom/Solflare wallet as a usable trade wal
   assert.match(appSource, /function connectedBrowserWalletOptionHtml/);
   assert.match(appSource, /<option value="connected"/);
   assert.match(functionBody(appSource, "tradeHtml"), /Connect to Trade/);
-  assert.match(functionBody(appSource, "tradeHtml"), /Connected browser wallets stay ready for this session/);
-  assert.match(functionBody(appSource, "tradeHtml"), /every buy\/sell still requires wallet confirmation/);
-  assert.match(functionBody(appSource, "tradeHtml"), /Automation Wallets/);
+  // OgreSwap redesign: a connected browser wallet feeds the wallet selector directly so
+  // it is usable as a trade wallet even with no managed wallets.
+  assert.match(functionBody(appSource, "tradeHtml"), /walletOptionsHtml\(connected\?\.publicKey && !hasManagedWallets \? "connected" : ""\)/);
+  assert.match(functionBody(appSource, "tradeHtml"), /OgreSwap/);
   assert.doesNotMatch(functionBody(appSource, "tradeHtml"), /return `\$\{createWalletSection\(\)\}/);
 });
 

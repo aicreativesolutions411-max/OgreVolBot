@@ -510,6 +510,12 @@ function loadConfig() {
   const pumpLaunchRequestMode = (process.env.PUMP_LAUNCH_REQUEST_MODE || "json").trim().toLowerCase();
   const pumpLaunchPriorityFeeSol = Number.parseFloat(process.env.PUMP_LAUNCH_PRIORITY_FEE_SOL || "0.00005");
   const pumpLaunchRequiredBufferSol = Number.parseFloat(process.env.PUMP_LAUNCH_REQUIRED_BUFFER_SOL || "0.01");
+  // Jito atomic anti-snipe bundle for launches (OFF by default; owner enables + tests
+  // before relying on it). When on, create + dev buy + first wallet buys land in one
+  // block via a Jito bundle so nothing snipes between launch and the first buys.
+  const pumpLaunchJitoBundle = parseBoolean(process.env.PUMP_LAUNCH_JITO_BUNDLE || "false");
+  const pumpLaunchJitoUrl = (process.env.PUMP_LAUNCH_JITO_URL || "https://mainnet.block-engine.jito.wtf/api/v1/bundles").trim();
+  const pumpLaunchJitoTipSol = Math.max(0.00001, Number.parseFloat(process.env.PUMP_LAUNCH_JITO_TIP_SOL || "0.0005") || 0.0005);
   const pumpLaunchMetadataProvider = normalizeMetadataProvider(process.env.METADATA_PROVIDER || process.env.PUMP_LAUNCH_METADATA_PROVIDER || "auto");
   const renderExternalHostname = String(process.env.RENDER_EXTERNAL_HOSTNAME || "").trim();
   const pumpLaunchHostedMetadataBaseUrl = (
@@ -870,6 +876,9 @@ function loadConfig() {
     pumpLaunchPumpFunIpfsUrl,
     pumpLaunchPriorityFeeSol,
     pumpLaunchRequiredBufferSol,
+    pumpLaunchJitoBundle,
+    pumpLaunchJitoUrl,
+    pumpLaunchJitoTipSol,
     photonNewPairsUrl: (process.env.PHOTON_NEW_PAIRS_URL || "").trim(),
     photonApiKey: process.env.PHOTON_API_KEY || "",
     livePairsRpcSafety,
@@ -28015,6 +28024,129 @@ async function sendVersionedTransaction(tx, label = "send versioned transaction"
   return signature;
 }
 
+// --- Jito atomic anti-snipe launch bundle (flag-gated; OFF by default) --------
+// Builds [create, dev buy, first wallet buys] via PumpPortal's multi-transaction
+// endpoint, signs each with the correct keypair, and submits them as ONE atomic Jito
+// bundle so they all land in the same block — nothing can snipe between the launch and
+// the first buys. A Jito bundle is all-or-none: if it does not land, nothing executes
+// and no SOL is spent, so a failed bundle is safe to retry. Capped at Jito's 5-tx limit.
+async function requestPumpPortalBundleTxs(actions, timeoutMs) {
+  const url = CONFIG.pumpLaunchApiUrl || "https://pumpportal.fun/api/trade-local";
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(actions),
+    signal: AbortSignal.timeout ? AbortSignal.timeout(timeoutMs) : undefined
+  });
+  if (!response.ok) {
+    const text = (await response.text()).replace(/\s+/g, " ").slice(0, 600);
+    const error = new Error(`PumpPortal bundle build failed: HTTP ${response.status} ${text}`);
+    error.status = response.status;
+    throw error;
+  }
+  const data = await response.json();
+  const list = Array.isArray(data) ? data : (Array.isArray(data?.transactions) ? data.transactions : []);
+  if (list.length !== actions.length) {
+    throw new Error(`PumpPortal returned ${list.length} transaction(s) for ${actions.length} bundle action(s).`);
+  }
+  return list.map((item) => {
+    const value = typeof item === "string" ? item : (item?.transaction || item?.tx || "");
+    if (!value) throw new Error("PumpPortal bundle item contained no transaction.");
+    try { return bs58.decode(value); } catch { return new Uint8Array(Buffer.from(value, "base64")); }
+  });
+}
+
+async function submitJitoBundle(base64Txs, timeoutMs) {
+  const response = await fetch(CONFIG.pumpLaunchJitoUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "sendBundle", params: [base64Txs, { encoding: "base64" }] }),
+    signal: AbortSignal.timeout ? AbortSignal.timeout(timeoutMs) : undefined
+  });
+  const text = await response.text();
+  let data = {};
+  try { data = JSON.parse(text); } catch { /* non-JSON */ }
+  if (!response.ok || data.error) {
+    throw new Error(`Jito sendBundle failed: HTTP ${response.status} ${(data.error ? JSON.stringify(data.error) : text).slice(0, 400)}`);
+  }
+  return String(data.result || "");
+}
+
+async function webLaunchPumpJitoBundle(userId, body, basePayload) {
+  const store = await readWalletStore();
+  const selectedDevWalletId = firstString(
+    basePayload.devBuy.walletIndex, body.selectedDevWalletId, body.devWalletPublicKey,
+    Array.isArray(body.walletIndexes) ? body.walletIndexes[0] : ""
+  );
+  const devSelection = selectPumpLaunchWallet(store, userId, selectedDevWalletId);
+  const devKeypair = decryptWallet(devSelection.wallet);
+  const devBuySol = Math.max(0, Number(basePayload.devBuy.amountSol) || 0);
+  const slippageBps = Number(basePayload.slippageBps) || 300;
+
+  // First-block wallet buys (the "bundle") that land atomically with the dev buy.
+  const bundle = body.bundleBuy || {};
+  const bundleAmountSol = Math.max(0, Number(bundle.amountSol) || 0);
+  let bundleWallets = [];
+  if (bundleAmountSol > 0 && (bundle.walletIndexes || bundle.walletGroup)) {
+    bundleWallets = webSelectedWallets(store, userId, bundle.walletIndexes, bundle.walletGroup)
+      .filter((wallet) => wallet.publicKey && wallet.publicKey !== devSelection.wallet.publicKey);
+  }
+  // Jito bundles allow at most 5 transactions: create + dev buy + remaining wallet buys.
+  const reserved = 1 + (devBuySol > 0 ? 1 : 0);
+  bundleWallets = bundleWallets.slice(0, Math.max(0, 5 - reserved));
+
+  const metadata = await uploadPumpLaunchMetadata(basePayload);
+  const mintKeypair = Keypair.generate();
+  const mint = mintKeypair.publicKey.toBase58();
+
+  // Track which keypairs sign which tx. PumpPortal uses the FIRST action's priorityFee
+  // as the Jito tip for the whole bundle.
+  const plan = [];
+  plan.push({
+    action: {
+      publicKey: devKeypair.publicKey.toBase58(), action: "create",
+      tokenMetadata: { name: basePayload.name, symbol: basePayload.symbol, uri: metadata.uri },
+      mint, denominatedInSol: "true", amount: 0, slippageBps, priorityFee: CONFIG.pumpLaunchJitoTipSol, pool: "pump"
+    },
+    signers: [mintKeypair, devKeypair]
+  });
+  if (devBuySol > 0) {
+    plan.push({
+      action: { publicKey: devKeypair.publicKey.toBase58(), action: "buy", mint, denominatedInSol: "true", amount: devBuySol, slippageBps, priorityFee: 0, pool: "pump" },
+      signers: [devKeypair]
+    });
+  }
+  for (const wallet of bundleWallets) {
+    const keypair = decryptWallet(wallet);
+    plan.push({
+      action: { publicKey: keypair.publicKey.toBase58(), action: "buy", mint, denominatedInSol: "true", amount: bundleAmountSol, slippageBps, priorityFee: 0, pool: "pump" },
+      signers: [keypair]
+    });
+  }
+
+  logPumpLaunchEvent("pump_launch_jito_bundle_build", {
+    launchAttemptId: basePayload.clientRequestId, userId, mint,
+    txCount: plan.length, devBuySol, bundleWalletCount: bundleWallets.length, tipSol: CONFIG.pumpLaunchJitoTipSol
+  });
+
+  const txBytes = await requestPumpPortalBundleTxs(plan.map((entry) => entry.action), CONFIG.pumpLaunchTimeoutMs || 30000);
+  const signed = txBytes.map((bytes, index) => {
+    const tx = VersionedTransaction.deserialize(bytes);
+    tx.sign(plan[index].signers);
+    return Buffer.from(tx.serialize()).toString("base64");
+  });
+  const bundleId = await submitJitoBundle(signed, CONFIG.pumpLaunchTimeoutMs || 30000);
+
+  logPumpLaunchEvent("pump_launch_jito_bundle_submitted", {
+    launchAttemptId: basePayload.clientRequestId, userId, mint, bundleId, txCount: plan.length
+  });
+  return {
+    status: "submitted", tokenMint: mint, mint, bundleId, bundled: true,
+    bundledWalletCount: bundleWallets.length, devBuyIncluded: devBuySol > 0,
+    provider: "jito-bundle", metadataUri: metadata.uri
+  };
+}
+
 async function webLaunchPumpPortalLocal(userId, body, basePayload) {
   const store = await readWalletStore();
   const selectedDevWalletId = firstString(
@@ -28266,7 +28398,13 @@ async function webLaunchPumpCoin(userId, body = {}) {
       throw error;
     }
     try {
-      const result = await webLaunchPumpPortalLocal(userId, body, basePayload);
+      // Flag-gated atomic anti-snipe path. When PUMP_LAUNCH_JITO_BUNDLE is OFF (default)
+      // this is never reached, so normal launches are unchanged. When ON, the create +
+      // dev buy + first-block wallet buys land together in one all-or-none Jito bundle.
+      const useJito = CONFIG.pumpLaunchJitoBundle && (Number(basePayload.devBuy?.amountSol) > 0 || Number(body.bundleBuy?.amountSol) > 0);
+      const result = useJito
+        ? await webLaunchPumpJitoBundle(userId, body, basePayload)
+        : await webLaunchPumpPortalLocal(userId, body, basePayload);
       await audit("web_launch_pump_coin", {
         userId,
         symbol,
