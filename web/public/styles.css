@@ -1539,6 +1539,14 @@ button:disabled {
 .tabs button[data-tab="pnl"]::before { background-image: url("./assets/slimewire/svg/icons/pnl.svg"); }
 .tabs button[data-tab="txAudit"]::before { background-image: url("./assets/slimewire/svg/icons/tx-audit.svg"); }
 .tabs button[data-tab="sniper"]::before { background-image: url("./assets/slimewire/svg/icons/snipe.svg"); }
+.tabs button[data-tab="launchCoin"]::before { background-image: url("./assets/slimewire/svg/icons/launch.svg"); }
+.tabs button[data-tab="ogreAi"]::before { background-image: url("./assets/slimewire/svg/icons/best-picks.svg"); }
+.tabs button[data-tab="smartChart"]::before { background-image: url("./assets/slimewire/svg/icons/slime-scope.svg"); }
+.tabs button[data-tab="tek"]::before { background-image: url("./assets/slimewire/svg/icons/settings.svg"); }
+
+/* Desktop default: the mobile-only bottom bar + chips are hidden (see overrides for mobile). */
+.subnav-chips { display: none; }
+.bottom-bar { display: none; }
 
 .panel-host {
   min-height: 280px;

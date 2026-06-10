@@ -92,16 +92,28 @@ test("mobile right rail is fixed and Ogre Tools stays user-controlled", () => {
   assert.match(cssSource, /top-sync-strip \.top-wallet-disconnected,[\s\S]*data-active-preset-label[\s\S]*display: none !important/);
 });
 
-test("mobile rail exposes the full desktop tool list", () => {
-  assert.match(cssSource, /CHART_AGENT_TRADE_RAIL_POLISH_20260608_V1/);
-  assert.match(cssSource, /OGRE_AI_POOL_AND_HEADER_POLISH_V1/);
-  assert.match(cssSource, /\[data-dashboard\] > \.tabs,[\s\S]*\[data-active-tab="smartChart"\] \[data-dashboard\] > \.tabs[\s\S]*flex-direction: column !important/);
-  assert.match(cssSource, /\[data-dashboard\] > \.tabs \.nav-tool-group,[\s\S]*display: contents !important/);
-  assert.match(cssSource, /\[data-dashboard\] > \.tabs button\[hidden\][\s\S]*display: none !important/);
+test("mobile bottom bar + chips expose every tool without a wall of tabs", () => {
+  // Mobile now uses a fixed 5-section bottom bar + a chip row instead of the long tab
+  // strip, so nothing is missed (Pump Launch / Sniper / Ogre A.I. are now surfaced).
+  assert.match(htmlSource, /<nav class="bottom-bar" data-bottom-bar/);
+  assert.match(htmlSource, /<div class="subnav-chips" data-subnav-chips/);
+  // Bottom bar + chips render from the NAV_SECTIONS source of truth.
+  assert.match(appSource, /const NAV_SECTIONS = \[/);
+  assert.match(appSource, /function syncMobileNav\(\)/);
+  assert.match(functionBody(appSource, "syncMobileNav"), /data-bottom-bar[\s\S]*data-subnav-chips/);
+  assert.match(appSource, /target\.matches\("\[data-nav-section\]"\)/);
+  // The previously-buried high-value tabs are now first-class nav entries.
+  for (const tab of ["launchCoin", "sniper", "ogreAi"]) {
+    assert.match(appSource, new RegExp(`tab: "${tab}"`));
+  }
+  // CSS: the desktop tab strip is hidden on mobile and the bottom bar takes over.
+  assert.match(cssSource, /\[data-app\]\[data-route="terminal"\] \.tabs \{ display: none; \}/);
+  assert.match(cssSource, /\.bottom-bar \{\s*display: flex;/);
+  // Every desktop nav label still exists (full tool list), just regrouped into 5 sections.
   const labels = [...htmlSource.matchAll(/<button[^>]*data-label="([^"]+)"[^>]*>/g)]
     .filter((match) => !/\shidden(?:\s|>|=)/.test(match[0]))
     .map((match) => match[1]);
-  assert.deepEqual(labels, ["Live", "Home", "Chart", "Swap", "Cooks", "Trades", "Scope", "Watch", "KOL", "Tek", "Wallets", "Pos", "PnL"]);
+  assert.deepEqual(labels, ["Live", "Cooks", "Scope", "Trades", "KOL", "Watch", "Swap", "Chart", "Sniper", "Launch", "Watches", "Bundle", "Tek", "A.I.", "Wallets", "Pos", "PnL", "Home"]);
 });
 
 test("mobile REC and wallet connect controls stay tappable in one sync row", () => {

@@ -885,6 +885,94 @@ const TERMINAL_FEEDS = [
 ];
 const TERMINAL_FEED_MAP = Object.fromEntries(TERMINAL_FEEDS.map((feed) => [feed.tabKey, feed]));
 
+// Single source of truth for the simplified navigation: 5 plain-language sections that
+// group every tab. Desktop shows the full grouped .tabs nav; mobile shows a fixed bottom
+// bar (one button per section) plus a chip row of the active section's tabs, so people see
+// the 5 places instead of a wall of 20 tabs and never miss Pump Launch / Sniper / A.I.
+const NAV_SECTIONS = [
+  {
+    key: "discover", label: "Discover", icon: "./assets/slimewire/svg/icons/search.svg", primary: "terminal",
+    tabs: [
+      { tab: "terminal", label: "Live Terminal" },
+      { tab: "live", label: "Cooks" },
+      { tab: "slimeScope", label: "Slime Scope" },
+      { tab: "liveTrades", label: "Live Trades" },
+      { tab: "kol", label: "KOL Tracker" },
+      { tab: "watchlist", label: "Watchlist" }
+    ]
+  },
+  {
+    key: "trade", label: "Trade", icon: "./assets/slimewire/svg/icons/slime-swap.svg", primary: "trade",
+    tabs: [
+      { tab: "trade", label: "Slime Swap" },
+      { tab: "smartChart", label: "Smart Chart" },
+      { tab: "sniper", label: "Sniper" }
+    ]
+  },
+  {
+    key: "launch", label: "Launch", icon: "./assets/slimewire/svg/icons/launch.svg", primary: "launchCoin",
+    tabs: [
+      { tab: "launchCoin", label: "Pump Launch" },
+      { tab: "launch", label: "Launch Watches" },
+      { tab: "bundle", label: "Bundle" },
+      { tab: "volume", label: "Volume" }
+    ]
+  },
+  {
+    key: "tools", label: "Tools", icon: "./assets/slimewire/svg/icons/settings.svg", primary: "tek",
+    tabs: [
+      { tab: "tek", label: "Ogre Tek" },
+      { tab: "ogreAi", label: "Ogre A.I." },
+      { tab: "ogreTek", label: "Perp Mode", feature: "ogre-tek" }
+    ]
+  },
+  {
+    key: "wallet", label: "Wallet", icon: "./assets/slimewire/svg/icons/wallet.svg", primary: "wallets",
+    tabs: [
+      { tab: "wallets", label: "Wallets" },
+      { tab: "positions", label: "Positions" },
+      { tab: "pnl", label: "PnL" },
+      { tab: "profile", label: "Home" }
+    ]
+  }
+];
+
+function navSectionForTab(tab = state.activeTab) {
+  return NAV_SECTIONS.find((section) => section.tabs.some((entry) => entry.tab === tab)) || NAV_SECTIONS[0];
+}
+
+function navSectionTabVisible(entry) {
+  // Hide feature-flagged tabs (e.g. Perp Mode) until staged on, mirroring the desktop nav.
+  if (entry.feature === "ogre-tek") return SHOW_STAGED_PERPS_NAV && shouldShowOgreTekNav(ogreTekConfig);
+  return true;
+}
+
+// Renders the mobile bottom bar + the active section's chip row. Both use plain data-tab /
+// data-nav-section buttons so the existing click handler does all the routing.
+function syncMobileNav() {
+  const bar = $("[data-bottom-bar]");
+  const chips = $("[data-subnav-chips]");
+  const activeSection = navSectionForTab(state.activeTab);
+  if (bar) {
+    bar.innerHTML = NAV_SECTIONS.map((section) => {
+      const isActive = section.key === activeSection.key;
+      return `
+        <button type="button" data-nav-section="${section.key}" data-active="${isActive ? "true" : "false"}" aria-label="${escapeHtml(section.label)}">
+          <img src="${section.icon}" alt="" aria-hidden="true" loading="lazy">
+          <span>${escapeHtml(section.label)}</span>
+        </button>`;
+    }).join("");
+  }
+  if (chips) {
+    const entries = activeSection.tabs.filter(navSectionTabVisible);
+    chips.innerHTML = entries.map((entry) => {
+      const isActive = entry.tab === state.activeTab;
+      return `<button type="button" data-tab="${entry.tab}" data-active="${isActive ? "true" : "false"}">${escapeHtml(entry.label)}</button>`;
+    }).join("");
+    chips.dataset.section = activeSection.key;
+  }
+}
+
 const SLIMEWIRE_CRITICAL_IMAGE_ASSETS = [
   "./assets/slimewire/png/slimewire-mark.png",
   "./assets/slimewire/svg/icons/wallet.svg",
@@ -5789,6 +5877,7 @@ function renderTabs() {
     const desktopInlineTools = typeof window !== "undefined" && window.matchMedia?.("(min-width: 761px)")?.matches;
     group.open = Boolean(desktopInlineTools) || Boolean(state.navTekOpen) || (!hasStoredNavTekPreference() && hasActiveChild);
   });
+  syncMobileNav();
 
   if (state.activeTab === "terminal") panel.innerHTML = livePairsHtml();
   if (state.activeTab === "tek") panel.innerHTML = tekHubHtml();
@@ -21447,6 +21536,31 @@ document.addEventListener("click", async (event) => {
         details: state.activeTab || "terminal"
       });
     }
+  }
+
+  if (target.matches("[data-nav-section]")) {
+    // Mobile bottom-bar tap: if already inside this section keep the current tab (just
+    // refresh the chip row); otherwise jump to the section's primary tab. The chips below
+    // (plain data-tab buttons) handle switching between a section's tabs.
+    const section = NAV_SECTIONS.find((entry) => entry.key === target.dataset.navSection);
+    if (!section) return;
+    if (navSectionForTab(state.activeTab).key === section.key) {
+      syncMobileNav();
+      return;
+    }
+    state.activeTab = section.primary;
+    state.route = "terminal";
+    if (!window.location.pathname.startsWith("/terminal")) {
+      window.history.pushState({}, "", "/terminal");
+    }
+    render();
+    refreshTerminalFeed(state.activeTab, {
+      silent: true,
+      ifStale: true,
+      force: !terminalFeedHasData(state.activeTab),
+      reason: "nav-section"
+    });
+    return;
   }
 
   if (target.matches("[data-tab]")) {

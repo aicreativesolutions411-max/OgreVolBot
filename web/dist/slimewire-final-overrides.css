@@ -20623,3 +20623,88 @@ html body main.shell[data-app] .slime-scope-page { margin-top: 0 !important; pad
 html body main.shell[data-app] .live-terminal .terminal-main { padding-top: 0 !important; gap: 8px !important; }
 html body main.shell[data-app] .live-terminal .live-pair-buckets { margin-bottom: 4px !important; }
 /* === END LIVE_REFRESH_OVERSCROLL_20260609_V1 ======================== */
+
+/* === MOBILE_BOTTOM_BAR_NAV_20260610_V1 ============================== */
+/* Replace the long horizontal tab strip on phones with a fixed 5-section bottom bar plus
+   a chip row for the active section. Desktop keeps the full grouped .tabs nav. */
+@media (max-width: 760px) {
+  [data-app][data-route="terminal"] .tabs { display: none; }
+
+  .subnav-chips {
+    display: flex;
+    gap: 6px;
+    padding: 8px 10px;
+    margin: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+    position: sticky;
+    top: 0;
+    z-index: 11;
+    background: linear-gradient(180deg, rgba(6, 16, 8, 0.96), rgba(6, 16, 8, 0.86));
+    backdrop-filter: blur(14px);
+    -webkit-overflow-scrolling: touch;
+  }
+  .subnav-chips::-webkit-scrollbar { display: none; }
+  .subnav-chips button {
+    flex: 0 0 auto;
+    padding: 7px 14px;
+    border-radius: 999px;
+    font-size: 0.82rem;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .subnav-chips button[data-active="true"] {
+    background: linear-gradient(135deg, rgba(114, 255, 35, 0.94), rgba(187, 255, 99, 0.94));
+    border-color: var(--line-strong);
+    color: #071006;
+  }
+
+  .bottom-bar {
+    display: flex;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 40;
+    padding: 6px 6px calc(6px + env(safe-area-inset-bottom, 0px));
+    gap: 2px;
+    background: linear-gradient(180deg, rgba(6, 16, 8, 0.92), rgba(3, 9, 4, 0.99));
+    border-top: 1px solid var(--line-strong, rgba(114, 255, 35, 0.3));
+    box-shadow: 0 -12px 36px rgba(0, 0, 0, 0.42);
+  }
+  .bottom-bar button {
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    padding: 6px 2px;
+    min-height: 52px;
+    background: transparent;
+    border: 0;
+    border-radius: 12px;
+    color: rgba(226, 255, 215, 0.72);
+    font-size: 0.64rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+  }
+  .bottom-bar button img {
+    width: 22px;
+    height: 22px;
+    opacity: 0.78;
+    filter: drop-shadow(0 0 5px rgba(114, 255, 35, 0.25));
+  }
+  .bottom-bar button[data-active="true"] {
+    color: #d6ffbf;
+    background: rgba(114, 255, 35, 0.12);
+  }
+  .bottom-bar button[data-active="true"] img {
+    opacity: 1;
+    filter: drop-shadow(0 0 8px rgba(114, 255, 35, 0.6));
+  }
+
+  /* Keep feed content clear of the fixed bottom bar. */
+  [data-app][data-route="terminal"] .panel-host { padding-bottom: 78px; }
+}
+/* === END MOBILE_BOTTOM_BAR_NAV_20260610_V1 ========================== */
