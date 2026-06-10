@@ -27522,25 +27522,47 @@ function shouldFallbackToPumpFunIpfsMetadata(error) {
 }
 
 async function uploadPumpLaunchMetadata(basePayload = {}) {
-  if (CONFIG.pumpLaunchMetadataProvider === "slimewire-hosted") {
+  const provider = CONFIG.pumpLaunchMetadataProvider;
+  if (provider === "slimewire-hosted") {
     return uploadHostedPumpLaunchMetadata(basePayload);
   }
-  if (CONFIG.pumpLaunchMetadataProvider === "pumpfun-ipfs") {
+  if (provider === "pumpfun-ipfs") {
     return uploadPumpFunIpfsLaunchMetadata(basePayload);
   }
 
+  // Explicit Pinata: keep Pinata primary, fall back to Pump.fun IPFS on provider error.
+  if (provider === "pinata") {
+    try {
+      return await uploadPinataPumpLaunchMetadata(basePayload);
+    } catch (error) {
+      if (!shouldFallbackToPumpFunIpfsMetadata(error)) throw error;
+      logPumpLaunchEvent("pump_launch_metadata_pinata_fallback", {
+        provider: "pinata",
+        fallbackProvider: "pumpfun-ipfs",
+        errorCode: error.code || "PUMP_METADATA_FAILED",
+        providerStatus: error.providerStatus || error.status || error.statusCode || null,
+        reason: sanitizeProviderBody(error.message)
+      });
+      return uploadPumpFunIpfsLaunchMetadata(basePayload);
+    }
+  }
+
+  // "auto": upload through Pump.fun's own IPFS first so the coin's image hosts on
+  // Pump.fun's infrastructure and reliably renders on pump.fun (a Pinata-hosted image
+  // URL frequently does not show in the Pump.fun UI). Fall back to Pinata only if
+  // Pump.fun's uploader fails and a Pinata JWT is configured, so launches still work.
   try {
-    return await uploadPinataPumpLaunchMetadata(basePayload);
+    return await uploadPumpFunIpfsLaunchMetadata(basePayload);
   } catch (error) {
-    if (!shouldFallbackToPumpFunIpfsMetadata(error)) throw error;
-    logPumpLaunchEvent("pump_launch_metadata_pinata_fallback", {
-      provider: "pinata",
-      fallbackProvider: "slimewire-hosted",
+    if (!CONFIG.pumpLaunchPinataJwt) throw error;
+    logPumpLaunchEvent("pump_launch_metadata_pumpfun_fallback", {
+      provider: "pumpfun-ipfs",
+      fallbackProvider: "pinata",
       errorCode: error.code || "PUMP_METADATA_FAILED",
       providerStatus: error.providerStatus || error.status || error.statusCode || null,
       reason: sanitizeProviderBody(error.message)
     });
-    return uploadPumpFunIpfsLaunchMetadata(basePayload);
+    return uploadPinataPumpLaunchMetadata(basePayload);
   }
 }
 
