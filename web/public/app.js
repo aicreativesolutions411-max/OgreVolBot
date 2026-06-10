@@ -20285,6 +20285,36 @@ document.addEventListener("focusin", (event) => {
   prefetchTokenChartFromElement(event.target instanceof Element ? event.target : null, "focus-prefetch");
 }, true);
 
+// Desktop wheel fallback: guarantee the mouse wheel scrolls the page when hovering
+// anywhere over terminal content, not just over the scrollbar. Only acts when no
+// inner scroller can take the wheel (respects the sidebar, trade panel, chart iframe,
+// modals, and overscroll-behavior). Mouse-wheel feel is identical (scrollTop += delta).
+document.addEventListener("wheel", (event) => {
+  if (event.defaultPrevented || event.ctrlKey || event.deltaY === 0) return;
+  if (state.route !== "terminal" || isCompactViewport()) return;
+  let node = event.target instanceof Element ? event.target : null;
+  if (node && node.tagName === "IFRAME") return; // embedded charts scroll themselves
+  const dir = event.deltaY > 0 ? 1 : -1;
+  while (node && node !== document.body && node !== document.documentElement) {
+    const style = window.getComputedStyle(node);
+    const oy = style.overflowY;
+    if ((oy === "auto" || oy === "scroll" || oy === "overlay") && node.scrollHeight > node.clientHeight + 1) {
+      const atTop = node.scrollTop <= 0;
+      const atBottom = node.scrollTop + node.clientHeight >= node.scrollHeight - 1;
+      if (!((dir < 0 && atTop) || (dir > 0 && atBottom))) return; // inner scroller will move
+      if (/contain|none/.test(style.overscrollBehaviorY)) return; // respect contained scrollers
+    }
+    node = node.parentElement;
+  }
+  const scroller = document.scrollingElement || document.documentElement;
+  if (!scroller || scroller.scrollHeight <= scroller.clientHeight + 1) return;
+  let delta = event.deltaY;
+  if (event.deltaMode === 1) delta *= 40;
+  else if (event.deltaMode === 2) delta *= scroller.clientHeight;
+  scroller.scrollTop += delta;
+  event.preventDefault();
+}, { passive: false });
+
 document.addEventListener("click", async (event) => {
   const source = event.target instanceof Element
     ? event.target
