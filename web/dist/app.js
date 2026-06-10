@@ -8293,12 +8293,26 @@ function volumeBotStageLabel(bot) {
   return bot.stage || "Armed";
 }
 
+function volumeBotBackgroundIndicatorHtml() {
+  const count = backgroundWallets().length;
+  if (!count) return "";
+  return `
+    <article class="volume-bot-status vbot-bg-indicator">
+      <div class="vbot-bg-row">
+        <span><strong>${count}</strong> background wallet${count === 1 ? "" : "s"} active · funds auto-return to your source wallet when a bot stops.</span>
+        <button type="button" class="secondary" data-sweep-background-wallets ${state.sweepBackgroundPending ? "disabled" : ""}>${state.sweepBackgroundPending ? "Sweeping..." : "Sweep to my wallet"}</button>
+      </div>
+      ${state.sweepBackgroundStatus ? `<small data-sweep-background-status>${escapeHtml(state.sweepBackgroundStatus)}</small>` : ""}
+    </article>`;
+}
+
 function volumeBotListHtml() {
   const bots = Array.isArray(state.volumeBots) ? state.volumeBots : [];
+  const bgIndicator = volumeBotBackgroundIndicatorHtml();
   if (!bots.length) {
-    return `<article class="volume-bot-status"><p class="muted">No SlimeBots running yet. Configure one above and press Start SlimeBot.</p></article>`;
+    return `${bgIndicator}<article class="volume-bot-status"><p class="muted">No SlimeBots running yet. Configure one above and press Start SlimeBot.</p></article>`;
   }
-  return bots.map((bot) => {
+  return bgIndicator + bots.map((bot) => {
     const stats = bot.stats || {};
     const active = bot.status !== "completed";
     const log = (bot.log || []).slice(0, 6);
@@ -8971,6 +8985,10 @@ function launchCoinHtml() {
               Image
               <input data-launch-coin-image type="file" accept="image/*,.png,.jpg,.jpeg,.webp,.gif,.heic,.heif,.avif">
               <span class="muted">SlimeWire converts common phone and desktop images during launch. Use a clear square JPG, PNG, WEBP, or screenshot for best results.</span>
+              <span class="launch-image-preview-wrap" data-launch-image-preview-wrap hidden>
+                <img class="launch-image-preview" data-launch-image-preview alt="Coin image preview">
+                <span class="launch-image-preview-meta" data-launch-image-preview-meta></span>
+              </span>
             </label>
             <label>
               Website
@@ -9406,11 +9424,17 @@ async function useLaunchCoinMint() {
 }
 
 async function submitLaunchCoin() {
+  // Double-submit guard: a duplicate launch click would create a second token /
+  // duplicate dev buy and burn SOL. Block re-entry until this attempt finishes.
+  if (state.launchCoinSubmitting) return;
   const status = $("[data-launch-coin-status]");
+  const button = $("[data-launch-coin-submit]");
+  state.launchCoinSubmitting = true;
+  if (button) { button.disabled = true; button.dataset.prevLabel = button.textContent; button.textContent = "Launching..."; }
   try {
     const draft = saveLaunchCoinDraft({ silent: true });
-    if (!draft.name) throw new Error("Enter the token name before launching.");
-    if (!draft.symbol) throw new Error("Enter the ticker before launching.");
+    if (!draft.name || String(draft.name).trim().length < 2) throw new Error("Enter a token name (2+ characters) before launching.");
+    if (!draft.symbol || String(draft.symbol).trim().length < 2) throw new Error("Enter a ticker (2+ characters) before launching.");
 
     state.launchCoinStatus = "Preparing image for SlimeWire backend conversion...";
     writeText(status, state.launchCoinStatus);
@@ -9496,6 +9520,10 @@ async function submitLaunchCoin() {
     });
     writeText(status, state.launchCoinStatus);
     setError(state.launchCoinStatus);
+  } finally {
+    state.launchCoinSubmitting = false;
+    const btn = $("[data-launch-coin-submit]");
+    if (btn) { btn.disabled = false; btn.textContent = btn.dataset.prevLabel || "Launch on Pump"; }
   }
 }
 
@@ -21678,6 +21706,23 @@ document.addEventListener("change", async (event) => {
     resetTerminalFeedVisibleLimit("slimeScope");
     render();
     runDeferredUiTask(() => refreshTerminalFeed("slimeScope", { force: true, reason: "cook-spot-category" }));
+  }
+  if (target?.matches?.("[data-launch-coin-image]")) {
+    // Show a live preview + size of the chosen coin image so a bad/wrong file is
+    // caught before launch. DOM-only — never re-render (that would clear the input).
+    const file = target.files?.[0];
+    const wrap = $("[data-launch-image-preview-wrap]");
+    const img = $("[data-launch-image-preview]");
+    const metaEl = $("[data-launch-image-preview-meta]");
+    if (!file) { if (wrap) wrap.hidden = true; return; }
+    const kb = Math.round(file.size / 1024);
+    if (metaEl) metaEl.textContent = `${file.name} · ${kb >= 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${kb} KB`}`;
+    try {
+      const url = URL.createObjectURL(file);
+      if (img) { img.onload = () => URL.revokeObjectURL(url); img.src = url; }
+      if (wrap) wrap.hidden = false;
+    } catch { if (wrap) wrap.hidden = true; }
+    return;
   }
   if (target?.matches?.("[data-terminal-filter-social], [data-terminal-filter-quote], [data-terminal-filter-audit]")) {
     const filters = terminalLaunchFilterState();

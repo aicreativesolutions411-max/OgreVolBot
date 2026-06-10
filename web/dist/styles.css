@@ -1187,6 +1187,35 @@ select:focus {
   min-height: 40px;
 }
 
+/* Volume bot background-wallet indicator */
+.vbot-bg-indicator { border-color: rgba(114, 255, 35, 0.3) !important; }
+.vbot-bg-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.vbot-bg-row span { font-size: 12.5px; line-height: 1.4; }
+.vbot-bg-row button { flex: 0 0 auto; }
+
+/* Pump launch image preview */
+.launch-image-preview-wrap {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0 2px;
+}
+.launch-image-preview {
+  width: 64px;
+  height: 64px;
+  border-radius: 12px;
+  object-fit: cover;
+  border: 1px solid var(--line-strong);
+  background: rgba(0, 0, 0, 0.35);
+}
+.launch-image-preview-meta { font-size: 11px; color: var(--muted); }
+
 .primary,
 .primary-link {
   display: inline-grid;
