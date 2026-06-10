@@ -359,6 +359,7 @@ const state = {
   tradeToken: "",
   tradeSwapFrom: "SOL",
   tradeSwapTo: "",
+  swapDirection: "buy",
   tradeResult: null,
   tradePlanResult: null,
   tradePlans: [],
@@ -4258,10 +4259,12 @@ function currentSwapTo() {
 function swapRouteMode() {
   const from = currentSwapFrom();
   const to = currentSwapTo();
-  if (from === "SOL" && to && to !== "SOL") return "buy";
-  if (from !== "SOL" && (!to || to === "SOL")) return "sell";
+  // Token-to-token (e.g. USDC into a token) keeps its own route.
   if (from !== "SOL" && to && to !== "SOL" && from !== to) return "two-step";
-  return "select";
+  // Normal SOL <-> token: the reverse button (swapDirection) decides buy vs sell.
+  const tokenSelected = (to && to !== "SOL") || normalizeSwapMint(state.tradeToken || "");
+  if (!tokenSelected) return "select";
+  return state.swapDirection === "sell" ? "sell" : "buy";
 }
 
 function swapRouteTokenMint(side = "buy") {
@@ -7137,6 +7140,25 @@ function tradeHtml() {
         : "Choose a token or paste a CA to prepare the route.";
   const routeTokenMint = routeMode === "sell" ? swapFrom : swapTo;
   const tokenInputValue = routeTokenMint && routeTokenMint !== "SOL" ? routeTokenMint : state.tradeToken;
+  const isSellRoute = routeMode === "sell";
+  // The slots are positioned by their .oss-pay (top) / .oss-receive (bottom) class
+  // over the template image, so the green reverse button swaps the CONTENT between
+  // the fixed top/bottom slots — the wallet/SOL controls and the token/CA controls
+  // trade places, and the panel visibly flips. Tap again to swap back.
+  const baseContent = `
+              <input class="oss-amount" data-swap-amount type="number" min="0" step="0.01" inputmode="decimal" placeholder="${isSellRoute ? "100" : "0.0"}" aria-label="${isSellRoute ? "Percent of token to sell" : "SOL amount to pay"}">
+              <select class="oss-tok" data-swap-from aria-label="Swap from token">
+                ${swapTokenSelectOptions(swapFrom, { includeCustom: false, walletOnly: true })}
+              </select>`;
+  const tokenContent = `
+              <input class="oss-amount oss-ca" data-trade-token type="text" placeholder="Paste token CA" value="${escapeHtml(tokenInputValue || "")}" aria-label="Token">
+              <select class="oss-tok" data-swap-to aria-label="Swap to token">
+                ${swapTokenSelectOptions(swapTo, { includeCustom: true })}
+              </select>`;
+  const swapSlotsHtml = `
+            <div class="oss-slot oss-pay" data-swap-slot="${isSellRoute ? "token" : "base"}">${isSellRoute ? tokenContent : baseContent}</div>
+            <button type="button" class="oss-reverse slime-swap-reverse" data-swap-reverse aria-label="Reverse swap route"><span class="slime-swap-route-icon" aria-hidden="true"></span></button>
+            <div class="oss-slot oss-receive" data-swap-slot="${isSellRoute ? "base" : "token"}">${isSellRoute ? baseContent : tokenContent}</div>`;
 
   return `
     <section class="trade-layout">
@@ -7144,21 +7166,7 @@ function tradeHtml() {
         <h3 class="ogre-swap-title oss-a11y-title">OgreSwap - live on-chain Solana swapper</h3>
         <div class="oss-stage-wrap">
           <div class="oss-stage" role="group" aria-label="OgreSwap swap panel">
-            <div class="oss-slot oss-pay">
-              <input class="oss-amount" data-swap-amount type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.0" aria-label="${swapFrom === "SOL" ? "SOL amount to pay" : "Sell percent"}">
-              <select class="oss-tok" data-swap-from aria-label="Swap from token">
-                ${swapTokenSelectOptions(swapFrom, { includeCustom: false, walletOnly: true })}
-              </select>
-            </div>
-            <button type="button" class="oss-reverse slime-swap-reverse" data-swap-reverse aria-label="Reverse swap route">
-              <span class="slime-swap-route-icon" aria-hidden="true"></span>
-            </button>
-            <div class="oss-slot oss-receive">
-              <input class="oss-amount oss-ca" data-trade-token type="text" placeholder="Paste token CA" value="${escapeHtml(tokenInputValue || "")}" aria-label="Token to receive">
-              <select class="oss-tok" data-swap-to aria-label="Swap to token">
-                ${swapTokenSelectOptions(swapTo, { includeCustom: true })}
-              </select>
-            </div>
+            ${swapSlotsHtml}
             <button type="button" class="oss-swap primary" data-swap-use-custom-amount>SWAP</button>
             <label class="oss-pill oss-slip" data-cap="Slippage">
               <select data-trade-slippage data-custom-select="trade-slippage" aria-label="Slippage">
@@ -21117,11 +21125,9 @@ document.addEventListener("click", async (event) => {
     await executeWebBuy(target.dataset.tradeBuyQuick);
   }
   if (target.closest?.("[data-swap-reverse]")) {
-    const from = normalizeSwapMint($("[data-swap-from]")?.value || state.tradeSwapFrom || "SOL") || "SOL";
-    const to = normalizeSwapMint($("[data-swap-to]")?.value || $("[data-trade-token]")?.value || state.tradeSwapTo || state.tradeToken || "");
-    state.tradeSwapFrom = to && to !== "custom" ? to : "SOL";
-    state.tradeSwapTo = from || "SOL";
-    state.tradeToken = state.tradeSwapFrom !== "SOL" ? state.tradeSwapFrom : state.tradeSwapTo !== "SOL" ? state.tradeSwapTo : state.tradeToken;
+    // Flip the swap direction: this both reverses buy<->sell AND visually swaps the
+    // wallet (pay) and CA (token) slots top<->bottom. Tap again to swap back.
+    state.swapDirection = state.swapDirection === "sell" ? "buy" : "sell";
     render({ force: true });
     return;
   }
@@ -21531,6 +21537,7 @@ document.addEventListener("change", async (event) => {
     state.tradeSwapTo = to;
     if (to && to !== "SOL") {
       state.tradeToken = to;
+      state.swapDirection = "buy";
       const input = $("[data-trade-token]");
       if (input) input.value = to;
     }
