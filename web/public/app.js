@@ -15686,8 +15686,13 @@ function slimeScopeHtml() {
   const refreshError = state.livePairsRefreshErrorByBucket?.[scopeBucket];
   const allRows = uniqueSignalRows(rankCookSpotRows(slimeScopeSourceRows(), category[0]));
   const rows = terminalFeedRowsWindow("slimeScope", allRows);
+  // On mobile, render the Cook Spot pairs with the same .signal-row cards as Cooks /
+  // Live Feed so the coin-pair layout matches across tabs. Desktop keeps its terminal
+  // row layout (which pairs with the desktop lifecycle columns below).
   const listBody = rows.length
-    ? compactSignalRowsHtml(rows, { layout: "terminal", limit: Math.max(1, rows.length), actionLabel: "Trade" })
+    ? (isCompactViewport()
+        ? tokenSignalRowsHtml(rows, { context: "live", shareBuilder: livePairShareText, hideToolbar: true })
+        : compactSignalRowsHtml(rows, { layout: "terminal", limit: Math.max(1, rows.length), actionLabel: "Trade" }))
     : refreshError
       ? emptyState("Unable to load pairs. Try refreshing.", "Cook Spot hit a snag — it keeps retrying, or tap Refresh Scope.")
       : scopeLoading
