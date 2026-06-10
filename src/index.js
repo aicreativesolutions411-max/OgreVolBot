@@ -145,6 +145,7 @@ const tokenAccountsCache = new Map();
 const tokenBalanceCache = new Map();
 const positionValueCache = new Map();
 const mintSafetyCache = new Map();
+const marketSafetyCache = new Map();
 const sniperScanState = new Map();
 let sniperCandidatesCache = { cachedAt: 0, value: [] };
 const dexSearchCandidatesCache = new Map();
@@ -1994,6 +1995,28 @@ async function handleWebApiRequest(request, response, requestUrl) {
         ok: true,
         livePairs: await webLivePairs(auth?.userId || "guest", bucket, { sort, force })
       });
+      return;
+    }
+
+    // Read-only buy pre-warm: when the UI sees buy intent (token selected/hovered),
+    // it pings this so the mint + market safety lookups are cached before the actual
+    // buy runs assertTokenBuySafety, shaving the ~1.8s DexScreener fetch off the click.
+    if (request.method === "GET" && pathname === "/api/web/prebuy-warm") {
+      const mint = String(requestUrl.searchParams.get("mint") || "").trim();
+      let warmed = false;
+      if (mint) {
+        try {
+          new PublicKey(mint);
+          await Promise.allSettled([
+            getMintSafetyInfo(mint).catch(() => null),
+            tokenMarketSafetyInfo(mint).catch(() => null)
+          ]);
+          warmed = true;
+        } catch {
+          warmed = false;
+        }
+      }
+      sendWebJson(request, response, 200, { ok: true, warmed });
       return;
     }
 
@@ -12835,6 +12858,13 @@ async function assertTokenMarketSafety(tokenMint, knownMarket = null) {
 }
 
 async function tokenMarketSafetyInfo(tokenMint) {
+  // Memoize for a short window so a pre-buy warm-up (and the buy moments later) reuse
+  // the same DexScreener lookup instead of paying the ~1.8s fetch twice.
+  const marketCacheKey = String(tokenMint || "").trim();
+  if (marketCacheKey) {
+    const cachedMarket = getTimedCache(marketSafetyCache, marketCacheKey, 45_000);
+    if (cachedMarket) return cachedMarket;
+  }
   const pairs = await fetchDexScreenerTokenPairsBatch([tokenMint], { timeoutMs: 1_800 }).catch(() => []);
   const best = bestDexPairForToken(tokenMint, pairs);
   const dex = metadataFromDexPair(tokenMint, best);
@@ -12859,7 +12889,7 @@ async function tokenMarketSafetyInfo(tokenMint) {
     best?.info?.websites?.map((item) => item?.label || item?.url),
     best?.info?.socials?.map((item) => `${item?.type || ""} ${item?.url || ""}`)
   ].flat(Infinity).filter(Boolean).join(" ").toLowerCase();
-  return {
+  const marketSafety = {
     marketCap,
     liquidityUsd,
     riskText,
@@ -12870,6 +12900,8 @@ async function tokenMarketSafetyInfo(tokenMint) {
     poolLabel: trustedToken2022PoolLabel(marketRow),
     trustedToken2022Pool: hasTrustedToken2022Pool(marketRow)
   };
+  if (marketCacheKey) setTimedCache(marketSafetyCache, marketCacheKey, marketSafety);
+  return marketSafety;
 }
 
 async function getMintSafetyInfo(tokenMint) {

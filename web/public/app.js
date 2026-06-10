@@ -12409,6 +12409,20 @@ function preferredSmartChartView(tokenRef = {}, options = {}) {
   return "chartTxns";
 }
 
+// Fire-and-forget buy pre-warm: warms the server-side mint + market safety caches so
+// the actual buy skips the ~1.8s DexScreener fetch. Deduped within 30s (cache TTL 45s)
+// and only fired on deliberate intent (chart open / quick-buy modal), never on hover.
+const prewarmedBuyMints = new Map();
+function prewarmBuyToken(mint) {
+  const key = String(mint || "").trim();
+  if (!key) return;
+  const last = prewarmedBuyMints.get(key) || 0;
+  if (Date.now() - last < 30_000) return;
+  prewarmedBuyMints.set(key, Date.now());
+  if (prewarmedBuyMints.size > 200) prewarmedBuyMints.clear();
+  api(`/api/web/prebuy-warm?mint=${encodeURIComponent(key)}`, { method: "GET" }).catch(() => {});
+}
+
 function openTokenChart(tokenRef = {}, options = {}) {
   perfMark("chartRouteStart");
   const routeStartedAt = perfNow();
@@ -12418,6 +12432,7 @@ function openTokenChart(tokenRef = {}, options = {}) {
     return;
   }
   prefetchTokenChart(tokenRef, { source: options.source || "token-entry" });
+  prewarmBuyToken(mint);
   state.chartTradeTab = options.defaultTab === "sell" ? "sell" : options.defaultTab === "chart" ? "buy" : "buy";
   state.smartChartView = preferredSmartChartView(state.smartChartTokenRef || tokenRef, options);
   state.chartFocusAmountInput = Boolean(options.focusAmountInput);
@@ -12502,6 +12517,7 @@ function openQuickBuy(tokenRef = {}, options = {}) {
     error: "",
     tradeAttemptId: ""
   };
+  prewarmBuyToken(mint);
   render({ force: true });
   requestAnimationFrame(() => $("[data-quick-buy-modal-amount]")?.focus());
 }
@@ -12531,6 +12547,7 @@ function openProtectedBuy(tokenRef = {}, options = {}) {
     ? "0.25"
     : formatQuickBuyAmount(amountNumber || 0.1);
   const connected = connectedBrowserWallet();
+  prewarmBuyToken(mint);
   state.quickBuyModal = { ...state.quickBuyModal, open: false, status: "", error: "" };
   state.protectedBuyModal = {
     open: true,
