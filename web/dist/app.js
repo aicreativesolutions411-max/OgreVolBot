@@ -1004,6 +1004,63 @@ function syncIntroGateHistory() {
   }
 }
 
+// Synthesized "portal" whoosh: a filtered-noise sweep + a low impact tone. Played as the
+// intro ends so a swoosh tails into the connect page ("you just came through a portal").
+// Needs an unlocked AudioContext; if the browser keeps it suspended (no gesture yet) it
+// simply stays silent. Reuses one context so the tail keeps playing across the route change.
+let portalAudioContext = null;
+function ensurePortalAudioContext() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return null;
+    if (!portalAudioContext) portalAudioContext = new Ctx();
+    if (portalAudioContext.state === "suspended") portalAudioContext.resume().catch(() => {});
+    return portalAudioContext;
+  } catch {
+    return null;
+  }
+}
+function playPortalWhoosh() {
+  const ctx = ensurePortalAudioContext();
+  if (!ctx || ctx.state !== "running") return;
+  try {
+    const now = ctx.currentTime;
+    const dur = 1.7;
+    const size = Math.floor(ctx.sampleRate * dur);
+    const buffer = ctx.createBuffer(1, size, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < size; i += 1) data[i] = (Math.random() * 2 - 1) * (1 - i / size);
+    const noise = ctx.createBufferSource();
+    noise.buffer = buffer;
+    const band = ctx.createBiquadFilter();
+    band.type = "bandpass";
+    band.Q.value = 0.7;
+    band.frequency.setValueAtTime(280, now);
+    band.frequency.exponentialRampToValueAtTime(3400, now + 0.55);
+    band.frequency.exponentialRampToValueAtTime(170, now + dur);
+    const noiseGain = ctx.createGain();
+    noiseGain.gain.setValueAtTime(0.0001, now);
+    noiseGain.gain.exponentialRampToValueAtTime(0.5, now + 0.16);
+    noiseGain.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+    noise.connect(band).connect(noiseGain).connect(ctx.destination);
+    const osc = ctx.createOscillator();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(150, now);
+    osc.frequency.exponentialRampToValueAtTime(46, now + 0.95);
+    const oscGain = ctx.createGain();
+    oscGain.gain.setValueAtTime(0.0001, now);
+    oscGain.gain.exponentialRampToValueAtTime(0.38, now + 0.08);
+    oscGain.gain.exponentialRampToValueAtTime(0.0001, now + 1.15);
+    osc.connect(oscGain).connect(ctx.destination);
+    noise.start(now);
+    noise.stop(now + dur);
+    osc.start(now);
+    osc.stop(now + 1.2);
+  } catch {
+    // Audio is cosmetic; never let it block the intro.
+  }
+}
+
 function initializeIntroVideoGate() {
   const root = document.querySelector("[data-intro-gate]");
   if (!root || root.dataset.introReady === "true") return;
@@ -1012,66 +1069,46 @@ function initializeIntroVideoGate() {
   const stage = root.querySelector("[data-intro-stage]");
   const entryVideo = root.querySelector('[data-intro-video="entry"]');
   const status = root.querySelector("[data-intro-status]");
-  const enterButton = root.querySelector("[data-intro-start]");
-  const audioButton = root.querySelector("[data-intro-sound]");
   let finishing = false;
-  let audioUnlocked = true;
-  let lastIntroPhase = "";
-  let lastIntroMessage = "";
+  let fallbackTimer = null;
   const introActive = () => state.route === "intro" && !root.hidden && !root.closest("[hidden]");
 
-  const setPhase = (phase, message) => {
-    if (stage && phase !== lastIntroPhase) {
-      stage.dataset.introPhase = phase;
-      lastIntroPhase = phase;
-    }
-    if (status && message && message !== lastIntroMessage) {
-      status.textContent = message;
-      lastIntroMessage = message;
-    }
+  const setPhase = (phase) => { if (stage) stage.dataset.introPhase = phase; };
+  const showStatus = (message) => {
+    if (!status) return;
+    status.textContent = message;
+    status.hidden = !message;
   };
 
-  const setAudioUi = (enabled, attention = false) => {
-    root.dataset.introAudio = enabled ? "on" : "off";
-    if (stage) stage.dataset.introAudio = enabled ? "on" : "off";
-    if (!audioButton) return;
-    audioButton.textContent = enabled ? "Mute" : "Sound";
-    audioButton.setAttribute("aria-pressed", enabled ? "true" : "false");
-    if (attention) {
-      audioButton.dataset.introAttention = "true";
-    } else {
-      delete audioButton.dataset.introAttention;
-    }
-  };
-
-  const setVideoAudio = (enabled) => {
-    audioUnlocked = enabled;
-    if (entryVideo) {
-      entryVideo.defaultMuted = !enabled;
-      entryVideo.muted = !enabled;
-      entryVideo.volume = enabled ? 1 : 0;
-    }
-    setAudioUi(enabled);
-  };
-
-  const enableIntroAudio = (message) => {
-    setVideoAudio(true);
-    if (message) setPhase(stage?.dataset.introPhase || "entry", message);
-  };
-
-  const muteIntroAudio = (message, attention = false) => {
-    setVideoAudio(false);
-    setAudioUi(false, attention);
-    if (message) setPhase(stage?.dataset.introPhase || "entry", message);
-  };
-
+  // No mute/skip buttons: when the video ends (or a safety timer fires) we slide through a
+  // short "portal" flash, fire the whoosh, then land on the connect page while it tails out.
   const finishIntro = () => {
     if (finishing) return;
     finishing = true;
+    if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
+    setPhase("portal");
+    playPortalWhoosh();
     markIntroGateCompleted();
-    pauseIntroVideoGate({ reset: true });
-    navigateTo("/connect");
+    setTimeout(() => {
+      pauseIntroVideoGate({ reset: true });
+      navigateTo("/connect");
+    }, 620);
   };
+
+  // Try to unlock audio invisibly on the first gesture (no visible control) so the intro and
+  // the closing whoosh can be heard. Audible autoplay with no gesture is blocked by browsers.
+  const unlockAudio = () => {
+    if (finishing) return;
+    ensurePortalAudioContext();
+    if (entryVideo && entryVideo.muted) {
+      entryVideo.muted = false;
+      entryVideo.volume = 1;
+      entryVideo.play?.().catch(() => {});
+    }
+  };
+  ["pointerdown", "touchstart", "keydown"].forEach((type) => {
+    document.addEventListener(type, unlockAudio, { once: true, passive: true });
+  });
 
   if (entryVideo) {
     entryVideo.preload = "auto";
@@ -1082,72 +1119,43 @@ function initializeIntroVideoGate() {
     entryVideo.disablePictureInPicture = true;
   }
 
-  const playIntro = (message = "") => {
-    if (finishing) return;
-    if (!introActive()) {
-      pauseIntroVideoGate({ reset: true });
-      return;
-    }
-    if (message) setPhase("entry", message);
-    const playResult = entryVideo?.play?.();
-    if (playResult?.catch) {
-      playResult.catch(() => {
-        muteIntroAudio("Tap Sound for audio, or Enter to continue.", true);
-        const mutedPlayResult = entryVideo?.play?.();
-        if (mutedPlayResult?.catch) {
-          mutedPlayResult.catch(() => {
-            setPhase("ready", "Tap Enter to start.");
-          });
-        }
-      });
-    }
+  const armFallback = (ms) => {
+    if (fallbackTimer) clearTimeout(fallbackTimer);
+    fallbackTimer = setTimeout(() => { if (introActive()) finishIntro(); }, Math.max(4000, Math.min(22000, ms)));
   };
 
-  entryVideo?.addEventListener("ended", () => {
-    setPhase("ready", "Opening the terminal...");
-    finishIntro();
-  });
-  entryVideo?.addEventListener("error", () => {
-    setPhase("ready", "Video could not load. Tap Enter to continue.");
-  });
-  entryVideo?.addEventListener("playing", () => setPhase("entry", "Playing intro. Enter opens the terminal."), { once: true });
+  const playIntro = () => {
+    if (finishing || !introActive()) return;
+    // Best-effort sound: attempt unmuted, fall back to muted autoplay (always allowed).
+    const tryPlay = (muted) => {
+      if (!entryVideo) return;
+      entryVideo.muted = muted;
+      entryVideo.volume = muted ? 0 : 1;
+      const result = entryVideo.play?.();
+      if (result?.catch) {
+        result.catch(() => {
+          if (!muted) tryPlay(true);
+          else showStatus("");
+        });
+      }
+    };
+    ensurePortalAudioContext();
+    tryPlay(false);
+  };
 
-  root.addEventListener("click", (event) => {
-    const target = event.target;
-    if (target?.closest?.(".swamp-intro-actions")) return;
-    enableIntroAudio();
-    playIntro("Sound on. Enter opens the terminal.");
+  entryVideo?.addEventListener("loadedmetadata", () => {
+    const duration = Number(entryVideo.duration);
+    armFallback(Number.isFinite(duration) && duration > 0 ? (duration + 2.5) * 1000 : 9000);
   });
-  audioButton?.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    if (audioUnlocked) {
-      muteIntroAudio("Muted. Tap Sound for audio.");
-      return;
-    }
-    enableIntroAudio("Sound on.");
-    playIntro();
-  });
-  enterButton?.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    enableIntroAudio();
-    finishIntro();
-  });
-  document.addEventListener("keydown", (event) => {
-    if (state.route !== "intro" || event.key !== "Enter") return;
-    event.preventDefault();
-    enableIntroAudio();
-    finishIntro();
-  });
+  entryVideo?.addEventListener("ended", finishIntro);
+  entryVideo?.addEventListener("error", () => { armFallback(1500); });
 
   if (!introActive()) {
-    setVideoAudio(false);
     pauseIntroVideoGate({ reset: true });
     return;
   }
-  setVideoAudio(true);
-  playIntro("Playing intro. Enter opens the terminal.");
+  armFallback(9000);
+  playIntro();
 }
 
 function tabForPath(pathname = window.location.pathname) {

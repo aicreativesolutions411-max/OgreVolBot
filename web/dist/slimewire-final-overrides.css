@@ -20297,3 +20297,44 @@ html body main.shell[data-app] .slime-scope-page { margin-top: 0 !important; pad
 html body main.shell[data-app] .live-terminal .terminal-main { padding-top: 0 !important; gap: 8px !important; }
 html body main.shell[data-app] .live-terminal .live-pair-buckets { margin-bottom: 4px !important; }
 /* === END LIVE_REFRESH_OVERSCROLL_20260609_V1 ======================== */
+
+/* === INTRO_PORTAL_VIDEO_20260610_V1 ================================= */
+/* New portal intro video: full-bleed cover fit (no letterbox) on web + mobile, no buttons,
+   and a short zoom-through-the-portal hand-off to the connect page when the video ends. */
+html body main.shell[data-app][data-route="intro"] .login-view.swamp-splash.swamp-intro-video {
+  padding: 0 !important;
+}
+html body main.shell[data-app][data-route="intro"] .swamp-intro-stage {
+  height: 100svh !important;
+  min-height: 100svh !important;
+}
+html body main.shell[data-app][data-route="intro"] .swamp-intro-media {
+  object-fit: cover !important;
+  object-position: center !important;
+}
+html body main.shell[data-app][data-route="intro"] .swamp-intro-portal {
+  position: absolute !important;
+  inset: 0 !important;
+  z-index: 3 !important;
+  pointer-events: none !important;
+  opacity: 0 !important;
+  transform: scale(0.55) !important;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(205, 255, 150, 0.98), rgba(81, 255, 24, 0.45) 36%, rgba(0, 0, 0, 0) 72%) !important;
+  transition: opacity 0.6s ease-in, transform 0.6s ease-in !important;
+}
+/* On the portal phase: zoom the footage into the light + bloom the flash. Uses transition +
+   !important so it overrides the base media transform (important author beats @keyframes). */
+html body main.shell[data-app][data-route="intro"] .swamp-intro-stage[data-intro-phase="portal"] .swamp-intro-media {
+  transform: scale(1.18) !important;
+  filter: brightness(1.7) saturate(1.15) !important;
+  transition: transform 0.6s ease-in, filter 0.6s ease-in !important;
+}
+html body main.shell[data-app][data-route="intro"] .swamp-intro-stage[data-intro-phase="portal"] .swamp-intro-portal {
+  opacity: 1 !important;
+  transform: scale(1.45) !important;
+}
+/* Buttons/overlay were removed from the intro markup; hide any leftover chrome just in case. */
+html body main.shell[data-app][data-route="intro"] .swamp-intro-overlay,
+html body main.shell[data-app][data-route="intro"] .swamp-intro-actions { display: none !important; }
+/* === END INTRO_PORTAL_VIDEO_20260610_V1 ============================= */

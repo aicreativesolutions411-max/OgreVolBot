@@ -84,10 +84,12 @@ test("terminal route cannot show the intro splash underneath the header", () => 
 
 test("intro video gate has a real connect-route fallback", () => {
   assert.match(htmlSource, /data-intro-gate/);
-  assert.match(htmlSource, /data-intro-sound>Sound/);
-  assert.match(htmlSource, /data-intro-start>Enter/);
+  // Button-free portal intro: no sound/skip/enter controls; auto-advances when it ends, and
+  // a safety timer (armFallback) still lands on /connect if the video stalls or errors.
+  assert.doesNotMatch(htmlSource, /data-intro-sound/);
+  assert.doesNotMatch(htmlSource, /data-intro-start/);
   assert.doesNotMatch(htmlSource, /data-intro-skip/);
-  assert.match(htmlSource, /swamp-intro-smooth\.mp4/);
+  assert.match(htmlSource, /swamp-portal-intro\.mp4/);
   assert.match(htmlSource, /sessionStorage\?\.getItem\("slimewireIntroCompleteV1"\) === "true"/);
   assert.match(htmlSource, /window\.history\.replaceState\(\{\}, "", "\/connect"\)/);
   assert.match(htmlSource, /const route = currentPath\.startsWith\("\/login"\)/);
@@ -95,8 +97,9 @@ test("intro video gate has a real connect-route fallback", () => {
   assert.match(htmlSource, /setRouteHidden\("\[data-connect\]", route !== "connect"\)/);
   assert.match(htmlSource, /toggleAttribute\("hidden", route !== "terminal"\)/);
   assert.match(appSource, /function initializeIntroVideoGate\(\)/);
-  assert.match(appSource, /setVideoAudio\(true\)/);
-  assert.match(appSource, /entryVideo\?\.addEventListener\("ended"/);
+  assert.match(appSource, /const armFallback = \(ms\)/);
+  assert.match(appSource, /if \(introActive\(\)\) finishIntro\(\)/);
+  assert.match(appSource, /entryVideo\?\.addEventListener\("ended", finishIntro\)/);
   assert.match(appSource, /navigateTo\("\/connect"\)/);
 });
 

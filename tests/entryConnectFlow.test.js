@@ -70,17 +70,18 @@ test("entry wallet cards start provider connect flow while main connect opens ch
 
 test("connect page has route bootstrap without a global capture click blocker", () => {
   assert.match(htmlSource, /data-intro-gate/);
-  assert.match(htmlSource, /rel="preload" as="video" href="\/assets\/slimewire\/intro\/swamp-intro-smooth\.mp4" type="video\/mp4"/);
-  assert.match(htmlSource, /src="\.\/assets\/slimewire\/intro\/swamp-intro-smooth\.mp4"/);
-  assert.match(htmlSource, /src="\.\/assets\/slimewire\/intro\/swamp-intro-smooth\.mp4"[\s\S]*preload="auto"/);
-  assert.match(htmlSource, /data-intro-sound>Sound/);
-  assert.match(htmlSource, /data-intro-start>Enter/);
+  assert.match(htmlSource, /rel="preload" as="video" href="\/assets\/slimewire\/intro\/swamp-portal-intro\.mp4" type="video\/mp4"/);
+  assert.match(htmlSource, /src="\.\/assets\/slimewire\/intro\/swamp-portal-intro\.mp4"/);
+  assert.match(htmlSource, /src="\.\/assets\/slimewire\/intro\/swamp-portal-intro\.mp4"[\s\S]*preload="auto"/);
+  // No mute/skip/enter buttons: the video autoplays and auto-advances when it ends.
+  assert.doesNotMatch(htmlSource, /data-intro-sound/);
+  assert.doesNotMatch(htmlSource, /data-intro-start/);
   assert.doesNotMatch(htmlSource, /data-intro-skip/);
   assert.doesNotMatch(htmlSource, /swamp-transition\.mp4/);
   assert.match(appSource, /function initializeIntroVideoGate\(\)/);
-  assert.match(appSource, /const setVideoAudio = \(enabled\)/);
+  assert.match(appSource, /const tryPlay = \(muted\)/);
   assert.match(appSource, /finishIntro\(\)/);
-  assert.match(appSource, /muteIntroAudio\("Tap Sound for audio, or Enter to continue\."/);
+  assert.match(appSource, /playPortalWhoosh\(\)/);
   assert.match(htmlSource, /sessionStorage\?\.getItem\("slimewireIntroCompleteV1"\) === "true"/);
   assert.match(htmlSource, /window\.history\.replaceState\(\{\}, "", "\/connect"\)/);
   assert.match(htmlSource, /const route = currentPath\.startsWith\("\/login"\)/);
