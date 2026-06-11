@@ -10053,6 +10053,28 @@ async function pollLaunchProgress(serverAttemptId, statusEl) {
 // Optimistic post-launch state: drop a placeholder position row and prime the
 // chart bootstrap from the launch draft, so the bag and ticker are visible the
 // instant the chart opens. The real refresh overwrites this within a second.
+// Mints whose exit plans are still being armed server-side (buys confirm, then
+// the plan registers ~10-20s later). While arming, the position card shows
+// "Exits arming..." instead of the alarming "No auto-exit on this bag".
+const launchExitsArmingUntil = new Map();
+function markLaunchExitsArming(tokenMint) {
+  const mint = String(tokenMint || "").trim();
+  if (mint) launchExitsArmingUntil.set(mint, Date.now() + 30_000);
+}
+function launchExitsArming(tokenMint) {
+  const until = launchExitsArmingUntil.get(String(tokenMint || "").trim());
+  return Boolean(until && Date.now() < until);
+}
+
+async function refreshTradePlansOnly() {
+  try {
+    const data = await api("/api/web/trade/plans", { timeoutMs: 9_000, dedupe: false });
+    if (Array.isArray(data?.plans)) state.tradePlans = data.plans;
+  } catch {
+    // a later retry covers it
+  }
+}
+
 function primeLaunchedPosition(tokenMint, draft = {}, launch = {}) {
   const mint = String(tokenMint || "").trim();
   if (!mint) return;
@@ -10219,6 +10241,13 @@ async function submitLaunchCoin() {
       // optimistic row is replaced by real data as soon as the first read lands.
       queuePostTradeRefresh(launch.signature || "", "pump-launch-first-buys");
       void refreshWalletPositions({ force: true, fast: true, silent: true, reason: "pump-launch-instant" }).catch(() => {});
+      // Exits arm a few seconds AFTER the buys confirm, so the normal refresh
+      // cadence misses them and the card would falsely read "no auto-exit".
+      // Mark the mint as arming and pull the plan list a few times until it lands.
+      markLaunchExitsArming(tokenMint);
+      [3_000, 8_000, 16_000].forEach((delay) => window.setTimeout(() => {
+        void refreshTradePlansOnly().then(() => render());
+      }, delay));
       navigateTo("/terminal/chart", "smartChart");
       render({ force: true });
       return;
@@ -18466,6 +18495,8 @@ function positionIntelHtml(position) {
     } else if (Number.isFinite(move)) {
       nanny = `${move >= 0 ? "Up" : "Down"} ${Math.abs(move).toFixed(1)}% - exits watching`;
     }
+  } else if (launchExitsArming(mint) || position.source === "launch-optimistic") {
+    nanny = "⏳ Exits arming from your launch - TP/SL/timer registering...";
   } else {
     nanny = "No auto-exit on this bag - Arm Exits if you are stepping away";
   }

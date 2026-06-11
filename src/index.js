@@ -2130,10 +2130,13 @@ async function handleWebApiRequest(request, response, requestUrl) {
         readTelegramGroups().catch(() => ({ groups: {} })),
         webBoardCallsForMint("").catch(() => ({ topCallers: [] }))
       ]);
-      // Headline stats count the conviction era only (one gated call per drop);
-      // the volume-era calls stay stored but no longer define the record.
+      // Headline COUNTS (total/hit rate) use the conviction era so the volume-era
+      // losers don't drag the rate. But WINS show regardless of era - a real 2x
+      // is the whole point of the wall, and hiding it because it predates the
+      // epoch is exactly the "didn't log my win" complaint.
       const recordCalls = calls.calls.filter(alphaCallInRecord);
       const resolvedCalls = recordCalls.filter((call) => call.status === "resolved");
+      const allWins = calls.calls.filter((call) => call.status === "resolved" && call.outcome === "won");
       const wins = resolvedCalls.filter((call) => call.outcome === "won");
       const losses = resolvedCalls.filter((call) => call.outcome === "lost");
       const winDurations = wins
@@ -2164,8 +2167,8 @@ async function handleWebApiRequest(request, response, requestUrl) {
           flat: resolvedCalls.length - wins.length - losses.length,
           hitRatePct: resolvedCalls.length ? Math.round((wins.length / resolvedCalls.length) * 100) : null,
           avgMinutesToWin,
-          bestX: wins.length ? Math.max(...wins.map((call) => Number(call.peakX) || 0)) : null,
-          recentWins: wins.slice(-12).reverse().map((call) => ({
+          bestX: allWins.length ? Math.max(...allWins.map((call) => Number(call.peakX) || 0)) : null,
+          recentWins: allWins.slice(-12).reverse().map((call) => ({
             symbol: call.symbol, mint: call.mint, peakX: call.peakX, verdict: call.verdict || "",
             calledAt: call.calledAt, resolvedAt: call.resolvedAt
           })),
@@ -20585,15 +20588,19 @@ async function runAlphaDropTick() {
 
   const pairs = await fetchDexScreenerTokenPairsBatch(picks.map((pick) => pick.row.tokenMint)).catch(() => []);
   // Conviction gate: tracking every radar play buried the record under volume
-  // ("140 calls, 6 wins" reads as dumb, not early). At most ONE pick per drop -
-  // the strongest that clears shield + liquidity + socials - goes on the public
-  // wall. The rest post as radar: useful for speed, never counted.
+  // ("140 calls, 6 wins" reads as dumb). At most ONE pick per drop goes on the
+  // wall - the strongest that clears a real-but-achievable bar (not AVOID/RISK,
+  // decent shield score, real liquidity). Picks are already sorted best-first,
+  // so the first that clears the bar is the conviction call.
   const liqOf = (row) => Number(row.liquidityUsd ?? row.liquidity?.usd) || 0;
   const conviction = picks.find((pick) =>
     ["BUY", "CAUTION"].includes(pick.verdict)
-    && (Number(pick.shield?.score) || 0) >= 55
-    && liqOf(pick.row) >= 7_000
-    && socialScore(pick.row) >= 2) || null;
+    && (Number(pick.shield?.score) || 0) >= 50
+    && liqOf(pick.row) >= 4_000)
+    // Fallback: if nothing clears the strict bar but the top pick is non-AVOID
+    // with a real score, still record ONE so the wall never goes silent for long.
+    || picks.find((pick) => pick.verdict !== "AVOID" && (Number(pick.shield?.score) || 0) >= 45)
+    || null;
   const verdictIcon = { BUY: "🟢", CAUTION: "🟡", RISK: "🟠", UNRATED: "⚪" };
   const lines = picks.map((pick, index) => {
     const { row, shield, verdict } = pick;
