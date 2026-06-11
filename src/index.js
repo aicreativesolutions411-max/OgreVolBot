@@ -30929,6 +30929,7 @@ async function firePostLaunchBuysServerSide({ mint, body, devWallet, devKeypair,
     const tx = VersionedTransaction.deserialize(bytes);
     tx.sign([keypair]);
     const signature = await sendVersionedTransaction(tx, `post-launch ${label} buy`);
+    invalidateWalletReadCache(keypair.publicKey.toBase58());
     logPumpLaunchEvent("pump_launch_fallback_buy", { launchAttemptId, userId, mint, label, amountSol, txSignature: signature, managed: false });
   };
   const planBuy = async (wallets, amountSol, label) => {
@@ -30977,6 +30978,16 @@ async function firePostLaunchBuysServerSide({ mint, body, devWallet, devKeypair,
         }
       }));
     }
+  }
+  // SOL just moved in every one of these wallets - kill all cached reads so the
+  // very next refresh shows true balances ("0.1 off for a long time" was stale
+  // cache, not lost SOL).
+  try {
+    invalidateWalletReadCache(devKeypair.publicKey.toBase58());
+    for (const wallet of bundleWallets) invalidateWalletReadCache(wallet.publicKey);
+    positionValueCache.clear();
+  } catch {
+    // cache hygiene only
   }
   return outcome;
 }
