@@ -19398,3 +19398,23 @@ html body main.shell[data-app][data-route="intro"] .swamp-intro-stage[data-intro
   }
   .ogre-agent-quick-actions button { font-size: 0.74rem !important; }
 }
+
+/* DEV_INFO_DRAWER_FIX_20260611: bottom action row must be reachable and tappable.
+   dvh height (mobile URL bars shrink vh), safe-area bottom padding, 40px targets. */
+.dev-info-drawer {
+  height: 100dvh !important;
+  padding-bottom: calc(28px + env(safe-area-inset-bottom)) !important;
+}
+.dev-info-drawer .slimeshield-drawer-actions {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 8px !important;
+}
+.dev-info-drawer .slimeshield-drawer-actions button,
+.dev-info-drawer .slimeshield-drawer-actions a {
+  min-height: 40px !important;
+  padding: 8px 14px !important;
+  border-radius: 999px !important;
+  font-size: 0.82rem !important;
+  flex: 0 0 auto !important;
+}

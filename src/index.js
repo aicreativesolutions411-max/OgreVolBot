@@ -15903,6 +15903,42 @@ async function getGeckoTerminalTokenMetadata(tokenMint, options = {}) {
   return value;
 }
 
+// Pump.fun creator launches: the dev's own history straight from the source. Cached
+// 10 minutes; this is what fills Dev Info for the pump tokens that dominate the feeds.
+const pumpFunCreatorCache = new Map();
+async function getPumpFunCreatorLaunches(creator, options = {}) {
+  const key = String(creator || "").trim();
+  if (!key) return [];
+  const cached = pumpFunCreatorCache.get(key);
+  if (cached && Date.now() - cached.at < 10 * 60 * 1000) return cached.value;
+  const headers = { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" };
+  if (CONFIG.pumpFunApiToken) headers.Authorization = `Bearer ${CONFIG.pumpFunApiToken}`;
+  let launches = [];
+  for (const base of [CONFIG.pumpFunApiBase, "https://frontend-api-v3.pump.fun"].filter((value, index, list) => value && list.indexOf(value) === index)) {
+    try {
+      const data = await fetchJson(`${String(base).replace(/\/$/, "")}/coins/user-created-coins/${encodeURIComponent(key)}?offset=0&limit=10&includeNsfw=false`, { headers, timeoutMs: options.timeoutMs || 3_500 });
+      const list = Array.isArray(data) ? data : (Array.isArray(data?.coins) ? data.coins : []);
+      launches = list.map((coin) => ({
+        mint: firstString(coin?.mint, coin?.address),
+        symbol: firstString(coin?.symbol, coin?.ticker),
+        name: firstString(coin?.name),
+        marketCap: firstMeaningfulNumber(coin?.usd_market_cap, coin?.market_cap, coin?.marketCap),
+        complete: Boolean(coin?.complete),
+        createdTimestamp: firstMeaningfulNumber(coin?.created_timestamp, coin?.createdTimestamp)
+      })).filter((coin) => coin.mint);
+      break;
+    } catch {
+      // try the next base
+    }
+  }
+  pumpFunCreatorCache.set(key, { at: Date.now(), value: launches });
+  if (pumpFunCreatorCache.size > 200) {
+    const oldest = [...pumpFunCreatorCache.entries()].sort((a, b) => a[1].at - b[1].at)[0]?.[0];
+    if (oldest) pumpFunCreatorCache.delete(oldest);
+  }
+  return launches;
+}
+
 async function getPumpFunTokenMetadata(tokenMint, options = {}) {
   const mint = String(tokenMint || "").trim();
   if (!mint) return {};
@@ -23654,6 +23690,24 @@ async function computeDevInfoFromLocalData(mint = "", row = null, options = {}) 
     }
   }
 
+  // Pump.fun names the creator wallet directly for pump tokens - check it before
+  // giving up. This is the reason Dev Info no longer comes back empty.
+  if (!candidate?.likelyDevWallet) {
+    const pumpMeta = await getPumpFunTokenMetadata(cleanMint).catch(() => null);
+    const creator = String(pumpMeta?.creator || pumpMeta?.creatorWallet || "").trim();
+    if (creator) {
+      candidate = {
+        mint: cleanMint,
+        tokenMint: cleanMint,
+        likelyDevWallet: creator,
+        confidence: "high",
+        source: "pump.fun",
+        pairAddress: firstString(pumpMeta?.raydiumPool, pumpMeta?.pairAddress)
+      };
+      if (options.persist !== false) void upsertPostgresDevWalletCandidate(candidate).catch(() => {});
+    }
+  }
+
   if (!candidate?.likelyDevWallet) {
     devInfoStats.unknownWallet += 1;
     const result = calculateDevInfoStatus({
@@ -23688,6 +23742,23 @@ async function computeDevInfoFromLocalData(mint = "", row = null, options = {}) 
     if (historyEvents.length) {
       historicalStats = calculateDevWalletStatsFromEvents(historyEvents, wallet);
       void persistPostgresDevWalletStats(wallet, historicalStats).catch(() => {});
+    }
+  }
+  if (!historicalStats || Number(historicalStats.launchesTracked || 0) === 0) {
+    const creatorLaunches = await getPumpFunCreatorLaunches(wallet).catch(() => []);
+    if (creatorLaunches.length) {
+      historicalStats = {
+        ...(historicalStats || {}),
+        likelyDevWallet: wallet,
+        launchesTracked: creatorLaunches.length,
+        recentLaunches: creatorLaunches.slice(0, 5).map((coin) => ({
+          mint: coin.mint,
+          symbol: coin.symbol || shortMint(coin.mint),
+          outcomeLabel: coin.complete ? "bonded" : (Number(coin.marketCap) > 15000 ? "active" : "low mc"),
+          firstSellMinutes: null
+        })),
+        source: "pump.fun"
+      };
     }
   }
 
