@@ -5010,7 +5010,7 @@ async function callOgreAgentGroq(message = "", context = {}, fallback = {}, time
     body: JSON.stringify({
       model: ogreAgentEnv("OGRE_AGENT_GROQ_MODEL") || "llama-3.1-8b-instant",
       temperature: 0.25,
-      max_tokens: 260,
+      max_tokens: 380,
       messages: ogreAgentChatMessages(message, context, fallback)
     })
   }, timeoutMs);
@@ -5039,7 +5039,7 @@ async function callOgreAgentGemini(message = "", context = {}, fallback = {}, ti
       ],
       generationConfig: {
         temperature: 0.25,
-        maxOutputTokens: 260
+        maxOutputTokens: 380
       }
     })
   }, timeoutMs);
@@ -5061,7 +5061,7 @@ async function callOgreAgentOpenRouter(message = "", context = {}, fallback = {}
     body: JSON.stringify({
       model: ogreAgentEnv("OGRE_AGENT_OPENROUTER_MODEL") || "openrouter/free",
       temperature: 0.25,
-      max_tokens: 260,
+      max_tokens: 380,
       messages: ogreAgentChatMessages(message, context, fallback)
     })
   }, timeoutMs);
@@ -5080,7 +5080,7 @@ async function callOgreAgentOpenAi(message = "", context = {}, fallback = {}, ti
     body: JSON.stringify({
       model: CONFIG.ogreAgentModel || "gpt-4.1-mini",
       temperature: 0.25,
-      max_tokens: 260,
+      max_tokens: 380,
       messages: ogreAgentChatMessages(message, context, fallback)
     })
   }, timeoutMs);
@@ -18927,6 +18927,12 @@ function defaultJsonForPath(filePath) {
       return { codes: [], sessions: [], profiles: {}, browserTradeOrders: [], sessionWalletOrders: [] };
     case "lock-in-events.json":
       return { events: [] };
+    case "telegram-groups.json":
+      return { groups: {} };
+    case "shield-receipts.json":
+      return { receipts: [] };
+    case "push-subscriptions.json":
+      return { subs: {} };
     case "terminal-feed-events.json":
       return { events: [] };
     case "performance-events.json":
