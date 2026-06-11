@@ -19491,6 +19491,8 @@ html body main.shell[data-app][data-route="intro"] .swamp-intro-stage[data-intro
    of icon buttons on desktop - this final rule outranks them all. */
 @media (min-width: 761px) {
   html body main.shell[data-app][data-route="terminal"] .tabs,
+  html body main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs,
+  html body main.shell[data-app][data-route="terminal"][data-active-tab] [data-dashboard] > .tabs,
   html body main.shell[data-app] nav.tabs {
     display: none !important;
   }
