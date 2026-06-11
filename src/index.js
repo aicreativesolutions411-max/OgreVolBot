@@ -2046,8 +2046,11 @@ async function handleWebApiRequest(request, response, requestUrl) {
       const resolvedCalls = calls.calls.filter((call) => call.status === "resolved");
       const wins = resolvedCalls.filter((call) => call.outcome === "won");
       const losses = resolvedCalls.filter((call) => call.outcome === "lost");
-      const avgMinutesToWin = wins.length
-        ? Math.round(wins.reduce((sum, call) => sum + Math.max(0, (Date.parse(call.resolvedAt) - Date.parse(call.calledAt)) / 60000), 0) / wins.length)
+      const winDurations = wins
+        .map((call) => (Date.parse(call.resolvedAt) - Date.parse(call.calledAt)) / 60000)
+        .filter((minutes) => Number.isFinite(minutes) && minutes >= 0);
+      const avgMinutesToWin = winDurations.length
+        ? Math.round(winDurations.reduce((sum, minutes) => sum + minutes, 0) / winDurations.length)
         : null;
       const groupTally = new Map();
       for (const call of wins) {
@@ -19393,9 +19396,11 @@ async function completeTelegramLink(code, tgUserId) {
   const entry = telegramLinkCodes.get(String(code));
   if (!entry || entry.expiresAt < Date.now()) return null;
   telegramLinkCodes.delete(String(code));
-  const store = await readTelegramLinks();
-  store.links[entry.webUserId] = String(tgUserId);
-  await writeJsonFile(telegramLinksPath(), store);
+  await withFileLock(telegramLinksPath(), async () => {
+    const store = await readTelegramLinks();
+    store.links[entry.webUserId] = String(tgUserId);
+    await writeJsonFile(telegramLinksPath(), store);
+  });
   return entry.webUserId;
 }
 
@@ -19413,15 +19418,17 @@ async function handleTelegramMyWinsToggle(chatId, message, userId, argument) {
     await say(chatId, "Usage: /mywins on - your SlimeWire TP wins post here with credit. /mywins off stops it. Make sure you logged into slimewire.org via the /web code in my DM, or the engine cannot match your trades.");
     return;
   }
-  const store = await readTelegramGroups();
-  const key = String(chatId);
-  store.groups[key] = store.groups[key] || { addedAt: new Date().toISOString(), alerts: false };
-  const subscribers = store.groups[key].winSubscribers || {};
   const handle = message.from?.username ? `@${message.from.username}` : (message.from?.first_name || "a degen");
-  if (turnOn) subscribers[String(userId)] = String(handle).slice(0, 40);
-  else delete subscribers[String(userId)];
-  store.groups[key].winSubscribers = subscribers;
-  await writeJsonFile(telegramGroupsPath(), store);
+  await withFileLock(telegramGroupsPath(), async () => {
+    const store = await readTelegramGroups();
+    const key = String(chatId);
+    store.groups[key] = store.groups[key] || { addedAt: new Date().toISOString(), alerts: false };
+    const subscribers = store.groups[key].winSubscribers || {};
+    if (turnOn) subscribers[String(userId)] = String(handle).slice(0, 40);
+    else delete subscribers[String(userId)];
+    store.groups[key].winSubscribers = subscribers;
+    await writeJsonFile(telegramGroupsPath(), store);
+  });
   await say(chatId, turnOn
     ? `${handle} - your SlimeWire take-profit wins will post here. (Heads up: that links your wins to this handle in this chat.)`
     : "Your wins will no longer post in this chat.");
@@ -19560,14 +19567,16 @@ async function handleTelegramGroupToggle(chatId, message, userId, argument, admi
     await say(chatId, "Usage: /slimewire on - or - /slimewire off\nWhen on, this group gets SlimeWire engine alerts (fresh launches, TP/SL fires, KOL copies), hard-capped at a few posts per hour.");
     return;
   }
-  const store = await readTelegramGroups();
-  const key = String(chatId);
-  store.groups[key] = {
-    ...(store.groups[key] || { addedAt: new Date().toISOString() }),
-    title: String(message.chat?.title || store.groups[key]?.title || "").slice(0, 80),
-    alerts: turnOn
-  };
-  await writeJsonFile(telegramGroupsPath(), store);
+  await withFileLock(telegramGroupsPath(), async () => {
+    const store = await readTelegramGroups();
+    const key = String(chatId);
+    store.groups[key] = {
+      ...(store.groups[key] || { addedAt: new Date().toISOString() }),
+      title: String(message.chat?.title || store.groups[key]?.title || "").slice(0, 80),
+      alerts: turnOn
+    };
+    await writeJsonFile(telegramGroupsPath(), store);
+  });
   if (turnOn) {
     const sent = await telegram("sendMessage", {
       chat_id: chatId,
@@ -19667,6 +19676,16 @@ async function renderSignalCard(tokenMint) {
 // outcome exactly like alpha drops. Reputation comes from results, not volume.
 const CALL_BOARD_SIDES = new Set(["bullish", "bearish", "warning", "question"]);
 
+// Per-file mutation lock: the new JSON stores (calls, receipts, groups, links, push
+// subs) are read-modify-write; concurrent ticks or user posts must queue, not race.
+const jsonFileLocks = new Map();
+function withFileLock(filePath, fn) {
+  const prev = jsonFileLocks.get(filePath) || Promise.resolve();
+  const next = prev.then(fn, fn);
+  jsonFileLocks.set(filePath, next.catch(() => {}));
+  return next;
+}
+
 function callBoardPath() {
   return path.join(CONFIG.dataDir, "call-board.json");
 }
@@ -19695,6 +19714,7 @@ async function webPostBoardCall(userId, body = {}) {
   const targetX = Math.max(0, Math.min(1000, Number(body.targetX) || 0)) || null;
   const profile = await webProfileForUser(userId);
   const handle = String(profile.username || "").trim() || `degen-${String(userId).slice(-4)}`;
+  return withFileLock(callBoardPath(), async () => {
   const store = await readCallBoard();
   const sixHoursAgo = Date.now() - 6 * 60 * 60 * 1000;
   if (store.calls.some((call) => call.userId === String(userId) && call.mint === tokenMint && Date.parse(call.createdAt) > sixHoursAgo)) {
@@ -19725,6 +19745,7 @@ async function webPostBoardCall(userId, body = {}) {
   store.calls = store.calls.slice(-1000);
   await writeJsonFile(callBoardPath(), store);
   return call;
+  });
 }
 
 async function webBoardCallsForMint(tokenMint = "") {
@@ -19748,6 +19769,7 @@ async function webBoardCallsForMint(tokenMint = "") {
 // Outcome tracking: bullish calls resolve on the same 2x / dead / flat rules as the
 // engine's own alpha drops - one honest standard for humans and machine alike.
 async function checkBoardCallOutcomes() {
+  return withFileLock(callBoardPath(), async () => {
   const store = await readCallBoard();
   const now = Date.now();
   const due = store.calls.filter((call) => call.status === "watching" && Number(call.priceUsd) > 0).slice(0, 25);
@@ -19778,6 +19800,7 @@ async function checkBoardCallOutcomes() {
     }
   }
   if (changed) await writeJsonFile(callBoardPath(), store);
+  });
 }
 
 // --- Alpha drops + winner receipts -------------------------------------------------
@@ -19924,6 +19947,7 @@ async function runAlphaDropTick() {
 }
 
 async function checkAlphaCallOutcomes() {
+  return withFileLock(alphaCallsPath(), async () => {
   const store = await readAlphaCalls();
   const now = Date.now();
   const due = store.calls.filter((call) => call.status === "watching" && Number(call.priceUsd) > 0).slice(0, 25);
@@ -19963,6 +19987,7 @@ async function checkAlphaCallOutcomes() {
     }
   }
   if (changed) await writeJsonFile(alphaCallsPath(), store);
+  });
 }
 
 // --- Daily Swamp Report: one digest post per UTC day to every armed chat ----------
@@ -20025,7 +20050,7 @@ function recordShieldReceipt(result, row = {}) {
   if (!["AVOID", "RISK"].includes(verdict)) return;
   const mint = String(result?.mint || row.tokenMint || "").trim();
   if (!mint) return;
-  void (async () => {
+  void withFileLock(shieldReceiptsPath(), async () => {
     try {
       const store = await readShieldReceipts();
       const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
@@ -20051,10 +20076,11 @@ function recordShieldReceipt(result, row = {}) {
     } catch (error) {
       console.warn(`[shield-receipts] record failed: ${error.message}`);
     }
-  })();
+  });
 }
 
 async function checkShieldReceiptOutcomes() {
+  return withFileLock(shieldReceiptsPath(), async () => {
   const store = await readShieldReceipts();
   const now = Date.now();
   const due = store.receipts
@@ -20088,6 +20114,7 @@ async function checkShieldReceiptOutcomes() {
   }
   if (changed) await writeJsonFile(shieldReceiptsPath(), store);
   return { checked: due.length };
+  });
 }
 
 if (CONFIG.serviceRole === "web") {

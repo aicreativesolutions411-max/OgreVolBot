@@ -6132,25 +6132,7 @@ function maybeOgreAgentHostGreeting() {
 }
 
 function ogreBriefHtml() {
-  const liveRows = allRawSignalRows();
-  const freshLowMc = liveRows.filter((row) => {
-    const mc = Number(row.marketCapUsd ?? row.marketCap) || 0;
-    return mc > 0 && mc < 8000;
-  }).length;
-  const plans = Array.isArray(state.tradePlans) ? state.tradePlans : [];
-  const watchingPlans = plans.filter((plan) => ["watching", "active"].includes(String(plan.status || "").toLowerCase()));
-  const nearTp = watchingPlans.filter((plan) => {
-    const move = Number(plan.lastMovePct ?? plan.wallets?.[0]?.lastMovePct);
-    const tp = Number(plan.takeProfitPct);
-    return Number.isFinite(move) && Number.isFinite(tp) && tp > 0 && move > tp * 0.7;
-  }).length;
-  const shieldWatching = Number(state.shieldReceipts?.stats?.watching || 0);
-  const items = [
-    freshLowMc ? `🐣 ${freshLowMc} fresh under 8k MC on the feed` : "",
-    watchingPlans.length ? `🛡 ${watchingPlans.length} plan(s) armed${nearTp ? ` - ${nearTp} near take-profit` : ""}` : "",
-    shieldWatching ? `🔎 ${shieldWatching} flagged token(s) being tracked to outcome` : "",
-    `🧾 Proof wall is public - slimewire.org/proof`
-  ].filter(Boolean);
+  const items = [...ogreBriefItems(), `🧾 Proof wall is public - slimewire.org/proof`];
   return `
     <section class="trade-card ogre-brief-card">
       <div class="trade-head">

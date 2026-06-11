@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SlimeWire User Guide</title>
+<style>
+  @page { margin: 17mm 15mm; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; color: #1a2419; font-size: 10.5pt; line-height: 1.5; margin: 0; }
+  h1 { font-size: 23pt; margin: 0 0 4px; color: #143307; }
+  h1 span { color: #3fae00; }
+  .subtitle { color: #5a6e54; margin: 0 0 16px; font-size: 11pt; }
+  h2 { font-size: 14.5pt; color: #143307; border-bottom: 2.5px solid #72ff23; padding-bottom: 4px; margin: 24px 0 9px; page-break-after: avoid; }
+  h3 { font-size: 11.5pt; color: #2a5212; margin: 13px 0 4px; page-break-after: avoid; }
+  p, li { margin: 4px 0; }
+  ul, ol { margin: 4px 0 8px; padding-left: 20px; }
+  code { background: #eef6e8; border: 1px solid #d4e8c8; border-radius: 4px; padding: 1px 5px; font-size: 9.5pt; font-family: Consolas, monospace; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 9.5pt; }
+  th, td { border: 1px solid #cfe3c2; padding: 5px 8px; text-align: left; vertical-align: top; }
+  th { background: #eef6e8; color: #143307; }
+  .tip { background: #f1fbe9; border-left: 4px solid #72ff23; padding: 8px 12px; margin: 10px 0; border-radius: 0 6px 6px 0; }
+  .pagebreak { page-break-before: always; }
+  .toc li { margin: 2px 0; }
+  .footer-note { color: #5a6e54; font-size: 9pt; margin-top: 22px; border-top: 1px solid #cfe3c2; padding-top: 8px; }
+</style>
+</head>
+<body>
+
+<h1><span>SlimeWire</span> User Guide</h1>
+<p class="subtitle">How to use everything &mdash; the site, the Telegram bot, and sharing to X. Your reference for the whole swamp. June 2026.</p>
+
+<h2>Contents</h2>
+<ul class="toc">
+  <li>1. Getting started</li>
+  <li>2. Finding your way around</li>
+  <li>3. Reading pairs &amp; SlimeShield</li>
+  <li>4. Buying &amp; selling</li>
+  <li>5. Positions &amp; PnL</li>
+  <li>6. Automation: exits, sniper, bots, A.I.</li>
+  <li>7. Launching a coin</li>
+  <li>8. The Call Board (token rooms)</li>
+  <li>9. Phone alerts</li>
+  <li>10. The Telegram bot</li>
+  <li>11. Sharing &amp; X</li>
+  <li>12. Quick reference</li>
+</ul>
+
+<h2>1. Getting started</h2>
+<ol>
+  <li>Go to <b>slimewire.org</b>. After the intro, hit <b>Connect</b> &mdash; Phantom, Solflare, or Backpack &mdash; or create an account with a username/email.</li>
+  <li>You land on the <b>Live Terminal</b>: fresh pairs cooking right now.</li>
+  <li>Two wallet types matter:
+    <ul>
+      <li><b>Connected wallet</b> (Phantom etc.) &mdash; you approve each trade in the wallet popup.</li>
+      <li><b>Managed wallets</b> (created in Wallets) &mdash; unlock everything automatic: server stop-losses that fire while you sleep, snipers, bots, A.I. buying. Backup files download when you create one &mdash; <b>save them</b>; they are the only restore path.</li>
+    </ul>
+  </li>
+  <li>Tap <b>Enable TP/SL</b> in the top bar once &mdash; that permission lets the server execute your exits. If it ever expires with plans armed, a red warning appears: re-enable immediately.</li>
+</ol>
+
+<h2>2. Finding your way around</h2>
+<ul>
+  <li><b>Desktop:</b> the top bar has six areas with drop-down menus &mdash; <b>Live</b> (terminal, cooks, trades), <b>Chart &amp; Swap</b>, <b>Intel</b> (scope, watchlist, KOL, sniper, TP/SL audit), <b>Ogre Tek</b> (A.I., launch, bundle, SlimeBot, launch watch), <b>Portfolio</b> (wallets, positions, PnL), <b>Profile</b>. Everything is two clicks away.</li>
+  <li><b>Mobile:</b> the right-side rail holds the same tools &mdash; scroll it if your screen is short.</li>
+  <li><b>Fastest way anywhere:</b> open the <b>Ask</b> bubble and type where you want to go &mdash; "open my bags", "where is the sniper", "take me to pnl". It navigates instantly.</li>
+</ul>
+
+<h2>3. Reading pairs &amp; SlimeShield</h2>
+<p>Every pair row shows MC, liquidity, age, volume, and a <b>SlimeShield verdict</b>:</p>
+<table>
+  <tr><th>Verdict</th><th>Meaning</th></tr>
+  <tr><td>&#x1F7E2; <b>BUY</b></td><td>Cleaner setup: real liquidity, healthy flow, no hard flags.</td></tr>
+  <tr><td>&#x1F7E1; <b>CAUTION</b></td><td>Tradeable but watch it &mdash; something is mid.</td></tr>
+  <tr><td>&#x1F7E0; <b>RISK</b></td><td>Degen territory. Can run hard; size like it can go to zero.</td></tr>
+  <tr><td>&#x1F534; <b>AVOID</b></td><td>Hard flags (mint/freeze risk, honeypot pattern, dev history). The site blocks quick-buys on the worst of these.</td></tr>
+</table>
+<p>The score (0&ndash;100) folds in liquidity, age, volume flow, sell pressure, bundle risk, dev wallet history, and KOL dump pressure. Check the shield's public track record any time at <b>slimewire.org/proof</b>.</p>
+<p>Tap any pair &rarr; its chart opens with transactions and the buy panel. <b>Watch</b> saves it to your Watchlist.</p>
+
+<h2>4. Buying &amp; selling</h2>
+<h3>Quick Buy &mdash; the one-tap entry</h3>
+<ol>
+  <li>Set your amount once in the <b>Quick Buy SOL</b> box on any feed (or pick a preset). Every Buy button site-wide now reads <b>"Buy 0.1 SOL"</b> with your amount.</li>
+  <li>Tap Buy on any row. Done. Your preset's TP/SL arms automatically on managed wallets.</li>
+  <li>Or tell the Ask bubble: <i>"set quick buy to 0.5"</i> &mdash; or even <i>"buy 0.1 of &lt;CA&gt; with 25 tp 8 sl"</i>.</li>
+</ol>
+<h3>Selling</h3>
+<p>From <b>Positions</b>: Sell 25% / 50% / Exit 100% / Custom %. From the chart page: the trade panel sells with live route preview. <b>Protected Buy</b> presets add a guarded entry with partial take-profits pre-armed.</p>
+<div class="tip"><b>The golden setup:</b> managed wallet + preset with TP/SL + quick buy amount set = see pair, one tap, protected. Everything else is optional.</div>
+
+<h2 class="pagebreak">5. Positions &amp; PnL</h2>
+<ul>
+  <li>Each position row answers "am I winning and am I protected": live value, <b>entry cost</b>, <b>current MC</b>, open PnL, <b>TP/SL armed state</b>, and a green/red "&#9650; +0.012 SOL since last refresh" note.</li>
+  <li><b>Arm Exits</b> opens the trade ticket for that bag if nothing is protecting it.</li>
+  <li><b>PnL page:</b> every closed trade with totals. <b>Card</b> downloads a branded PnL image; <b>Post</b> shares it to X (your referral link rides along automatically).</li>
+</ul>
+
+<h2>6. Automation: exits, sniper, bots, A.I.</h2>
+<table>
+  <tr><th>Tool</th><th>What it does</th><th>Where</th></tr>
+  <tr><td><b>Server TP/SL</b></td><td>Watches prices ~every 2s, executes your take-profit / stop-loss / timer with the browser closed.</td><td>Armed on any buy; tracked in TP/SL Audit</td></tr>
+  <tr><td><b>OgreSniper</b></td><td>Seven scan modes; one-tap snipe with per-wallet amount + exits.</td><td>Intel &rarr; Sniper</td></tr>
+  <tr><td><b>Launch Watch</b></td><td>Watches a ticker; buys the second it goes live.</td><td>Ogre Tek &rarr; Launch Watch</td></tr>
+  <tr><td><b>Bundle</b></td><td>Buy/sell one token across many wallets at once.</td><td>Ogre Tek &rarr; Bundle</td></tr>
+  <tr><td><b>SlimeBot</b></td><td>Volume engine: deploys a SOL budget as randomized buys/sells, sweeps back when done.</td><td>Ogre Tek &rarr; SlimeBot</td></tr>
+  <tr><td><b>Ogre A.I.</b></td><td>Scans, ranks, and apes the best pick with exits armed. <b>Autopilot</b> runs it unattended inside hard caps you set (max per buy, per hour, concurrent plans). Every buy passes a final SlimeShield check &mdash; AVOID never buys.</td><td>Ogre Tek &rarr; Ogre A.I.</td></tr>
+  <tr><td><b>KOL Copy</b></td><td>Mirrors a tracked wallet's next buy from your wallets, exits armed.</td><td>Intel &rarr; KOL Tracker &rarr; Copy Wallet Next Buy</td></tr>
+</table>
+
+<h2>7. Launching a coin</h2>
+<ol>
+  <li><b>Ogre Tek &rarr; Pump Launch</b>: name, ticker, image (the site checks your image actually reaches pump.fun before creating), socials, dev buy.</li>
+  <li><b>Anti-snipe is on:</b> your create + dev buy + bundle buys land in one atomic block &mdash; snipers cannot get between them.</li>
+  <li>Your launch auto-posts to SlimeWire's Telegram channels and groups with pump.fun + chart links &mdash; free promotion.</li>
+</ol>
+
+<h2>8. The Call Board (token rooms)</h2>
+<p>Scroll under any chart: that token's board. Post a structured call &mdash; <b>&#x1F7E2; Bullish / &#x1F534; Bearish / &#x26A0;&#xFE0F; Warning / &#x2753; Question</b>, optional 2x/5x/10x target, 140-character why. The site stamps your call with the shield score and entry MC, then <b>tracks it automatically</b>: hit 2x and your call shows "&#x2705; hit 2.4x" forever. Your handle carries your record (wins + hit rate) next to every post &mdash; reputation comes from results. One call per token per 6 hours. Every call row has <b>Buy</b> and <b>Watch</b> buttons so good calls turn into action instantly.</p>
+
+<h2>9. Phone alerts</h2>
+<ol>
+  <li><b>Profile &rarr; Alerts &rarr; Enable Push Alerts.</b></li>
+  <li>iPhone: add SlimeWire to your Home Screen first (Share &rarr; Add to Home Screen), open from there, then enable.</li>
+  <li>You get pinged when a TP or SL fires, a plan fails, or a KOL copy executes &mdash; site closed, phone in pocket.</li>
+</ol>
+
+<h2 class="pagebreak">10. The Telegram bot (@OgreTradeBot)</h2>
+<h3>In any group or channel</h3>
+<table>
+  <tr><th>Command</th><th>What you get</th></tr>
+  <tr><td><code>/look &lt;CA&gt;</code></td><td>Instant SlimeShield read + buttons: &#x1F4C8; Chart, &#x26A1; Buy on Site (buy panel pre-opened), Buy in DM, Dex, &#x1F9FE; Proof Wall.</td></tr>
+  <tr><td><code>/alpha</code></td><td>Top 3 scanner picks, every pair tap-to-chart, CAs tap-to-copy.</td></tr>
+  <tr><td><code>/ape</code></td><td>One fresh low-MC shot right now, honest verdict label included.</td></tr>
+  <tr><td><code>/receipts</code></td><td>SlimeShield's rug-call record with minutes-of-warning.</td></tr>
+  <tr><td><code>/proof</code></td><td>The engine's live W-L record + proof wall link.</td></tr>
+  <tr><td><code>/mywins on</code></td><td>YOUR take-profit wins post in this chat with your name (see below).</td></tr>
+  <tr><td><code>/slimewire on</code></td><td>(Admins) arms the live feed: plays every 15 min (3&ndash;4 picks, low-MC mixed in, verdict-labeled), 2x win receipts, fresh launches, stop-saves, KOL copies, daily report. Hard-capped posts per hour. <code>/slimewire off</code> any time.</td></tr>
+</table>
+<h3>Getting YOUR wins posted in your group &mdash; 3 steps</h3>
+<ol>
+  <li>On the site: <b>Profile &rarr; Alerts &rarr; "Track Wins in Telegram"</b> &mdash; Telegram opens, tap <b>Start</b>. Your account is now linked (one time, one tap).</li>
+  <li>In your group: type <b><code>/mywins on</code></b>.</li>
+  <li>Done. When your server take-profit fires: <i>"&#x1F3AF; @you just banked +47% on $XYZ &mdash; SlimeWire TP fired automatically."</i> <code>/mywins off</code> stops it. Per-group, opt-in only.</li>
+</ol>
+<h3>In DM</h3>
+<p>Full trading: <code>/trade</code> (guided buy/sell), <code>/wallets</code>, <code>/balances</code>, <code>/positions</code>, <code>/pnl</code> (+ shareable card with <code>/card &lt;token&gt;</code>), <code>/sniper</code>, <code>/bundle</code>, backups, and <code>/web</code> for a site login code.</p>
+
+<h2>11. Sharing &amp; X</h2>
+<ul>
+  <li><b>The token page:</b> <code>slimewire.org/t?ca=&lt;CA&gt;</code> &mdash; shield verdict, live stats, chart, and the call board, no login needed. <b>This is the link to drop on X instead of Dex.</b> "Saw it on X? Verify it on SlimeWire."</li>
+  <li><b>Signal cards:</b> the &#x1F4F8; button on any call board renders a branded share image (verdict, MC, stats, CA). Post it with your token page link.</li>
+  <li><b>PnL cards:</b> from the PnL page after a win &mdash; the flex that brings people in.</li>
+  <li><b>The Proof Wall:</b> <code>slimewire.org/proof</code> &mdash; the engine's full public record: 2x wins with time-to-win, rugs flagged with minutes-of-warning, top groups, live-tracked calls. Wins AND losses. Quote it whenever someone asks "is this legit".</li>
+  <li><b>Referral on every share:</b> logged in, every X share you make automatically carries your referral link. Set your custom code in Profile &rarr; Referral (edit the part after /r/), add a payout wallet, and every flex earns.</li>
+</ul>
+<div class="tip"><b>The loop that grows your bags and the swamp:</b> see a CA on X &rarr; verify on <code>/t?ca=</code> &rarr; call it on the board &rarr; buy with exits armed &rarr; TP fires &rarr; your win posts in your group with your name &rarr; share the card with your referral. Every step feeds the next.</div>
+
+<h2>12. Quick reference</h2>
+<table>
+  <tr><th>I want to...</th><th>Do this</th></tr>
+  <tr><td>Check if a coin is safe</td><td>Paste CA in the Ask bubble, or <code>/look &lt;CA&gt;</code> in TG, or open <code>/t?ca=&lt;CA&gt;</code></td></tr>
+  <tr><td>Buy fast with protection</td><td>Set Quick Buy SOL + preset once &rarr; tap Buy on any row</td></tr>
+  <tr><td>Sleep while protected</td><td>Managed wallet + TP/SL on the buy + push alerts enabled</td></tr>
+  <tr><td>Get pinged on my phone</td><td>Profile &rarr; Alerts &rarr; Enable Push Alerts</td></tr>
+  <tr><td>Post my wins in my group</td><td>Profile &rarr; Alerts &rarr; Track Wins in Telegram, then <code>/mywins on</code> in the group</td></tr>
+  <tr><td>Make my group smarter</td><td>Add @OgreTradeBot, admin runs <code>/slimewire on</code></td></tr>
+  <tr><td>Build a caller reputation</td><td>Post calls on token boards &mdash; wins are tracked forever</td></tr>
+  <tr><td>Earn from sharing</td><td>Set your referral code in Profile &mdash; it rides on every share automatically</td></tr>
+  <tr><td>Launch a coin snipe-proof</td><td>Ogre Tek &rarr; Pump Launch (anti-snipe bundle is on)</td></tr>
+  <tr><td>Ask anything</td><td>The Ask bubble &mdash; it navigates, checks coins, trades, and answers in plain words</td></tr>
+</table>
+
+<p class="footer-note">SlimeWire &mdash; slimewire.org &middot; Proof: slimewire.org/proof &middot; Bot: @OgreTradeBot &middot; June 2026. Trading memecoins is high risk; nothing here is financial advice.</p>
+
+</body>
+</html>
