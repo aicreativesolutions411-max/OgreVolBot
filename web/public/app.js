@@ -16320,7 +16320,9 @@ function activePresetButtonLabel() {
 function quickBuyButtonLabel() {
   const preset = activeTradePreset();
   const amount = activeQuickBuyAmount(preset);
-  return amount ? `Quick Buy ${amount}` : "Quick Buy";
+  // Compact label that always carries the live amount: "Buy 0.1 SOL" stays shorter
+  // than "Quick Buy" + amount, so buttons keep their size on every page.
+  return amount ? `Buy ${amount} SOL` : "Quick Buy";
 }
 
 function syncQuickBuyActionLabels() {
@@ -20508,6 +20510,110 @@ function ogreAgentLocalTrendReply(message = "") {
   };
 }
 
+// --- Instant local layer: navigation + small site actions resolve with ZERO server
+// round-trip. People ask "where is X" / "open X" a hundred different ways; answering
+// locally makes the agent feel instant and costs nothing.
+const OGRE_AGENT_TAB_ALIASES = [
+  ["terminal", ["terminal", "command center", "cooks", "main feed", "live feed", "home"]],
+  ["live", ["live pairs", "fresh pairs", "new pairs", "pairs"]],
+  ["slimeScope", ["slime scope", "scope", "scanner", "cook spot"]],
+  ["smartChart", ["smart chart", "chart page", "charting"]],
+  ["trade", ["trade desk", "trade page", "swap page", "slime swap", "manual trade"]],
+  ["bundle", ["bundle", "bundle buy", "multi wallet buy"]],
+  ["volume", ["volume", "slimebot", "slime bot", "volume bot"]],
+  ["sniper", ["sniper", "ogre sniper", "snipe picks", "picks"]],
+  ["launchCoin", ["pump launch", "launch a coin", "launch coin", "create coin", "create a token", "make a coin", "launcher"]],
+  ["launch", ["launch watch", "launch watches", "watch launches", "snipe launches"]],
+  ["kol", ["kol", "kols", "kol tracker", "copy trading", "copy wallet"]],
+  ["ogreAi", ["ogre ai", "ogre a.i", "autopilot", "auto pilot", "ai buyer"]],
+  ["wallets", ["wallets", "wallet page", "balances", "my wallets", "fund", "sweep"]],
+  ["positions", ["positions", "open positions", "bags", "holdings", "my coins"]],
+  ["pnl", ["pnl", "profit", "results", "p&l", "pnl card", "share card"]],
+  ["txAudit", ["tx audit", "stop loss audit", "audit", "armed plans", "my plans", "tp sl status"]],
+  ["profile", ["profile", "account", "referral", "referrals", "badges", "pfp", "alerts", "push alerts", "notifications"]],
+  ["tek", ["ogre tek", "tek hub", "tools", "tool hub", "automation deck", "shield receipts", "receipts"]],
+  ["ogreTek", ["perps", "perp", "perp mode", "leverage"]],
+  ["watchlist", ["watchlist", "watch list", "saved coins", "saved tokens"]],
+  ["liveTrades", ["live trades", "recent trades", "trade history"]]
+];
+
+const OGRE_AGENT_NAV_VERB = /\b(open|go to|goto|show me|show|take me|bring up|pull up|switch to|navigate|where is|where's|wheres|where are|where do i|how do i (?:get to|open|find)|find)\b/i;
+
+function ogreAgentLocalInstantReply(message) {
+  const text = String(message || "").toLowerCase().replace(/[?!.]+$/g, "").trim();
+  if (!text || text.length > 120) return null;
+  if (ogreAgentExtractSolanaMint(message)) return null;
+  if (ogreAgentTradeIntent(message)) return null;
+
+  // "set quick buy to 0.5" / "quick buy 0.25 sol"
+  const quickBuy = /(?:set\s+)?quick\s*buy(?:\s+amount)?\s*(?:to|at|=)?\s*([0-9]*\.?[0-9]+)\s*(?:sol)?$/i.exec(text);
+  if (quickBuy) {
+    const amount = formatQuickBuyAmount(quickBuy[1]);
+    if (amount) {
+      state.quickBuyAmountOverride = amount;
+      syncQuickBuyActionLabels();
+      return {
+        text: `Quick buy set to ${amount} SOL - every Buy button across the site now fires with that amount.`,
+        actions: [
+          { label: "Live Terminal", type: "open_tab", tab: "terminal" },
+          { label: "Slime Scope", type: "open_tab", tab: "slimeScope" }
+        ]
+      };
+    }
+  }
+
+  // refresh intents
+  if (/\brefresh\b.*\b(feed|pairs|scan)/.test(text) || text === "refresh feeds") {
+    return { text: "Refreshing the live feeds now.", run: { type: "refresh_feeds" }, actions: [] };
+  }
+  if (/\brefresh\b/.test(text) || /\bsync\b.*\b(wallet|balance|position)/.test(text)) {
+    return { text: "Refreshing wallets, balances, and positions now.", run: { type: "refresh_wallet" }, actions: [] };
+  }
+  if (/\b(connect|link|hook up)\b.*\bwallet\b/.test(text)) {
+    return { text: "Opening the wallet connect chooser.", run: { type: "open_wallet_connect" }, actions: [] };
+  }
+
+  // capability question
+  if (/what can you do|what do you do|help me|how do you work|what are you/.test(text)) {
+    return {
+      text: "I can take you anywhere on the site (just say \"open positions\" or \"where is the sniper\"), check any coin (paste a CA), run buys and sells (\"buy 0.1 of <CA>\"), set your quick-buy amount, refresh wallets and feeds, and read risk with SlimeShield. Ask in your own words - I'll keep up.",
+      actions: [
+        { label: "Live Terminal", type: "open_tab", tab: "terminal" },
+        { label: "Positions", type: "open_tab", tab: "positions" },
+        { label: "Ogre Tek", type: "open_tab", tab: "tek" }
+      ]
+    };
+  }
+
+  // navigation: needs a nav-ish verb OR a bare alias message ("pnl")
+  const hasNavVerb = OGRE_AGENT_NAV_VERB.test(text);
+  for (const [tab, aliases] of OGRE_AGENT_TAB_ALIASES) {
+    for (const alias of aliases) {
+      const bare = text === alias || text === `the ${alias}` || text === `my ${alias}`;
+      if (!bare && !(hasNavVerb && text.includes(alias))) continue;
+      const label = tabLabelForAgent(tab);
+      return {
+        text: `Opening ${label} now.${tab === "profile" && /alert|push|notification/.test(text) ? " Push alerts live under Profile > Alerts." : ""}`,
+        run: { type: "open_tab", tab },
+        actions: [{ label: "Back to Terminal", type: "open_tab", tab: "terminal" }]
+      };
+    }
+  }
+  return null;
+}
+
+function tabLabelForAgent(tab) {
+  const labels = {
+    terminal: "the Live Terminal", live: "Live Pairs", slimeScope: "Slime Scope", smartChart: "Smart Chart",
+    trade: "the Trade Desk", bundle: "Bundle", volume: "SlimeBot Volume", sniper: "OgreSniper",
+    launchCoin: "Pump Launch", launch: "Launch Watch", kol: "the KOL Tracker", ogreAi: "Ogre A.I.",
+    wallets: "Wallets", positions: "Positions", pnl: "PnL", txAudit: "the TP/SL Audit",
+    profile: "your Profile", tek: "the Ogre Tek hub", ogreTek: "Perp Mode", watchlist: "your Watchlist",
+    liveTrades: "Live Trades"
+  };
+  return labels[tab] || tab;
+}
+
 async function sendOgreAgentMessage(overrideMessage = "") {
   const input = document.querySelector("[data-ogre-agent-input]");
   const message = String(overrideMessage || input?.value || "").trim();
@@ -20576,6 +20682,14 @@ async function sendOgreAgentMessage(overrideMessage = "") {
     state.ogreAgentStatus = "Fast Mode: sending trade request...";
     renderOgreAgent({ force: true });
     await runOgreAgentAction(directAction);
+    return;
+  }
+  const instant = ogreAgentLocalInstantReply(message);
+  if (instant) {
+    pushOgreAgentMessage({ role: "assistant", text: instant.text, actions: instant.actions || [] });
+    state.ogreAgentStatus = "Instant local reply.";
+    renderOgreAgent({ force: true });
+    if (instant.run) await runOgreAgentAction(instant.run);
     return;
   }
   state.ogreAgentLoading = true;

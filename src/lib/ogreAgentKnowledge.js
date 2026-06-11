@@ -1,4 +1,4 @@
-export const OGRE_AGENT_KNOWLEDGE_VERSION = "2026-06-08-site-intel-v1";
+export const OGRE_AGENT_KNOWLEDGE_VERSION = "2026-06-10-site-intel-v2";
 
 function cleanText(value = "") {
   return String(value || "").toLowerCase().replace(/\s+/g, " ").trim();
@@ -96,6 +96,51 @@ const OGRE_AGENT_SITE_KNOWLEDGE = [
     actions: () => [action("Ogre A.I.", "open_tab", { tab: "ogreAi" }), action("Slime Scope", "open_tab", { tab: "slimeScope" }), action("Refresh Feeds", "refresh_feeds")]
   },
   {
+    intent: "site_push_alerts_help",
+    terms: [/\b(push alerts?|notifications?|notify|ping me|alert me|phone alerts?|get pinged|lock screen)\b/],
+    reply: () => [
+      "Push alerts ping your phone when a take-profit or stop-loss fires, a plan fails, or a KOL copy executes - even with the site closed.",
+      "Enable them under Profile > Alerts. On iPhone, add SlimeWire to your Home Screen first (Share > Add to Home Screen), then enable."
+    ].join("\n"),
+    actions: () => [action("Open Profile", "open_tab", { tab: "profile" })]
+  },
+  {
+    intent: "site_shield_receipts_help",
+    terms: [/\b(shield receipts?|receipts?|rug log|flagged tokens?|hit rate|slimeshield (history|proof|record))\b/],
+    reply: () => [
+      "SlimeShield Receipts record every AVOID/RISK flag, then track what happened to the token. Confirmed rugs show how many minutes of warning the shield gave.",
+      "Find the receipts panel on the Ogre Tek hub, including the running hit-rate."
+    ].join("\n"),
+    actions: () => [action("Ogre Tek", "open_tab", { tab: "tek" }), action("Slime Scope", "open_tab", { tab: "slimeScope" })]
+  },
+  {
+    intent: "site_kol_copy_help",
+    terms: [/\b(copy trad(e|ing)|copy wallet|copy kol|mirror (a )?wallet|follow (a )?wallet|copy (their|his|her) buys?)\b/],
+    reply: () => [
+      "KOL copy-trading lives on the KOL Tracker: tap Copy Wallet Next Buy on any tracked wallet and SlimeWire mirrors their next buy from your selected wallets, then arms TP/SL on the copied bag automatically.",
+      "Set the buy amount and exits in the copy setup before arming."
+    ].join("\n"),
+    actions: () => [action("KOL Tracker", "open_tab", { tab: "kol" }), action("TP/SL Audit", "open_tab", { tab: "txAudit" })]
+  },
+  {
+    intent: "site_quick_buy_amount_help",
+    terms: [/\b(quick buy (amount|button|sol)|change (the )?buy amount|buy button amount|default buy)\b/],
+    reply: () => [
+      "The quick-buy amount shows right on every Buy button (like \"Buy 0.1 SOL\"). Change it in the Quick Buy SOL box on any feed toolbar, pick a preset, or just tell me \"set quick buy to 0.5\".",
+      "Every Buy button across the site fires with that amount."
+    ].join("\n"),
+    actions: () => [action("Live Terminal", "open_tab", { tab: "terminal" })]
+  },
+  {
+    intent: "site_telegram_help",
+    terms: [/\b(telegram|tg bot|telegram bot|\/look|group bot|telegram group|telegram alerts)\b/],
+    reply: () => [
+      "The SlimeWire Telegram bot trades from DM (wallets, buys, sells, PnL cards) and works in groups: /look <CA> gives an instant SlimeShield read with trade links, /alpha posts current top picks.",
+      "Group admins can enable launch/TP/SL alerts with /slimewire on. Link your Telegram to the site with the /web login code."
+    ].join("\n"),
+    actions: () => [action("Open Profile", "open_tab", { tab: "profile" })]
+  },
+  {
     intent: "site_guide_help",
     terms: [/\b(help|guide|tutorial|walk me|what can you do|how do i use|where do i start|show me around)\b/],
     reply: () => [
@@ -111,7 +156,7 @@ export function ogreAgentKnowledgeReply(message = "", context = {}) {
   if (!lower) return null;
   const tokenMint = activeTokenMint(message, context);
   const asksSiteHelp = /\b(how|where|what|make|create|change|edit|set|use|find|open|show|custom|help|guide|why|can you|start|record|connect)\b/.test(lower)
-    || /\b(ref|pfp|tp\/sl|tpsl|stoploss|stop loss|take profit|rec|clip|wallet|profile|badges?|quests?|low mc|fresh launch|runner|x2)\b/.test(lower);
+    || /\b(ref|pfp|tp\/sl|tpsl|stoploss|stop loss|take profit|rec|clip|wallet|profile|badges?|quests?|low mc|fresh launch|runner|x2|push|alerts?|notifications?|receipts?|copy|telegram|quick buy)\b/.test(lower);
   if (!asksSiteHelp) return null;
 
   const card = OGRE_AGENT_SITE_KNOWLEDGE.find((entry) => entry.terms.some((term) => term.test(lower)));

@@ -6288,6 +6288,33 @@ async function handleMessage(message, userId) {
 
   if (!text) return;
 
+  // Groups: remember the chat (for opt-in alerts) and serve the group command set.
+  if (!isPrivateChat(message.chat)) registerTelegramGroup(message.chat);
+
+  const lookCommand = parseCommandWithArgument(text, ["look", "scan_ca", "check"]);
+  if (lookCommand) {
+    await handleTelegramLookCommand(chatId, message, lookCommand.argument);
+    return;
+  }
+  const alphaCommand = parseCommandWithArgument(text, ["alpha", "picks", "trending"]);
+  if (alphaCommand) {
+    await handleTelegramAlphaCommand(chatId, message);
+    return;
+  }
+  const groupToggle = parseCommandWithArgument(text, ["slimewire", "slimewire_alerts"]);
+  if (groupToggle && !isPrivateChat(message.chat)) {
+    await handleTelegramGroupToggle(chatId, message, userId, groupToggle.argument);
+    return;
+  }
+
+  // Deep link from a group post: /start buy_<mint> opens the prefilled buy flow in DM.
+  const deepLinkBuy = /^\/start(?:@\w+)?\s+buy_([A-HJ-NP-Za-km-z1-9]{32,48})$/i.exec(text);
+  if (deepLinkBuy && isPrivateChat(message.chat)) {
+    clearSession(chatId);
+    await startKolSignalAction(chatId, userId, "kol_trade", deepLinkBuy[1]);
+    return;
+  }
+
   if (text === "/start" || text === "/menu") {
     clearSession(chatId);
     await showMenu(chatId, userId);
@@ -9624,7 +9651,8 @@ function pushTradePlanExitToUser(event, plan, planWallet, triggerReason = "") {
 // Anonymous public channel post when a TP/SL exit actually fires. No user ids, no
 // wallet addresses - just the engine doing its job. Rate/dedupe limits live in the bridge.
 function announceTradePlanExitToChannel(event, plan, planWallet, triggerReason = "") {
-  if (!tgChannel.enabled || event !== "tp_sl_trade_closed") return;
+  // tgChannel.announce no-ops when the channel is dark; opted-in groups still get it.
+  if (event !== "tp_sl_trade_closed") return;
   const movePct = Number(planWallet?.lastTriggerMovePct ?? planWallet?.lastMovePct);
   const moveLabel = Number.isFinite(movePct) ? `${movePct >= 0 ? "+" : ""}${movePct.toFixed(1)}%` : "";
   const isStop = /^stop-loss\b/i.test(String(triggerReason || ""));
@@ -9635,11 +9663,13 @@ function announceTradePlanExitToChannel(event, plan, planWallet, triggerReason =
   const headline = isTp
     ? `🎯 <b>Take-profit fired</b> on $${symbol} ${moveLabel ? `at <b>${moveLabel}</b>` : ""}`
     : `🛡 <b>Stop-loss saved a bag</b> on $${symbol} ${moveLabel ? `(${moveLabel})` : ""}`;
-  tgChannel.announce(isTp ? "tp" : "sl", mint, [
+  const text = [
     headline,
     `SlimeWire server exits run 24/7 - even with the browser closed.`,
     mint ? `<a href="https://dexscreener.com/solana/${mint}">chart</a> | <a href="https://www.slimewire.org">slimewire.org</a>` : `<a href="https://www.slimewire.org">slimewire.org</a>`
-  ].join("\n"));
+  ].join("\n");
+  tgChannel.announce(isTp ? "tp" : "sl", mint, text);
+  broadcastToTelegramGroups(isTp ? "tp" : "sl", mint, text);
 }
 
 function planHasPriceExit(plan, planWallet) {
@@ -12077,11 +12107,13 @@ async function processCopyWalletWatchPlan(plan, walletStore) {
       tag: `kol-copy-${tokenMint}`,
       url: "/tx-audit"
     });
-    tgChannel.announce("kol-copy", tokenMint, [
+    const kolCopyText = [
       `🥷 <b>KOL copy fired</b>: SlimeWire mirrored a tracked wallet into $${escapeTelegramHtml(signal.symbol || shortMint(tokenMint))} within one scan tick.`,
       `TP/SL armed automatically on the copied bag.`,
       `<a href="${dexScreenerUrl(tokenMint)}">chart</a> | <a href="https://www.slimewire.org">slimewire.org</a>`
-    ].join("\n"));
+    ].join("\n");
+    tgChannel.announce("kol-copy", tokenMint, kolCopyText);
+    broadcastToTelegramGroups("kol-copy", tokenMint, kolCopyText);
     return {
       changed: true,
       message: [
@@ -18873,6 +18905,192 @@ async function readTradePlans() {
   const store = await readJson(tradePlansPath());
   if (!Array.isArray(store.plans)) store.plans = [];
   return store;
+}
+
+// --- Telegram group engagement: /look, /alpha, opt-in alerts ----------------------
+// Groups are registered when the bot sees them; alerts stay OFF until a group admin
+// runs /slimewire on. Per-chat cooldowns keep the bot useful instead of spammy.
+const TG_LOOK_COOLDOWN_MS = 20_000;
+const TG_ALPHA_COOLDOWN_MS = 10 * 60 * 1000;
+const tgCommandCooldowns = new Map();
+
+function telegramGroupsPath() {
+  return path.join(CONFIG.dataDir, "telegram-groups.json");
+}
+
+async function readTelegramGroups() {
+  const store = await readJson(telegramGroupsPath());
+  if (!store.groups || typeof store.groups !== "object") store.groups = {};
+  return store;
+}
+
+const telegramGroupRegisterSeen = new Set();
+function registerTelegramGroup(chat) {
+  if (!chat?.id || isPrivateChat(chat)) return;
+  const key = String(chat.id);
+  if (telegramGroupRegisterSeen.has(key)) return;
+  telegramGroupRegisterSeen.add(key);
+  void (async () => {
+    try {
+      const store = await readTelegramGroups();
+      if (!store.groups[key]) {
+        store.groups[key] = { title: String(chat.title || "").slice(0, 80), addedAt: new Date().toISOString(), alerts: false };
+        await writeJsonFile(telegramGroupsPath(), store);
+      }
+    } catch (error) {
+      console.warn(`[tg-groups] register failed: ${error.message}`);
+    }
+  })();
+}
+
+function tgCommandOnCooldown(chatId, kind, intervalMs) {
+  const key = `${kind}:${chatId}`;
+  const last = tgCommandCooldowns.get(key) || 0;
+  if (Date.now() - last < intervalMs) return true;
+  tgCommandCooldowns.set(key, Date.now());
+  return false;
+}
+
+function slimewireTokenLinks(tokenMint) {
+  return {
+    site: `https://www.slimewire.org/terminal/chart?token=${encodeURIComponent(tokenMint)}&source=telegram`,
+    dex: dexScreenerUrl(tokenMint),
+    dmBuy: CONFIG.telegramBotUsername ? `https://t.me/${CONFIG.telegramBotUsername}?start=buy_${tokenMint}` : ""
+  };
+}
+
+function tokenActionKeyboard(tokenMint) {
+  const links = slimewireTokenLinks(tokenMint);
+  const row = [
+    { text: "Chart + Trade", url: links.site },
+    { text: "Dex", url: links.dex }
+  ];
+  if (links.dmBuy) row.push({ text: "Quick Buy (DM)", url: links.dmBuy });
+  return { inline_keyboard: [row] };
+}
+
+// /look <CA>: instant SlimeShield read with trade links - the group-native version of
+// pasting a CA into Slime Scope.
+async function handleTelegramLookCommand(chatId, message, argument) {
+  const mint = (String(argument || "").match(/\b[A-HJ-NP-Za-km-z1-9]{32,48}\b/) || [])[0] || "";
+  if (!mint) {
+    await say(chatId, "Usage: /look <token CA> - I will run a SlimeShield read with chart and quick-buy links.");
+    return;
+  }
+  if (tgCommandOnCooldown(chatId, "look", TG_LOOK_COOLDOWN_MS)) return;
+  let shield = null;
+  try {
+    shield = await webSlimeShield(mint);
+  } catch {
+    // fall through to the degraded reply below
+  }
+  if (!shield) {
+    await sendOrEditMessage(chatId, null, `Could not pull a read on ${shortMint(mint)} right now. Chart links below.`, tokenActionKeyboard(mint));
+    return;
+  }
+  const verdictIcon = { BUY: "🟢", CAUTION: "🟡", RISK: "🟠", AVOID: "🔴" }[String(shield.verdict || "").toUpperCase()] || "⚪";
+  const factors = (shield.factors || []).slice(0, 3).map((factor) => `- ${String(factor?.label || factor).slice(0, 80)}`);
+  const lines = [
+    `${verdictIcon} SlimeShield: ${shield.verdict || "?"} (score ${shield.score ?? "?"}/100, ${shield.confidence || "low"} confidence)`,
+    shield.summary ? String(shield.summary).slice(0, 200) : "",
+    ...factors,
+    shield.suggestedAction ? `Suggested: ${shield.suggestedAction}` : ""
+  ].filter(Boolean);
+  await sendOrEditMessage(chatId, null, `${shortMint(mint)}\n${lines.join("\n")}`, tokenActionKeyboard(mint));
+}
+
+// /alpha: current top sniper picks with one-tap trade links.
+async function handleTelegramAlphaCommand(chatId, message) {
+  if (tgCommandOnCooldown(chatId, "alpha", isPrivateChat(message.chat) ? TG_LOOK_COOLDOWN_MS : TG_ALPHA_COOLDOWN_MS)) {
+    return;
+  }
+  let scan = null;
+  try {
+    scan = await webSniperScan(`tg:${chatId}`, "safe");
+  } catch {
+    // degraded reply below
+  }
+  const rows = (scan?.rows || []).slice(0, 3);
+  if (!rows.length) {
+    await say(chatId, "No qualified picks on the scanner right now - that happens in dead hours. Try again soon or watch the live feed on slimewire.org.");
+    return;
+  }
+  const lines = rows.map((row, index) => {
+    const symbol = row.symbol || shortMint(row.tokenMint);
+    const stats = [row.marketCapLabel ? `MC ${row.marketCapLabel}` : "", row.liquidityLabel ? `Liq ${row.liquidityLabel}` : "", row.pairAgeLabel || ""].filter(Boolean).join(" | ");
+    return `${index + 1}. $${symbol}${stats ? ` - ${stats}` : ""}`;
+  });
+  const top = rows[0];
+  await sendOrEditMessage(chatId, null, [
+    "🐸 SlimeWire alpha - top scanner picks right now:",
+    ...lines,
+    "",
+    "Reads, charts, and one-tap buys on slimewire.org"
+  ].join("\n"), tokenActionKeyboard(top.tokenMint));
+}
+
+// /slimewire on|off (group admins): opt the group in/out of launch + TP/SL + KOL alerts.
+async function handleTelegramGroupToggle(chatId, message, userId, argument) {
+  try {
+    const member = await telegram("getChatMember", { chat_id: chatId, user_id: userId });
+    const status = member?.result?.status || member?.status || "";
+    if (!["creator", "administrator"].includes(status)) {
+      await say(chatId, "Only group admins can toggle SlimeWire alerts.");
+      return;
+    }
+  } catch {
+    await say(chatId, "Could not verify admin rights - try again.");
+    return;
+  }
+  const turnOn = /^(on|enable|start|yes)$/i.test(String(argument || "").trim());
+  const turnOff = /^(off|disable|stop|no)$/i.test(String(argument || "").trim());
+  if (!turnOn && !turnOff) {
+    await say(chatId, "Usage: /slimewire on - or - /slimewire off\nWhen on, this group gets SlimeWire engine alerts (fresh launches, TP/SL fires, KOL copies), hard-capped at a few posts per hour.");
+    return;
+  }
+  const store = await readTelegramGroups();
+  const key = String(chatId);
+  store.groups[key] = {
+    ...(store.groups[key] || { addedAt: new Date().toISOString() }),
+    title: String(message.chat?.title || store.groups[key]?.title || "").slice(0, 80),
+    alerts: turnOn
+  };
+  await writeJsonFile(telegramGroupsPath(), store);
+  await say(chatId, turnOn
+    ? "SlimeWire alerts are ON for this group: fresh launches, TP/SL fires, and KOL copies, max a few posts per hour. /slimewire off any time. Try /look <CA> or /alpha too."
+    : "SlimeWire alerts are OFF for this group. /look and /alpha still work on demand.");
+}
+
+// Fan the same anonymized engine events out to opted-in groups, each behind its own
+// rate limiter (tighter than the channel: max 3/hour, 5 min apart).
+const tgGroupBridges = new Map();
+function groupBridgeFor(chatId) {
+  const key = String(chatId);
+  if (!tgGroupBridges.has(key)) {
+    tgGroupBridges.set(key, createTelegramChannelBridge({
+      enabled: true,
+      botToken: CONFIG.telegramChannelBotToken,
+      chatId: key,
+      maxPerHour: 3,
+      minIntervalSeconds: 300,
+      log: (entry) => console.warn(`[tg-group ${key}] ${entry}`)
+    }));
+  }
+  return tgGroupBridges.get(key);
+}
+
+function broadcastToTelegramGroups(kind, key, text) {
+  if (!CONFIG.telegramChannelBotToken || !text) return;
+  void (async () => {
+    try {
+      const store = await readTelegramGroups();
+      for (const [chatId, group] of Object.entries(store.groups)) {
+        if (group?.alerts) groupBridgeFor(chatId).announce(kind, key, text);
+      }
+    } catch (error) {
+      console.warn(`[tg-groups] broadcast failed: ${error.message}`);
+    }
+  })();
 }
 
 // --- SlimeShield receipts: every AVOID/RISK flag gets recorded, then we go back and
@@ -28685,10 +28903,12 @@ async function webLaunchPumpPortalLocal(userId, body, basePayload) {
     }
   });
   if (String(launchResult?.status || "").toUpperCase() === "COMPLETE" && launchResult.tokenMint) {
-    tgChannel.announce("launch", launchResult.tokenMint, [
+    const launchText = [
       `🐸 <b>Fresh swamp launch</b>: $${escapeTelegramHtml(basePayload.symbol || basePayload.name || "???")} just went live on pump.fun via SlimeWire Pump Launch.`,
       `<a href="https://pump.fun/coin/${launchResult.tokenMint}">pump.fun</a> | <a href="${dexScreenerUrl(launchResult.tokenMint)}">chart</a> | <a href="https://www.slimewire.org">launch yours</a>`
-    ].join("\n"));
+    ].join("\n");
+    tgChannel.announce("launch", launchResult.tokenMint, launchText);
+    broadcastToTelegramGroups("launch", launchResult.tokenMint, launchText);
   }
   return launchResult;
 }
