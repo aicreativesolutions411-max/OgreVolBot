@@ -2130,7 +2130,10 @@ async function handleWebApiRequest(request, response, requestUrl) {
         readTelegramGroups().catch(() => ({ groups: {} })),
         webBoardCallsForMint("").catch(() => ({ topCallers: [] }))
       ]);
-      const resolvedCalls = calls.calls.filter((call) => call.status === "resolved");
+      // Headline stats count the conviction era only (one gated call per drop);
+      // the volume-era calls stay stored but no longer define the record.
+      const recordCalls = calls.calls.filter(alphaCallInRecord);
+      const resolvedCalls = recordCalls.filter((call) => call.status === "resolved");
       const wins = resolvedCalls.filter((call) => call.outcome === "won");
       const losses = resolvedCalls.filter((call) => call.outcome === "lost");
       const winDurations = wins
@@ -2154,8 +2157,8 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendCachedWebJson(request, response, 200, {
         ok: true,
         alpha: {
-          totalCalls: calls.calls.length,
-          watching: calls.calls.filter((call) => call.status === "watching").length,
+          totalCalls: recordCalls.length,
+          watching: recordCalls.filter((call) => call.status === "watching").length,
           wins: wins.length,
           losses: losses.length,
           flat: resolvedCalls.length - wins.length - losses.length,
@@ -2166,7 +2169,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
             symbol: call.symbol, mint: call.mint, peakX: call.peakX, verdict: call.verdict || "",
             calledAt: call.calledAt, resolvedAt: call.resolvedAt
           })),
-          recentCalls: calls.calls.slice(-15).reverse().map((call) => ({
+          recentCalls: recordCalls.slice(-15).reverse().map((call) => ({
             symbol: call.symbol, mint: call.mint, status: call.status, outcome: call.outcome,
             verdict: call.verdict || "", calledAt: call.calledAt, peakX: call.peakX || null
           }))
@@ -2188,7 +2191,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
         },
         groupLeague,
         topCallers: board.topCallers || [],
-        thisWeek: weeklySeasonStats(calls.calls, receipts.receipts)
+        thisWeek: weeklySeasonStats(recordCalls, receipts.receipts)
       }, "public, max-age=15, stale-while-revalidate=60");
       return;
     }
@@ -20470,6 +20473,11 @@ async function checkBoardCallOutcomes() {
 // qualified pick = no post; silence costs nothing, a bad call costs trust. Every drop
 // records its entry price, and when a called pick 2x's, the same chats get the receipt.
 const TG_ALPHA_DROP_INTERVAL_MS = Math.max(5, Math.min(24 * 60, Number.parseInt(process.env.TG_ALPHA_DROP_INTERVAL_MINUTES || "15", 10) || 15)) * 60 * 1000;
+// Conviction-engine epoch: calls recorded before this were volume-era (every
+// radar play tracked). Public stats count from here so the record reflects the
+// selective engine - older calls stay in the store, honestly labeled.
+const ALPHA_CONVICTION_EPOCH = Date.parse(process.env.TG_ALPHA_RECORD_EPOCH || "2026-06-11T20:00:00Z");
+const alphaCallInRecord = (call) => Date.parse(call.calledAt || 0) >= ALPHA_CONVICTION_EPOCH;
 const TG_ALPHA_DROP_PICKS = Math.max(1, Math.min(4, Number.parseInt(process.env.TG_ALPHA_DROP_PICKS || "4", 10) || 4));
 
 function alphaCallsPath() {
@@ -20509,7 +20517,7 @@ async function runAlphaDropTick() {
 
   // Engine record footer: publishing the losses is what makes the wins believable.
   const priorCalls = await readAlphaCalls();
-  const priorResolved = priorCalls.calls.filter((call) => call.status === "resolved");
+  const priorResolved = priorCalls.calls.filter((call) => call.status === "resolved" && alphaCallInRecord(call));
   const priorWins = priorResolved.filter((call) => call.outcome === "won").length;
   const priorLosses = priorResolved.filter((call) => call.outcome === "lost").length;
   const recordLine = priorResolved.length
@@ -20557,13 +20565,24 @@ async function runAlphaDropTick() {
   if (!picks.length) return;
 
   const pairs = await fetchDexScreenerTokenPairsBatch(picks.map((pick) => pick.row.tokenMint)).catch(() => []);
+  // Conviction gate: tracking every radar play buried the record under volume
+  // ("140 calls, 6 wins" reads as dumb, not early). At most ONE pick per drop -
+  // the strongest that clears shield + liquidity + socials - goes on the public
+  // wall. The rest post as radar: useful for speed, never counted.
+  const liqOf = (row) => Number(row.liquidityUsd ?? row.liquidity?.usd) || 0;
+  const conviction = picks.find((pick) =>
+    ["BUY", "CAUTION"].includes(pick.verdict)
+    && (Number(pick.shield?.score) || 0) >= 55
+    && liqOf(pick.row) >= 7_000
+    && socialScore(pick.row) >= 2) || null;
   const verdictIcon = { BUY: "🟢", CAUTION: "🟡", RISK: "🟠", UNRATED: "⚪" };
   const lines = picks.map((pick, index) => {
     const { row, shield, verdict } = pick;
     const links = slimewireTokenLinks(row.tokenMint);
     const stats = [row.marketCapLabel ? `MC ${row.marketCapLabel}` : "", row.liquidityLabel ? `Liq ${row.liquidityLabel}` : "", row.pairAgeLabel || ""].filter(Boolean).map(escapeTelegramHtml).join(" | ");
+    const tag = pick === conviction ? " 🎯 <b>TRACKED CALL</b>" : "";
     return [
-      `${index + 1}. ${verdictIcon[verdict] || "⚪"} <a href="${links.site}"><b>$${escapeTelegramHtml(row.symbol || shortMint(row.tokenMint))}</b></a> - ${escapeTelegramHtml(verdict)}${shield?.score != null ? ` ${shield.score}/100` : ""}${stats ? ` | ${stats}` : ""}`,
+      `${index + 1}. ${verdictIcon[verdict] || "⚪"} <a href="${links.site}"><b>$${escapeTelegramHtml(row.symbol || shortMint(row.tokenMint))}</b></a> - ${escapeTelegramHtml(verdict)}${shield?.score != null ? ` ${shield.score}/100` : ""}${stats ? ` | ${stats}` : ""}${tag}`,
       `<code>${escapeTelegramHtml(row.tokenMint)}</code>`
     ].join("\n");
   });
@@ -20571,7 +20590,7 @@ async function runAlphaDropTick() {
   const text = [
     `🐸 <b>SlimeWire plays</b> - tap a pair to open its chart:`,
     ...lines,
-    `${topLinks.dmBuy ? `<a href="${topLinks.dmBuy}">quick buy top pick</a> | ` : ""}<a href="https://www.slimewire.org/proof">proof wall</a> - every call is tracked, winners get receipts.${escapeTelegramHtml(recordLine)}`
+    `${topLinks.dmBuy ? `<a href="${topLinks.dmBuy}">quick buy top pick</a> | ` : ""}<a href="https://www.slimewire.org/proof">proof wall</a> - 🎯 tracked calls go on the record, radar plays are for speed.${escapeTelegramHtml(recordLine)}`
   ].join("\n");
 
   // Key by time bucket so the cadence holds even when the same top pick repeats.
@@ -20592,10 +20611,12 @@ async function runAlphaDropTick() {
   }
   tgChannel.announce("alpha-drop", dropKey, text);
 
+  // Only the conviction pick is recorded - the wall reflects judgment, not volume.
+  if (!conviction) return;
   await withFileLock(alphaCallsPath(), async () => {
     const calls = await readAlphaCalls(); // fresh read: never clobber outcomes written mid-tick
     let recorded = false;
-    for (const pick of picks) {
+    for (const pick of [conviction]) {
       const best = bestDexPairForToken(pick.row.tokenMint, pairs.filter((pair) => pairMatchesToken(pair, pick.row.tokenMint)));
       const priceUsd = Number(best?.priceUsd) || null;
       if (!priceUsd) continue;
