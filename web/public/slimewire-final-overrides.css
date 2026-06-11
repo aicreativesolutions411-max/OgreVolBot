@@ -19483,3 +19483,13 @@ html body main.shell[data-app][data-route="intro"] .swamp-intro-stage[data-intro
     grid-column: 1 !important;
   }
 }
+
+/* NAV_TOPBAR_TAKEOVER_20260611: the dropdown top bar is desktop nav now. Several
+   unscoped !important blocks in this file still painted the flat rail as a grid
+   of icon buttons on desktop - this final rule outranks them all. */
+@media (min-width: 761px) {
+  html body main.shell[data-app][data-route="terminal"] .tabs,
+  html body main.shell[data-app] nav.tabs {
+    display: none !important;
+  }
+}

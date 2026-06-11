@@ -9605,28 +9605,20 @@ body {
   font-size: 0.86rem;
 }
 
-/* SlimeWire nav: ONE accordion sidebar. Desktop: fixed left, click a group and
-   its options drop in place - one open at a time, zero dead space. Mobile: the
-   same menu slides in off a hamburger and stays up until a pick / tap-off /
-   re-tap. The flat rail markup is untouched; CSS hides it where the drawer serves. */
+/* SlimeWire nav: ONE menu, two faces. Desktop: a single tight TOP BAR - the six
+   group pills sit in a row and each drops down to its subcategories on click
+   (one open at a time, closes on pick or outside click). Mobile: the same menu
+   slides in off a hamburger. The flat rail markup is untouched; CSS hides it. */
 .nav-drop-bar { display: none; }
 .nav-mobile-trigger,
 .nav-mobile-backdrop { display: none; }
 
-/* --- Shared accordion internals (both faces) --- */
-.nav-drop-bar .nav-drop-group {
-  border: 1px solid rgba(114, 255, 35, 0.14);
-  border-radius: 12px;
-  background: rgba(8, 20, 10, 0.45);
-  overflow: hidden;
-}
+/* --- Shared internals (both faces) --- */
 .nav-side-group-toggle {
   display: flex;
   align-items: center;
-  gap: 9px;
-  width: 100%;
+  gap: 8px;
   text-align: left;
-  padding: 10px 11px;
   border: 0;
   background: transparent;
   color: rgba(226, 255, 215, 0.9);
@@ -9636,13 +9628,8 @@ body {
   white-space: nowrap;
 }
 .nav-side-group-toggle .nav-side-label { flex: 1 1 auto; }
-.nav-side-group-toggle[data-active] { color: #9dff5e; }
 .nav-side-caret { font-size: 0.6rem; opacity: 0.55; transition: transform 0.18s ease; }
 .nav-drop-group.is-open .nav-side-caret { transform: rotate(180deg); }
-.nav-drop-group.is-open .nav-side-group-toggle {
-  background: rgba(114, 255, 35, 0.09);
-  border-bottom: 1px solid rgba(114, 255, 35, 0.14);
-}
 .nav-side-items { display: none; flex-direction: column; gap: 1px; padding: 5px; }
 .nav-drop-group.is-open .nav-side-items { display: flex; }
 .nav-drop-bar .nav-side-items button {
@@ -9673,33 +9660,56 @@ body {
 }
 .nav-side-icon { font-size: 1rem; line-height: 1; flex: 0 0 auto; }
 
-/* --- Desktop face: fixed left sidebar --- */
+/* --- Desktop face: one tight top bar, dropdowns to subcategories --- */
 @media (min-width: 761px) {
-  :root { --sw-sidebar-w: 196px; }
   .tabs { display: none; }
   .topbar { margin-bottom: 6px; }
-  main.shell[data-route="terminal"] { padding-left: calc(var(--sw-sidebar-w) + 16px); }
   main.shell[data-route="terminal"] .nav-drop-bar {
     display: flex;
-    flex-direction: column;
+    flex-wrap: wrap;
+    align-items: center;
     gap: 6px;
-    position: fixed;
-    top: 0;
-    left: 0;
-    bottom: 0;
-    width: var(--sw-sidebar-w);
-    z-index: 30;
-    padding: 14px 10px 16px 11px;
-    border-right: 1px solid rgba(114, 255, 35, 0.22);
-    background: linear-gradient(180deg, rgba(6, 14, 7, 0.99), rgba(3, 8, 4, 0.99));
-    box-shadow: 14px 0 44px rgba(0, 0, 0, 0.35);
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    scrollbar-width: thin;
+    position: sticky;
+    top: 8px;
+    z-index: 45;
+    padding: 6px 7px;
+    border-radius: 14px;
+    border: 1px solid rgba(114, 255, 35, 0.22);
+    background: rgba(5, 11, 6, 0.97);
+    box-shadow: 0 16px 44px rgba(0, 0, 0, 0.3);
   }
-  /* The execution receipt sits bottom-left; shift it clear of the sidebar. */
-  body:has(main.shell[data-route="terminal"]) [data-trade-trace-mount] .trade-trace {
-    left: calc(var(--sw-sidebar-w) + 14px);
+  .nav-drop-group { position: relative; }
+  .nav-side-group-toggle {
+    padding: 8px 14px;
+    border-radius: 999px;
+    border: 1px solid rgba(114, 255, 35, 0.25);
+    background: rgba(8, 20, 10, 0.55);
+  }
+  .nav-side-group-toggle:hover {
+    background: rgba(114, 255, 35, 0.12);
+    color: #eaffe0;
+  }
+  .nav-side-group-toggle[data-active] {
+    background: linear-gradient(135deg, rgba(114, 255, 35, 0.94), rgba(187, 255, 99, 0.94));
+    color: #071006;
+    border-color: rgba(114, 255, 35, 0.6);
+  }
+  .nav-drop-group.is-open .nav-side-group-toggle:not([data-active]) {
+    background: rgba(114, 255, 35, 0.16);
+    color: #eaffe0;
+    border-color: rgba(114, 255, 35, 0.5);
+  }
+  .nav-side-items {
+    position: absolute;
+    top: calc(100% + 7px);
+    left: 0;
+    min-width: 200px;
+    z-index: 60;
+    padding: 6px;
+    border-radius: 13px;
+    border: 1px solid rgba(114, 255, 35, 0.32);
+    background: #060d07;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
   }
 }
 
@@ -9765,8 +9775,19 @@ body {
   }
   /* Clear the hamburger so it never sits on the brand badge. */
   body:has([data-dashboard]:not([hidden])) main.shell[data-route="terminal"] .topbar { padding-left: 50px; }
-  /* Bigger tap targets inside the drawer. */
-  .nav-side-group-toggle { padding: 12px 12px; font-size: 0.92rem; }
+  /* Boxed accordion groups + bigger tap targets inside the drawer. */
+  .nav-drop-bar .nav-drop-group {
+    border: 1px solid rgba(114, 255, 35, 0.14);
+    border-radius: 12px;
+    background: rgba(8, 20, 10, 0.45);
+    overflow: hidden;
+  }
+  .nav-drop-group.is-open .nav-side-group-toggle {
+    background: rgba(114, 255, 35, 0.09);
+    border-bottom: 1px solid rgba(114, 255, 35, 0.14);
+  }
+  .nav-side-group-toggle { width: 100%; padding: 12px 12px; font-size: 0.92rem; }
+  .nav-side-group-toggle[data-active] { color: #9dff5e; }
   .nav-drop-bar .nav-side-items button { padding: 11px 10px; font-size: 0.9rem; min-height: 42px; }
 }
 

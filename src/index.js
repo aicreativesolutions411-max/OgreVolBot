@@ -16170,14 +16170,26 @@ async function getPumpFunCreatorLaunches(creator, options = {}) {
 async function pumpCurvePairFallback(tokenMint, options = {}) {
   const pump = await getPumpFunTokenMetadata(tokenMint, { cacheTtlMs: 15_000, timeoutMs: options.timeoutMs || 3_000 }).catch(() => null);
   if (!pump || (!pump.marketCap && !pump.priceUsd && !pump.virtualSolReserves)) return null;
-  const solUsd = await getSolUsdPrice({ timeoutMs: 1_500 }).catch(() => null);
+  // SOL/USD from the coin payload itself (usd_market_cap / market_cap-in-SOL):
+  // zero extra requests, and immune to the DexScreener shared-IP rate limit that
+  // makes getSolUsdPrice flaky on Render.
+  const usdMc = Number(pump.usdMarketCap) || Number(pump.marketCap) || 0;
+  const solMc = Number(pump.marketCapSol) || 0;
+  const solUsd = (usdMc > 0 && solMc > 0 && solMc < usdMc)
+    ? usdMc / solMc
+    : await getSolUsdPrice({ timeoutMs: 1_500 }).catch(() => null);
   // virtual_sol_reserves is lamports when it's a huge integer.
   const rawVirtualSol = Number(pump.virtualSolReserves) || 0;
   const virtualSol = rawVirtualSol > 1e6 ? rawVirtualSol / 1e9 : rawVirtualSol;
   const liquidityUsd = Number(pump.liquidityUsd)
-    || (virtualSol && Number.isFinite(solUsd) ? Math.round(virtualSol * solUsd) : null);
+    || (virtualSol && Number.isFinite(solUsd) && solUsd > 0 ? Math.round(virtualSol * solUsd) : null);
   // Pump supply is 1B tokens; MC/1e9 recovers price when the API omits it.
   const priceUsd = Number(pump.priceUsd) || (Number(pump.marketCap) ? Number(pump.marketCap) / 1e9 : null);
+  // Bonding progress: ~85 real SOL graduates a pump curve.
+  const rawRealSol = Number(pump.realSolReserves) || 0;
+  const realSol = rawRealSol > 1e6 ? rawRealSol / 1e9 : rawRealSol;
+  const bondingProgressPct = Number(pump.bondingProgressPct)
+    || (realSol ? Math.min(100, Math.round((realSol / 85) * 100)) : null);
   return {
     tokenMint,
     baseToken: { symbol: pump.symbol || "", name: pump.name || "" },
@@ -16192,7 +16204,7 @@ async function pumpCurvePairFallback(tokenMint, options = {}) {
     pairAddress: "",
     dexId: "pump-curve",
     pumpCurve: true,
-    bondingProgressPct: Number(pump.bondingProgressPct) || null
+    bondingProgressPct
   };
 }
 
@@ -16274,6 +16286,10 @@ async function getPumpFunTokenMetadata(tokenMint, options = {}) {
     priceUsd: firstMeaningfulNumber(coin?.priceUsd, coin?.price_usd, coin?.usdPrice, coin?.priceUSD, coin?.price) || null,
     virtualSolReserves: firstMeaningfulNumber(coin?.virtual_sol_reserves, coin?.virtualSolReserves) || null,
     virtualTokenReserves: firstMeaningfulNumber(coin?.virtual_token_reserves, coin?.virtualTokenReserves) || null,
+    realSolReserves: firstMeaningfulNumber(coin?.real_sol_reserves, coin?.realSolReserves) || null,
+    // market_cap is SOL-denominated on the pump.fun API (usd_market_cap is USD);
+    // their ratio recovers SOL/USD with zero extra requests.
+    marketCapSol: firstMeaningfulNumber(coin?.market_cap, coin?.marketCapSol) || null,
     marketCap: firstMeaningfulNumber(coin?.usd_market_cap, coin?.usdMarketCap, coin?.marketCapUsd, coin?.market_cap_usd, coin?.market_cap, coin?.marketCap, coin?.currentMarketCap, coin?.current_market_cap, coin?.fdv, coin?.mcap, coin?.mc) || null,
     usdMarketCap: firstMeaningfulNumber(coin?.usd_market_cap, coin?.usdMarketCap, coin?.marketCapUsd, coin?.market_cap_usd, coin?.market_cap, coin?.marketCap, coin?.currentMarketCap, coin?.current_market_cap, coin?.fdv, coin?.mcap, coin?.mc) || null,
     fdv: firstMeaningfulNumber(coin?.fdv, coin?.fullyDilutedValuation, coin?.marketCap, coin?.marketCapUsd, coin?.usdMarketCap, coin?.usd_market_cap, coin?.market_cap_usd, coin?.market_cap, coin?.mcap, coin?.mc) || null,

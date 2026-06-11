@@ -23298,7 +23298,17 @@ function buildDesktopNavDropBar() {
       }
       return;
     }
-    if (event.target.closest("[data-tab]")) closeMobileNavDrawer();
+    if (event.target.closest("[data-tab]")) {
+      // Picked a destination: drop the menu and the mobile drawer.
+      bar.querySelectorAll(".nav-drop-group.is-open").forEach((item) => item.classList.remove("is-open"));
+      closeMobileNavDrawer();
+    }
+  });
+  // Desktop dropdowns close on any outside click.
+  document.addEventListener("click", (event) => {
+    if (!event.target.closest("[data-nav-drop]") && !isCompactViewport()) {
+      bar.querySelectorAll(".nav-drop-group.is-open").forEach((item) => item.classList.remove("is-open"));
+    }
   });
   // Mobile trigger + backdrop live on body so they survive route re-renders.
   const trigger = document.createElement("button");
@@ -23328,9 +23338,10 @@ function syncDesktopNavActiveState() {
     group.querySelector(".nav-side-group-toggle")?.toggleAttribute("data-active", hasActive);
     if (group.classList.contains("is-open")) anyOpen = true;
   });
-  // Open the active group by default, but never slam shut a group the user just
-  // opened - background renders run every few seconds.
-  if (!anyOpen) {
+  // Drawer face only: open the active group by default so the menu is oriented,
+  // but never slam shut a group the user just opened - background renders run
+  // every few seconds. Desktop dropdowns must NEVER auto-open on render.
+  if (!anyOpen && isCompactViewport()) {
     bar.querySelectorAll(".nav-drop-group").forEach((group) => {
       if (group.querySelector(`[data-tab="${state.activeTab}"]`)) {
         group.classList.add("is-open");
