@@ -10115,6 +10115,9 @@ async function submitLaunchCoin() {
         ? `Launched ${shortAddress(tokenMint)} via the standard path (bundle missed the block lottery)${buyNote ? ` - server fired ${buyNote} right behind the create` : ""}.${signature} Opening chart...`
         : `Launch bundled atomically: ${shortAddress(tokenMint)}${buyNote ? ` (${buyNote} landed in-block)` : ""}.${signature} Opening chart...`;
       writeText(status, state.launchCoinStatus);
+      // The buys just executed server-side - pull wallets/positions NOW instead
+      // of waiting for the slow background cadence.
+      queuePostTradeRefresh(launch.signature || "", "pump-launch-first-buys");
       navigateTo("/terminal/chart", "smartChart");
       render({ force: true });
       return;

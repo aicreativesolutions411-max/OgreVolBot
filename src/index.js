@@ -30801,12 +30801,24 @@ async function submitJitoBundle(base64Txs, timeoutMs) {
   }
 }
 
-// After a fallback (non-atomic) launch the first buys MUST still be instant -
-// the server holds every keypair, so it fires dev buy + bundle wallet buys
-// itself, sequentially, the moment the create lands. No client round-trips.
-async function firePostLaunchBuysServerSide({ mint, devKeypair, devBuySol, bundleWallets, bundleAmountSol, slippagePct, launchAttemptId, userId }) {
-  const outcome = { dev: false, wallets: 0 };
-  const buyOnce = async (keypair, amountSol, label) => {
+// After a fallback (non-atomic) launch the first buys MUST still be instant AND
+// managed: they run through webCreateManagedBuyPlan - the same engine behind the
+// Buy buttons - so the buys execute in PARALLEL and the launch sheet's TP/SL/
+// timer arm in the same call. If the plan path can't run (e.g. automation
+// permission missing) it degrades to raw PumpPortal buys so SOL still deploys.
+async function firePostLaunchBuysServerSide({ mint, body, devWallet, devKeypair, devBuySol, bundleWallets, bundleAmountSol, slippagePct, launchAttemptId, userId }) {
+  const outcome = { dev: false, wallets: 0, planned: false };
+  const exitFields = {
+    tokenMint: mint,
+    takeProfitPct: body.takeProfitPct,
+    stopLossPct: body.stopLossPct,
+    sellDelay: body.sellDelay,
+    sellPercent: body.sellPercent || "100",
+    slippageBps: Math.max(Number(body.slippageBps) || 300, 1_000),
+    loopCount: "1",
+    loopDelay: "0"
+  };
+  const rawBuy = async (keypair, amountSol, label) => {
     const action = {
       publicKey: keypair.publicKey.toBase58(), action: "buy", mint,
       denominatedInSol: "true", amount: amountSol, slippage: slippagePct,
@@ -30816,23 +30828,50 @@ async function firePostLaunchBuysServerSide({ mint, devKeypair, devBuySol, bundl
     const tx = VersionedTransaction.deserialize(bytes);
     tx.sign([keypair]);
     const signature = await sendVersionedTransaction(tx, `post-launch ${label} buy`);
-    logPumpLaunchEvent("pump_launch_fallback_buy", { launchAttemptId, userId, mint, label, amountSol, txSignature: signature });
+    logPumpLaunchEvent("pump_launch_fallback_buy", { launchAttemptId, userId, mint, label, amountSol, txSignature: signature, managed: false });
   };
-  if (devBuySol > 0) {
+  const planBuy = async (wallets, amountSol, label) => {
+    await webCreateManagedBuyPlan(userId, wallets, { ...exitFields, amountSol: String(amountSol) }, {
+      source: "pump_launch_first_buys",
+      label,
+      auditType: "web_pump_launch_first_buys",
+      defaultSellDelay: "off",
+      defaultTakeProfitPct: "40",
+      defaultStopLossPct: "8",
+      defaultSlippageBps: 1_000
+    });
+    logPumpLaunchEvent("pump_launch_fallback_buy", { launchAttemptId, userId, mint, label, amountSol, walletCount: wallets.length, managed: true });
+  };
+  if (devBuySol > 0 && devWallet) {
     try {
-      await buyOnce(devKeypair, devBuySol, "dev");
+      await planBuy([devWallet], devBuySol, "Launch dev buy");
       outcome.dev = true;
+      outcome.planned = true;
     } catch (error) {
-      logPumpLaunchEvent("pump_launch_fallback_buy_failed", { launchAttemptId, userId, mint, label: "dev", errorMessage: String(error.message || "").slice(0, 200) });
+      logPumpLaunchEvent("pump_launch_fallback_plan_failed", { launchAttemptId, userId, mint, label: "dev", errorMessage: String(error.message || "").slice(0, 200) });
+      try {
+        await rawBuy(devKeypair, devBuySol, "dev");
+        outcome.dev = true;
+      } catch (rawError) {
+        logPumpLaunchEvent("pump_launch_fallback_buy_failed", { launchAttemptId, userId, mint, label: "dev", errorMessage: String(rawError.message || "").slice(0, 200) });
+      }
     }
   }
-  for (const wallet of bundleWallets) {
+  if (bundleWallets.length && bundleAmountSol > 0) {
     try {
-      const keypair = decryptWallet(wallet);
-      await buyOnce(keypair, bundleAmountSol, shortMint(wallet.publicKey));
-      outcome.wallets += 1;
+      await planBuy(bundleWallets, bundleAmountSol, "Launch bundle buys");
+      outcome.wallets = bundleWallets.length;
+      outcome.planned = true;
     } catch (error) {
-      logPumpLaunchEvent("pump_launch_fallback_buy_failed", { launchAttemptId, userId, mint, label: shortMint(wallet.publicKey), errorMessage: String(error.message || "").slice(0, 200) });
+      logPumpLaunchEvent("pump_launch_fallback_plan_failed", { launchAttemptId, userId, mint, label: "bundle", errorMessage: String(error.message || "").slice(0, 200) });
+      for (const wallet of bundleWallets) {
+        try {
+          await rawBuy(decryptWallet(wallet), bundleAmountSol, shortMint(wallet.publicKey));
+          outcome.wallets += 1;
+        } catch (rawError) {
+          logPumpLaunchEvent("pump_launch_fallback_buy_failed", { launchAttemptId, userId, mint, label: shortMint(wallet.publicKey), errorMessage: String(rawError.message || "").slice(0, 200) });
+        }
+      }
     }
   }
   return outcome;
@@ -31025,9 +31064,10 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
     let buys = { dev: false, wallets: 0 };
     if (fallbackMint) {
       buys = await firePostLaunchBuysServerSide({
-        mint: fallbackMint, devKeypair, devBuySol, bundleWallets, bundleAmountSol, slippagePct,
+        mint: fallbackMint, body, devWallet: devSelection.wallet, devKeypair, devBuySol,
+        bundleWallets, bundleAmountSol, slippagePct,
         launchAttemptId: basePayload.clientRequestId, userId
-      }).catch(() => ({ dev: false, wallets: 0 }));
+      }).catch(() => ({ dev: false, wallets: 0, planned: false }));
     }
     // bundled:true tells the client the buys are DONE - it must not re-run them.
     return {
@@ -31036,7 +31076,7 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
       bundleFallback: true,
       devBuyIncluded: buys.dev,
       bundledWalletCount: buys.wallets,
-      message: `Atomic bundle missed the block lottery (nothing spent on it) - launched standard instead. Server fired ${buys.dev ? "the dev buy" : "no dev buy"}${buys.wallets ? ` + ${buys.wallets} bundle wallet buy(s)` : ""} right behind the create.`
+      message: `Atomic bundle missed the block lottery (nothing spent on it) - launched standard instead. Server fired ${buys.dev ? "the dev buy" : "no dev buy"}${buys.wallets ? ` + ${buys.wallets} bundle wallet buy(s)` : ""}${buys.planned ? " with your TP/SL/timer armed" : ""} right behind the create.`
     };
   }
 
