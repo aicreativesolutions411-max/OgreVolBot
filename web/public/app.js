@@ -14763,12 +14763,21 @@ async function fastDirectDexLookup(mint) {
   const last = fastDexLookupAt.get(key) || 0;
   if (Date.now() - last < 30_000) return;
   fastDexLookupAt.set(key, Date.now());
-  try {
+  const directLookup = async () => {
     const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${encodeURIComponent(key)}`, { cache: "no-store" });
     const data = await response.json();
     const pairs = (data?.pairs || []).filter((pair) => pair?.chainId === "solana");
     const best = pairs.sort((a, b) => (Number(b?.liquidity?.usd) || 0) - (Number(a?.liquidity?.usd) || 0))[0];
-    if (!best) return;
+    if (!best) throw new Error("no pair");
+    return best;
+  };
+  const serverLookup = async () => {
+    const data = await api(`/api/web/pair-lite?mint=${encodeURIComponent(key)}`, { timeoutMs: 5_000 });
+    if (!data?.pair) throw new Error("no pair");
+    return data.pair;
+  };
+  try {
+    const best = await Promise.any([directLookup(), serverLookup()]);
     rememberSmartChartBootstrap({
       tokenMint: key,
       symbol: best.baseToken?.symbol || "",
@@ -14790,7 +14799,8 @@ async function fastDirectDexLookup(mint) {
     });
     if (state.activeTab === "smartChart") render({ preserveSmartChartFrame: true });
   } catch {
-    // Best-effort: the server bootstrap is still on its way.
+    // Both paths failed: clear the guard so the next render retries immediately.
+    fastDexLookupAt.delete(key);
   }
 }
 
@@ -17490,10 +17500,16 @@ function smartChartMarketBarHtml(token = {}, heldPosition = null) {
   const mint = String(token?.tokenMint || state.smartChartToken || "").trim();
   const mcValue = livePairMarketCap(token);
   const liqValue = livePairLiquidityUsd(token);
-  const mc = firstStatLabel(token.marketCapLabel, token.fdvLabel, mcValue > 0 ? compactUsd(mcValue) : "", "checking");
-  const liq = firstStatLabel(token.liquidityLabel, liqValue > 0 ? compactUsd(liqValue) : "", "checking");
-  const vol1h = firstStatLabel(token.volumeH1Label, token.volumeLabel, compactUsd(token.volumeH1), "checking");
-  const vol24h = firstStatLabel(token.volumeH24Label, compactUsd(token.volumeH24), "checking");
+  // Live numbers FIRST: feed rows ship placeholder labels like "checking", and a
+  // non-empty placeholder used to beat the real number forever.
+  const realLabel = (label) => {
+    const text = String(label ?? "").trim();
+    return /^(checking|loading|pending|tracking|n\/a)\.{0,3}$/i.test(text) ? "" : text;
+  };
+  const mc = firstStatLabel(mcValue > 0 ? compactUsd(mcValue) : "", realLabel(token.marketCapLabel), realLabel(token.fdvLabel), "checking");
+  const liq = firstStatLabel(liqValue > 0 ? compactUsd(liqValue) : "", realLabel(token.liquidityLabel), "checking");
+  const vol1h = firstStatLabel(Number(token.volumeH1) > 0 ? compactUsd(token.volumeH1) : "", realLabel(token.volumeH1Label), realLabel(token.volumeLabel), "checking");
+  const vol24h = firstStatLabel(Number(token.volumeH24) > 0 ? compactUsd(token.volumeH24) : "", realLabel(token.volumeH24Label), "checking");
   const status = heldPosition
     ? "Position held"
     : isUnbondedPumpToken(token)

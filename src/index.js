@@ -1997,6 +1997,44 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    // PUBLIC pair-lite: the fastest possible market read - one cached DexScreener
+    // fetch, no shield, no hydration. The chart bar races this against the browser's
+    // own DexScreener call so pair info always lands within a second.
+    if (request.method === "GET" && pathname === "/api/web/pair-lite") {
+      const liteMint = parsePublicKey(String(requestUrl.searchParams.get("mint") || "")).toBase58();
+      const cached = pairLiteCache.get(liteMint);
+      if (cached && Date.now() - cached.at < 15_000) {
+        sendCachedWebJson(request, response, 200, cached.payload, "public, max-age=10, stale-while-revalidate=30");
+        return;
+      }
+      const litePairs = await fetchDexScreenerTokenPairsFallback(liteMint).catch(() => []);
+      const liteBest = bestDexPairForToken(liteMint, litePairs);
+      const payload = {
+        ok: true,
+        pair: liteBest ? {
+          tokenMint: liteMint,
+          baseToken: { symbol: liteBest.baseToken?.symbol || "", name: liteBest.baseToken?.name || "" },
+          priceUsd: liteBest.priceUsd,
+          marketCap: Number(liteBest.marketCap || liteBest.fdv) || null,
+          fdv: Number(liteBest.fdv) || null,
+          liquidity: { usd: Number(liteBest.liquidity?.usd) || null },
+          volume: { h24: Number(liteBest.volume?.h24) || null, h1: Number(liteBest.volume?.h1) || null },
+          priceChange: { h1: Number(liteBest.priceChange?.h1) ?? null },
+          info: { imageUrl: liteBest.info?.imageUrl || "" },
+          url: liteBest.url || "",
+          pairAddress: liteBest.pairAddress || "",
+          dexId: liteBest.dexId || ""
+        } : null
+      };
+      pairLiteCache.set(liteMint, { at: Date.now(), payload });
+      if (pairLiteCache.size > 300) {
+        const oldestKey = [...pairLiteCache.entries()].sort((a, b) => a[1].at - b[1].at)[0]?.[0];
+        if (oldestKey) pairLiteCache.delete(oldestKey);
+      }
+      sendCachedWebJson(request, response, 200, payload, "public, max-age=10, stale-while-revalidate=30");
+      return;
+    }
+
     // PUBLIC token read: powers the shareable /t?ca= page - shield verdict, market
     // stats, and the call board without a login. "Saw it on X? Verify it on SlimeWire."
     if (request.method === "GET" && pathname === "/api/web/token-read") {
@@ -19158,6 +19196,7 @@ async function readTradePlans() {
 const TG_LOOK_COOLDOWN_MS = 20_000;
 const TG_ALPHA_COOLDOWN_MS = 10 * 60 * 1000;
 const tgCommandCooldowns = new Map();
+const pairLiteCache = new Map();
 
 function telegramGroupsPath() {
   return path.join(CONFIG.dataDir, "telegram-groups.json");
