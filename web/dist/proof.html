@@ -108,8 +108,15 @@
           const wins = (alpha.recentWins || []).map((win) =>
             '<div class="row"><b><a href="' + chartUrl(win.mint) + '">$' + esc(win.symbol) + '</a></b><span class="win">' + esc(win.peakX) + 'x</span><span class="meta">called ' + ago(win.calledAt) + (win.verdict ? ' | shield said ' + esc(win.verdict) : "") + "</span></div>").join("");
           document.querySelector("[data-wins]").innerHTML = wins || '<p class="empty">First wins land here - every call is being tracked right now.</p>';
+          const spark = (timeline) => {
+            if (!Array.isArray(timeline) || timeline.length < 2) return "";
+            const values = timeline.map((point) => Number(point.liqUsd) || 0);
+            const max = Math.max(...values, 1);
+            const pts = values.map((value, index) => ((index / (values.length - 1)) * 80).toFixed(1) + "," + (22 - (value / max) * 18).toFixed(1)).join(" ");
+            return '<svg viewBox="0 0 80 24" style="width:80px;height:24px;vertical-align:middle" preserveAspectRatio="none"><polyline fill="none" stroke="#ff7a6b" stroke-width="2" points="' + pts + '"/></svg>';
+          };
           const rugs = (shield.recentRugs || []).map((item) =>
-            '<div class="row"><b><a href="' + chartUrl(item.mint) + '">$' + esc(item.symbol || item.mint.slice(0, 6)) + '</a></b><span class="rug">rugged</span><span class="meta">flagged ' + esc(item.verdict) + " (score " + esc(item.score) + ")" + (item.warningMinutes ? " - " + esc(item.warningMinutes) + " min of warning" : "") + "</span></div>").join("");
+            '<div class="row"><b><a href="' + chartUrl(item.mint) + '">$' + esc(item.symbol || item.mint.slice(0, 6)) + '</a></b><span class="rug">rugged</span>' + spark(item.timeline) + '<span class="meta">flagged ' + esc(item.verdict) + " (score " + esc(item.score) + ")" + (item.warningMinutes ? " - " + esc(item.warningMinutes) + " min of warning" : "") + "</span></div>").join("");
           document.querySelector("[data-rugs]").innerHTML = rugs || '<p class="empty">No confirmed rugs in the log yet - flags resolve as the market moves.</p>';
           const calls = (alpha.recentCalls || []).map((call) => {
             const status = call.status === "watching"
@@ -124,7 +131,7 @@
             '<div class="row"><b>' + (index + 1) + ". " + esc(group.title) + '</b><span class="win">' + esc(group.wins) + " wins</span></div>").join("");
           document.querySelector("[data-league]").innerHTML = league || '<p class="empty">Groups earn spots here when their drops hit 2x. Add the bot, run /slimewire on, climb.</p>';
           const callers = (data.topCallers || []).map((caller, index) =>
-            '<div class="row"><b>' + (index + 1) + ". " + esc(caller.handle) + '</b><span class="win">' + esc(caller.wins) + " wins</span><span class=\"meta\">" + (caller.hitRatePct != null ? esc(caller.hitRatePct) + "% hit rate | " : "") + esc(caller.calls) + " calls</span></div>").join("");
+            '<div class="row"><b>' + (index + 1) + ". " + esc(caller.handle) + '</b><span class="win">' + esc(caller.wins) + " wins</span>" + (Number(caller.streak) >= 2 ? '<span class="win">🔥 ' + esc(caller.streak) + ' streak</span>' : "") + "<span class=\"meta\">" + (caller.hitRatePct != null ? esc(caller.hitRatePct) + "% hit rate | " : "") + esc(caller.calls) + " calls</span></div>").join("");
           document.querySelector("[data-callers]").innerHTML = callers || '<p class="empty">Post calls on any token board - winners get ranked here forever.</p>';
           const threadButton = document.querySelector("[data-x-thread]");
           if (threadButton) {

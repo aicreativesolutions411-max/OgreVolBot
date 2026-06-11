@@ -16,16 +16,34 @@ function functionBody(source, name) {
 }
 
 test("new data stores are whitelisted so first-run reads self-create instead of throwing", () => {
-  for (const file of ["telegram-groups.json", "shield-receipts.json", "push-subscriptions.json", "alpha-calls.json", "call-board.json", "telegram-links.json", "watch-alerts.json"]) {
+  for (const file of ["telegram-groups.json", "shield-receipts.json", "push-subscriptions.json", "alpha-calls.json", "call-board.json", "telegram-links.json", "watch-alerts.json", "watch-devs.json", "launch-hype.json", "launch-milestones.json"]) {
     assert.match(serverSource, new RegExp(`case "${file}":`), `${file} missing from defaultJsonForPath`);
   }
 });
 
 test("every new store mutation goes through the per-file lock", () => {
   assert.match(serverSource, /function withFileLock\(/);
-  for (const fn of ["webPostBoardCall", "checkBoardCallOutcomes", "checkAlphaCallOutcomes", "checkShieldReceiptOutcomes", "checkWatchlistMoveAlerts"]) {
+  for (const fn of ["webPostBoardCall", "checkBoardCallOutcomes", "checkAlphaCallOutcomes", "checkShieldReceiptOutcomes", "checkWatchlistMoveAlerts", "checkWatchedDevs", "fulfillLaunchHype", "subscribeHypePage"]) {
     assert.match(functionBody(serverSource, fn.replace(/^async /, "")), /withFileLock\(/, `${fn} not locked`);
   }
+});
+
+test("guard-what-you-own tier: bag scan, dev watch, hype pages, autopsy timelines", () => {
+  // scan-bags: authed endpoint, worst-first ordering
+  assert.match(serverSource, /\/api\/web\/shield\/scan-bags/);
+  // dev watch: seeded knownMints so the first tick never replays history
+  const devWatch = serverSource.slice(serverSource.indexOf('pathname === "/api/web/dev-watch"'));
+  assert.match(devWatch.slice(0, 1600), /knownMints = launches\.map/);
+  // hype: TG deep link subscribes, launch completion fulfills
+  assert.match(serverSource, /start hype_<id>|hype_\(\[a-z0-9\]\{6,16\}\)/);
+  assert.match(serverSource, /fulfillLaunchHype\(userId, launchResult\.tokenMint/);
+  // autopsy: token-read ships the collapse timeline
+  assert.match(serverSource, /autopsy: await/);
+  // client wiring exists
+  assert.match(appSource, /function bagScanSectionHtml/);
+  assert.match(appSource, /function toggleDevWatch/);
+  assert.match(appSource, /function createHypePage/);
+  assert.match(appSource, /function loadOgreMemory/);
 });
 
 test("telegram replies never interpolate unescaped user text into HTML mode", () => {

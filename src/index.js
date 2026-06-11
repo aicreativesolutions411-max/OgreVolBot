@@ -1283,7 +1283,7 @@ function startHealthServer() {
       return;
     }
 
-    if (request.method === "GET" && /^[/](call|u|g)([/]|$)/.test(requestUrl.pathname)) {
+    if (request.method === "GET" && /^[/](call|u|g|hype)([/]|$)/.test(requestUrl.pathname)) {
       await serveProofSharePage(requestUrl, request, response);
       return;
     }
@@ -2075,6 +2075,27 @@ async function handleWebApiRequest(request, response, requestUrl) {
           }
         })(),
         rugcheck,
+        // Black-box autopsy: if SlimeShield ever flagged this mint, ship the collapse
+        // curve so /t can show "flagged here, liquidity gone N minutes later".
+        autopsy: await (async () => {
+          try {
+            const receiptsStore = await readShieldReceipts();
+            const receipt = [...(receiptsStore.receipts || [])].reverse()
+              .find((item) => item.mint === readMint && (item.timeline || []).length >= 2);
+            if (!receipt) return null;
+            return {
+              flaggedAt: receipt.flaggedAt,
+              verdict: receipt.verdict,
+              score: receipt.score ?? null,
+              outcome: receipt.outcome || receipt.status,
+              warningMinutes: receipt.confirmedAfterMinutes || null,
+              flagLiqUsd: Number(receipt.liquidityUsd) || null,
+              timeline: (receipt.timeline || []).slice(-48).map((point) => ({ at: point.at, liqUsd: point.liqUsd }))
+            };
+          } catch {
+            return null;
+          }
+        })(),
         shield: shield ? {
           verdict: shield.verdict,
           score: shield.score,
@@ -2150,10 +2171,16 @@ async function handleWebApiRequest(request, response, requestUrl) {
           flagged: receipts.receipts.length,
           rugsCalled: ruggedReceipts.length,
           hitRatePct: resolvedReceipts.length ? Math.round((ruggedReceipts.length / resolvedReceipts.length) * 100) : null,
-          recentRugs: ruggedReceipts.slice(-10).reverse().map((item) => ({
-            symbol: item.symbol, mint: item.mint, verdict: item.verdict, score: item.score,
-            warningMinutes: item.confirmedAfterMinutes || null, flaggedAt: item.flaggedAt
-          }))
+          recentRugs: ruggedReceipts.slice(-10).reverse().map((item) => {
+            const timeline = item.timeline || [];
+            const step = timeline.length > 24 ? Math.ceil(timeline.length / 24) : 1;
+            return {
+              symbol: item.symbol, mint: item.mint, verdict: item.verdict, score: item.score,
+              warningMinutes: item.confirmedAfterMinutes || null, flaggedAt: item.flaggedAt,
+              timeline: timeline.filter((_, index) => index % step === 0 || index === timeline.length - 1)
+                .map((point) => ({ at: point.at, liqUsd: point.liqUsd }))
+            };
+          })
         },
         groupLeague,
         topCallers: board.topCallers || [],
@@ -2541,6 +2568,163 @@ async function handleWebApiRequest(request, response, requestUrl) {
           hitRatePct: resolved.length ? Math.round((rugged.length / resolved.length) * 100) : null
         }
       });
+      return;
+    }
+
+    // Pre-launch hype page: schedule a launch, get a shareable countdown page that
+    // collects Telegram notify subscribers and forwards to /t when the launch lands.
+    if (request.method === "POST" && pathname === "/api/web/hype") {
+      const body = await readJsonRequestBody(request);
+      const name = String(body.name || "").trim().slice(0, 40);
+      const symbol = String(body.symbol || "").trim().replace(/^\$+/, "").replace(/[^A-Za-z0-9]/g, "").slice(0, 12);
+      const blurb = String(body.blurb || "").trim().slice(0, 200);
+      const launchAtMs = Date.parse(String(body.launchAt || ""));
+      if (!name || !symbol) {
+        sendWebJson(request, response, 400, { ok: false, error: "Name and ticker are required." });
+        return;
+      }
+      if (!Number.isFinite(launchAtMs) || launchAtMs < Date.now() - 60_000 || launchAtMs > Date.now() + 14 * 24 * 60 * 60 * 1000) {
+        sendWebJson(request, response, 400, { ok: false, error: "Launch time must be within the next 14 days." });
+        return;
+      }
+      let created = null;
+      let limitHit = false;
+      await withFileLock(launchHypePath(), async () => {
+        const store = await readLaunchHype();
+        const mine = Object.values(store.pages).filter((page) => page.userId === String(auth.userId) && !page.mint);
+        if (mine.length >= 3) {
+          limitHit = true;
+          return;
+        }
+        const id = crypto.randomBytes(5).toString("hex");
+        created = {
+          id,
+          userId: String(auth.userId),
+          name,
+          symbol,
+          blurb,
+          launchAt: new Date(launchAtMs).toISOString(),
+          createdAt: new Date().toISOString(),
+          mint: "",
+          subscriberTgIds: []
+        };
+        store.pages[id] = created;
+        const keys = Object.keys(store.pages);
+        if (keys.length > 300) {
+          for (const key of keys.slice(0, keys.length - 300)) delete store.pages[key];
+        }
+        await writeJsonFile(launchHypePath(), store);
+      });
+      if (limitHit) {
+        sendWebJson(request, response, 400, { ok: false, error: "You already have 3 scheduled launches - launch one before scheduling more." });
+        return;
+      }
+      sendWebJson(request, response, 200, { ok: true, id: created.id, url: `${SHARE_PAGE_ORIGIN}/hype/${created.id}` });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/hype") {
+      const store = await readLaunchHype().catch(() => ({ pages: {} }));
+      const mine = Object.values(store.pages)
+        .filter((page) => page.userId === String(auth.userId))
+        .sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0))
+        .slice(0, 10)
+        .map((page) => ({
+          id: page.id, name: page.name, symbol: page.symbol, launchAt: page.launchAt,
+          mint: page.mint || "", subscribers: (page.subscriberTgIds || []).length,
+          url: `${SHARE_PAGE_ORIGIN}/hype/${page.id}`
+        }));
+      sendWebJson(request, response, 200, { ok: true, pages: mine });
+      return;
+    }
+
+    // Watch-this-dev: toggle tracking a deployer wallet for this user.
+    if (request.method === "POST" && pathname === "/api/web/dev-watch") {
+      const body = await readJsonRequestBody(request);
+      const wallet = parsePublicKey(String(body.wallet || "")).toBase58();
+      const enable = body.watch !== false;
+      let watching = false;
+      await withFileLock(watchDevsPath(), async () => {
+        const store = await readWatchDevs();
+        const watcher = store.watchers[wallet] || { addedAt: new Date().toISOString(), byUser: {}, knownMints: [] };
+        if (enable) {
+          watcher.byUser[auth.userId] = { addedAt: new Date().toISOString() };
+          if (!watcher.knownMints.length) {
+            // Seed with current history so the first tick doesn't replay old launches.
+            const launches = await getPumpFunCreatorLaunches(wallet).catch(() => []);
+            watcher.knownMints = launches.map((launch) => launch.mint).filter(Boolean).slice(0, 50);
+          }
+          store.watchers[wallet] = watcher;
+          watching = true;
+        } else {
+          delete watcher.byUser[auth.userId];
+          if (Object.keys(watcher.byUser).length) store.watchers[wallet] = watcher;
+          else delete store.watchers[wallet];
+        }
+        const keys = Object.keys(store.watchers);
+        if (keys.length > 200) {
+          for (const key of keys.slice(0, keys.length - 200)) delete store.watchers[key];
+        }
+        await writeJsonFile(watchDevsPath(), store);
+      });
+      sendWebJson(request, response, 200, { ok: true, wallet, watching });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/dev-watch") {
+      const wallet = parsePublicKey(String(requestUrl.searchParams.get("wallet") || "")).toBase58();
+      const store = await readWatchDevs().catch(() => ({ watchers: {} }));
+      sendWebJson(request, response, 200, {
+        ok: true,
+        wallet,
+        watching: Boolean(store.watchers[wallet]?.byUser?.[auth.userId])
+      });
+      return;
+    }
+
+    // "Scan my bags": run the safety engine over everything the user currently
+    // holds - shield verdict + live liquidity/price health per bag, worst first.
+    if (request.method === "GET" && pathname === "/api/web/shield/scan-bags") {
+      const summary = await webPositionSummary(auth.userId, { fast: true }).catch(() => null);
+      const mints = new Set();
+      for (const position of summary?.positions || []) {
+        if (position.tokenMint) mints.add(position.tokenMint);
+      }
+      for (const token of summary?.connectedWallet?.tokens || []) {
+        const mint = token?.mint || token?.tokenMint;
+        if (mint) mints.add(String(mint));
+      }
+      const targets = [...mints].slice(0, 10);
+      const bags = await Promise.all(targets.map(async (mint) => {
+        const [shield, pairs] = await Promise.all([
+          webSlimeShield(mint).catch(() => null),
+          fetchDexScreenerTokenPairsFallback(mint).catch(() => [])
+        ]);
+        const best = bestDexPairForToken(mint, pairs.filter((pair) => pairMatchesToken(pair, mint)));
+        const liquidityUsd = best ? Number(best.liquidity?.usd) || 0 : null;
+        const changeH24 = Number(best?.priceChange?.h24);
+        const verdict = String(shield?.verdict || "UNRATED").toUpperCase();
+        const flags = [];
+        if (verdict === "AVOID") flags.push("SlimeShield says AVOID");
+        else if (verdict === "RISK") flags.push("SlimeShield says RISK");
+        if (!best) flags.push("no live trading pair found");
+        else if (liquidityUsd < 3_000) flags.push("liquidity is thin");
+        if (Number.isFinite(changeH24) && changeH24 <= -50) flags.push(`down ${Math.abs(changeH24).toFixed(0)}% in 24h`);
+        return {
+          mint,
+          symbol: best?.baseToken?.symbol || shortMint(mint),
+          verdict,
+          score: shield?.score ?? null,
+          liquidityUsd,
+          marketCapUsd: Number(best?.marketCap || best?.fdv) || null,
+          changeH24: Number.isFinite(changeH24) ? changeH24 : null,
+          flags,
+          healthy: flags.length === 0
+        };
+      }));
+      const severity = (bag) => (bag.verdict === "AVOID" ? 0 : bag.verdict === "RISK" ? 1 : bag.flags.length ? 2 : 3);
+      bags.sort((a, b) => severity(a) - severity(b) || b.flags.length - a.flags.length);
+      sendWebJson(request, response, 200, { ok: true, scanned: bags.length, bags });
       return;
     }
 
@@ -6599,6 +6783,21 @@ async function handleMessage(message, userId) {
   if (deepLinkBuy && isPrivateChat(message.chat)) {
     clearSession(chatId);
     await startKolSignalAction(chatId, userId, "kol_trade", deepLinkBuy[1]);
+    return;
+  }
+
+  // Deep link from a hype page: /start hype_<id> subscribes this Telegram user to
+  // a one-time "it's live" DM when that scheduled launch lands.
+  const deepLinkHype = /^\/start(?:@\w+)?\s+hype_([a-z0-9]{6,16})$/i.exec(text);
+  if (deepLinkHype && isPrivateChat(message.chat)) {
+    const page = await subscribeHypePage(deepLinkHype[1], userId).catch(() => null);
+    if (page?.mint) {
+      await sayHtml(chatId, `🚀 <b>$${escapeTelegramHtml(page.symbol || "???")} already launched!</b>\n<a href="https://www.slimewire.org/t?ca=${page.mint}">Chart + shield read + one-tap trade</a>`);
+    } else if (page) {
+      await sayHtml(chatId, `🔔 You're on the list for <b>$${escapeTelegramHtml(page.symbol || "???")}</b>. The second it launches you get the link here - chart, shield read, and one-tap trade on <a href="https://www.slimewire.org">SlimeWire</a>.`);
+    } else {
+      await say(chatId, "That launch page no longer exists - it may have been removed.");
+    }
     return;
   }
 
@@ -19208,6 +19407,10 @@ function defaultJsonForPath(filePath) {
       return { links: {} };
     case "watch-alerts.json":
       return { snapshots: {} };
+    case "watch-devs.json":
+      return { watchers: {} };
+    case "launch-hype.json":
+      return { pages: {} };
     case "launch-milestones.json":
       return { tracked: {} };
     case "shield-receipts.json":
@@ -19933,9 +20136,16 @@ async function readCallBoard() {
 function callerReputation(calls, handle) {
   const resolved = calls.filter((call) => call.handle === handle && call.status === "resolved" && call.side === "bullish");
   const wins = resolved.filter((call) => call.outcome === "won").length;
+  // Streak: consecutive wins counting back from the most recent resolved call.
+  let streak = 0;
+  for (const call of [...resolved].reverse()) {
+    if (call.outcome !== "won") break;
+    streak += 1;
+  }
   return {
     calls: calls.filter((call) => call.handle === handle).length,
     wins,
+    streak,
     hitRatePct: resolved.length ? Math.round((wins / resolved.length) * 100) : null
   };
 }
@@ -20300,6 +20510,57 @@ async function checkWatchlistMoveAlerts() {
   });
 }
 
+// --- Pre-launch hype pages: a creator schedules a launch and gets a shareable
+// countdown page; degens tap "notify me" (TG deep link, no login needed); when the
+// creator's Pump Launch completes, every subscriber gets the launch-room link.
+function launchHypePath() {
+  return path.join(CONFIG.dataDir, "launch-hype.json");
+}
+
+async function readLaunchHype() {
+  const store = await readJson(launchHypePath());
+  if (!store.pages || typeof store.pages !== "object") store.pages = {};
+  return store;
+}
+
+async function subscribeHypePage(hypeId, tgUserId) {
+  let page = null;
+  await withFileLock(launchHypePath(), async () => {
+    const store = await readLaunchHype();
+    page = store.pages[hypeId] || null;
+    if (!page) return;
+    const subs = new Set(page.subscriberTgIds || []);
+    subs.add(String(tgUserId));
+    page.subscriberTgIds = [...subs].slice(0, 500);
+    await writeJsonFile(launchHypePath(), store);
+  });
+  return page;
+}
+
+// Called when a Pump Launch completes: the creator's oldest unlaunched hype page is
+// marked live and every TG subscriber gets the launch-room link.
+async function fulfillLaunchHype(userId, mint, symbol) {
+  let page = null;
+  await withFileLock(launchHypePath(), async () => {
+    const store = await readLaunchHype();
+    page = Object.values(store.pages)
+      .filter((item) => item.userId === String(userId) && !item.mint)
+      .sort((a, b) => Date.parse(a.launchAt || 0) - Date.parse(b.launchAt || 0))[0] || null;
+    if (!page) return;
+    page.mint = mint;
+    page.launchedAt = new Date().toISOString();
+    await writeJsonFile(launchHypePath(), store);
+  });
+  if (!page) return;
+  const text = [
+    `🚀 <b>$${escapeTelegramHtml(symbol || page.symbol || "???")} is LIVE</b> - the launch you were waiting on just happened via <a href="https://www.slimewire.org">SlimeWire</a>.`,
+    `<a href="https://www.slimewire.org/t?ca=${mint}">Chart + shield read + one-tap trade</a> | <a href="https://pump.fun/coin/${mint}">pump.fun</a>`
+  ].join("\n");
+  for (const tgUserId of page.subscriberTgIds || []) {
+    sayHtml(tgUserId, text).catch(() => {});
+  }
+}
+
 // --- Public share pages on go.slimewire.org: /call/:id, /u/:handle, /g ------------
 // Server-rendered with per-page OG tags (og:image = the live signal card), so every
 // link unfurls on X/TG with the actual coin and verdict instead of a generic mark.
@@ -20353,6 +20614,49 @@ async function serveProofSharePage(requestUrl, request, response) {
   const kind = parts[0];
   const param = decodeURIComponent(parts[1] || "");
 
+  if (kind === "hype" && param) {
+    const store = await readLaunchHype().catch(() => ({ pages: {} }));
+    const page = store.pages[param];
+    if (!page) {
+      sendShareHtml(response, sharePageShell({ title: "Launch not found - SlimeWire", description: "This launch page does not exist.", body: "<h1>Launch page not found</h1><p class='sub'>It may have been removed.</p><a class='cta' href='https://www.slimewire.org'>Open SlimeWire</a>" }));
+      return;
+    }
+    if (page.mint) {
+      // Already launched: this page's job is done - forward straight to the live room.
+      response.writeHead(302, { Location: `https://www.slimewire.org/t?ca=${encodeURIComponent(page.mint)}` });
+      response.end();
+      return;
+    }
+    const notifyUrl = CONFIG.telegramBotUsername ? `https://t.me/${CONFIG.telegramBotUsername}?start=hype_${encodeURIComponent(page.id)}` : "https://www.slimewire.org";
+    const subCount = (page.subscriberTgIds || []).length;
+    sendShareHtml(response, sharePageShell({
+      title: `$${page.symbol} launches soon - get notified on SlimeWire`,
+      description: `${page.name} ($${page.symbol}) is launching on pump.fun via SlimeWire. Tap notify and be there at block one.${page.blurb ? ` "${page.blurb}"` : ""}`,
+      body: `<h1><b>$${esc(page.symbol)}</b> is coming</h1>
+<p class="sub">${esc(page.name)}${page.blurb ? ` - "${esc(page.blurb)}"` : ""}</p>
+<div class="card"><div class="big" data-countdown>soon</div>
+<p class="meta">Scheduled for ${esc(sharePageDate(page.launchAt))}. The moment it goes live this page forwards to the chart + shield read.${subCount >= 5 ? ` ${subCount} degens already waiting.` : ""}</p></div>
+<a class="cta" href="${esc(notifyUrl)}">🔔 Notify me on Telegram</a>
+<a class="cta ghost" href="https://www.slimewire.org">Open the terminal</a>
+<script>
+(function () {
+  var target = ${JSON.stringify(page.launchAt || "")};
+  var el = document.querySelector("[data-countdown]");
+  function tick() {
+    var ms = Date.parse(target) - Date.now();
+    if (!isFinite(ms)) { el.textContent = "soon"; return; }
+    if (ms <= 0) { el.textContent = "any second now"; setTimeout(function () { location.reload(); }, 30000); return; }
+    var d = Math.floor(ms / 86400000), h = Math.floor(ms / 3600000) % 24, m = Math.floor(ms / 60000) % 60, s = Math.floor(ms / 1000) % 60;
+    el.textContent = (d ? d + "d " : "") + h + "h " + m + "m " + s + "s";
+    setTimeout(tick, 1000);
+  }
+  tick();
+})();
+</script>`
+    }));
+    return;
+  }
+
   if (kind === "call" && param) {
     const [alpha, board] = await Promise.all([readAlphaCalls().catch(() => ({ calls: [] })), readCallBoard().catch(() => ({ calls: [] }))]);
     const call = [...alpha.calls, ...board.calls].find((item) => item.id === param)
@@ -20398,7 +20702,7 @@ ${call.resolvedAt ? `<div class="row"><span class="meta">Resolved</span><b>${esc
       ogImage: theirCalls[0] ? `${SHARE_PAGE_ORIGIN}/api/web/signal-card?tokenMint=${encodeURIComponent(theirCalls[0].mint)}` : "",
       body: `<h1>Caller: <b>${esc(param)}</b></h1>
 <p class="sub">${rep.calls} call(s) tracked - every outcome public.</p>
-<div class="big">${rep.wins}W${rep.hitRatePct != null ? ` · ${rep.hitRatePct}%` : ""}</div>
+<div class="big">${rep.wins}W${rep.hitRatePct != null ? ` · ${rep.hitRatePct}%` : ""}${rep.streak >= 2 ? ` · 🔥${rep.streak}` : ""}</div>
 ${theirCalls.length ? theirCalls.map((call) => `<div class="row"><b>$${esc(call.symbol)}</b>${call.status === "resolved" ? (call.outcome === "won" ? `<span class="win">hit ${esc(String(call.peakX))}x</span>` : `<span class="lose">${esc(call.outcome)}</span>`) : `<span class="meta">tracking</span>`}<span class="meta">${esc(call.side)}${call.entryMcUsd ? " | entry " + esc(formatUsdCompact(call.entryMcUsd)) : ""}</span></div>`).join("") : `<p class="sub">No calls yet.</p>`}
 <a class="cta" href="https://www.slimewire.org">Make your own calls</a>`
     }));
@@ -20709,6 +21013,7 @@ if (CONFIG.serviceRole === "web") {
     checkLaunchMilestones().catch((error) => console.warn(`[launch-milestones] failed: ${error.message}`));
     if (Date.now() % (10 * 60 * 1000) < 5 * 60 * 1000) {
       checkWatchlistMoveAlerts().catch((error) => console.warn(`[watch-alerts] failed: ${error.message}`));
+      checkWatchedDevs().catch((error) => console.warn(`[dev-watch] failed: ${error.message}`));
     }
   }, 5 * 60 * 1000);
   shieldReceiptTimer.unref?.();
@@ -20749,6 +21054,62 @@ async function removePushSubscription(userId, endpoint) {
 }
 
 // Fire-and-forget per-user push. Dead subscriptions (410/404) are pruned in place.
+// --- Watch-this-dev: users track a deployer wallet; when it launches again on
+// pump.fun they get a web push + Telegram DM (if linked) with the shield-read link.
+function watchDevsPath() {
+  return path.join(CONFIG.dataDir, "watch-devs.json");
+}
+
+async function readWatchDevs() {
+  const store = await readJson(watchDevsPath());
+  if (!store.watchers || typeof store.watchers !== "object") store.watchers = {};
+  return store;
+}
+
+async function checkWatchedDevs() {
+  const peek = await readWatchDevs().catch(() => null);
+  const wallets = Object.keys(peek?.watchers || {}).slice(0, 25);
+  if (!wallets.length) return;
+  const links = await readTelegramLinks().catch(() => ({ links: {} }));
+  await withFileLock(watchDevsPath(), async () => {
+    const store = await readWatchDevs();
+    let changed = false;
+    for (const wallet of wallets) {
+      const watcher = store.watchers[wallet];
+      if (!watcher || !Object.keys(watcher.byUser || {}).length) continue;
+      const launches = await getPumpFunCreatorLaunches(wallet).catch(() => []);
+      if (!launches.length) continue;
+      const known = new Set(watcher.knownMints || []);
+      const newLaunches = launches.filter((launch) => launch.mint && !known.has(launch.mint));
+      watcher.lastCheckedAt = new Date().toISOString();
+      changed = true;
+      if (!newLaunches.length) continue;
+      watcher.knownMints = [...known, ...newLaunches.map((launch) => launch.mint)].slice(-50);
+      const shortWallet = `${wallet.slice(0, 4)}..${wallet.slice(-4)}`;
+      for (const launch of newLaunches.slice(0, 3)) {
+        const symbol = launch.symbol || "???";
+        for (const userId of Object.keys(watcher.byUser)) {
+          sendWebPushToUser(userId, {
+            title: `👀 Watched dev launched $${symbol}`,
+            body: `Deployer ${shortWallet} just launched again. Get the shield read before you ape.`,
+            tag: `dev-watch-${wallet}`,
+            url: `/t?ca=${launch.mint}`
+          }).catch(() => {});
+          const tgUserId = links.links?.[userId];
+          if (tgUserId) {
+            sayHtml(tgUserId, [
+              `👀 <b>A dev you watch just launched</b> $${escapeTelegramHtml(symbol)}`,
+              `Deployer <code>${escapeTelegramHtml(shortWallet)}</code> is at it again.`,
+              `<a href="https://www.slimewire.org/t?ca=${launch.mint}">Shield read + chart on SlimeWire</a>`
+            ].join("\n")).catch(() => {});
+          }
+        }
+      }
+    }
+    if (changed) await writeJsonFile(watchDevsPath(), store);
+  });
+}
+
 async function sendWebPushToUser(userId, payload = {}) {
   if (!webPushEnabled || !userId) return;
   try {
@@ -30489,6 +30850,7 @@ async function webLaunchPumpPortalLocal(userId, body, basePayload) {
     ].join("\n");
     tgChannel.announce("launch", launchResult.tokenMint, launchText);
     broadcastToTelegramGroups("launch", launchResult.tokenMint, launchText);
+    fulfillLaunchHype(userId, launchResult.tokenMint, basePayload.symbol).catch((error) => console.warn(`[hype] fulfill failed: ${error.message}`));
   }
   return launchResult;
 }

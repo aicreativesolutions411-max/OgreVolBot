@@ -6092,6 +6092,42 @@ function tekHubHtml() {
 
 // Live Ogre Brief: a glanceable "what is happening right now" strip built entirely
 // from state the client already has - zero extra requests.
+// --- Ogre Memory: tiny per-device prefs the agent carries between visits -------
+// quick-buy size, risk appetite, last tokens looked at. localStorage only - never
+// sent anywhere; it just makes the host greeting and replies feel like a regular.
+const OGRE_MEMORY_KEY = "slimewire-ogre-memory";
+
+function loadOgreMemory() {
+  try {
+    return JSON.parse(localStorage.getItem(OGRE_MEMORY_KEY) || "{}") || {};
+  } catch {
+    return {};
+  }
+}
+
+function saveOgreMemory(patch = {}) {
+  const memory = { ...loadOgreMemory(), ...patch };
+  try {
+    localStorage.setItem(OGRE_MEMORY_KEY, JSON.stringify(memory));
+  } catch {
+    // storage full/blocked - memory is a nicety, never an error
+  }
+  return memory;
+}
+
+function ogreMemoryNoteToken(mint, symbol = "") {
+  if (!mint) return;
+  const memory = loadOgreMemory();
+  const recent = (memory.recentTokens || []).filter((item) => item.mint !== mint);
+  recent.unshift({ mint, symbol: String(symbol || "").slice(0, 14), at: Date.now() });
+  saveOgreMemory({ recentTokens: recent.slice(0, 5) });
+}
+
+(function applyOgreMemoryOnBoot() {
+  const memory = loadOgreMemory();
+  if (memory.quickBuy && !state.quickBuyAmountOverride) state.quickBuyAmountOverride = memory.quickBuy;
+})();
+
 function ogreBriefItems() {
   const liveRows = allRawSignalRows();
   const freshLowMc = liveRows.filter((row) => {
@@ -6121,11 +6157,18 @@ function maybeOgreAgentHostGreeting() {
   if (ogreAgentHostGreeted || ogreAgentMessages().length) return;
   ogreAgentHostGreeted = true;
   const items = ogreBriefItems();
+  const memory = loadOgreMemory();
+  const memoryBits = [
+    memory.quickBuy ? `your quick buy is still ${memory.quickBuy} SOL` : "",
+    memory.risk === "degen" ? "serving the early risky ones first, like you asked" : memory.risk === "careful" ? "keeping it shield-clean first, like you asked" : "",
+    memory.recentTokens?.[0]?.symbol ? `last visit you were on $${memory.recentTokens[0].symbol}` : ""
+  ].filter(Boolean);
+  const memoryLine = memoryBits.length ? ` I remember: ${memoryBits.join(", ")}.` : "";
   pushOgreAgentMessage({
     role: "assistant",
     text: items.length
-      ? `Welcome back. Right now: ${items.join(". ")}. Ask me anything or say "open positions".`
-      : `Welcome to SlimeWire. I can navigate anywhere, check any CA, set your quick buy, and run trades from chat. Try "whats cooking" or paste a token address.`,
+      ? `Welcome back. Right now: ${items.join(". ")}.${memoryLine} Ask me anything or say "open positions".`
+      : `Welcome to SlimeWire. I can navigate anywhere, check any CA, set your quick buy, and run trades from chat.${memoryLine} Try "whats cooking" or paste a token address.`,
     actions: [
       { label: "Live Terminal", type: "open_tab", tab: "terminal" },
       { label: "Positions", type: "open_tab", tab: "positions" }
@@ -9322,6 +9365,92 @@ function launchShareKitHtml() {
   `;
 }
 
+// Pre-launch hype page: schedule the launch -> shareable countdown page on
+// go.slimewire.org/hype/<id> that collects Telegram notify subs and forwards to
+// the live room the moment the Pump Launch completes.
+function hypePanelHtml(draft = {}) {
+  maybeLoadHypePages();
+  const pages = state.hypePages || [];
+  const minLocal = new Date(Date.now() + 10 * 60 * 1000).toISOString().slice(0, 16);
+  return `
+    <div class="volume-grid">
+      <p class="muted full-span">Build the audience BEFORE you mint: schedule the launch, share the countdown page everywhere, and every "notify me" gets the chart link the second your Pump Launch completes.</p>
+      <label>
+        Token Name
+        <input data-hype-name type="text" placeholder="Defaults to Coin Details name" value="${escapeHtml(draft.name || "")}">
+      </label>
+      <label>
+        Ticker
+        <input data-hype-symbol type="text" placeholder="Defaults to Coin Details ticker" value="${escapeHtml(draft.symbol || "")}">
+      </label>
+      <label>
+        Launch Time
+        <input data-hype-launch-at type="datetime-local" min="${minLocal}">
+      </label>
+      <label class="full-span">
+        One-liner (optional)
+        <textarea data-hype-blurb rows="2" maxlength="200" placeholder="Why should degens set an alarm for this?"></textarea>
+      </label>
+      <div class="card-actions compact full-span">
+        <button class="primary" type="button" data-hype-create>Create Hype Page</button>
+      </div>
+      <p class="trade-status full-span" data-hype-status>${escapeHtml(state.hypeStatus || "")}</p>
+      ${pages.length ? `
+        <div class="full-span">
+          ${pages.map((page) => `
+            <div class="row-card">
+              <div class="row-main">
+                <strong>$${escapeHtml(page.symbol)} ${page.mint ? "🚀 launched" : "⏳ counting down"}</strong>
+                <small>${escapeHtml(page.subscribers || 0)} waiting | ${escapeHtml(page.url)}</small>
+              </div>
+              <div class="card-actions compact">
+                <button data-copy="${escapeHtml(page.url)}">Copy Link</button>
+                <a class="button-like" href="${escapeHtml(page.url)}" target="_blank" rel="noreferrer">Open</a>
+              </div>
+            </div>`).join("")}
+        </div>` : ""}
+    </div>`;
+}
+
+let hypePagesLoadedFor = "";
+function maybeLoadHypePages() {
+  if (!state.user || hypePagesLoadedFor === state.user.id) return;
+  hypePagesLoadedFor = state.user.id;
+  void (async () => {
+    try {
+      const result = await api("/api/web/hype", { timeoutMs: 12_000 });
+      state.hypePages = result.pages || [];
+      if (state.hypePages.length) render();
+    } catch {
+      hypePagesLoadedFor = "";
+    }
+  })();
+}
+
+async function createHypePage() {
+  const status = $("[data-hype-status]");
+  const name = String($("[data-hype-name]")?.value || $("[data-launch-coin-name]")?.value || "").trim();
+  const symbol = String($("[data-hype-symbol]")?.value || $("[data-launch-coin-symbol]")?.value || "").trim();
+  const launchAtLocal = String($("[data-hype-launch-at]")?.value || "").trim();
+  const blurb = String($("[data-hype-blurb]")?.value || "").trim();
+  if (!name || !symbol) { writeText(status, "Fill in the token name and ticker first (here or in Coin Details)."); return; }
+  if (!launchAtLocal) { writeText(status, "Pick the launch time."); return; }
+  writeText(status, "Creating hype page...");
+  try {
+    const result = await api("/api/web/hype", {
+      method: "POST",
+      body: JSON.stringify({ name, symbol, blurb, launchAt: new Date(launchAtLocal).toISOString() }),
+      timeoutMs: 15_000
+    });
+    state.hypeStatus = `Hype page live: ${result.url} - share it everywhere, it forwards to your chart at launch.`;
+    hypePagesLoadedFor = "";
+    maybeLoadHypePages();
+    render();
+  } catch (error) {
+    writeText(status, publicErrorMessage(error?.message || "Could not create the hype page."));
+  }
+}
+
 function launchCoinHtml() {
   const draft = state.launchCoinDraft || {};
   const sections = [
@@ -9511,6 +9640,10 @@ function launchCoinHtml() {
             </label>
             ${walletGroupHtml("launch-coin", draft.walletGroup || "")}
           </div>`
+    },
+    {
+      key: "hype", label: "Hype", hint: "Pre-launch page", title: "Pre-Launch Hype Page",
+      html: hypePanelHtml(draft)
     },
     {
       key: "live", label: "Live", hint: "Status feed", title: "Live Launch Status",
@@ -14426,9 +14559,11 @@ function positionsHtml() {
         <p>Only current token holdings show here. Use Refresh after buys, sells, or transfers.</p>
       </div>
       <button class="primary" data-refresh-all>Refresh Positions</button>
+      <button data-scan-bags>🛡 Scan My Bags</button>
       <button data-tab="wallets">Wallet Balances</button>
       <button data-tab="pnl">PnL History</button>
     </section>
+    ${bagScanSectionHtml()}
   `;
   if (!rows.length) return `${header}${emptyState("No open positions", "Current token holdings will show here after a wallet holds non-zero tokens.")}`;
   return `
@@ -14437,6 +14572,80 @@ function positionsHtml() {
       ${rows.map(positionRowHtml).join("")}
     </div>
   `;
+}
+
+// "Scan my bags": SlimeShield + live liquidity health over everything held,
+// worst bags first. Turns the safety engine from pre-buy check into a guard
+// for what the user already owns.
+function bagScanSectionHtml() {
+  const scan = state.bagScan;
+  if (!scan) return "";
+  if (scan.status === "loading") {
+    return `<section class="account-check-card"><div><h3>🛡 Scanning your bags...</h3><p>Running SlimeShield + liquidity checks over everything you hold. Takes a few seconds.</p></div></section>`;
+  }
+  if (scan.status === "error") {
+    return `<section class="account-check-card"><div><h3>🛡 Bag scan failed</h3><p>${escapeHtml(scan.message || "Try again in a moment.")}</p></div><button data-scan-bags>Retry</button></section>`;
+  }
+  const bags = scan.bags || [];
+  if (!bags.length) {
+    return `<section class="account-check-card"><div><h3>🛡 No bags found</h3><p>Nothing held in connected or bot wallets right now - scan again after your next buy.</p></div></section>`;
+  }
+  const flaggedCount = bags.filter((bag) => !bag.healthy).length;
+  const verdictColor = { BUY: "#72ff23", CAUTION: "#ffd84d", RISK: "#ff9d4d", AVOID: "#ff6b5e" };
+  return `
+    <section class="trade-card bag-scan">
+      <div class="trade-head">
+        <div>
+          <h3>🛡 Bag scan: ${flaggedCount ? `${flaggedCount} of ${bags.length} need eyes` : `all ${bags.length} look healthy`}</h3>
+          <p>Shield verdict + live liquidity on every bag, worst first. Scanned just now.</p>
+        </div>
+      </div>
+      <div class="table-list">
+        ${bags.map((bag) => `
+          <article class="row-card">
+            <div class="row-main">
+              <strong>$${escapeHtml(bag.symbol)} <span style="color:${verdictColor[bag.verdict] || "#9fb59a"};font-weight:800">${escapeHtml(bag.verdict)}${bag.score != null ? ` ${escapeHtml(String(bag.score))}/100` : ""}</span></strong>
+              <small>${bag.flags.length ? escapeHtml(bag.flags.join(" | ")) : "no red flags"}${bag.liquidityUsd != null ? ` | liq ${compactUsd(bag.liquidityUsd)}` : ""}${bag.marketCapUsd ? ` | MC ${compactUsd(bag.marketCapUsd)}` : ""}</small>
+            </div>
+            <div class="card-actions compact">
+              <button data-token-chart="${escapeHtml(bag.mint)}" data-token-chart-source="bag-scan">Chart</button>
+              <button data-position-sell="${escapeHtml(bag.mint)}" data-position-sell-percent="100">Sell All</button>
+            </div>
+          </article>`).join("")}
+      </div>
+    </section>
+  `;
+}
+
+// Watch-this-dev: alert (push + linked TG DM) the next time this deployer launches.
+async function toggleDevWatch(wallet) {
+  const target = String(wallet || "").trim();
+  if (!target) return;
+  if (!state.devWatch) state.devWatch = {};
+  const next = !state.devWatch[target];
+  try {
+    const result = await api("/api/web/dev-watch", {
+      method: "POST",
+      body: JSON.stringify({ wallet: target, watch: next }),
+      timeoutMs: 15_000
+    });
+    state.devWatch[target] = Boolean(result.watching);
+  } catch (error) {
+    setError(error?.message || "Could not update dev watch.");
+  }
+  renderDevInfoDrawer();
+}
+
+async function scanMyBags() {
+  state.bagScan = { status: "loading" };
+  render();
+  try {
+    const result = await api("/api/web/shield/scan-bags", { timeoutMs: 30_000 });
+    state.bagScan = { status: "done", bags: result.bags || [] };
+  } catch (error) {
+    state.bagScan = { status: "error", message: error?.message || "" };
+  }
+  render();
 }
 
 function pnlHtml() {
@@ -14874,6 +15083,7 @@ function prefetchTokenChart(tokenRef = {}, options = {}) {
   const mint = String(tokenRef?.tokenMint || tokenRef?.mint || tokenRef?.tokenAddress || "").trim();
   if (!mint) return false;
   rememberSmartChartDexResolution(tokenRef);
+  ogreMemoryNoteToken(mint, tokenRef.symbol || tokenRef.name || "");
   void fastDirectDexLookup(mint);
   queueSmartChartBootstrap(tokenRef, { source: options.source || "prefetch" });
   state.smartChartPrefetchLog = [
@@ -16972,6 +17182,7 @@ function renderDevInfoDrawer() {
         <div class="slimeshield-drawer-actions">
           ${wallet ? `<button type="button" data-copy="${escapeHtml(wallet)}">Copy Wallet</button>` : ""}
           <button type="button" data-copy="${escapeHtml(mint)}">Copy CA</button>
+          ${wallet && state.user ? `<button type="button" data-dev-watch="${escapeHtml(wallet)}">${state.devWatch?.[wallet] ? "✅ Watching this dev" : "👀 Watch this dev"}</button>` : ""}
         </div>
         ${referenceLinks.length ? `
           <div class="slimeshield-drawer-actions dev-info-reference-links">
@@ -20979,6 +21190,7 @@ function ogreAgentLocalInstantReply(message) {
     const amount = formatQuickBuyAmount(quickBuy[1]);
     if (amount) {
       state.quickBuyAmountOverride = amount;
+      saveOgreMemory({ quickBuy: amount });
       syncQuickBuyActionLabels();
       return {
         text: `Quick buy set to ${amount} SOL - every Buy button across the site now fires with that amount.`,
@@ -20986,6 +21198,24 @@ function ogreAgentLocalInstantReply(message) {
           { label: "Live Terminal", type: "open_tab", tab: "terminal" },
           { label: "Slime Scope", type: "open_tab", tab: "slimeScope" }
         ]
+      };
+    }
+  }
+
+  // "i like risky plays" / "keep it safe" - remembered across visits
+  if (/\b(i (?:like|prefer|want|am)|keep (?:it|them)|show me|give me)\b/.test(text)) {
+    if (/\b(risky|degen|moonshots?|early|low\s*mc|gambl)/.test(text)) {
+      saveOgreMemory({ risk: "degen" });
+      return {
+        text: "Noted - early risky plays it is. The fresh low-MC line in the brief is yours, and I'll keep that preference next visit too.",
+        actions: [{ label: "Live Terminal", type: "open_tab", tab: "terminal" }, { label: "Sniper", type: "open_tab", tab: "sniper" }]
+      };
+    }
+    if (/\b(safe|careful|low risk|clean|less risky)\b/.test(text)) {
+      saveOgreMemory({ risk: "careful" });
+      return {
+        text: "Noted - shield-clean setups first. I'll remember that next visit. SlimeShield verdicts are on every pair and /t page.",
+        actions: [{ label: "Live Terminal", type: "open_tab", tab: "terminal" }, { label: "Slime Scope", type: "open_tab", tab: "slimeScope" }]
       };
     }
   }
@@ -22272,6 +22502,9 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-share-pnl-card]")) {
     await sharePnlCard(target.dataset.sharePnlCard, target.dataset.shareText || "");
   }
+  if (target.matches("[data-scan-bags]")) { await scanMyBags(); return; }
+  if (target.matches("[data-dev-watch]")) { await toggleDevWatch(target.dataset.devWatch); return; }
+  if (target.matches("[data-hype-create]")) { await createHypePage(); return; }
   if (target.matches("[data-push-enable]")) { await enablePushAlerts(); return; }
   if (target.matches("[data-push-disable]")) { await disablePushAlerts(); return; }
   if (target.matches("[data-call-post]")) { await postBoardCall(target.dataset.callPost); return; }
