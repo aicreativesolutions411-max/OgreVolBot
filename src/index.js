@@ -2003,7 +2003,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
     if (request.method === "GET" && pathname === "/api/web/pair-lite") {
       const liteMint = parsePublicKey(String(requestUrl.searchParams.get("mint") || "")).toBase58();
       const cached = pairLiteCache.get(liteMint);
-      if (cached && Date.now() - cached.at < 15_000) {
+      if (cached?.payload?.pair && Date.now() - cached.at < 15_000) {
         sendCachedWebJson(request, response, 200, cached.payload, "public, max-age=10, stale-while-revalidate=30");
         return;
       }
@@ -2026,7 +2026,9 @@ async function handleWebApiRequest(request, response, requestUrl) {
           dexId: liteBest.dexId || ""
         } : null
       };
-      pairLiteCache.set(liteMint, { at: Date.now(), payload });
+      // Never cache a miss: server-side DexScreener calls can be rate-limited at the
+      // shared IP; an empty answer must not poison the next 15 seconds.
+      if (payload.pair) pairLiteCache.set(liteMint, { at: Date.now(), payload });
       if (pairLiteCache.size > 300) {
         const oldestKey = [...pairLiteCache.entries()].sort((a, b) => a[1].at - b[1].at)[0]?.[0];
         if (oldestKey) pairLiteCache.delete(oldestKey);
