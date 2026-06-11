@@ -19718,7 +19718,50 @@ async function handleBotChatMembershipUpdate(memberUpdate) {
   const chat = memberUpdate?.chat;
   const status = memberUpdate?.new_chat_member?.status || "";
   if (!chat?.id || isPrivateChat(chat)) return;
+  if (["left", "kicked"].includes(status)) {
+    // Bot removed - disarm so bridges stop trying to post into a dead chat.
+    await withFileLock(telegramGroupsPath(), async () => {
+      const store = await readTelegramGroups();
+      const key = String(chat.id);
+      if (store.groups[key]?.alerts) {
+        store.groups[key].alerts = false;
+        await writeJsonFile(telegramGroupsPath(), store);
+      }
+    }).catch(() => {});
+    return;
+  }
   if (!["member", "administrator"].includes(status)) return;
+  // Channels: admin is the ONLY way a bot can post, and only the channel owner can
+  // grant it - that promotion IS the opt-in. Auto-arm, no /slimewire needed, so the
+  // bot scales across many channels with zero per-channel env config.
+  if (chat.type === "channel" && status === "administrator") {
+    let alreadyArmed = false;
+    await withFileLock(telegramGroupsPath(), async () => {
+      const store = await readTelegramGroups();
+      const key = String(chat.id);
+      alreadyArmed = Boolean(store.groups[key]?.alerts);
+      store.groups[key] = {
+        ...(store.groups[key] || { addedAt: new Date().toISOString() }),
+        title: String(chat.title || store.groups[key]?.title || "").slice(0, 80),
+        kind: "channel",
+        alerts: true
+      };
+      await writeJsonFile(telegramGroupsPath(), store);
+    });
+    if (!alreadyArmed) {
+      await say(chat.id, [
+        "🐸 SlimeWire armed. This channel now gets the live engine feed:",
+        "",
+        "- Alpha drops every 15 min (3-4 picks, shield-labeled, tracked to outcome)",
+        "- Fresh SlimeWire launches + milestone wins ($5K/$10K/$25K/$50K MC, 2x)",
+        "- TP/SL fires and KOL copy receipts",
+        "- 2x \"Called it\" receipts when drops hit",
+        "",
+        "Rate-capped so it never floods. Post /slimewire off here to stop. Track record: slimewire.org/proof"
+      ].join("\n"));
+    }
+    return;
+  }
   registerTelegramGroup(chat);
   await say(chat.id, [
     "🐸 SlimeWire is in the chat. Three things I do here:",
