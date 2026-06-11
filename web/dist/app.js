@@ -1625,7 +1625,7 @@ import{canSubmitPerpOrder as bp,createPerpsProvider as yp,ogreTekRouteStatus as 
           </section>`).join("")}
       </div>
     </div>
-  `}function Va(e,t){return a.toolSections&&a.toolSections[e]||t}function ig(){const e=a.launchShareKit;if(!e?.tokenMint||Date.now()-(e.at||0)>7200*1e3)return"";const t=`https://www.slimewire.org/t?ca=${encodeURIComponent(e.tokenMint)}`,n=`Just launched $${e.symbol||e.name||"my coin"} on @pumpdotfun via SlimeWire - live chart, risk read, and call board in one link:`;return`
+  `}function Va(e,t){return a.toolSections&&a.toolSections[e]||t}function ig(){const e=a.launchShareKit;if(!e?.tokenMint||Date.now()-(e.at||0)>7200*1e3)return"";const t=`https://www.slimewire.org/t?ca=${encodeURIComponent(e.tokenMint)}`,n=`Just launched $${e.symbol||e.name||"my coin"} on @pumpdotfun via slimewire.org - live chart, risk read, and call board in one link:`;return`
     <section class="trade-card launch-share-kit">
       <div class="trade-head">
         <div>

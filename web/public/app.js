@@ -9302,7 +9302,7 @@ function launchShareKitHtml() {
   const kit = state.launchShareKit;
   if (!kit?.tokenMint || Date.now() - (kit.at || 0) > 2 * 60 * 60 * 1000) return "";
   const room = `https://www.slimewire.org/t?ca=${encodeURIComponent(kit.tokenMint)}`;
-  const xText = `Just launched $${kit.symbol || kit.name || "my coin"} on @pumpdotfun via SlimeWire - live chart, risk read, and call board in one link:`;
+  const xText = `Just launched $${kit.symbol || kit.name || "my coin"} on @pumpdotfun via slimewire.org - live chart, risk read, and call board in one link:`;
   return `
     <section class="trade-card launch-share-kit">
       <div class="trade-head">

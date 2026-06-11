@@ -83,7 +83,7 @@
           const verdict = String(data.shield?.verdict || "UNRATED").toUpperCase();
           const color = { BUY: "#72ff23", CAUTION: "#ffd84d", RISK: "#ff9d4d", AVOID: "#ff6b5e" }[verdict] || "#9fb59a";
           const launchedBadge = data.launchedViaSlimeWire
-            ? '<span class="verdict" style="color:#72ff23;border-color:#72ff23">🐸 LAUNCHED VIA SLIMEWIRE</span>'
+            ? '<a class="verdict" href="https://www.slimewire.org" style="color:#72ff23;border-color:#72ff23;text-decoration:none">🐸 LAUNCHED ON SLIMEWIRE.ORG</a>'
             : "";
           document.querySelector("[data-head]").innerHTML =
             (data.imageUrl ? '<img src="' + esc(data.imageUrl) + '" alt="">' : "")

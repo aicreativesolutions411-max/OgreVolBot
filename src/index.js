@@ -30363,7 +30363,7 @@ async function webLaunchPumpPortalLocal(userId, body, basePayload) {
   });
   if (String(launchResult?.status || "").toUpperCase() === "COMPLETE" && launchResult.tokenMint) {
     const launchText = [
-      `🐸 <b>Fresh swamp launch</b>: $${escapeTelegramHtml(basePayload.symbol || basePayload.name || "???")} just went live on pump.fun via SlimeWire Pump Launch.`,
+      `🐸 <b>Fresh swamp launch</b>: $${escapeTelegramHtml(basePayload.symbol || basePayload.name || "???")} just went live on pump.fun via <a href="https://www.slimewire.org">SlimeWire</a> Pump Launch.`,
       `<a href="https://www.slimewire.org/t?ca=${launchResult.tokenMint}">launch room</a> | <a href="https://pump.fun/coin/${launchResult.tokenMint}">pump.fun</a> | <a href="${dexScreenerUrl(launchResult.tokenMint)}">chart</a> | <a href="https://www.slimewire.org">launch yours</a>`
     ].join("\n");
     tgChannel.announce("launch", launchResult.tokenMint, launchText);
