@@ -9662,19 +9662,26 @@ body {
 @media (min-width: 761px) {
   .tabs { display: none; }
   .topbar { margin-bottom: 6px; }
+  /* Fixed, not sticky (ancestor overflow rules kill sticky): the bar rides at
+     the top of the screen at any scroll depth - options always handy. */
+  main.shell[data-route="terminal"] { padding-top: 62px; }
   main.shell[data-route="terminal"] .nav-drop-bar {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     align-items: center;
     gap: 6px;
-    position: sticky;
-    top: 8px;
-    z-index: 45;
+    position: fixed;
+    top: 6px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: max-content;
+    max-width: calc(100vw - 12px);
+    z-index: 1500;
     padding: 6px 7px;
     border-radius: 14px;
     border: 1px solid rgba(114, 255, 35, 0.22);
     background: rgba(5, 11, 6, 0.97);
-    box-shadow: 0 16px 44px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 16px 44px rgba(0, 0, 0, 0.45);
   }
   .nav-drop-group { position: relative; }
   .nav-side-group-toggle {
@@ -9778,6 +9785,24 @@ body {
   }
   .nav-drop-group:nth-last-child(-n+3) .nav-side-items { top: auto; bottom: 0; }
   .nav-drop-bar .nav-side-items button { padding: 11px 10px; font-size: 0.9rem; min-height: 42px; }
+}
+
+/* New-build pill: appears when a deploy ships while this tab sits open. */
+.build-update-pill {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 7000;
+  padding: 11px 20px;
+  border-radius: 999px;
+  border: 1px solid rgba(114, 255, 35, 0.7);
+  background: linear-gradient(135deg, rgba(114, 255, 35, 0.96), rgba(187, 255, 99, 0.96));
+  color: #071006;
+  font-weight: 800;
+  font-size: 0.88rem;
+  cursor: pointer;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55), 0 0 22px rgba(114, 255, 35, 0.35);
 }
 
 /* Execution receipt: the trade's live progress, bottom-left, out of the way. */

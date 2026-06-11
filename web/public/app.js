@@ -1162,8 +1162,37 @@ function initializeIntroVideoGate() {
   entryVideo?.addEventListener("ended", finishIntro);
   entryVideo?.addEventListener("error", () => { armFallback(1500); });
 
-  armFallback(9000);
-  playIntro();
+  // Smooth-start: don't roll the clip until the browser says it can play it
+  // through (capped wait) - starting on a half-empty buffer is what made the
+  // intro stutter on phone networks. If the buffer still runs dry mid-play,
+  // exit through the portal early instead of letting the video freeze-jerk.
+  let started = false;
+  let stallTimer = null;
+  const startWhenBuffered = () => {
+    if (started || finishing || !introActive()) return;
+    started = true;
+    playIntro();
+  };
+  if (entryVideo) {
+    if (entryVideo.readyState >= 4) {
+      startWhenBuffered();
+    } else {
+      entryVideo.addEventListener("canplaythrough", startWhenBuffered, { once: true });
+      setTimeout(startWhenBuffered, 2800);
+    }
+    entryVideo.addEventListener("waiting", () => {
+      if (!started || finishing) return;
+      if (stallTimer) clearTimeout(stallTimer);
+      stallTimer = setTimeout(() => { if (introActive()) finishIntro(); }, 900);
+    });
+    ["playing", "timeupdate"].forEach((type) => entryVideo.addEventListener(type, () => {
+      if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; }
+    }));
+  } else {
+    startWhenBuffered();
+  }
+
+  armFallback(11000);
 }
 
 function tabForPath(pathname = window.location.pathname) {
@@ -23329,8 +23358,41 @@ function syncDesktopNavActiveState() {
   });
 }
 
+// Auto-update watch: an SPA tab can sit open for hours, silently running stale
+// code after a deploy (today's "I don't see the change" loop). Every few minutes
+// compare the served index.html's app.js build stamp with ours; on mismatch show
+// a one-tap refresh pill instead of waiting for the user to figure it out.
+function startBuildUpdateWatch() {
+  const current = document.querySelector('script[src*="app.js?v="]')?.getAttribute("src") || "";
+  if (!current) return;
+  const check = async () => {
+    if (document.hidden) return;
+    try {
+      const html = await fetch("/?build-check=1", { cache: "no-store" }).then((response) => response.text());
+      const next = (html.match(/app\.js\?v=[\w-]+/) || [])[0] || "";
+      if (next && !current.includes(next)) showBuildUpdatePill();
+    } catch {
+      // offline or transient - try again next interval
+    }
+  };
+  const timer = setInterval(check, 5 * 60 * 1000);
+  timer.unref?.();
+}
+
+function showBuildUpdatePill() {
+  if (document.querySelector("[data-build-update]")) return;
+  const pill = document.createElement("button");
+  pill.type = "button";
+  pill.setAttribute("data-build-update", "");
+  pill.className = "build-update-pill";
+  pill.textContent = "🐸 SlimeWire updated - tap to refresh";
+  pill.addEventListener("click", () => window.location.reload());
+  document.body.appendChild(pill);
+}
+
 async function initializeApp() {
   buildDesktopNavDropBar();
+  startBuildUpdateWatch();
   syncIntroGateHistory();
   installPerformanceInstrumentation();
   installCrashInstrumentation();
