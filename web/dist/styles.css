@@ -9610,8 +9610,6 @@ body {
    (one open at a time, closes on pick or outside click). Mobile: the same menu
    slides in off a hamburger. The flat rail markup is untouched; CSS hides it. */
 .nav-drop-bar { display: none; }
-.nav-mobile-trigger,
-.nav-mobile-backdrop { display: none; }
 
 /* --- Shared internals (both faces) --- */
 .nav-side-group-toggle {
@@ -9713,81 +9711,69 @@ body {
   }
 }
 
-/* --- Mobile face: slide-out drawer + hamburger --- */
+/* --- Mobile face: right-edge category rail; a tap slides the subcategory menu
+   out to the LEFT and it stays until a pick or a tap anywhere else. Same six
+   groups as the web top bar. Legacy browsers (no :has) keep the old flat rail. --- */
 @media (max-width: 760px) {
   body:has([data-dashboard]:not([hidden])) main.shell[data-route="terminal"] .tabs { display: none; }
   body:has([data-dashboard]:not([hidden])) main.shell[data-route="terminal"] .nav-drop-bar {
     display: flex;
     flex-direction: column;
-    gap: 7px;
-    position: fixed;
-    top: 0;
-    left: 0;
-    bottom: 0;
-    width: min(78vw, 300px);
-    z-index: 6000;
-    padding: calc(12px + env(safe-area-inset-top)) 12px calc(16px + env(safe-area-inset-bottom));
-    background: #050d06;
-    border-right: 1px solid rgba(114, 255, 35, 0.3);
-    box-shadow: 24px 0 60px rgba(0, 0, 0, 0.6);
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    transform: translateX(-105%);
-    transition: transform 0.22s ease;
+    gap: 5px;
+    grid-column: 2;
+    grid-row: 2;
+    align-self: start;
+    position: sticky;
+    top: 8px;
+    width: 64px;
+    z-index: 50;
+    padding: 4px 3px;
+    border-radius: 12px;
+    border: 1px solid rgba(114, 255, 35, 0.2);
+    background: rgba(5, 11, 6, 0.95);
   }
-  body.nav-drawer-open main.shell[data-route="terminal"] .nav-drop-bar { transform: translateX(0); }
-  body.nav-drawer-open { overflow: hidden; }
-  body:has([data-dashboard]:not([hidden])):has(main.shell[data-route="terminal"]) .nav-mobile-trigger {
-    display: flex;
+  .nav-drop-group { position: relative; }
+  .nav-side-group-toggle {
     flex-direction: column;
     justify-content: center;
     align-items: center;
-    gap: 4px;
-    position: fixed;
-    top: calc(9px + env(safe-area-inset-top));
-    left: 10px;
-    width: 42px;
-    height: 42px;
-    z-index: 6001;
-    border-radius: 12px;
-    border: 1px solid rgba(114, 255, 35, 0.45);
-    background: rgba(6, 14, 7, 0.96);
-    cursor: pointer;
-    box-shadow: 0 8px 26px rgba(0, 0, 0, 0.45);
+    gap: 3px;
+    width: 100%;
+    min-height: 46px;
+    padding: 6px 2px;
+    border-radius: 9px;
+    border: 1px solid transparent;
+    font-size: 8.6px;
+    font-weight: 800;
+    text-align: center;
+    white-space: normal;
+    line-height: 1.1;
   }
-  .nav-mobile-trigger span {
-    display: block;
-    width: 17px;
-    height: 2px;
-    border-radius: 2px;
-    background: #9dff5e;
-    transition: transform 0.18s ease, opacity 0.18s ease;
-  }
-  body.nav-drawer-open .nav-mobile-trigger span:nth-child(1) { transform: translateY(6px) rotate(45deg); }
-  body.nav-drawer-open .nav-mobile-trigger span:nth-child(2) { opacity: 0; }
-  body.nav-drawer-open .nav-mobile-trigger span:nth-child(3) { transform: translateY(-6px) rotate(-45deg); }
-  body.nav-drawer-open .nav-mobile-backdrop {
-    display: block;
-    position: fixed;
-    inset: 0;
-    z-index: 5999;
-    background: rgba(0, 0, 0, 0.55);
-  }
-  /* Clear the hamburger so it never sits on the brand badge. */
-  body:has([data-dashboard]:not([hidden])) main.shell[data-route="terminal"] .topbar { padding-left: 50px; }
-  /* Boxed accordion groups + bigger tap targets inside the drawer. */
-  .nav-drop-bar .nav-drop-group {
-    border: 1px solid rgba(114, 255, 35, 0.14);
-    border-radius: 12px;
-    background: rgba(8, 20, 10, 0.45);
-    overflow: hidden;
-  }
+  .nav-side-group-toggle .nav-side-icon { font-size: 1.05rem; }
+  .nav-side-group-toggle .nav-side-caret { display: none; }
+  .nav-side-group-toggle .nav-side-label { flex: 0 0 auto; }
+  .nav-side-group-toggle[data-active],
   .nav-drop-group.is-open .nav-side-group-toggle {
-    background: rgba(114, 255, 35, 0.09);
-    border-bottom: 1px solid rgba(114, 255, 35, 0.14);
+    background: linear-gradient(135deg, rgba(114, 255, 35, 0.94), rgba(187, 255, 99, 0.94));
+    color: #071006;
+    border-color: rgba(114, 255, 35, 0.6);
   }
-  .nav-side-group-toggle { width: 100%; padding: 12px 12px; font-size: 0.92rem; }
-  .nav-side-group-toggle[data-active] { color: #9dff5e; }
+  /* Submenu slides out leftward from the tapped category, anchored to it. */
+  .nav-side-items {
+    position: absolute;
+    right: calc(100% + 9px);
+    top: 0;
+    min-width: 186px;
+    max-height: 64vh;
+    overflow-y: auto;
+    z-index: 6000;
+    padding: 6px;
+    border-radius: 13px;
+    border: 1px solid rgba(114, 255, 35, 0.35);
+    background: #060d07;
+    box-shadow: -18px 10px 50px rgba(0, 0, 0, 0.6);
+  }
+  .nav-drop-group:nth-last-child(-n+2) .nav-side-items { top: auto; bottom: 0; }
   .nav-drop-bar .nav-side-items button { padding: 11px 10px; font-size: 0.9rem; min-height: 42px; }
 }
 

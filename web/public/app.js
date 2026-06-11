@@ -23299,34 +23299,17 @@ function buildDesktopNavDropBar() {
       return;
     }
     if (event.target.closest("[data-tab]")) {
-      // Picked a destination: drop the menu and the mobile drawer.
+      // Picked a destination: the open menu drops away.
       bar.querySelectorAll(".nav-drop-group.is-open").forEach((item) => item.classList.remove("is-open"));
-      closeMobileNavDrawer();
     }
   });
-  // Desktop dropdowns close on any outside click.
+  // Open menus close on any outside click/tap - desktop dropdowns and the
+  // mobile slide-out panels alike.
   document.addEventListener("click", (event) => {
-    if (!event.target.closest("[data-nav-drop]") && !isCompactViewport()) {
+    if (!event.target.closest("[data-nav-drop]")) {
       bar.querySelectorAll(".nav-drop-group.is-open").forEach((item) => item.classList.remove("is-open"));
     }
   });
-  // Mobile trigger + backdrop live on body so they survive route re-renders.
-  const trigger = document.createElement("button");
-  trigger.type = "button";
-  trigger.className = "nav-mobile-trigger";
-  trigger.setAttribute("data-nav-mobile-trigger", "");
-  trigger.setAttribute("aria-label", "Open the SlimeWire menu");
-  trigger.innerHTML = "<span></span><span></span><span></span>";
-  trigger.addEventListener("click", () => document.body.classList.toggle("nav-drawer-open"));
-  const backdrop = document.createElement("div");
-  backdrop.className = "nav-mobile-backdrop";
-  backdrop.setAttribute("data-nav-mobile-backdrop", "");
-  backdrop.addEventListener("click", closeMobileNavDrawer);
-  document.body.append(trigger, backdrop);
-}
-
-function closeMobileNavDrawer() {
-  document.body.classList.remove("nav-drawer-open");
 }
 
 function syncDesktopNavActiveState() {
@@ -23338,17 +23321,9 @@ function syncDesktopNavActiveState() {
     group.querySelector(".nav-side-group-toggle")?.toggleAttribute("data-active", hasActive);
     if (group.classList.contains("is-open")) anyOpen = true;
   });
-  // Drawer face only: open the active group by default so the menu is oriented,
-  // but never slam shut a group the user just opened - background renders run
-  // every few seconds. Desktop dropdowns must NEVER auto-open on render.
-  if (!anyOpen && isCompactViewport()) {
-    bar.querySelectorAll(".nav-drop-group").forEach((group) => {
-      if (group.querySelector(`[data-tab="${state.activeTab}"]`)) {
-        group.classList.add("is-open");
-        group.querySelector(".nav-side-group-toggle")?.setAttribute("aria-expanded", "true");
-      }
-    });
-  }
+  // Menus never auto-open on render (both faces are tap-to-drop now); the
+  // anyOpen scan stays so a group the user just opened is never slammed shut.
+  void anyOpen;
   bar.querySelectorAll("[data-tab]").forEach((button) => {
     button.dataset.active = button.dataset.tab === state.activeTab ? "true" : "false";
   });

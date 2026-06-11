@@ -19467,13 +19467,13 @@ html body main.shell[data-app][data-route="intro"] .swamp-intro-stage[data-intro
   padding: 10px 12px !important;
 }
 
-/* NAV_DRAWER_TAKEOVER_20260611: the slide-out drawer is the mobile nav now.
-   The 108px mini-rail would double up with it, so when the drawer can serve
-   (modern :has browsers, dashboard visible) the rail hides and the dashboard
-   grid collapses to one full-width column. Legacy browsers keep the rail. */
+/* NAV_RAIL_TAKEOVER_20260611: the category rail (six groups, submenu slides out
+   left) replaces the old 20-button flat rail on mobile. Rail column sits on the
+   RIGHT edge where the user wants it; content takes column 1. Gated on :has so
+   legacy browsers keep the old flat rail untouched. */
 @media (max-width: 760px) {
   html body:has([data-dashboard]:not([hidden])) main.shell[data-app][data-route="terminal"] [data-dashboard] {
-    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-columns: minmax(0, 1fr) 64px !important;
   }
   html body:has([data-dashboard]:not([hidden])) main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs {
     display: none !important;
