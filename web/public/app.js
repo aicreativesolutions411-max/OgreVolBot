@@ -9414,7 +9414,10 @@ function launchShareKitHtml() {
 function hypePanelHtml(draft = {}) {
   maybeLoadHypePages();
   const pages = state.hypePages || [];
-  const minLocal = new Date(Date.now() + 10 * 60 * 1000).toISOString().slice(0, 16);
+  // datetime-local expects LOCAL time; toISOString() is UTC and made the
+  // earliest pickable slot hours wrong depending on timezone.
+  const minDate = new Date(Date.now() + 10 * 60 * 1000 - new Date().getTimezoneOffset() * 60 * 1000);
+  const minLocal = minDate.toISOString().slice(0, 16);
   return `
     <div class="volume-grid">
       <p class="muted full-span">Build the audience BEFORE you mint: schedule the launch, share the countdown page everywhere, and every "notify me" gets the chart link the second your Pump Launch completes.</p>
@@ -9604,6 +9607,7 @@ function launchCoinHtml() {
       key: "after", label: "After Launch", hint: "Auto trade / bundle", title: "Post-Launch Action",
       html: `
           <div class="volume-grid">
+            <p class="muted full-span">With Auto Bundle, the checked wallets buy AT launch (right behind the create) with these TP/SL/timer settings armed automatically. Other actions route the live CA into that tool after launch.</p>
             <label>
               Live CA After Launch
               <input data-launch-coin-ca type="text" placeholder="Auto-filled after launch, or paste CA manually" value="${escapeHtml(draft.tokenMint || "")}">
@@ -10231,7 +10235,7 @@ async function submitLaunchCoin() {
       const buyNote = [devNote, bundledCount > 0 ? `${bundledCount} bundle buy${bundledCount === 1 ? "" : "s"}` : ""].filter(Boolean).join(" + ");
       state.launchCoinStatus = launch.bundleFallback
         ? `Launched ${shortAddress(tokenMint)} via the standard path (bundle missed the block lottery)${buyNote ? ` - server fired ${buyNote} right behind the create` : ""}.${signature} Opening chart...`
-        : `Launch bundled atomically: ${shortAddress(tokenMint)}${buyNote ? ` (${buyNote} landed in-block)` : ""}.${signature} Opening chart...`;
+        : `Launch bundled atomically: ${shortAddress(tokenMint)}${buyNote ? ` (${buyNote} landed in-block)` : ""}.${signature} ⚠️ In-block buys do not auto-arm exits yet - tap Arm Exits on your bag. Opening chart...`;
       writeText(status, state.launchCoinStatus);
       // INSTANT FEEDBACK: show the new bag and prime the chart from what we
       // already know, so the user sees their position the moment the chart opens
@@ -10243,8 +10247,9 @@ async function submitLaunchCoin() {
       void refreshWalletPositions({ force: true, fast: true, silent: true, reason: "pump-launch-instant" }).catch(() => {});
       // Exits arm a few seconds AFTER the buys confirm, so the normal refresh
       // cadence misses them and the card would falsely read "no auto-exit".
-      // Mark the mint as arming and pull the plan list a few times until it lands.
-      markLaunchExitsArming(tokenMint);
+      // Only the fallback path arms exits - an atomic landing must NOT claim
+      // "arming" (it shows the Arm Exits prompt instead).
+      if (launch.bundleFallback) markLaunchExitsArming(tokenMint);
       [3_000, 8_000, 16_000].forEach((delay) => window.setTimeout(() => {
         void refreshTradePlansOnly().then(() => render());
       }, delay));

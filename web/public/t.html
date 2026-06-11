@@ -96,7 +96,8 @@
             ["MC / FDV", fmt(data.marketCapUsd)],
             ["Liquidity", fmt(data.liquidityUsd)],
             ["24h Vol", fmt(data.volumeH24)],
-            ["1h", Number.isFinite(Number(data.changeH1)) ? (Number(data.changeH1) >= 0 ? "+" : "") + Number(data.changeH1).toFixed(1) + "%" : "-"]
+            ["1h", Number.isFinite(Number(data.changeH1)) ? (Number(data.changeH1) >= 0 ? "+" : "") + Number(data.changeH1).toFixed(1) + "%" : "-"],
+            ...(data.pumpCurve ? [["Bonding curve", (Number(data.bondingProgressPct) || 0) + "% to graduation"]] : [])
           ].map(([label, value]) => '<div class="stat"><strong>' + esc(value) + '</strong><span>' + esc(label) + "</span></div>").join("");
           if (data.shield?.summary) document.querySelector("[data-summary]").textContent = data.shield.summary;
           if (data.rugcheck?.risks?.length) {
