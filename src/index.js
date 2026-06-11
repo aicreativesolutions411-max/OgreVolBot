@@ -18929,6 +18929,8 @@ function defaultJsonForPath(filePath) {
       return { events: [] };
     case "telegram-groups.json":
       return { groups: {} };
+    case "alpha-calls.json":
+      return { calls: [] };
     case "shield-receipts.json":
       return { receipts: [] };
     case "push-subscriptions.json":
@@ -19285,6 +19287,130 @@ function broadcastToTelegramGroups(kind, key, text) {
   })();
 }
 
+// --- Alpha drops + winner receipts -------------------------------------------------
+// Every few hours, opted-in groups (and the channel) get ONE pick - but only when a
+// candidate passes the full gate (top scanner row AND SlimeShield BUY verdict). No
+// qualified pick = no post; silence costs nothing, a bad call costs trust. Every drop
+// records its entry price, and when a called pick 2x's, the same chats get the receipt.
+const TG_ALPHA_DROP_INTERVAL_MS = 4 * 60 * 60 * 1000;
+
+function alphaCallsPath() {
+  return path.join(CONFIG.dataDir, "alpha-calls.json");
+}
+
+async function readAlphaCalls() {
+  const store = await readJson(alphaCallsPath());
+  if (!Array.isArray(store.calls)) store.calls = [];
+  return store;
+}
+
+function alphaAgeLabel(ms) {
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 90) return `${minutes} min ago`;
+  if (minutes < 48 * 60) return `${Math.round(minutes / 60)}h ago`;
+  return `${Math.round(minutes / 1440)}d ago`;
+}
+
+async function runAlphaDropTick() {
+  const groupsStore = await readTelegramGroups();
+  const now = Date.now();
+  const dueGroups = Object.entries(groupsStore.groups || {}).filter(([, group]) =>
+    group?.alerts && (!group.lastAlphaAt || now - Date.parse(group.lastAlphaAt) > TG_ALPHA_DROP_INTERVAL_MS));
+  if (!dueGroups.length && !tgChannel.enabled) return;
+
+  const { rows } = await telegramAlphaRows("alpha-drop");
+  let chosen = null;
+  let shield = null;
+  for (const row of rows.slice(0, 5)) {
+    const result = await webSlimeShield(row.tokenMint).catch(() => null);
+    if (String(result?.verdict || "").toUpperCase() === "BUY") {
+      chosen = row;
+      shield = result;
+      break;
+    }
+  }
+  if (!chosen) return;
+
+  const pairs = await fetchDexScreenerTokenPairsBatch([chosen.tokenMint]).catch(() => []);
+  const best = bestDexPairForToken(chosen.tokenMint, pairs.filter((pair) => pairMatchesToken(pair, chosen.tokenMint)));
+  const priceUsd = Number(best?.priceUsd) || null;
+  const links = slimewireTokenLinks(chosen.tokenMint);
+  const stats = [chosen.marketCapLabel ? `MC ${chosen.marketCapLabel}` : "", chosen.liquidityLabel ? `Liq ${chosen.liquidityLabel}` : "", chosen.pairAgeLabel || ""].filter(Boolean).map(escapeTelegramHtml).join(" | ");
+  const text = [
+    `🟢 <b>SlimeWire alpha drop</b>: $${escapeTelegramHtml(chosen.symbol || shortMint(chosen.tokenMint))}${stats ? ` - ${stats}` : ""}`,
+    `SlimeShield: <b>BUY</b> (score ${shield.score ?? "?"}/100). ${escapeTelegramHtml(String(shield.summary || "").slice(0, 140))}`,
+    `<code>${escapeTelegramHtml(chosen.tokenMint)}</code>`,
+    `<a href="${links.site}">chart + trade</a> | <a href="${links.dex}">dex</a>${links.dmBuy ? ` | <a href="${links.dmBuy}">quick buy</a>` : ""}`,
+    `Not financial advice - every call gets tracked and receipts post when it wins.`
+  ].join("\n");
+
+  const recipients = [];
+  for (const [chatId, group] of dueGroups) {
+    groupBridgeFor(chatId).announce("alpha-drop", chosen.tokenMint, text);
+    group.lastAlphaAt = new Date(now).toISOString();
+    recipients.push(chatId);
+  }
+  if (recipients.length) await writeJsonFile(telegramGroupsPath(), groupsStore);
+  tgChannel.announce("alpha-drop", chosen.tokenMint, text);
+
+  if (priceUsd) {
+    const calls = await readAlphaCalls();
+    calls.calls.push({
+      mint: chosen.tokenMint,
+      symbol: String(chosen.symbol || shortMint(chosen.tokenMint)).slice(0, 24),
+      chatIds: recipients,
+      priceUsd,
+      shieldScore: Number(shield.score) || null,
+      calledAt: new Date(now).toISOString(),
+      status: "watching",
+      outcome: null
+    });
+    calls.calls = calls.calls.slice(-200);
+    await writeJsonFile(alphaCallsPath(), calls);
+  }
+}
+
+async function checkAlphaCallOutcomes() {
+  const store = await readAlphaCalls();
+  const now = Date.now();
+  const due = store.calls.filter((call) => call.status === "watching" && Number(call.priceUsd) > 0).slice(0, 25);
+  if (!due.length) return;
+  const pairs = await fetchDexScreenerTokenPairsBatch(due.map((call) => call.mint)).catch(() => []);
+  let changed = false;
+  for (const call of due) {
+    const best = bestDexPairForToken(call.mint, pairs.filter((pair) => pairMatchesToken(pair, call.mint)));
+    const priceNow = Number(best?.priceUsd) || 0;
+    const ageMs = now - Date.parse(call.calledAt);
+    const multiple = priceNow > 0 ? priceNow / call.priceUsd : 0;
+    if (multiple >= 2) {
+      call.status = "resolved";
+      call.outcome = "won";
+      call.peakX = Math.round(multiple * 10) / 10;
+      call.resolvedAt = new Date(now).toISOString();
+      changed = true;
+      const links = slimewireTokenLinks(call.mint);
+      const winText = [
+        `✅ <b>Called it</b>: $${escapeTelegramHtml(call.symbol)} is <b>${call.peakX}x</b> since the SlimeWire alpha drop ${alphaAgeLabel(ageMs)}.`,
+        `Receipts, not promises.`,
+        `<a href="${links.site}">chart</a> | <a href="https://www.slimewire.org">slimewire.org</a>`
+      ].join("\n");
+      for (const chatId of call.chatIds || []) groupBridgeFor(chatId).announce("alpha-win", call.mint, winText);
+      tgChannel.announce("alpha-win", call.mint, winText);
+    } else if (ageMs > 60 * 60 * 1000 && (!priceNow || multiple < 0.4)) {
+      call.status = "resolved";
+      call.outcome = "lost";
+      call.resolvedAt = new Date(now).toISOString();
+      changed = true;
+    } else if (ageMs > 24 * 60 * 60 * 1000) {
+      call.status = "resolved";
+      call.outcome = "flat";
+      call.resolvedAt = new Date(now).toISOString();
+      changed = true;
+    }
+  }
+  if (changed) await writeJsonFile(alphaCallsPath(), store);
+}
+
 // --- SlimeShield receipts: every AVOID/RISK flag gets recorded, then we go back and
 // check what actually happened to the token. "Flagged 43 min before the rug" is the
 // kind of proof no other terminal publishes. Global store, capped, best-effort.
@@ -19376,6 +19502,8 @@ async function checkShieldReceiptOutcomes() {
 if (CONFIG.serviceRole === "web") {
   const shieldReceiptTimer = setInterval(() => {
     checkShieldReceiptOutcomes().catch((error) => console.warn(`[shield-receipts] check failed: ${error.message}`));
+    checkAlphaCallOutcomes().catch((error) => console.warn(`[alpha-calls] check failed: ${error.message}`));
+    runAlphaDropTick().catch((error) => console.warn(`[alpha-drop] tick failed: ${error.message}`));
   }, 10 * 60 * 1000);
   shieldReceiptTimer.unref?.();
 }
@@ -27662,6 +27790,26 @@ async function webStartOgreAiRun(userId, body = {}) {
     if (plans.length >= runCount) break;
     const pickSummary = webOgreAiPickSummary(pick);
     attemptedPicks.push(pickSummary);
+    // Final SlimeShield gate before any SOL moves: the row filters catch hard flags,
+    // but the shield folds in dev info, authority risk, and KOL dump pressure the
+    // feed row may not carry. AVOID always blocks; autopilot also refuses RISK -
+    // unattended buys should only take the cleaner setups.
+    try {
+      const shield = await webSlimeShield(pick.tokenMint);
+      const verdict = String(shield?.verdict || "").toUpperCase();
+      const autopilotRun = Boolean(body.autopilot);
+      if (verdict === "AVOID" || (autopilotRun && verdict === "RISK")) {
+        errors.push({
+          tokenMint: pick.tokenMint,
+          shortMint: shortMint(pick.tokenMint),
+          pick: pickSummary,
+          message: `SlimeShield ${verdict} (score ${shield?.score ?? "?"}): ${String(shield?.summary || "blocked").slice(0, 120)}`
+        });
+        continue;
+      }
+    } catch {
+      // Shield unavailable: fall through - the buy precheck still runs before swaps.
+    }
     try {
       const defaults = selection.defaults;
       const plan = await webCreateManagedBuyPlan(userId, wallets, {
