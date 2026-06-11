@@ -60,7 +60,7 @@
       <h2>🥇 Top callers</h2>
       <div data-callers><p class="empty">Loading...</p></div>
       <a class="cta" href="/">Open the SlimeWire terminal</a>
-      <button class="cta ghost" type="button" data-x-thread hidden>🧵 Copy X thread</button>
+      <button class="cta ghost" type="button" data-x-thread hidden>📣 Copy X post</button>
       <footer>Add the bot to your Telegram group: <a data-bot-link href="#">@OgreTradeBot</a> - /look, /alpha, /ape, /slimewire on. Not financial advice.</footer>
     </main>
     <script src="/config.js"></script>
@@ -137,21 +137,36 @@
           if (threadButton) {
             threadButton.hidden = false;
             threadButton.addEventListener("click", async () => {
-              const tweets = [];
-              tweets.push("Receipts, not promises. 🐸\n\nSlimeWire has tracked " + (alpha.totalCalls ?? 0) + " alpha calls publicly - every win AND every loss."
-                + (alpha.hitRatePct != null ? "\n\nHit rate so far: " + alpha.hitRatePct + "% to 2x." : ""));
-              const winLines = (alpha.recentWins || []).slice(0, 4).map((win) => "$" + win.symbol + " -> " + win.peakX + "x");
-              if (winLines.length) tweets.push("Recent wins called before they ran:\n\n" + winLines.join("\n") + (alpha.avgMinutesToWin ? "\n\nAvg time to 2x: " + alpha.avgMinutesToWin + " min." : ""));
-              if (shield.rugsCalled) tweets.push("SlimeShield flagged " + shield.rugsCalled + " rug" + (shield.rugsCalled === 1 ? "" : "s") + " BEFORE they died" + ((shield.recentRugs || [])[0]?.warningMinutes ? " - up to " + shield.recentRugs[0].warningMinutes + " minutes of warning" : "") + ".\n\nEvery flag is on the public wall. No deleting losses.");
-              tweets.push("It updates live and tracks itself. Check the wall, then trade where the receipts are:\n\nhttps://www.slimewire.org/proof");
-              const thread = tweets.map((tweet, index) => (index + 1) + "/" + tweets.length + "\n" + tweet).join("\n\n---\n\n");
+              // One post, never over the composer limit. X counts any URL as 23
+              // chars, so budget ~250 for the text and drop lines until it fits.
+              const bestWin = (alpha.recentWins || [])[0];
+              const winLines = (alpha.recentWins || []).slice(0, 3).map((win) => "$" + win.symbol + " → " + win.peakX + "x");
+              const hook = bestWin
+                ? "The engine called $" + bestWin.symbol + " before it ran " + bestWin.peakX + "x. 🐸"
+                : "Every call this engine makes is tracked in public. 🐸";
+              const lines = [
+                hook,
+                "",
+                winLines.length > 1 ? winLines.join("\n") : "",
+                winLines.length > 1 ? "" : null,
+                (alpha.totalCalls ?? 0) + " calls tracked - wins AND losses" + (alpha.hitRatePct != null ? ", " + alpha.hitRatePct + "% hit 2x" : "") + (alpha.avgMinutesToWin ? ", avg " + alpha.avgMinutesToWin + " min" : "") + ".",
+                shield.rugsCalled ? "SlimeShield flagged " + shield.rugsCalled + " rug" + (shield.rugsCalled === 1 ? "" : "s") + " before they died." : "",
+                "",
+                "Receipts, not promises:",
+                "https://www.slimewire.org/proof"
+              ].filter((line) => line !== null);
+              let post = lines.filter((line, i) => line !== "" || lines[i - 1] !== "").join("\n");
+              // Trim to fit: URL counts as 23, so text budget is 280 - 24.
+              const fits = (text) => text.replace("https://www.slimewire.org/proof", "X".repeat(23)).length <= 276;
+              if (!fits(post) && shield.rugsCalled) post = post.replace("SlimeShield flagged " + shield.rugsCalled + " rug" + (shield.rugsCalled === 1 ? "" : "s") + " before they died.\n", "");
+              if (!fits(post) && winLines.length > 1) post = post.replace(winLines.join("\n") + "\n", "");
               try {
-                await navigator.clipboard.writeText(thread);
-                threadButton.textContent = "✅ Thread copied - paste on X";
+                await navigator.clipboard.writeText(post);
+                threadButton.textContent = "✅ Copied - fits in one post";
               } catch {
                 threadButton.textContent = "Copy blocked - long-press to select";
               }
-              setTimeout(() => { threadButton.textContent = "🧵 Copy X thread"; }, 4000);
+              setTimeout(() => { threadButton.textContent = "📣 Copy X post"; }, 4000);
             });
           }
         } catch {

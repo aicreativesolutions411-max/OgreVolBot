@@ -19423,6 +19423,40 @@ html body main.shell[data-app][data-route="intro"] .swamp-intro-stage[data-intro
 .dev-info-drawer {
   background: #050e06 !important;
 }
+
+/* DEV_INFO_BUTTON_TONE_20260611: drawer buttons were flat black and read as dead.
+   Slime tint + green border so every action looks alive; primary stays the
+   filled-green CTA. Scoped to the drawer only. */
+.dev-info-drawer .slimeshield-drawer-actions button,
+.dev-info-drawer .slimeshield-drawer-actions a {
+  background: linear-gradient(180deg, rgba(114, 255, 35, 0.14), rgba(114, 255, 35, 0.05)) !important;
+  border: 1px solid rgba(114, 255, 35, 0.45) !important;
+  color: #d6ffbf !important;
+  font-weight: 700 !important;
+}
+.dev-info-drawer .slimeshield-drawer-actions button:hover,
+.dev-info-drawer .slimeshield-drawer-actions a:hover {
+  background: linear-gradient(180deg, rgba(114, 255, 35, 0.26), rgba(114, 255, 35, 0.1)) !important;
+  border-color: rgba(114, 255, 35, 0.75) !important;
+  color: #eaffe0 !important;
+}
+.dev-info-drawer .slimeshield-drawer-actions button.primary {
+  background: linear-gradient(135deg, rgba(114, 255, 35, 0.95), rgba(187, 255, 99, 0.95)) !important;
+  border-color: rgba(114, 255, 35, 0.9) !important;
+  color: #071006 !important;
+  font-weight: 800 !important;
+}
+.dev-info-drawer header button {
+  background: rgba(114, 255, 35, 0.1) !important;
+  border: 1px solid rgba(114, 255, 35, 0.4) !important;
+  color: #d6ffbf !important;
+  border-radius: 999px !important;
+}
+.dev-info-drawer .dev-info-reference-links a {
+  background: rgba(114, 255, 35, 0.07) !important;
+  border: 1px solid rgba(114, 255, 35, 0.3) !important;
+  color: #bdf09f !important;
+}
 .slimeshield-drawer-backdrop {
   background: rgba(0, 0, 0, 0.62) !important;
   backdrop-filter: none !important;

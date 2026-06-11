@@ -9605,77 +9605,82 @@ body {
   font-size: 0.86rem;
 }
 
-/* Desktop dropdown nav: compact areas with menus; the flat rail stays for mobile. */
+/* Desktop nav: fixed LEFT SIDEBAR - every destination always on screen, no
+   dropdowns. Icon-only at medium widths, icons + labels when wide. Scoped to the
+   terminal route so it never floats over the intro video. Mobile rail untouched. */
 .nav-drop-bar { display: none; }
 @media (min-width: 761px) {
+  :root { --sw-sidebar-w: 200px; }
   .tabs { display: none; }
-  .nav-drop-bar {
+  main.shell[data-route="terminal"] { padding-left: calc(var(--sw-sidebar-w) + 16px); }
+  main.shell[data-route="terminal"] .nav-drop-bar {
     display: flex;
-    gap: 8px;
-    position: sticky;
-    top: 10px;
-    z-index: 14;
-    padding: 9px 10px;
-    border-radius: 14px;
-    border: 1px solid rgba(114, 255, 35, 0.2);
-    background: rgba(4, 9, 5, 0.94);
-    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.22);
-  }
-  .nav-drop-group { position: relative; }
-  .nav-drop-toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    padding: 9px 16px;
-    border-radius: 999px;
-    border: 1px solid rgba(114, 255, 35, 0.2);
-    background: rgba(8, 20, 10, 0.55);
-    color: rgba(226, 255, 215, 0.85);
-    font-weight: 800;
-    font-size: 0.86rem;
-    cursor: pointer;
-  }
-  .nav-drop-caret { font-size: 0.62rem; opacity: 0.6; }
-  .nav-drop-toggle[data-active] {
-    background: linear-gradient(135deg, rgba(114, 255, 35, 0.94), rgba(187, 255, 99, 0.94));
-    color: #071006;
-    border-color: rgba(114, 255, 35, 0.6);
-  }
-  .nav-drop-menu {
-    display: none;
-    position: absolute;
-    top: calc(100% + 6px);
-    left: 0;
-    min-width: 188px;
-    z-index: 40;
-    padding: 7px;
-    border-radius: 14px;
-    border: 1px solid rgba(114, 255, 35, 0.28);
-    background: #060d07;
-    box-shadow: 0 22px 60px rgba(0, 0, 0, 0.55);
     flex-direction: column;
-    gap: 3px;
+    gap: 13px;
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: var(--sw-sidebar-w);
+    z-index: 30;
+    padding: 16px 10px 18px 12px;
+    border-right: 1px solid rgba(114, 255, 35, 0.22);
+    background: linear-gradient(180deg, rgba(6, 14, 7, 0.99), rgba(3, 8, 4, 0.99));
+    box-shadow: 14px 0 44px rgba(0, 0, 0, 0.35);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
   }
-  .nav-drop-group:hover .nav-drop-menu,
-  .nav-drop-group:focus-within .nav-drop-menu,
-  .nav-drop-group.is-open .nav-drop-menu { display: flex; }
-  .nav-drop-menu button {
+  .nav-side-group-label {
+    display: block;
+    padding: 2px 8px;
+    font-size: 0.62rem;
+    font-weight: 800;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: rgba(141, 184, 124, 0.85);
+  }
+  .nav-side-items { display: flex; flex-direction: column; gap: 2px; }
+  .nav-drop-bar .nav-side-items button {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
     text-align: left;
-    padding: 9px 12px;
-    border-radius: 9px;
+    padding: 8px 9px;
+    border-radius: 10px;
     border: 1px solid transparent;
     background: transparent;
     color: rgba(226, 255, 215, 0.85);
     font-weight: 700;
-    font-size: 0.86rem;
+    font-size: 0.84rem;
     cursor: pointer;
+    white-space: nowrap;
   }
-  .nav-drop-menu button:hover { background: rgba(114, 255, 35, 0.12); }
-  .nav-drop-menu button[data-active="true"] {
-    background: rgba(114, 255, 35, 0.2);
-    color: #d6ffbf;
-    border-color: rgba(114, 255, 35, 0.35);
+  .nav-drop-bar .nav-side-items button:hover {
+    background: rgba(114, 255, 35, 0.1);
+    border-color: rgba(114, 255, 35, 0.22);
+    color: #eaffe0;
   }
+  .nav-drop-bar .nav-side-items button[data-active="true"] {
+    background: linear-gradient(135deg, rgba(114, 255, 35, 0.94), rgba(187, 255, 99, 0.94));
+    color: #071006;
+    border-color: rgba(114, 255, 35, 0.6);
+    font-weight: 800;
+  }
+  .nav-side-icon { font-size: 1rem; line-height: 1; flex: 0 0 auto; }
+  /* The execution receipt sits bottom-left; shift it clear of the sidebar. */
+  body:has(main.shell[data-route="terminal"]) [data-trade-trace-mount] .trade-trace {
+    left: calc(var(--sw-sidebar-w) + 14px);
+  }
+}
+/* Medium desktop: icon-only rail keeps content wide. */
+@media (min-width: 761px) and (max-width: 1099px) {
+  :root { --sw-sidebar-w: 64px; }
+  .nav-side-group-label { display: none; }
+  .nav-drop-bar .nav-side-label { display: none; }
+  .nav-drop-bar .nav-side-items button { justify-content: center; padding: 9px 6px; }
+  .nav-side-icon { font-size: 1.15rem; }
 }
 
 /* Execution receipt: the trade's live progress, bottom-left, out of the way. */

@@ -119,34 +119,64 @@
           }
           const autopsy = data.autopsy;
           if (autopsy && Array.isArray(autopsy.timeline) && autopsy.timeline.length >= 2) {
-            const values = autopsy.timeline.map((point) => Number(point.liqUsd) || 0);
-            const max = Math.max(...values, Number(autopsy.flagLiqUsd) || 0, 1);
-            const W = 640, H = 120;
-            const coords = values.map((value, index) => [
-              (index / (values.length - 1)) * W,
-              H - 6 - (value / max) * (H - 14)
-            ]);
-            const pts = coords.map(([x, y]) => x.toFixed(1) + "," + y.toFixed(1)).join(" ");
-            const rugged = autopsy.outcome === "rugged";
-            const tone = rugged ? "#ff6b5e" : "#72ff23";
-            const flaggedDate = autopsy.flaggedAt ? new Date(autopsy.flaggedAt).toLocaleString() : "";
             const box = document.querySelector("[data-autopsy]");
             box.hidden = false;
-            box.innerHTML =
-              "<h2>" + (rugged ? "🪦 Rug autopsy" : "🛡 SlimeShield watch timeline") + "</h2>"
-              + '<p class="meta">SlimeShield flagged <b>' + esc(autopsy.verdict || "") + "</b>"
+            const values = autopsy.timeline.map((point) => Number(point.liqUsd) || 0);
+            const rugged = autopsy.outcome === "rugged";
+            const tone = rugged ? "#ff6b5e" : "#72ff23";
+            const flagLiq = Number(autopsy.flagLiqUsd) || values[0] || 0;
+            const nowLiq = values[values.length - 1];
+            const firstAt = Date.parse(autopsy.timeline[0].at);
+            const lastAt = Date.parse(autopsy.timeline[values.length - 1].at);
+            const spanMin = Math.max(1, Math.round((lastAt - firstAt) / 60000));
+            const spanLabel = spanMin >= 120 ? Math.round(spanMin / 60) + "h" : spanMin + " min";
+            const flaggedDate = autopsy.flaggedAt ? new Date(autopsy.flaggedAt).toLocaleString() : "";
+            const headline = "<h2>" + (rugged ? "🪦 Rug autopsy" : "🛡 SlimeShield watch timeline") + "</h2>"
+              + '<p class="meta">Flagged <b style="color:' + tone + '">' + esc(autopsy.verdict || "") + "</b>"
               + (autopsy.score != null ? " (" + esc(autopsy.score) + "/100)" : "")
-              + (flaggedDate ? " on " + esc(flaggedDate) : "")
-              + (rugged && autopsy.warningMinutes
-                ? " - liquidity was gone <b>" + esc(autopsy.warningMinutes) + " minutes later</b>. That was the warning window."
-                : " - tracking liquidity since the flag.")
-              + "</p>"
-              + '<svg viewBox="0 0 ' + W + " " + H + '" preserveAspectRatio="none" style="width:100%;height:120px;border:1px solid var(--line);border-radius:12px;background:rgba(8,20,10,0.5)">'
-              + '<polygon fill="' + tone + '22" points="0,' + H + " " + pts + " " + W + "," + H + '"/>'
-              + '<polyline fill="none" stroke="' + tone + '" stroke-width="2.5" points="' + pts + '"/>'
-              + '<circle cx="' + coords[0][0].toFixed(1) + '" cy="' + coords[0][1].toFixed(1) + '" r="4.5" fill="#ffd84d"/>'
-              + "</svg>"
-              + '<p class="meta">🟡 = the flag. Line = liquidity after it. Every flag is tracked to its outcome - <a href="/proof" style="color:var(--green)">see them all</a>.</p>';
+              + (flaggedDate ? " " + esc(flaggedDate) : "")
+              + (rugged && autopsy.warningMinutes ? " - liquidity was gone <b>" + esc(autopsy.warningMinutes) + " min later</b>. That was the warning window." : "")
+              + "</p>";
+            if (Math.max(...values, flagLiq) < 50) {
+              // Nothing to chart - say what the flat line means instead of drawing it.
+              box.innerHTML = headline
+                + '<div style="border:1px solid var(--line);border-radius:12px;padding:14px;background:rgba(8,20,10,0.5)">'
+                + '<b style="color:' + tone + '">No real liquidity has appeared since the flag.</b>'
+                + '<p class="meta" style="margin:6px 0 0">' + values.length + " checks over " + esc(spanLabel) + " - all near zero. A token that never gets liquidity IS the verdict. "
+                + 'Every flag is tracked to its outcome - <a href="/proof" style="color:var(--green)">see the wall</a>.</p></div>';
+            } else {
+              // Min-max scaling with padding so the shape reads even when moves are small.
+              const lo = Math.min(...values);
+              const hi = Math.max(...values, flagLiq);
+              const range = Math.max(hi - lo, hi * 0.08, 1);
+              const W = 640, H = 150, PAD = 16;
+              const coords = values.map((value, index) => [
+                PAD + (index / (values.length - 1)) * (W - PAD * 2),
+                H - 22 - ((value - lo) / range) * (H - 52)
+              ]);
+              const pts = coords.map(([x, y]) => x.toFixed(1) + "," + y.toFixed(1)).join(" ");
+              const first = coords[0];
+              const last = coords[coords.length - 1];
+              const deltaPct = flagLiq > 0 ? Math.round(((nowLiq - flagLiq) / flagLiq) * 100) : null;
+              box.innerHTML = headline
+                + '<div class="stats" style="margin:8px 0 10px">'
+                + '<div class="stat"><strong>' + esc(fmt(flagLiq)) + "</strong><span>liq at flag</span></div>"
+                + '<div class="stat"><strong style="color:' + (nowLiq < flagLiq ? "#ff7a6b" : "var(--green)") + '">' + esc(fmt(nowLiq)) + "</strong><span>liq now" + (deltaPct != null ? " (" + (deltaPct >= 0 ? "+" : "") + deltaPct + "%)" : "") + "</span></div>"
+                + '<div class="stat"><strong>' + values.length + "</strong><span>checks / " + esc(spanLabel) + "</span></div>"
+                + "</div>"
+                + '<svg viewBox="0 0 ' + W + " " + H + '" preserveAspectRatio="none" style="width:100%;height:150px;border:1px solid var(--line);border-radius:12px;background:rgba(8,20,10,0.5)">'
+                + '<defs><linearGradient id="liqFill" x1="0" y1="0" x2="0" y2="1">'
+                + '<stop offset="0%" stop-color="' + tone + '" stop-opacity="0.35"/><stop offset="100%" stop-color="' + tone + '" stop-opacity="0.02"/></linearGradient></defs>'
+                + '<line x1="' + PAD + '" y1="' + (H - 22) + '" x2="' + (W - PAD) + '" y2="' + (H - 22) + '" stroke="rgba(114,255,35,0.15)" stroke-width="1"/>'
+                + '<polygon fill="url(#liqFill)" points="' + first[0].toFixed(1) + "," + (H - 22) + " " + pts + " " + last[0].toFixed(1) + "," + (H - 22) + '"/>'
+                + '<polyline fill="none" stroke="' + tone + '" stroke-width="2.5" stroke-linejoin="round" points="' + pts + '"/>'
+                + '<circle cx="' + first[0].toFixed(1) + '" cy="' + first[1].toFixed(1) + '" r="5" fill="#ffd84d" stroke="#050705" stroke-width="1.5"/>'
+                + '<circle cx="' + last[0].toFixed(1) + '" cy="' + last[1].toFixed(1) + '" r="5" fill="' + tone + '" stroke="#050705" stroke-width="1.5"/>'
+                + '<text x="' + (first[0] + 9).toFixed(1) + '" y="' + Math.max(14, first[1] - 9).toFixed(1) + '" fill="#ffd84d" font-size="12" font-weight="800">flag</text>'
+                + '<text x="' + (last[0] - 9).toFixed(1) + '" y="' + Math.max(14, last[1] - 9).toFixed(1) + '" fill="' + tone + '" font-size="12" font-weight="800" text-anchor="end">now</text>'
+                + "</svg>"
+                + '<p class="meta">Liquidity since the flag, checked every ~10 min. Every flag is tracked to its outcome - <a href="/proof" style="color:var(--green)">see them all</a>.</p>';
+            }
           }
           const terminalUrl = "/terminal/chart?token=" + encodeURIComponent(mint) + "&source=token-page";
           document.querySelector("[data-ctas]").innerHTML =

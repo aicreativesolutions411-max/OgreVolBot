@@ -21802,6 +21802,9 @@ document.addEventListener("click", async (event) => {
 
   if (target.matches("[data-slimeshield-details]")) {
     event.preventDefault();
+    // Opened from inside the Dev Info drawer: close it first so the shield drawer
+    // lands on top instead of behind.
+    if (target.closest("[data-dev-info-drawer-root]")) closeDevInfoDetails();
     openSlimeShieldDetails(target.dataset.slimeshieldDetails || "");
     return;
   }
@@ -22076,6 +22079,7 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-protected-buy-open]")) {
     event.preventDefault();
     event.stopPropagation();
+    if (target.closest("[data-dev-info-drawer-root]")) closeDevInfoDetails();
     const sourceHint = target.dataset.protectedBuySource || "protected-buy";
     const fromQuickModal = Boolean(target.closest("[data-quick-buy-modal-root]"));
     const fromChartPanel = Boolean(target.closest(".chart-trade-panel"));
@@ -23240,6 +23244,17 @@ const DESKTOP_NAV_GROUPS = [
   { key: "profile", label: "Profile", items: [["profile", "Home / Profile"]] }
 ];
 
+const DESKTOP_NAV_ICONS = {
+  terminal: "📡", live: "🍳", liveTrades: "⚡",
+  smartChart: "📈", trade: "🔄",
+  slimeScope: "🔭", watchlist: "⭐", kol: "👑", sniper: "🎯", txAudit: "🧾",
+  tek: "🧰", ogreAi: "🤖", launchCoin: "🚀", bundle: "📦", volume: "🌀", launch: "👀",
+  wallets: "👛", positions: "💼", pnl: "📊", profile: "🐸"
+};
+
+// Desktop nav is a fixed LEFT SIDEBAR: every destination visible at all times -
+// no dropdowns to misread, nothing hides on hover. Icon-only at medium widths,
+// icons + labels when there is room. The mobile flat rail is untouched.
 function buildDesktopNavDropBar() {
   const tabs = document.querySelector(".tabs");
   if (!tabs || document.querySelector("[data-nav-drop]")) return;
@@ -23249,27 +23264,17 @@ function buildDesktopNavDropBar() {
   bar.setAttribute("aria-label", "Portal areas");
   bar.innerHTML = DESKTOP_NAV_GROUPS.map((group) => `
     <div class="nav-drop-group" data-nav-drop-group="${escapeHtml(group.key)}">
-      <button type="button" class="nav-drop-toggle" aria-haspopup="true" aria-expanded="false">${escapeHtml(group.label)}<span class="nav-drop-caret" aria-hidden="true">▾</span></button>
-      <div class="nav-drop-menu" role="menu">
-        ${group.items.map(([tab, label]) => `<button type="button" role="menuitem" data-tab="${escapeHtml(tab)}">${escapeHtml(label)}</button>`).join("")}
+      <span class="nav-side-group-label">${escapeHtml(group.label)}</span>
+      <div class="nav-side-items">
+        ${group.items.map(([tab, label]) => `
+          <button type="button" data-tab="${escapeHtml(tab)}" title="${escapeHtml(label)}">
+            <span class="nav-side-icon" aria-hidden="true">${DESKTOP_NAV_ICONS[tab] || "•"}</span>
+            <span class="nav-side-label">${escapeHtml(label)}</span>
+          </button>`).join("")}
       </div>
     </div>
   `).join("");
   tabs.parentElement.insertBefore(bar, tabs);
-  // Tap-to-toggle for touch laptops; hover handles the rest via CSS.
-  bar.addEventListener("click", (event) => {
-    const toggle = event.target.closest(".nav-drop-toggle");
-    if (!toggle) return;
-    const group = toggle.parentElement;
-    const wasOpen = group.classList.contains("is-open");
-    bar.querySelectorAll(".nav-drop-group.is-open").forEach((item) => item.classList.remove("is-open"));
-    if (!wasOpen) group.classList.add("is-open");
-  });
-  document.addEventListener("click", (event) => {
-    if (!event.target.closest("[data-nav-drop]")) {
-      bar.querySelectorAll(".nav-drop-group.is-open").forEach((item) => item.classList.remove("is-open"));
-    }
-  });
 }
 
 function syncDesktopNavActiveState() {

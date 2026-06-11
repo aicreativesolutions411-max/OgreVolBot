@@ -20085,18 +20085,55 @@ async function renderSignalCard(tokenMint) {
     vol ? `VOL ${formatUsdCompact(vol)}` : null,
     Number.isFinite(change) ? `1H ${change >= 0 ? "+" : ""}${change.toFixed(1)}%` : null
   ].filter(Boolean).join("   ");
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630">
-  <rect width="1200" height="630" fill="#050905"/>
-  <rect x="0" y="0" width="1200" height="630" fill="none" stroke="#72ff23" stroke-opacity="0.35" stroke-width="6"/>
-  <circle cx="120" cy="-40" r="320" fill="#72ff23" fill-opacity="0.07"/>
-  <text x="64" y="120" font-size="44" font-weight="900" fill="#9fb59a" font-family="Arial">SLIMEWIRE SIGNAL</text>
-  <text x="64" y="240" font-size="104" font-weight="900" fill="#eaffe0" font-family="Arial">$${escapeSvg(symbol)}</text>
-  ${name ? `<text x="64" y="298" font-size="34" fill="#9fb59a" font-family="Arial">${escapeSvg(name)}</text>` : ""}
-  <rect x="60" y="340" width="${Math.min(620, 200 + verdict.length * 42)}" height="86" rx="43" fill="${verdictColor}" fill-opacity="0.14" stroke="${verdictColor}" stroke-width="3"/>
-  <text x="96" y="398" font-size="46" font-weight="900" fill="${verdictColor}" font-family="Arial">SHIELD: ${escapeSvg(verdict)}${shield?.score != null ? ` ${shield.score}/100` : ""}</text>
-  <text x="64" y="496" font-size="38" font-weight="700" fill="#d6ffbf" font-family="Arial">${escapeSvg(stats || "fresh pair - data filling in")}</text>
-  <text x="64" y="560" font-size="26" fill="#7d937a" font-family="Consolas, monospace">${escapeSvg(tokenMint)}</text>
-  <text x="1136" y="560" text-anchor="end" font-size="34" font-weight="900" fill="#72ff23" font-family="Arial">slimewire.org/proof</text>
+  // Same visual language as the PnL card: slime border, dark panel, token art on
+  // the left, glow title - so every shared card is unmistakably SlimeWire.
+  const imageDataUrl = await tokenImageDataUrl(best?.info?.imageUrl);
+  const art = imageDataUrl
+    ? `<image href="${imageDataUrl}" x="72" y="160" width="400" height="400" preserveAspectRatio="xMidYMid slice" clip-path="url(#sigArtClip)"/>
+  <rect x="72" y="160" width="400" height="400" rx="34" fill="none" stroke="${verdictColor}" stroke-opacity="0.6" stroke-width="3"/>`
+    : `<rect x="72" y="160" width="400" height="400" rx="34" fill="#123018"/><text x="272" y="395" text-anchor="middle" font-size="120" font-weight="900" fill="${verdictColor}" font-family="${PNL_CARD_STYLE.fontFamily}">${escapeSvg(symbol.slice(0, 4))}</text>`;
+  const bgArt = imageDataUrl
+    ? `<image href="${imageDataUrl}" x="430" y="-120" width="900" height="900" preserveAspectRatio="xMidYMid slice" opacity="0.07"/>`
+    : "";
+  const borderDataUrl = await nextPnlBorderDataUrl();
+  const borderLayer = borderDataUrl
+    ? `<image href="${borderDataUrl}" x="0" y="0" width="${PNL_CARD_STYLE.width}" height="${PNL_CARD_STYLE.height}" preserveAspectRatio="xMidYMid slice"/>`
+    : pnlSlimeBorderSvg();
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${PNL_CARD_STYLE.width}" height="${PNL_CARD_STYLE.height}" viewBox="0 0 ${PNL_CARD_STYLE.width} ${PNL_CARD_STYLE.height}">
+  <defs>
+    <linearGradient id="sigBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#061006"/>
+      <stop offset="48%" stop-color="#0b2b12"/>
+      <stop offset="100%" stop-color="#020702"/>
+    </linearGradient>
+    <radialGradient id="sigGlow" cx="68%" cy="50%" r="48%">
+      <stop offset="0%" stop-color="${verdictColor}" stop-opacity="0.30"/>
+      <stop offset="100%" stop-color="${verdictColor}" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="sigArtClip"><rect x="72" y="160" width="400" height="400" rx="34"/></clipPath>
+    <filter id="sigShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="20" stdDeviation="24" flood-color="#000000" flood-opacity="0.55"/>
+    </filter>
+    <filter id="slimeGlow" x="-10%" y="-20%" width="120%" height="145%">
+      <feDropShadow dx="0" dy="0" stdDeviation="5" flood-color="${PNL_CARD_STYLE.slime}" flood-opacity="0.95"/>
+      <feDropShadow dx="0" dy="0" stdDeviation="18" flood-color="${PNL_CARD_STYLE.slime}" flood-opacity="0.42"/>
+    </filter>
+  </defs>
+  <rect width="${PNL_CARD_STYLE.width}" height="${PNL_CARD_STYLE.height}" fill="url(#sigBg)"/>
+  ${bgArt}
+  <rect width="${PNL_CARD_STYLE.width}" height="${PNL_CARD_STYLE.height}" fill="url(#sigGlow)"/>
+  ${borderLayer}
+  <rect x="42" y="86" width="1116" height="510" rx="42" fill="${PNL_CARD_STYLE.panel}" filter="url(#sigShadow)" stroke="rgba(255,255,255,0.09)"/>
+  ${art}
+  <text x="520" y="178" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="56" font-weight="900" fill="${PNL_CARD_STYLE.slime}" filter="url(#slimeGlow)">www.SlimeWire.org</text>
+  <text x="520" y="226" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="30" font-weight="800" fill="${PNL_CARD_STYLE.muted}">SIGNAL CARD</text>
+  <text x="520" y="330" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="96" font-weight="900" fill="${PNL_CARD_STYLE.white}">$${escapeSvg(symbol)}</text>
+  ${name ? `<text x="520" y="376" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="30" font-weight="700" fill="${PNL_CARD_STYLE.muted}">${escapeSvg(name)}</text>` : ""}
+  <rect x="516" y="404" width="${Math.min(580, 230 + verdict.length * 34)}" height="74" rx="37" fill="${verdictColor}" fill-opacity="0.16" stroke="${verdictColor}" stroke-width="3"/>
+  <text x="548" y="455" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="40" font-weight="900" fill="${verdictColor}">SHIELD: ${escapeSvg(verdict)}${shield?.score != null ? ` ${shield.score}/100` : ""}</text>
+  <text x="520" y="540" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="34" font-weight="800" fill="#d6ffbf">${escapeSvg(stats || "fresh pair - data filling in")}</text>
+  <text x="72" y="630" font-family="Consolas, monospace" font-size="24" fill="#7d937a">${escapeSvg(tokenMint)}</text>
+  <text x="1128" y="630" text-anchor="end" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="32" font-weight="900" fill="#72ff23">slimewire.org/proof</text>
 </svg>`;
   const png = await sharp(Buffer.from(svg)).png().toBuffer();
   signalCardCache.set(tokenMint, { png, at: Date.now() });
