@@ -75,8 +75,8 @@ test("connect page has route bootstrap without a global capture click blocker", 
   assert.doesNotMatch(htmlSource, /rel="preload" as="video"/);
   assert.match(htmlSource, /link\.as = "video"/);
   assert.match(htmlSource, /if \(skipsIntro \|\| introDone\) return/);
-  assert.match(htmlSource, /data-intro-src="\.\/assets\/slimewire\/intro\/swamp-portal-intro\.mp4"/);
-  assert.match(htmlSource, /data-intro-src="\.\/assets\/slimewire\/intro\/swamp-portal-intro\.mp4"[\s\S]*preload="none"/);
+  assert.match(htmlSource, /data-intro-src="\.\/assets\/slimewire\/intro\/swamp-portal-intro\.mp4[^"]*"/);
+  assert.match(htmlSource, /data-intro-src="\.\/assets\/slimewire\/intro\/swamp-portal-intro\.mp4[^"]*"[\s\S]*preload="none"/);
   assert.match(appSource, /entryVideo\.src = entryVideo\.dataset\.introSrc/);
   // No mute/skip/enter buttons: the video autoplays and auto-advances when it ends.
   assert.doesNotMatch(htmlSource, /data-intro-sound/);
