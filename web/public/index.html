@@ -10,6 +10,8 @@
     <link rel="dns-prefetch" href="https://dexscreener.com">
     <link rel="preconnect" href="https://api.dexscreener.com">
     <link rel="dns-prefetch" href="https://api.dexscreener.com">
+    <link rel="preconnect" href="https://ogrevolbot.onrender.com" crossorigin>
+    <link rel="dns-prefetch" href="https://ogrevolbot.onrender.com">
     <link rel="icon" type="image/svg+xml" href="/assets/slimewire/svg/slimewire-mark.svg">
     <script>
       // Preload the intro video only when the intro will actually play this session.
@@ -524,6 +526,21 @@
           setRouteHidden("[data-dashboard]", route !== "terminal");
           document.querySelector("[data-terminal-global-search]")?.toggleAttribute("hidden", route !== "terminal");
           document.querySelector("[data-top-sync-strip]")?.toggleAttribute("hidden", route !== "terminal");
+          // Telegram/share links land on /terminal/chart: paint a skeleton instantly so
+          // the tap feels immediate while the app and live chart boot behind it.
+          if (route === "terminal" && currentPath.includes("/terminal/chart")) {
+            const panel = document.querySelector("[data-panel]");
+            const rawToken = new URLSearchParams(window.location.search || "").get("token") || "";
+            const token = rawToken.replace(/[^A-HJ-NP-Za-km-z1-9]/g, "").slice(0, 48);
+            if (panel && !panel.childElementCount) {
+              const label = token ? token.slice(0, 4) + "..." + token.slice(-4) : "chart";
+              panel.innerHTML = '<div class="chart-boot-skeleton" aria-hidden="true">'
+                + '<div class="chart-boot-bar"></div>'
+                + '<div class="chart-boot-frame"><div class="chart-boot-shimmer"></div></div>'
+                + '<p>Loading ' + label + ' - SlimeWire live chart is booting...</p>'
+                + '</div>';
+            }
+          }
         })();
       </script>
 

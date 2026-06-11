@@ -19265,8 +19265,9 @@ function groupBridgeFor(chatId) {
       enabled: true,
       botToken: CONFIG.telegramChannelBotToken,
       chatId: key,
-      maxPerHour: 3,
-      minIntervalSeconds: 300,
+      // Sized for 15-min play drops (4/hour) plus engine events, still spaced out.
+      maxPerHour: 8,
+      minIntervalSeconds: 120,
       log: (entry) => console.warn(`[tg-group ${key}] ${entry}`)
     }));
   }
@@ -19292,7 +19293,8 @@ function broadcastToTelegramGroups(kind, key, text) {
 // candidate passes the full gate (top scanner row AND SlimeShield BUY verdict). No
 // qualified pick = no post; silence costs nothing, a bad call costs trust. Every drop
 // records its entry price, and when a called pick 2x's, the same chats get the receipt.
-const TG_ALPHA_DROP_INTERVAL_MS = 4 * 60 * 60 * 1000;
+const TG_ALPHA_DROP_INTERVAL_MS = Math.max(5, Math.min(24 * 60, Number.parseInt(process.env.TG_ALPHA_DROP_INTERVAL_MINUTES || "15", 10) || 15)) * 60 * 1000;
+const TG_ALPHA_DROP_PICKS = Math.max(1, Math.min(4, Number.parseInt(process.env.TG_ALPHA_DROP_PICKS || "4", 10) || 4));
 
 function alphaCallsPath() {
   return path.join(CONFIG.dataDir, "alpha-calls.json");
@@ -19318,54 +19320,73 @@ async function runAlphaDropTick() {
     group?.alerts && (!group.lastAlphaAt || now - Date.parse(group.lastAlphaAt) > TG_ALPHA_DROP_INTERVAL_MS));
   if (!dueGroups.length && !tgChannel.enabled) return;
 
+  // Take the top scanner rows, attach a shield verdict to each, and drop everything
+  // that is not an outright AVOID. Risky plays are shown honestly with their verdict -
+  // degens want the early ones, the label keeps it honest.
   const { rows } = await telegramAlphaRows("alpha-drop");
-  let chosen = null;
-  let shield = null;
-  for (const row of rows.slice(0, 5)) {
-    const result = await webSlimeShield(row.tokenMint).catch(() => null);
-    if (String(result?.verdict || "").toUpperCase() === "BUY") {
-      chosen = row;
-      shield = result;
-      break;
-    }
+  const picks = [];
+  for (const row of rows.slice(0, TG_ALPHA_DROP_PICKS + 3)) {
+    if (picks.length >= TG_ALPHA_DROP_PICKS) break;
+    const shield = await webSlimeShield(row.tokenMint).catch(() => null);
+    const verdict = String(shield?.verdict || "").toUpperCase();
+    if (verdict === "AVOID") continue;
+    picks.push({ row, shield, verdict: verdict || "UNRATED" });
   }
-  if (!chosen) return;
+  if (!picks.length) return;
 
-  const pairs = await fetchDexScreenerTokenPairsBatch([chosen.tokenMint]).catch(() => []);
-  const best = bestDexPairForToken(chosen.tokenMint, pairs.filter((pair) => pairMatchesToken(pair, chosen.tokenMint)));
-  const priceUsd = Number(best?.priceUsd) || null;
-  const links = slimewireTokenLinks(chosen.tokenMint);
-  const stats = [chosen.marketCapLabel ? `MC ${chosen.marketCapLabel}` : "", chosen.liquidityLabel ? `Liq ${chosen.liquidityLabel}` : "", chosen.pairAgeLabel || ""].filter(Boolean).map(escapeTelegramHtml).join(" | ");
+  const pairs = await fetchDexScreenerTokenPairsBatch(picks.map((pick) => pick.row.tokenMint)).catch(() => []);
+  const verdictIcon = { BUY: "🟢", CAUTION: "🟡", RISK: "🟠", UNRATED: "⚪" };
+  const lines = picks.map((pick, index) => {
+    const { row, shield, verdict } = pick;
+    const links = slimewireTokenLinks(row.tokenMint);
+    const stats = [row.marketCapLabel ? `MC ${row.marketCapLabel}` : "", row.liquidityLabel ? `Liq ${row.liquidityLabel}` : "", row.pairAgeLabel || ""].filter(Boolean).map(escapeTelegramHtml).join(" | ");
+    return [
+      `${index + 1}. ${verdictIcon[verdict] || "⚪"} <a href="${links.site}"><b>$${escapeTelegramHtml(row.symbol || shortMint(row.tokenMint))}</b></a> - ${escapeTelegramHtml(verdict)}${shield?.score != null ? ` ${shield.score}/100` : ""}${stats ? ` | ${stats}` : ""}`,
+      `<code>${escapeTelegramHtml(row.tokenMint)}</code>`
+    ].join("\n");
+  });
+  const topLinks = slimewireTokenLinks(picks[0].row.tokenMint);
   const text = [
-    `🟢 <b>SlimeWire alpha drop</b>: $${escapeTelegramHtml(chosen.symbol || shortMint(chosen.tokenMint))}${stats ? ` - ${stats}` : ""}`,
-    `SlimeShield: <b>BUY</b> (score ${shield.score ?? "?"}/100). ${escapeTelegramHtml(String(shield.summary || "").slice(0, 140))}`,
-    `<code>${escapeTelegramHtml(chosen.tokenMint)}</code>`,
-    `<a href="${links.site}">chart + trade</a> | <a href="${links.dex}">dex</a>${links.dmBuy ? ` | <a href="${links.dmBuy}">quick buy</a>` : ""}`,
-    `Not financial advice - every call gets tracked and receipts post when it wins.`
+    `🐸 <b>SlimeWire plays</b> - tap a pair to open its chart:`,
+    ...lines,
+    `${topLinks.dmBuy ? `<a href="${topLinks.dmBuy}">quick buy top pick</a> | ` : ""}<a href="https://www.slimewire.org">slimewire.org</a> - every call is tracked, winners get receipts.`
   ].join("\n");
 
+  // Key by time bucket so the cadence holds even when the same top pick repeats.
+  const dropKey = `drop-${Math.floor(now / TG_ALPHA_DROP_INTERVAL_MS)}`;
   const recipients = [];
   for (const [chatId, group] of dueGroups) {
-    groupBridgeFor(chatId).announce("alpha-drop", chosen.tokenMint, text);
+    groupBridgeFor(chatId).announce("alpha-drop", dropKey, text);
     group.lastAlphaAt = new Date(now).toISOString();
     recipients.push(chatId);
   }
   if (recipients.length) await writeJsonFile(telegramGroupsPath(), groupsStore);
-  tgChannel.announce("alpha-drop", chosen.tokenMint, text);
+  tgChannel.announce("alpha-drop", dropKey, text);
 
-  if (priceUsd) {
-    const calls = await readAlphaCalls();
+  const calls = await readAlphaCalls();
+  let recorded = false;
+  for (const pick of picks) {
+    const best = bestDexPairForToken(pick.row.tokenMint, pairs.filter((pair) => pairMatchesToken(pair, pick.row.tokenMint)));
+    const priceUsd = Number(best?.priceUsd) || null;
+    if (!priceUsd) continue;
+    const recentCall = calls.calls.find((call) => call.mint === pick.row.tokenMint
+      && call.status === "watching");
+    if (recentCall) continue; // already tracking this mint
     calls.calls.push({
-      mint: chosen.tokenMint,
-      symbol: String(chosen.symbol || shortMint(chosen.tokenMint)).slice(0, 24),
+      mint: pick.row.tokenMint,
+      symbol: String(pick.row.symbol || shortMint(pick.row.tokenMint)).slice(0, 24),
       chatIds: recipients,
       priceUsd,
-      shieldScore: Number(shield.score) || null,
+      shieldScore: Number(pick.shield?.score) || null,
+      verdict: pick.verdict,
       calledAt: new Date(now).toISOString(),
       status: "watching",
       outcome: null
     });
-    calls.calls = calls.calls.slice(-200);
+    recorded = true;
+  }
+  if (recorded) {
+    calls.calls = calls.calls.slice(-300);
     await writeJsonFile(alphaCallsPath(), calls);
   }
 }
@@ -19504,7 +19525,7 @@ if (CONFIG.serviceRole === "web") {
     checkShieldReceiptOutcomes().catch((error) => console.warn(`[shield-receipts] check failed: ${error.message}`));
     checkAlphaCallOutcomes().catch((error) => console.warn(`[alpha-calls] check failed: ${error.message}`));
     runAlphaDropTick().catch((error) => console.warn(`[alpha-drop] tick failed: ${error.message}`));
-  }, 10 * 60 * 1000);
+  }, 5 * 60 * 1000);
   shieldReceiptTimer.unref?.();
 }
 
@@ -27792,13 +27813,12 @@ async function webStartOgreAiRun(userId, body = {}) {
     attemptedPicks.push(pickSummary);
     // Final SlimeShield gate before any SOL moves: the row filters catch hard flags,
     // but the shield folds in dev info, authority risk, and KOL dump pressure the
-    // feed row may not carry. AVOID always blocks; autopilot also refuses RISK -
-    // unattended buys should only take the cleaner setups.
+    // feed row may not carry. Only AVOID blocks - risky setups are allowed because
+    // they are often the biggest winners; the TP/SL plan is the risk control.
     try {
       const shield = await webSlimeShield(pick.tokenMint);
       const verdict = String(shield?.verdict || "").toUpperCase();
-      const autopilotRun = Boolean(body.autopilot);
-      if (verdict === "AVOID" || (autopilotRun && verdict === "RISK")) {
+      if (verdict === "AVOID") {
         errors.push({
           tokenMint: pick.tokenMint,
           shortMint: shortMint(pick.tokenMint),

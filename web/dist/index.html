@@ -10,6 +10,8 @@
     <link rel="dns-prefetch" href="https://dexscreener.com">
     <link rel="preconnect" href="https://api.dexscreener.com">
     <link rel="dns-prefetch" href="https://api.dexscreener.com">
+    <link rel="preconnect" href="https://ogrevolbot.onrender.com" crossorigin>
+    <link rel="dns-prefetch" href="https://ogrevolbot.onrender.com">
     <link rel="icon" type="image/svg+xml" href="/assets/slimewire/svg/slimewire-mark.svg">
     <script>
       // Preload the intro video only when the intro will actually play this session.
@@ -38,12 +40,12 @@
     <link rel="preload" as="image" href="/assets/slimewire/svg/icons/wallet.svg">
     <link rel="preload" as="image" href="/assets/slimewire/svg/powered-by-ogres-badge.svg">
     <link rel="stylesheet" href="/tailwind.css?v=20260603-tailwind-v1">
-    <link rel="stylesheet" href="/styles.css?v=20260611022243">
-    <link rel="stylesheet" href="/slimewire-final-overrides.css?v=20260611022243">
+    <link rel="stylesheet" href="/styles.css?v=20260611023913">
+    <link rel="stylesheet" href="/slimewire-final-overrides.css?v=20260611023913">
     <script defer src="/config.js"></script>
     <script defer src="/vendor/tweetnacl-fast.min.js"></script>
     <script defer src="/vendor/solana-web3.iife.min.js?v=20260605-browser-trade-v1"></script>
-    <script type="module" src="/app.js?v=20260611022243"></script>
+    <script type="module" src="/app.js?v=20260611023913"></script>
   </head>
   <body>
     <main class="shell" data-app data-route="intro">
@@ -524,6 +526,21 @@
           setRouteHidden("[data-dashboard]", route !== "terminal");
           document.querySelector("[data-terminal-global-search]")?.toggleAttribute("hidden", route !== "terminal");
           document.querySelector("[data-top-sync-strip]")?.toggleAttribute("hidden", route !== "terminal");
+          // Telegram/share links land on /terminal/chart: paint a skeleton instantly so
+          // the tap feels immediate while the app and live chart boot behind it.
+          if (route === "terminal" && currentPath.includes("/terminal/chart")) {
+            const panel = document.querySelector("[data-panel]");
+            const rawToken = new URLSearchParams(window.location.search || "").get("token") || "";
+            const token = rawToken.replace(/[^A-HJ-NP-Za-km-z1-9]/g, "").slice(0, 48);
+            if (panel && !panel.childElementCount) {
+              const label = token ? token.slice(0, 4) + "..." + token.slice(-4) : "chart";
+              panel.innerHTML = '<div class="chart-boot-skeleton" aria-hidden="true">'
+                + '<div class="chart-boot-bar"></div>'
+                + '<div class="chart-boot-frame"><div class="chart-boot-shimmer"></div></div>'
+                + '<p>Loading ' + label + ' - SlimeWire live chart is booting...</p>'
+                + '</div>';
+            }
+          }
         })();
       </script>
 

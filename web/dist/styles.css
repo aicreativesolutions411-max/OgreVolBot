@@ -9539,3 +9539,41 @@ body {
     background-size: cover, 760px 760px, auto, auto, auto;
   }
 }
+
+/* Instant skeleton for /terminal/chart deep links (painted by inline HTML script
+   before app.js parses - the Telegram tap must feel immediate). */
+.chart-boot-skeleton {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+.chart-boot-bar {
+  height: 42px;
+  border-radius: 12px;
+  background: rgba(114, 255, 35, 0.08);
+  border: 1px solid rgba(114, 255, 35, 0.16);
+}
+.chart-boot-frame {
+  position: relative;
+  height: min(52vh, 460px);
+  border-radius: 14px;
+  overflow: hidden;
+  background: rgba(8, 20, 10, 0.55);
+  border: 1px solid rgba(114, 255, 35, 0.16);
+}
+.chart-boot-shimmer {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 30%, rgba(114, 255, 35, 0.1) 50%, transparent 70%);
+  background-size: 220% 100%;
+  animation: chart-boot-sweep 1.15s linear infinite;
+}
+@keyframes chart-boot-sweep {
+  from { background-position: 130% 0; }
+  to { background-position: -90% 0; }
+}
+.chart-boot-skeleton p {
+  margin: 0;
+  color: rgba(226, 255, 215, 0.72);
+  font-size: 0.85rem;
+}

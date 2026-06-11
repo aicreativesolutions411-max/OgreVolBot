@@ -17645,6 +17645,39 @@ function positionsTableHtml(limit = 25) {
   `;
 }
 
+// Position intelligence: entry cost, live MC, armed-exit state, and a "what changed
+// since last refresh" delta - the row should answer "am I winning and am I protected"
+// at a glance, without leaving SlimeWire.
+const positionValueMemory = new Map();
+function positionIntelHtml(position) {
+  const mint = String(position.tokenMint || "");
+  if (!mint) return "";
+  const pnlToken = (state.pnl?.tokens || []).find((row) => String(row.tokenMint) === mint);
+  const feedRow = allRawSignalRows().find((row) => String(row?.tokenMint || "") === mint);
+  const plan = (Array.isArray(state.tradePlans) ? state.tradePlans : []).find((item) =>
+    String(item.tokenMint) === mint && ["watching", "active", "armed", "pending"].includes(String(item.status || "").toLowerCase()));
+  const bits = [];
+  if (pnlToken?.spentSol) bits.push(`Entry ${pnlToken.spentSol} SOL`);
+  if (feedRow?.marketCapLabel) bits.push(`MC ${feedRow.marketCapLabel}`);
+  bits.push(plan
+    ? `TP ${plan.takeProfitSummary || plan.takeProfitPct || "off"} / SL ${plan.stopLossSummary || plan.stopLossPct || "off"} armed`
+    : "no auto-exit armed");
+  const value = Number(position.estimatedValueSol);
+  let changeNote = "";
+  if (Number.isFinite(value)) {
+    const previous = positionValueMemory.get(mint);
+    if (previous && Number.isFinite(previous.value) && Math.abs(value - previous.value) > 0.0005) {
+      const delta = value - previous.value;
+      changeNote = `${delta > 0 ? "▲ +" : "▼ "}${delta.toFixed(4)} SOL since last refresh`;
+    }
+    positionValueMemory.set(mint, { value, at: Date.now() });
+  }
+  return `
+    <small>${escapeHtml(bits.join(" | "))}</small>
+    ${changeNote ? `<small class="${changeNote.startsWith("▲") ? "positive" : "negative"}">${escapeHtml(changeNote)}</small>` : ""}
+  `;
+}
+
 function positionRowHtml(position) {
   const hasEstimatedValue = position.estimatedValueSol !== null && position.estimatedValueSol !== undefined && position.estimatedValueSol !== "";
   const hasOpenPnl = position.openPnlSol !== null && position.openPnlSol !== undefined && position.openPnlSol !== "";
@@ -17679,10 +17712,12 @@ function positionRowHtml(position) {
         <span>${escapeHtml(position.uiAmount)} tokens across ${escapeHtml(position.walletCount)} wallet(s)</span>
         ${position.name ? `<small>${escapeHtml(position.name)}</small>` : ""}
         <small>Value: ${escapeHtml(valueLabel)} | PnL: ${escapeHtml(pnlLabel)}</small>
+        ${positionIntelHtml(position)}
         ${valueStatus ? `<small class="${isValueUpdating ? "muted-text" : "warning-text"}">${escapeHtml(valueStatus)}</small>` : ""}
       </div>
       <div class="card-actions compact">
         <button class="primary" data-smart-chart-token="${escapeHtml(position.tokenMint)}">Chart</button>
+        <button data-token-trade="${escapeHtml(position.tokenMint)}" data-token-trade-source="position-arm" title="Open the trade ticket to arm or adjust TP/SL on this bag">Arm Exits</button>
         <button data-position-sell="${escapeHtml(position.tokenMint)}" data-position-sell-percent="25">Sell 25%</button>
         <button data-position-sell="${escapeHtml(position.tokenMint)}" data-position-sell-percent="50">Sell 50%</button>
         <button class="primary" data-position-sell="${escapeHtml(position.tokenMint)}" data-position-sell-percent="100">Exit 100%</button>
