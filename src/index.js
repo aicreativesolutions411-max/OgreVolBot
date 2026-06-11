@@ -1992,6 +1992,41 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    // PUBLIC token read: powers the shareable /t?ca= page - shield verdict, market
+    // stats, and the call board without a login. "Saw it on X? Verify it on SlimeWire."
+    if (request.method === "GET" && pathname === "/api/web/token-read") {
+      const readMint = parsePublicKey(String(requestUrl.searchParams.get("mint") || "")).toBase58();
+      const [shield, pairs, board] = await Promise.all([
+        webSlimeShield(readMint).catch(() => null),
+        fetchDexScreenerTokenPairsFallback(readMint).catch(() => []),
+        webBoardCallsForMint(readMint).catch(() => ({ calls: [], topCallers: [] }))
+      ]);
+      const best = bestDexPairForToken(readMint, pairs);
+      sendCachedWebJson(request, response, 200, {
+        ok: true,
+        mint: readMint,
+        symbol: best?.baseToken?.symbol || "",
+        name: best?.baseToken?.name || "",
+        priceUsd: Number(best?.priceUsd) || null,
+        marketCapUsd: Number(best?.marketCap || best?.fdv) || null,
+        liquidityUsd: Number(best?.liquidity?.usd) || null,
+        volumeH24: Number(best?.volume?.h24) || null,
+        changeH1: Number(best?.priceChange?.h1) ?? null,
+        pairAddress: best?.pairAddress || "",
+        imageUrl: best?.info?.imageUrl || "",
+        shield: shield ? {
+          verdict: shield.verdict,
+          score: shield.score,
+          confidence: shield.confidence,
+          summary: String(shield.summary || "").slice(0, 220),
+          factors: (shield.factors || []).slice(0, 3).map((factor) => String(factor?.label || factor).slice(0, 90))
+        } : null,
+        calls: (board.calls || []).slice(0, 10),
+        topCallers: board.topCallers || []
+      }, "public, max-age=20, stale-while-revalidate=120");
+      return;
+    }
+
     // PUBLIC signal card: shareable PNG for any token - the clean shill engine.
     if (request.method === "GET" && pathname === "/api/web/signal-card") {
       const cardMint = parsePublicKey(String(requestUrl.searchParams.get("tokenMint") || "")).toBase58();
@@ -2402,6 +2437,16 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendWebJson(request, response, 200, {
         ok: true,
         plans: await webTradePlanRows(auth.userId)
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/telegram/link-code") {
+      const linkCode = issueTelegramLinkCode(auth.userId);
+      sendWebJson(request, response, 200, {
+        ok: true,
+        url: CONFIG.telegramBotUsername ? `https://t.me/${CONFIG.telegramBotUsername}?start=link_${linkCode}` : "",
+        expiresInMinutes: 10
       });
       return;
     }
@@ -6463,6 +6508,17 @@ async function handleMessage(message, userId) {
       console.warn(`[tg-group] toggle failed: ${error.message}`);
       await say(chatId, `Could not update alerts: ${friendlyError(error)}`).catch(() => {});
     }
+    return;
+  }
+
+  // One-tap account link from the site: /start link_<code> binds this Telegram id to
+  // the web account that issued the code, so wins can be credited automatically.
+  const deepLinkBind = /^\/start(?:@\w+)?\s+link_([a-z0-9]+)$/i.exec(text);
+  if (deepLinkBind && isPrivateChat(message.chat)) {
+    const linkedWebUser = await completeTelegramLink(deepLinkBind[1], userId);
+    await say(chatId, linkedWebUser
+      ? "Linked! Your SlimeWire account is now connected to this Telegram. Next: in any group with me, type /mywins on and your take-profit wins will post there with your name."
+      : "That link code expired - tap the button on slimewire.org again (Profile > Alerts > Track wins in Telegram).");
     return;
   }
 
@@ -19034,6 +19090,8 @@ function defaultJsonForPath(filePath) {
     case "alpha-calls.json":
     case "call-board.json":
       return { calls: [] };
+    case "telegram-links.json":
+      return { links: {} };
     case "shield-receipts.json":
       return { receipts: [] };
     case "push-subscriptions.json":
@@ -19305,6 +19363,42 @@ async function handleTelegramReceiptsCommand(chatId) {
   ].join("\n"));
 }
 
+// One-tap account link: the site issues a short-lived code, the user taps a t.me
+// deep link, and the bot maps their Telegram id to their web account. After that the
+// engine can credit their wins regardless of how the account was created.
+const telegramLinkCodes = new Map(); // code -> { webUserId, expiresAt }
+
+function telegramLinksPath() {
+  return path.join(CONFIG.dataDir, "telegram-links.json");
+}
+
+async function readTelegramLinks() {
+  const store = await readJson(telegramLinksPath());
+  if (!store.links || typeof store.links !== "object") store.links = {};
+  return store;
+}
+
+function issueTelegramLinkCode(webUserId) {
+  const code = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  telegramLinkCodes.set(code, { webUserId: String(webUserId), expiresAt: Date.now() + 10 * 60 * 1000 });
+  if (telegramLinkCodes.size > 200) {
+    for (const [key, value] of telegramLinkCodes) {
+      if (value.expiresAt < Date.now()) telegramLinkCodes.delete(key);
+    }
+  }
+  return code;
+}
+
+async function completeTelegramLink(code, tgUserId) {
+  const entry = telegramLinkCodes.get(String(code));
+  if (!entry || entry.expiresAt < Date.now()) return null;
+  telegramLinkCodes.delete(String(code));
+  const store = await readTelegramLinks();
+  store.links[entry.webUserId] = String(tgUserId);
+  await writeJsonFile(telegramLinksPath(), store);
+  return entry.webUserId;
+}
+
 // /mywins on|off (any member, in a group): opt your own TP/SL wins into this chat.
 // Link path: DM the bot /web -> log into slimewire.org with the code -> your site
 // account IS your Telegram id, so the engine knows which exits are yours.
@@ -19342,10 +19436,12 @@ function postUserWinToGroups(plan, planWallet, triggerReason = "") {
   void (async () => {
     try {
       const store = await readTelegramGroups();
+      const links = await readTelegramLinks().catch(() => ({ links: {} }));
+      const linkedTgId = links.links?.[planUser] || "";
       const movePct = Number(planWallet?.lastTriggerMovePct ?? planWallet?.lastMovePct);
       const moveLabel = Number.isFinite(movePct) ? `+${movePct.toFixed(1)}%` : "a take-profit";
       for (const [groupChatId, group] of Object.entries(store.groups || {})) {
-        const handle = group?.winSubscribers?.[planUser];
+        const handle = group?.winSubscribers?.[planUser] || (linkedTgId ? group?.winSubscribers?.[linkedTgId] : "");
         if (!handle) continue;
         groupBridgeFor(groupChatId).announce("user-win", `${planUser}:${plan?.id || plan?.tokenMint}`, [
           `🎯 <b>${escapeTelegramHtml(handle)} just banked ${escapeTelegramHtml(moveLabel)}</b> on $${escapeTelegramHtml(plan?.copySignal?.symbol || shortMint(plan?.tokenMint || ""))} - SlimeWire server TP fired for them automatically.`,
@@ -19869,6 +19965,43 @@ async function checkAlphaCallOutcomes() {
   if (changed) await writeJsonFile(alphaCallsPath(), store);
 }
 
+// --- Daily Swamp Report: one digest post per UTC day to every armed chat ----------
+let lastSwampReportDay = "";
+async function runDailySwampReport() {
+  const today = new Date().toISOString().slice(0, 10);
+  if (lastSwampReportDay === today) return;
+  const hourUtc = new Date().getUTCHours();
+  if (hourUtc < 14) return; // post mid-day UTC, after the morning action
+  const groupsStore = await readTelegramGroups();
+  const meta = groupsStore.meta || {};
+  if (meta.lastSwampReportDay === today) {
+    lastSwampReportDay = today;
+    return;
+  }
+  const calls = await readAlphaCalls().catch(() => ({ calls: [] }));
+  const receipts = await readShieldReceipts().catch(() => ({ receipts: [] }));
+  const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+  const recent = calls.calls.filter((call) => Date.parse(call.calledAt) > dayAgo);
+  const recentWins = recent.filter((call) => call.outcome === "won");
+  const bestWin = recentWins.sort((a, b) => (b.peakX || 0) - (a.peakX || 0))[0];
+  const recentRugs = receipts.receipts.filter((item) => item.outcome === "rugged" && Date.parse(item.resolvedAt || "") > dayAgo);
+  if (!recent.length && !recentRugs.length) return; // nothing worth reporting
+  const lines = [
+    `🐸 <b>Daily Swamp Report</b>`,
+    `${recent.length} call(s) dropped, ${recentWins.length} hit 2x${bestWin ? ` (best: $${escapeTelegramHtml(bestWin.symbol)} ${bestWin.peakX}x)` : ""}.`,
+    recentRugs.length ? `🛡 SlimeShield flagged ${recentRugs.length} token(s) before they died.` : "",
+    `Full record, wins AND losses: <a href="https://www.slimewire.org/proof">slimewire.org/proof</a>`
+  ].filter(Boolean);
+  const text = lines.join("\n");
+  for (const [chatId, group] of Object.entries(groupsStore.groups || {})) {
+    if (group?.alerts) groupBridgeFor(chatId).announce("daily-report", today, text);
+  }
+  tgChannel.announce("daily-report", today, text);
+  groupsStore.meta = { ...meta, lastSwampReportDay: today };
+  await writeJsonFile(telegramGroupsPath(), groupsStore);
+  lastSwampReportDay = today;
+}
+
 // --- SlimeShield receipts: every AVOID/RISK flag gets recorded, then we go back and
 // check what actually happened to the token. "Flagged 43 min before the rug" is the
 // kind of proof no other terminal publishes. Global store, capped, best-effort.
@@ -19963,6 +20096,7 @@ if (CONFIG.serviceRole === "web") {
     checkAlphaCallOutcomes().catch((error) => console.warn(`[alpha-calls] check failed: ${error.message}`));
     runAlphaDropTick().catch((error) => console.warn(`[alpha-drop] tick failed: ${error.message}`));
     checkBoardCallOutcomes().catch((error) => console.warn(`[call-board] check failed: ${error.message}`));
+    runDailySwampReport().catch((error) => console.warn(`[swamp-report] failed: ${error.message}`));
   }, 5 * 60 * 1000);
   shieldReceiptTimer.unref?.();
 }

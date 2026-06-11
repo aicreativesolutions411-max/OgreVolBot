@@ -865,11 +865,11 @@ tabKey | label | component | endpoint | category | refreshMs | staleMs | cacheKe
 */
 const TERMINAL_FEEDS = [
   { tabKey: "terminal", label: "Live Terminal", component: "terminalHtml", endpoint: "composite:/api/web/live-pairs+/api/web/kol/scan+/api/web/watchlist", category: "overview:terminal", refreshMs: 8_000, staleMs: 24_000, cacheKey: "terminal:overview", pageSize: 12, maxPageSize: 24, previewLimit: 8, supportsPagination: false },
-  { tabKey: "live", label: "Cooks - New Solana Pairs", component: "livePairsHtml", endpoint: "/api/web/live-pairs", category: "pairs:new", refreshMs: 8_000, staleMs: 24_000, cacheKey: "pairs:{bucket}:{sort}", pageSize: 50, maxPageSize: 100, previewLimit: 12, supportsPagination: true },
-  { tabKey: "liveTrades", label: "Live Trades - Recent Swaps", component: "liveTradesHtml", endpoint: "/api/web/pnl", category: "trades:recent", refreshMs: 8_000, staleMs: 20_000, cacheKey: "trades:recent", pageSize: 50, maxPageSize: 100, previewLimit: 10, supportsPagination: true },
-  { tabKey: "slimeScope", label: "Slime Scope - Scanner Picks", component: "slimeScopeHtml", endpoint: "composite:/api/web/live-pairs+/api/web/sniper/scan", category: "scanner:slime-scope", refreshMs: 10_000, staleMs: 30_000, cacheKey: "scanner:slime-scope:{scopeMode}", pageSize: 60, maxPageSize: 120, previewLimit: 30, supportsPagination: true },
+  { tabKey: "live", label: "Cooks - New Solana Pairs", component: "livePairsHtml", endpoint: "/api/web/live-pairs", category: "pairs:new", refreshMs: 8_000, staleMs: 24_000, cacheKey: "pairs:{bucket}:{sort}", pageSize: 30, maxPageSize: 100, previewLimit: 12, supportsPagination: true },
+  { tabKey: "liveTrades", label: "Live Trades - Recent Swaps", component: "liveTradesHtml", endpoint: "/api/web/pnl", category: "trades:recent", refreshMs: 8_000, staleMs: 20_000, cacheKey: "trades:recent", pageSize: 30, maxPageSize: 100, previewLimit: 10, supportsPagination: true },
+  { tabKey: "slimeScope", label: "Slime Scope - Scanner Picks", component: "slimeScopeHtml", endpoint: "composite:/api/web/live-pairs+/api/web/sniper/scan", category: "scanner:slime-scope", refreshMs: 10_000, staleMs: 30_000, cacheKey: "scanner:slime-scope:{scopeMode}", pageSize: 30, maxPageSize: 120, previewLimit: 30, supportsPagination: true },
   { tabKey: "kol", label: "KOL Tracker - Social/KOL Signals", component: "kolHtml", endpoint: "/api/web/kol/scan", category: "signals:kol", refreshMs: 10_000, staleMs: 30_000, cacheKey: "signals:kol:{kolMode}:{kolWallet}", pageSize: 36, maxPageSize: 72, previewLimit: 12, supportsPagination: true },
-  { tabKey: "watchlist", label: "Watchlist - Your Saved Pairs", component: "watchlistHtml", endpoint: "/api/web/watchlist", category: "user:watchlist", refreshMs: 20_000, staleMs: 45_000, cacheKey: "user:watchlist", pageSize: 50, maxPageSize: 100, previewLimit: 12, supportsPagination: true },
+  { tabKey: "watchlist", label: "Watchlist - Your Saved Pairs", component: "watchlistHtml", endpoint: "/api/web/watchlist", category: "user:watchlist", refreshMs: 20_000, staleMs: 45_000, cacheKey: "user:watchlist", pageSize: 30, maxPageSize: 100, previewLimit: 12, supportsPagination: true },
   { tabKey: "smartChart", label: "Smart Chart - Selected Token", component: "smartChartHtml", endpoint: "composite:/api/web/positions", category: "token:selected-chart", refreshMs: 30_000, staleMs: 60_000, cacheKey: "token:selected-chart:{tokenMint}", pageSize: 5, maxPageSize: 10, previewLimit: 5, supportsPagination: false },
   { tabKey: "trade", label: "Slime Swap - Selected Token Panel", component: "tradeHtml", endpoint: "composite:/api/web/balances+/api/web/positions", category: "trade:selected-token", refreshMs: 20_000, staleMs: 45_000, cacheKey: "trade:selected-token:{tokenMint}", pageSize: 1, maxPageSize: 1, previewLimit: 1, supportsPagination: false },
   { tabKey: "bundle", label: "Bundle Volume - Bundle Actions", component: "bundleHtml", endpoint: "composite:/api/web/balances+/api/web/positions", category: "bundle:volume", refreshMs: 25_000, staleMs: 60_000, cacheKey: "bundle:volume:{tokenMint}", pageSize: 1, maxPageSize: 1, previewLimit: 1, supportsPagination: false },
@@ -6258,10 +6258,27 @@ function pushAlertsSection() {
         ${supported && permission !== "denied" ? `
           <button class="primary" data-push-enable ${enabled ? "hidden" : ""}>Enable Push Alerts</button>
           <button data-push-disable ${enabled ? "" : "hidden"}>Disable On This Device</button>` : ""}
+        <button data-telegram-link title="One tap: links this account to your Telegram so your take-profit wins can post in your groups (after /mywins on there)">Track Wins in Telegram</button>
       </div>
       <small data-push-status></small>
     </article>
   `;
+}
+
+async function startTelegramWinLink() {
+  const status = $("[data-push-status]");
+  try {
+    writeText(status, "Creating your Telegram link...");
+    const data = await api("/api/web/telegram/link-code", { method: "POST", body: "{}" });
+    if (!data.url) {
+      writeText(status, "Telegram bot is not configured.");
+      return;
+    }
+    window.open(data.url, "_blank", "noopener,noreferrer");
+    writeText(status, "Telegram opened - tap Start there, then type /mywins on in any group with the bot.");
+  } catch (error) {
+    writeText(status, publicErrorMessage(error?.message || "Could not create the link."));
+  }
 }
 
 function urlBase64ToUint8Array(base64String) {
@@ -22002,6 +22019,7 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-push-enable]")) { await enablePushAlerts(); return; }
   if (target.matches("[data-push-disable]")) { await disablePushAlerts(); return; }
   if (target.matches("[data-call-post]")) { await postBoardCall(target.dataset.callPost); return; }
+  if (target.matches("[data-telegram-link]")) { await startTelegramWinLink(); return; }
   if (target.matches("[data-create-wallets]")) await createWalletSet();
   if (target.matches("[data-distribute-fresh]")) { await distributeFreshWallets(); return; }
   if (target.matches("[data-return-funds]")) { await returnFundsToConnected(); return; }

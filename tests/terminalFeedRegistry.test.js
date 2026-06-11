@@ -165,9 +165,13 @@ test("live pair refresh keeps current rows stable while new data loads", () => {
 });
 
 test("full terminal feed tabs use page-sized windows instead of tiny preview caps", () => {
-  assert.ok(byTab("live").pageSize >= 50);
+  // First pages are 30 by owner decision (2026-06-11): rows refresh before anyone
+  // reads past ~30, and Load More still reaches maxPageSize depth.
+  assert.ok(byTab("live").pageSize >= 30);
+  assert.ok(byTab("live").maxPageSize >= 100);
   assert.ok(byTab("live").supportsPagination);
-  assert.ok(byTab("slimeScope").pageSize >= 50);
+  assert.ok(byTab("slimeScope").pageSize >= 30);
+  assert.ok(byTab("slimeScope").maxPageSize >= 120);
   assert.ok(byTab("slimeScope").supportsPagination);
   assert.ok(byTab("sniper").pageSize >= 36);
   assert.ok(byTab("sniper").supportsPagination);
