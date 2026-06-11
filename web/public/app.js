@@ -10050,6 +10050,47 @@ async function pollLaunchProgress(serverAttemptId, statusEl) {
   throw error;
 }
 
+// Optimistic post-launch state: drop a placeholder position row and prime the
+// chart bootstrap from the launch draft, so the bag and ticker are visible the
+// instant the chart opens. The real refresh overwrites this within a second.
+function primeLaunchedPosition(tokenMint, draft = {}, launch = {}) {
+  const mint = String(tokenMint || "").trim();
+  if (!mint) return;
+  const symbol = String(draft.symbol || "").replace(/^\$/, "").slice(0, 24) || shortAddress(mint);
+  const name = String(draft.name || "").slice(0, 48);
+  const walletCount = Number(launch.bundledWalletCount || 0) + (launch.devBuyIncluded ? 1 : 0) || 1;
+  const existing = (state.positions || []).some((row) => String(row.tokenMint || row.mint) === mint);
+  if (!existing) {
+    state.positions = [
+      {
+        tokenMint: mint,
+        symbol,
+        name,
+        shortMint: shortAddress(mint),
+        uiAmount: "just bought",
+        walletCount: String(walletCount),
+        estimatedValueSol: null,
+        openPnlSol: null,
+        valuePending: true,
+        source: "launch-optimistic"
+      },
+      ...(state.positions || [])
+    ];
+  }
+  // Prime the smart-chart so the ticker bar resolves from the launch image/name
+  // immediately, then fast-path the live market read.
+  state.smartChartToken = mint;
+  state.terminalToken = mint;
+  rememberSmartChartBootstrap({
+    tokenMint: mint,
+    symbol,
+    name,
+    imageUrl: draft.imageDataUrl || "",
+    source: "launch"
+  });
+  void fastDirectDexLookup(mint);
+}
+
 async function submitLaunchCoin() {
   // Double-submit guard: a duplicate launch click would create a second token /
   // duplicate dev buy and burn SOL. Block re-entry until this attempt finishes.
@@ -10170,9 +10211,14 @@ async function submitLaunchCoin() {
         ? `Launched ${shortAddress(tokenMint)} via the standard path (bundle missed the block lottery)${buyNote ? ` - server fired ${buyNote} right behind the create` : ""}.${signature} Opening chart...`
         : `Launch bundled atomically: ${shortAddress(tokenMint)}${buyNote ? ` (${buyNote} landed in-block)` : ""}.${signature} Opening chart...`;
       writeText(status, state.launchCoinStatus);
-      // The buys just executed server-side - pull wallets/positions NOW instead
-      // of waiting for the slow background cadence.
+      // INSTANT FEEDBACK: show the new bag and prime the chart from what we
+      // already know, so the user sees their position the moment the chart opens
+      // instead of staring at an empty Positions list during the refresh.
+      primeLaunchedPosition(tokenMint, draft, launch);
+      // Pull true balances immediately (0ms) AND on the normal cadence - the
+      // optimistic row is replaced by real data as soon as the first read lands.
       queuePostTradeRefresh(launch.signature || "", "pump-launch-first-buys");
+      void refreshWalletPositions({ force: true, fast: true, silent: true, reason: "pump-launch-instant" }).catch(() => {});
       navigateTo("/terminal/chart", "smartChart");
       render({ force: true });
       return;
