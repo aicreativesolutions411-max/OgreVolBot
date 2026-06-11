@@ -27391,7 +27391,7 @@ async function removeWebWallets(userId, body = {}) {
       .split(/[,\s]+/)
       .filter(Boolean);
   const indexes = uniqueStrings(rawIndexes.map((item) => String(item).replace(/[^\d]/g, "")).filter(Boolean));
-  if (!indexes.length) {
+  if (!indexes.length && !(Array.isArray(body.publicKeys) && body.publicKeys.length)) {
     const error = new Error("Choose at least one wallet to remove.");
     error.statusCode = 400;
     throw error;
@@ -27399,15 +27399,30 @@ async function removeWebWallets(userId, body = {}) {
 
   const store = await readWalletStore();
   const owned = walletsForOwner(store, userId);
-  const selected = indexes.map((index) => {
-    const wallet = owned[Number.parseInt(index, 10) - 1];
-    if (!wallet) {
-      const error = new Error(`Wallet ${index} does not exist.`);
-      error.statusCode = 400;
-      throw error;
-    }
-    return wallet;
-  });
+  // Prefer removal by PUBLIC KEY: positional indexes shift after every removal,
+  // so a stale UI row used to hit "Wallet N does not exist" or, worse, the
+  // wrong wallet. Keys are stable no matter how the list renumbers.
+  const requestedKeys = uniqueStrings((Array.isArray(body.publicKeys) ? body.publicKeys : [])
+    .map((key) => String(key || "").trim()).filter(Boolean));
+  const selected = requestedKeys.length
+    ? requestedKeys.map((key) => {
+      const wallet = owned.find((item) => item.publicKey === key);
+      if (!wallet) {
+        const error = new Error(`Wallet ${shortMint(key)} is not in your saved list (it may already be removed). Refresh and try again.`);
+        error.statusCode = 400;
+        throw error;
+      }
+      return wallet;
+    })
+    : indexes.map((index) => {
+      const wallet = owned[Number.parseInt(index, 10) - 1];
+      if (!wallet) {
+        const error = new Error(`Wallet ${index} does not exist - the list may have renumbered. Refresh and try again.`);
+        error.statusCode = 400;
+        throw error;
+      }
+      return wallet;
+    });
   const selectedPublicKeys = new Set(selected.map((wallet) => wallet.publicKey));
   const downloads = webBackupDownloadsForWallets(
     userId,

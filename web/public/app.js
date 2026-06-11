@@ -2801,12 +2801,19 @@ async function createAccountAndConnectWallet() {
 }
 
 async function createAccountAndOpenWallets() {
-  await createWebAccount();
+  // Logged-in users were sent through account CREATION (a no-op) with the
+  // chooser modal left open on top - the button looked completely dead.
+  if (!state.user) await createWebAccount();
   if (!state.user) return;
+  state.walletConnectMenuOpen = false;
   state.route = "terminal";
   state.activeTab = "wallets";
+  state.toolSections = { ...(state.toolSections || {}), wallets: state.wallets.length ? "balances" : "create" };
   window.history.pushState({}, "", "/terminal");
   render();
+  // First managed wallet: just make it (defaults: 1 wallet, auto-backup
+  // downloads) instead of stranding them on an empty form.
+  if (!state.wallets.length) await createWalletSet();
 }
 
 async function logout() {
@@ -6843,12 +6850,15 @@ function renderWalletConnectModal() {
   if (!state.walletConnectMenuOpen) {
     modal.hidden = true;
     modal.innerHTML = "";
+    modal.__lastDrawerHtml = "";
     return;
   }
 
   const connected = state.user?.connectedWallet || state.connectedWalletBalance;
   modal.hidden = false;
-  modal.innerHTML = `
+  // Background renders fire every few seconds; rebuilding identical markup
+  // repainted the provider icons and made the whole chooser flicker.
+  setDrawerHtmlIfChanged(modal, `
     <div class="wallet-connect-backdrop" data-wallet-connect-close></div>
     <section class="wallet-connect-dialog" role="dialog" aria-modal="true" aria-label="Connect wallet">
       <div class="wallet-connect-dialog-head">
@@ -6891,7 +6901,7 @@ function renderWalletConnectModal() {
       </div>
       <small class="connect-status" data-wallet-connect-status>${escapeHtml(state.walletConnectStatus || "")}</small>
     </section>
-  `;
+  `, ".wallet-connect-dialog");
 }
 
 function quickBuyModalHtml() {
@@ -10763,10 +10773,11 @@ function kolRowsHtml() {
 }
 
 async function createWalletSet() {
-  const labelInput = $("[data-wallet-label]");
-  const countInput = $("[data-wallet-count-input]");
+  // Scope to inputs: remove buttons also carry a data-wallet-label ATTRIBUTE, so
+  // a bare attribute selector could grab a button instead of the label field.
+  const labelInput = $("input[data-wallet-label]");
+  const countInput = $("input[data-wallet-count-input]");
   const status = $("[data-create-wallet-status]");
-  if (!labelInput || !countInput || !status) return;
   const buttons = [...document.querySelectorAll("[data-create-wallets]")];
   setError("");
   writeText(status, "Creating wallets...");
@@ -10776,7 +10787,7 @@ async function createWalletSet() {
   });
 
   try {
-    const count = Number.parseInt(countInput.value || "1", 10);
+    const count = Number.parseInt(countInput?.value || "1", 10);
     if (!Number.isInteger(count) || count < 1 || count > 20) {
       throw new Error("Wallet count must be from 1 to 20.");
     }
@@ -10784,7 +10795,7 @@ async function createWalletSet() {
     const data = await api("/api/web/wallets/create", {
       method: "POST",
       body: JSON.stringify({
-        label: labelInput.value.trim() || "Ogre Web",
+        label: String(labelInput?.value || "").trim() || "Ogre Web",
         count
       })
     });
@@ -10802,6 +10813,16 @@ async function createWalletSet() {
     writeText(status, data.downloads
       ? `Created ${wallets.length} wallet(s). Backup downloads started.`
       : `Created ${wallets.length} wallet(s). Use Download Backup before funding.`);
+    // Pull the full list NOW and land on Balances showing the new rows -
+    // waiting on the background refresh made a successful create look dead.
+    try {
+      const fresh = await api("/api/web/wallets", { timeoutMs: 10_000 });
+      if (Array.isArray(fresh?.wallets)) state.wallets = fresh.wallets;
+    } catch {
+      // background refresh will catch up
+    }
+    state.toolSections = { ...(state.toolSections || {}), wallets: "balances" };
+    state.walletRemoveStatus = `Created ${wallets.length} wallet(s) - they are in the list below. Back up before funding.`;
     queuePostTradeRefresh(firstResultSignature(data.plan), "wallet-create");
     state.activeTab = "wallets";
     render();
@@ -11261,7 +11282,7 @@ async function importWallet() {
   }
 }
 
-async function removeManagedWallet(walletIndex, walletLabel = "this wallet") {
+async function removeManagedWallet(walletIndex, walletLabel = "this wallet", walletPublicKey = "") {
   const label = String(walletLabel || `Wallet ${walletIndex}`);
   const firstConfirm = await slimeConfirm({
     title: "Remove Wallet",
@@ -11290,9 +11311,13 @@ async function removeManagedWallet(walletIndex, walletLabel = "this wallet") {
   setError("");
 
   try {
+    // Remove by public key when we have it: positional indexes renumber after
+    // every removal, which is exactly how "wallet 2 doesn't exist" happened.
     const data = await api("/api/web/wallets/remove", {
       method: "POST",
-      body: JSON.stringify({ walletIndexes: [String(walletIndex)] })
+      body: JSON.stringify(walletPublicKey
+        ? { publicKeys: [walletPublicKey] }
+        : { walletIndexes: [String(walletIndex)] })
     });
     const result = data.removed || {};
     state.downloads = result.downloads || state.downloads;
@@ -11303,6 +11328,9 @@ async function removeManagedWallet(walletIndex, walletLabel = "this wallet") {
       downloadText(result.downloads.recoveryKeys.filename, result.downloads.recoveryKeys.text);
     }
     state.walletRemoveStatus = result.message || `Removed ${label}.`;
+    // Apply the fresh, renumbered list NOW - waiting on the background refresh
+    // left stale rows whose Remove buttons pointed at dead positions.
+    if (Array.isArray(result.wallets)) state.wallets = result.wallets;
     queuePostTradeRefresh(firstResultSignature(data.plan), "wallet-remove");
     state.activeTab = "wallets";
     render();
@@ -14453,7 +14481,7 @@ function walletsHtml() {
           </div>
           <div class="card-actions compact">
             <button data-copy="${wallet.publicKey}">Copy</button>
-            <button class="danger-lite" data-remove-wallet="${wallet.index}" data-wallet-label="${escapeHtml(`${wallet.index}. ${wallet.label}`)}">Remove</button>
+            <button class="danger-lite" data-remove-wallet="${wallet.index}" data-remove-wallet-key="${escapeHtml(wallet.publicKey)}" data-wallet-label="${escapeHtml(`${wallet.index}. ${wallet.label}`)}">Remove</button>
           </div>
         </article>
       `).join("")}
@@ -22573,7 +22601,7 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-restore-backup]")) await restoreWalletBackup();
   if (target.matches("[data-export-backup]")) await exportWalletBackup();
   if (target.matches("[data-import-wallet]")) await importWallet();
-  if (target.matches("[data-remove-wallet]")) await removeManagedWallet(target.dataset.removeWallet || "", target.dataset.walletLabel || "");
+  if (target.matches("[data-remove-wallet]")) await removeManagedWallet(target.dataset.removeWallet || "", target.dataset.walletLabel || "", target.dataset.removeWalletKey || "");
   if (target.matches("[data-wallet-sweep-action]")) await runWalletSweepAction(target.dataset.walletSweepAction || "");
   if (target.matches("[data-download]")) {
     const file = state.downloads?.[target.dataset.download];
