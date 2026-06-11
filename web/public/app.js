@@ -10082,6 +10082,10 @@ async function submitLaunchCoin() {
       name: draft.name || "",
       at: Date.now()
     };
+    // The sheet did its job - reset it (state + stored draft) so the next launch
+    // starts clean. The live CA stays via applyLaunchCoinMint above.
+    state.launchCoinDraft = { tokenMint };
+    try { setStoredLaunchCoinDraft(state.launchCoinDraft); } catch { /* optional */ }
 
     // If the server landed the buys atomically in a Jito bundle, the dev buy and the
     // first-block wallet buys already executed inside the same block as the create.
@@ -23166,6 +23170,29 @@ document.addEventListener("change", async (event) => {
 document.addEventListener("focusout", () => {
   setTimeout(flushDeferredRender, 50);
 });
+
+// Launch sheet auto-save: every keystroke in the launch form lands in the draft
+// (state + localStorage), so flipping between sections/tabs never erases what
+// was typed. The draft resets only after a successful launch.
+let launchDraftSaveTimer = null;
+const queueLaunchDraftSave = (event) => {
+  const launchField = event.target?.closest?.(".launch-coin-card");
+  if (launchField && String(event.target?.tagName || "").match(/INPUT|TEXTAREA|SELECT/) && !event.target.matches("[data-launch-coin-image]")) {
+    if (launchDraftSaveTimer) clearTimeout(launchDraftSaveTimer);
+    launchDraftSaveTimer = setTimeout(() => { launchDraftSaveTimer = null; saveLaunchCoinDraft({ silent: true }); }, 350);
+  }
+};
+document.addEventListener("input", queueLaunchDraftSave);
+document.addEventListener("change", queueLaunchDraftSave);
+// Flush a pending save BEFORE any click can switch panels/tabs and re-render -
+// otherwise the last keystrokes typed within 350ms of the click would be lost.
+document.addEventListener("click", () => {
+  if (launchDraftSaveTimer) {
+    clearTimeout(launchDraftSaveTimer);
+    launchDraftSaveTimer = null;
+    saveLaunchCoinDraft({ silent: true });
+  }
+}, true);
 
 document.addEventListener("input", (event) => {
   const target = event.target;
