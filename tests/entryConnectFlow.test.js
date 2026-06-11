@@ -70,9 +70,14 @@ test("entry wallet cards start provider connect flow while main connect opens ch
 
 test("connect page has route bootstrap without a global capture click blocker", () => {
   assert.match(htmlSource, /data-intro-gate/);
-  assert.match(htmlSource, /rel="preload" as="video" href="\/assets\/slimewire\/intro\/swamp-portal-intro\.mp4" type="video\/mp4"/);
-  assert.match(htmlSource, /src="\.\/assets\/slimewire\/intro\/swamp-portal-intro\.mp4"/);
-  assert.match(htmlSource, /src="\.\/assets\/slimewire\/intro\/swamp-portal-intro\.mp4"[\s\S]*preload="auto"/);
+  // The video preload is injected only when the intro will play this session; the <video>
+  // ships without src (preload="none") so skipped intros never download the clip.
+  assert.doesNotMatch(htmlSource, /rel="preload" as="video"/);
+  assert.match(htmlSource, /link\.as = "video"/);
+  assert.match(htmlSource, /if \(skipsIntro \|\| introDone\) return/);
+  assert.match(htmlSource, /data-intro-src="\.\/assets\/slimewire\/intro\/swamp-portal-intro\.mp4"/);
+  assert.match(htmlSource, /data-intro-src="\.\/assets\/slimewire\/intro\/swamp-portal-intro\.mp4"[\s\S]*preload="none"/);
+  assert.match(appSource, /entryVideo\.src = entryVideo\.dataset\.introSrc/);
   // No mute/skip/enter buttons: the video autoplays and auto-advances when it ends.
   assert.doesNotMatch(htmlSource, /data-intro-sound/);
   assert.doesNotMatch(htmlSource, /data-intro-start/);

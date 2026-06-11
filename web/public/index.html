@@ -10,7 +10,27 @@
     <link rel="dns-prefetch" href="https://dexscreener.com">
     <link rel="preconnect" href="https://api.dexscreener.com">
     <link rel="dns-prefetch" href="https://api.dexscreener.com">
-    <link rel="preload" as="video" href="/assets/slimewire/intro/swamp-portal-intro.mp4" type="video/mp4">
+    <link rel="icon" type="image/svg+xml" href="/assets/slimewire/svg/slimewire-mark.svg">
+    <script>
+      // Preload the intro video only when the intro will actually play this session.
+      (() => {
+        try {
+          const path = window.location.pathname || "/";
+          const skipsIntro = ["/connect", "/login", "/account/login", "/terminal", "/ogre-tek"]
+            .some((prefix) => path.startsWith(prefix));
+          const introDone = window.sessionStorage?.getItem("slimewireIntroCompleteV1") === "true";
+          if (skipsIntro || introDone) return;
+          const link = document.createElement("link");
+          link.rel = "preload";
+          link.as = "video";
+          link.type = "video/mp4";
+          link.href = "/assets/slimewire/intro/swamp-portal-intro.mp4";
+          document.head.appendChild(link);
+        } catch {
+          // Preload is an optimization only.
+        }
+      })();
+    </script>
     <link rel="preload" as="image" href="/assets/slimewire/png/slimewire-mark.png">
     <link rel="preload" as="image" href="/assets/slimewire/png/slime-border-frame-rich.png">
     <link rel="preload" as="image" href="/assets/slimewire/clean-ui/wallet_icons/default/phantom.png">
@@ -18,12 +38,12 @@
     <link rel="preload" as="image" href="/assets/slimewire/svg/icons/wallet.svg">
     <link rel="preload" as="image" href="/assets/slimewire/svg/powered-by-ogres-badge.svg">
     <link rel="stylesheet" href="/tailwind.css?v=20260603-tailwind-v1">
-    <link rel="stylesheet" href="/styles.css?v=20260608-matrix-slime-v1">
-    <link rel="stylesheet" href="/slimewire-final-overrides.css?v=20260608-matrix-slime-v1">
+    <link rel="stylesheet" href="/styles.css?v=20260610-clean-sweep-v1">
+    <link rel="stylesheet" href="/slimewire-final-overrides.css?v=20260610-clean-sweep-v1">
     <script defer src="/config.js"></script>
     <script defer src="/vendor/tweetnacl-fast.min.js"></script>
     <script defer src="/vendor/solana-web3.iife.min.js?v=20260605-browser-trade-v1"></script>
-    <script type="module" src="/app.js?v=20260608-ogre-ai-pool-v1"></script>
+    <script type="module" src="/app.js?v=20260610-clean-sweep-v1"></script>
   </head>
   <body>
     <main class="shell" data-app data-route="intro">
@@ -319,11 +339,10 @@
           <video
             class="swamp-intro-media"
             data-intro-video="entry"
-            src="./assets/slimewire/intro/swamp-portal-intro.mp4"
+            data-intro-src="./assets/slimewire/intro/swamp-portal-intro.mp4"
             playsinline
             muted
-            autoplay
-            preload="auto"
+            preload="none"
             aria-label="SlimeWire intro"
           ></video>
           <div class="swamp-intro-portal" data-intro-portal aria-hidden="true"></div>

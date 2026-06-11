@@ -1095,6 +1095,13 @@ function initializeIntroVideoGate() {
     }, 620);
   };
 
+  // Returning users never see the intro: skip all video/gesture wiring so the 3MB clip is
+  // never fetched and a stray first tap can't start hidden playback.
+  if (!introActive()) {
+    pauseIntroVideoGate({ reset: true });
+    return;
+  }
+
   // Try to unlock audio invisibly on the first gesture (no visible control) so the intro and
   // the closing whoosh can be heard. Audible autoplay with no gesture is blocked by browsers.
   const unlockAudio = () => {
@@ -1117,6 +1124,11 @@ function initializeIntroVideoGate() {
     entryVideo.setAttribute("autoplay", "");
     entryVideo.setAttribute("playsinline", "");
     entryVideo.disablePictureInPicture = true;
+    // The markup ships without src so skipped intros never download the clip; the head
+    // preload (first-run only) has usually fetched it by the time we attach it here.
+    if (!entryVideo.getAttribute("src") && entryVideo.dataset.introSrc) {
+      entryVideo.src = entryVideo.dataset.introSrc;
+    }
   }
 
   const armFallback = (ms) => {
@@ -1150,10 +1162,6 @@ function initializeIntroVideoGate() {
   entryVideo?.addEventListener("ended", finishIntro);
   entryVideo?.addEventListener("error", () => { armFallback(1500); });
 
-  if (!introActive()) {
-    pauseIntroVideoGate({ reset: true });
-    return;
-  }
   armFallback(9000);
   playIntro();
 }
@@ -4730,6 +4738,57 @@ function queuePostTradeRefresh(signature = "", reason = "post-trade", options = 
   applyActionButtonStates();
 }
 
+// In-app replacement for window.confirm/window.prompt: a slime-styled dialog that
+// keeps focus in the page, supports Enter/Escape, and never blocks the event loop.
+// Resolves boolean (confirm mode) or string|null (input mode).
+function slimeConfirm({ title = "Confirm", lines = [], confirmLabel = "Confirm", cancelLabel = "Cancel", danger = false, input = null } = {}) {
+  if (!document?.body) {
+    const message = [].concat(lines).filter(Boolean).join("\n");
+    if (input) return Promise.resolve(window.prompt(message || title, input.value || ""));
+    return Promise.resolve(window.confirm(message || title));
+  }
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "slime-confirm-overlay";
+    overlay.innerHTML = `
+      <div class="slime-confirm-card" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}">
+        <h3 class="slime-confirm-title">${escapeHtml(title)}</h3>
+        ${[].concat(lines).filter(Boolean).map((line) => `<p class="slime-confirm-line">${escapeHtml(line)}</p>`).join("")}
+        ${input ? `
+          <label class="slime-confirm-input-label">
+            ${escapeHtml(input.label || "")}
+            <input class="slime-confirm-input" type="${escapeHtml(input.type || "text")}" value="${escapeHtml(input.value || "")}" placeholder="${escapeHtml(input.placeholder || "")}" ${input.inputmode ? `inputmode="${escapeHtml(input.inputmode)}"` : ""}>
+          </label>` : ""}
+        <div class="slime-confirm-actions">
+          <button type="button" class="slime-confirm-cancel">${escapeHtml(cancelLabel)}</button>
+          <button type="button" class="slime-confirm-accept${danger ? " is-danger" : ""}">${escapeHtml(confirmLabel)}</button>
+        </div>
+      </div>
+    `;
+    const previousFocus = document.activeElement;
+    const inputField = overlay.querySelector(".slime-confirm-input");
+    const settle = (result) => {
+      overlay.remove();
+      document.removeEventListener("keydown", onKeydown, true);
+      try { previousFocus?.focus?.({ preventScroll: true }); } catch {}
+      resolve(result);
+    };
+    const accept = () => settle(input ? (inputField?.value ?? "") : true);
+    const cancel = () => settle(input ? null : false);
+    const onKeydown = (event) => {
+      if (event.key === "Escape") { event.preventDefault(); cancel(); }
+      else if (event.key === "Enter" && (!input || event.target === inputField)) { event.preventDefault(); accept(); }
+    };
+    overlay.addEventListener("pointerdown", (event) => { if (event.target === overlay) cancel(); });
+    overlay.querySelector(".slime-confirm-accept").addEventListener("click", accept);
+    overlay.querySelector(".slime-confirm-cancel").addEventListener("click", cancel);
+    document.addEventListener("keydown", onKeydown, true);
+    document.body.appendChild(overlay);
+    (inputField || overlay.querySelector(".slime-confirm-accept"))?.focus({ preventScroll: true });
+    if (inputField) inputField.select();
+  });
+}
+
 function shouldDeferTerminalRender() {
   if (document.hidden && state.route === "terminal") return true;
   const active = document.activeElement;
@@ -5520,7 +5579,7 @@ function render(options = {}) {
           <article class="slime-panel">
             <h2>SlimeWire caught a display error</h2>
             <p>Your trade state is safe. Tap retry to redraw this panel without closing the window.</p>
-            <button type="button" class="primary" data-refresh-all>Retry Position Refresh</button>
+            <button type="button" class="primary" data-refresh-all>Retry Refresh</button>
           </article>
         </section>
       `;
@@ -5531,12 +5590,12 @@ function render(options = {}) {
           <article class="slime-panel">
             <h2>SlimeWire caught a display error</h2>
             <p>Your trade state is safe. The display refresh failed, but the app did not reload or submit another order.</p>
-            <button type="button" class="primary" data-refresh-all>Retry Position Refresh</button>
+            <button type="button" class="primary" data-refresh-all>Retry Refresh</button>
           </article>
         </section>
       `;
     }
-    setError("Display refresh failed. Your trade was not resubmitted. Tap Retry Position Refresh.");
+    setError("Display refresh failed. Your trade was not resubmitted. Tap Retry Refresh.");
   }
 }
 
@@ -5662,7 +5721,12 @@ async function handleTopWalletStatusClick() {
   const publicKey = String(connected?.publicKey || "").trim();
   const managedCount = Array.isArray(state.wallets) ? state.wallets.length : 0;
   if (publicKey) {
-    const ok = window.confirm(`Disconnect ${connected.provider || "wallet"} ${shortAddress(publicKey)}?`);
+    const ok = await slimeConfirm({
+      title: "Disconnect Wallet",
+      lines: [`Disconnect ${connected.provider || "wallet"} ${shortAddress(publicKey)}?`],
+      confirmLabel: "Disconnect",
+      danger: true
+    });
     if (ok) await disconnectBrowserWallet();
     return;
   }
@@ -5778,10 +5842,125 @@ function restoreStableFeedScrollSnapshot(snapshot, panel = $("[data-panel]")) {
   });
 }
 
+function formFieldStateKey(field, index) {
+  const dataKeys = Object.keys(field.dataset || {})
+    .filter((key) => key !== "customFor" && key !== "customSelect")
+    .sort()
+    .map((key) => `${key}=${field.dataset[key]}`)
+    .join("|");
+  const valuePart = field.type === "checkbox" || field.type === "radio" ? `:${field.value}` : "";
+  const base = `${field.tagName}:${field.type || ""}:${field.name || ""}:${dataKeys}${valuePart}`;
+  return dataKeys ? base : `${base}:idx${index}`;
+}
+
+function selectDefaultValue(select) {
+  const options = Array.from(select.options || []);
+  const preset = options.find((option) => option.defaultSelected);
+  return preset ? preset.value : (options[0]?.value ?? "");
+}
+
+// Same-tab re-renders replace the whole panel; carry user-edited field values (and focus)
+// across so a background data refresh never wipes what someone is typing. Fields whose
+// rendered default changed are left alone — that render meant to change them.
+function captureFormFieldSnapshot(panel) {
+  if (!panel || panel.dataset.renderedTab !== state.activeTab) return null;
+  const fields = new Map();
+  let focusedKey = "";
+  let selectionStart = null;
+  let selectionEnd = null;
+  Array.from(panel.querySelectorAll("input, textarea, select")).forEach((field, index) => {
+    const key = formFieldStateKey(field, index);
+    if (fields.has(key)) return;
+    const isToggle = field.type === "checkbox" || field.type === "radio";
+    const isSelect = field.tagName === "SELECT";
+    const defaultValue = isToggle ? String(field.defaultChecked) : isSelect ? selectDefaultValue(field) : field.defaultValue;
+    const currentValue = isToggle ? String(field.checked) : field.value;
+    if (currentValue === defaultValue) return;
+    fields.set(key, { value: currentValue, defaultValue, isToggle, isSelect });
+    if (document.activeElement === field) {
+      focusedKey = key;
+      try {
+        selectionStart = field.selectionStart;
+        selectionEnd = field.selectionEnd;
+      } catch {
+        // Selection is unsupported on some input types.
+      }
+    }
+  });
+  if (!fields.size) return null;
+  return { tab: state.activeTab, fields, focusedKey, selectionStart, selectionEnd };
+}
+
+function restoreFormFieldSnapshot(snapshot, panel) {
+  if (!snapshot || !panel || snapshot.tab !== state.activeTab) return;
+  const all = Array.from(panel.querySelectorAll("input, textarea, select"));
+  const applyPass = (selectsOnly) => {
+    all.forEach((field, index) => {
+      const isSelect = field.tagName === "SELECT";
+      if (selectsOnly !== isSelect) return;
+      const key = formFieldStateKey(field, index);
+      const saved = snapshot.fields.get(key);
+      if (!saved) return;
+      const isToggle = field.type === "checkbox" || field.type === "radio";
+      const defaultValue = isToggle ? String(field.defaultChecked) : isSelect ? selectDefaultValue(field) : field.defaultValue;
+      if (defaultValue !== saved.defaultValue) return;
+      if (isToggle) field.checked = saved.value === "true";
+      else field.value = saved.value;
+      if (key === snapshot.focusedKey && document.activeElement !== field) {
+        try {
+          field.focus({ preventScroll: true });
+          if (Number.isFinite(snapshot.selectionStart) && Number.isFinite(snapshot.selectionEnd)) {
+            field.setSelectionRange(snapshot.selectionStart, snapshot.selectionEnd);
+          }
+        } catch {
+          // Focus restore is cosmetic.
+        }
+      }
+    });
+  };
+  applyPass(true);
+  applyPass(false);
+}
+
+// Form/tool tabs scroll the window (and sometimes the panel); keep that position over
+// same-tab re-renders. Feed tabs and the terminal have their own anchored restores.
+function captureGeneralScrollSnapshot(panel) {
+  if (!panel || state.route !== "terminal") return null;
+  if (state.activeTab === "terminal" || MOBILE_STABLE_FEED_TABS.has(state.activeTab)) return null;
+  if (panel.dataset.renderedTab !== state.activeTab) return null;
+  if (state.activeTab === "smartChart" && state.chartScrollIntoView) return null;
+  return {
+    tab: state.activeTab,
+    windowY: window.scrollY || 0,
+    panelScrollTop: panel.scrollTop || 0,
+    dashboardScrollTop: dashboardView?.scrollTop || 0
+  };
+}
+
+function restoreGeneralScrollSnapshot(snapshot, panel) {
+  if (!snapshot || snapshot.tab !== state.activeTab) return;
+  const restore = () => {
+    const currentPanel = panel?.isConnected ? panel : $("[data-panel]");
+    if (currentPanel && currentPanel.scrollHeight > currentPanel.clientHeight + 2) {
+      currentPanel.scrollTop = Math.min(snapshot.panelScrollTop, currentPanel.scrollHeight - currentPanel.clientHeight);
+    }
+    if (dashboardView && dashboardView.scrollHeight > dashboardView.clientHeight + 2) {
+      dashboardView.scrollTop = Math.min(snapshot.dashboardScrollTop, dashboardView.scrollHeight - dashboardView.clientHeight);
+    }
+    if (Math.abs((window.scrollY || 0) - snapshot.windowY) > 8) {
+      window.scrollTo(0, Math.max(0, snapshot.windowY));
+    }
+  };
+  restore();
+  requestAnimationFrame(restore);
+}
+
 function renderTabs() {
   const panel = $("[data-panel]");
   if (!panel) return;
   const stableFeedScrollSnapshot = captureStableFeedScrollSnapshot(panel);
+  const formFieldSnapshot = captureFormFieldSnapshot(panel);
+  const generalScrollSnapshot = captureGeneralScrollSnapshot(panel);
   const terminalDockScrollTop = state.activeTab === "terminal"
     ? (panel.querySelector(".terminal-dock")?.scrollTop || 0)
     : 0;
@@ -5825,7 +6004,9 @@ function renderTabs() {
     panel.dataset.renderedTab = state.activeTab || "";
     ensureOgreTekData();
   }
+  restoreFormFieldSnapshot(formFieldSnapshot, panel);
   syncCustomFields(panel);
+  restoreGeneralScrollSnapshot(generalScrollSnapshot, panel);
   if (state.activeTab === "smartChart" && state.chartFocusAmountInput) {
     requestAnimationFrame(() => {
       const input = $("[data-chart-buy-amount]");
@@ -8202,10 +8383,15 @@ async function maybeReturnSessionFundsBeforeLeaving(action = "leaving") {
     const sessionWallets = state.wallets.filter((wallet) => wallet.sessionWallet);
     if (!sessionWallets.length) return;
     const walletIndexes = sessionWallets.map((wallet) => String(wallet.index));
-    const confirmed = window.confirm([
-      `Before ${action}, return tokens + SOL from your ${walletIndexes.length} session wallet(s)`,
-      `back to your connected wallet ${shortAddress(connected.publicKey)}?`
-    ].join("\n"));
+    const confirmed = await slimeConfirm({
+      title: "Return Session Funds",
+      lines: [
+        `Before ${action}, return tokens + SOL from your ${walletIndexes.length} session wallet(s)`,
+        `back to your connected wallet ${shortAddress(connected.publicKey)}?`
+      ],
+      confirmLabel: "Return Funds",
+      cancelLabel: "Skip"
+    });
     if (!confirmed) return;
     await api("/api/web/wallets/return-to-connected", {
       method: "POST",
@@ -8233,10 +8419,15 @@ async function returnFundsToConnected() {
     setReturnFundsStatus("No managed wallets to return from.");
     return;
   }
-  const confirmed = window.confirm([
-    `Sell all tokens to SOL and send everything from ${walletIndexes.length} wallet(s)`,
-    `back to your connected wallet ${shortAddress(connected.publicKey)}?`
-  ].join("\n"));
+  const confirmed = await slimeConfirm({
+    title: "Return Funds",
+    lines: [
+      `Sell all tokens to SOL and send everything from ${walletIndexes.length} wallet(s)`,
+      `back to your connected wallet ${shortAddress(connected.publicKey)}?`
+    ],
+    confirmLabel: "Sell & Return",
+    danger: true
+  });
   if (!confirmed) return;
   state.returnFundsBusy = true;
   setReturnFundsStatus("Selling tokens and returning SOL...");
@@ -8270,11 +8461,15 @@ async function distributeFreshWallets() {
     return;
   }
   const total = (Number(amountSol) || 0) * (Number(count) || 0);
-  const confirmed = window.confirm([
-    `Create ${count} fresh wallet(s) and fund each with ${amountSol} SOL?`,
-    `That sends about ${total.toFixed(3)} SOL total from the source wallet (real SOL).`,
-    "Backup/recovery files for the new wallets will download."
-  ].join("\n"));
+  const confirmed = await slimeConfirm({
+    title: "Create & Fund Wallets",
+    lines: [
+      `Create ${count} fresh wallet(s) and fund each with ${amountSol} SOL?`,
+      `That sends about ${total.toFixed(3)} SOL total from the source wallet (real SOL).`,
+      "Backup/recovery files for the new wallets will download."
+    ],
+    confirmLabel: "Create & Fund"
+  });
   if (!confirmed) return;
   state.distributeBusy = true;
   setDistributeStatus("Creating and funding wallets...");
@@ -8523,14 +8718,18 @@ async function startVolumeBot() {
     return;
   }
   const durLabel = form.durationMin >= 60 ? `${(form.durationMin / 60).toFixed(form.durationMin % 60 ? 1 : 0)}h` : `${form.durationMin}m`;
-  const confirmed = window.confirm([
-    "Start SlimeBot? This spends REAL SOL.",
-    `Token: ${form.tokenMint}`,
-    `${form.mode === "smart" ? "Smart" : "Spam"} mode, ${form.aggr.toUpperCase()} aggressiveness.`,
-    `Deploys up to ~${form.investment} SOL over ${durLabel} from your source wallet,`,
-    `as ${form.cycles} round(s) of randomized ~${form.buyAmountSol} SOL buys / sells.`,
-    "Sweeps funds back to the source wallet when done."
-  ].join("\n"));
+  const confirmed = await slimeConfirm({
+    title: "Start SlimeBot",
+    lines: [
+      "This spends REAL SOL.",
+      `Token: ${form.tokenMint}`,
+      `${form.mode === "smart" ? "Smart" : "Spam"} mode, ${form.aggr.toUpperCase()} aggressiveness.`,
+      `Deploys up to ~${form.investment} SOL over ${durLabel} from your source wallet,`,
+      `as ${form.cycles} round(s) of randomized ~${form.buyAmountSol} SOL buys / sells.`,
+      "Sweeps funds back to the source wallet when done."
+    ],
+    confirmLabel: "Start SlimeBot"
+  });
   if (!confirmed) return;
   state.volumeBotBusy = true;
   setVolumeBotStatus("Funding wallets and starting bot...");
@@ -8583,158 +8782,6 @@ function volumeHtml() {
   }
 
   return volumeBotPanelHtml();
-}
-
-function timedVolumePlanHtml_unused() {
-  return `
-    <section class="trade-layout">
-      <article class="trade-card">
-        <div class="trade-head">
-          <div>
-            <h3>Timed Volume Plan</h3>
-            <p>Single buy, then auto-manage the exit by timer, take-profit, stop-loss, or repeat cycles. (For the multi-wallet auto-volume engine, use SlimeBot above.)</p>
-          </div>
-          <a class="mini-link" href="${state.volumeToken ? dexUrl(state.volumeToken) : "#"}" target="_blank" rel="noreferrer">Dex</a>
-        </div>
-        <label>
-          Token CA
-          <input data-volume-token type="text" placeholder="Paste Solana token mint" value="${escapeHtml(state.volumeToken || state.tradeToken)}">
-        </label>
-        <div class="wallet-checks">
-          ${walletChecksHtml("volume")}
-        </div>
-        ${walletGroupHtml("volume")}
-
-        <div class="volume-grid">
-          <label>
-            Buy Amount
-            <input data-volume-amount type="number" min="0" step="0.01" value="0.1">
-          </label>
-          <label>
-            Sell After
-            ${fallbackTimerSelectHtml("volume-delay", "data-volume-delay", "5")}
-          </label>
-          <label>
-            Take Profit
-            <select data-volume-tp data-custom-select="volume-tp">
-              <option value="0">Off</option>
-              <option value="15">+15%</option>
-              <option value="25" selected>+25%</option>
-              <option value="50">+50%</option>
-              <option value="100">+100%</option>
-              <option value="250">+250%</option>
-              <option value="custom">Custom</option>
-            </select>
-            <input data-volume-tp-custom data-custom-for="volume-tp" type="text" placeholder="Custom: 500 or 5x" hidden>
-          </label>
-          <label>
-            Stop Loss
-            <select data-volume-sl data-custom-select="volume-sl">
-              <option value="0">Off</option>
-              <option value="8" selected>-8%</option>
-              <option value="10">-10%</option>
-              <option value="15">-15%</option>
-              <option value="25">-25%</option>
-              <option value="custom">Custom</option>
-            </select>
-            <input data-volume-sl-custom data-custom-for="volume-sl" type="text" placeholder="Custom SL %" hidden>
-          </label>
-          <label>
-            Repeat
-            <select data-volume-loop data-custom-select="volume-loop">
-              <option value="1" selected>1x</option>
-              <option value="5">5x</option>
-              <option value="10">10x</option>
-              <option value="custom">Custom</option>
-            </select>
-            <input data-volume-loop-custom data-custom-for="volume-loop" type="number" min="1" max="10" step="1" placeholder="Custom 1-10" hidden>
-          </label>
-          <label>
-            Repeat Wait
-            ${repeatWaitSelectHtml("volume-loop-delay", "data-volume-loop-delay", "0")}
-          </label>
-          <label>
-            Exit Size
-            <select data-volume-sell-percent data-custom-select="volume-sell-percent">
-              <option value="off">Off</option>
-              <option value="50">50%</option>
-              <option value="80">80%</option>
-              <option value="100" selected>100%</option>
-              <option value="custom">Custom</option>
-            </select>
-            <input data-volume-sell-percent-custom data-custom-for="volume-sell-percent" type="number" min="1" max="100" step="1" placeholder="Custom %" hidden>
-          </label>
-          <label>
-            Slippage
-            <select data-volume-slippage data-custom-select="volume-slippage">
-              <option value="300">3%</option>
-              <option value="400" selected>4%</option>
-              <option value="500">5%</option>
-              <option value="custom">Custom</option>
-            </select>
-            <input data-volume-slippage-custom data-custom-for="volume-slippage" type="number" min="1" max="5000" step="1" placeholder="Custom bps" hidden>
-          </label>
-        </div>
-
-        ${walletExitTargetsHtml("volume")}
-        <button class="primary" data-volume-start>Start Volume Plan</button>
-        <p class="trade-status" data-volume-status>${state.volumeResult ? escapeHtml(state.volumeResult.message || "Volume plan armed.") : "Ready."}</p>
-      </article>
-
-      <aside class="trade-side">
-        <article>
-          <h3>What It Does</h3>
-        <p>Volume is a timed position manager: it buys from selected wallets, then watches for your timer, profit target, or stop-loss. Repeat runs the same managed cycle again after an exit.</p>
-        </article>
-        <article>
-          <h3>Default Setup</h3>
-          <p>5 minute fallback timer, +25% take-profit, -8% stop-loss, 4% slippage, 100% exit.</p>
-        </article>
-        <article>
-          <h3>After Entry</h3>
-          <p>Refresh balances or view positions after a plan buys or exits.</p>
-          <div class="card-actions">
-            <button data-refresh-all>Refresh Balances</button>
-            <button data-tab="positions">Positions</button>
-          </div>
-        </article>
-        ${volumeResultHtml()}
-      </aside>
-    </section>
-  `;
-}
-
-function volumeResultHtml() {
-  if (!state.volumeResult) {
-    return `
-      <article>
-        <h3>Latest Plan</h3>
-        <p>Your latest web volume plan recap will show here after the first buy lands.</p>
-      </article>
-    `;
-  }
-
-  const row = state.volumeResult;
-  return `
-    <article class="latest-trade">
-      <h3>Plan Armed</h3>
-      <p>${escapeHtml(row.message || "")}</p>
-      <dl>
-        <div><dt>Wallets</dt><dd>${escapeHtml(row.walletLabel || `${row.successCount || 0}/${row.walletCount || 0}`)}</dd></div>
-        <div><dt>Buy</dt><dd>${escapeHtml(row.amountSol)} SOL</dd></div>
-        <div><dt>TP / SL</dt><dd>${escapeHtml(row.takeProfitSummary || `+${row.takeProfitPct}%`)} / ${escapeHtml(row.stopLossSummary || `-${row.stopLossPct}%`)}</dd></div>
-        <div><dt>Repeat</dt><dd>${escapeHtml(row.loopCount)}x</dd></div>
-        <div><dt>Repeat Wait</dt><dd>${escapeHtml(row.loopDelaySeconds || 0)} sec</dd></div>
-        <div><dt>Timer Exit</dt><dd>${escapeHtml(timerSellSummary(row))}</dd></div>
-      </dl>
-      ${row.results?.length ? `<div class="mini-results">${row.results.map((item) => `<span data-ok="${item.ok ? "true" : "false"}">${escapeHtml(item.message || item)}</span>`).join("")}</div>` : ""}
-      <div class="card-actions">
-        <button data-copy="${escapeHtml(row.tokenMint)}">Copy CA</button>
-        ${xShareButton(planShareText(row, "Armed volume plan"))}
-        <a href="${escapeHtml(row.dexUrl)}" target="_blank" rel="noreferrer">Dex</a>
-      </div>
-    </article>
-  `;
 }
 
 function launchHtml() {
@@ -8975,10 +9022,10 @@ function pumpLivePanelHtml(draft = state.launchCoinDraft || {}) {
 // buttons (a horizontal chip row on mobile) next to the panels, with only the active panel
 // shown. Every panel stays in the DOM (just hidden) so switching sections never loses typed
 // input. Switching is handled by the [data-tool-section] click handler without a full re-render.
-function toolPanelsHtml({ toolKey, activeKey, sections }) {
+function toolPanelsHtml({ toolKey, activeKey, sections, variant = "" }) {
   const active = sections.some((section) => section.key === activeKey) ? activeKey : sections[0]?.key;
   return `
-    <div class="tool-panels" data-tool-panels="${escapeHtml(toolKey)}">
+    <div class="tool-panels${variant === "stacked" ? " is-stacked" : ""}" data-tool-panels="${escapeHtml(toolKey)}">
       <nav class="tool-panel-nav" aria-label="Sections">
         ${sections.map((section) => `
           <button type="button" class="tool-panel-tab" data-tool-section="${escapeHtml(toolKey)}:${escapeHtml(section.key)}" data-active="${section.key === active ? "true" : "false"}">
@@ -10713,9 +10760,25 @@ async function importWallet() {
 
 async function removeManagedWallet(walletIndex, walletLabel = "this wallet") {
   const label = String(walletLabel || `Wallet ${walletIndex}`);
-  const firstConfirm = window.confirm(`Remove ${label} from this web account?\n\nA backup file and recovery key file will download first. This does not move any SOL or tokens.`);
+  const firstConfirm = await slimeConfirm({
+    title: "Remove Wallet",
+    lines: [
+      `Remove ${label} from this web account?`,
+      "A backup file and recovery key file will download first. This does not move any SOL or tokens."
+    ],
+    confirmLabel: "Back Up & Remove",
+    danger: true
+  });
   if (!firstConfirm) return;
-  const finalConfirm = window.confirm(`Final confirmation: remove ${label} from the saved wallet list?\n\nYou can restore it later only from the backup/recovery file.`);
+  const finalConfirm = await slimeConfirm({
+    title: "Final Confirmation",
+    lines: [
+      `Remove ${label} from the saved wallet list?`,
+      "You can restore it later only from the backup/recovery file."
+    ],
+    confirmLabel: "Remove Wallet",
+    danger: true
+  });
   if (!finalConfirm) return;
 
   const status = $("[data-wallet-remove-status]");
@@ -11070,9 +11133,14 @@ async function connectBrowserWallet(providerId, options = {}) {
     if (existingWallet) {
       const shouldReconnect = options.confirmSwitch === false
         ? true
-        : window.confirm(
-            `Reconnect or switch wallet?\n\nCurrent wallet: ${shortAddress(existingWallet)}\n\nYour wallet extension will open so you can approve the wallet to use on Live Terminal.`
-          );
+        : await slimeConfirm({
+            title: "Reconnect or Switch Wallet",
+            lines: [
+              `Current wallet: ${shortAddress(existingWallet)}`,
+              "Your wallet extension will open so you can approve the wallet to use on Live Terminal."
+            ],
+            confirmLabel: "Open Wallet"
+          });
       if (!shouldReconnect) {
         setWalletConnectStatus("Wallet connection unchanged.");
         navigateTo("/terminal", "terminal");
@@ -11501,18 +11569,22 @@ function confirmConnectedBrowserTrade({ side, connected, form = {}, actionDetail
     : amountMode === "max"
       ? "Max SOL"
       : `${amountSol || actionDetail || "custom"} SOL`;
-  return window.confirm([
-    `${action} with ${walletLabel}?`,
-    `Token: ${form.tokenMint || ""}`,
-    `Amount: ${amountLabel}`,
-    "Next step: approve the transaction in your wallet."
-  ].join("\n"));
+  return slimeConfirm({
+    title: `Confirm ${action}`,
+    lines: [
+      `${action} with ${walletLabel}?`,
+      `Token: ${form.tokenMint || ""}`,
+      `Amount: ${amountLabel}`,
+      "Next step: approve the transaction in your wallet."
+    ],
+    confirmLabel: action
+  });
 }
 
 async function executeConnectedBrowserTrade({ side, form, actionDetail, amountSol = "", amountMode = "", percent = "", attemptId, statusWriter = setTradeStatus }) {
   const writeStatus = typeof statusWriter === "function" ? statusWriter : setTradeStatus;
   const { provider, connected } = await connectedTradeProvider();
-  if (!state.walletFastApprovalsEnabled && !confirmConnectedBrowserTrade({ side, connected, form, actionDetail, amountSol, amountMode, percent })) {
+  if (!state.walletFastApprovalsEnabled && !(await confirmConnectedBrowserTrade({ side, connected, form, actionDetail, amountSol, amountMode, percent }))) {
     throw new Error("Connected-wallet trade cancelled.");
   }
   writeStatus(state.walletFastApprovalsEnabled
@@ -12161,13 +12233,17 @@ async function saveOgreAutopilot() {
     return;
   }
   if (payload.enabled) {
-    const ok = window.confirm([
-      "Enable Ogre A.I. Autopilot? This will spend REAL SOL automatically.",
-      `Category: ${ogreAiCategoryLabelClient(payload.category)}`,
-      `Up to ${payload.amountSol} SOL per wallet, max ${payload.maxSpendPerHourSol} SOL/hour, every ${payload.intervalMinutes} min.`,
-      `Only buys picks scoring >= ${payload.minScore}, max ${payload.maxConcurrent} live plans.`,
-      "You can turn it off any time."
-    ].join("\n"));
+    const ok = await slimeConfirm({
+      title: "Enable Ogre A.I. Autopilot",
+      lines: [
+        "This will spend REAL SOL automatically.",
+        `Category: ${ogreAiCategoryLabelClient(payload.category)}`,
+        `Up to ${payload.amountSol} SOL per wallet, max ${payload.maxSpendPerHourSol} SOL/hour, every ${payload.intervalMinutes} min.`,
+        `Only buys picks scoring >= ${payload.minScore}, max ${payload.maxConcurrent} live plans.`,
+        "You can turn it off any time."
+      ],
+      confirmLabel: "Enable Autopilot"
+    });
     if (!ok) return;
   }
   state.ogreAutopilotBusy = true;
@@ -13208,11 +13284,17 @@ async function quickPresetBundle(tokenMint, presetOverride = null) {
   }
   // A bundle buy fires across multiple wallets, so confirm before launching it
   // from a pair row - or send them to the Bundle page to review first.
-  if (!presetOverride && typeof window !== "undefined" && typeof window.confirm === "function") {
+  if (!presetOverride) {
     const walletCount = (preset.walletIndexes || []).length || (preset.walletGroup ? "group" : "saved");
-    const proceed = window.confirm(
-      `Bundle buy ${shortAddress(tokenMint)} with preset "${preset.name || "Fast Bundle"}" across ${walletCount} wallet(s)?\n\nOK = buy now   ·   Cancel = open the Bundle page to review.`
-    );
+    const proceed = await slimeConfirm({
+      title: "Bundle Buy",
+      lines: [
+        `Bundle buy ${shortAddress(tokenMint)} with preset "${preset.name || "Fast Bundle"}" across ${walletCount} wallet(s)?`,
+        "Cancel opens the Bundle page to review first."
+      ],
+      confirmLabel: "Buy Now",
+      cancelLabel: "Review First"
+    });
     if (!proceed) {
       openManualTradeForToken(tokenMint, "bundle", "Review the Bundle setup, then submit.");
       return;
@@ -13331,13 +13413,18 @@ async function sellPositionPercent(tokenMint, percentText = "100", options = {})
       clearManualSellActionLater(tokenMint, String(percent), 3_000);
       return;
     }
-    const ok = Boolean(options.skipConfirm) || window.confirm([
-      `Exit ${percent}% of ${tokenLabel}?`,
-      `Mint: ${tokenMint}`,
-      "Wallets: all managed wallets holding this token",
-      "Slippage: 4%",
-      "Expected SOL, minimum output, and route details are shown before the sell is submitted."
-    ].join("\n"));
+    const ok = Boolean(options.skipConfirm) || await slimeConfirm({
+      title: "Confirm Exit",
+      lines: [
+        `Exit ${percent}% of ${tokenLabel}?`,
+        `Mint: ${tokenMint}`,
+        "Wallets: all managed wallets holding this token",
+        "Slippage: 4%",
+        "Expected SOL, minimum output, and route details are shown before the sell is submitted."
+      ],
+      confirmLabel: `Sell ${percent}%`,
+      danger: true
+    });
     if (!ok) return;
     manualSellAttemptId = createClientAttemptId("manual-sell");
     setManualSellAction(tokenMint, String(percent), {
@@ -15135,6 +15222,21 @@ function terminalTokenStatsHtml(row = {}) {
   `;
 }
 
+// Shared Trade / Quick Buy / Bundle / Chart / Watch action cluster for terminal and
+// compact feed rows; the source tag tells the click handlers which layout fired.
+function feedRowActionsHtml(row, { source, actionLabel = "Trade", isKolContext = false } = {}) {
+  const watched = isTokenWatched(row.tokenMint);
+  return `
+    <button type="button" class="primary" data-token-trade="${escapeHtml(row.tokenMint)}" data-token-trade-source="${escapeHtml(source)}" title="Open chart and buy/sell panel">${escapeHtml(actionLabel)}</button>
+    <button type="button" data-quick-buy-token="${escapeHtml(row.tokenMint)}" data-quick-buy-source="${escapeHtml(source)}" title="Quick buy with preset or custom SOL amount">${escapeHtml(quickBuyButtonLabel())}</button>
+    <button type="button" data-quick-bundle-token="${escapeHtml(row.tokenMint)}" title="Bundle buy across wallets">Bundle</button>
+    <button type="button" data-smart-chart-token="${escapeHtml(row.tokenMint)}" title="Open chart">Chart</button>
+    ${isKolContext ? kolDumpSignalButtonHtml(row) : ""}
+    <button type="button" class="watch-action" data-watched="${watched}" title="${watched ? "Saved to watchlist" : "Watch / save coin"}" data-watch-token="${escapeHtml(row.tokenMint)}" data-watch-symbol="${escapeHtml(row.symbol || "")}" data-watch-name="${escapeHtml(row.name || "")}" data-watch-image="${escapeHtml(livePairImageUrl(row) || "")}">${watched ? "Saved" : "Watch"}</button>
+    ${devInfoPillHtml(row, { compact: true })}
+  `;
+}
+
 function terminalSignalRowsHtml(rows, options = {}) {
   const limit = options.limit || 6;
   const actionLabel = options.actionLabel || "Trade";
@@ -15148,7 +15250,6 @@ function terminalSignalRowsHtml(rows, options = {}) {
     <div class="terminal-token-list">
       ${visibleRows.map((row, index) => {
         const setup = row.scalpSetup || row.momentum || row.category || "live";
-        const watched = isTokenWatched(row.tokenMint);
         return `
           <article class="terminal-token-row${cooks} ${isKolContext ? "is-kol-signal" : ""}" data-token-chart="${escapeHtml(row.tokenMint)}" data-token-chart-source="terminal-row">
             ${livePairAvatarHtml(row, { priority: index < 8 })}
@@ -15165,13 +15266,7 @@ function terminalSignalRowsHtml(rows, options = {}) {
             </div>
             ${terminalTokenStatsHtml(row)}
             <div class="terminal-token-actions has-dev-info">
-              <button type="button" class="primary" data-token-trade="${escapeHtml(row.tokenMint)}" data-token-trade-source="terminal-row" title="Open chart and buy/sell panel">${escapeHtml(actionLabel)}</button>
-              <button type="button" data-quick-buy-token="${escapeHtml(row.tokenMint)}" data-quick-buy-source="terminal-row" title="Quick buy with preset or custom SOL amount">${escapeHtml(quickBuyButtonLabel())}</button>
-              <button type="button" data-quick-bundle-token="${escapeHtml(row.tokenMint)}" title="Bundle buy across wallets">Bundle</button>
-              <button type="button" data-smart-chart-token="${escapeHtml(row.tokenMint)}" title="Open chart">Chart</button>
-              ${isKolContext ? kolDumpSignalButtonHtml(row) : ""}
-              <button type="button" class="watch-action" data-watched="${watched}" title="${watched ? "Saved to watchlist" : "Watch / save coin"}" data-watch-token="${escapeHtml(row.tokenMint)}" data-watch-symbol="${escapeHtml(row.symbol || "")}" data-watch-name="${escapeHtml(row.name || "")}" data-watch-image="${escapeHtml(livePairImageUrl(row) || "")}">${watched ? "Saved" : "Watch"}</button>
-              ${devInfoPillHtml(row, { compact: true })}
+              ${feedRowActionsHtml(row, { source: "terminal-row", actionLabel, isKolContext })}
             </div>
           </article>
         `;
@@ -15209,13 +15304,7 @@ function compactSignalRowsHtml(rows, options = {}) {
           </div>
           ${scoreBadgeHtml(row)}
           <div class="compact-row-actions has-dev-info">
-            <button type="button" class="primary" data-token-trade="${escapeHtml(row.tokenMint)}" data-token-trade-source="compact-row" title="Open chart and buy/sell panel">${escapeHtml(actionLabel)}</button>
-            <button type="button" data-quick-buy-token="${escapeHtml(row.tokenMint)}" data-quick-buy-source="compact-row" title="Quick buy with preset or custom SOL amount">${escapeHtml(quickBuyButtonLabel())}</button>
-            <button type="button" data-quick-bundle-token="${escapeHtml(row.tokenMint)}">Bundle</button>
-            <button type="button" data-smart-chart-token="${escapeHtml(row.tokenMint)}">Chart</button>
-            ${isKolContext ? kolDumpSignalButtonHtml(row) : ""}
-            <button type="button" class="watch-action" data-watch-token="${escapeHtml(row.tokenMint)}" data-watch-symbol="${escapeHtml(row.symbol || "")}" data-watch-name="${escapeHtml(row.name || "")}" data-watch-image="${escapeHtml(livePairImageUrl(row) || "")}">${isTokenWatched(row.tokenMint) ? "Saved" : "Watch"}</button>
-            ${devInfoPillHtml(row, { compact: true })}
+            ${feedRowActionsHtml(row, { source: "compact-row", actionLabel, isKolContext })}
           </div>
         </article>
       `).join("")}
@@ -18296,6 +18385,92 @@ function sniperSetupHtml() {
   }
 
   const isPump = state.scanMode === "pumpsnipe";
+  const sections = [
+    {
+      key: "wallets", label: "Wallets", hint: "Who buys",
+      html: `
+        <div class="wallet-checks">
+          ${walletChecksHtml("sniper")}
+        </div>
+        ${walletGroupHtml("sniper")}
+      `
+    },
+    {
+      key: "buy", label: "Buy & Exits", hint: "Amount, TP/SL",
+      html: `
+        <div class="volume-grid">
+          <label>
+            Buy Per Wallet
+            <input data-sniper-amount type="number" min="0" step="0.01" value="0.1">
+          </label>
+          <label>
+            Take Profit
+            <select data-sniper-tp data-custom-select="sniper-tp">
+              <option value="0">Off</option>
+              <option value="15">+15%</option>
+              <option value="25" ${isPump ? "" : "selected"}>+25%</option>
+              <option value="40" ${isPump ? "selected" : ""}>+40%</option>
+              <option value="50">+50%</option>
+              <option value="100">+100%</option>
+              <option value="250">+250%</option>
+              <option value="custom">Custom</option>
+            </select>
+            <input data-sniper-tp-custom data-custom-for="sniper-tp" type="text" placeholder="Custom: 500 or 5x" hidden>
+          </label>
+          <label>
+            Stop Loss
+            <select data-sniper-sl data-custom-select="sniper-sl">
+              <option value="0">Off</option>
+              <option value="8" selected>-8%</option>
+              <option value="10">-10%</option>
+              <option value="15">-15%</option>
+              <option value="custom">Custom</option>
+            </select>
+            <input data-sniper-sl-custom data-custom-for="sniper-sl" type="text" placeholder="Custom SL %" hidden>
+          </label>
+          <label>
+            Fallback Sell
+            ${fallbackTimerSelectHtml("sniper-delay", "data-sniper-delay", isPump ? "3" : "5")}
+          </label>
+        </div>
+      `
+    },
+    {
+      key: "repeat", label: "Repeat & Slip", hint: "Cycles, slippage",
+      html: `
+        <div class="volume-grid">
+          <label>
+            Repeat
+            <select data-sniper-loop data-custom-select="sniper-loop">
+              <option value="1" selected>1x</option>
+              <option value="5">5x</option>
+              <option value="10">10x</option>
+              <option value="custom">Custom</option>
+            </select>
+            <input data-sniper-loop-custom data-custom-for="sniper-loop" type="number" min="1" max="10" step="1" placeholder="Custom 1-10" hidden>
+          </label>
+          <label>
+            Repeat Wait
+            ${repeatWaitSelectHtml("sniper-loop-delay", "data-sniper-loop-delay", "0")}
+          </label>
+          <label>
+            Slippage
+            <select data-sniper-slippage data-custom-select="sniper-slippage">
+              <option value="300" ${isPump ? "selected" : ""}>3%</option>
+              <option value="400" ${isPump ? "" : "selected"}>4%</option>
+              <option value="500">5%</option>
+              <option value="custom">Custom</option>
+            </select>
+            <input data-sniper-slippage-custom data-custom-for="sniper-slippage" type="number" min="1" max="5000" step="1" placeholder="Custom bps" hidden>
+          </label>
+        </div>
+      `
+    },
+    {
+      key: "targets", label: "Per-Wallet", hint: "Exit targets",
+      html: walletExitTargetsHtml("sniper") || `<p class="trade-status">No per-wallet exit targets yet.</p>`
+    }
+  ];
   return `
     <section class="trade-card sniper-setup">
       <div class="trade-head">
@@ -18304,70 +18479,12 @@ function sniperSetupHtml() {
           <p>Select wallets once, then tap Snipe on any pick. Amount is per selected wallet.</p>
         </div>
       </div>
-      <div class="wallet-checks">
-        ${walletChecksHtml("sniper")}
-      </div>
-      ${walletGroupHtml("sniper")}
-      <div class="volume-grid">
-        <label>
-          Buy Per Wallet
-          <input data-sniper-amount type="number" min="0" step="0.01" value="0.1">
-        </label>
-        <label>
-          Take Profit
-          <select data-sniper-tp data-custom-select="sniper-tp">
-            <option value="0">Off</option>
-            <option value="15">+15%</option>
-            <option value="25" ${isPump ? "" : "selected"}>+25%</option>
-            <option value="40" ${isPump ? "selected" : ""}>+40%</option>
-            <option value="50">+50%</option>
-            <option value="100">+100%</option>
-            <option value="250">+250%</option>
-            <option value="custom">Custom</option>
-          </select>
-          <input data-sniper-tp-custom data-custom-for="sniper-tp" type="text" placeholder="Custom: 500 or 5x" hidden>
-        </label>
-        <label>
-          Stop Loss
-          <select data-sniper-sl data-custom-select="sniper-sl">
-            <option value="0">Off</option>
-            <option value="8" selected>-8%</option>
-            <option value="10">-10%</option>
-            <option value="15">-15%</option>
-            <option value="custom">Custom</option>
-          </select>
-          <input data-sniper-sl-custom data-custom-for="sniper-sl" type="text" placeholder="Custom SL %" hidden>
-        </label>
-        <label>
-          Fallback Sell
-          ${fallbackTimerSelectHtml("sniper-delay", "data-sniper-delay", isPump ? "3" : "5")}
-        </label>
-        <label>
-          Repeat
-          <select data-sniper-loop data-custom-select="sniper-loop">
-            <option value="1" selected>1x</option>
-            <option value="5">5x</option>
-            <option value="10">10x</option>
-            <option value="custom">Custom</option>
-          </select>
-          <input data-sniper-loop-custom data-custom-for="sniper-loop" type="number" min="1" max="10" step="1" placeholder="Custom 1-10" hidden>
-        </label>
-        <label>
-          Repeat Wait
-          ${repeatWaitSelectHtml("sniper-loop-delay", "data-sniper-loop-delay", "0")}
-        </label>
-        <label>
-          Slippage
-          <select data-sniper-slippage data-custom-select="sniper-slippage">
-            <option value="300" ${isPump ? "selected" : ""}>3%</option>
-            <option value="400" ${isPump ? "" : "selected"}>4%</option>
-            <option value="500">5%</option>
-            <option value="custom">Custom</option>
-          </select>
-          <input data-sniper-slippage-custom data-custom-for="sniper-slippage" type="number" min="1" max="5000" step="1" placeholder="Custom bps" hidden>
-        </label>
-      </div>
-      ${walletExitTargetsHtml("sniper")}
+      ${toolPanelsHtml({
+        toolKey: "sniperSetup",
+        activeKey: activeToolSection("sniperSetup", "wallets"),
+        sections,
+        variant: "stacked"
+      })}
       <p class="trade-status" data-sniper-status>${state.sniperResult ? escapeHtml(state.sniperResult.message || "Sniper plan armed.") : "Ready. Tap Snipe on a pick below."}</p>
       ${sniperResultHtml()}
     </section>
@@ -20948,7 +21065,11 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-position-sell-custom]")) {
     event.preventDefault();
     event.stopPropagation();
-    const percent = window.prompt("Sell what percent of this position?", "100");
+    const percent = await slimeConfirm({
+      title: "Custom Sell",
+      input: { label: "Sell what percent of this position?", value: "100", type: "text", inputmode: "numeric" },
+      confirmLabel: "Sell"
+    });
     if (percent) await sellPositionPercent(target.dataset.positionSellCustom || "", percent, {
       slippageBps: state.activeTab === "smartChart" ? ($("[data-chart-buy-slippage]")?.value || "400") : "400"
     });

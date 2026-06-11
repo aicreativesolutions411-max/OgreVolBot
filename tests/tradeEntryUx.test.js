@@ -56,13 +56,16 @@ test("Quick Buy is separate and validates custom SOL amount", () => {
 });
 
 test("Rendered feed/card rows use Trade plus Quick Buy labels, not ambiguous quick-trade markup", () => {
+  // Terminal and compact rows share the feedRowActionsHtml action cluster.
+  const feedRowActions = functionBody(appSource, "feedRowActionsHtml");
+  assert.match(feedRowActions, /data-token-trade/);
+  assert.match(feedRowActions, /data-quick-buy-token/);
+  assert.doesNotMatch(feedRowActions, /data-quick-trade-token/);
   const terminalRows = functionBody(appSource, "terminalSignalRowsHtml");
-  assert.match(terminalRows, /data-token-trade/);
-  assert.match(terminalRows, /data-quick-buy-token/);
+  assert.match(terminalRows, /feedRowActionsHtml\(row/);
   assert.match(terminalRows, /slimeShieldMiniHtml\(row\)/);
   assert.doesNotMatch(terminalRows, /slimeShieldChipHtml\(row\)/);
-  assert.match(functionBody(appSource, "compactSignalRowsHtml"), /data-token-trade/);
-  assert.match(functionBody(appSource, "compactSignalRowsHtml"), /data-quick-buy-token/);
+  assert.match(functionBody(appSource, "compactSignalRowsHtml"), /feedRowActionsHtml\(row/);
   assert.match(functionBody(appSource, "tokenSignalRowHtml"), /data-token-trade/);
   assert.match(functionBody(appSource, "tokenSignalRowHtml"), /data-quick-buy-token/);
   assert.match(functionBody(appSource, "tokenPreviewHtml"), /data-token-trade/);
