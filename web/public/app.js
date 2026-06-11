@@ -10111,7 +10111,9 @@ async function submitLaunchCoin() {
       const bundledCount = Number(launch.bundledWalletCount || 0);
       const devNote = launch.devBuyIncluded ? "dev buy" : "";
       const buyNote = [devNote, bundledCount > 0 ? `${bundledCount} bundle buy${bundledCount === 1 ? "" : "s"}` : ""].filter(Boolean).join(" + ");
-      state.launchCoinStatus = `Launch bundled atomically: ${shortAddress(tokenMint)}${buyNote ? ` (${buyNote} landed in-block)` : ""}.${signature} Opening chart...`;
+      state.launchCoinStatus = launch.bundleFallback
+        ? `Launched ${shortAddress(tokenMint)} via the standard path (bundle missed the block lottery)${buyNote ? ` - server fired ${buyNote} right behind the create` : ""}.${signature} Opening chart...`
+        : `Launch bundled atomically: ${shortAddress(tokenMint)}${buyNote ? ` (${buyNote} landed in-block)` : ""}.${signature} Opening chart...`;
       writeText(status, state.launchCoinStatus);
       navigateTo("/terminal/chart", "smartChart");
       render({ force: true });

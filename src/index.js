@@ -30801,6 +30801,43 @@ async function submitJitoBundle(base64Txs, timeoutMs) {
   }
 }
 
+// After a fallback (non-atomic) launch the first buys MUST still be instant -
+// the server holds every keypair, so it fires dev buy + bundle wallet buys
+// itself, sequentially, the moment the create lands. No client round-trips.
+async function firePostLaunchBuysServerSide({ mint, devKeypair, devBuySol, bundleWallets, bundleAmountSol, slippagePct, launchAttemptId, userId }) {
+  const outcome = { dev: false, wallets: 0 };
+  const buyOnce = async (keypair, amountSol, label) => {
+    const action = {
+      publicKey: keypair.publicKey.toBase58(), action: "buy", mint,
+      denominatedInSol: "true", amount: amountSol, slippage: slippagePct,
+      priorityFee: Math.max(CONFIG.pumpLaunchPriorityFeeSol || 0.00005, 0.00005), pool: "pump"
+    };
+    const [bytes] = await requestPumpPortalBundleTxs([action], CONFIG.pumpLaunchTimeoutMs || 30000);
+    const tx = VersionedTransaction.deserialize(bytes);
+    tx.sign([keypair]);
+    const signature = await sendVersionedTransaction(tx, `post-launch ${label} buy`);
+    logPumpLaunchEvent("pump_launch_fallback_buy", { launchAttemptId, userId, mint, label, amountSol, txSignature: signature });
+  };
+  if (devBuySol > 0) {
+    try {
+      await buyOnce(devKeypair, devBuySol, "dev");
+      outcome.dev = true;
+    } catch (error) {
+      logPumpLaunchEvent("pump_launch_fallback_buy_failed", { launchAttemptId, userId, mint, label: "dev", errorMessage: String(error.message || "").slice(0, 200) });
+    }
+  }
+  for (const wallet of bundleWallets) {
+    try {
+      const keypair = decryptWallet(wallet);
+      await buyOnce(keypair, bundleAmountSol, shortMint(wallet.publicKey));
+      outcome.wallets += 1;
+    } catch (error) {
+      logPumpLaunchEvent("pump_launch_fallback_buy_failed", { launchAttemptId, userId, mint, label: shortMint(wallet.publicKey), errorMessage: String(error.message || "").slice(0, 200) });
+    }
+  }
+  return outcome;
+}
+
 async function webLaunchPumpJitoBundle(userId, body, basePayload) {
   const store = await readWalletStore();
   const selectedDevWalletId = firstString(
@@ -30981,15 +31018,25 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
       launchAttemptId: basePayload.clientRequestId, userId, mint, bundleId, attempts: tipSchedule.length, fallback: "pumpportal-local"
     });
     // The launch must NEVER dead-end on the block lottery: fall back to the
-    // proven sequential path (create + dev buy). The client sees bundled:false
-    // and runs the first-block wallet buys itself right after, as it always
-    // did before bundles existed. Slightly snipeable, but it SHIPS the coin.
+    // proven sequential path, then the SERVER fires the dev buy and every
+    // bundle wallet buy itself - instant, no client follow-ups to stall on.
     const fallback = await webLaunchPumpPortalLocal(userId, body, basePayload);
+    const fallbackMint = String(fallback?.tokenMint || fallback?.mint || "");
+    let buys = { dev: false, wallets: 0 };
+    if (fallbackMint) {
+      buys = await firePostLaunchBuysServerSide({
+        mint: fallbackMint, devKeypair, devBuySol, bundleWallets, bundleAmountSol, slippagePct,
+        launchAttemptId: basePayload.clientRequestId, userId
+      }).catch(() => ({ dev: false, wallets: 0 }));
+    }
+    // bundled:true tells the client the buys are DONE - it must not re-run them.
     return {
       ...fallback,
-      bundled: false,
+      bundled: true,
       bundleFallback: true,
-      message: "Atomic bundle missed the block lottery (no SOL was spent on it) - launched through the standard path instead; post-launch buys follow in seconds."
+      devBuyIncluded: buys.dev,
+      bundledWalletCount: buys.wallets,
+      message: `Atomic bundle missed the block lottery (nothing spent on it) - launched standard instead. Server fired ${buys.dev ? "the dev buy" : "no dev buy"}${buys.wallets ? ` + ${buys.wallets} bundle wallet buy(s)` : ""} right behind the create.`
     };
   }
 
