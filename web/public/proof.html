@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SlimeWire Proof Wall - receipts, not promises</title>
+    <meta name="description" content="Every SlimeWire alpha call and SlimeShield rug flag, tracked publicly. Wins, losses, and minutes-of-warning - receipts, not promises.">
+    <link rel="icon" type="image/svg+xml" href="/assets/slimewire/svg/slimewire-mark.svg">
+    <style>
+      :root { --green: #72ff23; --dim: rgba(226,255,215,0.72); --line: rgba(114,255,35,0.2); }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; min-height: 100vh; color: #eaffe0;
+        font-family: Inter, system-ui, -apple-system, sans-serif;
+        background: radial-gradient(circle at 15% 0%, rgba(114,255,35,0.14), transparent 38rem), #050705;
+      }
+      main { max-width: 880px; margin: 0 auto; padding: 28px 16px 60px; }
+      h1 { margin: 0; font-size: 1.5rem; }
+      h1 span { color: var(--green); }
+      .sub { color: var(--dim); margin: 6px 0 22px; font-size: 0.92rem; }
+      .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 24px; }
+      .stat { border: 1px solid var(--line); border-radius: 14px; padding: 14px; background: rgba(8,20,10,0.5); }
+      .stat strong { display: block; font-size: 1.4rem; color: var(--green); }
+      .stat span { font-size: 0.74rem; color: var(--dim); text-transform: uppercase; letter-spacing: 0.04em; }
+      h2 { font-size: 1.02rem; margin: 26px 0 10px; color: #d6ffbf; }
+      .row { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; border-bottom: 1px solid rgba(114,255,35,0.1); padding: 9px 2px; font-size: 0.9rem; }
+      .row b a { color: #eaffe0; text-decoration: none; }
+      .row b a:hover { color: var(--green); }
+      .win { color: var(--green); font-weight: 800; }
+      .rug { color: #ff7a6b; font-weight: 800; }
+      .meta { color: var(--dim); font-size: 0.78rem; }
+      .pill { font-size: 0.68rem; font-weight: 800; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); }
+      .cta { display: inline-block; margin-top: 28px; padding: 12px 22px; border-radius: 999px; font-weight: 800; color: #071006; background: linear-gradient(135deg, rgba(114,255,35,0.95), rgba(187,255,99,0.95)); text-decoration: none; }
+      .empty { color: var(--dim); font-size: 0.88rem; padding: 8px 2px; }
+      footer { margin-top: 34px; color: var(--dim); font-size: 0.78rem; }
+      footer a { color: var(--green); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1><span>SlimeWire</span> Proof Wall</h1>
+      <p class="sub">Every alpha call and every SlimeShield flag is tracked to its outcome - wins, losses, and minutes-of-warning. Receipts, not promises. Updates live.</p>
+      <div class="stats" data-stats><div class="stat"><strong>...</strong><span>loading</span></div></div>
+      <h2>✅ Called it - wins</h2>
+      <div data-wins><p class="empty">Loading...</p></div>
+      <h2>🛡 Rugs SlimeShield flagged first</h2>
+      <div data-rugs><p class="empty">Loading...</p></div>
+      <h2>📡 Latest calls (live tracking)</h2>
+      <div data-calls><p class="empty">Loading...</p></div>
+      <h2>🏆 Top alpha groups</h2>
+      <div data-league><p class="empty">Loading...</p></div>
+      <a class="cta" href="/">Open the SlimeWire terminal</a>
+      <footer>Add the bot to your Telegram group: <a data-bot-link href="#">@OgreTradeBot</a> - /look, /alpha, /ape, /slimewire on. Not financial advice.</footer>
+    </main>
+    <script src="/config.js"></script>
+    <script>
+      (async () => {
+        const config = window.OGRE_PORTAL_CONFIG || {};
+        const apiBase = String(config.apiBase || "").replace(/\/$/, "");
+        const botLink = document.querySelector("[data-bot-link]");
+        if (config.telegramBotUsername && botLink) {
+          botLink.href = "https://t.me/" + config.telegramBotUsername;
+          botLink.textContent = "@" + config.telegramBotUsername;
+        }
+        const esc = (value) => String(value ?? "").replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
+        const chartUrl = (mint) => "/terminal/chart?token=" + encodeURIComponent(mint) + "&source=proof";
+        const ago = (iso) => {
+          const minutes = Math.max(1, Math.round((Date.now() - Date.parse(iso)) / 60000));
+          if (minutes < 90) return minutes + "m ago";
+          if (minutes < 2880) return Math.round(minutes / 60) + "h ago";
+          return Math.round(minutes / 1440) + "d ago";
+        };
+        try {
+          const response = await fetch(apiBase + "/api/web/proof", { cache: "no-store" });
+          const data = await response.json();
+          const alpha = data.alpha || {};
+          const shield = data.shield || {};
+          document.querySelector("[data-stats]").innerHTML = [
+            ["Calls tracked", alpha.totalCalls ?? 0],
+            ["2x wins", alpha.wins ?? 0],
+            ["Hit rate", alpha.hitRatePct != null ? alpha.hitRatePct + "%" : "building"],
+            ["Best call", alpha.bestX ? alpha.bestX + "x" : "-"],
+            ["Avg time to 2x", alpha.avgMinutesToWin ? alpha.avgMinutesToWin + " min" : "-"],
+            ["Rugs flagged first", shield.rugsCalled ?? 0]
+          ].map(([label, value]) => '<div class="stat"><strong>' + esc(value) + '</strong><span>' + esc(label) + "</span></div>").join("");
+          const wins = (alpha.recentWins || []).map((win) =>
+            '<div class="row"><b><a href="' + chartUrl(win.mint) + '">$' + esc(win.symbol) + '</a></b><span class="win">' + esc(win.peakX) + 'x</span><span class="meta">called ' + ago(win.calledAt) + (win.verdict ? ' | shield said ' + esc(win.verdict) : "") + "</span></div>").join("");
+          document.querySelector("[data-wins]").innerHTML = wins || '<p class="empty">First wins land here - every call is being tracked right now.</p>';
+          const rugs = (shield.recentRugs || []).map((item) =>
+            '<div class="row"><b><a href="' + chartUrl(item.mint) + '">$' + esc(item.symbol || item.mint.slice(0, 6)) + '</a></b><span class="rug">rugged</span><span class="meta">flagged ' + esc(item.verdict) + " (score " + esc(item.score) + ")" + (item.warningMinutes ? " - " + esc(item.warningMinutes) + " min of warning" : "") + "</span></div>").join("");
+          document.querySelector("[data-rugs]").innerHTML = rugs || '<p class="empty">No confirmed rugs in the log yet - flags resolve as the market moves.</p>';
+          const calls = (alpha.recentCalls || []).map((call) => {
+            const status = call.status === "watching"
+              ? '<span class="pill">tracking</span>'
+              : call.outcome === "won"
+                ? '<span class="win">' + esc(call.peakX) + "x</span>"
+                : '<span class="meta">' + esc(call.outcome) + "</span>";
+            return '<div class="row"><b><a href="' + chartUrl(call.mint) + '">$' + esc(call.symbol) + '</a></b>' + status + '<span class="meta">' + ago(call.calledAt) + (call.verdict ? " | " + esc(call.verdict) : "") + "</span></div>";
+          }).join("");
+          document.querySelector("[data-calls]").innerHTML = calls || '<p class="empty">Calls post every 15 minutes to opted-in Telegram groups.</p>';
+          const league = (data.groupLeague || []).map((group, index) =>
+            '<div class="row"><b>' + (index + 1) + ". " + esc(group.title) + '</b><span class="win">' + esc(group.wins) + " wins</span></div>").join("");
+          document.querySelector("[data-league]").innerHTML = league || '<p class="empty">Groups earn spots here when their drops hit 2x. Add the bot, run /slimewire on, climb.</p>';
+        } catch {
+          document.querySelector("[data-stats]").innerHTML = '<div class="stat"><strong>offline</strong><span>retry shortly</span></div>';
+        }
+        setTimeout(() => window.location.reload(), 120000);
+      })();
+    </script>
+  </body>
+</html>

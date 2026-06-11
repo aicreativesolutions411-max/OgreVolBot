@@ -12920,6 +12920,13 @@ function applyChartRouteFromLocation() {
     const tokenRef = tokenRefFromMint(token, { source: params.get("source") || "route" });
     applyTokenRefToState(tokenRef);
     prefetchTokenChart(tokenRef, { source: params.get("source") || "route" });
+    // Deep links can land with the buy panel already open (&buy=1): Telegram creates
+    // the attention, the site is the execution layer - zero extra taps in between.
+    if (params.get("buy") === "1") {
+      window.setTimeout(() => {
+        try { openQuickBuy(tokenRef, { forceModal: true, source: "deep-link" }); } catch {}
+      }, 900);
+    }
     if (token !== previousToken) {
       state.chartTradeStatus = "";
       state.chartBuyWalletIndex = "";

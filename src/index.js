@@ -1228,6 +1228,7 @@ async function registerTelegramBotCommands() {
   const groupCommands = [
     { command: "look", description: "SlimeShield read on a token CA" },
     { command: "alpha", description: "Top scanner picks right now" },
+    { command: "ape", description: "One fresh low-MC shot right now" },
     { command: "receipts", description: "SlimeShield rug-call receipts + hit rate" },
     { command: "slimewire", description: "on/off - engine alerts in this chat (admins)" }
   ];
@@ -1978,6 +1979,66 @@ async function handleWebApiRequest(request, response, requestUrl) {
       const body = await readJsonRequestBody(request, 5_000);
       await recordLockInClickedEvent(body, request);
       sendWebJson(request, response, 200, { ok: true });
+      return;
+    }
+
+    // PUBLIC proof wall data: the engine's track record - wins AND losses - with no
+    // login. Every Telegram post links here; receipts are the marketing.
+    if (request.method === "GET" && pathname === "/api/web/proof") {
+      const [calls, receipts, groups] = await Promise.all([
+        readAlphaCalls().catch(() => ({ calls: [] })),
+        readShieldReceipts().catch(() => ({ receipts: [] })),
+        readTelegramGroups().catch(() => ({ groups: {} }))
+      ]);
+      const resolvedCalls = calls.calls.filter((call) => call.status === "resolved");
+      const wins = resolvedCalls.filter((call) => call.outcome === "won");
+      const losses = resolvedCalls.filter((call) => call.outcome === "lost");
+      const avgMinutesToWin = wins.length
+        ? Math.round(wins.reduce((sum, call) => sum + Math.max(0, (Date.parse(call.resolvedAt) - Date.parse(call.calledAt)) / 60000), 0) / wins.length)
+        : null;
+      const groupTally = new Map();
+      for (const call of wins) {
+        for (const chatId of call.chatIds || []) {
+          groupTally.set(chatId, (groupTally.get(chatId) || 0) + 1);
+        }
+      }
+      const groupLeague = [...groupTally.entries()]
+        .map(([chatId, winCount]) => ({ title: groups.groups?.[chatId]?.title || "Private group", wins: winCount }))
+        .sort((a, b) => b.wins - a.wins)
+        .slice(0, 10);
+      const resolvedReceipts = receipts.receipts.filter((item) => item.status === "resolved");
+      const ruggedReceipts = resolvedReceipts.filter((item) => item.outcome === "rugged");
+      sendCachedWebJson(request, response, 200, {
+        ok: true,
+        alpha: {
+          totalCalls: calls.calls.length,
+          watching: calls.calls.filter((call) => call.status === "watching").length,
+          wins: wins.length,
+          losses: losses.length,
+          flat: resolvedCalls.length - wins.length - losses.length,
+          hitRatePct: resolvedCalls.length ? Math.round((wins.length / resolvedCalls.length) * 100) : null,
+          avgMinutesToWin,
+          bestX: wins.length ? Math.max(...wins.map((call) => Number(call.peakX) || 0)) : null,
+          recentWins: wins.slice(-12).reverse().map((call) => ({
+            symbol: call.symbol, mint: call.mint, peakX: call.peakX, verdict: call.verdict || "",
+            calledAt: call.calledAt, resolvedAt: call.resolvedAt
+          })),
+          recentCalls: calls.calls.slice(-15).reverse().map((call) => ({
+            symbol: call.symbol, mint: call.mint, status: call.status, outcome: call.outcome,
+            verdict: call.verdict || "", calledAt: call.calledAt, peakX: call.peakX || null
+          }))
+        },
+        shield: {
+          flagged: receipts.receipts.length,
+          rugsCalled: ruggedReceipts.length,
+          hitRatePct: resolvedReceipts.length ? Math.round((ruggedReceipts.length / resolvedReceipts.length) * 100) : null,
+          recentRugs: ruggedReceipts.slice(-10).reverse().map((item) => ({
+            symbol: item.symbol, mint: item.mint, verdict: item.verdict, score: item.score,
+            warningMinutes: item.confirmedAfterMinutes || null, flaggedAt: item.flaggedAt
+          }))
+        },
+        groupLeague
+      }, "public, max-age=60, stale-while-revalidate=300");
       return;
     }
 
@@ -6344,6 +6405,11 @@ async function handleMessage(message, userId) {
   const receiptsCommand = parseCommandWithArgument(text, ["receipts", "shield"]);
   if (receiptsCommand) {
     await handleTelegramReceiptsCommand(chatId);
+    return;
+  }
+  const apeCommand = parseCommandWithArgument(text, ["ape", "fresh", "degen"]);
+  if (apeCommand) {
+    await handleTelegramApeCommand(chatId);
     return;
   }
   // /slimewire on|off - also accept the bare phrase, people drop the slash constantly.
@@ -19020,8 +19086,10 @@ function tgCommandOnCooldown(chatId, kind, intervalMs) {
 function slimewireTokenLinks(tokenMint) {
   return {
     site: `https://www.slimewire.org/terminal/chart?token=${encodeURIComponent(tokenMint)}&source=telegram`,
+    siteBuy: `https://www.slimewire.org/terminal/chart?token=${encodeURIComponent(tokenMint)}&source=telegram&buy=1`,
     dex: dexScreenerUrl(tokenMint),
-    dmBuy: CONFIG.telegramBotUsername ? `https://t.me/${CONFIG.telegramBotUsername}?start=buy_${tokenMint}` : ""
+    dmBuy: CONFIG.telegramBotUsername ? `https://t.me/${CONFIG.telegramBotUsername}?start=buy_${tokenMint}` : "",
+    proof: "https://www.slimewire.org/proof"
   };
 }
 
@@ -19039,11 +19107,47 @@ async function sayHtml(chatId, text, replyMarkup = null) {
 function tokenActionKeyboard(tokenMint) {
   const links = slimewireTokenLinks(tokenMint);
   const row = [
-    { text: "Chart + Trade", url: links.site },
-    { text: "Dex", url: links.dex }
+    { text: "📈 Chart", url: links.site },
+    { text: "⚡ Buy on Site", url: links.siteBuy }
   ];
-  if (links.dmBuy) row.push({ text: "Quick Buy (DM)", url: links.dmBuy });
-  return { inline_keyboard: [row] };
+  if (links.dmBuy) row.push({ text: "Buy in DM", url: links.dmBuy });
+  return { inline_keyboard: [row, [{ text: "Dex", url: links.dex }, { text: "🧾 Proof Wall", url: links.proof }]] };
+}
+
+// /ape: one fresh low-MC shot right now - no modes, no menus. Moonshot pool first
+// (4k-40k MC), then early pump launches, then fast movers. AVOID never posts.
+async function handleTelegramApeCommand(chatId) {
+  if (tgCommandOnCooldown(chatId, "ape", TG_LOOK_COOLDOWN_MS)) return;
+  let pick = null;
+  let shield = null;
+  for (const mode of ["moonshot", "pumpsnipe", "fast"]) {
+    try {
+      const scan = await webSniperScan(`tg:${chatId}:ape-${mode}`, mode);
+      for (const row of (scan?.rows || []).slice(0, 4)) {
+        const result = await webSlimeShield(row.tokenMint).catch(() => null);
+        if (String(result?.verdict || "").toUpperCase() === "AVOID") continue;
+        pick = row;
+        shield = result;
+        break;
+      }
+    } catch {
+      // try the next pool
+    }
+    if (pick) break;
+  }
+  if (!pick) {
+    await say(chatId, "Nothing fresh worth aping right now - that is the honest answer. Try again in a few minutes or watch /alpha.");
+    return;
+  }
+  const verdict = String(shield?.verdict || "UNRATED").toUpperCase();
+  const verdictIcon = { BUY: "🟢", CAUTION: "🟡", RISK: "🟠", UNRATED: "⚪" }[verdict] || "⚪";
+  const stats = [pick.marketCapLabel ? `MC ${pick.marketCapLabel}` : "", pick.liquidityLabel ? `Liq ${pick.liquidityLabel}` : "", pick.pairAgeLabel || ""].filter(Boolean).map(escapeTelegramHtml).join(" | ");
+  await sayHtml(chatId, [
+    `🦍 <b>Fresh shot</b>: <b>$${escapeTelegramHtml(pick.symbol || shortMint(pick.tokenMint))}</b>${stats ? ` - ${stats}` : ""}`,
+    `${verdictIcon} SlimeShield: <b>${escapeTelegramHtml(verdict)}</b>${shield?.score != null ? ` (${shield.score}/100)` : ""}${shield?.summary ? `. ${escapeTelegramHtml(String(shield.summary).slice(0, 140))}` : ""}`,
+    `<code>${escapeTelegramHtml(pick.tokenMint)}</code>`,
+    `Early + low MC = high risk. Size like it can go to zero.`
+  ].join("\n"), tokenActionKeyboard(pick.tokenMint));
 }
 
 // /look <CA>: instant SlimeShield read with trade links - the group-native version of
@@ -19185,6 +19289,11 @@ async function handleChannelPostCommands(post) {
     await handleTelegramReceiptsCommand(chatId);
     return;
   }
+  const apeCommand = parseCommandWithArgument(text, ["ape", "fresh", "degen"]);
+  if (apeCommand) {
+    await handleTelegramApeCommand(chatId);
+    return;
+  }
   const toggle = parseCommandWithArgument(text, ["slimewire", "slimewire_alerts"])
     || (/^slimewire(?:\s+alerts)?\s+(on|off|enable|disable|start|stop)$/i.exec(text) ? { argument: RegExp.$1 } : null);
   if (toggle) {
@@ -19211,6 +19320,7 @@ async function handleBotChatMembershipUpdate(memberUpdate) {
     "",
     "/look <CA> - instant SlimeShield risk read with chart + quick-buy links",
     "/alpha - top scanner picks, every pair tap-to-chart",
+    "/ape - one fresh low-MC shot right now",
     "/receipts - SlimeShield rug-call receipts and hit rate",
     "/slimewire on - (admins) live engine alerts: fresh launches, TP/SL fires, KOL copies. Hard-capped at 3 posts/hour.",
     "",
@@ -19349,7 +19459,7 @@ async function runAlphaDropTick() {
   const text = [
     `🐸 <b>SlimeWire plays</b> - tap a pair to open its chart:`,
     ...lines,
-    `${topLinks.dmBuy ? `<a href="${topLinks.dmBuy}">quick buy top pick</a> | ` : ""}<a href="https://www.slimewire.org">slimewire.org</a> - every call is tracked, winners get receipts.`
+    `${topLinks.dmBuy ? `<a href="${topLinks.dmBuy}">quick buy top pick</a> | ` : ""}<a href="https://www.slimewire.org/proof">proof wall</a> - every call is tracked, winners get receipts.`
   ].join("\n");
 
   // Key by time bucket so the cadence holds even when the same top pick repeats.
@@ -19412,8 +19522,8 @@ async function checkAlphaCallOutcomes() {
       const links = slimewireTokenLinks(call.mint);
       const winText = [
         `✅ <b>Called it</b>: $${escapeTelegramHtml(call.symbol)} is <b>${call.peakX}x</b> since the SlimeWire alpha drop ${alphaAgeLabel(ageMs)}.`,
-        `Receipts, not promises.`,
-        `<a href="${links.site}">chart</a> | <a href="https://www.slimewire.org">slimewire.org</a>`
+        `<a href="https://www.slimewire.org/proof">Receipts, not promises - full track record</a>.`,
+        `<a href="${links.site}">chart</a> | <a href="${links.siteBuy}">buy on site</a>`
       ].join("\n");
       for (const chatId of call.chatIds || []) groupBridgeFor(chatId).announce("alpha-win", call.mint, winText);
       tgChannel.announce("alpha-win", call.mint, winText);
