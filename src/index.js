@@ -3118,6 +3118,21 @@ async function handleWebApiRequest(request, response, requestUrl) {
         body = await readJsonRequestBody(request, bodyLimit);
         const launchAttemptId = String(body.launchAttemptId || "").slice(0, 80) || crypto.randomUUID();
         body.launchAttemptId = launchAttemptId;
+        // Idempotency: a retried/duplicated POST with the same attempt id must
+        // NEVER start a second pipeline (second coin, double buys). Point the
+        // caller at the already-running attempt instead.
+        const existing = pumpLaunchLiveProgress.get(launchAttemptId);
+        const ledgerExisting = existing ? null : await readPumpLaunchAttempts()
+          .then((store) => (store.attempts || []).find((item) => (item.id === launchAttemptId || item.launchAttemptId === launchAttemptId)))
+          .catch(() => null);
+        if ((existing && String(existing.userId || "") === String(auth.userId))
+          || (ledgerExisting && String(ledgerExisting.userId || "") === String(auth.userId))) {
+          sendWebJson(request, response, 200, {
+            ok: true,
+            launch: { status: "RUNNING", async: true, launchAttemptId, duplicate: true }
+          });
+          return;
+        }
         setLaunchProgress(launchAttemptId, {
           status: "RUNNING", stage: "starting", stageText: "Validating launch sheet",
           userId: String(auth.userId), startedAt: Date.now()
@@ -3166,7 +3181,11 @@ async function handleWebApiRequest(request, response, requestUrl) {
           stageText: attemptStatus === "COMPLETE" ? "Launch complete" : attemptStatus === "FAILED" ? "Launch failed" : "Launch in progress (recovered after restart)",
           failureReason: attempt.failureReason || attempt.errorMessage || "",
           startedAt: Date.parse(attempt.createdAt || "") || Date.now(),
-          result: attemptStatus === "COMPLETE" ? { status: "COMPLETE", tokenMint: attempt.tokenMint || "", mint: attempt.tokenMint || "", bundled: false, recovered: true } : undefined
+          // bundled:true is CRITICAL here: after a restart we cannot know which
+          // buys already executed, and bundled:false told the client to run its
+          // own buys - the double-buy bug. The client must never re-buy on a
+          // recovered launch; the user checks Positions instead.
+          result: attemptStatus === "COMPLETE" ? { status: "COMPLETE", tokenMint: attempt.tokenMint || "", mint: attempt.tokenMint || "", bundled: true, bundleFallback: true, recovered: true } : undefined
         };
       }
       sendWebJson(request, response, 200, {
