@@ -33438,7 +33438,19 @@ async function webSniperScan(userId, mode) {
   };
 }
 
+// Pump Mayhem coins never reach the pairs feeds: too risky for users to even see.
+// One choke point here covers the site feeds, alpha drops, /alpha, and the live-feed
+// fallbacks - the scanner paths already filter at scoring time.
 async function webLivePairs(userId, bucket = "live", options = {}) {
+  const value = await webLivePairsUnfiltered(userId, bucket, options);
+  if (value && Array.isArray(value.rows)) {
+    const rows = value.rows.filter((row) => !isPumpMayhemToken(row));
+    if (rows.length !== value.rows.length) return { ...value, rows };
+  }
+  return value;
+}
+
+async function webLivePairsUnfiltered(userId, bucket = "live", options = {}) {
   const safeBucket = normalizeLivePairBucket(bucket);
   const sort = String(options.sort || "best").toLowerCase();
   const force = Boolean(options.force);

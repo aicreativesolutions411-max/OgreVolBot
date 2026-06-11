@@ -106,7 +106,9 @@ test("web wallet, positions, and pnl summaries return cached data immediately an
 });
 
 test("live pair feeds use shared KV cache and stale rows while background refresh runs", () => {
-  const body = functionBodyFromSource(serverSource, "webLivePairs");
+  // webLivePairs is now a thin Pump Mayhem filter over webLivePairsUnfiltered,
+  // which carries the caching pipeline these assertions target.
+  const body = functionBodyFromSource(serverSource, "webLivePairsUnfiltered");
   assert.match(body, /web:livePairs:/);
   assert.match(body, /cacheGetJson\(externalKey\)/);
   assert.match(body, /cacheSetJson\(externalKey, displayCacheEnvelope\(value\)/);
