@@ -19468,12 +19468,14 @@ html body main.shell[data-app][data-route="intro"] .swamp-intro-stage[data-intro
 }
 
 /* NAV_RAIL_TAKEOVER_20260611: the category rail (six groups, submenu slides out
-   left) replaces the old 20-button flat rail on mobile. Rail column sits on the
-   RIGHT edge where the user wants it; content takes column 1. Gated on :has so
-   legacy browsers keep the old flat rail untouched. */
+   left) replaces the old 20-button flat rail on mobile. The rail is FIXED to the
+   right edge (sticky dies under the overflow-x:hidden ancestors), so the grid
+   collapses to one column and a slim padding-right keeps content clear of it.
+   Gated on :has so legacy browsers keep the old flat rail untouched. */
 @media (max-width: 760px) {
   html body:has([data-dashboard]:not([hidden])) main.shell[data-app][data-route="terminal"] [data-dashboard] {
-    grid-template-columns: minmax(0, 1fr) 64px !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    padding-right: 58px !important;
   }
   html body:has([data-dashboard]:not([hidden])) main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs {
     display: none !important;

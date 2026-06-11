@@ -9716,40 +9716,42 @@ body {
    groups as the web top bar. Legacy browsers (no :has) keep the old flat rail. --- */
 @media (max-width: 760px) {
   body:has([data-dashboard]:not([hidden])) main.shell[data-route="terminal"] .tabs { display: none; }
+  /* Fixed, not sticky: ancestors carry overflow-x:hidden (which kills sticky),
+     and fixed means the rail rides along no matter how far you scroll. Bottom-
+     anchored = thumb-reachable. */
   body:has([data-dashboard]:not([hidden])) main.shell[data-route="terminal"] .nav-drop-bar {
     display: flex;
     flex-direction: column;
-    gap: 5px;
-    grid-column: 2;
-    grid-row: 2;
-    align-self: start;
-    position: sticky;
-    top: 8px;
-    width: 64px;
-    z-index: 50;
-    padding: 4px 3px;
-    border-radius: 12px;
-    border: 1px solid rgba(114, 255, 35, 0.2);
-    background: rgba(5, 11, 6, 0.95);
+    gap: 4px;
+    position: fixed;
+    right: 3px;
+    bottom: 86px;
+    width: 50px;
+    z-index: 45;
+    padding: 3px 2px;
+    border-radius: 11px;
+    border: 1px solid rgba(114, 255, 35, 0.25);
+    background: rgba(5, 11, 6, 0.97);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
   }
   .nav-drop-group { position: relative; }
   .nav-side-group-toggle {
     flex-direction: column;
     justify-content: center;
     align-items: center;
-    gap: 3px;
+    gap: 2px;
     width: 100%;
-    min-height: 46px;
-    padding: 6px 2px;
-    border-radius: 9px;
+    min-height: 40px;
+    padding: 4px 1px;
+    border-radius: 8px;
     border: 1px solid transparent;
-    font-size: 8.6px;
+    font-size: 7.5px;
     font-weight: 800;
     text-align: center;
     white-space: normal;
-    line-height: 1.1;
+    line-height: 1.05;
   }
-  .nav-side-group-toggle .nav-side-icon { font-size: 1.05rem; }
+  .nav-side-group-toggle .nav-side-icon { font-size: 0.95rem; }
   .nav-side-group-toggle .nav-side-caret { display: none; }
   .nav-side-group-toggle .nav-side-label { flex: 0 0 auto; }
   .nav-side-group-toggle[data-active],
@@ -9758,13 +9760,14 @@ body {
     color: #071006;
     border-color: rgba(114, 255, 35, 0.6);
   }
-  /* Submenu slides out leftward from the tapped category, anchored to it. */
+  /* Submenu slides out leftward from the tapped category, anchored to it.
+     Bottom-anchored for the lower half of the rail so menus never run off-screen. */
   .nav-side-items {
     position: absolute;
-    right: calc(100% + 9px);
+    right: calc(100% + 7px);
     top: 0;
-    min-width: 186px;
-    max-height: 64vh;
+    min-width: 182px;
+    max-height: 60vh;
     overflow-y: auto;
     z-index: 6000;
     padding: 6px;
@@ -9773,7 +9776,7 @@ body {
     background: #060d07;
     box-shadow: -18px 10px 50px rgba(0, 0, 0, 0.6);
   }
-  .nav-drop-group:nth-last-child(-n+2) .nav-side-items { top: auto; bottom: 0; }
+  .nav-drop-group:nth-last-child(-n+3) .nav-side-items { top: auto; bottom: 0; }
   .nav-drop-bar .nav-side-items button { padding: 11px 10px; font-size: 0.9rem; min-height: 42px; }
 }
 
