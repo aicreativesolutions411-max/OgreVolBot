@@ -9296,6 +9296,32 @@ function activeToolSection(toolKey, fallback) {
   return (state.toolSections && state.toolSections[toolKey]) || fallback;
 }
 
+// Post-launch share kit: one tap each for the launch room, the branded card, and a
+// prewritten X post (with the creator's referral riding along via openXShare).
+function launchShareKitHtml() {
+  const kit = state.launchShareKit;
+  if (!kit?.tokenMint || Date.now() - (kit.at || 0) > 2 * 60 * 60 * 1000) return "";
+  const room = `https://www.slimewire.org/t?ca=${encodeURIComponent(kit.tokenMint)}`;
+  const xText = `Just launched $${kit.symbol || kit.name || "my coin"} on @pumpdotfun via SlimeWire - live chart, risk read, and call board in one link:`;
+  return `
+    <section class="trade-card launch-share-kit">
+      <div class="trade-head">
+        <div>
+          <h3>🚀 Your launch is live - now shill it</h3>
+          <p>$${escapeHtml(kit.symbol || kit.name || "")} has its own room: chart, shield read, call board, and one-tap trading. Post the link, not the CA.</p>
+        </div>
+      </div>
+      <div class="card-actions compact">
+        <a class="button-like primary" href="/t?ca=${encodeURIComponent(kit.tokenMint)}" target="_blank" rel="noreferrer">Open Launch Room</a>
+        <button data-copy="${escapeHtml(room)}">Copy Room Link</button>
+        <a class="button-like" href="${escapeHtml(apiUrl(`/api/web/signal-card?tokenMint=${encodeURIComponent(kit.tokenMint)}`))}" target="_blank" rel="noreferrer">📸 Share Card</a>
+        ${xShareButton(xText + " " + room, "Post to X")}
+        <button data-launch-kit-close>Done</button>
+      </div>
+    </section>
+  `;
+}
+
 function launchCoinHtml() {
   const draft = state.launchCoinDraft || {};
   const sections = [
@@ -9492,6 +9518,7 @@ function launchCoinHtml() {
     }
   ];
   return `
+    ${launchShareKitHtml()}
     <section class="trade-layout launch-coin-layout" data-preserve-focus>
       <article class="trade-card launch-coin-card">
         <div class="trade-head">
@@ -9874,6 +9901,15 @@ async function submitLaunchCoin() {
     }
 
     applyLaunchCoinMint(draft, tokenMint);
+    // Launch command center: the creator gets their full distribution kit instantly -
+    // launch room link, share card, and a prewritten X post. This is the reason to
+    // launch through SlimeWire instead of raw pump.fun.
+    state.launchShareKit = {
+      tokenMint,
+      symbol: draft.symbol || "",
+      name: draft.name || "",
+      at: Date.now()
+    };
 
     // If the server landed the buys atomically in a Jito bundle, the dev buy and the
     // first-block wallet buys already executed inside the same block as the create.
@@ -22219,6 +22255,7 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-call-post]")) { await postBoardCall(target.dataset.callPost); return; }
   if (target.matches("[data-telegram-link]")) { await startTelegramWinLink(); return; }
   if (target.matches("[data-trade-trace-close]")) { state.tradeTrace = null; renderTradeTrace(); return; }
+  if (target.matches("[data-launch-kit-close]")) { state.launchShareKit = null; render(); return; }
   if (target.matches("[data-create-wallets]")) await createWalletSet();
   if (target.matches("[data-distribute-fresh]")) { await distributeFreshWallets(); return; }
   if (target.matches("[data-return-funds]")) { await returnFundsToConnected(); return; }

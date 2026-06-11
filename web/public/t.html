@@ -82,11 +82,15 @@
           const data = await response.json();
           const verdict = String(data.shield?.verdict || "UNRATED").toUpperCase();
           const color = { BUY: "#72ff23", CAUTION: "#ffd84d", RISK: "#ff9d4d", AVOID: "#ff6b5e" }[verdict] || "#9fb59a";
+          const launchedBadge = data.launchedViaSlimeWire
+            ? '<span class="verdict" style="color:#72ff23;border-color:#72ff23">🐸 LAUNCHED VIA SLIMEWIRE</span>'
+            : "";
           document.querySelector("[data-head]").innerHTML =
             (data.imageUrl ? '<img src="' + esc(data.imageUrl) + '" alt="">' : "")
             + '<div><h1>$' + esc(data.symbol || mint.slice(0, 6)) + '</h1>'
             + (data.name ? '<div class="name">' + esc(data.name) + "</div>" : "") + "</div>"
-            + '<span class="verdict" style="color:' + color + ';border-color:' + color + '">' + esc(verdict) + (data.shield?.score != null ? " " + esc(data.shield.score) + "/100" : "") + "</span>";
+            + '<span class="verdict" style="color:' + color + ';border-color:' + color + '">' + esc(verdict) + (data.shield?.score != null ? " " + esc(data.shield.score) + "/100" : "") + "</span>"
+            + launchedBadge;
           document.querySelector("[data-stats]").innerHTML = [
             ["MC / FDV", fmt(data.marketCapUsd)],
             ["Liquidity", fmt(data.liquidityUsd)],

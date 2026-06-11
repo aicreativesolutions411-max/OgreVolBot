@@ -2066,6 +2066,14 @@ async function handleWebApiRequest(request, response, requestUrl) {
         pairAddress: best?.pairAddress || "",
         imageUrl: best?.info?.imageUrl || "",
         shieldPending,
+        launchedViaSlimeWire: await (async () => {
+          try {
+            const attempts = await readPumpLaunchAttempts();
+            return (attempts.attempts || []).some((attempt) => String(attempt.tokenMint || "") === readMint && String(attempt.status || "").toUpperCase() === "COMPLETE");
+          } catch {
+            return false;
+          }
+        })(),
         rugcheck,
         shield: shield ? {
           verdict: shield.verdict,
@@ -30356,7 +30364,7 @@ async function webLaunchPumpPortalLocal(userId, body, basePayload) {
   if (String(launchResult?.status || "").toUpperCase() === "COMPLETE" && launchResult.tokenMint) {
     const launchText = [
       `🐸 <b>Fresh swamp launch</b>: $${escapeTelegramHtml(basePayload.symbol || basePayload.name || "???")} just went live on pump.fun via SlimeWire Pump Launch.`,
-      `<a href="https://pump.fun/coin/${launchResult.tokenMint}">pump.fun</a> | <a href="${dexScreenerUrl(launchResult.tokenMint)}">chart</a> | <a href="https://www.slimewire.org">launch yours</a>`
+      `<a href="https://www.slimewire.org/t?ca=${launchResult.tokenMint}">launch room</a> | <a href="https://pump.fun/coin/${launchResult.tokenMint}">pump.fun</a> | <a href="${dexScreenerUrl(launchResult.tokenMint)}">chart</a> | <a href="https://www.slimewire.org">launch yours</a>`
     ].join("\n");
     tgChannel.announce("launch", launchResult.tokenMint, launchText);
     broadcastToTelegramGroups("launch", launchResult.tokenMint, launchText);
