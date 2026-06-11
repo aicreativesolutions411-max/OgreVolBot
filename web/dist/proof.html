@@ -46,6 +46,8 @@
       <h1><span>SlimeWire</span> Proof Wall</h1>
       <p class="sub">Every alpha call and every SlimeShield flag is tracked to its outcome - wins, losses, and minutes-of-warning. Receipts, not promises. Updates live.</p>
       <div class="stats" data-stats><div class="stat"><strong>...</strong><span>loading</span></div></div>
+      <h2>🏁 This week</h2>
+      <div data-week><p class="empty">Loading...</p></div>
       <h2>✅ Called it - wins</h2>
       <div data-wins><p class="empty">Loading...</p></div>
       <h2>🛡 Rugs SlimeShield flagged first</h2>
@@ -90,6 +92,17 @@
             ["Avg time to 2x", alpha.avgMinutesToWin ? alpha.avgMinutesToWin + " min" : "-"],
             ["Rugs flagged first", shield.rugsCalled ?? 0]
           ].map(([label, value]) => '<div class="stat"><strong>' + esc(value) + '</strong><span>' + esc(label) + "</span></div>").join("");
+          const week = data.thisWeek || {};
+          const weekBits = [
+            week.bestCall ? "Best call: $" + esc(week.bestCall.symbol) + " " + esc(week.bestCall.peakX) + "x" : "",
+            week.fastestWin ? "Fastest 2x: $" + esc(week.fastestWin.symbol) + " in " + esc(week.fastestWin.minutes) + " min" : "",
+            week.lowestMcWin && week.lowestMcWin.entryMcUsd ? "Lowest MC win: $" + esc(week.lowestMcWin.symbol) : "",
+            (week.calls ? week.calls + " calls, " + week.wins + " hit 2x" : ""),
+            week.rugsFlagged ? week.rugsFlagged + " rugs flagged first" : ""
+          ].filter(Boolean);
+          document.querySelector("[data-week]").innerHTML = weekBits.length
+            ? weekBits.map((bit) => '<div class="row"><b>' + bit + "</b></div>").join("")
+            : '<p class="empty">The week is young - drops and calls are being tracked now.</p>';
           const wins = (alpha.recentWins || []).map((win) =>
             '<div class="row"><b><a href="' + chartUrl(win.mint) + '">$' + esc(win.symbol) + '</a></b><span class="win">' + esc(win.peakX) + 'x</span><span class="meta">called ' + ago(win.calledAt) + (win.verdict ? ' | shield said ' + esc(win.verdict) : "") + "</span></div>").join("");
           document.querySelector("[data-wins]").innerHTML = wins || '<p class="empty">First wins land here - every call is being tracked right now.</p>';

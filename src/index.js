@@ -2100,7 +2100,8 @@ async function handleWebApiRequest(request, response, requestUrl) {
           }))
         },
         groupLeague,
-        topCallers: board.topCallers || []
+        topCallers: board.topCallers || [],
+        thisWeek: weeklySeasonStats(calls.calls, receipts.receipts)
       }, "public, max-age=60, stale-while-revalidate=300");
       return;
     }
@@ -20059,6 +20060,66 @@ async function checkWatchlistMoveAlerts() {
   });
 }
 
+// --- Degen Seasons v1: weekly bests computed from the call ledger. The Monday post
+// crowns last week's winners in every armed chat - status is the retention engine.
+function weeklySeasonStats(allCalls = [], allReceipts = []) {
+  const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const recent = allCalls.filter((call) => Date.parse(call.calledAt) > weekAgo);
+  const wins = recent.filter((call) => call.outcome === "won");
+  const bestCall = wins.sort((a, b) => (b.peakX || 0) - (a.peakX || 0))[0] || null;
+  const fastest = wins
+    .map((call) => ({ call, minutes: (Date.parse(call.resolvedAt) - Date.parse(call.calledAt)) / 60000 }))
+    .filter((item) => Number.isFinite(item.minutes) && item.minutes > 0)
+    .sort((a, b) => a.minutes - b.minutes)[0] || null;
+  const lowestMc = wins.filter((call) => Number(call.entryMcUsd) > 0).sort((a, b) => a.entryMcUsd - b.entryMcUsd)[0] || null;
+  const rugsFlagged = allReceipts.filter((item) => item.outcome === "rugged" && Date.parse(item.resolvedAt || "") > weekAgo).length;
+  const pick = (call, extra = {}) => call ? { symbol: call.symbol, mint: call.mint, peakX: call.peakX || null, entryMcUsd: call.entryMcUsd || null, ...extra } : null;
+  return {
+    calls: recent.length,
+    wins: wins.length,
+    bestCall: pick(bestCall),
+    fastestWin: fastest ? pick(fastest.call, { minutes: Math.round(fastest.minutes) }) : null,
+    lowestMcWin: pick(lowestMc),
+    rugsFlagged
+  };
+}
+
+let lastSeasonPostWeek = "";
+async function runWeeklySeasonPost() {
+  const now = new Date();
+  if (now.getUTCDay() !== 1 || now.getUTCHours() < 13) return; // Mondays, after 13:00 UTC
+  const weekKey = `${now.getUTCFullYear()}-w${Math.floor((Date.now() / 86400000 + 4) / 7)}`;
+  if (lastSeasonPostWeek === weekKey) return;
+  const groupsStore = await readTelegramGroups();
+  if (groupsStore.meta?.lastSeasonPostWeek === weekKey) {
+    lastSeasonPostWeek = weekKey;
+    return;
+  }
+  const calls = await readAlphaCalls().catch(() => ({ calls: [] }));
+  const receipts = await readShieldReceipts().catch(() => ({ receipts: [] }));
+  const week = weeklySeasonStats(calls.calls, receipts.receipts);
+  if (!week.wins && !week.rugsFlagged) return;
+  const lines = [
+    `🏆 <b>Swamp Season - last week's winners</b>`,
+    week.bestCall ? `Best call: $${escapeTelegramHtml(week.bestCall.symbol)} <b>${week.bestCall.peakX}x</b>` : "",
+    week.fastestWin ? `Fastest 2x: $${escapeTelegramHtml(week.fastestWin.symbol)} in ${week.fastestWin.minutes} min` : "",
+    week.lowestMcWin ? `Lowest MC winner: $${escapeTelegramHtml(week.lowestMcWin.symbol)} from ${formatUsdCompact(week.lowestMcWin.entryMcUsd)}` : "",
+    week.rugsFlagged ? `🛡 ${week.rugsFlagged} rug(s) flagged before death` : "",
+    `Full ledger: <a href="https://www.slimewire.org/proof">slimewire.org/proof</a> - new week starts now.`
+  ].filter(Boolean);
+  const text = lines.join("\n");
+  for (const [chatId, group] of Object.entries(groupsStore.groups || {})) {
+    if (group?.alerts) groupBridgeFor(chatId).announce("season", weekKey, text);
+  }
+  tgChannel.announce("season", weekKey, text);
+  await withFileLock(telegramGroupsPath(), async () => {
+    const fresh = await readTelegramGroups();
+    fresh.meta = { ...(fresh.meta || {}), lastSeasonPostWeek: weekKey };
+    await writeJsonFile(telegramGroupsPath(), fresh);
+  });
+  lastSeasonPostWeek = weekKey;
+}
+
 // --- Daily Swamp Report: one digest post per UTC day to every armed chat ----------
 let lastSwampReportDay = "";
 async function runDailySwampReport() {
@@ -20163,6 +20224,10 @@ async function checkShieldReceiptOutcomes() {
     const best = bestDexPairForToken(receipt.mint, tokenPairs);
     const liqNow = Number(best?.liquidity?.usd) || 0;
     const priceNow = Number(best?.priceUsd) || 0;
+    // Black-box timeline: every check appends a snapshot so confirmed rugs carry the
+    // full collapse curve ("flagged at min 3, liquidity gone by min 41").
+    receipt.timeline = [...(receipt.timeline || []), { at: new Date(now).toISOString(), liqUsd: liqNow, priceUsd: priceNow }].slice(-48);
+    changed = true;
     const flaggedLiq = Number(receipt.liquidityUsd) || 0;
     const flaggedPrice = Number(receipt.priceUsd) || 0;
     const ageMs = now - Date.parse(receipt.flaggedAt || "");
@@ -20193,6 +20258,7 @@ if (CONFIG.serviceRole === "web") {
     runAlphaDropTick().catch((error) => console.warn(`[alpha-drop] tick failed: ${error.message}`));
     checkBoardCallOutcomes().catch((error) => console.warn(`[call-board] check failed: ${error.message}`));
     runDailySwampReport().catch((error) => console.warn(`[swamp-report] failed: ${error.message}`));
+    runWeeklySeasonPost().catch((error) => console.warn(`[season] failed: ${error.message}`));
     if (Date.now() % (10 * 60 * 1000) < 5 * 60 * 1000) {
       checkWatchlistMoveAlerts().catch((error) => console.warn(`[watch-alerts] failed: ${error.message}`));
     }

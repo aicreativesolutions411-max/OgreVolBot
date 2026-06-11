@@ -3854,10 +3854,7 @@ html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-t
     font-size: 8px !important;
   }
 
-  [data-app][data-route="terminal"] .terminal-token-actions button,
-  [data-app][data-route="terminal"] .compact-row-actions button {
-    font-size: 7.7px !important;
-  }
+  
 }
 
 /* 2026-06-03 compact terminal labels + slimmer wallet/position strip.
