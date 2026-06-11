@@ -1228,6 +1228,7 @@ async function registerTelegramBotCommands() {
   const groupCommands = [
     { command: "look", description: "SlimeShield read on a token CA" },
     { command: "alpha", description: "Top scanner picks right now" },
+    { command: "receipts", description: "SlimeShield rug-call receipts + hit rate" },
     { command: "slimewire", description: "on/off - engine alerts in this chat (admins)" }
   ];
   const dmCommands = [
@@ -6340,9 +6341,27 @@ async function handleMessage(message, userId) {
     await handleTelegramAlphaCommand(chatId, message);
     return;
   }
-  const groupToggle = parseCommandWithArgument(text, ["slimewire", "slimewire_alerts"]);
-  if (groupToggle && !isPrivateChat(message.chat)) {
-    await handleTelegramGroupToggle(chatId, message, userId, groupToggle.argument);
+  const receiptsCommand = parseCommandWithArgument(text, ["receipts", "shield"]);
+  if (receiptsCommand) {
+    await handleTelegramReceiptsCommand(chatId);
+    return;
+  }
+  // /slimewire on|off - also accept the bare phrase, people drop the slash constantly.
+  const bareToggle = /^slimewire(?:\s+alerts)?\s+(on|off|enable|disable|start|stop)$/i.exec(text);
+  const groupToggle = parseCommandWithArgument(text, ["slimewire", "slimewire_alerts"])
+    || (bareToggle ? { argument: bareToggle[1] } : null);
+  if (groupToggle) {
+    if (isPrivateChat(message.chat)) {
+      await say(chatId, "/slimewire works inside groups and channels - it arms SlimeWire engine alerts there (fresh launches, TP/SL fires, KOL copies). Add me to your group, then an admin runs /slimewire on. In DM you already get everything: /alpha, /look <CA>, /trade, /positions, /pnl.");
+      return;
+    }
+    console.warn(`[tg-group] /slimewire "${groupToggle.argument}" from chat ${chatId} (${message.chat?.type})`);
+    try {
+      await handleTelegramGroupToggle(chatId, message, userId, groupToggle.argument);
+    } catch (error) {
+      console.warn(`[tg-group] toggle failed: ${error.message}`);
+      await say(chatId, `Could not update alerts: ${friendlyError(error)}`).catch(() => {});
+    }
     return;
   }
 
@@ -18998,6 +19017,17 @@ function slimewireTokenLinks(tokenMint) {
   };
 }
 
+// HTML sender for rich group/channel replies: clickable pair names, tap-to-copy CAs.
+async function sayHtml(chatId, text, replyMarkup = null) {
+  await telegram("sendMessage", {
+    chat_id: chatId,
+    text,
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
+    reply_markup: replyMarkup || undefined
+  });
+}
+
 function tokenActionKeyboard(tokenMint) {
   const links = slimewireTokenLinks(tokenMint);
   const row = [
@@ -19024,18 +19054,20 @@ async function handleTelegramLookCommand(chatId, message, argument) {
     // fall through to the degraded reply below
   }
   if (!shield) {
-    await sendOrEditMessage(chatId, null, `Could not pull a read on ${shortMint(mint)} right now. Chart links below.`, tokenActionKeyboard(mint));
+    await sayHtml(chatId, `Could not pull a read on <code>${escapeTelegramHtml(mint)}</code> right now. Chart links below.`, tokenActionKeyboard(mint));
     return;
   }
   const verdictIcon = { BUY: "🟢", CAUTION: "🟡", RISK: "🟠", AVOID: "🔴" }[String(shield.verdict || "").toUpperCase()] || "⚪";
-  const factors = (shield.factors || []).slice(0, 3).map((factor) => `- ${String(factor?.label || factor).slice(0, 80)}`);
+  const factors = (shield.factors || []).slice(0, 3).map((factor) => `- ${escapeTelegramHtml(String(factor?.label || factor).slice(0, 80))}`);
+  const links = slimewireTokenLinks(mint);
   const lines = [
-    `${verdictIcon} SlimeShield: ${shield.verdict || "?"} (score ${shield.score ?? "?"}/100, ${shield.confidence || "low"} confidence)`,
-    shield.summary ? String(shield.summary).slice(0, 200) : "",
+    `<a href="${links.site}"><b>${escapeTelegramHtml(shortMint(mint))}</b></a> | <code>${escapeTelegramHtml(mint)}</code>`,
+    `${verdictIcon} <b>SlimeShield: ${escapeTelegramHtml(shield.verdict || "?")}</b> (score ${shield.score ?? "?"}/100, ${escapeTelegramHtml(shield.confidence || "low")} confidence)`,
+    shield.summary ? escapeTelegramHtml(String(shield.summary).slice(0, 200)) : "",
     ...factors,
-    shield.suggestedAction ? `Suggested: ${shield.suggestedAction}` : ""
+    shield.suggestedAction ? `Suggested: ${escapeTelegramHtml(shield.suggestedAction)}` : ""
   ].filter(Boolean);
-  await sendOrEditMessage(chatId, null, `${shortMint(mint)}\n${lines.join("\n")}`, tokenActionKeyboard(mint));
+  await sayHtml(chatId, lines.join("\n"), tokenActionKeyboard(mint));
 }
 
 // /alpha: current top picks. Falls through scanner modes and finally the live feed so
@@ -19069,18 +19101,59 @@ async function handleTelegramAlphaCommand(chatId, message) {
     await say(chatId, "Feed is warming up - try /alpha again in a minute, or watch the live board on slimewire.org.");
     return;
   }
+  // Every pair name is a tappable link straight to its SlimeWire chart; the CA is
+  // tap-to-copy. One chart button per pick plus a Quick Buy deep link for the top one.
   const lines = rows.map((row, index) => {
-    const symbol = row.symbol || shortMint(row.tokenMint);
-    const stats = [row.marketCapLabel ? `MC ${row.marketCapLabel}` : "", row.liquidityLabel ? `Liq ${row.liquidityLabel}` : "", row.pairAgeLabel || ""].filter(Boolean).join(" | ");
-    return `${index + 1}. $${symbol}${stats ? ` - ${stats}` : ""}\n${row.tokenMint}`;
+    const symbol = escapeTelegramHtml(row.symbol || shortMint(row.tokenMint));
+    const stats = [row.marketCapLabel ? `MC ${row.marketCapLabel}` : "", row.liquidityLabel ? `Liq ${row.liquidityLabel}` : "", row.pairAgeLabel || ""].filter(Boolean).map(escapeTelegramHtml).join(" | ");
+    const links = slimewireTokenLinks(row.tokenMint);
+    return `${index + 1}. <a href="${links.site}"><b>$${symbol}</b></a>${stats ? ` - ${stats}` : ""}\n<code>${escapeTelegramHtml(row.tokenMint)}</code>`;
   });
-  const top = rows[0];
-  await sendOrEditMessage(chatId, null, [
-    `🐸 SlimeWire alpha (${source}):`,
+  const keyboard = {
+    inline_keyboard: [
+      rows.map((row) => ({
+        text: `📈 $${(row.symbol || shortMint(row.tokenMint)).slice(0, 12)}`,
+        url: slimewireTokenLinks(row.tokenMint).site
+      })),
+      [
+        ...(slimewireTokenLinks(rows[0].tokenMint).dmBuy ? [{ text: "⚡ Quick Buy (DM)", url: slimewireTokenLinks(rows[0].tokenMint).dmBuy }] : []),
+        { text: "Dex", url: dexScreenerUrl(rows[0].tokenMint) }
+      ]
+    ]
+  };
+  await sayHtml(chatId, [
+    `🐸 <b>SlimeWire alpha</b> (${escapeTelegramHtml(source)}) - tap a pair to open its chart:`,
     ...lines,
     "",
-    "Run /look <CA> for a SlimeShield read. Charts + one-tap buys on slimewire.org"
-  ].join("\n"), tokenActionKeyboard(top.tokenMint));
+    `/look &lt;CA&gt; for a SlimeShield read | <a href="https://www.slimewire.org">slimewire.org</a>`
+  ].join("\n"), keyboard);
+}
+
+// /receipts: the SlimeShield brag sheet - flagged tokens that went on to rug, with
+// minutes of warning. The single most shareable proof the shield works.
+async function handleTelegramReceiptsCommand(chatId) {
+  if (tgCommandOnCooldown(chatId, "receipts", TG_LOOK_COOLDOWN_MS)) return;
+  const store = await readShieldReceipts().catch(() => ({ receipts: [] }));
+  const receipts = store.receipts || [];
+  const resolved = receipts.filter((item) => item.status === "resolved");
+  const rugged = resolved.filter((item) => item.outcome === "rugged");
+  const recent = rugged.slice(-5).reverse();
+  const hitRate = resolved.length ? Math.round((rugged.length / resolved.length) * 100) : null;
+  if (!receipts.length) {
+    await say(chatId, "Shield receipts are still building - every AVOID/RISK flag gets recorded and tracked to its outcome. Check back soon.");
+    return;
+  }
+  const lines = recent.map((item) => {
+    const symbol = escapeTelegramHtml(item.symbol || shortMint(item.mint));
+    const warning = item.confirmedAfterMinutes ? `${item.confirmedAfterMinutes >= 90 ? `${Math.round(item.confirmedAfterMinutes / 60)}h` : `${item.confirmedAfterMinutes} min`} of warning` : "flag confirmed";
+    return `🔴 $${symbol} - flagged ${escapeTelegramHtml(item.verdict)} (score ${item.score}), rugged. ${warning}.`;
+  });
+  await sayHtml(chatId, [
+    `🛡 <b>SlimeShield receipts</b>: ${receipts.length} tokens flagged${hitRate !== null ? `, <b>${hitRate}%</b> of resolved flags went on to rug or die` : ""}.`,
+    ...(lines.length ? lines : ["No confirmed rugs in the log yet - flags resolve as the market moves."]),
+    "",
+    `Live shield reads on every pair: <a href="https://www.slimewire.org">slimewire.org</a> | /look &lt;CA&gt; here`
+  ].join("\n"));
 }
 
 // Channels: only /look, /alpha, /slimewire - posts have no from user, admin implied.
@@ -19099,9 +19172,21 @@ async function handleChannelPostCommands(post) {
     await handleTelegramAlphaCommand(chatId, post);
     return;
   }
-  const toggle = parseCommandWithArgument(text, ["slimewire", "slimewire_alerts"]);
+  const receiptsCommand = parseCommandWithArgument(text, ["receipts", "shield"]);
+  if (receiptsCommand) {
+    await handleTelegramReceiptsCommand(chatId);
+    return;
+  }
+  const toggle = parseCommandWithArgument(text, ["slimewire", "slimewire_alerts"])
+    || (/^slimewire(?:\s+alerts)?\s+(on|off|enable|disable|start|stop)$/i.exec(text) ? { argument: RegExp.$1 } : null);
   if (toggle) {
-    await handleTelegramGroupToggle(chatId, post, 0, toggle.argument, true);
+    console.warn(`[tg-channel] /slimewire "${toggle.argument}" from channel ${chatId}`);
+    try {
+      await handleTelegramGroupToggle(chatId, post, 0, toggle.argument, true);
+    } catch (error) {
+      console.warn(`[tg-channel] toggle failed: ${error.message}`);
+      await say(chatId, `Could not update alerts: ${friendlyError(error)}`).catch(() => {});
+    }
   }
 }
 
@@ -19117,7 +19202,8 @@ async function handleBotChatMembershipUpdate(memberUpdate) {
     "🐸 SlimeWire is in the chat. Three things I do here:",
     "",
     "/look <CA> - instant SlimeShield risk read with chart + quick-buy links",
-    "/alpha - top scanner picks right now",
+    "/alpha - top scanner picks, every pair tap-to-chart",
+    "/receipts - SlimeShield rug-call receipts and hit rate",
     "/slimewire on - (admins) live engine alerts: fresh launches, TP/SL fires, KOL copies. Hard-capped at 3 posts/hour.",
     "",
     "DM me for wallets, buys, sells, and PnL cards. Full terminal: slimewire.org"
