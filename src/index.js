@@ -31096,15 +31096,26 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
   }
   if (bundleWallets.length && bundleAmountSol > 0) {
     const perWalletNeedsSol = bundleAmountSol * 1.02 + 0.0045;
+    const needLamports = Math.ceil(perWalletNeedsSol * 1e9);
     const checked = [];
+    const skipped = [];
     for (const wallet of bundleWallets) {
       const balance = await rpcWithRetry("read bundle wallet balance", () => connection.getBalance(new PublicKey(wallet.publicKey), "confirmed"), CONFIG.rpcRetries).catch(() => 0);
-      if (balance < Math.ceil(perWalletNeedsSol * 1e9)) {
-        const error = new Error(`Bundle wallet ${shortMint(wallet.publicKey)} has ${(balance / 1e9).toFixed(4)} SOL but its first-block buy needs ~${perWalletNeedsSol.toFixed(4)} SOL (buy ${bundleAmountSol} + fees + token account rent). Fund it or uncheck it - nothing was spent.`);
-        error.statusCode = 400;
-        throw error;
-      }
-      checked.push(wallet);
+      if (balance < needLamports) skipped.push({ wallet, balance });
+      else checked.push(wallet);
+    }
+    // Skip an underfunded wallet instead of aborting the launch - the funded
+    // wallets (and the dev buy) still go. Only fail if NOTHING can buy.
+    if (skipped.length) {
+      logPumpLaunchEvent("pump_launch_bundle_wallet_skipped", {
+        launchAttemptId: basePayload.clientRequestId, userId,
+        skipped: skipped.map((item) => `${shortMint(item.wallet.publicKey)}:${(item.balance / 1e9).toFixed(4)}`)
+      });
+    }
+    if (!checked.length && devBuySol <= 0) {
+      const error = new Error(`Every bundle wallet is underfunded - each needs ~${perWalletNeedsSol.toFixed(4)} SOL for a ${bundleAmountSol} SOL buy. Fund them or lower the buy amount. Nothing was spent.`);
+      error.statusCode = 400;
+      throw error;
     }
     bundleWallets = checked;
   }

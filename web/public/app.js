@@ -16170,8 +16170,15 @@ function formatQuickBuyAmount(value) {
 }
 
 function normalizedQuickBuyAmount(value = state.quickBuyAmountOverride) {
-  const clean = String(value || "").replace(/[^0-9.]/g, "");
-  if (!clean) return "";
+  // Tolerate typos like "0..02" or "0.0.5": keep the first decimal point, drop
+  // the rest. A malformed amount used to parse as NaN and silently fall back to
+  // 0.1 - which is how a 0.02 bundle buy demanded 0.1 SOL per wallet.
+  let clean = String(value || "").replace(/[^0-9.]/g, "");
+  const firstDot = clean.indexOf(".");
+  if (firstDot !== -1) {
+    clean = clean.slice(0, firstDot + 1) + clean.slice(firstDot + 1).replace(/\./g, "");
+  }
+  if (!clean || clean === ".") return "";
   const number = Number(clean);
   if (!Number.isFinite(number) || number <= 0) return "";
   return formatQuickBuyAmount(number);
@@ -23270,6 +23277,19 @@ let launchDraftSaveTimer = null;
 const queueLaunchDraftSave = (event) => {
   const launchField = event.target?.closest?.(".launch-coin-card");
   if (launchField && String(event.target?.tagName || "").match(/INPUT|TEXTAREA|SELECT/) && !event.target.matches("[data-launch-coin-image]")) {
+    // Sanitize SOL-amount fields live so a stray double-dot ("0..02") can't sit
+    // there and silently fall back to the 0.1 default at launch time.
+    if (event.target.matches("[data-launch-coin-amount], [data-launch-coin-dev-buy-sol]")) {
+      const raw = String(event.target.value || "");
+      let clean = raw.replace(/[^0-9.]/g, "");
+      const dot = clean.indexOf(".");
+      if (dot !== -1) clean = clean.slice(0, dot + 1) + clean.slice(dot + 1).replace(/\./g, "");
+      if (clean !== raw) {
+        const pos = event.target.selectionStart;
+        event.target.value = clean;
+        try { event.target.setSelectionRange(pos - (raw.length - clean.length), pos - (raw.length - clean.length)); } catch {}
+      }
+    }
     if (launchDraftSaveTimer) clearTimeout(launchDraftSaveTimer);
     launchDraftSaveTimer = setTimeout(() => { launchDraftSaveTimer = null; saveLaunchCoinDraft({ silent: true }); }, 350);
   }
