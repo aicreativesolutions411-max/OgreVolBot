@@ -10279,6 +10279,7 @@ function renderKolDumpDetailsDrawer() {
   document.body.classList.toggle("kol-dump-drawer-open", open);
   if (!open || !featureEnabled("kolDumpDetectorEnabled", true)) {
     root.innerHTML = "";
+    root.__lastDrawerHtml = "";
     return;
   }
   const row = kolDumpStatsRows().find((item) => String(item.kolId) === String(details.kolId)) || kolDumpFallbackRowForId(details.kolId);
@@ -10288,7 +10289,7 @@ function renderKolDumpDetailsDrawer() {
   const lastToken = row.lastTokenMint
     ? `${row.lastTokenSymbol ? `${row.lastTokenSymbol} ` : ""}${shortAddress(row.lastTokenMint)}`
     : "n/a";
-  root.innerHTML = `
+  const drawerHtml = `
     <div class="slimeshield-drawer-backdrop" data-kol-dump-close></div>
     <aside class="kol-dump-drawer" role="dialog" aria-modal="true" aria-label="KOL Dump Detector details">
       <header>
@@ -10335,6 +10336,7 @@ function renderKolDumpDetailsDrawer() {
       <p class="slimeshield-safety-copy">This is wallet-based until social signal data is available. It never scans the chain from this details drawer.</p>
     </aside>
   `;
+  setDrawerHtmlIfChanged(root, drawerHtml, ".kol-dump-drawer");
 }
 
 function kolHtml() {
@@ -16880,6 +16882,19 @@ function intelNumberLabel(value, formatter = (number) => String(number), fallbac
   return Number.isFinite(value) && value > 0 ? formatter(value) : fallback;
 }
 
+function setDrawerHtmlIfChanged(root, html, scrollSelector = "") {
+  if (root.__lastDrawerHtml === html) return false;
+  const scroller = scrollSelector ? root.querySelector(scrollSelector) : null;
+  const scrollTop = scroller ? scroller.scrollTop : 0;
+  root.innerHTML = html;
+  root.__lastDrawerHtml = html;
+  if (scrollSelector && scrollTop) {
+    const next = root.querySelector(scrollSelector);
+    if (next) next.scrollTop = scrollTop;
+  }
+  return true;
+}
+
 function renderDevInfoDrawer() {
   let root = document.querySelector("[data-dev-info-drawer-root]");
   if (!root) {
@@ -16892,6 +16907,7 @@ function renderDevInfoDrawer() {
   document.body.classList.toggle("dev-info-drawer-open", open);
   if (!open || !featureEnabled("devInfoEnabled", true)) {
     root.innerHTML = "";
+    root.__lastDrawerHtml = "";
     return;
   }
   const mint = String(details.tokenMint || "").trim();
@@ -16930,7 +16946,7 @@ function renderDevInfoDrawer() {
   ].filter((link, index, links) => /^https?:\/\//i.test(String(link.url || ""))
     && links.findIndex((candidate) => String(candidate.url || "") === String(link.url || "")) === index).slice(0, 8);
   const recentLaunches = Array.isArray(history.recentLaunches) ? history.recentLaunches.slice(0, 5) : [];
-  root.innerHTML = `
+  const drawerHtml = `
     <div class="slimeshield-drawer-backdrop" data-dev-info-close></div>
     <aside class="dev-info-drawer" role="dialog" aria-modal="true" aria-label="Dev Info details">
       <header>
@@ -17050,6 +17066,7 @@ function renderDevInfoDrawer() {
       ${state.devInfoStatus ? `<small class="slimeshield-status">${escapeHtml(state.devInfoStatus)}</small>` : ""}
     </aside>
   `;
+  setDrawerHtmlIfChanged(root, drawerHtml, ".dev-info-drawer");
 }
 
 function replayFallbackResult(tokenMint = "") {
@@ -17158,12 +17175,13 @@ function renderReplayBeforeBuyDrawer() {
   document.body.classList.toggle("replay-drawer-open", open);
   if (!open || !featureEnabled("replayBeforeBuyEnabled", true)) {
     root.innerHTML = "";
+    root.__lastDrawerHtml = "";
     return;
   }
   const mint = String(details.tokenMint || "").trim();
   const replay = replayResultForMint(mint);
   const loading = Boolean(state.replayLoading?.[mint]);
-  root.innerHTML = `
+  const drawerHtml = `
     <div class="slimeshield-drawer-backdrop" data-replay-close></div>
     <aside class="replay-before-buy-drawer" role="dialog" aria-modal="true" aria-label="Replay Before You Buy details">
       <header>
@@ -17197,6 +17215,7 @@ function renderReplayBeforeBuyDrawer() {
       <p class="slimeshield-safety-copy">Replay uses cached local SlimeWire history only. It does not fetch historical chain data from this drawer.</p>
     </aside>
   `;
+  setDrawerHtmlIfChanged(root, drawerHtml, ".replay-drawer");
 }
 
 function renderSlimeShieldDetailsDrawer() {
@@ -17211,6 +17230,7 @@ function renderSlimeShieldDetailsDrawer() {
   document.body.classList.toggle("slimeshield-drawer-open", open);
   if (!open || !featureEnabled("slimeShieldEnabled", true)) {
     root.innerHTML = "";
+    root.__lastDrawerHtml = "";
     return;
   }
   const mint = String(details.tokenMint || "").trim();
@@ -17247,7 +17267,7 @@ function renderSlimeShieldDetailsDrawer() {
     ...(Array.isArray(row.scoreWarnings) ? row.scoreWarnings : []),
     ...(Array.isArray(row.bestPickWarnings) ? row.bestPickWarnings : [])
   ].filter(Boolean).slice(0, 4);
-  root.innerHTML = `
+  const drawerHtml = `
     <div class="slimeshield-drawer-backdrop" data-slimeshield-close></div>
     <aside class="slimeshield-drawer" role="dialog" aria-modal="true" aria-label="SlimeShield details">
       <header>
@@ -17310,6 +17330,7 @@ function renderSlimeShieldDetailsDrawer() {
       ${state.slimeShieldStatus ? `<small class="slimeshield-status">${escapeHtml(state.slimeShieldStatus)}</small>` : ""}
     </aside>
   `;
+  setDrawerHtmlIfChanged(root, drawerHtml, ".slimeshield-drawer");
 }
 
 function openPresetEditorTab(kind) {
@@ -21070,6 +21091,7 @@ function renderTradeTrace() {
   const trace = state.tradeTrace;
   if (!trace) {
     root.innerHTML = "";
+    root.__lastDrawerHtml = "";
     return;
   }
   const icon = (status) => status === "ok" ? "✅" : status === "fail" ? "❌" : "⏳";
