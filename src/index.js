@@ -1229,6 +1229,7 @@ async function registerTelegramBotCommands() {
     { command: "look", description: "SlimeShield read on a token CA" },
     { command: "alpha", description: "Top scanner picks right now" },
     { command: "ape", description: "One fresh low-MC shot right now" },
+    { command: "kols", description: "What tracked KOL wallets are buying now" },
     { command: "receipts", description: "SlimeShield rug-call receipts + hit rate" },
     { command: "proof", description: "Live engine track record + proof wall" },
     { command: "mywins", description: "on/off - post YOUR TP wins in this chat" },
@@ -6541,6 +6542,11 @@ async function handleMessage(message, userId) {
   const proofCommand = parseCommandWithArgument(text, ["proof", "record", "track_record"]);
   if (proofCommand) {
     await handleTelegramProofCommand(chatId);
+    return;
+  }
+  const kolsCommand = parseCommandWithArgument(text, ["kols", "kol", "whales"]);
+  if (kolsCommand) {
+    await handleTelegramKolsCommand(chatId);
     return;
   }
   const myWins = parseCommandWithArgument(text, ["mywins", "my_wins"]);
@@ -19559,6 +19565,35 @@ function postUserWinToGroups(plan, planWallet, triggerReason = "") {
   })();
 }
 
+// /kols: what tracked KOL wallets are actually buying right now - their wallets ARE
+// their calls, no X API needed. Each pick links straight to its chart.
+async function handleTelegramKolsCommand(chatId) {
+  if (tgCommandOnCooldown(chatId, "kols", TG_ALPHA_COOLDOWN_MS / 5)) return;
+  let scan = null;
+  try {
+    scan = await webKolScan(`tg:${chatId}`, "fresh");
+  } catch {
+    // degraded reply below
+  }
+  const rows = (scan?.rows || scan?.signals || []).filter((row) => row.tokenMint).slice(0, 4);
+  if (!rows.length) {
+    await say(chatId, "No fresh KOL buys on the tracker right now - their wallets are quiet. Try again soon or watch the KOL page on slimewire.org.");
+    return;
+  }
+  const lines = rows.map((row, index) => {
+    const links = slimewireTokenLinks(row.tokenMint);
+    const who = row.kolName || row.walletLabel || (row.wallet ? shortMint(row.wallet) : "tracked wallet");
+    const stats = [row.marketCapLabel ? `MC ${row.marketCapLabel}` : "", row.pairAgeLabel || ""].filter(Boolean).map(escapeTelegramHtml).join(" | ");
+    return `${index + 1}. <a href="${links.site}"><b>$${escapeTelegramHtml(row.symbol || shortMint(row.tokenMint))}</b></a> - bought by <b>${escapeTelegramHtml(String(who).slice(0, 24))}</b>${stats ? ` | ${stats}` : ""}
+<code>${escapeTelegramHtml(row.tokenMint)}</code>`;
+  });
+  await sayHtml(chatId, [
+    `🐋 <b>KOL flow</b> - tracked wallets are buying:`,
+    ...lines,
+    `Their wallets are their real calls. /look &lt;CA&gt; for a shield read | <a href="https://www.slimewire.org">copy-trade on slimewire.org</a>`
+  ].join("\n"), tokenActionKeyboard(rows[0].tokenMint));
+}
+
 // /proof: the quotable track record - one line of live stats + the public page.
 async function handleTelegramProofCommand(chatId) {
   if (tgCommandOnCooldown(chatId, "proof", TG_LOOK_COOLDOWN_MS)) return;
@@ -19607,6 +19642,11 @@ async function handleChannelPostCommands(post) {
     await handleTelegramProofCommand(chatId);
     return;
   }
+  const kolsCommand = parseCommandWithArgument(text, ["kols", "kol", "whales"]);
+  if (kolsCommand) {
+    await handleTelegramKolsCommand(chatId);
+    return;
+  }
   const toggle = parseCommandWithArgument(text, ["slimewire", "slimewire_alerts"])
     || (/^slimewire(?:\s+alerts)?\s+(on|off|enable|disable|start|stop)$/i.exec(text) ? { argument: RegExp.$1 } : null);
   if (toggle) {
@@ -19634,6 +19674,7 @@ async function handleBotChatMembershipUpdate(memberUpdate) {
     "/look <CA> - instant SlimeShield risk read with chart + quick-buy links",
     "/alpha - top scanner picks, every pair tap-to-chart",
     "/ape - one fresh low-MC shot right now",
+    "/kols - what tracked KOL wallets are buying right now",
     "/receipts - SlimeShield rug-call receipts and hit rate",
     "/slimewire on - (admins) live engine alerts: fresh launches, TP/SL fires, KOL copies. Hard-capped at 3 posts/hour.",
     "",
@@ -19969,14 +20010,20 @@ async function runAlphaDropTick() {
   const seenMints = new Set();
   const blended = [];
   const maxLen = Math.max(rows.length, moonRows.length);
+  // Moonshot rows lead: the bot's identity is early low-MC plays, not safe leftovers.
   for (let i = 0; i < maxLen; i++) {
-    for (const row of [rows[i], moonRows[i]]) {
+    for (const row of [moonRows[i], rows[i]]) {
       if (row?.tokenMint && !seenMints.has(row.tokenMint)) {
         seenMints.add(row.tokenMint);
         blended.push(row);
       }
     }
   }
+  // X potential floats up: live socials mean someone is pushing it; among equals,
+  // the lower market cap wins the slot.
+  const socialScore = (row) => (row.twitterUrl ? 2 : 0) + (row.telegramUrl ? 1 : 0) + (row.websiteUrl ? 1 : 0);
+  const mcOf = (row) => Number(row.marketCapUsd ?? row.marketCap ?? row.fdv) || Number.MAX_SAFE_INTEGER;
+  blended.sort((a, b) => (socialScore(b) - socialScore(a)) || (mcOf(a) - mcOf(b)));
   const picks = [];
   for (const row of blended.slice(0, TG_ALPHA_DROP_PICKS + 4)) {
     if (picks.length >= TG_ALPHA_DROP_PICKS) break;

@@ -209,7 +209,8 @@ test("Dev Info row pill, drawer, and endpoints are cache-first", () => {
   assert.match(functionBody("devInfoPillHtml"), /data-dev-info/);
   assert.match(functionBody("devInfoPillHtml"), /status === "unknown" \? ""/);
   assert.match(functionBody("renderDevInfoDrawer"), /Dev Dump History/);
-  assert.match(functionBody("renderDevInfoDrawer"), /Current dev position is not verified yet/);
+  // Empty sections now collapse into the "still building" line by design (2026-06-11).
+  assert.match(functionBody("renderDevInfoDrawer"), /Still building/);
   assert.match(functionBody("renderDevInfoDrawer"), /Token \/ Source Context/);
   assert.match(functionBody("renderDevInfoDrawer"), /marketContext/);
   assert.match(functionBody("renderDevInfoDrawer"), /Source Evidence/);

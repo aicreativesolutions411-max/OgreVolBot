@@ -16918,9 +16918,9 @@ function renderDevInfoDrawer() {
         <h4>Source Evidence</h4>
         ${devInfoReasonsHtml(sourceEvidence, "No verified public-source evidence is stored yet. Refresh Details will save Dex/Pump/Solscan-style context when the backend can verify it.")}
       </section>
+      ${current ? `
       <section>
         <h4>Current Token Position</h4>
-        ${current ? `
           <dl class="kol-dump-metrics">
             <div><dt>Started</dt><dd>${escapeHtml(devInfoMetric(current.initialSupplyPercent, "%"))}</dd></div>
             <div><dt>Current</dt><dd>${escapeHtml(devInfoMetric(current.currentSupplyPercent, "%"))}</dd></div>
@@ -16929,37 +16929,49 @@ function renderDevInfoDrawer() {
             <div><dt>First sell</dt><dd>${escapeHtml(devInfoMinutes(current.firstMajorSellMinutesAfterLaunch))}</dd></div>
             <div><dt>Last sell</dt><dd>${escapeHtml(current.lastSellAt ? formatDate(current.lastSellAt) : "n/a")}</dd></div>
           </dl>
-        ` : `<p class="slimeshield-muted">Current dev position is not verified yet. SlimeWire still shows the source context above, then stores wallet balance/transaction clues when the provider can verify them.</p>`}
-      </section>
+      </section>` : ""}
+      ${Number(history.launchesTracked) > 0 || recentLaunches.length ? `
       <section>
         <h4>Dev Dump History</h4>
         <dl class="kol-dump-metrics">
           <div><dt>Past launches</dt><dd>${escapeHtml(history.launchesTracked ?? 0)}</dd></div>
           <div><dt>Median first sell</dt><dd>${escapeHtml(devInfoMinutes(history.medianFirstSellMinutes))}</dd></div>
-          <div><dt>Median hold</dt><dd>${escapeHtml(devInfoMinutes(history.medianHoldMinutes))}</dd></div>
           <div><dt>&gt;50% sold 15m</dt><dd>${escapeHtml(devInfoMetric(history.soldMoreThan50Within15mPercent, "%"))}</dd></div>
-          <div><dt>&gt;50% sold 1h</dt><dd>${escapeHtml(devInfoMetric(history.soldMoreThan50Within1hPercent, "%"))}</dd></div>
           <div><dt>Held past 24h</dt><dd>${escapeHtml(devInfoMetric(history.heldPast24hPercent, "%"))}</dd></div>
         </dl>
         ${recentLaunches.length ? `
           <ul class="dev-info-launches">
-            ${recentLaunches.map((launch) => `<li><span>${escapeHtml(launch.symbol || shortAddress(launch.mint || ""))}</span><small>${escapeHtml(launch.outcomeLabel || "unknown")} · first sell ${escapeHtml(devInfoMinutes(launch.firstSellMinutes))}</small></li>`).join("")}
+            ${recentLaunches.map((launch) => `<li><span>${escapeHtml(launch.symbol || shortAddress(launch.mint || ""))}</span><small>${escapeHtml(launch.outcomeLabel || "unknown")}</small></li>`).join("")}
           </ul>
-        ` : `<p class="slimeshield-muted">Limited history. This improves as SlimeWire tracks more launches and wallet events.</p>`}
-      </section>
+        ` : ""}
+      </section>` : ""}
+      ${Array.isArray(result.riskReasons) && result.riskReasons.length ? `
       <section>
         <h4>Risk Signals</h4>
-        ${devInfoReasonsHtml(result.riskReasons, "No cached dev-wallet risk reason yet.")}
-      </section>
+        ${devInfoReasonsHtml(result.riskReasons, "")}
+      </section>` : ""}
+      ${Array.isArray(result.positiveReasons) && result.positiveReasons.length ? `
       <section>
         <h4>Positive Signals</h4>
-        ${devInfoReasonsHtml(result.positiveReasons, "No positive dev-wallet signal is strong enough yet.")}
-      </section>
+        ${devInfoReasonsHtml(result.positiveReasons, "")}
+      </section>` : ""}
+      ${linked.linkedWalletCount || (Array.isArray(linked.notes) && linked.notes.length) ? `
       <section>
         <h4>Linked Wallet Clues</h4>
-        <p class="slimeshield-muted">${escapeHtml(linked.linkedWalletCount ? `${linked.linkedWalletCount} linked wallet clue(s) cached.` : "No linked-wallet cluster detail cached yet.")}</p>
-        ${devInfoReasonsHtml(linked.notes, "No linked-wallet notes cached.")}
-      </section>
+        <p class="slimeshield-muted">${escapeHtml(linked.linkedWalletCount ? `${linked.linkedWalletCount} linked wallet clue(s) cached.` : "")}</p>
+        ${devInfoReasonsHtml(linked.notes, "")}
+      </section>` : ""}
+      ${(() => {
+        const building = [
+          !current ? "dev position" : "",
+          !(Number(history.launchesTracked) > 0 || recentLaunches.length) ? "launch history" : "",
+          !(result.riskReasons || []).length && !(result.positiveReasons || []).length ? "behavior signals" : "",
+          !linked.linkedWalletCount && !(linked.notes || []).length ? "linked wallets" : ""
+        ].filter(Boolean);
+        return building.length
+          ? `<p class="slimeshield-muted dev-info-building">📡 Still building: ${escapeHtml(building.join(", "))}. SlimeWire fills these in as it watches this wallet trade - Refresh pulls fresh source data now.</p>`
+          : "";
+      })()}
       <section class="slimeshield-action-note">
         <h4>Suggested Action</h4>
         <p>${escapeHtml(result.suggestedAction || "Check SlimeShield and liquidity before buying.")}</p>

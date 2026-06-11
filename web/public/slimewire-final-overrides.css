@@ -19418,3 +19418,17 @@ html body main.shell[data-app][data-route="intro"] .swamp-intro-stage[data-intro
   font-size: 0.82rem !important;
   flex: 0 0 auto !important;
 }
+
+/* Dev Info drawer: fully opaque - nothing ghosts through from the page behind. */
+.dev-info-drawer {
+  background: #050e06 !important;
+}
+.slimeshield-drawer-backdrop {
+  background: rgba(0, 0, 0, 0.62) !important;
+  backdrop-filter: none !important;
+}
+.dev-info-building {
+  border: 1px dashed rgba(114, 255, 35, 0.25) !important;
+  border-radius: 10px !important;
+  padding: 10px 12px !important;
+}
