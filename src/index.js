@@ -30794,6 +30794,10 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
   // for the next one; tight user slippage (3%) made later buys fail simulation,
   // which silently kills the whole all-or-none bundle no matter the tip.
   const slippageBps = Math.max(Number(basePayload.slippageBps) || 300, 2_000);
+  // PumpPortal's API takes `slippage` as a PERCENT - it silently ignores an
+  // unknown `slippageBps` field, which built every bundle buy with zero
+  // tolerance and made the all-or-none bundle unincludable at any tip.
+  const slippagePct = Math.min(99, slippageBps / 100);
 
   // First-block wallet buys (the "bundle") that land atomically with the dev buy.
   const bundle = body.bundleBuy || {};
@@ -30843,20 +30847,20 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
     action: {
       publicKey: devKeypair.publicKey.toBase58(), action: "create",
       tokenMetadata: { name: basePayload.name, symbol: basePayload.symbol, uri: metadata.uri },
-      mint, denominatedInSol: "true", amount: 0, slippageBps, priorityFee: CONFIG.pumpLaunchJitoTipSol, pool: "pump"
+      mint, denominatedInSol: "true", amount: 0, slippage: slippagePct, priorityFee: CONFIG.pumpLaunchJitoTipSol, pool: "pump"
     },
     signers: [mintKeypair, devKeypair]
   });
   if (devBuySol > 0) {
     plan.push({
-      action: { publicKey: devKeypair.publicKey.toBase58(), action: "buy", mint, denominatedInSol: "true", amount: devBuySol, slippageBps, priorityFee: 0, pool: "pump" },
+      action: { publicKey: devKeypair.publicKey.toBase58(), action: "buy", mint, denominatedInSol: "true", amount: devBuySol, slippage: slippagePct, priorityFee: 0, pool: "pump" },
       signers: [devKeypair]
     });
   }
   for (const wallet of bundleWallets) {
     const keypair = decryptWallet(wallet);
     plan.push({
-      action: { publicKey: keypair.publicKey.toBase58(), action: "buy", mint, denominatedInSol: "true", amount: bundleAmountSol, slippageBps, priorityFee: 0, pool: "pump" },
+      action: { publicKey: keypair.publicKey.toBase58(), action: "buy", mint, denominatedInSol: "true", amount: bundleAmountSol, slippage: slippagePct, priorityFee: 0, pool: "pump" },
       signers: [keypair]
     });
   }
