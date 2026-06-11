@@ -36,6 +36,7 @@
       .meta { color: var(--dim); font-size: 0.78rem; }
       .pill { font-size: 0.68rem; font-weight: 800; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); }
       .cta { display: inline-block; margin-top: 28px; padding: 12px 22px; border-radius: 999px; font-weight: 800; color: #071006; background: linear-gradient(135deg, rgba(114,255,35,0.95), rgba(187,255,99,0.95)); text-decoration: none; }
+      .cta.ghost { color: #eaffe0; background: none; border: 1px solid var(--line); cursor: pointer; font-size: 0.95rem; font-family: inherit; margin-left: 10px; }
       .empty { color: var(--dim); font-size: 0.88rem; padding: 8px 2px; }
       footer { margin-top: 34px; color: var(--dim); font-size: 0.78rem; }
       footer a { color: var(--green); }
@@ -59,6 +60,7 @@
       <h2>🥇 Top callers</h2>
       <div data-callers><p class="empty">Loading...</p></div>
       <a class="cta" href="/">Open the SlimeWire terminal</a>
+      <button class="cta ghost" type="button" data-x-thread hidden>🧵 Copy X thread</button>
       <footer>Add the bot to your Telegram group: <a data-bot-link href="#">@OgreTradeBot</a> - /look, /alpha, /ape, /slimewire on. Not financial advice.</footer>
     </main>
     <script src="/config.js"></script>
@@ -124,6 +126,27 @@
           const callers = (data.topCallers || []).map((caller, index) =>
             '<div class="row"><b>' + (index + 1) + ". " + esc(caller.handle) + '</b><span class="win">' + esc(caller.wins) + " wins</span><span class=\"meta\">" + (caller.hitRatePct != null ? esc(caller.hitRatePct) + "% hit rate | " : "") + esc(caller.calls) + " calls</span></div>").join("");
           document.querySelector("[data-callers]").innerHTML = callers || '<p class="empty">Post calls on any token board - winners get ranked here forever.</p>';
+          const threadButton = document.querySelector("[data-x-thread]");
+          if (threadButton) {
+            threadButton.hidden = false;
+            threadButton.addEventListener("click", async () => {
+              const tweets = [];
+              tweets.push("Receipts, not promises. 🐸\n\nSlimeWire has tracked " + (alpha.totalCalls ?? 0) + " alpha calls publicly - every win AND every loss."
+                + (alpha.hitRatePct != null ? "\n\nHit rate so far: " + alpha.hitRatePct + "% to 2x." : ""));
+              const winLines = (alpha.recentWins || []).slice(0, 4).map((win) => "$" + win.symbol + " -> " + win.peakX + "x");
+              if (winLines.length) tweets.push("Recent wins called before they ran:\n\n" + winLines.join("\n") + (alpha.avgMinutesToWin ? "\n\nAvg time to 2x: " + alpha.avgMinutesToWin + " min." : ""));
+              if (shield.rugsCalled) tweets.push("SlimeShield flagged " + shield.rugsCalled + " rug" + (shield.rugsCalled === 1 ? "" : "s") + " BEFORE they died" + ((shield.recentRugs || [])[0]?.warningMinutes ? " - up to " + shield.recentRugs[0].warningMinutes + " minutes of warning" : "") + ".\n\nEvery flag is on the public wall. No deleting losses.");
+              tweets.push("It updates live and tracks itself. Check the wall, then trade where the receipts are:\n\nhttps://www.slimewire.org/proof");
+              const thread = tweets.map((tweet, index) => (index + 1) + "/" + tweets.length + "\n" + tweet).join("\n\n---\n\n");
+              try {
+                await navigator.clipboard.writeText(thread);
+                threadButton.textContent = "✅ Thread copied - paste on X";
+              } catch {
+                threadButton.textContent = "Copy blocked - long-press to select";
+              }
+              setTimeout(() => { threadButton.textContent = "🧵 Copy X thread"; }, 4000);
+            });
+          }
         } catch {
           document.querySelector("[data-stats]").innerHTML = '<div class="stat"><strong>offline</strong><span>retry shortly</span></div>';
         }

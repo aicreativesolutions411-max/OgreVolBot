@@ -19208,6 +19208,8 @@ function defaultJsonForPath(filePath) {
       return { links: {} };
     case "watch-alerts.json":
       return { snapshots: {} };
+    case "launch-milestones.json":
+      return { tracked: {} };
     case "shield-receipts.json":
       return { receipts: [] };
     case "push-subscriptions.json":
@@ -20444,6 +20446,81 @@ async function runWeeklySeasonPost() {
   lastSeasonPostWeek = weekKey;
 }
 
+// --- Launch milestones: SlimeWire-launched coins announce their own wins. MC
+// thresholds and 2x-from-launch post automatically to armed chats with the launch
+// room link - creators keep getting reasons to share without lifting a finger.
+const LAUNCH_MILESTONES = [
+  { key: "mc5k", label: "$5K MC", test: (mc) => mc >= 5_000 },
+  { key: "mc10k", label: "$10K MC", test: (mc) => mc >= 10_000 },
+  { key: "mc25k", label: "$25K MC", test: (mc) => mc >= 25_000 },
+  { key: "mc50k", label: "$50K MC", test: (mc) => mc >= 50_000 }
+];
+
+function launchMilestonesPath() {
+  return path.join(CONFIG.dataDir, "launch-milestones.json");
+}
+
+async function readLaunchMilestones() {
+  const store = await readJson(launchMilestonesPath());
+  if (!store.tracked || typeof store.tracked !== "object") store.tracked = {};
+  return store;
+}
+
+async function checkLaunchMilestones() {
+  await withFileLock(launchMilestonesPath(), async () => {
+    const attempts = await readPumpLaunchAttempts().catch(() => ({ attempts: [] }));
+    const recentCutoff = Date.now() - 48 * 60 * 60 * 1000;
+    const live = (attempts.attempts || []).filter((attempt) =>
+      String(attempt.status || "").toUpperCase() === "COMPLETE"
+      && attempt.tokenMint
+      && Date.parse(attempt.completedAt || attempt.updatedAt || "") > recentCutoff);
+    if (!live.length) return;
+    const store = await readLaunchMilestones();
+    const mints = live.map((attempt) => attempt.tokenMint).slice(0, 25);
+    const pairs = await fetchDexScreenerTokenPairsBatch(mints).catch(() => []);
+    let changed = false;
+    for (const attempt of live.slice(0, 25)) {
+      const mint = attempt.tokenMint;
+      const best = bestDexPairForToken(mint, pairs.filter((pair) => pairMatchesToken(pair, mint)));
+      const mc = Number(best?.marketCap || best?.fdv) || 0;
+      const price = Number(best?.priceUsd) || 0;
+      const symbol = best?.baseToken?.symbol || attempt.symbol || shortMint(mint);
+      const entry = store.tracked[mint] || { symbol, basePrice: price || null, hit: {} };
+      if (!entry.basePrice && price) entry.basePrice = price;
+      const fired = [];
+      for (const milestone of LAUNCH_MILESTONES) {
+        if (!entry.hit[milestone.key] && mc > 0 && milestone.test(mc)) {
+          entry.hit[milestone.key] = new Date().toISOString();
+          fired.push(milestone.label);
+        }
+      }
+      if (!entry.hit.x2 && entry.basePrice && price >= entry.basePrice * 2) {
+        entry.hit.x2 = new Date().toISOString();
+        fired.push("2x from launch");
+      }
+      store.tracked[mint] = entry;
+      if (fired.length) {
+        changed = true;
+        const text = [
+          `🎉 <b>$${escapeTelegramHtml(symbol)} hit ${escapeTelegramHtml(fired.join(" + "))}</b> - launched on <a href="https://www.slimewire.org">SlimeWire</a>.`,
+          `<a href="https://www.slimewire.org/t?ca=${mint}">launch room</a> | <a href="https://pump.fun/coin/${mint}">pump.fun</a> | <a href="https://www.slimewire.org">launch yours</a>`
+        ].join("\n");
+        const groupsStore = await readTelegramGroups().catch(() => ({ groups: {} }));
+        for (const [chatId, group] of Object.entries(groupsStore.groups || {})) {
+          if (group?.alerts) groupBridgeFor(chatId).announce("launch-milestone", `${mint}:${fired[0]}`, text);
+        }
+        tgChannel.announce("launch-milestone", `${mint}:${fired[0]}`, text);
+      }
+    }
+    const keys = Object.keys(store.tracked);
+    if (keys.length > 200) {
+      for (const key of keys.slice(0, keys.length - 200)) delete store.tracked[key];
+      changed = true;
+    }
+    if (changed) await writeJsonFile(launchMilestonesPath(), store);
+  });
+}
+
 // --- Daily Swamp Report: one digest post per UTC day to every armed chat ----------
 let lastSwampReportDay = "";
 async function runDailySwampReport() {
@@ -20586,6 +20663,7 @@ if (CONFIG.serviceRole === "web") {
     checkBoardCallOutcomes().catch((error) => console.warn(`[call-board] check failed: ${error.message}`));
     runDailySwampReport().catch((error) => console.warn(`[swamp-report] failed: ${error.message}`));
     runWeeklySeasonPost().catch((error) => console.warn(`[season] failed: ${error.message}`));
+    checkLaunchMilestones().catch((error) => console.warn(`[launch-milestones] failed: ${error.message}`));
     if (Date.now() % (10 * 60 * 1000) < 5 * 60 * 1000) {
       checkWatchlistMoveAlerts().catch((error) => console.warn(`[watch-alerts] failed: ${error.message}`));
     }
