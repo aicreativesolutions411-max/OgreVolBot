@@ -1230,6 +1230,7 @@ async function registerTelegramBotCommands() {
     { command: "alpha", description: "Top scanner picks right now" },
     { command: "ape", description: "One fresh low-MC shot right now" },
     { command: "receipts", description: "SlimeShield rug-call receipts + hit rate" },
+    { command: "proof", description: "Live engine track record + proof wall" },
     { command: "slimewire", description: "on/off - engine alerts in this chat (admins)" }
   ];
   const dmCommands = [
@@ -6410,6 +6411,11 @@ async function handleMessage(message, userId) {
   const apeCommand = parseCommandWithArgument(text, ["ape", "fresh", "degen"]);
   if (apeCommand) {
     await handleTelegramApeCommand(chatId);
+    return;
+  }
+  const proofCommand = parseCommandWithArgument(text, ["proof", "record", "track_record"]);
+  if (proofCommand) {
+    await handleTelegramProofCommand(chatId);
     return;
   }
   // /slimewire on|off - also accept the bare phrase, people drop the slash constantly.
@@ -19268,6 +19274,23 @@ async function handleTelegramReceiptsCommand(chatId) {
   ].join("\n"));
 }
 
+// /proof: the quotable track record - one line of live stats + the public page.
+async function handleTelegramProofCommand(chatId) {
+  if (tgCommandOnCooldown(chatId, "proof", TG_LOOK_COOLDOWN_MS)) return;
+  const calls = await readAlphaCalls().catch(() => ({ calls: [] }));
+  const receipts = await readShieldReceipts().catch(() => ({ receipts: [] }));
+  const resolved = calls.calls.filter((call) => call.status === "resolved");
+  const wins = resolved.filter((call) => call.outcome === "won");
+  const losses = resolved.filter((call) => call.outcome === "lost");
+  const bestX = wins.length ? Math.max(...wins.map((call) => Number(call.peakX) || 0)) : null;
+  const rugs = receipts.receipts.filter((item) => item.outcome === "rugged").length;
+  await sayHtml(chatId, [
+    `🧾 <b>SlimeWire engine record</b>: ${wins.length}W-${losses.length}L on tracked calls${bestX ? `, best call <b>${bestX}x</b>` : ""}.`,
+    `${calls.calls.filter((call) => call.status === "watching").length} calls being tracked live. ${rugs} rugs flagged before death by SlimeShield.`,
+    `Wins AND losses, public: <a href="https://www.slimewire.org/proof">slimewire.org/proof</a>`
+  ].join("\n"));
+}
+
 // Channels: only /look, /alpha, /slimewire - posts have no from user, admin implied.
 async function handleChannelPostCommands(post) {
   const chatId = post?.chat?.id;
@@ -19292,6 +19315,11 @@ async function handleChannelPostCommands(post) {
   const apeCommand = parseCommandWithArgument(text, ["ape", "fresh", "degen"]);
   if (apeCommand) {
     await handleTelegramApeCommand(chatId);
+    return;
+  }
+  const proofCommand = parseCommandWithArgument(text, ["proof", "record", "track_record"]);
+  if (proofCommand) {
+    await handleTelegramProofCommand(chatId);
     return;
   }
   const toggle = parseCommandWithArgument(text, ["slimewire", "slimewire_alerts"])
@@ -19360,9 +19388,19 @@ async function handleTelegramGroupToggle(chatId, message, userId, argument, admi
     alerts: turnOn
   };
   await writeJsonFile(telegramGroupsPath(), store);
-  await say(chatId, turnOn
-    ? "SlimeWire alerts are ON for this group: fresh launches, TP/SL fires, and KOL copies, max a few posts per hour. /slimewire off any time. Try /look <CA> or /alpha too."
-    : "SlimeWire alerts are OFF for this group. /look and /alpha still work on demand.");
+  if (turnOn) {
+    const sent = await telegram("sendMessage", {
+      chat_id: chatId,
+      text: "SlimeWire alerts are ON: plays every 15 min, fresh launches, TP/SL fires, KOL copies, 2x receipts. /slimewire off any time. Try /look <CA>, /alpha, /ape, /proof. Track record: slimewire.org/proof",
+      disable_web_page_preview: true
+    }).catch(() => null);
+    // Best-effort pin so the proof funnel stays at the top of the chat.
+    if (sent?.message_id) {
+      await telegram("pinChatMessage", { chat_id: chatId, message_id: sent.message_id, disable_notification: true }).catch(() => {});
+    }
+  } else {
+    await say(chatId, "SlimeWire alerts are OFF for this group. /look, /alpha, /ape, and /proof still work on demand.");
+  }
 }
 
 // Fan the same anonymized engine events out to opted-in groups, each behind its own
@@ -19416,6 +19454,17 @@ async function readAlphaCalls() {
   return store;
 }
 
+async function firstAlphaGroupTitle(chatIds = []) {
+  const first = (chatIds || [])[0];
+  if (!first) return "";
+  try {
+    const store = await readTelegramGroups();
+    return String(store.groups?.[String(first)]?.title || "").slice(0, 48);
+  } catch {
+    return "";
+  }
+}
+
 function alphaAgeLabel(ms) {
   const minutes = Math.round(ms / 60_000);
   if (minutes < 90) return `${minutes} min ago`;
@@ -19429,6 +19478,15 @@ async function runAlphaDropTick() {
   const dueGroups = Object.entries(groupsStore.groups || {}).filter(([, group]) =>
     group?.alerts && (!group.lastAlphaAt || now - Date.parse(group.lastAlphaAt) > TG_ALPHA_DROP_INTERVAL_MS));
   if (!dueGroups.length && !tgChannel.enabled) return;
+
+  // Engine record footer: publishing the losses is what makes the wins believable.
+  const priorCalls = await readAlphaCalls();
+  const priorResolved = priorCalls.calls.filter((call) => call.status === "resolved");
+  const priorWins = priorResolved.filter((call) => call.outcome === "won").length;
+  const priorLosses = priorResolved.filter((call) => call.outcome === "lost").length;
+  const recordLine = priorResolved.length
+    ? ` Engine record: ${priorWins}W-${priorLosses}L${priorResolved.length - priorWins - priorLosses ? `-${priorResolved.length - priorWins - priorLosses}F` : ""}.`
+    : "";
 
   // Take the top scanner rows, attach a shield verdict to each, and drop everything
   // that is not an outright AVOID. Risky plays are shown honestly with their verdict -
@@ -19459,7 +19517,7 @@ async function runAlphaDropTick() {
   const text = [
     `🐸 <b>SlimeWire plays</b> - tap a pair to open its chart:`,
     ...lines,
-    `${topLinks.dmBuy ? `<a href="${topLinks.dmBuy}">quick buy top pick</a> | ` : ""}<a href="https://www.slimewire.org/proof">proof wall</a> - every call is tracked, winners get receipts.`
+    `${topLinks.dmBuy ? `<a href="${topLinks.dmBuy}">quick buy top pick</a> | ` : ""}<a href="https://www.slimewire.org/proof">proof wall</a> - every call is tracked, winners get receipts.${escapeTelegramHtml(recordLine)}`
   ].join("\n");
 
   // Key by time bucket so the cadence holds even when the same top pick repeats.
@@ -19473,7 +19531,7 @@ async function runAlphaDropTick() {
   if (recipients.length) await writeJsonFile(telegramGroupsPath(), groupsStore);
   tgChannel.announce("alpha-drop", dropKey, text);
 
-  const calls = await readAlphaCalls();
+  const calls = priorCalls;
   let recorded = false;
   for (const pick of picks) {
     const best = bestDexPairForToken(pick.row.tokenMint, pairs.filter((pair) => pairMatchesToken(pair, pick.row.tokenMint)));
@@ -19520,8 +19578,9 @@ async function checkAlphaCallOutcomes() {
       call.resolvedAt = new Date(now).toISOString();
       changed = true;
       const links = slimewireTokenLinks(call.mint);
+      const firstGroupTitle = await firstAlphaGroupTitle(call.chatIds);
       const winText = [
-        `✅ <b>Called it</b>: $${escapeTelegramHtml(call.symbol)} is <b>${call.peakX}x</b> since the SlimeWire alpha drop ${alphaAgeLabel(ageMs)}.`,
+        `✅ <b>Called it</b>: $${escapeTelegramHtml(call.symbol)} is <b>${call.peakX}x</b> since the SlimeWire alpha drop ${alphaAgeLabel(ageMs)}.${firstGroupTitle ? ` First dropped in <b>${escapeTelegramHtml(firstGroupTitle)}</b>.` : ""}`,
         `<a href="https://www.slimewire.org/proof">Receipts, not promises - full track record</a>.`,
         `<a href="${links.site}">chart</a> | <a href="${links.siteBuy}">buy on site</a>`
       ].join("\n");
