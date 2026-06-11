@@ -3144,10 +3144,27 @@ async function handleWebApiRequest(request, response, requestUrl) {
 
     if (request.method === "GET" && pathname === "/api/web/launch/progress") {
       const progressId = String(requestUrl.searchParams.get("launchAttemptId") || "").slice(0, 80);
-      const entry = pumpLaunchLiveProgress.get(progressId);
+      let entry = pumpLaunchLiveProgress.get(progressId);
       if (!entry || String(entry.userId || "") !== String(auth.userId)) {
-        sendWebJson(request, response, 404, { ok: false, error: "Unknown launch attempt." });
-        return;
+        // Memory misses after a server restart mid-launch - fall back to the
+        // persistent attempts ledger so the client never polls into a void.
+        const store = await readPumpLaunchAttempts().catch(() => ({ attempts: [] }));
+        const attempt = (store.attempts || []).find((item) =>
+          (item.id === progressId || item.launchAttemptId === progressId) && String(item.userId || "") === String(auth.userId));
+        if (!attempt) {
+          sendWebJson(request, response, 404, { ok: false, error: "Unknown launch attempt." });
+          return;
+        }
+        const attemptStatus = String(attempt.status || "").toUpperCase();
+        entry = {
+          userId: auth.userId,
+          status: attemptStatus === "COMPLETE" ? "COMPLETE" : attemptStatus === "FAILED" ? "FAILED" : "RUNNING",
+          stage: attempt.stage || attemptStatus.toLowerCase(),
+          stageText: attemptStatus === "COMPLETE" ? "Launch complete" : attemptStatus === "FAILED" ? "Launch failed" : "Launch in progress (recovered after restart)",
+          failureReason: attempt.failureReason || attempt.errorMessage || "",
+          startedAt: Date.parse(attempt.createdAt || "") || Date.now(),
+          result: attemptStatus === "COMPLETE" ? { status: "COMPLETE", tokenMint: attempt.tokenMint || "", mint: attempt.tokenMint || "", bundled: false, recovered: true } : undefined
+        };
       }
       sendWebJson(request, response, 200, {
         ok: true,
@@ -31165,7 +31182,10 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
       launchAttemptId: basePayload.clientRequestId, userId, mint, bundleId,
       txCount: plan.length, attempt: attempt + 1, tipSol: tipSchedule[attempt]
     });
-    landed = await mintLanded(attempt === tipSchedule.length - 1 ? 14_000 : 12_000);
+    // Pump-speed budget: a bundle that lands does so within a few blocks; if it
+    // has not appeared in 8s, the standard path with instant managed buys is
+    // faster than waiting on the lottery.
+    landed = await mintLanded(8_000);
   }
 
   if (!landed) {

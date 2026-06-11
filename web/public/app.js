@@ -10006,13 +10006,28 @@ async function useLaunchCoinMint() {
 async function pollLaunchProgress(serverAttemptId, statusEl) {
   const startedAt = Date.now();
   let lastText = "";
+  let misses = 0;
   while (Date.now() - startedAt < 180_000) {
     await sleep(1_200);
     let progress = null;
     try {
       const data = await api(`/api/web/launch/progress?launchAttemptId=${encodeURIComponent(serverAttemptId)}`, { timeoutMs: 8_000, dedupe: false });
       progress = data.progress || null;
-    } catch {
+      misses = 0;
+    } catch (pollError) {
+      misses += 1;
+      // Never hang silently: say what is happening, and give up with a real
+      // answer if the feed stays gone (e.g. server restarted mid-launch).
+      if (misses === 4) {
+        const note = "Progress feed reconnecting...";
+        state.launchCoinStatus = note;
+        writeText(statusEl, note);
+      }
+      if (misses >= 15) {
+        const error = new Error("Lost the launch progress feed (the server may have restarted). Check Positions/chart in ~1 minute before launching again - the launch may still have completed.");
+        error.launchAttemptId = serverAttemptId;
+        throw error;
+      }
       continue;
     }
     if (!progress) continue;
