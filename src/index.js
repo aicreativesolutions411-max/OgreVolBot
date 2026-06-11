@@ -20111,6 +20111,12 @@ footer a{color:#72ff23}
 </main></body></html>`;
 }
 
+function sharePageDate(value) {
+  const ts = Date.parse(value || "");
+  if (!Number.isFinite(ts)) return "unknown";
+  return new Date(ts).toUTCString().replace(":00 GMT", " UTC");
+}
+
 function sendShareHtml(response, html) {
   response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "public, max-age=30, stale-while-revalidate=120" });
   response.end(html);
@@ -20146,8 +20152,8 @@ async function serveProofSharePage(requestUrl, request, response) {
 <div class="card">
 ${call.entryMcUsd ? `<div class="row"><span class="meta">Entry MC</span><b>${esc(formatUsdCompact(call.entryMcUsd))}</b></div>` : ""}
 ${call.shieldVerdict || call.verdict ? `<div class="row"><span class="meta">SlimeShield at call</span><b>${esc(call.shieldVerdict || call.verdict)}${call.shieldScore != null ? " " + esc(String(call.shieldScore)) + "/100" : ""}</b></div>` : ""}
-<div class="row"><span class="meta">Called</span><b>${esc(formatDate(call.calledAt || call.createdAt))}</b></div>
-${call.resolvedAt ? `<div class="row"><span class="meta">Resolved</span><b>${esc(formatDate(call.resolvedAt))}</b></div>` : ""}
+<div class="row"><span class="meta">Called</span><b>${esc(sharePageDate(call.calledAt || call.createdAt))}</b></div>
+${call.resolvedAt ? `<div class="row"><span class="meta">Resolved</span><b>${esc(sharePageDate(call.resolvedAt))}</b></div>` : ""}
 <div class="row"><span class="meta">CA</span><b style="font-family:monospace;font-size:.78rem;word-break:break-all">${esc(call.mint)}</b></div>
 </div>
 <a class="cta" href="https://www.slimewire.org/t?ca=${encodeURIComponent(call.mint)}">Verify this token</a>
