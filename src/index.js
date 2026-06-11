@@ -11056,7 +11056,9 @@ async function processWebPortfolioExits(options = {}) {
         if (!shouldEmergencySellOnPriceFailure({
           stopLossPct,
           estimateFailures: failures,
-          minFailures: CONFIG.stopLossPriceFailureSellAfter
+          minFailures: CONFIG.stopLossPriceFailureSellAfter,
+          planCreatedAt: plan.createdAt || planWallet.createdAt || null,
+          graceMs: 30 * 60 * 1000
         })) {
           return;
         }
@@ -11870,7 +11872,9 @@ async function processWebExitGuard(guard, walletStore, options = {}) {
         if (shouldEmergencySellOnPriceFailure({
           stopLossPct,
           estimateFailures: planWallet.estimateFailures,
-          minFailures: CONFIG.stopLossPriceFailureSellAfter
+          minFailures: CONFIG.stopLossPriceFailureSellAfter,
+          planCreatedAt: plan.createdAt || planWallet.createdAt || null,
+          graceMs: 30 * 60 * 1000
         })) {
           const failures = Number.parseInt(planWallet.estimateFailures || 0, 10);
           const armedPct = Number(stopLossPct).toFixed(2).replace(/\.00$/, "");
@@ -11990,6 +11994,24 @@ async function processWebExitGuard(guard, walletStore, options = {}) {
     const failures = Number.parseInt(guard.failures || 0, 10) + 1;
     const priceExit = isPriceExitTrigger(triggerReason);
     if (isNoLiveTokenBalanceError(error)) {
+      // Fresh-launch tokens: the ATA was created seconds ago and balance reads
+      // lag - "no balance" within 30 min of the plan is transient, not final.
+      // Killing the guard here is how launch exits died silently.
+      const guardAgeMs = Date.now() - Date.parse(guard.createdAt || guard.armedAt || 0);
+      if (Number.isFinite(guardAgeMs) && guardAgeMs >= 0 && guardAgeMs < 30 * 60 * 1000) {
+        const retryIso = new Date(Date.now() + 45_000).toISOString();
+        guard.failures = failures;
+        guard.lastError = friendlyError(error);
+        guard.retryAfterAt = retryIso;
+        guard.nextRetryAt = retryIso;
+        guard.updatedAt = new Date().toISOString();
+        return {
+          changed: true,
+          triggered: false,
+          failed: false,
+          message: `${guard.walletLabel || guard.walletPublicKey}: token balance not visible yet for fresh ${shortMint(guard.tokenMint)} - retrying in 45s.`
+        };
+      }
       const nowIso = new Date().toISOString();
       guard.failures = failures;
       guard.status = "skipped";
@@ -12403,7 +12425,9 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
         if (shouldEmergencySellOnPriceFailure({
           stopLossPct,
           estimateFailures: planWallet.estimateFailures,
-          minFailures: CONFIG.stopLossPriceFailureSellAfter
+          minFailures: CONFIG.stopLossPriceFailureSellAfter,
+          planCreatedAt: plan.createdAt || planWallet.createdAt || null,
+          graceMs: 30 * 60 * 1000
         })) {
           const failures = Number.parseInt(planWallet.estimateFailures || 0, 10);
           const armedPct = Number(stopLossPct).toFixed(2).replace(/\.00$/, "");

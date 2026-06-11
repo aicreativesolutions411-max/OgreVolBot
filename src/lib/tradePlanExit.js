@@ -84,12 +84,19 @@ export function recentStoredPriceExitDecision({
   });
 }
 
-export function shouldEmergencySellOnPriceFailure({ stopLossPct = 0, estimateFailures = 0, minFailures = 2 } = {}) {
+export function shouldEmergencySellOnPriceFailure({ stopLossPct = 0, estimateFailures = 0, minFailures = 2, planCreatedAt = null, graceMs = 0 } = {}) {
   const stop = Number(stopLossPct || 0);
   const failures = Number.parseInt(estimateFailures || 0, 10);
   const threshold = Number.parseInt(minFailures || 2, 10);
   if (!Number.isFinite(stop) || stop <= 0) return false;
   if (!Number.isInteger(failures) || failures <= 0) return false;
+  // Fresh-launch grace: a token bought seconds ago has NO Jupiter route yet, so
+  // quote failures are expected, not a dying token. Tripping the emergency here
+  // sold (or tried to sell) launch bags within minutes of every launch.
+  if (planCreatedAt && graceMs > 0) {
+    const ageMs = Date.now() - Date.parse(planCreatedAt);
+    if (Number.isFinite(ageMs) && ageMs >= 0 && ageMs < graceMs) return false;
+  }
   const safeThreshold = Number.isInteger(threshold) && threshold > 0 ? threshold : 2;
   return failures >= safeThreshold;
 }
