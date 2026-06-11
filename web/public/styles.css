@@ -9493,3 +9493,26 @@ body {
   border: 1px solid var(--line, rgba(114, 255, 35, 0.18));
   color: rgba(226, 255, 215, 0.82);
 }
+
+/* slime-confirm on small screens: bottom-sheet feel, keyboard-safe, no iOS zoom. */
+@media (max-width: 480px) {
+  .slime-confirm-overlay {
+    align-items: flex-end;
+    padding: 0;
+  }
+  .slime-confirm-card {
+    width: 100%;
+    max-height: calc(100dvh - 40px);
+    overflow-y: auto;
+    border-radius: 16px 16px 0 0;
+    padding: 16px 14px calc(14px + env(safe-area-inset-bottom));
+  }
+  .slime-confirm-input {
+    font-size: 16px;
+    min-height: 44px;
+  }
+  .slime-confirm-actions button {
+    flex: 1 1 auto;
+    min-height: 44px;
+  }
+}

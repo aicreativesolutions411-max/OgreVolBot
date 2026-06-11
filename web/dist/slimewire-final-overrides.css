@@ -19259,3 +19259,30 @@ html body main.shell[data-app][data-route="intro"] .swamp-intro-stage[data-intro
 }
 /* Buttons/overlay were removed from the intro markup; hide any leftover chrome just in case. */
 /* === END INTRO_PORTAL_VIDEO_20260610_V1 ============================= */
+
+/* MOBILE_POLISH_20260610_V1: final-word floors so the density passes above can
+   never shrink feed actions below readable/tappable size on phones. */
+@media (max-width: 760px) {
+  [data-app][data-route="terminal"] .terminal-token-actions button,
+  [data-app][data-route="terminal"] .compact-row-actions button {
+    min-height: 34px !important;
+    height: auto !important;
+    font-size: 10px !important;
+    line-height: 1.05 !important;
+    padding: 4px 6px !important;
+  }
+  .ogre-tek-modal {
+    width: 100% !important;
+    max-height: calc(100dvh - 16px) !important;
+    padding: 14px 12px !important;
+  }
+  .wallet-connect-dialog {
+    max-height: calc(100dvh - 20px) !important;
+  }
+}
+@media (max-width: 420px) {
+  [data-app][data-route="terminal"] .terminal-token-actions button,
+  [data-app][data-route="terminal"] .compact-row-actions button {
+    font-size: 9.5px !important;
+  }
+}

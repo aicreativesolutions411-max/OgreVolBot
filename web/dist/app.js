@@ -9550,6 +9550,26 @@ async function submitLaunchCoin() {
     if (!draft.name || String(draft.name).trim().length < 2) throw new Error("Enter a token name (2+ characters) before launching.");
     if (!draft.symbol || String(draft.symbol).trim().length < 2) throw new Error("Enter a ticker (2+ characters) before launching.");
 
+    // No image = the backend silently launches with the default SlimeWire logo on
+    // pump.fun. That is almost never what the user wants, so make it an explicit choice.
+    if (!$("[data-launch-coin-image]")?.files?.[0]) {
+      const launchWithoutImage = await slimeConfirm({
+        title: "No Coin Image Selected",
+        lines: [
+          `${draft.name} (${draft.symbol}) has no custom image.`,
+          "pump.fun will show the default SlimeWire logo instead of your own artwork.",
+          "Launch anyway?"
+        ],
+        confirmLabel: "Launch With Default Logo",
+        cancelLabel: "Add Image First"
+      });
+      if (!launchWithoutImage) {
+        state.launchCoinStatus = "Launch paused - add a coin image in the Coin section, then launch again.";
+        writeText(status, state.launchCoinStatus);
+        return;
+      }
+    }
+
     state.launchCoinStatus = "Preparing image for SlimeWire backend conversion...";
     writeText(status, state.launchCoinStatus);
 
