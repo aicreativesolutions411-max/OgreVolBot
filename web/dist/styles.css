@@ -9664,14 +9664,14 @@ body {
   .topbar { margin-bottom: 6px; }
   /* Fixed, not sticky (ancestor overflow rules kill sticky): the bar rides at
      the top of the screen at any scroll depth - options always handy. */
-  main.shell[data-route="terminal"] { padding-top: 62px; }
+  main.shell[data-route="terminal"] { padding-top: 78px; }
   main.shell[data-route="terminal"] .nav-drop-bar {
     display: flex;
     flex-wrap: nowrap;
     align-items: center;
     gap: 6px;
     position: fixed;
-    top: 6px;
+    top: 28px;
     left: 50%;
     transform: translateX(-50%);
     width: max-content;
