@@ -9677,3 +9677,27 @@ body {
     border-color: rgba(114, 255, 35, 0.35);
   }
 }
+
+/* Execution receipt: the trade's live progress, bottom-left, out of the way. */
+[data-trade-trace-mount] .trade-trace {
+  position: fixed;
+  left: 14px;
+  bottom: 14px;
+  z-index: 5500;
+  width: min(330px, calc(100vw - 28px));
+  display: grid;
+  gap: 7px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(114, 255, 35, 0.35);
+  background: #060d07;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
+}
+[data-trade-trace-mount] header { display: flex; justify-content: space-between; align-items: center; }
+[data-trade-trace-mount] header strong { color: #d6ffbf; font-size: 0.9rem; }
+[data-trade-trace-mount] header button { background: none; border: none; color: rgba(226,255,215,0.6); cursor: pointer; font-size: 0.9rem; }
+.trade-trace-step { display: flex; gap: 9px; align-items: flex-start; font-size: 0.82rem; }
+.trade-trace-step b { color: #eaffe0; font-weight: 700; }
+.trade-trace-step small { display: block; color: rgba(226,255,215,0.6); font-size: 0.72rem; }
+.trade-trace-step.is-fail b { color: #ff8a7a; }
+.trade-trace-step.is-pending { opacity: 0.75; }

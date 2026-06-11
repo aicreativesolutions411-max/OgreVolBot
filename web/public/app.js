@@ -11886,6 +11886,8 @@ async function executeConnectedBrowserTrade({ side, form, actionDetail, amountSo
   if (!state.walletFastApprovalsEnabled && !(await confirmConnectedBrowserTrade({ side, connected, form, actionDetail, amountSol, amountMode, percent }))) {
     throw new Error("Connected-wallet trade cancelled.");
   }
+  traceTradeStart(`${side === "buy" ? "Buy" : "Sell"} ${shortAddress(form.tokenMint || "")}`);
+  traceTrade("submitted", "pending");
   writeStatus(state.walletFastApprovalsEnabled
     ? `Building ${side} approval for ${connected.provider || "your wallet"}...`
     : `Preparing ${side} approval...`);
@@ -11904,8 +11906,18 @@ async function executeConnectedBrowserTrade({ side, form, actionDetail, amountSo
     dedupe: false,
     timeoutMs: API_LONG_ACTION_TIMEOUT_MS
   });
+  traceTrade("submitted", "ok");
+  traceTrade("approved", "pending", `Approve in ${connected.provider || "your wallet"}`);
   writeStatus(`Approve ${side} in ${connected.provider || "your wallet"}...`);
-  const signedTransaction = await signBrowserTradeTransaction(order.order?.transaction, provider);
+  let signedTransaction;
+  try {
+    signedTransaction = await signBrowserTradeTransaction(order.order?.transaction, provider);
+  } catch (error) {
+    traceTrade("approved", "fail", publicErrorMessage(error?.message || "Wallet approval was declined."));
+    throw error;
+  }
+  traceTrade("approved", "ok");
+  traceTrade("sent", "pending");
   writeStatus("Submitting signed trade...");
   let result;
   try {
@@ -11927,9 +11939,12 @@ async function executeConnectedBrowserTrade({ side, form, actionDetail, amountSo
       error: publicErrorMessage(error?.message || "Trade submit failed.")
     });
     queuePostTradeRefresh("", `browser-${side}-error`, { tradeAttemptId: attemptId });
+    traceTrade("sent", "fail", publicErrorMessage(error?.message || "Submit failed - it may still have landed; positions are being re-checked."));
     writeStatus(`${side === "buy" ? "Buy" : "Sell"} submit failed or timed out - re-checking your wallet in case the trade landed...`);
     throw error;
   }
+  traceTrade("sent", "ok");
+  traceTrade("confirmed", result.trade?.signature ? "ok" : "pending", result.trade?.signature ? `tx ${String(result.trade.signature).slice(0, 8)}...` : "");
   state.tradeResult = result.trade;
   writeStatus(result.trade?.message || `${side === "buy" ? "Buy" : "Sell"} submitted from connected wallet.`);
   setTradeAction(side === "buy" ? "trade-buy" : "trade-sell", form.tokenMint, actionDetail, {
@@ -12114,11 +12129,17 @@ async function executeWebBuy(amountSol, amountMode = "fixed") {
       details: "trade-buy"
     });
     state.tradeResult = data.trade;
+    traceTradeStart(`Buy ${shortAddress(form.tokenMint || "")}`);
+    traceTrade("submitted", "ok");
+    traceTrade("sent", "ok");
+    traceTrade("confirmed", data.trade?.signature ? "ok" : "pending", data.trade?.signature ? `tx ${String(data.trade.signature).slice(0, 8)}...` : "");
     if (data.trade?.autoExitPlan) {
+      traceTrade("armed", "ok");
       state.tradePlanResult = data.trade.autoExitPlan;
       setTradeStatus(data.trade.autoExitPlan.shortMessage || "Buy landed and auto-exit is armed.");
       scheduleAutoExitChecks();
     } else if (data.trade?.autoExitRequested) {
+      traceTrade("armed", "fail", "Auto-exit was NOT armed - exit manually or create a managed plan.");
       setTradeStatus("Buy landed, but auto-exit was not armed. Use Positions to exit manually or create a managed plan.");
     }
     setTradeAction("trade-buy", form.tokenMint, actionDetail, {
@@ -20924,6 +20945,76 @@ function tabLabelForAgent(tab) {
   return labels[tab] || tab;
 }
 
+// --- Execution receipts: every trade shows its exact progress (submitted -> wallet
+// approved -> tx sent -> confirmed -> exits armed) and, on failure, the user-safe
+// reason on the exact step that died. No more guessing whether a buy went through.
+const TRADE_TRACE_LABELS = {
+  submitted: "Order submitted",
+  approved: "Wallet approved",
+  sent: "Transaction sent",
+  confirmed: "Confirmed on-chain",
+  armed: "TP/SL armed"
+};
+
+function traceTradeStart(title) {
+  state.tradeTrace = { title: String(title || "Trade"), steps: [], startedAt: Date.now(), done: false };
+  renderTradeTrace();
+}
+
+function traceTrade(stepKey, status = "ok", detail = "") {
+  if (!state.tradeTrace || state.tradeTrace.done && status === "pending") return;
+  const steps = state.tradeTrace.steps;
+  const existing = steps.find((step) => step.key === stepKey);
+  const entry = existing || { key: stepKey, label: TRADE_TRACE_LABELS[stepKey] || stepKey };
+  entry.status = status;
+  entry.detail = String(detail || "").slice(0, 140);
+  if (!existing) steps.push(entry);
+  if (status === "fail") state.tradeTrace.done = true;
+  renderTradeTrace();
+  if (status === "fail") return;
+  const allOk = steps.length >= 3 && steps.every((step) => step.status === "ok");
+  if (allOk) {
+    state.tradeTrace.done = true;
+    window.setTimeout(() => {
+      if (state.tradeTrace?.done && !state.tradeTrace.steps.some((step) => step.status === "fail")) {
+        state.tradeTrace = null;
+        renderTradeTrace();
+      }
+    }, 8_000);
+  }
+}
+
+function renderTradeTrace() {
+  let root = document.querySelector("[data-trade-trace-mount]");
+  if (!root) {
+    root = document.createElement("div");
+    root.dataset.tradeTraceMount = "true";
+    document.body.appendChild(root);
+  }
+  const trace = state.tradeTrace;
+  if (!trace) {
+    root.innerHTML = "";
+    return;
+  }
+  const icon = (status) => status === "ok" ? "✅" : status === "fail" ? "❌" : "⏳";
+  root.innerHTML = `
+    <aside class="trade-trace" role="status" aria-live="polite">
+      <header>
+        <strong>${escapeHtml(trace.title)}</strong>
+        <button type="button" data-trade-trace-close aria-label="Close receipt">✕</button>
+      </header>
+      ${trace.steps.map((step) => `
+        <div class="trade-trace-step is-${escapeHtml(step.status)}">
+          <span>${icon(step.status)}</span>
+          <div>
+            <b>${escapeHtml(step.label)}</b>
+            ${step.detail ? `<small>${escapeHtml(step.detail)}</small>` : ""}
+          </div>
+        </div>`).join("")}
+    </aside>
+  `;
+}
+
 async function sendOgreAgentMessage(overrideMessage = "") {
   const input = document.querySelector("[data-ogre-agent-input]");
   const message = String(overrideMessage || input?.value || "").trim();
@@ -22087,6 +22178,7 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-push-disable]")) { await disablePushAlerts(); return; }
   if (target.matches("[data-call-post]")) { await postBoardCall(target.dataset.callPost); return; }
   if (target.matches("[data-telegram-link]")) { await startTelegramWinLink(); return; }
+  if (target.matches("[data-trade-trace-close]")) { state.tradeTrace = null; renderTradeTrace(); return; }
   if (target.matches("[data-create-wallets]")) await createWalletSet();
   if (target.matches("[data-distribute-fresh]")) { await distributeFreshWallets(); return; }
   if (target.matches("[data-return-funds]")) { await returnFundsToConnected(); return; }
