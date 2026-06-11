@@ -54,6 +54,8 @@
       <div data-calls><p class="empty">Loading...</p></div>
       <h2>🏆 Top alpha groups</h2>
       <div data-league><p class="empty">Loading...</p></div>
+      <h2>🥇 Top callers</h2>
+      <div data-callers><p class="empty">Loading...</p></div>
       <a class="cta" href="/">Open the SlimeWire terminal</a>
       <footer>Add the bot to your Telegram group: <a data-bot-link href="#">@OgreTradeBot</a> - /look, /alpha, /ape, /slimewire on. Not financial advice.</footer>
     </main>
@@ -106,6 +108,9 @@
           const league = (data.groupLeague || []).map((group, index) =>
             '<div class="row"><b>' + (index + 1) + ". " + esc(group.title) + '</b><span class="win">' + esc(group.wins) + " wins</span></div>").join("");
           document.querySelector("[data-league]").innerHTML = league || '<p class="empty">Groups earn spots here when their drops hit 2x. Add the bot, run /slimewire on, climb.</p>';
+          const callers = (data.topCallers || []).map((caller, index) =>
+            '<div class="row"><b>' + (index + 1) + ". " + esc(caller.handle) + '</b><span class="win">' + esc(caller.wins) + " wins</span><span class=\"meta\">" + (caller.hitRatePct != null ? esc(caller.hitRatePct) + "% hit rate | " : "") + esc(caller.calls) + " calls</span></div>").join("");
+          document.querySelector("[data-callers]").innerHTML = callers || '<p class="empty">Post calls on any token board - winners get ranked here forever.</p>';
         } catch {
           document.querySelector("[data-stats]").innerHTML = '<div class="stat"><strong>offline</strong><span>retry shortly</span></div>';
         }

@@ -2,6 +2,8 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { transform } from "esbuild";
+
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const publicDir = path.join(rootDir, "web", "public");
 const distDir = path.join(rootDir, "web", "dist");
@@ -114,6 +116,20 @@ try {
   );
 } catch (error) {
   console.warn(`Web preview image was not copied: ${error.message}`);
+}
+
+// Minify the shipped app.js: Brotli covers the wire, but phones still parse the
+// full source - minification roughly halves parse/eval time on mobile. The public/
+// source stays readable; only dist/ gets the compact build.
+try {
+  const appSource = await fs.readFile(path.join(distDir, "app.js"), "utf8");
+  const minified = await transform(appSource, { minify: true, target: "es2020", charset: "utf8" });
+  if (minified.code && minified.code.length > 10_000) {
+    await fs.writeFile(path.join(distDir, "app.js"), minified.code, "utf8");
+    console.log(`Minified app.js ${(appSource.length / 1024).toFixed(0)}KB -> ${(minified.code.length / 1024).toFixed(0)}KB`);
+  }
+} catch (error) {
+  console.warn(`app.js minify skipped: ${error.message}`);
 }
 
 console.log(`Built OgreTrade web portal at ${path.relative(rootDir, distDir)}`);

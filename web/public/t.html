@@ -94,6 +94,21 @@
             ["1h", Number.isFinite(Number(data.changeH1)) ? (Number(data.changeH1) >= 0 ? "+" : "") + Number(data.changeH1).toFixed(1) + "%" : "-"]
           ].map(([label, value]) => '<div class="stat"><strong>' + esc(value) + '</strong><span>' + esc(label) + "</span></div>").join("");
           if (data.shield?.summary) document.querySelector("[data-summary]").textContent = data.shield.summary;
+          if (data.shieldPending) {
+            document.querySelector("[data-summary]").textContent = "SlimeShield is computing a fresh read...";
+            setTimeout(async () => {
+              try {
+                const retry = await (await fetch(apiBase + "/api/web/token-read?mint=" + encodeURIComponent(mint), { cache: "no-store" })).json();
+                if (retry.shield) {
+                  const v2 = String(retry.shield.verdict || "UNRATED").toUpperCase();
+                  const c2 = { BUY: "#72ff23", CAUTION: "#ffd84d", RISK: "#ff9d4d", AVOID: "#ff6b5e" }[v2] || "#9fb59a";
+                  const badge = document.querySelector(".verdict");
+                  if (badge) { badge.textContent = v2 + (retry.shield.score != null ? " " + retry.shield.score + "/100" : ""); badge.style.color = c2; badge.style.borderColor = c2; }
+                  document.querySelector("[data-summary]").textContent = retry.shield.summary || "";
+                }
+              } catch {}
+            }, 7000);
+          }
           const terminalUrl = "/terminal/chart?token=" + encodeURIComponent(mint) + "&source=token-page";
           document.querySelector("[data-ctas]").innerHTML =
             '<a class="cta primary" href="' + terminalUrl + '&buy=1">⚡ Trade on SlimeWire</a>'

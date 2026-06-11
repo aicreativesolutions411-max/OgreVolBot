@@ -1996,11 +1996,15 @@ async function handleWebApiRequest(request, response, requestUrl) {
     // stats, and the call board without a login. "Saw it on X? Verify it on SlimeWire."
     if (request.method === "GET" && pathname === "/api/web/token-read") {
       const readMint = parsePublicKey(String(requestUrl.searchParams.get("mint") || "")).toBase58();
+      // Two-stage: market data + calls return immediately; a COLD shield compute is
+      // given 1.5s, otherwise it finishes in the background and the page re-asks.
+      const shieldPromise = webSlimeShield(readMint).catch(() => null);
       const [shield, pairs, board] = await Promise.all([
-        webSlimeShield(readMint).catch(() => null),
+        Promise.race([shieldPromise, new Promise((resolve) => setTimeout(() => resolve(undefined), 1_500))]),
         fetchDexScreenerTokenPairsFallback(readMint).catch(() => []),
         webBoardCallsForMint(readMint).catch(() => ({ calls: [], topCallers: [] }))
       ]);
+      const shieldPending = shield === undefined;
       const best = bestDexPairForToken(readMint, pairs);
       sendCachedWebJson(request, response, 200, {
         ok: true,
@@ -2014,6 +2018,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
         changeH1: Number(best?.priceChange?.h1) ?? null,
         pairAddress: best?.pairAddress || "",
         imageUrl: best?.info?.imageUrl || "",
+        shieldPending,
         shield: shield ? {
           verdict: shield.verdict,
           score: shield.score,
@@ -2038,10 +2043,11 @@ async function handleWebApiRequest(request, response, requestUrl) {
     // PUBLIC proof wall data: the engine's track record - wins AND losses - with no
     // login. Every Telegram post links here; receipts are the marketing.
     if (request.method === "GET" && pathname === "/api/web/proof") {
-      const [calls, receipts, groups] = await Promise.all([
+      const [calls, receipts, groups, board] = await Promise.all([
         readAlphaCalls().catch(() => ({ calls: [] })),
         readShieldReceipts().catch(() => ({ receipts: [] })),
-        readTelegramGroups().catch(() => ({ groups: {} }))
+        readTelegramGroups().catch(() => ({ groups: {} })),
+        webBoardCallsForMint("").catch(() => ({ topCallers: [] }))
       ]);
       const resolvedCalls = calls.calls.filter((call) => call.status === "resolved");
       const wins = resolvedCalls.filter((call) => call.outcome === "won");
@@ -2093,7 +2099,8 @@ async function handleWebApiRequest(request, response, requestUrl) {
             warningMinutes: item.confirmedAfterMinutes || null, flaggedAt: item.flaggedAt
           }))
         },
-        groupLeague
+        groupLeague,
+        topCallers: board.topCallers || []
       }, "public, max-age=60, stale-while-revalidate=300");
       return;
     }
@@ -19095,6 +19102,8 @@ function defaultJsonForPath(filePath) {
       return { calls: [] };
     case "telegram-links.json":
       return { links: {} };
+    case "watch-alerts.json":
+      return { snapshots: {} };
     case "shield-receipts.json":
       return { receipts: [] };
     case "push-subscriptions.json":
@@ -19990,6 +19999,66 @@ async function checkAlphaCallOutcomes() {
   });
 }
 
+// --- Watchlist move alerts: "your watched coin moved 42%" straight to the phone.
+// Only users with push subscriptions are checked; per-user-per-mint 6h dedupe.
+function watchAlertsPath() {
+  return path.join(CONFIG.dataDir, "watch-alerts.json");
+}
+
+async function readWatchAlerts() {
+  const store = await readJson(watchAlertsPath());
+  if (!store.snapshots || typeof store.snapshots !== "object") store.snapshots = {};
+  return store;
+}
+
+async function checkWatchlistMoveAlerts() {
+  if (!webPushEnabled) return;
+  await withFileLock(watchAlertsPath(), async () => {
+    const subs = await readPushSubscriptions();
+    const userIds = Object.keys(subs.subs || {}).slice(0, 50);
+    if (!userIds.length) return;
+    const store = await readWatchAlerts();
+    const now = Date.now();
+    for (const userId of userIds) {
+      let rows = [];
+      try {
+        const profile = await webProfileForUser(userId);
+        rows = (Array.isArray(profile.watchedTokens) ? profile.watchedTokens : []).slice(0, 20);
+      } catch {
+        continue;
+      }
+      const mints = rows.map((row) => row.tokenMint).filter(Boolean);
+      if (!mints.length) continue;
+      const pairs = await fetchDexScreenerTokenPairsBatch(mints).catch(() => []);
+      const userSnap = store.snapshots[userId] || {};
+      for (const row of rows) {
+        const best = bestDexPairForToken(row.tokenMint, pairs.filter((pair) => pairMatchesToken(pair, row.tokenMint)));
+        const priceNow = Number(best?.priceUsd) || 0;
+        if (!priceNow) continue;
+        const snap = userSnap[row.tokenMint] || {};
+        const lastPrice = Number(snap.priceUsd) || 0;
+        const lastAlertAt = Number(snap.alertAt) || 0;
+        if (lastPrice > 0 && now - lastAlertAt > 6 * 60 * 60 * 1000) {
+          const movePct = ((priceNow - lastPrice) / lastPrice) * 100;
+          if (Math.abs(movePct) >= 40) {
+            void sendWebPushToUser(userId, {
+              title: `${row.symbol || shortMint(row.tokenMint)} moved ${movePct > 0 ? "+" : ""}${movePct.toFixed(0)}%`,
+              body: movePct > 0 ? "Your watched coin is running. Tap to open the chart." : "Your watched coin is dumping. Tap to check it.",
+              tag: `watch-${row.tokenMint}`,
+              url: `/terminal/chart?token=${row.tokenMint}&source=watch-alert`
+            });
+            userSnap[row.tokenMint] = { priceUsd: priceNow, alertAt: now };
+            continue;
+          }
+        }
+        if (!lastPrice) userSnap[row.tokenMint] = { priceUsd: priceNow, alertAt: snap.alertAt || 0 };
+      }
+      store.snapshots[userId] = userSnap;
+    }
+    await writeJsonFile(watchAlertsPath(), store);
+  });
+}
+
 // --- Daily Swamp Report: one digest post per UTC day to every armed chat ----------
 let lastSwampReportDay = "";
 async function runDailySwampReport() {
@@ -20124,6 +20193,9 @@ if (CONFIG.serviceRole === "web") {
     runAlphaDropTick().catch((error) => console.warn(`[alpha-drop] tick failed: ${error.message}`));
     checkBoardCallOutcomes().catch((error) => console.warn(`[call-board] check failed: ${error.message}`));
     runDailySwampReport().catch((error) => console.warn(`[swamp-report] failed: ${error.message}`));
+    if (Date.now() % (10 * 60 * 1000) < 5 * 60 * 1000) {
+      checkWatchlistMoveAlerts().catch((error) => console.warn(`[watch-alerts] failed: ${error.message}`));
+    }
   }, 5 * 60 * 1000);
   shieldReceiptTimer.unref?.();
 }
