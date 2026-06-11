@@ -13450,9 +13450,13 @@ function openQuickBuy(tokenRef = {}, options = {}) {
   }
   const preset = options.preset || activeTradePreset();
   const amount = preset && !options.forceModal ? activeQuickBuyAmount(preset) : "";
-  const hasPresetWallet = preset?.walletIndex || (preset?.walletIndexes || [])[0];
-  if (preset && amount && hasPresetWallet && !options.forceModal) {
-    void quickPresetTrade(mint, options.preset || null);
+  // Preset selected = Buy is ONE CLICK. A preset saved without a wallet used to
+  // silently drop into the modal - default to the first managed wallet instead.
+  const presetWallet = preset?.walletIndex
+    || (preset?.walletIndexes || [])[0]
+    || (state.wallets[0]?.index ? String(state.wallets[0].index) : "");
+  if (preset && amount && presetWallet && !options.forceModal) {
+    void quickPresetTrade(mint, { ...preset, walletIndex: presetWallet, walletIndexes: [presetWallet] });
     return;
   }
   const connected = connectedBrowserWallet();
@@ -13462,7 +13466,11 @@ function openQuickBuy(tokenRef = {}, options = {}) {
     amountSol: amount || state.quickBuyAmountOverride || "",
     walletIndex: connected?.publicKey ? "connected" : (state.wallets[0]?.index ? String(state.wallets[0].index) : ""),
     slippageBps: "400",
-    status: amount ? `Preset ${amount} SOL loaded. Confirm when ready.` : "Enter a SOL amount to quick buy.",
+    status: amount
+      ? `Preset ${amount} SOL loaded. Confirm when ready.`
+      : preset
+        ? "Your selected preset has no SOL amount - set one here (or edit the preset in the Trade tab) and Buy becomes one-click."
+        : "Enter a SOL amount to quick buy - or save a Trade preset and Buy becomes one-click.",
     source: options.source || "quick-buy",
     error: "",
     tradeAttemptId: ""
