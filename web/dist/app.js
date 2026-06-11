@@ -3105,6 +3105,9 @@ async function refreshWalletPositions(options = {}) {
       const positions = await api(`/api/web/positions${query}`, {
         timeoutMs: options.timeoutMs || (options.fast === false ? POSITIONS_REFRESH_TIMEOUT_MS : POSITIONS_FAST_REFRESH_TIMEOUT_MS)
       });
+      // A newer refresh started while this one was in flight: drop this result so a
+      // slow stale response can never overwrite fresher position/balance data.
+      if (positionsRefreshSequence !== requestId) return false;
       state.connectedWalletBalance = positions.connectedWallet || state.connectedWalletBalance || null;
       state.positions = mergePositionRefreshRows(positions.positions || state.positions || [], state.positions || [], options);
       state.lastWalletRefreshAt = new Date().toISOString();
@@ -6080,8 +6083,69 @@ function tekHubHtml() {
             <small>${escapeHtml(desc)}</small>
           </button>`).join("")}
       </div>
+      ${shieldReceiptsPanelHtml()}
     </section>
   `;
+}
+
+// --- SlimeShield receipts panel: public proof the shield works -----------------
+function shieldReceiptsPanelHtml() {
+  ensureShieldReceiptsData();
+  const data = state.shieldReceipts;
+  if (!data) {
+    return `
+      <section class="trade-card shield-receipts-card">
+        <div class="trade-head"><div><h3>SlimeShield Receipts</h3><p>Loading flagged-token outcomes...</p></div></div>
+      </section>
+    `;
+  }
+  const rugged = (data.receipts || []).filter((item) => item.outcome === "rugged").slice(0, 8);
+  const stats = data.stats || {};
+  return `
+    <section class="trade-card shield-receipts-card">
+      <div class="trade-head">
+        <div>
+          <h3>SlimeShield Receipts</h3>
+          <p>Every AVOID/RISK flag is recorded, then we check what happened. ${Number.isFinite(stats.hitRatePct) && stats.hitRatePct !== null ? `<strong>${stats.hitRatePct}%</strong> of resolved flags went on to rug or die.` : "Outcomes resolve after the market moves."}</p>
+        </div>
+        <span>${stats.flagged || 0} flagged | ${stats.rugged || 0} rugged | ${stats.watching || 0} watching</span>
+      </div>
+      ${rugged.length ? `
+        <div class="table-list compact-table">
+          ${rugged.map((item) => `
+            <article class="row-card">
+              <div class="row-main">
+                <strong>$${escapeHtml(item.symbol || shortAddress(item.mint))} <span class="negative">rugged</span></strong>
+                <span>Flagged ${escapeHtml(item.verdict)} (score ${escapeHtml(String(item.score))}) ${item.confirmedAfterMinutes ? `- confirmed dead within ${escapeHtml(formatReceiptDuration(item.confirmedAfterMinutes))}` : ""}</span>
+                ${item.summary ? `<small>${escapeHtml(item.summary)}</small>` : ""}
+              </div>
+              <div class="card-actions compact">
+                <button data-copy="${escapeHtml(item.mint)}">Copy CA</button>
+              </div>
+            </article>
+          `).join("")}
+        </div>` : `<p class="trade-status">No confirmed rugs in the log yet - receipts build up as the shield flags live tokens.</p>`}
+    </section>
+  `;
+}
+
+function formatReceiptDuration(minutes) {
+  const value = Number(minutes) || 0;
+  if (value < 90) return `${value} min`;
+  if (value < 48 * 60) return `${Math.round(value / 60)}h`;
+  return `${Math.round(value / 1440)}d`;
+}
+
+let shieldReceiptsFetchedAt = 0;
+function ensureShieldReceiptsData() {
+  if (Date.now() - shieldReceiptsFetchedAt < 5 * 60 * 1000) return;
+  shieldReceiptsFetchedAt = Date.now();
+  void api("/api/web/shield/receipts").then((data) => {
+    state.shieldReceipts = data;
+    if (state.activeTab === "tek") render();
+  }).catch(() => {
+    // Receipts are informational; never block the hub.
+  });
 }
 
 function dashboardHtml() {
@@ -6120,6 +6184,7 @@ function profileHtml() {
     { key: "login", label: "Login", hint: "Security", html: loginSecuritySection() },
     { key: "pfp", label: "PFP", hint: "Avatar", html: profilePfpSection() },
     { key: "x", label: "X", hint: "Connect X", html: xConnectSection() },
+    { key: "alerts", label: "Alerts", hint: "Push to phone", html: pushAlertsSection() },
     { key: "badges", label: "Badges", hint: "Earned", html: badgeShowcaseSection() },
     { key: "referral", label: "Referral", hint: "Invite & earn", html: referralSection() },
     { key: "board", label: "Board", hint: "Top traders", html: traderBoardSection() }
@@ -6130,6 +6195,104 @@ function profileHtml() {
       ${toolPanelsHtml({ toolKey: "profile", activeKey: activeToolSection("profile", "account"), sections })}
     </section>
   `;
+}
+
+// --- Web push alerts (TP/SL fires, KOL copies) -------------------------------
+function pushAlertsSection() {
+  const supported = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+  const permission = supported ? Notification.permission : "unsupported";
+  const enabled = state.pushAlertsEnabled === true;
+  const statusLine = !supported
+    ? "This browser does not support push alerts. On iPhone, add SlimeWire to your Home Screen first (Share - Add to Home Screen)."
+    : permission === "denied"
+      ? "Notifications are blocked for this site. Enable them in your browser settings, then try again."
+      : enabled
+        ? "Push alerts are ON for this device. TP/SL fires and KOL copies ping you even with the site closed."
+        : "Turn on push alerts to get pinged the moment a stop-loss or take-profit fires - no need to keep the tab open.";
+  return `
+    <article class="profile-card">
+      <div>
+        <h3>Push Alerts</h3>
+        <p>${escapeHtml(statusLine)}</p>
+      </div>
+      <div class="card-actions compact">
+        ${supported && permission !== "denied" ? `
+          <button class="primary" data-push-enable ${enabled ? "hidden" : ""}>Enable Push Alerts</button>
+          <button data-push-disable ${enabled ? "" : "hidden"}>Disable On This Device</button>` : ""}
+      </div>
+      <small data-push-status></small>
+    </article>
+  `;
+}
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = window.atob(base64);
+  return Uint8Array.from([...raw].map((char) => char.charCodeAt(0)));
+}
+
+async function enablePushAlerts() {
+  const status = $("[data-push-status]");
+  try {
+    writeText(status, "Setting up push alerts...");
+    const keyInfo = await api("/api/web/push/key");
+    if (!keyInfo.enabled || !keyInfo.publicKey) {
+      writeText(status, "Push alerts are not configured on the server yet.");
+      return;
+    }
+    const registration = await navigator.serviceWorker.register("/sw.js");
+    await navigator.serviceWorker.ready;
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") {
+      writeText(status, "Notification permission was not granted.");
+      return;
+    }
+    const subscription = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(keyInfo.publicKey)
+    });
+    const result = await api("/api/web/push/subscribe", {
+      method: "POST",
+      body: JSON.stringify({ subscription: subscription.toJSON() })
+    });
+    state.pushAlertsEnabled = true;
+    writeText(status, `Push alerts enabled (${result.devices || 1} device${(result.devices || 1) === 1 ? "" : "s"}).`);
+    render();
+  } catch (error) {
+    writeText(status, publicErrorMessage(error?.message || "Could not enable push alerts."));
+  }
+}
+
+async function disablePushAlerts() {
+  const status = $("[data-push-status]");
+  try {
+    const registration = await navigator.serviceWorker.getRegistration("/sw.js");
+    const subscription = await registration?.pushManager?.getSubscription();
+    if (subscription) {
+      await api("/api/web/push/unsubscribe", {
+        method: "POST",
+        body: JSON.stringify({ endpoint: subscription.endpoint })
+      }).catch(() => {});
+      await subscription.unsubscribe().catch(() => {});
+    }
+    state.pushAlertsEnabled = false;
+    writeText(status, "Push alerts disabled on this device.");
+    render();
+  } catch (error) {
+    writeText(status, publicErrorMessage(error?.message || "Could not disable push alerts."));
+  }
+}
+
+async function syncPushAlertsState() {
+  try {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
+    const registration = await navigator.serviceWorker.getRegistration("/sw.js");
+    const subscription = await registration?.pushManager?.getSubscription();
+    state.pushAlertsEnabled = Boolean(subscription);
+  } catch {
+    // Push state detection is cosmetic.
+  }
 }
 
 function hasProfileWalletReady() {
@@ -10647,6 +10810,42 @@ function ensureAutoExitWatchForActivePlans() {
     state.automationDelegationStatus = state.automationDelegationStatus
       || "Server TP/SL worker is monitoring active plans.";
   }
+  warnIfPlansLostAutomationPermission();
+}
+
+// Loud, non-buried warning when armed TP/SL plans are (about to be) orphaned by an
+// expired automation permission. Without this the plans die silently overnight and the
+// user finds out from an unprotected position.
+let planPermissionWarningKey = "";
+function warnIfPlansLostAutomationPermission() {
+  const plans = Array.isArray(state.tradePlans) ? state.tradePlans : [];
+  const watching = plans.filter((plan) => ["watching", "active", "armed", "pending"].includes(String(plan.status || "").toLowerCase()));
+  if (!watching.length) {
+    planPermissionWarningKey = "";
+    return;
+  }
+  const now = Date.now();
+  const expired = watching.filter((plan) => plan.automationPermissionExpiresAt && !plan.automationPermissionActive);
+  const expiringSoon = watching.filter((plan) => {
+    if (!plan.automationPermissionActive) return false;
+    const expiresAt = Date.parse(plan.automationPermissionExpiresAt || "");
+    return Number.isFinite(expiresAt) && expiresAt > now && expiresAt - now < 60 * 60 * 1000;
+  });
+  let message = "";
+  if (expired.length) {
+    message = `TP/SL permission EXPIRED with ${expired.length} armed plan(s) unprotected. Tap "Re-enable TP/SL" in the top bar or your stops will not fire.`;
+  } else if (expiringSoon.length) {
+    const soonest = Math.min(...expiringSoon.map((plan) => Date.parse(plan.automationPermissionExpiresAt)));
+    const minutes = Math.max(1, Math.round((soonest - now) / 60_000));
+    message = `TP/SL permission expires in ~${minutes} min with ${expiringSoon.length} armed plan(s). Re-enable TP/SL to keep your stops live.`;
+  }
+  const key = message ? `${expired.length}:${expiringSoon.length}` : "";
+  if (message && key !== planPermissionWarningKey) {
+    planPermissionWarningKey = key;
+    setError(message);
+  } else if (!message) {
+    planPermissionWarningKey = "";
+  }
 }
 
 function clearAutoExitWatchTimers() {
@@ -11628,15 +11827,29 @@ async function executeConnectedBrowserTrade({ side, form, actionDetail, amountSo
   writeStatus(`Approve ${side} in ${connected.provider || "your wallet"}...`);
   const signedTransaction = await signBrowserTradeTransaction(order.order?.transaction, provider);
   writeStatus("Submitting signed trade...");
-  const result = await api("/api/web/browser-trade/execute", {
-    method: "POST",
-    body: JSON.stringify({
-      browserTradeAttemptId: order.order?.browserTradeAttemptId,
-      signedTransaction
-    }),
-    dedupe: false,
-    timeoutMs: API_LONG_ACTION_TIMEOUT_MS
-  });
+  let result;
+  try {
+    result = await api("/api/web/browser-trade/execute", {
+      method: "POST",
+      body: JSON.stringify({
+        browserTradeAttemptId: order.order?.browserTradeAttemptId,
+        signedTransaction
+      }),
+      dedupe: false,
+      timeoutMs: API_LONG_ACTION_TIMEOUT_MS
+    });
+  } catch (error) {
+    // The wallet already signed, so a timeout here does NOT mean the trade failed -
+    // it may have landed on-chain. Mark the action failed (instead of leaving a stale
+    // "submitted" lock) and force a position re-check so the UI reflects reality.
+    setTradeAction(side === "buy" ? "trade-buy" : "trade-sell", form.tokenMint, actionDetail, {
+      state: "error",
+      error: publicErrorMessage(error?.message || "Trade submit failed.")
+    });
+    queuePostTradeRefresh("", `browser-${side}-error`, { tradeAttemptId: attemptId });
+    writeStatus(`${side === "buy" ? "Buy" : "Sell"} submit failed or timed out - re-checking your wallet in case the trade landed...`);
+    throw error;
+  }
   state.tradeResult = result.trade;
   writeStatus(result.trade?.message || `${side === "buy" ? "Buy" : "Sell"} submitted from connected wallet.`);
   setTradeAction(side === "buy" ? "trade-buy" : "trade-sell", form.tokenMint, actionDetail, {
@@ -21429,6 +21642,8 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-share-pnl-card]")) {
     await sharePnlCard(target.dataset.sharePnlCard, target.dataset.shareText || "");
   }
+  if (target.matches("[data-push-enable]")) { await enablePushAlerts(); return; }
+  if (target.matches("[data-push-disable]")) { await disablePushAlerts(); return; }
   if (target.matches("[data-create-wallets]")) await createWalletSet();
   if (target.matches("[data-distribute-fresh]")) { await distributeFreshWallets(); return; }
   if (target.matches("[data-return-funds]")) { await returnFundsToConnected(); return; }
@@ -22153,6 +22368,7 @@ async function initializeApp() {
   initializeMarketTickerInteractions();
   if (state.route === "intro") initializeIntroVideoGate();
   else pauseIntroVideoGate({ reset: true });
+  void syncPushAlertsState();
   startAppWatchdog();
   prewarmSlimewireImageAssets();
   applyChartRouteFromLocation();

@@ -49,6 +49,8 @@ import {
   tpSlLogEntry
 } from "./lib/tradeExecutionService.js";
 import { workerTickTaskFlags } from "./lib/workerTickTasks.js";
+import { createTelegramChannelBridge, escapeTelegramHtml } from "./lib/telegramChannelBridge.js";
+import webpush from "web-push";
 import {
   createPumpLaunchError,
   formatPumpLaunchUserError,
@@ -124,6 +126,16 @@ const OGRE_AI_SAFETY_SCAN_BUDGET_MS = 1_700;
 const OGRE_AI_SOURCE_SOFT_TIMEOUT_MS = 1_500;
 
 const CONFIG = loadConfig();
+// Public channel alerts (ship dark: TG_CHANNEL_ALERTS_ENABLED=false by default).
+// Callers must never pass user ids or wallet addresses - channel posts are anonymous.
+const tgChannel = createTelegramChannelBridge({
+  enabled: CONFIG.telegramChannelAlertsEnabled,
+  botToken: CONFIG.telegramChannelBotToken,
+  chatId: CONFIG.telegramChannelChatId,
+  maxPerHour: CONFIG.telegramChannelMaxPerHour,
+  minIntervalSeconds: CONFIG.telegramChannelMinIntervalSeconds,
+  log: (message) => console.warn(`[tg-channel] ${message}`)
+});
 const connection = new Connection(CONFIG.rpcUrl, "confirmed");
 const rpcLimiter = createRpcLimiter();
 const priorityRpcLimiter = createRpcLimiter({
@@ -961,6 +973,14 @@ function loadConfig() {
     solanaTrackerKolPositionConcurrency,
     solanaTrackerKolUsePeriodEndpoint,
     kolCopyScanIntervalMs,
+    telegramChannelAlertsEnabled: parseBoolean(process.env.TG_CHANNEL_ALERTS_ENABLED || "false"),
+    telegramChannelBotToken: process.env.TG_CHANNEL_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN || "",
+    telegramChannelChatId: process.env.TG_CHANNEL_CHAT_ID || "",
+    telegramChannelMaxPerHour: process.env.TG_CHANNEL_MAX_PER_HOUR || "6",
+    telegramChannelMinIntervalSeconds: process.env.TG_CHANNEL_MIN_INTERVAL_SECONDS || "120",
+    pushVapidPublicKey: process.env.PUSH_VAPID_PUBLIC_KEY || "",
+    pushVapidPrivateKey: process.env.PUSH_VAPID_PRIVATE_KEY || "",
+    pushVapidSubject: process.env.PUSH_VAPID_SUBJECT || "mailto:a.i.creativesolutions411@gmail.com",
     madeOnSolApiKey: process.env.MADE_ON_SOL_API_KEY || "",
     madeOnSolApiBase: (process.env.MADE_ON_SOL_API_BASE || "https://madeonsol.com/api/v1").replace(/\/$/, ""),
     madeOnSolKolLimit,
@@ -2279,6 +2299,48 @@ async function handleWebApiRequest(request, response, requestUrl) {
         ok: true,
         plans: await webTradePlanRows(auth.userId)
       });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/shield/receipts") {
+      const store = await readShieldReceipts();
+      const receipts = store.receipts.slice(-120).reverse();
+      const resolved = receipts.filter((item) => item.status === "resolved");
+      const rugged = resolved.filter((item) => item.outcome === "rugged");
+      sendWebJson(request, response, 200, {
+        ok: true,
+        receipts,
+        stats: {
+          flagged: store.receipts.length,
+          watching: store.receipts.filter((item) => item.status === "watching").length,
+          rugged: rugged.length,
+          survived: resolved.length - rugged.length,
+          hitRatePct: resolved.length ? Math.round((rugged.length / resolved.length) * 100) : null
+        }
+      });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/push/key") {
+      sendWebJson(request, response, 200, {
+        ok: true,
+        enabled: webPushEnabled,
+        publicKey: webPushEnabled ? CONFIG.pushVapidPublicKey : ""
+      });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/push/subscribe") {
+      const body = await readJsonRequestBody(request);
+      const count = await savePushSubscription(auth.userId, body.subscription);
+      sendWebJson(request, response, 200, { ok: true, devices: count });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/push/unsubscribe") {
+      const body = await readJsonRequestBody(request);
+      await removePushSubscription(auth.userId, String(body.endpoint || ""));
+      sendWebJson(request, response, 200, { ok: true });
       return;
     }
 
@@ -9536,6 +9598,48 @@ function logTradePlanExitEvent(event, plan, planWallet, sell = {}, triggerReason
     signature: sell?.signature || null,
     ...extra
   });
+  announceTradePlanExitToChannel(event, plan, planWallet, triggerReason);
+  pushTradePlanExitToUser(event, plan, planWallet, triggerReason);
+}
+
+// Private per-user push when their plan exits or fails - this is the alert that lets
+// people walk away from the screen while plans are armed.
+function pushTradePlanExitToUser(event, plan, planWallet, triggerReason = "") {
+  if (!webPushEnabled || !plan?.userId) return;
+  if (!["tp_sl_trade_closed", "tp_sl_trade_failed"].includes(event)) return;
+  const symbol = plan?.copySignal?.symbol || shortMint(plan?.tokenMint || "");
+  const movePct = Number(planWallet?.lastTriggerMovePct ?? planWallet?.lastMovePct);
+  const moveLabel = Number.isFinite(movePct) ? ` (${movePct >= 0 ? "+" : ""}${movePct.toFixed(1)}%)` : "";
+  const closed = event === "tp_sl_trade_closed";
+  void sendWebPushToUser(plan.userId, {
+    title: closed ? `Exit fired: ${symbol}${moveLabel}` : `Plan failed: ${symbol}`,
+    body: closed
+      ? `${triggerReason || "Managed exit"} executed. Tap to review the position.`
+      : `${planWallet?.error || planWallet?.lastError || "Exit attempt failed."} Tap to check the plan.`,
+    tag: `plan-${plan?.id || plan?.tokenMint || "exit"}`,
+    url: "/tx-audit"
+  });
+}
+
+// Anonymous public channel post when a TP/SL exit actually fires. No user ids, no
+// wallet addresses - just the engine doing its job. Rate/dedupe limits live in the bridge.
+function announceTradePlanExitToChannel(event, plan, planWallet, triggerReason = "") {
+  if (!tgChannel.enabled || event !== "tp_sl_trade_closed") return;
+  const movePct = Number(planWallet?.lastTriggerMovePct ?? planWallet?.lastMovePct);
+  const moveLabel = Number.isFinite(movePct) ? `${movePct >= 0 ? "+" : ""}${movePct.toFixed(1)}%` : "";
+  const isStop = /^stop-loss\b/i.test(String(triggerReason || ""));
+  const isTp = /^take-profit\b/i.test(String(triggerReason || ""));
+  if (!isStop && !isTp) return; // timer exits are not interesting channel content
+  const symbol = escapeTelegramHtml(plan?.copySignal?.symbol || shortMint(plan?.tokenMint || ""));
+  const mint = String(plan?.tokenMint || "");
+  const headline = isTp
+    ? `🎯 <b>Take-profit fired</b> on $${symbol} ${moveLabel ? `at <b>${moveLabel}</b>` : ""}`
+    : `🛡 <b>Stop-loss saved a bag</b> on $${symbol} ${moveLabel ? `(${moveLabel})` : ""}`;
+  tgChannel.announce(isTp ? "tp" : "sl", mint, [
+    headline,
+    `SlimeWire server exits run 24/7 - even with the browser closed.`,
+    mint ? `<a href="https://dexscreener.com/solana/${mint}">chart</a> | <a href="https://www.slimewire.org">slimewire.org</a>` : `<a href="https://www.slimewire.org">slimewire.org</a>`
+  ].join("\n"));
 }
 
 function planHasPriceExit(plan, planWallet) {
@@ -11967,6 +12071,17 @@ async function processCopyWalletWatchPlan(plan, walletStore) {
   if (tradeEvents.length > 0) {
     await recordTradeEvents(tradeEvents);
     plan.status = "watching";
+    void sendWebPushToUser(plan.userId, {
+      title: `KOL copy fired: ${signal.symbol || shortMint(tokenMint)}`,
+      body: `Copied the tracked wallet's buy with ${plan.amountSol} SOL. TP/SL armed.`,
+      tag: `kol-copy-${tokenMint}`,
+      url: "/tx-audit"
+    });
+    tgChannel.announce("kol-copy", tokenMint, [
+      `🥷 <b>KOL copy fired</b>: SlimeWire mirrored a tracked wallet into $${escapeTelegramHtml(signal.symbol || shortMint(tokenMint))} within one scan tick.`,
+      `TP/SL armed automatically on the copied bag.`,
+      `<a href="${dexScreenerUrl(tokenMint)}">chart</a> | <a href="https://www.slimewire.org">slimewire.org</a>`
+    ].join("\n"));
     return {
       changed: true,
       message: [
@@ -18758,6 +18873,166 @@ async function readTradePlans() {
   const store = await readJson(tradePlansPath());
   if (!Array.isArray(store.plans)) store.plans = [];
   return store;
+}
+
+// --- SlimeShield receipts: every AVOID/RISK flag gets recorded, then we go back and
+// check what actually happened to the token. "Flagged 43 min before the rug" is the
+// kind of proof no other terminal publishes. Global store, capped, best-effort.
+const SHIELD_RECEIPT_LIMIT = 400;
+const SHIELD_RECEIPT_MIN_AGE_MS = 20 * 60 * 1000;       // let the market move before judging
+const SHIELD_RECEIPT_SURVIVE_AGE_MS = 48 * 60 * 60 * 1000; // alive after 48h = survived
+const SHIELD_RECEIPT_RUG_LIQ_KEEP_PCT = 15;             // <15% of flag-time liquidity = rugged
+
+function shieldReceiptsPath() {
+  return path.join(CONFIG.dataDir, "shield-receipts.json");
+}
+
+async function readShieldReceipts() {
+  const store = await readJson(shieldReceiptsPath());
+  if (!Array.isArray(store.receipts)) store.receipts = [];
+  return store;
+}
+
+function recordShieldReceipt(result, row = {}) {
+  const verdict = String(result?.verdict || "").toUpperCase();
+  if (!["AVOID", "RISK"].includes(verdict)) return;
+  const mint = String(result?.mint || row.tokenMint || "").trim();
+  if (!mint) return;
+  void (async () => {
+    try {
+      const store = await readShieldReceipts();
+      const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+      const existing = store.receipts.find((item) => item.mint === mint
+        && (item.status === "watching" || Date.parse(item.flaggedAt || "") > dayAgo));
+      if (existing) return;
+      store.receipts.push({
+        mint,
+        symbol: String(row.symbol || row.baseSymbol || "").slice(0, 24),
+        name: String(row.name || row.baseName || "").slice(0, 48),
+        verdict,
+        score: Number(result.score) || 0,
+        summary: String(result.summary || "").slice(0, 160),
+        flaggedAt: new Date().toISOString(),
+        liquidityUsd: Number(row.liquidityUsd ?? row.liquidity?.usd) || null,
+        priceUsd: Number(row.priceUsd) || null,
+        status: "watching",
+        outcome: null,
+        resolvedAt: null
+      });
+      store.receipts = store.receipts.slice(-SHIELD_RECEIPT_LIMIT);
+      await writeJsonFile(shieldReceiptsPath(), store);
+    } catch (error) {
+      console.warn(`[shield-receipts] record failed: ${error.message}`);
+    }
+  })();
+}
+
+async function checkShieldReceiptOutcomes() {
+  const store = await readShieldReceipts();
+  const now = Date.now();
+  const due = store.receipts
+    .filter((item) => item.status === "watching" && now - Date.parse(item.flaggedAt || "") > SHIELD_RECEIPT_MIN_AGE_MS)
+    .slice(0, 25);
+  if (!due.length) return { checked: 0 };
+  const pairs = await fetchDexScreenerTokenPairsBatch(due.map((item) => item.mint)).catch(() => []);
+  let changed = false;
+  for (const receipt of due) {
+    const tokenPairs = pairs.filter((pair) => pairMatchesToken(pair, receipt.mint));
+    const best = bestDexPairForToken(receipt.mint, tokenPairs);
+    const liqNow = Number(best?.liquidity?.usd) || 0;
+    const priceNow = Number(best?.priceUsd) || 0;
+    const flaggedLiq = Number(receipt.liquidityUsd) || 0;
+    const flaggedPrice = Number(receipt.priceUsd) || 0;
+    const ageMs = now - Date.parse(receipt.flaggedAt || "");
+    const liquidityCollapsed = flaggedLiq > 1000 && liqNow < flaggedLiq * (SHIELD_RECEIPT_RUG_LIQ_KEEP_PCT / 100);
+    const priceCollapsed = flaggedPrice > 0 && priceNow > 0 && priceNow < flaggedPrice * 0.1;
+    if (!best || liquidityCollapsed || priceCollapsed) {
+      receipt.status = "resolved";
+      receipt.outcome = "rugged";
+      receipt.resolvedAt = new Date(now).toISOString();
+      receipt.confirmedAfterMinutes = Math.round(ageMs / 60_000);
+      changed = true;
+    } else if (ageMs > SHIELD_RECEIPT_SURVIVE_AGE_MS) {
+      receipt.status = "resolved";
+      receipt.outcome = "survived";
+      receipt.resolvedAt = new Date(now).toISOString();
+      changed = true;
+    }
+  }
+  if (changed) await writeJsonFile(shieldReceiptsPath(), store);
+  return { checked: due.length };
+}
+
+if (CONFIG.serviceRole === "web") {
+  const shieldReceiptTimer = setInterval(() => {
+    checkShieldReceiptOutcomes().catch((error) => console.warn(`[shield-receipts] check failed: ${error.message}`));
+  }, 10 * 60 * 1000);
+  shieldReceiptTimer.unref?.();
+}
+
+// --- Web push alerts (per-user, private; enabled only when VAPID keys are set) ---
+const webPushEnabled = Boolean(CONFIG.pushVapidPublicKey && CONFIG.pushVapidPrivateKey);
+if (webPushEnabled) {
+  webpush.setVapidDetails(CONFIG.pushVapidSubject, CONFIG.pushVapidPublicKey, CONFIG.pushVapidPrivateKey);
+}
+
+function pushSubscriptionsPath() {
+  return path.join(CONFIG.dataDir, "push-subscriptions.json");
+}
+
+async function readPushSubscriptions() {
+  const store = await readJson(pushSubscriptionsPath());
+  if (!store.subs || typeof store.subs !== "object") store.subs = {};
+  return store;
+}
+
+async function savePushSubscription(userId, subscription) {
+  if (!subscription?.endpoint) throw new Error("Invalid push subscription.");
+  const store = await readPushSubscriptions();
+  const list = Array.isArray(store.subs[userId]) ? store.subs[userId] : [];
+  const without = list.filter((item) => item?.endpoint !== subscription.endpoint);
+  store.subs[userId] = [...without, subscription].slice(-5); // a handful of devices per user
+  await writeJsonFile(pushSubscriptionsPath(), store);
+  return store.subs[userId].length;
+}
+
+async function removePushSubscription(userId, endpoint) {
+  const store = await readPushSubscriptions();
+  const list = Array.isArray(store.subs[userId]) ? store.subs[userId] : [];
+  store.subs[userId] = list.filter((item) => item?.endpoint !== endpoint);
+  if (!store.subs[userId].length) delete store.subs[userId];
+  await writeJsonFile(pushSubscriptionsPath(), store);
+}
+
+// Fire-and-forget per-user push. Dead subscriptions (410/404) are pruned in place.
+async function sendWebPushToUser(userId, payload = {}) {
+  if (!webPushEnabled || !userId) return;
+  try {
+    const store = await readPushSubscriptions();
+    const list = Array.isArray(store.subs[userId]) ? store.subs[userId] : [];
+    if (!list.length) return;
+    const body = JSON.stringify({
+      title: String(payload.title || "SlimeWire"),
+      body: String(payload.body || ""),
+      tag: String(payload.tag || "slimewire"),
+      url: String(payload.url || "/terminal")
+    });
+    const dead = [];
+    await Promise.all(list.map(async (subscription) => {
+      try {
+        await webpush.sendNotification(subscription, body, { TTL: 3600 });
+      } catch (error) {
+        if ([404, 410].includes(Number(error?.statusCode))) dead.push(subscription.endpoint);
+      }
+    }));
+    if (dead.length) {
+      store.subs[userId] = list.filter((item) => !dead.includes(item?.endpoint));
+      if (!store.subs[userId].length) delete store.subs[userId];
+      await writeJsonFile(pushSubscriptionsPath(), store);
+    }
+  } catch (error) {
+    console.warn(`[web-push] send failed: ${error.message}`);
+  }
 }
 
 async function writeTradePlans(store) {
@@ -28394,7 +28669,7 @@ async function webLaunchPumpPortalLocal(userId, body, basePayload) {
     log: logPumpLaunchEvent
   });
 
-  return service.launch({
+  const launchResult = await service.launch({
     launchAttemptId: basePayload.clientRequestId,
     userId,
     wallet: creatorWallet,
@@ -28409,6 +28684,13 @@ async function webLaunchPumpPortalLocal(userId, body, basePayload) {
       pool: "pump"
     }
   });
+  if (String(launchResult?.status || "").toUpperCase() === "COMPLETE" && launchResult.tokenMint) {
+    tgChannel.announce("launch", launchResult.tokenMint, [
+      `🐸 <b>Fresh swamp launch</b>: $${escapeTelegramHtml(basePayload.symbol || basePayload.name || "???")} just went live on pump.fun via SlimeWire Pump Launch.`,
+      `<a href="https://pump.fun/coin/${launchResult.tokenMint}">pump.fun</a> | <a href="${dexScreenerUrl(launchResult.tokenMint)}">chart</a> | <a href="https://www.slimewire.org">launch yours</a>`
+    ].join("\n"));
+  }
+  return launchResult;
 }
 
 function pumpLaunchProviderHint(status) {
@@ -31891,6 +32173,7 @@ async function webSlimeShield(tokenMint = "", options = {}) {
     slimeShieldCache.set(mint, { cachedAt: Date.now(), value: result });
     await cacheSetJson(externalKey, displayCacheEnvelope(result), SLIMESHIELD_CACHE_TTL_MS).catch(() => false);
     void persistPostgresSlimeShieldResult(result).catch(() => {});
+    recordShieldReceipt(result, row);
   }
   return result;
 }
