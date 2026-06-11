@@ -2658,6 +2658,14 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    // One-tap exit arming on an existing bag - no buy, no form.
+    if (request.method === "POST" && pathname === "/api/web/positions/arm-exits") {
+      const body = await readJsonRequestBody(request);
+      const result = await webArmExitsForExistingPositions(auth.userId, body);
+      sendWebJson(request, response, 200, { ok: true, ...result });
+      return;
+    }
+
     // Watch-this-dev: toggle tracking a deployer wallet for this user.
     if (request.method === "POST" && pathname === "/api/web/dev-watch") {
       const body = await readJsonRequestBody(request);
@@ -28518,6 +28526,151 @@ async function webCreateBundlePlan(userId, body = {}) {
   });
 }
 
+// Arm TP/SL/timer on tokens ALREADY HELD - no buying. Presets set = protection
+// on, zero extra steps: powers one-tap Arm Exits on positions and auto-arming
+// the in-block buys when an atomic launch bundle lands.
+async function webArmExitsForExistingPositions(userId, body = {}) {
+  const tokenMint = parsePublicKey(String(body.tokenMint || "")).toBase58();
+  const sellDelaySeconds = parseOptionalSellDelaySeconds(firstString(body.sellDelay, body.sellDelaySeconds, "off"));
+  const sellPercent = parsePercent(String(body.sellPercent || "100"));
+  const takeProfitPct = parseTakeProfitPercent(String(body.takeProfitPct || "40"));
+  const stopLossPct = parseOptionalTriggerPercent(String(body.stopLossPct || "8"));
+  const slippageBps = parseWebSlippage(body.slippageBps || 1_000);
+  ensureTimedPlanHasExit({ sellDelaySeconds, takeProfitPct, stopLossPct, walletTakeProfitTargets: null, walletStopLossTargets: null });
+  const automationPermission = await requireWebAutomationPermission(userId, "Arm exits");
+
+  const store = await readWalletStore();
+  const wallets = (body.walletIndexes || body.walletGroup)
+    ? webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup)
+    : walletsForOwner(store, userId);
+
+  // Never double-cover: wallets already watched by a live plan for this mint
+  // keep their existing plan.
+  const plansStore = await readTradePlans();
+  const covered = new Set();
+  for (const existing of plansStore.plans || []) {
+    if (String(existing.userId) !== String(userId) || existing.tokenMint !== tokenMint) continue;
+    if (!["watching", "active", "pending"].includes(String(existing.status || "").toLowerCase())) continue;
+    for (const planWallet of existing.wallets || []) {
+      if (["watching", "armed", "pending"].includes(String(planWallet.status || planWallet.exitStatus || "").toLowerCase())) {
+        covered.add(planWallet.publicKey);
+      }
+    }
+  }
+
+  const now = Date.now();
+  const sellAfterAt = planSellAfterAtFromNow({ sellDelaySeconds }, now);
+  const planWallets = [];
+  let alreadyCovered = 0;
+  await runWithConcurrency(wallets, CONFIG.balanceConcurrency, async (wallet) => {
+    if (covered.has(wallet.publicKey)) {
+      alreadyCovered += 1;
+      return;
+    }
+    try {
+      const keypair = decryptWallet(wallet);
+      const raw = await safeTokenRawBalance(keypair.publicKey, new PublicKey(tokenMint));
+      if (!raw || raw <= 0n) return;
+      // Basis = what the bag is worth RIGHT NOW, so TP/SL move math measures
+      // from the moment of arming (entry-less plans broke the monitor before).
+      let basisLamports = "0";
+      try {
+        const value = await estimatePositionValueFromMarket({
+          tokenMint,
+          accounts: [{ walletPublicKey: wallet.publicKey, rawAmount: raw, decimals: 6 }]
+        });
+        basisLamports = value.toString();
+      } catch {
+        // Price not readable yet - the monitor's own estimates take over.
+      }
+      planWallets.push({
+        label: wallet.label,
+        publicKey: wallet.publicKey,
+        walletIndex: Number(wallet.webIndex || 0) || planWallets.length + 1,
+        basisLamports,
+        grossLamports: basisLamports,
+        feeLamports: "0",
+        tokenOutAmount: raw.toString(),
+        buySignature: null,
+        currentLoop: 1,
+        completedLoops: 0,
+        takeProfitPct: null,
+        stopLossPct: null,
+        completedTakeProfitLevels: [],
+        triggerSellPercent: sellPercent,
+        triggerStatus: takeProfitPct || stopLossPct ? "armed" : "timer-only",
+        exitStatus: "watching",
+        armedAt: new Date(now).toISOString(),
+        sellAfterAt,
+        status: "watching",
+        lastCheckedAt: null,
+        lastMovePct: null,
+        lastError: null
+      });
+    } catch {
+      // unreadable wallet - skip
+    }
+  });
+
+  if (!planWallets.length) {
+    const reason = alreadyCovered
+      ? "Exits are already armed on every wallet holding this token."
+      : "No wallet holds this token yet - balances may still be indexing; try again in a few seconds.";
+    const error = new Error(reason);
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const plan = {
+    id: crypto.randomUUID(),
+    status: "watching",
+    userId,
+    chatId: null,
+    tokenMint,
+    source: String(body.source || "web_arm_exits").slice(0, 40),
+    executionMode: "managed_server",
+    automationPermission,
+    walletSelector: planWallets.map((wallet) => wallet.walletIndex).join(","),
+    amountSol: 0,
+    sellDelayMinutes: sellDelaySeconds / 60,
+    sellDelaySeconds,
+    sellAfterAt,
+    sellPercent,
+    triggerSellPercent: sellPercent,
+    loopCount: 1,
+    loopDelaySeconds: 0,
+    takeProfitPct,
+    stopLossPct,
+    takeProfitMode: "single",
+    stopLossMode: "single",
+    takeProfitLadder: [],
+    autoBundle: false,
+    slippageBps,
+    createdAt: new Date().toISOString(),
+    wallets: planWallets,
+    results: [`Armed exits on ${planWallets.length} wallet(s) holding ${shortMint(tokenMint)} - no buys made.`]
+  };
+  const plans = await readTradePlans();
+  plans.plans.push(plan);
+  await writeTradePlans(plans);
+  await audit("web_arm_exits_existing", {
+    userId, planId: plan.id, tokenMint,
+    wallets: planWallets.map((wallet) => wallet.publicKey),
+    takeProfitPct, stopLossPct, sellDelaySeconds, sellPercent
+  });
+  scheduleTradePlanProcessing("Arm exits", [500, 1500, 4000, 8000, 15000]);
+  await safeArmWebExitGuardsForPlan(plan, planWallets);
+  return {
+    planId: plan.id,
+    walletCount: planWallets.length,
+    alreadyCovered,
+    takeProfitPct,
+    stopLossPct,
+    sellAfterAt,
+    message: `Exits armed on ${planWallets.length} wallet(s)${alreadyCovered ? ` (${alreadyCovered} already covered)` : ""}: TP +${takeProfitPct || "off"}% / SL -${stopLossPct || "off"}%${sellAfterAt ? " / timer set" : ""}.`
+  };
+}
+
 async function webCreateSniperEntry(userId, body = {}) {
   const store = await readWalletStore();
   const wallets = webSelectedWallets(store, userId, body.walletIndexes, body.walletGroup);
@@ -31305,6 +31458,24 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
   logPumpLaunchEvent("pump_launch_jito_bundle_landed", {
     launchAttemptId: basePayload.clientRequestId, userId, mint, bundleId, txCount: plan.length
   });
+  // The in-block buys exist but carry no exit plans - auto-arm them with the
+  // launch sheet's TP/SL/timer. Presets set = protection on, zero user steps.
+  let atomicExitsArmed = false;
+  try {
+    await webArmExitsForExistingPositions(userId, {
+      tokenMint: mint,
+      takeProfitPct: body.takeProfitPct,
+      stopLossPct: body.stopLossPct,
+      sellDelay: body.sellDelay,
+      sellPercent: body.sellPercent || "100",
+      slippageBps: Math.max(Number(body.slippageBps) || 300, 1_000),
+      source: "pump_launch_atomic_arm"
+    });
+    atomicExitsArmed = true;
+    logPumpLaunchEvent("pump_launch_atomic_exits_armed", { launchAttemptId: basePayload.clientRequestId, userId, mint });
+  } catch (error) {
+    logPumpLaunchEvent("pump_launch_atomic_exits_arm_failed", { launchAttemptId: basePayload.clientRequestId, userId, mint, errorMessage: String(error.message || "").slice(0, 200) });
+  }
   // Ledger entry: this is what powers the /t "LAUNCHED ON SLIMEWIRE" badge and
   // the milestone auto-posts - bundled launches were invisible to both.
   await upsertPumpLaunchAttempt({
@@ -31323,6 +31494,7 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
   return {
     status: PUMP_LAUNCH_STATUS.COMPLETE, tokenMint: mint, mint, bundleId, bundled: true,
     bundledWalletCount: bundleWallets.length, devBuyIncluded: devBuySol > 0,
+    exitsArmed: atomicExitsArmed,
     provider: "jito-bundle", metadataUri: metadata.uri
   };
 }

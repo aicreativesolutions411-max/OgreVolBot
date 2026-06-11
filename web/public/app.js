@@ -10235,7 +10235,7 @@ async function submitLaunchCoin() {
       const buyNote = [devNote, bundledCount > 0 ? `${bundledCount} bundle buy${bundledCount === 1 ? "" : "s"}` : ""].filter(Boolean).join(" + ");
       state.launchCoinStatus = launch.bundleFallback
         ? `Launched ${shortAddress(tokenMint)} via the standard path (bundle missed the block lottery)${buyNote ? ` - server fired ${buyNote} right behind the create` : ""}.${signature} Opening chart...`
-        : `Launch bundled atomically: ${shortAddress(tokenMint)}${buyNote ? ` (${buyNote} landed in-block)` : ""}.${signature} ⚠️ In-block buys do not auto-arm exits yet - tap Arm Exits on your bag. Opening chart...`;
+        : `Launch bundled atomically: ${shortAddress(tokenMint)}${buyNote ? ` (${buyNote} landed in-block)` : ""}${launch.exitsArmed ? " - exits auto-armed" : " - ⚠️ tap Arm Exits on your bag"}.${signature} Opening chart...`;
       writeText(status, state.launchCoinStatus);
       // INSTANT FEEDBACK: show the new bag and prime the chart from what we
       // already know, so the user sees their position the moment the chart opens
@@ -10247,9 +10247,7 @@ async function submitLaunchCoin() {
       void refreshWalletPositions({ force: true, fast: true, silent: true, reason: "pump-launch-instant" }).catch(() => {});
       // Exits arm a few seconds AFTER the buys confirm, so the normal refresh
       // cadence misses them and the card would falsely read "no auto-exit".
-      // Only the fallback path arms exits - an atomic landing must NOT claim
-      // "arming" (it shows the Arm Exits prompt instead).
-      if (launch.bundleFallback) markLaunchExitsArming(tokenMint);
+      if (launch.bundleFallback || launch.exitsArmed) markLaunchExitsArming(tokenMint);
       [3_000, 8_000, 16_000].forEach((delay) => window.setTimeout(() => {
         void refreshTradePlansOnly().then(() => render());
       }, delay));
@@ -14862,6 +14860,36 @@ async function toggleDevWatch(wallet) {
   renderDevInfoDrawer();
 }
 
+// One-tap exit arming: TP/SL from the active trade preset (or sane defaults)
+// on every wallet holding the bag. No form, no buy - just protection.
+async function armExitsOneTap(tokenMint, button = null) {
+  const mint = String(tokenMint || "").trim();
+  if (!mint) return;
+  const preset = activeTradePreset();
+  if (button) { button.disabled = true; button.textContent = "Arming..."; }
+  try {
+    const result = await api("/api/web/positions/arm-exits", {
+      method: "POST",
+      body: JSON.stringify({
+        tokenMint: mint,
+        takeProfitPct: preset?.takeProfitPct || "40",
+        stopLossPct: preset?.stopLossPct || "8",
+        sellDelay: preset?.sellDelay || "off",
+        sellPercent: preset?.sellPercent || "100",
+        slippageBps: preset?.slippageBps || "1000"
+      }),
+      timeoutMs: 20_000
+    });
+    markLaunchExitsArming(mint);
+    state.walletRemoveStatus = result.message || "Exits armed.";
+    if (button) button.textContent = "✅ Armed";
+    void refreshTradePlansOnly().then(() => render());
+  } catch (error) {
+    setError(error?.message || "Could not arm exits.");
+    if (button) { button.disabled = false; button.textContent = "Arm Exits"; }
+  }
+}
+
 async function scanMyBags() {
   state.bagScan = { status: "loading" };
   render();
@@ -18559,7 +18587,7 @@ function positionRowHtml(position) {
       </div>
       <div class="card-actions compact">
         <button class="primary" data-smart-chart-token="${escapeHtml(position.tokenMint)}">Chart</button>
-        <button data-token-trade="${escapeHtml(position.tokenMint)}" data-token-trade-source="position-arm" title="Open the trade ticket to arm or adjust TP/SL on this bag">Arm Exits</button>
+        <button data-arm-exits="${escapeHtml(position.tokenMint)}" title="One tap: arms TP/SL with your active trade preset (or +40%/-8%) on every wallet holding this bag">Arm Exits</button>
         <button data-position-sell="${escapeHtml(position.tokenMint)}" data-position-sell-percent="25">Sell 25%</button>
         <button data-position-sell="${escapeHtml(position.tokenMint)}" data-position-sell-percent="50">Sell 50%</button>
         <button class="primary" data-position-sell="${escapeHtml(position.tokenMint)}" data-position-sell-percent="100">Exit 100%</button>
@@ -22744,6 +22772,7 @@ document.addEventListener("click", async (event) => {
     await sharePnlCard(target.dataset.sharePnlCard, target.dataset.shareText || "");
   }
   if (target.matches("[data-scan-bags]")) { await scanMyBags(); return; }
+  if (target.matches("[data-arm-exits]")) { await armExitsOneTap(target.dataset.armExits, target); return; }
   if (target.matches("[data-dev-watch]")) { await toggleDevWatch(target.dataset.devWatch); return; }
   if (target.matches("[data-hype-create]")) { await createHypePage(); return; }
   if (target.matches("[data-push-enable]")) { await enablePushAlerts(); return; }
