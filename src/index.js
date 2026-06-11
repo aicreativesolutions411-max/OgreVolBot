@@ -1282,6 +1282,11 @@ function startHealthServer() {
       return;
     }
 
+    if (request.method === "GET" && /^[/](call|u|g)([/]|$)/.test(requestUrl.pathname)) {
+      await serveProofSharePage(requestUrl, request, response);
+      return;
+    }
+
     if ((request.method === "GET" || request.method === "HEAD") && (requestUrl.pathname.startsWith("/assets/")
       || /\.(?:css|js|png|jpe?g|svg|webp|ico)$/i.test(requestUrl.pathname))) {
       await serveWebPortal(requestUrl, response, request.method, request.headers["accept-encoding"]);
@@ -19946,6 +19951,7 @@ async function runAlphaDropTick() {
         && call.status === "watching");
       if (recentCall) continue; // already tracking this mint
       calls.calls.push({
+        id: "alpha-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
         mint: pick.row.tokenMint,
         symbol: String(pick.row.symbol || shortMint(pick.row.tokenMint)).slice(0, 24),
         chatIds: recipients,
@@ -19988,7 +19994,7 @@ async function checkAlphaCallOutcomes() {
       const firstGroupTitle = await firstAlphaGroupTitle(call.chatIds);
       const winText = [
         `✅ <b>Called it</b>: $${escapeTelegramHtml(call.symbol)} is <b>${call.peakX}x</b> since the SlimeWire alpha drop ${alphaAgeLabel(ageMs)}.${firstGroupTitle ? ` First dropped in <b>${escapeTelegramHtml(firstGroupTitle)}</b>.` : ""}`,
-        `<a href="https://www.slimewire.org/proof">Receipts, not promises - full track record</a>.`,
+        `<a href="${call.id ? `https://go.slimewire.org/call/${call.id}` : "https://www.slimewire.org/proof"}">Receipts, not promises - this receipt has its own page</a>.`,
         `<a href="${links.site}">chart</a> | <a href="${links.siteBuy}">buy on site</a>`
       ].join("\n");
       for (const chatId of call.chatIds || []) groupBridgeFor(chatId).announce("alpha-win", call.mint, winText);
@@ -20067,6 +20073,129 @@ async function checkWatchlistMoveAlerts() {
     }
     await writeJsonFile(watchAlertsPath(), store);
   });
+}
+
+// --- Public share pages on go.slimewire.org: /call/:id, /u/:handle, /g ------------
+// Server-rendered with per-page OG tags (og:image = the live signal card), so every
+// link unfurls on X/TG with the actual coin and verdict instead of a generic mark.
+const SHARE_PAGE_ORIGIN = "https://go.slimewire.org";
+
+function sharePageShell({ title, description, ogImage, body }) {
+  const esc = escapeTelegramHtml;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(title)}</title>
+<meta name="description" content="${esc(description)}">
+<meta property="og:title" content="${esc(title)}">
+<meta property="og:description" content="${esc(description)}">
+<meta property="og:image" content="${esc(ogImage || "https://www.slimewire.org/assets/slimewire-panel-wordmark-clean.png")}">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="https://www.slimewire.org/assets/slimewire/svg/slimewire-mark.svg">
+<style>
+body{margin:0;min-height:100vh;color:#eaffe0;font-family:Inter,system-ui,sans-serif;background:radial-gradient(circle at 15% 0%,rgba(114,255,35,.13),transparent 36rem),#050705}
+main{max-width:760px;margin:0 auto;padding:26px 16px 56px}
+h1{margin:0 0 4px;font-size:1.45rem}h1 b{color:#72ff23}
+.sub{color:rgba(226,255,215,.72);font-size:.9rem;margin:0 0 18px}
+.big{font-size:2.6rem;font-weight:900;color:#72ff23;margin:10px 0}
+.big.bad{color:#ff7a6b}
+.row{display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline;border-bottom:1px solid rgba(114,255,35,.1);padding:9px 2px;font-size:.9rem}
+.meta{color:rgba(226,255,215,.72);font-size:.78rem}
+.win{color:#72ff23;font-weight:800}.lose{color:#ff7a6b;font-weight:800}
+.card{border:1px solid rgba(114,255,35,.2);border-radius:14px;padding:16px;background:rgba(8,20,10,.5);margin:10px 0}
+.cta{display:inline-block;margin:14px 10px 0 0;padding:12px 22px;border-radius:999px;font-weight:800;text-decoration:none;color:#071006;background:linear-gradient(135deg,rgba(114,255,35,.95),rgba(187,255,99,.95))}
+.cta.ghost{color:#eaffe0;background:none;border:1px solid rgba(114,255,35,.25)}
+footer{margin-top:30px;color:rgba(226,255,215,.6);font-size:.76rem}
+footer a{color:#72ff23}
+</style></head><body><main>${body}
+<footer>Tracked publicly by SlimeWire - wins AND losses. <a href="https://www.slimewire.org/proof">Full proof wall</a> | <a href="https://www.slimewire.org">open the terminal</a>. Not financial advice.</footer>
+</main></body></html>`;
+}
+
+function sendShareHtml(response, html) {
+  response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "public, max-age=30, stale-while-revalidate=120" });
+  response.end(html);
+}
+
+async function serveProofSharePage(requestUrl, request, response) {
+  const esc = escapeTelegramHtml;
+  const parts = requestUrl.pathname.split("/").filter(Boolean);
+  const kind = parts[0];
+  const param = decodeURIComponent(parts[1] || "");
+
+  if (kind === "call" && param) {
+    const [alpha, board] = await Promise.all([readAlphaCalls().catch(() => ({ calls: [] })), readCallBoard().catch(() => ({ calls: [] }))]);
+    const call = [...alpha.calls, ...board.calls].find((item) => item.id === param)
+      || [...alpha.calls].reverse().find((item) => item.mint === param);
+    if (!call) {
+      sendShareHtml(response, sharePageShell({ title: "Call not found - SlimeWire", description: "This receipt does not exist (yet).", body: "<h1>Receipt not found</h1><p class='sub'>It may still be tracking - check the proof wall.</p><a class='cta' href='https://www.slimewire.org/proof'>Proof wall</a>" }));
+      return;
+    }
+    const won = call.outcome === "won";
+    const status = call.status === "watching" ? "tracking live" : call.outcome || "open";
+    const title = won
+      ? `$${call.symbol} hit ${call.peakX}x - called on SlimeWire`
+      : `$${call.symbol} call - ${status} on SlimeWire`;
+    const description = `${call.handle ? `Called by ${call.handle}` : "SlimeWire engine call"}${call.entryMcUsd ? ` at ${formatUsdCompact(call.entryMcUsd)} MC` : ""}${call.shieldVerdict || call.verdict ? ` - shield said ${call.shieldVerdict || call.verdict}` : ""}. Receipts, not promises.`;
+    sendShareHtml(response, sharePageShell({
+      title,
+      description,
+      ogImage: `${SHARE_PAGE_ORIGIN}/api/web/signal-card?tokenMint=${encodeURIComponent(call.mint)}`,
+      body: `<h1><b>$${esc(call.symbol)}</b> ${won ? "receipt" : "call"}</h1>
+<p class="sub">${esc(description)}</p>
+<div class="big${call.outcome === "lost" ? " bad" : ""}">${won ? esc(String(call.peakX)) + "x" : esc(status)}</div>
+<div class="card">
+${call.entryMcUsd ? `<div class="row"><span class="meta">Entry MC</span><b>${esc(formatUsdCompact(call.entryMcUsd))}</b></div>` : ""}
+${call.shieldVerdict || call.verdict ? `<div class="row"><span class="meta">SlimeShield at call</span><b>${esc(call.shieldVerdict || call.verdict)}${call.shieldScore != null ? " " + esc(String(call.shieldScore)) + "/100" : ""}</b></div>` : ""}
+<div class="row"><span class="meta">Called</span><b>${esc(formatDate(call.calledAt || call.createdAt))}</b></div>
+${call.resolvedAt ? `<div class="row"><span class="meta">Resolved</span><b>${esc(formatDate(call.resolvedAt))}</b></div>` : ""}
+<div class="row"><span class="meta">CA</span><b style="font-family:monospace;font-size:.78rem;word-break:break-all">${esc(call.mint)}</b></div>
+</div>
+<a class="cta" href="https://www.slimewire.org/t?ca=${encodeURIComponent(call.mint)}">Verify this token</a>
+<a class="cta ghost" href="https://www.slimewire.org/terminal/chart?token=${encodeURIComponent(call.mint)}&buy=1">⚡ Trade it</a>`
+    }));
+    return;
+  }
+
+  if (kind === "u" && param) {
+    const board = await readCallBoard().catch(() => ({ calls: [] }));
+    const theirCalls = board.calls.filter((call) => call.handle === param).slice(-15).reverse();
+    const rep = callerReputation(board.calls, param);
+    const title = `${param} on SlimeWire - ${rep.wins} win(s)${rep.hitRatePct != null ? `, ${rep.hitRatePct}% hit rate` : ""}`;
+    sendShareHtml(response, sharePageShell({
+      title,
+      description: `Every call ${param} makes is tracked to its outcome. Receipts, not promises.`,
+      ogImage: theirCalls[0] ? `${SHARE_PAGE_ORIGIN}/api/web/signal-card?tokenMint=${encodeURIComponent(theirCalls[0].mint)}` : "",
+      body: `<h1>Caller: <b>${esc(param)}</b></h1>
+<p class="sub">${rep.calls} call(s) tracked - every outcome public.</p>
+<div class="big">${rep.wins}W${rep.hitRatePct != null ? ` · ${rep.hitRatePct}%` : ""}</div>
+${theirCalls.length ? theirCalls.map((call) => `<div class="row"><b>$${esc(call.symbol)}</b>${call.status === "resolved" ? (call.outcome === "won" ? `<span class="win">hit ${esc(String(call.peakX))}x</span>` : `<span class="lose">${esc(call.outcome)}</span>`) : `<span class="meta">tracking</span>`}<span class="meta">${esc(call.side)}${call.entryMcUsd ? " | entry " + esc(formatUsdCompact(call.entryMcUsd)) : ""}</span></div>`).join("") : `<p class="sub">No calls yet.</p>`}
+<a class="cta" href="https://www.slimewire.org">Make your own calls</a>`
+    }));
+    return;
+  }
+
+  if (kind === "g") {
+    const [groups, alpha] = await Promise.all([readTelegramGroups().catch(() => ({ groups: {} })), readAlphaCalls().catch(() => ({ calls: [] }))]);
+    const tally = new Map();
+    for (const call of alpha.calls.filter((item) => item.outcome === "won")) {
+      for (const chatId of call.chatIds || []) tally.set(chatId, (tally.get(chatId) || 0) + 1);
+    }
+    const league = [...tally.entries()]
+      .map(([chatId, wins]) => ({ title: groups.groups?.[chatId]?.title || "Private group", wins }))
+      .sort((a, b) => b.wins - a.wins).slice(0, 20);
+    sendShareHtml(response, sharePageShell({
+      title: "SlimeWire Group Alpha League",
+      description: "Telegram groups ranked by the 2x calls their drops produced. Add the bot, climb the board.",
+      body: `<h1>Group <b>Alpha League</b></h1>
+<p class="sub">Groups ranked by tracked 2x wins from their drops. Add @OgreTradeBot + /slimewire on to compete.</p>
+${league.length ? league.map((group, index) => `<div class="row"><b>${index + 1}. ${esc(group.title)}</b><span class="win">${esc(String(group.wins))} wins</span></div>`).join("") : `<p class="sub">First wins crown the first groups - the board is wide open.</p>`}
+<a class="cta" href="https://t.me/${encodeURIComponent(CONFIG.telegramBotUsername || "OgreTradeBot")}">Add the bot</a>
+<a class="cta ghost" href="https://www.slimewire.org/proof">Full proof wall</a>`
+    }));
+    return;
+  }
+
+  sendShareHtml(response, sharePageShell({ title: "SlimeWire", description: "Receipts, not promises.", body: "<h1><b>SlimeWire</b></h1><a class='cta' href='https://www.slimewire.org/proof'>Proof wall</a>" }));
 }
 
 // --- Degen Seasons v1: weekly bests computed from the call ledger. The Monday post
