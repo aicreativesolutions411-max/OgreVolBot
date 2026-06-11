@@ -20641,13 +20641,24 @@ async function fulfillLaunchHype(userId, mint, symbol) {
     await writeJsonFile(launchHypePath(), store);
   });
   if (!page) return;
+  const ticker = escapeTelegramHtml(symbol || page.symbol || "???");
   const text = [
-    `🚀 <b>$${escapeTelegramHtml(symbol || page.symbol || "???")} is LIVE</b> - the launch you were waiting on just happened via <a href="https://www.slimewire.org">SlimeWire</a>.`,
+    `🚀 <b>$${ticker} is LIVE</b> - the launch you were waiting on just happened via <a href="https://www.slimewire.org">SlimeWire</a>.`,
     `<a href="https://www.slimewire.org/t?ca=${mint}">Chart + shield read + one-tap trade</a> | <a href="https://pump.fun/coin/${mint}">pump.fun</a>`
   ].join("\n");
   for (const tgUserId of page.subscriberTgIds || []) {
     sayHtml(tgUserId, text).catch(() => {});
   }
+  // Shill the moment to every group/channel the bot is armed in: a launch that
+  // had a countdown page and waiting subscribers is a story, not just a CA.
+  const waiting = (page.subscriberTgIds || []).length;
+  const groupText = [
+    `🔥 <b>$${ticker} JUST WENT LIVE</b> - this one had its own countdown page${waiting >= 5 ? ` with <b>${waiting} degens</b> waiting on the notify list` : ""}.`,
+    `Scheduled, hyped, and launched through <a href="https://www.slimewire.org">SlimeWire</a> - dev buy landed at block one.`,
+    `<a href="https://www.slimewire.org/t?ca=${mint}">launch room: chart + shield read + one-tap trade</a> | <a href="https://pump.fun/coin/${mint}">pump.fun</a> | <a href="https://www.slimewire.org">launch yours with a hype page</a>`
+  ].join("\n");
+  broadcastToTelegramGroups("hype-launch", mint, groupText);
+  tgChannel.announce("hype-launch", mint, groupText);
 }
 
 // --- Public share pages on go.slimewire.org: /call/:id, /u/:handle, /g ------------
