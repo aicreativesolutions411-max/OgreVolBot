@@ -20944,6 +20944,23 @@ document.addEventListener("focusin", (event) => {
 // anywhere over terminal content, not just over the scrollbar. Only acts when no
 // inner scroller can take the wheel (respects the sidebar, trade panel, chart iframe,
 // modals, and overscroll-behavior). Mouse-wheel feel is identical (scrollTop += delta).
+// Style facts (overflow/overscroll) per element are cached so continuous wheeling
+// never pays repeated getComputedStyle walks - geometry (scrollTop/height) stays live.
+// Replaced rows are new elements, so the WeakMap self-invalidates on re-render.
+const wheelScrollFactsCache = new WeakMap();
+function wheelScrollFacts(node) {
+  let facts = wheelScrollFactsCache.get(node);
+  if (!facts) {
+    const style = window.getComputedStyle(node);
+    facts = {
+      scrollable: ["auto", "scroll", "overlay"].includes(style.overflowY),
+      contained: /contain|none/.test(style.overscrollBehaviorY)
+    };
+    wheelScrollFactsCache.set(node, facts);
+  }
+  return facts;
+}
+
 document.addEventListener("wheel", (event) => {
   if (event.defaultPrevented || event.ctrlKey || event.deltaY === 0) return;
   if (state.route !== "terminal" || isCompactViewport()) return;
@@ -20951,13 +20968,12 @@ document.addEventListener("wheel", (event) => {
   if (node && node.tagName === "IFRAME") return; // embedded charts scroll themselves
   const dir = event.deltaY > 0 ? 1 : -1;
   while (node && node !== document.body && node !== document.documentElement) {
-    const style = window.getComputedStyle(node);
-    const oy = style.overflowY;
-    if ((oy === "auto" || oy === "scroll" || oy === "overlay") && node.scrollHeight > node.clientHeight + 1) {
+    const facts = wheelScrollFacts(node);
+    if (facts.scrollable && node.scrollHeight > node.clientHeight + 1) {
       const atTop = node.scrollTop <= 0;
       const atBottom = node.scrollTop + node.clientHeight >= node.scrollHeight - 1;
       if (!((dir < 0 && atTop) || (dir > 0 && atBottom))) return; // inner scroller will move
-      if (/contain|none/.test(style.overscrollBehaviorY)) return; // respect contained scrollers
+      if (facts.contained) return; // respect contained scrollers
     }
     node = node.parentElement;
   }

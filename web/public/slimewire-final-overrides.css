@@ -19286,3 +19286,22 @@ html body main.shell[data-app][data-route="intro"] .swamp-intro-stage[data-intro
     font-size: 9.5px !important;
   }
 }
+
+/* SCROLL_SMOOTHNESS_20260611_V1: sticky surfaces must never backdrop-blur the page
+   beneath them - that re-blurs on every scrolled frame and is the main scroll-lag
+   source. Near-opaque backgrounds read the same and cost nothing per frame. */
+.tabs {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  background: rgba(4, 9, 5, 0.94) !important;
+}
+.command-title {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  background: rgba(4, 9, 5, 0.92) !important;
+}
+[data-app][data-route="terminal"] .topbar {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  background: rgba(5, 8, 6, 0.95) !important;
+}

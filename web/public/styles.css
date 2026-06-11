@@ -9516,3 +9516,26 @@ body {
     min-height: 44px;
   }
 }
+
+/* SCROLL_SMOOTHNESS_20260611_V1 (desktop): the multi-layer swamp background used
+   background-attachment: fixed on body, which repaints the whole viewport on every
+   scrolled frame. Moving it to a fixed, composited ::after layer paints it once. */
+@media (min-width: 921px) {
+  body {
+    background: #020302;
+  }
+  body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background:
+      linear-gradient(rgba(3, 5, 3, 0.9), rgba(3, 5, 3, 0.94)),
+      var(--slime-grid),
+      radial-gradient(circle at 12% 8%, rgba(114, 255, 35, 0.18), transparent 34rem),
+      radial-gradient(circle at 92% 4%, rgba(189, 255, 99, 0.12), transparent 30rem),
+      linear-gradient(135deg, #020302 0%, #07100a 52%, #020302 100%);
+    background-size: cover, 760px 760px, auto, auto, auto;
+  }
+}
