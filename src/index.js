@@ -30764,20 +30764,41 @@ async function requestPumpPortalBundleTxs(actions, timeoutMs) {
   });
 }
 
+// All Jito regional block engines: the global endpoint rate-limits under load
+// (seen live), so the same bundle goes to every region at once - any single
+// acceptance is enough, and regional engines often answer when global won't.
+const JITO_BLOCK_ENGINES = [
+  "https://mainnet.block-engine.jito.wtf/api/v1/bundles",
+  "https://ny.mainnet.block-engine.jito.wtf/api/v1/bundles",
+  "https://amsterdam.mainnet.block-engine.jito.wtf/api/v1/bundles",
+  "https://frankfurt.mainnet.block-engine.jito.wtf/api/v1/bundles",
+  "https://tokyo.mainnet.block-engine.jito.wtf/api/v1/bundles",
+  "https://slc.mainnet.block-engine.jito.wtf/api/v1/bundles"
+];
+
 async function submitJitoBundle(base64Txs, timeoutMs) {
-  const response = await fetch(CONFIG.pumpLaunchJitoUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "sendBundle", params: [base64Txs, { encoding: "base64" }] }),
-    signal: AbortSignal.timeout ? AbortSignal.timeout(timeoutMs) : undefined
-  });
-  const text = await response.text();
-  let data = {};
-  try { data = JSON.parse(text); } catch { /* non-JSON */ }
-  if (!response.ok || data.error) {
-    throw new Error(`Jito sendBundle failed: HTTP ${response.status} ${(data.error ? JSON.stringify(data.error) : text).slice(0, 400)}`);
+  const endpoints = [...new Set([CONFIG.pumpLaunchJitoUrl, ...JITO_BLOCK_ENGINES])];
+  const sendTo = async (endpoint) => {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "sendBundle", params: [base64Txs, { encoding: "base64" }] }),
+      signal: AbortSignal.timeout ? AbortSignal.timeout(timeoutMs) : undefined
+    });
+    const text = await response.text();
+    let data = {};
+    try { data = JSON.parse(text); } catch { /* non-JSON */ }
+    if (!response.ok || data.error) {
+      throw new Error(`${endpoint.split("//")[1].split(".")[0]}: HTTP ${response.status} ${(data.error ? JSON.stringify(data.error) : text).slice(0, 200)}`);
+    }
+    return String(data.result || "");
+  };
+  try {
+    return await Promise.any(endpoints.map(sendTo));
+  } catch (aggregate) {
+    const reasons = (aggregate.errors || []).map((error) => error.message).join(" | ").slice(0, 500);
+    throw new Error(`Jito sendBundle failed on every block engine: ${reasons}`);
   }
-  return String(data.result || "");
 }
 
 async function webLaunchPumpJitoBundle(userId, body, basePayload) {
@@ -30875,7 +30896,8 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
   // mint never existed). All-or-none means a missed bundle spent nothing, so we
   // rebuild with a fresh blockhash and a bigger tip and try again.
   const timeoutMs = CONFIG.pumpLaunchTimeoutMs || 30000;
-  const tipSchedule = [1, 3, 8].map((multiplier) => Math.min(0.01, CONFIG.pumpLaunchJitoTipSol * multiplier));
+  // Two shots then fall back to the standard path - speed beats stubbornness.
+  const tipSchedule = [1, 4].map((multiplier) => Math.min(0.01, CONFIG.pumpLaunchJitoTipSol * multiplier));
   const mintPubkey = new PublicKey(mint);
   const mintLanded = async (waitMs) => {
     const deadline = Date.now() + waitMs;
@@ -30897,7 +30919,13 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "simulateBundle", params: [{ encodedTransactions: signedBase64 }] })
       });
       const data = await response.json().catch(() => null);
-      if (!data || data.error) return null;
+      if (!data || data.error) {
+        logPumpLaunchEvent("pump_launch_jito_sim_unavailable", {
+          launchAttemptId: basePayload.clientRequestId, userId, mint,
+          error: String(data?.error?.message || data?.error?.code || "no JSON").slice(0, 160)
+        });
+        return null;
+      }
       const results = data.result?.value?.transactionResults || [];
       const failedIndex = results.findIndex((item) => item?.err);
       if (failedIndex >= 0) {
@@ -30945,16 +30973,24 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
       launchAttemptId: basePayload.clientRequestId, userId, mint, bundleId,
       txCount: plan.length, attempt: attempt + 1, tipSol: tipSchedule[attempt]
     });
-    landed = await mintLanded(attempt === tipSchedule.length - 1 ? 30_000 : 18_000);
+    landed = await mintLanded(attempt === tipSchedule.length - 1 ? 14_000 : 12_000);
   }
 
   if (!landed) {
     logPumpLaunchEvent("pump_launch_jito_bundle_missed", {
-      launchAttemptId: basePayload.clientRequestId, userId, mint, bundleId, attempts: tipSchedule.length
+      launchAttemptId: basePayload.clientRequestId, userId, mint, bundleId, attempts: tipSchedule.length, fallback: "pumpportal-local"
     });
-    const error = new Error(`The atomic launch bundle did not land after ${tipSchedule.length} attempts (tips up to ${tipSchedule[tipSchedule.length - 1]} SOL). Bundles are all-or-none, so NO SOL was spent - launch again, or raise PUMP_LAUNCH_JITO_TIP_SOL when the network is busy.`);
-    error.code = "JITO_BUNDLE_MISSED";
-    throw error;
+    // The launch must NEVER dead-end on the block lottery: fall back to the
+    // proven sequential path (create + dev buy). The client sees bundled:false
+    // and runs the first-block wallet buys itself right after, as it always
+    // did before bundles existed. Slightly snipeable, but it SHIPS the coin.
+    const fallback = await webLaunchPumpPortalLocal(userId, body, basePayload);
+    return {
+      ...fallback,
+      bundled: false,
+      bundleFallback: true,
+      message: "Atomic bundle missed the block lottery (no SOL was spent on it) - launched through the standard path instead; post-launch buys follow in seconds."
+    };
   }
 
   logPumpLaunchEvent("pump_launch_jito_bundle_landed", {
