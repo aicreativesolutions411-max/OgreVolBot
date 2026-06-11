@@ -15916,7 +15916,13 @@ async function getPumpFunCreatorLaunches(creator, options = {}) {
   let launches = [];
   for (const base of [CONFIG.pumpFunApiBase, "https://frontend-api-v3.pump.fun"].filter((value, index, list) => value && list.indexOf(value) === index)) {
     try {
-      const data = await fetchJson(`${String(base).replace(/\/$/, "")}/coins/user-created-coins/${encodeURIComponent(key)}?offset=0&limit=10&includeNsfw=false`, { headers, timeoutMs: options.timeoutMs || 3_500 });
+      const cleanBase = String(base).replace(/\/$/, "");
+      let data = await fetchJson(`${cleanBase}/coins/user-created-coins/${encodeURIComponent(key)}?offset=0&limit=10&includeNsfw=false`, { headers, timeoutMs: options.timeoutMs || 3_500 })
+        .catch(() => null);
+      if (!data || (Array.isArray(data) && !data.length)) {
+        data = await fetchJson(`${cleanBase}/coins/user-created-coins?creator=${encodeURIComponent(key)}&offset=0&limit=10`, { headers, timeoutMs: options.timeoutMs || 3_500 }).catch(() => null);
+      }
+      if (!data) continue;
       const list = Array.isArray(data) ? data : (Array.isArray(data?.coins) ? data.coins : []);
       launches = list.map((coin) => ({
         mint: firstString(coin?.mint, coin?.address),
