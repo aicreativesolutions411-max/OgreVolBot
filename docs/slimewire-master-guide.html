@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SlimeWire Master Guide</title>
+<style>
+  @page { margin: 18mm 16mm; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; color: #1a2419; font-size: 10.5pt; line-height: 1.5; margin: 0; }
+  h1 { font-size: 24pt; margin: 0 0 4px; color: #143307; }
+  h1 span { color: #3fae00; }
+  .subtitle { color: #5a6e54; margin: 0 0 18px; font-size: 11pt; }
+  h2 { font-size: 15pt; color: #143307; border-bottom: 2.5px solid #72ff23; padding-bottom: 4px; margin: 26px 0 10px; page-break-after: avoid; }
+  h3 { font-size: 11.5pt; color: #2a5212; margin: 14px 0 5px; page-break-after: avoid; }
+  p, li { margin: 4px 0; }
+  ul { margin: 4px 0 8px; padding-left: 20px; }
+  code { background: #eef6e8; border: 1px solid #d4e8c8; border-radius: 4px; padding: 1px 5px; font-size: 9.5pt; font-family: Consolas, monospace; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 9.5pt; }
+  th, td { border: 1px solid #cfe3c2; padding: 5px 8px; text-align: left; vertical-align: top; }
+  th { background: #eef6e8; color: #143307; }
+  .tip { background: #f1fbe9; border-left: 4px solid #72ff23; padding: 8px 12px; margin: 10px 0; border-radius: 0 6px 6px 0; }
+  .warn { background: #fdf3ec; border-left: 4px solid #e8833a; padding: 8px 12px; margin: 10px 0; border-radius: 0 6px 6px 0; }
+  .pagebreak { page-break-before: always; }
+  .toc li { margin: 2px 0; }
+  .footer-note { color: #5a6e54; font-size: 9pt; margin-top: 24px; border-top: 1px solid #cfe3c2; padding-top: 8px; }
+</style>
+</head>
+<body>
+
+<h1><span>SlimeWire</span> Master Guide</h1>
+<p class="subtitle">Every feature, how to use it, and how to maximize it &mdash; terminal, automation, Telegram bot, and the proof loops. June 2026.</p>
+
+<h2>Contents</h2>
+<ul class="toc">
+  <li>1. The big picture &mdash; how everything connects</li>
+  <li>2. The terminal: feeds, quick buy, SlimeShield</li>
+  <li>3. Trading &amp; server automation (TP/SL, Bundle, SlimeBot, Sniper)</li>
+  <li>4. Ogre A.I. &amp; Autopilot</li>
+  <li>5. KOL Tracker &amp; copy-trading</li>
+  <li>6. Pump Launch + Jito anti-snipe</li>
+  <li>7. Positions, PnL &amp; share cards</li>
+  <li>8. Push alerts (phone notifications)</li>
+  <li>9. The Ogre Agent (site chat A.I.)</li>
+  <li>10. The Telegram bot &mdash; complete manual</li>
+  <li>11. The Proof Wall &amp; growth loops</li>
+  <li>12. Operator reference: switches, tuning, costs</li>
+  <li>13. Recommended next moves</li>
+</ul>
+
+<h2>1. The big picture</h2>
+<p>SlimeWire is three layers that feed each other:</p>
+<ul>
+  <li><b>The terminal</b> (slimewire.org) &mdash; live pairs, charts, one-tap trading, risk reads, and managed wallets that can run automation while your browser is closed.</li>
+  <li><b>The engine</b> (server) &mdash; TP/SL watchers, the scanner, SlimeShield scoring, Ogre A.I. autopilot, KOL copy plans, and the alpha-call tracker. It runs 24/7.</li>
+  <li><b>The megaphone</b> (Telegram bot + Proof Wall) &mdash; the engine's activity becomes public posts: plays every 15 minutes, win receipts, rug-flag receipts. Every post links back into the terminal with the buy panel ready.</li>
+</ul>
+<p>The flywheel: <b>drops create attention &rarr; receipts create trust &rarr; deep links create users &rarr; users create more engine activity.</b></p>
+
+<h2>2. The terminal: feeds, quick buy, SlimeShield</h2>
+<h3>Feeds</h3>
+<ul>
+  <li><b>Live Terminal / Cooks</b> &mdash; the main live feed. Rows refresh in place (your scroll position never jumps).</li>
+  <li><b>Live Pairs</b> &mdash; bucketed fresh pairs (live / under 1h / 3h / 1d) with best/newest sorting.</li>
+  <li><b>Slime Scope</b> &mdash; the scanner view with deeper per-row stats.</li>
+  <li><b>Watchlist</b> &mdash; tap <i>Watch</i> on any row to save a coin; <i>Saved</i> rows show a star.</li>
+</ul>
+<h3>Quick Buy</h3>
+<p>Set your amount once in the <b>Quick Buy SOL</b> box on any feed toolbar (or pick a preset). Every Buy button across the whole site instantly reads <b>"Buy 0.1 SOL"</b> with your live amount and fires with one tap. You can also just tell the chat agent: <i>"set quick buy to 0.5"</i>.</p>
+<h3>SlimeShield</h3>
+<p>Every pair gets a verdict: <b>BUY / CAUTION / RISK / AVOID</b> with a 0&ndash;100 score, built from liquidity, age, volume flow, sell pressure, bundle risk, mint/freeze authority, dev-wallet history, and KOL dump pressure. The shield isn't advisory decoration &mdash; it actively gates Ogre A.I. buys and feeds the public receipts system.</p>
+<div class="tip"><b>Maximize it:</b> keep a preset with your default TP/SL and size, then trade entirely from feed rows: see pair &rarr; one tap Buy &rarr; exits armed automatically. The terminal is built so you never need the trade desk for routine entries.</div>
+
+<h2>3. Trading &amp; server automation</h2>
+<h3>Wallets: two kinds, different powers</h3>
+<table>
+  <tr><th>Wallet type</th><th>What it can do</th></tr>
+  <tr><td><b>Connected</b> (Phantom / Solflare / Backpack)</td><td>Buy/sell with a wallet-approval popup each time. View-only positions tracking.</td></tr>
+  <tr><td><b>Managed</b> (SlimeWire wallets)</td><td>Everything automated: server TP/SL, timers, Bundle, SlimeBot, Sniper, Ogre A.I., KOL copy &mdash; runs with your browser closed. Backup files download on creation; keep them.</td></tr>
+</table>
+<h3>Server TP/SL (the core safety net)</h3>
+<ul>
+  <li>Arm take-profit / stop-loss / timer exits on any buy. The server watches prices every ~2 seconds and executes without you.</li>
+  <li>Requires the <b>TP/SL automation permission</b> (the "Enable TP/SL" button in the top bar). It expires periodically &mdash; the site now shows a <b>loud red warning</b> when armed plans are running on an expiring/expired permission. Re-enable immediately when you see it.</li>
+  <li>Track every armed plan on the <b>TP/SL Audit</b> page (Tx Audit tab): status, per-wallet triggers, last price checks.</li>
+</ul>
+<h3>Bundle</h3>
+<p>One token bought/sold across many wallets at once, with auto-exit settings. Fast Bundle presets let you bundle-buy straight from a feed row (with an in-app confirm showing the wallet count).</p>
+<h3>SlimeBot (Volume)</h3>
+<p>The auto-volume engine: deploys a SOL budget over a duration as randomized buys/sells across recycled wallets (smart or spam mode, aggressiveness levels), then sweeps everything back to your source wallet. Confirm dialog shows the full deployment math before it spends.</p>
+<h3>OgreSniper &amp; Launch Watch</h3>
+<p>Sniper scans seven modes (Safe / Smart / Fast / PumpSnipe / Low-MC / Narratives / Long) and one-tap snipes with your per-wallet amount and exits. Launch Watch arms a watcher for a ticker so the buy fires the moment it goes live.</p>
+
+<h2 class="pagebreak">4. Ogre A.I. &amp; Autopilot</h2>
+<ul>
+  <li><b>Manual runs:</b> pick a category, amount, and exits &mdash; Ogre A.I. scans, ranks, and apes the best pick into a managed plan with TP/SL armed.</li>
+  <li><b>Autopilot:</b> fully unattended. Hard guards you set: max SOL per buy, max spend per hour, max concurrent plans, minimum score, interval. Default OFF; you arm it.</li>
+  <li><b>The shield gate:</b> every Ogre A.I. buy runs a final SlimeShield check at purchase time. Only <b>AVOID</b> blocks &mdash; risky setups are allowed on purpose (they're often the biggest winners); your TP/SL plan is the risk control.</li>
+  <li>It avoids repeating recent mints and diversifies across picks.</li>
+</ul>
+<div class="tip"><b>Maximize it:</b> run autopilot small and steady (e.g. 0.05 SOL per buy, 0.3 SOL/hour cap, 2 concurrent) with a -8% stop. The math of many small shielded entries with hard stops is the win-rate play; the engine record on the Proof Wall will show it working.</div>
+
+<h2>5. KOL Tracker &amp; copy-trading</h2>
+<ul>
+  <li>The KOL page tracks known trader wallets: live signals, positions, leaderboard.</li>
+  <li><b>Copy Wallet Next Buy:</b> pick a tracked wallet, set amount + exits &mdash; SlimeWire mirrors their next buy from your wallets within one ~30s scan tick and arms TP/SL on the copied bag automatically.</li>
+  <li><b>KOL Dump Detector</b> flags wallets that tend to sell into their followers &mdash; check it before copying anyone.</li>
+</ul>
+
+<h2>6. Pump Launch + Jito anti-snipe</h2>
+<ul>
+  <li>Create a pump.fun token from the Pump Launch page: coin details, image, socials, fees, dev buy, optional bundle buys.</li>
+  <li><b>Image pipeline is verified:</b> uploads go to pump.fun's own IPFS first, and the server confirms the image actually loads <i>before</i> the coin is created. Launching with no image now asks explicitly before using the default logo.</li>
+  <li><b>Jito anti-snipe is ON:</b> create + dev buy + first-block bundle buys land atomically in one Jito bundle &mdash; snipers physically cannot get between your create and your buys. Do your first launch with a small dev buy and watch it.</li>
+  <li>Successful launches auto-post to your opted-in Telegram groups/channel with pump.fun + chart links &mdash; free promotion for every launch through your launcher.</li>
+</ul>
+
+<h2>7. Positions, PnL &amp; share cards</h2>
+<ul>
+  <li>Each position row shows: live value, <b>entry cost</b>, <b>current MC</b>, open PnL, <b>TP/SL armed state</b> (or "no auto-exit armed"), and a green/red <b>"&#9650; +0.012 SOL since last refresh"</b> change note.</li>
+  <li><b>Arm Exits</b> button opens the trade ticket preloaded for that bag. Clicking the row opens its chart &mdash; everything stays inside SlimeWire.</li>
+  <li>Sell 25/50/100% or custom % directly from the row (custom uses the in-app dialog).</li>
+  <li><b>PnL cards:</b> on the PnL page, <i>Card</i> downloads a branded PNG of the trade, <i>Post</i> shares it. In the Telegram DM, <code>/pnl &lt;token&gt;</code> or <code>/card &lt;token&gt;</code> sends the same card.</li>
+</ul>
+
+<h2>8. Push alerts (phone notifications)</h2>
+<ul>
+  <li><b>Enable:</b> Profile &rarr; Alerts &rarr; "Enable Push Alerts". Up to 5 devices per account.</li>
+  <li><b>iPhone:</b> first add SlimeWire to your Home Screen (Share &rarr; Add to Home Screen), open it from there, then enable.</li>
+  <li><b>You get pinged when:</b> a take-profit or stop-loss fires, a plan fails, or a KOL copy executes &mdash; with the site completely closed. Tapping the notification opens the TP/SL audit.</li>
+</ul>
+<div class="tip"><b>Maximize it:</b> push alerts + server TP/SL = walk away from the screen. Arm the plan, close the laptop, get pinged when money moves. This is the feature that makes armed plans trustworthy.</div>
+
+<h2 class="pagebreak">9. The Ogre Agent (site chat A.I.)</h2>
+<p>The "Ask" bubble is a layered assistant &mdash; instant local smarts first, free 70B-class LLM (Groq Llama-3.3-70B, with Gemini/OpenRouter fallbacks) for everything else. It remembers the conversation.</p>
+<table>
+  <tr><th>Say things like</th><th>What happens</th></tr>
+  <tr><td>"where is the sniper" / "open my bags" / "take me to pnl"</td><td>Navigates instantly (no server round-trip), ~120 phrasings across all 21 pages</td></tr>
+  <tr><td>"set quick buy to 0.5"</td><td>Updates every Buy button on the site</td></tr>
+  <tr><td>paste any CA</td><td>Full coin read: MC, liquidity, volume, socials, SlimeShield verdict</td></tr>
+  <tr><td>"buy 0.1 of &lt;CA&gt; with 25 tp 8 sl"</td><td>Stages (or executes, in Fast Mode) the trade with exits</td></tr>
+  <tr><td>"how do push alerts work" / "how do I make a ref code"</td><td>Instant knowledge-card answers with action buttons</td></tr>
+  <tr><td>"why is this coin dumping" / anything open-ended</td><td>Goes to the LLM with your live site context (positions, shield, active token)</td></tr>
+</table>
+<p><b>Fast Mode</b> lets the agent execute trades from chat without an extra tap &mdash; you approve the auto-trade session first, and you can revoke any time.</p>
+
+<h2>10. The Telegram bot (@OgreTradeBot) &mdash; complete manual</h2>
+<h3>In groups and channels</h3>
+<table>
+  <tr><th>Command</th><th>What it does</th></tr>
+  <tr><td><code>/look &lt;CA&gt;</code></td><td>Instant SlimeShield read: verdict icon, score, top risk factors, suggested action. Buttons: 📈 Chart, ⚡ Buy on Site (buy panel opens automatically), Buy in DM, Dex, 🧾 Proof Wall. 20s per-chat cooldown.</td></tr>
+  <tr><td><code>/alpha</code></td><td>Top 3 scanner picks right now, each tap-to-chart with tap-to-copy CA. Falls through safe &rarr; fast &rarr; moonshot &rarr; live feed so it always returns picks.</td></tr>
+  <tr><td><code>/ape</code></td><td>One fresh low-MC shot right now (moonshot pool first). Honest verdict label + "size like it can go to zero."</td></tr>
+  <tr><td><code>/receipts</code></td><td>SlimeShield's rug-call record: hit rate + recent rugs with minutes-of-warning.</td></tr>
+  <tr><td><code>/proof</code></td><td>One quotable line of the live engine record (W-L, best call) + proof wall link.</td></tr>
+  <tr><td><code>/slimewire on|off</code></td><td>(Admins) arms the live feed for that chat. Works for anonymous admins and in channels (post as admin). The ON confirmation gets pinned automatically when the bot has pin rights.</td></tr>
+</table>
+<h3>What an armed chat receives</h3>
+<ul>
+  <li><b>Plays every 15 minutes:</b> 3&ndash;4 picks, each labeled 🟢 BUY / 🟡 CAUTION / 🟠 RISK with its shield score (AVOID never posts), with the honest engine record in the footer ("Engine record: 12W-9L").</li>
+  <li><b>Win receipts:</b> when a dropped pick 2x's, the chat gets "&#9989; Called it: $XYZ is 2.4x since the drop 3h ago &mdash; First dropped in [your group]".</li>
+  <li><b>Engine events:</b> fresh SlimeWire launches, TP/SL fires ("stop-loss saved a bag"), KOL copy executions &mdash; all anonymous, never wallet info.</li>
+  <li><b>Hard anti-spam:</b> max 8 posts/hour per chat, minimum 2 minutes apart, dedupe &mdash; enforced in code, drops instead of queueing.</li>
+</ul>
+<h3>In DM</h3>
+<p>Full wallet ops: <code>/wallets</code>, <code>/balances</code>, <code>/trade</code> (guided buy/sell), <code>/positions</code>, <code>/pnl</code> + cards, <code>/sniper</code>, <code>/bundle</code>, backups/restore, and <code>/web</code> &mdash; which gives you a 6-digit code to log into slimewire.org with your Telegram-linked account.</p>
+<h3>The funnel mechanics</h3>
+<ul>
+  <li>Every bot keyboard's <b>⚡ Buy on Site</b> opens the chart with the quick-buy panel already open &mdash; Telegram attention, site execution.</li>
+  <li><b>Buy in DM</b> deep-links into the bot's guided buy with the token preloaded &mdash; for users who haven't touched the site yet.</li>
+  <li>Chart deep links paint an instant loading skeleton, so taps feel immediate.</li>
+</ul>
+
+<h2>11. The Proof Wall &amp; growth loops</h2>
+<p><b>slimewire.org/proof</b> &mdash; public, no login, loads instantly. Shows: calls tracked, 2x wins with time-to-win, hit rate, best call, rugs SlimeShield flagged first (with minutes-of-warning), live-tracking calls, and the <b>Group Alpha League</b> (top groups ranked by wins their drops produced &mdash; groups compete to host the bot).</p>
+<p>Everything links here: drops, win receipts, /proof, /receipts, bot keyboards. The page is the answer to "is this legit" &mdash; and it includes the losses, which is exactly why it works.</p>
+<div class="tip"><b>Your playbook:</b> (1) add the bot to every group you're in, get admins to <code>/slimewire on</code>; (2) screenshot win receipts to X with the /proof link; (3) launch coins through Pump Launch so every launch self-promotes; (4) share PnL cards after wins. Every piece feeds the same loop.</div>
+
+<h2 class="pagebreak">12. Operator reference</h2>
+<h3>Switches currently ON</h3>
+<table>
+  <tr><th>Thing</th><th>State</th></tr>
+  <tr><td>Jito anti-snipe launches (<code>PUMP_LAUNCH_JITO_BUNDLE</code>)</td><td>ON</td></tr>
+  <tr><td>Push alert keys (VAPID)</td><td>ON</td></tr>
+  <tr><td>Alpha drops + winner receipts</td><td>ON (per chat via <code>/slimewire on</code>)</td></tr>
+  <tr><td>Shield receipts tracking</td><td>ON (always recording)</td></tr>
+  <tr><td>Channel bridge flag (<code>TG_CHANNEL_ALERTS_ENABLED</code>)</td><td>ON &mdash; but needs <code>TG_CHANNEL_CHAT_ID=@yourchannel</code> to use the dedicated 6/hour channel feed; otherwise just <code>/slimewire on</code> in the channel</td></tr>
+  <tr><td>Ogre Agent models</td><td>Groq Llama-3.3-70B primary, OpenRouter 70B free fallback</td></tr>
+</table>
+<h3>Tuning knobs (Render &rarr; Environment)</h3>
+<table>
+  <tr><th>Env var</th><th>Default</th><th>Controls</th></tr>
+  <tr><td><code>TG_ALPHA_DROP_INTERVAL_MINUTES</code></td><td>15</td><td>How often plays post per chat</td></tr>
+  <tr><td><code>TG_ALPHA_DROP_PICKS</code></td><td>4</td><td>Picks per drop (1&ndash;4)</td></tr>
+  <tr><td><code>TG_CHANNEL_MAX_PER_HOUR</code></td><td>6</td><td>Dedicated channel post cap</td></tr>
+  <tr><td><code>KOL_COPY_SCAN_INTERVAL_MS</code></td><td>30000</td><td>Copy-trade reaction speed</td></tr>
+</table>
+<h3>Costs &amp; housekeeping</h3>
+<ul>
+  <li><b>Render build minutes:</b> every git push builds 3 services. Set <b>Auto-Deploy: No</b> on the two background workers (they only call the web service over HTTP) to cut the burn by two-thirds. Top up minutes before big shipping days.</li>
+  <li><b>All A.I. is free-tier</b> (Groq/Gemini/OpenRouter). If the agent ever degrades, check those keys' quotas first.</li>
+  <li><b>Backups:</b> managed-wallet backup files download on creation and removal &mdash; store them; they're the only restore path.</li>
+</ul>
+
+<h2>13. Recommended next moves</h2>
+<ul>
+  <li><b>Set the channel chat ID</b> (or just /slimewire on in the channel) and pin the proof wall there. <i>5 minutes.</i></li>
+  <li><b>Test a Jito launch</b> with a small dev buy &mdash; the anti-snipe bundle is armed but hasn't fired on a real launch yet. <i>15 minutes.</i></li>
+  <li><b>Signal share cards</b> (proposed, not built): server-rendered token cards (MC, age, verdict, chart QR) shared from any row &mdash; the X shill engine. The PnL card renderer is ready to copy. <i>Best next build.</i></li>
+  <li><b>KOL report cards</b> (proposed, not built): shareable "this KOL sells into followers" cards from the dump detector &mdash; sticky, viral, drama-powered.</li>
+  <li><b>Landing-page engine ticker</b> (proposed, not built): the live proof strip on the front door before login.</li>
+  <li><b>Launch campaign mode</b> (partial): launches already auto-post; the countdown + sponsor-slot layer is worth building once launch volume picks up.</li>
+  <li><b>Referral wars</b> (partial): trader board + badges exist; rank by invites/volume/wins when there's a user base to rank.</li>
+  <li><b>Watch your TP/SL permission</b> &mdash; when the red expiry warning appears, re-enable. It's the one thing automation can't do for you.</li>
+</ul>
+
+<p class="footer-note">SlimeWire / OgreVolBot &mdash; generated June 11, 2026. Terminal: slimewire.org &middot; Proof: slimewire.org/proof &middot; Bot: @OgreTradeBot. Nothing in this document is financial advice.</p>
+
+</body>
+</html>

@@ -1983,6 +1983,22 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    // PUBLIC call board reads: token rooms + top callers (no login to read; posting
+    // requires a session). Cached briefly - boards must feel live.
+    if (request.method === "GET" && pathname === "/api/web/calls") {
+      const board = await webBoardCallsForMint(requestUrl.searchParams.get("mint") || "");
+      sendCachedWebJson(request, response, 200, { ok: true, ...board }, "public, max-age=20, stale-while-revalidate=120");
+      return;
+    }
+
+    // PUBLIC signal card: shareable PNG for any token - the clean shill engine.
+    if (request.method === "GET" && pathname === "/api/web/signal-card") {
+      const cardMint = parsePublicKey(String(requestUrl.searchParams.get("tokenMint") || "")).toBase58();
+      const png = await renderSignalCard(cardMint);
+      sendWebBinary(request, response, 200, png, "image/png", `slimewire-signal-${shortMint(cardMint)}.png`);
+      return;
+    }
+
     // PUBLIC proof wall data: the engine's track record - wins AND losses - with no
     // login. Every Telegram post links here; receipts are the marketing.
     if (request.method === "GET" && pathname === "/api/web/proof") {
@@ -2386,6 +2402,13 @@ async function handleWebApiRequest(request, response, requestUrl) {
         ok: true,
         plans: await webTradePlanRows(auth.userId)
       });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/web/calls") {
+      const body = await readJsonRequestBody(request);
+      const call = await webPostBoardCall(auth.userId, body);
+      sendWebJson(request, response, 200, { ok: true, call });
       return;
     }
 
@@ -19002,6 +19025,7 @@ function defaultJsonForPath(filePath) {
     case "telegram-groups.json":
       return { groups: {} };
     case "alpha-calls.json":
+    case "call-board.json":
       return { calls: [] };
     case "shield-receipts.json":
       return { receipts: [] };
@@ -19436,6 +19460,170 @@ function broadcastToTelegramGroups(kind, key, text) {
   })();
 }
 
+// Shareable signal card: token stats + shield verdict as a watermarked PNG. Built the
+// same way as PnL cards (SVG composited by sharp) so it needs no new dependencies.
+const signalCardCache = new Map();
+async function renderSignalCard(tokenMint) {
+  const cached = signalCardCache.get(tokenMint);
+  if (cached && Date.now() - cached.at < 60_000) return cached.png;
+  const shield = await webSlimeShield(tokenMint).catch(() => null);
+  const pairs = await fetchDexScreenerTokenPairsFallback(tokenMint).catch(() => []);
+  const best = bestDexPairForToken(tokenMint, pairs);
+  const symbol = sanitizeCardText(best?.baseToken?.symbol || shortMint(tokenMint), 14);
+  const name = sanitizeCardText(best?.baseToken?.name || "", 30);
+  const verdict = String(shield?.verdict || "UNRATED").toUpperCase();
+  const verdictColor = { BUY: "#72ff23", CAUTION: "#ffd84d", RISK: "#ff9d4d", AVOID: "#ff6b5e" }[verdict] || "#9fb59a";
+  const mcap = Number(best?.marketCap || best?.fdv) || null;
+  const liq = Number(best?.liquidity?.usd) || null;
+  const vol = Number(best?.volume?.h24) || null;
+  const change = Number(best?.priceChange?.h1);
+  const stats = [
+    mcap ? `MC ${formatUsdCompact(mcap)}` : null,
+    liq ? `LIQ ${formatUsdCompact(liq)}` : null,
+    vol ? `VOL ${formatUsdCompact(vol)}` : null,
+    Number.isFinite(change) ? `1H ${change >= 0 ? "+" : ""}${change.toFixed(1)}%` : null
+  ].filter(Boolean).join("   ");
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630">
+  <rect width="1200" height="630" fill="#050905"/>
+  <rect x="0" y="0" width="1200" height="630" fill="none" stroke="#72ff23" stroke-opacity="0.35" stroke-width="6"/>
+  <circle cx="120" cy="-40" r="320" fill="#72ff23" fill-opacity="0.07"/>
+  <text x="64" y="120" font-size="44" font-weight="900" fill="#9fb59a" font-family="Arial">SLIMEWIRE SIGNAL</text>
+  <text x="64" y="240" font-size="104" font-weight="900" fill="#eaffe0" font-family="Arial">$${escapeSvg(symbol)}</text>
+  ${name ? `<text x="64" y="298" font-size="34" fill="#9fb59a" font-family="Arial">${escapeSvg(name)}</text>` : ""}
+  <rect x="60" y="340" width="${Math.min(620, 200 + verdict.length * 42)}" height="86" rx="43" fill="${verdictColor}" fill-opacity="0.14" stroke="${verdictColor}" stroke-width="3"/>
+  <text x="96" y="398" font-size="46" font-weight="900" fill="${verdictColor}" font-family="Arial">SHIELD: ${escapeSvg(verdict)}${shield?.score != null ? ` ${shield.score}/100` : ""}</text>
+  <text x="64" y="496" font-size="38" font-weight="700" fill="#d6ffbf" font-family="Arial">${escapeSvg(stats || "fresh pair - data filling in")}</text>
+  <text x="64" y="560" font-size="26" fill="#7d937a" font-family="Consolas, monospace">${escapeSvg(tokenMint)}</text>
+  <text x="1136" y="560" text-anchor="end" font-size="34" font-weight="900" fill="#72ff23" font-family="Arial">slimewire.org/proof</text>
+</svg>`;
+  const png = await sharp(Buffer.from(svg)).png().toBuffer();
+  signalCardCache.set(tokenMint, { png, at: Date.now() });
+  if (signalCardCache.size > 60) {
+    const oldest = [...signalCardCache.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+    if (oldest) signalCardCache.delete(oldest[0]);
+  }
+  return png;
+}
+
+// --- Call Board: structured, auto-tracked calls tied to real token data -----------
+// Not a chat. Every post is a position statement (bullish/bearish/warning/question)
+// stamped with the SlimeShield score and entry price at post time, then tracked to its
+// outcome exactly like alpha drops. Reputation comes from results, not volume.
+const CALL_BOARD_SIDES = new Set(["bullish", "bearish", "warning", "question"]);
+
+function callBoardPath() {
+  return path.join(CONFIG.dataDir, "call-board.json");
+}
+
+async function readCallBoard() {
+  const store = await readJson(callBoardPath());
+  if (!Array.isArray(store.calls)) store.calls = [];
+  return store;
+}
+
+function callerReputation(calls, handle) {
+  const resolved = calls.filter((call) => call.handle === handle && call.status === "resolved" && call.side === "bullish");
+  const wins = resolved.filter((call) => call.outcome === "won").length;
+  return {
+    calls: calls.filter((call) => call.handle === handle).length,
+    wins,
+    hitRatePct: resolved.length ? Math.round((wins / resolved.length) * 100) : null
+  };
+}
+
+async function webPostBoardCall(userId, body = {}) {
+  const tokenMint = parsePublicKey(String(body.tokenMint || "")).toBase58();
+  const side = String(body.side || "").toLowerCase();
+  if (!CALL_BOARD_SIDES.has(side)) throw new Error("Pick bullish, bearish, warning, or question.");
+  const note = String(body.note || "").trim().slice(0, 140);
+  const targetX = Math.max(0, Math.min(1000, Number(body.targetX) || 0)) || null;
+  const profile = await webProfileForUser(userId);
+  const handle = String(profile.username || "").trim() || `degen-${String(userId).slice(-4)}`;
+  const store = await readCallBoard();
+  const sixHoursAgo = Date.now() - 6 * 60 * 60 * 1000;
+  if (store.calls.some((call) => call.userId === String(userId) && call.mint === tokenMint && Date.parse(call.createdAt) > sixHoursAgo)) {
+    throw new Error("You already posted on this token in the last 6 hours - let the call play out.");
+  }
+  const shield = await webSlimeShield(tokenMint).catch(() => null);
+  const pairs = await fetchDexScreenerTokenPairsFallback(tokenMint).catch(() => []);
+  const best = bestDexPairForToken(tokenMint, pairs);
+  const call = {
+    id: `call-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    mint: tokenMint,
+    symbol: String(best?.baseToken?.symbol || shield?.marketContext?.symbol || shortMint(tokenMint)).slice(0, 24),
+    side,
+    note,
+    targetX,
+    handle,
+    userId: String(userId),
+    source: String(body.source || "site").slice(0, 12),
+    shieldVerdict: shield?.verdict || "",
+    shieldScore: Number(shield?.score) || null,
+    priceUsd: Number(best?.priceUsd) || null,
+    entryMcUsd: Number(best?.marketCap || best?.fdv) || null,
+    createdAt: new Date().toISOString(),
+    status: side === "bullish" && Number(best?.priceUsd) > 0 ? "watching" : "open",
+    outcome: null
+  };
+  store.calls.push(call);
+  store.calls = store.calls.slice(-1000);
+  await writeJsonFile(callBoardPath(), store);
+  return call;
+}
+
+async function webBoardCallsForMint(tokenMint = "") {
+  const store = await readCallBoard();
+  const mint = String(tokenMint || "").trim();
+  const scoped = mint ? store.calls.filter((call) => call.mint === mint) : store.calls;
+  const rows = scoped.slice(-30).reverse().map((call) => ({
+    ...call,
+    userId: undefined,
+    reputation: callerReputation(store.calls, call.handle)
+  }));
+  const handles = [...new Set(store.calls.map((call) => call.handle))];
+  const topCallers = handles
+    .map((handle) => ({ handle, ...callerReputation(store.calls, handle) }))
+    .filter((caller) => caller.wins > 0)
+    .sort((a, b) => b.wins - a.wins)
+    .slice(0, 5);
+  return { calls: rows, topCallers, total: scoped.length };
+}
+
+// Outcome tracking: bullish calls resolve on the same 2x / dead / flat rules as the
+// engine's own alpha drops - one honest standard for humans and machine alike.
+async function checkBoardCallOutcomes() {
+  const store = await readCallBoard();
+  const now = Date.now();
+  const due = store.calls.filter((call) => call.status === "watching" && Number(call.priceUsd) > 0).slice(0, 25);
+  if (!due.length) return;
+  const pairs = await fetchDexScreenerTokenPairsBatch(due.map((call) => call.mint)).catch(() => []);
+  let changed = false;
+  for (const call of due) {
+    const best = bestDexPairForToken(call.mint, pairs.filter((pair) => pairMatchesToken(pair, call.mint)));
+    const priceNow = Number(best?.priceUsd) || 0;
+    const ageMs = now - Date.parse(call.createdAt);
+    const multiple = priceNow > 0 ? priceNow / call.priceUsd : 0;
+    if (multiple >= 2) {
+      call.status = "resolved";
+      call.outcome = "won";
+      call.peakX = Math.round(multiple * 10) / 10;
+      call.resolvedAt = new Date(now).toISOString();
+      changed = true;
+    } else if (ageMs > 60 * 60 * 1000 && (!priceNow || multiple < 0.4)) {
+      call.status = "resolved";
+      call.outcome = "lost";
+      call.resolvedAt = new Date(now).toISOString();
+      changed = true;
+    } else if (ageMs > 48 * 60 * 60 * 1000) {
+      call.status = "resolved";
+      call.outcome = "flat";
+      call.resolvedAt = new Date(now).toISOString();
+      changed = true;
+    }
+  }
+  if (changed) await writeJsonFile(callBoardPath(), store);
+}
+
 // --- Alpha drops + winner receipts -------------------------------------------------
 // Every few hours, opted-in groups (and the channel) get ONE pick - but only when a
 // candidate passes the full gate (top scanner row AND SlimeShield BUY verdict). No
@@ -19694,6 +19882,7 @@ if (CONFIG.serviceRole === "web") {
     checkShieldReceiptOutcomes().catch((error) => console.warn(`[shield-receipts] check failed: ${error.message}`));
     checkAlphaCallOutcomes().catch((error) => console.warn(`[alpha-calls] check failed: ${error.message}`));
     runAlphaDropTick().catch((error) => console.warn(`[alpha-drop] tick failed: ${error.message}`));
+    checkBoardCallOutcomes().catch((error) => console.warn(`[call-board] check failed: ${error.message}`));
   }, 5 * 60 * 1000);
   shieldReceiptTimer.unref?.();
 }

@@ -6083,7 +6083,45 @@ function tekHubHtml() {
             <small>${escapeHtml(desc)}</small>
           </button>`).join("")}
       </div>
+      ${ogreBriefHtml()}
       ${shieldReceiptsPanelHtml()}
+    </section>
+  `;
+}
+
+// Live Ogre Brief: a glanceable "what is happening right now" strip built entirely
+// from state the client already has - zero extra requests.
+function ogreBriefHtml() {
+  const liveRows = allRawSignalRows();
+  const freshLowMc = liveRows.filter((row) => {
+    const mc = Number(row.marketCapUsd ?? row.marketCap) || 0;
+    return mc > 0 && mc < 8000;
+  }).length;
+  const plans = Array.isArray(state.tradePlans) ? state.tradePlans : [];
+  const watchingPlans = plans.filter((plan) => ["watching", "active"].includes(String(plan.status || "").toLowerCase()));
+  const nearTp = watchingPlans.filter((plan) => {
+    const move = Number(plan.lastMovePct ?? plan.wallets?.[0]?.lastMovePct);
+    const tp = Number(plan.takeProfitPct);
+    return Number.isFinite(move) && Number.isFinite(tp) && tp > 0 && move > tp * 0.7;
+  }).length;
+  const shieldWatching = Number(state.shieldReceipts?.stats?.watching || 0);
+  const items = [
+    freshLowMc ? `🐣 ${freshLowMc} fresh under 8k MC on the feed` : "",
+    watchingPlans.length ? `🛡 ${watchingPlans.length} plan(s) armed${nearTp ? ` - ${nearTp} near take-profit` : ""}` : "",
+    shieldWatching ? `🔎 ${shieldWatching} flagged token(s) being tracked to outcome` : "",
+    `🧾 Proof wall is public - slimewire.org/proof`
+  ].filter(Boolean);
+  return `
+    <section class="trade-card ogre-brief-card">
+      <div class="trade-head">
+        <div>
+          <h3>Ogre Brief</h3>
+          <p>Right now, at a glance.</p>
+        </div>
+      </div>
+      <ul class="ogre-brief-list">
+        ${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+      </ul>
     </section>
   `;
 }
@@ -17515,8 +17553,109 @@ function smartChartHtml() {
           ${chartTradePanelHtml(token, heldPosition)}
         </aside>
       </div>
+      ${chartCallBoardHtml(mint)}
     </section>
   `;
+}
+
+// --- Token room: the Call Board. Structured calls (not chat) tied to this token,
+// stamped with the shield score at post time and tracked to outcome like alpha drops.
+let chartCallsFetchedFor = "";
+let chartCallsFetchedAt = 0;
+function ensureChartCallsData(mint) {
+  if (!mint) return;
+  if (chartCallsFetchedFor === mint && Date.now() - chartCallsFetchedAt < 30_000) return;
+  chartCallsFetchedFor = mint;
+  chartCallsFetchedAt = Date.now();
+  void api(`/api/web/calls?mint=${encodeURIComponent(mint)}`).then((data) => {
+    state.chartCalls = { mint, ...data };
+    if (state.activeTab === "smartChart") render({ preserveSmartChartFrame: true });
+  }).catch(() => {});
+}
+
+function callSideBadge(side) {
+  const map = {
+    bullish: ["🟢", "BULLISH"],
+    bearish: ["🔴", "BEARISH"],
+    warning: ["⚠️", "WARNING"],
+    question: ["❓", "QUESTION"]
+  };
+  const [icon, label] = map[side] || ["⚪", String(side || "").toUpperCase()];
+  return `${icon} ${label}`;
+}
+
+function chartCallBoardHtml(mint) {
+  ensureChartCallsData(mint);
+  const board = state.chartCalls?.mint === mint ? state.chartCalls : null;
+  const calls = board?.calls || [];
+  const signedIn = Boolean(state.token && state.user);
+  return `
+    <section class="terminal-panel chart-call-board" data-preserve-focus>
+      <div class="terminal-title-row">
+        <div>
+          <h3>Call Board</h3>
+          <p>Structured calls only - every post is stamped with the shield score and tracked to its outcome. Winners build reputation.</p>
+        </div>
+        <span>${board ? `${board.total || 0} call(s)` : "loading"}</span>
+      </div>
+      ${signedIn ? `
+        <div class="call-board-form">
+          <select data-call-side>
+            <option value="bullish">🟢 Bullish</option>
+            <option value="bearish">🔴 Bearish</option>
+            <option value="warning">⚠️ Warning</option>
+            <option value="question">❓ Question</option>
+          </select>
+          <select data-call-target>
+            <option value="">No target</option>
+            <option value="2">2x</option>
+            <option value="5">5x</option>
+            <option value="10">10x</option>
+          </select>
+          <input data-call-note type="text" maxlength="140" placeholder="Why? (max 140 chars)">
+          <button class="primary" data-call-post="${escapeHtml(mint)}">Post Call</button>
+        </div>
+        <small data-call-status></small>` : `<p class="trade-status">Log in to post calls - reads are public.</p>`}
+      ${calls.length ? `
+        <div class="table-list compact-table">
+          ${calls.map((call) => `
+            <article class="row-card">
+              <div class="row-main">
+                <strong>${escapeHtml(callSideBadge(call.side))} <span class="muted-text">by ${escapeHtml(call.handle)}</span>
+                  ${call.reputation?.wins ? `<span class="positive">${escapeHtml(String(call.reputation.wins))}W${call.reputation.hitRatePct != null ? ` ${escapeHtml(String(call.reputation.hitRatePct))}%` : ""}</span>` : ""}
+                </strong>
+                <span>${call.entryMcUsd ? `Entry MC ${escapeHtml(compactUsd(call.entryMcUsd))} | ` : ""}${call.targetX ? `Target ${escapeHtml(String(call.targetX))}x | ` : ""}${call.shieldVerdict ? `Shield ${escapeHtml(call.shieldVerdict)} ${escapeHtml(String(call.shieldScore ?? ""))} | ` : ""}${escapeHtml(formatDate(call.createdAt))}</span>
+                ${call.note ? `<small>${escapeHtml(call.note)}</small>` : ""}
+                ${call.status === "resolved" ? `<small class="${call.outcome === "won" ? "positive" : "negative"}">${call.outcome === "won" ? `✅ hit ${escapeHtml(String(call.peakX))}x` : escapeHtml(call.outcome)}</small>` : call.status === "watching" ? `<small class="muted-text">tracking...</small>` : ""}
+              </div>
+            </article>
+          `).join("")}
+        </div>` : `<p class="trade-status">No calls on this token yet - be first. First caller gets the receipt when it runs.</p>`}
+      <div class="card-actions compact">
+        <a class="button-like" href="${escapeHtml(apiUrl(`/api/web/signal-card?tokenMint=${encodeURIComponent(mint)}`))}" target="_blank" rel="noreferrer">📸 Signal Card</a>
+        ${xShareButton(`$${state.chartCalls?.calls?.[0]?.symbol || ""} on SlimeWire - shield read + live calls: https://www.slimewire.org/terminal/chart?token=${mint}`, "Share")}
+      </div>
+    </section>
+  `;
+}
+
+async function postBoardCall(mint) {
+  const status = $("[data-call-status]");
+  try {
+    const side = $("[data-call-side]")?.value || "bullish";
+    const targetX = $("[data-call-target]")?.value || "";
+    const note = $("[data-call-note]")?.value || "";
+    writeText(status, "Posting call...");
+    await api("/api/web/calls", {
+      method: "POST",
+      body: JSON.stringify({ tokenMint: mint, side, targetX, note, source: "site" })
+    });
+    writeText(status, "Call posted - it is now being tracked.");
+    chartCallsFetchedFor = "";
+    ensureChartCallsData(mint);
+  } catch (error) {
+    writeText(status, publicErrorMessage(error?.message || "Could not post call."));
+  }
 }
 
 function terminalTradePanelHtml(token, collapsed = false) {
@@ -21816,6 +21955,7 @@ document.addEventListener("click", async (event) => {
   }
   if (target.matches("[data-push-enable]")) { await enablePushAlerts(); return; }
   if (target.matches("[data-push-disable]")) { await disablePushAlerts(); return; }
+  if (target.matches("[data-call-post]")) { await postBoardCall(target.dataset.callPost); return; }
   if (target.matches("[data-create-wallets]")) await createWalletSet();
   if (target.matches("[data-distribute-fresh]")) { await distributeFreshWallets(); return; }
   if (target.matches("[data-return-funds]")) { await returnFundsToConnected(); return; }

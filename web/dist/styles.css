@@ -9577,3 +9577,30 @@ body {
   color: rgba(226, 255, 215, 0.72);
   font-size: 0.85rem;
 }
+
+/* Call board + ogre brief */
+.call-board-form {
+  display: grid;
+  grid-template-columns: minmax(120px, auto) minmax(100px, auto) minmax(0, 1fr) auto;
+  gap: 8px;
+  margin: 8px 0 12px;
+}
+@media (max-width: 760px) {
+  .call-board-form { grid-template-columns: 1fr 1fr; }
+  .call-board-form input { grid-column: 1 / -1; }
+  .call-board-form button { grid-column: 1 / -1; }
+}
+.ogre-brief-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 7px;
+}
+.ogre-brief-list li {
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(114, 255, 35, 0.16);
+  background: rgba(8, 20, 10, 0.5);
+  font-size: 0.86rem;
+}
