@@ -9605,25 +9605,91 @@ body {
   font-size: 0.86rem;
 }
 
-/* Desktop nav: fixed LEFT SIDEBAR - every destination always on screen, no
-   dropdowns. Icon-only at medium widths, icons + labels when wide. Scoped to the
-   terminal route so it never floats over the intro video. Mobile rail untouched. */
+/* SlimeWire nav: ONE accordion sidebar. Desktop: fixed left, click a group and
+   its options drop in place - one open at a time, zero dead space. Mobile: the
+   same menu slides in off a hamburger and stays up until a pick / tap-off /
+   re-tap. The flat rail markup is untouched; CSS hides it where the drawer serves. */
 .nav-drop-bar { display: none; }
+.nav-mobile-trigger,
+.nav-mobile-backdrop { display: none; }
+
+/* --- Shared accordion internals (both faces) --- */
+.nav-drop-bar .nav-drop-group {
+  border: 1px solid rgba(114, 255, 35, 0.14);
+  border-radius: 12px;
+  background: rgba(8, 20, 10, 0.45);
+  overflow: hidden;
+}
+.nav-side-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  text-align: left;
+  padding: 10px 11px;
+  border: 0;
+  background: transparent;
+  color: rgba(226, 255, 215, 0.9);
+  font-weight: 800;
+  font-size: 0.86rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.nav-side-group-toggle .nav-side-label { flex: 1 1 auto; }
+.nav-side-group-toggle[data-active] { color: #9dff5e; }
+.nav-side-caret { font-size: 0.6rem; opacity: 0.55; transition: transform 0.18s ease; }
+.nav-drop-group.is-open .nav-side-caret { transform: rotate(180deg); }
+.nav-drop-group.is-open .nav-side-group-toggle {
+  background: rgba(114, 255, 35, 0.09);
+  border-bottom: 1px solid rgba(114, 255, 35, 0.14);
+}
+.nav-side-items { display: none; flex-direction: column; gap: 1px; padding: 5px; }
+.nav-drop-group.is-open .nav-side-items { display: flex; }
+.nav-drop-bar .nav-side-items button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 9px;
+  border-radius: 9px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: rgba(226, 255, 215, 0.82);
+  font-weight: 700;
+  font-size: 0.84rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.nav-drop-bar .nav-side-items button:hover {
+  background: rgba(114, 255, 35, 0.1);
+  color: #eaffe0;
+}
+.nav-drop-bar .nav-side-items button[data-active="true"] {
+  background: linear-gradient(135deg, rgba(114, 255, 35, 0.94), rgba(187, 255, 99, 0.94));
+  color: #071006;
+  border-color: rgba(114, 255, 35, 0.6);
+  font-weight: 800;
+}
+.nav-side-icon { font-size: 1rem; line-height: 1; flex: 0 0 auto; }
+
+/* --- Desktop face: fixed left sidebar --- */
 @media (min-width: 761px) {
-  :root { --sw-sidebar-w: 200px; }
+  :root { --sw-sidebar-w: 196px; }
   .tabs { display: none; }
+  .topbar { margin-bottom: 6px; }
   main.shell[data-route="terminal"] { padding-left: calc(var(--sw-sidebar-w) + 16px); }
   main.shell[data-route="terminal"] .nav-drop-bar {
     display: flex;
     flex-direction: column;
-    gap: 13px;
+    gap: 6px;
     position: fixed;
     top: 0;
     left: 0;
     bottom: 0;
     width: var(--sw-sidebar-w);
     z-index: 30;
-    padding: 16px 10px 18px 12px;
+    padding: 14px 10px 16px 11px;
     border-right: 1px solid rgba(114, 255, 35, 0.22);
     background: linear-gradient(180deg, rgba(6, 14, 7, 0.99), rgba(3, 8, 4, 0.99));
     box-shadow: 14px 0 44px rgba(0, 0, 0, 0.35);
@@ -9631,56 +9697,77 @@ body {
     overscroll-behavior: contain;
     scrollbar-width: thin;
   }
-  .nav-side-group-label {
-    display: block;
-    padding: 2px 8px;
-    font-size: 0.62rem;
-    font-weight: 800;
-    letter-spacing: 0.09em;
-    text-transform: uppercase;
-    color: rgba(141, 184, 124, 0.85);
-  }
-  .nav-side-items { display: flex; flex-direction: column; gap: 2px; }
-  .nav-drop-bar .nav-side-items button {
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    width: 100%;
-    text-align: left;
-    padding: 8px 9px;
-    border-radius: 10px;
-    border: 1px solid transparent;
-    background: transparent;
-    color: rgba(226, 255, 215, 0.85);
-    font-weight: 700;
-    font-size: 0.84rem;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-  .nav-drop-bar .nav-side-items button:hover {
-    background: rgba(114, 255, 35, 0.1);
-    border-color: rgba(114, 255, 35, 0.22);
-    color: #eaffe0;
-  }
-  .nav-drop-bar .nav-side-items button[data-active="true"] {
-    background: linear-gradient(135deg, rgba(114, 255, 35, 0.94), rgba(187, 255, 99, 0.94));
-    color: #071006;
-    border-color: rgba(114, 255, 35, 0.6);
-    font-weight: 800;
-  }
-  .nav-side-icon { font-size: 1rem; line-height: 1; flex: 0 0 auto; }
   /* The execution receipt sits bottom-left; shift it clear of the sidebar. */
   body:has(main.shell[data-route="terminal"]) [data-trade-trace-mount] .trade-trace {
     left: calc(var(--sw-sidebar-w) + 14px);
   }
 }
-/* Medium desktop: icon-only rail keeps content wide. */
-@media (min-width: 761px) and (max-width: 1099px) {
-  :root { --sw-sidebar-w: 64px; }
-  .nav-side-group-label { display: none; }
-  .nav-drop-bar .nav-side-label { display: none; }
-  .nav-drop-bar .nav-side-items button { justify-content: center; padding: 9px 6px; }
-  .nav-side-icon { font-size: 1.15rem; }
+
+/* --- Mobile face: slide-out drawer + hamburger --- */
+@media (max-width: 760px) {
+  body:has([data-dashboard]:not([hidden])) main.shell[data-route="terminal"] .tabs { display: none; }
+  body:has([data-dashboard]:not([hidden])) main.shell[data-route="terminal"] .nav-drop-bar {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: min(78vw, 300px);
+    z-index: 6000;
+    padding: calc(12px + env(safe-area-inset-top)) 12px calc(16px + env(safe-area-inset-bottom));
+    background: #050d06;
+    border-right: 1px solid rgba(114, 255, 35, 0.3);
+    box-shadow: 24px 0 60px rgba(0, 0, 0, 0.6);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    transform: translateX(-105%);
+    transition: transform 0.22s ease;
+  }
+  body.nav-drawer-open main.shell[data-route="terminal"] .nav-drop-bar { transform: translateX(0); }
+  body.nav-drawer-open { overflow: hidden; }
+  body:has([data-dashboard]:not([hidden])):has(main.shell[data-route="terminal"]) .nav-mobile-trigger {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 4px;
+    position: fixed;
+    top: calc(9px + env(safe-area-inset-top));
+    left: 10px;
+    width: 42px;
+    height: 42px;
+    z-index: 6001;
+    border-radius: 12px;
+    border: 1px solid rgba(114, 255, 35, 0.45);
+    background: rgba(6, 14, 7, 0.96);
+    cursor: pointer;
+    box-shadow: 0 8px 26px rgba(0, 0, 0, 0.45);
+  }
+  .nav-mobile-trigger span {
+    display: block;
+    width: 17px;
+    height: 2px;
+    border-radius: 2px;
+    background: #9dff5e;
+    transition: transform 0.18s ease, opacity 0.18s ease;
+  }
+  body.nav-drawer-open .nav-mobile-trigger span:nth-child(1) { transform: translateY(6px) rotate(45deg); }
+  body.nav-drawer-open .nav-mobile-trigger span:nth-child(2) { opacity: 0; }
+  body.nav-drawer-open .nav-mobile-trigger span:nth-child(3) { transform: translateY(-6px) rotate(-45deg); }
+  body.nav-drawer-open .nav-mobile-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 5999;
+    background: rgba(0, 0, 0, 0.55);
+  }
+  /* Clear the hamburger so it never sits on the brand badge. */
+  body:has([data-dashboard]:not([hidden])) main.shell[data-route="terminal"] .topbar { padding-left: 50px; }
+  /* Bigger tap targets inside the drawer. */
+  .nav-side-group-toggle { padding: 12px 12px; font-size: 0.92rem; }
+  .nav-drop-bar .nav-side-items button { padding: 11px 10px; font-size: 0.9rem; min-height: 42px; }
 }
 
 /* Execution receipt: the trade's live progress, bottom-left, out of the way. */

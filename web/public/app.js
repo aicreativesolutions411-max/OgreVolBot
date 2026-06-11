@@ -23252,9 +23252,13 @@ const DESKTOP_NAV_ICONS = {
   wallets: "👛", positions: "💼", pnl: "📊", profile: "🐸"
 };
 
-// Desktop nav is a fixed LEFT SIDEBAR: every destination visible at all times -
-// no dropdowns to misread, nothing hides on hover. Icon-only at medium widths,
-// icons + labels when there is room. The mobile flat rail is untouched.
+const DESKTOP_NAV_GROUP_ICONS = { live: "📡", chart: "📈", intel: "🔭", tools: "🧰", portfolio: "💼", profile: "🐸" };
+
+// One nav, two faces. Desktop: fixed left sidebar with ACCORDION groups - click
+// "Intel" and its options drop right there; one group open at a time, no dead
+// space. Mobile: the same menu slides in from the left off a hamburger and stays
+// up until you pick a destination, tap outside, or tap the button again.
+// The flat rail markup in index.html is untouched (CSS-hidden where the drawer serves).
 function buildDesktopNavDropBar() {
   const tabs = document.querySelector(".tabs");
   if (!tabs || document.querySelector("[data-nav-drop]")) return;
@@ -23264,7 +23268,11 @@ function buildDesktopNavDropBar() {
   bar.setAttribute("aria-label", "Portal areas");
   bar.innerHTML = DESKTOP_NAV_GROUPS.map((group) => `
     <div class="nav-drop-group" data-nav-drop-group="${escapeHtml(group.key)}">
-      <span class="nav-side-group-label">${escapeHtml(group.label)}</span>
+      <button type="button" class="nav-side-group-toggle" aria-expanded="false">
+        <span class="nav-side-icon" aria-hidden="true">${DESKTOP_NAV_GROUP_ICONS[group.key] || "•"}</span>
+        <span class="nav-side-label">${escapeHtml(group.label)}</span>
+        <span class="nav-side-caret" aria-hidden="true">▾</span>
+      </button>
       <div class="nav-side-items">
         ${group.items.map(([tab, label]) => `
           <button type="button" data-tab="${escapeHtml(tab)}" title="${escapeHtml(label)}">
@@ -23275,16 +23283,59 @@ function buildDesktopNavDropBar() {
     </div>
   `).join("");
   tabs.parentElement.insertBefore(bar, tabs);
+  bar.addEventListener("click", (event) => {
+    const toggle = event.target.closest(".nav-side-group-toggle");
+    if (toggle) {
+      const group = toggle.parentElement;
+      const wasOpen = group.classList.contains("is-open");
+      bar.querySelectorAll(".nav-drop-group.is-open").forEach((item) => item.classList.remove("is-open"));
+      bar.querySelectorAll(".nav-side-group-toggle").forEach((item) => item.setAttribute("aria-expanded", "false"));
+      if (!wasOpen) {
+        group.classList.add("is-open");
+        toggle.setAttribute("aria-expanded", "true");
+      }
+      return;
+    }
+    if (event.target.closest("[data-tab]")) closeMobileNavDrawer();
+  });
+  // Mobile trigger + backdrop live on body so they survive route re-renders.
+  const trigger = document.createElement("button");
+  trigger.type = "button";
+  trigger.className = "nav-mobile-trigger";
+  trigger.setAttribute("data-nav-mobile-trigger", "");
+  trigger.setAttribute("aria-label", "Open the SlimeWire menu");
+  trigger.innerHTML = "<span></span><span></span><span></span>";
+  trigger.addEventListener("click", () => document.body.classList.toggle("nav-drawer-open"));
+  const backdrop = document.createElement("div");
+  backdrop.className = "nav-mobile-backdrop";
+  backdrop.setAttribute("data-nav-mobile-backdrop", "");
+  backdrop.addEventListener("click", closeMobileNavDrawer);
+  document.body.append(trigger, backdrop);
+}
+
+function closeMobileNavDrawer() {
+  document.body.classList.remove("nav-drawer-open");
 }
 
 function syncDesktopNavActiveState() {
   const bar = document.querySelector("[data-nav-drop]");
   if (!bar) return;
+  let anyOpen = false;
   bar.querySelectorAll(".nav-drop-group").forEach((group) => {
     const hasActive = Boolean(group.querySelector(`[data-tab="${state.activeTab}"]`));
-    group.querySelector(".nav-drop-toggle")?.toggleAttribute("data-active", hasActive);
-    group.classList.remove("is-open");
+    group.querySelector(".nav-side-group-toggle")?.toggleAttribute("data-active", hasActive);
+    if (group.classList.contains("is-open")) anyOpen = true;
   });
+  // Open the active group by default, but never slam shut a group the user just
+  // opened - background renders run every few seconds.
+  if (!anyOpen) {
+    bar.querySelectorAll(".nav-drop-group").forEach((group) => {
+      if (group.querySelector(`[data-tab="${state.activeTab}"]`)) {
+        group.classList.add("is-open");
+        group.querySelector(".nav-side-group-toggle")?.setAttribute("aria-expanded", "true");
+      }
+    });
+  }
   bar.querySelectorAll("[data-tab]").forEach((button) => {
     button.dataset.active = button.dataset.tab === state.activeTab ? "true" : "false";
   });
