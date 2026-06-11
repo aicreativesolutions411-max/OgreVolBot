@@ -5969,8 +5969,9 @@ function renderTabs() {
     : 0;
   const terminalWindowScrollTop = state.activeTab === "terminal" ? window.scrollY : 0;
   document.querySelectorAll("[data-tab]").forEach((button) => {
-    if (!button.closest(".tabs")) button.removeAttribute("data-active");
+    if (!button.closest(".tabs") && !button.closest("[data-nav-drop]")) button.removeAttribute("data-active");
   });
+  syncDesktopNavActiveState();
   document.querySelectorAll(".tabs [data-tab]").forEach((button) => {
     button.dataset.active = button.dataset.tab === state.activeTab ? "true" : "false";
   });
@@ -11528,7 +11529,10 @@ function cleanXHandle(value) {
 
 function openXShare(rawText) {
   const text = shareTextWithSite(rawText);
-  const url = `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(shareSiteUrl)}`;
+  // Logged-in shares carry the sharer's referral link - every flex earns invites.
+  const referral = String(state.user?.referralLink || "").trim();
+  const shareUrl = referral && !text.includes("/r/") ? referral : shareSiteUrl;
+  const url = `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(shareUrl)}`;
   window.open(url, "_blank", "noopener,noreferrer");
 }
 
@@ -14697,10 +14701,52 @@ function queueSmartChartBootstrap(token = {}, options = {}) {
   return true;
 }
 
+// Fast path: hit DexScreener's public API straight from the browser, in parallel with
+// the server bootstrap. The market bar fills in ~300ms even for a logged-out visitor
+// landing cold from a Telegram link - the server result still adds shield/dev data.
+const fastDexLookupAt = new Map();
+async function fastDirectDexLookup(mint) {
+  const key = String(mint || "").trim();
+  if (!key) return;
+  const last = fastDexLookupAt.get(key) || 0;
+  if (Date.now() - last < 30_000) return;
+  fastDexLookupAt.set(key, Date.now());
+  try {
+    const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${encodeURIComponent(key)}`, { cache: "no-store" });
+    const data = await response.json();
+    const pairs = (data?.pairs || []).filter((pair) => pair?.chainId === "solana");
+    const best = pairs.sort((a, b) => (Number(b?.liquidity?.usd) || 0) - (Number(a?.liquidity?.usd) || 0))[0];
+    if (!best) return;
+    rememberSmartChartBootstrap({
+      tokenMint: key,
+      symbol: best.baseToken?.symbol || "",
+      name: best.baseToken?.name || "",
+      priceUsd: best.priceUsd,
+      marketCap: best.marketCap || best.fdv || null,
+      marketCapUsd: best.marketCap || best.fdv || null,
+      fdv: best.fdv || null,
+      liquidityUsd: Number(best.liquidity?.usd) || null,
+      liquidity: { usd: Number(best.liquidity?.usd) || null },
+      volumeH24: Number(best.volume?.h24) || null,
+      volumeH1: Number(best.volume?.h1) || null,
+      h1: Number(best.priceChange?.h1) || null,
+      imageUrl: best.info?.imageUrl || "",
+      dexUrl: best.url || "",
+      pairAddress: best.pairAddress || "",
+      dexId: best.dexId || "",
+      source: "direct-dexscreener"
+    });
+    if (state.activeTab === "smartChart") render({ preserveSmartChartFrame: true });
+  } catch {
+    // Best-effort: the server bootstrap is still on its way.
+  }
+}
+
 function prefetchTokenChart(tokenRef = {}, options = {}) {
   const mint = String(tokenRef?.tokenMint || tokenRef?.mint || tokenRef?.tokenAddress || "").trim();
   if (!mint) return false;
   rememberSmartChartDexResolution(tokenRef);
+  void fastDirectDexLookup(mint);
   queueSmartChartBootstrap(tokenRef, { source: options.source || "prefetch" });
   state.smartChartPrefetchLog = [
     ...(state.smartChartPrefetchLog || []),
@@ -22672,7 +22718,66 @@ function startAppWatchdog() {
   }, APP_WATCHDOG_INTERVAL_MS);
 }
 
+// Desktop nav: a compact dropdown bar (6 areas) built alongside the existing flat rail.
+// The old .tabs nav is untouched (mobile rail + its tests depend on that exact DOM);
+// CSS swaps which one shows per breakpoint. Every item is a normal [data-tab] button,
+// so the existing click handlers and active-state logic just work.
+const DESKTOP_NAV_GROUPS = [
+  { key: "live", label: "Live", items: [["terminal", "Live Terminal"], ["live", "Cooks"], ["liveTrades", "Live Trades"]] },
+  { key: "chart", label: "Chart & Swap", items: [["smartChart", "Smart Chart"], ["trade", "Slime Swap"]] },
+  { key: "intel", label: "Intel", items: [["slimeScope", "Slime Scope"], ["watchlist", "Watchlist"], ["kol", "KOL Tracker"], ["sniper", "OgreSniper"], ["txAudit", "TP/SL Audit"]] },
+  { key: "tools", label: "Ogre Tek", items: [["tek", "Tek Hub"], ["ogreAi", "Ogre A.I."], ["launchCoin", "Pump Launch"], ["bundle", "Bundle"], ["volume", "SlimeBot"], ["launch", "Launch Watch"]] },
+  { key: "portfolio", label: "Portfolio", items: [["wallets", "Wallets"], ["positions", "Positions"], ["pnl", "PnL"]] },
+  { key: "profile", label: "Profile", items: [["profile", "Home / Profile"]] }
+];
+
+function buildDesktopNavDropBar() {
+  const tabs = document.querySelector(".tabs");
+  if (!tabs || document.querySelector("[data-nav-drop]")) return;
+  const bar = document.createElement("nav");
+  bar.className = "nav-drop-bar";
+  bar.setAttribute("data-nav-drop", "");
+  bar.setAttribute("aria-label", "Portal areas");
+  bar.innerHTML = DESKTOP_NAV_GROUPS.map((group) => `
+    <div class="nav-drop-group" data-nav-drop-group="${escapeHtml(group.key)}">
+      <button type="button" class="nav-drop-toggle" aria-haspopup="true" aria-expanded="false">${escapeHtml(group.label)}<span class="nav-drop-caret" aria-hidden="true">▾</span></button>
+      <div class="nav-drop-menu" role="menu">
+        ${group.items.map(([tab, label]) => `<button type="button" role="menuitem" data-tab="${escapeHtml(tab)}">${escapeHtml(label)}</button>`).join("")}
+      </div>
+    </div>
+  `).join("");
+  tabs.parentElement.insertBefore(bar, tabs);
+  // Tap-to-toggle for touch laptops; hover handles the rest via CSS.
+  bar.addEventListener("click", (event) => {
+    const toggle = event.target.closest(".nav-drop-toggle");
+    if (!toggle) return;
+    const group = toggle.parentElement;
+    const wasOpen = group.classList.contains("is-open");
+    bar.querySelectorAll(".nav-drop-group.is-open").forEach((item) => item.classList.remove("is-open"));
+    if (!wasOpen) group.classList.add("is-open");
+  });
+  document.addEventListener("click", (event) => {
+    if (!event.target.closest("[data-nav-drop]")) {
+      bar.querySelectorAll(".nav-drop-group.is-open").forEach((item) => item.classList.remove("is-open"));
+    }
+  });
+}
+
+function syncDesktopNavActiveState() {
+  const bar = document.querySelector("[data-nav-drop]");
+  if (!bar) return;
+  bar.querySelectorAll(".nav-drop-group").forEach((group) => {
+    const hasActive = Boolean(group.querySelector(`[data-tab="${state.activeTab}"]`));
+    group.querySelector(".nav-drop-toggle")?.toggleAttribute("data-active", hasActive);
+    group.classList.remove("is-open");
+  });
+  bar.querySelectorAll("[data-tab]").forEach((button) => {
+    button.dataset.active = button.dataset.tab === state.activeTab ? "true" : "false";
+  });
+}
+
 async function initializeApp() {
+  buildDesktopNavDropBar();
   syncIntroGateHistory();
   installPerformanceInstrumentation();
   installCrashInstrumentation();

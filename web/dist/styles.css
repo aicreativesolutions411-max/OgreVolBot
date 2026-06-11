@@ -9604,3 +9604,76 @@ body {
   background: rgba(8, 20, 10, 0.5);
   font-size: 0.86rem;
 }
+
+/* Desktop dropdown nav: compact areas with menus; the flat rail stays for mobile. */
+.nav-drop-bar { display: none; }
+@media (min-width: 761px) {
+  .tabs { display: none; }
+  .nav-drop-bar {
+    display: flex;
+    gap: 8px;
+    position: sticky;
+    top: 10px;
+    z-index: 14;
+    padding: 9px 10px;
+    border-radius: 14px;
+    border: 1px solid rgba(114, 255, 35, 0.2);
+    background: rgba(4, 9, 5, 0.94);
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.22);
+  }
+  .nav-drop-group { position: relative; }
+  .nav-drop-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 9px 16px;
+    border-radius: 999px;
+    border: 1px solid rgba(114, 255, 35, 0.2);
+    background: rgba(8, 20, 10, 0.55);
+    color: rgba(226, 255, 215, 0.85);
+    font-weight: 800;
+    font-size: 0.86rem;
+    cursor: pointer;
+  }
+  .nav-drop-caret { font-size: 0.62rem; opacity: 0.6; }
+  .nav-drop-toggle[data-active] {
+    background: linear-gradient(135deg, rgba(114, 255, 35, 0.94), rgba(187, 255, 99, 0.94));
+    color: #071006;
+    border-color: rgba(114, 255, 35, 0.6);
+  }
+  .nav-drop-menu {
+    display: none;
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    min-width: 188px;
+    z-index: 40;
+    padding: 7px;
+    border-radius: 14px;
+    border: 1px solid rgba(114, 255, 35, 0.28);
+    background: #060d07;
+    box-shadow: 0 22px 60px rgba(0, 0, 0, 0.55);
+    flex-direction: column;
+    gap: 3px;
+  }
+  .nav-drop-group:hover .nav-drop-menu,
+  .nav-drop-group:focus-within .nav-drop-menu,
+  .nav-drop-group.is-open .nav-drop-menu { display: flex; }
+  .nav-drop-menu button {
+    text-align: left;
+    padding: 9px 12px;
+    border-radius: 9px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: rgba(226, 255, 215, 0.85);
+    font-weight: 700;
+    font-size: 0.86rem;
+    cursor: pointer;
+  }
+  .nav-drop-menu button:hover { background: rgba(114, 255, 35, 0.12); }
+  .nav-drop-menu button[data-active="true"] {
+    background: rgba(114, 255, 35, 0.2);
+    color: #d6ffbf;
+    border-color: rgba(114, 255, 35, 0.35);
+  }
+}

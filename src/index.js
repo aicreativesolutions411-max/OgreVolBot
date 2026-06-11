@@ -1231,6 +1231,7 @@ async function registerTelegramBotCommands() {
     { command: "ape", description: "One fresh low-MC shot right now" },
     { command: "receipts", description: "SlimeShield rug-call receipts + hit rate" },
     { command: "proof", description: "Live engine track record + proof wall" },
+    { command: "mywins", description: "on/off - post YOUR TP wins in this chat" },
     { command: "slimewire", description: "on/off - engine alerts in this chat (admins)" }
   ];
   const dmCommands = [
@@ -6441,6 +6442,11 @@ async function handleMessage(message, userId) {
     await handleTelegramProofCommand(chatId);
     return;
   }
+  const myWins = parseCommandWithArgument(text, ["mywins", "my_wins"]);
+  if (myWins) {
+    await handleTelegramMyWinsToggle(chatId, message, userId, myWins.argument);
+    return;
+  }
   // /slimewire on|off - also accept the bare phrase, people drop the slash constantly.
   const bareToggle = /^slimewire(?:\s+alerts)?\s+(on|off|enable|disable|start|stop)$/i.exec(text);
   const groupToggle = parseCommandWithArgument(text, ["slimewire", "slimewire_alerts"])
@@ -9780,6 +9786,7 @@ function logTradePlanExitEvent(event, plan, planWallet, sell = {}, triggerReason
   });
   announceTradePlanExitToChannel(event, plan, planWallet, triggerReason);
   pushTradePlanExitToUser(event, plan, planWallet, triggerReason);
+  if (event === "tp_sl_trade_closed") postUserWinToGroups(plan, planWallet, triggerReason);
 }
 
 // Private per-user push when their plan exits or fails - this is the alert that lets
@@ -19298,6 +19305,59 @@ async function handleTelegramReceiptsCommand(chatId) {
   ].join("\n"));
 }
 
+// /mywins on|off (any member, in a group): opt your own TP/SL wins into this chat.
+// Link path: DM the bot /web -> log into slimewire.org with the code -> your site
+// account IS your Telegram id, so the engine knows which exits are yours.
+async function handleTelegramMyWinsToggle(chatId, message, userId, argument) {
+  if (isPrivateChat(message.chat)) {
+    await say(chatId, "/mywins works inside a group: it posts YOUR SlimeWire take-profit wins to that chat (you opt in per group). First link your account: DM me /web and log into slimewire.org with the code.");
+    return;
+  }
+  const turnOn = /^(on|enable|start|yes)$/i.test(String(argument || "").trim());
+  const turnOff = /^(off|disable|stop|no)$/i.test(String(argument || "").trim());
+  if (!turnOn && !turnOff) {
+    await say(chatId, "Usage: /mywins on - your SlimeWire TP wins post here with credit. /mywins off stops it. Make sure you logged into slimewire.org via the /web code in my DM, or the engine cannot match your trades.");
+    return;
+  }
+  const store = await readTelegramGroups();
+  const key = String(chatId);
+  store.groups[key] = store.groups[key] || { addedAt: new Date().toISOString(), alerts: false };
+  const subscribers = store.groups[key].winSubscribers || {};
+  const handle = message.from?.username ? `@${message.from.username}` : (message.from?.first_name || "a degen");
+  if (turnOn) subscribers[String(userId)] = String(handle).slice(0, 40);
+  else delete subscribers[String(userId)];
+  store.groups[key].winSubscribers = subscribers;
+  await writeJsonFile(telegramGroupsPath(), store);
+  await say(chatId, turnOn
+    ? `${handle} - your SlimeWire take-profit wins will post here. (Heads up: that links your wins to this handle in this chat.)`
+    : "Your wins will no longer post in this chat.");
+}
+
+// Personal win posts: when a TP fires for a user who opted in somewhere, those chats
+// get the flex with credit. Anonymous engine posts stay anonymous; this is opt-in.
+function postUserWinToGroups(plan, planWallet, triggerReason = "") {
+  if (!/^take-profit/i.test(String(triggerReason || ""))) return;
+  const planUser = String(plan?.userId || "");
+  if (!planUser) return;
+  void (async () => {
+    try {
+      const store = await readTelegramGroups();
+      const movePct = Number(planWallet?.lastTriggerMovePct ?? planWallet?.lastMovePct);
+      const moveLabel = Number.isFinite(movePct) ? `+${movePct.toFixed(1)}%` : "a take-profit";
+      for (const [groupChatId, group] of Object.entries(store.groups || {})) {
+        const handle = group?.winSubscribers?.[planUser];
+        if (!handle) continue;
+        groupBridgeFor(groupChatId).announce("user-win", `${planUser}:${plan?.id || plan?.tokenMint}`, [
+          `🎯 <b>${escapeTelegramHtml(handle)} just banked ${escapeTelegramHtml(moveLabel)}</b> on $${escapeTelegramHtml(plan?.copySignal?.symbol || shortMint(plan?.tokenMint || ""))} - SlimeWire server TP fired for them automatically.`,
+          `<a href="https://www.slimewire.org">run your exits on slimewire.org</a> | <a href="https://www.slimewire.org/proof">proof</a>`
+        ].join("\n"));
+      }
+    } catch (error) {
+      console.warn(`[my-wins] post failed: ${error.message}`);
+    }
+  })();
+}
+
 // /proof: the quotable track record - one line of live stats + the public page.
 async function handleTelegramProofCommand(chatId) {
   if (tgCommandOnCooldown(chatId, "proof", TG_LOOK_COOLDOWN_MS)) return;
@@ -19680,8 +19740,28 @@ async function runAlphaDropTick() {
   // that is not an outright AVOID. Risky plays are shown honestly with their verdict -
   // degens want the early ones, the label keeps it honest.
   const { rows } = await telegramAlphaRows("alpha-drop");
+  // Mix in low-MC moonshot rows: degens want at least a couple of genuinely early
+  // plays per drop, not just the safest scanner output.
+  let moonRows = [];
+  try {
+    const moonScan = await webSniperScan("tg:alpha-drop:moon", "moonshot");
+    moonRows = (moonScan?.rows || []).filter((row) => row.tokenMint);
+  } catch {
+    // moonshot pool empty - the main rows still post
+  }
+  const seenMints = new Set();
+  const blended = [];
+  const maxLen = Math.max(rows.length, moonRows.length);
+  for (let i = 0; i < maxLen; i++) {
+    for (const row of [rows[i], moonRows[i]]) {
+      if (row?.tokenMint && !seenMints.has(row.tokenMint)) {
+        seenMints.add(row.tokenMint);
+        blended.push(row);
+      }
+    }
+  }
   const picks = [];
-  for (const row of rows.slice(0, TG_ALPHA_DROP_PICKS + 3)) {
+  for (const row of blended.slice(0, TG_ALPHA_DROP_PICKS + 4)) {
     if (picks.length >= TG_ALPHA_DROP_PICKS) break;
     const shield = await webSlimeShield(row.tokenMint).catch(() => null);
     const verdict = String(shield?.verdict || "").toUpperCase();
