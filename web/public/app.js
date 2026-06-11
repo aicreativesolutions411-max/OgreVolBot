@@ -10000,6 +10000,41 @@ async function useLaunchCoinMint() {
   render({ force: true });
 }
 
+// Live launch feed: poll the server's progress map every ~1.2s and narrate each
+// stage with elapsed time. Returns the final launch result or throws the
+// server's exact failure reason.
+async function pollLaunchProgress(serverAttemptId, statusEl) {
+  const startedAt = Date.now();
+  let lastText = "";
+  while (Date.now() - startedAt < 180_000) {
+    await sleep(1_200);
+    let progress = null;
+    try {
+      const data = await api(`/api/web/launch/progress?launchAttemptId=${encodeURIComponent(serverAttemptId)}`, { timeoutMs: 8_000, dedupe: false });
+      progress = data.progress || null;
+    } catch {
+      continue;
+    }
+    if (!progress) continue;
+    if (progress.status === "COMPLETE") return progress.launch || {};
+    if (progress.status === "FAILED") {
+      const error = new Error(progress.failureReason || "Launch failed.");
+      error.launchAttemptId = serverAttemptId;
+      throw error;
+    }
+    const seconds = Math.round((Date.now() - startedAt) / 1000);
+    const text = `${progress.stageText || "Working..."} · ${seconds}s`;
+    if (text !== lastText) {
+      lastText = text;
+      state.launchCoinStatus = text;
+      writeText(statusEl, text);
+    }
+  }
+  const error = new Error("The launch is still finishing on the server - check the chart or Live Launch Status in a minute. Do NOT launch again (that would create a second coin).");
+  error.launchAttemptId = serverAttemptId;
+  throw error;
+}
+
 async function submitLaunchCoin() {
   // Double-submit guard: a duplicate launch click would create a second token /
   // duplicate dev buy and burn SOL. Block re-entry until this attempt finishes.
@@ -10079,7 +10114,12 @@ async function submitLaunchCoin() {
       preserveSafeError: true
     });
 
-    const launch = data.launch || {};
+    let launch = data.launch || {};
+    // Async pipeline: the server answered instantly; poll for the live
+    // play-by-play so the button never feels frozen.
+    if (launch.async && launch.status === "RUNNING" && launch.launchAttemptId) {
+      launch = await pollLaunchProgress(launch.launchAttemptId, status);
+    }
     const tokenMint = String(launch.tokenMint || launch.mint || launch.ca || launch.contractAddress || "").trim();
     const signature = launch.signature ? ` Signature: ${shortAddress(launch.signature)}.` : "";
 

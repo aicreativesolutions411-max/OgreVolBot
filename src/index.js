@@ -3103,6 +3103,9 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    // Launch is ASYNC: respond in <1s with the attempt id, run the pipeline in
+    // the background, and let the client poll /launch/progress for the live
+    // play-by-play. One long blocking request made every launch feel frozen.
     if (request.method === "POST" && pathname === "/api/web/launch/coin") {
       const bodyLimit = Number.isFinite(CONFIG.pumpLaunchBodyLimitBytes) && CONFIG.pumpLaunchBodyLimitBytes > 0
         ? CONFIG.pumpLaunchBodyLimitBytes
@@ -3110,15 +3113,54 @@ async function handleWebApiRequest(request, response, requestUrl) {
       let body = {};
       try {
         body = await readJsonRequestBody(request, bodyLimit);
-        const result = await webLaunchPumpCoin(auth.userId, body);
+        const launchAttemptId = String(body.launchAttemptId || "").slice(0, 80) || crypto.randomUUID();
+        body.launchAttemptId = launchAttemptId;
+        setLaunchProgress(launchAttemptId, {
+          status: "RUNNING", stage: "starting", stageText: "Validating launch sheet",
+          userId: String(auth.userId), startedAt: Date.now()
+        });
+        void webLaunchPumpCoin(auth.userId, body)
+          .then((result) => {
+            setLaunchProgress(launchAttemptId, { status: "COMPLETE", stageText: "Launch complete", result, tokenMint: result?.tokenMint || "" });
+          })
+          .catch((error) => {
+            const payload = pumpLaunchWebErrorPayload(error, body);
+            setLaunchProgress(launchAttemptId, {
+              status: "FAILED",
+              stageText: "Launch failed",
+              failureReason: String(payload?.message || error.message || "Launch failed.").slice(0, 500)
+            });
+          });
         sendWebJson(request, response, 200, {
           ok: true,
-          launch: result
+          launch: { status: "RUNNING", async: true, launchAttemptId }
         });
       } catch (error) {
         const status = Number(error.statusCode || error.status || 500);
         sendWebJson(request, response, status >= 400 && status < 600 ? status : 500, pumpLaunchWebErrorPayload(error, body));
       }
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/web/launch/progress") {
+      const progressId = String(requestUrl.searchParams.get("launchAttemptId") || "").slice(0, 80);
+      const entry = pumpLaunchLiveProgress.get(progressId);
+      if (!entry || String(entry.userId || "") !== String(auth.userId)) {
+        sendWebJson(request, response, 404, { ok: false, error: "Unknown launch attempt." });
+        return;
+      }
+      sendWebJson(request, response, 200, {
+        ok: true,
+        progress: {
+          launchAttemptId: progressId,
+          status: entry.status || "RUNNING",
+          stage: entry.stage || "",
+          stageText: entry.stageText || "",
+          failureReason: entry.failureReason || "",
+          elapsedMs: Date.now() - (entry.startedAt || Date.now()),
+          launch: entry.status === "COMPLETE" ? entry.result : undefined
+        }
+      });
       return;
     }
 
@@ -10020,11 +10062,54 @@ function logTpSlEvent(event, fields = {}) {
   }
 }
 
+// Live launch progress: the launch route answers in <1s and the client polls
+// this map for a step-by-step play-by-play. One hook in logPumpLaunchEvent
+// covers every stage from every launch path - no per-site wiring.
+const pumpLaunchLiveProgress = new Map();
+const PUMP_LAUNCH_STAGE_TEXT = {
+  pump_launch_wallet_validated: "Dev wallet authorized",
+  pump_launch_preflight_passed: "Balances verified",
+  pump_launch_image_processed: "Image processed",
+  pump_launch_metadata_uploaded: "Metadata pinned to IPFS",
+  pump_launch_pumpportal_request: "Building create transaction",
+  pump_launch_transaction_signed: "Signing transactions",
+  pump_launch_transaction_signature: "Create landed on-chain",
+  pump_launch_jito_bundle_build: "Building atomic anti-snipe bundle",
+  pump_launch_jito_bundle_submitted: "Bundle submitted - waiting for a block",
+  pump_launch_jito_bundle_landed: "Bundle landed atomically 🎯",
+  pump_launch_jito_bundle_missed: "Bundle missed - switching to standard launch",
+  pump_launch_jito_bundle_sim_failed: "Bundle simulation failed",
+  pump_launch_fallback_buy: "First buys executing",
+  pump_launch_fallback_plan_failed: "Retrying buys without exit plans",
+  pump_launch_failed: "Launch failed"
+};
+
+function setLaunchProgress(launchAttemptId, patch = {}) {
+  if (!launchAttemptId) return;
+  const prev = pumpLaunchLiveProgress.get(launchAttemptId) || {};
+  pumpLaunchLiveProgress.set(launchAttemptId, { ...prev, ...patch, updatedAt: Date.now() });
+  if (pumpLaunchLiveProgress.size > 100) {
+    const oldest = [...pumpLaunchLiveProgress.entries()].sort((a, b) => (a[1].updatedAt || 0) - (b[1].updatedAt || 0))[0]?.[0];
+    if (oldest) pumpLaunchLiveProgress.delete(oldest);
+  }
+}
+
 function logPumpLaunchEvent(event, fields = {}) {
   try {
     console.log(JSON.stringify(pumpLaunchLogEntry(event, fields)));
   } catch (error) {
     console.warn(`Pump launch log failed: ${error.message}`);
+  }
+  try {
+    const launchAttemptId = String(fields.launchAttemptId || "");
+    if (launchAttemptId && PUMP_LAUNCH_STAGE_TEXT[event]) {
+      setLaunchProgress(launchAttemptId, {
+        stage: event,
+        stageText: PUMP_LAUNCH_STAGE_TEXT[event] + (fields.attempt ? ` (attempt ${fields.attempt})` : "")
+      });
+    }
+  } catch {
+    // progress is a nicety; logging stays primary
   }
 }
 
