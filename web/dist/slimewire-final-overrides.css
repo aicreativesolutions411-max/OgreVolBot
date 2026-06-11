@@ -19305,3 +19305,28 @@ html body main.shell[data-app][data-route="intro"] .swamp-intro-stage[data-intro
   -webkit-backdrop-filter: none !important;
   background: rgba(5, 8, 6, 0.95) !important;
 }
+
+/* SPACING_TIGHTEN_20260611_V1: kill the dead air. Header cards, toolbars, and stacked
+   panels carry less padding everywhere; mobile loses the oversized gaps entirely. */
+.account-check-card {
+  padding: 12px 14px !important;
+  gap: 10px !important;
+}
+.account-check-card h3 { margin: 0 !important; }
+.account-check-card p { margin: 2px 0 0 !important; }
+.terminal-title-row { margin: 0 0 8px !important; gap: 8px !important; }
+.section-actions, .terminal-actions { gap: 7px !important; margin: 6px 0 10px !important; }
+.trade-head { margin-bottom: 8px !important; }
+.panel-host > section + section,
+.panel-host > div + section { margin-top: 10px !important; }
+@media (max-width: 760px) {
+  .panel-host { padding: 6px 6px 14px !important; }
+  .trade-card, .terminal-panel, .account-check-card, .row-card { padding: 10px !important; }
+  .table-list { gap: 7px !important; }
+  .tek-hub { gap: 10px !important; }
+  .tek-tool-grid { gap: 8px !important; }
+  .pnl-summary { gap: 8px !important; margin: 8px 0 !important; }
+  .card-actions { gap: 6px !important; }
+  .trade-layout, .terminal-layout { gap: 10px !important; }
+  .row-card { gap: 8px !important; }
+}

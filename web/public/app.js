@@ -6092,6 +6092,45 @@ function tekHubHtml() {
 
 // Live Ogre Brief: a glanceable "what is happening right now" strip built entirely
 // from state the client already has - zero extra requests.
+function ogreBriefItems() {
+  const liveRows = allRawSignalRows();
+  const freshLowMc = liveRows.filter((row) => {
+    const mc = Number(row.marketCapUsd ?? row.marketCap) || 0;
+    return mc > 0 && mc < 8000;
+  }).length;
+  const plans = Array.isArray(state.tradePlans) ? state.tradePlans : [];
+  const watchingPlans = plans.filter((plan) => ["watching", "active"].includes(String(plan.status || "").toLowerCase()));
+  const nearTp = watchingPlans.filter((plan) => {
+    const move = Number(plan.lastMovePct ?? plan.wallets?.[0]?.lastMovePct);
+    const tp = Number(plan.takeProfitPct);
+    return Number.isFinite(move) && Number.isFinite(tp) && tp > 0 && move > tp * 0.7;
+  }).length;
+  const shieldWatching = Number(state.shieldReceipts?.stats?.watching || 0);
+  return [
+    freshLowMc ? `🐣 ${freshLowMc} fresh under 8k MC on the feed` : "",
+    watchingPlans.length ? `🛡 ${watchingPlans.length} plan(s) armed${nearTp ? ` - ${nearTp} near take-profit` : ""}` : "",
+    shieldWatching ? `🔎 ${shieldWatching} flagged token(s) being tracked to outcome` : ""
+  ].filter(Boolean);
+}
+
+// The agent greets like a host: what changed, what needs attention - once per session.
+let ogreAgentHostGreeted = false;
+function maybeOgreAgentHostGreeting() {
+  if (ogreAgentHostGreeted || ogreAgentMessages().length) return;
+  ogreAgentHostGreeted = true;
+  const items = ogreBriefItems();
+  pushOgreAgentMessage({
+    role: "assistant",
+    text: items.length
+      ? `Welcome back. Right now: ${items.join(". ")}. Ask me anything or say "open positions".`
+      : `Welcome to SlimeWire. I can navigate anywhere, check any CA, set your quick buy, and run trades from chat. Try "whats cooking" or paste a token address.`,
+    actions: [
+      { label: "Live Terminal", type: "open_tab", tab: "terminal" },
+      { label: "Positions", type: "open_tab", tab: "positions" }
+    ]
+  });
+}
+
 function ogreBriefHtml() {
   const liveRows = allRawSignalRows();
   const freshLowMc = liveRows.filter((row) => {
@@ -14632,8 +14671,13 @@ function mergeSmartChartDexResolution(row = null) {
     name: row.name || resolved.name || "Token",
     imageUrl: row.imageUrl || resolved.imageUrl || "",
     marketCap: row.marketCap || resolved.marketCap || 0,
+    marketCapUsd: row.marketCapUsd || resolved.marketCap || 0,
     fdv: row.fdv || resolved.fdv || 0,
     liquidityUsd: row.liquidityUsd || resolved.liquidityUsd || 0,
+    volumeH24: row.volumeH24 || resolved.volumeH24 || 0,
+    volumeH1: row.volumeH1 || resolved.volumeH1 || 0,
+    priceUsd: row.priceUsd || resolved.priceUsd || 0,
+    h1: row.h1 || resolved.h1 || 0,
     volume: row.volume || resolved.volume || null,
     txns: row.txns || resolved.txns || null
   };
@@ -14680,6 +14724,15 @@ function rememberSmartChartDexResolution(tokenRef = {}) {
       symbol: tokenRef.symbol || "",
       name: tokenRef.name || "",
       imageUrl: tokenRef.imageUri || tokenRef.imageUrl || "",
+      // Market stats must survive this store or the chart bar shows "checking"
+      // forever for tokens that are not already in a feed (e.g. Telegram deep links).
+      marketCap: Number(tokenRef.marketCap ?? tokenRef.marketCapUsd) || state.smartChartDexResolution?.[mint]?.marketCap || 0,
+      fdv: Number(tokenRef.fdv) || state.smartChartDexResolution?.[mint]?.fdv || 0,
+      liquidityUsd: Number(tokenRef.liquidityUsd ?? tokenRef.liquidity?.usd) || state.smartChartDexResolution?.[mint]?.liquidityUsd || 0,
+      volumeH24: Number(tokenRef.volumeH24) || state.smartChartDexResolution?.[mint]?.volumeH24 || 0,
+      volumeH1: Number(tokenRef.volumeH1) || state.smartChartDexResolution?.[mint]?.volumeH1 || 0,
+      priceUsd: Number(tokenRef.priceUsd) || state.smartChartDexResolution?.[mint]?.priceUsd || 0,
+      h1: Number(tokenRef.h1) || state.smartChartDexResolution?.[mint]?.h1 || 0,
       status: "resolved",
       resolvedAt: Date.now()
     }
@@ -17690,6 +17743,10 @@ function chartCallBoardHtml(mint) {
                 <span>${call.entryMcUsd ? `Entry MC ${escapeHtml(compactUsd(call.entryMcUsd))} | ` : ""}${call.targetX ? `Target ${escapeHtml(String(call.targetX))}x | ` : ""}${call.shieldVerdict ? `Shield ${escapeHtml(call.shieldVerdict)} ${escapeHtml(String(call.shieldScore ?? ""))} | ` : ""}${escapeHtml(formatDate(call.createdAt))}</span>
                 ${call.note ? `<small>${escapeHtml(call.note)}</small>` : ""}
                 ${call.status === "resolved" ? `<small class="${call.outcome === "won" ? "positive" : "negative"}">${call.outcome === "won" ? `✅ hit ${escapeHtml(String(call.peakX))}x` : escapeHtml(call.outcome)}</small>` : call.status === "watching" ? `<small class="muted-text">tracking...</small>` : ""}
+              </div>
+              <div class="card-actions compact">
+                <button data-quick-buy-token="${escapeHtml(call.mint)}" data-quick-buy-source="call-board">${escapeHtml(quickBuyButtonLabel())}</button>
+                <button data-watch-token="${escapeHtml(call.mint)}" data-watch-symbol="${escapeHtml(call.symbol || "")}">Watch</button>
               </div>
             </article>
           `).join("")}
@@ -21356,6 +21413,7 @@ document.addEventListener("click", async (event) => {
       closeOgreAgentPanel();
     } else {
       state.ogreAgentOpen = true;
+      maybeOgreAgentHostGreeting();
       renderOgreAgent({ force: true });
     }
     return;
