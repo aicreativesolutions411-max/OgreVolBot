@@ -2102,7 +2102,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
         groupLeague,
         topCallers: board.topCallers || [],
         thisWeek: weeklySeasonStats(calls.calls, receipts.receipts)
-      }, "public, max-age=60, stale-while-revalidate=300");
+      }, "public, max-age=15, stale-while-revalidate=60");
       return;
     }
 
@@ -19920,40 +19920,49 @@ async function runAlphaDropTick() {
   // Key by time bucket so the cadence holds even when the same top pick repeats.
   const dropKey = `drop-${Math.floor(now / TG_ALPHA_DROP_INTERVAL_MS)}`;
   const recipients = [];
-  for (const [chatId, group] of dueGroups) {
+  for (const [chatId] of dueGroups) {
     groupBridgeFor(chatId).announce("alpha-drop", dropKey, text);
-    group.lastAlphaAt = new Date(now).toISOString();
     recipients.push(chatId);
   }
-  if (recipients.length) await writeJsonFile(telegramGroupsPath(), groupsStore);
+  if (recipients.length) {
+    await withFileLock(telegramGroupsPath(), async () => {
+      const fresh = await readTelegramGroups();
+      for (const chatId of recipients) {
+        if (fresh.groups[chatId]) fresh.groups[chatId].lastAlphaAt = new Date(now).toISOString();
+      }
+      await writeJsonFile(telegramGroupsPath(), fresh);
+    });
+  }
   tgChannel.announce("alpha-drop", dropKey, text);
 
-  const calls = priorCalls;
-  let recorded = false;
-  for (const pick of picks) {
-    const best = bestDexPairForToken(pick.row.tokenMint, pairs.filter((pair) => pairMatchesToken(pair, pick.row.tokenMint)));
-    const priceUsd = Number(best?.priceUsd) || null;
-    if (!priceUsd) continue;
-    const recentCall = calls.calls.find((call) => call.mint === pick.row.tokenMint
-      && call.status === "watching");
-    if (recentCall) continue; // already tracking this mint
-    calls.calls.push({
-      mint: pick.row.tokenMint,
-      symbol: String(pick.row.symbol || shortMint(pick.row.tokenMint)).slice(0, 24),
-      chatIds: recipients,
-      priceUsd,
-      shieldScore: Number(pick.shield?.score) || null,
-      verdict: pick.verdict,
-      calledAt: new Date(now).toISOString(),
-      status: "watching",
-      outcome: null
-    });
-    recorded = true;
-  }
-  if (recorded) {
-    calls.calls = calls.calls.slice(-300);
-    await writeJsonFile(alphaCallsPath(), calls);
-  }
+  await withFileLock(alphaCallsPath(), async () => {
+    const calls = await readAlphaCalls(); // fresh read: never clobber outcomes written mid-tick
+    let recorded = false;
+    for (const pick of picks) {
+      const best = bestDexPairForToken(pick.row.tokenMint, pairs.filter((pair) => pairMatchesToken(pair, pick.row.tokenMint)));
+      const priceUsd = Number(best?.priceUsd) || null;
+      if (!priceUsd) continue;
+      const recentCall = calls.calls.find((call) => call.mint === pick.row.tokenMint
+        && call.status === "watching");
+      if (recentCall) continue; // already tracking this mint
+      calls.calls.push({
+        mint: pick.row.tokenMint,
+        symbol: String(pick.row.symbol || shortMint(pick.row.tokenMint)).slice(0, 24),
+        chatIds: recipients,
+        priceUsd,
+        shieldScore: Number(pick.shield?.score) || null,
+        verdict: pick.verdict,
+        calledAt: new Date(now).toISOString(),
+        status: "watching",
+        outcome: null
+      });
+      recorded = true;
+    }
+    if (recorded) {
+      calls.calls = calls.calls.slice(-300);
+      await writeJsonFile(alphaCallsPath(), calls);
+    }
+  });
 }
 
 async function checkAlphaCallOutcomes() {
@@ -20152,8 +20161,11 @@ async function runDailySwampReport() {
     if (group?.alerts) groupBridgeFor(chatId).announce("daily-report", today, text);
   }
   tgChannel.announce("daily-report", today, text);
-  groupsStore.meta = { ...meta, lastSwampReportDay: today };
-  await writeJsonFile(telegramGroupsPath(), groupsStore);
+  await withFileLock(telegramGroupsPath(), async () => {
+    const fresh = await readTelegramGroups();
+    fresh.meta = { ...(fresh.meta || {}), lastSwampReportDay: today };
+    await writeJsonFile(telegramGroupsPath(), fresh);
+  });
   lastSwampReportDay = today;
 }
 
