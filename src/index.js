@@ -2045,10 +2045,11 @@ async function handleWebApiRequest(request, response, requestUrl) {
       // Two-stage: market data + calls return immediately; a COLD shield compute is
       // given 1.5s, otherwise it finishes in the background and the page re-asks.
       const shieldPromise = webSlimeShield(readMint).catch(() => null);
-      const [shield, pairs, board] = await Promise.all([
+      const [shield, pairs, board, rugcheck] = await Promise.all([
         Promise.race([shieldPromise, new Promise((resolve) => setTimeout(() => resolve(undefined), 1_500))]),
         fetchDexScreenerTokenPairsFallback(readMint).catch(() => []),
-        webBoardCallsForMint(readMint).catch(() => ({ calls: [], topCallers: [] }))
+        webBoardCallsForMint(readMint).catch(() => ({ calls: [], topCallers: [] })),
+        fetchRugcheckSummary(readMint).catch(() => null)
       ]);
       const shieldPending = shield === undefined;
       const best = bestDexPairForToken(readMint, pairs);
@@ -2065,6 +2066,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
         pairAddress: best?.pairAddress || "",
         imageUrl: best?.info?.imageUrl || "",
         shieldPending,
+        rugcheck,
         shield: shield ? {
           verdict: shield.verdict,
           score: shield.score,
@@ -19247,6 +19249,41 @@ const TG_LOOK_COOLDOWN_MS = 20_000;
 const TG_ALPHA_COOLDOWN_MS = 10 * 60 * 1000;
 const tgCommandCooldowns = new Map();
 const pairLiteCache = new Map();
+const rugcheckCache = new Map();
+// Rugcheck free summary: named risk factors (LP providers, liquidity, holder
+// concentration, authorities) from a second independent engine. Cached 10 min,
+// never blocks - it enriches reads, it does not gate them.
+async function fetchRugcheckSummary(mint) {
+  const key = String(mint || "").trim();
+  if (!key) return null;
+  const cached = rugcheckCache.get(key);
+  if (cached && Date.now() - cached.at < 10 * 60 * 1000) return cached.value;
+  let value = null;
+  try {
+    const data = await fetchJson(`https://api.rugcheck.xyz/v1/tokens/${encodeURIComponent(key)}/report/summary`, {
+      headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" },
+      timeoutMs: 3_000
+    });
+    if (data && Array.isArray(data.risks)) {
+      value = {
+        score: Number(data.score_normalised ?? data.score) || null,
+        risks: data.risks.slice(0, 4).map((risk) => ({
+          name: String(risk?.name || "").slice(0, 60),
+          level: String(risk?.level || "").slice(0, 10)
+        })).filter((risk) => risk.name)
+      };
+    }
+  } catch {
+    // free tier rate limits happen - reads simply omit the section
+  }
+  rugcheckCache.set(key, { at: Date.now(), value });
+  if (rugcheckCache.size > 300) {
+    const oldest = [...rugcheckCache.entries()].sort((a, b) => a[1].at - b[1].at)[0]?.[0];
+    if (oldest) rugcheckCache.delete(oldest);
+  }
+  return value;
+}
+
 
 function telegramGroupsPath() {
   return path.join(CONFIG.dataDir, "telegram-groups.json");
@@ -19373,13 +19410,18 @@ async function handleTelegramLookCommand(chatId, message, argument) {
   }
   const verdictIcon = { BUY: "🟢", CAUTION: "🟡", RISK: "🟠", AVOID: "🔴" }[String(shield.verdict || "").toUpperCase()] || "⚪";
   const factors = (shield.factors || []).slice(0, 3).map((factor) => `- ${escapeTelegramHtml(String(factor?.label || factor).slice(0, 80))}`);
+  const rugcheck = await fetchRugcheckSummary(mint).catch(() => null);
+  const rugcheckLine = rugcheck?.risks?.length
+    ? `🔬 Rugcheck: ${rugcheck.risks.slice(0, 2).map((risk) => escapeTelegramHtml(risk.name)).join(", ")}`
+    : "";
   const links = slimewireTokenLinks(mint);
   const lines = [
     `<a href="${links.site}"><b>${escapeTelegramHtml(shortMint(mint))}</b></a> | <code>${escapeTelegramHtml(mint)}</code>`,
     `${verdictIcon} <b>SlimeShield: ${escapeTelegramHtml(shield.verdict || "?")}</b> (score ${shield.score ?? "?"}/100, ${escapeTelegramHtml(shield.confidence || "low")} confidence)`,
     shield.summary ? escapeTelegramHtml(String(shield.summary).slice(0, 200)) : "",
     ...factors,
-    shield.suggestedAction ? `Suggested: ${escapeTelegramHtml(shield.suggestedAction)}` : ""
+    shield.suggestedAction ? `Suggested: ${escapeTelegramHtml(shield.suggestedAction)}` : "",
+    rugcheckLine
   ].filter(Boolean);
   await sayHtml(chatId, lines.join("\n"), tokenActionKeyboard(mint));
 }
