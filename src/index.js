@@ -2623,7 +2623,17 @@ async function handleWebApiRequest(request, response, requestUrl) {
         sendWebJson(request, response, 400, { ok: false, error: "You already have 3 scheduled launches - launch one before scheduling more." });
         return;
       }
-      sendWebJson(request, response, 200, { ok: true, id: created.id, url: `${SHARE_PAGE_ORIGIN}/hype/${created.id}` });
+      // Shill the countdown itself: armed groups/channels hear about the scheduled
+      // launch NOW, so the notify list fills before the mint even exists.
+      const hypeUrl = `${SHARE_PAGE_ORIGIN}/hype/${created.id}`;
+      const hypeText = [
+        `⏳ <b>$${escapeTelegramHtml(created.symbol)} launch scheduled</b> - the countdown page is live.`,
+        `${escapeTelegramHtml(created.name)} drops <b>${escapeTelegramHtml(sharePageDate(created.launchAt))}</b> via <a href="https://www.slimewire.org">SlimeWire</a>.`,
+        `<a href="${hypeUrl}">Watch the countdown + tap notify</a> - be there at block one.`
+      ].join("\n");
+      broadcastToTelegramGroups("hype-page", created.id, hypeText);
+      tgChannel.announce("hype-page", created.id, hypeText);
+      sendWebJson(request, response, 200, { ok: true, id: created.id, url: hypeUrl });
       return;
     }
 
@@ -30779,7 +30789,11 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
   const devSelection = selectPumpLaunchWallet(store, userId, selectedDevWalletId);
   const devKeypair = decryptWallet(devSelection.wallet);
   const devBuySol = Math.max(0, Number(basePayload.devBuy.amountSol) || 0);
-  const slippageBps = Number(basePayload.slippageBps) || 300;
+  // In-bundle buys execute atomically with the create - nothing can front-run
+  // between them - so high slippage is FREE safety here. Each buy moves the curve
+  // for the next one; tight user slippage (3%) made later buys fail simulation,
+  // which silently kills the whole all-or-none bundle no matter the tip.
+  const slippageBps = Math.max(Number(basePayload.slippageBps) || 300, 2_000);
 
   // First-block wallet buys (the "bundle") that land atomically with the dev buy.
   const bundle = body.bundleBuy || {};
@@ -30792,6 +30806,31 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
   // Jito bundles allow at most 5 transactions: create + dev buy + remaining wallet buys.
   const reserved = 1 + (devBuySol > 0 ? 1 : 0);
   bundleWallets = bundleWallets.slice(0, Math.max(0, 5 - reserved));
+
+  // Pre-flight balances: ONE underfunded wallet makes an all-or-none bundle
+  // unincludable at any tip. Check everything and name the exact problem first.
+  const maxTipSol = Math.min(0.01, CONFIG.pumpLaunchJitoTipSol * 8);
+  const devNeedsSol = 0.028 + devBuySol * 1.02 + maxTipSol + 0.005;
+  const devBalanceLamports = await rpcWithRetry("read dev wallet balance for bundle", () => connection.getBalance(devKeypair.publicKey, "confirmed"), CONFIG.rpcRetries);
+  if (devBalanceLamports < Math.ceil(devNeedsSol * 1e9)) {
+    const error = new Error(`Dev wallet ${shortMint(devSelection.wallet.publicKey)} has ${(devBalanceLamports / 1e9).toFixed(4)} SOL but the bundle needs ~${devNeedsSol.toFixed(3)} SOL (create ~0.028 + dev buy ${devBuySol} + tip up to ${maxTipSol} + buffer). Top it up and launch again - nothing was spent.`);
+    error.statusCode = 400;
+    throw error;
+  }
+  if (bundleWallets.length && bundleAmountSol > 0) {
+    const perWalletNeedsSol = bundleAmountSol * 1.02 + 0.0045;
+    const checked = [];
+    for (const wallet of bundleWallets) {
+      const balance = await rpcWithRetry("read bundle wallet balance", () => connection.getBalance(new PublicKey(wallet.publicKey), "confirmed"), CONFIG.rpcRetries).catch(() => 0);
+      if (balance < Math.ceil(perWalletNeedsSol * 1e9)) {
+        const error = new Error(`Bundle wallet ${shortMint(wallet.publicKey)} has ${(balance / 1e9).toFixed(4)} SOL but its first-block buy needs ~${perWalletNeedsSol.toFixed(4)} SOL (buy ${bundleAmountSol} + fees + token account rent). Fund it or uncheck it - nothing was spent.`);
+        error.statusCode = 400;
+        throw error;
+      }
+      checked.push(wallet);
+    }
+    bundleWallets = checked;
+  }
 
   const metadata = await uploadPumpLaunchMetadata(basePayload);
   const mintKeypair = Keypair.generate();
@@ -30843,6 +30882,34 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
     }
     return false;
   };
+  // Atomic simulation (Helius supports simulateBundle): if any tx in the bundle
+  // would fail, say exactly WHICH and WHY instead of losing the block lottery
+  // forever in silence. RPCs without the method just skip this check.
+  const simulateBundleOnRpc = async (signedBase64) => {
+    try {
+      const response = await fetch(connection.rpcEndpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "simulateBundle", params: [{ encodedTransactions: signedBase64 }] })
+      });
+      const data = await response.json().catch(() => null);
+      if (!data || data.error) return null;
+      const results = data.result?.value?.transactionResults || [];
+      const failedIndex = results.findIndex((item) => item?.err);
+      if (failedIndex >= 0) {
+        return {
+          ok: false,
+          failedIndex,
+          err: JSON.stringify(results[failedIndex].err).slice(0, 200),
+          logs: (results[failedIndex].logs || []).slice(-3).join(" | ").slice(0, 300)
+        };
+      }
+      return { ok: true };
+    } catch {
+      return null;
+    }
+  };
+
   let bundleId = "";
   let landed = false;
   for (let attempt = 0; attempt < tipSchedule.length && !landed; attempt += 1) {
@@ -30853,6 +30920,22 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
       tx.sign(plan[index].signers);
       return Buffer.from(tx.serialize()).toString("base64");
     });
+    if (attempt === 0) {
+      const sim = await simulateBundleOnRpc(signed);
+      if (sim && !sim.ok) {
+        const stage = sim.failedIndex === 0
+          ? "the create transaction"
+          : (devBuySol > 0 && sim.failedIndex === 1)
+            ? "the dev buy"
+            : `bundle wallet buy #${sim.failedIndex - (devBuySol > 0 ? 1 : 0)}`;
+        logPumpLaunchEvent("pump_launch_jito_bundle_sim_failed", {
+          launchAttemptId: basePayload.clientRequestId, userId, mint, failedIndex: sim.failedIndex, err: sim.err
+        });
+        const error = new Error(`Launch bundle simulation failed on ${stage}: ${sim.err}. Nothing was submitted and no SOL was spent.${sim.logs ? ` Details: ${sim.logs}` : ""}`);
+        error.statusCode = 400;
+        throw error;
+      }
+    }
     bundleId = await submitJitoBundle(signed, timeoutMs);
     logPumpLaunchEvent("pump_launch_jito_bundle_submitted", {
       launchAttemptId: basePayload.clientRequestId, userId, mint, bundleId,

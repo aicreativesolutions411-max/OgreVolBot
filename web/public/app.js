@@ -231,7 +231,11 @@ function getStoredLaunchCoinDraft() {
 
 function setStoredLaunchCoinDraft(draft) {
   try {
-    window.localStorage?.setItem("slimewireLaunchCoinDraft", JSON.stringify(draft || {}));
+    // Oversized image data URLs would blow the quota and slow every keystroke;
+    // they stay in state (covers tab flips) and only skip the reload-survival.
+    const toStore = { ...(draft || {}) };
+    if (String(toStore.imageDataUrl || "").length >= 1_500_000) delete toStore.imageDataUrl;
+    window.localStorage?.setItem("slimewireLaunchCoinDraft", JSON.stringify(toStore));
   } catch {
     // Launch drafts are convenience-only and should not block the terminal.
   }
@@ -9513,9 +9517,9 @@ function launchCoinHtml() {
               Image
               <input data-launch-coin-image type="file" accept="image/*,.png,.jpg,.jpeg,.webp,.gif,.heic,.heif,.avif">
               <span class="muted">SlimeWire converts common phone and desktop images during launch. Use a clear square JPG, PNG, WEBP, or screenshot for best results.</span>
-              <span class="launch-image-preview-wrap" data-launch-image-preview-wrap hidden>
-                <img class="launch-image-preview" data-launch-image-preview alt="Coin image preview">
-                <span class="launch-image-preview-meta" data-launch-image-preview-meta></span>
+              <span class="launch-image-preview-wrap" data-launch-image-preview-wrap ${draft.imageDataUrl ? "" : "hidden"}>
+                <img class="launch-image-preview" data-launch-image-preview ${draft.imageDataUrl ? `src="${draft.imageDataUrl}"` : ""} alt="Coin image preview">
+                <span class="launch-image-preview-meta" data-launch-image-preview-meta>${escapeHtml(draft.imageName ? `${draft.imageName} · saved with the sheet` : "")}</span>
               </span>
             </label>
           </div>`
@@ -9739,6 +9743,8 @@ function readLaunchCoinDraft() {
     symbol: ($("[data-launch-coin-symbol]")?.value || "").trim().replace(/^\$/, "").toUpperCase(),
     description: ($("[data-launch-coin-description]")?.value || "").trim(),
     imageName: imageFile?.name || draft.imageName || "",
+    imageDataUrl: draft.imageDataUrl || "",
+    imageType: draft.imageType || "",
     website: ($("[data-launch-coin-website]")?.value || "").trim(),
     x: ($("[data-launch-coin-x]")?.value || "").trim(),
     telegram: ($("[data-launch-coin-telegram]")?.value || "").trim(),
@@ -9885,13 +9891,24 @@ async function readFileAsDataUrl(file) {
 
 async function launchCoinImagePayload() {
   const imageFile = $("[data-launch-coin-image]")?.files?.[0];
-  if (!imageFile) return {};
-  const imageDataUrl = await readFileAsDataUrl(imageFile);
-  return {
-    imageName: imageFile.name,
-    imageType: dataUrlMimeType(imageDataUrl, imageFile.type || "application/octet-stream"),
-    imageDataUrl
-  };
+  if (imageFile) {
+    const imageDataUrl = await readFileAsDataUrl(imageFile);
+    return {
+      imageName: imageFile.name,
+      imageType: dataUrlMimeType(imageDataUrl, imageFile.type || "application/octet-stream"),
+      imageDataUrl
+    };
+  }
+  // The file input resets on re-render; the draft kept the picked image.
+  const draft = state.launchCoinDraft || {};
+  if (draft.imageDataUrl) {
+    return {
+      imageName: draft.imageName || "coin-image",
+      imageType: draft.imageType || dataUrlMimeType(draft.imageDataUrl, "image/png"),
+      imageDataUrl: draft.imageDataUrl
+    };
+  }
+  return {};
 }
 
 function applyLaunchCoinMint(draft, tokenMint) {
@@ -9998,7 +10015,7 @@ async function submitLaunchCoin() {
 
     // No image = the backend silently launches with the default SlimeWire logo on
     // pump.fun. That is almost never what the user wants, so make it an explicit choice.
-    if (!$("[data-launch-coin-image]")?.files?.[0]) {
+    if (!$("[data-launch-coin-image]")?.files?.[0] && !state.launchCoinDraft?.imageDataUrl) {
       const launchWithoutImage = await slimeConfirm({
         title: "No Coin Image Selected",
         lines: [
@@ -23128,12 +23145,27 @@ document.addEventListener("change", async (event) => {
     const metaEl = $("[data-launch-image-preview-meta]");
     if (!file) { if (wrap) wrap.hidden = true; return; }
     const kb = Math.round(file.size / 1024);
-    if (metaEl) metaEl.textContent = `${file.name} · ${kb >= 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${kb} KB`}`;
+    if (metaEl) metaEl.textContent = `${file.name} · ${kb >= 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${kb} KB`} · saved with the sheet`;
     try {
       const url = URL.createObjectURL(file);
       if (img) { img.onload = () => URL.revokeObjectURL(url); img.src = url; }
       if (wrap) wrap.hidden = false;
     } catch { if (wrap) wrap.hidden = true; }
+    // Persist into the draft IMMEDIATELY: file inputs reset on every re-render,
+    // which silently dropped the image when users flipped tabs before launching.
+    readFileAsDataUrl(file).then((dataUrl) => {
+      state.launchCoinDraft = {
+        ...(state.launchCoinDraft || {}),
+        imageDataUrl: dataUrl,
+        imageName: file.name,
+        imageType: dataUrlMimeType(dataUrl, file.type || "application/octet-stream")
+      };
+      // Big images can blow the localStorage quota - state alone still covers
+      // tab flips; only reloads lose oversized images.
+      if (String(dataUrl).length < 1_500_000) {
+        try { setStoredLaunchCoinDraft(state.launchCoinDraft); } catch { /* quota */ }
+      }
+    }).catch(() => {});
     return;
   }
   if (target?.matches?.("[data-terminal-filter-social], [data-terminal-filter-quote], [data-terminal-filter-audit]")) {
