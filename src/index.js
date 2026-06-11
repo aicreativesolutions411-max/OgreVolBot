@@ -2000,7 +2000,9 @@ async function handleWebApiRequest(request, response, requestUrl) {
 
     // PUBLIC pair-lite: the fastest possible market read - one cached DexScreener
     // fetch, no shield, no hydration. The chart bar races this against the browser's
-    // own DexScreener call so pair info always lands within a second.
+    // own DexScreener call so pair info always lands within a second. Bonding-curve
+    // tokens have NO DexScreener pair yet - pump.fun is the source of truth there,
+    // so a dex miss falls through to the pump-curve read instead of "checking" forever.
     if (request.method === "GET" && pathname === "/api/web/pair-lite") {
       const liteMint = parsePublicKey(String(requestUrl.searchParams.get("mint") || "")).toBase58();
       const cached = pairLiteCache.get(liteMint);
@@ -2025,7 +2027,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
           url: liteBest.url || "",
           pairAddress: liteBest.pairAddress || "",
           dexId: liteBest.dexId || ""
-        } : null
+        } : await pumpCurvePairFallback(liteMint)
       };
       // Never cache a miss: server-side DexScreener calls can be rate-limited at the
       // shared IP; an empty answer must not poison the next 15 seconds.
@@ -2052,7 +2054,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
         fetchRugcheckSummary(readMint).catch(() => null)
       ]);
       const shieldPending = shield === undefined;
-      const best = bestDexPairForToken(readMint, pairs);
+      const best = bestDexPairForToken(readMint, pairs) || await pumpCurvePairFallback(readMint).catch(() => null);
       sendCachedWebJson(request, response, 200, {
         ok: true,
         mint: readMint,
@@ -2065,6 +2067,8 @@ async function handleWebApiRequest(request, response, requestUrl) {
         changeH1: Number(best?.priceChange?.h1) ?? null,
         pairAddress: best?.pairAddress || "",
         imageUrl: best?.info?.imageUrl || "",
+        pumpCurve: Boolean(best?.pumpCurve),
+        bondingProgressPct: best?.bondingProgressPct ?? null,
         shieldPending,
         launchedViaSlimeWire: await (async () => {
           try {
@@ -16158,6 +16162,38 @@ async function getPumpFunCreatorLaunches(creator, options = {}) {
     if (oldest) pumpFunCreatorCache.delete(oldest);
   }
   return launches;
+}
+
+// Bonding-curve market read shaped like a DexScreener pair, so every client path
+// (chart bar, /t page, pair-lite race) renders pump.fun numbers identically to
+// graduated tokens. Returns null when pump.fun doesn't know the mint either.
+async function pumpCurvePairFallback(tokenMint, options = {}) {
+  const pump = await getPumpFunTokenMetadata(tokenMint, { cacheTtlMs: 15_000, timeoutMs: options.timeoutMs || 3_000 }).catch(() => null);
+  if (!pump || (!pump.marketCap && !pump.priceUsd && !pump.virtualSolReserves)) return null;
+  const solUsd = await getSolUsdPrice({ timeoutMs: 1_500 }).catch(() => null);
+  // virtual_sol_reserves is lamports when it's a huge integer.
+  const rawVirtualSol = Number(pump.virtualSolReserves) || 0;
+  const virtualSol = rawVirtualSol > 1e6 ? rawVirtualSol / 1e9 : rawVirtualSol;
+  const liquidityUsd = Number(pump.liquidityUsd)
+    || (virtualSol && Number.isFinite(solUsd) ? Math.round(virtualSol * solUsd) : null);
+  // Pump supply is 1B tokens; MC/1e9 recovers price when the API omits it.
+  const priceUsd = Number(pump.priceUsd) || (Number(pump.marketCap) ? Number(pump.marketCap) / 1e9 : null);
+  return {
+    tokenMint,
+    baseToken: { symbol: pump.symbol || "", name: pump.name || "" },
+    priceUsd,
+    marketCap: Number(pump.marketCap) || null,
+    fdv: Number(pump.marketCap) || null,
+    liquidity: { usd: liquidityUsd },
+    volume: { h24: Number(pump.volume?.h24) || null, h1: Number(pump.volume?.h1) || null },
+    priceChange: { h1: Number(pump.priceChange?.h1) ?? null },
+    info: { imageUrl: pump.imageUrl || "" },
+    url: `https://pump.fun/coin/${tokenMint}`,
+    pairAddress: "",
+    dexId: "pump-curve",
+    pumpCurve: true,
+    bondingProgressPct: Number(pump.bondingProgressPct) || null
+  };
 }
 
 async function getPumpFunTokenMetadata(tokenMint, options = {}) {

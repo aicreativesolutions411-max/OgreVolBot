@@ -15070,7 +15070,9 @@ async function fastDirectDexLookup(mint) {
       dexUrl: best.url || "",
       pairAddress: best.pairAddress || "",
       dexId: best.dexId || "",
-      source: "direct-dexscreener"
+      pumpCurve: Boolean(best.pumpCurve),
+      bondingProgressPct: best.bondingProgressPct ?? null,
+      source: best.pumpCurve ? "pump-curve" : "direct-dexscreener"
     });
     if (state.activeTab === "smartChart") render({ preserveSmartChartFrame: true });
   } catch {

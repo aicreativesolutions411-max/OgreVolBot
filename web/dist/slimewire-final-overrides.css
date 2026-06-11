@@ -19466,3 +19466,20 @@ html body main.shell[data-app][data-route="intro"] .swamp-intro-stage[data-intro
   border-radius: 10px !important;
   padding: 10px 12px !important;
 }
+
+/* NAV_DRAWER_TAKEOVER_20260611: the slide-out drawer is the mobile nav now.
+   The 108px mini-rail would double up with it, so when the drawer can serve
+   (modern :has browsers, dashboard visible) the rail hides and the dashboard
+   grid collapses to one full-width column. Legacy browsers keep the rail. */
+@media (max-width: 760px) {
+  html body:has([data-dashboard]:not([hidden])) main.shell[data-app][data-route="terminal"] [data-dashboard] {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  html body:has([data-dashboard]:not([hidden])) main.shell[data-app][data-route="terminal"] [data-dashboard] > .tabs {
+    display: none !important;
+  }
+  html body:has([data-dashboard]:not([hidden])) main.shell[data-app][data-route="terminal"] [data-dashboard] > .panel-host,
+  html body:has([data-dashboard]:not([hidden])) main.shell[data-app][data-route="terminal"] [data-dashboard] > [data-panel] {
+    grid-column: 1 !important;
+  }
+}
