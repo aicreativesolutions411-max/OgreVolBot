@@ -545,7 +545,7 @@ function loadConfig() {
   // block via a Jito bundle so nothing snipes between launch and the first buys.
   const pumpLaunchJitoBundle = parseBoolean(process.env.PUMP_LAUNCH_JITO_BUNDLE || "false");
   const pumpLaunchJitoUrl = (process.env.PUMP_LAUNCH_JITO_URL || "https://mainnet.block-engine.jito.wtf/api/v1/bundles").trim();
-  const pumpLaunchJitoTipSol = Math.max(0.00001, Number.parseFloat(process.env.PUMP_LAUNCH_JITO_TIP_SOL || "0.0005") || 0.0005);
+  const pumpLaunchJitoTipSol = Math.max(0.00001, Number.parseFloat(process.env.PUMP_LAUNCH_JITO_TIP_SOL || "0.001") || 0.001);
   const pumpLaunchMetadataProvider = normalizeMetadataProvider(process.env.METADATA_PROVIDER || process.env.PUMP_LAUNCH_METADATA_PROVIDER || "auto");
   const renderExternalHostname = String(process.env.RENDER_EXTERNAL_HOSTNAME || "").trim();
   const pumpLaunchHostedMetadataBaseUrl = (
@@ -30816,19 +30816,69 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
     txCount: plan.length, devBuySol, bundleWalletCount: bundleWallets.length, tipSol: CONFIG.pumpLaunchJitoTipSol
   });
 
-  const txBytes = await requestPumpPortalBundleTxs(plan.map((entry) => entry.action), CONFIG.pumpLaunchTimeoutMs || 30000);
-  const signed = txBytes.map((bytes, index) => {
-    const tx = VersionedTransaction.deserialize(bytes);
-    tx.sign(plan[index].signers);
-    return Buffer.from(tx.serialize()).toString("base64");
-  });
-  const bundleId = await submitJitoBundle(signed, CONFIG.pumpLaunchTimeoutMs || 30000);
+  // Submit-and-CONFIRM with escalating tips. A submitted bundle is only a lottery
+  // ticket - low-tip bundles routinely never land (first live test: submitted fine,
+  // mint never existed). All-or-none means a missed bundle spent nothing, so we
+  // rebuild with a fresh blockhash and a bigger tip and try again.
+  const timeoutMs = CONFIG.pumpLaunchTimeoutMs || 30000;
+  const tipSchedule = [1, 3, 8].map((multiplier) => Math.min(0.01, CONFIG.pumpLaunchJitoTipSol * multiplier));
+  const mintPubkey = new PublicKey(mint);
+  const mintLanded = async (waitMs) => {
+    const deadline = Date.now() + waitMs;
+    while (Date.now() < deadline) {
+      const info = await connection.getAccountInfo(mintPubkey, "confirmed").catch(() => null);
+      if (info) return true;
+      await new Promise((resolve) => setTimeout(resolve, 2_500));
+    }
+    return false;
+  };
+  let bundleId = "";
+  let landed = false;
+  for (let attempt = 0; attempt < tipSchedule.length && !landed; attempt += 1) {
+    plan[0].action.priorityFee = tipSchedule[attempt];
+    const txBytes = await requestPumpPortalBundleTxs(plan.map((entry) => entry.action), timeoutMs);
+    const signed = txBytes.map((bytes, index) => {
+      const tx = VersionedTransaction.deserialize(bytes);
+      tx.sign(plan[index].signers);
+      return Buffer.from(tx.serialize()).toString("base64");
+    });
+    bundleId = await submitJitoBundle(signed, timeoutMs);
+    logPumpLaunchEvent("pump_launch_jito_bundle_submitted", {
+      launchAttemptId: basePayload.clientRequestId, userId, mint, bundleId,
+      txCount: plan.length, attempt: attempt + 1, tipSol: tipSchedule[attempt]
+    });
+    landed = await mintLanded(attempt === tipSchedule.length - 1 ? 30_000 : 18_000);
+  }
 
-  logPumpLaunchEvent("pump_launch_jito_bundle_submitted", {
+  if (!landed) {
+    logPumpLaunchEvent("pump_launch_jito_bundle_missed", {
+      launchAttemptId: basePayload.clientRequestId, userId, mint, bundleId, attempts: tipSchedule.length
+    });
+    const error = new Error(`The atomic launch bundle did not land after ${tipSchedule.length} attempts (tips up to ${tipSchedule[tipSchedule.length - 1]} SOL). Bundles are all-or-none, so NO SOL was spent - launch again, or raise PUMP_LAUNCH_JITO_TIP_SOL when the network is busy.`);
+    error.code = "JITO_BUNDLE_MISSED";
+    throw error;
+  }
+
+  logPumpLaunchEvent("pump_launch_jito_bundle_landed", {
     launchAttemptId: basePayload.clientRequestId, userId, mint, bundleId, txCount: plan.length
   });
+  // Ledger entry: this is what powers the /t "LAUNCHED ON SLIMEWIRE" badge and
+  // the milestone auto-posts - bundled launches were invisible to both.
+  await upsertPumpLaunchAttempt({
+    id: basePayload.clientRequestId,
+    userId,
+    selectedDevWalletId,
+    devWalletPublicKey: devSelection.wallet.publicKey,
+    tokenName: basePayload.name,
+    symbol: basePayload.symbol,
+    tokenMint: mint,
+    status: PUMP_LAUNCH_STATUS.COMPLETE,
+    provider: "jito-bundle",
+    bundleId,
+    completedAt: new Date().toISOString()
+  }).catch((error) => console.warn(`[pump-launch] bundle ledger write failed: ${error.message}`));
   return {
-    status: "submitted", tokenMint: mint, mint, bundleId, bundled: true,
+    status: PUMP_LAUNCH_STATUS.COMPLETE, tokenMint: mint, mint, bundleId, bundled: true,
     bundledWalletCount: bundleWallets.length, devBuyIncluded: devBuySol > 0,
     provider: "jito-bundle", metadataUri: metadata.uri
   };
@@ -31102,6 +31152,17 @@ async function webLaunchPumpCoin(userId, body = {}) {
       const result = useJito
         ? await webLaunchPumpJitoBundle(userId, body, basePayload)
         : await webLaunchPumpPortalLocal(userId, body, basePayload);
+      // The local path announces internally; the bundle path needs the same sends
+      // (TG launch post + hype-page fulfillment) once the bundle is CONFIRMED landed.
+      if (useJito && String(result?.status || "").toUpperCase() === "COMPLETE" && result.tokenMint) {
+        const launchText = [
+          `🐸 <b>Fresh swamp launch</b>: $${escapeTelegramHtml(symbol || name || "???")} just went live on pump.fun via <a href="https://www.slimewire.org">SlimeWire</a> Pump Launch - dev buy + first-block buys landed atomically.`,
+          `<a href="https://www.slimewire.org/t?ca=${result.tokenMint}">launch room</a> | <a href="https://pump.fun/coin/${result.tokenMint}">pump.fun</a> | <a href="${dexScreenerUrl(result.tokenMint)}">chart</a> | <a href="https://www.slimewire.org">launch yours</a>`
+        ].join("\n");
+        tgChannel.announce("launch", result.tokenMint, launchText);
+        broadcastToTelegramGroups("launch", result.tokenMint, launchText);
+        fulfillLaunchHype(userId, result.tokenMint, symbol).catch((error) => console.warn(`[hype] fulfill failed: ${error.message}`));
+      }
       await audit("web_launch_pump_coin", {
         userId,
         symbol,
