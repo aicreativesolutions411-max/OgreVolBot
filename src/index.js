@@ -9477,6 +9477,14 @@ async function buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps, o
   let result;
   let tokenBeforeRaw = null;
   try {
+    // trustedLaunchMint: WE minted this token seconds ago (pump launch first
+    // buys). The on-chain safety read can't even classify a mint that young and
+    // fails closed - it must never block our own launch buys. Straight to the
+    // bonding curve; the rest of the flow (delta, fee, plan) runs as normal.
+    if (options.trustedLaunchMint) {
+      tokenBeforeRaw = trackMint ? await safeTokenRawBalance(keypair.publicKey, trackMint) : null;
+      result = await buyTokenViaPumpPortal(wallet, tokenMint, swapLamports, slippageBps, options);
+    } else {
     // Always enforce the authority / honeypot / liquidity safety checks. The Jupiter
     // route is a separate concern: a token that just launched on the pump.fun bonding
     // curve has no Jupiter route yet (it only gets one after it graduates to
@@ -9528,6 +9536,7 @@ async function buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps, o
           throw new Error(`Jupiter buy failed: ${friendlyError(jupiterError)}. Pump buy fallback failed: ${friendlyError(pumpError)}`);
         }
       }
+    }
     }
   } catch (error) {
     throw enrichBuyError(error, {
@@ -15303,7 +15312,14 @@ async function estimatePositionValueFromMarket(position, quoteError = null) {
     if (!Number.isFinite(priceSol) || priceSol <= 0) {
       const priceUsd = pumpFunPriceUsd(metadata, decimals);
       if (Number.isFinite(priceUsd) && priceUsd > 0) {
-        const solUsd = await getSolUsdPrice({ timeoutMs: 1_200 }).catch(() => null);
+        // SOL/USD from the coin payload itself when possible (usd_market_cap /
+        // market_cap-in-SOL) - getSolUsdPrice rides DexScreener, which rate-limits
+        // the shared Render IP and left fresh launches "Price unavailable".
+        const usdMc = Number(metadata.usdMarketCap) || 0;
+        const solMc = Number(metadata.marketCapSol) || 0;
+        const solUsd = (usdMc > 0 && solMc > 0 && solMc < usdMc)
+          ? usdMc / solMc
+          : await getSolUsdPrice({ timeoutMs: 1_200 }).catch(() => null);
         if (Number.isFinite(solUsd) && solUsd > 0) priceSol = priceUsd / solUsd;
       }
     }
@@ -28237,7 +28253,7 @@ async function webCreateManagedBuyPlan(userId, wallets, body = {}, options = {})
   await runWithConcurrency(wallets, CONFIG.bundleConcurrency, async (wallet) => {
     const walletIndex = Number(wallet.webIndex || wallets.indexOf(wallet) + 1);
     try {
-      const result = await buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps, { trackTokenDelta: true, userId });
+      const result = await buyTokenForPlan(wallet, tokenMint, amountLamports, slippageBps, { trackTokenDelta: true, userId, trustedLaunchMint: Boolean(options.trustedLaunchMint) });
       const tokenAmount = result.tokenDeltaAmount || result.outputAmount || null;
       tradeEvents.push({
         userId,
@@ -30923,7 +30939,8 @@ async function firePostLaunchBuysServerSide({ mint, body, devWallet, devKeypair,
       defaultSellDelay: "off",
       defaultTakeProfitPct: "40",
       defaultStopLossPct: "8",
-      defaultSlippageBps: 1_000
+      defaultSlippageBps: 1_000,
+      trustedLaunchMint: true
     });
     logPumpLaunchEvent("pump_launch_fallback_buy", { launchAttemptId, userId, mint, label, amountSol, walletCount: wallets.length, managed: true });
   };
@@ -30949,14 +30966,16 @@ async function firePostLaunchBuysServerSide({ mint, body, devWallet, devKeypair,
       outcome.planned = true;
     } catch (error) {
       logPumpLaunchEvent("pump_launch_fallback_plan_failed", { launchAttemptId, userId, mint, label: "bundle", errorMessage: String(error.message || "").slice(0, 200) });
-      for (const wallet of bundleWallets) {
+      // Raw degraded path runs every wallet in PARALLEL - sequential confirms
+      // cost 14s of dead time on the live test.
+      await Promise.all(bundleWallets.map(async (wallet) => {
         try {
           await rawBuy(decryptWallet(wallet), bundleAmountSol, shortMint(wallet.publicKey));
           outcome.wallets += 1;
         } catch (rawError) {
           logPumpLaunchEvent("pump_launch_fallback_buy_failed", { launchAttemptId, userId, mint, label: shortMint(wallet.publicKey), errorMessage: String(rawError.message || "").slice(0, 200) });
         }
-      }
+      }));
     }
   }
   return outcome;
@@ -31057,8 +31076,9 @@ async function webLaunchPumpJitoBundle(userId, body, basePayload) {
   // mint never existed). All-or-none means a missed bundle spent nothing, so we
   // rebuild with a fresh blockhash and a bigger tip and try again.
   const timeoutMs = CONFIG.pumpLaunchTimeoutMs || 30000;
-  // Two shots then fall back to the standard path - speed beats stubbornness.
-  const tipSchedule = [1, 4].map((multiplier) => Math.min(0.01, CONFIG.pumpLaunchJitoTipSol * multiplier));
+  // ONE decent-tip shot then fall back to the standard path - speed beats
+  // stubbornness, and the fallback fires managed buys seconds later anyway.
+  const tipSchedule = [3].map((multiplier) => Math.min(0.01, CONFIG.pumpLaunchJitoTipSol * multiplier));
   const mintPubkey = new PublicKey(mint);
   const mintLanded = async (waitMs) => {
     const deadline = Date.now() + waitMs;
