@@ -19740,7 +19740,6 @@ function ogreAgentHtml() {
           <button type="button" data-ogre-agent-quick="dev_info">Dev Info</button>
           <button type="button" data-ogre-agent-quick="protected_buy">Protected Buy?</button>
           <button type="button" data-ogre-agent-quick="replay">Replay</button>
-          <button type="button" data-ogre-agent-quick="positions">Positions</button>
           <button type="button" data-ogre-agent-quick="refresh_feeds">Refresh</button>
           <button type="button" data-ogre-agent-quick="clear_chat">Clear</button>
         </div>

@@ -19327,3 +19327,74 @@ html body main.shell[data-app][data-route="intro"] .swamp-intro-stage[data-intro
   .trade-layout, .terminal-layout { gap: 10px !important; }
   .row-card { gap: 8px !important; }
 }
+
+/* OGRE_AGENT_POLISH_20260611_V1: the chat panel reads like a panel, not text floating
+   over the feed. Opaque surface, chip-style quick actions on one wrapped row, matched
+   Mic/Send, tighter rhythm - web and mobile. */
+.ogre-agent-panel {
+  background: #060d07 !important;
+  border: 1px solid rgba(114, 255, 35, 0.3) !important;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.65), 0 0 24px rgba(114, 255, 35, 0.1) !important;
+  border-radius: 16px !important;
+}
+.ogre-agent-quick-actions {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 6px !important;
+  margin: 8px 0 4px !important;
+  padding: 0 !important;
+}
+.ogre-agent-quick-actions button {
+  flex: 0 0 auto !important;
+  width: auto !important;
+  min-height: 32px !important;
+  padding: 5px 12px !important;
+  border-radius: 999px !important;
+  border: 1px solid rgba(114, 255, 35, 0.26) !important;
+  background: rgba(114, 255, 35, 0.07) !important;
+  color: rgba(226, 255, 215, 0.88) !important;
+  font-size: 0.76rem !important;
+  font-weight: 800 !important;
+  line-height: 1 !important;
+  margin: 0 !important;
+}
+.ogre-agent-quick-actions button:hover { background: rgba(114, 255, 35, 0.16) !important; }
+.ogre-agent-composer, .ogre-agent-input-row {
+  gap: 8px !important;
+}
+.ogre-agent-send, button[data-ogre-agent-send] {
+  min-height: 40px !important;
+  padding: 8px 18px !important;
+  border-radius: 999px !important;
+  background: linear-gradient(135deg, rgba(114, 255, 35, 0.94), rgba(187, 255, 99, 0.94)) !important;
+  color: #071006 !important;
+  font-weight: 900 !important;
+  border: 1px solid rgba(114, 255, 35, 0.5) !important;
+}
+.ogre-agent-mic, button[data-ogre-agent-mic] {
+  min-height: 40px !important;
+  border-radius: 999px !important;
+}
+.ogre-agent-message [data-copy],
+.ogre-agent-message .ca-copy,
+.ogre-agent-message button {
+  min-height: 30px !important;
+  padding: 4px 12px !important;
+  border-radius: 999px !important;
+  border: 1px solid rgba(114, 255, 35, 0.22) !important;
+  background: rgba(8, 20, 10, 0.6) !important;
+  font-size: 0.76rem !important;
+  margin: 3px 6px 0 0 !important;
+}
+.ogre-agent-disclaimer {
+  display: block !important;
+  margin-top: 8px !important;
+  font-size: 0.68rem !important;
+  opacity: 0.55 !important;
+}
+@media (max-width: 760px) {
+  .ogre-agent-panel {
+    padding: 12px !important;
+  }
+  .ogre-agent-quick-actions button { font-size: 0.74rem !important; }
+}
