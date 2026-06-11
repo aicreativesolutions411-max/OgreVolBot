@@ -1215,9 +1215,33 @@ async function setupWebhook() {
   await telegram("setWebhook", {
     url: `${CONFIG.webhookUrl}${webhookPath()}`,
     secret_token: CONFIG.webhookSecret,
-    allowed_updates: ["message", "callback_query"],
+    // channel_post: channels never emit "message", so /look + /alpha + /slimewire in
+    // channels need it. my_chat_member: fires when the bot is added, for the welcome.
+    allowed_updates: ["message", "callback_query", "channel_post", "my_chat_member"],
     drop_pending_updates: false
   });
+  await registerTelegramBotCommands().catch((error) => console.warn(`[tg] setMyCommands failed: ${error.message}`));
+}
+
+// Command autocomplete in the Telegram UI - discovery matters more than docs.
+async function registerTelegramBotCommands() {
+  const groupCommands = [
+    { command: "look", description: "SlimeShield read on a token CA" },
+    { command: "alpha", description: "Top scanner picks right now" },
+    { command: "slimewire", description: "on/off - engine alerts in this chat (admins)" }
+  ];
+  const dmCommands = [
+    ...groupCommands,
+    { command: "menu", description: "Main menu" },
+    { command: "web", description: "Login code for slimewire.org" },
+    { command: "wallets", description: "Your saved wallets" },
+    { command: "balances", description: "Wallet balances" },
+    { command: "trade", description: "Buy / sell menu" },
+    { command: "positions", description: "Open positions" },
+    { command: "pnl", description: "PnL results + shareable card" }
+  ];
+  await telegram("setMyCommands", { commands: dmCommands, scope: { type: "all_private_chats" } });
+  await telegram("setMyCommands", { commands: groupCommands, scope: { type: "all_group_chats" } });
 }
 
 function startHealthServer() {
@@ -5852,6 +5876,21 @@ async function sendLoop() {
 }
 
 async function handleUpdate(update) {
+  // Bot added/removed from a chat: register + welcome. Fires before any message.
+  if (update.my_chat_member) {
+    await handleBotChatMembershipUpdate(update.my_chat_member).catch((error) => {
+      console.warn(`[tg] my_chat_member failed: ${error.message}`);
+    });
+    return;
+  }
+  // Channels never emit "message" - posts arrive as channel_post with no from user.
+  // Only channel admins can post, so the command set runs with admin implied.
+  if (update.channel_post) {
+    await handleChannelPostCommands(update.channel_post).catch((error) => {
+      console.warn(`[tg] channel_post failed: ${error.message}`);
+    });
+    return;
+  }
   const user = update.callback_query?.from || update.message?.from;
   if (!user?.id) {
     return;
@@ -18999,48 +19038,109 @@ async function handleTelegramLookCommand(chatId, message, argument) {
   await sendOrEditMessage(chatId, null, `${shortMint(mint)}\n${lines.join("\n")}`, tokenActionKeyboard(mint));
 }
 
-// /alpha: current top sniper picks with one-tap trade links.
-async function handleTelegramAlphaCommand(chatId, message) {
-  if (tgCommandOnCooldown(chatId, "alpha", isPrivateChat(message.chat) ? TG_LOOK_COOLDOWN_MS : TG_ALPHA_COOLDOWN_MS)) {
-    return;
+// /alpha: current top picks. Falls through scanner modes and finally the live feed so
+// it ALWAYS returns candidates - an empty alpha reply teaches people to stop asking.
+async function telegramAlphaRows(chatId) {
+  for (const mode of ["safe", "fast", "moonshot"]) {
+    try {
+      const scan = await webSniperScan(`tg:${chatId}:${mode}`, mode);
+      const rows = (scan?.rows || []).filter((row) => row.tokenMint);
+      if (rows.length) return { rows: rows.slice(0, 3), source: `${mode} scanner` };
+    } catch {
+      // try the next mode
+    }
   }
-  let scan = null;
   try {
-    scan = await webSniperScan(`tg:${chatId}`, "safe");
+    const feed = await webLivePairs(`tg:${chatId}`, "live", { sort: "best" });
+    const rows = (feed?.rows || []).filter((row) => row.tokenMint);
+    if (rows.length) return { rows: rows.slice(0, 3), source: "live feed" };
   } catch {
     // degraded reply below
   }
-  const rows = (scan?.rows || []).slice(0, 3);
+  return { rows: [], source: "" };
+}
+
+async function handleTelegramAlphaCommand(chatId, message) {
+  if (tgCommandOnCooldown(chatId, "alpha", isPrivateChat(message?.chat) ? TG_LOOK_COOLDOWN_MS : TG_ALPHA_COOLDOWN_MS)) {
+    return;
+  }
+  const { rows, source } = await telegramAlphaRows(chatId);
   if (!rows.length) {
-    await say(chatId, "No qualified picks on the scanner right now - that happens in dead hours. Try again soon or watch the live feed on slimewire.org.");
+    await say(chatId, "Feed is warming up - try /alpha again in a minute, or watch the live board on slimewire.org.");
     return;
   }
   const lines = rows.map((row, index) => {
     const symbol = row.symbol || shortMint(row.tokenMint);
     const stats = [row.marketCapLabel ? `MC ${row.marketCapLabel}` : "", row.liquidityLabel ? `Liq ${row.liquidityLabel}` : "", row.pairAgeLabel || ""].filter(Boolean).join(" | ");
-    return `${index + 1}. $${symbol}${stats ? ` - ${stats}` : ""}`;
+    return `${index + 1}. $${symbol}${stats ? ` - ${stats}` : ""}\n${row.tokenMint}`;
   });
   const top = rows[0];
   await sendOrEditMessage(chatId, null, [
-    "🐸 SlimeWire alpha - top scanner picks right now:",
+    `🐸 SlimeWire alpha (${source}):`,
     ...lines,
     "",
-    "Reads, charts, and one-tap buys on slimewire.org"
+    "Run /look <CA> for a SlimeShield read. Charts + one-tap buys on slimewire.org"
   ].join("\n"), tokenActionKeyboard(top.tokenMint));
 }
 
+// Channels: only /look, /alpha, /slimewire - posts have no from user, admin implied.
+async function handleChannelPostCommands(post) {
+  const chatId = post?.chat?.id;
+  const text = String(post?.text || "").trim();
+  if (!chatId || !text.startsWith("/")) return;
+  registerTelegramGroup(post.chat);
+  const lookCommand = parseCommandWithArgument(text, ["look", "scan_ca", "check"]);
+  if (lookCommand) {
+    await handleTelegramLookCommand(chatId, post, lookCommand.argument);
+    return;
+  }
+  const alphaCommand = parseCommandWithArgument(text, ["alpha", "picks", "trending"]);
+  if (alphaCommand) {
+    await handleTelegramAlphaCommand(chatId, post);
+    return;
+  }
+  const toggle = parseCommandWithArgument(text, ["slimewire", "slimewire_alerts"]);
+  if (toggle) {
+    await handleTelegramGroupToggle(chatId, post, 0, toggle.argument, true);
+  }
+}
+
+// Welcome when the bot lands in a new group/channel: one message that teaches the
+// three commands and how to arm alerts. Sent once per add.
+async function handleBotChatMembershipUpdate(memberUpdate) {
+  const chat = memberUpdate?.chat;
+  const status = memberUpdate?.new_chat_member?.status || "";
+  if (!chat?.id || isPrivateChat(chat)) return;
+  if (!["member", "administrator"].includes(status)) return;
+  registerTelegramGroup(chat);
+  await say(chat.id, [
+    "🐸 SlimeWire is in the chat. Three things I do here:",
+    "",
+    "/look <CA> - instant SlimeShield risk read with chart + quick-buy links",
+    "/alpha - top scanner picks right now",
+    "/slimewire on - (admins) live engine alerts: fresh launches, TP/SL fires, KOL copies. Hard-capped at 3 posts/hour.",
+    "",
+    "DM me for wallets, buys, sells, and PnL cards. Full terminal: slimewire.org"
+  ].join("\n"));
+}
+
 // /slimewire on|off (group admins): opt the group in/out of launch + TP/SL + KOL alerts.
-async function handleTelegramGroupToggle(chatId, message, userId, argument) {
-  try {
-    const member = await telegram("getChatMember", { chat_id: chatId, user_id: userId });
-    const status = member?.result?.status || member?.status || "";
-    if (!["creator", "administrator"].includes(status)) {
-      await say(chatId, "Only group admins can toggle SlimeWire alerts.");
+// adminImplied covers channels (only admins can post) and anonymous group admins
+// (Telegram only lets admins post as the group itself via sender_chat).
+async function handleTelegramGroupToggle(chatId, message, userId, argument, adminImplied = false) {
+  const anonymousAdmin = Boolean(message?.sender_chat && String(message.sender_chat.id) === String(chatId));
+  if (!adminImplied && !anonymousAdmin) {
+    try {
+      const member = await telegram("getChatMember", { chat_id: chatId, user_id: userId });
+      const status = member?.status || member?.result?.status || "";
+      if (!["creator", "administrator"].includes(status)) {
+        await say(chatId, "Only group admins can toggle SlimeWire alerts.");
+        return;
+      }
+    } catch {
+      await say(chatId, "Could not verify admin rights - try again.");
       return;
     }
-  } catch {
-    await say(chatId, "Could not verify admin rights - try again.");
-    return;
   }
   const turnOn = /^(on|enable|start|yes)$/i.test(String(argument || "").trim());
   const turnOff = /^(off|disable|stop|no)$/i.test(String(argument || "").trim());
