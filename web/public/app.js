@@ -6106,7 +6106,9 @@ function ogreBriefItems() {
     return Number.isFinite(move) && Number.isFinite(tp) && tp > 0 && move > tp * 0.7;
   }).length;
   const shieldWatching = Number(state.shieldReceipts?.stats?.watching || 0);
+  const recentWins = Number(state.proofStats?.wins || 0);
   return [
+    recentWins ? `✅ ${recentWins} tracked call(s) hit 2x - the proof wall has receipts` : "",
     freshLowMc ? `🐣 ${freshLowMc} fresh under 8k MC on the feed` : "",
     watchingPlans.length ? `🛡 ${watchingPlans.length} plan(s) armed${nearTp ? ` - ${nearTp} near take-profit` : ""}` : "",
     shieldWatching ? `🔎 ${shieldWatching} flagged token(s) being tracked to outcome` : ""
@@ -6205,6 +6207,11 @@ function ensureShieldReceiptsData() {
     if (state.activeTab === "tek") render();
   }).catch(() => {
     // Receipts are informational; never block the hub.
+  });
+  void api("/api/web/proof").then((data) => {
+    state.proofStats = data?.alpha || null;
+  }).catch(() => {
+    // Brief line is optional.
   });
 }
 
@@ -17543,11 +17550,23 @@ function smartChartMarketBarHtml(token = {}, heldPosition = null) {
   const liq = firstStatLabel(liqValue > 0 ? compactUsd(liqValue) : "", realLabel(token.liquidityLabel), "checking");
   const vol1h = firstStatLabel(Number(token.volumeH1) > 0 ? compactUsd(token.volumeH1) : "", realLabel(token.volumeH1Label), realLabel(token.volumeLabel), "checking");
   const vol24h = firstStatLabel(Number(token.volumeH24) > 0 ? compactUsd(token.volumeH24) : "", realLabel(token.volumeH24Label), "checking");
+  // Entry quality: one fast word for "should I even be looking at this entry".
+  const entryQuality = (() => {
+    const ageMin = Number(token.pairAgeMinutes) || (Number(token.pairAgeSeconds) / 60) || null;
+    const h1 = Number(token.h1);
+    if (liqValue > 0 && liqValue < 5000) return "Thin exit";
+    if (Number.isFinite(h1) && h1 > 80) return "Chasing";
+    if (ageMin !== null && ageMin < 30 && (!Number.isFinite(h1) || h1 >= 0)) return "Early";
+    if (ageMin !== null && ageMin > 360 && Number(token.volumeH1) < 500) return "Stale";
+    if (mcValue > 0 && liqValue > 0) return "Clean setup";
+    return "";
+  })();
   const status = heldPosition
     ? "Position held"
-    : isUnbondedPumpToken(token)
-      ? "Pump curve"
-      : firstStatLabel(token.safetyStatus, token.category, token.dexId, "DEX");
+    : entryQuality
+      || (isUnbondedPumpToken(token)
+        ? "Pump curve"
+        : firstStatLabel(token.safetyStatus, token.category, token.dexId, "DEX"));
   return `
     <div class="smart-chart-market-bar" aria-label="Selected token market stats">
       <span><small>CA</small><strong>${escapeHtml(shortAddress(mint))}</strong></span>
@@ -17969,8 +17988,29 @@ function positionIntelHtml(position) {
     }
     positionValueMemory.set(mint, { value, at: Date.now() });
   }
+  // The nanny line: one sentence that answers "do I need to do anything right now".
+  let nanny = "";
+  if (plan) {
+    const move = Number(plan.lastMovePct ?? plan.wallets?.[0]?.lastMovePct);
+    const tp = Number(plan.takeProfitPct);
+    const sl = Number(plan.stopLossPct);
+    const timerAt = Date.parse(plan.sellAfterAt || plan.wallets?.[0]?.sellAfterAt || "");
+    const timerMinutes = Number.isFinite(timerAt) ? Math.round((timerAt - Date.now()) / 60000) : null;
+    if (Number.isFinite(move) && Number.isFinite(tp) && tp > 0 && move >= tp * 0.75) {
+      nanny = `Up ${move.toFixed(1)}% - take-profit at +${tp}% is close`;
+    } else if (Number.isFinite(move) && Number.isFinite(sl) && sl > 0 && move <= -(sl * 0.6)) {
+      nanny = `Down ${Math.abs(move).toFixed(1)}% - stop-loss at -${sl}% is near`;
+    } else if (timerMinutes !== null && timerMinutes > 0 && timerMinutes <= 10) {
+      nanny = `Timer exit in ~${timerMinutes} min`;
+    } else if (Number.isFinite(move)) {
+      nanny = `${move >= 0 ? "Up" : "Down"} ${Math.abs(move).toFixed(1)}% - exits watching`;
+    }
+  } else {
+    nanny = "No auto-exit on this bag - Arm Exits if you are stepping away";
+  }
   return `
     <small>${escapeHtml(bits.join(" | "))}</small>
+    ${nanny ? `<small class="${/close|near|Timer|No auto/.test(nanny) ? "warning-text" : "muted-text"}">${escapeHtml(nanny)}</small>` : ""}
     ${changeNote ? `<small class="${changeNote.startsWith("▲") ? "positive" : "negative"}">${escapeHtml(changeNote)}</small>` : ""}
   `;
 }
