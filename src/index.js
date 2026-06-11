@@ -31002,7 +31002,8 @@ async function firePostLaunchBuysServerSide({ mint, body, devWallet, devKeypair,
     });
     logPumpLaunchEvent("pump_launch_fallback_buy", { launchAttemptId, userId, mint, label, amountSol, walletCount: wallets.length, managed: true });
   };
-  if (devBuySol > 0 && devWallet) {
+  const devTask = async () => {
+    if (!(devBuySol > 0 && devWallet)) return;
     try {
       await planBuy([devWallet], devBuySol, "Launch dev buy");
       outcome.dev = true;
@@ -31016,16 +31017,15 @@ async function firePostLaunchBuysServerSide({ mint, body, devWallet, devKeypair,
         logPumpLaunchEvent("pump_launch_fallback_buy_failed", { launchAttemptId, userId, mint, label: "dev", errorMessage: String(rawError.message || "").slice(0, 200) });
       }
     }
-  }
-  if (bundleWallets.length && bundleAmountSol > 0) {
+  };
+  const bundleTask = async () => {
+    if (!(bundleWallets.length && bundleAmountSol > 0)) return;
     try {
       await planBuy(bundleWallets, bundleAmountSol, "Launch bundle buys");
       outcome.wallets = bundleWallets.length;
       outcome.planned = true;
     } catch (error) {
       logPumpLaunchEvent("pump_launch_fallback_plan_failed", { launchAttemptId, userId, mint, label: "bundle", errorMessage: String(error.message || "").slice(0, 200) });
-      // Raw degraded path runs every wallet in PARALLEL - sequential confirms
-      // cost 14s of dead time on the live test.
       await Promise.all(bundleWallets.map(async (wallet) => {
         try {
           await rawBuy(decryptWallet(wallet), bundleAmountSol, shortMint(wallet.publicKey));
@@ -31035,7 +31035,11 @@ async function firePostLaunchBuysServerSide({ mint, body, devWallet, devKeypair,
         }
       }));
     }
-  }
+  };
+  // Dev buy + every bundle wallet fire AT THE SAME TIME the create lands - the
+  // dev buy used to finish (21s) before bundle buys even started, so bundle
+  // wallets landed 40s late and looked like they never bought.
+  await Promise.all([devTask(), bundleTask()]);
   // SOL just moved in every one of these wallets - kill all cached reads so the
   // very next refresh shows true balances ("0.1 off for a long time" was stale
   // cache, not lost SOL).
