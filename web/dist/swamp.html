@@ -107,16 +107,35 @@
       .btn.ape { background:linear-gradient(135deg,var(--green),var(--green2)); color:#071006; }
       .btn.ghost { background:rgba(8,20,10,0.7); border:1px solid var(--line); color:#eaffe0; font-size:0.8rem; padding:11px; }
       .mlinks { display:flex; gap:8px; margin-top:8px; }
-      /* overworld */
-      .world-wrap { position:relative; margin:10px 0 4px; display:none; }
-      .world-wrap.on { display:block; }
-      .world-wrap canvas[data-world] { width:100%; aspect-ratio:13/9; image-rendering:pixelated; border:1px solid var(--line); border-radius:16px; background:#06170c; display:block; touch-action:none; }
-      .world-hint { text-align:center; color:var(--dim); font-size:0.68rem; margin-top:6px; }
-      .dpad { position:absolute; left:10px; bottom:34px; display:flex; flex-direction:column; align-items:center; gap:4px; z-index:5; opacity:0.85; }
-      .dpad button { width:46px; height:42px; border-radius:10px; border:1px solid var(--line); background:rgba(8,20,10,0.82); color:var(--green); font-size:1rem; font-weight:900; cursor:pointer; touch-action:none; }
-      .dpad div { display:flex; gap:4px; }
-      .dpad button:active { background:var(--green); color:#071006; }
-      @media (min-width:760px){ .dpad { display:none; } }
+      /* overworld — FULLSCREEN game mode */
+      .world-wrap { display:none; }
+      .world-wrap.on { display:block; position:fixed; inset:0; z-index:46; background:#04190c; }
+      body.world-on { overflow:hidden; }
+      .world-wrap canvas[data-world] { position:absolute; inset:0; width:100%; height:100%; image-rendering:pixelated; display:block; touch-action:none; }
+      .world-vignette { position:absolute; inset:0; pointer-events:none; z-index:2;
+        background:radial-gradient(ellipse at 50% 42%, transparent 52%, rgba(2,10,4,0.55) 100%); }
+      .world-hud { position:absolute; top:0; left:0; right:0; z-index:4; display:flex; align-items:center; gap:8px;
+        padding:calc(8px + env(safe-area-inset-top)) 10px 8px; pointer-events:none;
+        background:linear-gradient(rgba(2,10,4,0.85), transparent); }
+      .world-hud > * { pointer-events:auto; }
+      .whud-chip { background:rgba(5,18,9,0.8); border:1px solid var(--line); border-radius:99px; padding:5px 11px;
+        font-size:0.7rem; font-weight:800; color:#eaffe0; white-space:nowrap; }
+      .whud-chip b { color:var(--green); }
+      .world-exit { margin-left:auto; background:rgba(5,18,9,0.85); border:1px solid var(--line); color:#eaffe0;
+        border-radius:99px; padding:7px 14px; font-weight:900; font-size:0.78rem; cursor:pointer; }
+      .world-storm { position:absolute; top:calc(46px + env(safe-area-inset-top)); left:50%; transform:translateX(-50%);
+        z-index:4; font-size:0.68rem; font-weight:800; color:var(--dim); pointer-events:none; text-shadow:0 1px 4px #000; }
+      .world-toastline { position:absolute; bottom:calc(132px + env(safe-area-inset-bottom)); left:0; right:0; text-align:center;
+        z-index:4; color:var(--dim); font-size:0.66rem; pointer-events:none; text-shadow:0 1px 4px #000; }
+      /* floating analog joystick */
+      .joy { position:absolute; z-index:5; width:118px; height:118px; border-radius:50%; pointer-events:none; opacity:0;
+        background:radial-gradient(circle, rgba(114,255,35,0.08), rgba(114,255,35,0.03) 65%, transparent 70%);
+        border:2px solid rgba(114,255,35,0.25); transition:opacity .15s; }
+      .joy.on { opacity:1; }
+      .joy .nub { position:absolute; left:50%; top:50%; width:46px; height:46px; border-radius:50%;
+        transform:translate(-50%,-50%); background:radial-gradient(circle at 35% 30%, #b9ff7a, #57d61a 60%, #2f8a10);
+        box-shadow:0 0 14px rgba(114,255,35,0.55); }
+      .joy-zone { position:absolute; inset:0; z-index:3; touch-action:none; }
       /* living swamp */
       .cv { animation: bob var(--bobdur,3.2s) ease-in-out var(--bobdel,0s) infinite; transform-origin: 50% 90%; }
       @keyframes bob { 0%,100%{ transform:translateY(0) scaleY(1);} 50%{ transform:translateY(-3px) scaleY(1.03);} }
@@ -230,12 +249,17 @@
       </div>
 
       <div class="world-wrap" data-world-wrap>
-        <canvas data-world width="624" height="432"></canvas>
-        <div class="world-hint">🕹️ walk into slimes to catch them · 🌿 tall grass hides fresh spawns · 🏠 enter buildings</div>
-        <div class="dpad" data-dpad>
-          <button data-dir="up">▲</button>
-          <div><button data-dir="left">◀</button><button data-dir="down">▼</button><button data-dir="right">▶</button></div>
+        <canvas data-world></canvas>
+        <div class="world-vignette"></div>
+        <div class="joy-zone" data-joyzone></div>
+        <div class="joy" data-joy><div class="nub" data-joynub></div></div>
+        <div class="world-hud">
+          <span class="whud-chip" data-whud-level>Lvl 1</span>
+          <span class="whud-chip" data-whud-balls>🟢 10</span>
+          <button class="world-exit" data-world-exit>✕ Exit</button>
         </div>
+        <div class="world-storm" data-storm-world></div>
+        <div class="world-toastline">🕹️ drag anywhere to move · walk into slimes to catch · 🌿 tall grass hides fresh spawns</div>
       </div>
 
       <div class="worth" data-worth hidden></div>
@@ -1064,80 +1088,124 @@
         try { syncRoamers(); } catch {}
       }
 
-      // ================= OVERWORLD (Pokemon-style swamp) =================
-      const W_COLS = 26, W_ROWS = 18, TILE = 24;
+            // ================= OVERWORLD v2 (fullscreen, camera, joystick) =================
+      const TILE = 32, W_COLS = 44, W_ROWS = 32;
       const worldCv = $("[data-world]");
       const wctx = worldCv ? worldCv.getContext("2d") : null;
-      // tiles: 0 grass, 1 tall-grass (encounters), 2 water, 3 mud path, 4 tree, 5 door
+      // tiles: 0 grass, 1 tall-grass (encounters), 2 water, 3 mud path, 4 solid, 5 door
       const BUILDINGS = [
-        { id:"lab",  name:"🥚 Launch Lab",   sub:"Hatch your own coin — it becomes an OGRE BOSS", url:"/terminal", x:3,  y:2,  w:4, h:3, color:"#2f6b2a", roof:"#72ff23" },
-        { id:"post", name:"⚡ Trading Post", sub:"The full SlimeWire terminal", url:"/terminal", x:19, y:2,  w:4, h:3, color:"#4a3a22", roof:"#ffd84d" },
-        { id:"totem",name:"🏆 Proof Totem",  sub:"Every call tracked — wins AND losses", url:"/proof", x:11, y:12, w:2, h:2, color:"#3a2f4f", roof:"#c79bff" }
+        { id:"lab",  name:"🥚 Launch Lab",   sub:"Hatch your own coin — it becomes an OGRE BOSS raid", url:"/terminal", x:6,  y:4,  w:6, h:4, color:"#2f6b2a", roof:"#72ff23" },
+        { id:"post", name:"⚡ Trading Post", sub:"The full SlimeWire terminal", url:"/terminal", x:32, y:5,  w:6, h:4, color:"#4a3a22", roof:"#ffd84d" },
+        { id:"totem",name:"🏆 Proof Totem",  sub:"Every call tracked — wins AND losses", url:"/proof", x:21, y:23, w:3, h:3, color:"#3a2f4f", roof:"#c79bff" }
       ];
       let wmap = null, mapLayer = null;
       function genMap() {
-        const r = rng(hash(dayKey()+"swampmap"));
+        const r = rng(hash(dayKey()+"swampmap2"));
         wmap = Array.from({length:W_ROWS},()=>Array(W_COLS).fill(0));
         for (let y=0;y<W_ROWS;y++) for (let x=0;x<W_COLS;x++) {
           if (x===0||y===0||x===W_COLS-1||y===W_ROWS-1) { wmap[y][x]=4; continue; }
           const v = r();
-          wmap[y][x] = v<0.10 ? 2 : v<0.16 ? 4 : v<0.40 ? 1 : 0;
+          wmap[y][x] = v<0.09 ? 2 : v<0.15 ? 4 : v<0.42 ? 1 : 0;
         }
+        // ponds: a few blobs of water
+        for (let p=0;p<4;p++){ const cxp=4+Math.floor(r()*(W_COLS-8)), cyp=4+Math.floor(r()*(W_ROWS-8)), rad=2+Math.floor(r()*2);
+          for (let y=cyp-rad;y<=cyp+rad;y++) for (let x=cxp-rad;x<=cxp+rad;x++)
+            if (wmap[y]?.[x]!==undefined && (x-cxp)**2+(y-cyp)**2<=rad*rad && wmap[y][x]!==4) wmap[y][x]=2; }
         // mud path cross
-        const py = Math.floor(W_ROWS/2);
-        for (let x=1;x<W_COLS-1;x++) wmap[py][x]=3;
-        for (let y=1;y<W_ROWS-1;y++) wmap[y][Math.floor(W_COLS/2)]=3;
-        // buildings stamp (4 = solid, door = 5 at bottom-center)
+        const py = Math.floor(W_ROWS/2), pxm = Math.floor(W_COLS/2);
+        for (let x=1;x<W_COLS-1;x++){ wmap[py][x]=3; if (r()<0.3) wmap[py+ (r()<0.5?1:-1)][x]=3; }
+        for (let y=1;y<W_ROWS-1;y++){ wmap[y][pxm]=3; }
         for (const b of BUILDINGS) {
           for (let y=b.y;y<b.y+b.h;y++) for (let x=b.x;x<b.x+b.w;x++) if (wmap[y]?.[x]!==undefined) wmap[y][x]=4;
           b.doorX = b.x + Math.floor(b.w/2); b.doorY = b.y + b.h;
           if (wmap[b.doorY]?.[b.doorX]!==undefined) wmap[b.doorY][b.doorX]=5;
+          if (wmap[b.doorY+1]?.[b.doorX]!==undefined && wmap[b.doorY+1][b.doorX]===4) wmap[b.doorY+1][b.doorX]=3;
         }
-        // pre-render map layer
+        // pre-render the map layer with richer tile art
         mapLayer = document.createElement("canvas"); mapLayer.width = W_COLS*TILE; mapLayer.height = W_ROWS*TILE;
         const m = mapLayer.getContext("2d");
-        const tr = rng(hash(dayKey()+"tiles"));
+        const tr = rng(hash(dayKey()+"tiles2"));
         for (let y=0;y<W_ROWS;y++) for (let x=0;x<W_COLS;x++) {
           const t = wmap[y][x], X=x*TILE, Y=y*TILE;
-          m.fillStyle = t===2 ? "#123e4a" : t===3 ? "#4a3a22" : t===4 ? "#0a2410" : "#15401e";
-          m.fillRect(X,Y,TILE,TILE);
-          if (t===0||t===1) { m.fillStyle = "rgba(0,0,0,0.08)"; if ((x+y)%2) m.fillRect(X,Y,TILE,TILE); }
-          if (t===1) { m.strokeStyle = "#2f8a3a"; m.lineWidth=2; for (let i=0;i<3;i++){ const gx=X+4+i*7; m.beginPath(); m.moveTo(gx,Y+TILE-3); m.lineTo(gx+2,Y+6); m.stroke(); } }
-          if (t===2) { m.fillStyle = "rgba(255,255,255,0.08)"; m.fillRect(X+3,Y+5+((x+y)%3)*4,TILE-9,2); }
-          if (t===4 && !(y===0||x===0||x===W_COLS-1||y===W_ROWS-1)) {
-            m.fillStyle="#13390f"; m.beginPath(); m.arc(X+TILE/2, Y+TILE/2-2, TILE/2-2, 0, 7); m.fill();
-            m.fillStyle="#0a2410"; m.fillRect(X+TILE/2-2, Y+TILE/2+4, 4, 7);
+          // grass base everywhere first
+          m.fillStyle = (x+y)%2 ? "#16451f" : "#194a22"; m.fillRect(X,Y,TILE,TILE);
+          if (tr()<0.18){ m.fillStyle="rgba(255,255,255,0.04)"; m.fillRect(X+ (tr()*TILE)|0, Y+(tr()*TILE)|0, 3,3); }
+          if (t===2) { // water with bank + ripples
+            m.fillStyle="#0e3340"; m.fillRect(X,Y,TILE,TILE);
+            m.fillStyle="#155062"; m.fillRect(X+2,Y+2,TILE-4,TILE-4);
+            m.fillStyle="rgba(255,255,255,0.10)"; m.fillRect(X+5,Y+7+((x+y)%3)*6,TILE-12,2); m.fillRect(X+8,Y+16+((x*y)%2)*4,TILE-16,2);
+          } else if (t===3) { // mud path with worn edges
+            m.fillStyle="#54422a"; m.fillRect(X,Y,TILE,TILE);
+            m.fillStyle="#5f4c31"; m.fillRect(X+2,Y+2,TILE-4,TILE-4);
+            m.fillStyle="rgba(0,0,0,0.12)"; for(let i=0;i<3;i++) m.fillRect(X+4+(tr()*22)|0, Y+4+(tr()*22)|0, 3,2);
+          } else if (t===1) { // tall grass tufts
+            m.fillStyle="#1d5c28"; m.fillRect(X,Y,TILE,TILE);
+            m.strokeStyle="#2f9a3f"; m.lineWidth=2;
+            for (let i=0;i<4;i++){ const gx=X+5+i*7; m.beginPath(); m.moveTo(gx,Y+TILE-4); m.quadraticCurveTo(gx+(i%2?3:-3), Y+TILE/2, gx+(i%2?1:-1), Y+6); m.stroke(); }
+            m.strokeStyle="#1c7a2c"; m.beginPath(); m.moveTo(X+12,Y+TILE-4); m.quadraticCurveTo(X+14,Y+14,X+11,Y+9); m.stroke();
+          } else if (t===4) {
+            const isWall = y===0||x===0||x===W_COLS-1||y===W_ROWS-1;
+            if (isWall) { m.fillStyle="#0a2410"; m.fillRect(X,Y,TILE,TILE); }
           }
-          if (tr()<0.03 && t===0) { m.fillStyle="#d9ffa0"; m.fillRect(X+TILE/2,Y+TILE/2,3,3); }
         }
-        // buildings drawn on map layer
+        // trees (drawn after base so canopies overlap nicely)
+        for (let y=1;y<W_ROWS-1;y++) for (let x=1;x<W_COLS-1;x++) {
+          if (wmap[y][x]!==4) continue;
+          const inB = BUILDINGS.some((b)=>x>=b.x&&x<b.x+b.w&&y>=b.y&&y<b.y+b.h);
+          if (inB) continue;
+          const X=x*TILE, Y=y*TILE;
+          m.fillStyle="rgba(0,0,0,0.28)"; m.beginPath(); m.ellipse(X+TILE/2,Y+TILE-5,11,4,0,0,7); m.fill();
+          m.fillStyle="#3a2a18"; m.fillRect(X+TILE/2-3,Y+TILE/2,6,TILE/2-4);
+          m.fillStyle="#0f3a14"; m.beginPath(); m.arc(X+TILE/2,Y+TILE/2-4,13,0,7); m.fill();
+          m.fillStyle="#176022"; m.beginPath(); m.arc(X+TILE/2-4,Y+TILE/2-8,8,0,7); m.fill();
+          m.fillStyle="#1f7a2c"; m.beginPath(); m.arc(X+TILE/2+3,Y+TILE/2-9,6,0,7); m.fill();
+        }
+        // buildings
         for (const b of BUILDINGS) {
           const X=b.x*TILE, Y=b.y*TILE, Wd=b.w*TILE, Hd=b.h*TILE;
-          m.fillStyle=b.color; m.fillRect(X,Y+8,Wd,Hd-8);
-          m.fillStyle=b.roof; m.beginPath(); m.moveTo(X-4,Y+10); m.lineTo(X+Wd/2,Y-8); m.lineTo(X+Wd+4,Y+10); m.closePath(); m.fill();
-          m.fillStyle="rgba(0,0,0,0.5)"; m.fillRect((b.doorX)*TILE+4, Y+Hd-16, TILE-8, 16);
-          m.fillStyle="#eaffe0"; m.font="bold 10px Inter"; m.textAlign="center";
-          m.fillText(b.name.replace(/^[^ ]+ /,""), X+Wd/2, Y+Hd+ (b.id==="totem"? -Hd-12 : 0) - 0 + 8 + (b.id==="totem"?0:0));
+          m.fillStyle="rgba(0,0,0,0.3)"; m.fillRect(X+4,Y+Hd-2,Wd-2,6);
+          m.fillStyle=b.color; m.fillRect(X,Y+12,Wd,Hd-12);
+          m.fillStyle="rgba(0,0,0,0.18)"; for(let i=0;i<b.w;i++) m.fillRect(X+i*TILE+2,Y+16,2,Hd-18);
+          m.fillStyle=b.roof; m.beginPath(); m.moveTo(X-8,Y+16); m.lineTo(X+Wd/2,Y-14); m.lineTo(X+Wd+8,Y+16); m.closePath(); m.fill();
+          m.fillStyle="rgba(0,0,0,0.25)"; m.beginPath(); m.moveTo(X-8,Y+16); m.lineTo(X+Wd/2,Y-14); m.lineTo(X+Wd/2,Y+16); m.closePath(); m.fill();
+          m.fillStyle="#120c06"; m.fillRect(b.doorX*TILE+5, Y+Hd-22, TILE-10, 22);
+          m.fillStyle=b.roof; m.fillRect(b.doorX*TILE+5, Y+Hd-22, TILE-10, 3);
+          m.font="900 13px Inter, sans-serif"; m.textAlign="center";
+          m.fillStyle="rgba(0,0,0,0.7)"; m.fillText(b.name, X+Wd/2+1, Y+Hd+15);
+          m.fillStyle="#eaffe0"; m.fillText(b.name, X+Wd/2, Y+Hd+14);
         }
       }
       const walkable = (x,y)=> wmap && wmap[y] && (wmap[y][x]===0||wmap[y][x]===1||wmap[y][x]===3||wmap[y][x]===5);
-      const player = { x:13, y:10, px:13*TILE, py:10*TILE, moving:false, dir:"down", frame:0 };
-      let roamers = []; // {mint,row,x,y,px,py,sprite,wanderAt}
+      const player = { x:22, y:18, px:22*TILE, py:18*TILE, moving:false, dir:"down", frame:0 };
+      // pre-rendered player sprites (2 walk frames) — chunky trainer slime
+      function makePlayerFrame(step) {
+        const c = document.createElement("canvas"); c.width=28; c.height=34; const p=c.getContext("2d");
+        p.fillStyle="#3fae12"; p.fillRect(7,12,14,14);                      // body
+        p.fillStyle="#4fc91d"; p.fillRect(7,12,14,4);                       // chest light
+        p.fillStyle="#72ff23"; p.fillRect(8,4,12,10);                       // head
+        p.fillStyle="#0a1505"; p.fillRect(10,8,3,3); p.fillRect(16,8,3,3);  // eyes
+        p.fillStyle="#fff"; p.fillRect(10.8,8.6,1,1); p.fillRect(16.8,8.6,1,1);
+        p.fillStyle="#2c5e1a"; p.fillRect(7,2,14,4); p.fillRect(7,5,5,2);   // cap
+        p.fillStyle="#2f8a10";                                              // feet
+        p.fillRect(7+(step?3:0),26,5,5); p.fillRect(16-(step?3:0),26,5,5);
+        return c;
+      }
+      const playerFrames = [makePlayerFrame(0), makePlayerFrame(1)];
+      let roamers = [];
       function spriteFor(row, ogre) {
-        const c = document.createElement("canvas"); c.width=40; c.height=40;
+        const c = document.createElement("canvas"); c.width=48; c.height=48;
         drawCreature(c, row.tokenMint, moodFor(row), Math.max(stageFor(row),1), ogre);
         return c;
       }
       function syncRoamers() {
         if (!wmap) return;
-        const want = rows.filter((r)=>!store.dex[r.tokenMint]).slice(0, isStorm()?16:10);
+        const want = rows.filter((r)=>!store.dex[r.tokenMint]).slice(0, isStorm()?18:12);
         const keep = new Map(roamers.map((c)=>[c.mint,c]));
         roamers = want.map((row)=>{
           const old = keep.get(row.tokenMint);
           if (old) { old.row = row; return old; }
           const rr = rng(hash(row.tokenMint+"spawn"));
-          let x,y,tries=0; do { x=2+Math.floor(rr()*(W_COLS-4)); y=2+Math.floor(rr()*(W_ROWS-4)); tries++; } while(!walkable(x,y)&&tries<40);
-          sfx("tick");
+          let x,y,tries=0; do { x=2+Math.floor(rr()*(W_COLS-4)); y=2+Math.floor(rr()*(W_ROWS-4)); tries++; } while(!walkable(x,y)&&tries<60);
           return { mint:row.tokenMint, row, x, y, px:x*TILE, py:y*TILE, sprite:spriteFor(row,isOgreMint(row.tokenMint)), wanderAt:Date.now()+1500+Math.random()*2000 };
         });
       }
@@ -1149,21 +1217,66 @@
         openCreature(mint);
       }
       const keys = {};
+      const moveVec = { x:0, y:0 };
       window.addEventListener("keydown",(e)=>{ const k={ArrowUp:"up",ArrowDown:"down",ArrowLeft:"left",ArrowRight:"right",w:"up",s:"down",a:"left",d:"right"}[e.key]; if(k&&view==="world"){ keys[k]=true; e.preventDefault(); } });
       window.addEventListener("keyup",(e)=>{ const k={ArrowUp:"up",ArrowDown:"down",ArrowLeft:"left",ArrowRight:"right",w:"up",s:"down",a:"left",d:"right"}[e.key]; if(k) keys[k]=false; });
-      document.querySelectorAll("[data-dpad] button").forEach((b)=>{
-        const d=b.dataset.dir;
-        b.addEventListener("pointerdown",(e)=>{ e.preventDefault(); keys[d]=true; });
-        for (const ev of ["pointerup","pointerleave","pointercancel"]) b.addEventListener(ev,()=>{ keys[d]=false; });
+      // floating analog joystick: touch anywhere, stick appears under your thumb
+      const joyEl = $("[data-joy]"), joyNub = $("[data-joynub]"), joyZone = $("[data-joyzone]");
+      let joyId = null, joyCx = 0, joyCy = 0, joyT0 = 0, joyMoved = false, joyX0 = 0, joyY0 = 0;
+      const JOY_R = 48;
+      function joySet(dx, dy) {
+        const mag = Math.hypot(dx,dy);
+        const cl = Math.min(mag, JOY_R);
+        const nx = mag>0 ? dx/mag : 0, ny = mag>0 ? dy/mag : 0;
+        joyNub.style.transform = `translate(calc(-50% + ${nx*cl}px), calc(-50% + ${ny*cl}px))`;
+        if (mag > 12) { moveVec.x = nx; moveVec.y = ny; } else { moveVec.x = 0; moveVec.y = 0; }
+      }
+      joyZone?.addEventListener("pointerdown",(e)=>{
+        if (joyId!==null) return;
+        joyId = e.pointerId; joyT0 = Date.now(); joyMoved = false; joyX0 = e.clientX; joyY0 = e.clientY;
+        joyCx = e.clientX; joyCy = e.clientY;
+        joyEl.style.left = (joyCx-59)+"px"; joyEl.style.top = (joyCy-59)+"px";
+        joyEl.classList.add("on"); joySet(0,0);
+        joyZone.setPointerCapture(e.pointerId);
       });
-      worldCv?.addEventListener("pointerdown",(e)=>{
+      joyZone?.addEventListener("pointermove",(e)=>{
+        if (e.pointerId!==joyId) return;
+        const dx=e.clientX-joyCx, dy=e.clientY-joyCy;
+        if (Math.hypot(e.clientX-joyX0, e.clientY-joyY0) > 10) joyMoved = true;
+        joySet(dx,dy);
+      });
+      function joyEnd(e){
+        if (e.pointerId!==joyId) return;
+        joyId=null; joyEl.classList.remove("on"); moveVec.x=0; moveVec.y=0;
+        // quick tap (no drag) = try to tap a creature
+        if (!joyMoved && Date.now()-joyT0 < 260) tapWorld(e.clientX, e.clientY);
+      }
+      joyZone?.addEventListener("pointerup", joyEnd);
+      joyZone?.addEventListener("pointercancel", joyEnd);
+      // camera + zoom
+      let camX=0, camY=0, ZOOM=2;
+      function resizeWorld() {
+        if (!worldCv) return;
+        const dpr = Math.min(2, window.devicePixelRatio||1);
+        worldCv.width = Math.floor(worldCv.clientWidth*dpr);
+        worldCv.height = Math.floor(worldCv.clientHeight*dpr);
+        wctx.imageSmoothingEnabled = false;
+        // show ~11 tiles on the short axis — chunky and readable
+        ZOOM = Math.max(1.4, Math.min(3.4, Math.min(worldCv.width, worldCv.height)/(11*TILE)));
+      }
+      window.addEventListener("resize", ()=>{ if (view==="world") resizeWorld(); });
+      function tapWorld(clientX, clientY) {
         const r = worldCv.getBoundingClientRect();
-        const sx = (e.clientX-r.left)/r.width*W_COLS*TILE, sy=(e.clientY-r.top)/r.height*W_ROWS*TILE;
-        for (const c of roamers) if (Math.abs(c.px+20-sx)<26 && Math.abs(c.py+20-sy)<26) { tryEncounter(c.mint); return; }
-      });
+        const dpr = worldCv.width / r.width;
+        const sx = (clientX-r.left)*dpr/ZOOM + camX, sy = (clientY-r.top)*dpr/ZOOM + camY;
+        for (const c of roamers) if (Math.abs(c.px+24-sx)<30 && Math.abs(c.py+24-sy)<30) { tryEncounter(c.mint); return; }
+      }
       function stepPlayer() {
         if (player.moving || encounterLock) return;
-        const dir = keys.up?"up":keys.down?"down":keys.left?"left":keys.right?"right":null;
+        let dir = null;
+        if (Math.abs(moveVec.x) > Math.abs(moveVec.y)) { if (moveVec.x < -0.25) dir="left"; else if (moveVec.x > 0.25) dir="right"; }
+        else { if (moveVec.y < -0.25) dir="up"; else if (moveVec.y > 0.25) dir="down"; }
+        if (!dir) dir = keys.up?"up":keys.down?"down":keys.left?"left":keys.right?"right":null;
         if (!dir) return;
         player.dir = dir;
         const nx = player.x + (dir==="left"?-1:dir==="right"?1:0);
@@ -1175,7 +1288,7 @@
       }
       function updateWorld(dt) {
         stepPlayer();
-        const sp = 0.12*dt;
+        const sp = 0.16*dt;
         if (player.moving) {
           const gx=player.tx*TILE, gy=player.ty*TILE;
           player.px += Math.sign(gx-player.px)*Math.min(sp,Math.abs(gx-player.px));
@@ -1197,11 +1310,11 @@
           if (now > c.wanderAt && !c.movingTo) {
             const dirs=[[0,1],[0,-1],[1,0],[-1,0]]; const [dx,dy]=dirs[Math.floor(Math.random()*4)];
             const nx=c.x+dx, ny=c.y+dy;
-            if (walkable(nx,ny) && !(nx===player.x&&ny===player.y)) { c.movingTo={x:nx,y:ny}; }
+            if (walkable(nx,ny) && !(nx===player.x&&ny===player.y)) c.movingTo={x:nx,y:ny};
             c.wanderAt = now + 1400 + Math.random()*2600;
           }
           if (c.movingTo) {
-            const gx=c.movingTo.x*TILE, gy=c.movingTo.y*TILE; const cs=0.05*dt;
+            const gx=c.movingTo.x*TILE, gy=c.movingTo.y*TILE; const cs=0.06*dt;
             c.px += Math.sign(gx-c.px)*Math.min(cs,Math.abs(gx-c.px));
             c.py += Math.sign(gy-c.py)*Math.min(cs,Math.abs(gy-c.py));
             if (c.px===gx&&c.py===gy){ c.x=c.movingTo.x; c.y=c.movingTo.y; c.movingTo=null;
@@ -1210,42 +1323,69 @@
           }
         }
       }
-      function drawPlayer() {
-        const X=player.px, Y=player.py-6;
-        const step = player.moving ? Math.floor(player.frame)%2 : 0;
-        wctx.fillStyle="rgba(0,0,0,0.3)"; wctx.beginPath(); wctx.ellipse(X+12,Y+26,8,3,0,0,7); wctx.fill();
-        wctx.fillStyle="#3fae12"; wctx.fillRect(X+6,Y+8,12,12);            // body
-        wctx.fillStyle="#72ff23"; wctx.fillRect(X+7,Y+4,10,8);             // head
-        wctx.fillStyle="#0a1505"; wctx.fillRect(X+9,Y+7,2,2); wctx.fillRect(X+13,Y+7,2,2); // eyes
-        wctx.fillStyle="#2c5e1a";                                          // cap
-        wctx.fillRect(X+6,Y+2,12,3); wctx.fillRect(X+6,Y+4,4,2);
-        wctx.fillStyle="#2f8a10";                                          // feet
-        wctx.fillRect(X+6+(step?2:0),Y+20,4,4); wctx.fillRect(X+14-(step?2:0),Y+20,4,4);
-      }
-      let lastT = 0, worldRunning = false;
+      // ambient spores drifting over the world
+      const spores = Array.from({length:14},(_,i)=>({ x:Math.random()*W_COLS*TILE, y:Math.random()*W_ROWS*TILE, s:0.5+Math.random()*1.2, ph:Math.random()*7 }));
+      let lastT = 0, worldRunning = false, hudTick = 0;
       function worldLoop(t) {
         if (view!=="world") { worldRunning=false; return; }
         const dt = Math.min(50, t-lastT||16); lastT=t;
         updateWorld(dt);
+        const vw = worldCv.width/ZOOM, vh = worldCv.height/ZOOM;
+        camX = Math.max(0, Math.min(W_COLS*TILE - vw, player.px + TILE/2 - vw/2));
+        camY = Math.max(0, Math.min(W_ROWS*TILE - vh, player.py + TILE/2 - vh/2));
         wctx.clearRect(0,0,worldCv.width,worldCv.height);
-        wctx.drawImage(mapLayer,0,0);
+        wctx.drawImage(mapLayer, camX, camY, vw, vh, 0, 0, worldCv.width, worldCv.height);
+        const S = (wx,wy)=>[(wx-camX)*ZOOM,(wy-camY)*ZOOM];
         const sorted=[...roamers].sort((a,b)=>a.py-b.py);
         for (const c of sorted) {
-          const bobY = Math.sin(t/300 + c.px)*2;
-          if (isShiny(c.mint)) { wctx.fillStyle="rgba(255,216,77,0.35)"; wctx.beginPath(); wctx.arc(c.px+20,c.py+20+bobY,16,0,7); wctx.fill(); }
-          wctx.drawImage(c.sprite, c.px+0, c.py-4+bobY);
+          if (c.px<camX-60||c.px>camX+vw+60||c.py<camY-60||c.py>camY+vh+60) continue;
+          const bobY = Math.sin(t/300 + c.px)*2.4;
+          const [sx,sy] = S(c.px, c.py-6+bobY);
+          wctx.fillStyle="rgba(0,0,0,0.32)"; wctx.beginPath(); wctx.ellipse(sx+24*ZOOM/2,sy+46*ZOOM/2*0.92,14*ZOOM/2,4*ZOOM/2,0,0,7); wctx.fill();
+          if (typeFor(c.row)==="shinytype") { wctx.fillStyle="rgba(255,216,77,0.30)"; wctx.beginPath(); wctx.arc(sx+24*ZOOM/2, sy+24*ZOOM/2, 22*ZOOM/2, 0, 7); wctx.fill(); }
+          wctx.drawImage(c.sprite, sx, sy, 48*ZOOM*0.75, 48*ZOOM*0.75);
         }
-        drawPlayer();
+        // player (drawn after creatures behind, before those in front — simple: by y)
+        const step = player.moving ? Math.floor(player.frame)%2 : 0;
+        const [pxS,pyS] = S(player.px+2, player.py-12);
+        wctx.fillStyle="rgba(0,0,0,0.32)"; wctx.beginPath(); wctx.ellipse(pxS+14*ZOOM*0.9/2*1.0+6, pyS+34*ZOOM*0.9, 10*ZOOM*0.6, 3.4*ZOOM*0.6, 0,0,7); wctx.fill();
+        wctx.drawImage(playerFrames[step], pxS, pyS, 28*ZOOM*0.9, 34*ZOOM*0.9);
+        // spores
+        wctx.fillStyle="rgba(217,255,160,0.5)";
+        for (const sp2 of spores) {
+          sp2.y -= 0.05*dt*sp2.s; sp2.x += Math.sin(t/900+sp2.ph)*0.3;
+          if (sp2.y < camY-20) { sp2.y = camY+vh+10; sp2.x = camX+Math.random()*vw; }
+          const [ssx,ssy]=S(sp2.x,sp2.y);
+          if (ssx>=-10&&ssx<=worldCv.width+10&&ssy>=-10&&ssy<=worldCv.height+10) wctx.fillRect(ssx,ssy,2.4*sp2.s,2.4*sp2.s);
+        }
+        // hud refresh ~2x/sec
+        hudTick += dt;
+        if (hudTick > 500) { hudTick = 0;
+          const lvl = levelFor(store.xp);
+          const lv = $("[data-whud-level]"); if (lv) lv.innerHTML = `Lvl <b>${lvl}</b> · ${esc(LEVELS[lvl-1]||"Ogre")}`;
+          const bl = $("[data-whud-balls]"); if (bl) bl.innerHTML = `🟢 <b>${energyState().count}</b>/${MAX_BALLS}`;
+          const st = $("[data-storm-world]"); if (st) { st.textContent = stormStatusText(); st.style.color = isStorm()?"var(--warn)":"var(--dim)"; }
+        }
         requestAnimationFrame(worldLoop);
       }
       function startWorld() {
         if (!wctx) return;
         if (!wmap) genMap();
         syncRoamers();
+        document.body.classList.add("world-on");
         $("[data-world-wrap]").classList.add("on");
-        if (!worldRunning) { worldRunning=true; requestAnimationFrame(worldLoop); }
+        resizeWorld();
+        if (!worldRunning) { worldRunning=true; lastT=0; requestAnimationFrame(worldLoop); }
       }
-      function stopWorld(){ $("[data-world-wrap]")?.classList.remove("on"); }
+      function stopWorld(){
+        document.body.classList.remove("world-on");
+        $("[data-world-wrap]")?.classList.remove("on");
+      }
+      $("[data-world-exit]")?.addEventListener("click", ()=>{
+        document.querySelectorAll(".tab").forEach((x)=>x.classList.remove("on"));
+        document.querySelector('.tab[data-view="wild"]')?.classList.add("on");
+        view = "wild"; stopWorld(); render();
+      });
       function openBuilding(b) {
         const scrim=$("[data-scrim]"), modal=$("[data-modal]");
         modal.innerHTML = `<button class="x" data-close>✕</button>
@@ -1253,7 +1393,7 @@
           <p class="lore" style="min-height:0">${esc(b.sub)}</p>
           <div class="row2"><a class="btn ape" href="${b.url}">Enter</a><button class="btn ghost" data-close2>Not yet</button></div>`;
         scrim.classList.add("on");
-        const leave=()=>{ scrim.classList.remove("on"); player.y=Math.min(W_ROWS-2,player.y+0); player.ty=player.y; player.tx=player.x; };
+        const leave=()=>{ scrim.classList.remove("on"); player.ty=player.y; player.tx=player.x; };
         modal.querySelector("[data-close]").onclick=leave;
         modal.querySelector("[data-close2]").onclick=leave;
       }
