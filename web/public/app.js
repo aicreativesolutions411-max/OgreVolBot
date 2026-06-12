@@ -12437,6 +12437,13 @@ async function executeWebBuy(amountSol, amountMode = "fixed") {
       slippageBps: form.slippageBps,
       tradeAttemptId
     };
+    // Swap-form buys inherit TP/SL/timer from the active preset - auto-armed
+    // on managed wallets (connected wallets can't server-sell, handled below).
+    const exitDefaults = presetExitDefaults();
+    const wantsAutoExit = isEnabledTradeTarget(exitDefaults.takeProfitPct)
+      || isEnabledTradeTarget(exitDefaults.stopLossPct)
+      || isEnabledTradeTarget(exitDefaults.sellDelay);
+    if (wantsAutoExit) Object.assign(payload, { autoExit: true, ...exitDefaults });
     if (amountMode === "max") {
       payload.amountMode = "max";
     } else {
@@ -13684,6 +13691,20 @@ function readQuickBuyModalForm() {
   return { tokenMint, walletIndex, amountSol, slippageBps };
 }
 
+// Universal auto-arm rule: any managed buy that doesn't carry explicit exits
+// inherits them from the ACTIVE TRADE PRESET. Presets set = protection on,
+// in every feature, with zero extra steps.
+function presetExitDefaults() {
+  const preset = activeTradePreset();
+  if (!preset) return {};
+  return {
+    takeProfitPct: preset.takeProfitPct || "",
+    stopLossPct: preset.stopLossPct || "",
+    sellDelay: preset.sellDelay || "off",
+    sellPercent: preset.sellPercent || "100"
+  };
+}
+
 async function executeQuickBuyAmount({
   tokenMint,
   walletIndex,
@@ -13895,7 +13916,8 @@ async function confirmQuickBuyModal() {
     const existingSafetyBlock = quickBuySafetyBlockMessage(state.quickBuyModal?.error || state.quickBuyModal?.status || "");
     if (existingSafetyBlock) throw new Error(existingSafetyBlock);
     state.quickBuyModal = { ...state.quickBuyModal, ...form, status: "Validating quick buy...", error: "" };
-    const trade = await executeQuickBuyAmount({ ...form, source: state.quickBuyModal?.source || "quick-buy-modal" });
+    // Modal buys inherit TP/SL/timer from the active preset - auto-armed.
+    const trade = await executeQuickBuyAmount({ ...presetExitDefaults(), ...form, source: state.quickBuyModal?.source || "quick-buy-modal" });
     state.quickBuyModal = {
       ...state.quickBuyModal,
       open: false,
