@@ -94,6 +94,39 @@
       .modal .x { float:right; background:none; border:0; color:var(--dim); font-size:1.3rem; cursor:pointer; line-height:1; }
       .modal-cv { display:block; margin:2px auto 4px; width:148px; height:148px; image-rendering:pixelated;
         background:radial-gradient(circle at 50% 40%, rgba(114,255,35,0.14), transparent 70%); border-radius:16px; }
+      /* ===== Arena battle mode ===== */
+      .arena-pick { display:grid; grid-template-columns:repeat(auto-fill,minmax(110px,1fr)); gap:10px; margin-top:8px; }
+      .arena-intro { text-align:center; color:var(--dim); font-size:0.85rem; margin:6px 0 2px; }
+      .arena-intro b { color:var(--green); }
+      .arena-record { text-align:center; margin:8px 0; }
+      .arena-record span { display:inline-block; background:var(--panel); border:1px solid var(--line); border-radius:99px; padding:5px 12px; font-size:0.74rem; font-weight:800; margin:0 4px; }
+      .battle { position:fixed; inset:0; z-index:125; display:none; flex-direction:column;
+        background:radial-gradient(ellipse at 50% 30%, #16243f, #0a1322 60%, #04060c); padding:calc(10px + env(safe-area-inset-top)) 12px calc(12px + env(safe-area-inset-bottom)); }
+      .battle.on { display:flex; }
+      .battle-top { display:flex; justify-content:space-between; align-items:center; }
+      .battle-title { font-weight:900; color:var(--warn); letter-spacing:0.05em; }
+      .battle-x { background:rgba(8,20,10,0.8); border:1px solid var(--line); color:#eaffe0; border-radius:99px; padding:6px 12px; font-weight:800; cursor:pointer; }
+      .fighters { flex:1; display:flex; align-items:center; justify-content:space-between; gap:8px; position:relative; min-height:0; }
+      .fighter { flex:1; text-align:center; display:flex; flex-direction:column; align-items:center; gap:6px; }
+      .fighter canvas { width:min(38vw,150px); height:min(38vw,150px); image-rendering:pixelated; transition:transform .15s; }
+      .fighter.you canvas { transform:scaleX(1); } .fighter.foe canvas { transform:scaleX(-1); }
+      .fighter.hit canvas { animation:hitflash .3s; }
+      @keyframes hitflash { 0%,100%{filter:none} 50%{filter:brightness(2.5) drop-shadow(0 0 8px #fff)} }
+      .fighter.lunge.you canvas { transform:translateX(30px) scale(1.06); } .fighter.lunge.foe canvas { transform:translateX(-30px) scaleX(-1) scale(1.06); }
+      .hpbar { width:90%; height:13px; border-radius:99px; background:rgba(0,0,0,0.5); border:1px solid var(--line); overflow:hidden; }
+      .hpfill { height:100%; background:linear-gradient(90deg,#72ff23,#bbff63); transition:width .4s; }
+      .hpfill.low { background:linear-gradient(90deg,#ff6b5e,#ffd84d); }
+      .fname { font-weight:800; font-size:0.8rem; } .fhp { font-size:0.62rem; color:var(--dim); }
+      .vs { font-weight:900; color:var(--bad); font-size:1.1rem; align-self:center; }
+      .battle-log { height:64px; overflow:hidden; text-align:center; font-size:0.8rem; color:#d6ffbf; margin:6px 0; display:flex; flex-direction:column-reverse; }
+      .battle-actions { display:flex; gap:8px; }
+      .dmgfloat { position:absolute; z-index:5; font-weight:900; font-size:1.2rem; pointer-events:none; animation:floatup 1s ease-out forwards; }
+      .arena-wrap { margin:4px 0 8px; }
+      .arena { display:block; width:100%; aspect-ratio:372/240; image-rendering:pixelated; border-radius:14px;
+        border:1px solid var(--green); background:#06170c; touch-action:none; cursor:grab; box-shadow:0 0 24px rgba(114,255,35,0.18) inset; }
+      .arena:active { cursor:grabbing; }
+      .arena-hud { display:flex; justify-content:space-between; align-items:center; margin-top:5px; font-size:0.74rem; font-weight:800; color:var(--dim); }
+      .arena-hud [data-arena-balls] { color:var(--green); }
       .modal h2 { text-align:center; margin:2px 0 0; font-size:1.3rem; }
       .modal .verdict { display:block; text-align:center; font-weight:900; font-size:0.84rem; margin:6px auto 0; }
       .modal .lore { color:var(--dim); font-size:0.8rem; text-align:center; margin:8px 0 10px; min-height:1.1em; }
@@ -130,7 +163,8 @@
       .title-mute { margin-top:14px; background:none; border:1px solid var(--line); color:var(--dim); border-radius:99px; padding:6px 14px; font-size:0.74rem; cursor:pointer; }
       .title-credit { margin-top:16px; color:var(--dim); font-size:0.66rem; } .title-credit b { color:var(--green); }
       /* coachmark */
-      .coach { position:fixed; inset:0; z-index:115; display:flex; align-items:flex-end; justify-content:center; padding:0 14px 96px; pointer-events:none; }
+      .coach { position:fixed; inset:0; z-index:130; display:none; align-items:flex-end; justify-content:center; padding:0 14px 96px; pointer-events:none; background:rgba(2,8,4,0.4); }
+      .coach.show { display:flex; }
       .coach-card { pointer-events:auto; max-width:420px; background:linear-gradient(180deg,#0a2110,#05130a); border:1px solid var(--green); border-radius:16px; padding:14px 16px; box-shadow:0 0 40px rgba(114,255,35,0.25); animation:lvlpop .5s ease-out; }
       .coach-card b { color:var(--green); } .coach-card p { color:var(--dim); font-size:0.84rem; margin:6px 0 12px; }
       .coach-card button { background:var(--green); color:#071006; border:0; border-radius:99px; padding:10px 22px; font-weight:900; cursor:pointer; }
@@ -255,7 +289,7 @@
     </div>
 
     <!-- first-run coachmark -->
-    <div class="coach" data-coach hidden>
+    <div class="coach" data-coach>
       <div class="coach-card">
         <b>🧌 Professor Ogre</b>
         <p>Drag anywhere to walk. Bump into a slime to catch it. <b>Tall grass</b> hides fresh launches. Walk into the <b>buildings</b> to launch or trade real coins. Gotta slime 'em all!</p>
@@ -296,6 +330,7 @@
         <button class="tab on" data-view="world">🗺️ Swamp</button>
         <button class="tab" data-view="wild">📡 Feed</button>
         <button class="tab" data-view="dex">🎒 Swampdex</button>
+        <button class="tab" data-view="arena">⚔️ Arena</button>
       </div>
 
       <div class="world-wrap" data-world-wrap>
@@ -332,6 +367,29 @@
         The Swamp is a playful skin over real SlimeWire market data. Creatures = real tokens; their power tracks the live chart.
         Catching is free and on-chain-free. Trading is real and risky — <a href="/proof">see the proof wall</a>. Not financial advice.
       </footer>
+    </div>
+
+    <!-- ARENA BATTLE overlay -->
+    <div class="battle" data-battle>
+      <div class="battle-top">
+        <span class="battle-title">⚔️ THE PIT</span>
+        <button class="battle-x" data-battle-x>✕</button>
+      </div>
+      <div class="fighters">
+        <div class="fighter you" data-fy>
+          <div class="hpbar"><div class="hpfill" data-hp-you></div></div>
+          <div class="fname" data-name-you></div><div class="fhp" data-hpn-you></div>
+          <canvas data-cv-you width="160" height="160"></canvas>
+        </div>
+        <div class="vs">VS</div>
+        <div class="fighter foe" data-ff>
+          <div class="hpbar"><div class="hpfill" data-hp-foe></div></div>
+          <div class="fname" data-name-foe></div><div class="fhp" data-hpn-foe></div>
+          <canvas data-cv-foe width="160" height="160"></canvas>
+        </div>
+      </div>
+      <div class="battle-log" data-battle-log></div>
+      <div class="battle-actions" data-battle-actions></div>
     </div>
 
     <div class="scrim" data-scrim>
@@ -941,6 +999,7 @@
         { id:"ogre",    icon:"🧌", name:"Ogre Tamer",   test:(s)=>(s.stats?.ogresCaught||0)>=1 },
         { id:"degen",   icon:"⚡", name:"Degen",        test:(s)=>(s.stats?.aped||0)>=1 },
         { id:"whale",   icon:"🐋", name:"Swamp Whale",  test:(s)=>(s.stats?.aped||0)>=5 },
+        { id:"champ",   icon:"⚔️", name:"Pit Champion", test:(s)=>(s.stats?.arenaWins||0)>=3 },
         { id:"lord",    icon:"👑", name:"Swamp Lord",   test:(s)=>Object.keys(s.dex).length>=25 }
       ];
       function checkUnlocks() {
@@ -975,6 +1034,7 @@
         renderProgress();
         if (view==="world") { $("[data-grid]").innerHTML=""; $("[data-empty]").hidden=true; $("[data-count]").textContent = `${rows.length} slimes roaming · ${Object.keys(store.dex).length} caught`; }
         else if (view==="wild") renderWild();
+        else if (view==="arena") openArena();
         else renderDex();
       }
 
@@ -1089,60 +1149,117 @@
       $("[data-scrim]").addEventListener("click", (e)=>{ if (e.target===$("[data-scrim]")) closeModal(); });
 
       // ---------- catch minigame: stop the marker inside the slime zone ----------
+      // NEW catch: a real arena where the slime HOPS and DODGES. Drag the
+      // slimeball and flick it — aim + power + a moving target. Skill, not a tap.
       function doCatch(mint, row, mood, stage, modal) {
         if (store.dex[mint]) return;
-        if (modal.querySelector(".cgame")) return; // already mid-throw
+        if (modal.querySelector(".arena-wrap")) return;
         if (energyState().count <= 0) {
           const ms = REGEN_MS - (Date.now() - store.energy.at);
           toast(`😮‍💨 Out of slimeballs — next in ${Math.max(1,Math.ceil(ms/60000))}m`);
-          sfx("miss");
-          return;
+          sfx("miss"); return;
         }
-        const catchBtn = modal.querySelector("[data-catch]");
-        if (catchBtn) { catchBtn.disabled = true; catchBtn.style.opacity = ".5"; }
-        spendBall(); sfx("throw");
-        // zone width scales with difficulty: fresher + ogre = tighter = more XP
         const ogre = isOgreMint(mint);
         const fresh = row.pairAgeSeconds!==undefined ? stageFor(row) : (stage||1);
-        const zonePct = ogre ? 16 : fresh===0 ? 18 : fresh===1 ? 24 : 30;
-        const zoneLeft = 12 + Math.floor(Math.random()*(82 - zonePct - 12));
-        const game = document.createElement("div");
-        game.className = "cgame";
-        game.innerHTML = `<div class="cbar"><div class="czone" style="left:${zoneLeft}%;width:${zonePct}%"></div><div class="cmark" style="left:0%"></div></div>
-          <div class="chint">TAP when the marker is in the green!</div>`;
-        modal.querySelector(".row2").before(game);
-        const mark = game.querySelector(".cmark");
-        let pos = 0, dir = 1, alive = true;
-        const speed = ogre ? 1.9 : 1.5 + fresh*0.1; // %/frame-ish
-        let lastTick = 0;
-        function frame() {
-          if (!alive) return;
-          pos += dir * speed; if (pos >= 97) { pos = 97; dir = -1; } if (pos <= 0) { pos = 0; dir = 1; }
-          mark.style.left = pos + "%";
-          const inZone = pos >= zoneLeft && pos <= zoneLeft + zonePct;
-          if (inZone && Date.now()-lastTick > 90) { sfx("tick"); lastTick = Date.now(); }
-          requestAnimationFrame(frame);
+        const catchBtn = modal.querySelector("[data-catch]");
+        if (catchBtn) { catchBtn.disabled = true; catchBtn.style.opacity = ".5"; catchBtn.textContent = "Catching…"; }
+        // hide the static portrait while the arena plays
+        const portrait = modal.querySelector(".modal-cv"); if (portrait) portrait.style.display = "none";
+
+        const wrap = document.createElement("div"); wrap.className = "arena-wrap";
+        wrap.innerHTML = `<canvas class="arena" width="372" height="240"></canvas>
+          <div class="arena-hud"><span data-arena-balls></span><span data-arena-hint>drag the 🟢 and flick it at the slime!</span></div>`;
+        modal.querySelector(".row2").before(wrap);
+        const cv = wrap.querySelector(".arena"); const ax = cv.getContext("2d");
+        const HUD = wrap.querySelector("[data-arena-hint]");
+        const ballsEl = wrap.querySelector("[data-arena-balls]");
+        // creature sprite (real or procedural fallback)
+        const sImg = loadSprite(ogre ? "ogre-boss" : spriteNameForRow(row));
+        let fallback = null;
+        if (!(sImg.complete && sImg.naturalWidth)) { fallback = document.createElement("canvas"); fallback.width=64; fallback.height=64; drawCreature(fallback, mint, mood, Math.max(fresh,1), ogre); }
+        const drawSprite = (x,y,sz)=>{ const img=(sImg.complete&&sImg.naturalWidth)?sImg:fallback; if(img) ax.drawImage(img, x-sz/2, y-sz/2, sz, sz); };
+
+        const W=cv.width, H=cv.height;
+        const cr = { x:W/2, y:70, tx:W/2, ty:70, r: ogre?34:26, hopAt:0, wob:0, sz: ogre?78:58 };
+        const hopEvery = ogre ? 620 : (1100 - fresh*120); // harder = hops more
+        const ANCH_X=W/2, ANCH_Y=H-26;
+        const ball = { x:ANCH_X, y:ANCH_Y, r:11, vx:0, vy:0, flying:false };
+        let aiming=false, aimX=0, aimY=0, hits=0, done=false, ballsThisScene=0, gotcha=0, raf=0;
+        const needed = ogre ? 2 : 1; // ogres take 2 clean hits
+        function setHud(){ ballsEl.textContent = `🟢 ${energyState().count}`; }
+        setHud();
+
+        function hop(now){
+          cr.hopAt = now + hopEvery*(0.7+Math.random()*0.6);
+          cr.tx = 40 + Math.random()*(W-80);
+          cr.ty = 36 + Math.random()*90;
         }
-        requestAnimationFrame(frame);
-        const resolveTap = (e) => {
-          e.preventDefault(); e.stopPropagation();
-          if (!alive) return; alive = false;
-          game.removeEventListener("pointerdown", resolveTap);
-          const hit = pos >= zoneLeft && pos <= zoneLeft + zonePct;
-          const near = !hit && (pos >= zoneLeft-6 && pos <= zoneLeft + zonePct + 6);
-          const cv = modal.querySelector(".modal-cv");
-          if (hit || (near && Math.random() < 0.4)) {
-            throwBallAnim(game, cv, (bx, by) => {
-              particleBurst(bx ?? window.innerWidth/2, by ?? window.innerHeight/2, ["#72ff23","#bbff63","#d8ffb0","#ffd84d"]);
-              landCatch(mint, row, mood, fresh, ogre, modal, game);
-            });
-          } else {
-            sfx("miss"); cv.classList.add("shake"); setTimeout(()=>cv.classList.remove("shake"), 420);
-            game.querySelector(".chint").textContent = near ? "SO close — it slipped away! 1 slimeball lost." : "Whiffed it! 1 slimeball lost.";
-            setTimeout(()=>{ game.remove(); if (catchBtn){ catchBtn.disabled=false; catchBtn.style.opacity="1"; catchBtn.textContent="🫳 Throw again"; } }, 900);
+        function reset(){ ball.x=W/2; ball.y=H-26; ball.vx=ball.vy=0; ball.flying=false; }
+        let lastT=0;
+        function loop(t){
+          if (done) return;
+          const dt = Math.min(40, t-lastT||16); lastT=t;
+          if (t>cr.hopAt && !ball.flying) hop(t);
+          // smooth dodge toward target (and a little juke away from a flying ball)
+          cr.x += (cr.tx-cr.x)*0.08; cr.y += (cr.ty-cr.y)*0.08;
+          if (ball.flying && Math.hypot(ball.x-cr.x, ball.y-cr.y) < 90 && Math.random()<0.04 && !ogre) { cr.tx = cr.x + (ball.x<cr.x?40:-40); }
+          // physics
+          if (ball.flying){ ball.vy += 0.22*dt*0.06; ball.x += ball.vx*dt*0.06; ball.y += ball.vy*dt*0.06;
+            if (ball.x<ball.r||ball.x>W-ball.r){ ball.vx*=-0.5; ball.x=Math.max(ball.r,Math.min(W-ball.r,ball.x)); }
+            if (Math.hypot(ball.x-cr.x, ball.y-cr.y) < cr.r+ball.r){ // HIT
+              ball.flying=false; hits++; sfx("catch"); cr.wob=1;
+              const [bx,by]=arenaToScreen(cv,cr.x,cr.y); particleBurst(bx,by,["#72ff23","#bbff63","#d8ffb0","#ffd84d"]);
+              if (hits>=needed){ done=true; gotcha=1; setTimeout(()=>finishWin(),650); }
+              else { HUD.textContent="nice! one more…"; setTimeout(reset,250); }
+            } else if (ball.y>H+30 || (ball.vy>0 && ball.y>H-6 && Math.abs(ball.vx)<0.2)){ // missed / landed
+              ball.flying=false; sfx("miss"); spendBall(); ballsThisScene++; setHud();
+              const [sx,sy]=arenaToScreen(cv, ball.x, H-10); const sp=document.createElement("div"); sp.className="splat"; sp.style.left=(sx-7)+"px"; sp.style.top=(sy-7)+"px"; document.body.appendChild(sp); setTimeout(()=>sp.remove(),480);
+              if (energyState().count<=0){ done=true; setTimeout(()=>finishOut(),300); }
+              else { HUD.textContent="missed! flick again 🟢"; setTimeout(reset,220); }
+            }
           }
+          // draw
+          ax.clearRect(0,0,W,H);
+          const g=ax.createLinearGradient(0,0,0,H); g.addColorStop(0,"#0c3a1a"); g.addColorStop(1,"#05160b"); ax.fillStyle=g; ax.fillRect(0,0,W,H);
+          for(let i=0;i<5;i++){ ax.fillStyle="rgba(114,255,35,0.05)"; ax.beginPath(); ax.arc((i*83+ (t*0.02))%W, 30+i*40, 30,0,7); ax.fill(); }
+          // creature shadow + sprite (wobble on hit)
+          ax.fillStyle="rgba(0,0,0,0.3)"; ax.beginPath(); ax.ellipse(cr.x, cr.y+cr.sz*0.4, cr.r*0.9, 6, 0,0,7); ax.fill();
+          ax.save(); ax.translate(cr.x,cr.y); if (cr.wob){ ax.rotate(Math.sin(t/40)*0.18); cr.wob=Math.max(0,cr.wob-0.02);} ax.translate(-cr.x,-cr.y);
+          const bob=Math.sin(t/220)*3; drawSprite(cr.x, cr.y+bob, cr.sz); ax.restore();
+          // aim guide (slingshot: trajectory predicted from the anchor)
+          if (aiming){ const vx0=(ANCH_X-ball.x)*0.16, vy0=(ANCH_Y-ball.y)*0.16;
+            ax.strokeStyle="rgba(114,255,35,0.4)"; ax.lineWidth=2; ax.beginPath(); ax.moveTo(ANCH_X,ANCH_Y); ax.lineTo(ball.x,ball.y); ax.stroke();
+            ax.strokeStyle="rgba(187,255,99,0.6)"; ax.setLineDash([4,5]);
+            let gx=ANCH_X,gy=ANCH_Y,gvx=vx0,gvy=vy0; ax.beginPath(); ax.moveTo(gx,gy);
+            for(let i=0;i<26;i++){ gvy+=0.22*0.96; gx+=gvx; gy+=gvy; if(gy>H||gx<0||gx>W) break; ax.lineTo(gx,gy);} ax.stroke(); ax.setLineDash([]);
+          }
+          // ball
+          ax.fillStyle="#0a1a06"; ax.beginPath(); ax.arc(ball.x,ball.y,ball.r+1,0,7); ax.fill();
+          const bg=ax.createRadialGradient(ball.x-3,ball.y-3,2,ball.x,ball.y,ball.r); bg.addColorStop(0,"#d8ffb0"); bg.addColorStop(0.6,"#72ff23"); bg.addColorStop(1,"#2f8a10"); ax.fillStyle=bg; ax.beginPath(); ax.arc(ball.x,ball.y,ball.r,0,7); ax.fill();
+          if (gotcha){ ax.fillStyle="rgba(114,255,35,0.92)"; ax.font="900 30px Inter,sans-serif"; ax.textAlign="center"; ax.fillText("GOTCHA!",W/2,H/2); }
+          raf=requestAnimationFrame(loop);
+        }
+        function arenaToScreen(canvas, x, y){ const r=canvas.getBoundingClientRect(); return [r.left + x/canvas.width*r.width, r.top + y/canvas.height*r.height]; }
+        function endScene(){ done=true; cancelAnimationFrame(raf); }
+        function finishWin(){ endScene(); landCatch(mint,row,mood,fresh,ogre,modal,wrap); if(portrait) portrait.style.display=""; }
+        function finishOut(){ endScene(); wrap.remove(); if(portrait) portrait.style.display="";
+          if (catchBtn){ catchBtn.disabled=false; catchBtn.style.opacity="1"; catchBtn.textContent="🫳 Throw slimeball"; }
+          toast("😮‍💨 Out of slimeballs — they regen over time!"); }
+
+        // SLINGSHOT input: grab the ball, pull back (anywhere), release to launch.
+        // Velocity = (anchor - pulled position) * k, so you aim by pulling opposite.
+        function ptr(e,canvas){ const r=canvas.getBoundingClientRect(); return { x:(e.clientX-r.left)/r.width*canvas.width, y:(e.clientY-r.top)/r.height*canvas.height }; }
+        cv.addEventListener("pointerdown",(e)=>{ if (ball.flying||done) return; aiming=true; const p=ptr(e,cv); ball.x=p.x; ball.y=p.y; cv.setPointerCapture?.(e.pointerId); e.preventDefault(); });
+        cv.addEventListener("pointermove",(e)=>{ if (!aiming) return; const p=ptr(e,cv); ball.x=Math.max(8,Math.min(W-8,p.x)); ball.y=Math.max(8,Math.min(H-8,p.y)); e.preventDefault(); });
+        const release=(e)=>{ if (!aiming) return; aiming=false;
+          const vx=(ANCH_X-ball.x)*0.16, vy=(ANCH_Y-ball.y)*0.16;
+          ball.x=ANCH_X; ball.y=ANCH_Y;
+          if (Math.hypot(vx,vy) < 1.2) { reset(); return; } // too weak, no throw, no ball spent
+          ball.vx=vx; ball.vy=vy; ball.flying=true; sfx("throw"); HUD.textContent="🎯";
         };
-        game.addEventListener("pointerdown", resolveTap);
+        cv.addEventListener("pointerup",release);
+        cv.addEventListener("pointercancel",release);
+        hop(performance.now()); raf=requestAnimationFrame(loop);
       }
 
       function landCatch(mint, row, mood, fresh, ogre, modal, game) {
@@ -1534,6 +1651,13 @@
                 if (card) card.classList.add("evolved");
               }
             }
+            // RUGGED → CURSED GHOST: a catch that dumps 80%+ rises from the dead
+            // as a cursed ghost — funny, on-brand, and gets a revenge buff in the Arena.
+            if (mult <= 0.2 && !c.cursed) {
+              c.cursed = true; c.spriteName = "toxic-rug-slime"; c.mood = "rug"; changed = true;
+              sfx("miss");
+              toast(`💀 $${c.symbol} got RUGGED (${mult.toFixed(2)}x)… and rose as a CURSED GHOST. Revenge awaits in the Arena.`);
+            }
           }
         }
         if (changed) save(store);
@@ -1572,17 +1696,132 @@
         } catch {}
       }
 
-      // ---------- events ----------
-      $("[data-grid]").addEventListener("click", (e) => {
-        const card = e.target.closest(".card"); if (!card) return;
-        openCreature(card.getAttribute("data-mint"));
-      });
-      document.querySelectorAll(".tab").forEach((t)=>t.addEventListener("click", ()=>{
-        document.querySelectorAll(".tab").forEach((x)=>x.classList.remove("on")); t.classList.add("on");
-        view = t.getAttribute("data-view");
-        if (view==="world") startWorld(); else stopWorld();
-        render();
-      }));
+      // ================= ARENA BATTLE =================
+      // Battle your caught creatures vs degen bots. Stats come from REAL market
+      // performance: pumpers hit harder, ogres tank, runners are fast/crit, and
+      // rugged "cursed ghosts" get a revenge curse. Win = XP + win streak.
+      const DEGEN_BOTS = [
+        { name:"Paper Hands Pete", sprite:"sell-pressure-slime", hp:78, atk:11, spd:8, crit:0.08, taunt:"sold the bottom again 😭" },
+        { name:"Jeet Jerry", sprite:"runner-slime", hp:70, atk:13, spd:15, crit:0.22, taunt:"in and out +12% 🏃" },
+        { name:"Rug Pull Randy", sprite:"toxic-rug-slime", hp:96, atk:16, spd:7, crit:0.12, taunt:"liq? what liq? 🫥" },
+        { name:"FOMO Frank", sprite:"candle-slime", hp:90, atk:15, spd:10, crit:0.16, taunt:"aped the top, LFG 🚀" },
+        { name:"Diamond Dan", sprite:"liquidity-slime", hp:132, atk:11, spd:6, crit:0.10, taunt:"never selling 💎🙌" },
+        { name:"Whale Wendy", sprite:"chart-wing-slime", hp:150, atk:18, spd:8, crit:0.12, taunt:"my bag moves charts 🐋" }
+      ];
+      function battleStats(c) {
+        const mc = num(c.mcNow||c.mc)||3000;
+        const mult = (num(c.mc)>0 && num(c.mcNow)>0) ? c.mcNow/c.mc : 1;
+        const hp = Math.round(70 + Math.log10(Math.max(1000,mc))*16 + (c.stage||1)*12);
+        const atk = Math.round(11 + Math.max(0,(mult-1))*9 + (c.ogre?9:0) + (c.shiny?6:0) + (c.cursed?5:0));
+        const runner = c.spriteName==="runner-slime";
+        return { name:c.symbol, sprite:c.ogre?"ogre-boss":(c.spriteName||"fresh-slime"),
+          hp, maxhp:hp, atk, spd: runner?15:(c.ogre?6:10), crit: c.shiny?0.25:(runner?0.2:0.1),
+          ogre:!!c.ogre, cursed:!!c.cursed, mult };
+      }
+      function drawFighter(canvas, sprite) {
+        const ctx=canvas.getContext("2d"); ctx.clearRect(0,0,canvas.width,canvas.height); ctx.imageSmoothingEnabled=false;
+        const img=loadSprite(sprite);
+        const go=()=>{ try{ ctx.clearRect(0,0,canvas.width,canvas.height); ctx.drawImage(img,4,4,canvas.width-8,canvas.height-8);}catch{} };
+        if (img.complete && img.naturalWidth) go(); else img.addEventListener("load",go,{once:true});
+      }
+      let battleBusy=false;
+      function openArena() {
+        const grid=$("[data-grid]"); $("[data-empty]").hidden=true;
+        const caught = Object.values(store.dex);
+        const rec = store.arena || { wins:0, losses:0, streak:0, best:0 };
+        if (!caught.length) { grid.innerHTML = `<div class="arena-intro" style="grid-column:1/-1">⚔️ Catch some slimes first, then bring them to <b>The Pit</b> to battle degen bots for XP and glory.</div>`; $("[data-count]").textContent="Arena"; return; }
+        $("[data-count]").textContent = `Arena · ${rec.wins}W / ${rec.losses}L`;
+        grid.innerHTML = `
+          <div class="arena-intro" style="grid-column:1/-1">Pick a fighter and enter <b>The Pit</b>. Pumpers hit harder, ogres tank, runners crit, cursed rugs get revenge. 🔥 Win streak: <b>${rec.streak}</b> (best ${rec.best})</div>
+          <div class="arena-pick" style="grid-column:1/-1" data-arena-pick></div>`;
+        const pick=grid.querySelector("[data-arena-pick]");
+        pick.innerHTML = caught.sort((a,b)=>(b.mcNow/b.mc||1)-(a.mcNow/a.mc||1)).map((c)=>{
+          const st=battleStats(c);
+          return `<div class="card ${c.ogre?'ogre':''} ${c.cursed?'':''}" data-fight="${esc(c.mint)}">
+            <canvas class="cv" width="96" height="96"></canvas>
+            <div class="nm">${c.cursed?'💀 ':''}${c.ogre?'🧌 ':''}$${esc(c.symbol||'?')}</div>
+            <div class="sub"><span>❤️${st.hp}</span><span>⚔️${st.atk}</span></div></div>`;
+        }).join("");
+        pick.querySelectorAll(".card").forEach((card)=>{ const m=card.getAttribute("data-fight"); const c=store.dex[m];
+          paintCreature(card.querySelector("canvas"), m, c.mood||"buy", c.stage||1, !!c.ogre, c.spriteName||null);
+          card.addEventListener("click", ()=>startBattle(c));
+        });
+      }
+      function startBattle(c) {
+        if (battleBusy) return; battleBusy=true;
+        const rec = store.arena || (store.arena={ wins:0, losses:0, streak:0, best:0 });
+        const you = battleStats(c);
+        // bot scales with your level + streak so it stays a challenge
+        const base = DEGEN_BOTS[Math.floor(Math.random()*DEGEN_BOTS.length)];
+        const scale = 1 + levelFor(store.xp)*0.04 + rec.streak*0.05;
+        const foe = { ...base, hp:Math.round(base.hp*scale), maxhp:Math.round(base.hp*scale), atk:Math.round(base.atk*scale) };
+        const bt=$("[data-battle]"); bt.classList.add("on");
+        $("[data-name-you]").textContent = (c.cursed?'💀 ':'')+(c.ogre?'🧌 ':'')+"$"+(you.name||"You");
+        $("[data-name-foe]").textContent = foe.name;
+        drawFighter($("[data-cv-you]"), you.sprite); drawFighter($("[data-cv-foe]"), foe.sprite);
+        const logEl=$("[data-battle-log]"); logEl.innerHTML="";
+        const log=(t)=>{ const d=document.createElement("div"); d.innerHTML=t; logEl.prepend(d); while(logEl.children.length>4) logEl.lastChild.remove(); };
+        const setHp=(who,st)=>{ const f=$(`[data-hp-${who}]`), n=$(`[data-hpn-${who}]`); const pct=Math.max(0,st.hp/st.maxhp*100); f.style.width=pct+"%"; f.classList.toggle("low",pct<35); n.textContent=`${Math.max(0,Math.round(st.hp))}/${st.maxhp}`; };
+        setHp("you",you); setHp("foe",foe);
+        log(`A wild <b>${esc(foe.name)}</b> blocks your path! <i>"${esc(foe.taunt)}"</i>`);
+        const actions=$("[data-battle-actions]");
+        actions.innerHTML = `<button class="btn ape" data-fight-go>⚔️ FIGHT</button>`;
+        const cleanup=()=>{ bt.classList.remove("on"); battleBusy=false; if(view==="arena") openArena(); };
+        $("[data-battle-x]").onclick = ()=>{ battleBusy=false; bt.classList.remove("on"); };
+        actions.querySelector("[data-fight-go]").onclick = ()=> runBattle();
+
+        async function strike(att, def, attWho, defWho, attName) {
+          const fEl = $(`[data-f${attWho==='you'?'y':'f'}]`);
+          fEl.classList.add("lunge"); await wait(160); fEl.classList.remove("lunge");
+          const crit = Math.random() < att.crit;
+          let dmg = Math.round(att.atk * (0.8+Math.random()*0.4) * (crit?2:1));
+          // pumped fighters "run it up", cursed ghosts curse on hit
+          let extra="";
+          if (att.cursed && Math.random()<0.3) { dmg=Math.round(dmg*1.5); extra=" 💀 CURSE!"; }
+          if (att.mult>=3 && Math.random()<0.3) { dmg=Math.round(dmg*1.4); extra=" 🚀 RUN IT UP!"; }
+          def.hp -= dmg;
+          const dEl=$(`[data-f${defWho==='you'?'y':'f'}]`); dEl.classList.add("hit"); setTimeout(()=>dEl.classList.remove("hit"),300);
+          sfx(crit?"level":"throw");
+          floatDmg(dEl, dmg, crit);
+          setHp(defWho, def);
+          log(`${esc(attName)} hits for <b style="color:${crit?'#ffd84d':'#fff'}">${dmg}</b>${crit?" ✨CRIT":""}${extra}`);
+          await wait(520);
+        }
+        function floatDmg(fighterEl, dmg, crit) {
+          const r=fighterEl.getBoundingClientRect(); const d=document.createElement("div"); d.className="dmgfloat";
+          d.textContent="-"+dmg; d.style.color=crit?"#ffd84d":"#ff6b5e"; d.style.left=(r.left+r.width/2-10)+"px"; d.style.top=(r.top+r.height*0.4)+"px";
+          document.body.appendChild(d); setTimeout(()=>d.remove(),1000);
+        }
+        async function runBattle() {
+          actions.innerHTML = `<button class="btn ghost" disabled>fighting…</button>`;
+          let order = you.spd >= foe.spd ? ["you","foe"] : ["foe","you"];
+          let guard=0;
+          while (you.hp>0 && foe.hp>0 && guard++<40) {
+            for (const turn of order) {
+              if (you.hp<=0||foe.hp<=0) break;
+              if (turn==="you") await strike(you, foe, "you","foe", "$"+(you.name||"You"));
+              else await strike(foe, you, "foe","you", foe.name);
+            }
+          }
+          const won = foe.hp<=0 && you.hp>0;
+          if (won) {
+            rec.wins++; rec.streak++; rec.best=Math.max(rec.best,rec.streak);
+            const reward = Math.round((40 + foe.maxhp*0.4) * (1 + rec.streak*0.1));
+            store.xp += reward; save(store);
+            sfx("level"); particleBurst(window.innerWidth/2, window.innerHeight*0.4, ["#72ff23","#bbff63","#ffd84d"]);
+            log(`🏆 <b>VICTORY!</b> +${reward} XP · streak ${rec.streak}`);
+            store.stats=store.stats||{}; store.stats.arenaWins=(store.stats.arenaWins||0)+1;
+            checkUnlocks(); renderProgress();
+          } else {
+            rec.losses++; rec.streak=0; store.xp+=10; save(store);
+            sfx("miss"); log(`💀 <b>${esc(foe.name)} wrecked you.</b> +10 XP for the bag. Train up and run it back.`);
+          }
+          actions.innerHTML = `<button class="btn ape" data-again>${won?"⚔️ Next fight":"↻ Try again"}</button><button class="btn ghost" data-leave>Leave</button>`;
+          actions.querySelector("[data-again]").onclick = cleanup;
+          actions.querySelector("[data-leave]").onclick = cleanup;
+        }
+      }
+      function wait(ms){ return new Promise(r=>setTimeout(r,ms)); }
 
       // ---------- ambient swamp music (synthesized, no audio files needed) ----------
       let music = { ctx:null, on:(store.muted!==true), nodes:[], frogTimer:null };
@@ -1625,11 +1864,10 @@
         setTimeout(()=>{ const t=$("[data-title]"); if (t) t.style.display="none"; }, 600);
         if (music.on) startMusic();
         startWorld();
-        if (!Object.keys(store.dex).length && !store.coachSeen) {
-          $("[data-coach]").hidden = false;
-          $("[data-coach-ok]").onclick = () => { $("[data-coach]").hidden = true; store.coachSeen = true; save(store); };
-        }
+        if (!store.coachSeen) showCoach();
       }
+      function showCoach(){ $("[data-coach]").classList.add("show"); }
+      function hideCoach(){ $("[data-coach]").classList.remove("show"); store.coachSeen = true; save(store); }
       function renderTitleStats() {
         const lvl = levelFor(store.xp);
         $("[data-title-stats]").innerHTML = [
@@ -1640,6 +1878,8 @@
       }
       $("[data-title-enter]")?.addEventListener("click", enterSwamp);
       $("[data-title-mute]")?.addEventListener("click", ()=> setMute(store.muted!==true));
+      $("[data-coach-ok]")?.addEventListener("click", hideCoach);
+      $("[data-coach]")?.addEventListener("click", (e)=>{ if (e.target===$("[data-coach]")) hideCoach(); });
 
       // ---------- events ----------
       $("[data-grid]").addEventListener("click", (e) => {
@@ -1650,7 +1890,7 @@
         document.querySelectorAll(".tab").forEach((x)=>x.classList.remove("on")); t.classList.add("on");
         view = t.getAttribute("data-view");
         if (view==="world") startWorld(); else stopWorld();
-        render();
+        if (view==="arena") { renderProgress(); openArena(); } else render();
       }));
 
       spawnAmbience();
