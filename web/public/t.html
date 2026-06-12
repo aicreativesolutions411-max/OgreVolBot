@@ -103,6 +103,9 @@
           if (data.rugcheck?.risks?.length) {
             document.querySelector("[data-summary]").textContent += " | Rugcheck: " + data.rugcheck.risks.slice(0, 3).map((risk) => risk.name).join(", ") + ".";
           }
+          if (data.goplus?.flags?.length) {
+            document.querySelector("[data-summary]").textContent += " | GoPlus: " + data.goplus.flags.join(", ") + ".";
+          }
           if (data.shieldPending) {
             document.querySelector("[data-summary]").textContent = "SlimeShield is computing a fresh read...";
             setTimeout(async () => {
@@ -183,7 +186,8 @@
           document.querySelector("[data-ctas]").innerHTML =
             '<a class="cta primary" href="' + terminalUrl + '&buy=1">⚡ Trade on SlimeWire</a>'
             + '<a class="cta ghost" href="' + terminalUrl + '">Open full terminal</a>'
-            + '<a class="cta ghost" href="' + esc(apiBase) + '/api/web/signal-card?tokenMint=' + encodeURIComponent(mint) + '" target="_blank" rel="noreferrer">📸 Share card</a>';
+            + '<a class="cta ghost" href="' + esc(apiBase) + '/api/web/signal-card?tokenMint=' + encodeURIComponent(mint) + '" target="_blank" rel="noreferrer">📸 Share card</a>'
+            + '<a class="cta ghost" href="https://app.bubblemaps.io/sol/token/' + encodeURIComponent(mint) + '" target="_blank" rel="noreferrer">🫧 Holder map</a>';
           const calls = (data.calls || []).map((call) => {
             const icon = { bullish: "🟢", bearish: "🔴", warning: "⚠️", question: "❓" }[call.side] || "⚪";
             const result = call.status === "resolved"

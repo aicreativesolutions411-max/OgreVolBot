@@ -2047,11 +2047,12 @@ async function handleWebApiRequest(request, response, requestUrl) {
       // Two-stage: market data + calls return immediately; a COLD shield compute is
       // given 1.5s, otherwise it finishes in the background and the page re-asks.
       const shieldPromise = webSlimeShield(readMint).catch(() => null);
-      const [shield, pairs, board, rugcheck] = await Promise.all([
+      const [shield, pairs, board, rugcheck, goplus] = await Promise.all([
         Promise.race([shieldPromise, new Promise((resolve) => setTimeout(() => resolve(undefined), 1_500))]),
         fetchDexScreenerTokenPairsFallback(readMint).catch(() => []),
         webBoardCallsForMint(readMint).catch(() => ({ calls: [], topCallers: [] })),
-        fetchRugcheckSummary(readMint).catch(() => null)
+        fetchRugcheckSummary(readMint).catch(() => null),
+        fetchGoPlusSolanaSecurity(readMint).catch(() => null)
       ]);
       const shieldPending = shield === undefined;
       const best = bestDexPairForToken(readMint, pairs) || await pumpCurvePairFallback(readMint).catch(() => null);
@@ -2079,6 +2080,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
           }
         })(),
         rugcheck,
+        goplus,
         // Black-box autopsy: if SlimeShield ever flagged this mint, ship the collapse
         // curve so /t can show "flagged here, liquidity gone N minutes later".
         autopsy: await (async () => {
@@ -13163,6 +13165,23 @@ async function getSolUsdPrice(options = {}) {
   }
 
   solUsdPriceCache.promise = (async () => {
+    // PRIMARY: Pyth oracle (free, no key, no rate-limit drama). The old
+    // DexScreener path rate-limits the shared Render IP and caused a string of
+    // "price unavailable" bugs; it stays as the fallback only.
+    try {
+      const pyth = await fetchJson(
+        "https://hermes.pyth.network/v2/updates/price/latest?ids[]=0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d",
+        { timeoutMs: options.timeoutMs || 1_800 }
+      );
+      const feed = pyth?.parsed?.[0]?.price;
+      const pythPrice = Number(feed?.price) * Math.pow(10, Number(feed?.expo ?? 0));
+      if (Number.isFinite(pythPrice) && pythPrice > 0) {
+        solUsdPriceCache = { cachedAt: Date.now(), value: pythPrice, promise: null };
+        return pythPrice;
+      }
+    } catch {
+      // fall through to DexScreener
+    }
     const pairs = await fetchDexScreenerTokenPairsBatch([SOL_MINT], { timeoutMs: options.timeoutMs || 1_800 }).catch(() => []);
     const priceUsd = firstMeaningfulNumber(...(pairs || []).map((pair) => pair?.priceUsd));
     if (!Number.isFinite(priceUsd) || priceUsd <= 0) {
@@ -19741,6 +19760,47 @@ const rugcheckCache = new Map();
 // Rugcheck free summary: named risk factors (LP providers, liquidity, holder
 // concentration, authorities) from a second independent engine. Cached 10 min,
 // never blocks - it enriches reads, it does not gate them.
+// GoPlus token security (free, no key): third risk engine alongside SlimeShield
+// and Rugcheck. Returns flag labels for authorities/hooks that bite buyers.
+const goplusCache = new Map();
+async function fetchGoPlusSolanaSecurity(mint) {
+  const key = String(mint || "").trim();
+  if (!key) return null;
+  const cached = goplusCache.get(key);
+  if (cached && Date.now() - cached.at < 10 * 60 * 1000) return cached.value;
+  let value = null;
+  try {
+    const data = await fetchJson(`https://api.gopluslabs.io/api/v1/solana/token_security?contract_addresses=${encodeURIComponent(key)}`, {
+      headers: { "Accept": "application/json" },
+      timeoutMs: 3_000
+    });
+    const token = data?.result?.[key] || Object.values(data?.result || {})[0];
+    if (token) {
+      const flags = [];
+      const flagIf = (field, label) => {
+        const status = token?.[field]?.status ?? token?.[field];
+        if (String(status) === "1" || status === true) flags.push(label);
+      };
+      flagIf("mintable", "mint authority active");
+      flagIf("freezable", "freeze authority active");
+      flagIf("closable", "closable token account");
+      flagIf("balance_mutable_authority", "balances mutable");
+      flagIf("non_transferable", "non-transferable");
+      flagIf("transfer_hook", "transfer hook");
+      flagIf("transfer_fee_upgradable", "upgradable transfer fee");
+      value = { flags: flags.slice(0, 4) };
+    }
+  } catch {
+    // free tier hiccups - reads simply omit the section
+  }
+  goplusCache.set(key, { at: Date.now(), value });
+  if (goplusCache.size > 300) {
+    const oldest = [...goplusCache.entries()].sort((a, b) => a[1].at - b[1].at)[0]?.[0];
+    if (oldest) goplusCache.delete(oldest);
+  }
+  return value;
+}
+
 async function fetchRugcheckSummary(mint) {
   const key = String(mint || "").trim();
   if (!key) return null;

@@ -17176,6 +17176,7 @@ function devInfoFallbackResultForMint(tokenMint = "") {
     { label: "Dex", url: row.dexUrl || dexUrl(tokenMint) },
     { label: "Solscan Wallet", url: wallet ? `https://solscan.io/account/${encodeURIComponent(wallet)}` : "" },
     { label: "KOLscan Wallet", url: wallet ? `https://kolscan.io/account/${encodeURIComponent(wallet)}` : "" },
+    { label: "Bubblemap", url: mint ? `https://app.bubblemaps.io/sol/token/${encodeURIComponent(mint)}` : "" },
     { label: "X", url: row.twitterUrl || row.xUrl },
     { label: "TG", url: row.telegramUrl },
     { label: "Website", url: row.websiteUrl }
@@ -17436,6 +17437,7 @@ function renderDevInfoDrawer() {
     { label: "Dex", url: row.dexUrl || dexUrl(mint) },
     { label: "Solscan Wallet", url: wallet ? `https://solscan.io/account/${encodeURIComponent(wallet)}` : "" },
     { label: "KOLscan Wallet", url: wallet ? `https://kolscan.io/account/${encodeURIComponent(wallet)}` : "" },
+    { label: "Bubblemap", url: mint ? `https://app.bubblemaps.io/sol/token/${encodeURIComponent(mint)}` : "" },
     { label: "X", url: row.twitterUrl || row.xUrl },
     { label: "TG", url: row.telegramUrl },
     { label: "Website", url: row.websiteUrl }
@@ -20365,11 +20367,9 @@ function ogreAgentHtml() {
           </div>
         </div>
         <div class="ogre-agent-quick-actions" aria-label="Ogre Agent quick actions">
+          <button type="button" data-ogre-agent-quick="whats_cooking">What's cooking?</button>
+          <button type="button" data-ogre-agent-quick="my_bags">My bags</button>
           <button type="button" data-ogre-agent-quick="risk">Why Risk?</button>
-          <button type="button" data-ogre-agent-quick="dev_info">Dev Info</button>
-          <button type="button" data-ogre-agent-quick="protected_buy">Protected Buy?</button>
-          <button type="button" data-ogre-agent-quick="replay">Replay</button>
-          <button type="button" data-ogre-agent-quick="refresh_feeds">Refresh</button>
           <button type="button" data-ogre-agent-quick="clear_chat">Clear</button>
         </div>
         <small class="ogre-agent-disclaimer">AI can make mistakes. Always review wallet prompts before signing.</small>
@@ -22162,6 +22162,8 @@ document.addEventListener("click", async (event) => {
   if (target.matches("[data-ogre-agent-quick]")) {
     const quick = target.dataset.ogreAgentQuick || "";
     if (quick === "positions") void runOgreAgentAction({ type: "open_tab", tab: "positions" });
+    if (quick === "whats_cooking") void sendOgreAgentMessage("whats cooking");
+    if (quick === "my_bags") void sendOgreAgentMessage("how are my bags");
     if (quick === "refresh_feeds") void runOgreAgentAction({ type: "refresh_feeds" });
     if (quick === "risk") void sendOgreAgentMessage("Why is this token risky?");
     if (quick === "dev_info") void sendOgreAgentMessage("Explain Dev Info for this token.");
