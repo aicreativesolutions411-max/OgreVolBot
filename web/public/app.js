@@ -24234,14 +24234,18 @@ document.addEventListener("input", (event) => {
   });
 })();
 
-
 // === Trailer Mode (owner-only, hidden) =======================================
-// Trigger: the small slime mark at the very bottom of the Profile tab - looks
-// like footer art, does nothing obvious. Tapping it makes the site PERFORM a
-// clean scripted demo over REAL live data (no demo data anywhere) while the
-// screen records: auto-recorded on desktop via tab capture; on mobile, start
-// the OS screen recorder during the countdown. Output saves as a .webm file.
-const trailerState = { running: false, recorder: null, chunks: [], stream: null, root: null, timers: [] };
+// Trigger: the faint slime mark at the very bottom of the Profile tab.
+// Makes the site PERFORM a scripted, cinematic demo over REAL live data while
+// the screen records. Mobile-first: portrait-friendly captions, countdown to
+// start the OS screen recorder, and a share sheet at the end on desktop
+// recordings. Movie-trailer sound design (pulse / risers / impacts) is
+// synthesized live with WebAudio and mixed INTO the desktop recording; on
+// mobile the OS recorder picks it up as app audio.
+const trailerState = {
+  running: false, recorder: null, chunks: [], stream: null, root: null,
+  timers: [], audio: null, mime: "video/webm"
+};
 
 function trailerWait(ms) {
   return new Promise((resolve) => {
@@ -24250,20 +24254,157 @@ function trailerWait(ms) {
   });
 }
 
+function trailerIsMobile() {
+  return window.matchMedia("(max-width: 760px)").matches || /Android|iPhone|iPad/i.test(navigator.userAgent);
+}
+
+// ---- Sound design (WebAudio, no assets) ------------------------------------
+function trailerAudioInit() {
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return null;
+  try {
+    const ctx = new Ctx();
+    void ctx.resume?.();
+    const master = ctx.createGain();
+    master.gain.value = 0.6;
+    master.connect(ctx.destination);
+    let dest = null;
+    try {
+      dest = ctx.createMediaStreamDestination();
+      master.connect(dest);
+    } catch {}
+    trailerState.audio = { ctx, master, dest };
+    return trailerState.audio;
+  } catch {
+    return null;
+  }
+}
+
+function tEnv(gainNode, t0, peak, attack, decay) {
+  const g = gainNode.gain;
+  g.setValueAtTime(0.0001, t0);
+  g.exponentialRampToValueAtTime(Math.max(0.001, peak), t0 + attack);
+  g.exponentialRampToValueAtTime(0.0001, t0 + attack + decay);
+}
+
+function tKick(t0, punch = 1) {
+  const audio = trailerState.audio;
+  if (!audio) return;
+  const osc = audio.ctx.createOscillator();
+  const gain = audio.ctx.createGain();
+  osc.type = "sine";
+  osc.frequency.setValueAtTime(150, t0);
+  osc.frequency.exponentialRampToValueAtTime(42, t0 + 0.22);
+  tEnv(gain, t0, 0.8 * punch, 0.006, 0.3);
+  osc.connect(gain).connect(audio.master);
+  osc.start(t0); osc.stop(t0 + 0.45);
+}
+
+function tNoiseBuffer(ctx) {
+  const buffer = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < data.length; i += 1) data[i] = Math.random() * 2 - 1;
+  return buffer;
+}
+
+function tRiser(t0, dur = 1.3) {
+  const audio = trailerState.audio;
+  if (!audio) return;
+  const src = audio.ctx.createBufferSource();
+  src.buffer = trailerState.noiseBuf || (trailerState.noiseBuf = tNoiseBuffer(audio.ctx));
+  src.loop = true;
+  const band = audio.ctx.createBiquadFilter();
+  band.type = "bandpass"; band.Q.value = 1.1;
+  band.frequency.setValueAtTime(250, t0);
+  band.frequency.exponentialRampToValueAtTime(5200, t0 + dur);
+  const gain = audio.ctx.createGain();
+  gain.gain.setValueAtTime(0.0001, t0);
+  gain.gain.exponentialRampToValueAtTime(0.3, t0 + dur);
+  gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur + 0.08);
+  src.connect(band).connect(gain).connect(audio.master);
+  src.start(t0); src.stop(t0 + dur + 0.2);
+}
+
+function tImpact(t0, big = false) {
+  const audio = trailerState.audio;
+  if (!audio) return;
+  tKick(t0, big ? 1.4 : 1.1);
+  const src = audio.ctx.createBufferSource();
+  src.buffer = trailerState.noiseBuf || (trailerState.noiseBuf = tNoiseBuffer(audio.ctx));
+  const low = audio.ctx.createBiquadFilter();
+  low.type = "lowpass"; low.frequency.value = big ? 1400 : 900;
+  const gain = audio.ctx.createGain();
+  tEnv(gain, t0, big ? 0.5 : 0.32, 0.004, big ? 0.9 : 0.5);
+  src.connect(low).connect(gain).connect(audio.master);
+  src.start(t0); src.stop(t0 + 1.4);
+  const sub = audio.ctx.createOscillator();
+  const subGain = audio.ctx.createGain();
+  sub.type = "sine";
+  sub.frequency.setValueAtTime(64, t0);
+  sub.frequency.exponentialRampToValueAtTime(28, t0 + (big ? 1.4 : 0.8));
+  tEnv(subGain, t0, big ? 0.7 : 0.4, 0.01, big ? 1.5 : 0.85);
+  sub.connect(subGain).connect(audio.master);
+  sub.start(t0); sub.stop(t0 + 2);
+}
+
+function tBlip(t0, freq = 720) {
+  const audio = trailerState.audio;
+  if (!audio) return;
+  const osc = audio.ctx.createOscillator();
+  const gain = audio.ctx.createGain();
+  osc.type = "square";
+  osc.frequency.value = freq;
+  tEnv(gain, t0, 0.12, 0.004, 0.12);
+  osc.connect(gain).connect(audio.master);
+  osc.start(t0); osc.stop(t0 + 0.2);
+}
+
+// Schedule the full score against the known scene timeline (seconds offsets).
+function trailerScheduleScore(boundaries, totalSec) {
+  const audio = trailerState.audio;
+  if (!audio) return;
+  const base = audio.ctx.currentTime + 0.05;
+  for (let t = 0; t < totalSec - 0.4; t += 0.5) {
+    tKick(base + t, 0.55 + 0.35 * (t / totalSec)); // pulse builds over the trailer
+  }
+  for (const b of boundaries) {
+    tRiser(base + Math.max(0, b - 1.25), 1.25);
+    tImpact(base + b, false);
+  }
+  tImpact(base + totalSec - 0.35, true); // end-card double boom
+  tImpact(base + totalSec + 0.45, true);
+}
+
+// ---- Overlay / cinematics ---------------------------------------------------
+function trailerEnsureStyles() {
+  if (document.getElementById("trailer-style")) return;
+  const style = document.createElement("style");
+  style.id = "trailer-style";
+  style.textContent = `
+    @keyframes twCapIn { 0% { transform: translateX(-50%) scale(1.3); opacity: 0; filter: blur(8px); } 100% { transform: translateX(-50%) scale(1); opacity: 1; filter: blur(0); } }
+    @keyframes twFlash { 0% { opacity: 0.85; } 100% { opacity: 0; } }
+    @keyframes twPulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+    @keyframes twGlow { 0%, 100% { text-shadow: 0 0 24px rgba(114,255,35,0.55); } 50% { text-shadow: 0 0 56px rgba(114,255,35,0.95); } }
+  `;
+  document.head.appendChild(style);
+}
+
 function trailerRoot() {
   if (trailerState.root) return trailerState.root;
+  trailerEnsureStyles();
   const root = document.createElement("div");
   root.setAttribute("data-trailer-overlay", "");
   root.style.cssText = "position:fixed;inset:0;z-index:99999;pointer-events:none;font-family:Inter,system-ui,sans-serif;";
   root.innerHTML = `
-    <div data-trailer-bar-top style="position:absolute;top:0;left:0;right:0;height:54px;background:linear-gradient(rgba(2,7,2,0.9),transparent);"></div>
-    <div data-trailer-bar-bottom style="position:absolute;bottom:0;left:0;right:0;height:110px;background:linear-gradient(transparent,rgba(2,7,2,0.92));"></div>
-    <div data-trailer-caption style="position:absolute;left:50%;bottom:34px;transform:translateX(-50%);text-align:center;opacity:0;transition:opacity 0.45s;max-width:92vw;">
-      <div data-trailer-caption-main style="color:#72ff23;font-size:clamp(18px,2.6vw,30px);font-weight:900;letter-spacing:0.04em;text-shadow:0 0 18px rgba(114,255,35,0.65);"></div>
-      <div data-trailer-caption-sub style="color:#d6ffbf;font-size:clamp(12px,1.5vw,17px);font-weight:600;margin-top:4px;"></div>
+    <div style="position:absolute;top:0;left:0;right:0;height:7vh;background:linear-gradient(rgba(2,7,2,0.92),transparent);"></div>
+    <div style="position:absolute;bottom:0;left:0;right:0;height:16vh;background:linear-gradient(transparent,rgba(2,7,2,0.94));"></div>
+    <div data-trailer-flash style="position:absolute;inset:0;background:radial-gradient(circle at 50% 45%, rgba(114,255,35,0.55), rgba(114,255,35,0.12) 60%, transparent);opacity:0;"></div>
+    <div data-trailer-caption style="position:absolute;left:50%;bottom:max(30px, env(safe-area-inset-bottom, 0px) + 26px);transform:translateX(-50%);text-align:center;opacity:0;max-width:94vw;">
+      <div data-trailer-caption-main style="color:#72ff23;font-size:clamp(20px,5.4vw,32px);font-weight:900;letter-spacing:0.04em;animation:twGlow 2.2s infinite;"></div>
+      <div data-trailer-caption-sub style="color:#d6ffbf;font-size:clamp(12px,3.4vw,17px);font-weight:600;margin-top:4px;"></div>
     </div>
-    <div data-trailer-center style="position:absolute;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;background:rgba(2,7,2,0.86);text-align:center;padding:20px;"></div>
-    <button type="button" data-trailer-stop style="position:absolute;top:10px;right:12px;pointer-events:auto;background:rgba(8,20,10,0.8);border:1px solid rgba(114,255,35,0.3);color:#9fb59a;border-radius:8px;padding:4px 10px;font-size:11px;cursor:pointer;">stop</button>
+    <div data-trailer-center style="position:absolute;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;background:rgba(2,7,2,0.88);text-align:center;padding:22px;"></div>
+    <button type="button" data-trailer-stop style="position:absolute;top:max(10px, env(safe-area-inset-top, 0px));right:12px;pointer-events:auto;background:rgba(8,20,10,0.8);border:1px solid rgba(114,255,35,0.3);color:#9fb59a;border-radius:8px;padding:4px 10px;font-size:11px;cursor:pointer;">stop</button>
   `;
   root.querySelector("[data-trailer-stop]").addEventListener("click", () => stopTrailerMode("stopped"));
   document.body.appendChild(root);
@@ -24271,12 +24412,26 @@ function trailerRoot() {
   return root;
 }
 
+function trailerFlash() {
+  const flash = trailerRoot().querySelector("[data-trailer-flash]");
+  flash.style.animation = "none";
+  void flash.offsetWidth;
+  flash.style.animation = "twFlash 0.55s ease-out forwards";
+}
+
 function trailerCaption(main, sub = "") {
   const root = trailerRoot();
   const wrap = root.querySelector("[data-trailer-caption]");
   root.querySelector("[data-trailer-caption-main]").textContent = main;
   root.querySelector("[data-trailer-caption-sub]").textContent = sub;
-  wrap.style.opacity = main ? "1" : "0";
+  if (main) {
+    wrap.style.animation = "none";
+    void wrap.offsetWidth;
+    wrap.style.animation = "twCapIn 0.5s cubic-bezier(0.2,1.4,0.4,1) forwards";
+    wrap.style.opacity = "1";
+  } else {
+    wrap.style.opacity = "0";
+  }
 }
 
 function trailerCenter(html) {
@@ -24290,41 +24445,91 @@ function trailerCenter(html) {
   center.style.display = "flex";
 }
 
+// ---- Recording + result sheet ------------------------------------------------
+function trailerPickMime() {
+  const candidates = [
+    "video/mp4;codecs=avc1.64001f,mp4a.40.2",
+    "video/mp4",
+    "video/webm;codecs=vp9,opus",
+    "video/webm"
+  ];
+  for (const mime of candidates) {
+    try { if (MediaRecorder.isTypeSupported(mime)) return mime; } catch {}
+  }
+  return "video/webm";
+}
+
 async function trailerTryRecord() {
   if (!navigator.mediaDevices?.getDisplayMedia || !window.MediaRecorder) return false;
   try {
-    const stream = await navigator.mediaDevices.getDisplayMedia({
+    const display = await navigator.mediaDevices.getDisplayMedia({
       video: { frameRate: 30 },
       audio: false,
       preferCurrentTab: true,
       selfBrowserSurface: "include"
     });
-    trailerState.stream = stream;
+    trailerState.stream = display;
+    const tracks = [...display.getVideoTracks()];
+    const audioTracks = trailerState.audio?.dest?.stream?.getAudioTracks() || [];
+    tracks.push(...audioTracks); // soundtrack baked into the file
+    const mixed = new MediaStream(tracks);
+    trailerState.mime = trailerPickMime();
     trailerState.chunks = [];
-    const recorder = new MediaRecorder(stream, { mimeType: MediaRecorder.isTypeSupported("video/webm;codecs=vp9") ? "video/webm;codecs=vp9" : "video/webm" });
+    const recorder = new MediaRecorder(mixed, { mimeType: trailerState.mime, videoBitsPerSecond: 6_000_000 });
     recorder.ondataavailable = (event) => { if (event.data?.size) trailerState.chunks.push(event.data); };
     recorder.start(1000);
     trailerState.recorder = recorder;
-    stream.getVideoTracks()[0]?.addEventListener("ended", () => stopTrailerMode("screen-share-ended"));
+    display.getVideoTracks()[0]?.addEventListener("ended", () => stopTrailerMode("screen-share-ended"));
     return true;
   } catch {
-    return false; // mobile / declined: user records with the OS recorder instead
+    return false; // mobile / declined -> OS screen recorder path
   }
 }
 
-function trailerSaveRecording() {
+function trailerShowResultSheet(blob) {
+  const ext = trailerState.mime.includes("mp4") ? "mp4" : "webm";
+  const fileName = `slimewire-trailer-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.${ext}`;
+  const url = URL.createObjectURL(blob);
+  const sheet = document.createElement("div");
+  sheet.setAttribute("data-trailer-result", "");
+  sheet.style.cssText = "position:fixed;inset:0;z-index:100000;background:rgba(2,7,2,0.94);display:flex;align-items:center;justify-content:center;padding:18px;font-family:Inter,system-ui,sans-serif;";
+  sheet.innerHTML = `
+    <div style="max-width:560px;width:100%;text-align:center;">
+      <div style="color:#72ff23;font-weight:900;font-size:20px;margin-bottom:10px;">🎬 Your trailer is ready</div>
+      <video src="${url}" controls playsinline style="width:100%;max-height:55vh;border-radius:14px;border:1px solid rgba(114,255,35,0.3);background:#000;"></video>
+      <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:14px;">
+        <button type="button" data-trailer-share style="background:linear-gradient(135deg,#72ff23,#bbff63);color:#071006;border:0;border-radius:999px;padding:12px 22px;font-weight:800;cursor:pointer;">Share</button>
+        <a href="${url}" download="${fileName}" style="background:rgba(8,20,10,0.8);border:1px solid rgba(114,255,35,0.35);color:#eaffe0;border-radius:999px;padding:12px 22px;font-weight:800;text-decoration:none;">Download</a>
+        <button type="button" data-trailer-close style="background:none;border:1px solid rgba(114,255,35,0.2);color:#9fb59a;border-radius:999px;padding:12px 18px;cursor:pointer;">Close</button>
+      </div>
+      <div style="color:#7d937a;font-size:11px;margin-top:12px;">Recorded on live market data. Not financial advice.</div>
+    </div>
+  `;
+  sheet.querySelector("[data-trailer-close]").addEventListener("click", () => {
+    sheet.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  });
+  sheet.querySelector("[data-trailer-share]").addEventListener("click", async () => {
+    try {
+      const file = new File([blob], fileName, { type: trailerState.mime.split(";")[0] });
+      if (navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ files: [file], title: "SlimeWire", text: "SlimeWire - verify before you ape. slimewire.org" });
+        return;
+      }
+    } catch {}
+    // no share sheet on this browser: fall back to download
+    sheet.querySelector("a[download]")?.click();
+  });
+  document.body.appendChild(sheet);
+}
+
+function trailerFinishRecording() {
   const recorder = trailerState.recorder;
   if (!recorder) return;
   const finish = () => {
     try {
-      const blob = new Blob(trailerState.chunks, { type: "video/webm" });
-      if (blob.size > 0) {
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(blob);
-        link.download = `slimewire-trailer-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.webm`;
-        link.click();
-        setTimeout(() => URL.revokeObjectURL(link.href), 30000);
-      }
+      const blob = new Blob(trailerState.chunks, { type: trailerState.mime.split(";")[0] });
+      if (blob.size > 0) trailerShowResultSheet(blob);
     } catch {}
   };
   if (recorder.state !== "inactive") {
@@ -24343,7 +24548,9 @@ function stopTrailerMode(reason = "done") {
   trailerState.running = false;
   trailerState.timers.forEach((timer) => clearTimeout(timer));
   trailerState.timers = [];
-  trailerSaveRecording();
+  trailerFinishRecording();
+  try { trailerState.audio?.ctx?.close(); } catch {}
+  trailerState.audio = null;
   trailerState.root?.remove();
   trailerState.root = null;
 }
@@ -24363,50 +24570,67 @@ async function runTrailerMode() {
   if (trailerState.running) return;
   trailerState.running = true;
   trailerRoot();
+  trailerAudioInit(); // inside the tap gesture so mobile audio is allowed
 
   const recording = await trailerTryRecord();
-  // Countdown: clean first frames on desktop, time to start the OS screen
-  // recorder on mobile.
-  for (const n of recording ? [2, 1] : [3, 2, 1]) {
+  const mobile = trailerIsMobile();
+
+  // Scene plan (seconds): countdown -> feed -> chart -> shield -> end card.
+  const count = recording ? 2 : 3;
+  const feedDur = 6.5, chartDur = 8.5, shieldDur = 6.5, endDur = 4.6;
+  const boundaries = [count, count + feedDur, count + feedDur + chartDur, count + feedDur + chartDur + shieldDur];
+  const totalSec = count + feedDur + chartDur + shieldDur + endDur;
+  trailerScheduleScore(boundaries, totalSec);
+
+  const audioNow = () => trailerState.audio?.ctx?.currentTime || 0;
+  const blipBase = audioNow() + 0.05;
+  for (let i = 0; i < count; i += 1) tBlip(blipBase + i, 600 + i * 90);
+
+  for (let n = count; n >= 1; n -= 1) {
     if (!trailerState.running) return;
-    trailerCenter(`<div style="color:#72ff23;font-size:96px;font-weight:900;text-shadow:0 0 28px rgba(114,255,35,0.7);">${n}</div>
-      ${recording ? "" : `<div style="color:#d6ffbf;font-size:15px;margin-top:8px;">start your screen recorder now</div>`}`);
+    trailerCenter(`<div style="color:#72ff23;font-size:clamp(64px,22vw,110px);font-weight:900;text-shadow:0 0 30px rgba(114,255,35,0.75);animation:twPulse 1s infinite;">${n}</div>
+      ${recording ? "" : `<div style="color:#d6ffbf;font-size:clamp(13px,3.6vw,16px);margin-top:8px;">start your screen recorder now</div>`}`);
     await trailerWait(1000);
   }
   trailerCenter("");
 
   // Scene 1: fresh pairs feed (real, live).
   if (!trailerState.running) return;
+  trailerFlash();
   navigateTo("/terminal/live-pairs");
   trailerCaption("FRESH PAIRS - LIVE", "new launches land here seconds after creation");
-  await trailerWait(7000);
+  await trailerWait(feedDur * 1000);
 
   // Scene 2: hottest pair -> native chart.
   if (!trailerState.running) return;
   const pick = trailerPickHotPair();
   const symbol = pick?.symbol ? `$${String(pick.symbol).slice(0, 12)}` : "live pair";
   if (pick?.tokenMint) {
+    trailerFlash();
     navigateTo(`/terminal/chart?token=${encodeURIComponent(pick.tokenMint)}`);
     trailerCaption("LIVE CHART + RISK READ", `${symbol} - real candles, real flow, zero delay`);
-    await trailerWait(9000);
+    await trailerWait(chartDur * 1000);
 
     // Scene 3: triple-engine shield drawer.
     if (!trailerState.running) return;
+    trailerFlash();
     openSlimeShieldDetails(pick.tokenMint);
     trailerCaption("TRIPLE-ENGINE SHIELD", "SlimeShield x Rugcheck x GoPlus - before you ape");
-    await trailerWait(7000);
+    await trailerWait(shieldDur * 1000);
     closeSlimeShieldDetails();
   }
 
   // End card + disclaimer (real data, honest footer).
   if (!trailerState.running) return;
   trailerCaption("");
+  trailerFlash();
   trailerCenter(`
-    <div style="color:#72ff23;font-size:clamp(34px,6vw,72px);font-weight:900;letter-spacing:0.05em;text-shadow:0 0 30px rgba(114,255,35,0.7);">SLIMEWIRE.ORG</div>
-    <div style="color:#d6ffbf;font-size:clamp(14px,2.2vw,22px);font-weight:700;margin-top:10px;">verify before you ape</div>
-    <div style="color:#7d937a;font-size:12px;margin-top:26px;">Recorded on live market data. Crypto is risky - not financial advice.</div>
+    <div style="color:#72ff23;font-size:clamp(38px,11vw,76px);font-weight:900;letter-spacing:0.05em;animation:twGlow 1.6s infinite, twPulse 1.6s infinite;">SLIMEWIRE.ORG</div>
+    <div style="color:#d6ffbf;font-size:clamp(15px,4.4vw,23px);font-weight:700;margin-top:10px;">verify before you ape</div>
+    <div style="color:#7d937a;font-size:clamp(10px,3vw,12px);margin-top:26px;">Recorded on live market data. Crypto is risky - not financial advice.</div>
+    ${!recording && mobile ? `<div style="color:#9fb59a;font-size:clamp(11px,3.2vw,13px);margin-top:14px;">stop your screen recorder - the clip is in your camera roll 🎬</div>` : ""}
   `);
-  await trailerWait(4200);
+  await trailerWait(endDur * 1000);
   stopTrailerMode("done");
 }
 
