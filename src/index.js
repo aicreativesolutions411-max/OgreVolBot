@@ -14162,6 +14162,33 @@ async function getSolBalanceCached(owner, options = {}) {
   return balance;
 }
 
+// ONE Helius call for up to 100 wallets instead of one getBalance each: primes
+// the SOL balance cache so every per-wallet read in the refresh hits warm cache.
+// This is the wallet-refresh speed fix - N round trips collapse into one.
+async function primeSolBalancesBatch(owners = []) {
+  const keys = owners
+    .map((owner) => {
+      try { return owner instanceof PublicKey ? owner : new PublicKey(owner); } catch { return null; }
+    })
+    .filter(Boolean);
+  if (!keys.length) return 0;
+  let primed = 0;
+  for (let start = 0; start < keys.length; start += 100) {
+    const chunk = keys.slice(start, start + 100);
+    try {
+      const infos = await rpcWithRetry("batch wallet SOL balances", () => connection.getMultipleAccountsInfo(chunk, "confirmed"), CONFIG.rpcRetries);
+      chunk.forEach((key, index) => {
+        const lamports = Number(infos?.[index]?.lamports ?? 0);
+        setTimedCache(solBalanceCache, key.toBase58(), lamports);
+        primed += 1;
+      });
+    } catch {
+      // batch failed - per-wallet reads still work as before
+    }
+  }
+  return primed;
+}
+
 async function getTokenBalanceForMint(owner, mint, options = {}) {
   const ownerKey = owner instanceof PublicKey ? owner : new PublicKey(owner);
   const mintKey = mint instanceof PublicKey ? mint : new PublicKey(mint);
@@ -15425,6 +15452,17 @@ async function estimatePositionValue(position) {
   if (cached !== undefined) return cached;
 
   let total = 0n;
+  // MARKET-FIRST: one cheap price read values the whole position. The old
+  // Jupiter-first path quoted EVERY account serially (up to 8 slow round trips
+  // per position) - the main reason wallet refresh crawled and timed out.
+  // Jupiter quotes remain the fallback when no market price exists.
+  try {
+    total = await estimatePositionValueFromMarket(position);
+    setTimedCache(positionValueCache, cacheKey, total);
+    return total;
+  } catch {
+    // no market price - fall through to route-based quotes
+  }
   if (!CONFIG.jupiterApiKey) {
     total = await estimatePositionValueFromMarket(position, new Error("Jupiter API key missing"));
     setTimedCache(positionValueCache, cacheKey, total);
@@ -32499,6 +32537,10 @@ async function webBalanceRows(userId, options = {}) {
   const wallets = walletsForOwner(store, userId);
   const rows = [];
 
+  // One batched RPC primes every wallet's SOL balance; the per-wallet reads
+  // below then hit warm cache instead of issuing N round trips.
+  await primeSolBalancesBatch(wallets.map((wallet) => wallet.publicKey)).catch(() => 0);
+
   await runWithConcurrency(wallets, CONFIG.balanceConcurrency, async (wallet, index) => {
     const row = {
       index: index + 1,
@@ -32513,7 +32555,7 @@ async function webBalanceRows(userId, options = {}) {
 
     try {
       const keypair = decryptWallet(wallet);
-      const balance = await getSolBalanceCached(keypair.publicKey, { force: Boolean(options.force) });
+      const balance = await getSolBalanceCached(keypair.publicKey, { force: false });
       row.sol = lamportsToSol(balance);
       row.lamports = String(balance);
 
