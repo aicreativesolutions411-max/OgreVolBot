@@ -1,9 +1,15 @@
 {
-  "version": "2026-06-12-swamp-assets-v1",
+  "version": "2026-06-12-swamp-assets-v3",
   "source": "Generated SlimeWire Swamp concept sheets; chroma key removed locally.",
   "sheets": {
     "creatures": "/assets/slimewire/swamp/sheets/swamp-creatures-sheet.png",
-    "environment": "/assets/slimewire/swamp/sheets/swamp-environment-sheet.png"
+    "environment": "/assets/slimewire/swamp/sheets/swamp-environment-sheet.png",
+    "overworld": "/assets/slimewire/swamp/sheets/swamp-overworld-sheet.png",
+    "walkers": "/assets/slimewire/swamp/sheets/swamp-walkers-sheet.png",
+    "creaturesBatch02": "/assets/slimewire/swamp/sheets/swamp-creatures-batch-02.png",
+    "creaturesBatch03": "/assets/slimewire/swamp/sheets/swamp-creatures-batch-03.png",
+    "bosses": "/assets/slimewire/swamp/sheets/swamp-bosses-sheet.png",
+    "rewards": "/assets/slimewire/swamp/sheets/swamp-rewards-sheet.png"
   },
   "creatures": [
     {
@@ -58,6 +64,40 @@
   "notes": [
     "Use sprites as optional art skins; keep procedural canvas creatures as fallback.",
     "Ogre boss assets are intended for SlimeWire-launched coins and launch raid events.",
-    "Toxic/rug and sell-pressure sprites should be informational game visuals, not financial advice."
-  ]
+    "Toxic/rug and sell-pressure sprites should be informational game visuals, not financial advice.",
+    "Overworld sheet includes ogre huts, bridges, bushes, water, mud paths, signs, cauldrons, crates, lanterns, and swamp props for a walking map.",
+    "Walker sheet includes player/NPC directional poses for the future walk-around game loop.",
+    "Additional creature sheets provide broad token-character variety: slimes, skeletons, ogres, swamp beasts, cursed rug forms, shiny runners, liquidity guardians, and bosses.",
+    "Reward sheet includes catch badges, slimeballs, launch boss crown, TP/SL shield, proof receipt, PnL trophy, share charms, wallet pouch, and portal token for quests and achievements."
+  ],
+  "world": {
+    "overworld": "/assets/slimewire/swamp/sheets/swamp-overworld-sheet.png",
+    "walkers": "/assets/slimewire/swamp/sheets/swamp-walkers-sheet.png"
+  },
+  "creatureSheets": [
+    {
+      "id": "base",
+      "path": "/assets/slimewire/swamp/sheets/swamp-creatures-sheet.png",
+      "count": 12
+    },
+    {
+      "id": "swamp-mobs-02",
+      "path": "/assets/slimewire/swamp/sheets/swamp-creatures-batch-02.png",
+      "count": 20
+    },
+    {
+      "id": "swamp-mobs-03",
+      "path": "/assets/slimewire/swamp/sheets/swamp-creatures-batch-03.png",
+      "count": 20
+    },
+    {
+      "id": "bosses",
+      "path": "/assets/slimewire/swamp/sheets/swamp-bosses-sheet.png",
+      "count": 16
+    }
+  ],
+  "rewards": {
+    "path": "/assets/slimewire/swamp/sheets/swamp-rewards-sheet.png",
+    "count": 24
+  }
 }
