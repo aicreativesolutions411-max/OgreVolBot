@@ -24660,7 +24660,7 @@ async function runTrailerMode() {
   // Scene 1: fresh pairs feed (real, live).
   if (!trailerState.running) return;
   trailerFlash();
-  trailerCaption("FRESH PAIRS - LIVE", "new launches land here seconds after creation");
+  trailerCaption("FRESH PAIRS. SECONDS OLD.", "every pump.fun launch lands here instantly");
   await trailerWait(feedDur * 1000);
 
   // Scene 2: hottest pair -> chart. Only runs when the chart actually mounts;
@@ -24671,14 +24671,14 @@ async function runTrailerMode() {
     navigateTo(`/terminal/chart?token=${encodeURIComponent(pick.tokenMint)}`);
     const chartReady = await trailerWaitForElement("iframe[src*='dexscreener'], .smart-chart-terminal iframe, [data-chart] canvas", 4500);
     if (!trailerState.running) return;
-    trailerCaption("LIVE CHART + RISK READ", `${symbol} - real candles, real flow, zero delay`);
+    trailerCaption("CHARTS WITH A BRAIN", `${symbol} - live candles, live flow, shield verdict on top`);
     await trailerWait((chartReady ? chartDur : 4) * 1000);
 
     // Scene 3: triple-engine shield drawer (renders over anything).
     if (!trailerState.running) return;
     trailerFlash();
     openSlimeShieldDetails(pick.tokenMint);
-    trailerCaption("TRIPLE-ENGINE SHIELD", "SlimeShield x Rugcheck x GoPlus - before you ape");
+    trailerCaption("TRIPLE-ENGINE RUG CHECK", "SlimeShield x Rugcheck x GoPlus - dodge the rug BEFORE you ape");
     await trailerWait(shieldDur * 1000);
     closeSlimeShieldDetails();
   }
@@ -24690,8 +24690,7 @@ async function runTrailerMode() {
   trailerCenter(`
     <div style="color:#72ff23;font-size:clamp(38px,11vw,76px);font-weight:900;letter-spacing:0.05em;animation:twGlow 1.6s infinite, twPulse 1.6s infinite;">SLIMEWIRE.ORG</div>
     <div style="color:#d6ffbf;font-size:clamp(15px,4.4vw,23px);font-weight:700;margin-top:10px;">verify before you ape</div>
-    <div style="color:#7d937a;font-size:clamp(10px,3vw,12px);margin-top:26px;">Recorded on live market data. Crypto is risky - not financial advice.</div>
-    ${!recording ? `<div style="color:#bbff63;font-weight:800;font-size:clamp(13px,4vw,16px);margin-top:16px;">🎬 STOP YOUR SCREEN RECORDER - the clip is in your camera roll</div>` : ""}
+    <div style="color:#7d937a;font-size:clamp(10px,3vw,12px);margin-top:26px;">Live market data. Not financial advice.</div>
   `);
   await trailerWait(endDur * 1000);
   stopTrailerMode("done");
