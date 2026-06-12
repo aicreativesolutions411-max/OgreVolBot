@@ -16933,6 +16933,13 @@ const OHLCV_TIMEFRAMES = {
   "1d": { path: "day", aggregate: 1, seconds: 86400 }
 };
 
+const GECKO_HEADERS = {
+  Accept: "application/json;version=20230302",
+  // GeckoTerminal sits behind Cloudflare and silently rejects UA-less requests
+  // from datacenter IPs (Render). Same lesson DexScreener taught us.
+  "User-Agent": "Mozilla/5.0 (compatible; SlimeWire/1.0; +https://www.slimewire.org)"
+};
+
 async function resolveGeckoPoolForMint(mint) {
   const cached = geckoPoolCache.get(mint);
   if (cached && Date.now() - cached.at < (cached.pool ? 10 * 60 * 1000 : 90 * 1000)) {
@@ -16940,7 +16947,7 @@ async function resolveGeckoPoolForMint(mint) {
   }
   const data = await fetchJson(
     `https://api.geckoterminal.com/api/v2/networks/solana/tokens/${encodeURIComponent(mint)}/pools?page=1`,
-    { headers: { Accept: "application/json" }, timeoutMs: 3_500 }
+    { headers: GECKO_HEADERS, timeoutMs: 3_500 }
   ).catch(() => null);
   const pools = Array.isArray(data?.data) ? data.data : [];
   const best = pools
@@ -16950,7 +16957,17 @@ async function resolveGeckoPoolForMint(mint) {
     }))
     .filter((item) => item.address)
     .sort((a, b) => b.reserveUsd - a.reserveUsd)[0] || null;
-  const pool = best?.address || null;
+  let pool = best?.address || null;
+  if (!pool) {
+    // Fallback: DexScreener already knows the pair address for indexed tokens
+    // (cached server-side), and GeckoTerminal accepts pool addresses directly.
+    const litePair = pairLiteCache.get(mint)?.payload?.pair;
+    pool = String(litePair?.pairAddress || "") || null;
+    if (!pool) {
+      const pairs = await fetchDexScreenerTokenPairsFallback(mint).catch(() => []);
+      pool = String(bestDexPairForToken(mint, pairs)?.pairAddress || "") || null;
+    }
+  }
   geckoPoolCache.set(mint, { at: Date.now(), pool });
   if (geckoPoolCache.size > 500) {
     const oldest = [...geckoPoolCache.entries()].sort((a, b) => a[1].at - b[1].at)[0]?.[0];
@@ -16965,7 +16982,7 @@ async function fetchGeckoOhlcv(mint, tfKey) {
   if (!pool) return { candles: [], poolAddress: null };
   const data = await fetchJson(
     `https://api.geckoterminal.com/api/v2/networks/solana/pools/${encodeURIComponent(pool)}/ohlcv/${tf.path}?aggregate=${tf.aggregate}&limit=300&currency=usd&token=base`,
-    { headers: { Accept: "application/json" }, timeoutMs: 4_000 }
+    { headers: GECKO_HEADERS, timeoutMs: 4_000 }
   ).catch(() => null);
   const list = Array.isArray(data?.data?.attributes?.ohlcv_list) ? data.data.attributes.ohlcv_list : [];
   const candles = list

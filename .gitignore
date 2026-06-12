@@ -15,3 +15,10 @@ scripts/preview-static.cjs
 uploaded-assets/
 artifacts/
 .zip_stage_*/
+
+# Video recorder toolchain + outputs (local only)
+tools/
+trailer-*.png
+.playwright-mcp/
+media-out/
+
