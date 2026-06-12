@@ -52,6 +52,26 @@ export function slimeShieldVerdictFromScore(score, factors = []) {
   return "BUY";
 }
 
+// Hard-danger detector for fresh-ape autopilot. Brand-new pump.fun pairs are
+// EXPECTED to be thin on liquidity/volume/age - those must not block a buy.
+// This returns true only for genuine, non-recoverable danger: mayhem, an
+// active mint/freeze authority (a real pump curve has neither), honeypot /
+// can't-sell, blacklist, transfer hooks, or a confirmed rug. Liquidity, age,
+// volume, flow, and score factors are deliberately ignored.
+const SLIMESHIELD_HARD_DANGER_RE = /honeypot|mint authority|mintable|freeze authority|freezable|freezeable|blacklist|cannot sell|can'?t sell|sell disabled|sell blocked|trading disabled|no sell|non-?transferable|transfer hook|balances mutable|\brug\b|scam|mayhem|liquidity (?:pulled|removed|drained)|lp (?:pulled|removed|drained)|pool drained/i;
+
+export function slimeShieldHasHardDanger(shield) {
+  if (!shield || typeof shield !== "object") return false;
+  const factors = Array.isArray(shield.factors) ? shield.factors : [];
+  for (const item of factors) {
+    if (item?.key === "hard_flag") return true;
+    if (item?.severity !== "risk") continue;
+    const text = `${item?.label || ""} ${item?.message || ""}`;
+    if (SLIMESHIELD_HARD_DANGER_RE.test(text)) return true;
+  }
+  return SLIMESHIELD_HARD_DANGER_RE.test(String(shield.summary || ""));
+}
+
 export function computeSlimeShield(row = {}, options = {}) {
   const mint = String(row.tokenMint || row.mint || row.tokenAddress || options.mint || "").trim();
   let score = 70;

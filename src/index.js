@@ -80,7 +80,7 @@ import {
 } from "./lib/launchImageProcessor.js";
 import { createTokenMetadataResolver } from "./lib/tokenMetadataResolver.js";
 import { createPumpPortalStream } from "./lib/pumpPortalStream.js";
-import { computeSlimeShield } from "./lib/slimeShield.js";
+import { computeSlimeShield, slimeShieldHasHardDanger } from "./lib/slimeShield.js";
 import {
   appendLimited,
   compareBigInt,
@@ -30529,17 +30529,24 @@ async function webStartOgreAiRun(userId, body = {}) {
     attemptedPicks.push(pickSummary);
     // Final SlimeShield gate before any SOL moves: the row filters catch hard flags,
     // but the shield folds in dev info, authority risk, and KOL dump pressure the
-    // feed row may not carry. Only AVOID blocks - risky setups are allowed because
-    // they are often the biggest winners; the TP/SL plan is the risk control.
+    // feed row may not carry. The TP/SL plan is the real risk control.
+    //
+    // Fresh-ape mode loosens this on purpose: a 20-30s-old pump.fun launch is
+    // EXPECTED to be thin on liquidity/volume, which alone tips the shield to
+    // AVOID. We only block genuine danger there - mayhem, mint/freeze authority,
+    // honeypot/can't-sell, blacklist, rug. Other modes keep the full AVOID gate.
     try {
       const shield = await webSlimeShield(pick.tokenMint);
       const verdict = String(shield?.verdict || "").toUpperCase();
-      if (verdict === "AVOID") {
+      const blocked = mode === "fresh_ape" ? slimeShieldHasHardDanger(shield) : verdict === "AVOID";
+      if (blocked) {
         errors.push({
           tokenMint: pick.tokenMint,
           shortMint: shortMint(pick.tokenMint),
           pick: pickSummary,
-          message: `SlimeShield ${verdict} (score ${shield?.score ?? "?"}): ${String(shield?.summary || "blocked").slice(0, 120)}`
+          message: mode === "fresh_ape"
+            ? `SlimeShield hard-danger flag (mayhem/mint/freeze/honeypot): ${String(shield?.summary || "blocked").slice(0, 120)}`
+            : `SlimeShield ${verdict} (score ${shield?.score ?? "?"}): ${String(shield?.summary || "blocked").slice(0, 120)}`
         });
         continue;
       }

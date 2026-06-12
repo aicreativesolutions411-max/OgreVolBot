@@ -1,6 +1,51 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { computeSlimeShield, slimeShieldVerdictFromScore } from "../src/lib/slimeShield.js";
+import { computeSlimeShield, slimeShieldVerdictFromScore, slimeShieldHasHardDanger } from "../src/lib/slimeShield.js";
+
+test("fresh-ape hard-danger gate ignores thin liquidity but blocks real danger", () => {
+  // A 20s-old pump.fun launch: thin liquidity tips the shield to AVOID, but
+  // that is EXPECTED and must NOT block a fresh-ape buy.
+  const freshThin = computeSlimeShield({
+    tokenMint: "FreshThinMint",
+    liquidityUsd: 400,
+    pairAgeSeconds: 20,
+    marketCap: 4_200,
+    volume5m: 120
+  });
+  assert.ok(["RISK", "AVOID"].includes(freshThin.verdict), "thin fresh pair scores risk/avoid overall");
+  assert.equal(slimeShieldHasHardDanger(freshThin), false, "but thin liquidity is NOT hard danger");
+
+  // Genuine danger MUST block.
+  const mintable = computeSlimeShield({
+    tokenMint: "MintableMint",
+    liquidityUsd: 5_000,
+    pairAgeSeconds: 20,
+    marketCap: 4_200,
+    goplus: { flags: ["mint authority active", "freeze authority active"] }
+  });
+  assert.equal(slimeShieldHasHardDanger(mintable), true, "active mint/freeze authority is hard danger");
+
+  const mayhem = computeSlimeShield({
+    tokenMint: "MayhemMint",
+    liquidityUsd: 5_000,
+    pairAgeSeconds: 20,
+    marketCap: 4_200,
+    riskFlags: ["pump mayhem"]
+  });
+  assert.equal(slimeShieldHasHardDanger(mayhem), true, "mayhem is hard danger");
+
+  // Rugcheck noise that is NOT a control/honeypot flag should not block.
+  const rugNoise = computeSlimeShield({
+    tokenMint: "RugNoiseMint",
+    liquidityUsd: 600,
+    pairAgeSeconds: 20,
+    marketCap: 4_200,
+    rugcheck: { risks: [{ name: "Low Liquidity", level: "danger" }] }
+  });
+  assert.equal(slimeShieldHasHardDanger(rugNoise), false, "low-liquidity rugcheck note is not hard danger");
+
+  assert.equal(slimeShieldHasHardDanger(null), false);
+});
 
 test("SlimeShield returns BUY for a clean cached setup", () => {
   const result = computeSlimeShield({
