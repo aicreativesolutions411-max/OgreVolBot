@@ -6326,6 +6326,7 @@ function profileHtml() {
           ${profileWalletFirstSection()}
           ${badgeShowcaseSection()}
         </section>
+        ${profileFootMarkHtml()}
       </section>
     `;
   }
@@ -6343,7 +6344,19 @@ function profileHtml() {
     <section class="profile-row-shell">
       ${profileIntroHtml(true)}
       ${toolPanelsHtml({ toolKey: "profile", activeKey: activeToolSection("profile", "account"), sections })}
+      ${profileFootMarkHtml()}
     </section>
+  `;
+}
+
+// Footer art at the bottom of Profile. It is also the hidden Trailer Mode
+// trigger - intentionally styled as a decorative watermark, no affordance.
+function profileFootMarkHtml() {
+  return `
+    <div style="display:flex;justify-content:center;padding:30px 0 10px;">
+      <img src="/assets/slimewire/svg/slimewire-mark.svg" alt="" data-trailer-mode
+        style="width:22px;height:22px;opacity:0.32;" />
+    </div>
   `;
 }
 
@@ -24221,3 +24234,185 @@ document.addEventListener("input", (event) => {
   });
 })();
 
+
+// === Trailer Mode (owner-only, hidden) =======================================
+// Trigger: the small slime mark at the very bottom of the Profile tab - looks
+// like footer art, does nothing obvious. Tapping it makes the site PERFORM a
+// clean scripted demo over REAL live data (no demo data anywhere) while the
+// screen records: auto-recorded on desktop via tab capture; on mobile, start
+// the OS screen recorder during the countdown. Output saves as a .webm file.
+const trailerState = { running: false, recorder: null, chunks: [], stream: null, root: null, timers: [] };
+
+function trailerWait(ms) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    trailerState.timers.push(timer);
+  });
+}
+
+function trailerRoot() {
+  if (trailerState.root) return trailerState.root;
+  const root = document.createElement("div");
+  root.setAttribute("data-trailer-overlay", "");
+  root.style.cssText = "position:fixed;inset:0;z-index:99999;pointer-events:none;font-family:Inter,system-ui,sans-serif;";
+  root.innerHTML = `
+    <div data-trailer-bar-top style="position:absolute;top:0;left:0;right:0;height:54px;background:linear-gradient(rgba(2,7,2,0.9),transparent);"></div>
+    <div data-trailer-bar-bottom style="position:absolute;bottom:0;left:0;right:0;height:110px;background:linear-gradient(transparent,rgba(2,7,2,0.92));"></div>
+    <div data-trailer-caption style="position:absolute;left:50%;bottom:34px;transform:translateX(-50%);text-align:center;opacity:0;transition:opacity 0.45s;max-width:92vw;">
+      <div data-trailer-caption-main style="color:#72ff23;font-size:clamp(18px,2.6vw,30px);font-weight:900;letter-spacing:0.04em;text-shadow:0 0 18px rgba(114,255,35,0.65);"></div>
+      <div data-trailer-caption-sub style="color:#d6ffbf;font-size:clamp(12px,1.5vw,17px);font-weight:600;margin-top:4px;"></div>
+    </div>
+    <div data-trailer-center style="position:absolute;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;background:rgba(2,7,2,0.86);text-align:center;padding:20px;"></div>
+    <button type="button" data-trailer-stop style="position:absolute;top:10px;right:12px;pointer-events:auto;background:rgba(8,20,10,0.8);border:1px solid rgba(114,255,35,0.3);color:#9fb59a;border-radius:8px;padding:4px 10px;font-size:11px;cursor:pointer;">stop</button>
+  `;
+  root.querySelector("[data-trailer-stop]").addEventListener("click", () => stopTrailerMode("stopped"));
+  document.body.appendChild(root);
+  trailerState.root = root;
+  return root;
+}
+
+function trailerCaption(main, sub = "") {
+  const root = trailerRoot();
+  const wrap = root.querySelector("[data-trailer-caption]");
+  root.querySelector("[data-trailer-caption-main]").textContent = main;
+  root.querySelector("[data-trailer-caption-sub]").textContent = sub;
+  wrap.style.opacity = main ? "1" : "0";
+}
+
+function trailerCenter(html) {
+  const center = trailerRoot().querySelector("[data-trailer-center]");
+  if (!html) {
+    center.style.display = "none";
+    center.innerHTML = "";
+    return;
+  }
+  center.innerHTML = html;
+  center.style.display = "flex";
+}
+
+async function trailerTryRecord() {
+  if (!navigator.mediaDevices?.getDisplayMedia || !window.MediaRecorder) return false;
+  try {
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      video: { frameRate: 30 },
+      audio: false,
+      preferCurrentTab: true,
+      selfBrowserSurface: "include"
+    });
+    trailerState.stream = stream;
+    trailerState.chunks = [];
+    const recorder = new MediaRecorder(stream, { mimeType: MediaRecorder.isTypeSupported("video/webm;codecs=vp9") ? "video/webm;codecs=vp9" : "video/webm" });
+    recorder.ondataavailable = (event) => { if (event.data?.size) trailerState.chunks.push(event.data); };
+    recorder.start(1000);
+    trailerState.recorder = recorder;
+    stream.getVideoTracks()[0]?.addEventListener("ended", () => stopTrailerMode("screen-share-ended"));
+    return true;
+  } catch {
+    return false; // mobile / declined: user records with the OS recorder instead
+  }
+}
+
+function trailerSaveRecording() {
+  const recorder = trailerState.recorder;
+  if (!recorder) return;
+  const finish = () => {
+    try {
+      const blob = new Blob(trailerState.chunks, { type: "video/webm" });
+      if (blob.size > 0) {
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = `slimewire-trailer-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.webm`;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(link.href), 30000);
+      }
+    } catch {}
+  };
+  if (recorder.state !== "inactive") {
+    recorder.addEventListener("stop", finish, { once: true });
+    try { recorder.stop(); } catch { finish(); }
+  } else {
+    finish();
+  }
+  trailerState.stream?.getTracks().forEach((track) => { try { track.stop(); } catch {} });
+  trailerState.recorder = null;
+  trailerState.stream = null;
+}
+
+function stopTrailerMode(reason = "done") {
+  if (!trailerState.running) return;
+  trailerState.running = false;
+  trailerState.timers.forEach((timer) => clearTimeout(timer));
+  trailerState.timers = [];
+  trailerSaveRecording();
+  trailerState.root?.remove();
+  trailerState.root = null;
+}
+
+function trailerPickHotPair() {
+  const rows = state.livePairsByBucket?.live?.rows
+    || state.livePairs?.rows
+    || state.livePairRows
+    || [];
+  const ranked = [...rows].filter((row) => row?.tokenMint).sort((a, b) =>
+    (Number(b.volume5m) || 0) - (Number(a.volume5m) || 0)
+    || (Number(b.bestPickScore || b.score) || 0) - (Number(a.bestPickScore || a.score) || 0));
+  return ranked[0] || rows[0] || null;
+}
+
+async function runTrailerMode() {
+  if (trailerState.running) return;
+  trailerState.running = true;
+  trailerRoot();
+
+  const recording = await trailerTryRecord();
+  // Countdown: clean first frames on desktop, time to start the OS screen
+  // recorder on mobile.
+  for (const n of recording ? [2, 1] : [3, 2, 1]) {
+    if (!trailerState.running) return;
+    trailerCenter(`<div style="color:#72ff23;font-size:96px;font-weight:900;text-shadow:0 0 28px rgba(114,255,35,0.7);">${n}</div>
+      ${recording ? "" : `<div style="color:#d6ffbf;font-size:15px;margin-top:8px;">start your screen recorder now</div>`}`);
+    await trailerWait(1000);
+  }
+  trailerCenter("");
+
+  // Scene 1: fresh pairs feed (real, live).
+  if (!trailerState.running) return;
+  navigateTo("/terminal/live-pairs");
+  trailerCaption("FRESH PAIRS - LIVE", "new launches land here seconds after creation");
+  await trailerWait(7000);
+
+  // Scene 2: hottest pair -> native chart.
+  if (!trailerState.running) return;
+  const pick = trailerPickHotPair();
+  const symbol = pick?.symbol ? `$${String(pick.symbol).slice(0, 12)}` : "live pair";
+  if (pick?.tokenMint) {
+    navigateTo(`/terminal/chart?token=${encodeURIComponent(pick.tokenMint)}`);
+    trailerCaption("LIVE CHART + RISK READ", `${symbol} - real candles, real flow, zero delay`);
+    await trailerWait(9000);
+
+    // Scene 3: triple-engine shield drawer.
+    if (!trailerState.running) return;
+    openSlimeShieldDetails(pick.tokenMint);
+    trailerCaption("TRIPLE-ENGINE SHIELD", "SlimeShield x Rugcheck x GoPlus - before you ape");
+    await trailerWait(7000);
+    closeSlimeShieldDetails();
+  }
+
+  // End card + disclaimer (real data, honest footer).
+  if (!trailerState.running) return;
+  trailerCaption("");
+  trailerCenter(`
+    <div style="color:#72ff23;font-size:clamp(34px,6vw,72px);font-weight:900;letter-spacing:0.05em;text-shadow:0 0 30px rgba(114,255,35,0.7);">SLIMEWIRE.ORG</div>
+    <div style="color:#d6ffbf;font-size:clamp(14px,2.2vw,22px);font-weight:700;margin-top:10px;">verify before you ape</div>
+    <div style="color:#7d937a;font-size:12px;margin-top:26px;">Recorded on live market data. Crypto is risky - not financial advice.</div>
+  `);
+  await trailerWait(4200);
+  stopTrailerMode("done");
+}
+
+document.addEventListener("click", (event) => {
+  const mark = event.target instanceof Element ? event.target.closest("[data-trailer-mode]") : null;
+  if (!mark) return;
+  event.preventDefault();
+  if (!trailerState.running) void runTrailerMode();
+});
