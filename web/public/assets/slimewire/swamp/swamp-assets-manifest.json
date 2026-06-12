@@ -1,5 +1,5 @@
 {
-  "version": "2026-06-12-swamp-assets-v3",
+  "version": "2026-06-12-swamp-assets-v4",
   "source": "Generated SlimeWire Swamp concept sheets; chroma key removed locally.",
   "sheets": {
     "creatures": "/assets/slimewire/swamp/sheets/swamp-creatures-sheet.png",
@@ -9,7 +9,10 @@
     "creaturesBatch02": "/assets/slimewire/swamp/sheets/swamp-creatures-batch-02.png",
     "creaturesBatch03": "/assets/slimewire/swamp/sheets/swamp-creatures-batch-03.png",
     "bosses": "/assets/slimewire/swamp/sheets/swamp-bosses-sheet.png",
-    "rewards": "/assets/slimewire/swamp/sheets/swamp-rewards-sheet.png"
+    "rewards": "/assets/slimewire/swamp/sheets/swamp-rewards-sheet.png",
+    "walkCycleBase": "/assets/slimewire/swamp/sheets/swamp-walk-cycle-base.png",
+    "cleanTileset": "/assets/slimewire/swamp/sheets/swamp-clean-tileset.png",
+    "creatureWalkCycle02": "/assets/slimewire/swamp/sheets/swamp-creature-walk-cycle-02.png"
   },
   "creatures": [
     {
@@ -68,7 +71,10 @@
     "Overworld sheet includes ogre huts, bridges, bushes, water, mud paths, signs, cauldrons, crates, lanterns, and swamp props for a walking map.",
     "Walker sheet includes player/NPC directional poses for the future walk-around game loop.",
     "Additional creature sheets provide broad token-character variety: slimes, skeletons, ogres, swamp beasts, cursed rug forms, shiny runners, liquidity guardians, and bosses.",
-    "Reward sheet includes catch badges, slimeballs, launch boss crown, TP/SL shield, proof receipt, PnL trophy, share charms, wallet pouch, and portal token for quests and achievements."
+    "Reward sheet includes catch badges, slimeballs, launch boss crown, TP/SL shield, proof receipt, PnL trophy, share charms, wallet pouch, and portal token for quests and achievements.",
+    "Walk-cycle base sheet adds player, ogre guide, slime, skeleton slime, and ogre pup directional animation frames.",
+    "Creature walk-cycle pack adds toxic, shiny, skeleton, frog, bat-wing slime, and ogre minion directional animation frames.",
+    "Clean tileset is the main map-building atlas for walking around bushes, paths, water, bridges, cover, and portal areas."
   ],
   "world": {
     "overworld": "/assets/slimewire/swamp/sheets/swamp-overworld-sheet.png",
@@ -99,5 +105,78 @@
   "rewards": {
     "path": "/assets/slimewire/swamp/sheets/swamp-rewards-sheet.png",
     "count": 24
-  }
+  },
+  "walkCycles": [
+    {
+      "id": "base-walk-cycle",
+      "path": "/assets/slimewire/swamp/sheets/swamp-walk-cycle-base.png",
+      "characters": [
+        "hooded-degen-player",
+        "small-moss-ogre-guide",
+        "green-slime",
+        "skeleton-slime",
+        "tiny-ogre-boss-pup"
+      ],
+      "directions": [
+        "down",
+        "left",
+        "right",
+        "up"
+      ],
+      "framesPerDirection": 4,
+      "layout": "rows=characters; columns=down4,left4,right4,up4",
+      "source": "/assets/slimewire/swamp/source/swamp-walk-cycle-base-source.png"
+    },
+    {
+      "id": "creature-walk-cycle-02",
+      "path": "/assets/slimewire/swamp/sheets/swamp-creature-walk-cycle-02.png",
+      "characters": [
+        "toxic-rug-ooze",
+        "gold-shiny-runner",
+        "bone-skeleton-crawler",
+        "swamp-frog-beast",
+        "bat-wing-chart-slime",
+        "small-ogre-boss-minion"
+      ],
+      "directions": [
+        "down",
+        "left",
+        "right",
+        "up"
+      ],
+      "framesPerDirection": 3,
+      "layout": "rows=creatures; columns=down3,left3,right3,up3",
+      "source": "/assets/slimewire/swamp/source/swamp-creature-walk-cycle-02-source.png"
+    }
+  ],
+  "tilesets": [
+    {
+      "id": "clean-walking-tileset",
+      "path": "/assets/slimewire/swamp/sheets/swamp-clean-tileset.png",
+      "source": "/assets/slimewire/swamp/source/swamp-clean-tileset-source.png",
+      "tileIntent": [
+        "grass",
+        "dark-grass",
+        "mud",
+        "path-straights",
+        "path-corners",
+        "water",
+        "water-edges",
+        "lily-water",
+        "tall-grass",
+        "reeds",
+        "bush",
+        "slime-puddle",
+        "bubbling-mud",
+        "stone-path",
+        "wood-bridge",
+        "fence",
+        "rock",
+        "stump",
+        "mushroom",
+        "portal-floor"
+      ],
+      "notes": "Clean square tile atlas intended for the future walk-around swamp map."
+    }
+  ]
 }
