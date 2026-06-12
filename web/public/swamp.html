@@ -486,13 +486,32 @@
         }
         if (changed) { save(store); renderQuests(); renderProgress(); }
       }
+      // daily gift egg: one free creature a day just for showing up
+      function eggAvailable(){ return (store.egg?.day) !== dayKey(); }
+      function hatchEgg() {
+        if (!eggAvailable() || !rows.length) { toast(rows.length?"🥚 Come back tomorrow!":"🥚 Swamp's still loading…"); return; }
+        const pool = rows.filter((r)=>!store.dex[r.tokenMint]);
+        const row = pool[Math.floor(Math.random()*Math.min(pool.length,15))];
+        if (!row) return;
+        store.egg = { day: dayKey() };
+        const ogre = isOgreMint(row.tokenMint);
+        const gain = Math.round(40 * streakMult());
+        store.xp += gain;
+        store.dex[row.tokenMint] = { mint:row.tokenMint, symbol:creatureName(row), mc:num(row.marketCap||row.marketCapUsd), mcNow:num(row.marketCap||row.marketCapUsd), mood:moodFor(row), stage:1, ogre, verdict:"hatched 🥚", caughtAt:Date.now() };
+        save(store); sfx("catch");
+        particleBurst(window.innerWidth/2, window.innerHeight*0.35, ["#ffd84d","#bbff63","#fff"]);
+        toast(`🥚 Hatched $${creatureName(row)}! +${gain} XP`);
+        checkUnlocks(); renderProgress(); renderQuests(); try { syncRoamers(); } catch {}
+      }
       function renderQuests() {
         const q = questState(); const el = $("[data-quests]"); if (!el) return;
-        el.innerHTML = todaysQuests().map((def)=>{
+        const egg = eggAvailable() ? `<div class="quest" data-egg style="cursor:pointer;border-color:var(--warn)">🥚 <div><div><b>Daily egg ready!</b></div><div style="font-size:0.62rem;color:var(--dim)">tap to hatch a free slime</div></div></div>` : "";
+        el.innerHTML = egg + todaysQuests().map((def)=>{
           const p = Math.min(def.target, q.prog[def.id]||0); const done = Boolean(q.claimed[def.id]);
           return `<div class="quest ${done?"done":""}">${def.icon} <div><div>${esc(def.name)} ${done?"✅":`<b>+${def.xp}xp</b>`}</div>
             <div class="qbar"><div class="qfill" style="width:${Math.round(p/def.target*100)}%"></div></div></div></div>`;
         }).join("");
+        el.querySelector("[data-egg]")?.addEventListener("click", hatchEgg);
       }
 
       // ---------- shiny spawns (rare, daily-rotating) ----------
