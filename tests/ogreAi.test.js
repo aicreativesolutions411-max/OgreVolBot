@@ -683,6 +683,19 @@ test("Ogre A.I. server collapses old mode names into fresh ape defaults", () => 
   assert.match(serverFunctionBody("ogreAiScannerModesForTarget"), /\["pumpsnipe", "moonshot", "fast"\]/);
 });
 
+test("Token-2022 buy guard falls back to the cached feed row for brand-new tokens", () => {
+  // A sub-30s token is not on DexScreener yet, so the buy-time market lookup
+  // must merge our own feed row (which carries the launchpad pool/source the
+  // candidate selection already trusted) - otherwise legit fresh launchpad
+  // Token-2022 launches get rejected purely for being too new to be indexed.
+  const body = serverFunctionBody("tokenMarketSafetyInfo");
+  assert.match(body, /localMarketRowForMint\(tokenMint\)/);
+  assert.match(body, /\.\.\.feedRow/);
+  // The honeypot / mint-freeze guard text must still be present and unchanged.
+  assert.match(serverFunctionBody("assertTokenBuyBaseSafety"), /Token-2022 requires a trusted/);
+  assert.match(serverFunctionBody("assertTokenBuyBaseSafety"), /freeze authority is still active/);
+});
+
 test("Ogre A.I. uses a fast cached-market fallback before failing empty", () => {
   assert.match(serverSource, /OGRE_AI_SOURCE_SOFT_TIMEOUT_MS = 1_500/);
   assert.match(serverSource, /OGRE_AI_SAFETY_SCAN_BUDGET_MS = 1_700/);

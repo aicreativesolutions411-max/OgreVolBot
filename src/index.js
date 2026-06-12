@@ -14007,15 +14007,26 @@ async function tokenMarketSafetyInfo(tokenMint) {
   const pairs = await fetchDexScreenerTokenPairsBatch([tokenMint], { timeoutMs: 1_800 }).catch(() => []);
   const best = bestDexPairForToken(tokenMint, pairs);
   const dex = metadataFromDexPair(tokenMint, best);
-  const marketCap = firstMeaningfulNumber(dex.marketCap, dex.fdv, best?.marketCap, best?.fdv) || 0;
-  const liquidityUsd = firstMeaningfulNumber(dex.liquidityUsd, best?.liquidity?.usd) || 0;
+  // Brand-new tokens (the whole point of fresh-ape, under 30s) are not indexed
+  // by DexScreener yet, so `best` is null and the trusted-pool signal vanishes -
+  // which is why a fresh launchpad Token-2022 the candidate selection ALREADY
+  // accepted (from its feed-row pool/source) gets rejected at buy time. Merge
+  // the cached feed row back in so the pool check sees the same evidence
+  // selection did. The honeypot/mint/freeze guards are unaffected.
+  const feedRow = (localMarketRowForMint(tokenMint) || {});
+  const marketCap = firstMeaningfulNumber(dex.marketCap, dex.fdv, best?.marketCap, best?.fdv, feedRow.marketCap, feedRow.fdv) || 0;
+  const liquidityUsd = firstMeaningfulNumber(dex.liquidityUsd, best?.liquidity?.usd, feedRow.liquidityUsd) || 0;
   const marketRow = {
+    ...feedRow,
     ...dex,
-    dexId: dex.dexId || best?.dexId,
-    dexName: dex.dexName || best?.dexName || best?.dexId,
-    pairAddress: dex.pairAddress || best?.pairAddress,
-    pairUrl: dex.pairUrl || best?.url,
-    labels: best?.labels,
+    dexId: dex.dexId || best?.dexId || feedRow.dexId,
+    dexName: dex.dexName || best?.dexName || best?.dexId || feedRow.dexName,
+    pairAddress: dex.pairAddress || best?.pairAddress || feedRow.pairAddress,
+    pairUrl: dex.pairUrl || best?.url || feedRow.pairUrl,
+    labels: best?.labels || feedRow.labels,
+    source: feedRow.source,
+    raydiumPool: feedRow.raydiumPool,
+    pool: feedRow.pool,
     tokenMint
   };
   const riskText = [
