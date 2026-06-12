@@ -7220,7 +7220,13 @@ async function handleMessage(message, userId) {
   }
 
   if (!session) {
-    await say(chatId, "Use /start to choose an action.");
+    // Groups: never answer ordinary chatter. Only explicit commands and CA
+    // pastes (handled above) get a reply - everything else is people talking,
+    // not bot input. DMs get a gentle hint, throttled to once a minute so it
+    // never machine-guns "/start" at someone typing a few lines.
+    if (isPrivateChat(message.chat) && !tgCommandOnCooldown(chatId, "start_hint", 60_000)) {
+      await say(chatId, "Use /start to choose an action.");
+    }
     return;
   }
 
@@ -21032,7 +21038,7 @@ async function checkBoardCallOutcomes() {
 // candidate passes the full gate (top scanner row AND SlimeShield BUY verdict). No
 // qualified pick = no post; silence costs nothing, a bad call costs trust. Every drop
 // records its entry price, and when a called pick 2x's, the same chats get the receipt.
-const TG_ALPHA_DROP_INTERVAL_MS = Math.max(5, Math.min(24 * 60, Number.parseInt(process.env.TG_ALPHA_DROP_INTERVAL_MINUTES || "15", 10) || 15)) * 60 * 1000;
+const TG_ALPHA_DROP_INTERVAL_MS = Math.max(5, Math.min(24 * 60, Number.parseInt(process.env.TG_ALPHA_DROP_INTERVAL_MINUTES || "180", 10) || 180)) * 60 * 1000;
 // Conviction-engine epoch: calls recorded before this were volume-era (every
 // radar play tracked). Public stats count from here so the record reflects the
 // selective engine - older calls stay in the store, honestly labeled.
