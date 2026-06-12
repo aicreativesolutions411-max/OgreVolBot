@@ -27,6 +27,13 @@
       .stat span { font-size: 0.68rem; color: var(--dim); text-transform: uppercase; }
       .summary { color: var(--dim); font-size: 0.9rem; margin: 4px 0 14px; }
       .frame { width: 100%; height: min(58vh, 520px); border: 1px solid var(--line); border-radius: 14px; background: rgba(8,20,10,0.5); }
+      .chart-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 6px; }
+      .chart-bar .label { font-size: 0.72rem; color: var(--dim); text-transform: uppercase; letter-spacing: 0.08em; }
+      .tf-btn { background: rgba(8,20,10,0.7); border: 1px solid var(--line); color: var(--dim); border-radius: 8px;
+        padding: 4px 10px; font-size: 0.74rem; font-weight: 700; cursor: pointer; }
+      .tf-btn.on { color: #071006; background: var(--green); border-color: var(--green); }
+      .chart-live { font-size: 0.7rem; color: var(--green); }
+      .map-frame { width: 100%; height: 420px; border: 1px solid var(--line); border-radius: 14px; background: rgba(8,20,10,0.5); }
       .cta-row { display: flex; flex-wrap: wrap; gap: 10px; margin: 16px 0; }
       .cta { display: inline-block; padding: 12px 20px; border-radius: 999px; font-weight: 800; text-decoration: none; font-size: 0.9rem; }
       .cta.primary { color: #071006; background: linear-gradient(135deg, rgba(114,255,35,0.95), rgba(187,255,99,0.95)); }
@@ -49,14 +56,30 @@
       <p class="ca" data-ca title="Tap to copy"></p>
       <div class="stats" data-stats></div>
       <p class="summary" data-summary></p>
-      <iframe class="frame" data-frame title="Live chart" loading="lazy"></iframe>
+      <p class="meta" style="margin:-6px 0 12px">🛡 Triple-engine risk read: <b>SlimeShield × Rugcheck × GoPlus</b> — every flag is tracked to its outcome on the <a href="/proof" style="color:var(--green)">proof wall</a>.</p>
+      <div class="chart-bar">
+        <span class="label">SlimeWire live chart</span>
+        <span class="chart-live" data-chart-live hidden>● LIVE</span>
+        <div data-tfs>
+          <button type="button" class="tf-btn on" data-tf="1m">1m</button>
+          <button type="button" class="tf-btn" data-tf="5m">5m</button>
+          <button type="button" class="tf-btn" data-tf="15m">15m</button>
+          <button type="button" class="tf-btn" data-tf="1h">1h</button>
+        </div>
+      </div>
+      <div class="frame" data-chart></div>
+      <iframe class="frame" data-frame title="Live chart" loading="lazy" hidden></iframe>
       <div data-autopsy hidden></div>
       <div class="cta-row" data-ctas></div>
+      <h2>Holder map</h2>
+      <iframe class="map-frame" data-bubblemap title="Holder bubble map" loading="lazy"></iframe>
+      <p class="meta">Bubbles that cluster together usually mean bundled wallets. Map by <a href="https://bubblemaps.io" target="_blank" rel="noreferrer" style="color:var(--green)">Bubblemaps</a>.</p>
       <h2>Tracked calls on this token</h2>
       <div data-calls><p class="empty">Loading...</p></div>
       <footer>SlimeWire tracks every call to its outcome - wins AND losses. <a href="/proof">See the proof wall</a>. Not financial advice.</footer>
     </main>
     <script src="/config.js"></script>
+    <script src="/vendor/lightweight-charts.standalone.production.js"></script>
     <script>
       (async () => {
         const config = window.OGRE_PORTAL_CONFIG || {};
@@ -69,7 +92,116 @@
         }
         document.querySelector("[data-ca]").textContent = mint;
         document.querySelector("[data-ca]").addEventListener("click", () => navigator.clipboard?.writeText(mint));
-        document.querySelector("[data-frame]").src = "https://dexscreener.com/solana/" + encodeURIComponent(mint) + "?embed=1&theme=dark&trades=0&info=0";
+        document.querySelector("[data-bubblemap]").src = "https://app.bubblemaps.io/sol/token/" + encodeURIComponent(mint);
+
+        // ---- Native SlimeWire chart (lightweight-charts + our own OHLCV API).
+        // Falls back to the old DexScreener iframe only if no candles exist at all.
+        const TF_SECONDS = { "1m": 60, "5m": 300, "15m": 900, "1h": 3600 };
+        const chartEl = document.querySelector("[data-chart]");
+        const frameEl = document.querySelector("[data-frame]");
+        const liveDot = document.querySelector("[data-chart-live]");
+        const cs = { tf: "1m", chart: null, candles: null, volume: null, lastBar: null, source: "", lastTickAt: 0, fellBack: false };
+
+        function showChartFallback() {
+          if (cs.fellBack) return;
+          cs.fellBack = true;
+          chartEl.hidden = true;
+          frameEl.hidden = false;
+          frameEl.src = "https://dexscreener.com/solana/" + encodeURIComponent(mint) + "?embed=1&theme=dark&trades=0&info=0";
+        }
+
+        function ensureChart(lastClose) {
+          if (cs.chart || typeof LightweightCharts === "undefined") return Boolean(cs.chart);
+          const precision = lastClose > 0 ? Math.min(10, Math.max(2, Math.ceil(-Math.log10(lastClose)) + 3)) : 6;
+          cs.chart = LightweightCharts.createChart(chartEl, {
+            layout: { background: { color: "transparent" }, textColor: "#9fb59a", fontFamily: "Inter, system-ui, sans-serif" },
+            grid: { vertLines: { color: "rgba(114,255,35,0.06)" }, horzLines: { color: "rgba(114,255,35,0.06)" } },
+            crosshair: { mode: 0 },
+            rightPriceScale: { borderColor: "rgba(114,255,35,0.2)" },
+            timeScale: { borderColor: "rgba(114,255,35,0.2)", timeVisible: true, secondsVisible: cs.tf === "1m" },
+            width: chartEl.clientWidth,
+            height: chartEl.clientHeight
+          });
+          cs.candles = cs.chart.addCandlestickSeries({
+            upColor: "#46e85e", downColor: "#ff6b5e", borderUpColor: "#72ff23", borderDownColor: "#ff6b5e",
+            wickUpColor: "#72ff23", wickDownColor: "#ff6b5e",
+            priceFormat: { type: "price", precision, minMove: Number((1 / Math.pow(10, precision)).toFixed(precision)) }
+          });
+          cs.volume = cs.chart.addHistogramSeries({
+            priceFormat: { type: "volume" }, priceScaleId: "",
+            color: "rgba(114,255,35,0.35)"
+          });
+          cs.chart.priceScale("").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+          new ResizeObserver(() => cs.chart && cs.chart.applyOptions({ width: chartEl.clientWidth, height: chartEl.clientHeight })).observe(chartEl);
+          return true;
+        }
+
+        async function loadCandles(fit) {
+          try {
+            const res = await fetch(apiBase + "/api/web/ohlcv?mint=" + encodeURIComponent(mint) + "&tf=" + cs.tf, { cache: "no-store" });
+            const data = await res.json();
+            const rows = Array.isArray(data.candles) ? data.candles : [];
+            if (!rows.length) {
+              // Brand-new token: ticks may land any second. Retry before iframe fallback.
+              if (!cs.retryCount) cs.retryCount = 0;
+              cs.retryCount += 1;
+              if (cs.retryCount >= 4) showChartFallback();
+              return;
+            }
+            cs.retryCount = 0;
+            cs.source = data.source || "";
+            if (!ensureChart(rows[rows.length - 1].c)) { showChartFallback(); return; }
+            cs.candles.setData(rows.map((r) => ({ time: r.t, open: r.o, high: r.h, low: r.l, close: r.c })));
+            cs.volume.setData(rows.map((r) => ({ time: r.t, value: r.v, color: r.c >= r.o ? "rgba(114,255,35,0.35)" : "rgba(255,107,94,0.35)" })));
+            cs.lastBar = { ...rows[rows.length - 1] };
+            if (fit) cs.chart.timeScale().fitContent();
+            liveDot.hidden = false;
+          } catch {
+            if (!cs.chart) showChartFallback();
+          }
+        }
+
+        // Live trade ticks (PumpPortal stream) keep the current candle moving
+        // between candle refreshes - real sub-second chart life for fresh tokens.
+        async function pollTicks() {
+          if (!cs.chart || cs.fellBack) return;
+          try {
+            const res = await fetch(apiBase + "/api/web/trade-ticks?mint=" + encodeURIComponent(mint) + "&since=" + cs.lastTickAt, { cache: "no-store" });
+            const data = await res.json();
+            const solUsd = Number(data.solUsd) || 0;
+            const trades = Array.isArray(data.trades) ? data.trades : [];
+            if (!solUsd || !trades.length) return;
+            const tfSec = TF_SECONDS[cs.tf] || 60;
+            for (const trade of trades.slice().reverse()) {
+              cs.lastTickAt = Math.max(cs.lastTickAt, trade.at);
+              const price = Number(trade.marketCapSol) > 0 ? (trade.marketCapSol / 1e9) * solUsd : null;
+              if (!price || !cs.lastBar) continue;
+              const bucket = Math.floor(trade.at / 1000 / tfSec) * tfSec;
+              if (bucket > cs.lastBar.t) {
+                cs.lastBar = { t: bucket, o: price, h: price, l: price, c: price, v: 0 };
+              } else {
+                cs.lastBar.h = Math.max(cs.lastBar.h, price);
+                cs.lastBar.l = Math.min(cs.lastBar.l, price);
+                cs.lastBar.c = price;
+              }
+              cs.lastBar.v += (Number(trade.solAmount) || 0) * solUsd;
+              cs.candles.update({ time: cs.lastBar.t, open: cs.lastBar.o, high: cs.lastBar.h, low: cs.lastBar.l, close: cs.lastBar.c });
+              cs.volume.update({ time: cs.lastBar.t, value: cs.lastBar.v, color: cs.lastBar.c >= cs.lastBar.o ? "rgba(114,255,35,0.35)" : "rgba(255,107,94,0.35)" });
+            }
+          } catch {}
+        }
+
+        document.querySelector("[data-tfs]").addEventListener("click", (event) => {
+          const btn = event.target.closest("[data-tf]");
+          if (!btn) return;
+          cs.tf = btn.dataset.tf;
+          document.querySelectorAll(".tf-btn").forEach((el) => el.classList.toggle("on", el === btn));
+          loadCandles(true);
+        });
+
+        loadCandles(true);
+        setInterval(() => { if (!cs.fellBack) loadCandles(false); }, 15000);
+        setInterval(pollTicks, 3500);
         const fmt = (value) => {
           const number = Number(value);
           if (!Number.isFinite(number)) return "-";
@@ -102,6 +234,9 @@
           if (data.shield?.summary) document.querySelector("[data-summary]").textContent = data.shield.summary;
           if (data.rugcheck?.risks?.length) {
             document.querySelector("[data-summary]").textContent += " | Rugcheck: " + data.rugcheck.risks.slice(0, 3).map((risk) => risk.name).join(", ") + ".";
+          }
+          if (data.goplus?.flags?.length) {
+            document.querySelector("[data-summary]").textContent += " | GoPlus: " + data.goplus.flags.join(", ") + ".";
           }
           if (data.shieldPending) {
             document.querySelector("[data-summary]").textContent = "SlimeShield is computing a fresh read...";
@@ -183,7 +318,8 @@
           document.querySelector("[data-ctas]").innerHTML =
             '<a class="cta primary" href="' + terminalUrl + '&buy=1">⚡ Trade on SlimeWire</a>'
             + '<a class="cta ghost" href="' + terminalUrl + '">Open full terminal</a>'
-            + '<a class="cta ghost" href="' + esc(apiBase) + '/api/web/signal-card?tokenMint=' + encodeURIComponent(mint) + '" target="_blank" rel="noreferrer">📸 Share card</a>';
+            + '<a class="cta ghost" href="' + esc(apiBase) + '/api/web/signal-card?tokenMint=' + encodeURIComponent(mint) + '" target="_blank" rel="noreferrer">📸 Share card</a>'
+            + '<a class="cta ghost" href="https://app.bubblemaps.io/sol/token/' + encodeURIComponent(mint) + '" target="_blank" rel="noreferrer">🫧 Holder map</a>';
           const calls = (data.calls || []).map((call) => {
             const icon = { bullish: "🟢", bearish: "🔴", warning: "⚠️", question: "❓" }[call.side] || "⚪";
             const result = call.status === "resolved"

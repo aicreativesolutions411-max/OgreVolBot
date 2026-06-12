@@ -673,9 +673,12 @@ test("Ogre A.I. fresh ape prefers under-5k starting-volume pairs before fallback
 
 test("Ogre A.I. server collapses old mode names into fresh ape defaults", () => {
   assert.match(serverFunctionBody("normalizeOgreAiMode"), /return "fresh_ape"/);
-  assert.match(serverFunctionBody("ogreAiModeDefaults"), /preferredMaxMarketCap:\s*5_000/);
-  assert.match(serverFunctionBody("ogreAiModeDefaults"), /maxMarketCap:\s*8_000/);
-  assert.match(serverFunctionBody("ogreAiModeDefaults"), /minMarketCap:\s*1_500/);
+  // Fresh APE band: under-30s pairs with MC >= $3k (sourced from the
+  // PumpPortal websocket, so sub-minute ages are exact).
+  assert.match(serverFunctionBody("ogreAiModeDefaults"), /preferredMaxMarketCap:\s*8_000/);
+  assert.match(serverFunctionBody("ogreAiModeDefaults"), /maxMarketCap:\s*15_000/);
+  assert.match(serverFunctionBody("ogreAiModeDefaults"), /minMarketCap:\s*3_000/);
+  assert.match(serverFunctionBody("ogreAiModeDefaults"), /maxAgeMinutes:\s*0\.5/);
   assert.match(serverFunctionBody("ogreAiModeDefaults"), /minStartingVolumeUsd:\s*60/);
   assert.match(serverFunctionBody("ogreAiScannerModesForTarget"), /\["pumpsnipe", "moonshot", "fast"\]/);
 });

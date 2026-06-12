@@ -79,6 +79,7 @@ import {
   safeLaunchImageDiagnostics
 } from "./lib/launchImageProcessor.js";
 import { createTokenMetadataResolver } from "./lib/tokenMetadataResolver.js";
+import { createPumpPortalStream } from "./lib/pumpPortalStream.js";
 import { computeSlimeShield } from "./lib/slimeShield.js";
 import {
   appendLimited,
@@ -137,6 +138,18 @@ const tgChannel = createTelegramChannelBridge({
   log: (message) => console.warn(`[tg-channel] ${message}`)
 });
 const connection = new Connection(CONFIG.rpcUrl, "confirmed");
+// One shared PumpPortal websocket: sub-second token creations + live trade
+// ticks. Feeds the fresh live-pairs bucket, Ogre A.I. fresh mode, and chart
+// trade ticks without any polling. Free tier, same provider we launch through.
+const pumpPortalStream = createPumpPortalStream({
+  url: CONFIG.pumpPortalWsUrl,
+  getSolUsd: () => (Number.isFinite(solUsdPriceCache?.value) && solUsdPriceCache.value > 0 ? solUsdPriceCache.value : null),
+  log: (message) => console.log(`[pumpportal-ws] ${message}`),
+  // Instant dev-watch: every pump.fun creation carries its creator wallet.
+  onCreation: (entry) => {
+    void handlePumpPortalCreationForDevWatch(entry).catch(() => {});
+  }
+});
 const rpcLimiter = createRpcLimiter();
 const priorityRpcLimiter = createRpcLimiter({
   minIntervalMs: Math.max(Math.min(CONFIG.rpcMinIntervalMs, 75), CONFIG.rpcMinIntervalFromRpsMs)
@@ -181,6 +194,10 @@ let sniperCandidatesCache = { cachedAt: 0, value: [] };
 const dexSearchCandidatesCache = new Map();
 let photonNewPairsCache = { cachedAt: 0, value: [] };
 let manualLaunchCandidatesCache = { cachedAt: 0, value: [] };
+// Native chart data: GeckoTerminal pool + OHLCV caches (free API, ~30 req/min,
+// so candles are cached briefly and pool lookups for longer).
+const geckoPoolCache = new Map();
+const geckoOhlcvCache = new Map();
 let livePairsSharedCache = new Map();
 let kolScanSharedCache = new Map();
 const kolDumpStatsCache = new Map();
@@ -448,6 +465,11 @@ async function main() {
     console.log("Web internal DCA interval runner disabled; Render worker tick owns DCA checks.");
   }
   startOgreAutopilotRunner();
+  if (CONFIG.pumpPortalWsEnabled) {
+    pumpPortalStream.start();
+    // Warm the SOL/USD cache so realtime creations get USD market caps immediately.
+    void getSolUsdPrice().catch(() => {});
+  }
 
   if (CONFIG.webhookUrl) {
     await setupWebhook();
@@ -875,6 +897,9 @@ function loadConfig() {
     rpcEnvSource: rpcConfig.envSource,
     publicRpcFallbackAllowed: rpcConfig.publicFallbackAllowed,
     heliusWsUrl,
+    heliusApiKey: String(process.env.HELIUS_API_KEY || "").trim() || (String(rpcConfig.url || "").match(/api-key=([\w-]+)/)?.[1] || ""),
+    heliusWebhookId: String(process.env.HELIUS_WEBHOOK_ID || "").trim(),
+    heliusWebhookSecret: String(process.env.HELIUS_WEBHOOK_SECRET || "").trim(),
     appSecret: secret,
     dataDir: path.resolve(process.cwd(), process.env.DATA_DIR || path.join(__dirname, "..", "data")),
     allowEphemeralStorage: parseBoolean(process.env.ALLOW_EPHEMERAL_STORAGE || "false"),
@@ -918,6 +943,8 @@ function loadConfig() {
     tokenAvatarFixEnabled,
     pumpPortalSellFallbackEnabled,
     pumpPortalTradeLocalUrl,
+    pumpPortalWsEnabled: parseBoolean(process.env.PUMPPORTAL_WS_ENABLED || "true"),
+    pumpPortalWsUrl: (process.env.PUMPPORTAL_WS_URL || "wss://pumpportal.fun/api/data").trim(),
     minExitMarketCapUsd,
     minExitLiquidityUsd,
     stopLossCheckIntervalMs,
@@ -1266,6 +1293,36 @@ function startHealthServer() {
       return;
     }
 
+    // Helius enhanced-transaction webhook: any tx from a watched wallet lands
+    // here seconds after it confirms. Auth via the webhook's authHeader value.
+    // Handled before the generic /api dispatch - it has no web session.
+    if (request.method === "POST" && requestUrl.pathname === "/api/internal/helius-webhook") {
+      if (CONFIG.heliusWebhookSecret && request.headers.authorization !== CONFIG.heliusWebhookSecret) {
+        response.writeHead(401, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ ok: false, error: "unauthorized" }));
+        return;
+      }
+      try {
+        const body = JSON.parse(await readRequestBody(request));
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ ok: true }));
+        const transactions = Array.isArray(body) ? body : [body];
+        const watched = await watchedDevWalletSet();
+        const touched = new Set();
+        for (const tx of transactions) {
+          const wallets = [tx?.feePayer, ...(Array.isArray(tx?.accountData) ? tx.accountData.map((item) => item?.account) : [])];
+          for (const wallet of wallets) {
+            if (wallet && watched.has(String(wallet))) touched.add(String(wallet));
+          }
+        }
+        if (touched.size) scheduleInstantWatchedDevCheck();
+      } catch {
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ ok: true }));
+      }
+      return;
+    }
+
     if (requestUrl.pathname.startsWith("/api/")
       || requestUrl.pathname.startsWith("/internal/")
       || requestUrl.pathname === "/worker/tick"
@@ -1280,6 +1337,15 @@ function startHealthServer() {
       || requestUrl.pathname === "/portal" || requestUrl.pathname.startsWith("/portal/")
       || requestUrl.pathname === "/terminal" || requestUrl.pathname.startsWith("/terminal/"))) {
       await serveWebPortal(requestUrl, response, request.method, request.headers["accept-encoding"]);
+      return;
+    }
+
+    // /t and /proof from the Node origin too (static hosts resolve t.html
+    // natively; this origin needs explicit routes). /t?ca= gets per-token OG
+    // tags injected server-side: crawlers never run JS, so without this every
+    // shared link unfurls with a generic image instead of the live shield read.
+    if (request.method === "GET" && ["/t", "/t.html", "/proof", "/proof.html"].includes(requestUrl.pathname)) {
+      await serveTokenSharePage(requestUrl, response);
       return;
     }
 
@@ -1332,6 +1398,7 @@ function startHealthServer() {
           requiredBufferSol: CONFIG.pumpLaunchRequiredBufferSol
         },
         metadataProvider: metadataProviderHealth,
+        pumpPortalStream: pumpPortalStream.stats(),
         keepAlive: lastKeepAliveStatus
       }));
       return;
@@ -2040,6 +2107,47 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    // PUBLIC OHLCV candles for native SlimeWire charts: GeckoTerminal for
+    // indexed pools, synthesized from live PumpPortal ticks for brand-new
+    // bonding-curve tokens. Free APIs, cached server-side.
+    if (request.method === "GET" && pathname === "/api/web/ohlcv") {
+      const ohlcvMint = parsePublicKey(String(requestUrl.searchParams.get("mint") || "")).toBase58();
+      const tfRaw = String(requestUrl.searchParams.get("tf") || "1m").toLowerCase();
+      const tfKey = OHLCV_TIMEFRAMES[tfRaw] ? tfRaw : "1m";
+      const payload = await webOhlcvPayload(ohlcvMint, tfKey);
+      sendCachedWebJson(request, response, 200, payload, "public, max-age=10, stale-while-revalidate=30");
+      return;
+    }
+
+    // PUBLIC trade ticks: live trades for a mint straight off the PumpPortal
+    // websocket. Calling this also (re)subscribes the mint so charts get live
+    // ticks for the next few minutes. Bonding-curve tokens only - graduated
+    // pairs fall back to candle refreshes.
+    if (request.method === "GET" && pathname === "/api/web/trade-ticks") {
+      const tickMint = parsePublicKey(String(requestUrl.searchParams.get("mint") || "")).toBase58();
+      pumpPortalStream.watchMint(tickMint);
+      const sinceMs = Number(requestUrl.searchParams.get("since")) || 0;
+      const trades = pumpPortalStream.getTrades(tickMint, { limit: 160 })
+        .filter((trade) => trade.at > sinceMs)
+        .map((trade) => ({
+          at: trade.at,
+          side: trade.side,
+          solAmount: trade.solAmount,
+          tokenAmount: trade.tokenAmount,
+          priceSol: trade.priceSol,
+          marketCapSol: trade.marketCapSol
+        }));
+      const solUsd = Number.isFinite(solUsdPriceCache?.value) ? solUsdPriceCache.value : null;
+      sendWebJson(request, response, 200, {
+        ok: true,
+        mint: tickMint,
+        connected: pumpPortalStream.isConnected(),
+        solUsd,
+        trades
+      });
+      return;
+    }
+
     // PUBLIC token read: powers the shareable /t?ca= page - shield verdict, market
     // stats, and the call board without a login. "Saw it on X? Verify it on SlimeWire."
     if (request.method === "GET" && pathname === "/api/web/token-read") {
@@ -2120,6 +2228,14 @@ async function handleWebApiRequest(request, response, requestUrl) {
       const cardMint = parsePublicKey(String(requestUrl.searchParams.get("tokenMint") || "")).toBase58();
       const png = await renderSignalCard(cardMint);
       sendWebBinary(request, response, 200, png, "image/png", `slimewire-signal-${shortMint(cardMint)}.png`);
+      return;
+    }
+
+    // PUBLIC aggregate Shield Report PNG: weekly receipts as one shareable card.
+    // Post it on X as-is: "?days=7" (default) or up to 90.
+    if (request.method === "GET" && pathname === "/api/web/shield-report-card") {
+      const png = await renderShieldReportCard(Number(requestUrl.searchParams.get("days")) || 7);
+      sendWebBinary(request, response, 200, png, "image/png", "slimewire-shield-report.png");
       return;
     }
 
@@ -2697,6 +2813,10 @@ async function handleWebApiRequest(request, response, requestUrl) {
         }
         await writeJsonFile(watchDevsPath(), store);
       });
+      // Refresh the in-memory watch set (instant alerts) and push the new
+      // address list to the Helius webhook if one is configured.
+      void watchedDevWalletSet(true).catch(() => {});
+      void syncHeliusWebhookAddresses().catch(() => {});
       sendWebJson(request, response, 200, { ok: true, wallet, watching });
       return;
     }
@@ -6819,7 +6939,17 @@ async function handleMessage(message, userId) {
   if (!text) return;
 
   // Groups: remember the chat (for opt-in alerts) and serve the group command set.
-  if (!isPrivateChat(message.chat)) registerTelegramGroup(message.chat);
+  if (!isPrivateChat(message.chat)) {
+    registerTelegramGroup(message.chat);
+    // Bare CA pasted in a group = automatic shield read. Someone drops a
+    // contract, SlimeWire answers with the verdict + chart + trade links -
+    // the most natural funnel there is. Cooldown inside the handler stops spam.
+    const bareCa = /^\$?([A-HJ-NP-Za-km-z1-9]{32,48})$/.exec(text.replace(/\s+/g, ""));
+    if (bareCa) {
+      await handleTelegramLookCommand(chatId, message, bareCa[1]);
+      return;
+    }
+  }
 
   const lookCommand = parseCommandWithArgument(text, ["look", "scan_ca", "check"]);
   if (lookCommand) {
@@ -14168,17 +14298,46 @@ async function recordReferralFeePayout({ userId, referrerUserId, referralWallet,
   });
 }
 
+// Wallet reads keep a "last known good" window: when a refresh burst gets
+// rate-limited, we show balances from the last few minutes instead of an empty
+// wallet + error. An empty answer is ALWAYS worse than a slightly old one.
+const WALLET_READ_STALE_FALLBACK_MS = 5 * 60 * 1000;
+const tokenAccountsInFlight = new Map();
+const solBalanceInFlight = new Map();
+
+function staleWalletCacheValue(cache, key, maxAgeMs = WALLET_READ_STALE_FALLBACK_MS) {
+  const entry = cache.get(key);
+  if (!entry) return undefined;
+  if (Date.now() - entry.createdAt > maxAgeMs) return undefined;
+  return entry.value;
+}
+
 async function getSolBalanceCached(owner, options = {}) {
   const ownerKey = owner instanceof PublicKey ? owner : new PublicKey(owner);
   const cacheKey = ownerKey.toBase58();
   const cached = getTimedCache(solBalanceCache, cacheKey, options.ttlMs);
   if (!options.force && cached !== undefined) return cached;
 
-  const balance = await rpcWithRetry("get wallet SOL balance", () => connection.getBalance(ownerKey, "confirmed"), CONFIG.rpcRetries, {
-    priority: Boolean(options.priority)
-  });
-  setTimedCache(solBalanceCache, cacheKey, balance);
-  return balance;
+  // Single-flight: simultaneous refreshes (positions + wallets + summary all
+  // fire on one click) share one RPC read instead of three.
+  const inFlight = solBalanceInFlight.get(cacheKey);
+  if (inFlight) return inFlight;
+
+  const fetchPromise = (async () => {
+    try {
+      const balance = await rpcWithRetry("get wallet SOL balance", () => connection.getBalance(ownerKey, "confirmed"), CONFIG.rpcRetries, {
+        priority: Boolean(options.priority)
+      });
+      setTimedCache(solBalanceCache, cacheKey, balance);
+      return balance;
+    } catch (error) {
+      const stale = staleWalletCacheValue(solBalanceCache, cacheKey);
+      if (stale !== undefined) return stale;
+      throw error;
+    }
+  })().finally(() => solBalanceInFlight.delete(cacheKey));
+  solBalanceInFlight.set(cacheKey, fetchPromise);
+  return fetchPromise;
 }
 
 // ONE Helius call for up to 100 wallets instead of one getBalance each: primes
@@ -14345,9 +14504,33 @@ async function getOwnedTokenAccountsWithWarningsCached(owner, options = {}) {
   const cached = getTimedCache(tokenAccountsCache, cacheKey, options.ttlMs);
   if (!options.force && cached) return cached;
 
-  const result = await getOwnedTokenAccountsWithWarnings(ownerKey, options);
-  setTimedCache(tokenAccountsCache, cacheKey, result);
-  return result;
+  // Single-flight: one in-flight RPC pass per wallet no matter how many
+  // panels ask at once. A force-refresh joining an in-flight fetch still gets
+  // data that is at most a second old.
+  const inFlight = tokenAccountsInFlight.get(cacheKey);
+  if (inFlight) return inFlight;
+
+  const fetchPromise = (async () => {
+    const result = await getOwnedTokenAccountsWithWarnings(ownerKey, options);
+    if (result.successes > 0) {
+      setTimedCache(tokenAccountsCache, cacheKey, result);
+      return result;
+    }
+    // Both program lookups failed (rate-limit burst / RPC hiccup). Never cache
+    // the failure - that used to overwrite good data and poison the next 12s.
+    // Serve the last known good read from the past few minutes instead.
+    const stale = staleWalletCacheValue(tokenAccountsCache, cacheKey);
+    if (stale?.successes > 0) {
+      return {
+        ...stale,
+        warnings: [...(result.warnings || []), "Showing last known balances - RPC was busy, refresh again in a few seconds."],
+        stale: true
+      };
+    }
+    return result;
+  })().finally(() => tokenAccountsInFlight.delete(cacheKey));
+  tokenAccountsInFlight.set(cacheKey, fetchPromise);
+  return fetchPromise;
 }
 
 function parseTokenAccountResponse(response, tokenProgramId = null) {
@@ -15078,7 +15261,7 @@ async function buildPositionsOverview(userId, options = {}) {
   await runWithConcurrency(wallets, CONFIG.balanceConcurrency, async (wallet) => {
     try {
       const keypair = decryptWallet(wallet);
-      const { accounts } = await getOwnedTokenAccountsWithWarningsCached(keypair.publicKey, { force: Boolean(options.force) });
+      const { accounts } = await getOwnedTokenAccountsWithWarningsCached(keypair.publicKey, { force: Boolean(options.force), priority: Boolean(options.force) });
       for (const account of accounts.filter((item) => item.rawAmount > 0n)) {
         const position = ensurePosition(positions, account.mint);
         position.rawAmount += account.rawAmount;
@@ -15098,7 +15281,7 @@ async function buildPositionsOverview(userId, options = {}) {
   if (connectedWalletPublicKey && !wallets.some((wallet) => wallet.publicKey === connectedWalletPublicKey)) {
     try {
       const owner = new PublicKey(connectedWalletPublicKey);
-      const { accounts } = await getOwnedTokenAccountsWithWarningsCached(owner, { force: Boolean(options.force) });
+      const { accounts } = await getOwnedTokenAccountsWithWarningsCached(owner, { force: Boolean(options.force), priority: Boolean(options.force) });
       for (const account of accounts.filter((item) => item.rawAmount > 0n)) {
         const position = ensurePosition(positions, account.mint);
         position.rawAmount += account.rawAmount;
@@ -16681,7 +16864,10 @@ async function fetchLivePairCandidates(options = {}) {
       : fetchDexSearchCandidatesForLiveBucket(safeBucket, options).catch(() => [])
   ]);
   const freshDexRows = dexLatest.filter((candidate) => candidate.source !== "top-boost" || safeBucket !== "live");
-  return uniqueSniperCandidates([...photon, ...pumpLatest, ...dexBucketSearch, ...freshDexRows])
+  // Realtime PumpPortal creations go first: they arrive sub-second over the
+  // shared websocket, so the "live" bucket shows pairs seconds after launch.
+  const realtime = pumpPortalStream.getCreationCandidates({ limit: 150 });
+  return uniqueSniperCandidates([...realtime, ...photon, ...pumpLatest, ...dexBucketSearch, ...freshDexRows])
     .sort(compareLivePairCandidates);
 }
 
@@ -16730,6 +16916,134 @@ function livePairBucketSearchQueries(bucket, scanState = {}) {
 
 function compareLivePairCandidates(a, b) {
   return Number(livePairCandidateCreatedAt(b) || 0) - Number(livePairCandidateCreatedAt(a) || 0);
+}
+
+// ---- Native chart OHLCV (GeckoTerminal candles + PumpPortal tick synth) ----
+// Powers SlimeWire-branded lightweight-charts instead of the DexScreener
+// iframe. GeckoTerminal serves free OHLCV for any indexed Solana pool; brand
+// new bonding-curve tokens have no pool yet, so their candles are synthesized
+// from the live PumpPortal trade stream we are already subscribed to.
+
+const OHLCV_TIMEFRAMES = {
+  "1m": { path: "minute", aggregate: 1, seconds: 60 },
+  "5m": { path: "minute", aggregate: 5, seconds: 300 },
+  "15m": { path: "minute", aggregate: 15, seconds: 900 },
+  "1h": { path: "hour", aggregate: 1, seconds: 3600 },
+  "4h": { path: "hour", aggregate: 4, seconds: 14400 },
+  "1d": { path: "day", aggregate: 1, seconds: 86400 }
+};
+
+async function resolveGeckoPoolForMint(mint) {
+  const cached = geckoPoolCache.get(mint);
+  if (cached && Date.now() - cached.at < (cached.pool ? 10 * 60 * 1000 : 90 * 1000)) {
+    return cached.pool;
+  }
+  const data = await fetchJson(
+    `https://api.geckoterminal.com/api/v2/networks/solana/tokens/${encodeURIComponent(mint)}/pools?page=1`,
+    { headers: { Accept: "application/json" }, timeoutMs: 3_500 }
+  ).catch(() => null);
+  const pools = Array.isArray(data?.data) ? data.data : [];
+  const best = pools
+    .map((item) => ({
+      address: String(item?.attributes?.address || ""),
+      reserveUsd: Number(item?.attributes?.reserve_in_usd) || 0
+    }))
+    .filter((item) => item.address)
+    .sort((a, b) => b.reserveUsd - a.reserveUsd)[0] || null;
+  const pool = best?.address || null;
+  geckoPoolCache.set(mint, { at: Date.now(), pool });
+  if (geckoPoolCache.size > 500) {
+    const oldest = [...geckoPoolCache.entries()].sort((a, b) => a[1].at - b[1].at)[0]?.[0];
+    if (oldest) geckoPoolCache.delete(oldest);
+  }
+  return pool;
+}
+
+async function fetchGeckoOhlcv(mint, tfKey) {
+  const tf = OHLCV_TIMEFRAMES[tfKey] || OHLCV_TIMEFRAMES["1m"];
+  const pool = await resolveGeckoPoolForMint(mint);
+  if (!pool) return { candles: [], poolAddress: null };
+  const data = await fetchJson(
+    `https://api.geckoterminal.com/api/v2/networks/solana/pools/${encodeURIComponent(pool)}/ohlcv/${tf.path}?aggregate=${tf.aggregate}&limit=300&currency=usd&token=base`,
+    { headers: { Accept: "application/json" }, timeoutMs: 4_000 }
+  ).catch(() => null);
+  const list = Array.isArray(data?.data?.attributes?.ohlcv_list) ? data.data.attributes.ohlcv_list : [];
+  const candles = list
+    .map((row) => ({
+      t: Number(row?.[0]) || 0,
+      o: Number(row?.[1]) || 0,
+      h: Number(row?.[2]) || 0,
+      l: Number(row?.[3]) || 0,
+      c: Number(row?.[4]) || 0,
+      v: Number(row?.[5]) || 0
+    }))
+    .filter((candle) => candle.t > 0 && candle.c > 0)
+    .sort((a, b) => a.t - b.t);
+  return { candles, poolAddress: pool };
+}
+
+// Bonding-curve tokens: build candles out of the live trade ticks we hold in
+// memory. History starts when the websocket first saw the token (its creation
+// for fresh launches), which is exactly when degens care about it.
+function synthCandlesFromPumpTrades(mint, tfKey) {
+  const tf = OHLCV_TIMEFRAMES[tfKey] || OHLCV_TIMEFRAMES["1m"];
+  const solUsd = Number.isFinite(solUsdPriceCache?.value) && solUsdPriceCache.value > 0 ? solUsdPriceCache.value : null;
+  if (!solUsd) return [];
+  const trades = pumpPortalStream.getTrades(mint, { limit: 240 });
+  if (!trades.length) return [];
+  const buckets = new Map();
+  for (const trade of [...trades].reverse()) { // oldest first
+    // pump.fun supply is 1B; marketCapSol is the steadiest per-trade price read.
+    const priceUsd = Number(trade.marketCapSol) > 0
+      ? (trade.marketCapSol / 1_000_000_000) * solUsd
+      : Number(trade.priceSol) > 0 ? trade.priceSol * solUsd : null;
+    if (!priceUsd) continue;
+    const bucketTs = Math.floor(trade.at / 1000 / tf.seconds) * tf.seconds;
+    const volumeUsd = (Number(trade.solAmount) || 0) * solUsd;
+    const bucket = buckets.get(bucketTs);
+    if (!bucket) {
+      buckets.set(bucketTs, { t: bucketTs, o: priceUsd, h: priceUsd, l: priceUsd, c: priceUsd, v: volumeUsd });
+    } else {
+      bucket.h = Math.max(bucket.h, priceUsd);
+      bucket.l = Math.min(bucket.l, priceUsd);
+      bucket.c = priceUsd;
+      bucket.v += volumeUsd;
+    }
+  }
+  return [...buckets.values()].sort((a, b) => a.t - b.t);
+}
+
+async function webOhlcvPayload(mint, tfKey) {
+  const cacheKey = `${mint}:${tfKey}`;
+  const cached = geckoOhlcvCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < 12_000) return cached.payload;
+
+  pumpPortalStream.watchMint(mint); // start collecting live ticks either way
+  let { candles, poolAddress } = await fetchGeckoOhlcv(mint, tfKey);
+  let source = candles.length ? "geckoterminal" : "";
+  if (!candles.length) {
+    candles = synthCandlesFromPumpTrades(mint, tfKey);
+    source = candles.length ? "pumpportal" : "none";
+  }
+  const payload = {
+    ok: true,
+    mint,
+    tf: tfKey,
+    source,
+    poolAddress: poolAddress || null,
+    lastPriceUsd: candles.length ? candles[candles.length - 1].c : null,
+    candles
+  };
+  // Never cache an empty answer for long - a fresh token can get its first
+  // candle seconds from now.
+  if (candles.length) {
+    geckoOhlcvCache.set(cacheKey, { at: Date.now(), payload });
+    if (geckoOhlcvCache.size > 300) {
+      const oldest = [...geckoOhlcvCache.entries()].sort((a, b) => a[1].at - b[1].at)[0]?.[0];
+      if (oldest) geckoOhlcvCache.delete(oldest);
+    }
+  }
+  return payload;
 }
 
 // Resolve a free-text query ($OGRE, ogre, a name, or a raw mint) to the most
@@ -16841,7 +17155,8 @@ async function fetchManualLaunchCandidates() {
     fetchPhotonNewPairCandidates({ ttlMs: cacheTtlMs }).catch(() => []),
     fetchPumpSnipeCandidates({ ttlMs: cacheTtlMs, timeoutMs: 2_500 }).catch(() => [])
   ]);
-  const value = uniqueSniperCandidates([...photon, ...pump]);
+  const realtime = pumpPortalStream.getCreationCandidates({ limit: 150 });
+  const value = uniqueSniperCandidates([...realtime, ...photon, ...pump]);
   manualLaunchCandidatesCache = { cachedAt: Date.now(), value };
   return value;
 }
@@ -20479,6 +20794,76 @@ async function renderSignalCard(tokenMint) {
   return png;
 }
 
+// Aggregate "Shield Report" card: the engine's track record over a window as a
+// single shareable PNG. Built for posting on X/Telegram - receipts ARE the
+// marketing. Same visual language as the signal/PnL cards.
+let shieldReportCardCache = { at: 0, days: 0, png: null };
+
+async function renderShieldReportCard(days = 7) {
+  const safeDays = Math.max(1, Math.min(90, Math.round(Number(days) || 7)));
+  if (shieldReportCardCache.png && shieldReportCardCache.days === safeDays && Date.now() - shieldReportCardCache.at < 10 * 60 * 1000) {
+    return shieldReportCardCache.png;
+  }
+  const [receiptsStore, callsStore] = await Promise.all([
+    readShieldReceipts().catch(() => ({ receipts: [] })),
+    readAlphaCalls().catch(() => ({ calls: [] }))
+  ]);
+  const cutoff = Date.now() - safeDays * 24 * 60 * 60 * 1000;
+  const inWindow = (item, field) => Date.parse(item?.[field] || "") >= cutoff;
+  const receipts = receiptsStore.receipts.filter((item) => inWindow(item, "flaggedAt"));
+  const resolved = receipts.filter((item) => item.status === "resolved");
+  const rugged = resolved.filter((item) => item.outcome === "rugged");
+  const warningTimes = rugged.map((item) => Number(item.confirmedAfterMinutes)).filter((minutes) => Number.isFinite(minutes) && minutes > 0);
+  const avgWarning = warningTimes.length ? Math.round(warningTimes.reduce((sum, m) => sum + m, 0) / warningTimes.length) : null;
+  const wins = callsStore.calls.filter((call) => call.status === "resolved" && call.outcome === "won" && inWindow(call, "resolvedAt"));
+  const bestX = wins.length ? Math.max(...wins.map((call) => Number(call.peakX) || 0)) : null;
+  const catchRate = resolved.length ? Math.round((rugged.length / resolved.length) * 100) : null;
+
+  const stat = (x, value, label, color = PNL_CARD_STYLE.slime) => `
+  <text x="${x}" y="392" text-anchor="middle" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="92" font-weight="900" fill="${color}" filter="url(#slimeGlow)">${escapeSvg(String(value))}</text>
+  <text x="${x}" y="442" text-anchor="middle" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="26" font-weight="800" fill="${PNL_CARD_STYLE.muted}">${escapeSvg(label)}</text>`;
+  const borderDataUrl = await nextPnlBorderDataUrl();
+  const borderLayer = borderDataUrl
+    ? `<image href="${borderDataUrl}" x="0" y="0" width="${PNL_CARD_STYLE.width}" height="${PNL_CARD_STYLE.height}" preserveAspectRatio="xMidYMid slice"/>`
+    : pnlSlimeBorderSvg();
+  const rangeLabel = safeDays === 7 ? "LAST 7 DAYS" : safeDays === 30 ? "LAST 30 DAYS" : `LAST ${safeDays} DAYS`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${PNL_CARD_STYLE.width}" height="${PNL_CARD_STYLE.height}" viewBox="0 0 ${PNL_CARD_STYLE.width} ${PNL_CARD_STYLE.height}">
+  <defs>
+    <linearGradient id="repBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#061006"/>
+      <stop offset="48%" stop-color="#0b2b12"/>
+      <stop offset="100%" stop-color="#020702"/>
+    </linearGradient>
+    <radialGradient id="repGlow" cx="50%" cy="38%" r="55%">
+      <stop offset="0%" stop-color="${PNL_CARD_STYLE.slime}" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="${PNL_CARD_STYLE.slime}" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="repShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="20" stdDeviation="24" flood-color="#000000" flood-opacity="0.55"/>
+    </filter>
+    <filter id="slimeGlow" x="-10%" y="-20%" width="120%" height="145%">
+      <feDropShadow dx="0" dy="0" stdDeviation="5" flood-color="${PNL_CARD_STYLE.slime}" flood-opacity="0.95"/>
+      <feDropShadow dx="0" dy="0" stdDeviation="18" flood-color="${PNL_CARD_STYLE.slime}" flood-opacity="0.42"/>
+    </filter>
+  </defs>
+  <rect width="${PNL_CARD_STYLE.width}" height="${PNL_CARD_STYLE.height}" fill="url(#repBg)"/>
+  <rect width="${PNL_CARD_STYLE.width}" height="${PNL_CARD_STYLE.height}" fill="url(#repGlow)"/>
+  ${borderLayer}
+  <rect x="42" y="86" width="1116" height="510" rx="42" fill="${PNL_CARD_STYLE.panel}" filter="url(#repShadow)" stroke="rgba(255,255,255,0.09)"/>
+  <text x="600" y="180" text-anchor="middle" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="58" font-weight="900" fill="${PNL_CARD_STYLE.slime}" filter="url(#slimeGlow)">SLIMESHIELD REPORT</text>
+  <text x="600" y="224" text-anchor="middle" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="28" font-weight="800" fill="${PNL_CARD_STYLE.muted}">${escapeSvg(rangeLabel)} - TRIPLE-ENGINE RISK READS, EVERY FLAG TRACKED TO ITS OUTCOME</text>
+  ${stat(238, receipts.length, "TOKENS FLAGGED")}
+  ${stat(600, rugged.length, "CONFIRMED RUGS CALLED", "#ff6b5e")}
+  ${stat(962, avgWarning != null ? `${avgWarning}m` : "-", "AVG WARNING BEFORE RUG")}
+  ${catchRate != null ? `<text x="600" y="510" text-anchor="middle" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="30" font-weight="800" fill="#d6ffbf">${escapeSvg(`${catchRate}% of resolved flags went to zero`)}${bestX ? escapeSvg(` - best tracked call hit ${bestX}x`) : ""}</text>` : ""}
+  <text x="72" y="630" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="26" font-weight="800" fill="#7d937a">SlimeShield x Rugcheck x GoPlus</text>
+  <text x="1128" y="630" text-anchor="end" font-family="${PNL_CARD_STYLE.fontFamily}" font-size="32" font-weight="900" fill="#72ff23">slimewire.org/proof</text>
+</svg>`;
+  const png = await sharp(Buffer.from(svg)).png().toBuffer();
+  shieldReportCardCache = { at: Date.now(), days: safeDays, png };
+  return png;
+}
+
 // --- Call Board: structured, auto-tracked calls tied to real token data -----------
 // Not a chat. Every post is a position statement (bullish/bearish/warning/question)
 // stamped with the SlimeShield score and entry price at post time, then tracked to its
@@ -21013,6 +21398,72 @@ function sendShareHtml(response, html) {
   response.end(html);
 }
 
+// /t and /proof pages served with share-crawler-grade meta tags. For /t?ca=
+// the OG title/description/image are rewritten per token: symbol, SlimeShield
+// verdict (from the warm cache only - never block a crawler on a cold compute),
+// market stats, and the PNG signal card as the unfurl image.
+async function serveTokenSharePage(requestUrl, response) {
+  const page = requestUrl.pathname.startsWith("/proof") ? "proof.html" : "t.html";
+  let html;
+  try {
+    html = await fs.readFile(path.join(WEB_STATIC_DIR, page), "utf8");
+  } catch {
+    response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+    response.end("Not found");
+    return;
+  }
+  if (page === "t.html") {
+    const mint = (requestUrl.searchParams.get("ca") || requestUrl.searchParams.get("token") || "")
+      .replace(/[^A-HJ-NP-Za-km-z1-9]/g, "").slice(0, 48);
+    if (mint) {
+      try {
+        html = await injectTokenShareTags(html, mint);
+      } catch {
+        // share tags are best-effort; the page itself must always render
+      }
+    }
+  }
+  response.writeHead(200, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "public, max-age=30, stale-while-revalidate=300"
+  });
+  response.end(html);
+}
+
+async function injectTokenShareTags(html, mint) {
+  let pair = pairLiteCache.get(mint)?.payload?.pair || null;
+  if (!pair) {
+    // Cold hit (usually a crawler): give market data a short budget, then ship.
+    pair = await Promise.race([
+      (async () => {
+        const pairs = await fetchDexScreenerTokenPairsFallback(mint).catch(() => []);
+        return bestDexPairForToken(mint, pairs) || await pumpCurvePairFallback(mint).catch(() => null);
+      })(),
+      new Promise((resolve) => setTimeout(() => resolve(null), 900))
+    ]).catch(() => null);
+  }
+  const shield = cachedSlimeShieldRecord(mint);
+  const symbol = String(pair?.baseToken?.symbol || "").trim() || shortMint(mint);
+  const marketCap = Number(pair?.marketCap || pair?.fdv) || null;
+  const liquidity = Number(pair?.liquidity?.usd) || null;
+  const title = shield
+    ? `$${symbol} — SlimeShield says ${shield.verdict} (${shield.score}/100) | SlimeWire`
+    : `$${symbol} — live shield read | SlimeWire`;
+  const statBits = [
+    marketCap ? `MC ${formatUsdCompact(marketCap)}` : "",
+    liquidity ? `Liq ${formatUsdCompact(liquidity)}` : ""
+  ].filter(Boolean).join(" · ");
+  const description = `${statBits ? statBits + ". " : ""}Triple-engine risk read (SlimeShield × Rugcheck × GoPlus), live chart, holder map, tracked calls. Verify before you ape.`;
+  const image = `${SHARE_PAGE_ORIGIN}/api/web/signal-card?tokenMint=${encodeURIComponent(mint)}`;
+  const safe = (text) => escapeHtml(String(text)).replace(/"/g, "&quot;");
+  return html
+    .replace(/<title>[^<]*<\/title>/, `<title>${safe(title)}</title>`)
+    .replace(/(<meta name="description" content=")[^"]*(")/, `$1${safe(description)}$2`)
+    .replace(/(<meta property="og:title" content=")[^"]*(")/, `$1${safe(title)}$2`)
+    .replace(/(<meta property="og:description" content=")[^"]*(")/, `$1${safe(description)}$2`)
+    .replace(/(<meta property="og:image" content=")[^"]*(")/, `$1${safe(image)}$2`);
+}
+
 async function serveProofSharePage(requestUrl, request, response) {
   const esc = escapeTelegramHtml;
   const parts = requestUrl.pathname.split("/").filter(Boolean);
@@ -21513,6 +21964,100 @@ async function checkWatchedDevs() {
     }
     if (changed) await writeJsonFile(watchDevsPath(), store);
   });
+}
+
+// --- Instant dev-watch -----------------------------------------------------
+// Two push paths replace the old "find out within 10 minutes" polling:
+//   1. The PumpPortal websocket sees EVERY pump.fun creation with its creator
+//      wallet - watched devs trigger alerts within ~1 second, no extra cost.
+//   2. A Helius webhook (optional, HELIUS_WEBHOOK_ID + HELIUS_WEBHOOK_SECRET)
+//      pushes any tx from watched wallets and triggers an immediate re-check,
+//      covering non-pump.fun activity. Polling stays as the safety net.
+
+let watchedDevSetCache = { at: 0, set: new Set() };
+
+async function watchedDevWalletSet(force = false) {
+  if (force || Date.now() - watchedDevSetCache.at > 60_000) {
+    const store = await readWatchDevs().catch(() => null);
+    watchedDevSetCache = { at: Date.now(), set: new Set(Object.keys(store?.watchers || {})) };
+  }
+  return watchedDevSetCache.set;
+}
+
+async function handlePumpPortalCreationForDevWatch(entry) {
+  const creator = String(entry?.event?.traderPublicKey || "").trim();
+  if (!creator) return;
+  const watched = await watchedDevWalletSet();
+  if (!watched.has(creator)) return;
+  const mint = String(entry.mint || "");
+  const symbol = String(entry.event?.symbol || "???");
+  const links = await readTelegramLinks().catch(() => ({ links: {} }));
+  await withFileLock(watchDevsPath(), async () => {
+    const store = await readWatchDevs();
+    const watcher = store.watchers[creator];
+    if (!watcher || !Object.keys(watcher.byUser || {}).length) return;
+    const known = new Set(watcher.knownMints || []);
+    if (known.has(mint)) return;
+    watcher.knownMints = [...known, mint].slice(-50);
+    watcher.lastCheckedAt = new Date().toISOString();
+    await writeJsonFile(watchDevsPath(), store);
+    const shortWallet = `${creator.slice(0, 4)}..${creator.slice(-4)}`;
+    for (const userId of Object.keys(watcher.byUser)) {
+      sendWebPushToUser(userId, {
+        title: `👀 Watched dev launched $${symbol}`,
+        body: `Deployer ${shortWallet} just launched again - seconds ago. Get the shield read before you ape.`,
+        tag: `dev-watch-${creator}`,
+        url: `/t?ca=${mint}`
+      }).catch(() => {});
+      const tgUserId = links.links?.[userId];
+      if (tgUserId) {
+        sayHtml(tgUserId, [
+          `👀 <b>A dev you watch just launched</b> $${escapeTelegramHtml(symbol)} <i>(live, seconds old)</i>`,
+          `Deployer <code>${escapeTelegramHtml(shortWallet)}</code> is at it again.`,
+          `<a href="https://www.slimewire.org/t?ca=${mint}">Shield read + chart on SlimeWire</a>`
+        ].join("\n")).catch(() => {});
+      }
+    }
+  });
+}
+
+let instantDevCheckTimer = null;
+
+// Debounced: a webhook burst (one launch = many txs) becomes one re-check.
+function scheduleInstantWatchedDevCheck() {
+  if (instantDevCheckTimer) return;
+  instantDevCheckTimer = setTimeout(() => {
+    instantDevCheckTimer = null;
+    void checkWatchedDevs().catch(() => {});
+  }, 1_500);
+}
+
+// Keep the Helius webhook's address list in sync with who is being watched.
+// No-op unless HELIUS_WEBHOOK_ID is configured (webhook created once in the
+// Helius dashboard pointing at /api/internal/helius-webhook).
+async function syncHeliusWebhookAddresses() {
+  if (!CONFIG.heliusApiKey || !CONFIG.heliusWebhookId) return false;
+  try {
+    const store = await readWatchDevs().catch(() => null);
+    const addresses = Object.keys(store?.watchers || {}).slice(0, 100);
+    if (!addresses.length) return false;
+    await fetchJson(`https://api.helius.xyz/v0/webhooks/${encodeURIComponent(CONFIG.heliusWebhookId)}?api-key=${encodeURIComponent(CONFIG.heliusApiKey)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        webhookURL: `${CONFIG.pumpLaunchHostedMetadataBaseUrl || ""}/api/internal/helius-webhook`,
+        transactionTypes: ["ANY"],
+        accountAddresses: addresses,
+        webhookType: "enhanced",
+        authHeader: CONFIG.heliusWebhookSecret || undefined
+      }),
+      timeoutMs: 5_000
+    });
+    return true;
+  } catch (error) {
+    console.warn(`[helius-webhook] address sync failed: ${error.message}`);
+    return false;
+  }
 }
 
 async function sendWebPushToUser(userId, payload = {}) {
@@ -29503,12 +30048,14 @@ function applyOgreAiCategory(defaults, category) {
 function ogreAiModeDefaults(mode) {
   normalizeOgreAiMode(mode);
   return {
-    buckets: ["live", "under1h"],
+    buckets: ["live"],
     minScore: 12,
-    minMarketCap: 1_500,
-    preferredMaxMarketCap: 5_000,
-    maxMarketCap: 8_000,
-    maxAgeMinutes: 45,
+    // Fresh APE: pairs under 30 seconds old with at least $3k market cap,
+    // straight off the PumpPortal websocket. Maximum freshness for max upside.
+    minMarketCap: 3_000,
+    preferredMaxMarketCap: 8_000,
+    maxMarketCap: 15_000,
+    maxAgeMinutes: 0.5,
     minStartingVolumeUsd: 60,
     minLiquidityUsd: 20,
     preferFreshLaunches: true,
@@ -29525,12 +30072,12 @@ function applyOgreAiTargetDefaults(defaults, targetPct, mode) {
   const safeMode = normalizeOgreAiMode(mode);
   if (safeMode === "fresh_ape") {
     defaults.targetBand = "fresh_ape";
-    defaults.buckets = [...new Set(["live", "under1h"])];
+    defaults.buckets = [...new Set(["live"])];
     defaults.minScore = Math.min(Number(defaults.minScore || 12), 12);
-    defaults.minMarketCap = Number(defaults.minMarketCap || 1_500);
-    defaults.preferredMaxMarketCap = Number(defaults.preferredMaxMarketCap || 5_000);
-    defaults.maxMarketCap = Math.min(Number(defaults.maxMarketCap || 8_000), 8_000);
-    defaults.maxAgeMinutes = Math.min(Number(defaults.maxAgeMinutes || 45), 45);
+    defaults.minMarketCap = Math.max(Number(defaults.minMarketCap || 3_000), 3_000);
+    defaults.preferredMaxMarketCap = Number(defaults.preferredMaxMarketCap || 8_000);
+    defaults.maxMarketCap = Math.min(Number(defaults.maxMarketCap || 15_000), 15_000);
+    defaults.maxAgeMinutes = Math.min(Number(defaults.maxAgeMinutes || 0.5), 0.5);
     defaults.minStartingVolumeUsd = Math.min(Number(defaults.minStartingVolumeUsd || 60), 60);
     defaults.minLiquidityUsd = Math.min(Number(defaults.minLiquidityUsd || 20), 20);
     defaults.preferFreshLaunches = true;
@@ -29593,12 +30140,12 @@ function applyOgreAiTimerIntentDefaults(defaults, body = {}, mode = "quick") {
     defaults.targetBand = "fresh_ape";
     defaults.preferFreshLaunches = true;
     defaults.diversityWindow = Math.max(Number(defaults.diversityWindow || 0), 18);
-    defaults.buckets = [...new Set(["live", "under1h"])];
+    defaults.buckets = [...new Set(["live"])];
     defaults.minScore = Math.min(Number(defaults.minScore || 12), 12);
-    defaults.minMarketCap = Number(defaults.minMarketCap || 1_500);
-    defaults.preferredMaxMarketCap = Number(defaults.preferredMaxMarketCap || 5_000);
-    defaults.maxMarketCap = Math.min(Number(defaults.maxMarketCap || 8_000), 8_000);
-    defaults.maxAgeMinutes = Math.min(Number(defaults.maxAgeMinutes || 45), 45);
+    defaults.minMarketCap = Math.max(Number(defaults.minMarketCap || 3_000), 3_000);
+    defaults.preferredMaxMarketCap = Number(defaults.preferredMaxMarketCap || 8_000);
+    defaults.maxMarketCap = Math.min(Number(defaults.maxMarketCap || 15_000), 15_000);
+    defaults.maxAgeMinutes = Math.min(Number(defaults.maxAgeMinutes || 0.5), 0.5);
     defaults.minStartingVolumeUsd = Math.min(Number(defaults.minStartingVolumeUsd || 60), 60);
     defaults.minLiquidityUsd = Math.min(Number(defaults.minLiquidityUsd || 20), 20);
     return defaults;
@@ -32662,10 +33209,16 @@ async function webConnectedWalletBalance(userId, options = {}) {
 
   try {
     const owner = new PublicKey(connected.publicKey);
-    const balance = await getSolBalanceCached(owner, { force: Boolean(options.force) });
+    // User-initiated refreshes ride the priority RPC lane and the SOL + token
+    // reads run in parallel - this is the "refresh wallet" button path.
+    const refreshOpts = { force: Boolean(options.force), priority: Boolean(options.force) };
+    const [balance, accountsRead] = await Promise.all([
+      getSolBalanceCached(owner, refreshOpts),
+      getOwnedTokenAccountsWithWarningsCached(owner, refreshOpts)
+    ]);
     row.sol = lamportsToSol(balance);
     row.lamports = String(balance);
-    const { accounts, warnings } = await getOwnedTokenAccountsWithWarningsCached(owner, { force: Boolean(options.force) });
+    const { accounts, warnings } = accountsRead;
     row.warnings = warnings || [];
     const tokens = accounts
       .filter((account) => account.rawAmount > 0n)
@@ -35199,8 +35752,19 @@ async function webSlimeShield(tokenMint = "", options = {}) {
     }).catch(() => null)
     : null;
   if (sourceHydration?.row) baseRow = sourceHydration.row;
-  const devInfoSummary = mint ? await webDevInfoSummary(mint, { force }).catch(() => null) : null;
-  const row = devInfoSummary ? { ...baseRow, devInfoSummary } : baseRow;
+  // Triple-engine: pull GoPlus + Rugcheck in parallel with dev info so their
+  // flags land inside the shield verdict itself (both are 10-min cached).
+  const [devInfoSummary, goplusRead, rugcheckRead] = await Promise.all([
+    mint ? webDevInfoSummary(mint, { force }).catch(() => null) : Promise.resolve(null),
+    mint ? fetchGoPlusSolanaSecurity(mint).catch(() => null) : Promise.resolve(null),
+    mint ? fetchRugcheckSummary(mint).catch(() => null) : Promise.resolve(null)
+  ]);
+  const row = {
+    ...baseRow,
+    ...(devInfoSummary ? { devInfoSummary } : {}),
+    ...(goplusRead ? { goplusFlags: goplusRead.flags || [] } : {}),
+    ...(rugcheckRead ? { rugcheckRisks: rugcheckRead.risks || [] } : {})
+  };
   const result = {
     ...computeSlimeShield(row, { mint }),
     cacheHit: false,

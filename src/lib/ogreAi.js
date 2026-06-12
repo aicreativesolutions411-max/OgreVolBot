@@ -21,10 +21,14 @@ const OGRE_AI_HARD_BLOCKED_RISK_RE = /\b(honeypot|honey\s*pot|mintable|mint auth
 const OGRE_AI_ABSURD_MARKET_CAP_USD = 25_000_000;
 const OGRE_AI_THIN_LIQUIDITY_MARKET_CAP_USD = 5_000_000;
 const OGRE_AI_THIN_LIQUIDITY_RATIO = 0.01;
-const OGRE_AI_FRESH_APE_MIN_MC_USD = 1_500;
-const OGRE_AI_FRESH_APE_PRIMARY_MAX_MC_USD = 5_000;
-const OGRE_AI_FRESH_APE_FALLBACK_MAX_MC_USD = 8_000;
-const OGRE_AI_FRESH_APE_MAX_AGE_MINUTES = 45;
+// Fresh APE hunts brand-new pump.fun launches ONLY: under 30 seconds old with
+// at least $3k market cap (a fresh curve with a real dev/snipe buy sits
+// ~$4.2k+). Sourced from the PumpPortal websocket so age is exact to the
+// second. Older or thinner pairs are someone else's trade.
+const OGRE_AI_FRESH_APE_MIN_MC_USD = 3_000;
+const OGRE_AI_FRESH_APE_PRIMARY_MAX_MC_USD = 8_000;
+const OGRE_AI_FRESH_APE_FALLBACK_MAX_MC_USD = 15_000;
+const OGRE_AI_FRESH_APE_MAX_AGE_MINUTES = 0.5;
 const OGRE_AI_FRESH_APE_MIN_STARTING_VOLUME_USD = 60;
 
 function isFreshApeMode(mode) {
@@ -95,9 +99,18 @@ export function ogreAiCandidateStats(row = {}) {
   const trades5m = numberValue(row.trades5m, row.txns5m, buys5m + sells5m);
   const rugRisk = finiteNumber(row.rugRisk);
   const exitRisk = finiteNumber(row.exitRisk);
-  const ageMinutes = row.pairAgeMinutes === null || row.pairAgeMinutes === undefined
-    ? null
-    : Number(row.pairAgeMinutes);
+  // Prefer pairAgeSeconds: pairAgeMinutes is floored to whole minutes upstream,
+  // which is useless for the under-30s fresh APE window.
+  const ageSeconds = Number(row.pairAgeSeconds);
+  let ageMinutes = Number.isFinite(ageSeconds) && ageSeconds >= 0
+    ? ageSeconds / 60
+    : row.pairAgeMinutes === null || row.pairAgeMinutes === undefined
+      ? null
+      : Number(row.pairAgeMinutes);
+  if (!Number.isFinite(ageMinutes)) {
+    const createdAt = Number(row.pairCreatedAt);
+    ageMinutes = createdAt > 1_000_000_000_000 ? Math.max(0, (Date.now() - createdAt) / 60_000) : null;
+  }
   const text = textBlob(row);
   const isPump = Boolean(row.isPump)
     || /pump/.test(text)
@@ -172,14 +185,15 @@ function ogreAiFreshApeFitScore(row = {}, defaults = {}) {
   else if (cap.band === "too_low") capFit = -18;
   else if (cap.band === "too_high") capFit = -28;
 
-  let ageSignal = 8;
+  // Under-30s window: the younger the better. Anything past the window is
+  // penalized hard - fresh APE never chases minutes-old pairs.
+  let ageSignal = 0;
   if (stats.ageMinutes !== null) {
-    if (stats.ageMinutes <= 3) ageSignal = 20;
-    else if (stats.ageMinutes <= 8) ageSignal = 17;
-    else if (stats.ageMinutes <= 20) ageSignal = 13;
-    else if (stats.ageMinutes <= 45) ageSignal = 7;
-    else if (stats.ageMinutes <= OGRE_AI_FRESH_APE_MAX_AGE_MINUTES) ageSignal = 1;
-    else ageSignal = -clampNumber((stats.ageMinutes - OGRE_AI_FRESH_APE_MAX_AGE_MINUTES) / 45, 0, 3) * 12;
+    const ageSeconds = stats.ageMinutes * 60;
+    if (ageSeconds <= 10) ageSignal = 20;
+    else if (ageSeconds <= 20) ageSignal = 16;
+    else if (ageSeconds <= OGRE_AI_FRESH_APE_MAX_AGE_MINUTES * 60) ageSignal = 11;
+    else ageSignal = -clampNumber((stats.ageMinutes - OGRE_AI_FRESH_APE_MAX_AGE_MINUTES) / 2, 0, 3) * 12;
   }
 
   const volumeSignal = clampNumber(stats.volumeMomentumUsd / Math.max(1, minVolume), 0, 1.8) * 18;
@@ -202,7 +216,7 @@ function ogreAiFreshApeFitScore(row = {}, defaults = {}) {
     + clampNumber(stats.exitRisk / 9, 0, 12)
     + (/\b(wash|bundle|mutable|unknown risk|low liquidity)\b/i.test(ogreAiRiskText(row)) ? 4 : 0);
   const deadPenalty = startingVolume ? 0 : (
-    stats.ageMinutes !== null && stats.ageMinutes <= 10 ? 18 : 28
+    stats.ageMinutes !== null && stats.ageMinutes <= OGRE_AI_FRESH_APE_MAX_AGE_MINUTES ? 12 : 28
   );
   return Math.round(clampNumber(
     scoreSignal
@@ -346,20 +360,23 @@ export function ogreAiTierForCandidate(row = {}, defaults = {}, mode = "quick") 
   if (isFreshApeMode(mode)) {
     const cap = ogreAiFreshApeCapInfo(stats, defaults);
     const maxAgeMinutes = Number(defaults.maxAgeMinutes || OGRE_AI_FRESH_APE_MAX_AGE_MINUTES);
-    const freshOk = stats.ageMinutes === null || stats.ageMinutes <= maxAgeMinutes;
+    // Hard rule: pair age must be KNOWN and under the window (30s). Unknown-age
+    // rows are excluded - the realtime websocket feed always knows the age, so
+    // anything ageless came from a slow poller and is already too old.
+    const freshOk = stats.ageMinutes !== null && stats.ageMinutes <= maxAgeMinutes;
+    // Hard rule: market cap must be KNOWN and >= $3k. The "unknown" band that
+    // used to pass is exactly the dead-launch zone we are avoiding.
+    const capOk = cap.ok && cap.band !== "unknown";
     const startingVolume = ogreAiFreshApeHasStartingVolume(stats, defaults);
     const buyIntentOk = stats.trades5m <= 0 || stats.buyPressure >= 0.42 || stats.buys5m >= 1;
     const liquidityOk = !stats.liquidityUsd
       || stats.liquidityUsd >= Number(defaults.minLiquidityUsd || 20)
       || stats.liquidityToMarketCap >= 0.006
       || stats.isPump;
-    const scoreOk = stats.score >= Math.max(5, Number(defaults.minScore || 12) - 6)
-      || stats.trades5m >= 2
-      || stats.volumeToMarketCap >= 0.012;
-    if (!freshOk || !cap.ok || !startingVolume || !buyIntentOk || !liquidityOk || !scoreOk) return null;
-    if (cap.band === "primary" && targetFit >= 45 && (stats.ageMinutes === null || stats.ageMinutes <= 30)) return "strict";
-    if ((cap.band === "primary" || cap.band === "unknown") && targetFit >= 30) return "balanced";
-    if ((cap.band === "primary" || cap.band === "fallback" || cap.band === "unknown") && targetFit >= Math.max(18, Number(defaults.minScore || 12))) return "available";
+    if (!freshOk || !capOk || !startingVolume || !buyIntentOk || !liquidityOk) return null;
+    if (cap.band === "primary" && targetFit >= 45) return "strict";
+    if (cap.band === "primary" && targetFit >= 30) return "balanced";
+    if ((cap.band === "primary" || cap.band === "fallback") && targetFit >= Math.max(18, Number(defaults.minScore || 12))) return "available";
     return null;
   }
   const highTarget = targetPct >= 80;

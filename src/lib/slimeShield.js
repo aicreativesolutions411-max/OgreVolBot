@@ -191,6 +191,49 @@ export function computeSlimeShield(row = {}, options = {}) {
     }
   }
 
+  // Triple-engine read: GoPlus token-security flags and Rugcheck risks stack
+  // into the same verdict alongside SlimeWire's own market signals. A null
+  // result means the engine has not answered (unknown), an empty list means
+  // it answered clean - those are very different for confidence.
+  const goplusFlags = Array.isArray(row.goplusFlags)
+    ? row.goplusFlags
+    : Array.isArray(row.goplus?.flags) ? row.goplus.flags : null;
+  if (goplusFlags) {
+    knownSignals.push("goplus");
+    const flagsText = goplusFlags.map((item) => String(item || "").toLowerCase());
+    const severeFlags = flagsText.filter((text) => /mint authority|freeze authority|balances mutable|non-transferable/.test(text));
+    if (severeFlags.length) {
+      score -= 22;
+      factors.push(factor("goplus_risk", "GoPlus", "risk", `GoPlus security: ${goplusFlags.slice(0, 3).join(", ")}.`, -22));
+    } else if (flagsText.length) {
+      score -= 8;
+      factors.push(factor("goplus_caution", "GoPlus", "caution", `GoPlus flags: ${goplusFlags.slice(0, 3).join(", ")}.`, -8));
+    } else {
+      score += 4;
+      factors.push(factor("goplus_clean", "GoPlus", "positive", "GoPlus security scan found no token-control flags.", 4));
+    }
+  }
+  // No goplus read = supplemental engine missing, not an unknown core signal.
+
+  const rugcheckRisks = Array.isArray(row.rugcheckRisks)
+    ? row.rugcheckRisks
+    : Array.isArray(row.rugcheck?.risks) ? row.rugcheck.risks : null;
+  if (rugcheckRisks) {
+    knownSignals.push("rugcheck");
+    const riskNames = rugcheckRisks.map((item) => String(item?.name || item || "")).filter(Boolean);
+    const severeCount = rugcheckRisks.filter((item) => /danger|critical|high/i.test(String(item?.level || ""))).length;
+    if (severeCount > 0) {
+      score -= 20;
+      factors.push(factor("rugcheck_risk", "Rugcheck", "risk", `Rugcheck: ${riskNames.slice(0, 3).join(", ")}.`, -20));
+    } else if (riskNames.length) {
+      score -= 6;
+      factors.push(factor("rugcheck_caution", "Rugcheck", "caution", `Rugcheck notes: ${riskNames.slice(0, 3).join(", ")}.`, -6));
+    } else {
+      score += 4;
+      factors.push(factor("rugcheck_clean", "Rugcheck", "positive", "Rugcheck found no major risks.", 4));
+    }
+  }
+
   const finalScore = clampScore(score);
   const verdict = slimeShieldVerdictFromScore(finalScore, factors);
   const confidence = knownSignals.length >= 5 && unknownSignals.length <= 1
