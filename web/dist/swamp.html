@@ -76,6 +76,7 @@
       .card:active { transform:scale(0.97); }
       .card:hover { border-color:var(--green); }
       .card.caught { border-color:rgba(114,255,35,0.55); }
+      .card.ogre { border-color:var(--green2); box-shadow:0 0 0 1px rgba(187,255,99,0.5), 0 0 18px rgba(114,255,35,0.18); background:linear-gradient(180deg,rgba(20,40,16,0.7),rgba(8,20,10,0.62)); }
       .card .badge { position:absolute; top:8px; right:8px; font-size:0.6rem; font-weight:900; padding:2px 7px; border-radius:99px; letter-spacing:0.04em; }
       .card .caught-tag { position:absolute; top:8px; left:8px; font-size:0.62rem; }
       .cv { display:block; width:100%; aspect-ratio:1/1; image-rendering:pixelated; border-radius:12px;
@@ -165,7 +166,7 @@
       <div class="empty" data-empty hidden></div>
 
       <a class="cta-launch" href="/terminal" data-launch>
-        🥚 <b>Launch your own coin on SlimeWire</b> → it becomes a swamp boss other degens hunt. Free game-world hype for your launch.
+        🧌 <b>Launch your coin on SlimeWire</b> → it spawns as a rare <b>OGRE BOSS</b>: pinned to the top, glowing, and hunted by every degen in the swamp. Free game-world hype only launchers get.
       </a>
 
       <footer>
@@ -232,13 +233,19 @@
           eye:"#08160a", sick:false
         };
       }
+      // Ogre skin: a consistent mossy swamp-green so SlimeWire-launched bosses
+      // are instantly recognizable as ogres, with slight per-coin hue drift.
+      function ogrePalette(rand) {
+        const hue = 96 + Math.floor(rand()*22);
+        return { body:`hsl(${hue} 42% 42%)`, body2:`hsl(${hue} 46% 27%)`, accent:"#bbff63", eye:"#0a1505", sick:false, ogre:true };
+      }
 
       // Procedural slime creature. Variety comes from: 6 body archetypes, eye
       // count (1-3), and feature rolls (horns, antennae, spots, fangs, crown,
       // tongue) — all keyed off the mint so the same coin always looks the same.
-      function drawCreature(canvas, mint, mood, stage) {
-        const rand = rng(hash(String(mint) + ":" + mood + ":v2"));
-        const pal = paletteFor(mood, rand);
+      function drawCreature(canvas, mint, mood, stage, isOgre) {
+        const rand = rng(hash(String(mint) + ":" + mood + ":v2" + (isOgre?":ogre":"")));
+        const pal = isOgre ? ogrePalette(rand) : paletteFor(mood, rand);
         const N = 16, half = Math.ceil(N/2);
         const cell = canvas.width / N;
         const ctx = canvas.getContext("2d");
@@ -247,11 +254,12 @@
         const grid = Array.from({length:N},()=>Array(N).fill(0));
         const cx = (N-1)/2, cy = N/2 + 0.8;
 
-        const archetypes = ["blob","tall","wide","spiky","segmented","drippy"];
+        const archetypes = isOgre ? ["wide","blob","spiky"] : ["blob","tall","wide","spiky","segmented","drippy"];
         const arche = archetypes[Math.floor(rand()*archetypes.length)];
         let rx = 4.0 + stage*0.5 + rand()*1.4, ryT = 3.2 + stage*0.4, ryB = 4.4 + stage*0.6;
         if (arche === "tall") { rx = 3.0 + rand()*0.8; ryT = 4.4 + stage*0.4; ryB = 5.2 + stage*0.5; }
         else if (arche === "wide") { rx = 5.4 + stage*0.5; ryT = 2.7; ryB = 3.6; }
+        if (isOgre) { rx += 0.6; ryB += 0.4; } // ogres are beefier
 
         for (let y=0;y<N;y++) for (let x=0;x<half;x++) {
           const dx = (x-cx)/rx, dy = (y-cy)/(y<cy?ryT:ryB);
@@ -266,8 +274,20 @@
         const px = (gx,gy,w=1,h=1,c) => { ctx.fillStyle = c; ctx.fillRect(gx*cell, gy*cell, cell*w, cell*h); };
 
         // horns / antennae / crown (top features) — drawn before body so body overlaps base
-        const feat = { horns:rand()<0.4, antennae:rand()<0.32, crown:arche==="spiky"&&rand()<0.6, spots:rand()<0.5, fangs:rand()<0.45, tongue:rand()<0.25, thirdEye:stage>=2&&rand()<0.4 };
+        const feat = isOgre
+          ? { horns:false, antennae:false, crown:false, spots:rand()<0.5, fangs:false, tongue:false, thirdEye:false, ears:true, brow:true, tusks:true, slimeCrown:true }
+          : { horns:rand()<0.4, antennae:rand()<0.32, crown:arche==="spiky"&&rand()<0.6, spots:rand()<0.5, fangs:rand()<0.45, tongue:rand()<0.25, thirdEye:stage>=2&&rand()<0.4, ears:false, brow:false, tusks:false, slimeCrown:false };
         const topY = Math.round(cy - ryT);
+        // ogre ears (side stubs) — drawn under body edges
+        if (feat.ears) {
+          const earY = Math.round(cy - 0.5);
+          px(Math.round(cx-rx-0.4), earY, 1, 1.6, pal.body2);
+          px(Math.round(cx+rx-0.6), earY, 1, 1.6, pal.body2);
+        }
+        // ogre SlimeWire crown: three slime spikes up top
+        if (feat.slimeCrown) {
+          for (const k of [-2, 0, 2]) { px(Math.round(cx+k), topY-1, 1, 1, pal.accent); px(Math.round(cx+k), topY-2, 1, 1, "#72ff23"); }
+        }
         if (feat.horns) {
           for (const hx of [Math.round(cx-rx*0.55), Math.round(cx+rx*0.55)-1]) {
             px(hx, topY-1, 1, 2, pal.body2); px(hx, topY-2, 1, 1, pal.accent);
@@ -300,12 +320,14 @@
           }
         }
 
-        // eyes
-        const eyeCount = rand()<0.14 ? 1 : (stage>=1 && rand()<0.30 ? 3 : 2);
+        // eyes (ogres always get a menacing pair)
+        const eyeCount = isOgre ? 2 : (rand()<0.14 ? 1 : (stage>=1 && rand()<0.30 ? 3 : 2));
         const eyeY = Math.round(cy - 1.2);
         const eyeXs = eyeCount===1 ? [Math.round(cx-0.7)]
           : eyeCount===3 ? [Math.round(cx-3), Math.round(cx-0.7), Math.round(cx+1.6)]
           : [Math.round(cx-2.4), Math.round(cx+0.9)];
+        // ogre heavy brow: a dark bar shading the eyes (drawn under eyes)
+        if (feat.brow) px(Math.round(cx-3), eyeY-0.8, 5.4, 0.9, "rgba(0,0,0,0.45)");
         const eW = eyeCount===3 ? 1.1 : 1.5;
         for (const ex of eyeXs) {
           if (pal.sick) {
@@ -320,9 +342,13 @@
         }
         if (feat.thirdEye && !pal.sick) { px(Math.round(cx), eyeY-1.4, 1, 1, "#f6fff0"); px(cx+0.25, eyeY-1.15, 0.5, 0.5, pal.eye); }
 
-        // mouth: fangs or tongue
+        // mouth: ogre grin with tusks, or fangs / tongue
         const mouthY = eyeY + 2;
-        if (feat.fangs) {
+        if (feat.tusks) {
+          px(Math.round(cx-2), mouthY, 4, 0.5, "rgba(0,0,0,0.55)"); // wide grin
+          px(Math.round(cx-1.6), mouthY-1.1, 0.7, 1.2, "#f6fff0");  // left tusk pointing up
+          px(Math.round(cx+0.9), mouthY-1.1, 0.7, 1.2, "#f6fff0");  // right tusk
+        } else if (feat.fangs) {
           for (const fx of [Math.round(cx-1.2), Math.round(cx+0.6)]) px(fx, mouthY, 0.5, 1, "#f6fff0");
         } else if (feat.tongue) {
           px(Math.round(cx-0.3), mouthY, 0.8, 1.2, "#ff7ab0");
@@ -339,7 +365,8 @@
           ctx.fillRect(dxp*cell+cell*0.28, (bottom+1)*cell, cell*0.44, cell*(1+Math.floor(rand()*2)));
         }
 
-        canvas.style.filter = mood==="buy" ? "drop-shadow(0 0 6px rgba(114,255,35,0.55))"
+        canvas.style.filter = isOgre ? "drop-shadow(0 0 8px rgba(114,255,35,0.7))"
+          : mood==="buy" ? "drop-shadow(0 0 6px rgba(114,255,35,0.55))"
           : pal.sick ? "saturate(0.7) brightness(0.92)" : "none";
       }
 
@@ -387,7 +414,9 @@
       // ---------- state ----------
       let rows = [];
       let view = "wild";
+      let ogreSet = new Set(); // mints launched on SlimeWire = OGRE bosses
       const VERDICT_COLOR = { BUY:"#72ff23", CAUTION:"#ffd84d", RISK:"#ff9d4d", AVOID:"#ff6b5e" };
+      const isOgreMint = (mint) => ogreSet.has(String(mint));
 
       function toast(msg) {
         const t = $("[data-toast]"); t.textContent = msg; t.classList.add("show");
@@ -396,14 +425,15 @@
 
       function cardHtml(row) {
         const mint = row.tokenMint; const mood = moodFor(row); const stage = stageFor(row);
-        const caught = Boolean(store.dex[mint]);
+        const caught = Boolean(store.dex[mint]); const ogre = isOgreMint(mint);
         const moodBadge = { buy:["BUY ZONE","#72ff23"], risk:["DICEY","#ffd84d"], avoid:["DUMPING","#ff9d4d"], rug:["DRAINED","#c79bff"] }[mood];
-        return `<div class="card ${caught?"caught":""}" data-mint="${esc(mint)}">
+        const badge = ogre ? ["🧌 OGRE","#bbff63"] : moodBadge;
+        return `<div class="card ${caught?"caught":""} ${ogre?"ogre":""}" data-mint="${esc(mint)}">
           ${caught?'<span class="caught-tag">✅</span>':''}
-          <span class="badge" style="background:${moodBadge[1]}22;color:${moodBadge[1]};border:1px solid ${moodBadge[1]}">${moodBadge[0]}</span>
+          <span class="badge" style="background:${badge[1]}22;color:${badge[1]};border:1px solid ${badge[1]}">${badge[0]}</span>
           <canvas class="cv" width="112" height="112"></canvas>
-          <div class="nm">$${esc(creatureName(row))}</div>
-          <div class="sub"><span class="stage">${STAGE_NAME[stage]}</span><span>${esc(fmt(row.marketCap||row.marketCapUsd))} · ${esc(ageLabel(row))}</span></div>
+          <div class="nm">${ogre?"🧌 ":""}$${esc(creatureName(row))}</div>
+          <div class="sub"><span class="stage">${ogre?"SlimeWire Boss":STAGE_NAME[stage]}</span><span>${esc(fmt(row.marketCap||row.marketCapUsd))} · ${esc(ageLabel(row))}</span></div>
         </div>`;
       }
 
@@ -411,18 +441,21 @@
         container.querySelectorAll(".card").forEach((card) => {
           const mint = card.getAttribute("data-mint");
           const row = list.find((r) => r.tokenMint === mint);
-          if (row) drawCreature(card.querySelector("canvas"), mint, moodFor(row), stageFor(row));
+          if (row) drawCreature(card.querySelector("canvas"), mint, moodFor(row), stageFor(row), isOgreMint(mint));
         });
       }
 
       function renderWild() {
         const grid = $("[data-grid]"); const empty = $("[data-empty]");
-        const live = rows.slice(0, 48);
+        // OGRE bosses (SlimeWire launches) pin to the top — premium visibility.
+        const ranked = [...rows].sort((a,b)=> (isOgreMint(b.tokenMint)?1:0) - (isOgreMint(a.tokenMint)?1:0));
+        const live = ranked.slice(0, 48);
         if (!live.length) { grid.innerHTML = ""; empty.hidden = false; empty.textContent = "The swamp is quiet… waiting for fresh launches to crawl out. 🐸"; return; }
         empty.hidden = true;
         grid.innerHTML = live.map(cardHtml).join("");
         paintGridCanvases(grid, live);
-        $("[data-count]").textContent = `${live.length} creatures stirring`;
+        const ogres = live.filter((r)=>isOgreMint(r.tokenMint)).length;
+        $("[data-count]").textContent = ogres ? `${live.length} creatures · ${ogres} 🧌 SlimeWire boss${ogres>1?"es":""}` : `${live.length} creatures stirring`;
       }
 
       function renderDex() {
@@ -431,13 +464,36 @@
         $("[data-count]").textContent = `${caught.length} caught`;
         if (!caught.length) { grid.innerHTML = ""; empty.hidden = false; empty.textContent = "No catches yet. Tap a wild creature and throw a slimeball! 🟢"; return; }
         empty.hidden = true;
-        grid.innerHTML = caught.map((c) => `<div class="card caught" data-mint="${esc(c.mint)}">
-          <span class="caught-tag">✅</span>
+        grid.innerHTML = unlocksHtml() + caught.map((c) => `<div class="card caught ${c.ogre?"ogre":""}" data-mint="${esc(c.mint)}">
+          <span class="caught-tag">${c.ogre?"🧌":"✅"}</span>
           <canvas class="cv" width="112" height="112"></canvas>
-          <div class="nm">$${esc(c.symbol||c.mint.slice(0,4))}</div>
-          <div class="sub"><span class="stage">${esc(c.verdict||"caught")}</span><span>${esc(fmt(c.mc))}</span></div>
+          <div class="nm">${c.ogre?"🧌 ":""}$${esc(c.symbol||c.mint.slice(0,4))}</div>
+          <div class="sub"><span class="stage">${c.ogre?"SlimeWire Boss":esc(c.verdict||"caught")}</span><span>${esc(fmt(c.mc))}</span></div>
         </div>`).join("");
-        grid.querySelectorAll(".card").forEach((card)=>{ const m=card.getAttribute("data-mint"); const c=store.dex[m]; if(c) drawCreature(card.querySelector("canvas"), m, c.mood||"buy", c.stage||1); });
+        grid.querySelectorAll(".card[data-mint]").forEach((card)=>{ const m=card.getAttribute("data-mint"); const c=store.dex[m]; if(c) drawCreature(card.querySelector("canvas"), m, c.mood||"buy", c.stage||1, Boolean(c.ogre)); });
+      }
+
+      // ---------- unlocks (using features grants badges) ----------
+      const UNLOCKS = [
+        { id:"first",   icon:"🟢", name:"First Slurp",  test:(s)=>Object.keys(s.dex).length>=1 },
+        { id:"collector",icon:"🎒",name:"Collector",    test:(s)=>Object.keys(s.dex).length>=10 },
+        { id:"ogre",    icon:"🧌", name:"Ogre Tamer",   test:(s)=>(s.stats?.ogresCaught||0)>=1 },
+        { id:"degen",   icon:"⚡", name:"Degen",        test:(s)=>(s.stats?.aped||0)>=1 },
+        { id:"whale",   icon:"🐋", name:"Swamp Whale",  test:(s)=>(s.stats?.aped||0)>=5 },
+        { id:"lord",    icon:"👑", name:"Swamp Lord",   test:(s)=>Object.keys(s.dex).length>=25 }
+      ];
+      function checkUnlocks() {
+        store.unlocked = store.unlocked || {};
+        for (const u of UNLOCKS) {
+          if (!store.unlocked[u.id] && u.test(store)) { store.unlocked[u.id] = Date.now(); save(store); toast(`${u.icon} Unlocked: ${u.name}!`); }
+        }
+      }
+      function unlocksHtml() {
+        store.unlocked = store.unlocked || {};
+        const chips = UNLOCKS.map((u)=>{ const on = Boolean(store.unlocked[u.id]);
+          return `<span style="display:inline-flex;align-items:center;gap:4px;border:1px solid ${on?'var(--green)':'var(--line)'};border-radius:99px;padding:4px 10px;font-size:0.72rem;font-weight:800;color:${on?'#eaffe0':'var(--dim)'};opacity:${on?1:0.5}">${u.icon} ${esc(u.name)}</span>`;
+        }).join("");
+        return `<div style="grid-column:1/-1;display:flex;gap:7px;flex-wrap:wrap;margin-bottom:4px">${chips}</div>`;
       }
 
       function render() { renderProgress(); if (view==="wild") renderWild(); else renderDex(); }
@@ -449,13 +505,15 @@
         const mood = row.marketCap!==undefined ? moodFor(row) : (store.dex[mint]?.mood||"buy");
         const stage = row.pairAgeSeconds!==undefined||row.pairCreatedAt ? stageFor(row) : (store.dex[mint]?.stage||1);
         const caught = Boolean(store.dex[mint]);
+        const ogre = isOgreMint(mint) || Boolean(store.dex[mint]?.ogre);
         const scrim = $("[data-scrim]"); const modal = $("[data-modal]");
         const buyUrl = `/terminal/chart?token=${encodeURIComponent(mint)}&buy=1&source=swamp`;
         const chartUrl = `/t?ca=${encodeURIComponent(mint)}`;
         modal.innerHTML = `
           <button class="x" data-close>✕</button>
           <canvas class="modal-cv" width="180" height="180"></canvas>
-          <h2>$${esc(creatureName(row))}</h2>
+          <h2>${ogre?"🧌 ":""}$${esc(creatureName(row))}</h2>
+          ${ogre?'<div style="text-align:center;color:var(--green2);font-weight:800;font-size:0.74rem;margin-top:2px">🧌 OGRE BOSS · BORN ON SLIMEWIRE</div>':''}
           <span class="verdict" data-verdict style="color:var(--dim)">reading the shield…</span>
           <p class="lore" data-lore></p>
           <div class="stats">
@@ -473,9 +531,15 @@
           </div>
         `;
         scrim.classList.add("on");
-        drawCreature(modal.querySelector(".modal-cv"), mint, mood, Math.max(stage,1));
+        drawCreature(modal.querySelector(".modal-cv"), mint, mood, Math.max(stage,1), ogre);
         modal.querySelector("[data-close]").onclick = closeModal;
         modal.querySelector("[data-catch]").onclick = () => doCatch(mint, row, mood, stage, modal);
+        // Aping (the real trade) grants XP + the Degen unlock — using SlimeWire
+        // features is what levels you up.
+        modal.querySelector(".btn.ape").addEventListener("click", () => {
+          store.stats = store.stats || {}; store.stats.aped = (store.stats.aped||0)+1;
+          store.xp += 15; save(store); checkUnlocks(); renderProgress();
+        });
         modal.querySelector("[data-share]").onclick = () => {
           const url = `${location.origin}/t?ca=${encodeURIComponent(mint)}`;
           if (navigator.share) navigator.share({ title:"SlimeWire", text:`Caught $${creatureName(row)} in the Swamp 🐸 slimewire.org/swamp`, url }).catch(()=>{});
@@ -506,13 +570,16 @@
         if (store.dex[mint]) return;
         const cv = modal.querySelector(".modal-cv"); cv.classList.add("shake");
         setTimeout(()=>cv.classList.remove("shake"), 420);
+        const ogre = isOgreMint(mint);
         const fresh = row.pairAgeSeconds!==undefined ? stageFor(row) : (stage||1);
-        const gain = 25 + (4-Math.min(fresh,3))*15 + (mood==="buy"?20:0); // fresher + healthier = more XP
+        const gain = 25 + (4-Math.min(fresh,3))*15 + (mood==="buy"?20:0) + (ogre?50:0); // fresher/healthier/ogre = more XP
         store.xp += gain;
-        store.dex[mint] = { mint, symbol:creatureName(row), mc:num(row.marketCap||row.marketCapUsd), mood, stage:Math.max(fresh,1), verdict:"caught", caughtAt:Date.now() };
+        store.stats = store.stats || {}; if (ogre) store.stats.ogresCaught = (store.stats.ogresCaught||0)+1;
+        store.dex[mint] = { mint, symbol:creatureName(row), mc:num(row.marketCap||row.marketCapUsd), mood, stage:Math.max(fresh,1), ogre, verdict:ogre?"OGRE":"caught", caughtAt:Date.now() };
         save(store);
+        checkUnlocks();
         renderProgress();
-        toast(`Caught $${creatureName(row)}! +${gain} XP`);
+        toast(`Caught ${ogre?"🧌 ":""}$${creatureName(row)}! +${gain} XP`);
         const btn = modal.querySelector("[data-catch]"); if (btn){ btn.textContent="✅ Caught"; btn.disabled=true; btn.style.opacity=".5"; }
         if (view==="wild") { const card = $(`[data-grid] .card[data-mint="${CSS.escape(mint)}"]`); if (card) card.classList.add("caught"); }
       }
@@ -525,10 +592,19 @@
           const next = (data.livePairs?.rows || data.rows || []).filter((r)=>r && r.tokenMint);
           if (next.length) rows = next;
           if (view==="wild") render();
-          $("[data-count]").textContent = `${Math.min(rows.length,48)} creatures stirring`;
         } catch {
           $("[data-count]").textContent = "swamp feed hiccup — retrying…";
         }
+      }
+      // SlimeWire-launched coins → OGRE bosses. Launching here earns a premium,
+      // pinned, glowing game presence (free attention on the launcher's coin).
+      async function loadLaunches() {
+        try {
+          const res = await fetch(apiBase + "/api/web/swamp-launches", { cache:"no-store" });
+          const data = await res.json();
+          const next = new Set((data.launches||[]).map((l)=>String(l.mint)).filter(Boolean));
+          if (next.size) { ogreSet = next; if (view==="wild") render(); }
+        } catch {}
       }
 
       // ---------- events ----------
@@ -543,8 +619,10 @@
 
       renderProgress();
       render();
+      loadLaunches();
       loadFeed();
       setInterval(loadFeed, 9000);
+      setInterval(loadLaunches, 60000);
     })();
     </script>
   </body>

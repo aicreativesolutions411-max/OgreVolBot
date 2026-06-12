@@ -2247,6 +2247,25 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    // PUBLIC: mints launched on SlimeWire (completed pump launches). The Swamp
+    // game renders these as rare OGRE bosses, so launching here earns a premium
+    // game presence - free attention on the launcher's coin.
+    if (request.method === "GET" && pathname === "/api/web/swamp-launches") {
+      const store = await readPumpLaunchAttempts().catch(() => ({ attempts: [] }));
+      const seen = new Set();
+      const mints = [];
+      for (const attempt of [...(store.attempts || [])].reverse()) {
+        if (String(attempt.status || "").toUpperCase() !== "COMPLETE") continue;
+        const mint = String(attempt.tokenMint || "").trim();
+        if (!mint || seen.has(mint)) continue;
+        seen.add(mint);
+        mints.push({ mint, symbol: String(attempt.symbol || attempt.ticker || "").slice(0, 12) });
+        if (mints.length >= 80) break;
+      }
+      sendCachedWebJson(request, response, 200, { ok: true, launches: mints }, "public, max-age=30, stale-while-revalidate=300");
+      return;
+    }
+
     // PUBLIC proof wall data: the engine's track record - wins AND losses - with no
     // login. Every Telegram post links here; receipts are the marketing.
     if (request.method === "GET" && pathname === "/api/web/proof") {
