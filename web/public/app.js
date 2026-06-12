@@ -542,6 +542,7 @@ let lastWalletForceRefreshAt = 0;
 let walletRefreshSequence = 0;
 let positionsRefreshSequence = 0;
 let ogreAiRunInFlight = null;
+let ogreAiHuntStop = false;
 const livePairsLoadInFlight = new Map();
 const livePairsLoadVersionsByBucket = {};
 const apiInFlight = new Map();
@@ -12876,9 +12877,10 @@ function readOgreAiForm() {
     slippageCustom,
     walletGroup
   });
-  const sellDelay = fieldValue("[data-ogre-ai-delay]", "[data-ogre-ai-delay-custom]", "5");
-  const takeProfitPct = fieldValue("[data-ogre-ai-tp]", "[data-ogre-ai-tp-custom]", "25");
-  const stopLossPct = fieldValue("[data-ogre-ai-sl]", "[data-ogre-ai-sl-custom]", "8");
+  // Runner-hunting defaults: 1h fallback timer, 2x take-profit, wide stop.
+  const sellDelay = fieldValue("[data-ogre-ai-delay]", "[data-ogre-ai-delay-custom]", "60");
+  const takeProfitPct = fieldValue("[data-ogre-ai-tp]", "[data-ogre-ai-tp-custom]", "100");
+  const stopLossPct = fieldValue("[data-ogre-ai-sl]", "[data-ogre-ai-sl-custom]", "40");
   const slippageBps = fieldValue("[data-ogre-ai-slippage]", "[data-ogre-ai-slippage-custom]", "400");
   const minScore = "";
   if (!walletIndexes.length && !walletGroup) throw new Error("Choose at least one managed wallet or enter a group label.");
@@ -12908,26 +12910,57 @@ function setOgreAiStatus(message) {
 
 async function startOgreAiRun() {
   if (ogreAiRunInFlight) {
-    setOgreAiStatus("Ogre A.I. is already scanning. Please wait for completion.");
+    // Second tap while hunting = stop after the current scan. One tap should
+    // keep hunting until it lands a buy, not require re-tapping each time.
+    ogreAiHuntStop = true;
+    setOgreAiStatus("Stopping the hunt after this scan...");
     return;
   }
   const runToken = Symbol("ogre-ai-run");
+  ogreAiHuntStop = false;
   try {
     const payload = readOgreAiForm();
     state.ogreAiLoading = true;
     ogreAiRunInFlight = runToken;
-    setOgreAiStatus("Scanning fresh low-MC pairs and arming managed exits...");
-    render();
-    const data = await api("/api/web/ogre-ai/start", {
-      method: "POST",
-      body: JSON.stringify(payload),
-      timeoutMs: API_LONG_ACTION_TIMEOUT_MS
-    });
-    state.ogreAiResult = data.ogreAi;
-    rememberOgreAiMints(data.ogreAi);
-    state.tradePlanResult = data.ogreAi?.plans?.[0] || state.tradePlanResult;
-    setOgreAiStatus(data.ogreAi?.message || "Ogre A.I. run armed.");
-    queuePostTradeRefresh(firstResultSignature(data.ogreAi?.plans?.[0]), "ogre-ai-run");
+    // Skip tokens that fail a buy precheck so each rescan moves on to the next.
+    const avoid = Array.isArray(payload.recentMints) ? [...payload.recentMints] : [];
+    let data = null;
+    let armed = false;
+    let scan = 0;
+    const maxScans = 120; // ~10 min safety cap, then stop and let the user re-tap
+    while (!armed && !ogreAiHuntStop && scan < maxScans) {
+      scan += 1;
+      setOgreAiStatus(scan === 1
+        ? "Scanning fresh low-MC pairs and arming managed exits..."
+        : `Hunting fresh pairs... (scan ${scan}) - tap Scan again to stop.`);
+      render();
+      data = await api("/api/web/ogre-ai/start", {
+        method: "POST",
+        body: JSON.stringify({ ...payload, recentMints: avoid }),
+        timeoutMs: API_LONG_ACTION_TIMEOUT_MS
+      });
+      armed = Number(data.ogreAi?.armedCount || 0) > 0 || (data.ogreAi?.plans?.length || 0) > 0;
+      if (armed) break;
+      for (const item of (data.ogreAi?.errors || [])) {
+        if (item?.tokenMint && !avoid.includes(item.tokenMint)) avoid.push(item.tokenMint);
+      }
+      for (const item of (data.ogreAi?.attemptedPicks || [])) {
+        if (item?.tokenMint && !avoid.includes(item.tokenMint)) avoid.push(item.tokenMint);
+      }
+      if (ogreAiHuntStop) break;
+      await sleep(5000); // let the live stream surface new sub-30s launches
+    }
+    state.ogreAiResult = data?.ogreAi;
+    rememberOgreAiMints(data?.ogreAi);
+    state.tradePlanResult = data?.ogreAi?.plans?.[0] || state.tradePlanResult;
+    setOgreAiStatus(armed
+      ? (data?.ogreAi?.message || "Ogre A.I. run armed.")
+      : ogreAiHuntStop
+        ? "Hunt stopped. Tap Scan to hunt again."
+        : "Still hunting - no clean fresh pair armed yet. Tap Scan to keep going.");
+    if (armed) {
+      queuePostTradeRefresh(firstResultSignature(data?.ogreAi?.plans?.[0]), "ogre-ai-run");
+    }
     state.activeTab = "ogreAi";
     render();
   } catch (error) {
@@ -12935,6 +12968,7 @@ async function startOgreAiRun() {
     setError(error.message);
   } finally {
     state.ogreAiLoading = false;
+    ogreAiHuntStop = false;
     if (ogreAiRunInFlight === runToken) ogreAiRunInFlight = null;
     render();
   }
