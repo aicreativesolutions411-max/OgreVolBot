@@ -161,9 +161,10 @@
             cs.candles.setData(rows.map((r) => ({ time: r.t, open: r.o, high: r.h, low: r.l, close: r.c })));
             cs.volume.setData(rows.map((r) => ({ time: r.t, value: r.v, color: r.c >= r.o ? "rgba(114,255,35,0.35)" : "rgba(255,107,94,0.35)" })));
             cs.lastBar = { ...rows[rows.length - 1] };
-            // Show the recent action with fat readable candles instead of
-            // squeezing 300 bars into the canvas.
-            if (fit) cs.chart.timeScale().scrollToRealTime();
+            // Default view after setData already lands on the newest candles
+            // at the configured barSpacing. scrollToRealTime would scroll PAST
+            // slightly-lagged candles into empty future space; fitContent
+            // squeezes 300 bars into hairlines. Do neither.
             liveDot.hidden = false;
           } catch {
             if (!cs.chart) showChartFallback();
