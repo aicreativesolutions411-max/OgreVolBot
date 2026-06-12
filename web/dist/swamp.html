@@ -107,6 +107,16 @@
       .btn.ape { background:linear-gradient(135deg,var(--green),var(--green2)); color:#071006; }
       .btn.ghost { background:rgba(8,20,10,0.7); border:1px solid var(--line); color:#eaffe0; font-size:0.8rem; padding:11px; }
       .mlinks { display:flex; gap:8px; margin-top:8px; }
+      /* overworld */
+      .world-wrap { position:relative; margin:10px 0 4px; display:none; }
+      .world-wrap.on { display:block; }
+      .world-wrap canvas[data-world] { width:100%; aspect-ratio:13/9; image-rendering:pixelated; border:1px solid var(--line); border-radius:16px; background:#06170c; display:block; touch-action:none; }
+      .world-hint { text-align:center; color:var(--dim); font-size:0.68rem; margin-top:6px; }
+      .dpad { position:absolute; left:10px; bottom:34px; display:flex; flex-direction:column; align-items:center; gap:4px; z-index:5; opacity:0.85; }
+      .dpad button { width:46px; height:42px; border-radius:10px; border:1px solid var(--line); background:rgba(8,20,10,0.82); color:var(--green); font-size:1rem; font-weight:900; cursor:pointer; touch-action:none; }
+      .dpad div { display:flex; gap:4px; }
+      .dpad button:active { background:var(--green); color:#071006; }
+      @media (min-width:760px){ .dpad { display:none; } }
       /* living swamp */
       .cv { animation: bob var(--bobdur,3.2s) ease-in-out var(--bobdel,0s) infinite; transform-origin: 50% 90%; }
       @keyframes bob { 0%,100%{ transform:translateY(0) scaleY(1);} 50%{ transform:translateY(-3px) scaleY(1.03);} }
@@ -214,8 +224,18 @@
       </div>
 
       <div class="tabs">
-        <button class="tab on" data-view="wild">🌿 Wild</button>
-        <button class="tab" data-view="dex">🎒 My Swampdex</button>
+        <button class="tab on" data-view="world">🗺️ Swamp</button>
+        <button class="tab" data-view="wild">📡 Feed</button>
+        <button class="tab" data-view="dex">🎒 Swampdex</button>
+      </div>
+
+      <div class="world-wrap" data-world-wrap>
+        <canvas data-world width="624" height="432"></canvas>
+        <div class="world-hint">🕹️ walk into slimes to catch them · 🌿 tall grass hides fresh spawns · 🏠 enter buildings</div>
+        <div class="dpad" data-dpad>
+          <button data-dir="up">▲</button>
+          <div><button data-dir="left">◀</button><button data-dir="down">▼</button><button data-dir="right">▶</button></div>
+        </div>
       </div>
 
       <div class="worth" data-worth hidden></div>
@@ -679,7 +699,7 @@
 
       // ---------- state ----------
       let rows = [];
-      let view = "wild";
+      let view = "world";
       let ogreSet = new Set(); // mints launched on SlimeWire = OGRE bosses
       const VERDICT_COLOR = { BUY:"#72ff23", CAUTION:"#ffd84d", RISK:"#ff9d4d", AVOID:"#ff6b5e" };
       const isOgreMint = (mint) => ogreSet.has(String(mint));
@@ -771,7 +791,12 @@
         return `<div style="grid-column:1/-1;display:flex;gap:7px;flex-wrap:wrap;margin-bottom:4px">${chips}</div>`;
       }
 
-      function render() { renderProgress(); if (view==="wild") renderWild(); else renderDex(); }
+      function render() {
+        renderProgress();
+        if (view==="world") { $("[data-grid]").innerHTML=""; $("[data-empty]").hidden=true; $("[data-count]").textContent = `${rows.length} slimes roaming · ${Object.keys(store.dex).length} caught`; }
+        else if (view==="wild") renderWild();
+        else renderDex();
+      }
 
       // ---------- modal ----------
       async function openCreature(mint) {
@@ -802,7 +827,9 @@
           </div>
           <div class="mlinks">
             <a class="btn ghost" href="${chartUrl}">📊 Shield + chart</a>
-            <button class="btn ghost" data-share>📸 Share</button>
+            <button class="btn ghost" data-shill-x>𝕏 Shill</button>
+            <button class="btn ghost" data-shill-tg>✈️ TG</button>
+            <button class="btn ghost" data-share>📸</button>
           </div>
         `;
         scrim.classList.add("on");
@@ -815,10 +842,20 @@
           store.stats = store.stats || {}; store.stats.aped = (store.stats.aped||0)+1;
           store.xp += 15; save(store); questEvent("ape"); checkUnlocks(); renderProgress();
         });
+        // shill tie-ins: one tap to X / Telegram with the CA + shield link + game link
+        const tUrl = `https://www.slimewire.org/t?ca=${encodeURIComponent(mint)}`;
+        const shillText = `Just slimed $${creatureName(row)} in the Swamp 🐸⚔️\n\nCA: ${mint}\n\nLive shield read 🛡 ${tUrl}\nPlay: slimewire.org/swamp`;
+        modal.querySelector("[data-shill-x]").onclick = () => {
+          store.xp += 10; save(store); renderProgress(); toast("+10 XP for shilling 🫡");
+          window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(shillText)}`, "_blank");
+        };
+        modal.querySelector("[data-shill-tg]").onclick = () => {
+          store.xp += 10; save(store); renderProgress(); toast("+10 XP for shilling 🫡");
+          window.open(`https://t.me/share/url?url=${encodeURIComponent(tUrl)}&text=${encodeURIComponent(shillText)}`, "_blank");
+        };
         modal.querySelector("[data-share]").onclick = () => {
-          const url = `${location.origin}/t?ca=${encodeURIComponent(mint)}`;
-          if (navigator.share) navigator.share({ title:"SlimeWire", text:`Caught $${creatureName(row)} in the Swamp 🐸 slimewire.org/swamp`, url }).catch(()=>{});
-          else { navigator.clipboard?.writeText(url); toast("Link copied"); }
+          if (navigator.share) navigator.share({ title:"SlimeWire", text:shillText, url:tUrl }).catch(()=>{});
+          else { navigator.clipboard?.writeText(tUrl); toast("Link copied"); }
         };
         // pull the REAL shield verdict (this is the trading funnel payload)
         try {
@@ -838,7 +875,13 @@
         if (verdict==="RISK"||verdict==="AVOID") return "Smells like a trap. Catch it for the dex, think twice before aping.";
         return "A fresh crawler. Its fate is still being written on the chart.";
       }
-      function closeModal(){ $("[data-scrim]").classList.remove("on"); }
+      let encounterImmuneUntil = 0;
+      function closeModal(){
+        $("[data-scrim]").classList.remove("on");
+        encounterLock = false;
+        encounterImmuneUntil = Date.now() + 1600; // step away without re-trigger
+        for (const k of Object.keys(keys)) keys[k] = false;
+      }
       $("[data-scrim]").addEventListener("click", (e)=>{ if (e.target===$("[data-scrim]")) closeModal(); });
 
       // ---------- catch minigame: stop the marker inside the slime zone ----------
@@ -920,6 +963,201 @@
         if (game) game.remove();
         const btn = modal.querySelector("[data-catch]"); if (btn){ btn.textContent="✅ Caught"; btn.disabled=true; btn.style.opacity=".5"; }
         if (view==="wild") { const card = $(`[data-grid] .card[data-mint="${CSS.escape(mint)}"]`); if (card) card.classList.add("caught"); }
+        try { syncRoamers(); } catch {}
+      }
+
+      // ================= OVERWORLD (Pokemon-style swamp) =================
+      const W_COLS = 26, W_ROWS = 18, TILE = 24;
+      const worldCv = $("[data-world]");
+      const wctx = worldCv ? worldCv.getContext("2d") : null;
+      // tiles: 0 grass, 1 tall-grass (encounters), 2 water, 3 mud path, 4 tree, 5 door
+      const BUILDINGS = [
+        { id:"lab",  name:"🥚 Launch Lab",   sub:"Hatch your own coin — it becomes an OGRE BOSS", url:"/terminal", x:3,  y:2,  w:4, h:3, color:"#2f6b2a", roof:"#72ff23" },
+        { id:"post", name:"⚡ Trading Post", sub:"The full SlimeWire terminal", url:"/terminal", x:19, y:2,  w:4, h:3, color:"#4a3a22", roof:"#ffd84d" },
+        { id:"totem",name:"🏆 Proof Totem",  sub:"Every call tracked — wins AND losses", url:"/proof", x:11, y:12, w:2, h:2, color:"#3a2f4f", roof:"#c79bff" }
+      ];
+      let wmap = null, mapLayer = null;
+      function genMap() {
+        const r = rng(hash(dayKey()+"swampmap"));
+        wmap = Array.from({length:W_ROWS},()=>Array(W_COLS).fill(0));
+        for (let y=0;y<W_ROWS;y++) for (let x=0;x<W_COLS;x++) {
+          if (x===0||y===0||x===W_COLS-1||y===W_ROWS-1) { wmap[y][x]=4; continue; }
+          const v = r();
+          wmap[y][x] = v<0.10 ? 2 : v<0.16 ? 4 : v<0.40 ? 1 : 0;
+        }
+        // mud path cross
+        const py = Math.floor(W_ROWS/2);
+        for (let x=1;x<W_COLS-1;x++) wmap[py][x]=3;
+        for (let y=1;y<W_ROWS-1;y++) wmap[y][Math.floor(W_COLS/2)]=3;
+        // buildings stamp (4 = solid, door = 5 at bottom-center)
+        for (const b of BUILDINGS) {
+          for (let y=b.y;y<b.y+b.h;y++) for (let x=b.x;x<b.x+b.w;x++) if (wmap[y]?.[x]!==undefined) wmap[y][x]=4;
+          b.doorX = b.x + Math.floor(b.w/2); b.doorY = b.y + b.h;
+          if (wmap[b.doorY]?.[b.doorX]!==undefined) wmap[b.doorY][b.doorX]=5;
+        }
+        // pre-render map layer
+        mapLayer = document.createElement("canvas"); mapLayer.width = W_COLS*TILE; mapLayer.height = W_ROWS*TILE;
+        const m = mapLayer.getContext("2d");
+        const tr = rng(hash(dayKey()+"tiles"));
+        for (let y=0;y<W_ROWS;y++) for (let x=0;x<W_COLS;x++) {
+          const t = wmap[y][x], X=x*TILE, Y=y*TILE;
+          m.fillStyle = t===2 ? "#123e4a" : t===3 ? "#4a3a22" : t===4 ? "#0a2410" : "#15401e";
+          m.fillRect(X,Y,TILE,TILE);
+          if (t===0||t===1) { m.fillStyle = "rgba(0,0,0,0.08)"; if ((x+y)%2) m.fillRect(X,Y,TILE,TILE); }
+          if (t===1) { m.strokeStyle = "#2f8a3a"; m.lineWidth=2; for (let i=0;i<3;i++){ const gx=X+4+i*7; m.beginPath(); m.moveTo(gx,Y+TILE-3); m.lineTo(gx+2,Y+6); m.stroke(); } }
+          if (t===2) { m.fillStyle = "rgba(255,255,255,0.08)"; m.fillRect(X+3,Y+5+((x+y)%3)*4,TILE-9,2); }
+          if (t===4 && !(y===0||x===0||x===W_COLS-1||y===W_ROWS-1)) {
+            m.fillStyle="#13390f"; m.beginPath(); m.arc(X+TILE/2, Y+TILE/2-2, TILE/2-2, 0, 7); m.fill();
+            m.fillStyle="#0a2410"; m.fillRect(X+TILE/2-2, Y+TILE/2+4, 4, 7);
+          }
+          if (tr()<0.03 && t===0) { m.fillStyle="#d9ffa0"; m.fillRect(X+TILE/2,Y+TILE/2,3,3); }
+        }
+        // buildings drawn on map layer
+        for (const b of BUILDINGS) {
+          const X=b.x*TILE, Y=b.y*TILE, Wd=b.w*TILE, Hd=b.h*TILE;
+          m.fillStyle=b.color; m.fillRect(X,Y+8,Wd,Hd-8);
+          m.fillStyle=b.roof; m.beginPath(); m.moveTo(X-4,Y+10); m.lineTo(X+Wd/2,Y-8); m.lineTo(X+Wd+4,Y+10); m.closePath(); m.fill();
+          m.fillStyle="rgba(0,0,0,0.5)"; m.fillRect((b.doorX)*TILE+4, Y+Hd-16, TILE-8, 16);
+          m.fillStyle="#eaffe0"; m.font="bold 10px Inter"; m.textAlign="center";
+          m.fillText(b.name.replace(/^[^ ]+ /,""), X+Wd/2, Y+Hd+ (b.id==="totem"? -Hd-12 : 0) - 0 + 8 + (b.id==="totem"?0:0));
+        }
+      }
+      const walkable = (x,y)=> wmap && wmap[y] && (wmap[y][x]===0||wmap[y][x]===1||wmap[y][x]===3||wmap[y][x]===5);
+      const player = { x:13, y:10, px:13*TILE, py:10*TILE, moving:false, dir:"down", frame:0 };
+      let roamers = []; // {mint,row,x,y,px,py,sprite,wanderAt}
+      function spriteFor(row, ogre) {
+        const c = document.createElement("canvas"); c.width=40; c.height=40;
+        drawCreature(c, row.tokenMint, moodFor(row), Math.max(stageFor(row),1), ogre);
+        return c;
+      }
+      function syncRoamers() {
+        if (!wmap) return;
+        const want = rows.filter((r)=>!store.dex[r.tokenMint]).slice(0,10);
+        const keep = new Map(roamers.map((c)=>[c.mint,c]));
+        roamers = want.map((row)=>{
+          const old = keep.get(row.tokenMint);
+          if (old) { old.row = row; return old; }
+          const rr = rng(hash(row.tokenMint+"spawn"));
+          let x,y,tries=0; do { x=2+Math.floor(rr()*(W_COLS-4)); y=2+Math.floor(rr()*(W_ROWS-4)); tries++; } while(!walkable(x,y)&&tries<40);
+          sfx("tick");
+          return { mint:row.tokenMint, row, x, y, px:x*TILE, py:y*TILE, sprite:spriteFor(row,isOgreMint(row.tokenMint)), wanderAt:Date.now()+1500+Math.random()*2000 };
+        });
+      }
+      let encounterLock = false;
+      function tryEncounter(mint) {
+        if (encounterLock || Date.now() < encounterImmuneUntil) return;
+        encounterLock = true;
+        sfx("level");
+        openCreature(mint);
+      }
+      const keys = {};
+      window.addEventListener("keydown",(e)=>{ const k={ArrowUp:"up",ArrowDown:"down",ArrowLeft:"left",ArrowRight:"right",w:"up",s:"down",a:"left",d:"right"}[e.key]; if(k&&view==="world"){ keys[k]=true; e.preventDefault(); } });
+      window.addEventListener("keyup",(e)=>{ const k={ArrowUp:"up",ArrowDown:"down",ArrowLeft:"left",ArrowRight:"right",w:"up",s:"down",a:"left",d:"right"}[e.key]; if(k) keys[k]=false; });
+      document.querySelectorAll("[data-dpad] button").forEach((b)=>{
+        const d=b.dataset.dir;
+        b.addEventListener("pointerdown",(e)=>{ e.preventDefault(); keys[d]=true; });
+        for (const ev of ["pointerup","pointerleave","pointercancel"]) b.addEventListener(ev,()=>{ keys[d]=false; });
+      });
+      worldCv?.addEventListener("pointerdown",(e)=>{
+        const r = worldCv.getBoundingClientRect();
+        const sx = (e.clientX-r.left)/r.width*W_COLS*TILE, sy=(e.clientY-r.top)/r.height*W_ROWS*TILE;
+        for (const c of roamers) if (Math.abs(c.px+20-sx)<26 && Math.abs(c.py+20-sy)<26) { tryEncounter(c.mint); return; }
+      });
+      function stepPlayer() {
+        if (player.moving || encounterLock) return;
+        const dir = keys.up?"up":keys.down?"down":keys.left?"left":keys.right?"right":null;
+        if (!dir) return;
+        player.dir = dir;
+        const nx = player.x + (dir==="left"?-1:dir==="right"?1:0);
+        const ny = player.y + (dir==="up"?-1:dir==="down"?1:0);
+        const hit = roamers.find((c)=>c.x===nx&&c.y===ny);
+        if (hit) { tryEncounter(hit.mint); return; }
+        if (!walkable(nx,ny)) return;
+        player.moving = true; player.tx=nx; player.ty=ny; sfx("tick");
+      }
+      function updateWorld(dt) {
+        stepPlayer();
+        const sp = 0.12*dt;
+        if (player.moving) {
+          const gx=player.tx*TILE, gy=player.ty*TILE;
+          player.px += Math.sign(gx-player.px)*Math.min(sp,Math.abs(gx-player.px));
+          player.py += Math.sign(gy-player.py)*Math.min(sp,Math.abs(gy-player.py));
+          player.frame += dt*0.02;
+          if (player.px===gx&&player.py===gy) {
+            player.x=player.tx; player.y=player.ty; player.moving=false;
+            const t = wmap[player.y][player.x];
+            if (t===5) { const b=BUILDINGS.find((b)=>b.doorX===player.x&&b.doorY===player.y); if (b) openBuilding(b); }
+            else if (t===1 && Math.random()<0.14 && rows.length) {
+              const fresh = rows.filter((r)=>!store.dex[r.tokenMint] && ageSeconds(r)<300);
+              const pick = fresh[Math.floor(Math.random()*fresh.length)] || rows[Math.floor(Math.random()*Math.min(rows.length,12))];
+              if (pick) { toast("🌿 A wild slime rustles out of the grass!"); tryEncounter(pick.tokenMint); }
+            }
+          }
+        }
+        const now = Date.now();
+        for (const c of roamers) {
+          if (now > c.wanderAt && !c.movingTo) {
+            const dirs=[[0,1],[0,-1],[1,0],[-1,0]]; const [dx,dy]=dirs[Math.floor(Math.random()*4)];
+            const nx=c.x+dx, ny=c.y+dy;
+            if (walkable(nx,ny) && !(nx===player.x&&ny===player.y)) { c.movingTo={x:nx,y:ny}; }
+            c.wanderAt = now + 1400 + Math.random()*2600;
+          }
+          if (c.movingTo) {
+            const gx=c.movingTo.x*TILE, gy=c.movingTo.y*TILE; const cs=0.05*dt;
+            c.px += Math.sign(gx-c.px)*Math.min(cs,Math.abs(gx-c.px));
+            c.py += Math.sign(gy-c.py)*Math.min(cs,Math.abs(gy-c.py));
+            if (c.px===gx&&c.py===gy){ c.x=c.movingTo.x; c.y=c.movingTo.y; c.movingTo=null;
+              if (Math.abs(c.x-player.x)+Math.abs(c.y-player.y)===1) tryEncounter(c.mint);
+            }
+          }
+        }
+      }
+      function drawPlayer() {
+        const X=player.px, Y=player.py-6;
+        const step = player.moving ? Math.floor(player.frame)%2 : 0;
+        wctx.fillStyle="rgba(0,0,0,0.3)"; wctx.beginPath(); wctx.ellipse(X+12,Y+26,8,3,0,0,7); wctx.fill();
+        wctx.fillStyle="#3fae12"; wctx.fillRect(X+6,Y+8,12,12);            // body
+        wctx.fillStyle="#72ff23"; wctx.fillRect(X+7,Y+4,10,8);             // head
+        wctx.fillStyle="#0a1505"; wctx.fillRect(X+9,Y+7,2,2); wctx.fillRect(X+13,Y+7,2,2); // eyes
+        wctx.fillStyle="#2c5e1a";                                          // cap
+        wctx.fillRect(X+6,Y+2,12,3); wctx.fillRect(X+6,Y+4,4,2);
+        wctx.fillStyle="#2f8a10";                                          // feet
+        wctx.fillRect(X+6+(step?2:0),Y+20,4,4); wctx.fillRect(X+14-(step?2:0),Y+20,4,4);
+      }
+      let lastT = 0, worldRunning = false;
+      function worldLoop(t) {
+        if (view!=="world") { worldRunning=false; return; }
+        const dt = Math.min(50, t-lastT||16); lastT=t;
+        updateWorld(dt);
+        wctx.clearRect(0,0,worldCv.width,worldCv.height);
+        wctx.drawImage(mapLayer,0,0);
+        const sorted=[...roamers].sort((a,b)=>a.py-b.py);
+        for (const c of sorted) {
+          const bobY = Math.sin(t/300 + c.px)*2;
+          if (isShiny(c.mint)) { wctx.fillStyle="rgba(255,216,77,0.35)"; wctx.beginPath(); wctx.arc(c.px+20,c.py+20+bobY,16,0,7); wctx.fill(); }
+          wctx.drawImage(c.sprite, c.px+0, c.py-4+bobY);
+        }
+        drawPlayer();
+        requestAnimationFrame(worldLoop);
+      }
+      function startWorld() {
+        if (!wctx) return;
+        if (!wmap) genMap();
+        syncRoamers();
+        $("[data-world-wrap]").classList.add("on");
+        if (!worldRunning) { worldRunning=true; requestAnimationFrame(worldLoop); }
+      }
+      function stopWorld(){ $("[data-world-wrap]")?.classList.remove("on"); }
+      function openBuilding(b) {
+        const scrim=$("[data-scrim]"), modal=$("[data-modal]");
+        modal.innerHTML = `<button class="x" data-close>✕</button>
+          <h2 style="text-align:center">${esc(b.name)}</h2>
+          <p class="lore" style="min-height:0">${esc(b.sub)}</p>
+          <div class="row2"><a class="btn ape" href="${b.url}">Enter</a><button class="btn ghost" data-close2>Not yet</button></div>`;
+        scrim.classList.add("on");
+        const leave=()=>{ scrim.classList.remove("on"); player.y=Math.min(W_ROWS-2,player.y+0); player.ty=player.y; player.tx=player.x; };
+        modal.querySelector("[data-close]").onclick=leave;
+        modal.querySelector("[data-close2]").onclick=leave;
       }
 
       // ---------- feed ----------
@@ -930,7 +1168,8 @@
           const next = (data.livePairs?.rows || data.rows || []).filter((r)=>r && r.tokenMint);
           if (next.length) rows = next;
           updateWorthFromRows();
-          if (view==="wild") render();
+          if (view==="world") { syncRoamers(); render(); }
+          else if (view==="wild") render();
         } catch {
           $("[data-count]").textContent = "swamp feed hiccup — retrying…";
         }
@@ -1007,7 +1246,9 @@
       });
       document.querySelectorAll(".tab").forEach((t)=>t.addEventListener("click", ()=>{
         document.querySelectorAll(".tab").forEach((x)=>x.classList.remove("on")); t.classList.add("on");
-        view = t.getAttribute("data-view"); render();
+        view = t.getAttribute("data-view");
+        if (view==="world") startWorld(); else stopWorld();
+        render();
       }));
 
       spawnAmbience();
@@ -1015,6 +1256,7 @@
       renderProgress();
       renderQuests();
       renderWorth();
+      startWorld();
       render();
       loadLaunches();
       loadFeed();
