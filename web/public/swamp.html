@@ -243,6 +243,7 @@
 
       <div class="feedbar">
         <span class="live"><span class="dot"></span> Live spawns</span>
+        <small data-storm style="font-weight:800"></small>
         <small data-count>loading the swamp…</small>
       </div>
 
@@ -517,6 +518,22 @@
       // ---------- shiny spawns (rare, daily-rotating) ----------
       function isShiny(mint) { return (hash(String(mint)+dayKey()+"shiny") % 100) < 4; }
 
+      // ---------- hourly FRESH LAUNCH STORM (minutes :00-:09 every hour) ----------
+      function isStorm(){ return new Date().getMinutes() < 10; }
+      let stormWasOn = isStorm();
+      function stormStatusText() {
+        const m = new Date().getMinutes();
+        return isStorm()
+          ? `⛈️ FRESH LAUNCH STORM — 1.5x XP, extra spawns! ${10-m}m left`
+          : `next storm in ${60-m}m`;
+      }
+      setInterval(()=>{
+        const on = isStorm();
+        if (on && !stormWasOn) { sfx("level"); toast("⛈️ FRESH LAUNCH STORM! Extra spawns + 1.5x XP for 10 minutes!"); try { syncRoamers(); } catch {} }
+        stormWasOn = on;
+        const el = $("[data-storm]"); if (el) { el.textContent = stormStatusText(); el.style.color = on ? "var(--warn)" : "var(--dim)"; }
+      }, 5000);
+
       // ---------- deterministic creature generator ----------
       function hash(str) { let h = 2166136261 >>> 0; for (let i=0;i<str.length;i++){ h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
       function rng(seed) { let s = seed >>> 0; return () => { s = (Math.imul(s ^ (s>>>15), 1 | s) + ((s ^ (s>>>7)) >>> 0)) >>> 0; s ^= s + Math.imul(s ^ (s>>>3), 61 | s); return ((s ^ (s>>>14)) >>> 0) / 4294967296; }; }
@@ -693,6 +710,29 @@
         return 3;                   // elder
       }
       const STAGE_NAME = ["Spawnling","Blobling","Slimebeast","Elder Ooze"];
+      // Rare spawn TYPES tied to real market behavior (user-designed):
+      //   RUNNER = low MC + strong buy pressure (the 2x candidates)
+      //   SHINY  = sudden volume spike (or daily-hash shiny)
+      //   GHOST  = drained relic   TOXIC = risk-flagged   OGRE = launched here
+      function typeFor(row) {
+        const mc = num(row.marketCap||row.marketCapUsd), liq = num(row.liquidityUsd);
+        const vol = num(row.volume5m), buys = num(row.buys5m), sells = num(row.sells5m);
+        const bp = buys+sells>0 ? buys/(buys+sells) : 0.5;
+        const riskText = (Array.isArray(row.riskFlags)?row.riskFlags.join(" "):"").toLowerCase();
+        if (isOgreMint(row.tokenMint)) return "ogre";
+        if (mc>0 && liq>0 && liq/mc < 0.004) return "ghost";
+        if (/mayhem|honeypot|mint|freeze|rug/.test(riskText)) return "toxic";
+        if (isShiny(row.tokenMint) || (mc>0 && vol/mc >= 0.5)) return "shinytype";
+        if (mc>0 && mc<25000 && bp>=0.62 && buys>=4) return "runner";
+        return "slime";
+      }
+      const TYPE_BADGE = {
+        ogre:   ["🧌 OGRE","#bbff63"],
+        ghost:  ["👻 GHOST","#c79bff"],
+        toxic:  ["☠️ TOXIC","#ff6b5e"],
+        shinytype:["✨ SHINY","#ffd84d"],
+        runner: ["🏃 RUNNER","#72ff23"]
+      };
       function moodFor(row) {
         // map color from the row's live signals (real shield verdict shown on tap)
         const liq = num(row.liquidityUsd), mc = num(row.marketCap || row.marketCapUsd);
@@ -732,8 +772,9 @@
         const mint = row.tokenMint; const mood = moodFor(row); const stage = stageFor(row);
         const caught = Boolean(store.dex[mint]); const ogre = isOgreMint(mint);
         const moodBadge = { buy:["BUY ZONE","#72ff23"], risk:["DICEY","#ffd84d"], avoid:["DUMPING","#ff9d4d"], rug:["DRAINED","#c79bff"] }[mood];
-        const badge = ogre ? ["🧌 OGRE","#bbff63"] : moodBadge;
-        const shiny = isShiny(mint) && !caught;
+        const ctype = typeFor(row);
+        const badge = TYPE_BADGE[ctype] || moodBadge;
+        const shiny = (ctype==="shinytype") && !caught;
         const m5 = num(row.m5 ?? row.priceChangeM5);
         const freshTag = ageSeconds(row) < 120 ? `<span class="tagnew">NEW</span>` : (m5 >= 30 ? `<span class="tagpump">🔥 +${Math.round(m5)}%</span>` : "");
         const h = hash(mint);
@@ -775,7 +816,7 @@
         $("[data-count]").textContent = `${caught.length} caught`;
         if (!caught.length) { grid.innerHTML = ""; empty.hidden = false; empty.textContent = "No catches yet. Tap a wild creature and throw a slimeball! 🟢"; return; }
         empty.hidden = true;
-        grid.innerHTML = unlocksHtml() + caught.map((c) => {
+        grid.innerHTML = recordsHtml() + unlocksHtml() + caught.map((c) => {
           const mult = num(c.mc)>0 && num(c.mcNow)>0 ? c.mcNow/c.mc : null;
           const gain = mult===null ? "" : `<span class="gainchip ${mult>=1?"gain-up":"gain-down"}">${mult>=1?"+":""}${((mult-1)*100).toFixed(0)}%</span>`;
           return `<div class="card caught ${c.ogre?"ogre":""} ${c.shiny?"shiny":""}" data-mint="${esc(c.mint)}">
@@ -801,6 +842,20 @@
         for (const u of UNLOCKS) {
           if (!store.unlocked[u.id] && u.test(store)) { store.unlocked[u.id] = Date.now(); save(store); toast(`${u.icon} Unlocked: ${u.name}!`); }
         }
+      }
+      // personal records (local leaderboard until the public one ships)
+      function recordsHtml() {
+        const entries = Object.values(store.dex);
+        if (!entries.length) return "";
+        let best = null;
+        for (const c of entries) { const m = num(c.mc)>0&&num(c.mcNow)>0 ? c.mcNow/c.mc : 0; if (!best || m > best.m) best = { sym:c.symbol, m }; }
+        const shinies = entries.filter((c)=>c.shiny).length;
+        const ogres = entries.filter((c)=>c.ogre).length;
+        const chips = [
+          best && best.m>0 ? `🏆 Best catch: $${esc(best.sym)} ${best.m.toFixed(1)}x` : "",
+          `🎒 ${entries.length} caught`, ogres?`🧌 ${ogres} ogre${ogres>1?"s":""}`:"", shinies?`✨ ${shinies} shiny`:""
+        ].filter(Boolean).map((t)=>`<span style="border:1px solid var(--line);border-radius:99px;padding:4px 10px;font-size:0.72rem;font-weight:800;color:#eaffe0">${t}</span>`).join("");
+        return `<div style="grid-column:1/-1;display:flex;gap:7px;flex-wrap:wrap;margin-bottom:2px">${chips}</div>`;
       }
       function unlocksHtml() {
         store.unlocked = store.unlocked || {};
@@ -831,15 +886,28 @@
         modal.innerHTML = `
           <button class="x" data-close>✕</button>
           <canvas class="modal-cv" width="180" height="180"></canvas>
-          <h2>${ogre?"🧌 ":""}$${esc(creatureName(row))}</h2>
-          ${ogre?'<div style="text-align:center;color:var(--green2);font-weight:800;font-size:0.74rem;margin-top:2px">🧌 OGRE BOSS · BORN ON SLIMEWIRE</div>':''}
+          <h2>${ogre?"⚔️ ":""}$${esc(creatureName(row))}</h2>
+          ${ogre?'<div style="text-align:center;color:var(--green2);font-weight:800;font-size:0.74rem;margin-top:2px">🧌 BOSS RAID · BORN ON SLIMEWIRE</div>':''}
           <span class="verdict" data-verdict style="color:var(--dim)">reading the shield…</span>
           <p class="lore" data-lore></p>
+          ${ogre ? `<div data-bossbars style="margin:8px 0 2px">
+            ${[["HP","#72ff23","hp"],["POWER","#ffd84d","pw"],["RAGE","#ff6b5e","rg"]].map(([lb,cl,k])=>`
+            <div style="display:flex;align-items:center;gap:8px;margin:4px 0">
+              <span style="width:52px;font-size:0.6rem;font-weight:900;color:${cl}">${lb}</span>
+              <div style="flex:1;height:9px;border-radius:99px;background:rgba(0,0,0,0.45);border:1px solid var(--line);overflow:hidden">
+                <div data-boss-${k} style="height:100%;width:0%;background:${cl};transition:width .8s"></div>
+              </div></div>`).join("")}
+          </div>` : ""}
           <div class="stats">
             <div><strong>${esc(fmt(row.marketCap||row.marketCapUsd))}</strong><span>Market cap</span></div>
             <div><strong data-liq>—</strong><span>Liquidity</span></div>
             <div><strong>${esc(row.pairAgeSeconds!==undefined?ageLabel(row):"—")}</strong><span>Age</span></div>
           </div>
+          ${(() => { const c = store.dex[mint];
+            if (!c || !(num(c.mc)>0 && num(c.mcNow)>0)) return "";
+            const mult = c.mcNow/c.mc; const cls = mult>=1?"gain-up":"gain-down";
+            return `<div style="text-align:center;font-size:0.78rem;margin:2px 0 6px">🎯 Slimed at <b>${esc(fmt(c.mc))}</b> → now <b class="${cls}">${esc(fmt(c.mcNow))}</b> <span class="gainchip ${cls}">(${mult.toFixed(1)}x)</span></div>`;
+          })()}
           <div class="row2">
             <button class="btn catch" data-catch ${caught?"disabled style=opacity:.5":""}>${caught?"✅ Caught":"🫳 Throw slimeball"}</button>
             <a class="btn ape" href="${buyUrl}">⚡ Ape it</a>
@@ -885,6 +953,17 @@
           else if (vEl) vEl.textContent = "🛡 Shield read pending — verify before you ape";
           if (modal.querySelector("[data-liq]")) modal.querySelector("[data-liq]").textContent = fmt(data.liquidityUsd);
           if (lore) lore.textContent = loreFor(v, mood);
+          // boss raid stat bars from REAL data: HP = bonding curve progress,
+          // POWER = live volume vs MC, RAGE = sell pressure
+          if (ogre && modal.querySelector("[data-boss-hp]")) {
+            const hp = Math.max(4, Math.min(100, num(data.bondingProgressPct) || 8));
+            const volRatio = num(data.marketCapUsd)>0 ? Math.min(100, (num(row.volume5m)/num(data.marketCapUsd))*400) : 20;
+            const buys = num(row.buys5m), sells = num(row.sells5m);
+            const rage = buys+sells>0 ? Math.round(sells/(buys+sells)*100) : 12;
+            modal.querySelector("[data-boss-hp]").style.width = hp+"%";
+            modal.querySelector("[data-boss-pw]").style.width = Math.max(6,volRatio)+"%";
+            modal.querySelector("[data-boss-rg]").style.width = Math.max(4,rage)+"%";
+          }
         } catch { const vEl = modal.querySelector("[data-verdict]"); if (vEl) vEl.textContent = "🛡 Shield offline — trade carefully"; }
       }
       function loreFor(verdict, mood) {
@@ -964,7 +1043,7 @@
         const shiny = isShiny(mint);
         const combo = comboHit();
         const baseGain = 25 + (4-Math.min(fresh,3))*15 + (mood==="buy"?20:0) + (ogre?50:0) + (combo>=2 ? combo*8 : 0);
-        const gain = Math.round(baseGain * (shiny?3:1) * streakMult());
+        const gain = Math.round(baseGain * (shiny?3:1) * streakMult() * (isStorm()?1.5:1));
         store.xp += gain;
         store.stats = store.stats || {}; if (ogre) store.stats.ogresCaught = (store.stats.ogresCaught||0)+1;
         store.dex[mint] = { mint, symbol:creatureName(row), mc:num(row.marketCap||row.marketCapUsd), mcNow:num(row.marketCap||row.marketCapUsd), mood, stage:Math.max(fresh,1), ogre, shiny, verdict:ogre?"OGRE":(shiny?"SHINY":"caught"), caughtAt:Date.now() };
@@ -1051,7 +1130,7 @@
       }
       function syncRoamers() {
         if (!wmap) return;
-        const want = rows.filter((r)=>!store.dex[r.tokenMint]).slice(0,10);
+        const want = rows.filter((r)=>!store.dex[r.tokenMint]).slice(0, isStorm()?16:10);
         const keep = new Map(roamers.map((c)=>[c.mint,c]));
         roamers = want.map((row)=>{
           const old = keep.get(row.tokenMint);
