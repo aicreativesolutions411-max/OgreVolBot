@@ -522,7 +522,7 @@
         const ogre = isOgreMint(row.tokenMint);
         const gain = Math.round(40 * streakMult());
         store.xp += gain;
-        store.dex[row.tokenMint] = { mint:row.tokenMint, symbol:creatureName(row), mc:num(row.marketCap||row.marketCapUsd), mcNow:num(row.marketCap||row.marketCapUsd), mood:moodFor(row), stage:1, ogre, verdict:"hatched 🥚", caughtAt:Date.now() };
+        store.dex[row.tokenMint] = { mint:row.tokenMint, symbol:creatureName(row), mc:num(row.marketCap||row.marketCapUsd), mcNow:num(row.marketCap||row.marketCapUsd), mood:moodFor(row), stage:1, ogre, spriteName:(ogre?"ogre-boss":spriteNameForRow(row)), verdict:"hatched 🥚", caughtAt:Date.now() };
         save(store); sfx("catch");
         particleBurst(window.innerWidth/2, window.innerHeight*0.35, ["#ffd84d","#bbff63","#fff"]);
         toast(`🥚 Hatched $${creatureName(row)}! +${gain} XP`);
@@ -757,6 +757,37 @@
         shinytype:["✨ SHINY","#ffd84d"],
         runner: ["🏃 RUNNER","#72ff23"]
       };
+
+      // ---------- real sprite art (console-tier) with procedural fallback ----------
+      const SPRITE_BASE = "/assets/slimewire/swamp/sprites/";
+      const spriteCache = {};
+      function loadSprite(name) {
+        if (!spriteCache[name]) { const img = new Image(); img.decoding="async"; img.src = SPRITE_BASE+name+".png"; spriteCache[name]=img; }
+        return spriteCache[name];
+      }
+      const TYPE_SPRITE = { ogre:"ogre-boss", ghost:"toxic-rug-slime", toxic:"toxic-rug-slime", shinytype:"shiny-slime", runner:"runner-slime" };
+      const SLIME_SKINS = ["fresh-slime","liquidity-slime","chart-wing-slime","small-ogre","candle-slime"];
+      function spriteNameForRow(row) {
+        const t = typeFor(row);
+        if (TYPE_SPRITE[t]) return TYPE_SPRITE[t];
+        const m5 = num(row.m5 ?? row.priceChangeM5);
+        if (m5 >= 40) return (hash(row.tokenMint)%2) ? "pump-rocket-slime" : "candle-slime";
+        return SLIME_SKINS[hash(row.tokenMint) % SLIME_SKINS.length];
+      }
+      ["fresh-slime","runner-slime","shiny-slime","toxic-rug-slime","sell-pressure-slime","liquidity-slime","small-ogre","ogre-boss","candle-slime","chart-wing-slime","pump-rocket-slime","swamp-trader-ogre"].forEach(loadSprite);
+      // Paint a creature into a <canvas>: real sprite if loaded, else procedural,
+      // then upgrade to the sprite the moment it loads.
+      function paintCreature(canvas, mint, mood, stage, ogre, rowOrName) {
+        const ctx = canvas.getContext("2d");
+        const name = ogre ? "ogre-boss" : (typeof rowOrName==="string" && rowOrName ? rowOrName : (rowOrName ? spriteNameForRow(rowOrName) : "fresh-slime"));
+        const img = loadSprite(name);
+        const draw = () => { try { ctx.clearRect(0,0,canvas.width,canvas.height); ctx.imageSmoothingEnabled=false;
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height); } catch {} };
+        canvas.style.filter = ogre ? "drop-shadow(0 0 8px rgba(114,255,35,0.7))" : (mood==="buy" ? "drop-shadow(0 0 5px rgba(114,255,35,0.45))" : "none");
+        if (img.complete && img.naturalWidth) draw();
+        else { drawCreature(canvas, mint, mood, stage, ogre); img.addEventListener("load", draw, { once:true }); }
+      }
+
       function moodFor(row) {
         // map color from the row's live signals (real shield verdict shown on tap)
         const liq = num(row.liquidityUsd), mc = num(row.marketCap || row.marketCapUsd);
@@ -817,7 +848,7 @@
         container.querySelectorAll(".card").forEach((card) => {
           const mint = card.getAttribute("data-mint");
           const row = list.find((r) => r.tokenMint === mint);
-          if (row) drawCreature(card.querySelector("canvas"), mint, moodFor(row), stageFor(row), isOgreMint(mint));
+          if (row) paintCreature(card.querySelector("canvas"), mint, moodFor(row), stageFor(row), isOgreMint(mint), row);
         });
       }
 
@@ -849,7 +880,7 @@
           <div class="nm">${c.ogre?"🧌 ":""}$${esc(c.symbol||c.mint.slice(0,4))}</div>
           <div class="sub"><span class="stage">${c.ogre?"SlimeWire Boss":esc(c.verdict||"caught")}</span>${gain||`<span>${esc(fmt(c.mc))}</span>`}</div>
         </div>`; }).join("");
-        grid.querySelectorAll(".card[data-mint]").forEach((card)=>{ const m=card.getAttribute("data-mint"); const c=store.dex[m]; if(c) drawCreature(card.querySelector("canvas"), m, c.mood||"buy", c.stage||1, Boolean(c.ogre)); });
+        grid.querySelectorAll(".card[data-mint]").forEach((card)=>{ const m=card.getAttribute("data-mint"); const c=store.dex[m]; if(c) paintCreature(card.querySelector("canvas"), m, c.mood||"buy", c.stage||1, Boolean(c.ogre), c.spriteName||null); });
       }
 
       // ---------- unlocks (using features grants badges) ----------
@@ -944,7 +975,7 @@
           </div>
         `;
         scrim.classList.add("on");
-        drawCreature(modal.querySelector(".modal-cv"), mint, mood, Math.max(stage,1), ogre);
+        paintCreature(modal.querySelector(".modal-cv"), mint, mood, Math.max(stage,1), ogre, rows.find((r)=>r.tokenMint===mint) || store.dex[mint]?.spriteName || null);
         modal.querySelector("[data-close]").onclick = closeModal;
         modal.querySelector("[data-catch]").onclick = () => doCatch(mint, row, mood, stage, modal);
         // Aping (the real trade) grants XP + the Degen unlock — using SlimeWire
@@ -1070,7 +1101,7 @@
         const gain = Math.round(baseGain * (shiny?3:1) * streakMult() * (isStorm()?1.5:1));
         store.xp += gain;
         store.stats = store.stats || {}; if (ogre) store.stats.ogresCaught = (store.stats.ogresCaught||0)+1;
-        store.dex[mint] = { mint, symbol:creatureName(row), mc:num(row.marketCap||row.marketCapUsd), mcNow:num(row.marketCap||row.marketCapUsd), mood, stage:Math.max(fresh,1), ogre, shiny, verdict:ogre?"OGRE":(shiny?"SHINY":"caught"), caughtAt:Date.now() };
+        store.dex[mint] = { mint, symbol:creatureName(row), mc:num(row.marketCap||row.marketCapUsd), mcNow:num(row.marketCap||row.marketCapUsd), mood, stage:Math.max(fresh,1), ogre, shiny, spriteName:(ogre?"ogre-boss":spriteNameForRow(row)), verdict:ogre?"OGRE":(shiny?"SHINY":"caught"), caughtAt:Date.now() };
         save(store);
         sfx("catch");
         const rect = modal.querySelector(".modal-cv").getBoundingClientRect();
@@ -1192,11 +1223,16 @@
       }
       const playerFrames = [makePlayerFrame(0), makePlayerFrame(1)];
       let roamers = [];
+      // roamer sprite: real PNG art, with a procedural canvas as fallback until it loads
       function spriteFor(row, ogre) {
+        const img = loadSprite(ogre ? "ogre-boss" : spriteNameForRow(row));
+        if (img.complete && img.naturalWidth) return img;
         const c = document.createElement("canvas"); c.width=48; c.height=48;
         drawCreature(c, row.tokenMint, moodFor(row), Math.max(stageFor(row),1), ogre);
+        c._upgrade = img; // swap to the real sprite when it loads
         return c;
       }
+      const playerImg = loadSprite("swamp-trader-ogre");
       function syncRoamers() {
         if (!wmap) return;
         const want = rows.filter((r)=>!store.dex[r.tokenMint]).slice(0, isStorm()?18:12);
@@ -1342,14 +1378,22 @@
           const bobY = Math.sin(t/300 + c.px)*2.4;
           const [sx,sy] = S(c.px, c.py-6+bobY);
           wctx.fillStyle="rgba(0,0,0,0.32)"; wctx.beginPath(); wctx.ellipse(sx+24*ZOOM/2,sy+46*ZOOM/2*0.92,14*ZOOM/2,4*ZOOM/2,0,0,7); wctx.fill();
-          if (typeFor(c.row)==="shinytype") { wctx.fillStyle="rgba(255,216,77,0.30)"; wctx.beginPath(); wctx.arc(sx+24*ZOOM/2, sy+24*ZOOM/2, 22*ZOOM/2, 0, 7); wctx.fill(); }
-          wctx.drawImage(c.sprite, sx, sy, 48*ZOOM*0.75, 48*ZOOM*0.75);
+          const ogreC = isOgreMint(c.mint);
+          const sz = (ogreC ? 58 : 46) * ZOOM * 0.78;
+          if (ogreC) { wctx.fillStyle="rgba(114,255,35,0.22)"; wctx.beginPath(); wctx.arc(sx+sz/2, sy+sz/2, sz*0.55, 0, 7); wctx.fill(); }
+          if (typeFor(c.row)==="shinytype") { wctx.fillStyle="rgba(255,216,77,0.30)"; wctx.beginPath(); wctx.arc(sx+sz/2, sy+sz/2, sz*0.55, 0, 7); wctx.fill(); }
+          // upgrade procedural fallback to the real sprite once it has loaded
+          let spr = c.sprite;
+          if (spr && spr._upgrade && spr._upgrade.complete && spr._upgrade.naturalWidth) spr = c.sprite = spr._upgrade;
+          wctx.drawImage(spr, sx, sy, sz, sz);
         }
-        // player (drawn after creatures behind, before those in front — simple: by y)
-        const step = player.moving ? Math.floor(player.frame)%2 : 0;
-        const [pxS,pyS] = S(player.px+2, player.py-12);
-        wctx.fillStyle="rgba(0,0,0,0.32)"; wctx.beginPath(); wctx.ellipse(pxS+14*ZOOM*0.9/2*1.0+6, pyS+34*ZOOM*0.9, 10*ZOOM*0.6, 3.4*ZOOM*0.6, 0,0,7); wctx.fill();
-        wctx.drawImage(playerFrames[step], pxS, pyS, 28*ZOOM*0.9, 34*ZOOM*0.9);
+        // player — the trader ogre sprite, with a gentle walk bob
+        const [pxS,pyS] = S(player.px - TILE*0.25, player.py - TILE*0.55);
+        const psz = TILE * 1.5 * ZOOM;
+        const walkBob = player.moving ? Math.abs(Math.sin(player.frame*3))*3*ZOOM : 0;
+        wctx.fillStyle="rgba(0,0,0,0.34)"; wctx.beginPath(); wctx.ellipse(pxS+psz/2, pyS+psz*0.92, psz*0.28, psz*0.09, 0,0,7); wctx.fill();
+        if (playerImg.complete && playerImg.naturalWidth) wctx.drawImage(playerImg, pxS, pyS - walkBob, psz, psz);
+        else { const step = player.moving ? Math.floor(player.frame)%2 : 0; wctx.drawImage(playerFrames[step], pxS, pyS, 28*ZOOM*0.9, 34*ZOOM*0.9); }
         // spores
         wctx.fillStyle="rgba(217,255,160,0.5)";
         for (const sp2 of spores) {

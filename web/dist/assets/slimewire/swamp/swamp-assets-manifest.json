@@ -1,0 +1,63 @@
+{
+  "version": "2026-06-12-swamp-assets-v1",
+  "source": "Generated SlimeWire Swamp concept sheets; chroma key removed locally.",
+  "sheets": {
+    "creatures": "/assets/slimewire/swamp/sheets/swamp-creatures-sheet.png",
+    "environment": "/assets/slimewire/swamp/sheets/swamp-environment-sheet.png"
+  },
+  "creatures": [
+    {
+      "id": "fresh-slime",
+      "path": "/assets/slimewire/swamp/sprites/fresh-slime.png"
+    },
+    {
+      "id": "runner-slime",
+      "path": "/assets/slimewire/swamp/sprites/runner-slime.png"
+    },
+    {
+      "id": "shiny-slime",
+      "path": "/assets/slimewire/swamp/sprites/shiny-slime.png"
+    },
+    {
+      "id": "toxic-rug-slime",
+      "path": "/assets/slimewire/swamp/sprites/toxic-rug-slime.png"
+    },
+    {
+      "id": "sell-pressure-slime",
+      "path": "/assets/slimewire/swamp/sprites/sell-pressure-slime.png"
+    },
+    {
+      "id": "liquidity-slime",
+      "path": "/assets/slimewire/swamp/sprites/liquidity-slime.png"
+    },
+    {
+      "id": "small-ogre",
+      "path": "/assets/slimewire/swamp/sprites/small-ogre.png"
+    },
+    {
+      "id": "ogre-boss",
+      "path": "/assets/slimewire/swamp/sprites/ogre-boss.png"
+    },
+    {
+      "id": "candle-slime",
+      "path": "/assets/slimewire/swamp/sprites/candle-slime.png"
+    },
+    {
+      "id": "chart-wing-slime",
+      "path": "/assets/slimewire/swamp/sprites/chart-wing-slime.png"
+    },
+    {
+      "id": "pump-rocket-slime",
+      "path": "/assets/slimewire/swamp/sprites/pump-rocket-slime.png"
+    },
+    {
+      "id": "swamp-trader-ogre",
+      "path": "/assets/slimewire/swamp/sprites/swamp-trader-ogre.png"
+    }
+  ],
+  "notes": [
+    "Use sprites as optional art skins; keep procedural canvas creatures as fallback.",
+    "Ogre boss assets are intended for SlimeWire-launched coins and launch raid events.",
+    "Toxic/rug and sell-pressure sprites should be informational game visuals, not financial advice."
+  ]
+}
