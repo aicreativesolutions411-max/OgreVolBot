@@ -17042,6 +17042,12 @@ async function webOhlcvPayload(mint, tfKey) {
     candles = synthCandlesFromPumpTrades(mint, tfKey);
     source = candles.length ? "pumpportal" : "none";
   }
+  // GeckoTerminal free tier rate-limits the shared Render IP now and then.
+  // A slightly stale chart beats a blank one: serve the last good payload
+  // for up to 10 minutes when a refresh comes back empty.
+  if (!candles.length && cached?.payload?.candles?.length && Date.now() - cached.at < 10 * 60 * 1000) {
+    return { ...cached.payload, stale: true };
+  }
   const payload = {
     ok: true,
     mint,
