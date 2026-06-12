@@ -22305,9 +22305,9 @@ async function runOgreAutopilotTick(reason = "interval") {
       const setStatus = (message, { skip = false } = {}) => {
         config.lastStatus = message;
         config.spendLog = prunedOgreAutopilotSpendLog(config, now);
-        // After a skip, re-check a bit sooner than a full interval so guards
-        // (spend window / concurrency) recover quickly.
-        config.nextRunAt = new Date(now + (skip ? Math.min(intervalMs, 90_000) : intervalMs)).toISOString();
+        // After a skip, re-check soon so the hunt resumes fast - fresh pairs
+        // launch every few seconds, so idling for a minute means missing them.
+        config.nextRunAt = new Date(now + (skip ? Math.min(intervalMs, 15_000) : intervalMs)).toISOString();
         mutated = true;
       };
 
@@ -22326,22 +22326,46 @@ async function runOgreAutopilotTick(reason = "interval") {
       }
 
       try {
-        const result = await webStartOgreAiRun(userId, {
-          category: config.category,
-          amountSol: String(config.amountSol),
-          runCount: "1",
-          sellDelay: config.sellDelay,
-          takeProfitPct: config.takeProfitPct,
-          stopLossPct: config.stopLossPct,
-          sellPercent: "100",
-          slippageBps: config.slippageBps,
-          walletIndexes: config.walletIndexes,
-          walletGroup: config.walletGroup,
-          recentMints: config.recentMints,
-          minScore: String(config.minScore || ""),
-          autopilot: true
-        });
-        const armed = Number(result?.armedCount || 0) > 0;
+        // Persistent hunt: don't bail after one empty scan. Fresh pairs launch
+        // constantly, so keep re-scanning for up to ~30s, skipping any token
+        // that fails the buy precheck, until a buy arms or the budget runs out.
+        // Selection is read-only and at most ONE buy ever arms per tick, so
+        // looping is safe and respects the spend/concurrency guards above.
+        const huntDeadlineMs = Date.now() + Math.min(intervalMs, 30_000);
+        const avoidMints = normalizeOgreAiRecentMints(config.recentMints || []);
+        let result = null;
+        let armed = false;
+        let huntPasses = 0;
+        do {
+          huntPasses += 1;
+          result = await webStartOgreAiRun(userId, {
+            category: config.category,
+            amountSol: String(config.amountSol),
+            runCount: "1",
+            sellDelay: config.sellDelay,
+            takeProfitPct: config.takeProfitPct,
+            stopLossPct: config.stopLossPct,
+            sellPercent: "100",
+            slippageBps: config.slippageBps,
+            walletIndexes: config.walletIndexes,
+            walletGroup: config.walletGroup,
+            recentMints: avoidMints,
+            minScore: String(config.minScore || ""),
+            autopilot: true
+          });
+          armed = Number(result?.armedCount || 0) > 0;
+          if (armed) break;
+          // Remember tokens that were tried but failed the buy precheck so the
+          // next scan moves on instead of re-picking the same dud.
+          for (const item of (result?.errors || [])) {
+            if (item?.tokenMint && !avoidMints.includes(item.tokenMint)) avoidMints.push(item.tokenMint);
+          }
+          for (const item of (result?.attemptedPicks || [])) {
+            if (item?.tokenMint && !avoidMints.includes(item.tokenMint)) avoidMints.push(item.tokenMint);
+          }
+          if (Date.now() >= huntDeadlineMs) break;
+          await sleep(5_000); // let the live stream surface new sub-30s launches
+        } while (Date.now() < huntDeadlineMs);
         if (armed) {
           const spend = config.amountSol * Number(result.walletCount || walletCount);
           config.spendLog = prunedOgreAutopilotSpendLog(config, now).concat([{ at: now, sol: spend }]);
@@ -22355,7 +22379,7 @@ async function runOgreAutopilotTick(reason = "interval") {
             userId, category: config.category, spend, tokenMints: newMints, reason
           });
         } else {
-          setStatus(result?.message || "No qualified pick this pass.", { skip: true });
+          setStatus(`${result?.message || "No qualified pick yet"} - hunting (${huntPasses} scan${huntPasses === 1 ? "" : "s"}), retrying shortly.`, { skip: true });
         }
       } catch (error) {
         setStatus(`Skipped: ${friendlyError(error)}`, { skip: true });
@@ -22373,8 +22397,11 @@ async function runOgreAutopilotTick(reason = "interval") {
 }
 
 function startOgreAutopilotRunner() {
-  const intervalMs = 60_000;
-  setTimeout(() => void runOgreAutopilotTick("startup").catch(() => {}), 15_000);
+  // Tick every 10s: per-config nextRunAt still gates buys (full interval after
+  // a fill), but a no-pick config can resume its hunt within seconds instead of
+  // waiting out a minute. The tick-active guard prevents overlap.
+  const intervalMs = 10_000;
+  setTimeout(() => void runOgreAutopilotTick("startup").catch(() => {}), 12_000);
   setInterval(() => void runOgreAutopilotTick("interval").catch(() => {}), intervalMs);
   console.log("Ogre A.I. autopilot runner enabled (guarded auto-buy; off until a user opts in).");
 }
