@@ -1,0 +1,485 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>The Swamp — SlimeWire</title>
+    <meta name="description" content="Every Solana launch is a creature in the Swamp. Catch them, read the shield, ape the runners. Gotta rot 'em all.">
+    <meta property="og:title" content="The Swamp — catch the coins before they rot">
+    <meta property="og:description" content="Every live launch becomes a creature. Catch them, dodge the rugs, ape the runners. Powered by SlimeWire.">
+    <meta property="og:image" content="https://www.slimewire.org/assets/slimewire-panel-wordmark-clean.png">
+    <meta name="twitter:card" content="summary_large_image">
+    <link rel="icon" type="image/svg+xml" href="/assets/slimewire/svg/slimewire-mark.svg">
+    <style>
+      :root {
+        --green:#72ff23; --green2:#bbff63; --dim:rgba(226,255,215,0.66); --line:rgba(114,255,35,0.18);
+        --panel:rgba(8,20,10,0.62); --bad:#ff6b5e; --warn:#ffd84d; --mid:#ff9d4d;
+      }
+      * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+      html,body { margin:0; }
+      body {
+        min-height:100vh; color:#eaffe0; font-family:Inter,system-ui,-apple-system,sans-serif;
+        background:
+          radial-gradient(circle at 18% -8%, rgba(114,255,35,0.16), transparent 38rem),
+          radial-gradient(circle at 86% 8%, rgba(60,200,120,0.10), transparent 32rem),
+          linear-gradient(180deg,#04190c 0%, #061b0e 40%, #020a05 100%);
+        background-attachment:fixed;
+        padding:0 0 96px;
+      }
+      .wrap { max-width:1100px; margin:0 auto; padding:0 12px; }
+      header.top {
+        position:sticky; top:0; z-index:30; backdrop-filter:blur(8px);
+        background:linear-gradient(rgba(3,12,6,0.92),rgba(3,12,6,0.55));
+        border-bottom:1px solid var(--line); padding:8px 0;
+      }
+      .toprow { display:flex; align-items:center; gap:10px; max-width:1100px; margin:0 auto; padding:0 12px; }
+      .brand { display:flex; align-items:center; gap:8px; font-weight:900; letter-spacing:0.02em; }
+      .brand img { width:26px; height:26px; }
+      .brand b { color:var(--green); text-shadow:0 0 14px rgba(114,255,35,0.5); font-size:1.02rem; }
+      .brand span { color:var(--dim); font-size:0.7rem; font-weight:700; }
+      .spacer { flex:1; }
+      .stat-chip { display:flex; flex-direction:column; align-items:flex-end; line-height:1.05; }
+      .stat-chip b { color:var(--green); font-size:0.95rem; }
+      .stat-chip span { color:var(--dim); font-size:0.6rem; text-transform:uppercase; letter-spacing:0.06em; }
+      .xp-wrap { width:120px; }
+      .xp-bar { height:7px; border-radius:99px; background:rgba(114,255,35,0.12); overflow:hidden; margin-top:3px; border:1px solid var(--line); }
+      .xp-fill { height:100%; background:linear-gradient(90deg,var(--green),var(--green2)); transition:width .5s; }
+
+      .hero { text-align:center; padding:18px 8px 6px; }
+      .hero h1 { margin:0; font-size:clamp(1.5rem,6vw,2.4rem); letter-spacing:-0.01em; }
+      .hero h1 .rot { color:var(--green); text-shadow:0 0 22px rgba(114,255,35,0.55); }
+      .hero p { color:var(--dim); margin:6px auto 0; max-width:560px; font-size:0.9rem; }
+      .ogre-say {
+        display:flex; gap:10px; align-items:center; justify-content:center; margin:12px auto 4px; max-width:620px;
+        background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:9px 14px;
+      }
+      .ogre-say .face { font-size:1.6rem; }
+      .ogre-say p { margin:0; text-align:left; font-size:0.82rem; }
+
+      .tabs { display:flex; gap:8px; justify-content:center; margin:14px 0 4px; flex-wrap:wrap; }
+      .tab { background:var(--panel); border:1px solid var(--line); color:var(--dim); border-radius:99px;
+        padding:7px 16px; font-weight:800; font-size:0.82rem; cursor:pointer; }
+      .tab.on { color:#071006; background:var(--green); border-color:var(--green); }
+
+      .feedbar { display:flex; align-items:center; gap:8px; justify-content:space-between; margin:12px 4px 6px; }
+      .feedbar .live { display:flex; align-items:center; gap:6px; color:var(--green); font-size:0.74rem; font-weight:800; text-transform:uppercase; letter-spacing:0.08em; }
+      .dot { width:8px; height:8px; border-radius:50%; background:var(--green); box-shadow:0 0 8px var(--green); animation:pulse 1.6s infinite; }
+      @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+      .feedbar small { color:var(--dim); font-size:0.72rem; }
+
+      .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:12px; }
+      @media (max-width:520px){ .grid { grid-template-columns:repeat(2,1fr); gap:10px; } }
+      .card {
+        position:relative; border:1px solid var(--line); border-radius:16px; padding:10px 10px 12px;
+        background:var(--panel); cursor:pointer; overflow:hidden; transition:transform .12s, border-color .12s;
+      }
+      .card:active { transform:scale(0.97); }
+      .card:hover { border-color:var(--green); }
+      .card.caught { border-color:rgba(114,255,35,0.55); }
+      .card .badge { position:absolute; top:8px; right:8px; font-size:0.6rem; font-weight:900; padding:2px 7px; border-radius:99px; letter-spacing:0.04em; }
+      .card .caught-tag { position:absolute; top:8px; left:8px; font-size:0.62rem; }
+      .cv { display:block; width:100%; aspect-ratio:1/1; image-rendering:pixelated; border-radius:12px;
+        background:radial-gradient(circle at 50% 38%, rgba(114,255,35,0.10), transparent 70%); }
+      .card .nm { font-weight:900; font-size:0.92rem; margin-top:6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .card .sub { color:var(--dim); font-size:0.68rem; display:flex; justify-content:space-between; margin-top:2px; }
+      .card .stage { color:var(--green2); font-size:0.62rem; font-weight:800; text-transform:uppercase; letter-spacing:0.05em; }
+
+      .empty { text-align:center; color:var(--dim); padding:50px 16px; font-size:0.9rem; }
+
+      /* modal */
+      .scrim { position:fixed; inset:0; z-index:50; background:rgba(2,7,3,0.82); display:none; align-items:center; justify-content:center; padding:14px; backdrop-filter:blur(3px); }
+      .scrim.on { display:flex; }
+      .modal { width:100%; max-width:420px; background:linear-gradient(180deg,#0a2110,#05130a); border:1px solid var(--green); border-radius:20px; padding:16px; box-shadow:0 0 50px rgba(114,255,35,0.18); }
+      .modal .x { float:right; background:none; border:0; color:var(--dim); font-size:1.3rem; cursor:pointer; line-height:1; }
+      .modal-cv { display:block; margin:2px auto 4px; width:148px; height:148px; image-rendering:pixelated;
+        background:radial-gradient(circle at 50% 40%, rgba(114,255,35,0.14), transparent 70%); border-radius:16px; }
+      .modal h2 { text-align:center; margin:2px 0 0; font-size:1.3rem; }
+      .modal .verdict { display:block; text-align:center; font-weight:900; font-size:0.84rem; margin:6px auto 0; }
+      .modal .lore { color:var(--dim); font-size:0.8rem; text-align:center; margin:8px 0 10px; min-height:1.1em; }
+      .modal .stats { display:grid; grid-template-columns:repeat(3,1fr); gap:7px; margin:10px 0; }
+      .modal .stats div { border:1px solid var(--line); border-radius:10px; padding:7px 4px; text-align:center; background:rgba(8,20,10,0.5); }
+      .modal .stats strong { display:block; color:var(--green); font-size:0.86rem; }
+      .modal .stats span { font-size:0.56rem; color:var(--dim); text-transform:uppercase; letter-spacing:0.04em; }
+      .row2 { display:flex; gap:8px; }
+      .btn { flex:1; text-align:center; border:0; border-radius:99px; padding:13px; font-weight:900; font-size:0.92rem; cursor:pointer; text-decoration:none; display:inline-block; }
+      .btn.catch { background:rgba(114,255,35,0.14); color:var(--green); border:1.5px solid var(--green); }
+      .btn.ape { background:linear-gradient(135deg,var(--green),var(--green2)); color:#071006; }
+      .btn.ghost { background:rgba(8,20,10,0.7); border:1px solid var(--line); color:#eaffe0; font-size:0.8rem; padding:11px; }
+      .mlinks { display:flex; gap:8px; margin-top:8px; }
+      .toast { position:fixed; left:50%; bottom:84px; transform:translateX(-50%); z-index:60;
+        background:var(--green); color:#071006; font-weight:900; padding:10px 20px; border-radius:99px;
+        opacity:0; transition:opacity .2s, transform .2s; pointer-events:none; box-shadow:0 0 24px rgba(114,255,35,0.5); }
+      .toast.show { opacity:1; transform:translateX(-50%) translateY(-8px); }
+
+      footer { text-align:center; color:var(--dim); font-size:0.72rem; margin-top:26px; }
+      footer a { color:var(--green); }
+      .cta-launch { display:block; text-align:center; margin:20px auto 0; max-width:480px;
+        border:1px dashed var(--line); border-radius:16px; padding:14px; text-decoration:none; color:#eaffe0; background:var(--panel); }
+      .cta-launch b { color:var(--green); }
+      .shake { animation:shake .4s; }
+      @keyframes shake { 0%,100%{transform:translateX(0)} 20%{transform:translateX(-6px) rotate(-3deg)} 40%{transform:translateX(6px) rotate(3deg)} 60%{transform:translateX(-4px)} 80%{transform:translateX(4px)} }
+      .bottom-nav { position:fixed; bottom:0; left:0; right:0; z-index:40; display:flex; justify-content:center; gap:8px;
+        padding:10px 12px calc(10px + env(safe-area-inset-bottom)); background:linear-gradient(transparent,rgba(2,8,4,0.95) 30%); }
+      .bottom-nav a { background:rgba(8,20,10,0.9); border:1px solid var(--line); color:#eaffe0; border-radius:99px;
+        padding:10px 16px; font-weight:800; font-size:0.8rem; text-decoration:none; }
+      .bottom-nav a.primary { background:linear-gradient(135deg,var(--green),var(--green2)); color:#071006; }
+    </style>
+  </head>
+  <body>
+    <header class="top">
+      <div class="toprow">
+        <div class="brand">
+          <img src="/assets/slimewire/svg/slimewire-mark.svg" alt="">
+          <div><b>THE SWAMP</b><br><span>by SlimeWire</span></div>
+        </div>
+        <div class="spacer"></div>
+        <div class="stat-chip"><b data-dex>0</b><span>caught</span></div>
+        <div class="xp-wrap">
+          <div class="stat-chip" style="align-items:flex-start"><b data-level>Lvl 1 · Tadpole</b><span data-xp-label>0 XP</span></div>
+          <div class="xp-bar"><div class="xp-fill" data-xp-fill style="width:0%"></div></div>
+        </div>
+      </div>
+    </header>
+
+    <div class="wrap">
+      <div class="hero">
+        <h1>Gotta <span class="rot">rot</span> 'em all</h1>
+        <p>Every live Solana launch is a wild creature in the Swamp. Catch the runners, dodge the rugs — its power IS its chart.</p>
+        <div class="ogre-say">
+          <div class="face">🧌</div>
+          <p data-ogre>Professor Ogre: "Fresh ones crawl out of the slime every few seconds, degen. Catch 'em before they pump… or before they rot."</p>
+        </div>
+      </div>
+
+      <div class="tabs">
+        <button class="tab on" data-view="wild">🌿 Wild</button>
+        <button class="tab" data-view="dex">🎒 My Swampdex</button>
+      </div>
+
+      <div class="feedbar">
+        <span class="live"><span class="dot"></span> Live spawns</span>
+        <small data-count>loading the swamp…</small>
+      </div>
+
+      <div class="grid" data-grid></div>
+      <div class="empty" data-empty hidden></div>
+
+      <a class="cta-launch" href="/terminal" data-launch>
+        🥚 <b>Launch your own coin on SlimeWire</b> → it becomes a swamp boss other degens hunt. Free game-world hype for your launch.
+      </a>
+
+      <footer>
+        The Swamp is a playful skin over real SlimeWire market data. Creatures = real tokens; their power tracks the live chart.
+        Catching is free and on-chain-free. Trading is real and risky — <a href="/proof">see the proof wall</a>. Not financial advice.
+      </footer>
+    </div>
+
+    <div class="scrim" data-scrim>
+      <div class="modal" data-modal></div>
+    </div>
+    <div class="toast" data-toast></div>
+
+    <nav class="bottom-nav">
+      <a href="/terminal">⚡ Terminal</a>
+      <a href="/swamp" class="primary">🌿 Swamp</a>
+      <a href="/proof">🏆 Proof</a>
+    </nav>
+
+    <script src="/config.js"></script>
+    <script>
+    (() => {
+      const config = window.OGRE_PORTAL_CONFIG || {};
+      const apiBase = String(config.apiBase || "https://ogrevolbot.onrender.com").replace(/\/$/, "");
+      const $ = (s) => document.querySelector(s);
+      const esc = (v) => String(v ?? "").replace(/[&<>"]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+
+      // ---------- progress (local, free) ----------
+      const KEY = "slimewireSwamp";
+      const save = (s) => { try { localStorage.setItem(KEY, JSON.stringify(s)); } catch {} };
+      const load = () => { try { return JSON.parse(localStorage.getItem(KEY) || "{}"); } catch { return {}; } };
+      const store = Object.assign({ xp:0, dex:{} }, load());
+      const LEVELS = ["Tadpole","Swamp Pup","Slime Scout","Rot Hunter","Bog Raider","Ooze Lord","Swamp King","Ogre Ascendant"];
+      const levelFor = (xp) => Math.min(LEVELS.length, Math.max(1, Math.floor(Math.sqrt(xp/120)) + 1));
+      const xpForLevel = (lvl) => Math.pow(lvl - 1, 2) * 120;
+      function renderProgress() {
+        const lvl = levelFor(store.xp);
+        const cur = xpForLevel(lvl), next = xpForLevel(lvl + 1);
+        const pct = next > cur ? Math.min(100, Math.round(((store.xp - cur) / (next - cur)) * 100)) : 100;
+        $("[data-level]").textContent = `Lvl ${lvl} · ${LEVELS[lvl-1] || "Ogre"}`;
+        $("[data-xp-label]").textContent = `${store.xp} XP`;
+        $("[data-xp-fill]").style.width = pct + "%";
+        $("[data-dex]").textContent = Object.keys(store.dex).length;
+      }
+
+      // ---------- deterministic creature generator ----------
+      function hash(str) { let h = 2166136261 >>> 0; for (let i=0;i<str.length;i++){ h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
+      function rng(seed) { let s = seed >>> 0; return () => { s = (Math.imul(s ^ (s>>>15), 1 | s) + ((s ^ (s>>>7)) >>> 0)) >>> 0; s ^= s + Math.imul(s ^ (s>>>3), 61 | s); return ((s ^ (s>>>14)) >>> 0) / 4294967296; }; }
+      // mood: derives a palette + features from the real token + its shield read
+      function paletteFor(mood, rand) {
+        if (mood === "rug") return { body:"#5b6b58", body2:"#3b4a3a", accent:"#9b6bff", eye:"#ff5e5e", zombie:true };
+        if (mood === "avoid") return { body:"#7a5a3a", body2:"#4a3422", accent:"#ff6b5e", eye:"#ffd84d", zombie:false };
+        if (mood === "risk") return { body:"#caa23a", body2:"#8a6a1f", accent:"#ffd84d", eye:"#1a1a1a", zombie:false };
+        const hue = 95 + Math.floor(rand()*40); // green family
+        return { body:`hsl(${hue} 90% 55%)`, body2:`hsl(${hue} 80% 34%)`, accent:`hsl(${hue+30} 95% 70%)`, eye:"#0a1a06", zombie:false };
+      }
+      // draw a symmetric pixel blob onto a canvas
+      function drawCreature(canvas, mint, mood, stage) {
+        const rand = rng(hash(String(mint) + ":" + mood));
+        const pal = paletteFor(mood, rand);
+        const N = 14, half = Math.ceil(N/2);
+        const cell = Math.floor(canvas.width / N);
+        const ctx = canvas.getContext("2d");
+        ctx.clearRect(0,0,canvas.width,canvas.height);
+        const grid = Array.from({length:N},()=>Array(N).fill(0));
+        const cx = (N-1)/2, cy = N/2 + 0.5;
+        const rx = 3.4 + stage*0.6 + rand()*1.2, ryT = 3.0 + stage*0.5, ryB = 4.2 + stage*0.7;
+        for (let y=0;y<N;y++) for (let x=0;x<half;x++) {
+          const dx = (x-cx)/rx, dy = (y-cy)/(y<cy?ryT:ryB);
+          const d = dx*dx + dy*dy;
+          let on = d < 1 ? 1 : (d < 1.25 && rand() < 0.5 ? 1 : 0);
+          if (on && rand() < 0.10) on = 0; // texture holes
+          grid[y][x] = on; grid[y][N-1-x] = on;
+        }
+        // render body with shading + outline
+        for (let y=0;y<N;y++) for (let x=0;x<N;x++) {
+          if (!grid[y][x]) continue;
+          const edge = !grid[y-1]?.[x] || !grid[y+1]?.[x] || !grid[y]?.[x-1] || !grid[y]?.[x+1];
+          ctx.fillStyle = y > cy+1 ? pal.body2 : pal.body;
+          ctx.fillRect(x*cell, y*cell, cell, cell);
+          if (edge) { ctx.fillStyle = "rgba(0,0,0,0.35)"; ctx.fillRect(x*cell, y*cell, cell, cell); ctx.fillStyle = y>cy+1?pal.body2:pal.body; ctx.fillRect(x*cell+1, y*cell+1, cell-2, cell-2); }
+        }
+        // eyes
+        const eyeY = Math.floor(cy - 1);
+        const eyeXs = stage>=2 ? [Math.floor(cx-2.5), Math.floor(cx+1.5)] : [Math.floor(cx-2), Math.floor(cx+1)];
+        for (const ex of eyeXs) {
+          if (pal.zombie) { // X eyes
+            ctx.strokeStyle = pal.eye; ctx.lineWidth = Math.max(2, cell*0.35);
+            ctx.beginPath();
+            ctx.moveTo(ex*cell, eyeY*cell); ctx.lineTo((ex+1.4)*cell, (eyeY+1.4)*cell);
+            ctx.moveTo((ex+1.4)*cell, eyeY*cell); ctx.lineTo(ex*cell, (eyeY+1.4)*cell); ctx.stroke();
+          } else {
+            ctx.fillStyle = "#f6fff0"; ctx.fillRect(ex*cell, eyeY*cell, cell*1.4, cell*1.4);
+            ctx.fillStyle = pal.eye; ctx.fillRect((ex+0.4)*cell, (eyeY+0.4)*cell, cell, cell);
+            ctx.fillStyle = "rgba(255,255,255,0.9)"; ctx.fillRect((ex+0.45)*cell, (eyeY+0.45)*cell, cell*0.35, cell*0.35);
+          }
+        }
+        // slime drips
+        ctx.fillStyle = pal.accent;
+        for (let i=0;i<3+Math.floor(rand()*3);i++){
+          const dxp = Math.floor(rand()*N);
+          if (!grid[N-1]?.[dxp]) continue;
+          const len = 1 + Math.floor(rand()*2);
+          ctx.fillRect(dxp*cell+cell*0.25, (N-1)*cell, cell*0.5, cell*len);
+        }
+        // glow for healthy pumpers
+        if (mood === "buy") { canvas.style.filter = "drop-shadow(0 0 6px rgba(114,255,35,0.6))"; }
+        else if (pal.zombie) { canvas.style.filter = "saturate(0.6) brightness(0.9)"; }
+        else canvas.style.filter = "none";
+      }
+
+      // ---------- token -> creature mapping ----------
+      const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+      function ageSeconds(row) {
+        const s = num(row.pairAgeSeconds);
+        if (s > 0) return s;
+        const created = num(row.pairCreatedAt);
+        if (created > 1e12) return Math.max(0, (Date.now()-created)/1000);
+        const m = num(row.pairAgeMinutes);
+        return m > 0 ? m*60 : 0;
+      }
+      function stageFor(row) {
+        const a = ageSeconds(row);
+        if (a < 90) return 0;       // egg
+        if (a < 6*60) return 1;     // hatchling
+        if (a < 30*60) return 2;    // grown
+        return 3;                   // elder
+      }
+      const STAGE_NAME = ["Egg","Hatchling","Beast","Elder"];
+      function moodFor(row) {
+        // map color from the row's live signals (real shield verdict shown on tap)
+        const liq = num(row.liquidityUsd), mc = num(row.marketCap || row.marketCapUsd);
+        const m5 = num(row.m5 ?? row.priceChangeM5);
+        if (mc > 0 && liq > 0 && liq/mc < 0.004) return "rug";
+        if (m5 <= -25) return "avoid";
+        if (m5 < 0) return "risk";
+        return "buy";
+      }
+      function fmt(v) {
+        const n = Number(v); if (!Number.isFinite(n) || n<=0) return "—";
+        if (n>=1e9) return "$"+(n/1e9).toFixed(1)+"B"; if (n>=1e6) return "$"+(n/1e6).toFixed(1)+"M";
+        if (n>=1e3) return "$"+(n/1e3).toFixed(1)+"K"; return "$"+n.toFixed(0);
+      }
+      function ageLabel(row) {
+        const s = Math.floor(ageSeconds(row)); if (!s) return "fresh";
+        if (s<60) return s+"s"; if (s<3600) return Math.floor(s/60)+"m"; return Math.floor(s/3600)+"h";
+      }
+      function creatureName(row) {
+        const sym = String(row.symbol || "").replace(/[^A-Za-z0-9]/g,"").slice(0,10);
+        return sym ? sym : (row.tokenMint||"???").slice(0,4);
+      }
+
+      // ---------- state ----------
+      let rows = [];
+      let view = "wild";
+      const VERDICT_COLOR = { BUY:"#72ff23", CAUTION:"#ffd84d", RISK:"#ff9d4d", AVOID:"#ff6b5e" };
+
+      function toast(msg) {
+        const t = $("[data-toast]"); t.textContent = msg; t.classList.add("show");
+        clearTimeout(toast._t); toast._t = setTimeout(()=>t.classList.remove("show"), 1500);
+      }
+
+      function cardHtml(row) {
+        const mint = row.tokenMint; const mood = moodFor(row); const stage = stageFor(row);
+        const caught = Boolean(store.dex[mint]);
+        const moodBadge = { buy:["BUY ZONE","#72ff23"], risk:["DICEY","#ffd84d"], avoid:["DUMPING","#ff9d4d"], rug:["ROTTING","#9b6bff"] }[mood];
+        return `<div class="card ${caught?"caught":""}" data-mint="${esc(mint)}">
+          ${caught?'<span class="caught-tag">✅</span>':''}
+          <span class="badge" style="background:${moodBadge[1]}22;color:${moodBadge[1]};border:1px solid ${moodBadge[1]}">${moodBadge[0]}</span>
+          <canvas class="cv" width="112" height="112"></canvas>
+          <div class="nm">$${esc(creatureName(row))}</div>
+          <div class="sub"><span class="stage">${STAGE_NAME[stage]}</span><span>${esc(fmt(row.marketCap||row.marketCapUsd))} · ${esc(ageLabel(row))}</span></div>
+        </div>`;
+      }
+
+      function paintGridCanvases(container, list) {
+        container.querySelectorAll(".card").forEach((card) => {
+          const mint = card.getAttribute("data-mint");
+          const row = list.find((r) => r.tokenMint === mint);
+          if (row) drawCreature(card.querySelector("canvas"), mint, moodFor(row), stageFor(row));
+        });
+      }
+
+      function renderWild() {
+        const grid = $("[data-grid]"); const empty = $("[data-empty]");
+        const live = rows.slice(0, 48);
+        if (!live.length) { grid.innerHTML = ""; empty.hidden = false; empty.textContent = "The swamp is quiet… waiting for fresh launches to crawl out. 🐸"; return; }
+        empty.hidden = true;
+        grid.innerHTML = live.map(cardHtml).join("");
+        paintGridCanvases(grid, live);
+        $("[data-count]").textContent = `${live.length} creatures stirring`;
+      }
+
+      function renderDex() {
+        const grid = $("[data-grid]"); const empty = $("[data-empty]");
+        const caught = Object.values(store.dex).sort((a,b)=>b.caughtAt-a.caughtAt);
+        $("[data-count]").textContent = `${caught.length} caught`;
+        if (!caught.length) { grid.innerHTML = ""; empty.hidden = false; empty.textContent = "No catches yet. Tap a wild creature and throw a slimeball! 🟢"; return; }
+        empty.hidden = true;
+        grid.innerHTML = caught.map((c) => `<div class="card caught" data-mint="${esc(c.mint)}">
+          <span class="caught-tag">✅</span>
+          <canvas class="cv" width="112" height="112"></canvas>
+          <div class="nm">$${esc(c.symbol||c.mint.slice(0,4))}</div>
+          <div class="sub"><span class="stage">${esc(c.verdict||"caught")}</span><span>${esc(fmt(c.mc))}</span></div>
+        </div>`).join("");
+        grid.querySelectorAll(".card").forEach((card)=>{ const m=card.getAttribute("data-mint"); const c=store.dex[m]; if(c) drawCreature(card.querySelector("canvas"), m, c.mood||"buy", c.stage||1); });
+      }
+
+      function render() { renderProgress(); if (view==="wild") renderWild(); else renderDex(); }
+
+      // ---------- modal ----------
+      async function openCreature(mint) {
+        const row = rows.find((r)=>r.tokenMint===mint) || (store.dex[mint] ? { tokenMint:mint, symbol:store.dex[mint].symbol } : null);
+        if (!row) return;
+        const mood = row.marketCap!==undefined ? moodFor(row) : (store.dex[mint]?.mood||"buy");
+        const stage = row.pairAgeSeconds!==undefined||row.pairCreatedAt ? stageFor(row) : (store.dex[mint]?.stage||1);
+        const caught = Boolean(store.dex[mint]);
+        const scrim = $("[data-scrim]"); const modal = $("[data-modal]");
+        const buyUrl = `/terminal/chart?token=${encodeURIComponent(mint)}&buy=1&source=swamp`;
+        const chartUrl = `/t?ca=${encodeURIComponent(mint)}`;
+        modal.innerHTML = `
+          <button class="x" data-close>✕</button>
+          <canvas class="modal-cv" width="180" height="180"></canvas>
+          <h2>$${esc(creatureName(row))}</h2>
+          <span class="verdict" data-verdict style="color:var(--dim)">reading the shield…</span>
+          <p class="lore" data-lore></p>
+          <div class="stats">
+            <div><strong>${esc(fmt(row.marketCap||row.marketCapUsd))}</strong><span>Market cap</span></div>
+            <div><strong data-liq>—</strong><span>Liquidity</span></div>
+            <div><strong>${esc(row.pairAgeSeconds!==undefined?ageLabel(row):"—")}</strong><span>Age</span></div>
+          </div>
+          <div class="row2">
+            <button class="btn catch" data-catch ${caught?"disabled style=opacity:.5":""}>${caught?"✅ Caught":"🫳 Throw slimeball"}</button>
+            <a class="btn ape" href="${buyUrl}">⚡ Ape it</a>
+          </div>
+          <div class="mlinks">
+            <a class="btn ghost" href="${chartUrl}">📊 Shield + chart</a>
+            <button class="btn ghost" data-share>📸 Share</button>
+          </div>
+        `;
+        scrim.classList.add("on");
+        drawCreature(modal.querySelector(".modal-cv"), mint, mood, Math.max(stage,1));
+        modal.querySelector("[data-close]").onclick = closeModal;
+        modal.querySelector("[data-catch]").onclick = () => doCatch(mint, row, mood, stage, modal);
+        modal.querySelector("[data-share]").onclick = () => {
+          const url = `${location.origin}/t?ca=${encodeURIComponent(mint)}`;
+          if (navigator.share) navigator.share({ title:"SlimeWire", text:`Caught $${creatureName(row)} in the Swamp 🐸 slimewire.org/swamp`, url }).catch(()=>{});
+          else { navigator.clipboard?.writeText(url); toast("Link copied"); }
+        };
+        // pull the REAL shield verdict (this is the trading funnel payload)
+        try {
+          const data = await (await fetch(apiBase + "/api/web/token-read?mint=" + encodeURIComponent(mint), { cache:"no-store" })).json();
+          const v = String(data.shield?.verdict || "").toUpperCase();
+          const vEl = modal.querySelector("[data-verdict]"); const lore = modal.querySelector("[data-lore]");
+          if (vEl && v) { vEl.textContent = `🛡 SlimeShield: ${v}${data.shield?.score!=null?` (${data.shield.score}/100)`:""}`; vEl.style.color = VERDICT_COLOR[v] || "var(--dim)"; }
+          else if (vEl) vEl.textContent = "🛡 Shield read pending — verify before you ape";
+          if (modal.querySelector("[data-liq]")) modal.querySelector("[data-liq]").textContent = fmt(data.liquidityUsd);
+          if (lore) lore.textContent = loreFor(v, mood);
+        } catch { const vEl = modal.querySelector("[data-verdict]"); if (vEl) vEl.textContent = "🛡 Shield offline — trade carefully"; }
+      }
+      function loreFor(verdict, mood) {
+        if (mood==="rug") return "This one already rotted. A zombie collectible — battle fodder, not a buy.";
+        if (verdict==="BUY") return "Healthy slime. Strong holders, real flow. The kind that runs.";
+        if (verdict==="CAUTION") return "Twitchy little beast. Trade small or use protection.";
+        if (verdict==="RISK"||verdict==="AVOID") return "Smells like a trap. Catch it for the dex, think twice before aping.";
+        return "A fresh crawler. Its fate is still being written on the chart.";
+      }
+      function closeModal(){ $("[data-scrim]").classList.remove("on"); }
+      $("[data-scrim]").addEventListener("click", (e)=>{ if (e.target===$("[data-scrim]")) closeModal(); });
+
+      function doCatch(mint, row, mood, stage, modal) {
+        if (store.dex[mint]) return;
+        const cv = modal.querySelector(".modal-cv"); cv.classList.add("shake");
+        setTimeout(()=>cv.classList.remove("shake"), 420);
+        const fresh = row.pairAgeSeconds!==undefined ? stageFor(row) : (stage||1);
+        const gain = 25 + (4-Math.min(fresh,3))*15 + (mood==="buy"?20:0); // fresher + healthier = more XP
+        store.xp += gain;
+        store.dex[mint] = { mint, symbol:creatureName(row), mc:num(row.marketCap||row.marketCapUsd), mood, stage:Math.max(fresh,1), verdict:"caught", caughtAt:Date.now() };
+        save(store);
+        renderProgress();
+        toast(`Caught $${creatureName(row)}! +${gain} XP`);
+        const btn = modal.querySelector("[data-catch]"); if (btn){ btn.textContent="✅ Caught"; btn.disabled=true; btn.style.opacity=".5"; }
+        if (view==="wild") { const card = $(`[data-grid] .card[data-mint="${CSS.escape(mint)}"]`); if (card) card.classList.add("caught"); }
+      }
+
+      // ---------- feed ----------
+      async function loadFeed() {
+        try {
+          const res = await fetch(apiBase + "/api/web/live-pairs?bucket=live&sort=fresh", { cache:"no-store" });
+          const data = await res.json();
+          const next = (data.livePairs?.rows || data.rows || []).filter((r)=>r && r.tokenMint);
+          if (next.length) rows = next;
+          if (view==="wild") render();
+          $("[data-count]").textContent = `${Math.min(rows.length,48)} creatures stirring`;
+        } catch {
+          $("[data-count]").textContent = "swamp feed hiccup — retrying…";
+        }
+      }
+
+      // ---------- events ----------
+      $("[data-grid]").addEventListener("click", (e) => {
+        const card = e.target.closest(".card"); if (!card) return;
+        openCreature(card.getAttribute("data-mint"));
+      });
+      document.querySelectorAll(".tab").forEach((t)=>t.addEventListener("click", ()=>{
+        document.querySelectorAll(".tab").forEach((x)=>x.classList.remove("on")); t.classList.add("on");
+        view = t.getAttribute("data-view"); render();
+      }));
+
+      renderProgress();
+      render();
+      loadFeed();
+      setInterval(loadFeed, 9000);
+    })();
+    </script>
+  </body>
+</html>

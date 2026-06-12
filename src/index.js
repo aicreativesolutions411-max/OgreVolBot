@@ -1349,6 +1349,14 @@ function startHealthServer() {
       return;
     }
 
+    // The Swamp: gamified launch feed. Live launches render as creatures you
+    // catch; tapping one funnels to the shield read + one-tap buy. Top-of-funnel
+    // that turns trading into a collect-and-battle world.
+    if (request.method === "GET" && ["/swamp", "/swamp.html", "/game", "/play"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "swamp.html");
+      return;
+    }
+
     if (request.method === "GET" && /^[/](call|u|g|hype)([/]|$)/.test(requestUrl.pathname)) {
       await serveProofSharePage(requestUrl, request, response);
       return;
@@ -21442,6 +21450,21 @@ function sendShareHtml(response, html) {
 // the OG title/description/image are rewritten per token: symbol, SlimeShield
 // verdict (from the warm cache only - never block a crawler on a cold compute),
 // market stats, and the PNG signal card as the unfurl image.
+// Serve a standalone HTML page from the built web dir (no template injection).
+async function serveStaticHtmlPage(response, fileName) {
+  try {
+    const html = await fs.readFile(path.join(WEB_STATIC_DIR, fileName), "utf8");
+    response.writeHead(200, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "public, max-age=60, stale-while-revalidate=600"
+    });
+    response.end(html);
+  } catch {
+    response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+    response.end("Not found");
+  }
+}
+
 async function serveTokenSharePage(requestUrl, response) {
   const page = requestUrl.pathname.startsWith("/proof") ? "proof.html" : "t.html";
   let html;
