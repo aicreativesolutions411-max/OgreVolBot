@@ -24382,7 +24382,7 @@ function trailerEnsureStyles() {
   style.id = "trailer-style";
   style.textContent = `
     @keyframes twCapIn { 0% { transform: translateX(-50%) scale(1.3); opacity: 0; filter: blur(8px); } 100% { transform: translateX(-50%) scale(1); opacity: 1; filter: blur(0); } }
-    @keyframes twFlash { 0% { opacity: 0.85; } 100% { opacity: 0; } }
+    @keyframes twFlash { 0% { opacity: 0.45; } 100% { opacity: 0; } }
     @keyframes twPulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
     @keyframes twGlow { 0%, 100% { text-shadow: 0 0 24px rgba(114,255,35,0.55); } 50% { text-shadow: 0 0 56px rgba(114,255,35,0.95); } }
   `;
@@ -24566,6 +24566,56 @@ function trailerPickHotPair() {
   return ranked[0] || rows[0] || null;
 }
 
+// The scenes need real rows - never start the performance over a loading
+// skeleton. Waits on the in-app state, then falls back to the public API.
+async function trailerWaitForPairs(maxMs = 9000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < maxMs) {
+    const pick = trailerPickHotPair();
+    if (pick) return pick;
+    if (!trailerState.running) return null;
+    await trailerWait(500);
+  }
+  try {
+    const data = await api(`/api/web/live-pairs?bucket=live&sort=fresh`);
+    const rows = data?.livePairs?.rows || [];
+    return rows.find((row) => row?.tokenMint) || null;
+  } catch {
+    return null;
+  }
+}
+
+// Wait for an element to exist (chart iframe etc.) so captions land on real
+// content instead of a loading flash.
+async function trailerWaitForElement(selector, maxMs = 4000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < maxMs) {
+    if (document.querySelector(selector)) return true;
+    if (!trailerState.running) return false;
+    await trailerWait(250);
+  }
+  return false;
+}
+
+// Mobile pre-flight: browsers cannot record their own screen on phones, so
+// the user starts the OS recorder FIRST and taps GO when it is rolling.
+function trailerMobilePreflight() {
+  return new Promise((resolve) => {
+    trailerCenter(`
+      <div style="color:#72ff23;font-weight:900;font-size:clamp(20px,6vw,28px);">🎬 TRAILER MODE</div>
+      <div style="color:#d6ffbf;font-size:clamp(13px,3.8vw,16px);margin-top:14px;max-width:420px;line-height:1.5;">
+        1. Start your phone's <b>screen recorder</b> now<br>
+        (Control Center on iPhone / quick tile on Android)<br>
+        2. Come back and tap GO
+      </div>
+      <button type="button" data-trailer-go style="pointer-events:auto;margin-top:22px;background:linear-gradient(135deg,#72ff23,#bbff63);color:#071006;border:0;border-radius:999px;padding:14px 44px;font-weight:900;font-size:18px;cursor:pointer;">GO</button>
+      <div style="color:#7d937a;font-size:11px;margin-top:14px;">the performance starts on a 3-2-1 after you tap</div>
+    `);
+    const goBtn = trailerState.root.querySelector("[data-trailer-go]");
+    goBtn?.addEventListener("click", () => resolve(true), { once: true });
+  });
+}
+
 async function runTrailerMode() {
   if (trailerState.running) return;
   trailerState.running = true;
@@ -24575,9 +24625,23 @@ async function runTrailerMode() {
   const recording = await trailerTryRecord();
   const mobile = trailerIsMobile();
 
+  // Mobile without self-recording: explicit GO gate so the user has the OS
+  // recorder rolling BEFORE the performance starts.
+  if (!recording) {
+    await trailerMobilePreflight();
+    if (!trailerState.running) return;
+  }
+
+  // Warm the stage while the user is still on GO/countdown: navigate to the
+  // feed and wait for real rows so no scene ever plays over a loading skeleton.
+  navigateTo("/terminal/live-pairs");
+  trailerCenter(`<div style="color:#72ff23;font-weight:900;font-size:clamp(18px,5vw,24px);animation:twPulse 1.2s infinite;">locking onto live pairs...</div>`);
+  const pick = await trailerWaitForPairs(9000);
+  if (!trailerState.running) return;
+
   // Scene plan (seconds): countdown -> feed -> chart -> shield -> end card.
-  const count = recording ? 2 : 3;
-  const feedDur = 6.5, chartDur = 8.5, shieldDur = 6.5, endDur = 4.6;
+  const count = 3;
+  const feedDur = 6.5, chartDur = 9, shieldDur = 6.5, endDur = 4.6;
   const boundaries = [count, count + feedDur, count + feedDur + chartDur, count + feedDur + chartDur + shieldDur];
   const totalSec = count + feedDur + chartDur + shieldDur + endDur;
   trailerScheduleScore(boundaries, totalSec);
@@ -24588,8 +24652,7 @@ async function runTrailerMode() {
 
   for (let n = count; n >= 1; n -= 1) {
     if (!trailerState.running) return;
-    trailerCenter(`<div style="color:#72ff23;font-size:clamp(64px,22vw,110px);font-weight:900;text-shadow:0 0 30px rgba(114,255,35,0.75);animation:twPulse 1s infinite;">${n}</div>
-      ${recording ? "" : `<div style="color:#d6ffbf;font-size:clamp(13px,3.6vw,16px);margin-top:8px;">start your screen recorder now</div>`}`);
+    trailerCenter(`<div style="color:#72ff23;font-size:clamp(64px,22vw,110px);font-weight:900;text-shadow:0 0 30px rgba(114,255,35,0.75);animation:twPulse 1s infinite;">${n}</div>`);
     await trailerWait(1000);
   }
   trailerCenter("");
@@ -24597,21 +24660,21 @@ async function runTrailerMode() {
   // Scene 1: fresh pairs feed (real, live).
   if (!trailerState.running) return;
   trailerFlash();
-  navigateTo("/terminal/live-pairs");
   trailerCaption("FRESH PAIRS - LIVE", "new launches land here seconds after creation");
   await trailerWait(feedDur * 1000);
 
-  // Scene 2: hottest pair -> native chart.
-  if (!trailerState.running) return;
-  const pick = trailerPickHotPair();
+  // Scene 2: hottest pair -> chart. Only runs when the chart actually mounts;
+  // captions never play over a loading flash.
   const symbol = pick?.symbol ? `$${String(pick.symbol).slice(0, 12)}` : "live pair";
-  if (pick?.tokenMint) {
+  if (trailerState.running && pick?.tokenMint) {
     trailerFlash();
     navigateTo(`/terminal/chart?token=${encodeURIComponent(pick.tokenMint)}`);
+    const chartReady = await trailerWaitForElement("iframe[src*='dexscreener'], .smart-chart-terminal iframe, [data-chart] canvas", 4500);
+    if (!trailerState.running) return;
     trailerCaption("LIVE CHART + RISK READ", `${symbol} - real candles, real flow, zero delay`);
-    await trailerWait(chartDur * 1000);
+    await trailerWait((chartReady ? chartDur : 4) * 1000);
 
-    // Scene 3: triple-engine shield drawer.
+    // Scene 3: triple-engine shield drawer (renders over anything).
     if (!trailerState.running) return;
     trailerFlash();
     openSlimeShieldDetails(pick.tokenMint);
@@ -24628,7 +24691,7 @@ async function runTrailerMode() {
     <div style="color:#72ff23;font-size:clamp(38px,11vw,76px);font-weight:900;letter-spacing:0.05em;animation:twGlow 1.6s infinite, twPulse 1.6s infinite;">SLIMEWIRE.ORG</div>
     <div style="color:#d6ffbf;font-size:clamp(15px,4.4vw,23px);font-weight:700;margin-top:10px;">verify before you ape</div>
     <div style="color:#7d937a;font-size:clamp(10px,3vw,12px);margin-top:26px;">Recorded on live market data. Crypto is risky - not financial advice.</div>
-    ${!recording && mobile ? `<div style="color:#9fb59a;font-size:clamp(11px,3.2vw,13px);margin-top:14px;">stop your screen recorder - the clip is in your camera roll 🎬</div>` : ""}
+    ${!recording ? `<div style="color:#bbff63;font-weight:800;font-size:clamp(13px,4vw,16px);margin-top:16px;">🎬 STOP YOUR SCREEN RECORDER - the clip is in your camera roll</div>` : ""}
   `);
   await trailerWait(endDur * 1000);
   stopTrailerMode("done");
