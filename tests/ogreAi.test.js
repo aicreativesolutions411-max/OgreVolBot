@@ -607,6 +607,44 @@ test("Ogre A.I. fresh ape rejects dead fresh pumps with no starting volume", () 
   assert.equal(pool.tierCounts.blocked, 1);
 });
 
+test("Ogre A.I. fresh ape needs multi-buyer confirmation and rewards socials", () => {
+  // A single dev buy with no follow-on buyers is the bundle-rug signature -
+  // it must NOT qualify as a fresh-ape entry.
+  const oneDevBuy = {
+    tokenMint: "OneBuyMintpump",
+    isPump: true,
+    marketCap: 4_200,
+    liquidityUsd: 30,
+    volume5m: 40,
+    buys5m: 1,
+    sells5m: 0,
+    trades5m: 1,
+    pairAgeSeconds: 12
+  };
+  assert.equal(ogreAiTierForCandidate(oneDevBuy, freshApeDefaults, "fresh_ape"), null);
+
+  // Several independent buys with net-positive flow = a real entry. Kept in
+  // the fallback cap band with modest flow so the fit score stays below the
+  // clamp ceiling and the social boost is observable.
+  const confirmed = {
+    tokenMint: "ConfirmedBuyersMintpump",
+    isPump: true,
+    marketCap: 6_500,
+    liquidityUsd: 30,
+    volume5m: 65,
+    buys5m: 3,
+    sells5m: 0,
+    trades5m: 3,
+    pairAgeSeconds: 25
+  };
+  assert.ok(["strict", "balanced", "available"].includes(ogreAiTierForCandidate(confirmed, freshApeDefaults, "fresh_ape")));
+
+  // A verified-looking X link raises the fresh-ape fit score (ranking boost).
+  const noSocial = ogreAiTargetFitScore(confirmed, freshApeDefaults, "fresh_ape");
+  const withX = ogreAiTargetFitScore({ ...confirmed, twitterUrl: "https://x.com/realtoken" }, freshApeDefaults, "fresh_ape");
+  assert.ok(withX > noSocial, `socials should raise fit (${withX} vs ${noSocial})`);
+});
+
 test("Ogre A.I. fresh ape allows pairs near the 1.5k market-cap floor when flow starts", () => {
   const tinyFresh = {
     tokenMint: "TinyFreshMintpump",

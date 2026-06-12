@@ -122,7 +122,18 @@ export function ogreAiCandidateStats(row = {}) {
   const buyPressure = buys5m + sells5m > 0 ? buys5m / Math.max(1, buys5m + sells5m) : 0.5;
   const volumeToMarketCap = marketCap > 0 ? volumeMomentumUsd / marketCap : 0;
   const liquidityToMarketCap = marketCap > 0 ? liquidityUsd / marketCap : 0;
+  // Fast social signal: a launch that bothered to attach an X / Telegram /
+  // website is more likely to have a team behind it than a zero-effort
+  // rug. Not a guarantee - used as a ranking boost, never a hard gate.
+  const hasX = Boolean(String(row.twitterUrl || row.xUrl || row.twitter || "").trim());
+  const hasTelegram = Boolean(String(row.telegramUrl || row.telegram || "").trim());
+  const hasWebsite = Boolean(String(row.websiteUrl || row.website || row.url || "").trim());
+  const socialCount = (hasX ? 1 : 0) + (hasTelegram ? 1 : 0) + (hasWebsite ? 1 : 0);
   return {
+    hasX,
+    hasTelegram,
+    hasWebsite,
+    socialCount,
     score,
     marketCap,
     liquidityUsd,
@@ -165,12 +176,15 @@ function ogreAiFreshApeCapInfo(stats = {}, defaults = {}) {
 
 function ogreAiFreshApeHasStartingVolume(stats = {}, defaults = {}) {
   const minVolume = Number(defaults.minStartingVolumeUsd || OGRE_AI_FRESH_APE_MIN_STARTING_VOLUME_USD);
-  if (stats.volumeMomentumUsd >= minVolume) return true;
-  if (stats.volume5m >= minVolume * 0.65) return true;
-  if (stats.volumeToMarketCap >= 0.012 && stats.trades5m >= 1) return true;
-  if (stats.buys5m >= 2 && stats.buyPressure >= 0.45) return true;
-  if (stats.trades5m >= 2 && stats.buyPressure >= 0.5) return true;
-  return stats.positivePriceMomentumPct >= 3 && stats.trades5m >= 1;
+  // Require GENUINE multi-buyer confirmation, not just the dev's own first buy.
+  // Bundle-and-dump rugs show one buy then heavy sells; real runners show
+  // several independent buys with net-positive flow. This is the main rug
+  // filter - it naturally pushes entries a few seconds past the instant-rug
+  // window while the pair is still fresh.
+  const confirmedBuyers = stats.buys5m >= 2 && stats.buyPressure >= 0.55;
+  const realVolume = stats.volumeMomentumUsd >= minVolume && stats.trades5m >= 2 && stats.buyPressure >= 0.5;
+  const strongRelVolume = stats.volumeToMarketCap >= 0.02 && stats.trades5m >= 2 && stats.buyPressure >= 0.5;
+  return confirmedBuyers || realVolume || strongRelVolume;
 }
 
 function ogreAiFreshApeFitScore(row = {}, defaults = {}) {
@@ -218,6 +232,10 @@ function ogreAiFreshApeFitScore(row = {}, defaults = {}) {
   const deadPenalty = startingVolume ? 0 : (
     stats.ageMinutes !== null && stats.ageMinutes <= OGRE_AI_FRESH_APE_MAX_AGE_MINUTES ? 12 : 28
   );
+  // Social signal: a launch with a real X / Telegram / website ranks higher -
+  // teams that set up socials rug less often than zero-effort launches. A
+  // verified-looking X (twitter.com/<handle> or x.com/<handle>) gets the most.
+  const socialSignal = (stats.hasX ? 9 : 0) + (stats.hasTelegram ? 3 : 0) + (stats.hasWebsite ? 3 : 0);
   return Math.round(clampNumber(
     scoreSignal
       + capFit
@@ -228,6 +246,7 @@ function ogreAiFreshApeFitScore(row = {}, defaults = {}) {
       + buyPressureSignal
       + momentumSignal
       + liquiditySignal
+      + socialSignal
       + (startingVolume ? 8 : 0)
       - riskPenalty
       - deadPenalty,
@@ -368,12 +387,14 @@ export function ogreAiTierForCandidate(row = {}, defaults = {}, mode = "quick") 
     // used to pass is exactly the dead-launch zone we are avoiding.
     const capOk = cap.ok && cap.band !== "unknown";
     const startingVolume = ogreAiFreshApeHasStartingVolume(stats, defaults);
-    const buyIntentOk = stats.trades5m <= 0 || stats.buyPressure >= 0.42 || stats.buys5m >= 1;
+    // Not actively being dumped: buyers must at least match sellers, or flow is
+    // net-positive. Heavy early sell pressure is the signature of a dev exit.
+    const notDumping = stats.buyPressure >= 0.5 || stats.sells5m <= stats.buys5m;
     const liquidityOk = !stats.liquidityUsd
       || stats.liquidityUsd >= Number(defaults.minLiquidityUsd || 20)
       || stats.liquidityToMarketCap >= 0.006
       || stats.isPump;
-    if (!freshOk || !capOk || !startingVolume || !buyIntentOk || !liquidityOk) return null;
+    if (!freshOk || !capOk || !startingVolume || !notDumping || !liquidityOk) return null;
     if (cap.band === "primary" && targetFit >= 45) return "strict";
     if (cap.band === "primary" && targetFit >= 30) return "balanced";
     if ((cap.band === "primary" || cap.band === "fallback") && targetFit >= Math.max(18, Number(defaults.minScore || 12))) return "available";

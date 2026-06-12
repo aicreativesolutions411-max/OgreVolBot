@@ -22165,9 +22165,10 @@ function defaultOgreAutopilotConfig() {
     enabled: false,
     category: "super_fresh",
     amountSol: OGRE_AUTOPILOT_LIMITS.amountSol.default,
-    takeProfitPct: "25",
-    stopLossPct: "8",
-    sellDelay: "5",
+    // Runner profile: 2x target, wide stop for volatility, 1h fallback timer.
+    takeProfitPct: "100",
+    stopLossPct: "40",
+    sellDelay: "60",
     slippageBps: "400",
     walletIndexes: [],
     walletGroup: "",
@@ -22196,9 +22197,9 @@ function sanitizeOgreAutopilotConfig(existing, body = {}) {
     enabled: Boolean(body.enabled),
     category: normalizeOgreAiCategory(firstString(body.category, base.category)),
     amountSol: clampLimit(body.amountSol, OGRE_AUTOPILOT_LIMITS.amountSol, base.amountSol),
-    takeProfitPct: String(firstString(body.takeProfitPct, base.takeProfitPct) || "25"),
-    stopLossPct: String(firstString(body.stopLossPct, base.stopLossPct) || "8"),
-    sellDelay: String(firstString(body.sellDelay, base.sellDelay) || "5"),
+    takeProfitPct: String(firstString(body.takeProfitPct, base.takeProfitPct) || "100"),
+    stopLossPct: String(firstString(body.stopLossPct, base.stopLossPct) || "40"),
+    sellDelay: String(firstString(body.sellDelay, base.sellDelay) || "60"),
     slippageBps: String(firstString(body.slippageBps, base.slippageBps) || "400"),
     walletIndexes,
     walletGroup: String(body.walletGroup || base.walletGroup || "").trim(),
@@ -30128,9 +30129,14 @@ function ogreAiModeDefaults(mode) {
     preferFreshLaunches: true,
     targetBand: "fresh_ape",
     diversityWindow: 18,
-    defaultSellDelay: "3",
-    defaultTakeProfitPct: "25",
-    defaultStopLossPct: "8",
+    // Runner-hunting exit: aim for a 2x (TP 100%), give the trade room to run
+    // with a wide stop (fresh pairs swing hard - a tight stop sells you out of
+    // every winner on normal noise; hard rugs lose 100% regardless, so the
+    // entry filter is the real rug defense), and a 1h fallback timer so a
+    // bag that never moves frees its slot instead of sitting forever.
+    defaultSellDelay: "60",
+    defaultTakeProfitPct: "100",
+    defaultStopLossPct: "40",
     defaultSlippageBps: 500
   };
 }
@@ -30149,7 +30155,9 @@ function applyOgreAiTargetDefaults(defaults, targetPct, mode) {
     defaults.minLiquidityUsd = Math.min(Number(defaults.minLiquidityUsd || 20), 20);
     defaults.preferFreshLaunches = true;
     defaults.diversityWindow = Math.max(Number(defaults.diversityWindow || 0), 18);
-    defaults.defaultSellDelay = "3";
+    defaults.defaultSellDelay = "60";
+    defaults.defaultTakeProfitPct = defaults.defaultTakeProfitPct || "100";
+    defaults.defaultStopLossPct = defaults.defaultStopLossPct || "40";
     defaults.defaultSlippageBps = Math.max(Number(defaults.defaultSlippageBps || 500), 500);
     return defaults;
   }
