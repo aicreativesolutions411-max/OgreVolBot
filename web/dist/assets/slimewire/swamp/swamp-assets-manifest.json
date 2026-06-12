@@ -1,5 +1,5 @@
 {
-  "version": "2026-06-12-swamp-assets-v4",
+  "version": "2026-06-12-swamp-assets-v5",
   "source": "Generated SlimeWire Swamp concept sheets; chroma key removed locally.",
   "sheets": {
     "creatures": "/assets/slimewire/swamp/sheets/swamp-creatures-sheet.png",
@@ -12,7 +12,10 @@
     "rewards": "/assets/slimewire/swamp/sheets/swamp-rewards-sheet.png",
     "walkCycleBase": "/assets/slimewire/swamp/sheets/swamp-walk-cycle-base.png",
     "cleanTileset": "/assets/slimewire/swamp/sheets/swamp-clean-tileset.png",
-    "creatureWalkCycle02": "/assets/slimewire/swamp/sheets/swamp-creature-walk-cycle-02.png"
+    "creatureWalkCycle02": "/assets/slimewire/swamp/sheets/swamp-creature-walk-cycle-02.png",
+    "cleanTileset02": "/assets/slimewire/swamp/sheets/swamp-clean-tileset-02.png",
+    "walkCycleNpcs02": "/assets/slimewire/swamp/sheets/swamp-walk-cycle-npcs-02.png",
+    "creatureWalkCycle03": "/assets/slimewire/swamp/sheets/swamp-creature-walk-cycle-03.png"
   },
   "creatures": [
     {
@@ -74,7 +77,8 @@
     "Reward sheet includes catch badges, slimeballs, launch boss crown, TP/SL shield, proof receipt, PnL trophy, share charms, wallet pouch, and portal token for quests and achievements.",
     "Walk-cycle base sheet adds player, ogre guide, slime, skeleton slime, and ogre pup directional animation frames.",
     "Creature walk-cycle pack adds toxic, shiny, skeleton, frog, bat-wing slime, and ogre minion directional animation frames.",
-    "Clean tileset is the main map-building atlas for walking around bushes, paths, water, bridges, cover, and portal areas."
+    "Clean tileset is the main map-building atlas for walking around bushes, paths, water, bridges, cover, and portal areas.",
+    "v5 adds additional clean walking tiles, NPC/player walk-cycle frames, and creature walk-cycle frames for the Swamp game."
   ],
   "world": {
     "overworld": "/assets/slimewire/swamp/sheets/swamp-overworld-sheet.png",
@@ -147,6 +151,47 @@
       "framesPerDirection": 3,
       "layout": "rows=creatures; columns=down3,left3,right3,up3",
       "source": "/assets/slimewire/swamp/source/swamp-creature-walk-cycle-02-source.png"
+    },
+    {
+      "id": "npcs-walk-cycle-02",
+      "path": "/assets/slimewire/swamp/sheets/swamp-walk-cycle-npcs-02.png",
+      "source": "/assets/slimewire/swamp/source/swamp-walk-cycle-npcs-02-source.png",
+      "characters": [
+        "hooded-degen-player",
+        "moss-ogre-guide",
+        "skeleton-trader",
+        "swamp-witch"
+      ],
+      "directions": [
+        "down",
+        "left",
+        "right",
+        "up"
+      ],
+      "framesPerDirection": 4,
+      "layout": "4 character rows; each row has down, left, right, up groups with 4 frames each; magenta keyed transparent",
+      "usage": "Playable NPCs, guides, quest givers, and trader visitors."
+    },
+    {
+      "id": "creature-walk-cycle-03",
+      "path": "/assets/slimewire/swamp/sheets/swamp-creature-walk-cycle-03.png",
+      "source": "/assets/slimewire/swamp/source/swamp-creature-walk-cycle-03-source.png",
+      "characters": [
+        "green-slime",
+        "toxic-rug-slime",
+        "gold-shiny-runner",
+        "skeleton-crawler",
+        "swamp-frog-beast"
+      ],
+      "directions": [
+        "down",
+        "left",
+        "right",
+        "up"
+      ],
+      "framesPerDirection": 4,
+      "layout": "5 creature rows; each row has down, left, right, up groups with 4 frames each; magenta keyed transparent",
+      "usage": "Roaming enemies, coin avatars, shiny events, and boss minions."
     }
   ],
   "tilesets": [
@@ -177,6 +222,20 @@
         "portal-floor"
       ],
       "notes": "Clean square tile atlas intended for the future walk-around swamp map."
+    },
+    {
+      "id": "clean-walking-tileset-02",
+      "path": "/assets/slimewire/swamp/sheets/swamp-clean-tileset-02.png",
+      "source": "/assets/slimewire/swamp/source/swamp-clean-tileset-02-source.png",
+      "tileIntent": [
+        "hut walls, roof caps, doors, lit windows, floor/interior props",
+        "dock planks, bridge pieces, posts, fence segments",
+        "water, mud, grass, moss, swamp transitions",
+        "bush walls, reeds, vines, rocks, stumps, mushrooms",
+        "portal pads, slime puddles, coin launch arena accents"
+      ],
+      "usage": "Clean overworld tile expansion for walkable maps, spawn zones, launch arenas, and boss-raid rooms."
     }
-  ]
+  ],
+  "generatedAt": "2026-06-12"
 }
