@@ -107,6 +107,33 @@
       .btn.ape { background:linear-gradient(135deg,var(--green),var(--green2)); color:#071006; }
       .btn.ghost { background:rgba(8,20,10,0.7); border:1px solid var(--line); color:#eaffe0; font-size:0.8rem; padding:11px; }
       .mlinks { display:flex; gap:8px; margin-top:8px; }
+      /* title screen */
+      .titlescreen { position:fixed; inset:0; z-index:120; display:flex; align-items:center; justify-content:center; text-align:center;
+        background:radial-gradient(ellipse at 50% 30%, #0c3a1a, #04190c 70%, #020a05);
+        padding:24px calc(20px + env(safe-area-inset-left)); transition:opacity .5s; }
+      .titlescreen.gone { opacity:0; pointer-events:none; }
+      .title-bgfx { position:absolute; inset:0; background:
+        radial-gradient(circle at 20% 80%, rgba(114,255,35,0.10), transparent 40%),
+        radial-gradient(circle at 80% 20%, rgba(60,200,120,0.10), transparent 40%); animation:titlepulse 6s ease-in-out infinite; }
+      @keyframes titlepulse { 0%,100%{opacity:.6} 50%{opacity:1} }
+      .title-inner { position:relative; z-index:1; max-width:460px; }
+      .title-mark { width:clamp(120px,38vw,180px); height:auto; image-rendering:pixelated; filter:drop-shadow(0 0 24px rgba(114,255,35,0.5)); animation:bob 3.4s ease-in-out infinite; }
+      .title-logo { margin:6px 0 0; font-size:clamp(2.4rem,12vw,4rem); font-weight:900; letter-spacing:0.02em; color:var(--green);
+        text-shadow:0 0 30px rgba(114,255,35,0.7), 0 4px 0 #0a3a14; }
+      .title-tag { color:var(--dim); font-size:clamp(0.85rem,3.5vw,1rem); margin:8px auto 22px; max-width:380px; }
+      .title-tag b { color:var(--green2); }
+      .title-enter { background:linear-gradient(135deg,var(--green),var(--green2)); color:#071006; border:0; border-radius:99px;
+        padding:16px 34px; font-weight:900; font-size:1.1rem; cursor:pointer; box-shadow:0 0 30px rgba(114,255,35,0.5); animation:enterpulse 1.8s ease-in-out infinite; }
+      @keyframes enterpulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.05)} }
+      .title-stats { display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin:18px 0 0; }
+      .title-stats span { background:rgba(8,20,10,0.7); border:1px solid var(--line); border-radius:99px; padding:5px 12px; font-size:0.72rem; font-weight:800; color:#eaffe0; }
+      .title-mute { margin-top:14px; background:none; border:1px solid var(--line); color:var(--dim); border-radius:99px; padding:6px 14px; font-size:0.74rem; cursor:pointer; }
+      .title-credit { margin-top:16px; color:var(--dim); font-size:0.66rem; } .title-credit b { color:var(--green); }
+      /* coachmark */
+      .coach { position:fixed; inset:0; z-index:115; display:flex; align-items:flex-end; justify-content:center; padding:0 14px 96px; pointer-events:none; }
+      .coach-card { pointer-events:auto; max-width:420px; background:linear-gradient(180deg,#0a2110,#05130a); border:1px solid var(--green); border-radius:16px; padding:14px 16px; box-shadow:0 0 40px rgba(114,255,35,0.25); animation:lvlpop .5s ease-out; }
+      .coach-card b { color:var(--green); } .coach-card p { color:var(--dim); font-size:0.84rem; margin:6px 0 12px; }
+      .coach-card button { background:var(--green); color:#071006; border:0; border-radius:99px; padding:10px 22px; font-weight:900; cursor:pointer; }
       /* overworld — FULLSCREEN game mode */
       .world-wrap { display:none; }
       .world-wrap.on { display:block; position:fixed; inset:0; z-index:46; background:#04190c; }
@@ -213,6 +240,29 @@
     </style>
   </head>
   <body>
+    <!-- TITLE / START SCREEN -->
+    <div class="titlescreen" data-title>
+      <div class="title-bgfx"></div>
+      <div class="title-inner">
+        <img class="title-mark" src="/assets/slimewire/swamp/sprites/swamp-trader-ogre.png" alt="" onerror="this.style.display='none'">
+        <h1 class="title-logo">THE&nbsp;SWAMP</h1>
+        <p class="title-tag">Every Solana launch is a creature. Catch the runners, dodge the rugs, <b>ape the winners</b>.</p>
+        <button class="title-enter" data-title-enter>▶ ENTER THE SWAMP</button>
+        <div class="title-stats" data-title-stats></div>
+        <button class="title-mute" data-title-mute>🔊 Sound: ON</button>
+        <div class="title-credit">powered by <b>SlimeWire</b> · slimewire.org</div>
+      </div>
+    </div>
+
+    <!-- first-run coachmark -->
+    <div class="coach" data-coach hidden>
+      <div class="coach-card">
+        <b>🧌 Professor Ogre</b>
+        <p>Drag anywhere to walk. Bump into a slime to catch it. <b>Tall grass</b> hides fresh launches. Walk into the <b>buildings</b> to launch or trade real coins. Gotta slime 'em all!</p>
+        <button data-coach-ok>Let's go 🐸</button>
+      </div>
+    </div>
+
     <header class="top">
       <div class="toprow">
         <div class="brand">
@@ -333,6 +383,7 @@
       // ---------- sound (tiny WebAudio blips, no assets) ----------
       let audioCtx = null;
       function sfx(kind) {
+        if (store.muted === true) return;
         try {
           audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)();
           const t = audioCtx.currentTime;
@@ -1533,12 +1584,82 @@
         render();
       }));
 
+      // ---------- ambient swamp music (synthesized, no audio files needed) ----------
+      let music = { ctx:null, on:(store.muted!==true), nodes:[], frogTimer:null };
+      function startMusic() {
+        if (!music.on || music.ctx) return;
+        try {
+          const ctx = new (window.AudioContext||window.webkitAudioContext)(); music.ctx = ctx;
+          const master = ctx.createGain(); master.gain.value = 0.0; master.connect(ctx.destination);
+          master.gain.linearRampToValueAtTime(0.14, ctx.currentTime + 2.5);
+          music.master = master;
+          // low drone pad: two detuned saws through a slow lowpass
+          const filt = ctx.createBiquadFilter(); filt.type="lowpass"; filt.frequency.value=420; filt.Q.value=6; filt.connect(master);
+          const lfo = ctx.createOscillator(), lfoG = ctx.createGain(); lfo.frequency.value=0.06; lfoG.gain.value=180;
+          lfo.connect(lfoG).connect(filt.frequency); lfo.start();
+          [55, 55.4, 82.5].forEach((f)=>{ const o=ctx.createOscillator(); o.type="sawtooth"; o.frequency.value=f; const g=ctx.createGain(); g.gain.value=0.5; o.connect(g).connect(filt); o.start(); music.nodes.push(o); });
+          music.nodes.push(lfo);
+          // occasional frog/bubble blips
+          const blip = () => {
+            if (!music.ctx) return;
+            const t = ctx.currentTime; const o=ctx.createOscillator(), g=ctx.createGain();
+            const frog = Math.random()<0.5;
+            o.type = frog?"sine":"triangle"; o.frequency.setValueAtTime(frog?110:480, t);
+            o.frequency.exponentialRampToValueAtTime(frog?70:900, t+0.18);
+            g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(0.06,t+0.02); g.gain.exponentialRampToValueAtTime(0.0001,t+0.3);
+            o.connect(g).connect(master); o.start(t); o.stop(t+0.35);
+            music.frogTimer = setTimeout(blip, 2500 + Math.random()*5000);
+          };
+          music.frogTimer = setTimeout(blip, 2000);
+        } catch {}
+      }
+      function stopMusic() { try { music.master?.gain.exponentialRampToValueAtTime(0.0001, music.ctx.currentTime+0.4); clearTimeout(music.frogTimer); setTimeout(()=>{ music.ctx?.close(); music.ctx=null; music.nodes=[]; }, 500); } catch {} }
+      function setMute(muted) { store.muted = muted; save(store); if (muted) { music.on=false; stopMusic(); } else { music.on=true; startMusic(); }
+        const b = $("[data-title-mute]"); if (b) b.textContent = muted ? "🔇 Sound: OFF" : "🔊 Sound: ON"; }
+
+      // ---------- title screen ----------
+      let started = false;
+      function enterSwamp() {
+        if (started) return; started = true;
+        $("[data-title]").classList.add("gone");
+        setTimeout(()=>{ const t=$("[data-title]"); if (t) t.style.display="none"; }, 600);
+        if (music.on) startMusic();
+        startWorld();
+        if (!Object.keys(store.dex).length && !store.coachSeen) {
+          $("[data-coach]").hidden = false;
+          $("[data-coach-ok]").onclick = () => { $("[data-coach]").hidden = true; store.coachSeen = true; save(store); };
+        }
+      }
+      function renderTitleStats() {
+        const lvl = levelFor(store.xp);
+        $("[data-title-stats]").innerHTML = [
+          `🎒 ${Object.keys(store.dex).length} caught`,
+          `⭐ Lvl ${lvl} ${esc(LEVELS[lvl-1]||"")}`,
+          (store.streakData?.days>1?`🔥 ${store.streakData.days}-day streak`:"")
+        ].filter(Boolean).map((t)=>`<span>${t}</span>`).join("");
+      }
+      $("[data-title-enter]")?.addEventListener("click", enterSwamp);
+      $("[data-title-mute]")?.addEventListener("click", ()=> setMute(store.muted!==true));
+
+      // ---------- events ----------
+      $("[data-grid]").addEventListener("click", (e) => {
+        const card = e.target.closest(".card"); if (!card) return;
+        openCreature(card.getAttribute("data-mint"));
+      });
+      document.querySelectorAll(".tab").forEach((t)=>t.addEventListener("click", ()=>{
+        document.querySelectorAll(".tab").forEach((x)=>x.classList.remove("on")); t.classList.add("on");
+        view = t.getAttribute("data-view");
+        if (view==="world") startWorld(); else stopWorld();
+        render();
+      }));
+
       spawnAmbience();
       touchStreak();
       renderProgress();
       renderQuests();
       renderWorth();
-      startWorld();
+      renderTitleStats();
+      if (store.muted===true) { const b=$("[data-title-mute]"); if (b) b.textContent="🔇 Sound: OFF"; }
       render();
       loadLaunches();
       loadFeed();
