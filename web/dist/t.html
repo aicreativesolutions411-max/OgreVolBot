@@ -125,7 +125,7 @@
             grid: { vertLines: { color: "rgba(114,255,35,0.06)" }, horzLines: { color: "rgba(114,255,35,0.06)" } },
             crosshair: { mode: 0 },
             rightPriceScale: { borderColor: "rgba(114,255,35,0.2)" },
-            timeScale: { borderColor: "rgba(114,255,35,0.2)", timeVisible: true, secondsVisible: cs.tf === "1m" },
+            timeScale: { borderColor: "rgba(114,255,35,0.2)", timeVisible: true, secondsVisible: cs.tf === "1m", barSpacing: 7, rightOffset: 3 },
             width: chartEl.clientWidth,
             height: chartEl.clientHeight
           });
@@ -161,7 +161,9 @@
             cs.candles.setData(rows.map((r) => ({ time: r.t, open: r.o, high: r.h, low: r.l, close: r.c })));
             cs.volume.setData(rows.map((r) => ({ time: r.t, value: r.v, color: r.c >= r.o ? "rgba(114,255,35,0.35)" : "rgba(255,107,94,0.35)" })));
             cs.lastBar = { ...rows[rows.length - 1] };
-            if (fit) cs.chart.timeScale().fitContent();
+            // Show the recent action with fat readable candles instead of
+            // squeezing 300 bars into the canvas.
+            if (fit) cs.chart.timeScale().scrollToRealTime();
             liveDot.hidden = false;
           } catch {
             if (!cs.chart) showChartFallback();
