@@ -14026,8 +14026,9 @@ async function quickPresetTrade(tokenMint, presetOverride = null) {
       signature: data.trade?.signature || ""
     });
     queuePostTradeRefresh(data.trade?.signature, "quick-preset-trade", { tradeAttemptId });
-    state.activeTab = "trade";
-    render();
+    // Buy in place: yanking the user to the Swap tab mid-scroll broke their
+    // flow - the status line + button state + receipt are the feedback.
+    render({ preserveSmartChartFrame: state.activeTab === "smartChart" });
     clearTradeActionLater("trade-buy", tokenMint, actionDetail, 3000);
   } catch (error) {
     if (tokenMint) {
