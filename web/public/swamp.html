@@ -4,9 +4,9 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>The Swamp — SlimeWire</title>
-    <meta name="description" content="Every Solana launch is a creature in the Swamp. Catch them, read the shield, ape the runners. Gotta rot 'em all.">
-    <meta property="og:title" content="The Swamp — catch the coins before they rot">
-    <meta property="og:description" content="Every live launch becomes a creature. Catch them, dodge the rugs, ape the runners. Powered by SlimeWire.">
+    <meta name="description" content="Every Solana launch is a slime creature in the Swamp. Catch them, read the shield, ape the runners. Gotta slime 'em all.">
+    <meta property="og:title" content="The Swamp — catch the coins before they pump">
+    <meta property="og:description" content="Every live launch becomes a slime creature. Catch them, read the shield, ape the runners. Powered by SlimeWire.">
     <meta property="og:image" content="https://www.slimewire.org/assets/slimewire-panel-wordmark-clean.png">
     <meta name="twitter:card" content="summary_large_image">
     <link rel="icon" type="image/svg+xml" href="/assets/slimewire/svg/slimewire-mark.svg">
@@ -47,7 +47,7 @@
 
       .hero { text-align:center; padding:18px 8px 6px; }
       .hero h1 { margin:0; font-size:clamp(1.5rem,6vw,2.4rem); letter-spacing:-0.01em; }
-      .hero h1 .rot { color:var(--green); text-shadow:0 0 22px rgba(114,255,35,0.55); }
+      .hero h1 .slime { color:var(--green); text-shadow:0 0 22px rgba(114,255,35,0.55); }
       .hero p { color:var(--dim); margin:6px auto 0; max-width:560px; font-size:0.9rem; }
       .ogre-say {
         display:flex; gap:10px; align-items:center; justify-content:center; margin:12px auto 4px; max-width:620px;
@@ -143,11 +143,11 @@
 
     <div class="wrap">
       <div class="hero">
-        <h1>Gotta <span class="rot">rot</span> 'em all</h1>
-        <p>Every live Solana launch is a wild creature in the Swamp. Catch the runners, dodge the rugs — its power IS its chart.</p>
+        <h1>Gotta <span class="slime">slime</span> 'em all</h1>
+        <p>Every live Solana launch is a wild slime crawling the Swamp. Catch the runners, read the shield — its power IS its chart.</p>
         <div class="ogre-say">
           <div class="face">🧌</div>
-          <p data-ogre>Professor Ogre: "Fresh ones crawl out of the slime every few seconds, degen. Catch 'em before they pump… or before they rot."</p>
+          <p data-ogre>Professor Ogre: "Fresh slimes crawl out the bog every few seconds, degen. Catch 'em before they pump."</p>
         </div>
       </div>
 
@@ -198,7 +198,7 @@
       const save = (s) => { try { localStorage.setItem(KEY, JSON.stringify(s)); } catch {} };
       const load = () => { try { return JSON.parse(localStorage.getItem(KEY) || "{}"); } catch { return {}; } };
       const store = Object.assign({ xp:0, dex:{} }, load());
-      const LEVELS = ["Tadpole","Swamp Pup","Slime Scout","Rot Hunter","Bog Raider","Ooze Lord","Swamp King","Ogre Ascendant"];
+      const LEVELS = ["Tadpole","Swamp Pup","Slime Scout","Bog Hunter","Goo Raider","Ooze Lord","Swamp King","Ogre Ascendant"];
       const levelFor = (xp) => Math.min(LEVELS.length, Math.max(1, Math.floor(Math.sqrt(xp/120)) + 1));
       const xpForLevel = (lvl) => Math.pow(lvl - 1, 2) * 120;
       function renderProgress() {
@@ -214,67 +214,133 @@
       // ---------- deterministic creature generator ----------
       function hash(str) { let h = 2166136261 >>> 0; for (let i=0;i<str.length;i++){ h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
       function rng(seed) { let s = seed >>> 0; return () => { s = (Math.imul(s ^ (s>>>15), 1 | s) + ((s ^ (s>>>7)) >>> 0)) >>> 0; s ^= s + Math.imul(s ^ (s>>>3), 61 | s); return ((s ^ (s>>>14)) >>> 0) / 4294967296; }; }
-      // mood: derives a palette + features from the real token + its shield read
+      // Slime-swamp palette: mostly green/teal goo, with toxic-purple for
+      // drained pairs and amber/swamp tones for shaky ones. Each healthy
+      // creature pulls a different hue so no two look alike.
       function paletteFor(mood, rand) {
-        if (mood === "rug") return { body:"#5b6b58", body2:"#3b4a3a", accent:"#9b6bff", eye:"#ff5e5e", zombie:true };
-        if (mood === "avoid") return { body:"#7a5a3a", body2:"#4a3422", accent:"#ff6b5e", eye:"#ffd84d", zombie:false };
-        if (mood === "risk") return { body:"#caa23a", body2:"#8a6a1f", accent:"#ffd84d", eye:"#1a1a1a", zombie:false };
-        const hue = 95 + Math.floor(rand()*40); // green family
-        return { body:`hsl(${hue} 90% 55%)`, body2:`hsl(${hue} 80% 34%)`, accent:`hsl(${hue+30} 95% 70%)`, eye:"#0a1a06", zombie:false };
+        if (mood === "rug") return { body:"#6f5b86", body2:"#43374f", accent:"#c79bff", eye:"#ffe24d", sick:true };
+        if (mood === "avoid") return { body:"#8a6a3a", body2:"#503820", accent:"#ffb14d", eye:"#10160a", sick:false };
+        if (mood === "risk") return { body:"#bca63a", body2:"#7c6a1f", accent:"#ffe87a", eye:"#10160a", sick:false };
+        const hues = [88, 100, 112, 124, 138, 152, 166, 178]; // green → teal slime
+        const hue = hues[Math.floor(rand()*hues.length)] + Math.floor(rand()*10 - 5);
+        const sat = 68 + Math.floor(rand()*26);
+        const light = 48 + Math.floor(rand()*12);
+        return {
+          body:`hsl(${hue} ${sat}% ${light}%)`,
+          body2:`hsl(${hue} ${sat-8}% ${light-18}%)`,
+          accent:`hsl(${(hue+38)%360} 95% 72%)`,
+          eye:"#08160a", sick:false
+        };
       }
-      // draw a symmetric pixel blob onto a canvas
+
+      // Procedural slime creature. Variety comes from: 6 body archetypes, eye
+      // count (1-3), and feature rolls (horns, antennae, spots, fangs, crown,
+      // tongue) — all keyed off the mint so the same coin always looks the same.
       function drawCreature(canvas, mint, mood, stage) {
-        const rand = rng(hash(String(mint) + ":" + mood));
+        const rand = rng(hash(String(mint) + ":" + mood + ":v2"));
         const pal = paletteFor(mood, rand);
-        const N = 14, half = Math.ceil(N/2);
-        const cell = Math.floor(canvas.width / N);
+        const N = 16, half = Math.ceil(N/2);
+        const cell = canvas.width / N;
         const ctx = canvas.getContext("2d");
+        ctx.imageSmoothingEnabled = false;
         ctx.clearRect(0,0,canvas.width,canvas.height);
         const grid = Array.from({length:N},()=>Array(N).fill(0));
-        const cx = (N-1)/2, cy = N/2 + 0.5;
-        const rx = 3.4 + stage*0.6 + rand()*1.2, ryT = 3.0 + stage*0.5, ryB = 4.2 + stage*0.7;
+        const cx = (N-1)/2, cy = N/2 + 0.8;
+
+        const archetypes = ["blob","tall","wide","spiky","segmented","drippy"];
+        const arche = archetypes[Math.floor(rand()*archetypes.length)];
+        let rx = 4.0 + stage*0.5 + rand()*1.4, ryT = 3.2 + stage*0.4, ryB = 4.4 + stage*0.6;
+        if (arche === "tall") { rx = 3.0 + rand()*0.8; ryT = 4.4 + stage*0.4; ryB = 5.2 + stage*0.5; }
+        else if (arche === "wide") { rx = 5.4 + stage*0.5; ryT = 2.7; ryB = 3.6; }
+
         for (let y=0;y<N;y++) for (let x=0;x<half;x++) {
           const dx = (x-cx)/rx, dy = (y-cy)/(y<cy?ryT:ryB);
-          const d = dx*dx + dy*dy;
-          let on = d < 1 ? 1 : (d < 1.25 && rand() < 0.5 ? 1 : 0);
-          if (on && rand() < 0.10) on = 0; // texture holes
+          let d = dx*dx + dy*dy;
+          if (arche === "spiky") d += Math.sin(y*1.6) * 0.10; // bumpy silhouette
+          let on = d < 1 ? 1 : (d < 1.28 && rand() < 0.5 ? 1 : 0);
+          if (arche === "segmented" && y % 3 === 0 && x < cx-1) on = 0; // banded body
+          if (on && rand() < 0.08) on = 0; // goo holes
           grid[y][x] = on; grid[y][N-1-x] = on;
         }
-        // render body with shading + outline
-        for (let y=0;y<N;y++) for (let x=0;x<N;x++) {
-          if (!grid[y][x]) continue;
-          const edge = !grid[y-1]?.[x] || !grid[y+1]?.[x] || !grid[y]?.[x-1] || !grid[y]?.[x+1];
-          ctx.fillStyle = y > cy+1 ? pal.body2 : pal.body;
-          ctx.fillRect(x*cell, y*cell, cell, cell);
-          if (edge) { ctx.fillStyle = "rgba(0,0,0,0.35)"; ctx.fillRect(x*cell, y*cell, cell, cell); ctx.fillStyle = y>cy+1?pal.body2:pal.body; ctx.fillRect(x*cell+1, y*cell+1, cell-2, cell-2); }
-        }
-        // eyes
-        const eyeY = Math.floor(cy - 1);
-        const eyeXs = stage>=2 ? [Math.floor(cx-2.5), Math.floor(cx+1.5)] : [Math.floor(cx-2), Math.floor(cx+1)];
-        for (const ex of eyeXs) {
-          if (pal.zombie) { // X eyes
-            ctx.strokeStyle = pal.eye; ctx.lineWidth = Math.max(2, cell*0.35);
-            ctx.beginPath();
-            ctx.moveTo(ex*cell, eyeY*cell); ctx.lineTo((ex+1.4)*cell, (eyeY+1.4)*cell);
-            ctx.moveTo((ex+1.4)*cell, eyeY*cell); ctx.lineTo(ex*cell, (eyeY+1.4)*cell); ctx.stroke();
-          } else {
-            ctx.fillStyle = "#f6fff0"; ctx.fillRect(ex*cell, eyeY*cell, cell*1.4, cell*1.4);
-            ctx.fillStyle = pal.eye; ctx.fillRect((ex+0.4)*cell, (eyeY+0.4)*cell, cell, cell);
-            ctx.fillStyle = "rgba(255,255,255,0.9)"; ctx.fillRect((ex+0.45)*cell, (eyeY+0.45)*cell, cell*0.35, cell*0.35);
+
+        const px = (gx,gy,w=1,h=1,c) => { ctx.fillStyle = c; ctx.fillRect(gx*cell, gy*cell, cell*w, cell*h); };
+
+        // horns / antennae / crown (top features) — drawn before body so body overlaps base
+        const feat = { horns:rand()<0.4, antennae:rand()<0.32, crown:arche==="spiky"&&rand()<0.6, spots:rand()<0.5, fangs:rand()<0.45, tongue:rand()<0.25, thirdEye:stage>=2&&rand()<0.4 };
+        const topY = Math.round(cy - ryT);
+        if (feat.horns) {
+          for (const hx of [Math.round(cx-rx*0.55), Math.round(cx+rx*0.55)-1]) {
+            px(hx, topY-1, 1, 2, pal.body2); px(hx, topY-2, 1, 1, pal.accent);
           }
         }
-        // slime drips
+        if (feat.antennae) {
+          for (const ax of [Math.round(cx-1.5), Math.round(cx+1.5)]) {
+            px(ax, topY-2, 0.4, 2, pal.body2); ctx.fillStyle = pal.accent; ctx.beginPath();
+            ctx.arc(ax*cell+cell*0.3, (topY-2)*cell, cell*0.7, 0, 7); ctx.fill();
+          }
+        }
+        if (feat.crown) { for (let i=-2;i<=2;i+=2) px(Math.round(cx+i), topY-1, 1, 1, pal.accent); }
+
+        // body with top-light / bottom-dark shading + dark outline
+        for (let y=0;y<N;y++) for (let x=0;x<N;x++) {
+          if (!grid[y][x]) continue;
+          const base = y > cy ? pal.body2 : pal.body;
+          px(x, y, 1, 1, base);
+          const edge = !grid[y-1]?.[x] || !grid[y+1]?.[x] || !grid[y]?.[x-1] || !grid[y]?.[x+1];
+          if (edge) { px(x, y, 1, 1, "rgba(0,0,0,0.40)"); ctx.fillStyle = base; ctx.fillRect(x*cell+1, y*cell+1, cell-2, cell-2); }
+        }
+        // sheen highlight
+        px(Math.round(cx-rx*0.4), Math.round(cy-ryT*0.5), 1, 1, "rgba(255,255,255,0.25)");
+
+        // spots
+        if (feat.spots) {
+          for (let i=0;i<3+Math.floor(rand()*3);i++){
+            const sx = 1+Math.floor(rand()*(N-2)), sy = Math.floor(cy)+Math.floor(rand()*ryB*0.6);
+            if (grid[sy]?.[sx]) px(sx, sy, 1, 1, "rgba(0,0,0,0.22)");
+          }
+        }
+
+        // eyes
+        const eyeCount = rand()<0.14 ? 1 : (stage>=1 && rand()<0.30 ? 3 : 2);
+        const eyeY = Math.round(cy - 1.2);
+        const eyeXs = eyeCount===1 ? [Math.round(cx-0.7)]
+          : eyeCount===3 ? [Math.round(cx-3), Math.round(cx-0.7), Math.round(cx+1.6)]
+          : [Math.round(cx-2.4), Math.round(cx+0.9)];
+        const eW = eyeCount===3 ? 1.1 : 1.5;
+        for (const ex of eyeXs) {
+          if (pal.sick) {
+            ctx.strokeStyle = pal.eye; ctx.lineWidth = Math.max(2, cell*0.32); ctx.beginPath();
+            ctx.moveTo(ex*cell, eyeY*cell); ctx.lineTo((ex+eW)*cell, (eyeY+eW)*cell);
+            ctx.moveTo((ex+eW)*cell, eyeY*cell); ctx.lineTo(ex*cell, (eyeY+eW)*cell); ctx.stroke();
+          } else {
+            px(ex, eyeY, eW, eW, "#f6fff0");
+            px(ex+eW*0.28, eyeY+eW*0.28, eW*0.6, eW*0.6, pal.eye);
+            px(ex+eW*0.32, eyeY+eW*0.30, eW*0.22, eW*0.22, "rgba(255,255,255,0.95)");
+          }
+        }
+        if (feat.thirdEye && !pal.sick) { px(Math.round(cx), eyeY-1.4, 1, 1, "#f6fff0"); px(cx+0.25, eyeY-1.15, 0.5, 0.5, pal.eye); }
+
+        // mouth: fangs or tongue
+        const mouthY = eyeY + 2;
+        if (feat.fangs) {
+          for (const fx of [Math.round(cx-1.2), Math.round(cx+0.6)]) px(fx, mouthY, 0.5, 1, "#f6fff0");
+        } else if (feat.tongue) {
+          px(Math.round(cx-0.3), mouthY, 0.8, 1.2, "#ff7ab0");
+        } else {
+          px(Math.round(cx-1), mouthY, 2, 0.4, "rgba(0,0,0,0.5)");
+        }
+
+        // slime drips off the bottom
         ctx.fillStyle = pal.accent;
         for (let i=0;i<3+Math.floor(rand()*3);i++){
           const dxp = Math.floor(rand()*N);
-          if (!grid[N-1]?.[dxp]) continue;
-          const len = 1 + Math.floor(rand()*2);
-          ctx.fillRect(dxp*cell+cell*0.25, (N-1)*cell, cell*0.5, cell*len);
+          let bottom = -1; for (let y=N-1;y>=0;y--) if (grid[y][dxp]) { bottom=y; break; }
+          if (bottom < 0) continue;
+          ctx.fillRect(dxp*cell+cell*0.28, (bottom+1)*cell, cell*0.44, cell*(1+Math.floor(rand()*2)));
         }
-        // glow for healthy pumpers
-        if (mood === "buy") { canvas.style.filter = "drop-shadow(0 0 6px rgba(114,255,35,0.6))"; }
-        else if (pal.zombie) { canvas.style.filter = "saturate(0.6) brightness(0.9)"; }
-        else canvas.style.filter = "none";
+
+        canvas.style.filter = mood==="buy" ? "drop-shadow(0 0 6px rgba(114,255,35,0.55))"
+          : pal.sick ? "saturate(0.7) brightness(0.92)" : "none";
       }
 
       // ---------- token -> creature mapping ----------
@@ -294,7 +360,7 @@
         if (a < 30*60) return 2;    // grown
         return 3;                   // elder
       }
-      const STAGE_NAME = ["Egg","Hatchling","Beast","Elder"];
+      const STAGE_NAME = ["Spawnling","Blobling","Slimebeast","Elder Ooze"];
       function moodFor(row) {
         // map color from the row's live signals (real shield verdict shown on tap)
         const liq = num(row.liquidityUsd), mc = num(row.marketCap || row.marketCapUsd);
@@ -331,7 +397,7 @@
       function cardHtml(row) {
         const mint = row.tokenMint; const mood = moodFor(row); const stage = stageFor(row);
         const caught = Boolean(store.dex[mint]);
-        const moodBadge = { buy:["BUY ZONE","#72ff23"], risk:["DICEY","#ffd84d"], avoid:["DUMPING","#ff9d4d"], rug:["ROTTING","#9b6bff"] }[mood];
+        const moodBadge = { buy:["BUY ZONE","#72ff23"], risk:["DICEY","#ffd84d"], avoid:["DUMPING","#ff9d4d"], rug:["DRAINED","#c79bff"] }[mood];
         return `<div class="card ${caught?"caught":""}" data-mint="${esc(mint)}">
           ${caught?'<span class="caught-tag">✅</span>':''}
           <span class="badge" style="background:${moodBadge[1]}22;color:${moodBadge[1]};border:1px solid ${moodBadge[1]}">${moodBadge[0]}</span>
@@ -427,9 +493,9 @@
         } catch { const vEl = modal.querySelector("[data-verdict]"); if (vEl) vEl.textContent = "🛡 Shield offline — trade carefully"; }
       }
       function loreFor(verdict, mood) {
-        if (mood==="rug") return "This one already rotted. A zombie collectible — battle fodder, not a buy.";
+        if (mood==="rug") return "Liquidity drained — this slime's gone toxic. A swamp relic for the dex, not a buy.";
         if (verdict==="BUY") return "Healthy slime. Strong holders, real flow. The kind that runs.";
-        if (verdict==="CAUTION") return "Twitchy little beast. Trade small or use protection.";
+        if (verdict==="CAUTION") return "Twitchy little blob. Trade small or use protection.";
         if (verdict==="RISK"||verdict==="AVOID") return "Smells like a trap. Catch it for the dex, think twice before aping.";
         return "A fresh crawler. Its fate is still being written on the chart.";
       }
