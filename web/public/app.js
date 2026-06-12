@@ -7917,7 +7917,8 @@ function ogreAiResultHtml() {
 }
 
 const OGRE_AI_CATEGORIES = [
-  ["super_fresh", "Super-fresh", "Brand-new sub-$8K launches with starting flow — fastest, highest risk. Blocks mint/freeze/honeypot/drained-liquidity before buys."],
+  ["strong", "Strong 🔥", "Highest win-rate mode. Waits for survivors (1.5–12 min old) with proven net-buying, real holders and healthy liquidity, then targets a 2x — entering before the breakout, not after. Built to win more than it loses."],
+  ["super_fresh", "Super-fresh", "Brand-new sub-$8K launches (under ~2 min) with starting flow — fastest, highest risk. Blocks mint/freeze/honeypot/drained-liquidity before buys."],
   ["volume", "Volume", "Active runners with real momentum ($8K–$350K MC), heavy early volume and live trades."],
   ["safe", "Safe", "Established small caps ($50K–$1.2M MC) with deeper liquidity and a higher score bar; tighter slippage."],
   ["long_term", "Long-term", "Larger, deeper pairs ($150K–$5M MC) for a longer horizon; strictest score + liquidity, lowest slippage."]
@@ -7927,7 +7928,7 @@ function ogreAiCategoryValue() {
   const isValid = (value) => OGRE_AI_CATEGORIES.some(([key]) => key === value);
   if (state.ogreAiCategory && isValid(state.ogreAiCategory)) return state.ogreAiCategory;
   const stored = readStoredOgreAiFormPreset().category;
-  return isValid(stored) ? stored : "super_fresh";
+  return isValid(stored) ? stored : "strong";
 }
 
 function ogreAiCategoryHint(category) {
@@ -22305,7 +22306,7 @@ document.addEventListener("click", async (event) => {
   const ogreCatBtn = target.closest?.("[data-ogre-cat]");
   if (ogreCatBtn) {
     event.preventDefault();
-    state.ogreAiCategory = ogreCatBtn.dataset.ogreCat || "super_fresh";
+    state.ogreAiCategory = ogreCatBtn.dataset.ogreCat || "strong";
     render({ force: true });
     return;
   }

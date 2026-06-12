@@ -28,12 +28,28 @@ const OGRE_AI_THIN_LIQUIDITY_RATIO = 0.01;
 const OGRE_AI_FRESH_APE_MIN_MC_USD = 3_000;
 const OGRE_AI_FRESH_APE_PRIMARY_MAX_MC_USD = 8_000;
 const OGRE_AI_FRESH_APE_FALLBACK_MAX_MC_USD = 15_000;
-const OGRE_AI_FRESH_APE_MAX_AGE_MINUTES = 0.5;
+const OGRE_AI_FRESH_APE_MAX_AGE_MINUTES = 2;
 const OGRE_AI_FRESH_APE_MIN_STARTING_VOLUME_USD = 60;
 
 function isFreshApeMode(mode) {
   const value = String(mode || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
   return value === "fresh_ape" || value === "freshape" || value === "ape";
+}
+
+// "Strong" mode: highest win-rate path. Instead of racing to be first on a
+// sub-30s launch (mostly bundle-rugs you can't tell apart yet), it waits for a
+// pair to SURVIVE the initial rug window, then buys the ones that have proven
+// real holders, growing liquidity, and sustained net-buying but have NOT yet
+// gone parabolic - the survivor + momentum, pre-breakout zone where a 2x is
+// most likely and rugs are mostly already filtered out by time.
+const OGRE_AI_STRONG_MIN_MC_USD = 6_000;
+const OGRE_AI_STRONG_MAX_MC_USD = 120_000;
+const OGRE_AI_STRONG_MIN_AGE_MIN = 1.5;
+const OGRE_AI_STRONG_MAX_AGE_MIN = 12;
+
+function isStrongMode(mode) {
+  const value = String(mode || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  return value === "strong" || value === "ogre_strong" || value === "sniper_strong";
 }
 
 function textBlob(row = {}) {
@@ -181,10 +197,11 @@ function ogreAiFreshApeHasStartingVolume(stats = {}, defaults = {}) {
   // several independent buys with net-positive flow. This is the main rug
   // filter - it naturally pushes entries a few seconds past the instant-rug
   // window while the pair is still fresh.
-  const confirmedBuyers = stats.buys5m >= 2 && stats.buyPressure >= 0.55;
-  const realVolume = stats.volumeMomentumUsd >= minVolume && stats.trades5m >= 2 && stats.buyPressure >= 0.5;
-  const strongRelVolume = stats.volumeToMarketCap >= 0.02 && stats.trades5m >= 2 && stats.buyPressure >= 0.5;
-  return confirmedBuyers || realVolume || strongRelVolume;
+  const confirmedBuyers = stats.buys5m >= 2 && stats.buyPressure >= 0.5;
+  const buyPlusVolume = stats.buys5m >= 1 && stats.trades5m >= 2 && stats.volumeMomentumUsd >= minVolume;
+  const realVolume = stats.volumeMomentumUsd >= minVolume * 1.5 && stats.trades5m >= 2;
+  const strongRelVolume = stats.volumeToMarketCap >= 0.025 && stats.trades5m >= 2;
+  return confirmedBuyers || buyPlusVolume || realVolume || strongRelVolume;
 }
 
 function ogreAiFreshApeFitScore(row = {}, defaults = {}) {
@@ -255,6 +272,72 @@ function ogreAiFreshApeFitScore(row = {}, defaults = {}) {
   ));
 }
 
+// Strong-mode fit: rewards proven survival + sustained demand + healthy
+// liquidity + early-but-not-blown-off momentum + socials. Penalizes pairs that
+// are being dumped or have already gone parabolic (late = you become exit liq).
+function ogreAiStrongFitScore(row = {}, defaults = {}) {
+  const stats = ogreAiCandidateStats(row);
+  const age = stats.ageMinutes;
+  let ageSignal = 0;
+  if (age !== null) {
+    if (age >= 2 && age <= 8) ageSignal = 20;           // prime survivor window
+    else if (age >= 1.5 && age <= 12) ageSignal = 13;
+    else if (age < 1.5) ageSignal = 2;                   // still unproven
+    else ageSignal = -clampNumber((age - 12) / 8, 0, 2) * 10;
+  }
+  // Sustained net buying is the single best win-rate signal.
+  const buyPressureSignal = clampNumber((stats.buyPressure - 0.5) / 0.25, 0, 1) * 18;
+  const tradeSignal = clampNumber(stats.trades5m / 12, 0, 1) * 14;
+  const relVolumeSignal = stats.volumeToMarketCap >= 0.15 ? 16
+    : stats.volumeToMarketCap >= 0.08 ? 12
+      : stats.volumeToMarketCap >= 0.04 ? 7
+        : stats.volumeToMarketCap >= 0.02 ? 3 : 0;
+  const liquiditySignal = stats.liquidityToMarketCap >= 0.04 ? 11
+    : stats.liquidityToMarketCap >= 0.02 ? 7
+      : stats.liquidityToMarketCap >= 0.01 ? 3 : 0;
+  // Enter on a rising but not exhausted move; punish already-pumped tops.
+  const m = stats.positivePriceMomentumPct;
+  let momentumSignal = 0;
+  if (m >= 5 && m <= 60) momentumSignal = 14;
+  else if (m > 3 && m < 120) momentumSignal = 8;
+  else if (m >= 120) momentumSignal = -8;
+  const socialSignal = (stats.hasX ? 9 : 0) + (stats.hasTelegram ? 3 : 0) + (stats.hasWebsite ? 3 : 0);
+  const scoreSignal = clampNumber(stats.score, 0, 100) * 0.12;
+  const riskPenalty = clampNumber(stats.rugRisk / 8, 0, 12)
+    + clampNumber(stats.exitRisk / 9, 0, 12)
+    + (/\b(wash|bundle|mutable|low liquidity|unknown risk)\b/i.test(ogreAiRiskText(row)) ? 6 : 0);
+  const dumpPenalty = stats.sells5m > stats.buys5m * 1.3 ? 18 : 0;
+  return Math.round(clampNumber(
+    ageSignal + buyPressureSignal + tradeSignal + relVolumeSignal + liquiditySignal
+      + momentumSignal + socialSignal + scoreSignal - riskPenalty - dumpPenalty,
+    1,
+    100
+  ));
+}
+
+function ogreAiStrongTier(row = {}, defaults = {}) {
+  const stats = ogreAiCandidateStats(row);
+  if (!stats.hasActivity) return null;
+  const minAge = Number(defaults.minAgeMinutes || OGRE_AI_STRONG_MIN_AGE_MIN);
+  const maxAge = Number(defaults.maxAgeMinutes || OGRE_AI_STRONG_MAX_AGE_MIN);
+  // Survivor window with KNOWN age (must have real market history to qualify).
+  const ageOk = stats.ageMinutes !== null && stats.ageMinutes >= minAge && stats.ageMinutes <= maxAge;
+  const minMc = Number(defaults.minMarketCap || OGRE_AI_STRONG_MIN_MC_USD);
+  const maxMc = Number(defaults.maxMarketCap || OGRE_AI_STRONG_MAX_MC_USD);
+  const capOk = stats.marketCap > 0 && stats.marketCap >= minMc && stats.marketCap <= maxMc;
+  // Proven demand: net buyers, real trade count, and live rotation vs MC.
+  const demandOk = stats.buyPressure >= 0.55 && stats.trades5m >= 4 && stats.volumeToMarketCap >= 0.02;
+  const liquidityOk = stats.liquidityToMarketCap >= 0.01 || stats.liquidityUsd >= Number(defaults.minLiquidityUsd || 1_500);
+  const notDumping = stats.sells5m <= stats.buys5m;
+  const notBlownOff = stats.positivePriceMomentumPct < 200; // never buy the top
+  if (!ageOk || !capOk || !demandOk || !liquidityOk || !notDumping || !notBlownOff) return null;
+  const fit = ogreAiStrongFitScore(row, defaults);
+  if (fit >= 62) return "strict";
+  if (fit >= 46) return "balanced";
+  if (fit >= Math.max(34, Number(defaults.minScore || 34))) return "available";
+  return null;
+}
+
 export function ogreAiTargetProfitPct(defaults = {}) {
   return clampNumber(numberValue(
     defaults.takeProfitPct,
@@ -265,6 +348,7 @@ export function ogreAiTargetProfitPct(defaults = {}) {
 }
 
 export function ogreAiTargetFitScore(row = {}, defaults = {}, mode = "quick") {
+  if (isStrongMode(mode)) return ogreAiStrongFitScore(row, defaults);
   if (isFreshApeMode(mode)) return ogreAiFreshApeFitScore(row, defaults);
   const stats = ogreAiCandidateStats(row);
   const targetPct = ogreAiTargetProfitPct(defaults);
@@ -371,6 +455,7 @@ export function ogreAiTierForCandidate(row = {}, defaults = {}, mode = "quick") 
   const stats = ogreAiCandidateStats(row);
   if (!stats.hasActivity) return null;
 
+  if (isStrongMode(mode)) return ogreAiStrongTier(row, defaults);
   const targetPct = ogreAiTargetProfitPct(defaults);
   const targetFit = ogreAiTargetFitScore(row, defaults, mode);
   const minScore = Number(defaults.minScore || 54);

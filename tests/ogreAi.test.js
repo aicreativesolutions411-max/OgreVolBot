@@ -607,6 +607,45 @@ test("Ogre A.I. fresh ape rejects dead fresh pumps with no starting volume", () 
   assert.equal(pool.tierCounts.blocked, 1);
 });
 
+test("Ogre A.I. Strong mode buys proven survivors, not unproven or dumping pairs", () => {
+  const strongDefaults = {
+    minScore: 34,
+    minMarketCap: 6_000,
+    preferredMaxMarketCap: 60_000,
+    maxMarketCap: 120_000,
+    minAgeMinutes: 1.5,
+    maxAgeMinutes: 12,
+    minLiquidityUsd: 1_500,
+    desiredPickCount: 1
+  };
+
+  // Proven survivor: 4 min old, net buyers, real trades, healthy liquidity,
+  // rising-not-blown-off, socials -> a Strong entry.
+  const survivor = {
+    tokenMint: "StrongSurvivorMintpump",
+    isPump: true,
+    marketCap: 28_000,
+    liquidityUsd: 1_400,
+    volume5m: 2_200,
+    buys5m: 14,
+    sells5m: 5,
+    trades5m: 19,
+    m5: 18,
+    pairAgeSeconds: 240,
+    twitterUrl: "https://x.com/strongtoken"
+  };
+  assert.ok(["strict", "balanced", "available"].includes(ogreAiTierForCandidate(survivor, strongDefaults, "strong")));
+
+  // Too young (40s) - not yet a proven survivor.
+  assert.equal(ogreAiTierForCandidate({ ...survivor, tokenMint: "TooYoungMintpump", pairAgeSeconds: 40 }, strongDefaults, "strong"), null);
+
+  // Being dumped (sells dominate) - rejected even if old enough.
+  assert.equal(ogreAiTierForCandidate({ ...survivor, tokenMint: "DumpingMintpump", buys5m: 3, sells5m: 16 }, strongDefaults, "strong"), null);
+
+  // Already blown off (+400%) - too late, would be exit liquidity.
+  assert.equal(ogreAiTierForCandidate({ ...survivor, tokenMint: "BlownOffMintpump", m5: 420 }, strongDefaults, "strong"), null);
+});
+
 test("Ogre A.I. fresh ape needs multi-buyer confirmation and rewards socials", () => {
   // A single dev buy with no follow-on buyers is the bundle-rug signature -
   // it must NOT qualify as a fresh-ape entry.
@@ -716,7 +755,7 @@ test("Ogre A.I. server collapses old mode names into fresh ape defaults", () => 
   assert.match(serverFunctionBody("ogreAiModeDefaults"), /preferredMaxMarketCap:\s*8_000/);
   assert.match(serverFunctionBody("ogreAiModeDefaults"), /maxMarketCap:\s*15_000/);
   assert.match(serverFunctionBody("ogreAiModeDefaults"), /minMarketCap:\s*3_000/);
-  assert.match(serverFunctionBody("ogreAiModeDefaults"), /maxAgeMinutes:\s*0\.5/);
+  assert.match(serverFunctionBody("ogreAiModeDefaults"), /maxAgeMinutes:\s*2\b/);
   assert.match(serverFunctionBody("ogreAiModeDefaults"), /minStartingVolumeUsd:\s*60/);
   assert.match(serverFunctionBody("ogreAiScannerModesForTarget"), /\["pumpsnipe", "moonshot", "fast"\]/);
 });

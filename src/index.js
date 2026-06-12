@@ -30021,6 +30021,7 @@ async function rollingExitActiveWallet(plan, byPk, slippageBps, noBalance) {
 // existing fresh-ape scoring path stays untouched for super_fresh.
 function normalizeOgreAiCategory(value) {
   const c = String(value || "super_fresh").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (["strong", "best", "win", "winner", "smart_pick", "ogre_strong", "highwin", "high_win"].includes(c)) return "strong";
   if (["volume", "vol", "runner", "runners", "momentum", "fast"].includes(c)) return "volume";
   if (["safe", "safer", "secure", "low_risk"].includes(c)) return "safe";
   if (["long_term", "longterm", "long", "hold", "established", "steady"].includes(c)) return "long_term";
@@ -30029,6 +30030,7 @@ function normalizeOgreAiCategory(value) {
 
 function ogreAiModeForCategory(category) {
   switch (normalizeOgreAiCategory(category)) {
+    case "strong": return "strong";
     case "volume": return "fast";
     case "safe": return "safer";
     case "long_term": return "steady";
@@ -30038,6 +30040,7 @@ function ogreAiModeForCategory(category) {
 
 function ogreAiCategoryLabel(category) {
   switch (normalizeOgreAiCategory(category)) {
+    case "strong": return "Strong";
     case "volume": return "Volume";
     case "safe": return "Safe";
     case "long_term": return "Long-term";
@@ -30047,6 +30050,7 @@ function ogreAiCategoryLabel(category) {
 
 function normalizeOgreAiMode(value) {
   const mode = String(value || "fresh_ape").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (["strong", "best", "win", "winner", "ogre_strong", "highwin", "high_win"].includes(mode)) return "strong";
   if (["volume", "vol", "runner", "runners", "momentum", "fast"].includes(mode)) return "fast";
   if (["safe", "safer", "secure", "low_risk"].includes(mode)) return "safer";
   if (["long_term", "longterm", "long", "hold", "established", "steady"].includes(mode)) return "steady";
@@ -30114,16 +30118,41 @@ function applyOgreAiCategory(defaults, category) {
 }
 
 function ogreAiModeDefaults(mode) {
-  normalizeOgreAiMode(mode);
+  // STRONG: the highest-win-rate mode. Waits for survivors (1.5-12 min old)
+  // with proven demand and healthy liquidity, then targets a 2x. This is the
+  // recommended "click, wait, win more than you lose" path.
+  if (normalizeOgreAiMode(mode) === "strong") {
+    return {
+      buckets: ["live", "under1h"],
+      minScore: 34,
+      minMarketCap: 6_000,
+      preferredMaxMarketCap: 60_000,
+      maxMarketCap: 120_000,
+      minAgeMinutes: 1.5,
+      maxAgeMinutes: 12,
+      minStartingVolumeUsd: 800,
+      minLiquidityUsd: 1_500,
+      preferFreshLaunches: true,
+      targetBand: "strong",
+      diversityWindow: 14,
+      // 2x target, room to run, 30-min fallback so winners have time to develop.
+      defaultSellDelay: "30",
+      defaultTakeProfitPct: "100",
+      defaultStopLossPct: "35",
+      defaultSlippageBps: 500
+    };
+  }
   return {
     buckets: ["live"],
     minScore: 12,
-    // Fresh APE: pairs under 30 seconds old with at least $3k market cap,
-    // straight off the PumpPortal websocket. Maximum freshness for max upside.
+    // Fresh APE: brand-new pairs (under ~2 min) with at least $3k market cap.
+    // 30s was too tight - no buyer confirmation can register that fast, so it
+    // found nothing. ~2 min keeps it fresh while letting a couple of real
+    // buys show up so the pick is not a pure dev-buy bundle.
     minMarketCap: 3_000,
     preferredMaxMarketCap: 8_000,
     maxMarketCap: 15_000,
-    maxAgeMinutes: 0.5,
+    maxAgeMinutes: 2,
     minStartingVolumeUsd: 60,
     minLiquidityUsd: 20,
     preferFreshLaunches: true,
@@ -30143,6 +30172,19 @@ function ogreAiModeDefaults(mode) {
 
 function applyOgreAiTargetDefaults(defaults, targetPct, mode) {
   const safeMode = normalizeOgreAiMode(mode);
+  if (safeMode === "strong") {
+    // Strong manages its own band (survivor window + demand); the requested
+    // take-profit still flows through as the real exit. Don't let the generic
+    // target overrides reshape it.
+    defaults.targetBand = "strong";
+    defaults.preferFreshLaunches = true;
+    defaults.buckets = [...new Set(defaults.buckets && defaults.buckets.length ? defaults.buckets : ["live", "under1h"])];
+    defaults.defaultSellDelay = defaults.defaultSellDelay || "30";
+    defaults.defaultTakeProfitPct = defaults.defaultTakeProfitPct || "100";
+    defaults.defaultStopLossPct = defaults.defaultStopLossPct || "35";
+    defaults.defaultSlippageBps = Math.max(Number(defaults.defaultSlippageBps || 500), 500);
+    return defaults;
+  }
   if (safeMode === "fresh_ape") {
     defaults.targetBand = "fresh_ape";
     defaults.buckets = [...new Set(["live"])];
@@ -30150,7 +30192,7 @@ function applyOgreAiTargetDefaults(defaults, targetPct, mode) {
     defaults.minMarketCap = Math.max(Number(defaults.minMarketCap || 3_000), 3_000);
     defaults.preferredMaxMarketCap = Number(defaults.preferredMaxMarketCap || 8_000);
     defaults.maxMarketCap = Math.min(Number(defaults.maxMarketCap || 15_000), 15_000);
-    defaults.maxAgeMinutes = Math.min(Number(defaults.maxAgeMinutes || 0.5), 0.5);
+    defaults.maxAgeMinutes = Math.min(Number(defaults.maxAgeMinutes || 2), 2);
     defaults.minStartingVolumeUsd = Math.min(Number(defaults.minStartingVolumeUsd || 60), 60);
     defaults.minLiquidityUsd = Math.min(Number(defaults.minLiquidityUsd || 20), 20);
     defaults.preferFreshLaunches = true;
@@ -30211,6 +30253,12 @@ function normalizeOgreAiRecentMints(input) {
 
 function applyOgreAiTimerIntentDefaults(defaults, body = {}, mode = "quick") {
   const safeMode = normalizeOgreAiMode(mode);
+  if (safeMode === "strong") {
+    defaults.targetBand = "strong";
+    defaults.preferFreshLaunches = true;
+    defaults.buckets = [...new Set(defaults.buckets && defaults.buckets.length ? defaults.buckets : ["live", "under1h"])];
+    return defaults;
+  }
   if (safeMode === "fresh_ape") {
     defaults.targetBand = "fresh_ape";
     defaults.preferFreshLaunches = true;
@@ -30220,7 +30268,7 @@ function applyOgreAiTimerIntentDefaults(defaults, body = {}, mode = "quick") {
     defaults.minMarketCap = Math.max(Number(defaults.minMarketCap || 3_000), 3_000);
     defaults.preferredMaxMarketCap = Number(defaults.preferredMaxMarketCap || 8_000);
     defaults.maxMarketCap = Math.min(Number(defaults.maxMarketCap || 15_000), 15_000);
-    defaults.maxAgeMinutes = Math.min(Number(defaults.maxAgeMinutes || 0.5), 0.5);
+    defaults.maxAgeMinutes = Math.min(Number(defaults.maxAgeMinutes || 2), 2);
     defaults.minStartingVolumeUsd = Math.min(Number(defaults.minStartingVolumeUsd || 60), 60);
     defaults.minLiquidityUsd = Math.min(Number(defaults.minLiquidityUsd || 20), 20);
     return defaults;
@@ -30248,6 +30296,7 @@ function applyOgreAiTimerIntentDefaults(defaults, body = {}, mode = "quick") {
 function ogreAiScannerModesForTarget(defaults = {}, mode = "quick") {
   const pct = Number(defaults.takeProfitPct || defaults.targetTakeProfitPct || defaults.defaultTakeProfitPct || 25);
   const safeMode = normalizeOgreAiMode(mode);
+  if (safeMode === "strong") return ["fast", "smart", "moonshot"];
   if (safeMode === "fresh_ape") return ["pumpsnipe", "moonshot", "fast"];
   if (pct >= 80) return safeMode === "safer" ? ["moonshot", "pumpsnipe"] : ["pumpsnipe", "moonshot"];
   if (pct <= 30) return safeMode === "fresh" ? ["fast", "smart"] : ["smart", "safe", "fast"];
@@ -30321,12 +30370,15 @@ async function selectOgreAiPicks(userId, body = {}, limit = 1) {
   );
   defaults.recentMints = recentMints;
   defaults.desiredPickCount = Math.max(1, limit, Number(defaults.diversityWindow || 0));
+  // fresh_ape and strong manage their own score/cap bands; don't let an
+  // incoming autopilot minScore (default 62) over-restrict them.
+  const selfTunedBand = mode === "fresh_ape" || mode === "strong";
   const minScoreInput = Number.parseInt(String(body.minScore || ""), 10);
-  if (mode !== "fresh_ape" && Number.isFinite(minScoreInput) && minScoreInput > 0) {
+  if (!selfTunedBand && Number.isFinite(minScoreInput) && minScoreInput > 0) {
     defaults.minScore = clamp(minScoreInput, 1, 100);
   }
   const maxMarketCapInput = Number.parseFloat(String(body.maxMarketCap || ""));
-  if (mode !== "fresh_ape" && Number.isFinite(maxMarketCapInput) && maxMarketCapInput > 0) {
+  if (!selfTunedBand && Number.isFinite(maxMarketCapInput) && maxMarketCapInput > 0) {
     defaults.maxMarketCap = maxMarketCapInput;
   }
 
