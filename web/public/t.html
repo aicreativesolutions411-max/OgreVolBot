@@ -33,7 +33,10 @@
         padding: 4px 10px; font-size: 0.74rem; font-weight: 700; cursor: pointer; }
       .tf-btn.on { color: #071006; background: var(--green); border-color: var(--green); }
       .chart-live { font-size: 0.7rem; color: var(--green); }
-      .map-frame { width: 100%; height: 420px; border: 1px solid var(--line); border-radius: 14px; background: rgba(8,20,10,0.5); }
+      .map-link { display: block; border: 1px solid var(--line); border-radius: 14px; background: rgba(8,20,10,0.5);
+        padding: 16px 18px; text-decoration: none; color: #eaffe0; }
+      .map-link b { color: var(--green); font-size: 1rem; display: block; margin-bottom: 4px; }
+      .map-link:hover { border-color: var(--green); }
       .cta-row { display: flex; flex-wrap: wrap; gap: 10px; margin: 16px 0; }
       .cta { display: inline-block; padding: 12px 20px; border-radius: 999px; font-weight: 800; text-decoration: none; font-size: 0.9rem; }
       .cta.primary { color: #071006; background: linear-gradient(135deg, rgba(114,255,35,0.95), rgba(187,255,99,0.95)); }
@@ -72,8 +75,12 @@
       <div data-autopsy hidden></div>
       <div class="cta-row" data-ctas></div>
       <h2>Holder map</h2>
-      <iframe class="map-frame" data-bubblemap title="Holder bubble map" loading="lazy"></iframe>
-      <p class="meta">Bubbles that cluster together usually mean bundled wallets. Map by <a href="https://bubblemaps.io" target="_blank" rel="noreferrer" style="color:var(--green)">Bubblemaps</a>.</p>
+      <!-- Bubblemaps sets frame-ancestors to partners only, so it cannot be
+           iframed - a branded click-out card is the legit option. -->
+      <a class="map-link" data-bubblemap href="#" target="_blank" rel="noreferrer">
+        <b>🫧 Open the holder bubble map</b>
+        <span class="meta">Clustered bubbles = bundled wallets. One tap, opens on Bubblemaps.</span>
+      </a>
       <h2>Tracked calls on this token</h2>
       <div data-calls><p class="empty">Loading...</p></div>
       <footer>SlimeWire tracks every call to its outcome - wins AND losses. <a href="/proof">See the proof wall</a>. Not financial advice.</footer>
@@ -92,7 +99,7 @@
         }
         document.querySelector("[data-ca]").textContent = mint;
         document.querySelector("[data-ca]").addEventListener("click", () => navigator.clipboard?.writeText(mint));
-        document.querySelector("[data-bubblemap]").src = "https://app.bubblemaps.io/sol/token/" + encodeURIComponent(mint);
+        document.querySelector("[data-bubblemap]").href = "https://app.bubblemaps.io/sol/token/" + encodeURIComponent(mint);
 
         // ---- Native SlimeWire chart (lightweight-charts + our own OHLCV API).
         // Falls back to the old DexScreener iframe only if no candles exist at all.
