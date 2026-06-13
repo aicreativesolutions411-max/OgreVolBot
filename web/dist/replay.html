@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Coin Story — SlimeWire</title>
+<meta name="description" content="Every coin has a story — launch, first volume, the boss it became, who caught it. Replay any coin's swamp journey.">
+<meta property="og:title" content="Coin Story — SlimeWire"><meta property="og:image" content="https://www.slimewire.org/assets/slimewire/swamp/art/og-survivors.jpg"><meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="/assets/slimewire/svg/slimewire-mark.svg">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;700;800;900&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#0a0d12;--card:#11171f;--line:rgba(255,255,255,0.08);--line2:rgba(255,255,255,0.14);--tx:#e8edf4;--dim:#8c97a7;--green:#5fe08a;--green2:#9fffb5;--gold:#ffcf5a;--blue:#5ab0ff;--purp:#a98bff;--red:#ff6b6b;}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;} html,body{margin:0;background:var(--bg);color:var(--tx);font-family:Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased;} a{color:inherit;text-decoration:none;}
+  .wrap{max-width:680px;margin:0 auto;padding:0 16px calc(60px + env(safe-area-inset-bottom));}
+  header.top{position:sticky;top:0;z-index:10;background:rgba(10,13,18,0.82);backdrop-filter:blur(14px);border-bottom:1px solid var(--line);}
+  .topin{max-width:680px;margin:0 auto;display:flex;align-items:center;gap:14px;padding:11px 16px;} .brand{display:flex;align-items:center;gap:9px;font-weight:900;} .brand img{width:26px;height:26px;} .brand b{color:var(--green);}
+  .navlinks{margin-left:auto;display:flex;gap:6px;} .navlinks a{color:var(--dim);font-weight:700;font-size:0.88rem;padding:7px 12px;border-radius:9px;} .navlinks a:hover{color:var(--tx);background:rgba(255,255,255,0.05);} .navlinks a.cta{color:#08120b;background:linear-gradient(135deg,var(--green),var(--green2));}
+  .hero{padding:26px 0 6px;} .hero h1{font-size:clamp(1.6rem,5vw,2.2rem);margin:0 0 6px;font-weight:900;} .hero p{color:var(--dim);margin:0;font-size:0.95rem;}
+  .search{display:flex;gap:8px;margin-top:16px;} .search input{flex:1;background:#0a0f15;border:1px solid var(--line2);color:var(--tx);border-radius:11px;padding:12px 14px;font-weight:700;outline:none;font-family:inherit;}
+  .search button{background:linear-gradient(135deg,var(--green),var(--green2));color:#08120b;border:0;border-radius:11px;padding:12px 20px;font-weight:900;cursor:pointer;}
+  .story{margin-top:20px;background:linear-gradient(180deg,var(--card),#0d121a);border:1px solid var(--line2);border-radius:18px;padding:20px;}
+  .story .h{display:flex;align-items:center;gap:12px;} .story .av{width:54px;height:54px;border-radius:13px;background:#0a0f15;border:1px solid var(--line);object-fit:cover;}
+  .story .nm{font-size:1.4rem;font-weight:900;} .story .sub{color:var(--dim);font-weight:700;font-size:0.82rem;}
+  .badge{margin-left:auto;font-size:0.66rem;font-weight:900;padding:5px 10px;border-radius:99px;} .badge.sw{color:var(--gold);background:rgba(255,207,90,0.16);}
+  .mrow{display:flex;gap:14px;flex-wrap:wrap;margin:14px 0;} .m span{display:block;color:var(--dim);font-size:0.66rem;text-transform:uppercase;letter-spacing:0.4px;} .m b{font-weight:900;font-size:1.05rem;}
+  .timeline{margin:12px 0;border-left:2px solid var(--line2);padding-left:16px;}
+  .tl{position:relative;padding:8px 0;color:var(--dim);font-size:0.9rem;} .tl b{color:var(--tx);} .tl::before{content:"";position:absolute;left:-23px;top:13px;width:10px;height:10px;border-radius:50%;background:var(--green);}
+  .acts{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px;} .acts a,.acts button{display:block;text-align:center;border-radius:11px;padding:13px;font-weight:900;cursor:pointer;border:0;font-size:0.9rem;}
+  .acts .ape{grid-column:1/-1;background:linear-gradient(135deg,var(--green),var(--green2));color:#08120b;} .acts .g{background:rgba(255,255,255,0.05);border:1px solid var(--line2);color:var(--tx);} .acts .x{background:#000;border:1px solid var(--line2);color:#fff;}
+  .empty{color:var(--dim);text-align:center;padding:30px;} .spin{width:30px;height:30px;border-radius:50%;border:3px solid rgba(255,255,255,0.1);border-top-color:var(--green);animation:sp 1s linear infinite;margin:30px auto;}@keyframes sp{to{transform:rotate(360deg);}}
+  .foot{color:var(--dim);font-size:0.8rem;text-align:center;padding:30px 0 10px;} .foot a{color:var(--green);}
+</style>
+</head>
+<body>
+<header class="top"><div class="topin">
+  <a class="brand" href="/"><img src="/assets/slimewire/svg/slimewire-mark.svg" alt="" onerror="this.style.display='none'">Slime<b>Wire</b></a>
+  <nav class="navlinks"><a href="/radar">📡 Radar</a><a href="/raids">🔥 Raids</a><a href="/swamp">🐸 Swamp</a><a class="cta" href="/terminal">Terminal</a></nav>
+</div></header>
+<div class="wrap">
+  <section class="hero"><h1>🎬 Coin Story</h1><p>Every coin has a journey — launch, first volume, the boss it became, who caught it. Paste a contract to replay its swamp story.</p>
+    <div class="search"><input id="ca" placeholder="token contract address"><button id="go">Replay</button></div>
+  </section>
+  <div id="out"></div>
+  <div class="foot">SlimeWire · <a href="/radar">find coins on Radar</a> · <a href="/raids">Raids</a></div>
+</div>
+<script>
+"use strict";
+(function(){
+const API=(location.hostname.includes("onrender.com")||location.hostname==="localhost"||location.hostname==="127.0.0.1")?"":"https://ogrevolbot.onrender.com";
+const SITE="https://www.slimewire.org";
+const num=(v)=>{const n=Number(v);return isFinite(n)?n:0;};
+function fmt(n){n=num(n);if(n>=1e6)return"$"+(n/1e6).toFixed(1)+"M";if(n>=1e3)return"$"+(n/1e3).toFixed(0)+"k";return"$"+n.toFixed(0);}
+function esc(s){return String(s).replace(/[<>&]/g,c=>({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]));}
+const $=(s)=>document.querySelector(s);
+async function replay(mint){
+  mint=String(mint||"").replace(/[^A-Za-z0-9]/g,"");
+  const out=$("#out");
+  if(mint.length<32){ out.innerHTML='<div class="empty">Paste a valid Solana contract address to replay its story.</div>'; return; }
+  out.innerHTML='<div class="spin"></div>';
+  let d={}; try{ const r=await fetch(API+"/api/web/token-read?mint="+encodeURIComponent(mint),{cache:"no-store"}); const j=await r.json(); if(j&&j.ok) d=j; }catch(_){}
+  const s=(d.symbol||"COIN"), mc=num(d.marketCapUsd), liq=num(d.liquidityUsd), bond=num(d.bondingProgressPct), sw=!!d.launchedViaSlimeWire;
+  const tl=[];
+  tl.push(`<div class="tl"><b>🥚 Born.</b> $${esc(s)} entered the swamp${sw?" — <b>launched on SlimeWire</b>":""}.</div>`);
+  if(liq>0) tl.push(`<div class="tl"><b>💧 Liquidity.</b> ${fmt(liq)} pooled — ${liq<1500?"thin, handle with care":"enough to trade"}.</div>`);
+  if(bond>0) tl.push(`<div class="tl"><b>⚡ Bonding ${Math.round(bond)}%.</b> ${bond>=100?"Graduated — it broke the curve.":"Climbing toward graduation."}</div>`);
+  tl.push(`<div class="tl"><b>🔥 Became a boss.</b> At ${fmt(mc)} MC it's a raid target in the swamp.</div>`);
+  tl.push(`<div class="tl"><b>🐸 Catchable.</b> Trainers can hunt $${esc(s)} as a creature right now.</div>`);
+  out.innerHTML=`<div class="story">
+    <div class="h"><img class="av" src="${API}/api/web/token-avatar?mint=${encodeURIComponent(mint)}" onerror="this.style.visibility='hidden'">
+      <div><div class="nm">$${esc(s)}</div><div class="sub">${esc(d.name||"")}</div></div>
+      ${sw?'<span class="badge sw">🧌 SlimeWire</span>':""}</div>
+    <div class="mrow"><div class="m"><span>Market Cap</span><b>${fmt(mc)}</b></div><div class="m"><span>Liquidity</span><b>${fmt(liq)}</b></div>${bond>0?`<div class="m"><span>Bonding</span><b>${Math.round(bond)}%</b></div>`:""}</div>
+    <div class="timeline">${tl.join("")}</div>
+    <div class="acts">
+      <a class="ape" href="${SITE}/t?ca=${encodeURIComponent(mint)}" target="_blank" rel="noopener">⚡ Ape $${esc(s)}</a>
+      <button class="g" id="raidit">⚔️ Raid it</button>
+      <button class="x" id="share">𝕏 Share story</button>
+    </div></div>`;
+  $("#raidit").onclick=async()=>{ try{ await fetch(API+"/api/web/community-raids",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({mint,symbol:s})}); }catch(_){}
+    location.href="/raids"; };
+  $("#share").onclick=()=>{ const txt=`The story of $${s} on @SlimeWire 🐸 — ${fmt(mc)} MC and climbing. Replay it 👇`;
+    window.open("https://twitter.com/intent/tweet?text="+encodeURIComponent(txt)+"&url="+encodeURIComponent(SITE+"/replay?ca="+mint),"_blank"); };
+  try{ history.replaceState(null,"","/replay?ca="+mint); }catch(_){}
+}
+$("#go").onclick=()=>replay($("#ca").value);
+$("#ca").addEventListener("keydown",e=>{if(e.key==="Enter")replay($("#ca").value);});
+const q=new URLSearchParams(location.search).get("ca"); if(q){ $("#ca").value=q; replay(q); }
+})();
+</script>
+</body>
+</html>

@@ -1399,6 +1399,18 @@ function startHealthServer() {
       await serveStaticHtmlPage(response, "events.html");
       return;
     }
+    if (request.method === "GET" && ["/locker", "/inventory"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "locker.html");
+      return;
+    }
+    if (request.method === "GET" && ["/watchtower", "/watch"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "watchtower.html");
+      return;
+    }
+    if (request.method === "GET" && ["/replay", "/story"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "replay.html");
+      return;
+    }
 
     if (request.method === "GET" && /^[/](call|u|g|hype)([/]|$)/.test(requestUrl.pathname)) {
       await serveProofSharePage(requestUrl, request, response);
