@@ -233,7 +233,17 @@ function charAspect(fr){ if(!fr) return 0.62; if(fr._aspect) return fr._aspect;
   for(const d of ["down","up","left","right"]){ const s=fr[d]; if(s) for(const f of s){ const im=imgCache.get(f.path); if(ready(im)) return (fr._aspect=Math.max(0.4,Math.min(1.05,im.naturalWidth/im.naturalHeight))); } } return 0.62; }
 function drawShadow(x,y,r){ ctx.fillStyle="rgba(0,0,0,0.34)"; ctx.beginPath(); ctx.ellipse(x,y+r*0.72,r*0.95,r*0.4,0,0,6.2832); ctx.fill(); }
 function drawWalker(e,fr,h,alpha){ let im=animImg(fr,e.dir,e.walkT); if(ready(im)) e._img=im; else im=e._img; if(!ready(im)) return false;
-  const w=h*(charAspect(fr)||0.62); if(alpha!=null) ctx.globalAlpha=alpha; ctx.drawImage(im,e.x-w/2,e.y+e.r*0.55-h,w,h); ctx.globalAlpha=1; return true; }
+  const w=h*(charAspect(fr)||0.62);
+  // procedural smoothing: continuous bob + squash/stretch so motion reads fluid between the few frames
+  const moving=!!e._mv; const ph=e.walkT*11;
+  const bob = moving ? Math.abs(Math.sin(ph))*h*0.055 : Math.sin(e.walkT*2.2)*h*0.012; // bounce on steps, gentle breathe at rest
+  const sx = moving ? 1+Math.sin(ph*2)*0.045 : 1;                                       // squash/stretch
+  const lean = moving ? Math.sin(ph)* (e.dir==="left"?-0.05:e.dir==="right"?0.05:0.03) : 0;
+  const dw=w*sx, dh=h/sx, footY=e.y+e.r*0.55;
+  if(alpha!=null) ctx.globalAlpha=alpha;
+  ctx.save(); ctx.translate(e.x, footY); ctx.rotate(lean);
+  ctx.drawImage(im, -dw/2, -dh-bob, dw, dh);
+  ctx.restore(); ctx.globalAlpha=1; return true; }
 function drawStill(e,im,h){ if(ready(im)) e._img=im; const u=ready(im)?im:e._img; if(!ready(u)) return false;
   const w=h*(u.naturalWidth/u.naturalHeight); ctx.drawImage(u,e.x-w/2,e.y+e.r*0.55-h,w,h); return true; }
 
@@ -386,21 +396,22 @@ function update(dt){
   const il=Math.hypot(ix,iy); if(il>1){ix/=il;iy/=il;}
   p.x+=ix*p.spd*dt; p.y+=iy*p.spd*dt;
   p.x=Math.max(40,Math.min(MAP.w*TILE-40,p.x)); p.y=Math.max(40,Math.min(MAP.h*TILE-40,p.y));
-  if(il>0.01){ p.walkT+=dt; const ax=Math.abs(ix),ay=Math.abs(iy); if(Math.abs(ax-ay)>0.22) p.dir=ax>ay?(ix<0?"left":"right"):(iy<0?"up":"down"); }
+  p._mv=il>0.01;
+  if(p._mv){ p.walkT+=dt; const ax=Math.abs(ix),ay=Math.abs(iy); if(Math.abs(ax-ay)>0.22) p.dir=ax>ay?(ix<0?"left":"right"):(iy<0?"up":"down"); }
   // creatures wander + flee slightly
   near=null; let nd=70*70;
   for(const c of creatures){ if(c.dead) continue; c.wt-=dt; c.bob+=dt*3;
     if(c.wt<=0){ c.wt=1+Math.random()*2.5; const a=Math.random()*6.28; c.vx=Math.cos(a)*30; c.vy=Math.sin(a)*30; }
     const dpx=c.x-p.x, dpy=c.y-p.y, dpd=Math.hypot(dpx,dpy)||1;
     if(dpd<140){ c.vx+=dpx/dpd*40*dt*60*dt; c.vy+=dpy/dpd*40*dt*60*dt; } // shy away a bit
-    c.x+=c.vx*dt; c.y+=c.vy*dt; c.vx*=0.9; c.vy*=0.9; c.walkT+=dt*0.6;
+    c.x+=c.vx*dt; c.y+=c.vy*dt; c.vx*=0.9; c.vy*=0.9; c._mv=(Math.abs(c.vx)+Math.abs(c.vy))>8; if(c._mv) c.walkT+=dt*0.9; else c.walkT+=dt*0.25;
     c.x=Math.max(30,Math.min(MAP.w*TILE-30,c.x)); c.y=Math.max(30,Math.min(MAP.h*TILE-30,c.y));
     const ax=Math.abs(c.vx),ay=Math.abs(c.vy); if(ax+ay>4 && Math.abs(ax-ay)>3) c.dir=ax>ay?(c.vx<0?"left":"right"):(c.vy<0?"up":"down");
     const dd=dpx*dpx+dpy*dpy; if(dd<nd){ nd=dd; near=c; }
   }
   // npc wander
   for(const q of npcs){ q.retarget-=dt; if(q.retarget<=0){ q.retarget=2+Math.random()*3; q.tx=player.x+(Math.random()*700-350); q.ty=player.y+(Math.random()*700-350); }
-    const dx=q.tx-q.x, dy=q.ty-q.y, d=Math.hypot(dx,dy)||1; if(d>6){ q.x+=dx/d*70*dt; q.y+=dy/d*70*dt; q.walkT+=dt; const ax=Math.abs(dx),ay=Math.abs(dy); if(Math.abs(ax-ay)>d*0.2) q.dir=ax>ay?(dx<0?"left":"right"):(dy<0?"up":"down"); } }
+    const dx=q.tx-q.x, dy=q.ty-q.y, d=Math.hypot(dx,dy)||1; q._mv=d>6; if(q._mv){ q.x+=dx/d*70*dt; q.y+=dy/d*70*dt; q.walkT+=dt; const ax=Math.abs(dx),ay=Math.abs(dy); if(Math.abs(ax-ay)>d*0.2) q.dir=ax>ay?(dx<0?"left":"right"):(dy<0?"up":"down"); } }
   // building proximity
   nearBld=null; let bd=86*86; for(const b of buildings){ const dx=b.x-p.x,dy=b.y-p.y,d=dx*dx+dy*dy; if(d<bd){ bd=d; nearBld=b; } }
   // prompt
@@ -460,14 +471,12 @@ function rarRing(c){ ctx.strokeStyle=c.rar.col; ctx.globalAlpha=0.6+0.3*Math.sin
   ctx.beginPath(); ctx.ellipse(c.x,c.y+c.r*0.5,c.r*1.15,c.r*0.5,0,0,6.2832); ctx.stroke(); ctx.globalAlpha=1; }
 function drawCreature(c){
   drawShadow(c.x,c.y,c.r); rarRing(c);
-  const bob=Math.sin(c.bob)*3; const sav=c.y; c.y+=bob;
   let drew=false;
   if(c.spr.frames) drew=drawWalker(c,c.spr.frames,c.r*2.5);
   else if(c.spr.img) drew=drawStill(c,img(c.spr.img),c.r*2.5);
-  if(!drew){ const g=ctx.createRadialGradient(c.x,c.y-c.r*0.3,1,c.x,c.y,c.r*1.3); g.addColorStop(0,"#cdff6a"); g.addColorStop(1,c.rar.col);
-    ctx.fillStyle=g; ctx.beginPath(); ctx.arc(c.x,c.y,c.r,0,6.2832); ctx.fill();
-    ctx.fillStyle="#06140a"; ctx.beginPath(); ctx.arc(c.x-c.r*0.3,c.y-c.r*0.2,c.r*0.16,0,6.2832); ctx.arc(c.x+c.r*0.3,c.y-c.r*0.2,c.r*0.16,0,6.2832); ctx.fill(); }
-  c.y=sav;
+  if(!drew){ const bob=Math.sin(c.bob)*3; const g=ctx.createRadialGradient(c.x,c.y-c.r*0.3+bob,1,c.x,c.y+bob,c.r*1.3); g.addColorStop(0,"#cdff6a"); g.addColorStop(1,c.rar.col);
+    ctx.fillStyle=g; ctx.beginPath(); ctx.arc(c.x,c.y+bob,c.r,0,6.2832); ctx.fill();
+    ctx.fillStyle="#06140a"; ctx.beginPath(); ctx.arc(c.x-c.r*0.3,c.y-c.r*0.2+bob,c.r*0.16,0,6.2832); ctx.arc(c.x+c.r*0.3,c.y-c.r*0.2+bob,c.r*0.16,0,6.2832); ctx.fill(); }
   if(c.rar.k!=="common"){ ctx.font="900 10px Inter,sans-serif"; ctx.textAlign="center"; ctx.fillStyle=c.rar.col; ctx.fillText("$"+c.sym,c.x,c.y-c.r-6); }
 }
 function drawPlayer(){ const p=player; drawShadow(p.x,p.y,p.r);
