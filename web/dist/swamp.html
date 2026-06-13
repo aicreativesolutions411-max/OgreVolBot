@@ -268,40 +268,38 @@ function img(p){ if(!p) return null; let im=imgCache.get(p); if(im) return im; i
 function ready(im){ return im&&im.complete&&im.naturalWidth>0; }
 const A={ index:null, players:[], creatures:[], statics:[], bosses:[], buildings:[], ground:null, loaded:false };
 const FALLBACK_PLAYERS=[{character:"hooded-degen-trader",frames:null}];
-/* ---- playable OGRE roster (ogres only): small/normal walk ogres + big boss
-   ogres. Bigger/cooler = rarer unlocks. Each def resolves a sprite in loadAssets:
-   key -> a walk-character still; boss:n -> a boss sprite (the big ogre monsters). */
+/* ---- custom HD ogre roster (generated, clean transparent PNGs). Ogres only.
+   Bigger/cooler = rarer unlock. Same sprites double as the wild coin-creatures. */
+const OGRE_DIR="/assets/slimewire/swamp/ogres/";
+const OGRE={ degen:OGRE_DIR+"ogre-degen.png", bruiser:OGRE_DIR+"ogre-bruiser.png", moss:OGRE_DIR+"ogre-moss.png",
+  goblin:OGRE_DIR+"ogre-goblin.png", gold:OGRE_DIR+"ogre-gold.png", knight:OGRE_DIR+"ogre-knight.png",
+  rug:OGRE_DIR+"ogre-rug.png", king:OGRE_DIR+"ogre-king.png", titan:OGRE_DIR+"ogre-titan.png", warlord:OGRE_DIR+"ogre-warlord.png" };
 const HERO_DEFS=[
-  { key:"hooded-degen-trader", name:"Degen Ogre",   req:null,           scale:1 },
-  { key:"tiny-ogre-bruiser",   name:"Ogre Bruiser", req:null,           scale:1 },
-  { key:"moss-ogre-scout",     name:"Moss Ogre",    req:{catches:3},    scale:1,    hint:"Catch 3 coins" },
-  { key:"coin-goblin-runner",  name:"Goblin Brute", req:{kills:8},      scale:0.95, hint:"Defeat 8 mobs" },
-  { key:"gold-runner-slime",   name:"Gold Ogre",    req:{catches:12},   scale:1,    hint:"Catch 12 coins" },
-  { key:"slime-armored-warrior",name:"Slime Knight",req:{kills:18},     scale:1.05, hint:"Defeat 18 mobs" },
-  { key:"toxic-rug-beast",     name:"Rug Beast",    req:{kills:32},     scale:1.1,  hint:"Defeat 32 mobs" },
-  { key:"crown-slime-leader",  name:"Slime King",   req:{catches:25},   scale:1.12, hint:"Catch 25 coins" },
-  { boss:0, name:"Bog Titan",      req:{level:4},     scale:1.25, hint:"Reach Lv 4" },
-  { boss:1, name:"Mire Brute",     req:{kills:45},    scale:1.28, hint:"Defeat 45 mobs" },
-  { boss:2, name:"Swamp Warlord",  req:{catches:40},  scale:1.3,  hint:"Catch 40 coins" },
-  { boss:3, name:"Toxic Colossus", req:{level:8},     scale:1.32, hint:"Reach Lv 8" },
-  { boss:4, name:"Ancient Ogre",   req:{kills:70},    scale:1.35, hint:"Defeat 70 mobs" },
-  { boss:5, name:"Slime Overlord", req:{launched:true},scale:1.38,hint:"Launch a coin" },
-  { boss:6, name:"Dread Ogre",     req:{kills:100},   scale:1.4,  hint:"Defeat 100 mobs" },
-  { boss:7, name:"Swamp God",      req:{catches:75},  scale:1.45, hint:"Catch 75 coins" }
+  { sprite:OGRE.degen,   name:"Degen Ogre",   req:null,            scale:1 },
+  { sprite:OGRE.bruiser, name:"Ogre Bruiser", req:null,            scale:1.05 },
+  { sprite:OGRE.goblin,  name:"Goblin Brute", req:{kills:8},       scale:0.92, hint:"Defeat 8 mobs" },
+  { sprite:OGRE.moss,    name:"Moss Ogre",    req:{catches:3},     scale:1,    hint:"Catch 3 coins" },
+  { sprite:OGRE.gold,    name:"Gold Ogre",    req:{catches:12},    scale:1.05, hint:"Catch 12 coins" },
+  { sprite:OGRE.knight,  name:"Slime Knight", req:{kills:18},      scale:1.08, hint:"Defeat 18 mobs" },
+  { sprite:OGRE.rug,     name:"Rug Beast",    req:{kills:32},      scale:1.12, hint:"Defeat 32 mobs" },
+  { sprite:OGRE.king,    name:"Slime King",   req:{catches:25},    scale:1.18, hint:"Catch 25 coins" },
+  { sprite:OGRE.titan,   name:"Bog Titan",    req:{level:6},       scale:1.32, hint:"Reach Lv 6" },
+  { sprite:OGRE.warlord, name:"War Warlord",  req:{kills:60},      scale:1.38, hint:"Defeat 60 mobs" }
 ];
-let HEROES=[]; // resolved {name,sprite,scale,req,hint} built in loadAssets
-function buildHeroes(){
-  const stillFor=(k)=>{ const p=(A.players||[]).find(x=>x.character===k); return (p&&p.still)||null; };
-  HEROES=HERO_DEFS.map(d=>{ const sprite = d.boss!=null ? (A.bosses&&A.bosses[d.boss%Math.max(1,A.bosses.length)]) : stillFor(d.key);
-    return { name:d.name, sprite:sprite||(A.creatures&&A.creatures[0])||(A.statics&&A.statics[0])||null, scale:d.scale||1, req:d.req||null, hint:d.hint||"" }; });
-}
+// wild coin-creatures = ogres by coin quality (hot coins -> bigger/scarier ogre)
+const OGRE_BY_TIER={ legendary:[OGRE.titan,OGRE.warlord,OGRE.king], epic:[OGRE.rug,OGRE.king,OGRE.knight],
+  rare:[OGRE.knight,OGRE.gold,OGRE.moss], uncommon:[OGRE.moss,OGRE.bruiser,OGRE.gold], common:[OGRE.goblin,OGRE.degen,OGRE.bruiser] };
+const MOB_OGRES=[OGRE.goblin,OGRE.rug,OGRE.bruiser,OGRE.moss];
+let HEROES=[]; // resolved {name,sprite,scale,req,hint}
+function buildHeroes(){ HEROES=HERO_DEFS.map(d=>({ name:d.name, sprite:d.sprite, scale:d.scale||1, req:d.req||null, hint:d.hint||"" }));
+  try{ Object.values(OGRE).forEach(p=>img(p)); }catch(_){} } // warm all ogre sprites
 function heroUnlocked(h){ const r=h&&h.req; if(!r) return true;
   if(r.catches!=null && dexCount()<r.catches) return false;
   if(r.kills!=null && (store.kills||0)<r.kills) return false;
   if(r.level!=null && level()<r.level) return false;
   if(r.launched && !store.eggClaimed) return false;
   return true; }
-const HERO_ORDER=HERO_DEFS.filter(d=>d.key).map(d=>d.key); // walk-char names to load
+const HERO_ORDER=[]; // (legacy: no library walk-chars needed now)
 function framesByDir(arr,ch){ const o={down:[],up:[],left:[],right:[]}; for(const f of arr){ if(f.character===ch&&o[f.direction]) o[f.direction].push(f); }
   for(const d in o){ o[d].sort((a,b)=>(a.frame||0)-(b.frame||0)); if(!o[d].length) delete o[d]; } return Object.keys(o).length?o:null; }
 function preloadFrames(){ /* walk frames are mis-sliced; we use clean static sprites instead */ }
@@ -398,12 +396,9 @@ function rarityOf(row){
 function hash(s){ s=String(s||""); let h=0; for(let i=0;i<s.length;i++){ h=(h*31+s.charCodeAt(i))>>>0; } return h; }
 function creatureFor(row){
   const mint=row.tokenMint||row.mint||row.symbol||"x"; const h=hash(mint); const rar=rarityOf(row);
-  // good/trending coins (epic/legendary) become BIG boss-tier monsters; basic
-  // launches are smaller clean creatures. Quality of the coin = the character.
-  if((rar.k==="legendary"||rar.k==="epic") && A.bosses&&A.bosses.length) return {img:A.bosses[h%A.bosses.length], boss:true};
-  if(A.creatures&&A.creatures.length) return {img:A.creatures[h%A.creatures.length]};
-  if(A.statics&&A.statics.length) return {img:A.statics[h%A.statics.length]};
-  return {proc:true};
+  // wild coin = an OGRE chosen by the coin's quality tier (hot coins -> bigger/scarier)
+  const pool=OGRE_BY_TIER[rar.k]||OGRE_BY_TIER.common;
+  return {img:pool[h%pool.length]};
 }
 function verdictOf(row){ const m5=num(row.m5 ?? row.priceChangeM5); const liq=num(row.liquidityUsd);
   if(row._ogre) return {t:"SlimeWire Born",c:"#ffd24a"}; if(liq>0&&liq<1500) return {t:"Low Liq ⚠",c:"#ff5e5e"};
@@ -535,7 +530,7 @@ const MOBS={ goblin:{name:"Goo Goblin",hp:24,dmg:5,spd:60,r:15,drop:{goo:2,scrap
 function spawnMob(type){ const m=MOBS[type]; const ang=Math.random()*6.28, dist=240+Math.random()*Math.min(W,H);
   mobs.push({ type,name:m.name,hp:m.hp,maxhp:m.hp,dmg:m.dmg,spd:m.spd,r:m.r,drop:m.drop,col:m.col,
     x:player.x+Math.cos(ang)*dist, y:player.y+Math.sin(ang)*dist, dir:"down", walkT:Math.random()*3, _mv:false, flash:0,
-    spr:(A.creatures&&A.creatures.length?{img:A.creatures[hash(type+m.name)%A.creatures.length]}:(A.statics&&A.statics.length?{img:A.statics[hash(type+m.name)%A.statics.length]}:{proc:true})) }); }
+    spr:{img:MOB_OGRES[hash(type+m.name)%MOB_OGRES.length]} }); }
 function manageMobs(){ const raid=raidState().live; const want=raid?12:6;
   while(mobs.length<want){ const r=Math.random(); spawnMob(raid&&r<0.22?"bear":r<0.55?"goblin":"wolf"); } }
 function addRes(drop){ for(const k in drop) store.res[k]=(store.res[k]||0)+drop[k]; save(); }
