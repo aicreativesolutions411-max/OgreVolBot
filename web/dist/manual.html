@@ -195,15 +195,50 @@
     </div>
 
     <div class="sec" id="tools">
-      <div class="sech"><div class="num">5</div><h2>Pro Tools</h2></div>
-      <p class="lead">Inside <b>Ogre Tek</b> you get the heavy machinery. Same presets apply (size, slippage, TP/SL).</p>
-      <h4>📦 Bundle</h4>
-      <p>Buy or sell the <b>same token across several wallets</b> from one panel — paste the CA, pick wallets, set buy-per-wallet + sell %, go. Add an optional Auto-Exit plan (TP/SL + fallback timer) for all of them.</p>
-      <h4>🎯 Snipe</h4>
-      <p>Set up a buy that fires the instant a target launches or hits your condition — size + slippage + priority fee preset, then it executes for you.</p>
-      <h4>🤖 Ogre A.I. / SlimeBot</h4>
-      <p>Hands-off automation that hunts and trades to your rules (size, TP, SL, limits). Start small, set hard limits, watch it in <b>Positions</b>.</p>
-      <div class="note">All automation respects your presets and limits. You can stop any of it from its panel at any time.</div>
+      <div class="sech"><div class="num">5</div><h2>Pro Tools (Ogre Tek)</h2></div>
+      <p class="lead"><b>Ogre Tek</b> is the heavy machinery — bundling, sniping, and the SlimeBot volume engine. Same presets apply (size, slippage, TP/SL). <b>Everything here spends real SOL — start small.</b></p>
+
+      <h3>📦 Bundle — many wallets, one tap</h3>
+      <p>Buy or sell the <b>same token across several of your wallets</b> at once — perfect for spreading a launch buy or exiting together.</p>
+      <div class="steps">
+        <div class="step">Paste the <b>Token CA</b>.</div>
+        <div class="step">Tick the <b>wallets</b> you want included.</div>
+        <div class="step">Set <b>Buy Per Wallet</b> (e.g. 0.1 SOL each) and a <b>Sell %</b> (25 / 50 / 100 / custom).</div>
+        <div class="step">Set <b>Slippage</b> (3–5% or custom bps), then <b>Bundle Buy</b> or <b>Bundle Sell</b>.</div>
+        <div class="step"><b>Auto Exit (optional):</b> add a TP / SL plan + fallback timer that applies to every wallet in the bundle.</div>
+      </div>
+      <div class="note"><b>Bundle + Launch:</b> bundling is how you get a clean multi-wallet buy on your own coin right as it launches (see §7) — your launch opens with real spread instead of one wallet.</div>
+
+      <h3>🎯 Snipe — buy the instant it's live</h3>
+      <div class="steps">
+        <div class="step">Open <b>Launch Snipe / Launch Watch</b>, set the target (a launch you're watching, or a condition).</div>
+        <div class="step">Pre-set your <b>size</b>, <b>slippage</b> and a <b>priority fee</b> (pay for speed).</div>
+        <div class="step">Arm it — the buy fires automatically the moment the coin goes live or your condition hits.</div>
+      </div>
+
+      <h3>🤖 SlimeBot — the Volume Configurator</h3>
+      <p>SlimeBot generates trading <b>volume</b> on a token using a rotating set of wallets — buys and sells in lifelike patterns so the chart looks active. Open <b>Volume Configurator</b> and set:</p>
+      <div class="presets">
+        <div class="preset"><div class="t">📇 Contract Address</div><p>The token to run volume on (paste its CA).</p></div>
+        <div class="preset"><div class="t">💰 Investment <span class="chip">0.1–10 SOL</span></div><p>Total SOL budget. SlimeBot bounds total spend near this — it won't blow past it.</p></div>
+        <div class="preset"><div class="t">⏱️ Duration <span class="chip">20m–6h</span></div><p>How long the volume runs. Longer = more spaced-out, natural-looking activity.</p></div>
+        <div class="preset"><div class="t">🧠 Mode <span class="chip">Smart</span> <span class="chip">Spam</span></div><p><b>Smart</b> = a fresh wallet each round (organic, looks like many real holders). <b>Spam</b> = faster, denser volume.</p></div>
+        <div class="preset"><div class="t">🔥 Aggressiveness <span class="chip">Low</span> <span class="chip">Med</span> <span class="chip">High</span></div><p>Controls speed, buy-bias and how many wallets cycle (Low ≈ 4 wallets/slow → High ≈ 10 wallets/fast).</p></div>
+        <div class="preset"><div class="t">🌊 Stagger pattern <span class="chip">Steady</span> <span class="chip">Waves</span> <span class="chip">Organic</span> <span class="chip">Ladder</span></div><p>The <b>buy/sell rhythm</b>: Steady = even drip; Waves = pushes then lulls; Organic = randomized/human; Ladder = stepped climbs.</p></div>
+        <div class="preset"><div class="t">👛 Pay From</div><p>The source wallet that funds the whole run.</p></div>
+      </div>
+      <h4>Two switches that make it look real</h4>
+      <ul>
+        <li><b>🪙 Leave dust</b> — keeps <b>1 token in each recycled wallet</b> after it sells, so every wallet reads as a real holder instead of a fully-dumped bot.</li>
+        <li><b>🔀 Offset sell</b> — a <b>different wallet sells behind each buy</b>, so there's never an instant self-sell on the same wallet (looks like organic two-sided flow).</li>
+      </ul>
+      <div class="steps">
+        <div class="step">Paste CA → set Investment, Duration, Mode, Aggressiveness, Stagger.</div>
+        <div class="step">Pick <b>Pay From</b> wallet; toggle <b>Leave dust</b> + <b>Offset sell</b> for the most natural look.</div>
+        <div class="step">Tap <b>Start SlimeBot</b>. Watch the live queue.</div>
+        <div class="step">When done, tap <b>Stop &amp; Sweep Back</b> to pull remaining SOL back to your source wallet.</div>
+      </div>
+      <div class="warn"><b>Real money:</b> SlimeBot spends real SOL from the source wallet across many small trades; fees add up. Start with a small Investment and a short Duration to see the pattern before scaling.</div>
     </div>
 
     <div class="sec" id="shield">
@@ -212,8 +247,34 @@
     </div>
 
     <div class="sec" id="launch">
-      <div class="sech"><div class="num">7</div><h2>Launch A Coin</h2></div>
-      <p>Launch from <b>Ogre Tek → Launch</b> or the <a href="https://www.slimewire.org/launch" style="color:var(--green)">/launch</a> page. On SlimeWire your coin becomes <b>content</b>: it shows on the <b>Radar</b>, spawns as a <b>boss</b> on Live Raids and a <b>legendary creature</b> in the Swamp, and can fire TG alerts + share cards automatically.</p>
+      <div class="sech"><div class="num">7</div><h2>Launch A Coin (Pump.fun)</h2></div>
+      <p class="lead">SlimeWire launches your coin on <b>pump.fun</b> from <b>Ogre Tek → Launch Pump Coin</b>. Fill only what you need — the launch buttons stay pinned so you can fire from any tab.</p>
+      <h3>📝 The launch sheet — field by field</h3>
+      <div class="presets">
+        <div class="preset"><div class="t">🏷️ Name &amp; Symbol</div><p>Your coin's name and ticker ($SYMBOL).</p></div>
+        <div class="preset"><div class="t">🖼️ Image &amp; Description</div><p>The coin's picture and blurb — this is what people see first.</p></div>
+        <div class="preset"><div class="t">🔗 Socials</div><p>Website, X and Telegram links shown on the coin.</p></div>
+        <div class="preset"><div class="t">💵 Dev Buy</div><p>Turn on <b>Dev Buy</b> and set how much SOL you buy at launch — your own opening position so you're not buying your coin at zero.</p></div>
+        <div class="preset"><div class="t">⚙️ Creator Fees</div><p>Fee mode + creator-fee % (bps) and the wallet that receives them. Option to <b>burn creator fees</b> or route to a <b>buyback wallet</b>.</p></div>
+      </div>
+      <h3>🚀 Launching — the flow</h3>
+      <div class="steps">
+        <div class="step">Fill the sheet (name, symbol, image, description, socials).</div>
+        <div class="step">Set your <b>Dev Buy</b> amount and fee handling.</div>
+        <div class="step">Tap <b>Launch on Pump</b> — SlimeWire sends the details to the launch connector and waits for your new <b>contract address (CA)</b>.</div>
+        <div class="step">Use <b>Use Live CA</b> to drop that CA straight into a preset / the Bundle panel.</div>
+        <div class="step"><b>Save Launch Sheet</b> keeps your setup; the official <b>Open Pump Create</b> and <b>Pay Dex / Edit Metadata</b> links are there as fallback tools.</div>
+      </div>
+      <h3>📦 Bundle + 🤖 SlimeBot behind your launch</h3>
+      <p>This is the pro combo:</p>
+      <div class="steps">
+        <div class="step"><b>Dev buy</b> opens your position as the coin goes live.</div>
+        <div class="step"><b>Bundle Buy</b> (§5) spreads an opening buy across several of your wallets — real holder spread, not one whale.</div>
+        <div class="step"><b>SlimeBot</b> (§5) then runs <b>volume</b> on the CA — buy/sell patterns with <b>Leave dust</b> (every wallet keeps 1 token = looks like a holder) and <b>Offset sell</b> (a different wallet sells behind each buy) so the chart looks alive and two-sided.</div>
+      </div>
+      <h3>🌍 Your coin becomes content</h3>
+      <p>However you launch, on SlimeWire the coin instantly: shows on the <b>Radar</b>, spawns as a <b>boss</b> on Live Raids and a <b>legendary creature</b> in the Swamp, and can fire TG alerts + share cards.</p>
+      <div class="warn"><b>Heads up:</b> dev buy, bundle buys and SlimeBot all spend real SOL. Plan your total budget before you launch.</div>
     </div>
 
     <img class="divimg" src="https://www.slimewire.org/assets/slimewire/swamp/art/survivors-hero.jpg" alt="">
