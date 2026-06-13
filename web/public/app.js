@@ -19506,13 +19506,18 @@ function livePairAvatarHtml(row, options = {}) {
   const avatarKey = `token:${String(mint || row.symbol || label).trim().toLowerCase()}`;
   const tokenAvatarFixOn = featureEnabled("tokenAvatarFixEnabled", true);
   const explicitAvatarState = String(row.avatarState || "").trim().toLowerCase();
+  const avatarBlocked = explicitAvatarState === "missing" || explicitAvatarState === "failed";
   const cachedAvatarReady = Boolean(row.avatarUrl) && (!explicitAvatarState || explicitAvatarState === "ready");
-  const proxyUrl = cachedAvatarReady && mint ? normalizeImageUrl(tokenImageProxyUrl(row)) : "";
+  // Use the backend token-image proxy whenever we have a mint and the avatar
+  // isn't known-missing. The proxy resolves the real image + redirects to it
+  // server-side, so even fresh "pending" coins get a picture without waiting
+  // for the row to carry a fully resolved avatarUrl.
+  const proxyUrl = mint && !avatarBlocked ? normalizeImageUrl(tokenImageProxyUrl(row)) : "";
   const src = tokenAvatarFixOn
-    ? stableAvatarSrc(avatarKey, cachedAvatarReady ? row.avatarUrl : "", proxyUrl, explicitAvatarState ? "" : imageUrl)
+    ? stableAvatarSrc(avatarKey, cachedAvatarReady ? row.avatarUrl : "", proxyUrl, avatarBlocked ? "" : imageUrl)
     : stableAvatarSrc(avatarKey, proxyUrl, imageUrl);
-  const backupSrc = tokenAvatarFixOn && cachedAvatarReady
-    ? (proxyUrl && src !== proxyUrl ? proxyUrl : (imageUrl && row.avatarUrl && imageUrl !== row.avatarUrl ? imageUrl : ""))
+  const backupSrc = tokenAvatarFixOn && !avatarBlocked
+    ? (proxyUrl && src !== proxyUrl ? proxyUrl : (imageUrl && imageUrl !== src ? imageUrl : ""))
     : "";
   const priority = Boolean(options.priority);
   const loading = priority ? "eager" : "lazy";

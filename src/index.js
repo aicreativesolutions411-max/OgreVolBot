@@ -37586,6 +37586,12 @@ function webSniperRow(row) {
     symbol: row.symbol || shortMint(row.tokenMint),
     name: row.name || "Unknown",
     imageUrl: row.imageUrl || "",
+    // Pass the resolved avatar through so the frontend can use the fast
+    // token-image proxy/redirect. Without these, the client falls back to the
+    // (usually empty) imageUrl for fresh coins and shows no image.
+    avatarUrl: row.avatarUrl || "",
+    avatarState: row.avatarState || (row.avatarUrl ? "ready" : "pending"),
+    avatarUpdatedAt: row.avatarUpdatedAt || "",
     websiteUrl: row.websiteUrl || "",
     twitterUrl: row.twitterUrl || "",
     telegramUrl: row.telegramUrl || "",
