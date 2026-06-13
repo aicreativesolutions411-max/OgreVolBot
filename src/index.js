@@ -6784,6 +6784,15 @@ async function handleCallback(query, userId) {
     return;
   }
 
+  if (query.data === "launch_build_menu" || query.data?.startsWith("lb_")) {
+    if (!isPrivateChat(chat)) {
+      await say(chatId, "Open this bot in DM to build a coin launch.");
+      return;
+    }
+    await handleLaunchBuilder(chatId, userId, query.data, messageId);
+    return;
+  }
+
   if (query.data?.startsWith("sniper_pick:")) {
     if (!isPrivateChat(chat)) {
       await say(chatId, "Open this bot in DM to use OgreSniper.");
@@ -7262,6 +7271,16 @@ async function handleMessage(message, userId) {
     return;
   }
 
+  if (text === "/launch" || /^\/launch(?:@\w+)?$/i.test(text)) {
+    if (!isPrivateChat(message.chat)) {
+      await say(chatId, "Open this bot in DM to build a coin launch.");
+      return;
+    }
+    clearSession(chatId);
+    await showLaunchBuilder(chatId, userId);
+    return;
+  }
+
   if (text === "/web" || /^\/start(?:@\w+)?\s+web$/i.test(text)) {
     if (!isPrivateChat(message.chat)) {
       await say(chatId, "Open this bot in DM to connect the web portal.");
@@ -7510,6 +7529,15 @@ async function handleDocumentMessage(message, userId, session) {
 async function continueFlow(chatId, text, session) {
   try {
     switch (session.step) {
+      case "lb_field": {
+        const field = session.data.field; const f = LAUNCH_FIELDS[field] || {}; const d = launchDraftFor(chatId);
+        let val = String(text || "").trim();
+        if (f.num) { const n = Number(val); d[field] = (Number.isFinite(n) && n > 0) ? String(Math.min(50, n)) : ""; }
+        else { if (val === "-" || /^skip$/i.test(val)) val = ""; if (f.up) val = val.toUpperCase().replace(/[^A-Za-z0-9]/g, ""); d[field] = val.slice(0, f.max || 120); }
+        clearSession(chatId);
+        await showLaunchBuilder(chatId, session.userId);
+        break;
+      }
       case "create_wallets_label":
         session.data.label = cleanLabel(text);
         session.step = "create_wallets_count";
@@ -15065,6 +15093,7 @@ async function showTelegramOgreToolsMenu(chatId, messageId = null) {
     "Automation and power tools: Ogre A.I., bundle workflows, timed volume plans, launch watches, and sniper modes."
   ].join("\n")), {
     inline_keyboard: [
+      [{ text: "🚀 Launch a Coin", callback_data: "launch_build_menu" }],
       [{ text: "Ogre A.I.", callback_data: "ogre_ai_menu" }, { text: "Auto Bundle", callback_data: "auto_bundle" }],
       [{ text: "Bundle", callback_data: "bundle_menu" }, { text: "Volume Plans", callback_data: "timed_trade_plans" }],
       [{ text: "Launch Snipe", callback_data: "sniper_manual_launch" }, { text: "Active Watches", callback_data: "manual_launch_watches" }],
@@ -15072,6 +15101,69 @@ async function showTelegramOgreToolsMenu(chatId, messageId = null) {
       [{ text: "Main Menu", callback_data: "main_menu" }]
     ]
   });
+}
+
+// --- Guided pump-launch builder (collect on TG, go live on the site) ---
+const launchDrafts = new Map(); // chatId -> { name, symbol, description, devBuySol, x, telegram, website }
+const LAUNCH_FIELDS = {
+  name: { emoji: "📝", ask: "Send your coin's NAME (e.g. Ogre Mode):", max: 32 },
+  symbol: { emoji: "💲", ask: "Send the TICKER / symbol (e.g. OGRE):", max: 12, up: true },
+  description: { emoji: "📄", ask: "Send a short DESCRIPTION for your coin:", max: 400 },
+  devBuySol: { emoji: "💰", ask: "Send your DEV BUY amount in SOL (e.g. 0.1), or 0 for none:", num: true },
+  x: { emoji: "🐦", ask: "Send your X (Twitter) link or @handle, or - to skip:", max: 80 },
+  telegram: { emoji: "✈️", ask: "Send your Telegram link, or - to skip:", max: 80 },
+  website: { emoji: "🌐", ask: "Send your website URL, or - to skip:", max: 120 }
+};
+function launchDraftFor(chatId) { let d = launchDrafts.get(chatId); if (!d) { d = {}; launchDrafts.set(chatId, d); } return d; }
+function launchSiteUrl(d) {
+  const p = new URLSearchParams();
+  if (d.name) p.set("lc_n", d.name);
+  if (d.symbol) p.set("lc_s", d.symbol);
+  if (d.description) p.set("lc_d", d.description);
+  if (d.devBuySol && Number(d.devBuySol) > 0) p.set("lc_dev", d.devBuySol);
+  if (d.x && d.x !== "-") p.set("lc_x", d.x);
+  if (d.telegram && d.telegram !== "-") p.set("lc_tg", d.telegram);
+  if (d.website && d.website !== "-") p.set("lc_web", d.website);
+  return "https://www.slimewire.org/terminal?" + p.toString();
+}
+async function showLaunchBuilder(chatId, userId, messageId = null) {
+  const d = launchDraftFor(chatId);
+  const ready = Boolean(d.name && d.symbol);
+  const v = (x) => (x && String(x).trim() ? String(x) : "—");
+  const lines = [
+    "🚀 Launch a Coin",
+    "",
+    "Fill in your coin here, then tap Launch to add an image, connect your wallet and go live on the site.",
+    "",
+    `${LAUNCH_FIELDS.name.emoji} Name: ${v(d.name)}`,
+    `${LAUNCH_FIELDS.symbol.emoji} Ticker: ${d.symbol ? "$" + d.symbol : "—"}`,
+    `${LAUNCH_FIELDS.description.emoji} Description: ${v(d.description)}`,
+    `${LAUNCH_FIELDS.devBuySol.emoji} Dev buy: ${d.devBuySol ? d.devBuySol + " SOL" : "—"}`,
+    `${LAUNCH_FIELDS.x.emoji} X: ${v(d.x)}   ${LAUNCH_FIELDS.telegram.emoji} TG: ${v(d.telegram)}   ${LAUNCH_FIELDS.website.emoji} Web: ${v(d.website)}`,
+    "",
+    ready ? "Looks good — tap 🚀 Launch on SlimeWire to finish + go live." : "Add at least a Name and Ticker to unlock Launch."
+  ];
+  const kb = [
+    [{ text: "📝 Name", callback_data: "lb_edit:name" }, { text: "💲 Ticker", callback_data: "lb_edit:symbol" }],
+    [{ text: "📄 Description", callback_data: "lb_edit:description" }],
+    [{ text: "💰 Dev buy", callback_data: "lb_edit:devBuySol" }],
+    [{ text: "🐦 X", callback_data: "lb_edit:x" }, { text: "✈️ Telegram", callback_data: "lb_edit:telegram" }, { text: "🌐 Website", callback_data: "lb_edit:website" }]
+  ];
+  if (ready) kb.push([{ text: "🚀 Launch on SlimeWire", url: launchSiteUrl(d) }]);
+  kb.push([{ text: "🧹 Clear", callback_data: "lb_clear" }, { text: "Main Menu", callback_data: "main_menu" }]);
+  await sendOrEditMessage(chatId, messageId, withBrandFooter(lines.join("\n")), { inline_keyboard: kb });
+}
+async function handleLaunchBuilder(chatId, userId, data, messageId) {
+  if (data === "lb_clear") { launchDrafts.set(chatId, {}); await showLaunchBuilder(chatId, userId, messageId); return; }
+  if (data.startsWith("lb_edit:")) {
+    const field = data.slice("lb_edit:".length);
+    const f = LAUNCH_FIELDS[field];
+    if (!f) { await showLaunchBuilder(chatId, userId, messageId); return; }
+    sessions.set(chatId, { step: "lb_field", userId, data: { field } });
+    await sendFlowPrompt(chatId, f.ask + "\n\n(or /cancel)", { inline_keyboard: [[{ text: "⬅ Back", callback_data: "launch_build_menu" }]] }, { fresh: true });
+    return;
+  }
+  await showLaunchBuilder(chatId, userId, messageId); // launch_build_menu
 }
 
 async function showTelegramPortfolioMenu(chatId, messageId = null) {

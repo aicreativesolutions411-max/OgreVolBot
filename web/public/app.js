@@ -222,11 +222,20 @@ function storedReferralCode() {
 }
 
 function getStoredLaunchCoinDraft() {
+  let d = {};
+  try { d = JSON.parse(window.localStorage?.getItem("slimewireLaunchCoinDraft") || "{}") || {}; } catch { d = {}; }
+  // Prefill from a Telegram launch-builder deep link (?lc_n=&lc_s=&lc_d=&lc_dev=&lc_x=&lc_tg=&lc_web=)
   try {
-    return JSON.parse(window.localStorage?.getItem("slimewireLaunchCoinDraft") || "{}") || {};
-  } catch {
-    return {};
-  }
+    const q = new URLSearchParams(window.location.search);
+    if (q.has("lc_n") || q.has("lc_s")) {
+      const map = { lc_n: "name", lc_s: "symbol", lc_d: "description", lc_x: "x", lc_tg: "telegram", lc_web: "website" };
+      for (const k in map) { const v = q.get(k); if (v) d[map[k]] = k === "lc_s" ? v.toUpperCase().slice(0, 12) : v; }
+      const dev = q.get("lc_dev"); if (dev && Number(dev) > 0) { d.devBuySol = String(dev); d.devBuyEnabled = true; }
+      try { setStoredLaunchCoinDraft(d); } catch { /* quota */ }
+      try { window.history.replaceState(null, "", window.location.pathname + window.location.hash); } catch { /* ok */ }
+    }
+  } catch { /* params optional */ }
+  return d;
 }
 
 function setStoredLaunchCoinDraft(draft) {
@@ -300,7 +309,9 @@ const state = {
   token: getStoredToken(),
   user: null,
   route: routeForPath(window.location.pathname),
-  activeTab: window.location.pathname.includes("/ogre-tek")
+  activeTab: (window.location.pathname.includes("/launch-coin") || /[?&]lc_n=/i.test(window.location.search))
+    ? "launchCoin"
+    : window.location.pathname.includes("/ogre-tek")
     ? "ogreTek"
     : window.location.pathname.includes("/chart")
       ? "smartChart"
