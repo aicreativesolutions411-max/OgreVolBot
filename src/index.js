@@ -4134,18 +4134,24 @@ async function resolveTokenAvatarRecord(mint = "", row = {}) {
     return tokenAvatarRecord(mint, { avatarUrl: direct, source: row.source || "row", state: "ready" });
   }
 
-  const [pumpMeta, dexMeta] = await Promise.all([
-    getPumpFunTokenMetadata(mint, { timeoutMs: 1_200, cacheTtlMs: 30 * 60 * 1000 }).catch(() => ({})),
-    getDexTokenMetadata(mint, { timeoutMs: 1_200 }).catch(() => ({}))
+  const [pumpMeta, dexMeta, heliusMeta] = await Promise.all([
+    getPumpFunTokenMetadata(mint, { timeoutMs: 1_500, cacheTtlMs: 30 * 60 * 1000 }).catch(() => ({})),
+    getDexTokenMetadata(mint, { timeoutMs: 1_500 }).catch(() => ({})),
+    // Helius DAS reads on-chain metadata -> reliable image (Helius CDN) even for
+    // brand-new coins that aren't on DexScreener yet. This is the key fallback.
+    fetchHeliusDasTokenMetadata(mint, { timeoutMs: 2_000 }).catch(() => ({}))
   ]);
   let avatarUrl = normalizeTokenAvatarUrl(firstString(
     pumpMeta.imageUrl,
     pumpMeta.imageUri,
+    heliusMeta.imageUrl,
+    heliusMeta.imageUri,
     dexMeta.imageUrl,
     dexMeta.imageUri
   ));
   let source = avatarUrl
-    ? (firstString(pumpMeta.imageUrl, pumpMeta.imageUri) ? "pump" : "dex")
+    ? (firstString(pumpMeta.imageUrl, pumpMeta.imageUri) ? "pump"
+      : firstString(heliusMeta.imageUrl, heliusMeta.imageUri) ? "helius" : "dex")
     : "";
 
   if (!avatarUrl) {
