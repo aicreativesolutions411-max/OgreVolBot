@@ -31023,6 +31023,27 @@ async function webStartOgreAiRun(userId, body = {}) {
     } catch {
       // Shield unavailable: fall through - the buy precheck still runs before swaps.
     }
+    // Freshness guard: re-read the LIVE market cap right before buying. The pick
+    // came from a scan that can be seconds stale; if it already dumped (e.g.
+    // signalled at $3k, now $1.9k) we skip instead of aping the dump.
+    try {
+      const signalMc = Number(pick.marketCap || pick.fdv || 0);
+      const freshPairs = await fetchDexScreenerTokenPairsFallback(pick.tokenMint, { timeoutMs: 3000 }).catch(() => []);
+      const best = bestDexPairForToken(pick.tokenMint, freshPairs);
+      const freshMc = Number(best?.marketCap || best?.fdv || 0);
+      if (freshMc > 0) {
+        if (signalMc > 0 && freshMc < signalMc * 0.70) {
+          errors.push({ tokenMint: pick.tokenMint, shortMint: shortMint(pick.tokenMint), pick: pickSummary,
+            message: `Skipped — dumped ${Math.round((1 - freshMc / signalMc) * 100)}% since signal ($${Math.round(signalMc)}→$${Math.round(freshMc)} MC).` });
+          continue;
+        }
+        if (freshMc < 1500) {
+          errors.push({ tokenMint: pick.tokenMint, shortMint: shortMint(pick.tokenMint), pick: pickSummary,
+            message: `Skipped — MC collapsed to $${Math.round(freshMc)} before buy.` });
+          continue;
+        }
+      }
+    } catch { /* live read failed -> fall through; the buy/route precheck still applies */ }
     try {
       const defaults = selection.defaults;
       const plan = await webCreateManagedBuyPlan(userId, wallets, {
@@ -36102,6 +36123,31 @@ async function webLivePairsUnfiltered(userId, bucket = "live", options = {}) {
         return staleValue;
       }
     }
+  }
+
+  // True stale-while-revalidate (in-memory): if we have a recent-enough value,
+  // serve it INSTANTLY and refresh in the background instead of awaiting a scan.
+  // This is what makes pairs feel instant on every refresh after the first load.
+  if (!force && CONFIG.livePairsSharedCacheMs > 0 && cached.value && (Date.now() - cached.cachedAt) < CONFIG.displayCacheStaleMs) {
+    const bg = buildWebLivePairs(userId, safeBucket, { sort, force: false })
+      .then(async (nextValue) => {
+        const rows = Array.isArray(nextValue?.rows) ? nextValue.rows : [];
+        const prevRows = Array.isArray(cached.value?.rows) ? cached.value.rows : [];
+        const value = (rows.length === 0 && prevRows.length > 0)
+          ? { ...cached.value, ...nextValue, rows: cached.value.rows, stale: true, emptyRefresh: true }
+          : nextValue;
+        livePairsSharedCache.set(cacheKey, { cachedAt: Date.now(), value, promise: null });
+        try { await cacheSetJson(externalKey, displayCacheEnvelope(value), Math.max(CONFIG.displayCacheStaleMs, 30_000)); } catch {}
+        return value;
+      })
+      .catch((err) => {
+        const cur = livePairsSharedCache.get(cacheKey);
+        livePairsSharedCache.set(cacheKey, { cachedAt: cur?.cachedAt || cached.cachedAt, value: cached.value, promise: null });
+        throw err;
+      });
+    livePairsSharedCache.set(cacheKey, { cachedAt: cached.cachedAt, value: cached.value, promise: bg });
+    bg.catch(() => {});
+    return { ...cached.value, stale: true, cacheHit: true, cacheSource: "memory-swr", backgroundRefreshing: true };
   }
 
   const promise = buildWebLivePairs(userId, safeBucket, { sort, force });
