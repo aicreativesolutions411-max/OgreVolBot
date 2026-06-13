@@ -884,6 +884,19 @@
         return SLIME_SKINS[hash(row.tokenMint) % SLIME_SKINS.length];
       }
       ["fresh-slime","runner-slime","shiny-slime","toxic-rug-slime","sell-pressure-slime","liquidity-slime","small-ogre","ogre-boss","candle-slime","chart-wing-slime","pump-rocket-slime","swamp-trader-ogre"].forEach(loadSprite);
+
+      // ---------- real painted tiles (with procedural fallback) ----------
+      const TILE_BASE = "/assets/slimewire/swamp/tiles/";
+      const TILE_IMG = {};
+      let tilesPending = 0;
+      ["grass","grass-2","tall-grass","tall-grass-2","water","path","plank","stump","rock","mushroom","lilypad","portal","flowers"].forEach((n)=>{
+        const img = new Image(); img.decoding="async"; tilesPending++;
+        img.addEventListener("load", ()=>{ tilesPending--; if (typeof onTilesReady==="function") onTilesReady(); }, { once:true });
+        img.addEventListener("error", ()=>{ tilesPending--; }, { once:true });
+        img.src = TILE_BASE+n+".png"; TILE_IMG[n]=img;
+      });
+      const tileReady = (n)=> TILE_IMG[n] && TILE_IMG[n].complete && TILE_IMG[n].naturalWidth>0;
+      function onTilesReady(){ if (tilesPending<=0 && wmap) { genMap(); } } // re-paint map once art is in
       // Paint a creature into a <canvas>: real sprite if loaded, else procedural,
       // then upgrade to the sprite the moment it loads.
       function paintCreature(canvas, mint, mood, stage, ogre, rowOrName) {
@@ -1324,20 +1337,32 @@
         mapLayer = document.createElement("canvas"); mapLayer.width = W_COLS*TILE; mapLayer.height = W_ROWS*TILE;
         const m = mapLayer.getContext("2d");
         const tr = rng(hash(dayKey()+"tiles2"));
+        m.imageSmoothingEnabled = false;
+        const useArt = tileReady("grass") && tileReady("water") && tileReady("tall-grass");
+        const grassTile = (x,y)=> (tileReady("grass-2") && ((x*7+y*3)%5===0)) ? TILE_IMG["grass-2"] : TILE_IMG["grass"];
         for (let y=0;y<W_ROWS;y++) for (let x=0;x<W_COLS;x++) {
           const t = wmap[y][x], X=x*TILE, Y=y*TILE;
-          // grass base everywhere first
+          if (useArt) {
+            // always lay grass under everything, then the feature tile on top
+            m.drawImage(grassTile(x,y), X, Y, TILE, TILE);
+            if (t===2 && tileReady("water")) m.drawImage(TILE_IMG["water"], X, Y, TILE, TILE);
+            else if (t===3 && tileReady("path")) m.drawImage(TILE_IMG["path"], X, Y, TILE, TILE);
+            else if (t===1 && tileReady("tall-grass")) m.drawImage((tileReady("tall-grass-2")&&((x+y)%2))?TILE_IMG["tall-grass-2"]:TILE_IMG["tall-grass"], X, Y, TILE, TILE);
+            else if (t===4 && (y===0||x===0||x===W_COLS-1||y===W_ROWS-1)) { m.fillStyle="#0a2410"; m.fillRect(X,Y,TILE,TILE); }
+            continue;
+          }
+          // ---- procedural fallback (until tiles load) ----
           m.fillStyle = (x+y)%2 ? "#16451f" : "#194a22"; m.fillRect(X,Y,TILE,TILE);
           if (tr()<0.18){ m.fillStyle="rgba(255,255,255,0.04)"; m.fillRect(X+ (tr()*TILE)|0, Y+(tr()*TILE)|0, 3,3); }
-          if (t===2) { // water with bank + ripples
+          if (t===2) {
             m.fillStyle="#0e3340"; m.fillRect(X,Y,TILE,TILE);
             m.fillStyle="#155062"; m.fillRect(X+2,Y+2,TILE-4,TILE-4);
             m.fillStyle="rgba(255,255,255,0.10)"; m.fillRect(X+5,Y+7+((x+y)%3)*6,TILE-12,2); m.fillRect(X+8,Y+16+((x*y)%2)*4,TILE-16,2);
-          } else if (t===3) { // mud path with worn edges
+          } else if (t===3) {
             m.fillStyle="#54422a"; m.fillRect(X,Y,TILE,TILE);
             m.fillStyle="#5f4c31"; m.fillRect(X+2,Y+2,TILE-4,TILE-4);
             m.fillStyle="rgba(0,0,0,0.12)"; for(let i=0;i<3;i++) m.fillRect(X+4+(tr()*22)|0, Y+4+(tr()*22)|0, 3,2);
-          } else if (t===1) { // tall grass tufts
+          } else if (t===1) {
             m.fillStyle="#1d5c28"; m.fillRect(X,Y,TILE,TILE);
             m.strokeStyle="#2f9a3f"; m.lineWidth=2;
             for (let i=0;i<4;i++){ const gx=X+5+i*7; m.beginPath(); m.moveTo(gx,Y+TILE-4); m.quadraticCurveTo(gx+(i%2?3:-3), Y+TILE/2, gx+(i%2?1:-1), Y+6); m.stroke(); }
@@ -1345,6 +1370,23 @@
           } else if (t===4) {
             const isWall = y===0||x===0||x===W_COLS-1||y===W_ROWS-1;
             if (isWall) { m.fillStyle="#0a2410"; m.fillRect(X,Y,TILE,TILE); }
+          }
+        }
+        // scattered deco props from the real tileset (rocks, stumps, mushrooms, lilypads)
+        if (useArt) {
+          const dr = rng(hash(dayKey()+"deco"));
+          for (let y=1;y<W_ROWS-1;y++) for (let x=1;x<W_COLS-1;x++) {
+            if (wmap[y][x]!==0) continue;
+            const v = dr(); let nm=null;
+            if (v<0.015 && tileReady("stump")) nm="stump";
+            else if (v<0.04 && tileReady("rock")) nm="rock";
+            else if (v<0.06 && tileReady("mushroom")) nm="mushroom";
+            else if (v<0.075 && tileReady("flowers")) nm="flowers";
+            if (nm) m.drawImage(TILE_IMG[nm], x*TILE, y*TILE-4, TILE, TILE);
+            if (wmap[y][x]===0 && tileReady("lilypad") && dr()<0.004) {} // lilypads handled on water below
+          }
+          for (let y=1;y<W_ROWS-1;y++) for (let x=1;x<W_COLS-1;x++) {
+            if (wmap[y][x]===2 && tileReady("lilypad") && dr()<0.18) m.drawImage(TILE_IMG["lilypad"], x*TILE, y*TILE, TILE, TILE);
           }
         }
         // trees (drawn after base so canopies overlap nicely)
