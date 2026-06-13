@@ -79,6 +79,15 @@
   .dcard .ds{font-size:0.7rem; font-weight:900; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
   .dcard .dm{font-size:0.66rem; font-weight:900;} .up{color:var(--green2);} .down{color:var(--bad);}
   .dcard .dr{position:absolute; top:3px; left:3px; width:8px; height:8px; border-radius:50%;}
+  /* evolution tiers — caught coins level up as their market cap pumps */
+  .dcard .evo{position:absolute; top:2px; right:4px; font-size:0.58rem; font-weight:900; letter-spacing:0.5px; color:var(--gold); text-shadow:0 0 6px rgba(255,210,74,0.7);}
+  .dcard.e2{border-color:rgba(90,176,255,0.55);} .dcard.e3{border-color:rgba(169,139,255,0.6);} .dcard.e4{border-color:rgba(255,210,74,0.7);}
+  .dcard.e2 img{filter:drop-shadow(0 0 7px rgba(90,176,255,0.65));}
+  .dcard.e3 img{filter:drop-shadow(0 0 9px rgba(169,139,255,0.75)); transform:scale(1.06);}
+  .dcard.e4 img{filter:drop-shadow(0 0 12px rgba(255,210,74,0.9)); transform:scale(1.12);}
+  .dcard.e3,.dcard.e4{background:radial-gradient(circle at 50% 38%,rgba(255,210,74,0.12),rgba(8,20,10,0.6) 70%);}
+  @keyframes evoPulse{0%,100%{opacity:0.5;}50%{opacity:1;}}
+  .dcard.e4 .evo{animation:evoPulse 1.6s ease-in-out infinite;}
   .sheet h2{font-family:Cinzel,serif; margin:0 0 2px; font-size:1.4rem;}
   .sheet .sub{color:var(--dim); font-size:0.8rem; margin-bottom:6px;}
   .closeX{position:absolute; top:10px; right:12px; background:none; border:0; color:#eaffe0; font-size:1.5rem; cursor:pointer; pointer-events:auto;}
@@ -214,6 +223,11 @@ if(typeof store.baseLv!=="number") store.baseLv=0;
 const save=()=>{ try{ localStorage.setItem(KEY,JSON.stringify(store)); }catch(_){} };
 const num=(v)=>{ const n=Number(v); return isFinite(n)?n:0; };
 function level(){ return Math.max(1,Math.floor(Math.sqrt(store.xp/40))+1); }
+// Pokemon-style evolution: a caught coin's creature evolves as its market cap
+// pumps from where you caught it. 2x -> Evolved, 5x -> Ascended, 15x -> APEX.
+// Creatures never de-evolve (peak is remembered on the dex entry).
+const EVO_TIERS=[{min:15,s:4,name:"APEX"},{min:5,s:3,name:"ASCENDED"},{min:2,s:2,name:"EVOLVED"}];
+function evoStageOf(mult){ for(const t of EVO_TIERS){ if(mult>=t.min) return t; } return {min:1,s:1,name:""}; }
 function dexCount(){ return Object.keys(store.dex).length; }
 function worthAvg(){ const e=Object.values(store.dex).filter(c=>num(c.mc)>0&&num(c.mcNow)>0); if(!e.length) return null;
   let s=0; for(const c of e) s+=c.mcNow/c.mc; return s/e.length; }
@@ -415,6 +429,16 @@ async function loadFeed(){
     const og=(j2&&(j2.launches||j2.ogres))||[]; for(const o of og){ if(o&&(o.mint||o.symbol)){ feedRows.unshift({tokenMint:o.mint||o.symbol,symbol:o.symbol||o.name,_ogre:true,marketCap:o.marketCap,pairAgeSeconds:o.ageSeconds}); } } }catch(_){}
   try{ const r3=await fetch(API+"/api/web/swamp-leaderboard?mode=catches",{cache:"no-store"}); const j3=await r3.json();
     lbNames=((j3&&j3.scores)||[]).map(s=>s.name).filter(Boolean).slice(0,5); }catch(_){ lbNames=[]; }
+  // Refresh caught coins' live market cap from the feed so creatures can evolve
+  // as their coin pumps (mult = mcNow/mc drives the evolution tiers).
+  try{ let dirty=false;
+    for(const row of feedRows){ const mint=row.tokenMint||row.mint; if(!mint) continue;
+      const c=store.dex[mint]; if(!c) continue;
+      const mc=num(row.marketCap||row.marketCapUsd); if(mc>0 && mc!==c.mcNow){ c.mcNow=mc; dirty=true; }
+      if(num(c.mc)>0 && num(c.mcNow)>0){ const ns=evoStageOf(c.mcNow/c.mc); if(ns.s>(c.evo||1)){ c.evo=ns.s; dirty=true;
+        try{ sfx("level",0.5); toast("✨ $"+c.symbol+" evolved to "+ns.name+"!"); store.xp+=20; }catch(_){} } } }
+    if(dirty) save();
+  }catch(_){}
   if(!feedRows.length){ // synthetic fallback so the world is never empty / offline-safe
     const syn=["PEPE","WOJAK","OGRE","BONK","SLIME","CHAD","FROG","DEGEN","MOON","RUG","WEN","GM"];
     feedRows=syn.map((s,i)=>({tokenMint:"syn_"+s,symbol:s,marketCap:3000+i*1500,pairAgeSeconds:[30,90,300,1200][i%4],m5:[60,10,-20,30][i%4],volume5m:[70000,5000,1000,20000][i%4],_ogre:i===2}));
@@ -704,12 +728,17 @@ function openDex(){ state="dex"; $("prompt").classList.remove("on");
     `<span style="color:var(--cLegend)">★${counts.legendary}</span> <span style="color:var(--cEpic)">${counts.epic}</span> <span style="color:var(--cRare)">${counts.rare}</span> <span style="color:var(--cUncommon)">${counts.uncommon}</span> <span style="color:var(--cCommon)">${counts.common}</span>`;
   const grid=$("dexGrid"); grid.innerHTML="";
   if(!entries.length){ grid.innerHTML='<div style="grid-column:1/-1;color:var(--dim);text-align:center;padding:20px">Empty. Go catch some coins!</div>'; }
+  let evoChanged=false;
   for(const [mint,c] of entries){ const mult=num(c.mc)>0&&num(c.mcNow)>0?c.mcNow/c.mc:1; const rc=(RAR[c.rarity]||RAR.common).col;
-    const d=document.createElement("div"); d.className="dcard"; d.style.borderColor=rc+"55";
+    const evo=evoStageOf(mult); const peak=Math.max(c.evo||1,evo.s); if(peak!==(c.evo||1)){ c.evo=peak; evoChanged=true; }
+    const tierName=(EVO_TIERS.find(t=>t.s===peak)||{}).name||"";
+    const d=document.createElement("div"); d.className="dcard"+(peak>1?(" e"+peak):""); d.style.borderColor=peak>1?"":rc+"55";
     const h=hash(mint); const path=A.statics.length?A.statics[h%A.statics.length]:null;
-    d.innerHTML=`<div class="dr" style="background:${rc}"></div>`+(path?`<img src="${path}" onerror="this.style.display='none'">`:`<div style="font-size:30px">${c.ogre?"🧌":"🟢"}</div>`)+
+    d.innerHTML=`<div class="dr" style="background:${rc}"></div>`+(peak>1?`<div class="evo">${"★".repeat(peak-1)} ${tierName}</div>`:"")+
+      (path?`<img src="${path}" onerror="this.style.display='none'">`:`<div style="font-size:30px">${c.ogre?"🧌":"🟢"}</div>`)+
       `<div class="ds">${c.ogre?"🧌":""}$${c.symbol}</div><div class="dm ${mult>=1?'up':'down'}">${mult>=1?'+':''}${((mult-1)*100).toFixed(0)}%</div>`;
     grid.appendChild(d); }
+  if(evoChanged) save();
   $("dex").classList.add("on");
 }
 function closeDex(){ $("dex").classList.remove("on"); if(state==="dex"){ state="world"; lastTs=performance.now(); requestAnimationFrame(loop); } }
