@@ -1338,7 +1338,10 @@
         const m = mapLayer.getContext("2d");
         const tr = rng(hash(dayKey()+"tiles2"));
         m.imageSmoothingEnabled = false;
-        const useArt = tileReady("grass") && tileReady("water") && tileReady("tall-grass");
+        // NOTE: the first-pass sliced tiles render on black/with chroma speckles
+        // (bad). Disabled until Codex delivers clean seamless ground tiles; the
+        // procedural ground below looks better in the meantime.
+        const useArt = false && tileReady("grass") && tileReady("water") && tileReady("tall-grass");
         const grassTile = (x,y)=> (tileReady("grass-2") && ((x*7+y*3)%5===0)) ? TILE_IMG["grass-2"] : TILE_IMG["grass"];
         for (let y=0;y<W_ROWS;y++) for (let x=0;x<W_COLS;x++) {
           const t = wmap[y][x], X=x*TILE, Y=y*TILE;
