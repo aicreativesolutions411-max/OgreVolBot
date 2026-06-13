@@ -118,7 +118,7 @@
       .sv-joy.on { opacity:1; } .sv-joy .nub { position:absolute; left:50%; top:50%; width:46px; height:46px; border-radius:50%; transform:translate(-50%,-50%);
         background:radial-gradient(circle at 35% 30%, #b9ff7a, #57d61a 60%, #2f8a10); box-shadow:0 0 14px rgba(114,255,35,0.55); }
       .sv-levelup, .sv-death, .sv-start { position:absolute; inset:0; z-index:6; display:none; align-items:center; justify-content:center; flex-direction:column;
-        background:rgba(2,8,4,0.9); text-align:center; padding:22px; }
+        background:rgba(2,8,4,0.92); text-align:center; padding:22px; overflow-y:auto; -webkit-overflow-scrolling:touch; }
       .sv-levelup.on, .sv-death.on, .sv-start.on { display:flex; }
       .sv-levelup h3 { color:var(--green); font-size:clamp(1.3rem,6vw,1.8rem); margin:0 0 14px; text-shadow:0 0 20px rgba(114,255,35,0.6); }
       .sv-cards { display:flex; flex-direction:column; gap:10px; width:100%; max-width:380px; }
@@ -2294,9 +2294,15 @@
             <a class="btn ape" style="flex:1" href="/terminal">⚡ Trade to power up</a>
             <a class="btn catch" style="flex:1" href="/terminal">🚀 Launch a coin</a>
           </div>
+          <button class="sv-ghost" data-sv-share style="margin-top:8px">𝕏 Flex my run</button>
           <div style="color:var(--dim);font-size:0.72rem;margin-top:8px">your Swamp Worth buffs your damage — bigger bags, bigger blasts 💥</div>
           <button class="sv-ghost" data-sv-leave>Leave the pit</button>`;
         el.querySelector("[data-sv-retry]").onclick = runSurvival;
+        el.querySelector("[data-sv-share]").onclick = ()=>{
+          const txt = `I survived to ⚔️ WAVE ${s.wave} in The Swamp 🐸💀\n☠ ${s.kills} rugs cleared\n\nThink you can beat me? Play free:`;
+          window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(txt)}&url=${encodeURIComponent("https://www.slimewire.org/swamp")}`,"_blank");
+          store.xp += 10; save(store); renderProgress();
+        };
         el.querySelector("[data-sv-leave]").onclick = ()=>{ stopSurvival(); document.querySelector('.tab[data-view="world"]')?.click(); };
         // submit to the public leaderboard (if a tag is set) and show rank
         const rankEl = el.querySelector("[data-sv-rank]");
