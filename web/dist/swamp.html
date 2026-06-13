@@ -94,6 +94,38 @@
       .modal .x { float:right; background:none; border:0; color:var(--dim); font-size:1.3rem; cursor:pointer; line-height:1; }
       .modal-cv { display:block; margin:2px auto 4px; width:148px; height:148px; image-rendering:pixelated;
         background:radial-gradient(circle at 50% 40%, rgba(114,255,35,0.14), transparent 70%); border-radius:16px; }
+      /* ===== Swamp Survival (Vampire-Survivors) ===== */
+      .survive { position:fixed; inset:0; z-index:124; display:none; background:#06140b; }
+      .survive.on { display:block; }
+      .survive canvas[data-sv-cv] { position:absolute; inset:0; width:100%; height:100%; image-rendering:pixelated; touch-action:none; display:block; }
+      .sv-vignette { position:absolute; inset:0; pointer-events:none; z-index:2; background:radial-gradient(ellipse at 50% 45%, transparent 55%, rgba(2,8,4,0.6) 100%); }
+      .sv-hud { position:absolute; top:0; left:0; right:0; z-index:3; padding:calc(8px + env(safe-area-inset-top)) 12px 6px; pointer-events:none;
+        background:linear-gradient(rgba(2,10,4,0.8), transparent); }
+      .sv-hpbar { height:12px; border-radius:99px; background:rgba(0,0,0,0.5); border:1px solid var(--line); overflow:hidden; }
+      .sv-hpfill { height:100%; width:100%; background:linear-gradient(90deg,#ff5e5e,#ffd84d); transition:width .15s; }
+      .sv-row { display:flex; justify-content:space-between; gap:8px; margin:4px 2px; font-size:0.74rem; font-weight:900; color:#eaffe0; text-shadow:0 1px 3px #000; }
+      .sv-row [data-sv-timer]{ color:var(--green); } .sv-row [data-sv-wave]{ color:var(--warn); }
+      .sv-xpbar { height:6px; border-radius:99px; background:rgba(114,255,35,0.12); overflow:hidden; border:1px solid var(--line); }
+      .sv-xpfill { height:100%; width:0%; background:linear-gradient(90deg,#46e8ff,#72ff23); transition:width .2s; }
+      .sv-exit { position:absolute; top:calc(8px + env(safe-area-inset-top)); right:10px; z-index:5; background:rgba(8,20,10,0.85); border:1px solid var(--line); color:#eaffe0; border-radius:99px; padding:6px 11px; font-weight:800; cursor:pointer; }
+      .sv-joy { position:absolute; z-index:4; width:120px; height:120px; border-radius:50%; pointer-events:none; opacity:0; transition:opacity .12s;
+        background:radial-gradient(circle, rgba(114,255,35,0.08), transparent 70%); border:2px solid rgba(114,255,35,0.25); }
+      .sv-joy.on { opacity:1; } .sv-joy .nub { position:absolute; left:50%; top:50%; width:46px; height:46px; border-radius:50%; transform:translate(-50%,-50%);
+        background:radial-gradient(circle at 35% 30%, #b9ff7a, #57d61a 60%, #2f8a10); box-shadow:0 0 14px rgba(114,255,35,0.55); }
+      .sv-levelup, .sv-death, .sv-start { position:absolute; inset:0; z-index:6; display:none; align-items:center; justify-content:center; flex-direction:column;
+        background:rgba(2,8,4,0.9); text-align:center; padding:22px; }
+      .sv-levelup.on, .sv-death.on, .sv-start.on { display:flex; }
+      .sv-levelup h3 { color:var(--green); font-size:clamp(1.3rem,6vw,1.8rem); margin:0 0 14px; text-shadow:0 0 20px rgba(114,255,35,0.6); }
+      .sv-cards { display:flex; flex-direction:column; gap:10px; width:100%; max-width:380px; }
+      .sv-card { background:linear-gradient(180deg,#0a2110,#05130a); border:1px solid var(--green); border-radius:14px; padding:13px 16px; cursor:pointer; text-align:left; }
+      .sv-card:active { transform:scale(0.98); } .sv-card b { color:var(--green2); display:block; font-size:1rem; }
+      .sv-card span { color:var(--dim); font-size:0.8rem; }
+      .sv-death h2 { color:var(--bad); font-size:clamp(1.6rem,8vw,2.4rem); margin:0; }
+      .sv-death .sv-stats { color:#eaffe0; margin:12px 0; font-size:0.95rem; line-height:1.7; }
+      .sv-start h2 { color:var(--green); font-size:clamp(1.8rem,9vw,2.6rem); margin:0 0 6px; text-shadow:0 0 26px rgba(114,255,35,0.6); }
+      .sv-start p { color:var(--dim); max-width:420px; font-size:0.88rem; margin:6px 0 18px; }
+      .sv-bigbtn { background:linear-gradient(135deg,var(--green),var(--green2)); color:#071006; border:0; border-radius:99px; padding:15px 36px; font-weight:900; font-size:1.1rem; cursor:pointer; box-shadow:0 0 28px rgba(114,255,35,0.5); }
+      .sv-ghost { background:rgba(8,20,10,0.8); border:1px solid var(--line); color:#eaffe0; border-radius:99px; padding:11px 22px; font-weight:800; cursor:pointer; margin-top:10px; }
       /* ===== Arena battle mode ===== */
       .arena-pick { display:grid; grid-template-columns:repeat(auto-fill,minmax(110px,1fr)); gap:10px; margin-top:8px; }
       .arena-intro { text-align:center; color:var(--dim); font-size:0.85rem; margin:6px 0 2px; }
@@ -331,6 +363,7 @@
         <button class="tab" data-view="wild">📡 Feed</button>
         <button class="tab" data-view="dex">🎒 Swampdex</button>
         <button class="tab" data-view="arena">⚔️ Arena</button>
+        <button class="tab" data-view="survive">💀 Survive</button>
       </div>
 
       <div class="world-wrap" data-world-wrap>
@@ -367,6 +400,22 @@
         The Swamp is a playful skin over real SlimeWire market data. Creatures = real tokens; their power tracks the live chart.
         Catching is free and on-chain-free. Trading is real and risky — <a href="/proof">see the proof wall</a>. Not financial advice.
       </footer>
+    </div>
+
+    <!-- SWAMP SURVIVAL overlay (Vampire-Survivors style) -->
+    <div class="survive" data-survive>
+      <canvas data-sv-cv></canvas>
+      <div class="sv-vignette"></div>
+      <div class="sv-hud">
+        <div class="sv-hpbar"><div class="sv-hpfill" data-sv-hp></div></div>
+        <div class="sv-row"><span data-sv-timer>0:00</span><span data-sv-lvl>Lvl 1</span><span data-sv-kills>☠ 0</span><span data-sv-wave></span></div>
+        <div class="sv-xpbar"><div class="sv-xpfill" data-sv-xp></div></div>
+      </div>
+      <button class="sv-exit" data-sv-exit>✕</button>
+      <div class="sv-joy" data-sv-joy><div class="nub" data-sv-nub></div></div>
+      <div class="sv-levelup" data-sv-levelup></div>
+      <div class="sv-death" data-sv-death></div>
+      <div class="sv-start" data-sv-start></div>
     </div>
 
     <!-- ARENA BATTLE overlay -->
@@ -1868,6 +1917,203 @@
       }
       function wait(ms){ return new Promise(r=>setTimeout(r,ms)); }
 
+      // ================= SWAMP SURVIVAL (Vampire-Survivors core) =================
+      // Survive the rug horde. Auto-blast swarming creatures, vacuum XP, level up
+      // with degen power-ups, fight launched-coin OGRE bosses. Your firepower
+      // scales with your real Swamp Worth; your HP with how many coins you've caught.
+      const SV = { on:false, raf:0, last:0 };
+      const svCv = $("[data-sv-cv]"); const svx = svCv ? svCv.getContext("2d") : null;
+      const ENEMY_SPRITES = ["toxic-rug-slime","sell-pressure-slime","fresh-slime","runner-slime","liquidity-slime","candle-slime"];
+      function svResize(){ if(!svCv) return; const dpr=Math.min(2,window.devicePixelRatio||1); svCv.width=Math.floor(svCv.clientWidth*dpr); svCv.height=Math.floor(svCv.clientHeight*dpr); svx.imageSmoothingEnabled=false; SV.dpr=dpr; }
+      window.addEventListener("resize", ()=>{ if(SV.on) svResize(); });
+
+      function svStartScreen() {
+        const worth = worthStats(); const mult = worth? worth.avg : 1;
+        const caught = Object.keys(store.dex).length;
+        const dmgBonus = Math.round((Math.max(1,mult)-1)*100);
+        const el=$("[data-sv-start]"); el.classList.add("on");
+        el.innerHTML = `<h2>💀 SWAMP SURVIVAL</h2>
+          <p>Survive the rug horde. Move to dodge, you auto-blast the swarm. Grab XP, level up, get broken. Last as long as you can.</p>
+          <p style="color:#bbff63">Your bags buff your run: <b>+${dmgBonus}% damage</b> from your ${worth?worth.avg.toFixed(2)+'x':'1.00x'} Swamp Worth · <b>+${caught*5} HP</b> from ${caught} caught.</p>
+          <button class="sv-bigbtn" data-sv-go>▶ ENTER THE HORDE</button>
+          ${store.survBest?`<div style="color:var(--dim);margin-top:12px;font-size:0.8rem">best: survived ${fmtTime(store.survBest.time)} · ☠ ${store.survBest.kills}</div>`:''}`;
+        el.querySelector("[data-sv-go]").onclick = runSurvival;
+      }
+      function fmtTime(s){ s=Math.floor(s); return Math.floor(s/60)+":"+String(s%60).padStart(2,"0"); }
+
+      let svState=null;
+      function runSurvival() {
+        $("[data-sv-start]").classList.remove("on");
+        $("[data-sv-death]").classList.remove("on");
+        $("[data-sv-levelup]").classList.remove("on");
+        svResize();
+        const worth = worthStats(); const mult = worth? Math.max(1,worth.avg):1;
+        const caught = Object.keys(store.dex).length;
+        const s = svState = {
+          t:0, kills:0, paused:false, dead:false,
+          player:{ x:0,y:0, hp:100+caught*5, maxhp:100+caught*5, r:16, speed:2.4, iframe:0 },
+          enemies:[], shots:[], gems:[], parts:[],
+          xp:0, level:1, xpNext:5,
+          weapon:{ dmg: 10*mult, cd:520, count:1, speed:6, pierce:0, last:0, range:9999 },
+          pickup:46, orbit:0, regen:0, lastBoss:0, spawnCd:900, lastSpawn:0,
+          mv:{x:0,y:0}
+        };
+        SV.on=true; SV.last=performance.now();
+        $("[data-sv-levelup]").classList.remove("on");
+        cancelAnimationFrame(SV.raf); SV.raf=requestAnimationFrame(svLoop);
+      }
+
+      // joystick (own handlers)
+      (function svJoy(){
+        if(!svCv) return;
+        const joy=$("[data-sv-joy]"), nub=$("[data-sv-nub]"); let id=null,cx=0,cy=0;
+        const set=(dx,dy)=>{ const m=Math.hypot(dx,dy),R=46,cl=Math.min(m,R),nx=m?dx/m:0,ny=m?dy/m:0; nub.style.transform=`translate(calc(-50% + ${nx*cl}px),calc(-50% + ${ny*cl}px))`; if(svState){ svState.mv.x=m>10?nx:0; svState.mv.y=m>10?ny:0; } };
+        svCv.addEventListener("pointerdown",(e)=>{ if(id!==null||!SV.on) return; id=e.pointerId; cx=e.clientX; cy=e.clientY; joy.style.left=(cx-60)+"px"; joy.style.top=(cy-60)+"px"; joy.classList.add("on"); set(0,0); svCv.setPointerCapture?.(e.pointerId); e.preventDefault(); });
+        svCv.addEventListener("pointermove",(e)=>{ if(e.pointerId!==id) return; set(e.clientX-cx,e.clientY-cy); e.preventDefault(); });
+        const end=(e)=>{ if(e.pointerId!==id) return; id=null; joy.classList.remove("on"); if(svState){svState.mv.x=0;svState.mv.y=0;} };
+        svCv.addEventListener("pointerup",end); svCv.addEventListener("pointercancel",end);
+        // keyboard
+        window.addEventListener("keydown",(e)=>{ if(!SV.on||!svState) return; const k=e.key.toLowerCase(); if(k==="w"||k==="arrowup")svState.mv.y=-1; if(k==="s"||k==="arrowdown")svState.mv.y=1; if(k==="a"||k==="arrowleft")svState.mv.x=-1; if(k==="d"||k==="arrowright")svState.mv.x=1; });
+        window.addEventListener("keyup",(e)=>{ if(!svState) return; const k=e.key.toLowerCase(); if(["w","s","arrowup","arrowdown"].includes(k))svState.mv.y=0; if(["a","d","arrowleft","arrowright"].includes(k))svState.mv.x=0; });
+      })();
+
+      function svSpawn(s, W, H) {
+        const ang=Math.random()*Math.PI*2, dist=Math.max(W,H)/SV.dpr*0.6+60;
+        const tier=1+s.t/45;
+        const isRunner=Math.random()<0.25;
+        s.enemies.push({ x:s.player.x+Math.cos(ang)*dist, y:s.player.y+Math.sin(ang)*dist,
+          r:14, hp:Math.round(14*tier), maxhp:Math.round(14*tier), spd:isRunner?1.7:0.9+Math.random()*0.4,
+          dmg:Math.round(6+tier*1.5), sprite:ENEMY_SPRITES[Math.floor(Math.random()*ENEMY_SPRITES.length)], boss:false, hit:0 });
+      }
+      function svSpawnBoss(s) {
+        sfx("level"); toast("🧌 OGRE BOSS incoming!");
+        const ang=Math.random()*Math.PI*2, dist=420;
+        s.enemies.push({ x:s.player.x+Math.cos(ang)*dist, y:s.player.y+Math.sin(ang)*dist,
+          r:38, hp:Math.round(400+s.t*6), maxhp:Math.round(400+s.t*6), spd:0.7, dmg:24,
+          sprite:"ogre-boss", boss:true, hit:0 });
+      }
+      const SV_UPGRADES = [
+        { b:"🔫 Double Tap", s:"+1 slimeball per shot", fn:(s)=>s.weapon.count++ },
+        { b:"⚡ Fast Hands", s:"fire 25% faster", fn:(s)=>s.weapon.cd*=0.75 },
+        { b:"💥 Big Slimes", s:"+50% damage", fn:(s)=>s.weapon.dmg*=1.5 },
+        { b:"🥾 Zoomies", s:"+20% move speed", fn:(s)=>s.player.speed*=1.2 },
+        { b:"🧲 Bag Magnet", s:"+60% pickup range", fn:(s)=>s.pickup*=1.6 },
+        { b:"❤️ Diamond Hands", s:"+40 max HP & heal", fn:(s)=>{ s.player.maxhp+=40; s.player.hp=Math.min(s.player.maxhp,s.player.hp+40); } },
+        { b:"🎯 Piercing", s:"shots pierce +1 enemy", fn:(s)=>s.weapon.pierce++ },
+        { b:"🛡 Slime Orbit", s:"+1 orbiting guard slime", fn:(s)=>s.orbit++ },
+        { b:"♻️ Regen", s:"slowly regen HP", fn:(s)=>s.regen+=0.4 }
+      ];
+      function svLevelUp(s) {
+        s.paused=true; sfx("quest");
+        const picks=[...SV_UPGRADES].sort(()=>Math.random()-0.5).slice(0,3);
+        const el=$("[data-sv-levelup]"); el.classList.add("on");
+        el.innerHTML = `<h3>⬆️ LEVEL ${s.level} — pick your edge</h3><div class="sv-cards">`+
+          picks.map((u,i)=>`<button class="sv-card" data-up="${i}"><b>${u.b}</b><span>${u.s}</span></button>`).join("")+`</div>`;
+        el.querySelectorAll("[data-up]").forEach((btn,i)=>btn.onclick=()=>{ picks[i].fn(s); sfx("catch"); el.classList.remove("on"); s.paused=false; SV.last=performance.now(); });
+      }
+      function svDie(s) {
+        s.dead=true; SV.on=false; cancelAnimationFrame(SV.raf); sfx("miss");
+        const reward = Math.round(s.t*3 + s.kills*4 + s.level*15);
+        store.xp += reward;
+        if (!store.survBest || s.t>store.survBest.time) store.survBest={ time:s.t, kills:s.kills };
+        store.stats=store.stats||{}; store.stats.survRuns=(store.stats.survRuns||0)+1;
+        save(store); checkUnlocks(); renderProgress();
+        const el=$("[data-sv-death]"); el.classList.add("on");
+        el.innerHTML = `<h2>💀 WRECKED</h2>
+          <div class="sv-stats">Survived <b>${fmtTime(s.t)}</b><br>☠ ${s.kills} rugs cleared · Lvl ${s.level}<br>+${reward} Swamp XP</div>
+          <button class="sv-bigbtn" data-sv-retry>↻ RUN IT BACK</button>
+          <button class="sv-ghost" data-sv-leave>Leave the pit</button>`;
+        el.querySelector("[data-sv-retry]").onclick = runSurvival;
+        el.querySelector("[data-sv-leave]").onclick = ()=>{ stopSurvival(); document.querySelector('.tab[data-view="survive"]')?.click(); };
+      }
+      function stopSurvival(){ SV.on=false; cancelAnimationFrame(SV.raf); $("[data-survive]").classList.remove("on"); document.body.classList.remove("world-on"); }
+
+      function svLoop(t) {
+        if (!SV.on) return;
+        const s=svState; const dt=Math.min(40,t-SV.last||16); SV.last=t;
+        if (s.paused){ SV.raf=requestAnimationFrame(svLoop); return; }
+        s.t += dt/1000;
+        const W=svCv.width, H=svCv.height, Z=SV.dpr, cw=W/2, ch=H/2;
+        // move player
+        const p=s.player; const ml=Math.hypot(s.mv.x,s.mv.y)||1;
+        p.x += (s.mv.x/ml)*(Math.hypot(s.mv.x,s.mv.y)>0?p.speed:0)*dt*0.06*Z;
+        p.y += (s.mv.y/ml)*(Math.hypot(s.mv.x,s.mv.y)>0?p.speed:0)*dt*0.06*Z;
+        if (p.iframe>0) p.iframe-=dt;
+        if (s.regen) p.hp=Math.min(p.maxhp,p.hp+s.regen*dt/1000);
+        // spawns
+        s.lastSpawn+=dt; const rate=Math.max(180, s.spawnCd - s.t*8);
+        if (s.lastSpawn>rate){ s.lastSpawn=0; const n=1+Math.floor(s.t/30); for(let i=0;i<n;i++) svSpawn(s,W,H); }
+        if (s.t-s.lastBoss>=75 && s.t>60){ s.lastBoss=s.t; svSpawnBoss(s); }
+        // auto-fire at nearest enemy
+        s.weapon.last+=dt;
+        if (s.weapon.last>=s.weapon.cd && s.enemies.length){
+          s.weapon.last=0;
+          let near=null,nd=1e9; for(const e of s.enemies){ const d=(e.x-p.x)**2+(e.y-p.y)**2; if(d<nd){nd=d;near=e;} }
+          if(near){ const base=Math.atan2(near.y-p.y,near.x-p.x); sfx("throw");
+            for(let i=0;i<s.weapon.count;i++){ const sp=base+(i-(s.weapon.count-1)/2)*0.18;
+              s.shots.push({ x:p.x,y:p.y, vx:Math.cos(sp)*s.weapon.speed*Z, vy:Math.sin(sp)*s.weapon.speed*Z, r:7*Z, life:900, pierce:s.weapon.pierce, dmg:s.weapon.dmg }); } }
+        }
+        // orbit guards
+        for(let i=0;i<s.orbit;i++){ const a=t/350 + i*(Math.PI*2/s.orbit); const ox=p.x+Math.cos(a)*60*Z, oy=p.y+Math.sin(a)*60*Z;
+          for(const e of s.enemies){ if(!e.boss && (e.x-ox)**2+(e.y-oy)**2 < (e.r*Z+10*Z)**2){ e.hp-=s.weapon.dmg*0.06*dt*0.06; e.hit=6; } } s._orb=s._orb||[]; }
+        // update shots
+        for(const sh of s.shots){ sh.x+=sh.vx*dt*0.06; sh.y+=sh.vy*dt*0.06; sh.life-=dt;
+          for(const e of s.enemies){ if(e.dead) continue; if((e.x-sh.x)**2+(e.y-sh.y)**2 < (e.r*Z+sh.r)**2){ e.hp-=sh.dmg; e.hit=6;
+            if(sh.pierce>0){sh.pierce--;} else {sh.life=0;} if(e.hp<=0){ e.dead=true; } break; } } }
+        s.shots=s.shots.filter(sh=>sh.life>0);
+        // update enemies
+        for(const e of s.enemies){ if(e.dead) continue; const a=Math.atan2(p.y-e.y,p.x-e.x); e.x+=Math.cos(a)*e.spd*dt*0.06*Z; e.y+=Math.sin(a)*e.spd*dt*0.06*Z; if(e.hit>0)e.hit-=dt*0.06;
+          if((e.x-p.x)**2+(e.y-p.y)**2 < (e.r*Z+p.r*Z)**2 && p.iframe<=0){ p.hp-=e.dmg; p.iframe=600; sfx("miss"); shakeT=180;
+            const[bx,by]=[cw,ch]; particleBurst(svCv.getBoundingClientRect().left+bx/Z, svCv.getBoundingClientRect().top+by/Z, ["#ff6b5e","#ffd84d"],8); } }
+        // deaths → gems
+        for(const e of s.enemies){ if(e.dead && !e._counted){ e._counted=true; s.kills++; sfx("tick");
+          s.gems.push({x:e.x,y:e.y,v:e.boss?20:(e.maxhp>20?3:1)}); if(e.boss){ for(let g=0;g<8;g++) s.gems.push({x:e.x+(Math.random()*40-20)*Z,y:e.y+(Math.random()*40-20)*Z,v:4}); } } }
+        s.enemies=s.enemies.filter(e=>!e.dead);
+        // gems vacuum
+        for(const g of s.gems){ const d=Math.hypot(g.x-p.x,g.y-p.y); if(d<s.pickup*Z){ const a=Math.atan2(p.y-g.y,p.x-g.x); g.x+=Math.cos(a)*8*Z; g.y+=Math.sin(a)*8*Z; } if(d<14*Z){ g.got=true; s.xp+=g.v; } }
+        s.gems=s.gems.filter(g=>!g.got);
+        while(s.xp>=s.xpNext){ s.xp-=s.xpNext; s.level++; s.xpNext=Math.round(s.xpNext*1.35+3); svLevelUp(s); }
+        if (p.hp<=0){ svDie(s); return; }
+
+        // ---- render ----
+        if (shakeT>0) shakeT-=dt; const shx=shakeT>0?(Math.random()*8-4)*Z:0, shy=shakeT>0?(Math.random()*8-4)*Z:0;
+        svx.clearRect(0,0,W,H);
+        const g=svx.createRadialGradient(cw,ch,40,cw,ch,Math.max(W,H)*0.7); g.addColorStop(0,"#0e3a1c"); g.addColorStop(1,"#05140b"); svx.fillStyle=g; svx.fillRect(0,0,W,H);
+        // grid floor for motion sense
+        svx.strokeStyle="rgba(114,255,35,0.06)"; svx.lineWidth=1; const gs=64*Z;
+        for(let gx=-(p.x*Z)%gs; gx<W; gx+=gs){ svx.beginPath(); svx.moveTo(gx+shx,0); svx.lineTo(gx+shx,H); svx.stroke(); }
+        for(let gy=-(p.y*Z)%gs; gy<H; gy+=gs){ svx.beginPath(); svx.moveTo(0,gy+shy); svx.lineTo(W,gy+shy); svx.stroke(); }
+        const SX=(wx)=>cw+(wx-p.x)*Z+shx, SY=(wy)=>ch+(wy-p.y)*Z+shy;
+        // gems
+        for(const gm of s.gems){ svx.fillStyle="#46e8ff"; svx.beginPath(); svx.arc(SX(gm.x),SY(gm.y),4*Z,0,7); svx.fill(); }
+        // enemies
+        for(const e of s.enemies){ const img=loadSprite(e.sprite); const sz=(e.boss?80:34)*Z; const ex=SX(e.x)-sz/2, ey=SY(e.y)-sz/2;
+          if(e.boss){ svx.fillStyle="rgba(114,255,35,0.2)"; svx.beginPath(); svx.arc(SX(e.x),SY(e.y),sz*0.55,0,7); svx.fill(); }
+          svx.save(); if(e.hit>0){ svx.globalCompositeOperation="lighter"; }
+          if(img.complete&&img.naturalWidth) svx.drawImage(img,ex,ey,sz,sz); else { svx.fillStyle="#66aa55"; svx.fillRect(ex,ey,sz,sz); }
+          svx.restore();
+          if(e.boss){ svx.fillStyle="rgba(0,0,0,0.5)"; svx.fillRect(ex,ey-8*Z,sz,4*Z); svx.fillStyle="#ff6b5e"; svx.fillRect(ex,ey-8*Z,sz*(e.hp/e.maxhp),4*Z); }
+        }
+        // shots
+        for(const sh of s.shots){ svx.fillStyle="#bbff63"; svx.beginPath(); svx.arc(SX(sh.x),SY(sh.y),sh.r,0,7); svx.fill(); svx.fillStyle="rgba(114,255,35,0.4)"; svx.beginPath(); svx.arc(SX(sh.x-sh.vx),SY(sh.y-sh.vy),sh.r*0.7,0,7); svx.fill(); }
+        // orbit guards
+        for(let i=0;i<s.orbit;i++){ const a=t/350+i*(Math.PI*2/Math.max(1,s.orbit)); svx.fillStyle="#72ff23"; svx.beginPath(); svx.arc(SX(p.x+Math.cos(a)*60),SY(p.y+Math.sin(a)*60),7*Z,0,7); svx.fill(); }
+        // player
+        const pImg=loadSprite("swamp-trader-ogre"); const psz=42*Z; const blink=p.iframe>0&&Math.floor(t/80)%2;
+        svx.fillStyle="rgba(0,0,0,0.34)"; svx.beginPath(); svx.ellipse(cw+shx,ch+psz*0.4+shy,psz*0.3,psz*0.1,0,0,7); svx.fill();
+        if(!blink){ if(pImg.complete&&pImg.naturalWidth) svx.drawImage(pImg,cw-psz/2+shx,ch-psz/2+shy,psz,psz); else { svx.fillStyle="#72ff23"; svx.fillRect(cw-12*Z+shx,ch-12*Z+shy,24*Z,24*Z); } }
+        // HUD update
+        $("[data-sv-hp]").style.width=Math.max(0,p.hp/p.maxhp*100)+"%";
+        $("[data-sv-timer]").textContent=fmtTime(s.t);
+        $("[data-sv-lvl]").textContent="Lvl "+s.level;
+        $("[data-sv-kills]").textContent="☠ "+s.kills;
+        $("[data-sv-xp]").style.width=(s.xp/s.xpNext*100)+"%";
+        SV.raf=requestAnimationFrame(svLoop);
+      }
+      let shakeT=0;
+      function startSurvivalView(){ $("[data-survive]").classList.add("on"); document.body.classList.add("world-on"); stopWorld(); svResize(); if(!SV.on){ $("[data-sv-death]").classList.remove("on"); $("[data-sv-levelup]").classList.remove("on"); svStartScreen(); } }
+      $("[data-sv-exit]")?.addEventListener("click", ()=>{ stopSurvival(); document.querySelector('.tab[data-view="world"]')?.click(); });
+
       // ---------- ambient swamp music (synthesized, no audio files needed) ----------
       let music = { ctx:null, on:(store.muted!==true), nodes:[], frogTimer:null };
       function startMusic() {
@@ -1934,8 +2180,11 @@
       document.querySelectorAll(".tab").forEach((t)=>t.addEventListener("click", ()=>{
         document.querySelectorAll(".tab").forEach((x)=>x.classList.remove("on")); t.classList.add("on");
         view = t.getAttribute("data-view");
-        if (view==="world") startWorld(); else stopWorld();
-        if (view==="arena") { renderProgress(); openArena(); } else render();
+        if (view!=="survive") stopSurvival();
+        if (view==="world") startWorld(); else if (view!=="survive") stopWorld();
+        if (view==="survive") startSurvivalView();
+        else if (view==="arena") { renderProgress(); openArena(); }
+        else render();
       }));
 
       spawnAmbience();
