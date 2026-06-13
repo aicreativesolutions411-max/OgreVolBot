@@ -1352,7 +1352,12 @@ function startHealthServer() {
     // The Swamp: gamified launch feed. Live launches render as creatures you
     // catch; tapping one funnels to the shield read + one-tap buy. Top-of-funnel
     // that turns trading into a collect-and-battle world.
-    if (request.method === "GET" && ["/swamp", "/swamp.html", "/game", "/play"].includes(requestUrl.pathname)) {
+    // /swamp = the new 3D action game; /swamp-classic = the 2D collect/survival game (fallback).
+    if (request.method === "GET" && ["/swamp", "/swamp.html", "/game", "/play", "/swamp3d", "/3d"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "swamp3d.html");
+      return;
+    }
+    if (request.method === "GET" && ["/swamp-classic", "/swamp2d", "/classic"].includes(requestUrl.pathname)) {
       await serveStaticHtmlPage(response, "swamp.html");
       return;
     }
