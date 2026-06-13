@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SlimeWire Sprite Forge — free HD sprite generator (Puter.js)</title>
+<script src="https://js.puter.com/v2/"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+  :root{ --g:#72ff23; --g2:#bbff63; --bad:#ff6b5e; }
+  *{box-sizing:border-box}
+  body{ margin:0; font-family:Inter,system-ui,sans-serif; color:#eaffe0;
+    background:linear-gradient(180deg,#0d0a22,#121030 40%,#0a1620 75%,#04060f); min-height:100vh; padding:18px; }
+  h1{ font-family:Georgia,serif; color:#eaf7df; text-shadow:0 0 24px rgba(114,255,35,.4); margin:0 0 4px; }
+  p.sub{ color:#9fb0c8; margin:0 0 14px; max-width:760px; line-height:1.5; }
+  .bar{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin:14px 0; position:sticky; top:0; z-index:5;
+    background:rgba(8,10,24,.85); backdrop-filter:blur(8px); padding:10px; border-radius:14px; border:1px solid rgba(114,255,35,.18); }
+  button{ background:linear-gradient(135deg,var(--g),var(--g2)); color:#071006; border:0; border-radius:99px; padding:11px 20px; font-weight:900; cursor:pointer; }
+  button.ghost{ background:rgba(10,20,12,.8); color:#eaffe0; border:1px solid rgba(114,255,35,.25); }
+  button:disabled{ opacity:.45; cursor:wait; }
+  select{ background:#0a1422; color:#eaffe0; border:1px solid rgba(114,255,35,.25); border-radius:10px; padding:9px 12px; font-weight:700; }
+  .status{ color:#9fb0c8; font-size:.85rem; }
+  .grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:14px; }
+  .card{ background:rgba(10,14,26,.7); border:1px solid rgba(114,255,35,.18); border-radius:16px; padding:12px; }
+  .card h3{ margin:0 0 2px; font-size:.95rem; color:var(--g2); }
+  .card .id{ color:#7f93ad; font-size:.7rem; font-family:monospace; margin-bottom:8px; }
+  .frame{ width:100%; aspect-ratio:1/1; border-radius:12px; display:flex; align-items:center; justify-content:center;
+    background:
+      conic-gradient(#1a2030 0 25%, #141a28 0 50%, #1a2030 0 75%, #141a28 0) 0 0/24px 24px;
+    overflow:hidden; position:relative; }
+  .frame img{ width:100%; height:100%; object-fit:contain; }
+  .frame .ph{ color:#5f7290; font-size:.78rem; text-align:center; padding:10px; }
+  .row{ display:flex; gap:8px; margin-top:8px; }
+  .row button{ flex:1; padding:9px; font-size:.82rem; }
+  .err{ color:var(--bad); font-size:.74rem; margin-top:6px; min-height:1em; }
+  .pill{ display:inline-block; background:rgba(114,255,35,.12); border:1px solid rgba(114,255,35,.3); color:var(--g2); border-radius:99px; padding:3px 10px; font-size:.72rem; font-weight:800; }
+</style>
+</head>
+<body>
+  <h1>🐸 SlimeWire Sprite Forge</h1>
+  <p class="sub">Free HD sprite generator powered by <b>Puter.js</b> (no API key, no credits). It renders each creature on a magenta key-screen, auto-cuts it to a <b>transparent PNG</b>, and downloads it with the exact filename the game expects. Generate all → Download all → drop the PNGs into <code>web/public/assets/slimewire/swamp/sprites/</code>.</p>
+
+  <div class="bar">
+    <button id="all">⚡ Generate All</button>
+    <button class="ghost" id="zip">⬇️ Download All (.zip)</button>
+    <label class="status">Model:
+      <select id="model">
+        <option value="">auto (default)</option>
+        <option value="dall-e-3">dall-e-3</option>
+        <option value="gpt-image-1">gpt-image-1</option>
+      </select>
+    </label>
+    <label class="status"><input type="checkbox" id="key" checked> chroma-cut magenta → transparent</label>
+    <span class="status" id="status">ready</span>
+  </div>
+
+  <div class="grid" id="grid"></div>
+
+<script>
+const STYLE = "Painterly realistic dark-fantasy game character, Warcraft-movie quality, soft volumetric shading, cool moonlit rim light from top-left and warm fire glow from below, dramatic and rich. Full body, centered, whole character in frame with margin, base near the bottom. Rendered on a SOLID FLAT PURE MAGENTA #FF00FF background with NO other scenery, NO ground, NO text, NO shadow on the background.";
+
+const SPRITES = [
+  ["fresh-slime","Fresh Slime","a small eager round swamp-green slime blob with big hopeful shining eyes, glossy and bouncy"],
+  ["runner-slime","Runner Slime","a lean teal slime creature mid-sprint, body stretched with motion, determined eyes, little dust kick"],
+  ["shiny-slime","Shiny Slime","a radiant golden slime, sparkling highlights, gem-like sheen, glowing aura"],
+  ["toxic-rug-slime","Toxic Rug Slime","a ghostly translucent purple cursed slime with glowing X-shaped eyes and wispy smoke trails, eerie"],
+  ["sell-pressure-slime","Sell-Pressure Slime","a sweating panicked drooping grey-green slime, nervous eyes, melting downward"],
+  ["liquidity-slime","Liquidity Slime","a deep translucent blue-teal watery slime with gold coins suspended floating inside its jelly body"],
+  ["small-ogre","Small Ogre","a squat young chunky ogre with small tusks and mossy green skin, grumpy cute"],
+  ["ogre-boss","Ogre Boss","a hulking massive muscular mossy-green ogre boss with glowing toxic-green eyes, big tusks, gold coins and trinkets braided in matted hair, battle scars, menacing and POWERFUL"],
+  ["candle-slime","Candle Slime","a slime shaped like a glossy green candlestick-chart candle with a small flame flickering on top"],
+  ["chart-wing-slime","Chart-Wing Slime","a slime with translucent glowing wings shaped like a rising green chart line, soaring"],
+  ["pump-rocket-slime","Pump Rocket Slime","a slime fused with a small rocket, blasting upward with a bright exhaust glow and motion streaks"],
+  ["swamp-trader-ogre","Swamp Trader Ogre (PLAYER)","the player hero: a friendly-but-tough medium green ogre wearing a worn hooded cloak and a leather coin satchel, small tusks, confident stance, one hand on the satchel"],
+];
+const PROPS = [
+  ["launch-lab","Launch Lab (hut)","a painterly swamp stilt-hut alchemy lab with a glowing green window and a thatched roof, for launching coins"],
+  ["trading-post","Trading Post (hut)","a painterly swamp stilt-hut trading post with warm glowing windows, hanging lanterns, thatched roof"],
+  ["proof-totem","Proof Totem","a tall carved swamp totem pole of stacked ogre faces glowing with green runes, mystical"],
+];
+
+const $ = (s)=>document.querySelector(s);
+const grid = $("#grid");
+const made = {}; // id -> dataURL (transparent png)
+
+function card(id, name, kind){
+  const el = document.createElement("div"); el.className="card"; el.dataset.id=id;
+  el.innerHTML = `<h3>${name}</h3><div class="id">${kind}/${id}.png</div>
+    <div class="frame"><div class="ph">not generated yet</div></div>
+    <div class="row"><button data-gen>Generate</button><button class="ghost" data-dl disabled>Download</button></div>
+    <div class="err" data-err></div>`;
+  grid.appendChild(el);
+  el.querySelector("[data-gen]").onclick = ()=>gen(id);
+  el.querySelector("[data-dl]").onclick = ()=>download(id);
+  return el;
+}
+const ALL = [...SPRITES.map(s=>[...s,"sprites"]), ...PROPS.map(p=>[...p,"props"])];
+ALL.forEach(([id,name,_desc,kind])=>card(id,name,kind));
+
+function promptFor(id){
+  const s = SPRITES.find(x=>x[0]===id) || PROPS.find(x=>x[0]===id);
+  return `${s[2]}. ${STYLE}`;
+}
+
+// magenta -> transparent, autocrop, return dataURL
+function keyImage(img){
+  const c=document.createElement("canvas"); c.width=img.naturalWidth||1024; c.height=img.naturalHeight||1024;
+  const x=c.getContext("2d"); x.drawImage(img,0,0,c.width,c.height);
+  if(!$("#key").checked) return c.toDataURL("image/png");
+  const d=x.getImageData(0,0,c.width,c.height), p=d.data;
+  let minX=c.width,minY=c.height,maxX=0,maxY=0;
+  for(let i=0;i<p.length;i+=4){
+    const r=p[i],g=p[i+1],b=p[i+2];
+    // magenta-ish: high red+blue, low green
+    if(r>120 && b>120 && g<110 && Math.abs(r-b)<90){ p[i+3]=0; }
+    else { const idx=(i/4); const px=idx%c.width, py=(idx/c.width)|0;
+      if(px<minX)minX=px; if(px>maxX)maxX=px; if(py<minY)minY=py; if(py>maxY)maxY=py; }
+  }
+  x.putImageData(d,0,0);
+  // autocrop with small pad
+  if(maxX>minX && maxY>minY){
+    const pad=Math.round(Math.max(c.width,c.height)*0.04);
+    minX=Math.max(0,minX-pad); minY=Math.max(0,minY-pad); maxX=Math.min(c.width,maxX+pad); maxY=Math.min(c.height,maxY+pad);
+    const w=maxX-minX,h=maxY-minY, side=Math.max(w,h);
+    const o=document.createElement("canvas"); o.width=512; o.height=512; const ox=o.getContext("2d");
+    ox.imageSmoothingQuality="high";
+    const dw=w/side*512, dh=h/side*512;
+    ox.drawImage(c,minX,minY,w,h,(512-dw)/2,(512-dh)/2,dw,dh);
+    return o.toDataURL("image/png");
+  }
+  return c.toDataURL("image/png");
+}
+
+async function gen(id){
+  const el=[...grid.children].find(e=>e.dataset.id===id);
+  const frame=el.querySelector(".frame"), err=el.querySelector("[data-err]"), btn=el.querySelector("[data-gen]");
+  err.textContent=""; btn.disabled=true; frame.innerHTML='<div class="ph">forging… 🔨</div>';
+  $("#status").textContent="generating "+id+"…";
+  try{
+    const model=$("#model").value;
+    const opts = model? {model} : undefined;
+    const img = await puter.ai.txt2img(promptFor(id), opts);
+    // puter returns an <img>; ensure loaded
+    await (img.decode? img.decode().catch(()=>{}) : Promise.resolve());
+    if(!img.naturalWidth) await new Promise(r=>{ img.onload=r; setTimeout(r,4000); });
+    const url=keyImage(img);
+    made[id]=url;
+    frame.innerHTML=""; const out=new Image(); out.src=url; frame.appendChild(out);
+    el.querySelector("[data-dl]").disabled=false;
+    $("#status").textContent="done "+id;
+  }catch(e){
+    err.textContent=(e&&e.message)||String(e);
+    frame.innerHTML='<div class="ph">failed — retry</div>';
+    $("#status").textContent="error on "+id;
+  }finally{ btn.disabled=false; }
+}
+
+function download(id){
+  if(!made[id]) return;
+  const a=document.createElement("a"); a.href=made[id]; a.download=id+".png"; a.click();
+}
+
+$("#all").onclick=async()=>{
+  $("#all").disabled=true;
+  for(const [id] of ALL){ if(!made[id]) await gen(id); }
+  $("#all").disabled=false; $("#status").textContent="all done ✅ — now Download All";
+};
+
+$("#zip").onclick=async()=>{
+  const ids=Object.keys(made); if(!ids.length){ $("#status").textContent="generate something first"; return; }
+  $("#status").textContent="zipping…";
+  const zip=new JSZip();
+  for(const id of ids){
+    const kind=PROPS.find(p=>p[0]===id)?"props":"sprites";
+    const b64=made[id].split(",")[1];
+    zip.folder(kind).file(id+".png", b64, {base64:true});
+  }
+  const blob=await zip.generateAsync({type:"blob"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="slimewire-swamp-sprites.zip"; a.click();
+  $("#status").textContent="zip downloaded ✅ unzip into web/public/assets/slimewire/swamp/";
+};
+</script>
+</body>
+</html>
