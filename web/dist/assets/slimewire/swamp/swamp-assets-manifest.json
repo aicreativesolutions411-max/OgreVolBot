@@ -1,5 +1,5 @@
 {
-  "version": "2026-06-12-swamp-assets-v6-bulk",
+  "version": "2026-06-12-swamp-assets-v8-expanded-individual",
   "source": "Generated SlimeWire Swamp concept sheets; chroma key removed locally.",
   "sheets": {
     "creatures": "/assets/slimewire/swamp/sheets/swamp-creatures-sheet.png",
@@ -27,7 +27,17 @@
     "rewardsIcons02": "/assets/slimewire/swamp/sheets/swamp-rewards-icons-02.png",
     "coinCreatures06": "/assets/slimewire/swamp/sheets/swamp-coin-creatures-pack-06.png",
     "creatureWalkCycle04": "/assets/slimewire/swamp/sheets/swamp-creature-walk-cycle-04.png",
-    "backgroundPanels01": "/assets/slimewire/swamp/sheets/swamp-background-panels-01.png"
+    "backgroundPanels01": "/assets/slimewire/swamp/sheets/swamp-background-panels-01.png",
+    "coinCreatures07": "/assets/slimewire/swamp/sheets/swamp-coin-creatures-pack-07.png",
+    "coinCreatures08": "/assets/slimewire/swamp/sheets/swamp-coin-creatures-pack-08.png",
+    "walkCyclePack05": "/assets/slimewire/swamp/sheets/swamp-walk-cycle-pack-05.png",
+    "buildings03": "/assets/slimewire/swamp/sheets/swamp-buildings-pack-03.png",
+    "cleanTileset04": "/assets/slimewire/swamp/sheets/swamp-clean-tileset-04.png",
+    "coinCreatures09": "/assets/slimewire/swamp/sheets/swamp-coin-creatures-pack-09.png",
+    "npcPack01": "/assets/slimewire/swamp/sheets/swamp-npc-pack-01.png",
+    "bosses03": "/assets/slimewire/swamp/sheets/swamp-bosses-pack-03.png",
+    "propsLoot03": "/assets/slimewire/swamp/sheets/swamp-props-loot-pack-03.png",
+    "vfx03": "/assets/slimewire/swamp/sheets/swamp-vfx-pack-03.png"
   },
   "creatures": [
     {
@@ -91,7 +101,9 @@
     "Creature walk-cycle pack adds toxic, shiny, skeleton, frog, bat-wing slime, and ogre minion directional animation frames.",
     "Clean tileset is the main map-building atlas for walking around bushes, paths, water, bridges, cover, and portal areas.",
     "v5 adds additional clean walking tiles, NPC/player walk-cycle frames, and creature walk-cycle frames for the Swamp game.",
-    "v6 bulk adds 12 more Swamp game sheets: 104+ idle coin creatures, 16 bosses, 16 walk-cycle actors/creatures, 64 tiles, 64 props, 64 reward icons, VFX strips, buildings, and background panels."
+    "v6 bulk adds 12 more Swamp game sheets: 104+ idle coin creatures, 16 bosses, 16 walk-cycle actors/creatures, 64 tiles, 64 props, 64 reward icons, VFX strips, buildings, and background panels.",
+    "v7 adds direct individual PNG cutouts and asset-index.json so game code can load characters, walk frames, tiles, props, VFX, rewards, bosses, buildings, and backgrounds without manual sheet slicing.",
+    "v8 adds 576 more direct game-ready PNGs from coin creature, NPC, boss, building, tile, prop/loot, VFX, and walk-cycle packs."
   ],
   "world": {
     "overworld": "/assets/slimewire/swamp/sheets/swamp-overworld-sheet.png",
@@ -389,5 +401,23 @@
       "estimatedPanels": 6,
       "usage": "Scene panels for hub, launch boss arena, swamp path, trading hut, and treasure rooms."
     }
-  ]
+  ],
+  "individualAssets": {
+    "index": "/assets/slimewire/swamp/individual/asset-index.json",
+    "summary": {
+      "characters": 248,
+      "npcs": 32,
+      "walkFrames": 256,
+      "creatureWalkFrames": 128,
+      "bosses": 32,
+      "buildings": 56,
+      "tiles": 128,
+      "props": 144,
+      "vfxFrames": 152,
+      "rewards": 64,
+      "backgrounds": 6,
+      "total": 1246
+    },
+    "note": "Primary game-ready individual PNG cutouts. Sheet files remain as source atlases/backups."
+  }
 }

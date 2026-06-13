@@ -58,7 +58,10 @@ for the start screen.
   (server endpoint in src/index.js); wallet-login save (ties to SlimeWire account);
   community raid on launched OGRE bosses; tournaments/seasons; breeding.
 
-## Style rules (keep consistent — see docs/swamp-asset-spec.md)
-Top-left light, soft shadows, swamp greens/teals, toxic-purple for rugs, gold
-accents, subtle dark outlines readable at ~40–64px. Transparent PNG (or pure
-`#FF00FF` chroma — Claude auto-keys/despeckles).
+## Style rules — UPDATED 2026-06-13: cinematic painterly, NOT pixel art
+The game pivoted to a Warcraft-movie dark-fantasy look. Reference:
+`web/public/assets/slimewire/swamp/art/title-bg.jpg`. Painterly realistic
+renders, stormy night palette (purple sky / teal swamp / warm fire light),
+cool top-left rim light, soft volumetric shading, silhouettes readable at 48px.
+Transparent PNG (or pure `#FF00FF` chroma — Claude auto-keys/despeckles).
+Current sprite/asset brief: docs/codex-asset-task.md.

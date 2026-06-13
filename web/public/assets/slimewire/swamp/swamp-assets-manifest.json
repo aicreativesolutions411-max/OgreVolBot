@@ -1,5 +1,5 @@
 {
-  "version": "2026-06-12-swamp-assets-v5",
+  "version": "2026-06-12-swamp-assets-v8-expanded-individual",
   "source": "Generated SlimeWire Swamp concept sheets; chroma key removed locally.",
   "sheets": {
     "creatures": "/assets/slimewire/swamp/sheets/swamp-creatures-sheet.png",
@@ -15,7 +15,29 @@
     "creatureWalkCycle02": "/assets/slimewire/swamp/sheets/swamp-creature-walk-cycle-02.png",
     "cleanTileset02": "/assets/slimewire/swamp/sheets/swamp-clean-tileset-02.png",
     "walkCycleNpcs02": "/assets/slimewire/swamp/sheets/swamp-walk-cycle-npcs-02.png",
-    "creatureWalkCycle03": "/assets/slimewire/swamp/sheets/swamp-creature-walk-cycle-03.png"
+    "creatureWalkCycle03": "/assets/slimewire/swamp/sheets/swamp-creature-walk-cycle-03.png",
+    "coinCreatures04": "/assets/slimewire/swamp/sheets/swamp-coin-creatures-pack-04.png",
+    "coinCreatures05": "/assets/slimewire/swamp/sheets/swamp-coin-creatures-pack-05.png",
+    "walkCyclePack04": "/assets/slimewire/swamp/sheets/swamp-walk-cycle-pack-04.png",
+    "bosses02": "/assets/slimewire/swamp/sheets/swamp-bosses-pack-02.png",
+    "buildings02": "/assets/slimewire/swamp/sheets/swamp-buildings-pack-02.png",
+    "cleanTileset03": "/assets/slimewire/swamp/sheets/swamp-clean-tileset-03.png",
+    "props02": "/assets/slimewire/swamp/sheets/swamp-props-pack-02.png",
+    "vfx02": "/assets/slimewire/swamp/sheets/swamp-vfx-pack-02.png",
+    "rewardsIcons02": "/assets/slimewire/swamp/sheets/swamp-rewards-icons-02.png",
+    "coinCreatures06": "/assets/slimewire/swamp/sheets/swamp-coin-creatures-pack-06.png",
+    "creatureWalkCycle04": "/assets/slimewire/swamp/sheets/swamp-creature-walk-cycle-04.png",
+    "backgroundPanels01": "/assets/slimewire/swamp/sheets/swamp-background-panels-01.png",
+    "coinCreatures07": "/assets/slimewire/swamp/sheets/swamp-coin-creatures-pack-07.png",
+    "coinCreatures08": "/assets/slimewire/swamp/sheets/swamp-coin-creatures-pack-08.png",
+    "walkCyclePack05": "/assets/slimewire/swamp/sheets/swamp-walk-cycle-pack-05.png",
+    "buildings03": "/assets/slimewire/swamp/sheets/swamp-buildings-pack-03.png",
+    "cleanTileset04": "/assets/slimewire/swamp/sheets/swamp-clean-tileset-04.png",
+    "coinCreatures09": "/assets/slimewire/swamp/sheets/swamp-coin-creatures-pack-09.png",
+    "npcPack01": "/assets/slimewire/swamp/sheets/swamp-npc-pack-01.png",
+    "bosses03": "/assets/slimewire/swamp/sheets/swamp-bosses-pack-03.png",
+    "propsLoot03": "/assets/slimewire/swamp/sheets/swamp-props-loot-pack-03.png",
+    "vfx03": "/assets/slimewire/swamp/sheets/swamp-vfx-pack-03.png"
   },
   "creatures": [
     {
@@ -78,7 +100,10 @@
     "Walk-cycle base sheet adds player, ogre guide, slime, skeleton slime, and ogre pup directional animation frames.",
     "Creature walk-cycle pack adds toxic, shiny, skeleton, frog, bat-wing slime, and ogre minion directional animation frames.",
     "Clean tileset is the main map-building atlas for walking around bushes, paths, water, bridges, cover, and portal areas.",
-    "v5 adds additional clean walking tiles, NPC/player walk-cycle frames, and creature walk-cycle frames for the Swamp game."
+    "v5 adds additional clean walking tiles, NPC/player walk-cycle frames, and creature walk-cycle frames for the Swamp game.",
+    "v6 bulk adds 12 more Swamp game sheets: 104+ idle coin creatures, 16 bosses, 16 walk-cycle actors/creatures, 64 tiles, 64 props, 64 reward icons, VFX strips, buildings, and background panels.",
+    "v7 adds direct individual PNG cutouts and asset-index.json so game code can load characters, walk frames, tiles, props, VFX, rewards, bosses, buildings, and backgrounds without manual sheet slicing.",
+    "v8 adds 576 more direct game-ready PNGs from coin creature, NPC, boss, building, tile, prop/loot, VFX, and walk-cycle packs."
   ],
   "world": {
     "overworld": "/assets/slimewire/swamp/sheets/swamp-overworld-sheet.png",
@@ -192,6 +217,54 @@
       "framesPerDirection": 4,
       "layout": "5 creature rows; each row has down, left, right, up groups with 4 frames each; magenta keyed transparent",
       "usage": "Roaming enemies, coin avatars, shiny events, and boss minions."
+    },
+    {
+      "id": "walk-cycle-pack-04",
+      "path": "/assets/slimewire/swamp/sheets/swamp-walk-cycle-pack-04.png",
+      "source": "/assets/slimewire/swamp/source/swamp-walk-cycle-pack-04-source.png",
+      "characters": [
+        "hooded-degen-trader",
+        "slime-armored-warrior",
+        "moss-ogre-scout",
+        "skeleton-market-maker",
+        "swamp-witch-caller",
+        "coin-goblin-runner",
+        "frog-courier",
+        "robot-wallet-helper"
+      ],
+      "directions": [
+        "down",
+        "left",
+        "right",
+        "up"
+      ],
+      "framesPerDirection": 4,
+      "layout": "8 character rows; down, left, right, up groups with 4 frames each",
+      "usage": "Playable/NPC directional movement set."
+    },
+    {
+      "id": "creature-walk-cycle-04",
+      "path": "/assets/slimewire/swamp/sheets/swamp-creature-walk-cycle-04.png",
+      "source": "/assets/slimewire/swamp/source/swamp-creature-walk-cycle-04-source.png",
+      "characters": [
+        "baby-whale-slime",
+        "toxic-slug",
+        "coin-crab",
+        "bone-frog",
+        "bramble-slime",
+        "crystal-eye-token",
+        "mini-hydra-slime",
+        "golden-runner-slime"
+      ],
+      "directions": [
+        "down",
+        "left",
+        "right",
+        "up"
+      ],
+      "framesPerDirection": 4,
+      "layout": "8 creature rows; down, left, right, up groups with 4 frames each",
+      "usage": "Roaming creature and enemy movement set."
     }
   ],
   "tilesets": [
@@ -235,7 +308,116 @@
         "portal pads, slime puddles, coin launch arena accents"
       ],
       "usage": "Clean overworld tile expansion for walkable maps, spawn zones, launch arenas, and boss-raid rooms."
+    },
+    {
+      "id": "clean-walking-tileset-03",
+      "path": "/assets/slimewire/swamp/sheets/swamp-clean-tileset-03.png",
+      "source": "/assets/slimewire/swamp/source/swamp-clean-tileset-03-source.png",
+      "tileIntent": [
+        "grass, mud, cracked mud, slime puddles",
+        "shallow/deep water, lily pads, water edges",
+        "path transitions, stone paths, dock planks",
+        "reed, bush, vine, and moss rock walls",
+        "hut, cave, portal, arena, coin pile, and rune floors"
+      ],
+      "usage": "64-tile expansion for walkable maps and encounter rooms."
     }
   ],
-  "generatedAt": "2026-06-12"
+  "generatedAt": "2026-06-12",
+  "characterPacks": [
+    {
+      "id": "coin-creatures-pack-04",
+      "path": "/assets/slimewire/swamp/sheets/swamp-coin-creatures-pack-04.png",
+      "source": "/assets/slimewire/swamp/source/swamp-coin-creatures-pack-04-source.png",
+      "estimatedSprites": 32,
+      "usage": "Fresh-launch coin creature idle sprites for random token mascots and roaming encounters."
+    },
+    {
+      "id": "coin-creatures-pack-05",
+      "path": "/assets/slimewire/swamp/sheets/swamp-coin-creatures-pack-05.png",
+      "source": "/assets/slimewire/swamp/source/swamp-coin-creatures-pack-05-source.png",
+      "estimatedSprites": 32,
+      "usage": "Additional coin creature idle sprites for enemy variety and collectible avatar rotation."
+    },
+    {
+      "id": "coin-creatures-pack-06",
+      "path": "/assets/slimewire/swamp/sheets/swamp-coin-creatures-pack-06.png",
+      "source": "/assets/slimewire/swamp/source/swamp-coin-creatures-pack-06-source.png",
+      "estimatedSprites": 40,
+      "usage": "Larger fresh-launch mascot set for hundreds of coin character variants."
+    }
+  ],
+  "bossSheets": [
+    {
+      "id": "bosses-pack-02",
+      "path": "/assets/slimewire/swamp/sheets/swamp-bosses-pack-02.png",
+      "source": "/assets/slimewire/swamp/source/swamp-bosses-pack-02-source.png",
+      "estimatedSprites": 16,
+      "usage": "Launch boss raid enemies and elite event monsters."
+    }
+  ],
+  "buildingSheets": [
+    {
+      "id": "buildings-pack-02",
+      "path": "/assets/slimewire/swamp/sheets/swamp-buildings-pack-02.png",
+      "source": "/assets/slimewire/swamp/source/swamp-buildings-pack-02-source.png",
+      "estimatedSprites": 24,
+      "usage": "Hub structures, launch huts, shops, portals, docks, and raid scenery."
+    }
+  ],
+  "propSheets": [
+    {
+      "id": "props-pack-02",
+      "path": "/assets/slimewire/swamp/sheets/swamp-props-pack-02.png",
+      "source": "/assets/slimewire/swamp/source/swamp-props-pack-02-source.png",
+      "estimatedSprites": 64,
+      "usage": "Small props, collectibles, obstacles, quest items, and decor."
+    }
+  ],
+  "vfxSheets": [
+    {
+      "id": "vfx-pack-02",
+      "path": "/assets/slimewire/swamp/sheets/swamp-vfx-pack-02.png",
+      "source": "/assets/slimewire/swamp/source/swamp-vfx-pack-02-source.png",
+      "animationStrips": 12,
+      "framesPerStrip": 6,
+      "usage": "Animated combat, trading, portal, reward, and boss-hit effects."
+    }
+  ],
+  "rewardSheets": [
+    {
+      "id": "reward-icons-02",
+      "path": "/assets/slimewire/swamp/sheets/swamp-rewards-icons-02.png",
+      "source": "/assets/slimewire/swamp/source/swamp-rewards-icons-02-source.png",
+      "estimatedSprites": 64,
+      "usage": "Quest rewards, raid loot, badges, charms, wallet/game action icons."
+    }
+  ],
+  "backgrounds": [
+    {
+      "id": "background-panels-01",
+      "path": "/assets/slimewire/swamp/sheets/swamp-background-panels-01.png",
+      "source": "/assets/slimewire/swamp/source/swamp-background-panels-01-source.png",
+      "estimatedPanels": 6,
+      "usage": "Scene panels for hub, launch boss arena, swamp path, trading hut, and treasure rooms."
+    }
+  ],
+  "individualAssets": {
+    "index": "/assets/slimewire/swamp/individual/asset-index.json",
+    "summary": {
+      "characters": 248,
+      "npcs": 32,
+      "walkFrames": 256,
+      "creatureWalkFrames": 128,
+      "bosses": 32,
+      "buildings": 56,
+      "tiles": 128,
+      "props": 144,
+      "vfxFrames": 152,
+      "rewards": 64,
+      "backgrounds": 6,
+      "total": 1246
+    },
+    "note": "Primary game-ready individual PNG cutouts. Sheet files remain as source atlases/backups."
+  }
 }
