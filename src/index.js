@@ -166,7 +166,7 @@ const tokenImageResponseCache = new Map();
 const tokenImageFailureCache = new Map();
 const TOKEN_IMAGE_RESPONSE_CACHE_TTL_MS = 30 * 60 * 1000;
 const TOKEN_IMAGE_RESPONSE_STALE_TTL_MS = 6 * 60 * 60 * 1000;
-const TOKEN_IMAGE_FAILURE_TTL_MS = 60 * 1000;
+const TOKEN_IMAGE_FAILURE_TTL_MS = 10 * 1000;
 const TOKEN_IMAGE_RESPONSE_CACHE_MAX = 500;
 const tokenAvatarCache = new Map();
 const tokenAvatarLookupInFlight = new Map();
@@ -4233,12 +4233,18 @@ async function sendWebTokenImage(request, response, requestUrl) {
 
   const recentFailure = tokenImageFailureCache.get(cacheKey);
   if (recentFailure && Date.now() - Number(recentFailure.cachedAt || 0) < TOKEN_IMAGE_FAILURE_TTL_MS) {
-    if (cachedImage) {
-      sendCachedWebTokenImage(request, response, cachedImage, "STALE");
+    // Don't stay stuck on a "warming up" 404 if the avatar has since resolved.
+    const mem = tokenAvatarMemoryRecord(mint);
+    if (mem && mem.state === "ready" && mem.avatarUrl) {
+      tokenImageFailureCache.delete(cacheKey);
+    } else {
+      if (cachedImage) {
+        sendCachedWebTokenImage(request, response, cachedImage, "STALE");
+        return;
+      }
+      sendWebTokenImageUnavailable(request, response, 404, "Token image warming up");
       return;
     }
-    sendWebTokenImageUnavailable(request, response, 404, "Token image warming up");
-    return;
   }
 
   const avatar = await tokenAvatarForMint(mint, { schedule: true }).catch(() => tokenAvatarRecord(mint, { state: "pending" }));
@@ -4256,49 +4262,16 @@ async function sendWebTokenImage(request, response, requestUrl) {
     return;
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 2_500);
-  try {
-    const imageResponse = await fetch(imageCandidate, {
-      signal: controller.signal,
-      headers: {
-        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-        "User-Agent": "solana-telegram-wallet-ops-bot"
-      }
-    });
-    if (!imageResponse.ok) {
-      throw new Error(`Token image fetch failed with ${imageResponse.status}`);
-    }
-    const contentType = imageResponse.headers.get("content-type") || "image/jpeg";
-    const buffer = Buffer.from(await imageResponse.arrayBuffer());
-    if (!buffer.length || buffer.length > 5_000_000) {
-      throw new Error("Token image response was empty or too large");
-    }
-    tokenImageResponseCache.set(cacheKey, {
-      cachedAt: Date.now(),
-      contentType,
-      buffer
-    });
-    pruneTokenImageResponseCache();
-    response.writeHead(200, {
-      "Content-Type": contentType,
-      "Content-Length": buffer.length,
-      "Cache-Control": "public, max-age=86400, stale-while-revalidate=604800",
-      "X-Slime-Avatar-Cache": "MISS",
-      ...webCorsHeaders(request)
-    });
-    response.end(buffer);
-  } catch (error) {
-    if (cachedImage) {
-      sendCachedWebTokenImage(request, response, cachedImage, "STALE");
-      return;
-    }
-    tokenImageFailureCache.set(cacheKey, { cachedAt: Date.now(), state: "failed" });
-    pruneTokenImageResponseCache();
-    sendWebTokenImageUnavailable(request, response, 502, "Token image unavailable");
-  } finally {
-    clearTimeout(timeout);
-  }
+  // Resolved avatar (e.g. pump.fun IPFS) is ready -> 302 redirect to it. Far faster
+  // than proxying bytes through our dyno (no 2.5s fetch, no timeout failures) and the
+  // browser + gateway cache it. This is what makes coin images show up instantly.
+  response.writeHead(302, {
+    "Location": imageCandidate,
+    "Cache-Control": "public, max-age=86400, stale-while-revalidate=604800",
+    "X-Slime-Avatar-Cache": "REDIRECT",
+    ...webCorsHeaders(request)
+  });
+  response.end();
 }
 
 async function serveHostedPumpMetadata(request, response, requestUrl) {
