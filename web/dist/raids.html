@@ -102,8 +102,9 @@
 <div class="wrap">
   <section class="hero">
     <h1><span class="live">●</span> Live Boss Raids</h1>
-    <p>Every coin launching on SlimeWire spawns as a <b>boss</b>. Rally your X &amp; Telegram crew to raid it, climb the raid leaderboard, and ape the ones that survive. Real launches, real raids, real-time.</p>
+    <p>Every coin spawns as a <b>boss</b> — launched on SlimeWire <b>or not</b>. Rally your X &amp; Telegram crew to raid it, climb the leaderboard, and ape the survivors. <b>Got a coin? Put it on the board in 5 seconds.</b></p>
     <div class="statbar" id="statbar"></div>
+    <div style="margin-top:14px"><a href="#ownraid" class="btnfull" style="display:inline-block;width:auto;padding:12px 22px">⚔️ Raid your own coin →</a></div>
   </section>
 
   <div class="layout">
@@ -112,7 +113,7 @@
       <div class="bosses" id="bosses"><div class="spin"></div></div>
     </main>
     <aside class="side">
-      <div class="panel">
+      <div class="panel" id="ownraid">
         <h3>⚔️ Raid your own coin</h3>
         <p style="color:var(--dim);font-size:0.84rem;line-height:1.5;margin:0 0 10px">Drop your token's contract address — it goes live as a boss for the whole swamp to raid. Rally your crew.</p>
         <input class="tagin" id="rMint" placeholder="token contract address (mint)">
@@ -176,7 +177,13 @@ async function load(){
   try{ const r=await fetch(API+"/api/web/swamp-launches",{cache:"no-store"}); const j=await r.json();
     const og=(j&&(j.launches||j.ogres))||[]; for(const o of og){ if(o&&(o.mint||o.symbol)) rows.push({tokenMint:o.mint,symbol:o.symbol||o.name,_ogre:true,marketCap:o.marketCap,bondingProgressPct:o.bondingProgressPct,pairAgeSeconds:o.ageSeconds,holders:o.holders}); } }catch(_){}
   try{ const r=await fetch(API+"/api/web/community-raids",{cache:"no-store"}); const j=await r.json();
-    for(const cr of (j&&j.raids)||[]){ if(cr&&cr.mint) rows.push({tokenMint:cr.mint,symbol:cr.symbol,_community:true,by:cr.by,bumps:cr.bumps}); } }catch(_){}
+    const crs=((j&&j.raids)||[]).filter(c=>c&&c.mint).slice(0,12);
+    // enrich each submitted coin with real market data (token-read) so it's a full boss
+    const enriched=await Promise.all(crs.map(async (cr)=>{ let td={};
+      try{ const tr=await fetch(API+"/api/web/token-read?mint="+encodeURIComponent(cr.mint),{cache:"no-store"}); const tj=await tr.json(); if(tj&&tj.ok) td=tj; }catch(_){}
+      return {tokenMint:cr.mint, symbol:(td.symbol||cr.symbol), _community:true, by:cr.by, bumps:cr.bumps,
+        marketCap:td.marketCapUsd, liquidityUsd:td.liquidityUsd, bondingProgressPct:td.bondingProgressPct}; }));
+    for(const e of enriched) rows.push(e); }catch(_){}
   try{ const r=await fetch(API+"/api/web/live-pairs?bucket=live&sort=fresh",{cache:"no-store"}); const j=await r.json();
     const lr=(j&&j.livePairs&&j.livePairs.rows)||(j&&j.rows)||[]; for(const x of lr){ if(x&&x.tokenMint) rows.push(x); } }catch(_){}
   // dedupe by mint, cap
