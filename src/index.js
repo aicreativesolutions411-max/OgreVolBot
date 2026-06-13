@@ -2433,6 +2433,29 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendWebJson(request, response, result.ok ? 200 : 400, result);
       return;
     }
+    // Presales: hype/commit listings (no custody yet).
+    if (request.method === "GET" && pathname === "/api/web/presales") {
+      const store = await readPresales().catch(() => ({ presales: [] }));
+      const now = Date.now();
+      const presales = (store.presales || [])
+        .map((p) => ({ ...p, backers: undefined, backerCount: Array.isArray(p.backers) ? p.backers.length : 0, live: Date.parse(p.deadline || "") > now }))
+        .sort((a, b) => (b.live - a.live) || (Number(b.interest) || 0) - (Number(a.interest) || 0))
+        .slice(0, 60);
+      sendCachedWebJson(request, response, 200, { ok: true, presales }, "public, max-age=10, stale-while-revalidate=60");
+      return;
+    }
+    if (request.method === "POST" && pathname === "/api/web/presales") {
+      const body = await readJsonRequestBody(request, 4_000);
+      const result = await submitPresale(body);
+      sendWebJson(request, response, result.ok ? 200 : 400, result);
+      return;
+    }
+    if (request.method === "POST" && pathname === "/api/web/presale-interest") {
+      const body = await readJsonRequestBody(request, 2_000);
+      const result = await bumpPresaleInterest(body);
+      sendWebJson(request, response, result.ok ? 200 : 400, result);
+      return;
+    }
     // Raid posts: X posts registered via TG /raid, ranked by likes+RTs.
     if (request.method === "GET" && pathname === "/api/web/raid-posts") {
       const store = await readRaidPosts().catch(() => ({ posts: [] }));
@@ -20466,6 +20489,8 @@ function defaultJsonForPath(filePath) {
       return { raids: [] };
     case "raid-posts.json":
       return { posts: [] };
+    case "presales.json":
+      return { presales: [] };
     case "audit-log.json":
       return { entries: [] };
     case "state.json":
@@ -23224,6 +23249,40 @@ async function submitCommunityRaid(body = {}) {
   store.raids = store.raids.slice(-80);
   await writeJsonFile(communityRaidsPath(), store);
   return { ok: true, mint, symbol };
+}
+
+// --- Presales: hype/commit listings (NO custody — interest only, for now) ---
+function presalesPath() { return path.join(CONFIG.dataDir, "presales.json"); }
+async function readPresales() { const s = await readJson(presalesPath()); if (!Array.isArray(s.presales)) s.presales = []; return s; }
+async function submitPresale(body = {}) {
+  const name = String(body.name || "").replace(/[^A-Za-z0-9 _$.-]/g, "").slice(0, 32).trim();
+  const symbol = String(body.symbol || "").replace(/[^A-Za-z0-9_$]/g, "").toUpperCase().slice(0, 12);
+  if (!name || !symbol) return { ok: false, error: "name + ticker required" };
+  const target = Math.max(1, Math.min(100000, Math.round(Number(body.target) || 0))) || 10;
+  const days = Math.max(1, Math.min(30, Math.round(Number(body.days) || 3)));
+  const blurb = String(body.blurb || "").replace(/[^\x20-\x7E]/g, "").slice(0, 400);
+  const by = String(body.by || "anon").replace(/[^A-Za-z0-9_$. -]/g, "").slice(0, 16) || "anon";
+  const x = String(body.x || "").slice(0, 120), tg = String(body.tg || "").slice(0, 120), web = String(body.web || "").slice(0, 120);
+  const store = await readPresales();
+  const now = Date.now();
+  const id = "ps" + now.toString(36) + Math.random().toString(36).slice(2, 6);
+  store.presales.push({ id, name, symbol, target, blurb, by, x, tg, web, interest: 1, backers: [], at: new Date(now).toISOString(), deadline: new Date(now + days * 86400000).toISOString() });
+  store.presales = store.presales.slice(-120);
+  await writeJsonFile(presalesPath(), store);
+  return { ok: true, id, name, symbol };
+}
+async function bumpPresaleInterest(body = {}) {
+  const id = String(body.id || "").replace(/[^A-Za-z0-9]/g, "").slice(0, 24);
+  const who = String(body.by || "").replace(/[^A-Za-z0-9_$. -]/g, "").slice(0, 16);
+  if (!id) return { ok: false, error: "bad id" };
+  const store = await readPresales();
+  const p = store.presales.find((x) => x.id === id);
+  if (!p) return { ok: false, error: "not found" };
+  p.backers = Array.isArray(p.backers) ? p.backers : [];
+  if (who && !p.backers.includes(who)) p.backers.push(who);
+  p.interest = Math.max(Number(p.interest) || 0, p.backers.length) + (who ? 0 : 1);
+  await writeJsonFile(presalesPath(), store);
+  return { ok: true, interest: p.interest };
 }
 
 // --- Raid posts: /raid in Telegram registers an X post, ranked by likes+RTs ---
