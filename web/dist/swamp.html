@@ -276,7 +276,7 @@ function symOf(row){ return String(row.symbol||row.tokenMint||"COIN").replace(/[
 const TILE=64; const MAP={w:46,h:38}; // tiles
 let player=null, creatures=[], npcs=[], buildings=[], parts=[], floats=[];
 let camx=0,camy=0, state="load", lastTs=0, near=null, nearBld=null;
-let feedRows=[], lbNames=[];
+let feedRows=[], lbNames=[], feedReal=false;
 
 const BUILDINGS_DEF=[
   { id:"launch", name:"🚀 Launch Lab", tx:8, ty:7, color:"#ff7a5e",
@@ -343,6 +343,7 @@ async function loadFeed(){
     const syn=["PEPE","WOJAK","OGRE","BONK","SLIME","CHAD","FROG","DEGEN","MOON","RUG","WEN","GM"];
     feedRows=syn.map((s,i)=>({tokenMint:"syn_"+s,symbol:s,marketCap:3000+i*1500,pairAgeSeconds:[30,90,300,1200][i%4],m5:[60,10,-20,30][i%4],volume5m:[70000,5000,1000,20000][i%4],_ogre:i===2}));
   }
+  feedReal = feedRows.length>0 && !String(feedRows[0].tokenMint||feedRows[0].mint||"").startsWith("syn_");
 }
 
 /* ---- balls (energy) ---- */
@@ -618,6 +619,10 @@ $("exit").onclick=()=>{ state="title"; $("hud").style.display="none"; showTitle(
   if(!A.loaded){ A.players=FALLBACK_PLAYERS; }
   if(!feedRows.length) await loadFeed().catch(()=>{});
   showTitle();
+  // cold-start warmup: Render free dyno may be asleep on first hit (synthetic shows
+  // first); retry quickly until REAL coins arrive, then settle into a slow refresh.
+  let warm=0; const warmId=setInterval(async()=>{ warm++; if(feedReal||warm>6){ clearInterval(warmId); return; }
+    await loadFeed().catch(()=>{}); if(state==="world"){ buildFromFeed(); refreshHud(); } }, 5000);
   // refresh feed periodically; fold new coins into the world
   setInterval(async()=>{ await loadFeed().catch(()=>{}); if(state==="world"){ buildFromFeed(); refreshHud(); } },45000);
 })();
