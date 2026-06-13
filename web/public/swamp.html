@@ -37,6 +37,15 @@
   .abtn{pointer-events:auto; width:64px; height:64px; border-radius:50%; border:2px solid rgba(114,255,35,0.4); background:rgba(8,22,12,0.85); color:#eaffe0; font-weight:900; font-size:0.7rem; cursor:pointer; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px; box-shadow:0 4px 14px rgba(0,0,0,0.4);}
   .abtn b{font-size:1.3rem; line-height:1;} .abtn:active{transform:scale(0.93);}
   .abtn.atk{width:78px; height:78px; border-color:rgba(255,120,80,0.6); background:radial-gradient(circle at 38% 32%,#ff8a5a,#d63a1a 70%); color:#fff; box-shadow:0 0 22px rgba(255,90,40,0.45);}
+  .abtn.wpn{border-color:rgba(114,255,35,0.5);} .abtn.wpn.locked{opacity:0.5;}
+  .combometer{position:absolute; top:84px; left:50%; transform:translateX(-50%); pointer-events:none; display:none; flex-direction:column; align-items:center; gap:4px; z-index:5;}
+  .combometer.on{display:flex;}
+  .combometer .cx{font-family:Cinzel,serif; font-weight:900; font-size:1.9rem; color:#bbff63; text-shadow:0 0 14px rgba(114,255,35,0.8),0 2px 4px #000; line-height:1;}
+  .combometer.hot .cx{color:#ffd24a; text-shadow:0 0 18px rgba(255,210,74,0.9),0 2px 4px #000; animation:comboPop .25s ease;}
+  @keyframes comboPop{0%{transform:scale(1.4);}100%{transform:scale(1);}}
+  .combometer .cbar{width:120px; height:5px; border-radius:3px; background:rgba(0,0,0,0.5); overflow:hidden;}
+  .combometer .cbarfill{height:100%; width:100%; background:linear-gradient(90deg,#72ff23,#bbff63); transition:width .08s linear;}
+  .combometer.hot .cbarfill{background:linear-gradient(90deg,#ffae3a,#ffd24a);}
   .ehp{height:12px;border-radius:99px;background:rgba(255,90,80,0.15);border:1px solid rgba(255,120,80,0.4);overflow:hidden;margin:2px 0 6px;}
   .ehpfill{height:100%;background:linear-gradient(90deg,#ff5e5e,#ffd84d);transition:width .2s;}
   .overlay{position:fixed; inset:0; z-index:10; display:none; align-items:center; justify-content:center; flex-direction:column; text-align:center;
@@ -122,6 +131,7 @@
       <div class="hpwrap"><div class="hpfill" id="hpbar"></div></div>
       <div class="quest" id="quest"></div>
     </div>
+    <div class="combometer" id="combo"><span class="cx" id="comboN">x2</span><div class="cbar"><div class="cbarfill" id="comboBar"></div></div></div>
     <div class="topbtns">
       <button class="tbtn" id="mute" title="sound">🔊</button>
       <button class="tbtn" id="exit" title="exit">✕</button>
@@ -129,6 +139,7 @@
     <div class="joy" id="joy"><div class="nub" id="nub"></div></div>
     <div class="actbtns">
       <button class="abtn" id="dexBtn"><b>📖</b>Dex</button>
+      <button class="abtn wpn" id="wpnBtn"><b>🟢</b>Wpn</button>
       <button class="abtn" id="actBtn"><b>✋</b>Catch</button>
       <button class="abtn atk" id="atkBtn"><b>⚔️</b>Attack</button>
     </div>
@@ -272,10 +283,10 @@ function drawChar(e,path,h,alpha){
   // attack: quick forward lunge + scale punch
   const atk=e.atk||0; let lungeX=0, lungeY=0, rot=0;
   if(atk>0){ const p=1-Math.min(1,atk/0.34); // 0->1 over the swing
-    // quick anticipation pull-back, then a snappy sine strike = weighty swing
-    const lunge = p<0.22 ? -(p/0.22)*0.35 : Math.sin((p-0.22)/0.78*Math.PI);
+    // gentle forward lean only (no jittery pull-back) — the WEAPON carries the swing
+    const lunge = Math.sin(Math.min(1,p)*Math.PI);
     const dx=e.dir==="left"?-1:e.dir==="right"?1:0, dy=e.dir==="up"?-1:e.dir==="down"?1:0;
-    lungeX=dx*lunge*h*0.30; lungeY=dy*lunge*h*0.18; sx*=1+Math.max(0,lunge)*0.22; rot=(e.dir==="left"?1:-1)*lunge*0.28; }
+    lungeX=dx*lunge*h*0.14; lungeY=dy*lunge*h*0.08; sx*=1+lunge*0.10; rot=(e.dir==="left"?1:-1)*lunge*0.10; }
   const dw=w*sx, dh=h/sx, footY=e.y+e.r*0.55+lungeY;
   if(alpha!=null) ctx.globalAlpha=alpha;
   ctx.save(); ctx.translate(e.x+lungeX, footY); if(rot) ctx.rotate(rot); if(e.dir==="left") ctx.scale(-1,1);
@@ -326,6 +337,9 @@ function floatTxt(x,y,txt,col){ if(floats.length>44) floats.shift(); floats.push
 let shake=0, hitstop=0, combo=0, comboT=0; let swings=[], shots=[];
 function addShake(a){ shake=Math.min(18,shake+a); }
 function bumpCombo(){ combo++; comboT=2.0; if(combo>=3) floatTxt(player.x,player.y-player.r*1.7,"COMBO x"+combo, combo>=8?"#ffd24a":"#bbff63"); }
+function updateComboMeter(){ const el=$("combo"); if(!el) return;
+  if(combo>=2){ el.classList.add("on"); el.classList.toggle("hot",combo>=8); const n=$("comboN"); if(n) n.textContent="x"+combo; const b=$("comboBar"); if(b) b.style.width=(Math.max(0,Math.min(1,comboT/2.0))*100)+"%"; }
+  else el.classList.remove("on"); }
 // a fast slash arc swept in the facing direction = the visible "swing"
 function spawnSwing(x,y,dir,col,reach){ const ang={right:0,down:1.5708,left:3.1416,up:-1.5708}[dir]||1.5708;
   swings.push({x,y,ang,col:col||"#bbff63",reach:reach||46,life:0.16,max:0.16}); }
@@ -335,9 +349,68 @@ function impactFX(x,y,fromx,fromy,col,big){ const a=Math.atan2(y-fromy,x-fromx);
     if(parts.length<260) parts.push({x,y,vx:Math.cos(sp)*s,vy:Math.sin(sp)*s,life:0.22+Math.random()*0.34,max:0.6,col,sz:2+Math.random()*3.2}); }
   swings.push({ring:true,x,y,r0:big?12:6,life:0.22,max:0.22,col:"#ffffff"});
   addShake(big?12:6); hitstop=Math.max(hitstop, big?0.09:0.05); }
-// lob a glowing slimeball toward a point — keeps the screen alive even with no target
-function throwSlime(tx,ty){ const p=player; const a=Math.atan2(ty-(p.y-p.r*0.4),tx-p.x), sp=600;
-  shots.push({x:p.x,y:p.y-p.r*0.4,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:0.85,r:9,dmg:14+level()*2,col:"#9bff5a",hitFoe:false}); }
+/* ---- overworld weapons (unlock + evolve by kills) ---- */
+const WEAPONS=[
+  { id:"slime",  name:"Slimeball",  emoji:"🟢", unlock:0,  desc:"Reliable glob." },
+  { id:"triple", name:"Triple Tap", emoji:"🕯️", unlock:6,  desc:"Three-way fan." },
+  { id:"bomb",   name:"Bag Bomb",   emoji:"💥", unlock:18, desc:"Lobs, explodes AoE." },
+  { id:"laser",  name:"Laser Eyes", emoji:"⚡", unlock:36, desc:"Piercing beam." }
+];
+function weaponDef(id){ return WEAPONS.find(w=>w.id===id)||WEAPONS[0]; }
+// procedural weapon heads drawn at (len,0) in the rotated weapon frame; glow + shape per type
+const WEAPON_LOOK={
+  slime:{ handle:"#4a3420", glow:"rgba(114,255,35,0.6)", draw(len,r){ const x=len, s=r*0.62;
+    const g=ctx.createRadialGradient(x,0,1,x,0,s*1.7); g.addColorStop(0,"#e7ffd0"); g.addColorStop(.5,"#72ff23"); g.addColorStop(1,"rgba(40,140,20,0)");
+    ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,0,s*1.6,0,6.2832); ctx.fill();
+    ctx.fillStyle="#8dff45"; for(let i=0;i<8;i++){ const a=i/8*6.2832; ctx.beginPath(); ctx.moveTo(x+Math.cos(a)*s*0.7,Math.sin(a)*s*0.7); ctx.lineTo(x+Math.cos(a)*s*1.5,Math.sin(a)*s*1.5); ctx.lineTo(x+Math.cos(a+0.5)*s*0.7,Math.sin(a+0.5)*s*0.7); ctx.fill(); }
+    ctx.fillStyle="#5fd61a"; ctx.beginPath(); ctx.arc(x,0,s,0,6.2832); ctx.fill();
+    ctx.fillStyle="rgba(255,255,255,0.85)"; ctx.beginPath(); ctx.arc(x-s*0.3,-s*0.3,s*0.32,0,6.2832); ctx.fill(); } },
+  triple:{ handle:"#5a4012", glow:"rgba(255,210,74,0.6)", draw(len,r){ const x=len, s=r*0.7; ctx.strokeStyle="#ffd24a"; ctx.lineWidth=r*0.16; ctx.lineCap="round";
+    for(const dy of [-s*0.7,0,s*0.7]){ ctx.beginPath(); ctx.moveTo(x-s*0.5,dy*0.4); ctx.lineTo(x+s,dy); ctx.stroke(); }
+    ctx.fillStyle="#fff3c4"; ctx.beginPath(); ctx.arc(x-s*0.5,0,s*0.3,0,6.2832); ctx.fill(); } },
+  bomb:{ handle:"#3a2a16", glow:"rgba(255,150,80,0.6)", draw(len,r){ const x=len, s=r*0.66;
+    const g=ctx.createRadialGradient(x,0,1,x,0,s*1.5); g.addColorStop(0,"#ffb15a"); g.addColorStop(1,"rgba(120,50,10,0)"); ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,0,s*1.4,0,6.2832); ctx.fill();
+    ctx.fillStyle="#26201c"; ctx.beginPath(); ctx.arc(x,0,s,0,6.2832); ctx.fill();
+    ctx.fillStyle="rgba(255,255,255,0.6)"; ctx.beginPath(); ctx.arc(x-s*0.3,-s*0.3,s*0.28,0,6.2832); ctx.fill();
+    ctx.strokeStyle="#caa"; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(x,-s); ctx.quadraticCurveTo(x+s*0.5,-s*1.5,x+s*0.2,-s*1.9); ctx.stroke();
+    ctx.fillStyle="#ffd24a"; ctx.beginPath(); ctx.arc(x+s*0.2,-s*1.9,s*0.25,0,6.2832); ctx.fill(); } },
+  laser:{ handle:"#1d3a44", glow:"rgba(123,224,255,0.7)", draw(len,r){ const x=len, s=r*0.6; ctx.fillStyle="#173842"; ctx.fillRect(x-s*0.4,-s*0.5,s*1.6,s);
+    const g=ctx.createLinearGradient(x+s,0,x+s*3,0); g.addColorStop(0,"#bfefff"); g.addColorStop(1,"rgba(123,224,255,0)"); ctx.fillStyle=g; ctx.fillRect(x+s,-s*0.22,s*2.2,s*0.44);
+    ctx.fillStyle="#7be0ff"; ctx.beginPath(); ctx.arc(x+s*1.1,0,s*0.4,0,6.2832); ctx.fill(); } }
+};
+// draw the equipped weapon in the player's hand; big visible swing arc on attack
+function drawWeapon(p){ const atk=p.atk||0; const look=WEAPON_LOOK[store.weapon||"slime"]||WEAPON_LOOK.slime; const flip=p.dir==="left"?-1:1;
+  const REST=-1.15, WIND=-2.45, END=0.78; let ang;
+  if(atk>0){ const t=1-Math.min(1,atk/0.34);
+    if(t<0.28) ang=REST+(WIND-REST)*(t/0.28); // wind up behind the head
+    else { const q=(t-0.28)/0.72; ang=WIND+(END-WIND)*(q*q*(3-2*q)); } // smoothstep forward sweep
+  } else { ang=REST+Math.sin((p.walkT||0)*2)*0.06; } // gentle idle sway
+  ctx.save(); ctx.translate(p.x, p.y-p.r*0.55-(p._mvBob||0)); if(flip<0) ctx.scale(-1,1); ctx.rotate(ang);
+  const len=p.r*1.7;
+  // motion-blur arc behind the head while swinging
+  if(atk>0){ ctx.globalAlpha=0.25; ctx.strokeStyle=look.glow; ctx.lineWidth=p.r*0.5; ctx.lineCap="round"; ctx.beginPath(); ctx.arc(0,0,len,-0.5,0.5); ctx.stroke(); ctx.globalAlpha=1; }
+  ctx.strokeStyle=look.handle; ctx.lineWidth=Math.max(3,p.r*0.2); ctx.lineCap="round";
+  ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(len,0); ctx.stroke();
+  look.draw(len,p.r);
+  ctx.restore(); }
+function weaponLevel(id){ return Math.min(8, 1+Math.floor((store.kills||0)/(id==="slime"?8:12))); } // evolves with kills
+function weaponUnlocked(id){ return (store.kills||0)>=weaponDef(id).unlock; }
+function fireWeapon(tx,ty){ const p=player, ox=p.x, oy=p.y-p.r*0.4; const a=Math.atan2(ty-oy,tx-ox);
+  const id=store.weapon||"slime", lv=weaponLevel(id), base=12+level()*2;
+  const mk=(ang,opt)=>{ const sp=(opt&&opt.sp)||600; shots.push(Object.assign({x:ox,y:oy,vx:Math.cos(ang)*sp,vy:Math.sin(ang)*sp,life:(opt&&opt.life)||0.85,r:(opt&&opt.r)||9,dmg:base,col:(opt&&opt.col)||"#9bff5a",hitFoe:false,hit:null},opt||{})); };
+  if(id==="triple"){ const spread=0.26+Math.min(0.18,lv*0.02); const shots3=lv>=5?5:3;
+    for(let i=0;i<shots3;i++){ const t=(i-(shots3-1)/2); mk(a+t*spread,{col:"#ffd27a",dmg:Math.round(base*0.8)}); } }
+  else if(id==="bomb"){ mk(a,{col:"#ff9a5a",r:11,sp:430,life:0.7,aoe:60+lv*6,dmg:Math.round(base*1.3)}); }
+  else if(id==="laser"){ mk(a,{col:"#7be0ff",r:7,sp:1050,life:0.5,pierce:true,hit:[],dmg:Math.round(base*0.9)}); if(lv>=6) mk(a+0.001,{col:"#7be0ff",r:7,sp:1050,life:0.5,pierce:true,hit:[],dmg:Math.round(base*0.9)}); }
+  else { mk(a,{col:"#9bff5a"}); if(lv>=7) mk(a+0.18,{col:"#9bff5a",dmg:Math.round(base*0.7)}); } // slime gains a 2nd glob at high lv
+}
+function cycleWeapon(){ const un=WEAPONS.filter(w=>weaponUnlocked(w.id)); if(un.length<2){ toast("Defeat mobs to unlock weapons (next at "+WEAPONS.find(w=>!weaponUnlocked(w.id)).unlock+" kills)"); return; }
+  const i=un.findIndex(w=>w.id===(store.weapon||"slime")); const nx=un[(i+1)%un.length]; store.weapon=nx.id; save(); refreshWeaponBtn(); sfx("ui",0.4); toast(nx.emoji+" "+nx.name+" — Lv"+weaponLevel(nx.id)+" · "+nx.desc); }
+function refreshWeaponBtn(){ const b=$("wpnBtn"); if(!b) return; const w=weaponDef(store.weapon||"slime"); b.querySelector("b").textContent=w.emoji; b.lastChild.textContent=w.name.split(" ")[0]; }
+function checkWeaponUnlocks(prev){ for(const w of WEAPONS){ if(w.unlock>0 && prev<w.unlock && (store.kills||0)>=w.unlock){ sfx("level",0.5); toast("🗡️ NEW WEAPON: "+w.emoji+" "+w.name+"! Tap Wpn to switch."); } } }
+function bombSplode(sh){ if(sh._sploded) return; sh._sploded=true; const R=sh.aoe||60; burst(sh.x,sh.y,"#ffb15a",20); impactFX(sh.x,sh.y,sh.x,sh.y-1,"#ffd24a",true); addShake(10);
+  for(const mob of mobs){ const dx=mob.x-sh.x, dy=mob.y-sh.y; if(dx*dx+dy*dy<R*R){ mob.hp-=Math.round(sh.dmg*0.8); mob.flash=0.14; floatTxt(mob.x,mob.y-mob.r,"-"+Math.round(sh.dmg*0.8),"#ffb15a"); if(mob.hp<=0) killMob(mob); } }
+  for(const r of RP.values()){ const mc=(store.clan||"").trim(); if(mc&&(r.clan||"").trim()===mc) continue; const dx=r.x-sh.x, dy=r.y-sh.y; if(dx*dx+dy*dy<R*R){ try{ if(wsOk&&sock&&sock.readyState===1) sock.send(JSON.stringify({type:"hit",to:r.id,dmg:Math.round(sh.dmg*0.8)})); }catch(_){} } } }
 let feedRows=[], lbNames=[], feedReal=false;
 
 const BUILDINGS_DEF=[
@@ -491,6 +564,7 @@ function refreshHud(){
   const r=store.res||{}; $("resp").textContent=`🪵${r.wood||0} 🔩${r.scrap||0} 🟢${r.goo||0}`;
   const rs=raidState(); const rp=$("raidp"); rp.textContent=rs.label+" "+rs.sub; rp.classList.toggle("live",rs.live);
   if(player){ $("hpbar").style.width=Math.max(0,player.hp/player.maxhp*100)+"%"; }
+  refreshWeaponBtn();
   const wild=creatures.length, rare=creatures.filter(c=>c.rar.k!=="common").length, hostiles=mobs.length;
   const clan=store.clan?`[${store.clan}] `:"";
   const online = wsOk ? ` · 👥 ${RP.size+1} online` : "";
@@ -513,6 +587,7 @@ window.addEventListener("keyup",e=>{ keys[e.key.toLowerCase()]=false; });
 cv.addEventListener("click",()=>{ if(state==="world") interact(); });
 $("actBtn").onclick=()=>{ if(state==="world") interact(); };
 $("atkBtn").onclick=()=>{ if(state==="world") playerSwing(); };
+$("wpnBtn").onclick=()=>{ if(state==="world") cycleWeapon(); };
 
 function interact(){ if(near) openEncounter(near); else if(nearBld) openBuilding(nearBld); else if(nearMob||nearFoe) playerSwing(); }
 function playerSwing(){ if(state!=="world"||!player||player.atkCd>0) return; player.atkCd=0.30; player.atk=0.34;
@@ -523,7 +598,7 @@ function playerSwing(){ if(state!=="world"||!player||player.atkCd>0) return; pla
   else { const off={right:[1,0],left:[-1,0],up:[0,-1],down:[0,1]}[player.dir]||[0,1]; tx=player.x+off[0]*130; ty=player.y+off[1]*130; }
   spawnSwing(player.x, player.y-player.r*0.3, player.dir, "#bbff63", player.r*2.7); sfx("throw",0.3);
   if(tkind==="mob") attackMob(); else if(tkind==="foe") attackFoe();
-  throwSlime(tx,ty); // always lob a slimeball so there's motion even with no target
+  fireWeapon(tx,ty); // fire the equipped weapon (always, so there's motion even with no target)
 }
 function attackFoe(){ const f=nearFoe; if(!f) return; const dmg=10+Math.floor(level()/2);
   bumpCombo(); impactFX(f.x,f.y,player.x,player.y,"#ff7bd0",false);
@@ -534,10 +609,10 @@ function attackMob(){ const m=nearMob; if(!m) return;
   const a=Math.atan2(m.y-player.y,m.x-player.x); m.x+=Math.cos(a)*24; m.y+=Math.sin(a)*24; // knockback
   impactFX(m.x,m.y,player.x,player.y,m.col,false);
   if(m.hp<=0) killMob(m); }
-function killMob(m){ if(!m||m._dead) return; m._dead=true; addRes(m.drop); store.xp+=8; save();
+function killMob(m){ if(!m||m._dead) return; m._dead=true; const prevK=store.kills||0; store.kills=prevK+1; addRes(m.drop); store.xp+=8; save();
   burst(m.x,m.y,m.col,18); impactFX(m.x,m.y,player.x,player.y,"#ffd24a",true);
   const got=Object.entries(m.drop).map(([k,v])=>"+"+v+" "+({wood:"🪵",scrap:"🔩",goo:"🟢"}[k]||k)).join(" ");
-  floatTxt(m.x,m.y,got,m.col); mobs=mobs.filter(x=>x!==m); if(nearMob===m) nearMob=null; sfx("catch",0.3); refreshHud(); setTimeout(manageMobs,400); }
+  floatTxt(m.x,m.y,got,m.col); mobs=mobs.filter(x=>x!==m); if(nearMob===m) nearMob=null; sfx("catch",0.3); checkWeaponUnlocks(prevK); refreshHud(); setTimeout(manageMobs,400); }
 function downed(pvp){ player.hp=player.maxhp; player.x=MAP.w*TILE/2; player.y=MAP.h*TILE/2; player.iframe=2.2; camx=player.x; camy=player.y;
   if(pvp){ const by=player.lastFoe&&player.lastFoe.name?(" by "+player.lastFoe.name):""; sfx("boss",0.4); toast("💀 Slimed"+by+"! Respawned at camp — get them back."); refreshHud(); return; }
   let lost=[]; for(const k in store.res){ const l=Math.floor((store.res[k]||0)*0.2); if(l>0){ store.res[k]-=l; lost.push(l+" "+({wood:"🪵",scrap:"🔩",goo:"🟢"}[k]||k)); } } save();
@@ -593,17 +668,22 @@ function update(dt){
   for(const pt of parts){ pt.x+=pt.vx*dt; pt.y+=pt.vy*dt; pt.vx*=0.92; pt.vy*=0.92; pt.life-=dt; } parts=parts.filter(p=>p.life>0);
   for(const f of floats){ f.t+=dt; f.y-=26*dt; } floats=floats.filter(f=>f.t<0.9);
   // combat juice decay + thrown slimeballs
-  if(shake>0) shake=Math.max(0,shake-dt*60); if(comboT>0){ comboT-=dt; if(comboT<=0) combo=0; }
+  if(shake>0) shake=Math.max(0,shake-dt*60); if(comboT>0){ comboT-=dt; if(comboT<=0) combo=0; } updateComboMeter();
   for(const s of swings){ s.life-=dt; if(s.ring) s.r0+=dt*90; } swings=swings.filter(s=>s.life>0);
-  for(const sh of shots){ sh.x+=sh.vx*dt; sh.y+=sh.vy*dt; sh.life-=dt; sh.vx*=0.985; sh.vy*=0.985;
-    if(parts.length<260 && Math.random()<0.6) parts.push({x:sh.x,y:sh.y,vx:0,vy:0,life:0.22,max:0.22,col:"#72ff3b",sz:2.5}); // trail
-    // hit a mob?
-    for(const mob of mobs){ const dx=mob.x-sh.x, dy=mob.y-sh.y; if(dx*dx+dy*dy<(mob.r+sh.r)*(mob.r+sh.r)){ mob.hp-=sh.dmg; mob.flash=0.14;
-      floatTxt(mob.x,mob.y-mob.r,"-"+sh.dmg,"#bbff63"); impactFX(sh.x,sh.y,player.x,player.y,mob.col,false); bumpCombo(); sh.life=0; if(mob.hp<=0) killMob(mob); break; } }
-    // hit a foe? (ranged PvP — one hit per shot)
+  for(const sh of shots){ sh.x+=sh.vx*dt; sh.y+=sh.vy*dt; sh.life-=dt; if(!sh.pierce){ sh.vx*=0.985; sh.vy*=0.985; }
+    if(parts.length<260 && Math.random()<0.6) parts.push({x:sh.x,y:sh.y,vx:0,vy:0,life:0.22,max:0.22,col:sh.col,sz:2.5}); // trail
+    // hit mobs (pierce shots keep going + remember who they hit; bombs explode)
+    for(const mob of mobs){ if(sh.hit&&sh.hit.indexOf(mob)>=0) continue; const dx=mob.x-sh.x, dy=mob.y-sh.y;
+      if(dx*dx+dy*dy<(mob.r+sh.r)*(mob.r+sh.r)){ mob.hp-=sh.dmg; mob.flash=0.14;
+        floatTxt(mob.x,mob.y-mob.r,"-"+sh.dmg,"#bbff63"); impactFX(sh.x,sh.y,player.x,player.y,mob.col,false); bumpCombo();
+        if(mob.hp<=0) killMob(mob);
+        if(sh.pierce){ sh.hit.push(mob); } else { if(sh.aoe) bombSplode(sh); sh.life=0; }
+        break; } }
+    // hit a foe (ranged PvP — one hit per non-pierce shot)
     if(sh.life>0 && !sh.hitFoe){ const mc=(store.clan||"").trim(); for(const r of RP.values()){ if(mc && (r.clan||"").trim()===mc) continue; const dx=r.x-sh.x, dy=r.y-sh.y;
-      if(dx*dx+dy*dy<(r.r+sh.r)*(r.r+sh.r)){ sh.hitFoe=true; sh.life=0; impactFX(sh.x,sh.y,player.x,player.y,"#ff7bd0",false);
+      if(dx*dx+dy*dy<(r.r+sh.r)*(r.r+sh.r)){ sh.hitFoe=true; if(!sh.pierce){ if(sh.aoe) bombSplode(sh); sh.life=0; } impactFX(sh.x,sh.y,player.x,player.y,"#ff7bd0",false);
         try{ if(wsOk&&sock&&sock.readyState===1) sock.send(JSON.stringify({type:"hit",to:r.id,dmg:sh.dmg})); }catch(_){} break; } } }
+    if(sh.aoe && sh.life<=0 && !sh._sploded) bombSplode(sh); // exploded on timeout
   } shots=shots.filter(s=>s.life>0);
   // live presence: throttled position send + smooth interpolation of remote traders
   posT-=dt; if(posT<=0){ posT=0.15; sendPos(); }
@@ -688,7 +768,10 @@ function drawCreature(c){
   if(c.rar.k!=="common"){ ctx.font="900 10px Inter,sans-serif"; ctx.textAlign="center"; ctx.fillStyle=c.rar.col; ctx.fillText("$"+c.sym,c.x,c.y-c.r-6); }
 }
 function drawPlayer(){ const p=player; drawShadow(p.x,p.y,p.r);
+  const upFacing=p.dir==="up";
+  if(upFacing) drawWeapon(p); // weapon behind the body when walking away
   if(!drawChar(p,p.sprPath,p.r*2.9)){ ctx.fillStyle="#3aa015"; ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,6.2832); ctx.fill(); ctx.fillStyle="#bbff63"; ctx.beginPath(); ctx.arc(p.x,p.y-4,p.r*0.6,0,6.2832); ctx.fill(); }
+  if(!upFacing) drawWeapon(p); // otherwise in front of the body
   ctx.strokeStyle="rgba(114,255,35,0.22)"; ctx.lineWidth=2; ctx.beginPath(); ctx.ellipse(p.x,p.y+p.r*0.5,p.r*0.95,p.r*0.38,0,0,6.2832); ctx.stroke();
 }
 function drawNpc(q){ drawShadow(q.x,q.y,q.r);
