@@ -112,6 +112,13 @@
       <div class="bosses" id="bosses"><div class="spin"></div></div>
     </main>
     <aside class="side">
+      <div class="panel">
+        <h3>⚔️ Raid your own coin</h3>
+        <p style="color:var(--dim);font-size:0.84rem;line-height:1.5;margin:0 0 10px">Drop your token's contract address — it goes live as a boss for the whole swamp to raid. Rally your crew.</p>
+        <input class="tagin" id="rMint" placeholder="token contract address (mint)">
+        <input class="tagin" id="rSym" maxlength="12" placeholder="$SYMBOL (optional)">
+        <button class="btnfull" id="rSubmit">🔥 Start the raid</button>
+      </div>
       <div class="panel promo">
         <h3>🚀 Launch = become a boss</h3>
         <p>Launch your coin on SlimeWire and it goes live here as a raid boss — instant exposure, crew raids, share cards, and a creature in The Swamp.</p>
@@ -160,7 +167,7 @@ function bossHp(r){
   const mc=num(r.marketCap||r.marketCapUsd); if(mc>0){ const prog=Math.min(100,mc/69000*100); return Math.max(2,100-prog); }
   return 70;
 }
-function bossTag(r){ if(r._ogre) return {c:"legend",t:"Legendary"}; const m5=num(r.m5??r.priceChangeM5); const a=num(r.pairAgeSeconds)||num(r.pairAgeMinutes)*60;
+function bossTag(r){ if(r._community) return {c:"hot",t:"Crew Raid ⚔️"}; if(r._ogre) return {c:"legend",t:"Legendary"}; const m5=num(r.m5??r.priceChangeM5); const a=num(r.pairAgeSeconds)||num(r.pairAgeMinutes)*60;
   if(m5>=40||num(r.volume5m)>40000) return {c:"hot",t:"Hot 🔥"}; if(a&&a<180) return {c:"fresh",t:"Fresh"}; return {c:"fresh",t:"Live"}; }
 
 let BOSSES=[];
@@ -168,6 +175,8 @@ async function load(){
   let rows=[];
   try{ const r=await fetch(API+"/api/web/swamp-launches",{cache:"no-store"}); const j=await r.json();
     const og=(j&&(j.launches||j.ogres))||[]; for(const o of og){ if(o&&(o.mint||o.symbol)) rows.push({tokenMint:o.mint,symbol:o.symbol||o.name,_ogre:true,marketCap:o.marketCap,bondingProgressPct:o.bondingProgressPct,pairAgeSeconds:o.ageSeconds,holders:o.holders}); } }catch(_){}
+  try{ const r=await fetch(API+"/api/web/community-raids",{cache:"no-store"}); const j=await r.json();
+    for(const cr of (j&&j.raids)||[]){ if(cr&&cr.mint) rows.push({tokenMint:cr.mint,symbol:cr.symbol,_community:true,by:cr.by,bumps:cr.bumps}); } }catch(_){}
   try{ const r=await fetch(API+"/api/web/live-pairs?bucket=live&sort=fresh",{cache:"no-store"}); const j=await r.json();
     const lr=(j&&j.livePairs&&j.livePairs.rows)||(j&&j.rows)||[]; for(const x of lr){ if(x&&x.tokenMint) rows.push(x); } }catch(_){}
   // dedupe by mint, cap
@@ -198,7 +207,7 @@ function render(){
     const d=document.createElement("div"); d.className="boss"+(r._ogre?" legend":"");
     d.innerHTML=`<div class="tagrow">
         <img class="av" src="${API+av}" alt="" onerror="this.style.display='none'">
-        <div><div class="nm">${r._ogre?"🧌 ":""}$${esc(sym)}</div><div class="sub">${r._ogre?"Born on SlimeWire":"live pair"} · ${ageStr(r)} old</div></div>
+        <div><div class="nm">${r._ogre?"🧌 ":""}$${esc(sym)}</div><div class="sub">${r._community?("⚔️ crew raid by "+esc(r.by||"anon")):r._ogre?"Born on SlimeWire":"live pair · "+ageStr(r)+" old"}</div></div>
         <span class="badge ${tag.c}">${tag.t}</span>
       </div>
       <div class="hpwrap"><div class="hl"><span>BOSS HP</span><span>${Math.round(hp)}%</span></div><div class="hpbar"><div class="hpfill" style="width:${hp}%"></div></div></div>
@@ -246,6 +255,16 @@ $$("[data-lb]").forEach(b=>b.onclick=()=>{ $$("[data-lb]").forEach(x=>x.classLis
 $("#tag").value=store.lbName||"";
 $("#tag").addEventListener("change",()=>{ store.lbName=$("#tag").value.trim().slice(0,16); save(); });
 
+$("#rSubmit").onclick=async()=>{
+  const mint=($("#rMint").value||"").trim(), sym=($("#rSym").value||"").trim();
+  if(mint.replace(/[^A-Za-z0-9]/g,"").length<32){ toast("Paste a valid token contract address (mint)"); return; }
+  try{ const r=await fetch(API+"/api/web/community-raids",{method:"POST",headers:{"content-type":"application/json"},
+      body:JSON.stringify({mint,symbol:sym,by:(store.lbName||"anon")})}); const j=await r.json();
+    if(j&&j.ok){ toast("🔥 Raid started! Rally your crew."); $("#rMint").value=""; $("#rSym").value=""; load();
+      const txt=`⚔️ RAIDING $${j.symbol} on @SlimeWire 🐸🔥\nJoin the raid 👇\n${SITE}/raids`;
+      window.open("https://twitter.com/intent/tweet?text="+encodeURIComponent(txt),"_blank");
+    } else toast(j&&j.error?("Couldn't start: "+j.error):"Couldn't start raid"); }catch(_){ toast("Network error"); }
+};
 load(); loadLb("raids");
 setInterval(load, 45000);
 // test hook

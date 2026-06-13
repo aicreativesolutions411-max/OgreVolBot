@@ -2359,6 +2359,19 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendWebJson(request, response, result.ok ? 200 : 400, result);
       return;
     }
+    // Community raids: anyone can submit their own coin as a raid boss (shill loop).
+    if (request.method === "GET" && pathname === "/api/web/community-raids") {
+      const store = await readCommunityRaids().catch(() => ({ raids: [] }));
+      const raids = (store.raids || []).slice(-40).reverse();
+      sendCachedWebJson(request, response, 200, { ok: true, raids }, "public, max-age=10, stale-while-revalidate=60");
+      return;
+    }
+    if (request.method === "POST" && pathname === "/api/web/community-raids") {
+      const body = await readJsonRequestBody(request, 4_000);
+      const result = await submitCommunityRaid(body);
+      sendWebJson(request, response, result.ok ? 200 : 400, result);
+      return;
+    }
 
     // PUBLIC proof wall data: the engine's track record - wins AND losses - with no
     // login. Every Telegram post links here; receipts are the marketing.
@@ -20153,6 +20166,8 @@ function defaultJsonForPath(filePath) {
       return { wallets: [] };
     case "swamp-leaderboard.json":
       return { scores: [] };
+    case "community-raids.json":
+      return { raids: [] };
     case "audit-log.json":
       return { entries: [] };
     case "state.json":
@@ -22857,6 +22872,34 @@ async function readSwampLeaderboard() {
   const store = await readJson(swampLeaderboardPath());
   if (!Array.isArray(store.scores)) store.scores = [];
   return store;
+}
+
+function communityRaidsPath() {
+  return path.join(CONFIG.dataDir, "community-raids.json");
+}
+async function readCommunityRaids() {
+  const store = await readJson(communityRaidsPath());
+  if (!Array.isArray(store.raids)) store.raids = [];
+  return store;
+}
+async function submitCommunityRaid(body = {}) {
+  const mint = String(body.mint || "").replace(/[^A-Za-z0-9]/g, "").slice(0, 64);
+  if (mint.length < 32) return { ok: false, error: "bad mint" };
+  const symbol = String(body.symbol || "").replace(/[^A-Za-z0-9_$]/g, "").slice(0, 12) || "COIN";
+  const by = String(body.by || "anon").replace(/[^A-Za-z0-9_$. -]/g, "").slice(0, 16) || "anon";
+  const store = await readCommunityRaids();
+  const now = new Date().toISOString();
+  const idx = store.raids.findIndex((r) => r.mint === mint);
+  if (idx >= 0) {
+    store.raids[idx].bumps = (store.raids[idx].bumps || 1) + 1;
+    store.raids[idx].at = now;
+  } else {
+    store.raids.push({ mint, symbol, by, at: now, bumps: 1 });
+  }
+  // keep newest 80
+  store.raids = store.raids.slice(-80);
+  await writeJsonFile(communityRaidsPath(), store);
+  return { ok: true, mint, symbol };
 }
 
 async function submitSwampScore(body = {}) {
