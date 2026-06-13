@@ -7148,6 +7148,21 @@ async function handleMessage(message, userId) {
   const text = (message.text || "").trim();
   const session = sessions.get(chatId);
 
+  if (message.photo && session?.step === "lb_image") {
+    try {
+      const best = message.photo[message.photo.length - 1];
+      const img = await fetchTelegramFileDataUrl(best.file_id);
+      const d = launchDraftFor(chatId);
+      d.imageDataUrl = img.dataUrl; d.imageName = img.name;
+      clearSession(chatId);
+      await say(chatId, "🖼️ Image saved.");
+      await showLaunchBuilder(chatId, userId);
+    } catch (error) {
+      await say(chatId, "Couldn't read that image — send a smaller photo (PNG/JPG).");
+    }
+    return;
+  }
+
   if (message.document) {
     try {
       await handleDocumentMessage(message, userId, session);
@@ -15126,35 +15141,74 @@ function launchSiteUrl(d) {
   if (d.website && d.website !== "-") p.set("lc_web", d.website);
   return "https://www.slimewire.org/terminal?" + p.toString();
 }
+async function launchBuilderWalletLabel(chatId, userId, d) {
+  try {
+    const store = await readWalletStore();
+    const wallets = walletsForOwner(store, userId);
+    if (!wallets.length) return { label: "no wallets yet", wallet: null, wallets: [] };
+    const chosen = (d.walletId && wallets.find((w) => w.publicKey === d.walletId)) || wallets[0];
+    return { label: `${chosen.label} (${shortMint(chosen.publicKey)})`, wallet: chosen, wallets };
+  } catch { return { label: "wallet", wallet: null, wallets: [] }; }
+}
 async function showLaunchBuilder(chatId, userId, messageId = null) {
   const d = launchDraftFor(chatId);
   const ready = Boolean(d.name && d.symbol);
   const v = (x) => (x && String(x).trim() ? String(x) : "—");
+  const w = await launchBuilderWalletLabel(chatId, userId, d);
   const lines = [
     "🚀 Launch a Coin",
     "",
-    "Fill in your coin here, then tap Launch to add an image, connect your wallet and go live on the site.",
+    "Build it here and launch straight from the bot — image, wallet, dev buy, all in Telegram.",
     "",
     `${LAUNCH_FIELDS.name.emoji} Name: ${v(d.name)}`,
     `${LAUNCH_FIELDS.symbol.emoji} Ticker: ${d.symbol ? "$" + d.symbol : "—"}`,
     `${LAUNCH_FIELDS.description.emoji} Description: ${v(d.description)}`,
-    `${LAUNCH_FIELDS.devBuySol.emoji} Dev buy: ${d.devBuySol ? d.devBuySol + " SOL" : "—"}`,
+    `🖼️ Image: ${d.imageDataUrl ? "✅ added" : "— (tap to upload)"}`,
+    `${LAUNCH_FIELDS.devBuySol.emoji} Dev buy: ${d.devBuySol ? d.devBuySol + " SOL" : "none"}`,
+    `👛 Launch wallet: ${w.label}`,
     `${LAUNCH_FIELDS.x.emoji} X: ${v(d.x)}   ${LAUNCH_FIELDS.telegram.emoji} TG: ${v(d.telegram)}   ${LAUNCH_FIELDS.website.emoji} Web: ${v(d.website)}`,
     "",
-    ready ? "Looks good — tap 🚀 Launch on SlimeWire to finish + go live." : "Add at least a Name and Ticker to unlock Launch."
+    ready ? "Ready. Tap 🚀 LAUNCH NOW to mint it live (your dev buy fires with it)." : "Add at least a Name and Ticker to unlock Launch."
   ];
   const kb = [
     [{ text: "📝 Name", callback_data: "lb_edit:name" }, { text: "💲 Ticker", callback_data: "lb_edit:symbol" }],
-    [{ text: "📄 Description", callback_data: "lb_edit:description" }],
-    [{ text: "💰 Dev buy", callback_data: "lb_edit:devBuySol" }],
+    [{ text: "📄 Description", callback_data: "lb_edit:description" }, { text: "🖼️ Image", callback_data: "lb_image" }],
+    [{ text: "💰 Dev buy", callback_data: "lb_edit:devBuySol" }, { text: "👛 Wallet", callback_data: "lb_wallet" }],
     [{ text: "🐦 X", callback_data: "lb_edit:x" }, { text: "✈️ Telegram", callback_data: "lb_edit:telegram" }, { text: "🌐 Website", callback_data: "lb_edit:website" }]
   ];
-  if (ready) kb.push([{ text: "🚀 Launch on SlimeWire", url: launchSiteUrl(d) }]);
+  if (ready) kb.push([{ text: "🚀 LAUNCH NOW", callback_data: "lb_go" }]);
+  kb.push([{ text: "🌐 Finish on site instead", url: launchSiteUrl(d) }]);
   kb.push([{ text: "🧹 Clear", callback_data: "lb_clear" }, { text: "Main Menu", callback_data: "main_menu" }]);
   await sendOrEditMessage(chatId, messageId, withBrandFooter(lines.join("\n")), { inline_keyboard: kb });
 }
 async function handleLaunchBuilder(chatId, userId, data, messageId) {
   if (data === "lb_clear") { launchDrafts.set(chatId, {}); await showLaunchBuilder(chatId, userId, messageId); return; }
+  if (data === "lb_image") {
+    sessions.set(chatId, { step: "lb_image", userId, data: {} });
+    await sendFlowPrompt(chatId, "Send your coin IMAGE now — just upload a photo (PNG/JPG). It becomes the token picture.\n\n(or /cancel)", { inline_keyboard: [[{ text: "⬅ Back", callback_data: "launch_build_menu" }]] }, { fresh: true });
+    return;
+  }
+  if (data === "lb_wallet") {
+    const store = await readWalletStore();
+    const wallets = walletsForOwner(store, userId);
+    if (!wallets.length) {
+      await sendOrEditMessage(chatId, messageId, withBrandFooter("You need a managed wallet (funded with a little SOL) to launch.\n\nGo to Portfolio → Wallets to create one, send it SOL, then come back."), { inline_keyboard: [[{ text: "Portfolio", callback_data: "portfolio_menu" }], [{ text: "⬅ Back", callback_data: "launch_build_menu" }]] });
+      return;
+    }
+    const rows = wallets.slice(0, 12).map((wal, i) => [{ text: `${wal.label} · ${shortMint(wal.publicKey)}`, callback_data: `lb_w:${i + 1}` }]);
+    rows.push([{ text: "⬅ Back", callback_data: "launch_build_menu" }]);
+    await sendOrEditMessage(chatId, messageId, withBrandFooter("Pick the wallet that launches the coin (and pays the dev buy):"), { inline_keyboard: rows });
+    return;
+  }
+  if (data.startsWith("lb_w:")) {
+    const idx = data.slice("lb_w:".length);
+    const store = await readWalletStore();
+    const wal = getWalletAt(store, idx, userId);
+    if (wal) launchDraftFor(chatId).walletId = wal.publicKey;
+    await showLaunchBuilder(chatId, userId, messageId);
+    return;
+  }
+  if (data === "lb_go") { await executeBotLaunch(chatId, userId, messageId); return; }
   if (data.startsWith("lb_edit:")) {
     const field = data.slice("lb_edit:".length);
     const f = LAUNCH_FIELDS[field];
@@ -15164,6 +15218,43 @@ async function handleLaunchBuilder(chatId, userId, data, messageId) {
     return;
   }
   await showLaunchBuilder(chatId, userId, messageId); // launch_build_menu
+}
+async function executeBotLaunch(chatId, userId, messageId) {
+  const d = launchDraftFor(chatId);
+  if (!d.name || !d.symbol) { await say(chatId, "Add a Name and Ticker first."); return; }
+  const store = await readWalletStore();
+  const wallets = walletsForOwner(store, userId);
+  if (!wallets.length) {
+    await sendOrEditMessage(chatId, messageId, withBrandFooter("You need a funded managed wallet to launch.\n\nPortfolio → Wallets to create one + send it SOL, then try again."), { inline_keyboard: [[{ text: "Portfolio", callback_data: "portfolio_menu" }], [{ text: "⬅ Back", callback_data: "launch_build_menu" }]] });
+    return;
+  }
+  const wid = (d.walletId && wallets.find((w) => w.publicKey === d.walletId)) ? d.walletId : wallets[0].publicKey;
+  if (!CONFIG.pumpLaunchEnabled || !CONFIG.pumpLaunchApiUrl) {
+    await sendOrEditMessage(chatId, messageId, withBrandFooter("On-bot minting isn't switched on for this deployment yet (admin: set PUMP_LAUNCH_ENABLED=true + PUMP_LAUNCH_API_URL).\n\nYour coin is built — finish it on the site (pre-filled):"), { inline_keyboard: [[{ text: "🚀 Launch on SlimeWire", url: launchSiteUrl(d) }], [{ text: "⬅ Back", callback_data: "launch_build_menu" }]] });
+    return;
+  }
+  await sendOrEditMessage(chatId, messageId, withBrandFooter(`🚀 Launching $${d.symbol} from ${shortMint(wid)} …\n\nThis takes ~20-40s (mint + metadata${Number(d.devBuySol) > 0 ? " + dev buy" : ""}). I'll post the contract the moment it's live.`), { inline_keyboard: [] });
+  const body = {
+    name: d.name, symbol: d.symbol,
+    description: d.description || `$${d.symbol} — born on SlimeWire`,
+    x: d.x && d.x !== "-" ? d.x : "", telegram: d.telegram && d.telegram !== "-" ? d.telegram : "", website: d.website && d.website !== "-" ? d.website : "",
+    imageDataUrl: d.imageDataUrl || "", imageName: d.imageName || "",
+    devBuyEnabled: Number(d.devBuySol) > 0, devBuySol: String(d.devBuySol || "0"),
+    selectedDevWalletId: wid, slippageBps: 300, launchAttemptId: crypto.randomUUID(), source: "slimewire_tg"
+  };
+  try {
+    const result = await webLaunchPumpCoin(userId, body);
+    const mint = result?.tokenMint || "";
+    launchDrafts.set(chatId, {});
+    const out = [`✅ $${d.symbol} is LIVE — born on SlimeWire!`];
+    if (mint) { out.push("", `CA: <code>${mint}</code>`, `Pump: https://pump.fun/${mint}`, `Chart: https://www.slimewire.org/t?ca=${mint}`); }
+    out.push("", "It's now a boss other traders can raid in the Swamp. 🐸");
+    await sendOrEditMessage(chatId, null, withBrandFooter(out.join("\n")), { inline_keyboard: [[{ text: "Ogre Tools", callback_data: "ogre_tools_menu" }, { text: "Main Menu", callback_data: "main_menu" }]] });
+  } catch (error) {
+    let msg = "Launch failed.";
+    try { msg = formatPumpLaunchUserError ? formatPumpLaunchUserError(error) : (error.message || msg); } catch { msg = error.message || msg; }
+    await sendOrEditMessage(chatId, null, withBrandFooter(`❌ ${msg}\n\nYour draft is saved — fix it and retry, or finish on the site.`), { inline_keyboard: [[{ text: "🔁 Back to builder", callback_data: "launch_build_menu" }], [{ text: "🌐 Finish on site", url: launchSiteUrl(d) }]] });
+  }
 }
 
 async function showTelegramPortfolioMenu(chatId, messageId = null) {
@@ -20191,6 +20282,16 @@ async function fetchTelegramFileText(fileId) {
     throw new Error(`Could not download backup file: HTTP ${response.status}`);
   }
   return response.text();
+}
+
+async function fetchTelegramFileDataUrl(fileId) {
+  const file = await telegram("getFile", { file_id: fileId });
+  const response = await fetch(`https://api.telegram.org/file/bot${CONFIG.telegramToken}/${file.file_path}`);
+  if (!response.ok) throw new Error(`Could not download image: HTTP ${response.status}`);
+  const buf = Buffer.from(await response.arrayBuffer());
+  const ext = String(file.file_path || "").split(".").pop().toLowerCase();
+  const mime = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : ext === "gif" ? "image/gif" : "image/jpeg";
+  return { dataUrl: `data:${mime};base64,${buf.toString("base64")}`, mime, size: buf.length, name: `coin.${ext || "jpg"}` };
 }
 
 function providerErrorValue(value) {
