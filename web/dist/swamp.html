@@ -36,6 +36,9 @@
   .actbtns{position:absolute; right:calc(20px + env(safe-area-inset-right)); bottom:calc(40px + env(safe-area-inset-bottom)); display:flex; flex-direction:column; gap:10px; z-index:6;}
   .abtn{pointer-events:auto; width:64px; height:64px; border-radius:50%; border:2px solid rgba(114,255,35,0.4); background:rgba(8,22,12,0.85); color:#eaffe0; font-weight:900; font-size:0.7rem; cursor:pointer; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px; box-shadow:0 4px 14px rgba(0,0,0,0.4);}
   .abtn b{font-size:1.3rem; line-height:1;} .abtn:active{transform:scale(0.93);}
+  .abtn.atk{width:78px; height:78px; border-color:rgba(255,120,80,0.6); background:radial-gradient(circle at 38% 32%,#ff8a5a,#d63a1a 70%); color:#fff; box-shadow:0 0 22px rgba(255,90,40,0.45);}
+  .ehp{height:12px;border-radius:99px;background:rgba(255,90,80,0.15);border:1px solid rgba(255,120,80,0.4);overflow:hidden;margin:2px 0 6px;}
+  .ehpfill{height:100%;background:linear-gradient(90deg,#ff5e5e,#ffd84d);transition:width .2s;}
   .overlay{position:fixed; inset:0; z-index:10; display:none; align-items:center; justify-content:center; flex-direction:column; text-align:center;
     padding:22px; overflow-y:auto; -webkit-overflow-scrolling:touch;
     background:linear-gradient(rgba(4,4,14,0.62),rgba(4,4,14,0.9)), url('/assets/slimewire/swamp/art/survivors-hero.jpg') center/cover no-repeat;}
@@ -117,7 +120,8 @@
     <div class="joy" id="joy"><div class="nub" id="nub"></div></div>
     <div class="actbtns">
       <button class="abtn" id="dexBtn"><b>📖</b>Dex</button>
-      <button class="abtn" id="actBtn"><b>✋</b>Act</button>
+      <button class="abtn" id="actBtn"><b>✋</b>Catch</button>
+      <button class="abtn atk" id="atkBtn"><b>⚔️</b>Attack</button>
     </div>
     <div class="prompt" id="prompt"></div>
   </div>
@@ -143,9 +147,14 @@
     <div class="encName" id="encName">$COIN</div>
     <div class="encStats" id="encStats"></div>
     <div id="catchUI">
+      <div class="ehp"><div class="ehpfill" id="ehpfill"></div></div>
+      <div class="catchhint" id="weakHint" style="margin-bottom:8px">Weaken it first for an easier catch — or just throw.</div>
       <div class="catchbar" id="catchbar"><div class="catchzone" id="catchzone"></div><div class="catchmark" id="catchmark"></div></div>
-      <div class="catchhint" id="catchhint">tap when the marker is in the green</div>
-      <button class="big" id="throwBtn" style="width:100%;margin-top:4px">🟢 THROW SLIMEBALL</button>
+      <div class="catchhint" id="catchhint">tap THROW when the marker is in the green</div>
+      <div style="display:flex;gap:8px;margin-top:4px">
+        <button class="pAlt" id="encAtk" style="flex:0 0 38%;border-radius:12px;padding:14px;font-weight:900;cursor:pointer">⚔️ Weaken</button>
+        <button class="big" id="throwBtn" style="flex:1;margin:0">🟢 THROW</button>
+      </div>
     </div>
     <div class="rowbtns">
       <a class="pBuy" id="encApe" href="#" target="_blank" rel="noopener">⚡ Ape</a>
@@ -218,7 +227,7 @@ const A={ index:null, players:[], creatures:[], statics:[], bosses:[], ground:nu
 const FALLBACK_PLAYERS=[{character:"hooded-degen-trader",frames:null}];
 function framesByDir(arr,ch){ const o={down:[],up:[],left:[],right:[]}; for(const f of arr){ if(f.character===ch&&o[f.direction]) o[f.direction].push(f); }
   for(const d in o){ o[d].sort((a,b)=>(a.frame||0)-(b.frame||0)); if(!o[d].length) delete o[d]; } return Object.keys(o).length?o:null; }
-function preloadFrames(fr){ if(!fr||fr._pre) return; fr._pre=true; for(const d of ["down","up","left","right"]){ const s=fr[d]; if(s) for(const f of s) img(f.path); } }
+function preloadFrames(){ /* walk frames are mis-sliced; we use clean static sprites instead */ }
 async function loadAssets(){
   A.ground=img("/assets/slimewire/swamp/art/ground-grass.jpg");
   try{
@@ -227,34 +236,34 @@ async function loadAssets(){
     const wf=idx.walkFrames||[]; const pchars=[...new Set(wf.map(f=>f.character))];
     const order=["hooded-degen-trader","tiny-ogre-bruiser","moss-ogre-scout","slime-armored-warrior","crown-slime-leader","swamp-witch-caller","robot-wallet-helper","skeleton-market-maker"];
     const ord=[...order.filter(h=>pchars.includes(h)),...pchars.filter(h=>!order.includes(h))];
-    A.players=ord.slice(0,6).map(ch=>({character:ch,frames:framesByDir(wf,ch)}));
-    const cwf=idx.creatureWalkFrames||[]; const ech=[...new Set(cwf.map(f=>f.character))];
-    A.creatures=ech.map(ch=>({character:ch,frames:framesByDir(cwf,ch)}));
-    A.creatures.forEach(d=>preloadFrames(d.frames));
+    // NOTE: walk-cycle frames are mis-sliced (some contain 2/cut-off chars), so we use
+    // the CLEAN single static character sprites + procedural motion instead.
+    A.players=ord.slice(0,6).map(ch=>{ const fr=framesByDir(wf,ch); const set=fr&&(fr.down||fr.right||fr.left||fr.up); return {character:ch, frames:fr, still:(set&&set[0]&&set[0].path)||null}; });
     A.statics=(idx.characters||[]).map(c=>c.path);
     A.bosses=(idx.bosses||[]).map(b=>b.path);
-  }catch(_){ A.players=FALLBACK_PLAYERS; A.creatures=[]; A.statics=[]; A.bosses=[]; }
+    A.statics.forEach(p=>img(p)); // warm the clean sprites
+  }catch(_){ A.players=FALLBACK_PLAYERS; A.statics=[]; A.bosses=[]; }
   A.loaded=true;
 }
-// stable sprite drawing: hold last frame + locked aspect + foot anchor
-function animImg(fr,dir,t){ if(!fr) return null; const s=fr[dir]||fr.down||fr.right||fr.left||fr.up; if(!s||!s.length) return null; return img(s[Math.floor(t*5.5)%s.length].path); }
-function charAspect(fr){ if(!fr) return 0.62; if(fr._aspect) return fr._aspect;
-  for(const d of ["down","up","left","right"]){ const s=fr[d]; if(s) for(const f of s){ const im=imgCache.get(f.path); if(ready(im)) return (fr._aspect=Math.max(0.4,Math.min(1.05,im.naturalWidth/im.naturalHeight))); } } return 0.62; }
+function preloadFramesNoop(){}
 function drawShadow(x,y,r){ ctx.fillStyle="rgba(0,0,0,0.34)"; ctx.beginPath(); ctx.ellipse(x,y+r*0.72,r*0.95,r*0.4,0,0,6.2832); ctx.fill(); }
-function drawWalker(e,fr,h,alpha){ let im=animImg(fr,e.dir,e.walkT); if(ready(im)) e._img=im; else im=e._img; if(!ready(im)) return false;
-  const w=h*(charAspect(fr)||0.62);
-  // procedural smoothing: continuous bob + squash/stretch so motion reads fluid between the few frames
-  const moving=!!e._mv; const ph=e.walkT*11;
-  const bob = moving ? Math.abs(Math.sin(ph))*h*0.055 : Math.sin(e.walkT*2.2)*h*0.012; // bounce on steps, gentle breathe at rest
-  const sx = moving ? 1+Math.sin(ph*2)*0.045 : 1;                                       // squash/stretch
-  const lean = moving ? Math.sin(ph)* (e.dir==="left"?-0.05:e.dir==="right"?0.05:0.03) : 0;
-  const dw=w*sx, dh=h/sx, footY=e.y+e.r*0.55;
+// draw ONE clean full character sprite at its true aspect, foot-anchored, with
+// procedural motion (bob + squash + left-flip). No frame cycling = no cut-off/ghosting.
+function drawChar(e,path,h,alpha){
+  const im=img(path); if(ready(im)) e._img=im; const u=ready(im)?im:e._img; if(!ready(u)) return false;
+  const w=h*(u.naturalWidth/u.naturalHeight);
+  const moving=!!e._mv, ph=(e.walkT||0)*11;
+  const bob = moving ? Math.abs(Math.sin(ph))*h*0.05 : Math.sin((e.walkT||0)*2.2)*h*0.012;
+  let sx  = moving ? 1+Math.sin(ph*2)*0.04 : 1;
+  // attack: quick forward lunge + scale punch
+  const atk=e.atk||0; let lungeX=0, lungeY=0, rot=0;
+  if(atk>0){ const k=Math.sin(Math.min(1,atk/0.3)*Math.PI); const dx=e.dir==="left"?-1:e.dir==="right"?1:0, dy=e.dir==="up"?-1:e.dir==="down"?1:0;
+    lungeX=dx*k*h*0.18; lungeY=dy*k*h*0.10; sx*=1+k*0.12; rot=(e.dir==="left"?1:-1)*k*0.18; }
+  const dw=w*sx, dh=h/sx, footY=e.y+e.r*0.55+lungeY;
   if(alpha!=null) ctx.globalAlpha=alpha;
-  ctx.save(); ctx.translate(e.x, footY); ctx.rotate(lean);
-  ctx.drawImage(im, -dw/2, -dh-bob, dw, dh);
+  ctx.save(); ctx.translate(e.x+lungeX, footY); if(rot) ctx.rotate(rot); if(e.dir==="left") ctx.scale(-1,1);
+  ctx.drawImage(u, -dw/2, -dh-bob, dw, dh);
   ctx.restore(); ctx.globalAlpha=1; return true; }
-function drawStill(e,im,h){ if(ready(im)) e._img=im; const u=ready(im)?im:e._img; if(!ready(u)) return false;
-  const w=h*(u.naturalWidth/u.naturalHeight); ctx.drawImage(u,e.x-w/2,e.y+e.r*0.55-h,w,h); return true; }
 
 /* ---- audio ---- */
 const AUD="/assets/slimewire/swamp/audio/"; const SFX={}; let ambient=null;
@@ -281,8 +290,7 @@ function rarityOf(row){
 function hash(s){ s=String(s||""); let h=0; for(let i=0;i<s.length;i++){ h=(h*31+s.charCodeAt(i))>>>0; } return h; }
 function creatureFor(row){
   const mint=row.tokenMint||row.mint||row.symbol||"x"; const h=hash(mint);
-  if(A.creatures.length){ const d=A.creatures[h%A.creatures.length]; preloadFrames(d.frames); return {frames:d.frames}; }
-  if(A.statics.length){ return {img:A.statics[h%A.statics.length]}; }
+  if(A.statics&&A.statics.length){ return {img:A.statics[h%A.statics.length]}; } // clean single sprites
   return {proc:true};
 }
 function verdictOf(row){ const m5=num(row.m5 ?? row.priceChangeM5); const liq=num(row.liquidityUsd);
@@ -330,7 +338,7 @@ const MOBS={ goblin:{name:"Goo Goblin",hp:24,dmg:5,spd:60,r:15,drop:{goo:2,scrap
 function spawnMob(type){ const m=MOBS[type]; const ang=Math.random()*6.28, dist=240+Math.random()*Math.min(W,H);
   mobs.push({ type,name:m.name,hp:m.hp,maxhp:m.hp,dmg:m.dmg,spd:m.spd,r:m.r,drop:m.drop,col:m.col,
     x:player.x+Math.cos(ang)*dist, y:player.y+Math.sin(ang)*dist, dir:"down", walkT:Math.random()*3, _mv:false, flash:0,
-    spr:(A.creatures.length?{frames:A.creatures[hash(type+"m")%A.creatures.length].frames}:{proc:true}) }); }
+    spr:(A.statics&&A.statics.length?{img:A.statics[hash(type+m.name)%A.statics.length]}:{proc:true}) }); }
 function manageMobs(){ const raid=raidState().live; const want=raid?12:6;
   while(mobs.length<want){ const r=Math.random(); spawnMob(raid&&r<0.22?"bear":r<0.55?"goblin":"wolf"); } }
 function addRes(drop){ for(const k in drop) store.res[k]=(store.res[k]||0)+drop[k]; save(); }
@@ -339,8 +347,7 @@ function newGame(){
   refillBalls();
   player={ x:MAP.w*TILE/2, y:MAP.h*TILE/2, r:18, spd:178, walkT:0, dir:"down", hp:100, maxhp:100, iframe:0, atkCd:0, _mv:false,
     char:(A.players[store.hero]&&A.players[store.hero].character)||"hooded-degen-trader",
-    frames:(A.players[store.hero]&&A.players[store.hero].frames)||null };
-  preloadFrames(player.frames);
+    sprPath:(A.players[store.hero]&&A.players[store.hero].still)||(A.statics&&A.statics[0])||null, atk:0 };
   buildings=BUILDINGS_DEF.map(b=>({...b, x:b.tx*TILE, y:b.ty*TILE}));
   creatures=[]; npcs=[]; mobs=[]; parts=[]; floats=[];
   camx=player.x; camy=player.y;
@@ -372,8 +379,7 @@ function spawnNpcs(){
   const n=Math.min(5,names.length);
   for(let i=0;i<n;i++){ const ang=(i/n)*6.28; const pd=A.players[(i+1)%Math.max(1,A.players.length)];
     npcs.push({ name:names[i], x:player.x+Math.cos(ang)*(260+i*40), y:player.y+Math.sin(ang)*(260+i*40),
-      r:18, dir:"down", walkT:Math.random()*3, frames:pd&&pd.frames, tx:0,ty:0, retarget:0 }); }
-  npcs.forEach(p=>preloadFrames(p.frames));
+      r:18, dir:"down", walkT:Math.random()*3, _mv:false, sprPath:(pd&&pd.still)||(A.statics&&A.statics[(i+2)%A.statics.length])||null, tx:0,ty:0, retarget:0 }); }
 }
 
 /* ---- LIVE co-presence (WebSocket): real traders walking the same map ---- */
@@ -388,9 +394,10 @@ function connectWS(){
     else if(m.type==="world"){ const seen=new Set();
       for(const pl of m.players){ if(pl.id===myId) continue; seen.add(pl.id);
         let r=RP.get(pl.id);
-        if(!r){ r={ x:pl.x,y:pl.y,tx:pl.x,ty:pl.y,dir:pl.d,name:pl.n,clan:pl.c,hero:pl.h,r:18,walkT:Math.random()*3,_mv:false,frames:(A.players[pl.h%Math.max(1,A.players.length)]||{}).frames }; preloadFrames(r.frames); RP.set(pl.id,r); }
+        const heroStill=(h)=>(A.players[h%Math.max(1,A.players.length)]||{}).still||(A.statics&&A.statics[0])||null;
+        if(!r){ r={ x:pl.x,y:pl.y,tx:pl.x,ty:pl.y,dir:pl.d,name:pl.n,clan:pl.c,hero:pl.h,r:18,walkT:Math.random()*3,_mv:false,sprPath:heroStill(pl.h) }; RP.set(pl.id,r); }
         r.tx=pl.x; r.ty=pl.y; r.dir=pl.d; r.name=pl.n; r.clan=pl.c;
-        if(r.hero!==pl.h){ r.hero=pl.h; r.frames=(A.players[pl.h%Math.max(1,A.players.length)]||{}).frames; preloadFrames(r.frames); }
+        if(r.hero!==pl.h){ r.hero=pl.h; r.sprPath=heroStill(pl.h); }
       }
       for(const id of [...RP.keys()]) if(!seen.has(id)) RP.delete(id);
       refreshHud();
@@ -451,9 +458,13 @@ window.addEventListener("keyup",e=>{ keys[e.key.toLowerCase()]=false; });
 // tap-to-interact (mouse / quick tap handled via click on canvas)
 cv.addEventListener("click",()=>{ if(state==="world") interact(); });
 $("actBtn").onclick=()=>{ if(state==="world") interact(); };
+$("atkBtn").onclick=()=>{ if(state==="world") playerSwing(); };
 
-function interact(){ if(nearMob) attackMob(); else if(near) openEncounter(near); else if(nearBld) openBuilding(nearBld); }
-function attackMob(){ const m=nearMob; if(!m||player.atkCd>0) return; player.atkCd=0.34;
+function interact(){ if(near) openEncounter(near); else if(nearBld) openBuilding(nearBld); else if(nearMob) playerSwing(); }
+function playerSwing(){ if(state!=="world"||!player) return; player.atk=0.3;
+  if(nearMob){ const m=nearMob; player.dir = Math.abs(m.x-player.x)>Math.abs(m.y-player.y)?(m.x<player.x?"left":"right"):(m.y<player.y?"up":"down"); attackMob(); }
+  else { sfx("throw",0.18); } }
+function attackMob(){ const m=nearMob; if(!m||player.atkCd>0) return; player.atkCd=0.34; player.atk=0.3;
   m.hp-=22; m.flash=0.12; sfx("throw",0.3); burst(m.x,m.y,m.col,7);
   const a=Math.atan2(m.y-player.y,m.x-player.x); m.x+=Math.cos(a)*12; m.y+=Math.sin(a)*12;
   if(m.hp<=0){ addRes(m.drop); store.xp+=8; save(); burst(m.x,m.y,m.col,16);
@@ -473,7 +484,7 @@ function update(dt){
   p.x=Math.max(40,Math.min(MAP.w*TILE-40,p.x)); p.y=Math.max(40,Math.min(MAP.h*TILE-40,p.y));
   p._mv=il>0.01;
   if(p._mv){ p.walkT+=dt; const ax=Math.abs(ix),ay=Math.abs(iy); if(Math.abs(ax-ay)>0.22) p.dir=ax>ay?(ix<0?"left":"right"):(iy<0?"up":"down"); }
-  if(p.atkCd>0)p.atkCd-=dt; if(p.iframe>0)p.iframe-=dt; if(p.hp<p.maxhp) p.hp=Math.min(p.maxhp,p.hp+(raidState().live?2:4.5)*dt);
+  if(p.atkCd>0)p.atkCd-=dt; if(p.atk>0)p.atk-=dt; if(p.iframe>0)p.iframe-=dt; if(p.hp<p.maxhp) p.hp=Math.min(p.maxhp,p.hp+(raidState().live?2:4.5)*dt);
   // creatures wander + flee slightly
   near=null; let nd=70*70;
   for(const c of creatures){ if(c.dead) continue; c.wt-=dt; c.bob+=dt*3;
@@ -563,30 +574,29 @@ function rarRing(c){ ctx.strokeStyle=c.rar.col; ctx.globalAlpha=0.6+0.3*Math.sin
 function drawCreature(c){
   drawShadow(c.x,c.y,c.r); rarRing(c);
   let drew=false;
-  if(c.spr.frames) drew=drawWalker(c,c.spr.frames,c.r*2.5);
-  else if(c.spr.img) drew=drawStill(c,img(c.spr.img),c.r*2.5);
+  if(c.spr.img) drew=drawChar(c,c.spr.img,c.r*2.5);
   if(!drew){ const bob=Math.sin(c.bob)*3; const g=ctx.createRadialGradient(c.x,c.y-c.r*0.3+bob,1,c.x,c.y+bob,c.r*1.3); g.addColorStop(0,"#cdff6a"); g.addColorStop(1,c.rar.col);
     ctx.fillStyle=g; ctx.beginPath(); ctx.arc(c.x,c.y+bob,c.r,0,6.2832); ctx.fill();
     ctx.fillStyle="#06140a"; ctx.beginPath(); ctx.arc(c.x-c.r*0.3,c.y-c.r*0.2+bob,c.r*0.16,0,6.2832); ctx.arc(c.x+c.r*0.3,c.y-c.r*0.2+bob,c.r*0.16,0,6.2832); ctx.fill(); }
   if(c.rar.k!=="common"){ ctx.font="900 10px Inter,sans-serif"; ctx.textAlign="center"; ctx.fillStyle=c.rar.col; ctx.fillText("$"+c.sym,c.x,c.y-c.r-6); }
 }
 function drawPlayer(){ const p=player; drawShadow(p.x,p.y,p.r);
-  if(!drawWalker(p,p.frames,p.r*2.9)){ ctx.fillStyle="#3aa015"; ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,6.2832); ctx.fill(); ctx.fillStyle="#bbff63"; ctx.beginPath(); ctx.arc(p.x,p.y-4,p.r*0.6,0,6.2832); ctx.fill(); }
+  if(!drawChar(p,p.sprPath,p.r*2.9)){ ctx.fillStyle="#3aa015"; ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,6.2832); ctx.fill(); ctx.fillStyle="#bbff63"; ctx.beginPath(); ctx.arc(p.x,p.y-4,p.r*0.6,0,6.2832); ctx.fill(); }
   ctx.strokeStyle="rgba(114,255,35,0.22)"; ctx.lineWidth=2; ctx.beginPath(); ctx.ellipse(p.x,p.y+p.r*0.5,p.r*0.95,p.r*0.38,0,0,6.2832); ctx.stroke();
 }
 function drawNpc(q){ drawShadow(q.x,q.y,q.r);
-  if(!drawWalker(q,q.frames,q.r*2.7)){ ctx.fillStyle="#5a7a9a"; ctx.beginPath(); ctx.arc(q.x,q.y,q.r,0,6.2832); ctx.fill(); }
+  if(!drawChar(q,q.sprPath,q.r*2.7)){ ctx.fillStyle="#5a7a9a"; ctx.beginPath(); ctx.arc(q.x,q.y,q.r,0,6.2832); ctx.fill(); }
   ctx.font="900 11px Inter,sans-serif"; ctx.textAlign="center"; ctx.fillStyle="#9bd1ff"; ctx.strokeStyle="rgba(0,0,0,0.7)"; ctx.lineWidth=3;
   ctx.strokeText("🧑 "+q.name,q.x,q.y-q.r-8); ctx.fillText("🧑 "+q.name,q.x,q.y-q.r-8);
 }
 function drawRemote(r){ drawShadow(r.x,r.y,r.r);
-  if(!drawWalker(r,r.frames,r.r*2.7)){ ctx.fillStyle="#6aa0ff"; ctx.beginPath(); ctx.arc(r.x,r.y,r.r,0,6.2832); ctx.fill(); }
+  if(!drawChar(r,r.sprPath,r.r*2.7)){ ctx.fillStyle="#6aa0ff"; ctx.beginPath(); ctx.arc(r.x,r.y,r.r,0,6.2832); ctx.fill(); }
   const tag=(r.clan?"["+r.clan+"] ":"")+(r.name||"trader");
   ctx.font="900 11px Inter,sans-serif"; ctx.textAlign="center"; ctx.fillStyle="#9bff9b"; ctx.strokeStyle="rgba(0,0,0,0.7)"; ctx.lineWidth=3;
   ctx.strokeText("🟢 "+tag,r.x,r.y-r.r-9); ctx.fillText("🟢 "+tag,r.x,r.y-r.r-9); }
 function drawMob(m){ drawShadow(m.x,m.y,m.r);
   ctx.strokeStyle="rgba(255,80,60,0.5)"; ctx.lineWidth=2; ctx.beginPath(); ctx.ellipse(m.x,m.y+m.r*0.5,m.r*1.1,m.r*0.45,0,0,6.2832); ctx.stroke();
-  let drew=false; if(m.spr.frames) drew=drawWalker(m,m.spr.frames,m.r*2.4);
+  let drew=false; if(m.spr.img) drew=drawChar(m,m.spr.img,m.r*2.4);
   if(!drew){ const g=ctx.createRadialGradient(m.x,m.y-m.r*0.3,1,m.x,m.y,m.r*1.3); g.addColorStop(0,"#fff2"); g.addColorStop(1,m.col);
     ctx.fillStyle=m.col; ctx.beginPath(); ctx.arc(m.x,m.y,m.r,0,6.2832); ctx.fill();
     ctx.fillStyle="#300"; ctx.beginPath(); ctx.arc(m.x-m.r*0.3,m.y-m.r*0.2,m.r*0.16,0,6.28); ctx.arc(m.x+m.r*0.3,m.y-m.r*0.2,m.r*0.16,0,6.28); ctx.fill(); }
@@ -615,11 +625,17 @@ function openEncounter(c){
   // catch bar setup (zone width by rarity)
   catchZoneW=Math.max(0.12, r.rate*0.34); catchZoneX=0.1+Math.random()*(0.8-catchZoneW);
   $("catchzone").style.left=(catchZoneX*100)+"%"; $("catchzone").style.width=(catchZoneW*100)+"%";
-  catchPos=0; catchDir=1; catching=true; $("throwBtn").disabled=false; $("throwBtn").textContent="🟢 THROW SLIMEBALL ("+store.balls+")";
+  // creature HP for weaken-then-catch (Pokemon-style): tougher rarity = more HP
+  c.maxHp=Math.round(40+(1/Math.max(0.2,r.rate))*22); c.curHp=c.maxHp;
+  $("ehpfill").style.width="100%"; $("weakHint").textContent="Weaken it first for an easier catch — or just throw.";
+  catchPos=0; catchDir=1; catching=true; $("throwBtn").disabled=false; $("throwBtn").textContent="🟢 THROW ("+store.balls+")";
   $("catchhint").textContent= store.balls>0 ? "tap THROW when the marker hits the green" : "out of slimeballs — they refill over time";
   $("enc").classList.add("on");
   startCatchAnim();
 }
+function encAttack(){ if(!encC||!catching) return; const dmg=Math.ceil(encC.maxHp*0.3); encC.curHp=Math.max(0,encC.curHp-dmg);
+  $("ehpfill").style.width=(encC.curHp/encC.maxHp*100)+"%"; sfx("throw",0.3); if(player) player.atk=0.3;
+  $("weakHint").textContent = encC.curHp<=encC.maxHp*0.3 ? "🔥 It's weak! Throw now for a high catch chance." : "Weakened — keep going or throw."; }
 function startCatchAnim(){ cancelAnimationFrame(catchAnim); let last=performance.now();
   const step=(t)=>{ const dt=Math.min(0.05,(t-last)/1000); last=t; if(!catching) return;
     catchPos+=catchDir*dt*1.15; if(catchPos>=1){catchPos=1;catchDir=-1;} if(catchPos<=0){catchPos=0;catchDir=1;}
@@ -632,11 +648,12 @@ $("throwBtn").onclick=()=>{
   if(store.balls<=0){ toast("No slimeballs left — they refill over time"); return; }
   store.balls--; save(); refreshHud();
   const inZone = catchPos>=catchZoneX && catchPos<=catchZoneX+catchZoneW;
-  // success: timing bonus + base rarity rate
-  const roll=Math.random(); const chance = encC.rar.rate*(inZone?1.0:0.4);
+  // success: base rarity rate + timing + how weakened it is
+  const weakBonus = encC.maxHp ? (1-encC.curHp/encC.maxHp)*0.5 : 0;
+  const roll=Math.random(); const chance = Math.min(0.96, encC.rar.rate*(inZone?1.0:0.45) + weakBonus);
   catching=false; cancelAnimationFrame(catchAnim);
   sfx("throw",0.4);
-  $("throwBtn").textContent="🟢 THROW SLIMEBALL ("+store.balls+")";
+  $("throwBtn").textContent="🟢 THROW ("+store.balls+")";
   if(roll<=chance){ caught(encC); }
   else {
     sfx("miss",0.4); toast(inZone?"So close! It wriggled free":"Missed the timing!");
@@ -664,7 +681,7 @@ function caught(c){
 }
 function replenishWild(){ buildFromFeed(); }
 function closeEnc(){ catching=false; cancelAnimationFrame(catchAnim); $("enc").classList.remove("on"); encC=null; if(state==="encounter"){ state="world"; lastTs=performance.now(); requestAnimationFrame(loop); } }
-$("encX").onclick=closeEnc; $("encFlee").onclick=closeEnc;
+$("encX").onclick=closeEnc; $("encFlee").onclick=closeEnc; $("encAtk").onclick=encAttack;
 $("encShill").onclick=()=>{ if(!encC) return; const mint=encC.mint; const tUrl=(""+mint).startsWith("syn_")?SITE+"/swamp":SITE+"/t?ca="+encodeURIComponent(mint);
   const txt=`Just caught $${encC.sym} (${encC.rar.label}) in the SlimeWire Swamp 🐸\n\nCatch live coins, hunt fresh launches 👇\n${SITE}/swamp`;
   window.open("https://twitter.com/intent/tweet?text="+encodeURIComponent(txt)+"&url="+encodeURIComponent(tUrl),"_blank"); store.xp+=5; save(); refreshHud(); };
