@@ -9853,6 +9853,13 @@ body {
 
 /* ---- connect/login hero: stop clipping the ogre character (was cut off) ---- */
 .connect-hero-side { overflow: visible !important; }
+/* chart-preview panel cropped the composed ogre with cover -> show it whole */
+.connect-method-showcase {
+  background-size: contain !important;
+  background-position: center !important;
+  background-color: #08120a !important;
+  min-height: clamp(210px, 24vw, 320px) !important;
+}
 .connect-ogre {
   position: relative !important;
   left: auto !important; right: auto !important; bottom: auto !important; top: auto !important;
