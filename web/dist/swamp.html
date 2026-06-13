@@ -498,7 +498,20 @@ function drawWeapon(p){ const atk=p.atk||0; const look=WEAPON_LOOK[store.weapon|
   ctx.restore(); }
 function weaponLevel(id){ return Math.min(8, 1+Math.floor((store.kills||0)/(id==="slime"?8:12))); } // evolves with kills
 function weaponUnlocked(id){ return (store.kills||0)>=weaponDef(id).unlock; }
-function dmgMult(){ return store.powerTotem?1.2:1; } // Slime Shop Power Totem
+/* ---- crafting: gather resources -> craft gear/weapons (level + cost gated) ---- */
+const GEAR={
+  armor:{name:"Slime Armor",emoji:"🛡️",cost:{wood:5,scrap:4},lvl:2,desc:"+30 max HP"},
+  boots:{name:"Swamp Boots",emoji:"👢",cost:{scrap:4,goo:2},lvl:3,desc:"+15% move speed"},
+  charm:{name:"Slime Charm",emoji:"🟢",cost:{goo:6},lvl:4,desc:"+12% catch chance"},
+  totem:{name:"Power Totem",emoji:"💪",cost:{scrap:10,goo:4},lvl:5,desc:"+20% weapon damage"},
+  blade:{name:"Warlord Blade",emoji:"🗡️",cost:{scrap:12,goo:6,relic:1},lvl:6,desc:"+40% weapon damage (needs a 🔮 relic)"}
+};
+const RES_ICON={wood:"🪵",scrap:"🔩",goo:"🟢",relic:"🔮"};
+function resHave(k){ return k==="relic"?(store.res&&store.res.relic||0):(store.res&&store.res[k]||0); }
+function affordable(cost){ for(const k in cost){ if(resHave(k)<cost[k]) return false; } return true; }
+function costStr(cost){ return Object.entries(cost).map(([k,v])=>v+(RES_ICON[k]||k)).join(" "); }
+function hasGear(id){ return !!(store.gear&&store.gear[id]); }
+function dmgMult(){ let m=1; if(store.powerTotem||hasGear("totem")) m*=1.2; if(hasGear("blade")) m*=1.4; return m; }
 function fireWeapon(tx,ty){ const p=player, ox=p.x, oy=p.y-p.r*0.4; const a=Math.atan2(ty-oy,tx-ox);
   const id=store.weapon||"slime", lv=weaponLevel(id), base=Math.round((12+level()*2)*dmgMult());
   const mk=(ang,opt)=>{ const sp=(opt&&opt.sp)||600; shots.push(Object.assign({x:ox,y:oy,vx:Math.cos(ang)*sp,vy:Math.sin(ang)*sp,life:(opt&&opt.life)||0.85,r:(opt&&opt.r)||9,dmg:base,col:(opt&&opt.col)||"#9bff5a",hitFoe:false,hit:null},opt||{})); };
@@ -530,9 +543,9 @@ const BUILDINGS_DEF=[
   { id:"shop", name:"🛒 Slime Shop", tx:10, ty:40, color:"#b06bff",
     desc:"Spend the goo, wood and scrap you gather (or earn from trading) on slimeballs, field medkits and a permanent power totem.",
     ctas:[{t:"🟢 5 slimeballs (4 🟢)",act:"shopBalls"},{t:"❤️ Field medkit — full heal (3 🟢)",act:"shopHeal"},{t:"💪 Power Totem +20% dmg (12 🔩)",act:"shopPower"}] },
-  { id:"camp", name:"🏕️ Clan Camp", tx:29, ty:42, color:"#46e8ff",
-    desc:"Your camp. Craft slimeballs from gathered resources, fortify your base, and rep your clan. On raid day (Sat 2pm–Sun 2am UTC) other traders are foes — slime them for raid points.",
-    ctas:[{t:"🟢 Craft 5 slimeballs (3🪵 2🔩)",act:"craftBalls"},{t:"🏗️ Fortify base",act:"fortify"},{t:"🛡️ Set clan tag",act:"setClan"}] },
+  { id:"camp", name:"🏕️ Base Camp & Workshop", tx:29, ty:42, color:"#46e8ff",
+    desc:"Your base + workshop. Gather 🪵🔩🟢 (and rare 🔮 relics from bears) to craft gear — armor, boots, charm, totem, blade — that level up your ogre. Craft a 🚩 flag to keep your base permanent (unflagged bases decay after a week). Rep your clan; on raid day other traders are foes.",
+    ctas:[] },
   { id:"proof", name:"🧾 Proof Totem", tx:48, ty:40, color:"#ffd24a",
     desc:"The public proof wall — real trades, real receipts. The swamp doesn't lie.",
     ctas:[{t:"🧾 See the proof wall",href:"/proof"},{t:"🪪 My Swamp Card",href:"/receipts"}] },
@@ -561,8 +574,11 @@ function addRes(drop){ for(const k in drop) store.res[k]=(store.res[k]||0)+drop[
 
 function newGame(){
   refillBalls();
+  // unprotected base decays after its flag lapses (build a new flag to keep it)
+  if(store.base&&store.base.flagUntil&&store.base.flagUntil<Date.now()&&(store.baseLv||0)>0){ store.baseLv=0; store.base.flagUntil=0; save(); }
   const hero=(HEROES&&HEROES[store.hero])||(HEROES&&HEROES[0])||{};
-  player={ x:MAP.w*TILE/2, y:MAP.h*TILE/2, r:Math.round(18*(hero.scale||1)), spd:178, walkT:0, dir:"down", hp:100, maxhp:100, iframe:0, atkCd:0, _mv:false,
+  const maxhp=100+(hasGear("armor")?30:0); const spd=Math.round(178*(hasGear("boots")?1.15:1));
+  player={ x:MAP.w*TILE/2, y:MAP.h*TILE/2, r:Math.round(18*(hero.scale||1)), spd, walkT:0, dir:"down", hp:maxhp, maxhp, iframe:0, atkCd:0, _mv:false,
     sprPath:hero.sprite||(A.creatures&&A.creatures[0])||(A.statics&&A.statics[0])||null, atk:0 };
   buildings=BUILDINGS_DEF.map(b=>({...b, x:b.tx*TILE, y:b.ty*TILE}));
   creatures=[]; npcs=[]; mobs=[]; parts=[]; floats=[]; shots=[]; swings=[]; shake=0; hitstop=0; combo=0; comboT=0;
@@ -731,7 +747,10 @@ function attackMob(){ const m=nearMob; if(!m) return;
   const a=Math.atan2(m.y-player.y,m.x-player.x); m.x+=Math.cos(a)*24; m.y+=Math.sin(a)*24; // knockback
   impactFX(m.x,m.y,player.x,player.y,m.col,false);
   if(m.hp<=0) killMob(m); }
-function killMob(m){ if(!m||m._dead) return; m._dead=true; const prevK=store.kills||0; store.kills=prevK+1; addRes(m.drop); store.xp+=8; save();
+function killMob(m){ if(!m||m._dead) return; m._dead=true; const prevK=store.kills||0; store.kills=prevK+1; addRes(m.drop); store.xp+=8;
+  // bears (Bear Market) sometimes drop a rare 🔮 relic — the key crafting material
+  if(m.type==="bear" && Math.random()<0.5){ store.res.relic=(store.res.relic||0)+1; floatTxt(m.x,m.y-14,"+1 🔮 relic","#b06bff"); }
+  save();
   burst(m.x,m.y,m.col,18); impactFX(m.x,m.y,player.x,player.y,"#ffd24a",true);
   const got=Object.entries(m.drop).map(([k,v])=>"+"+v+" "+({wood:"🪵",scrap:"🔩",goo:"🟢"}[k]||k)).join(" ");
   floatTxt(m.x,m.y,got,m.col); mobs=mobs.filter(x=>x!==m); if(nearMob===m) nearMob=null; sfx("catch",0.3); checkWeaponUnlocks(prevK); refreshHud(); setTimeout(manageMobs,400); }
@@ -1032,7 +1051,7 @@ $("throwBtn").onclick=()=>{
 };
 // real-time catch: sling slimeballs to weaken a wild coin, catch it when low.
 function catchTough(rar){ return ({common:24,uncommon:38,rare:60,epic:90,legendary:130}[rar&&rar.k]||30); }
-function catchChance(rar){ return ({common:0.95,uncommon:0.85,rare:0.70,epic:0.55,legendary:0.42}[rar&&rar.k]||0.9); }
+function catchChance(rar){ const base=({common:0.95,uncommon:0.85,rare:0.70,epic:0.55,legendary:0.42}[rar&&rar.k]||0.9); return Math.min(0.98, base+(hasGear("charm")?0.12:0)); }
 function weakenWild(c,dmg,sx,sy){ if(c.dead) return; if(c.weak==null) c.weak=1;
   c.weak=Math.max(0,c.weak-dmg/catchTough(c.rar)); c.flash=0.14; c.weakShown=2.2;
   floatTxt(c.x,c.y-c.r,"-"+dmg,c.rar.col); bumpCombo(); impactFX(c.x,c.y,sx,sy,c.rar.col,false);
@@ -1116,14 +1135,31 @@ function closeDex(){ $("dex").classList.remove("on"); if(state==="dex"){ state="
 $("dexBtn").onclick=()=>{ if(state==="world") openDex(); }; $("dexX").onclick=closeDex;
 
 /* ---- buildings ---- */
-function openBuilding(b){ state="bld"; $("prompt").classList.remove("on"); sfx("ui",0.4);
+let curBld=null;
+function campCtas(){
+  const r=store.res||{}; const out=[{t:`🛠️ Resources: 🪵${r.wood||0} 🔩${r.scrap||0} 🟢${r.goo||0} 🔮${r.relic||0}`,info:true}];
+  out.push({t:"🟢 Craft 5 slimeballs (3🪵 2🔩)",act:"craftBalls"});
+  for(const id in GEAR){ const g=GEAR[id], owned=hasGear(id), lvlOk=level()>=g.lvl, can=affordable(g.cost);
+    if(owned){ out.push({t:`${g.emoji} ✅ ${g.name} — ${g.desc}`,info:true}); }
+    else if(!lvlOk){ out.push({t:`${g.emoji} 🔒 ${g.name} — unlocks at Lv${g.lvl}`,info:true}); }
+    else { out.push({t:`${g.emoji} Craft ${g.name} (${costStr(g.cost)})${can?"":" — need more"}`, act:"craft:"+id}); } }
+  const flagOn=store.base&&store.base.flagUntil>Date.now();
+  out.push(flagOn?{t:"🚩 Base flag active — "+hms(store.base.flagUntil-Date.now())+" left",info:true}:{t:"🚩 Craft Base Flag (8🪵 5🔩 3🟢) — keeps base 7 days",act:"craftFlag"});
+  out.push({t:"🛡️ Set clan tag",act:"setClan"});
+  return out;
+}
+function openBuilding(b){ state="bld"; curBld=b; $("prompt").classList.remove("on"); sfx("ui",0.4);
   $("bldName").textContent=b.name; $("bldDesc").textContent=b.desc;
   const box=$("bldCTAs"); box.innerHTML="";
-  for(const cta of b.ctas){ if(cta.href){ const a=document.createElement("a"); a.href=cta.href; a.textContent=cta.t; a.style.background="linear-gradient(135deg,var(--green),var(--green2))"; a.style.color="#071006"; box.appendChild(a); }
+  const ctas = b.id==="camp" ? campCtas() : b.ctas;
+  for(const cta of ctas){
+    if(cta.href){ const a=document.createElement("a"); a.href=cta.href; a.textContent=cta.t; a.style.background="linear-gradient(135deg,var(--green),var(--green2))"; a.style.color="#071006"; box.appendChild(a); }
+    else if(cta.info){ const s=document.createElement("div"); s.textContent=cta.t; s.style.cssText="font-size:0.82rem;color:var(--dim);padding:6px 2px;font-weight:700"; box.appendChild(s); }
     else { const btn=document.createElement("button"); btn.textContent=cta.t; btn.style.background="rgba(114,255,35,0.14)"; btn.style.color="var(--green)"; btn.style.border="1.5px solid var(--green)";
       btn.onclick=()=>doBldAct(cta.act); box.appendChild(btn); } }
   $("bld").classList.add("on");
 }
+function refreshBld(){ if(curBld&&state==="bld") openBuilding(curBld); }
 function doBldAct(act){
   if(act==="claimEgg"){
     if(store.eggClaimed){ toast("You already hatched your founder Legendary 🌟"); return; }
@@ -1152,6 +1188,20 @@ function doBldAct(act){
   } else if(act==="tradeGoo"){
     const now=Date.now(); const last=store.tradeGooAt||0; if(now-last < 6*3600*1000){ const left=hms(6*3600*1000-(now-last)); toast("Trade goo restocks in "+left+" — go trade meanwhile"); return; }
     store.tradeGooAt=now; store.res.goo=(store.res.goo||0)+8; save(); refreshHud(); sfx("quest",0.4); toast("💰 +8 🟢 goo from trading. Spend it at the Slime Shop.");
+  } else if(act&&act.startsWith("craft:")){
+    const id=act.slice(6), g=GEAR[id]; if(!g) return;
+    if(hasGear(id)){ toast(g.name+" already crafted"); return; }
+    if(level()<g.lvl){ toast("🔒 "+g.name+" needs Lv"+g.lvl); return; }
+    if(!affordable(g.cost)){ toast("Need "+costStr(g.cost)+" — go gather"); return; }
+    for(const k in g.cost){ if(k==="relic") store.res.relic=(store.res.relic||0)-g.cost[k]; else store.res[k]=(store.res[k]||0)-g.cost[k]; }
+    store.gear=store.gear||{}; store.gear[id]=true; if(id==="totem") store.powerTotem=true;
+    if(player){ if(id==="armor"){ player.maxhp+=30; player.hp=Math.min(player.maxhp,player.hp+30); } if(id==="boots") player.spd=Math.round(player.spd*1.15); }
+    save(); refreshHud(); sfx("level",0.5); toast(g.emoji+" Crafted "+g.name+"! "+g.desc); refreshBld();
+  } else if(act==="craftFlag"){
+    const cost={wood:8,scrap:5,goo:3}; if(!affordable(cost)){ toast("Need 8🪵 5🔩 3🟢 for a flag"); return; }
+    for(const k in cost) store.res[k]=(store.res[k]||0)-cost[k];
+    store.base=store.base||{}; store.base.flagUntil=Date.now()+7*86400000; store.baseLv=Math.max(1,store.baseLv||1);
+    save(); refreshHud(); sfx("level",0.5); toast("🚩 Base flagged — it stays permanent for 7 days!"); refreshBld();
   }
 }
 function closeBld(){ $("bld").classList.remove("on"); if(state==="bld"){ state="world"; lastTs=performance.now(); requestAnimationFrame(loop); } }
