@@ -197,13 +197,19 @@ const texLoader = new THREE.TextureLoader();
 
 // ---------- ground ----------
 {
+  // outer swamp ground (muddy grass) under everything
   const gTex = texLoader.load(TEX+"ground-grass.jpg");
-  gTex.wrapS=gTex.wrapT=THREE.RepeatWrapping; gTex.repeat.set(40,40); gTex.colorSpace=THREE.SRGBColorSpace;
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(600,600), new THREE.MeshStandardMaterial({ map:gTex, roughness:1, metalness:0, color:0x9fb59a }));
+  gTex.wrapS=gTex.wrapT=THREE.RepeatWrapping; gTex.repeat.set(50,50); gTex.colorSpace=THREE.SRGBColorSpace;
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(600,600), new THREE.MeshStandardMaterial({ map:gTex, roughness:1, metalness:0, color:0x8aa088 }));
   ground.rotation.x = -Math.PI/2; ground.receiveShadow=true; scene.add(ground);
-  // arena ring (subtle) so the player has a sense of place
-  const ring = new THREE.Mesh(new THREE.RingGeometry(46,48,64), new THREE.MeshBasicMaterial({color:0x72ff23, transparent:true, opacity:0.12, side:THREE.DoubleSide}));
-  ring.rotation.x=-Math.PI/2; ring.position.y=0.05; scene.add(ring);
+  // the ARENA FLOOR: a runed-stone disc the fight happens on (high-end look)
+  const aTex = texLoader.load(TEX+"ground-arena.jpg");
+  aTex.wrapS=aTex.wrapT=THREE.RepeatWrapping; aTex.repeat.set(10,10); aTex.colorSpace=THREE.SRGBColorSpace;
+  const arena = new THREE.Mesh(new THREE.CircleGeometry(52,64), new THREE.MeshStandardMaterial({ map:aTex, roughness:0.85, metalness:0.05, color:0xaab4c0 }));
+  arena.rotation.x=-Math.PI/2; arena.position.y=0.02; arena.receiveShadow=true; scene.add(arena);
+  // glowing rune rim around the arena edge
+  const ring = new THREE.Mesh(new THREE.RingGeometry(51,53,80), new THREE.MeshBasicMaterial({color:0x72ff23, transparent:true, opacity:0.45, side:THREE.DoubleSide, fog:false}));
+  ring.rotation.x=-Math.PI/2; ring.position.y=0.06; scene.add(ring);
 }
 
 // ---------- arena decoration (perimeter trees + rocks, never blocks play) ----------
@@ -229,7 +235,19 @@ const texLoader = new THREE.TextureLoader();
   // central bonfire visual (matches the warm point light at 0,6,0)
   const fire=new THREE.Mesh(new THREE.ConeGeometry(1.2,3,8), new THREE.MeshBasicMaterial({color:0xff7a2a, fog:false}));
   fire.position.set(0,1.5,-8); scene.add(fire);
+  // torch posts ringing the arena — flickering warm light + flame (atmosphere)
+  window.__torches=[];
+  for(let i=0;i<5;i++){ const a=i/5*Math.PI*2+0.6, x=Math.cos(a)*44, z=Math.sin(a)*44;
+    const post=new THREE.Mesh(new THREE.CylinderGeometry(0.25,0.3,5,6), new THREE.MeshStandardMaterial({color:0x2a1d10,roughness:1})); post.position.set(x,2.5,z); post.castShadow=true; scene.add(post);
+    const flame=new THREE.Mesh(new THREE.ConeGeometry(0.6,1.6,8), new THREE.MeshBasicMaterial({color:0xff9a3a,fog:false})); flame.position.set(x,5.6,z); scene.add(flame);
+    const tl=new THREE.PointLight(0xff8a3a, 1.4, 36, 2); tl.position.set(x,6,z); scene.add(tl);
+    window.__torches.push({flame,tl,base:1.4,ph:i*1.7});
+  }
 })();
+// impact shockwave rings (pooled)
+const waves3d=[];
+function shockwave(x,z,color,r0){ const m=new THREE.Mesh(new THREE.RingGeometry(r0||0.6,(r0||0.6)+0.5,30), new THREE.MeshBasicMaterial({color,transparent:true,opacity:0.85,side:THREE.DoubleSide,fog:false,blending:THREE.AdditiveBlending}));
+  m.rotation.x=-Math.PI/2; m.position.set(x,0.5,z); scene.add(m); waves3d.push({m,t:0,life:0.45}); }
 
 // ---------- post (bloom) ----------
 const fxComposer = new EffectComposer(renderer);
@@ -361,7 +379,7 @@ function applySwingHit(){
     if(player.lifesteal){ player.hp=Math.min(player.maxhp, player.hp+player.lifesteal); }
     if(e.hp<=0) killEnemy(e);
   }
-  if(hit){ G.shake=Math.max(G.shake, 0.22); hitstop(0.05); }
+  if(hit){ G.shake=Math.max(G.shake, 0.35); hitstop(0.07); shockwave(player.pos.x+player.dir.x*2, player.pos.z+player.dir.z*2, 0xbbff63, 1.2); }
 }
 let stopT=0; function hitstop(s){ stopT=Math.max(stopT,s); }
 function killEnemy(e){
@@ -597,6 +615,11 @@ function tick(){
   // sparks
   for(const s of sparks){ const u=s.userData; u.life-=dt; u.vy-=18*dt; s.position.x+=u.vx*dt; s.position.y+=u.vy*dt; s.position.z+=u.vz*dt; s.material.opacity=Math.max(0,u.life/0.6); if(u.life<=0){ scene.remove(s); } }
   sparks=sparks.filter(s=>s.userData.life>0);
+  // shockwave rings expand + fade
+  for(const w of waves3d){ w.t+=dt; const k=w.t/w.life; const s=1+k*7; w.m.scale.set(s,s,s); w.m.material.opacity=Math.max(0,0.85*(1-k)); if(w.t>=w.life){ scene.remove(w.m); } }
+  for(let i=waves3d.length-1;i>=0;i--){ if(waves3d[i].t>=waves3d[i].life) waves3d.splice(i,1); }
+  // torch flicker
+  if(window.__torches){ for(const t of window.__torches){ const f=0.75+0.35*Math.sin(performance.now()/70+t.ph)*Math.random(); t.tl.intensity=t.base*f; t.flame.scale.y=0.8+0.5*f; } }
 
   // damage numbers
   for(const d of dmgEls){ d.t+=dt; const v=worldToScreen(d.pos); d.el.style.left=v.x+"px"; d.el.style.top=(v.y-40*d.t)+"px"; d.el.style.opacity=Math.max(0,1-d.t/0.9); if(d.t>0.9){ d.el.remove(); } }
