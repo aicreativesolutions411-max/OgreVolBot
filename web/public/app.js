@@ -23639,15 +23639,67 @@ const DESKTOP_NAV_GROUPS = [
   { key: "profile", label: "Profile", items: [["profile", "Home / Profile"]] }
 ];
 
-const DESKTOP_NAV_ICONS = {
-  terminal: "📡", live: "🍳", liveTrades: "⚡",
-  smartChart: "📈", trade: "🔄",
-  slimeScope: "🔭", watchlist: "⭐", kol: "👑", sniper: "🎯", txAudit: "🧾",
-  tek: "🧰", ogreAi: "🤖", launchCoin: "🚀", bundle: "📦", volume: "🌀", launch: "👀",
-  wallets: "👛", positions: "💼", pnl: "📊", profile: "🐸"
+// Custom SlimeWire icon set — clean line glyphs with swamp/ogre character
+// (cauldron for "Cooks", ogre head for the A.I., frog for profile, slime scope,
+// etc.) instead of generic emoji. All use stroke=currentColor so they inherit
+// the nav button colour and flip dark on the active green pill automatically.
+function swampIcon(paths) {
+  return `<svg class="swampi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+}
+const SWAMP_ICON_PATHS = {
+  // Live Terminal — command prompt
+  terminal: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M7 9l3 3-3 3"/><path d="M13 15h4"/>',
+  // Cooks / new pairs — bubbling swamp cauldron
+  live: '<path d="M4 11h16"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M7 18l-1 2"/><path d="M17 18l1 2"/><path d="M10 7c0-1.3 1-1.3 1-2.5"/><path d="M14 8c0-1.3 1-1.3 1-2.5"/>',
+  // Live trades — lightning
+  liveTrades: '<path d="M13 3L6 13h5l-1 8 8-11h-5z"/>',
+  // Smart chart — uptrend line
+  smartChart: '<path d="M3 17l5-5 4 3 8-9"/><path d="M16 6h4v4"/>',
+  // Trade — swap arrows
+  trade: '<path d="M4 8h13l-3-3"/><path d="M20 16H7l3 3"/>',
+  // Slime Scope — scope + lens
+  slimeScope: '<circle cx="11" cy="11" r="6"/><path d="M11 5v2.5"/><path d="M11 14.5V17"/><path d="M5 11h2.5"/><path d="M14.5 11H17"/><circle cx="11" cy="11" r="1.2"/><path d="M15.5 15.5L20 20"/>',
+  // Watchlist — star
+  watchlist: '<path d="M12 4l2.3 4.7 5.2.8-3.8 3.6.9 5.1-4.6-2.4-4.6 2.4.9-5.1L4.3 9.5l5.2-.8z"/>',
+  // KOL — crown
+  kol: '<path d="M4 8l3 9h10l3-9-5 4-3-6-3 6z"/><path d="M7 17h10"/>',
+  // Sniper — target reticle
+  sniper: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3.3"/><path d="M12 2v3"/><path d="M12 19v3"/><path d="M2 12h3"/><path d="M19 12h3"/>',
+  // Tx audit — receipt
+  txAudit: '<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6"/><path d="M9 12h6"/>',
+  // Tools — wrench
+  tek: '<path d="M15 5a4 4 0 0 1-5.2 5L5 14.8 9.2 19l4.8-4.8a4 4 0 0 1 5-5.2l-2.7 2.7-2.3-.5-.5-2.3z"/>',
+  // Ogre A.I. — ogre head with tusks
+  ogreAi: '<path d="M5 10a7 5 0 0 1 14 0v3a5 5 0 0 1-5 5h-4a5 5 0 0 1-5-5z"/><path d="M4 8L2.5 6"/><path d="M20 8l1.5-2"/><circle cx="9.5" cy="11" r="1"/><circle cx="14.5" cy="11" r="1"/><path d="M9.5 15l-.7 2.5"/><path d="M14.5 15l.7 2.5"/>',
+  // Launch a coin — rocket
+  launchCoin: '<path d="M12 3c3 2 5 6 5 10l-3 3h-4l-3-3c0-4 2-8 5-10z"/><circle cx="12" cy="10" r="1.6"/><path d="M9 17l-2 4"/><path d="M15 17l2 4"/>',
+  // Bundle — stacked crate
+  bundle: '<path d="M12 3l8 4-8 4-8-4z"/><path d="M4 7v6l8 4 8-4V7"/><path d="M12 11v6"/>',
+  // Volume — spectrum bars
+  volume: '<path d="M4 13v4"/><path d="M8 9v8"/><path d="M12 5v12"/><path d="M16 10v7"/><path d="M20 13v4"/>',
+  // Watch — eye
+  launch: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>',
+  // Wallets — wallet
+  wallets: '<rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10h18"/><circle cx="17" cy="14" r="1.3"/>',
+  // Positions — briefcase
+  positions: '<rect x="3" y="8" width="18" height="11" rx="2"/><path d="M8 8V6a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M3 13h18"/>',
+  // PnL — bar chart
+  pnl: '<path d="M4 20V11"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M21 20H3"/>',
+  // Profile — frog face
+  profile: '<path d="M5 12a7 6 0 0 1 14 0v2a5 5 0 0 1-5 5h-4a5 5 0 0 1-5-5z"/><circle cx="8" cy="8" r="2.2"/><circle cx="16" cy="8" r="2.2"/><path d="M9 14.5c1.2 1.4 4.8 1.4 6 0"/>'
 };
+const DESKTOP_NAV_ICONS = Object.fromEntries(
+  Object.entries(SWAMP_ICON_PATHS).map(([key, paths]) => [key, swampIcon(paths)])
+);
 
-const DESKTOP_NAV_GROUP_ICONS = { live: "📡", chart: "📈", intel: "🔭", tools: "🧰", portfolio: "💼", profile: "🐸" };
+const DESKTOP_NAV_GROUP_ICONS = {
+  live: swampIcon(SWAMP_ICON_PATHS.live),
+  chart: swampIcon(SWAMP_ICON_PATHS.smartChart),
+  intel: swampIcon(SWAMP_ICON_PATHS.slimeScope),
+  tools: swampIcon(SWAMP_ICON_PATHS.tek),
+  portfolio: swampIcon(SWAMP_ICON_PATHS.positions),
+  profile: swampIcon(SWAMP_ICON_PATHS.profile)
+};
 
 // One nav, two faces. Desktop: fixed left sidebar with ACCORDION groups - click
 // "Intel" and its options drop right there; one group open at a time, no dead

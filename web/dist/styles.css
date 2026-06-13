@@ -9679,7 +9679,12 @@ body {
   border-color: rgba(114, 255, 35, 0.6);
   font-weight: 800;
 }
-.nav-side-icon { font-size: 1rem; line-height: 1; flex: 0 0 auto; }
+.nav-side-icon { font-size: 1rem; line-height: 1; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; }
+.nav-side-icon .swampi { width: 18px; height: 18px; display: block; }
+/* Soft swamp glow on resting icons; drops to none on the active green pill so
+   the dark glyph stays crisp. */
+.nav-drop-bar .nav-side-items button:not([data-active="true"]) .swampi { filter: drop-shadow(0 0 4px rgba(114, 255, 35, 0.45)); }
+.nav-side-group-toggle .nav-side-icon .swampi { width: 17px; height: 17px; }
 
 /* --- Desktop face: one tight top bar, dropdowns to subcategories --- */
 @media (min-width: 761px) {
