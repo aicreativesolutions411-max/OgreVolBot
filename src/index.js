@@ -2408,6 +2408,19 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendWebJson(request, response, result.ok ? 200 : 400, result);
       return;
     }
+    // Raid posts: X posts registered via TG /raid, ranked by likes+RTs.
+    if (request.method === "GET" && pathname === "/api/web/raid-posts") {
+      const store = await readRaidPosts().catch(() => ({ posts: [] }));
+      const posts = (store.posts || []).slice(0, 25);
+      sendCachedWebJson(request, response, 200, { ok: true, posts, liveMetrics: !!(process.env.X_BEARER_TOKEN || process.env.TWITTER_BEARER_TOKEN) }, "public, max-age=15, stale-while-revalidate=120");
+      return;
+    }
+    if (request.method === "POST" && pathname === "/api/web/raid-posts") {
+      const body = await readJsonRequestBody(request, 4_000);
+      const result = await submitRaidPost(body);
+      sendWebJson(request, response, result.ok ? 200 : 400, result);
+      return;
+    }
     // Crews: aggregate leaderboard scores by clan tag (TG/X groups compete).
     if (request.method === "GET" && pathname === "/api/web/crews") {
       const board = await readSwampLeaderboard().catch(() => ({ scores: [] }));
@@ -7179,6 +7192,11 @@ async function handleMessage(message, userId) {
   const myWins = parseCommandWithArgument(text, ["mywins", "my_wins"]);
   if (myWins) {
     await handleTelegramMyWinsToggle(chatId, message, userId, myWins.argument);
+    return;
+  }
+  const raidCommand = parseCommandWithArgument(text, ["raid"]);
+  if (raidCommand) {
+    await handleTelegramRaidCommand(chatId, message, raidCommand.argument);
     return;
   }
   // /slimewire on|off - also accept the bare phrase, people drop the slash constantly.
@@ -20225,6 +20243,8 @@ function defaultJsonForPath(filePath) {
       return { scores: [] };
     case "community-raids.json":
       return { raids: [] };
+    case "raid-posts.json":
+      return { posts: [] };
     case "audit-log.json":
       return { entries: [] };
     case "state.json":
@@ -20753,6 +20773,32 @@ async function handleTelegramProofCommand(chatId) {
     `${calls.calls.filter((call) => call.status === "watching").length} calls being tracked live. ${rugs} rugs flagged before death by SlimeShield.`,
     `Wins AND losses, public: <a href="https://www.slimewire.org/proof">slimewire.org/proof</a>`
   ].join("\n"));
+}
+
+async function handleTelegramRaidCommand(chatId, message, argument) {
+  if (tgCommandOnCooldown(chatId, "raid", 4000)) return;
+  const arg = String(argument || "").trim();
+  const from = message?.from || {};
+  const by = "@" + String(from.username || from.first_name || "anon").replace(/[^A-Za-z0-9_]/g, "").slice(0, 24);
+  if (!arg || !/x\.com|twitter\.com/i.test(arg)) {
+    await sayHtml(chatId, [
+      "⚔️ <b>/raid &lt;your X post link&gt;</b>",
+      "",
+      "Drop the link to your raid post and it joins the <b>raid leaderboard</b> — ranked by likes + retweets — at <a href=\"https://www.slimewire.org/raids\">slimewire.org/raids</a>.",
+      "Get your crew to like &amp; RT it to climb the board. 🔥"
+    ].join("\n"));
+    return;
+  }
+  const res = await submitRaidPost({ url: arg, by });
+  if (res.ok) {
+    await sayHtml(chatId, [
+      "🔥 <b>Raid logged on the board!</b>",
+      res.liveMetrics ? `Current score: <b>${res.score}</b> (live likes + RTs).` : "It climbs as your post gets likes + RTs — rally your crew.",
+      "Board: <a href=\"https://www.slimewire.org/raids\">slimewire.org/raids</a>"
+    ].join("\n"));
+  } else {
+    await say(chatId, "Send a valid X post link, e.g.\n/raid https://x.com/you/status/123");
+  }
 }
 
 // Channels: only /look, /alpha, /slimewire - posts have no from user, admin implied.
@@ -22957,6 +23003,39 @@ async function submitCommunityRaid(body = {}) {
   store.raids = store.raids.slice(-80);
   await writeJsonFile(communityRaidsPath(), store);
   return { ok: true, mint, symbol };
+}
+
+// --- Raid posts: /raid in Telegram registers an X post, ranked by likes+RTs ---
+function raidPostsPath() { return path.join(CONFIG.dataDir, "raid-posts.json"); }
+async function readRaidPosts() { const s = await readJson(raidPostsPath()); if (!Array.isArray(s.posts)) s.posts = []; return s; }
+function parseTweetId(url) { const m = /(?:x\.com|twitter\.com)\/[^/]+\/status\/(\d+)/i.exec(String(url || "")); return m ? m[1] : null; }
+async function fetchXEngagement(tweetId) {
+  const token = process.env.X_BEARER_TOKEN || process.env.TWITTER_BEARER_TOKEN;
+  if (!token || !tweetId) return null;
+  try {
+    const r = await fetch(`https://api.twitter.com/2/tweets/${tweetId}?tweet.fields=public_metrics`, { headers: { Authorization: `Bearer ${token}` } });
+    if (!r.ok) return null;
+    const j = await r.json(); const m = j && j.data && j.data.public_metrics; if (!m) return null;
+    return { likes: m.like_count || 0, rts: (m.retweet_count || 0) + (m.quote_count || 0), replies: m.reply_count || 0 };
+  } catch { return null; }
+}
+function raidPostScore(p) { return (p.likes || 0) + (p.rts || 0) * 3 + (p.replies || 0) + (p.bumps || 0) * 5; }
+async function submitRaidPost(body = {}) {
+  const url = String(body.url || "").slice(0, 300);
+  const tid = parseTweetId(url);
+  if (!tid) return { ok: false, error: "need an x.com post link" };
+  const by = String(body.by || "anon").replace(/[^A-Za-z0-9_@. -]/g, "").slice(0, 24) || "anon";
+  const sym = String(body.symbol || "").replace(/[^A-Za-z0-9_$]/g, "").slice(0, 12);
+  const store = await readRaidPosts();
+  const now = new Date().toISOString();
+  const eng = await fetchXEngagement(tid);
+  let p = store.posts.find((x) => x.tid === tid);
+  if (p) { p.bumps = (p.bumps || 1) + 1; p.at = now; if (eng) { p.likes = eng.likes; p.rts = eng.rts; p.replies = eng.replies; } }
+  else { p = { tid, url: `https://x.com/i/status/${tid}`, by, symbol: sym, at: now, bumps: 1, likes: eng ? eng.likes : 0, rts: eng ? eng.rts : 0, replies: eng ? eng.replies : 0 }; store.posts.push(p); }
+  p.score = raidPostScore(p);
+  store.posts = store.posts.sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, 200);
+  await writeJsonFile(raidPostsPath(), store);
+  return { ok: true, score: p.score, liveMetrics: !!eng };
 }
 
 async function submitSwampScore(body = {}) {

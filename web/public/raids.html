@@ -132,6 +132,11 @@
         <div class="lb" id="lb"><div class="empty">loading…</div></div>
       </div>
       <div class="panel">
+        <h3>🐦 Top raid posts</h3>
+        <div style="color:var(--dim);font-size:0.8rem;margin-bottom:8px">From Telegram <b>/raid</b> · ranked by likes + RTs</div>
+        <div class="lb" id="posts"><div class="empty">no raid posts yet — use /raid in Telegram</div></div>
+      </div>
+      <div class="panel">
         <h3>🐸 Hunt them in The Swamp</h3>
         <p style="color:var(--dim);font-size:0.84rem;line-height:1.5;margin:0 0 12px">These bosses also roam the Swamp as catchable creatures. Catch them, build your Dex, fight for loot.</p>
         <a class="btnfull" href="/swamp" style="background:linear-gradient(135deg,var(--purp),#c9b3ff)">Play The Swamp →</a>
@@ -272,8 +277,13 @@ $("#rSubmit").onclick=async()=>{
       window.open("https://twitter.com/intent/tweet?text="+encodeURIComponent(txt),"_blank");
     } else toast(j&&j.error?("Couldn't start: "+j.error):"Couldn't start raid"); }catch(_){ toast("Network error"); }
 };
-load(); loadLb("raids");
-setInterval(load, 45000);
+async function loadPosts(){ try{ const r=await fetch(API+"/api/web/raid-posts",{cache:"no-store"}); const j=await r.json();
+    const rows=(j&&j.posts)||[]; const box=$("#posts");
+    if(!rows.length){ box.innerHTML='<div class="empty">no raid posts yet — use <b>/raid</b> in Telegram</div>'; return; }
+    box.innerHTML=rows.slice(0,8).map((p,i)=>`<div class="row"><span class="rk">#${i+1}</span><a class="nm" href="${esc(p.url)}" target="_blank" rel="noopener" style="color:var(--blue)">${esc(p.by||"anon")}${p.symbol?(" · $"+esc(p.symbol)):""}</a><span class="sc">${j.liveMetrics?("❤"+(p.likes||0)+" ↻"+(p.rts||0)):("🔥"+(p.score||0))}</span></div>`).join("");
+  }catch(_){ } }
+load(); loadLb("raids"); loadPosts();
+setInterval(()=>{load();loadPosts();}, 45000);
 // test hook
 window.__RAIDS={ get bosses(){return BOSSES;}, joinRaid:()=>{ if(BOSSES[0]) joinRaid(mintOf(BOSSES[0]),symOf(BOSSES[0]),null); }, get pts(){return store.raidPts;}, load };
 })();
