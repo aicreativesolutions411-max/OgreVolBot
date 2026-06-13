@@ -1371,6 +1371,10 @@ function startHealthServer() {
       await serveStaticHtmlPage(response, "swamp3d.html");
       return;
     }
+    if (request.method === "GET" && ["/raids", "/raid"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "raids.html");
+      return;
+    }
 
     if (request.method === "GET" && /^[/](call|u|g|hype)([/]|$)/.test(requestUrl.pathname)) {
       await serveProofSharePage(requestUrl, request, response);
@@ -22857,7 +22861,7 @@ async function readSwampLeaderboard() {
 
 async function submitSwampScore(body = {}) {
   const mode = String(body.mode || "").toLowerCase();
-  if (!["survival", "arena", "catches"].includes(mode)) return { ok: false, error: "bad mode" };
+  if (!["survival", "arena", "catches", "raids"].includes(mode)) return { ok: false, error: "bad mode" };
   const score = Math.max(0, Math.min(1e9, Math.round(Number(body.score) || 0)));
   if (!score) return { ok: false, error: "no score" };
   let name = String(body.name || "anon").replace(/[^A-Za-z0-9_$. -]/g, "").slice(0, 16).trim() || "anon";

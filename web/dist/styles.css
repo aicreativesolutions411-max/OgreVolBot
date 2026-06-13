@@ -1338,6 +1338,7 @@ button:disabled {
   box-shadow: 0 0 16px rgba(114, 255, 35, 0.4);
   animation: navGamePulse 2.4s ease-in-out infinite;
 }
+.tabs a.nav-game.nav-raids { background: linear-gradient(135deg, #ff6b6b, #ffcf5a); }
 .tabs a.nav-game:hover { filter: brightness(1.06); transform: translateY(-1px); }
 @keyframes navGamePulse { 0%, 100% { box-shadow: 0 0 12px rgba(114, 255, 35, 0.3); } 50% { box-shadow: 0 0 26px rgba(114, 255, 35, 0.65); } }
 
