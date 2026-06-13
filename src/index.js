@@ -2266,6 +2266,27 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    // PUBLIC: The Swamp game leaderboard — competition with no login required.
+    // GET returns top scores per mode; POST submits a run. This is the
+    // "compete against other degens" hook for the game.
+    if (request.method === "GET" && pathname === "/api/web/swamp-leaderboard") {
+      const mode = String(requestUrl.searchParams.get("mode") || "survival").toLowerCase();
+      const board = await readSwampLeaderboard().catch(() => ({ scores: [] }));
+      const rows = (board.scores || [])
+        .filter((s) => s.mode === mode)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 25)
+        .map((s, i) => ({ rank: i + 1, name: s.name, score: s.score, meta: s.meta || "", at: s.at }));
+      sendCachedWebJson(request, response, 200, { ok: true, mode, scores: rows }, "public, max-age=15, stale-while-revalidate=120");
+      return;
+    }
+    if (request.method === "POST" && pathname === "/api/web/swamp-leaderboard") {
+      const body = await readJsonRequestBody(request, 4_000);
+      const result = await submitSwampScore(body);
+      sendWebJson(request, response, result.ok ? 200 : 400, result);
+      return;
+    }
+
     // PUBLIC proof wall data: the engine's track record - wins AND losses - with no
     // login. Every Telegram post links here; receipts are the marketing.
     if (request.method === "GET" && pathname === "/api/web/proof") {
@@ -6399,6 +6420,10 @@ function tradeHistoryPath() {
 
 function pumpLaunchAttemptsPath() {
   return path.join(CONFIG.dataDir, "pump-launch-attempts.json");
+}
+
+function swampLeaderboardPath() {
+  return path.join(CONFIG.dataDir, "swamp-leaderboard.json");
 }
 
 function pumpLaunchHostedMetadataRoot() {
@@ -20053,6 +20078,8 @@ function defaultJsonForPath(filePath) {
   switch (path.basename(filePath)) {
     case "wallets.json":
       return { wallets: [] };
+    case "swamp-leaderboard.json":
+      return { scores: [] };
     case "audit-log.json":
       return { entries: [] };
     case "state.json":
@@ -22751,6 +22778,40 @@ async function readPumpLaunchAttempts() {
 async function writePumpLaunchAttempts(store) {
   store.attempts = Array.isArray(store.attempts) ? store.attempts.slice(-100) : [];
   await writeJsonFile(pumpLaunchAttemptsPath(), store);
+}
+
+async function readSwampLeaderboard() {
+  const store = await readJson(swampLeaderboardPath());
+  if (!Array.isArray(store.scores)) store.scores = [];
+  return store;
+}
+
+async function submitSwampScore(body = {}) {
+  const mode = String(body.mode || "").toLowerCase();
+  if (!["survival", "arena", "catches"].includes(mode)) return { ok: false, error: "bad mode" };
+  const score = Math.max(0, Math.min(1e9, Math.round(Number(body.score) || 0)));
+  if (!score) return { ok: false, error: "no score" };
+  let name = String(body.name || "anon").replace(/[^A-Za-z0-9_$. -]/g, "").slice(0, 16).trim() || "anon";
+  const meta = String(body.meta || "").replace(/[^A-Za-z0-9_$.,: -]/g, "").slice(0, 40);
+  const store = await readSwampLeaderboard();
+  // keep one best row per (mode,name): replace if this beats their prior best
+  const idx = store.scores.findIndex((s) => s.mode === mode && s.name === name);
+  if (idx >= 0) {
+    if (score <= store.scores[idx].score) {
+      const rank = store.scores.filter((s) => s.mode === mode && s.score > store.scores[idx].score).length + 1;
+      return { ok: true, improved: false, best: store.scores[idx].score, rank };
+    }
+    store.scores[idx] = { mode, name, score, meta, at: new Date().toISOString() };
+  } else {
+    store.scores.push({ mode, name, score, meta, at: new Date().toISOString() });
+  }
+  // cap stored rows per mode to keep the file small
+  const byMode = {};
+  for (const s of store.scores) (byMode[s.mode] = byMode[s.mode] || []).push(s);
+  store.scores = Object.values(byMode).flatMap((arr) => arr.sort((a, b) => b.score - a.score).slice(0, 200));
+  await writeJsonFile(swampLeaderboardPath(), store);
+  const rank = store.scores.filter((s) => s.mode === mode && s.score > score).length + 1;
+  return { ok: true, improved: true, rank };
 }
 
 async function upsertPumpLaunchAttempt(update = {}) {

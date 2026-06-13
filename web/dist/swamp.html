@@ -7,7 +7,8 @@
     <meta name="description" content="Every Solana launch is a slime creature in the Swamp. Catch them, read the shield, ape the runners. Gotta slime 'em all.">
     <meta property="og:title" content="The Swamp — catch the coins before they pump">
     <meta property="og:description" content="Every live launch becomes a slime creature. Catch them, read the shield, ape the runners. Powered by SlimeWire.">
-    <meta property="og:image" content="https://www.slimewire.org/assets/slimewire-panel-wordmark-clean.png">
+    <meta property="og:image" content="https://www.slimewire.org/assets/slimewire/swamp/art/og-hero.jpg">
+    <meta name="twitter:image" content="https://www.slimewire.org/assets/slimewire/swamp/art/og-hero.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <link rel="icon" type="image/svg+xml" href="/assets/slimewire/svg/slimewire-mark.svg">
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -189,8 +190,10 @@
       @keyframes stormflash { 0%,91%,100%{opacity:0} 92%{opacity:.55} 93.5%{opacity:.08} 95%{opacity:.4} 97%{opacity:0} }
       .title-inner { position:relative; z-index:1; max-width:520px; }
       .title-mark { display:none; }
+      .title-logo-img { width:clamp(260px,72vw,460px); height:auto; filter:drop-shadow(0 0 30px rgba(114,255,35,0.5)) drop-shadow(0 8px 18px rgba(0,0,0,0.8)); animation:bob 3.6s ease-in-out infinite; }
       .title-logo { margin:6px 0 0; font-family:var(--display); font-size:clamp(2.6rem,13vw,4.6rem); font-weight:900; letter-spacing:0.06em; color:#eaf7df;
         text-shadow:0 0 34px rgba(114,255,35,0.55), 0 0 80px rgba(124,90,255,0.45), 0 4px 14px rgba(0,0,0,0.9); }
+      .title-explore { display:block; margin:14px auto 0; background:none; border:0; color:var(--dim); font-size:0.86rem; cursor:pointer; text-decoration:underline; text-underline-offset:3px; }
       .title-tag { color:#d8dcf0; font-size:clamp(0.85rem,3.5vw,1rem); margin:8px auto 22px; max-width:380px; text-shadow:0 2px 8px rgba(0,0,0,0.9); }
       .title-tag b { color:var(--green2); }
       .title-enter { background:linear-gradient(135deg,var(--green),var(--green2)); color:#071006; border:0; border-radius:99px;
@@ -297,6 +300,17 @@
         opacity:0; transition:opacity .2s, transform .2s; pointer-events:none; box-shadow:0 0 24px rgba(114,255,35,0.5); }
       .toast.show { opacity:1; transform:translateX(-50%) translateY(-8px); }
 
+      /* leaderboard */
+      .lb-tabs { display:flex; gap:8px; justify-content:center; margin:4px 0 12px; flex-wrap:wrap; }
+      .lb-tab { background:var(--panel); border:1px solid var(--line); color:var(--dim); border-radius:99px; padding:6px 14px; font-weight:800; font-size:0.78rem; cursor:pointer; }
+      .lb-tab.on { background:var(--green); color:#071006; border-color:var(--green); }
+      .lb-list { max-width:480px; margin:0 auto; display:flex; flex-direction:column; gap:6px; }
+      .lb-row { display:flex; align-items:center; gap:10px; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:9px 14px; }
+      .lb-row.mine { border-color:var(--green); box-shadow:0 0 14px rgba(114,255,35,0.25); }
+      .lb-rank { width:34px; font-weight:900; color:var(--green2); }
+      .lb-nm { flex:1; font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .lb-sc { font-weight:900; color:var(--green); } .lb-sc small { color:var(--dim); font-weight:700; }
+      .lb-name { background:#0a1422; border:1px solid var(--line); color:#eaffe0; border-radius:99px; padding:9px 16px; font-weight:700; text-align:center; max-width:240px; }
       footer { text-align:center; color:var(--dim); font-size:0.72rem; margin-top:26px; }
       footer a { color:var(--green); }
       .cta-launch { display:block; text-align:center; margin:20px auto 0; max-width:480px;
@@ -316,10 +330,11 @@
     <div class="titlescreen" data-title>
       <div class="title-bgfx"></div>
       <div class="title-inner">
-        <img class="title-mark" src="/assets/slimewire/swamp/sprites/swamp-trader-ogre.png" alt="" onerror="this.style.display='none'">
-        <h1 class="title-logo">THE&nbsp;SWAMP</h1>
-        <p class="title-tag">Every Solana launch is a creature. Catch the runners, dodge the rugs, <b>ape the winners</b>.</p>
-        <button class="title-enter" data-title-enter>▶ ENTER THE SWAMP</button>
+        <img class="title-logo-img" src="/assets/slimewire/swamp/art/title-logo.png" alt="THE SWAMP" onerror="this.style.display='none';var h=document.querySelector('.title-logo');if(h)h.style.display='block'">
+        <h1 class="title-logo" style="display:none">THE&nbsp;SWAMP</h1>
+        <p class="title-tag">Survive the rug horde. Blast waves of slimes, level up, and fight <b>OGRE bosses</b> born from real Solana launches.</p>
+        <button class="title-enter" data-title-enter>⚔️ FIGHT THE HORDE</button>
+        <button class="title-explore" data-title-explore>🗺️ or explore the swamp</button>
         <div class="title-stats" data-title-stats></div>
         <button class="title-mute" data-title-mute>🔊 Sound: ON</button>
         <div class="title-credit">powered by <b>SlimeWire</b> · slimewire.org</div>
@@ -365,11 +380,12 @@
       </div>
 
       <div class="tabs">
-        <button class="tab on" data-view="world">🗺️ Swamp</button>
+        <button class="tab on" data-view="survive">⚔️ Fight</button>
+        <button class="tab" data-view="world">🗺️ Swamp</button>
         <button class="tab" data-view="wild">📡 Feed</button>
-        <button class="tab" data-view="dex">🎒 Swampdex</button>
-        <button class="tab" data-view="arena">⚔️ Arena</button>
-        <button class="tab" data-view="survive">💀 Survive</button>
+        <button class="tab" data-view="dex">🎒 Dex</button>
+        <button class="tab" data-view="arena">🏟️ Pit</button>
+        <button class="tab" data-view="board">🏆 Ranks</button>
       </div>
 
       <div class="world-wrap" data-world-wrap>
@@ -952,8 +968,8 @@
         if (!spriteCache[name]) { const img = new Image(); img.decoding="async"; img.src = SPRITE_BASE+name+".png"; spriteCache[name]=img; }
         return spriteCache[name];
       }
-      const TYPE_SPRITE = { ogre:"ogre-boss", ghost:"toxic-rug-slime", toxic:"toxic-rug-slime", shinytype:"shiny-slime", runner:"runner-slime" };
-      const SLIME_SKINS = ["fresh-slime","liquidity-slime","chart-wing-slime","small-ogre","candle-slime"];
+      const TYPE_SPRITE = { ogre:"ogre-boss", ghost:"ghost-slime", toxic:"toxic-rug-slime", shinytype:"shiny-slime", runner:"runner-slime" };
+      const SLIME_SKINS = ["fresh-slime","liquidity-slime","chart-wing-slime","small-ogre","candle-slime","whale-slime","jeet-slime","diamond-slime","ghost-slime"];
       function spriteNameForRow(row) {
         const t = typeFor(row);
         if (TYPE_SPRITE[t]) return TYPE_SPRITE[t];
@@ -961,7 +977,7 @@
         if (m5 >= 40) return (hash(row.tokenMint)%2) ? "pump-rocket-slime" : "candle-slime";
         return SLIME_SKINS[hash(row.tokenMint) % SLIME_SKINS.length];
       }
-      ["fresh-slime","runner-slime","shiny-slime","toxic-rug-slime","sell-pressure-slime","liquidity-slime","small-ogre","ogre-boss","candle-slime","chart-wing-slime","pump-rocket-slime","swamp-trader-ogre"].forEach(loadSprite);
+      ["fresh-slime","runner-slime","shiny-slime","toxic-rug-slime","sell-pressure-slime","liquidity-slime","small-ogre","ogre-boss","candle-slime","chart-wing-slime","pump-rocket-slime","swamp-trader-ogre","whale-slime","jeet-slime","diamond-slime","ghost-slime","swarm-gremlin","ogre-warlord"].forEach(loadSprite);
 
       // ---------- real painted tiles (with procedural fallback) ----------
       const TILE_BASE = "/assets/slimewire/swamp/tiles/";
@@ -1022,7 +1038,7 @@
 
       // ---------- state ----------
       let rows = [];
-      let view = "world";
+      let view = "survive";
       let ogreSet = new Set(); // mints launched on SlimeWire = OGRE bosses
       const VERDICT_COLOR = { BUY:"#72ff23", CAUTION:"#ffd84d", RISK:"#ff9d4d", AVOID:"#ff6b5e" };
       const isOgreMint = (mint) => ogreSet.has(String(mint));
@@ -1132,10 +1148,47 @@
 
       function render() {
         renderProgress();
+        if (view==="survive") return;
         if (view==="world") { $("[data-grid]").innerHTML=""; $("[data-empty]").hidden=true; $("[data-count]").textContent = `${rows.length} slimes roaming · ${Object.keys(store.dex).length} caught`; }
         else if (view==="wild") renderWild();
         else if (view==="arena") openArena();
+        else if (view==="board") renderBoard();
         else renderDex();
+      }
+
+      // ---------- leaderboard (competition) ----------
+      let boardMode = "survival";
+      async function renderBoard() {
+        const grid = $("[data-grid]"); const empty = $("[data-empty]"); empty.hidden = true;
+        $("[data-count]").textContent = "🏆 Leaderboard";
+        const tabs = [["survival","⚔️ Survival"],["catches","🎒 Catches"],["arena","🏟️ Pit"]]
+          .map(([m,l])=>`<button class="lb-tab ${m===boardMode?"on":""}" data-lb="${m}">${l}</button>`).join("");
+        grid.innerHTML = `<div style="grid-column:1/-1">
+          <div class="lb-tabs">${tabs}</div>
+          <div class="lb-list" data-lb-list><div class="empty">loading the ranks…</div></div>
+          <div style="text-align:center;margin-top:12px"><input class="lb-name" data-lb-name maxlength="16" placeholder="your tag (saved)" value="${esc(store.lbName||"")}"><div style="color:var(--dim);font-size:0.72rem;margin-top:6px">set your tag, then your runs auto-submit to the ranks</div></div>
+        </div>`;
+        grid.querySelectorAll("[data-lb]").forEach((b)=>b.onclick=()=>{ boardMode=b.getAttribute("data-lb"); renderBoard(); });
+        const nameEl = grid.querySelector("[data-lb-name]");
+        nameEl?.addEventListener("change", ()=>{ store.lbName = nameEl.value.replace(/[^A-Za-z0-9_$. -]/g,"").slice(0,16); save(store); });
+        try {
+          const data = await (await fetch(apiBase + "/api/web/swamp-leaderboard?mode=" + boardMode, { cache:"no-store" })).json();
+          const list = grid.querySelector("[data-lb-list]");
+          const unit = boardMode==="survival" ? (s)=>fmtTime(s) : (s)=>s+"";
+          if (!data.scores || !data.scores.length) { list.innerHTML = `<div class="empty">No runs yet — be the first to top the ranks! ⚔️</div>`; return; }
+          list.innerHTML = data.scores.map((r)=>{
+            const medal = r.rank===1?"🥇":r.rank===2?"🥈":r.rank===3?"🥉":`<b>#${r.rank}</b>`;
+            const mine = store.lbName && r.name===store.lbName ? "mine" : "";
+            return `<div class="lb-row ${mine}"><span class="lb-rank">${medal}</span><span class="lb-nm">${esc(r.name)}</span><span class="lb-sc">${esc(unit(r.score))}${r.meta?` <small>${esc(r.meta)}</small>`:""}</span></div>`;
+          }).join("");
+        } catch { const list = grid.querySelector("[data-lb-list]"); if (list) list.innerHTML = `<div class="empty">ranks offline — try again</div>`; }
+      }
+      async function submitScore(mode, score, meta) {
+        if (!store.lbName) return null; // no tag set, skip silently
+        try {
+          const r = await (await fetch(apiBase + "/api/web/swamp-leaderboard", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ mode, score, meta, name: store.lbName }) })).json();
+          return r && r.ok ? r : null;
+        } catch { return null; }
       }
 
       // ---------- modal ----------
@@ -2096,11 +2149,12 @@
         const caught = Object.keys(store.dex).length;
         const dmgBonus = Math.round((Math.max(1,mult)-1)*100);
         const el=$("[data-sv-start]"); el.classList.add("on");
-        el.innerHTML = `<h2>💀 SWAMP SURVIVAL</h2>
-          <p>Survive the rug horde. Move to dodge, you auto-blast the swarm. Grab XP, level up, get broken. Last as long as you can.</p>
+        el.innerHTML = `<h2>⚔️ SWAMP SURVIVAL</h2>
+          <p>Fight off escalating <b>waves</b> of rugs. Move to dodge — you auto-blast the swarm. Clear a wave, pick a power-up, push deeper. Every 5th wave is a <b>BOSS</b>; every 10th, the <b>SWAMP WARLORD</b>.</p>
           <p style="color:#bbff63">Your bags buff your run: <b>+${dmgBonus}% damage</b> from your ${worth?worth.avg.toFixed(2)+'x':'1.00x'} Swamp Worth · <b>+${caught*5} HP</b> from ${caught} caught.</p>
-          <button class="sv-bigbtn" data-sv-go>▶ ENTER THE HORDE</button>
-          ${store.survBest?`<div style="color:var(--dim);margin-top:12px;font-size:0.8rem">best: survived ${fmtTime(store.survBest.time)} · ☠ ${store.survBest.kills}</div>`:''}`;
+          <button class="sv-bigbtn" data-sv-go>▶ START WAVE 1</button>
+          ${store.survBest?`<div style="color:var(--dim);margin-top:12px;font-size:0.8rem">best: <b style="color:var(--warn)">Wave ${store.survBest.wave||1}</b> · ${fmtTime(store.survBest.time)} · ☠ ${store.survBest.kills}</div>`:''}
+          <div style="color:var(--dim);margin-top:6px;font-size:0.74rem">🏆 ${store.lbName?("competing as <b>"+esc(store.lbName)+"</b>"):"set a tag on the 🏆 Ranks tab to compete"}</div>`;
         el.querySelector("[data-sv-go]").onclick = runSurvival;
       }
       function fmtTime(s){ s=Math.floor(s); return Math.floor(s/60)+":"+String(s%60).padStart(2,"0"); }
@@ -2119,8 +2173,11 @@
           enemies:[], shots:[], gems:[], parts:[],
           xp:0, level:1, xpNext:5,
           weapon:{ dmg: 10*mult, cd:520, count:1, speed:6, pierce:0, last:0, range:9999 },
-          pickup:46, orbit:0, regen:0, lastBoss:0, spawnCd:900, lastSpawn:0,
-          mv:{x:0,y:0}
+          pickup:46, orbit:0, regen:0,
+          mv:{x:0,y:0},
+          // wave director
+          wave:0, waveActive:false, intermissionT:1600, toSpawn:0, spawnGap:600, spawnTimer:0,
+          bannerText:"", bannerSub:"", bannerT:0, dmgMult:mult
         };
         SV.on=true; SV.last=performance.now();
         $("[data-sv-levelup]").classList.remove("on");
@@ -2141,20 +2198,61 @@
         window.addEventListener("keyup",(e)=>{ if(!svState) return; const k=e.key.toLowerCase(); if(["w","s","arrowup","arrowdown"].includes(k))svState.mv.y=0; if(["a","d","arrowleft","arrowright"].includes(k))svState.mv.x=0; });
       })();
 
+      // ---- WAVE DIRECTOR: discrete escalating waves with boss waves ----
+      function svBanner(s, text, sub){ s.bannerText=text; s.bannerSub=sub||""; s.bannerT=2200; }
+      function svWaveQuota(n){ return 8 + n*4; }       // enemies per normal wave
+      function svIsBossWave(n){ return n % 5 === 0; }   // 5,10,15,...
+      function svStartWave(s) {
+        s.wave++; s.waveActive=true; s.spawnTimer=0;
+        if (svIsBossWave(s.wave)) {
+          const finalBoss = s.wave % 10 === 0; // every 10th = the warlord
+          svSpawnBoss(s, finalBoss);
+          s.toSpawn = 6 + Math.floor(s.wave/2);          // adds alongside the boss
+          s.spawnGap = 700;
+        } else {
+          s.toSpawn = svWaveQuota(s.wave);
+          s.spawnGap = Math.max(170, 620 - s.wave*28);   // later waves spawn faster
+          svBanner(s, "WAVE " + s.wave, s.toSpawn + " incoming");
+          sfx("ui");
+        }
+      }
+      function svEndWave(s) {
+        s.waveActive=false; s.intermissionT = 2600;
+        s.player.hp = Math.min(s.player.maxhp, s.player.hp + 8); // small breather heal
+        svBanner(s, "WAVE " + s.wave + " CLEARED", "+8 HP · brace yourself");
+        sfx("level");
+        // reward gems burst toward the player
+        for (let g=0; g<5; g++) s.gems.push({ x:s.player.x+(Math.random()*120-60), y:s.player.y+(Math.random()*120-60), v:2 });
+      }
       function svSpawn(s, W, H) {
         const ang=Math.random()*Math.PI*2, dist=Math.max(W,H)/SV.dpr*0.6+60;
-        const tier=1+s.t/45;
-        const isRunner=Math.random()<0.25;
+        const tier = 1 + s.wave*0.22;                    // scale by WAVE, not time
+        // enemy mix shifts nastier with waves; gremlins appear from wave 3
+        let sprite, spd, hpx=1, dmgx=1;
+        const roll=Math.random();
+        if (s.wave>=3 && roll<0.28) { sprite="swarm-gremlin"; spd=1.7+Math.random()*0.5; hpx=0.8; dmgx=1.1; } // fast glass
+        else if (roll<0.5) { sprite="toxic-rug-slime"; spd=0.9+Math.random()*0.3; hpx=1.2; }                 // tanky
+        else { sprite=ENEMY_SPRITES[Math.floor(Math.random()*ENEMY_SPRITES.length)]; spd=1.0+Math.random()*0.4; }
         s.enemies.push({ x:s.player.x+Math.cos(ang)*dist, y:s.player.y+Math.sin(ang)*dist,
-          r:14, hp:Math.round(14*tier), maxhp:Math.round(14*tier), spd:isRunner?1.7:0.9+Math.random()*0.4,
-          dmg:Math.round(6+tier*1.5), sprite:ENEMY_SPRITES[Math.floor(Math.random()*ENEMY_SPRITES.length)], boss:false, hit:0 });
+          r:14, hp:Math.round(14*tier*hpx), maxhp:Math.round(14*tier*hpx), spd,
+          dmg:Math.round((6+tier*1.6)*dmgx), sprite, boss:false, hit:0 });
       }
-      function svSpawnBoss(s) {
-        sfx("level"); toast("🧌 OGRE BOSS incoming!");
+      function svSpawnBoss(s, finalBoss) {
+        // name the boss after a real SlimeWire launch when we have one (site tie-in)
+        let label = finalBoss ? "SWAMP WARLORD" : "OGRE BOSS";
+        let mint = null;
+        const launched = [...ogreSet];
+        if (launched.length) { mint = launched[Math.floor(Math.random()*launched.length)];
+          const row = rows.find((r)=>r.tokenMint===mint); const sym = row?creatureName(row):(mint.slice(0,4));
+          label = "$" + sym + (finalBoss ? " WARLORD" : " BOSS"); }
+        sfx("boss"); shakeT=400;
+        svBanner(s, (finalBoss?"☠ FINAL BOSS":"🧌 BOSS WAVE"), label + " — wave " + s.wave);
+        toast((finalBoss?"☠ ":"🧌 ") + label + " incoming!");
         const ang=Math.random()*Math.PI*2, dist=420;
+        const hp = Math.round((finalBoss?900:380) + s.wave*48);
         s.enemies.push({ x:s.player.x+Math.cos(ang)*dist, y:s.player.y+Math.sin(ang)*dist,
-          r:38, hp:Math.round(400+s.t*6), maxhp:Math.round(400+s.t*6), spd:0.7, dmg:24,
-          sprite:"ogre-boss", boss:true, hit:0 });
+          r:finalBoss?52:38, hp, maxhp:hp, spd:finalBoss?0.62:0.74, dmg:finalBoss?34:24,
+          sprite:finalBoss?"ogre-warlord":"ogre-boss", boss:true, finalBoss, label, mint, hit:0 });
       }
       const SV_UPGRADES = [
         { b:"🔫 Double Tap", s:"+1 slimeball per shot", fn:(s)=>s.weapon.count++ },
@@ -2177,18 +2275,37 @@
       }
       function svDie(s) {
         s.dead=true; SV.on=false; cancelAnimationFrame(SV.raf); sfx("miss");
-        const reward = Math.round(s.t*3 + s.kills*4 + s.level*15);
+        const reward = Math.round(s.t*3 + s.kills*4 + s.level*15 + s.wave*25);
         store.xp += reward;
-        if (!store.survBest || s.t>store.survBest.time) store.survBest={ time:s.t, kills:s.kills };
+        const isBest = !store.survBest || s.wave>(store.survBest.wave||0) || (s.wave===(store.survBest.wave||0) && s.t>store.survBest.time);
+        if (isBest) store.survBest={ time:s.t, kills:s.kills, wave:s.wave };
         store.stats=store.stats||{}; store.stats.survRuns=(store.stats.survRuns||0)+1;
         save(store); checkUnlocks(); renderProgress();
+        const score = Math.round(s.t); const meta = `Wave ${s.wave} · ☠${s.kills}`;
+        const bossLinks = (s.bossKills||[]).slice(0,3).map((b)=>
+          `<a class="btn ape" style="margin:4px 0" href="/terminal/chart?token=${encodeURIComponent(b.mint)}&buy=1&source=swamp-survival">⚡ Ape ${esc(b.label)} (you slayed it)</a>`).join("");
         const el=$("[data-sv-death]"); el.classList.add("on");
         el.innerHTML = `<h2>💀 WRECKED</h2>
-          <div class="sv-stats">Survived <b>${fmtTime(s.t)}</b><br>☠ ${s.kills} rugs cleared · Lvl ${s.level}<br>+${reward} Swamp XP</div>
+          <div class="sv-stats">Reached <b style="color:var(--warn)">WAVE ${s.wave}</b> · survived <b>${fmtTime(s.t)}</b><br>☠ ${s.kills} rugs cleared · Lvl ${s.level}<br>+${reward} Swamp XP${isBest?' · <b style="color:var(--green)">NEW BEST!</b>':''}</div>
+          <div data-sv-rank style="color:var(--dim);font-size:0.82rem;margin:2px 0 10px"></div>
+          ${bossLinks ? `<div style="margin:6px 0 10px;display:flex;flex-direction:column;gap:2px">${bossLinks}</div>` : ""}
           <button class="sv-bigbtn" data-sv-retry>↻ RUN IT BACK</button>
+          <div style="display:flex;gap:8px;margin-top:10px;width:100%;max-width:380px">
+            <a class="btn ape" style="flex:1" href="/terminal">⚡ Trade to power up</a>
+            <a class="btn catch" style="flex:1" href="/terminal">🚀 Launch a coin</a>
+          </div>
+          <div style="color:var(--dim);font-size:0.72rem;margin-top:8px">your Swamp Worth buffs your damage — bigger bags, bigger blasts 💥</div>
           <button class="sv-ghost" data-sv-leave>Leave the pit</button>`;
         el.querySelector("[data-sv-retry]").onclick = runSurvival;
-        el.querySelector("[data-sv-leave]").onclick = ()=>{ stopSurvival(); document.querySelector('.tab[data-view="survive"]')?.click(); };
+        el.querySelector("[data-sv-leave]").onclick = ()=>{ stopSurvival(); document.querySelector('.tab[data-view="world"]')?.click(); };
+        // submit to the public leaderboard (if a tag is set) and show rank
+        const rankEl = el.querySelector("[data-sv-rank]");
+        if (!store.lbName) { if (rankEl) rankEl.innerHTML = `🏆 <a href="#" data-sv-settag style="color:var(--green)">Set your tag</a> to compete on the leaderboard`;
+          el.querySelector("[data-sv-settag]")?.addEventListener("click",(e)=>{ e.preventDefault(); const n=prompt("Your leaderboard tag:"); if(n){ store.lbName=n.replace(/[^A-Za-z0-9_$. -]/g,"").slice(0,16); save(store); submitScore("survival",score,meta).then((r)=>{ if(r&&rankEl) rankEl.textContent = `🏆 Ranked #${r.rank} on Survival!`; }); } });
+        } else {
+          if (rankEl) rankEl.textContent = "🏆 submitting to the ranks…";
+          submitScore("survival", score, meta).then((r)=>{ if(rankEl) rankEl.innerHTML = r ? `🏆 <b style="color:var(--green)">Ranked #${r.rank}</b> on Survival${r.improved?" — new personal best!":""}` : "🏆 ranks offline"; });
+        }
       }
       function stopSurvival(){ SV.on=false; cancelAnimationFrame(SV.raf); $("[data-survive]").classList.remove("on"); document.body.classList.remove("world-on"); }
 
@@ -2204,10 +2321,16 @@
         p.y += (s.mv.y/ml)*(Math.hypot(s.mv.x,s.mv.y)>0?p.speed:0)*dt*0.06*Z;
         if (p.iframe>0) p.iframe-=dt;
         if (s.regen) p.hp=Math.min(p.maxhp,p.hp+s.regen*dt/1000);
-        // spawns
-        s.lastSpawn+=dt; const rate=Math.max(180, s.spawnCd - s.t*8);
-        if (s.lastSpawn>rate){ s.lastSpawn=0; const n=1+Math.floor(s.t/30); for(let i=0;i<n;i++) svSpawn(s,W,H); }
-        if (s.t-s.lastBoss>=75 && s.t>60){ s.lastBoss=s.t; svSpawnBoss(s); }
+        // WAVE DIRECTOR
+        if (s.bannerT>0) s.bannerT-=dt;
+        if (!s.waveActive) {
+          s.intermissionT -= dt;
+          if (s.intermissionT <= 0) svStartWave(s);
+        } else {
+          s.spawnTimer += dt;
+          if (s.toSpawn > 0 && s.spawnTimer >= s.spawnGap) { s.spawnTimer=0; svSpawn(s,W,H); s.toSpawn--; }
+          if (s.toSpawn <= 0 && s.enemies.length === 0) svEndWave(s);
+        }
         // auto-fire at nearest enemy
         s.weapon.last+=dt;
         if (s.weapon.last>=s.weapon.cd && s.enemies.length){
@@ -2231,6 +2354,8 @@
             const[bx,by]=[cw,ch]; particleBurst(svCv.getBoundingClientRect().left+bx/Z, svCv.getBoundingClientRect().top+by/Z, ["#ff6b5e","#ffd84d"],8); } }
         // deaths → gems
         for(const e of s.enemies){ if(e.dead && !e._counted){ e._counted=true; s.kills++; sfx("tick");
+          if(e.boss){ sfx("level"); shakeT=300; s.bossKills=s.bossKills||[]; if(e.mint) s.bossKills.push({label:e.label,mint:e.mint}); toast("🏆 "+(e.label||"BOSS")+" slain!");
+            const[bx,by]=[cw,ch]; particleBurst(svCv.getBoundingClientRect().left+bx/Z, svCv.getBoundingClientRect().top+by/Z, ["#ffd84d","#72ff23","#fff"],20); }
           s.gems.push({x:e.x,y:e.y,v:e.boss?20:(e.maxhp>20?3:1)}); if(e.boss){ for(let g=0;g<8;g++) s.gems.push({x:e.x+(Math.random()*40-20)*Z,y:e.y+(Math.random()*40-20)*Z,v:4}); } } }
         s.enemies=s.enemies.filter(e=>!e.dead);
         // gems vacuum
@@ -2265,7 +2390,8 @@
           svx.save(); if(e.hit>0){ svx.globalCompositeOperation="lighter"; }
           if(img.complete&&img.naturalWidth) svx.drawImage(img,ex,ey,sz,sz); else { svx.fillStyle="#66aa55"; svx.fillRect(ex,ey,sz,sz); }
           svx.restore();
-          if(e.boss){ svx.fillStyle="rgba(0,0,0,0.5)"; svx.fillRect(ex,ey-8*Z,sz,4*Z); svx.fillStyle="#ff6b5e"; svx.fillRect(ex,ey-8*Z,sz*(e.hp/e.maxhp),4*Z); }
+          if(e.boss){ svx.fillStyle="rgba(0,0,0,0.6)"; svx.fillRect(ex,ey-10*Z,sz,5*Z); svx.fillStyle=e.finalBoss?"#ff4d4d":"#ff8a3d"; svx.fillRect(ex,ey-10*Z,sz*(e.hp/e.maxhp),5*Z);
+            svx.fillStyle="#fff"; svx.font=`900 ${11*Z}px Inter,sans-serif`; svx.textAlign="center"; svx.fillText(e.label||"BOSS", SX(e.x), ey-14*Z); }
         }
         // shots
         for(const sh of s.shots){ svx.fillStyle="#bbff63"; svx.beginPath(); svx.arc(SX(sh.x),SY(sh.y),sh.r,0,7); svx.fill(); svx.fillStyle="rgba(114,255,35,0.4)"; svx.beginPath(); svx.arc(SX(sh.x-sh.vx),SY(sh.y-sh.vy),sh.r*0.7,0,7); svx.fill(); }
@@ -2277,11 +2403,24 @@
         if(!blink){ if(pImg.complete&&pImg.naturalWidth) svx.drawImage(pImg,cw-psz/2+shx,ch-psz/2+shy,psz,psz); else { svx.fillStyle="#72ff23"; svx.fillRect(cw-12*Z+shx,ch-12*Z+shy,24*Z,24*Z); } }
         // cinematic pass: storm grade + hero glow (the horde reads scarier in the dark)
         atmosphere(svx, t, dt, W, H, [{ x:cw+shx, y:ch+shy, r:200*Z, c0:"rgba(160,255,140,0.16)", flicker:false }], Z*0.7);
+        // WAVE BANNER (big center text on wave start/clear)
+        if (s.bannerT > 0 && s.bannerText) {
+          const a = Math.min(1, s.bannerT/400) * Math.min(1, (2200-s.bannerT)/250);
+          svx.save(); svx.globalAlpha = Math.max(0,a); svx.textAlign="center";
+          svx.fillStyle="#eaffe0"; svx.font=`900 ${Math.min(W*0.09,52*Z)}px Cinzel, Georgia, serif`;
+          svx.shadowColor="rgba(114,255,35,0.8)"; svx.shadowBlur=24*Z;
+          svx.fillText(s.bannerText, cw, ch - 30*Z);
+          svx.shadowBlur=0; svx.fillStyle="#bbff63"; svx.font=`800 ${16*Z}px Inter,sans-serif`;
+          if (s.bannerSub) svx.fillText(s.bannerSub, cw, ch + 6*Z);
+          svx.restore();
+        }
+        // intermission countdown ring under the timer
         // HUD update
         $("[data-sv-hp]").style.width=Math.max(0,p.hp/p.maxhp*100)+"%";
         $("[data-sv-timer]").textContent=fmtTime(s.t);
         $("[data-sv-lvl]").textContent="Lvl "+s.level;
         $("[data-sv-kills]").textContent="☠ "+s.kills;
+        const wEl=$("[data-sv-wave]"); if (wEl) wEl.textContent = s.waveActive ? ("🌊 Wave "+s.wave) : (s.wave?("Wave "+s.wave+" ✓"):"");
         $("[data-sv-xp]").style.width=(s.xp/s.xpNext*100)+"%";
         SV.raf=requestAnimationFrame(svLoop);
       }
@@ -2342,13 +2481,14 @@
 
       // ---------- title screen ----------
       let started = false;
-      function enterSwamp() {
-        if (started) return; started = true;
-        $("[data-title]").classList.add("gone");
-        setTimeout(()=>{ const t=$("[data-title]"); if (t) t.style.display="none"; }, 600);
-        if (music.on) startMusic();
-        startWorld();
-        if (!store.coachSeen) showCoach();
+      function enterSwamp(mode) {
+        const dismiss = () => { $("[data-title]").classList.add("gone"); setTimeout(()=>{ const t=$("[data-title]"); if (t) t.style.display="none"; }, 600); };
+        if (!started) { started = true; dismiss(); if (music.on) startMusic(); }
+        else dismiss();
+        // default = jump straight into the wave fight; explore = the overworld hub
+        const targetTab = mode === "explore" ? "world" : "survive";
+        document.querySelector(`.tab[data-view="${targetTab}"]`)?.click();
+        if (mode === "explore" && !store.coachSeen) showCoach();
       }
       function showCoach(){ $("[data-coach]").classList.add("show"); }
       function hideCoach(){ $("[data-coach]").classList.remove("show"); store.coachSeen = true; save(store); }
@@ -2360,7 +2500,8 @@
           (store.streakData?.days>1?`🔥 ${store.streakData.days}-day streak`:"")
         ].filter(Boolean).map((t)=>`<span>${t}</span>`).join("");
       }
-      $("[data-title-enter]")?.addEventListener("click", enterSwamp);
+      $("[data-title-enter]")?.addEventListener("click", ()=> enterSwamp("fight"));
+      $("[data-title-explore]")?.addEventListener("click", ()=> enterSwamp("explore"));
       $("[data-title-mute]")?.addEventListener("click", ()=> setMute(store.muted!==true));
       $("[data-coach-ok]")?.addEventListener("click", hideCoach);
       $("[data-coach]")?.addEventListener("click", (e)=>{ if (e.target===$("[data-coach]")) hideCoach(); });
@@ -2377,6 +2518,7 @@
         if (view==="world") startWorld(); else if (view!=="survive") stopWorld();
         if (view==="survive") startSurvivalView();
         else if (view==="arena") { renderProgress(); openArena(); }
+        else if (view==="board") renderBoard();
         else render();
       }));
 
