@@ -61,11 +61,19 @@
   .overlay p{color:#dbe6f2; max-width:460px; font-size:0.94rem; line-height:1.5; margin:7px 0; text-shadow:0 2px 6px #000;}
   .big{background:linear-gradient(135deg,var(--green),var(--green2)); color:#071006; border:0; border-radius:99px; padding:16px 38px; font-weight:900; font-size:1.15rem; cursor:pointer; box-shadow:0 0 30px rgba(114,255,35,0.5); margin-top:10px;}
   .ghost{background:rgba(8,20,10,0.8); border:1px solid rgba(114,255,35,0.25); color:#eaffe0; border-radius:99px; padding:11px 22px; font-weight:800; cursor:pointer; margin-top:8px;}
-  .heroes{display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin:14px auto 0; max-width:264px;}
-  .hero{aspect-ratio:1; border-radius:16px; background:radial-gradient(circle at 50% 35%,rgba(114,255,35,0.10),rgba(8,20,10,0.85)); border:2px solid rgba(114,255,35,0.22); cursor:pointer; display:flex; align-items:center; justify-content:center; overflow:hidden; font-size:1.5rem; padding:6px; transition:transform .12s, border-color .12s, box-shadow .12s;}
-  .hero:active{transform:scale(0.95);}
-  .hero.sel{border-color:var(--green); box-shadow:0 0 18px rgba(114,255,35,0.55); transform:translateY(-2px);}
-  .hero img{width:100%; height:100%; object-fit:contain; filter:drop-shadow(0 3px 5px rgba(0,0,0,0.5));}
+  .herohead{margin:16px auto 6px; font-weight:900; font-size:0.9rem; color:#d6ffbf; text-align:center;}
+  .herohead span{color:var(--green2); font-weight:800;}
+  .heroes{display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin:0 auto; max-width:340px; max-height:212px; overflow-y:auto; padding:4px; -webkit-overflow-scrolling:touch;}
+  .hero{position:relative; aspect-ratio:1; border-radius:14px; background:radial-gradient(circle at 50% 32%,rgba(114,255,35,0.10),rgba(8,20,10,0.88)); border:2px solid rgba(114,255,35,0.2); cursor:pointer; display:flex; flex-direction:column; align-items:center; justify-content:center; overflow:hidden; padding:4px 3px 14px; transition:transform .12s, border-color .12s, box-shadow .12s;}
+  .hero:active{transform:scale(0.94);}
+  .hero.sel{border-color:var(--green); box-shadow:0 0 16px rgba(114,255,35,0.55);}
+  .hero img{width:100%; height:100%; object-fit:contain; filter:drop-shadow(0 2px 4px rgba(0,0,0,0.55));}
+  .hero .hname{position:absolute; left:0; right:0; bottom:2px; font-size:7.5px; font-weight:800; color:#bfe9b0; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding:0 2px; line-height:1.2;}
+  .hero.locked{filter:grayscale(0.85) brightness(0.5); border-color:rgba(255,255,255,0.08);}
+  .hero.locked .hname{color:#7a8a78;}
+  .hero .hlock{position:absolute; top:3px; right:4px; font-size:11px;}
+  .hero .hhint{position:absolute; inset:auto 0 14px; display:none; font-size:7px; color:#ffd24a; text-align:center; padding:0 2px; white-space:normal; line-height:1.1;}
+  .hero.locked:hover .hhint, .hero.locked:active .hhint{display:block;} .hero.locked:hover .hname{display:none;}
   /* encounter */
   .enc .panel{text-align:center;}
   .creatureBox{width:160px; height:160px; margin:4px auto 8px; position:relative; display:flex; align-items:center; justify-content:center;}
@@ -155,6 +163,7 @@
     <h1>THE SWAMP</h1>
     <div class="tag">catch the coins · degen safari</div>
     <p>Walk the swamp. Live memecoins roam as wild creatures — <b>fresh launches are rare</b>, SlimeWire launches are <b>legendary</b>. Sneak up, catch 'em, build your Dex. Other traders roam the same swamp.</p>
+    <div class="herohead">Pick your ogre <span id="herocount"></span></div>
     <div class="heroes" id="heroes"></div>
     <button class="big" id="play">▶ ENTER THE SWAMP</button>
     <div id="best" style="color:var(--dim);margin-top:10px;font-size:0.84rem"></div>
@@ -249,8 +258,36 @@ const ROOT="/assets/slimewire/swamp/individual";
 const imgCache=new Map();
 function img(p){ if(!p) return null; let im=imgCache.get(p); if(im) return im; im=new Image(); im.decoding="async"; im.src=p; imgCache.set(p,im); return im; }
 function ready(im){ return im&&im.complete&&im.naturalWidth>0; }
-const A={ index:null, players:[], creatures:[], statics:[], bosses:[], ground:null, loaded:false };
+const A={ index:null, players:[], creatures:[], statics:[], bosses:[], buildings:[], ground:null, loaded:false };
 const FALLBACK_PLAYERS=[{character:"hooded-degen-trader",frames:null}];
+/* ---- playable ogre roster: many styles, unlocked by playing ---- */
+const HERO_ORDER=["hooded-degen-trader","tiny-ogre-bruiser","moss-ogre-scout","slime-armored-warrior","crown-slime-leader","coin-goblin-runner","frog-courier","toxic-rug-beast","gold-runner-slime","swamp-witch-caller","frog-archer-courier","coin-crab-scout","hooded-wallet-mage","robot-wallet-helper","skeleton-market-maker","skeleton-caller"];
+// req: null = free; else {catches|kills|level|launched}. hint shown when locked.
+const HERO_GATES={
+  "hooded-degen-trader":{name:"Degen Ogre",req:null},
+  "tiny-ogre-bruiser":{name:"Ogre Bruiser",req:null},
+  "moss-ogre-scout":{name:"Moss Ogre",req:{catches:3},hint:"Catch 3 coins"},
+  "coin-goblin-runner":{name:"Goblin Runner",req:{kills:6},hint:"Defeat 6 mobs"},
+  "slime-armored-warrior":{name:"Slime Knight",req:{kills:15},hint:"Defeat 15 mobs"},
+  "frog-courier":{name:"Frog Courier",req:{catches:8},hint:"Catch 8 coins"},
+  "coin-crab-scout":{name:"Crab Scout",req:{level:3},hint:"Reach Lv 3"},
+  "toxic-rug-beast":{name:"Rug Beast",req:{kills:30},hint:"Defeat 30 mobs"},
+  "crown-slime-leader":{name:"Slime King",req:{catches:20},hint:"Catch 20 coins"},
+  "frog-archer-courier":{name:"Frog Archer",req:{catches:15},hint:"Catch 15 coins"},
+  "gold-runner-slime":{name:"Gold Runner",req:{kills:50},hint:"Defeat 50 mobs"},
+  "swamp-witch-caller":{name:"Swamp Witch",req:{level:5},hint:"Reach Lv 5"},
+  "hooded-wallet-mage":{name:"Wallet Mage",req:{catches:40},hint:"Catch 40 coins"},
+  "robot-wallet-helper":{name:"Wallet Bot",req:{launched:true},hint:"Launch a coin"},
+  "skeleton-market-maker":{name:"Market Maker",req:{level:8},hint:"Reach Lv 8"},
+  "skeleton-caller":{name:"Bone Caller",req:{kills:90},hint:"Defeat 90 mobs"}
+};
+function heroMeta(ch){ return HERO_GATES[ch]||{name:(ch||"Ogre").replace(/-/g," ").replace(/\b\w/g,c=>c.toUpperCase()),req:null}; }
+function heroUnlocked(ch){ const r=heroMeta(ch).req; if(!r) return true;
+  if(r.catches!=null && dexCount()<r.catches) return false;
+  if(r.kills!=null && (store.kills||0)<r.kills) return false;
+  if(r.level!=null && level()<r.level) return false;
+  if(r.launched && !store.eggClaimed) return false;
+  return true; }
 function framesByDir(arr,ch){ const o={down:[],up:[],left:[],right:[]}; for(const f of arr){ if(f.character===ch&&o[f.direction]) o[f.direction].push(f); }
   for(const d in o){ o[d].sort((a,b)=>(a.frame||0)-(b.frame||0)); if(!o[d].length) delete o[d]; } return Object.keys(o).length?o:null; }
 function preloadFrames(){ /* walk frames are mis-sliced; we use clean static sprites instead */ }
@@ -260,15 +297,18 @@ async function loadAssets(){
     const r=await fetch(ROOT+"/asset-index.json",{cache:"force-cache"}); if(!r.ok) throw 0;
     const idx=await r.json(); A.index=idx;
     const wf=idx.walkFrames||[]; const pchars=[...new Set(wf.map(f=>f.character))];
-    const order=["hooded-degen-trader","tiny-ogre-bruiser","moss-ogre-scout","slime-armored-warrior","crown-slime-leader","swamp-witch-caller","robot-wallet-helper","skeleton-market-maker"];
+    const order=HERO_ORDER;
     const ord=[...order.filter(h=>pchars.includes(h)),...pchars.filter(h=>!order.includes(h))];
     // NOTE: walk-cycle frames are mis-sliced (some contain 2/cut-off chars), so we use
     // the CLEAN single static character sprites + procedural motion instead.
-    A.players=ord.slice(0,6).map(ch=>{ const fr=framesByDir(wf,ch); const set=fr&&(fr.down||fr.right||fr.left||fr.up); return {character:ch, frames:fr, still:(set&&set[0]&&set[0].path)||null}; });
+    A.players=ord.slice(0,16).map(ch=>{ const fr=framesByDir(wf,ch); const set=fr&&(fr.down||fr.right||fr.left||fr.up); return {character:ch, frames:fr, still:(set&&set[0]&&set[0].path)||null}; });
     A.statics=(idx.characters||[]).map(c=>c.path);
     A.bosses=(idx.bosses||[]).map(b=>b.path);
+    A.buildings=(idx.buildings||[]).map(b=>b.path);
     A.statics.forEach(p=>img(p)); // warm the clean sprites
-  }catch(_){ A.players=FALLBACK_PLAYERS; A.statics=[]; A.bosses=[]; }
+    // assign + warm a detailed building sprite per structure (deterministic)
+    if(A.buildings.length){ for(const b of BUILDINGS_DEF){ b.sprite=A.buildings[hash("bld:"+b.id)%A.buildings.length]; img(b.sprite); } }
+  }catch(_){ A.players=FALLBACK_PLAYERS; A.statics=[]; A.bosses=[]; A.buildings=[]; }
   A.loaded=true;
 }
 function preloadFramesNoop(){}
@@ -360,24 +400,24 @@ const WEAPONS=[
 function weaponDef(id){ return WEAPONS.find(w=>w.id===id)||WEAPONS[0]; }
 // procedural weapon heads drawn at (len,0) in the rotated weapon frame; glow + shape per type
 const WEAPON_LOOK={
-  slime:{ handle:"#4a3420", glow:"rgba(114,255,35,0.6)", draw(len,r){ const x=len, s=r*0.62;
-    const g=ctx.createRadialGradient(x,0,1,x,0,s*1.7); g.addColorStop(0,"#e7ffd0"); g.addColorStop(.5,"#72ff23"); g.addColorStop(1,"rgba(40,140,20,0)");
-    ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,0,s*1.6,0,6.2832); ctx.fill();
-    ctx.fillStyle="#8dff45"; for(let i=0;i<8;i++){ const a=i/8*6.2832; ctx.beginPath(); ctx.moveTo(x+Math.cos(a)*s*0.7,Math.sin(a)*s*0.7); ctx.lineTo(x+Math.cos(a)*s*1.5,Math.sin(a)*s*1.5); ctx.lineTo(x+Math.cos(a+0.5)*s*0.7,Math.sin(a+0.5)*s*0.7); ctx.fill(); }
+  slime:{ handle:"#4a3420", glow:"rgba(114,255,35,0.45)", draw(len,r){ const x=len, s=r*0.4;
+    const g=ctx.createRadialGradient(x,0,1,x,0,s*1.35); g.addColorStop(0,"rgba(231,255,208,0.9)"); g.addColorStop(.55,"rgba(114,255,35,0.5)"); g.addColorStop(1,"rgba(40,140,20,0)");
+    ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,0,s*1.3,0,6.2832); ctx.fill();
+    ctx.fillStyle="#8dff45"; for(let i=0;i<6;i++){ const a=i/6*6.2832; ctx.beginPath(); ctx.moveTo(x+Math.cos(a)*s*0.7,Math.sin(a)*s*0.7); ctx.lineTo(x+Math.cos(a)*s*1.25,Math.sin(a)*s*1.25); ctx.lineTo(x+Math.cos(a+0.6)*s*0.7,Math.sin(a+0.6)*s*0.7); ctx.fill(); }
     ctx.fillStyle="#5fd61a"; ctx.beginPath(); ctx.arc(x,0,s,0,6.2832); ctx.fill();
-    ctx.fillStyle="rgba(255,255,255,0.85)"; ctx.beginPath(); ctx.arc(x-s*0.3,-s*0.3,s*0.32,0,6.2832); ctx.fill(); } },
-  triple:{ handle:"#5a4012", glow:"rgba(255,210,74,0.6)", draw(len,r){ const x=len, s=r*0.7; ctx.strokeStyle="#ffd24a"; ctx.lineWidth=r*0.16; ctx.lineCap="round";
+    ctx.fillStyle="rgba(255,255,255,0.85)"; ctx.beginPath(); ctx.arc(x-s*0.3,-s*0.3,s*0.3,0,6.2832); ctx.fill(); } },
+  triple:{ handle:"#5a4012", glow:"rgba(255,210,74,0.5)", draw(len,r){ const x=len, s=r*0.5; ctx.strokeStyle="#ffd24a"; ctx.lineWidth=r*0.13; ctx.lineCap="round";
     for(const dy of [-s*0.7,0,s*0.7]){ ctx.beginPath(); ctx.moveTo(x-s*0.5,dy*0.4); ctx.lineTo(x+s,dy); ctx.stroke(); }
-    ctx.fillStyle="#fff3c4"; ctx.beginPath(); ctx.arc(x-s*0.5,0,s*0.3,0,6.2832); ctx.fill(); } },
-  bomb:{ handle:"#3a2a16", glow:"rgba(255,150,80,0.6)", draw(len,r){ const x=len, s=r*0.66;
-    const g=ctx.createRadialGradient(x,0,1,x,0,s*1.5); g.addColorStop(0,"#ffb15a"); g.addColorStop(1,"rgba(120,50,10,0)"); ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,0,s*1.4,0,6.2832); ctx.fill();
+    ctx.fillStyle="#fff3c4"; ctx.beginPath(); ctx.arc(x-s*0.5,0,s*0.28,0,6.2832); ctx.fill(); } },
+  bomb:{ handle:"#3a2a16", glow:"rgba(255,150,80,0.5)", draw(len,r){ const x=len, s=r*0.46;
+    const g=ctx.createRadialGradient(x,0,1,x,0,s*1.25); g.addColorStop(0,"rgba(255,177,90,0.85)"); g.addColorStop(1,"rgba(120,50,10,0)"); ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,0,s*1.2,0,6.2832); ctx.fill();
     ctx.fillStyle="#26201c"; ctx.beginPath(); ctx.arc(x,0,s,0,6.2832); ctx.fill();
-    ctx.fillStyle="rgba(255,255,255,0.6)"; ctx.beginPath(); ctx.arc(x-s*0.3,-s*0.3,s*0.28,0,6.2832); ctx.fill();
+    ctx.fillStyle="rgba(255,255,255,0.6)"; ctx.beginPath(); ctx.arc(x-s*0.3,-s*0.3,s*0.26,0,6.2832); ctx.fill();
     ctx.strokeStyle="#caa"; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(x,-s); ctx.quadraticCurveTo(x+s*0.5,-s*1.5,x+s*0.2,-s*1.9); ctx.stroke();
-    ctx.fillStyle="#ffd24a"; ctx.beginPath(); ctx.arc(x+s*0.2,-s*1.9,s*0.25,0,6.2832); ctx.fill(); } },
-  laser:{ handle:"#1d3a44", glow:"rgba(123,224,255,0.7)", draw(len,r){ const x=len, s=r*0.6; ctx.fillStyle="#173842"; ctx.fillRect(x-s*0.4,-s*0.5,s*1.6,s);
-    const g=ctx.createLinearGradient(x+s,0,x+s*3,0); g.addColorStop(0,"#bfefff"); g.addColorStop(1,"rgba(123,224,255,0)"); ctx.fillStyle=g; ctx.fillRect(x+s,-s*0.22,s*2.2,s*0.44);
-    ctx.fillStyle="#7be0ff"; ctx.beginPath(); ctx.arc(x+s*1.1,0,s*0.4,0,6.2832); ctx.fill(); } }
+    ctx.fillStyle="#ffd24a"; ctx.beginPath(); ctx.arc(x+s*0.2,-s*1.9,s*0.24,0,6.2832); ctx.fill(); } },
+  laser:{ handle:"#1d3a44", glow:"rgba(123,224,255,0.55)", draw(len,r){ const x=len, s=r*0.46; ctx.fillStyle="#173842"; ctx.fillRect(x-s*0.4,-s*0.45,s*1.5,s*0.9);
+    const g=ctx.createLinearGradient(x+s,0,x+s*2.6,0); g.addColorStop(0,"rgba(191,239,255,0.85)"); g.addColorStop(1,"rgba(123,224,255,0)"); ctx.fillStyle=g; ctx.fillRect(x+s,-s*0.2,s*1.9,s*0.4);
+    ctx.fillStyle="#7be0ff"; ctx.beginPath(); ctx.arc(x+s*1.05,0,s*0.36,0,6.2832); ctx.fill(); } }
 };
 // draw the equipped weapon in the player's hand; big visible swing arc on attack
 function drawWeapon(p){ const atk=p.atk||0; const look=WEAPON_LOOK[store.weapon||"slime"]||WEAPON_LOOK.slime; const flip=p.dir==="left"?-1:1;
@@ -387,10 +427,10 @@ function drawWeapon(p){ const atk=p.atk||0; const look=WEAPON_LOOK[store.weapon|
     else { const q=(t-0.28)/0.72; ang=WIND+(END-WIND)*(q*q*(3-2*q)); } // smoothstep forward sweep
   } else { ang=REST+Math.sin((p.walkT||0)*2)*0.06; } // gentle idle sway
   ctx.save(); ctx.translate(p.x, p.y-p.r*0.55-(p._mvBob||0)); if(flip<0) ctx.scale(-1,1); ctx.rotate(ang);
-  const len=p.r*1.7;
-  // motion-blur arc behind the head while swinging
-  if(atk>0){ ctx.globalAlpha=0.25; ctx.strokeStyle=look.glow; ctx.lineWidth=p.r*0.5; ctx.lineCap="round"; ctx.beginPath(); ctx.arc(0,0,len,-0.5,0.5); ctx.stroke(); ctx.globalAlpha=1; }
-  ctx.strokeStyle=look.handle; ctx.lineWidth=Math.max(3,p.r*0.2); ctx.lineCap="round";
+  const len=p.r*1.55;
+  // subtle motion-blur arc behind the head while swinging
+  if(atk>0){ ctx.globalAlpha=0.16; ctx.strokeStyle=look.glow; ctx.lineWidth=p.r*0.32; ctx.lineCap="round"; ctx.beginPath(); ctx.arc(0,0,len,-0.45,0.45); ctx.stroke(); ctx.globalAlpha=1; }
+  ctx.strokeStyle=look.handle; ctx.lineWidth=Math.max(2.5,p.r*0.17); ctx.lineCap="round";
   ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(len,0); ctx.stroke();
   look.draw(len,p.r);
   ctx.restore(); }
@@ -601,7 +641,7 @@ function interact(){ if(near) openEncounter(near); else if(nearBld) openBuilding
 function playerSwing(){ if(state!=="world"||!player||player.atkCd>0) return; player.atkCd=0.15; player.atk=0.30;
   // aim at the nearest target, else the way we're facing
   let tx,ty,target=null,tkind=null;
-  if(nearMob){ target=nearMob; tkind="mob"; } else if(nearFoe){ target=nearFoe; tkind="foe"; }
+  if(nearMob){ target=nearMob; tkind="mob"; } else if(nearFoe){ target=nearFoe; tkind="foe"; } else if(near){ target=near; tkind="wild"; }
   if(target){ tx=target.x; ty=target.y; player.dir = Math.abs(tx-player.x)>Math.abs(ty-player.y)?(tx<player.x?"left":"right"):(ty<player.y?"up":"down"); }
   else { const off={right:[1,0],left:[-1,0],up:[0,-1],down:[0,1]}[player.dir]||[0,1]; tx=player.x+off[0]*130; ty=player.y+off[1]*130; }
   spawnSwing(player.x, player.y-player.r*0.3, player.dir, "#bbff63", player.r*2.7); sfx("throw",0.3);
@@ -645,7 +685,8 @@ function update(dt){
   // creatures wander + flee slightly
   near=null; let nd=70*70;
   for(const c of creatures){ if(c.dead) continue; c.wt-=dt; c.bob+=dt*3;
-    if(c.wt<=0){ c.wt=1+Math.random()*2.5; const a=Math.random()*6.28; c.vx=Math.cos(a)*30; c.vy=Math.sin(a)*30; }
+    if(c.flash>0) c.flash-=dt; if(c.weakShown>0) c.weakShown-=dt; if(c.flee>0) c.flee-=dt;
+    if(c.wt<=0){ c.wt=1+Math.random()*2.5; const a=Math.random()*6.28; const sp=c.flee>0?70:30; c.vx=Math.cos(a)*sp; c.vy=Math.sin(a)*sp; }
     const dpx=c.x-p.x, dpy=c.y-p.y, dpd=Math.hypot(dpx,dpy)||1;
     if(dpd<140){ c.vx+=dpx/dpd*40*dt*60*dt; c.vy+=dpy/dpd*40*dt*60*dt; } // shy away a bit
     c.x+=c.vx*dt; c.y+=c.vy*dt; c.vx*=0.9; c.vy*=0.9; c._mv=(Math.abs(c.vx)+Math.abs(c.vy))>8; if(c._mv) c.walkT+=dt*0.9; else c.walkT+=dt*0.25;
@@ -668,7 +709,7 @@ function update(dt){
   // prompt
   const pr=$("prompt");
   if(nearMob){ pr.textContent="⚔️ Fight "+nearMob.name+" — tap ✋"; pr.classList.add("on"); }
-  else if(near){ pr.textContent="✋ Catch $"+near.sym+" ("+near.rar.label+")"; pr.classList.add("on"); }
+  else if(near){ pr.textContent="⚔️ Sling slimeballs to catch $"+near.sym+" ("+near.rar.label+") · ✋ for aimed throw"; pr.classList.add("on"); }
   else if(nearFoe){ pr.textContent="🟢 Slime "+(nearFoe.name||"trader")+(nearFoe.clan?" ["+nearFoe.clan+"]":"")+" — tap ⚔️"; pr.classList.add("on"); }
   else if(nearBld){ pr.textContent="Enter "+nearBld.name; pr.classList.add("on"); }
   else pr.classList.remove("on");
@@ -679,7 +720,7 @@ function update(dt){
   if(shake>0) shake=Math.max(0,shake-dt*60); if(comboT>0){ comboT-=dt; if(comboT<=0) combo=0; } updateComboMeter();
   for(const s of swings){ s.life-=dt; if(s.ring) s.r0+=dt*90; } swings=swings.filter(s=>s.life>0);
   for(const sh of shots){ sh.x+=sh.vx*dt; sh.y+=sh.vy*dt; sh.life-=dt; if(!sh.pierce){ sh.vx*=0.985; sh.vy*=0.985; }
-    if(parts.length<260 && Math.random()<0.6) parts.push({x:sh.x,y:sh.y,vx:0,vy:0,life:0.22,max:0.22,col:sh.col,sz:2.5}); // trail
+    if(parts.length<260 && Math.random()<0.45) parts.push({x:sh.x,y:sh.y,vx:0,vy:0,life:0.18,max:0.18,col:sh.col,sz:1.8}); // trail
     // hit mobs (pierce shots keep going + remember who they hit; bombs explode)
     for(const mob of mobs){ if(sh.hit&&sh.hit.indexOf(mob)>=0) continue; const dx=mob.x-sh.x, dy=mob.y-sh.y;
       if(dx*dx+dy*dy<(mob.r+sh.r)*(mob.r+sh.r)){ mob.hp-=sh.dmg; mob.flash=0.14;
@@ -687,6 +728,10 @@ function update(dt){
         if(mob.hp<=0) killMob(mob);
         if(sh.pierce){ sh.hit.push(mob); } else { if(sh.aoe) bombSplode(sh); sh.life=0; }
         break; } }
+    // hit a wild coin -> weaken it; catch it when softened (slimeball = catch tool)
+    if(sh.life>0){ for(const c of creatures){ if(c.dead||(sh.hit&&sh.hit.indexOf(c)>=0)) continue; const dx=c.x-sh.x, dy=c.y-sh.y;
+      if(dx*dx+dy*dy<(c.r+sh.r)*(c.r+sh.r)){ weakenWild(c,sh.dmg,player.x,player.y);
+        if(sh.pierce){ sh.hit.push(c); } else { if(sh.aoe) bombSplode(sh); sh.life=0; } break; } } }
     // hit a foe (ranged PvP — one hit per non-pierce shot)
     if(sh.life>0 && !sh.hitFoe){ const mc=(store.clan||"").trim(); for(const r of RP.values()){ if(mc && (r.clan||"").trim()===mc) continue; const dx=r.x-sh.x, dy=r.y-sh.y;
       if(dx*dx+dy*dy<(r.r+sh.r)*(r.r+sh.r)){ sh.hitFoe=true; if(!sh.pierce){ if(sh.aoe) bombSplode(sh); sh.life=0; } impactFX(sh.x,sh.y,player.x,player.y,"#ff7bd0",false);
@@ -721,12 +766,13 @@ function render(){
   ents.sort((a,b)=>a.e.y-b.e.y);
   for(const it of ents){ if(it.t==="p") drawPlayer(); else if(it.t==="n") drawNpc(it.e); else if(it.t==="r") drawRemote(it.e); else if(it.t==="m") drawMob(it.e); else drawCreature(it.e); }
   for(const pt of parts){ ctx.globalAlpha=Math.max(0,pt.life/pt.max); ctx.fillStyle=pt.col; ctx.beginPath(); ctx.arc(pt.x,pt.y,pt.sz,0,6.2832); ctx.fill(); } ctx.globalAlpha=1;
-  // flying slimeballs (glow + squash + highlight)
-  for(const sh of shots){ const sp=Math.hypot(sh.vx,sh.vy)||1, a=Math.atan2(sh.vy,sh.vx);
-    ctx.save(); ctx.translate(sh.x,sh.y); ctx.rotate(a); ctx.scale(1.25,0.8);
-    const g=ctx.createRadialGradient(0,0,1,0,0,sh.r*1.6); g.addColorStop(0,"#e7ffd0"); g.addColorStop(0.5,sh.col); g.addColorStop(1,"rgba(60,160,20,0)");
-    ctx.fillStyle=g; ctx.beginPath(); ctx.arc(0,0,sh.r*1.5,0,6.2832); ctx.fill();
-    ctx.fillStyle="rgba(255,255,255,0.85)"; ctx.beginPath(); ctx.arc(-sh.r*0.3,-sh.r*0.3,sh.r*0.35,0,6.2832); ctx.fill(); ctx.restore(); }
+  // flying slimeballs (tight glow + squash + highlight — visible but not overpowering)
+  for(const sh of shots){ const a=Math.atan2(sh.vy,sh.vx);
+    ctx.save(); ctx.translate(sh.x,sh.y); ctx.rotate(a); ctx.scale(1.2,0.82);
+    const g=ctx.createRadialGradient(0,0,1,0,0,sh.r*1.15); g.addColorStop(0,"#e7ffd0"); g.addColorStop(0.6,sh.col); g.addColorStop(1,"rgba(60,160,20,0)");
+    ctx.fillStyle=g; ctx.beginPath(); ctx.arc(0,0,sh.r*1.1,0,6.2832); ctx.fill();
+    ctx.fillStyle=sh.col; ctx.beginPath(); ctx.arc(0,0,sh.r*0.6,0,6.2832); ctx.fill();
+    ctx.fillStyle="rgba(255,255,255,0.8)"; ctx.beginPath(); ctx.arc(-sh.r*0.28,-sh.r*0.28,sh.r*0.28,0,6.2832); ctx.fill(); ctx.restore(); }
   // slash arcs + impact rings
   for(const s of swings){ const al=Math.max(0,s.life/s.max);
     if(s.ring){ ctx.globalAlpha=al*0.8; ctx.strokeStyle=s.col; ctx.lineWidth=3*al+1; ctx.beginPath(); ctx.arc(s.x,s.y,s.r0,0,6.2832); ctx.stroke(); ctx.globalAlpha=1; continue; }
@@ -772,21 +818,27 @@ function drawBuilding(b){
   ctx.restore();
   // shadow
   ctx.fillStyle="rgba(0,0,0,0.4)"; ctx.beginPath(); ctx.ellipse(x,y+34,62,22,0,0,6.2832); ctx.fill();
-  // wall (planked)
+  const spr=b.sprite?img(b.sprite):null;
+  if(ready(spr)){
+    // detailed art sprite (foot-anchored), tinted glow rim in the building colour
+    const h=124, w=h*(spr.naturalWidth/spr.naturalHeight);
+    ctx.shadowColor=b.color; ctx.shadowBlur=near?22:12; ctx.drawImage(spr, x-w/2, y+38-h, w, h); ctx.shadowBlur=0;
+    // warm door-light spill so it reads as enterable
+    ctx.fillStyle="rgba(255,210,120,0.10)"; ctx.beginPath(); ctx.moveTo(x-16,y+34); ctx.lineTo(x-40,y+54); ctx.lineTo(x+40,y+54); ctx.lineTo(x+16,y+34); ctx.closePath(); ctx.fill();
+  } else {
+  // procedural fallback hut (planked wall + thatch roof + lit windows/door)
   const g=ctx.createLinearGradient(x,y-52,x,y+38); g.addColorStop(0,"#46341f"); g.addColorStop(1,"#1b120a");
   ctx.fillStyle=g; ctx.fillRect(x-50,y-50,100,86);
   ctx.strokeStyle="rgba(0,0,0,0.3)"; ctx.lineWidth=1.5; for(let i=1;i<4;i++){ ctx.beginPath(); ctx.moveTo(x-50,y-50+i*22); ctx.lineTo(x+50,y-50+i*22); ctx.stroke(); }
-  // thatch roof
   ctx.fillStyle=b.color; ctx.globalAlpha=0.92; ctx.beginPath(); ctx.moveTo(x-62,y-48); ctx.lineTo(x,y-96); ctx.lineTo(x+62,y-48); ctx.closePath(); ctx.fill(); ctx.globalAlpha=1;
   ctx.strokeStyle="rgba(0,0,0,0.25)"; ctx.lineWidth=1.5; for(let i=-2;i<=2;i++){ ctx.beginPath(); ctx.moveTo(x+i*16,y-48); ctx.lineTo(x+i*8,y-88+Math.abs(i)*6); ctx.stroke(); }
   ctx.shadowColor=b.color; ctx.shadowBlur=16; ctx.fillStyle=b.color; ctx.fillRect(x-52,y-52,104,5); ctx.shadowBlur=0;
-  // glowing windows
   const wf=0.55+0.25*Math.sin(performance.now()/600+x); ctx.fillStyle="rgba(255,214,120,"+wf+")";
   ctx.fillRect(x-38,y-30,16,16); ctx.fillRect(x+22,y-30,16,16);
-  // door (lit) + spill
   const dg=ctx.createLinearGradient(x,y-12,x,y+36); dg.addColorStop(0,"rgba(255,230,150,0.95)"); dg.addColorStop(1,"rgba(255,180,90,0.7)");
   ctx.fillStyle=dg; ctx.fillRect(x-14,y-12,28,48);
   ctx.fillStyle="rgba(255,210,120,0.12)"; ctx.beginPath(); ctx.moveTo(x-14,y+36); ctx.lineTo(x-34,y+52); ctx.lineTo(x+34,y+52); ctx.lineTo(x+14,y+36); ctx.closePath(); ctx.fill();
+  }
   // hanging sign with the building's emoji
   const emoji=(b.name.match(/^\S+/)||[""])[0];
   ctx.font="20px Inter,sans-serif"; ctx.textAlign="center"; ctx.textBaseline="middle";
@@ -805,7 +857,15 @@ function drawCreature(c){
   if(!drew){ const bob=Math.sin(c.bob)*3; const g=ctx.createRadialGradient(c.x,c.y-c.r*0.3+bob,1,c.x,c.y+bob,c.r*1.3); g.addColorStop(0,"#cdff6a"); g.addColorStop(1,c.rar.col);
     ctx.fillStyle=g; ctx.beginPath(); ctx.arc(c.x,c.y+bob,c.r,0,6.2832); ctx.fill();
     ctx.fillStyle="#06140a"; ctx.beginPath(); ctx.arc(c.x-c.r*0.3,c.y-c.r*0.2+bob,c.r*0.16,0,6.2832); ctx.arc(c.x+c.r*0.3,c.y-c.r*0.2+bob,c.r*0.16,0,6.2832); ctx.fill(); }
-  if(c.rar.k!=="common"){ ctx.font="900 10px Inter,sans-serif"; ctx.textAlign="center"; ctx.fillStyle=c.rar.col; ctx.fillText("$"+c.sym,c.x,c.y-c.r-6); }
+  if(c.flash>0){ ctx.globalAlpha=Math.min(0.7,c.flash*5); ctx.fillStyle="#fff"; ctx.beginPath(); ctx.arc(c.x,c.y,c.r,0,6.28); ctx.fill(); ctx.globalAlpha=1; }
+  // weaken bar + catch-ready ring once you've started slinging slimeballs at it
+  if(c.weak!=null && c.weak<1 && c.weakShown>0){ const w=c.r*1.7;
+    ctx.fillStyle="rgba(0,0,0,0.55)"; ctx.fillRect(c.x-w/2,c.y-c.r-10,w,4);
+    ctx.fillStyle=c.weak<0.35?"#ffd24a":"#8dff45"; ctx.fillRect(c.x-w/2,c.y-c.r-10,w*c.weak,4);
+    if(c.weak<0.35){ const t=performance.now()/220; ctx.strokeStyle="rgba(255,210,74,0.9)"; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.arc(c.x,c.y,c.r*1.4,t,t+1.6); ctx.stroke(); ctx.beginPath(); ctx.arc(c.x,c.y,c.r*1.4,t+3.14,t+4.74); ctx.stroke();
+      ctx.font="900 9px Inter,sans-serif"; ctx.textAlign="center"; ctx.fillStyle="#ffd24a"; ctx.fillText("CATCH!",c.x,c.y-c.r-15); } }
+  if(c.rar.k!=="common"){ ctx.font="900 10px Inter,sans-serif"; ctx.textAlign="center"; ctx.fillStyle=c.rar.col; ctx.fillText("$"+c.sym,c.x,c.y-c.r-(c.weakShown>0?24:6)); }
 }
 function drawPlayer(){ const p=player; drawShadow(p.x,p.y,p.r);
   const upFacing=p.dir==="up";
@@ -896,6 +956,27 @@ $("throwBtn").onclick=()=>{
     else { $("catchhint").textContent="out of slimeballs"; setTimeout(()=>closeEnc(),700); }
   }
 };
+// real-time catch: sling slimeballs to weaken a wild coin, catch it when low.
+function catchTough(rar){ return ({common:24,uncommon:38,rare:60,epic:90,legendary:130}[rar&&rar.k]||30); }
+function catchChance(rar){ return ({common:0.95,uncommon:0.85,rare:0.70,epic:0.55,legendary:0.42}[rar&&rar.k]||0.9); }
+function weakenWild(c,dmg,sx,sy){ if(c.dead) return; if(c.weak==null) c.weak=1;
+  c.weak=Math.max(0,c.weak-dmg/catchTough(c.rar)); c.flash=0.14; c.weakShown=2.2;
+  floatTxt(c.x,c.y-c.r,"-"+dmg,c.rar.col); bumpCombo(); impactFX(c.x,c.y,sx,sy,c.rar.col,false);
+  if(c.weak<=0){ // fully softened — try to bag it
+    if(Math.random()<=catchChance(c.rar)) catchWild(c);
+    else { c.weak=0.4; c.flee=1.2; floatTxt(c.x,c.y-c.r-12,"broke free!","#ff9a7e"); sfx("miss",0.35);
+      const a=Math.atan2(c.y-player.y,c.x-player.x); c.vx=Math.cos(a)*180; c.vy=Math.sin(a)*180; } }
+}
+function catchWild(c){ if(c.dead) return; c.dead=true; sfx("catch",0.6); sfx("level",0.4);
+  const row=c.row||{}; const mcNow=num(row.marketCap||row.marketCapUsd);
+  store.dex[c.mint]={ symbol:c.sym, mc:mcNow||1, mcNow:mcNow||1, rarity:c.rar.k, stage:1, ogre:!!row._ogre, at:Date.now() };
+  store.xp+=c.rar.xp; save();
+  burst(c.x,c.y,c.rar.col,22); impactFX(c.x,c.y,c.x,c.y-1,c.rar.col,true);
+  floats.push({x:c.x,y:c.y-c.r,txt:"CAUGHT! +"+c.rar.xp+"xp",col:c.rar.col,t:0});
+  creatures=creatures.filter(x=>x!==c); submitCatches();
+  toast((c.rar.k==="legendary"?"🌟 LEGENDARY ":c.rar.k==="epic"?"💜 EPIC ":c.rar.k==="rare"?"💎 RARE ":"")+"$"+c.sym+" bagged! ("+dexCount()+" in Dex)");
+  refreshHud(); replenishWild();
+}
 function caught(c){
   sfx("catch",0.6); sfx("level",0.4);
   const row=c.row; const mcNow=num(row.marketCap||row.marketCapUsd);
@@ -996,9 +1077,19 @@ $("bldX").onclick=closeBld;
 /* ---- title / boot ---- */
 function showTitle(){ state="title"; $("load").style.display="none"; $("start").classList.add("on");
   const hb=$("heroes"); hb.innerHTML=""; const list=A.players.length?A.players:FALLBACK_PLAYERS;
-  list.slice(0,6).forEach((pl,i)=>{ const d=document.createElement("div"); d.className="hero"+(i===store.hero?" sel":"");
-    const fr=pl.frames&&(pl.frames.down||pl.frames[Object.keys(pl.frames)[0]]); if(fr&&fr[0]){ const im=document.createElement("img"); im.src=fr[0].path; d.appendChild(im); } else d.textContent="🧑";
-    d.onclick=()=>{ store.hero=i; save(); showTitle(); }; hb.appendChild(d); });
+  // if the saved hero is now somehow locked, fall back to a free one
+  if(list[store.hero]&&!heroUnlocked(list[store.hero].character)){ const f=list.findIndex(p=>heroUnlocked(p.character)); if(f>=0) store.hero=f; }
+  const unlockedN=list.filter(p=>heroUnlocked(p.character)).length;
+  list.forEach((pl,i)=>{ const meta=heroMeta(pl.character), unl=heroUnlocked(pl.character);
+    const d=document.createElement("div"); d.className="hero"+(i===store.hero?" sel":"")+(unl?"":" locked"); d.title=meta.name;
+    const spr=(pl.still)||(pl.frames&&(pl.frames.down||pl.frames[Object.keys(pl.frames)[0]])||[])[0]?.path;
+    if(spr){ const im=document.createElement("img"); im.src=spr; im.alt=meta.name; d.appendChild(im); } else d.textContent="🧌";
+    const nm=document.createElement("span"); nm.className="hname"; nm.textContent=meta.name; d.appendChild(nm);
+    if(!unl){ const lk=document.createElement("span"); lk.className="hlock"; lk.textContent="🔒"; d.appendChild(lk);
+      const hint=document.createElement("span"); hint.className="hhint"; hint.textContent=meta.hint||"locked"; d.appendChild(hint); }
+    d.onclick=()=>{ if(heroUnlocked(pl.character)){ store.hero=i; save(); showTitle(); } else toast("🔒 "+meta.name+" — "+(meta.hint||"keep playing to unlock")); };
+    hb.appendChild(d); });
+  const hc=$("herocount"); if(hc) hc.textContent=unlockedN+" / "+list.length+" ogres unlocked";
   $("best").textContent=dexCount()?("your Dex: "+dexCount()+" caught · "+(worthAvg()?worthAvg().toFixed(2)+"x worth":"")):"";
   $("mute").textContent=store.muted?"🔇":"🔊";
 }
