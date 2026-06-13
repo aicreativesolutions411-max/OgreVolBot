@@ -99,6 +99,8 @@
   .dcard .ds{font-size:0.7rem; font-weight:900; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
   .dcard .dm{font-size:0.66rem; font-weight:900;} .up{color:var(--green2);} .down{color:var(--bad);}
   .dcard .dr{position:absolute; top:3px; left:3px; width:8px; height:8px; border-radius:50%;}
+  .dcard .dchart{position:absolute; bottom:3px; right:4px; font-size:0.62rem; opacity:0.55;}
+  .dcard:active{transform:scale(0.95);} .dcard{transition:transform .1s, box-shadow .12s;} .dcard:hover{box-shadow:0 0 0 1px var(--green),0 6px 16px rgba(0,0,0,0.4);}
   /* evolution tiers — caught coins level up as their market cap pumps */
   .dcard .evo{position:absolute; top:2px; right:4px; font-size:0.58rem; font-weight:900; letter-spacing:0.5px; color:var(--gold); text-shadow:0 0 6px rgba(255,210,74,0.7);}
   .dcard.e2{border-color:rgba(90,176,255,0.55);} .dcard.e3{border-color:rgba(169,139,255,0.6);} .dcard.e4{border-color:rgba(255,210,74,0.7);}
@@ -271,25 +273,41 @@ const FALLBACK_PLAYERS=[{character:"hooded-degen-trader",frames:null}];
 /* ---- custom HD ogre roster (generated, clean transparent PNGs). Ogres only.
    Bigger/cooler = rarer unlock. Same sprites double as the wild coin-creatures. */
 const OGRE_DIR="/assets/slimewire/swamp/ogres/";
-const OGRE={ degen:OGRE_DIR+"ogre-degen.png", bruiser:OGRE_DIR+"ogre-bruiser.png", moss:OGRE_DIR+"ogre-moss.png",
-  goblin:OGRE_DIR+"ogre-goblin.png", gold:OGRE_DIR+"ogre-gold.png", knight:OGRE_DIR+"ogre-knight.png",
-  rug:OGRE_DIR+"ogre-rug.png", king:OGRE_DIR+"ogre-king.png", titan:OGRE_DIR+"ogre-titan.png", warlord:OGRE_DIR+"ogre-warlord.png" };
+const _og=(n)=>OGRE_DIR+"ogre-"+n+".png";
+const OGRE={ degen:_og("degen"), bruiser:_og("bruiser"), moss:_og("moss"), goblin:_og("goblin"), gold:_og("gold"),
+  knight:_og("knight"), rug:_og("rug"), king:_og("king"), titan:_og("titan"), warlord:_og("warlord"),
+  shaman:_og("shaman"), pirate:_og("pirate"), ninja:_og("ninja"), frost:_og("frost"), lava:_og("lava"),
+  cyber:_og("cyber"), zombie:_og("zombie"), baby:_og("baby"), shroom:_og("shroom"), pharaoh:_og("pharaoh") };
 const HERO_DEFS=[
   { sprite:OGRE.degen,   name:"Degen Ogre",   req:null,            scale:1 },
   { sprite:OGRE.bruiser, name:"Ogre Bruiser", req:null,            scale:1.05 },
+  { sprite:OGRE.baby,    name:"Baby Ogre",    req:{catches:2},     scale:0.82, hint:"Catch 2 coins" },
   { sprite:OGRE.goblin,  name:"Goblin Brute", req:{kills:8},       scale:0.92, hint:"Defeat 8 mobs" },
-  { sprite:OGRE.moss,    name:"Moss Ogre",    req:{catches:3},     scale:1,    hint:"Catch 3 coins" },
-  { sprite:OGRE.gold,    name:"Gold Ogre",    req:{catches:12},    scale:1.05, hint:"Catch 12 coins" },
-  { sprite:OGRE.knight,  name:"Slime Knight", req:{kills:18},      scale:1.08, hint:"Defeat 18 mobs" },
-  { sprite:OGRE.rug,     name:"Rug Beast",    req:{kills:32},      scale:1.12, hint:"Defeat 32 mobs" },
-  { sprite:OGRE.king,    name:"Slime King",   req:{catches:25},    scale:1.18, hint:"Catch 25 coins" },
-  { sprite:OGRE.titan,   name:"Bog Titan",    req:{level:6},       scale:1.32, hint:"Reach Lv 6" },
-  { sprite:OGRE.warlord, name:"War Warlord",  req:{kills:60},      scale:1.38, hint:"Defeat 60 mobs" }
+  { sprite:OGRE.moss,    name:"Moss Ogre",    req:{catches:5},     scale:1,    hint:"Catch 5 coins" },
+  { sprite:OGRE.shroom,  name:"Shroom Ogre",  req:{catches:10},    scale:1,    hint:"Catch 10 coins" },
+  { sprite:OGRE.gold,    name:"Gold Ogre",    req:{catches:15},    scale:1.05, hint:"Catch 15 coins" },
+  { sprite:OGRE.pirate,  name:"Pirate Ogre",  req:{kills:15},      scale:1.05, hint:"Defeat 15 mobs" },
+  { sprite:OGRE.ninja,   name:"Ninja Ogre",   req:{kills:22},      scale:1,    hint:"Defeat 22 mobs" },
+  { sprite:OGRE.knight,  name:"Slime Knight", req:{kills:30},      scale:1.08, hint:"Defeat 30 mobs" },
+  { sprite:OGRE.shaman,  name:"Swamp Shaman", req:{level:5},       scale:1.05, hint:"Reach Lv 5" },
+  { sprite:OGRE.frost,   name:"Frost Ogre",   req:{catches:25},    scale:1.1,  hint:"Catch 25 coins" },
+  { sprite:OGRE.lava,    name:"Lava Ogre",    req:{kills:40},      scale:1.12, hint:"Defeat 40 mobs" },
+  { sprite:OGRE.rug,     name:"Rug Beast",    req:{kills:48},      scale:1.14, hint:"Defeat 48 mobs" },
+  { sprite:OGRE.zombie,  name:"Zombie Ogre",  req:{level:7},       scale:1.12, hint:"Reach Lv 7" },
+  { sprite:OGRE.cyber,   name:"Cyber Ogre",   req:{catches:40},    scale:1.15, hint:"Catch 40 coins" },
+  { sprite:OGRE.king,    name:"Slime King",   req:{catches:55},    scale:1.2,  hint:"Catch 55 coins" },
+  { sprite:OGRE.pharaoh, name:"Pharaoh Ogre", req:{launched:true}, scale:1.25, hint:"Launch a coin" },
+  { sprite:OGRE.titan,   name:"Bog Titan",    req:{level:10},      scale:1.34, hint:"Reach Lv 10" },
+  { sprite:OGRE.warlord, name:"War Warlord",  req:{kills:80},      scale:1.4,  hint:"Defeat 80 mobs" }
 ];
 // wild coin-creatures = ogres by coin quality (hot coins -> bigger/scarier ogre)
-const OGRE_BY_TIER={ legendary:[OGRE.titan,OGRE.warlord,OGRE.king], epic:[OGRE.rug,OGRE.king,OGRE.knight],
-  rare:[OGRE.knight,OGRE.gold,OGRE.moss], uncommon:[OGRE.moss,OGRE.bruiser,OGRE.gold], common:[OGRE.goblin,OGRE.degen,OGRE.bruiser] };
-const MOB_OGRES=[OGRE.goblin,OGRE.rug,OGRE.bruiser,OGRE.moss];
+const OGRE_BY_TIER={
+  legendary:[OGRE.titan,OGRE.warlord,OGRE.pharaoh,OGRE.king],
+  epic:[OGRE.rug,OGRE.lava,OGRE.cyber,OGRE.zombie,OGRE.frost],
+  rare:[OGRE.knight,OGRE.gold,OGRE.shaman,OGRE.ninja,OGRE.pirate],
+  uncommon:[OGRE.moss,OGRE.bruiser,OGRE.shroom,OGRE.frost],
+  common:[OGRE.goblin,OGRE.degen,OGRE.baby,OGRE.shroom] };
+const MOB_OGRES=[OGRE.goblin,OGRE.rug,OGRE.zombie,OGRE.ninja,OGRE.lava];
 let HEROES=[]; // resolved {name,sprite,scale,req,hint}
 function buildHeroes(){ HEROES=HERO_DEFS.map(d=>({ name:d.name, sprite:d.sprite, scale:d.scale||1, req:d.req||null, hint:d.hint||"" }));
   try{ Object.values(OGRE).forEach(p=>img(p)); }catch(_){} } // warm all ogre sprites
@@ -575,7 +593,7 @@ function spawnNpcs(){
 }
 
 /* ---- LIVE co-presence (WebSocket): real traders walking the same map ---- */
-const RP=new Map(); let myId=null, sock=null, wsOk=false, wsRetry=0, posT=0;
+const RP=new Map(); let myId=null, sock=null, wsOk=false, wsRetry=0, posT=0, pvpAnnounced=false;
 function wsUrl(){ const base = API ? API.replace(/^http/,"ws") : ((location.protocol==="https:"?"wss:":"ws:")+"//"+location.host); return base+"/ws/swamp"; }
 function connectWS(){
   if(typeof WebSocket==="undefined") return;
@@ -592,6 +610,8 @@ function connectWS(){
         if(r.hero!==pl.h){ r.hero=pl.h; r.sprPath=heroStill(pl.h); }
       }
       for(const id of [...RP.keys()]) if(!seen.has(id)) RP.delete(id);
+      if(RP.size>0 && !pvpAnnounced){ pvpAnnounced=true; if(state==="world") toast("⚔️ "+RP.size+" trader"+(RP.size>1?"s":"")+" in your swamp — walk up & sling to battle!"); }
+      if(RP.size===0) pvpAnnounced=false;
       refreshHud();
     }
     else if(m.type==="hit"){
@@ -602,8 +622,8 @@ function connectWS(){
       } else { const r=RP.get(m.to); if(r){ burst(r.x,r.y,"#ff7bd0",7); floatTxt(r.x,r.y-r.r,"-"+m.dmg,"#ff7bd0"); } } // splash on someone else
     }
     else if(m.type==="ko"){
-      if(m.by===myId){ store.raidPts=(store.raidPts||0)+10; store.xp+=15; save(); refreshHud(); sfx("catch",0.4);
-        burst(player.x,player.y-20,"#ffd24a",16); toast("💥 KO! You slimed "+(m.victimName||"a trader")+" — +10 raid pts"); } }
+      if(m.by===myId){ store.pvpWins=(store.pvpWins||0)+1; store.raidPts=(store.raidPts||0)+10; store.xp+=25; save(); refreshHud(); sfx("catch",0.4);
+        burst(player.x,player.y-20,"#ffd24a",18); addShake(8); toast("💥 KO #"+store.pvpWins+"! You slimed "+(m.victimName||"a trader")+" — +10 raid pts +25 xp"); } }
     };
   sock.onclose=()=>{ wsOk=false; RP.clear(); scheduleReconnect(); };
   sock.onerror=()=>{ try{ sock.close(); }catch{} };
@@ -750,7 +770,7 @@ function update(dt){
   const pr=$("prompt");
   if(nearMob){ pr.textContent="⚔️ Fight "+nearMob.name+" — tap ✋"; pr.classList.add("on"); }
   else if(near){ pr.textContent="⚔️ Sling slimeballs at $"+near.sym+" ("+near.rar.label+") to weaken & auto-catch it"; pr.classList.add("on"); }
-  else if(nearFoe){ pr.textContent="🟢 Slime "+(nearFoe.name||"trader")+(nearFoe.clan?" ["+nearFoe.clan+"]":"")+" — tap ⚔️"; pr.classList.add("on"); }
+  else if(nearFoe){ pr.textContent="⚔️ BATTLE "+(nearFoe.name||"trader")+(nearFoe.clan?" ["+nearFoe.clan+"]":"")+" — sling slimeballs!"; pr.classList.add("on"); }
   else if(nearBld){ pr.textContent="Enter "+nearBld.name; pr.classList.add("on"); }
   else pr.classList.remove("on");
   // particles/floats
@@ -1053,7 +1073,8 @@ function openDex(){ state="dex"; $("prompt").classList.remove("on");
   const counts={common:0,uncommon:0,rare:0,epic:0,legendary:0}; entries.forEach(([,c])=>{ if(counts[c.rarity]!=null)counts[c.rarity]++; });
   const w=worthAvg();
   $("dexSub").innerHTML=`${entries.length} caught · Swamp Worth <b style="color:var(--gold)">${w?w.toFixed(2)+"x":"—"}</b> · `+
-    `<span style="color:var(--cLegend)">★${counts.legendary}</span> <span style="color:var(--cEpic)">${counts.epic}</span> <span style="color:var(--cRare)">${counts.rare}</span> <span style="color:var(--cUncommon)">${counts.uncommon}</span> <span style="color:var(--cCommon)">${counts.common}</span>`;
+    `<span style="color:var(--cLegend)">★${counts.legendary}</span> <span style="color:var(--cEpic)">${counts.epic}</span> <span style="color:var(--cRare)">${counts.rare}</span> <span style="color:var(--cUncommon)">${counts.uncommon}</span> <span style="color:var(--cCommon)">${counts.common}</span>`
+    + `<div style="color:var(--dim);font-size:0.72rem;margin-top:3px">tap a coin to open its live chart 📈</div>`;
   const grid=$("dexGrid"); grid.innerHTML="";
   if(!entries.length){ grid.innerHTML='<div style="grid-column:1/-1;color:var(--dim);text-align:center;padding:20px">Empty. Go catch some coins!</div>'; }
   let evoChanged=false;
@@ -1061,10 +1082,16 @@ function openDex(){ state="dex"; $("prompt").classList.remove("on");
     const evo=evoStageOf(mult); const peak=Math.max(c.evo||1,evo.s); if(peak!==(c.evo||1)){ c.evo=peak; evoChanged=true; }
     const tierName=(EVO_TIERS.find(t=>t.s===peak)||{}).name||"";
     const d=document.createElement("div"); d.className="dcard"+(peak>1?(" e"+peak):""); d.style.borderColor=peak>1?"":rc+"55";
-    const h=hash(mint); const path=A.statics.length?A.statics[h%A.statics.length]:null;
+    // caught coin uses its clean OGRE (by rarity) — no boxes; whole card opens the chart
+    const h=hash(mint); const pool=OGRE_BY_TIER[c.rarity]||OGRE_BY_TIER.common; const path=pool[h%pool.length];
+    const real=!String(mint).startsWith("syn_")&&!String(mint).startsWith("founder_");
+    const href=real?(SITE+"/t?ca="+encodeURIComponent(mint)):(SITE+"/terminal");
+    d.style.cursor="pointer"; d.title="Open $"+c.symbol+" chart";
     d.innerHTML=`<div class="dr" style="background:${rc}"></div>`+(peak>1?`<div class="evo">${"★".repeat(peak-1)} ${tierName}</div>`:"")+
+      `<span class="dchart">📈</span>`+
       (path?`<img src="${path}" onerror="this.style.display='none'">`:`<div style="font-size:30px">${c.ogre?"🧌":"🟢"}</div>`)+
       `<div class="ds">${c.ogre?"🧌":""}$${c.symbol}</div><div class="dm ${mult>=1?'up':'down'}">${mult>=1?'+':''}${((mult-1)*100).toFixed(0)}%</div>`;
+    d.onclick=()=>{ try{ sfx("ui",0.3); window.open(href,"_blank","noopener"); }catch(_){} };
     grid.appendChild(d); }
   if(evoChanged) save();
   $("dex").classList.add("on");
