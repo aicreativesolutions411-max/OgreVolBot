@@ -49,6 +49,15 @@
   </div>
   <div class="err" id="bigerr" style="font-size:.85rem;margin:0 0 10px"></div>
 
+  <div id="import" style="border:1px dashed rgba(114,255,35,.4); border-radius:14px; padding:14px; margin:0 0 16px; background:rgba(10,20,12,.5)">
+    <b style="color:var(--g2)">📥 Import mode (works with ANY generator — no Puter needed)</b>
+    <p style="color:#9fb0c8; font-size:.85rem; margin:6px 0">
+      Generate the sprites on a free tool (Bing Image Creator, Leonardo.ai, etc.) using the prompt pack — each prompt asks for a <b>solid magenta background</b>. Save the PNGs, then drop them here. This page cuts the magenta to transparent, autocrops, resizes to 512px, and lets you Download All as a correctly-named zip.
+    </p>
+    <input type="file" id="imp" accept="image/*" multiple>
+    <span class="status" id="impstatus"></span>
+  </div>
+
   <div class="grid" id="grid"></div>
 
 <script>
@@ -175,6 +184,36 @@ function download(id){
   if(!made[id]) return;
   const a=document.createElement("a"); a.href=made[id]; a.download=id+".png"; a.click();
 }
+
+// ---- Import mode: process any image into a game-ready transparent sprite ----
+const ALL_IDS = ALL.map(a=>a[0]);
+function matchId(filename){
+  const base = filename.toLowerCase().replace(/\.[a-z0-9]+$/,"").replace(/[^a-z0-9]+/g,"-");
+  // exact, then contains
+  let m = ALL_IDS.find(id=>base===id);
+  if(!m) m = ALL_IDS.find(id=>base.includes(id));
+  if(!m) m = ALL_IDS.find(id=>id.split("-").every(part=>base.includes(part)));
+  return m || null;
+}
+$("#imp").onchange = async (e)=>{
+  const files=[...e.target.files]; if(!files.length) return;
+  $("#impstatus").textContent=`processing ${files.length}…`;
+  let ok=0, unknown=[];
+  for(const file of files){
+    const url=URL.createObjectURL(file);
+    const img=new Image(); img.src=url;
+    await new Promise(r=>{ img.onload=r; img.onerror=r; setTimeout(r,4000); });
+    if(!img.naturalWidth){ continue; }
+    let id=matchId(file.name);
+    if(!id){ id=prompt(`Which sprite is "${file.name}"?\nType one of:\n`+ALL_IDS.join(", ")); if(!ALL_IDS.includes(id)){ unknown.push(file.name); continue; } }
+    let out; try{ out=keyImage(img); }catch{ out=url; }
+    made[id]=out;
+    const el=[...grid.children].find(x=>x.dataset.id===id);
+    if(el){ const f=el.querySelector(".frame"); f.innerHTML=""; const im=new Image(); im.src=out; f.appendChild(im); el.querySelector("[data-dl]").disabled=false; }
+    ok++;
+  }
+  $("#impstatus").textContent=`imported ${ok}✅`+(unknown.length?` · skipped: ${unknown.join(", ")}`:"")+` — now Download All (.zip)`;
+};
 
 $("#signin").onclick=async()=>{
   $("#status").textContent="opening Puter sign-in…";
