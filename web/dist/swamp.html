@@ -22,7 +22,10 @@
   .top{position:absolute; top:0; left:0; right:0; padding:calc(8px + env(safe-area-inset-top)) 12px 8px; background:linear-gradient(rgba(2,6,12,0.74),transparent);}
   .stats{display:flex; gap:8px; max-width:620px; margin:0 auto; font-weight:900; font-size:0.82rem; align-items:center; flex-wrap:wrap; text-shadow:0 1px 3px #000;}
   .pill{background:rgba(8,20,10,0.7); border:1px solid rgba(114,255,35,0.28); border-radius:99px; padding:4px 11px;}
-  .pill.balls{color:var(--green2);} .pill.dex{color:var(--blue);} .pill.worth{color:var(--gold);} .pill.lvl{color:var(--green);}
+  .pill.balls{color:var(--green2);} .pill.dex{color:var(--blue);} .pill.worth{color:var(--gold);} .pill.lvl{color:var(--green);} .pill.res{color:#cdb08a;}
+  .pill.raid{border-color:rgba(255,120,80,0.45);} .pill.raid.live{color:#ff9a7e; border-color:#ff7a5e; box-shadow:0 0 12px rgba(255,90,40,0.4);}
+  .hpwrap{height:7px; border-radius:99px; background:rgba(255,90,80,0.12); overflow:hidden; border:1px solid rgba(255,120,80,0.3); max-width:620px; margin:6px auto 0;}
+  .hpfill{height:100%; width:100%; background:linear-gradient(90deg,#ff5e5e,#ffd84d 70%,#72ff23); transition:width .18s;}
   .quest{margin:6px auto 0; max-width:620px; font-size:0.74rem; color:var(--dim); text-align:center; text-shadow:0 1px 2px #000;}
   .topbtns{position:absolute; top:calc(8px + env(safe-area-inset-top)); right:10px; display:flex; gap:6px; z-index:7;}
   .tbtn{pointer-events:auto; background:rgba(8,20,10,0.85); border:1px solid rgba(114,255,35,0.3); color:#eaffe0; border-radius:99px; width:36px; height:36px; font-weight:800; cursor:pointer; font-size:1rem;}
@@ -97,11 +100,14 @@
   <div class="hud" id="hud" style="display:none">
     <div class="top">
       <div class="stats">
+        <span class="pill raid" id="raidp">🛡️</span>
         <span class="pill lvl" id="lvl">Lv 1</span>
         <span class="pill balls" id="balls">🟢 10</span>
         <span class="pill dex" id="dexc">📖 0</span>
         <span class="pill worth" id="worth">💰 1.00x</span>
+        <span class="pill res" id="resp">🪵0</span>
       </div>
+      <div class="hpwrap"><div class="hpfill" id="hpbar"></div></div>
       <div class="quest" id="quest"></div>
     </div>
     <div class="topbtns">
@@ -193,6 +199,9 @@ if(typeof store.balls!=="number") store.balls=10;
 if(typeof store.lastBall!=="number") store.lastBall=Date.now();
 if(typeof store.muted!=="boolean") store.muted=false;
 if(typeof store.hero!=="number") store.hero=0;
+if(!store.res||typeof store.res!=="object") store.res={wood:0,scrap:0,goo:0};
+if(typeof store.clan!=="string") store.clan="";
+if(typeof store.baseLv!=="number") store.baseLv=0;
 const save=()=>{ try{ localStorage.setItem(KEY,JSON.stringify(store)); }catch(_){} };
 const num=(v)=>{ const n=Number(v); return isFinite(n)?n:0; };
 function level(){ return Math.max(1,Math.floor(Math.sqrt(store.xp/40))+1); }
@@ -284,8 +293,10 @@ function symOf(row){ return String(row.symbol||row.tokenMint||"COIN").replace(/[
 
 /* ---- world ---- */
 const TILE=64; const MAP={w:46,h:38}; // tiles
-let player=null, creatures=[], npcs=[], buildings=[], parts=[], floats=[];
-let camx=0,camy=0, state="load", lastTs=0, near=null, nearBld=null;
+let player=null, creatures=[], npcs=[], mobs=[], buildings=[], parts=[], floats=[];
+let camx=0,camy=0, state="load", lastTs=0, near=null, nearBld=null, nearMob=null;
+function burst(x,y,col,n){ n=n||8; for(let i=0;i<n;i++){ const a=Math.random()*6.28,s=50+Math.random()*150; if(parts.length<240) parts.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:0.4+Math.random()*0.4,max:0.9,col,sz:2+Math.random()*3}); } }
+function floatTxt(x,y,txt,col){ if(floats.length>44) floats.shift(); floats.push({x,y,txt,col,t:0}); }
 let feedRows=[], lbNames=[], feedReal=false;
 
 const BUILDINGS_DEF=[
@@ -295,25 +306,47 @@ const BUILDINGS_DEF=[
   { id:"post", name:"💱 Trading Post", tx:36, ty:9, color:"#72ff23",
     desc:"Trade live coins on the SlimeWire terminal. Aping the creatures you catch grows your Swamp Worth.",
     ctas:[{t:"⚡ Open the terminal",href:"/terminal"}] },
-  { id:"gym", name:"⚔️ Battle Gym", tx:23, ty:30, color:"#46e8ff",
-    desc:"Battle other traders with your caught creatures. (Async duels — live PvP coming soon.)",
-    ctas:[{t:"⚔️ Coming soon — get notified",href:"/terminal"}] },
+  { id:"camp", name:"🏕️ Clan Camp", tx:23, ty:30, color:"#46e8ff",
+    desc:"Your camp. Craft slimeballs from the resources you gather, fortify your base, and rep your clan. On raid day (Sat 2pm–Sun 2am UTC) defend and raid rival clans — live PvP coming soon.",
+    ctas:[{t:"🟢 Craft 5 slimeballs (3🪵 2🔩)",act:"craftBalls"},{t:"🏗️ Fortify base",act:"fortify"},{t:"🛡️ Set clan tag",act:"setClan"}] },
   { id:"proof", name:"🧾 Proof Totem", tx:38, ty:30, color:"#ffd24a",
     desc:"The public proof wall — real trades, real receipts. The swamp doesn't lie.",
     ctas:[{t:"🧾 See the proof wall",href:"/proof"}] },
 ];
 
+/* ---- raid-day window (DayZ-style appointment engagement) ---- */
+function hms(ms){ ms=Math.max(0,ms); const s=Math.floor(ms/1000),d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);
+  if(d>0) return d+"d "+h+"h"; if(h>0) return h+"h "+m+"m"; return m+"m "+(s%60)+"s"; }
+function raidState(){ const d=new Date(),day=d.getUTCDay(),h=d.getUTCHours();
+  const live=(day===6&&h>=14)||(day===0&&h<2); // Sat 14:00 UTC -> Sun 02:00 UTC
+  if(live){ const close=Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate()+(day===6?1:0),2,0,0); return {live:true,label:"⚔️ RAID LIVE",sub:hms(close-d.getTime())+" left"}; }
+  let add=(6-day+7)%7; let nd=Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate()+add,14,0,0); if(nd<=d.getTime()) nd+=7*86400000;
+  return {live:false,label:"🛡️ PEACE",sub:"raid in "+hms(nd-d.getTime())}; }
+
+/* ---- hostile PvE mobs (defeat for resources) ---- */
+const MOBS={ goblin:{name:"Goo Goblin",hp:24,dmg:5,spd:60,r:15,drop:{goo:2,scrap:1},col:"#8aff5a"},
+  wolf:{name:"Rug Wolf",hp:18,dmg:8,spd:102,r:15,drop:{scrap:2},col:"#ff9a4a"},
+  bear:{name:"Bear Market",hp:64,dmg:13,spd:52,r:23,drop:{wood:3,scrap:2,goo:1},col:"#b06bff"} };
+function spawnMob(type){ const m=MOBS[type]; const ang=Math.random()*6.28, dist=240+Math.random()*Math.min(W,H);
+  mobs.push({ type,name:m.name,hp:m.hp,maxhp:m.hp,dmg:m.dmg,spd:m.spd,r:m.r,drop:m.drop,col:m.col,
+    x:player.x+Math.cos(ang)*dist, y:player.y+Math.sin(ang)*dist, dir:"down", walkT:Math.random()*3, _mv:false, flash:0,
+    spr:(A.creatures.length?{frames:A.creatures[hash(type+"m")%A.creatures.length].frames}:{proc:true}) }); }
+function manageMobs(){ const raid=raidState().live; const want=raid?12:6;
+  while(mobs.length<want){ const r=Math.random(); spawnMob(raid&&r<0.22?"bear":r<0.55?"goblin":"wolf"); } }
+function addRes(drop){ for(const k in drop) store.res[k]=(store.res[k]||0)+drop[k]; save(); }
+
 function newGame(){
   refillBalls();
-  player={ x:MAP.w*TILE/2, y:MAP.h*TILE/2, r:18, spd:178, walkT:0, dir:"down",
+  player={ x:MAP.w*TILE/2, y:MAP.h*TILE/2, r:18, spd:178, walkT:0, dir:"down", hp:100, maxhp:100, iframe:0, atkCd:0, _mv:false,
     char:(A.players[store.hero]&&A.players[store.hero].character)||"hooded-degen-trader",
     frames:(A.players[store.hero]&&A.players[store.hero].frames)||null };
   preloadFrames(player.frames);
   buildings=BUILDINGS_DEF.map(b=>({...b, x:b.tx*TILE, y:b.ty*TILE}));
-  creatures=[]; npcs=[]; parts=[]; floats=[];
+  creatures=[]; npcs=[]; mobs=[]; parts=[]; floats=[];
   camx=player.x; camy=player.y;
   buildFromFeed();
   spawnNpcs();
+  manageMobs();
   refreshHud();
 }
 function tileWalkable(){ return true; }
@@ -358,7 +391,7 @@ async function loadFeed(){
 
 /* ---- balls (energy) ---- */
 function refillBalls(){ const now=Date.now(); const gain=Math.floor((now-store.lastBall)/180000); if(gain>0){ store.balls=Math.min(15,store.balls+gain); store.lastBall=now; save(); } }
-setInterval(()=>{ if(state==="world"){ refillBalls(); refreshHud(); } },20000);
+setInterval(()=>{ if(state==="world"){ refillBalls(); manageMobs(); refreshHud(); } },20000);
 
 /* ---- HUD ---- */
 let toastT=null;
@@ -368,8 +401,14 @@ function refreshHud(){
   $("balls").textContent="🟢 "+store.balls;
   $("dexc").textContent="📖 "+dexCount();
   const w=worthAvg(); $("worth").textContent="💰 "+(w?w.toFixed(2):"1.00")+"x";
-  const wild=creatures.length; const rare=creatures.filter(c=>c.rar.k==="rare"||c.rar.k==="epic"||c.rar.k==="legendary").length;
-  $("quest").textContent=wild?`${wild} wild coins roaming${rare?` · ${rare} rare nearby 👀`:""} — walk up & catch`:"scanning the swamp for fresh launches…";
+  const r=store.res||{}; $("resp").textContent=`🪵${r.wood||0} 🔩${r.scrap||0} 🟢${r.goo||0}`;
+  const rs=raidState(); const rp=$("raidp"); rp.textContent=rs.label+" "+rs.sub; rp.classList.toggle("live",rs.live);
+  if(player){ $("hpbar").style.width=Math.max(0,player.hp/player.maxhp*100)+"%"; }
+  const wild=creatures.length, rare=creatures.filter(c=>c.rar.k!=="common").length, hostiles=mobs.length;
+  const clan=store.clan?`[${store.clan}] `:"";
+  $("quest").textContent= clan + (rs.live
+    ? `⚔️ RAID LIVE — ${hostiles} hostiles about. Fight for loot!`
+    : `${wild} coins to catch${rare?` · ${rare} rare 👀`:""} · ${hostiles} mobs for loot · base Lv${store.baseLv}`);
 }
 
 /* ---- input ---- */
@@ -386,7 +425,16 @@ window.addEventListener("keyup",e=>{ keys[e.key.toLowerCase()]=false; });
 cv.addEventListener("click",()=>{ if(state==="world") interact(); });
 $("actBtn").onclick=()=>{ if(state==="world") interact(); };
 
-function interact(){ if(near) openEncounter(near); else if(nearBld) openBuilding(nearBld); }
+function interact(){ if(nearMob) attackMob(); else if(near) openEncounter(near); else if(nearBld) openBuilding(nearBld); }
+function attackMob(){ const m=nearMob; if(!m||player.atkCd>0) return; player.atkCd=0.34;
+  m.hp-=22; m.flash=0.12; sfx("throw",0.3); burst(m.x,m.y,m.col,7);
+  const a=Math.atan2(m.y-player.y,m.x-player.x); m.x+=Math.cos(a)*12; m.y+=Math.sin(a)*12;
+  if(m.hp<=0){ addRes(m.drop); store.xp+=8; save(); burst(m.x,m.y,m.col,16);
+    const got=Object.entries(m.drop).map(([k,v])=>"+"+v+" "+({wood:"🪵",scrap:"🔩",goo:"🟢"}[k]||k)).join(" ");
+    floatTxt(m.x,m.y,got,m.col); mobs=mobs.filter(x=>x!==m); nearMob=null; sfx("catch",0.3); toast("Defeated "+m.name+"  "+got); refreshHud(); setTimeout(manageMobs,400); } }
+function downed(){ player.hp=player.maxhp; player.x=MAP.w*TILE/2; player.y=MAP.h*TILE/2; player.iframe=2.2; camx=player.x; camy=player.y;
+  let lost=[]; for(const k in store.res){ const l=Math.floor((store.res[k]||0)*0.2); if(l>0){ store.res[k]-=l; lost.push(l+" "+({wood:"🪵",scrap:"🔩",goo:"🟢"}[k]||k)); } } save();
+  sfx("boss",0.4); toast("💀 Downed! Lost "+(lost.length?lost.join(", "):"nothing")+". Respawned at camp."); refreshHud(); }
 
 /* ---- loop ---- */
 function loop(ts){ if(state!=="world") return; let dt=(ts-lastTs)/1000; lastTs=ts; if(!isFinite(dt)||dt<0)dt=0; dt=Math.min(dt,0.05); update(dt); render(); requestAnimationFrame(loop); }
@@ -398,6 +446,7 @@ function update(dt){
   p.x=Math.max(40,Math.min(MAP.w*TILE-40,p.x)); p.y=Math.max(40,Math.min(MAP.h*TILE-40,p.y));
   p._mv=il>0.01;
   if(p._mv){ p.walkT+=dt; const ax=Math.abs(ix),ay=Math.abs(iy); if(Math.abs(ax-ay)>0.22) p.dir=ax>ay?(ix<0?"left":"right"):(iy<0?"up":"down"); }
+  if(p.atkCd>0)p.atkCd-=dt; if(p.iframe>0)p.iframe-=dt; if(p.hp<p.maxhp) p.hp=Math.min(p.maxhp,p.hp+(raidState().live?2:4.5)*dt);
   // creatures wander + flee slightly
   near=null; let nd=70*70;
   for(const c of creatures){ if(c.dead) continue; c.wt-=dt; c.bob+=dt*3;
@@ -412,11 +461,19 @@ function update(dt){
   // npc wander
   for(const q of npcs){ q.retarget-=dt; if(q.retarget<=0){ q.retarget=2+Math.random()*3; q.tx=player.x+(Math.random()*700-350); q.ty=player.y+(Math.random()*700-350); }
     const dx=q.tx-q.x, dy=q.ty-q.y, d=Math.hypot(dx,dy)||1; q._mv=d>6; if(q._mv){ q.x+=dx/d*70*dt; q.y+=dy/d*70*dt; q.walkT+=dt; const ax=Math.abs(dx),ay=Math.abs(dy); if(Math.abs(ax-ay)>d*0.2) q.dir=ax>ay?(dx<0?"left":"right"):(dy<0?"up":"down"); } }
+  // hostile mobs: chase, contact-damage, track nearest for melee
+  nearMob=null; let nmd=66*66;
+  for(const mob of mobs){ const dx=p.x-mob.x, dy=p.y-mob.y, d=Math.hypot(dx,dy)||1;
+    if(d<460){ mob.x+=dx/d*mob.spd*dt; mob.y+=dy/d*mob.spd*dt; mob._mv=true; mob.walkT+=dt; const ax=Math.abs(dx),ay=Math.abs(dy); if(Math.abs(ax-ay)>d*0.18) mob.dir=ax>ay?(dx<0?"left":"right"):(dy<0?"up":"down"); } else { mob._mv=false; mob.walkT+=dt*0.2; }
+    if(mob.flash>0) mob.flash-=dt;
+    if(d<mob.r+p.r && p.iframe<=0){ p.hp-=mob.dmg; p.iframe=0.7; floatTxt(p.x,p.y-p.r,"-"+mob.dmg,"#ff5e5e"); burst(p.x,p.y,"#ff5e5e",5); sfx("miss",0.3); if(p.hp<=0) downed(); }
+    const dd=dx*dx+dy*dy; if(dd<nmd){ nmd=dd; nearMob=mob; } }
   // building proximity
   nearBld=null; let bd=86*86; for(const b of buildings){ const dx=b.x-p.x,dy=b.y-p.y,d=dx*dx+dy*dy; if(d<bd){ bd=d; nearBld=b; } }
   // prompt
   const pr=$("prompt");
-  if(near){ pr.textContent="✋ Catch $"+near.sym+" ("+near.rar.label+")"; pr.classList.add("on"); }
+  if(nearMob){ pr.textContent="⚔️ Fight "+nearMob.name+" — tap ✋"; pr.classList.add("on"); }
+  else if(near){ pr.textContent="✋ Catch $"+near.sym+" ("+near.rar.label+")"; pr.classList.add("on"); }
   else if(nearBld){ pr.textContent="Enter "+nearBld.name; pr.classList.add("on"); }
   else pr.classList.remove("on");
   // particles/floats
@@ -433,9 +490,9 @@ function render(){
   // building footprints
   for(const b of buildings) drawBuilding(b);
   // sort entities by y
-  const ents=[]; for(const c of creatures){ if(!c.dead) ents.push({t:"c",e:c}); } for(const q of npcs) ents.push({t:"n",e:q}); ents.push({t:"p",e:player});
+  const ents=[]; for(const c of creatures){ if(!c.dead) ents.push({t:"c",e:c}); } for(const q of npcs) ents.push({t:"n",e:q}); for(const mob of mobs) ents.push({t:"m",e:mob}); ents.push({t:"p",e:player});
   ents.sort((a,b)=>a.e.y-b.e.y);
-  for(const it of ents){ if(it.t==="p") drawPlayer(); else if(it.t==="n") drawNpc(it.e); else drawCreature(it.e); }
+  for(const it of ents){ if(it.t==="p") drawPlayer(); else if(it.t==="n") drawNpc(it.e); else if(it.t==="m") drawMob(it.e); else drawCreature(it.e); }
   for(const pt of parts){ ctx.globalAlpha=Math.max(0,pt.life/pt.max); ctx.fillStyle=pt.col; ctx.beginPath(); ctx.arc(pt.x,pt.y,pt.sz,0,6.2832); ctx.fill(); } ctx.globalAlpha=1;
   ctx.font="900 15px Inter,sans-serif"; ctx.textAlign="center";
   for(const f of floats){ ctx.globalAlpha=Math.max(0,1-f.t/0.9); ctx.fillStyle=f.col; ctx.fillText(f.txt,f.x,f.y); } ctx.globalAlpha=1;
@@ -488,6 +545,15 @@ function drawNpc(q){ drawShadow(q.x,q.y,q.r);
   ctx.font="900 11px Inter,sans-serif"; ctx.textAlign="center"; ctx.fillStyle="#9bd1ff"; ctx.strokeStyle="rgba(0,0,0,0.7)"; ctx.lineWidth=3;
   ctx.strokeText("🧑 "+q.name,q.x,q.y-q.r-8); ctx.fillText("🧑 "+q.name,q.x,q.y-q.r-8);
 }
+function drawMob(m){ drawShadow(m.x,m.y,m.r);
+  ctx.strokeStyle="rgba(255,80,60,0.5)"; ctx.lineWidth=2; ctx.beginPath(); ctx.ellipse(m.x,m.y+m.r*0.5,m.r*1.1,m.r*0.45,0,0,6.2832); ctx.stroke();
+  let drew=false; if(m.spr.frames) drew=drawWalker(m,m.spr.frames,m.r*2.4);
+  if(!drew){ const g=ctx.createRadialGradient(m.x,m.y-m.r*0.3,1,m.x,m.y,m.r*1.3); g.addColorStop(0,"#fff2"); g.addColorStop(1,m.col);
+    ctx.fillStyle=m.col; ctx.beginPath(); ctx.arc(m.x,m.y,m.r,0,6.2832); ctx.fill();
+    ctx.fillStyle="#300"; ctx.beginPath(); ctx.arc(m.x-m.r*0.3,m.y-m.r*0.2,m.r*0.16,0,6.28); ctx.arc(m.x+m.r*0.3,m.y-m.r*0.2,m.r*0.16,0,6.28); ctx.fill(); }
+  if(m.flash>0){ ctx.globalAlpha=Math.min(0.8,m.flash*5); ctx.fillStyle="#fff"; ctx.beginPath(); ctx.arc(m.x,m.y-m.r*0.2,m.r,0,6.28); ctx.fill(); ctx.globalAlpha=1; }
+  if(m.hp<m.maxhp){ const w=m.r*1.7; ctx.fillStyle="rgba(0,0,0,0.55)"; ctx.fillRect(m.x-w/2,m.y-m.r-9,w,3.5); ctx.fillStyle="#ff5e5e"; ctx.fillRect(m.x-w/2,m.y-m.r-9,w*Math.max(0,m.hp/m.maxhp),3.5); }
+  ctx.font="900 10px Inter,sans-serif"; ctx.textAlign="center"; ctx.fillStyle="#ff9a7e"; ctx.strokeStyle="rgba(0,0,0,0.7)"; ctx.lineWidth=3; ctx.strokeText(m.name,m.x,m.y-m.r-13); ctx.fillText(m.name,m.x,m.y-m.r-13); }
 function drawVignette(){ const g=ctx.createRadialGradient(W/2,H/2,Math.min(W,H)*0.45,W/2,H/2,Math.max(W,H)*0.78);
   g.addColorStop(0,"rgba(0,0,0,0)"); g.addColorStop(1,"rgba(0,0,0,0.5)"); ctx.fillStyle=g; ctx.fillRect(0,0,W,H); }
 
@@ -598,13 +664,23 @@ function openBuilding(b){ state="bld"; $("prompt").classList.remove("on"); sfx("
       btn.onclick=()=>doBldAct(cta.act); box.appendChild(btn); } }
   $("bld").classList.add("on");
 }
-function doBldAct(act){ if(act==="claimEgg"){
+function doBldAct(act){
+  if(act==="claimEgg"){
     if(store.eggClaimed){ toast("You already hatched your founder Legendary 🌟"); return; }
-    // honor-system founder reward: grants a legendary creature to the Dex
     store.eggClaimed=true; const id="founder_"+Date.now();
     store.dex[id]={ symbol:"FOUNDER", mc:1, mcNow:1, rarity:"legendary", stage:1, ogre:true, at:Date.now() };
     store.xp+=120; save(); refreshHud(); toast("🌟 LEGENDARY founder creature added! Launch a coin to make it real."); closeBld();
-  } }
+  } else if(act==="craftBalls"){
+    if((store.res.wood||0)>=3 && (store.res.scrap||0)>=2){ store.res.wood-=3; store.res.scrap-=2; store.balls=Math.min(20,store.balls+5); save(); refreshHud(); sfx("quest",0.4); toast("🟢 Crafted 5 slimeballs!"); }
+    else toast("Need 3 🪵 wood + 2 🔩 scrap — fight mobs to gather");
+  } else if(act==="fortify"){
+    const cost=(store.baseLv+1)*5; if((store.res.wood||0)>=cost){ store.res.wood-=cost; store.baseLv++; save(); refreshHud(); sfx("level",0.4); toast("🏗️ Base fortified to Lv "+store.baseLv+"!"); }
+    else toast("Need "+cost+" 🪵 wood to fortify to Lv "+(store.baseLv+1));
+  } else if(act==="setClan"){
+    let n=null; try{ n=window.prompt("Clan tag (max 12 chars):", store.clan||""); }catch(_){}
+    if(n!=null){ store.clan=String(n).replace(/[^A-Za-z0-9 _-]/g,"").slice(0,12).trim(); save(); refreshHud(); toast(store.clan?("🛡️ Clan set: ["+store.clan+"]"):"Clan cleared"); }
+  }
+}
 function closeBld(){ $("bld").classList.remove("on"); if(state==="bld"){ state="world"; lastTs=performance.now(); requestAnimationFrame(loop); } }
 $("bldX").onclick=closeBld;
 
@@ -637,9 +713,10 @@ $("exit").onclick=()=>{ state="title"; $("hud").style.display="none"; showTitle(
 })();
 
 // test hooks
-window.__SW={ get state(){return state;}, enterWorld, get player(){return player;}, get creatures(){return creatures;},
+window.__SW={ get state(){return state;}, enterWorld, get player(){return player;}, get creatures(){return creatures;}, get mobs(){return mobs;},
   openEncounter:()=>{ if(creatures[0]) openEncounter(creatures[0]); }, forceCatch:()=>{ if(encC) caught(encC); },
-  openDex, dexCount, step:(dt)=>{ if(state==="world") update(dt||0.016); }, near:()=>near };
+  openDex, dexCount, step:(dt)=>{ if(state==="world") update(dt||0.016); }, near:()=>near, nearMob:()=>nearMob,
+  attackMob, raidState, get res(){return store.res;}, bld:(id)=>openBuilding(buildings.find(b=>b.id===id)), doBldAct };
 })();
 </script>
 </body>
