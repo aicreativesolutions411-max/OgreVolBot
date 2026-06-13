@@ -9860,6 +9860,21 @@ body {
   background-color: #08120a !important;
   min-height: clamp(210px, 24vw, 320px) !important;
 }
+
+/* ===== Photon-clean pass: calmer, more breathing room, less neon clutter ===== */
+/* Tame the heavy dripping slime-border frame into a subtle accent + clean edge */
+.swamp-connect-shell::before { opacity: 0.18 !important; }
+.swamp-connect-shell {
+  border: 1px solid rgba(114, 255, 35, 0.16) !important;
+  border-radius: 24px !important;
+  box-shadow: 0 1px 0 rgba(255,255,255,0.03) inset, 0 30px 80px rgba(0,0,0,0.55) !important;
+  background: linear-gradient(180deg, rgba(10,18,12,0.82), rgba(6,12,8,0.9)) !important;
+  backdrop-filter: blur(6px);
+}
+/* softer, cleaner connect card panels */
+.connect-card, .connect-method-showcase { box-shadow: none !important; }
+/* a touch more whitespace + calmer green on primary CTAs site-wide */
+.connect-hero-side h1 { text-shadow: 0 0 18px rgba(114,255,35,0.32) !important; }
 .connect-ogre {
   position: relative !important;
   left: auto !important; right: auto !important; bottom: auto !important; top: auto !important;
