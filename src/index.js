@@ -1391,6 +1391,14 @@ function startHealthServer() {
       await serveStaticHtmlPage(response, "crews.html");
       return;
     }
+    if (request.method === "GET" && ["/radar", "/fresh"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "radar.html");
+      return;
+    }
+    if (request.method === "GET" && ["/events", "/event"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "events.html");
+      return;
+    }
 
     if (request.method === "GET" && /^[/](call|u|g|hype)([/]|$)/.test(requestUrl.pathname)) {
       await serveProofSharePage(requestUrl, request, response);
