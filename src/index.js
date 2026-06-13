@@ -1542,6 +1542,23 @@ function startSwampPresence(server) {
         if (typeof m.clan === "string") me.clan = m.clan.replace(/[^A-Za-z0-9 _-]/g, "").slice(0, 12);
         if (typeof m.hero === "number") me.hero = m.hero | 0;
         me.t = Date.now(); me.posSet = true;
+      } else if (m && m.type === "hit") {
+        // PvP slime-duel: relay a clamped hit to the targeted player (+ everyone
+        // for the splash FX). Same-clan players can't damage each other.
+        const to = String(m.to || "").slice(0, 24);
+        const tgt = swampPlayers.get(to);
+        if (tgt && to !== id && !(me.clan && tgt.clan && me.clan === tgt.clan)) {
+          const dmg = Math.max(1, Math.min(34, Number(m.dmg) || 12));
+          const ev = JSON.stringify({ type: "hit", from: id, fromName: me.name, fromClan: me.clan, to, x: Math.round(tgt.x), y: Math.round(tgt.y), dmg });
+          for (const c of wss.clients) if (c.readyState === 1) { try { c.send(ev); } catch {} }
+        }
+      } else if (m && m.type === "ko") {
+        // Victim reports who KO'd them; relay so the attacker can score.
+        const by = String(m.by || "").slice(0, 24);
+        if (swampPlayers.get(by)) {
+          const ev = JSON.stringify({ type: "ko", by, victim: id, victimName: me.name, victimClan: me.clan });
+          for (const c of wss.clients) if (c.readyState === 1) { try { c.send(ev); } catch {} }
+        }
       }
     });
     ws.on("pong", () => { ws.isAlive = true; });

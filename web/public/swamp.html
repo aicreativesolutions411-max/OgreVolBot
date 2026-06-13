@@ -316,7 +316,7 @@ function symOf(row){ return String(row.symbol||row.tokenMint||"COIN").replace(/[
 /* ---- world ---- */
 const TILE=64; const MAP={w:46,h:38}; // tiles
 let player=null, creatures=[], npcs=[], mobs=[], buildings=[], parts=[], floats=[];
-let camx=0,camy=0, state="load", lastTs=0, near=null, nearBld=null, nearMob=null;
+let camx=0,camy=0, state="load", lastTs=0, near=null, nearBld=null, nearMob=null, nearFoe=null;
 function burst(x,y,col,n){ n=n||8; for(let i=0;i<n;i++){ const a=Math.random()*6.28,s=50+Math.random()*150; if(parts.length<240) parts.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:0.4+Math.random()*0.4,max:0.9,col,sz:2+Math.random()*3}); } }
 function floatTxt(x,y,txt,col){ if(floats.length>44) floats.shift(); floats.push({x,y,txt,col,t:0}); }
 let feedRows=[], lbNames=[], feedReal=false;
@@ -409,13 +409,24 @@ function connectWS(){
       for(const pl of m.players){ if(pl.id===myId) continue; seen.add(pl.id);
         let r=RP.get(pl.id);
         const heroStill=(h)=>(A.players[h%Math.max(1,A.players.length)]||{}).still||(A.statics&&A.statics[0])||null;
-        if(!r){ r={ x:pl.x,y:pl.y,tx:pl.x,ty:pl.y,dir:pl.d,name:pl.n,clan:pl.c,hero:pl.h,r:18,walkT:Math.random()*3,_mv:false,sprPath:heroStill(pl.h) }; RP.set(pl.id,r); }
+        if(!r){ r={ id:pl.id,x:pl.x,y:pl.y,tx:pl.x,ty:pl.y,dir:pl.d,name:pl.n,clan:pl.c,hero:pl.h,r:18,walkT:Math.random()*3,_mv:false,sprPath:heroStill(pl.h) }; RP.set(pl.id,r); }
         r.tx=pl.x; r.ty=pl.y; r.dir=pl.d; r.name=pl.n; r.clan=pl.c;
         if(r.hero!==pl.h){ r.hero=pl.h; r.sprPath=heroStill(pl.h); }
       }
       for(const id of [...RP.keys()]) if(!seen.has(id)) RP.delete(id);
       refreshHud();
-    } };
+    }
+    else if(m.type==="hit"){
+      if(m.to===myId){ // I got slimed by another player
+        if(player && player.iframe<=0){ player.hp-=m.dmg; player.iframe=0.45; player.lastFoe={id:m.from,name:m.fromName||"ogre",t:Date.now()};
+          floatTxt(player.x,player.y-player.r,"-"+m.dmg,"#ff7bd0"); burst(player.x,player.y,"#ff7bd0",8); sfx("miss",0.35);
+          if(player.hp<=0){ try{ sock.send(JSON.stringify({type:"ko",by:m.from})); }catch(_){} downed(true); } }
+      } else { const r=RP.get(m.to); if(r){ burst(r.x,r.y,"#ff7bd0",7); floatTxt(r.x,r.y-r.r,"-"+m.dmg,"#ff7bd0"); } } // splash on someone else
+    }
+    else if(m.type==="ko"){
+      if(m.by===myId){ store.raidPts=(store.raidPts||0)+10; store.xp+=15; save(); refreshHud(); sfx("catch",0.4);
+        burst(player.x,player.y-20,"#ffd24a",16); toast("💥 KO! You slimed "+(m.victimName||"a trader")+" — +10 raid pts"); } }
+    };
   sock.onclose=()=>{ wsOk=false; RP.clear(); scheduleReconnect(); };
   sock.onerror=()=>{ try{ sock.close(); }catch{} };
 }
@@ -484,17 +495,24 @@ cv.addEventListener("click",()=>{ if(state==="world") interact(); });
 $("actBtn").onclick=()=>{ if(state==="world") interact(); };
 $("atkBtn").onclick=()=>{ if(state==="world") playerSwing(); };
 
-function interact(){ if(near) openEncounter(near); else if(nearBld) openBuilding(nearBld); else if(nearMob) playerSwing(); }
+function interact(){ if(near) openEncounter(near); else if(nearBld) openBuilding(nearBld); else if(nearMob||nearFoe) playerSwing(); }
 function playerSwing(){ if(state!=="world"||!player) return; player.atk=0.3;
   if(nearMob){ const m=nearMob; player.dir = Math.abs(m.x-player.x)>Math.abs(m.y-player.y)?(m.x<player.x?"left":"right"):(m.y<player.y?"up":"down"); attackMob(); }
+  else if(nearFoe){ attackFoe(); }
   else { sfx("throw",0.18); } }
+function attackFoe(){ const f=nearFoe; if(!f||player.atkCd>0) return; player.atkCd=0.34; player.atk=0.3;
+  player.dir = Math.abs(f.x-player.x)>Math.abs(f.y-player.y)?(f.x<player.x?"left":"right"):(f.y<player.y?"up":"down");
+  const dmg=10+Math.floor(level()/2); // a touch stronger as you level
+  burst(f.x,f.y,"#72ff3b",6); sfx("throw",0.32);
+  try{ if(wsOk&&sock&&sock.readyState===1) sock.send(JSON.stringify({type:"hit",to:f.id,dmg})); }catch(_){} }
 function attackMob(){ const m=nearMob; if(!m||player.atkCd>0) return; player.atkCd=0.34; player.atk=0.3;
   m.hp-=22; m.flash=0.12; sfx("throw",0.3); burst(m.x,m.y,m.col,7);
   const a=Math.atan2(m.y-player.y,m.x-player.x); m.x+=Math.cos(a)*12; m.y+=Math.sin(a)*12;
   if(m.hp<=0){ addRes(m.drop); store.xp+=8; save(); burst(m.x,m.y,m.col,16);
     const got=Object.entries(m.drop).map(([k,v])=>"+"+v+" "+({wood:"🪵",scrap:"🔩",goo:"🟢"}[k]||k)).join(" ");
     floatTxt(m.x,m.y,got,m.col); mobs=mobs.filter(x=>x!==m); nearMob=null; sfx("catch",0.3); toast("Defeated "+m.name+"  "+got); refreshHud(); setTimeout(manageMobs,400); } }
-function downed(){ player.hp=player.maxhp; player.x=MAP.w*TILE/2; player.y=MAP.h*TILE/2; player.iframe=2.2; camx=player.x; camy=player.y;
+function downed(pvp){ player.hp=player.maxhp; player.x=MAP.w*TILE/2; player.y=MAP.h*TILE/2; player.iframe=2.2; camx=player.x; camy=player.y;
+  if(pvp){ const by=player.lastFoe&&player.lastFoe.name?(" by "+player.lastFoe.name):""; sfx("boss",0.4); toast("💀 Slimed"+by+"! Respawned at camp — get them back."); refreshHud(); return; }
   let lost=[]; for(const k in store.res){ const l=Math.floor((store.res[k]||0)*0.2); if(l>0){ store.res[k]-=l; lost.push(l+" "+({wood:"🪵",scrap:"🔩",goo:"🟢"}[k]||k)); } } save();
   sfx("boss",0.4); toast("💀 Downed! Lost "+(lost.length?lost.join(", "):"nothing")+". Respawned at camp."); refreshHud(); }
 
@@ -540,6 +558,7 @@ function update(dt){
   const pr=$("prompt");
   if(nearMob){ pr.textContent="⚔️ Fight "+nearMob.name+" — tap ✋"; pr.classList.add("on"); }
   else if(near){ pr.textContent="✋ Catch $"+near.sym+" ("+near.rar.label+")"; pr.classList.add("on"); }
+  else if(nearFoe){ pr.textContent="🟢 Slime "+(nearFoe.name||"trader")+(nearFoe.clan?" ["+nearFoe.clan+"]":"")+" — tap ⚔️"; pr.classList.add("on"); }
   else if(nearBld){ pr.textContent="Enter "+nearBld.name; pr.classList.add("on"); }
   else pr.classList.remove("on");
   // particles/floats
@@ -547,8 +566,12 @@ function update(dt){
   for(const f of floats){ f.t+=dt; f.y-=26*dt; } floats=floats.filter(f=>f.t<0.9);
   // live presence: throttled position send + smooth interpolation of remote traders
   posT-=dt; if(posT<=0){ posT=0.15; sendPos(); }
+  nearFoe=null; let nfd=64*64; const myClan=(store.clan||"").trim();
   for(const r of RP.values()){ const k=Math.min(1,dt*10); r.x+=(r.tx-r.x)*k; r.y+=(r.ty-r.y)*k;
-    const moving=(r.tx-r.x)*(r.tx-r.x)+(r.ty-r.y)*(r.ty-r.y)>4; r._mv=moving; r.walkT+=dt*(moving?1:0.2); }
+    const moving=(r.tx-r.x)*(r.tx-r.x)+(r.ty-r.y)*(r.ty-r.y)>4; r._mv=moving; r.walkT+=dt*(moving?1:0.2);
+    // foe = a remote player not in my clan (same clan = ally). Track nearest for melee.
+    const ally = myClan && (r.clan||"").trim()===myClan;
+    if(!ally){ const dx=r.x-p.x, dy=r.y-p.y, dd=dx*dx+dy*dy; if(dd<nfd){ nfd=dd; nearFoe=r; } } }
   camx+=(p.x-camx)*Math.min(1,dt*7); camy+=(p.y-camy)*Math.min(1,dt*7);
 }
 
@@ -618,10 +641,15 @@ function drawNpc(q){ drawShadow(q.x,q.y,q.r);
   ctx.strokeText("🧑 "+q.name,q.x,q.y-q.r-8); ctx.fillText("🧑 "+q.name,q.x,q.y-q.r-8);
 }
 function drawRemote(r){ drawShadow(r.x,r.y,r.r);
-  if(!drawChar(r,r.sprPath,r.r*2.7)){ ctx.fillStyle="#6aa0ff"; ctx.beginPath(); ctx.arc(r.x,r.y,r.r,0,6.2832); ctx.fill(); }
+  const myClan=(store.clan||"").trim(); const ally=myClan&&(r.clan||"").trim()===myClan; const foe=!ally;
+  if(foe && r===nearFoe){ // target reticle on the foe you'd hit
+    const t=performance.now()/400; ctx.strokeStyle="rgba(255,123,208,0.9)"; ctx.lineWidth=2.5;
+    ctx.beginPath(); ctx.arc(r.x,r.y-r.r*0.2,r.r*1.5,t,t+1.9); ctx.stroke();
+    ctx.beginPath(); ctx.arc(r.x,r.y-r.r*0.2,r.r*1.5,t+3.14,t+5.04); ctx.stroke(); }
+  if(!drawChar(r,r.sprPath,r.r*2.7)){ ctx.fillStyle=foe?"#ff7bd0":"#6aa0ff"; ctx.beginPath(); ctx.arc(r.x,r.y,r.r,0,6.2832); ctx.fill(); }
   const tag=(r.clan?"["+r.clan+"] ":"")+(r.name||"trader");
-  ctx.font="900 11px Inter,sans-serif"; ctx.textAlign="center"; ctx.fillStyle="#9bff9b"; ctx.strokeStyle="rgba(0,0,0,0.7)"; ctx.lineWidth=3;
-  ctx.strokeText("🟢 "+tag,r.x,r.y-r.r-9); ctx.fillText("🟢 "+tag,r.x,r.y-r.r-9); }
+  ctx.font="900 11px Inter,sans-serif"; ctx.textAlign="center"; ctx.fillStyle=ally?"#9bff9b":"#ff9bd6"; ctx.strokeStyle="rgba(0,0,0,0.7)"; ctx.lineWidth=3;
+  const ic=ally?"🟢":"⚔️"; ctx.strokeText(ic+" "+tag,r.x,r.y-r.r-9); ctx.fillText(ic+" "+tag,r.x,r.y-r.r-9); }
 function drawMob(m){ drawShadow(m.x,m.y,m.r);
   ctx.strokeStyle="rgba(255,80,60,0.5)"; ctx.lineWidth=2; ctx.beginPath(); ctx.ellipse(m.x,m.y+m.r*0.5,m.r*1.1,m.r*0.45,0,0,6.2832); ctx.stroke();
   let drew=false; if(m.spr.img) drew=drawChar(m,m.spr.img,m.r*2.4);
