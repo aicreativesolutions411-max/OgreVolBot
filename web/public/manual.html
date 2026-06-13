@@ -3,51 +3,74 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SlimeWire — Complete User Guide</title>
-<meta name="description" content="The complete SlimeWire user guide — how the terminal, the Swamp game, raids, Telegram bot, X sharing and every page works.">
-<meta property="og:title" content="SlimeWire — Complete User Guide">
+<title>SlimeWire — The Degen Playbook</title>
+<meta name="description" content="The complete SlimeWire playbook — how to trade with quick presets, use every tool, play the Swamp, raid, and run the whole site like a pro.">
+<meta property="og:title" content="SlimeWire — The Degen Playbook">
 <meta property="og:image" content="https://www.slimewire.org/assets/slimewire/swamp/art/og-survivors.jpg">
 <link rel="icon" type="image/svg+xml" href="/assets/slimewire/svg/slimewire-mark.svg">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&family=Cinzel:wght@700;900&display=swap" rel="stylesheet">
 <style>
-  :root{ --bg:#0a0d12;--ink:#10151c;--card:#11171f;--line:#e3e8ef;--tx:#1a2230;--dim:#5a6678;--green:#1f9d54;--green2:#5fe08a;--gold:#b7860b;--blue:#2b78c4;--purp:#7a4fd0;--red:#d23b3b; }
+  :root{ --bg:#070f0a; --panel:#0d1a12; --panel2:#0a1410; --line:rgba(120,255,90,0.14); --line2:rgba(120,255,90,0.28);
+    --tx:#e6f5e0; --dim:#90a896; --green:#72ff23; --green2:#bbff63; --gold:#ffd24a; --blue:#5ab0ff; --purp:#b06bff; --red:#ff6b6b; }
   *{box-sizing:border-box;}
-  html,body{margin:0;background:#f4f6f9;color:var(--tx);font-family:Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased;line-height:1.55;}
-  .page{max-width:840px;margin:0 auto;background:#fff;}
-  .cover{background:linear-gradient(160deg,#0a0d12,#0f1a14);color:#eaffe0;text-align:center;padding:70px 40px 64px;position:relative;overflow:hidden;}
-  .cover img.bg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0.32;}
-  .cover .in{position:relative;}
-  .cover .logo{width:88px;height:88px;margin-bottom:14px;}
-  .cover h1{font-family:Cinzel,serif;font-size:2.8rem;margin:6px 0 4px;letter-spacing:1px;}
-  .cover .sub{color:var(--green2);font-weight:800;letter-spacing:3px;text-transform:uppercase;font-size:0.9rem;}
-  .cover p{color:#cdd8e6;max-width:520px;margin:16px auto 0;font-size:1rem;}
-  .cover .ver{margin-top:22px;color:#8c97a7;font-size:0.8rem;}
-  .body{padding:40px 48px 60px;}
-  h2{font-family:Cinzel,serif;font-size:1.7rem;color:var(--ink);margin:0 0 4px;border-bottom:3px solid var(--green2);padding-bottom:8px;}
-  h2 .em{margin-right:8px;}
-  h3{font-size:1.12rem;margin:22px 0 6px;color:var(--green);}
-  h4{font-size:0.98rem;margin:16px 0 4px;color:var(--ink);}
-  p,li{font-size:0.95rem;color:#28313f;}
-  .lead{color:var(--dim);font-size:1rem;}
-  ul{padding-left:20px;margin:8px 0;} li{margin:4px 0;}
-  .sec{padding:34px 0 8px;}
-  .sec + .sec{border-top:1px solid var(--line);}
-  .toc{background:#f7f9fc;border:1px solid var(--line);border-radius:12px;padding:20px 24px;margin:24px 0;}
-  .toc h3{margin-top:0;color:var(--ink);}
-  .toc ol{columns:2;column-gap:30px;margin:0;padding-left:18px;} .toc li{margin:5px 0;font-weight:600;}
-  .toc a{color:var(--blue);text-decoration:none;}
-  .tag{display:inline-block;background:#eef6ef;color:var(--green);border:1px solid #cfe9d6;border-radius:99px;padding:2px 10px;font-size:0.78rem;font-weight:800;margin:0 4px 4px 0;}
-  .note{background:#f0f7ff;border-left:4px solid var(--blue);padding:12px 16px;border-radius:0 8px 8px 0;margin:14px 0;font-size:0.9rem;}
-  .tip{background:#f1faf2;border-left:4px solid var(--green);padding:12px 16px;border-radius:0 8px 8px 0;margin:14px 0;font-size:0.9rem;}
-  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:0.9rem;}
-  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top;}
-  th{background:#f5f7fa;color:var(--ink);font-weight:800;font-size:0.82rem;text-transform:uppercase;letter-spacing:0.4px;}
-  td code,.cmd{background:#eef1f5;border-radius:6px;padding:1px 7px;font-family:ui-monospace,Menlo,monospace;font-size:0.86rem;color:var(--ink);}
+  html,body{margin:0;background:#050a07;color:var(--tx);font-family:Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased;line-height:1.55;}
+  .page{max-width:880px;margin:0 auto;background:var(--bg);}
+  /* COVER */
+  .cover{position:relative;text-align:center;padding:88px 36px 80px;overflow:hidden;border-bottom:2px solid var(--line2);}
+  .cover .bg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0.45;}
+  .cover::after{content:"";position:absolute;inset:0;background:radial-gradient(circle at 50% 40%,rgba(7,15,10,0.3),rgba(5,10,7,0.92));}
+  .cover .in{position:relative;z-index:2;}
+  .cover .logo{width:96px;height:96px;filter:drop-shadow(0 0 22px rgba(114,255,35,0.6));}
+  .cover .kick{color:var(--green2);font-weight:900;letter-spacing:5px;text-transform:uppercase;font-size:0.82rem;margin-top:10px;}
+  .cover h1{font-family:Cinzel,serif;font-size:3.4rem;margin:6px 0 2px;letter-spacing:2px;text-shadow:0 0 30px rgba(114,255,35,0.5);}
+  .cover h2{font-family:Cinzel,serif;font-size:1.5rem;margin:0;color:var(--green);letter-spacing:1px;}
+  .cover p{color:#cfe6d2;max-width:540px;margin:18px auto 0;font-size:1.02rem;}
+  .cover .dl{display:inline-block;margin-top:22px;background:linear-gradient(135deg,var(--green),var(--green2));color:#06140a;font-weight:900;text-decoration:none;border-radius:12px;padding:13px 30px;box-shadow:0 0 28px rgba(114,255,35,0.4);}
+  .body{padding:8px 40px 50px;}
+  /* SECTIONS */
+  .sec{padding:40px 0 10px;border-top:1px solid var(--line);}
+  .sec:first-child{border-top:0;}
+  .sech{display:flex;align-items:center;gap:14px;margin:0 0 14px;}
+  .sech .num{flex:0 0 auto;width:46px;height:46px;border-radius:13px;background:linear-gradient(135deg,var(--green),var(--green2));color:#06140a;font-family:Cinzel,serif;font-weight:900;font-size:1.4rem;display:flex;align-items:center;justify-content:center;box-shadow:0 0 18px rgba(114,255,35,0.35);}
+  .sech h2{font-family:Cinzel,serif;font-size:1.8rem;margin:0;color:#fff;text-shadow:0 0 16px rgba(114,255,35,0.3);}
+  h3{font-size:1.15rem;margin:22px 0 8px;color:var(--green2);}
+  h4{font-size:1rem;margin:14px 0 4px;color:#fff;}
+  p,li{font-size:0.96rem;color:#cfe0cc;} .lead{color:#aebfb0;font-size:1.04rem;}
+  b{color:#fff;}
+  ul{padding-left:20px;margin:8px 0;} li{margin:5px 0;}
+  /* step cards */
+  .steps{counter-reset:s;margin:14px 0;display:grid;gap:10px;}
+  .step{position:relative;background:var(--panel);border:1px solid var(--line2);border-radius:13px;padding:14px 16px 14px 56px;}
+  .step::before{counter-increment:s;content:counter(s);position:absolute;left:14px;top:13px;width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,var(--green),var(--green2));color:#06140a;font-weight:900;display:flex;align-items:center;justify-content:center;font-size:0.95rem;}
+  .step b{color:var(--green2);}
+  /* preset chips */
+  .presets{display:grid;gap:10px;margin:12px 0;}
+  .preset{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:13px 16px;}
+  .preset .t{font-weight:900;color:#fff;display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+  .chip{display:inline-block;background:rgba(114,255,35,0.12);border:1px solid var(--line2);color:var(--green2);border-radius:99px;padding:2px 10px;font-size:0.78rem;font-weight:800;font-family:ui-monospace,monospace;}
+  .preset p{margin:6px 0 0;color:var(--dim);font-size:0.9rem;}
+  /* callouts */
+  .tip,.warn,.note{border-radius:0 10px 10px 0;padding:12px 16px;margin:14px 0;font-size:0.92rem;}
+  .tip{background:rgba(114,255,35,0.08);border-left:4px solid var(--green);}
+  .warn{background:rgba(255,107,107,0.08);border-left:4px solid var(--red);}
+  .note{background:rgba(90,176,255,0.08);border-left:4px solid var(--blue);}
+  .cmd{background:rgba(114,255,35,0.12);border:1px solid var(--line);border-radius:6px;padding:1px 8px;font-family:ui-monospace,Menlo,monospace;font-size:0.86rem;color:var(--green2);}
+  /* page cards */
   .pages{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:14px 0;}
-  .pg{border:1px solid var(--line);border-radius:10px;padding:12px 14px;} .pg b{color:var(--ink);} .pg .u{color:var(--blue);font-family:ui-monospace,monospace;font-size:0.82rem;}
-  .foot{background:var(--ink);color:#8c97a7;text-align:center;padding:24px;font-size:0.82rem;}
-  .foot b{color:var(--green2);}
-  @media print{ body{background:#fff;} .page{max-width:none;} .sec{break-inside:avoid;} h2{break-after:avoid;} .cover{padding:90px 40px;} .no-print{display:none;} }
+  .pg{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;} .pg b{color:#fff;} .pg .u{color:var(--green);font-family:ui-monospace,monospace;font-size:0.82rem;}
+  .pg p{margin:6px 0 0;color:var(--dim);font-size:0.86rem;}
+  /* toc */
+  .toc{background:var(--panel);border:1px solid var(--line2);border-radius:14px;padding:20px 24px;margin:26px 0 8px;}
+  .toc h3{margin:0 0 10px;color:#fff;} .toc ol{columns:2;column-gap:30px;margin:0;padding-left:18px;} .toc li{margin:6px 0;font-weight:700;} .toc a{color:var(--green2);text-decoration:none;}
+  /* tabs table */
+  .nav-tbl{display:grid;gap:8px;margin:10px 0;}
+  .nav-row{display:grid;grid-template-columns:150px 1fr;gap:12px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:11px 14px;}
+  .nav-row .k{font-weight:900;color:var(--green2);} .nav-row .v{color:var(--dim);font-size:0.9rem;}
+  @media(max-width:560px){ .pages{grid-template-columns:1fr;} .nav-row{grid-template-columns:1fr;gap:3px;} .toc ol{columns:1;} .cover h1{font-size:2.4rem;} .body{padding:8px 20px 40px;} }
+  .divimg{width:100%;height:120px;object-fit:cover;border-radius:14px;margin:18px 0 6px;opacity:0.9;border:1px solid var(--line);}
+  .ogre{float:right;width:120px;margin:0 0 10px 16px;filter:drop-shadow(0 6px 14px rgba(0,0,0,0.6));}
+  .foot{background:#0a1410;border-top:2px solid var(--line2);color:var(--dim);text-align:center;padding:26px;font-size:0.84rem;} .foot b{color:var(--green2);}
+  @media print{ html,body{background:#fff;} .page{background:var(--bg);} .sec{break-inside:avoid;} .sech{break-after:avoid;} .step,.preset,.pg{break-inside:avoid;} .no-print{display:none;} .cover{padding:100px 40px;} }
 </style>
 </head>
 <body>
@@ -56,209 +79,228 @@
     <img class="bg" src="https://www.slimewire.org/assets/slimewire/swamp/art/survivors-hero.jpg" alt="">
     <div class="in">
       <img class="logo" src="https://www.slimewire.org/assets/slimewire/svg/slimewire-mark.svg" alt="SlimeWire">
-      <div class="sub">Complete User Guide</div>
-      <h1>SlimeWire</h1>
-      <p>The degen trading terminal with a game built on top. This guide walks you through everything — the terminal, the Swamp game, raids, the Telegram bot, and sharing on X — in plain language.</p>
-      <div class="ver">slimewire.org · User Manual</div>
-      <a href="/SlimeWire-User-Manual.pdf" download class="no-print" style="display:inline-block;margin-top:18px;background:linear-gradient(135deg,#5fe08a,#9fffb5);color:#08120b;font-weight:900;text-decoration:none;border-radius:11px;padding:12px 26px">⬇️ Download PDF</a>
+      <div class="kick">The Degen Playbook</div>
+      <h1>SLIMEWIRE</h1>
+      <h2>🐸 trade · hunt · raid · win 🧌</h2>
+      <p>Everything you need to run the swamp like a pro — how to trade with one-tap presets, use every tool, play the game, and raid with your crew. Built for degens. Easy for newbies.</p>
+      <a class="dl no-print" href="/SlimeWire-User-Manual.pdf" download>⬇️ Download this playbook (PDF)</a>
     </div>
   </div>
 
   <div class="body">
-    <p class="lead">SlimeWire is a Solana memecoin trading terminal — and a game. You can trade live coins, launch your own, hunt fresh launches, and play <b>The Swamp</b>, where real coins become creatures you catch and bosses you raid. This guide covers every feature you'll actually use. No technical setup, just how to navigate and what each thing does.</p>
+    <p class="lead" style="margin-top:24px">SlimeWire is two things in one: a <b>fast Solana memecoin terminal</b> and a <b>game</b> built on top of it. Trade live coins, launch your own, hunt fresh launches — then jump into <b>The Swamp</b>, where real coins become creatures you catch and bosses you raid. This playbook shows you exactly how to use all of it.</p>
 
     <div class="toc">
-      <h3>📖 What's inside</h3>
+      <h3>🗺️ The map</h3>
       <ol>
-        <li><a href="#start">Getting started</a></li>
-        <li><a href="#terminal">The Terminal</a></li>
+        <li><a href="#start">Get in (30 sec)</a></li>
+        <li><a href="#nav">The terminal &amp; every tab</a></li>
+        <li><a href="#trade">How to trade (the important one)</a></li>
+        <li><a href="#presets">Quick-trade presets explained</a></li>
+        <li><a href="#tools">Pro tools: Bundle, Snipe, Ogre A.I.</a></li>
         <li><a href="#shield">SlimeShield safety</a></li>
-        <li><a href="#trade">Trading &amp; wallets</a></li>
-        <li><a href="#launch">Launching a coin</a></li>
+        <li><a href="#launch">Launch a coin</a></li>
         <li><a href="#swamp">The Swamp game</a></li>
         <li><a href="#raids">Live Boss Raids</a></li>
-        <li><a href="#pages">Loop pages</a></li>
+        <li><a href="#pages">All the extra pages</a></li>
         <li><a href="#tg">Telegram bot</a></li>
-        <li><a href="#x">Sharing on X</a></li>
+        <li><a href="#x">Flex on X</a></li>
         <li><a href="#faq">Tips &amp; FAQ</a></li>
       </ol>
     </div>
 
     <div class="sec" id="start">
-      <h2><span class="em">🚀</span>1. Getting Started</h2>
-      <p>Open <b>slimewire.org</b>. You land on the connect screen with three ways in:</p>
-      <ul>
-        <li><b>Connect Wallet</b> — connect Phantom or Solflare to trade with your own wallet.</li>
-        <li><b>Create Account</b> — make a SlimeWire account (email) to save settings, presets and managed wallets.</li>
-        <li><b>Browse Terminal</b> — look around with no login. Great for scanning and playing the game before you commit.</li>
-      </ul>
-      <div class="tip"><b>Tip:</b> You can play the whole Swamp game and browse the terminal without connecting anything. You only need a wallet when you want to actually buy, sell or launch.</div>
+      <div class="sech"><div class="num">1</div><h2>Get In — 30 Seconds</h2></div>
+      <img class="ogre" src="https://www.slimewire.org/assets/slimewire/png/slimewire-ogre-hero-cutout.png" alt="" onerror="this.style.display='none'">
+      <p class="lead">Open <b>slimewire.org</b>. Three doors:</p>
+      <div class="steps">
+        <div class="step"><b>Connect Wallet</b> — tap it, pick <b>Phantom</b> or <b>Solflare</b>, approve. Now you can trade with your own wallet.</div>
+        <div class="step"><b>Create Account</b> — sign up with email to save presets, referral code and managed wallets across devices.</div>
+        <div class="step"><b>Browse Terminal</b> — poke around with no login. You can scan coins and play the whole game before connecting anything.</div>
+      </div>
+      <div class="tip"><b>New here?</b> Hit <b>Browse Terminal</b>, then <b>🎮 Play The Swamp</b>. You learn the vibe with zero risk. Connect a wallet only when you're ready to actually buy.</div>
     </div>
 
-    <div class="sec" id="terminal">
-      <h2><span class="em">🖥️</span>2. The Terminal</h2>
-      <p class="lead">The terminal is your command center. The left navigation is grouped into sections — here's what every tab does.</p>
-      <h3>Terminal</h3>
-      <table><tr><th>Tab</th><th>What it does</th></tr>
-        <tr><td><b>Live Terminal</b></td><td>Your main dashboard — live fresh pairs, best picks, KOL signals and quick trades in one view.</td></tr>
-        <tr><td><b>Home / Profile</b></td><td>Your account: profile image, X handle, referral code, and saved settings.</td></tr>
-        <tr><td><b>Smart Chart</b></td><td>Open any token's chart, links, transactions and trading context.</td></tr>
-        <tr><td><b>Slime Swap</b></td><td>Manual single-wallet swap with size presets — the fast buy/sell panel.</td></tr></table>
-      <h3>Market Intel</h3>
-      <table><tr><th>Tab</th><th>What it does</th></tr>
-        <tr><td><b>Cooks</b></td><td>Scan fresh and trending pairs cooking right now.</td></tr>
-        <tr><td><b>Live Trades</b></td><td>Live market activity and trade flow as it happens.</td></tr>
-        <tr><td><b>Slime Scope</b></td><td>Scan fresh, graduating and graduated pump-style movement.</td></tr>
-        <tr><td><b>Watchlist</b></td><td>Coins you've saved to track and their movement.</td></tr>
-        <tr><td><b>KOL Tracker</b></td><td>Watch KOL wallets, public signals and copy-trade candidates.</td></tr></table>
-      <h3>Ogre Tools</h3>
-      <table><tr><th>Tab</th><th>What it does</th></tr>
-        <tr><td><b>Ogre Tek</b></td><td>The automation deck — A.I. picking, SlimeBot, bundle, launch and snipe tools in one place.</td></tr></table>
-      <h3>Portfolio</h3>
-      <table><tr><th>Tab</th><th>What it does</th></tr>
-        <tr><td><b>Wallets / Balances</b></td><td>Your balances, managed wallets, restore, sweep and funding tools.</td></tr>
-        <tr><td><b>Positions</b></td><td>Open holdings with manual exit controls.</td></tr>
-        <tr><td><b>PnL</b></td><td>Realized and historical profit/loss cards.</td></tr></table>
-      <h3>Play</h3>
-      <p>The nav also has <span class="tag">🎮 Play The Swamp</span> and <span class="tag">🔥 Live Raids</span> — your entry points to the game and the raid board.</p>
-    </div>
-
-    <div class="sec" id="shield">
-      <h2><span class="em">🛡️</span>3. SlimeShield Safety Read</h2>
-      <p>Before you ape, SlimeWire gives every token a <b>SlimeShield</b> read — a quick verdict on whether a coin looks safe or risky. You'll see it on token pages and when you paste a contract address.</p>
-      <ul>
-        <li><b>Verdict</b> — a plain call (safe / risk / avoid) with the reasons behind it.</li>
-        <li><b>Signals</b> — liquidity, momentum, sell pressure and common rug patterns checked automatically.</li>
-      </ul>
-      <div class="note"><b>Always your call:</b> the shield is a helper, not a guarantee. Memecoins are high risk — only spend what you can lose.</div>
+    <div class="sec" id="nav">
+      <div class="sech"><div class="num">2</div><h2>The Terminal &amp; Every Tab</h2></div>
+      <p class="lead">The left nav is your control panel, grouped into sections. Here's where everything lives:</p>
+      <h3>🖥️ Terminal</h3>
+      <div class="nav-tbl">
+        <div class="nav-row"><div class="k">Live Terminal</div><div class="v">Your home base — fresh pairs, best picks, KOL signals, and quick trades in one screen.</div></div>
+        <div class="nav-row"><div class="k">Home / Profile</div><div class="v">Account: profile pic, X handle, referral code, saved settings &amp; presets.</div></div>
+        <div class="nav-row"><div class="k">Smart Chart</div><div class="v">Any token's chart, links, transactions and trading context.</div></div>
+        <div class="nav-row"><div class="k">Slime Swap</div><div class="v">The full buy/sell panel (OgreSwap) with presets — your main trade desk.</div></div>
+      </div>
+      <h3>📡 Market Intel</h3>
+      <div class="nav-tbl">
+        <div class="nav-row"><div class="k">Cooks</div><div class="v">Fresh + trending pairs cooking right now.</div></div>
+        <div class="nav-row"><div class="k">Live Trades</div><div class="v">Live buy/sell flow as it happens.</div></div>
+        <div class="nav-row"><div class="k">Slime Scope</div><div class="v">Fresh, graduating &amp; graduated pump movement.</div></div>
+        <div class="nav-row"><div class="k">Watchlist</div><div class="v">Coins you saved to track.</div></div>
+        <div class="nav-row"><div class="k">KOL Tracker</div><div class="v">Watch KOL wallets &amp; copy-trade candidates.</div></div>
+      </div>
+      <h3>🧌 Ogre Tools &amp; Portfolio</h3>
+      <div class="nav-tbl">
+        <div class="nav-row"><div class="k">Ogre Tek</div><div class="v">Automation deck — A.I. picks, SlimeBot, Bundle, Launch, Snipe.</div></div>
+        <div class="nav-row"><div class="k">Wallets / Balances</div><div class="v">Balances, managed wallets, funding, sweep, restore.</div></div>
+        <div class="nav-row"><div class="k">Positions</div><div class="v">Your open holdings + manual exit controls.</div></div>
+        <div class="nav-row"><div class="k">PnL</div><div class="v">Realized + historical profit/loss cards.</div></div>
+      </div>
+      <p>And the fun stuff: <span class="chip">🎮 Play The Swamp</span> <span class="chip">🔥 Live Raids</span> sit right in the nav.</p>
     </div>
 
     <div class="sec" id="trade">
-      <h2><span class="em">⚡</span>4. Trading &amp; Wallets</h2>
-      <h4>Buying &amp; selling</h4>
-      <ul>
-        <li>Open a token (tap any coin, or paste its contract). Use <b>Slime Swap</b> or the token's <b>Ape</b> button.</li>
-        <li>Pick a size preset or type an amount, confirm, done. Your fill shows in <b>Positions</b>.</li>
-        <li>Exit any position manually from <b>Positions</b>, or set take-profit / stop-loss where available.</li>
-      </ul>
-      <h4>Wallets</h4>
-      <ul>
-        <li><b>Connected wallet</b> — your own Phantom/Solflare.</li>
-        <li><b>Managed wallets</b> — wallets SlimeWire creates for you (fund, sweep, restore) for faster trading and automation.</li>
-      </ul>
-      <div class="tip"><b>Never share your seed phrase.</b> SlimeWire will never ask for it in chat.</div>
+      <div class="sech"><div class="num">3</div><h2>How To Trade</h2></div>
+      <p class="lead">Two ways to buy: <b>Quick Buy</b> (fastest) and <b>Slime Swap</b> (full control). Here's the whole flow.</p>
+
+      <h3>⚡ Quick Buy — the fast lane</h3>
+      <div class="steps">
+        <div class="step">Find a coin — tap one in any feed, or paste its <b>contract address (CA)</b> in the search.</div>
+        <div class="step">Tap <b>Quick Buy</b>. A little panel opens.</div>
+        <div class="step">Type how much <b>SOL</b> to spend (e.g. <span class="chip">0.10</span>) — or tap a size preset.</div>
+        <div class="step">Hit <b>Buy</b> &amp; approve. Your fill lands in <b>Positions</b>. Done.</div>
+      </div>
+
+      <h3>🟢 Slime Swap — full control</h3>
+      <div class="steps">
+        <div class="step">Open <b>Slime Swap</b> (or tap a coin → it loads there).</div>
+        <div class="step">Paste the <b>token CA</b> (or it's already filled from the coin you tapped).</div>
+        <div class="step">Pick the <b>wallet</b> to trade from.</div>
+        <div class="step">Set your <b>amount</b> and <b>slippage</b> (see presets below).</div>
+        <div class="step">Tap <b>Buy</b> → approve. To sell later, flip the route or use the sell % presets.</div>
+      </div>
+
+      <h3>💸 Selling &amp; exiting</h3>
+      <div class="steps">
+        <div class="step">Go to <b>Positions</b> — every open bag is listed with live PnL.</div>
+        <div class="step">Tap the position and choose a <b>sell %</b>: <span class="chip">25%</span> <span class="chip">50%</span> <span class="chip">100%</span> or custom — great for taking partial profit.</div>
+        <div class="step">Or set an <b>auto-exit</b> plan (Take Profit / Stop Loss) so it sells for you — see presets.</div>
+      </div>
+      <div class="warn"><b>Golden rule:</b> memecoins are high-risk. Only spend what you can afford to lose, and check the <b>SlimeShield</b> read before you ape.</div>
+    </div>
+
+    <div class="sec" id="presets">
+      <div class="sech"><div class="num">4</div><h2>Quick-Trade Presets</h2></div>
+      <p class="lead">Presets are one-tap settings so you trade fast without typing every time. Set your defaults in <b>Home / Profile</b>; tweak per-trade in the panel. Here's what each one means:</p>
+      <div class="presets">
+        <div class="preset"><div class="t">💰 Buy Size <span class="chip">0.1 SOL</span> <span class="chip">0.25</span> <span class="chip">0.5</span> <span class="chip">custom</span></div><p>How much SOL a one-tap buy spends. Tap a preset instead of typing the amount every time.</p></div>
+        <div class="preset"><div class="t">🌀 Slippage <span class="chip">3%</span> <span class="chip">4%</span> <span class="chip">5%</span> <span class="chip">custom bps</span></div><p>How much price movement you'll accept on the fill. Fresh/volatile coins need higher slippage to go through. Custom is in <b>bps</b> (basis points): <b>100 bps = 1%</b>, so 500 = 5%.</p></div>
+        <div class="preset"><div class="t">📤 Sell % <span class="chip">25%</span> <span class="chip">50%</span> <span class="chip">100%</span> <span class="chip">custom</span></div><p>How much of a bag to dump in one tap. Use 25–50% to take profit and ride the rest.</p></div>
+        <div class="preset"><div class="t">🎯 Take Profit <span class="chip">+25%</span> <span class="chip">+60%</span> <span class="chip">+100%</span> <span class="chip">+250%</span></div><p>Auto-sell when it pumps to your target. Custom accepts a % like <span class="chip">500</span> or a multiple like <span class="chip">5x</span>.</p></div>
+        <div class="preset"><div class="t">🛑 Stop Loss <span class="chip">off</span> <span class="chip">-8%</span> <span class="chip">-10%</span> <span class="chip">-15%</span></div><p>Auto-sell to cut a loser. Set it when you open a position so you don't round-trip a rug.</p></div>
+        <div class="preset"><div class="t">⏱️ Fallback Sell <span class="chip">timer</span></div><p>Auto-sells after a set time if neither TP nor SL hits — so nothing sits forgotten.</p></div>
+        <div class="preset"><div class="t">⚙️ Priority Fee</div><p>Pay a little extra for faster confirmation when the chain is busy / on snipes.</p></div>
+      </div>
+      <div class="tip"><b>Newbie defaults that just work:</b> Buy 0.1 SOL · Slippage 4% · Take Profit +60% · Stop Loss -10%. Adjust as you get a feel for it.</div>
+    </div>
+
+    <div class="sec" id="tools">
+      <div class="sech"><div class="num">5</div><h2>Pro Tools</h2></div>
+      <p class="lead">Inside <b>Ogre Tek</b> you get the heavy machinery. Same presets apply (size, slippage, TP/SL).</p>
+      <h4>📦 Bundle</h4>
+      <p>Buy or sell the <b>same token across several wallets</b> from one panel — paste the CA, pick wallets, set buy-per-wallet + sell %, go. Add an optional Auto-Exit plan (TP/SL + fallback timer) for all of them.</p>
+      <h4>🎯 Snipe</h4>
+      <p>Set up a buy that fires the instant a target launches or hits your condition — size + slippage + priority fee preset, then it executes for you.</p>
+      <h4>🤖 Ogre A.I. / SlimeBot</h4>
+      <p>Hands-off automation that hunts and trades to your rules (size, TP, SL, limits). Start small, set hard limits, watch it in <b>Positions</b>.</p>
+      <div class="note">All automation respects your presets and limits. You can stop any of it from its panel at any time.</div>
+    </div>
+
+    <div class="sec" id="shield">
+      <div class="sech"><div class="num">6</div><h2>SlimeShield Safety</h2></div>
+      <p>Every token gets a quick <b>SlimeShield</b> read — a plain verdict (safe / risk / avoid) with the reasons: liquidity, momentum, sell pressure and common rug patterns. You'll see it on token pages and any time you paste a CA. It's a helper, not a guarantee — your call always.</p>
     </div>
 
     <div class="sec" id="launch">
-      <h2><span class="em">🚀</span>5. Launching a Coin</h2>
-      <p>Launch your own coin from the terminal (<b>Ogre Tek → Launch</b>) or the <a href="https://www.slimewire.org/launch">/launch</a> page. On SlimeWire a launch isn't just a page — <b>your coin becomes content</b>:</p>
-      <ul>
-        <li>It appears on the <b>Fresh Launch Radar</b> and in the terminal feed.</li>
-        <li>It spawns as a <b>boss</b> on the Live Raids board and as a <b>legendary creature</b> in the Swamp.</li>
-        <li>It can fire Telegram alerts and generate share cards automatically.</li>
-      </ul>
+      <div class="sech"><div class="num">7</div><h2>Launch A Coin</h2></div>
+      <p>Launch from <b>Ogre Tek → Launch</b> or the <a href="https://www.slimewire.org/launch" style="color:var(--green)">/launch</a> page. On SlimeWire your coin becomes <b>content</b>: it shows on the <b>Radar</b>, spawns as a <b>boss</b> on Live Raids and a <b>legendary creature</b> in the Swamp, and can fire TG alerts + share cards automatically.</p>
     </div>
 
+    <img class="divimg" src="https://www.slimewire.org/assets/slimewire/swamp/art/survivors-hero.jpg" alt="">
     <div class="sec" id="swamp">
-      <h2><span class="em">🐸</span>6. The Swamp Game</h2>
-      <p class="lead">Open <a href="https://www.slimewire.org/swamp">slimewire.org/swamp</a> or tap <b>Play The Swamp</b>. It's free, runs in your browser, and is built on real live coins.</p>
-      <h3>The basics</h3>
+      <div class="sech"><div class="num">8</div><h2>The Swamp Game</h2></div>
+      <p class="lead">Open <a href="https://www.slimewire.org/swamp" style="color:var(--green)">slimewire.org/swamp</a> or tap <b>Play The Swamp</b>. Free, in your browser, built on real live coins.</p>
+      <h3>🎮 Move &amp; explore</h3>
+      <p>Drag the left side of the screen to move (mobile) or use <b>WASD / arrows</b> (desktop). Pick your ogre on the title screen. Live coins roam as <b>wild creatures</b> — fresh launches are <b>rare</b>, SlimeWire launches are <b>legendary</b>.</p>
+      <h3>✋ Catch coins (build your Dex)</h3>
+      <div class="steps">
+        <div class="step">Walk up to a creature and tap <b>✋ Catch</b> — you'll see its real market cap, age and momentum.</div>
+        <div class="step"><b>Weaken it first:</b> tap <b>⚔️ Weaken</b> to drop its HP. Lower HP = much higher catch chance.</div>
+        <div class="step">Time the bar and tap <b>🟢 Throw</b>. Caught coins go in your <b>Swampdex</b> with a rarity.</div>
+        <div class="step"><b>Slimeballs</b> are catch energy — they refill over time, or craft more from resources.</div>
+      </div>
+      <h3>⚔️ Fight for resources</h3>
+      <p>Hostile mobs (goblins, wolves, bears) roam too. Tap the <b>⚔️ Attack</b> button to fight them; they drop <b>wood, scrap &amp; goo</b>. Spend those at the <b>Clan Camp</b> to craft slimeballs and fortify your base.</p>
+      <h3>🗓️ Raid days, clans &amp; survival</h3>
       <ul>
-        <li><b>Move</b> — drag anywhere on the left (mobile) or use WASD / arrow keys (desktop).</li>
-        <li><b>Pick your ogre</b> on the title screen.</li>
-        <li>Live memecoins roam the swamp as <b>wild creatures</b>. Fresh launches are <b>rare</b>; SlimeWire launches are <b>legendary</b>.</li>
+        <li><b>Raid Day</b> (Sat 2pm → Sun 2am UTC): more &amp; tougher enemies. Rest of week = build &amp; gather. Watch the HUD countdown.</li>
+        <li><b>Clans</b> — set a tag at the Clan Camp; everyone with your tag is a <b>crew</b> competing together.</li>
+        <li><b>Other traders</b> walk the same map live.</li>
       </ul>
-      <h3>Catching coins (your Dex)</h3>
-      <ul>
-        <li>Walk up to a creature and tap <b>✋ Catch</b>. You'll see its real stats (market cap, age, momentum).</li>
-        <li><b>Weaken then catch:</b> tap <b>⚔️ Weaken</b> to lower its HP — the lower its HP, the higher your catch chance. Then time the throw bar and tap <b>Throw</b>.</li>
-        <li>Catches go in your <b>Swampdex</b> with a rarity. Your caught coins set your <b>Swamp Worth</b> (their performance since you caught them).</li>
-        <li><b>Slimeballs</b> are your catch energy — they refill over time, and you can craft more from resources.</li>
-      </ul>
-      <h3>Fighting &amp; resources</h3>
-      <ul>
-        <li>Hostile mobs (goblins, wolves, bears) roam too. Tap the <b>⚔️ Attack</b> button to fight them.</li>
-        <li>Defeated mobs drop <b>resources</b> (wood, scrap, goo). Spend them at the <b>Clan Camp</b> to craft slimeballs and fortify your base.</li>
-      </ul>
-      <h3>Raid days, clans &amp; survival</h3>
-      <ul>
-        <li><b>Raid Day</b> window (Sat 2pm → Sun 2am UTC): more and tougher enemies. The rest of the week you build and gather. Watch the HUD countdown.</li>
-        <li><b>Clans</b> — set a clan tag at the Clan Camp. Everyone with your tag forms a <b>crew</b> that competes together (see <a href="https://www.slimewire.org/crews">/crews</a>).</li>
-        <li><b>Other traders</b> walk the same map live — you'll see them around you.</li>
-      </ul>
-      <h3>Trade perks (never required)</h3>
-      <p>The game is 100% free. Trading just <b>rewards</b> you: your real Swamp Worth buffs your damage and HP, catching feeds your Dex, and launching a coin earns a legendary. You never have to trade to play.</p>
+      <div class="tip"><b>Free forever.</b> Trading just <b>rewards</b> you: your real Swamp Worth buffs your run, and launching a coin earns a legendary. You never have to trade to play.</div>
     </div>
 
     <div class="sec" id="raids">
-      <h2><span class="em">🔥</span>7. Live Boss Raids</h2>
-      <p>Open <a href="https://www.slimewire.org/raids">slimewire.org/raids</a>. Every live launch is a <b>boss</b> with HP based on its bonding/market cap.</p>
+      <div class="sech"><div class="num">9</div><h2>Live Boss Raids</h2></div>
+      <p>Open <a href="https://www.slimewire.org/raids" style="color:var(--green)">slimewire.org/raids</a>. Every live launch is a <b>boss</b>.</p>
       <ul>
         <li><b>Ape / Chart</b> — buy or view any boss instantly.</li>
-        <li><b>Join Raid</b> — opens a pre-filled X post and scores you on the <b>raid leaderboard</b>. Rally your crew for more points.</li>
-        <li><b>Raid your own coin</b> — paste <i>any</i> contract address (you don't need to have launched it on SlimeWire) and it goes on the board as a "Crew Raid" boss with real market data.</li>
-        <li><b>Top Raid Posts</b> — X posts submitted via the Telegram <span class="cmd">/raid</span> command, ranked by likes + retweets.</li>
+        <li><b>Join Raid</b> — posts a pre-filled shill on X and scores you on the raid leaderboard. Rally your crew.</li>
+        <li><b>Raid your own coin</b> — paste <i>any</i> CA (you don't need to have launched it here) and it goes on the board with live data.</li>
+        <li><b>Top Raid Posts</b> — X posts from the Telegram <span class="cmd">/raid</span> command, ranked by likes + retweets.</li>
       </ul>
     </div>
 
     <div class="sec" id="pages">
-      <h2><span class="em">🧭</span>8. Loop Pages</h2>
-      <p class="lead">Standalone pages that make the swamp social and sticky:</p>
+      <div class="sech"><div class="num">10</div><h2>All The Extra Pages</h2></div>
       <div class="pages">
-        <div class="pg"><b>📡 Radar</b> <span class="u">/radar</span><br>Clean, fast scan of fresh launches — buckets like "Fresh under 5k", "Volume waking", "Bonding fast". One-tap Ape / Chart / Raid.</div>
-        <div class="pg"><b>🗓️ Events</b> <span class="u">/events</span><br>The degen event calendar — Boss Raid Night (live countdown), Fresh Launch Hour, catch contests, survival runs.</div>
-        <div class="pg"><b>🪪 Profile</b> <span class="u">/profile</span><br>Your swamp identity — catches, raid points, survival, badges and crew. Share your page on X.</div>
-        <div class="pg"><b>🪪 Swamp Card</b> <span class="u">/receipts</span><br>Generate a clean shareable card of your run (catches, Swamp Worth, raid points). Download &amp; post it.</div>
-        <div class="pg"><b>👥 Crews</b> <span class="u">/crews</span><br>Telegram/X groups compete by clan tag. Everyone's catches + raids stack into the crew total.</div>
-        <div class="pg"><b>🎒 Locker</b> <span class="u">/locker</span><br>Cosmetics you unlock by playing — titles, badges and skins, with completion progress.</div>
-        <div class="pg"><b>🔭 Watchtower</b> <span class="u">/watchtower</span><br>What the swamp watches — most-raided coins, trending fresh, and your watchlist.</div>
-        <div class="pg"><b>🎬 Coin Story</b> <span class="u">/replay</span><br>Paste a contract to replay a coin's journey — born, liquidity, bonding, boss, catchable.</div>
+        <div class="pg"><b>📡 Radar</b> <span class="u">/radar</span><p>Fast scan of fresh launches in buckets (under 5k, volume waking, bonding fast). One-tap Ape / Chart / Raid.</p></div>
+        <div class="pg"><b>🗓️ Events</b> <span class="u">/events</span><p>Degen calendar — Raid Night (live countdown), Fresh Launch Hour, contests.</p></div>
+        <div class="pg"><b>🪪 Profile</b> <span class="u">/profile</span><p>Your swamp identity — catches, raids, survival, badges, crew. Shareable.</p></div>
+        <div class="pg"><b>🪪 Swamp Card</b> <span class="u">/receipts</span><p>One-tap shareable card of your run — download &amp; post it.</p></div>
+        <div class="pg"><b>👥 Crews</b> <span class="u">/crews</span><p>TG/X groups compete by clan tag. Everyone's catches + raids stack up.</p></div>
+        <div class="pg"><b>🎒 Locker</b> <span class="u">/locker</span><p>Cosmetics you unlock by playing — titles, badges, skins.</p></div>
+        <div class="pg"><b>🔭 Watchtower</b> <span class="u">/watchtower</span><p>Most-raided coins, trending fresh, your watchlist.</p></div>
+        <div class="pg"><b>🎬 Coin Story</b> <span class="u">/replay</span><p>Paste a CA to replay a coin's journey, beat by beat.</p></div>
       </div>
     </div>
 
     <div class="sec" id="tg">
-      <h2><span class="em">✈️</span>9. Telegram Bot</h2>
-      <p>Add the SlimeWire bot or DM it. In a group, an admin runs <span class="cmd">/slimewire on</span> to arm live alerts. Commands anyone can use:</p>
-      <table>
-        <tr><th>Command</th><th>What it does</th></tr>
-        <tr><td><span class="cmd">/start</span></td><td>Open the menu / link your account.</td></tr>
-        <tr><td><span class="cmd">/look &lt;CA&gt;</span></td><td>SlimeShield read on a contract — verdict, chart and trade links. (In groups, just pasting a contract does this automatically.)</td></tr>
-        <tr><td><span class="cmd">/alpha</span></td><td>Current best picks / trending coins.</td></tr>
-        <tr><td><span class="cmd">/ape</span></td><td>The freshest degen launches right now.</td></tr>
-        <tr><td><span class="cmd">/raid &lt;X link&gt;</span></td><td>Put your X raid post on the raid leaderboard, ranked by likes + retweets.</td></tr>
-        <tr><td><span class="cmd">/proof</span></td><td>The public engine track record (wins and losses).</td></tr>
-        <tr><td><span class="cmd">/kols</span></td><td>KOL / whale activity.</td></tr>
-        <tr><td><span class="cmd">/receipts</span></td><td>Latest SlimeShield receipts.</td></tr>
-        <tr><td><span class="cmd">/web</span></td><td>Jump to the web terminal.</td></tr>
-        <tr><td><span class="cmd">/slimewire on|off</span></td><td>(Group admins) arm or mute SlimeWire alerts in that group.</td></tr>
-      </table>
+      <div class="sech"><div class="num">11</div><h2>Telegram Bot</h2></div>
+      <p>DM the bot, or add it to your group and have an admin run <span class="cmd">/slimewire on</span> for live alerts. Commands:</p>
+      <div class="nav-tbl">
+        <div class="nav-row"><div class="k">/start</div><div class="v">Open the menu / link your account.</div></div>
+        <div class="nav-row"><div class="k">/look &lt;CA&gt;</div><div class="v">SlimeShield read + chart + trade links. (In groups, just pasting a CA does it.)</div></div>
+        <div class="nav-row"><div class="k">/alpha</div><div class="v">Current best picks / trending.</div></div>
+        <div class="nav-row"><div class="k">/ape</div><div class="v">The freshest degen launches right now.</div></div>
+        <div class="nav-row"><div class="k">/raid &lt;X link&gt;</div><div class="v">Put your raid post on the leaderboard (ranked by likes + RTs).</div></div>
+        <div class="nav-row"><div class="k">/proof</div><div class="v">Public engine track record — wins AND losses.</div></div>
+        <div class="nav-row"><div class="k">/kols</div><div class="v">KOL / whale activity.</div></div>
+        <div class="nav-row"><div class="k">/web</div><div class="v">Jump to the web terminal.</div></div>
+      </div>
     </div>
 
     <div class="sec" id="x">
-      <h2><span class="em">𝕏</span>10. Sharing on X</h2>
-      <p>SlimeWire turns your activity into shareable content — every share carries the site back to X:</p>
+      <div class="sech"><div class="num">12</div><h2>Flex On X</h2></div>
+      <p>SlimeWire turns your moves into shareable content — every share carries the site back to X:</p>
       <ul>
-        <li><b>Swamp Card</b> (<span class="cmd">/receipts</span>) — download your run card and post it.</li>
-        <li><b>Flex / Shill buttons</b> — in the game and on coins, one tap opens a pre-filled post with the contract and links.</li>
-        <li><b>Join Raid</b> — posts your raid for a coin and gets you on the raid board.</li>
-        <li><b>Profile</b> — share your <span class="cmd">/profile</span> page to show off your Dex and badges.</li>
+        <li><b>Swamp Card</b> — download your run card from <span class="cmd">/receipts</span> and post it.</li>
+        <li><b>Shill / Flex buttons</b> — one tap opens a pre-filled post with the CA + links.</li>
+        <li><b>Join Raid</b> — posts your raid and gets you on the board.</li>
+        <li><b>Profile</b> — share your <span class="cmd">/profile</span> to show off your Dex + badges.</li>
       </ul>
     </div>
 
     <div class="sec" id="faq">
-      <h2><span class="em">❓</span>11. Tips &amp; FAQ</h2>
-      <h4>Do I need a wallet to play the game?</h4>
-      <p>No. The Swamp, raids and all loop pages are free with no login. A wallet is only for actually buying, selling or launching.</p>
-      <h4>How do I get on a leaderboard?</h4>
-      <p>Set a tag (in the game and on /raids). Catches feed the catch board, raids feed the raid board, survival feeds the survival board, and your clan tag feeds the crews board.</p>
-      <h4>How do I bring my group in?</h4>
-      <p>Pick a clan tag, have your Telegram/X group all set the same tag, and grind together on the <a href="https://www.slimewire.org/crews">/crews</a> board.</p>
-      <h4>Is the SlimeShield read a guarantee?</h4>
-      <p>No — it's a fast safety helper. Memecoins are risky; only spend what you can afford to lose.</p>
-      <div class="tip"><b>Fastest loop:</b> scan <span class="cmd">/radar</span> → ape or raid a coin → catch it in the <span class="cmd">/swamp</span> → post your <span class="cmd">/receipts</span> card → bring your crew via <span class="cmd">/crews</span>.</div>
+      <div class="sech"><div class="num">13</div><h2>Tips &amp; FAQ</h2></div>
+      <h4>Do I need a wallet to play?</h4><p>No. The game, raids and all pages are free with no login. A wallet is only for buying, selling or launching.</p>
+      <h4>What slippage should I use?</h4><p>Start at 4%. Bump to 5–10% on brand-new/volatile coins if buys fail. Remember custom is in bps (500 = 5%).</p>
+      <h4>How do I take profit automatically?</h4><p>Set a Take Profit preset (e.g. +60% or custom 5x) and a Stop Loss (e.g. -10%) when you open the trade.</p>
+      <h4>How do I get my group competing?</h4><p>Pick a clan tag, have everyone set it in the game + on /raids, and climb the <a href="https://www.slimewire.org/crews" style="color:var(--green)">/crews</a> board.</p>
+      <div class="tip"><b>The full loop:</b> scan <span class="cmd">/radar</span> → ape or raid a coin → catch it in the <span class="cmd">/swamp</span> → post your <span class="cmd">/receipts</span> card → bring your crew on <span class="cmd">/crews</span>. Repeat. 🐸🔥</div>
     </div>
   </div>
-  <div class="foot">SlimeWire · <b>slimewire.org</b> · Complete User Guide · Play free, trade when you're ready.</div>
+  <div class="foot">🐸 <b>SlimeWire</b> · slimewire.org · The Degen Playbook · Play free, trade when you're ready. 🧌</div>
 </div>
 </body>
 </html>
