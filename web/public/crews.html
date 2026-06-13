@@ -31,7 +31,9 @@
   .board{margin-top:24px;background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden;}
   .row{display:flex;align-items:center;gap:12px;padding:14px 16px;border-bottom:1px solid var(--line);}
   .row:last-child{border:0;} .row.head{color:var(--dim);font-size:0.72rem;font-weight:800;text-transform:uppercase;letter-spacing:0.5px;}
-  .rk{width:30px;font-weight:900;color:var(--dim);font-size:1.05rem;} .row:nth-child(2) .rk{color:var(--gold);}
+  .rk{width:24px;font-weight:900;color:var(--dim);font-size:1.05rem;} .row:nth-child(2) .rk{color:var(--gold);}
+  .em{width:40px;height:40px;flex:0 0 auto;display:flex;align-items:center;justify-content:center;}
+  .em .clan-emblem{filter:drop-shadow(0 2px 6px rgba(0,0,0,0.35));border-radius:9px;}
   .cl{flex:1;font-weight:900;} .cl small{display:block;color:var(--dim);font-weight:700;font-size:0.74rem;}
   .sc{font-weight:900;color:var(--green);width:90px;text-align:right;}
   .mm{width:64px;text-align:right;color:var(--dim);font-weight:800;font-size:0.84rem;}
@@ -66,6 +68,7 @@
   </div>
   <div class="foot">SlimeWire · <a href="/raids">Raids</a> · <a href="/profile">Profiles</a> · <a href="/swamp">Swamp</a></div>
 </div>
+<script src="/assets/slimewire/clan-emblem.js"></script>
 <script>
 "use strict";
 (function(){
@@ -76,8 +79,8 @@ async function load(){
   try{ const r=await fetch(API+"/api/web/crews",{cache:"no-store"}); const j=await r.json();
     const crews=(j&&j.crews)||[];
     if(!crews.length){ box.innerHTML='<div class="board"><div class="empty">No crews yet — be the first. Set a clan tag in the Swamp + raids, then check back.</div></div>'; return; }
-    box.innerHTML='<div class="board"><div class="row head"><span class="rk">#</span><span class="cl">Crew</span><span class="mm">Members</span><span class="sc">Score</span></div>'+
-      crews.map((c,i)=>`<div class="row"><span class="rk">${i+1}</span><span class="cl">[${esc(c.clan)}]<small>⚔️ ${c.raids} raids · 📖 ${c.catches} catches</small></span><span class="mm">${c.members}</span><span class="sc">${Number(c.score).toLocaleString()}</span></div>`).join("")+'</div>';
+    box.innerHTML='<div class="board"><div class="row head"><span class="rk">#</span><span class="em"></span><span class="cl">Crew</span><span class="mm">Members</span><span class="sc">Score</span></div>'+
+      crews.map((c,i)=>`<div class="row"><span class="rk">${i+1}</span><span class="em">${(window.clanEmblem?window.clanEmblem(c.clan,40):"")}</span><span class="cl">[${esc(c.clan)}]<small>⚔️ ${c.raids} raids · 📖 ${c.catches} catches</small></span><span class="mm">${c.members}</span><span class="sc">${Number(c.score).toLocaleString()}</span></div>`).join("")+'</div>';
   }catch(_){ box.innerHTML='<div class="board"><div class="empty">Crews board offline — try again soon.</div></div>'; }
 }
 load(); setInterval(()=>{ if(!document.hidden) load(); },45000);
