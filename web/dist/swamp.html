@@ -770,7 +770,7 @@ $("exit").onclick=()=>{ state="title"; $("hud").style.display="none"; showTitle(
   let warm=0; const warmId=setInterval(async()=>{ warm++; if(feedReal||warm>6){ clearInterval(warmId); return; }
     await loadFeed().catch(()=>{}); if(state==="world"){ buildFromFeed(); refreshHud(); } }, 5000);
   // refresh feed periodically; fold new coins into the world
-  setInterval(async()=>{ await loadFeed().catch(()=>{}); if(state==="world"){ buildFromFeed(); refreshHud(); } },45000);
+  setInterval(async()=>{ if(document.hidden) return; await loadFeed().catch(()=>{}); if(state==="world"){ buildFromFeed(); refreshHud(); } },45000);
 })();
 
 // test hooks

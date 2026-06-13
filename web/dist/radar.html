@@ -102,7 +102,7 @@ function render(){
   g.innerHTML=rows.map(r=>{ const s=sym(r),mint=r.tokenMint,isSyn=String(mint).startsWith("syn"),m5=num(r.m5??r.priceChangeM5),tag=tagFor(r);
     const ape=isSyn?"/terminal":(SITE+"/t?ca="+encodeURIComponent(mint));
     return `<div class="c"><div class="h">
-        <img class="av" src="${API}/api/web/token-avatar?mint=${encodeURIComponent(mint)}" onerror="this.style.visibility='hidden'">
+        <img class="av" src="${isSyn?"":API+"/api/web/token-image?mint="+encodeURIComponent(mint)}" width="38" height="38" loading="lazy" decoding="async" onerror="this.style.visibility='hidden'">
         <div><div class="nm">$${esc(s)}</div><div class="sub">${age(r)} old · liq ${fmt(r.liquidityUsd)}</div></div>
         <span class="tag ${tag.c}">${tag.t}</span></div>
       <div class="mrow"><div class="m"><span>MC</span><b>${fmt(r.marketCap||r.marketCapUsd)}</b></div>
@@ -116,7 +116,7 @@ function render(){
 async function raid(mint,s){ if(String(mint).startsWith("syn")){ location.href="/raids"; return; }
   try{ await fetch(API+"/api/web/community-raids",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({mint,symbol:s})}); }catch(_){}
   toast("⚔️ $"+s+" added to the raid board!"); setTimeout(()=>location.href="/raids",700); }
-load(); setInterval(load,30000);
+load(); setInterval(()=>{ if(!document.hidden) load(); },45000);
 })();
 </script>
 </body>

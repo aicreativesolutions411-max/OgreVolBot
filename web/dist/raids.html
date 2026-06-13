@@ -176,7 +176,7 @@ function bossHp(r){
 function bossTag(r){ if(r._community) return {c:"hot",t:"Crew Raid ⚔️"}; if(r._ogre) return {c:"legend",t:"Legendary"}; const m5=num(r.m5??r.priceChangeM5); const a=num(r.pairAgeSeconds)||num(r.pairAgeMinutes)*60;
   if(m5>=40||num(r.volume5m)>40000) return {c:"hot",t:"Hot 🔥"}; if(a&&a<180) return {c:"fresh",t:"Fresh"}; return {c:"fresh",t:"Live"}; }
 
-let BOSSES=[];
+let BOSSES=[]; const TD={};
 async function load(){
   let rows=[];
   try{ const r=await fetch(API+"/api/web/swamp-launches",{cache:"no-store"}); const j=await r.json();
@@ -184,8 +184,8 @@ async function load(){
   try{ const r=await fetch(API+"/api/web/community-raids",{cache:"no-store"}); const j=await r.json();
     const crs=((j&&j.raids)||[]).filter(c=>c&&c.mint).slice(0,12);
     // enrich each submitted coin with real market data (token-read) so it's a full boss
-    const enriched=await Promise.all(crs.map(async (cr)=>{ let td={};
-      try{ const tr=await fetch(API+"/api/web/token-read?mint="+encodeURIComponent(cr.mint),{cache:"no-store"}); const tj=await tr.json(); if(tj&&tj.ok) td=tj; }catch(_){}
+    const enriched=await Promise.all(crs.map(async (cr)=>{ let td=TD[cr.mint];
+      if(!td){ td={}; try{ const tr=await fetch(API+"/api/web/token-read?mint="+encodeURIComponent(cr.mint),{cache:"force-cache"}); const tj=await tr.json(); if(tj&&tj.ok){ td=tj; TD[cr.mint]=tj; } }catch(_){} }
       return {tokenMint:cr.mint, symbol:(td.symbol||cr.symbol), _community:true, by:cr.by, bumps:cr.bumps,
         marketCap:td.marketCapUsd, liquidityUsd:td.liquidityUsd, bondingProgressPct:td.bondingProgressPct}; }));
     for(const e of enriched) rows.push(e); }catch(_){}
@@ -215,10 +215,10 @@ function render(){
     const isSyn=String(mint).startsWith("syn");
     const apeHref=isSyn?"/terminal":(SITE+"/t?ca="+encodeURIComponent(mint));
     const raided=!!store.raided[mint];
-    const av="/api/web/token-avatar?mint="+encodeURIComponent(mint);
+    const av=API+"/api/web/token-image?mint="+encodeURIComponent(mint);
     const d=document.createElement("div"); d.className="boss"+(r._ogre?" legend":"");
     d.innerHTML=`<div class="tagrow">
-        <img class="av" src="${API+av}" alt="" onerror="this.style.display='none'">
+        <img class="av" src="${isSyn?"":av}" alt="" width="42" height="42" loading="lazy" decoding="async" onerror="this.style.visibility='hidden'">
         <div><div class="nm">${r._ogre?"🧌 ":""}$${esc(sym)}</div><div class="sub">${r._community?("⚔️ crew raid by "+esc(r.by||"anon")):r._ogre?"Born on SlimeWire":"live pair · "+ageStr(r)+" old"}</div></div>
         <span class="badge ${tag.c}">${tag.t}</span>
       </div>
@@ -283,7 +283,7 @@ async function loadPosts(){ try{ const r=await fetch(API+"/api/web/raid-posts",{
     box.innerHTML=rows.slice(0,8).map((p,i)=>`<div class="row"><span class="rk">#${i+1}</span><a class="nm" href="${esc(p.url)}" target="_blank" rel="noopener" style="color:var(--blue)">${esc(p.by||"anon")}${p.symbol?(" · $"+esc(p.symbol)):""}</a><span class="sc">${j.liveMetrics?("❤"+(p.likes||0)+" ↻"+(p.rts||0)):("🔥"+(p.score||0))}</span></div>`).join("");
   }catch(_){ } }
 load(); loadLb("raids"); loadPosts();
-setInterval(()=>{load();loadPosts();}, 45000);
+setInterval(()=>{ if(document.hidden) return; load(); loadPosts(); }, 60000);
 // test hook
 window.__RAIDS={ get bosses(){return BOSSES;}, joinRaid:()=>{ if(BOSSES[0]) joinRaid(mintOf(BOSSES[0]),symOf(BOSSES[0]),null); }, get pts(){return store.raidPts;}, load };
 })();

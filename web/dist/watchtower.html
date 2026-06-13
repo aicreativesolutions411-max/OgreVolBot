@@ -75,7 +75,7 @@ function loadMine(){
   const box=document.getElementById("mine");
   box.innerHTML = w.length ? w.slice(0,12).map((c,i)=>rowHtml(i,c.mint,"$"+esc(c.symbol||"COIN"),"watching","⭐","g")).join("") : '<div class="empty">Star coins on <a href="/radar" style="color:var(--green)">/radar</a> to track them here.</div>';
 }
-loadRaided(); loadTrending(); loadMine(); setInterval(()=>{loadRaided();loadTrending();},30000);
+loadRaided(); loadTrending(); loadMine(); setInterval(()=>{ if(!document.hidden){loadRaided();loadTrending();} },45000);
 })();
 </script>
 </body>

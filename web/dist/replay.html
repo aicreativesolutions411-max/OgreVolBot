@@ -66,7 +66,7 @@ async function replay(mint){
   tl.push(`<div class="tl"><b>🔥 Became a boss.</b> At ${fmt(mc)} MC it's a raid target in the swamp.</div>`);
   tl.push(`<div class="tl"><b>🐸 Catchable.</b> Trainers can hunt $${esc(s)} as a creature right now.</div>`);
   out.innerHTML=`<div class="story">
-    <div class="h"><img class="av" src="${API}/api/web/token-avatar?mint=${encodeURIComponent(mint)}" onerror="this.style.visibility='hidden'">
+    <div class="h"><img class="av" src="${API}/api/web/token-image?mint=${encodeURIComponent(mint)}" width="54" height="54" loading="lazy" decoding="async" onerror="this.style.visibility='hidden'">
       <div><div class="nm">$${esc(s)}</div><div class="sub">${esc(d.name||"")}</div></div>
       ${sw?'<span class="badge sw">🧌 SlimeWire</span>':""}</div>
     <div class="mrow"><div class="m"><span>Market Cap</span><b>${fmt(mc)}</b></div><div class="m"><span>Liquidity</span><b>${fmt(liq)}</b></div>${bond>0?`<div class="m"><span>Bonding</span><b>${Math.round(bond)}%</b></div>`:""}</div>

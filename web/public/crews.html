@@ -80,7 +80,7 @@ async function load(){
       crews.map((c,i)=>`<div class="row"><span class="rk">${i+1}</span><span class="cl">[${esc(c.clan)}]<small>⚔️ ${c.raids} raids · 📖 ${c.catches} catches</small></span><span class="mm">${c.members}</span><span class="sc">${Number(c.score).toLocaleString()}</span></div>`).join("")+'</div>';
   }catch(_){ box.innerHTML='<div class="board"><div class="empty">Crews board offline — try again soon.</div></div>'; }
 }
-load(); setInterval(load,30000);
+load(); setInterval(()=>{ if(!document.hidden) load(); },45000);
 })();
 </script>
 </body>
