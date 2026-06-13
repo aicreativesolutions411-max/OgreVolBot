@@ -172,7 +172,8 @@ scene.background = new THREE.Color(0x1a1840);     // never a pure-black void
 scene.fog = new THREE.FogExp2(0x1a1840, 0.012);
 
 const camera = new THREE.PerspectiveCamera(52, innerWidth/innerHeight, 0.1, 600);
-const CAM_OFF = new THREE.Vector3(0, 32, 26); // pulled-back action-survivors view
+const CAM_OFF = new THREE.Vector3(0, 38, 32); // pulled-back action-survivors view
+let camMul = 1; // scaled per screen (phones in portrait pull back more)
 
 // ---------- lights (bright enough to clearly read on mobile) ----------
 const ambient = new THREE.AmbientLight(0x9fb0e0, 0.9); scene.add(ambient);
@@ -523,7 +524,8 @@ async function loadEnv(){
 }
 
 // ---------- main loop ----------
-function resize(){ camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth,innerHeight); fxComposer.setSize(innerWidth,innerHeight); }
+function resize(){ camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth,innerHeight); fxComposer.setSize(innerWidth,innerHeight);
+  camMul = innerHeight>innerWidth ? 1.0 + (innerHeight/innerWidth-1)*0.55 : 0.92; } // portrait phones: pull back to see the arena
 addEventListener("resize", resize);
 
 function tick(){
@@ -633,7 +635,7 @@ function tick(){
   for(let i=dmgEls.length-1;i>=0;i--){ if(dmgEls[i].t>0.9) dmgEls.splice(i,1); }
 
   // camera follow + shake
-  const desired=new THREE.Vector3().copy(player.pos).add(CAM_OFF);
+  const desired=new THREE.Vector3().copy(player.pos).add(new THREE.Vector3().copy(CAM_OFF).multiplyScalar(camMul));
   if(G.shake>0){ desired.x+=(Math.random()-0.5)*G.shake*4; desired.y+=(Math.random()-0.5)*G.shake*4; G.shake=Math.max(0,G.shake-dt*1.5); }
   camera.position.lerp(desired, 0.12);
   camera.lookAt(player.pos.x, 1.5, player.pos.z);
@@ -690,6 +692,7 @@ async function boot(){
   $("buffline").innerHTML = `Your bags buff your run: bigger Swamp Worth = more damage · +${caught*5} HP from ${caught} caught`;
   if(store.surv3dBest) $("best").innerHTML=`best: <b style="color:var(--warn)">Wave ${store.surv3dBest.wave}</b> · ${fmtTime(store.surv3dBest.t)} · ☠ ${store.surv3dBest.kills}`;
   $("load").style.display="none";
+  resize(); // initialize camMul + renderer sizes for the current viewport (phones never fire a resize event)
   tick(); // start rendering immediately with primitive fallbacks (instant, mobile-friendly)
   // stream HD models in the background
   (async()=>{

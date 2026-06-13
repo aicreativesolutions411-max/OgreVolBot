@@ -1352,13 +1352,18 @@ function startHealthServer() {
     // The Swamp: gamified launch feed. Live launches render as creatures you
     // catch; tapping one funnels to the shield read + one-tap buy. Top-of-funnel
     // that turns trading into a collect-and-battle world.
-    // /swamp = the new 3D action game (swamp.html); /swamp-classic = the 2D game.
-    if (request.method === "GET" && ["/swamp", "/swamp.html", "/game", "/play", "/swamp3d", "/3d"].includes(requestUrl.pathname)) {
+    // /swamp = Slime Survivors, the safe 2D canvas wave-survival game (swamp.html).
+    // /swamp-classic = the legacy 2D overworld; /swamp3d = the experimental 3D build.
+    if (request.method === "GET" && ["/swamp", "/swamp.html", "/game", "/play"].includes(requestUrl.pathname)) {
       await serveStaticHtmlPage(response, "swamp.html");
       return;
     }
     if (request.method === "GET" && ["/swamp-classic", "/swamp2d", "/classic"].includes(requestUrl.pathname)) {
       await serveStaticHtmlPage(response, "swamp-classic.html");
+      return;
+    }
+    if (request.method === "GET" && ["/swamp3d", "/3d"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "swamp3d.html");
       return;
     }
 
