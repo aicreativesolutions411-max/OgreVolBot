@@ -23649,9 +23649,21 @@ const DESKTOP_NAV_GROUPS = [
 // (cauldron for "Cooks", ogre head for the A.I., frog for profile, slime scope,
 // etc.) instead of generic emoji. All use stroke=currentColor so they inherit
 // the nav button colour and flip dark on the active green pill automatically.
-function swampIcon(paths) {
-  return `<svg class="swampi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+// Each icon gets its own vibrant swamp colour + a tinted rounded chip baked into
+// the SVG so the menu reads colourful and poppy (not a wall of green outlines).
+function swampIcon(paths, color) {
+  color = color || "#8dff45";
+  return `<svg class="swampi" viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">`
+    + `<rect x="1.5" y="1.5" width="21" height="21" rx="6.5" fill="${color}" fill-opacity="0.2" stroke="${color}" stroke-opacity="0.5" stroke-width="1.1"/>`
+    + `<g stroke="${color}" stroke-width="1.95">${paths}</g></svg>`;
 }
+const ICON_COLORS = {
+  terminal: "#46e8ff", live: "#8dff45", liveTrades: "#ffd24a", smartChart: "#72ff23",
+  trade: "#3fe0d0", slimeScope: "#5ab0ff", watchlist: "#ffd24a", kol: "#ffcf5a",
+  sniper: "#ff6b6b", txAudit: "#bbff63", tek: "#9fb6c2", ogreAi: "#b06bff",
+  launchCoin: "#ff8a5a", bundle: "#ffa64d", volume: "#46e8ff", launch: "#9bff9b",
+  wallets: "#ffd24a", positions: "#5ab0ff", pnl: "#72ff23", profile: "#8dff45"
+};
 const SWAMP_ICON_PATHS = {
   // Live Terminal — command prompt
   terminal: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M7 9l3 3-3 3"/><path d="M13 15h4"/>',
@@ -23695,16 +23707,16 @@ const SWAMP_ICON_PATHS = {
   profile: '<path d="M5 12a7 6 0 0 1 14 0v2a5 5 0 0 1-5 5h-4a5 5 0 0 1-5-5z"/><circle cx="8" cy="8" r="2.2"/><circle cx="16" cy="8" r="2.2"/><path d="M9 14.5c1.2 1.4 4.8 1.4 6 0"/>'
 };
 const DESKTOP_NAV_ICONS = Object.fromEntries(
-  Object.entries(SWAMP_ICON_PATHS).map(([key, paths]) => [key, swampIcon(paths)])
+  Object.entries(SWAMP_ICON_PATHS).map(([key, paths]) => [key, swampIcon(paths, ICON_COLORS[key])])
 );
 
 const DESKTOP_NAV_GROUP_ICONS = {
-  live: swampIcon(SWAMP_ICON_PATHS.live),
-  chart: swampIcon(SWAMP_ICON_PATHS.smartChart),
-  intel: swampIcon(SWAMP_ICON_PATHS.slimeScope),
-  tools: swampIcon(SWAMP_ICON_PATHS.tek),
-  portfolio: swampIcon(SWAMP_ICON_PATHS.positions),
-  profile: swampIcon(SWAMP_ICON_PATHS.profile)
+  live: swampIcon(SWAMP_ICON_PATHS.live, "#8dff45"),
+  chart: swampIcon(SWAMP_ICON_PATHS.smartChart, "#72ff23"),
+  intel: swampIcon(SWAMP_ICON_PATHS.slimeScope, "#5ab0ff"),
+  tools: swampIcon(SWAMP_ICON_PATHS.tek, "#9fb6c2"),
+  portfolio: swampIcon(SWAMP_ICON_PATHS.positions, "#5ab0ff"),
+  profile: swampIcon(SWAMP_ICON_PATHS.profile, "#8dff45")
 };
 
 // One nav, two faces. Desktop: fixed left sidebar with ACCORDION groups - click

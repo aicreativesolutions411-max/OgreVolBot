@@ -9679,21 +9679,20 @@ body {
   border-color: rgba(114, 255, 35, 0.6);
   font-weight: 800;
 }
-/* Icon badge tiles: each glyph sits on a soft rounded slime tile so the set
-   reads as designed icons with depth, not floating thin lines. The tile fades
-   to a dark wash on the active green pill so the dark glyph stays crisp. */
+/* Colourful icon chips: each SVG carries its own vibrant colour + tinted chip.
+   The container is a dark backing so the colours POP on both the nav and the
+   active green pill. */
 .nav-side-icon { line-height: 1; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
-  width: 28px; height: 28px; border-radius: 9px;
-  background: linear-gradient(160deg, rgba(114, 255, 35, 0.16), rgba(8, 20, 10, 0.5));
-  border: 1px solid rgba(114, 255, 35, 0.2); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06); }
-.nav-side-icon .swampi { width: 17px; height: 17px; display: block; stroke-width: 2; }
-.nav-drop-bar .nav-side-items button:not([data-active="true"]) .swampi { filter: drop-shadow(0 0 3px rgba(114, 255, 35, 0.5)); }
+  width: 30px; height: 30px; border-radius: 9px; background: rgba(3, 8, 4, 0.6);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 1px 3px rgba(0, 0, 0, 0.3); }
+.nav-side-icon .swampi { width: 24px; height: 24px; display: block; filter: drop-shadow(0 0 3px rgba(0, 0, 0, 0.5)); }
+/* keep the dark backing on the active pill so the coloured glyph stays crisp */
 .nav-drop-bar .nav-side-items button[data-active="true"] .nav-side-icon,
 .nav-side-group-toggle[data-active] .nav-side-icon,
 .nav-drop-group.is-open .nav-side-group-toggle .nav-side-icon {
-  background: rgba(0, 0, 0, 0.16); border-color: rgba(0, 0, 0, 0.18); }
-.nav-side-group-toggle .nav-side-icon { width: 26px; height: 26px; }
-.nav-side-group-toggle .nav-side-icon .swampi { width: 16px; height: 16px; }
+  background: rgba(0, 0, 0, 0.42); }
+.nav-side-group-toggle .nav-side-icon { width: 28px; height: 28px; }
+.nav-side-group-toggle .nav-side-icon .swampi { width: 22px; height: 22px; }
 
 /* --- Desktop face: one tight top bar, dropdowns to subcategories --- */
 @media (min-width: 761px) {
