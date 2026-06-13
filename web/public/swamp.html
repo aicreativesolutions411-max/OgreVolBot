@@ -375,6 +375,32 @@ function spawnNpcs(){
       r:18, dir:"down", walkT:Math.random()*3, frames:pd&&pd.frames, tx:0,ty:0, retarget:0 }); }
   npcs.forEach(p=>preloadFrames(p.frames));
 }
+
+/* ---- LIVE co-presence (WebSocket): real traders walking the same map ---- */
+const RP=new Map(); let myId=null, sock=null, wsOk=false, wsRetry=0, posT=0;
+function wsUrl(){ const base = API ? API.replace(/^http/,"ws") : ((location.protocol==="https:"?"wss:":"ws:")+"//"+location.host); return base+"/ws/swamp"; }
+function connectWS(){
+  if(typeof WebSocket==="undefined") return;
+  try{ sock=new WebSocket(wsUrl()); }catch(_){ scheduleReconnect(); return; }
+  sock.onopen=()=>{ wsOk=true; wsRetry=0; sendPos(); };
+  sock.onmessage=(e)=>{ let m; try{ m=JSON.parse(e.data); }catch{ return; }
+    if(m.type==="hello"){ myId=m.id; }
+    else if(m.type==="world"){ const seen=new Set();
+      for(const pl of m.players){ if(pl.id===myId) continue; seen.add(pl.id);
+        let r=RP.get(pl.id);
+        if(!r){ r={ x:pl.x,y:pl.y,tx:pl.x,ty:pl.y,dir:pl.d,name:pl.n,clan:pl.c,hero:pl.h,r:18,walkT:Math.random()*3,_mv:false,frames:(A.players[pl.h%Math.max(1,A.players.length)]||{}).frames }; preloadFrames(r.frames); RP.set(pl.id,r); }
+        r.tx=pl.x; r.ty=pl.y; r.dir=pl.d; r.name=pl.n; r.clan=pl.c;
+        if(r.hero!==pl.h){ r.hero=pl.h; r.frames=(A.players[pl.h%Math.max(1,A.players.length)]||{}).frames; preloadFrames(r.frames); }
+      }
+      for(const id of [...RP.keys()]) if(!seen.has(id)) RP.delete(id);
+      refreshHud();
+    } };
+  sock.onclose=()=>{ wsOk=false; RP.clear(); scheduleReconnect(); };
+  sock.onerror=()=>{ try{ sock.close(); }catch{} };
+}
+function scheduleReconnect(){ wsRetry=Math.min(wsRetry+1,6); setTimeout(connectWS,1500*wsRetry); }
+function sendPos(){ if(!wsOk||!sock||sock.readyState!==1||!player) return;
+  try{ sock.send(JSON.stringify({ type:"pos", x:Math.round(player.x), y:Math.round(player.y), dir:player.dir, name:(store.lbName||"ogre"), clan:store.clan||"", hero:store.hero||0 })); }catch(_){} }
 async function loadFeed(){
   try{ const r=await fetch(API+"/api/web/live-pairs?bucket=live&sort=fresh",{cache:"no-store"});
     const j=await r.json(); feedRows=(j&&j.livePairs&&j.livePairs.rows)||(j&&j.rows)||[]; }catch(_){ feedRows=[]; }
@@ -406,9 +432,10 @@ function refreshHud(){
   if(player){ $("hpbar").style.width=Math.max(0,player.hp/player.maxhp*100)+"%"; }
   const wild=creatures.length, rare=creatures.filter(c=>c.rar.k!=="common").length, hostiles=mobs.length;
   const clan=store.clan?`[${store.clan}] `:"";
+  const online = wsOk ? ` · 👥 ${RP.size+1} online` : "";
   $("quest").textContent= clan + (rs.live
     ? `⚔️ RAID LIVE — ${hostiles} hostiles about. Fight for loot!`
-    : `${wild} coins to catch${rare?` · ${rare} rare 👀`:""} · ${hostiles} mobs for loot · base Lv${store.baseLv}`);
+    : `${wild} coins${rare?` · ${rare} rare 👀`:""} · ${hostiles} mobs · base Lv${store.baseLv}`) + online;
 }
 
 /* ---- input ---- */
@@ -479,6 +506,10 @@ function update(dt){
   // particles/floats
   for(const pt of parts){ pt.x+=pt.vx*dt; pt.y+=pt.vy*dt; pt.vx*=0.92; pt.vy*=0.92; pt.life-=dt; } parts=parts.filter(p=>p.life>0);
   for(const f of floats){ f.t+=dt; f.y-=26*dt; } floats=floats.filter(f=>f.t<0.9);
+  // live presence: throttled position send + smooth interpolation of remote traders
+  posT-=dt; if(posT<=0){ posT=0.15; sendPos(); }
+  for(const r of RP.values()){ const k=Math.min(1,dt*10); r.x+=(r.tx-r.x)*k; r.y+=(r.ty-r.y)*k;
+    const moving=(r.tx-r.x)*(r.tx-r.x)+(r.ty-r.y)*(r.ty-r.y)>4; r._mv=moving; r.walkT+=dt*(moving?1:0.2); }
   camx+=(p.x-camx)*Math.min(1,dt*7); camy+=(p.y-camy)*Math.min(1,dt*7);
 }
 
@@ -490,9 +521,12 @@ function render(){
   // building footprints
   for(const b of buildings) drawBuilding(b);
   // sort entities by y
-  const ents=[]; for(const c of creatures){ if(!c.dead) ents.push({t:"c",e:c}); } for(const q of npcs) ents.push({t:"n",e:q}); for(const mob of mobs) ents.push({t:"m",e:mob}); ents.push({t:"p",e:player});
+  const live=wsOk&&RP.size>0;
+  const ents=[]; for(const c of creatures){ if(!c.dead) ents.push({t:"c",e:c}); }
+  if(live){ for(const r of RP.values()) ents.push({t:"r",e:r}); } else { for(const q of npcs) ents.push({t:"n",e:q}); }
+  for(const mob of mobs) ents.push({t:"m",e:mob}); ents.push({t:"p",e:player});
   ents.sort((a,b)=>a.e.y-b.e.y);
-  for(const it of ents){ if(it.t==="p") drawPlayer(); else if(it.t==="n") drawNpc(it.e); else if(it.t==="m") drawMob(it.e); else drawCreature(it.e); }
+  for(const it of ents){ if(it.t==="p") drawPlayer(); else if(it.t==="n") drawNpc(it.e); else if(it.t==="r") drawRemote(it.e); else if(it.t==="m") drawMob(it.e); else drawCreature(it.e); }
   for(const pt of parts){ ctx.globalAlpha=Math.max(0,pt.life/pt.max); ctx.fillStyle=pt.col; ctx.beginPath(); ctx.arc(pt.x,pt.y,pt.sz,0,6.2832); ctx.fill(); } ctx.globalAlpha=1;
   ctx.font="900 15px Inter,sans-serif"; ctx.textAlign="center";
   for(const f of floats){ ctx.globalAlpha=Math.max(0,1-f.t/0.9); ctx.fillStyle=f.col; ctx.fillText(f.txt,f.x,f.y); } ctx.globalAlpha=1;
@@ -545,6 +579,11 @@ function drawNpc(q){ drawShadow(q.x,q.y,q.r);
   ctx.font="900 11px Inter,sans-serif"; ctx.textAlign="center"; ctx.fillStyle="#9bd1ff"; ctx.strokeStyle="rgba(0,0,0,0.7)"; ctx.lineWidth=3;
   ctx.strokeText("🧑 "+q.name,q.x,q.y-q.r-8); ctx.fillText("🧑 "+q.name,q.x,q.y-q.r-8);
 }
+function drawRemote(r){ drawShadow(r.x,r.y,r.r);
+  if(!drawWalker(r,r.frames,r.r*2.7)){ ctx.fillStyle="#6aa0ff"; ctx.beginPath(); ctx.arc(r.x,r.y,r.r,0,6.2832); ctx.fill(); }
+  const tag=(r.clan?"["+r.clan+"] ":"")+(r.name||"trader");
+  ctx.font="900 11px Inter,sans-serif"; ctx.textAlign="center"; ctx.fillStyle="#9bff9b"; ctx.strokeStyle="rgba(0,0,0,0.7)"; ctx.lineWidth=3;
+  ctx.strokeText("🟢 "+tag,r.x,r.y-r.r-9); ctx.fillText("🟢 "+tag,r.x,r.y-r.r-9); }
 function drawMob(m){ drawShadow(m.x,m.y,m.r);
   ctx.strokeStyle="rgba(255,80,60,0.5)"; ctx.lineWidth=2; ctx.beginPath(); ctx.ellipse(m.x,m.y+m.r*0.5,m.r*1.1,m.r*0.45,0,0,6.2832); ctx.stroke();
   let drew=false; if(m.spr.frames) drew=drawWalker(m,m.spr.frames,m.r*2.4);
@@ -694,6 +733,7 @@ function showTitle(){ state="title"; $("load").style.display="none"; $("start").
   $("mute").textContent=store.muted?"🔇":"🔊";
 }
 function enterWorld(){ $("start").classList.remove("on"); $("hud").style.display="block"; startAmbient(); newGame();
+  connectWS();
   state="world"; lastTs=performance.now(); toast("Walk up to a coin and tap ✋ to catch it"); requestAnimationFrame(loop); }
 $("play").onclick=enterWorld;
 $("mute").onclick=()=>setMuted(!store.muted);
@@ -716,7 +756,8 @@ $("exit").onclick=()=>{ state="title"; $("hud").style.display="none"; showTitle(
 window.__SW={ get state(){return state;}, enterWorld, get player(){return player;}, get creatures(){return creatures;}, get mobs(){return mobs;},
   openEncounter:()=>{ if(creatures[0]) openEncounter(creatures[0]); }, forceCatch:()=>{ if(encC) caught(encC); },
   openDex, dexCount, step:(dt)=>{ if(state==="world") update(dt||0.016); }, near:()=>near, nearMob:()=>nearMob,
-  attackMob, raidState, get res(){return store.res;}, bld:(id)=>openBuilding(buildings.find(b=>b.id===id)), doBldAct };
+  attackMob, raidState, get res(){return store.res;}, bld:(id)=>openBuilding(buildings.find(b=>b.id===id)), doBldAct,
+  connectWS, get rp(){return RP.size;}, get wsOk(){return wsOk;}, _sock:()=>sock };
 })();
 </script>
 </body>

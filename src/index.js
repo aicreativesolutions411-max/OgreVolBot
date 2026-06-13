@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
 import bs58 from "bs58";
 import sharp from "sharp";
+import { WebSocketServer } from "ws";
 import nacl from "tweetnacl";
 import {
   classifySlimeScopePair,
@@ -1452,9 +1453,63 @@ function startHealthServer() {
     response.end(JSON.stringify({ ok: false, error: "not_found" }));
   });
 
+  startSwampPresence(server);
+
   server.listen(CONFIG.port, () => {
     console.log(`Health server listening on port ${CONFIG.port}.`);
   });
+}
+
+// --- SlimeWire Swamp live co-presence (WebSocket on /ws/swamp) ---
+const swampPlayers = new Map(); // id -> {name,clan,x,y,dir,hero,t,posSet}
+let swampSeq = 0;
+function swampWorldPayload() {
+  const now = Date.now();
+  for (const [id, p] of swampPlayers) if (now - p.t > 30000) swampPlayers.delete(id);
+  const players = [];
+  for (const p of swampPlayers.values()) {
+    if (!p.posSet) continue;
+    players.push({ id: p.id, n: p.name, c: p.clan, x: Math.round(p.x), y: Math.round(p.y), d: p.dir, h: p.hero | 0 });
+    if (players.length >= 60) break;
+  }
+  return { type: "world", count: players.length, players };
+}
+function startSwampPresence(server) {
+  let wss;
+  try { wss = new WebSocketServer({ server, path: "/ws/swamp", maxPayload: 4096 }); }
+  catch (err) { console.error("Swamp presence WS failed to start:", err?.message || err); return; }
+  wss.on("connection", (ws) => {
+    if (swampPlayers.size >= 120) { try { ws.close(1013, "full"); } catch {} return; }
+    const id = "p" + (++swampSeq).toString(36) + Math.random().toString(36).slice(2, 6);
+    const me = { id, name: "ogre", clan: "", x: 0, y: 0, dir: "down", hero: 0, t: Date.now(), posSet: false };
+    swampPlayers.set(id, me);
+    ws.isAlive = true;
+    try { ws.send(JSON.stringify({ type: "hello", id })); } catch {}
+    ws.on("message", (buf) => {
+      let m; try { m = JSON.parse(buf.toString().slice(0, 4096)); } catch { return; }
+      if (m && m.type === "pos") {
+        me.x = Number(m.x) || 0; me.y = Number(m.y) || 0;
+        me.dir = (["up", "down", "left", "right"].includes(m.dir) ? m.dir : "down");
+        if (typeof m.name === "string") me.name = m.name.replace(/[^A-Za-z0-9_$ -]/g, "").slice(0, 16) || "ogre";
+        if (typeof m.clan === "string") me.clan = m.clan.replace(/[^A-Za-z0-9 _-]/g, "").slice(0, 12);
+        if (typeof m.hero === "number") me.hero = m.hero | 0;
+        me.t = Date.now(); me.posSet = true;
+      }
+    });
+    ws.on("pong", () => { ws.isAlive = true; });
+    ws.on("close", () => { swampPlayers.delete(id); });
+    ws.on("error", () => { swampPlayers.delete(id); try { ws.close(); } catch {} });
+  });
+  const tick = setInterval(() => {
+    if (!wss.clients.size) return;
+    const payload = JSON.stringify(swampWorldPayload());
+    for (const c of wss.clients) if (c.readyState === 1) { try { c.send(payload); } catch {} }
+  }, 130);
+  const hb = setInterval(() => {
+    for (const c of wss.clients) { if (c.isAlive === false) { try { c.terminate(); } catch {}; continue; } c.isAlive = false; try { c.ping(); } catch {} }
+  }, 15000);
+  wss.on("close", () => { clearInterval(tick); clearInterval(hb); });
+  console.log("Swamp presence WS listening on /ws/swamp");
 }
 
 function metadataProviderDiagnosticsFields() {
