@@ -1400,10 +1400,19 @@
       const wctx = worldCv ? worldCv.getContext("2d") : null;
       // tiles: 0 grass, 1 tall-grass (encounters), 2 water, 3 mud path, 4 solid, 5 door
       const BUILDINGS = [
-        { id:"lab",  name:"🥚 Launch Lab",   sub:"Hatch your own coin — it becomes an OGRE BOSS raid", url:"/terminal", x:6,  y:4,  w:6, h:4, color:"#2f6b2a", roof:"#72ff23" },
-        { id:"post", name:"⚡ Trading Post", sub:"The full SlimeWire terminal", url:"/terminal", x:32, y:5,  w:6, h:4, color:"#4a3a22", roof:"#ffd84d" },
-        { id:"totem",name:"🏆 Proof Totem",  sub:"Every call tracked — wins AND losses", url:"/proof", x:21, y:23, w:3, h:3, color:"#3a2f4f", roof:"#c79bff" }
+        { id:"lab",  name:"🥚 Launch Lab",   sub:"Hatch your own coin — it becomes an OGRE BOSS raid", url:"/terminal", x:6,  y:4,  w:6, h:4, color:"#2f6b2a", roof:"#72ff23", prop:"launch-lab" },
+        { id:"post", name:"⚡ Trading Post", sub:"The full SlimeWire terminal", url:"/terminal", x:32, y:5,  w:6, h:4, color:"#4a3a22", roof:"#ffd84d", prop:"trading-post" },
+        { id:"totem",name:"🏆 Proof Totem",  sub:"Every call tracked — wins AND losses", url:"/proof", x:21, y:23, w:3, h:3, color:"#3a2f4f", roof:"#c79bff", prop:"proof-totem" }
       ];
+      // HD painted building props (re-render the map when they load)
+      const PROP_BASE = "/assets/slimewire/swamp/props/";
+      const PROP_IMG = {};
+      ["launch-lab","trading-post","proof-totem"].forEach((n)=>{
+        const img = new Image(); img.decoding="async";
+        img.addEventListener("load", ()=>{ if (wmap) genMap(); }, { once:true });
+        img.src = PROP_BASE+n+".png"; PROP_IMG[n]=img;
+      });
+      const propReady = (n)=> PROP_IMG[n] && PROP_IMG[n].complete && PROP_IMG[n].naturalWidth>0;
       let wmap = null, mapLayer = null;
       function genMap() {
         const r = rng(hash(dayKey()+"swampmap2"));
@@ -1505,9 +1514,19 @@
           m.strokeStyle="rgba(70,140,90,0.55)"; m.lineWidth=1.6;
           for(let i=0;i<3;i++){ const mx=cx2-10+i*9+trr()*4; m.beginPath(); m.moveTo(mx,cy2+8); m.quadraticCurveTo(mx+1.5,cy2+16+trr()*6,mx-1,cy2+20+trr()*8); m.stroke(); }
         }
-        // buildings — painterly huts: gradient walls, plank texture, glowing windows
+        // buildings — HD painted prop if available, else painterly procedural hut
         for (const b of BUILDINGS) {
           const X=b.x*TILE, Y=b.y*TILE, Wd=b.w*TILE, Hd=b.h*TILE;
+          if (b.prop && propReady(b.prop)) {
+            // ground-shadow then the painted building, scaled to span the footprint
+            m.fillStyle="rgba(0,0,0,0.45)"; m.beginPath(); m.ellipse(X+Wd/2,Y+Hd+2,Wd*0.6,9,0,0,7); m.fill();
+            const pw = Wd*1.7, ph = pw; const pxp = X+Wd/2 - pw/2, pyp = Y+Hd - ph + TILE*0.55;
+            m.drawImage(PROP_IMG[b.prop], pxp, pyp, pw, ph);
+            m.font="700 13px Cinzel, Georgia, serif"; m.textAlign="center";
+            m.fillStyle="rgba(0,0,0,0.8)"; m.fillText(b.name, X+Wd/2+1, Y+Hd+19);
+            m.fillStyle="#f3ecd8"; m.fillText(b.name, X+Wd/2, Y+Hd+18);
+            continue;
+          }
           m.fillStyle="rgba(0,0,0,0.42)"; m.beginPath(); m.ellipse(X+Wd/2,Y+Hd+2,Wd*0.55,8,0,0,7); m.fill();
           const wg = m.createLinearGradient(X,Y+12,X,Y+Hd);
           wg.addColorStop(0, b.color); wg.addColorStop(1, "rgba(0,0,0,0.55)");
