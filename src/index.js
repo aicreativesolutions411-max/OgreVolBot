@@ -1375,6 +1375,14 @@ function startHealthServer() {
       await serveStaticHtmlPage(response, "raids.html");
       return;
     }
+    if (request.method === "GET" && ["/launch", "/become-a-boss", "/launchpad-info"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "launch.html");
+      return;
+    }
+    if (request.method === "GET" && ["/receipts", "/receipt", "/swamp-card"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "receipts.html");
+      return;
+    }
 
     if (request.method === "GET" && /^[/](call|u|g|hype)([/]|$)/.test(requestUrl.pathname)) {
       await serveProofSharePage(requestUrl, request, response);
