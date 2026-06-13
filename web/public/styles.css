@@ -9679,12 +9679,21 @@ body {
   border-color: rgba(114, 255, 35, 0.6);
   font-weight: 800;
 }
-.nav-side-icon { font-size: 1rem; line-height: 1; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; }
-.nav-side-icon .swampi { width: 18px; height: 18px; display: block; }
-/* Soft swamp glow on resting icons; drops to none on the active green pill so
-   the dark glyph stays crisp. */
-.nav-drop-bar .nav-side-items button:not([data-active="true"]) .swampi { filter: drop-shadow(0 0 4px rgba(114, 255, 35, 0.45)); }
-.nav-side-group-toggle .nav-side-icon .swampi { width: 17px; height: 17px; }
+/* Icon badge tiles: each glyph sits on a soft rounded slime tile so the set
+   reads as designed icons with depth, not floating thin lines. The tile fades
+   to a dark wash on the active green pill so the dark glyph stays crisp. */
+.nav-side-icon { line-height: 1; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 9px;
+  background: linear-gradient(160deg, rgba(114, 255, 35, 0.16), rgba(8, 20, 10, 0.5));
+  border: 1px solid rgba(114, 255, 35, 0.2); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06); }
+.nav-side-icon .swampi { width: 17px; height: 17px; display: block; stroke-width: 2; }
+.nav-drop-bar .nav-side-items button:not([data-active="true"]) .swampi { filter: drop-shadow(0 0 3px rgba(114, 255, 35, 0.5)); }
+.nav-drop-bar .nav-side-items button[data-active="true"] .nav-side-icon,
+.nav-side-group-toggle[data-active] .nav-side-icon,
+.nav-drop-group.is-open .nav-side-group-toggle .nav-side-icon {
+  background: rgba(0, 0, 0, 0.16); border-color: rgba(0, 0, 0, 0.18); }
+.nav-side-group-toggle .nav-side-icon { width: 26px; height: 26px; }
+.nav-side-group-toggle .nav-side-icon .swampi { width: 16px; height: 16px; }
 
 /* --- Desktop face: one tight top bar, dropdowns to subcategories --- */
 @media (min-width: 761px) {
@@ -9757,14 +9766,14 @@ body {
   body:has([data-dashboard]:not([hidden])) main.shell[data-route="terminal"] .nav-drop-bar {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 5px;
     position: fixed;
-    right: 3px;
+    right: 6px;
     bottom: 86px;
-    width: 50px;
+    width: 58px;
     z-index: 45;
-    padding: 3px 2px;
-    border-radius: 11px;
+    padding: 5px 3px;
+    border-radius: 13px;
     border: 1px solid rgba(114, 255, 35, 0.25);
     background: rgba(5, 11, 6, 0.97);
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
@@ -9774,19 +9783,19 @@ body {
     flex-direction: column;
     justify-content: center;
     align-items: center;
-    gap: 2px;
+    gap: 3px;
     width: 100%;
-    min-height: 40px;
-    padding: 4px 1px;
-    border-radius: 8px;
+    min-height: 46px;
+    padding: 5px 1px;
+    border-radius: 10px;
     border: 1px solid transparent;
-    font-size: 7.5px;
+    font-size: 9px;
     font-weight: 800;
+    letter-spacing: 0.2px;
     text-align: center;
     white-space: normal;
     line-height: 1.05;
   }
-  .nav-side-group-toggle .nav-side-icon { font-size: 0.95rem; }
   .nav-side-group-toggle .nav-side-caret { display: none; }
   .nav-side-group-toggle .nav-side-label { flex: 0 0 auto; }
   .nav-side-group-toggle[data-active],
