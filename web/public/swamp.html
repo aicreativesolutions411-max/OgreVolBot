@@ -493,10 +493,24 @@
         renderEnergy(); renderStreak();
       }
 
-      // ---------- sound (tiny WebAudio blips, no assets) ----------
+      // ---------- sound: real files when present, synth fallback ----------
+      const AUDIO_BASE = "/assets/slimewire/swamp/audio/";
+      const SFX_FILES = {}; // kind -> HTMLAudioElement (ready=true once loadable)
+      ["throw","catch","miss","level","tick","quest","ui","boss"].forEach((kind)=>{
+        const a = new Audio();
+        a.preload = "auto";
+        const can = a.canPlayType && a.canPlayType("audio/ogg") ? "ogg" : "mp3";
+        a.src = AUDIO_BASE + kind + "." + can;
+        a.addEventListener("canplaythrough", ()=>{ a._ready = true; }, { once:true });
+        a.addEventListener("error", ()=>{ a._ready = false; }, { once:true });
+        SFX_FILES[kind] = a;
+      });
       let audioCtx = null;
       function sfx(kind) {
         if (store.muted === true) return;
+        // real sample if we have one (boss/level can map from synth-only kinds)
+        const f = SFX_FILES[kind] || (kind==="thunder" ? SFX_FILES["boss"] : null);
+        if (f && f._ready) { try { const c = f.cloneNode(); c.volume = 0.7; c.play().catch(()=>{}); return; } catch {} }
         try {
           audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)();
           const t = audioCtx.currentTime;
@@ -2257,8 +2271,23 @@
       $("[data-sv-exit]")?.addEventListener("click", ()=>{ stopSurvival(); document.querySelector('.tab[data-view="world"]')?.click(); });
 
       // ---------- ambient swamp music (synthesized, no audio files needed) ----------
-      let music = { ctx:null, on:(store.muted!==true), nodes:[], frogTimer:null };
+      let music = { ctx:null, on:(store.muted!==true), nodes:[], frogTimer:null, el:null };
+      // try a real ambient loop first; only synth if the file isn't there
+      const ambientEl = new Audio();
+      ambientEl.loop = true; ambientEl.preload = "auto";
+      ambientEl.src = AUDIO_BASE + "swamp-ambient." + (ambientEl.canPlayType && ambientEl.canPlayType("audio/ogg") ? "ogg" : "mp3");
+      ambientEl.addEventListener("canplaythrough", ()=>{ ambientEl._ready = true; }, { once:true });
       function startMusic() {
+        if (!music.on) return;
+        if (ambientEl._ready) {
+          try { ambientEl.volume = 0; ambientEl.play().then(()=>{
+            const fade = setInterval(()=>{ ambientEl.volume = Math.min(0.5, ambientEl.volume + 0.04); if (ambientEl.volume>=0.5) clearInterval(fade); }, 120);
+          }).catch(()=>{ realMusicFailed(); }); music.el = ambientEl; return; } catch { realMusicFailed(); }
+        }
+        startSynthMusic();
+      }
+      function realMusicFailed(){ music.el=null; startSynthMusic(); }
+      function startSynthMusic() {
         if (!music.on || music.ctx) return;
         try {
           const ctx = new (window.AudioContext||window.webkitAudioContext)(); music.ctx = ctx;
@@ -2285,7 +2314,10 @@
           music.frogTimer = setTimeout(blip, 2000);
         } catch {}
       }
-      function stopMusic() { try { music.master?.gain.exponentialRampToValueAtTime(0.0001, music.ctx.currentTime+0.4); clearTimeout(music.frogTimer); setTimeout(()=>{ music.ctx?.close(); music.ctx=null; music.nodes=[]; }, 500); } catch {} }
+      function stopMusic() { try {
+        if (music.el) { const e=music.el; const f=setInterval(()=>{ e.volume=Math.max(0,e.volume-0.06); if(e.volume<=0){ e.pause(); clearInterval(f); } }, 80); music.el=null; }
+        music.master?.gain.exponentialRampToValueAtTime(0.0001, music.ctx.currentTime+0.4); clearTimeout(music.frogTimer); setTimeout(()=>{ music.ctx?.close(); music.ctx=null; music.nodes=[]; }, 500);
+      } catch {} }
       function setMute(muted) { store.muted = muted; save(store); if (muted) { music.on=false; stopMusic(); } else { music.on=true; startMusic(); }
         const b = $("[data-title-mute]"); if (b) b.textContent = muted ? "🔇 Sound: OFF" : "🔊 Sound: ON"; }
 
