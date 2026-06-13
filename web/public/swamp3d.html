@@ -297,8 +297,15 @@ function blobFallback(color, h){
   return wrap;
 }
 
-// ---------- weapon (built from geometry, upgrades visually) ----------
+// ---------- weapon: real HD maul model if loaded, else geometry fallback ----------
 function makeWeapon(tier){
+  if(meshCache["weapon-maul"]){
+    const src=meshCache["weapon-maul"];
+    const box=new THREE.Box3().setFromObject(src); const sz=new THREE.Vector3(); box.getSize(sz);
+    const s=(2.6 + tier*0.4)/(Math.max(sz.x,sz.y,sz.z)||1); const m=src.clone(true); m.scale.setScalar(s);
+    const b2=new THREE.Box3().setFromObject(m); m.position.y-=b2.min.y; m.position.x-=(b2.min.x+b2.max.x)/2; m.position.z-=(b2.min.z+b2.max.z)/2;
+    const wrap=new THREE.Group(); wrap.add(m); return wrap;
+  }
   const g=new THREE.Group();
   const handleMat=new THREE.MeshStandardMaterial({color:0x5a3a1c, roughness:0.8});
   const headMat=new THREE.MeshStandardMaterial({color:tier>=2?0x9fb0c8:0x7a5a32, metalness:tier>=2?0.7:0.2, roughness:0.4, emissive:0x111100, emissiveIntensity:0.2});
@@ -476,12 +483,12 @@ function buildPlayer(){
   player.weapon=makeWeapon(player.weaponTier); player.weapon.position.set(0,0,0); hand.add(player.weapon);
   scene.add(wrap); player.obj=wrap;
 }
-function rebuildWeapon(){ if(player.hand&&player.weapon){ player.hand.remove(player.weapon); player.weapon=makeWeapon(player.weaponTier); player.weapon.scale.setScalar(1.6); player.hand.add(player.weapon); } }
+function rebuildWeapon(){ if(player.hand&&player.weapon){ player.hand.remove(player.weapon); player.weapon=makeWeapon(player.weaponTier); player.hand.add(player.weapon); } }
 
 // attach the weapon hand to a wrap group
 function attachHand(wrap){
-  const hand=new THREE.Group(); hand.position.set(1.1,2.0,0.8); wrap.add(hand); player.hand=hand;
-  player.weapon=makeWeapon(player.weaponTier); player.weapon.scale.setScalar(1.6); hand.add(player.weapon);
+  const hand=new THREE.Group(); hand.position.set(1.2,2.1,0.9); wrap.add(hand); player.hand=hand;
+  player.weapon=makeWeapon(player.weaponTier); hand.add(player.weapon);
 }
 // PLAYER = an OGRE. Prefer a rigged animated ogre (player-ogre.glb), else a
 // static ogre mesh (ogre-boss) that we code-animate. Never the goofy biped.
@@ -686,6 +693,7 @@ async function boot(){
   tick(); // start rendering immediately with primitive fallbacks (instant, mobile-friendly)
   // stream HD models in the background
   (async()=>{
+    await loadModel("weapon-maul").catch(()=>{}); // HD weapon first so the ogre spawns holding it
     await loadPlayerModel().catch(()=>{});      // OGRE player (rigged if available, else static ogre)
     // NOTE: the full 3D environment mesh engulfed the camera — disabled for a
     // clean, readable arena (textured ground + fog + decor). Re-add later, placed
