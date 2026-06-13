@@ -15224,16 +15224,18 @@ async function showLaunchConfirm(chatId, userId, messageId) {
   const d = launchDraftFor(chatId);
   if (!d.name || !d.symbol) { await say(chatId, "Add a Name and Ticker first."); return; }
   const w = await launchBuilderWalletLabel(chatId, userId, d);
-  const dev = Number(d.devBuySol) > 0 ? `${d.devBuySol} SOL dev buy` : "no dev buy";
+  const devTxt = Number(d.devBuySol) > 0 ? `${d.devBuySol} SOL dev buy` : "no dev buy";
   await sendOrEditMessage(chatId, messageId, withBrandFooter([
-    "⚠️ Confirm launch — this mints ON-CHAIN and spends REAL SOL.",
+    `Launch $${d.symbol} from ${w.label} with ${devTxt} — Confirm?`,
+    "",
+    "⚠️ This mints ON-CHAIN and spends REAL SOL — it can't be undone.",
     "",
     `Coin: ${d.name} ($${d.symbol})`,
-    `Image: ${d.imageDataUrl ? "✅" : "none"}`,
+    `Image: ${d.imageDataUrl ? "✅ attached" : "none"}`,
     `Wallet: ${w.label}`,
-    `Dev buy: ${dev}`,
+    `Dev buy: ${devTxt}`,
     "",
-    "Make sure that wallet holds enough SOL (mint fee + buffer + your dev buy). This can't be undone."
+    "Make sure that wallet holds enough SOL (mint fee + buffer + your dev buy)."
   ].join("\n")), {
     inline_keyboard: [
       [{ text: "✅ Confirm & Launch", callback_data: "lb_confirm" }],
