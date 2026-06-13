@@ -88,6 +88,7 @@
     <button class="dashbtn" id="dash">⚡</button>
     <button class="atkbtn" id="atk">⚔️</button>
     <div class="hint">drag left = move · ⚔️ = swing · ⚡ = dash</div>
+    <div id="dbg" style="position:absolute;left:8px;bottom:60px;z-index:9;color:#9bff5a;font:11px monospace;white-space:pre;text-shadow:0 1px 2px #000;display:none;pointer-events:none"></div>
   </div>
 
   <div class="banner" id="banner"><b id="bannerT"></b><span id="bannerS"></span></div>
@@ -140,6 +141,8 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 const cfg = window.OGRE_PORTAL_CONFIG || {};
 const apiBase = String(cfg.apiBase || "https://ogrevolbot.onrender.com").replace(/\/$/,"");
 const $ = (id)=>document.getElementById(id);
+const DEBUG = location.search.includes("debug");
+let envLoaded = false;
 const KEY="slimewireSwamp"; const store=(()=>{try{return JSON.parse(localStorage.getItem(KEY)||"{}")}catch{return{}}})();
 const save=()=>{try{localStorage.setItem(KEY,JSON.stringify(store))}catch{}};
 
@@ -168,8 +171,8 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x1a1840);     // never a pure-black void
 scene.fog = new THREE.FogExp2(0x1a1840, 0.012);
 
-const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.1, 600);
-const CAM_OFF = new THREE.Vector3(0, 15, 14); // angled top-down-ish follow
+const camera = new THREE.PerspectiveCamera(52, innerWidth/innerHeight, 0.1, 600);
+const CAM_OFF = new THREE.Vector3(0, 32, 26); // pulled-back action-survivors view
 
 // ---------- lights (bright enough to clearly read on mobile) ----------
 const ambient = new THREE.AmbientLight(0x9fb0e0, 0.9); scene.add(ambient);
@@ -306,7 +309,10 @@ function readKeys(){ if(joyId!==null) return; let x=0,y=0; if(keys["w"]||keys["a
 // ---------- combat ----------
 function doAttack(){
   if(!G.on||G.paused||player.swingCd>0) return;
-  player.swing=1; player.swingCd=0.42/player.atkSpeed; sfx("throw");
+  // auto-aim: face the nearest enemy so swings reliably connect
+  let near=null,nd=1e9; for(const e of enemies){ if(e.dead) continue; const d=e.pos.distanceToSquared(player.pos); if(d<nd){nd=d;near=e;} }
+  if(near && nd < 18*18){ const to=new THREE.Vector3().subVectors(near.pos,player.pos); to.y=0; if(to.lengthSq()>0.001){ player.dir.copy(to.normalize()); } }
+  player.swing=1; player.swingCd=0.40/player.atkSpeed; sfx("throw");
 }
 function doDash(){
   if(!G.on||G.paused||player.dashCd>0) return;
@@ -427,27 +433,34 @@ function buildPlayer(){
   player.weapon=makeWeapon(player.weaponTier); player.weapon.position.set(0,0,0); hand.add(player.weapon);
   scene.add(wrap); player.obj=wrap;
 }
-function rebuildWeapon(){ if(player.hand&&player.weapon){ player.hand.remove(player.weapon); player.weapon=makeWeapon(player.weaponTier); player.hand.add(player.weapon); } }
+function rebuildWeapon(){ if(player.hand&&player.weapon){ player.hand.remove(player.weapon); player.weapon=makeWeapon(player.weaponTier); player.weapon.scale.setScalar(1.6); player.hand.add(player.weapon); } }
 
-// rigged animated player (Walking/Running/Combat-Idle clips share one skeleton)
-async function loadRiggedPlayer(){
-  const gWalk=await loadGLTF("player-walk"); if(!gWalk||!gWalk.scene) return false;
-  const [gRun,gIdle]=await Promise.all([loadGLTF("player-run"), loadGLTF("player-idle")]);
-  if(player.obj){ scene.remove(player.obj); }
-  const wrap=fitInPlace(gWalk.scene, 3.8);
-  player.obj=wrap; player.body=wrap; scene.add(wrap);
-  const hand=new THREE.Group(); hand.position.set(0.95,1.7,0.45); wrap.add(hand); player.hand=hand;
-  player.weapon=makeWeapon(player.weaponTier); hand.add(player.weapon);
-  player.mixer=new THREE.AnimationMixer(gWalk.scene);
-  const walk=gWalk.animations&&gWalk.animations[0];
-  const run=(gRun&&gRun.animations&&gRun.animations[0])||walk;
-  const idle=(gIdle&&gIdle.animations&&gIdle.animations[0])||walk;
-  player.actIdle = idle?player.mixer.clipAction(idle):null;
-  player.actRun  = run?player.mixer.clipAction(run):player.actIdle;
-  if(player.actRun) player.actRun.timeScale=1.3;
-  if(player.actIdle){ player.actIdle.play(); player.curAct=player.actIdle; }
-  player.rigged=true;
-  return true;
+// attach the weapon hand to a wrap group
+function attachHand(wrap){
+  const hand=new THREE.Group(); hand.position.set(1.1,2.0,0.8); wrap.add(hand); player.hand=hand;
+  player.weapon=makeWeapon(player.weaponTier); player.weapon.scale.setScalar(1.6); hand.add(player.weapon);
+}
+// PLAYER = an OGRE. Prefer a rigged animated ogre (player-ogre.glb), else a
+// static ogre mesh (ogre-boss) that we code-animate. Never the goofy biped.
+async function loadPlayerModel(){
+  const g=await loadGLTF("player-ogre");
+  if(g && g.scene && g.animations && g.animations.length){
+    if(player.obj) scene.remove(player.obj);
+    const wrap=fitInPlace(g.scene, 4.0);
+    player.obj=wrap; player.body=wrap; scene.add(wrap); attachHand(wrap);
+    player.mixer=new THREE.AnimationMixer(g.scene);
+    player.curAct=player.mixer.clipAction(g.animations[0]); player.curAct.play(); player.singleClip=true; player.rigged=true;
+    return true;
+  }
+  await loadModel("ogre-boss");
+  if(meshCache["ogre-boss"]){
+    if(player.obj) scene.remove(player.obj);
+    const wrap=fitModel(meshCache["ogre-boss"], 3.6);
+    player.obj=wrap; player.body=wrap; scene.add(wrap); attachHand(wrap);
+    player.mixer=null; player.rigged=false;
+    return true;
+  }
+  return false;
 }
 // 3D swamp environment (decoration surrounding the arena)
 async function loadEnv(){
@@ -456,7 +469,7 @@ async function loadEnv(){
   const s=130/(Math.max(size.x,size.z)||1); env.scale.setScalar(s);
   const b2=new THREE.Box3().setFromObject(env); env.position.y-=b2.min.y;
   env.traverse(o=>{ if(o.isMesh){ o.receiveShadow=true; o.frustumCulled=false; if(o.material) o.material.metalness=Math.min(o.material.metalness??0,0.2); } });
-  scene.add(env);
+  scene.add(env); envLoaded=true;
 }
 
 // ---------- main loop ----------
@@ -483,11 +496,14 @@ function tick(){
     player.obj.position.copy(player.pos);
     // face direction (whole rig rotates; hand+weapon are children)
     const yaw=Math.atan2(player.dir.x, player.dir.z); player.obj.rotation.y = yaw + (player.modelYaw||0);
-    // rigged animation: idle when still, run when moving (crossfade)
+    // animation: rigged → play clip (faster while moving); static → code bob
+    const moving = mv.lengthSq()>0.001;
     if(player.mixer){ player.mixer.update(dt);
-      const moving = mv.lengthSq()>0.001;
-      const want = moving?player.actRun:player.actIdle;
-      if(want && want!==player.curAct){ if(player.curAct) player.curAct.fadeOut(0.18); want.reset().fadeIn(0.18).play(); player.curAct=want; }
+      if(player.singleClip && player.curAct){ player.curAct.timeScale = moving?1.5:0.6; }
+      else { const want = moving?player.actRun:player.actIdle;
+        if(want && want!==player.curAct){ if(player.curAct) player.curAct.fadeOut(0.18); want.reset().fadeIn(0.18).play(); player.curAct=want; } }
+    } else if(player.obj){ // static mesh: bob while walking, settle when idle
+      player.obj.position.y = moving ? Math.abs(Math.sin(performance.now()/110))*0.28 : 0;
     }
     heroGlow.position.set(player.pos.x, 3, player.pos.z);
     // swing animation + hit window
@@ -535,6 +551,15 @@ function tick(){
     $("lvl").textContent="Lvl "+G.level; $("kills").textContent="☠ "+G.kills;
     $("xp").style.width=(G.xp/G.xpNext*100)+"%";
   }
+  if(DEBUG){ const d=$("dbg"); if(d){ d.style.display="block";
+    d.textContent =
+      "on:"+G.on+" rigged:"+!!player.rigged+" env:"+envLoaded+"\n"+
+      "models:"+Object.keys(meshCache).join(",")+"\n"+
+      "enemies:"+enemies.length+" gems:"+gems.length+"\n"+
+      "player:"+(player.pos?player.pos.x.toFixed(1)+","+player.pos.z.toFixed(1):"?")+" objY:"+(player.obj?player.obj.position.y.toFixed(1):"?")+"\n"+
+      "cam:"+camera.position.x.toFixed(1)+","+camera.position.y.toFixed(1)+","+camera.position.z.toFixed(1)+"\n"+
+      "sceneChildren:"+scene.children.length+" bloom:"+useBloom;
+  } }
 
   // gems visual
   for(const g of gems){ if(!g.mesh){ g.mesh=new THREE.Mesh(gemGeo, gemMat); scene.add(g.mesh); } g.mesh.position.set(g.pos.x, 0.6+Math.sin(performance.now()/200+g.pos.x)*0.2, g.pos.z); g.mesh.rotation.y+=dt*3; }
@@ -571,7 +596,7 @@ function resetRun(){
   const worth = store.dex ? Object.values(store.dex) : [];
   let mult=1; const valid=worth.filter(c=>c&&c.mc>0&&c.mcNow>0); if(valid.length){ mult=Math.max(1, valid.reduce((s,c)=>s+c.mcNow/c.mc,0)/valid.length); }
   G.dmgMult=mult; const caught=worth.length;
-  player.hp=player.maxhp=100+caught*5; player.speed=11; player.atkSpeed=1; player.dmg=34; player.range=3.2; player.arc=Math.PI*0.7; player.cleave=3; player.lifesteal=0; player.weaponTier=1; player.dashCd=0; player.dashT=0;
+  player.hp=player.maxhp=100+caught*5; player.speed=12; player.atkSpeed=1; player.dmg=42; player.range=6.5; player.arc=Math.PI*0.95; player.cleave=4; player.lifesteal=0; player.weaponTier=1; player.dashCd=0; player.dashT=0;
   player.pos.set(0,0,0); rebuildWeapon();
   $("start").classList.remove("on"); $("death").classList.remove("on"); $("levelup").classList.remove("on"); $("hud").style.display="block";
 }
@@ -608,8 +633,8 @@ async function boot(){
   tick(); // start rendering immediately with primitive fallbacks (instant, mobile-friendly)
   // stream HD models in the background
   (async()=>{
-    await loadRiggedPlayer().catch(()=>{});   // animated ogre-biped player
-    loadEnv().catch(()=>{});                    // 3D swamp environment
+    await loadPlayerModel().catch(()=>{});      // OGRE player (rigged if available, else static ogre)
+    loadEnv().catch(()=>{});                     // 3D swamp environment
     const names=["fresh-slime","toxic-rug-slime","runner-slime","ogre-boss","mirebane-warlord"];
     for(const n of names){ await loadModel(n); }
   })();
