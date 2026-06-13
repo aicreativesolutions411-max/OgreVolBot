@@ -1411,6 +1411,10 @@ function startHealthServer() {
       await serveStaticHtmlPage(response, "replay.html");
       return;
     }
+    if (request.method === "GET" && ["/manual", "/guide", "/help"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "manual.html");
+      return;
+    }
 
     if (request.method === "GET" && /^[/](call|u|g|hype)([/]|$)/.test(requestUrl.pathname)) {
       await serveProofSharePage(requestUrl, request, response);
