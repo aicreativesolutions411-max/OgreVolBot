@@ -692,7 +692,7 @@ $("encShill").onclick=()=>{ if(!encC) return; const mint=encC.mint; const tUrl=(
 let catchSubT=null;
 function submitCatches(){ clearTimeout(catchSubT); catchSubT=setTimeout(async()=>{
   try{ await fetch(API+"/api/web/swamp-leaderboard",{method:"POST",headers:{"content-type":"application/json"},
-    body:JSON.stringify({mode:"catches",score:dexCount(),name:(store.lbName||"anon"),meta:"Lv"+level()})}); }catch(_){}
+    body:JSON.stringify({mode:"catches",score:dexCount(),name:(store.lbName||"anon"),clan:store.clan||"",meta:"Lv"+level()})}); }catch(_){}
 },800); }
 
 /* ---- dex ---- */

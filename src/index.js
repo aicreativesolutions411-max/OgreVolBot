@@ -1383,6 +1383,14 @@ function startHealthServer() {
       await serveStaticHtmlPage(response, "receipts.html");
       return;
     }
+    if (request.method === "GET" && (requestUrl.pathname === "/profile" || requestUrl.pathname.startsWith("/profile/"))) {
+      await serveStaticHtmlPage(response, "profile.html");
+      return;
+    }
+    if (request.method === "GET" && ["/crews", "/crew"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "crews.html");
+      return;
+    }
 
     if (request.method === "GET" && /^[/](call|u|g|hype)([/]|$)/.test(requestUrl.pathname)) {
       await serveProofSharePage(requestUrl, request, response);
@@ -2378,6 +2386,27 @@ async function handleWebApiRequest(request, response, requestUrl) {
       const body = await readJsonRequestBody(request, 4_000);
       const result = await submitCommunityRaid(body);
       sendWebJson(request, response, result.ok ? 200 : 400, result);
+      return;
+    }
+    // Crews: aggregate leaderboard scores by clan tag (TG/X groups compete).
+    if (request.method === "GET" && pathname === "/api/web/crews") {
+      const board = await readSwampLeaderboard().catch(() => ({ scores: [] }));
+      const crews = {};
+      for (const s of board.scores || []) {
+        const clan = String(s.clan || "").trim();
+        if (!clan) continue;
+        const c = (crews[clan] = crews[clan] || { clan, score: 0, members: new Set(), catches: 0, raids: 0, survival: 0 });
+        c.score += Number(s.score) || 0;
+        c.members.add(s.name);
+        if (s.mode === "catches") c.catches += Number(s.score) || 0;
+        else if (s.mode === "raids") c.raids += Number(s.score) || 0;
+        else if (s.mode === "survival") c.survival = Math.max(c.survival, Number(s.score) || 0);
+      }
+      const list = Object.values(crews)
+        .map((c) => ({ clan: c.clan, score: c.score, members: c.members.size, catches: c.catches, raids: c.raids, survival: c.survival }))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 50);
+      sendCachedWebJson(request, response, 200, { ok: true, crews: list }, "public, max-age=15, stale-while-revalidate=120");
       return;
     }
 
@@ -22917,17 +22946,20 @@ async function submitSwampScore(body = {}) {
   if (!score) return { ok: false, error: "no score" };
   let name = String(body.name || "anon").replace(/[^A-Za-z0-9_$. -]/g, "").slice(0, 16).trim() || "anon";
   const meta = String(body.meta || "").replace(/[^A-Za-z0-9_$.,: -]/g, "").slice(0, 40);
+  const clan = String(body.clan || "").replace(/[^A-Za-z0-9 _-]/g, "").slice(0, 12).trim();
   const store = await readSwampLeaderboard();
   // keep one best row per (mode,name): replace if this beats their prior best
   const idx = store.scores.findIndex((s) => s.mode === mode && s.name === name);
   if (idx >= 0) {
+    if (clan) store.scores[idx].clan = clan; // keep clan fresh even if score didn't beat
     if (score <= store.scores[idx].score) {
       const rank = store.scores.filter((s) => s.mode === mode && s.score > store.scores[idx].score).length + 1;
+      await writeJsonFile(swampLeaderboardPath(), store);
       return { ok: true, improved: false, best: store.scores[idx].score, rank };
     }
-    store.scores[idx] = { mode, name, score, meta, at: new Date().toISOString() };
+    store.scores[idx] = { mode, name, score, meta, clan, at: new Date().toISOString() };
   } else {
-    store.scores.push({ mode, name, score, meta, at: new Date().toISOString() });
+    store.scores.push({ mode, name, score, meta, clan, at: new Date().toISOString() });
   }
   // cap stored rows per mode to keep the file small
   const byMode = {};

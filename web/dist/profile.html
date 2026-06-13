@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Swamp Profile — SlimeWire</title>
+<meta name="description" content="A SlimeWire trader's Swamp profile — catches, raid score, survival, badges and crew. Build your identity, share your page.">
+<meta property="og:title" content="Swamp Profile — SlimeWire">
+<meta property="og:description" content="Catches, raids, survival, badges, crew. Build your swamp identity.">
+<meta property="og:image" content="https://www.slimewire.org/assets/slimewire/swamp/art/og-survivors.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="/assets/slimewire/svg/slimewire-mark.svg">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;700;800;900&display=swap" rel="stylesheet">
+<style>
+  :root{ --bg:#0a0d12;--card:#11171f;--line:rgba(255,255,255,0.08);--line2:rgba(255,255,255,0.14);--tx:#e8edf4;--dim:#8c97a7;--green:#5fe08a;--green2:#9fffb5;--gold:#ffcf5a;--blue:#5ab0ff;--purp:#a98bff;--red:#ff6b6b; --cLeg:#ffcf5a;--cEpic:#a98bff;--cRare:#5ab0ff;--cUnc:#5fe08a;--cCom:#9fb3a3; }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;background:var(--bg);color:var(--tx);font-family:Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased;}
+  a{color:inherit;text-decoration:none;}
+  .wrap{max-width:760px;margin:0 auto;padding:0 16px calc(60px + env(safe-area-inset-bottom));}
+  header.top{position:sticky;top:0;z-index:10;background:rgba(10,13,18,0.82);backdrop-filter:blur(14px);border-bottom:1px solid var(--line);}
+  .topin{max-width:760px;margin:0 auto;display:flex;align-items:center;gap:14px;padding:11px 16px;}
+  .brand{display:flex;align-items:center;gap:9px;font-weight:900;} .brand img{width:26px;height:26px;} .brand b{color:var(--green);}
+  .navlinks{margin-left:auto;display:flex;gap:6px;} .navlinks a{color:var(--dim);font-weight:700;font-size:0.88rem;padding:7px 12px;border-radius:9px;}
+  .navlinks a:hover{color:var(--tx);background:rgba(255,255,255,0.05);} .navlinks a.cta{color:#08120b;background:linear-gradient(135deg,var(--green),var(--green2));}
+  .head{display:flex;gap:16px;align-items:center;margin-top:24px;background:linear-gradient(180deg,var(--card),#0d121a);border:1px solid var(--line);border-radius:18px;padding:20px;}
+  .av{width:84px;height:84px;border-radius:18px;background:#0a0f15;border:1px solid var(--line2);display:flex;align-items:center;justify-content:center;font-size:2.4rem;overflow:hidden;flex:0 0 84px;}
+  .av img{width:100%;height:100%;object-fit:contain;}
+  .who h1{margin:0;font-size:1.6rem;font-weight:900;}
+  .who .clan{color:var(--purp);font-weight:800;font-size:0.9rem;}
+  .who .lvl{color:var(--dim);font-weight:700;font-size:0.85rem;margin-top:2px;}
+  .stats{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px;}
+  @media(min-width:520px){.stats{grid-template-columns:1fr 1fr 1fr 1fr;}}
+  .st{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;text-align:center;}
+  .st .n{font-weight:900;font-size:1.5rem;} .st .l{color:var(--dim);font-size:0.7rem;font-weight:800;text-transform:uppercase;letter-spacing:0.5px;margin-top:2px;}
+  .sect{margin-top:22px;} .sect h2{font-size:1rem;font-weight:900;margin:0 0 10px;}
+  .badges{display:flex;gap:8px;flex-wrap:wrap;}
+  .badge{background:var(--card);border:1px solid var(--line2);border-radius:99px;padding:8px 14px;font-weight:800;font-size:0.82rem;}
+  .badge.on{border-color:var(--green);color:var(--green2);} .badge.off{opacity:0.4;}
+  .rar{display:flex;gap:8px;flex-wrap:wrap;}
+  .rchip{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 12px;font-weight:800;font-size:0.84rem;}
+  .ctas{display:flex;gap:10px;flex-wrap:wrap;margin-top:22px;}
+  .btn{flex:1;min-width:140px;text-align:center;border-radius:12px;padding:14px;font-weight:900;cursor:pointer;border:0;font-size:0.92rem;}
+  .btn.p{background:linear-gradient(135deg,var(--green),var(--green2));color:#08120b;} .btn.g{background:rgba(255,255,255,0.05);border:1px solid var(--line2);color:var(--tx);} .btn.x{background:#000;border:1px solid var(--line2);color:#fff;}
+  .foot{color:var(--dim);font-size:0.8rem;text-align:center;padding:30px 0 10px;} .foot a{color:var(--green);}
+  .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);background:#161d27;border:1px solid var(--line2);color:var(--tx);padding:11px 20px;border-radius:12px;font-weight:800;opacity:0;transition:.25s;z-index:30;pointer-events:none;} .toast.on{opacity:1;}
+  .spin{width:32px;height:32px;border-radius:50%;border:3px solid rgba(255,255,255,0.1);border-top-color:var(--green);animation:sp 1s linear infinite;margin:40px auto;}@keyframes sp{to{transform:rotate(360deg);}}
+</style>
+</head>
+<body>
+<header class="top"><div class="topin">
+  <a class="brand" href="/"><img src="/assets/slimewire/svg/slimewire-mark.svg" alt="" onerror="this.style.display='none'">Slime<b>Wire</b></a>
+  <nav class="navlinks"><a href="/swamp">🐸 Swamp</a><a href="/raids">🔥 Raids</a><a href="/crews">👥 Crews</a><a class="cta" href="/terminal">Terminal</a></nav>
+</div></header>
+<div class="wrap"><div id="content"><div class="spin"></div></div>
+  <div class="foot">SlimeWire · <a href="/swamp">play the Swamp</a> · <a href="/receipts">make your card</a></div>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+"use strict";
+(function(){
+const $=(s)=>document.querySelector(s);
+const API=(location.hostname.includes("onrender.com")||location.hostname==="localhost"||location.hostname==="127.0.0.1")?"":"https://ogrevolbot.onrender.com";
+const SITE="https://www.slimewire.org";
+const KEY="slimewireSwamp";
+const store=(()=>{try{return JSON.parse(localStorage.getItem(KEY)||"{}");}catch{return{};}})();
+const num=(v)=>{const n=Number(v);return isFinite(n)?n:0;};
+let toastT;function toast(m){const t=$("#toast");t.textContent=m;t.classList.add("on");clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove("on"),2000);}
+function esc(s){return String(s).replace(/[<>&]/g,c=>({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]));}
+// who?
+const parts=location.pathname.split("/").filter(Boolean);
+let pname = parts[0]==="profile"&&parts[1] ? decodeURIComponent(parts[1]) : (new URLSearchParams(location.search).get("name")||"");
+pname=pname.replace(/[^A-Za-z0-9_]/g,"").slice(0,16);
+const isMe = !pname || pname===(store.lbName||"");
+const name = isMe ? (store.lbName||"anon") : pname;
+function dexEntries(){ const d=store.dex&&typeof store.dex==="object"?store.dex:{}; return Object.values(d); }
+function worthAvg(){ const e=dexEntries().filter(c=>num(c.mc)>0&&num(c.mcNow)>0); if(!e.length)return null; let s=0; for(const c of e)s+=c.mcNow/c.mc; return s/e.length; }
+function level(){ return Math.max(1,Math.floor(Math.sqrt(num(store.xp)/40))+1); }
+function rarCounts(){ const c={legendary:0,epic:0,rare:0,uncommon:0,common:0}; for(const e of dexEntries())if(c[e.rarity]!=null)c[e.rarity]++; return c; }
+
+async function lbRank(mode,nm){ try{ const r=await fetch(API+"/api/web/swamp-leaderboard?mode="+mode,{cache:"no-store"}); const j=await r.json();
+  const rows=(j&&j.scores)||[]; const i=rows.findIndex(s=>s.name===nm); return i>=0?{rank:i+1,score:rows[i].score,clan:rows[i].clan}:null; }catch{ return null; } }
+
+async function render(){
+  const box=$("#content");
+  let catches=0, raidPts=0, survival=0, worth=null, clan=store.clan||"", lvl=1, rarities=null;
+  if(isMe){ catches=dexEntries().length; raidPts=num(store.raidPts); survival=num(store.survBest); worth=worthAvg(); clan=store.clan||""; lvl=level(); rarities=rarCounts(); }
+  else {
+    const [c,rd,sv]=await Promise.all([lbRank("catches",name),lbRank("raids",name),lbRank("survival",name)]);
+    catches=c?c.score:0; raidPts=rd?rd.score:0; survival=sv?sv.score:0; clan=(c&&c.clan)||(rd&&rd.clan)||(sv&&sv.clan)||"";
+  }
+  const badges=[
+    {on:catches>=1,t:"🥚 First Catch"},{on:catches>=10,t:"📖 Collector"},{on:catches>=25,t:"🐸 Swamp Whale"},
+    {on:(rarities&&rarities.legendary>0)||catches>=50,t:"🌟 Legendary Hunter"},{on:raidPts>=50,t:"⚔️ Raider"},
+    {on:raidPts>=200,t:"🔥 Raid Lord"},{on:survival>=2000,t:"💀 Survivor"},{on:!!clan,t:"👥 Crew Member"},
+  ];
+  const av = isMe ? "🐸" : "🧑";
+  box.innerHTML=`
+    <div class="head">
+      <div class="av">${av}</div>
+      <div class="who">
+        <h1>@${esc(name)}</h1>
+        ${clan?`<div class="clan">[${esc(clan)}]</div>`:""}
+        <div class="lvl">${isMe?("Level "+lvl+" trainer"):"SlimeWire trader"}</div>
+      </div>
+    </div>
+    <div class="stats">
+      <div class="st"><div class="n" style="color:var(--cRare)">${catches}</div><div class="l">Caught</div></div>
+      <div class="st"><div class="n" style="color:var(--gold)">${worth?worth.toFixed(2)+"x":"—"}</div><div class="l">Swamp Worth</div></div>
+      <div class="st"><div class="n" style="color:var(--red)">${raidPts}</div><div class="l">Raid Pts</div></div>
+      <div class="st"><div class="n">${survival.toLocaleString()}</div><div class="l">Best Survival</div></div>
+    </div>
+    <div class="sect"><h2>🏅 Badges</h2><div class="badges">${badges.map(b=>`<span class="badge ${b.on?'on':'off'}">${b.t}</span>`).join("")}</div></div>
+    ${rarities?`<div class="sect"><h2>📖 Dex rarities</h2><div class="rar">
+      <span class="rchip" style="color:var(--cLeg)">★ ${rarities.legendary}</span>
+      <span class="rchip" style="color:var(--cEpic)">Epic ${rarities.epic}</span>
+      <span class="rchip" style="color:var(--cRare)">Rare ${rarities.rare}</span>
+      <span class="rchip" style="color:var(--cUnc)">Unc ${rarities.uncommon}</span>
+      <span class="rchip" style="color:var(--cCom)">Com ${rarities.common}</span></div></div>`:""}
+    <div class="ctas">
+      <a class="btn p" href="/swamp">🐸 ${isMe?"Play The Swamp":"Play too"}</a>
+      ${isMe?'<a class="btn g" href="/receipts">🪪 Make my card</a>':""}
+      <button class="btn x" id="share">𝕏 Share ${isMe?"my":"this"} profile</button>
+    </div>`;
+  $("#share").onclick=()=>{ const url=SITE+"/profile/"+encodeURIComponent(name);
+    const txt=isMe?`My SlimeWire Swamp profile 🐸 — ${catches} caught, ${raidPts} raid pts. Catch live coins + raid bosses 👇`:`Check @${name}'s SlimeWire Swamp profile 🐸`;
+    window.open("https://twitter.com/intent/tweet?text="+encodeURIComponent(txt)+"&url="+encodeURIComponent(url),"_blank"); };
+}
+render();
+})();
+</script>
+</body>
+</html>

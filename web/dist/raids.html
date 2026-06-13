@@ -239,7 +239,7 @@ function joinRaid(mint,sym,btn){
 let subT; function submitRaid(){ clearTimeout(subT); subT=setTimeout(async()=>{
   const tag=($("#tag").value||store.lbName||"").trim(); if(tag){ store.lbName=tag.slice(0,16); save(); }
   try{ await fetch(API+"/api/web/swamp-leaderboard",{method:"POST",headers:{"content-type":"application/json"},
-    body:JSON.stringify({mode:"raids",score:store.raidPts||0,name:(store.lbName||"anon"),meta:Object.keys(store.raided).length+" bosses"})}); }catch(_){}
+    body:JSON.stringify({mode:"raids",score:store.raidPts||0,name:(store.lbName||"anon"),clan:store.clan||"",meta:Object.keys(store.raided).length+" bosses"})}); }catch(_){}
   loadLb(curLb);
 },700); }
 
