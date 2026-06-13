@@ -206,6 +206,31 @@ const texLoader = new THREE.TextureLoader();
   ring.rotation.x=-Math.PI/2; ring.position.y=0.05; scene.add(ring);
 }
 
+// ---------- arena decoration (perimeter trees + rocks, never blocks play) ----------
+(function decorateArena(){
+  const trunkMat=new THREE.MeshStandardMaterial({color:0x2a1d10, roughness:1});
+  const leafMat=new THREE.MeshStandardMaterial({color:0x215a28, roughness:1});
+  const leafMat2=new THREE.MeshStandardMaterial({color:0x2f7a34, roughness:1});
+  const rockMat=new THREE.MeshStandardMaterial({color:0x39414f, roughness:1});
+  const R=50, N=30;
+  for(let i=0;i<N;i++){
+    const a=i/N*Math.PI*2, r=R+(i%3)*3, x=Math.cos(a)*r, z=Math.sin(a)*r;
+    if(i%4===0){
+      const rock=new THREE.Mesh(new THREE.DodecahedronGeometry(1.6+(i%3)*0.7), rockMat);
+      rock.position.set(x,0.7,z); rock.rotation.set(i,i*0.7,0); rock.castShadow=true; scene.add(rock);
+    } else {
+      const g=new THREE.Group();
+      const trunk=new THREE.Mesh(new THREE.CylinderGeometry(0.55,0.85,7,6), trunkMat); trunk.position.y=3.5; trunk.castShadow=true; g.add(trunk);
+      const c1=new THREE.Mesh(new THREE.IcosahedronGeometry(3,0), leafMat); c1.position.y=7.5; c1.castShadow=true; g.add(c1);
+      const c2=new THREE.Mesh(new THREE.IcosahedronGeometry(2,0), leafMat2); c2.position.set(1.4,6.4,0.6); g.add(c2);
+      g.position.set(x,0,z); g.rotation.y=i; g.scale.setScalar(1+(i%3)*0.35); scene.add(g);
+    }
+  }
+  // central bonfire visual (matches the warm point light at 0,6,0)
+  const fire=new THREE.Mesh(new THREE.ConeGeometry(1.2,3,8), new THREE.MeshBasicMaterial({color:0xff7a2a, fog:false}));
+  fire.position.set(0,1.5,-8); scene.add(fire);
+})();
+
 // ---------- post (bloom) ----------
 const fxComposer = new EffectComposer(renderer);
 fxComposer.addPass(new RenderPass(scene, camera));
@@ -639,7 +664,10 @@ async function boot(){
   // stream HD models in the background
   (async()=>{
     await loadPlayerModel().catch(()=>{});      // OGRE player (rigged if available, else static ogre)
-    loadEnv().catch(()=>{});                     // 3D swamp environment
+    // NOTE: the full 3D environment mesh engulfed the camera — disabled for a
+    // clean, readable arena (textured ground + fog + decor). Re-add later, placed
+    // around the perimeter only.
+    // loadEnv().catch(()=>{});
     const names=["fresh-slime","toxic-rug-slime","runner-slime","ogre-boss","mirebane-warlord"];
     for(const n of names){ await loadModel(n); }
   })();
