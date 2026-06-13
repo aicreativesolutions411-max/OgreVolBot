@@ -15208,7 +15208,8 @@ async function handleLaunchBuilder(chatId, userId, data, messageId) {
     await showLaunchBuilder(chatId, userId, messageId);
     return;
   }
-  if (data === "lb_go") { await executeBotLaunch(chatId, userId, messageId); return; }
+  if (data === "lb_go") { await showLaunchConfirm(chatId, userId, messageId); return; }
+  if (data === "lb_confirm") { await executeBotLaunch(chatId, userId, messageId); return; }
   if (data.startsWith("lb_edit:")) {
     const field = data.slice("lb_edit:".length);
     const f = LAUNCH_FIELDS[field];
@@ -15218,6 +15219,27 @@ async function handleLaunchBuilder(chatId, userId, data, messageId) {
     return;
   }
   await showLaunchBuilder(chatId, userId, messageId); // launch_build_menu
+}
+async function showLaunchConfirm(chatId, userId, messageId) {
+  const d = launchDraftFor(chatId);
+  if (!d.name || !d.symbol) { await say(chatId, "Add a Name and Ticker first."); return; }
+  const w = await launchBuilderWalletLabel(chatId, userId, d);
+  const dev = Number(d.devBuySol) > 0 ? `${d.devBuySol} SOL dev buy` : "no dev buy";
+  await sendOrEditMessage(chatId, messageId, withBrandFooter([
+    "⚠️ Confirm launch — this mints ON-CHAIN and spends REAL SOL.",
+    "",
+    `Coin: ${d.name} ($${d.symbol})`,
+    `Image: ${d.imageDataUrl ? "✅" : "none"}`,
+    `Wallet: ${w.label}`,
+    `Dev buy: ${dev}`,
+    "",
+    "Make sure that wallet holds enough SOL (mint fee + buffer + your dev buy). This can't be undone."
+  ].join("\n")), {
+    inline_keyboard: [
+      [{ text: "✅ Confirm & Launch", callback_data: "lb_confirm" }],
+      [{ text: "⬅ Back", callback_data: "launch_build_menu" }]
+    ]
+  });
 }
 async function executeBotLaunch(chatId, userId, messageId) {
   const d = launchDraftFor(chatId);
