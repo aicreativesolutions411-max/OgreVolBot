@@ -22,3 +22,6 @@ trailer-*.png
 .playwright-mcp/
 media-out/
 
+
+# raw 3D model sources (too big to commit)
+/asset-source/
