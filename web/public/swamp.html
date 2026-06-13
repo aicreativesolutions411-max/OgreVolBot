@@ -46,6 +46,10 @@
   .combometer .cbar{width:120px; height:5px; border-radius:3px; background:rgba(0,0,0,0.5); overflow:hidden;}
   .combometer .cbarfill{height:100%; width:100%; background:linear-gradient(90deg,#72ff23,#bbff63); transition:width .08s linear;}
   .combometer.hot .cbarfill{background:linear-gradient(90deg,#ffae3a,#ffd24a);}
+  .battlebanner{position:absolute; top:32%; left:0; right:0; text-align:center; pointer-events:none; z-index:6; opacity:0; transform:scale(0.8); transition:opacity .15s, transform .15s;}
+  .battlebanner.on{opacity:1; transform:scale(1);}
+  .battlebanner .bt{font-family:Cinzel,serif; font-weight:900; font-size:2.2rem; color:#fff; text-shadow:0 0 18px rgba(0,0,0,0.9),0 3px 6px #000; letter-spacing:1px;}
+  .battlebanner .bs{font-weight:800; font-size:0.95rem; color:#eaffe0; text-shadow:0 2px 4px #000; margin-top:2px;}
   .ehp{height:12px;border-radius:99px;background:rgba(255,90,80,0.15);border:1px solid rgba(255,120,80,0.4);overflow:hidden;margin:2px 0 6px;}
   .ehpfill{height:100%;background:linear-gradient(90deg,#ff5e5e,#ffd84d);transition:width .2s;}
   .overlay{position:fixed; inset:0; z-index:10; display:none; align-items:center; justify-content:center; flex-direction:column; text-align:center;
@@ -145,6 +149,7 @@
       <div class="quest" id="quest"></div>
     </div>
     <div class="combometer" id="combo"><span class="cx" id="comboN">x2</span><div class="cbar"><div class="cbarfill" id="comboBar"></div></div></div>
+    <div class="battlebanner" id="banner"><div class="bt" id="bannerT"></div><div class="bs" id="bannerS"></div></div>
     <div class="topbtns">
       <button class="tbtn" id="mute" title="sound">🔊</button>
       <button class="tbtn" id="exit" title="exit">✕</button>
@@ -310,7 +315,8 @@ const OGRE_BY_TIER={
 const MOB_OGRES=[OGRE.goblin,OGRE.rug,OGRE.zombie,OGRE.ninja,OGRE.lava];
 let HEROES=[]; // resolved {name,sprite,scale,req,hint}
 function buildHeroes(){ HEROES=HERO_DEFS.map(d=>({ name:d.name, sprite:d.sprite, scale:d.scale||1, req:d.req||null, hint:d.hint||"" }));
-  try{ Object.values(OGRE).forEach(p=>img(p)); }catch(_){} } // warm all ogre sprites
+  try{ Object.values(OGRE).forEach(p=>img(p)); }catch(_){} // warm all ogre sprites
+  try{ for(const b of BUILDINGS_DEF){ b.sprite="/assets/slimewire/swamp/buildings-hd/bld-"+b.id+".png"; img(b.sprite); } }catch(_){} }
 function heroUnlocked(h){ const r=h&&h.req; if(!r) return true;
   if(r.catches!=null && dexCount()<r.catches) return false;
   if(r.kills!=null && (store.kills||0)<r.kills) return false;
@@ -341,7 +347,7 @@ async function loadAssets(){
     A.creatures=cchars.map(ch=>{ const fs=cwf.filter(f=>f.character===ch).sort((a,b)=>(a.frame||0)-(b.frame||0)); const d=fs.find(f=>f.direction==="down")||fs[0]; return d&&d.path; }).filter(Boolean);
     A.creatures.forEach(p=>img(p)); A.bosses.forEach(p=>img(p)); // warm clean creature + boss sprites
     // assign + warm a detailed building sprite per structure (deterministic)
-    if(A.buildings.length){ for(const b of BUILDINGS_DEF){ b.sprite=A.buildings[hash("bld:"+b.id)%A.buildings.length]; img(b.sprite); } }
+    for(const b of BUILDINGS_DEF){ b.sprite="/assets/slimewire/swamp/buildings-hd/bld-"+b.id+".png"; img(b.sprite); } // custom HD building art
   }catch(_){ A.players=FALLBACK_PLAYERS; A.statics=[]; A.bosses=[]; A.buildings=[]; A.creatures=[]; }
   buildHeroes(); (HEROES||[]).forEach(h=>{ if(h.sprite) img(h.sprite); }); // resolve + warm ogre roster
   A.loaded=true;
@@ -623,7 +629,8 @@ function connectWS(){
     }
     else if(m.type==="ko"){
       if(m.by===myId){ store.pvpWins=(store.pvpWins||0)+1; store.raidPts=(store.raidPts||0)+10; store.xp+=25; save(); refreshHud(); sfx("catch",0.4);
-        burst(player.x,player.y-20,"#ffd24a",18); addShake(8); toast("💥 KO #"+store.pvpWins+"! You slimed "+(m.victimName||"a trader")+" — +10 raid pts +25 xp"); } }
+        burst(player.x,player.y-20,"#ffd24a",18); addShake(10); hitstop=Math.max(hitstop,0.12); showBanner("💥 VICTORY","KO #"+store.pvpWins+" · +10 raid pts","#ffd24a"); submitPvp();
+        toast("💥 KO #"+store.pvpWins+"! You slimed "+(m.victimName||"a trader")); } }
     };
   sock.onclose=()=>{ wsOk=false; RP.clear(); scheduleReconnect(); };
   sock.onerror=()=>{ try{ sock.close(); }catch{} };
@@ -662,6 +669,10 @@ setInterval(()=>{ if(state==="world"){ refillBalls(); manageMobs(); refreshHud()
 /* ---- HUD ---- */
 let toastT=null;
 function toast(msg){ const t=$("toast"); if(!t) return; t.textContent=msg; t.classList.add("on"); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove("on"),1900); }
+let bannerT=null;
+function showBanner(title,sub,col){ const b=$("banner"); if(!b) return; const t=$("bannerT"),s=$("bannerS");
+  if(t){ t.textContent=title; t.style.color=col||"#fff"; } if(s) s.textContent=sub||"";
+  b.classList.add("on"); clearTimeout(bannerT); bannerT=setTimeout(()=>b.classList.remove("on"),1500); }
 function refreshHud(){
   $("lvl").textContent="Lv "+level();
   $("balls").textContent="🟢 "+store.balls;
@@ -674,9 +685,10 @@ function refreshHud(){
   const wild=creatures.length, rare=creatures.filter(c=>c.rar.k!=="common").length, hostiles=mobs.length;
   const clan=store.clan?`[${store.clan}] `:"";
   const online = wsOk ? ` · 👥 ${RP.size+1} online` : "";
+  const wins = store.pvpWins>0 ? ` · ⚔️ ${store.pvpWins} KO` : "";
   $("quest").textContent= clan + (rs.live
     ? `⚔️ RAID LIVE — ${hostiles} hostiles about. Fight for loot!`
-    : `${wild} coins${rare?` · ${rare} rare 👀`:""} · ${hostiles} mobs · base Lv${store.baseLv}`) + online;
+    : `${wild} coins${rare?` · ${rare} rare 👀`:""} · ${hostiles} mobs · base Lv${store.baseLv}`) + online + wins;
 }
 
 /* ---- input ---- */
@@ -708,8 +720,10 @@ function playerSwing(){ if(state!=="world"||!player||player.atkCd>0) return; pla
   if(tkind==="mob") attackMob(); else if(tkind==="foe") attackFoe();
   fireWeapon(tx,ty); // fire the equipped weapon (always, so there's motion even with no target)
 }
+let lastBattleCue=0;
 function attackFoe(){ const f=nearFoe; if(!f) return; const dmg=Math.round((10+Math.floor(level()/2))*dmgMult());
   bumpCombo(); impactFX(f.x,f.y,player.x,player.y,"#ff7bd0",false);
+  if(performance.now()-lastBattleCue>7000){ lastBattleCue=performance.now(); showBanner("⚔️ BATTLE","sling slimeballs to KO "+(f.name||"them")+"!","#ff7bd0"); sfx("boss",0.3); }
   try{ if(wsOk&&sock&&sock.readyState===1) sock.send(JSON.stringify({type:"hit",to:f.id,dmg})); }catch(_){} }
 function attackMob(){ const m=nearMob; if(!m) return;
   const dmg=Math.round((22+level()*2)*dmgMult()); m.hp-=dmg; m.flash=0.16; bumpCombo();
@@ -1066,6 +1080,8 @@ function submitCatches(){ clearTimeout(catchSubT); catchSubT=setTimeout(async()=
   try{ await fetch(API+"/api/web/swamp-leaderboard",{method:"POST",headers:{"content-type":"application/json"},
     body:JSON.stringify({mode:"catches",score:dexCount(),name:(store.lbName||"anon"),clan:store.clan||"",meta:"Lv"+level()})}); }catch(_){}
 },800); }
+function submitPvp(){ if(!(store.pvpWins>0)) return; try{ fetch(API+"/api/web/swamp-leaderboard",{method:"POST",headers:{"content-type":"application/json"},
+  body:JSON.stringify({mode:"pvp",score:store.pvpWins,name:(store.lbName||"anon"),clan:store.clan||"",meta:"Lv"+level()})}).catch(()=>{}); }catch(_){} }
 
 /* ---- dex ---- */
 function openDex(){ state="dex"; $("prompt").classList.remove("on");
