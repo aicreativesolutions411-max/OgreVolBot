@@ -221,6 +221,12 @@
 "use strict";
 (function(){
 const $=(id)=>document.getElementById(id);
+// Boot safety net: never leave the user on an infinite "entering the swamp…"
+// spinner. Any uncaught error (or a >10s hang) reveals the Reload overlay.
+function showErr(){ try{ const e=document.getElementById("err"); if(e) e.style.display="flex"; const l=document.getElementById("load"); if(l) l.style.display="none"; }catch(_){ } }
+window.addEventListener("error",function(){ try{ if(!A.loaded) showErr(); }catch(_){ showErr(); } });
+window.addEventListener("unhandledrejection",function(){ try{ if(!A.loaded) showErr(); }catch(_){ } });
+setTimeout(function(){ const l=document.getElementById("load"); if(l && l.style.display!=="none"){ try{ showTitle(); }catch(_){ showErr(); } } },10000);
 const cv=$("cv"), ctx=cv.getContext("2d");
 let W=0,H=0,DPR=1;
 function resize(){ DPR=Math.min(2,window.devicePixelRatio||1); W=window.innerWidth; H=window.innerHeight;
@@ -326,11 +332,31 @@ async function loadAssets(){
 }
 function preloadFramesNoop(){}
 function drawShadow(x,y,r){ ctx.fillStyle="rgba(0,0,0,0.34)"; ctx.beginPath(); ctx.ellipse(x,y+r*0.72,r*0.95,r*0.4,0,0,6.2832); ctx.fill(); }
+// EVERY library sprite ships with a faint semi-transparent square background/frame
+// (the "boxes"). Clean each one ONCE: drop low-alpha pixels + trim to the opaque
+// character, cache the result. Same-origin assets so no canvas taint.
+const cleanCache=new Map();
+function cleanedSprite(path){ if(!path) return null; if(cleanCache.has(path)) return cleanCache.get(path);
+  const im=img(path); if(!ready(im)) return null;
+  try{
+    const iw=im.naturalWidth, ih=im.naturalHeight;
+    const oc=document.createElement("canvas"); oc.width=iw; oc.height=ih; const octx=oc.getContext("2d");
+    octx.drawImage(im,0,0); const id=octx.getImageData(0,0,iw,ih), d=id.data;
+    let minX=iw,minY=ih,maxX=0,maxY=0,any=false;
+    for(let i=0;i<d.length;i+=4){ const a=d[i+3]; if(a<130){ d[i+3]=0; } else { any=true; const px=(i>>2)%iw, py=(i>>2)/iw|0; if(px<minX)minX=px; if(px>maxX)maxX=px; if(py<minY)minY=py; if(py>maxY)maxY=py; } }
+    if(!any){ cleanCache.set(path,null); return null; }
+    octx.putImageData(id,0,0);
+    const pad=2; minX=Math.max(0,minX-pad); minY=Math.max(0,minY-pad); maxX=Math.min(iw-1,maxX+pad); maxY=Math.min(ih-1,maxY+pad);
+    const tw=maxX-minX+1, th=maxY-minY+1; const tc=document.createElement("canvas"); tc.width=tw; tc.height=th;
+    tc.getContext("2d").drawImage(oc,minX,minY,tw,th,0,0,tw,th);
+    cleanCache.set(path,tc); return tc;
+  }catch(_){ cleanCache.set(path,im); return im; }
+}
 // draw ONE clean full character sprite at its true aspect, foot-anchored, with
 // procedural motion (bob + squash + left-flip). No frame cycling = no cut-off/ghosting.
 function drawChar(e,path,h,alpha){
-  const im=img(path); if(ready(im)) e._img=im; const u=ready(im)?im:e._img; if(!ready(u)) return false;
-  const w=h*(u.naturalWidth/u.naturalHeight);
+  const c=cleanedSprite(path); if(c) e._img=c; const u=c||e._img; if(!u) return false;
+  const w=h*(u.width/u.height);
   const moving=!!e._mv, ph=(e.walkT||0)*11;
   const bob = moving ? Math.abs(Math.sin(ph))*h*0.05 : Math.sin((e.walkT||0)*2.2)*h*0.012;
   let sx  = moving ? 1+Math.sin(ph*2)*0.04 : 1;
