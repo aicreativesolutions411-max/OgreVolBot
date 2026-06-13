@@ -53,7 +53,11 @@
   .heroes{display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; justify-content:center;}
   .hero{width:62px; height:62px; border-radius:14px; background:rgba(8,20,10,0.7); border:2px solid rgba(114,255,35,0.2); cursor:pointer; display:flex; align-items:center; justify-content:center; overflow:hidden;}
   .hero.sel{border-color:var(--green); box-shadow:0 0 16px rgba(114,255,35,0.5);}
+  .hero.locked{opacity:0.45; filter:grayscale(1); font-size:1.6rem; align-items:center;}
   .hero img{width:100%; height:100%; object-fit:contain; image-rendering:auto;}
+  .daily{margin-top:12px; display:inline-flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:center; background:rgba(70,232,255,0.1); border:1px solid rgba(70,232,255,0.35); border-radius:99px; padding:7px 16px; max-width:460px;}
+  .daily span{color:var(--dim); font-size:0.74rem; font-weight:800; letter-spacing:1px;}
+  .daily b{color:var(--blue); font-size:0.95rem;}
   .ctaRow{display:flex; gap:8px; margin-top:14px; width:100%; max-width:400px;}
   .ctaRow a{flex:1; text-align:center; text-decoration:none; border-radius:99px; padding:13px; font-weight:900; font-size:0.92rem;}
   .ape{background:linear-gradient(135deg,var(--green),var(--green2)); color:#071006;}
@@ -133,6 +137,7 @@
     <div class="tag">degen wave survival</div>
     <p>You're loose in <b>The Swamp</b>. Endless waves of memecoin creatures want you dead. Auto-blast them, stack <b>6 weapons</b>, level up, and survive. Every 5th wave: a <b>BOSS born from a real SlimeWire launch</b> — slay it, ape it.</p>
     <div class="heroes" id="heroes"></div>
+    <div class="daily" id="daily"></div>
     <div class="buffbox" id="buffbox"></div>
     <button class="big" id="play">▶ ENTER THE SWAMP</button>
     <div id="best" style="color:var(--dim);margin-top:12px;font-size:0.86rem"></div>
@@ -373,6 +378,43 @@ const PASSIVES={
   xp:{ name:"Alpha Leak", icon:"📈", desc:"+20% XP gained.", apply(){ player.xpMult*=1.20; } },
   area:{ name:"Big Plays", icon:"🌐", desc:"+15% area / projectile size.", apply(){ player.area*=1.15; } },
 };
+// weapon EVOLUTIONS — unlock at max level (the big payoff)
+const EVO={
+  slimeball:{ name:"Slime Cannon", icon:"☄️", boost(s){ s.dmg*=1.9; s.count+=2; s.cd*=0.6; s.pierce+=2; } },
+  candles:{ name:"Green Candle Storm", icon:"📈", boost(s){ s.count+=4; s.dmg*=1.6; s.pierce+=3; s.cd*=0.7; } },
+  orbit:{ name:"Diamond Constellation", icon:"💠", boost(s){ s.count+=3; s.dmg*=1.7; s.radius+=40; s.speed*=1.4; } },
+  bagbomb:{ name:"Nuke Bags", icon:"☢️", boost(s){ s.dmg*=2.2; s.radius+=70; s.count+=1; s.cd*=0.7; } },
+  laser:{ name:"Death Ray", icon:"🔺", boost(s){ s.dmg*=2; s.width+=40; s.cd*=0.55; s.len+=160; } },
+  toxic:{ name:"Rug Apocalypse", icon:"☣️", boost(s){ s.dmg*=1.8; s.radius+=60; s.count+=2; s.life+=2; } },
+};
+// DAILY CHALLENGE — deterministic modifier per day (replay hook)
+const DAILY=[
+  { id:"none", name:"Open Swamp", desc:"Standard run. Pure survival.", apply(){} },
+  { id:"glass", name:"Glass Cannon", desc:"+60% damage, but half HP. Degen mode.", apply(){ player.dmgMult*=1.6; player.maxhp*=0.5; player.hp=player.maxhp; } },
+  { id:"swarm", name:"Swarm Day", desc:"Way more creatures, +35% XP.", apply(){ G._swarm=1.6; player.xpMult*=1.35; } },
+  { id:"bull", name:"Bull Market", desc:"Double XP gems — level fast.", apply(){ player.xpMult*=2; } },
+  { id:"bossrush", name:"Boss Rush", desc:"Bosses every 3rd wave. Big risk, big bags.", apply(){ G._bossEvery=3; } },
+  { id:"speed", name:"Degen Speed", desc:"Everything 25% faster. Hold on.", apply(){ player.spdMult*=1.25; G._fast=1.25; } },
+];
+function dailyMod(){
+  const d=new Date(); const seed=(d.getUTCFullYear()*1000)+(d.getUTCMonth()*40)+d.getUTCDate();
+  return DAILY[seed%DAILY.length];
+}
+// HEROES unlock gates (index → requirement); index 0 always open
+const HERO_GATES=[
+  null,
+  { kind:"best", n:2000, label:"Score 2,000 in a run" },
+  { kind:"caught", n:5, label:"Catch 5 coins on SlimeWire" },
+  { kind:"best", n:8000, label:"Score 8,000 in a run" },
+  { kind:"caught", n:15, label:"Catch 15 coins on SlimeWire" },
+  { kind:"best", n:20000, label:"Score 20,000 in a run" },
+];
+function heroUnlocked(i){
+  const g=HERO_GATES[i]; if(!g) return true;
+  if(g.kind==="best") return (store.survBest||0)>=g.n;
+  if(g.kind==="caught") return caughtCount()>=g.n;
+  return true;
+}
 
 /* ============================ entities & pools ============================ */
 let player=null;
@@ -412,7 +454,8 @@ function newRun(){
       weapons:[ mkWeapon("slimeball") ], boss:null, bossKills:[], buffs, ended:false };
   enemies=[]; projs=[]; gems=[]; parts=[]; floats=[]; puddles=[]; beams=[]; anims=[];
   camx=0; camy=0; shake=0; hitstop=0;
-  // orbit init if owned later
+  G._swarm=1; G._fast=1; G._bossEvery=5;
+  G.daily=dailyMod(); try{ G.daily.apply(); }catch(_){}
   refreshWepUI();
 }
 function mkWeapon(id){ const w={id,lvl:1,cd:0,s:scaleWeapon(id,1),angle:Math.random()*6.28}; return w; }
@@ -428,6 +471,9 @@ function addOrUpgrade(id){
 /* ============================ upgrade picker ============================ */
 function buildOffer(){
   const pool=[];
+  // EVOLUTIONS first — maxed weapons that can evolve (highest priority)
+  const evos=[];
+  for(const w of G.weapons){ if(w.lvl>=8 && !w.evolved && EVO[w.id]) evos.push({type:"evo",id:w.id}); }
   // weapon upgrades for owned (not maxed)
   for(const w of G.weapons){ if(w.lvl<8) pool.push({type:"wep",id:w.id,lvl:w.lvl}); }
   // new weapons if room (<6)
@@ -446,6 +492,8 @@ function buildOffer(){
   }
   // guarantee 3 with passives if pool small
   while(picks.length<3){ const ids=Object.keys(PASSIVES); picks.push({type:"passive",id:ids[(Math.random()*ids.length)|0]}); }
+  // force an evolution to the top of the offer when available (can't be missed)
+  if(evos.length){ picks.pop(); picks.unshift(evos[0]); }
   return picks;
 }
 function showLevelUp(){
@@ -456,10 +504,13 @@ function showLevelUp(){
   for(const o of offer){
     const d=document.createElement("button"); d.className="upg";
     let ic,nm,ds,tag;
-    if(o.type==="new"){ d.classList.add("newwep"); const W=WEAPONS[o.id]; ic=W.icon; nm=W.name; ds=W.desc(0); tag="NEW WEAPON"; }
+    if(o.type==="evo"){ d.classList.add("newwep"); const E=EVO[o.id]; ic=E.icon; nm=E.name; ds="EVOLVED "+WEAPONS[o.id].name+" — massive power spike."; tag="✨ EVOLVE"; }
+    else if(o.type==="new"){ d.classList.add("newwep"); const W=WEAPONS[o.id]; ic=W.icon; nm=W.name; ds=W.desc(0); tag="NEW WEAPON"; }
     else if(o.type==="wep"){ const W=WEAPONS[o.id]; ic=W.icon; nm=W.name; ds=W.desc(o.lvl); tag="Lv "+o.lvl+"→"+(o.lvl+1); }
     else { const P=PASSIVES[o.id]; ic=P.icon; nm=P.name; ds=P.desc; tag="PASSIVE"; }
-    d.innerHTML=`<div class="ig">${ic}</div><div class="tx"><b>${nm}</b><span>${ds}</span></div><div class="lvtag">${tag}</div>`;
+    let icHtml=ic;
+    if((o.type==="new"||o.type==="wep")&&WEAPONS[o.id]) icHtml=`<img src="/assets/slimewire/swamp/weapons/${o.id}.png" alt="" style="width:44px;height:44px;object-fit:contain;filter:drop-shadow(0 2px 6px rgba(0,0,0,.6))" onerror="this.replaceWith(document.createTextNode('${ic}'))">`;
+    d.innerHTML=`<div class="ig">${icHtml}</div><div class="tx"><b>${nm}</b><span>${ds}</span></div><div class="lvtag">${tag}</div>`;
     d.onclick=()=>{ pick(o); };
     box.appendChild(d);
   }
@@ -467,7 +518,9 @@ function showLevelUp(){
 }
 function pick(o){
   sfx("ui",0.4);
-  if(o.type==="new"||o.type==="wep") addOrUpgrade(o.id);
+  if(o.type==="evo"){ const w=G.weapons.find(x=>x.id===o.id); if(w){ w.evolved=true; w.s=scaleWeapon(o.id,w.lvl); EVO[o.id].boost(w.s); refreshWepUI();
+    banner("EVOLVED!",EVO[o.id].name,true); burst(player.x,player.y,"#ffd24a",24); sfx("quest",0.6); } }
+  else if(o.type==="new"||o.type==="wep") addOrUpgrade(o.id);
   else PASSIVES[o.id].apply();
   $("levelup").classList.remove("on");
   state="play"; lastTs=performance.now();
@@ -496,7 +549,7 @@ function spawnEnemy(){
   const hpScale=1+G.wave*0.42+G.t*0.012;
   const def=enemyDef();
   enemies.push({ x,y, dead:false, ...at, def,
-    hp:Math.round((16+G.wave*4)*at.hp*hpScale), maxhp:0, r:16*at.scale, spd:(58+G.wave*2.2)*at.spd,
+    hp:Math.round((16+G.wave*4)*at.hp*hpScale), maxhp:0, r:16*at.scale, spd:(58+G.wave*2.2)*at.spd*(G._fast||1),
     flash:0, walkT:Math.random()*3, dir:"down", boss:false });
   enemies[enemies.length-1].maxhp=enemies[enemies.length-1].hp;
 }
@@ -508,7 +561,7 @@ function spawnBoss(){
   const b={ x:player.x+Math.cos(a)*dist, y:player.y+Math.sin(a)*dist, dead:false, boss:true,
     type:"boss", hp, maxhp:hp, r:54, spd:46+G.wave*1.4, dmg:22, xp:60, col:"#ff7a5e",
     bimg:bImg, sym:info.sym, mint:info.mint, flash:0, walkT:0, dir:"down", scale:2.2,
-    def:bImg?null:enemyDef() };
+    special:5.5, def:bImg?null:enemyDef() };
   enemies.push(b); G.boss=b;
   $("bossnm").textContent="🧌 $"+info.sym+" — BORN ON SLIMEWIRE";
   $("bossbar").classList.add("on");
@@ -581,11 +634,12 @@ function update(dt){
   // spawn director
   G.wave=Math.floor(G.t/26)+1;
   $("wave").textContent="Wave "+G.wave;
-  // boss trigger: each new wave that is multiple of 5, once
-  if(G.wave%5===0 && (!G._lastBossWave || G._lastBossWave!==G.wave) && !G.boss){ G._lastBossWave=G.wave; spawnBoss(); }
-  G.spawnGap=Math.max(0.22, 1.15-G.wave*0.05);
+  // boss trigger: each new wave that is a multiple of the boss cadence, once
+  const bossEvery=G._bossEvery||5;
+  if(G.wave%bossEvery===0 && (!G._lastBossWave || G._lastBossWave!==G.wave) && !G.boss){ G._lastBossWave=G.wave; spawnBoss(); }
+  G.spawnGap=Math.max(0.18, (1.15-G.wave*0.05)/(G._fast||1));
   G.spawnT-=dt;
-  if(G.spawnT<=0 && enemies.length<ENEMY_CAP){ G.spawnT=G.spawnGap; const batch=1+Math.floor(G.wave/3); for(let i=0;i<batch;i++) spawnEnemy(); }
+  if(G.spawnT<=0 && enemies.length<ENEMY_CAP){ G.spawnT=G.spawnGap; const batch=Math.max(1,Math.round((1+Math.floor(G.wave/3))*(G._swarm||1))); for(let i=0;i<batch;i++) spawnEnemy(); }
 
   // enemies
   for(const e of enemies){
@@ -594,6 +648,16 @@ function update(dt){
     e.x+=dx/d*e.spd*dt; e.y+=dy/d*e.spd*dt; e.walkT+=dt;
     e.dir=Math.abs(dx)>Math.abs(dy)?(dx<0?"left":"right"):(dy<0?"up":"down");
     if(e.flash>0) e.flash-=dt;
+    // boss special: periodically summon a pack of adds
+    if(e.boss){ e.special-=dt; if(e.special<=0 && enemies.length<ENEMY_CAP-8){ e.special=6.5; G._summons=(G._summons||0)+1;
+      playAnim("slime-portal-open",e.x,e.y,1.6)||playAnim("green-portal-open",e.x,e.y,1.6);
+      toast("$"+e.sym+" summons the horde!"); sfx("boss",0.35);
+      const add=Math.min(4,2+Math.floor(G.wave/10));
+      for(let i=0;i<add;i++){ const aa=Math.random()*6.28, rr=70+Math.random()*50; const at=archetype(G.wave); const def=enemyDef();
+        const m={ x:e.x+Math.cos(aa)*rr, y:e.y+Math.sin(aa)*rr, dead:false, ...at, def,
+          hp:Math.round((14+G.wave*3)*at.hp), maxhp:0, r:15*at.scale, spd:(60+G.wave*2)*at.spd*(G._fast||1), flash:0, walkT:0, dir:"down", boss:false };
+        m.maxhp=m.hp; enemies.push(m); }
+    } }
     // contact damage
     if(d<e.r+p.r && p.iframe<=0){
       p.hp-=e.dmg; p.iframe=0.6; shake=Math.max(shake,7); sfx("miss",0.3);
@@ -835,7 +899,9 @@ function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("on"
 function refreshWepUI(){
   const box=$("weps"); box.innerHTML="";
   for(const w of G.weapons){ const W=WEAPONS[w.id]; const d=document.createElement("div"); d.className="wchip";
-    d.innerHTML=`<span class="ic">${W.icon}</span><span class="lv">L${w.lvl}</span>`; box.appendChild(d); }
+    const icHtml=(w.evolved&&EVO[w.id])?EVO[w.id].icon
+      :`<img src="/assets/slimewire/swamp/weapons/${w.id}.png" alt="" style="width:18px;height:18px;object-fit:contain;vertical-align:middle" onerror="this.replaceWith(document.createTextNode('${W.icon}'))">`;
+    d.innerHTML=`<span class="ic">${icHtml}</span><span class="lv">${w.evolved?"MAX":("L"+w.lvl)}</span>`; box.appendChild(d); }
 }
 
 /* ============================ pause / death ============================ */
@@ -894,12 +960,16 @@ function showTitle(){
   // hero picker
   const hb=$("heroes"); hb.innerHTML="";
   const list=A.players.length?A.players:FALLBACK_PLAYERS;
-  list.slice(0,6).forEach((pl,i)=>{ const d=document.createElement("div"); d.className="hero"+(i===heroSel?" sel":"");
-    const fr=pl.frames&&(pl.frames.down||pl.frames[Object.keys(pl.frames)[0]]);
-    if(fr&&fr[0]){ const im=document.createElement("img"); im.src=fr[0].path; d.appendChild(im); }
-    else d.textContent="🧌";
-    d.onclick=()=>{ heroSel=i; showTitle(); };
+  list.slice(0,6).forEach((pl,i)=>{ const unlocked=heroUnlocked(i); const d=document.createElement("div");
+    d.className="hero"+(i===heroSel&&unlocked?" sel":"")+(unlocked?"":" locked");
+    if(!unlocked){ d.textContent="🔒"; d.onclick=()=>toast("🔒 "+HERO_GATES[i].label); }
+    else { const fr=pl.frames&&(pl.frames.down||pl.frames[Object.keys(pl.frames)[0]]);
+      if(fr&&fr[0]){ const im=document.createElement("img"); im.src=fr[0].path; d.appendChild(im); } else d.textContent="🧌";
+      d.onclick=()=>{ heroSel=i; showTitle(); }; }
     hb.appendChild(d); });
+  if(!heroUnlocked(heroSel)) heroSel=0;
+  // daily challenge strip
+  const dm=dailyMod(); const db=$("daily"); if(db){ db.innerHTML=`<span>🗓️ TODAY'S RUN</span><b>${dm.name}</b><span>${dm.desc}</span>`; }
   // buff box
   const b=tradeBuffs(); const bb=$("buffbox");
   if(b.w){ bb.innerHTML=`<b>Your bags are buffing this run:</b><br>Swamp Worth <b>${b.w.avg.toFixed(2)}x</b> → <b>+${Math.round((b.dmgMult-1)*100)}% damage</b> · ${b.caught} catches → <b>+${b.hpBonus} HP</b><div class="muted" style="margin-top:4px">Free to play — but trading on SlimeWire makes your ogre hit harder.</div>`; }
@@ -913,7 +983,8 @@ function startGame(){
   startAmbient();
   newRun();
   state="play"; lastTs=performance.now();
-  banner("WAVE 1","survive the swamp",false);
+  banner("WAVE 1", G.daily&&G.daily.id!=="none"?("🗓️ "+G.daily.name):"survive the swamp", false);
+  if(G.daily&&G.daily.id!=="none") setTimeout(()=>toast(G.daily.desc),1400);
   requestAnimationFrame(loop);
 }
 $("play").onclick=startGame;
@@ -942,7 +1013,8 @@ $("share").onclick=()=>{
 
 // expose for smoke harness
 window.__SS={ get state(){return state;}, startGame, get G(){return G;}, update:(dt)=>{ if(state==="play") update(dt); },
-  killAll:()=>{ for(const e of enemies){ if(!e.dead) killEnemy(e); } }, spawnBoss:()=>{ if(!G.boss) spawnBoss(); }, hurt:(n)=>{ player.iframe=0; player.hp-=n; if(player.hp<=0) die(); }, grantXp:(n)=>{ if(state==="play") gainXp(n); } };
+  killAll:()=>{ for(const e of enemies){ if(!e.dead) killEnemy(e); } }, spawnBoss:()=>{ if(!G.boss) spawnBoss(); }, hurt:(n)=>{ player.iframe=0; player.hp-=n; if(player.hp<=0) die(); }, grantXp:(n)=>{ if(state==="play") gainXp(n); }, enemyCount:()=>enemies.filter(e=>!e.dead).length,
+  forceSummon:()=>{ if(G.boss){ G.boss.special=0; update(0.02); } } };
 })();
 </script>
 </body>

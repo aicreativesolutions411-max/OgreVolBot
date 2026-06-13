@@ -1320,6 +1320,27 @@ button:disabled {
   filter: drop-shadow(0 0 6px rgba(114, 255, 35, 0.35));
 }
 
+.tabs a.nav-game {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  text-decoration: none;
+  cursor: pointer;
+  white-space: nowrap;
+  padding: 9px 16px;
+  border-radius: 12px;
+  font-weight: 900;
+  font-size: 0.9rem;
+  color: #071006;
+  border: 1px solid var(--line-strong);
+  background: linear-gradient(135deg, rgba(114, 255, 35, 0.96), rgba(187, 255, 99, 0.96));
+  box-shadow: 0 0 16px rgba(114, 255, 35, 0.4);
+  animation: navGamePulse 2.4s ease-in-out infinite;
+}
+.tabs a.nav-game:hover { filter: brightness(1.06); transform: translateY(-1px); }
+@keyframes navGamePulse { 0%, 100% { box-shadow: 0 0 12px rgba(114, 255, 35, 0.3); } 50% { box-shadow: 0 0 26px rgba(114, 255, 35, 0.65); } }
+
 .tabs button[data-active="true"],
 .mode-row button[data-active="true"] {
   background: linear-gradient(135deg, rgba(114, 255, 35, 0.94), rgba(187, 255, 99, 0.94));
