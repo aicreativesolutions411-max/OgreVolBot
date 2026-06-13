@@ -1356,11 +1356,17 @@ function queuePerfPost(payload = {}) {
     for (const event of batch) {
       try {
         const body = JSON.stringify(event);
-        if (navigator.sendBeacon) {
+        const url = apiUrl("/api/web/perf-event");
+        // sendBeacon forces credentials-mode "include", which cross-origin needs
+        // Allow-Credentials:true for — our API returns ACAO:* so beacon would fail
+        // CORS and spam the console. Only beacon same-origin; else plain fetch
+        // (default "same-origin" credentials → passes ACAO:* cross-origin).
+        const sameOrigin = url.charAt(0) === "/" || url.indexOf(location.origin) === 0;
+        if (sameOrigin && navigator.sendBeacon) {
           const blob = new Blob([body], { type: "application/json" });
-          if (navigator.sendBeacon(apiUrl("/api/web/perf-event"), blob)) continue;
+          if (navigator.sendBeacon(url, blob)) continue;
         }
-        fetch(apiUrl("/api/web/perf-event"), {
+        fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body,
