@@ -161,24 +161,26 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio||1, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.05;
+renderer.toneMappingExposure = 1.35;
 renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0x121033, 0.018);
+scene.background = new THREE.Color(0x1a1840);     // never a pure-black void
+scene.fog = new THREE.FogExp2(0x1a1840, 0.012);
 
 const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.1, 600);
-const CAM_OFF = new THREE.Vector3(0, 17, 15); // angled top-down-ish follow
+const CAM_OFF = new THREE.Vector3(0, 15, 14); // angled top-down-ish follow
 
-// ---------- lights ----------
-const hemi = new THREE.HemisphereLight(0x8a7bd6, 0x1a2a18, 0.7); scene.add(hemi);
-const moon = new THREE.DirectionalLight(0xbcd0ff, 0.9);
+// ---------- lights (bright enough to clearly read on mobile) ----------
+const ambient = new THREE.AmbientLight(0x9fb0e0, 0.9); scene.add(ambient);
+const hemi = new THREE.HemisphereLight(0xb5c0ff, 0x2a3a22, 1.1); scene.add(hemi);
+const moon = new THREE.DirectionalLight(0xeaf0ff, 1.7);
 moon.position.set(-30, 60, 20); moon.castShadow = true;
 moon.shadow.mapSize.set(1024,1024); moon.shadow.camera.near=10; moon.shadow.camera.far=160;
 moon.shadow.camera.left=-60; moon.shadow.camera.right=60; moon.shadow.camera.top=60; moon.shadow.camera.bottom=-60;
 scene.add(moon); scene.add(moon.target);
 const bonfire = new THREE.PointLight(0xff8a3a, 2.2, 90, 2); bonfire.position.set(0, 6, 0); scene.add(bonfire);
-const heroGlow = new THREE.PointLight(0x9bff5a, 0.8, 26, 2); scene.add(heroGlow);
+const heroGlow = new THREE.PointLight(0x9bff5a, 1.0, 30, 2); scene.add(heroGlow);
 
 // ---------- sky dome ----------
 const texLoader = new THREE.TextureLoader();
@@ -206,7 +208,7 @@ const fxComposer = new EffectComposer(renderer);
 fxComposer.addPass(new RenderPass(scene, camera));
 const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.6, 0.7, 0.85);
 fxComposer.addPass(bloom);
-let useBloom = (Math.min(innerWidth,innerHeight) > 500); // skip heavy bloom on tiny screens
+let useBloom = false; // bloom/EffectComposer renders black on some mobile GL — direct render is reliable
 
 // ---------- model loading (GLB with primitive fallback) ----------
 const draco = new DRACOLoader(); draco.setDecoderPath("https://unpkg.com/three@0.160.0/examples/jsm/libs/draco/");
