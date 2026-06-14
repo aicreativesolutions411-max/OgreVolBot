@@ -662,6 +662,18 @@ function reconcileCooksFeedInPlace(liveFeed, nextFeed) {
   return true;
 }
 
+// Tracks the last time the USER scrolled (wheel/touch/keys) so auto-refresh can pin
+// the viewport without ever fighting an active scroll.
+let lastUserScrollAt = 0;
+if (typeof window !== "undefined") {
+  const markUserScroll = () => { lastUserScrollAt = Date.now(); };
+  window.addEventListener("wheel", markUserScroll, { passive: true });
+  window.addEventListener("touchmove", markUserScroll, { passive: true });
+  window.addEventListener("keydown", (e) => {
+    if (["ArrowDown", "ArrowUp", "PageDown", "PageUp", "Home", "End", " ", "Spacebar"].includes(e.key)) markUserScroll();
+  }, { passive: true });
+}
+
 // Steady refresh without the full-panel rebuild "shake": on the Cooks tab, update
 // the live rows in place (keyed by mint) so the controls, scroll position, and
 // painted avatars stay put. Returns true if patched.
@@ -679,8 +691,10 @@ function patchLivePairsFeedInPlace() {
   // has no wheel to fight, and there are no delayed passes. Desktop relies on native
   // overflow-anchor (no scrollTo, so it never fights the mouse wheel).
   const compact = isCompactViewport();
+  // Capture on-screen anchor rows so an auto-refresh can pin the viewport (no jump)
+  // on desktop too — not just mobile.
   const anchors = [];
-  if (compact) {
+  {
     const viewportH = window.innerHeight || 700;
     for (const el of feed.querySelectorAll(".signal-row[data-token-chart]")) {
       const top = el.getBoundingClientRect().top;
@@ -697,7 +711,9 @@ function patchLivePairsFeedInPlace() {
   if (!nextFeed || !reconcileCooksFeedInPlace(feed, nextFeed)) {
     feed.outerHTML = cooksFeedHtml(allRows);
   }
-  if (compact && anchors.length) {
+  // Pin the viewport on auto-refresh: always on mobile; on desktop only when the
+  // user isn't actively scrolling (so a single scrollBy never fights the wheel).
+  if (anchors.length && (compact || Date.now() - lastUserScrollAt > 450)) {
     const liveFeed = panel.querySelector(".cooks-feed");
     // Use the first captured row that survived the refresh (best picks can rotate
     // out), and pin it with one scrollBy so nothing above pulls the page.
