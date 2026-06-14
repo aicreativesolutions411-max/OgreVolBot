@@ -1284,8 +1284,8 @@ function openDex(){ state="dex"; $("prompt").classList.remove("on");
     const evo=evoStageOf(mult); const peak=Math.max(c.evo||1,evo.s); if(peak!==(c.evo||1)){ c.evo=peak; evoChanged=true; }
     const tierName=(EVO_TIERS.find(t=>t.s===peak)||{}).name||"";
     const d=document.createElement("div"); d.className="dcard"+(peak>1?(" e"+peak):""); d.style.borderColor=peak>1?"":rc+"55";
-    // caught coin uses its clean OGRE (by rarity) — no boxes; whole card opens the chart
-    const h=hash(mint); const pool=OGRE_BY_TIER[c.rarity]||OGRE_BY_TIER.common; const path=pool[h%pool.length];
+    // caught coin shows its element creature card art (unified with the Arena)
+    const path=elemArt(coinSpecies(mint,c.rarity).element.n);
     const real=!String(mint).startsWith("syn_")&&!String(mint).startsWith("founder_");
     const href=real?(SITE+"/t?ca="+encodeURIComponent(mint)):(SITE+"/terminal");
     d.style.cursor="pointer";
@@ -1315,15 +1315,16 @@ const FX_LABEL={poison:"☠ poison",burn:"🔥 burn",freeze:"❄ freeze",shock:"
 function cardMoves(card){ const e=card.elem.n;
   const themed={Toxic:["Ooze Jab","Toxic Spit","Plague Bomb"],Ember:["Cinder","Flame Lash","Magma Burst"],Frost:["Chill Nip","Frost Bite","Blizzard"],Volt:["Spark","Shock Whip","Overload"],Void:["Drain Touch","Void Rip","Black Hole"],Bog:["Mud Slap","Vine Whip","Quagmire"],Slime:["Goo Flick","Slime Slam","Mega Ooze"]}[e]||["Jab","Smash","Ultra"];
   return [{n:themed[0],pow:0.85},{n:themed[1],pow:1.25},{n:themed[2],pow:1.7,cd:3,fx:SPECIAL_FX[e]||null}]; }
-function artCleanSrc(path){ try{ const c=cleanedSprite(path); if(c&&c.toDataURL) return c.toDataURL(); }catch(_){} return path; }
-function makeCard(mint,entry){ const sp=coinSpecies(mint,entry.rarity); const pool=OGRE_BY_TIER[entry.rarity]||OGRE_BY_TIER.common; const art=pool[hash(mint)%pool.length];
+function elemArt(name){ return "/assets/slimewire/swamp/art/creature-"+String(name||"slime").toLowerCase()+".png"; }
+function artCleanSrc(path){ if(/creature-|boss-|arena-|\.jpe?g/.test(String(path||""))) return path; try{ const c=cleanedSprite(path); if(c&&c.toDataURL) return c.toDataURL(); }catch(_){} return path; }
+function makeCard(mint,entry){ const sp=coinSpecies(mint,entry.rarity); const art=elemArt(sp.element.n);
   const evo=entry.evo||1, boost=1+(evo-1)*0.12; const bf=store.deckBuff||{atk:0,def:0,hp:0};
   const atk=Math.round(sp.atk*boost*(1+(bf.atk||0))), def=Math.round(sp.def*boost*(1+(bf.def||0))), maxhp=Math.round((sp.hp*boost*2.4+60)*(1+(bf.hp||0)));
   return {mint, sym:entry.symbol, elem:sp.element, species:sp.species, atk, def, maxhp, hp:maxhp, art, cds:{}, rarity:entry.rarity}; }
 function bossDeck(){ const tiers=["common","uncommon","rare","epic","legendary"]; const lv=level();
   const names=["Bog Tyrant","Rug Warlord","Slime Reaper","Toxic Overlord","Void Baron","Mire King"]; const n=Math.max(2,Math.min(6,store.deck.length||3)); const deck=[];
   for(let i=0;i<n;i++){ const t=tiers[Math.min(4,Math.floor(lv/4)+(i%2))]||"common"; const fm="boss_"+i+"_"+t;
-    const sp=coinSpecies(fm,t); const pool=OGRE_BY_TIER[t]; const art=pool[hash(fm)%pool.length]; const boost=1+lv*0.03;
+    const sp=coinSpecies(fm,t); const art=elemArt(sp.element.n); const boost=1+lv*0.03;
     const mh=Math.round(sp.hp*boost*2.4+70); deck.push({mint:fm, sym:(names[i%names.length]||"Boss").replace(/ /g,""), elem:sp.element, species:names[i%names.length], atk:Math.round(sp.atk*boost), def:Math.round(sp.def*boost), maxhp:mh, hp:mh, cds:{}, art, rarity:t}); }
   return deck; }
 let B=null;
@@ -1337,7 +1338,7 @@ function buildDeckUI(){ const entries=Object.entries(store.dex); const grid=$("d
   if(!entries.length){ grid.innerHTML='<div style="grid-column:1/-1;color:var(--dim);text-align:center;padding:18px">Catch coins first — each becomes a battle card.</div>'; $("battleStart").style.display="none"; return; }
   $("battleStart").style.display=store.deck.length?"block":"none";
   for(const [mint,c] of entries){ const sp=coinSpecies(mint,c.rarity), el=sp.element, picked=store.deck.includes(mint);
-    const pool=OGRE_BY_TIER[c.rarity]||OGRE_BY_TIER.common; const art=pool[hash(mint)%pool.length];
+    const art=elemArt(sp.element.n);
     const d=document.createElement("div"); d.className="dcard"+(picked?" picked":""); d.style.cursor="pointer";
     d.innerHTML=`<div class="dr" style="background:${(RAR[c.rarity]||RAR.common).col}"></div>${picked?'<div class="dpick">✅</div>':''}<div class="delem" style="position:absolute;top:5px;left:6px;font-size:0.72rem">${el.i}</div><img src="${art}" onerror="this.style.display='none'"><div class="ds">$${c.symbol}</div><div class="dstat" style="font-size:0.52rem;color:var(--dim)">⚔${sp.atk} 🛡${sp.def} ❤${sp.hp}</div>`;
     d.onclick=()=>{ const i=store.deck.indexOf(mint); if(i>=0) store.deck.splice(i,1); else { if(store.deck.length>=6){ toast("Deck full (6)"); return; } store.deck.push(mint); } save(); try{sfx("ui",0.3);}catch(_){} buildDeckUI(); publishMyDeck(); };
@@ -1413,7 +1414,7 @@ function loseBattle(){ B.over=true; try{sfx("boss",0.4);}catch(_){}
 /* ----- Phase 4: Survival Gauntlet ----- */
 function survivalFoeDeck(wave){ const tiers=["common","uncommon","rare","epic","legendary"], lv=level(), size=Math.min(6,2+Math.floor(wave/2)), deck=[];
   for(let k=0;k<size;k++){ const t=tiers[Math.min(4,Math.floor(wave/2)+(k%2))], fm="surv_"+wave+"_"+k;
-    const sp=coinSpecies(fm,t), pool=OGRE_BY_TIER[t], art=pool[hash(fm)%pool.length], boost=1+lv*0.03+wave*0.08, mh=Math.round(sp.hp*boost*2.4+60);
+    const sp=coinSpecies(fm,t), art=elemArt(sp.element.n), boost=1+lv*0.03+wave*0.08, mh=Math.round(sp.hp*boost*2.4+60);
     deck.push({mint:fm, sym:"W"+wave, elem:sp.element, species:sp.species, atk:Math.round(sp.atk*boost), def:Math.round(sp.def*boost), maxhp:mh, hp:mh, cds:{}, art, rarity:t}); }
   return deck; }
 function startSurvival(){ if(!store.deck||!store.deck.length){ toast("Build a deck first"); arenaShow("arenaDeck"); buildDeckUI(); return; }
@@ -1459,7 +1460,7 @@ function openBossCutscene(i){ const bo=STORY_BOSSES[i]; arenaShow("arenaCutscene
   $("csGo").textContent="⚔️ FIGHT"; $("csGo").onclick=()=>startStoryBattle(i); try{sfx("boss",0.4);}catch(_){} playCutscene(); }
 function storyBossDeck(bo){ const lv=level(), tiers=["common","uncommon","rare","epic","legendary"]; const tierIdx={common:0,uncommon:1,rare:2,epic:3,legendary:4}[bo.tier]||2; const deck=[];
   for(let k=0;k<bo.size;k++){ const t=tiers[Math.max(0,Math.min(4,tierIdx-(k%2)))], fm=bo.id+"_"+k;
-    const sp=coinSpecies(fm,t), pool=OGRE_BY_TIER[t], art=pool[hash(fm)%pool.length], boost=1+lv*0.03+tierIdx*0.05;
+    const sp=coinSpecies(fm,t), art=elemArt(bo.elem), boost=1+lv*0.03+tierIdx*0.05;
     const mh=Math.round(sp.hp*boost*2.4+70); deck.push({mint:fm, sym:bo.id.toUpperCase(), elem:(ELEMENTS.find(e=>e.n===bo.elem)||sp.element), species:(k===0?bo.name:sp.species), atk:Math.round(sp.atk*boost), def:Math.round(sp.def*boost), maxhp:mh, hp:mh, cds:{}, art, rarity:t}); }
   return deck; }
 function startStoryBattle(i){ const bo=STORY_BOSSES[i]; if(!store.deck||!store.deck.length){ toast("Build a deck first — Back → pick cards"); arenaShow("arenaDeck"); buildDeckUI(); return; }
@@ -1473,7 +1474,7 @@ function publishMyDeck(){ if(!store.deck||!store.deck.length) return;
   if(!deck.length) return;
   try{ fetch(API+"/api/web/swamp-deck",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({id:myPvpId(),name:store.lbName||"anon",clan:store.clan||"",level:level(),deck})}).catch(()=>{}); }catch(_){}
 }
-function pvpCard(c){ const elem=ELEMENTS.find(e=>e.n===c.el)||ELEMENTS[ELEMENTS.length-1]; const t=c.rarity||"common"; const pool=OGRE_BY_TIER[t]||OGRE_BY_TIER.common; const art=pool[hash((c.sym||"x")+t)%pool.length]; const mh=Math.round((c.hp||80)*2.4+60);
+function pvpCard(c){ const elem=ELEMENTS.find(e=>e.n===c.el)||ELEMENTS[ELEMENTS.length-1]; const t=c.rarity||"common"; const art=elemArt(elem.n); const mh=Math.round((c.hp||80)*2.4+60);
   return {mint:"pvp_"+(c.sym||"x"), sym:c.sym||"COIN", elem, species:"$"+(c.sym||"COIN"), atk:c.atk||40, def:c.def||40, maxhp:mh, hp:mh, cds:{}, art, rarity:t}; }
 async function startPvp(){ if(!store.deck||!store.deck.length){ toast("Build a deck first"); arenaShow("arenaDeck"); buildDeckUI(); return; }
   const my=store.deck.map(m=>store.dex[m]?makeCard(m,store.dex[m]):null).filter(Boolean); if(!my.length){ toast("Deck empty"); return; }
