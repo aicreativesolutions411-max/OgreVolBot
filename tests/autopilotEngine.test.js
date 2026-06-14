@@ -349,7 +349,9 @@ test("engine: profit vault sweeps gains above the stake and keeps running", asyn
     sweepProfit: async (dest, amt) => { swept.push(amt); walletSol -= amt; return { ok: true, sentSol: amt }; }
   });
   await engine.start({ solBudget: 1, minutes: 60, live: true, walletPubkey: "W".repeat(44), vault: { destination: "V".repeat(44) } });
-  // simulate the wallet growing to 1.4 (profit) then run the slow loop
+  // first slow-loop pass captures the vault floor at the starting balance (1.0)
+  await engine._hunt();
+  // now the wallet grows to 1.4 (profit) — next pass sweeps only the excess above the floor
   walletSol = 1.4;
   await engine._hunt();
   const st = engine.status();

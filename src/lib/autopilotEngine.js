@@ -254,6 +254,9 @@ function freshState(opts) {
     // { destination, minSweep } — null = off. secured = cumulative SOL vaulted.
     vault: opts.vault || null,
     secured: 0,
+    // Wallet balance captured at session start — the vault only sweeps profit
+    // ABOVE this, so it never touches funds you started with (set on first reconcile).
+    vaultFloor: null,
     open: [],
     wins: 0,
     losses: 0,
@@ -512,7 +515,12 @@ export function createAutopilotEngine(deps) {
       if (state.live) {
         try {
           const ws = await getWalletSol();
-          if (Number.isFinite(ws) && ws >= 0) { state.walletSol = ws; state.bank = ws; }
+          if (Number.isFinite(ws) && ws >= 0) {
+            state.walletSol = ws;
+            state.bank = ws;
+            // Capture the starting wallet balance once — the vault floor.
+            if (state.vaultFloor == null) state.vaultFloor = ws;
+          }
         } catch {}
       }
 
@@ -520,7 +528,10 @@ export function createAutopilotEngine(deps) {
       // sweep it to the vault wallet and keep trading the stake. Gains physically
       // leave the trading wallet, so a cold streak can never claw them back.
       if (state.vault && state.vault.destination && state.live && Number.isFinite(state.walletSol)) {
-        const keep = state.start;          // working stake to maintain
+        // Keep the FULL balance you started the session with — only profit above
+        // it is swept. (Previously kept only the stake `start`, which on a wallet
+        // bigger than the stake swept your existing balance to the vault.)
+        const keep = Math.max(state.start, state.vaultFloor || 0);
         const buffer = 0.02;               // leave a little for trade fees
         const minSweep = state.vault.minSweep || 0.05;
         const excess = state.walletSol - keep - buffer;
