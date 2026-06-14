@@ -19609,3 +19609,32 @@ html body .swamp-connect-shell > *:not(.swamp-hero-video) { z-index: 2 !importan
   /* mobile: skip the video, use the static portrait hero (lighter) */
   html body .swamp-connect-shell .swamp-hero-video { display: none !important; }
 }
+
+/* ===== FULL-SCREEN, in-frame connect/login hero (v6) ===== */
+/* break out of the .shell max-width/padding so it's truly edge-to-edge full screen */
+html body main.shell .connect-view {
+  width: 100vw !important;
+  margin-left: calc(50% - 50vw) !important;
+  margin-right: calc(50% - 50vw) !important;
+  padding: 0 !important;
+}
+html body main.shell .connect-view .swamp-connect-shell,
+html body .swamp-connect-shell {
+  min-height: 100svh !important;
+  border: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  background-size: cover !important;       /* 16:9 art fills a desktop screen fully in-frame */
+  background-position: center center !important;
+  animation: none !important;              /* drop the zoom-drift so nothing gets cropped */
+}
+html body .swamp-connect-shell .swamp-hero-video {
+  object-fit: cover !important;            /* video fills the screen too */
+}
+
+/* SCROLL FIX (final): the connect/login page must scroll with the wheel anywhere.
+   An earlier rule set the shell overflow:hidden — make it visible so nothing clips
+   and the page (body) is the scroller. */
+html body main.shell .connect-view .swamp-connect-shell,
+html body .swamp-connect-shell { overflow: visible !important; }
+html, body { overflow-y: auto !important; height: auto !important; min-height: 100% !important; }

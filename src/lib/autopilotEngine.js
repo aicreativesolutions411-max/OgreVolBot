@@ -900,9 +900,14 @@ export function createAutopilotEngine(deps) {
         record("info", `⛔ skip ${cand.r.symbol} — dev rugged ${rep.rugs}x before`);
         continue;
       }
-      // Conviction sizing — bet bigger on high-confluence setups, smaller on
-      // marginal ones (proven dev + buy flow + freshness + score). Still capped.
+      // Conviction = confluence of proven-dev rep + buy flow + freshness + score.
       const conv = convictionMult(cand.r, rep);
+      // ADAPTIVE QUALITY GATE (smarter picks): when the tape is risky, take ONLY the
+      // highest-confluence setups; stay permissive when it's hot/warming so runners
+      // aren't missed. This is what makes it "best picks per situation" instead of
+      // aping everything into a dumping tape.
+      const minConv = tune.tape === "COLD" ? 0.95 : tune.tape === "NORMAL" ? 0.7 : 0;
+      if (conv < minConv) continue;
       let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv, state.maxTradeSol));
       if (!canOpen(state, size)) break;
       await openPosition(cand.r, size, cand.fs, dev, rep);
