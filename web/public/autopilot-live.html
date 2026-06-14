@@ -132,7 +132,8 @@
       <div id="positions"><div class="muted">none</div></div>
       <label style="margin-top:12px">Decision log</label>
       <div class="log" id="log"></div>
-      <button id="stopBtn" class="b-stop" style="margin-top:12px">■ Stop & flatten</button>
+      <button id="copyLogBtn" class="b-ghost" style="margin-top:8px">📋 Copy log + stats (to share)</button>
+      <button id="stopBtn" class="b-stop" style="margin-top:8px">■ Stop & flatten</button>
     </div>
   </div>
 
@@ -314,6 +315,27 @@ $("startBtn").addEventListener("click", async () => {
   $("startBtn").disabled = false;
   if (r && r.ok) { $("startMsg").innerHTML = '<span class="ok">Running. It trades on the server now — you can close this page.</span>'; poll(); }
   else { $("startMsg").innerHTML = '<span class="warn">'+((r&&r.error)||"failed")+'</span>'; }
+});
+
+$("copyLogBtn").addEventListener("click", async () => {
+  const r = await api("/api/web/autopilot/status");
+  const s = r && r.status;
+  if (!s) { $("copyLogBtn").textContent = "nothing to copy"; setTimeout(()=>$("copyLogBtn").textContent="📋 Copy log + stats (to share)",1500); return; }
+  const lines = [];
+  lines.push(`SlimeWire Autopilot — ${s.live?"LIVE":"PAPER"} ${s.running?"running":("stopped"+(s.stopReason?` (${s.stopReason})`:""))}`);
+  lines.push(`wallet(real) ${s.walletSol} SOL | equity ${s.equity} | pnl ${s.pnlPct}% | W/L ${s.wins}/${s.losses} | peak ${s.peak} | start ${s.start} | endsIn ${s.endsInS}s | mode ${s.mode}`);
+  lines.push("open: " + ((s.open||[]).map(p=>`${p.sym} ${p.movePct}% ${p.costSol}SOL ${p.heldS}s`).join(" | ") || "none"));
+  lines.push("log:");
+  for (const l of (s.log||[])) lines.push(`${new Date(l.at).toLocaleTimeString()} ${l.msg}`);
+  const text = lines.join("\n");
+  try {
+    await navigator.clipboard.writeText(text);
+    $("copyLogBtn").textContent = "Copied ✓ — paste it to me";
+  } catch {
+    window.prompt("Copy this and paste it to me:", text);
+    $("copyLogBtn").textContent = "📋 Copy log + stats (to share)";
+  }
+  setTimeout(()=>$("copyLogBtn").textContent="📋 Copy log + stats (to share)", 2000);
 });
 
 $("stopBtn").addEventListener("click", async () => {
