@@ -602,12 +602,16 @@ export function createAutopilotEngine(deps) {
       } catch (e) {
         pos.sellFails = (pos.sellFails || 0) + 1;
         const noBalance = /no token balance|rounded to zero/i.test((e && e.message) || "");
+        const ageMs = now() - pos.openedAt;
         record("warn", `sell ${pos.sym} failed (${reason}): ${e && e.message}`);
-        // Transient error: keep the position and retry next tick. But "no token
-        // balance" (tokens gone/dust) or repeated failures are terminal — write
-        // the portion off at ZERO so the ledger can't show SOL we don't have.
-        if (!noBalance && pos.sellFails < 4) return;
-        failedTerminal = true;
+        // "no token balance" on a fresh position is almost always the BUY still
+        // settling on-chain (we got a token amount back from the buy, so the
+        // tokens exist — they're just not readable yet). NEVER write that off as
+        // a loss: retry on later ticks until it settles. Only give up if it's
+        // been a while (genuinely gone/dust) or other errors persist.
+        if (noBalance && ageMs < 30_000) return;        // young: buy still settling, retry
+        if (pos.sellFails < 5) return;                  // otherwise allow several retries
+        failedTerminal = true;                          // persistent failure → write off
       }
     }
 
