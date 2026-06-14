@@ -364,6 +364,19 @@ function cleanedSprite(path){ if(!path) return null; if(cleanCache.has(path)) re
     const iw=im.naturalWidth, ih=im.naturalHeight;
     const oc=document.createElement("canvas"); oc.width=iw; oc.height=ih; const octx=oc.getContext("2d");
     octx.drawImage(im,0,0); const id=octx.getImageData(0,0,iw,ih), d=id.data;
+    // Some sprites bake an OPAQUE background box (low-alpha keying can't remove it).
+    // Sample the corners; if they share a solid color, flood-fill that color inward
+    // from the edges (stops at the character) so the box is erased but interior kept.
+    const cr=(x,y)=>{const i=(y*iw+x)*4; return [d[i],d[i+1],d[i+2],d[i+3]];};
+    const corners=[cr(0,0),cr(iw-1,0),cr(0,ih-1),cr(iw-1,ih-1)].filter(c=>c[3]>140);
+    if(corners.length>=3){
+      const bg=[0,1,2].map(k=>Math.round(corners.reduce((s,c)=>s+c[k],0)/corners.length)); const tol=48;
+      const match=(i)=>d[i+3]>0 && Math.abs(d[i]-bg[0])<tol && Math.abs(d[i+1]-bg[1])<tol && Math.abs(d[i+2]-bg[2])<tol;
+      const seen=new Uint8Array(iw*ih), stack=[];
+      const push=(x,y)=>{ if(x<0||y<0||x>=iw||y>=ih) return; const p=y*iw+x; if(seen[p]) return; seen[p]=1; stack.push(p); };
+      for(let x=0;x<iw;x++){ push(x,0); push(x,ih-1); } for(let y=0;y<ih;y++){ push(0,y); push(iw-1,y); }
+      while(stack.length){ const p=stack.pop(), i=p*4; if(!match(i)) continue; d[i+3]=0; const x=p%iw, y=(p/iw)|0; push(x+1,y); push(x-1,y); push(x,y+1); push(x,y-1); }
+    }
     let minX=iw,minY=ih,maxX=0,maxY=0,any=false;
     for(let i=0;i<d.length;i+=4){ const a=d[i+3]; if(a<130){ d[i+3]=0; } else { any=true; const px=(i>>2)%iw, py=(i>>2)/iw|0; if(px<minX)minX=px; if(px>maxX)maxX=px; if(py<minY)minY=py; if(py>maxY)maxY=py; } }
     if(!any){ cleanCache.set(path,null); return null; }
@@ -782,7 +795,14 @@ function playerSwing(){ if(state!=="world"||!player||player.atkCd>0) return; pla
   let tx,ty,target=null,tkind=null;
   if(nearMob){ target=nearMob; tkind="mob"; } else if(nearFoe){ target=nearFoe; tkind="foe"; } else if(near){ target=near; tkind="wild"; }
   if(target){ tx=target.x; ty=target.y; player.dir = Math.abs(tx-player.x)>Math.abs(ty-player.y)?(tx<player.x?"left":"right"):(ty<player.y?"up":"down"); }
-  else { const off={right:[1,0],left:[-1,0],up:[0,-1],down:[0,1]}[player.dir]||[0,1]; tx=player.x+off[0]*130; ty=player.y+off[1]*130; }
+  else { // free 360° aim along current movement (keyboard + joystick) — supports diagonals
+    let ax=0, ay=0;
+    if(keys["d"]||keys["arrowright"])ax+=1; if(keys["a"]||keys["arrowleft"])ax-=1;
+    if(keys["s"]||keys["arrowdown"])ay+=1; if(keys["w"]||keys["arrowup"])ay-=1;
+    ax+=mvx||0; ay+=mvy||0;
+    const l=Math.hypot(ax,ay);
+    if(l>0.2){ ax/=l; ay/=l; } else { const off={right:[1,0],left:[-1,0],up:[0,-1],down:[0,1]}[player.dir]||[0,1]; ax=off[0]; ay=off[1]; }
+    tx=player.x+ax*130; ty=player.y+ay*130; }
   spawnSwing(player.x, player.y-player.r*0.3, player.dir, "#bbff63", player.r*2.7); sfx("throw",0.3);
   if(tkind==="mob") attackMob(); else if(tkind==="foe") attackFoe();
   fireWeapon(tx,ty); // fire the equipped weapon (always, so there's motion even with no target)
@@ -1017,7 +1037,9 @@ function drawCreature(c){
     if(c.weak<0.35){ const t=performance.now()/220; ctx.strokeStyle="rgba(255,210,74,0.9)"; ctx.lineWidth=2;
       ctx.beginPath(); ctx.arc(c.x,c.y,c.r*1.4,t,t+1.6); ctx.stroke(); ctx.beginPath(); ctx.arc(c.x,c.y,c.r*1.4,t+3.14,t+4.74); ctx.stroke();
       ctx.font="900 9px Inter,sans-serif"; ctx.textAlign="center"; ctx.fillStyle="#ffd24a"; ctx.fillText("CATCH!",c.x,c.y-c.r-15); } }
-  if(c.rar.k!=="common"){ ctx.font="900 10px Inter,sans-serif"; ctx.textAlign="center"; ctx.fillStyle=c.rar.col; ctx.fillText("$"+c.sym,c.x,c.y-c.r-(c.weakShown>0?24:6)); }
+  { ctx.font="900 10px Inter,sans-serif"; ctx.textAlign="center"; ctx.fillStyle=c.rar.col;
+    ctx.strokeStyle="rgba(0,0,0,0.7)"; ctx.lineWidth=3; const ly=c.y-c.r-(c.weakShown>0?24:6);
+    ctx.strokeText("$"+c.sym,c.x,ly); ctx.fillText("$"+c.sym,c.x,ly); }
 }
 function drawPlayer(){ const p=player; drawShadow(p.x,p.y,p.r);
   const upFacing=p.dir==="up";
