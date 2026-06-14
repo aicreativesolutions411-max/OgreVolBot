@@ -139,10 +139,12 @@ async function tick(){
       if(age<4||age>1200) continue;                        // skip 0-3s instant-rug bait; ≤20m window
       if(mc<1800||mc>20000) continue;                      // MC band
       const vol=n(row.volume5m), buys=n(row.buys5m), sells=n(row.sells5m), liq=n(row.liquidityUsd);
-      if(liq>0 && liq<2500) continue;                      // LIQUIDITY FLOOR — thin liq = rug bait
-      if(buys<2) continue;                                 // need ≥2 real buyers (not 1-buy launch noise)
-      if(vol<25) continue;                                 // real starting volume
-      if(sells>buys*1.3) continue;                         // not already dumping
+      // A $2k-MC fresh launch legitimately has ~$2k liquidity, so an absolute
+      // floor rejects everything — gate liquidity RELATIVE to MC (catches real
+      // drains); rely on the fast exit-side rug/stop protection for the rest.
+      if(liq>0 && liq<mc*0.3) continue;                    // drained relative to size = rug bait
+      if(vol<25) continue;                                 // real starting volume = activity (buy counts unreliable on fresh)
+      if(buys>0 && sells>buys*2+3) continue;               // clear heavy dump only
       const fs=freshScore(row); if(fs<P.minScore) continue;
       cands.push({row, fs}); }
     cands.sort((a,b)=>b.fs-a.fs);

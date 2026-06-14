@@ -1565,6 +1565,10 @@ function startHealthServer() {
       await serveStaticHtmlPage(response, "hub.html");
       return;
     }
+    if (request.method === "GET" && ["/autopilot-live", "/autobot", "/live-autopilot"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "autopilot-live.html");
+      return;
+    }
 
     if (request.method === "GET" && /^[/](call|u|g|hype)([/]|$)/.test(requestUrl.pathname)) {
       await serveProofSharePage(requestUrl, request, response);

@@ -85,11 +85,18 @@ test("entryReject: passes a clean fresh mover", () => {
 test("entryReject: blocks instant-rug bait", () => {
   const P = aggParams(baseState());
   assert.equal(entryReject(goodRow({ pairAgeSeconds: 1 }), P), "age");
+  // liquidity gate is relative to market cap (mc 5000 -> floor 1500)
   assert.equal(entryReject(goodRow({ liquidityUsd: 500 }), P), "liquidity");
-  assert.equal(entryReject(goodRow({ buys5m: 1 }), P), "buyers");
   assert.equal(entryReject(goodRow({ volume5m: 5 }), P), "volume");
   assert.equal(entryReject(goodRow({ buys5m: 5, sells5m: 20 }), P), "dumping");
   assert.equal(entryReject(goodRow({ marketCap: 500 }), P), "mc");
+});
+
+test("entryReject: a $2k fresh launch with ~$2k liquidity is NOT rejected for liquidity", () => {
+  const P = aggParams(baseState());
+  // the real-market case that was wrongly filtered: mc≈liq≈2k
+  const row = goodRow({ marketCap: 2300, liquidityUsd: 2200, pairAgeSeconds: 30, volume5m: 90, buys5m: 1, sells5m: 0 });
+  assert.equal(entryReject(row, P), null);
 });
 
 test("evalExit: hard stop fires past -sl", () => {

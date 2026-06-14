@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="robots" content="noindex, nofollow" />
+<title>SlimeWire · Live Autopilot</title>
+<style>
+  :root { --bg:#070b08; --card:#0f1712; --line:#1d2b22; --green:#8dff5a; --green2:#5be08a; --dim:#7d9384; --warn:#ff6b6b; --gold:#ffd45a; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; background:radial-gradient(1200px 600px at 50% -10%, #11231a 0%, var(--bg) 60%); color:#e9ffe9; font:15px/1.45 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif; padding:18px; max-width:560px; margin:0 auto; min-height:100vh; }
+  h1 { font-size:20px; margin:4px 0 2px; letter-spacing:.3px; }
+  h1 .live { color:var(--warn); }
+  .sub { color:var(--dim); font-size:12.5px; margin-bottom:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; margin-bottom:14px; }
+  label { display:block; font-size:12px; color:var(--dim); margin:10px 0 4px; text-transform:uppercase; letter-spacing:.5px; }
+  select, input[type=number] { width:100%; background:#0a120c; color:#eaffea; border:1px solid var(--line); border-radius:10px; padding:11px; font-size:15px; }
+  .row { display:flex; gap:10px; }
+  .row > div { flex:1; }
+  button { width:100%; border:0; border-radius:11px; padding:13px; font-size:15px; font-weight:700; cursor:pointer; }
+  .b-green { background:linear-gradient(180deg,var(--green),var(--green2)); color:#04210f; }
+  .b-live { background:linear-gradient(180deg,#ff8a5a,#ff5a5a); color:#2a0606; }
+  .b-stop { background:#2a1414; color:#ffb3b3; border:1px solid #5a2222; }
+  .b-ghost { background:#0a120c; color:var(--green); border:1px solid var(--line); }
+  .chk { display:flex; align-items:center; gap:9px; margin:12px 0; font-size:14px; color:#eaffea; text-transform:none; letter-spacing:0; }
+  .chk input { width:20px; height:20px; accent-color:var(--green); }
+  .addr { font-family:ui-monospace,Menlo,monospace; font-size:12px; word-break:break-all; color:var(--green2); background:#0a120c; border:1px dashed var(--line); border-radius:9px; padding:9px; }
+  .stat { display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid #142019; font-size:14px; }
+  .stat:last-child { border:0; }
+  .stat b { font-variant-numeric:tabular-nums; }
+  .big { font-size:30px; font-weight:800; font-variant-numeric:tabular-nums; }
+  .up { color:var(--green); } .down { color:var(--warn); }
+  .pos { font-size:12.5px; padding:7px 0; border-bottom:1px solid #142019; display:flex; justify-content:space-between; gap:8px; }
+  .log { font-family:ui-monospace,Menlo,monospace; font-size:11.5px; color:#bfe9c9; background:#0a120c; border:1px solid var(--line); border-radius:9px; padding:9px; max-height:200px; overflow:auto; }
+  .log div { padding:1px 0; }
+  .warn { color:var(--warn); font-size:12.5px; }
+  .ok { color:var(--green); }
+  .muted { color:var(--dim); font-size:12px; }
+  .pill { display:inline-block; font-size:11px; padding:2px 8px; border-radius:99px; background:#142019; color:var(--green2); margin-left:6px; }
+  .hidden { display:none; }
+  a { color:var(--green2); }
+</style>
+</head>
+<body>
+  <h1>🤖 Live Autopilot <span id="modePill" class="pill">paper</span></h1>
+  <div class="sub">Private control panel · tied to this browser's wallet · no login. Fund a dedicated wallet, set an amount, run it. It trades in the background on the server even if you close this page.</div>
+
+  <div id="boot" class="card">Connecting…</div>
+
+  <div id="app" class="hidden">
+    <!-- WALLET -->
+    <div class="card">
+      <label>Autopilot wallet</label>
+      <select id="walletSel"></select>
+      <div id="noWallet" class="hidden">
+        <div class="muted" style="margin:8px 0">No wallet yet. Create a dedicated one to trade with.</div>
+      </div>
+      <div style="margin-top:10px" class="row">
+        <div><button class="b-ghost" id="createBtn">+ New wallet</button></div>
+        <div><button class="b-ghost" id="refreshBtn">↻ Balance</button></div>
+      </div>
+      <div id="walletInfo" class="hidden" style="margin-top:12px">
+        <label>Deposit address — send SOL here to fund it</label>
+        <div class="addr" id="walletAddr">—</div>
+        <div style="margin-top:6px"><button class="b-ghost" id="copyBtn">Copy address</button></div>
+        <div class="stat" style="margin-top:10px"><span>Balance</span><b id="walletBal">—</b></div>
+        <div class="warn" style="margin-top:8px">⚠️ Only deposit what you'll risk. Keep this browser — your wallet is tied to it. Back up its key from the main terminal's Wallets tab.</div>
+      </div>
+    </div>
+
+    <!-- SETTINGS -->
+    <div class="card">
+      <div class="row">
+        <div>
+          <label>Amount (SOL)</label>
+          <input type="number" id="amt" value="0.25" min="0.01" step="0.01" />
+        </div>
+        <div>
+          <label>Run for</label>
+          <select id="mins">
+            <option value="30">30 min</option>
+            <option value="60" selected>1 hour</option>
+            <option value="180">3 hours</option>
+            <option value="360">6 hours</option>
+            <option value="720">12 hours</option>
+            <option value="1440">24 hours</option>
+          </select>
+        </div>
+      </div>
+      <label class="chk"><input type="checkbox" id="useAll" /> Use the whole wallet balance (it sizes itself)</label>
+      <label>Aggression</label>
+      <select id="mode">
+        <option value="chill">Chill — smaller, pickier</option>
+        <option value="normal" selected>Normal</option>
+        <option value="degen">Degen — bigger, faster</option>
+      </select>
+      <label class="chk"><input type="checkbox" id="live" /> <b>LIVE — trade REAL SOL</b> (off = paper, no SOL touched)</label>
+      <div id="liveWarn" class="warn hidden" style="margin:-4px 0 10px">Real money. It stops itself at a 70% loss cap or when the timer ends. You can Stop anytime.</div>
+      <button id="startBtn" class="b-green">▶ Start (paper)</button>
+      <div id="startMsg" class="muted" style="margin-top:8px"></div>
+    </div>
+
+    <!-- STATUS -->
+    <div id="statusCard" class="card hidden">
+      <div style="display:flex; justify-content:space-between; align-items:center">
+        <div><span class="muted">Equity</span><div class="big" id="equity">—</div></div>
+        <div style="text-align:right"><div id="pnl" class="big">—</div><div class="muted" id="runState">—</div></div>
+      </div>
+      <div class="stat"><span>Cash</span><b id="bank">—</b></div>
+      <div class="stat"><span>Wins / Losses</span><b id="wl">—</b></div>
+      <div class="stat"><span>Peak</span><b id="peak">—</b></div>
+      <div class="stat"><span>Ends in</span><b id="ends">—</b></div>
+      <label style="margin-top:12px">Open positions</label>
+      <div id="positions"><div class="muted">none</div></div>
+      <label style="margin-top:12px">Decision log</label>
+      <div class="log" id="log"></div>
+      <button id="stopBtn" class="b-stop" style="margin-top:12px">■ Stop & flatten</button>
+    </div>
+  </div>
+
+<script>
+const API = (location.hostname.includes("onrender.com")||location.hostname==="localhost"||location.hostname==="127.0.0.1") ? "" : "https://ogrevolbot.onrender.com";
+let token = "";
+try { token = localStorage.getItem("ogreWebToken") || ""; } catch {}
+let wallets = [];
+
+async function api(path, opts={}) {
+  const headers = { "content-type":"application/json" };
+  if (token) headers.authorization = "Bearer " + token;
+  let r;
+  try { r = await fetch(API + path, { ...opts, headers }); }
+  catch (e) { return { ok:false, error:"network" }; }
+  return r.json().catch(()=>({ ok:false, error:"bad-json" }));
+}
+
+async function ensureAccount() {
+  if (token) {
+    const probe = await api("/api/web/autopilot/wallets");
+    if (probe && probe.ok) return true;
+  }
+  const s = await api("/api/web/signup", { method:"POST", body:JSON.stringify({}) });
+  if (s && s.token) {
+    token = s.token;
+    try { localStorage.setItem("ogreWebToken", token); } catch {}
+    return true;
+  }
+  return false;
+}
+
+const $ = (id) => document.getElementById(id);
+
+async function loadWallets() {
+  const r = await api("/api/web/autopilot/wallets");
+  wallets = (r && r.wallets) ? r.wallets.filter(w => !w.isFeeWallet) : [];
+  const sel = $("walletSel");
+  sel.innerHTML = "";
+  if (!wallets.length) {
+    $("noWallet").classList.remove("hidden");
+    $("walletInfo").classList.add("hidden");
+    sel.classList.add("hidden");
+  } else {
+    $("noWallet").classList.add("hidden");
+    sel.classList.remove("hidden");
+    for (const w of wallets) {
+      const o = document.createElement("option");
+      o.value = w.index;
+      o.textContent = `#${w.index} ${w.label} · ${w.balanceSol!=null?(+w.balanceSol).toFixed(3):"?"} SOL`;
+      sel.appendChild(o);
+    }
+    showWalletInfo();
+  }
+}
+function selectedWallet() { return wallets.find(w => String(w.index) === String($("walletSel").value)); }
+function showWalletInfo() {
+  const w = selectedWallet();
+  if (!w) { $("walletInfo").classList.add("hidden"); return; }
+  $("walletInfo").classList.remove("hidden");
+  $("walletAddr").textContent = w.pubkey;
+  $("walletBal").textContent = (w.balanceSol!=null ? (+w.balanceSol).toFixed(4) : "?") + " SOL";
+}
+
+$("walletSel").addEventListener("change", showWalletInfo);
+$("createBtn").addEventListener("click", async () => {
+  $("createBtn").textContent = "Creating…";
+  await api("/api/web/wallets/create", { method:"POST", body:JSON.stringify({ label:"Autopilot", count:1 }) });
+  await loadWallets();
+  $("createBtn").textContent = "+ New wallet";
+});
+$("refreshBtn").addEventListener("click", loadWallets);
+$("copyBtn").addEventListener("click", () => {
+  const w = selectedWallet(); if (!w) return;
+  navigator.clipboard?.writeText(w.pubkey);
+  $("copyBtn").textContent = "Copied ✓"; setTimeout(()=>$("copyBtn").textContent="Copy address", 1200);
+});
+
+function syncLiveUi() {
+  const live = $("live").checked;
+  $("liveWarn").classList.toggle("hidden", !live);
+  $("modePill").textContent = live ? "LIVE" : "paper";
+  $("modePill").style.background = live ? "#3a1414" : "#142019";
+  $("modePill").style.color = live ? "#ff8a8a" : "#5be08a";
+  $("startBtn").textContent = live ? "▶ START LIVE (real SOL)" : "▶ Start (paper)";
+  $("startBtn").className = live ? "b-live" : "b-green";
+}
+$("live").addEventListener("change", syncLiveUi);
+$("useAll").addEventListener("change", () => { $("amt").disabled = $("useAll").checked; });
+
+$("startBtn").addEventListener("click", async () => {
+  const live = $("live").checked;
+  const useAll = $("useAll").checked;
+  const w = selectedWallet();
+  if (live && !w) { $("startMsg").innerHTML = '<span class="warn">Create/select a wallet first.</span>'; return; }
+  const body = {
+    minutes: Number($("mins").value),
+    mode: $("mode").value,
+    live,
+    sol: useAll ? "all" : Number($("amt").value)
+  };
+  if (w) body.wallet = w.index;
+  if (live) body.confirm = "LIVE";
+  $("startBtn").disabled = true; $("startMsg").textContent = "Starting…";
+  const r = await api("/api/web/autopilot/start", { method:"POST", body:JSON.stringify(body) });
+  $("startBtn").disabled = false;
+  if (r && r.ok) { $("startMsg").innerHTML = '<span class="ok">Running. It trades on the server now — you can close this page.</span>'; poll(); }
+  else { $("startMsg").innerHTML = '<span class="warn">'+((r&&r.error)||"failed")+'</span>'; }
+});
+
+$("stopBtn").addEventListener("click", async () => {
+  $("stopBtn").textContent = "Stopping…";
+  await api("/api/web/autopilot/stop", { method:"POST", body:JSON.stringify({}) });
+  $("stopBtn").textContent = "■ Stop & flatten";
+  poll();
+});
+
+function fmtPnl(p) {
+  const s = (p>=0?"+":"") + (p==null?"—":p.toFixed(2)+"%");
+  return `<span class="${p>=0?'up':'down'}">${s}</span>`;
+}
+async function poll() {
+  const r = await api("/api/web/autopilot/status");
+  const s = r && r.status;
+  if (!s || s.running === false && !s.stopReason && s.equity == null) { $("statusCard").classList.add("hidden"); return; }
+  $("statusCard").classList.remove("hidden");
+  $("equity").textContent = (s.equity!=null?s.equity.toFixed(4):"—") + " SOL";
+  $("pnl").innerHTML = fmtPnl(s.pnlPct);
+  $("runState").textContent = s.running ? (s.live?"LIVE running":"paper running") : ("stopped"+(s.stopReason?` · ${s.stopReason}`:""));
+  $("bank").textContent = (s.bank!=null?s.bank.toFixed(4):"—") + " SOL";
+  $("wl").textContent = `${s.wins||0} W / ${s.losses||0} L`;
+  $("peak").textContent = (s.peak!=null?s.peak.toFixed(4):"—") + " SOL";
+  const m = Math.floor((s.endsInS||0)/60), sec=(s.endsInS||0)%60;
+  $("ends").textContent = s.running ? `${m}m ${sec}s` : "—";
+  const pos = s.open||[];
+  $("positions").innerHTML = pos.length ? pos.map(p=>`<div class="pos"><span>${p.sym} <span class="muted">${p.heldS}s</span></span><b>${fmtPnl(p.movePct)} · ${p.costSol} SOL</b></div>`).join("") : '<div class="muted">none</div>';
+  $("log").innerHTML = (s.log||[]).slice().reverse().map(l=>`<div>${new Date(l.at).toLocaleTimeString()} ${escapeHtml(l.msg)}</div>`).join("");
+}
+function escapeHtml(t){ return String(t||"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+
+(async function boot() {
+  const ok = await ensureAccount();
+  if (!ok) { $("boot").innerHTML = '<span class="warn">Could not start a session. Reload, or open the main terminal once.</span>'; return; }
+  $("boot").classList.add("hidden");
+  $("app").classList.remove("hidden");
+  syncLiveUi();
+  await loadWallets();
+  poll();
+  setInterval(poll, 3000);
+})();
+</script>
+</body>
+</html>

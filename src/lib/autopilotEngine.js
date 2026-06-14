@@ -113,12 +113,17 @@ export function entryReject(row, P) {
   const buys = Number(row.buys5m) || 0;
   const sells = Number(row.sells5m) || 0;
 
+  // Anti-rug, calibrated to the REAL fresh-launch market: a $2k-MC pump coin
+  // legitimately has ~$2k liquidity, so an absolute liq floor rejects everything.
+  // Gate liquidity RELATIVE to market cap (catches genuine drains) and lean on
+  // the fast exit-side rug/stop protection for the rest. buys/sells counts are
+  // unreliable on brand-new bonding-curve pairs, so use volume as the activity
+  // signal and only reject on a clear heavy dump.
   if (!Number.isFinite(age) || age < 4 || age > 1200) return "age";
   if (!Number.isFinite(mc) || mc < 1800 || mc > 20000) return "mc";
-  if (liq > 0 && liq < 2500) return "liquidity";
-  if (buys < 2) return "buyers";
+  if (liq > 0 && liq < mc * 0.3) return "liquidity";
   if (vol < 25) return "volume";
-  if (sells > buys * 1.3) return "dumping";
+  if (buys > 0 && sells > buys * 2 + 3) return "dumping";
   if (freshScore(row) < P.minScore) return "score";
   return null;
 }
