@@ -165,9 +165,9 @@
 
     <!-- WIN CARDS (2x+) -->
     <div id="winsCard" class="card hidden">
-      <label>🏆 Win cards (2x+) — tap ⬇ to download</label>
+      <label>🏆 Win cards (+300% big wins) — tap ⬇ to download</label>
       <div id="wins"></div>
-      <div class="muted" style="margin-top:6px">Every 2x+ runner makes a clean SlimeWire PnL card (also auto-posted to your Telegram). Download here to share on X.</div>
+      <div class="muted" style="margin-top:6px">Every +300% runner makes a clean SlimeWire PnL card (also auto-posted to your Telegram). Download here to share on X.</div>
     </div>
   </div>
 
@@ -506,7 +506,7 @@ let WINS = [];
 function renderWins(wins){
   WINS = wins;
   $("winsCard").classList.remove("hidden"); // always visible so it's findable
-  if(!wins.length){ $("wins").innerHTML = '<div class="muted">A downloadable card appears here after any 2x+ runner closes.</div>'; return; }
+  if(!wins.length){ $("wins").innerHTML = '<div class="muted">A downloadable card appears here after a +300% runner closes.</div>'; return; }
   $("wins").innerHTML = wins.map((w,i)=>`<div class="pos"><span><b class="up">$${escapeHtml(w.symbol)}</b> <span class="up">+${Number(w.gainPct).toLocaleString()}%</span> <span class="muted">${w.multiple}x</span></span><button class="b-ghost" style="width:auto;padding:6px 12px;font-size:12px" onclick="dlWin(${i})">⬇ card</button></div>`).join("");
 }
 async function dlWin(i){

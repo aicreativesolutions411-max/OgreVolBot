@@ -726,8 +726,8 @@ export function createAutopilotEngine(deps) {
         });
       } catch {}
     }
-    // Win card trigger: any solid runner that peaked >= 2x (+100%).
-    if (win && (pos.peakPct || 0) >= 100) {
+    // Win card trigger: BIG wins only — peaked >= +300%.
+    if (win && (pos.peakPct || 0) >= 300) {
       const winData = {
         symbol: pos.sym,
         mint: pos.mint,
