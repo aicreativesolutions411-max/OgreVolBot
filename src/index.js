@@ -21668,11 +21668,13 @@ function announceLaunchCard(kind, mint, draft, captionText, replyMarkup) {
       try { png = await renderLaunchCard(draft, mint, null); } catch (e) { png = null; console.warn(`[launch-card] render failed: ${e.message}`); }
       const fname = `launch-${sanitizeFilenamePart(draft.symbol || mint)}.png`;
       if (png) {
-        const posted = tgChannel.announcePhoto(kind, mint, png, fname, captionText, replyMarkup);
+        // Card rendered: send the PHOTO to the channel + groups and STOP. Never also
+        // send text (it would race the photo on the same dedupe key and suppress it).
+        tgChannel.announcePhoto(kind, mint, png, fname, captionText, replyMarkup);
         broadcastPhotoToTelegramGroups(kind, mint, png, fname, captionText, replyMarkup);
-        if (posted) return;
+        return;
       }
-      // fallback: plain text announce
+      // fallback only when no image could be rendered at all
       tgChannel.announce(kind, mint, captionText);
       broadcastToTelegramGroups(kind, mint, captionText);
     } catch (error) {
