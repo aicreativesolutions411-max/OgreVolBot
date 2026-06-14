@@ -19579,3 +19579,19 @@ html body .tabs .tab-auto-pro {
 }
 html body .tabs .tab-auto-pro:hover { box-shadow: 0 0 28px rgba(141,255,90,0.85) !important; }
 @keyframes autoTabPulse { 0%,100% { box-shadow: 0 0 14px rgba(141,255,90,0.4); } 50% { box-shadow: 0 0 24px rgba(141,255,90,0.75); } }
+
+/* Login logo as the emblem (round badge) + gentle "moving" drift on the hero */
+html body .connect-card .connect-logo-emblem {
+  width: 116px !important; height: 116px !important; object-fit: contain !important;
+  border-radius: 22px !important;
+  filter: drop-shadow(0 0 22px rgba(141,255,90,0.55)) !important;
+}
+html body main.shell .connect-view .swamp-connect-shell,
+html body .swamp-connect-shell {
+  background-size: 116% !important;            /* room to drift */
+  animation: swampHeroDrift 26s ease-in-out infinite alternate;
+}
+@keyframes swampHeroDrift {
+  0%   { background-position: 46% 50%; }
+  100% { background-position: 56% 46%; }
+}
