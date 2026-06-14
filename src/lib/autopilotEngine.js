@@ -221,13 +221,19 @@ export function evalExit(pos, P, nowMs) {
     return { action: "sell", pct: 100, reason: "dev-avg-take", move };
   }
 
-  // Liquidity pulled out from under us — get out at any price. Fire EARLIER
-  // (40% liquidity drop, not 50%) to cut the big full-position rug losses.
-  if (pos.entryLiq > 400 && pos.lastLiq > 0 && pos.lastLiq < pos.entryLiq * 0.6) {
+  // Liquidity pulled out from under us — get out at any price. Fire FAST: a 30%
+  // liquidity drop is already a rug in progress; dumping here (instead of waiting
+  // for -40% or the price to fully crater) is what saves the most on rugs.
+  if (pos.entryLiq > 400 && pos.lastLiq > 0 && pos.lastLiq < pos.entryLiq * 0.7) {
     return { action: "sell", pct: 100, reason: "rug", move };
   }
-  // We lost the live feed for this coin and it's been a while — exit blind.
-  if (pos.missed >= 2 && held > 18_000) {
+  // Feed dying + already underwater = almost always a rug killing the trades. Don't
+  // wait the full blind-exit window — bail immediately to cap the loss.
+  if (pos.missed >= 1 && move <= -4) {
+    return { action: "sell", pct: 100, reason: "rug-feed", move };
+  }
+  // We lost the live feed for this coin and it's been a bit — exit blind (faster now).
+  if (pos.missed >= 2 && held > 8_000) {
     return { action: "sell", pct: 100, reason: "feed-lost", move };
   }
   // Trailing give-back once in profit — protects the moon bag at ANY peak (a
