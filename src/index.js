@@ -15292,11 +15292,14 @@ async function executeBotLaunch(chatId, userId, messageId) {
   try {
     const result = await webLaunchPumpCoin(userId, body);
     const mint = result?.tokenMint || "";
+    const trailerDraft = { name: d.name, symbol: d.symbol, description: d.description, imageDataUrl: d.imageDataUrl, x: d.x, telegram: d.telegram, website: d.website };
     launchDrafts.set(chatId, {});
     const out = [`✅ $${d.symbol} is LIVE — born on SlimeWire!`];
     if (mint) { out.push("", `CA: <code>${mint}</code>`, `Pump: https://pump.fun/${mint}`, `Chart: https://www.slimewire.org/t?ca=${mint}`); }
     out.push("", "It's now a boss other traders can raid in the Swamp. 🐸");
     await sendOrEditMessage(chatId, null, withBrandFooter(out.join("\n")), { inline_keyboard: [[{ text: "Ogre Tools", callback_data: "ogre_tools_menu" }, { text: "Main Menu", callback_data: "main_menu" }]] });
+    // AI launch trailer (hype copy + generated card / video) — best-effort, never blocks the launch
+    postLaunchTrailer(chatId, trailerDraft, mint).catch(() => {});
   } catch (error) {
     let msg = "Launch failed.";
     try { msg = formatPumpLaunchUserError ? formatPumpLaunchUserError(error) : (error.message || msg); } catch { msg = error.message || msg; }
@@ -16398,6 +16401,323 @@ async function renderPnlCard(row, metadata = {}) {
 </svg>`;
 
   return sharp(Buffer.from(svg)).png().toBuffer();
+}
+
+/* ===================== AI LAUNCH TRAILER =====================
+ * On every on-bot mint we auto-generate hype copy (LLM) + a per-coin
+ * "launch card" (SVG->PNG via sharp) and post it to Telegram. If a video
+ * API is configured (LAUNCH_VIDEO_API_URL + LAUNCH_VIDEO_API_KEY) we post a
+ * real generated trailer MP4 instead. Everything here is best-effort: a
+ * failure NEVER affects the already-successful launch.
+ * ============================================================ */
+function launchHypeFallback(d = {}) {
+  const sym = String(d.symbol || "COIN").toUpperCase();
+  const nm = d.name || sym;
+  const taglines = [
+    `$${sym} just crawled out of the swamp.`,
+    `The ogres minted $${sym}. You're early.`,
+    `$${sym} is live — fresh slime, fresh chart.`,
+    `Born on SlimeWire. $${sym} hits the swamp.`,
+    `$${sym} oozed onto the chain. Ape responsibly.`
+  ];
+  const t = taglines[(sym.charCodeAt(0) + sym.length) % taglines.length];
+  return {
+    tagline: t,
+    lines: [
+      `${nm} ($${sym}) is LIVE on pump.fun`,
+      `Minted straight from the SlimeWire swamp 🐸`,
+      `Trade the chart or hunt it in the game.`
+    ]
+  };
+}
+
+async function launchCopyLLM(system, user) {
+  const mk = (model) => JSON.stringify({ model, temperature: 0.85, max_tokens: 300, messages: [{ role: "system", content: system }, { role: "user", content: user }] });
+  const groq = ogreAgentEnv("GROQ_API_KEY");
+  if (groq) {
+    const d = await ogreAgentFetchJson("https://api.groq.com/openai/v1/chat/completions", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${groq}` }, body: mk(ogreAgentEnv("OGRE_AGENT_GROQ_MODEL") || "llama-3.1-8b-instant") }, 4500);
+    const r = String(d?.choices?.[0]?.message?.content || "").trim();
+    if (r) return r;
+  }
+  const orr = ogreAgentEnv("OPENROUTER_API_KEY");
+  if (orr) {
+    const d = await ogreAgentFetchJson("https://openrouter.ai/api/v1/chat/completions", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${orr}`, "X-Title": "SlimeWire Launch" }, body: mk(ogreAgentEnv("OGRE_AGENT_OPENROUTER_MODEL") || "openrouter/free") }, 5000);
+    const r = String(d?.choices?.[0]?.message?.content || "").trim();
+    if (r) return r;
+  }
+  if (CONFIG.openaiApiKey && ogreAgentEnv("OGRE_AGENT_OPENAI_FALLBACK") !== "false") {
+    const d = await ogreAgentFetchJson("https://api.openai.com/v1/chat/completions", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${CONFIG.openaiApiKey}` }, body: mk(CONFIG.ogreAgentModel || "gpt-4.1-mini") }, 6000);
+    const r = String(d?.choices?.[0]?.message?.content || "").trim();
+    if (r) return r;
+  }
+  return null;
+}
+
+async function launchHypeCopy(d = {}) {
+  const fb = launchHypeFallback(d);
+  if (!ogreAgentProviderEnabled()) return fb;
+  const sym = String(d.symbol || "COIN").toUpperCase();
+  const system = 'You are a hype copywriter for SlimeWire, a Solana memecoin launchpad with a degen swamp / ogre slime theme. Reply with ONLY compact JSON: {"tagline":"...","lines":["...","...","..."]}. tagline <= 60 chars, punchy, no hashtags, no quotes inside. exactly 3 lines, each <= 70 chars. Hype and fun but never financial advice or guaranteed returns. Keep the swamp/ogre/slime vibe.';
+  const user = `Coin name: ${d.name || sym}. Ticker: $${sym}. Description: ${d.description || "(none)"}. Write the launch hype.`;
+  try {
+    const raw = await launchCopyLLM(system, user);
+    if (raw) {
+      const m = raw.match(/\{[\s\S]*\}/);
+      if (m) {
+        const j = JSON.parse(m[0]);
+        const tagline = String(j.tagline || "").trim().replace(/\s+/g, " ").slice(0, 80);
+        const lines = Array.isArray(j.lines) ? j.lines.map((x) => String(x || "").trim()).filter(Boolean).slice(0, 3) : [];
+        if (tagline && lines.length) return { tagline, lines };
+      }
+    }
+  } catch { /* fall through to template */ }
+  return fb;
+}
+
+// Small timeout-guarded JSON fetch for the video API (separate from the LLM helper).
+async function videoFetchJson(url, options = {}, timeoutMs = 15000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const r = await fetch(url, { ...options, signal: controller.signal });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch { return null; } finally { clearTimeout(timer); }
+}
+
+// fal.ai queue adapter: submit -> poll status -> fetch result -> video URL.
+// Docs contract: POST https://queue.fal.run/{model} (Authorization: Key <FAL_KEY>)
+// returns {status_url, response_url}; status -> {status:"COMPLETED"}; result -> {video:{url}}.
+async function falSubmitPoll(modelId, input, key) {
+  const sub = await videoFetchJson(`https://queue.fal.run/${modelId}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Key ${key}` },
+    body: JSON.stringify(input)
+  }, 20000);
+  const statusUrl = sub?.status_url, respUrl = sub?.response_url;
+  if (!statusUrl || !respUrl) return null;
+  const deadline = Date.now() + (Number(ogreAgentEnv("LAUNCH_VIDEO_TIMEOUT_MS")) || 180000);
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 5000));
+    const st = await videoFetchJson(`${statusUrl}`, { headers: { Authorization: `Key ${key}` } }, 12000);
+    const s = String(st?.status || "").toUpperCase();
+    if (s === "COMPLETED") break;
+    if (/FAIL|ERROR|CANCEL/.test(s)) return null;
+  }
+  const out = await videoFetchJson(`${respUrl}`, { headers: { Authorization: `Key ${key}` } }, 20000);
+  const url = out?.video?.url || (typeof out?.video === "string" ? out.video : null)
+    || out?.videos?.[0]?.url || out?.url || out?.output?.url
+    || (Array.isArray(out?.output) ? out.output[0] : (typeof out?.output === "string" ? out.output : null));
+  return (url && /^https?:\/\//i.test(String(url))) ? String(url) : null;
+}
+
+// Generate a real trailer video. Prefers fal.ai (FAL_KEY); falls back to a generic
+// JSON webhook (LAUNCH_VIDEO_API_URL). Returns {url} or null. Best-effort.
+async function generateLaunchVideo(d = {}, mint = "", cp = {}) {
+  const sym = String(d.symbol || "COIN").toUpperCase();
+  const prompt = `Cinematic 5-second hype trailer for Solana memecoin $${sym} (${d.name || sym}). Neon green slime, glowing swamp-ogre mascot, energetic particles, dramatic zoom, pump.fun launch energy. ${cp.tagline || ""}`.trim();
+  const falKey = ogreAgentEnv("FAL_KEY") || ogreAgentEnv("LAUNCH_VIDEO_API_KEY");
+  if (falKey && ogreAgentEnv("LAUNCH_VIDEO_PROVIDER") !== "webhook") {
+    try {
+      let modelId, input;
+      if (d.imageDataUrl) { // animate the coin's actual logo
+        modelId = ogreAgentEnv("LAUNCH_VIDEO_IMG_MODEL") || "fal-ai/kling-video/v1/standard/image-to-video";
+        input = { prompt, image_url: d.imageDataUrl, duration: "5" };
+      } else {
+        modelId = ogreAgentEnv("LAUNCH_VIDEO_TXT_MODEL"); // text-to-video only if explicitly set
+        if (!modelId) return null;
+        input = { prompt, duration: "5" };
+      }
+      const url = await falSubmitPoll(modelId, input, falKey);
+      if (url) return { url };
+    } catch { /* fall through */ }
+    return null;
+  }
+  // legacy generic webhook hook
+  const url = ogreAgentEnv("LAUNCH_VIDEO_API_URL");
+  if (!url) return null;
+  const key = ogreAgentEnv("LAUNCH_VIDEO_API_KEY");
+  try {
+    const data = await videoFetchJson(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(key ? { Authorization: `Bearer ${key}` } : {}) },
+      body: JSON.stringify({ prompt, symbol: sym, name: d.name || sym, mint, image_data_url: d.imageDataUrl || "" })
+    }, 120000);
+    const out = data?.video_url || data?.url || data?.output || data?.result?.url || "";
+    if (out && /^https?:\/\//i.test(String(out))) return { url: String(out) };
+  } catch { /* ignore, fall back to card */ }
+  return null;
+}
+
+// Normalize a social input (URL or handle) into a short display string + clickable href.
+function launchSocialEntry(kind, raw) {
+  let v = String(raw || "").trim();
+  if (!v || v === "-") return null;
+  const strip = (s) => s.replace(/^https?:\/\//i, "").replace(/^www\./i, "").replace(/\/+$/, "");
+  if (kind === "x") {
+    const h = strip(v).replace(/^(x|twitter)\.com\//i, "").replace(/^@/, "");
+    return { label: "X @" + h, url: "https://x.com/" + h };
+  }
+  if (kind === "tg") {
+    const h = strip(v).replace(/^t\.me\//i, "").replace(/^@/, "");
+    return { label: "TG @" + h, url: "https://t.me/" + h };
+  }
+  // website
+  const host = strip(v);
+  return { label: host, url: /^https?:\/\//i.test(v) ? v : "https://" + host };
+}
+function launchSocials(d = {}) {
+  return [launchSocialEntry("x", d.x), launchSocialEntry("tg", d.telegram), launchSocialEntry("web", d.website)].filter(Boolean);
+}
+
+// Build the launch-card inner SVG ONCE (art + border resolved). Reused by the
+// static "fire image" and by every frame of the free animated GIF trailer.
+async function launchCardInnerSvg(d = {}, mint = "", cp = null) {
+  const S = PNL_CARD_STYLE;
+  const accent = S.slime;
+  const sym = sanitizeCardText(String(d.symbol || "COIN").toUpperCase(), 16);
+  const name = sanitizeCardText(d.name || "SlimeWire", 24);
+  const copy = cp || await launchHypeCopy(d);
+  const tagline = sanitizeCardText(copy.tagline || "", 52);
+  let artDataUrl = d.imageDataUrl || "";
+  if (!artDataUrl && mint) { try { const meta = await getDexTokenMetadata(mint); artDataUrl = await tokenImageDataUrl(meta?.imageUrl); } catch { /* no art */ } }
+  const art = artDataUrl
+    ? `<image href="${artDataUrl}" x="72" y="142" width="430" height="430" preserveAspectRatio="xMidYMid slice" clip-path="url(#artClip)"/>`
+    : `<rect x="72" y="142" width="430" height="430" rx="34" fill="#123018"/><text x="287" y="405" text-anchor="middle" font-size="150" font-weight="900" fill="${accent}" font-family="${S.fontFamily}">${escapeSvg(sym.slice(0, 3))}</text>`;
+  const borderDataUrl = await nextPnlBorderDataUrl();
+  const borderLayer = borderDataUrl
+    ? `<image href="${borderDataUrl}" x="0" y="0" width="${S.width}" height="${S.height}" preserveAspectRatio="xMidYMid slice"/>`
+    : pnlSlimeBorderSvg();
+  const caText = mint ? `CA ${shortMint(mint)}` : "MINTING…";
+  const socialsText = sanitizeCardText(launchSocials(d).map((s) => s.label).join("   ·   "), 52) || "pump.fun";
+
+  return `
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#061006"/>
+      <stop offset="48%" stop-color="#0b2b12"/>
+      <stop offset="100%" stop-color="#020702"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="68%" cy="46%" r="52%">
+      <stop offset="0%" stop-color="${accent}" stop-opacity="0.40"/>
+      <stop offset="100%" stop-color="${accent}" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="artClip"><rect x="72" y="142" width="430" height="430" rx="34"/></clipPath>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="20" stdDeviation="24" flood-color="#000000" flood-opacity="0.55"/>
+    </filter>
+    <filter id="slimeGlow" x="-10%" y="-20%" width="120%" height="145%">
+      <feDropShadow dx="0" dy="0" stdDeviation="5" flood-color="${S.slime}" flood-opacity="0.95"/>
+      <feDropShadow dx="0" dy="0" stdDeviation="18" flood-color="${S.slime}" flood-opacity="0.42"/>
+    </filter>
+  </defs>
+  <rect width="${S.width}" height="${S.height}" fill="url(#bg)"/>
+  <rect width="${S.width}" height="${S.height}" fill="url(#glow)"/>
+  <g opacity="0.16">
+    <path d="M0 570 C220 420 342 690 540 520 S882 430 1200 560 L1200 675 L0 675 Z" fill="${accent}"/>
+    <path d="M60 100 H1140 M60 590 H1140 M980 60 V615" stroke="${accent}" stroke-width="2"/>
+  </g>
+  ${borderLayer}
+  <rect x="42" y="86" width="1116" height="510" rx="42" fill="${S.panel}" filter="url(#shadow)" stroke="rgba(255,255,255,0.09)"/>
+  ${art}
+  <g transform="translate(555,138)">
+    <rect x="0" y="-34" width="208" height="48" rx="24" fill="${accent}"/>
+    <circle cx="28" cy="-10" r="9" fill="#06140a"/>
+    <text x="50" y="0" font-family="${S.fontFamily}" font-size="28" font-weight="900" fill="#06140a">LIVE NOW</text>
+  </g>
+  <text x="555" y="214" font-family="${S.fontFamily}" font-size="80" font-weight="900" fill="${S.white}">$${escapeSvg(sym)}</text>
+  <text x="555" y="256" font-family="${S.fontFamily}" font-size="34" font-weight="800" fill="${S.muted}">${escapeSvg(name)}</text>
+  <text x="555" y="320" font-family="${S.fontFamily}" font-size="36" font-weight="900" fill="${accent}" filter="url(#slimeGlow)">${escapeSvg(tagline)}</text>
+  <text x="555" y="388" font-family="${S.fontFamily}" font-size="42" font-weight="900" fill="${S.slime}" filter="url(#slimeGlow)">BORN ON SLIMEWIRE</text>
+  <text x="555" y="436" font-family="monospace" font-size="26" font-weight="800" fill="${S.white}">${escapeSvg(caText)}</text>
+  <text x="555" y="476" font-family="${S.fontFamily}" font-size="24" font-weight="700" fill="${S.muted}">${escapeSvg(socialsText)}</text>
+  <g transform="translate(555,500)">
+    <rect x="0" y="0" width="320" height="40" rx="20" fill="rgba(57,255,20,0.14)" stroke="${S.slime}" stroke-width="1.5"/>
+    <text x="16" y="27" font-family="${S.fontFamily}" font-size="24" font-weight="900" fill="${S.slime}">🌐 www.SlimeWire.org</text>
+  </g>
+  <text x="555" y="576" font-family="${S.fontFamily}" font-size="23" font-weight="700" fill="${S.muted}">Trade it, or hunt it in the Swamp 🐸</text>`;
+}
+
+async function renderLaunchCard(d = {}, mint = "", cp = null) {
+  const S = PNL_CARD_STYLE;
+  const inner = await launchCardInnerSvg(d, mint, cp);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${S.width}" height="${S.height}" viewBox="0 0 ${S.width} ${S.height}">${inner}</svg>`;
+  return sharp(Buffer.from(svg)).png().toBuffer();
+}
+
+// FREE animated GIF trailer (no external API): the fire card with a slow zoom +
+// a diagonal "shine" sweep, authored frame-by-frame via sharp's join. Returns a
+// GIF buffer, or null if anything fails (caller falls back to the static card).
+async function buildLaunchTrailerGif(d = {}, mint = "", cp = null) {
+  try {
+    const S = PNL_CARD_STYLE;
+    const inner = await launchCardInnerSvg(d, mint, cp);
+    const FRAMES = 16, OUTW = 760;
+    const bufs = [];
+    for (let f = 0; f < FRAMES; f++) {
+      const t = f / (FRAMES - 1);
+      const zoom = 1 + t * 0.05;                       // slow push-in
+      const vw = S.width / zoom, vh = S.height / zoom;
+      const vx = (S.width - vw) / 2, vy = (S.height - vh) / 2;
+      const sweepX = -400 + t * (S.width + 800);       // diagonal light sweep
+      const overlay = `<g opacity="0.10"><polygon points="${sweepX},0 ${sweepX + 180},0 ${sweepX - 120},${S.height} ${sweepX - 300},${S.height}" fill="#ffffff"/></g>`;
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${S.width}" height="${S.height}" viewBox="${vx.toFixed(2)} ${vy.toFixed(2)} ${vw.toFixed(2)} ${vh.toFixed(2)}">${inner}${overlay}</svg>`;
+      bufs.push(await sharp(Buffer.from(svg)).resize(OUTW).png().toBuffer());
+    }
+    return await sharp(bufs, { join: { animated: true } }).gif({ loop: 0, delay: 130 }).toBuffer();
+  } catch { return null; }
+}
+
+async function postLaunchTrailer(chatId, d = {}, mint = "") {
+  try {
+    const sym = String(d.symbol || "COIN").toUpperCase();
+    const cp = await launchHypeCopy(d);
+    const socials = launchSocials(d);
+    // caption links (clickable in Telegram): pump + chart + each social + ALWAYS website
+    const linkLines = [];
+    if (mint) { linkLines.push(`💊 <a href="https://pump.fun/${mint}">Pump.fun</a>  ·  📈 <a href="https://www.slimewire.org/t?ca=${mint}">Chart</a>`); }
+    for (const s of socials) { linkLines.push(`🔗 <a href="${s.url}">${escapeHtml(s.label)}</a>`); }
+    linkLines.push(`🌐 <a href="https://www.slimewire.org">www.SlimeWire.org</a>`);
+    const caption = [
+      `🚀 <b>$${sym} — born on SlimeWire</b>`,
+      escapeHtml(cp.tagline),
+      "",
+      ...cp.lines.map((l) => escapeHtml(l)),
+      mint ? `\nCA: <code>${mint}</code>` : "",
+      "",
+      ...linkLines
+    ].filter(Boolean).join("\n");
+    const kbRows = [];
+    if (mint) kbRows.push([{ text: "📈 Chart", url: `https://www.slimewire.org/t?ca=${mint}` }, { text: "💊 Pump.fun", url: `https://pump.fun/${mint}` }]);
+    const socialBtns = socials.map((s) => ({ text: s.label.length > 16 ? s.label.slice(0, 15) + "…" : s.label, url: s.url }));
+    for (let i = 0; i < socialBtns.length; i += 2) kbRows.push(socialBtns.slice(i, i + 2));
+    kbRows.push([{ text: "🌐 SlimeWire.org", url: "https://www.slimewire.org" }, { text: "🐸 Swamp", url: "https://www.slimewire.org/swamp" }]);
+    const kb = { inline_keyboard: kbRows };
+
+    const targets = [chatId];
+    const broadcast = ogreAgentEnv("LAUNCH_BROADCAST_CHAT_ID");
+    if (broadcast && String(broadcast) !== String(chatId)) targets.push(broadcast);
+
+    // 1) FIRE IMAGE FIRST — the launch card with CA + socials + website (fast, always works)
+    const png = await renderLaunchCard(d, mint, cp);
+    const fname = `launch-${sanitizeFilenamePart(sym)}.png`;
+    for (const t of targets) { try { await sendPhoto(t, fname, png, caption, kb, "HTML"); } catch { /* per-target */ } }
+
+    // 2) THEN THE VIDEO — free animated GIF trailer by default (no API/no cost);
+    //    upgrades to a real MP4 only if a video key (FAL_KEY) is set.
+    const vCap = `🎬 <b>$${sym}</b> trailer — born on SlimeWire${mint ? `\nCA: <code>${mint}</code>` : ""}`;
+    const hasVideoApi = ogreAgentEnv("FAL_KEY") || ogreAgentEnv("LAUNCH_VIDEO_API_KEY") || ogreAgentEnv("LAUNCH_VIDEO_API_URL");
+    if (hasVideoApi) {
+      generateLaunchVideo(d, mint, cp).then(async (vid) => {
+        if (vid && vid.url) { for (const t of targets) { try { await sendTelegramVideo(t, { url: vid.url }, vCap, kb); } catch { /* per-target */ } } return; }
+        const gif = await buildLaunchTrailerGif(d, mint, cp);
+        if (gif) for (const t of targets) { try { await sendTelegramAnimation(t, gif, `${fname}.gif`, vCap, kb); } catch { /* per-target */ } }
+      }).catch(() => {});
+    } else {
+      const gif = await buildLaunchTrailerGif(d, mint, cp);
+      if (gif) for (const t of targets) { try { await sendTelegramAnimation(t, gif, `${fname}.gif`, vCap, kb); } catch { /* per-target */ } }
+    }
+  } catch { /* launch already succeeded; trailer is bonus */ }
 }
 
 async function nextPnlBorderDataUrl() {
@@ -20303,11 +20623,12 @@ async function sendDocument(chatId, filename, text) {
   return data.result;
 }
 
-async function sendPhoto(chatId, filename, buffer, caption = "", replyMarkup = null) {
+async function sendPhoto(chatId, filename, buffer, caption = "", replyMarkup = null, parseMode = null) {
   const form = new FormData();
   form.append("chat_id", String(chatId));
   form.append("photo", new Blob([buffer], { type: "image/png" }), filename);
   if (caption) form.append("caption", caption);
+  if (parseMode) form.append("parse_mode", parseMode);
   if (replyMarkup) form.append("reply_markup", JSON.stringify(replyMarkup));
 
   const data = await fetchJson(`https://api.telegram.org/bot${CONFIG.telegramToken}/sendPhoto`, {
@@ -20317,6 +20638,54 @@ async function sendPhoto(chatId, filename, buffer, caption = "", replyMarkup = n
 
   if (!data.ok) {
     throw new Error(data.description || "Telegram sendPhoto failed");
+  }
+
+  return data.result;
+}
+
+// Send a video to Telegram. source = { url } (Telegram fetches it) or { buffer, filename }.
+async function sendTelegramVideo(chatId, source = {}, caption = "", replyMarkup = null, parseMode = "HTML") {
+  const form = new FormData();
+  form.append("chat_id", String(chatId));
+  if (source.url) {
+    form.append("video", String(source.url));
+  } else if (source.buffer) {
+    form.append("video", new Blob([source.buffer], { type: "video/mp4" }), source.filename || "trailer.mp4");
+  } else {
+    throw new Error("sendTelegramVideo needs a url or buffer");
+  }
+  if (caption) form.append("caption", caption);
+  if (parseMode) form.append("parse_mode", parseMode);
+  if (replyMarkup) form.append("reply_markup", JSON.stringify(replyMarkup));
+
+  const data = await fetchJson(`https://api.telegram.org/bot${CONFIG.telegramToken}/sendVideo`, {
+    method: "POST",
+    body: form
+  });
+
+  if (!data.ok) {
+    throw new Error(data.description || "Telegram sendVideo failed");
+  }
+
+  return data.result;
+}
+
+// Send an animated GIF (the free trailer) to Telegram as an animation.
+async function sendTelegramAnimation(chatId, buffer, filename = "trailer.gif", caption = "", replyMarkup = null, parseMode = "HTML") {
+  const form = new FormData();
+  form.append("chat_id", String(chatId));
+  form.append("animation", new Blob([buffer], { type: "image/gif" }), filename);
+  if (caption) form.append("caption", caption);
+  if (parseMode) form.append("parse_mode", parseMode);
+  if (replyMarkup) form.append("reply_markup", JSON.stringify(replyMarkup));
+
+  const data = await fetchJson(`https://api.telegram.org/bot${CONFIG.telegramToken}/sendAnimation`, {
+    method: "POST",
+    body: form
+  });
+
+  if (!data.ok) {
+    throw new Error(data.description || "Telegram sendAnimation failed");
   }
 
   return data.result;
@@ -21227,6 +21596,62 @@ function groupBridgeFor(chatId) {
     }));
   }
   return tgGroupBridges.get(key);
+}
+
+function broadcastPhotoToTelegramGroups(kind, key, buffer, filename, caption, replyMarkup) {
+  if (!CONFIG.telegramChannelBotToken || !buffer) return;
+  void (async () => {
+    try {
+      const store = await readTelegramGroups();
+      for (const [chatId, group] of Object.entries(store.groups)) {
+        if (group?.alerts) groupBridgeFor(chatId).announcePhoto(kind, key, buffer, filename, caption, replyMarkup);
+      }
+    } catch (error) {
+      console.warn(`[tg-groups] photo broadcast failed: ${error.message}`);
+    }
+  })();
+}
+
+// Public launch announcement: posts the fire CARD (pair + launch info) to the channel
+// and all opted-in groups, with a clean text fallback. Fire-and-forget — never blocks
+// or breaks the launch. captionText is the clean caption (no "bundled" explainer).
+function announceLaunchCard(kind, mint, draft, captionText, replyMarkup) {
+  void (async () => {
+    try {
+      let png = null;
+      try { png = await renderLaunchCard(draft, mint, null); } catch { png = null; }
+      const fname = `launch-${sanitizeFilenamePart(draft.symbol || mint)}.png`;
+      if (png) {
+        const posted = tgChannel.announcePhoto(kind, mint, png, fname, captionText, replyMarkup);
+        broadcastPhotoToTelegramGroups(kind, mint, png, fname, captionText, replyMarkup);
+        if (posted) return;
+      }
+      // fallback: plain text announce
+      tgChannel.announce(kind, mint, captionText);
+      broadcastToTelegramGroups(kind, mint, captionText);
+    } catch (error) {
+      console.warn(`[launch-card] announce failed: ${error.message}`);
+    }
+  })();
+}
+
+// Clean public launch caption: pair (ticker) + CA + links. No "dev buy / bundled /
+// landed atomically" mechanics — just the launch info traders want.
+function buildLaunchAnnounceCaption(sym, mint) {
+  return [
+    `🐸 <b>Fresh swamp launch — $${sym}</b> is LIVE on pump.fun`,
+    `CA: <code>${mint}</code>`,
+    "",
+    `📈 <a href="https://www.slimewire.org/t?ca=${mint}">Chart</a>  ·  💊 <a href="https://pump.fun/coin/${mint}">Pump.fun</a>  ·  🌐 <a href="https://www.slimewire.org">SlimeWire</a>`
+  ].join("\n");
+}
+function launchAnnounceKb(mint) {
+  return {
+    inline_keyboard: [
+      [{ text: "📈 Chart", url: `https://www.slimewire.org/t?ca=${mint}` }, { text: "💊 Pump.fun", url: `https://pump.fun/coin/${mint}` }],
+      [{ text: "🌐 SlimeWire.org", url: "https://www.slimewire.org" }, { text: "🚀 Launch yours", url: "https://www.slimewire.org" }]
+    ]
+  };
 }
 
 function broadcastToTelegramGroups(kind, key, text) {
@@ -33051,12 +33476,10 @@ async function webLaunchPumpPortalLocal(userId, body, basePayload) {
     }
   });
   if (String(launchResult?.status || "").toUpperCase() === "COMPLETE" && launchResult.tokenMint) {
-    const launchText = [
-      `🐸 <b>Fresh swamp launch</b>: $${escapeTelegramHtml(basePayload.symbol || basePayload.name || "???")} just went live on pump.fun via <a href="https://www.slimewire.org">SlimeWire</a> Pump Launch.`,
-      `<a href="https://www.slimewire.org/t?ca=${launchResult.tokenMint}">launch room</a> | <a href="https://pump.fun/coin/${launchResult.tokenMint}">pump.fun</a> | <a href="${dexScreenerUrl(launchResult.tokenMint)}">chart</a> | <a href="https://www.slimewire.org">launch yours</a>`
-    ].join("\n");
-    tgChannel.announce("launch", launchResult.tokenMint, launchText);
-    broadcastToTelegramGroups("launch", launchResult.tokenMint, launchText);
+    const sym = escapeTelegramHtml(basePayload.symbol || basePayload.name || "???");
+    const launchText = buildLaunchAnnounceCaption(sym, launchResult.tokenMint);
+    const draft = { name: basePayload.name, symbol: basePayload.symbol, description: basePayload.description, imageDataUrl: basePayload.imageDataUrl, x: basePayload.twitter, telegram: basePayload.telegram, website: basePayload.website };
+    announceLaunchCard("launch", launchResult.tokenMint, draft, launchText, launchAnnounceKb(launchResult.tokenMint));
     fulfillLaunchHype(userId, launchResult.tokenMint, basePayload.symbol).catch((error) => console.warn(`[hype] fulfill failed: ${error.message}`));
   }
   return launchResult;
@@ -33208,12 +33631,10 @@ async function webLaunchPumpCoin(userId, body = {}) {
       // The local path announces internally; the bundle path needs the same sends
       // (TG launch post + hype-page fulfillment) once the bundle is CONFIRMED landed.
       if (useJito && String(result?.status || "").toUpperCase() === "COMPLETE" && result.tokenMint) {
-        const launchText = [
-          `🐸 <b>Fresh swamp launch</b>: $${escapeTelegramHtml(symbol || name || "???")} just went live on pump.fun via <a href="https://www.slimewire.org">SlimeWire</a> Pump Launch - dev buy + first-block buys landed atomically.`,
-          `<a href="https://www.slimewire.org/t?ca=${result.tokenMint}">launch room</a> | <a href="https://pump.fun/coin/${result.tokenMint}">pump.fun</a> | <a href="${dexScreenerUrl(result.tokenMint)}">chart</a> | <a href="https://www.slimewire.org">launch yours</a>`
-        ].join("\n");
-        tgChannel.announce("launch", result.tokenMint, launchText);
-        broadcastToTelegramGroups("launch", result.tokenMint, launchText);
+        const sym = escapeTelegramHtml(symbol || name || "???");
+        const launchText = buildLaunchAnnounceCaption(sym, result.tokenMint);
+        const draft = { name, symbol, description: body.description, imageDataUrl: body.imageDataUrl, x: body.x || body.twitter, telegram: body.telegram, website: body.website };
+        announceLaunchCard("launch", result.tokenMint, draft, launchText, launchAnnounceKb(result.tokenMint));
         fulfillLaunchHype(userId, result.tokenMint, symbol).catch((error) => console.warn(`[hype] fulfill failed: ${error.message}`));
       }
       await audit("web_launch_pump_coin", {

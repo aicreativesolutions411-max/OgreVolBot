@@ -424,6 +424,24 @@ function creatureFor(row){
   const pool=OGRE_BY_TIER[rar.k]||OGRE_BY_TIER.common;
   return {img:pool[h%pool.length]};
 }
+/* ---- per-coin bestiary: a unique, deterministic monster identity per mint ----
+ * Every caught coin becomes its own species (name + element + stats), seeded by
+ * the mint so it's stable forever. Makes the Dex a real Pokédex, not reskins.
+ * If a runtime image API is ever wired up, swap art per species here. */
+const BEAST_PREFIX=["Bog","Slime","Murk","Toxic","Fungal","Goo","Mire","Sludge","Swamp","Ooze","Venom","Rot","Gloom","Spore","Brine","Tar"];
+const BEAST_BODY=["Gremlin","Ogre","Wraith","Troll","Lurker","Brute","Imp","Behemoth","Crawler","Hag","Golem","Fiend","Maw","Stalker","Glutton","Wart"];
+const ELEMENTS=[{n:"Toxic",i:"☣️",c:"#9dff45"},{n:"Ember",i:"🔥",c:"#ff7a3c"},{n:"Frost",i:"❄️",c:"#6ad0ff"},{n:"Volt",i:"⚡",c:"#ffe24a"},{n:"Void",i:"🌀",c:"#b06bff"},{n:"Bog",i:"🍄",c:"#7bd06a"},{n:"Slime",i:"💧",c:"#39ff14"}];
+const speciesCache=new Map();
+function coinSpecies(mint,rarity){ const key=mint+"|"+(rarity||"");
+  if(speciesCache.has(key)) return speciesCache.get(key);
+  const h=hash("sp"+mint);
+  const pre=BEAST_PREFIX[h%BEAST_PREFIX.length];
+  const body=BEAST_BODY[(h>>4)%BEAST_BODY.length];
+  const el=ELEMENTS[(h>>8)%ELEMENTS.length];
+  const bump={common:0,uncommon:6,rare:13,epic:22,legendary:34}[rarity]||0;
+  const cl=v=>Math.max(35,Math.min(99,v+bump));
+  const out={species:pre+" "+body, element:el, atk:cl(40+((h>>3)%55)), def:cl(40+((h>>10)%55)), hp:cl(40+((h>>17)%55))};
+  speciesCache.set(key,out); return out; }
 function verdictOf(row){ const m5=num(row.m5 ?? row.priceChangeM5); const liq=num(row.liquidityUsd);
   if(row._ogre) return {t:"SlimeWire Born",c:"#ffd24a"}; if(liq>0&&liq<1500) return {t:"Low Liq ⚠",c:"#ff5e5e"};
   if(m5<=-25) return {t:"Dumping",c:"#ff5e5e"}; if(m5>=30) return {t:"Pumping 🔥",c:"#72ff23"}; return {t:"Stable",c:"#9fb3a3"}; }
@@ -569,7 +587,23 @@ function spawnMob(type){ const m=MOBS[type]; const ang=Math.random()*6.28, dist=
     x:player.x+Math.cos(ang)*dist, y:player.y+Math.sin(ang)*dist, dir:"down", walkT:Math.random()*3, _mv:false, flash:0,
     spr:{img:MOB_OGRES[hash(type+m.name)%MOB_OGRES.length]} }); }
 function manageMobs(){ const raid=raidState().live; const want=raid?12:6;
-  while(mobs.length<want){ const r=Math.random(); spawnMob(raid&&r<0.22?"bear":r<0.55?"goblin":"wolf"); } }
+  // count only normal mobs so an active rug boss doesn't suppress the usual spawns
+  while(mobs.filter(m=>!m.boss).length<want){ const r=Math.random(); spawnMob(raid&&r<0.22?"bear":r<0.55?"goblin":"wolf"); } }
+// A rugged coin's creature turns hostile — a tough, themed boss worth real loot.
+function spawnRugBoss(mint,c){ if(!player) return;
+  const rar=c.rarity||"common"; const sp=coinSpecies(mint,rar);
+  const tierMul={common:1,uncommon:1.4,rare:1.9,epic:2.6,legendary:3.4}[rar]||1; const lv=level();
+  const hp=Math.round((150+lv*14)*tierMul);
+  const pool=OGRE_BY_TIER[rar]||OGRE_BY_TIER.common; const sprPath=pool[hash(mint)%pool.length];
+  const ang=Math.random()*6.28, dist=300+Math.random()*220;
+  mobs.push({ type:"rugboss", boss:true, bossMint:mint, bossSym:c.symbol, species:sp.species,
+    name:"💀 Rug Boss $"+c.symbol, hp, maxhp:hp, dmg:Math.round(10+lv*1.2), spd:46,
+    r:Math.round(26*Math.min(1.5,0.8+tierMul*0.22)), drop:{wood:4,scrap:3,goo:3}, col:sp.element.c,
+    x:player.x+Math.cos(ang)*dist, y:player.y+Math.sin(ang)*dist, dir:"down", walkT:0, _mv:false, flash:0,
+    spr:{img:sprPath} });
+  try{ sfx("boss",0.55); }catch(_){}
+  try{ showBanner("💀 RUG BOSS","$"+c.symbol+" rugged — its "+sp.species+" turned hostile!",sp.element.c); }catch(_){}
+  toast("💀 $"+c.symbol+" rugged! A Rug Boss is loose in the swamp — hunt it for revenge + 🔮"); }
 function addRes(drop){ for(const k in drop) store.res[k]=(store.res[k]||0)+drop[k]; save(); }
 
 function newGame(){
@@ -663,12 +697,21 @@ async function loadFeed(){
     lbNames=((j3&&j3.scores)||[]).map(s=>s.name).filter(Boolean).slice(0,5); }catch(_){ lbNames=[]; }
   // Refresh caught coins' live market cap from the feed so creatures can evolve
   // as their coin pumps (mult = mcNow/mc drives the evolution tiers).
-  try{ let dirty=false;
+  try{ let dirty=false; const rugged=[];
     for(const row of feedRows){ const mint=row.tokenMint||row.mint; if(!mint) continue;
       const c=store.dex[mint]; if(!c) continue;
       const mc=num(row.marketCap||row.marketCapUsd); if(mc>0 && mc!==c.mcNow){ c.mcNow=mc; dirty=true; }
       if(num(c.mc)>0 && num(c.mcNow)>0){ const ns=evoStageOf(c.mcNow/c.mc); if(ns.s>(c.evo||1)){ c.evo=ns.s; dirty=true;
-        try{ sfx("level",0.5); toast("✨ $"+c.symbol+" evolved to "+ns.name+"!"); store.xp+=20; }catch(_){} } } }
+        try{ sfx("level",0.5); toast("✨ $"+c.symbol+" evolved to "+ns.name+"!"); store.xp+=20; }catch(_){} } }
+      // RUG BOSS: track each coin's peak; if it craters from its peak, it "rugs"
+      // and its creature turns into a hostile boss to hunt down for revenge + loot.
+      const peak=Math.max(num(c.mcPeak)||0,num(c.mcNow)||0,num(c.mc)||0); if(peak!==c.mcPeak){ c.mcPeak=peak; dirty=true; }
+      const real=!String(mint).startsWith("syn_")&&!String(mint).startsWith("founder_");
+      const dump=num(c.mcNow)>0 && peak>2000 && c.mcNow<=peak*0.5 && peak>=(num(c.mc)||1)*1.1;
+      const cooled=!c.ruggedAt || (Date.now()-c.ruggedAt>6*3600000);
+      if(real && dump && cooled) rugged.push({mint,c}); }
+    // spawn at most one rug boss per refresh, only while playing the world
+    if(state==="world" && player && rugged.length){ const {mint,c}=rugged[0]; c.ruggedAt=Date.now(); dirty=true; spawnRugBoss(mint,c); }
     if(dirty) save();
   }catch(_){}
   if(!feedRows.length){ // synthetic fallback so the world is never empty / offline-safe
@@ -715,7 +758,15 @@ cv.addEventListener("touchmove",e=>{ for(const t of e.changedTouches){ if(t.iden
   mvx=dx/d; mvy=dy/d; if(d<10){mvx=0;mvy=0;} $("nub").style.transform=`translate(calc(-50% + ${mvx*cl}px), calc(-50% + ${mvy*cl}px))`; e.preventDefault(); } } },{passive:false});
 function endTouch(e){ for(const t of e.changedTouches){ if(t.identifier===joyId){ joyId=null; mvx=0;mvy=0; $("joy").classList.remove("on"); } } }
 cv.addEventListener("touchend",endTouch); cv.addEventListener("touchcancel",endTouch);
-const keys={}; window.addEventListener("keydown",e=>{ keys[e.key.toLowerCase()]=true; });
+const keys={};
+window.addEventListener("keydown",e=>{ const k=e.key.toLowerCase(); keys[k]=true;
+  // stop space/arrows from scrolling the page while playing
+  if(k===" "||k==="spacebar"||k.startsWith("arrow")) e.preventDefault();
+  if(state!=="world") return;
+  // one-shot keys (held movement + attack are read every frame in update())
+  if(k==="e"||k==="enter") interact();      // enter building (or swing if none)
+  if(k==="q"||k==="x") cycleWeapon();        // swap weapon
+});
 window.addEventListener("keyup",e=>{ keys[e.key.toLowerCase()]=false; });
 // tap-to-interact (mouse / quick tap handled via click on canvas)
 cv.addEventListener("click",()=>{ if(state==="world") interact(); });
@@ -750,6 +801,12 @@ function attackMob(){ const m=nearMob; if(!m) return;
 function killMob(m){ if(!m||m._dead) return; m._dead=true; const prevK=store.kills||0; store.kills=prevK+1; addRes(m.drop); store.xp+=8;
   // bears (Bear Market) sometimes drop a rare 🔮 relic — the key crafting material
   if(m.type==="bear" && Math.random()<0.5){ store.res.relic=(store.res.relic||0)+1; floatTxt(m.x,m.y-14,"+1 🔮 relic","#b06bff"); }
+  // RUG BOSS down: guaranteed relics, big XP + raid pts, and "revenge" bragging rights
+  if(m.boss){ const relics=2+Math.floor(Math.random()*3); store.res.relic=(store.res.relic||0)+relics;
+    store.xp+=120; store.raidPts=(store.raidPts||0)+25; store.bossKills=(store.bossKills||0)+1;
+    floatTxt(m.x,m.y-18,"+"+relics+" 🔮 relic","#b06bff");
+    try{ showBanner("🏆 RUG REVENGE","Slayed the $"+(m.bossSym||"?")+" Rug Boss · +"+relics+" 🔮 +120xp","#ffd24a"); }catch(_){}
+    burst(m.x,m.y,m.col,40); addShake(12); hitstop=Math.max(hitstop,0.14); }
   save();
   burst(m.x,m.y,m.col,18); impactFX(m.x,m.y,player.x,player.y,"#ffd24a",true);
   const got=Object.entries(m.drop).map(([k,v])=>"+"+v+" "+({wood:"🪵",scrap:"🔩",goo:"🟢"}[k]||k)).join(" ");
@@ -766,6 +823,8 @@ function update(dt){
   const p=player; let ix=mvx,iy=mvy;
   if(keys["a"]||keys["arrowleft"])ix=-1; if(keys["d"]||keys["arrowright"])ix=1; if(keys["w"]||keys["arrowup"])iy=-1; if(keys["s"]||keys["arrowdown"])iy=1;
   const il=Math.hypot(ix,iy); if(il>1){ix/=il;iy/=il;}
+  // attack while moving: hold Space / J / F to swing+fire (rate-limited by atkCd)
+  if(keys[" "]||keys["j"]||keys["f"]) playerSwing();
   // velocity smoothing -> eases accel/decel so movement feels fluid, not snappy
   p.vx=p.vx||0; p.vy=p.vy||0; const sm=Math.min(1,dt*12);
   p.vx+=(ix*p.spd-p.vx)*sm; p.vy+=(iy*p.spd-p.vy)*sm;
@@ -983,6 +1042,10 @@ function drawRemote(r){ drawShadow(r.x,r.y,r.r);
   ctx.font="900 11px Inter,sans-serif"; ctx.textAlign="center"; ctx.fillStyle=ally?"#9bff9b":"#ff9bd6"; ctx.strokeStyle="rgba(0,0,0,0.7)"; ctx.lineWidth=3;
   const ic=ally?"🟢":"⚔️"; ctx.strokeText(ic+" "+tag,r.x,r.y-r.r-9); ctx.fillText(ic+" "+tag,r.x,r.y-r.r-9); }
 function drawMob(m){ drawShadow(m.x,m.y,m.r);
+  if(m.boss){ const t=performance.now()/420, pr=m.r*(1.7+Math.sin(t*2)*0.12);
+    const g=ctx.createRadialGradient(m.x,m.y,m.r*0.4,m.x,m.y,pr); g.addColorStop(0,(m.col||"#ff5e5e")+"00"); g.addColorStop(0.7,(m.col||"#ff5e5e")+"33"); g.addColorStop(1,(m.col||"#ff5e5e")+"00");
+    ctx.fillStyle=g; ctx.beginPath(); ctx.arc(m.x,m.y,pr,0,6.2832); ctx.fill();
+    ctx.strokeStyle=(m.col||"#ff5e5e"); ctx.lineWidth=2.5; ctx.globalAlpha=0.8; ctx.beginPath(); ctx.arc(m.x,m.y-m.r*0.2,m.r*1.45,t,t+2); ctx.stroke(); ctx.beginPath(); ctx.arc(m.x,m.y-m.r*0.2,m.r*1.45,t+3.14,t+5.14); ctx.stroke(); ctx.globalAlpha=1; }
   ctx.strokeStyle="rgba(255,80,60,0.5)"; ctx.lineWidth=2; ctx.beginPath(); ctx.ellipse(m.x,m.y+m.r*0.5,m.r*1.1,m.r*0.45,0,0,6.2832); ctx.stroke();
   let drew=false; if(m.spr.img) drew=drawChar(m,m.spr.img,m.r*2.4);
   if(!drew){ const g=ctx.createRadialGradient(m.x,m.y-m.r*0.3,1,m.x,m.y,m.r*1.3); g.addColorStop(0,"#fff2"); g.addColorStop(1,m.col);
@@ -1062,8 +1125,10 @@ function weakenWild(c,dmg,sx,sy){ if(c.dead) return; if(c.weak==null) c.weak=1;
 }
 function catchWild(c){ if(c.dead) return; c.dead=true; sfx("catch",0.6); sfx("level",0.4);
   const row=c.row||{}; const mcNow=num(row.marketCap||row.marketCapUsd);
+  const firstSeen=!store.dex[c.mint];
   store.dex[c.mint]={ symbol:c.sym, mc:mcNow||1, mcNow:mcNow||1, rarity:c.rar.k, stage:1, ogre:!!row._ogre, at:Date.now() };
   store.xp+=c.rar.xp; save();
+  if(firstSeen){ const sp=coinSpecies(c.mint,c.rar.k); setTimeout(()=>toast(`🧬 New species: ${sp.element.i} ${sp.species} — ATK ${sp.atk}/DEF ${sp.def}/HP ${sp.hp}`),700); }
   burst(c.x,c.y,c.rar.col,22); impactFX(c.x,c.y,c.x,c.y-1,c.rar.col,true);
   floats.push({x:c.x,y:c.y-c.r,txt:"CAUGHT! +"+c.rar.xp+"xp",col:c.rar.col,t:0});
   creatures=creatures.filter(x=>x!==c); submitCatches();
@@ -1121,11 +1186,17 @@ function openDex(){ state="dex"; $("prompt").classList.remove("on");
     const h=hash(mint); const pool=OGRE_BY_TIER[c.rarity]||OGRE_BY_TIER.common; const path=pool[h%pool.length];
     const real=!String(mint).startsWith("syn_")&&!String(mint).startsWith("founder_");
     const href=real?(SITE+"/t?ca="+encodeURIComponent(mint)):(SITE+"/terminal");
-    d.style.cursor="pointer"; d.title="Open $"+c.symbol+" chart";
+    d.style.cursor="pointer";
+    const sp=coinSpecies(mint,c.rarity); const el=sp.element;
+    d.title=`$${c.symbol} — ${sp.species} (${el.n}) · ATK ${sp.atk} / DEF ${sp.def} / HP ${sp.hp} · tap for chart`;
     d.innerHTML=`<div class="dr" style="background:${rc}"></div>`+(peak>1?`<div class="evo">${"★".repeat(peak-1)} ${tierName}</div>`:"")+
       `<span class="dchart">📈</span>`+
+      `<div class="delem" style="position:absolute;top:5px;left:6px;font-size:0.72rem;filter:drop-shadow(0 0 3px ${el.c})" title="${el.n}">${el.i}</div>`+
       (path?`<img src="${path}" onerror="this.style.display='none'">`:`<div style="font-size:30px">${c.ogre?"🧌":"🟢"}</div>`)+
-      `<div class="ds">${c.ogre?"🧌":""}$${c.symbol}</div><div class="dm ${mult>=1?'up':'down'}">${mult>=1?'+':''}${((mult-1)*100).toFixed(0)}%</div>`;
+      `<div class="ds">${c.ogre?"🧌":""}$${c.symbol}</div>`+
+      `<div class="dsp" style="font-size:0.56rem;font-weight:800;line-height:1.1;color:${el.c};margin:1px 0 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${sp.species}</div>`+
+      `<div class="dstat" style="font-size:0.52rem;color:var(--dim);letter-spacing:.2px">⚔${sp.atk} 🛡${sp.def} ❤${sp.hp}</div>`+
+      `<div class="dm ${mult>=1?'up':'down'}">${mult>=1?'+':''}${((mult-1)*100).toFixed(0)}%</div>`;
     d.onclick=()=>{ try{ sfx("ui",0.3); window.open(href,"_blank","noopener"); }catch(_){} };
     grid.appendChild(d); }
   if(evoChanged) save();
@@ -1227,7 +1298,9 @@ function showTitle(){ state="title"; $("load").style.display="none"; $("start").
 }
 function enterWorld(){ $("start").classList.remove("on"); $("hud").style.display="block"; startAmbient(); newGame();
   connectWS();
-  state="world"; lastTs=performance.now(); toast("Walk up to a coin and tap ✋ to catch it"); requestAnimationFrame(loop); }
+  state="world"; lastTs=performance.now();
+  toast(("ontouchstart" in window)?"Drag to move · ⚔️ to attack · ✋ to catch / enter":"WASD move · Space/J attack (while moving!) · E enter · Q swap weapon");
+  requestAnimationFrame(loop); }
 $("play").onclick=enterWorld;
 $("mute").onclick=()=>setMuted(!store.muted);
 $("exit").onclick=()=>{ state="title"; $("hud").style.display="none"; showTitle(); };

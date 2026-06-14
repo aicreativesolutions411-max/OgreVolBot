@@ -67,6 +67,23 @@ export function createTelegramChannelBridge(options = {}) {
     }
   }
 
+  async function sendPhotoReq(buffer, filename, caption, replyMarkup) {
+    const form = new FormData();
+    form.append("chat_id", chatId);
+    form.append("photo", new Blob([buffer], { type: "image/png" }), filename || "card.png");
+    if (caption) { form.append("caption", caption); form.append("parse_mode", "HTML"); }
+    if (replyMarkup) form.append("reply_markup", JSON.stringify(replyMarkup));
+    const response = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
+      method: "POST",
+      body: form,
+      signal: AbortSignal.timeout(25_000)
+    });
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw new Error(`telegram sendPhoto ${response.status}: ${body.slice(0, 200)}`);
+    }
+  }
+
   /**
    * Fire-and-forget channel post. kind groups rate/dedupe buckets; key identifies the
    * event (usually the token mint). Never throws; drops silently when limits apply.
@@ -85,7 +102,26 @@ export function createTelegramChannelBridge(options = {}) {
     });
   }
 
-  return { enabled, announce };
+  /**
+   * Fire-and-forget channel PHOTO post (e.g. the launch fire-card). Same rate/dedupe
+   * contract as announce(). Returns true if accepted (sent async), false if dropped.
+   */
+  function announcePhoto(kind, key, buffer, filename, caption, replyMarkup) {
+    if (!enabled || !buffer) return false;
+    const safeKind = String(kind || "event");
+    const safeKey = String(key || filename || "").slice(0, 120);
+    if (!allow(safeKind, safeKey)) {
+      log(`tg-channel drop photo (${safeKind}): rate/dedupe limit`);
+      return false;
+    }
+    markSent(safeKind, safeKey);
+    sendPhotoReq(buffer, filename, caption, replyMarkup).catch((error) => {
+      log(`tg-channel photo failed (${safeKind}): ${error.message}`);
+    });
+    return true;
+  }
+
+  return { enabled, announce, announcePhoto };
 }
 
 export function escapeTelegramHtml(value = "") {
