@@ -7974,6 +7974,7 @@ function ogreAutopilotPanelHtml() {
         <div>
           <h3>Autopilot</h3>
           <p>Auto-ape the best <strong>${escapeHtml(catLabel)}</strong> pick on a timer, using the TP/SL/timer/slippage and wallets above — within hard guards.</p>
+          <p style="margin-top:6px"><a href="/autopilot" style="color:#39ff14;font-weight:800;text-decoration:none">🤖 Open Full Autopilot (paper test — no SOL) →</a></p>
         </div>
         <label class="ogre-autopilot-switch">
           <input type="checkbox" data-autopilot-enabled ${enabled ? "checked" : ""}>
