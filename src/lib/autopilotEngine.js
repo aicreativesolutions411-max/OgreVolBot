@@ -726,8 +726,8 @@ export function createAutopilotEngine(deps) {
         });
       } catch {}
     }
-    // Big-runner card trigger: only for monsters that ran >= 5x (peak +400%+).
-    if (win && (pos.peakPct || 0) >= 400) {
+    // Win card trigger: any solid runner that peaked >= 2x (+100%).
+    if (win && (pos.peakPct || 0) >= 100) {
       const winData = {
         symbol: pos.sym,
         mint: pos.mint,
