@@ -486,7 +486,7 @@ async function poll() {
   $("bigLabel").textContent = s.live ? "Wallet SOL (real)" : "Equity (paper)";
   $("equity").textContent = (s.live ? (wallet!=null?wallet.toFixed(4):"…") : (eq!=null?eq.toFixed(4):"—")) + " SOL";
   $("pnl").innerHTML = fmtPnl(s.pnlPct);
-  $("runState").textContent = (s.running ? (s.live?"LIVE running":"paper running") : ("stopped"+(s.stopReason?` · ${s.stopReason}`:""))) + (s.churn==="low"?" · 🎯 low-churn":"");
+  $("runState").textContent = (s.running ? (s.live?"LIVE running":"paper running") : ("stopped"+(s.stopReason?` · ${s.stopReason}`:""))) + (s.churn==="low"?" · 🎯 low-churn":"") + (s.tape&&s.tape!=="warming"?` · tape ${s.tape}${s.betMult&&s.betMult!==1?` (${s.betMult}x)`:""}`:"");
   $("walletReal").textContent = (wallet!=null?wallet.toFixed(4):"refreshing…") + " SOL";
   $("inPos").textContent = (inPos!=null?inPos.toFixed(4):"—") + " SOL";
   $("secured").textContent = (s.secured!=null?s.secured.toFixed(4):"0") + " SOL";

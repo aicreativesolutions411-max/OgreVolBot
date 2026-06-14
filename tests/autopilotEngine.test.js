@@ -4,6 +4,8 @@ import {
   aggParams,
   sizeFor,
   freshScore,
+  convictionMult,
+  autoTune,
   entryReject,
   evalExit,
   canOpen,
@@ -109,6 +111,29 @@ test("freshScore: younger + buy-led scores higher than old + sell-led", () => {
   const young = freshScore(goodRow({ pairAgeSeconds: 20, buys5m: 30, sells5m: 4 }));
   const old = freshScore(goodRow({ pairAgeSeconds: 900, buys5m: 5, sells5m: 12 }));
   assert.ok(young > old);
+});
+
+test("autoTune: cold tape -> pickier + smaller, hot tape -> looser + bigger", () => {
+  const cold = baseState({ recentPeaks: [0, 0, -10, 5, 20, 0, 0, -8], recentRugs: [true, true, true, false, false, true, false, true], lastTuneAt: 0 });
+  autoTune(cold, 1_000_000);
+  assert.equal(cold.tune.tape, "COLD");
+  assert.ok(cold.tune.sizeMult < 1 && cold.tune.scoreBonus > 0);
+
+  const hot = baseState({ recentPeaks: [300, 150, 220, 40, 600, 30, 180, 90], recentRugs: [false, false, false, false, false, false, false, false], lastTuneAt: 0 });
+  autoTune(hot, 1_000_000);
+  assert.equal(hot.tune.tape, "HOT");
+  assert.ok(hot.tune.sizeMult > 1);
+});
+
+test("convictionMult: bigger on a proven dev + strong flow, smaller on a rugger", () => {
+  const strong = goodRow({ pairAgeSeconds: 40, buys5m: 30, sells5m: 3, volume5m: 120, bestPickScore: 90 });
+  const provenDev = { runners: 3, rugs: 0 };
+  const rugDev = { runners: 0, rugs: 3 };
+  const hi = convictionMult(strong, provenDev);
+  const lo = convictionMult(goodRow({ buys5m: 3, sells5m: 12, volume5m: 20 }), rugDev);
+  assert.ok(hi > 1.2, "high-confluence setup sizes up");
+  assert.ok(lo < 0.9, "weak setup + rugger-dev sizes down");
+  assert.ok(hi <= 1.6 && lo >= 0.5, "stays within bounds");
 });
 
 test("entryReject: passes a clean fresh mover", () => {

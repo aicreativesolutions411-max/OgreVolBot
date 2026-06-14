@@ -65,11 +65,36 @@ export function aggParams(state) {
   // drops to ~50), while NO observed runner was below fs 58 — including the fs61
   // monsters (TOMMY +711%, normie +338%). So floor low-churn at 57: cuts the
   // garbage, keeps every winner.
+  // Self-tuning: the auto-tuner raises the bar in cold/rug-heavy tape and lowers
+  // it when runners are frequent.
+  minScore += (state.tune && state.tune.scoreBonus) || 0;
   if (state.churn === "low") minScore = Math.max(minScore, 57);
 
   const mcFloor = 1800; // no MC filter — a low-MC runner (e.g. ZUL +56% @ $1973) stays in
 
   return { regime, wr, baseFrac, streakMult, regimeMult, tp1, tp2, sl, minScore, mcFloor };
+}
+
+// SELF-TUNING / market-regime brain: reads the recent runner & rug rate and sets
+// a tape temperature that scales selectivity (scoreBonus) and bet size (sizeMult).
+// Cold/rug-heavy -> pickier + smaller (sit back). Hot/runner-rich -> looser +
+// bigger (press the edge). Throttled; needs a little history first.
+export function autoTune(state, nowMs) {
+  if (nowMs - (state.lastTuneAt || 0) < 30_000) return state.tune;
+  state.lastTuneAt = nowMs;
+  const peaks = (state.recentPeaks || []).slice(-20);
+  const rugs = (state.recentRugs || []).slice(-20);
+  if (peaks.length < 6) return state.tune;
+  const runnerRate = peaks.filter((p) => p >= 100).length / peaks.length;
+  const rugRate = rugs.length ? rugs.filter(Boolean).length / rugs.length : 0;
+  if (rugRate > 0.4 || runnerRate < 0.05) {
+    state.tune = { scoreBonus: 8, sizeMult: 0.6, tape: "COLD" };       // dead tape — sit back
+  } else if (runnerRate >= 0.2 && rugRate < 0.2) {
+    state.tune = { scoreBonus: -2, sizeMult: 1.3, tape: "HOT" };        // runners flowing — press
+  } else {
+    state.tune = { scoreBonus: 0, sizeMult: 1, tape: "NORMAL" };
+  }
+  return state.tune;
 }
 
 // Position size in SOL: base fraction of cash, scaled by streak + regime,
@@ -79,7 +104,8 @@ export function sizeFor(state, P) {
   // Low-churn sizes up (fewer, higher-conviction bets); normal stays modest.
   const fracCap = state.sizeFracCap || 0.12;
   const baseFrac = state.churn === "low" ? Math.max(P.baseFrac, 0.12) : P.baseFrac;
-  const raw = cash * baseFrac * P.streakMult * P.regimeMult;
+  const tapeMult = (state.tune && state.tune.sizeMult) || 1; // self-tuner: press in hot tape, shrink in cold
+  const raw = cash * baseFrac * P.streakMult * P.regimeMult * tapeMult;
   const min = state.minTradeSol;
   // Cap any single bet at fracCap of cash AND the per-trade ceiling — one
   // instant-dump can't be allowed to erase several wins.
@@ -118,6 +144,29 @@ export function freshScore(row) {
   s += Math.min(15, prov * 0.15);
 
   return s;
+}
+
+// CONVICTION: how hard to bet a setup (0.5x..1.6x of base size). Trades like a
+// pro — size scales with confluence: proven dev + heavy buy flow + freshness +
+// strong score → bigger; marginal/risky → smaller. Bounded; final size still
+// clamped to the per-trade ceiling by the caller.
+export function convictionMult(row, rep) {
+  let c = 1.0;
+  if (rep) {
+    if (rep.runners >= 2 && rep.rugs === 0) c += 0.4;        // proven runner-dev
+    else if (rep.runners >= 1 && rep.rugs === 0) c += 0.2;   // promising
+    else if (rep.rugs >= 1 && rep.runners === 0) c -= 0.3;   // rug-leaning
+  }
+  const buys = Number(row.buys5m) || 0;
+  const sells = Number(row.sells5m) || 0;
+  const vol = Number(row.volume5m) || 0;
+  const flow = buys + sells > 0 ? buys / (buys + sells) : 0.5;
+  if (flow >= 0.8 && vol >= 60) c += 0.2;                    // strong, well-funded buy flow
+  else if (flow <= 0.45) c -= 0.15;                          // sellers leading
+  const age = Number(row.pairAgeSeconds) || 9999;
+  if (age <= 60) c += 0.15;                                  // very fresh = best entries
+  if (freshScore(row) >= 70) c += 0.15;                      // top-tier setup
+  return Math.max(0.5, Math.min(1.6, c));
 }
 
 // Hard entry gates — filter instant-rug bait while keeping genuine fresh
@@ -286,6 +335,12 @@ function freshState(opts) {
     results: [],
     waves: {},
     recentSells: {},
+    // Adaptive "tape" auto-tuner: reads recent runner/rug rate and nudges the
+    // bar + bet size — press in hot tape, sit back in cold. (autoTune mutates it.)
+    tune: { scoreBonus: 0, sizeMult: 1, tape: "warming" },
+    recentPeaks: [],
+    recentRugs: [],
+    lastTuneAt: 0,
     tradeNo: 0,
     tickN: 0,
     startedAt: opts.startedAt,
@@ -456,6 +511,8 @@ export function createAutopilotEngine(deps) {
       mode: state.mode,
       churn: state.churn,
       maxOpen: state.maxOpen,
+      tape: state.tune ? state.tune.tape : null,
+      betMult: state.tune ? state.tune.sizeMult : 1,
       wallet: state.walletPubkey,
       start: state.start,
       bank: round(state.bank),
@@ -711,6 +768,11 @@ export function createAutopilotEngine(deps) {
     }
     state.recentSells[pos.mint] = now();
     const pnl = totalProceeds - pos.costSol;
+    // Feed the self-tuner: recent peaks + rug flags.
+    state.recentPeaks.push(Math.round(pos.peakPct || 0));
+    if (state.recentPeaks.length > 30) state.recentPeaks.shift();
+    state.recentRugs.push(/rug/.test(reason) || pnl <= -pos.costSol * 0.5);
+    if (state.recentRugs.length > 30) state.recentRugs.shift();
     record(win ? "info" : "warn", `${win ? "✅" : "🔴"} ${pos.sym} CLOSE ${reason} ${pnl >= 0 ? "+" : ""}${round(pnl, 4)} SOL`);
 
     // Learning flywheel: record this trade's features + outcome (live only).
@@ -766,6 +828,7 @@ export function createAutopilotEngine(deps) {
         if (mc > 0) lastFeed.set(r.tokenMint, { mc, liq: Number(r.liquidityUsd) || 0, at: t });
       }
     }
+    autoTune(state, now()); // adapt selectivity + size to the current tape
     const P = aggParams(state);
     const held = new Set(state.open.map((p) => p.mint));
     const nowMs = now();
@@ -791,11 +854,10 @@ export function createAutopilotEngine(deps) {
         record("info", `⛔ skip ${cand.r.symbol} — dev rugged ${rep.rugs}x before`);
         continue;
       }
-      let size = sizeFor(state, P);
-      // Size up on a PROVEN dev (multiple runners, no rugs) — lean into edge.
-      if (rep && rep.runners >= 2 && rep.rugs === 0) {
-        size = Math.min(size * 1.3, state.maxTradeSol);
-      }
+      // Conviction sizing — bet bigger on high-confluence setups, smaller on
+      // marginal ones (proven dev + buy flow + freshness + score). Still capped.
+      const conv = convictionMult(cand.r, rep);
+      let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv, state.maxTradeSol));
       if (!canOpen(state, size)) break;
       await openPosition(cand.r, size, cand.fs, dev, rep);
     }
