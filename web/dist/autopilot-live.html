@@ -322,7 +322,16 @@ function syncLiveUi() {
 }
 $("live").addEventListener("change", syncLiveUi);
 $("useAll").addEventListener("change", () => { $("amt").disabled = $("useAll").checked; });
-$("useVault").addEventListener("change", () => { $("vaultDest").classList.toggle("hidden", !$("useVault").checked); });
+$("useVault").addEventListener("change", () => {
+  $("vaultDest").classList.toggle("hidden", !$("useVault").checked);
+  // Vault and the session-ending profit-lock contradict each other — pick one.
+  if ($("useVault").checked) { $("profitLock").checked = false; $("profitLock").disabled = true; }
+  else { $("profitLock").disabled = false; }
+});
+$("profitLock").addEventListener("change", () => {
+  if ($("profitLock").checked) { $("useVault").checked = false; $("vaultDest").classList.add("hidden"); $("useVault").disabled = true; }
+  else { $("useVault").disabled = false; }
+});
 
 $("startBtn").addEventListener("click", async () => {
   const live = $("live").checked;

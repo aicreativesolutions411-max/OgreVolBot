@@ -478,7 +478,10 @@ export function createAutopilotEngine(deps) {
 
       // Session profit-lock: once we've made real money, don't let a green peak
       // bleed back. Stop + flatten if equity gives back `giveback` of the gain.
-      if (state.profitLock && state.peak > state.start) {
+      // Ignored when the profit VAULT is active — the vault sweeps profit out
+      // (which lowers working equity), which would otherwise look like a giveback
+      // and end the session. Vault + profit-lock are mutually exclusive by design.
+      if (state.profitLock && !state.vault && state.peak > state.start) {
         const gain = state.peak - state.start;
         const minGain = state.start * ((state.profitLock.minGainPct || 5) / 100);
         const giveback = state.profitLock.giveback || 0.5;
