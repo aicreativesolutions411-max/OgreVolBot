@@ -2138,6 +2138,24 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "GET" && pathname === "/api/web/launch-card-test") {
+      // Read-only diagnostic: renders the launch card/trailer and reports byte sizes
+      // or the exact error. No channel sends, no side effects. Gated by a fixed token.
+      if (requestUrl.searchParams.get("key") !== "slime-dbg-7741") { sendWebJson(request, response, 403, { ok: false, error: "forbidden" }); return; }
+      const sym = requestUrl.searchParams.get("sym") || "TEST";
+      const mint = requestUrl.searchParams.get("mint") || "So11111111111111111111111111111111111111112";
+      const img = requestUrl.searchParams.get("img") || "";
+      const draft = { name: sym, symbol: sym, description: "debug", imageDataUrl: img, x: requestUrl.searchParams.get("x") || "", telegram: "", website: "" };
+      const result = { ok: false, channelEnabled: Boolean(tgChannel.enabled) };
+      try {
+        const png = await renderLaunchCard(draft, mint, null);
+        result.ok = true; result.cardBytes = png?.length || 0;
+        try { const gif = await buildLaunchTrailerGif(draft, mint, null); result.gifBytes = gif?.length || 0; } catch (ge) { result.gifError = ge.message; }
+      } catch (e) { result.error = e.message; result.stack = String(e.stack || "").split("\n").slice(0, 4).join(" | "); }
+      sendWebJson(request, response, 200, result);
+      return;
+    }
+
     if (request.method === "POST" && pathname === "/api/web/login") {
       assertWebLoginAttemptAllowed(request);
       const body = await readJsonRequestBody(request);
@@ -16572,6 +16590,32 @@ function launchSocials(d = {}) {
 
 // Build the launch-card inner SVG ONCE (art + border resolved). Reused by the
 // static "fire image" and by every frame of the free animated GIF trailer.
+// Normalize any image (data URI, http URL, raw) into a clean 430px PNG data URI.
+// librsvg can throw on webp / oversized / remote <image>; this removes that risk.
+async function safeLaunchArtDataUrl(src) {
+  if (!src) return "";
+  try {
+    let buf = null;
+    const s = String(src);
+    if (/^data:/i.test(s)) {
+      const b64 = s.slice(s.indexOf(",") + 1);
+      buf = Buffer.from(b64, "base64");
+    } else if (/^https?:\/\//i.test(s)) {
+      const r = await fetch(s, { signal: AbortSignal.timeout(8000) });
+      if (!r.ok) return "";
+      buf = Buffer.from(await r.arrayBuffer());
+    } else {
+      return "";
+    }
+    if (!buf || !buf.length) return "";
+    const png = await sharp(buf).resize(430, 430, { fit: "cover" }).png().toBuffer();
+    return `data:image/png;base64,${png.toString("base64")}`;
+  } catch (error) {
+    console.warn(`[launch-card] art normalize failed: ${error.message}`);
+    return "";
+  }
+}
+
 async function launchCardInnerSvg(d = {}, mint = "", cp = null) {
   const S = PNL_CARD_STYLE;
   const accent = S.slime;
@@ -16579,8 +16623,10 @@ async function launchCardInnerSvg(d = {}, mint = "", cp = null) {
   const name = sanitizeCardText(d.name || "SlimeWire", 24);
   const copy = cp || await launchHypeCopy(d);
   const tagline = sanitizeCardText(copy.tagline || "", 52);
-  let artDataUrl = d.imageDataUrl || "";
-  if (!artDataUrl && mint) { try { const meta = await getDexTokenMetadata(mint); artDataUrl = await tokenImageDataUrl(meta?.imageUrl); } catch { /* no art */ } }
+  // ALWAYS normalize the art through sharp -> clean 430px PNG data URI. Raw user
+  // uploads (webp/huge/remote/odd) can make librsvg throw; this guarantees safe art.
+  let artDataUrl = await safeLaunchArtDataUrl(d.imageDataUrl);
+  if (!artDataUrl && mint) { try { const meta = await getDexTokenMetadata(mint); artDataUrl = await safeLaunchArtDataUrl(meta?.imageUrl) || await tokenImageDataUrl(meta?.imageUrl); } catch { /* no art */ } }
   const art = artDataUrl
     ? `<image href="${artDataUrl}" x="72" y="142" width="430" height="430" preserveAspectRatio="xMidYMid slice" clip-path="url(#artClip)"/>`
     : `<rect x="72" y="142" width="430" height="430" rx="34" fill="#123018"/><text x="287" y="405" text-anchor="middle" font-size="150" font-weight="900" fill="${accent}" font-family="${S.fontFamily}">${escapeSvg(sym.slice(0, 3))}</text>`;
@@ -21619,7 +21665,7 @@ function announceLaunchCard(kind, mint, draft, captionText, replyMarkup) {
   void (async () => {
     try {
       let png = null;
-      try { png = await renderLaunchCard(draft, mint, null); } catch { png = null; }
+      try { png = await renderLaunchCard(draft, mint, null); } catch (e) { png = null; console.warn(`[launch-card] render failed: ${e.message}`); }
       const fname = `launch-${sanitizeFilenamePart(draft.symbol || mint)}.png`;
       if (png) {
         const posted = tgChannel.announcePhoto(kind, mint, png, fname, captionText, replyMarkup);
