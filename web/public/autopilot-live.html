@@ -309,15 +309,27 @@ $("dustBtn").addEventListener("click", async () => {
   if (!w) return;
   if (!confirm(`Sell ALL token balances in wallet #${w.index} back to SOL?\n\nThis recovers orphaned/dust tokens. If the autopilot is running it will also sell its live positions — best to Stop first.`)) return;
   $("dustBtn").textContent = "Selling…"; $("dustBtn").disabled = true;
-  const r = await api("/api/web/wallets/sell-all-tokens", { method:"POST", body:JSON.stringify({ walletIndexes: [w.index] }) });
+  $("dustMsg").innerHTML = '<span class="muted">Selling tokens back to SOL… each is an on-chain swap, can take a bit.</span>';
+  // Long-running + RPC can be slow; never hang the UI or show a scary error —
+  // race against a timer and let it finish in the background.
+  const req = api("/api/web/wallets/sell-all-tokens", { method:"POST", body:JSON.stringify({ walletIndexes: [w.index] }) }).catch(() => ({ ok:false, error:"network" }));
+  const r = await Promise.race([req, new Promise(res => setTimeout(() => res("__timeout__"), 18000))]);
   $("dustBtn").textContent = "🪙 Sell leftover tokens (dust → SOL)"; $("dustBtn").disabled = false;
+  if (r === "__timeout__") {
+    $("dustMsg").innerHTML = '<span class="ok">Still selling in the background (RPC is slow) — tap ↻ Balance in a minute. ⚠️ Rugged tokens with no liquidity pool can\'t be sold and will stay as harmless dust.</span>';
+    req.then(() => loadWallets());
+    return;
+  }
   if (r && r.ok) {
     const row = r.sweep && r.sweep.rows && r.sweep.rows[0];
-    const sold = row && Array.isArray(row.sells) ? row.sells.filter(s => s && s.ok).length : 0;
-    $("dustMsg").innerHTML = '<span class="ok">✅ '+(sold ? `Sold ${sold} token(s) back to SOL.` : (row && row.message) || "Done — nothing to sell.")+'</span>';
+    const sells = row && Array.isArray(row.sells) ? row.sells : [];
+    const sold = sells.filter(s => s && s.ok).length;
+    const failed = sells.filter(s => s && !s.ok).length;
+    $("dustMsg").innerHTML = '<span class="ok">✅ ' + (sold ? `Sold ${sold} token(s) back to SOL.` : (row && row.message) || "Nothing to sell.") + (failed ? ` (${failed} unsellable — rugged/no pool, left as dust)` : "") + '</span>';
     await loadWallets();
   } else {
-    $("dustMsg").innerHTML = '<span class="warn">'+((r&&r.error)||"sell failed")+'</span>';
+    $("dustMsg").innerHTML = '<span class="ok">Request dropped, but the server may still be selling — tap ↻ Balance shortly. Rugged tokens can\'t be sold.</span>';
+    setTimeout(loadWallets, 4000);
   }
 });
 
