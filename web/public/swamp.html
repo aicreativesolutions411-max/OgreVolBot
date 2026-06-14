@@ -1355,6 +1355,7 @@ function renderBattle(){ const me=curMe(), foe=curFoe();
   $("foeName").textContent=`${foe.elem.i} ${foe.species}`+statusIcons(foe); $("meName").textContent=`${me.elem.i} $${me.sym}`+statusIcons(me);
   $("foeArt").src=artCleanSrc(foe.art); $("foeArt").style.display=""; $("meArt").src=artCleanSrc(me.art); $("meArt").style.display="";
   $("foeHp").style.width=Math.max(0,foe.hp/foe.maxhp*100)+"%"; $("meHp").style.width=Math.max(0,me.hp/me.maxhp*100)+"%";
+  try{ const ec=(foe.elem&&foe.elem.c)||"#39ff14"; $("arenaBattle").style.boxShadow="inset 0 0 110px "+ec+"55, inset 0 0 40px rgba(0,0,0,0.7)"; }catch(_){}
   const mv=$("bMoves"); mv.innerHTML=""; cardMoves(me).forEach((mo,idx)=>{ const cd=me.cds[idx]||0; const b=document.createElement("button"); b.className="bmove";
     b.innerHTML=`${mo.n} <small>${Math.round(mo.pow*100)}% pwr${mo.cd?(cd>0?` · cd ${cd}`:" · special"):""}</small>`; b.disabled=(B.turn!=="me"||B.over||cd>0); b.onclick=()=>playerMove(idx); mv.appendChild(b); });
   const dr=$("bDeckRow"); dr.innerHTML=""; B.me.forEach((c,i)=>{ const p=document.createElement("div"); p.className="pip"+(c.hp<=0?" dead":"")+(i===B.mi?" active":""); p.textContent=c.elem.i; dr.appendChild(p); }); }
@@ -1402,7 +1403,7 @@ function winBattle(){ B.over=true; const story=(B.story!=null), bo=story?STORY_B
   if(story && B.story>=(store.storyBeat||0)) store.storyBeat=B.story+1;
   if(B.pvp){ store.pvpWins=(store.pvpWins||0)+1; try{submitPvp();}catch(_){} } save();
   bLog(`🏆 VICTORY! +${xp}xp · +${relics} 🔮`); try{sfx("level",0.5); showBanner(B.pvp?"⚔️ PvP WIN":"🏆 VICTORY",(B.pvp?("beat "+(B.oppName||"rival")+" · "):"")+"+"+xp+"xp · +"+relics+" 🔮","#ffd24a");}catch(_){}
-  if(story){ setTimeout(()=>{ arenaShow("arenaCutscene"); playCutscene(); $("csArt").src=bo.art; $("csArt").style.display=""; $("csName").textContent="🏆 "+bo.name+" DEFEATED";
+  if(story){ setTimeout(()=>{ arenaShow("arenaCutscene"); playCutscene(bo.elem); $("csArt").src=bo.art; $("csArt").style.display=""; $("csName").textContent="🏆 "+bo.name+" DEFEATED";
     $("csText").textContent=bo.win+`\n\n+${xp} XP · +${relics} 🔮 relic`+((store.storyBeat>=STORY_BOSSES.length)?"\n\n👑 You cleared the Swamp Saga — SWAMP CHAMPION!":""); $("csGo").textContent="Continue"; $("csGo").onclick=()=>{ openStory(); refreshHud(); }; refreshHud(); },1200); }
   else { setTimeout(()=>{ arenaShow("arenaDeck"); buildDeckUI(); refreshHud(); },1700); } }
 function loseBattle(){ B.over=true; try{sfx("boss",0.4);}catch(_){}
@@ -1454,10 +1455,11 @@ function buildStoryList(){ const beat=store.storyBeat||0, list=$("storyList"); l
     row.innerHTML=`<img src="${bo.art}" onerror="this.style.display='none'"><div class="bi"><div class="bn">${beaten?"✅ ":""}${bo.name}</div><div class="bd">${ei} ${bo.elem} · ${bo.tier} · ${bo.size} cards</div></div><button>${beaten?"Rematch":unlocked?"Fight":"🔒"}</button>`;
     if(unlocked) row.querySelector("button").onclick=()=>openBossCutscene(i);
     list.appendChild(row); }); }
-function playCutscene(){ const cs=$("arenaCutscene"); if(!cs) return; cs.classList.remove("show"); void cs.offsetWidth; cs.classList.add("show"); }
+function playCutscene(elemName){ const cs=$("arenaCutscene"); if(!cs) return; cs.classList.remove("show"); void cs.offsetWidth; cs.classList.add("show");
+  try{ const ec=(ELEMENTS.find(e=>e.n===elemName)||{}).c||"#39ff14"; cs.style.boxShadow="inset 0 0 130px "+ec+"66, inset 0 0 50px rgba(0,0,0,0.7)"; }catch(_){} }
 function openBossCutscene(i){ const bo=STORY_BOSSES[i]; arenaShow("arenaCutscene");
   $("csArt").src=bo.art; $("csArt").style.display=""; $("csName").textContent=bo.name; $("csText").textContent=bo.intro;
-  $("csGo").textContent="⚔️ FIGHT"; $("csGo").onclick=()=>startStoryBattle(i); try{sfx("boss",0.4);}catch(_){} playCutscene(); }
+  $("csGo").textContent="⚔️ FIGHT"; $("csGo").onclick=()=>startStoryBattle(i); try{sfx("boss",0.4);}catch(_){} playCutscene(bo.elem); }
 function storyBossDeck(bo){ const lv=level(), tiers=["common","uncommon","rare","epic","legendary"]; const tierIdx={common:0,uncommon:1,rare:2,epic:3,legendary:4}[bo.tier]||2; const deck=[];
   for(let k=0;k<bo.size;k++){ const t=tiers[Math.max(0,Math.min(4,tierIdx-(k%2)))], fm=bo.id+"_"+k;
     const sp=coinSpecies(fm,t), art=elemArt(bo.elem), boost=1+lv*0.03+tierIdx*0.05;
