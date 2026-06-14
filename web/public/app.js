@@ -9612,13 +9612,12 @@ function launchCoinHtml() {
               <input data-launch-coin-fee-recipient type="text" placeholder="Optional wallet address" value="${escapeHtml(draft.creatorFeeRecipient || "")}">
             </label>
             <label>
-              Fee Handling
+              Dev fees (where creator fees go)
               <select data-launch-coin-fee-mode>
-                <option value="standard" ${(draft.feeMode || "standard") === "standard" ? "selected" : ""}>Standard</option>
-                <option value="dev" ${draft.feeMode === "dev" ? "selected" : ""}>Send creator fees to dev wallet</option>
-                <option value="buyback" ${draft.feeMode === "buyback" ? "selected" : ""}>Route creator fees to buyback wallet</option>
-                <option value="burn" ${draft.feeMode === "burn" ? "selected" : ""}>Burn creator fees when supported</option>
-                <option value="split" ${draft.feeMode === "split" ? "selected" : ""}>Split dev / buyback</option>
+                <option value="dev" ${(draft.feeMode || "dev") === "dev" ? "selected" : ""}>100% to my dev wallet (most pick this)</option>
+                <option value="buyback" ${draft.feeMode === "buyback" ? "selected" : ""}>Custom — route to buyback wallet</option>
+                <option value="burn" ${draft.feeMode === "burn" ? "selected" : ""}>Custom — burn creator fees</option>
+                <option value="split" ${draft.feeMode === "split" ? "selected" : ""}>Custom — split dev / buyback</option>
               </select>
             </label>
             <label>
@@ -9803,7 +9802,7 @@ function readLaunchCoinDraft() {
     telegram: ($("[data-launch-coin-telegram]")?.value || "").trim(),
     creatorFeeBps: $("[data-launch-coin-creator-fee]")?.value || draft.creatorFeeBps || "0",
     creatorFeeRecipient: ($("[data-launch-coin-fee-recipient]")?.value || "").trim(),
-    feeMode: $("[data-launch-coin-fee-mode]")?.value || draft.feeMode || "standard",
+    feeMode: $("[data-launch-coin-fee-mode]")?.value || draft.feeMode || "dev",
     buybackWallet: ($("[data-launch-coin-buyback-wallet]")?.value || "").trim(),
     burnCreatorFees: Boolean($("[data-launch-coin-burn-creator-fees]")?.checked),
     devBuyEnabled: Boolean($("[data-launch-coin-dev-buy-enabled]")?.checked),
