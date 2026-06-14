@@ -102,6 +102,34 @@ export function createTelegramChannelBridge(options = {}) {
     });
   }
 
+  async function sendAnimationReq(buffer, filename, caption, replyMarkup) {
+    const form = new FormData();
+    form.append("chat_id", chatId);
+    form.append("animation", new Blob([buffer], { type: "image/gif" }), filename || "trailer.gif");
+    if (caption) { form.append("caption", caption); form.append("parse_mode", "HTML"); }
+    if (replyMarkup) form.append("reply_markup", JSON.stringify(replyMarkup));
+    const response = await fetch(`https://api.telegram.org/bot${botToken}/sendAnimation`, {
+      method: "POST",
+      body: form,
+      signal: AbortSignal.timeout(30_000)
+    });
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw new Error(`telegram sendAnimation ${response.status}: ${body.slice(0, 200)}`);
+    }
+  }
+
+  // Post an animation WITHOUT rate/dedupe checks. Use only for media paired with an
+  // already-rate-limited post (e.g. the launch trailer that follows the launch card),
+  // so the 120s min-interval doesn't drop the second piece. Fire-and-forget.
+  function sendAnimationRaw(buffer, filename, caption, replyMarkup) {
+    if (!enabled || !buffer) return false;
+    sendAnimationReq(buffer, filename, caption, replyMarkup).catch((error) => {
+      log(`tg-channel animation failed: ${error.message}`);
+    });
+    return true;
+  }
+
   /**
    * Fire-and-forget channel PHOTO post (e.g. the launch fire-card). Same rate/dedupe
    * contract as announce(). Returns true if accepted (sent async), false if dropped.
@@ -121,7 +149,7 @@ export function createTelegramChannelBridge(options = {}) {
     return true;
   }
 
-  return { enabled, announce, announcePhoto };
+  return { enabled, announce, announcePhoto, sendAnimationRaw };
 }
 
 export function escapeTelegramHtml(value = "") {

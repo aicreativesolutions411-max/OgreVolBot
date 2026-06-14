@@ -21658,6 +21658,22 @@ function broadcastPhotoToTelegramGroups(kind, key, buffer, filename, caption, re
   })();
 }
 
+// Broadcast a GIF/animation to opted-in groups WITHOUT rate-limiting — used for the
+// launch trailer that immediately follows the (already rate-limited) launch card.
+function broadcastAnimationToTelegramGroups(buffer, filename, caption, replyMarkup) {
+  if (!CONFIG.telegramChannelBotToken || !buffer) return;
+  void (async () => {
+    try {
+      const store = await readTelegramGroups();
+      for (const [chatId, group] of Object.entries(store.groups)) {
+        if (group?.alerts) groupBridgeFor(chatId).sendAnimationRaw(buffer, filename, caption, replyMarkup);
+      }
+    } catch (error) {
+      console.warn(`[tg-groups] animation broadcast failed: ${error.message}`);
+    }
+  })();
+}
+
 // Public launch announcement: posts the fire CARD (pair + launch info) to the channel
 // and all opted-in groups, with a clean text fallback. Fire-and-forget — never blocks
 // or breaks the launch. captionText is the clean caption (no "bundled" explainer).
@@ -21672,6 +21688,16 @@ function announceLaunchCard(kind, mint, draft, captionText, replyMarkup) {
         // send text (it would race the photo on the same dedupe key and suppress it).
         tgChannel.announcePhoto(kind, mint, png, fname, captionText, replyMarkup);
         broadcastPhotoToTelegramGroups(kind, mint, png, fname, captionText, replyMarkup);
+        // Then the FREE animated GIF trailer as a follow-up (raw send, bypasses the
+        // 120s rate gate so it isn't dropped right after the card).
+        try {
+          const gif = await buildLaunchTrailerGif(draft, mint, null);
+          if (gif) {
+            const vCap = `🎬 <b>$${draft.symbol || ""}</b> trailer — born on SlimeWire`;
+            tgChannel.sendAnimationRaw(gif, `${fname}.gif`, vCap, replyMarkup);
+            broadcastAnimationToTelegramGroups(gif, `${fname}.gif`, vCap, replyMarkup);
+          }
+        } catch (e) { console.warn(`[launch-card] trailer gif failed: ${e.message}`); }
         return;
       }
       // fallback only when no image could be rendered at all
