@@ -157,17 +157,19 @@ export function evalExit(pos, P, nowMs) {
   if (pos.missed >= 2 && held > 18_000) {
     return { action: "sell", pct: 100, reason: "feed-lost", move };
   }
-  // Trailing give-back, TIGHTER the higher it ran so we lock more of a big
-  // runner's peak (a +350% coin shouldn't be allowed to fall to +175% before we
-  // exit). Give back ~28% from a huge peak, ~38% from a medium one, 50% otherwise.
-  if (pos.tp1Done && peak >= 40) {
+  // Trailing give-back once in profit — protects the moon bag at ANY peak (a
+  // position that took TP1 then fades must NOT be allowed to ride into a loss;
+  // that was the gap that let a +26% TP1 coin bleed to -13%). Tighter the higher
+  // it ran: give back ~28% from a huge peak, ~38% medium, 50% otherwise.
+  if (pos.tp1Done && peak >= 25) {
     const keep = peak >= 300 ? 0.72 : peak >= 150 ? 0.62 : 0.5;
     if (move <= peak * keep) {
       return { action: "sell", pct: 100, reason: "trail", move };
     }
   }
-  // Hard stop, but only before we've taken any profit (after TP1 the trail owns it).
-  if (!pos.tp1Done && move <= -P.sl) {
+  // Hard stop — ALWAYS a backstop (including the moon bag after TP1), so nothing
+  // can ride past -sl unprotected.
+  if (move <= -P.sl) {
     return { action: "sell", pct: 100, reason: "stop", move };
   }
   // TP1: bank 40%, let the rest ride.
