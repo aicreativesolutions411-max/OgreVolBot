@@ -19606,8 +19606,9 @@ html body .swamp-connect-shell::before,
 html body .swamp-connect-shell::after { z-index: 1 !important; }
 html body .swamp-connect-shell > *:not(.swamp-hero-video) { z-index: 2 !important; }
 @media (max-width: 760px) {
-  /* mobile: PLAY the 15s scene video too (muted autoplay works on mobile) */
-  html body .swamp-connect-shell .swamp-hero-video { display: block !important; }
+  /* mobile: static hero only (no heavy video on phone data; the wallet-connect
+     panel covers the screen there anyway) */
+  html body .swamp-connect-shell .swamp-hero-video { display: none !important; }
 }
 
 /* ===== FULL-SCREEN, in-frame connect/login hero (v6) ===== */
