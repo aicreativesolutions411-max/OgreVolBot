@@ -130,6 +130,32 @@ export function createTelegramChannelBridge(options = {}) {
     return true;
   }
 
+  async function sendVideoReq(buffer, filename, caption, replyMarkup) {
+    const form = new FormData();
+    form.append("chat_id", chatId);
+    form.append("video", new Blob([buffer], { type: "video/mp4" }), filename || "trailer.mp4");
+    if (caption) { form.append("caption", caption); form.append("parse_mode", "HTML"); }
+    if (replyMarkup) form.append("reply_markup", JSON.stringify(replyMarkup));
+    const response = await fetch(`https://api.telegram.org/bot${botToken}/sendVideo`, {
+      method: "POST",
+      body: form,
+      signal: AbortSignal.timeout(45_000)
+    });
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw new Error(`telegram sendVideo ${response.status}: ${body.slice(0, 200)}`);
+    }
+  }
+
+  // Post an MP4 WITHOUT rate/dedupe checks (paired launch trailer). Fire-and-forget.
+  function sendVideoRaw(buffer, filename, caption, replyMarkup) {
+    if (!enabled || !buffer) return false;
+    sendVideoReq(buffer, filename, caption, replyMarkup).catch((error) => {
+      log(`tg-channel video failed: ${error.message}`);
+    });
+    return true;
+  }
+
   /**
    * Fire-and-forget channel PHOTO post (e.g. the launch fire-card). Same rate/dedupe
    * contract as announce(). Returns true if accepted (sent async), false if dropped.
@@ -149,7 +175,7 @@ export function createTelegramChannelBridge(options = {}) {
     return true;
   }
 
-  return { enabled, announce, announcePhoto, sendAnimationRaw };
+  return { enabled, announce, announcePhoto, sendAnimationRaw, sendVideoRaw };
 }
 
 export function escapeTelegramHtml(value = "") {

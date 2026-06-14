@@ -2,11 +2,14 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import http from "node:http";
+import os from "node:os";
+import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
 import bs58 from "bs58";
 import sharp from "sharp";
+import ffmpegPath from "ffmpeg-static";
 import { WebSocketServer } from "ws";
 import nacl from "tweetnacl";
 import {
@@ -2150,6 +2153,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
       try {
         const png = await renderLaunchCard(draft, mint, null);
         result.ok = true; result.cardBytes = png?.length || 0;
+        try { const mp4 = await buildLaunchTrailerMp4(draft, mint, null); result.mp4Bytes = mp4?.length || 0; } catch (me) { result.mp4Error = me.message; }
         try { const gif = await buildLaunchTrailerGif(draft, mint, null); result.gifBytes = gif?.length || 0; } catch (ge) { result.gifError = ge.message; }
       } catch (e) { result.error = e.message; result.stack = String(e.stack || "").split("\n").slice(0, 4).join(" | "); }
       sendWebJson(request, response, 200, result);
@@ -16714,6 +16718,84 @@ async function buildLaunchTrailerGif(d = {}, mint = "", cp = null) {
   } catch { return null; }
 }
 
+// FREE cinematic ~15s MP4 trailer (no external API): 5 composed scenes (suspense ->
+// logo reveal -> $TICKER -> LIVE ON PUMP.FUN + CA -> CTA) rendered by sharp and
+// stitched with ffmpeg crossfades. Watermarked www.SlimeWire.org. Returns an MP4
+// buffer or null (caller falls back to the GIF).
+function trailerSceneFrame(inner) {
+  const W = 1200, H = 675, slime = "#39ff14";
+  const wm = `<text x="600" y="652" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="800" fill="${slime}" opacity="0.85">www.SlimeWire.org</text>`;
+  const defs = `<defs><radialGradient id="g" cx="50%" cy="46%" r="60%"><stop offset="0%" stop-color="${slime}" stop-opacity="0.5"/><stop offset="100%" stop-color="${slime}" stop-opacity="0"/></radialGradient><clipPath id="cir"><circle cx="600" cy="300" r="190"/></clipPath><filter id="gl"><feDropShadow dx="0" dy="0" stdDeviation="6" flood-color="${slime}" flood-opacity="0.95"/></filter></defs>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><rect width="${W}" height="${H}" fill="#040a05"/>${defs}${inner}${wm}</svg>`;
+}
+async function buildLaunchTrailerMp4(d = {}, mint = "", cp = null) {
+  if (!ffmpegPath) return null;
+  const FF = "Arial, Helvetica, sans-serif", slime = "#39ff14", white = "#f7fff7", muted = "#b8c7b8";
+  const e = (s) => escapeSvg(String(s == null ? "" : s));
+  const sym = e(String(d.symbol || "COIN").toUpperCase());
+  const copy = cp || await launchHypeCopy(d);
+  const tagline = e(sanitizeCardText(copy.tagline || "", 46));
+  const caShort = mint ? e(shortMint(mint)) : "minting";
+  const socialsText = e(sanitizeCardText(launchSocials(d).map((s) => s.label).join("    ") || "pump.fun", 46));
+  const artUrl = await safeLaunchArtDataUrl(d.imageDataUrl) || (mint ? await safeLaunchArtDataUrl((await getDexTokenMetadata(mint).catch(() => null))?.imageUrl) : "");
+  const art = artUrl
+    ? `<image href="${artUrl}" x="410" y="110" width="380" height="380" preserveAspectRatio="xMidYMid slice" clip-path="url(#cir)"/><circle cx="600" cy="300" r="190" fill="none" stroke="${slime}" stroke-width="5" filter="url(#gl)"/>`
+    : `<circle cx="600" cy="300" r="190" fill="#0c2410" stroke="${slime}" stroke-width="5" filter="url(#gl)"/><text x="600" y="335" text-anchor="middle" font-family="${FF}" font-size="120" font-weight="900" fill="${slime}">${sym.slice(0, 3)}</text>`;
+  const scenes = [
+    `<rect width="1200" height="675" fill="url(#g)" opacity="0.25"/><text x="600" y="320" text-anchor="middle" font-family="${FF}" font-size="40" font-weight="900" fill="${muted}" letter-spacing="14">INCOMING...</text>`,
+    `<rect width="1200" height="675" fill="url(#g)" opacity="0.5"/>${art}<text x="600" y="560" text-anchor="middle" font-family="${FF}" font-size="34" font-weight="800" fill="${white}">a fresh slime crawls out of the swamp</text>`,
+    `<rect width="1200" height="675" fill="url(#g)" opacity="0.4"/><text x="600" y="300" text-anchor="middle" font-family="${FF}" font-size="150" font-weight="900" fill="${white}">$${sym}</text><text x="600" y="380" text-anchor="middle" font-family="${FF}" font-size="40" font-weight="900" fill="${slime}" filter="url(#gl)">${tagline}</text>`,
+    `<rect width="1200" height="675" fill="url(#g)" opacity="0.55"/><text x="600" y="280" text-anchor="middle" font-family="${FF}" font-size="92" font-weight="900" fill="${slime}" filter="url(#gl)">LIVE ON PUMP.FUN</text><text x="600" y="362" text-anchor="middle" font-family="monospace" font-size="34" font-weight="800" fill="${white}">CA ${caShort}</text>`,
+    `<rect width="1200" height="675" fill="url(#g)" opacity="0.45"/><text x="600" y="262" text-anchor="middle" font-family="${FF}" font-size="64" font-weight="900" fill="${slime}" filter="url(#gl)">BORN ON SLIMEWIRE</text><text x="600" y="334" text-anchor="middle" font-family="${FF}" font-size="30" font-weight="800" fill="${white}">${socialsText}</text><text x="600" y="416" text-anchor="middle" font-family="${FF}" font-size="46" font-weight="900" fill="${white}">www.SlimeWire.org</text>`
+  ];
+  const dur = [3.2, 3.4, 3.4, 3.4, 3.8], xf = 0.6;
+  let dir = null;
+  try {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "swtrail-"));
+    const files = [];
+    for (let i = 0; i < scenes.length; i++) {
+      const f = path.join(dir, `s${i}.png`);
+      await fs.writeFile(f, await sharp(Buffer.from(trailerSceneFrame(scenes[i]))).png().toBuffer());
+      files.push(f);
+    }
+    const out = path.join(dir, "out.mp4");
+    const inputs = [];
+    files.forEach((f, i) => { inputs.push("-loop", "1", "-t", String(dur[i]), "-i", f); });
+    let fc = "";
+    files.forEach((f, i) => { fc += `[${i}:v]scale=768:432,fps=25,format=yuv420p,setsar=1[v${i}];`; });
+    let prev = "v0", off = 0;
+    for (let i = 1; i < files.length; i++) {
+      off += dur[i - 1] - xf;
+      const tag = (i === files.length - 1) ? "vout" : `x${i}`;
+      fc += `[${prev}][v${i}]xfade=transition=fade:duration=${xf}:offset=${off.toFixed(2)}[${tag}];`;
+      prev = tag;
+    }
+    const args = ["-y", ...inputs, "-filter_complex", fc.replace(/;$/, ""), "-map", "[vout]", "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "veryfast", "-movflags", "+faststart", out];
+    await new Promise((res, rej) => {
+      const proc = spawn(ffmpegPath, args);
+      let err = "";
+      proc.stderr.on("data", (chunk) => { err += chunk; if (err.length > 4000) err = err.slice(-2000); });
+      proc.on("error", rej);
+      proc.on("close", (code) => code === 0 ? res() : rej(new Error(`ffmpeg ${code}: ${err.slice(-300)}`)));
+    });
+    return await fs.readFile(out);
+  } catch (error) {
+    console.warn(`[launch-trailer] mp4 failed: ${error.message}`);
+    return null;
+  } finally {
+    if (dir) fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+// Best available trailer: cinematic MP4 if ffmpeg works, else the GIF.
+async function buildBestTrailer(d = {}, mint = "", cp = null) {
+  const mp4 = await buildLaunchTrailerMp4(d, mint, cp);
+  if (mp4 && mp4.length) return { kind: "mp4", buffer: mp4 };
+  const gif = await buildLaunchTrailerGif(d, mint, cp);
+  if (gif && gif.length) return { kind: "gif", buffer: gif };
+  return null;
+}
+
 async function postLaunchTrailer(chatId, d = {}, mint = "") {
   try {
     const sym = String(d.symbol || "COIN").toUpperCase();
@@ -16740,29 +16822,37 @@ async function postLaunchTrailer(chatId, d = {}, mint = "") {
     kbRows.push([{ text: "🌐 SlimeWire.org", url: "https://www.slimewire.org" }, { text: "🐸 Swamp", url: "https://www.slimewire.org/swamp" }]);
     const kb = { inline_keyboard: kbRows };
 
-    const targets = [chatId];
+    // Public channel/groups are posted by announceLaunchCard. Here we ONLY give the
+    // launcher a private copy (DM = positive chat id) so groups don't get doubles.
+    const targets = [];
+    if (Number(chatId) > 0) targets.push(chatId);
     const broadcast = ogreAgentEnv("LAUNCH_BROADCAST_CHAT_ID");
-    if (broadcast && String(broadcast) !== String(chatId)) targets.push(broadcast);
+    if (broadcast && !targets.map(String).includes(String(broadcast))) targets.push(broadcast);
+    if (!targets.length) return;
 
     // 1) FIRE IMAGE FIRST — the launch card with CA + socials + website (fast, always works)
     const png = await renderLaunchCard(d, mint, cp);
     const fname = `launch-${sanitizeFilenamePart(sym)}.png`;
     for (const t of targets) { try { await sendPhoto(t, fname, png, caption, kb, "HTML"); } catch { /* per-target */ } }
 
-    // 2) THEN THE VIDEO — free animated GIF trailer by default (no API/no cost);
-    //    upgrades to a real MP4 only if a video key (FAL_KEY) is set.
+    // 2) THEN THE VIDEO — free cinematic MP4 trailer by default (no API/no cost);
+    //    upgrades to a real AI MP4 only if a video key (FAL_KEY) is set.
     const vCap = `🎬 <b>$${sym}</b> trailer — born on SlimeWire${mint ? `\nCA: <code>${mint}</code>` : ""}`;
     const hasVideoApi = ogreAgentEnv("FAL_KEY") || ogreAgentEnv("LAUNCH_VIDEO_API_KEY") || ogreAgentEnv("LAUNCH_VIDEO_API_URL");
-    if (hasVideoApi) {
-      generateLaunchVideo(d, mint, cp).then(async (vid) => {
+    (async () => {
+      if (hasVideoApi) {
+        const vid = await generateLaunchVideo(d, mint, cp).catch(() => null);
         if (vid && vid.url) { for (const t of targets) { try { await sendTelegramVideo(t, { url: vid.url }, vCap, kb); } catch { /* per-target */ } } return; }
-        const gif = await buildLaunchTrailerGif(d, mint, cp);
-        if (gif) for (const t of targets) { try { await sendTelegramAnimation(t, gif, `${fname}.gif`, vCap, kb); } catch { /* per-target */ } }
-      }).catch(() => {});
-    } else {
-      const gif = await buildLaunchTrailerGif(d, mint, cp);
-      if (gif) for (const t of targets) { try { await sendTelegramAnimation(t, gif, `${fname}.gif`, vCap, kb); } catch { /* per-target */ } }
-    }
+      }
+      const tr = await buildBestTrailer(d, mint, cp);
+      if (!tr) return;
+      for (const t of targets) {
+        try {
+          if (tr.kind === "mp4") await sendTelegramVideo(t, { buffer: tr.buffer, filename: `${fname}.mp4` }, vCap, kb);
+          else await sendTelegramAnimation(t, tr.buffer, `${fname}.gif`, vCap, kb);
+        } catch { /* per-target */ }
+      }
+    })().catch(() => {});
   } catch { /* launch already succeeded; trailer is bonus */ }
 }
 
@@ -21674,6 +21764,21 @@ function broadcastAnimationToTelegramGroups(buffer, filename, caption, replyMark
   })();
 }
 
+// Broadcast an MP4 trailer to opted-in groups WITHOUT rate-limiting.
+function broadcastVideoToTelegramGroups(buffer, filename, caption, replyMarkup) {
+  if (!CONFIG.telegramChannelBotToken || !buffer) return;
+  void (async () => {
+    try {
+      const store = await readTelegramGroups();
+      for (const [chatId, group] of Object.entries(store.groups)) {
+        if (group?.alerts) groupBridgeFor(chatId).sendVideoRaw(buffer, filename, caption, replyMarkup);
+      }
+    } catch (error) {
+      console.warn(`[tg-groups] video broadcast failed: ${error.message}`);
+    }
+  })();
+}
+
 // Public launch announcement: posts the fire CARD (pair + launch info) to the channel
 // and all opted-in groups, with a clean text fallback. Fire-and-forget — never blocks
 // or breaks the launch. captionText is the clean caption (no "bundled" explainer).
@@ -21688,16 +21793,21 @@ function announceLaunchCard(kind, mint, draft, captionText, replyMarkup) {
         // send text (it would race the photo on the same dedupe key and suppress it).
         tgChannel.announcePhoto(kind, mint, png, fname, captionText, replyMarkup);
         broadcastPhotoToTelegramGroups(kind, mint, png, fname, captionText, replyMarkup);
-        // Then the FREE animated GIF trailer as a follow-up (raw send, bypasses the
-        // 120s rate gate so it isn't dropped right after the card).
+        // Then the FREE cinematic trailer as a follow-up (raw send, bypasses the 120s
+        // rate gate so it isn't dropped right after the card). MP4 if ffmpeg works, else GIF.
         try {
-          const gif = await buildLaunchTrailerGif(draft, mint, null);
-          if (gif) {
+          const tr = await buildBestTrailer(draft, mint, null);
+          if (tr) {
             const vCap = `🎬 <b>$${draft.symbol || ""}</b> trailer — born on SlimeWire`;
-            tgChannel.sendAnimationRaw(gif, `${fname}.gif`, vCap, replyMarkup);
-            broadcastAnimationToTelegramGroups(gif, `${fname}.gif`, vCap, replyMarkup);
+            if (tr.kind === "mp4") {
+              tgChannel.sendVideoRaw(tr.buffer, `${fname}.mp4`, vCap, replyMarkup);
+              broadcastVideoToTelegramGroups(tr.buffer, `${fname}.mp4`, vCap, replyMarkup);
+            } else {
+              tgChannel.sendAnimationRaw(tr.buffer, `${fname}.gif`, vCap, replyMarkup);
+              broadcastAnimationToTelegramGroups(tr.buffer, `${fname}.gif`, vCap, replyMarkup);
+            }
           }
-        } catch (e) { console.warn(`[launch-card] trailer gif failed: ${e.message}`); }
+        } catch (e) { console.warn(`[launch-card] trailer failed: ${e.message}`); }
         return;
       }
       // fallback only when no image could be rendered at all
