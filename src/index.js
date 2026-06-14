@@ -207,9 +207,57 @@ async function relockAutopilotWalletByPubkey(pubkey) {
   return lockAutopilotWallet(match, "resume");
 }
 
+// --- Autopilot learning flywheel: trade-outcome log + dev-wallet reputation ----
+// Every trade records its features + outcome so we can find what predicts runners,
+// and we skip wallets that have repeatedly rugged us (the one real anti-rug edge:
+// you can't read a rug off the coin, but you can off the dev's track record).
+const AUTOPILOT_TRADES_FILE = path.join(CONFIG.dataDir, "autopilot-trades.json");
+const autopilotDevRep = new Map(); // devWallet -> { trades, rugs, runners, pnl }
+let autopilotTradesCache = null;
+
+function autopilotDevRepBump(dev, rec) {
+  if (!dev) return;
+  const r = autopilotDevRep.get(dev) || { trades: 0, rugs: 0, runners: 0, pnl: 0 };
+  r.trades += 1;
+  if (rec.rugged) r.rugs += 1;
+  if ((rec.peakPct || 0) >= 100) r.runners += 1;
+  r.pnl += Number(rec.pnl) || 0;
+  autopilotDevRep.set(dev, r);
+}
+async function loadAutopilotTrades() {
+  if (autopilotTradesCache) return autopilotTradesCache;
+  let trades = [];
+  try {
+    const j = await readJson(AUTOPILOT_TRADES_FILE).catch(() => null);
+    trades = (j && Array.isArray(j.trades)) ? j.trades : [];
+  } catch { trades = []; }
+  autopilotDevRep.clear();
+  for (const t of trades) autopilotDevRepBump(t.dev, t);
+  autopilotTradesCache = trades;
+  return trades;
+}
+async function recordAutopilotTrade(rec) {
+  try {
+    if (!autopilotTradesCache) await loadAutopilotTrades();
+    autopilotTradesCache.push(rec);
+    if (autopilotTradesCache.length > 4000) autopilotTradesCache = autopilotTradesCache.slice(-4000);
+    autopilotDevRepBump(rec.dev, rec);
+    await writeJsonFile(AUTOPILOT_TRADES_FILE, { trades: autopilotTradesCache });
+  } catch {}
+}
+
 const autopilotEngine = createAutopilotEngine({
   exitMs: 1000,
   huntMs: 5000,
+  // Learning flywheel hooks:
+  getDevWallet: (mint) => {
+    try {
+      const ce = pumpPortalStream.getCreationEntry(mint);
+      return (ce && ce.event && ce.event.traderPublicKey) ? String(ce.event.traderPublicKey) : null;
+    } catch { return null; }
+  },
+  devReputation: (dev) => (dev ? (autopilotDevRep.get(dev) || null) : null),
+  recordTrade: (rec) => { void recordAutopilotTrade(rec); },
   log: (level, msg) => console.log(`[autopilot:${level}] ${msg}`),
   isPaused: async () => Boolean((await readState().catch(() => ({}))).paused),
   persist: async (snap) => {
@@ -229,6 +277,7 @@ const autopilotEngine = createAutopilotEngine({
       volume5m: r.volume5m,
       buys5m: r.buys5m,
       sells5m: r.sells5m,
+      sniperCount: r.sniperCount || r.snipers || 0,
       bestPickScore: r.bestPickScore || r.bestPick || 0
     }));
   },
@@ -350,6 +399,8 @@ const autopilotEngine = createAutopilotEngine({
 });
 
 async function startLiveAutopilotResume() {
+  // Populate dev-reputation from the trade history so it's effective immediately.
+  await loadAutopilotTrades().catch(() => {});
   // After a redeploy/restart, re-attach to an in-flight session so open
   // positions keep being managed and (if still inside the timer) hunting resumes.
   try {
@@ -2393,7 +2444,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
     //   POST /api/web/autopilot/stop
     // Live trading requires live:true AND confirm:"LIVE" AND a selected wallet
     // (never the fee wallet). Otherwise it runs paper (no SOL touched).
-    if (pathname === "/api/web/autopilot/status" || pathname === "/api/web/autopilot/start" || pathname === "/api/web/autopilot/stop" || pathname === "/api/web/autopilot/wallets" || pathname === "/api/web/autopilot/sweep" || pathname === "/api/web/autopilot/win-card") {
+    if (pathname === "/api/web/autopilot/status" || pathname === "/api/web/autopilot/start" || pathname === "/api/web/autopilot/stop" || pathname === "/api/web/autopilot/wallets" || pathname === "/api/web/autopilot/sweep" || pathname === "/api/web/autopilot/win-card" || pathname === "/api/web/autopilot/stats") {
       const webAuth = await authenticateOptionalWebRequest(request);
       const body = request.method === "POST" ? await readJsonRequestBody(request).catch(() => ({})) : {};
       const providedKey = String(requestUrl.searchParams.get("key") || body.key || "");
@@ -2420,6 +2471,40 @@ async function handleWebApiRequest(request, response, requestUrl) {
         }
         if (pathname === "/api/web/autopilot/status") {
           sendWebJson(request, response, 200, { ok: true, status: autopilotEngine.status() });
+          return;
+        }
+        if (pathname === "/api/web/autopilot/stats") {
+          // Study tool: win/rug rates bucketed by score, MC, age + dev leaderboard.
+          const trades = await loadAutopilotTrades();
+          const r2 = (n) => Math.round(Number(n) * 1000) / 1000;
+          const bucket = (keyFn) => {
+            const m = {};
+            for (const t of trades) {
+              const k = keyFn(t); if (k == null) continue;
+              const b = m[k] || { n: 0, win: 0, rug: 0, run: 0, pnl: 0 };
+              b.n++; if (t.win) b.win++; if (t.rugged) b.rug++; if ((t.peakPct || 0) >= 100) b.run++; b.pnl += Number(t.pnl) || 0;
+              m[k] = b;
+            }
+            for (const k of Object.keys(m)) { m[k].pnl = r2(m[k].pnl); m[k].winRate = Math.round((m[k].win / m[k].n) * 100); }
+            return m;
+          };
+          const devs = [...autopilotDevRep.entries()].map(([dev, x]) => ({ dev: shortMint(dev), ...x, pnl: r2(x.pnl) }));
+          sendWebJson(request, response, 200, {
+            ok: true,
+            stats: {
+              total: trades.length,
+              wins: trades.filter((t) => t.win).length,
+              rugs: trades.filter((t) => t.rugged).length,
+              runners100: trades.filter((t) => (t.peakPct || 0) >= 100).length,
+              runners400: trades.filter((t) => (t.peakPct || 0) >= 400).length,
+              netPnlSol: r2(trades.reduce((a, t) => a + (Number(t.pnl) || 0), 0)),
+              byScore: bucket((t) => t.fs == null ? null : (t.fs < 57 ? "<57" : t.fs < 62 ? "57-61" : t.fs < 67 ? "62-66" : t.fs < 72 ? "67-71" : "72+")),
+              byMc: bucket((t) => t.entryMc == null ? null : (t.entryMc < 2100 ? "<2.1k" : t.entryMc < 2500 ? "2.1-2.5k" : t.entryMc < 3500 ? "2.5-3.5k" : "3.5k+")),
+              byAge: bucket((t) => t.entryAge == null ? null : (t.entryAge < 30 ? "<30s" : t.entryAge < 120 ? "30-120s" : t.entryAge < 300 ? "2-5m" : "5m+")),
+              bestDevs: devs.filter((d) => d.trades >= 2).sort((a, b) => b.pnl - a.pnl).slice(0, 8),
+              worstDevs: devs.filter((d) => d.rugs >= 1).sort((a, b) => b.rugs - a.rugs).slice(0, 8)
+            }
+          });
           return;
         }
         if (pathname === "/api/web/autopilot/win-card") {

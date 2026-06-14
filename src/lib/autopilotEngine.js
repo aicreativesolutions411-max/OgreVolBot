@@ -302,6 +302,9 @@ export function createAutopilotEngine(deps) {
     getInstantMc = () => null,
     sweepProfit = async () => ({ ok: false }),
     onBigWin = () => {},
+    getDevWallet = () => null,
+    devReputation = () => null,
+    recordTrade = () => {},
     exitMs = 1000,
     huntMs = 5000
   } = deps;
@@ -701,6 +704,20 @@ export function createAutopilotEngine(deps) {
     state.recentSells[pos.mint] = now();
     const pnl = totalProceeds - pos.costSol;
     record(win ? "info" : "warn", `${win ? "✅" : "🔴"} ${pos.sym} CLOSE ${reason} ${pnl >= 0 ? "+" : ""}${round(pnl, 4)} SOL`);
+
+    // Learning flywheel: record this trade's features + outcome (live only).
+    if (state.live) {
+      const rugged = /rug/.test(reason) || pnl <= -pos.costSol * 0.5;
+      try {
+        recordTrade({
+          mint: pos.mint, sym: pos.sym, dev: pos.dev || null,
+          entryMc: Math.round(pos.entryMc), entryAge: pos.entryAge, entrySniper: pos.entrySniper,
+          entryVol5m: pos.entryVol5m, entryBuys: pos.entryBuys, entrySells: pos.entrySells,
+          fs: pos.fs, peakPct: Math.round(pos.peakPct || 0), pnl: round(pnl, 4),
+          win, rugged, reason, mode: state.mode, churn: state.churn, at: now()
+        });
+      } catch {}
+    }
     // Big-runner card trigger: only for monsters that ran >= 5x (peak +400%+).
     if (win && (pos.peakPct || 0) >= 400) {
       const winData = {
@@ -753,13 +770,23 @@ export function createAutopilotEngine(deps) {
 
     for (const cand of scored) {
       if (state.stopped || now() >= state.endAt) break; // never open after a stop/timer
+      // Dev-reputation skip: avoid wallets that have rugged us repeatedly with no
+      // runner to show for it (the one rug signal you CAN read — the dev's history).
+      const dev = getDevWallet(cand.r.tokenMint);
+      if (dev) {
+        const rep = devReputation(dev);
+        if (rep && rep.rugs >= 2 && rep.runners === 0) {
+          record("info", `⛔ skip ${cand.r.symbol} — dev rugged ${rep.rugs}x before`);
+          continue;
+        }
+      }
       const size = sizeFor(state, P);
       if (!canOpen(state, size)) break;
-      await openPosition(cand.r, size, cand.fs);
+      await openPosition(cand.r, size, cand.fs, dev);
     }
   }
 
-  async function openPosition(row, sizeSol, fs) {
+  async function openPosition(row, sizeSol, fs, dev) {
     if (!state || state.stopped) return; // never open once stopped
     const mint = row.tokenMint;
     const sym = row.symbol || row.baseToken?.symbol || shortMint(mint);
@@ -813,7 +840,14 @@ export function createAutopilotEngine(deps) {
       tp3Done: false,
       peakPct: 0,
       realized: 0,
-      fs: round(fs, 1)
+      fs: round(fs, 1),
+      // Features captured for the learning flywheel.
+      dev: dev || null,
+      entryAge: Number(row.pairAgeSeconds) || null,
+      entrySniper: Number(row.sniperCount) || 0,
+      entryVol5m: Number(row.volume5m) || 0,
+      entryBuys: Number(row.buys5m) || 0,
+      entrySells: Number(row.sells5m) || 0
     };
     state.open.push(pos);
     record("info", `🟢 APED ${sym} ${round(sizeSol, 4)} SOL @ MC $${Math.round(entryMc)} (fs ${pos.fs})`);
