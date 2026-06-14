@@ -160,6 +160,13 @@
       <button id="copyLogBtn" class="b-ghost" style="margin-top:8px">📋 Copy log + stats (to share)</button>
       <button id="stopBtn" class="b-stop" style="margin-top:8px">■ Stop & flatten</button>
     </div>
+
+    <!-- BIG WINS (5x+) -->
+    <div id="winsCard" class="card hidden">
+      <label>🏆 Big wins (5x+) — tap to download the PnL card</label>
+      <div id="wins"></div>
+      <div class="muted" style="margin-top:6px">Each 5x+ runner also auto-posts a clean SlimeWire PnL card to your Telegram. Download here to share on X.</div>
+    </div>
   </div>
 
 <script>
@@ -461,8 +468,26 @@ async function poll() {
   const pos = s.open||[];
   $("positions").innerHTML = pos.length ? pos.map(p=>`<div class="pos"><span>${p.sym} <span class="muted">${p.heldS}s</span></span><b>${fmtPnl(p.movePct)} · ${p.costSol} SOL</b></div>`).join("") : '<div class="muted">none</div>';
   $("log").innerHTML = (s.log||[]).slice().reverse().map(l=>`<div>${new Date(l.at).toLocaleTimeString()} ${escapeHtml(l.msg)}</div>`).join("");
+  renderWins(s.bigWins||[]);
 }
 function escapeHtml(t){ return String(t||"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+
+let WINS = [];
+function renderWins(wins){
+  WINS = wins;
+  if(!wins.length){ $("winsCard").classList.add("hidden"); return; }
+  $("winsCard").classList.remove("hidden");
+  $("wins").innerHTML = wins.map((w,i)=>`<div class="pos"><span><b class="up">$${escapeHtml(w.symbol)}</b> <span class="up">+${Number(w.gainPct).toLocaleString()}%</span> <span class="muted">${w.multiple}x</span></span><button class="b-ghost" style="width:auto;padding:6px 12px;font-size:12px" onclick="dlWin(${i})">⬇ card</button></div>`).join("");
+}
+async function dlWin(i){
+  const w = WINS[i]; if(!w) return;
+  const r = await api("/api/web/autopilot/win-card", { method:"POST", body:JSON.stringify(w) });
+  if(r && r.ok && r.png){
+    const a=document.createElement("a"); a.href=r.png; a.download=`slimewire-${(w.symbol||"win").replace(/[^a-z0-9]/gi,"")}-${w.gainPct}pct.png`;
+    document.body.appendChild(a); a.click(); a.remove();
+  }
+}
+window.dlWin = dlWin;
 
 (async function boot() {
   const ok = await ensureAccount();

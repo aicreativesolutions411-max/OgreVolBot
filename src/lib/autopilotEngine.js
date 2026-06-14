@@ -261,6 +261,8 @@ function freshState(opts) {
     // Session loss cap: stop + flatten if working equity falls this far below the
     // stake. Default -20%; clamped 5%-50%.
     lossCapFrac: Math.max(0.05, Math.min(0.5, Number(opts.lossCapFrac) > 0 ? Number(opts.lossCapFrac) : 0.20)),
+    // Recent big-win (>=5x) records for the panel's downloadable PnL cards.
+    bigWins: [],
     // Optional PROFIT VAULT: sweep realized profit above the working stake to a
     // separate wallet, keep trading the stake (set-and-forget 12h protection).
     // { destination, minSweep } — null = off. secured = cumulative SOL vaulted.
@@ -464,6 +466,7 @@ export function createAutopilotEngine(deps) {
         heldS: Math.round((now() - p.openedAt) / 1000)
       })),
       tradeNo: state.tradeNo,
+      bigWins: (state.bigWins || []).slice(-12).reverse(),
       endsInS: Math.max(0, Math.round((state.endAt - now()) / 1000)),
       stopped: state.stopped,
       stopReason: state.stopReason,
@@ -699,18 +702,20 @@ export function createAutopilotEngine(deps) {
     const pnl = totalProceeds - pos.costSol;
     record(win ? "info" : "warn", `${win ? "✅" : "🔴"} ${pos.sym} CLOSE ${reason} ${pnl >= 0 ? "+" : ""}${round(pnl, 4)} SOL`);
     // Big-runner card trigger: only for monsters that ran >= 5x (peak +400%+).
-    if (win && state.live && (pos.peakPct || 0) >= 400) {
-      try {
-        onBigWin({
-          symbol: pos.sym,
-          mint: pos.mint,
-          gainPct: Math.round(pos.peakPct),
-          multiple: Math.round((1 + pos.peakPct / 100) * 10) / 10,
-          entryMc: Math.round(pos.entryMc),
-          peakMc: Math.round(pos.entryMc * (1 + pos.peakPct / 100)),
-          profitSol: round(pnl, 4)
-        });
-      } catch {}
+    if (win && (pos.peakPct || 0) >= 400) {
+      const winData = {
+        symbol: pos.sym,
+        mint: pos.mint,
+        gainPct: Math.round(pos.peakPct),
+        multiple: Math.round((1 + pos.peakPct / 100) * 10) / 10,
+        entryMc: Math.round(pos.entryMc),
+        peakMc: Math.round(pos.entryMc * (1 + pos.peakPct / 100)),
+        profitSol: round(pnl, 4),
+        at: now()
+      };
+      state.bigWins.push(winData);
+      if (state.bigWins.length > 12) state.bigWins.shift();
+      if (state.live) { try { onBigWin(winData); } catch {} }
     }
   }
 

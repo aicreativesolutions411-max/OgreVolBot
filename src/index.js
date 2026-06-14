@@ -2393,7 +2393,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
     //   POST /api/web/autopilot/stop
     // Live trading requires live:true AND confirm:"LIVE" AND a selected wallet
     // (never the fee wallet). Otherwise it runs paper (no SOL touched).
-    if (pathname === "/api/web/autopilot/status" || pathname === "/api/web/autopilot/start" || pathname === "/api/web/autopilot/stop" || pathname === "/api/web/autopilot/wallets" || pathname === "/api/web/autopilot/sweep") {
+    if (pathname === "/api/web/autopilot/status" || pathname === "/api/web/autopilot/start" || pathname === "/api/web/autopilot/stop" || pathname === "/api/web/autopilot/wallets" || pathname === "/api/web/autopilot/sweep" || pathname === "/api/web/autopilot/win-card") {
       const webAuth = await authenticateOptionalWebRequest(request);
       const body = request.method === "POST" ? await readJsonRequestBody(request).catch(() => ({})) : {};
       const providedKey = String(requestUrl.searchParams.get("key") || body.key || "");
@@ -2420,6 +2420,20 @@ async function handleWebApiRequest(request, response, requestUrl) {
         }
         if (pathname === "/api/web/autopilot/status") {
           sendWebJson(request, response, 200, { ok: true, status: autopilotEngine.status() });
+          return;
+        }
+        if (pathname === "/api/web/autopilot/win-card") {
+          // Render a downloadable PnL win card from the provided win data.
+          const png = await renderPnlWinCard({
+            symbol: body.symbol,
+            mint: body.mint,
+            gainPct: body.gainPct,
+            multiple: body.multiple,
+            entryMc: body.entryMc,
+            peakMc: body.peakMc
+          }).catch(() => null);
+          if (!png) { sendWebJson(request, response, 500, { ok: false, error: "card render failed" }); return; }
+          sendWebJson(request, response, 200, { ok: true, png: `data:image/png;base64,${png.toString("base64")}` });
           return;
         }
         if (pathname === "/api/web/autopilot/stop") {
