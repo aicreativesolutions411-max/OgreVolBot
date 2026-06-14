@@ -130,8 +130,13 @@ export function entryReject(row, P) {
 
 // Decide what to do with one open position given a fresh market read.
 // Returns { action: 'hold' | 'sell', pct, reason } where pct is fraction to sell.
+// Decide what to do with one open position. `pct` is the % of the CURRENTLY
+// REMAINING bag to sell. Ladder: bank profit early, then let a moon bag ride to
+// big multiples — protected by a trailing give-back so a runner that spikes and
+// reverses (e.g. +450% then dumps) is sold on the way down, not at zero.
 export function evalExit(pos, P, nowMs) {
   const move = pos.entryMc > 0 ? (pos.lastMc / pos.entryMc - 1) * 100 : 0;
+  const peak = Math.max(pos.peakPct || 0, move);
   const held = nowMs - pos.openedAt;
 
   // Liquidity pulled out from under us — get out at any price.
@@ -142,20 +147,34 @@ export function evalExit(pos, P, nowMs) {
   if (pos.missed >= 2 && held > 18_000) {
     return { action: "sell", pct: 100, reason: "feed-lost", move };
   }
-  // Hard stop.
-  if (move <= -P.sl) {
+  // Trailing give-back: once we've banked first profit and it has run, dump the
+  // rest if it retraces to half of its peak gain. This is what catches the
+  // "+450% then tanked" round-trip — it would exit near +225%, not at 0.
+  if (pos.tp1Done && peak >= 40 && move <= peak * 0.5) {
+    return { action: "sell", pct: 100, reason: "trail", move };
+  }
+  // Hard stop, but only before we've taken any profit (after TP1 the trail owns it).
+  if (!pos.tp1Done && move <= -P.sl) {
     return { action: "sell", pct: 100, reason: "stop", move };
   }
-  // First take-profit: bank 40%, let the rest ride as a moon bag.
+  // TP1: bank 40%, let the rest ride.
   if (!pos.tp1Done && move >= P.tp1) {
     return { action: "sell", pct: 40, reason: "tp1", move };
   }
-  // Second take-profit: close it.
-  if (move >= P.tp2) {
-    return { action: "sell", pct: 100, reason: "tp2", move };
+  // TP2: bank half of what's left, keep a moon bag for a real runner.
+  if (pos.tp1Done && !pos.tp2Done && move >= P.tp2) {
+    return { action: "sell", pct: 50, reason: "tp2", move };
   }
-  // Stale: held 3 min without hitting a target.
-  if (held > 180_000) {
+  // TP3 (+200%): sell half the moon bag.
+  if (pos.tp2Done && !pos.tp3Done && move >= 200) {
+    return { action: "sell", pct: 50, reason: "tp3", move };
+  }
+  // TP4 (+500%): close the runner out.
+  if (pos.tp3Done && move >= 500) {
+    return { action: "sell", pct: 100, reason: "tp4", move };
+  }
+  // Stale: held 3 min and never really moved.
+  if (held > 180_000 && move < P.tp1) {
     return { action: "sell", pct: 100, reason: "stale", move };
   }
   return { action: "hold", move };
@@ -222,6 +241,7 @@ export function createAutopilotEngine(deps) {
     log = () => {},
     persist = async () => {},
     isPaused = async () => false,
+    onOpen = () => {},
     tickMs = 2200,
     huntEvery = 3
   } = deps;
@@ -230,6 +250,7 @@ export function createAutopilotEngine(deps) {
   let timer = null;
   let inTick = false;
   const logRing = [];
+  const lastFeed = new Map(); // mint -> {mc, liq, at} — fresh prices from the live feed
 
   function record(level, msg, data) {
     const entry = { at: now(), level, msg, data: data || null };
@@ -299,9 +320,17 @@ export function createAutopilotEngine(deps) {
       timer = null;
     }
     if (state && !state.stopped) {
+      // Selling out is the whole point of Stop — flatten every open position
+      // (real sells in live mode) before we mark the session done.
+      const hadOpen = state.open.length;
+      try {
+        await flatten(reason);
+      } catch (e) {
+        record("warn", `flatten on stop failed: ${e && e.message}`);
+      }
       state.stopped = true;
       state.stopReason = reason;
-      record("info", `Autopilot STOP (${reason})`);
+      record("info", `Autopilot STOP (${reason})${hadOpen ? ` — flattened ${hadOpen} position(s)` : ""}`);
       await savePoint();
     }
     return status();
@@ -361,16 +390,14 @@ export function createAutopilotEngine(deps) {
     if (!running()) return;
     state.tickN += 1;
 
-    // External emergency stop respected.
+    // External emergency stop respected (stop() flattens).
     if (await isPaused()) {
-      await flatten("emergency-stop");
       await stop("emergency-stop");
       return;
     }
 
     // Timer expired: stop hunting, flatten, end.
     if (now() >= state.endAt) {
-      await flatten("timer");
       await stop("timer");
       return;
     }
@@ -378,7 +405,6 @@ export function createAutopilotEngine(deps) {
     // Loss cap: protect the dedicated bankroll.
     if (equity(state) <= state.start * 0.7) {
       record("warn", `Loss cap hit at equity ${round(equity(state))} SOL — flattening.`);
-      await flatten("loss-cap");
       await stop("loss-cap");
       return;
     }
@@ -399,16 +425,31 @@ export function createAutopilotEngine(deps) {
   async function manageExits() {
     const P = aggParams(state);
     for (const pos of [...state.open]) {
-      let lite = null;
+      let mc = 0;
+      let liq = 0;
+      // Primary = getPairLite, which reads the live pump trade tick (in-memory,
+      // sub-second) for bonding-curve coins; the recently-cached feed is the
+      // fallback when there's no fresh tick yet.
       try {
-        lite = await getPairLite(pos.mint);
-      } catch {
-        lite = null;
+        const lite = await getPairLite(pos.mint);
+        if (lite && Number(lite.marketCap) > 0) {
+          mc = Number(lite.marketCap);
+          liq = Number(lite.liquidityUsd) || 0;
+        }
+      } catch {}
+      if (!(mc > 0)) {
+        const fed = lastFeed.get(pos.mint);
+        if (fed && now() - fed.at < 12000 && fed.mc > 0) {
+          mc = fed.mc;
+          liq = fed.liq;
+        }
       }
-      if (lite && Number(lite.marketCap) > 0) {
-        pos.lastMc = Number(lite.marketCap);
-        if (Number(lite.liquidityUsd) > 0) pos.lastLiq = Number(lite.liquidityUsd);
+      if (mc > 0) {
+        pos.lastMc = mc;
+        if (liq > 0) pos.lastLiq = liq;
         pos.missed = 0;
+        const movePct = pos.entryMc > 0 ? (pos.lastMc / pos.entryMc - 1) * 100 : 0;
+        pos.peakPct = Math.max(pos.peakPct || 0, movePct);
       } else {
         pos.missed = (pos.missed || 0) + 1;
       }
@@ -450,7 +491,9 @@ export function createAutopilotEngine(deps) {
     } else {
       pos.remFrac = pos.remFrac * (1 - frac);
       if (reason === "tp1") pos.tp1Done = true;
-      record("info", `🟡 ${pos.sym} ${reason.toUpperCase()} sold ${pct}% @ ${round(move, 1)}%`);
+      else if (reason === "tp2") pos.tp2Done = true;
+      else if (reason === "tp3") pos.tp3Done = true;
+      record("info", `🟡 ${pos.sym} ${reason.toUpperCase()} sold ${pct}% @ ${round(move, 1)}% (moon bag rides)`);
     }
   }
 
@@ -483,6 +526,14 @@ export function createAutopilotEngine(deps) {
       return;
     }
     if (!Array.isArray(rows) || !rows.length) return;
+    // Cache fresh prices from the feed so open positions update fast (used in manageExits).
+    const t = now();
+    for (const r of rows) {
+      if (r && r.tokenMint) {
+        const mc = Number(r.marketCap) || 0;
+        if (mc > 0) lastFeed.set(r.tokenMint, { mc, liq: Number(r.liquidityUsd) || 0, at: t });
+      }
+    }
     const P = aggParams(state);
     const held = new Set(state.open.map((p) => p.mint));
     const nowMs = now();
@@ -511,6 +562,8 @@ export function createAutopilotEngine(deps) {
     const entryMc = Number(row.marketCap) || 0;
     const entryLiq = Number(row.liquidityUsd) || 0;
     if (entryMc <= 0) return;
+    // Start the live pump trade-tick stream for this coin so prices update instantly.
+    try { onOpen(mint); } catch {}
 
     let tokenAmount = null;
     if (state.live) {
@@ -543,6 +596,9 @@ export function createAutopilotEngine(deps) {
       openedAt: now(),
       missed: 0,
       tp1Done: false,
+      tp2Done: false,
+      tp3Done: false,
+      peakPct: 0,
       realized: 0,
       fs: round(fs, 1)
     };

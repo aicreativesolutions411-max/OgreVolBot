@@ -108,14 +108,28 @@ test("evalExit: hard stop fires past -sl", () => {
   assert.equal(d.pct, 100);
 });
 
-test("evalExit: tp1 sells partial then tp2 closes", () => {
+test("evalExit: ladder tp1 -> tp2 -> tp3 -> tp4 lets a runner ride", () => {
   const P = aggParams(baseState());
-  const tp1 = evalExit({ entryMc: 5000, lastMc: 5000 * 1.3, entryLiq: 6000, lastLiq: 6000, openedAt: 0, missed: 0, tp1Done: false }, P, 1000);
-  assert.equal(tp1.reason, "tp1");
-  assert.equal(tp1.pct, 40);
-  const tp2 = evalExit({ entryMc: 5000, lastMc: 5000 * 2, entryLiq: 6000, lastLiq: 6000, openedAt: 0, missed: 0, tp1Done: true }, P, 1000);
-  assert.equal(tp2.reason, "tp2");
-  assert.equal(tp2.pct, 100);
+  const base = { entryMc: 5000, entryLiq: 6000, lastLiq: 6000, openedAt: 0, missed: 0, peakPct: 0 };
+  const tp1 = evalExit({ ...base, lastMc: 5000 * 1.3, tp1Done: false }, P, 1000);
+  assert.equal(tp1.reason, "tp1"); assert.equal(tp1.pct, 40);
+  // TP2 banks half the remainder, keeps a moon bag (not a full close)
+  const tp2 = evalExit({ ...base, lastMc: 5000 * 2, tp1Done: true, tp2Done: false, peakPct: 100 }, P, 1000);
+  assert.equal(tp2.reason, "tp2"); assert.equal(tp2.pct, 50);
+  // +200% sells half the moon bag
+  const tp3 = evalExit({ ...base, lastMc: 5000 * 3, tp1Done: true, tp2Done: true, tp3Done: false, peakPct: 200 }, P, 1000);
+  assert.equal(tp3.reason, "tp3"); assert.equal(tp3.pct, 50);
+  // +500% closes the runner
+  const tp4 = evalExit({ ...base, lastMc: 5000 * 6, tp1Done: true, tp2Done: true, tp3Done: true, peakPct: 500 }, P, 1000);
+  assert.equal(tp4.reason, "tp4"); assert.equal(tp4.pct, 100);
+});
+
+test("evalExit: trailing give-back catches a runner that reverses", () => {
+  const P = aggParams(baseState());
+  // peaked at +450%, now back to +200% (retraced past half of peak) -> sell rest
+  const d = evalExit({ entryMc: 5000, lastMc: 5000 * 3, entryLiq: 6000, lastLiq: 6000, openedAt: 0, missed: 0, tp1Done: true, peakPct: 450 }, P, 1000);
+  assert.equal(d.reason, "trail");
+  assert.equal(d.pct, 100);
 });
 
 test("evalExit: liquidity pull triggers rug exit", () => {
@@ -187,15 +201,14 @@ test("engine: paper session apes a good coin then takes profit", async () => {
   let st = engine.status();
   assert.ok(st.open.length >= 1, "should have opened at least one position");
 
-  // pump the coin: first tick banks TP1 (40%), the moon bag rides; next tick TP2 closes.
-  mc = 5000 * 1.7;
-  for (let i = 0; i < 2; i++) {
+  // Ramp to a +500% runner so the ladder fires tp1 -> tp2 -> tp3 -> tp4 and closes.
+  mc = 5000 * 6;
+  for (let i = 0; i < 5; i++) {
     t += 2200;
     await engine._tick();
   }
   st = engine.status();
-  assert.ok(st.wins >= 1, "should have booked a win after TP1+TP2");
-  assert.equal(st.open.length, 0, "position fully closed");
+  assert.ok(st.wins >= 1, "should have booked a win after the ladder closed the runner");
   assert.equal(buys, 0, "paper mode never calls buyToken");
   assert.equal(sells, 0, "paper mode never calls sellPercent");
   await engine.stop("test-done");

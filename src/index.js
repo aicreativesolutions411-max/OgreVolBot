@@ -233,6 +233,26 @@ const autopilotEngine = createAutopilotEngine({
     }));
   },
   getPairLite: async (mint) => {
+    // FAST PATH for pump.fun coins: the live PumpPortal trade tick is in-memory
+    // and sub-second. We subscribe each coin on open (onOpen), so this is the
+    // instant, authoritative price for fresh bonding-curve tokens.
+    try {
+      const solUsd = Number(solUsdPriceCache?.value) || 0;
+      if (solUsd > 0) {
+        const ticks = pumpPortalStream.getTrades(mint, { limit: 1 });
+        let mcSol = ticks && ticks[0] ? Number(ticks[0].marketCapSol) : 0;
+        let vSol = ticks && ticks[0] ? Number(ticks[0].vSolInBondingCurve) : 0;
+        if (!mcSol) {
+          const ce = pumpPortalStream.getCreationEntry(mint);
+          const lt = ce && ce.lastTrade;
+          if (lt) { mcSol = Number(lt.marketCapSol) || 0; vSol = Number(lt.vSolInBondingCurve) || vSol; }
+        }
+        if (mcSol > 0) {
+          return { marketCap: mcSol * solUsd, liquidityUsd: vSol > 0 ? vSol * solUsd : 0, priceUsd: 0 };
+        }
+      }
+    } catch {}
+    // Fallbacks for graduated/indexed coins: DexScreener, then on-chain curve.
     try {
       const pairs = await fetchDexScreenerTokenPairsFallback(mint).catch(() => []);
       const best = bestDexPairForToken(mint, pairs);
@@ -254,6 +274,8 @@ const autopilotEngine = createAutopilotEngine({
     } catch {}
     return null;
   },
+  // Subscribe a freshly-aped coin to the live trade-tick stream for instant prices.
+  onOpen: (mint) => { try { pumpPortalStream.watchMint(mint); } catch {} },
   buyToken: async (mint, lamports) => {
     if (!autopilotWalletRecord) throw new Error("autopilot wallet not resolved");
     const res = await buyTokenForPlan(autopilotWalletRecord, mint, lamports, CONFIG.autopilotSlippageBps, {
