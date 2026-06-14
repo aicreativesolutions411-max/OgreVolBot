@@ -298,7 +298,12 @@ const autopilotEngine = createAutopilotEngine({
   getWalletSol: async () => {
     if (!autopilotWalletRecord) return null;
     try {
-      return lamportsToSol(await getSolBalanceCached(new PublicKey(autopilotWalletRecord.publicKey), { force: true }));
+      // Return a NUMBER (lamportsToSol returns a formatted string, which fails the
+      // engine's Number.isFinite check — that bug left wallet(real) null + the
+      // ledger synthetic instead of tracking real SOL).
+      const lamports = await getSolBalanceCached(new PublicKey(autopilotWalletRecord.publicKey), { force: true });
+      const sol = Number(lamports) / AUTOPILOT_LAMPORTS_PER_SOL;
+      return Number.isFinite(sol) ? sol : null;
     } catch {
       return null;
     }
