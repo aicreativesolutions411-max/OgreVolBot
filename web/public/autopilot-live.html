@@ -101,8 +101,12 @@
           <label>Max per trade (SOL)</label>
           <input type="number" id="maxTrade" value="0.08" min="0.012" step="0.01" />
         </div>
+        <div>
+          <label>Session stop-loss (%)</label>
+          <input type="number" id="lossCap" value="20" min="5" max="50" step="1" />
+        </div>
       </div>
-      <div class="muted" style="margin:-4px 0 8px">🛡️ Hard cap on every single bet — a rug can't lose more than this. Keep it small (0.05–0.1); it's your risk-per-trade, independent of wallet size.</div>
+      <div class="muted" style="margin:-4px 0 8px">🛡️ <b>Max per trade</b> = risk per bet (a rug can't lose more), independent of wallet size. <b>Session stop-loss</b> = it stops + flattens if the working stake falls this far (vaulted profit stays safe).</div>
       <div class="row">
         <div>
           <label>Run for</label>
@@ -383,6 +387,7 @@ $("startBtn").addEventListener("click", async () => {
     live,
     sol: useAll ? "all" : Number($("amt").value),
     maxTradeSol: Number($("maxTrade").value) || undefined,
+    lossCapPct: Number($("lossCap").value) || undefined,
     profitLock: $("profitLock").checked,
     lowChurn: $("lowChurn").checked
   };

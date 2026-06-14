@@ -249,6 +249,9 @@ function freshState(opts) {
     // Optional session profit-lock: once up >= minGainPct, stop + flatten if
     // equity gives back `giveback` fraction of the peak gain. null = off.
     profitLock: opts.profitLock || null,
+    // Session loss cap: stop + flatten if working equity falls this far below the
+    // stake. Default -20%; clamped 5%-50%.
+    lossCapFrac: Math.max(0.05, Math.min(0.5, Number(opts.lossCapFrac) > 0 ? Number(opts.lossCapFrac) : 0.20)),
     // Optional PROFIT VAULT: sweep realized profit above the working stake to a
     // separate wallet, keep trading the stake (set-and-forget 12h protection).
     // { destination, minSweep } — null = off. secured = cumulative SOL vaulted.
@@ -470,8 +473,8 @@ export function createAutopilotEngine(deps) {
       if (await isPaused()) { await stop("emergency-stop"); return; }
       if (now() >= state.endAt) { await stop("timer"); return; }
 
-      if (equity(state) <= state.start * 0.7) {
-        record("warn", `Loss cap hit at equity ${round(equity(state))} SOL — flattening.`);
+      if (equity(state) <= state.start * (1 - state.lossCapFrac)) {
+        record("warn", `Loss cap hit (-${Math.round(state.lossCapFrac * 100)}%) at equity ${round(equity(state))} SOL — flattening.`);
         await stop("loss-cap");
         return;
       }

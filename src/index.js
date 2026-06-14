@@ -2489,6 +2489,10 @@ async function handleWebApiRequest(request, response, requestUrl) {
         let maxTradeSol;
         const mt = Number(body.maxTradeSol);
         if (Number.isFinite(mt) && mt > 0) maxTradeSol = Math.max(0.012, Math.min(mt, 1));
+        // Session loss cap as a fraction (panel sends a %, e.g. 20 -> 0.20).
+        let lossCapFrac;
+        const lc = Number(body.lossCapPct);
+        if (Number.isFinite(lc) && lc > 0) lossCapFrac = Math.max(0.05, Math.min(0.5, lc / 100));
         let vault = null;
         const vaultDest = String(body.vaultDestination || "").trim();
         if (vaultDest) {
@@ -2505,7 +2509,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
           }
           vault = { destination: destKey };
         }
-        const status = await autopilotEngine.start({ solBudget: sol, minutes, mode, live: wantLive, walletPubkey, profitLock, churn, vault, maxTradeSol });
+        const status = await autopilotEngine.start({ solBudget: sol, minutes, mode, live: wantLive, walletPubkey, profitLock, churn, vault, maxTradeSol, lossCapFrac });
         sendWebJson(request, response, 200, { ok: true, status });
         return;
       } catch (e) {
