@@ -307,6 +307,10 @@ export function createAutopilotEngine(deps) {
     if (!snap || snap.stopped) return false;
     if (now() >= snap.endAt && snap.open.length === 0) return false;
     state = snap;
+    // Re-subscribe open positions to the live tick stream so they price instantly.
+    for (const pos of state.open) {
+      try { onOpen(pos.mint); } catch {}
+    }
     record("info", `Autopilot RESUME ${state.live ? "LIVE" : "PAPER"} · ${state.open.length} open · bank ${state.bank.toFixed(4)} SOL`);
     timer = setInterval(() => {
       void safeTick();
