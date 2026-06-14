@@ -2442,6 +2442,21 @@ async function handleWebApiRequest(request, response, requestUrl) {
       sendWebJson(request, response, result.ok ? 200 : 400, result);
       return;
     }
+    // PvP deck duels: players publish their deck; others fetch a random one to battle (async).
+    if (request.method === "GET" && pathname === "/api/web/swamp-deck") {
+      const ex = String(requestUrl.searchParams.get("exclude") || "");
+      const store = await readSwampDecks().catch(() => ({ decks: [] }));
+      const pool = (store.decks || []).filter((d) => d.id !== ex && Array.isArray(d.deck) && d.deck.length);
+      const opponent = pool.length ? pool[Math.floor(Math.random() * pool.length)] : null;
+      sendWebJson(request, response, 200, { ok: true, opponent });
+      return;
+    }
+    if (request.method === "POST" && pathname === "/api/web/swamp-deck") {
+      const body = await readJsonRequestBody(request, 8_000);
+      const result = await publishSwampDeck(body);
+      sendWebJson(request, response, result.ok ? 200 : 400, result);
+      return;
+    }
     // Community raids: anyone can submit their own coin as a raid boss (shill loop).
     if (request.method === "GET" && pathname === "/api/web/community-raids") {
       const store = await readCommunityRaids().catch(() => ({ raids: [] }));
@@ -21029,6 +21044,8 @@ function defaultJsonForPath(filePath) {
       return { posts: [] };
     case "presales.json":
       return { presales: [] };
+    case "swamp-decks.json":
+      return { decks: [] };
     case "audit-log.json":
       return { entries: [] };
     case "state.json":
@@ -23891,6 +23908,33 @@ async function submitCommunityRaid(body = {}) {
   store.raids = store.raids.slice(-80);
   await writeJsonFile(communityRaidsPath(), store);
   return { ok: true, mint, symbol };
+}
+
+// --- PvP deck duels: a small published-deck store for async battles ---
+function swampDecksPath() { return path.join(CONFIG.dataDir, "swamp-decks.json"); }
+async function readSwampDecks() { const s = await readJson(swampDecksPath()); if (!Array.isArray(s.decks)) s.decks = []; return s; }
+async function publishSwampDeck(body = {}) {
+  const id = String(body.id || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40);
+  if (!id) return { ok: false, error: "no id" };
+  const name = String(body.name || "anon").replace(/[^A-Za-z0-9_$. -]/g, "").slice(0, 16) || "anon";
+  const clan = String(body.clan || "").replace(/[^A-Za-z0-9_$. -]/g, "").slice(0, 16);
+  const level = Math.max(1, Math.min(999, Number(body.level) || 1));
+  const cards = Array.isArray(body.deck) ? body.deck.slice(0, 6).map((c) => ({
+    sym: String(c.sym || "COIN").replace(/[^A-Za-z0-9_$]/g, "").slice(0, 12) || "COIN",
+    el: String(c.el || "Slime").replace(/[^A-Za-z]/g, "").slice(0, 8) || "Slime",
+    atk: Math.max(1, Math.min(999, Number(c.atk) || 40)),
+    def: Math.max(1, Math.min(999, Number(c.def) || 40)),
+    hp: Math.max(1, Math.min(9999, Number(c.hp) || 120)),
+    rarity: String(c.rarity || "common").replace(/[^a-z]/g, "").slice(0, 12) || "common"
+  })) : [];
+  if (!cards.length) return { ok: false, error: "empty deck" };
+  const store = await readSwampDecks();
+  const rec = { id, name, clan, level, deck: cards, at: new Date().toISOString() };
+  const idx = store.decks.findIndex((d) => d.id === id);
+  if (idx >= 0) store.decks[idx] = rec; else store.decks.push(rec);
+  store.decks = store.decks.slice(-600);
+  await writeJsonFile(swampDecksPath(), store);
+  return { ok: true };
 }
 
 // --- Presales: hype/commit listings (NO custody — interest only, for now) ---

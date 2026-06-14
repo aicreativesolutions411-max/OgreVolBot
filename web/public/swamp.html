@@ -249,7 +249,10 @@
         <button class="big" id="battleStart" style="flex:1;margin:0">⚔️ QUICK BATTLE</button>
         <button class="big" id="storyOpen" style="flex:1;margin:0;background:linear-gradient(90deg,#b06bff,#ff7bd0)">📖 STORY MODE</button>
       </div>
-      <button class="big" id="survivalStart" style="margin-top:8px;width:100%;background:linear-gradient(90deg,#ff9a4a,#ff5e5e)">🔥 SURVIVAL GAUNTLET</button>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="big" id="survivalStart" style="flex:1;margin:0;background:linear-gradient(90deg,#ff9a4a,#ff5e5e)">🔥 SURVIVAL</button>
+        <button class="big" id="pvpStart" style="flex:1;margin:0;background:linear-gradient(90deg,#46e8ff,#6aa0ff)">⚔️ PvP DUEL</button>
+      </div>
     </div>
     <div id="arenaStory" style="display:none">
       <h2>📖 Swamp Saga</h2>
@@ -1328,7 +1331,7 @@ function buildDeckUI(){ const entries=Object.entries(store.dex); const grid=$("d
     const pool=OGRE_BY_TIER[c.rarity]||OGRE_BY_TIER.common; const art=pool[hash(mint)%pool.length];
     const d=document.createElement("div"); d.className="dcard"+(picked?" picked":""); d.style.cursor="pointer";
     d.innerHTML=`<div class="dr" style="background:${(RAR[c.rarity]||RAR.common).col}"></div>${picked?'<div class="dpick">✅</div>':''}<div class="delem" style="position:absolute;top:5px;left:6px;font-size:0.72rem">${el.i}</div><img src="${art}" onerror="this.style.display='none'"><div class="ds">$${c.symbol}</div><div class="dstat" style="font-size:0.52rem;color:var(--dim)">⚔${sp.atk} 🛡${sp.def} ❤${sp.hp}</div>`;
-    d.onclick=()=>{ const i=store.deck.indexOf(mint); if(i>=0) store.deck.splice(i,1); else { if(store.deck.length>=6){ toast("Deck full (6)"); return; } store.deck.push(mint); } save(); try{sfx("ui",0.3);}catch(_){} buildDeckUI(); };
+    d.onclick=()=>{ const i=store.deck.indexOf(mint); if(i>=0) store.deck.splice(i,1); else { if(store.deck.length>=6){ toast("Deck full (6)"); return; } store.deck.push(mint); } save(); try{sfx("ui",0.3);}catch(_){} buildDeckUI(); publishMyDeck(); };
     grid.appendChild(d); } }
 function curMe(){ return B.me[B.mi]; } function curFoe(){ return B.foe[B.fi]; }
 function bLog(t){ $("bLog").textContent=t; }
@@ -1359,9 +1362,10 @@ function foeMove(){ if(!B||B.over) return; const me=curMe(), foe=curFoe(); const
 function foeFaint(){ bLog(`${curFoe().species} fainted!`); B.fi++; if(B.fi>=B.foe.length){ if(B.survival){ clearWave(); } else { winBattle(); } return; } B.turn="me"; renderBattle(); bLog(`${B.survival?"Next":"Boss sends out"} ${curFoe().species}!`); }
 function meFaint(){ bLog(`$${curMe().sym} fainted!`); B.mi++; if(B.mi>=B.me.length){ loseBattle(); return; } B.turn="me"; renderBattle(); bLog(`You send out $${curMe().sym}!`); }
 function winBattle(){ B.over=true; const story=(B.story!=null), bo=story?STORY_BOSSES[B.story]:null;
-  const xp=(story?80:40)+level()*6, relics=story?2:1; store.xp+=xp; store.res.relic=(store.res.relic||0)+relics; store.arenaWins=(store.arenaWins||0)+1;
-  if(story && B.story>=(store.storyBeat||0)) store.storyBeat=B.story+1; save();
-  bLog(`🏆 VICTORY! +${xp}xp · +${relics} 🔮`); try{sfx("level",0.5); showBanner("🏆 VICTORY","+"+xp+"xp · +"+relics+" 🔮","#ffd24a");}catch(_){}
+  const xp=(story?80:B.pvp?55:40)+level()*6, relics=story?2:1; store.xp+=xp; store.res.relic=(store.res.relic||0)+relics; store.arenaWins=(store.arenaWins||0)+1;
+  if(story && B.story>=(store.storyBeat||0)) store.storyBeat=B.story+1;
+  if(B.pvp){ store.pvpWins=(store.pvpWins||0)+1; try{submitPvp();}catch(_){} } save();
+  bLog(`🏆 VICTORY! +${xp}xp · +${relics} 🔮`); try{sfx("level",0.5); showBanner(B.pvp?"⚔️ PvP WIN":"🏆 VICTORY",(B.pvp?("beat "+(B.oppName||"rival")+" · "):"")+"+"+xp+"xp · +"+relics+" 🔮","#ffd24a");}catch(_){}
   if(story){ setTimeout(()=>{ arenaShow("arenaCutscene"); $("csArt").src=bo.art; $("csArt").style.display=""; $("csName").textContent="🏆 "+bo.name+" DEFEATED";
     $("csText").textContent=bo.win+`\n\n+${xp} XP · +${relics} 🔮 relic`+((store.storyBeat>=STORY_BOSSES.length)?"\n\n👑 You cleared the Swamp Saga — SWAMP CHAMPION!":""); $("csGo").textContent="Continue"; $("csGo").onclick=()=>{ openStory(); refreshHud(); }; refreshHud(); },1200); }
   else { setTimeout(()=>{ arenaShow("arenaDeck"); buildDeckUI(); refreshHud(); },1700); } }
@@ -1426,9 +1430,26 @@ function startStoryBattle(i){ const bo=STORY_BOSSES[i]; if(!store.deck||!store.d
   const my=store.deck.map(m=>store.dex[m]?makeCard(m,store.dex[m]):null).filter(Boolean); if(!my.length){ toast("Deck empty"); return; }
   B={me:my, foe:storyBossDeck(bo), mi:0, fi:0, turn:"me", over:false, story:i};
   arenaShow("arenaBattle"); renderBattle(); try{sfx("boss",0.5);}catch(_){} showBanner("📖 "+bo.name, bo.elem+" boss · "+bo.size+" cards","#ff7bd0"); bLog("Battle begins!"); }
+/* ----- Phase 3: PvP deck duels (async — battle real players' published decks) ----- */
+function myPvpId(){ if(!store.pvpId){ store.pvpId="p"+Math.random().toString(36).slice(2,10); save(); } return store.pvpId; }
+function publishMyDeck(){ if(!store.deck||!store.deck.length) return;
+  const deck=store.deck.map(m=>{ const c=store.dex[m]; if(!c) return null; const sp=coinSpecies(m,c.rarity); return {sym:c.symbol, el:sp.element.n, atk:sp.atk, def:sp.def, hp:sp.hp, rarity:c.rarity}; }).filter(Boolean);
+  if(!deck.length) return;
+  try{ fetch(API+"/api/web/swamp-deck",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({id:myPvpId(),name:store.lbName||"anon",clan:store.clan||"",level:level(),deck})}).catch(()=>{}); }catch(_){}
+}
+function pvpCard(c){ const elem=ELEMENTS.find(e=>e.n===c.el)||ELEMENTS[ELEMENTS.length-1]; const t=c.rarity||"common"; const pool=OGRE_BY_TIER[t]||OGRE_BY_TIER.common; const art=pool[hash((c.sym||"x")+t)%pool.length]; const mh=Math.round((c.hp||120)*3+80);
+  return {mint:"pvp_"+(c.sym||"x"), sym:c.sym||"COIN", elem, species:"$"+(c.sym||"COIN"), atk:c.atk||40, def:c.def||40, maxhp:mh, hp:mh, cds:{}, art, rarity:t}; }
+async function startPvp(){ if(!store.deck||!store.deck.length){ toast("Build a deck first"); arenaShow("arenaDeck"); buildDeckUI(); return; }
+  const my=store.deck.map(m=>store.dex[m]?makeCard(m,store.dex[m]):null).filter(Boolean); if(!my.length){ toast("Deck empty"); return; }
+  publishMyDeck(); toast("Finding an opponent…");
+  let opp=null; try{ const r=await fetch(API+"/api/web/swamp-deck?exclude="+encodeURIComponent(myPvpId()),{cache:"no-store"}); const j=await r.json(); opp=j&&j.opponent; }catch(_){}
+  let foe;
+  if(opp&&opp.deck&&opp.deck.length){ foe=opp.deck.map(pvpCard); } else { foe=bossDeck(); opp={name:"Swamp Bot"}; }
+  B={me:my, foe, mi:0, fi:0, turn:"me", over:false, pvp:true, oppName:(opp.name||"rival")};
+  arenaShow("arenaBattle"); renderBattle(); try{sfx("boss",0.5);}catch(_){} showBanner("⚔️ PvP DUEL","vs "+(opp.name||"rival")+(opp.clan?" ["+opp.clan+"]":""),"#ff7bd0"); bLog("Dueling "+(opp.name||"a rival")+"'s deck!"); }
 $("arenaBtn").onclick=()=>{ if(state==="world") openArena(); }; $("arenaX").onclick=closeArena; $("battleStart").onclick=startBattle;
 $("storyOpen").onclick=openStory; $("storyBack").onclick=()=>{ arenaShow("arenaDeck"); buildDeckUI(); };
-$("survivalStart").onclick=startSurvival;
+$("survivalStart").onclick=startSurvival; $("pvpStart").onclick=startPvp;
 
 /* ---- buildings ---- */
 let curBld=null;
