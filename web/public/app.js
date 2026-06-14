@@ -9599,13 +9599,15 @@ function launchCoinHtml() {
       html: `
           <div class="volume-grid">
             <label>
-              Creator Fee
-              <select data-launch-coin-creator-fee>
-                <option value="0" ${String(draft.creatorFeeBps || "0") === "0" ? "selected" : ""}>None</option>
-                <option value="50" ${String(draft.creatorFeeBps || "") === "50" ? "selected" : ""}>0.5%</option>
-                <option value="100" ${String(draft.creatorFeeBps || "") === "100" ? "selected" : ""}>1%</option>
-                <option value="200" ${String(draft.creatorFeeBps || "") === "200" ? "selected" : ""}>2%</option>
+              Creator / dev fee (you keep 100% of these)
+              <select data-launch-coin-creator-fee onchange="(this.closest('.volume-grid')||document).querySelector('[data-launch-coin-fee-custom-wrap]').hidden=(this.value!=='custom')">
+                <option value="1000" ${(!draft.creatorFeeBps || String(draft.creatorFeeBps) === "1000" || String(draft.creatorFeeBps) === "0") ? "selected" : ""}>100% — max creator fees (most pick this)</option>
+                <option value="custom" ${(draft.creatorFeeBps && !["0", "1000"].includes(String(draft.creatorFeeBps))) ? "selected" : ""}>Custom %</option>
               </select>
+            </label>
+            <label data-launch-coin-fee-custom-wrap ${(draft.creatorFeeBps && !["0", "1000"].includes(String(draft.creatorFeeBps))) ? "" : "hidden"}>
+              Custom fee % (max 10%)
+              <input data-launch-coin-creator-fee-custom type="number" min="0" max="10" step="0.5" placeholder="e.g. 2" value="${draft.creatorFeeBps && !["0", "1000"].includes(String(draft.creatorFeeBps)) ? (Number(draft.creatorFeeBps) / 100) : ""}">
             </label>
             <label>
               Creator Fee Wallet
@@ -9800,7 +9802,11 @@ function readLaunchCoinDraft() {
     website: ($("[data-launch-coin-website]")?.value || "").trim(),
     x: ($("[data-launch-coin-x]")?.value || "").trim(),
     telegram: ($("[data-launch-coin-telegram]")?.value || "").trim(),
-    creatorFeeBps: $("[data-launch-coin-creator-fee]")?.value || draft.creatorFeeBps || "0",
+    creatorFeeBps: (() => {
+      const sel = $("[data-launch-coin-creator-fee]")?.value;
+      if (sel === "custom") return String(Math.min(1000, Math.max(0, Math.round((Number($("[data-launch-coin-creator-fee-custom]")?.value) || 0) * 100))));
+      return sel || draft.creatorFeeBps || "1000";
+    })(),
     creatorFeeRecipient: ($("[data-launch-coin-fee-recipient]")?.value || "").trim(),
     feeMode: $("[data-launch-coin-fee-mode]")?.value || draft.feeMode || "dev",
     buybackWallet: ($("[data-launch-coin-buyback-wallet]")?.value || "").trim(),

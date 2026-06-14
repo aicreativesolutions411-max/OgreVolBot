@@ -174,7 +174,12 @@ export function convictionMult(row, rep) {
   const age = Number(row.pairAgeSeconds) || 9999;
   if (age <= 60) c += 0.15;                                  // very fresh = best entries
   if (freshScore(row) >= 70) c += 0.15;                      // top-tier setup
-  return Math.max(0.5, Math.min(1.6, c));
+  // CRITICAL: freshness/score do NOT predict instant-rugs. Only let conviction size
+  // ABOVE base for a dev with a PROVEN runner history (and no rugs). Unknown/unproven
+  // coins are capped at 1.0x so one instant-rug can't blow a big bet (the log showed
+  // 0.045 SOL = 18% bets on fresh coins gapping -37% past the stop).
+  const proven = rep && rep.runners >= 1 && rep.rugs === 0;
+  return Math.max(0.5, Math.min(proven ? 1.6 : 1.0, c));
 }
 
 // Hard entry gates — filter instant-rug bait while keeping genuine fresh
@@ -358,7 +363,10 @@ function freshState(opts) {
     recentSells: {},
     // Adaptive "tape" auto-tuner: reads recent runner/rug rate and nudges the
     // bar + bet size — press in hot tape, sit back in cold. (autoTune mutates it.)
-    tune: { scoreBonus: 0, sizeMult: 1, tape: "warming", maxOpenCap: null, entryGapMs: 0, perCycle: 99 },
+    // Warming = no tape data yet (and where restarted sessions live). Start SMALL and
+    // open at most 2 per cycle so an instant-rug wave can't gut the bankroll before
+    // the brain has any read. Sizing opens up once the tape proves itself (autoTune).
+    tune: { scoreBonus: 0, sizeMult: 0.6, tape: "warming", maxOpenCap: null, entryGapMs: 0, perCycle: 2 },
     recentPeaks: [],
     recentRugs: [],
     lastTuneAt: 0,
@@ -815,8 +823,11 @@ export function createAutopilotEngine(deps) {
     if (state.recentRugs.length > 30) state.recentRugs.shift();
     record(win ? "info" : "warn", `${win ? "✅" : "🔴"} ${pos.sym} CLOSE ${reason} ${pnl >= 0 ? "+" : ""}${round(pnl, 4)} SOL`);
 
-    // Learning flywheel: record this trade's features + outcome (live only).
-    if (state.live) {
+    // Learning flywheel: record EVERY trade's features + outcome — paper too. Paper
+    // outcomes use real market data (a rug in paper is a real rug), so they're valid
+    // signal: the brain now learns dev reputation + win/rug patterns from every paper
+    // session you run, not just live money. This is the "data god" — always learning.
+    {
       const rugged = /rug/.test(reason) || pnl <= -pos.costSol * 0.5;
       try {
         recordTrade({
@@ -824,7 +835,7 @@ export function createAutopilotEngine(deps) {
           entryMc: Math.round(pos.entryMc), entryAge: pos.entryAge, entrySniper: pos.entrySniper,
           entryVol5m: pos.entryVol5m, entryBuys: pos.entryBuys, entrySells: pos.entrySells,
           fs: pos.fs, peakPct: Math.round(pos.peakPct || 0), pnl: round(pnl, 4),
-          win, rugged, reason, mode: state.mode, churn: state.churn, at: now()
+          win, rugged, reason, mode: state.mode, churn: state.churn, paper: !state.live, at: now()
         });
       } catch {}
     }
