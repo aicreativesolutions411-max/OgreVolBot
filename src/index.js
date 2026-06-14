@@ -331,7 +331,9 @@ const SOL_MINT = "So11111111111111111111111111111111111111112";
 const AUTOSNIPE_TAKE_PROFIT_PCT = 25;
 const AUTOSNIPE_STOP_LOSS_PCT = 8;
 const AUTOSNIPE_SLIPPAGE_BPS = 400;
-const AUTOSNIPE_SELL_DELAY_SECONDS = 300;
+// Fresh-Ape stale timer: only fires if TP/SL didn't — caps dead-pair bag-holding
+// at ~160s (was 300s) so capital rotates into the next fresh launch faster.
+const AUTOSNIPE_SELL_DELAY_SECONDS = 160;
 const PUMPSNIPE_TAKE_PROFIT_PCT = 40;
 const PUMPSNIPE_STOP_LOSS_PCT = 8;
 const PUMPSNIPE_SLIPPAGE_BPS = 300;

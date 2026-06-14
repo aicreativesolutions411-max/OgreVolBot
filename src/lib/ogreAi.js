@@ -25,11 +25,14 @@ const OGRE_AI_THIN_LIQUIDITY_RATIO = 0.01;
 // at least $3k market cap (a fresh curve with a real dev/snipe buy sits
 // ~$4.2k+). Sourced from the PumpPortal websocket so age is exact to the
 // second. Older or thinner pairs are someone else's trade.
-const OGRE_AI_FRESH_APE_MIN_MC_USD = 3_000;
+// Tuned to the Fresh Ape Auto spec: $2.5k–$8k sweet spot, up to $12k only on
+// strong acceleration; 10s–3min window; small starting volume so we don't miss
+// the first candle. Edge = early entry + strict exits, not pickiness.
+const OGRE_AI_FRESH_APE_MIN_MC_USD = 2_500;
 const OGRE_AI_FRESH_APE_PRIMARY_MAX_MC_USD = 8_000;
-const OGRE_AI_FRESH_APE_FALLBACK_MAX_MC_USD = 15_000;
-const OGRE_AI_FRESH_APE_MAX_AGE_MINUTES = 2;
-const OGRE_AI_FRESH_APE_MIN_STARTING_VOLUME_USD = 60;
+const OGRE_AI_FRESH_APE_FALLBACK_MAX_MC_USD = 12_000;
+const OGRE_AI_FRESH_APE_MAX_AGE_MINUTES = 3;
+const OGRE_AI_FRESH_APE_MIN_STARTING_VOLUME_USD = 55;
 
 function isFreshApeMode(mode) {
   const value = String(mode || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
