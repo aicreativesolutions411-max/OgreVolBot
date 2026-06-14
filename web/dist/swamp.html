@@ -249,6 +249,7 @@
         <button class="big" id="battleStart" style="flex:1;margin:0">⚔️ QUICK BATTLE</button>
         <button class="big" id="storyOpen" style="flex:1;margin:0;background:linear-gradient(90deg,#b06bff,#ff7bd0)">📖 STORY MODE</button>
       </div>
+      <button class="big" id="survivalStart" style="margin-top:8px;width:100%;background:linear-gradient(90deg,#ff9a4a,#ff5e5e)">🔥 SURVIVAL GAUNTLET</button>
     </div>
     <div id="arenaStory" style="display:none">
       <h2>📖 Swamp Saga</h2>
@@ -1304,7 +1305,8 @@ function cardMoves(card){ const e=card.elem.n;
   return [{n:themed[0],pow:0.85},{n:themed[1],pow:1.25},{n:themed[2],pow:1.75,cd:3}]; }
 function artCleanSrc(path){ try{ const c=cleanedSprite(path); if(c&&c.toDataURL) return c.toDataURL(); }catch(_){} return path; }
 function makeCard(mint,entry){ const sp=coinSpecies(mint,entry.rarity); const pool=OGRE_BY_TIER[entry.rarity]||OGRE_BY_TIER.common; const art=pool[hash(mint)%pool.length];
-  const evo=entry.evo||1, boost=1+(evo-1)*0.12; const atk=Math.round(sp.atk*boost), def=Math.round(sp.def*boost), maxhp=Math.round(sp.hp*boost*3+80);
+  const evo=entry.evo||1, boost=1+(evo-1)*0.12; const bf=store.deckBuff||{atk:0,def:0,hp:0};
+  const atk=Math.round(sp.atk*boost*(1+(bf.atk||0))), def=Math.round(sp.def*boost*(1+(bf.def||0))), maxhp=Math.round((sp.hp*boost*3+80)*(1+(bf.hp||0)));
   return {mint, sym:entry.symbol, elem:sp.element, species:sp.species, atk, def, maxhp, hp:maxhp, art, cds:{}, rarity:entry.rarity}; }
 function bossDeck(){ const tiers=["common","uncommon","rare","epic","legendary"]; const lv=level();
   const names=["Bog Tyrant","Rug Warlord","Slime Reaper","Toxic Overlord","Void Baron","Mire King"]; const n=Math.max(2,Math.min(6,store.deck.length||3)); const deck=[];
@@ -1318,7 +1320,8 @@ function openArena(){ state="arena"; $("prompt").classList.remove("on"); if(!Arr
   arenaShow("arenaDeck"); buildDeckUI(); $("arena").classList.add("on"); }
 function closeArena(){ $("arena").classList.remove("on"); if(state==="arena"){ state="world"; lastTs=performance.now(); requestAnimationFrame(loop); } }
 function buildDeckUI(){ const entries=Object.entries(store.dex); const grid=$("deckGrid"); grid.innerHTML="";
-  $("arenaSub").innerHTML=`Pick up to 6 cards · Deck: <b style="color:var(--gold)">${store.deck.length}/6</b>`+(store.arenaWins?` · 🏆 ${store.arenaWins} wins`:"");
+  const bf=store.deckBuff; const buffTxt=(bf&&(bf.atk||bf.hp))?` · ⬆ deck +${Math.round((bf.atk||0)*100)}%`:"";
+  $("arenaSub").innerHTML=`Pick up to 6 cards · Deck: <b style="color:var(--gold)">${store.deck.length}/6</b>`+(store.arenaWins?` · 🏆 ${store.arenaWins}`:"")+(store.survivalBest?` · 🔥 best W${store.survivalBest}`:"")+buffTxt;
   if(!entries.length){ grid.innerHTML='<div style="grid-column:1/-1;color:var(--dim);text-align:center;padding:18px">Catch coins first — each becomes a battle card.</div>'; $("battleStart").style.display="none"; return; }
   $("battleStart").style.display=store.deck.length?"block":"none";
   for(const [mint,c] of entries){ const sp=coinSpecies(mint,c.rarity), el=sp.element, picked=store.deck.includes(mint);
@@ -1353,7 +1356,7 @@ function foeMove(){ if(!B||B.over) return; const me=curMe(), foe=curFoe(); const
   const {dmg,tmult}=dmgCalc(foe,me,pick.m); me.hp-=dmg; if(pick.m.cd) foe.cds[pick.i]=pick.m.cd; tickCds(foe,pick.i);
   bLog(`${foe.species} used ${pick.m.n}! ${tmult>1?"Super effective! ":""}-${dmg} to $${me.sym}`); renderBattle();
   if(me.hp<=0){ setTimeout(meFaint,650); return; } B.turn="me"; renderBattle(); }
-function foeFaint(){ bLog(`${curFoe().species} fainted!`); B.fi++; if(B.fi>=B.foe.length){ winBattle(); return; } B.turn="me"; renderBattle(); bLog(`Boss sends out ${curFoe().species}!`); }
+function foeFaint(){ bLog(`${curFoe().species} fainted!`); B.fi++; if(B.fi>=B.foe.length){ if(B.survival){ clearWave(); } else { winBattle(); } return; } B.turn="me"; renderBattle(); bLog(`${B.survival?"Next":"Boss sends out"} ${curFoe().species}!`); }
 function meFaint(){ bLog(`$${curMe().sym} fainted!`); B.mi++; if(B.mi>=B.me.length){ loseBattle(); return; } B.turn="me"; renderBattle(); bLog(`You send out $${curMe().sym}!`); }
 function winBattle(){ B.over=true; const story=(B.story!=null), bo=story?STORY_BOSSES[B.story]:null;
   const xp=(story?80:40)+level()*6, relics=story?2:1; store.xp+=xp; store.res.relic=(store.res.relic||0)+relics; store.arenaWins=(store.arenaWins||0)+1;
@@ -1362,8 +1365,30 @@ function winBattle(){ B.over=true; const story=(B.story!=null), bo=story?STORY_B
   if(story){ setTimeout(()=>{ arenaShow("arenaCutscene"); $("csArt").src=bo.art; $("csArt").style.display=""; $("csName").textContent="🏆 "+bo.name+" DEFEATED";
     $("csText").textContent=bo.win+`\n\n+${xp} XP · +${relics} 🔮 relic`+((store.storyBeat>=STORY_BOSSES.length)?"\n\n👑 You cleared the Swamp Saga — SWAMP CHAMPION!":""); $("csGo").textContent="Continue"; $("csGo").onclick=()=>{ openStory(); refreshHud(); }; refreshHud(); },1200); }
   else { setTimeout(()=>{ arenaShow("arenaDeck"); buildDeckUI(); refreshHud(); },1700); } }
-function loseBattle(){ B.over=true; bLog("💀 Deck wiped! Catch stronger coins and try again."); try{sfx("boss",0.4);}catch(_){}
+function loseBattle(){ B.over=true; try{sfx("boss",0.4);}catch(_){}
+  if(B.survival){ const w=Math.max(0,(B.wave||1)-1); bLog(`💀 Wiped out at Wave ${B.wave}. Cleared ${w} waves.`);
+    try{ showBanner("🔥 SURVIVAL OVER","Cleared "+w+" waves · best "+(store.survivalBest||0),"#ff9a4a"); }catch(_){}
+    setTimeout(()=>{ arenaShow("arenaDeck"); buildDeckUI(); refreshHud(); },1800); return; }
+  bLog("💀 Deck wiped! Catch stronger coins and try again.");
   const story=(B.story!=null); setTimeout(()=>{ if(story) openStory(); else { arenaShow("arenaDeck"); buildDeckUI(); } },1700); }
+/* ----- Phase 4: Survival Gauntlet ----- */
+function survivalFoeDeck(wave){ const tiers=["common","uncommon","rare","epic","legendary"], lv=level(), size=Math.min(6,2+Math.floor(wave/2)), deck=[];
+  for(let k=0;k<size;k++){ const t=tiers[Math.min(4,Math.floor(wave/2)+(k%2))], fm="surv_"+wave+"_"+k;
+    const sp=coinSpecies(fm,t), pool=OGRE_BY_TIER[t], art=pool[hash(fm)%pool.length], boost=1+lv*0.03+wave*0.08, mh=Math.round(sp.hp*boost*3+80);
+    deck.push({mint:fm, sym:"W"+wave, elem:sp.element, species:sp.species, atk:Math.round(sp.atk*boost), def:Math.round(sp.def*boost), maxhp:mh, hp:mh, cds:{}, art, rarity:t}); }
+  return deck; }
+function startSurvival(){ if(!store.deck||!store.deck.length){ toast("Build a deck first"); arenaShow("arenaDeck"); buildDeckUI(); return; }
+  const my=store.deck.map(m=>store.dex[m]?makeCard(m,store.dex[m]):null).filter(Boolean); if(!my.length){ toast("Deck empty"); return; }
+  B={me:my, foe:survivalFoeDeck(1), mi:0, fi:0, turn:"me", over:false, survival:true, wave:1};
+  arenaShow("arenaBattle"); renderBattle(); try{sfx("boss",0.4);}catch(_){} showBanner("🔥 SURVIVAL","Wave 1 — last as long as you can","#ff9a4a"); bLog("Wave 1 incoming!"); }
+function clearWave(){ const w=B.wave; store.xp+=15+w*4; if(w%3===0){ store.res.relic=(store.res.relic||0)+1; store.deckBuff=store.deckBuff||{atk:0,def:0,hp:0}; store.deckBuff.atk+=0.05; store.deckBuff.def+=0.05; store.deckBuff.hp+=0.05; }
+  store.survivalBest=Math.max(store.survivalBest||0,w); save();
+  B.wave=w+1; B.foe=survivalFoeDeck(B.wave); B.fi=0;
+  B.me.forEach(c=>{ if(c.hp>0) c.hp=Math.min(c.maxhp, c.hp+Math.round(c.maxhp*0.25)); });
+  while(B.mi<B.me.length && curMe().hp<=0) B.mi++;
+  if(B.mi>=B.me.length){ loseBattle(); return; }
+  B.turn="me"; renderBattle(); try{sfx("level",0.4);}catch(_){}
+  showBanner("🔥 WAVE "+B.wave, (w%3===0?"⬆ Deck upgraded +5%! ":"")+"team healed +25%","#ff9a4a"); bLog("Wave "+B.wave+" — survive!"); }
 
 /* ----- Phase 2: Story Mode ----- */
 const STORY_BOSSES=[
@@ -1403,6 +1428,7 @@ function startStoryBattle(i){ const bo=STORY_BOSSES[i]; if(!store.deck||!store.d
   arenaShow("arenaBattle"); renderBattle(); try{sfx("boss",0.5);}catch(_){} showBanner("📖 "+bo.name, bo.elem+" boss · "+bo.size+" cards","#ff7bd0"); bLog("Battle begins!"); }
 $("arenaBtn").onclick=()=>{ if(state==="world") openArena(); }; $("arenaX").onclick=closeArena; $("battleStart").onclick=startBattle;
 $("storyOpen").onclick=openStory; $("storyBack").onclick=()=>{ arenaShow("arenaDeck"); buildDeckUI(); };
+$("survivalStart").onclick=startSurvival;
 
 /* ---- buildings ---- */
 let curBld=null;
