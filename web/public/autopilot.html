@@ -96,8 +96,8 @@ function aggParams(){
   const streakMult = S.streak>=3?1.5 : S.streak>=1?1.2 : S.streak<=-2?0.5 : S.streak<=-1?0.75 : 1;
   const regimeMult = regime==="HOT"?1.3 : regime==="COLD"?0.6 : 1;
   if(regime==="HOT"){tp1+=5;tp2+=15;} if(regime==="COLD"){tp1=Math.max(15,tp1-6);}
-  let minScore = regime==="HOT"?48 : regime==="COLD"?60 : 54;
-  if(S.agg==="degen") minScore-=6; if(S.agg==="chill") minScore+=6;
+  let minScore = regime==="HOT"?34 : regime==="COLD"?48 : 40;
+  if(S.agg==="degen") minScore-=6; if(S.agg==="chill") minScore+=8;
   return {regime,wr,baseFrac,tp1,tp2,sl,maxOpen,streakMult,regimeMult,minScore};
 }
 function sizeFor(p){ const minViable=0.012, maxPer=S.bank*0.22;
@@ -134,6 +134,9 @@ async function tick(){
       if((S.waves[mint]||0)>=2) continue;                 // wave cap per coin
       if(age>180) continue;                                // ≤3 min
       if(mc<1500||mc>12000) continue;                      // MC band (fresh pump starts ~$1.9k)
+      const vol=n(row.volume5m), buys=n(row.buys5m), sells=n(row.sells5m);
+      if(vol<18 && buys<2) continue;                       // STARTING VOLUME gate — skip dead pairs
+      if(sells>buys*1.5) continue;                         // not dumping
       const fs=freshScore(row); if(fs<P.minScore) continue;
       cands.push({row, fs}); }
     cands.sort((a,b)=>b.fs-a.fs);
@@ -145,13 +148,12 @@ async function tick(){
 }
 // Client-side Fresh-Ape score 0-100: freshness + MC fit + starting volume + buy flow + provider score
 function freshScore(row){ const mc=rowMc(row), age=rowAge(row), vol=n(row.volume5m), buys=n(row.buys5m), sells=n(row.sells5m);
-  const base=Math.min(40, n(row.bestPickScore||row.score)*0.4);                 // provider quality (capped)
-  const ageS = age<=20?22 : age<=60?17 : age<=120?11 : age<=180?5 : 0;          // younger = better
-  const mcS  = (mc>=2500&&mc<=8000)?20 : (mc>=1800&&mc<12000)?10 : 0;           // sweet spot
-  const volS = vol>=120?14 : vol>=60?10 : vol>=30?6 : vol>=12?2 : -6;           // starting volume (kills dead pairs)
-  const flow = (buys+sells>0)? (buys/(buys+sells)) : 0.5; const flowS=(flow-0.5)*20; // net buy pressure
-  const dump = sells>buys*1.4 ? -14 : 0;
-  return Math.round(Math.max(1, Math.min(100, base+ageS+mcS+volS+flowS+dump))); }
+  const ageS = age<=20?26 : age<=60?18 : age<=120?10 : 4;                       // younger = better
+  const mcS  = (mc>=2500&&mc<=8000)?22 : (mc>=1800&&mc<12000)?14 : 6;           // sweet spot vs ok
+  const volS = vol>=120?16 : vol>=60?11 : vol>=30?7 : vol>=18?3 : 0;            // starting volume
+  const flow = (buys+sells>0)? (buys/(buys+sells)) : 0.5; const flowS=(flow-0.5)*22; // net buy pressure
+  const prov = n(row.bestPickScore||row.score)>0 ? Math.min(15, n(row.bestPickScore||row.score)*0.15) : 0;
+  return Math.round(Math.max(1, Math.min(100, ageS+mcS+volS+flowS+prov))); }
 function openPos(row, size, P, fs){ if(size<0.012){ return; } const mint=rowMint(row);
   S.bank-=size; S.tradeNo++; S.waves[mint]=(S.waves[mint]||0)+1; S.scanMsg="";
   const pos={mint, sym:rowSym(row), entryMc:rowMc(row), lastMc:rowMc(row), cost:size, rem:size, at:Date.now(), missed:0, tp1:false};
