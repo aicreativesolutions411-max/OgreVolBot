@@ -85,12 +85,16 @@ export function autoTune(state, nowMs) {
   const peaks = (state.recentPeaks || []).slice(-20);
   const rugs = (state.recentRugs || []).slice(-20);
   if (peaks.length < 6) return state.tune;
-  const runnerRate = peaks.filter((p) => p >= 100).length / peaks.length;
+  // "good" = a trade that actually moved (>=+40%); "big" = >=+100%. Using +40%
+  // means a tape hitting +50-90% wins is recognized as warm (it wasn't before,
+  // which starved the wins by keeping size tiny).
+  const goodRate = peaks.filter((p) => p >= 40).length / peaks.length;
+  const bigRate = peaks.filter((p) => p >= 100).length / peaks.length;
   const rugRate = rugs.length ? rugs.filter(Boolean).length / rugs.length : 0;
-  if (rugRate > 0.4 || runnerRate < 0.05) {
-    state.tune = { scoreBonus: 8, sizeMult: 0.6, tape: "COLD" };       // dead tape — sit back
-  } else if (runnerRate >= 0.2 && rugRate < 0.2) {
-    state.tune = { scoreBonus: -2, sizeMult: 1.3, tape: "HOT" };        // runners flowing — press
+  if (rugRate > 0.45 && goodRate < 0.12) {
+    state.tune = { scoreBonus: 6, sizeMult: 0.7, tape: "COLD" };        // genuinely dead — pull back
+  } else if (goodRate >= 0.3 || bigRate >= 0.15) {
+    state.tune = { scoreBonus: -2, sizeMult: 1.3, tape: "HOT" };        // tape producing wins — press
   } else {
     state.tune = { scoreBonus: 0, sizeMult: 1, tape: "NORMAL" };
   }

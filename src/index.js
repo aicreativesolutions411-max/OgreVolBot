@@ -248,6 +248,86 @@ async function recordAutopilotTrade(rec) {
   } catch {}
 }
 
+// --- DEV OBSERVATORY: passively watch EVERY pump.fun launch (creator + outcome)
+// market-wide via the live stream, so dev reputation is rich from thousands of
+// coins, not just the few we traded. Runs 24/7 regardless of whether autopilot
+// is on. Best-effort; never affects trading.
+const DEV_OBS_FILE = path.join(CONFIG.dataDir, "dev-observatory.json");
+const devObs = new Map();    // dev -> { coins, ran, rugged, peakSum }  (peakSum = sum of max/first multiples)
+const obsCoins = new Map();  // mint -> { dev, firstMc, maxMc, lastMc, at, seen }
+
+function devObsBump(dev, ranMult, rugged) {
+  if (!dev) return;
+  const r = devObs.get(dev) || { coins: 0, ran: 0, rugged: 0, peakSum: 0 };
+  r.coins += 1;
+  if (ranMult >= 2) r.ran += 1;       // ran >= 2x
+  if (rugged) r.rugged += 1;
+  r.peakSum += ranMult;
+  devObs.set(dev, r);
+}
+async function loadDevObservatory() {
+  try {
+    const j = await readJson(DEV_OBS_FILE).catch(() => null);
+    if (j && j.devs) for (const [dev, r] of Object.entries(j.devs)) devObs.set(dev, r);
+  } catch {}
+}
+async function saveDevObservatory() {
+  try { await writeJsonFile(DEV_OBS_FILE, { devs: Object.fromEntries(devObs), savedAt: Date.now() }); } catch {}
+}
+function sampleDevObservatory() {
+  try {
+    const rows = pumpPortalStream.getCreationCandidates({ maxAgeMs: 30 * 60 * 1000, limit: 250 });
+    const now = Date.now();
+    const seen = new Set();
+    for (const row of rows) {
+      const mint = row.tokenMint; if (!mint) continue;
+      const mc = Number(row.profile?.marketCap) || 0; if (mc <= 0) continue;
+      const dev = String(row.profile?.devWallet || "").trim();
+      seen.add(mint);
+      const c = obsCoins.get(mint) || { dev, firstMc: mc, maxMc: mc, lastMc: mc, at: now, seen: now };
+      if (!c.dev && dev) c.dev = dev;
+      c.maxMc = Math.max(c.maxMc, mc);
+      c.lastMc = mc;
+      c.seen = now;
+      obsCoins.set(mint, c);
+    }
+    // Finalize coins that aged out of the buffer or got old enough to judge.
+    for (const [mint, c] of obsCoins) {
+      const old = now - c.at > 25 * 60 * 1000;
+      const gone = !seen.has(mint) && now - c.seen > 90 * 1000;
+      if (old || gone) {
+        const ranMult = c.firstMc > 0 ? c.maxMc / c.firstMc : 1;
+        const rugged = (c.maxMc >= c.firstMc * 1.2 && c.lastMc <= c.maxMc * 0.3) || (c.firstMc > 0 && c.lastMc <= c.firstMc * 0.4);
+        devObsBump(c.dev, ranMult, rugged);
+        obsCoins.delete(mint);
+      }
+    }
+    if (obsCoins.size > 5000) {
+      for (const [m] of [...obsCoins.entries()].sort((a, b) => a[1].seen - b[1].seen).slice(0, 800)) obsCoins.delete(m);
+    }
+    void saveDevObservatory();
+  } catch (e) { console.warn(`[dev-obs] ${e && e.message}`); }
+}
+function startDevObservatory() {
+  void loadDevObservatory();
+  setInterval(sampleDevObservatory, 45_000);
+}
+// Combined dev reputation = our own trades + the market-wide observatory.
+function combinedDevRep(dev) {
+  if (!dev) return null;
+  const mine = autopilotDevRep.get(dev);
+  const obs = devObs.get(dev);
+  if (!mine && !obs) return null;
+  const trades = (mine?.trades || 0) + (obs?.coins || 0);
+  const runners = (mine?.runners || 0) + (obs?.ran || 0);
+  const rugs = (mine?.rugs || 0) + (obs?.rugged || 0);
+  // avgPeak in %: our peakSum is already %, observatory peakSum is multiples.
+  const minePct = mine?.peakSum || 0;
+  const obsPct = obs ? (obs.peakSum * 100 - obs.coins * 100) : 0;
+  const avgPeak = trades > 0 ? Math.round((minePct + obsPct) / trades) : 0;
+  return { trades, runners, rugs, avgPeak, peakSum: minePct + obsPct, pnl: mine?.pnl || 0 };
+}
+
 const autopilotEngine = createAutopilotEngine({
   exitMs: 1000,
   huntMs: 5000,
@@ -258,7 +338,7 @@ const autopilotEngine = createAutopilotEngine({
       return (ce && ce.event && ce.event.traderPublicKey) ? String(ce.event.traderPublicKey) : null;
     } catch { return null; }
   },
-  devReputation: (dev) => (dev ? (autopilotDevRep.get(dev) || null) : null),
+  devReputation: (dev) => combinedDevRep(dev),
   recordTrade: (rec) => { void recordAutopilotTrade(rec); },
   log: (level, msg) => console.log(`[autopilot:${level}] ${msg}`),
   isPaused: async () => Boolean((await readState().catch(() => ({}))).paused),
@@ -733,6 +813,7 @@ async function main() {
     console.log("Web internal DCA interval runner disabled; Render worker tick owns DCA checks.");
   }
   startOgreAutopilotRunner();
+  startDevObservatory();
   void startLiveAutopilotResume();
   if (CONFIG.pumpPortalWsEnabled) {
     pumpPortalStream.start();
@@ -2500,6 +2581,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
               runners100: trades.filter((t) => (t.peakPct || 0) >= 100).length,
               runners400: trades.filter((t) => (t.peakPct || 0) >= 400).length,
               netPnlSol: r2(trades.reduce((a, t) => a + (Number(t.pnl) || 0), 0)),
+              observatory: { devsTracked: devObs.size, coinsWatching: obsCoins.size },
               byScore: bucket((t) => t.fs == null ? null : (t.fs < 57 ? "<57" : t.fs < 62 ? "57-61" : t.fs < 67 ? "62-66" : t.fs < 72 ? "67-71" : "72+")),
               byMc: bucket((t) => t.entryMc == null ? null : (t.entryMc < 2100 ? "<2.1k" : t.entryMc < 2500 ? "2.1-2.5k" : t.entryMc < 3500 ? "2.5-3.5k" : "3.5k+")),
               byAge: bucket((t) => t.entryAge == null ? null : (t.entryAge < 30 ? "<30s" : t.entryAge < 120 ? "30-120s" : t.entryAge < 300 ? "2-5m" : "5m+")),
@@ -2568,9 +2650,10 @@ async function handleWebApiRequest(request, response, requestUrl) {
             sendWebJson(request, response, 400, { ok: false, error: 'Using the full wallet balance requires live mode with a selected wallet.' });
             return;
           }
-          const balSol = lamportsToSol(await getSolBalanceCached(new PublicKey(walletRec.publicKey), { force: true }));
-          // Keep the buy reserve plus a small fee buffer so trades can still settle.
-          sol = Math.max(0, balSol - CONFIG.buyReserveSol - 0.006);
+          // Baseline = the FULL starting wallet balance so P&L begins at a true
+          // 0.00% (the buy reserve is enforced downstream by the buy path, not by
+          // shrinking the baseline — that was the phantom "+2% before any trade").
+          sol = Math.max(0, Number(lamportsToSol(await getSolBalanceCached(new PublicKey(walletRec.publicKey), { force: true }))));
         }
         if (!(sol > 0)) {
           sendWebJson(request, response, 400, { ok: false, error: useAll ? "Selected wallet has no spendable SOL after the reserve." : "sol must be > 0 (or pass sol:\"all\")" });

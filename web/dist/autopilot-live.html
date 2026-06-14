@@ -456,6 +456,7 @@ $("statsBtn").addEventListener("click", async () => {
   };
   $("statsBox").innerHTML =
     `<div><b>Total ${s.total} trades</b> · ${s.wins} win · ${s.rugs} rug · ${s.runners100} ran 2x+ · ${s.runners400} ran 5x+ · net ${s.netPnlSol>=0?"+":""}${s.netPnlSol} SOL</div>`
+    + (s.observatory?`<div class="muted">🔭 dev observatory: ${s.observatory.devsTracked} devs tracked · ${s.observatory.coinsWatching} coins watching now</div>`:"")
     + bucketRows(s.byScore, "by score (fs)")
     + bucketRows(s.byMc, "by entry MC")
     + bucketRows(s.byAge, "by age")

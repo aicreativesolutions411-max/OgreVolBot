@@ -621,7 +621,7 @@ function symOf(row){ return String(row.symbol||row.tokenMint||"COIN").replace(/[
 
 /* ---- world ---- */
 const TILE=64; const MAP={w:58,h:48}; // tiles — big open swamp
-let player=null, creatures=[], npcs=[], mobs=[], buildings=[], gathers=[], parts=[], floats=[];
+let player=null, creatures=[], npcs=[], mobs=[], buildings=[], gathers=[], parts=[], floats=[], companion=null;
 let camx=0,camy=0, state="load", lastTs=0, near=null, nearBld=null, nearMob=null, nearFoe=null, nearGather=null;
 let worldEvent=null, worldEventCd=18;
 function burst(x,y,col,n){ n=n||8; for(let i=0;i<n;i++){ const a=Math.random()*6.28,s=50+Math.random()*150; if(parts.length<240) parts.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:0.4+Math.random()*0.4,max:0.9,col,sz:2+Math.random()*3}); } }
@@ -829,6 +829,56 @@ function collectGather(g){ if(!g||g.dead) return; g.dead=true; addRes(g.res); st
   burst(g.x,g.y,g.col,12); floatTxt(g.x,g.y-g.r,got,g.col); try{sfx("quest",0.28);}catch(_){} refreshHud(); updateRadar();
 }
 
+const RAR_RANK={common:1,uncommon:2,rare:3,epic:4,legendary:5};
+function companionPick(){
+  const dex=store.dex||{};
+  const deck=(Array.isArray(store.deck)?store.deck:[]).filter(m=>dex[m]);
+  const ids=deck.length?deck:Object.keys(dex);
+  const entries=ids.map(m=>[m,dex[m]]).filter(([,e])=>e&&e.symbol);
+  if(!entries.length) return null;
+  entries.sort((a,b)=>{
+    const ar=(RAR_RANK[(a[1]&&a[1].rarity)||"common"]||1), br=(RAR_RANK[(b[1]&&b[1].rarity)||"common"]||1);
+    const ae=(a[1]&&a[1].evo)||1, be=(b[1]&&b[1].evo)||1;
+    return (br+be*0.18+(b[1].ogre?0.45:0))-(ar+ae*0.18+(a[1].ogre?0.45:0)) || ((b[1].at||0)-(a[1].at||0));
+  });
+  return {mint:entries[0][0],entry:entries[0][1]};
+}
+function spawnCompanion(){
+  if(!player){ companion=null; return; }
+  const pick=companionPick(); if(!pick){ companion=null; return; }
+  const e=pick.entry||{}, rarity=e.rarity||"common", rank=RAR_RANK[rarity]||1;
+  const sp=coinSpecies(pick.mint,rarity), pool=OGRE_BY_TIER[rarity]||OGRE_BY_TIER.common, sprPath=pool[hash("ally"+pick.mint)%pool.length];
+  companion={ mint:pick.mint, sym:String(e.symbol||"ALLY").slice(0,8), species:sp.species, rarity, col:sp.element.c,
+    atk:sp.atk, def:sp.def, hp:sp.hp, sprPath, x:player.x-54, y:player.y+38, r:12+rank*1.4, spd:132+rank*9,
+    fireCd:0, bob:0, walkT:0, dir:"down", _mv:false };
+  try{ img(sprPath); }catch(_){}
+}
+function updateCompanion(dt){
+  if(!player||!companion||state!=="world") return;
+  if(!store.dex||!store.dex[companion.mint]){ spawnCompanion(); if(!companion) return; }
+  const c=companion; c.bob=(c.bob||0)+dt*4; c.fireCd=Math.max(0,(c.fireCd||0)-dt);
+  let target=null, td=999999;
+  for(const m of mobs){ if(!m||m._dead) continue; const dx=m.x-c.x, dy=m.y-c.y, d2=dx*dx+dy*dy; if(d2<td && d2<340*340){ target=m; td=d2; } }
+  const slotByDir={down:[-42,42],up:[44,46],left:[48,34],right:[-48,34]}[player.dir]||[-44,40];
+  let gx=player.x+slotByDir[0], gy=player.y+slotByDir[1];
+  if(target&&td>96*96){ gx=target.x; gy=target.y; }
+  const dx=gx-c.x, dy=gy-c.y, d=Math.hypot(dx,dy)||1, step=Math.min(d,c.spd*dt*(target?1.12:1));
+  if(d>5){ c.x+=dx/d*step; c.y+=dy/d*step; c._mv=true; c.walkT+=dt; const ax=Math.abs(dx),ay=Math.abs(dy); if(Math.abs(ax-ay)>d*0.16) c.dir=ax>ay?(dx<0?"left":"right"):(dy<0?"up":"down"); }
+  else { c._mv=false; c.walkT+=dt*0.22; }
+  clampEnt(c,34);
+  if(target&&c.fireCd<=0){
+    const ax=target.x-c.x, ay=target.y-c.y, ad=Math.hypot(ax,ay)||1; if(ad<250){
+      c.fireCd=Math.max(0.62,1.08-(RAR_RANK[c.rarity]||1)*0.06);
+      const dmg=Math.max(4,Math.round(5+level()*1.1+(c.atk||44)*0.075));
+      target.hp-=dmg; target.flash=0.12; target.x+=ax/ad*9; target.y+=ay/ad*9; clampEnt(target,30);
+      for(let i=0;i<7;i++){ const t=i/6, px=c.x+ax*t+(Math.random()-0.5)*8, py=c.y+ay*t+(Math.random()-0.5)*8; if(parts.length<260) parts.push({x:px,y:py,vx:(Math.random()-0.5)*40,vy:(Math.random()-0.5)*40,life:0.2+Math.random()*0.16,max:0.42,col:c.col,sz:2+Math.random()*2}); }
+      swings.push({ring:true,x:target.x,y:target.y,r0:7,life:0.18,max:0.18,col:c.col});
+      floatTxt(target.x,target.y-target.r,"ally -"+dmg,c.col);
+      if(target.hp<=0) killMob(target);
+    }
+  }
+}
+
 const WORLD_EVENTS=[
   {id:"patrol",title:"Raid Patrol",sub:"A rival crew is moving through the reeds",col:"#ff9a4a"},
   {id:"rift",title:"Swamp Rift",sub:"A corrupted brute crawled out of the bog",col:"#b06bff"},
@@ -862,12 +912,13 @@ function newGame(){
   player={ x:MAP.w*TILE/2, y:MAP.h*TILE/2, r:Math.round(18*(hero.scale||1)), spd, walkT:0, dir:"down", hp:maxhp, maxhp, iframe:0, atkCd:0, _mv:false,
     sprPath:hero.sprite||(A.creatures&&A.creatures[0])||(A.statics&&A.statics[0])||null, atk:0 };
   buildings=BUILDINGS_DEF.map(b=>({...b, x:b.tx*TILE, y:b.ty*TILE}));
-  creatures=[]; npcs=[]; mobs=[]; gathers=[]; parts=[]; floats=[]; shots=[]; swings=[]; shake=0; hitstop=0; combo=0; comboT=0; comboRewardMark=0; worldEvent=null; worldEventCd=18;
+  creatures=[]; npcs=[]; mobs=[]; gathers=[]; parts=[]; floats=[]; shots=[]; swings=[]; companion=null; shake=0; hitstop=0; combo=0; comboT=0; comboRewardMark=0; worldEvent=null; worldEventCd=18;
   spawnGatherNodes();
   camx=player.x; camy=player.y;
   buildFromFeed();
   spawnNpcs();
   manageMobs();
+  spawnCompanion();
   refreshHud();
 }
 function tileWalkable(){ return true; }
@@ -1184,6 +1235,7 @@ function update(dt){
   if(RUN&&!RUN.over){ survTick(dt); } // SURVIVORS horde run: auto-fire, spawns, gems, leveling
   else if(p.hp<p.maxhp) p.hp=Math.min(p.maxhp,p.hp+(raidState().live?2:4.5)*dt);
   tickWorldEvent(dt);
+  updateCompanion(dt);
   // creatures wander + flee slightly
   near=null; let nd=70*70;
   for(const c of creatures){ if(c.dead) continue; c.wt-=dt; c.bob+=dt*3;
@@ -1265,11 +1317,11 @@ function render(){
   for(const b of buildings) drawBuilding(b);
   // sort entities by y
   const live=wsOk&&RP.size>0;
-  const ents=[]; for(const g of gathers){ if(!g.dead) ents.push({t:"g",e:g}); } for(const c of creatures){ if(!c.dead) ents.push({t:"c",e:c}); }
+  const ents=[]; if(companion) ents.push({t:"a",e:companion}); for(const g of gathers){ if(!g.dead) ents.push({t:"g",e:g}); } for(const c of creatures){ if(!c.dead) ents.push({t:"c",e:c}); }
   if(live){ for(const r of RP.values()) ents.push({t:"r",e:r}); } else { for(const q of npcs) ents.push({t:"n",e:q}); }
   for(const mob of mobs) ents.push({t:"m",e:mob}); ents.push({t:"p",e:player});
   ents.sort((a,b)=>a.e.y-b.e.y);
-  for(const it of ents){ if(it.t==="p") drawPlayer(); else if(it.t==="n") drawNpc(it.e); else if(it.t==="r") drawRemote(it.e); else if(it.t==="m") drawMob(it.e); else if(it.t==="g") drawGather(it.e); else drawCreature(it.e); }
+  for(const it of ents){ if(it.t==="p") drawPlayer(); else if(it.t==="a") drawCompanion(it.e); else if(it.t==="n") drawNpc(it.e); else if(it.t==="r") drawRemote(it.e); else if(it.t==="m") drawMob(it.e); else if(it.t==="g") drawGather(it.e); else drawCreature(it.e); }
   for(const pt of parts){ ctx.globalAlpha=Math.max(0,pt.life/pt.max); ctx.fillStyle=pt.col; ctx.beginPath(); ctx.arc(pt.x,pt.y,pt.sz,0,6.2832); ctx.fill(); } ctx.globalAlpha=1;
   // XP gems (survival run) — glowing pickups
   if(gems&&gems.length){ const t=performance.now()/200; for(const gm of gems){ const pul=1+Math.sin(t+gm.x*0.05)*0.18;
@@ -1401,6 +1453,14 @@ function drawGather(g){ const t=performance.now()/350+g.bob, hot=nearGather===g;
   if(hot){ ctx.font="900 10px Inter,sans-serif"; ctx.textAlign="center"; ctx.fillStyle=g.col; ctx.strokeStyle="rgba(0,0,0,0.8)"; ctx.lineWidth=3; ctx.strokeText("USE",0,-g.r-14); ctx.fillText("USE",0,-g.r-14); }
   ctx.restore();
 }
+function drawCompanion(c){ const t=performance.now()/320+(c.bob||0); drawShadow(c.x,c.y,c.r);
+  ctx.save(); ctx.strokeStyle=c.col||"#8dff45"; ctx.globalAlpha=0.38+Math.sin(t)*0.10; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.ellipse(c.x,c.y+c.r*0.55,c.r*1.35,c.r*0.52,0,0,6.2832); ctx.stroke(); ctx.globalAlpha=1; ctx.restore();
+  if(!drawChar(c,c.sprPath,c.r*2.55,0.92)){ ctx.fillStyle=c.col||"#8dff45"; ctx.beginPath(); ctx.arc(c.x,c.y,c.r,0,6.2832); ctx.fill(); }
+  if((c.fireCd||0)>0.55){ ctx.strokeStyle=c.col||"#8dff45"; ctx.globalAlpha=0.55; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(c.x,c.y-c.r*0.15,c.r*1.15,0,6.2832); ctx.stroke(); ctx.globalAlpha=1; }
+  ctx.font="900 9px Inter,sans-serif"; ctx.textAlign="center"; ctx.fillStyle=c.col||"#8dff45"; ctx.strokeStyle="rgba(0,0,0,0.75)"; ctx.lineWidth=3;
+  const label="ALLY $"+(c.sym||"DEX"); ctx.strokeText(label,c.x,c.y-c.r-8); ctx.fillText(label,c.x,c.y-c.r-8);
+}
 function drawPlayer(){ const p=player; drawShadow(p.x,p.y,p.r);
   const upFacing=p.dir==="up";
   if(upFacing) drawWeapon(p); // weapon behind the body when walking away
@@ -1514,6 +1574,7 @@ function awardCatch(c){ if(!c||c.dead) return null; c.dead=true; sfx("catch",0.6
   const firstSeen=!store.dex[c.mint];
   store.dex[c.mint]={ symbol:c.sym, mc:mcNow||1, mcNow:mcNow||1, rarity:c.rar.k, stage:1, ogre:!!row._ogre, at:Date.now() };
   store.xp+=c.rar.xp; recordDaily("catches",1); save();
+  if(player) spawnCompanion();
   if(firstSeen){ const sp=coinSpecies(c.mint,c.rar.k); setTimeout(()=>toast("New species: "+sp.element.i+" "+sp.species+" - ATK "+sp.atk+"/DEF "+sp.def+"/HP "+sp.hp),700); }
   burst(c.x,c.y,c.rar.col,22); impactFX(c.x,c.y,c.x,c.y-1,c.rar.col,true);
   floats.push({x:c.x,y:c.y-c.r,txt:"CAUGHT! +"+c.rar.xp+"xp",col:c.rar.col,t:0});
@@ -1611,7 +1672,7 @@ let B=null;
 function arenaShow(sec){ ["arenaDeck","arenaStory","arenaCutscene","arenaBattle"].forEach(s=>{ const el=$(s); if(el) el.style.display=(s===sec)?"block":"none"; }); }
 function openArena(){ state="arena"; $("prompt").classList.remove("on"); if(!Array.isArray(store.deck)) store.deck=[];
   arenaShow("arenaDeck"); buildDeckUI(); $("arena").classList.add("on"); }
-function closeArena(){ $("arena").classList.remove("on"); if(state==="arena"){ state="world"; lastTs=performance.now(); requestAnimationFrame(loop); } }
+function closeArena(){ $("arena").classList.remove("on"); if(state==="arena"){ state="world"; spawnCompanion(); lastTs=performance.now(); requestAnimationFrame(loop); } }
 function buildDeckUI(){ const entries=Object.entries(store.dex); const grid=$("deckGrid"); grid.innerHTML="";
   const bf=store.deckBuff; const buffTxt=(bf&&(bf.atk||bf.hp))?` · ⬆ deck +${Math.round((bf.atk||0)*100)}%`:"";
   $("arenaSub").innerHTML=`Pick up to 6 cards · Deck: <b style="color:var(--gold)">${store.deck.length}/6</b>`+(store.arenaWins?` · 🏆 ${store.arenaWins}`:"")+(store.survivalBest?` · 🔥 best W${store.survivalBest}`:"")+buffTxt;
@@ -2078,7 +2139,7 @@ $("exit").onclick=()=>{ RUN=null; runPaused=false; gems=[]; $("runHud").classLis
 })();
 
 // test hooks
-window.__SW={ get state(){return state;}, enterWorld, get player(){return player;}, get creatures(){return creatures;}, get mobs(){return mobs;}, get worldEvent(){return worldEvent;}, startWorldEvent,
+window.__SW={ get state(){return state;}, enterWorld, get player(){return player;}, get creatures(){return creatures;}, get mobs(){return mobs;}, get companion(){return companion;}, get worldEvent(){return worldEvent;}, startWorldEvent,
   openEncounter:()=>{ if(creatures[0]) openEncounter(creatures[0]); }, forceCatch:()=>{ if(encC) caught(encC); },
   openDex, dexCount, step:(dt)=>{ if(state==="world") update(dt||0.016); }, near:()=>near, nearMob:()=>nearMob,
   attackMob, raidState, get res(){return store.res;}, bld:(id)=>openBuilding(buildings.find(b=>b.id===id)), doBldAct,
