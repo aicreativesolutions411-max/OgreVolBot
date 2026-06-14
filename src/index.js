@@ -2510,15 +2510,8 @@ async function handleWebApiRequest(request, response, requestUrl) {
           return;
         }
         if (pathname === "/api/web/autopilot/win-card") {
-          // Render a downloadable PnL win card from the provided win data.
-          const png = await renderPnlWinCard({
-            symbol: body.symbol,
-            mint: body.mint,
-            gainPct: body.gainPct,
-            multiple: body.multiple,
-            entryMc: body.entryMc,
-            peakMc: body.peakMc
-          }).catch(() => null);
+          // Render a downloadable site-style PnL card from the provided win data.
+          const png = await renderAutopilotPnlCard(body).catch(() => null);
           if (!png) { sendWebJson(request, response, 500, { ok: false, error: "card render failed" }); return; }
           sendWebJson(request, response, 200, { ok: true, png: `data:image/png;base64,${png.toString("base64")}` });
           return;
@@ -17242,12 +17235,37 @@ async function renderPnlWinCard(d = {}) {
   return sharp(Buffer.from(svg)).png().toBuffer();
 }
 
+// Build the SAME PnL card the site/manual trades use, from autopilot win data —
+// so it carries identical info+style (token image, X, symbol/name, profit,
+// spent/received, held, MC) and reads exactly like a hand trade.
+async function renderAutopilotPnlCard(d = {}) {
+  const toLamports = (sol) => { try { return BigInt(Math.max(0, Math.round((Number(sol) || 0) * 1e9))); } catch { return 0n; } };
+  const row = {
+    tokenMint: d.mint || "",
+    spent: toLamports(d.costSol),
+    received: toLamports(d.receivedSol),
+    firstBuyAt: d.openedAt || null,
+    lastSellAt: d.closedAt || d.at || null
+  };
+  const metadata = { symbol: d.symbol, name: "", imageUrl: "", marketCap: d.peakMc || d.entryMc, fdv: d.peakMc || d.entryMc, priceChange: null };
+  try {
+    const m = await getDexTokenMetadata(d.mint).catch(() => null);
+    if (m) {
+      metadata.name = m.name || metadata.name;
+      metadata.imageUrl = m.imageUrl || m.avatarUrl || "";
+      metadata.marketCap = Number(m.marketCap || m.fdv) || metadata.marketCap;
+      metadata.priceChange = m.priceChange || null;
+    }
+  } catch {}
+  return renderPnlCard(row, metadata);
+}
+
 // Post a big-win PnL card to the channel + opted-in groups. Looks like a normal
 // SlimeWire trade flex — never references any automation.
 function announceWinCard(d = {}) {
   void (async () => {
     try {
-      const png = await renderPnlWinCard(d).catch(() => null);
+      const png = await renderAutopilotPnlCard(d).catch(() => null);
       if (!png) return;
       const sym = String(d.symbol || "").toUpperCase();
       const link = d.mint ? `https://www.slimewire.org/t?ca=${d.mint}` : "https://www.slimewire.org";

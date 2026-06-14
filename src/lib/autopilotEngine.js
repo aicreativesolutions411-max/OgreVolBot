@@ -736,6 +736,11 @@ export function createAutopilotEngine(deps) {
         entryMc: Math.round(pos.entryMc),
         peakMc: Math.round(pos.entryMc * (1 + pos.peakPct / 100)),
         profitSol: round(pnl, 4),
+        // For the site-style PnL card (spent/received/held).
+        costSol: round(pos.costSol, 6),
+        receivedSol: round(totalProceeds, 6),
+        openedAt: pos.openedAt,
+        closedAt: now(),
         at: now()
       };
       state.bigWins.push(winData);
