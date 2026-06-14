@@ -1999,7 +1999,7 @@ function startHealthServer() {
       await serveStaticHtmlPage(response, "autopilot-live.html");
       return;
     }
-    if (request.method === "GET" && ["/pro", "/auto", "/slimewire-auto", "/trade-bot"].includes(requestUrl.pathname)) {
+    if (request.method === "GET" && ["/autopilot-pro", "/autopilot-app", "/swamp-auto", "/pro", "/auto", "/slimewire-auto", "/trade-bot"].includes(requestUrl.pathname)) {
       await serveStaticHtmlPage(response, "autopilot-pro.html");
       return;
     }

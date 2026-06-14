@@ -19497,3 +19497,73 @@ html body main.shell[data-app][data-route="intro"] .swamp-intro-stage[data-intro
     display: none !important;
   }
 }
+
+/* =============================================================
+   LIVING SWAMP CONNECT / LOGIN LANDING (page-2 pre-app gate)
+   Full-bleed Higgs swamp-ogre hero + slime glow + pulsing portal,
+   plus a hard scroll fix so the mouse wheel works anywhere.
+   ============================================================= */
+/* Scroll fix: make the page scroll naturally on the gate routes (wheel anywhere,
+   not just over the scrollbar). Beats any inline overflow:hidden the SPA sets. */
+html, body { overflow-y: auto !important; }
+[data-app][data-route="connect"],
+[data-app][data-route="intro"],
+[data-app][data-route="login"] { overflow: visible !important; height: auto !important; min-height: 0 !important; }
+.connect-view, .login-view, .swamp-connect-shell { overflow: visible !important; max-height: none !important; touch-action: pan-y !important; }
+
+/* Immersive hero behind the connect card (high-specificity to beat the base art) */
+html body main.shell .connect-view .swamp-connect-shell,
+html body .swamp-connect-shell {
+  position: relative !important;
+  background-image: url('/assets/slimewire/auto/login-hero.jpg') !important;
+  background-position: center !important;
+  background-size: cover !important;
+  background-repeat: no-repeat !important;
+  background-color: #04070a !important;
+  border: 1px solid rgba(141,255,90,0.28) !important;
+  border-radius: 20px !important;
+  overflow: hidden !important;
+  min-height: min(84vh, 760px) !important;
+  box-shadow: 0 26px 80px rgba(0,0,0,0.55), 0 0 60px rgba(39,224,106,0.18) !important;
+}
+html body .swamp-connect-shell::before {
+  content: ""; position: absolute; inset: 0; z-index: 0; pointer-events: none;
+  background: linear-gradient(90deg, rgba(3,6,4,0.10) 0%, rgba(3,6,4,0.34) 44%, rgba(3,6,4,0.86) 100%) !important;
+}
+/* pulsing slime-portal glow aligned to the portal in the art — makes it feel alive */
+html body .swamp-connect-shell::after {
+  content: ""; position: absolute; inset: 0; z-index: 0; pointer-events: none; mix-blend-mode: screen;
+  background: radial-gradient(circle at 28% 52%, rgba(57,255,20,0.32), rgba(57,255,20,0) 34%) !important;
+  animation: swampPortalPulse 4.6s ease-in-out infinite;
+}
+@keyframes swampPortalPulse { 0%,100% { opacity: .4; } 50% { opacity: 1; } }
+html body .swamp-connect-shell > * { position: relative; z-index: 1; }
+/* drop the old chart-preview clutter on the hero side — let the swamp art breathe */
+html body .connect-view .connect-hero-side .connect-method-showcase,
+html body .connect-view .connect-hero-side .connect-ogre { display: none !important; }
+@media (max-width: 760px) {
+  html body .swamp-connect-shell {
+    background-image: url('/assets/slimewire/auto/login-hero-portrait.jpg') !important;
+    min-height: min(90vh, 900px) !important;
+  }
+  html body .swamp-connect-shell::before { background: linear-gradient(180deg, rgba(3,6,4,0.10) 0%, rgba(3,6,4,0.5) 52%, rgba(3,6,4,0.94) 100%) !important; }
+  html body .swamp-connect-shell::after { background: radial-gradient(circle at 50% 34%, rgba(57,255,20,0.3), rgba(57,255,20,0) 34%) !important; }
+}
+
+/* Premium glass connect card + slime branding text */
+.connect-card {
+  background: linear-gradient(180deg, rgba(10,18,11,0.80), rgba(4,8,5,0.96)) !important;
+  backdrop-filter: blur(10px) !important;
+  border: 1px solid rgba(141,255,90,0.45) !important;
+  box-shadow: 0 0 44px rgba(39,224,106,0.28), 0 22px 64px rgba(0,0,0,0.55) !important;
+}
+.connect-card h2 {
+  color: #bdff63 !important;
+  text-shadow: 0 0 20px rgba(141,255,90,0.55), 0 0 4px rgba(141,255,90,0.8) !important;
+  letter-spacing: .3px;
+}
+.connect-hero-side h1 {
+  color: #8dff5a !important;
+  text-shadow: 0 0 26px rgba(141,255,90,0.5) !important;
+}
+.connect-powered { color: #9fe6a8 !important; text-shadow: 0 0 10px rgba(57,255,20,0.4); }

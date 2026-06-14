@@ -498,6 +498,8 @@
         (() => {
           const app = document.querySelector("[data-app]");
           if (!app) return;
+          // Intro video removed — land people straight on the connect page.
+          try { window.sessionStorage?.setItem("slimewireIntroCompleteV1", "true"); } catch {}
           const path = window.location.pathname || "/";
           const introDone = (() => {
             try {
