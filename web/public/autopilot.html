@@ -1,0 +1,182 @@
+<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Ogre Autopilot — SlimeWire</title>
+<style>
+ :root{--bg:#050d07;--pan:#0b1f12;--gr:#39ff14;--gr2:#9dff45;--gold:#ffd24a;--bad:#ff5e5e;--dim:#8fae93;--ink:#eaffe0;}
+ *{box-sizing:border-box} body{margin:0;background:radial-gradient(120% 100% at 50% 0,#0a1c10,#050d07);color:var(--ink);font-family:Inter,system-ui,Arial,sans-serif;-webkit-text-size-adjust:100%}
+ .wrap{max-width:760px;margin:0 auto;padding:16px calc(14px + env(safe-area-inset-right)) 40px calc(14px + env(safe-area-inset-left))}
+ h1{font-size:1.35rem;margin:6px 0 2px} h1 .b{color:var(--gr)} .tag{color:var(--dim);font-size:.85rem;margin-bottom:12px}
+ .paper{display:inline-block;background:rgba(70,232,255,.14);border:1px solid #46e8ff;color:#bdefff;font-weight:800;font-size:.72rem;border-radius:8px;padding:2px 8px;margin-left:6px}
+ .card{background:linear-gradient(180deg,var(--pan),#060f09);border:1px solid rgba(57,255,20,.25);border-radius:16px;padding:16px;margin-bottom:14px}
+ label{display:block;font-weight:700;font-size:.82rem;color:var(--dim);margin:8px 0 4px}
+ input,select{width:100%;background:#06140a;border:1px solid rgba(57,255,20,.3);color:var(--ink);border-radius:10px;padding:11px;font-size:1rem;font-weight:700}
+ .row{display:flex;gap:10px}.row>*{flex:1}
+ .big{width:100%;border:0;border-radius:14px;padding:15px;font-weight:900;font-size:1.05rem;cursor:pointer;color:#06140a;background:linear-gradient(90deg,var(--gr),var(--gr2));margin-top:12px}
+ .big.stop{background:linear-gradient(90deg,#ff5e5e,#ff9a4a);color:#1a0606}
+ .bank{font-size:2.4rem;font-weight:900;letter-spacing:-1px} .bank small{font-size:1rem;color:var(--dim);font-weight:700}
+ .delta.up{color:var(--gr2)}.delta.down{color:var(--bad)}
+ .stats{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+ .pill{background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.08);border-radius:9px;padding:4px 9px;font-size:.78rem;font-weight:800}
+ canvas{width:100%;height:120px;display:block;margin-top:10px;background:rgba(0,0,0,.25);border-radius:10px}
+ .pos{display:flex;align-items:center;gap:8px;background:rgba(8,20,10,.6);border:1px solid rgba(57,255,20,.16);border-radius:10px;padding:7px 10px;margin-top:6px;font-size:.84rem}
+ .pos .s{font-weight:900;flex:1} .pos .p{font-weight:900} .pos .p.up{color:var(--gr2)}.pos .p.down{color:var(--bad)}
+ .log{margin-top:8px;max-height:240px;overflow:auto;font-size:.8rem;line-height:1.5}
+ .log div{padding:3px 6px;border-bottom:1px solid rgba(255,255,255,.05)} .log .g{color:var(--gr2)}.log .r{color:var(--bad)}.log .y{color:var(--gold)}.log .d{color:var(--dim)}
+ .muted{color:var(--dim);font-size:.8rem} a{color:var(--gr)}
+ .hide{display:none}
+ .warn{background:rgba(255,210,74,.1);border:1px solid rgba(255,210,74,.35);border-radius:10px;padding:10px;font-size:.8rem;color:#ffe9a8;margin-top:8px}
+</style></head><body>
+<div class="wrap">
+  <h1>🤖 Ogre <span class="b">Autopilot</span> <span class="paper" id="modeChip">PAPER</span></h1>
+  <div class="tag">Hunts very fresh low-MC launches · pays itself fast · cuts garbage instantly · adapts as it goes.</div>
+
+  <div class="card" id="cfg">
+    <label>Bankroll (SOL to deploy)</label>
+    <input id="sol" type="number" step="0.01" min="0.05" value="1.0">
+    <div class="row">
+      <div><label>Run for</label>
+        <select id="dur"><option value="30">30 min</option><option value="60">1 hour</option><option value="180" selected>3 hours</option><option value="360">6 hours</option><option value="720">12 hours</option><option value="custom">Custom…</option></select>
+      </div>
+      <div><label>Aggression</label>
+        <select id="agg"><option value="auto" selected>Auto (adapts)</option><option value="chill">Chill</option><option value="normal">Normal</option><option value="degen">Degen</option></select>
+      </div>
+    </div>
+    <div id="customWrap" class="hide"><label>Custom minutes</label><input id="durCustom" type="number" min="5" value="120"></div>
+    <div class="warn">Paper mode trades on <b>real live launch data with simulated fills</b> — no SOL is spent. Prove the edge here, then flip to live. Fresh-launch sniping is high-risk; this is not financial advice.</div>
+    <button class="big" id="start">▶ START AUTOPILOT (PAPER)</button>
+  </div>
+
+  <div class="card hide" id="live">
+    <div class="bank" id="bank">— <small>SOL</small></div>
+    <div class="delta" id="delta"></div>
+    <div class="stats" id="stats"></div>
+    <canvas id="spark" width="720" height="120"></canvas>
+    <div style="font-weight:800;margin-top:12px">Open positions</div>
+    <div id="positions"><div class="muted">none — scanning for a fresh entry…</div></div>
+    <div style="font-weight:800;margin-top:12px">Ogre's brain</div>
+    <div class="log" id="log"></div>
+    <button class="big stop" id="stop">■ STOP & CLOSE SESSION</button>
+  </div>
+
+  <div class="muted">Engine: deterministic Fresh-Ape scoring (age · MC fit · volume accel · buyer/flow · liquidity · safety) with adaptive sizing, streak &amp; regime logic, and re-entry waves. Live data via SlimeWire. · <a href="/terminal">Terminal</a> · <a href="/swamp">Swamp</a></div>
+</div>
+<script>
+"use strict";
+const $=id=>document.getElementById(id);
+const API=(location.origin.includes("localhost")?location.origin:location.origin);
+const n=v=>{const x=Number(v);return isFinite(x)?x:0;};
+const fmt=v=>(Math.round(v*1000)/1000).toFixed(3);
+function rowMint(r){return r.tokenMint||r.mint||r.address||"";}
+function rowSym(r){return String(r.symbol||r.sym||r.ticker||"?").replace(/^\$/,"");}
+function rowMc(r){return n(r.marketCap||r.marketCapUsd||r.mc||r.fdv);}
+function rowAge(r){const s=n(r.pairAgeSeconds);if(s>0)return s;const m=n(r.pairAgeMinutes||r.ageMinutes);return m>0?m*60:n(r.ageSeconds);}
+function rowScore(r){return n(r.score||r.ogreScore||r.fitScore);}
+
+let S=null, timer=null;
+$("dur").onchange=()=>{ $("customWrap").classList.toggle("hide", $("dur").value!=="custom"); };
+
+$("start").onclick=()=>{
+  const bank=Math.max(0.05, n($("sol").value)||1);
+  const durMin=$("dur").value==="custom"?Math.max(5,n($("durCustom").value)||120):n($("dur").value);
+  S={ bank, start:bank, peak:bank, open:[], wins:0, losses:0, streak:0, results:[], waves:{}, hist:[bank], endAt:Date.now()+durMin*60000, stopped:false, agg:$("agg").value, tradeNo:0 };
+  $("cfg").classList.add("hide"); $("live").classList.remove("hide");
+  pushLog("d","🤖 Autopilot armed — "+fmt(bank)+" SOL · "+durMin+" min · hunting fresh launches…");
+  render(); tick(); timer=setInterval(tick, 6000);
+};
+$("stop").onclick=()=>endSession("Stopped by you");
+
+function aggParams(){
+  // adaptive regime from recent win-rate
+  const last=S.results.slice(-10); const wr=last.length?last.filter(x=>x>0).length/last.length:0.5;
+  const regime = wr>=0.55?"HOT": wr<=0.3?"COLD":"NORMAL";
+  let baseFrac=0.08, tp1=25, tp2=60, sl=8, maxOpen=2;
+  if(S.agg==="chill"){baseFrac=0.05;tp1=20;tp2=45;maxOpen=1;}
+  if(S.agg==="degen"){baseFrac=0.12;tp1=30;tp2=80;maxOpen=3;}
+  // regime + streak adaptation (its "mind")
+  const streakMult = S.streak>=3?1.5 : S.streak>=1?1.2 : S.streak<=-2?0.5 : S.streak<=-1?0.75 : 1;
+  const regimeMult = regime==="HOT"?1.3 : regime==="COLD"?0.6 : 1;
+  if(regime==="HOT"){tp1+=5;tp2+=15;} if(regime==="COLD"){tp1=Math.max(15,tp1-6);}
+  return {regime,wr,baseFrac,tp1,tp2,sl,maxOpen,streakMult,regimeMult};
+}
+function sizeFor(p){ const minViable=0.012, maxPer=S.bank*0.22;
+  let sz=S.bank*p.baseFrac*p.streakMult*p.regimeMult;
+  sz=Math.max(minViable, Math.min(maxPer, sz));
+  return Math.min(sz, S.bank-0.005); }
+
+async function tick(){
+  if(!S||S.stopped) return;
+  if(Date.now()>=S.endAt){ endSession("Timer finished"); return; }
+  if(S.bank <= S.start*0.7){ endSession("Session loss-cap (-30%) hit — protecting capital"); return; }
+  const P=aggParams();
+  // 1) price refresh for open positions via live feed
+  let priceMap={};
+  try{ const r=await fetch(API+"/api/web/live-pairs?bucket=live&sort=fresh",{cache:"no-store"}); const j=await r.json();
+    const rows=(j&&j.livePairs&&j.livePairs.rows)||(j&&j.rows)||[]; for(const row of rows){ const m=rowMint(row); if(m) priceMap[m]=rowMc(row); } }catch(_){}
+  // 2) manage exits
+  for(const pos of [...S.open]){ let mc=priceMap[pos.mint];
+    if(mc>0){ pos.lastMc=mc; pos.missed=0; } else { pos.missed=(pos.missed||0)+1; mc=pos.lastMc; }
+    const pct=(mc/pos.entryMc-1)*100;
+    if(pos.missed>=3){ closePos(pos, pct, "stale (feed lost)"); continue; }
+    if(pct<=-P.sl){ closePos(pos, pct, "stop -"+P.sl+"%"); continue; }
+    if(!pos.tp1 && pct>=P.tp1){ sellPart(pos, mc, 0.4, "TP1 +"+Math.round(pct)+"%"); pos.tp1=true; }
+    if(pos.tp1 && pct>=P.tp2){ closePos(pos, pct, "TP2 +"+Math.round(pct)+"% (moonbag banked)"); continue; }
+    // stale-by-time: fresh scalps shouldn't ride forever
+    if(Date.now()-pos.at>160000 && pct<P.tp1){ closePos(pos, pct, "stale 160s, flow died"); continue; }
+  }
+  // 3) hunt a new entry
+  if(S.open.length<P.maxOpen && S.bank>0.015 && Date.now()<S.endAt){
+    try{ const r=await fetch(API+"/api/web/sniper/scan?mode=fresh_ape",{cache:"no-store"}); const j=await r.json();
+      const rows=((j&&j.scan&&j.scan.rows)||[]).filter(x=>rowMint(x)&&rowMc(x)>0);
+      const held=new Set(S.open.map(p=>p.mint));
+      let pick=null;
+      for(const row of rows){ const mint=rowMint(row), sc=rowScore(row), mc=rowMc(row), age=rowAge(row);
+        if(held.has(mint)) continue;
+        const waves=S.waves[mint]||0; if(waves>=2) continue;          // wave cap per coin
+        if(sc<58) continue;                                            // score gate
+        if(mc<2000||mc>12000) continue;                               // MC band
+        if(age>0&&age>210) continue;                                  // ≤3.5min
+        pick=row; break; }
+      if(pick){ openPos(pick, sizeFor(P), P); }
+    }catch(_){}
+  }
+  S.hist.push(S.bank); if(S.hist.length>240) S.hist.shift();
+  render();
+}
+function openPos(row, size, P){ if(size<0.012){ return; } const mint=rowMint(row);
+  S.bank-=size; S.tradeNo++; S.waves[mint]=(S.waves[mint]||0)+1;
+  const pos={mint, sym:rowSym(row), entryMc:rowMc(row), lastMc:rowMc(row), cost:size, rem:size, at:Date.now(), missed:0, tp1:false};
+  S.open.push(pos);
+  pushLog("d",`🟢 Aped $${pos.sym} — ${Math.round(rowAge(row))}s old, $${(rowMc(row)/1000).toFixed(1)}k MC, score ${rowScore(row)} · size ${fmt(size)} (${P.regime}${S.streak?`, streak ${S.streak}`:""})`); }
+function sellPart(pos, mc, frac, why){ const soldBasis=pos.rem*frac; const proceeds=soldBasis*(mc/pos.entryMc)*0.985; S.bank+=proceeds; pos.rem-=soldBasis;
+  pushLog(proceeds>=soldBasis?"g":"y",`💰 ${pos.sym} ${why} — sold ${Math.round(frac*100)}%, +${fmt(proceeds)} SOL`); }
+function closePos(pos, pct, why){ const mc=pos.lastMc; const proceeds=pos.rem*(mc/pos.entryMc)*0.985;
+  S.bank+=proceeds; S.open=S.open.filter(p=>p!==pos);
+  const net=(proceeds - pos.rem); const win=pct>0; S.results.push(win?1:-1);
+  if(win){ S.wins++; S.streak=S.streak>=0?S.streak+1:1; } else { S.losses++; S.streak=S.streak<=0?S.streak-1:-1; }
+  if(S.bank>S.peak) S.peak=S.bank;
+  pushLog(win?"g":"r",`${win?"✅":"✂️"} ${pos.sym} ${why} → ${pct>=0?"+":""}${Math.round(pct)}% · bank ${fmt(S.bank)} SOL`); }
+function endSession(reason){ if(!S||S.stopped) return; S.stopped=true; clearInterval(timer);
+  for(const pos of [...S.open]){ const pct=(pos.lastMc/pos.entryMc-1)*100; closePos(pos, pct, "session close"); }
+  const pnl=S.bank-S.start, pct=(pnl/S.start*100);
+  pushLog(pnl>=0?"g":"r",`🏁 ${reason}. ${pnl>=0?"+":""}${fmt(pnl)} SOL (${pct>=0?"+":""}${pct.toFixed(1)}%) · ${S.wins}W/${S.losses}L`);
+  render(); $("stop").textContent="↻ NEW SESSION"; $("stop").classList.remove("stop"); $("stop").onclick=()=>location.reload(); }
+function pushLog(c,t){ if(!S) return; const d=document.createElement("div"); d.className=c; d.textContent=t; const lg=$("log"); lg.prepend(d); while(lg.children.length>80) lg.removeChild(lg.lastChild); }
+function render(){ if(!S) return;
+  const pnl=S.bank-S.start, pct=S.start?pnl/S.start*100:0;
+  $("bank").innerHTML=fmt(S.bank)+' <small>SOL</small>';
+  $("delta").className="delta "+(pnl>=0?"up":"down"); $("delta").textContent=(pnl>=0?"▲ +":"▼ ")+fmt(pnl)+" SOL ("+(pct>=0?"+":"")+pct.toFixed(1)+"%)";
+  const P=aggParams(); const mins=Math.max(0,Math.round((S.endAt-Date.now())/60000));
+  $("stats").innerHTML=[`⏱ ${mins}m left`,`🧠 ${P.regime}`,`✅ ${S.wins}W`,`✂️ ${S.losses}L`,`🔥 streak ${S.streak}`,`📈 peak ${fmt(S.peak)}`].map(x=>`<span class="pill">${x}</span>`).join("");
+  const pc=$("positions"); if(!S.open.length){ pc.innerHTML='<div class="muted">none — scanning for a fresh entry…</div>'; }
+  else pc.innerHTML=S.open.map(p=>{ const pp=(p.lastMc/p.entryMc-1)*100; return `<div class="pos"><span class="s">$${p.sym}</span><span class="muted">${fmt(p.rem)} SOL</span><span class="p ${pp>=0?'up':'down'}">${pp>=0?'+':''}${Math.round(pp)}%</span></div>`; }).join("");
+  drawSpark();
+}
+function drawSpark(){ const c=$("spark"), x=c.getContext("2d"); const W=c.width,H=c.height; x.clearRect(0,0,W,H);
+  const h=S.hist; if(h.length<2) return; const min=Math.min(...h,S.start), max=Math.max(...h,S.start), rng=(max-min)||1;
+  const px=i=>i/(h.length-1)*W, py=v=>H-8-((v-min)/rng)*(H-16);
+  // start line
+  x.strokeStyle="rgba(255,255,255,.18)"; x.setLineDash([4,4]); x.beginPath(); x.moveTo(0,py(S.start)); x.lineTo(W,py(S.start)); x.stroke(); x.setLineDash([]);
+  x.strokeStyle=S.bank>=S.start?"#9dff45":"#ff5e5e"; x.lineWidth=2; x.beginPath(); h.forEach((v,i)=>{ i?x.lineTo(px(i),py(v)):x.moveTo(px(i),py(v)); }); x.stroke();
+}
+</script>
+</body></html>
