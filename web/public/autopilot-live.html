@@ -582,20 +582,19 @@ async function dlWin(i){
 }
 window.dlWin = dlWin;
 
+function lockOut(msg) {
+  $("app").classList.add("hidden");
+  $("boot").classList.remove("hidden");
+  $("boot").innerHTML = '🔒 <b>Owner access only.</b><br><span class="muted" style="display:inline-block;margin-top:6px">' + msg + '</span>';
+}
+// Your KEY is your login — no site login to remember. Paste it once (saved in this
+// browser) and you're in, on any device. It maps to one stable owner identity so
+// your wallets always follow the key.
 (async function boot() {
-  const ok = await ensureAccount();
-  if (!ok) { $("boot").innerHTML = '<span class="warn">Could not start a session. Reload, or open the main terminal once.</span>'; return; }
-  // OWNER GATE: this panel only opens for the owner-key holder. Everyone else gets
-  // the lock prompt and never sees any controls or data (the API is key-gated too).
-  const acc = await api("/api/web/autopilot/access");
-  if (!acc || !acc.owner) {
-    $("app").classList.add("hidden");
-    $("boot").classList.remove("hidden");
-    $("boot").innerHTML = ownerKey
-      ? '🔒 <b>Owner access only.</b><br><span class="warn" style="display:inline-block;margin-top:6px">That owner key didn’t match — check it and Save again above.</span>'
-      : '🔒 <b>Owner access only.</b><br><span class="muted" style="display:inline-block;margin-top:6px">Paste your owner key in the box above and hit Save to unlock.</span>';
-    return;
-  }
+  if (!ownerKey) { lockOut("Paste your owner key in the box above and hit Save to unlock."); return; }
+  const r = await api("/api/web/autopilot/key-login", { method: "POST", body: JSON.stringify({ key: ownerKey }) });
+  if (!(r && r.ok && r.token && r.owner)) { lockOut("That owner key didn’t match — check it and Save again above."); return; }
+  token = r.token; try { localStorage.setItem("ogreWebToken", token); } catch {}
   $("ownerPill").classList.remove("hidden");
   $("boot").classList.add("hidden");
   $("app").classList.remove("hidden");

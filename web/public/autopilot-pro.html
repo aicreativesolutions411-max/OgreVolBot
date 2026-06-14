@@ -176,11 +176,28 @@
       <button class="b-go" id="redeemBtn" style="margin-top:10px">Unlock with code</button>
       <div id="redeemMsg" class="muted" style="margin-top:8px"></div>
     </div>
+    <div class="card">
+      <label>Already paid? Log in with your access key</label>
+      <div class="muted" style="margin-bottom:8px">Your key restores your access + wallets on any device — no login needed.</div>
+      <input type="text" id="keyLoginInput" placeholder="swa_…" autocomplete="off"/>
+      <button class="b-ghost" id="keyLoginBtn" style="margin-top:10px">🔑 Log in with key</button>
+      <div id="keyLoginMsg" class="muted" style="margin-top:8px"></div>
+    </div>
   </div>
 
   <!-- APP -->
   <div id="app" class="hidden">
     <div id="trialBanner" class="trial-pill hidden">⏳ Trial pass · <span id="trialLeft">—</span></div>
+    <!-- ACCESS KEY (save it!) -->
+    <div id="keyCard" class="card hidden" style="border-color:var(--green)">
+      <label>🔑 Your access key — save this!</label>
+      <div class="muted" style="margin-bottom:8px">This is how you get back in if you switch devices or lose your login. Anyone with it has your access — keep it private.</div>
+      <div class="addr" id="myKey">…</div>
+      <div class="row" style="margin-top:10px">
+        <div><button class="b-ghost" id="copyKey">Copy</button></div>
+        <div><button class="b-ghost" id="dlKey">⬇ Back up</button></div>
+      </div>
+    </div>
 
     <!-- WALLET -->
     <div class="card">
@@ -434,6 +451,24 @@ async function redeem(codeRaw){
   return ok;
 }
 $("redeemBtn").addEventListener("click",()=>redeem($("redeemCode").value));
+
+// ---- access key: log in with key (any device) + show/download your key ----
+$("keyLoginBtn").addEventListener("click",async()=>{
+  const k=$("keyLoginInput").value.trim();
+  if(!k){$("keyLoginMsg").innerHTML='<span class="warn">Paste your key.</span>';return;}
+  $("keyLoginMsg").textContent="Logging in…";
+  const r=await api("/api/web/autopilot/key-login",{method:"POST",body:JSON.stringify({key:k})});
+  if(r&&r.ok&&r.token){token=r.token;try{localStorage.setItem("ogreWebToken",token);}catch{}$("keyLoginMsg").innerHTML='<span class="ok">In! Loading…</span>';setTimeout(()=>location.reload(),500);}
+  else $("keyLoginMsg").innerHTML='<span class="warn">'+((r&&r.error)||"invalid key")+'</span>';
+});
+async function loadMyKey(){
+  const r=await api("/api/web/autopilot/my-key",{method:"POST",body:JSON.stringify({})});
+  if(!(r&&r.ok&&r.key))return;
+  $("keyCard").classList.remove("hidden");
+  $("myKey").textContent=r.key;
+  $("copyKey").onclick=()=>{navigator.clipboard?.writeText(r.key);$("copyKey").textContent="Copied ✓";setTimeout(()=>$("copyKey").textContent="Copy",1200);};
+  $("dlKey").onclick=()=>{const t="SlimeWire Auto — your access key (KEEP PRIVATE)\n\n"+r.key+"\n\nLog in with it anytime at slimewire.org/pro -> \"Log in with your access key\". It restores your access + wallets on any device.\n";dl("slimewire-access-key.txt","data:text/plain;base64,"+btoa(unescape(encodeURIComponent(t))));};
+}
 function setupTrial(a){
   const t=a.trial; if(!t)return;
   trialRemaining=t.remainingSeconds; trialRunning=false;
@@ -495,6 +530,7 @@ $("endPay").addEventListener("click",()=>{ $("endModal").classList.add("hidden")
     if(a.expiresAt&&!trialActive){const d=Math.max(0,Math.ceil((Date.parse(a.expiresAt)-Date.now())/86400000));$("expLbl").textContent=a.owner?"owner":`${d} days left`;}
     if(trialActive)setupTrial(a);
     $("app").classList.remove("hidden");
+    if(!a.owner)loadMyKey();
     await loadWallets();poll();setInterval(poll,1500);
   } else if(trialExpired){
     // had a pass, it's used up: show the app + the withdraw-or-pay modal

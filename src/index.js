@@ -186,6 +186,8 @@ async function grantAutopilotSub(userId, days = CONFIG.subDays) {
   const expiresAt = new Date(base + days * 24 * 60 * 60 * 1000).toISOString();
   store.subs[userId] = { ...(store.subs[userId] || {}), expiresAt, grantedAt: new Date().toISOString() };
   await writeJsonFile(AUTOPILOT_SUBS_FILE, store);
+  // Make sure a savable access key exists the moment they're paid up.
+  try { await autopilotAccessKeyFor(userId); } catch {}
   return store.subs[userId];
 }
 // Each subscriber gets a unique deposit address (a managed wallet) so payments
@@ -316,8 +318,39 @@ function startTrialUsageWatcher() {
   setInterval(() => { void tickTrialUsage().catch(() => {}); }, 10_000);
 }
 
-// Owner = holds the owner key (or, before a key is set, any logged-in session).
+// --- KEY-BASED ACCESS (decoupled from site logins) ---------------------------
+// The autopilot is almost a standalone product: people come here just for this.
+// So access is by KEY, not by remembering a site login. The OWNER key is the
+// owner's login and always maps to one stable identity (so wallets persist on any
+// device). Paying users get a savable/downloadable access key bound to their
+// account — losing a site login never loses paid access; the key restores it.
+const AUTOPILOT_OWNER_USERID = "__owner__";
+async function autopilotResolveKey(keyRaw) {
+  const k = String(keyRaw || "").trim();
+  if (!k) return null;
+  if (CONFIG.autopilotOwnerKey && k === CONFIG.autopilotOwnerKey) return { userId: AUTOPILOT_OWNER_USERID, owner: true };
+  if (CONFIG.autopilotControlKey && k === CONFIG.autopilotControlKey) return { userId: AUTOPILOT_OWNER_USERID, owner: true };
+  const store = await readAutopilotSubs();
+  const uid = store.accessKeys && store.accessKeys[k];
+  return uid ? { userId: uid, owner: false } : null;
+}
+async function autopilotAccessKeyFor(userId) {
+  if (!userId) return null;
+  const store = await readAutopilotSubs();
+  if (!store.accessKeys) store.accessKeys = {};
+  if (!store.userKeys) store.userKeys = {};
+  const existing = store.userKeys[userId];
+  if (existing && store.accessKeys[existing] === userId) return existing;
+  const key = "swa_" + crypto.randomBytes(20).toString("hex");
+  store.accessKeys[key] = userId; store.userKeys[userId] = key;
+  await writeJsonFile(AUTOPILOT_SUBS_FILE, store);
+  return key;
+}
+
+// Owner = holds the owner key (provided directly, OR is signed in as the stable
+// owner identity via key-login). Before any owner key is set, any session is owner.
 function autopilotIsOwner(providedKey, webAuth) {
+  if (webAuth && webAuth.userId === AUTOPILOT_OWNER_USERID) return true;
   if (CONFIG.autopilotOwnerKey) return providedKey === CONFIG.autopilotOwnerKey;
   if (CONFIG.autopilotControlKey && providedKey === CONFIG.autopilotControlKey) return true;
   return Boolean(webAuth);
@@ -726,6 +759,7 @@ let chartBootstrapSharedCache = new Map();
 const solanaTrackerCache = new Map();
 const madeOnSolCache = new Map();
 const heliusDasAssetCache = new Map();
+const swampNftWalletCache = new Map();
 const webLoginAttemptLimits = new Map();
 const webSummaryCache = new Map();
 let redisKvClientPromise = null;
@@ -2717,10 +2751,23 @@ async function handleWebApiRequest(request, response, requestUrl) {
     //   POST /api/web/autopilot/stop
     // Live trading requires live:true AND confirm:"LIVE" AND a selected wallet
     // (never the fee wallet). Otherwise it runs paper (no SOL touched).
-    if (pathname === "/api/web/autopilot/status" || pathname === "/api/web/autopilot/start" || pathname === "/api/web/autopilot/stop" || pathname === "/api/web/autopilot/wallets" || pathname === "/api/web/autopilot/sweep" || pathname === "/api/web/autopilot/win-card" || pathname === "/api/web/autopilot/stats" || pathname === "/api/web/autopilot/access" || pathname === "/api/web/autopilot/grant" || pathname === "/api/web/autopilot/trial" || pathname === "/api/web/autopilot/redeem") {
+    if (pathname === "/api/web/autopilot/status" || pathname === "/api/web/autopilot/start" || pathname === "/api/web/autopilot/stop" || pathname === "/api/web/autopilot/wallets" || pathname === "/api/web/autopilot/sweep" || pathname === "/api/web/autopilot/win-card" || pathname === "/api/web/autopilot/stats" || pathname === "/api/web/autopilot/access" || pathname === "/api/web/autopilot/grant" || pathname === "/api/web/autopilot/trial" || pathname === "/api/web/autopilot/redeem" || pathname === "/api/web/autopilot/key-login" || pathname === "/api/web/autopilot/my-key") {
       const webAuth = await authenticateOptionalWebRequest(request);
       const body = request.method === "POST" ? await readJsonRequestBody(request).catch(() => ({})) : {};
       const providedKey = String(requestUrl.searchParams.get("key") || body.key || "");
+      // KEY-LOGIN: exchange an access key (owner key or a user's saved key) for a
+      // session token bound to that key's stable identity. This IS the login — no
+      // prior auth required. The key is the durable credential; the token is just
+      // the session it mints (paste the key on any device to restore everything).
+      if (pathname === "/api/web/autopilot/key-login") {
+        const resolved = await autopilotResolveKey(providedKey);
+        if (!resolved) { sendWebJson(request, response, 401, { ok: false, error: "That key isn't valid." }); return; }
+        try {
+          const sess = await issueWebSessionForExistingUser(resolved.userId, resolved.userId);
+          sendWebJson(request, response, 200, { ok: true, token: sess.token, expiresAt: sess.expiresAt, owner: resolved.owner });
+        } catch (e) { sendWebJson(request, response, 500, { ok: false, error: (e && e.message) || "login failed" }); }
+        return;
+      }
       const controllerUserId = webAuth?.userId || null;
       const isOwner = autopilotIsOwner(providedKey, webAuth);
       const hasSub = controllerUserId ? await autopilotSubActive(controllerUserId) : false;
@@ -2787,6 +2834,14 @@ async function handleWebApiRequest(request, response, requestUrl) {
         if (!targetUser) { sendWebJson(request, response, 400, { ok: false, error: "userId required" }); return; }
         const sub = await grantAutopilotSub(targetUser, Number(body.days) || CONFIG.subDays);
         sendWebJson(request, response, 200, { ok: true, userId: targetUser, sub });
+        return;
+      }
+      // A paid/owner/trial user fetches their durable access key (to save + back up).
+      if (pathname === "/api/web/autopilot/my-key") {
+        if (!controllerUserId) { sendWebJson(request, response, 403, { ok: false, error: "Log in first." }); return; }
+        if (!everEntitled) { sendWebJson(request, response, 402, { ok: false, error: "subscription_required" }); return; }
+        const key = await autopilotAccessKeyFor(controllerUserId);
+        sendWebJson(request, response, 200, { ok: true, key });
         return;
       }
       if (!allowed) {
@@ -3238,6 +3293,19 @@ async function handleWebApiRequest(request, response, requestUrl) {
         if (mints.length >= 80) break;
       }
       sendCachedWebJson(request, response, 200, { ok: true, launches: mints }, "public, max-age=30, stale-while-revalidate=300");
+      return;
+    }
+
+    // PUBLIC: wallet NFT -> playable Swamp champions. Only public wallet
+    // metadata is read, and the response is capped/lightweight for game UX.
+    if (request.method === "GET" && pathname === "/api/web/swamp-nfts") {
+      try {
+        const wallet = String(requestUrl.searchParams.get("wallet") || "").trim();
+        const result = await fetchSwampWalletNfts(wallet);
+        sendWebJson(request, response, 200, result);
+      } catch {
+        sendWebJson(request, response, 400, { ok: false, error: "bad wallet" });
+      }
       return;
     }
 
@@ -24938,6 +25006,155 @@ async function publishSwampDeck(body = {}) {
   store.decks = store.decks.slice(-600);
   await writeJsonFile(swampDecksPath(), store);
   return { ok: true };
+}
+
+const SWAMP_NFT_ARCHETYPES = [
+  { key: "ogre", kind: "Ogre", sprite: "/assets/slimewire/swamp/ogres/ogre-warlord.png", weapon: "boulder", over: "quake" },
+  { key: "goblin", kind: "Goblin", sprite: "/assets/slimewire/swamp/ogres/ogre-goblin.png", weapon: "triple", over: "speed burst" },
+  { key: "undead|zombie|skeleton|reaper|death", kind: "Undead", sprite: "/assets/slimewire/swamp/ogres/ogre-zombie.png", weapon: "acid", over: "lifedrain" },
+  { key: "giant|titan|rock|mountain|stone", kind: "Giant", sprite: "/assets/slimewire/swamp/ogres/ogre-titan.png", weapon: "boulder", over: "stone rage" },
+  { key: "elf|nymph|fairy|forest|witch|shaman", kind: "Nymph", sprite: "/assets/slimewire/swamp/ogres/ogre-shaman.png", weapon: "vine", over: "healing bloom" },
+  { key: "knight|warrior|paladin|dwarf", kind: "Warrior", sprite: "/assets/slimewire/swamp/ogres/ogre-knight.png", weapon: "laser", over: "shield rush" },
+  { key: "pirate|raider|bandit", kind: "Raider", sprite: "/assets/slimewire/swamp/ogres/ogre-pirate.png", weapon: "fan", over: "loot frenzy" },
+  { key: "fire|lava|inferno", kind: "Fire", sprite: "/assets/slimewire/swamp/ogres/ogre-lava.png", weapon: "bomb", over: "magma rush" },
+  { key: "ice|frost|snow", kind: "Frost", sprite: "/assets/slimewire/swamp/ogres/ogre-frost.png", weapon: "thunder", over: "freeze frame" },
+  { key: "cyber|robot|mech", kind: "Cyber", sprite: "/assets/slimewire/swamp/ogres/ogre-cyber.png", weapon: "laser", over: "overclock" }
+];
+const SWAMP_NFT_RARITIES = ["common", "uncommon", "rare", "epic", "legendary"];
+const SWAMP_NFT_WEAPON_BY_RARITY = { common: "slime", uncommon: "triple", rare: "vine", epic: "laser", legendary: "boulder" };
+
+function swampHashText(value = "") {
+  let h = 2166136261;
+  for (const ch of String(value || "")) {
+    h ^= ch.charCodeAt(0);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h;
+}
+
+function swampNftText(asset = {}) {
+  const content = asset.content || {};
+  const metadata = content.metadata || {};
+  const collection = asset.grouping?.find?.((g) => /collection/i.test(String(g?.group_key || "")))?.group_value || "";
+  return [
+    metadata.name,
+    asset.name,
+    metadata.symbol,
+    asset.symbol,
+    collection,
+    asset.collection?.name,
+    asset.authorities?.[0]?.address
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+
+function swampNftArchetype(asset = {}) {
+  const text = swampNftText(asset);
+  return SWAMP_NFT_ARCHETYPES.find((a) => new RegExp(`\\b(${a.key})\\b`, "i").test(text)) || SWAMP_NFT_ARCHETYPES[swampHashText(text || asset.id || "swamp") % SWAMP_NFT_ARCHETYPES.length];
+}
+
+function swampNftRarity(asset = {}) {
+  const text = swampNftText(asset);
+  if (/\b(legendary|mythic|god|king|queen|titan|apex|one of one|1\/1)\b/i.test(text)) return "legendary";
+  if (/\b(epic|ancient|warlord|reaper|dragon|cyber)\b/i.test(text)) return "epic";
+  if (/\b(rare|gold|frost|lava|knight|shaman)\b/i.test(text)) return "rare";
+  if (/\b(uncommon|silver|goblin|pirate)\b/i.test(text)) return "uncommon";
+  return SWAMP_NFT_RARITIES[swampHashText(`${asset.id || ""}:${text}`) % SWAMP_NFT_RARITIES.length];
+}
+
+function swampNftImageUrl(asset = {}) {
+  const content = asset.content || {};
+  const metadata = content.metadata || {};
+  const links = content.links || {};
+  const files = Array.isArray(content.files) ? content.files : [];
+  const imageFile = files.find((file) => /image/i.test(String(file?.mime || file?.type || ""))) || files[0] || {};
+  return firstString(links.image, links.imageUrl, metadata.image, metadata.image_url, imageFile.cdn_uri, imageFile.uri);
+}
+
+function swampNftCollectionName(asset = {}) {
+  const content = asset.content || {};
+  const metadata = content.metadata || {};
+  const group = Array.isArray(asset.grouping) ? asset.grouping.find((g) => /collection/i.test(String(g?.group_key || ""))) : null;
+  return firstString(asset.collection?.name, metadata.collection?.name, group?.group_value, "Wallet NFT");
+}
+
+function swampNftAssetToChampion(asset = {}, index = 0) {
+  const id = String(asset.id || asset.interface || `wallet_nft_${index}`).slice(0, 80);
+  const name = firstString(asset.content?.metadata?.name, asset.name, `Wallet Monster ${index + 1}`).replace(/[^\x20-\x7E]/g, "").slice(0, 42) || `Wallet Monster ${index + 1}`;
+  const rarity = swampNftRarity(asset);
+  const archetype = swampNftArchetype(asset);
+  return {
+    id,
+    mint: id,
+    name,
+    kind: archetype.kind,
+    rarity,
+    sprite: archetype.sprite,
+    imageUrl: swampNftImageUrl(asset),
+    collection: swampNftCollectionName(asset),
+    weapon: SWAMP_NFT_WEAPON_BY_RARITY[rarity] || archetype.weapon || "slime",
+    over: archetype.over,
+    source: "wallet-nft"
+  };
+}
+
+function swampNftAssetLooksPlayable(asset = {}) {
+  const iface = String(asset.interface || asset.token_info?.token_standard || "").toLowerCase();
+  if (/fungible/.test(iface)) return false;
+  if (asset.token_info?.decimals != null && Number(asset.token_info.decimals) > 0) return false;
+  const name = firstString(asset.content?.metadata?.name, asset.name);
+  return Boolean(asset.id && name);
+}
+
+async function fetchSwampWalletNfts(wallet = "") {
+  const owner = parsePublicKey(String(wallet || "")).toBase58();
+  const cached = swampNftWalletCache.get(owner);
+  if (cached && Date.now() - Number(cached.cachedAt || 0) < 60_000) {
+    return cached.value;
+  }
+  if (!heliusDasEnabled()) {
+    const value = { ok: true, wallet: owner, nfts: [], indexerReady: false, message: "Helius DAS wallet indexing is not configured on this backend yet." };
+    swampNftWalletCache.set(owner, { cachedAt: Date.now(), value });
+    return value;
+  }
+  try {
+    const response = await rpcWithRetry("helius das getAssetsByOwner", () => fetchJson(CONFIG.rpcUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: "slimewire-swamp-nfts",
+        method: "getAssetsByOwner",
+        params: {
+          ownerAddress: owner,
+          page: 1,
+          limit: 40,
+          displayOptions: {
+            showFungible: false,
+            showNativeBalance: false,
+            showCollectionMetadata: true
+          }
+        }
+      }),
+      timeoutMs: CONFIG.heliusDasTimeoutMs
+    }), 1, { priority: false });
+    if (response?.error) throw new Error(providerErrorValue(response.error) || "Helius DAS returned an error");
+    const items = Array.isArray(response?.result?.items) ? response.result.items : [];
+    const nfts = items.filter(swampNftAssetLooksPlayable).slice(0, 24).map(swampNftAssetToChampion);
+    const value = { ok: true, wallet: owner, nfts, indexerReady: true, scannedAt: new Date().toISOString() };
+    swampNftWalletCache.set(owner, { cachedAt: Date.now(), value });
+    return value;
+  } catch (error) {
+    const value = {
+      ok: true,
+      wallet: owner,
+      nfts: [],
+      indexerReady: false,
+      message: "Wallet NFT indexer was unavailable; local Beam champions still work.",
+      warning: safePerfEventText(error?.message || "DAS wallet scan failed", 120)
+    };
+    swampNftWalletCache.set(owner, { cachedAt: Date.now(), value });
+    return value;
+  }
 }
 
 // --- Presales: hype/commit listings (NO custody — interest only, for now) ---
