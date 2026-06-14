@@ -54,6 +54,7 @@ import {
 } from "./lib/tradeExecutionService.js";
 import { workerTickTaskFlags } from "./lib/workerTickTasks.js";
 import { createTelegramChannelBridge, escapeTelegramHtml } from "./lib/telegramChannelBridge.js";
+import { createAutopilotEngine, LAMPORTS_PER_SOL as AUTOPILOT_LAMPORTS_PER_SOL } from "./lib/autopilotEngine.js";
 import webpush from "web-push";
 import {
   createPumpLaunchError,
@@ -154,6 +155,108 @@ const pumpPortalStream = createPumpPortalStream({
     void handlePumpPortalCreationForDevWatch(entry).catch(() => {});
   }
 });
+// --- Live Autopilot (Fresh-Ape, server-side, always-on) -------------------
+// The browser /autopilot page proved the brain on real data with paper fills.
+// This is the same brain running inside the server process so it survives the
+// user closing their phone/app, manages many positions at once, and executes
+// REAL trades through the battle-tested buy/sell path - but ONLY ever on the
+// single dedicated wallet named by AUTOPILOT_WALLET_PUBKEY, with a loss cap,
+// a hard timer, and a kill switch. Controlled from the terminal, off the page.
+const AUTOPILOT_STATE_FILE = path.join(CONFIG.dataDir, "autopilot-session.json");
+let autopilotWalletRecord = null;
+
+async function resolveAutopilotWallet() {
+  const want = CONFIG.autopilotWalletPubkey;
+  if (!want) throw new Error("AUTOPILOT_WALLET_PUBKEY is not set.");
+  if (want === CONFIG.feeWallet) throw new Error("Refusing to run the autopilot on the FEE wallet.");
+  const store = await readWalletStore();
+  const match = store.wallets.find((w) => w.publicKey === want);
+  if (!match) throw new Error(`AUTOPILOT_WALLET_PUBKEY ${want} is not a managed wallet in this store.`);
+  if (!match.secret) throw new Error("Dedicated autopilot wallet has no signable secret.");
+  autopilotWalletRecord = match;
+  return match;
+}
+
+const autopilotEngine = createAutopilotEngine({
+  tickMs: 2200,
+  huntEvery: 3,
+  log: (level, msg) => console.log(`[autopilot:${level}] ${msg}`),
+  isPaused: async () => Boolean((await readState().catch(() => ({}))).paused),
+  persist: async (snap) => {
+    try {
+      await writeJsonFile(AUTOPILOT_STATE_FILE, snap || {});
+    } catch {}
+  },
+  getFreshFeed: async () => {
+    const feed = await webLivePairs("autopilot", "live", { sort: "fresh", force: true });
+    const rows = Array.isArray(feed?.rows) ? feed.rows : [];
+    return rows.map((r) => ({
+      tokenMint: r.tokenMint,
+      symbol: r.symbol,
+      pairAgeSeconds: r.pairAgeSeconds,
+      marketCap: r.marketCap,
+      liquidityUsd: r.liquidityUsd,
+      volume5m: r.volume5m,
+      buys5m: r.buys5m,
+      sells5m: r.sells5m,
+      bestPickScore: r.bestPickScore || r.bestPick || 0
+    }));
+  },
+  getPairLite: async (mint) => {
+    try {
+      const pairs = await fetchDexScreenerTokenPairsFallback(mint).catch(() => []);
+      const best = bestDexPairForToken(mint, pairs);
+      if (best) {
+        return {
+          marketCap: Number(best.marketCap || best.fdv) || 0,
+          liquidityUsd: Number(best.liquidity?.usd) || 0,
+          priceUsd: Number(best.priceUsd) || 0
+        };
+      }
+      const curve = await pumpCurvePairFallback(mint).catch(() => null);
+      if (curve) {
+        return {
+          marketCap: Number(curve.marketCap || curve.fdv) || 0,
+          liquidityUsd: Number(curve.liquidity?.usd) || 0,
+          priceUsd: Number(curve.priceUsd) || 0
+        };
+      }
+    } catch {}
+    return null;
+  },
+  buyToken: async (mint, lamports) => {
+    if (!autopilotWalletRecord) throw new Error("autopilot wallet not resolved");
+    const res = await buyTokenForPlan(autopilotWalletRecord, mint, lamports, CONFIG.autopilotSlippageBps, {
+      trackTokenDelta: true,
+      priority: true,
+      userId: `autopilot:${autopilotWalletRecord.ownerId}`
+    });
+    return { ok: true, tokenAmount: res.tokenDeltaAmount || res.outputAmount || null, signature: res.signature };
+  },
+  sellPercent: async (mint, pct) => {
+    if (!autopilotWalletRecord) throw new Error("autopilot wallet not resolved");
+    const res = await sellTokenFromWallet(autopilotWalletRecord, mint, pct, CONFIG.autopilotSlippageBps, {
+      priceExit: true,
+      priority: true
+    });
+    return { ok: true, signature: res?.signature };
+  }
+});
+
+async function startLiveAutopilotResume() {
+  // After a redeploy/restart, re-attach to an in-flight session so open
+  // positions keep being managed and (if still inside the timer) hunting resumes.
+  try {
+    const snap = await readJson(AUTOPILOT_STATE_FILE).catch(() => null);
+    if (!snap || snap.stopped) return;
+    if (snap.live) await resolveAutopilotWallet().catch((e) => { throw e; });
+    const resumed = await autopilotEngine.resume(snap);
+    if (resumed) console.log(`[autopilot] resumed ${snap.live ? "LIVE" : "PAPER"} session with ${snap.open?.length || 0} open position(s).`);
+  } catch (e) {
+    console.warn(`[autopilot] resume skipped: ${e && e.message}`);
+  }
+}
+
 const rpcLimiter = createRpcLimiter();
 const priorityRpcLimiter = createRpcLimiter({
   minIntervalMs: Math.max(Math.min(CONFIG.rpcMinIntervalMs, 75), CONFIG.rpcMinIntervalFromRpsMs)
@@ -471,6 +574,7 @@ async function main() {
     console.log("Web internal DCA interval runner disabled; Render worker tick owns DCA checks.");
   }
   startOgreAutopilotRunner();
+  void startLiveAutopilotResume();
   if (CONFIG.pumpPortalWsEnabled) {
     pumpPortalStream.start();
     // Warm the SOL/USD cache so realtime creations get USD market caps immediately.
@@ -1050,7 +1154,14 @@ function loadConfig() {
     sniperDefaultSlippageBps,
     jupiterSwapMaxAttempts,
     manualLaunchScanIntervalMs,
-    priorityFeeLamports: Number.parseInt(process.env.PRIORITY_FEE_LAMPORTS || "0", 10)
+    priorityFeeLamports: Number.parseInt(process.env.PRIORITY_FEE_LAMPORTS || "0", 10),
+    // Live Autopilot (Fresh-Ape, server-side, background). OFF unless BOTH are
+    // set, and it will ONLY ever touch the dedicated wallet named here - never
+    // the fee wallet, never a user's main wallet. Fund this one wallet with the
+    // SOL you are willing to risk and control it from your terminal.
+    autopilotControlKey: String(process.env.AUTOPILOT_CONTROL_KEY || "").trim(),
+    autopilotWalletPubkey: String(process.env.AUTOPILOT_WALLET_PUBKEY || "").trim(),
+    autopilotSlippageBps: Number.parseInt(process.env.AUTOPILOT_SLIPPAGE_BPS || "700", 10)
   };
 }
 
@@ -2160,6 +2271,64 @@ async function handleWebApiRequest(request, response, requestUrl) {
       } catch (e) { result.error = e.message; result.stack = String(e.stack || "").split("\n").slice(0, 4).join(" | "); }
       sendWebJson(request, response, 200, result);
       return;
+    }
+
+    // --- Live Autopilot terminal control (key-gated, off the website) -------
+    // curl from your terminal:
+    //   GET  /api/web/autopilot/status?key=...
+    //   POST /api/web/autopilot/start  {key, sol, minutes, mode, live, confirm}
+    //   POST /api/web/autopilot/stop   {key}
+    // Live trading requires live:true AND confirm:"LIVE" AND a configured
+    // dedicated wallet. Without those it runs in paper mode (no SOL touched).
+    if (pathname === "/api/web/autopilot/status" || pathname === "/api/web/autopilot/start" || pathname === "/api/web/autopilot/stop") {
+      const key = request.method === "GET"
+        ? String(requestUrl.searchParams.get("key") || "")
+        : "";
+      const body = request.method === "POST" ? await readJsonRequestBody(request).catch(() => ({})) : {};
+      const providedKey = key || String(body.key || "");
+      if (!CONFIG.autopilotControlKey) {
+        sendWebJson(request, response, 503, { ok: false, error: "AUTOPILOT_CONTROL_KEY not configured on the server." });
+        return;
+      }
+      if (providedKey !== CONFIG.autopilotControlKey) {
+        sendWebJson(request, response, 403, { ok: false, error: "forbidden" });
+        return;
+      }
+      try {
+        if (pathname === "/api/web/autopilot/status") {
+          sendWebJson(request, response, 200, { ok: true, status: autopilotEngine.status() });
+          return;
+        }
+        if (pathname === "/api/web/autopilot/stop") {
+          const status = await autopilotEngine.stop("manual");
+          sendWebJson(request, response, 200, { ok: true, status });
+          return;
+        }
+        // start
+        const sol = Number(body.sol);
+        const minutes = Number(body.minutes) || 60;
+        const mode = ["chill", "normal", "degen"].includes(String(body.mode)) ? String(body.mode) : "normal";
+        const wantLive = body.live === true || body.live === "true";
+        if (!(sol > 0)) {
+          sendWebJson(request, response, 400, { ok: false, error: "sol must be > 0" });
+          return;
+        }
+        let walletPubkey = null;
+        if (wantLive) {
+          if (String(body.confirm) !== "LIVE") {
+            sendWebJson(request, response, 400, { ok: false, error: 'Live trading requires confirm:"LIVE".' });
+            return;
+          }
+          const wallet = await resolveAutopilotWallet();
+          walletPubkey = wallet.publicKey;
+        }
+        const status = await autopilotEngine.start({ solBudget: sol, minutes, mode, live: wantLive, walletPubkey });
+        sendWebJson(request, response, 200, { ok: true, status });
+        return;
+      } catch (e) {
+        sendWebJson(request, response, 400, { ok: false, error: e && e.message });
+        return;
+      }
     }
 
     if (request.method === "POST" && pathname === "/api/web/login") {
