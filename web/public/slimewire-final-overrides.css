@@ -19515,7 +19515,7 @@ html, body { overflow-y: auto !important; }
 html body main.shell .connect-view .swamp-connect-shell,
 html body .swamp-connect-shell {
   position: relative !important;
-  background-image: url('/assets/slimewire/auto/login-hero.jpg?v=v6scene') !important;
+  background-image: url('/assets/slimewire/auto/login-hero.jpg?v=v2drama') !important;
   background-position: center !important;
   background-size: cover !important;
   background-repeat: no-repeat !important;
@@ -19543,7 +19543,7 @@ html body .connect-view .connect-hero-side .connect-method-showcase,
 html body .connect-view .connect-hero-side .connect-ogre { display: none !important; }
 @media (max-width: 760px) {
   html body .swamp-connect-shell {
-    background-image: url('/assets/slimewire/auto/login-hero-portrait.jpg?v=v6scene') !important;
+    background-image: url('/assets/slimewire/auto/login-hero-portrait.jpg?v=v2drama') !important;
     min-height: min(90vh, 900px) !important;
   }
   html body .swamp-connect-shell::before { background: linear-gradient(180deg, rgba(3,6,4,0.10) 0%, rgba(3,6,4,0.5) 52%, rgba(3,6,4,0.94) 100%) !important; }
