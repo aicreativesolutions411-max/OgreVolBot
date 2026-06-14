@@ -163,7 +163,179 @@ const pumpPortalStream = createPumpPortalStream({
 // single dedicated wallet named by AUTOPILOT_WALLET_PUBKEY, with a loss cap,
 // a hard timer, and a kill switch. Controlled from the terminal, off the page.
 const AUTOPILOT_STATE_FILE = path.join(CONFIG.dataDir, "autopilot-session.json");
+const AUTOPILOT_SUBS_FILE = path.join(CONFIG.dataDir, "autopilot-subs.json");
 let autopilotWalletRecord = null;
+
+// --- Subscription access (pay SOL to receive wallet -> 30 days) ----------------
+async function readAutopilotSubs() {
+  try {
+    const j = await readJson(AUTOPILOT_SUBS_FILE).catch(() => null);
+    return (j && j.subs && typeof j.subs === "object") ? j : { subs: {} };
+  } catch { return { subs: {} }; }
+}
+async function autopilotSubActive(userId) {
+  if (!userId) return false;
+  const store = await readAutopilotSubs();
+  const exp = Date.parse(store.subs[userId]?.expiresAt || "");
+  return Number.isFinite(exp) && exp > Date.now();
+}
+async function grantAutopilotSub(userId, days = CONFIG.subDays) {
+  const store = await readAutopilotSubs();
+  const cur = Date.parse(store.subs[userId]?.expiresAt || "");
+  const base = Number.isFinite(cur) && cur > Date.now() ? cur : Date.now();
+  const expiresAt = new Date(base + days * 24 * 60 * 60 * 1000).toISOString();
+  store.subs[userId] = { ...(store.subs[userId] || {}), expiresAt, grantedAt: new Date().toISOString() };
+  await writeJsonFile(AUTOPILOT_SUBS_FILE, store);
+  return store.subs[userId];
+}
+// Each subscriber gets a unique deposit address (a managed wallet) so payments
+// attribute cleanly. Paying the monthly price there auto-unlocks 30 days and the
+// SOL is swept to the owner's receive wallet.
+const SUB_DEPOSIT_OWNER = "__sub_deposits__";
+async function getSubDepositWallet(userId) {
+  const store = await readWalletStore();
+  const label = `subdep:${userId}`;
+  let w = store.wallets.find((x) => String(x.ownerId) === SUB_DEPOSIT_OWNER && x.label === label);
+  if (!w) {
+    const kp = Keypair.generate();
+    w = walletRecord(label, kp, SUB_DEPOSIT_OWNER);
+    store.wallets.push(w);
+    await writeWalletStore(store);
+  }
+  return w;
+}
+async function checkSubscriptionPayments() {
+  if (!CONFIG.subReceiveWallet || !(CONFIG.subPriceSol > 0)) return;
+  let receive;
+  try { receive = new PublicKey(CONFIG.subReceiveWallet); } catch { return; }
+  const store = await readWalletStore();
+  const deposits = store.wallets.filter((x) => String(x.ownerId) === SUB_DEPOSIT_OWNER);
+  for (const w of deposits) {
+    try {
+      const bal = Number(await getSolBalanceCached(new PublicKey(w.publicKey), { force: true })) / 1_000_000_000;
+      if (bal >= CONFIG.subPriceSol * 0.98) {
+        const userId = w.label.replace(/^subdep:/, "");
+        await grantAutopilotSub(userId, CONFIG.subDays);
+        try {
+          const kp = decryptWallet(w);
+          await drainSolFromWallet(kp, receive);
+          invalidateWalletReadCache(w.publicKey);
+        } catch (e) { console.warn(`[subs] sweep failed for ${userId}: ${e && e.message}`); }
+        console.log(`[subs] payment ${bal} SOL -> unlocked ${userId} for ${CONFIG.subDays}d + swept to receive wallet`);
+      }
+    } catch {}
+  }
+}
+function startSubscriptionWatcher() {
+  if (!CONFIG.subReceiveWallet) return;
+  setInterval(() => { void checkSubscriptionPayments(); }, 60_000);
+}
+
+// --- Temporary access (owner-minted 1-hour trial codes) -----------------------
+// The owner mints a code from their panel and hands it to a person. The person
+// redeems it (while logged in) and gets a budget of *active running time* (default
+// 60 min). Usage only ticks while THEIR autopilot session is actually running.
+// When the budget is exhausted the engine auto-stops (flattening every position
+// back to SOL) and the /pro app offers them: withdraw their SOL to any wallet, or
+// pay to unlock a full subscription. One engine runs at a time, so the running
+// controller's clock is unambiguous.
+function newTrialCode() {
+  return crypto.randomBytes(4).toString("hex").toUpperCase(); // e.g. "9F3A2C71"
+}
+async function autopilotTrialState(userId) {
+  if (!userId) return null;
+  const store = await readAutopilotSubs();
+  return (store.trials && store.trials[userId]) || null;
+}
+function trialIsActive(t) {
+  return Boolean(t) && !t.expiredAt && Number(t.secondsUsed || 0) < Number(t.capSeconds || 0);
+}
+async function autopilotTrialActive(userId) {
+  return trialIsActive(await autopilotTrialState(userId));
+}
+async function createTrialCode(capMinutes = CONFIG.subTrialMinutes) {
+  const store = await readAutopilotSubs();
+  if (!store.trialCodes) store.trialCodes = {};
+  const cap = Math.max(1, Math.min(Number(capMinutes) || CONFIG.subTrialMinutes, 1440));
+  let code = newTrialCode();
+  while (store.trialCodes[code]) code = newTrialCode();
+  store.trialCodes[code] = { capSeconds: cap * 60, createdAt: new Date().toISOString(), redeemedBy: null, redeemedAt: null };
+  await writeJsonFile(AUTOPILOT_SUBS_FILE, store);
+  return { code, capSeconds: cap * 60, capMinutes: cap };
+}
+async function redeemTrialCode(userId, codeRaw) {
+  const code = String(codeRaw || "").trim().toUpperCase();
+  if (!code) throw new Error("Enter an access code.");
+  const store = await readAutopilotSubs();
+  if (!store.trials) store.trials = {};
+  if (!store.trialCodes) store.trialCodes = {};
+  const c = store.trialCodes[code];
+  if (!c) throw new Error("That code isn't valid.");
+  if (c.redeemedBy && c.redeemedBy !== userId) throw new Error("That code has already been used.");
+  const existing = store.trials[userId];
+  if (trialIsActive(existing)) return existing; // already on a live trial; no double-spend
+  c.redeemedBy = userId; c.redeemedAt = new Date().toISOString();
+  store.trials[userId] = { capSeconds: c.capSeconds, secondsUsed: 0, grantedAt: new Date().toISOString(), code, expiredAt: null };
+  await writeJsonFile(AUTOPILOT_SUBS_FILE, store);
+  return store.trials[userId];
+}
+async function accrueTrialUsage(userId, seconds) {
+  if (!userId || !(seconds > 0)) return autopilotTrialState(userId);
+  const store = await readAutopilotSubs();
+  const t = store.trials && store.trials[userId];
+  if (!t || t.expiredAt) return t || null;
+  t.secondsUsed = Math.min(Number(t.capSeconds || 0), Number(t.secondsUsed || 0) + seconds);
+  if (t.secondsUsed >= Number(t.capSeconds || 0)) t.expiredAt = t.expiredAt || new Date().toISOString();
+  await writeJsonFile(AUTOPILOT_SUBS_FILE, store);
+  return t;
+}
+
+// Which logged-in user owns the currently running engine, and whether their clock
+// is a metered trial. Set when a session starts; consumed by the trial watcher.
+let autopilotRunController = null; // { userId, isTrial, lastAccrueAt }
+async function tickTrialUsage() {
+  const c = autopilotRunController;
+  if (!c || !c.isTrial) return;
+  const now = Date.now();
+  const delta = Math.max(0, (now - c.lastAccrueAt) / 1000);
+  c.lastAccrueAt = now;
+  let running = false;
+  try { running = Boolean(autopilotEngine.status()?.running); } catch {}
+  if (delta > 0) {
+    const t = await accrueTrialUsage(c.userId, delta);
+    if (t && (t.expiredAt || Number(t.secondsUsed) >= Number(t.capSeconds))) {
+      try { await autopilotEngine.stop("trial_expired"); } catch {}
+      console.log(`[trial] ${c.userId} used full ${Math.round((t.capSeconds || 0) / 60)}m budget -> auto-stopped & flattened to SOL`);
+      autopilotRunController = null;
+      return;
+    }
+  }
+  if (!running) autopilotRunController = null; // they stopped; final delta already counted
+}
+function startTrialUsageWatcher() {
+  setInterval(() => { void tickTrialUsage().catch(() => {}); }, 10_000);
+}
+
+// Owner = holds the owner key (or, before a key is set, any logged-in session).
+function autopilotIsOwner(providedKey, webAuth) {
+  if (CONFIG.autopilotOwnerKey) return providedKey === CONFIG.autopilotOwnerKey;
+  if (CONFIG.autopilotControlKey && providedKey === CONFIG.autopilotControlKey) return true;
+  return Boolean(webAuth);
+}
+// Strip the owner-only intel (decision log, strategy internals, stats) from a
+// status payload so paying users see ONLY their P&L — never how it works.
+function liteAutopilotStatus(s) {
+  if (!s) return s;
+  return {
+    running: s.running, live: s.live, wallet: s.wallet,
+    start: s.start, bank: s.bank, walletSol: s.walletSol, secured: s.secured,
+    equity: s.equity, peak: s.peak, pnlPct: s.pnlPct,
+    wins: s.wins, losses: s.losses,
+    open: (s.open || []).map((p) => ({ sym: p.sym, movePct: p.movePct, heldS: p.heldS })),
+    endsInS: s.endsInS, stopped: s.stopped, stopReason: s.stopReason,
+    bigWins: s.bigWins // their own win cards are fine to keep
+  };
+}
 
 // Lock the autopilot onto a specific managed wallet record. Always refuses the
 // fee wallet and any wallet without a signable secret - the only two hard "no"s.
@@ -814,6 +986,8 @@ async function main() {
   }
   startOgreAutopilotRunner();
   startDevObservatory();
+  startSubscriptionWatcher();
+  startTrialUsageWatcher();
   void startLiveAutopilotResume();
   if (CONFIG.pumpPortalWsEnabled) {
     pumpPortalStream.start();
@@ -1401,7 +1575,19 @@ function loadConfig() {
     // SOL you are willing to risk and control it from your terminal.
     autopilotControlKey: String(process.env.AUTOPILOT_CONTROL_KEY || "").trim(),
     autopilotWalletPubkey: String(process.env.AUTOPILOT_WALLET_PUBKEY || "").trim(),
-    autopilotSlippageBps: Number.parseInt(process.env.AUTOPILOT_SLIPPAGE_BPS || "700", 10)
+    autopilotSlippageBps: Number.parseInt(process.env.AUTOPILOT_SLIPPAGE_BPS || "700", 10),
+    // OWNER LOCK: secret that unlocks the full panel (logs/stats/all controls).
+    // While unset, any logged-in session is treated as owner (so you're not locked
+    // out before you set it). Once set, only key-holders are owner; others need a sub.
+    autopilotOwnerKey: String(process.env.AUTOPILOT_OWNER_KEY || "").trim(),
+    // SUBSCRIPTIONS: users pay this much SOL to the receive wallet for 30 days.
+    subPriceSol: Number.parseFloat(process.env.SUB_PRICE_SOL || "0.5"),
+    subReceiveWallet: String(process.env.SUB_RECEIVE_WALLET || "").trim(),
+    subDays: Number.parseInt(process.env.SUB_DAYS || "30", 10),
+    // TEMP ACCESS: owner can mint codes granting this many minutes of *active*
+    // (running) autopilot time. When the budget is used up, the engine auto-stops
+    // (flattens to SOL) and the user is offered withdraw-or-pay.
+    subTrialMinutes: Number.parseInt(process.env.SUB_TRIAL_MINUTES || "60", 10)
   };
 }
 
@@ -1777,6 +1963,10 @@ function startHealthServer() {
     }
     if (request.method === "GET" && ["/autopilot-live", "/autobot", "/live-autopilot"].includes(requestUrl.pathname)) {
       await serveStaticHtmlPage(response, "autopilot-live.html");
+      return;
+    }
+    if (request.method === "GET" && ["/pro", "/auto", "/slimewire-auto", "/trade-bot"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "autopilot-pro.html");
       return;
     }
 
@@ -2527,16 +2717,91 @@ async function handleWebApiRequest(request, response, requestUrl) {
     //   POST /api/web/autopilot/stop
     // Live trading requires live:true AND confirm:"LIVE" AND a selected wallet
     // (never the fee wallet). Otherwise it runs paper (no SOL touched).
-    if (pathname === "/api/web/autopilot/status" || pathname === "/api/web/autopilot/start" || pathname === "/api/web/autopilot/stop" || pathname === "/api/web/autopilot/wallets" || pathname === "/api/web/autopilot/sweep" || pathname === "/api/web/autopilot/win-card" || pathname === "/api/web/autopilot/stats") {
+    if (pathname === "/api/web/autopilot/status" || pathname === "/api/web/autopilot/start" || pathname === "/api/web/autopilot/stop" || pathname === "/api/web/autopilot/wallets" || pathname === "/api/web/autopilot/sweep" || pathname === "/api/web/autopilot/win-card" || pathname === "/api/web/autopilot/stats" || pathname === "/api/web/autopilot/access" || pathname === "/api/web/autopilot/grant" || pathname === "/api/web/autopilot/trial" || pathname === "/api/web/autopilot/redeem") {
       const webAuth = await authenticateOptionalWebRequest(request);
       const body = request.method === "POST" ? await readJsonRequestBody(request).catch(() => ({})) : {};
       const providedKey = String(requestUrl.searchParams.get("key") || body.key || "");
-      const keyOk = Boolean(CONFIG.autopilotControlKey) && providedKey === CONFIG.autopilotControlKey;
-      if (!webAuth && !keyOk) {
-        sendWebJson(request, response, 403, { ok: false, error: "Log in to your terminal first (or set AUTOPILOT_CONTROL_KEY)." });
+      const controllerUserId = webAuth?.userId || null;
+      const isOwner = autopilotIsOwner(providedKey, webAuth);
+      const hasSub = controllerUserId ? await autopilotSubActive(controllerUserId) : false;
+      const trialRec = controllerUserId ? await autopilotTrialState(controllerUserId) : null;
+      const hasTrial = trialIsActive(trialRec);
+      // Starting needs LIVE access. Reading status / listing wallets / sweeping out
+      // stays open to anyone who has ever redeemed a trial, so an EXPIRED-trial user
+      // can still see and withdraw their SOL — they just can't start a new run.
+      const canStart = isOwner || hasSub || hasTrial;
+      const everEntitled = isOwner || hasSub || Boolean(trialRec);
+      const allowed = everEntitled;
+      // ACCESS probe: tells the panel which tier it is + sub status + how to pay.
+      if (pathname === "/api/web/autopilot/access") {
+        let expiresAt = null;
+        if (controllerUserId) { const st = await readAutopilotSubs(); expiresAt = st.subs[controllerUserId]?.expiresAt || null; }
+        // Issue the user's unique pay-to address only when they ask (body.deposit),
+        // so we don't mint a wallet for every casual visitor.
+        let depositAddress = null;
+        if (controllerUserId && !isOwner && body.deposit && CONFIG.subReceiveWallet) {
+          try { depositAddress = (await getSubDepositWallet(controllerUserId)).publicKey; } catch {}
+        }
+        let trial = null;
+        if (trialRec) {
+          const cap = Number(trialRec.capSeconds || 0);
+          const used = Number(trialRec.secondsUsed || 0);
+          trial = {
+            active: hasTrial,
+            expired: Boolean(trialRec.expiredAt) || used >= cap,
+            capSeconds: cap, usedSeconds: Math.min(used, cap),
+            remainingSeconds: Math.max(0, cap - used)
+          };
+        }
+        sendWebJson(request, response, 200, {
+          ok: true, owner: isOwner, subscribed: hasSub, expiresAt,
+          trial,
+          priceSol: CONFIG.subPriceSol, days: CONFIG.subDays,
+          subEnabled: Boolean(CONFIG.subReceiveWallet),
+          depositAddress,
+          loggedIn: Boolean(controllerUserId)
+        });
         return;
       }
-      const controllerUserId = webAuth?.userId || null;
+      // Logged-in user: redeem an owner-minted temporary access code. Placed BEFORE
+      // the access gate because redeeming is how a fresh user FIRST gains access.
+      if (pathname === "/api/web/autopilot/redeem") {
+        if (!controllerUserId) { sendWebJson(request, response, 403, { ok: false, error: "Log in first." }); return; }
+        try {
+          const t = await redeemTrialCode(controllerUserId, body.code);
+          sendWebJson(request, response, 200, { ok: true, trial: { capSeconds: t.capSeconds, usedSeconds: t.secondsUsed, remainingSeconds: Math.max(0, t.capSeconds - t.secondsUsed) } });
+        } catch (e) { sendWebJson(request, response, 400, { ok: false, error: e && e.message }); }
+        return;
+      }
+      // Owner-only: mint a temporary access code to hand to someone.
+      if (pathname === "/api/web/autopilot/trial") {
+        if (!isOwner) { sendWebJson(request, response, 403, { ok: false, error: "owner only" }); return; }
+        const minted = await createTrialCode(Number(body.minutes) || CONFIG.subTrialMinutes);
+        sendWebJson(request, response, 200, { ok: true, ...minted });
+        return;
+      }
+      // Owner-only: grant a subscription manually.
+      if (pathname === "/api/web/autopilot/grant") {
+        if (!isOwner) { sendWebJson(request, response, 403, { ok: false, error: "owner only" }); return; }
+        const targetUser = String(body.userId || "").trim();
+        if (!targetUser) { sendWebJson(request, response, 400, { ok: false, error: "userId required" }); return; }
+        const sub = await grantAutopilotSub(targetUser, Number(body.days) || CONFIG.subDays);
+        sendWebJson(request, response, 200, { ok: true, userId: targetUser, sub });
+        return;
+      }
+      if (!allowed) {
+        if (!controllerUserId) {
+          sendWebJson(request, response, 403, { ok: false, error: "Log in first." });
+        } else {
+          sendWebJson(request, response, 402, { ok: false, error: "subscription_required", priceSol: CONFIG.subPriceSol, days: CONFIG.subDays, receiveWallet: CONFIG.subReceiveWallet || null });
+        }
+        return;
+      }
+      // Stats are owner-only (the edge — dev leaderboard, win patterns).
+      if (pathname === "/api/web/autopilot/stats" && !isOwner) {
+        sendWebJson(request, response, 403, { ok: false, error: "owner only" });
+        return;
+      }
       try {
         if (pathname === "/api/web/autopilot/wallets") {
           if (!controllerUserId) {
@@ -2553,7 +2818,8 @@ async function handleWebApiRequest(request, response, requestUrl) {
           return;
         }
         if (pathname === "/api/web/autopilot/status") {
-          sendWebJson(request, response, 200, { ok: true, status: autopilotEngine.status() });
+          const full = autopilotEngine.status();
+          sendWebJson(request, response, 200, { ok: true, owner: isOwner, status: isOwner ? full : liteAutopilotStatus(full) });
           return;
         }
         if (pathname === "/api/web/autopilot/stats") {
@@ -2599,7 +2865,9 @@ async function handleWebApiRequest(request, response, requestUrl) {
           return;
         }
         if (pathname === "/api/web/autopilot/stop") {
+          await tickTrialUsage().catch(() => {}); // count time up to this moment
           const status = await autopilotEngine.stop("manual");
+          if (autopilotRunController && autopilotRunController.userId === controllerUserId) autopilotRunController = null;
           sendWebJson(request, response, 200, { ok: true, status });
           return;
         }
@@ -2626,7 +2894,11 @@ async function handleWebApiRequest(request, response, requestUrl) {
           sendWebJson(request, response, 200, { ok: true, sweep, status: stopStatus });
           return;
         }
-        // start
+        // start — requires live access (expired trials can read/withdraw but not start)
+        if (!canStart) {
+          sendWebJson(request, response, 402, { ok: false, error: "trial_expired", priceSol: CONFIG.subPriceSol, days: CONFIG.subDays });
+          return;
+        }
         const minutes = Number(body.minutes) || 60;
         const mode = ["chill", "normal", "degen"].includes(String(body.mode)) ? String(body.mode) : "normal";
         const wantLive = body.live === true || body.live === "true";
@@ -2668,6 +2940,11 @@ async function handleWebApiRequest(request, response, requestUrl) {
         let maxTradeSol;
         const mt = Number(body.maxTradeSol);
         if (Number.isFinite(mt) && mt > 0) maxTradeSol = Math.max(0.012, Math.min(mt, 1));
+        // How many positions may ride at once (the panel's "trades at once"). The
+        // cold-tape throttle can cap BELOW this automatically, never above. 1–8.
+        let maxOpen;
+        const mo = Number(body.maxOpen);
+        if (Number.isFinite(mo) && mo > 0) maxOpen = Math.max(1, Math.min(Math.floor(mo), 8));
         // Session loss cap as a fraction (panel sends a %, e.g. 20 -> 0.20).
         let lossCapFrac;
         const lc = Number(body.lossCapPct);
@@ -2688,7 +2965,12 @@ async function handleWebApiRequest(request, response, requestUrl) {
           }
           vault = { destination: destKey };
         }
-        const status = await autopilotEngine.start({ solBudget: sol, minutes, mode, live: wantLive, walletPubkey, profitLock, churn, vault, maxTradeSol, lossCapFrac });
+        const status = await autopilotEngine.start({ solBudget: sol, minutes, mode, live: wantLive, walletPubkey, profitLock, churn, vault, maxTradeSol, lossCapFrac, maxOpen });
+        // Bind the running clock to this controller. Trial users (no owner key, no
+        // sub) burn metered time; owner/subscribers don't.
+        if (controllerUserId) {
+          autopilotRunController = { userId: controllerUserId, isTrial: !isOwner && !hasSub && hasTrial, lastAccrueAt: Date.now() };
+        }
         sendWebJson(request, response, 200, { ok: true, status });
         return;
       } catch (e) {
@@ -17318,29 +17600,131 @@ async function renderPnlWinCard(d = {}) {
   return sharp(Buffer.from(svg)).png().toBuffer();
 }
 
-// Build the SAME PnL card the site/manual trades use, from autopilot win data —
-// so it carries identical info+style (token image, X, symbol/name, profit,
-// spent/received, held, MC) and reads exactly like a hand trade.
+// ---- NEXT-LEVEL PnL cards: 10 rotating slime styles + a loss "blood-drip" style.
+// Higgs-generated slime backgrounds in src/assets/pnl-bg, with dripping slime-text
+// overlays. No bot wording — reads like a hand trade flex. Held time fixed (the
+// engine passes numeric ms; we compute the duration directly).
+const SLIME_BG_DIR = path.join(__dirname, "assets", "pnl-bg");
+const slimeBgDataUrlCache = new Map();
+async function slimeBgDataUrl(name) {
+  if (slimeBgDataUrlCache.has(name)) return slimeBgDataUrlCache.get(name);
+  try {
+    const buffer = await fs.readFile(path.join(SLIME_BG_DIR, name));
+    const mime = name.endsWith(".png") ? "image/png" : "image/jpeg";
+    const url = `data:${mime};base64,${buffer.toString("base64")}`;
+    slimeBgDataUrlCache.set(name, url);
+    return url;
+  } catch { slimeBgDataUrlCache.set(name, null); return null; }
+}
+// Stable 1..10 style per mint (so a coin always looks the same), or an explicit override.
+function slimeStyleIndex(mint, override) {
+  const ov = Number(override);
+  if (Number.isFinite(ov) && ov >= 1) return (((Math.floor(ov) - 1) % 10) + 10) % 10 + 1;
+  let h = 5381; const s = String(mint || "slime");
+  for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+  return (h % 10) + 1;
+}
+// A gooey slime drip = a fat rounded neck that bulges into a big teardrop blob at
+// the end (NOT a thin line). The blob is wider than the neck so it reads as molten
+// slime oozing down. Width drives the whole thing.
+function slimeDripGroup(cx, baseY, color, drops, w) {
+  return drops.map(([dx, len]) => {
+    const x = cx + dx, ww = w || 12, r = ww * 1.15 + 3;   // blob noticeably fatter than neck
+    const yb = baseY + len + r - 4;
+    return `<rect x="${(x - ww / 2).toFixed(1)}" y="${baseY.toFixed(1)}" width="${ww}" height="${len}" rx="${(ww / 2).toFixed(1)}" fill="${color}"/>`
+      + `<ellipse cx="${x.toFixed(1)}" cy="${yb.toFixed(1)}" rx="${(r * 0.92).toFixed(1)}" ry="${r.toFixed(1)}" fill="${color}"/>`;
+  }).join("");
+}
+
+async function renderSlimeCard(d = {}) {
+  const win = d.loss === true ? false : (d.loss === false ? true : (Number(d.profitSol) >= 0));
+  const style = slimeStyleIndex(d.mint, d.style);
+  const bgUrl = await slimeBgDataUrl(win ? `slime-bg-${style}.jpg` : "slime-loss.jpg");
+  let imageDataUrl = "";
+  try { imageDataUrl = await tokenImageDataUrl(d.imageUrl || ""); } catch {}
+  const W = PNL_CARD_STYLE;
+  const symbol = escapeSvg(sanitizeCardText(String(d.symbol || "TOKEN"), 16));
+  const name = escapeSvg(sanitizeCardText(String(d.name || "SlimeWire"), 22));
+  const gainPct = Number(d.gainPct);
+  const multiple = d.multiple != null ? Math.round(Number(d.multiple) * 10) / 10 : (Number.isFinite(gainPct) ? Math.round((1 + gainPct / 100) * 10) / 10 : null);
+  const profit = Number(d.profitSol) || 0;
+  const spent = Number(d.costSol) || 0;
+  const received = Number(d.receivedSol) || 0;
+  const heldMs = (Number(d.closedAt) > 0 && Number(d.openedAt) > 0)
+    ? Math.max(0, Number(d.closedAt) - Number(d.openedAt))
+    : (Number(d.heldMs) || 0);
+  const held = heldMs > 0 ? formatCompactDurationMs(heldMs) : "n/a";
+  const mc = Number(d.peakMc || d.entryMc) || 0;
+  const sol4 = (n) => (Math.round(Number(n) * 1e4) / 1e4).toString();
+  const big = win
+    ? `${multiple != null ? multiple : "?"}X`
+    : `-${Math.abs(Math.round(gainPct || 0))}%`;
+  const accent = win ? W.slime : W.red;
+  const dripColor = win ? W.slime : "#c41212";
+  const bigDrops = win ? [[-45, 30], [50, 52], [150, 36], [245, 58], [95, 22]] : [[-45, 50], [50, 76], [150, 56], [245, 92], [110, 108]];
+  const artX = 66, artY = 168, artS = 360, colX = 472;
+  const art = imageDataUrl
+    ? `<image href="${imageDataUrl}" x="${artX}" y="${artY}" width="${artS}" height="${artS}" preserveAspectRatio="xMidYMid slice" clip-path="url(#artClip)"/>`
+    : `<rect x="${artX}" y="${artY}" width="${artS}" height="${artS}" rx="30" fill="#0c1f10"/><text x="${artX + artS / 2}" y="${artY + artS / 2 + 34}" text-anchor="middle" font-size="120" font-weight="900" fill="${accent}" font-family="${W.fontFamily}">${symbol.slice(0, 3)}</text>`;
+  // Frame: REAL photoreal slime (Higgs-rendered, background removed) dripping from
+  // the top of every card, and pooling at the bottom — green on wins, blood-red on
+  // losses. These are raster overlays, not drawn shapes, so they read as actual goo.
+  const TOPH = 155, BOTH = win ? 125 : 130;
+  const topUrl = await slimeBgDataUrl("slime-top-green.png");
+  const botUrl = await slimeBgDataUrl(win ? "slime-bot-green.png" : "slime-bot-red.png");
+  const topBand = topUrl ? `<image href="${topUrl}" x="0" y="0" width="${W.width}" height="${TOPH}" preserveAspectRatio="none"/>` : "";
+  const bottomBand = botUrl ? `<image href="${botUrl}" x="0" y="${W.height - BOTH}" width="${W.width}" height="${BOTH}" preserveAspectRatio="none"/>` : "";
+
+  const svg = `
+<svg xmlns="http://www.w3.org/2000/svg" width="${W.width}" height="${W.height}" viewBox="0 0 ${W.width} ${W.height}">
+  <defs>
+    <linearGradient id="bigFill" x1="0" y1="0" x2="0" y2="1">
+      ${win
+        ? `<stop offset="0%" stop-color="#f1ffd6"/><stop offset="45%" stop-color="#76ff3c"/><stop offset="100%" stop-color="#13a30c"/>`
+        : `<stop offset="0%" stop-color="#a6ff6b"/><stop offset="42%" stop-color="#ff7a3a"/><stop offset="100%" stop-color="#8a0d0d"/>`}
+    </linearGradient>
+    <linearGradient id="scrim" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#000000" stop-opacity="0.20"/>
+      <stop offset="38%" stop-color="#000000" stop-opacity="0.62"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0.30"/>
+    </linearGradient>
+    <clipPath id="artClip"><rect x="${artX}" y="${artY}" width="${artS}" height="${artS}" rx="30"/></clipPath>
+    <filter id="cardShadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="16" stdDeviation="22" flood-color="#000" flood-opacity="0.6"/></filter>
+    <filter id="bigGlow" x="-12%" y="-15%" width="124%" height="150%">
+      <feDropShadow dx="0" dy="0" stdDeviation="6" flood-color="${accent}" flood-opacity="0.95"/>
+      <feDropShadow dx="0" dy="0" stdDeviation="22" flood-color="${accent}" flood-opacity="0.45"/>
+    </filter>
+    <filter id="txtGlow" x="-20%" y="-40%" width="140%" height="180%"><feDropShadow dx="0" dy="0" stdDeviation="4" flood-color="${W.slime}" flood-opacity="0.8"/></filter>
+  </defs>
+  ${bgUrl ? `<image href="${bgUrl}" x="0" y="0" width="${W.width}" height="${W.height}" preserveAspectRatio="xMidYMid slice"/>` : `<rect width="${W.width}" height="${W.height}" fill="${W.bg}"/>`}
+  <rect width="${W.width}" height="${W.height}" fill="url(#scrim)"/>
+  <rect x="20" y="20" width="${W.width - 40}" height="${W.height - 40}" rx="34" fill="none" stroke="${accent}" stroke-width="4" opacity="0.5"/>
+  ${art}
+  <rect x="${artX}" y="${artY}" width="${artS}" height="${artS}" rx="30" fill="none" stroke="${accent}" stroke-width="5" opacity="0.85" filter="url(#bigGlow)"/>
+  <text x="${colX}" y="196" font-family="${W.fontFamily}" font-size="44" font-weight="900" fill="${W.slime}" filter="url(#txtGlow)">www.SlimeWire.org</text>
+  <text x="${colX}" y="226" font-family="${W.fontFamily}" font-size="26" font-weight="800" fill="${W.muted}" letter-spacing="6">PNL CARD</text>
+  <g filter="url(#bigGlow)"><text x="${colX}" y="358" font-family="${W.fontFamily}" font-size="168" font-weight="900" fill="url(#bigFill)" letter-spacing="-2">${escapeSvg(big)}</text></g>
+  <text x="${colX}" y="420" font-family="${W.fontFamily}" font-size="42" font-weight="900" fill="${W.white}">${symbol} <tspan fill="${W.muted}" font-size="30">/ ${name}</tspan></text>
+  <text x="${colX}" y="462" font-family="${W.fontFamily}" font-size="36" font-weight="900" fill="${accent}">${win ? "Profit +" : "Loss -"}${escapeSvg(sol4(Math.abs(profit)))} SOL</text>
+  <text x="${colX}" y="500" font-family="${W.fontFamily}" font-size="26" font-weight="700" fill="${W.muted}">Spent ${escapeSvg(sol4(spent))} SOL   |   Received ${escapeSvg(sol4(received))} SOL</text>
+  <text x="${colX}" y="534" font-family="${W.fontFamily}" font-size="26" font-weight="700" fill="${W.muted}">Held ${escapeSvg(held)}${mc ? `   |   ${win ? "Peak " : ""}MC ${escapeSvg(formatUsdCompact(mc))}` : ""}</text>
+  ${topBand}${bottomBand}
+</svg>`;
+  return sharp(Buffer.from(svg)).png().toBuffer();
+}
+
+// Public entry: enrich autopilot win/loss data with token name/image/MC, then render.
 async function renderAutopilotPnlCard(d = {}) {
-  const toLamports = (sol) => { try { return BigInt(Math.max(0, Math.round((Number(sol) || 0) * 1e9))); } catch { return 0n; } };
-  const row = {
-    tokenMint: d.mint || "",
-    spent: toLamports(d.costSol),
-    received: toLamports(d.receivedSol),
-    firstBuyAt: d.openedAt || null,
-    lastSellAt: d.closedAt || d.at || null
-  };
-  const metadata = { symbol: d.symbol, name: "", imageUrl: "", marketCap: d.peakMc || d.entryMc, fdv: d.peakMc || d.entryMc, priceChange: null };
+  const enriched = { ...d };
   try {
     const m = await getDexTokenMetadata(d.mint).catch(() => null);
     if (m) {
-      metadata.name = m.name || metadata.name;
-      metadata.imageUrl = m.imageUrl || m.avatarUrl || "";
-      metadata.marketCap = Number(m.marketCap || m.fdv) || metadata.marketCap;
-      metadata.priceChange = m.priceChange || null;
+      if (!enriched.name) enriched.name = m.name || "";
+      if (!enriched.imageUrl) enriched.imageUrl = m.imageUrl || m.avatarUrl || "";
+      if (!enriched.peakMc && !enriched.entryMc) enriched.peakMc = Number(m.marketCap || m.fdv) || 0;
     }
   } catch {}
-  return renderPnlCard(row, metadata);
+  return renderSlimeCard(enriched);
 }
 
 // Post a big-win PnL card to the channel + opted-in groups. Looks like a normal

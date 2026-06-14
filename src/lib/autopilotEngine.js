@@ -91,12 +91,16 @@ export function autoTune(state, nowMs) {
   const goodRate = peaks.filter((p) => p >= 40).length / peaks.length;
   const bigRate = peaks.filter((p) => p >= 100).length / peaks.length;
   const rugRate = rugs.length ? rugs.filter(Boolean).length / rugs.length : 0;
+  // tape sets selectivity + bet size AND how hard we throttle entries. The cold
+  // throttle is the fix for "machine-gunning a dead tape into 100+ fee-bleed
+  // losses": when rugs dominate we widen the gap between entries and cap how many
+  // positions ride at once, so a runnerless tape can't drain the wallet via churn.
   if (rugRate > 0.45 && goodRate < 0.12) {
-    state.tune = { scoreBonus: 6, sizeMult: 0.7, tape: "COLD" };        // genuinely dead — pull back
+    state.tune = { scoreBonus: 6, sizeMult: 0.7, tape: "COLD", maxOpenCap: 2, entryGapMs: 15000, perCycle: 1 };
   } else if (goodRate >= 0.3 || bigRate >= 0.15) {
-    state.tune = { scoreBonus: -2, sizeMult: 1.3, tape: "HOT" };        // tape producing wins — press
+    state.tune = { scoreBonus: -2, sizeMult: 1.3, tape: "HOT", maxOpenCap: null, entryGapMs: 0, perCycle: 4 };
   } else {
-    state.tune = { scoreBonus: 0, sizeMult: 1, tape: "NORMAL" };
+    state.tune = { scoreBonus: 0, sizeMult: 1, tape: "NORMAL", maxOpenCap: null, entryGapMs: 0, perCycle: 3 };
   }
   return state.tune;
 }
@@ -304,6 +308,10 @@ function freshState(opts) {
     start: opts.solBudget,
     bank: opts.solBudget,
     peak: opts.solBudget,
+    // Total-equity peak (working + already-vaulted) for the always-on bank-the-peak
+    // ratchet, so sweeping profit to the vault never looks like a giveback.
+    peakTotal: opts.solBudget,
+    lastOpenAt: 0,
     walletSol: null,
     minTradeSol: opts.minTradeSol || 0.012,
     // Per-trade HARD ceiling — caps risk per bet so a rug can't gut the wallet.
@@ -341,7 +349,7 @@ function freshState(opts) {
     recentSells: {},
     // Adaptive "tape" auto-tuner: reads recent runner/rug rate and nudges the
     // bar + bet size — press in hot tape, sit back in cold. (autoTune mutates it.)
-    tune: { scoreBonus: 0, sizeMult: 1, tape: "warming" },
+    tune: { scoreBonus: 0, sizeMult: 1, tape: "warming", maxOpenCap: null, entryGapMs: 0, perCycle: 99 },
     recentPeaks: [],
     recentRugs: [],
     lastTuneAt: 0,
@@ -567,6 +575,25 @@ export function createAutopilotEngine(deps) {
       await manageExits();
       const eq = equity(state);
       if (eq > state.peak) state.peak = eq;
+
+      // BANK-THE-PEAK RATCHET (always on, no toggle): the #1 fix for "up +12%/+20%
+      // then bled to the -20% cap". Track the TOTAL-equity peak (working + already
+      // vaulted, so vault sweeps don't look like a giveback). Once the session has
+      // peaked >= +8%, never let it give back more than HALF that gain — flatten and
+      // bank the green. (e.g. peak +20% -> locks ~+10% instead of bleeding to -20%.)
+      const totalEq = eq + (state.secured || 0);
+      if (totalEq > (state.peakTotal || state.start)) state.peakTotal = totalEq;
+      {
+        const peakGain = (state.peakTotal || state.start) - state.start;
+        if (peakGain >= state.start * 0.08) {
+          const floor = state.start + peakGain * 0.5; // give back at most half the gain
+          if (totalEq <= floor) {
+            record("info", `🔒 Locked gains: peak +${round((state.peakTotal / state.start - 1) * 100, 1)}% → banked +${round((totalEq / state.start - 1) * 100, 1)}% (don't give back a green session).`);
+            await stop("locked-gains");
+            return;
+          }
+        }
+      }
 
       // Session profit-lock: once we've made real money, don't let a green peak
       // bleed back. Stop + flatten if equity gives back `giveback` of the gain.
@@ -848,8 +875,20 @@ export function createAutopilotEngine(deps) {
       .filter((x) => !x.reject)
       .sort((a, b) => b.fs - a.fs);
 
+    // THROTTLE (built-in anti-churn): space out entries and cap how many ride at
+    // once based on tape. Cold tape -> ~1 entry / 15s, max 2 open; normal -> 1 / 5s;
+    // hot -> press (3 per cycle, no gap). This is what stops the 100+ fee-bleed
+    // losses in a runnerless tape without raising the entry bar (runners stay in).
+    const tune = state.tune || {};
+    const gap = tune.entryGapMs || 0;
+    if (gap > 0 && nowMs - (state.lastOpenAt || 0) < gap) return;
+    const maxNow = Math.min(state.maxOpen, tune.maxOpenCap || state.maxOpen);
+    const perCycle = Math.max(1, tune.perCycle || 1);
+    let openedThisCycle = 0;
+
     for (const cand of scored) {
       if (state.stopped || now() >= state.endAt) break; // never open after a stop/timer
+      if (state.open.length >= maxNow) break;            // tape-aware concurrent cap
       // Dev-reputation skip: avoid wallets that have rugged us repeatedly with no
       // runner to show for it (the one rug signal you CAN read — the dev's history).
       const dev = getDevWallet(cand.r.tokenMint);
@@ -864,6 +903,9 @@ export function createAutopilotEngine(deps) {
       let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv, state.maxTradeSol));
       if (!canOpen(state, size)) break;
       await openPosition(cand.r, size, cand.fs, dev, rep);
+      state.lastOpenAt = now();
+      openedThisCycle += 1;
+      if (openedThisCycle >= perCycle) break;            // don't machine-gun the whole feed at once
     }
   }
 

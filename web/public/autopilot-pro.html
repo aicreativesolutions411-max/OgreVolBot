@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="robots" content="noindex, nofollow" />
+<title>SlimeWire Auto · Pro</title>
+<style>
+  :root{ --bg:#05080a; --card:rgba(10,18,14,0.66); --line:rgba(141,255,90,0.18); --green:#8dff5a; --green2:#27e06a; --dim:#9fb6a8; --warn:#ff6b6b; --gold:#ffd45a; --ink:#eafff0; }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;}
+  body{min-height:100vh;color:var(--ink);background:#04070a;
+    font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    padding:0 0 40px;max-width:540px;margin:0 auto;position:relative;overflow-x:hidden;}
+
+  /* ---------------- LIVING SCENE ---------------- */
+  .stage{position:relative;width:100%;aspect-ratio:3/4;overflow:hidden;isolation:isolate;
+    background:#04070a url('/assets/slimewire/auto/reactor.jpg') center/cover no-repeat;
+    border-bottom:1px solid var(--line);}
+  .stage .bg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0;}
+  .stage::after{content:"";position:absolute;inset:0;pointer-events:none;z-index:1;
+    background:linear-gradient(180deg,rgba(4,7,10,.45) 0%,rgba(4,7,10,0) 22%,rgba(4,7,10,0) 60%,rgba(4,7,10,.85) 100%);}
+  /* reactor core glow over the ogre's chest */
+  .core{position:absolute;left:45%;top:52%;width:40%;aspect-ratio:1;transform:translate(-50%,-50%);z-index:2;
+    border-radius:50%;pointer-events:none;mix-blend-mode:screen;
+    background:radial-gradient(circle, rgba(141,255,90,.55) 0%, rgba(39,224,106,.28) 32%, rgba(39,224,106,0) 68%);
+    opacity:.5;filter:blur(2px);transition:opacity .5s, background .8s;}
+  body[data-state=idle] .core{animation:corePulse 5.5s ease-in-out infinite;opacity:.42;}
+  body[data-state=activating] .core{animation:coreSurge 1.7s ease-out;opacity:1;}
+  body[data-state=running] .core{animation:corePulse 2.1s ease-in-out infinite;opacity:.9;}
+  body.loss[data-state=running] .core{background:radial-gradient(circle, rgba(255,150,90,.5) 0%, rgba(255,107,107,.25) 34%, rgba(255,107,107,0) 68%);}
+  @keyframes corePulse{0%,100%{transform:translate(-50%,-50%) scale(.92);opacity:.45;}50%{transform:translate(-50%,-50%) scale(1.06);opacity:.95;}}
+  @keyframes coreSurge{0%{transform:translate(-50%,-50%) scale(.6);opacity:.2;}55%{transform:translate(-50%,-50%) scale(1.3);opacity:1;}100%{transform:translate(-50%,-50%) scale(1.05);opacity:.9;}}
+
+  /* energy pulses travelling from core up into the screen (running only) */
+  .spark{position:absolute;width:9px;height:9px;border-radius:50%;pointer-events:none;opacity:0;z-index:2;
+    background:radial-gradient(circle,#dfffce,#8dff5a 55%,rgba(141,255,90,0) 70%);filter:blur(.4px);}
+  body[data-state=running] .spark{animation:sparkUp 1.6s linear infinite;}
+  .spark.s2{animation-delay:.55s;}.spark.s3{animation-delay:1.05s;}
+  @keyframes sparkUp{0%{left:44%;top:53%;opacity:0;transform:scale(.6);}15%{opacity:1;}70%{opacity:.9;}100%{left:64%;top:30%;opacity:0;transform:scale(1.1);}}
+
+  /* floating embers/spores */
+  .ember{position:absolute;bottom:8%;width:4px;height:4px;border-radius:50%;background:rgba(141,255,90,.8);opacity:0;pointer-events:none;filter:blur(.3px);z-index:2;}
+  .ember{animation:ember 7s linear infinite;}
+  .ember:nth-child(1){left:24%;animation-delay:0s;}.ember:nth-child(2){left:38%;animation-delay:2.2s;}
+  .ember:nth-child(3){left:58%;animation-delay:1.1s;}.ember:nth-child(4){left:70%;animation-delay:3.4s;}
+  .ember:nth-child(5){left:50%;animation-delay:4.6s;}.ember:nth-child(6){left:82%;animation-delay:5.5s;}
+  @keyframes ember{0%{transform:translateY(0) scale(1);opacity:0;}12%{opacity:.85;}100%{transform:translateY(-260px) scale(.3);opacity:0;}}
+
+  /* the HUD "screen" pinned onto the dark glass panel in the art (top-right) */
+  .hud-screen{position:absolute;top:20.5%;right:23.5%;width:20%;min-height:16%;z-index:3;
+    background:linear-gradient(160deg,rgba(6,14,9,.7),rgba(6,14,9,.32));
+    border:1px solid rgba(141,255,90,.3);border-radius:8px;padding:7px 8px;
+    box-shadow:0 0 22px rgba(39,224,106,.22), inset 0 0 18px rgba(39,224,106,.1);overflow:hidden;backdrop-filter:blur(1px);}
+  .hud-screen .lbl{font-size:7px;letter-spacing:.6px;color:var(--dim);text-transform:uppercase;}
+  .hud-screen .pnl{font-size:clamp(15px,4.6vw,20px);font-weight:900;line-height:1.05;font-variant-numeric:tabular-nums;letter-spacing:-.5px;}
+  .hud-screen .eq{font-size:9px;color:var(--ink);font-variant-numeric:tabular-nums;opacity:.9;}
+  .hud-screen .scan{position:absolute;left:0;right:0;height:30%;top:-30%;pointer-events:none;
+    background:linear-gradient(180deg,rgba(141,255,90,0),rgba(141,255,90,.16),rgba(141,255,90,0));}
+  body[data-state=running] .hud-screen .scan{animation:scan 2.6s linear infinite;}
+  body[data-state=running] .hud-screen{border-color:rgba(141,255,90,.6);box-shadow:0 0 30px rgba(39,224,106,.45), inset 0 0 22px rgba(39,224,106,.2);}
+  @keyframes scan{0%{top:-30%;}100%{top:100%;}}
+
+  /* status LED */
+  .led{position:absolute;top:8px;right:8px;width:8px;height:8px;border-radius:50%;background:#3a5a44;box-shadow:0 0 0 rgba(0,0,0,0);}
+  body[data-state=running] .led{background:var(--green);box-shadow:0 0 10px var(--green);animation:blink 1.4s ease-in-out infinite;}
+  body.loss[data-state=running] .led{background:var(--warn);box-shadow:0 0 10px var(--warn);}
+  @keyframes blink{0%,100%{opacity:1;}50%{opacity:.35;}}
+
+  /* the vertical profit GAUGE pinned onto the green tube in the art */
+  .gauge{position:absolute;top:22.5%;right:16%;width:4%;height:30%;border-radius:20px;overflow:hidden;z-index:3;
+    background:rgba(3,8,5,.55);border:1px solid rgba(141,255,90,.3);box-shadow:inset 0 0 10px rgba(0,0,0,.6);}
+  .gauge .fill{position:absolute;left:0;right:0;bottom:0;height:8%;
+    background:linear-gradient(180deg,#bfff8f,#27e06a);box-shadow:0 0 14px rgba(39,224,106,.7);
+    transition:height .9s cubic-bezier(.4,1.3,.5,1), background .6s;}
+  body.loss .gauge .fill{background:linear-gradient(180deg,#ffd1a0,#ff6b6b);box-shadow:0 0 14px rgba(255,107,107,.6);}
+  body[data-state=running] .gauge .fill{animation:gaugeGlow 2s ease-in-out infinite;}
+  @keyframes gaugeGlow{0%,100%{filter:brightness(1);}50%{filter:brightness(1.35);}}
+
+  .stage-cap{position:absolute;left:0;right:0;bottom:0;padding:14px 18px 16px;z-index:4;}
+  .stage-cap h1{font-size:23px;margin:0;font-weight:900;letter-spacing:.3px;text-shadow:0 2px 16px rgba(0,0,0,.8);}
+  .stage-cap .sub{color:#cfe9d6;font-size:12px;margin-top:2px;text-shadow:0 1px 8px rgba(0,0,0,.9);}
+  .tier{position:absolute;top:12px;left:12px;z-index:5;font-size:11px;font-weight:800;padding:5px 11px;border-radius:99px;
+    background:rgba(4,7,10,.55);color:var(--green);border:1px solid var(--line);backdrop-filter:blur(4px);letter-spacing:.5px;}
+  .snd{position:absolute;top:10px;right:12px;z-index:6;width:36px;height:36px;padding:0;font-size:16px;border-radius:50%;
+    background:rgba(4,7,10,.6);color:var(--green);border:1px solid var(--line);backdrop-filter:blur(4px);line-height:1;}
+
+  /* ---------------- CONTROL DECK ---------------- */
+  .wrap{padding:16px;}
+  .card{background:var(--card);backdrop-filter:blur(10px);border:1px solid var(--line);border-radius:18px;padding:16px;margin-bottom:14px;
+    box-shadow:0 12px 40px rgba(0,0,0,.4);position:relative;overflow:hidden;}
+  .card::before{content:"";position:absolute;left:0;right:0;top:0;height:1px;background:linear-gradient(90deg,transparent,rgba(141,255,90,.6),transparent);}
+  label{display:block;font-size:11px;color:var(--dim);margin:10px 0 5px;text-transform:uppercase;letter-spacing:.6px;font-weight:600;}
+  select,input{width:100%;background:#08110b;color:var(--ink);border:1px solid var(--line);border-radius:12px;padding:12px;font-size:15px;}
+  input[type=text]{font-family:ui-monospace,Menlo,monospace;font-size:12.5px;}
+  .row{display:flex;gap:10px;}.row>div{flex:1;}
+  button{width:100%;border:0;border-radius:14px;padding:15px;font-size:16px;font-weight:800;cursor:pointer;
+    transition:transform .06s, box-shadow .2s;position:relative;overflow:hidden;}
+  button:active{transform:scale(.985);}
+  .b-go{background:linear-gradient(180deg,var(--green),var(--green2));color:#04210f;box-shadow:0 8px 28px rgba(39,224,106,.4);}
+  .b-go:hover{box-shadow:0 8px 36px rgba(39,224,106,.6);}
+  .b-stop{background:#2a1414;color:#ffb3b3;border:1px solid #5a2222;}
+  .b-ghost{background:#08110b;color:var(--green);border:1px solid var(--line);}
+  button.loading{pointer-events:none;color:transparent !important;}
+  button.loading::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.25),transparent);
+    background-size:200% 100%;animation:shimmer 1s linear infinite;}
+  button.flash-ok{animation:flashOk .6s ease;}
+  button.flash-err{animation:flashErr .5s ease;}
+  @keyframes shimmer{0%{background-position:200% 0;}100%{background-position:-200% 0;}}
+  @keyframes flashOk{0%{box-shadow:0 0 0 0 rgba(141,255,90,.7);}100%{box-shadow:0 0 0 18px rgba(141,255,90,0);}}
+  @keyframes flashErr{0%,100%{transform:translateX(0);}20%{transform:translateX(-6px);}60%{transform:translateX(6px);}}
+  .ripple{position:absolute;border-radius:50%;background:rgba(255,255,255,.35);transform:scale(0);animation:ripple .55s ease-out;pointer-events:none;}
+  @keyframes ripple{to{transform:scale(2.6);opacity:0;}}
+  .chk{display:flex;align-items:center;gap:10px;margin:12px 0;font-size:14px;text-transform:none;letter-spacing:0;color:var(--ink);}
+  .chk input{width:20px;height:20px;accent-color:var(--green);}
+  .big{font-size:38px;font-weight:900;font-variant-numeric:tabular-nums;letter-spacing:-1px;}
+  .up{color:var(--green);}.down{color:var(--warn);}
+  .stat{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(141,255,90,.08);font-size:14px;}
+  .stat:last-child{border:0;}.stat b{font-variant-numeric:tabular-nums;}
+  .pos{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(141,255,90,.08);font-size:13.5px;}
+  .addr{font-family:ui-monospace,Menlo,monospace;font-size:12px;word-break:break-all;color:var(--green2);background:#08110b;border:1px dashed var(--line);border-radius:11px;padding:11px;}
+  .muted{color:var(--dim);font-size:12px;}.warn{color:var(--warn);font-size:12.5px;}.ok{color:var(--green);}
+  .hidden{display:none;}
+  .hero{font-size:13px;color:var(--dim);}
+  .price{font-size:34px;font-weight:900;color:var(--green);}
+  .trial-pill{display:flex;align-items:center;justify-content:center;gap:8px;background:rgba(39,224,106,.1);border:1px solid var(--line);
+    border-radius:14px;padding:10px;margin-bottom:14px;font-weight:800;color:var(--green);font-variant-numeric:tabular-nums;}
+  #endModal{position:fixed;inset:0;background:rgba(0,0,0,.82);backdrop-filter:blur(6px);z-index:50;display:flex;align-items:center;justify-content:center;padding:18px;}
+  #endModal.hidden{display:none;}
+  @media (prefers-reduced-motion: reduce){.core,.spark,.ember,.hud-screen .scan,.gauge .fill,.led{animation:none !important;}}
+</style>
+</head>
+<body data-state="idle">
+  <!-- ===== LIVING REACTOR STAGE ===== -->
+  <div class="stage" id="stage">
+    <video class="bg" id="bgVid" autoplay muted loop playsinline preload="auto" poster="/assets/slimewire/auto/reactor.jpg">
+      <source src="/assets/slimewire/auto/reactor.mp4" type="video/mp4">
+    </video>
+    <span class="tier" id="tierPill">PRO</span>
+    <button class="snd" id="soundBtn" title="Sound on/off">🔊</button>
+    <div class="core" id="core"></div>
+    <span class="spark s1"></span><span class="spark s2"></span><span class="spark s3"></span>
+    <span class="ember"></span><span class="ember"></span><span class="ember"></span>
+    <span class="ember"></span><span class="ember"></span><span class="ember"></span>
+    <div class="hud-screen">
+      <span class="led" id="led"></span>
+      <div class="scan"></div>
+      <div class="lbl">Account value</div>
+      <div class="pnl" id="hudPnl">—</div>
+      <div class="eq" id="hudEq">— SOL</div>
+    </div>
+    <div class="gauge"><div class="fill" id="gaugeFill"></div></div>
+    <div class="stage-cap">
+      <div class="sub" id="stageSub">The ogre powers the swamp. Fund it, wake it, watch it hunt.</div>
+    </div>
+  </div>
+
+  <div class="wrap">
+  <div id="boot" class="card">Connecting…</div>
+
+  <!-- SUBSCRIBE -->
+  <div id="subView" class="hidden">
+    <div class="card" style="text-align:center">
+      <div class="hero">Unlock SlimeWire Auto</div>
+      <div class="price" id="priceLbl">— SOL<span style="font-size:16px;color:var(--dim)">/mo</span></div>
+      <div class="muted" id="subStatus" style="margin:6px 0 14px">Send the amount below to your unlock address — access activates automatically (~1 min) and lasts 30 days.</div>
+      <label>Your unlock address — send <b id="priceInline">—</b> SOL here</label>
+      <div class="addr" id="payAddr">getting your address…</div>
+      <button class="b-ghost" id="copyPay" style="margin-top:10px">Copy address</button>
+      <div class="muted" style="margin-top:10px">It auto-detects the payment and unlocks. This page refreshes itself.</div>
+    </div>
+    <div class="card">
+      <label>Have an access code?</label>
+      <div class="muted" style="margin-bottom:8px">Got a temporary pass? Enter it to start trading right away.</div>
+      <input type="text" id="redeemCode" placeholder="e.g. 9F3A2C71" autocomplete="off" style="text-transform:uppercase"/>
+      <button class="b-go" id="redeemBtn" style="margin-top:10px">Unlock with code</button>
+      <div id="redeemMsg" class="muted" style="margin-top:8px"></div>
+    </div>
+  </div>
+
+  <!-- APP -->
+  <div id="app" class="hidden">
+    <div id="trialBanner" class="trial-pill hidden">⏳ Trial pass · <span id="trialLeft">—</span></div>
+
+    <!-- WALLET -->
+    <div class="card">
+      <label>Trading wallet</label>
+      <select id="walletSel"></select>
+      <div class="row" style="margin-top:10px">
+        <div><button class="b-ghost" id="newWallet">+ New</button></div>
+        <div><button class="b-ghost" id="refresh">↻ Balance</button></div>
+        <div><button class="b-ghost" id="backup">⬇ Back up</button></div>
+      </div>
+      <div id="walletInfo" class="hidden" style="margin-top:12px">
+        <label>Deposit address — fund it with SOL to trade</label>
+        <div class="addr" id="walletAddr">—</div>
+        <div style="margin-top:6px"><button class="b-ghost" id="copyWallet">Copy</button></div>
+        <div class="stat" style="margin-top:8px"><span>Balance</span><b id="walletBal">—</b></div>
+        <div class="warn" style="margin-top:6px">⚠️ Only deposit what you'll risk. Memecoin trading is high-risk; you can lose it.</div>
+      </div>
+      <div id="msg" class="muted" style="margin-top:8px"></div>
+    </div>
+
+    <!-- SETTINGS (click-and-go) -->
+    <div class="card">
+      <div class="row">
+        <div><label>Amount to trade (SOL)</label><input type="number" id="amt" value="0.5" min="0.05" step="0.05"/></div>
+        <div><label>Run for</label>
+          <select id="mins"><option value="60">1 hour</option><option value="180">3 hours</option><option value="360">6 hours</option><option value="720" selected>12 hours</option><option value="1440">24 hours</option></select>
+        </div>
+      </div>
+      <div class="row">
+        <div><label>Max per trade (SOL)</label><input type="number" id="maxTrade" value="0.08" min="0.01" step="0.01"/></div>
+        <div><label>Trades at once</label><input type="number" id="maxOpen" value="3" min="1" max="8" step="1"/></div>
+      </div>
+      <label>🏦 Safe wallet — profits auto cash-out here</label>
+      <input type="text" id="vaultDest" placeholder="your Phantom address (a different wallet)" autocomplete="off"/>
+      <div class="muted" style="margin-top:6px">Everything else is handled for you — it sizes, banks gains, tightens up in bad markets, and stops itself if a green session starts slipping.</div>
+      <button id="startBtn" class="b-go" style="margin-top:14px">⚡ Wake the ogre — start trading</button>
+      <div id="startMsg" class="muted" style="margin-top:8px"></div>
+    </div>
+
+    <!-- DASHBOARD -->
+    <div id="dash" class="card hidden">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start">
+        <div><span class="muted">Account value</span><div class="big" id="equity">—</div></div>
+        <div style="text-align:right"><div id="pnl" class="big">—</div><div class="muted" id="run">—</div></div>
+      </div>
+      <div class="stat"><span>Wallet SOL</span><b id="wallet">—</b></div>
+      <div class="stat"><span>🏦 Cashed out (safe)</span><b id="secured">—</b></div>
+      <div class="stat"><span>Wins / Losses</span><b id="wl">—</b></div>
+      <div class="stat"><span>Ends in</span><b id="ends">—</b></div>
+      <label style="margin-top:12px">Live positions</label>
+      <div id="positions"><div class="muted">none</div></div>
+      <div id="winsWrap" class="hidden" style="margin-top:12px">
+        <label>🏆 Big wins — tap to download</label>
+        <div id="wins"></div>
+      </div>
+      <button id="stopBtn" class="b-stop" style="margin-top:14px">■ Stop &amp; cash out</button>
+    </div>
+    <div class="muted" style="text-align:center">Pro access · <span id="expLbl">active</span> · powered by SlimeWire</div>
+  </div>
+  </div><!-- /wrap -->
+
+  <!-- TRIAL-ENDED MODAL -->
+  <div id="endModal" class="hidden">
+    <div class="card" style="max-width:440px;width:100%;border-color:var(--green)">
+      <div style="text-align:center"><div class="hero">Your trial pass is used up</div>
+      <div class="muted" style="margin:6px 0 12px">Everything was sold back to SOL and is safe in your wallet. Withdraw it anywhere, or unlock full access to keep trading.</div></div>
+      <div class="stat"><span>Your SOL</span><b id="endBal">—</b></div>
+      <label style="margin-top:12px">Withdraw to a wallet</label>
+      <input type="text" id="endDest" placeholder="your wallet address (Phantom)" autocomplete="off"/>
+      <button class="b-go" id="endWithdraw" style="margin-top:10px">Send my SOL out</button>
+      <div id="endMsg" class="muted" style="margin-top:8px"></div>
+      <div style="border-top:1px solid var(--line);margin:14px 0"></div>
+      <div class="muted" style="text-align:center">Or keep the bot running:</div>
+      <button class="b-ghost" id="endPay" style="margin-top:8px">Unlock full access (<span id="endPrice">—</span> SOL / 30 days)</button>
+    </div>
+  </div>
+
+<script>
+const API=(location.hostname.includes("onrender.com")||location.hostname==="localhost"||location.hostname==="127.0.0.1")?"":"https://ogrevolbot.onrender.com";
+let token=""; try{token=localStorage.getItem("ogreWebToken")||"";}catch{}
+let wallets=[], WINS=[];
+const $=(id)=>document.getElementById(id);
+function hdr(){const h={"content-type":"application/json"};if(token)h.authorization="Bearer "+token;return h;}
+async function api(p,o={}){let r;try{r=await fetch(API+p,{...o,headers:hdr()});}catch{return{ok:false,error:"network"};}return r.json().catch(()=>({ok:false,error:"bad-json"}));}
+async function ensureAccount(){
+  if(token){const a=await api("/api/web/autopilot/access",{method:"POST",body:JSON.stringify({})});if(a&&a.ok)return a;}
+  const s=await api("/api/web/signup",{method:"POST",body:JSON.stringify({})});
+  if(s&&s.token){token=s.token;try{localStorage.setItem("ogreWebToken",token);}catch{}}
+  return api("/api/web/autopilot/access",{method:"POST",body:JSON.stringify({})});
+}
+function dl(name,dataUrl){const a=document.createElement("a");a.href=dataUrl;a.download=name;document.body.appendChild(a);a.click();a.remove();}
+
+/* ---- living scene control: states + button feedback ---- */
+let activatingUntil=0;
+function setState(st){document.body.dataset.state=st;}
+function applyScene(s){
+  const running=Boolean(s&&s.running);
+  const pnl=(s&&typeof s.pnlPct==="number")?s.pnlPct:null;
+  document.body.classList.toggle("loss", pnl!=null && pnl<0);
+  if(Date.now()<activatingUntil){setState("activating");}
+  else setState(running?"running":"idle");
+  // gauge: map pnl -20%..+120% -> 6%..100%
+  const pct = pnl==null?6:Math.max(6,Math.min(100, 6 + ((pnl+20)/140)*94));
+  $("gaugeFill").style.height=pct+"%";
+  $("hudPnl").innerHTML=fmtPnl(pnl);
+  if(s&&s.equity!=null)$("hudEq").textContent=s.equity.toFixed(3)+" SOL";
+  setAmbient(ambientForState());
+}
+// global ripple on any button press
+document.addEventListener("click",(e)=>{
+  const b=e.target.closest("button"); if(!b)return;
+  const r=document.createElement("span"); r.className="ripple";
+  const rect=b.getBoundingClientRect(); const d=Math.max(rect.width,rect.height);
+  r.style.width=r.style.height=d+"px";
+  r.style.left=(e.clientX-rect.left-d/2)+"px"; r.style.top=(e.clientY-rect.top-d/2)+"px";
+  b.appendChild(r); setTimeout(()=>r.remove(),560);
+  if(b.id!=="soundBtn"){ blip("click"); } // a press tick on every control
+  ensureAmbient(); // first user gesture unlocks the ambient loop
+},true);
+// wrap an async button action with loading shimmer + ok/err flash
+async function withBtn(btn,fn){
+  if(!btn)return fn();
+  btn.classList.add("loading");
+  try{const res=await fn(); btn.classList.remove("loading");
+    btn.classList.add("flash-ok"); setTimeout(()=>btn.classList.remove("flash-ok"),650); blip("ok"); return res;}
+  catch(err){btn.classList.remove("loading"); btn.classList.add("flash-err"); setTimeout(()=>btn.classList.remove("flash-err"),520); blip("err"); throw err;}
+}
+
+/* ---- SOUND: ambient loop + surge + synth UI blips, all behind a mute toggle ---- */
+let soundOn=true; try{soundOn=localStorage.getItem("apSound")!=="off";}catch{}
+let audioCtx=null, ambientStarted=false, ambRAF=0;
+function ac(){ if(!audioCtx){try{audioCtx=new (window.AudioContext||window.webkitAudioContext)();}catch{}} return audioCtx; }
+const ambient=new Audio("/assets/slimewire/auto/reactor-ambient.mp3"); ambient.loop=true; ambient.volume=0; ambient.preload="auto";
+const surgeSfx=new Audio("/assets/slimewire/auto/surge.mp3"); surgeSfx.volume=0.55; surgeSfx.preload="auto";
+function ensureAmbient(){ if(soundOn && !ambientStarted){ ambient.play().then(()=>{ambientStarted=true;}).catch(()=>{}); } }
+function setAmbient(target){
+  if(!soundOn){ambient.volume=0;return;}
+  ensureAmbient();
+  cancelAnimationFrame(ambRAF);
+  const step=()=>{ const d=target-ambient.volume; if(Math.abs(d)<0.015){ambient.volume=Math.max(0,Math.min(1,target));return;}
+    ambient.volume=Math.max(0,Math.min(1,ambient.volume+d*0.12)); ambRAF=requestAnimationFrame(step); };
+  step();
+}
+function ambientForState(){ const st=document.body.dataset.state; return st==="running"?0.5:st==="activating"?0.55:0.12; }
+function blip(type){
+  if(!soundOn)return; const c=ac(); if(!c)return; if(c.state==="suspended")c.resume();
+  const o=c.createOscillator(), g=c.createGain(); o.connect(g); g.connect(c.destination); const t=c.currentTime;
+  if(type==="ok"){o.type="triangle";o.frequency.setValueAtTime(523,t);o.frequency.exponentialRampToValueAtTime(880,t+.12);}
+  else if(type==="err"){o.type="sawtooth";o.frequency.setValueAtTime(240,t);o.frequency.exponentialRampToValueAtTime(90,t+.2);}
+  else{o.type="square";o.frequency.setValueAtTime(300,t);o.frequency.exponentialRampToValueAtTime(430,t+.05);}
+  const peak=type==="click"?0.05:0.1;
+  g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(peak,t+.02); g.gain.exponentialRampToValueAtTime(0.0001,t+(type==="err"?.22:.16));
+  o.start(t); o.stop(t+.26);
+}
+function playSurge(){ if(!soundOn)return; try{surgeSfx.currentTime=0;surgeSfx.play().catch(()=>{});}catch{} }
+function updateSoundBtn(){ const b=$("soundBtn"); if(b)b.textContent=soundOn?"🔊":"🔇"; }
+$("soundBtn").addEventListener("click",(e)=>{ e.stopPropagation(); soundOn=!soundOn;
+  try{localStorage.setItem("apSound",soundOn?"on":"off");}catch{} updateSoundBtn();
+  if(!soundOn){ambient.pause();ambient.volume=0;} else {ambientStarted=false;setAmbient(ambientForState());}
+});
+updateSoundBtn();
+
+// ---- subscribe view ----
+async function showSubscribe(a){
+  $("subView").classList.remove("hidden");$("app").classList.add("hidden");
+  $("priceLbl").innerHTML=(a.priceSol||"—")+' SOL<span style="font-size:16px;color:var(--dim)">/mo</span>';
+  $("priceInline").textContent=a.priceSol||"—";
+  if(!a.subEnabled){$("payAddr").textContent="Subscriptions not enabled yet — contact the owner.";return;}
+  const d=await api("/api/web/autopilot/access",{method:"POST",body:JSON.stringify({deposit:true})});
+  $("payAddr").textContent=d.depositAddress||"could not get address — reload";
+  $("copyPay").onclick=()=>{navigator.clipboard?.writeText(d.depositAddress||"");$("copyPay").textContent="Copied ✓";setTimeout(()=>$("copyPay").textContent="Copy address",1200);};
+}
+
+// ---- app (subscribed) ----
+async function loadWallets(){
+  const r=await api("/api/web/autopilot/wallets");
+  wallets=(r&&r.wallets)?r.wallets.filter(w=>!w.isFeeWallet):[];
+  const sel=$("walletSel");sel.innerHTML="";
+  if(!wallets.length){const o=document.createElement("option");o.textContent="— create a wallet —";sel.appendChild(o);$("walletInfo").classList.add("hidden");return;}
+  for(const w of wallets){const o=document.createElement("option");o.value=w.index;o.textContent=`#${w.index} ${w.label} · ${w.balanceSol!=null?(+w.balanceSol).toFixed(3):"?"} SOL`;sel.appendChild(o);}
+  showWalletInfo();
+}
+function selWallet(){return wallets.find(w=>String(w.index)===String($("walletSel").value));}
+function showWalletInfo(){const w=selWallet();if(!w){$("walletInfo").classList.add("hidden");return;}$("walletInfo").classList.remove("hidden");$("walletAddr").textContent=w.pubkey;$("walletBal").textContent=(w.balanceSol!=null?(+w.balanceSol).toFixed(4):"?")+" SOL";}
+$("walletSel").addEventListener("change",showWalletInfo);
+$("newWallet").addEventListener("click",async()=>{await withBtn($("newWallet"),async()=>{const r=await api("/api/web/wallets/create",{method:"POST",body:JSON.stringify({label:"Auto",count:1})});if(r&&r.downloads){if(r.downloads.recoveryKeys?.text)dl(r.downloads.recoveryKeys.filename,"data:text/plain;base64,"+btoa(unescape(encodeURIComponent(r.downloads.recoveryKeys.text))));}$("msg").innerHTML='<span class="ok">Wallet created — key file downloaded, keep it safe.</span>';await loadWallets();});});
+$("refresh").addEventListener("click",()=>withBtn($("refresh"),loadWallets));
+$("backup").addEventListener("click",async()=>{await withBtn($("backup"),async()=>{const r=await api("/api/web/wallets/export",{method:"POST",body:JSON.stringify({})});if(r&&r.ok&&r.backup?.downloads?.recoveryKeys?.text){dl(r.backup.downloads.recoveryKeys.filename,"data:text/plain;base64,"+btoa(unescape(encodeURIComponent(r.backup.downloads.recoveryKeys.text))));$("msg").innerHTML='<span class="ok">Backup downloaded.</span>';}});});
+$("copyWallet").addEventListener("click",()=>{const w=selWallet();if(w){navigator.clipboard?.writeText(w.pubkey);$("copyWallet").textContent="Copied ✓";setTimeout(()=>$("copyWallet").textContent="Copy",1200);}});
+
+$("startBtn").addEventListener("click",async()=>{
+  const w=selWallet();
+  if(!w){$("startMsg").innerHTML='<span class="warn">Create + fund a wallet first.</span>';return;}
+  const body={sol:Number($("amt").value),minutes:Number($("mins").value),wallet:w.index,live:true,confirm:"LIVE",lowChurn:true,
+    maxTradeSol:Number($("maxTrade").value)||undefined, maxOpen:Number($("maxOpen").value)||undefined};
+  const safe=$("vaultDest").value.trim(); if(safe) body.vaultDestination=safe;
+  $("startMsg").textContent="Waking the ogre…";
+  try{
+    const r=await withBtn($("startBtn"),async()=>{
+      const res=await api("/api/web/autopilot/start",{method:"POST",body:JSON.stringify(body)});
+      if(!(res&&res.ok))throw new Error((res&&res.error)||"failed");
+      return res;
+    });
+    // play the power-up surge, then settle into running
+    activatingUntil=Date.now()+1700; setState("activating"); playSurge(); setAmbient(0.55);
+    $("startMsg").innerHTML='<span class="ok">Live — trading on the server. You can close this; it keeps running.</span>';
+    poll();
+  }catch(e){
+    if(String(e.message)==="trial_expired"){showEndModal();return;}
+    $("startMsg").innerHTML='<span class="warn">'+e.message+'</span>';
+  }
+});
+$("stopBtn").addEventListener("click",async()=>{await withBtn($("stopBtn"),async()=>{await api("/api/web/autopilot/stop",{method:"POST",body:JSON.stringify({})});});activatingUntil=0;setState("idle");poll();});
+
+function fmtPnl(p){const s=(p>=0?"+":"")+(p==null?"—":p.toFixed(2)+"%");return `<span class="${p>=0?'up':'down'}">${s}</span>`;}
+async function poll(){
+  const r=await api("/api/web/autopilot/status");const s=r&&r.status;if(!s)return;
+  trialRunning=Boolean(s.running);
+  if(s.stopReason==="trial_expired"){showEndModal();}
+  applyScene(s);
+  $("dash").classList.remove("hidden");
+  $("equity").textContent=(s.equity!=null?s.equity.toFixed(4):"—")+" SOL";
+  $("pnl").innerHTML=fmtPnl(s.pnlPct);
+  $("run").textContent=s.running?"running":("stopped"+(s.stopReason?" · "+s.stopReason:""));
+  $("wallet").textContent=(s.walletSol!=null?s.walletSol.toFixed(4):"—")+" SOL";
+  $("secured").textContent=(s.secured!=null?s.secured.toFixed(4):"0")+" SOL";
+  $("wl").textContent=`${s.wins||0} W / ${s.losses||0} L`;
+  const m=Math.floor((s.endsInS||0)/60);$("ends").textContent=s.running?`${m}m`:"—";
+  const pos=s.open||[];
+  $("positions").innerHTML=pos.length?pos.map(p=>`<div class="pos"><span>${p.sym}</span><b>${fmtPnl(p.movePct)}</b></div>`).join(""):'<div class="muted">none</div>';
+  WINS=s.bigWins||[];
+  if(WINS.length){$("winsWrap").classList.remove("hidden");$("wins").innerHTML=WINS.map((w,i)=>`<div class="pos"><span><b class="up">$${(w.symbol||"").replace(/[<>&]/g,"")}</b> +${Number(w.gainPct).toLocaleString()}%</span><button class="b-ghost" style="width:auto;padding:5px 11px;font-size:12px" onclick="dlWin(${i})">⬇</button></div>`).join("");}
+}
+async function dlWin(i){const w=WINS[i];if(!w)return;const r=await api("/api/web/autopilot/win-card",{method:"POST",body:JSON.stringify(w)});if(r&&r.ok&&r.png)dl(`slimewire-${(w.symbol||"win").replace(/[^a-z0-9]/gi,"")}.png`,r.png);}
+window.dlWin=dlWin;
+
+// ---- temporary access (trial pass) ----
+let LAST_ACCESS=null, trialRemaining=null, trialRunning=false, endModalShown=false;
+function fmtClock(sec){sec=Math.max(0,Math.round(sec));const m=Math.floor(sec/60),s=sec%60;return m+"m "+String(s).padStart(2,"0")+"s";}
+async function redeem(codeRaw){
+  const code=String(codeRaw||"").trim().toUpperCase();
+  if(!code){$("redeemMsg").innerHTML='<span class="warn">Enter your code.</span>';return false;}
+  $("redeemMsg").textContent="Unlocking…";
+  if(!token){await ensureAccount();} // make sure we have an identity to bind the code to
+  let ok=false;
+  await withBtn($("redeemBtn"),async()=>{
+    const r=await api("/api/web/autopilot/redeem",{method:"POST",body:JSON.stringify({code})});
+    if(r&&r.ok){ok=true;}else{throw new Error((r&&r.error)||"that code didn’t work");}
+  }).catch(e=>{$("redeemMsg").innerHTML='<span class="warn">'+e.message+'</span>';});
+  if(ok){$("redeemMsg").innerHTML='<span class="ok">Unlocked! Loading…</span>';setTimeout(()=>location.reload(),600);}
+  return ok;
+}
+$("redeemBtn").addEventListener("click",()=>redeem($("redeemCode").value));
+function setupTrial(a){
+  const t=a.trial; if(!t)return;
+  trialRemaining=t.remainingSeconds; trialRunning=false;
+  $("trialBanner").classList.remove("hidden");$("expLbl").textContent="trial pass";
+  renderTrialBanner();
+}
+function renderTrialBanner(){ if(trialRemaining==null)return; $("trialLeft").textContent=fmtClock(trialRemaining)+" left"; }
+// local 1s tick so the countdown feels live while running; server is the source of truth
+setInterval(()=>{ if(trialRemaining!=null&&trialRunning&&trialRemaining>0){trialRemaining-=1;renderTrialBanner();} },1000);
+// resync remaining time + flip to ended-state from the server every 12s
+setInterval(async()=>{
+  if(!LAST_ACCESS||LAST_ACCESS.owner||LAST_ACCESS.subscribed)return;
+  const x=await api("/api/web/autopilot/access",{method:"POST",body:JSON.stringify({})});
+  if(!x||!x.ok)return; LAST_ACCESS=x;
+  if(x.subscribed){location.reload();return;}
+  if(x.trial){trialRemaining=x.trial.remainingSeconds;renderTrialBanner();if(x.trial.expired)showEndModal();}
+},12000);
+async function showEndModal(){
+  if(endModalShown)return; endModalShown=true; trialRunning=false; activatingUntil=0; setState("idle");
+  $("trialLeft").textContent="0m 00s left";
+  const a=LAST_ACCESS||{}; $("endPrice").textContent=a.priceSol||"—";
+  // refresh balance + remember the wallet to withdraw from
+  await loadWallets();
+  const w=selWallet()||wallets[0];
+  if(w)$("endBal").textContent=(w.balanceSol!=null?(+w.balanceSol).toFixed(4):"?")+" SOL";
+  $("endModal").classList.remove("hidden");
+}
+$("endWithdraw").addEventListener("click",async()=>{
+  const dest=$("endDest").value.trim();
+  if(!dest){$("endMsg").innerHTML='<span class="warn">Enter a wallet address.</span>';return;}
+  const w=selWallet()||wallets[0];
+  if(!w){$("endMsg").innerHTML='<span class="warn">No wallet found.</span>';return;}
+  $("endMsg").textContent="Sending…";
+  try{
+    const r=await withBtn($("endWithdraw"),async()=>{
+      const res=await api("/api/web/autopilot/sweep",{method:"POST",body:JSON.stringify({wallet:w.index,destination:dest,stopFirst:false})});
+      if(!(res&&res.ok))throw new Error((res&&res.error)||"withdraw failed");
+      return res;
+    });
+    const row=r.sweep&&r.sweep.rows&&r.sweep.rows[0];$("endMsg").innerHTML='<span class="ok">✅ Sent'+(row&&row.signature?" — done":"")+'.</span>';loadWallets();
+  }catch(e){$("endMsg").innerHTML='<span class="warn">'+e.message+'</span>';}
+});
+$("endPay").addEventListener("click",()=>{ $("endModal").classList.add("hidden");$("app").classList.add("hidden");showSubscribe(LAST_ACCESS||{}); });
+
+(async function boot(){
+  const urlCode=new URLSearchParams(location.search).get("code");
+  let a=await ensureAccount();
+  if(!a||!a.ok){$("boot").innerHTML='<span class="warn">Could not connect. Reload the page.</span>';return;}
+  // A code in the URL auto-redeems for first-time visitors who aren't already in.
+  if(urlCode && !(a.owner||a.subscribed||(a.trial&&a.trial.active))){
+    const ok=await redeem(urlCode); if(ok)return; // reloads on success
+  }
+  LAST_ACCESS=a;
+  $("boot").classList.add("hidden");
+  $("tierPill").textContent=a.owner?"OWNER":"PRO";
+  const trialActive=a.trial&&a.trial.active;
+  const trialExpired=a.trial&&a.trial.expired&&!a.owner&&!a.subscribed;
+  if(a.owner||a.subscribed||trialActive){
+    if(a.expiresAt&&!trialActive){const d=Math.max(0,Math.ceil((Date.parse(a.expiresAt)-Date.now())/86400000));$("expLbl").textContent=a.owner?"owner":`${d} days left`;}
+    if(trialActive)setupTrial(a);
+    $("app").classList.remove("hidden");
+    await loadWallets();poll();setInterval(poll,1500);
+  } else if(trialExpired){
+    // had a pass, it's used up: show the app + the withdraw-or-pay modal
+    $("app").classList.remove("hidden");
+    await loadWallets();poll();setInterval(poll,1500);
+    showEndModal();
+  } else {
+    await showSubscribe(a);
+    if(urlCode)$("redeemCode").value=urlCode.toUpperCase();
+    setInterval(async()=>{const x=await api("/api/web/autopilot/access",{method:"POST",body:JSON.stringify({})});if(x&&(x.owner||x.subscribed))location.reload();},15000);
+  }
+})();
+</script>
+</body>
+</html>

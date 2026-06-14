@@ -25,3 +25,18 @@ media-out/
 
 # raw 3D model sources (too big to commit)
 /asset-source/
+
+# autopilot secrets + scratch artifacts (do not commit)
+OWNER-KEY.txt
+test-card.cjs
+*-results.txt
+_bgtmp/
+card-*.png
+preview-*.png
+demo-*.mp4
+slime-green-preview.png
+concept*.png
+v2-*.png
+v3-*.png
+ogre*.png
+vid-*.mp4
