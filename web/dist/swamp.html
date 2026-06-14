@@ -219,6 +219,9 @@
     <div class="heroes" id="heroes"></div>
     <button class="big" id="play">▶ ENTER THE SWAMP</button>
     <button class="big" id="playSurv" style="margin-top:8px;background:linear-gradient(90deg,#ff5e5e,#b06bff)">🧟 SURVIVE THE HORDE</button>
+    <button class="big" id="openShop" style="margin-top:8px;background:linear-gradient(90deg,#46e8ff,#6aa0ff)">🛠️ WORKSHOP & UPGRADES</button>
+    <div id="titleStats" style="margin-top:10px;font-size:0.82rem;font-weight:800;color:#ffe9a8"></div>
+    <div id="titleDaily" style="margin-top:4px;font-size:0.78rem;color:#9dd6ff"></div>
     <div id="best" style="color:var(--dim);margin-top:10px;font-size:0.84rem"></div>
   </div>
 
@@ -317,11 +320,21 @@
     <h2>⬆ LEVEL UP — pick a power</h2>
     <div class="upcards" id="upCards"></div>
   </div></div>
+  <!-- WORKSHOP (permanent meta upgrades) -->
+  <div class="sheet" id="shop"><div class="panel">
+    <button class="closeX" id="shopX">✕</button>
+    <h2>🛠️ Slime Workshop</h2>
+    <div class="sub" id="shopSub">Spend 🔮 relics on permanent upgrades — they boost every run.</div>
+    <div id="shopList"></div>
+  </div></div>
+
   <!-- RUN SUMMARY -->
   <div class="sheet" id="runEnd"><div class="panel" style="text-align:center">
     <h2 id="reTitle">💀 OVERRUN</h2>
     <div class="sub" id="reStats"></div>
-    <button class="big" id="reAgain" style="margin-top:10px">🧟 RUN AGAIN</button>
+    <div id="reBoard" style="margin-top:8px;font-size:0.8rem;color:var(--dim)"></div>
+    <button class="big" id="reShop" style="margin-top:10px;background:linear-gradient(90deg,#46e8ff,#6aa0ff)">🛠️ Workshop (spend 🔮)</button>
+    <button class="big" id="reAgain" style="margin-top:8px">🧟 RUN AGAIN</button>
     <button class="pAlt" id="reExit" style="margin-top:8px;border-radius:12px;padding:12px;font-weight:900;cursor:pointer;width:100%">⬅ Back to swamp</button>
   </div></div>
 
@@ -432,6 +445,7 @@ let HEROES=[]; // resolved {name,sprite,scale,req,hint}
 function buildHeroes(){ HEROES=HERO_DEFS.map(d=>({ name:d.name, sprite:d.sprite, scale:d.scale||1, req:d.req||null, hint:d.hint||"", wpn:d.wpn||"slime" }));
   try{ Object.values(OGRE).forEach(p=>img(p)); }catch(_){} // warm all ogre sprites
   try{ ["slime","triple","bomb","laser","spore","boulder","vine","acid","thunder","fan"].forEach(id=>img("/assets/slimewire/swamp/art/weapon-"+id+".png")); }catch(_){} // warm weapon art
+  try{ ["enemy-zombie","enemy-ghoul"].forEach(n=>img("/assets/slimewire/swamp/art/"+n+".png")); }catch(_){} // warm horde enemies
   try{ for(const b of BUILDINGS_DEF){ b.sprite="/assets/slimewire/swamp/buildings-hd/bld-"+b.id+".png"; img(b.sprite); } }catch(_){} }
 function heroUnlocked(h){ const r=h&&h.req; if(!r) return true;
   if(r.catches!=null && dexCount()<r.catches) return false;
@@ -771,6 +785,7 @@ function newGame(){
 }
 function tileWalkable(){ return true; }
 function buildFromFeed(){
+  if(RUN&&!RUN.over){ creatures=[]; npcs=[]; return; } // survival run: no wild coins, only the horde
   // keep up to ~14 wild creatures from the freshest uncaught rows
   const rows=feedRows.filter(r=>r&&(r.tokenMint||r.symbol));
   const want=14; const have=new Set(creatures.map(c=>c.mint));
@@ -915,7 +930,7 @@ function refreshHud(){
   const clan=store.clan?`[${store.clan}] `:"";
   const online = wsOk ? ` · 👥 ${RP.size+1} online` : "";
   const wins = store.pvpWins>0 ? ` · ⚔️ ${store.pvpWins} KO` : "";
-  checkQuests();
+  checkQuests(); try{ checkAch(); }catch(_){}
   $("quest").textContent = clan + questLine() + online + wins;
 }
 
@@ -1669,6 +1684,7 @@ $("bldX").onclick=closeBld;
 
 /* ---- title / boot ---- */
 function showTitle(){ state="title"; $("load").style.display="none"; $("start").classList.add("on");
+  try{ const st=$("start"); st.style.backgroundImage="linear-gradient(rgba(4,10,5,0.74),rgba(4,10,5,0.9)), url(/assets/slimewire/swamp/art/title-bg.jpg)"; st.style.backgroundSize="cover"; st.style.backgroundPosition="center"; }catch(_){}
   const hb=$("heroes"); hb.innerHTML=""; const list=(HEROES&&HEROES.length)?HEROES:[{name:"Ogre",sprite:null,req:null}];
   // if the saved hero is now somehow locked, fall back to a free one
   if(list[store.hero]&&!heroUnlocked(list[store.hero])){ const f=list.findIndex(h=>heroUnlocked(h)); if(f>=0) store.hero=f; }
@@ -1684,6 +1700,7 @@ function showTitle(){ state="title"; $("load").style.display="none"; $("start").
   const hc=$("herocount"); if(hc) hc.textContent=unlockedN+" / "+list.length+" ogres unlocked";
   $("best").textContent=dexCount()?("your Dex: "+dexCount()+" caught · "+(worthAvg()?worthAvg().toFixed(2)+"x worth":"")):"";
   $("mute").textContent=store.muted?"🔇":"🔊";
+  try{ checkAch(); updateTitleStats(); }catch(_){}
 }
 function enterWorld(){ $("start").classList.remove("on"); $("hud").style.display="block"; startAmbient(); newGame();
   connectWS();
@@ -1705,16 +1722,17 @@ const UPGRADES=[
   {id:"xp",   ic:"📈", n:"XP Gain +20%",    d:"Level up faster",       ap:()=>RUN.up.xpMul*=1.2}
 ];
 function nearestMobs(n){ const live=mobs.filter(m=>!m._dead); live.sort((a,b)=>(((a.x-player.x)**2+(a.y-player.y)**2)-((b.x-player.x)**2+(b.y-player.y)**2))); return live.slice(0,n); }
+const SURV_SPR=["/assets/slimewire/swamp/art/enemy-zombie.png","/assets/slimewire/swamp/art/enemy-ghoul.png"];
 function survSpawnWave(){ if(mobs.length>110) return; const t=RUN.t, lv=level(); const n=1+Math.floor(t/14)+(Math.random()<0.5?1:0);
-  for(let i=0;i<n;i++){ const ang=Math.random()*6.2832, dist=400+Math.random()*70;
-    const hp=Math.round(14+t*1.7+lv*3), dmg=Math.round(6+t*0.13), spd=48+Math.min(78,t*0.55);
-    mobs.push({ type:"z", name:"", hp, maxhp:hp, dmg, spd, r:13+Math.random()*5, drop:{}, col:"#8aff5a",
+  for(let i=0;i<n;i++){ const ang=Math.random()*6.2832, dist=340+Math.random()*90; const fast=Math.random()<0.4;
+    const hp=Math.round((fast?9:16)+t*1.7+lv*3), dmg=Math.round(6+t*0.13), spd=(fast?70:48)+Math.min(78,t*0.55);
+    mobs.push({ type:"z", name:"", hp, maxhp:hp, dmg, spd, r:(fast?11:15)+Math.random()*4, drop:{}, col:"#8aff5a",
       x:player.x+Math.cos(ang)*dist, y:player.y+Math.sin(ang)*dist, dir:"down", walkT:Math.random()*3, _mv:true, flash:0,
-      spr:{img:MOB_OGRES[(Math.random()*MOB_OGRES.length)|0]} }); } }
+      spr:{img:fast?SURV_SPR[1]:SURV_SPR[0]} }); } }
 function survBoss(){ if(mobs.length>110) return; const t=RUN.t, lv=level(); const ang=Math.random()*6.2832, dist=430;
   const hp=Math.round(220+t*7+lv*12);
   mobs.push({ type:"zboss", boss:true, name:"🧟 HORDE BOSS", hp, maxhp:hp, dmg:Math.round(12+t*0.2), spd:44, r:30, drop:{}, col:"#ff5e5e",
-    x:player.x+Math.cos(ang)*dist, y:player.y+Math.sin(ang)*dist, dir:"down", walkT:0, _mv:true, flash:0, spr:{img:MOB_OGRES[1]} });
+    x:player.x+Math.cos(ang)*dist, y:player.y+Math.sin(ang)*dist, dir:"down", walkT:0, _mv:true, flash:0, spr:{img:"/assets/slimewire/swamp/art/enemy-zombie.png"} });
   try{ showBanner("🧟 HORDE BOSS","Big one incoming — focus fire!","#ff5e5e"); sfx("boss",0.4);}catch(_){} }
 function survKill(m){ if(m._dead) return; m._dead=true; RUN.kills++;
   burst(m.x,m.y,m.col||"#8aff5a",m.boss?26:8);
@@ -1744,21 +1762,77 @@ function survStart(){ const wasRunning=(state==="world"); $("start").classList.r
   $("hud").style.display="block"; try{startAmbient();}catch(_){} newGame();
   creatures=[]; npcs=[]; mobs=[]; gems=[]; parts=[]; floats=[]; shots=[]; buildings=[];
   player.x=MAP.w*TILE/2; player.y=MAP.h*TILE/2; player.hp=player.maxhp; player.fireCd=0;
-  RUN={ t:0, xp:0, xpNext:5, lvl:1, kills:0, spawnCd:0.4, bossCd:35, over:false, up:{dmg:1,rate:1,multi:0,magnet:115,regen:0,xpMul:1} };
+  RUN={ t:0, xp:0, xpNext:5, lvl:1, kills:0, spawnCd:0.4, bossCd:35, over:false, revives:0, up:{dmg:1,rate:1,multi:0,magnet:115,regen:0,xpMul:1} };
+  try{ applyMeta(); }catch(_){}
   runPaused=false; state="world"; lastTs=performance.now(); $("runHud").classList.add("on"); refreshHud();
   try{ showBanner("🧟 SURVIVE THE HORDE","Auto-fire ON — just move & dodge!","#ff5e5e"); }catch(_){}
   if(!wasRunning) requestAnimationFrame(loop); }
-function endRun(died){ if(!RUN||RUN.over) return; RUN.over=true; runPaused=false;
+function endRun(died){ if(!RUN||RUN.over) return;
+  if(died && RUN.revives>0){ RUN.revives--; player.hp=Math.round(player.maxhp*0.6); player.iframe=2.6; runPaused=false;
+    try{ sfx("level",0.5); showBanner("😇 SECOND WIND","Revived! "+RUN.revives+" left","#9dff45"); }catch(_){} return; }
+  RUN.over=true; runPaused=false;
   const m=Math.floor(RUN.t/60), s=Math.floor(RUN.t%60), timeStr=m+":"+String(s).padStart(2,"0");
   const relics=Math.floor(RUN.kills/25)+RUN.lvl, xpGain=RUN.kills*3+RUN.lvl*20;
   store.res=store.res||{}; store.res.relic=(store.res.relic||0)+relics; store.xp=(store.xp||0)+xpGain;
-  store.survRunBest=Math.max(store.survRunBest||0, RUN.kills); save(); try{sfx("boss",0.5);}catch(_){}
+  store.survRunBest=Math.max(store.survRunBest||0, RUN.kills); store.survRuns=(store.survRuns||0)+1; save();
+  try{sfx("boss",0.5);}catch(_){}
+  try{ tryClaimDaily(RUN.t); }catch(_){} try{ checkAch(); }catch(_){} try{ submitSurvival(); showSurvBoard(); }catch(_){}
   $("runHud").classList.remove("on"); $("reTitle").textContent=died?"💀 OVERRUN":"🧟 RUN OVER";
   $("reStats").innerHTML=`Survived <b>${timeStr}</b> · <b>${RUN.kills}</b> kills · reached <b>Lv ${RUN.lvl}</b><br>+${xpGain} XP · +${relics} 🔮 relic<br>🏆 Best: ${store.survRunBest} kills`;
   $("runEnd").classList.add("on"); }
 $("playSurv").onclick=survStart;
 $("reAgain").onclick=survStart;
 $("reExit").onclick=()=>{ RUN=null; gems=[]; mobs=[]; $("runEnd").classList.remove("on"); $("runHud").classList.remove("on"); state="title"; $("hud").style.display="none"; showTitle(); };
+
+/* ===================== META: Workshop · Achievements · Daily · Leaderboard ===================== */
+const META_UPS=[
+  {id:"hp",    ic:"❤️", n:"Vitality",     d:"+25 max HP each level",     max:8, cost:l=>3+l*2},
+  {id:"dmg",   ic:"💥", n:"Might",        d:"+10% damage each level",    max:8, cost:l=>4+l*3},
+  {id:"rate",  ic:"⚡", n:"Haste",        d:"+8% fire rate each level",  max:6, cost:l=>4+l*3},
+  {id:"spd",   ic:"👢", n:"Swiftness",    d:"+6% move speed each level", max:6, cost:l=>3+l*2},
+  {id:"magnet",ic:"🧲", n:"Greed",        d:"+25 gem magnet each level", max:6, cost:l=>2+l*2},
+  {id:"revive",ic:"😇", n:"Second Wind",  d:"Revive once per run/level", max:2, cost:l=>12+l*16}
+];
+function metaLvl(id){ return (store.meta&&store.meta[id])||0; }
+function relicsHave(){ return (store.res&&store.res.relic)||0; }
+function openShop(){ buildShop(); $("shop").classList.add("on"); }
+function buildShop(){ const list=$("shopList"); list.innerHTML=""; $("shopSub").innerHTML=`You have <b style="color:var(--gold)">${relicsHave()} 🔮</b> — permanent upgrades boost <i>every</i> run.`;
+  META_UPS.forEach(u=>{ const lv=metaLvl(u.id), maxed=lv>=u.max, cost=u.cost(lv), can=(!maxed&&relicsHave()>=cost);
+    const d=document.createElement("div"); d.className="upcard"; d.style.cursor=maxed?"default":"pointer"; d.style.opacity=maxed?"0.7":"1";
+    d.innerHTML=`<div class="ic">${u.ic}</div><div style="flex:1"><div class="un">${u.n} <span style="color:var(--dim);font-weight:700">Lv ${lv}/${u.max}</span></div><div class="ud">${u.d}</div></div><div style="font-weight:900;color:${can?'#9dff45':'var(--dim)'}">${maxed?'MAX':cost+' 🔮'}</div>`;
+    if(!maxed) d.onclick=()=>{ if(relicsHave()<cost){ toast("Need "+cost+" 🔮 — earn relics from runs & bosses"); return; } store.res.relic-=cost; store.meta=store.meta||{}; store.meta[u.id]=lv+1; save(); try{sfx("level",0.4);}catch(_){} buildShop(); updateTitleStats(); };
+    list.appendChild(d); }); }
+function applyMeta(){ if(!player||!RUN) return;
+  player.maxhp += metaLvl("hp")*25; player.hp=player.maxhp;
+  player.spd = Math.round(player.spd*(1+metaLvl("spd")*0.06));
+  RUN.up.dmg *= 1+metaLvl("dmg")*0.10; RUN.up.rate *= 1+metaLvl("rate")*0.08;
+  RUN.up.magnet += metaLvl("magnet")*25; RUN.revives = metaLvl("revive"); }
+const ACH=[
+  {id:"firstcatch",n:"First Catch",c:()=>dexCount()>=1,r:2},
+  {id:"catch10",n:"Collector — 10 coins",c:()=>dexCount()>=10,r:5},
+  {id:"catch25",n:"Hoarder — 25 coins",c:()=>dexCount()>=25,r:10},
+  {id:"kill50",n:"Exterminator — 50 kills",c:()=>(store.kills||0)>=50,r:5},
+  {id:"surv100",n:"Horde Survivor — 100 kills/run",c:()=>(store.survRunBest||0)>=100,r:8},
+  {id:"surv500",n:"Apocalypse — 500 kills/run",c:()=>(store.survRunBest||0)>=500,r:20},
+  {id:"arena5",n:"Card Shark — 5 arena wins",c:()=>(store.arenaWins||0)>=5,r:8},
+  {id:"story1",n:"Slayer — beat a Story boss",c:()=>(store.storyBeat||0)>=1,r:8},
+  {id:"storyend",n:"SWAMP CHAMPION",c:()=>(store.storyBeat||0)>=4,r:30},
+  {id:"lvl10",n:"Veteran — reach Lv 10",c:()=>level()>=10,r:10}
+];
+function checkAch(){ store.ach=store.ach||{}; let any=false;
+  for(const a of ACH){ if(!store.ach[a.id] && a.c()){ store.ach[a.id]=1; store.res=store.res||{}; store.res.relic=(store.res.relic||0)+a.r; any=true;
+    try{ sfx("level",0.5); showBanner("🏅 ACHIEVEMENT","+"+a.r+" 🔮 · "+a.n,"#ffd24a"); }catch(_){} } }
+  if(any) save(); }
+function achCount(){ store.ach=store.ach||{}; return Object.keys(store.ach).length; }
+function todayStr(){ const d=new Date(); return d.getUTCFullYear()+"-"+(d.getUTCMonth()+1)+"-"+d.getUTCDate(); }
+function dailyClaimed(){ return store.daily && store.daily.date===todayStr() && store.daily.claimed; }
+function tryClaimDaily(secs){ if(dailyClaimed()) return; if(secs>=150){ store.daily={date:todayStr(),claimed:true}; store.res=store.res||{}; store.res.relic=(store.res.relic||0)+8; save(); try{showBanner("📅 DAILY DONE","+8 🔮 relics!","#9dd6ff");}catch(_){} } }
+function submitSurvival(){ if(!(store.survRunBest>0)) return; try{ fetch(API+"/api/web/swamp-leaderboard",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({mode:"survival",score:store.survRunBest,name:(store.lbName||"anon"),clan:store.clan||"",meta:"Lv"+level()})}).catch(()=>{}); }catch(_){} }
+async function showSurvBoard(){ try{ const r=await fetch(API+"/api/web/swamp-leaderboard?mode=survival",{cache:"no-store"}); const j=await r.json(); const rows=(j&&j.scores)||[];
+  const el=$("reBoard"); if(el) el.innerHTML = rows.length? ("🏆 Top survivors:<br>"+rows.slice(0,5).map((s,i)=>`${i+1}. ${s.name} — ${s.score} kills`).join("<br>")) : "Be the first on the leaderboard!"; }catch(_){} }
+function updateTitleStats(){ const ts=$("titleStats"); if(ts) ts.innerHTML=`🔮 ${relicsHave()} relics · 🧟 best ${store.survRunBest||0} · 🏅 ${achCount()}/${ACH.length}`;
+  const td=$("titleDaily"); if(td) td.textContent= dailyClaimed()? "📅 Daily complete ✓" : "📅 Daily: survive 2:30 in a run → +8 🔮"; }
+$("openShop").onclick=openShop; $("reShop").onclick=openShop; $("shopX").onclick=()=>$("shop").classList.remove("on");
 $("mute").onclick=()=>setMuted(!store.muted);
 $("exit").onclick=()=>{ RUN=null; runPaused=false; gems=[]; $("runHud").classList.remove("on"); $("upPick").classList.remove("on"); state="title"; $("hud").style.display="none"; showTitle(); };
 
