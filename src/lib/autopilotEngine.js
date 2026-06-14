@@ -236,9 +236,10 @@ function freshState(opts) {
     peak: opts.solBudget,
     walletSol: null,
     minTradeSol: opts.minTradeSol || 0.012,
-    // Per-trade ceiling. Low-churn bets bigger (fewer of them, higher quality);
-    // normal stays small to bound damage from frequent entries.
-    maxTradeSol: opts.maxTradeSol || Math.max(0.06, budget * (lowChurn ? 0.12 : 0.05)),
+    // Per-trade HARD ceiling — caps risk per bet so a rug can't gut the wallet.
+    // User-set value wins; otherwise a conservative budget-scaled default (low
+    // enough that even a big "whole wallet" can't auto-size into 0.3 SOL bets).
+    maxTradeSol: opts.maxTradeSol || Math.max(0.05, budget * (lowChurn ? 0.06 : 0.04)),
     // Fraction-of-cash cap per bet (low-churn concentrates capital).
     sizeFracCap: lowChurn ? 0.28 : 0.12,
     // Entry-quality bump: low-churn only takes strong setups (skips the toll on marginal coins).

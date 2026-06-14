@@ -2484,6 +2484,11 @@ async function handleWebApiRequest(request, response, requestUrl) {
           ? { giveback: 0.5, minGainPct: 5 }
           : (body.profitLock && typeof body.profitLock === "object" ? body.profitLock : null);
         const churn = (body.churn === "low" || body.lowChurn === true || body.lowChurn === "true") ? "low" : "normal";
+        // Hard per-trade ceiling the user sets — caps risk per bet regardless of
+        // wallet size (clamped to a sane 0.012–1 SOL).
+        let maxTradeSol;
+        const mt = Number(body.maxTradeSol);
+        if (Number.isFinite(mt) && mt > 0) maxTradeSol = Math.max(0.012, Math.min(mt, 1));
         let vault = null;
         const vaultDest = String(body.vaultDestination || "").trim();
         if (vaultDest) {
@@ -2500,7 +2505,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
           }
           vault = { destination: destKey };
         }
-        const status = await autopilotEngine.start({ solBudget: sol, minutes, mode, live: wantLive, walletPubkey, profitLock, churn, vault });
+        const status = await autopilotEngine.start({ solBudget: sol, minutes, mode, live: wantLive, walletPubkey, profitLock, churn, vault, maxTradeSol });
         sendWebJson(request, response, 200, { ok: true, status });
         return;
       } catch (e) {
