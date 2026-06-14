@@ -116,7 +116,10 @@
   /* card arena */
   .dcard.picked{border-color:var(--gold); box-shadow:0 0 0 2px var(--gold),0 0 14px rgba(255,210,74,0.4);}
   .dcard .dpick{position:absolute; top:2px; right:4px; font-size:0.8rem;}
-  #arenaBattle{ background:linear-gradient(rgba(4,10,5,0.5),rgba(4,10,5,0.78)), url(/assets/slimewire/swamp/art/arena-bg.jpg) center/cover; border-radius:14px; padding:14px 12px; box-shadow:inset 0 0 60px rgba(0,0,0,0.6);}
+  #arenaBattle{ position:relative; overflow:hidden; background:linear-gradient(rgba(4,10,5,0.5),rgba(4,10,5,0.78)), url(/assets/slimewire/swamp/art/arena-bg.jpg) center/cover; border-radius:14px; padding:14px 12px; box-shadow:inset 0 0 60px rgba(0,0,0,0.6);}
+  #arenaBattle.shake{ animation:abshake .32s; } @keyframes abshake{ 0%,100%{transform:translate(0,0);} 20%{transform:translate(-7px,3px);} 40%{transform:translate(7px,-3px);} 60%{transform:translate(-5px,-2px);} 80%{transform:translate(4px,2px);} }
+  #battleFx{ position:absolute; width:200px; height:200px; object-fit:contain; pointer-events:none; opacity:0; z-index:6; left:0; top:0; transform:translate(-50%,-50%) scale(0.4); }
+  #battleFx.play{ animation:fxpop .55s ease-out; } @keyframes fxpop{ 0%{opacity:0; transform:translate(-50%,-50%) scale(0.4) rotate(-8deg);} 25%{opacity:1; transform:translate(-50%,-50%) scale(1.25) rotate(4deg);} 100%{opacity:0; transform:translate(-50%,-50%) scale(1.55) rotate(0);} }
   .bfoe,.bme{display:flex; flex-direction:column; align-items:center; gap:4px;}
   .bme{margin-top:6px;}
   .bart{width:130px; height:130px; object-fit:cover; filter:drop-shadow(0 6px 10px rgba(0,0,0,0.5)); -webkit-mask:radial-gradient(circle at 50% 46%, #000 58%, transparent 76%); mask:radial-gradient(circle at 50% 46%, #000 58%, transparent 76%);}
@@ -286,6 +289,7 @@
       <button class="big" id="csGo" style="margin-top:12px">⚔️ FIGHT</button>
     </div>
     <div id="arenaBattle" style="display:none">
+      <img id="battleFx" alt="">
       <div class="bfoe">
         <div class="bname" id="foeName"></div>
         <div class="bhp"><div class="bhpfill foe" id="foeHp"></div></div>
@@ -446,6 +450,7 @@ function buildHeroes(){ HEROES=HERO_DEFS.map(d=>({ name:d.name, sprite:d.sprite,
   try{ Object.values(OGRE).forEach(p=>img(p)); }catch(_){} // warm all ogre sprites
   try{ ["slime","triple","bomb","laser","spore","boulder","vine","acid","thunder","fan"].forEach(id=>img("/assets/slimewire/swamp/art/weapon-"+id+".png")); }catch(_){} // warm weapon art
   try{ ["enemy-zombie","enemy-ghoul"].forEach(n=>img("/assets/slimewire/swamp/art/"+n+".png")); }catch(_){} // warm horde enemies
+  try{ ["fire","ice","volt","void","slime","toxic"].forEach(n=>img("/assets/slimewire/swamp/art/fx-"+n+".png")); }catch(_){} // warm battle VFX
   try{ for(const b of BUILDINGS_DEF){ b.sprite="/assets/slimewire/swamp/buildings-hd/bld-"+b.id+".png"; img(b.sprite); } }catch(_){} }
 function heroUnlocked(h){ const r=h&&h.req; if(!r) return true;
   if(r.catches!=null && dexCount()<r.catches) return false;
@@ -851,8 +856,7 @@ function scheduleReconnect(){ wsRetry=Math.min(wsRetry+1,6); setTimeout(connectW
 function sendPos(){ if(!wsOk||!sock||sock.readyState!==1||!player) return;
   try{ sock.send(JSON.stringify({ type:"pos", x:Math.round(player.x), y:Math.round(player.y), dir:player.dir, name:(store.lbName||"ogre"), clan:store.clan||"", hero:store.hero||0 })); }catch(_){} }
 async function loadFeed(){
-  try{ const r=await fetch(API+"/api/web/live-pairs?bucket=live&sort=fresh",{cache:"no-store"});
-    const j=await r.json(); feedRows=(j&&j.livePairs&&j.livePairs.rows)||(j&&j.rows)||[]; }catch(_){ feedRows=[]; }
+  feedRows=[]; // FREE GAME: never call the paid live-pairs API — use synthetic names + own SlimeWire launches only
   try{ const r2=await fetch(API+"/api/web/swamp-launches",{cache:"no-store"}); const j2=await r2.json();
     const og=(j2&&(j2.launches||j2.ogres))||[]; for(const o of og){ if(o&&(o.mint||o.symbol)){ feedRows.unshift({tokenMint:o.mint||o.symbol,symbol:o.symbol||o.name,_ogre:true,marketCap:o.marketCap,pairAgeSeconds:o.ageSeconds}); } } }catch(_){}
   try{ const r3=await fetch(API+"/api/web/swamp-leaderboard?mode=catches",{cache:"no-store"}); const j3=await r3.json();
@@ -876,9 +880,10 @@ async function loadFeed(){
     if(state==="world" && player && rugged.length){ const {mint,c}=rugged[0]; c.ruggedAt=Date.now(); dirty=true; spawnRugBoss(mint,c); }
     if(dirty) save();
   }catch(_){}
-  if(!feedRows.length){ // synthetic fallback so the world is never empty / offline-safe
-    const syn=["PEPE","WOJAK","OGRE","BONK","SLIME","CHAD","FROG","DEGEN","MOON","RUG","WEN","GM"];
-    feedRows=syn.map((s,i)=>({tokenMint:"syn_"+s,symbol:s,marketCap:3000+i*1500,pairAgeSeconds:[30,90,300,1200][i%4],m5:[60,10,-20,30][i%4],volume5m:[70000,5000,1000,20000][i%4],_ogre:i===2}));
+  { // always blend a synthetic memecoin pool so names/creatures stay varied (no API cost)
+    const syn=["PEPE","WOJAK","BONK","SLIME","CHAD","FROG","DEGEN","MOON","WEN","GM","DOGE","SHIB","TURBO","MOG","POPCAT","WIF","BODEN","BRETT","TOSHI","GIGA","SLERF","MEW","PONKE","HARAMBE","NPC","BOOK","SC","RETARDIO"];
+    for(let i=0;i<syn.length;i++){ const s=syn[i]; if(feedRows.some(r=>r.symbol===s)) continue;
+      feedRows.push({tokenMint:"syn_"+s,symbol:s,marketCap:3000+i*900,pairAgeSeconds:[30,90,300,1200][i%4],m5:[60,10,-20,30][i%4],volume5m:[70000,5000,1000,20000][i%4]}); }
   }
   feedReal = feedRows.length>0 && !String(feedRows[0].tokenMint||feedRows[0].mint||"").startsWith("syn_");
 }
@@ -1481,6 +1486,11 @@ function renderBattle(){ const me=curMe(), foe=curFoe();
 function dmgCalc(att,def,move){ const tmult=elemMult(att.elem.n,def.elem.n); let raw=24*move.pow*(att.atk/50)*tmult; if(att.weak) raw*=0.7; const mit=def.def/(def.def+120); const v=0.85+Math.random()*0.3; return {dmg:Math.max(1,Math.round(raw*(1-mit)*v)),tmult}; }
 function tickCds(card,used){ for(const k in card.cds){ if(Number(k)!==used && card.cds[k]>0) card.cds[k]--; } }
 function flashCard(side,cls){ const el=$(side==="me"?"meArt":"foeArt"); if(!el) return; el.classList.remove("hit","heal"); void el.offsetWidth; el.classList.add(cls||"hit"); }
+function vfxArt(elemName){ const map={Toxic:"toxic",Slime:"slime",Bog:"slime",Ember:"fire",Frost:"ice",Volt:"volt",Void:"void"}; return "/assets/slimewire/swamp/art/fx-"+(map[elemName]||"slime")+".png"; }
+function playBattleFx(side,elemName,big){ const fx=$("battleFx"), tgt=$(side==="foe"?"foeArt":"meArt"), ab=$("arenaBattle"); if(!fx||!tgt||!ab) return;
+  try{ const tr=tgt.getBoundingClientRect(), ar=ab.getBoundingClientRect(); fx.style.left=(tr.left-ar.left+tr.width/2)+"px"; fx.style.top=(tr.top-ar.top+tr.height/2)+"px"; fx.style.width=(big?280:200)+"px"; fx.style.height=(big?280:200)+"px"; }catch(_){}
+  fx.src=vfxArt(elemName); fx.classList.remove("play"); void fx.offsetWidth; fx.classList.add("play");
+  ab.classList.remove("shake"); void ab.offsetWidth; ab.classList.add("shake"); }
 function floatDmg(side,txt,col){ const wrap=$(side==="me"?"bme":"bfoe"); if(!wrap) return; const f=document.createElement("div"); f.className="dmgfloat"; f.textContent=txt; f.style.color=col||"#fff"; wrap.appendChild(f); setTimeout(()=>{try{f.remove();}catch(_){}},900); }
 function lbl(c,side){ return side==="me"?("$"+c.sym):(c.species||("$"+c.sym)); }
 function applyFx(att,def,move,defSide){ if(!move.fx) return "";
@@ -1496,6 +1506,7 @@ function playerMove(idx){ if(!B||B.over||B.turn!=="me") return; const me=curMe()
   B.turn="busy";
   const {dmg,tmult}=dmgCalc(me,foe,move); foe._lastDmg=dmg; foe.hp-=dmg; if(move.cd) me.cds[idx]=move.cd; tickCds(me,idx); me.weak=false;
   flashCard("foe","hit"); floatDmg("foe","-"+dmg,tmult>1?"#ffd24a":"#fff"); try{sfx("throw",0.3);}catch(_){}
+  playBattleFx("foe", me.elem.n, !!move.cd);
   const fx=applyFx(me,foe,move,"foe");
   bLog(`$${me.sym} used ${move.n}! ${tmult>1?"Super effective! ":tmult<1?"Not very effective. ":""}-${dmg}${fx}`); renderBattle();
   if(foe.hp<=0){ setTimeout(foeFaint,650); return; }
@@ -1508,6 +1519,7 @@ function foeMove(){ if(!B||B.over) return; const me=curMe(), foe=curFoe(); const
   const pick=(Math.random()<0.6?avail[0]:avail[Math.floor(Math.random()*avail.length)])||{m:moves[0],i:0};
   const {dmg,tmult}=dmgCalc(foe,me,pick.m); me._lastDmg=dmg; me.hp-=dmg; if(pick.m.cd) foe.cds[pick.i]=pick.m.cd; tickCds(foe,pick.i); foe.weak=false;
   flashCard("me","hit"); floatDmg("me","-"+dmg,tmult>1?"#ff5e5e":"#fff");
+  playBattleFx("me", foe.elem.n, !!pick.m.cd);
   const fx=applyFx(foe,me,pick.m,"me");
   bLog(`${lbl(foe)} used ${pick.m.n}! ${tmult>1?"Super effective! ":""}-${dmg}${fx}`); renderBattle();
   if(me.hp<=0){ setTimeout(meFaint,650); return; }
@@ -1550,16 +1562,16 @@ function clearWave(){ const w=B.wave; store.xp+=15+w*4; if(w%3===0){ store.res.r
 
 /* ----- Phase 2: Story Mode ----- */
 const STORY_BOSSES=[
-  {id:"grik",name:"Grik the Warlord",elem:"Bog",tier:"rare",size:3,art:"/assets/slimewire/swamp/art/boss-grik.png",
+  {id:"grik",name:"Grik the Warlord",elem:"Bog",tier:"rare",size:2,art:"/assets/slimewire/swamp/art/boss-grik.png",
    intro:"Grik crashes through the reeds, club dragging mud: \"This swamp is MINE, runt. Crawl back or get squashed.\"",
    win:"Grik topples into the bog with a wet thud. The deeper swamp lies open."},
-  {id:"reaper",name:"Rugpull Reaper",elem:"Void",tier:"epic",size:4,art:"/assets/slimewire/swamp/art/boss-reaper.png",
+  {id:"reaper",name:"Rugpull Reaper",elem:"Void",tier:"epic",size:3,art:"/assets/slimewire/swamp/art/boss-reaper.png",
    intro:"A cold wind. The Rugpull Reaper raises its scythe: \"Every chart ends in zero... starting with yours.\"",
    win:"The Reaper shatters into green dust. Its scythe sinks into the muck."},
-  {id:"toxica",name:"Toxica the Witch",elem:"Toxic",tier:"epic",size:4,art:"/assets/slimewire/swamp/art/boss-toxica.png",
+  {id:"toxica",name:"Toxica the Witch",elem:"Toxic",tier:"epic",size:3,art:"/assets/slimewire/swamp/art/boss-toxica.png",
    intro:"Toxica stirs her cauldron and grins: \"Fresh ingredients! Hold still, little ape.\"",
    win:"Toxica's brew explodes in her face. She flees cackling into the fog."},
-  {id:"slimelord",name:"THE SLIMELORD",elem:"Slime",tier:"legendary",size:5,art:"/assets/slimewire/swamp/art/boss-slimelord.png",
+  {id:"slimelord",name:"THE SLIMELORD",elem:"Slime",tier:"legendary",size:4,art:"/assets/slimewire/swamp/art/boss-slimelord.png",
    intro:"The ground heaves. The SLIMELORD rises, crowned in dripping ooze, eyes ablaze: \"You DARE challenge the throne of slime?\"",
    win:"The SLIMELORD collapses into a glowing puddle. The swamp is yours."}
 ];
@@ -1578,7 +1590,8 @@ function openBossCutscene(i){ const bo=STORY_BOSSES[i]; arenaShow("arenaCutscene
   $("csArt").src=bo.art; $("csArt").style.display=""; $("csName").textContent=bo.name; $("csText").textContent=bo.intro;
   $("csGo").textContent="⚔️ FIGHT"; $("csGo").onclick=()=>startStoryBattle(i); try{sfx("boss",0.4);}catch(_){} playCutscene(bo.elem); }
 function storyBossDeck(bo){ const lv=level(), tiers=["common","uncommon","rare","epic","legendary"]; const tierIdx={common:0,uncommon:1,rare:2,epic:3,legendary:4}[bo.tier]||2; const deck=[]; const syms=arenaCoinSyms(true);
-  for(let k=0;k<bo.size;k++){ const t=tiers[Math.max(0,Math.min(4,tierIdx-(k%2)))], boost=1+lv*0.03+tierIdx*0.05;
+  const bi=Math.max(0,STORY_BOSSES.indexOf(bo)); const diff=0.5+bi*0.17; // guided curve: boss 1 ~0.5x, finale ~1.0x
+  for(let k=0;k<bo.size;k++){ const t=tiers[Math.max(0,Math.min(4,tierIdx-(k%2)))], boost=(1+lv*0.03+tierIdx*0.05)*diff;
     if(k===0){ const sp=coinSpecies(bo.id,t), be=(ELEMENTS.find(e=>e.n===bo.elem)||sp.element), mh=Math.round(sp.hp*boost*2.4+90);
       deck.push({mint:bo.id, sym:bo.id.toUpperCase(), elem:be, species:bo.name, atk:Math.round(sp.atk*boost), def:Math.round(sp.def*boost), maxhp:mh, hp:mh, cds:{}, art:elemArt(bo.elem), rarity:t}); }
     else { deck.push(aiCard(syms[k%syms.length], t, boost)); } }
@@ -1723,9 +1736,9 @@ const UPGRADES=[
 ];
 function nearestMobs(n){ const live=mobs.filter(m=>!m._dead); live.sort((a,b)=>(((a.x-player.x)**2+(a.y-player.y)**2)-((b.x-player.x)**2+(b.y-player.y)**2))); return live.slice(0,n); }
 const SURV_SPR=["/assets/slimewire/swamp/art/enemy-zombie.png","/assets/slimewire/swamp/art/enemy-ghoul.png"];
-function survSpawnWave(){ if(mobs.length>110) return; const t=RUN.t, lv=level(); const n=1+Math.floor(t/14)+(Math.random()<0.5?1:0);
-  for(let i=0;i<n;i++){ const ang=Math.random()*6.2832, dist=340+Math.random()*90; const fast=Math.random()<0.4;
-    const hp=Math.round((fast?9:16)+t*1.7+lv*3), dmg=Math.round(6+t*0.13), spd=(fast?70:48)+Math.min(78,t*0.55);
+function survSpawnWave(){ if(mobs.length>140) return; const t=RUN.t, lv=level(); const n=1+Math.floor(t/8)+(Math.random()<0.5?1:0);
+  for(let i=0;i<n;i++){ const ang=Math.random()*6.2832, dist=340+Math.random()*90; const fast=Math.random()<0.42;
+    const hp=Math.round((fast?13:22)+t*2.4+lv*4), dmg=Math.round(7+t*0.2), spd=(fast?76:52)+Math.min(86,t*0.62);
     mobs.push({ type:"z", name:"", hp, maxhp:hp, dmg, spd, r:(fast?11:15)+Math.random()*4, drop:{}, col:"#8aff5a",
       x:player.x+Math.cos(ang)*dist, y:player.y+Math.sin(ang)*dist, dir:"down", walkT:Math.random()*3, _mv:true, flash:0,
       spr:{img:fast?SURV_SPR[1]:SURV_SPR[0]} }); } }
@@ -1740,8 +1753,8 @@ function survKill(m){ if(m._dead) return; m._dead=true; RUN.kills++;
   mobs=mobs.filter(x=>x!==m); if(nearMob===m) nearMob=null; }
 function survTick(dt){ RUN.t+=dt;
   if(RUN.up.regen>0) player.hp=Math.min(player.maxhp, player.hp+RUN.up.regen*dt);
-  RUN.spawnCd-=dt; if(RUN.spawnCd<=0){ survSpawnWave(); RUN.spawnCd=Math.max(0.3, 1.5-RUN.t*0.012); }
-  RUN.bossCd-=dt; if(RUN.bossCd<=0){ RUN.bossCd=35; survBoss(); }
+  RUN.spawnCd-=dt; if(RUN.spawnCd<=0){ survSpawnWave(); RUN.spawnCd=Math.max(0.22, 1.4-RUN.t*0.015); }
+  RUN.bossCd-=dt; if(RUN.bossCd<=0){ RUN.bossCd=30; survBoss(); }
   player.fireCd=(player.fireCd||0)-dt; if(player.fireCd<=0){ const tg=nearestMobs(1+RUN.up.multi); if(tg.length){ player.fireCd=0.55/RUN.up.rate; for(const m of tg) fireWeapon(m.x,m.y); } else player.fireCd=0.1; }
   const mag=RUN.up.magnet, mag2=mag*mag;
   for(const g of gems){ const dx=player.x-g.x, dy=player.y-g.y, d2=dx*dx+dy*dy;
