@@ -108,22 +108,26 @@ function sizeFor(p){ const minViable=0.012, maxPer=S.bank*0.22;
 async function tick(){
   if(!S||S.stopped) return;
   if(Date.now()>=S.endAt){ endSession("Timer finished"); return; }
-  if(S.bank <= S.start*0.7){ endSession("Session loss-cap (-30%) hit — protecting capital"); return; }
+  if(equity() <= S.start*0.7){ endSession("Session loss-cap (-30%) hit — protecting capital"); return; }
   const P=aggParams();
   // 1) ONE fetch of the freshest live launches — used for BOTH price tracking and hunting
   let priceMap={}, feedRows=[];
   try{ const r=await fetch(API+"/api/web/live-pairs?bucket=live&sort=fresh",{cache:"no-store"}); const j=await r.json();
     feedRows=(j&&j.livePairs&&j.livePairs.rows)||(j&&j.rows)||[]; for(const row of feedRows){ const m=rowMint(row); if(m) priceMap[m]=rowMc(row); } }catch(e){ pushLog("r","feed error — retrying…"); }
-  // 2) manage exits
-  for(const pos of [...S.open]){ let mc=priceMap[pos.mint];
-    if(mc>0){ pos.lastMc=mc; pos.missed=0; } else { pos.missed=(pos.missed||0)+1; mc=pos.lastMc; }
-    const pct=(mc/pos.entryMc-1)*100;
-    if(pos.missed>=3){ closePos(pos, pct, "stale (feed lost)"); continue; }
+  // 2) manage exits — REAL per-position price + liquidity via pair-lite (DexScreener live)
+  for(const pos of [...S.open]){
+    let mc=null, liq=null;
+    try{ const r=await fetch(API+"/api/web/pair-lite?mint="+encodeURIComponent(pos.mint),{cache:"no-store"}); const j=await r.json();
+      if(j&&j.pair){ mc=n(j.pair.marketCap||j.pair.fdv); liq=n(j.pair.liquidity&&j.pair.liquidity.usd); } }catch(_){}
+    if(!mc) mc=priceMap[pos.mint]||0;                                  // fallback: fresh-feed MC
+    if(mc>0){ pos.lastMc=mc; pos.missed=0; if(liq>0) pos.lastLiq=liq; } else { pos.missed=(pos.missed||0)+1; mc=pos.lastMc; }
+    const pct=(mc/pos.entryMc-1)*100; pos.curPct=pct; const held=Date.now()-pos.at;
+    if(pos.entryLiq>400 && pos.lastLiq>0 && pos.lastLiq<pos.entryLiq*0.5){ closePos(pos, pct, "🛑 liquidity pulled (rug)"); continue; }
+    if(pos.missed>=2 && held>18000){ closePos(pos, pct, "feed lost — exit"); continue; }
     if(pct<=-P.sl){ closePos(pos, pct, "stop -"+P.sl+"%"); continue; }
     if(!pos.tp1 && pct>=P.tp1){ sellPart(pos, mc, 0.4, "TP1 +"+Math.round(pct)+"%"); pos.tp1=true; }
     if(pos.tp1 && pct>=P.tp2){ closePos(pos, pct, "TP2 +"+Math.round(pct)+"% (moonbag banked)"); continue; }
-    // stale-by-time: fresh scalps shouldn't ride forever
-    if(Date.now()-pos.at>160000 && pct<P.tp1){ closePos(pos, pct, "stale 160s, flow died"); continue; }
+    if(held>180000 && pct<P.tp1){ closePos(pos, pct, "stale 3m, flow died"); continue; }
   }
   // 3) hunt a fresh entry from the SAME feed (client-side Fresh-Ape scoring)
   if(S.open.length<P.maxOpen && S.bank>0.015 && Date.now()<S.endAt){
@@ -132,8 +136,8 @@ async function tick(){
     for(const row of feedRows){ const mint=rowMint(row), mc=rowMc(row), age=rowAge(row);
       if(!mint||mc<=0||held.has(mint)) continue;
       if((S.waves[mint]||0)>=2) continue;                 // wave cap per coin
-      if(age>180) continue;                                // ≤3 min
-      if(mc<1500||mc>12000) continue;                      // MC band (fresh pump starts ~$1.9k)
+      if(age>1200) continue;                               // ≤20 min window (fresh-first, but catches early movers)
+      if(mc<1500||mc>20000) continue;                      // MC band (fresh pump starts ~$1.9k)
       const vol=n(row.volume5m), buys=n(row.buys5m), sells=n(row.sells5m);
       if(vol<18 && buys<2) continue;                       // STARTING VOLUME gate — skip dead pairs
       if(sells>buys*1.5) continue;                         // not dumping
@@ -143,20 +147,20 @@ async function tick(){
     if(cands.length){ openPos(cands[0].row, sizeFor(P), P, cands[0].fs); }
     else if(!S.open.length){ S.scanMsg=feedRows.length?("scanning "+feedRows.length+" fresh pairs — none qualify yet"):"waiting for live feed…"; }
   }
-  S.hist.push(S.bank); if(S.hist.length>240) S.hist.shift();
+  S.hist.push(equity()); if(S.hist.length>240) S.hist.shift();
   render();
 }
 // Client-side Fresh-Ape score 0-100: freshness + MC fit + starting volume + buy flow + provider score
 function freshScore(row){ const mc=rowMc(row), age=rowAge(row), vol=n(row.volume5m), buys=n(row.buys5m), sells=n(row.sells5m);
-  const ageS = age<=20?26 : age<=60?18 : age<=120?10 : 4;                       // younger = better
-  const mcS  = (mc>=2500&&mc<=8000)?22 : (mc>=1800&&mc<12000)?14 : 6;           // sweet spot vs ok
+  const ageS = age<=30?26 : age<=120?20 : age<=300?14 : age<=600?9 : 4;         // fresh-first, fades to 20m
+  const mcS  = (mc>=2500&&mc<=8000)?22 : (mc>=1800&&mc<=15000)?14 : 6;          // sweet spot vs ok
   const volS = vol>=120?16 : vol>=60?11 : vol>=30?7 : vol>=18?3 : 0;            // starting volume
   const flow = (buys+sells>0)? (buys/(buys+sells)) : 0.5; const flowS=(flow-0.5)*22; // net buy pressure
   const prov = n(row.bestPickScore||row.score)>0 ? Math.min(15, n(row.bestPickScore||row.score)*0.15) : 0;
   return Math.round(Math.max(1, Math.min(100, ageS+mcS+volS+flowS+prov))); }
 function openPos(row, size, P, fs){ if(size<0.012){ return; } const mint=rowMint(row);
   S.bank-=size; S.tradeNo++; S.waves[mint]=(S.waves[mint]||0)+1; S.scanMsg="";
-  const pos={mint, sym:rowSym(row), entryMc:rowMc(row), lastMc:rowMc(row), cost:size, rem:size, at:Date.now(), missed:0, tp1:false};
+  const pos={mint, sym:rowSym(row), entryMc:rowMc(row), lastMc:rowMc(row), entryLiq:n(row.liquidityUsd), lastLiq:n(row.liquidityUsd), cost:size, rem:size, at:Date.now(), missed:0, tp1:false, curPct:0};
   S.open.push(pos);
   pushLog("d",`🟢 Aped $${pos.sym} — ${Math.round(rowAge(row))}s old, $${(rowMc(row)/1000).toFixed(1)}k MC, score ${fs} · size ${fmt(size)} (${P.regime}${S.streak?`, streak ${S.streak}`:""})`); }
 function sellPart(pos, mc, frac, why){ const soldBasis=pos.rem*frac; const proceeds=soldBasis*(mc/pos.entryMc)*0.985; S.bank+=proceeds; pos.rem-=soldBasis;
@@ -173,14 +177,15 @@ function endSession(reason){ if(!S||S.stopped) return; S.stopped=true; clearInte
   pushLog(pnl>=0?"g":"r",`🏁 ${reason}. ${pnl>=0?"+":""}${fmt(pnl)} SOL (${pct>=0?"+":""}${pct.toFixed(1)}%) · ${S.wins}W/${S.losses}L`);
   render(); $("stop").textContent="↻ NEW SESSION"; $("stop").classList.remove("stop"); $("stop").onclick=()=>location.reload(); }
 function pushLog(c,t){ if(!S) return; const d=document.createElement("div"); d.className=c; d.textContent=t; const lg=$("log"); lg.prepend(d); while(lg.children.length>80) lg.removeChild(lg.lastChild); }
+function equity(){ let e=S.bank; for(const p of S.open) e+=p.rem*(p.lastMc/p.entryMc); return e; }
 function render(){ if(!S) return;
-  const pnl=S.bank-S.start, pct=S.start?pnl/S.start*100:0;
-  $("bank").innerHTML=fmt(S.bank)+' <small>SOL</small>';
-  $("delta").className="delta "+(pnl>=0?"up":"down"); $("delta").textContent=(pnl>=0?"▲ +":"▼ ")+fmt(pnl)+" SOL ("+(pct>=0?"+":"")+pct.toFixed(1)+"%)";
+  const eq=equity(); if(eq>S.peak)S.peak=eq; const pnl=eq-S.start, pct=S.start?pnl/S.start*100:0;
+  $("bank").innerHTML=fmt(eq)+' <small>SOL equity</small>';
+  $("delta").className="delta "+(pnl>=0?"up":"down"); $("delta").textContent=(pnl>=0?"▲ +":"▼ ")+fmt(pnl)+" SOL ("+(pct>=0?"+":"")+pct.toFixed(1)+"%) · "+fmt(S.bank)+" cash";
   const P=aggParams(); const mins=Math.max(0,Math.round((S.endAt-Date.now())/60000));
   $("stats").innerHTML=[`⏱ ${mins}m left`,`🧠 ${P.regime}`,`✅ ${S.wins}W`,`✂️ ${S.losses}L`,`🔥 streak ${S.streak}`,`📈 peak ${fmt(S.peak)}`].map(x=>`<span class="pill">${x}</span>`).join("");
   const pc=$("positions"); if(!S.open.length){ pc.innerHTML='<div class="muted">none — '+(S.scanMsg||"scanning for a fresh entry…")+'</div>'; }
-  else pc.innerHTML=S.open.map(p=>{ const pp=(p.lastMc/p.entryMc-1)*100; return `<div class="pos"><span class="s">$${p.sym}</span><span class="muted">${fmt(p.rem)} SOL</span><span class="p ${pp>=0?'up':'down'}">${pp>=0?'+':''}${Math.round(pp)}%</span></div>`; }).join("");
+  else pc.innerHTML=S.open.map(p=>{ const pp=p.curPct||0; return `<div class="pos"><span class="s">$${p.sym}</span><span class="muted">${fmt(p.rem)} SOL</span><span class="p ${pp>=0?'up':'down'}">${pp>=0?'+':''}${Math.round(pp)}%</span></div>`; }).join("");
   drawSpark();
 }
 function drawSpark(){ const c=$("spark"), x=c.getContext("2d"); const W=c.width,H=c.height; x.clearRect(0,0,W,H);
