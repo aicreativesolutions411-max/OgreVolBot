@@ -26,7 +26,7 @@
   .pill.raid{border-color:rgba(255,120,80,0.45);} .pill.raid.live{color:#ff9a7e; border-color:#ff7a5e; box-shadow:0 0 12px rgba(255,90,40,0.4);}
   .hpwrap{height:7px; border-radius:99px; background:rgba(255,90,80,0.12); overflow:hidden; border:1px solid rgba(255,120,80,0.3); max-width:620px; margin:6px auto 0;}
   .hpfill{height:100%; width:100%; background:linear-gradient(90deg,#ff5e5e,#ffd84d 70%,#72ff23); transition:width .18s;}
-  .quest{margin:6px auto 0; max-width:620px; font-size:0.74rem; color:var(--dim); text-align:center; text-shadow:0 1px 2px #000;}
+  .quest{margin:6px auto 0; max-width:560px; font-size:0.82rem; font-weight:800; color:#ffe9a8; text-align:center; text-shadow:0 1px 3px #000; background:rgba(0,0,0,0.32); border:1px solid rgba(255,210,74,0.3); border-radius:10px; padding:4px 12px;}
   .topbtns{position:absolute; top:calc(8px + env(safe-area-inset-top)); right:10px; display:flex; gap:6px; z-index:7;}
   .tbtn{pointer-events:auto; background:rgba(8,20,10,0.85); border:1px solid rgba(114,255,35,0.3); color:#eaffe0; border-radius:99px; width:36px; height:36px; font-weight:800; cursor:pointer; font-size:1rem;}
   .joy{position:absolute; width:130px; height:130px; border-radius:50%; pointer-events:none; opacity:0; transition:opacity .12s; z-index:6;
@@ -851,6 +851,29 @@ let bannerT=null;
 function showBanner(title,sub,col){ const b=$("banner"); if(!b) return; const t=$("bannerT"),s=$("bannerS");
   if(t){ t.textContent=title; t.style.color=col||"#fff"; } if(s) s.textContent=sub||"";
   b.classList.add("on"); clearTimeout(bannerT); bannerT=setTimeout(()=>b.classList.remove("on"),1500); }
+/* ---- Quest line: GB-style guided objectives that thread the whole game ---- */
+const QUESTS=[
+  {t:"Sling slimeballs at a wild coin to catch it",type:"catch",n:1,xp:20,relic:0},
+  {t:"Defeat 3 swamp mobs",type:"kills",n:3,xp:30,relic:0},
+  {t:"Win a Card Arena battle (tap 🃏)",type:"cardwin",n:1,xp:40,relic:1},
+  {t:"Reach Level 3",type:"level",n:3,xp:40,relic:0},
+  {t:"Catch 6 coins total",type:"catch",n:6,xp:50,relic:1},
+  {t:"Beat Grik in Story Mode (🃏 → 📖)",type:"storybeat",n:1,xp:80,relic:1},
+  {t:"Defeat 15 mobs",type:"kills",n:15,xp:80,relic:1},
+  {t:"Reach Level 6",type:"level",n:6,xp:100,relic:2},
+  {t:"Catch 15 coins",type:"catch",n:15,xp:120,relic:2},
+  {t:"Defeat THE SLIMELORD (Story finale)",type:"storybeat",n:4,xp:300,relic:5}
+];
+function questCount(type){ return ({catch:dexCount(),kills:store.kills||0,level:level(),cardwin:store.arenaWins||0,storybeat:store.storyBeat||0})[type]||0; }
+function checkQuests(){ if(store.questStep==null) store.questStep=0; let adv=false;
+  while(store.questStep<QUESTS.length){ const q=QUESTS[store.questStep]; if(questCount(q.type)>=q.n){
+    store.xp+=q.xp||0; if(q.relic){ store.res=store.res||{}; store.res.relic=(store.res.relic||0)+q.relic; } store.questStep++; adv=true;
+    try{ sfx("level",0.5); showBanner("✅ QUEST COMPLETE","+"+(q.xp||0)+"xp"+(q.relic?" · +"+q.relic+" 🔮":""),"#ffd24a"); }catch(_){}
+  } else break; }
+  if(adv){ save(); const nq=QUESTS[store.questStep]; if(nq) setTimeout(()=>{ try{toast("📜 New quest: "+nq.t);}catch(_){} },1700); } }
+function questLine(){ if(store.questStep==null) store.questStep=0; const q=QUESTS[store.questStep];
+  if(!q) return "🏆 Swamp Champion — all quests done!";
+  return "📜 "+q.t+" ("+Math.min(questCount(q.type),q.n)+"/"+q.n+")"; }
 function refreshHud(){
   $("lvl").textContent="Lv "+level();
   $("balls").textContent="🟢 "+store.balls;
@@ -864,9 +887,8 @@ function refreshHud(){
   const clan=store.clan?`[${store.clan}] `:"";
   const online = wsOk ? ` · 👥 ${RP.size+1} online` : "";
   const wins = store.pvpWins>0 ? ` · ⚔️ ${store.pvpWins} KO` : "";
-  $("quest").textContent= clan + (rs.live
-    ? `⚔️ RAID LIVE — ${hostiles} hostiles about. Fight for loot!`
-    : `${wild} coins${rare?` · ${rare} rare 👀`:""} · ${hostiles} mobs · base Lv${store.baseLv}`) + online + wins;
+  checkQuests();
+  $("quest").textContent = clan + questLine() + online + wins;
 }
 
 /* ---- input ---- */
@@ -1631,6 +1653,7 @@ function enterWorld(){ $("start").classList.remove("on"); $("hud").style.display
   connectWS();
   state="world"; lastTs=performance.now();
   toast(("ontouchstart" in window)?"Drag to move · ⚔️ to attack · ✋ to catch / enter":"WASD move · Space/J attack (while moving!) · E enter · Q swap weapon");
+  try{ checkQuests(); const q=QUESTS[store.questStep||0]; if(q) setTimeout(()=>toast("📜 Quest: "+q.t),2600); }catch(_){}
   requestAnimationFrame(loop); }
 $("play").onclick=enterWorld;
 $("mute").onclick=()=>setMuted(!store.muted);
