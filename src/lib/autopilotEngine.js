@@ -59,6 +59,7 @@ export function aggParams(state) {
   let minScore = regime === "HOT" ? 34 : regime === "COLD" ? 48 : 40;
   if (mode === "degen") minScore -= 6;
   else if (mode === "chill") minScore += 8;
+  minScore += state.minScoreBonus || 0; // low-churn raises the bar
 
   return { regime, wr, baseFrac, streakMult, regimeMult, tp1, tp2, sl, minScore };
 }
@@ -67,11 +68,14 @@ export function aggParams(state) {
 // clamped so a single trade is never trivially small nor a huge slug of bank.
 export function sizeFor(state, P) {
   const cash = state.bank;
-  const raw = cash * P.baseFrac * P.streakMult * P.regimeMult;
+  // Low-churn sizes up (fewer, higher-conviction bets); normal stays modest.
+  const fracCap = state.sizeFracCap || 0.12;
+  const baseFrac = state.churn === "low" ? Math.max(P.baseFrac, 0.12) : P.baseFrac;
+  const raw = cash * baseFrac * P.streakMult * P.regimeMult;
   const min = state.minTradeSol;
-  // Cap any single bet at 12% of cash AND a hard 0.06 SOL ceiling — one
+  // Cap any single bet at fracCap of cash AND the per-trade ceiling — one
   // instant-dump can't be allowed to erase several wins.
-  const max = Math.max(min, Math.min(cash * 0.12, state.maxTradeSol || 0.06));
+  const max = Math.max(min, Math.min(cash * fracCap, state.maxTradeSol || 0.06));
   return Math.max(min, Math.min(raw, max));
 }
 
@@ -215,8 +219,14 @@ export function equity(state) {
 // ---------------------------------------------------------------------------
 
 function freshState(opts) {
+  // LOW-CHURN: be patient — far fewer, higher-conviction shots, each sized to
+  // actually win big (concentrate capital instead of diluting into a swarm of
+  // tiny bets). This is the "win big and often, not every second" profile.
+  const lowChurn = opts.churn === "low";
+  const budget = opts.solBudget || 0;
   return {
     mode: opts.mode || "normal",
+    churn: lowChurn ? "low" : "normal",
     live: Boolean(opts.live),
     walletPubkey: opts.walletPubkey || null,
     start: opts.solBudget,
@@ -224,9 +234,15 @@ function freshState(opts) {
     peak: opts.solBudget,
     walletSol: null,
     minTradeSol: opts.minTradeSol || 0.012,
-    // Hard per-trade ceiling, budget-scaled (so a single instant-dump is bounded).
-    maxTradeSol: opts.maxTradeSol || Math.max(0.06, (opts.solBudget || 0) * 0.05),
-    maxOpen: opts.maxOpen || 8,
+    // Per-trade ceiling. Low-churn bets bigger (fewer of them, higher quality);
+    // normal stays small to bound damage from frequent entries.
+    maxTradeSol: opts.maxTradeSol || Math.max(0.06, budget * (lowChurn ? 0.12 : 0.05)),
+    // Fraction-of-cash cap per bet (low-churn concentrates capital).
+    sizeFracCap: lowChurn ? 0.28 : 0.12,
+    // Entry-quality bump: low-churn only takes strong setups (skips the toll on marginal coins).
+    minScoreBonus: lowChurn ? 16 : 0,
+    // Few concurrent positions so each runner is meaningful + dry powder stays free.
+    maxOpen: opts.maxOpen || (lowChurn ? 3 : 8),
     // Optional session profit-lock: once up >= minGainPct, stop + flatten if
     // equity gives back `giveback` fraction of the peak gain. null = off.
     profitLock: opts.profitLock || null,
@@ -398,6 +414,8 @@ export function createAutopilotEngine(deps) {
       running: running(),
       live: state.live,
       mode: state.mode,
+      churn: state.churn,
+      maxOpen: state.maxOpen,
       wallet: state.walletPubkey,
       start: state.start,
       bank: round(state.bank),

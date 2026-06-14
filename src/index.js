@@ -2463,7 +2463,8 @@ async function handleWebApiRequest(request, response, requestUrl) {
         const profitLock = (body.profitLock === true || body.profitLock === "true")
           ? { giveback: 0.5, minGainPct: 5 }
           : (body.profitLock && typeof body.profitLock === "object" ? body.profitLock : null);
-        const status = await autopilotEngine.start({ solBudget: sol, minutes, mode, live: wantLive, walletPubkey, profitLock });
+        const churn = (body.churn === "low" || body.lowChurn === true || body.lowChurn === "true") ? "low" : "normal";
+        const status = await autopilotEngine.start({ solBudget: sol, minutes, mode, live: wantLive, walletPubkey, profitLock, churn });
         sendWebJson(request, response, 200, { ok: true, status });
         return;
       } catch (e) {

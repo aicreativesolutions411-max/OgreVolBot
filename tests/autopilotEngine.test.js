@@ -45,6 +45,34 @@ function goodRow(over = {}) {
   };
 }
 
+test("low-churn: raises entry bar, concentrates size, caps positions at 3", async () => {
+  // minScore bonus
+  const normalP = aggParams(baseState());
+  const lowP = aggParams(baseState({ minScoreBonus: 16 }));
+  assert.equal(lowP.minScore, normalP.minScore + 16);
+
+  // bigger per-bet size vs normal on the same bank
+  const normalState = baseState({ bank: 1, maxTradeSol: 0.05, sizeFracCap: 0.12, churn: "normal" });
+  const lowState = baseState({ bank: 1, maxTradeSol: 0.12, sizeFracCap: 0.28, churn: "low" });
+  assert.ok(sizeFor(lowState, aggParams(lowState)) > sizeFor(normalState, aggParams(normalState)), "low-churn bets bigger");
+
+  // engine respects maxOpen 3 in low-churn
+  let t = 0;
+  const rows = Array.from({ length: 8 }, (_, i) => goodRow({ tokenMint: `Z${i}`, symbol: `Z${i}`, bestPickScore: 100 }));
+  const engine = createAutopilotEngine({
+    getFreshFeed: async () => rows,
+    getPairLite: async () => ({ marketCap: 5000, liquidityUsd: 6000 }),
+    buyToken: async () => ({ ok: true, tokenAmount: "1" }),
+    sellPercent: async () => ({ ok: true }),
+    now: () => t,
+    persist: async () => {}
+  });
+  await engine.start({ solBudget: 1, minutes: 60, live: false, churn: "low" });
+  for (let i = 0; i < 4; i++) { t += 1000; await engine._tick(); }
+  assert.ok(engine.status().open.length <= 3, "low-churn holds at most 3 positions");
+  await engine.stop("test");
+});
+
 test("aggParams: hot regime sizes up and loosens cutoff", () => {
   const s = baseState({ results: ["W", "W", "W", "W", "W"], streak: 3 });
   const P = aggParams(s);

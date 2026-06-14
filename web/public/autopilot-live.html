@@ -107,6 +107,7 @@
         </div>
       </div>
       <label class="chk"><input type="checkbox" id="useAll" /> Use the whole wallet balance (it sizes itself)</label>
+      <label class="chk"><input type="checkbox" id="lowChurn" checked /> 🎯 Low-churn — patient: fewer, bigger, higher-conviction shots (win big, not every second)</label>
       <label class="chk"><input type="checkbox" id="profitLock" /> 🔒 Profit-lock — auto stop &amp; cash out if I give back half my gains (after +5%)</label>
       <label>Aggression</label>
       <select id="mode">
@@ -329,7 +330,8 @@ $("startBtn").addEventListener("click", async () => {
     mode: $("mode").value,
     live,
     sol: useAll ? "all" : Number($("amt").value),
-    profitLock: $("profitLock").checked
+    profitLock: $("profitLock").checked,
+    lowChurn: $("lowChurn").checked
   };
   if (w) body.wallet = w.index;
   if (live) body.confirm = "LIVE";
@@ -384,7 +386,7 @@ async function poll() {
   $("bigLabel").textContent = s.live ? "Wallet SOL (real)" : "Equity (paper)";
   $("equity").textContent = (s.live ? (wallet!=null?wallet.toFixed(4):"…") : (eq!=null?eq.toFixed(4):"—")) + " SOL";
   $("pnl").innerHTML = fmtPnl(s.pnlPct);
-  $("runState").textContent = s.running ? (s.live?"LIVE running":"paper running") : ("stopped"+(s.stopReason?` · ${s.stopReason}`:""));
+  $("runState").textContent = (s.running ? (s.live?"LIVE running":"paper running") : ("stopped"+(s.stopReason?` · ${s.stopReason}`:""))) + (s.churn==="low"?" · 🎯 low-churn":"");
   $("walletReal").textContent = (wallet!=null?wallet.toFixed(4):"refreshing…") + " SOL";
   $("inPos").textContent = (inPos!=null?inPos.toFixed(4):"—") + " SOL";
   $("bank").textContent = (eq!=null?eq.toFixed(4):"—") + " SOL";
