@@ -244,7 +244,8 @@ export function createAutopilotEngine(deps) {
     isPaused = async () => false,
     onOpen = () => {},
     getWalletSol = async () => null,
-    exitMs = 1200,
+    getInstantMc = () => null,
+    exitMs = 1000,
     huntMs = 5000
   } = deps;
 
@@ -333,20 +334,28 @@ export function createAutopilotEngine(deps) {
 
   async function stop(reason = "manual") {
     stopLoops();
-    if (state && !state.stopped) {
-      // Selling out is the whole point of Stop — flatten every open position
-      // (real sells in live mode) before we mark the session done.
-      const hadOpen = state.open.length;
+    if (!state || state.stopped) return status();
+    // 1) Flip the flag FIRST so any in-flight exit/hunt iteration bails out and
+    //    stops opening new positions (openPosition/hunt check state.stopped).
+    state.stopped = true;
+    state.stopReason = reason;
+    // 2) Wait for any in-flight loop iteration to finish so flatten has exclusive
+    //    access to state.open (no concurrent splice/push corrupting it).
+    for (let i = 0; i < 40 && (inExit || inHunt); i++) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    // 3) Flatten with retries — catches anything a finishing hunt slipped in.
+    let tries = 0;
+    while (state.open.length && tries < 8) {
       try {
         await flatten(reason);
       } catch (e) {
         record("warn", `flatten on stop failed: ${e && e.message}`);
       }
-      state.stopped = true;
-      state.stopReason = reason;
-      record("info", `Autopilot STOP (${reason})${hadOpen ? ` — flattened ${hadOpen} position(s)` : ""}`);
-      await savePoint();
+      tries += 1;
     }
+    record("info", `Autopilot STOP (${reason}) — ${state.open.length === 0 ? "all positions flat" : `WARNING ${state.open.length} still open`}`);
+    await savePoint();
     return status();
   }
 
@@ -357,8 +366,20 @@ export function createAutopilotEngine(deps) {
     }
   }
 
+  // Latest in-memory price for a position (pump tick), falling back to the last
+  // value the loop saw. Used so the displayed numbers are live on every poll,
+  // not just as fresh as the last exit-loop pass.
+  function liveMcFor(pos) {
+    const m = Number(getInstantMc(pos.mint));
+    return m > 0 ? m : pos.lastMc;
+  }
+
   function status() {
     if (!state) return { running: false };
+    const liveEquity = state.bank + state.open.reduce((a, p) => {
+      const mv = p.entryMc > 0 ? liveMcFor(p) / p.entryMc : 1;
+      return a + p.costSol * p.remFrac * mv;
+    }, 0);
     return {
       running: running(),
       live: state.live,
@@ -367,9 +388,9 @@ export function createAutopilotEngine(deps) {
       start: state.start,
       bank: round(state.bank),
       walletSol: state.walletSol == null ? null : round(state.walletSol),
-      equity: round(equity(state)),
+      equity: round(liveEquity),
       peak: round(state.peak),
-      pnlPct: round(((equity(state) / state.start) - 1) * 100, 2),
+      pnlPct: round(((liveEquity / state.start) - 1) * 100, 2),
       wins: state.wins,
       losses: state.losses,
       streak: state.streak,
@@ -378,7 +399,7 @@ export function createAutopilotEngine(deps) {
         mint: p.mint,
         costSol: round(p.costSol),
         remFrac: p.remFrac,
-        movePct: round(p.entryMc > 0 ? (p.lastMc / p.entryMc - 1) * 100 : 0, 2),
+        movePct: round(p.entryMc > 0 ? (liveMcFor(p) / p.entryMc - 1) * 100 : 0, 2),
         heldS: Math.round((now() - p.openedAt) / 1000)
       })),
       tradeNo: state.tradeNo,
@@ -509,6 +530,14 @@ export function createAutopilotEngine(deps) {
     state.bank += proceeds;
     pos.realized = (pos.realized || 0) + proceeds;
 
+    // Count a WIN the moment booked proceeds pass the entry cost — i.e. you've
+    // pulled out more SOL than you put in (locked profit, can't reverse). This
+    // is counted once, even while a moon bag keeps riding.
+    if (!pos.countedWin && pos.realized > pos.costSol) {
+      markWin(pos);
+      record("info", `✅ ${pos.sym} IN PROFIT — recovered entry +${round(pos.realized - pos.costSol, 4)} SOL (moon bag still riding)`);
+    }
+
     if (pct >= 100 || frac >= 1 || failedTerminal) {
       // Closing the position.
       pos.remFrac = 0;
@@ -522,21 +551,33 @@ export function createAutopilotEngine(deps) {
     }
   }
 
+  function markWin(pos) {
+    if (pos.countedWin) return;
+    pos.countedWin = true;
+    state.wins += 1;
+    state.results.push("W");
+    state.streak = state.streak >= 0 ? state.streak + 1 : 1;
+    if (state.results.length > 40) state.results.shift();
+  }
+  function markLoss(pos) {
+    state.losses += 1;
+    state.results.push("L");
+    state.streak = state.streak <= 0 ? state.streak - 1 : -1;
+    if (state.results.length > 40) state.results.shift();
+  }
+
   function finalizePosition(pos, reason) {
     const idx = state.open.indexOf(pos);
     if (idx >= 0) state.open.splice(idx, 1);
     const totalProceeds = pos.realized || 0;
-    const win = totalProceeds >= pos.costSol;
+    const win = pos.countedWin || totalProceeds > pos.costSol;
+    // Win already counted at the moment proceeds passed cost; only a trade that
+    // closes WITHOUT ever recovering its entry counts as a loss.
     if (win) {
-      state.wins += 1;
-      state.results.push("W");
-      state.streak = state.streak >= 0 ? state.streak + 1 : 1;
+      if (!pos.countedWin) markWin(pos);
     } else {
-      state.losses += 1;
-      state.results.push("L");
-      state.streak = state.streak <= 0 ? state.streak - 1 : -1;
+      markLoss(pos);
     }
-    if (state.results.length > 40) state.results.shift();
     state.recentSells[pos.mint] = now();
     const pnl = totalProceeds - pos.costSol;
     record(win ? "info" : "warn", `${win ? "✅" : "🔴"} ${pos.sym} CLOSE ${reason} ${pnl >= 0 ? "+" : ""}${round(pnl, 4)} SOL`);
@@ -575,6 +616,7 @@ export function createAutopilotEngine(deps) {
       .sort((a, b) => b.fs - a.fs);
 
     for (const cand of scored) {
+      if (state.stopped || now() >= state.endAt) break; // never open after a stop/timer
       const size = sizeFor(state, P);
       if (!canOpen(state, size)) break;
       await openPosition(cand.r, size, cand.fs);
@@ -582,6 +624,7 @@ export function createAutopilotEngine(deps) {
   }
 
   async function openPosition(row, sizeSol, fs) {
+    if (!state || state.stopped) return; // never open once stopped
     const mint = row.tokenMint;
     const sym = row.symbol || row.baseToken?.symbol || shortMint(mint);
     const entryMc = Number(row.marketCap) || 0;
@@ -604,6 +647,15 @@ export function createAutopilotEngine(deps) {
         record("warn", `buy ${sym} failed: ${e && e.message}`);
         return;
       }
+      // If a Stop landed while this buy was in flight, sell it straight back so
+      // we never leave an untracked position open after Stop.
+      if (state.stopped) {
+        try { await sellPercent(mint, 100, { mint, tokenAmount }); } catch {}
+        record("warn", `bought ${sym} during stop — sold back`);
+        return;
+      }
+    } else if (state.stopped) {
+      return;
     }
 
     state.bank -= sizeSol;

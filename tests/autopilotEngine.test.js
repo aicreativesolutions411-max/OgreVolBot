@@ -256,6 +256,29 @@ test("engine: live mode refuses to start without a wallet", async () => {
   await assert.rejects(() => engine.start({ solBudget: 1, minutes: 60, live: true }), /dedicated wallet/);
 });
 
+test("engine: stop sells every open position and opens no more", async () => {
+  let t = 0;
+  let sells = 0;
+  const rows = Array.from({ length: 6 }, (_, i) => goodRow({ tokenMint: `M${i}`, symbol: `S${i}` }));
+  const engine = createAutopilotEngine({
+    getFreshFeed: async () => rows,
+    getPairLite: async () => ({ marketCap: 5000, liquidityUsd: 6000 }),
+    buyToken: async () => ({ ok: true, tokenAmount: "1" }),
+    sellPercent: async () => { sells++; return { ok: true }; },
+    now: () => t,
+    persist: async () => {}
+  });
+  await engine.start({ solBudget: 1, minutes: 60, mode: "degen", live: true, walletPubkey: "W".repeat(44) });
+  for (let i = 0; i < 3; i++) { t += 1000; await engine._tick(); }
+  assert.ok(engine.status().open.length >= 3, "should hold positions before stop");
+  const after = await engine.stop("manual");
+  assert.equal(after.open.length, 0, "stop must leave zero open positions");
+  assert.ok(sells >= 3, "stop sold the open positions");
+  // a stray hunt after stop must not open anything
+  await engine._hunt();
+  assert.equal(engine.status().open.length, 0, "no positions opened after stop");
+});
+
 test("engine: loss cap flattens and stops", async () => {
   let t = 0;
   let mc = 5000;

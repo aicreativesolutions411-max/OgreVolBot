@@ -14,8 +14,8 @@
   .sub { color:var(--dim); font-size:12.5px; margin-bottom:16px; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; margin-bottom:14px; }
   label { display:block; font-size:12px; color:var(--dim); margin:10px 0 4px; text-transform:uppercase; letter-spacing:.5px; }
-  select, input[type=number], input[type=text] { width:100%; background:#0a120c; color:#eaffea; border:1px solid var(--line); border-radius:10px; padding:11px; font-size:15px; }
-  input[type=text] { font-family:ui-monospace,Menlo,monospace; font-size:12.5px; }
+  select, input[type=number], input[type=text], input[type=password] { width:100%; background:#0a120c; color:#eaffea; border:1px solid var(--line); border-radius:10px; padding:11px; font-size:15px; }
+  input[type=text], input[type=password] { font-family:ui-monospace,Menlo,monospace; font-size:12.5px; }
   .row { display:flex; gap:10px; }
   .row > div { flex:1; }
   button { width:100%; border:0; border-radius:11px; padding:13px; font-size:15px; font-weight:700; cursor:pointer; }
@@ -62,6 +62,12 @@
         <div><button class="b-ghost" id="backupBtn">⬇ Back up keys</button></div>
       </div>
       <div id="backupMsg" class="muted" style="margin-top:6px"></div>
+      <div style="margin-top:12px; border-top:1px solid var(--line); padding-top:12px">
+        <label>Load an existing wallet (private key)</label>
+        <input type="password" id="importKey" placeholder="paste private key — base58 or [12,34,...] JSON" autocomplete="off" />
+        <button class="b-ghost" id="importBtn" style="margin-top:8px">📥 Load wallet</button>
+        <div id="importMsg" class="muted" style="margin-top:6px">Imports a wallet you already control so the autopilot can trade it. Stored encrypted on the server.</div>
+      </div>
       <div id="walletInfo" class="hidden" style="margin-top:12px">
         <label>Deposit address — send SOL here to fund it</label>
         <div class="addr" id="walletAddr">—</div>
@@ -275,6 +281,21 @@ $("sweepBtn").addEventListener("click", async () => {
   }
 });
 
+$("importBtn").addEventListener("click", async () => {
+  const key = $("importKey").value.trim();
+  if (!key) { $("importMsg").innerHTML = '<span class="warn">Paste a private key first.</span>'; return; }
+  $("importBtn").textContent = "Loading…"; $("importBtn").disabled = true;
+  const r = await api("/api/web/wallets/import", { method:"POST", body:JSON.stringify({ privateKey:key, label:"Autopilot (loaded)" }) });
+  $("importBtn").textContent = "📥 Load wallet"; $("importBtn").disabled = false;
+  if (r && r.ok) {
+    $("importKey").value = "";
+    $("importMsg").innerHTML = '<span class="ok">✅ Wallet loaded — select it above.</span>';
+    await loadWallets();
+  } else {
+    $("importMsg").innerHTML = '<span class="warn">'+((r&&r.error)||"load failed")+'</span>';
+  }
+});
+
 $("refreshBtn").addEventListener("click", loadWallets);
 $("copyBtn").addEventListener("click", () => {
   const w = selectedWallet(); if (!w) return;
@@ -383,7 +404,7 @@ function escapeHtml(t){ return String(t||"").replace(/[&<>]/g,c=>({"&":"&amp;","
   syncLiveUi();
   await loadWallets();
   poll();
-  setInterval(poll, 1200); // fast UI refresh so prices feel instant
+  setInterval(poll, 900); // fast UI refresh; server returns live pump-tick prices
 })();
 </script>
 </body>

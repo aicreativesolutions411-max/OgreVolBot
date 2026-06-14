@@ -208,7 +208,7 @@ async function relockAutopilotWalletByPubkey(pubkey) {
 }
 
 const autopilotEngine = createAutopilotEngine({
-  exitMs: 1200,
+  exitMs: 1000,
   huntMs: 5000,
   log: (level, msg) => console.log(`[autopilot:${level}] ${msg}`),
   isPaused: async () => Boolean((await readState().catch(() => ({}))).paused),
@@ -276,6 +276,23 @@ const autopilotEngine = createAutopilotEngine({
   },
   // Subscribe a freshly-aped coin to the live trade-tick stream for instant prices.
   onOpen: (mint) => { try { pumpPortalStream.watchMint(mint); } catch {} },
+  // Synchronous, in-memory latest market cap (USD) from the live pump tick — used
+  // so status() shows truly live prices on every poll, with zero network wait.
+  getInstantMc: (mint) => {
+    try {
+      const solUsd = Number(solUsdPriceCache?.value) || 0;
+      if (!solUsd) return null;
+      const t = pumpPortalStream.getTrades(mint, { limit: 1 });
+      let mcSol = t && t[0] ? Number(t[0].marketCapSol) : 0;
+      if (!mcSol) {
+        const ce = pumpPortalStream.getCreationEntry(mint);
+        if (ce && ce.lastTrade) mcSol = Number(ce.lastTrade.marketCapSol) || 0;
+      }
+      return mcSol > 0 ? mcSol * solUsd : null;
+    } catch {
+      return null;
+    }
+  },
   // Real free SOL in the dedicated wallet — the true source of truth for the
   // displayed balance and for position sizing (reconciled into the engine).
   getWalletSol: async () => {
