@@ -26,6 +26,14 @@
   .pill.raid{border-color:rgba(255,120,80,0.45);} .pill.raid.live{color:#ff9a7e; border-color:#ff7a5e; box-shadow:0 0 12px rgba(255,90,40,0.4);}
   .hpwrap{height:7px; border-radius:99px; background:rgba(255,90,80,0.12); overflow:hidden; border:1px solid rgba(255,120,80,0.3); max-width:620px; margin:6px auto 0;}
   .hpfill{height:100%; width:100%; background:linear-gradient(90deg,#ff5e5e,#ffd84d 70%,#72ff23); transition:width .18s;}
+  #runHud{ position:fixed; top:calc(8px + env(safe-area-inset-top)); left:50%; transform:translateX(-50%); z-index:8; display:none; text-align:center; pointer-events:none; }
+  #runHud.on{ display:block; }
+  .rhrow{ font-weight:900; font-size:1rem; color:#fff; text-shadow:0 2px 6px #000; background:rgba(0,0,0,0.45); padding:4px 14px; border-radius:12px; border:1px solid rgba(255,94,94,0.4); }
+  .rhxp{ width:min(74vw,420px); height:8px; background:rgba(0,0,0,0.5); border-radius:5px; overflow:hidden; margin:5px auto 0; }
+  .rhxpfill{ height:100%; width:0%; background:linear-gradient(90deg,#9dff45,#ffd24a); transition:width .15s; }
+  .upcards{ display:grid; grid-template-columns:1fr; gap:10px; margin-top:12px; }
+  .upcard{ background:linear-gradient(180deg,rgba(20,50,26,0.95),rgba(8,20,10,0.95)); border:1px solid var(--green); border-radius:14px; padding:14px; cursor:pointer; text-align:left; display:flex; gap:12px; align-items:center; }
+  .upcard:active{ transform:scale(0.98); } .upcard .ic{ font-size:1.8rem; } .upcard .un{ font-weight:900; font-size:1rem; } .upcard .ud{ font-size:0.8rem; color:var(--dim); }
   .quest{margin:6px auto 0; max-width:560px; font-size:0.82rem; font-weight:800; color:#ffe9a8; text-align:center; text-shadow:0 1px 3px #000; background:rgba(0,0,0,0.32); border:1px solid rgba(255,210,74,0.3); border-radius:10px; padding:4px 12px;}
   .topbtns{position:absolute; top:calc(8px + env(safe-area-inset-top)); right:10px; display:flex; gap:6px; z-index:7;}
   .tbtn{pointer-events:auto; background:rgba(8,20,10,0.85); border:1px solid rgba(114,255,35,0.3); color:#eaffe0; border-radius:99px; width:36px; height:36px; font-weight:800; cursor:pointer; font-size:1rem;}
@@ -210,6 +218,7 @@
     <div class="herohead">Pick your ogre <span id="herocount"></span></div>
     <div class="heroes" id="heroes"></div>
     <button class="big" id="play">▶ ENTER THE SWAMP</button>
+    <button class="big" id="playSurv" style="margin-top:8px;background:linear-gradient(90deg,#ff5e5e,#b06bff)">🧟 SURVIVE THE HORDE</button>
     <div id="best" style="color:var(--dim);margin-top:10px;font-size:0.84rem"></div>
   </div>
 
@@ -296,6 +305,24 @@
     <h2 id="bldName"></h2>
     <div class="sub" id="bldDesc"></div>
     <div class="modalCTAs" id="bldCTAs"></div>
+  </div></div>
+
+  <!-- SURVIVAL RUN HUD -->
+  <div id="runHud">
+    <div class="rhrow"><span id="rhTime">0:00</span> · 🧟 <span id="rhKills">0</span> · <span id="rhLvl">Lv 1</span></div>
+    <div class="rhxp"><div class="rhxpfill" id="rhXp"></div></div>
+  </div>
+  <!-- UPGRADE PICK -->
+  <div class="sheet" id="upPick"><div class="panel" style="text-align:center">
+    <h2>⬆ LEVEL UP — pick a power</h2>
+    <div class="upcards" id="upCards"></div>
+  </div></div>
+  <!-- RUN SUMMARY -->
+  <div class="sheet" id="runEnd"><div class="panel" style="text-align:center">
+    <h2 id="reTitle">💀 OVERRUN</h2>
+    <div class="sub" id="reStats"></div>
+    <button class="big" id="reAgain" style="margin-top:10px">🧟 RUN AGAIN</button>
+    <button class="pAlt" id="reExit" style="margin-top:8px;border-radius:12px;padding:12px;font-weight:900;cursor:pointer;width:100%">⬅ Back to swamp</button>
   </div></div>
 
   <div class="err" id="err">
@@ -642,7 +669,8 @@ function hasGear(id){ return !!(store.gear&&store.gear[id]); }
 function dmgMult(){ let m=1; if(store.powerTotem||hasGear("totem")) m*=1.2; if(hasGear("blade")) m*=1.4; return m; }
 function fireWeapon(tx,ty){ const p=player, ox=p.x, oy=p.y-p.r*0.4; const a=Math.atan2(ty-oy,tx-ox);
   p.aimAng=a; p.recoil=0.16; p.muzzle=0.12; p.aimT=0.55; // aim the gun + kick + muzzle flash
-  const id=store.weapon||"slime", lv=weaponLevel(id), base=Math.round((12+level()*2)*dmgMult());
+  const id=store.weapon||"slime", lv=weaponLevel(id); let base=Math.round((12+level()*2)*dmgMult());
+  if(RUN&&!RUN.over) base=Math.round(base*(RUN.up.dmg||1)); // survival run damage scaling
   const mk=(ang,opt)=>{ const sp=(opt&&opt.sp)||600; shots.push(Object.assign({x:ox,y:oy,vx:Math.cos(ang)*sp,vy:Math.sin(ang)*sp,life:(opt&&opt.life)||0.85,r:(opt&&opt.r)||9,dmg:base,col:(opt&&opt.col)||"#9bff5a",hitFoe:false,hit:null},opt||{})); };
   if(id==="triple"){ const spread=0.26+Math.min(0.18,lv*0.02); const shots3=lv>=5?5:3;
     for(let i=0;i<shots3;i++){ const t=(i-(shots3-1)/2); mk(a+t*spread,{col:"#ffd27a",dmg:Math.round(base*0.8)}); } }
@@ -703,7 +731,7 @@ function spawnMob(type){ const m=MOBS[type]; const ang=Math.random()*6.28, dist=
   mobs.push({ type,name:m.name,hp:m.hp,maxhp:m.hp,dmg:m.dmg,spd:m.spd,r:m.r,drop:m.drop,col:m.col,
     x:player.x+Math.cos(ang)*dist, y:player.y+Math.sin(ang)*dist, dir:"down", walkT:Math.random()*3, _mv:false, flash:0,
     spr:{img:MOB_OGRES[hash(type+m.name)%MOB_OGRES.length]} }); }
-function manageMobs(){ const raid=raidState().live; const want=raid?12:6;
+function manageMobs(){ if(RUN&&!RUN.over) return; const raid=raidState().live; const want=raid?12:6;
   // count only normal mobs so an active rug boss doesn't suppress the usual spawns
   while(mobs.filter(m=>!m.boss).length<want){ const r=Math.random(); spawnMob(raid&&r<0.22?"bear":r<0.55?"goblin":"wolf"); } }
 // A rugged coin's creature turns hostile — a tough, themed boss worth real loot.
@@ -953,7 +981,8 @@ function attackMob(){ const m=nearMob; if(!m) return;
   const a=Math.atan2(m.y-player.y,m.x-player.x); m.x+=Math.cos(a)*24; m.y+=Math.sin(a)*24; // knockback
   impactFX(m.x,m.y,player.x,player.y,m.col,false);
   if(m.hp<=0) killMob(m); }
-function killMob(m){ if(!m||m._dead) return; m._dead=true; const prevK=store.kills||0; store.kills=prevK+1; addRes(m.drop); store.xp+=8;
+function killMob(m){ if(!m||m._dead) return; if(RUN&&!RUN.over){ return survKill(m); }
+  m._dead=true; const prevK=store.kills||0; store.kills=prevK+1; addRes(m.drop); store.xp+=8;
   // bears (Bear Market) sometimes drop a rare 🔮 relic — the key crafting material
   if(m.type==="bear" && Math.random()<0.5){ store.res.relic=(store.res.relic||0)+1; floatTxt(m.x,m.y-14,"+1 🔮 relic","#b06bff"); }
   // RUG BOSS down: guaranteed relics, big XP + raid pts, and "revenge" bragging rights
@@ -966,7 +995,8 @@ function killMob(m){ if(!m||m._dead) return; m._dead=true; const prevK=store.kil
   burst(m.x,m.y,m.col,18); impactFX(m.x,m.y,player.x,player.y,"#ffd24a",true);
   const got=Object.entries(m.drop).map(([k,v])=>"+"+v+" "+({wood:"🪵",scrap:"🔩",goo:"🟢"}[k]||k)).join(" ");
   floatTxt(m.x,m.y,got,m.col); mobs=mobs.filter(x=>x!==m); if(nearMob===m) nearMob=null; sfx("catch",0.3); checkWeaponUnlocks(prevK); refreshHud(); setTimeout(manageMobs,400); }
-function downed(pvp){ player.hp=player.maxhp; player.x=MAP.w*TILE/2; player.y=MAP.h*TILE/2; player.iframe=2.2; camx=player.x; camy=player.y;
+function downed(pvp){ if(RUN&&!RUN.over){ return endRun(true); }
+  player.hp=player.maxhp; player.x=MAP.w*TILE/2; player.y=MAP.h*TILE/2; player.iframe=2.2; camx=player.x; camy=player.y;
   if(pvp){ const by=player.lastFoe&&player.lastFoe.name?(" by "+player.lastFoe.name):""; sfx("boss",0.4); toast("💀 Slimed"+by+"! Respawned at camp — get them back."); refreshHud(); return; }
   let lost=[]; for(const k in store.res){ const l=Math.floor((store.res[k]||0)*0.2); if(l>0){ store.res[k]-=l; lost.push(l+" "+({wood:"🪵",scrap:"🔩",goo:"🟢"}[k]||k)); } } save();
   sfx("boss",0.4); toast("💀 Downed! Lost "+(lost.length?lost.join(", "):"nothing")+". Respawned at camp."); refreshHud(); }
@@ -975,6 +1005,7 @@ function downed(pvp){ player.hp=player.maxhp; player.x=MAP.w*TILE/2; player.y=MA
 function loop(ts){ if(state!=="world") return; let dt=(ts-lastTs)/1000; lastTs=ts; if(!isFinite(dt)||dt<0)dt=0; dt=Math.min(dt,0.05);
   if(hitstop>0){ hitstop-=dt; dt*=0.07; } update(dt); render(); requestAnimationFrame(loop); }
 function update(dt){
+  if(runPaused) return; // frozen while choosing a survival upgrade
   const p=player; let ix=mvx,iy=mvy;
   if(keys["a"]||keys["arrowleft"])ix=-1; if(keys["d"]||keys["arrowright"])ix=1; if(keys["w"]||keys["arrowup"])iy=-1; if(keys["s"]||keys["arrowdown"])iy=1;
   const il=Math.hypot(ix,iy); if(il>1){ix/=il;iy/=il;}
@@ -990,7 +1021,8 @@ function update(dt){
   if(p._mv){ p.walkT+=dt; const ax=Math.abs(ix),ay=Math.abs(iy); if(Math.abs(ax-ay)>0.22) p.dir=ax>ay?(ix<0?"left":"right"):(iy<0?"up":"down"); }
   if(p.atkCd>0)p.atkCd-=dt; if(p.atk>0)p.atk-=dt; if(p.iframe>0)p.iframe-=dt;
   if(p.recoil>0)p.recoil-=dt; if(p.muzzle>0)p.muzzle-=dt; if(p.aimT>0)p.aimT-=dt;
-  if(p.hp<p.maxhp) p.hp=Math.min(p.maxhp,p.hp+(raidState().live?2:4.5)*dt);
+  if(RUN&&!RUN.over){ survTick(dt); } // SURVIVORS horde run: auto-fire, spawns, gems, leveling
+  else if(p.hp<p.maxhp) p.hp=Math.min(p.maxhp,p.hp+(raidState().live?2:4.5)*dt);
   // creatures wander + flee slightly
   near=null; let nd=70*70;
   for(const c of creatures){ if(c.dead) continue; c.wt-=dt; c.bob+=dt*3;
@@ -1075,6 +1107,10 @@ function render(){
   ents.sort((a,b)=>a.e.y-b.e.y);
   for(const it of ents){ if(it.t==="p") drawPlayer(); else if(it.t==="n") drawNpc(it.e); else if(it.t==="r") drawRemote(it.e); else if(it.t==="m") drawMob(it.e); else drawCreature(it.e); }
   for(const pt of parts){ ctx.globalAlpha=Math.max(0,pt.life/pt.max); ctx.fillStyle=pt.col; ctx.beginPath(); ctx.arc(pt.x,pt.y,pt.sz,0,6.2832); ctx.fill(); } ctx.globalAlpha=1;
+  // XP gems (survival run) — glowing pickups
+  if(gems&&gems.length){ const t=performance.now()/200; for(const gm of gems){ const pul=1+Math.sin(t+gm.x*0.05)*0.18;
+    ctx.fillStyle="rgba(120,255,80,0.25)"; ctx.beginPath(); ctx.arc(gm.x,gm.y,7*pul,0,6.2832); ctx.fill();
+    ctx.fillStyle=gm.v>=5?"#ffd24a":"#9dff45"; ctx.beginPath(); ctx.arc(gm.x,gm.y,3.4*pul,0,6.2832); ctx.fill(); } }
   // flying slimeballs (tight glow + squash + highlight — visible but not overpowering)
   for(const sh of shots){ const a=Math.atan2(sh.vy,sh.vx);
     ctx.save(); ctx.translate(sh.x,sh.y); ctx.rotate(a); ctx.scale(1.2,0.82);
@@ -1656,8 +1692,75 @@ function enterWorld(){ $("start").classList.remove("on"); $("hud").style.display
   try{ checkQuests(); const q=QUESTS[store.questStep||0]; if(q) setTimeout(()=>toast("📜 Quest: "+q.t),2600); }catch(_){}
   requestAnimationFrame(loop); }
 $("play").onclick=enterWorld;
+/* ===================== SURVIVORS HORDE MODE ("zombie run") ===================== */
+var RUN=null, runPaused=false, gems=[];
+const UPGRADES=[
+  {id:"dmg",  ic:"💥", n:"Power +25%",      d:"More weapon damage",   ap:()=>RUN.up.dmg*=1.25},
+  {id:"rate", ic:"⚡", n:"Fire Rate +25%",  d:"Auto-shoot faster",     ap:()=>RUN.up.rate*=1.25},
+  {id:"multi",ic:"🎯", n:"Multishot +1",    d:"Hit one more enemy",    ap:()=>RUN.up.multi++},
+  {id:"spd",  ic:"👢", n:"Move Speed +12%", d:"Run & dodge faster",    ap:()=>{player.spd=Math.round(player.spd*1.12);}},
+  {id:"hp",   ic:"❤️", n:"Max HP +30",      d:"Heal + tankier",        ap:()=>{player.maxhp+=30; player.hp=Math.min(player.maxhp,player.hp+45);}},
+  {id:"mag",  ic:"🧲", n:"Magnet +50",      d:"Grab gems farther",     ap:()=>RUN.up.magnet+=50},
+  {id:"regen",ic:"💚", n:"Regen +1.5/s",    d:"Heal over time",        ap:()=>RUN.up.regen+=1.5},
+  {id:"xp",   ic:"📈", n:"XP Gain +20%",    d:"Level up faster",       ap:()=>RUN.up.xpMul*=1.2}
+];
+function nearestMobs(n){ const live=mobs.filter(m=>!m._dead); live.sort((a,b)=>(((a.x-player.x)**2+(a.y-player.y)**2)-((b.x-player.x)**2+(b.y-player.y)**2))); return live.slice(0,n); }
+function survSpawnWave(){ if(mobs.length>110) return; const t=RUN.t, lv=level(); const n=1+Math.floor(t/14)+(Math.random()<0.5?1:0);
+  for(let i=0;i<n;i++){ const ang=Math.random()*6.2832, dist=400+Math.random()*70;
+    const hp=Math.round(14+t*1.7+lv*3), dmg=Math.round(6+t*0.13), spd=48+Math.min(78,t*0.55);
+    mobs.push({ type:"z", name:"", hp, maxhp:hp, dmg, spd, r:13+Math.random()*5, drop:{}, col:"#8aff5a",
+      x:player.x+Math.cos(ang)*dist, y:player.y+Math.sin(ang)*dist, dir:"down", walkT:Math.random()*3, _mv:true, flash:0,
+      spr:{img:MOB_OGRES[(Math.random()*MOB_OGRES.length)|0]} }); } }
+function survBoss(){ if(mobs.length>110) return; const t=RUN.t, lv=level(); const ang=Math.random()*6.2832, dist=430;
+  const hp=Math.round(220+t*7+lv*12);
+  mobs.push({ type:"zboss", boss:true, name:"🧟 HORDE BOSS", hp, maxhp:hp, dmg:Math.round(12+t*0.2), spd:44, r:30, drop:{}, col:"#ff5e5e",
+    x:player.x+Math.cos(ang)*dist, y:player.y+Math.sin(ang)*dist, dir:"down", walkT:0, _mv:true, flash:0, spr:{img:MOB_OGRES[1]} });
+  try{ showBanner("🧟 HORDE BOSS","Big one incoming — focus fire!","#ff5e5e"); sfx("boss",0.4);}catch(_){} }
+function survKill(m){ if(m._dead) return; m._dead=true; RUN.kills++;
+  burst(m.x,m.y,m.col||"#8aff5a",m.boss?26:8);
+  gems.push({x:m.x,y:m.y,v:m.boss?9:1}); if(m.boss){ player.hp=Math.min(player.maxhp,player.hp+25); addShake&&addShake(8); }
+  mobs=mobs.filter(x=>x!==m); if(nearMob===m) nearMob=null; }
+function survTick(dt){ RUN.t+=dt;
+  if(RUN.up.regen>0) player.hp=Math.min(player.maxhp, player.hp+RUN.up.regen*dt);
+  RUN.spawnCd-=dt; if(RUN.spawnCd<=0){ survSpawnWave(); RUN.spawnCd=Math.max(0.3, 1.5-RUN.t*0.012); }
+  RUN.bossCd-=dt; if(RUN.bossCd<=0){ RUN.bossCd=35; survBoss(); }
+  player.fireCd=(player.fireCd||0)-dt; if(player.fireCd<=0){ const tg=nearestMobs(1+RUN.up.multi); if(tg.length){ player.fireCd=0.55/RUN.up.rate; for(const m of tg) fireWeapon(m.x,m.y); } else player.fireCd=0.1; }
+  const mag=RUN.up.magnet, mag2=mag*mag;
+  for(const g of gems){ const dx=player.x-g.x, dy=player.y-g.y, d2=dx*dx+dy*dy;
+    if(d2<mag2){ const d=Math.sqrt(d2)||1; const pull=(1-d/mag)*560*dt+90*dt; g.x+=dx/d*pull; g.y+=dy/d*pull; }
+    if(d2<26*26){ g._got=true; RUN.xp+=g.v*(RUN.up.xpMul||1); } }
+  gems=gems.filter(g=>!g._got);
+  if(RUN.xp>=RUN.xpNext) survLevelUp();
+  updateRunHud(); }
+function survLevelUp(){ RUN.xp-=RUN.xpNext; RUN.lvl++; RUN.xpNext=Math.round(RUN.xpNext*1.32+4); runPaused=true; try{sfx("level",0.5);}catch(_){}
+  const pool=[...UPGRADES]; for(let i=pool.length-1;i>0;i--){ const j=(Math.random()*(i+1))|0; const t=pool[i]; pool[i]=pool[j]; pool[j]=t; }
+  const box=$("upCards"); box.innerHTML=""; pool.slice(0,3).forEach(u=>{ const d=document.createElement("div"); d.className="upcard";
+    d.innerHTML=`<div class="ic">${u.ic}</div><div><div class="un">${u.n}</div><div class="ud">${u.d}</div></div>`;
+    d.onclick=()=>{ try{u.ap();}catch(_){} $("upPick").classList.remove("on"); runPaused=false; lastTs=performance.now(); }; box.appendChild(d); });
+  $("upPick").classList.add("on"); }
+function updateRunHud(){ const m=Math.floor(RUN.t/60), s=Math.floor(RUN.t%60); $("rhTime").textContent=m+":"+String(s).padStart(2,"0");
+  $("rhKills").textContent=RUN.kills; $("rhLvl").textContent="Lv "+RUN.lvl; $("rhXp").style.width=Math.min(100,RUN.xp/RUN.xpNext*100)+"%"; }
+function survStart(){ const wasRunning=(state==="world"); $("start").classList.remove("on"); $("runEnd").classList.remove("on"); $("upPick").classList.remove("on");
+  $("hud").style.display="block"; try{startAmbient();}catch(_){} newGame();
+  creatures=[]; npcs=[]; mobs=[]; gems=[]; parts=[]; floats=[]; shots=[]; buildings=[];
+  player.x=MAP.w*TILE/2; player.y=MAP.h*TILE/2; player.hp=player.maxhp; player.fireCd=0;
+  RUN={ t:0, xp:0, xpNext:5, lvl:1, kills:0, spawnCd:0.4, bossCd:35, over:false, up:{dmg:1,rate:1,multi:0,magnet:115,regen:0,xpMul:1} };
+  runPaused=false; state="world"; lastTs=performance.now(); $("runHud").classList.add("on"); refreshHud();
+  try{ showBanner("🧟 SURVIVE THE HORDE","Auto-fire ON — just move & dodge!","#ff5e5e"); }catch(_){}
+  if(!wasRunning) requestAnimationFrame(loop); }
+function endRun(died){ if(!RUN||RUN.over) return; RUN.over=true; runPaused=false;
+  const m=Math.floor(RUN.t/60), s=Math.floor(RUN.t%60), timeStr=m+":"+String(s).padStart(2,"0");
+  const relics=Math.floor(RUN.kills/25)+RUN.lvl, xpGain=RUN.kills*3+RUN.lvl*20;
+  store.res=store.res||{}; store.res.relic=(store.res.relic||0)+relics; store.xp=(store.xp||0)+xpGain;
+  store.survRunBest=Math.max(store.survRunBest||0, RUN.kills); save(); try{sfx("boss",0.5);}catch(_){}
+  $("runHud").classList.remove("on"); $("reTitle").textContent=died?"💀 OVERRUN":"🧟 RUN OVER";
+  $("reStats").innerHTML=`Survived <b>${timeStr}</b> · <b>${RUN.kills}</b> kills · reached <b>Lv ${RUN.lvl}</b><br>+${xpGain} XP · +${relics} 🔮 relic<br>🏆 Best: ${store.survRunBest} kills`;
+  $("runEnd").classList.add("on"); }
+$("playSurv").onclick=survStart;
+$("reAgain").onclick=survStart;
+$("reExit").onclick=()=>{ RUN=null; gems=[]; mobs=[]; $("runEnd").classList.remove("on"); $("runHud").classList.remove("on"); state="title"; $("hud").style.display="none"; showTitle(); };
 $("mute").onclick=()=>setMuted(!store.muted);
-$("exit").onclick=()=>{ state="title"; $("hud").style.display="none"; showTitle(); };
+$("exit").onclick=()=>{ RUN=null; runPaused=false; gems=[]; $("runHud").classList.remove("on"); $("upPick").classList.remove("on"); state="title"; $("hud").style.display="none"; showTitle(); };
 
 (async function init(){
   try{ await Promise.race([ Promise.all([loadAssets(),loadFeed()]), new Promise(r=>setTimeout(r,5000)) ]); }catch(_){}
