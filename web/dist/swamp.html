@@ -91,7 +91,7 @@
   .hero.locked:hover .hhint, .hero.locked:active .hhint{display:block;} .hero.locked:hover .hname{display:none;}
   .contracts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;width:min(460px,94vw);margin:10px auto 2px;}
   .contract{min-height:58px;text-align:left;background:rgba(8,20,10,0.72);border:1px solid rgba(114,255,35,0.28);border-radius:12px;padding:8px 9px;cursor:pointer;color:#eaffe0;box-shadow:0 6px 18px rgba(0,0,0,0.28);}
-  .contract:active{transform:scale(0.97);}.contract b{display:block;color:var(--green2);font-size:0.78rem;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.contract span{display:block;color:var(--dim);font-size:0.66rem;line-height:1.18;margin-top:3px;}
+  .contract:active{transform:scale(0.97);}.contract.ready{border-color:rgba(255,210,74,0.75);box-shadow:0 0 18px rgba(255,210,74,0.18),0 6px 18px rgba(0,0,0,0.28);}.contract.done{opacity:0.58;}.contract b{display:block;color:var(--green2);font-size:0.78rem;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.contract span{display:block;color:var(--dim);font-size:0.66rem;line-height:1.18;margin-top:3px;}
   @media(max-width:420px){.contracts{grid-template-columns:1fr;max-width:320px}.contract{min-height:42px;display:flex;align-items:center;gap:8px}.contract b{flex:0 0 92px}.contract span{margin-top:0}}
   /* encounter */
   .enc .panel{text-align:center;}
@@ -555,7 +555,7 @@ const AUD="/assets/slimewire/swamp/audio/"; const SFX={}; let ambient=null;
 ["throw","catch","miss","level","tick","quest","ui","boss"].forEach(n=>{ const a=new Audio(); a.src=AUD+n+".ogg"; a.preload="auto"; a.volume=0.5; SFX[n]=a; });
 function sfx(n,v){ if(store.muted) return; const b=SFX[n]; if(!b) return; try{ const a=b.cloneNode(); a.volume=v==null?0.5:v; a.play().catch(()=>{}); }catch(_){} }
 function startAmbient(){ if(store.muted) return; try{ if(!ambient){ ambient=new Audio(AUD+"swamp-ambient.ogg"); ambient.loop=true; ambient.volume=0.32; } ambient.play().catch(()=>{}); }catch(_){} }
-function setMuted(m){ store.muted=m; save(); $("mute").textContent=m?"🔇":"🔊"; if(ambient){ if(m) ambient.pause(); else ambient.play().catch(()=>{}); } }
+function setMuted(m){ store.muted=m; save(); $("mute").textContent=m?"OFF":"SND"; if(ambient){ if(m) ambient.pause(); else ambient.play().catch(()=>{}); } }
 
 /* ---- rarity + creature mapping from live market data ---- */
 const RAR={ common:{k:"common",label:"Common",col:"#9fb3a3",rate:0.85,xp:6,sz:0.9},
@@ -610,9 +610,15 @@ let camx=0,camy=0, state="load", lastTs=0, near=null, nearBld=null, nearMob=null
 function burst(x,y,col,n){ n=n||8; for(let i=0;i<n;i++){ const a=Math.random()*6.28,s=50+Math.random()*150; if(parts.length<240) parts.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:0.4+Math.random()*0.4,max:0.9,col,sz:2+Math.random()*3}); } }
 function floatTxt(x,y,txt,col){ if(floats.length>44) floats.shift(); floats.push({x,y,txt,col,t:0}); }
 /* ---- combat juice: shake, hitstop, slash arcs, thrown slime, combos ---- */
-let shake=0, hitstop=0, combo=0, comboT=0; let swings=[], shots=[];
+let shake=0, hitstop=0, combo=0, comboT=0, comboRewardMark=0; let swings=[], shots=[];
 function addShake(a){ shake=Math.min(18,shake+a); }
-function bumpCombo(){ combo++; comboT=2.0; if(combo>=3) floatTxt(player.x,player.y-player.r*1.7,"COMBO x"+combo, combo>=8?"#ffd24a":"#bbff63"); }
+function bumpCombo(){ combo++; comboT=2.0; recordDaily("combo",combo,true);
+  if(combo>=3) floatTxt(player.x,player.y-player.r*1.7,"COMBO x"+combo, combo>=8?"#ffd24a":"#bbff63");
+  const tier=Math.floor(combo/8);
+  if(tier>comboRewardMark && !RUN){ comboRewardMark=tier; store.xp=(store.xp||0)+tier*4; store.res=store.res||{};
+    if(tier%2===0){ store.res.goo=(store.res.goo||0)+1; floatTxt(player.x,player.y-player.r*2.2,"chain +1 goo","#9dff45"); }
+    save(); }
+}
 function updateComboMeter(){ const el=$("combo"); if(!el) return;
   if(combo>=2){ el.classList.add("on"); el.classList.toggle("hot",combo>=8); const n=$("comboN"); if(n) n.textContent="x"+combo; const b=$("comboBar"); if(b) b.style.width=(Math.max(0,Math.min(1,comboT/2.0))*100)+"%"; }
   else el.classList.remove("on"); }
@@ -796,7 +802,7 @@ function newGame(){
   player={ x:MAP.w*TILE/2, y:MAP.h*TILE/2, r:Math.round(18*(hero.scale||1)), spd, walkT:0, dir:"down", hp:maxhp, maxhp, iframe:0, atkCd:0, _mv:false,
     sprPath:hero.sprite||(A.creatures&&A.creatures[0])||(A.statics&&A.statics[0])||null, atk:0 };
   buildings=BUILDINGS_DEF.map(b=>({...b, x:b.tx*TILE, y:b.ty*TILE}));
-  creatures=[]; npcs=[]; mobs=[]; parts=[]; floats=[]; shots=[]; swings=[]; shake=0; hitstop=0; combo=0; comboT=0;
+  creatures=[]; npcs=[]; mobs=[]; parts=[]; floats=[]; shots=[]; swings=[]; shake=0; hitstop=0; combo=0; comboT=0; comboRewardMark=0;
   camx=player.x; camy=player.y;
   buildFromFeed();
   spawnNpcs();
@@ -1023,7 +1029,7 @@ function attackMob(){ const m=nearMob; if(!m) return;
   impactFX(m.x,m.y,player.x,player.y,m.col,false);
   if(m.hp<=0) killMob(m); }
 function killMob(m){ if(!m||m._dead) return; if(RUN&&!RUN.over){ return survKill(m); }
-  m._dead=true; const prevK=store.kills||0; store.kills=prevK+1; addRes(m.drop); store.xp+=8;
+  m._dead=true; const prevK=store.kills||0; store.kills=prevK+1; recordDaily("kills",1); addRes(m.drop); store.xp+=8;
   // bears (Bear Market) sometimes drop a rare 🔮 relic — the key crafting material
   if(m.type==="bear" && Math.random()<0.5){ store.res.relic=(store.res.relic||0)+1; floatTxt(m.x,m.y-14,"+1 🔮 relic","#b06bff"); }
   // RUG BOSS down: guaranteed relics, big XP + raid pts, and "revenge" bragging rights
@@ -1365,7 +1371,7 @@ function awardCatch(c){ if(!c||c.dead) return null; c.dead=true; sfx("catch",0.6
   const row=c.row||{}; const mcNow=num(row.marketCap||row.marketCapUsd);
   const firstSeen=!store.dex[c.mint];
   store.dex[c.mint]={ symbol:c.sym, mc:mcNow||1, mcNow:mcNow||1, rarity:c.rar.k, stage:1, ogre:!!row._ogre, at:Date.now() };
-  store.xp+=c.rar.xp; save();
+  store.xp+=c.rar.xp; recordDaily("catches",1); save();
   if(firstSeen){ const sp=coinSpecies(c.mint,c.rar.k); setTimeout(()=>toast("New species: "+sp.element.i+" "+sp.species+" - ATK "+sp.atk+"/DEF "+sp.def+"/HP "+sp.hp),700); }
   burst(c.x,c.y,c.rar.col,22); impactFX(c.x,c.y,c.x,c.y-1,c.rar.col,true);
   floats.push({x:c.x,y:c.y-c.r,txt:"CAUGHT! +"+c.rar.xp+"xp",col:c.rar.col,t:0});
@@ -1725,7 +1731,7 @@ function showTitle(){ state="title"; $("load").style.display="none"; $("start").
     hb.appendChild(d); });
   const hc=$("herocount"); if(hc) hc.textContent=unlockedN+" / "+list.length+" ogres unlocked";
   $("best").textContent=dexCount()?("your Swampdex: "+dexCount()+" caught - "+(worthAvg()?worthAvg().toFixed(2)+"x worth":"")):"";
-  $("mute").textContent=store.muted?"????":"????";
+  $("mute").textContent=store.muted?"OFF":"SND";
   try{ checkAch(); updateTitleStats(); updateContracts(); }catch(_){}
 }
 function enterWorld(){ $("start").classList.remove("on"); $("hud").style.display="block"; startAmbient(); newGame();
@@ -1774,7 +1780,7 @@ function offerExtractChoice(){ if(!RUN||RUN.over) return;
     d.innerHTML='<div class="ic">'+c.ic+'</div><div><div class="un">'+c.n+'</div><div class="ud">'+c.d+'</div></div>';
     d.onclick=c.go; box.appendChild(d); });
   modal.classList.add("on"); }
-function survKill(m){ if(m._dead) return; m._dead=true; RUN.kills++;
+function survKill(m){ if(m._dead) return; m._dead=true; RUN.kills++; recordDaily("horde",1); if(m&&m.boss) recordDaily("bosses",1);
   burst(m.x,m.y,m.col||"#8aff5a",m.boss?26:8);
   gems.push({x:m.x,y:m.y,v:m.boss?9:1}); if(m.boss){
     player.hp=Math.min(player.maxhp,player.hp+25); addShake&&addShake(8);
@@ -1879,19 +1885,39 @@ function checkAch(){ store.ach=store.ach||{}; let any=false;
   if(any) save(); }
 function achCount(){ store.ach=store.ach||{}; return Object.keys(store.ach).length; }
 function todayStr(){ const d=new Date(); return d.getUTCFullYear()+"-"+(d.getUTCMonth()+1)+"-"+d.getUTCDate(); }
+function ensureDaily(){ const date=todayStr();
+  if(!store.dailyContracts||store.dailyContracts.date!==date) store.dailyContracts={date,catches:0,kills:0,horde:0,bosses:0,combo:0,claimed:{}};
+  if(!store.dailyContracts.claimed) store.dailyContracts.claimed={}; return store.dailyContracts; }
+function recordDaily(k,v,maxMode){ const d=ensureDaily(); if(maxMode) d[k]=Math.max(d[k]||0,v||0); else d[k]=(d[k]||0)+(v||1); }
+const DAILY_CONTRACTS=[
+  {id:"catch2",title:"Bag launches",goal:2,progress:d=>d.catches||0,reward:{xp:35,goo:3,relic:1},go:()=>enterWorld()},
+  {id:"mobs12",title:"Clear mobs",goal:12,progress:d=>d.kills||0,reward:{xp:45,scrap:4,relic:1},go:()=>enterWorld()},
+  {id:"horde60",title:"Horde raid",goal:60,progress:d=>d.horde||0,reward:{xp:80,goo:5,relic:3},go:()=>survStart()}
+];
+function rewardText(r){ const out=[]; if(r.xp) out.push(r.xp+" XP"); for(const k of ["wood","scrap","goo","relic"]){ if(r[k]) out.push("+"+r[k]+" "+(RES_ICON[k]||k)); } return out.join(" / "); }
+function claimDailyContract(id){ const d=ensureDaily(), c=DAILY_CONTRACTS.find(x=>x.id===id); if(!c) return;
+  if(d.claimed&&d.claimed[id]){ toast("Already claimed today"); return; }
+  const p=c.progress(d); if(p<c.goal){ toast(c.title+" "+p+"/"+c.goal); return; }
+  d.claimed[id]=1; store.res=store.res||{}; store.xp=(store.xp||0)+(c.reward.xp||0);
+  for(const k of ["wood","scrap","goo","relic"]){ if(c.reward[k]) store.res[k]=(store.res[k]||0)+c.reward[k]; }
+  save(); try{ sfx("level",0.45); showBanner("DAILY CLAIMED",rewardText(c.reward),"#ffd24a"); }catch(_){} refreshHud(); updateTitleStats(); updateContracts(); }
 function dailyClaimed(){ return store.daily && store.daily.date===todayStr() && store.daily.claimed; }
 function tryClaimDaily(secs){ if(dailyClaimed()) return; if(secs>=150){ store.daily={date:todayStr(),claimed:true}; store.res=store.res||{}; store.res.relic=(store.res.relic||0)+8; save(); try{showBanner("📅 DAILY DONE","+8 🔮 relics!","#9dd6ff");}catch(_){} } }
 function submitSurvival(){ if(!(store.survRunBest>0)) return; try{ fetch(API+"/api/web/swamp-leaderboard",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({mode:"survival",score:store.survRunBest,name:(store.lbName||"anon"),clan:store.clan||"",meta:"Lv"+level()})}).catch(()=>{}); }catch(_){} }
 async function showSurvBoard(){ try{ const r=await fetch(API+"/api/web/swamp-leaderboard?mode=survival",{cache:"no-store"}); const j=await r.json(); const rows=(j&&j.scores)||[];
   const el=$("reBoard"); if(el) el.innerHTML = rows.length? ("🏆 Top survivors:<br>"+rows.slice(0,5).map((s,i)=>`${i+1}. ${s.name} — ${s.score} kills`).join("<br>")) : "Be the first on the leaderboard!"; }catch(_){} }
-function updateTitleStats(){ const ts=$("titleStats"); if(ts) ts.innerHTML="???? "+relicsHave()+" relics ?? ???? best "+(store.survRunBest||0)+" ?? ???? "+achCount()+"/"+ACH.length;
-  const td=$("titleDaily"); if(td) td.textContent= dailyClaimed()? "???? Daily complete ???" : "???? Daily: survive 2:30 in a run ??? +8 ????"; }
-function contractCard(title,sub,onClick){ const d=document.createElement("button"); d.type="button"; d.className="contract"; d.innerHTML="<b>"+title+"</b><span>"+sub+"</span>"; d.onclick=onClick; return d; }
+function updateTitleStats(){ const ts=$("titleStats"), day=ensureDaily(); const claimed=Object.keys(day.claimed||{}).length;
+  if(ts) ts.textContent="relics: "+relicsHave()+" | best: "+(store.survRunBest||0)+" | daily: "+claimed+"/"+DAILY_CONTRACTS.length+" | badges: "+achCount()+"/"+ACH.length;
+  const td=$("titleDaily"); if(td) td.textContent= dailyClaimed()? "Daily complete" : "Daily: survive 2:30 in a run for +8 relics"; }
+function contractCard(title,sub,onClick,cls){ const d=document.createElement("button"); d.type="button"; d.className="contract"; if(cls) d.classList.add(cls); d.innerHTML="<b>"+title+"</b><span>"+sub+"</span>"; d.onclick=onClick; return d; }
 function updateContracts(){ const box=$("contracts"); if(!box) return; box.innerHTML="";
-  const nextQuest=QUESTS[store.questStep||0];
-  box.appendChild(contractCard("Catch", nextQuest?(nextQuest.t+" - "+Math.min(questCount(nextQuest.type),nextQuest.n)+"/"+nextQuest.n):(dexCount()+" caught"), ()=>enterWorld()));
+  const nextQuest=QUESTS[store.questStep||0], day=ensureDaily();
+  box.appendChild(contractCard("Quest", nextQuest?(nextQuest.t+" - "+Math.min(questCount(nextQuest.type),nextQuest.n)+"/"+nextQuest.n):(dexCount()+" caught"), ()=>enterWorld()));
   box.appendChild(contractCard("Horde", (store.survRunBest||0)+" best kills - extract relics", ()=>survStart()));
-  box.appendChild(contractCard("Workshop", relicsHave()+" relics ready", ()=>openShop())); }
+  box.appendChild(contractCard("Workshop", relicsHave()+" relics ready", ()=>openShop()));
+  for(const c of DAILY_CONTRACTS){ const p=Math.min(c.progress(day),c.goal), claimed=day.claimed&&day.claimed[c.id], ready=p>=c.goal&&!claimed;
+    box.appendChild(contractCard((claimed?"Done: ":ready?"Claim: ":"Daily: ")+c.title, claimed?"claimed":(p+"/"+c.goal+" - "+rewardText(c.reward)), ()=>{ if(ready) claimDailyContract(c.id); else c.go(); }, claimed?"done":(ready?"ready":""))); }
+}
 $("openShop").onclick=openShop; $("reShop").onclick=openShop; $("shopX").onclick=()=>$("shop").classList.remove("on");
 $("mute").onclick=()=>setMuted(!store.muted);
 $("exit").onclick=()=>{ RUN=null; runPaused=false; gems=[]; $("runHud").classList.remove("on"); $("upPick").classList.remove("on"); state="title"; $("hud").style.display="none"; showTitle(); };

@@ -165,16 +165,46 @@ const pumpPortalStream = createPumpPortalStream({
 const AUTOPILOT_STATE_FILE = path.join(CONFIG.dataDir, "autopilot-session.json");
 let autopilotWalletRecord = null;
 
-async function resolveAutopilotWallet() {
-  const want = CONFIG.autopilotWalletPubkey;
-  if (!want) throw new Error("AUTOPILOT_WALLET_PUBKEY is not set.");
-  if (want === CONFIG.feeWallet) throw new Error("Refusing to run the autopilot on the FEE wallet.");
-  const store = await readWalletStore();
-  const match = store.wallets.find((w) => w.publicKey === want);
-  if (!match) throw new Error(`AUTOPILOT_WALLET_PUBKEY ${want} is not a managed wallet in this store.`);
-  if (!match.secret) throw new Error("Dedicated autopilot wallet has no signable secret.");
+// Lock the autopilot onto a specific managed wallet record. Always refuses the
+// fee wallet and any wallet without a signable secret - the only two hard "no"s.
+function lockAutopilotWallet(match, context = "") {
+  if (!match) throw new Error(`No wallet to run the autopilot on${context ? ` (${context})` : ""}.`);
+  if (match.publicKey === CONFIG.feeWallet) throw new Error("Refusing to run the autopilot on the FEE wallet.");
+  if (!match.secret) throw new Error("Selected wallet has no signable secret.");
   autopilotWalletRecord = match;
   return match;
+}
+
+// Resolve which wallet a START request should use. Two paths:
+//  - logged-in terminal session: pick from YOUR loaded wallets by index, label,
+//    or pubkey (the "select a wallet loaded in terminal" flow - no env needed).
+//  - headless control key: fall back to AUTOPILOT_WALLET_PUBKEY if configured.
+async function resolveAutopilotWalletFor({ selector, userId }) {
+  const store = await readWalletStore();
+  if (userId && selector != null && String(selector).trim() !== "") {
+    const mine = walletsForOwner(store, userId);
+    const sel = String(selector).trim();
+    const idx = Number(sel);
+    let match = null;
+    if (Number.isInteger(idx) && idx >= 1 && idx <= mine.length) match = mine[idx - 1];
+    else match = mine.find((w) => w.label === sel || w.publicKey === sel);
+    if (!match) throw new Error(`Wallet "${sel}" not found in your loaded wallets. Run the wallets command to list them.`);
+    return lockAutopilotWallet(match, "selected in terminal");
+  }
+  if (CONFIG.autopilotWalletPubkey) {
+    const match = store.wallets.find((w) => w.publicKey === CONFIG.autopilotWalletPubkey);
+    if (!match) throw new Error(`AUTOPILOT_WALLET_PUBKEY ${CONFIG.autopilotWalletPubkey} is not a managed wallet in this store.`);
+    return lockAutopilotWallet(match, "AUTOPILOT_WALLET_PUBKEY");
+  }
+  throw new Error("No wallet selected. Log in and pass a wallet index, or set AUTOPILOT_WALLET_PUBKEY.");
+}
+
+// Re-lock the wallet a persisted session was using (boot resume after redeploy).
+async function relockAutopilotWalletByPubkey(pubkey) {
+  const store = await readWalletStore();
+  const match = store.wallets.find((w) => w.publicKey === pubkey);
+  if (!match) throw new Error(`Persisted autopilot wallet ${pubkey} is no longer in the store.`);
+  return lockAutopilotWallet(match, "resume");
 }
 
 const autopilotEngine = createAutopilotEngine({
@@ -249,7 +279,7 @@ async function startLiveAutopilotResume() {
   try {
     const snap = await readJson(AUTOPILOT_STATE_FILE).catch(() => null);
     if (!snap || snap.stopped) return;
-    if (snap.live) await resolveAutopilotWallet().catch((e) => { throw e; });
+    if (snap.live) await relockAutopilotWalletByPubkey(snap.walletPubkey);
     const resumed = await autopilotEngine.resume(snap);
     if (resumed) console.log(`[autopilot] resumed ${snap.live ? "LIVE" : "PAPER"} session with ${snap.open?.length || 0} open position(s).`);
   } catch (e) {
@@ -2273,28 +2303,41 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
-    // --- Live Autopilot terminal control (key-gated, off the website) -------
-    // curl from your terminal:
-    //   GET  /api/web/autopilot/status?key=...
-    //   POST /api/web/autopilot/start  {key, sol, minutes, mode, live, confirm}
-    //   POST /api/web/autopilot/stop   {key}
-    // Live trading requires live:true AND confirm:"LIVE" AND a configured
-    // dedicated wallet. Without those it runs in paper mode (no SOL touched).
-    if (pathname === "/api/web/autopilot/status" || pathname === "/api/web/autopilot/start" || pathname === "/api/web/autopilot/stop") {
-      const key = request.method === "GET"
-        ? String(requestUrl.searchParams.get("key") || "")
-        : "";
+    // --- Live Autopilot terminal control (off the website) ------------------
+    // Authenticated by your existing terminal session (Bearer token) OR, for a
+    // headless box, the optional AUTOPILOT_CONTROL_KEY. With a session you need
+    // NO env vars at all and pick a wallet by index from your loaded wallets:
+    //   GET  /api/web/autopilot/status
+    //   GET  /api/web/autopilot/wallets            -> list your loaded wallets
+    //   POST /api/web/autopilot/start  {sol, minutes, mode, live, confirm, wallet}
+    //   POST /api/web/autopilot/stop
+    // Live trading requires live:true AND confirm:"LIVE" AND a selected wallet
+    // (never the fee wallet). Otherwise it runs paper (no SOL touched).
+    if (pathname === "/api/web/autopilot/status" || pathname === "/api/web/autopilot/start" || pathname === "/api/web/autopilot/stop" || pathname === "/api/web/autopilot/wallets") {
+      const webAuth = await authenticateOptionalWebRequest(request);
       const body = request.method === "POST" ? await readJsonRequestBody(request).catch(() => ({})) : {};
-      const providedKey = key || String(body.key || "");
-      if (!CONFIG.autopilotControlKey) {
-        sendWebJson(request, response, 503, { ok: false, error: "AUTOPILOT_CONTROL_KEY not configured on the server." });
+      const providedKey = String(requestUrl.searchParams.get("key") || body.key || "");
+      const keyOk = Boolean(CONFIG.autopilotControlKey) && providedKey === CONFIG.autopilotControlKey;
+      if (!webAuth && !keyOk) {
+        sendWebJson(request, response, 403, { ok: false, error: "Log in to your terminal first (or set AUTOPILOT_CONTROL_KEY)." });
         return;
       }
-      if (providedKey !== CONFIG.autopilotControlKey) {
-        sendWebJson(request, response, 403, { ok: false, error: "forbidden" });
-        return;
-      }
+      const controllerUserId = webAuth?.userId || null;
       try {
+        if (pathname === "/api/web/autopilot/wallets") {
+          if (!controllerUserId) {
+            sendWebJson(request, response, 400, { ok: false, error: "Log in to list your wallets." });
+            return;
+          }
+          const store = await readWalletStore();
+          const wallets = await Promise.all(walletsForOwner(store, controllerUserId).map(async (w, i) => {
+            let balanceSol = null;
+            try { balanceSol = lamportsToSol(await getSolBalanceCached(new PublicKey(w.publicKey))); } catch {}
+            return { index: i + 1, label: w.label, pubkey: w.publicKey, balanceSol, isFeeWallet: w.publicKey === CONFIG.feeWallet };
+          }));
+          sendWebJson(request, response, 200, { ok: true, wallets });
+          return;
+        }
         if (pathname === "/api/web/autopilot/status") {
           sendWebJson(request, response, 200, { ok: true, status: autopilotEngine.status() });
           return;
@@ -2319,7 +2362,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
             sendWebJson(request, response, 400, { ok: false, error: 'Live trading requires confirm:"LIVE".' });
             return;
           }
-          const wallet = await resolveAutopilotWallet();
+          const wallet = await resolveAutopilotWalletFor({ selector: body.wallet, userId: controllerUserId });
           walletPubkey = wallet.publicKey;
         }
         const status = await autopilotEngine.start({ solBudget: sol, minutes, mode, live: wantLive, walletPubkey });

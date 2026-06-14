@@ -2,54 +2,46 @@
 
 The same adaptive Fresh-Ape brain that runs on the `/autopilot` page, but running
 **inside the server** so it keeps trading in the background even after you close
-your phone. It executes real buys/sells through the battle-tested trade path,
-manages many positions at once, and is bounded to **one dedicated wallet** with a
-loss cap, a hard timer, and a kill switch.
+your phone/laptop. It executes real buys/sells through the battle-tested trade
+path, manages many positions at once, and trades **only the wallet you pick**,
+with a loss cap, a hard timer, and a kill switch.
 
-It is **off the website on purpose** — controlled only from your terminal with a
-secret key.
+It is **off the website on purpose** — controlled only from your terminal, and
+authenticated with your own SlimeWire session (no server secrets to set up).
 
-## One-time setup (on Render → OgreVolBot → Environment)
-
-1. Create a **fresh wallet** in the bot and fund it with only the SOL you're
-   willing to risk. This is the ONLY wallet the autopilot can touch.
-2. Set these env vars (then redeploy):
-
-   | Var | Value |
-   |-----|-------|
-   | `AUTOPILOT_CONTROL_KEY` | a long random secret (your password to control it) |
-   | `AUTOPILOT_WALLET_PUBKEY` | the public key of the dedicated wallet above |
-   | `AUTOPILOT_SLIPPAGE_BPS` | optional, default `700` (7%) for fast fresh fills |
-
-   The engine **refuses to run on the fee wallet** and refuses live mode unless
-   `AUTOPILOT_WALLET_PUBKEY` resolves to a managed, signable wallet.
-
-## Control from your terminal
+## Turn it on (no env vars needed)
 
 ```bash
-export AUTOPILOT_API="https://ogrevolbot.onrender.com"
-export AUTOPILOT_CONTROL_KEY="<the key you set on Render>"
+export AUTOPILOT_API="https://ogrevolbot.onrender.com"   # optional; this is the default
 
-# Dry run first — PAPER mode, no SOL touched, proves the feed/brain live:
+# 1) In Telegram, send /web to get a login code, then:
+node scripts/autopilot.js login --code A1B2C3
+
+# 2) See the wallets loaded in your terminal (with balances + index):
+node scripts/autopilot.js wallets
+
+# 3) PAPER first — no SOL touched, proves the live feed + brain:
 node scripts/autopilot.js start --sol 0.5 --minutes 60 --mode degen
 
-# Go LIVE (real SOL from the dedicated wallet):
-node scripts/autopilot.js start --sol 0.5 --minutes 60 --mode degen --live
+# 4) Go LIVE on a chosen wallet (real SOL):
+node scripts/autopilot.js start --sol 0.5 --minutes 60 --mode degen --wallet 2 --live
 
 node scripts/autopilot.js status     # equity, open positions, W/L, recent log
 node scripts/autopilot.js stop       # kill switch — stops hunting + flattens
 ```
 
-`--mode` is `chill | normal | degen` (sizing aggressiveness). `--live` makes it
-trade real SOL and auto-sends the `confirm:"LIVE"` opt-in.
+- `--wallet <index>` picks from your loaded wallets (the index from the `wallets`
+  command). Required for `--live`.
+- `--mode` is `chill | normal | degen` (sizing aggressiveness).
+- `--live` makes it trade real SOL and auto-sends the `confirm:"LIVE"` opt-in.
+- Fund the wallet you pick with **only the SOL you're willing to risk**. The
+  engine **refuses the fee wallet** and any wallet without a signable secret.
 
-You can also `curl` the endpoints directly:
-
-```
-GET  /api/web/autopilot/status?key=...
-POST /api/web/autopilot/start  {key, sol, minutes, mode, live, confirm:"LIVE"}
-POST /api/web/autopilot/stop   {key}
-```
+### Headless option (a server/box with no login)
+Set `AUTOPILOT_CONTROL_KEY` (any long secret) and `AUTOPILOT_WALLET_PUBKEY` on
+the server, export `AUTOPILOT_CONTROL_KEY` in the box's shell, and the same CLI
+works without `login` (the env wallet is used). Optional `AUTOPILOT_SLIPPAGE_BPS`
+(default `700`).
 
 ## What it does, ruthlessly honest
 
@@ -63,9 +55,10 @@ POST /api/web/autopilot/stop   {key}
   it sold after a 45s wave cooldown.
 - **Exits**: TP1 banks 40% at +25–28%, the moon bag rides to TP2 (+45–75%);
   hard stop at −8%; instant exit if liquidity is pulled; stale exit at 3 min.
-- **Safety rails**: dedicated wallet only; **loss cap** flattens + stops if equity
-  falls to 70% of the starting budget; **hard timer** flattens at the end; honors
-  the global emergency-stop; survives a redeploy (resumes the open session).
+- **Safety rails**: trades only the wallet you select (never the fee wallet);
+  **loss cap** flattens + stops if equity falls to 70% of the starting budget;
+  **hard timer** flattens at the end; honors the global emergency-stop; survives
+  a redeploy (resumes the open session and re-locks the same wallet).
 
 This is real-money, high-variance memecoin sniping. It is built to be smart and
 disciplined, **not** to guarantee profit. Start small, run paper first, watch the
