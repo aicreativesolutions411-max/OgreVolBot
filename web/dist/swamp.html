@@ -528,12 +528,12 @@ const speciesCache=new Map();
 function coinSpecies(mint,rarity){ const key=mint+"|"+(rarity||"");
   if(speciesCache.has(key)) return speciesCache.get(key);
   const h=hash("sp"+mint);
-  const pre=BEAST_PREFIX[h%BEAST_PREFIX.length];
-  const body=BEAST_BODY[(h>>4)%BEAST_BODY.length];
-  const el=ELEMENTS[(h>>8)%ELEMENTS.length];
+  const pre=BEAST_PREFIX[(h>>>0)%BEAST_PREFIX.length];
+  const body=BEAST_BODY[(h>>>4)%BEAST_BODY.length];
+  const el=ELEMENTS[(h>>>8)%ELEMENTS.length]||ELEMENTS[0];
   const bump={common:0,uncommon:6,rare:13,epic:22,legendary:34}[rarity]||0;
   const cl=v=>Math.max(35,Math.min(99,v+bump));
-  const out={species:pre+" "+body, element:el, atk:cl(40+((h>>3)%55)), def:cl(40+((h>>10)%55)), hp:cl(40+((h>>17)%55))};
+  const out={species:pre+" "+body, element:el, atk:cl(40+((h>>>3)%55)), def:cl(40+((h>>>10)%55)), hp:cl(40+((h>>>17)%55))};
   speciesCache.set(key,out); return out; }
 function verdictOf(row){ const m5=num(row.m5 ?? row.priceChangeM5); const liq=num(row.liquidityUsd);
   if(row._ogre) return {t:"SlimeWire Born",c:"#ffd24a"}; if(liq>0&&liq<1500) return {t:"Low Liq ⚠",c:"#ff5e5e"};
@@ -1328,11 +1328,17 @@ function makeCard(mint,entry){ const sp=coinSpecies(mint,entry.rarity); const ar
   const evo=entry.evo||1, boost=1+(evo-1)*0.12; const bf=store.deckBuff||{atk:0,def:0,hp:0};
   const atk=Math.round(sp.atk*boost*(1+(bf.atk||0))), def=Math.round(sp.def*boost*(1+(bf.def||0))), maxhp=Math.round((sp.hp*boost*2.4+60)*(1+(bf.hp||0)));
   return {mint, sym:entry.symbol, elem:sp.element, species:sp.species, atk, def, maxhp, hp:maxhp, art, cds:{}, rarity:entry.rarity}; }
+// Real coin names for AI cards: ogre=true → coins LAUNCHED ON SLIMEWIRE (bosses);
+// ogre=false → trending pump/dex coins (other characters). Falls back if feed empty.
+function arenaCoinSyms(ogre){ const rows=(typeof feedRows!=='undefined'&&feedRows)||[];
+  const pick=rows.filter(r=> ogre ? r._ogre : !r._ogre).map(r=>String(r.symbol||r.sym||"").replace(/^\$/,"").replace(/[^A-Za-z0-9_]/g,"")).filter(Boolean);
+  if(pick.length) return [...new Set(pick)];
+  return ogre?["SLIME","OGRE","SWAMP","GOO","BOG"]:["PEPE","BONK","WOJAK","DEGEN","CHAD","MOON","WEN"]; }
+function aiCard(sym,tier,boost){ const sp=coinSpecies(sym,tier); const mh=Math.round(sp.hp*boost*2.4+70);
+  return {mint:"ai_"+sym, sym, elem:sp.element, species:"$"+sym, atk:Math.round(sp.atk*boost), def:Math.round(sp.def*boost), maxhp:mh, hp:mh, cds:{}, art:elemArt(sp.element.n), rarity:tier}; }
 function bossDeck(){ const tiers=["common","uncommon","rare","epic","legendary"]; const lv=level();
-  const names=["Bog Tyrant","Rug Warlord","Slime Reaper","Toxic Overlord","Void Baron","Mire King"]; const n=Math.max(2,Math.min(6,store.deck.length||3)); const deck=[];
-  for(let i=0;i<n;i++){ const t=tiers[Math.min(4,Math.floor(lv/4)+(i%2))]||"common"; const fm="boss_"+i+"_"+t;
-    const sp=coinSpecies(fm,t); const art=elemArt(sp.element.n); const boost=1+lv*0.03;
-    const mh=Math.round(sp.hp*boost*2.4+70); deck.push({mint:fm, sym:(names[i%names.length]||"Boss").replace(/ /g,""), elem:sp.element, species:names[i%names.length], atk:Math.round(sp.atk*boost), def:Math.round(sp.def*boost), maxhp:mh, hp:mh, cds:{}, art, rarity:t}); }
+  const syms=arenaCoinSyms(true); const n=Math.max(2,Math.min(6,store.deck.length||3)); const deck=[];
+  for(let i=0;i<n;i++){ const t=tiers[Math.min(4,Math.floor(lv/4)+(i%2))]||"common"; deck.push(aiCard(syms[i%syms.length],t,1+lv*0.03)); }
   return deck; }
 let B=null;
 function arenaShow(sec){ ["arenaDeck","arenaStory","arenaCutscene","arenaBattle"].forEach(s=>{ const el=$(s); if(el) el.style.display=(s===sec)?"block":"none"; }); }
@@ -1425,10 +1431,8 @@ function loseBattle(){ B.over=true; try{sfx("boss",0.4);}catch(_){}
   bLog("💀 Deck wiped! Catch stronger coins and try again.");
   const story=(B.story!=null); setTimeout(()=>{ if(story) openStory(); else { arenaShow("arenaDeck"); buildDeckUI(); } },1700); }
 /* ----- Phase 4: Survival Gauntlet ----- */
-function survivalFoeDeck(wave){ const tiers=["common","uncommon","rare","epic","legendary"], lv=level(), size=Math.min(6,2+Math.floor(wave/2)), deck=[];
-  for(let k=0;k<size;k++){ const t=tiers[Math.min(4,Math.floor(wave/2)+(k%2))], fm="surv_"+wave+"_"+k;
-    const sp=coinSpecies(fm,t), art=elemArt(sp.element.n), boost=1+lv*0.03+wave*0.08, mh=Math.round(sp.hp*boost*2.4+60);
-    deck.push({mint:fm, sym:"W"+wave, elem:sp.element, species:sp.species, atk:Math.round(sp.atk*boost), def:Math.round(sp.def*boost), maxhp:mh, hp:mh, cds:{}, art, rarity:t}); }
+function survivalFoeDeck(wave){ const tiers=["common","uncommon","rare","epic","legendary"], lv=level(), size=Math.min(6,2+Math.floor(wave/2)), deck=[]; const syms=arenaCoinSyms(false);
+  for(let k=0;k<size;k++){ const t=tiers[Math.min(4,Math.floor(wave/2)+(k%2))]; deck.push(aiCard(syms[(k+wave)%syms.length], t, 1+lv*0.03+wave*0.08)); }
   return deck; }
 function startSurvival(){
   const my=activeDeck();
@@ -1472,10 +1476,11 @@ function playCutscene(elemName){ const cs=$("arenaCutscene"); if(!cs) return; cs
 function openBossCutscene(i){ const bo=STORY_BOSSES[i]; arenaShow("arenaCutscene");
   $("csArt").src=bo.art; $("csArt").style.display=""; $("csName").textContent=bo.name; $("csText").textContent=bo.intro;
   $("csGo").textContent="⚔️ FIGHT"; $("csGo").onclick=()=>startStoryBattle(i); try{sfx("boss",0.4);}catch(_){} playCutscene(bo.elem); }
-function storyBossDeck(bo){ const lv=level(), tiers=["common","uncommon","rare","epic","legendary"]; const tierIdx={common:0,uncommon:1,rare:2,epic:3,legendary:4}[bo.tier]||2; const deck=[];
-  for(let k=0;k<bo.size;k++){ const t=tiers[Math.max(0,Math.min(4,tierIdx-(k%2)))], fm=bo.id+"_"+k;
-    const sp=coinSpecies(fm,t), art=elemArt(bo.elem), boost=1+lv*0.03+tierIdx*0.05;
-    const mh=Math.round(sp.hp*boost*2.4+70); deck.push({mint:fm, sym:bo.id.toUpperCase(), elem:(ELEMENTS.find(e=>e.n===bo.elem)||sp.element), species:(k===0?bo.name:sp.species), atk:Math.round(sp.atk*boost), def:Math.round(sp.def*boost), maxhp:mh, hp:mh, cds:{}, art, rarity:t}); }
+function storyBossDeck(bo){ const lv=level(), tiers=["common","uncommon","rare","epic","legendary"]; const tierIdx={common:0,uncommon:1,rare:2,epic:3,legendary:4}[bo.tier]||2; const deck=[]; const syms=arenaCoinSyms(true);
+  for(let k=0;k<bo.size;k++){ const t=tiers[Math.max(0,Math.min(4,tierIdx-(k%2)))], boost=1+lv*0.03+tierIdx*0.05;
+    if(k===0){ const sp=coinSpecies(bo.id,t), be=(ELEMENTS.find(e=>e.n===bo.elem)||sp.element), mh=Math.round(sp.hp*boost*2.4+90);
+      deck.push({mint:bo.id, sym:bo.id.toUpperCase(), elem:be, species:bo.name, atk:Math.round(sp.atk*boost), def:Math.round(sp.def*boost), maxhp:mh, hp:mh, cds:{}, art:elemArt(bo.elem), rarity:t}); }
+    else { deck.push(aiCard(syms[k%syms.length], t, boost)); } }
   return deck; }
 function startStoryBattle(i){ const bo=STORY_BOSSES[i];
   const my=activeDeck();
