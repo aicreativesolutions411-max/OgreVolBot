@@ -99,7 +99,7 @@
   /* dex */
   .dexgrid{display:grid; grid-template-columns:repeat(auto-fill,minmax(86px,1fr)); gap:8px; margin-top:10px;}
   .dcard{background:rgba(8,20,10,0.6); border:1px solid rgba(114,255,35,0.18); border-radius:12px; padding:7px 5px; text-align:center; position:relative;}
-  .dcard img{width:46px; height:46px; object-fit:contain;}
+  .dcard img{width:50px; height:50px; object-fit:cover; border-radius:8px; -webkit-mask:radial-gradient(circle at 50% 46%, #000 60%, transparent 78%); mask:radial-gradient(circle at 50% 46%, #000 60%, transparent 78%);}
   .dcard .ds{font-size:0.7rem; font-weight:900; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
   .dcard .dm{font-size:0.66rem; font-weight:900;} .up{color:var(--green2);} .down{color:var(--bad);}
   .dcard .dr{position:absolute; top:3px; left:3px; width:8px; height:8px; border-radius:50%;}
@@ -111,7 +111,7 @@
   #arenaBattle{ background:linear-gradient(rgba(4,10,5,0.5),rgba(4,10,5,0.78)), url(/assets/slimewire/swamp/art/arena-bg.jpg) center/cover; border-radius:14px; padding:14px 12px; box-shadow:inset 0 0 60px rgba(0,0,0,0.6);}
   .bfoe,.bme{display:flex; flex-direction:column; align-items:center; gap:4px;}
   .bme{margin-top:6px;}
-  .bart{width:120px; height:120px; object-fit:contain; filter:drop-shadow(0 6px 10px rgba(0,0,0,0.5));}
+  .bart{width:130px; height:130px; object-fit:cover; filter:drop-shadow(0 6px 10px rgba(0,0,0,0.5)); -webkit-mask:radial-gradient(circle at 50% 46%, #000 58%, transparent 76%); mask:radial-gradient(circle at 50% 46%, #000 58%, transparent 76%);}
   .bart.hit{ animation:bhit .32s; } @keyframes bhit{ 0%{filter:brightness(3) drop-shadow(0 0 12px #fff);} 25%{transform:translateX(-7px);} 50%{transform:translateX(7px);filter:none;} 75%{transform:translateX(-3px);} 100%{transform:translateX(0);} }
   .bart.heal{ animation:bheal .5s; } @keyframes bheal{ 0%,100%{filter:drop-shadow(0 6px 10px rgba(0,0,0,0.5));} 50%{filter:brightness(1.4) drop-shadow(0 0 14px #39ff14);} }
   .bfoe,.bme{ position:relative; }
@@ -864,8 +864,15 @@ window.addEventListener("keyup",e=>{ keys[e.key.toLowerCase()]=false; });
 // tap-to-interact (mouse / quick tap handled via click on canvas)
 cv.addEventListener("click",()=>{ if(state==="world") interact(); });
 $("actBtn").onclick=()=>{ if(state==="world") interact(); };
-$("atkBtn").onclick=()=>{ if(state==="world") playerSwing(); };
 $("wpnBtn").onclick=()=>{ if(state==="world") cycleWeapon(); };
+// HOLD-to-fire: press & hold Attack to keep shooting while you move (mobile + mouse)
+let atkHeld=false;
+(function(){ const b=$("atkBtn"); if(!b) return;
+  const dn=(e)=>{ atkHeld=true; if(state==="world") playerSwing(); if(e&&e.cancelable) e.preventDefault(); };
+  const up=()=>{ atkHeld=false; };
+  b.addEventListener("pointerdown",dn); b.addEventListener("touchstart",dn,{passive:false});
+  window.addEventListener("pointerup",up); window.addEventListener("touchend",up); window.addEventListener("touchcancel",up); b.addEventListener("pointercancel",up);
+})();
 
 // Catching is automatic now (sling slimeballs to weaken -> auto-bag), so the ✋
 // button is just "enter building" — or a convenience swing when nothing to enter.
@@ -923,8 +930,8 @@ function update(dt){
   const p=player; let ix=mvx,iy=mvy;
   if(keys["a"]||keys["arrowleft"])ix=-1; if(keys["d"]||keys["arrowright"])ix=1; if(keys["w"]||keys["arrowup"])iy=-1; if(keys["s"]||keys["arrowdown"])iy=1;
   const il=Math.hypot(ix,iy); if(il>1){ix/=il;iy/=il;}
-  // attack while moving: hold Space / J / F to swing+fire (rate-limited by atkCd)
-  if(keys[" "]||keys["j"]||keys["f"]) playerSwing();
+  // attack while moving: hold Space / J / F (desktop) or the Attack button (mobile)
+  if(keys[" "]||keys["j"]||keys["f"]||atkHeld) playerSwing();
   // velocity smoothing -> eases accel/decel so movement feels fluid, not snappy
   p.vx=p.vx||0; p.vy=p.vy||0; const sm=Math.min(1,dt*12);
   p.vx+=(ix*p.spd-p.vx)*sm; p.vy+=(iy*p.spd-p.vy)*sm;
@@ -1335,8 +1342,8 @@ function closeArena(){ $("arena").classList.remove("on"); if(state==="arena"){ s
 function buildDeckUI(){ const entries=Object.entries(store.dex); const grid=$("deckGrid"); grid.innerHTML="";
   const bf=store.deckBuff; const buffTxt=(bf&&(bf.atk||bf.hp))?` · ⬆ deck +${Math.round((bf.atk||0)*100)}%`:"";
   $("arenaSub").innerHTML=`Pick up to 6 cards · Deck: <b style="color:var(--gold)">${store.deck.length}/6</b>`+(store.arenaWins?` · 🏆 ${store.arenaWins}`:"")+(store.survivalBest?` · 🔥 best W${store.survivalBest}`:"")+buffTxt;
-  if(!entries.length){ grid.innerHTML='<div style="grid-column:1/-1;color:var(--dim);text-align:center;padding:18px">Catch coins first — each becomes a battle card.</div>'; $("battleStart").style.display="none"; return; }
-  $("battleStart").style.display=store.deck.length?"block":"none";
+  $("battleStart").style.display="block"; // always playable (auto/starter deck)
+  if(!entries.length){ grid.innerHTML='<div style="grid-column:1/-1;color:var(--dim);text-align:center;padding:18px">Catch coins (✋ in the swamp) to collect cards. You can still battle now with a starter deck 👇</div>'; return; }
   for(const [mint,c] of entries){ const sp=coinSpecies(mint,c.rarity), el=sp.element, picked=store.deck.includes(mint);
     const art=elemArt(sp.element.n);
     const d=document.createElement("div"); d.className="dcard"+(picked?" picked":""); d.style.cursor="pointer";
@@ -1345,8 +1352,13 @@ function buildDeckUI(){ const entries=Object.entries(store.dex); const grid=$("d
     grid.appendChild(d); } }
 function curMe(){ return B.me[B.mi]; } function curFoe(){ return B.foe[B.fi]; }
 function bLog(t){ $("bLog").textContent=t; }
-function startBattle(){ if(!store.deck.length){ toast("Add cards first"); return; }
-  const my=store.deck.map(m=>store.dex[m]?makeCard(m,store.dex[m]):null).filter(Boolean); if(!my.length){ toast("Deck empty"); return; }
+// Always returns a playable team: your deck, else your caught coins, else starter cards.
+function activeDeck(){ let ids=(store.deck&&store.deck.length)?store.deck:Object.keys(store.dex||{}).slice(0,6);
+  let cards=ids.map(m=>store.dex[m]?makeCard(m,store.dex[m]):null).filter(Boolean);
+  if(!cards.length){ cards=[ makeCard("starter_slime",{symbol:"GOO",rarity:"uncommon"}), makeCard("starter_bog",{symbol:"MOSSY",rarity:"common"}) ]; }
+  return cards; }
+function startBattle(){
+  const my=activeDeck();
   B={me:my, foe:bossDeck(), mi:0, fi:0, turn:"me", over:false};
   arenaShow("arenaBattle"); renderBattle();
   try{sfx("boss",0.4);}catch(_){} showBanner("⚔️ ARENA","Boss deck: "+B.foe.length+" cards","#ff7bd0"); bLog(`A ${curFoe().species} blocks your path!`); }
@@ -1418,8 +1430,8 @@ function survivalFoeDeck(wave){ const tiers=["common","uncommon","rare","epic","
     const sp=coinSpecies(fm,t), art=elemArt(sp.element.n), boost=1+lv*0.03+wave*0.08, mh=Math.round(sp.hp*boost*2.4+60);
     deck.push({mint:fm, sym:"W"+wave, elem:sp.element, species:sp.species, atk:Math.round(sp.atk*boost), def:Math.round(sp.def*boost), maxhp:mh, hp:mh, cds:{}, art, rarity:t}); }
   return deck; }
-function startSurvival(){ if(!store.deck||!store.deck.length){ toast("Build a deck first"); arenaShow("arenaDeck"); buildDeckUI(); return; }
-  const my=store.deck.map(m=>store.dex[m]?makeCard(m,store.dex[m]):null).filter(Boolean); if(!my.length){ toast("Deck empty"); return; }
+function startSurvival(){
+  const my=activeDeck();
   B={me:my, foe:survivalFoeDeck(1), mi:0, fi:0, turn:"me", over:false, survival:true, wave:1};
   arenaShow("arenaBattle"); renderBattle(); try{sfx("boss",0.4);}catch(_){} showBanner("🔥 SURVIVAL","Wave 1 — last as long as you can","#ff9a4a"); bLog("Wave 1 incoming!"); }
 function clearWave(){ const w=B.wave; store.xp+=15+w*4; if(w%3===0){ store.res.relic=(store.res.relic||0)+1; store.deckBuff=store.deckBuff||{atk:0,def:0,hp:0}; store.deckBuff.atk+=0.05; store.deckBuff.def+=0.05; store.deckBuff.hp+=0.05; }
@@ -1465,8 +1477,8 @@ function storyBossDeck(bo){ const lv=level(), tiers=["common","uncommon","rare",
     const sp=coinSpecies(fm,t), art=elemArt(bo.elem), boost=1+lv*0.03+tierIdx*0.05;
     const mh=Math.round(sp.hp*boost*2.4+70); deck.push({mint:fm, sym:bo.id.toUpperCase(), elem:(ELEMENTS.find(e=>e.n===bo.elem)||sp.element), species:(k===0?bo.name:sp.species), atk:Math.round(sp.atk*boost), def:Math.round(sp.def*boost), maxhp:mh, hp:mh, cds:{}, art, rarity:t}); }
   return deck; }
-function startStoryBattle(i){ const bo=STORY_BOSSES[i]; if(!store.deck||!store.deck.length){ toast("Build a deck first — Back → pick cards"); arenaShow("arenaDeck"); buildDeckUI(); return; }
-  const my=store.deck.map(m=>store.dex[m]?makeCard(m,store.dex[m]):null).filter(Boolean); if(!my.length){ toast("Deck empty"); return; }
+function startStoryBattle(i){ const bo=STORY_BOSSES[i];
+  const my=activeDeck();
   B={me:my, foe:storyBossDeck(bo), mi:0, fi:0, turn:"me", over:false, story:i};
   arenaShow("arenaBattle"); renderBattle(); try{sfx("boss",0.5);}catch(_){} showBanner("📖 "+bo.name, bo.elem+" boss · "+bo.size+" cards","#ff7bd0"); bLog("Battle begins!"); }
 /* ----- Phase 3: PvP deck duels (async — battle real players' published decks) ----- */
@@ -1478,8 +1490,8 @@ function publishMyDeck(){ if(!store.deck||!store.deck.length) return;
 }
 function pvpCard(c){ const elem=ELEMENTS.find(e=>e.n===c.el)||ELEMENTS[ELEMENTS.length-1]; const t=c.rarity||"common"; const art=elemArt(elem.n); const mh=Math.round((c.hp||80)*2.4+60);
   return {mint:"pvp_"+(c.sym||"x"), sym:c.sym||"COIN", elem, species:"$"+(c.sym||"COIN"), atk:c.atk||40, def:c.def||40, maxhp:mh, hp:mh, cds:{}, art, rarity:t}; }
-async function startPvp(){ if(!store.deck||!store.deck.length){ toast("Build a deck first"); arenaShow("arenaDeck"); buildDeckUI(); return; }
-  const my=store.deck.map(m=>store.dex[m]?makeCard(m,store.dex[m]):null).filter(Boolean); if(!my.length){ toast("Deck empty"); return; }
+async function startPvp(){
+  const my=activeDeck();
   publishMyDeck(); toast("Finding an opponent…");
   let opp=null; try{ const r=await fetch(API+"/api/web/swamp-deck?exclude="+encodeURIComponent(myPvpId()),{cache:"no-store"}); const j=await r.json(); opp=j&&j.opponent; }catch(_){}
   let foe;
@@ -1487,6 +1499,7 @@ async function startPvp(){ if(!store.deck||!store.deck.length){ toast("Build a d
   B={me:my, foe, mi:0, fi:0, turn:"me", over:false, pvp:true, oppName:(opp.name||"rival")};
   arenaShow("arenaBattle"); renderBattle(); try{sfx("boss",0.5);}catch(_){} showBanner("⚔️ PvP DUEL","vs "+(opp.name||"rival")+(opp.clan?" ["+opp.clan+"]":""),"#ff7bd0"); bLog("Dueling "+(opp.name||"a rival")+"'s deck!"); }
 $("arenaBtn").onclick=()=>{ if(state==="world") openArena(); }; $("arenaX").onclick=closeArena; $("battleStart").onclick=startBattle;
+try{ $("arena").addEventListener("click",e=>{ if(e.target&&e.target.id==="arena") closeArena(); }); }catch(_){}
 $("storyOpen").onclick=openStory; $("storyBack").onclick=()=>{ arenaShow("arenaDeck"); buildDeckUI(); };
 $("survivalStart").onclick=startSurvival; $("pvpStart").onclick=startPvp;
 
