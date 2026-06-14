@@ -15210,6 +15210,7 @@ async function showLaunchBuilder(chatId, userId, messageId = null) {
     `${LAUNCH_FIELDS.description.emoji} Description: ${v(d.description)}`,
     `🖼️ Image: ${d.imageDataUrl ? "✅ added" : "— (tap to upload)"}`,
     `${LAUNCH_FIELDS.devBuySol.emoji} Dev buy: ${d.devBuySol ? d.devBuySol + " SOL" : "none"}`,
+    `🎯 Auto-exit: ${d.autoExitX ? "auto-sell dev bag at " + d.autoExitX + "x" : "none (hold)"}`,
     `👛 Launch wallet: ${w.label}`,
     `${LAUNCH_FIELDS.x.emoji} X: ${v(d.x)}   ${LAUNCH_FIELDS.telegram.emoji} TG: ${v(d.telegram)}   ${LAUNCH_FIELDS.website.emoji} Web: ${v(d.website)}`,
     "",
@@ -15218,7 +15219,7 @@ async function showLaunchBuilder(chatId, userId, messageId = null) {
   const kb = [
     [{ text: "📝 Name", callback_data: "lb_edit:name" }, { text: "💲 Ticker", callback_data: "lb_edit:symbol" }],
     [{ text: "📄 Description", callback_data: "lb_edit:description" }, { text: "🖼️ Image", callback_data: "lb_image" }],
-    [{ text: "💰 Dev buy", callback_data: "lb_edit:devBuySol" }, { text: "👛 Wallet", callback_data: "lb_wallet" }],
+    [{ text: "💰 Dev buy", callback_data: "lb_edit:devBuySol" }, { text: "🎯 Auto-exit", callback_data: "lb_autoexit" }, { text: "👛 Wallet", callback_data: "lb_wallet" }],
     [{ text: "🐦 X", callback_data: "lb_edit:x" }, { text: "✈️ Telegram", callback_data: "lb_edit:telegram" }, { text: "🌐 Website", callback_data: "lb_edit:website" }]
   ];
   if (ready) kb.push([{ text: "🚀 LAUNCH NOW", callback_data: "lb_go" }]);
@@ -15253,6 +15254,17 @@ async function handleLaunchBuilder(chatId, userId, data, messageId) {
     await showLaunchBuilder(chatId, userId, messageId);
     return;
   }
+  if (data === "lb_autoexit") {
+    const rows = [
+      [{ text: "None — hold the bag", callback_data: "lb_ax:0" }],
+      [{ text: "Auto-sell at 2x", callback_data: "lb_ax:2" }, { text: "3x", callback_data: "lb_ax:3" }],
+      [{ text: "5x", callback_data: "lb_ax:5" }, { text: "10x", callback_data: "lb_ax:10" }],
+      [{ text: "⬅ Back", callback_data: "launch_build_menu" }]
+    ];
+    await sendOrEditMessage(chatId, messageId, withBrandFooter("🎯 Auto-exit the DEV bag\n\nPick a target and the bot auto-sells 100% of your dev buy when the coin hits that multiple. No stop-loss — you're the first buyer, so there's no downside floor to protect.\n\n(You can always sell manually too.)"), { inline_keyboard: rows });
+    return;
+  }
+  if (data.startsWith("lb_ax:")) { launchDraftFor(chatId).autoExitX = Number(data.slice("lb_ax:".length)) || 0; await showLaunchBuilder(chatId, userId, messageId); return; }
   if (data === "lb_go") { await showLaunchConfirm(chatId, userId, messageId); return; }
   if (data === "lb_confirm") { await executeBotLaunch(chatId, userId, messageId); return; }
   if (data.startsWith("lb_edit:")) {
@@ -15279,6 +15291,7 @@ async function showLaunchConfirm(chatId, userId, messageId) {
     `Image: ${d.imageDataUrl ? "✅ attached" : "none"}`,
     `Wallet: ${w.label}`,
     `Dev buy: ${devTxt}`,
+    `Auto-exit: ${d.autoExitX ? `auto-sell dev bag at ${d.autoExitX}x` : "none (hold)"}`,
     "",
     "Make sure that wallet holds enough SOL (mint fee + buffer + your dev buy)."
   ].join("\n")), {
@@ -15312,12 +15325,32 @@ async function executeBotLaunch(chatId, userId, messageId) {
     selectedDevWalletId: wid, slippageBps: 300, launchAttemptId: crypto.randomUUID(), source: "slimewire_tg"
   };
   try {
+    const autoExitX = Number(d.autoExitX) || 0;
     const result = await webLaunchPumpCoin(userId, body);
     const mint = result?.tokenMint || "";
     const trailerDraft = { name: d.name, symbol: d.symbol, description: d.description, imageDataUrl: d.imageDataUrl, x: d.x, telegram: d.telegram, website: d.website };
     launchDrafts.set(chatId, {});
     const out = [`✅ $${d.symbol} is LIVE — born on SlimeWire!`];
     if (mint) { out.push("", `CA: <code>${mint}</code>`, `Pump: https://pump.fun/${mint}`, `Chart: https://www.slimewire.org/t?ca=${mint}`); }
+    // Arm the dev-bag auto-exit (take-profit only, no stop-loss) if a preset was chosen.
+    if (autoExitX > 1 && mint) {
+      try {
+        const devWallet = wallets.find((wal) => wal.publicKey === wid) || wallets[0];
+        const walletIndex = Math.max(1, wallets.findIndex((wal) => wal.publicKey === wid) + 1);
+        const tpPct = Math.round((autoExitX - 1) * 100); // 2x->+100%, 5x->+400%, 10x->+900%
+        const lamports = String(BigInt(Math.round(Number(d.devBuySol || 0) * 1e9)));
+        const buyResult = {
+          amountLamports: lamports, swapLamports: lamports, feeLamports: "0",
+          tokenDeltaAmount: result?.tokenDeltaAmount || result?.devBuyTokenAmount || result?.outputAmount || null,
+          outputAmount: result?.outputAmount || null,
+          signature: result?.devBuySignature || result?.signature || ""
+        };
+        await webCreateSingleTradeAutoExitPlan(userId, devWallet, mint, buyResult, { takeProfitPct: String(tpPct), stopLossPct: "0", sellPercent: "100", walletIndex: String(walletIndex) }, 300);
+        out.push("", `🎯 Auto-exit armed — I'll auto-sell your dev bag at ${autoExitX}x (+${tpPct}%).`);
+      } catch (e) {
+        out.push("", `🎯 Couldn't arm auto-exit (${(e && e.message) || "error"}). Set exits in Portfolio if you want them.`);
+      }
+    }
     out.push("", "It's now a boss other traders can raid in the Swamp. 🐸");
     await sendOrEditMessage(chatId, null, withBrandFooter(out.join("\n")), { inline_keyboard: [[{ text: "Ogre Tools", callback_data: "ogre_tools_menu" }, { text: "Main Menu", callback_data: "main_menu" }]] });
     // AI launch trailer (hype copy + generated card / video) — best-effort, never blocks the launch
