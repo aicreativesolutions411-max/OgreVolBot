@@ -248,6 +248,11 @@ function freshState(opts) {
     // Optional session profit-lock: once up >= minGainPct, stop + flatten if
     // equity gives back `giveback` fraction of the peak gain. null = off.
     profitLock: opts.profitLock || null,
+    // Optional PROFIT VAULT: sweep realized profit above the working stake to a
+    // separate wallet, keep trading the stake (set-and-forget 12h protection).
+    // { destination, minSweep } — null = off. secured = cumulative SOL vaulted.
+    vault: opts.vault || null,
+    secured: 0,
     open: [],
     wins: 0,
     losses: 0,
@@ -277,6 +282,7 @@ export function createAutopilotEngine(deps) {
     onOpen = () => {},
     getWalletSol = async () => null,
     getInstantMc = () => null,
+    sweepProfit = async () => ({ ok: false }),
     exitMs = 1000,
     huntMs = 5000
   } = deps;
@@ -408,10 +414,12 @@ export function createAutopilotEngine(deps) {
 
   function status() {
     if (!state) return { running: false };
-    const liveEquity = state.bank + state.open.reduce((a, p) => {
+    const workingEquity = state.bank + state.open.reduce((a, p) => {
       const mv = p.entryMc > 0 ? liveMcFor(p) / p.entryMc : 1;
       return a + p.costSol * p.remFrac * mv;
     }, 0);
+    // Total includes profit already swept to the vault (safe SOL).
+    const totalEquity = workingEquity + (state.secured || 0);
     return {
       running: running(),
       live: state.live,
@@ -422,9 +430,11 @@ export function createAutopilotEngine(deps) {
       start: state.start,
       bank: round(state.bank),
       walletSol: state.walletSol == null ? null : round(state.walletSol),
-      equity: round(liveEquity),
+      secured: round(state.secured || 0),
+      vault: state.vault ? state.vault.destination : null,
+      equity: round(totalEquity),
       peak: round(state.peak),
-      pnlPct: round(((liveEquity / state.start) - 1) * 100, 2),
+      pnlPct: round(((totalEquity / state.start) - 1) * 100, 2),
       wins: state.wins,
       losses: state.losses,
       streak: state.streak,
@@ -500,6 +510,34 @@ export function createAutopilotEngine(deps) {
           const ws = await getWalletSol();
           if (Number.isFinite(ws) && ws >= 0) { state.walletSol = ws; state.bank = ws; }
         } catch {}
+      }
+
+      // PROFIT VAULT: any free SOL above the working stake is realized profit —
+      // sweep it to the vault wallet and keep trading the stake. Gains physically
+      // leave the trading wallet, so a cold streak can never claw them back.
+      if (state.vault && state.vault.destination && state.live && Number.isFinite(state.walletSol)) {
+        const keep = state.start;          // working stake to maintain
+        const buffer = 0.02;               // leave a little for trade fees
+        const minSweep = state.vault.minSweep || 0.05;
+        const excess = state.walletSol - keep - buffer;
+        if (excess >= minSweep) {
+          try {
+            const res = await sweepProfit(state.vault.destination, excess);
+            if (res && res.ok) {
+              const sent = Number(res.sentSol) || excess;
+              state.secured = (state.secured || 0) + sent;
+              record("info", `🏦 Vault: secured +${round(sent, 4)} SOL (total ${round(state.secured, 4)} SOL safe)`);
+              try {
+                const ws2 = await getWalletSol();
+                if (Number.isFinite(ws2) && ws2 >= 0) { state.walletSol = ws2; state.bank = ws2; }
+              } catch {}
+            } else {
+              record("warn", `vault sweep skipped: ${(res && res.error) || "send failed"}`);
+            }
+          } catch (e) {
+            record("warn", `vault sweep error: ${e && e.message}`);
+          }
+        }
       }
 
       if (now() < state.endAt) await hunt();

@@ -334,6 +334,32 @@ test("engine: profit-lock stops + flattens after giving back half the peak gain"
   assert.equal(st.stopReason, "profit-lock");
 });
 
+test("engine: profit vault sweeps gains above the stake and keeps running", async () => {
+  let t = 0;
+  let walletSol = 1; // start at the stake
+  const swept = [];
+  const engine = createAutopilotEngine({
+    getFreshFeed: async () => [],
+    getPairLite: async () => null,
+    buyToken: async () => ({ ok: true }),
+    sellPercent: async () => ({ ok: true }),
+    now: () => t,
+    persist: async () => {},
+    getWalletSol: async () => walletSol,
+    sweepProfit: async (dest, amt) => { swept.push(amt); walletSol -= amt; return { ok: true, sentSol: amt }; }
+  });
+  await engine.start({ solBudget: 1, minutes: 60, live: true, walletPubkey: "W".repeat(44), vault: { destination: "V".repeat(44) } });
+  // simulate the wallet growing to 1.4 (profit) then run the slow loop
+  walletSol = 1.4;
+  await engine._hunt();
+  const st = engine.status();
+  assert.ok(swept.length === 1, "should sweep once");
+  assert.ok(swept[0] > 0.35 && swept[0] < 0.4, "sweeps the excess above stake minus buffer");
+  assert.equal(st.running, true, "session keeps running after a vault sweep");
+  assert.ok(st.secured > 0.35, "secured tracks the vaulted profit");
+  await engine.stop("test");
+});
+
 test("engine: loss cap flattens and stops", async () => {
   let t = 0;
   let mc = 5000;

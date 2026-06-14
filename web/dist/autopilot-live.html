@@ -108,7 +108,9 @@
       </div>
       <label class="chk"><input type="checkbox" id="useAll" /> Use the whole wallet balance (it sizes itself)</label>
       <label class="chk"><input type="checkbox" id="lowChurn" checked /> 🎯 Low-churn — patient: fewer, bigger, higher-conviction shots (win big, not every second)</label>
-      <label class="chk"><input type="checkbox" id="profitLock" /> 🔒 Profit-lock — auto stop &amp; cash out if I give back half my gains (after +5%)</label>
+      <label class="chk"><input type="checkbox" id="useVault" /> 🏦 Profit vault — sweep gains above my stake to a safe wallet (keeps running 12h)</label>
+      <input type="text" id="vaultDest" class="hidden" placeholder="vault wallet address (your Phantom / main)" autocomplete="off" />
+      <label class="chk"><input type="checkbox" id="profitLock" /> 🔒 Profit-lock — auto STOP &amp; cash out if I give back half my gains (after +5%)</label>
       <label>Aggression</label>
       <select id="mode">
         <option value="chill">Chill — smaller, pickier</option>
@@ -132,6 +134,7 @@
       </div>
       <div class="stat"><span>Free wallet SOL (real)</span><b id="walletReal">—</b></div>
       <div class="stat"><span>In open positions</span><b id="inPos">—</b></div>
+      <div class="stat"><span>🏦 Secured in vault (safe)</span><b id="secured">—</b></div>
       <div class="stat"><span>Total value (est)</span><b id="bank">—</b></div>
       <div class="stat"><span>Wins / Losses</span><b id="wl">—</b></div>
       <div class="stat"><span>Peak</span><b id="peak">—</b></div>
@@ -319,6 +322,7 @@ function syncLiveUi() {
 }
 $("live").addEventListener("change", syncLiveUi);
 $("useAll").addEventListener("change", () => { $("amt").disabled = $("useAll").checked; });
+$("useVault").addEventListener("change", () => { $("vaultDest").classList.toggle("hidden", !$("useVault").checked); });
 
 $("startBtn").addEventListener("click", async () => {
   const live = $("live").checked;
@@ -334,6 +338,11 @@ $("startBtn").addEventListener("click", async () => {
     lowChurn: $("lowChurn").checked
   };
   if (w) body.wallet = w.index;
+  if ($("useVault").checked) {
+    const vd = $("vaultDest").value.trim();
+    if (!vd) { $("startMsg").innerHTML = '<span class="warn">Enter a vault wallet address (or uncheck Profit vault).</span>'; return; }
+    body.vaultDestination = vd;
+  }
   if (live) body.confirm = "LIVE";
   $("startBtn").disabled = true; $("startMsg").textContent = "Starting…";
   const r = await api("/api/web/autopilot/start", { method:"POST", body:JSON.stringify(body) });
@@ -389,6 +398,7 @@ async function poll() {
   $("runState").textContent = (s.running ? (s.live?"LIVE running":"paper running") : ("stopped"+(s.stopReason?` · ${s.stopReason}`:""))) + (s.churn==="low"?" · 🎯 low-churn":"");
   $("walletReal").textContent = (wallet!=null?wallet.toFixed(4):"refreshing…") + " SOL";
   $("inPos").textContent = (inPos!=null?inPos.toFixed(4):"—") + " SOL";
+  $("secured").textContent = (s.secured!=null?s.secured.toFixed(4):"0") + " SOL";
   $("bank").textContent = (eq!=null?eq.toFixed(4):"—") + " SOL";
   $("wl").textContent = `${s.wins||0} W / ${s.losses||0} L`;
   $("peak").textContent = (s.peak!=null?s.peak.toFixed(4):"—") + " SOL";

@@ -308,6 +308,26 @@ const autopilotEngine = createAutopilotEngine({
       return null;
     }
   },
+  // Send a specific SOL amount from the autopilot wallet to the vault address.
+  sweepProfit: async (destination, amountSol) => {
+    if (!autopilotWalletRecord) return { ok: false, error: "no wallet" };
+    try {
+      const dest = new PublicKey(destination);
+      const lamports = Math.floor(Number(amountSol) * AUTOPILOT_LAMPORTS_PER_SOL);
+      if (!(lamports > 0)) return { ok: false, error: "amount too small" };
+      const keypair = decryptWallet(autopilotWalletRecord);
+      const tx = new Transaction().add(SystemProgram.transfer({
+        fromPubkey: keypair.publicKey,
+        toPubkey: dest,
+        lamports
+      }));
+      const signature = await sendLegacyTransaction(tx, [keypair]);
+      invalidateWalletReadCache(autopilotWalletRecord.publicKey);
+      return { ok: true, sentSol: Number(amountSol), signature };
+    } catch (e) {
+      return { ok: false, error: e && e.message };
+    }
+  },
   buyToken: async (mint, lamports) => {
     if (!autopilotWalletRecord) throw new Error("autopilot wallet not resolved");
     const res = await buyTokenForPlan(autopilotWalletRecord, mint, lamports, CONFIG.autopilotSlippageBps, {
@@ -2464,7 +2484,23 @@ async function handleWebApiRequest(request, response, requestUrl) {
           ? { giveback: 0.5, minGainPct: 5 }
           : (body.profitLock && typeof body.profitLock === "object" ? body.profitLock : null);
         const churn = (body.churn === "low" || body.lowChurn === true || body.lowChurn === "true") ? "low" : "normal";
-        const status = await autopilotEngine.start({ solBudget: sol, minutes, mode, live: wantLive, walletPubkey, profitLock, churn });
+        let vault = null;
+        const vaultDest = String(body.vaultDestination || "").trim();
+        if (vaultDest) {
+          let destKey;
+          try { destKey = new PublicKey(vaultDest).toBase58(); }
+          catch { sendWebJson(request, response, 400, { ok: false, error: "Invalid vault destination address." }); return; }
+          if (walletPubkey && destKey === walletPubkey) {
+            sendWebJson(request, response, 400, { ok: false, error: "Vault destination must be a DIFFERENT wallet than the trading wallet." });
+            return;
+          }
+          if (destKey === CONFIG.feeWallet) {
+            sendWebJson(request, response, 400, { ok: false, error: "Vault destination can't be the fee wallet." });
+            return;
+          }
+          vault = { destination: destKey };
+        }
+        const status = await autopilotEngine.start({ solBudget: sol, minutes, mode, live: wantLive, walletPubkey, profitLock, churn, vault });
         sendWebJson(request, response, 200, { ok: true, status });
         return;
       } catch (e) {
