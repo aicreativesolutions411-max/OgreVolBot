@@ -2348,22 +2348,36 @@ async function handleWebApiRequest(request, response, requestUrl) {
           return;
         }
         // start
-        const sol = Number(body.sol);
         const minutes = Number(body.minutes) || 60;
         const mode = ["chill", "normal", "degen"].includes(String(body.mode)) ? String(body.mode) : "normal";
         const wantLive = body.live === true || body.live === "true";
-        if (!(sol > 0)) {
-          sendWebJson(request, response, 400, { ok: false, error: "sol must be > 0" });
-          return;
-        }
+        // Amount: either an explicit SOL number, or "all"/useFullBalance to let
+        // it size the budget from whatever's in the selected wallet (minus the
+        // safety reserve) and play it as it sees fit.
+        const useAll = body.sol === "all" || body.sol === "max" || body.useFullBalance === true;
         let walletPubkey = null;
+        let walletRec = null;
         if (wantLive) {
           if (String(body.confirm) !== "LIVE") {
             sendWebJson(request, response, 400, { ok: false, error: 'Live trading requires confirm:"LIVE".' });
             return;
           }
-          const wallet = await resolveAutopilotWalletFor({ selector: body.wallet, userId: controllerUserId });
-          walletPubkey = wallet.publicKey;
+          walletRec = await resolveAutopilotWalletFor({ selector: body.wallet, userId: controllerUserId });
+          walletPubkey = walletRec.publicKey;
+        }
+        let sol = Number(body.sol);
+        if (useAll) {
+          if (!walletRec) {
+            sendWebJson(request, response, 400, { ok: false, error: 'Using the full wallet balance requires live mode with a selected wallet.' });
+            return;
+          }
+          const balSol = lamportsToSol(await getSolBalanceCached(new PublicKey(walletRec.publicKey), { force: true }));
+          // Keep the buy reserve plus a small fee buffer so trades can still settle.
+          sol = Math.max(0, balSol - CONFIG.buyReserveSol - 0.006);
+        }
+        if (!(sol > 0)) {
+          sendWebJson(request, response, 400, { ok: false, error: useAll ? "Selected wallet has no spendable SOL after the reserve." : "sol must be > 0 (or pass sol:\"all\")" });
+          return;
         }
         const status = await autopilotEngine.start({ solBudget: sol, minutes, mode, live: wantLive, walletPubkey });
         sendWebJson(request, response, 200, { ok: true, status });

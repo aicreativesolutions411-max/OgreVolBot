@@ -88,21 +88,25 @@ async function main() {
 
   if (cmd === "start") {
     const live = Boolean(arg("live", false));
+    const solArg = String(arg("sol", "0.25")).toLowerCase();
+    const useAll = solArg === "all" || solArg === "max";
     const payload = {
-      sol: Number(arg("sol", 0.25)),
+      sol: useAll ? "all" : Number(solArg),
       minutes: Number(arg("minutes", 60)),
       mode: String(arg("mode", "normal")),
       live,
       wallet: arg("wallet", undefined),
       confirm: live ? "LIVE" : undefined
     };
-    if (!(payload.sol > 0)) return die("--sol must be > 0");
-    if (live && (payload.wallet === undefined)) {
+    if (!useAll && !(payload.sol > 0)) return die('--sol must be > 0 (or use --sol all)');
+    if (live && payload.wallet === undefined) {
       return die("Live mode needs --wallet <index>. Run the wallets command to see indexes.");
     }
+    if (useAll && !live) return die('--sol all only works with --live (it reads the selected wallet balance).');
+    const amount = useAll ? "the wallet's full balance (minus reserve)" : `${payload.sol} SOL`;
     console.log(live
-      ? `\n⚠️  LIVE: real SOL from wallet #${payload.wallet} · ${payload.sol} SOL · ${payload.minutes}m · ${payload.mode}\n`
-      : `\nPAPER (no SOL): ${payload.sol} SOL sim · ${payload.minutes}m · ${payload.mode}\n`);
+      ? `\n⚠️  LIVE: real SOL from wallet #${payload.wallet} · ${amount} · ${payload.minutes}m · ${payload.mode}\n`
+      : `\nPAPER (no SOL): ${amount} sim · ${payload.minutes}m · ${payload.mode}\n`);
     return print(await jpost(`${API}/api/web/autopilot/start`, payload));
   }
 
