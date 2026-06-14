@@ -63,7 +63,7 @@
 <script>
 "use strict";
 const $=id=>document.getElementById(id);
-const API=(location.origin.includes("localhost")?location.origin:location.origin);
+const API=(location.hostname.includes("onrender.com")||location.hostname==="localhost"||location.hostname==="127.0.0.1")?"":"https://ogrevolbot.onrender.com";
 const n=v=>{const x=Number(v);return isFinite(x)?x:0;};
 const fmt=v=>(Math.round(v*1000)/1000).toFixed(3);
 function rowMint(r){return r.tokenMint||r.mint||r.address||"";}
@@ -96,7 +96,9 @@ function aggParams(){
   const streakMult = S.streak>=3?1.5 : S.streak>=1?1.2 : S.streak<=-2?0.5 : S.streak<=-1?0.75 : 1;
   const regimeMult = regime==="HOT"?1.3 : regime==="COLD"?0.6 : 1;
   if(regime==="HOT"){tp1+=5;tp2+=15;} if(regime==="COLD"){tp1=Math.max(15,tp1-6);}
-  return {regime,wr,baseFrac,tp1,tp2,sl,maxOpen,streakMult,regimeMult};
+  let minScore = regime==="HOT"?48 : regime==="COLD"?60 : 54;
+  if(S.agg==="degen") minScore-=6; if(S.agg==="chill") minScore+=6;
+  return {regime,wr,baseFrac,tp1,tp2,sl,maxOpen,streakMult,regimeMult,minScore};
 }
 function sizeFor(p){ const minViable=0.012, maxPer=S.bank*0.22;
   let sz=S.bank*p.baseFrac*p.streakMult*p.regimeMult;
@@ -108,10 +110,10 @@ async function tick(){
   if(Date.now()>=S.endAt){ endSession("Timer finished"); return; }
   if(S.bank <= S.start*0.7){ endSession("Session loss-cap (-30%) hit — protecting capital"); return; }
   const P=aggParams();
-  // 1) price refresh for open positions via live feed
-  let priceMap={};
+  // 1) ONE fetch of the freshest live launches — used for BOTH price tracking and hunting
+  let priceMap={}, feedRows=[];
   try{ const r=await fetch(API+"/api/web/live-pairs?bucket=live&sort=fresh",{cache:"no-store"}); const j=await r.json();
-    const rows=(j&&j.livePairs&&j.livePairs.rows)||(j&&j.rows)||[]; for(const row of rows){ const m=rowMint(row); if(m) priceMap[m]=rowMc(row); } }catch(_){}
+    feedRows=(j&&j.livePairs&&j.livePairs.rows)||(j&&j.rows)||[]; for(const row of feedRows){ const m=rowMint(row); if(m) priceMap[m]=rowMc(row); } }catch(e){ pushLog("r","feed error — retrying…"); }
   // 2) manage exits
   for(const pos of [...S.open]){ let mc=priceMap[pos.mint];
     if(mc>0){ pos.lastMc=mc; pos.missed=0; } else { pos.missed=(pos.missed||0)+1; mc=pos.lastMc; }
@@ -123,30 +125,38 @@ async function tick(){
     // stale-by-time: fresh scalps shouldn't ride forever
     if(Date.now()-pos.at>160000 && pct<P.tp1){ closePos(pos, pct, "stale 160s, flow died"); continue; }
   }
-  // 3) hunt a new entry
+  // 3) hunt a fresh entry from the SAME feed (client-side Fresh-Ape scoring)
   if(S.open.length<P.maxOpen && S.bank>0.015 && Date.now()<S.endAt){
-    try{ const r=await fetch(API+"/api/web/sniper/scan?mode=fresh_ape",{cache:"no-store"}); const j=await r.json();
-      const rows=((j&&j.scan&&j.scan.rows)||[]).filter(x=>rowMint(x)&&rowMc(x)>0);
-      const held=new Set(S.open.map(p=>p.mint));
-      let pick=null;
-      for(const row of rows){ const mint=rowMint(row), sc=rowScore(row), mc=rowMc(row), age=rowAge(row);
-        if(held.has(mint)) continue;
-        const waves=S.waves[mint]||0; if(waves>=2) continue;          // wave cap per coin
-        if(sc<58) continue;                                            // score gate
-        if(mc<2000||mc>12000) continue;                               // MC band
-        if(age>0&&age>210) continue;                                  // ≤3.5min
-        pick=row; break; }
-      if(pick){ openPos(pick, sizeFor(P), P); }
-    }catch(_){}
+    const held=new Set(S.open.map(p=>p.mint));
+    const cands=[];
+    for(const row of feedRows){ const mint=rowMint(row), mc=rowMc(row), age=rowAge(row);
+      if(!mint||mc<=0||held.has(mint)) continue;
+      if((S.waves[mint]||0)>=2) continue;                 // wave cap per coin
+      if(age>180) continue;                                // ≤3 min
+      if(mc<1500||mc>12000) continue;                      // MC band (fresh pump starts ~$1.9k)
+      const fs=freshScore(row); if(fs<P.minScore) continue;
+      cands.push({row, fs}); }
+    cands.sort((a,b)=>b.fs-a.fs);
+    if(cands.length){ openPos(cands[0].row, sizeFor(P), P, cands[0].fs); }
+    else if(!S.open.length){ S.scanMsg=feedRows.length?("scanning "+feedRows.length+" fresh pairs — none qualify yet"):"waiting for live feed…"; }
   }
   S.hist.push(S.bank); if(S.hist.length>240) S.hist.shift();
   render();
 }
-function openPos(row, size, P){ if(size<0.012){ return; } const mint=rowMint(row);
-  S.bank-=size; S.tradeNo++; S.waves[mint]=(S.waves[mint]||0)+1;
+// Client-side Fresh-Ape score 0-100: freshness + MC fit + starting volume + buy flow + provider score
+function freshScore(row){ const mc=rowMc(row), age=rowAge(row), vol=n(row.volume5m), buys=n(row.buys5m), sells=n(row.sells5m);
+  const base=Math.min(40, n(row.bestPickScore||row.score)*0.4);                 // provider quality (capped)
+  const ageS = age<=20?22 : age<=60?17 : age<=120?11 : age<=180?5 : 0;          // younger = better
+  const mcS  = (mc>=2500&&mc<=8000)?20 : (mc>=1800&&mc<12000)?10 : 0;           // sweet spot
+  const volS = vol>=120?14 : vol>=60?10 : vol>=30?6 : vol>=12?2 : -6;           // starting volume (kills dead pairs)
+  const flow = (buys+sells>0)? (buys/(buys+sells)) : 0.5; const flowS=(flow-0.5)*20; // net buy pressure
+  const dump = sells>buys*1.4 ? -14 : 0;
+  return Math.round(Math.max(1, Math.min(100, base+ageS+mcS+volS+flowS+dump))); }
+function openPos(row, size, P, fs){ if(size<0.012){ return; } const mint=rowMint(row);
+  S.bank-=size; S.tradeNo++; S.waves[mint]=(S.waves[mint]||0)+1; S.scanMsg="";
   const pos={mint, sym:rowSym(row), entryMc:rowMc(row), lastMc:rowMc(row), cost:size, rem:size, at:Date.now(), missed:0, tp1:false};
   S.open.push(pos);
-  pushLog("d",`🟢 Aped $${pos.sym} — ${Math.round(rowAge(row))}s old, $${(rowMc(row)/1000).toFixed(1)}k MC, score ${rowScore(row)} · size ${fmt(size)} (${P.regime}${S.streak?`, streak ${S.streak}`:""})`); }
+  pushLog("d",`🟢 Aped $${pos.sym} — ${Math.round(rowAge(row))}s old, $${(rowMc(row)/1000).toFixed(1)}k MC, score ${fs} · size ${fmt(size)} (${P.regime}${S.streak?`, streak ${S.streak}`:""})`); }
 function sellPart(pos, mc, frac, why){ const soldBasis=pos.rem*frac; const proceeds=soldBasis*(mc/pos.entryMc)*0.985; S.bank+=proceeds; pos.rem-=soldBasis;
   pushLog(proceeds>=soldBasis?"g":"y",`💰 ${pos.sym} ${why} — sold ${Math.round(frac*100)}%, +${fmt(proceeds)} SOL`); }
 function closePos(pos, pct, why){ const mc=pos.lastMc; const proceeds=pos.rem*(mc/pos.entryMc)*0.985;
@@ -167,7 +177,7 @@ function render(){ if(!S) return;
   $("delta").className="delta "+(pnl>=0?"up":"down"); $("delta").textContent=(pnl>=0?"▲ +":"▼ ")+fmt(pnl)+" SOL ("+(pct>=0?"+":"")+pct.toFixed(1)+"%)";
   const P=aggParams(); const mins=Math.max(0,Math.round((S.endAt-Date.now())/60000));
   $("stats").innerHTML=[`⏱ ${mins}m left`,`🧠 ${P.regime}`,`✅ ${S.wins}W`,`✂️ ${S.losses}L`,`🔥 streak ${S.streak}`,`📈 peak ${fmt(S.peak)}`].map(x=>`<span class="pill">${x}</span>`).join("");
-  const pc=$("positions"); if(!S.open.length){ pc.innerHTML='<div class="muted">none — scanning for a fresh entry…</div>'; }
+  const pc=$("positions"); if(!S.open.length){ pc.innerHTML='<div class="muted">none — '+(S.scanMsg||"scanning for a fresh entry…")+'</div>'; }
   else pc.innerHTML=S.open.map(p=>{ const pp=(p.lastMc/p.entryMc-1)*100; return `<div class="pos"><span class="s">$${p.sym}</span><span class="muted">${fmt(p.rem)} SOL</span><span class="p ${pp>=0?'up':'down'}">${pp>=0?'+':''}${Math.round(pp)}%</span></div>`; }).join("");
   drawSpark();
 }
