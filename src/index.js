@@ -2444,7 +2444,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
           }
           const store = await readWalletStore();
           const idx = walletsForOwner(store, controllerUserId).findIndex((w) => w.publicKey === wallet.publicKey) + 1;
-          const sweep = await webSweepSol(controllerUserId, { destination, walletIndexes: String(idx) });
+          const sweep = await webSweepSol(controllerUserId, { destination, walletIndexes: [idx] });
           sendWebJson(request, response, 200, { ok: true, sweep, status: stopStatus });
           return;
         }

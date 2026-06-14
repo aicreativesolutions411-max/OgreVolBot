@@ -309,7 +309,7 @@ $("dustBtn").addEventListener("click", async () => {
   if (!w) return;
   if (!confirm(`Sell ALL token balances in wallet #${w.index} back to SOL?\n\nThis recovers orphaned/dust tokens. If the autopilot is running it will also sell its live positions — best to Stop first.`)) return;
   $("dustBtn").textContent = "Selling…"; $("dustBtn").disabled = true;
-  const r = await api("/api/web/wallets/sell-all-tokens", { method:"POST", body:JSON.stringify({ walletIndexes: String(w.index) }) });
+  const r = await api("/api/web/wallets/sell-all-tokens", { method:"POST", body:JSON.stringify({ walletIndexes: [w.index] }) });
   $("dustBtn").textContent = "🪙 Sell leftover tokens (dust → SOL)"; $("dustBtn").disabled = false;
   if (r && r.ok) {
     const row = r.sweep && r.sweep.rows && r.sweep.rows[0];
