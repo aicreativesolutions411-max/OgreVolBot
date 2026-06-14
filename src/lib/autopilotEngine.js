@@ -213,6 +213,7 @@ function freshState(opts) {
     start: opts.solBudget,
     bank: opts.solBudget,
     peak: opts.solBudget,
+    walletSol: null,
     minTradeSol: opts.minTradeSol || 0.012,
     maxOpen: opts.maxOpen || 8,
     open: [],
@@ -242,13 +243,16 @@ export function createAutopilotEngine(deps) {
     persist = async () => {},
     isPaused = async () => false,
     onOpen = () => {},
-    tickMs = 2200,
-    huntEvery = 3
+    getWalletSol = async () => null,
+    exitMs = 1200,
+    huntMs = 5000
   } = deps;
 
   let state = null;
-  let timer = null;
-  let inTick = false;
+  let exitTimer = null;
+  let huntTimer = null;
+  let inExit = false;
+  let inHunt = false;
   const logRing = [];
   const lastFeed = new Map(); // mint -> {mc, liq, at} — fresh prices from the live feed
 
@@ -295,10 +299,21 @@ export function createAutopilotEngine(deps) {
       wallet: state.walletPubkey
     });
     await savePoint();
-    timer = setInterval(() => {
-      void safeTick();
-    }, tickMs);
+    startLoops();
     return status();
+  }
+
+  // Two independent loops: a fast exit/price loop (in-memory pump ticks, so
+  // P&L and stops update near-instantly) and a slower hunt loop (the heavy live
+  // feed fetch + new buys), so a slow feed pull never delays price updates.
+  function startLoops() {
+    stopLoops();
+    exitTimer = setInterval(() => { void safeExit(); }, exitMs);
+    huntTimer = setInterval(() => { void safeHunt(); }, huntMs);
+  }
+  function stopLoops() {
+    if (exitTimer) { clearInterval(exitTimer); exitTimer = null; }
+    if (huntTimer) { clearInterval(huntTimer); huntTimer = null; }
   }
 
   // Re-attach to a persisted session after a restart/redeploy. Positions keep
@@ -312,17 +327,12 @@ export function createAutopilotEngine(deps) {
       try { onOpen(pos.mint); } catch {}
     }
     record("info", `Autopilot RESUME ${state.live ? "LIVE" : "PAPER"} · ${state.open.length} open · bank ${state.bank.toFixed(4)} SOL`);
-    timer = setInterval(() => {
-      void safeTick();
-    }, tickMs);
+    startLoops();
     return true;
   }
 
   async function stop(reason = "manual") {
-    if (timer) {
-      clearInterval(timer);
-      timer = null;
-    }
+    stopLoops();
     if (state && !state.stopped) {
       // Selling out is the whole point of Stop — flatten every open position
       // (real sells in live mode) before we mark the session done.
@@ -356,6 +366,7 @@ export function createAutopilotEngine(deps) {
       wallet: state.walletPubkey,
       start: state.start,
       bank: round(state.bank),
+      walletSol: state.walletSol == null ? null : round(state.walletSol),
       equity: round(equity(state)),
       peak: round(state.peak),
       pnlPct: round(((equity(state) / state.start) - 1) * 100, 2),
@@ -378,52 +389,58 @@ export function createAutopilotEngine(deps) {
     };
   }
 
-  async function safeTick() {
-    if (inTick) return; // never overlap; real fills can take a few seconds
-    inTick = true;
+  // FAST loop: prices + exits + safety. In-memory pump ticks make this nearly
+  // instant; it never does the heavy feed fetch.
+  async function safeExit() {
+    if (inExit) return;
+    inExit = true;
     try {
-      await tick();
+      if (!running()) return;
+      state.tickN += 1;
+
+      if (await isPaused()) { await stop("emergency-stop"); return; }
+      if (now() >= state.endAt) { await stop("timer"); return; }
+
+      if (equity(state) <= state.start * 0.7) {
+        record("warn", `Loss cap hit at equity ${round(equity(state))} SOL — flattening.`);
+        await stop("loss-cap");
+        return;
+      }
+
+      await manageExits();
+      const eq = equity(state);
+      if (eq > state.peak) state.peak = eq;
     } catch (e) {
-      record("error", `tick error: ${e && e.message}`);
+      record("error", `exit loop error: ${e && e.message}`);
     } finally {
-      inTick = false;
+      inExit = false;
     }
   }
 
-  async function tick() {
-    if (!running()) return;
-    state.tickN += 1;
+  // SLOW loop: wallet reconciliation, hunting for new entries (heavy feed fetch),
+  // and persistence. Runs independently so it can't stall the exit loop.
+  async function safeHunt() {
+    if (inHunt) return;
+    inHunt = true;
+    try {
+      if (!running()) return;
 
-    // External emergency stop respected (stop() flattens).
-    if (await isPaused()) {
-      await stop("emergency-stop");
-      return;
+      // Reconcile to the REAL wallet balance so the displayed numbers and
+      // position sizing track actual SOL, not a drifting synthetic ledger.
+      if (state.live) {
+        try {
+          const ws = await getWalletSol();
+          if (Number.isFinite(ws) && ws >= 0) { state.walletSol = ws; state.bank = ws; }
+        } catch {}
+      }
+
+      if (now() < state.endAt) await hunt();
+      await savePoint();
+    } catch (e) {
+      record("error", `hunt loop error: ${e && e.message}`);
+    } finally {
+      inHunt = false;
     }
-
-    // Timer expired: stop hunting, flatten, end.
-    if (now() >= state.endAt) {
-      await stop("timer");
-      return;
-    }
-
-    // Loss cap: protect the dedicated bankroll.
-    if (equity(state) <= state.start * 0.7) {
-      record("warn", `Loss cap hit at equity ${round(equity(state))} SOL — flattening.`);
-      await stop("loss-cap");
-      return;
-    }
-
-    // Manage every open position every tick (fast exits).
-    await manageExits();
-
-    // Hunt for new entries every Nth tick.
-    if (state.tickN % huntEvery === 0) {
-      await hunt();
-    }
-
-    const eq = equity(state);
-    if (eq > state.peak) state.peak = eq;
-    await savePoint();
   }
 
   async function manageExits() {
@@ -468,30 +485,34 @@ export function createAutopilotEngine(deps) {
     const move = pos.entryMc > 0 ? (pos.lastMc / pos.entryMc - 1) * 100 : 0;
     const frac = pct / 100;
     const portionOfOriginal = pos.remFrac * frac;
-    let ok = true;
+    let failedTerminal = false;
     if (state.live) {
       try {
         const res = await sellPercent(pos.mint, pct, pos);
-        ok = res && res.ok !== false;
+        if (res && res.ok === false) throw new Error("sell rejected");
       } catch (e) {
-        ok = false;
         pos.sellFails = (pos.sellFails || 0) + 1;
+        const noBalance = /no token balance|rounded to zero/i.test((e && e.message) || "");
         record("warn", `sell ${pos.sym} failed (${reason}): ${e && e.message}`);
-        // Give up after repeated failures so a stuck token can't wedge the loop.
-        if (pos.sellFails < 4) return;
-        ok = false;
+        // Transient error: keep the position and retry next tick. But "no token
+        // balance" (tokens gone/dust) or repeated failures are terminal — write
+        // the portion off at ZERO so the ledger can't show SOL we don't have.
+        if (!noBalance && pos.sellFails < 4) return;
+        failedTerminal = true;
       }
     }
 
-    // Synthetic ledger update (drives sizing; real wallet is source of truth).
-    const proceeds = pos.costSol * portionOfOriginal * (1 + move / 100) * SELL_FEE_FACTOR;
+    // Credit estimated proceeds for a real/paper fill only. A terminal live
+    // failure books zero so the synthetic bank can't drift above the real wallet
+    // (the wallet balance reconciliation is the true source of truth either way).
+    const proceeds = failedTerminal ? 0 : pos.costSol * portionOfOriginal * (1 + move / 100) * SELL_FEE_FACTOR;
     state.bank += proceeds;
     pos.realized = (pos.realized || 0) + proceeds;
 
-    if (pct >= 100 || frac >= 1) {
+    if (pct >= 100 || frac >= 1 || failedTerminal) {
       // Closing the position.
       pos.remFrac = 0;
-      finalizePosition(pos, reason);
+      finalizePosition(pos, failedTerminal ? `${reason}-failed` : reason);
     } else {
       pos.remFrac = pos.remFrac * (1 - frac);
       if (reason === "tp1") pos.tp1Done = true;
@@ -610,7 +631,14 @@ export function createAutopilotEngine(deps) {
     record("info", `🟢 APED ${sym} ${round(sizeSol, 4)} SOL @ MC $${Math.round(entryMc)} (fs ${pos.fs})`);
   }
 
-  return { start, stop, resume, status, snapshot, _tick: safeTick, _state: () => state };
+  // _tick drives one full step (exit pass + hunt pass) for deterministic tests.
+  return {
+    start, stop, resume, status, snapshot,
+    _tick: async () => { await safeExit(); await safeHunt(); },
+    _exit: safeExit,
+    _hunt: safeHunt,
+    _state: () => state
+  };
 }
 
 // ---------------------------------------------------------------------------

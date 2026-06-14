@@ -208,8 +208,8 @@ async function relockAutopilotWalletByPubkey(pubkey) {
 }
 
 const autopilotEngine = createAutopilotEngine({
-  tickMs: 2200,
-  huntEvery: 3,
+  exitMs: 1200,
+  huntMs: 5000,
   log: (level, msg) => console.log(`[autopilot:${level}] ${msg}`),
   isPaused: async () => Boolean((await readState().catch(() => ({}))).paused),
   persist: async (snap) => {
@@ -276,6 +276,16 @@ const autopilotEngine = createAutopilotEngine({
   },
   // Subscribe a freshly-aped coin to the live trade-tick stream for instant prices.
   onOpen: (mint) => { try { pumpPortalStream.watchMint(mint); } catch {} },
+  // Real free SOL in the dedicated wallet — the true source of truth for the
+  // displayed balance and for position sizing (reconciled into the engine).
+  getWalletSol: async () => {
+    if (!autopilotWalletRecord) return null;
+    try {
+      return lamportsToSol(await getSolBalanceCached(new PublicKey(autopilotWalletRecord.publicKey), { force: true }));
+    } catch {
+      return null;
+    }
+  },
   buyToken: async (mint, lamports) => {
     if (!autopilotWalletRecord) throw new Error("autopilot wallet not resolved");
     const res = await buyTokenForPlan(autopilotWalletRecord, mint, lamports, CONFIG.autopilotSlippageBps, {
@@ -2339,7 +2349,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
     //   POST /api/web/autopilot/stop
     // Live trading requires live:true AND confirm:"LIVE" AND a selected wallet
     // (never the fee wallet). Otherwise it runs paper (no SOL touched).
-    if (pathname === "/api/web/autopilot/status" || pathname === "/api/web/autopilot/start" || pathname === "/api/web/autopilot/stop" || pathname === "/api/web/autopilot/wallets") {
+    if (pathname === "/api/web/autopilot/status" || pathname === "/api/web/autopilot/start" || pathname === "/api/web/autopilot/stop" || pathname === "/api/web/autopilot/wallets" || pathname === "/api/web/autopilot/sweep") {
       const webAuth = await authenticateOptionalWebRequest(request);
       const body = request.method === "POST" ? await readJsonRequestBody(request).catch(() => ({})) : {};
       const providedKey = String(requestUrl.searchParams.get("key") || body.key || "");
@@ -2371,6 +2381,29 @@ async function handleWebApiRequest(request, response, requestUrl) {
         if (pathname === "/api/web/autopilot/stop") {
           const status = await autopilotEngine.stop("manual");
           sendWebJson(request, response, 200, { ok: true, status });
+          return;
+        }
+        if (pathname === "/api/web/autopilot/sweep") {
+          // Sell everything (Stop flattens to SOL), then send the wallet's SOL
+          // out to a destination address you choose.
+          if (!controllerUserId) {
+            sendWebJson(request, response, 400, { ok: false, error: "Log in to sweep your wallet." });
+            return;
+          }
+          const destination = String(body.destination || "").trim();
+          if (!destination) {
+            sendWebJson(request, response, 400, { ok: false, error: "Enter a destination wallet address to sweep to." });
+            return;
+          }
+          const wallet = await resolveAutopilotWalletFor({ selector: body.wallet, userId: controllerUserId });
+          let stopStatus = null;
+          if (body.stopFirst !== false) {
+            stopStatus = await autopilotEngine.stop("sweep"); // sells all open positions to SOL
+          }
+          const store = await readWalletStore();
+          const idx = walletsForOwner(store, controllerUserId).findIndex((w) => w.publicKey === wallet.publicKey) + 1;
+          const sweep = await webSweepSol(controllerUserId, { destination, walletIndexes: String(idx) });
+          sendWebJson(request, response, 200, { ok: true, sweep, status: stopStatus });
           return;
         }
         // start
