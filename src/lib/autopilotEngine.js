@@ -628,15 +628,15 @@ export function createAutopilotEngine(deps) {
         pos.sellFails = (pos.sellFails || 0) + 1;
         const noBalance = /no token balance|rounded to zero/i.test((e && e.message) || "");
         const ageMs = now() - pos.openedAt;
-        record("warn", `sell ${pos.sym} failed (${reason}): ${e && e.message}`);
-        // "no token balance" on a fresh position is almost always the BUY still
-        // settling on-chain (we got a token amount back from the buy, so the
-        // tokens exist — they're just not readable yet). NEVER write that off as
-        // a loss: retry on later ticks until it settles. Only give up if it's
-        // been a while (genuinely gone/dust) or other errors persist.
-        if (noBalance && ageMs < 30_000) return;        // young: buy still settling, retry
-        if (pos.sellFails < 5) return;                  // otherwise allow several retries
-        failedTerminal = true;                          // persistent failure → write off
+        // Throttle the log — only the first failure (don't spam every tick).
+        if (pos.sellFails === 1) record("warn", `sell ${pos.sym} failing (${reason}): ${e && e.message}`);
+        // "no token balance" on a fresh position is usually the BUY still settling
+        // on-chain — retry until it's readable. But cap the wait at 10s (settles in
+        // <5s normally); past that the buy never delivered tokens, so write it off
+        // and free the slot instead of hogging it (low-churn only has 3 slots).
+        if (noBalance && ageMs < 10_000) return;        // young: buy still settling, retry
+        if (!noBalance && pos.sellFails < 5) return;    // other transient errors: a few retries
+        failedTerminal = true;                          // persistent / no-tokens → write off
       }
     }
 

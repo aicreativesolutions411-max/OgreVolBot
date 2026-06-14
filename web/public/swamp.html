@@ -45,6 +45,7 @@
   .radar .dot.b{background:#46e8ff; color:#46e8ff;}
   .radar .dot.c{background:#ffd24a; color:#ffd24a;}
   .radar .dot.m{background:#ff7a5e; color:#ff7a5e;}
+  .radar .dot.g{background:#c8a06a; color:#c8a06a;}
   @media(max-width:520px){.radar{width:118px; left:8px; bottom:calc(10px + env(safe-area-inset-bottom)); padding:6px;}.radar .map{height:58px}.radar .rt{font-size:0.58rem}.radar .rs{font-size:0.56rem}}
   .topbtns{position:absolute; top:calc(8px + env(safe-area-inset-top)); right:10px; display:flex; gap:6px; z-index:7;}
   .tbtn{pointer-events:auto; background:rgba(8,20,10,0.85); border:1px solid rgba(114,255,35,0.3); color:#eaffe0; border-radius:99px; width:36px; height:36px; font-weight:800; cursor:pointer; font-size:1rem;}
@@ -617,8 +618,8 @@ function symOf(row){ return String(row.symbol||row.tokenMint||"COIN").replace(/[
 
 /* ---- world ---- */
 const TILE=64; const MAP={w:58,h:48}; // tiles — big open swamp
-let player=null, creatures=[], npcs=[], mobs=[], buildings=[], parts=[], floats=[];
-let camx=0,camy=0, state="load", lastTs=0, near=null, nearBld=null, nearMob=null, nearFoe=null;
+let player=null, creatures=[], npcs=[], mobs=[], buildings=[], gathers=[], parts=[], floats=[];
+let camx=0,camy=0, state="load", lastTs=0, near=null, nearBld=null, nearMob=null, nearFoe=null, nearGather=null;
 function burst(x,y,col,n){ n=n||8; for(let i=0;i<n;i++){ const a=Math.random()*6.28,s=50+Math.random()*150; if(parts.length<240) parts.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:0.4+Math.random()*0.4,max:0.9,col,sz:2+Math.random()*3}); } }
 function floatTxt(x,y,txt,col){ if(floats.length>44) floats.shift(); floats.push({x,y,txt,col,t:0}); }
 /* ---- combat juice: shake, hitstop, slash arcs, thrown slime, combos ---- */
@@ -804,6 +805,25 @@ function spawnRugBoss(mint,c){ if(!player) return;
   toast("💀 $"+c.symbol+" rugged! A Rug Boss is loose in the swamp — hunt it for revenge + 🔮"); }
 function addRes(drop){ for(const k in drop) store.res[k]=(store.res[k]||0)+drop[k]; save(); }
 
+const GATHER_TYPES={
+  wood:{name:"Rot Log",res:{wood:2},col:"#c8a06a"},
+  scrap:{name:"Scrap Cache",res:{scrap:2},col:"#b8d4d8"},
+  goo:{name:"Goo Bloom",res:{goo:2},col:"#8dff45"}
+};
+function spawnGatherNodes(){
+  gathers=[]; const keys=["wood","scrap","goo"]; const MW=MAP.w*TILE, MH=MAP.h*TILE;
+  for(let i=0;i<34;i++){ const kind=keys[hash("gk"+i)%keys.length], def=GATHER_TYPES[kind];
+    let x=90+(hash("gx"+i)%(MW-180)), y=90+(hash("gy"+i)%(MH-180));
+    for(const b of buildings){ const dx=x-b.x, dy=y-b.y; if(dx*dx+dy*dy<160*160){ x+=((hash("go"+i)%2)?1:-1)*170; y+=((hash("go2"+i)%2)?1:-1)*120; } }
+    x=Math.max(70,Math.min(MW-70,x)); y=Math.max(70,Math.min(MH-70,y));
+    gathers.push({id:"g"+i,kind,name:def.name,res:def.res,col:def.col,x,y,r:18+(hash("gr"+i)%8),bob:(hash("gb"+i)%100)/20,dead:false});
+  }
+}
+function collectGather(g){ if(!g||g.dead) return; g.dead=true; addRes(g.res); store.xp=(store.xp||0)+3; save();
+  const got=Object.entries(g.res).map(([k,v])=>"+"+v+" "+(RES_ICON[k]||k)).join(" ");
+  burst(g.x,g.y,g.col,12); floatTxt(g.x,g.y-g.r,got,g.col); try{sfx("quest",0.28);}catch(_){} refreshHud(); updateRadar();
+}
+
 function newGame(){
   refillBalls();
   // unprotected base decays after its flag lapses (build a new flag to keep it)
@@ -815,7 +835,8 @@ function newGame(){
   player={ x:MAP.w*TILE/2, y:MAP.h*TILE/2, r:Math.round(18*(hero.scale||1)), spd, walkT:0, dir:"down", hp:maxhp, maxhp, iframe:0, atkCd:0, _mv:false,
     sprPath:hero.sprite||(A.creatures&&A.creatures[0])||(A.statics&&A.statics[0])||null, atk:0 };
   buildings=BUILDINGS_DEF.map(b=>({...b, x:b.tx*TILE, y:b.ty*TILE}));
-  creatures=[]; npcs=[]; mobs=[]; parts=[]; floats=[]; shots=[]; swings=[]; shake=0; hitstop=0; combo=0; comboT=0; comboRewardMark=0;
+  creatures=[]; npcs=[]; mobs=[]; gathers=[]; parts=[]; floats=[]; shots=[]; swings=[]; shake=0; hitstop=0; combo=0; comboT=0; comboRewardMark=0;
+  spawnGatherNodes();
   camx=player.x; camy=player.y;
   buildFromFeed();
   spawnNpcs();
@@ -967,12 +988,20 @@ function compassDir(dx,dy){ const dirs=["E","SE","S","SW","W","NW","N","NE"]; co
 function targetInfo(){
   if(!player) return null; let best=null;
   function consider(kind,label,x,y){ const dx=x-player.x, dy=y-player.y, d=Math.hypot(dx,dy); if(!best||d<best.d) best={kind,label,x,y,d,dx,dy}; }
+  function building(id){ const b=buildings.find(x=>x.id===id)||buildings[0]; if(b) consider("b",b.name.replace(/^\S+\s*/,""),b.x,b.y); }
+  const q=QUESTS[store.questStep||0], qt=q&&q.type;
+  if(qt==="catch"){ for(const c of creatures){ if(!c.dead) consider("c","Catch "+c.sym,c.x,c.y); } if(!best) building("watch"); return best; }
+  if(qt==="kills"){ for(const m of mobs.filter(m=>!m._dead).slice(0,10)) consider("m",m.name||"Hostile",m.x,m.y); return best; }
+  if(qt==="cardwin"||qt==="storybeat"){ building("camp"); return best; }
+  if(qt==="level"){ for(const m of mobs.filter(m=>!m._dead).slice(0,8)) consider("m",m.name||"Hostile",m.x,m.y); for(const g of gathers.filter(g=>!g.dead).slice(0,8)) consider("g",g.name,g.x,g.y); if(!best) building("camp"); return best; }
   if(nearBld) consider("b",nearBld.name.replace(/^\S+\s*/,""),nearBld.x,nearBld.y);
+  if(nearGather) consider("g",nearGather.name,nearGather.x,nearGather.y);
   if(near) consider("c","Catch "+near.sym,near.x,near.y);
   if(nearMob) consider("m",nearMob.name||"Hostile",nearMob.x,nearMob.y);
   for(const c of creatures){ if(!c.dead) consider("c","Catch "+c.sym,c.x,c.y); }
-  const liveMobs=mobs.filter(m=>!m._dead); for(const m of liveMobs.slice(0,8)) consider("m",m.name||"Hostile",m.x,m.y);
-  if(!best && buildings.length){ const q=QUESTS[store.questStep||0]; let id=(q&&q.type==="catch")?"watch":(q&&q.type==="cardwin")?"camp":(q&&q.type==="level")?"camp":"launch"; const b=buildings.find(x=>x.id===id)||buildings[0]; if(b) consider("b",b.name.replace(/^\S+\s*/,""),b.x,b.y); }
+  for(const m of mobs.filter(m=>!m._dead).slice(0,8)) consider("m",m.name||"Hostile",m.x,m.y);
+  for(const g of gathers.filter(g=>!g.dead).slice(0,8)) consider("g",g.name,g.x,g.y);
+  if(!best) building("launch");
   return best;
 }
 function updateRadar(){
@@ -987,6 +1016,7 @@ function updateRadar(){
   for(const b of buildings.slice(0,6)) dot("b",b.x,b.y);
   for(const c of creatures.filter(c=>!c.dead).slice(0,6)) dot("c",c.x,c.y);
   for(const m of mobs.filter(m=>!m._dead).slice(0,8)) dot("m",m.x,m.y);
+  for(const g of gathers.filter(g=>!g.dead).slice(0,8)) dot("g",g.x,g.y);
   map.innerHTML=dots.join("");
 }
 function refreshHud(){
@@ -1043,7 +1073,7 @@ let atkHeld=false;
 
 // Catching is automatic now (sling slimeballs to weaken -> auto-bag), so the ✋
 // button is just "enter building" — or a convenience swing when nothing to enter.
-function interact(){ if(nearBld) openBuilding(nearBld); else playerSwing(); }
+function interact(){ if(nearBld) openBuilding(nearBld); else if(nearGather) collectGather(nearGather); else playerSwing(); }
 function moveDir(){ let ax=mvx||0, ay=mvy||0;
   if(keys["d"]||keys["arrowright"])ax+=1; if(keys["a"]||keys["arrowleft"])ax-=1; if(keys["s"]||keys["arrowdown"])ay+=1; if(keys["w"]||keys["arrowup"])ay-=1;
   let l=Math.hypot(ax,ay); if(l>0.15) return [ax/l,ay/l]; const off={right:[1,0],left:[-1,0],up:[0,-1],down:[0,1]}[player&&player.dir]||[0,1]; return off; }
@@ -1147,14 +1177,16 @@ function update(dt){
     if(d<mob.r+p.r && p.iframe<=0){ p.hp-=mob.dmg; p.iframe=0.7; p.x+=dx/d*36; p.y+=dy/d*36; p.vx+=dx/d*150; p.vy+=dy/d*150; clampEnt(p,40); floatTxt(p.x,p.y-p.r,"-"+mob.dmg,"#ff5e5e"); burst(p.x,p.y,"#ff5e5e",5); addShake(7); sfx("miss",0.3); if(p.hp<=0) downed(); }
     const dd=dx*dx+dy*dy; if(dd<nmd){ nmd=dd; nearMob=mob; } }
   for(let i=0;i<mobs.length;i++){ for(let j=i+1;j<mobs.length;j++){ const a=mobs[i], b=mobs[j], dx=b.x-a.x, dy=b.y-a.y, d=Math.hypot(dx,dy)||1, min=a.r+b.r+7; if(d<min){ const push=(min-d)*0.5, nx=dx/d, ny=dy/d; a.x-=nx*push; a.y-=ny*push; b.x+=nx*push; b.y+=ny*push; clampEnt(a,30); clampEnt(b,30); } } }
-  // building proximity
+  // building/resource proximity
   nearBld=null; let bd=86*86; for(const b of buildings){ const dx=b.x-p.x,dy=b.y-p.y,d=dx*dx+dy*dy; if(d<bd){ bd=d; nearBld=b; } }
+  nearGather=null; let gd=64*64; for(const g of gathers){ if(g.dead) continue; const dx=g.x-p.x,dy=g.y-p.y,d=dx*dx+dy*dy; if(d<gd){ gd=d; nearGather=g; } }
   // prompt
   const pr=$("prompt");
   if(nearMob){ pr.textContent="Fight "+nearMob.name+" - tap Act"; pr.classList.add("on"); }
   else if(near){ const label=launchLabel(near.row,near.sym); pr.textContent="SlimeWire launch "+label+" ("+near.rar.label+") - weaken & catch"; pr.classList.add("on"); }
-  else if(nearFoe){ pr.textContent="⚔️ BATTLE "+(nearFoe.name||"trader")+(nearFoe.clan?" ["+nearFoe.clan+"]":"")+" — sling slimeballs!"; pr.classList.add("on"); }
+  else if(nearFoe){ pr.textContent="Battle "+(nearFoe.name||"trader")+(nearFoe.clan?" ["+nearFoe.clan+"]":"")+" - sling slimeballs"; pr.classList.add("on"); }
   else if(nearBld){ pr.textContent="Enter "+nearBld.name; pr.classList.add("on"); }
+  else if(nearGather){ pr.textContent="Harvest "+nearGather.name+" - tap Use"; pr.classList.add("on"); }
   else pr.classList.remove("on");
   // particles/floats
   for(const pt of parts){ pt.x+=pt.vx*dt; pt.y+=pt.vy*dt; pt.vx*=0.92; pt.vy*=0.92; pt.life-=dt; } parts=parts.filter(p=>p.life>0);
@@ -1203,11 +1235,11 @@ function render(){
   for(const b of buildings) drawBuilding(b);
   // sort entities by y
   const live=wsOk&&RP.size>0;
-  const ents=[]; for(const c of creatures){ if(!c.dead) ents.push({t:"c",e:c}); }
+  const ents=[]; for(const g of gathers){ if(!g.dead) ents.push({t:"g",e:g}); } for(const c of creatures){ if(!c.dead) ents.push({t:"c",e:c}); }
   if(live){ for(const r of RP.values()) ents.push({t:"r",e:r}); } else { for(const q of npcs) ents.push({t:"n",e:q}); }
   for(const mob of mobs) ents.push({t:"m",e:mob}); ents.push({t:"p",e:player});
   ents.sort((a,b)=>a.e.y-b.e.y);
-  for(const it of ents){ if(it.t==="p") drawPlayer(); else if(it.t==="n") drawNpc(it.e); else if(it.t==="r") drawRemote(it.e); else if(it.t==="m") drawMob(it.e); else drawCreature(it.e); }
+  for(const it of ents){ if(it.t==="p") drawPlayer(); else if(it.t==="n") drawNpc(it.e); else if(it.t==="r") drawRemote(it.e); else if(it.t==="m") drawMob(it.e); else if(it.t==="g") drawGather(it.e); else drawCreature(it.e); }
   for(const pt of parts){ ctx.globalAlpha=Math.max(0,pt.life/pt.max); ctx.fillStyle=pt.col; ctx.beginPath(); ctx.arc(pt.x,pt.y,pt.sz,0,6.2832); ctx.fill(); } ctx.globalAlpha=1;
   // XP gems (survival run) — glowing pickups
   if(gems&&gems.length){ const t=performance.now()/200; for(const gm of gems){ const pul=1+Math.sin(t+gm.x*0.05)*0.18;
@@ -1329,6 +1361,15 @@ function drawCreature(c){
   if((c.row&&c.row._ogre)||c===near||c.weakShown>0){ ctx.font="900 10px Inter,sans-serif"; ctx.textAlign="center"; ctx.fillStyle=c.rar.col;
     ctx.strokeStyle="rgba(0,0,0,0.7)"; ctx.lineWidth=3; const ly=c.y-c.r-(c.weakShown>0?24:6); const label=(c.row&&c.row._ogre?"$":"")+c.sym;
     ctx.strokeText(label,c.x,ly); ctx.fillText(label,c.x,ly); }
+}
+function roundedRectPath(x,y,w,h,r){ ctx.moveTo(x+r,y); ctx.lineTo(x+w-r,y); ctx.quadraticCurveTo(x+w,y,x+w,y+r); ctx.lineTo(x+w,y+h-r); ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h); ctx.lineTo(x+r,y+h); ctx.quadraticCurveTo(x,y+h,x,y+h-r); ctx.lineTo(x,y+r); ctx.quadraticCurveTo(x,y,x+r,y); }
+function drawGather(g){ const t=performance.now()/350+g.bob, hot=nearGather===g; drawShadow(g.x,g.y,g.r*0.7);
+  ctx.save(); ctx.translate(g.x,g.y+Math.sin(t)*2); ctx.lineWidth=hot?3:2; ctx.strokeStyle=g.col; ctx.globalAlpha=hot?0.95:0.62; ctx.beginPath(); ctx.ellipse(0,4,g.r*1.18,g.r*0.58,0,0,6.2832); ctx.stroke(); ctx.globalAlpha=1;
+  if(g.kind==="wood"){ ctx.fillStyle="#5a351c"; ctx.strokeStyle="#c8a06a"; ctx.lineWidth=2; for(const off of [-7,7]){ ctx.save(); ctx.translate(off,0); ctx.rotate(off<0?-0.45:0.38); ctx.beginPath(); roundedRectPath(-15,-6,30,12,6); ctx.fill(); ctx.stroke(); ctx.fillStyle="#8a5a2e"; ctx.beginPath(); ctx.arc(-11,0,4,0,6.2832); ctx.fill(); ctx.restore(); } }
+  else if(g.kind==="scrap"){ ctx.fillStyle="#50606a"; ctx.strokeStyle="#b8d4d8"; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(-15,8); ctx.lineTo(-4,-12); ctx.lineTo(16,-4); ctx.lineTo(10,12); ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.fillStyle="#d8ffff"; ctx.fillRect(2,-6,7,3); }
+  else { const glow=ctx.createRadialGradient(0,0,1,0,0,g.r*1.5); glow.addColorStop(0,"rgba(220,255,190,0.9)"); glow.addColorStop(0.55,"rgba(141,255,69,0.45)"); glow.addColorStop(1,"rgba(141,255,69,0)"); ctx.fillStyle=glow; ctx.beginPath(); ctx.arc(0,0,g.r*1.25,0,6.2832); ctx.fill(); ctx.fillStyle="#8dff45"; for(let i=0;i<5;i++){ const a=i*1.256+t*0.18; ctx.beginPath(); ctx.arc(Math.cos(a)*8,Math.sin(a)*5,5,0,6.2832); ctx.fill(); } }
+  if(hot){ ctx.font="900 10px Inter,sans-serif"; ctx.textAlign="center"; ctx.fillStyle=g.col; ctx.strokeStyle="rgba(0,0,0,0.8)"; ctx.lineWidth=3; ctx.strokeText("USE",0,-g.r-14); ctx.fillText("USE",0,-g.r-14); }
+  ctx.restore();
 }
 function drawPlayer(){ const p=player; drawShadow(p.x,p.y,p.r);
   const upFacing=p.dir==="up";
@@ -1887,7 +1928,7 @@ function updateRunHud(){ const m=Math.floor(RUN.t/60), s=Math.floor(RUN.t%60); $
   const loot=$("rhLoot"); if(loot){ const rel=RUN.pendingRelics||0, xp=RUN.pendingXp||0, mult=(RUN.pushMul||1); loot.textContent="loot "+rel+" relic"+(rel===1?"":"s")+" - "+xp+" XP - "+mult.toFixed(2)+"x"; } }
 function survStart(){ const wasRunning=(state==="world"); $("start").classList.remove("on"); $("runEnd").classList.remove("on"); $("upPick").classList.remove("on");
   $("hud").style.display="block"; try{startAmbient();}catch(_){} newGame();
-  creatures=[]; npcs=[]; mobs=[]; gems=[]; parts=[]; floats=[]; shots=[]; buildings=[];
+  creatures=[]; npcs=[]; mobs=[]; gathers=[]; gems=[]; parts=[]; floats=[]; shots=[]; buildings=[];
   player.x=MAP.w*TILE/2; player.y=MAP.h*TILE/2; player.hp=player.maxhp; player.fireCd=0;
   RUN={ t:0, xp:0, xpNext:5, lvl:1, kills:0, spawnCd:0.4, bossCd:24, over:false, revives:0, bossKills:0, pendingRelics:0, pendingXp:0, pushMul:1, extracted:false, up:{dmg:1,rate:1,multi:0,magnet:115,regen:0,xpMul:1} };
   try{ applyMeta(); }catch(_){}
