@@ -158,6 +158,8 @@
       <label style="margin-top:12px">Decision log</label>
       <div class="log" id="log"></div>
       <button id="copyLogBtn" class="b-ghost" style="margin-top:8px">📋 Copy log + stats (to share)</button>
+      <button id="statsBtn" class="b-ghost" style="margin-top:8px">📊 What it's learned (dev patterns)</button>
+      <div id="statsBox" class="log hidden" style="margin-top:8px; max-height:280px"></div>
       <button id="stopBtn" class="b-stop" style="margin-top:8px">■ Stop & flatten</button>
     </div>
 
@@ -431,6 +433,34 @@ $("copyLogBtn").addEventListener("click", async () => {
     $("copyLogBtn").textContent = "📋 Copy log + stats (to share)";
   }
   setTimeout(()=>$("copyLogBtn").textContent="📋 Copy log + stats (to share)", 2000);
+});
+
+$("statsBtn").addEventListener("click", async () => {
+  $("statsBox").classList.remove("hidden");
+  $("statsBox").innerHTML = "loading…";
+  const r = await api("/api/web/autopilot/stats");
+  const s = r && r.stats;
+  if (!s) { $("statsBox").innerHTML = '<span class="warn">no data yet — let it trade a while</span>'; return; }
+  const bucketRows = (obj, title) => {
+    const keys = Object.keys(obj || {});
+    if (!keys.length) return "";
+    return `<div style="margin-top:6px"><b>${title}</b></div>` + keys.map(k => {
+      const b = obj[k];
+      return `<div>${k.padEnd(10)} ${b.n} trades · ${b.winRate}% win · ${b.run} ran · ${b.rug} rug · ${b.pnl>=0?"+":""}${b.pnl} SOL</div>`;
+    }).join("");
+  };
+  const devRows = (arr, title) => {
+    if (!arr || !arr.length) return "";
+    return `<div style="margin-top:6px"><b>${title}</b></div>` + arr.map(d =>
+      `<div>${d.dev} · ${d.trades}t · ${d.runners} ran · ${d.rugs} rug · avg ${d.avgPeak}% · ${d.pnl>=0?"+":""}${d.pnl} SOL</div>`).join("");
+  };
+  $("statsBox").innerHTML =
+    `<div><b>Total ${s.total} trades</b> · ${s.wins} win · ${s.rugs} rug · ${s.runners100} ran 2x+ · ${s.runners400} ran 5x+ · net ${s.netPnlSol>=0?"+":""}${s.netPnlSol} SOL</div>`
+    + bucketRows(s.byScore, "by score (fs)")
+    + bucketRows(s.byMc, "by entry MC")
+    + bucketRows(s.byAge, "by age")
+    + devRows(s.bestDevs, "🏆 best devs")
+    + devRows(s.worstDevs, "⛔ worst devs (skipped)");
 });
 
 $("stopBtn").addEventListener("click", async () => {
