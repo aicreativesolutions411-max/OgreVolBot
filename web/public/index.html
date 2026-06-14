@@ -357,6 +357,7 @@
           <video class="swamp-hero-video" autoplay muted loop playsinline preload="auto" poster="/assets/slimewire/auto/login-hero.jpg?v=v6scene" aria-hidden="true">
             <source src="/assets/slimewire/auto/login-hero.mp4?v=v6scene" type="video/mp4">
           </video>
+          <button class="hero-sound-btn" type="button" aria-label="Toggle sound" title="Sound" onclick="(function(b){var v=document.querySelector('.swamp-hero-video');if(!v)return;v.muted=!v.muted;if(!v.muted){try{v.volume=0.5;v.play();}catch(e){}}b.textContent=v.muted?'\u{1F507}':'\u{1F50A}';})(this)">🔇</button>
           <section class="connect-hero-side" aria-label="SlimeWire trader terminal preview">
             <img class="connect-mark" src="./assets/slimewire/png/slimewire-mark.png" data-fallback-src="./assets/slimewire/svg/icons/wallet.svg" alt="" aria-hidden="true">
             <p>Built for</p>

@@ -19639,3 +19639,15 @@ html body .swamp-connect-shell .swamp-hero-video {
 html body main.shell .connect-view .swamp-connect-shell,
 html body .swamp-connect-shell { overflow: visible !important; }
 html, body { overflow-y: auto !important; height: auto !important; min-height: 100% !important; }
+
+/* 🔊 unmute button on the connect/login hero video (desktop only) */
+html body .swamp-connect-shell .hero-sound-btn {
+  position: absolute !important; top: 14px; left: 14px; z-index: 4 !important;
+  width: 42px; height: 42px; padding: 0; border-radius: 50%;
+  background: rgba(4,8,5,0.62); color: var(--green, #8dff5a);
+  border: 1px solid rgba(141,255,90,0.5); font-size: 18px; line-height: 1;
+  cursor: pointer; backdrop-filter: blur(4px);
+  box-shadow: 0 0 16px rgba(39,224,106,0.3);
+}
+html body .swamp-connect-shell .hero-sound-btn:hover { box-shadow: 0 0 24px rgba(39,224,106,0.6); }
+@media (max-width: 760px) { html body .swamp-connect-shell .hero-sound-btn { display: none !important; } }
