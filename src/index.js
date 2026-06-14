@@ -217,11 +217,13 @@ let autopilotTradesCache = null;
 
 function autopilotDevRepBump(dev, rec) {
   if (!dev) return;
-  const r = autopilotDevRep.get(dev) || { trades: 0, rugs: 0, runners: 0, pnl: 0 };
+  const r = autopilotDevRep.get(dev) || { trades: 0, rugs: 0, runners: 0, pnl: 0, peakSum: 0, avgPeak: 0 };
   r.trades += 1;
   if (rec.rugged) r.rugs += 1;
   if ((rec.peakPct || 0) >= 100) r.runners += 1;
   r.pnl += Number(rec.pnl) || 0;
+  r.peakSum += Number(rec.peakPct) || 0;
+  r.avgPeak = Math.round(r.peakSum / r.trades); // this dev's coins typically top around here
   autopilotDevRep.set(dev, r);
 }
 async function loadAutopilotTrades() {

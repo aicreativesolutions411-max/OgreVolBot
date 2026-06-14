@@ -158,6 +158,21 @@ test("evalExit: ladder tp1 -> tp2 -> tp3 -> tp4 lets a runner ride", () => {
   assert.equal(tp4.reason, "tp4"); assert.equal(tp4.pct, 100);
 });
 
+test("evalExit: adaptive dev-avg take banks near a dev's typical top", () => {
+  const P = aggParams(baseState());
+  const base = { entryMc: 5000, entryLiq: 6000, lastLiq: 6000, openedAt: 0, missed: 0, tp1Done: true };
+  // dev tops ~200% on average; at +130% (>= 0.6*200) take the whole position
+  const d = evalExit({ ...base, lastMc: 5000 * 2.3, peakPct: 130, devAvgPeak: 200 }, P, 1000);
+  assert.equal(d.reason, "dev-avg-take");
+  assert.equal(d.pct, 100);
+  // a high-avg dev (800) is NOT taken yet at +130% — let it ride
+  const d2 = evalExit({ ...base, lastMc: 5000 * 2.3, peakPct: 130, devAvgPeak: 800 }, P, 1000);
+  assert.notEqual(d2.reason, "dev-avg-take");
+  // no dev history -> falls through to the normal ladder
+  const d3 = evalExit({ ...base, lastMc: 5000 * 2.3, peakPct: 130, devAvgPeak: null, tp2Done: false }, P, 1000);
+  assert.notEqual(d3.reason, "dev-avg-take");
+});
+
 test("evalExit: trailing give-back catches a runner that reverses", () => {
   const P = aggParams(baseState());
   // peaked at +450%, now back to +200% (retraced past half of peak) -> sell rest

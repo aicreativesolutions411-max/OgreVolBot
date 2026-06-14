@@ -156,6 +156,14 @@ export function evalExit(pos, P, nowMs) {
   const peak = Math.max(pos.peakPct || 0, move);
   const held = nowMs - pos.openedAt;
 
+  // ADAPTIVE dev-style take: if this dev's coins historically top around X%, bank
+  // the whole position as it nears ~60% of that level — don't hold a +200%-style
+  // dev's coin hoping for +500. Scales per dev: avg 200 -> take ~120; avg 800 ->
+  // ride to ~480. (Only once the dev has enough history; null = use the ladder.)
+  if (pos.devAvgPeak && pos.devAvgPeak >= 80 && move >= 40 && move >= pos.devAvgPeak * 0.6) {
+    return { action: "sell", pct: 100, reason: "dev-avg-take", move };
+  }
+
   // Liquidity pulled out from under us — get out at any price. Fire EARLIER
   // (40% liquidity drop, not 50%) to cut the big full-position rug losses.
   if (pos.entryLiq > 400 && pos.lastLiq > 0 && pos.lastLiq < pos.entryLiq * 0.6) {
@@ -773,20 +781,22 @@ export function createAutopilotEngine(deps) {
       // Dev-reputation skip: avoid wallets that have rugged us repeatedly with no
       // runner to show for it (the one rug signal you CAN read — the dev's history).
       const dev = getDevWallet(cand.r.tokenMint);
-      if (dev) {
-        const rep = devReputation(dev);
-        if (rep && rep.rugs >= 2 && rep.runners === 0) {
-          record("info", `⛔ skip ${cand.r.symbol} — dev rugged ${rep.rugs}x before`);
-          continue;
-        }
+      const rep = dev ? devReputation(dev) : null;
+      if (rep && rep.rugs >= 2 && rep.runners === 0) {
+        record("info", `⛔ skip ${cand.r.symbol} — dev rugged ${rep.rugs}x before`);
+        continue;
       }
-      const size = sizeFor(state, P);
+      let size = sizeFor(state, P);
+      // Size up on a PROVEN dev (multiple runners, no rugs) — lean into edge.
+      if (rep && rep.runners >= 2 && rep.rugs === 0) {
+        size = Math.min(size * 1.3, state.maxTradeSol);
+      }
       if (!canOpen(state, size)) break;
-      await openPosition(cand.r, size, cand.fs, dev);
+      await openPosition(cand.r, size, cand.fs, dev, rep);
     }
   }
 
-  async function openPosition(row, sizeSol, fs, dev) {
+  async function openPosition(row, sizeSol, fs, dev, rep) {
     if (!state || state.stopped) return; // never open once stopped
     const mint = row.tokenMint;
     const sym = row.symbol || row.baseToken?.symbol || shortMint(mint);
@@ -843,6 +853,8 @@ export function createAutopilotEngine(deps) {
       fs: round(fs, 1),
       // Features captured for the learning flywheel.
       dev: dev || null,
+      // This dev's historical avg peak (>=3 trades) drives the adaptive exit.
+      devAvgPeak: (rep && rep.trades >= 3 && rep.avgPeak >= 80) ? rep.avgPeak : null,
       entryAge: Number(row.pairAgeSeconds) || null,
       entrySniper: Number(row.sniperCount) || 0,
       entryVol5m: Number(row.volume5m) || 0,
