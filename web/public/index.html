@@ -358,6 +358,16 @@
             <source src="/assets/slimewire/auto/login-hero.mp4?v=v6scene" type="video/mp4">
           </video>
           <button class="hero-sound-btn" type="button" aria-label="Toggle sound" title="Sound" onclick="(function(b){var v=document.querySelector('.swamp-hero-video');if(!v)return;v.muted=!v.muted;if(!v.muted){try{v.volume=0.5;v.play();}catch(e){}}b.textContent=v.muted?'\u{1F507}':'\u{1F50A}';})(this)">🔇</button>
+          <script>
+          (function(){
+            function V(){return document.querySelector('.swamp-hero-video');}
+            function setBtn(){var b=document.querySelector('.hero-sound-btn'),v=V();if(b&&v)b.textContent=v.muted?'\u{1F507}':'\u{1F50A}';}
+            function go(){var v=V();if(!v)return;v.muted=false;try{v.volume=0.5;var p=v.play();if(p&&p.catch)p.catch(function(){v.muted=true;try{v.play();}catch(e){}setBtn();});}catch(e){}setBtn();}
+            function gesture(){go();["pointerdown","touchstart","keydown","scroll"].forEach(function(ev){window.removeEventListener(ev,gesture,true);});}
+            ["pointerdown","touchstart","keydown","scroll"].forEach(function(ev){window.addEventListener(ev,gesture,true);});
+            setTimeout(go,500); // attempt sound-on-load; browsers that block it unmute on first interaction
+          })();
+          </script>
           <section class="connect-hero-side" aria-label="SlimeWire trader terminal preview">
             <img class="connect-mark" src="./assets/slimewire/png/slimewire-mark.png" data-fallback-src="./assets/slimewire/svg/icons/wallet.svg" alt="" aria-hidden="true">
             <p>Built for</p>
