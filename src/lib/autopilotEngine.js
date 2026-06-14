@@ -47,7 +47,7 @@ export function aggParams(state) {
 
   let tp1 = 25;
   let tp2 = 60;
-  const sl = 8;
+  const sl = 6; // tighter stop — cut losers faster (was 8%)
   if (regime === "HOT") {
     tp1 = 28;
     tp2 = 75;
@@ -60,8 +60,16 @@ export function aggParams(state) {
   if (mode === "degen") minScore -= 6;
   else if (mode === "chill") minScore += 8;
   minScore += state.minScoreBonus || 0; // low-churn raises the bar
+  // Runner-SAFE hard floor: log analysis showed the catastrophic instant-rugs
+  // cluster at fs <= 56 (they only sneak in during HOT regimes where the bar
+  // drops to ~50), while NO observed runner was below fs 58 — including the fs61
+  // monsters (TOMMY +711%, normie +338%). So floor low-churn at 57: cuts the
+  // garbage, keeps every winner.
+  if (state.churn === "low") minScore = Math.max(minScore, 57);
 
-  return { regime, wr, baseFrac, streakMult, regimeMult, tp1, tp2, sl, minScore };
+  const mcFloor = 1800; // no MC filter — a low-MC runner (e.g. ZUL +56% @ $1973) stays in
+
+  return { regime, wr, baseFrac, streakMult, regimeMult, tp1, tp2, sl, minScore, mcFloor };
 }
 
 // Position size in SOL: base fraction of cash, scaled by streak + regime,
@@ -129,7 +137,7 @@ export function entryReject(row, P) {
   // unreliable on brand-new bonding-curve pairs, so use volume as the activity
   // signal and only reject on a clear heavy dump.
   if (!Number.isFinite(age) || age < 4 || age > 1200) return "age";
-  if (!Number.isFinite(mc) || mc < 1800 || mc > 20000) return "mc";
+  if (!Number.isFinite(mc) || mc < (P.mcFloor || 1800) || mc > 20000) return "mc";
   if (liq > 0 && liq < mc * 0.3) return "liquidity";
   if (vol < 25) return "volume";
   if (buys > 0 && sells > buys * 2 + 3) return "dumping";
@@ -162,7 +170,8 @@ export function evalExit(pos, P, nowMs) {
   // that was the gap that let a +26% TP1 coin bleed to -13%). Tighter the higher
   // it ran: give back ~28% from a huge peak, ~38% medium, 50% otherwise.
   if (pos.tp1Done && peak >= 25) {
-    const keep = peak >= 300 ? 0.72 : peak >= 150 ? 0.62 : 0.5;
+    // Tighter the higher it ran — lock more of a big runner (5x+ gives back only ~18%).
+    const keep = peak >= 500 ? 0.82 : peak >= 300 ? 0.74 : peak >= 150 ? 0.62 : 0.5;
     if (move <= peak * keep) {
       return { action: "sell", pct: 100, reason: "trail", move };
     }
@@ -242,7 +251,7 @@ function freshState(opts) {
     maxTradeSol: opts.maxTradeSol || Math.max(0.05, budget * (lowChurn ? 0.06 : 0.04)),
     // Fraction-of-cash cap per bet (low-churn concentrates capital).
     sizeFracCap: lowChurn ? 0.28 : 0.12,
-    // Entry-quality bump: low-churn only takes strong setups (skips the toll on marginal coins).
+    // Entry-quality bump: low-churn takes stronger setups (no hard filter — keeps runners).
     minScoreBonus: lowChurn ? 16 : 0,
     // Few concurrent positions so each runner is meaningful + dry powder stays free.
     maxOpen: opts.maxOpen || (lowChurn ? 3 : 8),
@@ -290,6 +299,7 @@ export function createAutopilotEngine(deps) {
     getWalletSol = async () => null,
     getInstantMc = () => null,
     sweepProfit = async () => ({ ok: false }),
+    onBigWin = () => {},
     exitMs = 1000,
     huntMs = 5000
   } = deps;
@@ -688,6 +698,20 @@ export function createAutopilotEngine(deps) {
     state.recentSells[pos.mint] = now();
     const pnl = totalProceeds - pos.costSol;
     record(win ? "info" : "warn", `${win ? "✅" : "🔴"} ${pos.sym} CLOSE ${reason} ${pnl >= 0 ? "+" : ""}${round(pnl, 4)} SOL`);
+    // Big-runner card trigger: only for monsters that ran >= 5x (peak +400%+).
+    if (win && state.live && (pos.peakPct || 0) >= 400) {
+      try {
+        onBigWin({
+          symbol: pos.sym,
+          mint: pos.mint,
+          gainPct: Math.round(pos.peakPct),
+          multiple: Math.round((1 + pos.peakPct / 100) * 10) / 10,
+          entryMc: Math.round(pos.entryMc),
+          peakMc: Math.round(pos.entryMc * (1 + pos.peakPct / 100)),
+          profitSol: round(pnl, 4)
+        });
+      } catch {}
+    }
   }
 
   async function hunt() {

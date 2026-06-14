@@ -308,6 +308,8 @@ const autopilotEngine = createAutopilotEngine({
       return null;
     }
   },
+  // Big-runner win (>=5x): post a clean SlimeWire PnL card to the channel + groups.
+  onBigWin: (d) => { try { announceWinCard(d); } catch {} },
   // Send a specific SOL amount from the autopilot wallet to the vault address.
   sweepProfit: async (destination, amountSol) => {
     if (!autopilotWalletRecord) return { ok: false, error: "no wallet" };
@@ -17099,6 +17101,63 @@ async function renderLaunchCard(d = {}, mint = "", cp = null) {
   const inner = await launchCardInnerSvg(d, mint, cp);
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${S.width}" height="${S.height}" viewBox="0 0 ${S.width} ${S.height}">${inner}</svg>`;
   return sharp(Buffer.from(svg)).png().toBuffer();
+}
+
+// Clean trade-WIN PnL card (for big runners). Branded as a SlimeWire trade — no
+// mention of any bot/autopilot. Returns a PNG buffer.
+function pnlMcLabel(n) {
+  const v = Number(n) || 0;
+  if (v >= 1000) return "$" + (v / 1000).toFixed(v >= 10000 ? 0 : 1) + "K";
+  return "$" + Math.round(v);
+}
+async function renderPnlWinCard(d = {}) {
+  const S = PNL_CARD_STYLE;
+  const e = (s) => escapeSvg(String(s == null ? "" : s));
+  const sym = e(String(d.symbol || "COIN").toUpperCase()).slice(0, 18);
+  const gain = "+" + Math.round(Number(d.gainPct) || 0).toLocaleString("en-US") + "%";
+  const mult = (Number(d.multiple) || 0) + "x";
+  const entry = pnlMcLabel(d.entryMc);
+  const peak = pnlMcLabel(d.peakMc);
+  const ca = d.mint ? e(shortMint(d.mint)) : "";
+  const W = S.width, H = S.height, slime = S.slime, green = S.green, white = S.white, muted = S.muted, FF = S.fontFamily;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
+    <defs>
+      <radialGradient id="bgg" cx="50%" cy="38%" r="70%"><stop offset="0%" stop-color="#0c2a10"/><stop offset="100%" stop-color="${S.bg}"/></radialGradient>
+      <filter id="glow"><feDropShadow dx="0" dy="0" stdDeviation="10" flood-color="${slime}" flood-opacity="0.9"/></filter>
+    </defs>
+    <rect width="${W}" height="${H}" fill="url(#bgg)"/>
+    <rect x="14" y="14" width="${W - 28}" height="${H - 28}" rx="26" fill="none" stroke="${slime}" stroke-opacity="0.55" stroke-width="3"/>
+    <text x="60" y="86" font-family="${FF}" font-size="34" font-weight="900" fill="${slime}" letter-spacing="2">SLIMEWIRE</text>
+    <text x="${W - 60}" y="86" text-anchor="end" font-family="${FF}" font-size="26" font-weight="700" fill="${muted}">PROFIT</text>
+    <text x="60" y="210" font-family="${FF}" font-size="78" font-weight="900" fill="${white}">$${sym}</text>
+    <text x="60" y="392" font-family="${FF}" font-size="190" font-weight="900" fill="${green}" filter="url(#glow)">${gain}</text>
+    <text x="62" y="470" font-family="${FF}" font-size="64" font-weight="900" fill="${slime}">${mult}</text>
+    <text x="${W - 60}" y="392" text-anchor="end" font-family="${FF}" font-size="40" font-weight="800" fill="${muted}">${entry} <tspan fill="${white}">→</tspan> ${peak}</text>
+    <text x="${W - 60}" y="448" text-anchor="end" font-family="${FF}" font-size="30" font-weight="600" fill="${muted}">market cap</text>
+    ${ca ? `<text x="60" y="560" font-family="${FF}" font-size="30" font-weight="600" fill="${muted}">CA ${ca}</text>` : ""}
+    <text x="${W - 60}" y="608" text-anchor="end" font-family="${FF}" font-size="32" font-weight="800" fill="${slime}">www.slimewire.org</text>
+    <text x="60" y="608" font-family="${FF}" font-size="28" font-weight="700" fill="${white}">traded on SlimeWire 🐸</text>
+  </svg>`;
+  return sharp(Buffer.from(svg)).png().toBuffer();
+}
+
+// Post a big-win PnL card to the channel + opted-in groups. Looks like a normal
+// SlimeWire trade flex — never references any automation.
+function announceWinCard(d = {}) {
+  void (async () => {
+    try {
+      const png = await renderPnlWinCard(d).catch(() => null);
+      if (!png) return;
+      const sym = String(d.symbol || "").toUpperCase();
+      const link = d.mint ? `https://www.slimewire.org/t?ca=${d.mint}` : "https://www.slimewire.org";
+      const cap = `🟢 <b>$${escapeTelegramHtml(sym)}</b> +${Math.round(Number(d.gainPct) || 0).toLocaleString("en-US")}% (${d.multiple}x) — traded on SlimeWire\n${link}`;
+      const fname = `win-${sanitizeFilenamePart(sym || d.mint || "trade")}.png`;
+      tgChannel.announcePhoto("pnl-win", d.mint || sym, png, fname, cap);
+      broadcastPhotoToTelegramGroups("pnl-win", d.mint || sym, png, fname, cap);
+    } catch (e) {
+      console.warn(`[pnl-win] ${e && e.message}`);
+    }
+  })();
 }
 
 // FREE animated GIF trailer (no external API): the fire card with a slow zoom +
