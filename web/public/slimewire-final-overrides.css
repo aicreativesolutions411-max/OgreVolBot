@@ -19595,3 +19595,17 @@ html body .swamp-connect-shell {
   0%   { background-position: 46% 50%; }
   100% { background-position: 56% 46%; }
 }
+
+/* Looping video layer for the connect/login hero (real motion) */
+html body .swamp-connect-shell .swamp-hero-video {
+  position: absolute !important; inset: 0 !important;
+  width: 100% !important; height: 100% !important;
+  object-fit: cover !important; z-index: 0 !important; pointer-events: none !important;
+}
+html body .swamp-connect-shell::before,
+html body .swamp-connect-shell::after { z-index: 1 !important; }
+html body .swamp-connect-shell > *:not(.swamp-hero-video) { z-index: 2 !important; }
+@media (max-width: 760px) {
+  /* mobile: skip the video, use the static portrait hero (lighter) */
+  html body .swamp-connect-shell .swamp-hero-video { display: none !important; }
+}

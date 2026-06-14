@@ -323,7 +323,10 @@ function freshState(opts) {
     // Entry-quality bump: low-churn takes stronger setups (no hard filter — keeps runners).
     minScoreBonus: lowChurn ? 16 : 0,
     // Few concurrent positions so each runner is meaningful + dry powder stays free.
-    maxOpen: opts.maxOpen || (lowChurn ? 3 : 8),
+    // Concurrent-position cap. Lowered the normal default 8 -> 5 so a session that
+    // doesn't pass maxOpen can't over-deploy the whole bankroll into one dumping
+    // wave (the "losing fast" pattern). The panel sends an explicit value (default 3).
+    maxOpen: opts.maxOpen || (lowChurn ? 3 : 5),
     // Optional session profit-lock: once up >= minGainPct, stop + flatten if
     // equity gives back `giveback` fraction of the peak gain. null = off.
     profitLock: opts.profitLock || null,
