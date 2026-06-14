@@ -361,6 +361,9 @@ function freshState(opts) {
     results: [],
     waves: {},
     recentSells: {},
+    // Per-coin loss memory: stop re-aping a coin that keeps stopping us out this
+    // session (the log showed one coin entered 6x, almost all losses).
+    coinLosses: {},
     // Adaptive "tape" auto-tuner: reads recent runner/rug rate and nudges the
     // bar + bet size — press in hot tape, sit back in cold. (autoTune mutates it.)
     // Warming = no tape data yet (and where restarted sessions live). Start SMALL and
@@ -813,6 +816,7 @@ export function createAutopilotEngine(deps) {
       if (!pos.countedWin) markWin(pos);
     } else {
       markLoss(pos);
+      state.coinLosses[pos.mint] = (state.coinLosses[pos.mint] || 0) + 1; // remember repeat losers
     }
     state.recentSells[pos.mint] = now();
     const pnl = totalProceeds - pos.costSol;
@@ -886,6 +890,7 @@ export function createAutopilotEngine(deps) {
 
     const scored = rows
       .filter((r) => r && r.tokenMint && !held.has(r.tokenMint))
+      .filter((r) => (state.coinLosses[r.tokenMint] || 0) < 2)  // stop re-aping a repeat loser
       .filter((r) => {
         // Wave cooldown: allow re-entry on a coin we sold, but not within 45s.
         const last = state.recentSells[r.tokenMint];
