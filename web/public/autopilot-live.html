@@ -84,6 +84,9 @@
         <button class="b-ghost" id="sweepBtn" style="margin-top:8px">🧹 Sell all & sweep SOL out</button>
         <div class="muted" style="margin-top:6px">Stops the autopilot, sells open positions to SOL, then sends the wallet's SOL to the address above.</div>
         <div id="sweepMsg" class="muted" style="margin-top:6px"></div>
+        <button class="b-ghost" id="dustBtn" style="margin-top:10px">🪙 Sell leftover tokens (dust → SOL)</button>
+        <div class="muted" style="margin-top:6px">Sells ANY token balances still in this wallet back to SOL — recovers orphaned/dust tokens. Best used when the autopilot is stopped (it sells everything held).</div>
+        <div id="dustMsg" class="muted" style="margin-top:6px"></div>
       </div>
     </div>
 
@@ -298,6 +301,23 @@ $("importBtn").addEventListener("click", async () => {
     await loadWallets();
   } else {
     $("importMsg").innerHTML = '<span class="warn">'+((r&&r.error)||"load failed")+'</span>';
+  }
+});
+
+$("dustBtn").addEventListener("click", async () => {
+  const w = selectedWallet();
+  if (!w) return;
+  if (!confirm(`Sell ALL token balances in wallet #${w.index} back to SOL?\n\nThis recovers orphaned/dust tokens. If the autopilot is running it will also sell its live positions — best to Stop first.`)) return;
+  $("dustBtn").textContent = "Selling…"; $("dustBtn").disabled = true;
+  const r = await api("/api/web/wallets/sell-all-tokens", { method:"POST", body:JSON.stringify({ walletIndexes: String(w.index) }) });
+  $("dustBtn").textContent = "🪙 Sell leftover tokens (dust → SOL)"; $("dustBtn").disabled = false;
+  if (r && r.ok) {
+    const row = r.sweep && r.sweep.rows && r.sweep.rows[0];
+    const sold = row && Array.isArray(row.sells) ? row.sells.filter(s => s && s.ok).length : 0;
+    $("dustMsg").innerHTML = '<span class="ok">✅ '+(sold ? `Sold ${sold} token(s) back to SOL.` : (row && row.message) || "Done — nothing to sell.")+'</span>';
+    await loadWallets();
+  } else {
+    $("dustMsg").innerHTML = '<span class="warn">'+((r&&r.error)||"sell failed")+'</span>';
   }
 });
 
