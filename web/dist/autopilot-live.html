@@ -58,11 +58,16 @@
       <div style="margin-top:10px" class="row">
         <div><button class="b-ghost" id="createBtn">+ New wallet</button></div>
         <div><button class="b-ghost" id="refreshBtn">↻ Balance</button></div>
+        <div><button class="b-ghost" id="backupBtn">⬇ Back up keys</button></div>
       </div>
+      <div id="backupMsg" class="muted" style="margin-top:6px"></div>
       <div id="walletInfo" class="hidden" style="margin-top:12px">
         <label>Deposit address — send SOL here to fund it</label>
         <div class="addr" id="walletAddr">—</div>
-        <div style="margin-top:6px"><button class="b-ghost" id="copyBtn">Copy address</button></div>
+        <div style="margin-top:6px" class="row">
+          <div><button class="b-ghost" id="copyBtn">Copy address</button></div>
+          <div><button class="b-stop" id="removeBtn">🗑 Remove wallet</button></div>
+        </div>
         <div class="stat" style="margin-top:10px"><span>Balance</span><b id="walletBal">—</b></div>
         <div class="warn" style="margin-top:8px">⚠️ Only deposit what you'll risk. Keep this browser — your wallet is tied to it. Back up its key from the main terminal's Wallets tab.</div>
       </div>
@@ -94,8 +99,11 @@
         <option value="normal" selected>Normal</option>
         <option value="degen">Degen — bigger, faster</option>
       </select>
-      <label class="chk"><input type="checkbox" id="live" /> <b>LIVE — trade REAL SOL</b> (off = paper, no SOL touched)</label>
-      <div id="liveWarn" class="warn hidden" style="margin:-4px 0 10px">Real money. It stops itself at a 70% loss cap or when the timer ends. You can Stop anytime.</div>
+      <div id="liveBox" style="margin:14px 0 10px; border:1px solid var(--line); border-radius:11px; padding:12px; background:#0a120c">
+        <label class="chk" style="margin:0; font-size:15px"><input type="checkbox" id="live" /> <b id="liveLabel">PAPER mode — no real SOL</b></label>
+        <div class="muted" style="margin-top:4px">Flip this switch ON to trade real SOL. Leave OFF to test.</div>
+        <div id="liveWarn" class="warn hidden" style="margin-top:8px">⚠️ LIVE: real money. It stops itself at a 70% loss cap or when the timer ends. You can Stop anytime.</div>
+      </div>
       <button id="startBtn" class="b-green">▶ Start (paper)</button>
       <div id="startMsg" class="muted" style="margin-top:8px"></div>
     </div>
@@ -180,12 +188,62 @@ function showWalletInfo() {
 }
 
 $("walletSel").addEventListener("change", showWalletInfo);
+
+function downloadText(filename, text) {
+  const blob = new Blob([text], { type:"text/plain" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename || "slimewire-wallet-backup.txt";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+function saveDownloads(dl) {
+  if (!dl) return false;
+  if (dl.recoveryKeys && dl.recoveryKeys.text) downloadText(dl.recoveryKeys.filename, dl.recoveryKeys.text);
+  if (dl.encryptedBackup && dl.encryptedBackup.text) downloadText(dl.encryptedBackup.filename, dl.encryptedBackup.text);
+  return Boolean((dl.recoveryKeys && dl.recoveryKeys.text) || (dl.encryptedBackup && dl.encryptedBackup.text));
+}
+
 $("createBtn").addEventListener("click", async () => {
   $("createBtn").textContent = "Creating…";
-  await api("/api/web/wallets/create", { method:"POST", body:JSON.stringify({ label:"Autopilot", count:1 }) });
-  await loadWallets();
+  const r = await api("/api/web/wallets/create", { method:"POST", body:JSON.stringify({ label:"Autopilot", count:1 }) });
   $("createBtn").textContent = "+ New wallet";
+  if (r && r.ok) {
+    const got = saveDownloads(r.downloads);
+    $("backupMsg").innerHTML = got
+      ? '<span class="ok">✅ Wallet created — KEY FILE + encrypted backup downloaded. Store them safe; they\'re the only way to recover the funds.</span>'
+      : '<span class="warn">Wallet created, but backup files didn\'t download — tap “⬇ Back up keys” now.</span>';
+    await loadWallets();
+  } else {
+    $("backupMsg").innerHTML = '<span class="warn">'+((r&&r.error)||"create failed")+'</span>';
+  }
 });
+
+$("backupBtn").addEventListener("click", async () => {
+  $("backupBtn").textContent = "…";
+  const r = await api("/api/web/wallets/export", { method:"POST", body:JSON.stringify({}) });
+  $("backupBtn").textContent = "⬇ Back up keys";
+  if (r && r.ok && r.backup && saveDownloads(r.backup.downloads)) {
+    $("backupMsg").innerHTML = '<span class="ok">✅ Backup downloaded (key file + encrypted backup for all wallets).</span>';
+  } else {
+    $("backupMsg").innerHTML = '<span class="warn">'+((r&&r.error)||"nothing to back up")+'</span>';
+  }
+});
+
+$("removeBtn").addEventListener("click", async () => {
+  const w = selectedWallet();
+  if (!w) return;
+  if (!confirm(`Remove wallet #${w.index} (${w.label})?\n\n${w.pubkey}\n\nMake sure you've backed up its key and swept any SOL — this cannot be undone.`)) return;
+  if (!confirm(`FINAL CONFIRM — permanently remove this wallet?\n\nBalance: ${w.balanceSol!=null?(+w.balanceSol).toFixed(4):"?"} SOL\n\nAny funds left in it become unrecoverable without the key backup.`)) return;
+  $("removeBtn").textContent = "Removing…";
+  const r = await api("/api/web/wallets/remove", { method:"POST", body:JSON.stringify({ publicKeys:[w.pubkey] }) });
+  $("removeBtn").textContent = "🗑 Remove wallet";
+  $("backupMsg").innerHTML = (r && r.ok)
+    ? '<span class="ok">Wallet removed.</span>'
+    : '<span class="warn">'+((r&&r.error)||"remove failed")+'</span>';
+  await loadWallets();
+});
+
 $("refreshBtn").addEventListener("click", loadWallets);
 $("copyBtn").addEventListener("click", () => {
   const w = selectedWallet(); if (!w) return;
@@ -196,6 +254,9 @@ $("copyBtn").addEventListener("click", () => {
 function syncLiveUi() {
   const live = $("live").checked;
   $("liveWarn").classList.toggle("hidden", !live);
+  $("liveLabel").textContent = live ? "LIVE mode — trading REAL SOL" : "PAPER mode — no real SOL";
+  $("liveBox").style.borderColor = live ? "#5a2222" : "var(--line)";
+  $("liveBox").style.background = live ? "#1a0c0c" : "#0a120c";
   $("modePill").textContent = live ? "LIVE" : "paper";
   $("modePill").style.background = live ? "#3a1414" : "#142019";
   $("modePill").style.color = live ? "#ff8a8a" : "#5be08a";
