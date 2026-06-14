@@ -107,6 +107,7 @@
         </div>
       </div>
       <label class="chk"><input type="checkbox" id="useAll" /> Use the whole wallet balance (it sizes itself)</label>
+      <label class="chk"><input type="checkbox" id="profitLock" /> 🔒 Profit-lock — auto stop &amp; cash out if I give back half my gains (after +5%)</label>
       <label>Aggression</label>
       <select id="mode">
         <option value="chill">Chill — smaller, pickier</option>
@@ -327,7 +328,8 @@ $("startBtn").addEventListener("click", async () => {
     minutes: Number($("mins").value),
     mode: $("mode").value,
     live,
-    sol: useAll ? "all" : Number($("amt").value)
+    sol: useAll ? "all" : Number($("amt").value),
+    profitLock: $("profitLock").checked
   };
   if (w) body.wallet = w.index;
   if (live) body.confirm = "LIVE";

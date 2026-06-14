@@ -2455,7 +2455,10 @@ async function handleWebApiRequest(request, response, requestUrl) {
           sendWebJson(request, response, 400, { ok: false, error: useAll ? "Selected wallet has no spendable SOL after the reserve." : "sol must be > 0 (or pass sol:\"all\")" });
           return;
         }
-        const status = await autopilotEngine.start({ solBudget: sol, minutes, mode, live: wantLive, walletPubkey });
+        const profitLock = (body.profitLock === true || body.profitLock === "true")
+          ? { giveback: 0.5, minGainPct: 5 }
+          : (body.profitLock && typeof body.profitLock === "object" ? body.profitLock : null);
+        const status = await autopilotEngine.start({ solBudget: sol, minutes, mode, live: wantLive, walletPubkey, profitLock });
         sendWebJson(request, response, 200, { ok: true, status });
         return;
       } catch (e) {

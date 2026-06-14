@@ -123,10 +123,10 @@ async function tick(){
     if(mc>0){ pos.lastMc=mc; pos.missed=0; if(liq>0) pos.lastLiq=liq; } else { pos.missed=(pos.missed||0)+1; mc=pos.lastMc; }
     const pct=(mc/pos.entryMc-1)*100; pos.curPct=pct; const held=Date.now()-pos.at;
     pos.peak=Math.max(pos.peak||0, pct);
-    if(pos.entryLiq>400 && pos.lastLiq>0 && pos.lastLiq<pos.entryLiq*0.5){ closePos(pos, pct, "🛑 liquidity pulled (rug)"); continue; }
+    if(pos.entryLiq>400 && pos.lastLiq>0 && pos.lastLiq<pos.entryLiq*0.6){ closePos(pos, pct, "🛑 liquidity pulled (rug)"); continue; }
     if(pos.missed>=2 && held>18000){ closePos(pos, pct, "feed lost — exit"); continue; }
-    // trailing give-back once in profit: catches "+450% then tanked" round-trips
-    if(pos.tp1 && pos.peak>=40 && pct<=pos.peak*0.5){ closePos(pos, pct, "trail (gave back from +"+Math.round(pos.peak)+"%)"); continue; }
+    // trailing give-back once in profit, tighter the higher it ran (lock more of a big runner)
+    if(pos.tp1 && pos.peak>=40){ const keep = pos.peak>=300?0.72 : pos.peak>=150?0.62 : 0.5; if(pct<=pos.peak*keep){ closePos(pos, pct, "trail (gave back from +"+Math.round(pos.peak)+"%)"); continue; } }
     if(!pos.tp1 && pct<=-P.sl){ closePos(pos, pct, "stop -"+P.sl+"%"); continue; }
     if(!pos.tp1 && pct>=P.tp1){ sellPart(pos, mc, 0.4, "TP1 +"+Math.round(pct)+"%"); pos.tp1=true; continue; }
     if(pos.tp1 && !pos.tp2 && pct>=P.tp2){ sellPart(pos, mc, 0.5, "TP2 +"+Math.round(pct)+"% (moon bag rides)"); pos.tp2=true; continue; }

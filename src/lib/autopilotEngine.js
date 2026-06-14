@@ -32,15 +32,18 @@ export function aggParams(state) {
   else if (wr <= 0.3) regime = "COLD";
 
   const mode = state.mode || "normal";
-  const baseFrac = mode === "degen" ? 0.12 : mode === "chill" ? 0.05 : 0.08;
+  const baseFrac = mode === "degen" ? 0.10 : mode === "chill" ? 0.04 : 0.06;
 
+  // Softer streak/regime scaling: a hot streak no longer balloons size right
+  // into the next loss cluster (live data showed streak-pumped 0.11+ SOL bets
+  // taking 4x-bigger rug/dump hits and erasing the peak). Shrink fast on losses.
   let streakMult = 1;
-  if (state.streak >= 3) streakMult = 1.5;
-  else if (state.streak >= 1) streakMult = 1.2;
-  else if (state.streak <= -2) streakMult = 0.5;
-  else if (state.streak <= -1) streakMult = 0.75;
+  if (state.streak >= 3) streakMult = 1.25;
+  else if (state.streak >= 1) streakMult = 1.1;
+  else if (state.streak <= -2) streakMult = 0.45;
+  else if (state.streak <= -1) streakMult = 0.7;
 
-  const regimeMult = regime === "HOT" ? 1.3 : regime === "COLD" ? 0.6 : 1;
+  const regimeMult = regime === "HOT" ? 1.15 : regime === "COLD" ? 0.55 : 1;
 
   let tp1 = 25;
   let tp2 = 60;
@@ -66,7 +69,9 @@ export function sizeFor(state, P) {
   const cash = state.bank;
   const raw = cash * P.baseFrac * P.streakMult * P.regimeMult;
   const min = state.minTradeSol;
-  const max = Math.max(min, cash * 0.22);
+  // Cap any single bet at 12% of cash AND a hard 0.06 SOL ceiling — one
+  // instant-dump can't be allowed to erase several wins.
+  const max = Math.max(min, Math.min(cash * 0.12, state.maxTradeSol || 0.06));
   return Math.max(min, Math.min(raw, max));
 }
 
@@ -139,19 +144,23 @@ export function evalExit(pos, P, nowMs) {
   const peak = Math.max(pos.peakPct || 0, move);
   const held = nowMs - pos.openedAt;
 
-  // Liquidity pulled out from under us — get out at any price.
-  if (pos.entryLiq > 400 && pos.lastLiq > 0 && pos.lastLiq < pos.entryLiq * 0.5) {
+  // Liquidity pulled out from under us — get out at any price. Fire EARLIER
+  // (40% liquidity drop, not 50%) to cut the big full-position rug losses.
+  if (pos.entryLiq > 400 && pos.lastLiq > 0 && pos.lastLiq < pos.entryLiq * 0.6) {
     return { action: "sell", pct: 100, reason: "rug", move };
   }
   // We lost the live feed for this coin and it's been a while — exit blind.
   if (pos.missed >= 2 && held > 18_000) {
     return { action: "sell", pct: 100, reason: "feed-lost", move };
   }
-  // Trailing give-back: once we've banked first profit and it has run, dump the
-  // rest if it retraces to half of its peak gain. This is what catches the
-  // "+450% then tanked" round-trip — it would exit near +225%, not at 0.
-  if (pos.tp1Done && peak >= 40 && move <= peak * 0.5) {
-    return { action: "sell", pct: 100, reason: "trail", move };
+  // Trailing give-back, TIGHTER the higher it ran so we lock more of a big
+  // runner's peak (a +350% coin shouldn't be allowed to fall to +175% before we
+  // exit). Give back ~28% from a huge peak, ~38% from a medium one, 50% otherwise.
+  if (pos.tp1Done && peak >= 40) {
+    const keep = peak >= 300 ? 0.72 : peak >= 150 ? 0.62 : 0.5;
+    if (move <= peak * keep) {
+      return { action: "sell", pct: 100, reason: "trail", move };
+    }
   }
   // Hard stop, but only before we've taken any profit (after TP1 the trail owns it).
   if (!pos.tp1Done && move <= -P.sl) {
@@ -215,7 +224,12 @@ function freshState(opts) {
     peak: opts.solBudget,
     walletSol: null,
     minTradeSol: opts.minTradeSol || 0.012,
+    // Hard per-trade ceiling, budget-scaled (so a single instant-dump is bounded).
+    maxTradeSol: opts.maxTradeSol || Math.max(0.06, (opts.solBudget || 0) * 0.05),
     maxOpen: opts.maxOpen || 8,
+    // Optional session profit-lock: once up >= minGainPct, stop + flatten if
+    // equity gives back `giveback` fraction of the peak gain. null = off.
+    profitLock: opts.profitLock || null,
     open: [],
     wins: 0,
     losses: 0,
@@ -431,6 +445,19 @@ export function createAutopilotEngine(deps) {
       await manageExits();
       const eq = equity(state);
       if (eq > state.peak) state.peak = eq;
+
+      // Session profit-lock: once we've made real money, don't let a green peak
+      // bleed back. Stop + flatten if equity gives back `giveback` of the gain.
+      if (state.profitLock && state.peak > state.start) {
+        const gain = state.peak - state.start;
+        const minGain = state.start * ((state.profitLock.minGainPct || 5) / 100);
+        const giveback = state.profitLock.giveback || 0.5;
+        if (gain >= minGain && eq <= state.peak - gain * giveback) {
+          record("info", `🔒 Profit-lock: peak +${round((state.peak / state.start - 1) * 100, 1)}%, gave back ${Math.round(giveback * 100)}% of gains → locking +${round((eq / state.start - 1) * 100, 1)}%`);
+          await stop("profit-lock");
+          return;
+        }
+      }
     } catch (e) {
       record("error", `exit loop error: ${e && e.message}`);
     } finally {

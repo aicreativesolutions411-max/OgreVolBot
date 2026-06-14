@@ -71,6 +71,12 @@ test("sizeFor: clamps between min trade and 22% of bank", () => {
   assert.ok(size <= s.bank * 0.22 + 1e-9);
 });
 
+test("sizeFor: respects the hard per-trade ceiling even on a big bank + hot streak", () => {
+  const s = baseState({ bank: 10, maxTradeSol: 0.06, streak: 5, results: ["W","W","W","W","W"] });
+  const P = aggParams(s);
+  assert.ok(sizeFor(s, P) <= 0.06 + 1e-9, "single bet capped to the max-trade ceiling");
+});
+
 test("freshScore: younger + buy-led scores higher than old + sell-led", () => {
   const young = freshScore(goodRow({ pairAgeSeconds: 20, buys5m: 30, sells5m: 4 }));
   const old = freshScore(goodRow({ pairAgeSeconds: 900, buys5m: 5, sells5m: 12 }));
@@ -277,6 +283,27 @@ test("engine: stop sells every open position and opens no more", async () => {
   // a stray hunt after stop must not open anything
   await engine._hunt();
   assert.equal(engine.status().open.length, 0, "no positions opened after stop");
+});
+
+test("engine: profit-lock stops + flattens after giving back half the peak gain", async () => {
+  let t = 0;
+  const engine = createAutopilotEngine({
+    getFreshFeed: async () => [],
+    getPairLite: async () => null,
+    buyToken: async () => ({ ok: true }),
+    sellPercent: async () => ({ ok: true }),
+    now: () => t,
+    persist: async () => {}
+  });
+  await engine.start({ solBudget: 1, minutes: 60, live: false, profitLock: { giveback: 0.5, minGainPct: 5 } });
+  const s = engine._state();
+  s.peak = 1.2;   // peaked at +20%
+  s.bank = 1.08;  // gave back to +8% — that's 60% of the 0.2 gain, past the 50% lock
+  t += 1000;
+  await engine._exit();
+  const st = engine.status();
+  assert.equal(st.running, false);
+  assert.equal(st.stopReason, "profit-lock");
 });
 
 test("engine: loss cap flattens and stops", async () => {
