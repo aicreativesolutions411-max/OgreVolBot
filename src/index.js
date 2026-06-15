@@ -363,7 +363,7 @@ function liteAutopilotStatus(s) {
     running: s.running, live: s.live, wallet: s.wallet,
     start: s.start, bank: s.bank, walletSol: s.walletSol, secured: s.secured,
     equity: s.equity, peak: s.peak, pnlPct: s.pnlPct,
-    wins: s.wins, losses: s.losses,
+    wins: s.wins, losses: s.losses, blocked: s.blocked,
     open: (s.open || []).map((p) => ({ sym: p.sym, movePct: p.movePct, heldS: p.heldS })),
     endsInS: s.endsInS, stopped: s.stopped, stopReason: s.stopReason,
     bigWins: s.bigWins, // their own win cards are fine to keep

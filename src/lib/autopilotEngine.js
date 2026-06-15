@@ -495,6 +495,7 @@ function freshState(opts) {
     open: [],
     wins: 0,
     losses: 0,
+    blocked: 0,
     streak: 0,
     results: [],
     waves: {},
@@ -708,6 +709,7 @@ export function createAutopilotEngine(deps) {
       pnlPct: round(((totalEquity / state.start) - 1) * 100, 2),
       wins: state.wins,
       losses: state.losses,
+      blocked: state.blocked || 0,
       streak: state.streak,
       open: state.open.map((p) => ({
         sym: p.sym,
@@ -1149,6 +1151,7 @@ export function createAutopilotEngine(deps) {
       const dev = getDevWallet(cand.r.tokenMint);
       const rep = dev ? devReputation(dev) : null;
       if (rep && rep.rugs >= 2 && rep.runners === 0) {
+        state.blocked = (state.blocked || 0) + 1; // rug dodged — drives the panel's rug-dodge clip
         record("info", `⛔ skip ${cand.r.symbol} — dev rugged ${rep.rugs}x before`);
         continue;
       }

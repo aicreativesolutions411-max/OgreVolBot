@@ -298,17 +298,22 @@ function setState(st){document.body.dataset.state=st;}
    same reactor hero so they're the same ogre. ---- */
 const STATE_CLIPS="/assets/slimewire/auto/states/";
 let curClip="", clipEventUntil=0, lastSceneS=null;
-let pPrevOpen=null, pPrevWins=null, pPrevSec=null;
+let pPrevOpen=null, pPrevWins=null, pPrevSec=null, pPrevBlocked=0, lastRugAt=0;
 function playClip(name, isEvent){
   const v=$("bgVid"); if(!v) return;
   if(curClip===name) return;
   curClip=name;
   try{
     v.loop=!isEvent;
+    // EVENT clips play their OWN baked sound effect (the ogre's roar / surge / shockwave);
+    // ambient loops stay muted under the reactor ambient bed. Needs sound on + a prior
+    // user gesture (browsers block autoplay audio until then) — both handled elsewhere.
+    v.muted = !(isEvent && soundOn);
     v.src=STATE_CLIPS+name+".mp4";
     v.load(); const p=v.play(); if(p&&p.catch)p.catch(()=>{});
+    if(isEvent && soundOn){ try{ v.volume=0.7; }catch{} }
   }catch{}
-  if(isEvent) clipEventUntil=Date.now()+4600;
+  if(isEvent) clipEventUntil=Date.now()+(name==="rugdodge"?8200:4600); // rug-dodge is the longer 8s clip
 }
 function ambientClip(s){
   if(!s||!s.running) return "idle";
@@ -321,13 +326,14 @@ function driveScene(s){
   const now=Date.now();
   let evt=null;
   if(s&&s.running){
-    const op=(s.open||[]).length, wn=(s.bigWins||[]).length, sec=Number(s.secured||0);
+    const op=(s.open||[]).length, wn=(s.bigWins||[]).length, sec=Number(s.secured||0), bl=Number(s.blocked||0);
     if(pPrevOpen!==null){
       if(wn>pPrevWins) evt="win";                       // a big win just printed
       else if(sec>pPrevSec+0.0005) evt="banking";       // profit swept to the safe wallet
       else if(op>pPrevOpen) evt="aped";                 // a new position just opened
+      else if(bl>pPrevBlocked && now-lastRugAt>30000){ evt="rugdodge"; lastRugAt=now; } // dodged a rugger (throttled)
     }
-    pPrevOpen=op; pPrevWins=wn; pPrevSec=sec;
+    pPrevOpen=op; pPrevWins=wn; pPrevSec=sec; pPrevBlocked=bl;
   } else { pPrevOpen=null; }
   if(evt){ playClip(evt,true); try{blip(evt==="win"?"ok":"click");}catch{} if(evt==="win"||evt==="aped"){try{playSurge();}catch{}} return; }
   if(now>=clipEventUntil) playClip(ambientClip(s),false);  // back to the ambient loop
