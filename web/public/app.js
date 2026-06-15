@@ -7784,11 +7784,14 @@ function attachOgreAccents(panel, tab) {
     if (!head) return;
     if (tab === "terminal" || tab === "live") {
       const desc = head.querySelector("p");
-      if (desc && !desc.querySelector(".ogre-radar")) {
+      if (desc && !desc.querySelector(".ogre-radar-bar")) {
         const count = panel.querySelectorAll(".signal-row, [data-token-mint]").length;
-        desc.innerHTML = `<span class="ogre-radar"><span class="rdr"></span><span class="rl">RADAR</span> · <b>${count}</b> live · scanning the swamp</span>`;
-        const radar = desc.querySelector(".ogre-radar");
-        if (radar && count > ogreRadarPrevCount && ogreRadarPrevCount > 0) { radar.classList.add("hit"); setTimeout(() => radar.classList.remove("hit"), 700); }
+        desc.innerHTML = `<span class="ogre-radar-bar">`
+          + `<span class="orb-scope"><span class="ring"></span><span class="ring r2"></span><span class="sweep"></span><span class="blip b1"></span><span class="blip b2"></span><span class="blip b3"></span></span>`
+          + `<span class="orb-read"><span class="t">SWAMP RADAR</span><span class="s"><b>${count}</b> live pairs · scanning the swamp</span></span>`
+          + `<span class="orb-heat">LIVE</span></span>`;
+        const radar = desc.querySelector(".ogre-radar-bar");
+        if (radar && count > ogreRadarPrevCount && ogreRadarPrevCount > 0) { radar.classList.add("hit"); setTimeout(() => radar.classList.remove("hit"), 800); }
         ogreRadarPrevCount = count;
       }
     } else if (tab === "kol" || tab === "slimeScope" || tab === "watchlist") {

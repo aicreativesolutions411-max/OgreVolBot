@@ -114,34 +114,53 @@
 /* ----------------------------------------------------------------- TIER 3 OGRE ACCENTS
    Featherweight CSS/SVG accents for data-dense screens — NO video. They live in space that
    already exists (the tab description line / header), so the lists never bulk or scroll more. */
-/* Radar-operator strip (replaces the static description on Terminal / Live). */
-.ogre-radar{display:flex;align-items:center;gap:9px;font-size:12px;color:#bfe9c8;margin:2px 0 0;}
-.ogre-radar .rdr{flex:none;position:relative;width:22px;height:22px;border-radius:50%;background:rgba(141,255,90,.08);
-  border:1px solid rgba(141,255,90,.35);overflow:hidden;}
-.ogre-radar .rdr::before{content:"";position:absolute;left:50%;top:50%;width:50%;height:50%;transform-origin:top left;
-  background:conic-gradient(from 0deg,rgba(141,255,90,.55),rgba(141,255,90,0) 70%);animation:rdrSweep 2.4s linear infinite;}
-.ogre-radar .rdr::after{content:"";position:absolute;left:50%;top:50%;width:5px;height:5px;border-radius:50%;transform:translate(-50%,-50%);
-  background:#8dff5a;box-shadow:0 0 7px #8dff5a;animation:rdrBlip 2.4s ease-in-out infinite;}
-.ogre-radar b{color:#9dff6a;font-variant-numeric:tabular-nums;font-weight:900;}
-.ogre-radar .rl{opacity:.8;}
-.ogre-radar.hit .rdr{box-shadow:0 0 14px rgba(141,255,90,.7);border-color:#8dff5a;}
-.ogre-radar.hit{animation:rdrHit .7s ease;}
-@keyframes rdrSweep{to{transform:rotate(360deg);}}
-@keyframes rdrBlip{0%,100%{opacity:.5;}50%{opacity:1;}}
-@keyframes rdrHit{0%{color:#eafff0;}100%{color:#bfe9c8;}}
-/* Intel "spy-eye" chip (KOL / SlimeScope / Watchlist headers). */
-.ogre-spy{flex:none;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:50%;margin-right:8px;vertical-align:middle;
-  background:radial-gradient(circle at 50% 50%,rgba(90,176,255,.25),rgba(6,12,16,.6) 70%);border:1px solid rgba(90,176,255,.5);box-shadow:0 0 10px rgba(90,176,255,.3);}
-.ogre-spy i{display:block;width:9px;height:9px;border-radius:50%;background:#5ab0ff;box-shadow:0 0 8px #5ab0ff;animation:spyScan 3.2s ease-in-out infinite;}
-.ogre-spy.alert i{background:#ffd45a;box-shadow:0 0 10px #ffd45a;animation:spyBlink .5s ease-in-out 4;}
-@keyframes spyScan{0%,100%{transform:translateX(-4px) scaleX(.8);}50%{transform:translateX(4px) scaleX(1);}}
+/* SWAMP RADAR bar — a live radar scope (sweep + pinging blips + scanline) that REPLACES the
+   static description line on Terminal / Live. Eye-catching but slim (~48px); flares when the
+   feed grows. */
+.ogre-radar-bar{display:flex;align-items:center;gap:11px;margin:6px 0 2px;padding:7px 12px;border-radius:13px;position:relative;overflow:hidden;
+  background:linear-gradient(100deg,rgba(6,16,9,.9),rgba(8,18,12,.4));border:1px solid rgba(141,255,90,.24);
+  box-shadow:inset 0 0 22px rgba(39,224,106,.08),0 6px 18px rgba(0,0,0,.35);}
+.ogre-radar-bar::after{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(90deg,transparent,rgba(141,255,90,.07),transparent);background-size:220% 100%;animation:rbScan 4.5s linear infinite;}
+@keyframes rbScan{0%{background-position:220% 0;}100%{background-position:-220% 0;}}
+.orb-scope{flex:none;position:relative;width:42px;height:42px;border-radius:50%;overflow:hidden;
+  background:radial-gradient(circle,rgba(10,24,12,.95),rgba(4,10,6,.98));border:1px solid rgba(141,255,90,.55);
+  box-shadow:0 0 14px rgba(39,224,106,.4),inset 0 0 10px rgba(39,224,106,.22);}
+.orb-scope .ring{position:absolute;inset:7px;border:1px solid rgba(141,255,90,.16);border-radius:50%;}
+.orb-scope .ring.r2{inset:14px;}
+.orb-scope .sweep{position:absolute;left:50%;top:50%;width:50%;height:50%;transform-origin:top left;
+  background:conic-gradient(from 0deg,rgba(141,255,90,.55),rgba(141,255,90,0) 65%);animation:rbSweep 2.2s linear infinite;}
+.orb-scope .blip{position:absolute;width:4px;height:4px;border-radius:50%;background:#bdff8f;box-shadow:0 0 7px #8dff5a;opacity:0;}
+.orb-scope .b1{left:66%;top:30%;animation:rbBlip 2.2s ease-in-out infinite;}
+.orb-scope .b2{left:32%;top:60%;animation:rbBlip 2.2s ease-in-out .8s infinite;}
+.orb-scope .b3{left:58%;top:68%;animation:rbBlip 2.2s ease-in-out 1.5s infinite;}
+@keyframes rbSweep{to{transform:rotate(360deg);}}
+@keyframes rbBlip{0%,78%,100%{opacity:0;transform:scale(.6);}38%{opacity:1;transform:scale(1);}}
+.orb-read{display:flex;flex-direction:column;line-height:1.18;min-width:0;}
+.orb-read .t{font-size:8px;letter-spacing:1.6px;color:#7fae74;font-weight:800;}
+.orb-read .s{font-size:12.5px;color:#d6f2dd;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.orb-read .s b{color:#9dff6a;font-variant-numeric:tabular-nums;}
+.orb-heat{margin-left:auto;flex:none;font-size:9px;font-weight:900;letter-spacing:.5px;padding:4px 10px;border-radius:99px;text-transform:uppercase;display:flex;align-items:center;gap:5px;color:#8dff5a;background:rgba(141,255,90,.12);border:1px solid rgba(141,255,90,.4);}
+.orb-heat::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;box-shadow:0 0 7px currentColor;animation:rbBlink 1.3s ease-in-out infinite;}
+@keyframes rbBlink{0%,100%{opacity:1;}50%{opacity:.4;}}
+.ogre-radar-bar.hit{animation:rbHit .8s ease;}
+.ogre-radar-bar.hit .orb-scope{box-shadow:0 0 24px rgba(141,255,90,.85),inset 0 0 12px rgba(39,224,106,.45);}
+@keyframes rbHit{0%{border-color:#8dff5a;}100%{border-color:rgba(141,255,90,.24);}}
+/* Intel "spy-eye" — a striking scanning eye (KOL / SlimeScope / Watchlist headers). */
+.ogre-spy{flex:none;display:inline-flex;align-items:center;justify-content:center;width:30px;height:19px;border-radius:50% / 60%;margin-right:9px;vertical-align:middle;position:relative;overflow:hidden;
+  background:radial-gradient(ellipse at 50% 50%,rgba(90,176,255,.3),rgba(6,12,16,.72) 72%);border:1px solid rgba(90,176,255,.55);box-shadow:0 0 12px rgba(90,176,255,.35);}
+.ogre-spy i{display:block;width:10px;height:10px;border-radius:50%;background:radial-gradient(circle at 40% 40%,#e6f4ff,#5ab0ff 62%);box-shadow:0 0 9px #5ab0ff;animation:spyScan 3.2s ease-in-out infinite;}
+.ogre-spy::after{content:"";position:absolute;left:0;right:0;height:50%;top:-50%;background:linear-gradient(180deg,rgba(90,176,255,0),rgba(90,176,255,.3),rgba(90,176,255,0));animation:spyLine 2.6s linear infinite;}
+.ogre-spy.alert{border-color:rgba(255,212,90,.7);box-shadow:0 0 14px rgba(255,212,90,.5);}
+.ogre-spy.alert i{background:radial-gradient(circle at 40% 40%,#fff,#ffd45a 62%);box-shadow:0 0 10px #ffd45a;animation:spyBlink .5s ease-in-out 4;}
+@keyframes spyScan{0%,100%{transform:translateX(-5px) scaleX(.8);}50%{transform:translateX(5px) scaleX(1);}}
+@keyframes spyLine{0%{top:-50%;}100%{top:100%;}}
 @keyframes spyBlink{0%,100%{opacity:1;}50%{opacity:.2;}}
 /* Chart-watcher mini head (Smart Chart toolbar corner). */
 .ogre-chartwatch{flex:none;display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:800;color:#9dff6a;
   padding:3px 9px;border-radius:99px;background:rgba(4,7,10,.5);border:1px solid rgba(141,255,90,.3);}
 .ogre-chartwatch .ce{width:8px;height:8px;border-radius:50%;background:#8dff5a;box-shadow:0 0 7px #8dff5a;animation:rdrBlip 2s ease-in-out infinite;}
 .ogre-chartwatch.up{color:#9dff6a;}.ogre-chartwatch.down{color:#ff8a8a;}.ogre-chartwatch.down .ce{background:#ff6b6b;box-shadow:0 0 7px #ff6b6b;}
-@media (prefers-reduced-motion: reduce){.ogre-radar .rdr::before,.ogre-radar .rdr::after,.ogre-spy i,.ogre-chartwatch .ce{animation:none !important;}}
+@media (prefers-reduced-motion: reduce){.ogre-radar-bar::after,.orb-scope .sweep,.orb-scope .blip,.orb-heat::before,.ogre-spy i,.ogre-spy::after,.ogre-chartwatch .ce{animation:none !important;}}
 
 /* ----------------------------------------------------------------- OGRE A.I. TIER BANNER */
 .ogre-ai-tier{display:flex;align-items:center;gap:10px;margin:0 0 12px;padding:10px 12px;border-radius:12px;
