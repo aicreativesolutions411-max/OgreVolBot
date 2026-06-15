@@ -111,6 +111,38 @@
 .ogre-stage.volume .ov-read .chip .v{font-size:13px;font-weight:900;font-variant-numeric:tabular-nums;color:#eaddff;}
 .ogre-stage.volume .ov-read .chip .v.buy{color:#8dff5a;}.ogre-stage.volume .ov-read .chip .v.sell{color:#ff9a3a;}
 
+/* ----------------------------------------------------------------- TIER 3 OGRE ACCENTS
+   Featherweight CSS/SVG accents for data-dense screens — NO video. They live in space that
+   already exists (the tab description line / header), so the lists never bulk or scroll more. */
+/* Radar-operator strip (replaces the static description on Terminal / Live). */
+.ogre-radar{display:flex;align-items:center;gap:9px;font-size:12px;color:#bfe9c8;margin:2px 0 0;}
+.ogre-radar .rdr{flex:none;position:relative;width:22px;height:22px;border-radius:50%;background:rgba(141,255,90,.08);
+  border:1px solid rgba(141,255,90,.35);overflow:hidden;}
+.ogre-radar .rdr::before{content:"";position:absolute;left:50%;top:50%;width:50%;height:50%;transform-origin:top left;
+  background:conic-gradient(from 0deg,rgba(141,255,90,.55),rgba(141,255,90,0) 70%);animation:rdrSweep 2.4s linear infinite;}
+.ogre-radar .rdr::after{content:"";position:absolute;left:50%;top:50%;width:5px;height:5px;border-radius:50%;transform:translate(-50%,-50%);
+  background:#8dff5a;box-shadow:0 0 7px #8dff5a;animation:rdrBlip 2.4s ease-in-out infinite;}
+.ogre-radar b{color:#9dff6a;font-variant-numeric:tabular-nums;font-weight:900;}
+.ogre-radar .rl{opacity:.8;}
+.ogre-radar.hit .rdr{box-shadow:0 0 14px rgba(141,255,90,.7);border-color:#8dff5a;}
+.ogre-radar.hit{animation:rdrHit .7s ease;}
+@keyframes rdrSweep{to{transform:rotate(360deg);}}
+@keyframes rdrBlip{0%,100%{opacity:.5;}50%{opacity:1;}}
+@keyframes rdrHit{0%{color:#eafff0;}100%{color:#bfe9c8;}}
+/* Intel "spy-eye" chip (KOL / SlimeScope / Watchlist headers). */
+.ogre-spy{flex:none;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:50%;margin-right:8px;vertical-align:middle;
+  background:radial-gradient(circle at 50% 50%,rgba(90,176,255,.25),rgba(6,12,16,.6) 70%);border:1px solid rgba(90,176,255,.5);box-shadow:0 0 10px rgba(90,176,255,.3);}
+.ogre-spy i{display:block;width:9px;height:9px;border-radius:50%;background:#5ab0ff;box-shadow:0 0 8px #5ab0ff;animation:spyScan 3.2s ease-in-out infinite;}
+.ogre-spy.alert i{background:#ffd45a;box-shadow:0 0 10px #ffd45a;animation:spyBlink .5s ease-in-out 4;}
+@keyframes spyScan{0%,100%{transform:translateX(-4px) scaleX(.8);}50%{transform:translateX(4px) scaleX(1);}}
+@keyframes spyBlink{0%,100%{opacity:1;}50%{opacity:.2;}}
+/* Chart-watcher mini head (Smart Chart toolbar corner). */
+.ogre-chartwatch{flex:none;display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:800;color:#9dff6a;
+  padding:3px 9px;border-radius:99px;background:rgba(4,7,10,.5);border:1px solid rgba(141,255,90,.3);}
+.ogre-chartwatch .ce{width:8px;height:8px;border-radius:50%;background:#8dff5a;box-shadow:0 0 7px #8dff5a;animation:rdrBlip 2s ease-in-out infinite;}
+.ogre-chartwatch.up{color:#9dff6a;}.ogre-chartwatch.down{color:#ff8a8a;}.ogre-chartwatch.down .ce{background:#ff6b6b;box-shadow:0 0 7px #ff6b6b;}
+@media (prefers-reduced-motion: reduce){.ogre-radar .rdr::before,.ogre-radar .rdr::after,.ogre-spy i,.ogre-chartwatch .ce{animation:none !important;}}
+
 /* ----------------------------------------------------------------- OGRE A.I. TIER BANNER */
 .ogre-ai-tier{display:flex;align-items:center;gap:10px;margin:0 0 12px;padding:10px 12px;border-radius:12px;
   background:linear-gradient(120deg,rgba(70,232,255,.12),rgba(70,232,255,.04));border:1px solid rgba(70,232,255,.3);}
@@ -145,7 +177,7 @@
 .ogre-stage.launch{--accent:#ff8a3a;}
 .ogre-stage.sniper{--accent:#ff5a5a;}
 .ogre-stage.ogreai{--accent:#46e8ff;}
-.ogre-stage.bundle{--accent:#c06bff;}
+.ogre-stage.bundle{--accent:#ffa64d;}
 .ogre-stage.positions,.ogre-stage.pnl{--accent:#8dff5a;}
 
 /* ----------------------------------------------------------------- OGRE SPINNER

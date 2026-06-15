@@ -6096,6 +6096,9 @@ function renderTabs() {
       attachOgreStage(panel);
     } catch (err) { /* stage is decorative — never block render */ }
   }
+  if (["terminal", "live", "kol", "slimeScope", "watchlist", "smartChart"].includes(state.activeTab)) {
+    try { attachOgreAccents(panel, state.activeTab); } catch (err) { /* accent is decorative */ }
+  }
   if (state.activeTab === "smartChart" && state.chartFocusAmountInput) {
     requestAnimationFrame(() => {
       const input = $("[data-chart-buy-amount]");
@@ -7705,9 +7708,9 @@ const OGRE_HERO_KINDS = {
   launchCoin: { base: "/assets/slimewire/launch/states/", poster: "/assets/slimewire/launch/hero.png", tier: "OGRE FORGE", cap: ["Pump Launcher", "Forge it · birth it · send it."], accent: "launch", idle: "idle", event: "launch", sfx: [OGRE_SWAP_SFX + "win.mp3", 0.8] },
   sniper:     { base: "/assets/slimewire/sniper/states/", poster: "/assets/slimewire/sniper/hero.png", tier: "OGRESNIPER", cap: ["OgreSniper", "Lock on · strike first."], accent: "sniper", idle: "idle", event: "fire", sfx: ["/assets/slimewire/auto/sfx/shockwave.mp3", 0.8] },
   ogreAi:     { base: "/assets/slimewire/ogreai/states/", poster: "/assets/slimewire/ogreai/hero.png", tier: "OGRE A.I.", cap: ["Ogre A.I.", "Ask the swamp oracle."], accent: "ogreai", idle: "idle", event: "speak", sfx: [OGRE_SWAP_SFX + "appraise.mp3", 0.6] },
-  bundle:     { base: "/assets/slimewire/volume/states/", poster: "/assets/slimewire/volume/hero.png", tier: "OGRE BUNDLE", cap: ["Bundle", "Many wallets · one tap."], accent: "bundle", idle: "idle", event: "running", sfx: [OGRE_VOL_SFX + "start.mp3", 0.7] },
-  positions:  { base: "/assets/slimewire/auto/states/", poster: "/assets/slimewire/auto/reactor.jpg", tier: "POSITIONS", cap: ["Open Positions", "Your swamp, live."], accent: "positions", idle: "idle", event: "win", sfx: ["/assets/slimewire/auto/sfx/victory.mp3", 0.85] },
-  pnl:        { base: "/assets/slimewire/auto/states/", poster: "/assets/slimewire/auto/reactor.jpg", tier: "PROFIT & LOSS", cap: ["PnL", "Count the winnings."], accent: "positions", idle: "idle", event: "win", sfx: ["/assets/slimewire/auto/sfx/victory.mp3", 0.85] }
+  bundle:     { base: "/assets/slimewire/bundle/states/", poster: "/assets/slimewire/bundle/hero.png", tier: "OGRE BUNDLE", cap: ["Bundle", "Many wallets · one volley."], accent: "bundle", idle: "idle", event: "volley", sfx: ["/assets/slimewire/auto/sfx/shockwave.mp3", 0.8] },
+  positions:  { base: "/assets/slimewire/positions/states/", poster: "/assets/slimewire/positions/hero.png", tier: "POSITIONS", cap: ["Open Positions", "Your swamp, live."], accent: "positions", idle: "idle", event: "win", sfx: ["/assets/slimewire/auto/sfx/victory.mp3", 0.85] },
+  pnl:        { base: "/assets/slimewire/positions/states/", poster: "/assets/slimewire/positions/hero.png", tier: "PROFIT & LOSS", cap: ["PnL", "Count the winnings."], accent: "positions", idle: "idle", event: "win", sfx: ["/assets/slimewire/auto/sfx/victory.mp3", 0.85] }
 };
 function ogreClipBase() {
   const k = ogreStage.kind;
@@ -7770,6 +7773,30 @@ async function ogreShareCard(kind) {
   try {
     const res = await api("/api/web/card", { method: "POST", body: JSON.stringify(payload) });
     if (res && res.ok && res.png) ogreCardDownload(`slimewire-${kind}-card.png`, res.png);
+  } catch {}
+}
+// Tier-3 accents: drop a featherweight ogre status into space that already exists on the
+// data-dense screens — never a banner, never extra scroll. CSS/SVG only.
+let ogreRadarPrevCount = 0;
+function attachOgreAccents(panel, tab) {
+  try {
+    const head = panel.querySelector(".trade-head");
+    if (!head) return;
+    if (tab === "terminal" || tab === "live") {
+      const desc = head.querySelector("p");
+      if (desc && !desc.querySelector(".ogre-radar")) {
+        const count = panel.querySelectorAll(".signal-row, [data-token-mint]").length;
+        desc.innerHTML = `<span class="ogre-radar"><span class="rdr"></span><span class="rl">RADAR</span> · <b>${count}</b> live · scanning the swamp</span>`;
+        const radar = desc.querySelector(".ogre-radar");
+        if (radar && count > ogreRadarPrevCount && ogreRadarPrevCount > 0) { radar.classList.add("hit"); setTimeout(() => radar.classList.remove("hit"), 700); }
+        ogreRadarPrevCount = count;
+      }
+    } else if (tab === "kol" || tab === "slimeScope" || tab === "watchlist") {
+      const h = head.querySelector("h3");
+      if (h && !h.querySelector(".ogre-spy")) h.insertAdjacentHTML("afterbegin", `<span class="ogre-spy" title="Intel watch"><i></i></span>`);
+    } else if (tab === "smartChart") {
+      if (!head.querySelector(".ogre-chartwatch")) head.insertAdjacentHTML("beforeend", `<span class="ogre-chartwatch"><span class="ce"></span>WATCHING</span>`);
+    }
   } catch {}
 }
 let ogreSoundOn = true; try { ogreSoundOn = localStorage.getItem("ogreStageSound") !== "off"; } catch {}
