@@ -6086,6 +6086,9 @@ function renderTabs() {
   restoreFormFieldSnapshot(formFieldSnapshot, panel);
   syncCustomFields(panel);
   restoreGeneralScrollSnapshot(generalScrollSnapshot, panel);
+  if (state.activeTab === "trade" || state.activeTab === "volume") {
+    try { attachOgreStage(panel); } catch (err) { /* stage is decorative — never block render */ }
+  }
   if (state.activeTab === "smartChart" && state.chartFocusAmountInput) {
     requestAnimationFrame(() => {
       const input = $("[data-chart-buy-amount]");
@@ -7676,6 +7679,243 @@ function shortAddress(value) {
   return text.length > 10 ? `${text.slice(0, 4)}...${text.slice(-4)}` : text || "token";
 }
 
+/* ============================================================================
+   OGRE STAGES — immersive living panels for OgreSwap + SlimeBot/Volume.
+   Markup is emitted inside tradeHtml()/volumeBotPanelHtml(); attachOgreStage()
+   runs after every render (from renderTabs) and drives the clips/HUD/SFX from
+   live `state`. Purely decorative — wrapped in try/catch so it can never block
+   a render or a trade. Three identities share the /pro engine pattern:
+     swap   = gold/teal treasurer + SlimeShield      volume = violet conductor + swarm
+   ============================================================================ */
+const OGRE_SWAP_CLIPS = "/assets/slimewire/swap/states/";
+const OGRE_SWAP_SFX = "/assets/slimewire/swap/sfx/";
+const OGRE_VOL_CLIPS = "/assets/slimewire/volume/states/";
+const OGRE_VOL_SFX = "/assets/slimewire/volume/sfx/";
+let ogreSoundOn = true; try { ogreSoundOn = localStorage.getItem("ogreStageSound") !== "off"; } catch {}
+const ogreSfxCache = {};
+function ogrePlaySfx(url, vol) {
+  if (!ogreSoundOn) return;
+  try { let a = ogreSfxCache[url]; if (!a) { a = new Audio(url); a.preload = "auto"; ogreSfxCache[url] = a; } a.volume = vol == null ? 0.7 : vol; a.currentTime = 0; a.play().catch(() => {}); } catch {}
+}
+const ogreStage = { kind: null, clip: "", eventUntil: 0, prev: {}, feed: [], feedIdx: 0, tkTimer: 0 };
+function ogreShortMint(m) { m = String(m || ""); return m.length > 9 ? `${m.slice(0, 4)}…${m.slice(-4)}` : m || "coin"; }
+function ogreResSym(r) { return r && r.symbol ? `$${r.symbol}` : (r && r.shortMint ? `$${r.shortMint}` : "the coin"); }
+function ogreStageVideoHtml(kind) {
+  const base = kind === "swap" ? OGRE_SWAP_CLIPS : OGRE_VOL_CLIPS;
+  const poster = kind === "swap" ? "/assets/slimewire/swap/hero.png" : "/assets/slimewire/volume/hero.png";
+  return `<video class="ogre-bg" data-ogre-bg autoplay muted loop playsinline preload="auto" poster="${poster}" src="${base}idle.mp4"></video>`;
+}
+function ogreSwapStageHtml() {
+  return `
+    <div class="ogre-stage swap" data-ogre-stage="swap">
+      ${ogreStageVideoHtml("swap")}
+      <span class="os-tier">OGRESWAP</span>
+      <button class="os-snd" data-ogre-snd type="button" title="Sound on/off">🔊</button>
+      <span class="os-led"></span>
+      <div class="os-shield" data-os-shield><span class="ic">🛡️</span><span data-os-shield-text>SHIELD</span></div>
+      <div class="os-read" data-os-read><div class="l">SlimeShield score</div><div class="v" data-os-read-v>—</div></div>
+      <div class="os-gauge"><div class="fill" data-os-gauge></div></div>
+      <div class="os-orb" data-os-orb><span class="s" data-os-orb-s></span><span class="p" data-os-orb-p></span></div>
+      <div class="os-ticker"><span class="os-tk" data-os-tk><span class="os-dot"></span>OgreSwap ready — paste a coin to appraise</span></div>
+      <div class="os-cap"><h4>OgreSwap</h4><p>Appraise it · swap it · bank it.</p></div>
+    </div>`;
+}
+function ogreVolumeStageHtml() {
+  return `
+    <div class="ogre-stage volume" data-ogre-stage="volume">
+      ${ogreStageVideoHtml("volume")}
+      <span class="os-tier">SLIMEBOT</span>
+      <button class="os-snd" data-ogre-snd type="button" title="Sound on/off">🔊</button>
+      <span class="os-led"></span>
+      <div class="ov-swarm" data-ov-swarm></div>
+      <div class="ov-budget" data-ov-budget><div class="l">SOL deployed</div><div class="v" data-ov-budget-v>—</div><div class="bar"><i data-ov-budget-bar></i></div></div>
+      <div class="ov-ring" data-ov-ring><svg width="54" height="54"><circle class="trk" cx="27" cy="27" r="22"></circle><circle class="prg" data-ov-ring-prg cx="27" cy="27" r="22"></circle></svg><div class="lbl"><span>round</span><b data-ov-ring-lbl>0/0</b></div></div>
+      <div class="ov-read" data-ov-read>
+        <div class="chip"><span class="l">Volume</span><span class="v" data-ov-vol>—</span></div>
+        <div class="chip"><span class="l">Buys</span><span class="v buy" data-ov-buys>0</span></div>
+        <div class="chip"><span class="l">Sells</span><span class="v sell" data-ov-sells>0</span></div>
+        <div class="chip"><span class="l">Wallets</span><span class="v" data-ov-wallets>0</span></div>
+      </div>
+      <div class="os-ticker"><span class="os-tk" data-os-tk><span class="os-dot"></span>SlimeBot idle — set a token and start</span></div>
+      <div class="os-cap"><h4>SlimeBot Volume Engine</h4><p>A swarm of wallets · lifelike flow.</p></div>
+    </div>`;
+}
+function ogreAmbientClip(kind) {
+  if (kind === "volume") return (state.volumeBots || []).some((b) => b && b.status !== "completed") ? "running" : "idle";
+  return "idle";
+}
+function ogreEventSfx(name) {
+  if (ogreStage.kind === "swap") {
+    const m = { appraise: ["appraise.mp3", 0.7], buy: ["buy.mp3", 0.85], win: ["win.mp3", 0.85], loss: ["loss.mp3", 0.6], banking: ["bank.mp3", 0.8] };
+    if (m[name]) ogrePlaySfx(OGRE_SWAP_SFX + m[name][0], m[name][1]);
+  } else {
+    const m = { running: ["start.mp3", 0.7], sweep: ["sweep.mp3", 0.8] };
+    if (m[name]) ogrePlaySfx(OGRE_VOL_SFX + m[name][0], m[name][1]);
+  }
+}
+function ogrePlayClip(stage, name, isEvent) {
+  const bg = stage.querySelector("[data-ogre-bg]");
+  if (!bg || ogreStage.clip === name) return;
+  ogreStage.clip = name;
+  const base = ogreStage.kind === "swap" ? OGRE_SWAP_CLIPS : OGRE_VOL_CLIPS;
+  try { bg.loop = !isEvent; bg.muted = true; bg.src = base + name + ".mp4"; bg.load(); const p = bg.play(); if (p && p.catch) p.catch(() => {}); } catch {}
+  if (isEvent) { ogreStage.eventUntil = Date.now() + (name === "running" ? 8500 : 4600); ogreEventSfx(name); }
+}
+function ogrePushFeed(text, color) { ogreStage.feed.unshift({ text, color: color || "" }); if (ogreStage.feed.length > 16) ogreStage.feed.pop(); ogreStage.feedIdx = 0; }
+function ogreTickerTick() {
+  const stage = document.querySelector("[data-ogre-stage]");
+  if (!stage) { if (ogreStage.tkTimer) { clearInterval(ogreStage.tkTimer); ogreStage.tkTimer = 0; } return; }
+  const tk = stage.querySelector("[data-os-tk]"); if (!tk) return;
+  if (!ogreStage.feed.length) {
+    if (ogreStage.kind === "volume") {
+      const active = (state.volumeBots || []).some((b) => b && b.status !== "completed");
+      tk.innerHTML = `<span class="os-dot"></span>` + (active ? "Swarm running — generating lifelike volume" : "SlimeBot idle — set a token and start");
+    } else {
+      tk.innerHTML = `<span class="os-dot"></span>` + (state.tradeToken ? "Coin loaded — set your size and SWAP" : "OgreSwap ready — paste a coin to appraise");
+    }
+    return;
+  }
+  const item = ogreStage.feed[ogreStage.feedIdx++ % ogreStage.feed.length];
+  const dot = item.color ? `<span class="os-dot" style="background:${item.color};box-shadow:0 0 8px ${item.color}"></span>` : `<span class="os-dot"></span>`;
+  tk.innerHTML = dot + escapeHtml(item.text);
+  tk.style.animation = "none"; void tk.offsetWidth; tk.style.animation = "os-tkin .5s ease";
+}
+function attachOgreStage(panel) {
+  const stage = panel.querySelector("[data-ogre-stage]");
+  if (!stage) { ogreStage.kind = null; return; }
+  const kind = stage.getAttribute("data-ogre-stage");
+  if (ogreStage.kind !== kind) { ogreStage.kind = kind; ogreStage.clip = ""; ogreStage.eventUntil = 0; ogreStage.prev = {}; ogreStage.feed = []; ogreStage.feedIdx = 0; }
+  const sndBtn = stage.querySelector("[data-ogre-snd]");
+  if (sndBtn) {
+    sndBtn.textContent = ogreSoundOn ? "🔊" : "🔇";
+    sndBtn.onclick = (e) => { e.stopPropagation(); ogreSoundOn = !ogreSoundOn; try { localStorage.setItem("ogreStageSound", ogreSoundOn ? "on" : "off"); } catch {} sndBtn.textContent = ogreSoundOn ? "🔊" : "🔇"; };
+  }
+  const bg = stage.querySelector("[data-ogre-bg]");
+  if (bg && !bg.__ogreBound) {
+    bg.__ogreBound = true;
+    bg.addEventListener("ended", () => { if (!bg.loop) { ogreStage.eventUntil = 0; ogreStage.clip = ""; ogrePlayClip(stage, ogreAmbientClip(ogreStage.kind), false); } });
+  }
+  if (!ogreStage.tkTimer) ogreStage.tkTimer = setInterval(ogreTickerTick, 3400);
+  if (kind === "swap") driveOgreSwapStage(stage); else driveOgreVolumeStage(stage);
+}
+function driveOgreSwapStage(stage) {
+  const token = String(state.tradeToken || "").trim();
+  const shield = token ? (state.slimeShieldResults || {})[token] : null;
+  const badge = stage.querySelector("[data-os-shield]");
+  const bt = stage.querySelector("[data-os-shield-text]");
+  const gauge = stage.querySelector("[data-os-gauge]");
+  const read = stage.querySelector("[data-os-read]");
+  const rv = stage.querySelector("[data-os-read-v]");
+  if (shield) {
+    const verdict = String(shield.verdict || "").toLowerCase();
+    const cls = (verdict.includes("avoid") || verdict.includes("danger") || verdict.includes("rug")) ? "avoid" : (verdict.includes("safe") || verdict.includes("clean") || verdict.includes("ok")) ? "safe" : "risk";
+    if (badge) badge.className = "os-shield show " + cls;
+    if (bt) bt.textContent = String(shield.verdict || "checked").toUpperCase();
+    const score = Number(shield.score);
+    if (!isNaN(score) && gauge) gauge.style.height = Math.max(6, Math.min(100, score)) + "%";
+    if (!isNaN(score) && read && rv) { read.classList.add("show"); rv.textContent = Math.round(score); rv.className = "v " + (cls === "avoid" ? "down" : cls === "safe" ? "up" : ""); }
+    stage.classList.toggle("loss", cls === "avoid");
+  } else {
+    if (badge) badge.className = "os-shield";
+    if (read) read.classList.remove("show");
+    if (gauge) gauge.style.height = "6%";
+    stage.classList.remove("loss");
+  }
+  if (token && token !== ogreStage.prev.swapToken) {
+    ogreStage.prev.swapToken = token;
+    ogrePushFeed("Appraising $" + ogreShortMint(token), "#36e0c8");
+    ogrePlayClip(stage, "appraise", true);
+    if (!shield && typeof loadSlimeShield === "function") { try { loadSlimeShield(token).catch(() => {}); } catch {} }
+  }
+  const r = state.tradeResult;
+  const rsig = r ? `${r.signature || r.message || ""}|${r.type || ""}` : "";
+  if (r && rsig !== ogreStage.prev.swapRes) {
+    ogreStage.prev.swapRes = rsig;
+    if (r.type === "buy") {
+      ogrePlayClip(stage, "buy", true);
+      const orb = stage.querySelector("[data-os-orb]");
+      if (orb) { orb.classList.add("show", "up"); orb.classList.remove("down"); const s = orb.querySelector("[data-os-orb-s]"); const p = orb.querySelector("[data-os-orb-p]"); if (s) s.textContent = ogreResSym(r).replace("$", "").slice(0, 7); if (p) p.textContent = "HELD"; }
+      ogrePushFeed("Bought " + ogreResSym(r), "#9dff6a");
+    } else if (r.type === "sell") {
+      ogrePlayClip(stage, "banking", true);
+      const orb = stage.querySelector("[data-os-orb]"); if (orb) orb.classList.remove("show");
+      ogrePushFeed("Sold " + ogreResSym(r) + " — banked", "#ffd45a");
+    }
+  }
+  if (Date.now() >= ogreStage.eventUntil) ogrePlayClip(stage, "idle", false);
+}
+function ogreRenderSwarm(stage, n, buys, sells) {
+  const wrap = stage.querySelector("[data-ov-swarm]"); if (!wrap) return;
+  n = Math.max(0, Math.min(12, Math.round(n)));
+  if (wrap.children.length !== n) {
+    wrap.innerHTML = "";
+    for (let i = 0; i < n; i++) {
+      const o = document.createElement("div"); o.className = "ov-orb";
+      const ang = (i / n) * Math.PI * 2 - Math.PI / 2;
+      o.style.left = (50 + Math.cos(ang) * 34) + "%";
+      o.style.top = (46 + Math.sin(ang) * 30) + "%";
+      wrap.appendChild(o);
+    }
+  }
+  const orbs = wrap.children; if (!orbs.length) return;
+  const pb = Number(ogreStage.prev.volBuys || 0), ps = Number(ogreStage.prev.volSells || 0);
+  const flash = (cls, count) => { for (let k = 0; k < count && k < 3; k++) { const o = orbs[Math.floor(Math.random() * orbs.length)]; o.classList.remove("buy", "sell"); void o.offsetWidth; o.classList.add(cls); setTimeout(() => o.classList.remove(cls), 430); } };
+  if (buys > pb) flash("buy", buys - pb);
+  if (sells > ps) flash("sell", sells - ps);
+  if (buys > pb || sells > ps) ogrePlaySfx(OGRE_VOL_SFX + "pulse.mp3", 0.32);
+  ogreStage.prev.volBuys = buys; ogreStage.prev.volSells = sells;
+}
+function driveOgreVolumeStage(stage) {
+  const bots = state.volumeBots || [];
+  const bot = bots.find((b) => b && b.status !== "completed") || null;
+  const active = !!bot;
+  const wasActive = ogreStage.prev.volActive;
+  stage.classList.toggle("live", active);
+  if (active && !wasActive) { ogrePushFeed("SlimeBot online — swarm spinning up", "#c06bff"); ogrePlayClip(stage, "running", true); }
+  if (!active && wasActive) { ogrePushFeed("Swept back — funds returned home", "#c06bff"); ogrePlayClip(stage, "sweep", true); }
+  ogreStage.prev.volActive = active;
+  if (Date.now() >= ogreStage.eventUntil) ogrePlayClip(stage, active ? "running" : "idle", false);
+  const budget = stage.querySelector("[data-ov-budget]");
+  const ring = stage.querySelector("[data-ov-ring]");
+  const read = stage.querySelector("[data-ov-read]");
+  if (bot) {
+    const st = bot.stats || {};
+    const buys = Number(st.buys || 0), sells = Number(st.sells || 0), funded = Number(st.fundedSol || 0);
+    const cyc = Number(bot.currentCycle || 0), tot = Number(bot.cycles || bot.maxRounds || 0);
+    const ba = Number(bot.buyAmountSol || 0);
+    if (budget) {
+      budget.classList.add("show");
+      const v = budget.querySelector("[data-ov-budget-v]"); if (v) v.textContent = funded.toFixed(3) + " SOL";
+      const prog = tot > 0 ? Math.min(1, cyc / tot) : 0;
+      const bar = budget.querySelector("[data-ov-budget-bar]"); if (bar) bar.style.width = (prog * 100) + "%";
+    }
+    if (ring) {
+      ring.classList.add("show");
+      const C = 2 * Math.PI * 22; const prog = tot > 0 ? Math.min(1, cyc / tot) : 0;
+      const prg = ring.querySelector("[data-ov-ring-prg]"); if (prg) { prg.style.strokeDasharray = C; prg.style.strokeDashoffset = C * (1 - prog); }
+      const lbl = ring.querySelector("[data-ov-ring-lbl]"); if (lbl) lbl.textContent = cyc + "/" + (tot || "?");
+    }
+    if (read) {
+      read.classList.add("show");
+      const vol = (buys + sells) * ba;
+      const setT = (sel, val) => { const el = read.querySelector(sel); if (el) el.textContent = val; };
+      setT("[data-ov-vol]", vol > 0 ? vol.toFixed(2) + " SOL" : "—");
+      setT("[data-ov-buys]", String(buys));
+      setT("[data-ov-sells]", String(sells));
+      setT("[data-ov-wallets]", String(Number(bot.walletCount || 0)));
+    }
+    ogreRenderSwarm(stage, Number(bot.walletCount || 6), buys, sells);
+    const log = bot.log || []; const last = log[0];
+    const key = last ? (last.at || "") + (last.message || "") : "";
+    if (last && key !== ogreStage.prev.volLog) { ogreStage.prev.volLog = key; ogrePushFeed(String(last.message || "").slice(0, 80), ""); }
+  } else {
+    if (budget) budget.classList.remove("show");
+    if (ring) ring.classList.remove("show");
+    if (read) read.classList.remove("show");
+    ogreRenderSwarm(stage, 0, 0, 0);
+  }
+}
+
 function tradeHtml() {
   const connected = connectedBrowserWallet();
   const hasManagedWallets = state.wallets.length > 0;
@@ -7734,6 +7974,7 @@ function tradeHtml() {
             <div class="oss-slot oss-receive" data-swap-slot="${isSellRoute ? "base" : "token"}">${isSellRoute ? baseContent : tokenContent}</div>`;
 
   return `
+    ${ogreSwapStageHtml()}
     <section class="trade-layout">
       <article class="trade-card slime-swap-card ogre-swap-card ogre-swap-skin">
         <h3 class="ogre-swap-title oss-a11y-title">OgreSwap - live on-chain Solana swapper</h3>
@@ -8963,6 +9204,7 @@ function volumeBotQueueHtml() {
 
 function volumeBotPanelHtml() {
   return `
+    ${ogreVolumeStageHtml()}
     <section class="trade-card volume-bot-card slime-configurator ovs-skin" data-preserve-focus>
       <h2 class="vbot-config-title oss-a11y-title">Volume Configurator</h2>
       <div class="ovs-stage">
