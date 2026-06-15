@@ -513,6 +513,8 @@ export function createAutopilotEngine(deps) {
   let huntTimer = null;
   let inExit = false;
   let inHunt = false;
+  let huntStartedAt = 0;   // watchdog: when the current hunt cycle began
+  let exitStartedAt = 0;   // watchdog: when the current exit cycle began
   const logRing = [];
   const lastFeed = new Map(); // mint -> {mc, liq, at} — fresh prices from the live feed
 
@@ -681,8 +683,10 @@ export function createAutopilotEngine(deps) {
   // FAST loop: prices + exits + safety. In-memory pump ticks make this nearly
   // instant; it never does the heavy feed fetch.
   async function safeExit() {
-    if (inExit) return;
+    // Watchdog (see safeHunt): never let one hung cycle permanently stop exit management.
+    if (inExit && now() - exitStartedAt < 30_000) return;
     inExit = true;
+    exitStartedAt = now();
     try {
       if (!running()) return;
       state.tickN += 1;
@@ -775,8 +779,14 @@ export function createAutopilotEngine(deps) {
   // SLOW loop: wallet reconciliation, hunting for new entries (heavy feed fetch),
   // and persistence. Runs independently so it can't stall the exit loop.
   async function safeHunt() {
-    if (inHunt) return;
+    // WATCHDOG: if a prior cycle's await hung (a feed fetch / RPC / sweep that never
+    // resolved), inHunt would stay true forever and freeze all new entries — looking
+    // exactly like a stall (exits keep running, but nothing new is bought). After 90s
+    // assume the previous cycle is dead and proceed, so a single hang can't permanently
+    // brick the hunter.
+    if (inHunt && now() - huntStartedAt < 90_000) return;
     inHunt = true;
+    huntStartedAt = now();
     try {
       if (!running()) return;
 
