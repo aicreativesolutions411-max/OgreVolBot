@@ -127,7 +127,56 @@
     border-radius:14px;padding:10px;margin-bottom:14px;font-weight:800;color:var(--green);font-variant-numeric:tabular-nums;}
   #endModal{position:fixed;inset:0;background:rgba(0,0,0,.82);backdrop-filter:blur(6px);z-index:50;display:flex;align-items:center;justify-content:center;padding:18px;}
   #endModal.hidden{display:none;}
-  @media (prefers-reduced-motion: reduce){.core,.spark,.ember,.hud-screen .scan,.gauge .fill,.led{animation:none !important;}}
+  /* ---------------- LIVE HUD LAYERS (driven by live status, zero-cost) ---------------- */
+  /* tape-regime thermometer — top center */
+  .thermo{position:absolute;top:50px;left:50%;transform:translateX(-50%);z-index:5;
+    display:flex;align-items:center;gap:7px;padding:5px 11px;border-radius:99px;
+    background:rgba(4,7,10,.55);border:1px solid var(--line);backdrop-filter:blur(5px);
+    font-size:9px;font-weight:800;letter-spacing:.9px;text-transform:uppercase;}
+  .thermo .dot{width:7px;height:7px;border-radius:50%;background:#3a5a44;transition:.4s;}
+  .thermo .seg{color:var(--dim);opacity:.4;transition:.35s;}
+  .thermo .seg.on{opacity:1;text-shadow:0 0 8px currentColor;}
+  .thermo.cold .dot{background:#5ab8ff;box-shadow:0 0 11px #5ab8ff;}
+  .thermo.cold .seg.s-cold{color:#5ab8ff;}
+  .thermo.normal .dot{background:var(--green);box-shadow:0 0 11px var(--green);}
+  .thermo.normal .seg.s-normal{color:var(--green);}
+  .thermo.hot .dot{background:#ff8a3a;box-shadow:0 0 13px #ff6b2a;animation:blink 1s ease-in-out infinite;}
+  .thermo.hot .seg.s-hot{color:#ff8a3a;}
+
+  /* vault counter — top-left under the tier pill */
+  .vault{position:absolute;top:46px;left:12px;z-index:5;padding:6px 11px;border-radius:13px;
+    background:rgba(4,7,10,.55);border:1px solid var(--line);backdrop-filter:blur(5px);min-width:100px;transition:transform .25s;}
+  .vault .vl{font-size:7px;letter-spacing:.7px;color:var(--dim);text-transform:uppercase;}
+  .vault .vv{font-size:15px;font-weight:900;color:var(--gold);font-variant-numeric:tabular-nums;line-height:1.15;}
+  .vault.pop{animation:vaultPop .85s ease;}
+  @keyframes vaultPop{0%{transform:scale(1);}28%{transform:scale(1.16);box-shadow:0 0 24px rgba(255,212,90,.6);}100%{transform:scale(1);}}
+
+  /* floating position orbs — one per open coin, color by PnL */
+  .orbs{position:absolute;inset:0;z-index:3;pointer-events:none;}
+  .orb{position:absolute;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    width:58px;height:58px;border-radius:50%;text-align:center;
+    background:radial-gradient(circle at 38% 30%, rgba(141,255,90,.34), rgba(6,14,9,.62) 70%);
+    border:1px solid rgba(141,255,90,.5);box-shadow:0 0 18px rgba(39,224,106,.4), inset 0 0 12px rgba(39,224,106,.25);
+    backdrop-filter:blur(2px);animation:orbFloat 6s ease-in-out infinite;transition:opacity .5s, transform .5s, box-shadow .4s;}
+  .orb.down{background:radial-gradient(circle at 38% 30%, rgba(255,107,107,.32), rgba(14,6,6,.62) 70%);
+    border-color:rgba(255,107,107,.5);box-shadow:0 0 18px rgba(255,107,107,.4), inset 0 0 12px rgba(255,107,107,.25);}
+  .orb.hot{box-shadow:0 0 26px rgba(141,255,90,.8), inset 0 0 14px rgba(39,224,106,.4);}
+  .orb .os{font-size:9px;letter-spacing:.2px;color:#eafff0;font-weight:800;max-width:50px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .orb .op{font-size:12px;font-weight:900;font-variant-numeric:tabular-nums;}
+  .orb.up .op{color:var(--green);}.orb.down .op{color:#ffb3b3;}
+  .orb.enter{animation:orbIn .6s cubic-bezier(.3,1.4,.5,1);}
+  @keyframes orbFloat{0%,100%{transform:translateY(0);}50%{transform:translateY(-9px);}}
+  @keyframes orbIn{0%{opacity:0;transform:scale(.2);}100%{opacity:1;transform:scale(1);}}
+
+  /* live scan ticker — thin activity line above the caption */
+  .ticker{position:absolute;left:0;right:0;bottom:58px;z-index:4;height:24px;overflow:hidden;display:flex;align-items:center;padding:0 12px;
+    background:linear-gradient(90deg,rgba(4,7,10,.74),rgba(4,7,10,.3) 50%,rgba(4,7,10,.74));border-top:1px solid var(--line);border-bottom:1px solid var(--line);}
+  .ticker .tk{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:10.5px;font-weight:700;letter-spacing:.3px;color:#cfe9d6;display:flex;align-items:center;gap:7px;width:100%;}
+  .ticker .tk .r-dot{flex:none;width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:blink 1.2s ease-in-out infinite;}
+  .ticker .tk.r .r-dot{background:var(--warn);box-shadow:0 0 8px var(--warn);}
+  @keyframes tkIn{from{opacity:0;transform:translateX(16px);}to{opacity:1;transform:translateX(0);}}
+
+  @media (prefers-reduced-motion: reduce){.core,.spark,.ember,.hud-screen .scan,.gauge .fill,.led,.orb,.thermo .dot,.ticker .tk .r-dot{animation:none !important;}}
 </style>
 </head>
 <body data-state="idle">
@@ -148,6 +197,10 @@
       <div class="eq" id="hudEq">— SOL</div>
     </div>
     <div class="gauge"><div class="fill" id="gaugeFill"></div></div>
+    <div class="thermo" id="thermo"><span class="dot"></span><span class="seg s-cold">COLD</span><span class="seg s-normal">NORM</span><span class="seg s-hot">HOT</span></div>
+    <div class="vault" id="vault"><div class="vl">🏦 Vault secured</div><div class="vv"><span id="vaultVal">0.000</span> SOL</div></div>
+    <div class="orbs" id="orbs"></div>
+    <div class="ticker"><span class="tk" id="tkLine"><span class="r-dot"></span>Reactor idle — wake the ogre to begin</span></div>
     <div class="stage-cap">
       <div class="sub" id="stageSub">The ogre powers the swamp. Fund it, wake it, watch it hunt.</div>
     </div>
@@ -335,7 +388,8 @@ function driveScene(s){
     }
     pPrevOpen=op; pPrevWins=wn; pPrevSec=sec; pPrevBlocked=bl;
   } else { pPrevOpen=null; }
-  if(evt){ playClip(evt,true); try{blip(evt==="win"?"ok":"click");}catch{} if(evt==="win"||evt==="aped"){try{playSurge();}catch{}} return; }
+  if(evt){ playClip(evt,true); try{blip(evt==="win"?"ok":"click");}catch{} if(evt==="win"||evt==="aped"){try{playSurge();}catch{}}
+    if(evt==="win")pushFeed("🏆 Big win banked",""); else if(evt==="rugdodge")pushFeed("🛡️ Dodged a known rugger","r"); return; }
   if(now>=clipEventUntil) playClip(ambientClip(s),false);  // back to the ambient loop
 }
 // when a one-shot event clip ends, drop straight back to the ambient loop
@@ -354,7 +408,87 @@ function applyScene(s){
   if(s&&s.equity!=null)$("hudEq").textContent=s.equity.toFixed(3)+" SOL";
   setAmbient(ambientForState());
   driveScene(s);  // swap the ogre clip to match what the bot is doing
+  renderHud(s);   // live HUD layers: thermometer, vault, position orbs, ticker
 }
+
+/* ---- LIVE HUD LAYERS: tape thermometer · vault counter · position orbs · scan ticker.
+   All driven by the same status payload the dashboard polls — no extra calls, no strategy
+   internals exposed (only mood/P&L the user already sees). ---- */
+let hudPrevSec=null, hudPrevWins=0;
+function renderHud(s){
+  const running=Boolean(s&&s.running);
+  // --- tape thermometer ---
+  const tape=String((s&&s.tape)||"").toUpperCase();
+  const th=$("thermo");
+  if(th){
+    let cls = !running ? "" : (tape==="HOT" ? "hot" : (tape==="COLD"||tape==="PROBE") ? "cold" : "normal");
+    th.className="thermo "+cls;
+    th.querySelectorAll(".seg").forEach(e=>e.classList.remove("on"));
+    if(running){ const k = tape==="HOT"?"s-hot":(tape==="COLD"||tape==="PROBE")?"s-cold":"s-normal"; const seg=th.querySelector("."+k); if(seg)seg.classList.add("on"); }
+  }
+  // --- vault counter (pops + logs when profit is swept to the safe wallet) ---
+  const sec=Number((s&&s.secured)||0);
+  $("vaultVal").textContent=sec.toFixed(3);
+  if(hudPrevSec!=null && sec>hudPrevSec+0.0005){
+    const v=$("vault"); if(v){ v.classList.remove("pop"); void v.offsetWidth; v.classList.add("pop"); }
+    pushFeed("💰 Banked +"+(sec-hudPrevSec).toFixed(3)+" SOL to the vault","");
+  }
+  hudPrevSec=sec;
+  // --- big-win ticker line (with symbol) ---
+  const bw=(s&&s.bigWins)||[];
+  if(bw.length>hudPrevWins){ const w=bw[bw.length-1]; if(w)pushFeed("🏆 $"+String(w.symbol||"").replace(/[<>&]/g,"")+" +"+Number(w.gainPct).toLocaleString()+"%",""); }
+  hudPrevWins=bw.length;
+  // --- floating position orbs ---
+  renderOrbs(running ? ((s&&s.open)||[]) : []);
+}
+
+const ORB_SLOTS=[[10,50],[24,60],[8,68],[20,80],[6,86],[34,72],[38,87],[14,40]];
+let orbMap={}, slotUsed={};
+function freeSlot(){ for(let i=0;i<ORB_SLOTS.length;i++){ if(!slotUsed[i])return i; } return ORB_SLOTS.length-1; }
+function renderOrbs(open){
+  const wrap=$("orbs"); if(!wrap)return;
+  const seen={};
+  open.slice(0,8).forEach((p)=>{
+    const key=(p.sym||"?")+"";
+    seen[key]=1;
+    let el=orbMap[key];
+    if(!el){
+      const si=freeSlot(); slotUsed[si]=key;
+      el=document.createElement("div"); el.className="orb enter"; el.dataset.slot=si;
+      el.style.left=ORB_SLOTS[si][0]+"%"; el.style.top=ORB_SLOTS[si][1]+"%";
+      el.style.animationDelay=(si*0.4)+"s";
+      el.innerHTML='<span class="os"></span><span class="op"></span>';
+      wrap.appendChild(el); orbMap[key]=el;
+      setTimeout(()=>el.classList.remove("enter"),650);
+      pushFeed("🎯 Aped $"+key.replace(/[<>&]/g,"").slice(0,8),"");
+    }
+    const mv=Number(p.movePct||0), up=mv>=0;
+    el.classList.toggle("up",up); el.classList.toggle("down",!up);
+    el.classList.toggle("hot",mv>=40);
+    el.querySelector(".os").textContent=key.replace(/[<>&]/g,"").slice(0,7);
+    el.querySelector(".op").textContent=(up?"+":"")+mv.toFixed(0)+"%";
+  });
+  Object.keys(orbMap).forEach(k=>{ if(!seen[k]){ const el=orbMap[k]; delete slotUsed[el.dataset.slot]; el.style.opacity="0"; el.style.transform="scale(.2)"; setTimeout(()=>el.remove(),520); delete orbMap[k]; } });
+}
+
+/* scan ticker: a rolling activity line. Real events (apes, banks, wins, dodges) get
+   pushed in; between them it shows what the bot is doing right now. */
+let feed=[], feedIdx=0;
+function pushFeed(text,cls){ feed.unshift({text,cls:cls||""}); if(feed.length>16)feed.pop(); feedIdx=0; }
+function tickerTick(){
+  const tk=$("tkLine"); if(!tk)return;
+  const s=lastSceneS;
+  if(!(s&&s.running)){ tk.className="tk"; tk.innerHTML='<span class="r-dot"></span>Reactor idle — wake the ogre to begin'; return; }
+  if(feed.length<3){ const t=String(s.tape||"NORMAL").toUpperCase();
+    const line = t==="HOT"?"🔥 Tape is HOT — hunting aggressively":(t==="COLD"||t==="PROBE")?"❄️ Cold tape — slowing down, protecting":"🔍 Scanning the tape — reading fresh launches";
+    if(!feed.some(f=>f.text===line))feed.push({text:line,cls:""}); }
+  if(!feed.length)return;
+  const item=feed[feedIdx%feed.length]; feedIdx++;
+  tk.className="tk "+(item.cls||"");
+  tk.innerHTML='<span class="r-dot"></span>'+item.text;
+  tk.style.animation="none"; void tk.offsetWidth; tk.style.animation="tkIn .5s ease";
+}
+setInterval(tickerTick,3200);
 // global ripple on any button press
 document.addEventListener("click",(e)=>{
   const b=e.target.closest("button"); if(!b)return;
