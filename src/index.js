@@ -26053,8 +26053,33 @@ async function createWebAccount(options = {}) {
   const rawPassword = String(body.password || "");
   const wantsPasswordLogin = Boolean(rawUsername || rawPassword);
   const username = wantsPasswordLogin ? normalizeWebUsername(rawUsername) : "";
+  // Idempotent signup: if this username already exists, don't fail with "already
+  // taken" - that read as a dead button to people who'd simply signed up before and
+  // were re-entering the SAME credentials. Verify the password and log them straight
+  // in. Only a real mismatch (someone else's username, or a typo'd password) gets the
+  // friendly conflict message.
+  if (username) {
+    const existing = findWebProfileByUsername(store, username);
+    if (existing) {
+      const normalizedPassword = normalizeWebPassword(rawPassword);
+      if (existing.profile?.passwordLogin && verifyWebPassword(normalizedPassword, existing.profile.passwordLogin)) {
+        const loginNow = Date.now();
+        const loginSession = issueWebSessionRecord(existing.userId, existing.userId, loginNow);
+        store.sessions = [
+          ...store.sessions.filter((item) => Date.parse(item.expiresAt || "") > loginNow),
+          loginSession.record
+        ];
+        existing.profile.lastPasswordLoginAt = new Date(loginNow).toISOString();
+        await writeWebAuthStore(store);
+        await audit("web_signup_login_existing", { userId: existing.userId, username, expiresAt: loginSession.expiresAt });
+        return { userId: existing.userId, token: loginSession.token, tokenHash: loginSession.tokenHash, expiresAt: loginSession.expiresAt, emailSent: false, emailError: null, loggedInExisting: true };
+      }
+      const error = new Error("That username is already taken. If it's yours, log in with your password instead.");
+      error.statusCode = 409;
+      throw error;
+    }
+  }
   const passwordLogin = wantsPasswordLogin ? hashWebPassword(normalizeWebPassword(rawPassword)) : null;
-  if (username) assertWebUsernameAvailable(store, username);
   const referralEntry = findWebProfileByReferralCode(store, body.referralCode || body.ref || "");
   const referralCode = generateWebReferralCode(store, username || userId);
   const session = issueWebSessionRecord(userId, userId, now);

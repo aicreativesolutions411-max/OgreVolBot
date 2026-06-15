@@ -6,10 +6,13 @@
    All overlays are driven from live state by ogre-stages logic in app.js.
    ============================================================================ */
 
-.ogre-stage{position:relative;width:100%;aspect-ratio:4/5;max-height:72vh;overflow:hidden;
-  border-radius:18px;isolation:isolate;margin:0 0 14px;background:#05080a;
+/* Stage matches the clip's native 3:4 portrait so the WHOLE ogre shows — hammer,
+   coins, all the way down — with object-fit:contain as a belt-and-suspenders guard
+   against any off-ratio clip (tiny themed bars instead of a crop). */
+.ogre-stage{position:relative;width:100%;aspect-ratio:3/4;max-height:82vh;overflow:hidden;
+  border-radius:18px;isolation:isolate;margin:0 auto 14px;background:radial-gradient(120% 90% at 50% 22%,#0a1410 0%,#05080a 70%);
   border:1px solid rgba(255,255,255,.08);box-shadow:0 14px 44px rgba(0,0,0,.5);}
-.ogre-stage .ogre-bg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center 28%;z-index:0;}
+.ogre-stage .ogre-bg{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;object-position:center center;z-index:0;}
 .ogre-stage::after{content:"";position:absolute;inset:0;pointer-events:none;z-index:1;
   background:linear-gradient(180deg,rgba(4,7,10,.5) 0%,rgba(4,7,10,0) 26%,rgba(4,7,10,0) 52%,rgba(4,7,10,.9) 100%);}
 .ogre-stage .os-tier{position:absolute;top:11px;left:12px;z-index:6;font-size:10px;font-weight:800;letter-spacing:.6px;
@@ -263,24 +266,25 @@ html body main.shell[data-app] .preset-toolbar{ background:linear-gradient(160de
 /* ----------------------------------------------------------------- HERO STAGES (Tier 1/2)
    Lighter banner stages for Launch / Sniper / OgreAI / Bundle / Positions / PnL — same
    ogre family, each its own accent. Shorter than the swap/volume deep-HUD stages. */
-.ogre-stage.hero{aspect-ratio:4/5;}
-.ogre-stage .ogre-bg{object-position:center 18%;}
-/* WEB: big cinematic cockpit — wide stage with the controls floating over it */
+.ogre-stage.hero{aspect-ratio:3/4;}
+/* WEB: full-ogre portrait "screen" centered in the panel — the whole character shows
+   (hammer, coins, all the way down), then the controls float UP over the bottom of the
+   video so it still reads as a live cockpit you're working inside. Width is capped so the
+   portrait doesn't dominate a wide column. */
 @media (min-width:760px){
-  .ogre-stage, .ogre-stage.hero{aspect-ratio:16/10;max-height:520px;}
-  .ogre-stage .ogre-bg{object-position:center 24%;}
-  /* LIVE COCKPIT: the panel's controls float UP over the bottom of the big video, with the
-     video fading in behind them — so it feels like you're inside the scene and your actions
-     drive the ogre (the event clips already fire on tap). Web only; mobile stays stacked. */
+  .ogre-stage, .ogre-stage.hero{aspect-ratio:3/4;max-width:460px;max-height:640px;}
+  /* LIVE COCKPIT: the panel's controls float UP over the bottom of the video, fading in
+     behind them — so it feels like you're inside the scene and your actions drive the ogre
+     (the event clips already fire on tap). Matched to the stage width so the controls sit
+     inside the frame, not beside it. */
   html body main.shell[data-app] .ogre-stage + *{
-    position:relative; z-index:6; margin-top:-160px; border-radius:20px; padding-top:22px;
-    background:linear-gradient(180deg, rgba(5,9,7,0) 0, rgba(5,9,7,.45) 52px, rgba(5,9,7,.9) 150px, rgba(5,9,7,.96)) !important;
+    position:relative; z-index:6; margin-top:-120px; border-radius:20px; padding-top:22px;
+    background:linear-gradient(180deg, rgba(5,9,7,0) 0, rgba(5,9,7,.5) 56px, rgba(5,9,7,.92) 140px, rgba(5,9,7,.97)) !important;
     backdrop-filter:blur(6px); box-shadow:0 -12px 34px rgba(0,0,0,.45);
   }
   /* keep the stage's own bottom corners square so the cockpit panel fuses up into it */
   html body main.shell[data-app] .ogre-stage{border-bottom-left-radius:0;border-bottom-right-radius:0;}
 }
-.ogre-stage.hero .ogre-bg{object-position:center 30%;}
 .ogre-stage.hero .os-tier{color:var(--accent);border:1px solid rgba(255,255,255,.16);}
 .ogre-stage.hero .os-dot{background:var(--accent);box-shadow:0 0 8px var(--accent);}
 .ogre-stage.launch{--accent:#ff8a3a;}
