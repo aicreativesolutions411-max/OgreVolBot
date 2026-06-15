@@ -26097,9 +26097,25 @@ async function authenticateWebRequest(request) {
     throw error;
   }
 
-  session.lastUsedAt = new Date(now).toISOString();
-  store.sessions = store.sessions.filter((item) => Date.parse(item.expiresAt || "") > now);
-  await writeWebAuthStore(store);
+  // Do NOT rewrite the whole store on every request. That read-modify-write ran on
+  // every panel poll and was clobbering freshly-issued login sessions (a poll that
+  // read the store a moment before your key-login wrote it back, dropping your new
+  // session) — the cause of "I had to paste my key a few times to get in". Only
+  // persist occasionally, and when we do, re-read inside a lock and merge so we can
+  // never drop a session another request just added.
+  const lastUsed = Date.parse(session.lastUsedAt || "") || 0;
+  const hasExpired = store.sessions.some((item) => Date.parse(item.expiresAt || "") <= now);
+  if (now - lastUsed > 5 * 60_000 || hasExpired) {
+    try {
+      await LockService.withLock("web-auth-store", 10_000, async () => {
+        const fresh = await readWebAuthStore();
+        const s = (fresh.sessions || []).find((item) => item.tokenHash === tokenHash);
+        if (s) s.lastUsedAt = new Date(now).toISOString();
+        fresh.sessions = (fresh.sessions || []).filter((item) => Date.parse(item.expiresAt || "") > now);
+        await writeWebAuthStore(fresh);
+      });
+    } catch { /* best-effort; auth already succeeded */ }
+  }
 
   return { userId: session.userId, chatId: session.chatId, tokenHash };
 }
@@ -29684,19 +29700,27 @@ async function createMobileWalletConnectPending(body = {}, auth = null) {
 }
 
 async function issueWebSessionForExistingUser(userId, chatId = "") {
-  const store = await readWebAuthStore();
   const key = String(userId || "");
   if (!key) throw mobileWalletConnectError("Wallet connected, but the web profile could not be resolved.", "MOBILE_WALLET_USER_MISSING", 500);
-  ensureWebProfileDefaults(store, key);
-  const now = Date.now();
-  const session = issueWebSessionRecord(key, chatId || key, now);
-  store.sessions = [
-    ...store.sessions.filter((item) => Date.parse(item.expiresAt || "") > now),
-    session.record
-  ];
-  await writeWebAuthStore(store);
-  await audit("web_mobile_wallet_session_issued", { userId: key, expiresAt: session.expiresAt });
-  return { token: session.token, tokenHash: session.tokenHash, userId: key, expiresAt: session.expiresAt };
+  // Issue the session, serialized with the per-request auth write (same lock) so a
+  // concurrent request can't clobber it. The lock is best-effort (acquireCacheLock
+  // returns immediately if held) — so if it's momentarily contended we still issue
+  // UNLOCKED (passed as the skippedValue fn) rather than fail the login. The real
+  // collision fix is the throttled auth write above; this just tightens it further.
+  const doIssue = async () => {
+    const store = await readWebAuthStore();
+    ensureWebProfileDefaults(store, key);
+    const now = Date.now();
+    const session = issueWebSessionRecord(key, chatId || key, now);
+    store.sessions = [
+      ...(store.sessions || []).filter((item) => Date.parse(item.expiresAt || "") > now),
+      session.record
+    ];
+    await writeWebAuthStore(store);
+    await audit("web_mobile_wallet_session_issued", { userId: key, expiresAt: session.expiresAt });
+    return { token: session.token, tokenHash: session.tokenHash, userId: key, expiresAt: session.expiresAt };
+  };
+  return LockService.withLock("web-auth-store", 10_000, doIssue, doIssue);
 }
 
 function decodeMobileWalletCallbackPayload(pending = {}, body = {}) {
