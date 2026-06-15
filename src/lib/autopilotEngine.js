@@ -1042,7 +1042,13 @@ export function createAutopilotEngine(deps) {
       record("warn", `feed error: ${e && e.message}`);
       return;
     }
-    if (!Array.isArray(rows) || !rows.length) return;
+    if (!Array.isArray(rows) || !rows.length) {
+      if (now() - (state.lastScanLogAt || 0) > 45_000) {
+        state.lastScanLogAt = now();
+        record("info", "🔍 scanning — feed quiet (0 fresh pairs right now)");
+      }
+      return;
+    }
     // Cache fresh prices from the feed so open positions update fast (used in manageExits).
     const t = now();
     for (const r of rows) {
@@ -1151,6 +1157,16 @@ export function createAutopilotEngine(deps) {
         state.lastOpenAt = now();
         openedThisCycle += 1;
       }
+    }
+
+    // SCAN HEARTBEAT: when a cycle opens nothing, surface WHY at most once per ~45s so
+    // the panel proves the bot is alive + scanning (not stuck) — shows the tape, how
+    // many fresh pairs are in the feed, how many passed the quality bar, and the best
+    // score available right now.
+    if (openedThisCycle === 0 && now() - (state.lastScanLogAt || 0) > 45_000) {
+      state.lastScanLogAt = now();
+      const best = scored[0] ? Math.round(scored[0].fs) : 0;
+      record("info", `🔍 scanning (${tune.tape || "warming"}) — ${rows.length} fresh, ${scored.length} passed the bar${scored.length ? `, best fs ${best}` : ""}; holding for a clean setup`);
     }
   }
 
