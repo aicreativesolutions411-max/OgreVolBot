@@ -184,6 +184,16 @@ html body main.shell[data-app] .metrics article strong.metric-neg{ color:#ff6b6b
 html body main.shell[data-app] .search input:focus, html body main.shell[data-app] input[type="search"]:focus, html body main.shell[data-app] [data-token-search]:focus{
   border-color:rgba(141,255,90,.55) !important; box-shadow:0 0 0 1px rgba(141,255,90,.3), 0 0 18px rgba(39,224,106,.22) !important; outline:none !important;
 }
+/* refresh buttons feel alive — a slime ripple on tap */
+html body main.shell[data-app] button.ogre-refreshing{animation:ogreRefreshPulse .9s ease;}
+@keyframes ogreRefreshPulse{0%{box-shadow:0 0 0 0 rgba(141,255,90,.45);}70%{box-shadow:0 0 0 11px rgba(141,255,90,0);}100%{box-shadow:0 0 0 0 rgba(141,255,90,0);}}
+/* mobile: keep the stat tiles tight + readable so all four fit cleanly on a phone */
+@media (max-width:480px){
+  html body main.shell[data-app] .metrics article{padding:8px 9px !important;}
+  html body main.shell[data-app] .metrics article span{font-size:8.5px !important;letter-spacing:.4px;}
+  html body main.shell[data-app] .metrics article strong{font-size:16px !important;}
+  html body main.shell[data-app] .metrics article small{display:none !important;}
+}
 
 /* ----------------------------------------------------------------- OGRE A.I. TIER BANNER */
 .ogre-ai-tier{display:flex;align-items:center;gap:10px;margin:0 0 12px;padding:10px 12px;border-radius:12px;

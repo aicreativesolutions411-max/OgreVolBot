@@ -6100,6 +6100,7 @@ function renderTabs() {
   if (["terminal", "live", "kol", "slimeScope", "watchlist", "smartChart"].includes(state.activeTab)) {
     try { attachOgreAccents(panel, state.activeTab); } catch (err) { /* accent is decorative */ }
   }
+  try { bindOgreRefreshSpin(); } catch (err) { /* refresh shimmer is decorative */ }
   if (state.activeTab === "smartChart" && state.chartFocusAmountInput) {
     requestAnimationFrame(() => {
       const input = $("[data-chart-buy-amount]");
@@ -7775,6 +7776,26 @@ async function ogreShareCard(kind) {
     const res = await api("/api/web/card", { method: "POST", body: JSON.stringify(payload) });
     if (res && res.ok && res.png) ogreCardDownload(`slimewire-${kind}-card.png`, res.png);
   } catch {}
+}
+// Refresh buttons feel alive: a slime ripple the instant you tap any refresh control
+// (pairs with the existing "Refreshing…" spinner). One delegated, idempotent listener.
+let ogreRefreshBound = false;
+function bindOgreRefreshSpin() {
+  if (ogreRefreshBound) return;
+  ogreRefreshBound = true;
+  document.addEventListener("click", (e) => {
+    try {
+      const btn = e.target.closest("button");
+      if (!btn) return;
+      const isRefresh = btn.matches("[data-top-refresh-wallet],[data-refresh-all],[data-refresh-live-pairs],[data-refresh-scanner],[data-refresh],[data-refresh-watchlist],[data-refresh-kol]")
+        || /(^|\s)(refresh|reload)(\b|$)/i.test((btn.textContent || "").trim());
+      if (!isRefresh) return;
+      btn.classList.remove("ogre-refreshing");
+      void btn.offsetWidth;
+      btn.classList.add("ogre-refreshing");
+      setTimeout(() => btn.classList.remove("ogre-refreshing"), 900);
+    } catch {}
+  }, true);
 }
 // Tier-3 accents: drop a featherweight ogre status into space that already exists on the
 // data-dense screens — never a banner, never extra scroll. CSS/SVG only.
