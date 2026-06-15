@@ -13409,6 +13409,7 @@ async function processWebExitGuard(guard, walletStore, options = {}) {
       });
       planWallet.lastCheckedAt = new Date().toISOString();
       planWallet.lastMovePct = estimate.movePct;
+      if (Number.isFinite(Number(estimate.movePct))) planWallet.peakMovePct = Math.max(Number(planWallet.peakMovePct || 0), Number(estimate.movePct));
       planWallet.lastGrossMovePct = estimate.grossMovePct ?? estimate.movePct;
       planWallet.lastNetMovePct = estimate.netMovePct ?? estimate.movePct;
       planWallet.lastEstimateSource = estimate.source || "jupiter";
@@ -13978,6 +13979,7 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
       });
       planWallet.lastCheckedAt = new Date().toISOString();
       planWallet.lastMovePct = estimate.movePct;
+      if (Number.isFinite(Number(estimate.movePct))) planWallet.peakMovePct = Math.max(Number(planWallet.peakMovePct || 0), Number(estimate.movePct));
       planWallet.lastGrossMovePct = estimate.grossMovePct ?? estimate.movePct;
       planWallet.lastNetMovePct = estimate.netMovePct ?? estimate.movePct;
       planWallet.lastEstimateSource = estimate.source || "jupiter";
@@ -14011,7 +14013,27 @@ async function processTradePlanWallet(plan, planWallet, walletStore, options = {
       planWallet.lastTriggerPriceSource = evaluation.priceSource || estimate.source || "jupiter";
       planWallet.lastShouldTriggerStopLoss = stopLossTriggerPct > 0 && triggerMovePct <= -stopLossTriggerPct;
       planWallet.lastShouldTriggerTakeProfit = Number.isFinite(Number(takeProfitPct)) && Number(takeProfitPct) > 0 && triggerMovePct >= Number(takeProfitPct);
-      const trigger = applyPriceExitTrigger(plan, planWallet, decision, triggerMovePct, { ladderLevel });
+      let trigger = applyPriceExitTrigger(plan, planWallet, decision, triggerMovePct, { ladderLevel });
+      // Trailing stop: lock gains when a winner pulls back from its peak. Only arms once the
+      // position has actually run past the activation gain, so it can never cause a loss-sell.
+      if (!trigger) {
+        const trailPct = Number(plan.trailingStopPct || 0);
+        const activate = Number(plan.trailingActivatePct || 0);
+        const peak = Number(planWallet.peakMovePct || 0);
+        if (trailPct > 0 && activate > 0 && peak >= activate) {
+          const threshold = peak * (1 - trailPct / 100);
+          if (Number.isFinite(triggerMovePct) && triggerMovePct <= threshold) {
+            planWallet.triggerStatus = "triggered";
+            planWallet.triggerKind = "take-profit";
+            planWallet.triggerTargetPct = threshold;
+            planWallet.triggerSellPercent = 100;
+            trigger = {
+              triggerReason: `take-profit trailing-stop ${triggerMovePct.toFixed(2)}% (peak +${peak.toFixed(0)}%, trail ${trailPct}%)`,
+              triggerMeta: { kind: "take-profit", sellPercent: 100, trailing: true }
+            };
+          }
+        }
+      }
       if (trigger) {
         planWallet.lastTriggerMovePct = triggerMovePct;
         triggerReason = trigger.triggerReason;
@@ -32074,6 +32096,8 @@ async function webCreateManagedBuyPlan(userId, wallets, body = {}, options = {})
     takeProfitLadder,
     breakEvenAfterTp1: Boolean(breakEvenAfterTp1),
     breakEvenStopPct: 2,
+    trailingStopPct: smartExits ? (Number(body.trailingStopPct) || 25) : (Number(body.trailingStopPct) || 0),
+    trailingActivatePct: smartExits ? (Number(body.trailingActivatePct) || 40) : (Number(body.trailingActivatePct) || 0),
     autoBundle: false,
     slippageBps,
     createdAt: new Date().toISOString(),
@@ -32476,6 +32500,15 @@ function volumeBotStaggerMs(cfg, baseMs, index = 0) {
   return baseMs;
 }
 
+// Best-effort current pool liquidity (USD) for the volume bot's auto-pause guard.
+async function volumeBotTokenLiquidityUsd(mint) {
+  try {
+    const m = await getDexTokenMetadata(mint, { timeoutMs: 2_000 }).catch(() => null);
+    const v = Number(m && (m.liquidityUsd ?? m.liquidity?.usd));
+    return Number.isFinite(v) && v > 0 ? v : null;
+  } catch { return null; }
+}
+
 async function webStartVolumeBot(userId, body = {}) {
   const tokenMint = parsePublicKey(String(body.tokenMint || "")).toBase58();
   const walletCount = clamp(Number.parseInt(body.walletCount || "0", 10) || 0, 1, VOLUME_BOT_LIMITS.maxWallets);
@@ -32526,7 +32559,7 @@ async function webStartVolumeBot(userId, body = {}) {
       tokenMint,
       createdAt: nowIso,
       updatedAt: nowIso,
-      config: { rollingWallets: true, maxRounds, buyAmountSol, sellPercent, buyBias, delaySecs, slippageBps, sweepBack, keepDust, offsetSell, staggerPattern },
+      config: { rollingWallets: true, maxRounds, buyAmountSol, sellPercent, buyBias, delaySecs, slippageBps, sweepBack, keepDust, offsetSell, staggerPattern, goalVolumeSol: Math.max(0, Number(body.goalVolumeSol) || 0), autoPauseLiquidity: body.autoPauseLiquidity !== false && body.autoPauseLiquidity !== "false", minLiquidityUsd: Math.max(0, Number(body.minLiquidityUsd) || 0) },
       sourcePublicKey: sourceRecord.publicKey,
       tradingPublicKeys: [],
       botStage: "running",
@@ -32591,7 +32624,7 @@ async function webStartVolumeBot(userId, body = {}) {
     tokenMint,
     createdAt: nowIso,
     updatedAt: nowIso,
-    config: { walletCount: tradingPublicKeys.length, autoCreate, cycles, buyAmountSol, sellPercent, buyBias, delaySecs, slippageBps, sweepBack, keepDust, offsetSell, staggerPattern },
+    config: { walletCount: tradingPublicKeys.length, autoCreate, cycles, buyAmountSol, sellPercent, buyBias, delaySecs, slippageBps, sweepBack, keepDust, offsetSell, staggerPattern, goalVolumeSol: Math.max(0, Number(body.goalVolumeSol) || 0), autoPauseLiquidity: body.autoPauseLiquidity !== false && body.autoPauseLiquidity !== "false", minLiquidityUsd: Math.max(0, Number(body.minLiquidityUsd) || 0) },
     sourcePublicKey: sourceRecord.publicKey,
     tradingPublicKeys,
     botStage: "running",
@@ -32674,8 +32707,33 @@ async function processVolumeBotPlan(plan, walletStore, persist) {
     if (cfg.rollingWallets) {
       await runRollingVolumeBotStep(plan, { slippageBps, noBalance });
     } else if (plan.botStage === "running") {
-      const pks = plan.tradingPublicKeys || [];
-      if (!pks.length) {
+      // Goal-mode + auto-pause guards. Both only STOP the bot early (sweep funds back) —
+      // never spend more — so the worst-case failure is stopping sooner, never overspending.
+      const stopVolumeBot = (reason) => {
+        plan.botStage = cfg.sweepBack === false ? "done" : "sweeping";
+        plan.sweepCursor = 0;
+        plan.autoStopReason = reason;
+        volumeBotLogPush(plan, reason);
+      };
+      const goalVol = Number(cfg.goalVolumeSol || 0);
+      if (goalVol > 0) {
+        const volSoFar = (Number(plan.stats.buys || 0) + Number(plan.stats.sells || 0)) * Number(cfg.buyAmountSol || 0);
+        if (volSoFar >= goalVol) stopVolumeBot(`Goal reached: ~${volSoFar.toFixed(2)} SOL volume generated (target ${goalVol} SOL). Sweeping back.`);
+      }
+      if (plan.botStage === "running" && cfg.autoPauseLiquidity !== false) {
+        const liq = await volumeBotTokenLiquidityUsd(plan.tokenMint);
+        if (Number.isFinite(liq) && liq > 0) {
+          if (!plan.startLiquidityUsd) plan.startLiquidityUsd = liq;
+          const floor = Number(cfg.minLiquidityUsd || 0);
+          const dropFrac = plan.startLiquidityUsd > 0 ? liq / plan.startLiquidityUsd : 1;
+          if (floor > 0 && liq < floor) stopVolumeBot(`Auto-paused: liquidity ${formatUsdCompact(liq)} fell below the ${formatUsdCompact(floor)} floor. Funds swept back.`);
+          else if (dropFrac <= 0.5) stopVolumeBot(`Auto-paused: liquidity down ${Math.round((1 - dropFrac) * 100)}% from start (${formatUsdCompact(liq)}). Funds swept back.`);
+        }
+      }
+      const pks = plan.botStage === "running" ? (plan.tradingPublicKeys || []) : [];
+      if (plan.botStage !== "running") {
+        // a guard stopped us this tick; the sweeping stage handles the rest next tick
+      } else if (!pks.length) {
         plan.botStage = cfg.sweepBack === false ? "done" : "sweeping";
         plan.sweepCursor = 0;
       } else {
