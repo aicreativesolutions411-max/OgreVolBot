@@ -6086,8 +6086,15 @@ function renderTabs() {
   restoreFormFieldSnapshot(formFieldSnapshot, panel);
   syncCustomFields(panel);
   restoreGeneralScrollSnapshot(generalScrollSnapshot, panel);
-  if (state.activeTab === "trade" || state.activeTab === "volume") {
-    try { attachOgreStage(panel); } catch (err) { /* stage is decorative — never block render */ }
+  if (["trade", "volume", "launchCoin", "sniper", "ogreAi", "bundle", "positions", "pnl"].includes(state.activeTab)) {
+    try {
+      // swap/volume emit their deep-HUD stage inside their own HTML; the lighter hero
+      // kinds get their banner injected at the top of the panel here (no edits to 6 fns).
+      if (OGRE_HERO_KINDS[state.activeTab] && !panel.querySelector("[data-ogre-stage]")) {
+        panel.insertAdjacentHTML("afterbegin", ogreHeroStageHtml(state.activeTab));
+      }
+      attachOgreStage(panel);
+    } catch (err) { /* stage is decorative — never block render */ }
   }
   if (state.activeTab === "smartChart" && state.chartFocusAmountInput) {
     requestAnimationFrame(() => {
@@ -7691,6 +7698,23 @@ const OGRE_SWAP_CLIPS = "/assets/slimewire/swap/states/";
 const OGRE_SWAP_SFX = "/assets/slimewire/swap/sfx/";
 const OGRE_VOL_CLIPS = "/assets/slimewire/volume/states/";
 const OGRE_VOL_SFX = "/assets/slimewire/volume/sfx/";
+// Config-driven "hero" stages for the Tier 1/2 panels — same engine, lighter banner.
+// base = clip dir, poster = still, tier/cap = labels, accent = CSS class, idle/event clip names.
+// event SFX reuse the existing libraries so the whole site shares one sound identity.
+const OGRE_HERO_KINDS = {
+  launchCoin: { base: "/assets/slimewire/launch/states/", poster: "/assets/slimewire/launch/hero.png", tier: "OGRE FORGE", cap: ["Pump Launcher", "Forge it · birth it · send it."], accent: "launch", idle: "idle", event: "launch", sfx: [OGRE_SWAP_SFX + "win.mp3", 0.8] },
+  sniper:     { base: "/assets/slimewire/sniper/states/", poster: "/assets/slimewire/sniper/hero.png", tier: "OGRESNIPER", cap: ["OgreSniper", "Lock on · strike first."], accent: "sniper", idle: "idle", event: "fire", sfx: ["/assets/slimewire/auto/sfx/shockwave.mp3", 0.8] },
+  ogreAi:     { base: "/assets/slimewire/ogreai/states/", poster: "/assets/slimewire/ogreai/hero.png", tier: "OGRE A.I.", cap: ["Ogre A.I.", "Ask the swamp oracle."], accent: "ogreai", idle: "idle", event: "speak", sfx: [OGRE_SWAP_SFX + "appraise.mp3", 0.6] },
+  bundle:     { base: "/assets/slimewire/volume/states/", poster: "/assets/slimewire/volume/hero.png", tier: "OGRE BUNDLE", cap: ["Bundle", "Many wallets · one tap."], accent: "bundle", idle: "idle", event: "running", sfx: [OGRE_VOL_SFX + "start.mp3", 0.7] },
+  positions:  { base: "/assets/slimewire/auto/states/", poster: "/assets/slimewire/auto/reactor.jpg", tier: "POSITIONS", cap: ["Open Positions", "Your swamp, live."], accent: "positions", idle: "idle", event: "win", sfx: ["/assets/slimewire/auto/sfx/victory.mp3", 0.85] },
+  pnl:        { base: "/assets/slimewire/auto/states/", poster: "/assets/slimewire/auto/reactor.jpg", tier: "PROFIT & LOSS", cap: ["PnL", "Count the winnings."], accent: "positions", idle: "idle", event: "win", sfx: ["/assets/slimewire/auto/sfx/victory.mp3", 0.85] }
+};
+function ogreClipBase() {
+  const k = ogreStage.kind;
+  if (k === "swap") return OGRE_SWAP_CLIPS;
+  if (k === "volume") return OGRE_VOL_CLIPS;
+  return OGRE_HERO_KINDS[k] ? OGRE_HERO_KINDS[k].base : OGRE_SWAP_CLIPS;
+}
 let ogreSoundOn = true; try { ogreSoundOn = localStorage.getItem("ogreStageSound") !== "off"; } catch {}
 const ogreSfxCache = {};
 function ogrePlaySfx(url, vol) {
@@ -7745,10 +7769,12 @@ function ogreAmbientClip(kind) {
   return "idle";
 }
 function ogreEventSfx(name) {
+  const hk = OGRE_HERO_KINDS[ogreStage.kind];
+  if (hk) { if (hk.sfx && name === hk.event) ogrePlaySfx(hk.sfx[0], hk.sfx[1]); return; }
   if (ogreStage.kind === "swap") {
     const m = { appraise: ["appraise.mp3", 0.7], buy: ["buy.mp3", 0.85], win: ["win.mp3", 0.85], loss: ["loss.mp3", 0.6], banking: ["bank.mp3", 0.8] };
     if (m[name]) ogrePlaySfx(OGRE_SWAP_SFX + m[name][0], m[name][1]);
-  } else {
+  } else if (ogreStage.kind === "volume") {
     const m = { running: ["start.mp3", 0.7], sweep: ["sweep.mp3", 0.8] };
     if (m[name]) ogrePlaySfx(OGRE_VOL_SFX + m[name][0], m[name][1]);
   }
@@ -7757,7 +7783,7 @@ function ogrePlayClip(stage, name, isEvent) {
   const bg = stage.querySelector("[data-ogre-bg]");
   if (!bg || ogreStage.clip === name) return;
   ogreStage.clip = name;
-  const base = ogreStage.kind === "swap" ? OGRE_SWAP_CLIPS : OGRE_VOL_CLIPS;
+  const base = ogreClipBase();
   try { bg.loop = !isEvent; bg.muted = true; bg.src = base + name + ".mp4"; bg.load(); const p = bg.play(); if (p && p.catch) p.catch(() => {}); } catch {}
   if (isEvent) { ogreStage.eventUntil = Date.now() + (name === "running" ? 8500 : 4600); ogreEventSfx(name); }
 }
@@ -7767,7 +7793,10 @@ function ogreTickerTick() {
   if (!stage) { if (ogreStage.tkTimer) { clearInterval(ogreStage.tkTimer); ogreStage.tkTimer = 0; } return; }
   const tk = stage.querySelector("[data-os-tk]"); if (!tk) return;
   if (!ogreStage.feed.length) {
-    if (ogreStage.kind === "volume") {
+    const hk = OGRE_HERO_KINDS[ogreStage.kind];
+    if (hk) {
+      tk.innerHTML = `<span class="os-dot"></span>` + hk.cap[1];
+    } else if (ogreStage.kind === "volume") {
       const active = (state.volumeBots || []).some((b) => b && b.status !== "completed");
       tk.innerHTML = `<span class="os-dot"></span>` + (active ? "Swarm running — generating lifelike volume" : "SlimeBot idle — set a token and start");
     } else {
@@ -7796,7 +7825,32 @@ function attachOgreStage(panel) {
     bg.addEventListener("ended", () => { if (!bg.loop) { ogreStage.eventUntil = 0; ogreStage.clip = ""; ogrePlayClip(stage, ogreAmbientClip(ogreStage.kind), false); } });
   }
   if (!ogreStage.tkTimer) ogreStage.tkTimer = setInterval(ogreTickerTick, 3400);
-  if (kind === "swap") driveOgreSwapStage(stage); else driveOgreVolumeStage(stage);
+  if (kind === "swap") driveOgreSwapStage(stage);
+  else if (kind === "volume") driveOgreVolumeStage(stage);
+  else driveOgreHeroStage(stage, kind);
+}
+function ogreHeroStageHtml(kind) {
+  const k = OGRE_HERO_KINDS[kind];
+  if (!k) return "";
+  return `
+    <div class="ogre-stage hero ${k.accent}" data-ogre-stage="${kind}" data-hero="1">
+      <video class="ogre-bg" data-ogre-bg autoplay muted loop playsinline preload="auto" poster="${k.poster}" src="${k.base}${k.idle}.mp4"></video>
+      <span class="os-tier">${escapeHtml(k.tier)}</span>
+      <button class="os-snd" data-ogre-snd type="button" title="Sound on/off">🔊</button>
+      <span class="os-led"></span>
+      <div class="os-ticker"><span class="os-tk" data-os-tk><span class="os-dot"></span>${escapeHtml(k.cap[1])}</span></div>
+      <div class="os-cap"><h4>${escapeHtml(k.cap[0])}</h4><p>${escapeHtml(k.cap[1])}</p></div>
+    </div>`;
+}
+// Generic hero driver: ambient idle loop (the gorgeous new ogre carries it). An action
+// handler can fire the event clip via ogreHeroFire(kind) when its real event happens.
+function driveOgreHeroStage(stage, kind) {
+  if (Date.now() >= ogreStage.eventUntil) ogrePlayClip(stage, "idle", false);
+}
+function ogreHeroFire(kind) {
+  const stage = document.querySelector(`[data-ogre-stage="${kind}"]`);
+  const k = OGRE_HERO_KINDS[kind];
+  if (stage && k && ogreStage.kind === kind) ogrePlayClip(stage, k.event, true);
 }
 function driveOgreSwapStage(stage) {
   const token = String(state.tradeToken || "").trim();

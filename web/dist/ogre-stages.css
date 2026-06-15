@@ -126,6 +126,29 @@
 .ogre-tek .tek-toggle input{width:18px;height:18px;accent-color:#8dff5a;}
 .ogre-tek .tek-note{font-size:11px;opacity:.7;}
 
+/* ----------------------------------------------------------------- HERO STAGES (Tier 1/2)
+   Lighter banner stages for Launch / Sniper / OgreAI / Bundle / Positions / PnL — same
+   ogre family, each its own accent. Shorter than the swap/volume deep-HUD stages. */
+.ogre-stage.hero{aspect-ratio:16/9;max-height:300px;}
+.ogre-stage.hero .ogre-bg{object-position:center 30%;}
+.ogre-stage.hero .os-tier{color:var(--accent);border:1px solid rgba(255,255,255,.16);}
+.ogre-stage.hero .os-dot{background:var(--accent);box-shadow:0 0 8px var(--accent);}
+.ogre-stage.launch{--accent:#ff8a3a;}
+.ogre-stage.sniper{--accent:#ff5a5a;}
+.ogre-stage.ogreai{--accent:#46e8ff;}
+.ogre-stage.bundle{--accent:#c06bff;}
+.ogre-stage.positions,.ogre-stage.pnl{--accent:#8dff5a;}
+
+/* ----------------------------------------------------------------- OGRE SPINNER
+   A reusable slime-blob loader to replace plain spinners. Use <span class="ogre-spin"></span>. */
+.ogre-spin{display:inline-block;width:34px;height:34px;border-radius:50%;position:relative;vertical-align:middle;
+  background:radial-gradient(circle at 40% 35%,#bff58f,#27e06a 62%,rgba(39,224,106,.12));box-shadow:0 0 14px rgba(39,224,106,.5);
+  animation:ogreSpinPulse 1.1s ease-in-out infinite;}
+.ogre-spin::after{content:"";position:absolute;inset:-4px;border-radius:50%;border:2px solid transparent;border-top-color:#8dff5a;animation:ogreSpinRot .9s linear infinite;}
+.ogre-spin.sm{width:22px;height:22px;}
+@keyframes ogreSpinPulse{0%,100%{transform:scale(.85);opacity:.82;}50%{transform:scale(1.05);opacity:1;}}
+@keyframes ogreSpinRot{to{transform:rotate(360deg);}}
+
 @media (prefers-reduced-motion: reduce){
-  .ogre-stage .os-led,.ogre-stage.swap .os-orb,.ogre-stage.swap .os-shield.avoid,.ogre-stage.volume .ov-orb{animation:none !important;}
+  .ogre-stage .os-led,.ogre-stage.swap .os-orb,.ogre-stage.swap .os-shield.avoid,.ogre-stage.volume .ov-orb,.ogre-spin,.ogre-spin::after{animation:none !important;}
 }
