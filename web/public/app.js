@@ -5589,6 +5589,7 @@ function render(options = {}) {
   const positionRows = portfolioPositions();
   setText("[data-position-count]", positionRows.length);
   setText("[data-realized]", portfolioRealizedPnlLabel());
+  try { const rEl = $("[data-realized]"); if (rEl) { const neg = /-/.test(String(portfolioRealizedPnlLabel() || "")); rEl.classList.toggle("metric-neg", neg); rEl.classList.toggle("metric-pos", !neg); } } catch {}
   setText("[data-top-sol]", `${totalSol().toFixed(4)} SOL`);
   setText("[data-top-portfolio]", `${positionRows.length} position${positionRows.length === 1 ? "" : "s"}`);
   setText("[data-sync-health]", hasWalletContext ? syncHealthLabel() : "Sync idle");

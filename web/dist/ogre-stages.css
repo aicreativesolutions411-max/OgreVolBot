@@ -162,6 +162,29 @@
 .ogre-chartwatch.up{color:#9dff6a;}.ogre-chartwatch.down{color:#ff8a8a;}.ogre-chartwatch.down .ce{background:#ff6b6b;box-shadow:0 0 7px #ff6b6b;}
 @media (prefers-reduced-motion: reduce){.ogre-radar-bar::after,.orb-scope .sweep,.orb-scope .blip,.orb-heat::before,.ogre-spy i,.ogre-spy::after,.ogre-chartwatch .ce{animation:none !important;}}
 
+/* ----------------------------------------------------------------- PREMIUM BARS
+   Elevates the signature account stat bar + search into a high-end, unmistakably-SlimeWire
+   look. Additive overrides only — same layout/form, just richer. */
+html body main.shell[data-app] .metrics article{
+  position:relative; overflow:hidden;
+  background:linear-gradient(160deg,rgba(11,20,15,.72),rgba(6,12,9,.42)) !important;
+  border:1px solid rgba(141,255,90,.16) !important; border-radius:14px !important;
+  box-shadow:0 6px 18px rgba(0,0,0,.32); transition:border-color .25s, box-shadow .25s, transform .15s;
+}
+html body main.shell[data-app] .metrics article::before{
+  content:""; position:absolute; left:14%; right:14%; top:0; height:2px; border-radius:2px;
+  background:linear-gradient(90deg,transparent,rgba(141,255,90,.75),transparent);
+}
+html body main.shell[data-app] .metrics article:hover{ border-color:rgba(141,255,90,.42) !important; box-shadow:0 10px 26px rgba(39,224,106,.16); transform:translateY(-1px); }
+html body main.shell[data-app] .metrics article strong{ color:#eafff0 !important; font-variant-numeric:tabular-nums; text-shadow:0 0 12px rgba(141,255,90,.22); }
+html body main.shell[data-app] .metrics article span{ letter-spacing:.7px; text-transform:uppercase; opacity:.85; }
+html body main.shell[data-app] .metrics article strong.metric-pos{ color:#8dff5a !important; text-shadow:0 0 12px rgba(141,255,90,.4); }
+html body main.shell[data-app] .metrics article strong.metric-neg{ color:#ff6b6b !important; text-shadow:0 0 12px rgba(255,107,107,.4); }
+/* search bar focus glow */
+html body main.shell[data-app] .search input:focus, html body main.shell[data-app] input[type="search"]:focus, html body main.shell[data-app] [data-token-search]:focus{
+  border-color:rgba(141,255,90,.55) !important; box-shadow:0 0 0 1px rgba(141,255,90,.3), 0 0 18px rgba(39,224,106,.22) !important; outline:none !important;
+}
+
 /* ----------------------------------------------------------------- OGRE A.I. TIER BANNER */
 .ogre-ai-tier{display:flex;align-items:center;gap:10px;margin:0 0 12px;padding:10px 12px;border-radius:12px;
   background:linear-gradient(120deg,rgba(70,232,255,.12),rgba(70,232,255,.04));border:1px solid rgba(70,232,255,.3);}
