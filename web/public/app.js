@@ -7729,6 +7729,8 @@ function bindOgreActions() {
   ogreActionBound = true;
   document.addEventListener("click", (e) => {
     try {
+      const cardBtn = e.target.closest("[data-ogre-card]");
+      if (cardBtn) { e.preventDefault(); e.stopPropagation(); ogreShareCard(cardBtn.getAttribute("data-ogre-card")); return; }
       const kind = ogreStage.kind;
       if (!kind) return;
       const btn = e.target.closest("button");
@@ -7746,6 +7748,29 @@ function bindOgreActions() {
       }
     } catch {}
   }, true);
+}
+function ogreCardDownload(name, dataUrl) { try { const a = document.createElement("a"); a.href = dataUrl; a.download = name; document.body.appendChild(a); a.click(); a.remove(); } catch {} }
+// Branded share/receipt cards: gold OgreSwap, violet SlimeBot. Honest receipts (no fake
+// PnL) built from whatever real data the flow has, themed by the card renderer.
+async function ogreShareCard(kind) {
+  const sol = (n) => { const v = Number(n); return Number.isFinite(v) ? v.toFixed(4) : "0"; };
+  let payload = null;
+  if (kind === "swap") {
+    const r = state.tradeResult || {};
+    payload = { theme: "swap", receipt: true, loss: false, headline: "SWAPPED", mint: r.tokenMint || state.tradeToken || "", symbol: String(r.symbol || r.shortMint || "TOKEN"), name: "OgreSwap",
+      lines: [r.type === "sell" ? `Received ${sol(r.netSol)} SOL` : (r.type === "buy" ? `Aped ${sol(r.spentSol)} SOL` : "Swapped on SlimeWire"), "OgreSwap · on-chain", "slimewire.org"] };
+  } else if (kind === "volume") {
+    const bots = Array.isArray(state.volumeBots) ? state.volumeBots : [];
+    const bot = bots.find((b) => b && b.status !== "completed") || bots[bots.length - 1] || {};
+    const st = bot.stats || {}; const ba = Number(bot.buyAmountSol || 0);
+    const vol = (Number(st.buys || 0) + Number(st.sells || 0)) * ba;
+    payload = { theme: "volume", receipt: true, loss: false, headline: "VOLUME RUN", mint: bot.tokenMint || "", symbol: String(bot.shortMint || "SLIMEBOT"), name: "SlimeBot",
+      lines: [`${vol.toFixed(2)} SOL volume`, `${Number(bot.walletCount || 0)} wallets · ${Number(bot.currentCycle || bot.cycles || 0)} rounds`, "SlimeBot · slimewire.org"] };
+  } else return;
+  try {
+    const res = await api("/api/web/autopilot/win-card", { method: "POST", body: JSON.stringify(payload) });
+    if (res && res.ok && res.png) ogreCardDownload(`slimewire-${kind}-card.png`, res.png);
+  } catch {}
 }
 let ogreSoundOn = true; try { ogreSoundOn = localStorage.getItem("ogreStageSound") !== "off"; } catch {}
 const ogreSfxCache = {};
@@ -7767,6 +7792,7 @@ function ogreSwapStageHtml() {
       ${ogreStageVideoHtml("swap")}
       <span class="os-tier">OGRESWAP</span>
       <button class="os-snd" data-ogre-snd type="button" title="Sound on/off">🔊</button>
+      <button class="os-card" data-ogre-card="swap" type="button" title="Download a share card">🏆</button>
       <span class="os-led"></span>
       <div class="os-shield" data-os-shield><span class="ic">🛡️</span><span data-os-shield-text>SHIELD</span></div>
       <div class="os-read" data-os-read><div class="l">SlimeShield score</div><div class="v" data-os-read-v>—</div></div>
@@ -7782,6 +7808,7 @@ function ogreVolumeStageHtml() {
       ${ogreStageVideoHtml("volume")}
       <span class="os-tier">SLIMEBOT</span>
       <button class="os-snd" data-ogre-snd type="button" title="Sound on/off">🔊</button>
+      <button class="os-card" data-ogre-card="volume" type="button" title="Download a share card">🏆</button>
       <span class="os-led"></span>
       <div class="ov-swarm" data-ov-swarm></div>
       <div class="ov-budget" data-ov-budget><div class="l">SOL deployed</div><div class="v" data-ov-budget-v>—</div><div class="bar"><i data-ov-budget-bar></i></div></div>

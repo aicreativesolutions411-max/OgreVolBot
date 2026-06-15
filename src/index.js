@@ -18017,11 +18017,18 @@ async function renderSlimeCard(d = {}) {
   const held = heldMs > 0 ? formatCompactDurationMs(heldMs) : "n/a";
   const mc = Number(d.peakMc || d.entryMc) || 0;
   const sol4 = (n) => (Math.round(Number(n) * 1e4) / 1e4).toString();
-  const big = win
-    ? `${multiple != null ? multiple : "?"}X`
-    : `-${Math.abs(Math.round(gainPct || 0))}%`;
-  const accent = win ? W.slime : W.red;
-  const dripColor = win ? W.slime : "#c41212";
+  // Per-feature card theming (gold OgreSwap, violet SlimeBot, green Autopilot default).
+  // "receipt" mode shows an honest headline + lines instead of PnL math (for flows that
+  // don't track round-trip P&L, e.g. a manual swap or a volume campaign).
+  const CARD_THEME = { auto: { a: "#39ff14", label: "PNL CARD", f: ["#f1ffd6", "#76ff3c", "#13a30c"] }, swap: { a: "#ffd45a", label: "OGRESWAP", f: ["#fff3c4", "#ffc23a", "#c8860f"] }, volume: { a: "#c06bff", label: "SLIMEBOT", f: ["#efd9ff", "#b06bff", "#6a2bb0"] } };
+  const theme = CARD_THEME[String(d.theme || "")] ? CARD_THEME[String(d.theme)] : CARD_THEME.auto;
+  const themedWin = win && theme !== CARD_THEME.auto;
+  const receipt = d.receipt === true || d.receipt === "true";
+  const big = receipt
+    ? String(d.headline || "RECEIPT")
+    : (win ? `${multiple != null ? multiple : "?"}X` : `-${Math.abs(Math.round(gainPct || 0))}%`);
+  const accent = win ? theme.a : W.red;
+  const dripColor = win ? theme.a : "#c41212";
   const bigDrops = win ? [[-45, 30], [50, 52], [150, 36], [245, 58], [95, 22]] : [[-45, 50], [50, 76], [150, 56], [245, 92], [110, 108]];
   const artX = 66, artY = 168, artS = 360, colX = 472;
   const art = imageDataUrl
@@ -18031,17 +18038,24 @@ async function renderSlimeCard(d = {}) {
   // the top of every card, and pooling at the bottom — green on wins, blood-red on
   // losses. These are raster overlays, not drawn shapes, so they read as actual goo.
   const TOPH = 155, BOTH = win ? 125 : 130;
-  const topUrl = await slimeBgDataUrl("slime-top-green.png");
-  const botUrl = await slimeBgDataUrl(win ? "slime-bot-green.png" : "slime-bot-red.png");
-  const topBand = topUrl ? `<image href="${topUrl}" x="0" y="0" width="${W.width}" height="${TOPH}" preserveAspectRatio="none"/>` : "";
-  const bottomBand = botUrl ? `<image href="${botUrl}" x="0" y="${W.height - BOTH}" width="${W.width}" height="${BOTH}" preserveAspectRatio="none"/>` : "";
+  let topBand, bottomBand;
+  if (themedWin) {
+    // gold/violet themed flat accent bars instead of the green slime raster
+    topBand = `<rect x="0" y="0" width="${W.width}" height="12" fill="${accent}" opacity="0.9"/>`;
+    bottomBand = `<rect x="0" y="${W.height - 12}" width="${W.width}" height="12" fill="${accent}" opacity="0.9"/>`;
+  } else {
+    const topUrl = await slimeBgDataUrl("slime-top-green.png");
+    const botUrl = await slimeBgDataUrl(win ? "slime-bot-green.png" : "slime-bot-red.png");
+    topBand = topUrl ? `<image href="${topUrl}" x="0" y="0" width="${W.width}" height="${TOPH}" preserveAspectRatio="none"/>` : "";
+    bottomBand = botUrl ? `<image href="${botUrl}" x="0" y="${W.height - BOTH}" width="${W.width}" height="${BOTH}" preserveAspectRatio="none"/>` : "";
+  }
 
   const svg = `
 <svg xmlns="http://www.w3.org/2000/svg" width="${W.width}" height="${W.height}" viewBox="0 0 ${W.width} ${W.height}">
   <defs>
     <linearGradient id="bigFill" x1="0" y1="0" x2="0" y2="1">
       ${win
-        ? `<stop offset="0%" stop-color="#f1ffd6"/><stop offset="45%" stop-color="#76ff3c"/><stop offset="100%" stop-color="#13a30c"/>`
+        ? `<stop offset="0%" stop-color="${theme.f[0]}"/><stop offset="45%" stop-color="${theme.f[1]}"/><stop offset="100%" stop-color="${theme.f[2]}"/>`
         : `<stop offset="0%" stop-color="#a6ff6b"/><stop offset="42%" stop-color="#ff7a3a"/><stop offset="100%" stop-color="#8a0d0d"/>`}
     </linearGradient>
     <linearGradient id="scrim" x1="0" y1="0" x2="1" y2="0">
@@ -18063,12 +18077,16 @@ async function renderSlimeCard(d = {}) {
   ${art}
   <rect x="${artX}" y="${artY}" width="${artS}" height="${artS}" rx="30" fill="none" stroke="${accent}" stroke-width="5" opacity="0.85" filter="url(#bigGlow)"/>
   <text x="${colX}" y="196" font-family="${W.fontFamily}" font-size="44" font-weight="900" fill="${W.slime}" filter="url(#txtGlow)">www.SlimeWire.org</text>
-  <text x="${colX}" y="226" font-family="${W.fontFamily}" font-size="26" font-weight="800" fill="${W.muted}" letter-spacing="6">PNL CARD</text>
-  <g filter="url(#bigGlow)"><text x="${colX}" y="358" font-family="${W.fontFamily}" font-size="168" font-weight="900" fill="url(#bigFill)" letter-spacing="-2">${escapeSvg(big)}</text></g>
+  <text x="${colX}" y="226" font-family="${W.fontFamily}" font-size="26" font-weight="800" fill="${W.muted}" letter-spacing="6">${escapeSvg(theme.label)}</text>
+  <g filter="url(#bigGlow)"><text x="${colX}" y="358" font-family="${W.fontFamily}" font-size="${receipt ? 110 : 168}" font-weight="900" fill="url(#bigFill)" letter-spacing="-2">${escapeSvg(big)}</text></g>
   <text x="${colX}" y="420" font-family="${W.fontFamily}" font-size="42" font-weight="900" fill="${W.white}">${symbol} <tspan fill="${W.muted}" font-size="30">/ ${name}</tspan></text>
-  <text x="${colX}" y="462" font-family="${W.fontFamily}" font-size="36" font-weight="900" fill="${accent}">${win ? "Profit +" : "Loss -"}${escapeSvg(sol4(Math.abs(profit)))} SOL</text>
+  ${receipt
+    ? `<text x="${colX}" y="462" font-family="${W.fontFamily}" font-size="34" font-weight="900" fill="${accent}">${escapeSvg(String((d.lines && d.lines[0]) || ""))}</text>
+  <text x="${colX}" y="500" font-family="${W.fontFamily}" font-size="26" font-weight="700" fill="${W.muted}">${escapeSvg(String((d.lines && d.lines[1]) || ""))}</text>
+  <text x="${colX}" y="534" font-family="${W.fontFamily}" font-size="26" font-weight="700" fill="${W.muted}">${escapeSvg(String((d.lines && d.lines[2]) || ""))}</text>`
+    : `<text x="${colX}" y="462" font-family="${W.fontFamily}" font-size="36" font-weight="900" fill="${accent}">${win ? "Profit +" : "Loss -"}${escapeSvg(sol4(Math.abs(profit)))} SOL</text>
   <text x="${colX}" y="500" font-family="${W.fontFamily}" font-size="26" font-weight="700" fill="${W.muted}">Spent ${escapeSvg(sol4(spent))} SOL   |   Received ${escapeSvg(sol4(received))} SOL</text>
-  <text x="${colX}" y="534" font-family="${W.fontFamily}" font-size="26" font-weight="700" fill="${W.muted}">Held ${escapeSvg(held)}${mc ? `   |   ${win ? "Peak " : ""}MC ${escapeSvg(formatUsdCompact(mc))}` : ""}</text>
+  <text x="${colX}" y="534" font-family="${W.fontFamily}" font-size="26" font-weight="700" fill="${W.muted}">Held ${escapeSvg(held)}${mc ? `   |   ${win ? "Peak " : ""}MC ${escapeSvg(formatUsdCompact(mc))}` : ""}</text>`}
   ${topBand}${bottomBand}
 </svg>`;
   return sharp(Buffer.from(svg)).png().toBuffer();
