@@ -153,6 +153,19 @@ test("autoTune: realized win-rate bleed forces COLD even on a green peak read", 
   assert.equal(s.tune.tape, "COLD");
 });
 
+test("autoTune: recovers from COLD after sitting out (re-probes stale losing history)", () => {
+  const t = 10_000_000;
+  const losing = { results: ["L", "L", "L", "L", "L", "L", "L", "L", "L", "L"], recentPnl: [-0.01, -0.01, -0.01, -0.01, -0.01, -0.01, -0.01, -0.01], recentPeaks: [0, 0, 0, 5, 0, 0, 0, 0], recentRugs: [true, true, false, false, true, false, true, true] };
+  // just traded (idle < 4 min) with a losing history -> stays COLD (protect)
+  const s1 = baseState({ ...losing, lastOpenAt: t - 60_000, lastTuneAt: 0 });
+  autoTune(s1, t, null);
+  assert.equal(s1.tune.tape, "COLD");
+  // sat out 5+ min -> stale losing history expires, re-probe the tape (no longer COLD)
+  const s2 = baseState({ ...losing, lastOpenAt: t - 5 * 60_000, lastTuneAt: 0 });
+  autoTune(s2, t, null);
+  assert.notEqual(s2.tune.tape, "COLD");
+});
+
 test("convictionMult: bigger on a proven dev + strong flow, smaller on a rugger", () => {
   const strong = goodRow({ pairAgeSeconds: 40, buys5m: 30, sells5m: 3, volume5m: 120, bestPickScore: 90 });
   const provenDev = { runners: 3, rugs: 0 };

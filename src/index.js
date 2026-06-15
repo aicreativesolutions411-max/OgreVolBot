@@ -418,6 +418,19 @@ async function relockAutopilotWalletByPubkey(pubkey) {
 // you can't read a rug off the coin, but you can off the dev's track record).
 const AUTOPILOT_TRADES_FILE = path.join(CONFIG.dataDir, "autopilot-trades.json");
 const autopilotDevRep = new Map(); // devWallet -> { trades, rugs, runners, pnl }
+// CROSS-SESSION repeat-loser memory by coin NAME. Clone-name serial ruggers (e.g.
+// "LONGDOG" relaunched again and again, different mints) slip past the per-mint guard
+// and the per-session name guard resets on restart. This tally persists via the trade
+// history so a name that's lost us money repeatedly gets skipped permanently.
+const autopilotSymLosses = new Map(); // normSym -> loss count (all-time)
+function autopilotNormSym(s) { return String(s || "").toLowerCase().replace(/[^a-z0-9]/g, ""); }
+function autopilotSymLossBump(rec) {
+  if (!rec || rec.win) return;
+  const ns = autopilotNormSym(rec.sym);
+  if (!ns) return;
+  autopilotSymLosses.set(ns, (autopilotSymLosses.get(ns) || 0) + 1);
+}
+function autopilotSymbolLoserCount(symbol) { return autopilotSymLosses.get(autopilotNormSym(symbol)) || 0; }
 let autopilotTradesCache = null;
 
 function autopilotDevRepBump(dev, rec) {
@@ -439,7 +452,8 @@ async function loadAutopilotTrades() {
     trades = (j && Array.isArray(j.trades)) ? j.trades : [];
   } catch { trades = []; }
   autopilotDevRep.clear();
-  for (const t of trades) autopilotDevRepBump(t.dev, t);
+  autopilotSymLosses.clear();
+  for (const t of trades) { autopilotDevRepBump(t.dev, t); autopilotSymLossBump(t); }
   autopilotTradesCache = trades;
   return trades;
 }
@@ -449,6 +463,7 @@ async function recordAutopilotTrade(rec) {
     autopilotTradesCache.push(rec);
     if (autopilotTradesCache.length > 4000) autopilotTradesCache = autopilotTradesCache.slice(-4000);
     autopilotDevRepBump(rec.dev, rec);
+    autopilotSymLossBump(rec);
     await writeJsonFile(AUTOPILOT_TRADES_FILE, { trades: autopilotTradesCache });
   } catch {}
 }
@@ -705,6 +720,7 @@ const autopilotEngine = createAutopilotEngine({
   smartMoneyReady: () => smartMoneyReady(),
   smartMoneyFeed: async () => smartMoneyFeed(),
   getMarketTape: () => marketTape(),
+  symbolLoserCount: (symbol) => autopilotSymbolLoserCount(symbol),
   recordTrade: (rec) => { void recordAutopilotTrade(rec); },
   log: (level, msg) => console.log(`[autopilot:${level}] ${msg}`),
   isPaused: async () => Boolean((await readState().catch(() => ({}))).paused),
@@ -736,9 +752,15 @@ const autopilotEngine = createAutopilotEngine({
     try {
       const solUsd = Number(solUsdPriceCache?.value) || 0;
       if (solUsd > 0) {
-        const ticks = pumpPortalStream.getTrades(mint, { limit: 1 });
-        let mcSol = ticks && ticks[0] ? Number(ticks[0].marketCapSol) : 0;
-        let vSol = ticks && ticks[0] ? Number(ticks[0].vSolInBondingCurve) : 0;
+        // REALIZABLE price: a single tiny buy can spike one tick's marketCapSol on a
+        // thin curve, which marked positions at fantasy gains (+178% that filled at
+        // +15%). Use the MEDIAN of the last few trades so one phantom-spike tick can't
+        // fool the exit logic — the bot marks/exits on a price that's actually sellable.
+        const ticks = pumpPortalStream.getTrades(mint, { limit: 5 }) || [];
+        let mcSol = 0;
+        let vSol = ticks[0] ? Number(ticks[0].vSolInBondingCurve) : 0;
+        const mcs = ticks.map((t) => Number(t.marketCapSol) || 0).filter((x) => x > 0).sort((a, b) => a - b);
+        if (mcs.length) mcSol = mcs[Math.floor(mcs.length / 2)]; // median
         if (!mcSol) {
           const ce = pumpPortalStream.getCreationEntry(mint);
           const lt = ce && ce.lastTrade;

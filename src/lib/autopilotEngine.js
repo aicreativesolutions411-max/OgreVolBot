@@ -154,21 +154,29 @@ export function autoTune(state, nowMs, marketTape = null) {
   const sessGain = state.start > 0 ? equity(state) / state.start - 1 : 0;
   const green = sessGain >= 0.15;
 
+  // COLD RECOVERY (deadlock fix): once COLD stops us trading, our realized history
+  // never updates — so realizedBleed/ownCold would stay true forever and freeze the bot
+  // permanently (observed: 7+ min stuck COLD). If we've actually traded this session and
+  // then sat OUT for 4+ min, treat that stale losing history as expired and RE-PROBE the
+  // tape (our own COLD signals are suppressed). Only the market-wide gauge — which keeps
+  // updating from the 24/7 observatory regardless of our trading — can still hold COLD.
+  const probeNow = (state.lastOpenAt || 0) > 0 && (nowMs - state.lastOpenAt) > 4 * 60_000;
   const mktCold = mkt && mkt.heat === "COLD";
   const mktHot = mkt && mkt.heat === "HOT";
-  const ownCold = havePeaks && rugRate > 0.45 && goodRate < 0.12;
+  const ownCold = !probeNow && havePeaks && rugRate > 0.45 && goodRate < 0.12;
   const ownHot = havePeaks && (goodRate >= 0.3 || bigRate >= 0.15);
+  const bleed = realizedBleed && !probeNow;
 
   // COLD wins ties — protecting capital beats chasing. The market going cold, our own
   // trades going cold, OR our realized results bleeding all slam the brakes: widen the
   // gap between entries, cap concurrent bags, shrink size. This is what stops a dead
   // tape from draining the wallet via churn.
-  if (ownCold || realizedBleed || mktCold) {
+  if (ownCold || bleed || mktCold) {
     // COLD: only take genuinely strong setups. scoreBonus +20 lifts the entry bar to
     // ~fs 60-68 (vs the base ~40-48) so the fs 61-63 churn that bleeds a chop tape gets
     // skipped while the fs 67+ runners still pass. Plus widen entry gap + cap bags.
     state.tune = { scoreBonus: 20, sizeMult: 0.7, tape: "COLD", maxOpenCap: 2, entryGapMs: 15000, perCycle: 1 };
-  } else if ((ownHot || mktHot) && !realizedBleed) {
+  } else if ((ownHot || mktHot) && !bleed) {
     // Hot — press harder (bigger size, more concurrent, no gap). If already well up,
     // ease off so the session banks green instead of round-tripping it.
     state.tune = { scoreBonus: green ? 2 : -2, sizeMult: green ? 1.0 : 1.35, tape: "HOT", maxOpenCap: green ? 3 : null, entryGapMs: 0, perCycle: green ? 3 : 4 };
@@ -514,6 +522,7 @@ export function createAutopilotEngine(deps) {
     smartMoneyReady = () => false,
     smartMoneyFeed = async () => [],
     getMarketTape = () => null,
+    symbolLoserCount = () => 0,
     recordTrade = () => {},
     exitMs = 1000,
     huntMs = 5000
@@ -1100,6 +1109,7 @@ export function createAutopilotEngine(deps) {
         if (e.count >= 2) return false;
         return nowMs - (e.at || 0) > 60_000;
       })
+      .filter((r) => symbolLoserCount(r.symbol) < 3) // CROSS-SESSION: skip serial-rug names (e.g. LONGDOG) that have lost us money 3+ times all-time
       .map((r) => ({ r, reject: entryReject(r, P), fs: freshScore(r) }))
       .filter((x) => !x.reject)
       .sort((a, b) => b.fs - a.fs);
