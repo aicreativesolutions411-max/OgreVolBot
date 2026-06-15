@@ -855,14 +855,16 @@ export function createAutopilotEngine(deps) {
         // it off at 10s was booking full-size losses (e.g. -0.03) on coins whose tokens
         // we actually hold, just hadn't indexed yet — one of those wipes ~6-8 small
         // wins. Give a fresh buy up to 30s to become readable before writing it off.
-        // A position we've EVER held in profit (or already partially sold) definitely
-        // has tokens — a "no token balance" there is a transient RPC/settle read, NOT
-        // a real loss. NEVER write off a winner over a flaky balance read: keep
-        // retrying so a spiking runner's profit-take actually goes off.
-        const everReal = pos.countedWin || (pos.realized || 0) > 0 || (pos.peakPct || 0) >= 20;
-        if (noBalance && (ageMs < 30_000 || everReal)) return; // young buy settling OR a real position we hold → retry
-        if (!noBalance && pos.sellFails < 8) return;    // other transient errors: more retries before giving up
-        failedTerminal = true;                          // persistent + never-real (failed buy) → write off + free slot
+        // Distinguish a REAL holding from a PHANTOM (a buy that never delivered tokens
+        // but whose marked price still moves). The only proof we actually hold tokens
+        // is that a sell ALREADY returned SOL (realized>0) — the MARKED price (peakPct)
+        // is NOT proof and must never protect a position, or a phantom that marks +115%
+        // rides forever inflating equity and never sells (exactly the "deep" case).
+        const reallyHeld = pos.countedWin || (pos.realized || 0) > 0;
+        if (noBalance && reallyHeld) return;             // confirmed real holding, flaky read → retry indefinitely
+        if (noBalance && ageMs < 30_000) return;         // fresh buy may still be settling → retry briefly
+        if (!noBalance && pos.sellFails < 8) return;     // other transient errors: more retries before giving up
+        failedTerminal = true;                           // 30s+ no balance & never returned SOL → phantom/failed buy → write off
       }
     }
 
