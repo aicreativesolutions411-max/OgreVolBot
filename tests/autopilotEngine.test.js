@@ -48,10 +48,11 @@ function goodRow(over = {}) {
 }
 
 test("low-churn: raises entry bar, concentrates size, caps positions at 3", async () => {
-  // minScore bonus
+  // minScore bonus: low-churn never lowers the bar (exact +16 only holds above the
+  // universal runner-safe floor, which both can clamp to).
   const normalP = aggParams(baseState());
   const lowP = aggParams(baseState({ minScoreBonus: 16 }));
-  assert.equal(lowP.minScore, normalP.minScore + 16);
+  assert.ok(lowP.minScore >= normalP.minScore, "low-churn raises (never lowers) the bar");
 
   // bigger per-bet size vs normal on the same bank
   const normalState = baseState({ bank: 1, maxTradeSol: 0.05, sizeFracCap: 0.12, churn: "normal" });
@@ -75,12 +76,13 @@ test("low-churn: raises entry bar, concentrates size, caps positions at 3", asyn
   await engine.stop("test");
 });
 
-test("aggParams: hot regime sizes up and loosens cutoff", () => {
+test("aggParams: hot regime sizes up but holds the runner-safe entry floor", () => {
   const s = baseState({ results: ["W", "W", "W", "W", "W"], streak: 3 });
   const P = aggParams(s);
   assert.equal(P.regime, "HOT");
   assert.ok(P.regimeMult > 1);
-  assert.ok(P.minScore < 40);
+  // Hot sizes up, but never apes below fs 58 (instant-rugs cluster <=56; no runner <58).
+  assert.ok(P.minScore >= 58, "hot keeps the safe floor instead of dropping into garbage");
 });
 
 test("aggParams: cold regime shrinks size and demands quality but keeps buying", () => {

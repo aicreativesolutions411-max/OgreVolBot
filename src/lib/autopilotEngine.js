@@ -16,6 +16,13 @@
 export const LAMPORTS_PER_SOL = 1_000_000_000;
 const SELL_FEE_FACTOR = 0.985; // round-trip slippage+fee haircut used for synthetic ledger
 
+// Normalized coin name for clone detection. Pump.fun lets anyone mint a coin with
+// the same name, so when one pops a swarm of same-name clones floods the feed and
+// dumps. Keyed loss memory by normalized name lets us stop re-aping the clones.
+export function normSym(s) {
+  return String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
 // ---------------------------------------------------------------------------
 // Pure decision helpers (ported from web/public/autopilot.html)
 // ---------------------------------------------------------------------------
@@ -68,7 +75,14 @@ export function aggParams(state) {
   // Self-tuning: the auto-tuner raises the bar in cold/rug-heavy tape and lowers
   // it when runners are frequent.
   minScore += (state.tune && state.tune.scoreBonus) || 0;
-  if (state.churn === "low") minScore = Math.max(minScore, 57);
+  // UNIVERSAL runner-safe floor: no observed runner was below fs 58 and instant-rugs
+  // cluster at fs<=56. This was only enforced for low-churn before, so normal mode
+  // could ape fs 34-57 garbage whenever the regime bar dropped (HOT). Floor everyone.
+  minScore = Math.max(minScore, state.churn === "low" ? 60 : 58);
+  // COLD / bleeding / cold-market tape: demand genuinely strong setups (fs ~66+)
+  // regardless of regime base — this is what actually stops the fs 61-63 chop churn
+  // that bleeds a directionless tape. (scoreBonus alone couldn't reach this.)
+  if (state.tune && state.tune.tape === "COLD") minScore = Math.max(minScore, 66);
 
   const mcFloor = 1800; // no MC filter — a low-MC runner (e.g. ZUL +56% @ $1973) stays in
 
@@ -407,6 +421,9 @@ function freshState(opts) {
     // Per-coin loss memory: stop re-aping a coin that keeps stopping us out this
     // session (the log showed one coin entered 6x, almost all losses).
     coinLosses: {},
+    // Per-NAME loss memory: clones of a hot name flood the feed and dump. After a
+    // name loses, cool off / cap re-entries on that name (different mints, same name).
+    symLosses: {},
     // Adaptive "tape" auto-tuner: reads recent runner/rug rate and nudges the
     // bar + bet size — press in hot tape, sit back in cold. (autoTune mutates it.)
     // Warming = no tape data yet (and where restarted sessions live). Start SMALL and
@@ -876,6 +893,12 @@ export function createAutopilotEngine(deps) {
     } else {
       markLoss(pos);
       state.coinLosses[pos.mint] = (state.coinLosses[pos.mint] || 0) + 1; // remember repeat losers
+      const ns = normSym(pos.sym);                                          // remember losing NAMES (clone swarms)
+      if (ns) {
+        const e = state.symLosses[ns] || { count: 0, at: 0 };
+        e.count += 1; e.at = now();
+        state.symLosses[ns] = e;
+      }
     }
     state.recentSells[pos.mint] = now();
     const pnl = totalProceeds - pos.costSol;
@@ -957,6 +980,15 @@ export function createAutopilotEngine(deps) {
         // Wave cooldown: allow re-entry on a coin we sold, but not within 45s.
         const last = state.recentSells[r.tokenMint];
         return !last || nowMs - last > 45_000;
+      })
+      .filter((r) => {
+        // CLONE-SWARM guard: when a NAME just lost (different mint, same name flooding
+        // the feed), stop aping its clones — cap at 2 same-name losses/session and a
+        // 60s cooldown after any same-name loss. This kills the MistCoin/MIST x5 churn.
+        const e = state.symLosses[normSym(r.symbol)];
+        if (!e) return true;
+        if (e.count >= 2) return false;
+        return nowMs - (e.at || 0) > 60_000;
       })
       .map((r) => ({ r, reject: entryReject(r, P), fs: freshScore(r) }))
       .filter((x) => !x.reject)
