@@ -807,7 +807,7 @@ import{canSubmitPerpOrder as gm,createPerpsProvider as bm,ogreTekRouteStatus as 
       <article class="trade-card slime-swap-card ogre-swap-card ogre-swap-skin">
         <h3 class="ogre-swap-title oss-a11y-title">OgreSwap - live on-chain Solana swapper</h3>
         <div class="oss-stage-wrap">
-          <div class="oss-stage" role="group" aria-label="OgreSwap swap panel">
+          <div class="oss-stage oss-flat" role="group" aria-label="OgreSwap swap panel">
             ${g}
             <button type="button" class="oss-swap primary" data-swap-use-custom-amount>SWAP</button>
             <label class="oss-pill oss-slip" data-cap="Slippage">
@@ -1449,7 +1449,7 @@ import{canSubmitPerpOrder as gm,createPerpsProvider as bm,ogreTekRouteStatus as 
     ${Bg()}
     <section class="trade-card volume-bot-card slime-configurator ovs-skin" data-preserve-focus>
       <h2 class="vbot-config-title oss-a11y-title">Volume Configurator</h2>
-      <div class="ovs-stage">
+      <div class="ovs-stage ovs-flat">
         <span class="ovs-mlabel" aria-hidden="true">VOLUME CONFIGURATOR</span>
         <span class="ovs-mlabel ovs-mlabel-field" aria-hidden="true">Contract Address</span>
         <input class="ovs-ca" data-vbot-token type="text" placeholder="Paste contract address" value="${i(n.volumeToken||n.tradeToken||"")}" aria-label="Contract address">

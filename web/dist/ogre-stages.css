@@ -149,6 +149,34 @@
 @keyframes ogreSpinPulse{0%,100%{transform:scale(.85);opacity:.82;}50%{transform:scale(1.05);opacity:1;}}
 @keyframes ogreSpinRot{to{transform:rotate(360deg);}}
 
+/* ----------------------------------------------------------------- FLAT / CLEAN PANELS
+   Removes the old template-image skins (swap-template.png / volume-template.png) and flows
+   the SAME controls into a clean glass panel fused under the live video stage. Works on
+   mobile + web; nothing is removed, just relaid-out. High specificity to beat the skins. */
+html body main.shell[data-app] .ogre-stage.swap, html body main.shell[data-app] .ogre-stage.volume { margin-bottom: 0; border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+html body main.shell[data-app] .oss-stage.oss-flat,
+html body main.shell[data-app] .ovs-stage.ovs-flat {
+  aspect-ratio: auto !important; background: linear-gradient(160deg, rgba(10,18,14,.78), rgba(6,12,9,.55)) !important;
+  border: 1px solid rgba(141,255,90,.16); border-top: 0; border-radius: 0 0 16px 16px; padding: 14px; overflow: visible !important;
+  display: flex; flex-direction: column; gap: 10px; container-type: normal;
+}
+/* --- swap flat --- */
+html body main.shell[data-app] .oss-flat .oss-slot { position: static !important; left: auto; top: auto; width: 100%; height: auto; padding: 12px 14px; background: #08110b; border: 1px solid rgba(141,255,90,.16); border-radius: 12px; }
+html body main.shell[data-app] .oss-flat .oss-amount { font-size: 20px !important; }
+html body main.shell[data-app] .oss-flat .oss-ca { font-size: 13px !important; }
+html body main.shell[data-app] .oss-flat .oss-reverse { position: static !important; transform: none !important; width: 38px; height: 38px; margin: -3px auto; border: 1px solid rgba(141,255,90,.2) !important; border-radius: 50%; }
+html body main.shell[data-app] .oss-flat .oss-swap { position: static !important; left: auto; top: auto; width: 100%; height: auto; padding: 15px; border-radius: 14px; background: linear-gradient(180deg,#8dff5a,#27e06a) !important; color: #04210f !important; font-size: 20px !important; letter-spacing: .12em; text-shadow: none !important; order: 9; }
+html body main.shell[data-app] .oss-flat .oss-wallet-bar { position: static !important; left: auto; top: auto; width: 100%; height: auto; order: 7; }
+html body main.shell[data-app] .oss-flat .oss-pill { position: static !important; left: auto !important; top: auto !important; width: 100% !important; height: auto; background: #08110b; border: 1px solid rgba(141,255,90,.16); border-radius: 12px; padding: 9px 12px; order: 6; }
+html body main.shell[data-app] .oss-flat .oss-pill::before { position: static; display: block; text-align: left; top: auto; margin-bottom: 3px; }
+/* --- volume flat (only the templated upper block; .ovs-below is already clean flow) --- */
+html body main.shell[data-app] .ovs-flat .ovs-ca { position: static !important; left: auto; top: auto; width: 100%; height: auto; padding: 11px 12px !important; background: #08110b; border: 1px solid rgba(141,255,90,.16); border-radius: 12px; font-size: 13px !important; }
+html body main.shell[data-app] .ovs-flat .ovs-invest, html body main.shell[data-app] .ovs-flat .ovs-duration { position: static !important; left: auto; top: auto; width: 100%; height: auto; background: #08110b; border: 1px solid rgba(141,255,90,.16); border-radius: 12px; padding: 11px 12px; }
+html body main.shell[data-app] .ovs-flat .ovs-mode, html body main.shell[data-app] .ovs-flat .ovs-aggr { position: static !important; left: auto; top: auto; width: 100%; height: auto; }
+html body main.shell[data-app] .ovs-flat .ovs-mlabel-field { position: static !important; left: auto; top: auto; display: block; font-size: 10px; letter-spacing: .6px; color: #7fae74; text-transform: uppercase; margin: 2px 0 -2px; }
+html body main.shell[data-app] .ovs-flat .ovs-mlabel:not(.ovs-mlabel-field) { display: none; }
+html body main.shell[data-app] .ovs-flat .ovs-stage::after { display: none; }
+
 @media (prefers-reduced-motion: reduce){
   .ogre-stage .os-led,.ogre-stage.swap .os-orb,.ogre-stage.swap .os-shield.avoid,.ogre-stage.volume .ov-orb,.ogre-spin,.ogre-spin::after{animation:none !important;}
 }
