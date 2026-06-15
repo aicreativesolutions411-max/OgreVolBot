@@ -830,7 +830,18 @@ const autopilotEngine = createAutopilotEngine({
       priority: true,
       userId: `autopilot:${autopilotWalletRecord.ownerId}`
     });
-    return { ok: true, tokenAmount: res.tokenDeltaAmount || res.outputAmount || null, signature: res.signature };
+    // CONFIRM the buy actually delivered tokens before the engine opens a position.
+    // tokenDeltaAmount is the REAL measured balance increase (retried ~10s); if it's
+    // null/0 the tokens never landed, so report failure instead of falling back to the
+    // EXPECTED outputAmount. Falling back was the phantom source: a buy that didn't
+    // deliver still "opened" and rode a marked price it never owned (the "deep" case).
+    let delta = null;
+    try { delta = res && res.tokenDeltaAmount != null ? BigInt(res.tokenDeltaAmount) : null; } catch { delta = null; }
+    if (delta == null || delta <= 0n) {
+      console.warn(`[autopilot] buy ${shortMint(mint)} did not deliver tokens — skipping (no phantom position).`);
+      return { ok: false, error: "buy delivered no tokens", signature: res && res.signature };
+    }
+    return { ok: true, tokenAmount: res.tokenDeltaAmount, signature: res.signature };
   },
   sellPercent: async (mint, pct) => {
     if (!autopilotWalletRecord) throw new Error("autopilot wallet not resolved");
