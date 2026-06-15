@@ -672,10 +672,22 @@ export function createAutopilotEngine(deps) {
         const peakGain = (state.peakTotal || state.start) - state.start;
         if (peakGain >= state.start * 0.08) {
           const floor = state.start + peakGain * 0.5; // give back at most half the gain
-          if (totalEq <= floor) {
+          // CRITICAL: only bank-and-STOP when we're genuinely still GREEN. A peak can
+          // be an UNREALIZED mark-to-market spike on an open position (a fast pump that
+          // reverts before the sell fills, or a bad price tick). If that round-trips we
+          // must NEVER shut a green-targeted session down at a LOSS while calling it
+          // "locked gains" — that banked nothing and ended the run early. When the
+          // giveback lands below +3%, keep trading; the loss cap handles real downside.
+          if (totalEq <= floor && totalEq >= state.start * 1.03) {
             record("info", `🔒 Locked gains: peak +${round((state.peakTotal / state.start - 1) * 100, 1)}% → banked +${round((totalEq / state.start - 1) * 100, 1)}% (don't give back a green session).`);
             await stop("locked-gains");
             return;
+          }
+          // Peak was unrealized and round-tripped to ~flat/red — don't end the session
+          // on it. Re-anchor the peak to the current level so we don't sit permanently
+          // armed off a phantom spike; the loss cap still guards the downside.
+          if (totalEq < state.start * 1.03 && state.peakTotal > state.start * 1.10) {
+            state.peakTotal = Math.max(totalEq, state.start);
           }
         }
       }
@@ -822,9 +834,14 @@ export function createAutopilotEngine(deps) {
         // it off at 10s was booking full-size losses (e.g. -0.03) on coins whose tokens
         // we actually hold, just hadn't indexed yet — one of those wipes ~6-8 small
         // wins. Give a fresh buy up to 30s to become readable before writing it off.
-        if (noBalance && ageMs < 30_000) return;        // young: buy still settling/indexing, keep retrying
+        // A position we've EVER held in profit (or already partially sold) definitely
+        // has tokens — a "no token balance" there is a transient RPC/settle read, NOT
+        // a real loss. NEVER write off a winner over a flaky balance read: keep
+        // retrying so a spiking runner's profit-take actually goes off.
+        const everReal = pos.countedWin || (pos.realized || 0) > 0 || (pos.peakPct || 0) >= 20;
+        if (noBalance && (ageMs < 30_000 || everReal)) return; // young buy settling OR a real position we hold → retry
         if (!noBalance && pos.sellFails < 8) return;    // other transient errors: more retries before giving up
-        failedTerminal = true;                          // persistent / genuinely no tokens → write off + free slot
+        failedTerminal = true;                          // persistent + never-real (failed buy) → write off + free slot
       }
     }
 
