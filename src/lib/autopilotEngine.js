@@ -158,12 +158,19 @@ export function freshScore(row) {
 // pro — size scales with confluence: proven dev + heavy buy flow + freshness +
 // strong score → bigger; marginal/risky → smaller. Bounded; final size still
 // clamped to the per-trade ceiling by the caller.
-export function convictionMult(row, rep) {
+export function convictionMult(row, rep, sm) {
   let c = 1.0;
   if (rep) {
     if (rep.runners >= 2 && rep.rugs === 0) c += 0.4;        // proven runner-dev
     else if (rep.runners >= 1 && rep.rugs === 0) c += 0.2;   // promising
     else if (rep.rugs >= 1 && rep.runners === 0) c -= 0.3;   // rug-leaning
+  }
+  // SMART MONEY: proven-winner wallets or tracked KOLs already aping this coin.
+  // Bonus signal only — boosts conviction, never gates entry. Bonded, never huge.
+  if (sm) {
+    if (sm.kol) c += 0.3;                                    // a tracked KOL is in early buyers
+    if (sm.winners >= 2) c += 0.3;                           // multiple proven winners aping
+    else if (sm.winners >= 1) c += 0.2;                      // one proven winner aping
   }
   const buys = Number(row.buys5m) || 0;
   const sells = Number(row.sells5m) || 0;
@@ -178,7 +185,10 @@ export function convictionMult(row, rep) {
   // ABOVE base for a dev with a PROVEN runner history (and no rugs). Unknown/unproven
   // coins are capped at 1.0x so one instant-rug can't blow a big bet (the log showed
   // 0.045 SOL = 18% bets on fresh coins gapping -37% past the stop).
-  const proven = rep && rep.runners >= 1 && rep.rugs === 0;
+  // Allow sizing ABOVE base for a proven runner-dev OR a strong smart-money read
+  // (a tracked KOL, or multiple proven-winner wallets in the early buyers). Lone
+  // unproven coins stay capped at 1.0x so one instant-rug can't blow a big bet.
+  const proven = (rep && rep.runners >= 1 && rep.rugs === 0) || (sm && (sm.kol || sm.winners >= 2));
   return Math.max(0.5, Math.min(proven ? 1.6 : 1.0, c));
 }
 
@@ -399,6 +409,9 @@ export function createAutopilotEngine(deps) {
     onBigWin = () => {},
     getDevWallet = () => null,
     devReputation = () => null,
+    smartMoney = () => null,
+    smartMoneyReady = () => false,
+    smartMoneyFeed = async () => [],
     recordTrade = () => {},
     exitMs = 1000,
     huntMs = 5000
@@ -922,8 +935,12 @@ export function createAutopilotEngine(deps) {
         record("info", `⛔ skip ${cand.r.symbol} — dev rugged ${rep.rugs}x before`);
         continue;
       }
-      // Conviction = confluence of proven-dev rep + buy flow + freshness + score.
-      const conv = convictionMult(cand.r, rep);
+      // Smart-money read — proven-winner wallets / tracked KOLs in the early buyers.
+      // Bonus signal: it only bumps conviction, it never gates entry (main scan rules).
+      const sm = smartMoney ? smartMoney(cand.r.tokenMint) : null;
+      // Conviction = confluence of proven-dev rep + buy flow + freshness + score + smart money.
+      const conv = convictionMult(cand.r, rep, sm);
+      if (sm) record("info", `🐳 smart money on ${cand.r.symbol} — ${sm.kol ? "KOL " : ""}${sm.winners || 0} winner-wallet(s) → conv ${conv.toFixed(2)}`);
       // ADAPTIVE QUALITY GATE (smarter picks): when the tape is risky, take ONLY the
       // highest-confluence setups; stay permissive when it's hot/warming so runners
       // aren't missed. This is what makes it "best picks per situation" instead of
@@ -936,6 +953,40 @@ export function createAutopilotEngine(deps) {
       state.lastOpenAt = now();
       openedThisCycle += 1;
       if (openedThisCycle >= perCycle) break;            // don't machine-gun the whole feed at once
+    }
+
+    // SELF-ACTIVATING SMART-MONEY ENTRIES — no toggle. Once the wallet observatory
+    // has built up enough proven-winner history on its OWN (paper feeds it 24/7),
+    // the bot ALSO starts taking follow plays on coins that tracked winner-wallets /
+    // KOLs are buying right now — including ones the fresh-ape scan never surfaced
+    // (e.g. higher-MC coins past the freshness gate). Works in paper AND live. The
+    // main fresh scan above is completely unchanged; these are pure bonus entries,
+    // and every smart-money position still rides the same rug/stop/trailing exits.
+    if (smartMoneyReady() && state.open.length < maxNow && openedThisCycle < perCycle) {
+      let smRows = [];
+      try { smRows = await smartMoneyFeed(); } catch (e) { record("warn", `smart-money feed: ${e && e.message}`); }
+      for (const r of (smRows || [])) {
+        if (state.stopped || now() >= state.endAt) break;
+        if (state.open.length >= maxNow) break;
+        if (openedThisCycle >= perCycle) break;
+        if (!r || !r.tokenMint || held.has(r.tokenMint)) continue;
+        if ((state.coinLosses[r.tokenMint] || 0) >= 2) continue; // don't re-ape a repeat loser
+        const last = state.recentSells[r.tokenMint];
+        if (last && now() - last < 45_000) continue;             // wave cooldown
+        const dev = getDevWallet(r.tokenMint);
+        const rep = dev ? devReputation(dev) : null;
+        if (rep && rep.rugs >= 2 && rep.runners === 0) continue;  // dev rug history still vetoes
+        const sm = r._smartMoney || (smartMoney ? smartMoney(r.tokenMint) : null);
+        if (!sm || !(sm.kol || sm.winners >= 1)) continue;
+        const conv = convictionMult(r, rep, sm);
+        if (conv < 1.0) continue;                                 // must carry real smart-money confluence
+        let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv, state.maxTradeSol));
+        if (!canOpen(state, size)) break;
+        record("info", `🐳 smart-money entry ${r.symbol || shortMint(r.tokenMint)} @ MC $${Math.round(Number(r.marketCap) || 0)} — ${sm.kol ? "KOL " : ""}${sm.winners || 0} winner-wallet(s) → conv ${conv.toFixed(2)}`);
+        await openPosition(r, size, freshScore(r), dev, rep);
+        state.lastOpenAt = now();
+        openedThisCycle += 1;
+      }
     }
   }
 

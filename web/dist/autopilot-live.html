@@ -43,8 +43,14 @@
 </style>
 </head>
 <body>
-  <h1>🤖 Live Autopilot <span id="modePill" class="pill">paper</span></h1>
-  <div class="sub">Private control panel · tied to this browser's wallet · no login. Fund a dedicated wallet, set an amount, run it. It trades in the background on the server even if you close this page.</div>
+  <h1>🤖 Live Autopilot <span id="modePill" class="pill">paper</span> <span id="ownerPill" class="pill hidden" style="background:#1a2a14;color:#8dff5a">OWNER</span></h1>
+  <div class="sub">Owner control panel — full logs, stats &amp; controls. Trades in the background on the server even if you close this page.</div>
+
+  <div class="card" style="padding:10px 12px">
+    <label style="margin:0 0 4px">Owner key (unlocks the full panel)</label>
+    <div class="row"><div style="flex:3"><input type="password" id="ownerKeyInput" placeholder="paste your AUTOPILOT_OWNER_KEY" autocomplete="off" /></div><div><button class="b-ghost" id="ownerKeySave">Save</button></div></div>
+    <div id="ownerKeyMsg" class="muted" style="margin-top:5px"></div>
+  </div>
 
   <div id="boot" class="card">Connecting…</div>
 
@@ -119,12 +125,16 @@
             <option value="1440">24 hours</option>
           </select>
         </div>
+        <div>
+          <label>Trades at once</label>
+          <input type="number" id="maxOpen" value="3" min="1" max="8" step="1" />
+        </div>
       </div>
+      <div class="muted" style="margin:2px 0 8px">🔒 Bank-the-peak is built in now — a green session auto-locks gains (won't bleed back) and it throttles itself in cold tape. No toggle needed.</div>
       <label class="chk"><input type="checkbox" id="useAll" /> Use the whole wallet balance (it sizes itself)</label>
       <label class="chk"><input type="checkbox" id="lowChurn" checked /> 🎯 Low-churn — patient: fewer, bigger, higher-conviction shots (win big, not every second)</label>
       <label class="chk"><input type="checkbox" id="useVault" /> 🏦 Profit vault — sweep gains above my stake to a safe wallet (keeps running 12h)</label>
       <input type="text" id="vaultDest" class="hidden" placeholder="vault wallet address (your Phantom / main)" autocomplete="off" />
-      <label class="chk"><input type="checkbox" id="profitLock" /> 🔒 Profit-lock — auto STOP &amp; cash out if I give back half my gains (after +5%)</label>
       <label>Aggression</label>
       <select id="mode">
         <option value="chill">Chill — smaller, pickier</option>
@@ -169,22 +179,53 @@
       <div id="wins"></div>
       <div class="muted" style="margin-top:6px">Every +300% runner makes a clean SlimeWire PnL card (also auto-posted to your Telegram). Download here to share on X.</div>
     </div>
+
+    <!-- ISSUE TEMPORARY ACCESS PASS -->
+    <div class="card">
+      <label>🎟️ Give someone temporary access</label>
+      <div class="muted" style="margin-bottom:8px">Mints a one-time code. They redeem it on the user app and get a budget of <b>active running time</b> (only ticks while their bot is actually running). When it's used up the bot auto-stops, flattens everything back to SOL, and they're offered: withdraw their SOL or pay for full access.</div>
+      <label>Minutes of run-time</label>
+      <input type="number" id="trialMins" value="60" min="1" max="1440" step="1" />
+      <button class="b-ghost" id="trialBtn" style="margin-top:8px">🎟️ Generate access code</button>
+      <div id="trialMsg" class="muted" style="margin-top:8px"></div>
+      <div id="trialCodes" style="margin-top:6px"></div>
+    </div>
   </div>
 
 <script>
 const API = (location.hostname.includes("onrender.com")||location.hostname==="localhost"||location.hostname==="127.0.0.1") ? "" : "https://ogrevolbot.onrender.com";
 let token = "";
 try { token = localStorage.getItem("ogreWebToken") || ""; } catch {}
+let ownerKey = ""; try { ownerKey = localStorage.getItem("apOwnerKey") || ""; } catch {}
 let wallets = [];
 
 async function api(path, opts={}) {
   const headers = { "content-type":"application/json" };
   if (token) headers.authorization = "Bearer " + token;
+  let url = API + path;
+  let options = { ...opts, headers };
+  if (ownerKey) {
+    if ((opts.method || "GET").toUpperCase() === "POST") {
+      try { const b = opts.body ? JSON.parse(opts.body) : {}; b.key = ownerKey; options.body = JSON.stringify(b); } catch {}
+    } else {
+      url += (url.includes("?") ? "&" : "?") + "key=" + encodeURIComponent(ownerKey);
+    }
+  }
   let r;
-  try { r = await fetch(API + path, { ...opts, headers }); }
+  try { r = await fetch(url, options); }
   catch (e) { return { ok:false, error:"network" }; }
   return r.json().catch(()=>({ ok:false, error:"bad-json" }));
 }
+(function(){
+  const i = document.getElementById("ownerKeyInput"); if (i) i.value = ownerKey;
+  const b = document.getElementById("ownerKeySave");
+  if (b) b.addEventListener("click", () => {
+    ownerKey = document.getElementById("ownerKeyInput").value.trim();
+    try { localStorage.setItem("apOwnerKey", ownerKey); } catch {}
+    document.getElementById("ownerKeyMsg").innerHTML = '<span class="ok">Saved — reloading…</span>';
+    setTimeout(() => location.reload(), 600);
+  });
+})();
 
 async function ensureAccount() {
   if (token) {
@@ -376,13 +417,6 @@ $("live").addEventListener("change", syncLiveUi);
 $("useAll").addEventListener("change", () => { $("amt").disabled = $("useAll").checked; });
 $("useVault").addEventListener("change", () => {
   $("vaultDest").classList.toggle("hidden", !$("useVault").checked);
-  // Vault and the session-ending profit-lock contradict each other — pick one.
-  if ($("useVault").checked) { $("profitLock").checked = false; $("profitLock").disabled = true; }
-  else { $("profitLock").disabled = false; }
-});
-$("profitLock").addEventListener("change", () => {
-  if ($("profitLock").checked) { $("useVault").checked = false; $("vaultDest").classList.add("hidden"); $("useVault").disabled = true; }
-  else { $("useVault").disabled = false; }
 });
 
 $("startBtn").addEventListener("click", async () => {
@@ -396,8 +430,8 @@ $("startBtn").addEventListener("click", async () => {
     live,
     sol: useAll ? "all" : Number($("amt").value),
     maxTradeSol: Number($("maxTrade").value) || undefined,
+    maxOpen: Number($("maxOpen").value) || undefined,
     lossCapPct: Number($("lossCap").value) || undefined,
-    profitLock: $("profitLock").checked,
     lowChurn: $("lowChurn").checked
   };
   if (w) body.wallet = w.index;
@@ -471,6 +505,34 @@ $("stopBtn").addEventListener("click", async () => {
   poll();
 });
 
+let TRIAL_CODES = [];
+$("trialBtn").addEventListener("click", async () => {
+  const mins = Math.max(1, Math.min(parseInt($("trialMins").value,10)||60, 1440));
+  $("trialBtn").textContent = "Generating…"; $("trialBtn").disabled = true; $("trialMsg").innerHTML = "";
+  const r = await api("/api/web/autopilot/trial", { method:"POST", body:JSON.stringify({ minutes: mins }) });
+  $("trialBtn").textContent = "🎟️ Generate access code"; $("trialBtn").disabled = false;
+  if (r && r.ok && r.code) {
+    const link = location.origin + "/pro?code=" + encodeURIComponent(r.code);
+    TRIAL_CODES.unshift({ code:r.code, mins:r.capMinutes, link });
+    $("trialMsg").innerHTML = '<span class="ok">✅ '+r.capMinutes+'-min pass created. Send them the link (or the code).</span>';
+    renderTrialCodes();
+  } else {
+    $("trialMsg").innerHTML = '<span class="warn">'+((r&&r.error)||"failed — are you the owner?")+'</span>';
+  }
+});
+function renderTrialCodes(){
+  $("trialCodes").innerHTML = TRIAL_CODES.map((t,i)=>
+    `<div class="pos"><span><b class="up">${t.code}</b> <span class="muted">${t.mins}m</span></span>`+
+    `<button class="b-ghost" style="width:auto;padding:6px 12px;font-size:12px" onclick="copyTrial(${i})">📋 copy link</button></div>`
+  ).join("");
+}
+async function copyTrial(i){
+  const t = TRIAL_CODES[i]; if(!t) return;
+  try { await navigator.clipboard.writeText(t.link); $("trialMsg").innerHTML='<span class="ok">📋 link copied</span>'; }
+  catch { $("trialMsg").innerHTML='<span class="muted">'+t.link+'</span>'; }
+}
+window.copyTrial = copyTrial;
+
 function fmtPnl(p) {
   const s = (p>=0?"+":"") + (p==null?"—":p.toFixed(2)+"%");
   return `<span class="${p>=0?'up':'down'}">${s}</span>`;
@@ -520,9 +582,20 @@ async function dlWin(i){
 }
 window.dlWin = dlWin;
 
+function lockOut(msg) {
+  $("app").classList.add("hidden");
+  $("boot").classList.remove("hidden");
+  $("boot").innerHTML = '🔒 <b>Owner access only.</b><br><span class="muted" style="display:inline-block;margin-top:6px">' + msg + '</span>';
+}
+// Your KEY is your login — no site login to remember. Paste it once (saved in this
+// browser) and you're in, on any device. It maps to one stable owner identity so
+// your wallets always follow the key.
 (async function boot() {
-  const ok = await ensureAccount();
-  if (!ok) { $("boot").innerHTML = '<span class="warn">Could not start a session. Reload, or open the main terminal once.</span>'; return; }
+  if (!ownerKey) { lockOut("Paste your owner key in the box above and hit Save to unlock."); return; }
+  const r = await api("/api/web/autopilot/key-login", { method: "POST", body: JSON.stringify({ key: ownerKey }) });
+  if (!(r && r.ok && r.token && r.owner)) { lockOut("That owner key didn’t match — check it and Save again above."); return; }
+  token = r.token; try { localStorage.setItem("ogreWebToken", token); } catch {}
+  $("ownerPill").classList.remove("hidden");
   $("boot").classList.add("hidden");
   $("app").classList.remove("hidden");
   syncLiveUi();

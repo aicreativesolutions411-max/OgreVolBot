@@ -26,6 +26,16 @@
   .pill.raid{border-color:rgba(255,120,80,0.45);} .pill.raid.live{color:#ff9a7e; border-color:#ff7a5e; box-shadow:0 0 12px rgba(255,90,40,0.4);}
   .hpwrap{height:7px; border-radius:99px; background:rgba(255,90,80,0.12); overflow:hidden; border:1px solid rgba(255,120,80,0.3); max-width:620px; margin:6px auto 0;}
   .hpfill{height:100%; width:100%; background:linear-gradient(90deg,#ff5e5e,#ffd84d 70%,#72ff23); transition:width .18s;}
+  .heatwrap{position:relative; height:6px; border-radius:99px; background:rgba(70,232,255,0.08); overflow:hidden; border:1px solid rgba(70,232,255,0.24); max-width:620px; margin:4px auto 0;}
+  .heatfill{height:100%; width:0%; background:linear-gradient(90deg,#46e8ff,#bbff63 70%,#ffd24a); transition:width .1s linear;}
+  .heatwrap.hot{border-color:rgba(255,94,94,0.6); box-shadow:0 0 12px rgba(255,94,94,0.22);}
+  .heatwrap.hot .heatfill{background:linear-gradient(90deg,#ffd24a,#ff7a5e,#ff5e5e);}
+  .ragewrap{border-color:rgba(176,107,255,0.34); background:rgba(176,107,255,0.08);}
+  .ragefill{background:linear-gradient(90deg,#46e8ff,#b06bff 55%,#ffd24a);}
+  .ragewrap.ready{border-color:rgba(255,210,74,0.72); box-shadow:0 0 14px rgba(255,210,74,0.24);}
+  .ragewrap.ready .ragefill{background:linear-gradient(90deg,#ffd24a,#ff7a5e,#72ff23);}
+  .ragewrap.live{border-color:rgba(114,255,35,0.86); box-shadow:0 0 18px rgba(114,255,35,0.35);}
+  .heatlabel{position:absolute; right:7px; top:50%; transform:translateY(-50%); font-size:0.48rem; line-height:1; font-weight:900; color:rgba(234,255,224,0.78); text-shadow:0 1px 2px #000; letter-spacing:0.5px;}
   #runHud{ position:fixed; top:calc(8px + env(safe-area-inset-top)); left:50%; transform:translateX(-50%); z-index:8; display:none; text-align:center; pointer-events:none; }
   #runHud.on{ display:block; }
   .rhrow{ font-weight:900; font-size:1rem; color:#fff; text-shadow:0 2px 6px #000; background:rgba(0,0,0,0.45); padding:4px 14px; border-radius:12px; border:1px solid rgba(255,94,94,0.4); }
@@ -38,19 +48,45 @@
   .quest{margin:6px auto 0; max-width:560px; font-size:0.82rem; font-weight:800; color:#ffe9a8; text-align:center; text-shadow:0 1px 3px #000; background:rgba(0,0,0,0.32); border:1px solid rgba(255,210,74,0.3); border-radius:10px; padding:4px 12px;}
   .eventline{display:none; margin:5px auto 0; max-width:500px; font-size:0.72rem; font-weight:900; color:#eaffe0; text-align:center; text-shadow:0 1px 3px #000; background:rgba(8,20,10,0.52); border:1px solid rgba(70,232,255,0.32); border-radius:999px; padding:3px 11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
   .eventline.on{display:block;}
-  .radar{position:absolute; left:12px; bottom:calc(14px + env(safe-area-inset-bottom)); width:142px; pointer-events:none; z-index:6; background:rgba(8,20,10,0.66); border:1px solid rgba(114,255,35,0.28); border-radius:12px; padding:7px; box-shadow:0 5px 18px rgba(0,0,0,0.35); backdrop-filter:blur(4px);}
+  .targetplate{display:none; margin:5px auto 0; max-width:430px; background:rgba(8,20,10,0.7); border:1px solid rgba(255,94,94,0.34); border-radius:12px; padding:5px 10px; box-shadow:0 5px 18px rgba(0,0,0,0.28);}
+  .targetplate.on{display:block;}
+  .targetrow{display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:0.68rem; line-height:1; font-weight:900; color:#eaffe0; text-shadow:0 1px 3px #000;}
+  .targetrow .tn{min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .targetrow .ti{color:#ff9a7e; letter-spacing:0.8px; text-transform:uppercase;}
+  .targethp{height:5px; border-radius:99px; background:rgba(255,94,94,0.18); overflow:hidden; margin-top:5px;}
+  .targethp div{height:100%; width:0%; background:linear-gradient(90deg,#ff5e5e,#ffd24a); transition:width .12s linear;}
+  .radar{position:absolute; left:12px; bottom:calc(14px + env(safe-area-inset-bottom)); width:168px; pointer-events:auto; cursor:pointer; z-index:6; background:rgba(8,20,10,0.72); border:1px solid rgba(114,255,35,0.32); border-radius:12px; padding:7px; box-shadow:0 5px 18px rgba(0,0,0,0.35); backdrop-filter:blur(4px);}
   .radar .rt{font-size:0.64rem; font-weight:900; color:#bbff63; text-transform:uppercase; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
   .radar .rs{font-size:0.62rem; color:#dbe6f2; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
-  .radar .map{position:relative; width:100%; height:72px; margin-top:6px; border-radius:9px; background:radial-gradient(circle at 50% 50%,rgba(114,255,35,0.16),rgba(0,0,0,0.4)); border:1px solid rgba(114,255,35,0.18); overflow:hidden;}
+  .radar .map{position:relative; width:100%; height:94px; margin-top:6px; border-radius:9px; background:linear-gradient(rgba(114,255,35,0.05) 1px,transparent 1px),linear-gradient(90deg,rgba(114,255,35,0.05) 1px,transparent 1px),radial-gradient(circle at 50% 50%,rgba(114,255,35,0.16),rgba(0,0,0,0.44)); background-size:25% 25%,25% 25%,100% 100%; border:1px solid rgba(114,255,35,0.18); overflow:hidden;}
   .radar .dot{position:absolute; width:6px; height:6px; border-radius:50%; transform:translate(-50%,-50%); background:#9dff45; box-shadow:0 0 8px currentColor;}
   .radar .dot.p{width:7px; height:7px; background:#fff; color:#fff;}
   .radar .dot.b{background:#46e8ff; color:#46e8ff;}
   .radar .dot.c{background:#ffd24a; color:#ffd24a;}
   .radar .dot.m{background:#ff7a5e; color:#ff7a5e;}
   .radar .dot.g{background:#c8a06a; color:#c8a06a;}
-  @media(max-width:520px){.radar{width:118px; left:8px; bottom:calc(10px + env(safe-area-inset-bottom)); padding:6px;}.radar .map{height:58px}.radar .rt{font-size:0.58rem}.radar .rs{font-size:0.56rem}}
+  .radar .dot.t{width:10px; height:10px; background:#ffd24a; color:#ffd24a; border:2px solid #fff; animation:radarpulse 1.1s ease-in-out infinite;}
+  .radar .dot.a{width:6px; height:6px; background:#46e8ff; color:#46e8ff; border:1px solid #dffbff;}
+  .radar .dot.boss{width:10px; height:10px; background:#ff5e5e; color:#ff5e5e; border:1px solid #ffd0c8;}
+  @keyframes radarpulse{0%,100%{transform:translate(-50%,-50%) scale(1);}50%{transform:translate(-50%,-50%) scale(1.45);}}
+  .mapPanel{max-width:min(780px,96vw)!important;}
+  .fullmap{position:relative; aspect-ratio:1.25; min-height:280px; margin-top:10px; border-radius:16px; overflow:hidden; border:1px solid rgba(114,255,35,0.28); background:linear-gradient(rgba(114,255,35,0.055) 1px,transparent 1px),linear-gradient(90deg,rgba(114,255,35,0.055) 1px,transparent 1px),radial-gradient(circle at 50% 50%,rgba(70,232,255,0.12),rgba(0,0,0,0.54)); background-size:8% 8%,8% 8%,100% 100%; box-shadow:inset 0 0 60px rgba(0,0,0,0.42);}
+  .fullmap .mdot{position:absolute; width:11px; height:11px; border-radius:50%; transform:translate(-50%,-50%); background:#9dff45; color:#9dff45; box-shadow:0 0 10px currentColor,0 0 0 2px rgba(0,0,0,0.45); cursor:pointer;}
+  .fullmap .mdot.p{width:14px;height:14px;background:#fff;color:#fff;z-index:5;}
+  .fullmap .mdot.b{background:#46e8ff;color:#46e8ff;}
+  .fullmap .mdot.c{background:#ffd24a;color:#ffd24a;}
+  .fullmap .mdot.m{background:#ff7a5e;color:#ff7a5e;}
+  .fullmap .mdot.g{background:#c8a06a;color:#c8a06a;}
+  .fullmap .mdot.a{background:#46e8ff;color:#46e8ff;border:2px solid #dffbff;}
+  .fullmap .mdot.boss{width:16px;height:16px;background:#ff5e5e;color:#ff5e5e;border:2px solid #ffd0c8;}
+  .fullmap .mdot.t{width:18px;height:18px;background:#ffd24a;color:#ffd24a;border:2px solid #fff;animation:radarpulse 1.1s ease-in-out infinite;}
+  .fullmap .mlabel{position:absolute; left:50%; top:15px; transform:translateX(-50%); max-width:110px; padding:2px 5px; border-radius:8px; background:rgba(0,0,0,0.48); color:#eaffe0; font-size:0.58rem; font-weight:900; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; pointer-events:none;}
+  .maplegend{display:flex; flex-wrap:wrap; gap:6px; margin-top:9px; color:var(--dim); font-size:0.72rem; font-weight:800;}
+  .maplegend span{background:rgba(8,20,10,0.58); border:1px solid rgba(114,255,35,0.16); border-radius:99px; padding:4px 8px;}
+  @media(max-width:520px){.targetplate{max-width:330px;padding:4px 9px}.targetrow{font-size:0.62rem}.radar{width:132px; left:8px; bottom:calc(10px + env(safe-area-inset-bottom)); padding:6px;}.radar .map{height:68px}.radar .rt{font-size:0.58rem}.radar .rs{font-size:0.56rem}}
   .topbtns{position:absolute; top:calc(8px + env(safe-area-inset-top)); right:10px; display:flex; gap:6px; z-index:7;}
-  .tbtn{pointer-events:auto; background:rgba(8,20,10,0.85); border:1px solid rgba(114,255,35,0.3); color:#eaffe0; border-radius:99px; width:36px; height:36px; font-weight:800; cursor:pointer; font-size:1rem;}
+  .tbtn{pointer-events:auto; background:rgba(8,20,10,0.85); border:1px solid rgba(114,255,35,0.3); color:#eaffe0; border-radius:99px; width:36px; height:36px; font-weight:800; cursor:pointer; font-size:0.72rem;}
+  .tbtn.ready{border-color:rgba(255,210,74,0.82); color:#ffd24a; box-shadow:0 0 14px rgba(255,210,74,0.26);}
   .joy{position:absolute; width:130px; height:130px; border-radius:50%; pointer-events:none; opacity:0; transition:opacity .12s; z-index:6;
     background:radial-gradient(circle, rgba(114,255,35,0.10), transparent 70%); border:2px solid rgba(114,255,35,0.25);}
   .joy.on{opacity:1;} .joy .nub{position:absolute; left:50%; top:50%; width:54px; height:54px; border-radius:50%; transform:translate(-50%,-50%);
@@ -78,9 +114,9 @@
     padding:22px; overflow-y:auto; -webkit-overflow-scrolling:touch;
     background:linear-gradient(rgba(4,4,14,0.62),rgba(4,4,14,0.9)), url('/assets/slimewire/swamp/art/survivors-hero.jpg') center/cover no-repeat;}
   .overlay.on{display:flex;}
-  .sheet{position:fixed; inset:0; z-index:11; display:none; align-items:flex-end; justify-content:center; }
+  .sheet{position:fixed; inset:0; z-index:11; display:none; align-items:flex-end; justify-content:center; background:rgba(0,0,0,0.18); }
   .sheet.on{display:flex;}
-  .sheet .panel{width:100%; max-width:560px; max-height:92vh; overflow-y:auto; background:linear-gradient(180deg,#0b1f12,#060f09); border:1px solid rgba(114,255,35,0.3); border-radius:20px 20px 0 0; padding:18px 16px calc(20px + env(safe-area-inset-bottom)); box-shadow:0 -10px 40px rgba(0,0,0,0.6);}
+  .sheet .panel{position:relative; width:100%; max-width:560px; max-height:92dvh; overflow-y:auto; background:linear-gradient(180deg,#0b1f12,#060f09); border:1px solid rgba(114,255,35,0.3); border-radius:20px 20px 0 0; padding:18px 16px calc(20px + env(safe-area-inset-bottom)); box-shadow:0 -10px 40px rgba(0,0,0,0.6);}
   .logo{width:clamp(220px,60vw,380px); height:auto; filter:drop-shadow(0 0 26px rgba(114,255,35,0.45)) drop-shadow(0 8px 18px rgba(0,0,0,0.8));}
   .overlay h1{font-family:Cinzel,serif; font-size:clamp(1.7rem,8vw,2.8rem); margin:6px 0 0; text-shadow:0 0 24px rgba(114,255,35,0.6);}
   .tag{color:var(--green2); font-weight:800; letter-spacing:3px; font-size:0.72rem; margin:2px 0 6px; text-transform:uppercase;}
@@ -179,9 +215,44 @@
   .dcard.e4 .evo{animation:evoPulse 1.6s ease-in-out infinite;}
   .sheet h2{font-family:Cinzel,serif; margin:0 0 2px; font-size:1.4rem;}
   .sheet .sub{color:var(--dim); font-size:0.8rem; margin-bottom:6px;}
-  .closeX{position:absolute; top:10px; right:12px; background:none; border:0; color:#eaffe0; font-size:1.5rem; cursor:pointer; pointer-events:auto;}
+  .closeX{position:sticky; top:4px; float:right; z-index:4; width:38px; height:38px; display:inline-flex; align-items:center; justify-content:center; background:rgba(8,20,10,0.88); border:1px solid rgba(114,255,35,0.34); color:#eaffe0; border-radius:50%; font-size:1.35rem; cursor:pointer; pointer-events:auto; box-shadow:0 4px 14px rgba(0,0,0,0.45);}
   .modalCTAs{display:flex; flex-direction:column; gap:8px; margin-top:10px;}
   .modalCTAs a,.modalCTAs button{display:block; text-decoration:none; text-align:center; border-radius:12px; padding:13px; font-weight:900; border:0; cursor:pointer; font-size:0.95rem;}
+  .beamPanel{max-width:620px!important;}
+  .beamHero{border:1px solid rgba(70,232,255,0.26); border-radius:14px; padding:12px; margin:10px 0; background:radial-gradient(circle at 15% 20%,rgba(70,232,255,0.16),transparent 42%),linear-gradient(135deg,rgba(8,30,18,0.92),rgba(6,14,10,0.96));}
+  .beamHero b{color:#bbff63}.beamHero small{display:block;color:var(--dim);font-weight:800;line-height:1.35;margin-top:5px}
+  .beamScanner{display:none; position:relative; border:1px solid rgba(114,255,35,0.24); border-radius:14px; overflow:hidden; min-height:160px; background:#020805; margin:10px 0;}
+  .beamScanner.on{display:block}.beamScanner video{display:block;width:100%;max-height:280px;object-fit:cover;background:#020805}
+  .beamScanner:after{content:""; position:absolute; inset:18%; border:2px solid rgba(187,255,99,0.72); border-radius:12px; box-shadow:0 0 0 999px rgba(0,0,0,0.28),0 0 24px rgba(114,255,35,0.4); pointer-events:none;}
+  .beamInput{width:100%; border:1px solid rgba(114,255,35,0.35); background:rgba(0,0,0,0.45); color:#eaffe0; border-radius:12px; padding:13px 12px; font-weight:900; font-size:0.95rem; outline:none;}
+  .beamInput:focus{border-color:var(--green); box-shadow:0 0 0 2px rgba(114,255,35,0.14)}
+  .beamLabel{display:block; color:var(--dim); font-size:0.72rem; font-weight:900; margin:9px 0 5px; text-transform:uppercase; letter-spacing:0.7px}
+  .beamMsg{min-height:24px; margin-top:8px; color:#ffe9a8; font-size:0.78rem; font-weight:850; line-height:1.35}
+  .beamStats{display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; margin-top:8px}
+  .beamStat{border:1px solid rgba(114,255,35,0.18); background:rgba(8,20,10,0.58); border-radius:11px; padding:8px}
+  .beamStat span{display:block;color:var(--dim);font-size:0.62rem;font-weight:900;text-transform:uppercase}.beamStat b{display:block;font-size:0.9rem;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .dcard.beam{box-shadow:0 0 18px rgba(70,232,255,0.12), inset 0 0 18px rgba(70,232,255,0.05);}
+  .dcard .beamtag{position:absolute; top:3px; right:4px; font-size:0.52rem; font-weight:900; color:#46e8ff; letter-spacing:0.5px;}
+  .nftPanel{max-width:680px!important;}
+  .nftHero{display:grid; grid-template-columns:76px 1fr; gap:12px; align-items:center; border:1px solid rgba(255,210,74,0.28); border-radius:14px; padding:12px; margin:10px 0; background:radial-gradient(circle at 15% 20%,rgba(255,210,74,0.16),transparent 42%),linear-gradient(135deg,rgba(8,30,18,0.92),rgba(6,14,10,0.96));}
+  .nftHero img{width:76px;height:76px;object-fit:contain;filter:drop-shadow(0 8px 18px rgba(0,0,0,0.65));}
+  .nftHero b{display:block;color:#ffd24a;font-size:1rem}.nftHero small{display:block;color:var(--dim);font-weight:800;line-height:1.35;margin-top:4px}
+  .walletLine{display:flex;align-items:center;justify-content:space-between;gap:8px;background:rgba(8,20,10,0.58);border:1px solid rgba(114,255,35,0.2);border-radius:12px;padding:10px;margin:8px 0;color:#dfffd6;font-weight:900;font-size:0.82rem}
+  .walletLine span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.walletLine em{font-style:normal;color:var(--dim);font-size:0.72rem}
+  .nftGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(126px,1fr));gap:8px;margin-top:10px}
+  .nftCard{position:relative;min-height:156px;background:rgba(8,20,10,0.68);border:1px solid rgba(114,255,35,0.2);border-radius:13px;padding:8px;cursor:pointer;text-align:center;overflow:hidden}
+  .nftCard.sel{border-color:var(--gold);box-shadow:0 0 0 2px rgba(255,210,74,0.35),0 0 18px rgba(255,210,74,0.22)}
+  .nftCard img{width:86px;height:86px;object-fit:contain;filter:drop-shadow(0 8px 18px rgba(0,0,0,0.65))}
+  .nftCard b{display:block;color:#eaffe0;font-size:0.78rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.nftCard small{display:block;color:var(--dim);font-size:0.62rem;font-weight:800;line-height:1.25;margin-top:3px}
+  .nftTag{position:absolute;top:6px;right:6px;color:#061006;background:var(--green2);border-radius:99px;padding:2px 6px;font-size:0.5rem;font-weight:900;letter-spacing:.4px}
+  .nftMsg{min-height:24px;margin-top:8px;color:#ffe9a8;font-size:0.78rem;font-weight:850;line-height:1.35}
+  .champIntro{position:fixed;inset:0;z-index:13;display:none;align-items:center;justify-content:center;pointer-events:none;background:radial-gradient(circle at 50% 42%,rgba(114,255,35,0.16),transparent 36%),rgba(0,0,0,0.45);}
+  .champIntro.on{display:flex;animation:champFade 1.55s ease-out forwards}.champCard{width:min(420px,86vw);text-align:center;transform-origin:center;}
+  .champCard img{width:min(270px,68vw);height:min(270px,68vw);object-fit:contain;filter:drop-shadow(0 18px 38px rgba(0,0,0,0.85)) drop-shadow(0 0 30px rgba(114,255,35,0.45));}
+  .champCard b{display:block;font-family:Cinzel,serif;font-size:clamp(1.35rem,7vw,2.3rem);color:#fff;text-shadow:0 0 22px rgba(114,255,35,0.75),0 3px 8px #000}.champCard span{display:block;color:#ffd24a;font-weight:900;text-shadow:0 2px 6px #000}
+  @keyframes champFade{0%{opacity:0}14%{opacity:1}82%{opacity:1}100%{opacity:0}} @keyframes champZoom{0%{transform:scale(1.18)}100%{transform:scale(0.86)}}
+  .champIntro.on .champCard{animation:champZoom 1.55s ease-out forwards}
+  @media(max-width:480px){.nftHero{grid-template-columns:62px 1fr}.nftHero img{width:62px;height:62px}.nftGrid{grid-template-columns:repeat(2,minmax(0,1fr))}.nftCard{min-height:142px}.nftCard img{width:72px;height:72px}.topbtns{gap:4px}.tbtn{width:34px;height:34px;font-size:0.65rem}}
   .toast{position:fixed; left:50%; bottom:calc(120px + env(safe-area-inset-bottom)); transform:translateX(-50%); z-index:12; background:rgba(8,20,10,0.94);
     border:1px solid rgba(114,255,35,0.45); color:#eaffe0; font-weight:800; padding:9px 18px; border-radius:99px; opacity:0; transition:opacity .25s; pointer-events:none; font-size:0.84rem; text-align:center; max-width:88vw;}
   .toast.on{opacity:1;}
@@ -209,13 +280,19 @@
         <span class="pill res" id="resp">🪵0</span>
       </div>
       <div class="hpwrap"><div class="hpfill" id="hpbar"></div></div>
+      <div class="heatwrap" id="heatwrap"><div class="heatfill" id="heatbar"></div><span class="heatlabel" id="heatlabel">HEAT</span></div>
+      <div class="heatwrap ragewrap" id="ragewrap"><div class="heatfill ragefill" id="ragebar"></div><span class="heatlabel" id="ragelabel">RAGE</span></div>
       <div class="quest" id="quest"></div>
       <div class="eventline" id="eventLine"></div>
+      <div class="targetplate" id="targetPlate"><div class="targetrow"><span class="tn" id="targetName">Target</span><span class="ti" id="targetIntent">Hostile</span></div><div class="targethp"><div id="targetHp"></div></div></div>
     </div>
     <div class="combometer" id="combo"><span class="cx" id="comboN">x2</span><div class="cbar"><div class="cbarfill" id="comboBar"></div></div></div>
     <div class="battlebanner" id="banner"><div class="bt" id="bannerT"></div><div class="bs" id="bannerS"></div></div>
     <div class="topbtns">
       <button class="tbtn" id="mute" title="sound">🔊</button>
+      <button class="tbtn" id="beamBtn" title="scan beam">QR</button>
+      <button class="tbtn" id="nftBtn" title="nft champions">NFT</button>
+      <button class="tbtn" id="rageBtn" title="overdrive">R</button>
       <button class="tbtn" id="exit" title="exit">✕</button>
     </div>
     <div class="joy" id="joy"><div class="nub" id="nub"></div></div>
@@ -232,6 +309,7 @@
   </div>
 
   <div class="toast" id="toast"></div>
+  <div class="champIntro" id="champIntro"><div class="champCard"><img id="champIntroImg" alt=""><b id="champIntroName"></b><span id="champIntroSub"></span></div></div>
 
   <!-- TITLE -->
   <div class="overlay on" id="start">
@@ -242,6 +320,8 @@
     <div class="herohead">Pick your ogre <span id="herocount"></span></div>
     <div class="heroes" id="heroes"></div>
     <button class="big" id="play">▶ ENTER THE SWAMP</button>
+    <button class="big" id="openNftTitle" style="margin-top:8px;background:linear-gradient(90deg,#ffd24a,#72ff23)">NFT CHAMPIONS</button>
+    <button class="big" id="openBeamTitle" style="margin-top:8px;background:linear-gradient(90deg,#46e8ff,#72ff23)">QR SCAN SWAMP BEAM</button>
     <button class="big" id="playSurv" style="margin-top:8px;background:linear-gradient(90deg,#ff5e5e,#b06bff)">🧟 SURVIVE THE HORDE</button>
     <button class="big" id="openShop" style="margin-top:8px;background:linear-gradient(90deg,#46e8ff,#6aa0ff)">🛠️ WORKSHOP & UPGRADES</button>
     <div id="titleStats" style="margin-top:10px;font-size:0.82rem;font-weight:800;color:#ffe9a8"></div>
@@ -280,6 +360,55 @@
     <h2>📖 Swampdex</h2>
     <div class="sub" id="dexSub"></div>
     <div class="dexgrid" id="dexGrid"></div>
+  </div></div>
+
+  <!-- SWAMP BEAMS -->
+  <div class="sheet" id="beam"><div class="panel beamPanel">
+    <button class="closeX" id="beamX">x</button>
+    <h2>Swamp Beams</h2>
+    <div class="sub">Scan QR/barcodes from launches, merch, Telegram raids, sponsor cards, or X drops to open a Beam Rift.</div>
+    <div class="beamHero"><b>Scan -> fight -> catch -> mint-ready Swampdex card.</b><small>Game claim is instant and free. Rare Beam creatures are marked for future wallet minting without slowing down the catch flow.</small></div>
+    <div class="beamScanner" id="beamScanner"><video id="beamVideo" muted playsinline></video></div>
+    <div class="rowbtns">
+      <button class="pBuy" id="beamScan">Scan QR / Barcode</button>
+      <button class="pAlt" id="beamStop">Stop Camera</button>
+    </div>
+    <label class="beamLabel" for="beamInput">Beam URL, code, or barcode</label>
+    <input class="beamInput" id="beamInput" autocomplete="off" placeholder="SWAMP:LAUNCH:OGRE:RARE or paste QR URL">
+    <div class="rowbtns">
+      <button class="pBuy" id="beamClaim">Open Beam Rift</button>
+      <button class="pAlt" id="beamDemo">Demo Drop</button>
+    </div>
+    <div class="beamMsg" id="beamMsg"></div>
+    <div class="beamStats" id="beamStats"></div>
+  </div></div>
+
+  <!-- NFT CHAMPIONS -->
+  <div class="sheet" id="nft"><div class="panel nftPanel">
+    <button class="closeX" id="nftX">x</button>
+    <h2>NFT Champions</h2>
+    <div class="sub">Scan your wallet for special Swamp monsters, then use one as your PFP and playable champion. Beam cards work locally now; a backend NFT indexer can unlock real wallet collections later.</div>
+    <div class="nftHero">
+      <img id="nftHeroImg" src="/assets/slimewire/swamp/ogres/ogre-warlord.png" alt="">
+      <div><b id="nftHeroName">No champion selected</b><small id="nftHeroSub">Pick an OG champion or a mint-ready Beam creature. The selected monster spawns as your player and powers Overdrive.</small></div>
+    </div>
+    <div class="walletLine"><span id="nftWalletLine">Wallet: not connected</span><em id="nftScanLine">local Beam scan ready</em></div>
+    <div class="rowbtns">
+      <button class="pBuy" id="nftConnect">Connect Wallet</button>
+      <button class="pAlt" id="nftScan">Scan Wallet</button>
+      <button class="pAlt" id="nftClear">Clear</button>
+    </div>
+    <div class="nftMsg" id="nftMsg"></div>
+    <div class="nftGrid" id="nftGrid"></div>
+  </div></div>
+
+  <!-- MAP -->
+  <div class="sheet" id="mapSheet"><div class="panel mapPanel">
+    <button class="closeX" id="mapX">x</button>
+    <h2>Swamp Map</h2>
+    <div class="sub" id="mapSub">Tap the radar any time. Yellow is your active goal.</div>
+    <div class="fullmap" id="fullMap"></div>
+    <div class="maplegend"><span>White: you</span><span>Yellow: goal</span><span>Blue: huts</span><span>Gold: launches</span><span>Red: hostiles</span><span>Tan: resources</span></div>
   </div></div>
 
   <!-- CARD ARENA (deck builder + battle) -->
@@ -378,8 +507,8 @@ const $=(id)=>document.getElementById(id);
 // Boot safety net: never leave the user on an infinite "entering the swamp…"
 // spinner. Any uncaught error (or a >10s hang) reveals the Reload overlay.
 function showErr(){ try{ const e=document.getElementById("err"); if(e) e.style.display="flex"; const l=document.getElementById("load"); if(l) l.style.display="none"; }catch(_){ } }
-window.addEventListener("error",function(){ try{ if(!A.loaded) showErr(); }catch(_){ showErr(); } });
-window.addEventListener("unhandledrejection",function(){ try{ if(!A.loaded) showErr(); }catch(_){ } });
+window.addEventListener("error",function(e){ try{ window.__swampBootError={message:e&&e.message||"boot error",line:e&&e.lineno,col:e&&e.colno}; if(!A.loaded) showErr(); }catch(_){ showErr(); } });
+window.addEventListener("unhandledrejection",function(e){ try{ const r=e&&e.reason; window.__swampBootError={message:(r&&r.message)||String(r||"boot rejection")}; if(!A.loaded) showErr(); }catch(_){ } });
 setTimeout(function(){ const l=document.getElementById("load"); if(l && l.style.display!=="none"){ try{ showTitle(); }catch(_){ showErr(); } } },10000);
 const cv=$("cv"), ctx=cv.getContext("2d");
 let W=0,H=0,DPR=1;
@@ -403,6 +532,10 @@ if(typeof store.hero!=="number") store.hero=0;
 if(!store.res||typeof store.res!=="object") store.res={wood:0,scrap:0,goo:0};
 if(typeof store.clan!=="string") store.clan="";
 if(typeof store.baseLv!=="number") store.baseLv=0;
+if(!store.beams||typeof store.beams!=="object") store.beams={claims:{}};
+if(!store.beams.claims||typeof store.beams.claims!=="object") store.beams.claims={};
+if(!store.nftWallet||typeof store.nftWallet!=="object") store.nftWallet=null;
+if(!store.nftChampion||typeof store.nftChampion!=="object") store.nftChampion=null;
 const save=()=>{ try{ localStorage.setItem(KEY,JSON.stringify(store)); }catch(_){} };
 const num=(v)=>{ const n=Number(v); return isFinite(n)?n:0; };
 function level(){ return Math.max(1,Math.floor(Math.sqrt(store.xp/40))+1); }
@@ -579,8 +712,112 @@ const RAR={ common:{k:"common",label:"Common",col:"#9fb3a3",rate:0.85,xp:6,sz:0.
   rare:{k:"rare",label:"Rare",col:"#46e8ff",rate:0.5,xp:26,sz:1.2},
   epic:{k:"epic",label:"Epic",col:"#b06bff",rate:0.34,xp:55,sz:1.5},
   legendary:{k:"legendary",label:"Legendary",col:"#ffd24a",rate:0.22,xp:120,sz:1.8} };
+const NFT_ARCHETYPES=[
+  {id:"ogre_warlord",name:"Warlord Ogre",kind:"OG",rarity:"legendary",sprite:OGRE.warlord,weapon:"boulder",scale:1.42,over:"quake"},
+  {id:"undead_reaper",name:"Undead Reaper",kind:"Undead",rarity:"epic",sprite:OGRE.zombie,weapon:"acid",scale:1.16,over:"lifedrain"},
+  {id:"rock_titan",name:"Rock Titan",kind:"Giant",rarity:"legendary",sprite:OGRE.titan,weapon:"boulder",scale:1.38,over:"stone rage"},
+  {id:"swamp_nymph",name:"Swamp Nymph",kind:"Nymph",rarity:"rare",sprite:OGRE.shaman,weapon:"vine",scale:1.04,over:"healing bloom"},
+  {id:"goblin_scout",name:"Goo Goblin",kind:"Goblin",rarity:"uncommon",sprite:OGRE.goblin,weapon:"triple",scale:0.92,over:"speed burst"},
+  {id:"slime_knight",name:"Slime Knight",kind:"Warrior",rarity:"epic",sprite:OGRE.knight,weapon:"laser",scale:1.12,over:"shield rush"}
+];
+const CHAMP_WEAPON={common:"slime",uncommon:"triple",rare:"vine",epic:"laser",legendary:"boulder"};
+function shortAddr(a){ a=String(a||""); return a.length>12?a.slice(0,4)+"..."+a.slice(-4):a; }
+function activeNftChampion(){ const c=store.nftChampion; return c&&c.sprite&&c.name?c:null; }
+function normalizeChampion(c){
+  if(!c) return null;
+  return {id:String(c.id||("champ_"+Date.now())).slice(0,80),name:String(c.name||"Swamp Champion").slice(0,42),kind:String(c.kind||"Champion").slice(0,28),
+    rarity:(RAR[c.rarity]?c.rarity:"rare"),sprite:String(c.sprite||OGRE.warlord),weapon:String(c.weapon||CHAMP_WEAPON[c.rarity]||"slime"),
+    scale:Math.max(0.82,Math.min(1.55,num(c.scale)||1.08)),source:String(c.source||"Swamp").slice(0,60),mint:String(c.mint||""),wallet:String(c.wallet||""),over:String(c.over||"overdrive").slice(0,32)};
+}
+function walletProvider(){
+  const p=(window.phantom&&window.phantom.solana)||window.solana||window.solflare;
+  if(!p) return null;
+  const name=p.isPhantom?"Phantom":(p.isSolflare?"Solflare":"Solana Wallet");
+  return {provider:p,name};
+}
+function nftMsg(msg,col){ const el=$("nftMsg"); if(el){ el.textContent=msg||""; el.style.color=col||"#ffe9a8"; } }
+function beamChampions(){
+  const out=[];
+  for(const [mint,c] of Object.entries(store.dex||{})){
+    if(!c||!(c.beam||c.mintReady)) continue;
+    const rar=RAR[c.rarity]?c.rarity:"rare", pool=OGRE_BY_TIER[rar]||OGRE_BY_TIER.rare||OGRE_BY_TIER.common;
+    const sym=String(c.symbol||mint).replace(/[^A-Za-z0-9_]/g,"").slice(0,10)||"BEAM";
+    out.push(normalizeChampion({id:"beam:"+mint,name:"$"+sym+" Beam",kind:"Beam NFT",rarity:rar,sprite:pool[hash("beamchamp"+mint)%pool.length],
+      weapon:CHAMP_WEAPON[rar]||"vine",scale:0.98+((RAR_RANK&&RAR_RANK[rar])||2)*0.08,source:c.beamSource||"Swamp Beam",mint,wallet:c.wallet||"",over:"beam rage"}));
+  }
+  return out;
+}
+function remoteNftChampions(){
+  const rows=(store.nftWallet&&Array.isArray(store.nftWallet.remoteNfts))?store.nftWallet.remoteNfts:[];
+  return rows.map((n,i)=>normalizeChampion({id:"wallet:"+String(n.mint||n.id||i),name:n.name||("Wallet Monster "+(i+1)),kind:n.kind||"Wallet NFT",rarity:n.rarity||"rare",
+    sprite:n.sprite||n.image||OGRE_BY_TIER.rare[i%OGRE_BY_TIER.rare.length],weapon:n.weapon||"vine",scale:n.scale||1.08,source:n.collection||"Wallet",mint:n.mint||"",wallet:store.nftWallet&&store.nftWallet.publicKey,over:n.over||"wallet rage"})).filter(Boolean);
+}
+function nftCandidates(){
+  const wallet=store.nftWallet&&store.nftWallet.publicKey;
+  const base=NFT_ARCHETYPES.map(c=>normalizeChampion({...c,source:"OG demo champion",wallet:wallet||""}));
+  return [...beamChampions(),...remoteNftChampions(),...base].filter(Boolean);
+}
+function sameChamp(a,b){ return a&&b&&a.id===b.id; }
+function refreshNftButton(){
+  const b=$("nftBtn"), rb=$("rageBtn"); if(!b) return;
+  const c=activeNftChampion(); b.classList.toggle("ready",!!c); b.textContent=c?"PFP":"NFT"; b.title=c?("playing as "+c.name):"nft champions";
+  if(rb) rb.classList.toggle("ready",!!player&&((player.rage||0)>=100||player.rageT>0));
+}
+function renderNftPanel(){
+  const wallet=store.nftWallet||null, active=activeNftChampion(), list=nftCandidates();
+  const w=$("nftWalletLine"); if(w) w.textContent=wallet&&wallet.publicKey?("Wallet: "+(wallet.provider||"connected")+" "+shortAddr(wallet.publicKey)):"Wallet: not connected";
+  const sl=$("nftScanLine"); if(sl){ const beams=beamChampions().length; sl.textContent=(wallet&&wallet.scannedAt?"scanned ":"local ")+"Beam "+beams; }
+  const hi=$("nftHeroImg"), hn=$("nftHeroName"), hs=$("nftHeroSub");
+  if(active){ if(hi) hi.src=active.sprite; if(hn) hn.textContent=active.name; if(hs) hs.textContent=active.kind+" - "+active.source+" - "+active.over+" Overdrive"; }
+  else { if(hi) hi.src=OGRE.warlord; if(hn) hn.textContent="No champion selected"; if(hs) hs.textContent="Pick an OG champion or a mint-ready Beam creature. The selected monster spawns as your player and powers Overdrive."; }
+  const grid=$("nftGrid"); if(!grid) return; grid.innerHTML="";
+  for(const c of list){
+    const card=document.createElement("button"); card.type="button"; card.className="nftCard"+(sameChamp(c,active)?" sel":""); card.style.borderColor=(RAR[c.rarity]||RAR.rare).col+"77";
+    const tag=document.createElement("div"); tag.className="nftTag"; tag.textContent=c.kind; card.appendChild(tag);
+    const im=document.createElement("img"); im.src=c.sprite; im.alt=""; card.appendChild(im);
+    const nm=document.createElement("b"); nm.textContent=c.name; card.appendChild(nm);
+    const sub=document.createElement("small"); sub.textContent=(RAR[c.rarity]||RAR.rare).label+" - "+c.source+" - "+c.weapon; card.appendChild(sub);
+    card.onclick=()=>selectNftChampion(c); grid.appendChild(card);
+  }
+  if(!list.length){ grid.innerHTML='<div style="grid-column:1/-1;color:var(--dim);text-align:center;padding:18px">Catch a Beam creature or connect a wallet to unlock champions.</div>'; }
+}
+function openNft(){ renderNftPanel(); $("nft").classList.add("on"); nftMsg(activeNftChampion()?"Champion ready. Enter the swamp to play it.":"Pick a champion, or scan a wallet for special NFTs."); }
+function closeNft(){ $("nft").classList.remove("on"); if(state==="nft"){ state="title"; } }
+function selectNftChampion(c){ store.nftChampion=normalizeChampion(c); save(); renderNftPanel(); refreshNftButton(); try{sfx("level",0.38);}catch(_){} nftMsg("Champion armed: "+store.nftChampion.name+". Enter the swamp to play it.","#bbff63"); toast("PFP champion armed: "+store.nftChampion.name); }
+function clearNftChampion(){ store.nftChampion=null; save(); renderNftPanel(); refreshNftButton(); nftMsg("Champion cleared. Regular ogre picker is active."); toast("NFT champion cleared"); }
+async function connectNftWallet(){
+  const wp=walletProvider(); if(!wp){ nftMsg("No Phantom/Solflare provider found in this browser. Open in your wallet browser or install a Solana wallet.","#ffd24a"); return null; }
+  try{
+    const res=await wp.provider.connect({onlyIfTrusted:false});
+    const pk=(res&&res.publicKey&&res.publicKey.toString())||(wp.provider.publicKey&&wp.provider.publicKey.toString())||"";
+    if(!pk) throw new Error("wallet returned no public key");
+    store.nftWallet={publicKey:pk,provider:wp.name,connectedAt:Date.now(),scannedAt:store.nftWallet&&store.nftWallet.scannedAt||0,remoteNfts:store.nftWallet&&store.nftWallet.remoteNfts||[]}; save();
+    renderNftPanel(); nftMsg(wp.name+" connected. Scan checks Swamp NFTs and keeps local Beam champions ready.","#bbff63"); return store.nftWallet;
+  }catch(e){ nftMsg("Wallet connection was cancelled or blocked. No seed phrase is ever requested.","#ffd24a"); return null; }
+}
+async function scanWalletNfts(){
+  let w=store.nftWallet; if(!w||!w.publicKey) w=await connectNftWallet(); if(!w||!w.publicKey) return;
+  nftMsg("Scanning wallet and local Beam cards...");
+  let remote=[];
+  try{
+    const ctl=new AbortController(); const t=setTimeout(()=>ctl.abort(),1800);
+    const r=await fetch(API+"/api/web/swamp-nfts?wallet="+encodeURIComponent(w.publicKey),{cache:"no-store",signal:ctl.signal});
+    clearTimeout(t);
+    if(r.ok){ const j=await r.json(); remote=Array.isArray(j&&j.nfts)?j.nfts:[]; }
+  }catch(_){}
+  store.nftWallet={...w,scannedAt:Date.now(),remoteNfts:remote.slice(0,36)}; save(); renderNftPanel();
+  const beams=beamChampions().length, found=remote.length+beams;
+  nftMsg(found?("Found "+found+" playable champion source(s). Select one below."):"No wallet-indexed monsters found yet. OG demo champions and future Beam catches are playable now.",found?"#bbff63":"#ffd24a");
+}
+function showChampionIntro(){
+  const c=activeNftChampion(); if(!c) return;
+  const el=$("champIntro"); if(!el) return;
+  $("champIntroImg").src=c.sprite; $("champIntroName").textContent=c.name; $("champIntroSub").textContent=c.kind+" - "+(RAR[c.rarity]||RAR.rare).label+" Overdrive";
+  el.classList.remove("on"); void el.offsetWidth; el.classList.add("on"); setTimeout(()=>{ try{el.classList.remove("on");}catch(_){} },1600);
+}
 function ageSec(row){ const s=num(row.pairAgeSeconds); if(s>0) return s; const m=num(row.pairAgeMinutes); return m>0?m*60:9999; }
 function rarityOf(row){
+  if(row._beam && row.beamRarity && RAR[row.beamRarity]) return RAR[row.beamRarity];
   if(row._ogre) return RAR.legendary;
   const m5=num(row.m5 ?? row.priceChangeM5); const a=ageSec(row); const vol=num(row.volume5m); const mc=num(row.marketCap||row.marketCapUsd);
   if(m5>=80 || vol>60000) return RAR.epic;
@@ -614,14 +851,111 @@ function coinSpecies(mint,rarity){ const key=mint+"|"+(rarity||"");
   const out={species:pre+" "+body, element:el, atk:cl(40+((h>>>3)%55)), def:cl(40+((h>>>10)%55)), hp:cl(40+((h>>>17)%55))};
   speciesCache.set(key,out); return out; }
 function verdictOf(row){ const m5=num(row.m5 ?? row.priceChangeM5); const liq=num(row.liquidityUsd);
+  if(row._beam) return {t:"Beam Rift",c:"#46e8ff"};
   if(row._ogre) return {t:"SlimeWire Born",c:"#ffd24a"}; if(liq>0&&liq<1500) return {t:"Low Liq ⚠",c:"#ff5e5e"};
   if(m5<=-25) return {t:"Dumping",c:"#ff5e5e"}; if(m5>=30) return {t:"Pumping 🔥",c:"#72ff23"}; return {t:"Stable",c:"#9fb3a3"}; }
 function fmtUsd(n){ n=num(n); if(n>=1e6) return "$"+(n/1e6).toFixed(1)+"M"; if(n>=1e3) return "$"+(n/1e3).toFixed(0)+"k"; return "$"+n.toFixed(0); }
 function symOf(row){ return String(row.symbol||row.tokenMint||"COIN").replace(/[^A-Za-z0-9_]/g,"").slice(0,10)||"COIN"; }
 
+/* ---- Swamp Beams: QR/barcode -> Beam Rift -> catch -> mint-ready Dex card ---- */
+const BEAM_RARITY=["common","uncommon","rare","epic","legendary"];
+let beamStream=null, beamScanRaf=0, urlBeamHandled=false;
+function beamClaims(){ store.beams=store.beams||{claims:{}}; store.beams.claims=store.beams.claims||{}; return store.beams.claims; }
+function cleanBeamText(raw){ return String(raw||"").trim().slice(0,420); }
+function extractBeamPayload(raw){
+  let s=cleanBeamText(raw); if(!s) return "";
+  try{ const u=new URL(s,location.href); const q=u.searchParams.get("beam")||u.searchParams.get("swamp")||u.searchParams.get("claim")||u.searchParams.get("code"); if(q) s=q; }catch(_){}
+  return cleanBeamText(s);
+}
+function pickBeamRarity(payload,kind){
+  const up=payload.toUpperCase(); if(up.includes("LEGEND")) return "legendary"; if(up.includes("EPIC")) return "epic"; if(up.includes("RARE")) return "rare"; if(up.includes("UNCOMMON")) return "uncommon";
+  const roll=hash("rar"+payload)%1000, barcode=kind==="barcode";
+  if(roll>(barcode?993:975)) return "legendary";
+  if(roll>(barcode?965:910)) return "epic";
+  if(roll>(barcode?850:730)) return "rare";
+  if(roll>(barcode?610:420)) return "uncommon";
+  return "common";
+}
+function beamSymbol(payload){
+  const up=payload.toUpperCase(), parts=up.split(/[^A-Z0-9]+/).filter(Boolean);
+  const bad=new Set(["HTTP","HTTPS","WWW","COM","ORG","SWAMP","SLIMEWIRE","BEAM","CLAIM","CODE","LAUNCH","RARE","EPIC","LEGENDARY","UNCOMMON"]);
+  let pick=parts.find(p=>p.length>=3&&p.length<=10&&!bad.has(p)&&!/^\d+$/.test(p));
+  if(!pick) pick="BEAM"+String(hash(payload)%999).padStart(3,"0");
+  return pick.replace(/[^A-Z0-9_]/g,"").slice(0,10)||"BEAM";
+}
+function beamSource(payload,kind){
+  const up=payload.toUpperCase();
+  if(up.includes("TG")||up.includes("TELEGRAM")) return "Telegram Raid";
+  if(up.includes("KOL")||up.includes("XDROP")||up.includes("TWITTER")) return "KOL / X Drop";
+  if(up.includes("MERCH")||kind==="barcode") return "Physical Drop";
+  if(up.includes("SPONSOR")) return "Sponsor Beam";
+  if(up.includes("LAUNCH")) return "Launch Beam";
+  return "Swamp Beam";
+}
+function beamRowFromRaw(raw){
+  const payload=extractBeamPayload(raw); if(!payload) return null;
+  const kind=/^\d{8,14}$/.test(payload.replace(/\s+/g,""))?"barcode":"qr";
+  const id="beam_"+hash(payload.toUpperCase()).toString(36), rarity=pickBeamRarity(payload,kind), rank=BEAM_RARITY.indexOf(rarity)+1, h=hash("beamrow"+payload);
+  return { tokenMint:id, symbol:beamSymbol(payload), _beam:true, beamId:id, beamPayload:payload, beamKind:kind,
+    beamRarity:rarity, beamSource:beamSource(payload,kind), marketCap:900+rank*620+(h%2100), marketCapUsd:900+rank*620+(h%2100),
+    pairAgeSeconds:30+(h%180), m5:8+rank*9+(h%21), volume5m:1200+rank*2600+(h%5200), liquidityUsd:800+rank*900+(h%2200) };
+}
+function packBeamRow(row){ return {tokenMint:row.tokenMint,symbol:row.symbol,_beam:true,beamId:row.beamId,beamPayload:row.beamPayload,beamKind:row.beamKind,beamRarity:row.beamRarity,beamSource:row.beamSource,marketCap:row.marketCap,marketCapUsd:row.marketCapUsd,pairAgeSeconds:row.pairAgeSeconds,m5:row.m5,volume5m:row.volume5m,liquidityUsd:row.liquidityUsd}; }
+function beamMsg(msg,col){ const el=$("beamMsg"); if(el){ el.textContent=msg||""; el.style.color=col||"#ffe9a8"; } }
+function renderBeamStats(row){
+  const box=$("beamStats"); if(!box) return; if(!row){ box.innerHTML=""; return; }
+  const rar=RAR[row.beamRarity]||RAR.common, sp=coinSpecies(row.tokenMint,row.beamRarity);
+  box.innerHTML=`<div class="beamStat"><span>Creature</span><b>${row.symbol}</b></div><div class="beamStat"><span>Rarity</span><b style="color:${rar.col}">${rar.label}</b></div><div class="beamStat"><span>Source</span><b>${row.beamSource}</b></div><div class="beamStat"><span>Species</span><b style="color:${sp.element.c}">${sp.species}</b></div><div class="beamStat"><span>Mint</span><b>Ready</b></div><div class="beamStat"><span>Kind</span><b>${row.beamKind}</b></div>`;
+}
+function makeBeamCreature(row,closeToPlayer){
+  if(!player||!row) return null; const mint=row.tokenMint; if(store.dex[mint]) return null;
+  let c=creatures.find(x=>x.mint===mint&&!x.dead); if(c) return c;
+  const rar=rarityOf(row), spr=creatureFor(row), ang=Math.random()*6.2832, dist=closeToPlayer?86:190+Math.random()*160;
+  c={ mint, row, sym:symOf(row), rar, spr, dead:false, beam:true,
+    x:player.x+Math.cos(ang)*dist, y:player.y+Math.sin(ang)*dist, r:17*rar.sz,
+    vx:0,vy:0, wt:Math.random()*3, dir:"down", walkT:Math.random()*3, bob:Math.random()*6.28 };
+  clampEnt(c,34); creatures.push(c); return c;
+}
+function spawnPendingBeams(){
+  if(!player) return; const claims=beamClaims();
+  Object.values(claims).filter(c=>c&&c.row&&!c.caught&&!store.dex[c.mint]).slice(-6).forEach(c=>makeBeamCreature(c.row,false));
+}
+function ensureWorldForBeam(){
+  if(RUN&&!RUN.over){ beamMsg("Finish or exit the horde run before opening a Beam Rift.","#ffb0a0"); return false; }
+  if(state!=="world"){ $("beam").classList.remove("on"); enterWorld(); }
+  return true;
+}
+function openBeamRift(raw){
+  const row=beamRowFromRaw(raw); if(!row){ beamMsg("Paste or scan a real Beam code, QR URL, or product barcode.","#ffb0a0"); return; }
+  renderBeamStats(row);
+  const claims=beamClaims(), existing=claims[row.beamId];
+  if(store.dex[row.tokenMint]||(existing&&existing.caught)){ beamMsg(row.symbol+" is already in your Swampdex. Opening Dex instead.","#bbff63"); save(); setTimeout(()=>{ closeBeam(); openDex(); },450); return; }
+  claims[row.beamId]=existing||{id:row.beamId,mint:row.tokenMint,row:packBeamRow(row),at:Date.now(),caught:false};
+  claims[row.beamId].row=packBeamRow(row); claims[row.beamId].lastOpened=Date.now(); save();
+  if(!ensureWorldForBeam()) return;
+  setTimeout(()=>{ const c=makeBeamCreature(row,true); if(!c){ beamMsg("Beam already caught or unavailable.","#ffb0a0"); return; }
+    closeBeam(); showBanner("BEAM RIFT OPEN",row.beamSource+" - catch "+row.symbol,(RAR[row.beamRarity]||RAR.common).col); toast("Beam creature found: "+row.symbol+" - weaken and catch it!"); openEncounter(c); refreshHud(); updateRadar(); },260);
+}
+function openBeam(prefill){ stopBeamCamera(); $("beam").classList.add("on"); const i=$("beamInput"); if(i&&prefill) i.value=extractBeamPayload(prefill); const row=beamRowFromRaw(i&&i.value); renderBeamStats(row); beamMsg(prefill?"Beam link detected. Tap Open Beam Rift.":"Scan a QR/barcode or paste a Beam code."); }
+function closeBeam(){ stopBeamCamera(); const b=$("beam"); if(b) b.classList.remove("on"); }
+async function startBeamCamera(){
+  const vid=$("beamVideo"), box=$("beamScanner"); if(!vid||!box) return;
+  if(!("BarcodeDetector" in window)){ beamMsg("Barcode scan is not supported in this browser. Paste the QR URL/code instead.","#ffb0a0"); return; }
+  try{
+    stopBeamCamera(); box.classList.add("on"); beamMsg("Point camera at a QR code or barcode.");
+    beamStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"}},audio:false}); vid.srcObject=beamStream; await vid.play();
+    const detector=new BarcodeDetector({formats:["qr_code","ean_13","ean_8","upc_a","upc_e","code_128","code_39"]});
+    const scan=async()=>{ try{ const codes=await detector.detect(vid); if(codes&&codes[0]&&codes[0].rawValue){ const val=codes[0].rawValue; $("beamInput").value=val; beamMsg("Beam scanned. Opening Rift...","#bbff63"); stopBeamCamera(); openBeamRift(val); return; } }catch(_){}
+      beamScanRaf=requestAnimationFrame(scan); };
+    scan();
+  }catch(_){ stopBeamCamera(); beamMsg("Camera permission was blocked. Paste the Beam URL/code instead.","#ffb0a0"); }
+}
+function stopBeamCamera(){ if(beamScanRaf) cancelAnimationFrame(beamScanRaf); beamScanRaf=0; try{ if(beamStream) beamStream.getTracks().forEach(t=>t.stop()); }catch(_){} beamStream=null; const v=$("beamVideo"); if(v) v.srcObject=null; const b=$("beamScanner"); if(b) b.classList.remove("on"); }
+function demoBeam(){ const pool=["SWAMP:LAUNCH:GOO:RARE","SWAMP:MERCH:BOG:EPIC","SWAMP:TG RAID:SLIME:UNCOMMON","SWAMP:SPONSOR:OGRE:LEGENDARY"]; const code=pool[hash(Date.now())%pool.length]+":"+Date.now().toString(36); $("beamInput").value=code; openBeamRift(code); }
+
 /* ---- world ---- */
 const TILE=64; const MAP={w:58,h:48}; // tiles — big open swamp
-let player=null, creatures=[], npcs=[], mobs=[], buildings=[], gathers=[], parts=[], floats=[], companion=null;
+let player=null, creatures=[], npcs=[], mobs=[], buildings=[], gathers=[], parts=[], floats=[], hazards=[], companion=null;
 let camx=0,camy=0, state="load", lastTs=0, near=null, nearBld=null, nearMob=null, nearFoe=null, nearGather=null;
 let worldEvent=null, worldEventCd=18;
 function burst(x,y,col,n){ n=n||8; for(let i=0;i<n;i++){ const a=Math.random()*6.28,s=50+Math.random()*150; if(parts.length<240) parts.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:0.4+Math.random()*0.4,max:0.9,col,sz:2+Math.random()*3}); } }
@@ -648,6 +982,48 @@ function impactFX(x,y,fromx,fromy,col,big){ const a=Math.atan2(y-fromy,x-fromx);
     if(parts.length<260) parts.push({x,y,vx:Math.cos(sp)*s,vy:Math.sin(sp)*s,life:0.22+Math.random()*0.34,max:0.6,col,sz:2+Math.random()*3.2}); }
   swings.push({ring:true,x,y,r0:big?12:6,life:0.22,max:0.22,col:"#ffffff"});
   addShake(big?12:6); hitstop=Math.max(hitstop, big?0.09:0.05); }
+function spawnEnemyShot(m,tx,ty,opt){
+  if(!m||hazards.length>90) return;
+  const o=opt||{}, sx=m.x, sy=m.y-m.r*0.25, a=Math.atan2(ty-sy,tx-sx), sp=o.sp||250;
+  hazards.push({kind:"shot",x:sx,y:sy,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:o.life||2.4,max:o.life||2.4,r:o.r||9,dmg:o.dmg||8,col:o.col||m.col||"#ff9a4a"});
+}
+function spawnHazardZone(x,y,opt){
+  const o=opt||{}; if(hazards.length>90) hazards.shift();
+  hazards.push({kind:"zone",x,y,r:o.r||70,life:o.life||7,max:o.life||7,dmg:o.dmg||6,col:o.col||"#b06bff",hitCd:0,label:o.label||"MIASMA"});
+}
+function damagePlayerHazard(h){
+  if(!player||player.iframe>0) return false;
+  const dx=player.x-h.x, dy=player.y-h.y, d=Math.hypot(dx,dy)||1;
+  player.hp-=h.dmg; player.iframe=h.kind==="zone"?0.42:0.62;
+  player.x+=dx/d*(h.kind==="zone"?18:30); player.y+=dy/d*(h.kind==="zone"?18:30); clampEnt(player,40);
+  floatTxt(player.x,player.y-player.r,"-"+h.dmg,h.col||"#ff5e5e"); burst(player.x,player.y,h.col||"#ff5e5e",h.kind==="zone"?4:7);
+  addShake(h.kind==="zone"?4:6); gainRage(8); const hp=$("hpbar"); if(hp) hp.style.width=Math.max(0,player.hp/player.maxhp*100)+"%"; if(player.hp<=0) downed(); return true;
+}
+function updateHazards(dt){
+  if(!player){ hazards=[]; return; }
+  for(const h of hazards){
+    h.life-=dt;
+    if(h.kind==="shot"){
+      h.x+=h.vx*dt; h.y+=h.vy*dt;
+      if(parts.length<260 && Math.random()<0.55) parts.push({x:h.x,y:h.y,vx:0,vy:0,life:0.18,max:0.18,col:h.col,sz:1.8});
+      const dx=player.x-h.x, dy=player.y-h.y; if(dx*dx+dy*dy<(player.r+h.r)*(player.r+h.r)){ if(damagePlayerHazard(h)) h.life=0; }
+    } else if(h.kind==="zone"){
+      h.hitCd=Math.max(0,(h.hitCd||0)-dt);
+      const dx=player.x-h.x, dy=player.y-h.y; if(dx*dx+dy*dy<h.r*h.r && h.hitCd<=0){ if(damagePlayerHazard(h)) h.hitCd=0.55; }
+    }
+  }
+  hazards=hazards.filter(h=>h.life>0);
+}
+function drawHazards(kind){
+  if(!hazards||!hazards.length) return;
+  for(const h of hazards){ if(kind && h.kind!==kind) continue;
+    if(h.kind==="zone"){ const a=Math.max(0,Math.min(1,h.life/h.max)), pulse=1+Math.sin(performance.now()/220+h.x)*0.05;
+      ctx.save(); ctx.globalAlpha=0.18+0.18*a; const g=ctx.createRadialGradient(h.x,h.y,4,h.x,h.y,h.r*pulse); g.addColorStop(0,(h.col||"#b06bff")+"88"); g.addColorStop(0.64,(h.col||"#b06bff")+"33"); g.addColorStop(1,(h.col||"#b06bff")+"00");
+      ctx.fillStyle=g; ctx.beginPath(); ctx.arc(h.x,h.y,h.r*pulse,0,6.2832); ctx.fill(); ctx.globalAlpha=0.55*a; ctx.strokeStyle=h.col||"#b06bff"; ctx.setLineDash([8,7]); ctx.lineWidth=2; ctx.beginPath(); ctx.arc(h.x,h.y,h.r*pulse,0,6.2832); ctx.stroke(); ctx.restore();
+    } else if(h.kind==="shot"){ ctx.save(); ctx.globalAlpha=Math.max(0.25,Math.min(1,h.life/h.max)); const a=Math.atan2(h.vy,h.vx); ctx.translate(h.x,h.y); ctx.rotate(a); ctx.scale(1.35,0.78);
+      const g=ctx.createRadialGradient(0,0,1,0,0,h.r*1.35); g.addColorStop(0,"#fff4"); g.addColorStop(0.55,h.col||"#ff9a4a"); g.addColorStop(1,"rgba(255,80,40,0)"); ctx.fillStyle=g; ctx.beginPath(); ctx.arc(0,0,h.r*1.3,0,6.2832); ctx.fill(); ctx.restore(); }
+  }
+}
 /* ---- overworld weapons (unlock + evolve by kills) ---- */
 const WEAPONS=[
   { id:"slime",  name:"Slimeball",  short:"Slime", emoji:"🟢", unlock:0,  desc:"Reliable glob." },
@@ -702,6 +1078,65 @@ function drawWeapon(p){ const id=store.weapon||"slime"; const im=weaponImg(id);
   ctx.restore(); }
 function weaponLevel(id){ return Math.min(8, 1+Math.floor((store.kills||0)/(id==="slime"?8:12))); } // evolves with kills
 function weaponUnlocked(id){ return (store.kills||0)>=weaponDef(id).unlock || (store.unlockedWpns||[]).includes(id); }
+const WEAPON_HEAT={slime:8,triple:14,bomb:25,laser:17,spore:18,boulder:28,vine:13,acid:16,thunder:18,fan:16};
+let heatHudKey="";
+function updateHeatHud(force){
+  const bar=$("heatbar"), wrap=$("heatwrap"), label=$("heatlabel"); if(!bar||!wrap||!player) return;
+  const h=Math.max(0,Math.min(100,player.heat||0)), hot=(player.overheat||0)>0||h>82;
+  const key=Math.round(h)+"|"+hot+"|"+((player.counterT||0)>0?1:0); if(!force&&key===heatHudKey) return; heatHudKey=key;
+  bar.style.width=h.toFixed(0)+"%"; wrap.classList.toggle("hot",hot); label.textContent=(player.overheat||0)>0?"COOLING":((player.counterT||0)>0?"COUNTER":"HEAT");
+}
+let rageHudKey="";
+function updateRageHud(force){
+  const bar=$("ragebar"), wrap=$("ragewrap"), label=$("ragelabel"); if(!bar||!wrap||!player) return;
+  const live=(player.rageT||0)>0, ready=(player.rage||0)>=100, pct=live?100:Math.max(0,Math.min(100,player.rage||0));
+  const key=Math.round(pct)+"|"+Math.ceil(player.rageT||0)+"|"+ready+"|"+live; if(!force&&key===rageHudKey) return; rageHudKey=key;
+  bar.style.width=pct.toFixed(0)+"%"; wrap.classList.toggle("ready",ready&&!live); wrap.classList.toggle("live",live);
+  label.textContent=live?("OVERDRIVE "+Math.ceil(player.rageT)):ready?"READY":"RAGE";
+  refreshNftButton();
+}
+function gainRage(n){
+  if(!player) return; if((player.rageT||0)>0) return;
+  player.rage=Math.max(0,Math.min(100,(player.rage||0)+n)); updateRageHud();
+}
+function activateRage(){
+  if(state!=="world"||!player) return;
+  if((player.rageT||0)>0){ toast("Overdrive is already live"); return; }
+  if((player.rage||0)<100){ toast("Build Rage by fighting, catching, and taking hits"); return; }
+  player.rage=0; player.rageT=8.5; player.iframe=Math.max(player.iframe||0,0.55);
+  const champ=player.champion||activeNftChampion();
+  try{ sfx("boss",0.48); showBanner("OVERDRIVE", champ?(champ.name+" - "+champ.over):"Rage mode online", "#ffd24a"); }catch(_){}
+  for(let i=0;i<34;i++){ const a=i/34*6.2832, r=24+Math.random()*38; if(parts.length<260) parts.push({x:player.x+Math.cos(a)*r,y:player.y+Math.sin(a)*r,vx:Math.cos(a)*(80+Math.random()*90),vy:Math.sin(a)*(80+Math.random()*90),life:0.25+Math.random()*0.25,max:0.55,col:i%2?"#ffd24a":"#72ff23",sz:2+Math.random()*3}); }
+  addShake(8); updateRageHud(true);
+}
+function coolWeapon(dt){
+  if(!player) return;
+  const moving=(Math.abs(player.vx||0)+Math.abs(player.vy||0))>12;
+  const rate=(RUN&&!RUN.over?44:0)+(moving?30:20)+((player.counterT||0)>0?24:0);
+  player.heat=Math.max(0,(player.heat||0)-rate*dt);
+  if((player.overheat||0)>0) player.overheat=Math.max(0,player.overheat-dt);
+  updateHeatHud();
+}
+function armCounterFromDash(){
+  if(!player||!mobs.length) return false;
+  for(const m of mobs){ if(!m||m._dead) continue; const dx=m.x-player.x, dy=m.y-player.y;
+    if(dx*dx+dy*dy<175*175 && ((m.wind||0)>0||(m.lunge||0)>0||m.boss)){ player.counterT=1.35; player.heat=Math.max(0,(player.heat||0)-30);
+      floatTxt(player.x,player.y-player.r*1.9,"COUNTER READY","#46e8ff"); showBanner("COUNTER READY","next hit boosted - weapon cooled","#46e8ff"); updateHeatHud(true); return true; } }
+  return false;
+}
+function consumeCounter(mult){
+  if(!player||(player.counterT||0)<=0) return 1;
+  player.counterT=0; player.heat=Math.max(0,(player.heat||0)-14); updateHeatHud(true);
+  floatTxt(player.x,player.y-player.r*2.0,"COUNTER!","#46e8ff"); return mult||1.5;
+}
+function tryWeaponHeat(id){
+  const p=player; if(!p) return false;
+  const now=performance.now();
+  if((p.overheat||0)>0){ if(now-(p.lastHeatToast||0)>700){ p.lastHeatToast=now; toast("Weapon cooling - move or dash"); } updateHeatHud(true); return false; }
+  const cost=(WEAPON_HEAT[id]||12)*(RUN&&!RUN.over?0.46:1);
+  if((p.heat||0)+cost>=100){ p.heat=100; p.overheat=1.05; p.lastHeatToast=now; toast("Weapon overheated - dodge to cool"); updateHeatHud(true); return false; }
+  p.heat=(p.heat||0)+cost; updateHeatHud(); return true;
+}
 /* ---- crafting: gather resources -> craft gear/weapons (level + cost gated) ---- */
 const GEAR={
   armor:{name:"Slime Armor",emoji:"🛡️",cost:{wood:5,scrap:4},lvl:2,desc:"+30 max HP"},
@@ -715,10 +1150,11 @@ function resHave(k){ return k==="relic"?(store.res&&store.res.relic||0):(store.r
 function affordable(cost){ for(const k in cost){ if(resHave(k)<cost[k]) return false; } return true; }
 function costStr(cost){ return Object.entries(cost).map(([k,v])=>v+(RES_ICON[k]||k)).join(" "); }
 function hasGear(id){ return !!(store.gear&&store.gear[id]); }
-function dmgMult(){ let m=1; if(store.powerTotem||hasGear("totem")) m*=1.2; if(hasGear("blade")) m*=1.4; return m; }
-function fireWeapon(tx,ty){ const p=player, ox=p.x, oy=p.y-p.r*0.4; const a=Math.atan2(ty-oy,tx-ox);
+function dmgMult(){ let m=1; if(store.powerTotem||hasGear("totem")) m*=1.2; if(hasGear("blade")) m*=1.4; if(player&&(player.rageT||0)>0) m*=1.45; return m; }
+function fireWeapon(tx,ty){ const p=player, id=store.weapon||"slime"; if(!tryWeaponHeat(id)) return false;
+  const ox=p.x, oy=p.y-p.r*0.4; const a=Math.atan2(ty-oy,tx-ox);
   p.aimAng=a; p.recoil=0.16; p.muzzle=0.12; p.aimT=0.55; // aim the gun + kick + muzzle flash
-  const id=store.weapon||"slime", lv=weaponLevel(id); let base=Math.round((12+level()*2)*dmgMult());
+  const lv=weaponLevel(id); let base=Math.round((12+level()*2)*dmgMult()*consumeCounter(1.35));
   if(RUN&&!RUN.over) base=Math.round(base*(RUN.up.dmg||1)); // survival run damage scaling
   const mk=(ang,opt)=>{ const sp=(opt&&opt.sp)||600; shots.push(Object.assign({x:ox,y:oy,vx:Math.cos(ang)*sp,vy:Math.sin(ang)*sp,life:(opt&&opt.life)||0.85,r:(opt&&opt.r)||9,dmg:base,col:(opt&&opt.col)||"#9bff5a",hitFoe:false,hit:null},opt||{})); };
   if(id==="triple"){ const spread=0.26+Math.min(0.18,lv*0.02); const shots3=lv>=5?5:3;
@@ -732,13 +1168,18 @@ function fireWeapon(tx,ty){ const p=player, ox=p.x, oy=p.y-p.r*0.4; const a=Math
   else if(id==="thunder"){ for(let i=0;i<2;i++) mk(a+(Math.random()-0.5)*0.06,{col:"#ffe24a",sp:1150,life:0.45,pierce:true,hit:[],r:6,dmg:Math.round(base*0.7)}); } // piercing zaps
   else if(id==="fan"){ const fn=5; for(let i=0;i<fn;i++){ const t=(i-(fn-1)/2); mk(a+t*0.2,{col:"#e8e0c0",sp:680,dmg:Math.round(base*0.7)}); } } // wide spread
   else { mk(a,{col:"#9bff5a"}); if(lv>=7) mk(a+0.18,{col:"#9bff5a",dmg:Math.round(base*0.7)}); } // slime gains a 2nd glob at high lv
+  return true;
 }
 function cycleWeapon(){ const un=WEAPONS.filter(w=>weaponUnlocked(w.id)); if(un.length<2){ toast("Defeat mobs to unlock weapons (next at "+WEAPONS.find(w=>!weaponUnlocked(w.id)).unlock+" kills)"); return; }
   const i=un.findIndex(w=>w.id===(store.weapon||"slime")); const nx=un[(i+1)%un.length]; store.weapon=nx.id; save(); refreshWeaponBtn(); sfx("ui",0.4); toast(nx.emoji+" "+nx.name+" — Lv"+weaponLevel(nx.id)+" · "+nx.desc); }
 function refreshWeaponBtn(){ const b=$("wpnBtn"); if(!b) return; const w=weaponDef(store.weapon||"slime"); b.querySelector("b").textContent=w.emoji; b.lastChild.textContent=w.short||w.name; }
 function refreshDashBtn(){ const b=$("dashBtn"); if(!b||!player) return; const cd=Math.max(0,player.dashCd||0); b.style.opacity=cd>0?"0.55":"1"; const n=b.querySelector("b"); if(n) n.textContent=cd>0?String(Math.ceil(cd*10)/10):"D"; }
 function checkWeaponUnlocks(prev){ for(const w of WEAPONS){ if(w.unlock>0 && prev<w.unlock && (store.kills||0)>=w.unlock){ sfx("level",0.5); toast("🗡️ NEW WEAPON: "+w.emoji+" "+w.name+"! Tap Wpn to switch."); } } }
-function bombSplode(sh){ if(sh._sploded) return; sh._sploded=true; const R=sh.aoe||60; burst(sh.x,sh.y,"#ffb15a",20); impactFX(sh.x,sh.y,sh.x,sh.y-1,"#ffd24a",true); addShake(10);
+function bombSplode(sh){ if(sh._sploded) return; sh._sploded=true; const R=sh.aoe||60, heavy=R>70;
+  burst(sh.x,sh.y,"#ffb15a",heavy?10:8);
+  swings.push({ring:true,x:sh.x,y:sh.y,r0:Math.max(10,R*0.25),life:0.22,max:0.22,col:"#ffd24a"});
+  addShake(heavy?5:3);
+  for(let i=0;i<(heavy?9:6);i++){ const a=i/(heavy?9:6)*6.2832, s=70+Math.random()*90; if(parts.length<190) parts.push({x:sh.x,y:sh.y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:0.22+Math.random()*0.18,max:0.45,col:"#ffb15a",sz:2+Math.random()*2.5}); }
   for(const mob of mobs){ const dx=mob.x-sh.x, dy=mob.y-sh.y; if(dx*dx+dy*dy<R*R){ mob.hp-=Math.round(sh.dmg*0.8); mob.flash=0.14; floatTxt(mob.x,mob.y-mob.r,"-"+Math.round(sh.dmg*0.8),"#ffb15a"); if(mob.hp<=0) killMob(mob); } }
   for(const r of RP.values()){ const mc=(store.clan||"").trim(); if(mc&&(r.clan||"").trim()===mc) continue; const dx=r.x-sh.x, dy=r.y-sh.y; if(dx*dx+dy*dy<R*R){ try{ if(wsOk&&sock&&sock.readyState===1) sock.send(JSON.stringify({type:"hit",to:r.id,dmg:Math.round(sh.dmg*0.8)})); }catch(_){} } } }
 let feedRows=[], lbNames=[], feedReal=false;
@@ -788,6 +1229,7 @@ const MOBS={ goblin:{name:"Goo Wretch",hp:24,dmg:5,spd:60,r:15,drop:{goo:2,scrap
 function makeMob(type,opts){ const m=MOBS[type]||MOBS.goblin, o=opts||{}; const ang=o.ang!=null?o.ang:Math.random()*6.28, dist=o.dist!=null?o.dist:240+Math.random()*Math.min(W,H);
   return { type,name:o.name||m.name,hp:o.hp||m.hp,maxhp:o.hp||m.hp,dmg:o.dmg||m.dmg,spd:o.spd||m.spd,r:o.r||m.r,drop:o.drop||m.drop,col:o.col||m.col,
     x:o.x!=null?o.x:player.x+Math.cos(ang)*dist, y:o.y!=null?o.y:player.y+Math.sin(ang)*dist, dir:"down", walkT:Math.random()*3, _mv:false, flash:0,
+    atkCd:0.4+Math.random()*1.0, wind:0, windMax:0, lunge:0, hitSwing:false, lvx:0, lvy:0,
     boss:!!o.boss, elite:!!o.elite, eventId:o.eventId||null, eventBoss:!!o.eventBoss, spr:{img:o.spr||MOB_OGRES[hash(type+(o.name||m.name))%MOB_OGRES.length]} }; }
 function spawnMob(type){ mobs.push(makeMob(type)); }
 function manageMobs(){ if(RUN&&!RUN.over) return; const raid=raidState().live; const want=raid?12:6;
@@ -905,17 +1347,19 @@ function newGame(){
   refillBalls();
   // unprotected base decays after its flag lapses (build a new flag to keep it)
   if(store.base&&store.base.flagUntil&&store.base.flagUntil<Date.now()&&(store.baseLv||0)>0){ store.baseLv=0; store.base.flagUntil=0; save(); }
-  const hero=(HEROES&&HEROES[store.hero])||(HEROES&&HEROES[0])||{};
+  const champ=activeNftChampion();
+  const hero=champ?{name:champ.name,sprite:champ.sprite,scale:champ.scale||1.08,wpn:champ.weapon||"slime",champion:champ}:((HEROES&&HEROES[store.hero])||(HEROES&&HEROES[0])||{});
   // each ogre fights with its OWN signature weapon (unlock it for this character)
   if(hero.wpn){ store.weapon=hero.wpn; store.unlockedWpns=[...new Set([...(store.unlockedWpns||[]),hero.wpn])]; save(); }
   const maxhp=100+(hasGear("armor")?30:0); const spd=Math.round(178*(hasGear("boots")?1.15:1));
   player={ x:MAP.w*TILE/2, y:MAP.h*TILE/2, r:Math.round(18*(hero.scale||1)), spd, walkT:0, dir:"down", hp:maxhp, maxhp, iframe:0, atkCd:0, _mv:false,
-    sprPath:hero.sprite||(A.creatures&&A.creatures[0])||(A.statics&&A.statics[0])||null, atk:0 };
+    sprPath:hero.sprite||(A.creatures&&A.creatures[0])||(A.statics&&A.statics[0])||null, atk:0, heat:0, overheat:0, counterT:0, rage:0, rageT:0, champion:champ||null };
   buildings=BUILDINGS_DEF.map(b=>({...b, x:b.tx*TILE, y:b.ty*TILE}));
-  creatures=[]; npcs=[]; mobs=[]; gathers=[]; parts=[]; floats=[]; shots=[]; swings=[]; companion=null; shake=0; hitstop=0; combo=0; comboT=0; comboRewardMark=0; worldEvent=null; worldEventCd=18;
+  creatures=[]; npcs=[]; mobs=[]; gathers=[]; parts=[]; floats=[]; hazards=[]; shots=[]; swings=[]; companion=null; shake=0; hitstop=0; combo=0; comboT=0; comboRewardMark=0; worldEvent=null; worldEventCd=18;
   spawnGatherNodes();
   camx=player.x; camy=player.y;
   buildFromFeed();
+  spawnPendingBeams();
   spawnNpcs();
   manageMobs();
   spawnCompanion();
@@ -1066,6 +1510,7 @@ function compassDir(dx,dy){ const dirs=["E","SE","S","SW","W","NW","N","NE"]; co
 function targetInfo(){
   if(!player) return null; let best=null;
   function consider(kind,label,x,y){ const dx=x-player.x, dy=y-player.y, d=Math.hypot(dx,dy); if(!best||d<best.d) best={kind,label,x,y,d,dx,dy}; }
+  if(RUN&&RUN.shrines&&RUN.shrines.length){ for(const s of RUN.shrines) consider("s",s.name,s.x,s.y); if(best) return best; }
   if(worldEvent&&worldEvent.target){ for(const m of mobs.filter(m=>!m._dead&&m.eventId===worldEvent.uid)) consider("m",worldEvent.title,m.x,m.y); if(best) return best; }
   function building(id){ const b=buildings.find(x=>x.id===id)||buildings[0]; if(b) consider("b",b.name.replace(/^\S+\s*/,""),b.x,b.y); }
   const q=QUESTS[store.questStep||0], qt=q&&q.type;
@@ -1089,14 +1534,62 @@ function updateRadar(){
   box.style.display="block"; const t=targetInfo(), title=$("radarTitle"), sub=$("radarSub");
   if(t){ if(title) title.textContent=t.label; if(sub) sub.textContent=Math.max(1,Math.round(t.d/TILE))+" tiles "+compassDir(t.dx,t.dy); }
   else { if(title) title.textContent="Explore"; if(sub) sub.textContent="Find mobs, launches, and huts"; }
-  const dots=[]; const scale=900;
+  const dots=[]; const scale=t?Math.max(680,Math.min(1900,t.d*1.18)):900;
   function dot(cls,x,y){ const dx=Math.max(-1,Math.min(1,(x-player.x)/scale)); const dy=Math.max(-1,Math.min(1,(y-player.y)/scale)); dots.push('<i class="dot '+cls+'" style="left:'+(50+dx*45).toFixed(1)+'%;top:'+(50+dy*45).toFixed(1)+'%"></i>'); }
   dot("p",player.x,player.y);
   for(const b of buildings.slice(0,6)) dot("b",b.x,b.y);
   for(const c of creatures.filter(c=>!c.dead).slice(0,6)) dot("c",c.x,c.y);
-  for(const m of mobs.filter(m=>!m._dead).slice(0,8)) dot("m",m.x,m.y);
+  for(const m of mobs.filter(m=>!m._dead).slice(0,8)) dot(m.boss?"m boss":"m",m.x,m.y);
   for(const g of gathers.filter(g=>!g.dead).slice(0,8)) dot("g",g.x,g.y);
+  if(companion) dot("a",companion.x,companion.y);
+  if(t) dot("t",t.x,t.y);
   map.innerHTML=dots.join("");
+}
+function mapDot(parent,cls,label,x,y){
+  if(!parent) return; const d=document.createElement("i"); d.className="mdot "+cls;
+  d.style.left=Math.max(2,Math.min(98,(x/(MAP.w*TILE))*100)).toFixed(2)+"%";
+  d.style.top=Math.max(2,Math.min(98,(y/(MAP.h*TILE))*100)).toFixed(2)+"%";
+  d.title=label||""; parent.appendChild(d);
+  if(label&&(cls==="p"||cls==="b"||cls==="t"||cls.indexOf("boss")>=0)){ const l=document.createElement("span"); l.className="mlabel"; l.textContent=label; d.appendChild(l); }
+}
+function renderFullMap(){
+  const map=$("fullMap"), sub=$("mapSub"); if(!map||!player) return; map.innerHTML="";
+  const t=targetInfo(); if(sub){ sub.textContent=t?("Goal: "+t.label+" - "+Math.max(1,Math.round(t.d/TILE))+" tiles "+compassDir(t.dx,t.dy)):"Explore the swamp, huts, resources, and hostiles."; }
+  mapDot(map,"p","You",player.x,player.y);
+  for(const b of buildings) mapDot(map,"b",b.name.replace(/^\S+\s*/,""),b.x,b.y);
+  for(const c of creatures.filter(c=>!c.dead).slice(0,20)) mapDot(map,"c",c.sym||"Launch",c.x,c.y);
+  for(const g of gathers.filter(g=>!g.dead).slice(0,28)) mapDot(map,"g",g.name||"Resource",g.x,g.y);
+  for(const m of mobs.filter(m=>!m._dead).slice(0,30)) mapDot(map,m.boss?"m boss":"m",m.name||"Hostile",m.x,m.y);
+  if(companion) mapDot(map,"a",companion.sym||"Ally",companion.x,companion.y);
+  if(t) mapDot(map,"t","GOAL",t.x,t.y);
+}
+function openMap(){ if(state!=="world") return; renderFullMap(); const m=$("mapSheet"); if(m) m.classList.add("on"); }
+function closeMap(){ const m=$("mapSheet"); if(m) m.classList.remove("on"); }
+let targetMob=null, targetHudT=0, targetHudKey="";
+function pickCombatTarget(){
+  if(!player) return null;
+  let best=null, bestScore=-999999;
+  for(const m of mobs){ if(!m||m._dead) continue; const dx=m.x-player.x, dy=m.y-player.y, d=Math.hypot(dx,dy);
+    if(d>760 && !m.boss) continue;
+    const score=(m.boss?100000:0)+(m.elite?18000:0)+(m.wind>0?9000:0)+(m.lunge>0?7000:0)-d;
+    if(score>bestScore){ best=m; bestScore=score; }
+  }
+  return best;
+}
+function updateTargetHud(dt){
+  targetHudT-=dt||0; if(targetHudT>0) return; targetHudT=0.12;
+  const plate=$("targetPlate"); if(!plate) return;
+  targetMob=pickCombatTarget();
+  if(!targetMob||state!=="world"){ plate.classList.remove("on"); targetHudKey=""; return; }
+  const pct=Math.max(0,Math.min(1,(targetMob.hp||0)/(targetMob.maxhp||1)));
+  const intent=targetMob.wind>0?"DODGE":targetMob.lunge>0?"STRIKE":targetMob.boss?"BOSS":targetMob.elite?"ELITE":"HOSTILE";
+  const key=(targetMob.name||"Target")+"|"+intent+"|"+Math.round(pct*100)+"|"+(targetMob.col||"");
+  if(key===targetHudKey) return; targetHudKey=key;
+  $("targetName").textContent=(targetMob.boss?"BOSS - ":"")+(targetMob.name||"Hostile");
+  $("targetIntent").textContent=intent;
+  $("targetHp").style.width=(pct*100).toFixed(1)+"%";
+  plate.style.borderColor=(targetMob.wind>0||targetMob.lunge>0)?"rgba(255,94,94,0.8)":((targetMob.col||"#ff5e5e")+"99");
+  plate.classList.add("on");
 }
 function refreshHud(){
   $("lvl").textContent="Lv "+level();
@@ -1107,9 +1600,12 @@ function refreshHud(){
   const rs=raidState(); const rp=$("raidp"); rp.textContent=rs.label+" "+rs.sub; rp.classList.toggle("live",rs.live);
   const evLine=$("eventLine"); if(evLine){ const txt=eventLineText(); evLine.textContent=txt; evLine.classList.toggle("on",!!txt); evLine.style.borderColor=worldEvent?(worldEvent.col||"#46e8ff"):""; }
   if(player){ $("hpbar").style.width=Math.max(0,player.hp/player.maxhp*100)+"%"; }
+  updateHeatHud(true);
+  updateRageHud(true);
   refreshWeaponBtn();
   refreshDashBtn();
   updateRadar();
+  updateTargetHud(999);
   const wild=creatures.length, rare=creatures.filter(c=>c.rar.k!=="common").length, hostiles=mobs.length;
   const clan=store.clan?`[${store.clan}] `:"";
   const online = wsOk ? ` · 👥 ${RP.size+1} online` : "";
@@ -1133,7 +1629,9 @@ window.addEventListener("keydown",e=>{ const k=e.key.toLowerCase(); keys[k]=true
   if(state!=="world") return;
   // one-shot keys (held movement + attack are read every frame in update())
   if(k==="e"||k==="enter") interact();      // enter building (or swing if none)
+  if(k==="m") openMap();                     // full swamp map
   if(k==="q"||k==="x") cycleWeapon();        // swap weapon
+  if(k==="r") activateRage();                 // NFT/champion overdrive
   if(k==="shift"||k==="z") dashMove();        // quick dodge dash
 });
 window.addEventListener("keyup",e=>{ keys[e.key.toLowerCase()]=false; });
@@ -1142,6 +1640,10 @@ cv.addEventListener("click",()=>{ if(state==="world") interact(); });
 $("actBtn").onclick=()=>{ if(state==="world") interact(); };
 $("dashBtn").onclick=()=>{ if(state==="world") dashMove(); };
 $("wpnBtn").onclick=()=>{ if(state==="world") cycleWeapon(); };
+$("rageBtn").onclick=()=>{ if(state==="world") activateRage(); };
+$("radar").onclick=()=>{ if(state==="world") openMap(); };
+$("mapX").onclick=closeMap;
+backdropClose("mapSheet",closeMap);
 // HOLD-to-fire: press & hold Attack to keep shooting while you move (mobile + mouse)
 let atkHeld=false;
 (function(){ const b=$("atkBtn"); if(!b) return;
@@ -1161,8 +1663,9 @@ function dashMove(){ if(state!=="world"||!player||player.dashCd>0) return; const
   player.x=Math.max(40,Math.min(MAP.w*TILE-40,player.x+d[0]*dist)); player.y=Math.max(40,Math.min(MAP.h*TILE-40,player.y+d[1]*dist));
   player.iframe=Math.max(player.iframe||0,0.32); player.dashCd=0.82; player._mv=true; player.walkT=(player.walkT||0)+0.22;
   for(let i=0;i<12;i++){ const back=12+i*10; if(parts.length<260) parts.push({x:player.x-d[0]*back+(Math.random()*18-9),y:player.y-d[1]*back+(Math.random()*18-9),vx:-d[0]*(20+Math.random()*50),vy:-d[1]*(20+Math.random()*50),life:0.18+Math.random()*0.18,max:0.34,col:"#46e8ff",sz:2+Math.random()*3}); }
-  addShake(4); try{sfx("miss",0.22);}catch(_){} floatTxt(player.x,player.y-player.r*1.5,"DASH","#46e8ff"); refreshDashBtn(); updateRadar(); }
-function playerSwing(){ if(state!=="world"||!player||player.atkCd>0) return; player.atkCd=0.15; player.atk=0.30;
+  const armed=armCounterFromDash();
+  addShake(armed?6:4); try{sfx("miss",0.22);}catch(_){} if(!armed) floatTxt(player.x,player.y-player.r*1.5,"DASH","#46e8ff"); refreshDashBtn(); updateRadar(); }
+function playerSwing(){ if(state!=="world"||!player||player.atkCd>0) return; const wid=store.weapon||"slime"; player.atkCd=(player.overheat||0)>0?0.28:(wid==="slime"?0.18:0.22); player.atk=0.30;
   // aim at the nearest target, else the way we're facing
   let tx,ty,target=null,tkind=null;
   if(nearMob){ target=nearMob; tkind="mob"; } else if(nearFoe){ target=nearFoe; tkind="foe"; } else if(near){ target=near; tkind="wild"; }
@@ -1185,13 +1688,29 @@ function attackFoe(){ const f=nearFoe; if(!f) return; const dmg=Math.round((10+M
   if(performance.now()-lastBattleCue>7000){ lastBattleCue=performance.now(); showBanner("⚔️ BATTLE","sling slimeballs to KO "+(f.name||"them")+"!","#ff7bd0"); sfx("boss",0.3); }
   try{ if(wsOk&&sock&&sock.readyState===1) sock.send(JSON.stringify({type:"hit",to:f.id,dmg})); }catch(_){} }
 function attackMob(){ const m=nearMob; if(!m) return;
-  const dmg=Math.round((22+level()*2)*dmgMult()); m.hp-=dmg; m.flash=0.16; bumpCombo();
+  const dmg=Math.round((22+level()*2)*dmgMult()*consumeCounter(1.65)); m.hp-=dmg; m.flash=0.16; bumpCombo();
   floatTxt(m.x,m.y-m.r,"-"+dmg,"#ffffff");
   const a=Math.atan2(m.y-player.y,m.x-player.x); m.x+=Math.cos(a)*24; m.y+=Math.sin(a)*24; // knockback
   impactFX(m.x,m.y,player.x,player.y,m.col,false);
   if(m.hp<=0) killMob(m); }
+function hurtPlayerFromMob(m,dx,dy){
+  if(!player||!m||m._dead||player.iframe>0) return false;
+  const d=Math.hypot(dx,dy)||1;
+  player.hp-=m.dmg; player.iframe=m.boss?0.95:0.72;
+  player.x+=dx/d*(m.boss?48:36); player.y+=dy/d*(m.boss?48:36);
+  player.vx=(player.vx||0)+dx/d*(m.boss?190:150); player.vy=(player.vy||0)+dy/d*(m.boss?190:150);
+  clampEnt(player,40);
+  floatTxt(player.x,player.y-player.r,"-"+m.dmg,"#ff5e5e");
+  burst(player.x,player.y,"#ff5e5e",m.boss?10:6);
+  addShake(m.boss?11:7); sfx("miss",0.3);
+  gainRage(m.boss?18:10);
+  const hp=$("hpbar"); if(hp) hp.style.width=Math.max(0,player.hp/player.maxhp*100)+"%";
+  if(player.hp<=0) downed();
+  return true;
+}
 function killMob(m){ if(!m||m._dead) return; if(RUN&&!RUN.over){ return survKill(m); }
   m._dead=true; const prevK=store.kills||0; store.kills=prevK+1; recordDaily("kills",1); addRes(m.drop); store.xp+=m.elite?14:8; if(worldEvent&&m.eventId===worldEvent.uid) worldEvent.kills=(worldEvent.kills||0)+1;
+  gainRage(m.boss?35:(m.elite?18:12));
   // bears (Bear Market) sometimes drop a rare 🔮 relic — the key crafting material
   if(m.type==="bear" && Math.random()<0.5){ store.res.relic=(store.res.relic||0)+1; floatTxt(m.x,m.y-14,"+1 🔮 relic","#b06bff"); }
   // RUG BOSS down: guaranteed relics, big XP + raid pts, and "revenge" bragging rights
@@ -1223,13 +1742,14 @@ function update(dt){
   if(keys[" "]||keys["j"]||keys["f"]||atkHeld) playerSwing();
   // velocity smoothing -> eases accel/decel so movement feels fluid, not snappy
   p.vx=p.vx||0; p.vy=p.vy||0; const sm=Math.min(1,dt*12);
-  p.vx+=(ix*p.spd-p.vx)*sm; p.vy+=(iy*p.spd-p.vy)*sm;
+  const moveSpd=p.spd*((p.rageT||0)>0?1.22:1);
+  p.vx+=(ix*moveSpd-p.vx)*sm; p.vy+=(iy*moveSpd-p.vy)*sm;
   if(Math.abs(p.vx)<2&&!ix)p.vx=0; if(Math.abs(p.vy)<2&&!iy)p.vy=0;
   p.x+=p.vx*dt; p.y+=p.vy*dt;
   p.x=Math.max(40,Math.min(MAP.w*TILE-40,p.x)); p.y=Math.max(40,Math.min(MAP.h*TILE-40,p.y));
   p._mv=(Math.abs(p.vx)+Math.abs(p.vy))>14;
   if(p._mv){ p.walkT+=dt; const ax=Math.abs(ix),ay=Math.abs(iy); if(Math.abs(ax-ay)>0.22) p.dir=ax>ay?(ix<0?"left":"right"):(iy<0?"up":"down"); }
-  if(p.atkCd>0)p.atkCd-=dt; if(p.atk>0)p.atk-=dt; if(p.iframe>0)p.iframe-=dt; if(p.dashCd>0)p.dashCd-=dt;
+  if(p.atkCd>0)p.atkCd-=dt; if(p.atk>0)p.atk-=dt; if(p.iframe>0)p.iframe-=dt; if(p.dashCd>0)p.dashCd-=dt; if(p.counterT>0)p.counterT-=dt; if(p.rageT>0){ p.rageT=Math.max(0,p.rageT-dt); updateRageHud(); } coolWeapon(dt);
   radarTick-=dt; if(radarTick<=0){ radarTick=0.2; refreshDashBtn(); updateRadar(); }
   if(p.recoil>0)p.recoil-=dt; if(p.muzzle>0)p.muzzle-=dt; if(p.aimT>0)p.aimT-=dt;
   if(RUN&&!RUN.over){ survTick(dt); } // SURVIVORS horde run: auto-fire, spawns, gems, leveling
@@ -1254,11 +1774,54 @@ function update(dt){
   // hostile mobs: chase, contact-damage, track nearest for melee
   nearMob=null; let nmd=66*66;
   for(const mob of mobs){ const dx=p.x-mob.x, dy=p.y-mob.y, d=Math.hypot(dx,dy)||1;
-    if(d<460){ mob.x+=dx/d*mob.spd*dt; mob.y+=dy/d*mob.spd*dt; mob._mv=true; mob.walkT+=dt; const ax=Math.abs(dx),ay=Math.abs(dy); if(Math.abs(ax-ay)>d*0.18) mob.dir=ax>ay?(dx<0?"left":"right"):(dy<0?"up":"down"); } else { mob._mv=false; mob.walkT+=dt*0.2; }
+    if(mob.atkCd>0) mob.atkCd-=dt;
     if(mob.flash>0) mob.flash-=dt;
-    if(d<mob.r+p.r && p.iframe<=0){ p.hp-=mob.dmg; p.iframe=0.7; p.x+=dx/d*36; p.y+=dy/d*36; p.vx+=dx/d*150; p.vy+=dy/d*150; clampEnt(p,40); floatTxt(p.x,p.y-p.r,"-"+mob.dmg,"#ff5e5e"); burst(p.x,p.y,"#ff5e5e",5); addShake(7); sfx("miss",0.3); if(p.hp<=0) downed(); }
+    if(mob.role==="spitter" && !mob.boss){
+      if(mob.cast>0){
+        mob.cast-=dt; mob._mv=false; mob.walkT+=dt*0.3;
+        if(mob.cast<=0){ spawnEnemyShot(mob,p.x,p.y,{sp:255+survThreat()*12,dmg:Math.round((mob.dmg||7)*0.9),r:8,col:mob.col||"#ffd24a"}); spawnHazardZone(p.x+(Math.random()*70-35),p.y+(Math.random()*70-35),{r:34,life:2.7,dmg:3+Math.round(survThreat()*0.4),col:"#ffd24a",label:"spit"}); }
+      } else if(d<640 && (mob.atkCd||0)<=0){
+        mob.cast=0.42; mob.atkCd=1.15+Math.random()*0.55; mob.wind=0; mob._mv=false; mob.walkT+=dt*0.2;
+      } else {
+        const desired=270, dir=d<desired?-1:1, sp=d>desired+80?mob.spd:mob.spd*0.74;
+        if(d>80){ mob.x+=dx/d*sp*dir*dt; mob.y+=dy/d*sp*dir*dt; mob._mv=true; mob.walkT+=dt; const ax=Math.abs(dx),ay=Math.abs(dy); if(Math.abs(ax-ay)>d*0.18) mob.dir=ax>ay?(dx<0?"left":"right"):(dy<0?"up":"down"); }
+      }
+      clampEnt(mob,30); const dd=dx*dx+dy*dy; if(dd<nmd){ nmd=dd; nearMob=mob; } continue;
+    }
+    if(mob.role==="summoner" && RUN && !mob.boss){
+      mob.summonCd=(mob.summonCd||3)-dt;
+      if(mob.summonCd<=0 && mobs.length<175){ mob.summonCd=5.2+Math.random()*2.8; const threat=survThreat();
+        for(let si=0;si<2;si++){ const a=Math.random()*6.2832, hp=Math.round(10+RUN.t*0.75+threat*4);
+          mobs.push({type:"z",role:"grunt",name:"Spawn",hp,maxhp:hp,dmg:Math.round(4+threat),spd:82+threat*4,r:10+Math.random()*3,drop:{},col:"#b06bff",
+            x:mob.x+Math.cos(a)*(34+Math.random()*20),y:mob.y+Math.sin(a)*(34+Math.random()*20),dir:"down",walkT:0,_mv:true,flash:0,spr:{img:SURV_SPR[1]}}); }
+        spawnHazardZone(mob.x,mob.y,{r:48,life:3.8,dmg:4+Math.round(threat),col:"#b06bff",label:"summon"}); }
+    }
+    const readableCombat=!RUN||mob.boss||mob.elite;
+    if(readableCombat){
+      if(mob.wind>0){
+        mob.wind-=dt; mob._mv=false; mob.walkT+=dt*0.25;
+        const ax=Math.abs(dx),ay=Math.abs(dy); if(Math.abs(ax-ay)>d*0.18) mob.dir=ax>ay?(dx<0?"left":"right"):(dy<0?"up":"down");
+        if(mob.wind<=0){ const lx=p.x-mob.x, ly=p.y-mob.y, ld=Math.hypot(lx,ly)||1, power=(mob.boss?275:215)+(mob.spd||60)*1.25;
+          mob.lunge=mob.boss?0.24:0.18; mob.lvx=lx/ld*power; mob.lvy=ly/ld*power; mob.hitSwing=false; mob.atkCd=mob.boss?0.95:1.15+Math.random()*0.45; }
+      } else if(mob.lunge>0){
+        mob.lunge-=dt; mob.x+=mob.lvx*dt; mob.y+=mob.lvy*dt; mob.lvx*=0.9; mob.lvy*=0.9; mob._mv=true; mob.walkT+=dt*1.25;
+        const ax=Math.abs(mob.lvx),ay=Math.abs(mob.lvy); if(ax+ay>4 && Math.abs(ax-ay)>3) mob.dir=ax>ay?(mob.lvx<0?"left":"right"):(mob.lvy<0?"up":"down");
+        const hx=p.x-mob.x, hy=p.y-mob.y, hd=Math.hypot(hx,hy)||1;
+        if(!mob.hitSwing && hd<mob.r+p.r+8){ mob.hitSwing=hurtPlayerFromMob(mob,hx,hy); }
+        if(mob.lunge<=0){ mob.lunge=0; mob.lvx=0; mob.lvy=0; }
+      } else if(d<mob.r+p.r+56 && (mob.atkCd||0)<=0){
+        mob.windMax=mob.boss?0.55:0.38; mob.wind=mob.windMax; mob._mv=false; mob.walkT+=dt*0.2;
+      } else if(d<460){
+        mob.x+=dx/d*mob.spd*dt; mob.y+=dy/d*mob.spd*dt; mob._mv=true; mob.walkT+=dt; const ax=Math.abs(dx),ay=Math.abs(dy); if(Math.abs(ax-ay)>d*0.18) mob.dir=ax>ay?(dx<0?"left":"right"):(dy<0?"up":"down");
+      } else { mob._mv=false; mob.walkT+=dt*0.2; }
+      clampEnt(mob,30);
+    } else {
+      if(d<460){ mob.x+=dx/d*mob.spd*dt; mob.y+=dy/d*mob.spd*dt; mob._mv=true; mob.walkT+=dt; const ax=Math.abs(dx),ay=Math.abs(dy); if(Math.abs(ax-ay)>d*0.18) mob.dir=ax>ay?(dx<0?"left":"right"):(dy<0?"up":"down"); } else { mob._mv=false; mob.walkT+=dt*0.2; }
+      if(d<mob.r+p.r && p.iframe<=0) hurtPlayerFromMob(mob,dx,dy);
+    }
     const dd=dx*dx+dy*dy; if(dd<nmd){ nmd=dd; nearMob=mob; } }
   for(let i=0;i<mobs.length;i++){ for(let j=i+1;j<mobs.length;j++){ const a=mobs[i], b=mobs[j], dx=b.x-a.x, dy=b.y-a.y, d=Math.hypot(dx,dy)||1, min=a.r+b.r+7; if(d<min){ const push=(min-d)*0.5, nx=dx/d, ny=dy/d; a.x-=nx*push; a.y-=ny*push; b.x+=nx*push; b.y+=ny*push; clampEnt(a,30); clampEnt(b,30); } } }
+  updateHazards(dt);
   // building/resource proximity
   nearBld=null; let bd=86*86; for(const b of buildings){ const dx=b.x-p.x,dy=b.y-p.y,d=dx*dx+dy*dy; if(d<bd){ bd=d; nearBld=b; } }
   nearGather=null; let gd=64*64; for(const g of gathers){ if(g.dead) continue; const dx=g.x-p.x,dy=g.y-p.y,d=dx*dx+dy*dy; if(d<gd){ gd=d; nearGather=g; } }
@@ -1270,6 +1833,7 @@ function update(dt){
   else if(nearBld){ pr.textContent="Enter "+nearBld.name; pr.classList.add("on"); }
   else if(nearGather){ pr.textContent="Harvest "+nearGather.name+" - tap Use"; pr.classList.add("on"); }
   else pr.classList.remove("on");
+  updateTargetHud(dt);
   // particles/floats
   for(const pt of parts){ pt.x+=pt.vx*dt; pt.y+=pt.vy*dt; pt.vx*=0.92; pt.vy*=0.92; pt.life-=dt; } parts=parts.filter(p=>p.life>0);
   for(const f of floats){ f.t+=dt; f.y-=26*dt; } floats=floats.filter(f=>f.t<0.9);
@@ -1281,7 +1845,7 @@ function update(dt){
     // hit mobs (pierce shots keep going + remember who they hit; bombs explode)
     for(const mob of mobs){ if(sh.hit&&sh.hit.indexOf(mob)>=0) continue; const dx=mob.x-sh.x, dy=mob.y-sh.y;
       if(dx*dx+dy*dy<(mob.r+sh.r)*(mob.r+sh.r)){ mob.hp-=sh.dmg; mob.flash=0.14; const sl=Math.hypot(sh.vx,sh.vy)||1; mob.x+=sh.vx/sl*12; mob.y+=sh.vy/sl*12; clampEnt(mob,30);
-        floatTxt(mob.x,mob.y-mob.r,"-"+sh.dmg,"#bbff63"); impactFX(sh.x,sh.y,player.x,player.y,mob.col,false); bumpCombo();
+        floatTxt(mob.x,mob.y-mob.r,"-"+sh.dmg,"#bbff63"); if(sh.aoe){ swings.push({ring:true,x:sh.x,y:sh.y,r0:6,life:0.14,max:0.14,col:mob.col}); } else impactFX(sh.x,sh.y,player.x,player.y,mob.col,false); bumpCombo();
         if(mob.hp<=0) killMob(mob);
         if(sh.pierce){ sh.hit.push(mob); } else { if(sh.aoe) bombSplode(sh); sh.life=0; }
         break; } }
@@ -1313,6 +1877,8 @@ function render(){
   const ox=W/2-camx+shx, oy=H/2-camy+shy;
   ctx.save(); ctx.translate(ox,oy);
   drawGround();
+  drawHazards("zone");
+  drawSurvShrines();
   // building footprints
   for(const b of buildings) drawBuilding(b);
   // sort entities by y
@@ -1334,6 +1900,7 @@ function render(){
     ctx.fillStyle=g; ctx.beginPath(); ctx.arc(0,0,sh.r*1.1,0,6.2832); ctx.fill();
     ctx.fillStyle=sh.col; ctx.beginPath(); ctx.arc(0,0,sh.r*0.6,0,6.2832); ctx.fill();
     ctx.fillStyle="rgba(255,255,255,0.8)"; ctx.beginPath(); ctx.arc(-sh.r*0.28,-sh.r*0.28,sh.r*0.28,0,6.2832); ctx.fill(); ctx.restore(); }
+  drawHazards("shot");
   // slash arcs + impact rings
   for(const s of swings){ const al=Math.max(0,s.life/s.max);
     if(s.ring){ ctx.globalAlpha=al*0.8; ctx.strokeStyle=s.col; ctx.lineWidth=3*al+1; ctx.beginPath(); ctx.arc(s.x,s.y,s.r0,0,6.2832); ctx.stroke(); ctx.globalAlpha=1; continue; }
@@ -1462,6 +2029,9 @@ function drawCompanion(c){ const t=performance.now()/320+(c.bob||0); drawShadow(
   const label="ALLY $"+(c.sym||"DEX"); ctx.strokeText(label,c.x,c.y-c.r-8); ctx.fillText(label,c.x,c.y-c.r-8);
 }
 function drawPlayer(){ const p=player; drawShadow(p.x,p.y,p.r);
+  if((p.rageT||0)>0){ const t=performance.now()/150, rr=p.r*(1.65+Math.sin(t)*0.08);
+    ctx.save(); ctx.globalAlpha=0.68; ctx.strokeStyle="#ffd24a"; ctx.lineWidth=3; ctx.beginPath(); ctx.arc(p.x,p.y-p.r*0.08,rr,t,t+4.7); ctx.stroke();
+    ctx.globalAlpha=0.18; const g=ctx.createRadialGradient(p.x,p.y,1,p.x,p.y,rr*1.2); g.addColorStop(0,"rgba(114,255,35,0.6)"); g.addColorStop(1,"rgba(255,210,74,0)"); ctx.fillStyle=g; ctx.beginPath(); ctx.arc(p.x,p.y,rr*1.2,0,6.2832); ctx.fill(); ctx.restore(); }
   const upFacing=p.dir==="up";
   if(upFacing) drawWeapon(p); // weapon behind the body when walking away
   if(!drawChar(p,p.sprPath,p.r*2.9)){ ctx.fillStyle="#3aa015"; ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,6.2832); ctx.fill(); ctx.fillStyle="#bbff63"; ctx.beginPath(); ctx.arc(p.x,p.y-4,p.r*0.6,0,6.2832); ctx.fill(); }
@@ -1485,6 +2055,15 @@ function drawRemote(r){ drawShadow(r.x,r.y,r.r);
   ctx.font="900 11px Inter,sans-serif"; ctx.textAlign="center"; ctx.fillStyle=ally?"#9bff9b":"#ff9bd6"; ctx.strokeStyle="rgba(0,0,0,0.7)"; ctx.lineWidth=3;
   const ic=ally?"🟢":"⚔️"; ctx.strokeText(ic+" "+tag,r.x,r.y-r.r-9); ctx.fillText(ic+" "+tag,r.x,r.y-r.r-9); }
 function drawMob(m){ drawShadow(m.x,m.y,m.r);
+  if(m===targetMob){ const t=performance.now()/360; ctx.strokeStyle=m.col||"#ff5e5e"; ctx.globalAlpha=0.72; ctx.lineWidth=2.5;
+    ctx.beginPath(); ctx.arc(m.x,m.y-m.r*0.1,m.r*(1.55+Math.sin(t)*0.04),t,t+2.05); ctx.stroke(); ctx.beginPath(); ctx.arc(m.x,m.y-m.r*0.1,m.r*(1.55+Math.sin(t)*0.04),t+3.14,t+5.19); ctx.stroke(); ctx.globalAlpha=1; }
+  if(m.wind>0){ const pr=1-Math.max(0,m.wind)/(m.windMax||0.4), rr=m.r+20+pr*18;
+    ctx.save(); ctx.globalAlpha=0.35+pr*0.45; ctx.strokeStyle="#ff5e5e"; ctx.lineWidth=2.5+pr*2; ctx.setLineDash([7,5]);
+    ctx.beginPath(); ctx.arc(m.x,m.y,rr,0,6.2832); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle="rgba(255,94,94,"+(0.08+pr*0.16).toFixed(3)+")"; ctx.beginPath(); ctx.arc(m.x,m.y,rr*0.78,0,6.2832); ctx.fill();
+    ctx.font="900 9px Inter,sans-serif"; ctx.textAlign="center"; ctx.fillStyle="#ffb0a0"; ctx.strokeStyle="rgba(0,0,0,0.8)"; ctx.lineWidth=3; ctx.strokeText("DODGE",m.x,m.y-m.r-24); ctx.fillText("DODGE",m.x,m.y-m.r-24); ctx.restore(); }
+  if(m.lunge>0){ ctx.save(); ctx.globalAlpha=0.45; ctx.strokeStyle=m.col||"#ff5e5e"; ctx.lineWidth=4; ctx.lineCap="round";
+    ctx.beginPath(); ctx.moveTo(m.x-(m.lvx||0)*0.08,m.y-(m.lvy||0)*0.08); ctx.lineTo(m.x,m.y); ctx.stroke(); ctx.restore(); }
   if(m.elite&&!m.boss){ const t=performance.now()/420; ctx.strokeStyle=m.col||"#ff9a4a"; ctx.globalAlpha=0.55; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(m.x,m.y-m.r*0.1,m.r*(1.3+Math.sin(t)*0.05),0,6.2832); ctx.stroke(); ctx.globalAlpha=1; }
   if(m.boss){ const t=performance.now()/420, pr=m.r*(1.7+Math.sin(t*2)*0.12);
     const g=ctx.createRadialGradient(m.x,m.y,m.r*0.4,m.x,m.y,pr); g.addColorStop(0,(m.col||"#ff5e5e")+"00"); g.addColorStop(0.7,(m.col||"#ff5e5e")+"33"); g.addColorStop(1,(m.col||"#ff5e5e")+"00");
@@ -1516,7 +2095,8 @@ function openEncounter(c){
   $("encStats").innerHTML=`<span>MC <b>${fmtUsd(row.marketCap||row.marketCapUsd)}</b></span><span>age <b>${ageStr(ageSec(row))}</b></span>`+
     `<span>5m <b class="${num(row.m5??row.priceChangeM5)>=0?'up':'down'}">${num(row.m5??row.priceChangeM5)>=0?'+':''}${Math.round(num(row.m5??row.priceChangeM5))}%</b></span>`+
     `<span style="color:${v.c}">${v.t}</span>`;
-  const mint=c.mint; $("encApe").href = (""+mint).startsWith("syn_")?"/terminal":(SITE+"/t?ca="+encodeURIComponent(mint));
+  const mint=c.mint; $("encApe").href = row&&row._beam?(SITE+"/swamp?beam="+encodeURIComponent(row.beamPayload||row.beamId||mint)):((""+mint).startsWith("syn_")?"/terminal":(SITE+"/t?ca="+encodeURIComponent(mint)));
+  $("encApe").textContent = row&&row._beam ? "Mint Ready" : "⚡ Ape";
   // catch bar setup (zone width by rarity)
   catchZoneW=Math.max(0.12, r.rate*0.34); catchZoneX=0.1+Math.random()*(0.8-catchZoneW);
   $("catchzone").style.left=(catchZoneX*100)+"%"; $("catchzone").style.width=(catchZoneW*100)+"%";
@@ -1563,6 +2143,7 @@ function catchChance(rar){ const base=({common:0.95,uncommon:0.85,rare:0.70,epic
 function weakenWild(c,dmg,sx,sy){ if(c.dead) return; if(c.weak==null) c.weak=1;
   c.weak=Math.max(0,c.weak-dmg/catchTough(c.rar)); c.flash=0.14; c.weakShown=2.2;
   floatTxt(c.x,c.y-c.r,"-"+dmg,c.rar.col); bumpCombo(); impactFX(c.x,c.y,sx,sy,c.rar.col,false);
+  gainRage(Math.max(3,(RAR_RANK[c.rar.k]||1)*2));
   if(c.weak<=0){ // fully softened — try to bag it
     if(Math.random()<=catchChance(c.rar)) catchWild(c);
     else { c.weak=0.4; c.flee=1.2; floatTxt(c.x,c.y-c.r-12,"broke free!","#ff9a7e"); sfx("miss",0.35);
@@ -1572,8 +2153,12 @@ function catchPrefix(rar){ return rar&&rar.k==="legendary"?"LEGENDARY ":rar&&rar
 function awardCatch(c){ if(!c||c.dead) return null; c.dead=true; sfx("catch",0.6); sfx("level",0.4);
   const row=c.row||{}; const mcNow=num(row.marketCap||row.marketCapUsd);
   const firstSeen=!store.dex[c.mint];
-  store.dex[c.mint]={ symbol:c.sym, mc:mcNow||1, mcNow:mcNow||1, rarity:c.rar.k, stage:1, ogre:!!row._ogre, at:Date.now() };
+  store.dex[c.mint]={ symbol:c.sym, mc:mcNow||1, mcNow:mcNow||1, rarity:c.rar.k, stage:1, ogre:!!row._ogre, beam:!!row._beam,
+    beamId:row.beamId||"", beamSource:row.beamSource||"", beamKind:row.beamKind||"", mintReady:!!row._beam,
+    claimUrl:row._beam?(SITE+"/swamp?beam="+encodeURIComponent(row.beamPayload||row.beamId||c.mint)):"", at:Date.now() };
+  if(row._beam&&row.beamId){ const claims=beamClaims(); claims[row.beamId]=claims[row.beamId]||{id:row.beamId,mint:c.mint,row:packBeamRow(row),at:Date.now()}; claims[row.beamId].caught=true; claims[row.beamId].caughtAt=Date.now(); claims[row.beamId].mintReady=true; store.res=store.res||{}; store.res.goo=(store.res.goo||0)+(RAR_RANK[c.rar.k]||1); if(c.rar.k==="epic"||c.rar.k==="legendary") store.res.relic=(store.res.relic||0)+1; }
   store.xp+=c.rar.xp; recordDaily("catches",1); save();
+  gainRage((RAR_RANK[c.rar.k]||1)*8);
   if(player) spawnCompanion();
   if(firstSeen){ const sp=coinSpecies(c.mint,c.rar.k); setTimeout(()=>toast("New species: "+sp.element.i+" "+sp.species+" - ATK "+sp.atk+"/DEF "+sp.def+"/HP "+sp.hp),700); }
   burst(c.x,c.y,c.rar.col,22); impactFX(c.x,c.y,c.x,c.y-1,c.rar.col,true);
@@ -1590,9 +2175,10 @@ function caught(c){ const row=awardCatch(c); if(!row) return;
   $("encName").textContent="CAUGHT - "+launchLabel(row,c.sym);
   setTimeout(()=>{ $("catchUI").style.display=""; closeEnc(); replenishWild(); },1100);
 }
-function replenishWild(){ buildFromFeed(); }
+function replenishWild(){ buildFromFeed(); spawnPendingBeams(); }
 function closeEnc(){ catching=false; cancelAnimationFrame(catchAnim); $("enc").classList.remove("on"); encC=null; if(state==="encounter"){ state="world"; lastTs=performance.now(); requestAnimationFrame(loop); } }
 $("encX").onclick=closeEnc; $("encFlee").onclick=closeEnc; $("encAtk").onclick=encAttack;
+backdropClose("enc",closeEnc);
 $("encShill").onclick=()=>{ if(!encC) return; const mint=encC.mint; const tUrl=(""+mint).startsWith("syn_")?SITE+"/swamp":SITE+"/t?ca="+encodeURIComponent(mint);
   const txt=`Just caught ${launchLabel(encC.row,encC.sym)} (${encC.rar.label}) in the SlimeWire Swamp\n\nCatch launch creatures, push raid bosses\n${SITE}/swamp`;
   window.open("https://twitter.com/intent/tweet?text="+encodeURIComponent(txt)+"&url="+encodeURIComponent(tUrl),"_blank"); store.xp+=5; save(); refreshHud(); };
@@ -1608,21 +2194,22 @@ function submitPvp(){ if(!(store.pvpWins>0)) return; try{ fetch(API+"/api/web/sw
 function openDex(){ state="dex"; $("prompt").classList.remove("on");
   const entries=Object.entries(store.dex).sort((a,b)=>(b[1].at||0)-(a[1].at||0));
   const counts={common:0,uncommon:0,rare:0,epic:0,legendary:0}; entries.forEach(([,c])=>{ if(counts[c.rarity]!=null)counts[c.rarity]++; });
-  const w=worthAvg();
+  const w=worthAvg(), beamN=entries.filter(([,c])=>c&&c.beam).length;
   $("dexSub").innerHTML=`${entries.length} caught · Swamp Worth <b style="color:var(--gold)">${w?w.toFixed(2)+"x":"—"}</b> · `+
     `<span style="color:var(--cLegend)">★${counts.legendary}</span> <span style="color:var(--cEpic)">${counts.epic}</span> <span style="color:var(--cRare)">${counts.rare}</span> <span style="color:var(--cUncommon)">${counts.uncommon}</span> <span style="color:var(--cCommon)">${counts.common}</span>`
     + `<div style="color:var(--dim);font-size:0.72rem;margin-top:3px">tap a launch card to open its live chart 📈</div>`;
+  if(beamN) $("dexSub").innerHTML=$("dexSub").innerHTML.replace("<div style="," Â· <span style=\"color:var(--blue)\">QR "+beamN+"</span><div style=");
   const grid=$("dexGrid"); grid.innerHTML="";
   if(!entries.length){ grid.innerHTML='<div style="grid-column:1/-1;color:var(--dim);text-align:center;padding:20px">Empty. Go catch some launch creatures!</div>'; }
   let evoChanged=false;
   for(const [mint,c] of entries){ const mult=num(c.mc)>0&&num(c.mcNow)>0?c.mcNow/c.mc:1; const rc=(RAR[c.rarity]||RAR.common).col;
     const evo=evoStageOf(mult); const peak=Math.max(c.evo||1,evo.s); if(peak!==(c.evo||1)){ c.evo=peak; evoChanged=true; }
     const tierName=(EVO_TIERS.find(t=>t.s===peak)||{}).name||"";
-    const d=document.createElement("div"); d.className="dcard"+(peak>1?(" e"+peak):""); d.style.borderColor=peak>1?"":rc+"55";
+    const d=document.createElement("div"); d.className="dcard"+(c.beam?" beam":"")+(peak>1?(" e"+peak):""); d.style.borderColor=peak>1?"":rc+"55";
     // caught coin shows its element creature card art (unified with the Arena)
     const path=elemArt(coinSpecies(mint,c.rarity).element.n);
-    const real=!String(mint).startsWith("syn_")&&!String(mint).startsWith("founder_");
-    const href=real?(SITE+"/t?ca="+encodeURIComponent(mint)):(SITE+"/terminal");
+    const real=!c.beam&&!String(mint).startsWith("syn_")&&!String(mint).startsWith("founder_");
+    const href=c.beam?(c.claimUrl||SITE+"/swamp"):(real?(SITE+"/t?ca="+encodeURIComponent(mint)):(SITE+"/terminal"));
     d.style.cursor="pointer";
     const sp=coinSpecies(mint,c.rarity); const el=sp.element;
     d.title=`$${c.symbol} — ${sp.species} (${el.n}) · ATK ${sp.atk} / DEF ${sp.def} / HP ${sp.hp} · tap for chart`;
@@ -1634,6 +2221,7 @@ function openDex(){ state="dex"; $("prompt").classList.remove("on");
       `<div class="dsp" style="font-size:0.56rem;font-weight:800;line-height:1.1;color:${el.c};margin:1px 0 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${sp.species}</div>`+
       `<div class="dstat" style="font-size:0.52rem;color:var(--dim);letter-spacing:.2px">⚔${sp.atk} 🛡${sp.def} ❤${sp.hp}</div>`+
       `<div class="dm ${mult>=1?'up':'down'}">${mult>=1?'+':''}${((mult-1)*100).toFixed(0)}%</div>`;
+    if(c.beam){ d.title+=" - Beam mint-ready"; d.insertAdjacentHTML("beforeend",'<div class="beamtag">BEAM</div>'); }
     d.onclick=()=>{ try{ sfx("ui",0.3); window.open(href,"_blank","noopener"); }catch(_){} };
     grid.appendChild(d); }
   if(evoChanged) save();
@@ -1641,6 +2229,7 @@ function openDex(){ state="dex"; $("prompt").classList.remove("on");
 }
 function closeDex(){ $("dex").classList.remove("on"); if(state==="dex"){ state="world"; lastTs=performance.now(); requestAnimationFrame(loop); } }
 $("dexBtn").onclick=()=>{ if(state==="world") openDex(); }; $("dexX").onclick=closeDex;
+backdropClose("dex",closeDex);
 
 /* ===================== CARD ARENA — Phase 1 (deck + turn battle vs AI boss) ===================== */
 const ELEM_CHART={Toxic:{Bog:1.5,Slime:1.5,Volt:0.6},Ember:{Frost:1.5,Bog:1.5,Void:0.6},Frost:{Volt:1.5,Ember:0.6},Volt:{Frost:1.5,Toxic:1.5,Bog:0.6},Void:{Slime:1.5,Void:1.5,Ember:0.6},Bog:{Volt:1.5,Toxic:0.6},Slime:{Void:1.5,Frost:1.5}};
@@ -1840,7 +2429,7 @@ async function startPvp(){
   B={me:my, foe, mi:0, fi:0, turn:"me", over:false, pvp:true, oppName:(opp.name||"rival")};
   arenaShow("arenaBattle"); renderBattle(); try{sfx("boss",0.5);}catch(_){} showBanner("⚔️ PvP DUEL","vs "+(opp.name||"rival")+(opp.clan?" ["+opp.clan+"]":""),"#ff7bd0"); bLog("Dueling "+(opp.name||"a rival")+"'s deck!"); }
 $("arenaBtn").onclick=()=>{ if(state==="world") openArena(); }; $("arenaX").onclick=closeArena; $("battleStart").onclick=startBattle;
-try{ $("arena").addEventListener("click",e=>{ if(e.target&&e.target.id==="arena") closeArena(); }); }catch(_){}
+backdropClose("arena",closeArena);
 $("storyOpen").onclick=openStory; $("storyBack").onclick=()=>{ arenaShow("arenaDeck"); buildDeckUI(); };
 $("survivalStart").onclick=startSurvival; $("pvpStart").onclick=startPvp;
 
@@ -1916,6 +2505,10 @@ function doBldAct(act){
 }
 function closeBld(){ $("bld").classList.remove("on"); if(state==="bld"){ state="world"; lastTs=performance.now(); requestAnimationFrame(loop); } }
 $("bldX").onclick=closeBld;
+backdropClose("bld",closeBld);
+function backdropClose(id,fn){ try{ const el=$(id); if(!el||el._swBackdropClose) return; el._swBackdropClose=1;
+  el.addEventListener("pointerdown",e=>{ if(e.target===el) fn(); });
+}catch(_){} }
 
 /* ---- title / boot ---- */
 function showTitle(){ state="title"; $("load").style.display="none"; $("start").classList.add("on");
@@ -1935,12 +2528,14 @@ function showTitle(){ state="title"; $("load").style.display="none"; $("start").
   const hc=$("herocount"); if(hc) hc.textContent=unlockedN+" / "+list.length+" ogres unlocked";
   $("best").textContent=dexCount()?("your Swampdex: "+dexCount()+" caught - "+(worthAvg()?worthAvg().toFixed(2)+"x worth":"")):"";
   $("mute").textContent=store.muted?"OFF":"SND";
+  refreshNftButton();
   try{ checkAch(); updateTitleStats(); updateContracts(); }catch(_){}
 }
 function enterWorld(){ $("start").classList.remove("on"); $("hud").style.display="block"; startAmbient(); newGame();
   connectWS();
   state="world"; lastTs=performance.now();
-  toast(("ontouchstart" in window)?"Drag to move - Dash to dodge - Attack":"WASD move - Space/J attack - Shift/Z dash - E enter - Q swap weapon");
+  showChampionIntro();
+  toast(("ontouchstart" in window)?"Drag to move - Dash into danger for counters - tap radar map":"WASD move - Space/J attack - Shift/Z counter dash - M map - E enter");
   try{ checkQuests(); const q=QUESTS[store.questStep||0]; if(q) setTimeout(()=>toast("📜 Quest: "+q.t),2600); }catch(_){}
   requestAnimationFrame(loop); }
 $("play").onclick=enterWorld;
@@ -1958,17 +2553,32 @@ const UPGRADES=[
 ];
 function nearestMobs(n){ const live=mobs.filter(m=>!m._dead); live.sort((a,b)=>(((a.x-player.x)**2+(a.y-player.y)**2)-((b.x-player.x)**2+(b.y-player.y)**2))); return live.slice(0,n); }
 const SURV_SPR=["/assets/slimewire/swamp/art/enemy-zombie.png","/assets/slimewire/swamp/art/enemy-ghoul.png"];
-function survSpawnWave(){ if(mobs.length>140) return; const t=RUN.t, lv=level(); const n=1+Math.floor(t/8)+(Math.random()<0.5?1:0);
-  for(let i=0;i<n;i++){ const ang=Math.random()*6.2832, dist=340+Math.random()*90; const fast=Math.random()<0.42;
-    const hp=Math.round((fast?13:22)+t*2.4+lv*4), dmg=Math.round(7+t*0.2), spd=(fast?76:52)+Math.min(86,t*0.62);
-    mobs.push({ type:"z", name:"", hp, maxhp:hp, dmg, spd, r:(fast?11:15)+Math.random()*4, drop:{}, col:"#8aff5a",
+const SURV_ELITES=[
+  {name:"Bog Hunter",col:"#ffd24a",spr:"/assets/slimewire/swamp/art/enemy-ghoul.png"},
+  {name:"Rift Butcher",col:"#ff7a5e",spr:"/assets/slimewire/swamp/art/enemy-zombie.png"},
+  {name:"Goo Stalker",col:"#46e8ff",spr:"/assets/slimewire/swamp/art/enemy-ghoul.png"}
+];
+function survThreat(){ if(!RUN) return 1; const push=Math.max(1,RUN.pushMul||1);
+  const v=1+(RUN.t||0)/52+(RUN.lvl||1)*0.16+(RUN.kills||0)/170+(RUN.bossKills||0)*0.42+(RUN.shrineWins||0)*0.12+(RUN.shrineMisses||0)*0.32+(push-1)*1.05;
+  RUN.threat=Math.max(1,Math.min(7.5,v)); return RUN.threat; }
+function survSpawnWave(){ const threat=survThreat(), cap=Math.min(190,118+Math.round(threat*11)); if(mobs.length>cap) return; const t=RUN.t, lv=level();
+  const n=Math.min(12,1+Math.floor(t/10)+Math.floor(threat/1.65)+(Math.random()<Math.min(0.85,0.22+threat*0.08)?1:0));
+  for(let i=0;i<n;i++){ const ang=Math.random()*6.2832, dist=330+Math.random()*(100+threat*12); const fast=Math.random()<Math.min(0.72,0.34+threat*0.035);
+    const elite=Math.random()<Math.min(0.34,0.025+threat*0.04), e=elite?SURV_ELITES[(Math.random()*SURV_ELITES.length)|0]:null;
+    const roll=Math.random(), role=elite?(roll<0.34?"spitter":roll<0.66?"summoner":"charger"):(roll<Math.min(0.2,0.04+threat*0.018)?"spitter":(roll<Math.min(0.31,0.08+threat*0.025)?"charger":"grunt"));
+    const roleName=role==="spitter"?"Spitter":role==="summoner"?"Caller":role==="charger"?"Charger":"";
+    const hp=Math.round(((fast?12:21)+t*(1.55+threat*0.22)+lv*(3.4+threat*0.18))*(elite?2.35:1));
+    const dmg=Math.round((6+t*0.08+threat*1.35)*(elite?1.45:1));
+    const spd=((fast?76:52)+Math.min(92,t*0.42)+threat*4.2)*(elite?1.04:1)*(role==="spitter"?0.88:role==="summoner"?0.82:1);
+    mobs.push({ type:"z", role, elite, name:elite?e.name:roleName, hp:Math.round(hp*(role==="summoner"?1.22:role==="spitter"?0.86:1)), maxhp:Math.round(hp*(role==="summoner"?1.22:role==="spitter"?0.86:1)), dmg, spd, r:(fast?11:15)+Math.random()*4+(elite?5:0)+(role==="summoner"?3:0), drop:{}, col:elite?e.col:(role==="spitter"?"#ffd24a":role==="summoner"?"#b06bff":"#8aff5a"),
       x:player.x+Math.cos(ang)*dist, y:player.y+Math.sin(ang)*dist, dir:"down", walkT:Math.random()*3, _mv:true, flash:0,
-      spr:{img:fast?SURV_SPR[1]:SURV_SPR[0]} }); } }
-function survBoss(){ if(mobs.length>110) return; const t=RUN.t, lv=level(); const ang=Math.random()*6.2832, dist=430;
-  const hp=Math.round(220+t*7+lv*12);
-  mobs.push({ type:"zboss", boss:true, name:"🧟 HORDE BOSS", hp, maxhp:hp, dmg:Math.round(12+t*0.2), spd:44, r:30, drop:{}, col:"#ff5e5e",
+      cast:0, summonCd:2.8+Math.random()*2.5,
+      spr:{img:elite?e.spr:(fast?SURV_SPR[1]:SURV_SPR[0])} }); } }
+function survBoss(){ if(mobs.length>125) return; const threat=survThreat(), t=RUN.t, lv=level(); const ang=Math.random()*6.2832, dist=430;
+  const hp=Math.round(230+t*(5.8+threat*1.1)+lv*(10+threat*1.2)+(RUN.bossKills||0)*85);
+  mobs.push({ type:"zboss", role:"boss", boss:true, elite:true, name:"HORDE BOSS", hp, maxhp:hp, dmg:Math.round(11+t*0.12+threat*2.2), spd:44+threat*2.5, r:30+Math.min(10,threat), drop:{}, col:"#ff5e5e",
     x:player.x+Math.cos(ang)*dist, y:player.y+Math.sin(ang)*dist, dir:"down", walkT:0, _mv:true, flash:0, spr:{img:"/assets/slimewire/swamp/art/enemy-zombie.png"} });
-  try{ showBanner("🧟 HORDE BOSS","Big one incoming — focus fire!","#ff5e5e"); sfx("boss",0.4);}catch(_){} }
+  try{ showBanner("HORDE BOSS","Threat "+threat.toFixed(1)+" - focus fire and dodge windups","#ff5e5e"); sfx("boss",0.4);}catch(_){} }
 function offerExtractChoice(){ if(!RUN||RUN.over) return;
   runPaused=true;
   const modal=$("upPick"), box=$("upCards"); if(!modal||!box){ runPaused=false; return; }
@@ -1983,7 +2593,49 @@ function offerExtractChoice(){ if(!RUN||RUN.over) return;
     d.innerHTML='<div class="ic">'+c.ic+'</div><div><div class="un">'+c.n+'</div><div class="ud">'+c.d+'</div></div>';
     d.onclick=c.go; box.appendChild(d); });
   modal.classList.add("on"); }
-function survKill(m){ if(m._dead) return; m._dead=true; RUN.kills++; recordDaily("horde",1); if(m&&m.boss) recordDaily("bosses",1);
+const SHRINE_TYPES=[
+  {id:"heal",name:"Green Font",col:"#72ff23",reward:"heal"},
+  {id:"rage",name:"Rage Totem",col:"#ffd24a",reward:"rage"},
+  {id:"relic",name:"Relic Cache",col:"#46e8ff",reward:"relic"}
+];
+function survSpawnShrine(){
+  if(!RUN||RUN.over||!player) return;
+  RUN.shrines=RUN.shrines||[];
+  if(RUN.shrines.length>=2) return;
+  const def=SHRINE_TYPES[(hash("shrine"+Math.floor((RUN.t||0)*10)+RUN.kills)%SHRINE_TYPES.length)];
+  const a=Math.random()*6.2832, dist=280+Math.random()*260;
+  const x=Math.max(90,Math.min(MAP.w*TILE-90,player.x+Math.cos(a)*dist));
+  const y=Math.max(90,Math.min(MAP.h*TILE-90,player.y+Math.sin(a)*dist));
+  RUN.shrines.push({id:"s"+Date.now()+Math.random().toString(36).slice(2,5),...def,x,y,r:62,life:22,need:2.35,charge:0});
+  try{ showBanner(def.name,"Hold the glowing circle for a raid boost",def.col); }catch(_){}
+}
+function completeShrine(s){
+  if(!RUN||!s||s.done) return; s.done=true; RUN.shrineWins=(RUN.shrineWins||0)+1;
+  if(s.reward==="heal"){ player.hp=Math.min(player.maxhp,player.hp+42); floatTxt(player.x,player.y-player.r*1.7,"+heal",s.col); }
+  else if(s.reward==="rage"){ gainRage(34); RUN.xp+=5; floatTxt(player.x,player.y-player.r*1.7,"+rage",s.col); }
+  else { RUN.pendingRelics=(RUN.pendingRelics||0)+1; RUN.pendingXp=(RUN.pendingXp||0)+10; RUN.xp+=4; floatTxt(player.x,player.y-player.r*1.7,"+relic",s.col); }
+  burst(s.x,s.y,s.col,22); addShake(6); updateRunHud(); try{sfx("level",0.36); showBanner(s.name,"secured - keep pushing",s.col);}catch(_){}
+}
+function survTickShrines(dt){
+  if(!RUN) return; RUN.shrines=RUN.shrines||[];
+  for(const s of RUN.shrines){
+    s.life-=dt; const dx=player.x-s.x, dy=player.y-s.y, inside=dx*dx+dy*dy<s.r*s.r;
+    s.charge=Math.max(0,Math.min(s.need,(s.charge||0)+(inside?dt:-dt*0.55)));
+    if(inside && Math.random()<dt*5 && parts.length<260) parts.push({x:s.x+(Math.random()*2-1)*s.r,y:s.y+(Math.random()*2-1)*s.r,vx:0,vy:-20-Math.random()*30,life:0.25,max:0.35,col:s.col,sz:2+Math.random()*3});
+    if(s.charge>=s.need) completeShrine(s);
+    else if(s.life<=0){ s.done=true; RUN.shrineMisses=(RUN.shrineMisses||0)+1; spawnHazardZone(s.x,s.y,{r:88,life:5.5,dmg:5+Math.round(survThreat()),col:"#ff5e5e",label:"failed shrine"}); try{toast("Shrine collapsed - threat rising");}catch(_){} }
+  }
+  RUN.shrines=RUN.shrines.filter(s=>!s.done);
+}
+function drawSurvShrines(){
+  if(!RUN||!RUN.shrines||!RUN.shrines.length) return;
+  for(const s of RUN.shrines){ const pct=Math.max(0,Math.min(1,(s.charge||0)/s.need)), pulse=1+Math.sin(performance.now()/240+s.x)*0.06;
+    ctx.save(); ctx.globalAlpha=0.2+0.22*pct; ctx.fillStyle=s.col; ctx.beginPath(); ctx.arc(s.x,s.y,s.r*pulse,0,6.2832); ctx.fill();
+    ctx.globalAlpha=0.86; ctx.strokeStyle=s.col; ctx.lineWidth=3; ctx.setLineDash([10,7]); ctx.beginPath(); ctx.arc(s.x,s.y,s.r*pulse,0,6.2832); ctx.stroke(); ctx.setLineDash([]);
+    ctx.globalAlpha=1; ctx.fillStyle="rgba(0,0,0,0.62)"; ctx.fillRect(s.x-38,s.y-s.r-18,76,6); ctx.fillStyle=s.col; ctx.fillRect(s.x-38,s.y-s.r-18,76*pct,6);
+    ctx.font="900 10px Inter,sans-serif"; ctx.textAlign="center"; ctx.fillStyle="#eaffe0"; ctx.strokeStyle="rgba(0,0,0,0.75)"; ctx.lineWidth=3; ctx.strokeText(s.name,s.x,s.y-s.r-24); ctx.fillText(s.name,s.x,s.y-s.r-24); ctx.restore(); }
+}
+function survKill(m){ if(m._dead) return; m._dead=true; RUN.kills++; recordDaily("horde",1); if(m&&m.boss) recordDaily("bosses",1); gainRage(m.boss?24:(m.elite?10:4));
   burst(m.x,m.y,m.col||"#8aff5a",m.boss?26:8);
   gems.push({x:m.x,y:m.y,v:m.boss?9:1}); if(m.boss){
     player.hp=Math.min(player.maxhp,player.hp+25); addShake&&addShake(8);
@@ -1997,10 +2649,17 @@ function survKill(m){ if(m._dead) return; m._dead=true; RUN.kills++; recordDaily
   }
   mobs=mobs.filter(x=>x!==m); if(nearMob===m) nearMob=null; }
 function survTick(dt){ RUN.t+=dt;
+  const threat=survThreat();
   if(RUN.up.regen>0) player.hp=Math.min(player.maxhp, player.hp+RUN.up.regen*dt);
-  RUN.spawnCd-=dt; if(RUN.spawnCd<=0){ survSpawnWave(); RUN.spawnCd=Math.max(0.22, 1.4-RUN.t*0.015); }
-  RUN.bossCd-=dt; if(RUN.bossCd<=0){ RUN.bossCd=30; survBoss(); }
-  player.fireCd=(player.fireCd||0)-dt; if(player.fireCd<=0){ const tg=nearestMobs(1+RUN.up.multi); if(tg.length){ player.fireCd=0.55/RUN.up.rate; for(const m of tg) fireWeapon(m.x,m.y); } else player.fireCd=0.1; }
+  RUN.spawnCd-=dt; if(RUN.spawnCd<=0){ survSpawnWave(); RUN.spawnCd=Math.max(0.18, 1.34-RUN.t*0.009-threat*0.055); }
+  RUN.bossCd-=dt; if(RUN.bossCd<=0){ RUN.bossCd=Math.max(18,31-threat*1.4); survBoss(); }
+  RUN.shrineCd-=dt; if(RUN.shrineCd<=0){ survSpawnShrine(); RUN.shrineCd=22+Math.random()*13; }
+  survTickShrines(dt);
+  player.fireCd=(player.fireCd||0)-dt; if(player.fireCd<=0){ const tg=nearestMobs(1+RUN.up.multi); if(tg.length){
+      const wid=store.weapon||"slime", aoe=(wid==="bomb"||wid==="boulder"), burstCount=aoe?1:tg.length;
+      player.fireCd=(aoe?0.92:0.55)/RUN.up.rate;
+      for(const m of tg.slice(0,burstCount)) fireWeapon(m.x,m.y);
+    } else player.fireCd=0.1; }
   const mag=RUN.up.magnet, mag2=mag*mag;
   for(const g of gems){ const dx=player.x-g.x, dy=player.y-g.y, d2=dx*dx+dy*dy;
     if(d2<mag2){ const d=Math.sqrt(d2)||1; const pull=(1-d/mag)*560*dt+90*dt; g.x+=dx/d*pull; g.y+=dy/d*pull; }
@@ -2015,14 +2674,14 @@ function survLevelUp(){ RUN.xp-=RUN.xpNext; RUN.lvl++; RUN.xpNext=Math.round(RUN
     d.innerHTML=`<div class="ic">${u.ic}</div><div><div class="un">${u.n}</div><div class="ud">${u.d}</div></div>`;
     d.onclick=()=>{ try{u.ap();}catch(_){} $("upPick").classList.remove("on"); runPaused=false; lastTs=performance.now(); }; box.appendChild(d); });
   $("upPick").classList.add("on"); }
-function updateRunHud(){ const m=Math.floor(RUN.t/60), s=Math.floor(RUN.t%60); $("rhTime").textContent=m+":"+String(s).padStart(2,"0");
+function updateRunHud(){ const m=Math.floor(RUN.t/60), s=Math.floor(RUN.t%60), threat=survThreat(); $("rhTime").textContent=m+":"+String(s).padStart(2,"0");
   $("rhKills").textContent=RUN.kills; $("rhLvl").textContent="Lv "+RUN.lvl; $("rhXp").style.width=Math.min(100,RUN.xp/RUN.xpNext*100)+"%";
-  const loot=$("rhLoot"); if(loot){ const rel=RUN.pendingRelics||0, xp=RUN.pendingXp||0, mult=(RUN.pushMul||1); loot.textContent="loot "+rel+" relic"+(rel===1?"":"s")+" - "+xp+" XP - "+mult.toFixed(2)+"x"; } }
+  const loot=$("rhLoot"); if(loot){ const rel=RUN.pendingRelics||0, xp=RUN.pendingXp||0, mult=(RUN.pushMul||1), shr=(RUN.shrines&&RUN.shrines.length)?(" - shrine "+Math.ceil(RUN.shrines[0].life)+"s"):""; loot.textContent="threat "+threat.toFixed(1)+shr+" - loot "+rel+" relic"+(rel===1?"":"s")+" - "+xp+" XP - "+mult.toFixed(2)+"x"; } }
 function survStart(){ const wasRunning=(state==="world"); $("start").classList.remove("on"); $("runEnd").classList.remove("on"); $("upPick").classList.remove("on");
   $("hud").style.display="block"; try{startAmbient();}catch(_){} newGame();
-  creatures=[]; npcs=[]; mobs=[]; gathers=[]; gems=[]; parts=[]; floats=[]; shots=[]; buildings=[]; worldEvent=null;
+  creatures=[]; npcs=[]; mobs=[]; gathers=[]; gems=[]; parts=[]; floats=[]; hazards=[]; shots=[]; buildings=[]; worldEvent=null;
   player.x=MAP.w*TILE/2; player.y=MAP.h*TILE/2; player.hp=player.maxhp; player.fireCd=0;
-  RUN={ t:0, xp:0, xpNext:5, lvl:1, kills:0, spawnCd:0.4, bossCd:24, over:false, revives:0, bossKills:0, pendingRelics:0, pendingXp:0, pushMul:1, extracted:false, up:{dmg:1,rate:1,multi:0,magnet:115,regen:0,xpMul:1} };
+  RUN={ t:0, xp:0, xpNext:5, lvl:1, kills:0, spawnCd:0.4, bossCd:24, shrineCd:12, shrines:[], shrineWins:0, shrineMisses:0, over:false, revives:0, bossKills:0, pendingRelics:0, pendingXp:0, pushMul:1, extracted:false, up:{dmg:1,rate:1,multi:0,magnet:115,regen:0,xpMul:1} };
   try{ applyMeta(); }catch(_){}
   runPaused=false; state="world"; lastTs=performance.now(); $("runHud").classList.add("on"); refreshHud(); updateRunHud();
   try{ showBanner("🧟 SURVIVE THE HORDE","Auto-fire ON — just move & dodge!","#ff5e5e"); }catch(_){}
@@ -2045,7 +2704,9 @@ function endRun(died){ if(!RUN||RUN.over) return;
   $("runEnd").classList.add("on"); }
 $("playSurv").onclick=survStart;
 $("reAgain").onclick=survStart;
-$("reExit").onclick=()=>{ RUN=null; gems=[]; mobs=[]; $("runEnd").classList.remove("on"); $("runHud").classList.remove("on"); state="title"; $("hud").style.display="none"; showTitle(); };
+function closeRunEnd(){ RUN=null; gems=[]; mobs=[]; hazards=[]; $("runEnd").classList.remove("on"); $("runHud").classList.remove("on"); state="title"; $("hud").style.display="none"; showTitle(); }
+$("reExit").onclick=closeRunEnd;
+backdropClose("runEnd",closeRunEnd);
 
 /* ===================== META: Workshop · Achievements · Daily · Leaderboard ===================== */
 const META_UPS=[
@@ -2059,6 +2720,7 @@ const META_UPS=[
 function metaLvl(id){ return (store.meta&&store.meta[id])||0; }
 function relicsHave(){ return (store.res&&store.res.relic)||0; }
 function openShop(){ buildShop(); $("shop").classList.add("on"); }
+function closeShop(){ $("shop").classList.remove("on"); }
 function buildShop(){ const list=$("shopList"); list.innerHTML=""; $("shopSub").innerHTML=`You have <b style="color:var(--gold)">${relicsHave()} 🔮</b> — permanent upgrades boost <i>every</i> run.`;
   META_UPS.forEach(u=>{ const lv=metaLvl(u.id), maxed=lv>=u.max, cost=u.cost(lv), can=(!maxed&&relicsHave()>=cost);
     const d=document.createElement("div"); d.className="upcard"; d.style.cursor=maxed?"default":"pointer"; d.style.opacity=maxed?"0.7":"1";
@@ -2109,8 +2771,9 @@ function tryClaimDaily(secs){ if(dailyClaimed()) return; if(secs>=150){ store.da
 function submitSurvival(){ if(!(store.survRunBest>0)) return; try{ fetch(API+"/api/web/swamp-leaderboard",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({mode:"survival",score:store.survRunBest,name:(store.lbName||"anon"),clan:store.clan||"",meta:"Lv"+level()})}).catch(()=>{}); }catch(_){} }
 async function showSurvBoard(){ try{ const r=await fetch(API+"/api/web/swamp-leaderboard?mode=survival",{cache:"no-store"}); const j=await r.json(); const rows=(j&&j.scores)||[];
   const el=$("reBoard"); if(el) el.innerHTML = rows.length? ("🏆 Top survivors:<br>"+rows.slice(0,5).map((s,i)=>`${i+1}. ${s.name} — ${s.score} kills`).join("<br>")) : "Be the first on the leaderboard!"; }catch(_){} }
-function updateTitleStats(){ const ts=$("titleStats"), day=ensureDaily(); const claimed=Object.keys(day.claimed||{}).length;
-  if(ts) ts.textContent="relics: "+relicsHave()+" | best: "+(store.survRunBest||0)+" | daily: "+claimed+"/"+DAILY_CONTRACTS.length+" | badges: "+achCount()+"/"+ACH.length;
+function updateTitleStats(){ const ts=$("titleStats"), day=ensureDaily(); const claimed=Object.keys(day.claimed||{}).length, beams=Object.values(store.dex||{}).filter(c=>c&&c.beam).length;
+  const champ=activeNftChampion();
+  if(ts) ts.textContent="relics: "+relicsHave()+" | best: "+(store.survRunBest||0)+" | beams: "+beams+(champ?" | PFP: "+champ.name:"")+" | daily: "+claimed+"/"+DAILY_CONTRACTS.length+" | badges: "+achCount()+"/"+ACH.length;
   const td=$("titleDaily"); if(td) td.textContent= dailyClaimed()? "Daily complete" : "Daily: survive 2:30 in a run for +8 relics"; }
 function contractCard(title,sub,onClick,cls){ const d=document.createElement("button"); d.type="button"; d.className="contract"; if(cls) d.classList.add(cls); d.innerHTML="<b>"+title+"</b><span>"+sub+"</span>"; d.onclick=onClick; return d; }
 function updateContracts(){ const box=$("contracts"); if(!box) return; box.innerHTML="";
@@ -2121,15 +2784,24 @@ function updateContracts(){ const box=$("contracts"); if(!box) return; box.inner
   for(const c of DAILY_CONTRACTS){ const p=Math.min(c.progress(day),c.goal), claimed=day.claimed&&day.claimed[c.id], ready=p>=c.goal&&!claimed;
     box.appendChild(contractCard((claimed?"Done: ":ready?"Claim: ":"Daily: ")+c.title, claimed?"claimed":(p+"/"+c.goal+" - "+rewardText(c.reward)), ()=>{ if(ready) claimDailyContract(c.id); else c.go(); }, claimed?"done":(ready?"ready":""))); }
 }
-$("openShop").onclick=openShop; $("reShop").onclick=openShop; $("shopX").onclick=()=>$("shop").classList.remove("on");
+function maybeOpenUrlBeam(){ if(urlBeamHandled) return; let code=""; try{ const q=new URLSearchParams(location.search); code=q.get("beam")||q.get("swamp")||q.get("claim")||q.get("code")||""; }catch(_){}
+  if(code){ urlBeamHandled=true; setTimeout(()=>openBeam(code),350); } }
+$("openShop").onclick=openShop; $("reShop").onclick=openShop; $("shopX").onclick=closeShop; backdropClose("shop",closeShop);
+$("openBeamTitle").onclick=()=>openBeam(); $("beamBtn").onclick=()=>openBeam(); $("beamX").onclick=closeBeam; backdropClose("beam",closeBeam);
+$("beamScan").onclick=startBeamCamera; $("beamStop").onclick=()=>{ stopBeamCamera(); beamMsg("Camera stopped. Paste a Beam code or scan again."); };
+$("beamClaim").onclick=()=>openBeamRift($("beamInput").value); $("beamDemo").onclick=demoBeam;
+$("beamInput").addEventListener("input",()=>{ const row=beamRowFromRaw($("beamInput").value); renderBeamStats(row); if(row) beamMsg("Ready: "+row.symbol+" "+(RAR[row.beamRarity]||RAR.common).label+" from "+row.beamSource,"#bbff63"); });
+$("openNftTitle").onclick=()=>openNft(); $("nftBtn").onclick=()=>openNft(); $("nftX").onclick=closeNft; backdropClose("nft",closeNft);
+$("nftConnect").onclick=()=>connectNftWallet(); $("nftScan").onclick=()=>scanWalletNfts(); $("nftClear").onclick=()=>clearNftChampion();
 $("mute").onclick=()=>setMuted(!store.muted);
-$("exit").onclick=()=>{ RUN=null; runPaused=false; gems=[]; $("runHud").classList.remove("on"); $("upPick").classList.remove("on"); state="title"; $("hud").style.display="none"; showTitle(); };
+$("exit").onclick=()=>{ RUN=null; runPaused=false; gems=[]; hazards=[]; $("runHud").classList.remove("on"); $("upPick").classList.remove("on"); state="title"; $("hud").style.display="none"; showTitle(); };
 
 (async function init(){
   try{ await Promise.race([ Promise.all([loadAssets(),loadFeed()]), new Promise(r=>setTimeout(r,5000)) ]); }catch(_){}
   if(!A.loaded){ A.players=FALLBACK_PLAYERS; }
   if(!feedRows.length) await loadFeed().catch(()=>{});
   showTitle();
+  maybeOpenUrlBeam();
   // cold-start warmup: Render free dyno may be asleep on first hit (synthetic shows
   // first); retry quickly until real SlimeWire launches arrive, then settle into a slow refresh.
   let warm=0; const warmId=setInterval(async()=>{ warm++; if(feedReal||warm>6){ clearInterval(warmId); return; }
@@ -2141,9 +2813,10 @@ $("exit").onclick=()=>{ RUN=null; runPaused=false; gems=[]; $("runHud").classLis
 // test hooks
 window.__SW={ get state(){return state;}, enterWorld, get player(){return player;}, get creatures(){return creatures;}, get mobs(){return mobs;}, get companion(){return companion;}, get worldEvent(){return worldEvent;}, startWorldEvent,
   openEncounter:()=>{ if(creatures[0]) openEncounter(creatures[0]); }, forceCatch:()=>{ if(encC) caught(encC); },
-  openDex, dexCount, step:(dt)=>{ if(state==="world") update(dt||0.016); }, near:()=>near, nearMob:()=>nearMob,
+  openDex, openNft, scanWalletNfts, get nftChampion(){return activeNftChampion();}, selectFirstChampion:()=>{ const c=nftCandidates()[0]; if(c) selectNftChampion(c); return c; }, activateRage,
+  dexCount, step:(dt)=>{ if(state==="world") update(dt||0.016); }, near:()=>near, nearMob:()=>nearMob,
   attackMob, raidState, get res(){return store.res;}, bld:(id)=>openBuilding(buildings.find(b=>b.id===id)), doBldAct,
-  connectWS, get rp(){return RP.size;}, get wsOk(){return wsOk;}, _sock:()=>sock };
+  openMap, closeMap, connectWS, get rp(){return RP.size;}, get wsOk(){return wsOk;}, _sock:()=>sock };
 })();
 </script>
 </body>

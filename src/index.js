@@ -458,8 +458,14 @@ async function recordAutopilotTrade(rec) {
 // coins, not just the few we traded. Runs 24/7 regardless of whether autopilot
 // is on. Best-effort; never affects trading.
 const DEV_OBS_FILE = path.join(CONFIG.dataDir, "dev-observatory.json");
+const WALLET_OBS_FILE = path.join(CONFIG.dataDir, "wallet-observatory.json");
 const devObs = new Map();    // dev -> { coins, ran, rugged, peakSum }  (peakSum = sum of max/first multiples)
-const obsCoins = new Map();  // mint -> { dev, firstMc, maxMc, lastMc, at, seen }
+const obsCoins = new Map();  // mint -> { dev, firstMc, maxMc, lastMc, at, seen, buyers:[] }
+// SMART-MONEY OBSERVATORY: same idea as devObs but for the EARLY BUYER wallets of
+// every observed coin — score wallets by how their buys turned out (ran vs rugged).
+// Lets the bot lean harder when proven winners / tracked KOLs are aping a coin.
+const walletObs = new Map(); // wallet -> { coins, ran, rugged, peakSum }
+const KOL_WALLETS = new Set(String(process.env.KOL_WALLETS || "").split(",").map((s) => s.trim()).filter(Boolean));
 
 function devObsBump(dev, ranMult, rugged) {
   if (!dev) return;
@@ -470,6 +476,84 @@ function devObsBump(dev, ranMult, rugged) {
   r.peakSum += ranMult;
   devObs.set(dev, r);
 }
+function walletObsBump(wallet, ranMult, rugged) {
+  if (!wallet) return;
+  const r = walletObs.get(wallet) || { coins: 0, ran: 0, rugged: 0, peakSum: 0 };
+  r.coins += 1;
+  if (ranMult >= 2) r.ran += 1;
+  if (rugged) r.rugged += 1;
+  r.peakSum += ranMult;
+  walletObs.set(wallet, r);
+  if (walletObs.size > 20000) { // keep memory bounded — drop the lowest-signal wallets
+    for (const [w] of [...walletObs.entries()].sort((a, b) => a[1].coins - b[1].coins).slice(0, 4000)) walletObs.delete(w);
+  }
+}
+// A wallet is a "proven winner" once it has enough sample, a real hit rate, and
+// far more runners than rugs.
+function isWinnerWallet(r) {
+  return Boolean(r) && r.coins >= 3 && r.ran >= 2 && r.ran >= r.rugged * 2;
+}
+// Smart-money read for a coin: are proven-winner wallets or tracked KOLs in its
+// early buyers right now? Returns null when there's no smart-money signal.
+function smartMoneyScore(mint) {
+  try {
+    const trades = pumpPortalStream.getTrades(mint, { limit: 80 }) || [];
+    const buyers = new Set();
+    for (const t of trades) { if (t && t.side === "buy" && t.trader) buyers.add(String(t.trader)); }
+    let winners = 0, kol = false;
+    for (const w of buyers) {
+      if (KOL_WALLETS.has(w)) kol = true;
+      if (isWinnerWallet(walletObs.get(w))) winners += 1;
+    }
+    return (winners || kol) ? { winners, kol } : null;
+  } catch { return null; }
+}
+// SELF-ACTIVATION GATE: the smart-money entry path turns itself ON (no toggle) only
+// once the observatory has learned enough — a real roster of proven-winner wallets
+// AND a deep sample of scored coins. Until then it's pure observation. KOLs you list
+// in KOL_WALLETS are trusted immediately, so any KOL also flips it on.
+function smartMoneyReady() {
+  if (KOL_WALLETS.size > 0) return true;
+  let winners = 0, coins = 0;
+  for (const r of walletObs.values()) { if (isWinnerWallet(r)) winners += 1; coins += (r.coins || 0); }
+  return winners >= 8 && coins >= 300;
+}
+// Build live entry candidates from coins that tracked winners / KOLs are buying RIGHT
+// NOW — including ones past the fresh-ape freshness gate. Returns fresh-feed-shaped
+// rows (marketCap in USD, matching getPairLite) so the engine can size + open them.
+function smartMoneyFeed() {
+  const out = [];
+  const solUsd = Number(solUsdPriceCache?.value) || 0;
+  if (!solUsd) return out;
+  for (const [mint] of obsCoins) {
+    if (out.length >= 6) break;                 // bounded — a few best follow plays per cycle
+    const sm = smartMoneyScore(mint);
+    if (!sm || !(sm.kol || sm.winners >= 2)) continue;  // require strong smart-money read to self-enter
+    let mcSol = 0, vSol = 0, sym = null, ageSec = null;
+    try {
+      const ticks = pumpPortalStream.getTrades(mint, { limit: 1 });
+      if (ticks && ticks[0]) { mcSol = Number(ticks[0].marketCapSol) || 0; vSol = Number(ticks[0].vSolInBondingCurve) || 0; }
+      const ce = pumpPortalStream.getCreationEntry(mint);
+      if (ce) {
+        if (!mcSol && ce.lastTrade) { mcSol = Number(ce.lastTrade.marketCapSol) || 0; vSol = Number(ce.lastTrade.vSolInBondingCurve) || vSol; }
+        sym = ce.event?.symbol || ce.event?.name || null;
+        const created = Number(ce.event?.timestamp || ce.at) || 0;
+        if (created) ageSec = Math.max(0, Math.round((Date.now() - created) / 1000));
+      }
+    } catch {}
+    if (mcSol <= 0) continue;
+    out.push({
+      tokenMint: mint,
+      symbol: sym || shortMint(mint),
+      marketCap: mcSol * solUsd,
+      liquidityUsd: vSol > 0 ? vSol * solUsd : 0,
+      pairAgeSeconds: ageSec,
+      volume5m: 0, buys5m: 0, sells5m: 0, sniperCount: 0,
+      _smartMoney: sm
+    });
+  }
+  return out;
+}
 async function loadDevObservatory() {
   try {
     const j = await readJson(DEV_OBS_FILE).catch(() => null);
@@ -478,6 +562,15 @@ async function loadDevObservatory() {
 }
 async function saveDevObservatory() {
   try { await writeJsonFile(DEV_OBS_FILE, { devs: Object.fromEntries(devObs), savedAt: Date.now() }); } catch {}
+}
+async function loadWalletObservatory() {
+  try {
+    const j = await readJson(WALLET_OBS_FILE).catch(() => null);
+    if (j && j.wallets) for (const [w, r] of Object.entries(j.wallets)) walletObs.set(w, r);
+  } catch {}
+}
+async function saveWalletObservatory() {
+  try { await writeJsonFile(WALLET_OBS_FILE, { wallets: Object.fromEntries(walletObs), savedAt: Date.now() }); } catch {}
 }
 function sampleDevObservatory() {
   try {
@@ -489,11 +582,23 @@ function sampleDevObservatory() {
       const mc = Number(row.profile?.marketCap) || 0; if (mc <= 0) continue;
       const dev = String(row.profile?.devWallet || "").trim();
       seen.add(mint);
-      const c = obsCoins.get(mint) || { dev, firstMc: mc, maxMc: mc, lastMc: mc, at: now, seen: now };
+      const c = obsCoins.get(mint) || { dev, firstMc: mc, maxMc: mc, lastMc: mc, at: now, seen: now, buyers: [] };
       if (!c.dev && dev) c.dev = dev;
       c.maxMc = Math.max(c.maxMc, mc);
       c.lastMc = mc;
       c.seen = now;
+      // Capture the coin's early buyer wallets (up to 12) so we can score them later.
+      if (!c.buyers) c.buyers = [];
+      if (c.buyers.length < 12) {
+        try {
+          for (const t of (pumpPortalStream.getTrades(mint, { limit: 40 }) || [])) {
+            if (t && t.side === "buy" && t.trader && !c.buyers.includes(t.trader)) {
+              c.buyers.push(String(t.trader));
+              if (c.buyers.length >= 12) break;
+            }
+          }
+        } catch {}
+      }
       obsCoins.set(mint, c);
     }
     // Finalize coins that aged out of the buffer or got old enough to judge.
@@ -504,6 +609,7 @@ function sampleDevObservatory() {
         const ranMult = c.firstMc > 0 ? c.maxMc / c.firstMc : 1;
         const rugged = (c.maxMc >= c.firstMc * 1.2 && c.lastMc <= c.maxMc * 0.3) || (c.firstMc > 0 && c.lastMc <= c.firstMc * 0.4);
         devObsBump(c.dev, ranMult, rugged);
+        for (const w of (c.buyers || [])) walletObsBump(w, ranMult, rugged); // score early buyers
         obsCoins.delete(mint);
       }
     }
@@ -511,10 +617,12 @@ function sampleDevObservatory() {
       for (const [m] of [...obsCoins.entries()].sort((a, b) => a[1].seen - b[1].seen).slice(0, 800)) obsCoins.delete(m);
     }
     void saveDevObservatory();
+    void saveWalletObservatory();
   } catch (e) { console.warn(`[dev-obs] ${e && e.message}`); }
 }
 function startDevObservatory() {
   void loadDevObservatory();
+  void loadWalletObservatory();
   setInterval(sampleDevObservatory, 45_000);
 }
 // Combined dev reputation = our own trades + the market-wide observatory.
@@ -544,6 +652,9 @@ const autopilotEngine = createAutopilotEngine({
     } catch { return null; }
   },
   devReputation: (dev) => combinedDevRep(dev),
+  smartMoney: (mint) => smartMoneyScore(mint),
+  smartMoneyReady: () => smartMoneyReady(),
+  smartMoneyFeed: async () => smartMoneyFeed(),
   recordTrade: (rec) => { void recordAutopilotTrade(rec); },
   log: (level, msg) => console.log(`[autopilot:${level}] ${msg}`),
   isPaused: async () => Boolean((await readState().catch(() => ({}))).paused),
@@ -2902,7 +3013,8 @@ async function handleWebApiRequest(request, response, requestUrl) {
               runners100: trades.filter((t) => (t.peakPct || 0) >= 100).length,
               runners400: trades.filter((t) => (t.peakPct || 0) >= 400).length,
               netPnlSol: r2(trades.reduce((a, t) => a + (Number(t.pnl) || 0), 0)),
-              observatory: { devsTracked: devObs.size, coinsWatching: obsCoins.size },
+              observatory: { devsTracked: devObs.size, coinsWatching: obsCoins.size, walletsTracked: walletObs.size, winnerWallets: [...walletObs.values()].filter(isWinnerWallet).length, smartMoneyActive: smartMoneyReady() },
+              topWallets: [...walletObs.entries()].filter(([, r]) => isWinnerWallet(r)).sort((a, b) => b[1].peakSum - a[1].peakSum).slice(0, 8).map(([w, r]) => ({ wallet: shortMint(w), kol: KOL_WALLETS.has(w), coins: r.coins, ran: r.ran, rugged: r.rugged, avgPeak: r.coins ? r2(r.peakSum / r.coins) : 0 })),
               byScore: bucket((t) => t.fs == null ? null : (t.fs < 57 ? "<57" : t.fs < 62 ? "57-61" : t.fs < 67 ? "62-66" : t.fs < 72 ? "67-71" : "72+")),
               byMc: bucket((t) => t.entryMc == null ? null : (t.entryMc < 2100 ? "<2.1k" : t.entryMc < 2500 ? "2.1-2.5k" : t.entryMc < 3500 ? "2.5-3.5k" : "3.5k+")),
               byAge: bucket((t) => t.entryAge == null ? null : (t.entryAge < 30 ? "<30s" : t.entryAge < 120 ? "30-120s" : t.entryAge < 300 ? "2-5m" : "5m+")),
@@ -17555,6 +17667,30 @@ async function safeLaunchArtDataUrl(src) {
   }
 }
 
+// Normalize a user banner (data URI or URL) into a clean 1200x675 PNG data URI for
+// use as the launch card's full-bleed backdrop. Returns "" on any failure.
+async function safeLaunchBannerBgDataUrl(src) {
+  if (!src) return "";
+  try {
+    let buf = null;
+    const s = String(src);
+    if (/^data:/i.test(s)) {
+      buf = Buffer.from(s.slice(s.indexOf(",") + 1), "base64");
+    } else if (/^https?:\/\//i.test(s)) {
+      const r = await fetch(s, { signal: AbortSignal.timeout(8000) });
+      if (!r.ok) return "";
+      buf = Buffer.from(await r.arrayBuffer());
+    } else {
+      return "";
+    }
+    if (!buf || !buf.length) return "";
+    const png = await sharp(buf, { animated: false }).resize(1200, 675, { fit: "cover", position: "centre" }).png().toBuffer();
+    return `data:image/png;base64,${png.toString("base64")}`;
+  } catch {
+    return "";
+  }
+}
+
 async function launchCardInnerSvg(d = {}, mint = "", cp = null) {
   const S = PNL_CARD_STYLE;
   const accent = S.slime;
@@ -17573,6 +17709,18 @@ async function launchCardInnerSvg(d = {}, mint = "", cp = null) {
   const borderLayer = borderDataUrl
     ? `<image href="${borderDataUrl}" x="0" y="0" width="${S.width}" height="${S.height}" preserveAspectRatio="xMidYMid slice"/>`
     : pnlSlimeBorderSvg();
+  // Full-bleed background. If the creator supplied a coin banner, IT becomes the
+  // card backdrop (their art front-and-center) with a heavier scrim so text stays
+  // readable. Otherwise fall back to a per-coin swamp-ogre scene (same 15-scene set
+  // as the PnL cards), then a flat gradient.
+  const launchBannerBg = await safeLaunchBannerBgDataUrl(d.bannerDataUrl || d.bannerUri);
+  const launchBgStyle = slimeStyleIndex(mint || d.symbol || name);
+  const launchBgUrl = launchBannerBg ? "" : await slimeBgDataUrl(`slime-bg-${launchBgStyle}.jpg`);
+  const launchBgLayer = launchBannerBg
+    ? `<image href="${launchBannerBg}" x="0" y="0" width="${S.width}" height="${S.height}" preserveAspectRatio="xMidYMid slice"/><rect width="${S.width}" height="${S.height}" fill="#020702" opacity="0.55"/>`
+    : launchBgUrl
+      ? `<image href="${launchBgUrl}" x="0" y="0" width="${S.width}" height="${S.height}" preserveAspectRatio="xMidYMid slice"/><rect width="${S.width}" height="${S.height}" fill="#020702" opacity="0.42"/>`
+      : `<rect width="${S.width}" height="${S.height}" fill="url(#bg)"/>`;
   const caText = mint ? `CA ${shortMint(mint)}` : "MINTING…";
   const socialsText = sanitizeCardText(launchSocials(d).map((s) => s.label).join("   ·   "), 52) || "pump.fun";
 
@@ -17596,7 +17744,7 @@ async function launchCardInnerSvg(d = {}, mint = "", cp = null) {
       <feDropShadow dx="0" dy="0" stdDeviation="18" flood-color="${S.slime}" flood-opacity="0.42"/>
     </filter>
   </defs>
-  <rect width="${S.width}" height="${S.height}" fill="url(#bg)"/>
+  ${launchBgLayer}
   <rect width="${S.width}" height="${S.height}" fill="url(#glow)"/>
   <g opacity="0.16">
     <path d="M0 570 C220 420 342 690 540 520 S882 430 1200 560 L1200 675 L0 675 Z" fill="${accent}"/>
@@ -17684,13 +17832,16 @@ async function slimeBgDataUrl(name) {
     return url;
   } catch { slimeBgDataUrlCache.set(name, null); return null; }
 }
-// Stable 1..10 style per mint (so a coin always looks the same), or an explicit override.
+// Stable 1..15 style per mint (so a coin always looks the same), or an explicit override.
+// 15 distinct swamp-ogre backgrounds for wins AND 15 for losses, so cards never feel
+// same-y — each coin gets its own scene, win or loss.
+const SLIME_BG_COUNT = 15;
 function slimeStyleIndex(mint, override) {
   const ov = Number(override);
-  if (Number.isFinite(ov) && ov >= 1) return (((Math.floor(ov) - 1) % 10) + 10) % 10 + 1;
+  if (Number.isFinite(ov) && ov >= 1) return (((Math.floor(ov) - 1) % SLIME_BG_COUNT) + SLIME_BG_COUNT) % SLIME_BG_COUNT + 1;
   let h = 5381; const s = String(mint || "slime");
   for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
-  return (h % 10) + 1;
+  return (h % SLIME_BG_COUNT) + 1;
 }
 // A gooey slime drip = a fat rounded neck that bulges into a big teardrop blob at
 // the end (NOT a thin line). The blob is wider than the neck so it reads as molten
@@ -17707,7 +17858,7 @@ function slimeDripGroup(cx, baseY, color, drops, w) {
 async function renderSlimeCard(d = {}) {
   const win = d.loss === true ? false : (d.loss === false ? true : (Number(d.profitSol) >= 0));
   const style = slimeStyleIndex(d.mint, d.style);
-  const bgUrl = await slimeBgDataUrl(win ? `slime-bg-${style}.jpg` : "slime-loss.jpg");
+  const bgUrl = await slimeBgDataUrl(win ? `slime-bg-${style}.jpg` : `slime-loss-${style}.jpg`);
   let imageDataUrl = "";
   try { imageDataUrl = await tokenImageDataUrl(d.imageUrl || ""); } catch {}
   const W = PNL_CARD_STYLE;
@@ -33725,6 +33876,62 @@ async function launchImageBufferForUpload(basePayload = {}) {
   };
 }
 
+// Optional pump.fun coin-page BANNER (separate from the square logo). Pump.fun wants
+// 3:1 / 1500x500, images or animated GIFs up to 5MB, and it can ONLY be set at
+// creation. We resize stills to 1500x500 (cover) and pass animated GIFs through
+// untouched so they stay animated. Returns null when no banner was provided, and
+// never throws — a bad banner must never block the actual coin launch.
+async function launchBannerBufferForUpload(basePayload = {}) {
+  const raw = String(basePayload.bannerDataUrl || "");
+  if (!raw) return null;
+  let decoded = null;
+  try {
+    decoded = decodeLaunchImageDataUrl(raw, { symbol: basePayload.symbol, name: basePayload.name, imageName: basePayload.bannerName });
+  } catch { decoded = null; }
+  if (!decoded || !decoded.buffer || !decoded.buffer.length) return null;
+  const symbolSlug = String(basePayload.symbol || basePayload.name || "banner").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "banner";
+  const MAX_BANNER_BYTES = 5 * 1024 * 1024;
+  // Animated GIF banner: keep as-is so the animation survives (within pump.fun's 5MB cap).
+  if (String(decoded.contentType || "").includes("gif") && decoded.buffer.length <= MAX_BANNER_BYTES) {
+    return { buffer: decoded.buffer, contentType: "image/gif", filename: `${symbolSlug}-banner.gif` };
+  }
+  try {
+    const buffer = await sharp(decoded.buffer, { animated: false, limitInputPixels: 268402689 })
+      .rotate()
+      .resize(1500, 500, { fit: "cover", position: "centre" })
+      .flatten({ background: "#050805" })
+      .jpeg({ quality: 86, mozjpeg: true })
+      .toBuffer();
+    return { buffer, contentType: "image/jpeg", filename: `${symbolSlug}-banner-1500x500.jpg` };
+  } catch (error) {
+    console.warn(`[pump-launch] banner process failed: ${error && error.message}`);
+    return null;
+  }
+}
+
+// Pin a processed banner to IPFS via pump.fun's own gateway and return the pinned
+// image URI (the same `ipfs.io/ipfs/...` format pump.fun uses for banner_uri). Used
+// so the banner is permanent + portable. Best-effort: returns "" on any failure.
+async function pinBannerToPumpFunIpfs(banner) {
+  if (!banner || !banner.buffer || !banner.buffer.length) return "";
+  if (typeof FormData === "undefined" || typeof Blob === "undefined") return "";
+  try {
+    const form = new FormData();
+    form.append("file", new Blob([banner.buffer], { type: banner.contentType || "image/jpeg" }), banner.filename || "banner.jpg");
+    const response = await fetch(CONFIG.pumpLaunchPumpFunIpfsUrl, {
+      method: "POST",
+      body: form,
+      signal: AbortSignal.timeout ? AbortSignal.timeout(CONFIG.pumpLaunchTimeoutMs || 30000) : undefined
+    });
+    if (!response.ok) return "";
+    const data = JSON.parse(await response.text());
+    return String(data?.metadata?.image || data?.imageUri || data?.image || "").trim();
+  } catch (error) {
+    console.warn(`[pump-launch] banner pin failed: ${error && error.message}`);
+    return "";
+  }
+}
+
 function hostedPumpMetadataBaseUrl() {
   const baseUrl = String(CONFIG.pumpLaunchHostedMetadataBaseUrl || "").trim().replace(/\/$/, "");
   if (!baseUrl) {
@@ -33757,11 +33964,21 @@ async function uploadHostedPumpLaunchMetadata(basePayload = {}) {
   const imageFilename = hostedImageFilename(image);
   const metadataFilename = "metadata.json";
   const imageUri = hostedPumpMetadataUrl(launchId, imageFilename);
+  // Optional coin-page banner (3:1). We host the file ourselves and reference it in
+  // the metadata JSON under "banner" — the field pump.fun reads for the coin banner.
+  const banner = await launchBannerBufferForUpload(basePayload);
+  let bannerUri = "";
+  let bannerFilename = "";
+  if (banner) {
+    bannerFilename = `banner.${banner.contentType && banner.contentType.includes("gif") ? "gif" : "jpg"}`;
+    bannerUri = hostedPumpMetadataUrl(launchId, bannerFilename);
+  }
   const metadata = compactLaunchPayload({
     name: basePayload.name,
     symbol: basePayload.symbol,
     description: basePayload.description || "",
     image: imageUri,
+    banner: bannerUri,
     twitter: basePayload.twitter || "",
     telegram: basePayload.telegram || "",
     website: basePayload.website || "",
@@ -33770,11 +33987,13 @@ async function uploadHostedPumpLaunchMetadata(basePayload = {}) {
   });
 
   await fs.writeFile(path.join(directory, imageFilename), image.buffer);
+  if (banner && bannerFilename) await fs.writeFile(path.join(directory, bannerFilename), banner.buffer);
   await fs.writeFile(path.join(directory, metadataFilename), JSON.stringify(metadata, null, 2));
 
   return {
     uri: hostedPumpMetadataUrl(launchId, metadataFilename),
     imageUri,
+    bannerUri,
     imageBytes: image.buffer.length,
     imageContentType: image.contentType,
     imageProcessing: image.imageProcessing || safeLaunchImageDiagnostics(image),
@@ -33809,7 +34028,6 @@ async function uploadPumpFunIpfsLaunchMetadata(basePayload = {}) {
   form.append("showName", "true");
   form.append("createdOn", "https://pump.fun");
   form.append("file", new Blob([image.buffer], { type: image.contentType || "image/png" }), image.filename || "token-image.png");
-
   let response;
   let text = "";
   const delays = [0, 5_000, 15_000, 30_000];
@@ -33852,9 +34070,16 @@ async function uploadPumpFunIpfsLaunchMetadata(basePayload = {}) {
       providerResponseBody: sanitizeProviderBody(text)
     });
   }
+  // Optional coin banner: pump.fun's metadata endpoint ignores a banner field (only
+  // its authenticated website writes the DB banner_uri), so we pin the banner to IPFS
+  // ourselves and hand the URI back. SlimeWire renders it on our surfaces, and it's
+  // ready for any indexer that reads a metadata banner. Best-effort, never blocks.
+  const banner = await launchBannerBufferForUpload(basePayload);
+  const bannerUri = banner ? await pinBannerToPumpFunIpfs(banner) : "";
   return {
     uri,
     imageUri,
+    bannerUri,
     imageBytes: image.buffer.length,
     imageContentType: image.contentType,
     imageProcessing: image.imageProcessing || safeLaunchImageDiagnostics(image),
@@ -34959,7 +35184,7 @@ async function webLaunchPumpPortalLocal(userId, body, basePayload) {
   if (String(launchResult?.status || "").toUpperCase() === "COMPLETE" && launchResult.tokenMint) {
     const sym = escapeTelegramHtml(basePayload.symbol || basePayload.name || "???");
     const launchText = buildLaunchAnnounceCaption(sym, launchResult.tokenMint);
-    const draft = { name: basePayload.name, symbol: basePayload.symbol, description: basePayload.description, imageDataUrl: basePayload.imageDataUrl, x: basePayload.twitter, telegram: basePayload.telegram, website: basePayload.website };
+    const draft = { name: basePayload.name, symbol: basePayload.symbol, description: basePayload.description, imageDataUrl: basePayload.imageDataUrl, bannerDataUrl: basePayload.bannerDataUrl, bannerUri: launchResult.bannerUri || "", x: basePayload.twitter, telegram: basePayload.telegram, website: basePayload.website };
     announceLaunchCard("launch", launchResult.tokenMint, draft, launchText, launchAnnounceKb(launchResult.tokenMint));
     fulfillLaunchHype(userId, launchResult.tokenMint, basePayload.symbol).catch((error) => console.warn(`[hype] fulfill failed: ${error.message}`));
   }
@@ -35051,6 +35276,16 @@ async function webLaunchPumpCoin(userId, body = {}) {
     throw error;
   }
 
+  // Optional pump.fun coin-page banner (3:1, set only at creation). Validated lightly
+  // and never required — a bad/oversized banner is dropped, the launch still proceeds.
+  let bannerDataUrl = String(body.bannerDataUrl || "");
+  if (bannerDataUrl && !/^data:image\/(?:png|jpe?g|webp|gif|heic|heif|avif);base64,/i.test(bannerDataUrl)) {
+    bannerDataUrl = ""; // unknown type -> ignore rather than fail the launch
+  }
+  if (bannerDataUrl && bannerDataUrl.length > 7_500_000) {
+    bannerDataUrl = ""; // ~5MB image + base64 overhead; oversized -> ignore
+  }
+
   const creatorFeeBps = cleanLaunchNumber(body.creatorFeeBps, 0, 0, 1000);
   const devBuyEnabled = cleanLaunchBoolean(body.devBuyEnabled);
   const feeModeRaw = cleanLaunchText(body.feeMode, 24).toLowerCase();
@@ -35071,6 +35306,8 @@ async function webLaunchPumpCoin(userId, body = {}) {
     imageDataUrl,
     imageName: cleanLaunchText(body.imageName, 120),
     imageType: cleanLaunchText(body.imageType, 80),
+    bannerDataUrl,
+    bannerName: cleanLaunchText(body.bannerName, 120),
     creatorFeeBps,
     burnCreatorFees,
     creatorFeeRecipient,
@@ -35114,7 +35351,7 @@ async function webLaunchPumpCoin(userId, body = {}) {
       if (useJito && String(result?.status || "").toUpperCase() === "COMPLETE" && result.tokenMint) {
         const sym = escapeTelegramHtml(symbol || name || "???");
         const launchText = buildLaunchAnnounceCaption(sym, result.tokenMint);
-        const draft = { name, symbol, description: body.description, imageDataUrl: body.imageDataUrl, x: body.x || body.twitter, telegram: body.telegram, website: body.website };
+        const draft = { name, symbol, description: body.description, imageDataUrl: body.imageDataUrl, bannerDataUrl: body.bannerDataUrl, x: body.x || body.twitter, telegram: body.telegram, website: body.website };
         announceLaunchCard("launch", result.tokenMint, draft, launchText, launchAnnounceKb(result.tokenMint));
         fulfillLaunchHype(userId, result.tokenMint, symbol).catch((error) => console.warn(`[hype] fulfill failed: ${error.message}`));
       }

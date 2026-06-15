@@ -244,6 +244,7 @@ function setStoredLaunchCoinDraft(draft) {
     // they stay in state (covers tab flips) and only skip the reload-survival.
     const toStore = { ...(draft || {}) };
     if (String(toStore.imageDataUrl || "").length >= 1_500_000) delete toStore.imageDataUrl;
+    if (String(toStore.bannerDataUrl || "").length >= 1_500_000) delete toStore.bannerDataUrl;
     window.localStorage?.setItem("slimewireLaunchCoinDraft", JSON.stringify(toStore));
   } catch {
     // Launch drafts are convenience-only and should not block the terminal.
@@ -9574,6 +9575,15 @@ function launchCoinHtml() {
                 <span class="launch-image-preview-meta" data-launch-image-preview-meta>${escapeHtml(draft.imageName ? `${draft.imageName} · saved with the sheet` : "")}</span>
               </span>
             </label>
+            <label class="full-span">
+              Banner (optional)
+              <input data-launch-coin-banner type="file" accept="image/*,.png,.jpg,.jpeg,.webp,.gif">
+              <span class="muted">Wide 3:1 cover image or animated GIF (1500×500). Saved with your coin, pinned to IPFS, and shown on its SlimeWire page. SlimeWire resizes stills to 1500×500.</span>
+              <span class="launch-image-preview-wrap" data-launch-banner-preview-wrap ${draft.bannerDataUrl ? "" : "hidden"}>
+                <img class="launch-image-preview" data-launch-banner-preview ${draft.bannerDataUrl ? `src="${draft.bannerDataUrl}"` : ""} alt="Coin banner preview" style="aspect-ratio:3/1;object-fit:cover;width:100%;max-width:360px;">
+                <span class="launch-image-preview-meta" data-launch-banner-preview-meta>${escapeHtml(draft.bannerName ? `${draft.bannerName} · saved with the sheet` : "")}</span>
+              </span>
+            </label>
           </div>`
     },
     {
@@ -9799,6 +9809,9 @@ function readLaunchCoinDraft() {
     imageName: imageFile?.name || draft.imageName || "",
     imageDataUrl: draft.imageDataUrl || "",
     imageType: draft.imageType || "",
+    bannerName: $("[data-launch-coin-banner]")?.files?.[0]?.name || draft.bannerName || "",
+    bannerDataUrl: draft.bannerDataUrl || "",
+    bannerType: draft.bannerType || "",
     website: ($("[data-launch-coin-website]")?.value || "").trim(),
     x: ($("[data-launch-coin-x]")?.value || "").trim(),
     telegram: ($("[data-launch-coin-telegram]")?.value || "").trim(),
@@ -9945,6 +9958,54 @@ async function readFileAsDataUrl(file) {
   }
 
   throw new Error("Token image is too large for upload. Use a smaller phone screenshot, PNG, JPG, WEBP, or GIF and try again.");
+}
+
+// Banner reader: keeps the wide 3:1 aspect (the square-logo reader would crop it).
+// Stills are downscaled to <=1500px wide and compressed to keep the upload small;
+// animated GIFs pass through untouched (within ~5MB) so the animation survives.
+async function readBannerFileAsDataUrl(file) {
+  if (!file) return "";
+  const maxRawBytes = 8 * 1024 * 1024;
+  const maxBackendPayloadBytes = 7_000_000;
+  if (file.size > maxRawBytes) {
+    throw new Error("Banner is over 8MB. Use a smaller wide image or GIF (1500×500 works best).");
+  }
+  const rawDataUrl = await readRawFileAsDataUrl(file);
+  if (file.type === "image/gif" || /\.gif$/i.test(file.name || "")) {
+    if (rawDataUrl.length > maxBackendPayloadBytes) {
+      throw new Error("Animated banner is too large. Keep it under ~5MB.");
+    }
+    return rawDataUrl;
+  }
+  try {
+    const image = await imageFromDataUrl(rawDataUrl);
+    const maxW = 1500;
+    const scale = Math.min(1, maxW / Math.max(1, image.width || maxW));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round((image.width || maxW) * scale));
+    canvas.height = Math.max(1, Math.round((image.height || Math.round(maxW / 3)) * scale));
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+    for (const [type, quality] of [["image/webp", 0.82], ["image/webp", 0.7], ["image/jpeg", 0.8], ["image/jpeg", 0.66]]) {
+      const compressed = canvas.toDataURL(type, quality);
+      if (compressed.length <= maxBackendPayloadBytes) return compressed;
+    }
+  } catch { /* fall through to raw */ }
+  if (rawDataUrl.length <= maxBackendPayloadBytes) return rawDataUrl;
+  throw new Error("Banner is too large for upload. Use a smaller wide image or GIF.");
+}
+
+async function launchCoinBannerPayload() {
+  const bannerFile = $("[data-launch-coin-banner]")?.files?.[0];
+  if (bannerFile) {
+    const bannerDataUrl = await readBannerFileAsDataUrl(bannerFile);
+    return { bannerName: bannerFile.name, bannerType: dataUrlMimeType(bannerDataUrl, bannerFile.type || "image/jpeg"), bannerDataUrl };
+  }
+  const draft = state.launchCoinDraft || {};
+  if (draft.bannerDataUrl) {
+    return { bannerName: draft.bannerName || "banner", bannerType: draft.bannerType || dataUrlMimeType(draft.bannerDataUrl, "image/jpeg"), bannerDataUrl: draft.bannerDataUrl };
+  }
+  return {};
 }
 
 async function launchCoinImagePayload() {
@@ -10208,6 +10269,7 @@ async function submitLaunchCoin() {
     writeText(status, state.launchCoinStatus);
 
     const imagePayload = await launchCoinImagePayload();
+    const bannerPayload = await launchCoinBannerPayload();
     const launchAttemptId = globalThis.crypto?.randomUUID?.()
       || `launch-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     // When the atomic anti-snipe bundle is enabled server-side, the backend lands the
@@ -10227,6 +10289,7 @@ async function submitLaunchCoin() {
     const requestPayload = {
       ...draft,
       ...imagePayload,
+      ...bannerPayload,
       launchAttemptId,
       ...(bundleBuy ? { bundleBuy } : {})
     };
@@ -23471,6 +23534,36 @@ document.addEventListener("change", async (event) => {
     }).catch(() => {});
     return;
   }
+  if (target?.matches?.("[data-launch-coin-banner]")) {
+    // Live banner preview + persist to draft (file inputs reset on re-render). DOM-only.
+    const file = target.files?.[0];
+    const wrap = $("[data-launch-banner-preview-wrap]");
+    const img = $("[data-launch-banner-preview]");
+    const metaEl = $("[data-launch-banner-preview-meta]");
+    if (!file) { if (wrap) wrap.hidden = true; return; }
+    const kb = Math.round(file.size / 1024);
+    if (metaEl) metaEl.textContent = `${file.name} · ${kb >= 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${kb} KB`} · saved with the sheet`;
+    try {
+      const url = URL.createObjectURL(file);
+      if (img) { img.onload = () => URL.revokeObjectURL(url); img.src = url; }
+      if (wrap) wrap.hidden = false;
+    } catch { if (wrap) wrap.hidden = true; }
+    readBannerFileAsDataUrl(file).then((dataUrl) => {
+      state.launchCoinDraft = {
+        ...(state.launchCoinDraft || {}),
+        bannerDataUrl: dataUrl,
+        bannerName: file.name,
+        bannerType: dataUrlMimeType(dataUrl, file.type || "image/jpeg")
+      };
+      if (String(dataUrl).length < 1_500_000) {
+        try { setStoredLaunchCoinDraft(state.launchCoinDraft); } catch { /* quota */ }
+      }
+    }).catch((error) => {
+      const status = $("[data-launch-coin-status]");
+      if (status) writeText(status, error?.message || "Could not read that banner.");
+    });
+    return;
+  }
   if (target?.matches?.("[data-terminal-filter-social], [data-terminal-filter-quote], [data-terminal-filter-audit]")) {
     const filters = terminalLaunchFilterState();
     const social = target.getAttribute("data-terminal-filter-social");
@@ -23512,7 +23605,7 @@ document.addEventListener("focusout", () => {
 let launchDraftSaveTimer = null;
 const queueLaunchDraftSave = (event) => {
   const launchField = event.target?.closest?.(".launch-coin-card");
-  if (launchField && String(event.target?.tagName || "").match(/INPUT|TEXTAREA|SELECT/) && !event.target.matches("[data-launch-coin-image]")) {
+  if (launchField && String(event.target?.tagName || "").match(/INPUT|TEXTAREA|SELECT/) && !event.target.matches("[data-launch-coin-image]") && !event.target.matches("[data-launch-coin-banner]")) {
     // Sanitize SOL-amount fields live so a stray double-dot ("0..02") can't sit
     // there and silently fall back to the 0.1 default at launch time.
     if (event.target.matches("[data-launch-coin-amount], [data-launch-coin-dev-buy-sol]")) {

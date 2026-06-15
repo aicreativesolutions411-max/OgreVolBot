@@ -19497,3 +19497,157 @@ html body main.shell[data-app][data-route="intro"] .swamp-intro-stage[data-intro
     display: none !important;
   }
 }
+
+/* =============================================================
+   LIVING SWAMP CONNECT / LOGIN LANDING (page-2 pre-app gate)
+   Full-bleed Higgs swamp-ogre hero + slime glow + pulsing portal,
+   plus a hard scroll fix so the mouse wheel works anywhere.
+   ============================================================= */
+/* Scroll fix: make the page scroll naturally on the gate routes (wheel anywhere,
+   not just over the scrollbar). Beats any inline overflow:hidden the SPA sets. */
+html, body { overflow-y: auto !important; }
+[data-app][data-route="connect"],
+[data-app][data-route="intro"],
+[data-app][data-route="login"] { overflow: visible !important; height: auto !important; min-height: 0 !important; }
+.connect-view, .login-view, .swamp-connect-shell { overflow: visible !important; max-height: none !important; touch-action: pan-y !important; }
+
+/* Immersive hero behind the connect card (high-specificity to beat the base art) */
+html body main.shell .connect-view .swamp-connect-shell,
+html body .swamp-connect-shell {
+  position: relative !important;
+  background-image: url('/assets/slimewire/auto/login-hero.jpg?v=v2drama') !important;
+  background-position: center !important;
+  background-size: cover !important;
+  background-repeat: no-repeat !important;
+  background-color: #04070a !important;
+  border: 1px solid rgba(141,255,90,0.28) !important;
+  border-radius: 20px !important;
+  overflow: hidden !important;
+  min-height: min(84vh, 760px) !important;
+  box-shadow: 0 26px 80px rgba(0,0,0,0.55), 0 0 60px rgba(39,224,106,0.18) !important;
+}
+html body .swamp-connect-shell::before {
+  content: ""; position: absolute; inset: 0; z-index: 0; pointer-events: none;
+  background: linear-gradient(90deg, rgba(3,6,4,0.10) 0%, rgba(3,6,4,0.34) 44%, rgba(3,6,4,0.86) 100%) !important;
+}
+/* pulsing slime-portal glow aligned to the portal in the art — makes it feel alive */
+html body .swamp-connect-shell::after {
+  content: ""; position: absolute; inset: 0; z-index: 0; pointer-events: none; mix-blend-mode: screen;
+  background: radial-gradient(circle at 28% 52%, rgba(57,255,20,0.32), rgba(57,255,20,0) 34%) !important;
+  animation: swampPortalPulse 4.6s ease-in-out infinite;
+}
+@keyframes swampPortalPulse { 0%,100% { opacity: .4; } 50% { opacity: 1; } }
+html body .swamp-connect-shell > * { position: relative; z-index: 1; }
+/* drop the old chart-preview clutter on the hero side — let the swamp art breathe */
+html body .connect-view .connect-hero-side .connect-method-showcase,
+html body .connect-view .connect-hero-side .connect-ogre { display: none !important; }
+@media (max-width: 760px) {
+  html body .swamp-connect-shell {
+    background-image: url('/assets/slimewire/auto/login-hero-portrait.jpg?v=v2drama') !important;
+    min-height: min(90vh, 900px) !important;
+  }
+  html body .swamp-connect-shell::before { background: linear-gradient(180deg, rgba(3,6,4,0.10) 0%, rgba(3,6,4,0.5) 52%, rgba(3,6,4,0.94) 100%) !important; }
+  html body .swamp-connect-shell::after { background: radial-gradient(circle at 50% 34%, rgba(57,255,20,0.3), rgba(57,255,20,0) 34%) !important; }
+}
+
+/* Premium glass connect card + slime branding text */
+.connect-card {
+  background: linear-gradient(180deg, rgba(10,18,11,0.80), rgba(4,8,5,0.96)) !important;
+  backdrop-filter: blur(10px) !important;
+  border: 1px solid rgba(141,255,90,0.45) !important;
+  box-shadow: 0 0 44px rgba(39,224,106,0.28), 0 22px 64px rgba(0,0,0,0.55) !important;
+}
+.connect-card h2 {
+  color: #bdff63 !important;
+  text-shadow: 0 0 20px rgba(141,255,90,0.55), 0 0 4px rgba(141,255,90,0.8) !important;
+  letter-spacing: .3px;
+}
+.connect-hero-side h1 {
+  color: #8dff5a !important;
+  text-shadow: 0 0 26px rgba(141,255,90,0.5) !important;
+}
+.connect-powered { color: #9fe6a8 !important; text-shadow: 0 0 10px rgba(57,255,20,0.4); }
+
+/* "🤖 Auto" tek-bar link — highlighted so users find the paid autopilot */
+html body .tabs .tab-auto-pro {
+  background: linear-gradient(180deg, #8dff5a, #27e06a) !important;
+  color: #04210f !important;
+  font-weight: 900 !important;
+  border: 1px solid rgba(141,255,90,0.6) !important;
+  box-shadow: 0 0 18px rgba(141,255,90,0.5) !important;
+  animation: autoTabPulse 3s ease-in-out infinite;
+}
+html body .tabs .tab-auto-pro:hover { box-shadow: 0 0 28px rgba(141,255,90,0.85) !important; }
+@keyframes autoTabPulse { 0%,100% { box-shadow: 0 0 14px rgba(141,255,90,0.4); } 50% { box-shadow: 0 0 24px rgba(141,255,90,0.75); } }
+
+/* Login logo as the emblem (round badge) + gentle "moving" drift on the hero */
+html body .connect-card .connect-logo-emblem {
+  width: 116px !important; height: 116px !important; object-fit: contain !important;
+  border-radius: 22px !important;
+  filter: drop-shadow(0 0 22px rgba(141,255,90,0.55)) !important;
+}
+html body main.shell .connect-view .swamp-connect-shell,
+html body .swamp-connect-shell {
+  background-size: 116% !important;            /* room to drift */
+  animation: swampHeroDrift 26s ease-in-out infinite alternate;
+}
+@keyframes swampHeroDrift {
+  0%   { background-position: 46% 50%; }
+  100% { background-position: 56% 46%; }
+}
+
+/* Looping video layer for the connect/login hero (real motion) */
+html body .swamp-connect-shell .swamp-hero-video {
+  position: absolute !important; inset: 0 !important;
+  width: 100% !important; height: 100% !important;
+  object-fit: cover !important; z-index: 0 !important; pointer-events: none !important;
+}
+html body .swamp-connect-shell::before,
+html body .swamp-connect-shell::after { z-index: 1 !important; }
+html body .swamp-connect-shell > *:not(.swamp-hero-video) { z-index: 2 !important; }
+@media (max-width: 760px) {
+  /* mobile: static hero only (no heavy video on phone data; the wallet-connect
+     panel covers the screen there anyway) */
+  html body .swamp-connect-shell .swamp-hero-video { display: none !important; }
+}
+
+/* ===== FULL-SCREEN, in-frame connect/login hero (v6) ===== */
+/* break out of the .shell max-width/padding so it's truly edge-to-edge full screen */
+html body main.shell .connect-view {
+  width: 100vw !important;
+  margin-left: calc(50% - 50vw) !important;
+  margin-right: calc(50% - 50vw) !important;
+  padding: 0 !important;
+}
+html body main.shell .connect-view .swamp-connect-shell,
+html body .swamp-connect-shell {
+  min-height: 100svh !important;
+  border: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  background-size: cover !important;       /* 16:9 art fills a desktop screen fully in-frame */
+  background-position: center center !important;
+  animation: none !important;              /* drop the zoom-drift so nothing gets cropped */
+}
+html body .swamp-connect-shell .swamp-hero-video {
+  object-fit: cover !important;            /* video fills the screen too */
+}
+
+/* SCROLL FIX (final): the connect/login page must scroll with the wheel anywhere.
+   An earlier rule set the shell overflow:hidden — make it visible so nothing clips
+   and the page (body) is the scroller. */
+html body main.shell .connect-view .swamp-connect-shell,
+html body .swamp-connect-shell { overflow: visible !important; }
+html, body { overflow-y: auto !important; height: auto !important; min-height: 100% !important; }
+
+/* 🔊 unmute button on the connect/login hero video (desktop only) */
+html body .swamp-connect-shell .hero-sound-btn {
+  position: absolute !important; top: 14px; left: 14px; z-index: 4 !important;
+  width: 42px; height: 42px; padding: 0; border-radius: 50%;
+  background: rgba(4,8,5,0.62); color: var(--green, #8dff5a);
+  border: 1px solid rgba(141,255,90,0.5); font-size: 18px; line-height: 1;
+  cursor: pointer; backdrop-filter: blur(4px);
+  box-shadow: 0 0 16px rgba(39,224,106,0.3);
+}
+html body .swamp-connect-shell .hero-sound-btn:hover { box-shadow: 0 0 24px rgba(39,224,106,0.6); }
+@media (max-width: 760px) { html body .swamp-connect-shell .hero-sound-btn { display: none !important; } }
