@@ -104,7 +104,14 @@ export function aggParams(state) {
     tp1Pct = 25; spikePct = 50; tp2Lvl = 100; tp2Pct = 33; tp3Lvl = 200; tp3Pct = 50; moonTarget = 400;
   }
 
-  return { regime, wr, baseFrac, streakMult, regimeMult, tp1, tp2, sl, minScore, mcFloor, steady, blend, tp1Pct, spikePct, moonTarget, tp2Lvl, tp2Pct, tp3Lvl, tp3Pct };
+  // AUTO-ADAPT to a hostile tape: in COLD (bleeding / dead), the moon-ride doesn't pay
+  // — coins pop then dump — so bank HARD regardless of the chosen mode. Lock ~85% at
+  // the first pop and hold no mid rungs (like steady), so a chop tape can't round-trip
+  // a 75% blend remnant into a loss. Reverts to the chosen mode the moment it's not cold.
+  const bankHard = steady || (state.tune && state.tune.tape === "COLD");
+  if (bankHard && !steady) { tp1Pct = Math.max(tp1Pct, 85); spikePct = Math.max(spikePct, 85); moonTarget = Math.min(moonTarget, 400); }
+
+  return { regime, wr, baseFrac, streakMult, regimeMult, tp1, tp2, sl, minScore, mcFloor, steady, blend, bankHard, tp1Pct, spikePct, moonTarget, tp2Lvl, tp2Pct, tp3Lvl, tp3Pct };
 }
 
 // SELF-TUNING / market-regime brain: reads the recent runner & rug rate and sets
@@ -345,9 +352,10 @@ export function evalExit(pos, P, nowMs) {
   if (!pos.tp1Done && move >= P.tp1) {
     return { action: "sell", pct: P.tp1Pct || 55, reason: "tp1", move };
   }
-  // Mid rungs only in the laddered styles (normal/blend). steady HOLDS the runner
-  // after TP1 — no mid-rung selling — so its 20% can reach the moon target.
-  if (!P.steady) {
+  // Mid rungs only in the laddered styles (normal/blend) AND only when not banking
+  // hard. steady / cold-tape bankHard HOLD the small runner after TP1 — no mid-rung
+  // selling — so the tail can reach the moon target and a chop tape can't round-trip it.
+  if (!P.steady && !P.bankHard) {
     // TP2: next tranche (blend = ~33% of remainder @ +100%; normal = 50% @ P.tp2).
     if (pos.tp1Done && !pos.tp2Done && move >= (P.tp2Lvl || P.tp2)) {
       return { action: "sell", pct: P.tp2Pct || 50, reason: "tp2", move };
@@ -357,8 +365,8 @@ export function evalExit(pos, P, nowMs) {
       return { action: "sell", pct: P.tp3Pct || 50, reason: "tp3", move };
     }
   }
-  // Moon target: close the runner out (+400% steady/blend, +500% normal).
-  if ((pos.tp3Done || P.steady) && move >= (P.moonTarget || 500)) {
+  // Moon target: close the runner out (+400% steady/blend/cold, +500% normal).
+  if ((pos.tp3Done || P.steady || P.bankHard) && move >= (P.moonTarget || 500)) {
     return { action: "sell", pct: 100, reason: "tp4", move };
   }
   // Moon-bag TIME CAP: once the bulk is banked (tp1Done), don't let a small remnant
