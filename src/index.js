@@ -11986,7 +11986,14 @@ function walletStopLossPct(plan, planWallet) {
     ? planWallet.stopLossPct
     : plan.stopLossPct;
   const number = Number(value);
-  return Number.isFinite(number) && number > 0 ? number : 0;
+  const base = Number.isFinite(number) && number > 0 ? number : 0;
+  // Break-even after TP1: once the first laddered take-profit tranche has filled (profit
+  // already banked), tighten the stop to ~entry so a winner can't round-trip into a loss.
+  if (plan.breakEvenAfterTp1 && (planWallet?.completedTakeProfitLevels || []).length >= 1) {
+    const be = Number(plan.breakEvenStopPct) || 2;
+    return base > 0 ? Math.min(base, be) : be;
+  }
+  return base;
 }
 
 function timedPlanExitSource(plan) {
@@ -31911,9 +31918,31 @@ async function webCreateTradePlan(userId, body = {}) {
     defaultSellDelay: "5",
     defaultTakeProfitPct: "25",
     defaultStopLossPct: "8",
-    defaultSlippageBps: 400
+    defaultSlippageBps: 400,
+    defaultSmartExits: true // laddered take-profit + break-even after TP1 by default (pass smartExits:false to opt out)
   });
 }
+
+// Normalize a take-profit ladder (array of {pct, sellPercent}) from a web request.
+// Keeps only positive, ascending-pct rungs; caps total sell at 100%.
+function parseWebTakeProfitLadder(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  let sold = 0;
+  for (const level of raw) {
+    const pct = Number(level && (level.pct ?? level.takeProfitPct));
+    let sell = Number(level && (level.sellPercent ?? level.sell));
+    if (!Number.isFinite(pct) || pct <= 0) continue;
+    if (!Number.isFinite(sell) || sell <= 0) sell = 25;
+    sell = Math.min(sell, Math.max(0, 100 - sold));
+    if (sell <= 0) break;
+    sold += sell;
+    out.push({ pct: Math.round(pct), sellPercent: Math.round(sell) });
+  }
+  return out.sort((a, b) => a.pct - b.pct);
+}
+// The default "Smart exits" ladder: bank early, keep a moon-bag riding.
+const SMART_EXIT_LADDER = [{ pct: 50, sellPercent: 40 }, { pct: 120, sellPercent: 35 }, { pct: 300, sellPercent: 50 }];
 
 async function webCreateManagedBuyPlan(userId, wallets, body = {}, options = {}) {
   const tokenMint = parsePublicKey(String(body.tokenMint || "")).toBase58();
@@ -31927,6 +31956,12 @@ async function webCreateManagedBuyPlan(userId, wallets, body = {}, options = {})
   const loopDelaySeconds = parseLoopDelaySeconds(String(body.loopDelay || body.loopDelaySeconds || "0"));
   const slippageBps = parseWebSlippage(body.slippageBps || options.defaultSlippageBps);
   const triggerSellPercent = sellPercent;
+  // Smart exits: laddered take-profit (bank some, ride some) + break-even after TP1.
+  // Opt-in per request (body.smartExits) or per caller default (options.defaultSmartExits).
+  const smartExits = body.smartExits === true || body.smartExits === "true" || (options.defaultSmartExits && body.smartExits !== false && body.smartExits !== "false");
+  let takeProfitLadder = parseWebTakeProfitLadder(body.takeProfitLadder);
+  if (smartExits && takeProfitLadder.length === 0) takeProfitLadder = SMART_EXIT_LADDER.slice();
+  const breakEvenAfterTp1 = body.breakEvenAfterTp1 === true || body.breakEvenAfterTp1 === "true" || (smartExits && body.breakEvenAfterTp1 !== false && body.breakEvenAfterTp1 !== "false");
   const source = options.source || "web_volume";
   const label = options.label || "Plan";
   const results = [];
@@ -31940,7 +31975,8 @@ async function webCreateManagedBuyPlan(userId, wallets, body = {}, options = {})
     takeProfitPct,
     stopLossPct,
     walletTakeProfitTargets,
-    walletStopLossTargets
+    walletStopLossTargets,
+    takeProfitLadder
   });
   const automationPermission = await requireWebAutomationPermission(userId, `${label} server exits`);
 
@@ -32033,9 +32069,11 @@ async function webCreateManagedBuyPlan(userId, wallets, body = {}, options = {})
     loopDelaySeconds,
     takeProfitPct,
     stopLossPct,
-    takeProfitMode: walletTakeProfitTargets ? "wallets" : "single",
+    takeProfitMode: takeProfitLadder.length ? "ladder" : (walletTakeProfitTargets ? "wallets" : "single"),
     stopLossMode: walletStopLossTargets ? "wallets" : "single",
-    takeProfitLadder: [],
+    takeProfitLadder,
+    breakEvenAfterTp1: Boolean(breakEvenAfterTp1),
+    breakEvenStopPct: 2,
     autoBundle: false,
     slippageBps,
     createdAt: new Date().toISOString(),
