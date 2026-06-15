@@ -303,8 +303,9 @@ export function evalExit(pos, P, nowMs) {
   // that was the gap that let a +26% TP1 coin bleed to -13%). Tighter the higher
   // it ran: give back ~28% from a huge peak, ~38% medium, 50% otherwise.
   if (pos.tp1Done && peak >= 25) {
-    // Tighter the higher it ran — lock more of a big runner (5x+ gives back only ~18%).
-    const keep = peak >= 500 ? 0.82 : peak >= 300 ? 0.74 : peak >= 150 ? 0.62 : 0.5;
+    // Tighter than before — honest fills showed moon bags fading far below their marked
+    // peak before the old looser trail fired, so bank the remainder closer to the top.
+    const keep = peak >= 500 ? 0.85 : peak >= 300 ? 0.8 : peak >= 150 ? 0.72 : 0.55;
     if (move <= peak * keep) {
       return { action: "sell", pct: 100, reason: "trail", move };
     }
@@ -314,9 +315,17 @@ export function evalExit(pos, P, nowMs) {
   if (move <= -P.sl) {
     return { action: "sell", pct: 100, reason: "stop", move };
   }
-  // TP1: bank 40%, let the rest ride.
+  // FAST-SPIKE CAPTURE: a coin already +150%+ is a fast pump that fades fast and fills
+  // below the marked price on a thin curve — bank the BULK now near the spike instead
+  // of laddering into a fading price. Honest fills showed a +358%-marked runner only
+  // netted ~+74% riding the slow ladder; grab it. Keep a small runner for the monster.
+  if (!pos.tp1Done && move >= 150) {
+    return { action: "sell", pct: 75, reason: "spike", move };
+  }
+  // TP1: bank the first pop HARD. Was 40% — too little; the runner faded before the
+  // later rungs filled, so most of the bag rode a moon bag back down.
   if (!pos.tp1Done && move >= P.tp1) {
-    return { action: "sell", pct: 40, reason: "tp1", move };
+    return { action: "sell", pct: 55, reason: "tp1", move };
   }
   // TP2: bank half of what's left, keep a moon bag for a real runner.
   if (pos.tp1Done && !pos.tp2Done && move >= P.tp2) {
@@ -895,6 +904,7 @@ export function createAutopilotEngine(deps) {
       if (reason === "tp1") pos.tp1Done = true;
       else if (reason === "tp2") pos.tp2Done = true;
       else if (reason === "tp3") pos.tp3Done = true;
+      else if (reason === "spike") { pos.tp1Done = true; pos.tp2Done = true; } // bulk banked; small runner trails
       record("info", `🟡 ${pos.sym} ${reason.toUpperCase()} sold ${pct}% @ ${round(move, 1)}% (moon bag rides)`);
     }
   }

@@ -199,7 +199,10 @@ test("evalExit: ladder tp1 -> tp2 -> tp3 -> tp4 lets a runner ride", () => {
   const P = aggParams(baseState());
   const base = { entryMc: 5000, entryLiq: 6000, lastLiq: 6000, openedAt: 0, missed: 0, peakPct: 0 };
   const tp1 = evalExit({ ...base, lastMc: 5000 * 1.3, tp1Done: false }, P, 1000);
-  assert.equal(tp1.reason, "tp1"); assert.equal(tp1.pct, 40);
+  assert.equal(tp1.reason, "tp1"); assert.equal(tp1.pct, 55);
+  // Fast spike (+150%+) banks the bulk at once instead of laddering into a fade.
+  const spike = evalExit({ ...base, lastMc: 5000 * 2.6, tp1Done: false, peakPct: 160 }, P, 1000);
+  assert.equal(spike.reason, "spike"); assert.equal(spike.pct, 75);
   // TP2 banks half the remainder, keeps a moon bag (not a full close)
   const tp2 = evalExit({ ...base, lastMc: 5000 * 2, tp1Done: true, tp2Done: false, peakPct: 100 }, P, 1000);
   assert.equal(tp2.reason, "tp2"); assert.equal(tp2.pct, 50);
