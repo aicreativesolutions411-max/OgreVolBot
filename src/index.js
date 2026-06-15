@@ -366,7 +366,8 @@ function liteAutopilotStatus(s) {
     wins: s.wins, losses: s.losses,
     open: (s.open || []).map((p) => ({ sym: p.sym, movePct: p.movePct, heldS: p.heldS })),
     endsInS: s.endsInS, stopped: s.stopped, stopReason: s.stopReason,
-    bigWins: s.bigWins // their own win cards are fine to keep
+    bigWins: s.bigWins, // their own win cards are fine to keep
+    tape: s.tape // mood only (HOT/COLD/NORMAL) — drives the reactor color, not strategy internals
   };
 }
 

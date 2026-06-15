@@ -133,9 +133,7 @@
 <body data-state="idle">
   <!-- ===== LIVING REACTOR STAGE ===== -->
   <div class="stage" id="stage">
-    <video class="bg" id="bgVid" autoplay muted loop playsinline preload="auto" poster="/assets/slimewire/auto/reactor.jpg">
-      <source src="/assets/slimewire/auto/reactor.mp4" type="video/mp4">
-    </video>
+    <video class="bg" id="bgVid" autoplay muted loop playsinline preload="auto" poster="/assets/slimewire/auto/reactor.jpg" src="/assets/slimewire/auto/states/idle.mp4"></video>
     <span class="tier" id="tierPill">PRO</span>
     <button class="snd" id="soundBtn" title="Sound on/off">🔊</button>
     <div class="core" id="core"></div>
@@ -293,6 +291,50 @@ function dl(name,dataUrl){const a=document.createElement("a");a.href=dataUrl;a.d
 /* ---- living scene control: states + button feedback ---- */
 let activatingUntil=0;
 function setState(st){document.body.dataset.state=st;}
+
+/* ---- STATE-REACTIVE OGRE CLIPS: the ogre visibly acts out what the bot is doing.
+   Ambient loops by state (idle / scanning / cold), with one-shot EVENT clips overlaid
+   when the bot apes, banks a win, or sweeps profit to the vault. All animated from the
+   same reactor hero so they're the same ogre. ---- */
+const STATE_CLIPS="/assets/slimewire/auto/states/";
+let curClip="", clipEventUntil=0, lastSceneS=null;
+let pPrevOpen=null, pPrevWins=null, pPrevSec=null;
+function playClip(name, isEvent){
+  const v=$("bgVid"); if(!v) return;
+  if(curClip===name) return;
+  curClip=name;
+  try{
+    v.loop=!isEvent;
+    v.src=STATE_CLIPS+name+".mp4";
+    v.load(); const p=v.play(); if(p&&p.catch)p.catch(()=>{});
+  }catch{}
+  if(isEvent) clipEventUntil=Date.now()+4600;
+}
+function ambientClip(s){
+  if(!s||!s.running) return "idle";
+  const t=String((s.tape||"")).toUpperCase();
+  if(t==="COLD"||t==="PROBE") return "cold";
+  return "scanning";
+}
+function driveScene(s){
+  lastSceneS=s;
+  const now=Date.now();
+  let evt=null;
+  if(s&&s.running){
+    const op=(s.open||[]).length, wn=(s.bigWins||[]).length, sec=Number(s.secured||0);
+    if(pPrevOpen!==null){
+      if(wn>pPrevWins) evt="win";                       // a big win just printed
+      else if(sec>pPrevSec+0.0005) evt="banking";       // profit swept to the safe wallet
+      else if(op>pPrevOpen) evt="aped";                 // a new position just opened
+    }
+    pPrevOpen=op; pPrevWins=wn; pPrevSec=sec;
+  } else { pPrevOpen=null; }
+  if(evt){ playClip(evt,true); try{blip(evt==="win"?"ok":"click");}catch{} if(evt==="win"||evt==="aped"){try{playSurge();}catch{}} return; }
+  if(now>=clipEventUntil) playClip(ambientClip(s),false);  // back to the ambient loop
+}
+// when a one-shot event clip ends, drop straight back to the ambient loop
+document.addEventListener("DOMContentLoaded",()=>{ const v=$("bgVid"); if(v) v.addEventListener("ended",()=>{ if(!v.loop){ clipEventUntil=0; curClip=""; playClip(ambientClip(lastSceneS),false); } }); });
+
 function applyScene(s){
   const running=Boolean(s&&s.running);
   const pnl=(s&&typeof s.pnlPct==="number")?s.pnlPct:null;
@@ -305,6 +347,7 @@ function applyScene(s){
   $("hudPnl").innerHTML=fmtPnl(pnl);
   if(s&&s.equity!=null)$("hudEq").textContent=s.equity.toFixed(3)+" SOL";
   setAmbient(ambientForState());
+  driveScene(s);  // swap the ogre clip to match what the bot is doing
 }
 // global ripple on any button press
 document.addEventListener("click",(e)=>{
@@ -402,7 +445,7 @@ $("startBtn").addEventListener("click",async()=>{
       return res;
     });
     // play the power-up surge, then settle into running
-    activatingUntil=Date.now()+1700; setState("activating"); playSurge(); setAmbient(0.55);
+    activatingUntil=Date.now()+1700; setState("activating"); playSurge(); setAmbient(0.55); playClip("aped",true);
     $("startMsg").innerHTML='<span class="ok">Live — trading on the server. You can close this; it keeps running.</span>';
     poll();
   }catch(e){
