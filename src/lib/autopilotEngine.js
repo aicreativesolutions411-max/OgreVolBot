@@ -101,7 +101,12 @@ export function autoTune(state, nowMs, marketTape = null) {
   // isn't rug-heavy on peaks but keeps handing us small net losses.
   const res = (state.results || []).slice(-15);
   const realizedWinRate = res.length >= 8 ? res.filter((r) => r === "W").length / res.length : null;
-  const realizedBleed = realizedWinRate !== null && realizedWinRate < 0.30;
+  // Net realized PnL over recent closed trades — catches the "40% win-rate but still
+  // net RED" case (lots of tiny wins, a few bigger losses + fees) that a win-rate gate
+  // alone misses. If we're genuinely losing money over the last several trades, brake.
+  const pnls = (state.recentPnl || []).slice(-12);
+  const netRecent = pnls.reduce((a, b) => a + b, 0);
+  const realizedBleed = (realizedWinRate !== null && realizedWinRate < 0.30) || (pnls.length >= 8 && netRecent < 0);
   // PROTECT A GREEN SESSION: once up meaningfully, tighten so we don't churn hard-won
   // gains back into a softening tape (works with the bank-the-peak ratchet).
   const sessGain = state.start > 0 ? equity(state) / state.start - 1 : 0;
@@ -117,15 +122,18 @@ export function autoTune(state, nowMs, marketTape = null) {
   // gap between entries, cap concurrent bags, shrink size. This is what stops a dead
   // tape from draining the wallet via churn.
   if (ownCold || realizedBleed || mktCold) {
-    state.tune = { scoreBonus: 6, sizeMult: 0.7, tape: "COLD", maxOpenCap: 2, entryGapMs: 15000, perCycle: 1 };
+    // COLD: only take genuinely strong setups. scoreBonus +20 lifts the entry bar to
+    // ~fs 60-68 (vs the base ~40-48) so the fs 61-63 churn that bleeds a chop tape gets
+    // skipped while the fs 67+ runners still pass. Plus widen entry gap + cap bags.
+    state.tune = { scoreBonus: 20, sizeMult: 0.7, tape: "COLD", maxOpenCap: 2, entryGapMs: 15000, perCycle: 1 };
   } else if ((ownHot || mktHot) && !realizedBleed) {
     // Hot — press harder (bigger size, more concurrent, no gap). If already well up,
     // ease off so the session banks green instead of round-tripping it.
     state.tune = { scoreBonus: green ? 2 : -2, sizeMult: green ? 1.0 : 1.35, tape: "HOT", maxOpenCap: green ? 3 : null, entryGapMs: 0, perCycle: green ? 3 : 4 };
   } else {
-    // Normal — slightly selective so marginal setups in a directionless tape don't
-    // nickel-and-dime the bankroll; tighten further once green to defend the gains.
-    state.tune = { scoreBonus: green ? 4 : 2, sizeMult: green ? 0.85 : 1, tape: "NORMAL", maxOpenCap: green ? 3 : null, entryGapMs: green ? 4000 : 0, perCycle: green ? 2 : 3 };
+    // Normal — more selective than before so marginal setups in a directionless tape
+    // don't nickel-and-dime the bankroll; tighten harder once green to defend gains.
+    state.tune = { scoreBonus: green ? 12 : 6, sizeMult: green ? 0.85 : 1, tape: "NORMAL", maxOpenCap: green ? 3 : null, entryGapMs: green ? 4000 : 0, perCycle: green ? 2 : 3 };
   }
   return state.tune;
 }
@@ -407,6 +415,7 @@ function freshState(opts) {
     tune: { scoreBonus: 0, sizeMult: 0.6, tape: "warming", maxOpenCap: null, entryGapMs: 0, perCycle: 2 },
     recentPeaks: [],
     recentRugs: [],
+    recentPnl: [],
     lastTuneAt: 0,
     tradeNo: 0,
     tickN: 0,
@@ -875,6 +884,9 @@ export function createAutopilotEngine(deps) {
     if (state.recentPeaks.length > 30) state.recentPeaks.shift();
     state.recentRugs.push(/rug/.test(reason) || pnl <= -pos.costSol * 0.5);
     if (state.recentRugs.length > 30) state.recentRugs.shift();
+    state.recentPnl = state.recentPnl || [];
+    state.recentPnl.push(pnl); // realized net per closed trade -> feeds the net-PnL bleed brake
+    if (state.recentPnl.length > 20) state.recentPnl.shift();
     record(win ? "info" : "warn", `${win ? "✅" : "🔴"} ${pos.sym} CLOSE ${reason} ${pnl >= 0 ? "+" : ""}${round(pnl, 4)} SOL`);
 
     // Learning flywheel: record EVERY trade's features + outcome — paper too. Paper
