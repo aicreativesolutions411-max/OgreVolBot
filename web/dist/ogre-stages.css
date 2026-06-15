@@ -111,6 +111,13 @@
 .ogre-stage.volume .ov-read .chip .v{font-size:13px;font-weight:900;font-variant-numeric:tabular-nums;color:#eaddff;}
 .ogre-stage.volume .ov-read .chip .v.buy{color:#8dff5a;}.ogre-stage.volume .ov-read .chip .v.sell{color:#ff9a3a;}
 
+/* ----------------------------------------------------------------- OGRE A.I. TIER BANNER */
+.ogre-ai-tier{display:flex;align-items:center;gap:10px;margin:0 0 12px;padding:10px 12px;border-radius:12px;
+  background:linear-gradient(120deg,rgba(70,232,255,.12),rgba(70,232,255,.04));border:1px solid rgba(70,232,255,.3);}
+.ogre-ai-tier .tier-badge{flex:none;font-size:10px;font-weight:900;letter-spacing:.8px;color:#0a0e0c;background:#46e8ff;padding:4px 9px;border-radius:99px;}
+.ogre-ai-tier .tier-copy{font-size:12px;color:#cfe9f2;line-height:1.45;}
+.ogre-ai-tier .tier-link{color:#8dff5a;font-weight:800;white-space:nowrap;}
+
 /* ----------------------------------------------------------------- PRO TEK EXPANDER */
 .ogre-tek{margin:10px 0 0;border:1px solid rgba(255,255,255,.1);border-radius:14px;overflow:hidden;background:rgba(8,12,16,.4);}
 .ogre-tek>summary{list-style:none;cursor:pointer;padding:12px 14px;font-weight:800;font-size:13px;display:flex;align-items:center;gap:8px;user-select:none;}

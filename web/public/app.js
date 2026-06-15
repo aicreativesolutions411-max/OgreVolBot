@@ -8404,6 +8404,11 @@ function ogreAiHtml() {
           <span class="sync-pill">Managed server exits</span>
         </div>
 
+        <div class="ogre-ai-tier">
+          <span class="tier-badge">CO-PILOT</span>
+          <span class="tier-copy">Ogre A.I. scans, apes the best setup, and arms your exits — you stay in the loop. Want it fully hands-off with smart-money entries, laddered banking &amp; auto cash-out? <a href="/pro" class="tier-link">Unlock Pro Autopilot →</a></span>
+        </div>
+
         <div class="ogre-cat-field" data-preserve-focus>
           <span class="ogre-cat-label">Scan category</span>
           ${ogreAiCategorySegmentHtml(activeCategory)}
@@ -9349,8 +9354,8 @@ function volumeBotPanelHtml() {
 
         <div class="vbot-config-row">
           <div class="vbot-config-field">
-            <span class="vbot-config-label">Stagger pattern</span>
-            ${slimeBotSegment("stagger", state.slimeBotStagger, [["steady", "Steady"], ["waves", "Waves"], ["organic", "Organic"], ["ladder", "Ladder"]])}
+            <span class="vbot-config-label">Chart shape <span style="opacity:.6;font-weight:600">· the pattern it paints</span></span>
+            ${slimeBotSegment("stagger", state.slimeBotStagger, [["steady", "Steady"], ["waves", "Waves"], ["organic", "Organic"], ["ladder", "Uptrend"]])}
           </div>
         </div>
 
