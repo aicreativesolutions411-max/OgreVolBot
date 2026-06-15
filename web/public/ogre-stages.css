@@ -221,6 +221,25 @@ html body main.shell[data-app] .nav-side-group-toggle[data-active]{box-shadow:in
   html body main.shell[data-app] .metrics article small{display:none !important;}
 }
 
+/* ----------------------------------------------------------------- HIGGSFIELD UI SKIN
+   Generated slime assets used as light overlays/textures (transparent PNGs + a dark tile) —
+   custom HUD chrome that CSS alone can't do, kept mobile-light. */
+/* 1) slime drip oozing over the top of every immersive stage */
+html body main.shell[data-app] .ogre-stage::before{
+  content:""; position:absolute; left:0; right:0; top:0; height:34px; z-index:3; pointer-events:none;
+  background:url("/assets/slimewire/ui/slime-drip-top.png") top center / 100% 100% no-repeat; opacity:.92;
+  filter:drop-shadow(0 0 6px rgba(39,224,106,.4));
+}
+/* 2) wet gloss sheen on the high-touch action buttons (CSS gradient — clean, light) */
+html body main.shell[data-app] .oss-swap, html body main.shell[data-app] .vbot-config-start{position:relative;overflow:hidden;}
+html body main.shell[data-app] .oss-swap::after, html body main.shell[data-app] .vbot-config-start::after{
+  content:""; position:absolute; inset:0; z-index:1; pointer-events:none;
+  background:linear-gradient(118deg, transparent 32%, rgba(255,255,255,.30) 47%, rgba(255,255,255,.05) 55%, transparent 68%);
+}
+/* 3) tactile slime-bark surface under the bars (very subtle, blended) */
+html body main.shell[data-app] .top-sync-strip{ background:linear-gradient(120deg,rgba(10,18,14,.62),rgba(6,12,9,.34)), url("/assets/slimewire/ui/bar-texture.png") !important; background-size:auto, cover !important; background-blend-mode:normal, soft-light !important; }
+html body main.shell[data-app] .preset-toolbar{ background:linear-gradient(160deg,rgba(10,18,14,.55),rgba(6,12,9,.3)), url("/assets/slimewire/ui/bar-texture.png") !important; background-size:auto, cover !important; background-blend-mode:normal, soft-light !important; }
+
 /* ----------------------------------------------------------------- OGRE A.I. TIER BANNER */
 .ogre-ai-tier{display:flex;align-items:center;gap:10px;margin:0 0 12px;padding:10px 12px;border-radius:12px;
   background:linear-gradient(120deg,rgba(70,232,255,.12),rgba(70,232,255,.04));border:1px solid rgba(70,232,255,.3);}
