@@ -351,6 +351,12 @@ export function evalExit(pos, P, nowMs) {
   if (move <= -P.sl) {
     return { action: "sell", pct: 100, reason: "stop", move };
   }
+  // SMART-MONEY EXIT: proven winner wallets are in this coin, and we've learned the gain
+  // level where the earliest of them historically sells. Bank our WHOLE position just
+  // before that — get out ahead of the smart money's dump instead of riding into it.
+  if (pos.smartExitPct && move >= pos.smartExitPct) {
+    return { action: "sell", pct: 100, reason: "smart-exit", move };
+  }
   // FAST-SPIKE CAPTURE: a coin already +150%+ is a fast pump that fades fast and fills
   // below the marked price on a thin curve — bank the BULK now near the spike instead
   // of laddering into a fading price. Honest fills showed a +358%-marked runner only
@@ -1165,7 +1171,7 @@ export function createAutopilotEngine(deps) {
       if (conv < minConv) continue;
       let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv, state.maxTradeSol));
       if (!canOpen(state, size)) break;
-      await openPosition(cand.r, size, cand.fs, dev, rep);
+      await openPosition(cand.r, size, cand.fs, dev, rep, sm);
       state.lastOpenAt = now();
       openedThisCycle += 1;
       if (openedThisCycle >= perCycle) break;            // don't machine-gun the whole feed at once
@@ -1199,7 +1205,7 @@ export function createAutopilotEngine(deps) {
         let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv, state.maxTradeSol));
         if (!canOpen(state, size)) break;
         record("info", `🐳 smart-money entry ${r.symbol || shortMint(r.tokenMint)} @ MC $${Math.round(Number(r.marketCap) || 0)} — ${sm.kol ? "KOL " : ""}${sm.winners || 0} winner-wallet(s) → conv ${conv.toFixed(2)}`);
-        await openPosition(r, size, freshScore(r), dev, rep);
+        await openPosition(r, size, freshScore(r), dev, rep, sm);
         state.lastOpenAt = now();
         openedThisCycle += 1;
       }
@@ -1216,7 +1222,7 @@ export function createAutopilotEngine(deps) {
     }
   }
 
-  async function openPosition(row, sizeSol, fs, dev, rep) {
+  async function openPosition(row, sizeSol, fs, dev, rep, sm) {
     if (!state || state.stopped) return; // never open once stopped
     const mint = row.tokenMint;
     const sym = row.symbol || row.baseToken?.symbol || shortMint(mint);
@@ -1279,7 +1285,11 @@ export function createAutopilotEngine(deps) {
       entrySniper: Number(row.sniperCount) || 0,
       entryVol5m: Number(row.volume5m) || 0,
       entryBuys: Number(row.buys5m) || 0,
-      entrySells: Number(row.sells5m) || 0
+      entrySells: Number(row.sells5m) || 0,
+      // SMART-MONEY EXIT: if proven winner wallets are in this coin, exit just BEFORE
+      // the earliest-exiting one historically sells — bank at ~85% of their typical
+      // exit gain. null = no smart-money exit signal (use the normal ladder).
+      smartExitPct: (sm && sm.exitMult) ? Math.max(30, Math.min(400, Math.round((sm.exitMult - 1) * 100 * 0.85))) : null
     };
     state.open.push(pos);
     state.recentApeNames[normSym(sym)] = now(); // remember the NAME to block clone-swarm pile-ins

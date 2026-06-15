@@ -2429,6 +2429,7 @@ function drawMob(m){ drawShadow(m.x,m.y,m.r);
     ctx.fillStyle=m.col; ctx.beginPath(); ctx.arc(m.x,m.y,m.r,0,6.2832); ctx.fill();
     ctx.fillStyle="#300"; ctx.beginPath(); ctx.arc(m.x-m.r*0.3,m.y-m.r*0.2,m.r*0.16,0,6.28); ctx.arc(m.x+m.r*0.3,m.y-m.r*0.2,m.r*0.16,0,6.28); ctx.fill(); }
   if(m.flash>0){ ctx.globalAlpha=Math.min(0.8,m.flash*5); ctx.fillStyle="#fff"; ctx.beginPath(); ctx.arc(m.x,m.y-m.r*0.2,m.r,0,6.28); ctx.fill(); ctx.globalAlpha=1; }
+  drawMobStatus(m);
   if(m.hp<m.maxhp){ const w=m.r*1.7; ctx.fillStyle="rgba(0,0,0,0.55)"; ctx.fillRect(m.x-w/2,m.y-m.r-9,w,3.5); ctx.fillStyle="#ff5e5e"; ctx.fillRect(m.x-w/2,m.y-m.r-9,w*Math.max(0,m.hp/m.maxhp),3.5); }
   if(m.boss||m===nearMob||m.hp<m.maxhp){ ctx.font="900 10px Inter,sans-serif"; ctx.textAlign="center"; ctx.fillStyle="#ff9a7e"; ctx.strokeStyle="rgba(0,0,0,0.7)"; ctx.lineWidth=3; ctx.strokeText(m.name,m.x,m.y-m.r-13); ctx.fillText(m.name,m.x,m.y-m.r-13); } }
 function drawVignette(){ const g=ctx.createRadialGradient(W/2,H/2,Math.min(W,H)*0.45,W/2,H/2,Math.max(W,H)*0.78);

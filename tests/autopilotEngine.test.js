@@ -260,6 +260,18 @@ test("evalExit: blend mode ladders ~25% tranches in a HOT tape, rides the tail t
   assert.equal(t4.reason, "tp4"); assert.equal(t4.pct, 100);
 });
 
+test("evalExit: smart-money exit banks before the tracked wallet's typical dump", () => {
+  const P = aggParams(baseState());
+  const base = { entryMc: 5000, entryLiq: 6000, lastLiq: 6000, openedAt: 0, missed: 0, peakPct: 0, smartExitPct: 170 };
+  // below the learned smart-money exit level -> not yet
+  const before = evalExit({ ...base, lastMc: 5000 * 2 }, P, 1000); // +100%
+  assert.notEqual(before.reason, "smart-exit");
+  // at/above the level -> bank the whole position before they dump
+  const at = evalExit({ ...base, lastMc: 5000 * 2.8 }, P, 1000); // +180% >= 170
+  assert.equal(at.reason, "smart-exit");
+  assert.equal(at.pct, 100);
+});
+
 test("evalExit: adaptive dev-avg take banks near a dev's typical top", () => {
   const P = aggParams(baseState());
   const base = { entryMc: 5000, entryLiq: 6000, lastLiq: 6000, openedAt: 0, missed: 0, tp1Done: true };

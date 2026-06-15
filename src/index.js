@@ -554,19 +554,33 @@ function walletObsBump(wallet, ranMult, rugged) {
 function isWinnerWallet(r) {
   return Boolean(r) && r.coins >= 3 && r.ran >= 2 && r.ran >= r.rugged * 2;
 }
-// Smart-money read for a coin: are proven-winner wallets or tracked KOLs in its
-// early buyers right now? Returns null when there's no smart-money signal.
+// A winner wallet's learned EXIT STYLE: the avg gain-multiple (from launch) at which
+// it tends to sell. null until we've seen it exit a couple times.
+function walletExitMult(r) {
+  return (r && r.exitN >= 2) ? r.exitSum / r.exitN : null;
+}
+// Smart-money read for a coin: are proven-winner wallets or tracked KOLs in its early
+// buyers right now? Also returns exitMult = the MOST CONSERVATIVE winner's typical exit
+// multiple, so we can bank just before the earliest-exiting smart wallet. null = no signal.
 function smartMoneyScore(mint) {
   try {
     const trades = pumpPortalStream.getTrades(mint, { limit: 80 }) || [];
     const buyers = new Set();
     for (const t of trades) { if (t && t.side === "buy" && t.trader) buyers.add(String(t.trader)); }
     let winners = 0, kol = false;
+    const exitMults = [];
     for (const w of buyers) {
       if (KOL_WALLETS.has(w)) kol = true;
-      if (isWinnerWallet(walletObs.get(w))) winners += 1;
+      const r = walletObs.get(w);
+      if (isWinnerWallet(r)) {
+        winners += 1;
+        const em = walletExitMult(r);
+        if (em != null) exitMults.push(em);
+      }
     }
-    return (winners || kol) ? { winners, kol } : null;
+    if (!winners && !kol) return null;
+    const exitMult = exitMults.length ? Math.min(...exitMults) : null; // exit before the earliest
+    return { winners, kol, exitMult };
   } catch { return null; }
 }
 // SELF-ACTIVATION GATE: the smart-money entry path turns itself ON (no toggle) only
@@ -648,18 +662,32 @@ function sampleDevObservatory() {
       c.maxMc = Math.max(c.maxMc, mc);
       c.lastMc = mc;
       c.seen = now;
-      // Capture the coin's early buyer wallets (up to 12) so we can score them later.
+      // One trade scan captures TWO things: the coin's early BUYER wallets (to score
+      // them), and the gain-multiple at which any known WINNER wallet SELLS (to learn
+      // each winner's exit style, so we can bank just BEFORE them next time).
       if (!c.buyers) c.buyers = [];
-      if (c.buyers.length < 12) {
-        try {
-          for (const t of (pumpPortalStream.getTrades(mint, { limit: 40 }) || [])) {
-            if (t && t.side === "buy" && t.trader && !c.buyers.includes(t.trader)) {
-              c.buyers.push(String(t.trader));
-              if (c.buyers.length >= 12) break;
+      try {
+        for (const t of (pumpPortalStream.getTrades(mint, { limit: 40 }) || [])) {
+          if (!t || !t.trader) continue;
+          const w = String(t.trader);
+          if (t.side === "buy") {
+            if (c.buyers.length < 12 && !c.buyers.includes(w)) c.buyers.push(w);
+          } else if (t.side === "sell" && c.firstMc > 0) {
+            const r = walletObs.get(w);
+            if (isWinnerWallet(r)) {
+              c.exitSeen = c.exitSeen || {};
+              if (!c.exitSeen[w]) {            // record each winner's exit on this coin once
+                c.exitSeen[w] = 1;
+                const gm = Math.max(1, (c.lastMc || c.firstMc) / c.firstMc); // gain-mult at their sell
+                r.exitSum = (r.exitSum || 0) + gm;
+                r.exitN = (r.exitN || 0) + 1;
+                if (r.exitN > 50) { r.exitSum = r.exitSum * 50 / r.exitN; r.exitN = 50; } // bounded rolling avg
+                walletObs.set(w, r);
+              }
             }
           }
-        } catch {}
-      }
+        }
+      } catch {}
       obsCoins.set(mint, c);
     }
     // Finalize coins that aged out of the buffer or got old enough to judge.
