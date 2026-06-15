@@ -82,11 +82,29 @@ export function aggParams(state) {
   // COLD / bleeding / cold-market tape: demand genuinely strong setups (fs ~66+)
   // regardless of regime base — this is what actually stops the fs 61-63 chop churn
   // that bleeds a directionless tape. (scoreBonus alone couldn't reach this.)
-  if (state.tune && state.tune.tape === "COLD") minScore = Math.max(minScore, 66);
+  if (state.tune && state.tune.tape === "COLD") minScore = Math.max(minScore, 62);
 
   const mcFloor = 1800; // no MC filter — a low-MC runner (e.g. ZUL +56% @ $1973) stays in
 
-  return { regime, wr, baseFrac, streakMult, regimeMult, tp1, tp2, sl, minScore, mcFloor };
+  // BANK STYLE — three exit personalities:
+  //  • "steady": lock the bulk at the first DOABLE pop (80%) + free-roll 20% to +400%,
+  //    skipping mid rungs. Grabs the realizable value; cheap lottery ticket on top.
+  //  • "blend": the "4 wallets in one" profile — sell in ~25% tranches as it climbs
+  //    (first pop / +100% / +200%) and ride the last ~25% to +400%, so it banks what
+  //    it "sees risked" while a tail still rides. A trail protects the whole remainder.
+  //  • default ("normal"/etc): bank 55% (spike 75%) and ladder to ~+500%.
+  const steady = mode === "steady";
+  const blend = mode === "blend";
+  let tp1Pct = 55, spikePct = 75, moonTarget = 500, tp2Lvl = tp2, tp2Pct = 50, tp3Lvl = 200, tp3Pct = 50;
+  if (steady) {
+    tp1Pct = 80; spikePct = 85; moonTarget = 400;
+  } else if (blend) {
+    // sell 25% of the ORIGINAL at each rung: 25% @ first pop, then 33% of the 75%
+    // remainder @ +100%, then 50% of the 50% remainder @ +200%, ride the last 25%.
+    tp1Pct = 25; spikePct = 50; tp2Lvl = 100; tp2Pct = 33; tp3Lvl = 200; tp3Pct = 50; moonTarget = 400;
+  }
+
+  return { regime, wr, baseFrac, streakMult, regimeMult, tp1, tp2, sl, minScore, mcFloor, steady, blend, tp1Pct, spikePct, moonTarget, tp2Lvl, tp2Pct, tp3Lvl, tp3Pct };
 }
 
 // SELF-TUNING / market-regime brain: reads the recent runner & rug rate and sets
@@ -320,24 +338,36 @@ export function evalExit(pos, P, nowMs) {
   // of laddering into a fading price. Honest fills showed a +358%-marked runner only
   // netted ~+74% riding the slow ladder; grab it. Keep a small runner for the monster.
   if (!pos.tp1Done && move >= 150) {
-    return { action: "sell", pct: 75, reason: "spike", move };
+    return { action: "sell", pct: P.spikePct || 75, reason: "spike", move };
   }
-  // TP1: bank the first pop HARD. Was 40% — too little; the runner faded before the
-  // later rungs filled, so most of the bag rode a moon bag back down.
+  // TP1: bank the first DOABLE pop. steady mode banks 80% here (locks the realizable
+  // win); default banks 55%.
   if (!pos.tp1Done && move >= P.tp1) {
-    return { action: "sell", pct: 55, reason: "tp1", move };
+    return { action: "sell", pct: P.tp1Pct || 55, reason: "tp1", move };
   }
-  // TP2: bank half of what's left, keep a moon bag for a real runner.
-  if (pos.tp1Done && !pos.tp2Done && move >= P.tp2) {
-    return { action: "sell", pct: 50, reason: "tp2", move };
+  // Mid rungs only in the laddered styles (normal/blend). steady HOLDS the runner
+  // after TP1 — no mid-rung selling — so its 20% can reach the moon target.
+  if (!P.steady) {
+    // TP2: next tranche (blend = ~33% of remainder @ +100%; normal = 50% @ P.tp2).
+    if (pos.tp1Done && !pos.tp2Done && move >= (P.tp2Lvl || P.tp2)) {
+      return { action: "sell", pct: P.tp2Pct || 50, reason: "tp2", move };
+    }
+    // TP3 (+200%): next tranche.
+    if (pos.tp2Done && !pos.tp3Done && move >= (P.tp3Lvl || 200)) {
+      return { action: "sell", pct: P.tp3Pct || 50, reason: "tp3", move };
+    }
   }
-  // TP3 (+200%): sell half the moon bag.
-  if (pos.tp2Done && !pos.tp3Done && move >= 200) {
-    return { action: "sell", pct: 50, reason: "tp3", move };
-  }
-  // TP4 (+500%): close the runner out.
-  if (pos.tp3Done && move >= 500) {
+  // Moon target: close the runner out (+400% steady/blend, +500% normal).
+  if ((pos.tp3Done || P.steady) && move >= (P.moonTarget || 500)) {
     return { action: "sell", pct: 100, reason: "tp4", move };
+  }
+  // Moon-bag TIME CAP: once the bulk is banked (tp1Done), don't let a small remnant
+  // hog a maxOpen slot for minutes waiting for a moon that isn't coming. Cash it and
+  // free the slot so the bot keeps hunting. This is the fix for "stuck — no buys for
+  // minutes": a couple of riding bags (e.g. one sitting at +210% between the trail and
+  // the moon target) used to fill every slot and freeze new entries indefinitely.
+  if (pos.tp1Done && held > 4 * 60_000) {
+    return { action: "sell", pct: 100, reason: "moonbag-timeout", move };
   }
   // Stale: held 3 min and never really moved.
   if (held > 180_000 && move < P.tp1) {

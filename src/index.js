@@ -479,9 +479,13 @@ function marketTape() {
   if (r.length < 12) return null; // not enough fresh market data to call it yet
   const runRate = r.filter((x) => x.ranMult >= 2).length / r.length;
   const rugRate = r.filter((x) => x.rugged).length / r.length;
+  // CALIBRATED to pump.fun's grim baseline: MOST coins rug/die normally, so a high
+  // rug rate is NOT "cold" — it's Tuesday. COLD must be genuinely dead (almost nothing
+  // running AND rugs even worse than baseline), or the gauge reads COLD ~always and
+  // freezes the bot every session. HOT = clearly more runners than usual.
   let heat = "NORMAL";
-  if (runRate >= 0.22 && rugRate < 0.5) heat = "HOT";          // lots of coins running
-  else if (runRate < 0.08 || rugRate > 0.65) heat = "COLD";    // nothing runs / everything dumps
+  if (runRate >= 0.16) heat = "HOT";                              // notably more coins running than usual
+  else if (runRate < 0.04 && rugRate > 0.85) heat = "COLD";      // truly dead: nothing runs + extreme rugs
   return { heat, runRate: Math.round(runRate * 100) / 100, rugRate: Math.round(rugRate * 100) / 100, sample: r.length };
 }
 
@@ -3132,7 +3136,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
           return;
         }
         const minutes = Number(body.minutes) || 60;
-        const mode = ["chill", "normal", "degen"].includes(String(body.mode)) ? String(body.mode) : "normal";
+        const mode = ["chill", "normal", "degen", "steady", "blend"].includes(String(body.mode)) ? String(body.mode) : "normal";
         const wantLive = body.live === true || body.live === "true";
         // Amount: either an explicit SOL number, or "all"/useFullBalance to let
         // it size the budget from whatever's in the selected wallet (minus the

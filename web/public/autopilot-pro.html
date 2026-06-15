@@ -391,7 +391,7 @@ $("copyWallet").addEventListener("click",()=>{const w=selWallet();if(w){navigato
 $("startBtn").addEventListener("click",async()=>{
   const w=selWallet();
   if(!w){$("startMsg").innerHTML='<span class="warn">Create + fund a wallet first.</span>';return;}
-  const body={sol:Number($("amt").value),minutes:Number($("mins").value),wallet:w.index,live:true,confirm:"LIVE",lowChurn:true,
+  const body={sol:Number($("amt").value),minutes:Number($("mins").value),wallet:w.index,live:true,confirm:"LIVE",lowChurn:true,mode:"blend",
     maxTradeSol:Number($("maxTrade").value)||undefined, maxOpen:Number($("maxOpen").value)||undefined};
   const safe=$("vaultDest").value.trim(); if(safe) body.vaultDestination=safe;
   $("startMsg").textContent="Waking the ogre…";

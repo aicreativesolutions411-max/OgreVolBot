@@ -137,8 +137,10 @@
       <input type="text" id="vaultDest" class="hidden" placeholder="vault wallet address (your Phantom / main)" autocomplete="off" />
       <label>Aggression</label>
       <select id="mode">
+        <option value="blend" selected>Blend — bank in 25% tranches as it climbs, ride the last 25% to 400% (recommended)</option>
+        <option value="steady">Steady — bank 80% at a doable pop, ride 20% for a 400% moon</option>
         <option value="chill">Chill — smaller, pickier</option>
-        <option value="normal" selected>Normal</option>
+        <option value="normal">Normal — ladder out, ride to 500%</option>
         <option value="degen">Degen — bigger, faster</option>
       </select>
       <div id="liveBox" style="margin:14px 0 10px; border:1px solid var(--line); border-radius:11px; padding:12px; background:#0a120c">

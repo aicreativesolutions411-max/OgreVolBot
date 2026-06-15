@@ -214,6 +214,38 @@ test("evalExit: ladder tp1 -> tp2 -> tp3 -> tp4 lets a runner ride", () => {
   assert.equal(tp4.reason, "tp4"); assert.equal(tp4.pct, 100);
 });
 
+test("evalExit: steady mode banks 80% at the first pop and rides 20% to +400%", () => {
+  const P = aggParams(baseState({ mode: "steady" }));
+  const base = { entryMc: 5000, entryLiq: 6000, lastLiq: 6000, openedAt: 0, missed: 0, peakPct: 0 };
+  // bank 80% at the first doable pop
+  const tp1 = evalExit({ ...base, lastMc: 5000 * 1.3, tp1Done: false }, P, 1000);
+  assert.equal(tp1.reason, "tp1"); assert.equal(tp1.pct, 80);
+  // after TP1, mid rungs do NOT fire — the 20% runner is held
+  const mid = evalExit({ ...base, lastMc: 5000 * 3.5, tp1Done: true, tp2Done: false, peakPct: 250 }, P, 1000);
+  assert.notEqual(mid.reason, "tp2");
+  assert.notEqual(mid.reason, "tp3");
+  // the runner cashes at +400%
+  const moon = evalExit({ ...base, lastMc: 5000 * 5, tp1Done: true, tp2Done: true, tp3Done: false, peakPct: 400 }, P, 1000);
+  assert.equal(moon.reason, "tp4"); assert.equal(moon.pct, 100);
+});
+
+test("evalExit: blend mode banks ~25% tranches climbing and rides the tail to +400%", () => {
+  const P = aggParams(baseState({ mode: "blend" }));
+  const base = { entryMc: 5000, entryLiq: 6000, lastLiq: 6000, openedAt: 0, missed: 0, peakPct: 0 };
+  // first tranche: 25% at the first doable pop
+  const t1 = evalExit({ ...base, lastMc: 5000 * 1.3, tp1Done: false }, P, 1000);
+  assert.equal(t1.reason, "tp1"); assert.equal(t1.pct, 25);
+  // second tranche: ~33% of remainder at +100%
+  const t2 = evalExit({ ...base, lastMc: 5000 * 2, tp1Done: true, tp2Done: false, peakPct: 100 }, P, 1000);
+  assert.equal(t2.reason, "tp2"); assert.equal(t2.pct, 33);
+  // third tranche: 50% of remainder at +200%
+  const t3 = evalExit({ ...base, lastMc: 5000 * 3, tp1Done: true, tp2Done: true, tp3Done: false, peakPct: 200 }, P, 1000);
+  assert.equal(t3.reason, "tp3"); assert.equal(t3.pct, 50);
+  // the tail rides to +400%
+  const t4 = evalExit({ ...base, lastMc: 5000 * 5, tp1Done: true, tp2Done: true, tp3Done: true, peakPct: 400 }, P, 1000);
+  assert.equal(t4.reason, "tp4"); assert.equal(t4.pct, 100);
+});
+
 test("evalExit: adaptive dev-avg take banks near a dev's typical top", () => {
   const P = aggParams(baseState());
   const base = { entryMc: 5000, entryLiq: 6000, lastLiq: 6000, openedAt: 0, missed: 0, tp1Done: true };
