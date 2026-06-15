@@ -79,44 +79,52 @@ export function aggParams(state) {
 // a tape temperature that scales selectivity (scoreBonus) and bet size (sizeMult).
 // Cold/rug-heavy -> pickier + smaller (sit back). Hot/runner-rich -> looser +
 // bigger (press the edge). Throttled; needs a little history first.
-export function autoTune(state, nowMs) {
+export function autoTune(state, nowMs, marketTape = null) {
   if (nowMs - (state.lastTuneAt || 0) < 30_000) return state.tune;
   state.lastTuneAt = nowMs;
   const peaks = (state.recentPeaks || []).slice(-20);
   const rugs = (state.recentRugs || []).slice(-20);
-  if (peaks.length < 6) return state.tune;
+  // MARKET-WIDE TAPE: the heat of the WHOLE observed market (thousands of launches),
+  // not just our own trades. This is what lets the engine "think like it's always
+  // watching" — it can go cold the instant the broad market dumps, and press when
+  // the whole market is running, even before our own sample is big enough to know.
+  const mkt = marketTape && marketTape.sample >= 12 ? marketTape : null;
+  const havePeaks = peaks.length >= 6;
+  // Nothing to learn from yet (no own history AND no market read) — stay warming.
+  if (!havePeaks && !mkt) return state.tune;
   // "good" = a trade that actually moved (>=+40%); "big" = >=+100%. Using +40%
-  // means a tape hitting +50-90% wins is recognized as warm (it wasn't before,
-  // which starved the wins by keeping size tiny).
-  const goodRate = peaks.filter((p) => p >= 40).length / peaks.length;
-  const bigRate = peaks.filter((p) => p >= 100).length / peaks.length;
-  const rugRate = rugs.length ? rugs.filter(Boolean).length / rugs.length : 0;
-  // REALIZED win-rate over recent CLOSED trades (W/L). This is the fix for the
-  // "good run then slow bleed" pattern: a flat/chop tape that isn't rug-heavy enough
-  // to read COLD on peaks alone but keeps handing us small net losses. If our actual
-  // closed trades are losing, go conservative regardless of the peak/rug read.
+  // means a tape hitting +50-90% wins is recognized as warm.
+  const goodRate = havePeaks ? peaks.filter((p) => p >= 40).length / peaks.length : 0;
+  const bigRate = havePeaks ? peaks.filter((p) => p >= 100).length / peaks.length : 0;
+  const rugRate = havePeaks && rugs.length ? rugs.filter(Boolean).length / rugs.length : 0;
+  // REALIZED win-rate over recent CLOSED trades (W/L) — catches a flat/chop tape that
+  // isn't rug-heavy on peaks but keeps handing us small net losses.
   const res = (state.results || []).slice(-15);
   const realizedWinRate = res.length >= 8 ? res.filter((r) => r === "W").length / res.length : null;
   const realizedBleed = realizedWinRate !== null && realizedWinRate < 0.30;
-  // PROTECT A GREEN SESSION: once we're up meaningfully, tighten so we don't churn
-  // hard-won gains back into a softening tape (works with the bank-the-peak ratchet).
+  // PROTECT A GREEN SESSION: once up meaningfully, tighten so we don't churn hard-won
+  // gains back into a softening tape (works with the bank-the-peak ratchet).
   const sessGain = state.start > 0 ? equity(state) / state.start - 1 : 0;
-  // tape sets selectivity + bet size AND how hard we throttle entries. The cold
-  // throttle is the fix for "machine-gunning a dead tape into 100+ fee-bleed
-  // losses": when rugs dominate we widen the gap between entries and cap how many
-  // positions ride at once, so a runnerless tape can't drain the wallet via churn.
-  if ((rugRate > 0.45 && goodRate < 0.12) || realizedBleed) {
+  const green = sessGain >= 0.15;
+
+  const mktCold = mkt && mkt.heat === "COLD";
+  const mktHot = mkt && mkt.heat === "HOT";
+  const ownCold = havePeaks && rugRate > 0.45 && goodRate < 0.12;
+  const ownHot = havePeaks && (goodRate >= 0.3 || bigRate >= 0.15);
+
+  // COLD wins ties — protecting capital beats chasing. The market going cold, our own
+  // trades going cold, OR our realized results bleeding all slam the brakes: widen the
+  // gap between entries, cap concurrent bags, shrink size. This is what stops a dead
+  // tape from draining the wallet via churn.
+  if (ownCold || realizedBleed || mktCold) {
     state.tune = { scoreBonus: 6, sizeMult: 0.7, tape: "COLD", maxOpenCap: 2, entryGapMs: 15000, perCycle: 1 };
-  } else if ((goodRate >= 0.3 || bigRate >= 0.15) && !realizedBleed) {
-    // Hot tape — press. But if we're already well up, take size off so the session
-    // banks green instead of round-tripping it.
-    const hot = sessGain >= 0.15;
-    state.tune = { scoreBonus: hot ? 2 : -2, sizeMult: hot ? 1.0 : 1.3, tape: "HOT", maxOpenCap: hot ? 3 : null, entryGapMs: 0, perCycle: hot ? 3 : 4 };
+  } else if ((ownHot || mktHot) && !realizedBleed) {
+    // Hot — press harder (bigger size, more concurrent, no gap). If already well up,
+    // ease off so the session banks green instead of round-tripping it.
+    state.tune = { scoreBonus: green ? 2 : -2, sizeMult: green ? 1.0 : 1.35, tape: "HOT", maxOpenCap: green ? 3 : null, entryGapMs: 0, perCycle: green ? 3 : 4 };
   } else {
-    // Normal tape: slightly more selective than before (was scoreBonus 0) so marginal
-    // setups in a directionless tape don't nickel-and-dime the bankroll. Tighten
-    // further once green to defend the gains.
-    const green = sessGain >= 0.15;
+    // Normal — slightly selective so marginal setups in a directionless tape don't
+    // nickel-and-dime the bankroll; tighten further once green to defend the gains.
     state.tune = { scoreBonus: green ? 4 : 2, sizeMult: green ? 0.85 : 1, tape: "NORMAL", maxOpenCap: green ? 3 : null, entryGapMs: green ? 4000 : 0, perCycle: green ? 2 : 3 };
   }
   return state.tune;
@@ -429,6 +437,7 @@ export function createAutopilotEngine(deps) {
     smartMoney = () => null,
     smartMoneyReady = () => false,
     smartMoneyFeed = async () => [],
+    getMarketTape = () => null,
     recordTrade = () => {},
     exitMs = 1000,
     huntMs = 5000
@@ -913,7 +922,7 @@ export function createAutopilotEngine(deps) {
         if (mc > 0) lastFeed.set(r.tokenMint, { mc, liq: Number(r.liquidityUsd) || 0, at: t });
       }
     }
-    autoTune(state, now()); // adapt selectivity + size to the current tape
+    autoTune(state, now(), getMarketTape ? getMarketTape() : null); // adapt to our tape + the whole-market tape
     const P = aggParams(state);
     const held = new Set(state.open.map((p) => p.mint));
     const nowMs = now();

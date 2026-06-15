@@ -467,6 +467,24 @@ const obsCoins = new Map();  // mint -> { dev, firstMc, maxMc, lastMc, at, seen,
 const walletObs = new Map(); // wallet -> { coins, ran, rugged, peakSum }
 const KOL_WALLETS = new Set(String(process.env.KOL_WALLETS || "").split(",").map((s) => s.trim()).filter(Boolean));
 
+// MARKET-WIDE TAPE: rolling record of FINALIZED market outcomes across every coin the
+// observatory watches (not just ours). The autopilot reads this to know if the WHOLE
+// market is hot (press) or cold (slow down) — like an AI watching the room, not just
+// its own hand. Each entry: { ranMult, rugged, at }.
+const marketRecent = [];
+function marketTape() {
+  const now = Date.now();
+  const cutoff = now - 30 * 60 * 1000;
+  const r = marketRecent.filter((x) => x.at >= cutoff);
+  if (r.length < 12) return null; // not enough fresh market data to call it yet
+  const runRate = r.filter((x) => x.ranMult >= 2).length / r.length;
+  const rugRate = r.filter((x) => x.rugged).length / r.length;
+  let heat = "NORMAL";
+  if (runRate >= 0.22 && rugRate < 0.5) heat = "HOT";          // lots of coins running
+  else if (runRate < 0.08 || rugRate > 0.65) heat = "COLD";    // nothing runs / everything dumps
+  return { heat, runRate: Math.round(runRate * 100) / 100, rugRate: Math.round(rugRate * 100) / 100, sample: r.length };
+}
+
 // COIN BANNERS: pump.fun's banner is website/DB-only (can't be set via any create
 // API), so SlimeWire keeps its own mint -> banner map and renders the banner like a
 // pump.fun coin page (wide banner + overlapping pfp) on our own coin pages.
@@ -634,6 +652,8 @@ function sampleDevObservatory() {
         const rugged = (c.maxMc >= c.firstMc * 1.2 && c.lastMc <= c.maxMc * 0.3) || (c.firstMc > 0 && c.lastMc <= c.firstMc * 0.4);
         devObsBump(c.dev, ranMult, rugged);
         for (const w of (c.buyers || [])) walletObsBump(w, ranMult, rugged); // score early buyers
+        marketRecent.push({ ranMult, rugged, at: now }); // feed the market-wide tape
+        if (marketRecent.length > 600) marketRecent.splice(0, marketRecent.length - 600);
         obsCoins.delete(mint);
       }
     }
@@ -680,6 +700,7 @@ const autopilotEngine = createAutopilotEngine({
   smartMoney: (mint) => smartMoneyScore(mint),
   smartMoneyReady: () => smartMoneyReady(),
   smartMoneyFeed: async () => smartMoneyFeed(),
+  getMarketTape: () => marketTape(),
   recordTrade: (rec) => { void recordAutopilotTrade(rec); },
   log: (level, msg) => console.log(`[autopilot:${level}] ${msg}`),
   isPaused: async () => Boolean((await readState().catch(() => ({}))).paused),
@@ -3039,6 +3060,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
               runners400: trades.filter((t) => (t.peakPct || 0) >= 400).length,
               netPnlSol: r2(trades.reduce((a, t) => a + (Number(t.pnl) || 0), 0)),
               observatory: { devsTracked: devObs.size, coinsWatching: obsCoins.size, walletsTracked: walletObs.size, winnerWallets: [...walletObs.values()].filter(isWinnerWallet).length, smartMoneyActive: smartMoneyReady() },
+              marketTape: marketTape(),
               topWallets: [...walletObs.entries()].filter(([, r]) => isWinnerWallet(r)).sort((a, b) => b[1].peakSum - a[1].peakSum).slice(0, 8).map(([w, r]) => ({ wallet: shortMint(w), kol: KOL_WALLETS.has(w), coins: r.coins, ran: r.ran, rugged: r.rugged, avgPeak: r.coins ? r2(r.peakSum / r.coins) : 0 })),
               byScore: bucket((t) => t.fs == null ? null : (t.fs < 57 ? "<57" : t.fs < 62 ? "57-61" : t.fs < 67 ? "62-66" : t.fs < 72 ? "67-71" : "72+")),
               byMc: bucket((t) => t.entryMc == null ? null : (t.entryMc < 2100 ? "<2.1k" : t.entryMc < 2500 ? "2.1-2.5k" : t.entryMc < 3500 ? "2.5-3.5k" : "3.5k+")),

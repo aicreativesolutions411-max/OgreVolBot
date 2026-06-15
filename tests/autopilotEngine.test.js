@@ -125,6 +125,32 @@ test("autoTune: cold tape -> pickier + smaller, hot tape -> looser + bigger", ()
   assert.ok(hot.tune.sizeMult > 1);
 });
 
+test("autoTune: market-wide COLD tape slows us down even with no own trades yet", () => {
+  const s = baseState({ recentPeaks: [], recentRugs: [], lastTuneAt: 0 });
+  autoTune(s, 1_000_000, { heat: "COLD", runRate: 0.03, rugRate: 0.7, sample: 40 });
+  assert.equal(s.tune.tape, "COLD");
+  assert.ok(s.tune.entryGapMs > 0 && s.tune.perCycle === 1);
+});
+
+test("autoTune: market-wide HOT tape presses even before our own sample is big", () => {
+  const s = baseState({ recentPeaks: [], recentRugs: [], lastTuneAt: 0 });
+  autoTune(s, 1_000_000, { heat: "HOT", runRate: 0.3, rugRate: 0.2, sample: 40 });
+  assert.equal(s.tune.tape, "HOT");
+  assert.ok(s.tune.sizeMult > 1);
+});
+
+test("autoTune: a thin market read (sample < 12) is ignored -> stays warming", () => {
+  const s = baseState({ recentPeaks: [], recentRugs: [], lastTuneAt: 0, tune: { tape: "warming" } });
+  autoTune(s, 1_000_000, { heat: "HOT", runRate: 0.5, rugRate: 0, sample: 5 });
+  assert.equal(s.tune.tape, "warming");
+});
+
+test("autoTune: realized win-rate bleed forces COLD even on a green peak read", () => {
+  const s = baseState({ recentPeaks: [50, 60, 40, 80, 45, 70], recentRugs: [false, false, false, false, false, false], results: ["L", "L", "L", "L", "W", "L", "L", "L", "L", "L"], lastTuneAt: 0 });
+  autoTune(s, 1_000_000, null);
+  assert.equal(s.tune.tape, "COLD");
+});
+
 test("convictionMult: bigger on a proven dev + strong flow, smaller on a rugger", () => {
   const strong = goodRow({ pairAgeSeconds: 40, buys5m: 30, sells5m: 3, volume5m: 120, bestPickScore: 90 });
   const provenDev = { runners: 3, rugs: 0 };
