@@ -838,10 +838,12 @@ export function createAutopilotEngine(deps) {
     const frac = pct / 100;
     const portionOfOriginal = pos.remFrac * frac;
     let failedTerminal = false;
+    let realProceeds = null; // actual SOL the wallet received this sell (live only)
     if (state.live) {
       try {
         const res = await sellPercent(pos.mint, pct, pos);
         if (res && res.ok === false) throw new Error("sell rejected");
+        if (res && Number.isFinite(res.receivedSol)) realProceeds = Number(res.receivedSol);
       } catch (e) {
         pos.sellFails = (pos.sellFails || 0) + 1;
         const noBalance = /no token balance|rounded to zero/i.test((e && e.message) || "");
@@ -864,10 +866,13 @@ export function createAutopilotEngine(deps) {
       }
     }
 
-    // Credit estimated proceeds for a real/paper fill only. A terminal live
-    // failure books zero so the synthetic bank can't drift above the real wallet
-    // (the wallet balance reconciliation is the true source of truth either way).
-    const proceeds = failedTerminal ? 0 : pos.costSol * portionOfOriginal * (1 + move / 100) * SELL_FEE_FACTOR;
+    // Book the REAL SOL received when live (the actual fill), falling back to the
+    // marked-price estimate only for paper or when the fill amount wasn't returned.
+    // This is THE fix for "log shows +0.48 wins but the wallet is down": a moon bag
+    // marked at +480% that really fills at +40% now books +40%, so win/loss counts,
+    // the ledger, and the learning data all reflect what the wallet actually got.
+    const estProceeds = pos.costSol * portionOfOriginal * (1 + move / 100) * SELL_FEE_FACTOR;
+    const proceeds = failedTerminal ? 0 : (realProceeds != null ? realProceeds : estProceeds);
     state.bank += proceeds;
     pos.realized = (pos.realized || 0) + proceeds;
 

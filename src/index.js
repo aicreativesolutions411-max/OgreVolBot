@@ -838,7 +838,14 @@ const autopilotEngine = createAutopilotEngine({
       priceExit: true,
       priority: true
     });
-    return { ok: true, signature: res?.signature };
+    // Return the REAL SOL the wallet received (gross swap out minus our platform fee),
+    // so the engine books actual fills — not the marked/displayed price. Without this
+    // a +480%-marked moon bag that fills at +40% logged a fake +0.48 "win" while the
+    // wallet barely moved. receivedSol = the truth the ledger + learning must use.
+    const gross = Number(res?.outputLamports || 0);
+    const fee = Number(res?.feeLamports || 0);
+    const receivedSol = gross > 0 ? Math.max(0, gross - fee) / 1_000_000_000 : null;
+    return { ok: true, signature: res?.signature, receivedSol };
   }
 });
 
