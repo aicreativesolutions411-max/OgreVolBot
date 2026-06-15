@@ -24027,7 +24027,7 @@ function startAppWatchdog() {
 // so the existing click handlers and active-state logic just work.
 const DESKTOP_NAV_GROUPS = [
   { key: "live", label: "Live", items: [["terminal", "Live Terminal"], ["live", "Cooks"], ["liveTrades", "Live Trades"]] },
-  { key: "chart", label: "Chart & Swap", items: [["smartChart", "Smart Chart"], ["trade", "Slime Swap"]] },
+  { key: "chart", label: "Swap & Chart", items: [["trade", "Slime Swap"], ["smartChart", "Smart Chart"]] },
   { key: "intel", label: "Intel", items: [["slimeScope", "Slime Scope"], ["watchlist", "Watchlist"], ["kol", "KOL Tracker"], ["sniper", "OgreSniper"], ["txAudit", "TP/SL Audit"]] },
   { key: "tools", label: "Ogre Tek", items: [["tek", "Tek Hub"], ["ogreAi", "Ogre A.I."], ["launchCoin", "Pump Launch"], ["bundle", "Bundle"], ["volume", "SlimeBot"], ["launch", "Launch Watch"]] },
   { key: "portfolio", label: "Portfolio", items: [["wallets", "Wallets"], ["positions", "Positions"], ["pnl", "PnL"]] },
@@ -24101,7 +24101,7 @@ const DESKTOP_NAV_ICONS = Object.fromEntries(
 
 const DESKTOP_NAV_GROUP_ICONS = {
   live: swampIcon(SWAMP_ICON_PATHS.live, "#8dff45"),
-  chart: swampIcon(SWAMP_ICON_PATHS.smartChart, "#72ff23"),
+  chart: swampIcon(SWAMP_ICON_PATHS.trade, "#3fe0d0"),
   intel: swampIcon(SWAMP_ICON_PATHS.slimeScope, "#5ab0ff"),
   tools: swampIcon(SWAMP_ICON_PATHS.tek, "#9fb6c2"),
   portfolio: swampIcon(SWAMP_ICON_PATHS.positions, "#5ab0ff"),
