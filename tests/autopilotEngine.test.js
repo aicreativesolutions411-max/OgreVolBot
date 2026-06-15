@@ -430,6 +430,33 @@ test("engine: profit vault sweeps gains above the stake and keeps running", asyn
   await engine.stop("test");
 });
 
+test("engine: bank-the-peak lock sweeps profit to the safe wallet and KEEPS running", async () => {
+  let t = 0;
+  let walletSol = 1.2;
+  const swept = [];
+  const engine = createAutopilotEngine({
+    getFreshFeed: async () => [],
+    getPairLite: async () => null,
+    buyToken: async () => ({ ok: true }),
+    sellPercent: async () => ({ ok: true }),
+    now: () => t,
+    persist: async () => {},
+    getWalletSol: async () => walletSol,
+    sweepProfit: async (dest, amt) => { swept.push(amt); walletSol -= amt; return { ok: true, sentSol: amt }; }
+  });
+  await engine.start({ solBudget: 1, minutes: 60, live: true, walletPubkey: "W".repeat(44), vault: { destination: "B".repeat(44) } });
+  const s = engine._state();
+  // Peaked +40%, gave back to +20% (past the half-gain floor) but still clearly green.
+  s.peakTotal = 1.4; s.bank = 1.2; walletSol = 1.2;
+  t += 1000;
+  await engine._exit();
+  const st = engine.status();
+  assert.equal(st.running, true, "session keeps running after locking gains");
+  assert.ok(swept.length > 0, "profit was banked to the safe wallet");
+  assert.ok(st.secured > 0, "secured tracks the banked profit");
+  await engine.stop("test");
+});
+
 test("engine: loss cap flattens and stops", async () => {
   let t = 0;
   let mc = 5000;

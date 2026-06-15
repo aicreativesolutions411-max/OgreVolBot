@@ -672,20 +672,39 @@ export function createAutopilotEngine(deps) {
         const peakGain = (state.peakTotal || state.start) - state.start;
         if (peakGain >= state.start * 0.08) {
           const floor = state.start + peakGain * 0.5; // give back at most half the gain
-          // CRITICAL: only bank-and-STOP when we're genuinely still GREEN. A peak can
-          // be an UNREALIZED mark-to-market spike on an open position (a fast pump that
-          // reverts before the sell fills, or a bad price tick). If that round-trips we
-          // must NEVER shut a green-targeted session down at a LOSS while calling it
-          // "locked gains" — that banked nothing and ended the run early. When the
-          // giveback lands below +3%, keep trading; the loss cap handles real downside.
+          // LOCK & CONTINUE (only when genuinely GREEN): instead of ending the run,
+          // sweep the locked profit to the safe/bank wallet and KEEP TRADING the stake,
+          // then re-anchor the peak so the ratchet arms fresh. A peak can also be an
+          // UNREALIZED spike that reverts before the sell fills — if the giveback lands
+          // below +3% we never treat it as a lock (the loss cap guards real downside).
           if (totalEq <= floor && totalEq >= state.start * 1.03) {
-            record("info", `🔒 Locked gains: peak +${round((state.peakTotal / state.start - 1) * 100, 1)}% → banked +${round((totalEq / state.start - 1) * 100, 1)}% (don't give back a green session).`);
-            await stop("locked-gains");
+            const peakPctLog = round((state.peakTotal / state.start - 1) * 100, 1);
+            const dest = state.vault && state.vault.destination;
+            let banked = 0;
+            if (dest && state.live) {
+              try {
+                const free = (Number(state.walletSol) || state.bank) - state.start - 0.02; // profit above the stake
+                if (free >= 0.01) {
+                  const res = await sweepProfit(dest, free);
+                  if (res && res.ok) {
+                    banked = Number(res.sentSol) || free;
+                    state.secured = (state.secured || 0) + banked;
+                    try { const ws2 = await getWalletSol(); if (Number.isFinite(ws2) && ws2 >= 0) { state.walletSol = ws2; state.bank = ws2; } } catch {}
+                  }
+                }
+              } catch (e) { record("warn", `lock sweep failed: ${e && e.message}`); }
+            }
+            // Re-anchor the peak to the current total so the ratchet disarms and re-arms
+            // on the NEXT green run instead of stopping. Session keeps going.
+            state.peakTotal = equity(state) + (state.secured || 0);
+            state.peak = equity(state);
+            if (banked > 0) record("info", `🏦 Banked +${round(banked, 4)} SOL to safe wallet at peak +${peakPctLog}% — still running (${round(state.secured, 4)} SOL secured).`);
+            else record("info", `🔒 Locked peak +${peakPctLog}% — re-anchored, still running${dest ? "" : " (set a safe wallet to auto-send profit out)"}.`);
             return;
           }
           // Peak was unrealized and round-tripped to ~flat/red — don't end the session
-          // on it. Re-anchor the peak to the current level so we don't sit permanently
-          // armed off a phantom spike; the loss cap still guards the downside.
+          // on it. Re-anchor the peak so we don't sit permanently armed off a phantom
+          // spike; the loss cap still guards the downside.
           if (totalEq < state.start * 1.03 && state.peakTotal > state.start * 1.10) {
             state.peakTotal = Math.max(totalEq, state.start);
           }
