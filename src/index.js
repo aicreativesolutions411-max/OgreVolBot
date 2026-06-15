@@ -917,17 +917,30 @@ const autopilotEngine = createAutopilotEngine({
 async function startLiveAutopilotResume() {
   // Populate dev-reputation from the trade history so it's effective immediately.
   await loadAutopilotTrades().catch(() => {});
-  // After a redeploy/restart, re-attach to an in-flight session so open
-  // positions keep being managed and (if still inside the timer) hunting resumes.
-  try {
-    const snap = await readJson(AUTOPILOT_STATE_FILE).catch(() => null);
-    if (!snap || snap.stopped) return;
-    if (snap.live) await relockAutopilotWalletByPubkey(snap.walletPubkey);
-    const resumed = await autopilotEngine.resume(snap);
-    if (resumed) console.log(`[autopilot] resumed ${snap.live ? "LIVE" : "PAPER"} session with ${snap.open?.length || 0} open position(s).`);
-  } catch (e) {
-    console.warn(`[autopilot] resume skipped: ${e && e.message}`);
+  // After a redeploy/restart, re-attach to an in-flight session so open positions keep
+  // being managed and hunting resumes. RETRY with backoff — on boot the wallet store /
+  // RPC may not be ready for a beat, and a single failure used to SILENTLY drop a LIVE
+  // session (the run just stopped after a deploy). Now it keeps trying so a restart
+  // re-attaches reliably instead of leaving the user stopped.
+  let snap = null;
+  try { snap = await readJson(AUTOPILOT_STATE_FILE).catch(() => null); } catch {}
+  if (!snap || snap.stopped) return;
+  // Don't resume a timer that already fully expired with nothing open.
+  if (Number(snap.endAt) && Date.now() >= Number(snap.endAt) && (!Array.isArray(snap.open) || snap.open.length === 0)) return;
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    try {
+      if (snap.live) await relockAutopilotWalletByPubkey(snap.walletPubkey);
+      const resumed = await autopilotEngine.resume(snap);
+      if (resumed) {
+        console.log(`[autopilot] resumed ${snap.live ? "LIVE" : "PAPER"} session with ${snap.open?.length || 0} open position(s) (attempt ${attempt}).`);
+      }
+      return; // resumed, or resume() declined (stopped/expired) — nothing left to retry
+    } catch (e) {
+      console.warn(`[autopilot] resume attempt ${attempt}/5 failed: ${e && e.message}`);
+      if (attempt < 5) await sleep(2000 * attempt); // back off 2s,4s,6s,8s — wait for the store/RPC
+    }
   }
+  console.warn("[autopilot] resume gave up after 5 attempts — LIVE session not re-attached; restart it from the panel.");
 }
 
 const rpcLimiter = createRpcLimiter();

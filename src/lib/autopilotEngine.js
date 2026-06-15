@@ -166,9 +166,14 @@ export function autoTune(state, nowMs, marketTape = null) {
   const probeNow = (state.lastOpenAt || 0) > 0 && (nowMs - state.lastOpenAt) > 4 * 60_000;
   const mktCold = mkt && mkt.heat === "COLD";
   const mktHot = mkt && mkt.heat === "HOT";
-  const ownCold = !probeNow && havePeaks && rugRate > 0.45 && goodRate < 0.12;
+  const ownColdRaw = havePeaks && rugRate > 0.45 && goodRate < 0.12;
+  const ownCold = !probeNow && ownColdRaw;
   const ownHot = havePeaks && (goodRate >= 0.3 || bigRate >= 0.15);
   const bleed = realizedBleed && !probeNow;
+  // We're RE-PROBING a tape that bled (sat out 4+ min, but our underlying read is still
+  // bad). Test it with ONE tiny cautious trade instead of a full NORMAL burst — a still
+  // dead tape then only costs a single small probe, not a churn of losers.
+  const reProbe = probeNow && (realizedBleed || ownColdRaw) && !(ownHot || mktHot);
 
   // COLD wins ties — protecting capital beats chasing. The market going cold, our own
   // trades going cold, OR our realized results bleeding all slam the brakes: widen the
@@ -183,6 +188,11 @@ export function autoTune(state, nowMs, marketTape = null) {
     // Hot — press harder (bigger size, more concurrent, no gap). If already well up,
     // ease off so the session banks green instead of round-tripping it.
     state.tune = { scoreBonus: green ? 2 : -2, sizeMult: green ? 1.0 : 1.35, tape: "HOT", maxOpenCap: green ? 3 : null, entryGapMs: 0, perCycle: green ? 3 : 4 };
+  } else if (reProbe) {
+    // CAUTIOUS RE-PROBE: one small, selective trade per ~20s to test if the bled tape
+    // recovered — not a full NORMAL burst. A winning probe lifts the win-rate and we go
+    // NORMAL next; a loser flips straight back to COLD. Stops the dead-tape probe drip.
+    state.tune = { scoreBonus: 10, sizeMult: 0.55, tape: "PROBE", maxOpenCap: 1, entryGapMs: 20000, perCycle: 1 };
   } else {
     // Normal — more selective than before so marginal setups in a directionless tape
     // don't nickel-and-dime the bankroll; tighten harder once green to defend gains.
@@ -419,7 +429,11 @@ export function canOpen(state, sizeSol) {
 
 export function equity(state) {
   const openVal = state.open.reduce((a, p) => {
-    const move = p.entryMc > 0 ? p.lastMc / p.entryMc : 1;
+    // Cap the marked multiple at 10x: a fresh thin-curve coin can flash a phantom
+    // marketCap (e.g. +4591% from a couple of tiny buys) that ISN'T sellable. Letting
+    // that into equity flashed a fake "4200% win" and a fake session peak. Real value
+    // is bounded by what the curve can pay; 10x is past where the ladder has banked out.
+    const move = p.entryMc > 0 ? Math.min(p.lastMc / p.entryMc, 10) : 1;
     return a + p.costSol * p.remFrac * move;
   }, 0);
   return state.bank + openVal;
@@ -879,7 +893,9 @@ export function createAutopilotEngine(deps) {
         if (liq > 0) pos.lastLiq = liq;
         pos.missed = 0;
         const movePct = pos.entryMc > 0 ? (pos.lastMc / pos.entryMc - 1) * 100 : 0;
-        pos.peakPct = Math.max(pos.peakPct || 0, movePct);
+        // Cap recorded peak at +900% so a phantom marketCap spike (unsellable) can't set
+        // a fake peak that flashes a "4200% win" or skews the trailing/learning stats.
+        pos.peakPct = Math.max(pos.peakPct || 0, Math.min(movePct, 900));
       } else {
         pos.missed = (pos.missed || 0) + 1;
       }
