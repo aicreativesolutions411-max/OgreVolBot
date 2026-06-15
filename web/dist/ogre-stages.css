@@ -6,7 +6,7 @@
    All overlays are driven from live state by ogre-stages logic in app.js.
    ============================================================================ */
 
-.ogre-stage{position:relative;width:100%;aspect-ratio:5/4;max-height:430px;overflow:hidden;
+.ogre-stage{position:relative;width:100%;aspect-ratio:4/5;max-height:72vh;overflow:hidden;
   border-radius:18px;isolation:isolate;margin:0 0 14px;background:#05080a;
   border:1px solid rgba(255,255,255,.08);box-shadow:0 14px 44px rgba(0,0,0,.5);}
 .ogre-stage .ogre-bg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center 28%;z-index:0;}
@@ -225,15 +225,7 @@ html body main.shell[data-app] .nav-side-group-toggle[data-active]{box-shadow:in
 /* ----------------------------------------------------------------- HIGGSFIELD UI SKIN
    Generated slime assets used as light overlays/textures (transparent PNGs + a dark tile) —
    custom HUD chrome that CSS alone can't do, kept mobile-light. */
-/* 1) slime drip oozing over the top of each immersive stage — TINTED to that stage's own
-   accent (gold swap / violet volume / amber bundle / cyan ai / etc.) via mask so it reads
-   intentional, never a random green smear. Subtle. */
-html body main.shell[data-app] .ogre-stage::before{
-  content:""; position:absolute; left:0; right:0; top:0; height:24px; z-index:3; pointer-events:none;
-  background: var(--accent, #8dff5a); opacity:.7;
-  -webkit-mask:url("/assets/slimewire/ui/slime-drip-top.png") top center / 100% 100% no-repeat;
-  mask:url("/assets/slimewire/ui/slime-drip-top.png") top center / 100% 100% no-repeat;
-}
+/* (drip top-edge removed — it read as a colored line across every video) */
 /* 2) wet gloss sheen on the high-touch action buttons (CSS gradient — clean, light) */
 html body main.shell[data-app] .oss-swap, html body main.shell[data-app] .vbot-config-start{position:relative;overflow:hidden;}
 html body main.shell[data-app] .oss-swap::after, html body main.shell[data-app] .vbot-config-start::after{
@@ -271,12 +263,22 @@ html body main.shell[data-app] .preset-toolbar{ background:linear-gradient(160de
 /* ----------------------------------------------------------------- HERO STAGES (Tier 1/2)
    Lighter banner stages for Launch / Sniper / OgreAI / Bundle / Positions / PnL — same
    ogre family, each its own accent. Shorter than the swap/volume deep-HUD stages. */
-.ogre-stage.hero{aspect-ratio:16/9;max-height:300px;}
-/* WEB: make the immersive videos big + prominent (so you actually see them on desktop) */
+.ogre-stage.hero{aspect-ratio:4/5;}
+.ogre-stage .ogre-bg{object-position:center 18%;}
+/* WEB: big cinematic cockpit — wide stage with the controls floating over it */
 @media (min-width:760px){
-  .ogre-stage{max-height:580px;}
-  .ogre-stage.hero{aspect-ratio:16/10;max-height:500px;}
-  .ogre-stage .ogre-bg{object-position:center 26%;}
+  .ogre-stage, .ogre-stage.hero{aspect-ratio:16/10;max-height:520px;}
+  .ogre-stage .ogre-bg{object-position:center 24%;}
+  /* LIVE COCKPIT: the panel's controls float UP over the bottom of the big video, with the
+     video fading in behind them — so it feels like you're inside the scene and your actions
+     drive the ogre (the event clips already fire on tap). Web only; mobile stays stacked. */
+  html body main.shell[data-app] .ogre-stage + *{
+    position:relative; z-index:6; margin-top:-160px; border-radius:20px; padding-top:22px;
+    background:linear-gradient(180deg, rgba(5,9,7,0) 0, rgba(5,9,7,.45) 52px, rgba(5,9,7,.9) 150px, rgba(5,9,7,.96)) !important;
+    backdrop-filter:blur(6px); box-shadow:0 -12px 34px rgba(0,0,0,.45);
+  }
+  /* keep the stage's own bottom corners square so the cockpit panel fuses up into it */
+  html body main.shell[data-app] .ogre-stage{border-bottom-left-radius:0;border-bottom-right-radius:0;}
 }
 .ogre-stage.hero .ogre-bg{object-position:center 30%;}
 .ogre-stage.hero .os-tier{color:var(--accent);border:1px solid rgba(255,255,255,.16);}
