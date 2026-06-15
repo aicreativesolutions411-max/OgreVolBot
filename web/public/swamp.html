@@ -1166,6 +1166,13 @@ function consumeCounter(mult){
 }
 function mobDamage(m,dmg){ return Math.max(1,Math.round(dmg*((m&&m.vuln>0)?1.38:1))); }
 function mobSpeed(m){ return (m&&m.spd||60)*(((m&&m.slowT||0)>0)?(m.slowMul||0.58):1); }
+function guardBlocks(m,src){
+  if(!m||m.role!=="guard"||m.boss||m.stagger>0||m.vuln>0||!src) return false;
+  const k=src.kind||""; if(k==="acid"||k==="bomb"||k==="boulder"||k==="thunder") return false;
+  if(!player) return true;
+  const fx=player.x-m.x, fy=player.y-m.y, fl=Math.hypot(fx,fy)||1, ix=-(src.vx||0), iy=-(src.vy||0), il=Math.hypot(ix,iy)||1;
+  return ((fx/fl)*(ix/il)+(fy/fl)*(iy/il))>0.1;
+}
 function weaponOnKill(m){
   if(!player) return;
   const cool=m&&m.boss?24:(m&&m.marked?18:(m&&m.elite?12:6));
@@ -1205,6 +1212,8 @@ function applyShotStatus(m,src,dmg){
 }
 function tickMobStatus(m,dt){
   if(!m||m._dead) return false;
+  if((m.guardT||0)>0) m.guardT=Math.max(0,m.guardT-dt);
+  if((m.healGlow||0)>0) m.healGlow=Math.max(0,m.healGlow-dt);
   if((m.slowT||0)>0){ m.slowT=Math.max(0,m.slowT-dt); if(m.slowT<=0) m.slowMul=1; }
   if((m.shockT||0)>0) m.shockT=Math.max(0,m.shockT-dt);
   if((m.dotT||0)>0){
@@ -1473,6 +1482,8 @@ function eventLineText(){
     return worldEvent.title+" - "+live+" hostile"+(live===1?"":"s")+" active - "+left+"s"; }
   if(state==="world"&&player){
     if(RUN&&RUN.bounty&&RUN.bounty.mob&&!RUN.bounty.mob._dead) return "BOUNTY MARK - "+Math.ceil(RUN.bounty.life)+"s - drop it for momentum and bonus loot";
+    const rr=activeRunRoom&&activeRunRoom();
+    if(rr) return rr.state==="locked"?"LOCKED ROOM - stand in the ring to open the arena":"ARENA ROOM - clear "+(rr.kills||0)+"/"+(rr.need||0)+" guards before it seals";
     if(player.hp/player.maxhp<0.32) return "LOW HP - kite, dash, and let regen tick before re-engaging";
     if((player.rage||0)>=100 && !(player.rageT>0)) return "OVERDRIVE READY - tap R for burst speed and power";
     if(targetMob&&targetMob.wind>0) return "DANGER TELL - dash through the red windup for a perfect dodge";
@@ -1657,6 +1668,7 @@ function targetInfo(){
   if(!player) return null; let best=null;
   function consider(kind,label,x,y){ const dx=x-player.x, dy=y-player.y, d=Math.hypot(dx,dy); if(!best||d<best.d) best={kind,label,x,y,d,dx,dy}; }
   if(RUN&&RUN.bounty&&RUN.bounty.mob&&!RUN.bounty.mob._dead){ const b=RUN.bounty; consider("m","Bounty "+Math.ceil(b.life)+"s",b.mob.x,b.mob.y); return best; }
+  if(RUN&&RUN.rooms&&RUN.rooms.length){ for(const r of RUN.rooms){ if(!r||r.done) continue; consider("r",r.state==="locked"?"Locked Room":"Arena "+(r.kills||0)+"/"+(r.need||0),r.x,r.y); } if(best) return best; }
   if(RUN&&RUN.shrines&&RUN.shrines.length){ for(const s of RUN.shrines) consider("s",s.name,s.x,s.y); if(best) return best; }
   if(worldEvent&&worldEvent.target){ for(const m of mobs.filter(m=>!m._dead&&m.eventId===worldEvent.uid)) consider("m",worldEvent.title,m.x,m.y); if(best) return best; }
   function building(id){ const b=buildings.find(x=>x.id===id)||buildings[0]; if(b) consider("b",b.name.replace(/^\S+\s*/,""),b.x,b.y); }
@@ -1688,6 +1700,7 @@ function updateRadar(){
   for(const c of creatures.filter(c=>!c.dead).slice(0,6)) dot("c",c.x,c.y);
   for(const m of mobs.filter(m=>!m._dead).slice(0,8)) dot(m.marked?"t":(m.boss?"m boss":"m"),m.x,m.y);
   for(const g of gathers.filter(g=>!g.dead).slice(0,8)) dot("g",g.x,g.y);
+  if(RUN&&RUN.rooms){ for(const r of RUN.rooms){ if(r&&!r.done) dot("t",r.x,r.y); } }
   if(companion) dot("a",companion.x,companion.y);
   if(t) dot("t",t.x,t.y);
   map.innerHTML=dots.join("");
@@ -1707,6 +1720,7 @@ function renderFullMap(){
   for(const c of creatures.filter(c=>!c.dead).slice(0,20)) mapDot(map,"c",c.sym||"Launch",c.x,c.y);
   for(const g of gathers.filter(g=>!g.dead).slice(0,28)) mapDot(map,"g",g.name||"Resource",g.x,g.y);
   for(const m of mobs.filter(m=>!m._dead).slice(0,30)) mapDot(map,m.marked?"t":(m.boss?"m boss":"m"),m.marked?"BOUNTY":(m.name||"Hostile"),m.x,m.y);
+  if(RUN&&RUN.rooms){ for(const r of RUN.rooms.filter(r=>r&&!r.done)) mapDot(map,"t",r.state==="locked"?"LOCKED ROOM":"ARENA ROOM",r.x,r.y); }
   if(companion) mapDot(map,"a",companion.sym||"Ally",companion.x,companion.y);
   if(t) mapDot(map,"t","GOAL",t.x,t.y);
 }
@@ -1718,7 +1732,7 @@ function pickCombatTarget(){
   let best=null, bestScore=-999999;
   for(const m of mobs){ if(!m||m._dead) continue; const dx=m.x-player.x, dy=m.y-player.y, d=Math.hypot(dx,dy);
     if(d>760 && !m.boss) continue;
-    const score=(m.boss?100000:0)+(m.marked?52000:0)+(m.elite?18000:0)+(m.wind>0?9000:0)+(m.lunge>0?7000:0)-d;
+    const score=(m.boss?100000:0)+(m.marked?52000:0)+(m.role==="mender"?42000:0)+(m.role==="guard"?24000:0)+(m.elite?18000:0)+(m.wind>0?9000:0)+(m.lunge>0?7000:0)-d;
     if(score>bestScore){ best=m; bestScore=score; }
   }
   return best;
@@ -1729,7 +1743,7 @@ function updateTargetHud(dt){
   targetMob=pickCombatTarget();
   if(!targetMob||state!=="world"){ plate.classList.remove("on"); targetHudKey=""; return; }
   const pct=Math.max(0,Math.min(1,(targetMob.hp||0)/(targetMob.maxhp||1)));
-  const intent=targetMob.stagger>0||targetMob.vuln>0?"OPEN":targetMob.cast>0?"SPIT":(targetMob.role==="summoner"&&(targetMob.summonCd||9)<1.25)?"SUMMON":targetMob.wind>0?"DODGE":targetMob.lunge>0?"STRIKE":targetMob.marked?"BOUNTY":targetMob.boss?"BOSS":targetMob.elite?"ELITE":"HOSTILE";
+  const intent=targetMob.stagger>0||targetMob.vuln>0?"OPEN":targetMob.cast>0?"SPIT":(targetMob.role==="summoner"&&(targetMob.summonCd||9)<1.25)?"SUMMON":targetMob.role==="mender"?"HEAL":targetMob.role==="guard"?"GUARD":targetMob.wind>0?"DODGE":targetMob.lunge>0?"STRIKE":targetMob.marked?"BOUNTY":targetMob.boss?"BOSS":targetMob.elite?"ELITE":"HOSTILE";
   const key=(targetMob.name||"Target")+"|"+intent+"|"+Math.round(pct*100)+"|"+(targetMob.col||"");
   if(key===targetHudKey) return; targetHudKey=key;
   $("targetName").textContent=(targetMob.boss?"BOSS - ":"")+(targetMob.name||"Hostile");
@@ -2015,7 +2029,17 @@ function update(dt){
             x:mob.x+Math.cos(a)*(34+Math.random()*20),y:mob.y+Math.sin(a)*(34+Math.random()*20),dir:"down",walkT:0,_mv:true,flash:0,spr:{img:SURV_SPR[1]}}); }
         spawnHazardZone(mob.x,mob.y,{r:48,life:3.8,dmg:4+Math.round(threat),col:"#b06bff",label:"summon"}); }
     }
-    const readableCombat=!RUN||mob.boss||mob.elite;
+    if(mob.role==="mender" && RUN && !mob.boss){
+      mob.healCd=(mob.healCd||1)-dt;
+      let hurt=null, hpPct=1;
+      for(const a of mobs){ if(!a||a._dead||a===mob||!a.maxhp||a.hp>=a.maxhp) continue; const ax=a.x-mob.x, ay=a.y-mob.y, ad=ax*ax+ay*ay; if(ad<230*230 && a.hp/a.maxhp<hpPct){ hurt=a; hpPct=a.hp/a.maxhp; } }
+      if(hurt&&mob.healCd<=0){ mob.healCd=2.2+Math.random()*0.7; const heal=Math.round(10+survThreat()*3.2+RUN.lvl*0.8); hurt.hp=Math.min(hurt.maxhp,hurt.hp+heal); hurt.healGlow=0.65;
+        floatTxt(hurt.x,hurt.y-hurt.r,"+"+heal,"#72ff23"); for(let i=0;i<fxBudget(10);i++){ const t=i/9, px=mob.x+(hurt.x-mob.x)*t+(Math.random()*10-5), py=mob.y+(hurt.y-mob.y)*t+(Math.random()*10-5); if(parts.length<partCap()) parts.push({x:px,y:py,vx:(Math.random()-0.5)*34,vy:-18-Math.random()*18,life:0.18+Math.random()*0.18,max:0.38,col:"#72ff23",sz:2+Math.random()*2}); } }
+      const dir=d<280?-1:(d>430?1:0.18), drift=(hurt?0.32:0);
+      if(d>70){ mob.x+=dx/d*mobSpd*dir*dt; mob.y+=dy/d*mobSpd*dir*dt; if(hurt&&drift){ const hx=hurt.x-mob.x, hy=hurt.y-mob.y, hd=Math.hypot(hx,hy)||1; mob.x+=hx/hd*mobSpd*drift*dt; mob.y+=hy/hd*mobSpd*drift*dt; } mob._mv=true; mob.walkT+=dt; const ax=Math.abs(dx),ay=Math.abs(dy); if(Math.abs(ax-ay)>d*0.18) mob.dir=ax>ay?(dx<0?"left":"right"):(dy<0?"up":"down"); }
+      clampEnt(mob,30); const dd=dx*dx+dy*dy; if(dd<nmd){ nmd=dd; nearMob=mob; } continue;
+    }
+    const readableCombat=!RUN||mob.boss||mob.elite||mob.role==="guard";
     if(readableCombat){
       if(mob.wind>0){
         mob.wind-=dt; mob._mv=false; mob.walkT+=dt*0.25;
@@ -2064,9 +2088,9 @@ function update(dt){
     if(parts.length<partCap() && Math.random()<(W<520?0.28:0.45)) parts.push({x:sh.x,y:sh.y,vx:0,vy:0,life:0.18,max:0.18,col:sh.col,sz:1.8}); // trail
     // hit mobs (pierce shots keep going + remember who they hit; bombs explode)
     for(const mob of mobs){ if(sh.hit&&sh.hit.indexOf(mob)>=0) continue; const dx=mob.x-sh.x, dy=mob.y-sh.y;
-      if(dx*dx+dy*dy<(mob.r+sh.r)*(mob.r+sh.r)){ const dmg=mobDamage(mob,sh.dmg); mob.hp-=dmg; mob.flash=0.14; applyShotStatus(mob,sh,dmg); const sl=Math.hypot(sh.vx,sh.vy)||1; mob.x+=sh.vx/sl*12; mob.y+=sh.vy/sl*12; clampEnt(mob,30);
-        floatTxt(mob.x,mob.y-mob.r,"-"+dmg,mob.vuln>0?"#ffd24a":"#bbff63"); if(sh.aoe){ swings.push({ring:true,x:sh.x,y:sh.y,r0:6,life:0.14,max:0.14,col:mob.col}); } else impactFX(sh.x,sh.y,player.x,player.y,mob.col,false); bumpCombo();
-        maybeStaggerMob(mob,dmg);
+      if(dx*dx+dy*dy<(mob.r+sh.r)*(mob.r+sh.r)){ const blocked=guardBlocks(mob,sh), dmg=mobDamage(mob,blocked?Math.max(1,Math.round(sh.dmg*0.28)):sh.dmg); mob.hp-=dmg; mob.flash=0.14; if(blocked){ mob.guardT=0.28; floatTxt(mob.x,mob.y-mob.r,"BLOCK","#46e8ff"); } else applyShotStatus(mob,sh,dmg); const sl=Math.hypot(sh.vx,sh.vy)||1; mob.x+=sh.vx/sl*(blocked?4:12); mob.y+=sh.vy/sl*(blocked?4:12); clampEnt(mob,30);
+        floatTxt(mob.x,mob.y-mob.r,"-"+dmg,blocked?"#46e8ff":(mob.vuln>0?"#ffd24a":"#bbff63")); if(sh.aoe){ swings.push({ring:true,x:sh.x,y:sh.y,r0:6,life:0.14,max:0.14,col:mob.col}); } else impactFX(sh.x,sh.y,player.x,player.y,blocked?"#46e8ff":mob.col,false); bumpCombo();
+        if(!blocked) maybeStaggerMob(mob,dmg);
         if(mob.hp<=0) killMob(mob);
         if(sh.pierce){ sh.hit.push(mob); } else { if(sh.aoe) bombSplode(sh); if(sh.cloud) shotCloud(sh); sh.life=0; }
         break; } }
@@ -2104,6 +2128,7 @@ function render(){
   drawSwampAtmosphere("back");
   drawHazards("zone");
   drawSurvShrines();
+  drawRunRooms();
   // building footprints
   for(const b of buildings) drawBuilding(b);
   // sort entities by y
@@ -2395,6 +2420,12 @@ function drawMob(m){ drawShadow(m.x,m.y,m.r);
     ctx.beginPath(); ctx.arc(m.x,m.y-m.r*0.12,rr,0,6.2832); ctx.stroke(); ctx.setLineDash([]);
     ctx.globalAlpha=0.18; ctx.fillStyle="#ffd24a"; ctx.beginPath(); ctx.arc(m.x,m.y-m.r*0.12,rr*0.82,0,6.2832); ctx.fill();
     ctx.font="900 9px Inter,sans-serif"; ctx.textAlign="center"; ctx.fillStyle="#ffd24a"; ctx.strokeStyle="rgba(0,0,0,0.85)"; ctx.lineWidth=3; ctx.strokeText("BOUNTY",m.x,m.y-m.r-34); ctx.fillText("BOUNTY",m.x,m.y-m.r-34); ctx.restore(); }
+  if(m.role==="guard"){ const t=performance.now()/320, pr=(m.guardT||0)>0?1:0.45, rr=m.r*(1.62+Math.sin(t)*0.05);
+    ctx.save(); ctx.globalAlpha=pr; ctx.strokeStyle="#46e8ff"; ctx.lineWidth=3; ctx.setLineDash([10,6]); ctx.beginPath(); ctx.arc(m.x,m.y-m.r*0.12,rr,-0.35,3.49); ctx.stroke(); ctx.setLineDash([]);
+    ctx.font="900 8px Inter,sans-serif"; ctx.textAlign="center"; ctx.fillStyle="#46e8ff"; ctx.strokeStyle="rgba(0,0,0,0.82)"; ctx.lineWidth=3; ctx.strokeText("GUARD",m.x,m.y-m.r-34-(m.marked?12:0)); ctx.fillText("GUARD",m.x,m.y-m.r-34-(m.marked?12:0)); ctx.restore(); }
+  if(m.role==="mender"){ const t=performance.now()/390, rr=m.r*(1.48+Math.sin(t)*0.07);
+    ctx.save(); ctx.globalAlpha=(m.healGlow||0)>0?0.88:0.46; ctx.strokeStyle="#72ff23"; ctx.lineWidth=(m.healGlow||0)>0?3:2; ctx.beginPath(); ctx.arc(m.x,m.y-m.r*0.08,rr,0,6.2832); ctx.stroke();
+    ctx.font="900 8px Inter,sans-serif"; ctx.textAlign="center"; ctx.fillStyle="#72ff23"; ctx.strokeStyle="rgba(0,0,0,0.82)"; ctx.lineWidth=3; ctx.strokeText("HEAL",m.x,m.y-m.r-34-(m.marked?12:0)); ctx.fillText("HEAL",m.x,m.y-m.r-34-(m.marked?12:0)); ctx.restore(); }
   if(m===targetMob){ const t=performance.now()/360; ctx.strokeStyle=m.col||"#ff5e5e"; ctx.globalAlpha=0.72; ctx.lineWidth=2.5;
     ctx.beginPath(); ctx.arc(m.x,m.y-m.r*0.1,m.r*(1.55+Math.sin(t)*0.04),t,t+2.05); ctx.stroke(); ctx.beginPath(); ctx.arc(m.x,m.y-m.r*0.1,m.r*(1.55+Math.sin(t)*0.04),t+3.14,t+5.19); ctx.stroke(); ctx.globalAlpha=1; }
   if(m.stagger>0||m.vuln>0){ const t=performance.now()/190, rr=m.r*(1.55+Math.sin(t)*0.08);
@@ -2969,20 +3000,21 @@ const SURV_ELITES=[
   {name:"Goo Stalker",col:"#46e8ff",spr:"/assets/slimewire/swamp/art/enemy-ghoul.png"}
 ];
 function survThreat(){ if(!RUN) return 1; const push=Math.max(1,RUN.pushMul||1);
-  const v=1+(RUN.t||0)/44+(RUN.lvl||1)*0.18+(RUN.kills||0)/145+(RUN.bossKills||0)*0.48+(RUN.shrineWins||0)*0.1+(RUN.shrineMisses||0)*0.45+(push-1)*1.08;
+  const v=1+(RUN.t||0)/44+(RUN.lvl||1)*0.18+(RUN.kills||0)/145+(RUN.bossKills||0)*0.48+(RUN.shrineWins||0)*0.1+(RUN.shrineMisses||0)*0.45+(RUN.roomWins||0)*0.16+(RUN.roomMisses||0)*0.52+(push-1)*1.08;
   RUN.threat=Math.max(1,Math.min(7.5,v)); return RUN.threat; }
 function survSpawnWave(){ const threat=survThreat(), cap=Math.min(205,126+Math.round(threat*12)); if(mobs.length>cap) return; const t=RUN.t, lv=level();
   const n=Math.min(14,1+Math.floor(t/9)+Math.floor(threat/1.55)+(Math.random()<Math.min(0.9,0.24+threat*0.085)?1:0));
   for(let i=0;i<n;i++){ const ang=Math.random()*6.2832, dist=330+Math.random()*(100+threat*12); const fast=Math.random()<Math.min(0.72,0.34+threat*0.035);
     const elite=Math.random()<Math.min(0.34,0.025+threat*0.04), e=elite?SURV_ELITES[(Math.random()*SURV_ELITES.length)|0]:null;
-    const roll=Math.random(), role=elite?(roll<0.34?"spitter":roll<0.66?"summoner":"charger"):(roll<Math.min(0.2,0.04+threat*0.018)?"spitter":(roll<Math.min(0.31,0.08+threat*0.025)?"charger":"grunt"));
-    const roleName=role==="spitter"?"Spitter":role==="summoner"?"Caller":role==="charger"?"Charger":"";
+    const roll=Math.random(), role=elite?(roll<0.24?"spitter":roll<0.46?"summoner":roll<0.64?"guard":roll<0.78?"mender":"charger"):(roll<Math.min(0.18,0.04+threat*0.016)?"spitter":(threat>1.6&&roll<Math.min(0.25,0.05+threat*0.02)?"guard":(threat>2.2&&roll<Math.min(0.3,0.08+threat*0.02)?"mender":(roll<Math.min(0.34,0.09+threat*0.026)?"charger":"grunt"))));
+    const roleName=role==="spitter"?"Spitter":role==="summoner"?"Caller":role==="charger"?"Charger":role==="guard"?"Guard":role==="mender"?"Mender":"";
     const hp=Math.round(((fast?14:24)+t*(1.7+threat*0.24)+lv*(3.8+threat*0.2))*(elite?2.45:1));
-    const dmg=Math.round((7+t*0.095+threat*1.55)*(elite?1.48:1));
-    const spd=((fast?76:52)+Math.min(92,t*0.42)+threat*4.2)*(elite?1.04:1)*(role==="spitter"?0.88:role==="summoner"?0.82:1);
-    mobs.push({ type:"z", role, elite, name:elite?e.name:roleName, hp:Math.round(hp*(role==="summoner"?1.22:role==="spitter"?0.86:1)), maxhp:Math.round(hp*(role==="summoner"?1.22:role==="spitter"?0.86:1)), dmg, spd, r:(fast?11:15)+Math.random()*4+(elite?5:0)+(role==="summoner"?3:0), drop:{}, col:elite?e.col:(role==="spitter"?"#ffd24a":role==="summoner"?"#b06bff":"#8aff5a"),
+    const roleHpMul=role==="summoner"?1.22:role==="spitter"?0.86:role==="guard"?1.55:role==="mender"?0.92:1;
+    const dmg=Math.round((7+t*0.095+threat*1.55)*(elite?1.48:1)*(role==="mender"?0.7:role==="guard"?0.82:1));
+    const spd=((fast?76:52)+Math.min(92,t*0.42)+threat*4.2)*(elite?1.04:1)*(role==="spitter"?0.88:role==="summoner"?0.82:role==="guard"?0.72:role==="mender"?0.78:1);
+    mobs.push({ type:"z", role, elite, name:elite?e.name:roleName, hp:Math.round(hp*roleHpMul), maxhp:Math.round(hp*roleHpMul), dmg, spd, r:(fast?11:15)+Math.random()*4+(elite?5:0)+(role==="summoner"||role==="guard"?3:0), drop:{}, col:elite?e.col:(role==="spitter"?"#ffd24a":role==="summoner"?"#b06bff":role==="guard"?"#46e8ff":role==="mender"?"#72ff23":"#8aff5a"),
       x:player.x+Math.cos(ang)*dist, y:player.y+Math.sin(ang)*dist, dir:"down", walkT:Math.random()*3, _mv:true, flash:0,
-      cast:0, summonCd:2.8+Math.random()*2.5,
+      cast:0, summonCd:2.8+Math.random()*2.5, healCd:1.6+Math.random()*1.6, guardT:0,
       spr:{img:elite?e.spr:(fast?SURV_SPR[1]:SURV_SPR[0])} }); } }
 function survBoss(){ if(mobs.length>125) return; const threat=survThreat(), t=RUN.t, lv=level(); const ang=Math.random()*6.2832, dist=430;
   const hp=Math.round(230+t*(5.8+threat*1.1)+lv*(10+threat*1.2)+(RUN.bossKills||0)*85);
@@ -3060,6 +3092,98 @@ function drawSurvShrines(){
     ctx.globalAlpha=1; ctx.fillStyle="rgba(0,0,0,0.62)"; ctx.fillRect(s.x-38,s.y-s.r-18,76,6); ctx.fillStyle=s.col; ctx.fillRect(s.x-38,s.y-s.r-18,76*pct,6);
     ctx.font="900 10px Inter,sans-serif"; ctx.textAlign="center"; ctx.fillStyle="#eaffe0"; ctx.strokeStyle="rgba(0,0,0,0.75)"; ctx.lineWidth=3; ctx.strokeText(s.name,s.x,s.y-s.r-24); ctx.fillText(s.name,s.x,s.y-s.r-24); ctx.restore(); }
 }
+function activeRunRoom(){ if(!RUN||!RUN.rooms) return null; for(const r of RUN.rooms){ if(r&&!r.done) return r; } return null; }
+function spawnRunRoom(){
+  if(!RUN||RUN.over||!player||activeRunRoom()) return;
+  RUN.rooms=RUN.rooms||[];
+  const threat=survThreat(), a=Math.random()*6.2832, dist=360+Math.random()*300;
+  const x=Math.max(110,Math.min(MAP.w*TILE-110,player.x+Math.cos(a)*dist));
+  const y=Math.max(110,Math.min(MAP.h*TILE-110,player.y+Math.sin(a)*dist));
+  const need=3+Math.floor(threat/1.55);
+  RUN.rooms.push({id:"room"+Date.now()+Math.random().toString(36).slice(2,5),x,y,r:92,life:48+Math.min(14,threat*2.2),unlock:0,need,kills:0,state:"locked",done:false,col:"#46e8ff"});
+  try{ showBanner("LOCKED ROOM","Stand inside to open the arena cache","#46e8ff"); sfx("quest",0.26); }catch(_){}
+  updateRunHud(true); updateEventLine(); updateRadar();
+}
+function spawnRunRoomPack(room){
+  if(!RUN||!room||mobs.length>188) return;
+  const threat=survThreat(), count=Math.min(9,(room.need||4)+2), roles=["charger","guard","spitter","mender","grunt"];
+  for(let i=0;i<count;i++){
+    const role=roles[(i+(Math.random()*roles.length)|0)%roles.length], elite=i===0||threat>3.2&&i===1, e=elite?SURV_ELITES[(Math.random()*SURV_ELITES.length)|0]:null;
+    const a=(i/count)*6.2832+Math.random()*0.35, dist=room.r+46+Math.random()*44;
+    const hp=Math.round((30+RUN.t*1.35+RUN.lvl*5+threat*10)*(elite?1.72:1)*(role==="guard"?1.38:role==="mender"?0.88:1));
+    const dmg=Math.round((6+threat*1.45+RUN.lvl*0.45)*(role==="mender"?0.72:role==="guard"?0.82:1));
+    const spd=(role==="spitter"?74:role==="mender"?68:role==="guard"?64:role==="charger"?108:86)+threat*4.5;
+    const mob={type:"z",role,elite,roomId:room.id,name:elite?(e&&e.name)||"Arena Elite":(role==="spitter"?"Room Spitter":role==="mender"?"Room Mender":role==="guard"?"Room Guard":role==="charger"?"Room Charger":"Room Guard"),
+      hp,maxhp:hp,dmg,spd,r:14+Math.random()*4+(elite?5:0)+(role==="guard"?4:0),drop:{},col:elite?e.col:(role==="spitter"?"#ffd24a":role==="mender"?"#72ff23":role==="guard"?"#46e8ff":role==="charger"?"#ff9a4a":"#8aff5a"),
+      x:room.x+Math.cos(a)*dist,y:room.y+Math.sin(a)*dist,dir:"down",walkT:Math.random()*3,_mv:true,flash:0,cast:0,summonCd:3+Math.random()*2,healCd:1+Math.random()*1.4,guardT:0,
+      spr:{img:elite&&e?e.spr:(role==="charger"?SURV_SPR[1]:SURV_SPR[0])}};
+    clampEnt(mob,30); mobs.push(mob);
+  }
+}
+function runRoomKill(m){
+  if(!RUN||!m||!m.roomId||!RUN.rooms) return;
+  const room=RUN.rooms.find(r=>r&&r.id===m.roomId&&!r.done);
+  if(!room||room.state!=="active") return;
+  room.kills=(room.kills||0)+1;
+  addRunMomentum(1.6,"arena pick","#46e8ff");
+  if(room.kills>=room.need) completeRunRoom(room);
+  else updateRunHud(true);
+}
+function completeRunRoom(room){
+  if(!RUN||RUN.over||!room||room.done) return;
+  const threat=survThreat(), xp=Math.round(18+RUN.lvl*5+threat*4), relic=threat>=2.15?1:0;
+  room.done=true; room.state="cleared"; room.life=4.5; RUN.roomWins=(RUN.roomWins||0)+1; RUN.roomCd=34+Math.random()*16;
+  RUN.pendingXp=(RUN.pendingXp||0)+xp; RUN.xp+=Math.max(4,Math.round(xp*0.22));
+  if(relic) RUN.pendingRelics=(RUN.pendingRelics||0)+relic;
+  addRunMomentum(10,"arena cleared","#46e8ff");
+  burst(room.x,room.y,room.col,28); addShake(7);
+  gems.push({x:room.x,y:room.y,v:8},{x:room.x+18,y:room.y-8,v:5},{x:room.x-18,y:room.y+8,v:5});
+  try{ showBanner("ROOM CLEARED","+"+xp+" XP"+(relic?" +"+relic+" relic":""),"#46e8ff"); sfx("level",0.34); }catch(_){}
+  updateRunHud(true); updateEventLine(); updateRadar();
+}
+function tickRunRooms(dt){
+  if(!RUN||RUN.over||!player) return;
+  RUN.rooms=RUN.rooms||[];
+  for(const r of RUN.rooms){ if(r&&r.done) r.life-=dt; }
+  RUN.rooms=RUN.rooms.filter(r=>r&&!r.done||r&&r.life>0);
+  let room=activeRunRoom();
+  if(!room){
+    RUN.roomCd=(RUN.roomCd==null?10:RUN.roomCd)-dt;
+    if(RUN.roomCd<=0){ RUN.roomCd=42+Math.random()*18; spawnRunRoom(); }
+    return;
+  }
+  room.life-=dt;
+  const dx=player.x-room.x, dy=player.y-room.y, inside=dx*dx+dy*dy<room.r*room.r;
+  if(room.state==="locked"){
+    room.unlock=Math.max(0,Math.min(1.65,(room.unlock||0)+(inside?dt:-dt*0.72)));
+    if(inside&&Math.random()<dt*7&&parts.length<partCap()) parts.push({x:room.x+(Math.random()*2-1)*room.r,y:room.y+(Math.random()*2-1)*room.r,vx:0,vy:-26-Math.random()*36,life:0.22,max:0.36,col:room.col,sz:2+Math.random()*3});
+    if(room.unlock>=1.65){ room.state="active"; room.kills=0; room.life=Math.max(room.life,31+survThreat()*1.8); spawnRunRoomPack(room); try{ showBanner("ARENA OPEN","Clear "+room.need+" guards before it seals",room.col); sfx("boss",0.28); }catch(_){} }
+  } else if(room.state==="active"&&room.kills>=room.need) completeRunRoom(room);
+  if(!room.done&&room.life<=0){
+    room.done=true; room.state="sealed"; room.life=3.2; RUN.roomMisses=(RUN.roomMisses||0)+1; RUN.roomCd=24+Math.random()*14;
+    loseRunMomentum(4,"room sealed"); spawnHazardZone(room.x,room.y,{r:86,life:4.4,dmg:4+Math.round(survThreat()*0.8),col:"#46e8ff",label:"sealed room"});
+    try{ toast("Loot room sealed - keep moving"); }catch(_){}
+    updateRunHud(true); updateEventLine(); updateRadar();
+  }
+}
+function drawRunRooms(){
+  if(!RUN||!RUN.rooms||!RUN.rooms.length) return;
+  const now=performance.now();
+  for(const r of RUN.rooms){ if(!r||!inView(r,260)) continue;
+    const pulse=1+Math.sin(now/220+r.x)*0.045, col=r.col||"#46e8ff";
+    const pct=r.state==="locked"?Math.max(0,Math.min(1,(r.unlock||0)/1.65)):(r.need?Math.max(0,Math.min(1,(r.kills||0)/r.need)):1);
+    ctx.save();
+    ctx.globalAlpha=r.done?0.16:0.18+0.18*pct; ctx.fillStyle=col; ctx.beginPath(); ctx.arc(r.x,r.y,r.r*pulse,0,6.2832); ctx.fill();
+    ctx.globalAlpha=r.done?0.46:0.9; ctx.strokeStyle=col; ctx.lineWidth=3; if(r.state==="locked") ctx.setLineDash([14,8]); ctx.beginPath(); ctx.arc(r.x,r.y,r.r*pulse,0,6.2832); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle="rgba(0,0,0,0.66)"; ctx.fillRect(r.x-56,r.y-r.r-25,112,19);
+    ctx.fillStyle=col; ctx.fillRect(r.x-52,r.y-r.r-10,104*Math.max(0,Math.min(1,(r.life||0)/52)),3);
+    ctx.fillStyle="#eaffe0"; ctx.font="900 10px Inter,sans-serif"; ctx.textAlign="center"; ctx.textBaseline="middle";
+    const label=r.state==="locked"?"LOCKED ROOM":r.state==="active"?"CLEAR "+(r.kills||0)+"/"+(r.need||0):r.state==="sealed"?"SEALED":"CLEARED";
+    ctx.strokeStyle="rgba(0,0,0,0.78)"; ctx.lineWidth=3; ctx.strokeText(label,r.x,r.y-r.r-16); ctx.fillText(label,r.x,r.y-r.r-16);
+    ctx.fillStyle="rgba(0,0,0,0.6)"; ctx.fillRect(r.x-38,r.y+r.r+10,76,5); ctx.fillStyle=col; ctx.fillRect(r.x-38,r.y+r.r+10,76*pct,5);
+    ctx.restore();
+  }
+}
 function spawnRunBounty(){
   if(!RUN||RUN.over||!player||mobs.length>190) return;
   const threat=survThreat(), id="b"+Date.now()+Math.random().toString(36).slice(2,5);
@@ -3098,6 +3222,7 @@ function tickRunBounty(dt){
 }
 function survKill(m){ if(m._dead) return; m._dead=true; RUN.kills++; recordDaily("horde",1); if(m&&m.boss) recordDaily("bosses",1); gainRage(m.boss?24:(m.elite?10:4));
   weaponOnKill(m);
+  if(m.roomId) runRoomKill(m);
   addRunMomentum(m.boss?14:(m.elite?6:1.1),m.boss?"boss drop":(m.elite?"elite clean":"chain"),m.boss?"#ffd24a":(m.elite?"#72ff23":"#bfe9b0"));
   if(m.marked) completeRunBounty(m);
   burst(m.x,m.y,m.col||"#8aff5a",m.boss?26:8);
@@ -3121,6 +3246,7 @@ function survTick(dt){ RUN.t+=dt;
   RUN.shrineCd-=dt; if(RUN.shrineCd<=0){ survSpawnShrine(); RUN.shrineCd=22+Math.random()*13; }
   survTickShrines(dt);
   tickRunBounty(dt);
+  tickRunRooms(dt);
   player.fireCd=(player.fireCd||0)-dt; if(player.fireCd<=0){ const tg=nearestMobs(1+RUN.up.multi); if(tg.length){
       const wid=store.weapon||"slime", aoe=(wid==="bomb"||wid==="boulder"), burstCount=aoe?1:tg.length;
       player.fireCd=(aoe?1.08:0.66)/RUN.up.rate;
@@ -3142,17 +3268,18 @@ function survLevelUp(){ RUN.xp-=RUN.xpNext; RUN.lvl++; RUN.xpNext=Math.round(RUN
   $("upPick").classList.add("on"); }
 function updateRunHud(force){ if(!RUN) return; const now=performance.now(); if(!force && now-runHudStamp<105) return;
   const m=Math.floor(RUN.t/60), s=Math.floor(RUN.t%60), threat=survThreat(), xpPct=Math.min(100,RUN.xp/RUN.xpNext*100);
+  const room=activeRunRoom(), roomTxt=room?(" - "+(room.state==="locked"?"room lock "+Math.ceil(room.life)+"s":"room "+(room.kills||0)+"/"+(room.need||0))):"";
   const loot=$("rhLoot"), rel=RUN.pendingRelics||0, xp=RUN.pendingXp||0, mult=(RUN.pushMul||1), rank=runRank(RUN.mom||0), mm=runMomentumMult(), shr=(RUN.shrines&&RUN.shrines.length)?(" - shrine "+Math.ceil(RUN.shrines[0].life)+"s"):"", bty=(RUN.bounty&&RUN.bounty.mob&&!RUN.bounty.mob._dead)?(" - bounty "+Math.ceil(RUN.bounty.life)+"s"):"";
-  const key=m+"|"+s+"|"+RUN.kills+"|"+RUN.lvl+"|"+Math.round(xpPct)+"|"+rel+"|"+xp+"|"+mult.toFixed(2)+"|"+rank.n+"|"+Math.round(RUN.mom||0)+"|"+mm.toFixed(2)+"|"+shr+"|"+bty+"|"+threat.toFixed(1);
+  const key=m+"|"+s+"|"+RUN.kills+"|"+RUN.lvl+"|"+Math.round(xpPct)+"|"+rel+"|"+xp+"|"+mult.toFixed(2)+"|"+rank.n+"|"+Math.round(RUN.mom||0)+"|"+mm.toFixed(2)+"|"+shr+"|"+bty+"|"+roomTxt+"|"+threat.toFixed(1);
   if(!force && key===runHudKey) return; runHudKey=key; runHudStamp=now;
   $("rhTime").textContent=m+":"+String(s).padStart(2,"0");
   $("rhKills").textContent=RUN.kills; $("rhLvl").textContent="Lv "+RUN.lvl; $("rhXp").style.width=xpPct+"%";
-  if(loot) loot.textContent="rank "+rank.n+" x"+mm.toFixed(2)+" - threat "+threat.toFixed(1)+bty+shr+" - loot "+rel+" relic"+(rel===1?"":"s")+" - "+xp+" XP - "+mult.toFixed(2)+"x"; }
+  if(loot) loot.textContent="rank "+rank.n+" x"+mm.toFixed(2)+" - threat "+threat.toFixed(1)+bty+roomTxt+shr+" - loot "+rel+" relic"+(rel===1?"":"s")+" - "+xp+" XP - "+mult.toFixed(2)+"x"; }
 function survStart(){ const wasRunning=(state==="world"); $("start").classList.remove("on"); $("runEnd").classList.remove("on"); $("upPick").classList.remove("on");
   $("hud").style.display="block"; try{startAmbient();}catch(_){} newGame();
   creatures=[]; npcs=[]; mobs=[]; gathers=[]; gems=[]; parts=[]; floats=[]; hazards=[]; shots=[]; buildings=[]; worldEvent=null;
   player.x=MAP.w*TILE/2; player.y=MAP.h*TILE/2; player.hp=player.maxhp; player.fireCd=0;
-  RUN={ t:0, xp:0, xpNext:5, lvl:1, kills:0, spawnCd:0.4, bossCd:24, shrineCd:12, bountyCd:13, bounty:null, shrines:[], shrineWins:0, shrineMisses:0, over:false, revives:0, bossKills:0, pendingRelics:0, pendingXp:0, pushMul:1, extracted:false, mom:0, bestMom:0, momT:0, styleXp:0, up:{dmg:1,rate:1,multi:0,magnet:115,regen:0,xpMul:1} };
+  RUN={ t:0, xp:0, xpNext:5, lvl:1, kills:0, spawnCd:0.4, bossCd:24, shrineCd:12, bountyCd:13, roomCd:8, bounty:null, shrines:[], rooms:[], shrineWins:0, shrineMisses:0, roomWins:0, roomMisses:0, over:false, revives:0, bossKills:0, pendingRelics:0, pendingXp:0, pushMul:1, extracted:false, mom:0, bestMom:0, momT:0, styleXp:0, up:{dmg:1,rate:1,multi:0,magnet:115,regen:0,xpMul:1} };
   try{ applyMeta(); }catch(_){}
   runPaused=false; runHudStamp=0; runHudKey=""; state="world"; lastTs=performance.now(); $("runHud").classList.add("on"); refreshHud(); updateRunHud(true);
   try{ showBanner("🧟 SURVIVE THE HORDE","Auto-fire ON — just move & dodge!","#ff5e5e"); }catch(_){}

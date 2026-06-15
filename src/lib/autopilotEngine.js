@@ -738,47 +738,23 @@ export function createAutopilotEngine(deps) {
       // vaulted, so vault sweeps don't look like a giveback). Once the session has
       // peaked >= +8%, never let it give back more than HALF that gain — flatten and
       // bank the green. (e.g. peak +20% -> locks ~+10% instead of bleeding to -20%.)
+      // BANK-THE-PEAK RATCHET (HARD STOP — the protection that prevents "+29% peak bled
+      // to the -35% loss cap"). peakTotal is a HIGH-WATER mark (only goes up — never
+      // re-anchored down; re-anchoring down was the bug that let a green peak round-trip
+      // into a deep loss). Once the session has peaked >= +10%, if it gives back HALF that
+      // gain while still green, FLATTEN AND STOP — bank the green, end the run. The profit
+      // vault (if set) has already been sweeping gains to safety while running; this is the
+      // backstop that locks the rest. Come back green and restart to keep going.
       const totalEq = eq + (state.secured || 0);
       if (totalEq > (state.peakTotal || state.start)) state.peakTotal = totalEq;
       {
         const peakGain = (state.peakTotal || state.start) - state.start;
-        if (peakGain >= state.start * 0.08) {
-          const floor = state.start + peakGain * 0.5; // give back at most half the gain
-          // LOCK & CONTINUE (only when genuinely GREEN): instead of ending the run,
-          // sweep the locked profit to the safe/bank wallet and KEEP TRADING the stake,
-          // then re-anchor the peak so the ratchet arms fresh. A peak can also be an
-          // UNREALIZED spike that reverts before the sell fills — if the giveback lands
-          // below +3% we never treat it as a lock (the loss cap guards real downside).
-          if (totalEq <= floor && totalEq >= state.start * 1.03) {
-            const peakPctLog = round((state.peakTotal / state.start - 1) * 100, 1);
-            const dest = state.vault && state.vault.destination;
-            let banked = 0;
-            if (dest && state.live) {
-              try {
-                const free = (Number(state.walletSol) || state.bank) - state.start - 0.02; // profit above the stake
-                if (free >= 0.01) {
-                  const res = await sweepProfit(dest, free);
-                  if (res && res.ok) {
-                    banked = Number(res.sentSol) || free;
-                    state.secured = (state.secured || 0) + banked;
-                    try { const ws2 = await getWalletSol(); if (Number.isFinite(ws2) && ws2 >= 0) { state.walletSol = ws2; state.bank = ws2; } } catch {}
-                  }
-                }
-              } catch (e) { record("warn", `lock sweep failed: ${e && e.message}`); }
-            }
-            // Re-anchor the peak to the current total so the ratchet disarms and re-arms
-            // on the NEXT green run instead of stopping. Session keeps going.
-            state.peakTotal = equity(state) + (state.secured || 0);
-            state.peak = equity(state);
-            if (banked > 0) record("info", `🏦 Banked +${round(banked, 4)} SOL to safe wallet at peak +${peakPctLog}% — still running (${round(state.secured, 4)} SOL secured).`);
-            else record("info", `🔒 Locked peak +${peakPctLog}% — re-anchored, still running${dest ? "" : " (set a safe wallet to auto-send profit out)"}.`);
+        if (peakGain >= state.start * 0.10) {
+          const floor = state.start + peakGain * 0.5; // give back at most half the peak gain
+          if (totalEq <= floor && totalEq >= state.start * 1.02) {
+            record("info", `🔒 Locked gains: peak +${round((state.peakTotal / state.start - 1) * 100, 1)}% gave back half → banked +${round((totalEq / state.start - 1) * 100, 1)}% and STOPPED (never round-trip a green session).`);
+            await stop("locked-gains");
             return;
-          }
-          // Peak was unrealized and round-tripped to ~flat/red — don't end the session
-          // on it. Re-anchor the peak so we don't sit permanently armed off a phantom
-          // spike; the loss cap still guards the downside.
-          if (totalEq < state.start * 1.03 && state.peakTotal > state.start * 1.10) {
-            state.peakTotal = Math.max(totalEq, state.start);
           }
         }
       }

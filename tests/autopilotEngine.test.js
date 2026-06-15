@@ -491,31 +491,25 @@ test("engine: profit vault sweeps gains above the stake and keeps running", asyn
   await engine.stop("test");
 });
 
-test("engine: bank-the-peak lock sweeps profit to the safe wallet and KEEPS running", async () => {
+test("engine: bank-the-peak ratchet STOPS on a giveback (never round-trips a green peak)", async () => {
   let t = 0;
-  let walletSol = 1.2;
-  const swept = [];
   const engine = createAutopilotEngine({
     getFreshFeed: async () => [],
     getPairLite: async () => null,
     buyToken: async () => ({ ok: true }),
     sellPercent: async () => ({ ok: true }),
     now: () => t,
-    persist: async () => {},
-    getWalletSol: async () => walletSol,
-    sweepProfit: async (dest, amt) => { swept.push(amt); walletSol -= amt; return { ok: true, sentSol: amt }; }
+    persist: async () => {}
   });
-  await engine.start({ solBudget: 1, minutes: 60, live: true, walletPubkey: "W".repeat(44), vault: { destination: "B".repeat(44) } });
+  await engine.start({ solBudget: 1, minutes: 60, live: false });
   const s = engine._state();
-  // Peaked +40%, gave back to +20% (past the half-gain floor) but still clearly green.
-  s.peakTotal = 1.4; s.bank = 1.2; walletSol = 1.2;
+  // Peaked +40%, gave back to +18% (past the half-gain floor at +20%) but still green.
+  s.peakTotal = 1.4; s.bank = 1.18;
   t += 1000;
   await engine._exit();
   const st = engine.status();
-  assert.equal(st.running, true, "session keeps running after locking gains");
-  assert.ok(swept.length > 0, "profit was banked to the safe wallet");
-  assert.ok(st.secured > 0, "secured tracks the banked profit");
-  await engine.stop("test");
+  assert.equal(st.running, false, "ratchet flattens and stops to bank the green peak");
+  assert.equal(st.stopReason, "locked-gains");
 });
 
 test("engine: loss cap flattens and stops", async () => {
