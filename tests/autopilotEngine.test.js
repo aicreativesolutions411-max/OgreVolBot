@@ -229,8 +229,9 @@ test("evalExit: steady mode banks 80% at the first pop and rides 20% to +400%", 
   assert.equal(moon.reason, "tp4"); assert.equal(moon.pct, 100);
 });
 
-test("evalExit: blend mode banks ~25% tranches climbing and rides the tail to +400%", () => {
-  const P = aggParams(baseState({ mode: "blend" }));
+test("evalExit: blend mode ladders ~25% tranches in a HOT tape, rides the tail to +400%", () => {
+  // Blend only ladders when the tape is HOT (coins climbing); otherwise it banks hard.
+  const P = aggParams(baseState({ mode: "blend", tune: { tape: "HOT" } }));
   const base = { entryMc: 5000, entryLiq: 6000, lastLiq: 6000, openedAt: 0, missed: 0, peakPct: 0 };
   // first tranche: 25% at the first doable pop
   const t1 = evalExit({ ...base, lastMc: 5000 * 1.3, tp1Done: false }, P, 1000);

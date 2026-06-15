@@ -104,11 +104,14 @@ export function aggParams(state) {
     tp1Pct = 25; spikePct = 50; tp2Lvl = 100; tp2Pct = 33; tp3Lvl = 200; tp3Pct = 50; moonTarget = 400;
   }
 
-  // AUTO-ADAPT to a hostile tape: in COLD (bleeding / dead), the moon-ride doesn't pay
-  // — coins pop then dump — so bank HARD regardless of the chosen mode. Lock ~85% at
-  // the first pop and hold no mid rungs (like steady), so a chop tape can't round-trip
-  // a 75% blend remnant into a loss. Reverts to the chosen mode the moment it's not cold.
-  const bankHard = steady || (state.tune && state.tune.tape === "COLD");
+  // AUTO-ADAPT — the key lesson from live: the moon-ride only PAYS in a genuinely HOT
+  // tape (coins actually climbing). The rest of the time coins pop then dump, so holding
+  // a big remnant just round-trips into a loss (blend banked 25% then the 75% dumped,
+  // repeatedly). So: RIDE only when HOT; otherwise BANK HARD — lock ~85% at the first
+  // pop, hold no mid rungs, small tail to +400%. Blend laddered only when HOT; Normal
+  // keeps its ladder unless COLD; Steady always banks hard.
+  const tape = (state.tune && state.tune.tape) || "warming";
+  const bankHard = steady || tape === "COLD" || (blend && tape !== "HOT");
   if (bankHard && !steady) { tp1Pct = Math.max(tp1Pct, 85); spikePct = Math.max(spikePct, 85); moonTarget = Math.min(moonTarget, 400); }
 
   return { regime, wr, baseFrac, streakMult, regimeMult, tp1, tp2, sl, minScore, mcFloor, steady, blend, bankHard, tp1Pct, spikePct, moonTarget, tp2Lvl, tp2Pct, tp3Lvl, tp3Pct };
