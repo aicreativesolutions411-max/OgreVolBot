@@ -476,6 +476,9 @@ function freshState(opts) {
     results: [],
     waves: {},
     recentSells: {},
+    // Last time we APED each coin NAME — blocks piling into a clone swarm (same name,
+    // different mints) 3x in seconds before any loss registers (ASTROGUY/Bob x3).
+    recentApeNames: {},
     // Per-coin loss memory: stop re-aping a coin that keeps stopping us out this
     // session (the log showed one coin entered 6x, almost all losses).
     coinLosses: {},
@@ -1110,6 +1113,15 @@ export function createAutopilotEngine(deps) {
         return nowMs - (e.at || 0) > 60_000;
       })
       .filter((r) => symbolLoserCount(r.symbol) < 3) // CROSS-SESSION: skip serial-rug names (e.g. LONGDOG) that have lost us money 3+ times all-time
+      .filter((r) => {
+        // PILE-IN guard: clone swarms flood the feed as different mints with the SAME
+        // name and get bought 3x in seconds before any loss registers (ASTROGUY/Bob x3).
+        // Never hold two of the same name at once, and don't re-ape a name within 15s.
+        const ns = normSym(r.symbol);
+        if (state.open.some((p) => normSym(p.sym) === ns)) return false;
+        const a = state.recentApeNames[ns];
+        return !a || nowMs - a > 15_000;
+      })
       .map((r) => ({ r, reject: entryReject(r, P), fs: freshScore(r) }))
       .filter((x) => !x.reject)
       .sort((a, b) => b.fs - a.fs);
@@ -1128,6 +1140,9 @@ export function createAutopilotEngine(deps) {
     for (const cand of scored) {
       if (state.stopped || now() >= state.endAt) break; // never open after a stop/timer
       if (state.open.length >= maxNow) break;            // tape-aware concurrent cap
+      // Within-cycle pile-in guard: don't open a 2nd of the same NAME we just opened
+      // this very cycle (a clone can appear multiple times in one feed refresh).
+      if (state.open.some((p) => normSym(p.sym) === normSym(cand.r.symbol))) continue;
       // Dev-reputation skip: avoid wallets that have rugged us repeatedly with no
       // runner to show for it (the one rug signal you CAN read — the dev's history).
       const dev = getDevWallet(cand.r.tokenMint);
@@ -1267,6 +1282,7 @@ export function createAutopilotEngine(deps) {
       entrySells: Number(row.sells5m) || 0
     };
     state.open.push(pos);
+    state.recentApeNames[normSym(sym)] = now(); // remember the NAME to block clone-swarm pile-ins
     record("info", `🟢 APED ${sym} ${round(sizeSol, 4)} SOL @ MC $${Math.round(entryMc)} (fs ${pos.fs})`);
   }
 
