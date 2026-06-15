@@ -351,22 +351,20 @@ function setState(st){document.body.dataset.state=st;}
    same reactor hero so they're the same ogre. ---- */
 const STATE_CLIPS="/assets/slimewire/auto/states/";
 let curClip="", clipEventUntil=0, lastSceneS=null;
-let pPrevOpen=null, pPrevWins=null, pPrevSec=null, pPrevBlocked=0, lastRugAt=0;
+let pPrevOpen=null, pPrevWins=null, pPrevSec=null, pPrevBlocked=0, lastRugAt=0, lastVictoryAt=0, lastWinAt=0;
+const VICTORY_THROTTLE=90000, WIN_THROTTLE=15000; // big celebrations shouldn't fire too often
 function playClip(name, isEvent){
   const v=$("bgVid"); if(!v) return;
   if(curClip===name) return;
   curClip=name;
   try{
     v.loop=!isEvent;
-    // EVENT clips play their OWN baked sound effect (the ogre's roar / surge / shockwave);
-    // ambient loops stay muted under the reactor ambient bed. Needs sound on + a prior
-    // user gesture (browsers block autoplay audio until then) — both handled elsewhere.
-    v.muted = !(isEvent && soundOn);
+    v.muted=true; // clips' own baked audio is OFF — sound is driven by the custom SFX below
     v.src=STATE_CLIPS+name+".mp4";
     v.load(); const p=v.play(); if(p&&p.catch)p.catch(()=>{});
-    if(isEvent && soundOn){ try{ v.volume=0.7; }catch{} }
   }catch{}
-  if(isEvent) clipEventUntil=Date.now()+(name==="rugdodge"?8200:4600); // rug-dodge is the longer 8s clip
+  // rug-dodge + victory are the longer 8s clips
+  if(isEvent){ clipEventUntil=Date.now()+((name==="rugdodge"||name==="victory")?8200:4600); playSfx(name); }
 }
 function ambientClip(s){
   if(!s||!s.running) return "idle";
@@ -378,18 +376,28 @@ function driveScene(s){
   lastSceneS=s;
   const now=Date.now();
   let evt=null;
+  let bigG=0;
   if(s&&s.running){
     const op=(s.open||[]).length, wn=(s.bigWins||[]).length, sec=Number(s.secured||0), bl=Number(s.blocked||0);
+    const arr=(s.bigWins||[]); bigG=Number((arr[arr.length-1]||{}).gainPct||0);
     if(pPrevOpen!==null){
-      if(wn>pPrevWins) evt="win";                       // a big win just printed
+      if(wn>pPrevWins){                                 // a win just printed — celebrate by size
+        if(bigG>=300 && now-lastVictoryAt>VICTORY_THROTTLE){ evt="victory"; lastVictoryAt=now; }   // 3x+ → big victory
+        else if(bigG>=200 && now-lastWinAt>WIN_THROTTLE){ evt="win"; lastWinAt=now; }              // 2x+ → win clip
+        // smaller wins: no celebration clip (kept calm so the big ones land)
+      }
       else if(sec>pPrevSec+0.0005) evt="banking";       // profit swept to the safe wallet
       else if(op>pPrevOpen) evt="aped";                 // a new position just opened
       else if(bl>pPrevBlocked && now-lastRugAt>30000){ evt="rugdodge"; lastRugAt=now; } // dodged a rugger (throttled)
     }
     pPrevOpen=op; pPrevWins=wn; pPrevSec=sec; pPrevBlocked=bl;
+    // a position printing 3x+ while still HELD also triggers the victory celebration (throttled)
+    if(!evt){ const mx=Math.max(0,...(s.open||[]).map(p=>Number(p.movePct||0))); if(mx>=300 && now-lastVictoryAt>VICTORY_THROTTLE){ evt="victory"; lastVictoryAt=now; } }
   } else { pPrevOpen=null; }
-  if(evt){ playClip(evt,true); try{blip(evt==="win"?"ok":"click");}catch{} if(evt==="win"||evt==="aped"){try{playSurge();}catch{}}
-    if(evt==="win")pushFeed("🏆 Big win banked",""); else if(evt==="rugdodge")pushFeed("🛡️ Dodged a known rugger","r"); return; }
+  if(evt){ playClip(evt,true); try{blip(evt==="win"||evt==="victory"?"ok":"click");}catch{}
+    if(evt==="victory")pushFeed("🎉 VICTORY — "+(bigG>=300?bigG.toLocaleString()+"% ":"")+"monster win!","");
+    else if(evt==="win")pushFeed("🏆 Big win banked (2x+)","");
+    else if(evt==="rugdodge")pushFeed("🛡️ Dodged a known rugger","r"); return; }
   if(now>=clipEventUntil) playClip(ambientClip(s),false);  // back to the ambient loop
 }
 // when a one-shot event clip ends, drop straight back to the ambient loop
@@ -515,6 +523,19 @@ let audioCtx=null, ambientStarted=false, ambRAF=0;
 function ac(){ if(!audioCtx){try{audioCtx=new (window.AudioContext||window.webkitAudioContext)();}catch{}} return audioCtx; }
 const ambient=new Audio("/assets/slimewire/auto/reactor-ambient.mp3"); ambient.loop=true; ambient.volume=0; ambient.preload="auto";
 const surgeSfx=new Audio("/assets/slimewire/auto/surge.mp3"); surgeSfx.volume=0.55; surgeSfx.preload="auto";
+/* custom event SFX — punchy entry hit, cash-register bank chime, deep shockwave boom,
+   epic victory sting. These REPLACE the clips' baked audio (clips play muted). */
+const SFX_BASE="/assets/slimewire/auto/sfx/";
+const SFX={};
+[["aped","entry",0.7],["banking","bank",0.8],["rugdodge","shockwave",0.85],["victory","victory",0.9]].forEach(([k,f,v])=>{
+  const a=new Audio(SFX_BASE+f+".mp3"); a.preload="auto"; a.volume=v; SFX[k]=a;
+});
+function playSfx(name){
+  if(!soundOn) return;
+  const a=SFX[name];
+  if(a){ try{ a.currentTime=0; a.play().catch(()=>{}); }catch{} }
+  else if(name==="win"){ playSurge(); } // 2x win uses the surge sting
+}
 function ensureAmbient(){ if(soundOn && !ambientStarted){ ambient.play().then(()=>{ambientStarted=true;}).catch(()=>{}); } }
 function setAmbient(target){
   if(!soundOn){ambient.volume=0;return;}
