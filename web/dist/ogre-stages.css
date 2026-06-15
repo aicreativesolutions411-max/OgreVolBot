@@ -200,9 +200,11 @@ html body main.shell[data-app] .nav-side-group-toggle[data-active] .nav-side-lab
 /* --- top sync strip: glass + accent top edge (REC/Connect/Refresh) --- */
 html body main.shell[data-app] .top-sync-strip{position:relative;border:1px solid rgba(141,255,90,.14) !important;border-radius:13px !important;background:linear-gradient(120deg,rgba(10,18,14,.6),rgba(6,12,9,.35)) !important;}
 html body main.shell[data-app] .top-sync-strip::before{content:"";position:absolute;left:12%;right:12%;top:0;height:2px;border-radius:2px;background:linear-gradient(90deg,transparent,rgba(141,255,90,.6),transparent);}
-/* --- preset strips: clean glass with accent edge (Quick Buy / Fast Trade / Fast Bundle) --- */
-html body main.shell[data-app] .terminal-quick-buy-bar, html body main.shell[data-app] .terminal-preset-strip{border:1px solid rgba(141,255,90,.14) !important;border-radius:13px !important;background:linear-gradient(160deg,rgba(10,18,14,.6),rgba(6,12,9,.32)) !important;box-shadow:0 6px 16px rgba(0,0,0,.28);}
-html body main.shell[data-app] .terminal-preset-strip label, html body main.shell[data-app] .terminal-quick-buy-bar label{letter-spacing:.4px;}
+/* --- preset toolbar: clean glass with accent edge (Quick Buy / Fast Trade / Fast Bundle) --- */
+html body main.shell[data-app] .preset-toolbar{border:1px solid rgba(141,255,90,.14) !important;border-radius:13px !important;background:linear-gradient(160deg,rgba(10,18,14,.55),rgba(6,12,9,.3)) !important;box-shadow:0 6px 16px rgba(0,0,0,.26);}
+html body main.shell[data-app] .preset-toolbar .quick-buy-label{letter-spacing:.4px;}
+/* --- radar bar wrapper spacing (mounted at the top of the terminal feed) --- */
+html body main.shell[data-app] .ogre-radar-wrap{margin:0 0 10px;}
 /* mobile: keep the stat tiles tight + readable so all four fit cleanly on a phone */
 @media (max-width:480px){
   html body main.shell[data-app] .metrics article{padding:8px 9px !important;}

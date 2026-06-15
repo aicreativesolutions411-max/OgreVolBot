@@ -7802,21 +7802,30 @@ function bindOgreRefreshSpin() {
 let ogreRadarPrevCount = 0;
 function attachOgreAccents(panel, tab) {
   try {
-    const head = panel.querySelector(".trade-head");
-    if (!head) return;
     if (tab === "terminal" || tab === "live") {
-      const desc = head.querySelector("p");
-      if (desc && !desc.querySelector(".ogre-radar-bar")) {
+      // The terminal is .terminal-layout (no .trade-head), so mount the radar as a slim bar
+      // at the top of the feed area / its header — not dependent on a description line.
+      if (!panel.querySelector(".ogre-radar-bar")) {
+        const host = panel.querySelector(".cooks-category-label")?.parentElement
+          || panel.querySelector(".terminal-main")
+          || panel.querySelector(".terminal-layout")
+          || panel;
         const count = panel.querySelectorAll(".signal-row, [data-token-mint]").length;
-        desc.innerHTML = `<span class="ogre-radar-bar">`
+        const wrap = document.createElement("div");
+        wrap.className = "ogre-radar-wrap";
+        wrap.innerHTML = `<span class="ogre-radar-bar">`
           + `<span class="orb-scope"><span class="ring"></span><span class="ring r2"></span><span class="sweep"></span><span class="blip b1"></span><span class="blip b2"></span><span class="blip b3"></span></span>`
           + `<span class="orb-read"><span class="t">SWAMP RADAR</span><span class="s"><b>${count}</b> live pairs · scanning the swamp</span></span>`
           + `<span class="orb-heat">LIVE</span></span>`;
-        const radar = desc.querySelector(".ogre-radar-bar");
-        if (radar && count > ogreRadarPrevCount && ogreRadarPrevCount > 0) { radar.classList.add("hit"); setTimeout(() => radar.classList.remove("hit"), 800); }
+        host.insertBefore(wrap, host.firstChild);
+        if (count > ogreRadarPrevCount && ogreRadarPrevCount > 0) { const r = wrap.querySelector(".ogre-radar-bar"); r.classList.add("hit"); setTimeout(() => r.classList.remove("hit"), 800); }
         ogreRadarPrevCount = count;
       }
-    } else if (tab === "kol" || tab === "slimeScope" || tab === "watchlist") {
+      return;
+    }
+    const head = panel.querySelector(".trade-head");
+    if (!head) return;
+    if (tab === "kol" || tab === "slimeScope" || tab === "watchlist") {
       const h = head.querySelector("h3");
       if (h && !h.querySelector(".ogre-spy")) h.insertAdjacentHTML("afterbegin", `<span class="ogre-spy" title="Intel watch"><i></i></span>`);
     } else if (tab === "smartChart") {
@@ -7935,6 +7944,30 @@ function attachOgreStage(panel) {
     bg.__ogreBound = true;
     bg.addEventListener("ended", () => { if (!bg.loop) { ogreStage.eventUntil = 0; ogreStage.clip = ""; ogrePlayClip(stage, ogreAmbientClip(ogreStage.kind), false); } });
   }
+  // LAZY/PERF: only the active tab's clip is ever in the DOM (panels re-render), and now the
+  // clip also PAUSES when the stage scrolls off-screen or the app is backgrounded — so the
+  // immersive layer is feather-light on mobile (battery + data). Purely behavioural.
+  try {
+    if (window.__ogreIO) { window.__ogreIO.disconnect(); }
+    if (bg && "IntersectionObserver" in window) {
+      window.__ogreIO = new IntersectionObserver((entries) => {
+        for (const e of entries) {
+          if (e.isIntersecting && !document.hidden) { try { const p = bg.play(); if (p && p.catch) p.catch(() => {}); } catch {} }
+          else { try { bg.pause(); } catch {} }
+        }
+      }, { threshold: 0.06 });
+      window.__ogreIO.observe(stage);
+    }
+    if (!window.__ogreVisBound) {
+      window.__ogreVisBound = true;
+      document.addEventListener("visibilitychange", () => {
+        const v = document.querySelector("[data-ogre-bg]");
+        if (!v) return;
+        if (document.hidden) { try { v.pause(); } catch {} }
+        else { try { const p = v.play(); if (p && p.catch) p.catch(() => {}); } catch {} }
+      });
+    }
+  } catch {}
   if (!ogreStage.tkTimer) ogreStage.tkTimer = setInterval(ogreTickerTick, 3400);
   bindOgreActions();
   if (kind === "swap") driveOgreSwapStage(stage);
