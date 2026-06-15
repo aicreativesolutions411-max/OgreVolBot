@@ -28,8 +28,8 @@
 @keyframes os-blink{0%,100%{opacity:1;}50%{opacity:.35;}}
 
 /* shared activity ticker */
-.ogre-stage .os-ticker{position:absolute;left:0;right:0;bottom:52px;z-index:4;height:23px;overflow:hidden;display:flex;align-items:center;padding:0 12px;
-  background:linear-gradient(90deg,rgba(4,7,10,.74),rgba(4,7,10,.3) 50%,rgba(4,7,10,.74));border-top:1px solid rgba(255,255,255,.07);border-bottom:1px solid rgba(255,255,255,.07);}
+.ogre-stage .os-ticker{position:absolute;left:12px;right:auto;bottom:54px;z-index:4;max-width:calc(100% - 24px);width:auto;height:auto;overflow:hidden;display:inline-flex;align-items:center;padding:5px 11px;border-radius:10px;
+  background:rgba(4,7,10,.62);backdrop-filter:blur(3px);border:1px solid rgba(255,255,255,.08);}
 .ogre-stage .os-tk{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:10.5px;font-weight:700;letter-spacing:.3px;color:#e8f6ee;display:flex;align-items:center;gap:7px;width:100%;}
 .ogre-stage .os-tk .os-dot{flex:none;width:6px;height:6px;border-radius:50%;}
 @keyframes os-tkin{from{opacity:0;transform:translateX(14px);}to{opacity:1;transform:translateX(0);}}
@@ -272,6 +272,12 @@ html body main.shell[data-app] .preset-toolbar{ background:linear-gradient(160de
    Lighter banner stages for Launch / Sniper / OgreAI / Bundle / Positions / PnL — same
    ogre family, each its own accent. Shorter than the swap/volume deep-HUD stages. */
 .ogre-stage.hero{aspect-ratio:16/9;max-height:300px;}
+/* WEB: make the immersive videos big + prominent (so you actually see them on desktop) */
+@media (min-width:760px){
+  .ogre-stage{max-height:580px;}
+  .ogre-stage.hero{aspect-ratio:16/10;max-height:500px;}
+  .ogre-stage .ogre-bg{object-position:center 26%;}
+}
 .ogre-stage.hero .ogre-bg{object-position:center 30%;}
 .ogre-stage.hero .os-tier{color:var(--accent);border:1px solid rgba(255,255,255,.16);}
 .ogre-stage.hero .os-dot{background:var(--accent);box-shadow:0 0 8px var(--accent);}
