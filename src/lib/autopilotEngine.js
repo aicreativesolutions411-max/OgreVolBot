@@ -791,13 +791,14 @@ export function createAutopilotEngine(deps) {
         const ageMs = now() - pos.openedAt;
         // Throttle the log — only the first failure (don't spam every tick).
         if (pos.sellFails === 1) record("warn", `sell ${pos.sym} failing (${reason}): ${e && e.message}`);
-        // "no token balance" on a fresh position is usually the BUY still settling
-        // on-chain — retry until it's readable. But cap the wait at 10s (settles in
-        // <5s normally); past that the buy never delivered tokens, so write it off
-        // and free the slot instead of hogging it (low-churn only has 3 slots).
-        if (noBalance && ageMs < 10_000) return;        // young: buy still settling, retry
-        if (!noBalance && pos.sellFails < 5) return;    // other transient errors: a few retries
-        failedTerminal = true;                          // persistent / no-tokens → write off
+        // "no token balance" on a fresh position is usually the BUY still settling /
+        // the new token account not yet indexed by the RPC — NOT a real loss. Writing
+        // it off at 10s was booking full-size losses (e.g. -0.03) on coins whose tokens
+        // we actually hold, just hadn't indexed yet — one of those wipes ~6-8 small
+        // wins. Give a fresh buy up to 30s to become readable before writing it off.
+        if (noBalance && ageMs < 30_000) return;        // young: buy still settling/indexing, keep retrying
+        if (!noBalance && pos.sellFails < 8) return;    // other transient errors: more retries before giving up
+        failedTerminal = true;                          // persistent / genuinely no tokens → write off + free slot
       }
     }
 
@@ -848,6 +849,16 @@ export function createAutopilotEngine(deps) {
     const idx = state.open.indexOf(pos);
     if (idx >= 0) state.open.splice(idx, 1);
     const totalProceeds = pos.realized || 0;
+    // FAILED ENTRY: the buy never delivered readable tokens (e.g. tx didn't land), so
+    // we never actually held a position. That's an execution failure, NOT a losing
+    // trade — counting it as an L poisoned the W/L, the learning data, and the tape
+    // gauge, and showed a scary full-size "loss" the wallet reconciliation undoes.
+    // Free the slot, note it, and move on without booking it as a trade outcome.
+    if (/-failed$/.test(reason || "") && !pos.countedWin && totalProceeds === 0) {
+      state.recentSells[pos.mint] = now();
+      record("warn", `⚠️ ${pos.sym} entry didn't fill (${reason}) — not a trade, freeing slot`);
+      return;
+    }
     const win = pos.countedWin || totalProceeds > pos.costSol;
     // Win already counted at the moment proceeds passed cost; only a trade that
     // closes WITHOUT ever recovering its entry counts as a loss.
