@@ -7768,7 +7768,7 @@ async function ogreShareCard(kind) {
       lines: [`${vol.toFixed(2)} SOL volume`, `${Number(bot.walletCount || 0)} wallets · ${Number(bot.currentCycle || bot.cycles || 0)} rounds`, "SlimeBot · slimewire.org"] };
   } else return;
   try {
-    const res = await api("/api/web/autopilot/win-card", { method: "POST", body: JSON.stringify(payload) });
+    const res = await api("/api/web/card", { method: "POST", body: JSON.stringify(payload) });
     if (res && res.ok && res.png) ogreCardDownload(`slimewire-${kind}-card.png`, res.png);
   } catch {}
 }

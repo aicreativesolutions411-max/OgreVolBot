@@ -4582,6 +4582,16 @@ async function handleWebApiRequest(request, response, requestUrl) {
       return;
     }
 
+    if (request.method === "POST" && pathname === "/api/web/card") {
+      // Branded share/receipt card for any web user (gold OgreSwap / violet SlimeBot /
+      // green autopilot) — same renderer as the autopilot win-card, reachable from the terminal.
+      const body = await readJsonRequestBody(request);
+      const png = await renderAutopilotPnlCard(body).catch(() => null);
+      if (!png) { sendWebJson(request, response, 500, { ok: false, error: "card render failed" }); return; }
+      sendWebJson(request, response, 200, { ok: true, png: `data:image/png;base64,${png.toString("base64")}` });
+      return;
+    }
+
     if (request.method === "POST" && pathname === "/api/web/volume/plan") {
       const body = await readJsonRequestBody(request);
       const result = await webCreateVolumePlan(auth.userId, body);
