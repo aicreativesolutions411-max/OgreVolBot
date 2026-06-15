@@ -142,13 +142,16 @@ export function autoTune(state, nowMs, marketTape = null) {
   // REALIZED win-rate over recent CLOSED trades (W/L) — catches a flat/chop tape that
   // isn't rug-heavy on peaks but keeps handing us small net losses.
   const res = (state.results || []).slice(-15);
-  const realizedWinRate = res.length >= 8 ? res.filter((r) => r === "W").length / res.length : null;
+  // Arm the brake FAST — after just 5 closed trades — so a ruggy tape's opening burst
+  // (live showed 11 losers in ~3 min before the old 8-trade gate engaged) gets braked
+  // sooner. COLD-recovery re-probes every 4 min, so a false-cold self-corrects.
+  const realizedWinRate = res.length >= 5 ? res.filter((r) => r === "W").length / res.length : null;
   // Net realized PnL over recent closed trades — catches the "40% win-rate but still
   // net RED" case (lots of tiny wins, a few bigger losses + fees) that a win-rate gate
   // alone misses. If we're genuinely losing money over the last several trades, brake.
   const pnls = (state.recentPnl || []).slice(-12);
   const netRecent = pnls.reduce((a, b) => a + b, 0);
-  const realizedBleed = (realizedWinRate !== null && realizedWinRate < 0.30) || (pnls.length >= 8 && netRecent < 0);
+  const realizedBleed = (realizedWinRate !== null && realizedWinRate < 0.35) || (pnls.length >= 5 && netRecent < 0);
   // PROTECT A GREEN SESSION: once up meaningfully, tighten so we don't churn hard-won
   // gains back into a softening tape (works with the bank-the-peak ratchet).
   const sessGain = state.start > 0 ? equity(state) / state.start - 1 : 0;
