@@ -205,6 +205,14 @@ html body main.shell[data-app] .preset-toolbar{border:1px solid rgba(141,255,90,
 html body main.shell[data-app] .preset-toolbar .quick-buy-label{letter-spacing:.4px;}
 /* --- radar bar wrapper spacing (mounted at the top of the terminal feed) --- */
 html body main.shell[data-app] .ogre-radar-wrap{margin:0 0 10px;}
+/* BOLDER pass — make the bar accents unmistakable on mobile + web */
+html body main.shell[data-app] .metrics article{border-color:rgba(141,255,90,.32) !important; box-shadow:0 6px 18px rgba(0,0,0,.32), inset 0 0 16px rgba(39,224,106,.07) !important;}
+html body main.shell[data-app] .metrics article::before{height:3px !important; left:8% !important; right:8% !important; background:linear-gradient(90deg,transparent,#8dff5a 50%,transparent) !important; box-shadow:0 0 10px rgba(141,255,90,.55);}
+html body main.shell[data-app] .live-pair-buckets button[data-active="true"]{box-shadow:0 0 18px rgba(39,224,106,.6), inset 0 0 12px rgba(39,224,106,.28) !important; border-color:rgba(141,255,90,.6) !important;}
+html body main.shell[data-app] .top-sync-strip{border-color:rgba(141,255,90,.24) !important;}
+html body main.shell[data-app] .top-sync-strip::before{height:3px !important; background:linear-gradient(90deg,transparent,#8dff5a,transparent) !important;}
+html body main.shell[data-app] .preset-toolbar{border-color:rgba(141,255,90,.22) !important;}
+html body main.shell[data-app] .nav-side-group-toggle[data-active]{box-shadow:inset 3px 0 0 #8dff5a, 0 0 18px rgba(39,224,106,.3) !important;}
 /* mobile: keep the stat tiles tight + readable so all four fit cleanly on a phone */
 @media (max-width:480px){
   html body main.shell[data-app] .metrics article{padding:8px 9px !important;}
