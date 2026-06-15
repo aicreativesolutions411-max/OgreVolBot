@@ -177,6 +177,16 @@ html body main.shell[data-app] .ovs-flat .ovs-mlabel-field { position: static !i
 html body main.shell[data-app] .ovs-flat .ovs-mlabel:not(.ovs-mlabel-field) { display: none; }
 html body main.shell[data-app] .ovs-flat .ovs-stage::after { display: none; }
 
+/* Slime-ify the app's refresh spinner — a tiny glowing slime blob instead of a plain ring. */
+html body main.shell[data-app] [data-refresh-spinner]{
+  width: 12px !important; height: 12px !important; border: 0 !important; border-radius: 50% !important;
+  background: radial-gradient(circle at 40% 35%, #bff58f, #27e06a 62%, rgba(39,224,106,.15)) !important;
+  box-shadow: 0 0 8px rgba(39,224,106,.6) !important; animation: ogreSpinPulse 1s ease-in-out infinite !important; position: relative;
+}
+html body main.shell[data-app] [data-refresh-spinner]::after{
+  content: ""; position: absolute; inset: -3px; border-radius: 50%; border: 2px solid transparent; border-top-color: #8dff5a; animation: ogreSpinRot .85s linear infinite;
+}
+
 @media (prefers-reduced-motion: reduce){
-  .ogre-stage .os-led,.ogre-stage.swap .os-orb,.ogre-stage.swap .os-shield.avoid,.ogre-stage.volume .ov-orb,.ogre-spin,.ogre-spin::after{animation:none !important;}
+  .ogre-stage .os-led,.ogre-stage.swap .os-orb,.ogre-stage.swap .os-shield.avoid,.ogre-stage.volume .ov-orb,.ogre-spin,.ogre-spin::after,html body main.shell[data-app] [data-refresh-spinner],html body main.shell[data-app] [data-refresh-spinner]::after{animation:none !important;}
 }
