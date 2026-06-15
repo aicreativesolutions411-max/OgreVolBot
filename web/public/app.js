@@ -7715,6 +7715,38 @@ function ogreClipBase() {
   if (k === "volume") return OGRE_VOL_CLIPS;
   return OGRE_HERO_KINDS[k] ? OGRE_HERO_KINDS[k].base : OGRE_SWAP_CLIPS;
 }
+// The primary action on each panel that should kick the ogre into its event clip — so
+// every video UI reacts to what you do, like the autopilot does. (Sniper uses a text
+// match since its action is a per-pick "Snipe" button.)
+const OGRE_HERO_ACTION = {
+  launchCoin: "[data-launch-coin-submit]",
+  ogreAi: "[data-ogre-ai-start]",
+  bundle: "[data-bundle-buy]"
+};
+let ogreActionBound = false;
+function bindOgreActions() {
+  if (ogreActionBound) return;
+  ogreActionBound = true;
+  document.addEventListener("click", (e) => {
+    try {
+      const kind = ogreStage.kind;
+      if (!kind) return;
+      const btn = e.target.closest("button");
+      if (!btn) return;
+      const stage = document.querySelector(`[data-ogre-stage="${kind}"]`);
+      if (!stage) return;
+      if (OGRE_HERO_KINDS[kind]) {
+        const sel = OGRE_HERO_ACTION[kind];
+        const txt = (btn.textContent || "").toLowerCase();
+        if ((sel && btn.closest(sel)) || (kind === "sniper" && /snipe|ape|fire/.test(txt))) ogreHeroFire(kind);
+      } else if (kind === "swap" && btn.closest("[data-swap-use-custom-amount]")) {
+        ogrePlayClip(stage, "buy", true); // optimistic motion; the real result still drives win/banking
+      } else if (kind === "volume" && btn.closest("[data-vbot-start]")) {
+        ogrePlayClip(stage, "running", true);
+      }
+    } catch {}
+  }, true);
+}
 let ogreSoundOn = true; try { ogreSoundOn = localStorage.getItem("ogreStageSound") !== "off"; } catch {}
 const ogreSfxCache = {};
 function ogrePlaySfx(url, vol) {
@@ -7825,6 +7857,7 @@ function attachOgreStage(panel) {
     bg.addEventListener("ended", () => { if (!bg.loop) { ogreStage.eventUntil = 0; ogreStage.clip = ""; ogrePlayClip(stage, ogreAmbientClip(ogreStage.kind), false); } });
   }
   if (!ogreStage.tkTimer) ogreStage.tkTimer = setInterval(ogreTickerTick, 3400);
+  bindOgreActions();
   if (kind === "swap") driveOgreSwapStage(stage);
   else if (kind === "volume") driveOgreVolumeStage(stage);
   else driveOgreHeroStage(stage, kind);
