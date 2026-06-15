@@ -19651,3 +19651,39 @@ html body .swamp-connect-shell .hero-sound-btn {
 }
 html body .swamp-connect-shell .hero-sound-btn:hover { box-shadow: 0 0 24px rgba(39,224,106,0.6); }
 @media (max-width: 760px) { html body .swamp-connect-shell .hero-sound-btn { display: none !important; } }
+
+/* ===== Pump.fun-style coin page: wide banner + overlapping PFP ===== */
+.coin-banner-hero{
+  width:100%;
+  aspect-ratio:3/1;
+  max-height:210px;
+  background-size:cover;
+  background-position:center;
+  background-repeat:no-repeat;
+  border-radius:16px 16px 0 0;
+  border:1px solid rgba(57,255,20,0.28);
+  border-bottom:none;
+  box-shadow:inset 0 -60px 60px -30px rgba(2,7,2,0.92);
+}
+.smart-chart-token-header.has-banner{
+  position:relative;
+  margin-top:-34px;
+  padding-left:8px;
+  align-items:flex-end;
+}
+.smart-chart-token-header.has-banner .live-pair-avatar{
+  width:74px;height:74px;min-width:74px;
+  border-radius:50%;
+  border:3px solid #0a160a;
+  box-shadow:0 0 0 2px rgba(57,255,20,0.6), 0 8px 22px rgba(0,0,0,0.55);
+  background:#0a160a;
+  position:relative;z-index:2;
+}
+.smart-chart-token-header.has-banner .live-pair-avatar img{
+  width:100%;height:100%;border-radius:50%;object-fit:cover;
+}
+.smart-chart-token-header.has-banner .live-pair-avatar span{font-size:1.5rem;}
+@media (max-width:760px){
+  .coin-banner-hero{max-height:150px;border-radius:12px 12px 0 0;}
+  .smart-chart-token-header.has-banner .live-pair-avatar{width:60px;height:60px;min-width:60px;}
+}

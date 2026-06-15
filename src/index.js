@@ -467,6 +467,30 @@ const obsCoins = new Map();  // mint -> { dev, firstMc, maxMc, lastMc, at, seen,
 const walletObs = new Map(); // wallet -> { coins, ran, rugged, peakSum }
 const KOL_WALLETS = new Set(String(process.env.KOL_WALLETS || "").split(",").map((s) => s.trim()).filter(Boolean));
 
+// COIN BANNERS: pump.fun's banner is website/DB-only (can't be set via any create
+// API), so SlimeWire keeps its own mint -> banner map and renders the banner like a
+// pump.fun coin page (wide banner + overlapping pfp) on our own coin pages.
+const COIN_BANNER_FILE = path.join(CONFIG.dataDir, "coin-banners.json");
+const coinBanners = new Map(); // mint -> { bannerUri, symbol, name, at }
+async function loadCoinBanners() {
+  try {
+    const j = await readJson(COIN_BANNER_FILE).catch(() => null);
+    if (j && j.banners) for (const [m, r] of Object.entries(j.banners)) coinBanners.set(m, r);
+  } catch {}
+}
+async function saveCoinBanners() {
+  try { await writeJsonFile(COIN_BANNER_FILE, { banners: Object.fromEntries(coinBanners), savedAt: Date.now() }); } catch {}
+}
+function recordCoinBanner(mint, rec = {}) {
+  const m = String(mint || "").trim();
+  if (!m || !rec.bannerUri) return;
+  coinBanners.set(m, { bannerUri: String(rec.bannerUri), symbol: rec.symbol || "", name: rec.name || "", at: Date.now() });
+  if (coinBanners.size > 20000) {
+    for (const [k] of [...coinBanners.entries()].sort((a, b) => (a[1].at || 0) - (b[1].at || 0)).slice(0, 4000)) coinBanners.delete(k);
+  }
+  void saveCoinBanners();
+}
+
 function devObsBump(dev, ranMult, rugged) {
   if (!dev) return;
   const r = devObs.get(dev) || { coins: 0, ran: 0, rugged: 0, peakSum: 0 };
@@ -623,6 +647,7 @@ function sampleDevObservatory() {
 function startDevObservatory() {
   void loadDevObservatory();
   void loadWalletObservatory();
+  void loadCoinBanners();
   setInterval(sampleDevObservatory, 45_000);
 }
 // Combined dev reputation = our own trades + the market-wide observatory.
@@ -3212,6 +3237,15 @@ async function handleWebApiRequest(request, response, requestUrl) {
     if (request.method === "GET" && pathname === "/api/web/calls") {
       const board = await webBoardCallsForMint(requestUrl.searchParams.get("mint") || "");
       sendCachedWebJson(request, response, 200, { ok: true, ...board }, "public, max-age=20, stale-while-revalidate=120");
+      return;
+    }
+
+    // PUBLIC coin banner: SlimeWire-hosted banner for a mint (pump.fun-style coin
+    // page). Empty when the coin wasn't launched here with a banner.
+    if (request.method === "GET" && pathname === "/api/web/coin-banner") {
+      const bm = String(requestUrl.searchParams.get("mint") || "").trim();
+      const rec = bm ? coinBanners.get(bm) : null;
+      sendCachedWebJson(request, response, 200, { ok: true, mint: bm, bannerUri: rec?.bannerUri || "" }, "public, max-age=60, stale-while-revalidate=300");
       return;
     }
 
@@ -35363,11 +35397,24 @@ async function webLaunchPumpCoin(userId, body = {}) {
         hasImage: Boolean(imageDataUrl),
         provider: result.provider
       });
+      // Persist the banner for this mint so SlimeWire renders a pump.fun-style coin
+      // page (wide banner + overlapping pfp). Best-effort; never affects the launch.
+      if (result?.tokenMint && basePayload.bannerDataUrl) {
+        try {
+          let bannerUri = String(result.bannerUri || "");
+          if (!bannerUri) {
+            const banner = await launchBannerBufferForUpload(basePayload);
+            bannerUri = banner ? await pinBannerToPumpFunIpfs(banner) : "";
+          }
+          if (bannerUri) recordCoinBanner(result.tokenMint, { bannerUri, symbol, name });
+        } catch (e) { console.warn(`[pump-launch] banner record failed: ${e && e.message}`); }
+      }
       return {
         ...result,
         launchAttemptId,
         pumpUrl: pumpFunUrl(result.tokenMint),
         dexUrl: dexScreenerUrl(result.tokenMint),
+        bannerUri: result.bannerUri || (coinBanners.get(result.tokenMint)?.bannerUri || ""),
         message: `Pump launch returned ${shortMint(result.tokenMint)}.`
       };
     } catch (error) {

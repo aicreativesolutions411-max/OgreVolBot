@@ -18406,7 +18406,8 @@ function smartChartHtml() {
       </div>
       <div class="smart-chart-grid smart-chart-clean-grid">
         <article class="terminal-panel smart-chart-main smart-chart-clean-main">
-          <div class="smart-chart-token-header smart-chart-clean-token-header">
+          ${(() => { ensureCoinBanner(mint); const b = coinBannerUrl(mint); return b ? `<div class="coin-banner-hero" style="background-image:url('${b}')" role="img" aria-label="Coin banner"></div>` : ""; })()}
+          <div class="smart-chart-token-header smart-chart-clean-token-header${coinBannerUrl(mint) ? " has-banner" : ""}">
             ${livePairAvatarHtml(token)}
             <div>
               <strong>${escapeHtml(tokenLabel)}</strong>
@@ -18428,6 +18429,26 @@ function smartChartHtml() {
       ${chartCallBoardHtml(mint)}
     </section>
   `;
+}
+
+// --- Coin banner (pump.fun-style coin page). SlimeWire hosts the banner for coins
+// launched here, since pump.fun's banner is website-only. Fetch once per mint, cache.
+function coinBannerUrl(mint) {
+  const m = String(mint || "").trim();
+  return (state.coinBanners && state.coinBanners[m]) || "";
+}
+let coinBannerFetchedFor = "";
+function ensureCoinBanner(mint) {
+  const m = String(mint || "").trim();
+  if (!m || coinBannerFetchedFor === m) return;
+  coinBannerFetchedFor = m;
+  void api(`/api/web/coin-banner?mint=${encodeURIComponent(m)}`).then((data) => {
+    const uri = String(data?.bannerUri || "");
+    if (!uri) return;
+    state.coinBanners = state.coinBanners || {};
+    state.coinBanners[m] = normalizeImageUrl(uri);
+    if (state.activeTab === "smartChart") render({ preserveSmartChartFrame: true });
+  }).catch(() => {});
 }
 
 // --- Token room: the Call Board. Structured calls (not chat) tied to this token,

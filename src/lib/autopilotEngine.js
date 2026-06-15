@@ -91,16 +91,33 @@ export function autoTune(state, nowMs) {
   const goodRate = peaks.filter((p) => p >= 40).length / peaks.length;
   const bigRate = peaks.filter((p) => p >= 100).length / peaks.length;
   const rugRate = rugs.length ? rugs.filter(Boolean).length / rugs.length : 0;
+  // REALIZED win-rate over recent CLOSED trades (W/L). This is the fix for the
+  // "good run then slow bleed" pattern: a flat/chop tape that isn't rug-heavy enough
+  // to read COLD on peaks alone but keeps handing us small net losses. If our actual
+  // closed trades are losing, go conservative regardless of the peak/rug read.
+  const res = (state.results || []).slice(-15);
+  const realizedWinRate = res.length >= 8 ? res.filter((r) => r === "W").length / res.length : null;
+  const realizedBleed = realizedWinRate !== null && realizedWinRate < 0.30;
+  // PROTECT A GREEN SESSION: once we're up meaningfully, tighten so we don't churn
+  // hard-won gains back into a softening tape (works with the bank-the-peak ratchet).
+  const sessGain = state.start > 0 ? equity(state) / state.start - 1 : 0;
   // tape sets selectivity + bet size AND how hard we throttle entries. The cold
   // throttle is the fix for "machine-gunning a dead tape into 100+ fee-bleed
   // losses": when rugs dominate we widen the gap between entries and cap how many
   // positions ride at once, so a runnerless tape can't drain the wallet via churn.
-  if (rugRate > 0.45 && goodRate < 0.12) {
+  if ((rugRate > 0.45 && goodRate < 0.12) || realizedBleed) {
     state.tune = { scoreBonus: 6, sizeMult: 0.7, tape: "COLD", maxOpenCap: 2, entryGapMs: 15000, perCycle: 1 };
-  } else if (goodRate >= 0.3 || bigRate >= 0.15) {
-    state.tune = { scoreBonus: -2, sizeMult: 1.3, tape: "HOT", maxOpenCap: null, entryGapMs: 0, perCycle: 4 };
+  } else if ((goodRate >= 0.3 || bigRate >= 0.15) && !realizedBleed) {
+    // Hot tape — press. But if we're already well up, take size off so the session
+    // banks green instead of round-tripping it.
+    const hot = sessGain >= 0.15;
+    state.tune = { scoreBonus: hot ? 2 : -2, sizeMult: hot ? 1.0 : 1.3, tape: "HOT", maxOpenCap: hot ? 3 : null, entryGapMs: 0, perCycle: hot ? 3 : 4 };
   } else {
-    state.tune = { scoreBonus: 0, sizeMult: 1, tape: "NORMAL", maxOpenCap: null, entryGapMs: 0, perCycle: 3 };
+    // Normal tape: slightly more selective than before (was scoreBonus 0) so marginal
+    // setups in a directionless tape don't nickel-and-dime the bankroll. Tighten
+    // further once green to defend the gains.
+    const green = sessGain >= 0.15;
+    state.tune = { scoreBonus: green ? 4 : 2, sizeMult: green ? 0.85 : 1, tape: "NORMAL", maxOpenCap: green ? 3 : null, entryGapMs: green ? 4000 : 0, perCycle: green ? 2 : 3 };
   }
   return state.tune;
 }
