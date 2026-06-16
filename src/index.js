@@ -143,6 +143,13 @@ const tgChannel = createTelegramChannelBridge({
   log: (message) => console.warn(`[tg-channel] ${message}`)
 });
 const connection = new Connection(CONFIG.rpcUrl, "confirmed");
+// Optional cheaper READ provider (Alchemy/Chainstack). When configured, high-volume
+// read calls route here (via rpcRead) with automatic fallback to Helius; writes, DAS,
+// and webhooks always use `connection` (Helius). Unset => readConnection IS connection.
+const readConnection = CONFIG.readRpcUrl ? new Connection(CONFIG.readRpcUrl, "confirmed") : connection;
+if (readConnection !== connection) {
+  console.info(`[rpc] reads -> ${CONFIG.readRpcProviderName} (${CONFIG.readRpcHost}) with Helius fallback; writes/DAS/webhooks -> ${CONFIG.rpcProviderName} (${CONFIG.rpcUrlHost})`);
+}
 // One shared PumpPortal websocket: sub-second token creations + live trade
 // ticks. Feeds the fresh live-pairs bucket, Ogre A.I. fresh mode, and chart
 // trade ticks without any polling. Free tier, same provider we launch through.
@@ -1413,6 +1420,7 @@ function loadConfig() {
   ).replace(/\/$/, "");
   const pumpLaunchPumpFunIpfsUrl = (process.env.PUMP_LAUNCH_PUMPFUN_IPFS_URL || "https://pump.fun/api/ipfs").trim();
   const rpcConfig = resolveSolanaRpcConfig();
+  const readRpcConfig = resolveReadRpcConfig();
   const workerSecret = process.env.WORKER_SECRET || "";
   const runWorker = parseBoolean(process.env.RUN_WORKER || (serviceRole === "worker" ? "true" : "false"));
   const workerTickEnabled = parseOptionalBoolean(
@@ -1729,6 +1737,10 @@ function loadConfig() {
     rpcUrlHost: rpcConfig.host,
     rpcEnvSource: rpcConfig.envSource,
     publicRpcFallbackAllowed: rpcConfig.publicFallbackAllowed,
+    readRpcUrl: readRpcConfig?.url || "",
+    readRpcHost: readRpcConfig?.host || "",
+    readRpcProviderName: readRpcConfig?.providerName || "",
+    readRpcEnvSource: readRpcConfig?.envSource || "",
     heliusWsUrl,
     heliusApiKey: String(process.env.HELIUS_API_KEY || "").trim() || (String(rpcConfig.url || "").match(/api-key=([\w-]+)/)?.[1] || ""),
     heliusWebhookId: String(process.env.HELIUS_WEBHOOK_ID || "").trim(),
@@ -7297,6 +7309,9 @@ function handleInternalWorkerHealth(request, response) {
     activeCacheLocks: activeCacheLockSnapshot(),
     rpcProviderName: CONFIG.rpcProviderName,
     rpcUrlHost: CONFIG.rpcUrlHost,
+    readRpcProviderName: CONFIG.readRpcProviderName || CONFIG.rpcProviderName,
+    readRpcHost: CONFIG.readRpcHost || CONFIG.rpcUrlHost,
+    readRpcSplitActive: Boolean(CONFIG.readRpcUrl),
     rpcRpsLimit: CONFIG.rpcRpsLimit,
     dasRpsLimit: CONFIG.dasRpsLimit,
     rpcStats: rpcStatsSnapshot(),
@@ -7647,6 +7662,35 @@ function resolveSolanaRpcConfig() {
     envSource,
     publicFallbackAllowed: allowPublicFallback
   };
+}
+
+// OPTIONAL cheaper READ provider (Alchemy / Chainstack / any standard Solana RPC).
+// When set, high-volume READ calls (balances, token accounts, signature history) are
+// routed here with AUTOMATIC fallback to the primary Helius connection on any error.
+// Writes (sendRawTransaction), DAS metadata, and webhooks always stay on Helius.
+// Unset => reads use Helius exactly as before (zero behavior change).
+function resolveReadRpcConfig() {
+  const candidates = [
+    ["READ_RPC_URL", process.env.READ_RPC_URL],
+    ["ALCHEMY_RPC_URL", process.env.ALCHEMY_RPC_URL],
+    ["CHAINSTACK_RPC_URL", process.env.CHAINSTACK_RPC_URL],
+    ["SECONDARY_RPC_URL", process.env.SECONDARY_RPC_URL]
+  ];
+  const match = candidates.find(([, value]) => String(value || "").trim());
+  if (!match) return null;
+  const url = String(match[1] || "").trim();
+  const host = safeUrlHost(url);
+  if (!url || !host) {
+    throw new Error(`${match[0]} is set but is not a valid URL.`);
+  }
+  const providerName = /alchemy/i.test(host)
+    ? "alchemy"
+    : /chainstack|p2pify/i.test(host)
+    ? "chainstack"
+    : host.includes("helius")
+    ? "helius"
+    : "custom";
+  return { url, host, providerName, envSource: match[0] };
 }
 
 function normalizeMetadataProvider(value) {
@@ -15888,7 +15932,7 @@ async function getSolBalanceCached(owner, options = {}) {
 
   const fetchPromise = (async () => {
     try {
-      const balance = await rpcWithRetry("get wallet SOL balance", () => connection.getBalance(ownerKey, "confirmed"), CONFIG.rpcRetries, {
+      const balance = await rpcRead("get wallet SOL balance", (c) => c.getBalance(ownerKey, "confirmed"), {
         priority: Boolean(options.priority)
       });
       setTimedCache(solBalanceCache, cacheKey, balance);
@@ -15917,7 +15961,7 @@ async function primeSolBalancesBatch(owners = []) {
   for (let start = 0; start < keys.length; start += 100) {
     const chunk = keys.slice(start, start + 100);
     try {
-      const infos = await rpcWithRetry("batch wallet SOL balances", () => connection.getMultipleAccountsInfo(chunk, "confirmed"), CONFIG.rpcRetries);
+      const infos = await rpcRead("batch wallet SOL balances", (c) => c.getMultipleAccountsInfo(chunk, "confirmed"));
       chunk.forEach((key, index) => {
         const lamports = Number(infos?.[index]?.lamports ?? 0);
         setTimedCache(solBalanceCache, key.toBase58(), lamports);
@@ -15937,12 +15981,12 @@ async function getTokenBalanceForMint(owner, mint, options = {}) {
   let accounts = [];
 
   if (tokenProgramId.equals(TOKEN_2022_PROGRAM_ID)) {
-    const response = await rpcWithRetry("get Token-2022 accounts for selected mint", () => connection.getParsedTokenAccountsByOwner(ownerKey, { programId: TOKEN_2022_PROGRAM_ID }, "confirmed"), CONFIG.rpcRetries, {
+    const response = await rpcRead("get Token-2022 accounts for selected mint", (c) => c.getParsedTokenAccountsByOwner(ownerKey, { programId: TOKEN_2022_PROGRAM_ID }, "confirmed"), {
       priority: Boolean(options.priority)
     });
     accounts = parseTokenAccountResponse(response, TOKEN_2022_PROGRAM_ID).filter((account) => account.mint === mintKey.toBase58());
   } else {
-    const response = await rpcWithRetry("get token accounts for selected mint", () => connection.getParsedTokenAccountsByOwner(ownerKey, { mint: mintKey }, "confirmed"), CONFIG.rpcRetries, {
+    const response = await rpcRead("get token accounts for selected mint", (c) => c.getParsedTokenAccountsByOwner(ownerKey, { mint: mintKey }, "confirmed"), {
       priority: Boolean(options.priority)
     });
     accounts = parseTokenAccountResponse(response, tokenProgramId).filter((account) => account.mint === mintKey.toBase58());
@@ -16048,7 +16092,7 @@ async function getOwnedTokenAccountsWithWarnings(owner, options = {}) {
 
   await Promise.all(lookups.map(async (lookup) => {
     try {
-      const response = await rpcWithRetry(`get ${lookup.label} token accounts`, () => connection.getParsedTokenAccountsByOwner(ownerKey, { programId: lookup.programId }, "confirmed"), CONFIG.rpcRetries, {
+      const response = await rpcRead(`get ${lookup.label} token accounts`, (c) => c.getParsedTokenAccountsByOwner(ownerKey, { programId: lookup.programId }, "confirmed"), {
         priority: Boolean(options.priority)
       });
       successes += 1;
@@ -27976,15 +28020,15 @@ async function inferDevCandidateFromMintSource(mint = "", row = null, options = 
   if (!CONFIG.devInfoSourceHydrationEnabled || !solanaPublicKeyLike(cleanMint)) return null;
   try {
     const mintKey = new PublicKey(cleanMint);
-    const signatures = await rpcWithRetry("dev info mint signatures", () => connection.getSignaturesForAddress(mintKey, {
+    const signatures = await rpcRead("dev info mint signatures", (c) => c.getSignaturesForAddress(mintKey, {
       limit: Math.min(4, CONFIG.devInfoSourceSignatureLimit)
-    }, "confirmed"), 1);
+    }, "confirmed"), { retries: 1 });
     const oldest = Array.isArray(signatures) && signatures.length ? signatures[signatures.length - 1] : null;
     if (!oldest?.signature) return null;
-    const tx = await rpcWithRetry("dev info mint first transaction", () => connection.getParsedTransaction(oldest.signature, {
+    const tx = await rpcRead("dev info mint first transaction", (c) => c.getParsedTransaction(oldest.signature, {
       commitment: "confirmed",
       maxSupportedTransactionVersion: 0
-    }), 1);
+    }), { retries: 1 });
     const keys = tx?.transaction?.message?.accountKeys || [];
     const signer = keys
       .map((key) => ({
@@ -28108,17 +28152,17 @@ async function hydrateDevInfoFromSourceData(mint = "", row = null, options = {})
       const walletKey = new PublicKey(wallet);
       const signatureLimit = Math.max(1, Math.min(CONFIG.devInfoSourceSignatureLimit, Number(options.signatureLimit || CONFIG.devInfoSourceSignatureLimit)));
       const txLimit = Math.max(1, Math.min(CONFIG.devInfoSourceTransactionLimit, Number(options.transactionLimit || CONFIG.devInfoSourceTransactionLimit)));
-      const signatures = await rpcWithRetry("dev info wallet signatures", () => connection.getSignaturesForAddress(walletKey, {
+      const signatures = await rpcRead("dev info wallet signatures", (c) => c.getSignaturesForAddress(walletKey, {
         limit: signatureLimit
-      }, "confirmed"), 1);
+      }, "confirmed"), { retries: 1 });
       signaturesScanned = Array.isArray(signatures) ? signatures.length : 0;
       const recent = (Array.isArray(signatures) ? signatures : []).slice(0, txLimit);
       const parsed = await runWithConcurrency(recent, 2, async (item) => {
         if (!item?.signature) return null;
-        return rpcWithRetry("dev info wallet transaction", () => connection.getParsedTransaction(item.signature, {
+        return rpcRead("dev info wallet transaction", (c) => c.getParsedTransaction(item.signature, {
           commitment: "confirmed",
           maxSupportedTransactionVersion: 0
-        }), 1).catch(() => null);
+        }), { retries: 1 }).catch(() => null);
       });
       for (let index = 0; index < parsed.length; index += 1) {
         const tx = parsed[index];
@@ -41986,6 +42030,24 @@ function looksLikeBackupDocument(filename, text) {
     || sample.includes("\"wallets\"")
     || sample.includes("wallet-backup")
     || sample.includes("encrypted");
+}
+
+// Route a READ through the optional cheaper provider (Alchemy/Chainstack) with the
+// same retry/limiter behavior, then AUTOMATICALLY fall back to the primary Helius
+// connection if the read provider errors out. `opFactory` takes a Connection so the
+// same closure can run against either provider. When no read provider is configured
+// (readConnection === connection) this is exactly rpcWithRetry on Helius — no change.
+async function rpcRead(label, opFactory, options = {}) {
+  if (readConnection === connection) {
+    return rpcWithRetry(label, () => opFactory(connection), options.retries ?? CONFIG.rpcRetries, options);
+  }
+  try {
+    return await rpcWithRetry(label, () => opFactory(readConnection), options.retries ?? CONFIG.rpcRetries, options);
+  } catch (error) {
+    rpcStats.readFallbackCount = (rpcStats.readFallbackCount || 0) + 1;
+    console.warn(`${label}: read provider failed (${friendlyError(error)}); falling back to Helius.`);
+    return rpcWithRetry(label, () => opFactory(connection), options.retries ?? CONFIG.rpcRetries, options);
+  }
 }
 
 async function rpcWithRetry(label, operation, retries = CONFIG.rpcRetries, options = {}) {
