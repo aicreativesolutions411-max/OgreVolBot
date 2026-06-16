@@ -1200,15 +1200,24 @@ export function createAutopilotEngine(deps) {
     // entries below (the edge that still works in chop) and keep managing open exits.
     const recentP = (state.recentPnl || []).slice(-8);
     const recentNet = recentP.reduce((a, b) => a + b, 0);
-    // Count trailing consecutive losers — the FAST trip so a burst can't bleed 8 trades
-    // before the guard reacts (the old "5+ recent & net-negative" tripped too late).
+    // Count trailing consecutive losers — the FAST trip so a burst can't bleed 8 trades.
     let lossStreak = 0;
     for (let i = recentP.length - 1; i >= 0; i--) { if (recentP[i] < 0) lossStreak++; else break; }
-    const bleeding = lossStreak >= 3 || (recentP.length >= 5 && recentNet < 0);
-    if ((lossStreak >= 3 || tune.tape === "COLD") && bleeding && (!state.chopPauseUntil || nowMs > state.chopPauseUntil)) {
+    // NET-DRAWDOWN trip (tape-agnostic): catches the SCATTERED chop the streak-trip misses —
+    // a win sprinkled between losers keeps resetting the streak while the session quietly
+    // bleeds (e.g. +4% peak → -2.6%). If the last several closes net materially negative, OR
+    // we've given back a real chunk from the session peak, pause regardless of tape.
+    const netBleed = recentP.length >= 5 && recentNet < -(state.start * 0.02);
+    const peakGiveback = (state.peakTotal || state.start) > state.start &&
+      (equity(state) + (state.secured || 0)) <= (state.peakTotal || state.start) - state.start * 0.05;
+    const trip = lossStreak >= 3 || netBleed || (tune.tape === "COLD" && recentP.length >= 5 && recentNet < 0) || (peakGiveback && recentNet < 0);
+    if (trip && (!state.chopPauseUntil || nowMs > state.chopPauseUntil)) {
       state.chopPauseUntil = nowMs + 240_000;
-      const why = lossStreak >= 3 ? `${lossStreak} losses in a row` : "COLD + bleeding";
-      record("info", `🧊 Chop guard: ${why} (${round(recentNet, 4)} SOL last ${recentP.length}) — pausing fresh entries ~4m. Smart-money copies + exits stay live.`);
+      const why = lossStreak >= 3 ? `${lossStreak} losses in a row`
+        : netBleed ? `net ${round(recentNet, 4)} SOL over last ${recentP.length}`
+        : peakGiveback ? "gave back from session peak"
+        : "COLD + bleeding";
+      record("info", `🧊 Chop guard: ${why} — pausing fresh entries ~4m to stop the bleed. Smart-money copies + exits stay live.`);
     }
     if (tune.tape === "HOT") state.chopPauseUntil = 0; // tape warmed → resume immediately
     const chopPaused = Boolean(state.chopPauseUntil && nowMs < state.chopPauseUntil);
