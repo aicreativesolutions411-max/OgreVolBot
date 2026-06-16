@@ -704,3 +704,60 @@ test("engine: sweepNow banks profit on demand and keeps the session running", as
   assert.equal(engine.status().running, true, "session keeps running after a manual bank");
   await engine.stop("test"); // clear the interval loops so node --test can exit
 });
+
+// --- Per-mode winner shaping: degen fix + conviction caps + per-mode loss budget --------------
+test("aggParams: degen no longer loosens the entry bar (the rug magnet is gone)", () => {
+  const degen = aggParams(baseState({ mode: "degen" }));
+  const normal = aggParams(baseState({ mode: "normal" }));
+  assert.ok(degen.minScore >= 58, "degen still respects the universal fs floor");
+  assert.ok(degen.minScore >= normal.minScore - 1e-9, "degen is no longer looser than normal");
+});
+
+test("aggParams: per-mode conviction caps concentrate degen into proven setups", () => {
+  const degen = aggParams(baseState({ mode: "degen" }));
+  const chill = aggParams(baseState({ mode: "chill" }));
+  const normal = aggParams(baseState({ mode: "normal" }));
+  assert.equal(degen.unprovenConvCap, 0.6);
+  assert.equal(degen.provenConvCap, 1.6);
+  assert.equal(chill.provenConvCap, 1.15);
+  assert.equal(normal.unprovenConvCap, 0.7);
+});
+
+test("convictionMult: honors per-mode caps (degen unproven 0.6, chill proven 1.15)", () => {
+  const row = { buys5m: 8, sells5m: 1, volume5m: 80, pairAgeSeconds: 40, marketCap: 9000 };
+  const proven = { runners: 3, rugs: 0 };
+  assert.ok(convictionMult(row, null, null, null, { unprovenCap: 0.6, provenCap: 1.6 }) <= 0.6 + 1e-9, "degen caps unproven at 0.6");
+  assert.ok(convictionMult(row, proven, null, null, { unprovenCap: 0.6, provenCap: 1.6 }) > 0.6, "proven sizes above the unproven cap");
+  assert.ok(convictionMult(row, proven, { kol: true, winners: 3 }, null, { unprovenCap: 0.7, provenCap: 1.15 }) <= 1.15 + 1e-9, "chill never oversizes past 1.15");
+});
+
+test("engine: per-mode session loss cap (degen 15%, chill 12%, normal 20%)", async () => {
+  let t = 0;
+  const mk = () => createAutopilotEngine({ getFreshFeed: async () => [], getPairLite: async () => null, buyToken: async () => ({ ok: true }), sellPercent: async () => ({ ok: true }), now: () => t, persist: async () => {} });
+  for (const [mode, cap] of [["degen", 0.15], ["chill", 0.12], ["normal", 0.20]]) {
+    const e = mk();
+    await e.start({ solBudget: 1, minutes: 60, live: false, mode });
+    assert.ok(Math.abs(e._state().lossCapFrac - cap) < 1e-9, `${mode} loss cap ${cap}`);
+    await e.stop("test");
+  }
+});
+
+test("aggParams: chill is capital-preservation — banks hard with a low moon (not the 500% ladder)", () => {
+  const chill = aggParams(baseState({ mode: "chill" }));
+  assert.ok(chill.tp1Pct >= 75, "chill banks the bulk at the first pop");
+  assert.ok(chill.moonTarget <= 350, "chill rides only a modest tail");
+  const normal = aggParams(baseState({ mode: "normal" }));
+  assert.ok(normal.moonTarget >= 500, "normal still rides the full ladder (distinct from chill)");
+});
+
+test("engine: per-mode per-bet sizing (degen biggest, chill smallest)", async () => {
+  let t = 0;
+  const mk = () => createAutopilotEngine({ getFreshFeed: async () => [], getPairLite: async () => null, buyToken: async () => ({ ok: true }), sellPercent: async () => ({ ok: true }), now: () => t, persist: async () => {} });
+  const cap = {};
+  for (const mode of ["degen", "chill", "normal"]) {
+    const e = mk(); await e.start({ solBudget: 1, minutes: 60, live: false, mode });
+    cap[mode] = e._state().sizeFracCap; await e.stop("test");
+  }
+  assert.ok(cap.degen > cap.normal, "degen concentrates more per bet");
+  assert.ok(cap.chill < cap.normal, "chill preserves capital with smaller bets");
+});

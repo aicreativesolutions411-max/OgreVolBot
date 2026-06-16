@@ -117,3 +117,40 @@ export function computeCalibration(trades, opts = {}) {
 
   return { minScoreBonus, sizeFracCapMult, sample: counted.length, overallWinRate, evPerTrade: ev, byFs, byMc, bestMcBand, notes };
 }
+
+// PER-MODE calibration — the "every mode a winner" enforcer. Each mode's trades are stamped
+// (rec.mode), so we compute a separate bias per mode: a mode that's been bleeding auto-tightens
+// (higher bar / smaller size) until it's green, independently of the others. Same safety
+// contract (never looser; neutral until MIN_SAMPLE per mode). Returns { [mode]: calibration }.
+export function computeCalibrationByMode(trades, opts = {}) {
+  const byMode = {};
+  const modes = new Set();
+  for (const t of trades || []) { if (t && t.mode) modes.add(String(t.mode)); }
+  for (const m of modes) {
+    byMode[m] = computeCalibration((trades || []).filter((t) => t && String(t.mode) === m), opts);
+  }
+  return byMode;
+}
+
+// Per-mode scorecard for the owner /stats — proves (or disproves) each mode is a winner.
+// { [mode]: { trades, wins, winRate, ev, avgPeak, rugRate } }.
+export function modeScorecard(trades) {
+  const m = {};
+  for (const t of trades || []) {
+    if (!t || !t.mode || !isCounted(t)) continue;
+    const k = String(t.mode);
+    const b = m[k] || { trades: 0, wins: 0, rugs: 0, pnl: 0, peakSum: 0 };
+    b.trades += 1; if (t.win) b.wins += 1; if (t.rugged) b.rugs += 1;
+    b.pnl += num(t.pnl); b.peakSum += num(t.peakPct);
+    m[k] = b;
+  }
+  for (const k of Object.keys(m)) {
+    const b = m[k];
+    b.winRate = Math.round((b.wins / b.trades) * 100);
+    b.ev = Math.round((b.pnl / b.trades) * 100000) / 100000;
+    b.avgPeak = Math.round(b.peakSum / b.trades);
+    b.rugRate = Math.round((b.rugs / b.trades) * 100);
+    delete b.pnl; delete b.peakSum; delete b.rugs;
+  }
+  return m;
+}

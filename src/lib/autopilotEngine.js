@@ -73,8 +73,11 @@ export function aggParams(state) {
   if (grind) sl = 8;
 
   let minScore = regime === "HOT" ? 34 : regime === "COLD" ? 48 : 40;
-  if (mode === "degen") minScore -= 6;
-  else if (mode === "chill") minScore += 8;
+  // degen does NOT loosen the entry bar — a lower bar just apes more rugs (the live data is
+  // unambiguous: instant-rugs cluster below the fs floor). degen's aggression comes from BIGGER
+  // SIZE ON PROVEN setups + a longer ride (conviction caps + moonTarget below), never a weaker
+  // gate. chill is the pickiest; grind gates on its own grindScore scale.
+  if (mode === "chill") minScore += 8;
   else if (grind) minScore += 6;
   minScore += state.minScoreBonus || 0; // low-churn raises the bar
   // Runner-SAFE hard floor: log analysis showed the catastrophic instant-rugs
@@ -138,6 +141,11 @@ export function aggParams(state) {
   let tp1Pct = 55, spikePct = 75, moonTarget = 500, tp2Lvl = tp2, tp2Pct = 50, tp3Lvl = 200, tp3Pct = 50;
   if (steady) {
     tp1Pct = 80; spikePct = 85; moonTarget = 400;
+  } else if (mode === "chill") {
+    // CAPITAL PRESERVATION exit: lock the bulk at the first pop, free-roll a small tail to a
+    // modest moon — lowest variance, matches chill's "tiny green, almost never red" thesis
+    // (the old chill rode the full 500% ladder, which fought its own purpose).
+    tp1Pct = 78; spikePct = 85; moonTarget = 300; tp2Pct = 55; tp3Pct = 60;
   } else if (blend) {
     // sell 25% of the ORIGINAL at each rung: 25% @ first pop, then 33% of the 75%
     // remainder @ +100%, then 50% of the 50% remainder @ +200%, ride the last 25%.
@@ -161,7 +169,17 @@ export function aggParams(state) {
   const bankHard = steady || tape === "COLD" || (blend && tape !== "HOT");
   if (bankHard && !steady) { tp1Pct = Math.max(tp1Pct, 85); spikePct = Math.max(spikePct, 85); moonTarget = Math.min(moonTarget, 400); }
 
-  return { regime, wr, baseFrac, streakMult, regimeMult, tp1, tp2, sl, minScore, mcFloor, mcCeil, minAge, maxAge, liqFrac, minLiqAbs, steady, blend, grind, bankHard, tp1Pct, spikePct, moonTarget, tp2Lvl, tp2Pct, tp3Lvl, tp3Pct };
+  // Per-mode CONVICTION CAPS — how far ONE bet may scale. degen concentrates size into PROVEN
+  // setups (proven dev / smart-money / proven caller) and caps UNPROVEN coins harder, so a weak
+  // coin can never carry a big bet; chill never oversizes at all. (Consumed by convictionMult.)
+  let unprovenConvCap = 0.7, provenConvCap = 1.6;
+  if (mode === "degen") { unprovenConvCap = 0.6; provenConvCap = 1.6; }
+  else if (mode === "chill") { provenConvCap = 1.15; }
+  // degen rides the proven runners it sizes into FURTHER — a higher moon target (unless a COLD
+  // tape already pulled it in via the bankHard clamp above).
+  if (mode === "degen" && !bankHard) moonTarget = Math.max(moonTarget, 700);
+
+  return { regime, wr, baseFrac, streakMult, regimeMult, tp1, tp2, sl, minScore, mcFloor, mcCeil, minAge, maxAge, liqFrac, minLiqAbs, steady, blend, grind, bankHard, tp1Pct, spikePct, moonTarget, tp2Lvl, tp2Pct, tp3Lvl, tp3Pct, unprovenConvCap, provenConvCap };
 }
 
 // SELF-TUNING / market-regime brain: reads the recent runner & rug rate and sets
@@ -331,7 +349,7 @@ export function grindScore(row) {
 // pro — size scales with confluence: proven dev + heavy buy flow + freshness +
 // strong score → bigger; marginal/risky → smaller. Bounded; final size still
 // clamped to the per-trade ceiling by the caller.
-export function convictionMult(row, rep, sm, ci) {
+export function convictionMult(row, rep, sm, ci, caps = {}) {
   let c = 1.0;
   if (rep) {
     if (rep.runners >= 2 && rep.rugs === 0) c += 0.4;        // proven runner-dev
@@ -378,11 +396,15 @@ export function convictionMult(row, rep, sm, ci) {
   // (a tracked KOL, or multiple proven-winner wallets in the early buyers). Lone
   // unproven coins stay capped at 1.0x so one instant-rug can't blow a big bet.
   const proven = (rep && rep.runners >= 1 && rep.rugs === 0) || (sm && (sm.kol || sm.winners >= 2)) || (ci && ci.trusted);
+  // Per-mode caps (default 0.7x unproven / 1.6x proven). degen concentrates into proven setups
+  // (unproven 0.6x); chill never oversizes (proven 1.15x). See aggParams.
+  const provenCap = Number.isFinite(caps.provenCap) ? caps.provenCap : 1.6;
+  const unprovenCap = Number.isFinite(caps.unprovenCap) ? caps.unprovenCap : 0.7;
   // Unproven coins (no proven dev, no smart money) are capped at 0.7x base — even ELITE fs.
   // Live proof: fs75 DATASS/Puffins rugged -70/-94% at full size for -0.065/-0.084. Since
   // score can't predict a rug, the only protection is a smaller bet on every unproven coin;
   // proven-dev / smart-money setups still size up to 1.6x where the edge is real.
-  return Math.max(0.5, Math.min(proven ? 1.6 : 0.7, c));
+  return Math.max(0.5, Math.min(proven ? provenCap : unprovenCap, c));
 }
 
 // Hard entry gates — filter instant-rug bait while keeping genuine fresh
@@ -586,13 +608,13 @@ function freshState(opts) {
     lastOpenAt: 0,
     walletSol: null,
     minTradeSol: opts.minTradeSol || 0.012,
-    // Per-trade HARD ceiling — caps risk per bet so a rug can't gut the wallet.
-    // User-set value wins; otherwise a conservative budget-scaled default (low
-    // enough that even a big "whole wallet" can't auto-size into 0.3 SOL bets).
-    maxTradeSol: opts.maxTradeSol || Math.max(0.05, budget * (lowChurn ? 0.06 : 0.04)),
-    // Fraction-of-cash cap per bet (low-churn concentrates capital). Calibration can only
-    // SHRINK this (×<=1) when history shows the recent book bled.
-    sizeFracCap: (lowChurn ? 0.28 : 0.12) * calSizeMult,
+    // Per-trade HARD ceiling — caps risk per bet so a rug can't gut the wallet. User-set value
+    // wins; otherwise a budget-scaled default that's PER-MODE so each mode's identity is real:
+    // degen bets bigger (6%), chill smaller (3%), everyone else 4%. Low-churn concentrates (6%).
+    maxTradeSol: opts.maxTradeSol || Math.max(0.05, budget * (lowChurn ? 0.06 : opts.mode === "degen" ? 0.06 : opts.mode === "chill" ? 0.03 : 0.04)),
+    // Fraction-of-cash cap per bet. Per-mode: degen concentrates into proven setups (16%), chill
+    // preserves capital (8%), default 12%; low-churn 28%. Calibration can only SHRINK this (×<=1).
+    sizeFracCap: (lowChurn ? 0.28 : opts.mode === "degen" ? 0.16 : opts.mode === "chill" ? 0.08 : 0.12) * calSizeMult,
     // Entry-quality bump: low-churn takes stronger setups (no hard filter — keeps runners).
     // Calibration ADDS to this (raises the bar) when marginal-score setups have been bleeding.
     minScoreBonus: (lowChurn ? 16 : 0) + calScoreBonus,
@@ -606,9 +628,12 @@ function freshState(opts) {
     // Optional session profit-lock: once up >= minGainPct, stop + flatten if
     // equity gives back `giveback` fraction of the peak gain. null = off.
     profitLock: opts.profitLock || null,
-    // Session loss cap: stop + flatten if working equity falls this far below the
-    // stake. Default -20%; clamped 5%-50%.
-    lossCapFrac: Math.max(0.05, Math.min(0.5, Number(opts.lossCapFrac) > 0 ? Number(opts.lossCapFrac) : 0.20)),
+    // Session loss cap: stop + flatten if working equity falls this far below the stake.
+    // Per-mode default when the user doesn't set one: the more AGGRESSIVE the mode, the TIGHTER
+    // the cap — a tight cap is exactly what keeps an aggressive style net-green over a run
+    // (degen -15%, chill -12% capital-preservation, everyone else -20%). User value wins.
+    lossCapFrac: Math.max(0.05, Math.min(0.5, Number(opts.lossCapFrac) > 0 ? Number(opts.lossCapFrac)
+      : (opts.mode === "degen" ? 0.15 : opts.mode === "chill" ? 0.12 : 0.20))),
     // Recent big-win (>=5x) records for the panel's downloadable PnL cards.
     bigWins: [],
     // Optional PROFIT VAULT: sweep realized profit above the working stake to a
@@ -1433,7 +1458,7 @@ export function createAutopilotEngine(deps) {
       const ciRec = callerIntel ? callerIntel(cand.r.tokenMint) : null;
       const ci = ciRec && ciRec.signal ? ciRec.signal : null;
       // Conviction = confluence of proven-dev rep + buy flow + freshness + score + smart money + caller intel.
-      const conv = convictionMult(cand.r, rep, sm, ci);
+      const conv = convictionMult(cand.r, rep, sm, ci, { unprovenCap: P.unprovenConvCap, provenCap: P.provenConvCap });
       if (sm) record("info", `🐳 smart money on ${cand.r.symbol} — ${sm.kol ? "KOL " : ""}${sm.winners || 0} winner-wallet(s) → conv ${conv.toFixed(2)}`);
       if (ci && ci.trusted) record("info", `📣 caller intel on ${cand.r.symbol} — ${ci.reason} (+${ci.convictionDelta.toFixed(2)} conv) → conv ${conv.toFixed(2)}`);
       // ADAPTIVE QUALITY GATE (smarter picks): when the tape is risky, take ONLY the
@@ -1494,7 +1519,7 @@ export function createAutopilotEngine(deps) {
         if (!sm || !(sm.kol || sm.winners >= 1)) continue;
         const ciRec = callerIntel ? callerIntel(r.tokenMint) : null;
         const ci = ciRec && ciRec.signal ? ciRec.signal : null;
-        const conv = convictionMult(r, rep, sm, ci);
+        const conv = convictionMult(r, rep, sm, ci, { unprovenCap: P.unprovenConvCap, provenCap: P.provenConvCap });
         if (conv < 1.0) continue;                                 // must carry real smart-money confluence
         let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv, state.maxTradeSol));
         if (!canOpen(state, size)) break;

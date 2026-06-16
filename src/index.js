@@ -87,7 +87,7 @@ import { createTokenMetadataResolver } from "./lib/tokenMetadataResolver.js";
 import { createPumpPortalStream } from "./lib/pumpPortalStream.js";
 import { computeSlimeShield, slimeShieldHasHardDanger } from "./lib/slimeShield.js";
 import * as callerIntel from "./lib/callerIntel.js";
-import { computeCalibration as computeAutopilotCalibration } from "./lib/selfCalibration.js";
+import { computeCalibration as computeAutopilotCalibration, computeCalibrationByMode, modeScorecard } from "./lib/selfCalibration.js";
 import { r2PutObject, r2Configured } from "./lib/r2.js";
 import {
   appendLimited,
@@ -510,25 +510,39 @@ async function recordAutopilotTrade(rec) {
 // trade history (lib/selfCalibration.js) and cache it to disk. Recomputed periodically on
 // the web tick and read at session start so the bot's selectivity tracks what has paid.
 const AUTOPILOT_CALIBRATION_FILE = path.join(CONFIG.dataDir, "autopilot-calibration.json");
-let autopilotCalibrationCache = null;
+let autopilotCalibrationCache = null;      // global bias
+let autopilotCalibrationByMode = null;     // { [mode]: bias }
 let autopilotCalibrationAt = 0;
 async function recomputeAutopilotCalibration() {
   try {
     const trades = await loadAutopilotTrades();
     const cal = computeAutopilotCalibration(trades);
     autopilotCalibrationCache = cal;
+    autopilotCalibrationByMode = computeCalibrationByMode(trades);
     autopilotCalibrationAt = Date.now();
-    await writeJsonFile(AUTOPILOT_CALIBRATION_FILE, { ...cal, savedAt: autopilotCalibrationAt });
+    await writeJsonFile(AUTOPILOT_CALIBRATION_FILE, { ...cal, byMode: autopilotCalibrationByMode, savedAt: autopilotCalibrationAt });
     return cal;
   } catch { return autopilotCalibrationCache; }
 }
-async function getAutopilotCalibration() {
-  if (autopilotCalibrationCache) return autopilotCalibrationCache;
-  try {
-    const j = await readJson(AUTOPILOT_CALIBRATION_FILE).catch(() => null);
-    if (j && (j.minScoreBonus != null || j.sizeFracCapMult != null)) { autopilotCalibrationCache = j; return j; }
-  } catch {}
-  return recomputeAutopilotCalibration();
+// Returns the bias for a session: the MODE-specific one when that mode has a real sample,
+// otherwise the global bias (then defaults). This is what makes every mode self-correct
+// toward green on its OWN record rather than being dragged by the others.
+async function getAutopilotCalibration(mode) {
+  if (!autopilotCalibrationCache) {
+    try {
+      const j = await readJson(AUTOPILOT_CALIBRATION_FILE).catch(() => null);
+      if (j && (j.minScoreBonus != null || j.sizeFracCapMult != null)) {
+        autopilotCalibrationCache = j;
+        if (j.byMode) autopilotCalibrationByMode = j.byMode;
+      } else {
+        await recomputeAutopilotCalibration();
+      }
+    } catch { await recomputeAutopilotCalibration().catch(() => {}); }
+  }
+  const m = mode && autopilotCalibrationByMode && autopilotCalibrationByMode[mode];
+  // Use the mode bias only once it has enough sample to be non-neutral; else fall back global.
+  if (m && (m.minScoreBonus > 0 || (m.sizeFracCapMult != null && m.sizeFracCapMult < 1))) return m;
+  return autopilotCalibrationCache || { minScoreBonus: 0, sizeFracCapMult: 1 };
 }
 
 // --- OFF-BOX BACKUP to Cloudflare R2 (10GB free, zero egress) -------------------------------
@@ -3421,6 +3435,10 @@ async function handleWebApiRequest(request, response, requestUrl) {
               worstDevs: devs.filter((d) => d.rugs >= 1).sort((a, b) => b.rugs - a.rugs).slice(0, 8),
               // The self-calibration bias currently applied to new sessions (and WHY).
               calibration: await getAutopilotCalibration().catch(() => null),
+              // Per-mode scorecard — is EVERY mode a winner? {trades, winRate, ev, avgPeak, rugRate}.
+              byMode: modeScorecard(trades),
+              // Per-mode self-calibration bias (a bleeding mode auto-tightens on its own record).
+              calibrationByMode: autopilotCalibrationByMode || null,
               // Off-box backup status (R2): configured? + last run.
               backup: { configured: r2Configured(r2Config()), last: lastBackupInfo }
             }
@@ -3558,8 +3576,9 @@ async function handleWebApiRequest(request, response, requestUrl) {
         // Keep-going lock: bank each green and CONTINUE trading (re-baselined; vault sweeps
         // if set) instead of stopping the session when the bank-the-peak ratchet fires.
         const lockGainsContinue = body.lockGainsContinue === true || body.lockGainsContinue === "true" || body.keepGoing === true || body.keepGoing === "true";
-        // Self-calibration bias from accumulated trade history (bounded, never-looser).
-        const calibration = await getAutopilotCalibration().catch(() => null);
+        // Self-calibration bias from accumulated trade history (bounded, never-looser) — the
+        // MODE-specific bias when that mode has a real record, else the global one.
+        const calibration = await getAutopilotCalibration(mode).catch(() => null);
         const status = await autopilotEngine.start({ solBudget: sol, minutes, mode, live: wantLive, walletPubkey, profitLock, churn, vault, maxTradeSol, lossCapFrac, maxOpen, lockGainsContinue, calibration });
         // Bind the running clock to this controller. Trial users (no owner key, no
         // sub) burn metered time; owner/subscribers don't.
@@ -8307,6 +8326,16 @@ async function handleCallback(query, userId) {
     return;
   }
 
+  // /chart timeframe buttons — chartx:<coingeckoId>:<symbol>:<tf>
+  if (query.data?.startsWith("chartx:") && messageId) {
+    const parts = String(query.data).split(":");
+    const tf = parts.pop();
+    const symbol = parts.pop();
+    const id = parts.slice(1).join(":"); // coingecko ids use hyphens, never colons
+    if (id && symbol && CHART_TF_DAYS[tf]) { try { await sendCryptoChart(chatId, id, symbol, tf, messageId); } catch {} }
+    return;
+  }
+
   if (query.data === "pnl_card" || query.data?.startsWith("pnl_card:")) {
     if (!isPrivateChat(chat)) {
       await say(chatId, "Open this bot in DM to create a PnL card.");
@@ -8731,6 +8760,17 @@ async function handleMessage(message, userId) {
     }
   }
 
+  // Cashtag like "$OGRE" → resolve the ticker to its token and post the SAME scan card as a CA
+  // (records the channel call too, via the look handler). Works in groups + DM.
+  const cashtag = /^\$([A-Za-z][A-Za-z0-9._]{1,19})$/.exec(text.trim());
+  if (cashtag) {
+    if (tgCommandOnCooldown(chatId, "cashtag", TG_LOOK_COOLDOWN_MS)) return;
+    const mint = await resolveCashtagToMint(cashtag[1]).catch(() => null);
+    if (mint) await handleTelegramLookCommand(chatId, message, mint);
+    else if (isPrivateChat(message.chat)) await say(chatId, `Couldn't find a token for $${escapeTelegramHtml(cashtag[1])}. Paste its contract address (CA) and I'll pull the card.`);
+    return;
+  }
+
   const lookCommand = parseCommandWithArgument(text, ["look", "scan_ca", "check"]);
   if (lookCommand) {
     await handleTelegramLookCommand(chatId, message, lookCommand.argument);
@@ -9018,18 +9058,35 @@ async function handleMessage(message, userId) {
     return;
   }
 
-  // /chart <CA> — instant chart + quick-buy links (works in groups + DM).
-  const chartCommand = parseCommandWithArgument(text, ["chart"]);
+  // /chart <CA | crypto ticker | stock> — Solana CA → native chart links; crypto ticker (btc,
+  // eth, sol…) → CoinGecko+QuickChart image with timeframe buttons; stock/unknown → TradingView.
+  const chartCommand = parseCommandWithArgument(text, ["chart", "c"]);
   if (chartCommand) {
-    const ca = (String(chartCommand.argument || "").match(/\b[A-HJ-NP-Za-km-z1-9]{32,48}\b/) || [])[0] || "";
-    if (!ca) { await say(chatId, "Usage: /chart <token CA> — I'll send the chart + quick-buy links."); return; }
-    const lx = slimewireTokenLinks(ca);
-    await sayHtml(chatId, `📈 <b>Chart</b> · <code>${escapeTelegramHtml(ca)}</code>`, {
-      inline_keyboard: [
-        [{ text: "🟢 SlimeWire Chart", url: lx.site }, { text: "⚡ Quick Buy", url: lx.siteBuy }],
-        [{ text: "Dexscreener", url: dexScreenerUrl(ca) }, { text: "🔄 Full scan", callback_data: `scan:refresh:${ca}` }]
-      ]
-    });
+    const arg = String(chartCommand.argument || "").trim();
+    if (!arg) { await say(chatId, "Usage: /chart <ticker | CA> — e.g. /chart btc, /chart sol, /chart eth, or /chart <token CA>."); return; }
+    const ca = (arg.match(/\b[A-HJ-NP-Za-km-z1-9]{32,48}\b/) || [])[0] || "";
+    if (ca) {
+      const lx = slimewireTokenLinks(ca);
+      await sayHtml(chatId, `📈 <b>Chart</b> · <code>${escapeTelegramHtml(ca)}</code>`, {
+        inline_keyboard: [
+          [{ text: "🟢 SlimeWire Chart", url: lx.site }, { text: "⚡ Quick Buy", url: lx.siteBuy }],
+          [{ text: "Dexscreener", url: dexScreenerUrl(ca) }, { text: "🔄 Full scan", callback_data: `scan:refresh:${ca}` }]
+        ]
+      });
+      return;
+    }
+    if (tgCommandOnCooldown(chatId, "chart", 3000)) return;
+    const coin = await resolveCoinGeckoId(arg);
+    if (coin) { await sendCryptoChart(chatId, coin.id, coin.symbol, "1D"); return; }
+    // Not a CA, not a known crypto → a TradingView link (stocks / forex / anything).
+    const sym = arg.replace(/[^A-Za-z0-9:.]/g, "").toUpperCase().slice(0, 14);
+    if (sym) {
+      await sayHtml(chatId, `📈 <b>${escapeTelegramHtml(sym)}</b> — open the chart:`, {
+        inline_keyboard: [[{ text: "📈 TradingView", url: `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(sym)}` }, { text: "🔎 Look up", url: `https://www.tradingview.com/symbols/${encodeURIComponent(sym)}/` }]]
+      });
+    } else {
+      await say(chatId, `Couldn't find "${arg}" — try a ticker (btc, eth, sol, tsla) or a token CA. (Heads up: some names like Starlink aren't publicly traded.)`);
+    }
     return;
   }
 
@@ -19793,6 +19850,72 @@ async function resolveGeckoPoolForMint(mint) {
   return pool;
 }
 
+// --- /chart for crypto tickers (btc/eth/...) — CoinGecko data + QuickChart image -------------
+// Both are free + no key + US-accessible (Binance is geo-blocked on US hosts). Solana CAs use
+// the existing native chart; stocks/unknown fall back to a TradingView link. Timeframe buttons
+// re-render the image.
+const CG_TICKER_IDS = { btc: "bitcoin", xbt: "bitcoin", eth: "ethereum", sol: "solana", bnb: "binancecoin", xrp: "ripple", doge: "dogecoin", ada: "cardano", avax: "avalanche-2", link: "chainlink", matic: "matic-network", pol: "matic-network", dot: "polkadot", ltc: "litecoin", trx: "tron", shib: "shiba-inu", pepe: "pepe", wif: "dogwifcoin", bonk: "bonk", ton: "the-open-network", sui: "sui", apt: "aptos", arb: "arbitrum", op: "optimism", near: "near", inj: "injective-protocol", atom: "cosmos", uni: "uniswap", fet: "fetch-ai", rndr: "render-token", tao: "bittensor", hype: "hyperliquid", ena: "ethena" };
+const CHART_TF_DAYS = { "1D": 1, "7D": 7, "1M": 30, "3M": 90, "1Y": 365 };
+const chartCgIdCache = new Map();
+async function resolveCoinGeckoId(input) {
+  const k = String(input || "").trim().toLowerCase().replace(/^\$/, "");
+  if (!k) return null;
+  if (CG_TICKER_IDS[k]) return { id: CG_TICKER_IDS[k], symbol: k.toUpperCase() };
+  if (chartCgIdCache.has(k)) return chartCgIdCache.get(k);
+  try {
+    const d = await fetchJson(`https://api.coingecko.com/api/v3/search?query=${encodeURIComponent(k)}`, { timeoutMs: 5000 }).catch(() => null);
+    const coins = Array.isArray(d?.coins) ? d.coins : [];
+    const coin = coins.find((c) => String(c.symbol || "").toLowerCase() === k) || coins[0];
+    const out = coin ? { id: coin.id, symbol: String(coin.symbol || k).toUpperCase() } : null;
+    chartCgIdCache.set(k, out);
+    return out;
+  } catch { return null; }
+}
+async function fetchCoinGeckoPrices(id, days) {
+  const d = await fetchJson(`https://api.coingecko.com/api/v3/coins/${encodeURIComponent(id)}/market_chart?vs_currency=usd&days=${days}`, { timeoutMs: 6500 }).catch(() => null);
+  const prices = Array.isArray(d?.prices) ? d.prices : [];
+  return prices.map((p) => Number(p?.[1])).filter((n) => Number.isFinite(n));
+}
+function quickChartLineUrl(closes, label) {
+  const step = Math.max(1, Math.floor(closes.length / 64));
+  const pts = closes.filter((_, i) => i % step === 0);
+  const up = pts.length >= 2 && pts[pts.length - 1] >= pts[0];
+  const color = up ? "rgb(57,255,20)" : "rgb(255,77,77)";
+  const fillC = up ? "rgba(57,255,20,0.14)" : "rgba(255,77,77,0.14)";
+  const cfg = {
+    type: "line",
+    data: { labels: pts.map(() => ""), datasets: [{ data: pts, borderColor: color, backgroundColor: fillC, fill: true, pointRadius: 0, borderWidth: 2, tension: 0.25 }] },
+    options: { plugins: { legend: { display: false }, title: { display: true, text: label, color: "#cfeac0", font: { size: 16 } } }, scales: { x: { display: false }, y: { position: "right", ticks: { color: "#8aa680" }, grid: { color: "rgba(255,255,255,0.05)" } } } }
+  };
+  return `https://quickchart.io/chart?bkg=%230b140c&w=760&h=420&c=${encodeURIComponent(JSON.stringify(cfg))}`;
+}
+function chartTickerKeyboard(id, symbol, activeTf) {
+  const tfRow = Object.keys(CHART_TF_DAYS).map((tf) => ({ text: tf === activeTf ? `· ${tf} ·` : tf, callback_data: `chartx:${id}:${symbol}:${tf}` }));
+  return { inline_keyboard: [tfRow, [{ text: "📈 TradingView", url: `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(symbol)}USD` }]] };
+}
+async function sendCryptoChart(chatId, id, symbol, tf, messageId = null) {
+  const days = CHART_TF_DAYS[tf] || 1;
+  const closes = await fetchCoinGeckoPrices(id, days);
+  if (!closes.length) {
+    if (!messageId) await say(chatId, `Couldn't pull ${symbol} price data right now — try again in a moment.`);
+    return false;
+  }
+  const last = closes[closes.length - 1];
+  const first = closes[0];
+  const pct = first > 0 ? ((last / first - 1) * 100) : 0;
+  const label = `${symbol}/USD  $${last >= 1 ? last.toLocaleString("en-US", { maximumFractionDigits: 2 }) : last.toPrecision(3)}  ${pct >= 0 ? "+" : ""}${pct.toFixed(1)}% (${tf})`;
+  const img = quickChartLineUrl(closes, label);
+  const kb = chartTickerKeyboard(id, symbol, tf);
+  try {
+    if (messageId) {
+      await telegram("editMessageMedia", { chat_id: chatId, message_id: messageId, media: { type: "photo", media: img, caption: label }, reply_markup: kb });
+    } else {
+      await telegram("sendPhoto", { chat_id: chatId, photo: img, caption: label, reply_markup: kb });
+    }
+    return true;
+  } catch { if (!messageId) await say(chatId, `${label}\nChart: https://www.tradingview.com/chart/?symbol=${symbol}USD`); return false; }
+}
+
 async function fetchGeckoOhlcv(mint, tfKey) {
   const tf = OHLCV_TIMEFRAMES[tfKey] || OHLCV_TIMEFRAMES["1m"];
   const pool = await resolveGeckoPoolForMint(mint);
@@ -22539,13 +22662,16 @@ async function sendTradeResult(chatId, text, withActions = false) {
   });
 }
 
-async function say(chatId, text) {
+async function say(chatId, text, options = {}) {
   const chunks = chunkText(text, 3900);
   for (const chunk of chunks) {
+    // Unfurl a real tweet link into the full X post (media-rich via fxtwitter); keep previews
+    // off otherwise (clean replies).
+    const showPreview = options.preview === true || hasTweetPost(chunk);
     await telegram("sendMessage", {
       chat_id: chatId,
-      text: chunk,
-      disable_web_page_preview: true
+      text: hasTweetPost(chunk) ? embedTweetLinks(chunk) : chunk,
+      disable_web_page_preview: !showPreview
     });
   }
 }
@@ -23368,12 +23494,44 @@ function slimewireTokenLinks(tokenMint) {
 }
 
 // HTML sender for rich group/channel replies: clickable pair names, tap-to-copy CAs.
-async function sayHtml(chatId, text, replyMarkup = null) {
+// A specific tweet link (x.com / twitter.com /<user>/status/<id>) — vs a search/intent/profile
+// URL. Only a real post should unfurl into the embedded tweet; everything else stays clean.
+const TWEET_LINK_RE = /https?:\/\/(?:www\.)?(?:x|twitter|fxtwitter|vxtwitter|fixupx)\.com\/([A-Za-z0-9_]+)\/status\/(\d+)/i;
+function hasTweetPost(text) { return TWEET_LINK_RE.test(String(text || "")); }
+// Twitter blocks Telegram's link-preview crawler, so a raw x.com link unfurls with NO media.
+// fxtwitter mirrors the post with proper OG tags, so Telegram shows the full post — image/
+// video + text — inline. Rewrite any tweet link in outgoing text to its fxtwitter mirror so
+// the media renders; the post still links back to X when tapped.
+function embedTweetLinks(text) {
+  return String(text || "").replace(/https?:\/\/(?:www\.)?(?:x|twitter|vxtwitter|fixupx)\.com\/([A-Za-z0-9_]+)\/status\/(\d+)/gi, "https://fxtwitter.com/$1/status/$2");
+}
+function parseTweetUrl(url) {
+  const m = String(url || "").match(TWEET_LINK_RE);
+  if (!m) return null;
+  return { user: m[1], id: m[2], original: `https://x.com/${m[1]}/status/${m[2]}`, embed: `https://fxtwitter.com/${m[1]}/status/${m[2]}` };
+}
+// Post an X tweet INTO chat with its image/video + text (via the fxtwitter embed) plus a
+// "See full post on X" button to the original. Use this anywhere the bot shares a tweet.
+async function postXPost(chatId, tweetUrl, prefix = "") {
+  const t = parseTweetUrl(tweetUrl);
+  if (!t) return false;
+  const text = `${prefix ? escapeTelegramHtml(prefix) + "\n" : ""}<a href="${t.embed}">𝕏 post →</a>`;
+  await telegram("sendMessage", {
+    chat_id: chatId, text, parse_mode: "HTML", disable_web_page_preview: false,
+    reply_markup: { inline_keyboard: [[{ text: "See full post on X →", url: t.original }]] }
+  });
+  return true;
+}
+async function sayHtml(chatId, text, replyMarkup = null, options = {}) {
+  // Show the X post: if the message contains a real tweet link (or the caller forces it),
+  // let Telegram unfurl it. Cards/lists (which only carry x.com/search/intent links) keep
+  // previews off so they stay clean.
+  const showPreview = options.preview === true || hasTweetPost(text);
   await telegram("sendMessage", {
     chat_id: chatId,
-    text,
+    text: hasTweetPost(text) ? embedTweetLinks(text) : text, // media-rich tweet embed
     parse_mode: "HTML",
-    disable_web_page_preview: true,
+    disable_web_page_preview: !showPreview,
     reply_markup: replyMarkup || undefined
   });
 }
@@ -23496,6 +23654,27 @@ function parseTokenAth(raw, supply) {
     let at = Number(d.timestamp ?? d.time ?? d.t ?? d.date) || 0;
     if (at > 0 && at < 1e12) at *= 1000; // seconds → ms
     return { mc, at };
+  } catch { return null; }
+}
+
+// Resolve a cashtag ("$OGRE") to its token mint so a ticker posts the SAME scan card as a CA.
+// DexScreener symbol search → the highest-liquidity Solana pair whose base symbol matches.
+const cashtagMintCache = new Map();
+async function resolveCashtagToMint(symbol) {
+  const q = String(symbol || "").replace(/^\$/, "").trim();
+  if (q.length < 2) return null;
+  const key = q.toLowerCase();
+  const cached = cashtagMintCache.get(key);
+  if (cached && Date.now() - cached.at < 60_000) return cached.mint;
+  try {
+    const d = await fetchJson(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(q)}`, { timeoutMs: 6000 }).catch(() => null);
+    const pairs = Array.isArray(d?.pairs) ? d.pairs : [];
+    const sol = pairs.filter((p) => String(p.chainId) === "solana");
+    const exact = sol.filter((p) => String(p.baseToken?.symbol || "").toLowerCase() === key);
+    const pick = (exact.length ? exact : sol).sort((a, b) => (Number(b.liquidity?.usd) || 0) - (Number(a.liquidity?.usd) || 0))[0];
+    const mint = pick?.baseToken?.address || null;
+    cashtagMintCache.set(key, { at: Date.now(), mint });
+    return mint;
   } catch { return null; }
 }
 
@@ -23758,8 +23937,12 @@ async function handleTelegramLookCommand(chatId, message, argument) {
   }
   // Picture at the top: token image from Dexscreener, falling back to pump.fun metadata.
   // Caption carries the full card. If the image fails (or is missing), send text only.
+  // Telegram's 1024 caption limit applies to the VISIBLE text (after entity parsing), not the
+  // raw HTML — the long href URLs don't count. Measure visible length so the richer card
+  // (ATH + quick-links + caller line) still ships WITH the image at the top, not text-only.
   const img = firstString(scan.meta?.imageUrl, scan.bonding?.imageUrl, scan.bonding?.imageUri);
-  if (img && text.length <= 1024) {
+  const captionVisibleLen = text.replace(/<[^>]+>/g, "").length;
+  if (img && captionVisibleLen <= 1024) {
     try {
       await telegram("sendPhoto", { chat_id: chatId, photo: img, caption: text, parse_mode: "HTML", reply_markup: slimeScanKeyboard(mint) });
       return;
