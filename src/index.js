@@ -1106,7 +1106,11 @@ const rpcStats = {
   samples: [],
   lastCallAt: "",
   lastErrorAt: "",
-  lastError: ""
+  lastError: "",
+  // Read-split visibility: how many reads went to the cheap provider (relief),
+  // and how often that provider failed and we fell back to Helius.
+  readCallCount: 0,
+  readFallbackCount: 0
 };
 const startedAt = new Date();
 const WEB_LOGIN_CODE_TTL_MS = 10 * 60 * 1000;
@@ -29433,7 +29437,12 @@ function rpcStatsSnapshot() {
     p95Ms: p95Index >= 0 ? samples[p95Index] : 0,
     lastCallAt: rpcStats.lastCallAt,
     lastErrorAt: rpcStats.lastErrorAt,
-    lastError: rpcStats.lastError
+    lastError: rpcStats.lastError,
+    // Read-split relief: reads served by the cheap provider vs how often it fell back.
+    readProvider: CONFIG.readRpcProviderName || CONFIG.rpcProviderName,
+    readCallCount: rpcStats.readCallCount,
+    readFallbackCount: rpcStats.readFallbackCount,
+    readOffloadPct: rpcStats.callCount ? Math.round((rpcStats.readCallCount / rpcStats.callCount) * 100) : 0
   };
 }
 
@@ -42041,6 +42050,7 @@ async function rpcRead(label, opFactory, options = {}) {
   if (readConnection === connection) {
     return rpcWithRetry(label, () => opFactory(connection), options.retries ?? CONFIG.rpcRetries, options);
   }
+  rpcStats.readCallCount = (rpcStats.readCallCount || 0) + 1;
   try {
     return await rpcWithRetry(label, () => opFactory(readConnection), options.retries ?? CONFIG.rpcRetries, options);
   } catch (error) {
