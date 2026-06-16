@@ -6100,6 +6100,7 @@ function renderTabs() {
   if (["terminal", "live", "kol", "slimeScope", "watchlist", "smartChart"].includes(state.activeTab)) {
     try { attachOgreAccents(panel, state.activeTab); } catch (err) { /* accent is decorative */ }
   }
+  try { attachOgreSheen(panel); } catch (err) { /* sheen is decorative */ }
   try { bindOgreRefreshSpin(); } catch (err) { /* refresh shimmer is decorative */ }
   if (state.activeTab === "smartChart" && state.chartFocusAmountInput) {
     requestAnimationFrame(() => {
@@ -7868,6 +7869,14 @@ function bindOgreRefreshSpin() {
     } catch {}
   }, true);
 }
+// Higgs motion textures: a small muted looping <video> dropped into an existing accent shell.
+function ogreTexVideo(cls, name) {
+  return `<video class="${cls}" autoplay muted loop playsinline preload="auto" src="/assets/slimewire/ui/${name}.mp4"></video>`;
+}
+// Subtle ember/sheen loop behind any stat-tile grid (shows in the gaps; never blocks tiles).
+function attachOgreSheen(panel) {
+  try { const m = panel.querySelector(".metrics"); if (m && !m.querySelector(".ogre-sheen")) m.insertAdjacentHTML("afterbegin", ogreTexVideo("ogre-sheen", "sheen")); } catch {}
+}
 // Tier-3 accents: drop a featherweight ogre status into space that already exists on the
 // data-dense screens — never a banner, never extra scroll. CSS/SVG only.
 let ogreRadarPrevCount = 0;
@@ -7885,7 +7894,8 @@ function attachOgreAccents(panel, tab) {
         const wrap = document.createElement("div");
         wrap.className = "ogre-radar-wrap";
         wrap.innerHTML = `<span class="ogre-radar-bar">`
-          + `<span class="orb-scope"><span class="ring"></span><span class="ring r2"></span><span class="sweep"></span><span class="blip b1"></span><span class="blip b2"></span><span class="blip b3"></span></span>`
+          + ogreTexVideo("rbar-bg", "conduit")
+          + `<span class="orb-scope">${ogreTexVideo("orb-vid", "scope")}<span class="ring"></span><span class="ring r2"></span><span class="sweep"></span><span class="blip b1"></span><span class="blip b2"></span><span class="blip b3"></span></span>`
           + `<span class="orb-read"><span class="t">SWAMP RADAR</span><span class="s"><b>${count}</b> live pairs · scanning the swamp</span></span>`
           + `<span class="orb-heat">LIVE</span></span>`;
         host.insertBefore(wrap, host.firstChild);
@@ -7898,7 +7908,7 @@ function attachOgreAccents(panel, tab) {
     if (!head) return;
     if (tab === "kol" || tab === "slimeScope" || tab === "watchlist") {
       const h = head.querySelector("h3");
-      if (h && !h.querySelector(".ogre-spy")) h.insertAdjacentHTML("afterbegin", `<span class="ogre-spy" title="Intel watch"><i></i></span>`);
+      if (h && !h.querySelector(".ogre-spy")) h.insertAdjacentHTML("afterbegin", `<span class="ogre-spy" title="Intel watch">${ogreTexVideo("spy-vid", "eye")}<i></i></span>`);
     } else if (tab === "smartChart") {
       if (!head.querySelector(".ogre-chartwatch")) head.insertAdjacentHTML("beforeend", `<span class="ogre-chartwatch"><span class="ce"></span>WATCHING</span>`);
     }

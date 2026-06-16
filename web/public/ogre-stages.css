@@ -165,6 +165,26 @@
 .ogre-chartwatch.up{color:#9dff6a;}.ogre-chartwatch.down{color:#ff8a8a;}.ogre-chartwatch.down .ce{background:#ff6b6b;box-shadow:0 0 7px #ff6b6b;}
 @media (prefers-reduced-motion: reduce){.ogre-radar-bar::after,.orb-scope .sweep,.orb-scope .blip,.orb-heat::before,.ogre-spy i,.ogre-spy::after,.ogre-chartwatch .ce{animation:none !important;}}
 
+/* ----------------------------------------------------------------- HIGGS MOTION TEXTURES
+   Real rendered loops dropped into the existing accent shells (same size/layout) so the radar,
+   intel eye and stat bar read as premium living panels instead of flat CSS. Each <video> is a
+   small, muted, looping underlay; the original CSS art stays on top as a faint overlay. */
+/* radar: flowing conduit behind the whole bar + a real sweeping scope in the orb */
+.ogre-radar-bar .rbar-bg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0;opacity:.4;mix-blend-mode:screen;pointer-events:none;}
+.ogre-radar-bar > :not(.rbar-bg){position:relative;z-index:1;}
+.orb-scope .orb-vid{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0;}
+.orb-scope .ring{opacity:.45;z-index:1;}
+.orb-scope .sweep{opacity:.4;z-index:1;}
+.orb-scope .blip{z-index:2;}
+/* intel: real scanning ogre eye fills the spy shell (the CSS dot becomes a fallback) */
+.ogre-spy .spy-vid{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0;}
+.ogre-spy:has(.spy-vid) i{display:none;}
+/* stat tiles: a subtle ember/sheen loop behind the metrics grid (shows in the gaps) */
+html body main.shell[data-app] .metrics{position:relative;}
+html body main.shell[data-app] .metrics .ogre-sheen{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0;opacity:.2;pointer-events:none;border-radius:inherit;}
+html body main.shell[data-app] .metrics > article{position:relative;z-index:1;}
+@media (prefers-reduced-motion: reduce){.ogre-radar-bar .rbar-bg,.orb-scope .orb-vid,.ogre-spy .spy-vid,.metrics .ogre-sheen{display:none !important;}}
+
 /* ----------------------------------------------------------------- PREMIUM BARS
    Elevates the signature account stat bar + search into a high-end, unmistakably-SlimeWire
    look. Additive overrides only — same layout/form, just richer. */
