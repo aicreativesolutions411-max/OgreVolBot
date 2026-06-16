@@ -93,10 +93,11 @@ export function aggParams(state) {
   // regardless of regime base — this is what actually stops the fs 61-63 chop churn
   // that bleeds a directionless tape. (scoreBonus alone couldn't reach this.)
   if (state.tune && state.tune.tape === "COLD") minScore = Math.max(minScore, 62);
-  // GRIND demands a decent setup floor regardless of regime — we bank small, so the
-  // hit-rate has to stay high; weak fs setups are exactly the ones that round-trip. Kept
-  // modest (62, just above the universal 58) so it still finds enough candidates to trade.
-  if (grind) minScore = Math.max(minScore, 62);
+  // GRIND gates on grindScore (survivor-oriented), NOT freshScore — so its bar lives on a
+  // different scale. Override to a grindScore threshold (the freshScore floors above don't
+  // apply to grind). Stays adaptive: the auto-tuner's scoreBonus still raises it in cold/
+  // rug-heavy tape. ~50 passes solid survived coins, filters thin/dumping ones.
+  if (grind) minScore = 50 + ((state.tune && state.tune.scoreBonus) || 0);
 
   // ENTRY MC WINDOW. Default: tiny floor (a low-MC runner like ZUL +56% @ $1973 stays in),
   // ceiling 20k (these are fresh launches). GRIND skips the brand-new sub-$5k curve — where
@@ -285,6 +286,35 @@ export function freshScore(row) {
   return s;
 }
 
+// SURVIVOR score for GRIND — the steady-win mode wants coins that already SURVIVED the
+// rug window and are climbing, which freshScore structurally rejects (it rewards <30s age
+// and $2.5-8k MC, the opposite of grind's target). This scores what actually matters for a
+// safer base-hit: real recent VOLUME (the coin is alive + tradeable), BUY-led flow,
+// LIQUIDITY depth (clean fills + rug resistance), a sane MC band, and site provenance —
+// with no youth penalty. ~0..100; grind gates on this instead of freshScore.
+export function grindScore(row) {
+  const mc = Number(row.marketCap) || 0;
+  const vol = Number(row.volume5m) || 0;
+  const buys = Number(row.buys5m) || 0;
+  const sells = Number(row.sells5m) || 0;
+  const liq = Number(row.liquidityUsd) || 0;
+  const prov = Number(row.bestPickScore) || 0;
+  let s = 0;
+  // Real recent volume = live + sellable (the #1 survival signal).
+  if (vol >= 200) s += 28; else if (vol >= 100) s += 22; else if (vol >= 50) s += 14; else if (vol >= 25) s += 7;
+  // Buy-led flow (up to ~+27 for heavily buy-dominant).
+  const flow = buys + sells > 0 ? buys / (buys + sells) : 0.5;
+  s += Math.max(0, flow - 0.45) * 50;
+  // Liquidity depth relative to MC — fills the 30% TP cleanly + resists drains.
+  const lr = mc > 0 ? liq / mc : 0;
+  if (lr >= 0.6) s += 18; else if (lr >= 0.45) s += 12; else if (lr >= 0.35) s += 6;
+  // MC sweet spot for steady +30% moves (not dust, not too heavy to move).
+  if (mc >= 6000 && mc <= 45000) s += 16; else if (mc >= 5000 && mc <= 80000) s += 9;
+  // Site provenance / best-pick quality.
+  s += Math.min(14, prov * 0.14);
+  return s;
+}
+
 // CONVICTION: how hard to bet a setup (0.5x..1.6x of base size). Trades like a
 // pro — size scales with confluence: proven dev + heavy buy flow + freshness +
 // strong score → bigger; marginal/risky → smaller. Bounded; final size still
@@ -359,7 +389,9 @@ export function entryReject(row, P) {
   if (liq > 0 && liq < mc * (P.liqFrac || 0.3)) return "liquidity";
   if (vol < 25) return "volume";
   if (buys > 0 && sells > buys * 2 + 3) return "dumping";
-  if (freshScore(row) < P.minScore) return "score";
+  // GRIND scores survived/climbing coins (grindScore); every other mode uses freshScore.
+  const setupScore = P.grind ? grindScore(row) : freshScore(row);
+  if (setupScore < P.minScore) return "score";
   return null;
 }
 
@@ -1228,7 +1260,7 @@ export function createAutopilotEngine(deps) {
         const a = state.recentApeNames[ns];
         return !a || nowMs - a > 15_000;
       })
-      .map((r) => ({ r, reject: entryReject(r, P), fs: freshScore(r) }))
+      .map((r) => ({ r, reject: entryReject(r, P), fs: P.grind ? grindScore(r) : freshScore(r) }))
       .filter((x) => !x.reject)
       .sort((a, b) => b.fs - a.fs);
 

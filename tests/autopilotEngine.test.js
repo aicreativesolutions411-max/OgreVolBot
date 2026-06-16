@@ -4,6 +4,7 @@ import {
   aggParams,
   sizeFor,
   freshScore,
+  grindScore,
   convictionMult,
   autoTune,
   entryReject,
@@ -216,6 +217,19 @@ test("grind: enters only at safer (higher) MC and skips the sub-7k rug zone", ()
     entryReject(goodRow({ marketCap: 12000, liquidityUsd: 9000, pairAgeSeconds: 90, volume5m: 120, buys5m: 25, sells5m: 8, bestPickScore: 80 }), P),
     null
   );
+});
+
+test("grind: an OLDER survived/climbing coin passes (grindScore), where freshScore would reject it", () => {
+  const P = aggParams(baseState({ mode: "grind" }));
+  const normalP = aggParams(baseState());
+  // 400s old, $25k, deep liquidity, strong buy-led volume — exactly what grind wants, but
+  // freshScore punishes the age + higher MC so it would never clear a freshScore bar.
+  const survivor = goodRow({ marketCap: 25000, liquidityUsd: 15000, pairAgeSeconds: 400, volume5m: 150, buys5m: 30, sells5m: 10, bestPickScore: 70 });
+  assert.ok(freshScore(survivor) < 62, "freshScore structurally rejects this survived coin");
+  assert.ok(grindScore(survivor) >= P.minScore, "grindScore recognizes it as a quality base-hit");
+  assert.equal(entryReject(survivor, P), null, "grind accepts the survived coin");
+  // a thin, dumping coin is still rejected by grind
+  assert.ok(entryReject(goodRow({ marketCap: 9000, liquidityUsd: 1500, pairAgeSeconds: 120, volume5m: 10 }), P));
 });
 
 test("grind: banks the bulk at +30% and caps the ride at +150% (base-hits, not moonshots)", () => {
