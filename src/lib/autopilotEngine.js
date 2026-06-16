@@ -551,6 +551,12 @@ function freshState(opts) {
   // tiny bets). This is the "win big and often, not every second" profile.
   const lowChurn = opts.churn === "low";
   const budget = opts.solBudget || 0;
+  // SELF-CALIBRATION bias (from historical outcomes; see lib/selfCalibration.js). Bounded +
+  // never-looser by contract: a non-negative score bonus raises the entry bar, a <=1 size
+  // multiplier shrinks the per-bet cap. Absent/zero = unchanged behavior.
+  const cal = opts.calibration || {};
+  const calScoreBonus = Math.max(0, Math.min(12, Number(cal.minScoreBonus) || 0));
+  const calSizeMult = Math.max(0.5, Math.min(1, Number(cal.sizeFracCapMult) || 1));
   return {
     mode: opts.mode || "normal",
     churn: lowChurn ? "low" : "normal",
@@ -577,10 +583,14 @@ function freshState(opts) {
     // User-set value wins; otherwise a conservative budget-scaled default (low
     // enough that even a big "whole wallet" can't auto-size into 0.3 SOL bets).
     maxTradeSol: opts.maxTradeSol || Math.max(0.05, budget * (lowChurn ? 0.06 : 0.04)),
-    // Fraction-of-cash cap per bet (low-churn concentrates capital).
-    sizeFracCap: lowChurn ? 0.28 : 0.12,
+    // Fraction-of-cash cap per bet (low-churn concentrates capital). Calibration can only
+    // SHRINK this (×<=1) when history shows the recent book bled.
+    sizeFracCap: (lowChurn ? 0.28 : 0.12) * calSizeMult,
     // Entry-quality bump: low-churn takes stronger setups (no hard filter — keeps runners).
-    minScoreBonus: lowChurn ? 16 : 0,
+    // Calibration ADDS to this (raises the bar) when marginal-score setups have been bleeding.
+    minScoreBonus: (lowChurn ? 16 : 0) + calScoreBonus,
+    // Self-calibration snapshot in effect this session (for the status/log; null = defaults).
+    calibration: cal && (calScoreBonus || calSizeMult < 1) ? { minScoreBonus: calScoreBonus, sizeFracCapMult: calSizeMult } : null,
     // Few concurrent positions so each runner is meaningful + dry powder stays free.
     // Concurrent-position cap. Lowered the normal default 8 -> 5 so a session that
     // doesn't pass maxOpen can't over-deploy the whole bankroll into one dumping

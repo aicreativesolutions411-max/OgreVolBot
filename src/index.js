@@ -87,6 +87,7 @@ import { createTokenMetadataResolver } from "./lib/tokenMetadataResolver.js";
 import { createPumpPortalStream } from "./lib/pumpPortalStream.js";
 import { computeSlimeShield, slimeShieldHasHardDanger } from "./lib/slimeShield.js";
 import * as callerIntel from "./lib/callerIntel.js";
+import { computeCalibration as computeAutopilotCalibration } from "./lib/selfCalibration.js";
 import {
   appendLimited,
   compareBigInt,
@@ -479,6 +480,31 @@ async function recordAutopilotTrade(rec) {
     autopilotSymLossBump(rec);
     await writeJsonFile(AUTOPILOT_TRADES_FILE, { trades: autopilotTradesCache });
   } catch {}
+}
+
+// SELF-CALIBRATION: derive a bounded, never-looser entry/size bias from the accumulated
+// trade history (lib/selfCalibration.js) and cache it to disk. Recomputed periodically on
+// the web tick and read at session start so the bot's selectivity tracks what has paid.
+const AUTOPILOT_CALIBRATION_FILE = path.join(CONFIG.dataDir, "autopilot-calibration.json");
+let autopilotCalibrationCache = null;
+let autopilotCalibrationAt = 0;
+async function recomputeAutopilotCalibration() {
+  try {
+    const trades = await loadAutopilotTrades();
+    const cal = computeAutopilotCalibration(trades);
+    autopilotCalibrationCache = cal;
+    autopilotCalibrationAt = Date.now();
+    await writeJsonFile(AUTOPILOT_CALIBRATION_FILE, { ...cal, savedAt: autopilotCalibrationAt });
+    return cal;
+  } catch { return autopilotCalibrationCache; }
+}
+async function getAutopilotCalibration() {
+  if (autopilotCalibrationCache) return autopilotCalibrationCache;
+  try {
+    const j = await readJson(AUTOPILOT_CALIBRATION_FILE).catch(() => null);
+    if (j && (j.minScoreBonus != null || j.sizeFracCapMult != null)) { autopilotCalibrationCache = j; return j; }
+  } catch {}
+  return recomputeAutopilotCalibration();
 }
 
 // RUNNING LOG: a rolling, PERSISTENT play-by-play of the autopilot's narration so the log
@@ -3284,7 +3310,9 @@ async function handleWebApiRequest(request, response, requestUrl) {
               byMc: bucket((t) => t.entryMc == null ? null : (t.entryMc < 2100 ? "<2.1k" : t.entryMc < 2500 ? "2.1-2.5k" : t.entryMc < 3500 ? "2.5-3.5k" : "3.5k+")),
               byAge: bucket((t) => t.entryAge == null ? null : (t.entryAge < 30 ? "<30s" : t.entryAge < 120 ? "30-120s" : t.entryAge < 300 ? "2-5m" : "5m+")),
               bestDevs: devs.filter((d) => d.trades >= 2).sort((a, b) => b.pnl - a.pnl).slice(0, 8),
-              worstDevs: devs.filter((d) => d.rugs >= 1).sort((a, b) => b.rugs - a.rugs).slice(0, 8)
+              worstDevs: devs.filter((d) => d.rugs >= 1).sort((a, b) => b.rugs - a.rugs).slice(0, 8),
+              // The self-calibration bias currently applied to new sessions (and WHY).
+              calibration: await getAutopilotCalibration().catch(() => null)
             }
           });
           return;
@@ -3407,7 +3435,9 @@ async function handleWebApiRequest(request, response, requestUrl) {
         // Keep-going lock: bank each green and CONTINUE trading (re-baselined; vault sweeps
         // if set) instead of stopping the session when the bank-the-peak ratchet fires.
         const lockGainsContinue = body.lockGainsContinue === true || body.lockGainsContinue === "true" || body.keepGoing === true || body.keepGoing === "true";
-        const status = await autopilotEngine.start({ solBudget: sol, minutes, mode, live: wantLive, walletPubkey, profitLock, churn, vault, maxTradeSol, lossCapFrac, maxOpen, lockGainsContinue });
+        // Self-calibration bias from accumulated trade history (bounded, never-looser).
+        const calibration = await getAutopilotCalibration().catch(() => null);
+        const status = await autopilotEngine.start({ solBudget: sol, minutes, mode, live: wantLive, walletPubkey, profitLock, churn, vault, maxTradeSol, lossCapFrac, maxOpen, lockGainsContinue, calibration });
         // Bind the running clock to this controller. Trial users (no owner key, no
         // sub) burn metered time; owner/subscribers don't.
         if (controllerUserId) {
@@ -25227,6 +25257,9 @@ if (CONFIG.serviceRole === "web") {
     checkShieldReceiptOutcomes().catch((error) => console.warn(`[shield-receipts] check failed: ${error.message}`));
     checkAlphaCallOutcomes().catch((error) => console.warn(`[alpha-calls] check failed: ${error.message}`));
     runCallerIntelTick().catch((error) => console.warn(`[caller-intel] tick failed: ${error.message}`));
+    if (Date.now() - autopilotCalibrationAt > 6 * 60 * 60 * 1000) { // refresh the learned bias ~every 6h
+      recomputeAutopilotCalibration().catch((error) => console.warn(`[calibration] recompute failed: ${error.message}`));
+    }
     runAlphaDropTick().catch((error) => console.warn(`[alpha-drop] tick failed: ${error.message}`));
     checkBoardCallOutcomes().catch((error) => console.warn(`[call-board] check failed: ${error.message}`));
     runDailySwampReport().catch((error) => console.warn(`[swamp-report] failed: ${error.message}`));
