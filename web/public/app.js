@@ -10326,12 +10326,9 @@ function launchCoinHtml() {
 
         <div class="quick-grid launch-coin-actions">
           <button class="primary" type="button" data-launch-coin-submit>Launch on Pump</button>
-          <button type="button" data-launch-coin-save>Save Launch Sheet</button>
-          <button type="button" data-launch-coin-use-ca>Use Live CA</button>
-          <a href="https://pump.fun/create" target="_blank" rel="noreferrer">Open Pump Create</a>
           <a href="https://marketplace.dexscreener.com/" target="_blank" rel="noreferrer">Pay Dex / Edit Metadata</a>
         </div>
-        <p class="trade-status" data-launch-coin-status>${escapeHtml(state.launchCoinStatus || "Ready. Launch on Pump submits through the SlimeWire launch connector when enabled. The official Pump and Dex links remain available as fallback tools.")}</p>
+        <p class="trade-status" data-launch-coin-status>${escapeHtml(state.launchCoinStatus || "Ready. Launch on Pump submits through the SlimeWire launch connector when enabled. The Dex metadata link remains as a fallback tool.")}</p>
       </article>
 
       <aside class="trade-side">
@@ -10876,7 +10873,7 @@ async function submitLaunchCoin() {
     const signature = launch.signature ? ` Signature: ${shortAddress(launch.signature)}.` : "";
 
     if (!tokenMint) {
-      state.launchCoinStatus = `Launch submitted, but the launch connector did not return a CA yet.${signature} Paste the CA above when it appears, then tap Use Live CA.`;
+      state.launchCoinStatus = `Launch submitted, but the launch connector did not return a CA yet.${signature} The CA will appear above when it lands — then trade it from the Swap panel.`;
       writeText(status, state.launchCoinStatus);
       return;
     }
