@@ -854,15 +854,17 @@ const LIVE_FEED_CATEGORIES = [
 // Cook Spot = a DISCOVERY/trending feed. Its categories are deliberately disjoint
 // from the Live Feed's market-metric set (only "Fresh Pairs" is shared) so the two
 // pages have different uses and surface different pairs.
+// 4th field = the BACKEND sort to fetch for this option, so each option pulls a genuinely
+// different pool (not just a client re-rank of the same rows). Mirrors LIVE_FEED_CATEGORIES.
 const COOK_SPOT_CATEGORIES = [
-  ["dexTrending", "DEX Trending", "Trending across DEX pairs"],
-  ["fresh", "Fresh Pairs", "Newest DEX pairs"],
-  ["dexBoosted", "DEX Boosted", "Paid DEX boosts"],
-  ["pumpTrending", "Pump.fun Trending", "Hot pump-curve launches"],
-  ["memeMovers", "Meme Coin Movers", "Top meme % movers"],
-  ["earlyMomentum", "Early Momentum", "Young pairs building"],
-  ["graduating", "Graduating", "Near pump migration"],
-  ["graduated", "Graduated", "Moved to the open market"]
+  ["dexTrending", "DEX Trending", "Trending across DEX pairs", "volume"],
+  ["fresh", "Fresh Pairs", "Newest DEX pairs", "newest"],
+  ["dexBoosted", "DEX Boosted", "Paid DEX boosts", "volume"],
+  ["pumpTrending", "Pump.fun Trending", "Hot pump-curve launches", "newest"],
+  ["memeMovers", "Meme Coin Movers", "Top meme % movers", "momentum"],
+  ["earlyMomentum", "Early Momentum", "Young pairs building", "newest"],
+  ["graduating", "Graduating", "Near pump migration", "volume"],
+  ["graduated", "Graduated", "Moved to the open market", "liquidity"]
 ];
 
 const TERMINAL_LAUNCH_SOCIAL_FILTERS = [
@@ -24090,6 +24092,9 @@ document.addEventListener("change", async (event) => {
   if (target?.matches?.("[data-live-terminal-category]")) {
     state.liveTerminalCategory = target.value || "dexTrending";
     try { localStorage.setItem("liveTerminalCategory", state.liveTerminalCategory); } catch {}
+    // Pull the matching backend pool so each option shows genuinely different pairs (not
+    // just a client re-rank of the same rows) — same mechanism the Live feed uses.
+    state.terminalSort = currentLiveTerminalCategory()[3] || "volume";
     resetTerminalFeedVisibleLimit("live");
     render();
     runDeferredUiTask(() => refreshLivePairBuckets({ silent: true, force: true }));
@@ -24097,6 +24102,7 @@ document.addEventListener("change", async (event) => {
   if (target?.matches?.("[data-cook-spot-category]")) {
     state.cookSpotCategory = target.value || "dexTrending";
     try { localStorage.setItem("cookSpotCategory", state.cookSpotCategory); } catch {}
+    state.terminalSort = currentCookSpotCategory()[3] || "volume";
     resetTerminalFeedVisibleLimit("slimeScope");
     render();
     runDeferredUiTask(() => refreshTerminalFeed("slimeScope", { force: true, reason: "cook-spot-category" }));

@@ -507,6 +507,10 @@ function freshState(opts) {
     streak: 0,
     results: [],
     waves: {},
+    // Momentum-confirmation memory (cold-tape only): a fresh unproven coin must hold
+    // strength across two scans before we ape, so single-tick spike-then-dump bait is
+    // skipped. { [mint]: { at, mc } }.
+    watching: {},
     recentSells: {},
     // Last time we APED each coin NAME — blocks piling into a clone swarm (same name,
     // different mints) 3x in seconds before any loss registers (ASTROGUY/Bob x3).
@@ -1136,6 +1140,10 @@ export function createAutopilotEngine(deps) {
     const P = aggParams(state);
     const held = new Set(state.open.map((p) => p.mint));
     const nowMs = now();
+    // Prune stale momentum-watch entries (a coin we eyed but that didn't hold/return).
+    for (const m of Object.keys(state.watching || {})) {
+      if (nowMs - (state.watching[m].at || 0) > 60_000) delete state.watching[m];
+    }
 
     const scored = rows
       .filter((r) => r && r.tokenMint && !held.has(r.tokenMint))
@@ -1206,6 +1214,19 @@ export function createAutopilotEngine(deps) {
       // aping everything into a dumping tape.
       const minConv = tune.tape === "COLD" ? 0.95 : tune.tape === "NORMAL" ? 0.7 : 0;
       if (conv < minConv) continue;
+      // MOMENTUM CONFIRMATION (cold tape only): an unproven fresh coin must show SUSTAINED
+      // strength — still passing the bar on a 2nd scan within 30s with its MC holding (not
+      // already fading) — before we ape. This is what kills the single-tick spike-then-dump
+      // churn that bleeds a red/cold day. Proven-dev or smart-money plays skip the wait, and
+      // HOT/NORMAL tapes still enter immediately so real runners aren't missed.
+      const proven = (rep && rep.runners >= 1 && rep.rugs === 0) || (sm && (sm.kol || sm.winners >= 2));
+      if (!proven && tune.tape === "COLD") {
+        const w = state.watching[cand.r.tokenMint];
+        const curMc = Number(cand.r.marketCap) || 0;
+        if (!w || nowMs - w.at > 30_000) { state.watching[cand.r.tokenMint] = { at: nowMs, mc: curMc }; continue; }
+        if (curMc < w.mc * 0.92) { delete state.watching[cand.r.tokenMint]; continue; } // momentum faded → skip
+        delete state.watching[cand.r.tokenMint]; // held strong across two reads → take it
+      }
       let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv, state.maxTradeSol));
       if (!canOpen(state, size)) break;
       await openPosition(cand.r, size, cand.fs, dev, rep, sm);
