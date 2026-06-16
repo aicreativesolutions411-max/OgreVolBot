@@ -23406,8 +23406,11 @@ async function handleScanCallback(query, chatId, messageId) {
     } else if (action === "refresh") {
       if (tgCommandOnCooldown(chatId, `scanrefresh:${mint}`, 4000)) return;
       let scan = null; try { scan = await gatherSlimeScan(mint); } catch {}
+      const curMc = Number(scan?.meta?.marketCap || scan?.meta?.fdv || scan?.bonding?.marketCap || 0);
+      // Refresh re-pulls the live read AND updates the caller footer (X/% since the call).
+      const callerLine = await buildScanCallerFooter(chatId, mint, curMc).catch(() => "");
       let text = null;
-      if (scan && (scan.meta || scan.bonding || scan.shield)) { try { text = formatSlimeScanCard({ mint, ...scan }); } catch {} }
+      if (scan && (scan.meta || scan.bonding || scan.shield)) { try { text = formatSlimeScanCard({ mint, ...scan, callerLine }); } catch {} }
       if (!text) return;
       if (isPhoto) {
         await telegram("editMessageCaption", { chat_id: chatId, message_id: messageId, caption: text, parse_mode: "HTML", reply_markup: slimeScanKeyboard(mint) });
@@ -23420,8 +23423,42 @@ async function handleScanCallback(query, chatId, messageId) {
   }
 }
 
-function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, supply }) {
+// Caller footer for the scan card: who FIRST called this CA in this channel, when, and how
+// it's done since the call (live X / %, plus peak). Also refreshes the call's last/peak MC so
+// the caller-intel warehouse stays current on every look/refresh. Channel-only (no record in
+// DMs). Returns "" when there's no recorded call (e.g. a DM or a never-called coin).
+async function buildScanCallerFooter(chatId, mint, currentMc) {
+  try {
+    if (!chatId || !mint) return "";
+    const store = await readTelegramCalls();
+    const rec = store.calls && store.calls[`${chatId}:${mint}`];
+    if (!rec) return "";
+    const mc = Number(currentMc) || 0;
+    if (mc > 0) { // keep the warehouse fresh on every render
+      rec.lastMc = mc; rec.lastAt = Date.now();
+      if (mc > (rec.peakMc || 0)) rec.peakMc = mc;
+      scheduleTelegramCallsFlush();
+    }
+    const entry = Number(rec.entryMc) || 0;
+    const ago = alphaAgeLabel(Math.max(0, Date.now() - Number(rec.firstAt || Date.now())));
+    let perf = "";
+    if (entry > 0 && mc > 0) {
+      const x = mc / entry;
+      const pct = Math.round((x - 1) * 100);
+      const tag = x >= 1 ? "🟢" : "🔴";
+      const xStr = x >= 2 ? ` ${x >= 10 ? Math.round(x) : x.toFixed(1)}x` : "";
+      const peakX = entry > 0 ? (Number(rec.peakMc) || 0) / entry : 0;
+      const peakStr = peakX >= 2 ? ` · peak +${Math.round((peakX - 1) * 100)}%` : "";
+      perf = ` · now ${tag}${xStr} ${pct >= 0 ? "+" : ""}${pct}%${peakStr}`;
+    }
+    return `📣 First called by <b>${escapeTelegramHtml(rec.callerName || "someone")}</b> · ${ago}${perf}`;
+  } catch { return ""; }
+}
+
+function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, supply, callerLine }) {
   const esc = escapeTelegramHtml;
+  const links = slimewireTokenLinks(mint);
+  const dex = dexScreenerUrl(mint);
   const sym = (meta?.symbol || bonding?.symbol || shortMint(mint)).slice(0, 18);
   const name = (meta?.name || bonding?.name || sym).slice(0, 40);
   const dexId = meta?.dexId || (mint.endsWith("pump") ? "pump" : "sol");
@@ -23444,13 +23481,13 @@ function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, 
     .concat(rug?.holderCount ? [`∞ ${scanFmtSupply(rug.holderCount)}`] : [])
     .join(" | ");
 
-  // socials: X + about(description)
+  // socials: REAL links only — X, website, Telegram, Pump.fun. (Dropped the generic "about";
+  // show only what the token actually has, with a chart/Pump link always present.)
   const socialBits = [];
-  if (meta?.twitterUrl) socialBits.push(`<a href="${esc(meta.twitterUrl)}">𝕏</a>`);
-  else socialBits.push(`<a href="https://x.com/search?q=${encodeURIComponent(mint)}&f=live">𝕏</a>`);
-  const about = meta?.websiteUrl || (bonding && bonding.description ? `https://pump.fun/coin/${mint}` : "");
-  if (about) socialBits.push(`<a href="${esc(about)}">about</a>`);
-  if (meta?.telegramUrl) socialBits.push(`<a href="${esc(meta.telegramUrl)}">TG</a>`);
+  socialBits.push(`<a href="${esc(meta?.twitterUrl || `https://x.com/search?q=${encodeURIComponent(mint)}&f=live`)}">𝕏</a>`);
+  if (meta?.websiteUrl) socialBits.push(`<a href="${esc(meta.websiteUrl)}">🌐 Web</a>`);
+  if (meta?.telegramUrl) socialBits.push(`<a href="${esc(meta.telegramUrl)}">✈️ TG</a>`);
+  socialBits.push(`<a href="https://pump.fun/coin/${mint}">🚀 Pump</a>`);
 
   // security (RugCheck full)
   const light = (b, onYes) => b === true ? (onYes ? "🟢" : "🔴") : b === false ? (onYes ? "🔴" : "🟢") : "⚪";
@@ -23485,6 +23522,11 @@ function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, 
     `├ DEX Paid <b>${dexPaidStr}</b>`,
     `└ Mint <b>${mintAuth}</b> | Freeze <b>${freezeAuth}</b>`,
     "",
+    // CALLER INTEL: who first called it here, when, and X/% since (live; updates on refresh).
+    callerLine || "",
+    `🔗 <b>Quick links</b>`,
+    `└ <a href="${links.site}">Chart</a> • <a href="${dex}">DEX</a> • <a href="https://rugcheck.xyz/tokens/${mint}">Audit</a> • <a href="https://pump.fun/coin/${mint}">Pump</a> • <a href="${links.proof}">Proof</a>`,
+    "",
     `<a href="https://www.slimewire.org">⚡ Powered by SlimeWire</a> — Quick Buy below`
   ].filter(Boolean);
   return lines.join("\n");
@@ -23507,14 +23549,15 @@ async function handleTelegramLookCommand(chatId, message, argument) {
   } catch {
     // fall through to the degraded reply below
   }
-  // CALLER INTELLIGENCE (Phase A): log this as a channel "call" with its entry MC.
-  if (message && message.chat && !isPrivateChat(message.chat)) {
-    const callMc = Number(scan?.meta?.marketCap || scan?.meta?.fdv || scan?.bonding?.marketCap || 0);
-    void recordTelegramCall(message, mint, callMc).catch(() => {});
-  }
+  // CALLER INTELLIGENCE: record this channel "call" with its entry MC, then show who FIRST
+  // called it here + how it's done since (channel-only; the footer updates on every refresh).
+  const inChannel = Boolean(message && message.chat && !isPrivateChat(message.chat));
+  const curMc = Number(scan?.meta?.marketCap || scan?.meta?.fdv || scan?.bonding?.marketCap || 0);
+  if (inChannel) await recordTelegramCall(message, mint, curMc).catch(() => {});
+  const callerLine = inChannel ? await buildScanCallerFooter(message.chat.id, mint, curMc).catch(() => "") : "";
   let text = null;
   if (scan && (scan.meta || scan.bonding || scan.shield)) {
-    try { text = formatSlimeScanCard({ mint, ...scan }); } catch { text = null; }
+    try { text = formatSlimeScanCard({ mint, ...scan, callerLine }); } catch { text = null; }
   }
   if (!text) {
     await sayHtml(chatId, `Could not pull a clean read on <code>${escapeTelegramHtml(mint)}</code> right now. Links below.`, slimeScanKeyboard(mint));
