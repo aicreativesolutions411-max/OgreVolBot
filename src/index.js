@@ -517,6 +517,7 @@ setInterval(() => {
 // is on. Best-effort; never affects trading.
 const DEV_OBS_FILE = path.join(CONFIG.dataDir, "dev-observatory.json");
 const WALLET_OBS_FILE = path.join(CONFIG.dataDir, "wallet-observatory.json");
+const MARKET_TAPE_FILE = path.join(CONFIG.dataDir, "market-tape.json");
 const devObs = new Map();    // dev -> { coins, ran, rugged, peakSum }  (peakSum = sum of max/first multiples)
 const obsCoins = new Map();  // mint -> { dev, firstMc, maxMc, lastMc, at, seen, buyers:[] }
 // SMART-MONEY OBSERVATORY: same idea as devObs but for the EARLY BUYER wallets of
@@ -690,6 +691,24 @@ async function loadWalletObservatory() {
 async function saveWalletObservatory() {
   try { await writeJsonFile(WALLET_OBS_FILE, { wallets: Object.fromEntries(walletObs), savedAt: Date.now() }); } catch {}
 }
+// Persist the market-wide tape so the bot isn't "blind" (marketTape() => null) for the
+// first ~30 min after a redeploy. On load we keep only entries inside the 30-min window;
+// stale ones are dropped (marketTape's own cutoff would ignore them anyway).
+async function loadMarketTape() {
+  try {
+    const j = await readJson(MARKET_TAPE_FILE).catch(() => null);
+    if (j && Array.isArray(j.recent)) {
+      const cutoff = Date.now() - 30 * 60 * 1000;
+      for (const e of j.recent) {
+        if (e && Number(e.at) >= cutoff) marketRecent.push({ ranMult: Number(e.ranMult) || 1, rugged: Boolean(e.rugged), at: Number(e.at) });
+      }
+      if (marketRecent.length > 600) marketRecent.splice(0, marketRecent.length - 600);
+    }
+  } catch {}
+}
+async function saveMarketTape() {
+  try { await writeJsonFile(MARKET_TAPE_FILE, { recent: marketRecent.slice(-600), savedAt: Date.now() }); } catch {}
+}
 function sampleDevObservatory() {
   try {
     const rows = pumpPortalStream.getCreationCandidates({ maxAgeMs: 30 * 60 * 1000, limit: 250 });
@@ -752,11 +771,13 @@ function sampleDevObservatory() {
     }
     void saveDevObservatory();
     void saveWalletObservatory();
+    void saveMarketTape();
   } catch (e) { console.warn(`[dev-obs] ${e && e.message}`); }
 }
 function startDevObservatory() {
   void loadDevObservatory();
   void loadWalletObservatory();
+  void loadMarketTape();
   void loadCoinBanners();
   setInterval(sampleDevObservatory, 45_000);
 }
@@ -3054,7 +3075,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
         result.ok = true; result.cardBytes = png?.length || 0;
         try { const mp4 = await buildLaunchTrailerMp4(draft, mint, null); result.mp4Bytes = mp4?.length || 0; } catch (me) { result.mp4Error = me.message; }
         try { const gif = await buildLaunchTrailerGif(draft, mint, null); result.gifBytes = gif?.length || 0; } catch (ge) { result.gifError = ge.message; }
-      } catch (e) { result.error = e.message; result.stack = String(e.stack || "").split("\n").slice(0, 4).join(" | "); }
+      } catch (e) { result.error = e.message; console.warn(`[launch-card-test] ${e && e.stack}`); }
       sendWebJson(request, response, 200, result);
       return;
     }

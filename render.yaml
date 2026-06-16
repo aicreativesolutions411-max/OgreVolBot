@@ -34,6 +34,13 @@ services:
         sync: false
       - key: HELIUS_WS_URL
         sync: false
+      # Cheaper READ provider — Alchemy (balances, token accounts, positions, observatory
+      # reads). Reads route here with automatic fallback to the primary on error; writes/
+      # DAS/webhooks stay on the primary (Helius). Value is set in the Render dashboard
+      # (sync:false). This is what spares Helius credits. A 3rd provider can be added as
+      # CHAINSTACK_RPC_URL for further read-splitting / send failover (see P4).
+      - key: READ_RPC_URL
+        sync: false
       - key: RPC_RPS_LIMIT
         value: 40
       - key: DAS_RPS_LIMIT
