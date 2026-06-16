@@ -280,7 +280,14 @@ export function convictionMult(row, rep, sm) {
   if (vol >= 80 && (buys + sells) > 0 && (buys + sells) < 8) c -= 0.3;
   const age = Number(row.pairAgeSeconds) || 9999;
   if (age <= 60) c += 0.15;                                  // very fresh = best entries
-  if (freshScore(row) >= 70) c += 0.15;                      // top-tier setup
+  const fsv = freshScore(row);
+  if (fsv >= 70) c += 0.15;                                  // top-tier setup
+  // SIZE DOWN the lowest-confidence bets: no proven dev, no smart money, only a marginal
+  // score. A rug/dump on these gaps PAST any stop (waewa rugged -60% past the 6% stop), so
+  // betting smaller is the only thing that shrinks the hit. Strong/proven setups keep full
+  // size — this just trims the weakest, highest-rug-risk entries so losers cost less.
+  const noEdge = !(rep && rep.runners >= 1) && !(sm && (sm.kol || sm.winners >= 1));
+  if (noEdge && fsv < 66) c -= 0.25;
   // CRITICAL: freshness/score do NOT predict instant-rugs. Only let conviction size
   // ABOVE base for a dev with a PROVEN runner history (and no rugs). Unknown/unproven
   // coins are capped at 1.0x so one instant-rug can't blow a big bet (the log showed
