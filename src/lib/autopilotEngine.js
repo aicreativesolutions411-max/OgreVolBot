@@ -969,13 +969,25 @@ export function createAutopilotEngine(deps) {
       }
     }
 
-    // Book the REAL SOL received when live (the actual fill), falling back to the
-    // marked-price estimate only for paper or when the fill amount wasn't returned.
-    // This is THE fix for "log shows +0.48 wins but the wallet is down": a moon bag
-    // marked at +480% that really fills at +40% now books +40%, so win/loss counts,
-    // the ledger, and the learning data all reflect what the wallet actually got.
+    // Book the REAL SOL received when live (the actual fill). This is THE fix for
+    // "log shows +0.48 wins but the wallet is down": a moon bag marked at +480% that
+    // really fills at +40% must book +40%, so win/loss counts, the ledger, the peak, and
+    // the learning data all reflect what the wallet actually got.
+    // LIVE NEVER falls back to the marked estimate: if the swap didn't report a fill
+    // amount we book 0 instead of trusting the marked price. Trusting it booked PHANTOM
+    // wins on thin coins — e.g. a +729% spike on a $3k coin that isn't actually sellable
+    // inflated the bank + session peak, then evaporated on the next wallet reconcile, so
+    // nothing real was ever banked. Paper mode still uses the estimate.
     const estProceeds = pos.costSol * portionOfOriginal * (1 + move / 100) * SELL_FEE_FACTOR;
-    const proceeds = failedTerminal ? 0 : (realProceeds != null ? realProceeds : estProceeds);
+    let proceeds;
+    if (failedTerminal) proceeds = 0;
+    else if (realProceeds != null) proceeds = realProceeds;
+    else if (state.live) {
+      proceeds = 0;
+      record("warn", `${pos.sym} ${reason}: no on-chain fill amount returned — booking 0, not the marked +${round(move, 1)}% (no phantom win); wallet reconcile will confirm the real balance.`);
+    } else {
+      proceeds = estProceeds;
+    }
     state.bank += proceeds;
     pos.realized = (pos.realized || 0) + proceeds;
 
