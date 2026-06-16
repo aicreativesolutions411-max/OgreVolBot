@@ -7876,10 +7876,12 @@ function ogreTexVideo(cls, name) {
 // space). Tries the common header hooks in order; first one wins, once per render.
 function mountOgreEye(panel) {
   try {
+    // ONLY mount into plain headings — never into a filter control (the cooks/live category
+    // dropdown lives in .cooks-category-label; injecting there broke the fresh/dex/trending
+    // picker). Terminal/Live get the eye inside the radar bar instead (see the radar markup).
     const host = panel.querySelector(".trade-head h3")
-      || panel.querySelector(".cooks-category-label")
+      || panel.querySelector(".pump-live-head h3")
       || panel.querySelector(".pump-live-head")
-      || panel.querySelector(".terminal-launch-filter-head")
       || panel.querySelector(".trade-head");
     if (host && !host.querySelector(".ogre-spy")) {
       host.insertAdjacentHTML("afterbegin", `<span class="ogre-spy" title="Intel watch">${ogreTexVideo("spy-vid", "eye")}<i></i></span>`);
@@ -7906,15 +7908,16 @@ function attachOgreAccents(panel, tab) {
           + ogreTexVideo("rbar-bg", "conduit")
           + `<span class="orb-scope">${ogreTexVideo("orb-vid", "scope")}<span class="ring"></span><span class="ring r2"></span><span class="sweep"></span><span class="blip b1"></span><span class="blip b2"></span><span class="blip b3"></span></span>`
           + `<span class="orb-read"><span class="t">SWAMP RADAR</span><span class="s"><b>${count}</b> live pairs · scanning the swamp</span></span>`
+          + `<span class="ogre-spy radar-eye" title="Intel watch">${ogreTexVideo("spy-vid", "eye")}<i></i></span>`
           + `<span class="orb-heat">LIVE</span></span>`;
         host.insertBefore(wrap, host.firstChild);
         if (count > ogreRadarPrevCount && ogreRadarPrevCount > 0) { const r = wrap.querySelector(".ogre-radar-bar"); r.classList.add("hit"); setTimeout(() => r.classList.remove("hit"), 800); }
         ogreRadarPrevCount = count;
       }
+      return; // terminal/live get the eye INSIDE the radar bar above — never touch the filter dropdown
     }
-    // The watching ogre eye rides the TOP of every pair page (live/terminal/scanner/kol/
-    // watchlist/etc.) — tucked into the heading that's already there, so it never widens a
-    // panel or adds scroll. Same eye as KOL, everywhere pairs are listed.
+    // The watching ogre eye rides the heading of the other pair pages (kol/watchlist/
+    // slimeScope/smartChart) — tucked into the title that's already there, no new space.
     mountOgreEye(panel);
     if (tab === "smartChart") {
       const head = panel.querySelector(".trade-head");

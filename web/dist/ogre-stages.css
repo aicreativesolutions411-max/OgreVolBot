@@ -169,6 +169,12 @@
    Real rendered loops dropped into the existing accent shells (same size/layout) so the radar,
    intel eye and stat bar read as premium living panels instead of flat CSS. Each <video> is a
    small, muted, looping underlay; the original CSS art stays on top as a faint overlay. */
+/* NO BLACK FLASH: every accent/stage video gets a dark themed background so the element
+   paints dark (not black) before its first frame decodes — kills the "top goes black" flash. */
+.ogre-radar-bar .rbar-bg, .orb-scope .orb-vid, .ogre-spy .spy-vid{background:#06100b;}
+.ogre-stage .ogre-bg{background:radial-gradient(120% 90% at 50% 22%,#0a1410 0%,#05080a 70%);}
+/* the watching eye seated in the radar bar (terminal/live), before the LIVE badge */
+.ogre-radar-bar .radar-eye{flex:none;margin-left:8px;margin-right:0;}
 /* radar: flowing conduit behind the whole bar + a real sweeping scope in the orb */
 .ogre-radar-bar .rbar-bg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0;opacity:.4;mix-blend-mode:screen;pointer-events:none;}
 .ogre-radar-bar > :not(.rbar-bg){position:relative;z-index:1;}
