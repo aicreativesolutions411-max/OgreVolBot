@@ -86,6 +86,7 @@ import {
 import { createTokenMetadataResolver } from "./lib/tokenMetadataResolver.js";
 import { createPumpPortalStream } from "./lib/pumpPortalStream.js";
 import { computeSlimeShield, slimeShieldHasHardDanger } from "./lib/slimeShield.js";
+import * as callerIntel from "./lib/callerIntel.js";
 import {
   appendLimited,
   compareBigInt,
@@ -3225,6 +3226,29 @@ async function handleWebApiRequest(request, response, requestUrl) {
           await loadAutopilotEvents();
           const lim = Math.max(20, Math.min(2000, Number(requestUrl.searchParams.get("limit")) || 300));
           sendWebJson(request, response, 200, { ok: true, count: autopilotEvents.length, events: autopilotEvents.slice(-lim) });
+          return;
+        }
+        if (pathname === "/api/web/autopilot/caller-intel") {
+          // OWNER ONLY — the caller/channel win-rate leaderboard (the social edge that
+          // feeds the autopilot's "a proven caller just called this" conviction signal).
+          if (!isOwner) { sendWebJson(request, response, 403, { ok: false, error: "owner only" }); return; }
+          const store = await readTelegramCalls();
+          const minResolved = Math.max(1, Math.min(50, Number(requestUrl.searchParams.get("min")) || 3));
+          const boards = callerIntel.buildLeaderboards(store.calls || {}, { minResolved });
+          const calls = Object.values(store.calls || {});
+          const resolved = calls.filter((c) => c.status === "resolved");
+          sendWebJson(request, response, 200, {
+            ok: true,
+            totals: {
+              calls: calls.length,
+              resolved: resolved.length,
+              wins: resolved.filter((c) => c.outcome === "won").length,
+              losses: resolved.filter((c) => c.outcome === "lost").length,
+              flats: resolved.filter((c) => c.outcome === "flat").length
+            },
+            callers: boards.callers.slice(0, 50),
+            channels: boards.channels.slice(0, 50)
+          });
           return;
         }
         if (pathname === "/api/web/autopilot/stats") {
@@ -22931,6 +22955,136 @@ async function recordTelegramCall(message, mint, mcUsd) {
   } catch { return null; }
 }
 
+// --- CALLER INTELLIGENCE — Phase B/C: follow every called coin to an outcome, score the
+// caller + channel, and expose a bounded trade signal the autopilot can act on. -----------
+// The poller (web service, on the 5-min loop) refreshes each recent call's peak/last MC via
+// the same DexScreener batch the alpha wall uses, then resolves it (won/lost/flat) with the
+// pure callerIntel module. Resolved + updated calls mirror to the Postgres warehouse so the
+// record survives the 6k JSON cap and redeploys. A reputation index is rebuilt each tick so
+// the engine's per-candidate lookup (telegramCallerIntelForMint) is O(1).
+const CALLER_INTEL_FOLLOW_MS = 3 * 24 * 60 * 60 * 1000; // follow a call up to 3 days
+const CALLER_INTEL_TICK_LIMIT = 40;                     // mints refreshed per tick (bounds RPC)
+let callerIntelRepCache = null;   // { builtAt, callers:Map, channels:Map, mintCallers:Map, mintChannels:Map }
+let callerIntelPgReady = false;
+
+async function persistPostgresTelegramCalls(records) {
+  if (!records || !records.length) return false;
+  try {
+    const pool = await postgresPool();
+    if (!pool) return false;
+    if (!callerIntelPgReady) {
+      await pool.query(`create table if not exists telegram_calls (
+        chat_id text not null, mint text not null, chat_title text, caller_id text, caller_name text,
+        entry_mc double precision, peak_mc double precision, last_mc double precision,
+        first_at bigint, last_at bigint, status text, outcome text, peak_x double precision, resolved_at bigint,
+        primary key (chat_id, mint))`);
+      await pool.query(`create index if not exists telegram_calls_caller_idx on telegram_calls (caller_id, status)`);
+      await pool.query(`create index if not exists telegram_calls_mint_idx on telegram_calls (mint)`);
+      callerIntelPgReady = true;
+    }
+    for (const r of records) {
+      await pool.query(
+        `insert into telegram_calls (chat_id, mint, chat_title, caller_id, caller_name, entry_mc, peak_mc, last_mc, first_at, last_at, status, outcome, peak_x, resolved_at)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+         on conflict (chat_id, mint) do update set chat_title=excluded.chat_title, peak_mc=excluded.peak_mc, last_mc=excluded.last_mc, last_at=excluded.last_at, status=excluded.status, outcome=excluded.outcome, peak_x=excluded.peak_x, resolved_at=excluded.resolved_at`,
+        [String(r.chatId), r.mint, r.chatTitle || null, r.callerId != null ? String(r.callerId) : null, r.callerName || null,
+         Number(r.entryMc) || null, Number(r.peakMc) || null, Number(r.lastMc) || null, Number(r.firstAt) || null, Number(r.lastAt) || null,
+         r.status || "watching", r.outcome || null, Number(r.peakX) || null, Number(r.resolvedAt) || null]);
+    }
+    return true;
+  } catch { return false; }
+}
+
+// Rebuild the caller/channel reputation index from the full call store. Cheap (a few
+// thousand records, capped at 6k) and only runs on the 5-min tick / lazily on first use.
+function rebuildCallerIntelIndex(store) {
+  const calls = Object.values(store?.calls || {});
+  const byCaller = new Map();   // callerId -> { name, calls:[] }
+  const byChannel = new Map();  // chatId   -> { name, calls:[] }
+  const mintCallers = new Map();  // mint -> Set(callerId)
+  const mintChannels = new Map(); // mint -> Set(chatId)
+  for (const c of calls) {
+    const cid = c.callerId != null ? String(c.callerId) : (c.callerName || "anon");
+    const chid = c.chatId != null ? String(c.chatId) : "";
+    if (!byCaller.has(cid)) byCaller.set(cid, { name: c.callerName || cid, calls: [] });
+    byCaller.get(cid).calls.push(c);
+    if (chid) {
+      if (!byChannel.has(chid)) byChannel.set(chid, { name: c.chatTitle || chid, calls: [] });
+      byChannel.get(chid).calls.push(c);
+    }
+    if (c.mint) {
+      if (!mintCallers.has(c.mint)) mintCallers.set(c.mint, new Set());
+      mintCallers.get(c.mint).add(cid);
+      if (chid) { if (!mintChannels.has(c.mint)) mintChannels.set(c.mint, new Set()); mintChannels.get(c.mint).add(chid); }
+    }
+  }
+  const callerReps = new Map();
+  for (const [id, g] of byCaller) callerReps.set(id, { id, name: g.name, ...callerIntel.aggregateReputation(g.calls) });
+  const channelReps = new Map();
+  for (const [id, g] of byChannel) channelReps.set(id, { id, name: g.name, ...callerIntel.aggregateReputation(g.calls) });
+  callerIntelRepCache = { builtAt: Date.now(), callers: callerReps, channels: channelReps, mintCallers, mintChannels };
+  return callerIntelRepCache;
+}
+
+async function ensureCallerIntelIndex() {
+  if (callerIntelRepCache) return callerIntelRepCache;
+  try { return rebuildCallerIntelIndex(await readTelegramCalls()); } catch { return null; }
+}
+
+// THE ENGINE HOOK (P2 uses this): for a mint that was called in any tracked channel,
+// return the best caller + channel reputation and the bounded conviction signal. Returns
+// null when the mint was never called or no proven record backs it.
+function telegramCallerIntelForMint(mint) {
+  const idx = callerIntelRepCache;
+  if (!idx || !mint) return null;
+  const callerIds = idx.mintCallers.get(mint);
+  const chatIds = idx.mintChannels.get(mint);
+  if (!callerIds && !chatIds) return null;
+  let bestCaller = null, bestChannel = null;
+  for (const cid of callerIds || []) { const r = idx.callers.get(cid); if (r && (!bestCaller || r.score > bestCaller.score)) bestCaller = r; }
+  for (const chid of chatIds || []) { const r = idx.channels.get(chid); if (r && (!bestChannel || r.score > bestChannel.score)) bestChannel = r; }
+  const signal = callerIntel.callerSignal(bestCaller, bestChannel);
+  if (!signal.trusted) return null;
+  return { caller: bestCaller, channel: bestChannel, signal };
+}
+
+async function runCallerIntelTick() {
+  const store = await readTelegramCalls();
+  const all = Object.values(store.calls || {});
+  const now = Date.now();
+  // Calls still in flight: not resolved yet, first seen within the follow window. Oldest
+  // unresolved first so nothing starves. Stale-but-unresolved (>follow window) get a final
+  // resolve pass below regardless of price (so they don't linger as "watching" forever).
+  const watching = all.filter((c) => c.status !== "resolved");
+  const fresh = watching.filter((c) => now - Number(c.firstAt || 0) <= CALLER_INTEL_FOLLOW_MS)
+    .sort((a, b) => Number(a.lastAt || a.firstAt || 0) - Number(b.lastAt || b.firstAt || 0))
+    .slice(0, CALLER_INTEL_TICK_LIMIT);
+  const touched = [];
+  if (fresh.length) {
+    const mints = [...new Set(fresh.map((c) => c.mint))];
+    const pairs = await fetchDexScreenerTokenPairsBatch(mints).catch(() => []);
+    for (const c of fresh) {
+      const best = bestDexPairForToken(c.mint, (pairs || []).filter((p) => pairMatchesToken(p, c.mint)));
+      const mc = Number(best?.marketCap || best?.fdv) || 0;
+      if (mc > 0) { c.lastMc = mc; c.lastAt = now; if (mc > (c.peakMc || 0)) c.peakMc = mc; }
+      const res = callerIntel.resolveCallOutcome(c, now);
+      if (res) Object.assign(c, res);
+      touched.push(c);
+    }
+  }
+  // Final-resolve anything past the follow window that price-following never closed.
+  for (const c of watching) {
+    if (now - Number(c.firstAt || 0) <= CALLER_INTEL_FOLLOW_MS) continue;
+    const res = callerIntel.resolveCallOutcome(c, now, { flatAgeMs: 0 });
+    if (res) { Object.assign(c, res); touched.push(c); }
+  }
+  if (touched.length) {
+    scheduleTelegramCallsFlush();
+    void persistPostgresTelegramCalls(touched);
+  }
+  rebuildCallerIntelIndex(store); // refresh the engine-facing reputation index
+}
+
 function telegramGroupsPath() {
   return path.join(CONFIG.dataDir, "telegram-groups.json");
 }
@@ -25071,6 +25225,7 @@ if (CONFIG.serviceRole === "web") {
   const shieldReceiptTimer = setInterval(() => {
     checkShieldReceiptOutcomes().catch((error) => console.warn(`[shield-receipts] check failed: ${error.message}`));
     checkAlphaCallOutcomes().catch((error) => console.warn(`[alpha-calls] check failed: ${error.message}`));
+    runCallerIntelTick().catch((error) => console.warn(`[caller-intel] tick failed: ${error.message}`));
     runAlphaDropTick().catch((error) => console.warn(`[alpha-drop] tick failed: ${error.message}`));
     checkBoardCallOutcomes().catch((error) => console.warn(`[call-board] check failed: ${error.message}`));
     runDailySwampReport().catch((error) => console.warn(`[swamp-report] failed: ${error.message}`));
