@@ -97,7 +97,7 @@ export function aggParams(state) {
   // different scale. Override to a grindScore threshold (the freshScore floors above don't
   // apply to grind). Stays adaptive: the auto-tuner's scoreBonus still raises it in cold/
   // rug-heavy tape. ~50 passes solid survived coins, filters thin/dumping ones.
-  if (grind) minScore = 50 + ((state.tune && state.tune.scoreBonus) || 0);
+  if (grind) minScore = 46 + ((state.tune && state.tune.scoreBonus) || 0);
 
   // ENTRY MC WINDOW. Default: tiny floor (a low-MC runner like ZUL +56% @ $1973 stays in),
   // ceiling 20k (these are fresh launches). GRIND skips the brand-new sub-$5k curve — where
@@ -105,14 +105,14 @@ export function aggParams(state) {
   // SURVIVED the rug window and have real liquidity to fill 30-150% TPs. The floor is the
   // user's "~5k" target; age(45s) + deep liquidity + fs64 + the 0.7x size cap do the
   // rug-dodging, while the wide window keeps enough candidates to actually trade + compound.
-  const mcFloor = grind ? 5000 : 1800;
+  const mcFloor = grind ? 3000 : 1800;
   const mcCeil = grind ? 80000 : 20000;
   // GRIND waits out the first ~15s (the worst instant-rug/sniper-dump seconds — the fresh
   // feed is mostly sub-30s, so a 45s gate starved it to zero entries) and asks for slightly
   // deeper liquidity than default (cleaner fills, less drain risk) without being so strict
   // it can't find candidates. The 0.7x size cap + liquidity-pull/feed-death exits do the
   // rest of the rug-dodging.
-  const minAge = grind ? 15 : 4;
+  const minAge = grind ? 20 : 4;
   // GRIND also raises the age CEILING: it targets survived/climbed coins from the last-hour
   // window (often 20-60min old), which the default 20-min cap would reject outright.
   const maxAge = grind ? 3600 : 1200;
@@ -311,8 +311,9 @@ export function grindScore(row) {
   // Liquidity depth relative to MC — fills the 30% TP cleanly + resists drains.
   const lr = mc > 0 ? liq / mc : 0;
   if (lr >= 0.6) s += 18; else if (lr >= 0.45) s += 12; else if (lr >= 0.35) s += 6;
-  // MC sweet spot for steady +30% moves (not dust, not too heavy to move).
-  if (mc >= 6000 && mc <= 45000) s += 16; else if (mc >= 5000 && mc <= 80000) s += 9;
+  // MC sweet spot for steady +30% moves (not dust, not too heavy to move). The live feed
+  // is mostly sub-$5k, so a small $3-5k band keeps grind trading on quality movers there.
+  if (mc >= 6000 && mc <= 45000) s += 16; else if (mc >= 5000 && mc <= 80000) s += 9; else if (mc >= 3000 && mc <= 80000) s += 6;
   // Site provenance / best-pick quality.
   s += Math.min(14, prov * 0.14);
   return s;

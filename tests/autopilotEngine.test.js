@@ -202,8 +202,9 @@ test("entryReject: a $2k fresh launch with ~$2k liquidity is NOT rejected for li
 
 test("grind: enters only at safer (higher) MC and skips the sub-7k rug zone", () => {
   const P = aggParams(baseState({ mode: "grind" }));
-  // window: floor ~5k (user's target), ceiling 80k, waits out the first ~45s, deeper liq.
-  assert.ok(P.mcFloor >= 5000, "grind raises the MC floor out of the instant-rug zone");
+  // window: floor $3k (feed is mostly sub-$5k; quality gating does the rug-dodging), ceiling
+  // 80k, waits out the first ~20s, deeper liq.
+  assert.ok(P.mcFloor >= 3000 && P.mcFloor < 5000, "grind floors above the deepest dust");
   assert.ok(P.mcCeil > 20000, "grind reaches well higher for survived coins");
   assert.ok(P.minAge >= 12, "grind waits out the worst instant-rug seconds");
   assert.ok(P.maxAge >= 3600, "grind accepts older survived coins from the last-hour window");
@@ -214,8 +215,8 @@ test("grind: enters only at safer (higher) MC and skips the sub-7k rug zone", ()
     null
   );
   assert.ok(P.sl >= 7, "grind uses a wider stop so dips don't shake out winners");
-  // a fresh sub-5k brand-new curve (the ruggy zone) is now rejected for MC
-  assert.equal(entryReject(goodRow({ marketCap: 3000, liquidityUsd: 4000, pairAgeSeconds: 90 }), P), "mc");
+  // the deepest dust (sub-$3k brand-new curve) is rejected for MC
+  assert.equal(entryReject(goodRow({ marketCap: 1500, liquidityUsd: 2000, pairAgeSeconds: 90 }), P), "mc");
   // too young (still in the worst rug seconds) is rejected even at a good MC
   assert.equal(entryReject(goodRow({ marketCap: 12000, liquidityUsd: 9000, pairAgeSeconds: 8 }), P), "age");
   // a healthy, survived $12k coin with deep liquidity passes
