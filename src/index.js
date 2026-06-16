@@ -42072,8 +42072,11 @@ async function rpcRead(label, opFactory, options = {}) {
     return rpcWithRetry(label, () => opFactory(connection), options.retries ?? CONFIG.rpcRetries, options);
   }
   rpcStats.readCallCount = (rpcStats.readCallCount || 0) + 1;
+  // Tag metrics/logs with the ACTUAL read provider so log lines show alchemy/chainstack
+  // (not the static "helius" label) when a read is served off Helius.
+  const readOpts = { ...options, providerName: CONFIG.readRpcProviderName || "read", providerHost: CONFIG.readRpcHost || "" };
   try {
-    return await rpcWithRetry(label, () => opFactory(readConnection), options.retries ?? CONFIG.rpcRetries, options);
+    return await rpcWithRetry(label, () => opFactory(readConnection), readOpts.retries ?? CONFIG.rpcRetries, readOpts);
   } catch (error) {
     rpcStats.readFallbackCount = (rpcStats.readFallbackCount || 0) + 1;
     console.warn(`${label}: read provider failed (${friendlyError(error)}); falling back to Helius.`);
@@ -42084,12 +42087,14 @@ async function rpcRead(label, opFactory, options = {}) {
 async function rpcWithRetry(label, operation, retries = CONFIG.rpcRetries, options = {}) {
   let lastError;
   const limiter = options.priority ? priorityRpcLimiter : rpcLimiter;
+  const providerName = options.providerName || CONFIG.rpcProviderName;
+  const providerHost = options.providerHost || CONFIG.rpcUrlHost;
   const startedAt = Date.now();
 
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     try {
       const result = await limiter.schedule(label, operation);
-      recordRpcMetric(Date.now() - startedAt, null, label);
+      recordRpcMetric(Date.now() - startedAt, null, label, providerName, providerHost);
       return result;
     } catch (error) {
       lastError = error;
@@ -42107,11 +42112,11 @@ async function rpcWithRetry(label, operation, retries = CONFIG.rpcRetries, optio
     }
   }
 
-  recordRpcMetric(Date.now() - startedAt, lastError, label);
+  recordRpcMetric(Date.now() - startedAt, lastError, label, providerName, providerHost);
   throw lastError;
 }
 
-function recordRpcMetric(durationMs, error = null, label = "rpc") {
+function recordRpcMetric(durationMs, error = null, label = "rpc", providerName = CONFIG.rpcProviderName, providerHost = CONFIG.rpcUrlHost) {
   const safeDuration = Number.isFinite(Number(durationMs)) ? Math.max(0, Math.round(Number(durationMs))) : 0;
   rpcStats.callCount += 1;
   rpcStats.totalMs += safeDuration;
@@ -42124,17 +42129,17 @@ function recordRpcMetric(durationMs, error = null, label = "rpc") {
     rpcStats.lastError = safePerfEventText(error?.message || "RPC error", 120);
     if (isRetryableRpcError(error)) rpcStats.rateLimitCount += 1;
   }
-  logRpcMetric({ label, durationMs: safeDuration, error });
+  logRpcMetric({ label, durationMs: safeDuration, error, providerName, providerHost });
 }
 
-function logRpcMetric({ label = "rpc", durationMs = 0, error = null } = {}) {
+function logRpcMetric({ label = "rpc", durationMs = 0, error = null, providerName = CONFIG.rpcProviderName, providerHost = CONFIG.rpcUrlHost } = {}) {
   const rateLimited = Boolean(error && isRetryableRpcError(error));
   if (!error && durationMs < 250) return;
   try {
     console.info(JSON.stringify({
-      event: "helius_rpc_call",
-      rpcProviderName: CONFIG.rpcProviderName,
-      rpcUrlHost: CONFIG.rpcUrlHost,
+      event: "rpc_call",
+      rpcProviderName: providerName,
+      rpcUrlHost: providerHost,
       method: safePerfEventText(label, 80),
       duration_ms: Math.max(0, Math.round(Number(durationMs) || 0)),
       status: error ? (rateLimited ? "rate_limited" : "error") : "ok",

@@ -83,7 +83,7 @@ test("Helius RPC is the explicit backend provider path and public fallback is di
   assert.match(serverSource, /RPC_RPS_LIMIT/);
   assert.match(serverSource, /DAS_RPS_LIMIT/);
   assert.match(serverSource, /rpcMinIntervalFromRpsMs/);
-  assert.match(serverSource, /event: "helius_rpc_call"/);
+  assert.match(serverSource, /event: "rpc_call"/);
   assert.match(serverSource, /function rpcStatsSnapshot/);
   assert.match(serverSource, /function recordRpcMetric/);
   assert.doesNotMatch(functionBodyFromSource(serverSource, "loadConfig"), /rpcUrl:\s*process\.env\.SOLANA_RPC_URL \|\| "https:\/\/api\.mainnet-beta\.solana\.com"/);
