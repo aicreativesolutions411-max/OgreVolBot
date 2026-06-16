@@ -257,6 +257,20 @@ test("grind: banks the bulk at +30% and caps the ride at +150% (base-hits, not m
   assert.equal(cap.reason, "tp4"); assert.equal(cap.pct, 100);
 });
 
+test("evalExit: a proven-dev moon bag rides longer before the time-cap, still bounded", () => {
+  const P = aggParams(baseState());
+  // +50% move, bulk already banked (tp1Done), liquidity intact, modest peak — the only
+  // exit in play here is the slot-freeing moonbag time-cap.
+  const base = { entryMc: 10000, lastMc: 15000, entryLiq: 9000, lastLiq: 9000, openedAt: 0, missed: 0, peakPct: 50, tp1Done: true };
+  const fiveMin = 5 * 60_000;
+  // Unknown dev (devAvgPeak null): default 4-min cap → cashed at 5 min to free the slot.
+  assert.equal(evalExit({ ...base }, P, fiveMin).reason, "moonbag-timeout");
+  // Proven big-runner dev (avgPeak 300): 7-min leash → still holding at 5 min.
+  assert.equal(evalExit({ ...base, devAvgPeak: 300 }, P, fiveMin).action, "hold");
+  // ...but the leash is bounded — even a proven dev's bag is capped (here at 11 min).
+  assert.equal(evalExit({ ...base, devAvgPeak: 300 }, P, 11 * 60_000).reason, "moonbag-timeout");
+});
+
 test("evalExit: hard stop fires past -sl", () => {
   const P = aggParams(baseState());
   const pos = { entryMc: 5000, lastMc: 4500, entryLiq: 6000, lastLiq: 6000, openedAt: 0, missed: 0 };

@@ -506,7 +506,14 @@ export function evalExit(pos, P, nowMs) {
   // free the slot so the bot keeps hunting. This is the fix for "stuck — no buys for
   // minutes": a couple of riding bags (e.g. one sitting at +210% between the trail and
   // the moon target) used to fill every slot and freeze new entries indefinitely.
-  if (pos.tp1Done && held > 4 * 60_000) {
+  // PROVEN-DEV LEASH (richer observatory use): a coin from a dev whose history shows big
+  // average peaks has earned a longer ride before the slot-freeing time-cap fires — so we
+  // don't cash a proven runner-dev's moon bag early. Sample-gated (devAvgPeak is only set
+  // when the dev has >=3 trades & avg peak >=80%), bounded 4→10 min, and it ONLY extends the
+  // hold — the trailing give-back, hard stop, and rug/feed exits still protect the bag the
+  // whole time. Unknown devs (the vast majority) keep the default 4 min: behavior unchanged.
+  const moonHoldMs = ((pos.devAvgPeak || 0) >= 400 ? 10 : (pos.devAvgPeak || 0) >= 200 ? 7 : 4) * 60_000;
+  if (pos.tp1Done && held > moonHoldMs) {
     return { action: "sell", pct: 100, reason: "moonbag-timeout", move };
   }
   // Stale: held 3 min and never really moved.

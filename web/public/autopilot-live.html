@@ -197,6 +197,15 @@
       <div id="trialMsg" class="muted" style="margin-top:8px"></div>
       <div id="trialCodes" style="margin-top:6px"></div>
     </div>
+
+    <!-- CALLER INTEL LEADERBOARD (owner-only, observe) -->
+    <div class="card">
+      <label>📣 Caller intel — who actually calls winners</label>
+      <div class="muted" style="margin-bottom:8px">Every CA called in the channels the bot sits in is tracked from the call to its peak. Callers/channels with a proven record feed the autopilot's conviction. Builds over days — early on it'll read "no resolved calls yet."</div>
+      <button class="b-ghost" id="callerIntelBtn">📣 Load caller leaderboard</button>
+      <div id="callerIntelMsg" class="muted" style="margin-top:8px"></div>
+      <div id="callerIntelOut" style="margin-top:8px"></div>
+    </div>
   </div>
 
 <script>
@@ -558,6 +567,25 @@ function renderTrialCodes(){
     `<button class="b-ghost" style="width:auto;padding:6px 12px;font-size:12px" onclick="copyTrial(${i})">📋 copy link</button></div>`
   ).join("");
 }
+function ciEsc(s){return String(s||"").replace(/[<>&]/g,c=>({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]));}
+function ciRows(list){
+  if(!list||!list.length) return '<div class="muted">none with enough resolved calls yet</div>';
+  return list.slice(0,10).map(r=>
+    `<div class="pos"><span><b>${ciEsc(r.name)}</b> <span class="muted">${r.wins}/${r.resolved} · ${Math.round((r.hitRate||0)*100)}%</span></span>`+
+    `<b class="up">avg ${(r.avgPeakX||0).toFixed(1)}x</b></div>`
+  ).join("");
+}
+$("callerIntelBtn").addEventListener("click", async () => {
+  $("callerIntelBtn").disabled = true; $("callerIntelMsg").textContent = "Loading…";
+  try {
+    const r = await api("/api/web/autopilot/caller-intel");
+    if (r && r.ok) {
+      const t = r.totals || {};
+      $("callerIntelMsg").innerHTML = `<span class="ok">${t.calls||0} calls tracked · ${t.resolved||0} resolved (${t.wins||0}W / ${t.losses||0}L / ${t.flats||0} flat)</span>`;
+      $("callerIntelOut").innerHTML = '<label style="margin:10px 0 4px">Top callers</label>' + ciRows(r.callers) + '<label style="margin:12px 0 4px">Top channels</label>' + ciRows(r.channels);
+    } else { $("callerIntelMsg").innerHTML = '<span class="warn">'+((r&&r.error)||"failed — owner only")+'</span>'; }
+  } finally { $("callerIntelBtn").disabled = false; }
+});
 async function copyTrial(i){
   const t = TRIAL_CODES[i]; if(!t) return;
   try { await navigator.clipboard.writeText(t.link); $("trialMsg").innerHTML='<span class="ok">📋 link copied</span>'; }
