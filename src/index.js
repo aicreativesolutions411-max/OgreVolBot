@@ -469,6 +469,37 @@ async function recordAutopilotTrade(rec) {
   } catch {}
 }
 
+// RUNNING LOG: a rolling, PERSISTENT play-by-play of the autopilot's narration so the log
+// survives session/server restarts and accumulates a reviewable history (for tuning + user
+// trust). The high-frequency "scanning…" heartbeats are dropped so the log stays signal
+// (apes, closes, locks, banks, skips, starts/stops). Capped + debounce-written.
+const AUTOPILOT_EVENTS_FILE = path.join(CONFIG.dataDir, "autopilot-events.json");
+let autopilotEvents = [];
+let autopilotEventsLoaded = false;
+let autopilotEventsDirty = false;
+async function loadAutopilotEvents() {
+  if (autopilotEventsLoaded) return;
+  autopilotEventsLoaded = true;
+  try {
+    const j = await readJson(AUTOPILOT_EVENTS_FILE).catch(() => null);
+    autopilotEvents = (j && Array.isArray(j.events)) ? j.events : [];
+  } catch { autopilotEvents = []; }
+}
+function pushAutopilotEvent(level, msg) {
+  try {
+    const text = String(msg || "");
+    if (/^🔍 scanning/.test(text)) return; // skip the noisy heartbeats — keep the log meaningful
+    autopilotEvents.push({ at: Date.now(), level, msg: text.slice(0, 300) });
+    if (autopilotEvents.length > 4000) autopilotEvents.splice(0, autopilotEvents.length - 4000);
+    autopilotEventsDirty = true;
+  } catch {}
+}
+setInterval(() => {
+  if (!autopilotEventsDirty) return;
+  autopilotEventsDirty = false;
+  writeJsonFile(AUTOPILOT_EVENTS_FILE, { events: autopilotEvents }).catch(() => {});
+}, 8_000);
+
 // --- DEV OBSERVATORY: passively watch EVERY pump.fun launch (creator + outcome)
 // market-wide via the live stream, so dev reputation is rich from thousands of
 // coins, not just the few we traded. Runs 24/7 regardless of whether autopilot
@@ -751,7 +782,7 @@ const autopilotEngine = createAutopilotEngine({
   getMarketTape: () => marketTape(),
   symbolLoserCount: (symbol) => autopilotSymbolLoserCount(symbol),
   recordTrade: (rec) => { void recordAutopilotTrade(rec); },
-  log: (level, msg) => console.log(`[autopilot:${level}] ${msg}`),
+  log: (level, msg) => { console.log(`[autopilot:${level}] ${msg}`); pushAutopilotEvent(level, msg); },
   isPaused: async () => Boolean((await readState().catch(() => ({}))).paused),
   persist: async (snap) => {
     try {
@@ -918,6 +949,7 @@ const autopilotEngine = createAutopilotEngine({
 async function startLiveAutopilotResume() {
   // Populate dev-reputation from the trade history so it's effective immediately.
   await loadAutopilotTrades().catch(() => {});
+  await loadAutopilotEvents().catch(() => {});
   // After a redeploy/restart, re-attach to an in-flight session so open positions keep
   // being managed and hunting resumes. RETRY with backoff — on boot the wallet store /
   // RPC may not be ready for a beat, and a single failure used to SILENTLY drop a LIVE
@@ -3118,6 +3150,14 @@ async function handleWebApiRequest(request, response, requestUrl) {
         if (pathname === "/api/web/autopilot/status") {
           const full = autopilotEngine.status();
           sendWebJson(request, response, 200, { ok: true, owner: isOwner, status: isOwner ? full : liteAutopilotStatus(full) });
+          return;
+        }
+        if (pathname === "/api/web/autopilot/log") {
+          // Persistent running log — survives session/server restarts so the play-by-play
+          // accumulates a reviewable history. Returns newest-last; ?limit caps the slice.
+          await loadAutopilotEvents();
+          const lim = Math.max(20, Math.min(2000, Number(requestUrl.searchParams.get("limit")) || 300));
+          sendWebJson(request, response, 200, { ok: true, count: autopilotEvents.length, events: autopilotEvents.slice(-lim) });
           return;
         }
         if (pathname === "/api/web/autopilot/stats") {
