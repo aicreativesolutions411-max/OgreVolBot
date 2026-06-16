@@ -199,6 +199,39 @@ test("entryReject: a $2k fresh launch with ~$2k liquidity is NOT rejected for li
   assert.equal(entryReject(row, P), null);
 });
 
+test("grind: enters only at safer (higher) MC and skips the sub-7k rug zone", () => {
+  const P = aggParams(baseState({ mode: "grind" }));
+  // window moved up: floor 7k, ceiling 60k, waits out the first ~45s, deeper liquidity.
+  assert.ok(P.mcFloor >= 7000, "grind raises the MC floor out of the instant-rug zone");
+  assert.ok(P.mcCeil > 20000, "grind reaches a bit higher for survived coins");
+  assert.ok(P.minAge >= 30, "grind waits out the instant-rug window");
+  assert.ok(P.liqFrac > 0.3, "grind demands deeper liquidity");
+  // a fresh sub-7k brand-new curve (the ruggy zone) is now rejected for MC
+  assert.equal(entryReject(goodRow({ marketCap: 4000, liquidityUsd: 5000, pairAgeSeconds: 90 }), P), "mc");
+  // too young (still in the rug window) is rejected even at a good MC
+  assert.equal(entryReject(goodRow({ marketCap: 12000, liquidityUsd: 9000, pairAgeSeconds: 20 }), P), "age");
+  // a healthy, survived $12k coin with deep liquidity passes
+  assert.equal(
+    entryReject(goodRow({ marketCap: 12000, liquidityUsd: 9000, pairAgeSeconds: 90, volume5m: 120, buys5m: 25, sells5m: 8, bestPickScore: 80 }), P),
+    null
+  );
+});
+
+test("grind: banks the bulk at +30% and caps the ride at +150% (base-hits, not moonshots)", () => {
+  const P = aggParams(baseState({ mode: "grind" }));
+  assert.ok(P.tp1 <= 30 && P.tp1 >= 24, "first take-profit lands around +30%");
+  assert.ok(P.moonTarget <= 150, "no moonshot chase — ride is capped near +150%");
+  assert.ok(!P.steady, "grind ladders (not a single-pop bank-and-hold)");
+  const base = { entryMc: 10000, entryLiq: 9000, lastLiq: 9000, openedAt: 0, missed: 0, peakPct: 0 };
+  // +30% pop banks the BULK (~65%) but keeps a tail to ladder
+  const tp1 = evalExit({ ...base, lastMc: 10000 * 1.3, tp1Done: false }, P, 1000);
+  assert.equal(tp1.reason, "tp1");
+  assert.ok(tp1.pct >= 60 && tp1.pct <= 70, "banks ~65% at the first pop");
+  // a coin reaching the +150% cap is fully closed (no holding for a 500x)
+  const cap = evalExit({ ...base, lastMc: 10000 * 2.5, tp1Done: true, tp2Done: true, tp3Done: true, peakPct: 150 }, P, 1000);
+  assert.equal(cap.reason, "tp4"); assert.equal(cap.pct, 100);
+});
+
 test("evalExit: hard stop fires past -sl", () => {
   const P = aggParams(baseState());
   const pos = { entryMc: 5000, lastMc: 4500, entryLiq: 6000, lastLiq: 6000, openedAt: 0, missed: 0 };

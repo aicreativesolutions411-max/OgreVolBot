@@ -3243,7 +3243,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
           return;
         }
         const minutes = Number(body.minutes) || 60;
-        const mode = ["chill", "normal", "degen", "steady", "blend"].includes(String(body.mode)) ? String(body.mode) : "normal";
+        const mode = ["chill", "normal", "degen", "steady", "blend", "grind"].includes(String(body.mode)) ? String(body.mode) : "normal";
         const wantLive = body.live === true || body.live === "true";
         // Amount: either an explicit SOL number, or "all"/useFullBalance to let
         // it size the budget from whatever's in the selected wallet (minus the

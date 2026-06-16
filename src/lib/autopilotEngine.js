@@ -39,7 +39,11 @@ export function aggParams(state) {
   else if (wr <= 0.3) regime = "COLD";
 
   const mode = state.mode || "normal";
-  const baseFrac = mode === "degen" ? 0.10 : mode === "chill" ? 0.04 : 0.06;
+  // "grind" = the base-hits machine: safer (higher) MC entries, bank small + often.
+  // Slightly larger base than normal because the entry filters cut the rug tail, so
+  // each (lower-variance) bet can carry a touch more size and still risk less.
+  const grind = mode === "grind";
+  const baseFrac = mode === "degen" ? 0.10 : mode === "chill" ? 0.04 : grind ? 0.07 : 0.06;
 
   // Softer streak/regime scaling: a hot streak no longer balloons size right
   // into the next loss cluster (live data showed streak-pumped 0.11+ SOL bets
@@ -66,6 +70,7 @@ export function aggParams(state) {
   let minScore = regime === "HOT" ? 34 : regime === "COLD" ? 48 : 40;
   if (mode === "degen") minScore -= 6;
   else if (mode === "chill") minScore += 8;
+  else if (grind) minScore += 6;
   minScore += state.minScoreBonus || 0; // low-churn raises the bar
   // Runner-SAFE hard floor: log analysis showed the catastrophic instant-rugs
   // cluster at fs <= 56 (they only sneak in during HOT regimes where the bar
@@ -83,8 +88,20 @@ export function aggParams(state) {
   // regardless of regime base — this is what actually stops the fs 61-63 chop churn
   // that bleeds a directionless tape. (scoreBonus alone couldn't reach this.)
   if (state.tune && state.tune.tape === "COLD") minScore = Math.max(minScore, 62);
+  // GRIND demands a genuinely decent setup floor regardless of regime — we bank small,
+  // so the hit-rate has to stay high; weak fs setups are exactly the ones that round-trip.
+  if (grind) minScore = Math.max(minScore, 64);
 
-  const mcFloor = 1800; // no MC filter — a low-MC runner (e.g. ZUL +56% @ $1973) stays in
+  // ENTRY MC WINDOW. Default: tiny floor (a low-MC runner like ZUL +56% @ $1973 stays in),
+  // ceiling 20k (these are fresh launches). GRIND deliberately skips the sub-$7k brand-new
+  // curve — that's where the instant-rugs cluster — and reaches a bit higher (to $60k) for
+  // coins that already SURVIVED the rug window and have real liquidity to fill 30-150% TPs.
+  const mcFloor = grind ? 7000 : 1800;
+  const mcCeil = grind ? 60000 : 20000;
+  // GRIND also waits out the first ~45s (the instant-rug window) and demands DEEPER
+  // liquidity relative to MC (cleaner fills, far less drain risk).
+  const minAge = grind ? 45 : 4;
+  const liqFrac = grind ? 0.45 : 0.3;
 
   // BANK STYLE — three exit personalities:
   //  • "steady": lock the bulk at the first DOABLE pop (80%) + free-roll 20% to +400%,
@@ -102,6 +119,13 @@ export function aggParams(state) {
     // sell 25% of the ORIGINAL at each rung: 25% @ first pop, then 33% of the 75%
     // remainder @ +100%, then 50% of the 50% remainder @ +200%, ride the last 25%.
     tp1Pct = 25; spikePct = 50; tp2Lvl = 100; tp2Pct = 33; tp3Lvl = 200; tp3Pct = 50; moonTarget = 400;
+  } else if (grind) {
+    // BASE-HITS ladder: bank the BULK at the first +30% pop (~65%), bank most of the
+    // remainder at +70%, ride a small ~14% tail to +120-150% (the rare extra), capped at
+    // +150%. No moonshot chase — high realized win-rate, small banks that compound. The
+    // first-pop trigger (tp1) is set to ~30% just below.
+    tp1 = regime === "HOT" ? 32 : regime === "COLD" ? 24 : 30;
+    tp1Pct = 65; spikePct = 80; tp2Lvl = 70; tp2Pct = 60; tp3Lvl = 120; tp3Pct = 60; moonTarget = 150;
   }
 
   // AUTO-ADAPT — the key lesson from live: the moon-ride only PAYS in a genuinely HOT
@@ -114,7 +138,7 @@ export function aggParams(state) {
   const bankHard = steady || tape === "COLD" || (blend && tape !== "HOT");
   if (bankHard && !steady) { tp1Pct = Math.max(tp1Pct, 85); spikePct = Math.max(spikePct, 85); moonTarget = Math.min(moonTarget, 400); }
 
-  return { regime, wr, baseFrac, streakMult, regimeMult, tp1, tp2, sl, minScore, mcFloor, steady, blend, bankHard, tp1Pct, spikePct, moonTarget, tp2Lvl, tp2Pct, tp3Lvl, tp3Pct };
+  return { regime, wr, baseFrac, streakMult, regimeMult, tp1, tp2, sl, minScore, mcFloor, mcCeil, minAge, liqFrac, steady, blend, grind, bankHard, tp1Pct, spikePct, moonTarget, tp2Lvl, tp2Pct, tp3Lvl, tp3Pct };
 }
 
 // SELF-TUNING / market-regime brain: reads the recent runner & rug rate and sets
@@ -319,9 +343,9 @@ export function entryReject(row, P) {
   // the fast exit-side rug/stop protection for the rest. buys/sells counts are
   // unreliable on brand-new bonding-curve pairs, so use volume as the activity
   // signal and only reject on a clear heavy dump.
-  if (!Number.isFinite(age) || age < 4 || age > 1200) return "age";
-  if (!Number.isFinite(mc) || mc < (P.mcFloor || 1800) || mc > 20000) return "mc";
-  if (liq > 0 && liq < mc * 0.3) return "liquidity";
+  if (!Number.isFinite(age) || age < (P.minAge || 4) || age > 1200) return "age";
+  if (!Number.isFinite(mc) || mc < (P.mcFloor || 1800) || mc > (P.mcCeil || 20000)) return "mc";
+  if (liq > 0 && liq < mc * (P.liqFrac || 0.3)) return "liquidity";
   if (vol < 25) return "volume";
   if (buys > 0 && sells > buys * 2 + 3) return "dumping";
   if (freshScore(row) < P.minScore) return "score";
