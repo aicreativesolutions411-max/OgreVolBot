@@ -7741,11 +7741,10 @@ const OGRE_HERO_CLIPMAP = {
   pnl: [["[data-refresh-all],[data-refresh]", "survey"]]
 };
 // Hero panels whose primary action row should be LIFTED onto the video as an on-clip CTA bar.
-const OGRE_HERO_LIFT = {
-  ogreAi: "[data-ogre-ai-start]",
-  bundle: "[data-bundle-buy]",
-  launchCoin: "[data-launch-coin-submit]"
-};
+// Hero CTA lift disabled: lifting the action row onto the (now compact, full-content) data
+// pages cramped them on desktop. Buttons stay in their full-width forms; the clip is a clean
+// banner and still reacts to clicks via bindOgreActions. (Swap keeps its on-video HUD.)
+const OGRE_HERO_LIFT = {};
 // Config-driven "hero" stages for the Tier 1/2 panels — same engine, lighter banner.
 // base = clip dir, poster = still, tier/cap = labels, accent = CSS class, idle/event clip names.
 // event SFX reuse the existing libraries so the whole site shares one sound identity.

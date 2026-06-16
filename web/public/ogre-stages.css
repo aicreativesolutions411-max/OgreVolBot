@@ -369,17 +369,29 @@ html body main.shell[data-app] .ogre-stage.volume + *::before{
   background:linear-gradient(90deg, transparent, var(--accent, #8dff5a), transparent); opacity:.5;
 }
 
-/* WEB: each living panel becomes a centered column the width of the video above it. */
+/* WEB layout. The immersive centered-console look is ONLY for Swap + Volume (the two
+   control "machines"). The data/form hero pages (Launch, Bundle, Sniper, OgreAI,
+   Positions, PnL) must NOT be crushed into a narrow column — that overlapped their text
+   and broke the Launch checklist. They get a modest centered video banner with the real
+   content flowing at FULL width below. */
 @media (min-width:760px){
-  .ogre-stage, .ogre-stage.hero{aspect-ratio:3/4;max-width:480px;max-height:600px;}
-  /* swap: video (with the on-video HUD) is the hero; the info cards sit in one centered
-     column beneath it (collapse the 2-col grid so nothing floats off to the side). */
-  html body main.shell[data-app] .ogre-stage.swap + .trade-layout{grid-template-columns:1fr !important; max-width:480px; margin:12px auto 0; gap:12px;}
-  /* volume: the glass console centers and rises into the bottom of the video. */
-  html body main.shell[data-app] .ogre-stage.volume + *{max-width:480px; margin:-120px auto 0; padding-top:30px;}
-  /* hero: video + content centered as one column (the CTA already lives on the clip). */
-  html body main.shell[data-app] .ogre-stage.hero + *{max-width:480px; margin:12px auto 0;}
+  /* Swap + Volume machines: centered console, a touch wider than before. */
+  .ogre-stage.swap, .ogre-stage.volume{aspect-ratio:3/4;max-width:560px;max-height:640px;}
+  html body main.shell[data-app] .ogre-stage.swap + .trade-layout{grid-template-columns:1fr !important; max-width:560px; margin:12px auto 0; gap:12px;}
+  html body main.shell[data-app] .ogre-stage.volume + *{max-width:560px; margin:-96px auto 0; padding-top:28px;}
+  /* Hero data/form pages: a small centered portrait banner (full ogre, no letterbox), with
+     the real content flowing at FULL width below — no crush, no overlap. */
+  .ogre-stage.hero{aspect-ratio:3/4; max-width:340px; max-height:440px; margin-left:auto; margin-right:auto;}
+  html body main.shell[data-app] .ogre-stage.hero + *{max-width:none !important; margin:14px 0 0 !important; background:none !important; backdrop-filter:none !important; box-shadow:none !important;}
+  html body main.shell[data-app] .ogre-stage.hero + *::before{display:none !important;}
 }
+/* PnL totals: big, centered cards (Trades / Spent / Received / Realized). */
+html body main.shell[data-app] .pnl-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;max-width:620px;margin:16px auto;}
+html body main.shell[data-app] .pnl-summary > div{text-align:center;padding:18px 14px;background:rgba(10,18,14,.6);border:1px solid rgba(141,255,90,.16);border-radius:16px;}
+html body main.shell[data-app] .pnl-summary > div > span{display:block;font-size:12px;letter-spacing:.6px;color:#7fae74;text-transform:uppercase;}
+html body main.shell[data-app] .pnl-summary > div > strong{display:block;margin-top:6px;font-size:30px;font-weight:900;line-height:1.1;}
+@media (min-width:760px){ html body main.shell[data-app] .pnl-summary{grid-template-columns:repeat(4,minmax(0,1fr));max-width:880px;} html body main.shell[data-app] .pnl-summary > div > strong{font-size:34px;} }
+
 .ogre-stage.hero .os-tier{color:var(--accent);border:1px solid rgba(255,255,255,.16);}
 .ogre-stage.hero .os-dot{background:var(--accent);box-shadow:0 0 8px var(--accent);}
 .ogre-stage.launch{--accent:#ff8a3a;}
