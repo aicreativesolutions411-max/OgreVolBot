@@ -7872,6 +7872,20 @@ function bindOgreRefreshSpin() {
 function ogreTexVideo(cls, name) {
   return `<video class="${cls}" autoplay muted loop playsinline preload="auto" src="/assets/slimewire/ui/${name}.mp4"></video>`;
 }
+// The watching ogre-eye, mounted into whatever heading a pair page already has (no new
+// space). Tries the common header hooks in order; first one wins, once per render.
+function mountOgreEye(panel) {
+  try {
+    const host = panel.querySelector(".trade-head h3")
+      || panel.querySelector(".cooks-category-label")
+      || panel.querySelector(".pump-live-head")
+      || panel.querySelector(".terminal-launch-filter-head")
+      || panel.querySelector(".trade-head");
+    if (host && !host.querySelector(".ogre-spy")) {
+      host.insertAdjacentHTML("afterbegin", `<span class="ogre-spy" title="Intel watch">${ogreTexVideo("spy-vid", "eye")}<i></i></span>`);
+    }
+  } catch {}
+}
 // Tier-3 accents: drop a featherweight ogre status into space that already exists on the
 // data-dense screens — never a banner, never extra scroll. CSS/SVG only.
 let ogreRadarPrevCount = 0;
@@ -7897,15 +7911,14 @@ function attachOgreAccents(panel, tab) {
         if (count > ogreRadarPrevCount && ogreRadarPrevCount > 0) { const r = wrap.querySelector(".ogre-radar-bar"); r.classList.add("hit"); setTimeout(() => r.classList.remove("hit"), 800); }
         ogreRadarPrevCount = count;
       }
-      return;
     }
-    const head = panel.querySelector(".trade-head");
-    if (!head) return;
-    if (tab === "kol" || tab === "slimeScope" || tab === "watchlist") {
-      const h = head.querySelector("h3");
-      if (h && !h.querySelector(".ogre-spy")) h.insertAdjacentHTML("afterbegin", `<span class="ogre-spy" title="Intel watch">${ogreTexVideo("spy-vid", "eye")}<i></i></span>`);
-    } else if (tab === "smartChart") {
-      if (!head.querySelector(".ogre-chartwatch")) head.insertAdjacentHTML("beforeend", `<span class="ogre-chartwatch"><span class="ce"></span>WATCHING</span>`);
+    // The watching ogre eye rides the TOP of every pair page (live/terminal/scanner/kol/
+    // watchlist/etc.) — tucked into the heading that's already there, so it never widens a
+    // panel or adds scroll. Same eye as KOL, everywhere pairs are listed.
+    mountOgreEye(panel);
+    if (tab === "smartChart") {
+      const head = panel.querySelector(".trade-head");
+      if (head && !head.querySelector(".ogre-chartwatch")) head.insertAdjacentHTML("beforeend", `<span class="ogre-chartwatch"><span class="ce"></span>WATCHING</span>`);
     }
   } catch {}
 }

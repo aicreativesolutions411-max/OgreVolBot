@@ -180,6 +180,12 @@
 .ogre-spy .spy-vid{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0;}
 .ogre-spy:has(.spy-vid) i{display:none;}
 @media (prefers-reduced-motion: reduce){.ogre-radar-bar .rbar-bg,.orb-scope .orb-vid,.ogre-spy .spy-vid{display:none !important;}}
+/* MOBILE: the watching eye a touch bigger so it reads on a phone — still inline in the
+   existing heading, no wider panel, no extra space. */
+@media (max-width:760px){
+  .ogre-spy{width:40px;height:25px;margin-right:10px;}
+  .ogre-spy i{width:13px;height:13px;}
+}
 
 /* ----------------------------------------------------------------- PREMIUM BARS
    Elevates the signature account stat bar + search into a high-end, unmistakably-SlimeWire
