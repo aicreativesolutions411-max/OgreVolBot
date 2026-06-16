@@ -23323,33 +23323,55 @@ function scanFmtAge(ms) {
 }
 
 // Pull everything for one scan card from the free data the site already uses.
+// SolanaTracker ATH (we hold the key). { mc, at } or null — defensive: any missing field / no
+// key / error → null → the card simply omits the ATH line (never a fabricated "ATH = now").
+function parseTokenAth(raw, supply) {
+  try {
+    if (!raw) return null;
+    const d = raw.ath || raw.data || raw;
+    let mc = firstMeaningfulNumber(d.highest_market_cap, d.highestMarketCap, d.marketCap, d.market_cap, d.mc);
+    const price = Number(d.highest_price ?? d.highestPrice ?? d.price) || 0;
+    if (!(mc > 0) && price > 0 && Number(supply) > 0) mc = price * Number(supply);
+    if (!(mc > 0)) return null;
+    let at = Number(d.timestamp ?? d.time ?? d.t ?? d.date) || 0;
+    if (at > 0 && at < 1e12) at *= 1000; // seconds → ms
+    return { mc, at };
+  } catch { return null; }
+}
+
 async function gatherSlimeScan(mint) {
-  const [pairs, rug, shield, dexPaid, supply] = await Promise.all([
+  // Pump coins read Pump metadata FIRST (priority), Dex fills the gaps it doesn't have
+  // (volume, 1H txns, price-change). Fetch everything in parallel so the card always has the
+  // richest read available — no field is left blank just because one source was slow.
+  const pumpStyle = isPumpStyleToken({ tokenMint: mint });
+  const [pairs, rug, shield, dexPaid, supply, pumpMeta, athRaw] = await Promise.all([
     fetchDexScreenerTokenPairsFallback(mint).catch(() => null),
     fetchRugcheckFull(mint).catch(() => null),
     webSlimeShield(mint).catch(() => null),
     fetchDexPaidStatus(mint).catch(() => null),
-    fetchTokenSupplyUi(mint).catch(() => null)
+    fetchTokenSupplyUi(mint).catch(() => null),
+    (pumpStyle ? getPumpFunTokenMetadata(mint).catch(() => null) : Promise.resolve(null)),
+    (CONFIG.solanaTrackerApiKey ? solanaTrackerJson(`/tokens/${mint}/ath`, { cacheTtlMs: 60_000, timeoutMs: 5_000 }).catch(() => null) : Promise.resolve(null))
   ]);
   const best = bestDexPairForToken(mint, pairs);
   const meta = best ? metadataFromDexPair(mint, best) : null;
-  let bonding = null;
-  if (!meta || !meta.marketCap) {
-    const pump = await getPumpFunTokenMetadata(mint).catch(() => null);
-    if (pump) bonding = pump;
-  } else if (isPumpStyleToken({ tokenMint: mint, symbol: meta.symbol, name: meta.name })) {
-    bonding = await getPumpFunTokenMetadata(mint).catch(() => null);
-  }
-  return { best, meta, rug, shield, bonding, dexPaid, supply };
+  // bonding = Pump metadata. Always present for pump-style coins (fetched above); for the rare
+  // case it wasn't pump-style yet has no Dex MC, grab it now so MC/price/LP never read blank.
+  let bonding = pumpMeta;
+  if (!bonding && (!meta || !meta.marketCap)) bonding = await getPumpFunTokenMetadata(mint).catch(() => null);
+  const ath = parseTokenAth(athRaw, supply);
+  return { best, meta, rug, shield, bonding, dexPaid, supply, ath };
 }
 
 // Compact bottom row: just Menu + Quick Buy + Refresh (3 small buttons, not bulky).
 // Menu opens user-friendly submenus; Quick Buy deep-links the CA prefilled to the site.
 function slimeScanKeyboard(mint) {
   const links = slimewireTokenLinks(mint);
+  // Clean, primary-action-first row — Quick Buy (the funnel) leads; Menu opens the full link
+  // sets; Refresh re-pulls the read + caller line. All other links live in the card text now.
   return { inline_keyboard: [[
-    { text: "📂 Menu", callback_data: `scan:menu:${mint}` },
     { text: "⚡ Quick Buy", url: links.siteBuy },
+    { text: "📊 Menu", callback_data: `scan:menu:${mint}` },
     { text: "🔄 Refresh", callback_data: `scan:refresh:${mint}` }
   ]] };
 }
@@ -23441,43 +23463,54 @@ async function buildScanCallerFooter(chatId, mint, currentMc) {
     }
     const entry = Number(rec.entryMc) || 0;
     const ago = alphaAgeLabel(Math.max(0, Date.now() - Number(rec.firstAt || Date.now())));
-    let perf = "";
+    // Compact, scanner-bot style: "📣 caller @ $<MC then> [<move since>] (<ago>)" + peak if big.
+    let bracket = "";
     if (entry > 0 && mc > 0) {
-      const x = mc / entry;
-      const pct = Math.round((x - 1) * 100);
-      const tag = x >= 1 ? "🟢" : "🔴";
-      const xStr = x >= 2 ? ` ${x >= 10 ? Math.round(x) : x.toFixed(1)}x` : "";
-      const peakX = entry > 0 ? (Number(rec.peakMc) || 0) / entry : 0;
-      const peakStr = peakX >= 2 ? ` · peak +${Math.round((peakX - 1) * 100)}%` : "";
-      perf = ` · now ${tag}${xStr} ${pct >= 0 ? "+" : ""}${pct}%${peakStr}`;
+      const pct = Math.round((mc / entry - 1) * 100);
+      bracket = ` ${pct >= 0 ? "🟢" : "🔴"} [${pct >= 0 ? "+" : ""}${pct}%]`;
     }
-    return `📣 First called by <b>${escapeTelegramHtml(rec.callerName || "someone")}</b> · ${ago}${perf}`;
+    const peakX = entry > 0 ? (Number(rec.peakMc) || 0) / entry : 0;
+    const peakStr = peakX >= 2 ? ` · peak +${Math.round((peakX - 1) * 100)}%` : "";
+    return `📣 <b>${escapeTelegramHtml(rec.callerName || "someone")}</b> @ ${scanFmtMoney(entry)}${bracket} (${ago})${peakStr}`;
   } catch { return ""; }
 }
 
-function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, supply, callerLine }) {
+function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, supply, callerLine, ath }) {
   const esc = escapeTelegramHtml;
   const links = slimewireTokenLinks(mint);
   const dex = dexScreenerUrl(mint);
   const sym = (meta?.symbol || bonding?.symbol || shortMint(mint)).slice(0, 18);
   const name = (meta?.name || bonding?.name || sym).slice(0, 40);
   const dexId = meta?.dexId || (mint.endsWith("pump") ? "pump" : "sol");
-  const mc = meta?.marketCap || meta?.fdv || bonding?.marketCap || 0;
-  const liq = meta?.liquidityUsd || bonding?.liquidityUsd || 0;
-  const vol24 = Number(meta?.volume?.h24 || meta?.volume?.h6 || 0);
-  const ch24 = meta?.priceChange?.h24;
+
+  // header status FIRST — it also decides metadata PRECEDENCE: a coin still ON the bonding
+  // curve reads Pump-first (live + accurate there); a migrated coin reads Dex-first (Pump
+  // metadata freezes at migration). This is the "pump coins use Pump first" priority.
+  const bondPct = firstMeaningfulNumber(bonding?.bondingProgressPct);
+  const onCurve = Boolean(bonding && bondPct != null && !meta?.graduated);
+  const pick = (pumpVal, dexVal) => onCurve ? firstMeaningfulNumber(pumpVal, dexVal) : firstMeaningfulNumber(dexVal, pumpVal);
+  const mc = pick(bonding?.marketCap, meta?.marketCap ?? meta?.fdv) || 0;
+  const liq = pick(bonding?.liquidityUsd, meta?.liquidityUsd) || 0;
+  const vol24 = Number(meta?.volume?.h24 || meta?.volume?.h6 || bonding?.volume24h || 0);
+  const ch24 = meta?.priceChange?.h24 ?? bonding?.priceChange24h;
   const ch1 = meta?.priceChange?.h1;
   const buys1 = Number(meta?.txns?.h1?.buys || 0);
   const sells1 = Number(meta?.txns?.h1?.sells || 0);
-  const price = scanFmtPriceSub(Number(best?.priceUsd) || Number(bonding?.priceUsd) || (mc && supply ? mc / supply : 0));
+  const price = scanFmtPriceSub(pick(Number(bonding?.priceUsd), Number(best?.priceUsd)) || (mc && supply ? mc / supply : 0));
+  // ATH (real, from SolanaTracker) — only shown when genuinely at/above the current MC.
+  const showAth = ath && Number(ath.mc) > 0 && Number(ath.mc) >= mc * 0.999;
+  let athTail = "";
+  if (showAth) {
+    const fromAth = mc > 0 ? Math.round((mc / ath.mc - 1) * 100) : null;
+    const aAge = ath.at ? alphaAgeLabel(Math.max(0, Date.now() - Number(ath.at))) : "";
+    const parts = [fromAth != null ? `${fromAth}%` : "", aAge].filter(Boolean).join(" / ");
+    athTail = parts ? ` <i>(${parts})</i>` : "";
+  }
 
-  // header status: Pump bonding % on a curve, MIGRATED once graduated, else the DEX
-  const bondPct = firstMeaningfulNumber(bonding?.bondingProgressPct);
-  const onCurve = Boolean(bonding && bondPct != null && !meta?.graduated);
   const headStatus = onCurve
     ? `(Pump @ ${Math.max(0, Math.min(100, Math.round(bondPct)))}%)`
     : (meta?.graduated ? "(Migrated)" : "");
-  const headerTail = [`#SOL${headStatus ? ` ${headStatus}` : ""}`, `🌱 ${scanFmtAge(meta?.pairCreatedAt)}`]
+  const headerTail = [`#SOL${headStatus ? ` ${headStatus}` : ""}`, `🌱 ${scanFmtAge(meta?.pairCreatedAt || bonding?.createdAt || bonding?.pairCreatedAt)}`]
     .concat(rug?.holderCount ? [`∞ ${scanFmtSupply(rug.holderCount)}`] : [])
     .join(" | ");
 
@@ -23509,8 +23542,9 @@ function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, 
     `├ MC   <b>${scanFmtMoney(mc)}</b>`,
     `├ Vol  <b>${scanFmtMoney(vol24)}</b>`,
     `├ LP   <b>${scanFmtMoney(liq)}</b>`,
-    supply ? `├ Sup  <b>${scanFmtSupply(supply)}</b>` : "",
-    `└ 1H   <b>${scanFmtPct(ch1)}</b>  🟢 ${buys1}  🔴 ${sells1}`,
+    supply ? `├ Sup  <b>${scanFmtSupply(supply)}</b>` : null,
+    `${showAth ? "├" : "└"} 1H   <b>${scanFmtPct(ch1)}</b>  🟢 ${buys1}  🔴 ${sells1}`,
+    showAth ? `└ ATH  <b>${scanFmtMoney(ath.mc)}</b>${athTail}` : null,
     "",
     `🔗 <b>Socials</b>`,
     `└ ${socialBits.join(" • ")}`,
@@ -23522,13 +23556,12 @@ function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, 
     `├ DEX Paid <b>${dexPaidStr}</b>`,
     `└ Mint <b>${mintAuth}</b> | Freeze <b>${freezeAuth}</b>`,
     "",
-    // CALLER INTEL: who first called it here, when, and X/% since (live; updates on refresh).
-    callerLine || "",
-    `🔗 <b>Quick links</b>`,
-    `└ <a href="${links.site}">Chart</a> • <a href="${dex}">DEX</a> • <a href="https://rugcheck.xyz/tokens/${mint}">Audit</a> • <a href="https://pump.fun/coin/${mint}">Pump</a> • <a href="${links.proof}">Proof</a>`,
-    "",
+    // CALLER INTEL: who first called it here, the MC then, the move since, and how long ago.
+    callerLine || null,
+    // Compact quick-links row (matches scanner-bot style) — SlimeWire chart first.
+    `🔗 <a href="${links.site}">Chart</a> • <a href="${dex}">DS</a> • <a href="https://www.geckoterminal.com/solana/tokens/${mint}">GT</a> • <a href="https://rugcheck.xyz/tokens/${mint}">Rug</a> • <a href="https://solscan.io/token/${mint}">Sol</a> • <a href="${links.proof}">Proof</a>`,
     `<a href="https://www.slimewire.org">⚡ Powered by SlimeWire</a> — Quick Buy below`
-  ].filter(Boolean);
+  ].filter((l) => l != null); // keep intentional "" section separators; drop omitted (null) lines
   return lines.join("\n");
 }
 
