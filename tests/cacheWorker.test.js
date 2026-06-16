@@ -89,6 +89,20 @@ test("Helius RPC is the explicit backend provider path and public fallback is di
   assert.doesNotMatch(functionBodyFromSource(serverSource, "loadConfig"), /rpcUrl:\s*process\.env\.SOLANA_RPC_URL \|\| "https:\/\/api\.mainnet-beta\.solana\.com"/);
 });
 
+test("autopilot backend is owner-locked: admin page gated, owner check fails closed, paper is owner-only", () => {
+  // The admin panel page must be served through the owner-gated handler, not the open one.
+  assert.match(serverSource, /serveAutopilotAdminPage/);
+  const adminBody = functionBodyFromSource(serverSource, "serveAutopilotAdminPage");
+  assert.match(adminBody, /404/); // 404s (hides existence) when not authed
+  assert.match(adminBody, /autopilotOwnerKey/);
+  // autopilotIsOwner must FAIL CLOSED — never trust a bare logged-in session as owner.
+  const ownerBody = functionBodyFromSource(serverSource, "autopilotIsOwner");
+  assert.doesNotMatch(ownerBody, /return Boolean\(webAuth\)/);
+  assert.match(ownerBody, /return false/);
+  // Paper mode must be owner-only in the start path.
+  assert.match(serverSource, /Paper mode is owner-only/);
+});
+
 test("web wallet, positions, and pnl summaries return cached data immediately and refresh in background", () => {
   const body = functionBodyFromSource(serverSource, "cachedWebSummary");
   assert.match(body, /memory-hit/);

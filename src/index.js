@@ -357,10 +357,14 @@ async function autopilotAccessKeyFor(userId) {
 // Owner = holds the owner key (provided directly, OR is signed in as the stable
 // owner identity via key-login). Before any owner key is set, any session is owner.
 function autopilotIsOwner(providedKey, webAuth) {
+  // Owner ONLY = signed in as the stable owner identity (key-login) OR presenting the
+  // exact owner/control key. FAIL CLOSED: if no owner key is configured we trust NOBODY
+  // (previously any logged-in session was treated as owner — that leaked paper mode,
+  // logs, and strategy to ordinary users). The owner key is required to be set in prod.
   if (webAuth && webAuth.userId === AUTOPILOT_OWNER_USERID) return true;
-  if (CONFIG.autopilotOwnerKey) return providedKey === CONFIG.autopilotOwnerKey;
+  if (CONFIG.autopilotOwnerKey && providedKey === CONFIG.autopilotOwnerKey) return true;
   if (CONFIG.autopilotControlKey && providedKey === CONFIG.autopilotControlKey) return true;
-  return Boolean(webAuth);
+  return false;
 }
 // Strip the owner-only intel (decision log, strategy internals, stats) from a
 // status payload so paying users see ONLY their P&L — never how it works.
@@ -2308,7 +2312,9 @@ function startHealthServer() {
       return;
     }
     if (request.method === "GET" && ["/autopilot-live", "/autobot", "/live-autopilot"].includes(requestUrl.pathname)) {
-      await serveStaticHtmlPage(response, "autopilot-live.html");
+      // OWNER-ONLY: gated on the owner key; 404s for everyone else so the admin panel
+      // (paper mode, strategy labels, logs) is never exposed.
+      await serveAutopilotAdminPage(requestUrl, request, response);
       return;
     }
     if (request.method === "GET" && ["/autopilot-pro", "/autopilot-app", "/swamp-auto", "/pro", "/auto", "/slimewire-auto", "/trade-bot"].includes(requestUrl.pathname)) {
@@ -3282,6 +3288,13 @@ async function handleWebApiRequest(request, response, requestUrl) {
         const minutes = Number(body.minutes) || 60;
         const mode = ["chill", "normal", "degen", "steady", "blend", "grind"].includes(String(body.mode)) ? String(body.mode) : "normal";
         const wantLive = body.live === true || body.live === "true";
+        // PAPER MODE IS OWNER-ONLY. Paper runs the full strategy with no risk, so it's the
+        // clearest window into how the bot works — paying users must NEVER see it. They run
+        // LIVE on their own wallet only; only the owner key can run paper/simulation.
+        if (!wantLive && !isOwner) {
+          sendWebJson(request, response, 403, { ok: false, error: "Paper mode is owner-only. Start live trading on your own wallet." });
+          return;
+        }
         // Amount: either an explicit SOL number, or "all"/useFullBalance to let
         // it size the budget from whatever's in the selected wallet (minus the
         // safety reserve) and play it as it sees fit.
@@ -22848,6 +22861,136 @@ async function handleTelegramApeCommand(chatId) {
   ].join("\n"), tokenActionKeyboard(pick.tokenMint));
 }
 
+// ---------------------------------------------------------------------------
+// SCAN CARD (OgreScanBot-style clean info box, ported into the SlimeWire bot)
+// A pasted CA in any channel returns a Rick/Phanes-style scan: stats, audit,
+// socials, links — and a one-tap prefilled "Buy on SlimeWire" button. This is
+// the all-in-one funnel: scan lives in channels, buy flows straight to the site.
+// ---------------------------------------------------------------------------
+function scanFmtMoney(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n === 0) return "n/a";
+  if (n >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
+  if (n >= 1e6) return `$${(n / 1e6).toFixed(2)}M`;
+  if (n >= 1e3) return `$${(n / 1e3).toFixed(1)}K`;
+  return `$${n.toFixed(2)}`;
+}
+function scanFmtPrice(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return "n/a";
+  if (n < 0.00001) return `$${n.toFixed(10).replace(/0+$/, "")}`;
+  if (n < 0.01) return `$${n.toFixed(8).replace(/0+$/, "")}`;
+  return `$${n.toFixed(4)}`;
+}
+function scanFmtPct(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "n/a";
+  return `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`;
+}
+function scanFmtAge(ms) {
+  const t = Number(ms);
+  if (!Number.isFinite(t) || t <= 0) return "age n/a";
+  const s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+  if (s < 3600) return `${Math.max(1, Math.floor(s / 60))}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}d`;
+}
+
+// Pull everything for one scan card from the free data the site already uses.
+async function gatherSlimeScan(mint) {
+  const [pairs, rug, shield] = await Promise.all([
+    fetchDexScreenerTokenPairsFallback(mint).catch(() => null),
+    fetchRugcheckSummary(mint).catch(() => null),
+    webSlimeShield(mint).catch(() => null)
+  ]);
+  const best = bestDexPairForToken(mint, pairs);
+  const meta = best ? metadataFromDexPair(mint, best) : null;
+  let bonding = null;
+  if (!meta || !meta.marketCap) {
+    const pump = await getPumpFunTokenMetadata(mint).catch(() => null);
+    if (pump) bonding = pump;
+  } else if (isPumpStyleToken({ tokenMint: mint, symbol: meta.symbol, name: meta.name })) {
+    bonding = await getPumpFunTokenMetadata(mint).catch(() => null);
+  }
+  return { best, meta, rug, shield, bonding };
+}
+
+function slimeScanKeyboard(mint) {
+  const links = slimewireTokenLinks(mint);
+  const rows = [
+    [
+      { text: "⚡ Buy on SlimeWire", url: links.siteBuy },
+      { text: "📈 Chart", url: links.site }
+    ]
+  ];
+  if (links.dmBuy) rows.push([{ text: "🤖 Buy in DM", url: links.dmBuy }, { text: "Dex", url: links.dex }]);
+  else rows.push([{ text: "Dex", url: links.dex }]);
+  rows.push([
+    { text: "🔬 Rugcheck", url: `https://rugcheck.xyz/tokens/${mint}` },
+    { text: "🫧 Bubblemaps", url: `https://app.bubblemaps.io/sol/token/${mint}` },
+    { text: "🚀 Pump", url: `https://pump.fun/coin/${mint}` }
+  ]);
+  rows.push([
+    { text: "🔎 X search", url: `https://x.com/search?q=${encodeURIComponent(mint)}&f=live` },
+    { text: "🧾 Proof Wall", url: links.proof }
+  ]);
+  return { inline_keyboard: rows };
+}
+
+function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best }) {
+  const esc = escapeTelegramHtml;
+  const sym = (meta?.symbol || bonding?.symbol || shortMint(mint)).slice(0, 18);
+  const name = (meta?.name || bonding?.name || sym).slice(0, 40);
+  const dexId = meta?.dexId || (mint.endsWith("pump") ? "pump" : "sol");
+  const mc = meta?.marketCap || meta?.fdv || bonding?.marketCap || 0;
+  const liq = meta?.liquidityUsd || bonding?.liquidityUsd || 0;
+  const vol24 = Number(meta?.volume?.h24 || meta?.volume?.h6 || 0);
+  const ch24 = meta?.priceChange?.h24;
+  const ch1 = meta?.priceChange?.h1;
+  const buys1 = Number(meta?.txns?.h1?.buys || 0);
+  const sells1 = Number(meta?.txns?.h1?.sells || 0);
+  const price = scanFmtPrice(Number(best?.priceUsd) || Number(bonding?.priceUsd) || 0);
+  // status chip: bonding % for pump curve, else dex id
+  const bondPct = firstMeaningfulNumber(bonding?.bondingProgressPct);
+  const status = (bonding && bondPct != null && !meta?.graduated)
+    ? `Pump ${Math.max(0, Math.min(100, Math.round(bondPct)))}%`
+    : (meta?.graduated ? "MIGRATED" : `#${String(dexId).toUpperCase()}`);
+
+  const verdict = String(shield?.verdict || "").toUpperCase();
+  const verdictIcon = { BUY: "🟢", CAUTION: "🟡", RISK: "🟠", AVOID: "🔴" }[verdict] || "⚪";
+  const rugLine = rug?.risks?.length
+    ? rug.risks.slice(0, 3).map((r) => esc(r.name)).join(", ")
+    : (rug?.score != null ? `score ${rug.score}` : "no major flags returned");
+
+  // socials
+  const socials = [];
+  if (meta?.telegramUrl) socials.push(`<a href="${esc(meta.telegramUrl)}">TG</a>`);
+  if (meta?.websiteUrl) socials.push(`<a href="${esc(meta.websiteUrl)}">Web</a>`);
+  if (meta?.twitterUrl) socials.push(`<a href="${esc(meta.twitterUrl)}">X</a>`);
+  const socialsLine = socials.length ? socials.join(" • ") : "none found";
+
+  const lines = [
+    `🦅 <b>${esc(name)} ($${esc(sym)})</b> • ${esc(status)}`,
+    `<code>${esc(mint)}</code>`,
+    `└ #SOL • ${esc(dexId)} • ${esc(scanFmtAge(meta?.pairCreatedAt))}`,
+    "",
+    `📊 <b>Stats</b>`,
+    `├ USD <b>${price}</b> (${scanFmtPct(ch24)} 24h) | MC <b>${scanFmtMoney(mc)}</b>`,
+    `├ Vol <b>${scanFmtMoney(vol24)}</b> | LP <b>${scanFmtMoney(liq)}</b>`,
+    `└ 1H <b>${scanFmtPct(ch1)}</b> 🟢 ${buys1} 🔴 ${sells1}`,
+    "",
+    `🔒 <b>Audit</b>`,
+    `├ ${verdictIcon} SlimeShield <b>${esc(verdict || "UNRATED")}</b>${shield?.score != null ? ` (${shield.score}/100)` : ""}`,
+    `└ 🔬 Rugcheck: ${rugLine}`,
+    "",
+    `🔗 <b>Socials</b> ${socialsLine}`,
+    "",
+    `⚡ <b>Tap “Buy on SlimeWire” below</b> — CA prefilled, one-tap entry.`,
+    `<a href="https://www.slimewire.org">Powered by SlimeWire</a>`
+  ];
+  return lines.join("\n");
+}
+
 // /look <CA>: instant SlimeShield read with trade links - the group-native version of
 // pasting a CA into Slime Scope.
 async function handleTelegramLookCommand(chatId, message, argument) {
@@ -22857,32 +23000,23 @@ async function handleTelegramLookCommand(chatId, message, argument) {
     return;
   }
   if (tgCommandOnCooldown(chatId, "look", TG_LOOK_COOLDOWN_MS)) return;
-  let shield = null;
+  // Clean OgreScanBot-style scan card: stats + audit + socials + a prefilled
+  // "Buy on SlimeWire" button. The all-in-one funnel — scan in any channel, buy on the site.
+  let scan = null;
   try {
-    shield = await webSlimeShield(mint);
+    scan = await gatherSlimeScan(mint);
   } catch {
     // fall through to the degraded reply below
   }
-  if (!shield) {
-    await sayHtml(chatId, `Could not pull a read on <code>${escapeTelegramHtml(mint)}</code> right now. Chart links below.`, tokenActionKeyboard(mint));
+  let text = null;
+  if (scan && (scan.meta || scan.bonding || scan.shield)) {
+    try { text = formatSlimeScanCard({ mint, ...scan }); } catch { text = null; }
+  }
+  if (!text) {
+    await sayHtml(chatId, `Could not pull a clean read on <code>${escapeTelegramHtml(mint)}</code> right now. Links below.`, slimeScanKeyboard(mint));
     return;
   }
-  const verdictIcon = { BUY: "🟢", CAUTION: "🟡", RISK: "🟠", AVOID: "🔴" }[String(shield.verdict || "").toUpperCase()] || "⚪";
-  const factors = (shield.factors || []).slice(0, 3).map((factor) => `- ${escapeTelegramHtml(String(factor?.label || factor).slice(0, 80))}`);
-  const rugcheck = await fetchRugcheckSummary(mint).catch(() => null);
-  const rugcheckLine = rugcheck?.risks?.length
-    ? `🔬 Rugcheck: ${rugcheck.risks.slice(0, 2).map((risk) => escapeTelegramHtml(risk.name)).join(", ")}`
-    : "";
-  const links = slimewireTokenLinks(mint);
-  const lines = [
-    `<a href="${links.site}"><b>${escapeTelegramHtml(shortMint(mint))}</b></a> | <code>${escapeTelegramHtml(mint)}</code>`,
-    `${verdictIcon} <b>SlimeShield: ${escapeTelegramHtml(shield.verdict || "?")}</b> (score ${shield.score ?? "?"}/100, ${escapeTelegramHtml(shield.confidence || "low")} confidence)`,
-    shield.summary ? escapeTelegramHtml(String(shield.summary).slice(0, 200)) : "",
-    ...factors,
-    shield.suggestedAction ? `Suggested: ${escapeTelegramHtml(shield.suggestedAction)}` : "",
-    rugcheckLine
-  ].filter(Boolean);
-  await sayHtml(chatId, lines.join("\n"), tokenActionKeyboard(mint));
+  await sayHtml(chatId, text, slimeScanKeyboard(mint));
 }
 
 // /alpha: current top picks. Falls through scanner modes and finally the live feed so
@@ -24129,6 +24263,54 @@ function sendShareHtml(response, html) {
 // verdict (from the warm cache only - never block a crawler on a cold compute),
 // market stats, and the PNG signal card as the unfurl image.
 // Serve a standalone HTML page from the built web dir (no template injection).
+function readRequestCookie(request, name) {
+  const raw = String(request?.headers?.cookie || "");
+  const match = raw.match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`));
+  return match ? decodeURIComponent(match[1]) : "";
+}
+
+// OWNER-ONLY admin panel. The autopilot-live page exposes paper mode, every mode
+// name + strategy label, the running-log download, and full controls — i.e. exactly
+// how the bot is set up. It must NEVER be visible to anyone but the owner. We gate the
+// PAGE itself on the owner key (via ?k= once, then an HttpOnly cookie) and 404 otherwise
+// so its very existence stays hidden. The key is injected into localStorage so the
+// owner's API calls keep working without re-entering it. Fails CLOSED if no key is set.
+async function serveAutopilotAdminPage(requestUrl, request, response) {
+  const ownerKey = CONFIG.autopilotOwnerKey || "";
+  const controlKey = CONFIG.autopilotControlKey || "";
+  const provided = String(
+    requestUrl.searchParams.get("k")
+    || requestUrl.searchParams.get("key")
+    || readRequestCookie(request, "apk")
+    || ""
+  ).trim();
+  const authed = Boolean(provided) && ((ownerKey && provided === ownerKey) || (controlKey && provided === controlKey));
+  if (!authed) {
+    // Pretend it doesn't exist — never hint that an admin panel is here.
+    response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+    response.end("Not found");
+    return;
+  }
+  let html;
+  try {
+    html = await fs.readFile(path.join(WEB_STATIC_DIR, "autopilot-live.html"), "utf8");
+  } catch {
+    response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+    response.end("Not found");
+    return;
+  }
+  // Auto-fill the API owner key so the gated owner never has to paste it twice.
+  const inject = `<script>try{localStorage.setItem('apOwnerKey', ${JSON.stringify(provided)});}catch(e){}</script>`;
+  html = html.includes("</head>") ? html.replace("</head>", `${inject}</head>`) : `${inject}${html}`;
+  response.writeHead(200, {
+    "Content-Type": "text/html; charset=utf-8",
+    // Never cache a page carrying the key, and keep it off any shared/CDN cache.
+    "Cache-Control": "no-store, private",
+    "Set-Cookie": `apk=${encodeURIComponent(provided)}; Path=/; Max-Age=2592000; HttpOnly; Secure; SameSite=Lax`
+  });
+  response.end(html);
+}
+
 async function serveStaticHtmlPage(response, fileName) {
   try {
     const html = await fs.readFile(path.join(WEB_STATIC_DIR, fileName), "utf8");
