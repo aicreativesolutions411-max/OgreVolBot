@@ -512,6 +512,29 @@ test("engine: bank-the-peak ratchet STOPS on a giveback (never round-trips a gre
   assert.equal(st.stopReason, "locked-gains");
 });
 
+test("engine: lock-gains CONTINUE mode banks the green and keeps trading", async () => {
+  let t = 0;
+  const engine = createAutopilotEngine({
+    getFreshFeed: async () => [],
+    getPairLite: async () => null,
+    buyToken: async () => ({ ok: true }),
+    sellPercent: async () => ({ ok: true }),
+    now: () => t,
+    persist: async () => {}
+  });
+  await engine.start({ solBudget: 1, minutes: 60, live: false, lockGainsContinue: true });
+  const s = engine._state();
+  // Same giveback that STOPS by default — but continue mode should bank + keep running.
+  s.peakTotal = 1.4; s.bank = 1.18;
+  t += 1000;
+  await engine._exit();
+  const st = engine.status();
+  assert.equal(st.running, true, "continue mode keeps the session running");
+  assert.ok(st.lockedBankedSol > 0, "the banked green is tracked");
+  assert.ok(s.lockBase >= 1.17, "protected baseline ratchets up to the banked level");
+  await engine.stop("test");
+});
+
 test("engine: loss cap flattens and stops", async () => {
   let t = 0;
   let mc = 5000;

@@ -283,7 +283,11 @@
       </div>
       <label>🏦 Safe wallet — profits auto cash-out here</label>
       <input type="text" id="vaultDest" placeholder="your Phantom address (a different wallet)" autocomplete="off"/>
-      <div class="muted" style="margin-top:6px">Everything else is handled for you — it sizes, banks gains, tightens up in bad markets, and stops itself if a green session starts slipping.</div>
+      <label style="display:flex;align-items:center;gap:9px;margin-top:12px;cursor:pointer">
+        <input type="checkbox" id="keepGoing" style="width:18px;height:18px;accent-color:#8dff5a"/>
+        <span>🔒 Keep going after locking gains — bank the green &amp; keep trading (instead of stopping)</span>
+      </label>
+      <div class="muted" style="margin-top:6px">Default: it banks a green session and <b>stops</b> so a winner never round-trips. Turn this on to bank each green, protect it, and <b>keep hunting</b> (profits sweep to your safe wallet if set).</div>
       <button id="startBtn" class="b-go" style="margin-top:14px">⚡ Wake the ogre — start trading</button>
       <div id="startMsg" class="muted" style="margin-top:8px"></div>
     </div>
@@ -596,7 +600,8 @@ $("startBtn").addEventListener("click",async()=>{
   const w=selWallet();
   if(!w){$("startMsg").innerHTML='<span class="warn">Create + fund a wallet first.</span>';return;}
   const body={sol:Number($("amt").value),minutes:Number($("mins").value),wallet:w.index,live:true,confirm:"LIVE",lowChurn:true,mode:"blend",
-    maxTradeSol:Number($("maxTrade").value)||undefined, maxOpen:Number($("maxOpen").value)||undefined};
+    maxTradeSol:Number($("maxTrade").value)||undefined, maxOpen:Number($("maxOpen").value)||undefined,
+    lockGainsContinue:$("keepGoing").checked};
   const safe=$("vaultDest").value.trim(); if(safe) body.vaultDestination=safe;
   $("startMsg").textContent="Waking the ogre…";
   try{

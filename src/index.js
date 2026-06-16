@@ -3265,7 +3265,10 @@ async function handleWebApiRequest(request, response, requestUrl) {
           }
           vault = { destination: destKey };
         }
-        const status = await autopilotEngine.start({ solBudget: sol, minutes, mode, live: wantLive, walletPubkey, profitLock, churn, vault, maxTradeSol, lossCapFrac, maxOpen });
+        // Keep-going lock: bank each green and CONTINUE trading (re-baselined; vault sweeps
+        // if set) instead of stopping the session when the bank-the-peak ratchet fires.
+        const lockGainsContinue = body.lockGainsContinue === true || body.lockGainsContinue === "true" || body.keepGoing === true || body.keepGoing === "true";
+        const status = await autopilotEngine.start({ solBudget: sol, minutes, mode, live: wantLive, walletPubkey, profitLock, churn, vault, maxTradeSol, lossCapFrac, maxOpen, lockGainsContinue });
         // Bind the running clock to this controller. Trial users (no owner key, no
         // sub) burn metered time; owner/subscribers don't.
         if (controllerUserId) {

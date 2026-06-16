@@ -1,0 +1,44 @@
+<!doctype html><html><head><meta charset="utf-8">
+<link rel="stylesheet" href="/styles.css">
+<link rel="stylesheet" href="/ogre-stages.css">
+<style>
+/* magenta chroma key — ffmpeg colorkeys it out so the controls float over the live clip */
+html,body{margin:0;background:#ff00ff;}
+.frame{position:relative;width:1080px;height:1440px;overflow:hidden;background:#ff00ff;}
+.ogre-stage.swap{background:#ff00ff !important;}
+/* HUD: drop the gradient so only the opaque control chips remain (clean key) */
+.oss-stage-wrap.os-hud{position:absolute;left:0;right:0;bottom:0;background:none !important;padding:22px 26px 30px !important;}
+.oss-stage{display:flex;flex-direction:column;gap:16px;}
+/* force chips fully opaque so the magenta key can't bleed through them */
+.os-hud .oss-slot{display:flex;gap:14px;align-items:center;background:#0a1610 !important;border:2px solid rgba(141,255,90,.5) !important;border-radius:16px;padding:16px 20px !important;}
+.os-hud .oss-amount,.os-hud .oss-tok{font-size:34px;background:transparent;border:0;color:#eafff0;}
+.os-hud .oss-tok{color:#ffd45a;font-weight:800;}
+.os-hud .oss-reverse{font-size:30px;width:62px;height:62px;background:#0a1610 !important;border:2px solid rgba(141,255,90,.5) !important;}
+.os-hud .oss-swap{font-size:40px;padding:22px !important;background:linear-gradient(180deg,#8dff5a,#27e06a) !important;color:#04210f !important;border-radius:18px;font-weight:900;letter-spacing:3px;}
+.os-tier{font-size:22px;}
+.os-snd,.os-card{display:none;}
+/* kill everything that would smear magenta into a halo (blur / shadow / dark gradient) */
+*{backdrop-filter:none !important;}
+.ogre-stage.swap{box-shadow:none !important;border:0 !important;border-radius:0 !important;}
+.ogre-stage::after,.ogre-stage::before{display:none !important;}
+.os-hud .oss-slot,.os-hud .oss-reverse{box-shadow:none !important;}
+.os-tier{background:#0a1610 !important;border:1px solid rgba(255,212,90,.5) !important;}
+</style></head>
+<body>
+<div class="frame">
+  <div class="ogre-stage swap" data-ogre-stage="swap" style="position:absolute;inset:0;background:transparent;">
+    <span class="os-tier">OGRESWAP</span>
+    <button class="os-snd">🔊</button>
+    <button class="os-card">🏆</button>
+    <span class="os-led"></span>
+    <div class="oss-stage-wrap os-hud">
+      <div class="oss-stage oss-flat">
+        <div class="oss-slot"><input class="oss-amount" value="1"><select class="oss-tok"><option>SOL</option></select></div>
+        <button class="oss-reverse">⇅</button>
+        <div class="oss-slot"><input class="oss-amount oss-ca" placeholder="Paste token CA"><select class="oss-tok"><option>USDC</option></select></div>
+        <button class="oss-swap primary">SWAP</button>
+      </div>
+    </div>
+  </div>
+</div>
+</body></html>

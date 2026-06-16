@@ -460,6 +460,14 @@ function freshState(opts) {
     // Total-equity peak (working + already-vaulted) for the always-on bank-the-peak
     // ratchet, so sweeping profit to the vault never looks like a giveback.
     peakTotal: opts.solBudget,
+    // Protected baseline for the bank-the-peak ratchet. In "continue" mode it steps UP
+    // each time a green is banked, so the next cycle guards the new, higher floor.
+    lockBase: opts.solBudget,
+    // When true, the bank-the-peak ratchet BANKS the green and KEEPS TRADING (flatten +
+    // re-baseline, vault sweeps on the slow loop) instead of stopping the session.
+    // Default false = stop (the original safe behavior, unchanged for everyone else).
+    lockGainsContinue: Boolean(opts.lockGainsContinue),
+    lockedBankedSol: 0,
     lastOpenAt: 0,
     walletSol: null,
     minTradeSol: opts.minTradeSol || 0.012,
@@ -703,6 +711,8 @@ export function createAutopilotEngine(deps) {
       bank: round(state.bank),
       walletSol: state.walletSol == null ? null : round(state.walletSol),
       secured: round(state.secured || 0),
+      lockGainsContinue: Boolean(state.lockGainsContinue),
+      lockedBankedSol: round(state.lockedBankedSol || 0),
       vault: state.vault ? state.vault.destination : null,
       equity: round(totalEquity),
       peak: round(state.peak),
@@ -767,13 +777,29 @@ export function createAutopilotEngine(deps) {
       const totalEq = eq + (state.secured || 0);
       if (totalEq > (state.peakTotal || state.start)) state.peakTotal = totalEq;
       {
-        const peakGain = (state.peakTotal || state.start) - state.start;
-        if (peakGain >= state.start * 0.10) {
-          const floor = state.start + peakGain * 0.5; // give back at most half the peak gain
-          if (totalEq <= floor && totalEq >= state.start * 1.02) {
-            record("info", `🔒 Locked gains: peak +${round((state.peakTotal / state.start - 1) * 100, 1)}% gave back half → banked +${round((totalEq / state.start - 1) * 100, 1)}% and STOPPED (never round-trip a green session).`);
-            await stop("locked-gains");
-            return;
+        const base = state.lockBase || state.start;
+        const peakGain = (state.peakTotal || base) - base;
+        if (peakGain >= base * 0.10) {
+          const floor = base + peakGain * 0.5; // give back at most half the peak gain
+          if (totalEq <= floor && totalEq >= base * 1.02) {
+            if (state.lockGainsContinue) {
+              // BANK & KEEP GOING: realize the open bags so the green is booked, ratchet the
+              // protected floor UP to the banked level, and continue hunting. If a profit
+              // vault is set, the booked profit sweeps to the safe wallet on the next slow
+              // tick. The banked green can never round-trip; the session keeps running.
+              await flatten("locked-gains-bank");
+              const eqNow = equity(state);
+              const totalNow = eqNow + (state.secured || 0);
+              state.lockedBankedSol = round((state.lockedBankedSol || 0) + (totalNow - base), 4);
+              state.lockBase = totalNow;   // ratchet the protected baseline up
+              state.peakTotal = totalNow;  // fresh peak from the banked level
+              state.peak = eqNow;
+              record("info", `🔒 Banked +${round((totalNow / state.start - 1) * 100, 1)}% (locked ${round(totalNow - base, 4)} SOL · ${state.lockedBankedSol} SOL secured this run) — re-baselined and CONTINUING. Your gains are protected; hunting again.`);
+            } else {
+              record("info", `🔒 Locked gains: peak +${round((state.peakTotal / base - 1) * 100, 1)}% gave back half → banked +${round((totalEq / base - 1) * 100, 1)}% and STOPPED (never round-trip a green session).`);
+              await stop("locked-gains");
+              return;
+            }
           }
         }
       }
