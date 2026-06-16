@@ -8690,7 +8690,7 @@ async function handleMessage(message, userId) {
     || (bareToggle ? { argument: bareToggle[1] } : null);
   if (groupToggle) {
     if (isPrivateChat(message.chat)) {
-      await say(chatId, "/slimewire works inside groups and channels - it arms SlimeWire engine alerts there (fresh launches, TP/SL fires, KOL copies). Add me to your group, then an admin runs /slimewire on. In DM you already get everything: /alpha, /look <CA>, /trade, /positions, /pnl.");
+      await say(chatId, "/slimewire works inside groups and channels - it arms SlimeWire engine alerts there (fresh launches, TP/SL fires, KOL copies). Add me to your group, then an admin runs /slimewire on. In groups: /look <CA>, /chart <CA>, /alpha, /leaderboard. In DM you also get /trade, /positions, /pnl, /flex <CA>.");
       return;
     }
     console.warn(`[tg-group] /slimewire "${groupToggle.argument}" from chat ${chatId} (${message.chat?.type})`);
@@ -8914,6 +8914,41 @@ async function handleMessage(message, userId) {
       setSession(chatId, "pnl_card_token", userId);
       await say(chatId, "Paste the token mint / CA for the PnL card. You can also use `/pnlcard CA` in one message.");
     }
+    return;
+  }
+
+  // /flex [CA] — the rotating win/loss flex card for your PnL on a token (DM-only; it's your
+  // trade history). Same scene-rotating card as /pnlcard, framed as a flex.
+  const flexCommand = parseCommandWithArgument(text, ["flex"]);
+  if (flexCommand) {
+    if (!isPrivateChat(message.chat)) { await say(chatId, "Open this bot in DM to flex your PnL card."); return; }
+    if (flexCommand.argument) {
+      await sendPnlCardForTokenText(chatId, userId, flexCommand.argument);
+    } else {
+      setSession(chatId, "pnl_card_token", userId);
+      await say(chatId, "Paste the token mint / CA to flex. You can also use `/flex CA` in one message.");
+    }
+    return;
+  }
+
+  // /chart <CA> — instant chart + quick-buy links (works in groups + DM).
+  const chartCommand = parseCommandWithArgument(text, ["chart"]);
+  if (chartCommand) {
+    const ca = (String(chartCommand.argument || "").match(/\b[A-HJ-NP-Za-km-z1-9]{32,48}\b/) || [])[0] || "";
+    if (!ca) { await say(chatId, "Usage: /chart <token CA> — I'll send the chart + quick-buy links."); return; }
+    const lx = slimewireTokenLinks(ca);
+    await sayHtml(chatId, `📈 <b>Chart</b> · <code>${escapeTelegramHtml(ca)}</code>`, {
+      inline_keyboard: [
+        [{ text: "🟢 SlimeWire Chart", url: lx.site }, { text: "⚡ Quick Buy", url: lx.siteBuy }],
+        [{ text: "Dexscreener", url: dexScreenerUrl(ca) }, { text: "🔄 Full scan", callback_data: `scan:refresh:${ca}` }]
+      ]
+    });
+    return;
+  }
+
+  // /leaderboard — public hall of fame: the biggest tracked calls that hit 2x+.
+  if (parseCommandWithArgument(text, ["leaderboard", "lb", "halloffame", "hof"]) || text === "/wins") {
+    await handleTelegramLeaderboardCommand(chatId);
     return;
   }
 
@@ -17802,6 +17837,35 @@ function formatCompactDurationMs(ms) {
   return `${days}d ${hours % 24}h`;
 }
 
+// X (twitter) share intent — opens the tweet composer prefilled. Used on PnL/flex cards so a
+// win is one tap to post. Bounded text; the CA page link rides along.
+function xShareUrl(text, url) {
+  const t = encodeURIComponent(String(text || "").slice(0, 240));
+  const u = encodeURIComponent(String(url || "https://www.slimewire.org"));
+  return `https://x.com/intent/tweet?text=${t}&url=${u}`;
+}
+
+// Adapt a grouped PnL row (+ token metadata) into the rotating win/loss flex card's data
+// shape, so /pnl, /pnlcard and /flex all render the same scene-rotating card the autopilot
+// big-wins use (win-art for green, loss-art for red, rotated per mint).
+function slimeDataFromPnlRow(row, metadata = {}) {
+  const spent = Number(lamportsBigToSol(row.spent)) || 0;
+  const received = Number(lamportsBigToSol(row.received)) || 0;
+  const profitSol = received - spent;
+  const gainPct = spent > 0 ? (profitSol / spent) * 100 : 0;
+  return {
+    mint: row.tokenMint,
+    symbol: metadata.symbol || shortMint(row.tokenMint),
+    name: metadata.name || "SlimeWire",
+    imageUrl: metadata.imageUrl || metadata.avatarUrl || "",
+    gainPct,
+    multiple: spent > 0 ? received / spent : null,
+    profitSol, costSol: spent, receivedSol: received,
+    loss: profitSol < 0,
+    entryMc: Number(metadata.marketCap || metadata.fdv) || 0
+  };
+}
+
 async function sendPnlCard(chatId, userId, tokenFilter = null, options = {}) {
   const rows = await pnlRows(userId, tokenFilter, { groupByToken: true, limit: 1 });
   if (rows.length === 0) {
@@ -17816,13 +17880,22 @@ async function sendPnlCard(chatId, userId, tokenFilter = null, options = {}) {
   const row = rows[0];
   try {
     const metadata = await getDexTokenMetadata(row.tokenMint);
-    const png = await renderPnlCard(row, metadata);
-    await sendPhoto(chatId, `pnl-card-${sanitizeFilenamePart(metadata.symbol || row.tokenMint)}.png`, png, [
-      `${metadata.symbol || shortMint(row.tokenMint)} PnL card`,
+    const d = slimeDataFromPnlRow(row, metadata);
+    // Rotating win/loss flex card (win-art for green, loss-art for red) — same renderer the
+    // autopilot big-wins use. Falls back to the classic gradient card if it ever throws.
+    let png = null;
+    try { png = await renderSlimeCard(d); } catch {}
+    if (!png) png = await renderPnlCard(row, metadata);
+    const sym = metadata.symbol || shortMint(row.tokenMint);
+    const isWin = d.profitSol >= 0;
+    const pct = Math.round(d.gainPct);
+    const share = xShareUrl(`${isWin ? "🟢" : "🔴"} $${sym} ${pct >= 0 ? "+" : ""}${pct}% — traded on SlimeWire`, `https://www.slimewire.org/t?ca=${row.tokenMint}`);
+    await sendPhoto(chatId, `pnl-card-${sanitizeFilenamePart(sym)}.png`, png, [
+      `${sym} PnL — ${pct >= 0 ? "+" : ""}${pct}%`,
       dexScreenerUrl(row.tokenMint)
     ].join("\n"), {
       inline_keyboard: [
-        [{ text: "Chart", url: dexScreenerUrl(row.tokenMint) }],
+        [{ text: "𝕏 Share", url: share }, { text: "📈 Chart", url: slimewireTokenLinks(row.tokenMint).site }],
         [{ text: "PnL / Results", callback_data: "pnl_results" }, { text: "Positions", callback_data: "positions_overview" }]
       ]
     });
@@ -23821,6 +23894,35 @@ async function handleTelegramKolsCommand(chatId) {
 }
 
 // /proof: the quotable track record - one line of live stats + the public page.
+// /leaderboard — public hall of fame: the biggest tracked calls that hit 2x+ (from the
+// alpha-call record that already powers the proof wall). Pure marketing — leaks no internals.
+async function handleTelegramLeaderboardCommand(chatId) {
+  if (tgCommandOnCooldown(chatId, "leaderboard", TG_ALPHA_COOLDOWN_MS)) return;
+  let wins = [];
+  try {
+    const store = await readAlphaCalls();
+    wins = (store.calls || [])
+      .filter((c) => c.status === "resolved" && c.outcome === "won" && Number(c.peakX) > 0)
+      .sort((a, b) => Number(b.peakX) - Number(a.peakX))
+      .slice(0, 10);
+  } catch {}
+  if (!wins.length) {
+    await say(chatId, "🏆 The board is fresh — tracked calls post here as they hit 2x+. Watch /alpha.");
+    return;
+  }
+  const medal = (i) => (i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `${i + 1}.`);
+  const lines = wins.map((c, i) => {
+    const lx = slimewireTokenLinks(c.mint);
+    return `${medal(i)} <a href="${lx.site}"><b>$${escapeTelegramHtml(c.symbol || shortMint(c.mint))}</b></a> — <b>${c.peakX}x</b>`;
+  });
+  const text = [
+    `🏆 <b>SlimeWire Hall of Fame</b> — biggest tracked calls:`,
+    ...lines,
+    `\n<a href="https://www.slimewire.org/proof">full proof wall →</a>`
+  ].join("\n");
+  await sayHtml(chatId, text);
+}
+
 async function handleTelegramProofCommand(chatId) {
   if (tgCommandOnCooldown(chatId, "proof", TG_LOOK_COOLDOWN_MS)) return;
   const calls = await readAlphaCalls().catch(() => ({ calls: [] }));
