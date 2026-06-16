@@ -274,6 +274,10 @@ export function convictionMult(row, rep, sm) {
   const flow = buys + sells > 0 ? buys / (buys + sells) : 0.5;
   if (flow >= 0.8 && vol >= 60) c += 0.2;                    // strong, well-funded buy flow
   else if (flow <= 0.45) c -= 0.15;                          // sellers leading
+  // WASH/BUNDLE guard: real momentum is many small txns; a big volume number from only a
+  // handful of transactions is wash-trading / bundled bait (the strongest rug tell). Size
+  // DOWN on it rather than hard-reject (counts can be noisy on brand-new curves).
+  if (vol >= 80 && (buys + sells) > 0 && (buys + sells) < 8) c -= 0.3;
   const age = Number(row.pairAgeSeconds) || 9999;
   if (age <= 60) c += 0.15;                                  // very fresh = best entries
   if (freshScore(row) >= 70) c += 0.15;                      // top-tier setup
@@ -511,6 +515,9 @@ function freshState(opts) {
     // strength across two scans before we ape, so single-tick spike-then-dump bait is
     // skipped. { [mint]: { at, mc } }.
     watching: {},
+    // Sit-out-the-chop: when set in the future, fresh sniping is paused (capital
+    // preservation) while smart-money copies + open-position exits keep running.
+    chopPauseUntil: 0,
     recentSells: {},
     // Last time we APED each coin NAME — blocks piling into a clone swarm (same name,
     // different mints) 3x in seconds before any loss registers (ASTROGUY/Bob x3).
@@ -1187,7 +1194,21 @@ export function createAutopilotEngine(deps) {
     const perCycle = Math.max(1, tune.perCycle || 1);
     let openedThisCycle = 0;
 
+    // SIT OUT THE CHOP (capital preservation): a COLD tape we're ALSO bleeding into is the
+    // death-by-fees trap that turns a flat day red. Pause FRESH sniping for a ~4m cool-off
+    // and resume when the tape warms or the timer passes — but KEEP taking smart-money copy
+    // entries below (the edge that still works in chop) and keep managing open exits.
+    const recentP = (state.recentPnl || []).slice(-8);
+    const recentNet = recentP.reduce((a, b) => a + b, 0);
+    if (tune.tape === "COLD" && recentP.length >= 5 && recentNet < 0 && (!state.chopPauseUntil || nowMs > state.chopPauseUntil)) {
+      state.chopPauseUntil = nowMs + 240_000;
+      record("info", `🧊 Chop guard: COLD + bleeding (${round(recentNet, 4)} SOL over last ${recentP.length}) — pausing fresh entries ~4m. Smart-money copies + exits stay live.`);
+    }
+    if (tune.tape === "HOT") state.chopPauseUntil = 0; // tape warmed → resume immediately
+    const chopPaused = Boolean(state.chopPauseUntil && nowMs < state.chopPauseUntil);
+
     for (const cand of scored) {
+      if (chopPaused) break;                            // sitting out the chop — no fresh snipes
       if (state.stopped || now() >= state.endAt) break; // never open after a stop/timer
       if (state.open.length >= maxNow) break;            // tape-aware concurrent cap
       // Within-cycle pile-in guard: don't open a 2nd of the same NAME we just opened
