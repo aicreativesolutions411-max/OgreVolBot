@@ -41,6 +41,14 @@ services:
       # CHAINSTACK_RPC_URL for further read-splitting / send failover (see P4).
       - key: READ_RPC_URL
         sync: false
+      # SEND FAILOVER (P4): re-broadcast the SAME signed tx to a backup write RPC if the
+      # primary (Helius) hits a transient error, so an outage can't stop trading. Kill switch
+      # below (default on). Optional dedicated 3rd provider here; if unset, the Alchemy
+      # READ_RPC_URL is reused as the failover write target.
+      - key: SEND_FAILOVER_ENABLED
+        value: true
+      - key: SEND_FALLBACK_RPC_URL
+        sync: false
       - key: RPC_RPS_LIMIT
         value: 40
       - key: DAS_RPS_LIMIT

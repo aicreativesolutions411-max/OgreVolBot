@@ -152,6 +152,29 @@ const readConnection = CONFIG.readRpcUrl ? new Connection(CONFIG.readRpcUrl, "co
 if (readConnection !== connection) {
   console.info(`[rpc] reads -> ${CONFIG.readRpcProviderName} (${CONFIG.readRpcHost}) with Helius fallback; writes/DAS/webhooks -> ${CONFIG.rpcProviderName} (${CONFIG.rpcUrlHost})`);
 }
+// SEND FAILOVER (P4): a backup write RPC so a primary (Helius) outage / rate-limit can't stop
+// the machine from trading. On a TRANSIENT primary send error we RE-BROADCAST THE SAME SIGNED
+// transaction bytes here — same signature, so the network dedupes it; never re-signed, so a
+// send can never double-execute. Prefers a dedicated 3rd provider (SEND_FALLBACK_RPC_URL /
+// BACKUP_RPC_URL); otherwise reuses the Alchemy read provider (which can also send). Kill
+// switch: set SEND_FAILOVER_ENABLED=false on Render to disable instantly. Unset/no distinct
+// provider => null => send behavior is byte-identical to before.
+const sendFailoverEnabled = String(process.env.SEND_FAILOVER_ENABLED ?? "true").toLowerCase() !== "false";
+const sendFallbackRpcUrl = String(process.env.SEND_FALLBACK_RPC_URL || process.env.BACKUP_RPC_URL || CONFIG.readRpcUrl || "").trim();
+const backupConnection = (sendFailoverEnabled && sendFallbackRpcUrl && sendFallbackRpcUrl !== CONFIG.rpcUrl)
+  ? (CONFIG.readRpcUrl && sendFallbackRpcUrl === CONFIG.readRpcUrl ? readConnection : new Connection(sendFallbackRpcUrl, "confirmed"))
+  : null;
+if (backupConnection && backupConnection !== connection) {
+  console.info(`[rpc] send failover -> ${sendFallbackRpcUrl.replace(/\/\/.*@/, "//")} (re-broadcasts the SAME signed tx on a transient primary failure)`);
+}
+// A primary send error worth failing over on: the PRIMARY RPC is the problem (rate-limit,
+// timeout, network, unavailable), NOT the transaction. Never fail over on errors that mean
+// the tx itself is bad/stale (a backup would fail the same way, or worse).
+function isTransientSendError(error) {
+  const m = String((error && (error.message || error)) || "");
+  if (/invalid signature|blockhash not found|block height exceeded|insufficient|already processed|no token balance|invalid public key|simulation failed|custom program error/i.test(m)) return false;
+  return /429|too many requests|rate limit|timeout|timed out|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|socket hang up|network|fetch failed|503|502|504|service unavailable|temporarily unavailable/i.test(m);
+}
 // One shared PumpPortal websocket: sub-second token creations + live trade
 // ticks. Feeds the fresh live-pairs bucket, Ogre A.I. fresh mode, and chart
 // trade ticks without any polling. Free tier, same provider we launch through.
@@ -15875,12 +15898,20 @@ async function sendLegacyTransaction(tx, signers, options = {}) {
   tx.recentBlockhash = blockhash;
   tx.feePayer = signers[0].publicKey;
   tx.sign(...signers);
-  const signature = await rpcWithRetry("send raw transaction", () => connection.sendRawTransaction(tx.serialize(), {
-    skipPreflight: false,
-    maxRetries: 10
-  }));
-  await rpcWithRetry("confirm transaction", () => connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed"));
-  return signature;
+  const raw = tx.serialize(); // sign ONCE; the same bytes are re-broadcast on any retry/failover
+  try {
+    const signature = await rpcWithRetry("send raw transaction", () => connection.sendRawTransaction(raw, { skipPreflight: false, maxRetries: 10 }));
+    await rpcWithRetry("confirm transaction", () => connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed"));
+    return signature;
+  } catch (error) {
+    if (!backupConnection || !isTransientSendError(error)) throw error;
+    // Primary RPC is the problem, not the tx — re-broadcast the SAME signed bytes to backup.
+    console.warn(`send raw transaction: primary RPC failed (${friendlyError(error)}); re-broadcasting same signed tx to backup RPC.`);
+    rpcStats.sendFailoverCount = (rpcStats.sendFailoverCount || 0) + 1;
+    const signature = await rpcWithRetry("send raw transaction (backup)", () => backupConnection.sendRawTransaction(raw, { skipPreflight: false, maxRetries: 10 }));
+    await rpcWithRetry("confirm transaction (backup)", () => backupConnection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed"));
+    return signature;
+  }
 }
 
 async function estimateLegacyTransactionFee(tx) {
@@ -35740,12 +35771,19 @@ async function requestPumpPortalLocalTransaction(requestPayload, timeoutMs, opti
 }
 
 async function sendVersionedTransaction(tx, label = "send versioned transaction") {
-  const signature = await rpcWithRetry(label, () => connection.sendRawTransaction(tx.serialize(), {
-    skipPreflight: false,
-    maxRetries: 10
-  }));
-  await rpcWithRetry("confirm versioned transaction", () => connection.confirmTransaction(signature, "confirmed"));
-  return signature;
+  const raw = tx.serialize(); // already signed by the caller; reuse the same bytes everywhere
+  try {
+    const signature = await rpcWithRetry(label, () => connection.sendRawTransaction(raw, { skipPreflight: false, maxRetries: 10 }));
+    await rpcWithRetry("confirm versioned transaction", () => connection.confirmTransaction(signature, "confirmed"));
+    return signature;
+  } catch (error) {
+    if (!backupConnection || !isTransientSendError(error)) throw error;
+    console.warn(`${label}: primary RPC failed (${friendlyError(error)}); re-broadcasting same signed tx to backup RPC.`);
+    rpcStats.sendFailoverCount = (rpcStats.sendFailoverCount || 0) + 1;
+    const signature = await rpcWithRetry(`${label} (backup)`, () => backupConnection.sendRawTransaction(raw, { skipPreflight: false, maxRetries: 10 }));
+    await rpcWithRetry("confirm versioned transaction (backup)", () => backupConnection.confirmTransaction(signature, "confirmed"));
+    return signature;
+  }
 }
 
 // --- Jito atomic anti-snipe launch bundle (flag-gated; OFF by default) --------
