@@ -58,7 +58,7 @@ export function aggParams(state) {
 
   let tp1 = 25;
   let tp2 = 60;
-  const sl = 6; // tighter stop — cut losers faster (was 8%)
+  let sl = 6; // tighter stop — cut losers faster (was 8%)
   if (regime === "HOT") {
     tp1 = 28;
     tp2 = 75;
@@ -66,6 +66,11 @@ export function aggParams(state) {
     tp1 = 20;
     tp2 = 45;
   }
+  // GRIND uses a slightly wider stop so normal dips on calmer higher-MC coins don't
+  // shake us out of eventual winners. Real rugs are still cut FAST by the liquidity-pull
+  // and feed-death exits (not this %-stop), so this only avoids noise stop-outs → a
+  // higher hit-rate, which is the whole point of a steady-win mode.
+  if (grind) sl = 8;
 
   let minScore = regime === "HOT" ? 34 : regime === "COLD" ? 48 : 40;
   if (mode === "degen") minScore -= 6;
@@ -88,20 +93,26 @@ export function aggParams(state) {
   // regardless of regime base — this is what actually stops the fs 61-63 chop churn
   // that bleeds a directionless tape. (scoreBonus alone couldn't reach this.)
   if (state.tune && state.tune.tape === "COLD") minScore = Math.max(minScore, 62);
-  // GRIND demands a genuinely decent setup floor regardless of regime — we bank small,
-  // so the hit-rate has to stay high; weak fs setups are exactly the ones that round-trip.
-  if (grind) minScore = Math.max(minScore, 64);
+  // GRIND demands a decent setup floor regardless of regime — we bank small, so the
+  // hit-rate has to stay high; weak fs setups are exactly the ones that round-trip. Kept
+  // modest (62, just above the universal 58) so it still finds enough candidates to trade.
+  if (grind) minScore = Math.max(minScore, 62);
 
   // ENTRY MC WINDOW. Default: tiny floor (a low-MC runner like ZUL +56% @ $1973 stays in),
-  // ceiling 20k (these are fresh launches). GRIND deliberately skips the sub-$7k brand-new
-  // curve — that's where the instant-rugs cluster — and reaches a bit higher (to $60k) for
-  // coins that already SURVIVED the rug window and have real liquidity to fill 30-150% TPs.
-  const mcFloor = grind ? 7000 : 1800;
-  const mcCeil = grind ? 60000 : 20000;
-  // GRIND also waits out the first ~45s (the instant-rug window) and demands DEEPER
-  // liquidity relative to MC (cleaner fills, far less drain risk).
-  const minAge = grind ? 45 : 4;
-  const liqFrac = grind ? 0.45 : 0.3;
+  // ceiling 20k (these are fresh launches). GRIND skips the brand-new sub-$5k curve — where
+  // the instant-rugs cluster — and reaches well higher (to $80k) for coins that already
+  // SURVIVED the rug window and have real liquidity to fill 30-150% TPs. The floor is the
+  // user's "~5k" target; age(45s) + deep liquidity + fs64 + the 0.7x size cap do the
+  // rug-dodging, while the wide window keeps enough candidates to actually trade + compound.
+  const mcFloor = grind ? 5000 : 1800;
+  const mcCeil = grind ? 80000 : 20000;
+  // GRIND waits out the first ~15s (the worst instant-rug/sniper-dump seconds — the fresh
+  // feed is mostly sub-30s, so a 45s gate starved it to zero entries) and asks for slightly
+  // deeper liquidity than default (cleaner fills, less drain risk) without being so strict
+  // it can't find candidates. The 0.7x size cap + liquidity-pull/feed-death exits do the
+  // rest of the rug-dodging.
+  const minAge = grind ? 15 : 4;
+  const liqFrac = grind ? 0.35 : 0.3;
 
   // BANK STYLE — three exit personalities:
   //  • "steady": lock the bulk at the first DOABLE pop (80%) + free-roll 20% to +400%,
@@ -125,7 +136,7 @@ export function aggParams(state) {
     // +150%. No moonshot chase — high realized win-rate, small banks that compound. The
     // first-pop trigger (tp1) is set to ~30% just below.
     tp1 = regime === "HOT" ? 32 : regime === "COLD" ? 24 : 30;
-    tp1Pct = 65; spikePct = 80; tp2Lvl = 70; tp2Pct = 60; tp3Lvl = 120; tp3Pct = 60; moonTarget = 150;
+    tp1Pct = 70; spikePct = 82; tp2Lvl = 70; tp2Pct = 60; tp3Lvl = 120; tp3Pct = 60; moonTarget = 150;
   }
 
   // AUTO-ADAPT — the key lesson from live: the moon-ride only PAYS in a genuinely HOT
