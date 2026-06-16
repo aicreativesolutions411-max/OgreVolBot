@@ -6100,7 +6100,6 @@ function renderTabs() {
   if (["terminal", "live", "kol", "slimeScope", "watchlist", "smartChart"].includes(state.activeTab)) {
     try { attachOgreAccents(panel, state.activeTab); } catch (err) { /* accent is decorative */ }
   }
-  try { attachOgreSheen(panel); } catch (err) { /* sheen is decorative */ }
   try { bindOgreRefreshSpin(); } catch (err) { /* refresh shimmer is decorative */ }
   if (state.activeTab === "smartChart" && state.chartFocusAmountInput) {
     requestAnimationFrame(() => {
@@ -7872,10 +7871,6 @@ function bindOgreRefreshSpin() {
 // Higgs motion textures: a small muted looping <video> dropped into an existing accent shell.
 function ogreTexVideo(cls, name) {
   return `<video class="${cls}" autoplay muted loop playsinline preload="auto" src="/assets/slimewire/ui/${name}.mp4"></video>`;
-}
-// Subtle ember/sheen loop behind any stat-tile grid (shows in the gaps; never blocks tiles).
-function attachOgreSheen(panel) {
-  try { const m = panel.querySelector(".metrics"); if (m && !m.querySelector(".ogre-sheen")) m.insertAdjacentHTML("afterbegin", ogreTexVideo("ogre-sheen", "sheen")); } catch {}
 }
 // Tier-3 accents: drop a featherweight ogre status into space that already exists on the
 // data-dense screens — never a banner, never extra scroll. CSS/SVG only.

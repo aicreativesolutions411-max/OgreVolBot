@@ -179,11 +179,7 @@
 /* intel: real scanning ogre eye fills the spy shell (the CSS dot becomes a fallback) */
 .ogre-spy .spy-vid{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0;}
 .ogre-spy:has(.spy-vid) i{display:none;}
-/* stat tiles: a subtle ember/sheen loop behind the metrics grid (shows in the gaps) */
-html body main.shell[data-app] .metrics{position:relative;}
-html body main.shell[data-app] .metrics .ogre-sheen{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0;opacity:.2;pointer-events:none;border-radius:inherit;}
-html body main.shell[data-app] .metrics > article{position:relative;z-index:1;}
-@media (prefers-reduced-motion: reduce){.ogre-radar-bar .rbar-bg,.orb-scope .orb-vid,.ogre-spy .spy-vid,.metrics .ogre-sheen{display:none !important;}}
+@media (prefers-reduced-motion: reduce){.ogre-radar-bar .rbar-bg,.orb-scope .orb-vid,.ogre-spy .spy-vid{display:none !important;}}
 
 /* ----------------------------------------------------------------- PREMIUM BARS
    Elevates the signature account stat bar + search into a high-end, unmistakably-SlimeWire
