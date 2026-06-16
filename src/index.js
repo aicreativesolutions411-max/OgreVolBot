@@ -798,7 +798,28 @@ const autopilotEngine = createAutopilotEngine({
   },
   getFreshFeed: async () => {
     const feed = await webLivePairs("autopilot", "live", { sort: "fresh", force: true });
-    const rows = Array.isArray(feed?.rows) ? feed.rows : [];
+    let rows = Array.isArray(feed?.rows) ? feed.rows : [];
+    // GRIND targets SURVIVED/climbed coins ($5-80k, aged past the first seconds). The
+    // fresh/newest view is almost all brand-new sub-$5k launches, so grind starves on it
+    // (50 fresh, 0 passed). Data-driven sorts (volume/momentum) pull the broader LAST-HOUR
+    // window — exactly the coins grind wants — so for grind we merge those in (deduped).
+    // Cheap: the extra views are served from the shared live-pairs cache (no force).
+    let mode = null;
+    try { mode = autopilotEngine.status()?.mode || null; } catch {}
+    if (mode === "grind") {
+      try {
+        const [vol, mom] = await Promise.all([
+          webLivePairs("autopilot", "live", { sort: "volume" }).catch(() => null),
+          webLivePairs("autopilot", "live", { sort: "momentum" }).catch(() => null)
+        ]);
+        const seen = new Set(rows.map((r) => r.tokenMint));
+        for (const extra of [vol, mom]) {
+          for (const r of (Array.isArray(extra?.rows) ? extra.rows : [])) {
+            if (r && r.tokenMint && !seen.has(r.tokenMint)) { seen.add(r.tokenMint); rows.push(r); }
+          }
+        }
+      } catch {}
+    }
     return rows.map((r) => ({
       tokenMint: r.tokenMint,
       symbol: r.symbol,
