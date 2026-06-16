@@ -1300,7 +1300,9 @@ button:disabled {
   z-index: 12;
   overflow-x: auto;
   scrollbar-width: thin;
-  backdrop-filter: blur(18px);
+  /* no backdrop-filter: it offsets touch hit-testing on iOS Safari (taps land above the
+     element). Solid frosted-dark background keeps the look without the blur. */
+  background: linear-gradient(180deg, rgba(8, 18, 11, 0.9), rgba(4, 10, 7, 0.94));
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.22);
 }
 
@@ -1881,7 +1883,8 @@ code {
   position: sticky;
   top: 76px;
   z-index: 8;
-  backdrop-filter: blur(18px);
+  /* no backdrop-filter: offsets touch hit-testing on iOS (taps land above the element). */
+  background: linear-gradient(180deg, rgba(8, 18, 11, 0.92), rgba(5, 11, 7, 0.96));
 }
 
 .command-controls {
@@ -3798,8 +3801,8 @@ code {
   gap: 12px;
   padding: 8px 12px;
   border-radius: 14px;
-  background: rgba(5, 8, 6, 0.86);
-  backdrop-filter: blur(14px);
+  /* no backdrop-filter: offsets touch hit-testing on iOS (taps land above the element). */
+  background: rgba(5, 8, 6, 0.94);
 }
 
 
@@ -9459,8 +9462,9 @@ body {
   align-items: center;
   justify-content: center;
   padding: 18px;
-  background: rgba(3, 8, 4, 0.72);
-  backdrop-filter: blur(3px);
+  /* no backdrop-filter: offsets touch hit-testing on iOS (taps on the dialog buttons land
+     above them). A slightly darker scrim keeps the focus without the blur. */
+  background: rgba(3, 8, 4, 0.82);
 }
 .slime-confirm-card {
   width: min(440px, 100%);
