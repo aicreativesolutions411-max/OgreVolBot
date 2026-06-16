@@ -551,7 +551,12 @@ test("engine: loss cap flattens and stops", async () => {
     now: () => t,
     persist: async () => {}
   });
-  await engine.start({ solBudget: 1, minutes: 60, mode: "degen", live: false });
+  // Tighter loss cap (10%) + explicit maxTradeSol so the backstop is exercised independently
+  // of per-trade size tuning. The unproven-coin conviction cap (0.7x) keeps total deployment
+  // conservative (~19% of bank across 5 positions), so a 20% cap would sit just out of reach;
+  // 10% definitively breaches when every position is tanked. This test verifies the loss-cap
+  // backstop FIRES, not the entry-sizing math.
+  await engine.start({ solBudget: 1, minutes: 60, mode: "degen", live: false, maxTradeSol: 0.1, lossCapFrac: 0.1 });
   for (let i = 0; i < 3; i++) {
     t += 2200;
     await engine._tick();

@@ -296,7 +296,11 @@ export function convictionMult(row, rep, sm) {
   // (a tracked KOL, or multiple proven-winner wallets in the early buyers). Lone
   // unproven coins stay capped at 1.0x so one instant-rug can't blow a big bet.
   const proven = (rep && rep.runners >= 1 && rep.rugs === 0) || (sm && (sm.kol || sm.winners >= 2));
-  return Math.max(0.5, Math.min(proven ? 1.6 : 1.0, c));
+  // Unproven coins (no proven dev, no smart money) are capped at 0.7x base — even ELITE fs.
+  // Live proof: fs75 DATASS/Puffins rugged -70/-94% at full size for -0.065/-0.084. Since
+  // score can't predict a rug, the only protection is a smaller bet on every unproven coin;
+  // proven-dev / smart-money setups still size up to 1.6x where the edge is real.
+  return Math.max(0.5, Math.min(proven ? 1.6 : 0.7, c));
 }
 
 // Hard entry gates — filter instant-rug bait while keeping genuine fresh

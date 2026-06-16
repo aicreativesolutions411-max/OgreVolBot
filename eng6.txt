@@ -1,0 +1,34 @@
+✔ low-churn: raises entry bar, concentrates size, caps positions at 3 (5.1453ms)
+✔ aggParams: hot regime sizes up and loosens cutoff (0.1497ms)
+✔ aggParams: cold regime shrinks size and demands quality but keeps buying (0.1335ms)
+✔ sizeFor: clamps between min trade and 22% of bank (0.1167ms)
+✔ sizeFor: respects the hard per-trade ceiling even on a big bank + hot streak (0.1638ms)
+✔ freshScore: younger + buy-led scores higher than old + sell-led (0.1615ms)
+✔ autoTune: cold tape -> pickier + smaller, hot tape -> looser + bigger (0.2537ms)
+✔ convictionMult: bigger on a proven dev + strong flow, smaller on a rugger (0.1343ms)
+✔ entryReject: passes a clean fresh mover (0.1247ms)
+✔ entryReject: blocks instant-rug bait (0.2996ms)
+✔ entryReject: a $2k fresh launch with ~$2k liquidity is NOT rejected for liquidity (0.1688ms)
+✔ evalExit: hard stop fires past -sl (0.1593ms)
+✔ evalExit: ladder tp1 -> tp2 -> tp3 -> tp4 lets a runner ride (0.1768ms)
+✔ evalExit: adaptive dev-avg take banks near a dev's typical top (0.1911ms)
+✔ evalExit: trailing give-back catches a runner that reverses (0.1217ms)
+✔ evalExit: liquidity pull triggers rug exit (0.101ms)
+✔ canOpen: multi-position allowed beyond two while cash + deployment permit (0.1331ms)
+✔ canOpen: respects soft max and over-deployment (0.1128ms)
+✔ equity: cash plus marked-to-market open positions (0.1143ms)
+✔ engine: paper session apes a good coin then takes profit (1.4617ms)
+✔ engine: live mode routes through buy/sell deps (0.955ms)
+✔ engine: live mode refuses to start without a wallet (0.6072ms)
+✔ engine: stop sells every open position and opens no more (1.326ms)
+✔ engine: profit-lock stops + flattens after giving back half the peak gain (2488.9024ms)
+✔ engine: profit vault sweeps gains above the stake and keeps running (2.7236ms)
+✔ engine: loss cap flattens and stops (2500.2466ms)
+ℹ tests 26
+ℹ suites 0
+ℹ pass 26
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5102.047
