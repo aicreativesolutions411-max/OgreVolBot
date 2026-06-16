@@ -3102,11 +3102,21 @@ html body main.shell[data-app] .swamp-market-ticker[data-market-ticker] .swamp-t
   grid-column: 2 !important;
   grid-row: 1 !important;
   grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
-  gap: 5px !important;
+  gap: 7px !important;
+  /* Breathing room so the Wallets/Total SOL/Positions/PnL strip isn't squished against
+     the header / powered-by row — nudges the 4 bubbles down with separation below. */
+  margin: 12px 0 14px !important;
   padding: 0 !important;
   border: 0 !important;
   background: transparent !important;
   box-shadow: none !important;
+}
+
+/* On the Home/Profile tab, give the strip a touch more drop so it sits centered between
+   the Profile heading and the hub instead of jammed at the very top. */
+[data-app][data-route="terminal"][data-active-tab="profile"] .metrics {
+  margin-top: 20px !important;
+  margin-bottom: 18px !important;
 }
 
 [data-app][data-route="terminal"] .metrics article {
