@@ -170,6 +170,7 @@
       <label style="margin-top:12px">Decision log</label>
       <div class="log" id="log"></div>
       <button id="copyLogBtn" class="b-ghost" style="margin-top:8px">📋 Copy log + stats (to share)</button>
+      <button id="dlLogBtn" class="b-ghost" style="margin-top:8px">⤓ Download full running log <span class="muted" id="dlLogCount"></span></button>
       <button id="statsBtn" class="b-ghost" style="margin-top:8px">📊 What it's learned (dev patterns)</button>
       <div id="statsBox" class="log hidden" style="margin-top:8px; max-height:280px"></div>
       <button id="stopBtn" class="b-stop" style="margin-top:8px">■ Stop & flatten</button>
@@ -469,6 +470,20 @@ $("copyLogBtn").addEventListener("click", async () => {
     $("copyLogBtn").textContent = "📋 Copy log + stats (to share)";
   }
   setTimeout(()=>$("copyLogBtn").textContent="📋 Copy log + stats (to share)", 2000);
+});
+
+// Download the FULL persistent running log (survives restarts) — owner only.
+$("dlLogBtn").addEventListener("click", async () => {
+  try {
+    const r = await api("/api/web/autopilot/log?limit=2000");
+    if (!r || !r.ok) { $("dlLogBtn").textContent = (r&&r.error)||"failed"; return; }
+    const ev = r.events || [];
+    const txt = ev.map(e => new Date(e.at).toLocaleString() + "  [" + (e.level||"info") + "] " + e.msg).join("\n") || "(no events yet)";
+    const a = document.createElement("a");
+    a.href = "data:text/plain;base64," + btoa(unescape(encodeURIComponent(txt)));
+    a.download = "slimewire-autopilot-log.txt";
+    document.body.appendChild(a); a.click(); a.remove();
+  } catch (e) { $("dlLogBtn").textContent = "failed"; }
 });
 
 $("statsBtn").addEventListener("click", async () => {

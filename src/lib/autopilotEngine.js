@@ -1200,9 +1200,15 @@ export function createAutopilotEngine(deps) {
     // entries below (the edge that still works in chop) and keep managing open exits.
     const recentP = (state.recentPnl || []).slice(-8);
     const recentNet = recentP.reduce((a, b) => a + b, 0);
-    if (tune.tape === "COLD" && recentP.length >= 5 && recentNet < 0 && (!state.chopPauseUntil || nowMs > state.chopPauseUntil)) {
+    // Count trailing consecutive losers — the FAST trip so a burst can't bleed 8 trades
+    // before the guard reacts (the old "5+ recent & net-negative" tripped too late).
+    let lossStreak = 0;
+    for (let i = recentP.length - 1; i >= 0; i--) { if (recentP[i] < 0) lossStreak++; else break; }
+    const bleeding = lossStreak >= 3 || (recentP.length >= 5 && recentNet < 0);
+    if ((lossStreak >= 3 || tune.tape === "COLD") && bleeding && (!state.chopPauseUntil || nowMs > state.chopPauseUntil)) {
       state.chopPauseUntil = nowMs + 240_000;
-      record("info", `🧊 Chop guard: COLD + bleeding (${round(recentNet, 4)} SOL over last ${recentP.length}) — pausing fresh entries ~4m. Smart-money copies + exits stay live.`);
+      const why = lossStreak >= 3 ? `${lossStreak} losses in a row` : "COLD + bleeding";
+      record("info", `🧊 Chop guard: ${why} (${round(recentNet, 4)} SOL last ${recentP.length}) — pausing fresh entries ~4m. Smart-money copies + exits stay live.`);
     }
     if (tune.tape === "HOT") state.chopPauseUntil = 0; // tape warmed → resume immediately
     const chopPaused = Boolean(state.chopPauseUntil && nowMs < state.chopPauseUntil);

@@ -308,14 +308,6 @@
         <label>🏆 Big wins — tap to download</label>
         <div id="wins"></div>
       </div>
-      <div style="margin-top:14px;display:flex;justify-content:space-between;align-items:center">
-        <label style="margin:0">📜 Running log <span class="muted" id="logCount"></span></label>
-        <div style="display:flex;gap:8px">
-          <button class="b-ghost" id="logRefresh" style="padding:4px 10px;font-size:12px">↻</button>
-          <button class="b-ghost" id="logDownload" style="padding:4px 10px;font-size:12px">⤓ Download</button>
-        </div>
-      </div>
-      <div id="runlog" style="margin-top:6px;max-height:240px;overflow:auto;background:rgba(4,8,6,.6);border:1px solid rgba(141,255,90,.14);border-radius:12px;padding:10px;font-family:ui-monospace,Menlo,monospace;font-size:11.5px;line-height:1.5"><div class="muted">Loading…</div></div>
       <button id="stopBtn" class="b-stop" style="margin-top:14px">■ Stop &amp; cash out</button>
     </div>
     <div class="muted" style="text-align:center">Pro access · <span id="expLbl">active</span> · powered by SlimeWire</div>
@@ -647,31 +639,9 @@ async function poll(){
   $("positions").innerHTML=pos.length?pos.map(p=>`<div class="pos"><span>${p.sym}</span><b>${fmtPnl(p.movePct)}</b></div>`).join(""):'<div class="muted">none</div>';
   WINS=s.bigWins||[];
   if(WINS.length){$("winsWrap").classList.remove("hidden");$("wins").innerHTML=WINS.map((w,i)=>`<div class="pos"><span><b class="up">$${(w.symbol||"").replace(/[<>&]/g,"")}</b> +${Number(w.gainPct).toLocaleString()}%</span><button class="b-ghost" style="width:auto;padding:5px 11px;font-size:12px" onclick="dlWin(${i})">⬇</button></div>`).join("");}
-  loadRunLog();
 }
 async function dlWin(i){const w=WINS[i];if(!w)return;const r=await api("/api/web/autopilot/win-card",{method:"POST",body:JSON.stringify(w)});if(r&&r.ok&&r.png)dl(`slimewire-${(w.symbol||"win").replace(/[^a-z0-9]/gi,"")}.png`,r.png);}
 window.dlWin=dlWin;
-
-// ---- persistent running log (survives restarts) ----
-function escLog(s){return String(s||"").replace(/[<>&]/g,c=>({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]));}
-async function loadRunLog(){
-  try{
-    const r=await api("/api/web/autopilot/log?limit=300");
-    if(!r||!r.ok)return;
-    const ev=r.events||[];
-    $("logCount").textContent=r.count?"("+r.count+")":"";
-    $("runlog").innerHTML=ev.length?ev.slice().reverse().map(e=>{
-      const t=new Date(e.at).toLocaleTimeString();
-      return '<div><span class="muted">'+t+'</span> '+escLog(e.msg)+'</div>';
-    }).join(""):'<div class="muted">No events yet — they appear as the bot trades.</div>';
-  }catch{}
-}
-if($("logRefresh"))$("logRefresh").addEventListener("click",()=>loadRunLog());
-if($("logDownload"))$("logDownload").addEventListener("click",async()=>{
-  try{const r=await api("/api/web/autopilot/log?limit=2000");const ev=(r&&r.events)||[];
-    const txt=ev.map(e=>new Date(e.at).toLocaleString()+"  "+e.msg).join("\n")||"(no events)";
-    dl("slimewire-autopilot-log.txt","data:text/plain;base64,"+btoa(unescape(encodeURIComponent(txt))));}catch{}
-});
 
 // ---- temporary access (trial pass) ----
 let LAST_ACCESS=null, trialRemaining=null, trialRunning=false, endModalShown=false;

@@ -3153,6 +3153,9 @@ async function handleWebApiRequest(request, response, requestUrl) {
           return;
         }
         if (pathname === "/api/web/autopilot/log") {
+          // OWNER ONLY — the decision log reveals the strategy (entry bar, skips, dev-rep,
+          // smart-money, chop-guard). Never expose it to regular/pro users.
+          if (!isOwner) { sendWebJson(request, response, 403, { ok: false, error: "owner only" }); return; }
           // Persistent running log — survives session/server restarts so the play-by-play
           // accumulates a reviewable history. Returns newest-last; ?limit caps the slice.
           await loadAutopilotEvents();
