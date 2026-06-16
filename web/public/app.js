@@ -8712,9 +8712,22 @@ function ogreAiHtml() {
   `;
 }
 
+// Clean gate for feature pages that need a managed wallet — a short message + one button,
+// NOT the whole wallet/connect/automation hub dumped inline (that confused testers).
+function walletGateCard(feature, blurb) {
+  return `
+    <section class="account-check-card wallet-gate">
+      <div>
+        <h3>Make a web wallet to use ${escapeHtml(feature)}</h3>
+        <p>${escapeHtml(blurb)}</p>
+      </div>
+      <button class="primary" type="button" data-connect-create-wallet>Create a Wallet</button>
+      <button type="button" data-tab="wallets">Open Wallets</button>
+    </section>`;
+}
 function bundleHtml() {
   if (!state.wallets.length) {
-    return `${createWalletSection()}${emptyState("No wallets loaded yet", "Create or restore wallets above first. Bundle works after the web account has managed wallets saved.")}`;
+    return walletGateCard("Bundle", "Bundle fires many managed wallets in one shot, so it needs at least one SlimeWire wallet. Tap to create one — your backup downloads instantly.");
   }
 
   return `
@@ -9729,7 +9742,7 @@ async function stopVolumeBot(planId) {
 
 function volumeHtml() {
   if (!state.wallets.length) {
-    return `${createWalletSection()}${emptyState("No wallets loaded yet", "Create or restore a managed wallet above first. SlimeBot funds and trades from managed wallets, so it needs at least one saved source wallet.")}`;
+    return walletGateCard("SlimeBot", "SlimeBot funds and trades from a managed SlimeWire wallet, so it needs at least one saved. Tap to create one — your backup downloads instantly.");
   }
 
   return volumeBotPanelHtml();

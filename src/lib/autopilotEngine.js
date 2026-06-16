@@ -973,18 +973,19 @@ export function createAutopilotEngine(deps) {
     // "log shows +0.48 wins but the wallet is down": a moon bag marked at +480% that
     // really fills at +40% must book +40%, so win/loss counts, the ledger, the peak, and
     // the learning data all reflect what the wallet actually got.
-    // LIVE NEVER falls back to the marked estimate: if the swap didn't report a fill
-    // amount we book 0 instead of trusting the marked price. Trusting it booked PHANTOM
-    // wins on thin coins — e.g. a +729% spike on a $3k coin that isn't actually sellable
-    // inflated the bank + session peak, then evaporated on the next wallet reconcile, so
-    // nothing real was ever banked. Paper mode still uses the estimate.
+    // Phantoms are fake GAINS, not losses. When live and the swap didn't report a fill
+    // amount: only DISTRUST a large marked GAIN (an unsellable spike on thin liquidity, e.g.
+    // +729% on a $3k coin) — book ~breakeven for that sold portion so no phantom win inflates
+    // the ledger/peak. Losses and modest moves are trustworthy (no phantom risk), so book the
+    // estimate — otherwise a real -27% exit was being written off as a full -100% loss.
+    // Either way the 5s wallet reconcile sets the bank to the true balance.
     const estProceeds = pos.costSol * portionOfOriginal * (1 + move / 100) * SELL_FEE_FACTOR;
     let proceeds;
     if (failedTerminal) proceeds = 0;
     else if (realProceeds != null) proceeds = realProceeds;
-    else if (state.live) {
-      proceeds = 0;
-      record("warn", `${pos.sym} ${reason}: no on-chain fill amount returned — booking 0, not the marked +${round(move, 1)}% (no phantom win); wallet reconcile will confirm the real balance.`);
+    else if (state.live && move > 25) {
+      proceeds = pos.costSol * portionOfOriginal; // ~breakeven on the unconfirmed portion
+      record("warn", `${pos.sym} ${reason}: +${round(move, 1)}% marked but no on-chain fill — booking ~breakeven (no phantom win); wallet reconcile confirms.`);
     } else {
       proceeds = estProceeds;
     }
