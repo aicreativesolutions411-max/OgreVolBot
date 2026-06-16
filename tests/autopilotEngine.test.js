@@ -671,3 +671,22 @@ test("engine: profit vault does a FINAL bank on session stop (last gains aren't 
   assert.ok(swept[0] > 0.27 && swept[0] < 0.3, "sweeps excess above stake minus the fee buffer");
   assert.ok(engine.status().secured > 0.27, "secured reflects the final bank");
 });
+
+test("engine: sweepNow banks profit on demand and keeps the session running", async () => {
+  let t = 0; let walletSol = 1; const swept = [];
+  const engine = createAutopilotEngine({
+    getFreshFeed: async () => [], getPairLite: async () => null,
+    buyToken: async () => ({ ok: true }), sellPercent: async () => ({ ok: true }),
+    now: () => t, persist: async () => {},
+    getWalletSol: async () => walletSol,
+    sweepProfit: async (dest, amt) => { swept.push(amt); walletSol -= amt; return { ok: true, sentSol: amt }; }
+  });
+  await engine.start({ solBudget: 1, minutes: 60, live: true, walletPubkey: "W".repeat(44), vault: { destination: "V".repeat(44) } });
+  await engine._hunt();           // floor captured at 1.0
+  walletSol = 1.25;               // profit sitting as cash
+  const res = await engine.sweepNow();
+  assert.equal(res.ok, true);
+  assert.ok(res.swept > 0.22 && res.swept < 0.24, "banks excess above stake minus buffer");
+  assert.equal(engine.status().running, true, "session keeps running after a manual bank");
+  await engine.stop("test"); // clear the interval loops so node --test can exit
+});

@@ -283,6 +283,8 @@
       </div>
       <label>🏦 Safe wallet — profits auto cash-out here</label>
       <input type="text" id="vaultDest" placeholder="your Phantom address (a different wallet)" autocomplete="off"/>
+      <div id="vaultConfirm" class="muted hidden" style="margin-top:6px">Profit sweeps go here and <b>can't be undone</b> — double-check the address. <span id="vaultDestEcho" style="color:#8dff5a;word-break:break-all"></span></div>
+      <div id="minSweepWrap" class="hidden" style="margin-top:8px"><label>Bank when profit clears (SOL)</label><input type="number" id="vaultMinSweep" value="0.05" min="0.01" max="5" step="0.01"/><div class="muted" style="margin-top:4px">Smaller = bank more often (more fees); larger = fewer, bigger sweeps.</div></div>
       <label style="display:flex;align-items:center;gap:9px;margin-top:12px;cursor:pointer">
         <input type="checkbox" id="keepGoing" style="width:18px;height:18px;accent-color:#8dff5a"/>
         <span>🔒 Keep going after locking gains — bank the green &amp; keep trading (instead of stopping)</span>
@@ -300,6 +302,8 @@
       </div>
       <div class="stat"><span>Wallet SOL</span><b id="wallet">—</b></div>
       <div class="stat"><span>🏦 Cashed out (safe)</span><b id="secured">—</b></div>
+      <button id="sweepNowBtn" class="b-go hidden" style="margin-top:10px;background:linear-gradient(180deg,#1c2a16,#16210f);border-color:#3c5a24">🏦 Bank profit now → safe wallet</button>
+      <div id="sweepNowMsg" class="muted" style="margin-top:6px"></div>
       <div class="stat"><span>Wins / Losses</span><b id="wl">—</b></div>
       <div class="stat"><span>Ends in</span><b id="ends">—</b></div>
       <label style="margin-top:12px">Live positions</label>
@@ -602,7 +606,7 @@ $("startBtn").addEventListener("click",async()=>{
   const body={sol:Number($("amt").value),minutes:Number($("mins").value),wallet:w.index,live:true,confirm:"LIVE",lowChurn:true,mode:"blend",
     maxTradeSol:Number($("maxTrade").value)||undefined, maxOpen:Number($("maxOpen").value)||undefined,
     lockGainsContinue:$("keepGoing").checked};
-  const safe=$("vaultDest").value.trim(); if(safe) body.vaultDestination=safe;
+  const safe=$("vaultDest").value.trim(); if(safe){ body.vaultDestination=safe; const ms=Number($("vaultMinSweep").value); if(ms>0) body.vaultMinSweep=ms; }
   $("startMsg").textContent="Waking the ogre…";
   try{
     const r=await withBtn($("startBtn"),async()=>{
@@ -620,6 +624,10 @@ $("startBtn").addEventListener("click",async()=>{
   }
 });
 $("stopBtn").addEventListener("click",async()=>{await withBtn($("stopBtn"),async()=>{await api("/api/web/autopilot/stop",{method:"POST",body:JSON.stringify({})});});activatingUntil=0;setState("idle");poll();});
+// Safe-wallet confirmation echo + reveal the bank-threshold control once an address is typed.
+$("vaultDest").addEventListener("input",()=>{const v=$("vaultDest").value.trim();const on=v.length>=32;$("vaultConfirm").classList.toggle("hidden",!on);$("minSweepWrap").classList.toggle("hidden",!on);$("vaultDestEcho").textContent=on?v:"";});
+// Bank profit on demand (sweeps gains above your stake to the safe wallet; keeps trading).
+$("sweepNowBtn").addEventListener("click",async()=>{await withBtn($("sweepNowBtn"),async()=>{$("sweepNowMsg").textContent="Banking profit…";const r=await api("/api/web/autopilot/sweep-now",{method:"POST",body:JSON.stringify({})});if(r&&r.ok){$("sweepNowMsg").innerHTML='<span class="ok">'+(r.swept>0?("Banked "+(+r.swept).toFixed(4)+" SOL to your safe wallet."):"Nothing above your stake to bank yet.")+'</span>';poll();}else{$("sweepNowMsg").innerHTML='<span class="warn">'+((r&&r.error)||"sweep failed")+'</span>';}});});
 
 function fmtPnl(p){const s=(p>=0?"+":"")+(p==null?"—":p.toFixed(2)+"%");return `<span class="${p>=0?'up':'down'}">${s}</span>`;}
 async function poll(){
@@ -633,6 +641,8 @@ async function poll(){
   $("run").textContent=s.running?"running":("stopped"+(s.stopReason?" · "+s.stopReason:""));
   $("wallet").textContent=(s.walletSol!=null?s.walletSol.toFixed(4):"—")+" SOL";
   $("secured").textContent=(s.secured!=null?s.secured.toFixed(4):"0")+" SOL";
+  // Show "Bank profit now" only on a running live session that has a safe wallet set.
+  $("sweepNowBtn").classList.toggle("hidden",!(s.running&&s.live&&s.vault));
   $("wl").textContent=`${s.wins||0} W / ${s.losses||0} L`;
   const m=Math.floor((s.endsInS||0)/60);$("ends").textContent=s.running?`${m}m`:"—";
   const pos=s.open||[];

@@ -3118,7 +3118,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
     //   POST /api/web/autopilot/stop
     // Live trading requires live:true AND confirm:"LIVE" AND a selected wallet
     // (never the fee wallet). Otherwise it runs paper (no SOL touched).
-    if (pathname === "/api/web/autopilot/status" || pathname === "/api/web/autopilot/start" || pathname === "/api/web/autopilot/stop" || pathname === "/api/web/autopilot/wallets" || pathname === "/api/web/autopilot/sweep" || pathname === "/api/web/autopilot/win-card" || pathname === "/api/web/autopilot/stats" || pathname === "/api/web/autopilot/access" || pathname === "/api/web/autopilot/grant" || pathname === "/api/web/autopilot/trial" || pathname === "/api/web/autopilot/redeem" || pathname === "/api/web/autopilot/key-login" || pathname === "/api/web/autopilot/my-key") {
+    if (pathname === "/api/web/autopilot/status" || pathname === "/api/web/autopilot/start" || pathname === "/api/web/autopilot/stop" || pathname === "/api/web/autopilot/wallets" || pathname === "/api/web/autopilot/sweep" || pathname === "/api/web/autopilot/sweep-now" || pathname === "/api/web/autopilot/win-card" || pathname === "/api/web/autopilot/stats" || pathname === "/api/web/autopilot/access" || pathname === "/api/web/autopilot/grant" || pathname === "/api/web/autopilot/trial" || pathname === "/api/web/autopilot/redeem" || pathname === "/api/web/autopilot/key-login" || pathname === "/api/web/autopilot/my-key") {
       const webAuth = await authenticateOptionalWebRequest(request);
       const body = request.method === "POST" ? await readJsonRequestBody(request).catch(() => ({})) : {};
       const providedKey = String(requestUrl.searchParams.get("key") || body.key || "");
@@ -3354,6 +3354,16 @@ async function handleWebApiRequest(request, response, requestUrl) {
           sendWebJson(request, response, 200, { ok: true, sweep, status: stopStatus });
           return;
         }
+        if (pathname === "/api/web/autopilot/sweep-now") {
+          // Bank profit on demand: sweep gains above the stake to the configured safe wallet
+          // WITHOUT stopping the session. Only the running session's owner/controller can.
+          if (!controllerUserId) { sendWebJson(request, response, 400, { ok: false, error: "Log in first." }); return; }
+          try {
+            const res = await autopilotEngine.sweepNow();
+            sendWebJson(request, response, 200, res && res.ok ? { ok: true, swept: res.swept, secured: res.secured } : { ok: false, error: (res && res.error) || "sweep unavailable" });
+          } catch (e) { sendWebJson(request, response, 500, { ok: false, error: e && e.message }); }
+          return;
+        }
         // start — requires live access (expired trials can read/withdraw but not start)
         if (!canStart) {
           sendWebJson(request, response, 402, { ok: false, error: "trial_expired", priceSol: CONFIG.subPriceSol, days: CONFIG.subDays });
@@ -3431,6 +3441,9 @@ async function handleWebApiRequest(request, response, requestUrl) {
             return;
           }
           vault = { destination: destKey };
+          // Optional bank threshold — only sweep once profit clears this many SOL (bounded).
+          const ms = Number(body.vaultMinSweep);
+          if (Number.isFinite(ms) && ms > 0) vault.minSweep = Math.max(0.01, Math.min(5, ms));
         }
         // Keep-going lock: bank each green and CONTINUE trading (re-baselined; vault sweeps
         // if set) instead of stopping the session when the bank-the-peak ratchet fires.

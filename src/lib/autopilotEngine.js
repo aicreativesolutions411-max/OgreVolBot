@@ -973,29 +973,30 @@ export function createAutopilotEngine(deps) {
   // above that is ever swept, so principal is never touched. Counts consecutive failures so
   // a bad address / RPC outage escalates to a visible warning instead of silently dropping.
   async function doVaultSweep(opts = {}) {
-    if (!(state && state.vault && state.vault.destination && state.live)) return;
-    if (opts.final || !Number.isFinite(state.walletSol)) {
+    if (!(state && state.vault && state.vault.destination && state.live)) return 0;
+    if (opts.final || opts.manual || !Number.isFinite(state.walletSol)) {
       try {
         const ws = await getWalletSol();
         if (Number.isFinite(ws) && ws >= 0) { state.walletSol = ws; state.bank = ws; if (state.vaultFloor == null) state.vaultFloor = ws; }
       } catch {}
     }
-    if (!Number.isFinite(state.walletSol)) return;
+    if (!Number.isFinite(state.walletSol)) return 0;
     const keep = Math.max(state.start, state.vaultFloor || 0);
     const buffer = 0.02;               // leave a little for trade fees
-    // Final (session-end) sweep banks even small leftover profit — the bot won't trade again,
-    // so there's no reason to keep dry powder; only the fee buffer stays behind.
-    const minSweep = opts.final ? 0.005 : (state.vault.minSweep || 0.05);
+    // Final (session-end) and manual ("bank now") sweeps bank even small leftover profit —
+    // the slow-loop sweep keeps dry powder; these don't need to. Only the fee buffer stays.
+    const minSweep = (opts.final || opts.manual) ? 0.005 : (state.vault.minSweep || 0.05);
     const excess = state.walletSol - keep - buffer;
-    if (excess < minSweep) return;
+    if (excess < minSweep) return 0;
     try {
       const res = await sweepProfit(state.vault.destination, excess);
       if (res && res.ok) {
         const sent = Number(res.sentSol) || excess;
         state.secured = (state.secured || 0) + sent;
         state.vaultFails = 0;
-        record("info", `🏦 Vault: secured +${round(sent, 4)} SOL (total ${round(state.secured, 4)} SOL safe)${opts.final ? " — final bank on session end" : ""}`);
+        record("info", `🏦 Vault: secured +${round(sent, 4)} SOL (total ${round(state.secured, 4)} SOL safe)${opts.final ? " — final bank on session end" : opts.manual ? " — manual bank" : ""}`);
         try { const ws2 = await getWalletSol(); if (Number.isFinite(ws2) && ws2 >= 0) { state.walletSol = ws2; state.bank = ws2; } } catch {}
+        return sent;
       } else {
         state.vaultFails = (state.vaultFails || 0) + 1;
         record(state.vaultFails >= 3 ? "warn" : "info", `vault sweep skipped: ${(res && res.error) || "send failed"}${state.vaultFails >= 3 ? ` — ⚠️ ${state.vaultFails} in a row; verify the safe-wallet address / RPC` : ""}`);
@@ -1004,6 +1005,18 @@ export function createAutopilotEngine(deps) {
       state.vaultFails = (state.vaultFails || 0) + 1;
       record("warn", `vault sweep error: ${e && e.message}`);
     }
+    return 0;
+  }
+
+  // Manual "bank profit now" — sweep gains above the stake on demand without stopping the
+  // session. Returns the SOL swept (0 if nothing was above the floor).
+  async function sweepNow() {
+    if (!running()) return { ok: false, error: "not running", swept: 0 };
+    if (!(state.vault && state.vault.destination)) return { ok: false, error: "no safe wallet set", swept: 0 };
+    if (!state.live) return { ok: false, error: "paper session", swept: 0 };
+    const swept = await doVaultSweep({ manual: true });
+    await savePoint();
+    return { ok: true, swept: round(swept || 0, 4), secured: round(state.secured || 0, 4) };
   }
 
   // SLOW loop: wallet reconciliation, hunting for new entries (heavy feed fetch),
@@ -1577,7 +1590,7 @@ export function createAutopilotEngine(deps) {
 
   // _tick drives one full step (exit pass + hunt pass) for deterministic tests.
   return {
-    start, stop, resume, status, snapshot,
+    start, stop, resume, status, snapshot, sweepNow,
     _tick: async () => { await safeExit(); await safeHunt(); },
     _exit: safeExit,
     _hunt: safeHunt,
