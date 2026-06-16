@@ -784,7 +784,14 @@ export function createAutopilotEngine(deps) {
       }
       tries += 1;
     }
-    record("info", `Autopilot STOP (${reason}) — ${state.open.length === 0 ? "all positions flat" : `WARNING ${state.open.length} still open`}`);
+    // FINAL BANK: flatten turned the open bags into cash in the trading wallet; sweep that
+    // realized profit to the safe wallet now, because the slow loop won't run again once
+    // stopped. Without this the last batch of gains sat un-swept in the hot wallet until the
+    // next session — exactly the money a losing streak could later give back. Best-effort.
+    if (state.vault && state.vault.destination && state.live) {
+      try { await doVaultSweep({ final: true }); } catch (e) { record("warn", `final vault sweep failed: ${e && e.message}`); }
+    }
+    record("info", `Autopilot STOP (${reason}) — ${state.open.length === 0 ? "all positions flat" : `WARNING ${state.open.length} still open`}${state.secured ? ` · ${round(state.secured, 4)} SOL banked to safe wallet` : ""}`);
     await savePoint();
     return status();
   }
@@ -949,6 +956,46 @@ export function createAutopilotEngine(deps) {
     }
   }
 
+  // PROFIT VAULT sweep — bank realized profit above the working stake to the safe wallet.
+  // Used both on the slow loop (continuous, keep trading the stake) and as a FINAL sweep on
+  // session end (so the last batch of profit is banked, not left in the hot wallet). Keeps
+  // the FULL balance you started with (max(start, vaultFloor)) + a fee buffer; only profit
+  // above that is ever swept, so principal is never touched. Counts consecutive failures so
+  // a bad address / RPC outage escalates to a visible warning instead of silently dropping.
+  async function doVaultSweep(opts = {}) {
+    if (!(state && state.vault && state.vault.destination && state.live)) return;
+    if (opts.final || !Number.isFinite(state.walletSol)) {
+      try {
+        const ws = await getWalletSol();
+        if (Number.isFinite(ws) && ws >= 0) { state.walletSol = ws; state.bank = ws; if (state.vaultFloor == null) state.vaultFloor = ws; }
+      } catch {}
+    }
+    if (!Number.isFinite(state.walletSol)) return;
+    const keep = Math.max(state.start, state.vaultFloor || 0);
+    const buffer = 0.02;               // leave a little for trade fees
+    // Final (session-end) sweep banks even small leftover profit — the bot won't trade again,
+    // so there's no reason to keep dry powder; only the fee buffer stays behind.
+    const minSweep = opts.final ? 0.005 : (state.vault.minSweep || 0.05);
+    const excess = state.walletSol - keep - buffer;
+    if (excess < minSweep) return;
+    try {
+      const res = await sweepProfit(state.vault.destination, excess);
+      if (res && res.ok) {
+        const sent = Number(res.sentSol) || excess;
+        state.secured = (state.secured || 0) + sent;
+        state.vaultFails = 0;
+        record("info", `🏦 Vault: secured +${round(sent, 4)} SOL (total ${round(state.secured, 4)} SOL safe)${opts.final ? " — final bank on session end" : ""}`);
+        try { const ws2 = await getWalletSol(); if (Number.isFinite(ws2) && ws2 >= 0) { state.walletSol = ws2; state.bank = ws2; } } catch {}
+      } else {
+        state.vaultFails = (state.vaultFails || 0) + 1;
+        record(state.vaultFails >= 3 ? "warn" : "info", `vault sweep skipped: ${(res && res.error) || "send failed"}${state.vaultFails >= 3 ? ` — ⚠️ ${state.vaultFails} in a row; verify the safe-wallet address / RPC` : ""}`);
+      }
+    } catch (e) {
+      state.vaultFails = (state.vaultFails || 0) + 1;
+      record("warn", `vault sweep error: ${e && e.message}`);
+    }
+  }
+
   // SLOW loop: wallet reconciliation, hunting for new entries (heavy feed fetch),
   // and persistence. Runs independently so it can't stall the exit loop.
   async function safeHunt() {
@@ -977,36 +1024,10 @@ export function createAutopilotEngine(deps) {
         } catch {}
       }
 
-      // PROFIT VAULT: any free SOL above the working stake is realized profit —
-      // sweep it to the vault wallet and keep trading the stake. Gains physically
-      // leave the trading wallet, so a cold streak can never claw them back.
-      if (state.vault && state.vault.destination && state.live && Number.isFinite(state.walletSol)) {
-        // Keep the FULL balance you started the session with — only profit above
-        // it is swept. (Previously kept only the stake `start`, which on a wallet
-        // bigger than the stake swept your existing balance to the vault.)
-        const keep = Math.max(state.start, state.vaultFloor || 0);
-        const buffer = 0.02;               // leave a little for trade fees
-        const minSweep = state.vault.minSweep || 0.05;
-        const excess = state.walletSol - keep - buffer;
-        if (excess >= minSweep) {
-          try {
-            const res = await sweepProfit(state.vault.destination, excess);
-            if (res && res.ok) {
-              const sent = Number(res.sentSol) || excess;
-              state.secured = (state.secured || 0) + sent;
-              record("info", `🏦 Vault: secured +${round(sent, 4)} SOL (total ${round(state.secured, 4)} SOL safe)`);
-              try {
-                const ws2 = await getWalletSol();
-                if (Number.isFinite(ws2) && ws2 >= 0) { state.walletSol = ws2; state.bank = ws2; }
-              } catch {}
-            } else {
-              record("warn", `vault sweep skipped: ${(res && res.error) || "send failed"}`);
-            }
-          } catch (e) {
-            record("warn", `vault sweep error: ${e && e.message}`);
-          }
-        }
-      }
+      // PROFIT VAULT: sweep realized profit above the working stake to the safe wallet and
+      // keep trading the stake. Gains physically leave the hot wallet, so a cold streak can
+      // never claw them back. (Shared helper — also runs as a final bank on session end.)
+      await doVaultSweep();
 
       if (now() < state.endAt) await hunt();
       await savePoint();

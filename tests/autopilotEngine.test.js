@@ -647,3 +647,27 @@ test("convictionMult: an untrusted/zero caller signal does not change conviction
   assert.equal(convictionMult(row, null, null, { trusted: false, convictionDelta: 0 }), base);
   assert.equal(convictionMult(row, null, null, null), base);          // null is safe
 });
+
+test("engine: profit vault does a FINAL bank on session stop (last gains aren't left in the hot wallet)", async () => {
+  let t = 0;
+  let walletSol = 1;
+  const swept = [];
+  const engine = createAutopilotEngine({
+    getFreshFeed: async () => [],
+    getPairLite: async () => null,
+    buyToken: async () => ({ ok: true }),
+    sellPercent: async () => ({ ok: true }),
+    now: () => t,
+    persist: async () => {},
+    getWalletSol: async () => walletSol,
+    sweepProfit: async (dest, amt) => { swept.push(amt); walletSol -= amt; return { ok: true, sentSol: amt }; }
+  });
+  await engine.start({ solBudget: 1, minutes: 60, live: true, walletPubkey: "W".repeat(44), vault: { destination: "V".repeat(44) } });
+  await engine._hunt();            // captures the vault floor at 1.0, nothing to sweep yet
+  assert.equal(swept.length, 0, "no sweep at the stake");
+  walletSol = 1.3;                 // profit realized as cash, not yet swept by a slow loop
+  await engine.stop("timer");      // stopping must bank the leftover profit
+  assert.equal(swept.length, 1, "final sweep banks the leftover profit on stop");
+  assert.ok(swept[0] > 0.27 && swept[0] < 0.3, "sweeps excess above stake minus the fee buffer");
+  assert.ok(engine.status().secured > 0.27, "secured reflects the final bank");
+});
