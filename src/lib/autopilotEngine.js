@@ -1214,13 +1214,19 @@ export function createAutopilotEngine(deps) {
       // aping everything into a dumping tape.
       const minConv = tune.tape === "COLD" ? 0.95 : tune.tape === "NORMAL" ? 0.7 : 0;
       if (conv < minConv) continue;
-      // MOMENTUM CONFIRMATION (cold tape only): an unproven fresh coin must show SUSTAINED
-      // strength — still passing the bar on a 2nd scan within 30s with its MC holding (not
-      // already fading) — before we ape. This is what kills the single-tick spike-then-dump
-      // churn that bleeds a red/cold day. Proven-dev or smart-money plays skip the wait, and
-      // HOT/NORMAL tapes still enter immediately so real runners aren't missed.
+      // MOMENTUM CONFIRMATION: an unproven, NON-elite setup must show SUSTAINED strength —
+      // still passing the bar on a 2nd scan within 30s with its MC holding (not already
+      // fading) — before we ape. This kills the marginal fs 61-67 burst-churn that bleeds a
+      // session (the log showed PvP/CHAIRS/MANNN/SNDK all scratching/stopping). It applies
+      // in COLD tape OR for any marginal score (fs < 72) in any tape; ELITE setups (fs 72+),
+      // proven-dev history, or smart-money plays still enter instantly so real runners and
+      // the strongest fresh movers are never missed. Also re-confirms a coin that already
+      // stopped us this session (coinLosses>0) so we stop instantly re-aping a chopper.
       const proven = (rep && rep.runners >= 1 && rep.rugs === 0) || (sm && (sm.kol || sm.winners >= 2));
-      if (!proven && tune.tape === "COLD") {
+      const elite = cand.fs >= 72;
+      const stoppedBefore = (state.coinLosses[cand.r.tokenMint] || 0) > 0;
+      const needsConfirm = !proven && (stoppedBefore || tune.tape === "COLD" || !elite);
+      if (needsConfirm) {
         const w = state.watching[cand.r.tokenMint];
         const curMc = Number(cand.r.marketCap) || 0;
         if (!w || nowMs - w.at > 30_000) { state.watching[cand.r.tokenMint] = { at: nowMs, mc: curMc }; continue; }
