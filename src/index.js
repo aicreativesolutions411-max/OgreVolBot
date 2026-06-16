@@ -15650,7 +15650,7 @@ async function getMintSafetyInfo(tokenMint) {
   const cached = getTimedCache(mintSafetyCache, cacheKey, 10 * 60 * 1000);
   if (cached) return cached;
 
-  const response = await rpcWithRetry("get mint safety info", () => connection.getParsedAccountInfo(mintKey, "confirmed"));
+  const response = await rpcRead("get mint safety info", (c) => c.getParsedAccountInfo(mintKey, "confirmed"));
   const account = response.value;
   if (!account?.owner) {
     throw new Error(`Could not read mint account ${cacheKey}.`);
@@ -16045,7 +16045,7 @@ async function getMintTokenProgramId(mint, options = {}) {
   const cached = mintProgramCache.get(cacheKey);
   if (cached) return cached;
 
-  const account = await rpcWithRetry("get mint owner program", () => connection.getAccountInfo(mintKey, "confirmed"), CONFIG.rpcRetries, {
+  const account = await rpcRead("get mint owner program", (c) => c.getAccountInfo(mintKey, "confirmed"), {
     priority: Boolean(options.priority)
   });
   if (!account?.owner) {
@@ -28083,7 +28083,7 @@ async function devCurrentTokenSnapshotEvent(wallet = "", mint = "", row = null) 
     const tokenAmount = Number(balance?.uiAmount || 0);
     let supplyPercent = null;
     try {
-      const supply = await rpcWithRetry("dev info token supply", () => connection.getTokenSupply(new PublicKey(mint), "confirmed"), 1);
+      const supply = await rpcRead("dev info token supply", (c) => c.getTokenSupply(new PublicKey(mint), "confirmed"), { retries: 1 });
       const supplyAmount = Number(supply?.value?.uiAmountString ?? supply?.value?.uiAmount);
       if (Number.isFinite(supplyAmount) && supplyAmount > 0 && Number.isFinite(tokenAmount)) {
         supplyPercent = (tokenAmount / supplyAmount) * 100;
@@ -36762,7 +36762,7 @@ async function webTxAudit(signatureText) {
     throw new Error("Paste a valid Solana transaction signature.");
   }
 
-  const tx = await rpcWithRetry("get transaction audit", () => connection.getParsedTransaction(signature, {
+  const tx = await rpcRead("get transaction audit", (c) => c.getParsedTransaction(signature, {
     commitment: "finalized",
     maxSupportedTransactionVersion: 0
   }));
