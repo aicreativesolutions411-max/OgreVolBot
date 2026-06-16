@@ -800,8 +800,16 @@ export function createAutopilotEngine(deps) {
 
   function status() {
     if (!state) return { running: false };
+    // HONEST DISPLAY EQUITY: value open bags at what you'd REALISTICALLY bank if you
+    // stopped right now — not the raw mark. A marked-up memecoin rarely fills at its mark
+    // (slippage + thin curves), and a single tiny buy can phantom-spike the tick. The old
+    // display used the uncapped live mark, so it read "+5%" then "adjusted" down when it
+    // reconciled. Now: full downside, but haircut unrealized gains to ~60% and hard-cap the
+    // mark at 4x, so the running % tracks reality and never looks like you're winning more
+    // than you really are. Realized SOL (bank) is always exact; this only tempers OPEN bags.
     const workingEquity = state.bank + state.open.reduce((a, p) => {
-      const mv = p.entryMc > 0 ? liveMcFor(p) / p.entryMc : 1;
+      const raw = p.entryMc > 0 ? liveMcFor(p) / p.entryMc : 1;
+      const mv = raw >= 1 ? 1 + (Math.min(raw, 4) - 1) * 0.6 : Math.max(0, raw);
       return a + p.costSol * p.remFrac * mv;
     }, 0);
     // Total includes profit already swept to the vault (safe SOL).
