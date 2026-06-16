@@ -22846,6 +22846,70 @@ async function fetchTokenSupplyUi(mint) {
   } catch { return null; }
 }
 
+// ---------------------------------------------------------------------------
+// CALLER INTELLIGENCE — Phase A: record every CA "called" in a channel.
+// When the bot scans a CA in a group/channel it logs the call: who, where, entry MC,
+// and tracks the peak MC since. This is the raw signal that later powers caller/channel
+// win-rate scoring (Phase B) and the autopilot "a proven caller just called this" entry
+// edge (Phase C). First caller per (chat, mint) owns the call. Pure data — no risk.
+// ---------------------------------------------------------------------------
+function telegramCallsPath() {
+  return path.join(CONFIG.dataDir, "telegram-calls.json");
+}
+let telegramCallsCache = null;
+let telegramCallsFlushTimer = null;
+async function readTelegramCalls() {
+  if (telegramCallsCache) return telegramCallsCache;
+  const store = await readJson(telegramCallsPath());
+  if (!store.calls || typeof store.calls !== "object") store.calls = {};
+  telegramCallsCache = store;
+  return store;
+}
+function scheduleTelegramCallsFlush() {
+  if (telegramCallsFlushTimer) return;
+  telegramCallsFlushTimer = setTimeout(() => {
+    telegramCallsFlushTimer = null;
+    void (async () => {
+      try { if (telegramCallsCache) await writeJsonFile(telegramCallsPath(), telegramCallsCache); } catch {}
+    })();
+  }, 5000);
+  if (telegramCallsFlushTimer.unref) telegramCallsFlushTimer.unref();
+}
+async function recordTelegramCall(message, mint, mcUsd) {
+  try {
+    const chatId = message?.chat?.id;
+    if (!chatId || isPrivateChat(message.chat) || !solanaPublicKeyLike(mint)) return null;
+    const store = await readTelegramCalls();
+    const key = `${chatId}:${mint}`;
+    const nowMs = Date.now();
+    const mc = Number(mcUsd) || 0;
+    const caller = message.from || {};
+    const callerName = caller.username
+      ? `@${caller.username}`
+      : ([caller.first_name, caller.last_name].filter(Boolean).join(" ") || String(caller.id || "anon"));
+    let rec = store.calls[key];
+    if (!rec) {
+      rec = {
+        mint, chatId: String(chatId), chatTitle: String(message.chat.title || "").slice(0, 80),
+        callerId: caller.id || null, callerName,
+        entryMc: mc, firstAt: nowMs, peakMc: mc, lastMc: mc, lastAt: nowMs
+      };
+      store.calls[key] = rec;
+      console.info(JSON.stringify({ event: "tg_call_recorded", chat: rec.chatTitle, caller: callerName, mint, entryMc: mc }));
+    } else if (mc > 0) {
+      rec.lastMc = mc; rec.lastAt = nowMs;
+      if (mc > (rec.peakMc || 0)) rec.peakMc = mc;
+    }
+    const keys = Object.keys(store.calls);
+    if (keys.length > 6000) {
+      const drop = keys.sort((a, b) => (store.calls[a].firstAt || 0) - (store.calls[b].firstAt || 0)).slice(0, keys.length - 6000);
+      for (const k of drop) delete store.calls[k];
+    }
+    scheduleTelegramCallsFlush();
+    return rec;
+  } catch { return null; }
+}
+
 function telegramGroupsPath() {
   return path.join(CONFIG.dataDir, "telegram-groups.json");
 }
@@ -23192,6 +23256,11 @@ async function handleTelegramLookCommand(chatId, message, argument) {
     scan = await gatherSlimeScan(mint);
   } catch {
     // fall through to the degraded reply below
+  }
+  // CALLER INTELLIGENCE (Phase A): log this as a channel "call" with its entry MC.
+  if (message && message.chat && !isPrivateChat(message.chat)) {
+    const callMc = Number(scan?.meta?.marketCap || scan?.meta?.fdv || scan?.bonding?.marketCap || 0);
+    void recordTelegramCall(message, mint, callMc).catch(() => {});
   }
   let text = null;
   if (scan && (scan.meta || scan.bonding || scan.shield)) {
