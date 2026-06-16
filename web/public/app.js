@@ -7703,6 +7703,16 @@ const OGRE_SWAP_CLIPS = "/assets/slimewire/swap/states/";
 const OGRE_SWAP_SFX = "/assets/slimewire/swap/sfx/";
 const OGRE_VOL_CLIPS = "/assets/slimewire/volume/states/";
 const OGRE_VOL_SFX = "/assets/slimewire/volume/sfx/";
+// Shared UI sounds so EVERY control on a living panel gives audible feedback — a click you
+// can hear, a flip whoosh on the reverse. Keeps the "movie you control" feel even on the
+// little secondary buttons that have no dedicated clip.
+const OGRE_UI_TICK = "/assets/slimewire/ui/tick.mp3";
+const OGRE_UI_FLIP = "/assets/slimewire/ui/flip.mp3";
+// Clips we actually ship per kind — guards ogrePlayClip from ever pointing at a missing file.
+const OGRE_CLIP_SET = {
+  swap: new Set(["idle", "appraise", "buy", "sell", "banking", "win", "loss"]),
+  volume: new Set(["idle", "running", "sweep", "stop"])
+};
 // Config-driven "hero" stages for the Tier 1/2 panels — same engine, lighter banner.
 // base = clip dir, poster = still, tier/cap = labels, accent = CSS class, idle/event clip names.
 // event SFX reuse the existing libraries so the whole site shares one sound identity.
@@ -7738,18 +7748,43 @@ function bindOgreActions() {
       if (cardBtn) { e.preventDefault(); e.stopPropagation(); ogreShareCard(cardBtn.getAttribute("data-ogre-card")); return; }
       const kind = ogreStage.kind;
       if (!kind) return;
-      const btn = e.target.closest("button");
-      if (!btn) return;
       const stage = document.querySelector(`[data-ogre-stage="${kind}"]`);
       if (!stage) return;
+      // React to any real control the user can press inside the living panel — buttons, the
+      // route toggle, selects, range inputs, pills — not just the one primary action. Scope it
+      // to the panel that owns the stage so nav/other taps never trigger the ogre or its sound.
+      const el = e.target.closest("button, a[role='button'], [data-swap-reverse], select, input[type='range'], label.oss-pill, [role='button']");
+      if (!el) return;
+      if (el.closest("[data-ogre-snd],[data-ogre-card]")) return;
+      const panel = stage.closest("[data-rendered-tab]") || stage.parentElement || document;
+      if (panel.contains && !panel.contains(el)) return;
+      const tick = () => ogrePlaySfx(OGRE_UI_TICK, 0.5);
+
       if (OGRE_HERO_KINDS[kind]) {
         const sel = OGRE_HERO_ACTION[kind];
-        const txt = (btn.textContent || "").toLowerCase();
-        if ((sel && btn.closest(sel)) || (kind === "sniper" && /snipe|ape|fire/.test(txt))) ogreHeroFire(kind);
-      } else if (kind === "swap" && btn.closest("[data-swap-use-custom-amount]")) {
-        ogrePlayClip(stage, "buy", true); // optimistic motion; the real result still drives win/banking
-      } else if (kind === "volume" && btn.closest("[data-vbot-start]")) {
-        ogrePlayClip(stage, "running", true);
+        const txt = (el.textContent || "").toLowerCase();
+        if ((sel && el.closest(sel)) || (kind === "sniper" && /snipe|ape|fire/.test(txt))) ogreHeroFire(kind);
+        else tick();
+        return;
+      }
+      if (kind === "swap") {
+        if (el.closest("[data-swap-use-custom-amount]")) {
+          // Direction-aware: the same SWAP button cashes out (sell) or apes in (buy) — different
+          // clip + sound for each so the action you took is the action the ogre performs.
+          ogrePlayClip(stage, state.swapDirection === "sell" ? "sell" : "buy", true);
+        } else if (el.closest("[data-swap-reverse]")) {
+          ogrePlayClip(stage, "appraise", true); ogrePlaySfx(OGRE_UI_FLIP, 0.6);
+        } else if (el.closest("[data-swap-to],[data-swap-from],[data-trade-token]")) {
+          ogrePlayClip(stage, "appraise", true);
+        } else { tick(); }
+        return;
+      }
+      if (kind === "volume") {
+        if (el.closest("[data-vbot-start]")) ogrePlayClip(stage, "running", true);
+        else if (el.closest("[data-vbot-stop]")) ogrePlayClip(stage, "stop", true);
+        else if (el.closest("[data-vbot-set-mode],[data-vbot-set-aggr],[data-vbot-set-stagger],[data-vbot-source]")) ogrePlayClip(stage, "sweep", true);
+        else tick();
+        return;
       }
     } catch {}
   }, true);
@@ -7860,7 +7895,6 @@ function ogreSwapStageHtml() {
       <div class="os-gauge"><div class="fill" data-os-gauge></div></div>
       <div class="os-orb" data-os-orb><span class="s" data-os-orb-s></span><span class="p" data-os-orb-p></span></div>
       <div class="os-ticker"><span class="os-tk" data-os-tk><span class="os-dot"></span>OgreSwap ready — paste a coin to appraise</span></div>
-      <div class="os-cap"><h4>OgreSwap</h4><p>Appraise it · swap it · bank it.</p></div>
     </div>`;
 }
 function ogreVolumeStageHtml() {
@@ -7881,7 +7915,6 @@ function ogreVolumeStageHtml() {
         <div class="chip"><span class="l">Wallets</span><span class="v" data-ov-wallets>0</span></div>
       </div>
       <div class="os-ticker"><span class="os-tk" data-os-tk><span class="os-dot"></span>SlimeBot idle — set a token and start</span></div>
-      <div class="os-cap"><h4>SlimeBot Volume Engine</h4><p>A swarm of wallets · lifelike flow.</p></div>
     </div>`;
 }
 function ogreAmbientClip(kind) {
@@ -7892,16 +7925,24 @@ function ogreEventSfx(name) {
   const hk = OGRE_HERO_KINDS[ogreStage.kind];
   if (hk) { if (hk.sfx && name === hk.event) ogrePlaySfx(hk.sfx[0], hk.sfx[1]); return; }
   if (ogreStage.kind === "swap") {
-    const m = { appraise: ["appraise.mp3", 0.7], buy: ["buy.mp3", 0.85], win: ["win.mp3", 0.85], loss: ["loss.mp3", 0.6], banking: ["bank.mp3", 0.8] };
+    const m = { appraise: ["appraise.mp3", 0.7], buy: ["buy.mp3", 0.85], sell: ["sell.mp3", 0.85], win: ["win.mp3", 0.85], loss: ["loss.mp3", 0.6], banking: ["bank.mp3", 0.8] };
     if (m[name]) ogrePlaySfx(OGRE_SWAP_SFX + m[name][0], m[name][1]);
   } else if (ogreStage.kind === "volume") {
-    const m = { running: ["start.mp3", 0.7], sweep: ["sweep.mp3", 0.8] };
+    const m = { running: ["start.mp3", 0.7], sweep: ["sweep.mp3", 0.8], stop: ["stop.mp3", 0.8] };
     if (m[name]) ogrePlaySfx(OGRE_VOL_SFX + m[name][0], m[name][1]);
   }
 }
 function ogrePlayClip(stage, name, isEvent) {
   const bg = stage.querySelector("[data-ogre-bg]");
   if (!bg || ogreStage.clip === name) return;
+  // Never point the video at a clip we don't ship — fall back to the event's nearest
+  // sibling so a missing file degrades to motion we have instead of a broken frame.
+  const set = OGRE_CLIP_SET[ogreStage.kind];
+  if (set && !set.has(name)) {
+    if (isEvent) ogreEventSfx(name); // still play the action's sound
+    name = ogreStage.kind === "swap" ? "appraise" : "sweep";
+    if (!set.has(name)) return;
+  }
   ogreStage.clip = name;
   const base = ogreClipBase();
   try { bg.loop = !isEvent; bg.muted = true; bg.src = base + name + ".mp4"; bg.load(); const p = bg.play(); if (p && p.catch) p.catch(() => {}); } catch {}
@@ -7943,6 +7984,7 @@ function attachOgreStage(panel) {
   if (bg && !bg.__ogreBound) {
     bg.__ogreBound = true;
     bg.addEventListener("ended", () => { if (!bg.loop) { ogreStage.eventUntil = 0; ogreStage.clip = ""; ogrePlayClip(stage, ogreAmbientClip(ogreStage.kind), false); } });
+    bg.addEventListener("error", () => { ogreStage.eventUntil = 0; ogreStage.clip = ""; const amb = ogreAmbientClip(ogreStage.kind); if (amb !== "idle" || bg.getAttribute("src") !== ogreClipBase() + amb + ".mp4") ogrePlayClip(stage, amb, false); });
   }
   // LAZY/PERF: only the active tab's clip is ever in the DOM (panels re-render), and now the
   // clip also PAUSES when the stage scrolls off-screen or the app is backgrounded — so the
@@ -7984,7 +8026,6 @@ function ogreHeroStageHtml(kind) {
       <button class="os-snd" data-ogre-snd type="button" title="Sound on/off">🔊</button>
       <span class="os-led"></span>
       <div class="os-ticker"><span class="os-tk" data-os-tk><span class="os-dot"></span>${escapeHtml(k.cap[1])}</span></div>
-      <div class="os-cap"><h4>${escapeHtml(k.cap[0])}</h4><p>${escapeHtml(k.cap[1])}</p></div>
     </div>`;
 }
 // Generic hero driver: ambient idle loop (the gorgeous new ogre carries it). An action

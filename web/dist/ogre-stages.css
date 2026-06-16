@@ -272,18 +272,28 @@ html body main.shell[data-app] .preset-toolbar{ background:linear-gradient(160de
    video so it still reads as a live cockpit you're working inside. Width is capped so the
    portrait doesn't dominate a wide column. */
 @media (min-width:760px){
-  .ogre-stage, .ogre-stage.hero{aspect-ratio:3/4;max-width:460px;max-height:640px;}
-  /* LIVE COCKPIT: the panel's controls float UP over the bottom of the video, fading in
-     behind them — so it feels like you're inside the scene and your actions drive the ogre
-     (the event clips already fire on tap). Matched to the stage width so the controls sit
-     inside the frame, not beside it. */
+  /* One centered "carved console": the full ogre shows on top, then the real controls rise
+     up into the bottom of the video and fuse with it — the panel becomes the lower half of
+     the scene, framed by the stone-and-glass surround, instead of a separate box below.
+     Every control inside still fires its own clip + sound (bindOgreActions). */
+  .ogre-stage, .ogre-stage.hero{aspect-ratio:3/4;max-width:480px;max-height:600px;}
   html body main.shell[data-app] .ogre-stage + *{
-    position:relative; z-index:6; margin-top:-120px; border-radius:20px; padding-top:22px;
-    background:linear-gradient(180deg, rgba(5,9,7,0) 0, rgba(5,9,7,.5) 56px, rgba(5,9,7,.92) 140px, rgba(5,9,7,.97)) !important;
-    backdrop-filter:blur(6px); box-shadow:0 -12px 34px rgba(0,0,0,.45);
+    position:relative; z-index:6; max-width:480px; margin:-150px auto 0; padding-top:30px;
+    border-radius:0 0 22px 22px; border:1px solid rgba(141,255,90,.14); border-top:0;
+    background:linear-gradient(180deg, rgba(5,9,7,0) 0, rgba(6,11,9,.55) 64px, rgba(6,11,9,.95) 156px, rgba(6,11,9,.98)) !important;
+    backdrop-filter:blur(7px); box-shadow:0 -10px 38px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.05);
   }
-  /* keep the stage's own bottom corners square so the cockpit panel fuses up into it */
+  /* swap is a 2-col grid (machine + info aside) — collapse it under the video so the console
+     is one centered column the width of the screen above it; the info cards stack beneath. */
+  html body main.shell[data-app] .ogre-stage + .trade-layout{grid-template-columns:1fr !important; gap:12px;}
+  html body main.shell[data-app] .ogre-stage + .trade-layout > .trade-side{margin-top:6px;}
+  /* square the video's bottom so the console fuses straight up into it (no seam gap) */
   html body main.shell[data-app] .ogre-stage{border-bottom-left-radius:0;border-bottom-right-radius:0;}
+  /* let the carved console glow at the seam where it meets the live video */
+  html body main.shell[data-app] .ogre-stage + *::before{
+    content:""; position:absolute; left:18px; right:18px; top:0; height:2px; border-radius:2px;
+    background:linear-gradient(90deg, transparent, var(--accent, #8dff5a), transparent); opacity:.5;
+  }
 }
 .ogre-stage.hero .os-tier{color:var(--accent);border:1px solid rgba(255,255,255,.16);}
 .ogre-stage.hero .os-dot{background:var(--accent);box-shadow:0 0 8px var(--accent);}
