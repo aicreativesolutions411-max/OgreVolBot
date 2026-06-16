@@ -539,8 +539,10 @@ test("engine: loss cap flattens and stops", async () => {
   let t = 0;
   let mc = 5000;
   // Many fresh rows so it deploys most of the bankroll across several positions;
-  // tanking them all then drops realized equity below the 70% cap.
-  const rows = Array.from({ length: 8 }, (_, i) => goodRow({ tokenMint: `Mint${i}`, symbol: `C${i}` }));
+  // tanking them all then drops realized equity below the 70% cap. Use ELITE-score rows
+  // (very fresh + high provenance => fs >= 72) so they bypass momentum-confirmation and
+  // deploy immediately — this test is about the loss-cap backstop, not entry selectivity.
+  const rows = Array.from({ length: 8 }, (_, i) => goodRow({ tokenMint: `Mint${i}`, symbol: `C${i}`, pairAgeSeconds: 20, bestPickScore: 95 }));
   const engine = createAutopilotEngine({
     getFreshFeed: async () => rows,
     getPairLite: async () => ({ marketCap: mc, liquidityUsd: 6000 }),
