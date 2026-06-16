@@ -204,8 +204,11 @@ test("grind: enters only at safer (higher) MC and skips the sub-7k rug zone", ()
   const P = aggParams(baseState({ mode: "grind" }));
   // window: floor $3k (feed is mostly sub-$5k; quality gating does the rug-dodging), ceiling
   // 80k, waits out the first ~20s, deeper liq.
-  assert.ok(P.mcFloor >= 3000 && P.mcFloor < 5000, "grind floors above the deepest dust");
+  assert.ok(P.mcFloor >= 6000 && P.mcFloor < 10000, "grind floors above the instant-rug/phantom dust");
   assert.ok(P.mcCeil > 20000, "grind reaches well higher for survived coins");
+  assert.ok(P.minLiqAbs >= 3000, "grind enforces an absolute liquidity floor (anti-phantom)");
+  // a thin-liquidity coin (phantom-spike risk) is rejected even at a fine MC
+  assert.equal(entryReject(goodRow({ marketCap: 9000, liquidityUsd: 1500, pairAgeSeconds: 120, volume5m: 120, buys5m: 25, sells5m: 8, bestPickScore: 80 }), P), "liquidity");
   assert.ok(P.minAge >= 12, "grind waits out the worst instant-rug seconds");
   assert.ok(P.maxAge >= 3600, "grind accepts older survived coins from the last-hour window");
   assert.ok(P.liqFrac > 0.3, "grind demands deeper liquidity");

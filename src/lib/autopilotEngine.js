@@ -105,8 +105,16 @@ export function aggParams(state) {
   // SURVIVED the rug window and have real liquidity to fill 30-150% TPs. The floor is the
   // user's "~5k" target; age(45s) + deep liquidity + fs64 + the 0.7x size cap do the
   // rug-dodging, while the wide window keeps enough candidates to actually trade + compound.
-  const mcFloor = grind ? 3000 : 1800;
+  // Live data settled it: $3k floor traded dust that rugged (CHAIR -68% past stop) and
+  // phantom-spiked (Specs fake +400% that couldn't fill). Float the floor above the
+  // instant-rug/phantom zone. Frequency drops, but that's the price of not bleeding —
+  // the real higher-frequency edge is smart-money copy, not aping fresher dust.
+  const mcFloor = grind ? 6000 : 1800;
   const mcCeil = grind ? 80000 : 20000;
+  // ANTI-PHANTOM hard liquidity floor for grind: a phantom +400% spike comes from a thin
+  // curve where one tiny buy moves the marked cap but nothing can actually fill. Require
+  // REAL depth (present + >= $4k) so those un-sellable coins never pass.
+  const minLiqAbs = grind ? 4000 : 0;
   // GRIND waits out the first ~15s (the worst instant-rug/sniper-dump seconds — the fresh
   // feed is mostly sub-30s, so a 45s gate starved it to zero entries) and asks for slightly
   // deeper liquidity than default (cleaner fills, less drain risk) without being so strict
@@ -153,7 +161,7 @@ export function aggParams(state) {
   const bankHard = steady || tape === "COLD" || (blend && tape !== "HOT");
   if (bankHard && !steady) { tp1Pct = Math.max(tp1Pct, 85); spikePct = Math.max(spikePct, 85); moonTarget = Math.min(moonTarget, 400); }
 
-  return { regime, wr, baseFrac, streakMult, regimeMult, tp1, tp2, sl, minScore, mcFloor, mcCeil, minAge, maxAge, liqFrac, steady, blend, grind, bankHard, tp1Pct, spikePct, moonTarget, tp2Lvl, tp2Pct, tp3Lvl, tp3Pct };
+  return { regime, wr, baseFrac, streakMult, regimeMult, tp1, tp2, sl, minScore, mcFloor, mcCeil, minAge, maxAge, liqFrac, minLiqAbs, steady, blend, grind, bankHard, tp1Pct, spikePct, moonTarget, tp2Lvl, tp2Pct, tp3Lvl, tp3Pct };
 }
 
 // SELF-TUNING / market-regime brain: reads the recent runner & rug rate and sets
@@ -391,6 +399,9 @@ export function entryReject(row, P) {
   if (!Number.isFinite(age) || age < (P.minAge || 4) || age > (P.maxAge || 1200)) return "age";
   if (!Number.isFinite(mc) || mc < (P.mcFloor || 1800) || mc > (P.mcCeil || 20000)) return "mc";
   if (liq > 0 && liq < mc * (P.liqFrac || 0.3)) return "liquidity";
+  // GRIND: liquidity must be PRESENT and meet an absolute floor — kills phantom thin-curve
+  // coins (the ones that flash fake +400% but can't fill). Closes the liq===0 bypass too.
+  if (P.minLiqAbs && (!(liq > 0) || liq < P.minLiqAbs)) return "liquidity";
   if (vol < 25) return "volume";
   if (buys > 0 && sells > buys * 2 + 3) return "dumping";
   // GRIND scores survived/climbing coins (grindScore); every other mode uses freshScore.
