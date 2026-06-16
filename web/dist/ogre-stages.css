@@ -267,33 +267,80 @@ html body main.shell[data-app] .preset-toolbar{ background:linear-gradient(160de
    Lighter banner stages for Launch / Sniper / OgreAI / Bundle / Positions / PnL — same
    ogre family, each its own accent. Shorter than the swap/volume deep-HUD stages. */
 .ogre-stage.hero{aspect-ratio:3/4;}
-/* WEB: full-ogre portrait "screen" centered in the panel — the whole character shows
-   (hammer, coins, all the way down), then the controls float UP over the bottom of the
-   video so it still reads as a live cockpit you're working inside. Width is capped so the
-   portrait doesn't dominate a wide column. */
+
+/* ================= BUTTONS-IN-THE-VIDEO (swap) =================
+   The compact swap machine is lifted (in JS) into the stage as .os-hud and pinned to the
+   bottom of the living video — controls laid ON the clip, translucent so the treasurer's
+   face/shield stay clear and the coins glow through behind them. Works mobile + web. */
+/* On the buttons-on-video swap stage the controls own the lower half, so frame the treasurer
+   to fill the visible upper area (face + shield large) instead of shrinking the whole figure
+   into a strip — cover, biased high. The lower coins/table sit behind the translucent HUD. */
+.ogre-stage.swap .ogre-bg{object-fit:cover !important; object-position:center 15% !important;}
+.ogre-stage.swap{aspect-ratio:3/4;}
+/* keep each pay/receive row on ONE line (amount + token side by side) so the HUD stays in the
+   lower half instead of growing taller than the video and hiding the ogre. */
+html body main.shell[data-app] .os-hud .oss-slot{display:flex !important; flex-direction:row !important; align-items:center; gap:8px;}
+html body main.shell[data-app] .os-hud .oss-slot .oss-amount{flex:1 1 auto; min-width:0; width:auto;}
+html body main.shell[data-app] .os-hud .oss-slot .oss-tok{flex:0 0 auto; width:auto; max-width:48%;}
+.ogre-stage.swap .oss-stage-wrap.os-hud{
+  position:absolute; left:0; right:0; bottom:0; z-index:6; margin:0; padding:8px 10px 9px;
+  background:linear-gradient(180deg, rgba(4,7,10,0) 0%, rgba(4,7,10,.28) 22%, rgba(4,7,10,.6) 55%, rgba(4,7,10,.8) 100%);
+}
+/* the inner flat container goes fully transparent so only the chips read as glass on video */
+html body main.shell[data-app] .os-hud .oss-stage.oss-flat{background:transparent !important; border:0 !important; padding:0 !important; gap:6px;}
+/* compact every control so the HUD stays in the lower ~half and the treasurer shows above it */
+html body main.shell[data-app] .os-hud .oss-slot,
+html body main.shell[data-app] .os-hud .oss-pill{
+  background:rgba(7,13,9,.52) !important; border:1px solid rgba(141,255,90,.26) !important; backdrop-filter:blur(6px);
+  padding:7px 10px !important;
+}
+html body main.shell[data-app] .os-hud .oss-amount{font-size:16px !important;}
+html body main.shell[data-app] .os-hud .oss-ca{font-size:12px !important;}
+html body main.shell[data-app] .os-hud .oss-reverse{width:30px !important; height:30px !important; margin:-2px auto !important;}
+html body main.shell[data-app] .os-hud .oss-swap{padding:11px !important; font-size:17px !important; box-shadow:0 6px 18px rgba(40,160,70,.4);}
+/* slippage + wallet as slim chips — hide their stacked caption labels (the value reads fine)
+   and tighten the selects so each chip is ~32px instead of ~80px. */
+html body main.shell[data-app] .os-hud .oss-wallet-bar{margin-top:0;}
+html body main.shell[data-app] .os-hud .oss-pill{padding:4px 9px !important;}
+html body main.shell[data-app] .os-hud .oss-pill::before{display:none !important;}
+html body main.shell[data-app] .os-hud .oss-pill select{padding:3px 4px !important; font-size:12px !important;}
+html body main.shell[data-app] .os-hud .oss-slot{padding:5px 9px !important;}
+html body main.shell[data-app] .os-hud .oss-slot .oss-tok{padding:4px 6px !important; font-size:12px !important;}
+/* the bottom ticker would collide with the on-video HUD — the HUD itself is the live read now */
+.ogre-stage.swap .os-ticker{display:none;}
+/* slippage + wallet settings tray, relocated just below the video (one slim row, two chips) */
+html body main.shell[data-app] .oss-settings-tray{display:flex; gap:10px; margin:0 0 10px;}
+html body main.shell[data-app] .oss-settings-tray .oss-slip,
+html body main.shell[data-app] .oss-settings-tray .oss-wallet-bar{flex:1 1 0; min-width:0; margin:0;}
+html body main.shell[data-app] .oss-settings-tray .oss-pill{width:100% !important; background:#08110b; border:1px solid rgba(141,255,90,.16); border-radius:12px; padding:7px 11px !important;}
+html body main.shell[data-app] .oss-settings-tray .oss-pill::before{display:block; font-size:9px; letter-spacing:.5px; color:#7fae74; text-transform:uppercase; margin-bottom:2px;}
+
+/* ================= LIVING HEADER CONSOLE (volume + hero) =================
+   Longer panels (the volume configurator, the hero forms) can't sit ON the clip without
+   burying it, so the video is a header the glass controls rise UP into — same family, the
+   controls fuse to the bottom of the video with a glowing seam. Web centers the column. */
+html body main.shell[data-app] .ogre-stage.volume + *,
+html body main.shell[data-app] .ogre-stage.hero + *{
+  position:relative; z-index:6; margin-top:-86px; padding-top:26px; border-radius:0 0 20px 20px;
+  background:linear-gradient(180deg, rgba(5,9,7,0) 0, rgba(6,11,9,.5) 50px, rgba(6,11,9,.94) 130px, rgba(6,11,9,.97)) !important;
+  backdrop-filter:blur(6px); box-shadow:0 -10px 32px rgba(0,0,0,.45);
+}
+html body main.shell[data-app] .ogre-stage.volume, html body main.shell[data-app] .ogre-stage.hero{border-bottom-left-radius:0;border-bottom-right-radius:0;}
+html body main.shell[data-app] .ogre-stage.volume + *::before,
+html body main.shell[data-app] .ogre-stage.hero + *::before{
+  content:""; position:absolute; left:18px; right:18px; top:0; height:2px; border-radius:2px;
+  background:linear-gradient(90deg, transparent, var(--accent, #8dff5a), transparent); opacity:.5;
+}
+
+/* WEB: each living panel becomes a centered column the width of the video above it. */
 @media (min-width:760px){
-  /* One centered "carved console": the full ogre shows on top, then the real controls rise
-     up into the bottom of the video and fuse with it — the panel becomes the lower half of
-     the scene, framed by the stone-and-glass surround, instead of a separate box below.
-     Every control inside still fires its own clip + sound (bindOgreActions). */
   .ogre-stage, .ogre-stage.hero{aspect-ratio:3/4;max-width:480px;max-height:600px;}
-  html body main.shell[data-app] .ogre-stage + *{
-    position:relative; z-index:6; max-width:480px; margin:-150px auto 0; padding-top:30px;
-    border-radius:0 0 22px 22px; border:1px solid rgba(141,255,90,.14); border-top:0;
-    background:linear-gradient(180deg, rgba(5,9,7,0) 0, rgba(6,11,9,.55) 64px, rgba(6,11,9,.95) 156px, rgba(6,11,9,.98)) !important;
-    backdrop-filter:blur(7px); box-shadow:0 -10px 38px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.05);
-  }
-  /* swap is a 2-col grid (machine + info aside) — collapse it under the video so the console
-     is one centered column the width of the screen above it; the info cards stack beneath. */
-  html body main.shell[data-app] .ogre-stage + .trade-layout{grid-template-columns:1fr !important; gap:12px;}
-  html body main.shell[data-app] .ogre-stage + .trade-layout > .trade-side{margin-top:6px;}
-  /* square the video's bottom so the console fuses straight up into it (no seam gap) */
-  html body main.shell[data-app] .ogre-stage{border-bottom-left-radius:0;border-bottom-right-radius:0;}
-  /* let the carved console glow at the seam where it meets the live video */
-  html body main.shell[data-app] .ogre-stage + *::before{
-    content:""; position:absolute; left:18px; right:18px; top:0; height:2px; border-radius:2px;
-    background:linear-gradient(90deg, transparent, var(--accent, #8dff5a), transparent); opacity:.5;
-  }
+  /* swap: video (with the on-video HUD) is the hero; the info cards sit in one centered
+     column beneath it (collapse the 2-col grid so nothing floats off to the side). */
+  html body main.shell[data-app] .ogre-stage.swap + .trade-layout{grid-template-columns:1fr !important; max-width:480px; margin:12px auto 0; gap:12px;}
+  /* volume + hero: the glass console centers and rises into the bottom of the video. */
+  html body main.shell[data-app] .ogre-stage.volume + *,
+  html body main.shell[data-app] .ogre-stage.hero + *{max-width:480px; margin:-120px auto 0; padding-top:30px;}
 }
 .ogre-stage.hero .os-tier{color:var(--accent);border:1px solid rgba(255,255,255,.16);}
 .ogre-stage.hero .os-dot{background:var(--accent);box-shadow:0 0 8px var(--accent);}

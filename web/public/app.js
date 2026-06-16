@@ -8012,6 +8012,28 @@ function attachOgreStage(panel) {
   } catch {}
   if (!ogreStage.tkTimer) ogreStage.tkTimer = setInterval(ogreTickerTick, 3400);
   bindOgreActions();
+  // SWAP: lift the compact swap machine UP onto the living video as a translucent HUD — the
+  // approved "buttons in the video" look. The controls keep ALL their options; handlers are
+  // delegated so they survive the move, and input values move with the node. The treasurer
+  // (face + shield) stays clear above; coins glow through behind the translucent controls.
+  if (kind === "swap") {
+    try {
+      const hud = panel.querySelector(".oss-stage-wrap");
+      if (hud && !stage.contains(hud)) { hud.classList.add("os-hud"); stage.appendChild(hud); }
+      // The selects are touch-tall, so keep ONLY the core action on the clip (amount, token,
+      // reverse, SWAP). Slippage + wallet are settings — drop them into a slim row in the card
+      // just below the video so they stay one tap away without burying the treasurer.
+      const card = panel.querySelector(".slime-swap-card");
+      if (card && hud) {
+        let tray = card.querySelector("[data-oss-settings]");
+        if (!tray) { tray = document.createElement("div"); tray.setAttribute("data-oss-settings", ""); tray.className = "oss-settings-tray"; card.insertBefore(tray, card.firstChild); }
+        const slip = hud.querySelector(".oss-slip");
+        const walletBar = hud.querySelector(".oss-wallet-bar");
+        if (slip && slip.parentElement !== tray) tray.appendChild(slip);
+        if (walletBar && walletBar.parentElement !== tray) tray.appendChild(walletBar);
+      }
+    } catch {}
+  }
   if (kind === "swap") driveOgreSwapStage(stage);
   else if (kind === "volume") driveOgreVolumeStage(stage);
   else driveOgreHeroStage(stage, kind);
