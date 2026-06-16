@@ -22757,6 +22757,75 @@ async function fetchRugcheckSummary(mint) {
 }
 
 
+// Fuller RugCheck report for the scan card: top-holder concentration, holder count,
+// mint/freeze authorities, dev-sold (mirrors the OgreScanBot field mapping). Cached.
+const rugcheckFullCache = new Map();
+async function fetchRugcheckFull(mint) {
+  const key = String(mint || "").trim();
+  if (!key) return null;
+  const cached = rugcheckFullCache.get(key);
+  if (cached && Date.now() - cached.at < 10 * 60 * 1000) return cached.value;
+  let value = null;
+  try {
+    const data = await fetchJson(`https://api.rugcheck.xyz/v1/tokens/${encodeURIComponent(key)}/report`, {
+      headers: { "Accept": "application/json", "User-Agent": "solana-telegram-wallet-ops-bot" },
+      timeoutMs: 3500
+    });
+    if (data && typeof data === "object") {
+      const holders = Array.isArray(data.topHolders) ? data.topHolders : [];
+      const lpWords = ["liquidity", "raydium", "meteora", "orca", "pump amm", "pool"];
+      const clean = holders.filter((h) => h && typeof h === "object" && !lpWords.some((w) => JSON.stringify(h).toLowerCase().includes(w)));
+      const use = clean.length ? clean : holders;
+      const pctOf = (h) => Number(h?.pct ?? h?.percentage ?? h?.uiPct) || 0;
+      const top = use.slice(0, 10).map(pctOf);
+      const holderCount = Number(data.holderCount ?? data.totalHolders ?? data.numHolders ?? data.token?.holderCount ?? data.token?.totalHolders) || null;
+      const risksText = JSON.stringify(data.risks || data).toLowerCase();
+      const devSold = /dev (has )?not sold|creator (has )?not sold/.test(risksText) ? false
+        : /(dev|developer|creator|deployer) (has )?sold/.test(risksText) ? true
+        : (Array.isArray(data.risks) ? false : null);
+      value = {
+        score: Number(data.score_normalised ?? data.score) || null,
+        riskCount: Array.isArray(data.risks) ? data.risks.length : null,
+        topHolders: top.slice(0, 5),
+        top10Pct: top.length ? top.reduce((a, b) => a + b, 0) : null,
+        holderCount,
+        mintAuthority: (data.mintAuthority || data.token?.mintAuthority) ? String(data.mintAuthority || data.token?.mintAuthority) : null,
+        freezeAuthority: (data.freezeAuthority || data.token?.freezeAuthority) ? String(data.freezeAuthority || data.token?.freezeAuthority) : null,
+        devSold,
+        risks: Array.isArray(data.risks) ? data.risks.slice(0, 4).map((r) => ({ name: String(r?.name || "").slice(0, 60) })).filter((r) => r.name) : []
+      };
+    }
+  } catch {
+    // free tier rate-limits — card omits the section gracefully
+  }
+  rugcheckFullCache.set(key, { at: Date.now(), value });
+  if (rugcheckFullCache.size > 300) {
+    const oldest = [...rugcheckFullCache.entries()].sort((a, b) => a[1].at - b[1].at)[0]?.[0];
+    if (oldest) rugcheckFullCache.delete(oldest);
+  }
+  return value;
+}
+
+// DEX "paid" / enhanced status from the free Dexscreener orders endpoint.
+async function fetchDexPaidStatus(mint) {
+  try {
+    const data = await fetchJson(`https://api.dexscreener.com/orders/v1/solana/${encodeURIComponent(String(mint || "").trim())}`, {
+      headers: { "Accept": "application/json" }, timeoutMs: 3000
+    });
+    if (Array.isArray(data)) return data.some((o) => String(o?.status || "").toLowerCase() === "approved");
+    return null;
+  } catch { return null; }
+}
+
+// Total token supply (uiAmount) via the cheap read provider. Used for the Sup line.
+async function fetchTokenSupplyUi(mint) {
+  try {
+    const r = await rpcRead("scan token supply", (c) => c.getTokenSupply(new PublicKey(mint), "confirmed"), { retries: 1 });
+    const ui = Number(r?.value?.uiAmount);
+    return Number.isFinite(ui) && ui > 0 ? ui : null;
+  } catch { return null; }
+}
+
 function telegramGroupsPath() {
   return path.join(CONFIG.dataDir, "telegram-groups.json");
 }
@@ -22887,6 +22956,29 @@ function scanFmtPct(value) {
   if (!Number.isFinite(n)) return "n/a";
   return `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`;
 }
+// Crypto subscript price: 0.00002572 -> "$0.0₄2572" (matches Phanes/DEX display).
+function scanFmtPriceSub(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return "n/a";
+  if (n >= 0.01) return `$${n.toFixed(4)}`;
+  const str = n.toFixed(15);
+  const m = str.match(/^0\.(0*)(\d+)/);
+  if (!m) return `$${n.toPrecision(4)}`;
+  const zeros = m[1].length;
+  const sig = (m[2] || "").replace(/0+$/, "").slice(0, 4) || "0";
+  if (zeros <= 1) return `$0.${"0".repeat(zeros)}${sig}`;
+  const subDigits = "₀₁₂₃₄₅₆₇₈₉";
+  const sub = String(zeros).split("").map((d) => subDigits[Number(d)]).join("");
+  return `$0.0${sub}${sig}`;
+}
+function scanFmtSupply(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return "n/a";
+  if (n >= 1e9) return `${(n / 1e9).toFixed(n >= 1e10 ? 0 : 1).replace(/\.0$/, "")}B`;
+  if (n >= 1e6) return `${(n / 1e6).toFixed(0)}M`;
+  if (n >= 1e3) return `${(n / 1e3).toFixed(0)}K`;
+  return `${Math.round(n)}`;
+}
 function scanFmtAge(ms) {
   const t = Number(ms);
   if (!Number.isFinite(t) || t <= 0) return "age n/a";
@@ -22898,10 +22990,12 @@ function scanFmtAge(ms) {
 
 // Pull everything for one scan card from the free data the site already uses.
 async function gatherSlimeScan(mint) {
-  const [pairs, rug, shield] = await Promise.all([
+  const [pairs, rug, shield, dexPaid, supply] = await Promise.all([
     fetchDexScreenerTokenPairsFallback(mint).catch(() => null),
-    fetchRugcheckSummary(mint).catch(() => null),
-    webSlimeShield(mint).catch(() => null)
+    fetchRugcheckFull(mint).catch(() => null),
+    webSlimeShield(mint).catch(() => null),
+    fetchDexPaidStatus(mint).catch(() => null),
+    fetchTokenSupplyUi(mint).catch(() => null)
   ]);
   const best = bestDexPairForToken(mint, pairs);
   const meta = best ? metadataFromDexPair(mint, best) : null;
@@ -22912,32 +23006,27 @@ async function gatherSlimeScan(mint) {
   } else if (isPumpStyleToken({ tokenMint: mint, symbol: meta.symbol, name: meta.name })) {
     bonding = await getPumpFunTokenMetadata(mint).catch(() => null);
   }
-  return { best, meta, rug, shield, bonding };
+  return { best, meta, rug, shield, bonding, dexPaid, supply };
 }
 
 function slimeScanKeyboard(mint) {
   const links = slimewireTokenLinks(mint);
+  // Small menu (compact tool row) with the prominent QUICK BUY button at the BOTTOM.
   const rows = [
     [
-      { text: "⚡ Buy on SlimeWire", url: links.siteBuy },
-      { text: "📈 Chart", url: links.site }
+      { text: "📈 Chart", url: links.site },
+      { text: "Dex", url: links.dex },
+      { text: "🔬 Rug", url: `https://rugcheck.xyz/tokens/${mint}` },
+      { text: "🚀 Pump", url: `https://pump.fun/coin/${mint}` }
     ]
   ];
-  if (links.dmBuy) rows.push([{ text: "🤖 Buy in DM", url: links.dmBuy }, { text: "Dex", url: links.dex }]);
-  else rows.push([{ text: "Dex", url: links.dex }]);
-  rows.push([
-    { text: "🔬 Rugcheck", url: `https://rugcheck.xyz/tokens/${mint}` },
-    { text: "🫧 Bubblemaps", url: `https://app.bubblemaps.io/sol/token/${mint}` },
-    { text: "🚀 Pump", url: `https://pump.fun/coin/${mint}` }
-  ]);
-  rows.push([
-    { text: "🔎 X search", url: `https://x.com/search?q=${encodeURIComponent(mint)}&f=live` },
-    { text: "🧾 Proof Wall", url: links.proof }
-  ]);
+  const buyRow = [{ text: "⚡ QUICK BUY on SlimeWire", url: links.siteBuy }];
+  if (links.dmBuy) buyRow.push({ text: "🤖 DM", url: links.dmBuy });
+  rows.push(buyRow);
   return { inline_keyboard: rows };
 }
 
-function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best }) {
+function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, supply }) {
   const esc = escapeTelegramHtml;
   const sym = (meta?.symbol || bonding?.symbol || shortMint(mint)).slice(0, 18);
   const name = (meta?.name || bonding?.name || sym).slice(0, 40);
@@ -22949,45 +23038,61 @@ function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best }) {
   const ch1 = meta?.priceChange?.h1;
   const buys1 = Number(meta?.txns?.h1?.buys || 0);
   const sells1 = Number(meta?.txns?.h1?.sells || 0);
-  const price = scanFmtPrice(Number(best?.priceUsd) || Number(bonding?.priceUsd) || 0);
-  // status chip: bonding % for pump curve, else dex id
+  const price = scanFmtPriceSub(Number(best?.priceUsd) || Number(bonding?.priceUsd) || (mc && supply ? mc / supply : 0));
+
+  // header status: Pump bonding % on a curve, MIGRATED once graduated, else the DEX
   const bondPct = firstMeaningfulNumber(bonding?.bondingProgressPct);
-  const status = (bonding && bondPct != null && !meta?.graduated)
-    ? `Pump ${Math.max(0, Math.min(100, Math.round(bondPct)))}%`
-    : (meta?.graduated ? "MIGRATED" : `#${String(dexId).toUpperCase()}`);
+  const onCurve = Boolean(bonding && bondPct != null && !meta?.graduated);
+  const headStatus = onCurve
+    ? `(Pump @ ${Math.max(0, Math.min(100, Math.round(bondPct)))}%)`
+    : (meta?.graduated ? "(Migrated)" : "");
+  const headerTail = [`#SOL${headStatus ? ` ${headStatus}` : ""}`, `🌱 ${scanFmtAge(meta?.pairCreatedAt)}`]
+    .concat(rug?.holderCount ? [`∞ ${scanFmtSupply(rug.holderCount)}`] : [])
+    .join(" | ");
 
-  const verdict = String(shield?.verdict || "").toUpperCase();
-  const verdictIcon = { BUY: "🟢", CAUTION: "🟡", RISK: "🟠", AVOID: "🔴" }[verdict] || "⚪";
-  const rugLine = rug?.risks?.length
-    ? rug.risks.slice(0, 3).map((r) => esc(r.name)).join(", ")
-    : (rug?.score != null ? `score ${rug.score}` : "no major flags returned");
+  // socials: X + about(description)
+  const socialBits = [];
+  if (meta?.twitterUrl) socialBits.push(`<a href="${esc(meta.twitterUrl)}">𝕏</a>`);
+  else socialBits.push(`<a href="https://x.com/search?q=${encodeURIComponent(mint)}&f=live">𝕏</a>`);
+  const about = meta?.websiteUrl || (bonding && bonding.description ? `https://pump.fun/coin/${mint}` : "");
+  if (about) socialBits.push(`<a href="${esc(about)}">about</a>`);
+  if (meta?.telegramUrl) socialBits.push(`<a href="${esc(meta.telegramUrl)}">TG</a>`);
 
-  // socials
-  const socials = [];
-  if (meta?.telegramUrl) socials.push(`<a href="${esc(meta.telegramUrl)}">TG</a>`);
-  if (meta?.websiteUrl) socials.push(`<a href="${esc(meta.websiteUrl)}">Web</a>`);
-  if (meta?.twitterUrl) socials.push(`<a href="${esc(meta.twitterUrl)}">X</a>`);
-  const socialsLine = socials.length ? socials.join(" • ") : "none found";
+  // security (RugCheck full)
+  const light = (b, onYes) => b === true ? (onYes ? "🟢" : "🔴") : b === false ? (onYes ? "🔴" : "🟢") : "⚪";
+  const top10 = rug?.top10Pct != null ? `${Math.round(rug.top10Pct)}%` : "n/a";
+  const holders = rug?.holderCount != null ? ` | ${rug.holderCount} (total)` : "";
+  const th = rug?.topHolders?.length ? rug.topHolders.map((p) => (Number(p) || 0).toFixed(1)).join("|") : "n/a";
+  const devSold = rug ? `${light(rug.devSold, false)} ${rug.devSold === true ? "Yes" : rug.devSold === false ? "No" : "n/a"}` : "⚪ n/a";
+  const dexPaidStr = `${light(dexPaid, true)} ${dexPaid === true ? "Paid" : dexPaid === false ? "Unpaid" : "n/a"}`;
+  const mintAuth = rug ? (rug.mintAuthority ? "🔴 active" : "🟢 none") : "⚪ n/a";
+  const freezeAuth = rug ? (rug.freezeAuthority ? "🔴 active" : "🟢 none") : "⚪ n/a";
 
   const lines = [
-    `🦅 <b>${esc(name)} ($${esc(sym)})</b> • ${esc(status)}`,
-    `<code>${esc(mint)}</code>`,
-    `└ #SOL • ${esc(dexId)} • ${esc(scanFmtAge(meta?.pairCreatedAt))}`,
+    `💊 <b>${esc(name)} ($${esc(sym)})</b>`,
+    `├ <code>${esc(mint)}</code>`,
+    `└ ${headerTail}`,
     "",
     `📊 <b>Stats</b>`,
-    `├ USD <b>${price}</b> (${scanFmtPct(ch24)} 24h) | MC <b>${scanFmtMoney(mc)}</b>`,
-    `├ Vol <b>${scanFmtMoney(vol24)}</b> | LP <b>${scanFmtMoney(liq)}</b>`,
-    `└ 1H <b>${scanFmtPct(ch1)}</b> 🟢 ${buys1} 🔴 ${sells1}`,
+    `├ USD  <b>${price}</b> (${scanFmtPct(ch24)})`,
+    `├ MC   <b>${scanFmtMoney(mc)}</b>`,
+    `├ Vol  <b>${scanFmtMoney(vol24)}</b>`,
+    `├ LP   <b>${scanFmtMoney(liq)}</b>`,
+    supply ? `├ Sup  <b>${scanFmtSupply(supply)}</b>` : "",
+    `└ 1H   <b>${scanFmtPct(ch1)}</b>  🟢 ${buys1}  🔴 ${sells1}`,
     "",
-    `🔒 <b>Audit</b>`,
-    `├ ${verdictIcon} SlimeShield <b>${esc(verdict || "UNRATED")}</b>${shield?.score != null ? ` (${shield.score}/100)` : ""}`,
-    `└ 🔬 Rugcheck: ${rugLine}`,
+    `🔗 <b>Socials</b>`,
+    `└ ${socialBits.join(" • ")}`,
     "",
-    `🔗 <b>Socials</b> ${socialsLine}`,
+    `🔒 <b>Security</b>`,
+    `├ Top 10   <b>${top10}</b>${holders}`,
+    `├ TH       <b>${th}</b>`,
+    `├ Dev Sold <b>${devSold}</b>`,
+    `├ DEX Paid <b>${dexPaidStr}</b>`,
+    `└ Mint <b>${mintAuth}</b> | Freeze <b>${freezeAuth}</b>`,
     "",
-    `⚡ <b>Tap “Buy on SlimeWire” below</b> — CA prefilled, one-tap entry.`,
-    `<a href="https://www.slimewire.org">Powered by SlimeWire</a>`
-  ];
+    `<a href="https://www.slimewire.org">⚡ Powered by SlimeWire</a> — Quick Buy below`
+  ].filter(Boolean);
   return lines.join("\n");
 }
 
