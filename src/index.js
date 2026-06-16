@@ -8102,6 +8102,12 @@ async function handleCallback(query, userId) {
     return;
   }
 
+  // Scan-card menu/submenu/refresh — works in groups + DMs (no wallet action, all read/links).
+  if (query.data?.startsWith("scan:")) {
+    await handleScanCallback(query, chatId, messageId);
+    return;
+  }
+
   if (query.data === "pnl_card" || query.data?.startsWith("pnl_card:")) {
     if (!isPrivateChat(chat)) {
       await say(chatId, "Open this bot in DM to create a PnL card.");
@@ -19191,7 +19197,17 @@ async function getPumpFunTokenMetadata(tokenMint, options = {}) {
   const txns = typeof coin?.txns === "object" && coin.txns !== null ? coin.txns : {};
   const transactions = typeof coin?.transactions === "object" && coin.transactions !== null ? coin.transactions : {};
   const raydiumPool = firstString(coin?.raydium_pool, coin?.raydiumPool, coin?.poolAddress, coin?.pool, coin?.amm_pool);
-  const bondingProgressPct = firstMeaningfulNumber(
+  // ACCURATE bonding progress from on-curve reserves. pump.fun sells 793.1M tokens from
+  // the curve to graduate; real_token_reserves (raw, 6 decimals) falls from 793.1M -> 0.
+  // progress = (1 - reserves/793.1M) * 100. This is exact — the API "progress" fields are
+  // unreliable and an MC/$69k proxy is wrong (the curve is nonlinear: a $25k coin can be 96%).
+  const realTokenReservesRaw = firstMeaningfulNumber(coin?.real_token_reserves, coin?.realTokenReserves) || 0;
+  let bondingFromReserves = null;
+  if (realTokenReservesRaw > 0) {
+    const rtrUi = realTokenReservesRaw >= 1e9 ? realTokenReservesRaw / 1e6 : realTokenReservesRaw;
+    bondingFromReserves = Math.max(0, Math.min(100, (1 - rtrUi / 793_100_000) * 100));
+  }
+  const apiBondingPct = firstMeaningfulNumber(
     coin?.bondingProgressPct,
     coin?.bondingProgress,
     coin?.bonding_curve_progress,
@@ -19201,7 +19217,11 @@ async function getPumpFunTokenMetadata(tokenMint, options = {}) {
     coin?.graduationProgress,
     coin?.completion,
     coin?.completePct
-  ) || 0;
+  );
+  // Prefer the reserves math; only fall back to an API field if it's a sane 0-100 value.
+  const bondingProgressPct = bondingFromReserves != null
+    ? bondingFromReserves
+    : (apiBondingPct != null && apiBondingPct >= 0 && apiBondingPct <= 100 ? apiBondingPct : 0);
   const graduated = Boolean(
     coin?.complete
     || coin?.completed
@@ -23009,21 +23029,81 @@ async function gatherSlimeScan(mint) {
   return { best, meta, rug, shield, bonding, dexPaid, supply };
 }
 
+// Compact bottom row: just Menu + Quick Buy + Refresh (3 small buttons, not bulky).
+// Menu opens user-friendly submenus; Quick Buy deep-links the CA prefilled to the site.
 function slimeScanKeyboard(mint) {
   const links = slimewireTokenLinks(mint);
-  // Small menu (compact tool row) with the prominent QUICK BUY button at the BOTTOM.
-  const rows = [
-    [
-      { text: "📈 Chart", url: links.site },
-      { text: "Dex", url: links.dex },
-      { text: "🔬 Rug", url: `https://rugcheck.xyz/tokens/${mint}` },
-      { text: "🚀 Pump", url: `https://pump.fun/coin/${mint}` }
+  return { inline_keyboard: [[
+    { text: "📂 Menu", callback_data: `scan:menu:${mint}` },
+    { text: "⚡ Quick Buy", url: links.siteBuy },
+    { text: "🔄 Refresh", callback_data: `scan:refresh:${mint}` }
+  ]] };
+}
+
+// Submenu: tidy categories. Each opens a small list of links (all loaded with the CA).
+function scanMenuKeyboard(mint) {
+  const links = slimewireTokenLinks(mint);
+  return { inline_keyboard: [
+    [{ text: "📈 Charts", callback_data: `scan:cat:chart:${mint}` }, { text: "🔒 Security", callback_data: `scan:cat:sec:${mint}` }],
+    [{ text: "🔗 Socials", callback_data: `scan:cat:social:${mint}` }, { text: "🛠 Trade Tools", callback_data: `scan:cat:trade:${mint}` }],
+    [{ text: "⚡ Quick Buy", url: links.siteBuy }, { text: "⬅ Back", callback_data: `scan:back:${mint}` }]
+  ] };
+}
+
+// Per-category link lists — every link carries the CA so it loads that exact coin.
+function scanCategoryKeyboard(mint, cat) {
+  const links = slimewireTokenLinks(mint);
+  const map = {
+    chart: [
+      [{ text: "🟢 SlimeWire Chart", url: links.site }, { text: "Dexscreener", url: dexScreenerUrl(mint) }],
+      [{ text: "GeckoTerminal", url: `https://www.geckoterminal.com/solana/tokens/${mint}` }, { text: "Birdeye", url: `https://birdeye.so/token/${mint}?chain=solana` }]
+    ],
+    sec: [
+      [{ text: "🔬 Rugcheck", url: `https://rugcheck.xyz/tokens/${mint}` }, { text: "🫧 Bubblemaps", url: `https://app.bubblemaps.io/sol/token/${mint}` }],
+      [{ text: "Solscan", url: `https://solscan.io/token/${mint}` }, { text: "🧾 Proof Wall", url: links.proof }]
+    ],
+    social: [
+      [{ text: "𝕏 Search", url: `https://x.com/search?q=${encodeURIComponent(mint)}&f=live` }, { text: "🚀 Pump.fun", url: `https://pump.fun/coin/${mint}` }]
+    ],
+    trade: [
+      [{ text: "⚡ Buy on SlimeWire", url: links.siteBuy }, ...(links.dmBuy ? [{ text: "🤖 Buy in DM", url: links.dmBuy }] : [])],
+      [{ text: "GMGN", url: `https://gmgn.ai/sol/token/${mint}` }, { text: "Photon", url: `https://photon-sol.tinyastro.io/en/lp/${mint}` }, { text: "Jupiter", url: `https://jup.ag/swap/SOL-${mint}` }]
     ]
-  ];
-  const buyRow = [{ text: "⚡ QUICK BUY on SlimeWire", url: links.siteBuy }];
-  if (links.dmBuy) buyRow.push({ text: "🤖 DM", url: links.dmBuy });
-  rows.push(buyRow);
+  };
+  const rows = (map[cat] || []).slice();
+  rows.push([{ text: "⬅ Back to menu", callback_data: `scan:menu:${mint}` }]);
   return { inline_keyboard: rows };
+}
+
+// Callback dispatch for scan cards: menu / submenu / back / refresh.
+async function handleScanCallback(query, chatId, messageId) {
+  const parts = String(query.data || "").split(":"); // scan : action : [cat] : mint
+  const action = parts[1];
+  const mint = parts[parts.length - 1];
+  if (!solanaPublicKeyLike(mint) || !messageId) return;
+  const isPhoto = Boolean(query.message?.photo);
+  try {
+    if (action === "menu") {
+      await telegram("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: scanMenuKeyboard(mint) });
+    } else if (action === "back") {
+      await telegram("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: slimeScanKeyboard(mint) });
+    } else if (action === "cat") {
+      await telegram("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: scanCategoryKeyboard(mint, parts[2]) });
+    } else if (action === "refresh") {
+      if (tgCommandOnCooldown(chatId, `scanrefresh:${mint}`, 4000)) return;
+      let scan = null; try { scan = await gatherSlimeScan(mint); } catch {}
+      let text = null;
+      if (scan && (scan.meta || scan.bonding || scan.shield)) { try { text = formatSlimeScanCard({ mint, ...scan }); } catch {} }
+      if (!text) return;
+      if (isPhoto) {
+        await telegram("editMessageCaption", { chat_id: chatId, message_id: messageId, caption: text, parse_mode: "HTML", reply_markup: slimeScanKeyboard(mint) });
+      } else {
+        await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: slimeScanKeyboard(mint) });
+      }
+    }
+  } catch {
+    // editing can fail if the message is unchanged/too old — ignore
+  }
 }
 
 function formatSlimeScanCard({ mint, meta, rug, shield, bonding, best, dexPaid, supply }) {
@@ -23120,6 +23200,17 @@ async function handleTelegramLookCommand(chatId, message, argument) {
   if (!text) {
     await sayHtml(chatId, `Could not pull a clean read on <code>${escapeTelegramHtml(mint)}</code> right now. Links below.`, slimeScanKeyboard(mint));
     return;
+  }
+  // Picture at the top: token image from Dexscreener, falling back to pump.fun metadata.
+  // Caption carries the full card. If the image fails (or is missing), send text only.
+  const img = firstString(scan.meta?.imageUrl, scan.bonding?.imageUrl, scan.bonding?.imageUri);
+  if (img && text.length <= 1024) {
+    try {
+      await telegram("sendPhoto", { chat_id: chatId, photo: img, caption: text, parse_mode: "HTML", reply_markup: slimeScanKeyboard(mint) });
+      return;
+    } catch {
+      // image fetch/upload failed — fall back to the text card
+    }
   }
   await sayHtml(chatId, text, slimeScanKeyboard(mint));
 }
