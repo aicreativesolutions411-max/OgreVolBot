@@ -206,7 +206,13 @@ test("grind: enters only at safer (higher) MC and skips the sub-7k rug zone", ()
   assert.ok(P.mcFloor >= 5000, "grind raises the MC floor out of the instant-rug zone");
   assert.ok(P.mcCeil > 20000, "grind reaches well higher for survived coins");
   assert.ok(P.minAge >= 12, "grind waits out the worst instant-rug seconds");
+  assert.ok(P.maxAge >= 3600, "grind accepts older survived coins from the last-hour window");
   assert.ok(P.liqFrac > 0.3, "grind demands deeper liquidity");
+  // a 30-min-old survived coin (rejected by the default 20-min cap) is accepted by grind
+  assert.equal(
+    entryReject(goodRow({ marketCap: 22000, liquidityUsd: 14000, pairAgeSeconds: 1800, volume5m: 160, buys5m: 30, sells5m: 10, bestPickScore: 72 }), P),
+    null
+  );
   assert.ok(P.sl >= 7, "grind uses a wider stop so dips don't shake out winners");
   // a fresh sub-5k brand-new curve (the ruggy zone) is now rejected for MC
   assert.equal(entryReject(goodRow({ marketCap: 3000, liquidityUsd: 4000, pairAgeSeconds: 90 }), P), "mc");

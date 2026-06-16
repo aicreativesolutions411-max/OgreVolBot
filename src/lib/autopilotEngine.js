@@ -113,6 +113,9 @@ export function aggParams(state) {
   // it can't find candidates. The 0.7x size cap + liquidity-pull/feed-death exits do the
   // rest of the rug-dodging.
   const minAge = grind ? 15 : 4;
+  // GRIND also raises the age CEILING: it targets survived/climbed coins from the last-hour
+  // window (often 20-60min old), which the default 20-min cap would reject outright.
+  const maxAge = grind ? 3600 : 1200;
   const liqFrac = grind ? 0.35 : 0.3;
 
   // BANK STYLE — three exit personalities:
@@ -150,7 +153,7 @@ export function aggParams(state) {
   const bankHard = steady || tape === "COLD" || (blend && tape !== "HOT");
   if (bankHard && !steady) { tp1Pct = Math.max(tp1Pct, 85); spikePct = Math.max(spikePct, 85); moonTarget = Math.min(moonTarget, 400); }
 
-  return { regime, wr, baseFrac, streakMult, regimeMult, tp1, tp2, sl, minScore, mcFloor, mcCeil, minAge, liqFrac, steady, blend, grind, bankHard, tp1Pct, spikePct, moonTarget, tp2Lvl, tp2Pct, tp3Lvl, tp3Pct };
+  return { regime, wr, baseFrac, streakMult, regimeMult, tp1, tp2, sl, minScore, mcFloor, mcCeil, minAge, maxAge, liqFrac, steady, blend, grind, bankHard, tp1Pct, spikePct, moonTarget, tp2Lvl, tp2Pct, tp3Lvl, tp3Pct };
 }
 
 // SELF-TUNING / market-regime brain: reads the recent runner & rug rate and sets
@@ -384,7 +387,7 @@ export function entryReject(row, P) {
   // the fast exit-side rug/stop protection for the rest. buys/sells counts are
   // unreliable on brand-new bonding-curve pairs, so use volume as the activity
   // signal and only reject on a clear heavy dump.
-  if (!Number.isFinite(age) || age < (P.minAge || 4) || age > 1200) return "age";
+  if (!Number.isFinite(age) || age < (P.minAge || 4) || age > (P.maxAge || 1200)) return "age";
   if (!Number.isFinite(mc) || mc < (P.mcFloor || 1800) || mc > (P.mcCeil || 20000)) return "mc";
   if (liq > 0 && liq < mc * (P.liqFrac || 0.3)) return "liquidity";
   if (vol < 25) return "volume";
@@ -1233,7 +1236,7 @@ export function createAutopilotEngine(deps) {
       if (nowMs - (state.watching[m].at || 0) > 60_000) delete state.watching[m];
     }
 
-    const scored = rows
+    const scoredAll = rows
       .filter((r) => r && r.tokenMint && !held.has(r.tokenMint))
       .filter((r) => (state.coinLosses[r.tokenMint] || 0) < 2)  // stop re-aping a repeat loser
       .filter((r) => {
@@ -1260,7 +1263,13 @@ export function createAutopilotEngine(deps) {
         const a = state.recentApeNames[ns];
         return !a || nowMs - a > 15_000;
       })
-      .map((r) => ({ r, reject: entryReject(r, P), fs: P.grind ? grindScore(r) : freshScore(r) }))
+      .map((r) => ({ r, reject: entryReject(r, P), fs: P.grind ? grindScore(r) : freshScore(r) }));
+    // Reject-reason tally so a persistently-dry feed shows WHY (mc/age/liquidity/score/etc.)
+    // — turns "0 passed the bar" into an actionable breakdown in the scan heartbeat.
+    const rejTally = {};
+    for (const x of scoredAll) { if (x.reject) rejTally[x.reject] = (rejTally[x.reject] || 0) + 1; }
+    state.lastRejTally = rejTally;
+    const scored = scoredAll
       .filter((x) => !x.reject)
       .sort((a, b) => b.fs - a.fs);
 
@@ -1406,7 +1415,12 @@ export function createAutopilotEngine(deps) {
     if (openedThisCycle === 0 && now() - (state.lastScanLogAt || 0) > 45_000) {
       state.lastScanLogAt = now();
       const best = scored[0] ? Math.round(scored[0].fs) : 0;
-      record("info", `🔍 scanning (${tune.tape || "warming"}) — ${rows.length} fresh, ${scored.length} passed the bar${scored.length ? `, best fs ${best}` : ""}; holding for a clean setup`);
+      // When nothing passed, show the reject breakdown (why) so a dry feed is diagnosable.
+      const rej = state.lastRejTally || {};
+      const rejStr = (!scored.length && Object.keys(rej).length)
+        ? ` [${Object.entries(rej).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}:${v}`).join(" ")}]`
+        : "";
+      record("info", `🔍 scanning (${tune.tape || "warming"}) — ${rows.length} fresh, ${scored.length} passed the bar${scored.length ? `, best fs ${best}` : ""}${rejStr}; holding for a clean setup`);
     }
   }
 
