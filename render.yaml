@@ -41,6 +41,20 @@ services:
       # CHAINSTACK_RPC_URL for further read-splitting / send failover (see P4).
       - key: READ_RPC_URL
         sync: false
+      # OFF-BOX BACKUP to Cloudflare R2 (10GB free, zero egress). Daily gzip of /var/data JSON
+      # (the autopilot brain) uploaded to R2. app-secret.json is never backed up. Unset => no-op.
+      # Set these in the Render dashboard (sync:false). R2_BACKUP_PG=true also dumps Postgres
+      # (bounded by R2_BACKUP_PG_ROW_CAP). Make the R2 bucket PRIVATE.
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
+        sync: false
+      - key: R2_BACKUP_PG
+        value: false
       # SEND FAILOVER (P4): re-broadcast the SAME signed tx to a backup write RPC if the
       # primary (Helius) hits a transient error, so an outage can't stop trading. Kill switch
       # below (default on). Optional dedicated 3rd provider here; if unset, the Alchemy

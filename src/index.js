@@ -88,6 +88,7 @@ import { createPumpPortalStream } from "./lib/pumpPortalStream.js";
 import { computeSlimeShield, slimeShieldHasHardDanger } from "./lib/slimeShield.js";
 import * as callerIntel from "./lib/callerIntel.js";
 import { computeCalibration as computeAutopilotCalibration } from "./lib/selfCalibration.js";
+import { r2PutObject, r2Configured } from "./lib/r2.js";
 import {
   appendLimited,
   compareBigInt,
@@ -528,6 +529,79 @@ async function getAutopilotCalibration() {
     if (j && (j.minScoreBonus != null || j.sizeFracCapMult != null)) { autopilotCalibrationCache = j; return j; }
   } catch {}
   return recomputeAutopilotCalibration();
+}
+
+// --- OFF-BOX BACKUP to Cloudflare R2 (10GB free, zero egress) -------------------------------
+// A persistent disk survives deploys but is NOT a backup (a deleted/corrupt disk loses it all).
+// This daily job gzips the /var/data JSON state — the irreplaceable autopilot brain: trades,
+// dev/wallet observatories, caller-intel, calibration, market-tape — and uploads it to R2.
+// SECURITY: app-secret.json (the key that decrypts wallets) is NEVER backed up, so the off-box
+// copy holds the ENCRYPTED wallets but not the secret to open them — an R2 leak alone can't
+// drain funds. Gated on R2_* env: when unset this is a no-op (zero behavior change).
+function r2Config() {
+  return {
+    accountId: process.env.R2_ACCOUNT_ID || "",
+    accessKeyId: process.env.R2_ACCESS_KEY_ID || "",
+    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY || "",
+    bucket: process.env.R2_BUCKET || ""
+  };
+}
+let lastBackupAt = 0;
+let lastBackupInfo = null;
+async function buildBackupBundle() {
+  const bundle = { at: Date.now(), service: CONFIG.serviceRole || "web", files: {}, pg: null, notes: [] };
+  // NEVER back up the decryption secret next to the encrypted wallets.
+  const EXCLUDE = new Set(["app-secret.json", ...String(process.env.R2_BACKUP_EXCLUDE || "").split(",").map((s) => s.trim()).filter(Boolean)]);
+  try {
+    const names = (await fs.readdir(CONFIG.dataDir)).filter((n) => n.endsWith(".json") && !EXCLUDE.has(n));
+    for (const n of names) {
+      try { bundle.files[n] = await fs.readFile(path.join(CONFIG.dataDir, n), "utf8"); } catch {}
+    }
+  } catch (e) { bundle.notes.push(`dataDir read: ${e && e.message}`); }
+  // OPTIONAL bounded Postgres export (off unless R2_BACKUP_PG=true). Dumps the newest rows per
+  // public table up to a cap so a huge table can't OOM the box; caps are logged (no silent
+  // truncation). Render's managed PG backups remain the heavier, point-in-time tool.
+  if (String(process.env.R2_BACKUP_PG || "").toLowerCase() === "true") {
+    try {
+      const pool = await postgresPool();
+      if (pool) {
+        const cap = Math.max(1000, Math.min(200000, Number(process.env.R2_BACKUP_PG_ROW_CAP) || 50000));
+        const t = await pool.query("select table_name from information_schema.tables where table_schema='public' and table_type='BASE TABLE'");
+        bundle.pg = {};
+        for (const row of t.rows) {
+          const tbl = String(row.table_name);
+          try {
+            const r = await pool.query(`select * from "${tbl}" limit ${cap + 1}`);
+            const capped = r.rows.length > cap;
+            bundle.pg[tbl] = r.rows.slice(0, cap);
+            if (capped) bundle.notes.push(`pg ${tbl}: capped at ${cap} rows (more exist)`);
+          } catch (e) { bundle.notes.push(`pg ${tbl}: ${e && e.message}`); }
+        }
+      }
+    } catch (e) { bundle.notes.push(`pg export: ${e && e.message}`); }
+  }
+  return bundle;
+}
+async function backupDataToR2(reason = "scheduled") {
+  const cfg = r2Config();
+  if (!r2Configured(cfg)) { lastBackupInfo = { ok: false, skipped: true, reason: "R2 not configured" }; return lastBackupInfo; }
+  try {
+    const bundle = await buildBackupBundle();
+    const gz = zlib.gzipSync(Buffer.from(JSON.stringify(bundle)));
+    const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    const fileCount = Object.keys(bundle.files).length;
+    const datedKey = `backups/slimewire-${stamp}.json.gz`;
+    const a = await r2PutObject(cfg, datedKey, gz, "application/gzip");          // dated snapshot
+    const b = await r2PutObject(cfg, "backups/latest.json.gz", gz, "application/gzip"); // easy restore
+    lastBackupAt = Date.now();
+    lastBackupInfo = { ok: Boolean(a.ok && b.ok), at: lastBackupAt, reason, bytes: gz.length, files: fileCount, pg: Boolean(bundle.pg), key: datedKey, notes: bundle.notes.slice(0, 8) };
+    console.log(`[backup] R2 ${lastBackupInfo.ok ? "OK" : `FAIL ${a.status}/${b.status}`} ${(gz.length / 1024).toFixed(0)}KB · ${fileCount} files${bundle.pg ? " +pg" : ""} -> ${datedKey} (${reason})`);
+    return lastBackupInfo;
+  } catch (e) {
+    lastBackupInfo = { ok: false, at: Date.now(), reason, error: e && e.message };
+    console.warn(`[backup] R2 failed: ${e && e.message}`);
+    return lastBackupInfo;
+  }
 }
 
 // RUNNING LOG: a rolling, PERSISTENT play-by-play of the autopilot's narration so the log
@@ -3141,7 +3215,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
     //   POST /api/web/autopilot/stop
     // Live trading requires live:true AND confirm:"LIVE" AND a selected wallet
     // (never the fee wallet). Otherwise it runs paper (no SOL touched).
-    if (pathname === "/api/web/autopilot/status" || pathname === "/api/web/autopilot/start" || pathname === "/api/web/autopilot/stop" || pathname === "/api/web/autopilot/wallets" || pathname === "/api/web/autopilot/sweep" || pathname === "/api/web/autopilot/sweep-now" || pathname === "/api/web/autopilot/win-card" || pathname === "/api/web/autopilot/stats" || pathname === "/api/web/autopilot/access" || pathname === "/api/web/autopilot/grant" || pathname === "/api/web/autopilot/trial" || pathname === "/api/web/autopilot/redeem" || pathname === "/api/web/autopilot/key-login" || pathname === "/api/web/autopilot/my-key") {
+    if (pathname === "/api/web/autopilot/status" || pathname === "/api/web/autopilot/start" || pathname === "/api/web/autopilot/stop" || pathname === "/api/web/autopilot/wallets" || pathname === "/api/web/autopilot/sweep" || pathname === "/api/web/autopilot/sweep-now" || pathname === "/api/web/autopilot/win-card" || pathname === "/api/web/autopilot/stats" || pathname === "/api/web/autopilot/caller-intel" || pathname === "/api/web/autopilot/backup" || pathname === "/api/web/autopilot/access" || pathname === "/api/web/autopilot/grant" || pathname === "/api/web/autopilot/trial" || pathname === "/api/web/autopilot/redeem" || pathname === "/api/web/autopilot/key-login" || pathname === "/api/web/autopilot/my-key") {
       const webAuth = await authenticateOptionalWebRequest(request);
       const body = request.method === "POST" ? await readJsonRequestBody(request).catch(() => ({})) : {};
       const providedKey = String(requestUrl.searchParams.get("key") || body.key || "");
@@ -3301,6 +3375,17 @@ async function handleWebApiRequest(request, response, requestUrl) {
           });
           return;
         }
+        if (pathname === "/api/web/autopilot/backup") {
+          // OWNER ONLY — run an off-box backup to R2 now (GET = status, POST = trigger).
+          if (!isOwner) { sendWebJson(request, response, 403, { ok: false, error: "owner only" }); return; }
+          if (request.method === "POST") {
+            const info = await backupDataToR2("manual");
+            sendWebJson(request, response, 200, { ok: Boolean(info && info.ok), info });
+          } else {
+            sendWebJson(request, response, 200, { ok: true, configured: r2Configured(r2Config()), last: lastBackupInfo });
+          }
+          return;
+        }
         if (pathname === "/api/web/autopilot/stats") {
           // Study tool: win/rug rates bucketed by score, MC, age + dev leaderboard.
           const trades = await loadAutopilotTrades();
@@ -3335,7 +3420,9 @@ async function handleWebApiRequest(request, response, requestUrl) {
               bestDevs: devs.filter((d) => d.trades >= 2).sort((a, b) => b.pnl - a.pnl).slice(0, 8),
               worstDevs: devs.filter((d) => d.rugs >= 1).sort((a, b) => b.rugs - a.rugs).slice(0, 8),
               // The self-calibration bias currently applied to new sessions (and WHY).
-              calibration: await getAutopilotCalibration().catch(() => null)
+              calibration: await getAutopilotCalibration().catch(() => null),
+              // Off-box backup status (R2): configured? + last run.
+              backup: { configured: r2Configured(r2Config()), last: lastBackupInfo }
             }
           });
           return;
@@ -25481,6 +25568,9 @@ if (CONFIG.serviceRole === "web") {
     runCallerIntelTick().catch((error) => console.warn(`[caller-intel] tick failed: ${error.message}`));
     if (Date.now() - autopilotCalibrationAt > 6 * 60 * 60 * 1000) { // refresh the learned bias ~every 6h
       recomputeAutopilotCalibration().catch((error) => console.warn(`[calibration] recompute failed: ${error.message}`));
+    }
+    if (Date.now() - lastBackupAt > 24 * 60 * 60 * 1000) { // daily off-box backup to R2 (no-op if unconfigured)
+      backupDataToR2("daily").catch((error) => console.warn(`[backup] daily failed: ${error.message}`));
     }
     runAlphaDropTick().catch((error) => console.warn(`[alpha-drop] tick failed: ${error.message}`));
     checkBoardCallOutcomes().catch((error) => console.warn(`[call-board] check failed: ${error.message}`));
