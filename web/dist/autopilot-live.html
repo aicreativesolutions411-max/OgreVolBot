@@ -458,7 +458,7 @@ $("copyLogBtn").addEventListener("click", async () => {
   if (!s) { $("copyLogBtn").textContent = "nothing to copy"; setTimeout(()=>$("copyLogBtn").textContent="📋 Copy log + stats (to share)",1500); return; }
   const lines = [];
   lines.push(`SlimeWire Autopilot — ${s.live?"LIVE":"PAPER"} ${s.running?"running":("stopped"+(s.stopReason?` (${s.stopReason})`:""))}`);
-  lines.push(`wallet(real) ${s.walletSol} SOL | equity ${s.equity} | pnl ${s.pnlPct}% | W/L ${s.wins}/${s.losses} | peak ${s.peak} | start ${s.start} | endsIn ${s.endsInS}s | mode ${s.mode}`);
+  lines.push(`wallet(real) ${s.walletSol} SOL | equity ${s.equity} | pnl ${s.pnlPct}% | W/L/scratch ${s.wins}/${s.losses}/${s.scratches||0} | peak ${s.peak} | start ${s.start} | endsIn ${s.endsInS}s | mode ${s.mode}`);
   lines.push("open: " + ((s.open||[]).map(p=>`${p.sym} ${p.movePct}% ${p.costSol}SOL ${p.heldS}s`).join(" | ") || "none"));
   lines.push("log:");
   for (const l of (s.log||[])) lines.push(`${new Date(l.at).toLocaleTimeString()} ${l.msg}`);

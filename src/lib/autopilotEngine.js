@@ -600,6 +600,7 @@ function freshState(opts) {
     open: [],
     wins: 0,
     losses: 0,
+    scratches: 0,
     blocked: 0,
     streak: 0,
     results: [],
@@ -826,6 +827,7 @@ export function createAutopilotEngine(deps) {
       pnlPct: round(((totalEquity / state.start) - 1) * 100, 2),
       wins: state.wins,
       losses: state.losses,
+      scratches: state.scratches || 0,
       blocked: state.blocked || 0,
       streak: state.streak,
       open: state.open.map((p) => ({
@@ -1099,12 +1101,13 @@ export function createAutopilotEngine(deps) {
     state.bank += proceeds;
     pos.realized = (pos.realized || 0) + proceeds;
 
-    // Count a WIN the moment booked proceeds pass the entry cost — i.e. you've
-    // pulled out more SOL than you put in (locked profit, can't reverse). This
-    // is counted once, even while a moon bag keeps riding.
-    if (!pos.countedWin && pos.realized > pos.costSol) {
+    // Count a WIN only when booked proceeds clear the entry cost by a real, FEE-CLEARING
+    // margin (>=4%). Recovering by a hair (+0.0003 SOL) is NOT a win — buy+sell fees ate
+    // it, so it's a scratch. Counting those as wins is what made "3W/1L" show while the
+    // wallet bled. Honest accounting: a win must actually put SOL in your pocket.
+    if (!pos.countedWin && pos.realized >= pos.costSol * 1.04) {
       markWin(pos);
-      record("info", `✅ ${pos.sym} IN PROFIT — recovered entry +${round(pos.realized - pos.costSol, 4)} SOL (moon bag still riding)`);
+      record("info", `✅ ${pos.sym} IN PROFIT — locked +${round(pos.realized - pos.costSol, 4)} SOL (moon bag still riding)`);
     }
 
     if (pct >= 100 || frac >= 1 || failedTerminal) {
@@ -1150,12 +1153,15 @@ export function createAutopilotEngine(deps) {
       record("warn", `⚠️ ${pos.sym} entry didn't fill (${reason}) — not a trade, freeing slot`);
       return;
     }
-    const win = pos.countedWin || totalProceeds > pos.costSol;
-    // Win already counted at the moment proceeds passed cost; only a trade that
-    // closes WITHOUT ever recovering its entry counts as a loss.
+    const net = totalProceeds - pos.costSol;
+    // HONEST W/L/scratch. A win must clear fees (>=4% net). A loss is a real net loss
+    // beyond the fee deadband (<=-2.5%). Everything between is a SCRATCH — fees ate it —
+    // and counts as neither a win nor a loss so the panel reflects reality, not fee-churn.
+    const win = pos.countedWin || net >= pos.costSol * 0.04;
+    const realLoss = net <= -pos.costSol * 0.025;
     if (win) {
       if (!pos.countedWin) markWin(pos);
-    } else {
+    } else if (realLoss) {
       markLoss(pos);
       state.coinLosses[pos.mint] = (state.coinLosses[pos.mint] || 0) + 1; // remember repeat losers
       const ns = normSym(pos.sym);                                          // remember losing NAMES (clone swarms)
@@ -1164,9 +1170,14 @@ export function createAutopilotEngine(deps) {
         e.count += 1; e.at = now();
         state.symLosses[ns] = e;
       }
+    } else {
+      // SCRATCH — near-breakeven; fees roughly cancelled it. Track it (so the bleed is
+      // visible) but don't poison W/L. Repeat-scratch coins still get a cooldown.
+      state.scratches = (state.scratches || 0) + 1;
+      state.coinLosses[pos.mint] = (state.coinLosses[pos.mint] || 0) + 1;
     }
     state.recentSells[pos.mint] = now();
-    const pnl = totalProceeds - pos.costSol;
+    const pnl = net;
     // Feed the self-tuner: recent peaks + rug flags.
     state.recentPeaks.push(Math.round(pos.peakPct || 0));
     if (state.recentPeaks.length > 30) state.recentPeaks.shift();
@@ -1175,7 +1186,9 @@ export function createAutopilotEngine(deps) {
     state.recentPnl = state.recentPnl || [];
     state.recentPnl.push(pnl); // realized net per closed trade -> feeds the net-PnL bleed brake
     if (state.recentPnl.length > 20) state.recentPnl.shift();
-    record(win ? "info" : "warn", `${win ? "✅" : "🔴"} ${pos.sym} CLOSE ${reason} ${pnl >= 0 ? "+" : ""}${round(pnl, 4)} SOL`);
+    const outcomeIcon = win ? "✅" : realLoss ? "🔴" : "⚪";
+    const outcomeWord = win ? "WIN" : realLoss ? "LOSS" : "scratch (fees)";
+    record(realLoss ? "warn" : "info", `${outcomeIcon} ${pos.sym} CLOSE ${reason} ${outcomeWord} ${pnl >= 0 ? "+" : ""}${round(pnl, 4)} SOL`);
 
     // Learning flywheel: record EVERY trade's features + outcome — paper too. Paper
     // outcomes use real market data (a rug in paper is a real rug), so they're valid
