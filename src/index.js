@@ -812,6 +812,7 @@ const autopilotEngine = createAutopilotEngine({
   smartMoney: (mint) => smartMoneyScore(mint),
   smartMoneyReady: () => smartMoneyReady(),
   smartMoneyFeed: async () => smartMoneyFeed(),
+  callerIntel: (mint) => telegramCallerIntelForMint(mint),
   getMarketTape: () => marketTape(),
   symbolLoserCount: (symbol) => autopilotSymbolLoserCount(symbol),
   recordTrade: (rec) => { void recordAutopilotTrade(rec); },

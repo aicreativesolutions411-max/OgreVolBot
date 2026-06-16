@@ -630,3 +630,20 @@ test("engine: loss cap flattens and stops", async () => {
   assert.equal(st.running, false);
   assert.equal(st.stopReason, "loss-cap");
 });
+
+// --- Caller-intel conviction wiring (P2a) -----------------------------------------------
+test("convictionMult: a trusted caller signal adds bounded conviction and enables proven sizing", () => {
+  const row = { buys5m: 5, sells5m: 4, volume5m: 40, pairAgeSeconds: 120, marketCap: 9000 };
+  const base = convictionMult(row, null, null);                       // unproven, capped at 0.7
+  const withCaller = convictionMult(row, null, null, { trusted: true, convictionDelta: 0.3, reason: "proven caller" });
+  assert.ok(withCaller > base, "trusted caller raises conviction");
+  assert.ok(withCaller > 0.7, "trusted caller lifts the unproven 0.7x cap (treated as proven edge)");
+  assert.ok(withCaller <= 1.6, "still bounded by the proven ceiling");
+});
+
+test("convictionMult: an untrusted/zero caller signal does not change conviction", () => {
+  const row = { buys5m: 5, sells5m: 4, volume5m: 40, pairAgeSeconds: 120, marketCap: 9000 };
+  const base = convictionMult(row, null, null);
+  assert.equal(convictionMult(row, null, null, { trusted: false, convictionDelta: 0 }), base);
+  assert.equal(convictionMult(row, null, null, null), base);          // null is safe
+});

@@ -331,7 +331,7 @@ export function grindScore(row) {
 // pro — size scales with confluence: proven dev + heavy buy flow + freshness +
 // strong score → bigger; marginal/risky → smaller. Bounded; final size still
 // clamped to the per-trade ceiling by the caller.
-export function convictionMult(row, rep, sm) {
+export function convictionMult(row, rep, sm, ci) {
   let c = 1.0;
   if (rep) {
     if (rep.runners >= 2 && rep.rugs === 0) c += 0.4;        // proven runner-dev
@@ -345,6 +345,11 @@ export function convictionMult(row, rep, sm) {
     if (sm.winners >= 2) c += 0.3;                           // multiple proven winners aping
     else if (sm.winners >= 1) c += 0.2;                      // one proven winner aping
   }
+  // CALLER INTEL: a Telegram caller / channel with a PROVEN call→2x record just called this
+  // coin. Pure bonus conviction (never a veto), already bounded + sample-gated by the
+  // callerSignal scorer — front-runs the crowd that follows good alpha groups. Stays 0 until
+  // a caller/channel has a real resolved record, so it can't be gamed by a fresh account.
+  if (ci && ci.convictionDelta > 0) c += ci.convictionDelta;
   const buys = Number(row.buys5m) || 0;
   const sells = Number(row.sells5m) || 0;
   const vol = Number(row.volume5m) || 0;
@@ -363,7 +368,7 @@ export function convictionMult(row, rep, sm) {
   // score. A rug/dump on these gaps PAST any stop (waewa rugged -60% past the 6% stop), so
   // betting smaller is the only thing that shrinks the hit. Strong/proven setups keep full
   // size — this just trims the weakest, highest-rug-risk entries so losers cost less.
-  const noEdge = !(rep && rep.runners >= 1) && !(sm && (sm.kol || sm.winners >= 1));
+  const noEdge = !(rep && rep.runners >= 1) && !(sm && (sm.kol || sm.winners >= 1)) && !(ci && ci.trusted);
   if (noEdge && fsv < 66) c -= 0.25;
   // CRITICAL: freshness/score do NOT predict instant-rugs. Only let conviction size
   // ABOVE base for a dev with a PROVEN runner history (and no rugs). Unknown/unproven
@@ -372,7 +377,7 @@ export function convictionMult(row, rep, sm) {
   // Allow sizing ABOVE base for a proven runner-dev OR a strong smart-money read
   // (a tracked KOL, or multiple proven-winner wallets in the early buyers). Lone
   // unproven coins stay capped at 1.0x so one instant-rug can't blow a big bet.
-  const proven = (rep && rep.runners >= 1 && rep.rugs === 0) || (sm && (sm.kol || sm.winners >= 2));
+  const proven = (rep && rep.runners >= 1 && rep.rugs === 0) || (sm && (sm.kol || sm.winners >= 2)) || (ci && ci.trusted);
   // Unproven coins (no proven dev, no smart money) are capped at 0.7x base — even ELITE fs.
   // Live proof: fs75 DATASS/Puffins rugged -70/-94% at full size for -0.065/-0.084. Since
   // score can't predict a rug, the only protection is a smaller bet on every unproven coin;
@@ -664,6 +669,7 @@ export function createAutopilotEngine(deps) {
     smartMoney = () => null,
     smartMoneyReady = () => false,
     smartMoneyFeed = async () => [],
+    callerIntel = () => null,   // (mint) -> { signal:{convictionDelta,reason,trusted}, caller, channel } | null
     getMarketTape = () => null,
     symbolLoserCount = () => 0,
     recordTrade = () => {},
@@ -1371,9 +1377,14 @@ export function createAutopilotEngine(deps) {
       // Smart-money read — proven-winner wallets / tracked KOLs in the early buyers.
       // Bonus signal: it only bumps conviction, it never gates entry (main scan rules).
       const sm = smartMoney ? smartMoney(cand.r.tokenMint) : null;
-      // Conviction = confluence of proven-dev rep + buy flow + freshness + score + smart money.
-      const conv = convictionMult(cand.r, rep, sm);
+      // Caller intel — a proven Telegram caller/channel called this coin (front-run the
+      // crowd that follows good alpha). Pure bonus conviction; sample-gated + bounded.
+      const ciRec = callerIntel ? callerIntel(cand.r.tokenMint) : null;
+      const ci = ciRec && ciRec.signal ? ciRec.signal : null;
+      // Conviction = confluence of proven-dev rep + buy flow + freshness + score + smart money + caller intel.
+      const conv = convictionMult(cand.r, rep, sm, ci);
       if (sm) record("info", `🐳 smart money on ${cand.r.symbol} — ${sm.kol ? "KOL " : ""}${sm.winners || 0} winner-wallet(s) → conv ${conv.toFixed(2)}`);
+      if (ci && ci.trusted) record("info", `📣 caller intel on ${cand.r.symbol} — ${ci.reason} (+${ci.convictionDelta.toFixed(2)} conv) → conv ${conv.toFixed(2)}`);
       // ADAPTIVE QUALITY GATE (smarter picks): when the tape is risky, take ONLY the
       // highest-confluence setups; stay permissive when it's hot/warming so runners
       // aren't missed. This is what makes it "best picks per situation" instead of
@@ -1388,7 +1399,7 @@ export function createAutopilotEngine(deps) {
       // proven-dev history, or smart-money plays still enter instantly so real runners and
       // the strongest fresh movers are never missed. Also re-confirms a coin that already
       // stopped us this session (coinLosses>0) so we stop instantly re-aping a chopper.
-      const proven = (rep && rep.runners >= 1 && rep.rugs === 0) || (sm && (sm.kol || sm.winners >= 2));
+      const proven = (rep && rep.runners >= 1 && rep.rugs === 0) || (sm && (sm.kol || sm.winners >= 2)) || (ci && ci.trusted);
       const elite = cand.fs >= 72;
       const stoppedBefore = (state.coinLosses[cand.r.tokenMint] || 0) > 0;
       const needsConfirm = !proven && (stoppedBefore || tune.tape === "COLD" || !elite);
@@ -1430,7 +1441,9 @@ export function createAutopilotEngine(deps) {
         if (rep && rep.rugs >= 2 && rep.runners === 0) continue;  // dev rug history still vetoes
         const sm = r._smartMoney || (smartMoney ? smartMoney(r.tokenMint) : null);
         if (!sm || !(sm.kol || sm.winners >= 1)) continue;
-        const conv = convictionMult(r, rep, sm);
+        const ciRec = callerIntel ? callerIntel(r.tokenMint) : null;
+        const ci = ciRec && ciRec.signal ? ciRec.signal : null;
+        const conv = convictionMult(r, rep, sm, ci);
         if (conv < 1.0) continue;                                 // must carry real smart-money confluence
         let size = Math.max(state.minTradeSol, Math.min(sizeFor(state, P) * conv, state.maxTradeSol));
         if (!canOpen(state, size)) break;
