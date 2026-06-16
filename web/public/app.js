@@ -7711,7 +7711,40 @@ const OGRE_UI_FLIP = "/assets/slimewire/ui/flip.mp3";
 // Clips we actually ship per kind — guards ogrePlayClip from ever pointing at a missing file.
 const OGRE_CLIP_SET = {
   swap: new Set(["idle", "appraise", "buy", "sell", "banking", "win", "loss"]),
-  volume: new Set(["idle", "running", "sweep", "stop"])
+  volume: new Set(["idle", "running", "sweep", "stop"]),
+  sniper: new Set(["idle", "fire", "lock"]),
+  ogreAi: new Set(["idle", "speak", "think"]),
+  bundle: new Set(["idle", "volley", "sell"]),
+  launchCoin: new Set(["idle", "launch", "forge"]),
+  positions: new Set(["idle", "win", "survey"]),
+  pnl: new Set(["idle", "win", "survey"])
+};
+// One sound per (kind, clip) so every click has its OWN voice, never a shared blip.
+const OGRE_SOUND = {
+  swap: { appraise: [OGRE_SWAP_SFX + "appraise.mp3", .7], buy: [OGRE_SWAP_SFX + "buy.mp3", .85], sell: [OGRE_SWAP_SFX + "sell.mp3", .85], win: [OGRE_SWAP_SFX + "win.mp3", .85], loss: [OGRE_SWAP_SFX + "loss.mp3", .6], banking: [OGRE_SWAP_SFX + "bank.mp3", .8] },
+  volume: { running: [OGRE_VOL_SFX + "start.mp3", .7], sweep: [OGRE_VOL_SFX + "sweep.mp3", .8], stop: [OGRE_VOL_SFX + "stop.mp3", .8] },
+  sniper: { fire: ["/assets/slimewire/auto/sfx/shockwave.mp3", .8], lock: ["/assets/slimewire/sniper/sfx/lock.mp3", .7] },
+  ogreAi: { think: ["/assets/slimewire/ogreai/sfx/think.mp3", .6], speak: [OGRE_SWAP_SFX + "appraise.mp3", .6] },
+  bundle: { volley: ["/assets/slimewire/auto/sfx/shockwave.mp3", .8], sell: ["/assets/slimewire/bundle/sfx/sell.mp3", .8] },
+  launchCoin: { forge: ["/assets/slimewire/launch/sfx/forge.mp3", .85], launch: [OGRE_SWAP_SFX + "win.mp3", .8] },
+  positions: { survey: ["/assets/slimewire/positions/sfx/survey.mp3", .7], win: ["/assets/slimewire/auto/sfx/victory.mp3", .85] },
+  pnl: { survey: ["/assets/slimewire/positions/sfx/survey.mp3", .7], win: ["/assets/slimewire/auto/sfx/victory.mp3", .85] }
+};
+// Which control on each hero panel fires which clip. "__text:" entries match button label text
+// (sniper's snipe is a per-pick button with no stable hook).
+const OGRE_HERO_CLIPMAP = {
+  sniper: [["[data-sniper-arm]", "lock"], ["__text:snipe|ape|fire", "fire"]],
+  ogreAi: [["[data-ogre-ai-start]", "think"]],
+  bundle: [["[data-bundle-buy]", "volley"], ["[data-bundle-sell]", "sell"]],
+  launchCoin: [["[data-launch-coin-submit]", "forge"], ["__text:launch", "forge"]],
+  positions: [["[data-refresh-all],[data-refresh],[data-refresh-positions]", "survey"]],
+  pnl: [["[data-refresh-all],[data-refresh]", "survey"]]
+};
+// Hero panels whose primary action row should be LIFTED onto the video as an on-clip CTA bar.
+const OGRE_HERO_LIFT = {
+  ogreAi: "[data-ogre-ai-start]",
+  bundle: "[data-bundle-buy]",
+  launchCoin: "[data-launch-coin-submit]"
 };
 // Config-driven "hero" stages for the Tier 1/2 panels — same engine, lighter banner.
 // base = clip dir, poster = still, tier/cap = labels, accent = CSS class, idle/event clip names.
@@ -7761,10 +7794,13 @@ function bindOgreActions() {
       const tick = () => ogrePlaySfx(OGRE_UI_TICK, 0.5);
 
       if (OGRE_HERO_KINDS[kind]) {
-        const sel = OGRE_HERO_ACTION[kind];
+        const rules = OGRE_HERO_CLIPMAP[kind] || [];
         const txt = (el.textContent || "").toLowerCase();
-        if ((sel && el.closest(sel)) || (kind === "sniper" && /snipe|ape|fire/.test(txt))) ogreHeroFire(kind);
-        else tick();
+        for (const [sel, clip] of rules) {
+          if (sel.startsWith("__text:")) { if (new RegExp(sel.slice(7)).test(txt)) { ogrePlayClip(stage, clip, true); return; } }
+          else if (el.closest(sel)) { ogrePlayClip(stage, clip, true); return; }
+        }
+        tick();
         return;
       }
       if (kind === "swap") {
@@ -7922,15 +7958,8 @@ function ogreAmbientClip(kind) {
   return "idle";
 }
 function ogreEventSfx(name) {
-  const hk = OGRE_HERO_KINDS[ogreStage.kind];
-  if (hk) { if (hk.sfx && name === hk.event) ogrePlaySfx(hk.sfx[0], hk.sfx[1]); return; }
-  if (ogreStage.kind === "swap") {
-    const m = { appraise: ["appraise.mp3", 0.7], buy: ["buy.mp3", 0.85], sell: ["sell.mp3", 0.85], win: ["win.mp3", 0.85], loss: ["loss.mp3", 0.6], banking: ["bank.mp3", 0.8] };
-    if (m[name]) ogrePlaySfx(OGRE_SWAP_SFX + m[name][0], m[name][1]);
-  } else if (ogreStage.kind === "volume") {
-    const m = { running: ["start.mp3", 0.7], sweep: ["sweep.mp3", 0.8], stop: ["stop.mp3", 0.8] };
-    if (m[name]) ogrePlaySfx(OGRE_VOL_SFX + m[name][0], m[name][1]);
-  }
+  const m = OGRE_SOUND[ogreStage.kind];
+  if (m && m[name]) ogrePlaySfx(m[name][0], m[name][1]);
 }
 function ogrePlayClip(stage, name, isEvent) {
   const bg = stage.querySelector("[data-ogre-bg]");
@@ -7940,7 +7969,7 @@ function ogrePlayClip(stage, name, isEvent) {
   const set = OGRE_CLIP_SET[ogreStage.kind];
   if (set && !set.has(name)) {
     if (isEvent) ogreEventSfx(name); // still play the action's sound
-    name = ogreStage.kind === "swap" ? "appraise" : "sweep";
+    name = ogreStage.kind === "swap" ? "appraise" : (ogreStage.kind === "volume" ? "sweep" : "idle");
     if (!set.has(name)) return;
   }
   ogreStage.clip = name;
@@ -8032,6 +8061,16 @@ function attachOgreStage(panel) {
         if (slip && slip.parentElement !== tray) tray.appendChild(slip);
         if (walletBar && walletBar.parentElement !== tray) tray.appendChild(walletBar);
       }
+    } catch {}
+  }
+  // HERO panels: lift the primary action ROW (Scan & Ape / Bundle Buy+Sell / Launch) onto the
+  // clip as a slim translucent CTA bar — buttons on the video, ogre fully visible above. The
+  // rest of the form stays in the panel below. Each button still fires its own clip + sound.
+  if (OGRE_HERO_LIFT[kind]) {
+    try {
+      const btn = panel.querySelector(OGRE_HERO_LIFT[kind]);
+      const row = btn && (btn.closest(".quick-grid") || btn.closest(".card-actions") || btn.parentElement);
+      if (row && !stage.contains(row)) { row.classList.add("os-hud", "os-cta"); stage.appendChild(row); }
     } catch {}
   }
   if (kind === "swap") driveOgreSwapStage(stage);

@@ -315,19 +315,28 @@ html body main.shell[data-app] .oss-settings-tray .oss-wallet-bar{flex:1 1 0; mi
 html body main.shell[data-app] .oss-settings-tray .oss-pill{width:100% !important; background:#08110b; border:1px solid rgba(141,255,90,.16); border-radius:12px; padding:7px 11px !important;}
 html body main.shell[data-app] .oss-settings-tray .oss-pill::before{display:block; font-size:9px; letter-spacing:.5px; color:#7fae74; text-transform:uppercase; margin-bottom:2px;}
 
-/* ================= LIVING HEADER CONSOLE (volume + hero) =================
-   Longer panels (the volume configurator, the hero forms) can't sit ON the clip without
-   burying it, so the video is a header the glass controls rise UP into — same family, the
-   controls fuse to the bottom of the video with a glowing seam. Web centers the column. */
-html body main.shell[data-app] .ogre-stage.volume + *,
-html body main.shell[data-app] .ogre-stage.hero + *{
+/* ================= ON-VIDEO CTA BAR (hero action panels) =================
+   The primary action row (Scan & Ape / Bundle Buy+Sell / Launch) is lifted onto the clip as a
+   slim translucent bar pinned to the bottom — buttons ON the video, the whole ogre visible
+   above. The rest of the form flows in the panel below. */
+.ogre-stage .os-hud.os-cta{
+  position:absolute; left:0; right:0; bottom:0; z-index:6; margin:0; padding:9px 11px 11px;
+  display:flex; gap:8px; flex-wrap:wrap; align-items:stretch;
+  background:linear-gradient(180deg, rgba(4,7,10,0) 0%, rgba(4,7,10,.34) 30%, rgba(4,7,10,.7) 70%, rgba(4,7,10,.84) 100%);
+}
+html body main.shell[data-app] .os-cta button{flex:1 1 40%; min-width:120px; backdrop-filter:blur(5px);}
+html body main.shell[data-app] .os-cta button.primary{flex:1 1 100%;}
+
+/* ================= LIVING HEADER CONSOLE (volume) =================
+   The volume configurator is too long to sit on the clip, so the conductor is a header the
+   glass controls rise UP into, fused with a glowing seam. */
+html body main.shell[data-app] .ogre-stage.volume + *{
   position:relative; z-index:6; margin-top:-86px; padding-top:26px; border-radius:0 0 20px 20px;
   background:linear-gradient(180deg, rgba(5,9,7,0) 0, rgba(6,11,9,.5) 50px, rgba(6,11,9,.94) 130px, rgba(6,11,9,.97)) !important;
   backdrop-filter:blur(6px); box-shadow:0 -10px 32px rgba(0,0,0,.45);
 }
-html body main.shell[data-app] .ogre-stage.volume, html body main.shell[data-app] .ogre-stage.hero{border-bottom-left-radius:0;border-bottom-right-radius:0;}
-html body main.shell[data-app] .ogre-stage.volume + *::before,
-html body main.shell[data-app] .ogre-stage.hero + *::before{
+html body main.shell[data-app] .ogre-stage.volume{border-bottom-left-radius:0;border-bottom-right-radius:0;}
+html body main.shell[data-app] .ogre-stage.volume + *::before{
   content:""; position:absolute; left:18px; right:18px; top:0; height:2px; border-radius:2px;
   background:linear-gradient(90deg, transparent, var(--accent, #8dff5a), transparent); opacity:.5;
 }
@@ -338,9 +347,10 @@ html body main.shell[data-app] .ogre-stage.hero + *::before{
   /* swap: video (with the on-video HUD) is the hero; the info cards sit in one centered
      column beneath it (collapse the 2-col grid so nothing floats off to the side). */
   html body main.shell[data-app] .ogre-stage.swap + .trade-layout{grid-template-columns:1fr !important; max-width:480px; margin:12px auto 0; gap:12px;}
-  /* volume + hero: the glass console centers and rises into the bottom of the video. */
-  html body main.shell[data-app] .ogre-stage.volume + *,
-  html body main.shell[data-app] .ogre-stage.hero + *{max-width:480px; margin:-120px auto 0; padding-top:30px;}
+  /* volume: the glass console centers and rises into the bottom of the video. */
+  html body main.shell[data-app] .ogre-stage.volume + *{max-width:480px; margin:-120px auto 0; padding-top:30px;}
+  /* hero: video + content centered as one column (the CTA already lives on the clip). */
+  html body main.shell[data-app] .ogre-stage.hero + *{max-width:480px; margin:12px auto 0;}
 }
 .ogre-stage.hero .os-tier{color:var(--accent);border:1px solid rgba(255,255,255,.16);}
 .ogre-stage.hero .os-dot{background:var(--accent);box-shadow:0 0 8px var(--accent);}
