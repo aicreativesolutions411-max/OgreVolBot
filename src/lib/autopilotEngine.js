@@ -525,6 +525,9 @@ function freshState(opts) {
     // Sit-out-the-chop: when set in the future, fresh sniping is paused (capital
     // preservation) while smart-money copies + open-position exits keep running.
     chopPauseUntil: 0,
+    // Closed-trade count at the last chop trip — the guard only re-arms after NEW trades
+    // close, so a cooldown actually resumes instead of re-pausing on stale bleed signals.
+    chopTrippedAtTrades: 0,
     recentSells: {},
     // Last time we APED each coin NAME — blocks piling into a clone swarm (same name,
     // different mints) 3x in seconds before any loss registers (ASTROGUY/Bob x3).
@@ -1217,14 +1220,21 @@ export function createAutopilotEngine(deps) {
     const netBleed = recentP.length >= 5 && recentNet < -(state.start * 0.02);
     const peakGiveback = (state.peakTotal || state.start) > state.start &&
       (equity(state) + (state.secured || 0)) <= (state.peakTotal || state.start) - state.start * 0.05;
-    const trip = lossStreak >= 3 || netBleed || (tune.tape === "COLD" && recentP.length >= 5 && recentNet < 0) || (peakGiveback && recentNet < 0);
+    // CRITICAL: a pause is a COOLDOWN, then it RESUMES. The bleed signals (recentPnl, peak)
+    // don't change while paused (nothing closes), so without this the guard would re-arm
+    // every 4m forever and the bot could never trade its way back. Only (re)trip when NEW
+    // trades have closed since the last trip — i.e. fresh evidence of bleeding after a resume.
+    const closedCount = (state.wins || 0) + (state.losses || 0);
+    const freshSincePause = closedCount > (state.chopTrippedAtTrades || 0);
+    const trip = freshSincePause && (lossStreak >= 3 || netBleed || (tune.tape === "COLD" && recentP.length >= 5 && recentNet < 0) || (peakGiveback && recentNet < 0));
     if (trip && (!state.chopPauseUntil || nowMs > state.chopPauseUntil)) {
-      state.chopPauseUntil = nowMs + 240_000;
+      state.chopPauseUntil = nowMs + 180_000; // 3-min cool-off, then resume and try again
+      state.chopTrippedAtTrades = closedCount; // won't re-arm until new trades close
       const why = lossStreak >= 3 ? `${lossStreak} losses in a row`
         : netBleed ? `net ${round(recentNet, 4)} SOL over last ${recentP.length}`
         : peakGiveback ? "gave back from session peak"
         : "COLD + bleeding";
-      record("info", `🧊 Chop guard: ${why} — pausing fresh entries ~4m to stop the bleed. Smart-money copies + exits stay live.`);
+      record("info", `🧊 Chop guard: ${why} — cooling off ~3m, then resuming. Smart-money copies + exits stay live.`);
     }
     if (tune.tape === "HOT") state.chopPauseUntil = 0; // tape warmed → resume immediately
     const chopPaused = Boolean(state.chopPauseUntil && nowMs < state.chopPauseUntil);
