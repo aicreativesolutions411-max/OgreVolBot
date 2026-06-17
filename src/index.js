@@ -24196,7 +24196,7 @@ async function buildChartData(mint, tf) {
       }
     }
   }
-  const data = { ok: true, mint, tf, stage, symbol: stats.symbol, name: stats.name, priceUsd: stats.priceUsd, mc: stats.mc, liq: stats.liq, vol24: stats.vol24, change24h: stats.change24h, candles, trades, at: Date.now(), _diag: diag };
+  const data = { ok: true, mint, tf, stage, symbol: stats.symbol, name: stats.name, priceUsd: stats.priceUsd, mc: stats.mc, liq: stats.liq, vol24: stats.vol24, change24h: stats.change24h, candles, trades, at: Date.now() };
   CHART_API_CACHE.set(key, { at: Date.now(), data });
   if (CHART_API_CACHE.size > 400) { const old = [...CHART_API_CACHE.entries()].sort((a, b) => a[1].at - b[1].at).slice(0, 200); for (const [k] of old) CHART_API_CACHE.delete(k); }
   return data;
