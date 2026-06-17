@@ -24132,11 +24132,16 @@ async function resolveCashtagToMint(symbol) {
 // the pre-migration fallback. Cached ~8s so many viewers hit our cache, not the upstreams.
 const CHART_API_CACHE = new Map();
 const GT_API = "https://api.geckoterminal.com/api/v2";
+let lastGtStatus = 0;
 async function gtFetch(p, timeoutMs = 6000) {
   const ctrl = new AbortController();
   const to = setTimeout(() => ctrl.abort(), timeoutMs);
-  try { const r = await fetch(GT_API + p, { headers: { accept: "application/json" }, signal: ctrl.signal }); if (!r.ok) return null; return await r.json(); }
-  catch { return null; }
+  try {
+    const r = await fetch(GT_API + p, { headers: { accept: "application/json", "user-agent": "Mozilla/5.0 (compatible; SlimeWire/1.0)" }, signal: ctrl.signal });
+    lastGtStatus = r.status;
+    if (!r.ok) return null;
+    return await r.json();
+  } catch { lastGtStatus = -1; return null; }
   finally { clearTimeout(to); }
 }
 function gtTimeframe(tf) { if (tf === "1m") return ["minute", 1]; if (tf === "15m") return ["minute", 15]; if (tf === "1h") return ["hour", 1]; return ["minute", 5]; }
@@ -24147,9 +24152,11 @@ async function buildChartData(mint, tf) {
   let stage = "pump", pairAddress = "";
   let stats = { symbol: "", name: "", priceUsd: 0, mc: 0, liq: 0, vol24: 0, change24h: 0 };
   let candles = [], trades = [];
+  const diag = {};
   // 1) DEX path — resolve the pool DIRECTLY via GeckoTerminal's token→pools endpoint (reliable; the
   // DexScreener-pair shape didn't yield a usable pool address on the server). Works once migrated.
   const tp = await gtFetch(`/networks/solana/tokens/${mint}/pools?page=1`);
+  diag.poolStatus = lastGtStatus; diag.poolCount = (tp && tp.data && tp.data.length) || 0;
   const pool = tp && tp.data && tp.data[0];
   if (pool && pool.attributes && pool.attributes.address) {
     stage = "dex";
@@ -24166,6 +24173,7 @@ async function buildChartData(mint, tf) {
     const oh = await gtFetch(`/networks/solana/pools/${pairAddress}/ohlcv/${tfName}?aggregate=${agg}&limit=150&currency=usd`);
     const list = (oh && oh.data && oh.data.attributes && oh.data.attributes.ohlcv_list) || [];
     candles = list.map((x) => ({ t: Number(x[0]) || 0, o: Number(x[1]) || 0, h: Number(x[2]) || 0, l: Number(x[3]) || 0, c: Number(x[4]) || 0, v: Number(x[5]) || 0 })).filter((k) => k.c > 0).sort((p, q) => p.t - q.t);
+    diag.ohlcvStatus = lastGtStatus; diag.gtCandles = candles.length;
     const tr = await gtFetch(`/networks/solana/pools/${pairAddress}/trades?trade_volume_in_usd_greater_than=0`);
     const trl = (tr && tr.data) || [];
     trades = trl.slice(0, 60).map((d) => { const x = d.attributes || {}; const buy = x.kind === "buy"; return { t: Math.floor(Date.parse(x.block_timestamp) / 1000) || 0, side: buy ? "buy" : "sell", usd: Number(x.volume_in_usd) || 0, price: Number(buy ? x.price_to_in_usd : x.price_from_in_usd) || 0 }; });
@@ -24188,7 +24196,7 @@ async function buildChartData(mint, tf) {
       }
     }
   }
-  const data = { ok: true, mint, tf, stage, symbol: stats.symbol, name: stats.name, priceUsd: stats.priceUsd, mc: stats.mc, liq: stats.liq, vol24: stats.vol24, change24h: stats.change24h, candles, trades, at: Date.now() };
+  const data = { ok: true, mint, tf, stage, symbol: stats.symbol, name: stats.name, priceUsd: stats.priceUsd, mc: stats.mc, liq: stats.liq, vol24: stats.vol24, change24h: stats.change24h, candles, trades, at: Date.now(), _diag: diag };
   CHART_API_CACHE.set(key, { at: Date.now(), data });
   if (CHART_API_CACHE.size > 400) { const old = [...CHART_API_CACHE.entries()].sort((a, b) => a[1].at - b[1].at).slice(0, 200); for (const [k] of old) CHART_API_CACHE.delete(k); }
   return data;
