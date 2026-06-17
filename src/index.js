@@ -8931,6 +8931,9 @@ async function handleMessage(message, userId) {
   // All-in-one group bot: /settings + module toggles (/buybot|raid|rose|scan on|off). Group-only,
   // admin-gated; returns false (no-op) for DMs and non-matching text, so existing flows are untouched.
   if (await handleGroupBotCommand(message, userId).catch(() => false)) return;
+  // Rose Manager (when on): new-member welcome, anti-links, and moderation commands. Runs before
+  // the text-required gate below so it can welcome joiners (which carry no text). No-op when off.
+  if (await handleGroupRose(message, userId).catch(() => false)) return;
 
   if (message.photo && session?.step === "lb_image") {
     try {
@@ -24710,7 +24713,7 @@ const GROUP_BOT_FILE = path.join(CONFIG.dataDir, "group-bot.json");
 const GROUP_BOT_FEATURES = [
   { key: "buybot", label: "Buy Bot", emoji: "🟢", desc: "auto-grabs the CA + posts buys with a Quick-Buy link to the coin on SlimeWire" },
   { key: "raid", label: "Raid Bot", emoji: "⚔️", desc: "X-raid posts with live progress + a SlimeWire link" },
-  { key: "rose", label: "Rose Manager", emoji: "🛡️", desc: "welcome, rules, anti-spam, warn / mute / ban, locks (coming soon)" },
+  { key: "rose", label: "Rose Manager", emoji: "🛡️", desc: "welcome, rules, anti-links, warn / mute / kick / ban (reply to a user)" },
   { key: "scan", label: "Scan Bot", emoji: "🔍", desc: "paste a CA → instant SlimeShield scan card" }
 ];
 let groupBotCache = null;
@@ -24880,6 +24883,83 @@ async function pollGroupBuyBots() {
   } catch {}
 }
 function startGroupBuyBot() { setInterval(() => { void pollGroupBuyBots(); }, 25_000); }
+
+// ROSE MANAGER — group moderation (welcome, rules, anti-links, warn/mute/kick/ban). Per-group,
+// gated on the `rose` flag (off by default), admin-gated. Reply-based moderation targets.
+async function setGroupRose(chatId, patch) {
+  const store = await readGroupBot();
+  const k = String(chatId);
+  const e = store.groups[k] || defaultGroupBotEntry();
+  e.rose = { welcome: null, rules: null, antilinks: false, warns: {}, ...(e.rose || {}), ...patch };
+  store.groups[k] = e;
+  await writeGroupBot(store);
+  return e.rose;
+}
+function roseConfig(entry) { return (entry && entry.rose) || { welcome: null, rules: null, antilinks: false, warns: {} }; }
+const ROSE_LINK_RE = /(https?:\/\/|t\.me\/|@[A-Za-z0-9_]{4,}|[a-z0-9-]+\.(?:com|org|io|xyz|fun|net|gg|app|co|me)\b)/i;
+// Returns true if it fully handled the message (welcome posted / link removed / mod command run).
+async function handleGroupRose(message, userId) {
+  const chat = message?.chat;
+  if (!chat || isPrivateChat(chat)) return false;
+  const chatId = chat.id;
+  const entry = await getGroupBotEntry(chatId).catch(() => null);
+  if (!groupBotFeatureOn(entry, "rose")) return false; // module off → do nothing
+  const cfg = roseConfig(entry);
+
+  // New members → welcome.
+  if (Array.isArray(message.new_chat_members) && message.new_chat_members.length) {
+    const names = message.new_chat_members.map((m) => escapeTelegramHtml(m.first_name || m.username || "friend")).join(", ");
+    const tmpl = cfg.welcome || "👋 Welcome {name}! Read /rules and enjoy the swamp. ⚡ slimewire.org";
+    await sayHtml(chatId, tmpl.replace(/\{name\}/g, names)).catch(() => {});
+    return true;
+  }
+
+  const text = String(message.text || message.caption || "").trim();
+  const isAdmin = await isGroupBotAdmin(chatId, userId, message);
+
+  // Anti-links: delete links from non-admins (when on), and soft-warn.
+  if (cfg.antilinks && text && !isAdmin && ROSE_LINK_RE.test(text)) {
+    await telegram("deleteMessage", { chat_id: chatId, message_id: message.message_id }).catch(() => {});
+    await say(chatId, "🛡️ Links aren't allowed here. (admins only)").catch(() => {});
+    return true;
+  }
+
+  // Moderation commands (admins only). Most act on the replied-to user.
+  const cmd = text.match(/^\/(rules|setrules|welcome|setwelcome|antilinks|warn|warnings|clearwarns|mute|unmute|kick|ban|unban)(?:@\w+)?(?:\s+([\s\S]*))?$/i);
+  if (!cmd) return false;
+  const name = cmd[1].toLowerCase();
+  const arg = (cmd[2] || "").trim();
+  // Public reads: /rules and /welcome are open to everyone.
+  if (name === "rules") { await sayHtml(chatId, cfg.rules ? escapeTelegramHtml(cfg.rules) : "No rules set. An admin can set them with /setrules <text>."); return true; }
+  if (name === "welcome" && !arg) { await sayHtml(chatId, cfg.welcome ? escapeTelegramHtml(cfg.welcome) : "Default welcome is on. Admins: /setwelcome <text> (use {name})."); return true; }
+  if (!isAdmin) { await say(chatId, "Only group admins can use moderation commands."); return true; }
+  if (name === "setrules") { await setGroupRose(chatId, { rules: arg || null }); await say(chatId, arg ? "Rules updated." : "Rules cleared."); return true; }
+  if (name === "setwelcome") { await setGroupRose(chatId, { welcome: arg || null }); await say(chatId, arg ? "Welcome message updated." : "Welcome reset to default."); return true; }
+  if (name === "antilinks") { const on = /^on$/i.test(arg); await setGroupRose(chatId, { antilinks: on }); await say(chatId, `🛡️ Anti-links ${on ? "ON" : "OFF"}.`); return true; }
+  // Reply-based actions.
+  const target = message.reply_to_message?.from;
+  const needsTarget = ["warn", "mute", "unmute", "kick", "ban", "unban"].includes(name);
+  if (needsTarget && !target) { await say(chatId, `Reply to the person's message with /${name}.`); return true; }
+  const tId = target?.id;
+  const tName = target ? escapeTelegramHtml(target.first_name || target.username || String(tId)) : "";
+  try {
+    if (name === "warn") {
+      const warns = { ...(cfg.warns || {}) }; warns[tId] = (warns[tId] || 0) + 1;
+      await setGroupRose(chatId, { warns });
+      if (warns[tId] >= 3) { await telegram("restrictChatMember", { chat_id: chatId, user_id: tId, permissions: { can_send_messages: false } }).catch(() => {}); await say(chatId, `${tName} hit 3 warnings — muted.`); }
+      else await say(chatId, `⚠️ Warned ${tName} (${warns[tId]}/3).`);
+    } else if (name === "warnings") { await say(chatId, `${tName}: ${(cfg.warns || {})[tId] || 0}/3 warnings.`); }
+    else if (name === "clearwarns") { const warns = { ...(cfg.warns || {}) }; delete warns[tId]; await setGroupRose(chatId, { warns }); await say(chatId, `Cleared warnings for ${tName}.`); }
+    else if (name === "mute") { await telegram("restrictChatMember", { chat_id: chatId, user_id: tId, permissions: { can_send_messages: false } }); await say(chatId, `🔇 Muted ${tName}.`); }
+    else if (name === "unmute") { await telegram("restrictChatMember", { chat_id: chatId, user_id: tId, permissions: { can_send_messages: true, can_send_media_messages: true, can_send_other_messages: true, can_add_web_page_previews: true } }); await say(chatId, `🔊 Unmuted ${tName}.`); }
+    else if (name === "kick") { await telegram("banChatMember", { chat_id: chatId, user_id: tId }); await telegram("unbanChatMember", { chat_id: chatId, user_id: tId }).catch(() => {}); await say(chatId, `👢 Kicked ${tName}.`); }
+    else if (name === "ban") { await telegram("banChatMember", { chat_id: chatId, user_id: tId }); await say(chatId, `🔨 Banned ${tName}.`); }
+    else if (name === "unban") { await telegram("unbanChatMember", { chat_id: chatId, user_id: tId, only_if_banned: true }); await say(chatId, `Unbanned ${tName}.`); }
+  } catch (e) {
+    await say(chatId, "Couldn't do that — make sure I'm an admin with ban/restrict rights.").catch(() => {});
+  }
+  return true;
+}
 
 // /slimewire on|off (group admins): opt the group in/out of launch + TP/SL + KOL alerts.
 // adminImplied covers channels (only admins can post) and anonymous group admins
