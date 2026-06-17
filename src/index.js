@@ -9517,10 +9517,10 @@ async function handleMessage(message, userId) {
 async function handleDocumentMessage(message, userId, session) {
   const chatId = message.chat.id;
 
-  if (!isPrivateChat(message.chat)) {
-    await say(chatId, "Open this bot in DM before uploading wallet backup files.");
-    return;
-  }
+  // In GROUPS, never react to file/document uploads — wallet restore is a DM-only flow, and people
+  // share images/files in groups constantly. Replying nagged the chat on every attachment (spam).
+  // Stay silent in groups; the DM flow handles real backups.
+  if (!isPrivateChat(message.chat)) return;
 
   if (session && String(session.userId) !== String(userId)) {
     await say(chatId, "That active flow belongs to another Telegram user. Use /cancel and start your own flow in DM.");

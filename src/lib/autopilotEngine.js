@@ -340,15 +340,20 @@ export function freshScore(row) {
   const sells = Number(row.sells5m) || 0;
 
   let s = 0;
-  if (age <= 30) s += 26;
-  else if (age <= 120) s += 20;
-  else if (age <= 300) s += 14;
+  // AGE + MC scoring REALIGNED to realized EV (1464-trade live audit, see [[autopilot-engine-modes]]):
+  // age <30s WON, 30-120s BLED (-1.24); MC $1.8-2.5k WON (+1.22), $2.5-3.5k BLED (-1.41). The old
+  // weights rewarded the losing bands (30-120s got +20, $2.5-8k got the top +22) — flip it so the
+  // entry bar preferentially admits the proven +EV pocket and starves the bleeders.
+  if (age <= 30) s += 26;          // <30s = +EV
+  else if (age <= 120) s += 8;     // 30-120s = the WORST age band (-1.29 over 509) — penalize hard
+  else if (age <= 300) s += 14;    // 2-5m was +EV (+0.34)
   else if (age <= 600) s += 9;
-  else s += 4;
+  else s += 5;
 
-  if (mc >= 2500 && mc <= 8000) s += 22;
-  else if (mc >= 1800 && mc <= 15000) s += 14;
-  else s += 6;
+  if (mc >= 2100 && mc < 2500) s += 24;     // the ONLY +EV MC pocket (+1.22 over 477)
+  else if (mc >= 1800 && mc < 2100) s += 10;
+  else if (mc <= 15000) s += 7;             // everything >2.5k is -EV (2.5-3.5k = -1.43) → low reward
+  else s += 5;
 
   if (vol >= 120) s += 16;
   else if (vol >= 60) s += 11;

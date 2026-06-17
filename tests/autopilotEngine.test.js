@@ -38,8 +38,8 @@ function goodRow(over = {}) {
   return {
     tokenMint: "Mint1111111111111111111111111111111111111111",
     symbol: "GOOD",
-    pairAgeSeconds: 60,
-    marketCap: 5000,
+    pairAgeSeconds: 18,
+    marketCap: 2300,
     liquidityUsd: 6000,
     volume5m: 120,
     buys5m: 20,

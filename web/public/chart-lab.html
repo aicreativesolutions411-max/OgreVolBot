@@ -123,6 +123,7 @@
 (function(){
   var cv=document.getElementById('goo'); if(!cv) return;
   var QP=new URLSearchParams(location.search),CA=(QP.get('ca')||'').trim(),EMBED=QP.get('embed')==='1',TF=QP.get('tf')||'5m';
+  var MCP=Number(QP.get('mc'))||0,SYMP=(QP.get('sym')||'').trim();  // authoritative MC + symbol the app passes (keeps the chart's MC matching the top bar; avoids GT's FDV inflation)
   var usdMode=false,mcScale=8400,chg24=null,realPrice=null;
   if(EMBED&&document.body)document.body.classList.add('embed');
   function fmtUsd(p){p=Number(p)||0;if(p<=0)return '$0';if(p>=1)return '$'+p.toLocaleString(undefined,{maximumFractionDigits:3});if(p>=0.001)return '$'+p.toFixed(5);return '$'+p.toPrecision(3);}
@@ -222,9 +223,10 @@
     var cs=d.candles.slice(-N),nb=cs.map(function(k,idx){var up=k.c>=k.o;return {o:k.o,h:k.h,l:k.l,c:k.c,up:up,ss:up?0.4:0.66,vol:Math.max(0.0001,k.v),ph:(idx*1.37)%6.28,fl:idx%2===0};});
     while(nb.length<N)nb.unshift(Object.assign({},nb[0]));
     bars=nb;usdMode=true;chg24=Number(d.change24h);realPrice=(Number(d.priceUsd)>0)?Number(d.priceUsd):null;
-    if(d.mc>0&&bars[N-1].c>0)mcScale=d.mc/bars[N-1].c;
+    var realMc=Number(d.mc)||0; if(realMc<=0)realMc=MCP>0?MCP:(Number(d.fdv)||0); // real MC first, app-passed MC fills GT gaps, FDV only last resort (was inflating the chart MC)
+    if(realMc>0&&bars[N-1].c>0)mcScale=realMc/bars[N-1].c;
     var e;
-    if(d.symbol&&(e=document.querySelector('.tk .sym'))){var nm=(d.name&&d.name!==d.symbol)?(' <span style="color:#5d8a6e;font-weight:400">· '+esc(String(d.name).slice(0,22))+'</span>'):'';e.innerHTML='$'+esc(d.symbol)+nm;}
+    var symShow=SYMP||d.symbol;if(symShow&&(e=document.querySelector('.tk .sym'))){var nm=(d.name&&d.name!==symShow)?(' <span style="color:#5d8a6e;font-weight:400">· '+esc(String(d.name).slice(0,22))+'</span>'):'';e.innerHTML='$'+esc(symShow)+nm;}
     if(CA&&(e=document.querySelector('.tk .sub')))e.textContent=CA.slice(0,4)+'…'+CA.slice(-4);
     if(d.liq&&(e=document.getElementById('s_liq')))e.textContent=fmtMcRaw(d.liq);
     if(d.vol24&&(e=document.getElementById('s_vol')))e.textContent=fmtMcRaw(d.vol24);
@@ -251,7 +253,7 @@
         return gtj(GTB+'/pools/'+addr+'/trades?trade_volume_in_usd_greater_than=0').then(function(tr){
           var trl=(tr&&tr.data)||[];
           var trades=trl.slice(0,60).map(function(d){var x=d.attributes||{},buy=x.kind==='buy';return {t:Math.floor(Date.parse(x.block_timestamp)/1000)||0,side:buy?'buy':'sell',usd:+x.volume_in_usd||0,price:+(buy?x.price_to_in_usd:x.price_from_in_usd)||0};});
-          return {ok:true,stage:'dex',symbol:sym,name:sym,priceUsd:+a.base_token_price_usd||0,mc:+a.market_cap_usd||+a.fdv_usd||0,liq:+a.reserve_in_usd||0,vol24:(a.volume_usd&&+a.volume_usd.h24)||0,change24h:(a.price_change_percentage&&+a.price_change_percentage.h24)||0,candles:candles,trades:trades};
+          return {ok:true,stage:'dex',symbol:sym,name:sym,priceUsd:+a.base_token_price_usd||0,mc:+a.market_cap_usd||0,fdv:+a.fdv_usd||0,liq:+a.reserve_in_usd||0,vol24:(a.volume_usd&&+a.volume_usd.h24)||0,change24h:(a.price_change_percentage&&+a.price_change_percentage.h24)||0,candles:candles,trades:trades};
         });
       });
     }).catch(function(){return null;});
