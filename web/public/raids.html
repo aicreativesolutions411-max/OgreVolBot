@@ -3,88 +3,126 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Live Boss Raids — SlimeWire</title>
-<meta name="description" content="Every SlimeWire launch is a live boss raid. Rally your X/TG crew, climb the raid leaderboard, ape the survivors. Real coins, real raids.">
-<meta property="og:title" content="Live Boss Raids — SlimeWire">
-<meta property="og:description" content="Every launch is a boss. Raid with your crew, climb the leaderboard, ape the survivors.">
+<title>Raid Board — SlimeWire</title>
+<meta name="description" content="The SlimeWire raid board. Rally your X &amp; Telegram crew, fill the slime gauge, climb the raid leaderboard. Every post is a boss.">
+<meta property="og:title" content="SlimeWire Raid Board — rally the swamp">
+<meta property="og:description" content="Drop a post, the swamp raids it. Fill the slime gauge with likes + retweets, climb the leaderboard, ape the survivors.">
 <meta property="og:image" content="https://www.slimewire.org/assets/slimewire/swamp/art/og-survivors.jpg">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" type="image/svg+xml" href="/assets/slimewire/svg/slimewire-mark.svg">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;700;800;900&display=swap" rel="stylesheet">
 <style>
-  /* clean dark "pro terminal" palette (Phantom/Photon-ish) */
-  :root{ --bg:#0a0d12; --bg2:#0e131a; --card:#11171f; --line:rgba(255,255,255,0.07); --line2:rgba(255,255,255,0.12);
-    --tx:#e8edf4; --dim:#8c97a7; --green:#5fe08a; --green2:#9fffb5; --red:#ff6b6b; --gold:#ffcf5a; --blue:#5ab0ff; --purp:#a98bff; }
+  /* ── premium swamp-ogre theme ───────────────────────────────────────────── */
+  :root{ --bg:#04070a; --bg2:#06100b; --card:rgba(9,17,12,0.72); --line:rgba(141,255,90,0.16); --line2:rgba(141,255,90,0.34);
+    --tx:#eafff0; --dim:#8fae9b; --green:#8dff5a; --green2:#27e06a; --red:#ff6b6b; --gold:#ffd45a; --gold2:#b9892b; --blue:#5ab0ff; --purp:#a98bff; }
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
   html,body{margin:0; background:var(--bg); color:var(--tx); font-family:Inter,system-ui,sans-serif; -webkit-font-smoothing:antialiased;}
+  body{min-height:100vh; position:relative; overflow-x:hidden;
+    background:
+      radial-gradient(120% 70% at 20% -8%, rgba(39,224,106,0.14), transparent 60%),
+      radial-gradient(120% 70% at 95% 0%, rgba(141,255,90,0.10), transparent 55%),
+      radial-gradient(140% 90% at 50% 120%, rgba(20,60,32,0.55), transparent 60%),
+      linear-gradient(180deg,#04070a,#050b08 60%,#04070a);}
   a{color:inherit; text-decoration:none;}
-  .wrap{max-width:1100px; margin:0 auto; padding:0 16px calc(60px + env(safe-area-inset-bottom));}
-  header.top{position:sticky; top:0; z-index:10; background:rgba(10,13,18,0.82); backdrop-filter:blur(14px); border-bottom:1px solid var(--line); }
-  .topin{max-width:1100px; margin:0 auto; display:flex; align-items:center; gap:14px; padding:11px 16px;}
+  .wrap{max-width:1120px; margin:0 auto; padding:0 16px calc(64px + env(safe-area-inset-bottom));}
+  header.top{position:sticky; top:0; z-index:20; background:rgba(4,7,10,0.86); border-bottom:1px solid var(--line);}
+  .topin{max-width:1120px; margin:0 auto; display:flex; align-items:center; gap:14px; padding:11px 16px;}
   .brand{display:flex; align-items:center; gap:9px; font-weight:900; font-size:1.05rem; letter-spacing:0.2px;}
   .brand img{width:26px; height:26px;}
   .brand b{color:var(--green);}
-  .navlinks{margin-left:auto; display:flex; gap:6px; align-items:center;}
-  .navlinks a{color:var(--dim); font-weight:700; font-size:0.88rem; padding:7px 12px; border-radius:9px; transition:.15s;}
-  .navlinks a:hover{color:var(--tx); background:rgba(255,255,255,0.05);}
-  .navlinks a.cta{color:#08120b; background:linear-gradient(135deg,var(--green),var(--green2)); }
-  .hero{padding:30px 0 14px;}
-  .hero h1{font-size:clamp(1.7rem,5vw,2.5rem); margin:0 0 6px; font-weight:900; letter-spacing:-0.5px;}
-  .hero h1 .live{color:var(--red);}
-  .hero p{color:var(--dim); max-width:640px; margin:0; line-height:1.55; font-size:0.98rem;}
-  .statbar{display:flex; gap:10px; flex-wrap:wrap; margin-top:16px;}
-  .stat{background:var(--card); border:1px solid var(--line); border-radius:12px; padding:10px 16px; min-width:120px;}
-  .stat .n{font-weight:900; font-size:1.3rem;} .stat .l{color:var(--dim); font-size:0.74rem; font-weight:700; text-transform:uppercase; letter-spacing:0.6px;}
-  .layout{display:grid; grid-template-columns:1fr; gap:20px; margin-top:24px;}
-  @media(min-width:880px){ .layout{ grid-template-columns:1fr 320px; } }
-  .secttl{display:flex; align-items:center; gap:10px; margin:6px 0 12px; font-weight:900; font-size:1.05rem;}
-  .secttl .dot{width:8px; height:8px; border-radius:50%; background:var(--red); box-shadow:0 0 0 4px rgba(255,107,107,0.15); animation:pulse 1.6s infinite;}
-  @keyframes pulse{50%{box-shadow:0 0 0 7px rgba(255,107,107,0);}}
-  .bosses{display:grid; grid-template-columns:1fr; gap:12px;}
+  .navlinks{margin-left:auto; display:flex; gap:4px; align-items:center;}
+  .navlinks a{color:var(--dim); font-weight:800; font-size:0.86rem; padding:7px 11px; border-radius:10px; transition:.15s;}
+  .navlinks a:hover{color:var(--tx); background:rgba(141,255,90,0.08);}
+  .navlinks a.cta{color:#05210f; background:linear-gradient(135deg,var(--green),var(--green2));}
+  /* hero */
+  .hero{padding:30px 0 8px; position:relative;}
+  .hero .eyebrow{display:inline-flex; align-items:center; gap:7px; font-size:0.72rem; font-weight:900; letter-spacing:1px; text-transform:uppercase;
+    color:var(--gold); background:rgba(255,212,90,0.10); border:1px solid rgba(255,212,90,0.28); padding:5px 12px; border-radius:99px;}
+  .hero h1{font-size:clamp(1.9rem,6vw,3rem); margin:12px 0 6px; font-weight:900; letter-spacing:-0.6px; line-height:1.02;}
+  .hero h1 .slime{color:var(--green); text-shadow:0 0 26px rgba(141,255,90,0.45);}
+  .hero p{color:#bfe9cc; max-width:660px; margin:0; line-height:1.55; font-size:1rem;}
+  .statbar{display:flex; gap:10px; flex-wrap:wrap; margin-top:18px;}
+  .stat{background:var(--card); border:1px solid var(--line); border-radius:13px; padding:11px 17px; min-width:118px; backdrop-filter:blur(8px);}
+  .stat .n{font-weight:900; font-size:1.35rem; color:var(--green);} .stat .l{color:var(--dim); font-size:0.7rem; font-weight:800; text-transform:uppercase; letter-spacing:0.6px; margin-top:2px;}
+  .layout{display:grid; grid-template-columns:1fr; gap:22px; margin-top:26px;}
+  @media(min-width:900px){ .layout{ grid-template-columns:1fr 330px; } }
+  .secttl{display:flex; align-items:center; gap:10px; margin:6px 0 14px; font-weight:900; font-size:1.12rem;}
+  .secttl .dot{width:9px; height:9px; border-radius:50%; background:var(--green); box-shadow:0 0 0 4px rgba(141,255,90,0.16); animation:pulse 1.7s infinite;}
+  .secttl .more{margin-left:auto; font-size:0.74rem; font-weight:800; color:var(--dim);}
+  @keyframes pulse{50%{box-shadow:0 0 0 8px rgba(141,255,90,0);}}
+  /* RAID CARDS (the X/TG raid board — the hero) */
+  .raids{display:grid; grid-template-columns:1fr; gap:13px;}
+  .raid-c{position:relative; background:var(--card); border:1px solid var(--line); border-radius:18px; padding:15px 16px; overflow:hidden; backdrop-filter:blur(10px);
+    transition:.16s;}
+  .raid-c::before{content:""; position:absolute; left:0; right:0; top:0; height:1px; background:linear-gradient(90deg,transparent,var(--line2),transparent);}
+  .raid-c:hover{border-color:var(--line2); transform:translateY(-2px);}
+  .raid-c.lead{border-color:rgba(255,212,90,0.4); box-shadow:0 0 30px rgba(255,212,90,0.08);}
+  .rc-top{display:flex; align-items:center; gap:11px; margin-bottom:11px;}
+  .rc-rk{width:34px; height:34px; flex:none; display:flex; align-items:center; justify-content:center; border-radius:11px; font-weight:900; font-size:0.95rem;
+    background:rgba(141,255,90,0.1); color:var(--green); border:1px solid var(--line);}
+  .raid-c.lead .rc-rk{background:rgba(255,212,90,0.14); color:var(--gold); border-color:rgba(255,212,90,0.3);}
+  .rc-id{min-width:0;}
+  .rc-id .nm{font-weight:900; font-size:1.02rem; line-height:1.15; display:flex; align-items:center; gap:6px;}
+  .rc-id .sub{color:var(--dim); font-size:0.74rem; font-weight:700; margin-top:1px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .rc-eng{margin-left:auto; display:flex; gap:12px; text-align:right; flex:none;}
+  .rc-eng .e b{font-weight:900; font-size:1.02rem; font-variant-numeric:tabular-nums;} .rc-eng .e span{display:block; color:var(--dim); font-size:0.62rem; font-weight:800; text-transform:uppercase; letter-spacing:0.4px;}
+  /* the slime boss gauge */
+  .gauge{margin:4px 0 12px;}
+  .gauge .gl{display:flex; justify-content:space-between; font-size:0.72rem; color:var(--dim); font-weight:800; margin-bottom:5px;}
+  .gauge .gl b{color:var(--green); font-variant-numeric:tabular-nums;}
+  .gbar{height:13px; border-radius:99px; background:rgba(4,12,7,0.7); border:1px solid var(--line); overflow:hidden; position:relative;}
+  .gfill{height:100%; border-radius:99px; background:linear-gradient(90deg,#1f8f3e,var(--green2) 55%,var(--green)); box-shadow:0 0 16px rgba(141,255,90,0.55) inset; transition:width .9s cubic-bezier(.4,1.2,.5,1); position:relative; min-width:6px;}
+  .gfill::after{content:""; position:absolute; right:0; top:0; bottom:0; width:14px; background:linear-gradient(90deg,transparent,rgba(223,255,206,0.85)); border-radius:99px;}
+  .raid-c.full .gfill{background:linear-gradient(90deg,var(--gold2),var(--gold)); box-shadow:0 0 18px rgba(255,212,90,0.6) inset;}
+  .rc-acts{display:grid; grid-template-columns:1fr auto auto; gap:8px;}
+  .rc-acts a,.rc-acts button{display:flex; align-items:center; justify-content:center; gap:6px; border:1px solid var(--line2); background:rgba(141,255,90,0.05); color:var(--tx);
+    border-radius:11px; padding:11px; font-weight:900; font-size:0.88rem; cursor:pointer; transition:.12s; font-family:inherit;}
+  .rc-acts a:hover,.rc-acts button:hover{background:rgba(141,255,90,0.12);}
+  .rc-acts .raidnow{background:linear-gradient(135deg,var(--green),var(--green2)); color:#05210f; border:0; box-shadow:0 6px 22px rgba(39,224,106,0.3);}
+  .rc-acts .ic{width:46px; padding:11px 0;}
+  /* coin bosses (secondary) */
+  .bosses{display:grid; grid-template-columns:1fr; gap:11px;}
   @media(min-width:560px){ .bosses{ grid-template-columns:1fr 1fr; } }
-  .boss{background:linear-gradient(180deg,var(--card),#0d121a); border:1px solid var(--line); border-radius:16px; padding:15px; transition:.15s; position:relative; overflow:hidden;}
+  .boss{background:var(--card); border:1px solid var(--line); border-radius:15px; padding:13px; position:relative; overflow:hidden; backdrop-filter:blur(8px); transition:.15s;}
   .boss:hover{border-color:var(--line2); transform:translateY(-2px);}
-  .boss.legend{border-color:rgba(255,207,90,0.4); box-shadow:0 0 24px rgba(255,207,90,0.08);}
-  .boss .tagrow{display:flex; align-items:center; gap:7px; margin-bottom:9px;}
-  .boss .av{width:42px; height:42px; border-radius:11px; object-fit:cover; background:#0a0f15; border:1px solid var(--line);}
-  .boss .nm{font-weight:900; font-size:1.05rem; line-height:1.1;}
-  .boss .sub{color:var(--dim); font-size:0.72rem; font-weight:700;}
-  .badge{margin-left:auto; font-size:0.64rem; font-weight:900; letter-spacing:0.5px; padding:4px 9px; border-radius:99px; text-transform:uppercase;}
-  .badge.legend{color:var(--gold); background:rgba(255,207,90,0.14);}
-  .badge.hot{color:var(--red); background:rgba(255,107,107,0.14);}
-  .badge.fresh{color:var(--blue); background:rgba(90,176,255,0.14);}
-  .hpwrap{margin:10px 0 4px;}
-  .hpwrap .hl{display:flex; justify-content:space-between; font-size:0.7rem; color:var(--dim); font-weight:800; margin-bottom:4px;}
-  .hpbar{height:9px; border-radius:99px; background:rgba(255,255,255,0.06); overflow:hidden;}
-  .hpfill{height:100%; background:linear-gradient(90deg,var(--red),var(--gold)); border-radius:99px;}
-  .mrow{display:flex; gap:12px; flex-wrap:wrap; margin:9px 0; font-size:0.78rem;}
-  .mrow .m b{font-weight:900;} .mrow .m span{color:var(--dim); font-weight:700; font-size:0.68rem; display:block; text-transform:uppercase; letter-spacing:0.4px;}
+  .boss.legend{border-color:rgba(255,212,90,0.36);}
+  .boss .tagrow{display:flex; align-items:center; gap:8px; margin-bottom:8px;}
+  .boss .av{width:40px; height:40px; border-radius:11px; object-fit:cover; background:#08120b; border:1px solid var(--line);}
+  .boss .nm{font-weight:900; font-size:1rem; line-height:1.1;} .boss .sub{color:var(--dim); font-size:0.7rem; font-weight:700;}
+  .badge{margin-left:auto; font-size:0.62rem; font-weight:900; letter-spacing:0.5px; padding:4px 9px; border-radius:99px; text-transform:uppercase;}
+  .badge.legend{color:var(--gold); background:rgba(255,212,90,0.14);} .badge.hot{color:var(--red); background:rgba(255,107,107,0.14);} .badge.fresh{color:var(--green); background:rgba(141,255,90,0.12);}
+  .hpwrap{margin:9px 0 4px;} .hpwrap .hl{display:flex; justify-content:space-between; font-size:0.68rem; color:var(--dim); font-weight:800; margin-bottom:4px;}
+  .hpbar{height:8px; border-radius:99px; background:rgba(4,12,7,0.7); overflow:hidden;} .hpfill{height:100%; background:linear-gradient(90deg,#1f8f3e,var(--green)); border-radius:99px;}
+  .mrow{display:flex; gap:12px; flex-wrap:wrap; margin:8px 0; font-size:0.76rem;}
+  .mrow .m b{font-weight:900;} .mrow .m span{color:var(--dim); font-weight:700; font-size:0.64rem; display:block; text-transform:uppercase; letter-spacing:0.4px;}
   .up{color:var(--green);} .down{color:var(--red);}
-  .acts{display:grid; grid-template-columns:1fr 1fr; gap:7px; margin-top:11px;}
-  .acts button,.acts a{display:flex; align-items:center; justify-content:center; gap:5px; border:1px solid var(--line2); background:rgba(255,255,255,0.04); color:var(--tx); border-radius:10px; padding:10px; font-weight:800; font-size:0.84rem; cursor:pointer; transition:.12s;}
-  .acts button:hover,.acts a:hover{background:rgba(255,255,255,0.08);}
-  .acts .ape{grid-column:1/-1; background:linear-gradient(135deg,var(--green),var(--green2)); color:#08120b; border:0;}
-  .acts .raid{background:rgba(255,107,107,0.14); border-color:rgba(255,107,107,0.4); color:#ff9a9a;}
-  .acts .raid.done{background:rgba(95,224,138,0.14); border-color:rgba(95,224,138,0.4); color:var(--green2);}
-  .side .panel{background:var(--card); border:1px solid var(--line); border-radius:16px; padding:16px; margin-bottom:16px;}
-  .panel h3{margin:0 0 10px; font-size:0.95rem; font-weight:900;}
+  .acts{display:grid; grid-template-columns:1fr 1fr; gap:7px; margin-top:9px;}
+  .acts a,.acts button{display:flex; align-items:center; justify-content:center; gap:5px; border:1px solid var(--line2); background:rgba(141,255,90,0.05); color:var(--tx); border-radius:10px; padding:9px; font-weight:800; font-size:0.82rem; cursor:pointer; transition:.12s; font-family:inherit;}
+  .acts a:hover,.acts button:hover{background:rgba(141,255,90,0.11);}
+  .acts .ape{grid-column:1/-1; background:linear-gradient(135deg,var(--green),var(--green2)); color:#05210f; border:0;}
+  /* side panels */
+  .side .panel{background:var(--card); border:1px solid var(--line); border-radius:16px; padding:16px; margin-bottom:15px; backdrop-filter:blur(8px);}
+  .panel h3{margin:0 0 10px; font-size:0.98rem; font-weight:900;}
   .tabs{display:flex; gap:6px; margin-bottom:10px;}
-  .tabs button{flex:1; background:rgba(255,255,255,0.04); border:1px solid var(--line); color:var(--dim); border-radius:9px; padding:7px; font-weight:800; font-size:0.78rem; cursor:pointer;}
-  .tabs button.on{color:var(--tx); background:rgba(95,224,138,0.12); border-color:rgba(95,224,138,0.4);}
-  .lb .row{display:flex; align-items:center; gap:9px; padding:7px 4px; font-size:0.86rem; border-bottom:1px solid var(--line);}
+  .tabs button{flex:1; background:rgba(141,255,90,0.05); border:1px solid var(--line); color:var(--dim); border-radius:9px; padding:7px; font-weight:800; font-size:0.78rem; cursor:pointer; font-family:inherit;}
+  .tabs button.on{color:var(--tx); background:rgba(141,255,90,0.14); border-color:var(--line2);}
+  .lb .row{display:flex; align-items:center; gap:9px; padding:8px 4px; font-size:0.86rem; border-bottom:1px solid var(--line);}
   .lb .row:last-child{border:0;}
   .lb .rk{width:22px; font-weight:900; color:var(--dim);} .lb .row:nth-child(1) .rk{color:var(--gold);}
-  .lb .nm{flex:1; font-weight:800;} .lb .sc{font-weight:900; color:var(--green);}
-  .lb .me{background:rgba(95,224,138,0.06); border-radius:8px;}
-  .promo{background:linear-gradient(160deg,rgba(255,207,90,0.1),rgba(95,224,138,0.06)); border:1px solid rgba(255,207,90,0.25);}
-  .promo p{color:var(--dim); font-size:0.84rem; line-height:1.5; margin:0 0 12px;}
-  .btnfull{display:block; text-align:center; background:linear-gradient(135deg,var(--green),var(--green2)); color:#08120b; border-radius:11px; padding:12px; font-weight:900; cursor:pointer;}
-  .tagin{width:100%; background:#0a0f15; border:1px solid var(--line2); color:var(--tx); border-radius:9px; padding:9px 11px; font-weight:700; outline:none; margin-bottom:8px; font-family:inherit;}
-  .empty{color:var(--dim); text-align:center; padding:30px; font-size:0.9rem;}
-  .toast{position:fixed; left:50%; bottom:26px; transform:translateX(-50%); background:#161d27; border:1px solid var(--line2); color:var(--tx); padding:11px 20px; border-radius:12px; font-weight:800; opacity:0; transition:.25s; z-index:30; box-shadow:0 10px 40px rgba(0,0,0,0.5); pointer-events:none; max-width:90vw; text-align:center;}
+  .lb .nm{flex:1; font-weight:800; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;} .lb .sc{font-weight:900; color:var(--green); font-variant-numeric:tabular-nums;}
+  .lb .me{background:rgba(141,255,90,0.07); border-radius:8px;}
+  .promo{background:linear-gradient(160deg,rgba(255,212,90,0.1),rgba(141,255,90,0.05)); border:1px solid rgba(255,212,90,0.24);}
+  .promo p{color:#cfe9d6; font-size:0.84rem; line-height:1.5; margin:0 0 12px;}
+  .btnfull{display:block; text-align:center; background:linear-gradient(135deg,var(--green),var(--green2)); color:#05210f; border-radius:12px; padding:12px; font-weight:900; cursor:pointer; border:0; width:100%; font-family:inherit; font-size:0.95rem;}
+  .btngold{background:linear-gradient(135deg,var(--gold),var(--gold2)); color:#2a1c02;}
+  .tagin{width:100%; background:#08120b; border:1px solid var(--line2); color:var(--tx); border-radius:10px; padding:10px 12px; font-weight:700; outline:none; margin-bottom:8px; font-family:inherit;}
+  .tagin:focus{border-color:var(--green);}
+  .empty{color:var(--dim); text-align:center; padding:26px; font-size:0.9rem;}
+  .toast{position:fixed; left:50%; bottom:26px; transform:translateX(-50%); background:#0a160e; border:1px solid var(--line2); color:var(--tx); padding:11px 20px; border-radius:12px; font-weight:800; opacity:0; transition:.25s; z-index:40; box-shadow:0 12px 44px rgba(0,0,0,0.6); pointer-events:none; max-width:90vw; text-align:center;}
   .toast.on{opacity:1;}
   .foot{color:var(--dim); font-size:0.8rem; text-align:center; padding:30px 0 10px;}
-  .spin{width:34px;height:34px;border-radius:50%;border:3px solid rgba(255,255,255,0.1);border-top-color:var(--green);animation:sp 1s linear infinite;margin:30px auto;}
+  .foot a{color:var(--green);}
+  .spin{width:34px;height:34px;border-radius:50%;border:3px solid rgba(141,255,90,0.12);border-top-color:var(--green);animation:sp 1s linear infinite;margin:30px auto;}
   @keyframes sp{to{transform:rotate(360deg);}}
 </style>
 </head>
@@ -92,59 +130,56 @@
 <header class="top"><div class="topin">
   <a class="brand" href="/"><img src="/assets/slimewire/svg/slimewire-mark.svg" alt="" onerror="this.style.display='none'">Slime<b>Wire</b></a>
   <nav class="navlinks">
-    <a href="/hub">🧭 Hub</a>
-    <a href="/swamp">🐸 Swamp</a>
-    <a href="/radar">📡 Radar</a>
-    <a href="/launch">🚀 Launch</a>
+    <a href="/hub">Hub</a>
+    <a href="/prelaunch">Prelaunch</a>
+    <a href="/swamp">Swamp</a>
     <a class="cta" href="/terminal">Terminal</a>
   </nav>
 </div></header>
 
 <div class="wrap">
   <section class="hero">
-    <h1><span class="live">●</span> Live Boss Raids</h1>
-    <p>Every coin spawns as a <b>boss</b> — launched on SlimeWire <b>or not</b>. Rally your X &amp; Telegram crew to raid it, climb the leaderboard, and ape the survivors. <b>Got a coin? Put it on the board in 5 seconds.</b></p>
+    <span class="eyebrow">⚔️ The swamp raids together</span>
+    <h1>SlimeWire <span class="slime">Raid Board</span></h1>
+    <p>Drop an X post, the whole swamp raids it. Every post is a <b>boss</b> — fill its <b>slime gauge</b> with likes &amp; retweets, climb the raid leaderboard, and ape the survivors. Start one with <b>/raid</b> in Telegram.</p>
     <div class="statbar" id="statbar"></div>
-    <div style="margin-top:14px"><a href="#ownraid" class="btnfull" style="display:inline-block;width:auto;padding:12px 22px">⚔️ Raid your own coin →</a></div>
   </section>
 
   <div class="layout">
     <main>
-      <div class="secttl"><span class="dot"></span> Active bosses</div>
+      <div class="secttl"><span class="dot"></span> Active raids <span class="more" id="raidMore"></span></div>
+      <div class="raids" id="raids"><div class="spin"></div></div>
+
+      <div class="secttl" style="margin-top:26px">🧌 Boss coins <span class="more">live launches &amp; movers</span></div>
       <div class="bosses" id="bosses"><div class="spin"></div></div>
     </main>
     <aside class="side">
-      <div class="panel" id="ownraid">
-        <h3>⚔️ Raid your own coin</h3>
-        <p style="color:var(--dim);font-size:0.84rem;line-height:1.5;margin:0 0 10px">Drop your token's contract address — it goes live as a boss for the whole swamp to raid. Rally your crew.</p>
-        <input class="tagin" id="rMint" placeholder="token contract address (mint)">
-        <input class="tagin" id="rSym" maxlength="12" placeholder="$SYMBOL (optional)">
-        <button class="btnfull" id="rSubmit">🔥 Start the raid</button>
-      </div>
       <div class="panel promo">
-        <h3>🚀 Launch = become a boss</h3>
-        <p>Launch your coin on SlimeWire and it goes live here as a raid boss — instant exposure, crew raids, share cards, and a creature in The Swamp.</p>
-        <a class="btnfull" href="/launch">Why launch here →</a>
+        <h3>⚔️ Start a raid</h3>
+        <p>Raids are born in Telegram: run <b>/raid &lt;your X post link&gt;</b> and your post lands here as a live boss for the whole swamp to pile on — likes &amp; retweets fill the gauge.</p>
+        <a class="btnfull btngold" href="https://t.me/SlimeWireBot?start=raid" target="_blank" rel="noopener">Open the Telegram bot →</a>
       </div>
       <div class="panel">
-        <h3>🏆 Leaderboard</h3>
-        <div class="tabs"><button class="on" data-lb="raids">Top Raiders</button><button data-lb="catches">Top Catchers</button></div>
-        <input class="tagin" id="tag" maxlength="16" placeholder="your raider tag">
+        <h3>🏆 Top raiders</h3>
+        <div class="tabs"><button class="on" data-lb="raids">Raiders</button><button data-lb="catches">Catchers</button></div>
+        <input class="tagin" id="tag" maxlength="16" placeholder="your raider tag (shows on the board)">
         <div class="lb" id="lb"><div class="empty">loading…</div></div>
       </div>
       <div class="panel">
-        <h3>🐦 Top raid posts</h3>
-        <div style="color:var(--dim);font-size:0.8rem;margin-bottom:8px">From Telegram <b>/raid</b> · ranked by likes + RTs</div>
-        <div class="lb" id="posts"><div class="empty">no raid posts yet — use /raid in Telegram</div></div>
+        <h3>🔥 Raid your own coin</h3>
+        <p style="color:var(--dim);font-size:0.84rem;line-height:1.5;margin:0 0 10px">Put your token on the board as a boss coin — instant exposure for the swamp to raid + ape.</p>
+        <input class="tagin" id="rMint" placeholder="token contract address (mint)">
+        <input class="tagin" id="rSym" maxlength="12" placeholder="$SYMBOL (optional)">
+        <button class="btnfull" id="rSubmit">🔥 Put it on the board</button>
       </div>
       <div class="panel">
         <h3>🐸 Hunt them in The Swamp</h3>
-        <p style="color:var(--dim);font-size:0.84rem;line-height:1.5;margin:0 0 12px">These bosses also roam the Swamp as catchable creatures. Catch them, build your Dex, fight for loot.</p>
-        <a class="btnfull" href="/swamp" style="background:linear-gradient(135deg,var(--purp),#c9b3ff)">Play The Swamp →</a>
+        <p style="color:var(--dim);font-size:0.84rem;line-height:1.5;margin:0 0 12px">Boss coins also roam the Swamp as catchable creatures. Catch them, build your Dex, fight for loot.</p>
+        <a class="btnfull" href="/swamp" style="background:linear-gradient(135deg,var(--purp),#c9b3ff);color:#1a1030">Play The Swamp →</a>
       </div>
     </aside>
   </div>
-  <div class="foot">SlimeWire · raids refresh live · <a href="/swamp" style="color:var(--green)">Swamp</a> · <a href="/proof" style="color:var(--green)">Proof</a></div>
+  <div class="foot">SlimeWire · raids refresh live · <a href="/prelaunch">Prelaunch</a> · <a href="/swamp">Swamp</a> · <a href="/proof">Proof</a></div>
 </div>
 <div class="toast" id="toast"></div>
 
@@ -154,6 +189,7 @@
 const $=(s)=>document.querySelector(s), $$=(s)=>[...document.querySelectorAll(s)];
 const API = (location.hostname.includes("onrender.com")||location.hostname==="localhost"||location.hostname==="127.0.0.1") ? "" : "https://ogrevolbot.onrender.com";
 const SITE="https://www.slimewire.org";
+const TG="https://t.me/SlimeWireBot?start=raid";
 const KEY="slimewireSwamp";
 const store=(()=>{ try{ return JSON.parse(localStorage.getItem(KEY)||"{}"); }catch{ return {}; } })();
 if(typeof store.raidPts!=="number") store.raidPts=0;
@@ -161,22 +197,60 @@ if(!store.raided||typeof store.raided!=="object") store.raided={};
 const save=()=>{ try{ localStorage.setItem(KEY,JSON.stringify(store)); }catch(_){} };
 const num=(v)=>{ const n=Number(v); return isFinite(n)?n:0; };
 function fmtUsd(n){ n=num(n); if(n>=1e6)return "$"+(n/1e6).toFixed(1)+"M"; if(n>=1e3)return "$"+(n/1e3).toFixed(0)+"k"; return "$"+n.toFixed(0); }
+function fmtN(n){ n=num(n); if(n>=1e6)return (n/1e6).toFixed(1)+"M"; if(n>=1e3)return (n/1e3).toFixed(1)+"k"; return String(Math.round(n)); }
 function ageStr(row){ let s=num(row.pairAgeSeconds); if(!s){ const m=num(row.pairAgeMinutes); s=m*60; } if(!s) return "—"; if(s>=3600)return Math.floor(s/3600)+"h"; if(s>=60)return Math.floor(s/60)+"m"; return Math.floor(s)+"s"; }
-let toastT; function toast(m){ const t=$("#toast"); t.textContent=m; t.classList.add("on"); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove("on"),2200); }
+let toastT; function toast(m){ const t=$("#toast"); t.textContent=m; t.classList.add("on"); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove("on"),2300); }
 function esc(s){ return String(s).replace(/[<>&"]/g,c=>({"<":"&lt;",">":"&gt;","&":"&amp;","\"":"&quot;"}[c])); }
 function symOf(r){ return String(r.symbol||r.tokenMint||"COIN").replace(/[^A-Za-z0-9_]/g,"").slice(0,12)||"COIN"; }
 function mintOf(r){ return r.tokenMint||r.mint||r.address||""; }
 
-// boss HP: launches use bonding %, hot coins use momentum toward graduation (~$69k)
-function bossHp(r){
-  const b=num(r.bondingProgressPct ?? r.bondingProgress ?? r.bonding);
-  if(b>0) return Math.max(2,Math.min(100,100-b)); // closer to graduation = weaker boss
-  const mc=num(r.marketCap||r.marketCapUsd); if(mc>0){ const prog=Math.min(100,mc/69000*100); return Math.max(2,100-prog); }
-  return 70;
+// ── RAID BOARD (X/TG raid posts as bosses with a slime gauge) ───────────────
+// Milestone target: the next round number of total engagement (likes+RT) to chase.
+const TIERS=[50,100,250,500,1000,2500,5000,10000,25000,50000];
+function tierFor(total){ for(const t of TIERS){ if(total < t) return t; } return Math.ceil(total/10000)*10000; }
+function loadPosts(){
+  fetch(API+"/api/web/raid-posts",{cache:"no-store"}).then(r=>r.json()).then(j=>{
+    const rows=(j&&j.posts)||[]; const box=$("#raids"); const live=!!(j&&j.liveMetrics);
+    $("#raidMore").textContent = rows.length ? (rows.length+" live") : "";
+    if(!rows.length){ box.innerHTML='<div class="empty">No active raids yet — run <b>/raid &lt;X post&gt;</b> in Telegram to light the first one. 🐸</div>'; return; }
+    box.innerHTML="";
+    rows.slice(0,12).forEach((p,i)=>{
+      const likes=num(p.likes), rts=num(p.rts), reps=num(p.replies);
+      const total=likes+rts, target=num(p.target)>0?num(p.target):tierFor(total);
+      const pct=Math.max(2,Math.min(100, target?Math.round(total/target*100):2));
+      const full=total>=target && target>0;
+      const url=esc(p.url||("https://x.com/i/status/"+(p.tid||"")));
+      const who=esc(p.by||"anon")+(p.symbol?(" · $"+esc(p.symbol)):"");
+      const shareTxt=`⚔️ RAID THIS for $${esc(p.symbol||"")} on @SlimeWire 🐸🔥 — like + RT to fill the gauge\n${p.url||""}`;
+      const d=document.createElement("div"); d.className="raid-c"+(i===0?" lead":"")+(full?" full":"");
+      d.innerHTML=`<div class="rc-top">
+          <div class="rc-rk">#${i+1}</div>
+          <div class="rc-id"><div class="nm">${full?"👑 ":"⚔️ "}${p.symbol?("$"+esc(p.symbol)):"Raid"} <span class="sub" style="display:inline">${full?"target smashed":"raiding"}</span></div>
+            <div class="sub">by ${who}</div></div>
+          <div class="rc-eng">
+            <div class="e"><b>${live?fmtN(likes):"—"}</b><span>❤ likes</span></div>
+            <div class="e"><b>${live?fmtN(rts):"—"}</b><span>↻ RT</span></div>
+          </div></div>
+        <div class="gauge"><div class="gl"><span>Boss gauge</span><b>${fmtN(total)} / ${fmtN(target)}</b></div>
+          <div class="gbar"><div class="gfill" style="width:${pct}%"></div></div></div>
+        <div class="rc-acts">
+          <a class="raidnow" href="${url}" target="_blank" rel="noopener" data-raidnow="${esc(p.tid||url)}">⚔️ RAID NOW</a>
+          <button class="ic" title="Share on X" data-sharex="${esc(shareTxt)}">𝕏</button>
+          <a class="ic" title="Share to Telegram" href="https://t.me/share/url?url=${encodeURIComponent(p.url||SITE+"/raids")}&text=${encodeURIComponent("⚔️ Raid this for $"+(p.symbol||"")+" — like + RT")}" target="_blank" rel="noopener">✈</a>
+        </div>`;
+      box.appendChild(d);
+    });
+    $$("[data-raidnow]").forEach(b=>b.addEventListener("click",()=>{ const k=b.getAttribute("data-raidnow"); if(!store.raided[k]){ store.raided[k]=Date.now(); store.raidPts=(store.raidPts||0)+10; save(); toast("⚔️ +10 raid pts — like + RT to fill the gauge!"); renderStats(); submitRaid(); } }));
+    $$("[data-sharex]").forEach(b=>b.addEventListener("click",()=>{ window.open("https://twitter.com/intent/tweet?text="+encodeURIComponent(b.getAttribute("data-sharex")),"_blank"); }));
+  }).catch(()=>{ $("#raids").innerHTML='<div class="empty">Raid board offline — try again in a moment.</div>'; });
 }
-function bossTag(r){ if(r._community) return {c:"hot",t:"Crew Raid ⚔️"}; if(r._ogre) return {c:"legend",t:"Legendary"}; const m5=num(r.m5??r.priceChangeM5); const a=num(r.pairAgeSeconds)||num(r.pairAgeMinutes)*60;
-  if(m5>=40||num(r.volume5m)>40000) return {c:"hot",t:"Hot 🔥"}; if(a&&a<180) return {c:"fresh",t:"Fresh"}; return {c:"fresh",t:"Live"}; }
 
+// ── BOSS COINS (live launches + community raids + movers) ───────────────────
+function bossHp(r){ const b=num(r.bondingProgressPct ?? r.bondingProgress ?? r.bonding);
+  if(b>0) return Math.max(2,Math.min(100,100-b));
+  const mc=num(r.marketCap||r.marketCapUsd); if(mc>0){ const prog=Math.min(100,mc/69000*100); return Math.max(2,100-prog); } return 70; }
+function bossTag(r){ if(r._community) return {c:"hot",t:"Crew Raid"}; if(r._ogre) return {c:"legend",t:"Launch"}; const m5=num(r.m5??r.priceChangeM5); const a=num(r.pairAgeSeconds)||num(r.pairAgeMinutes)*60;
+  if(m5>=40||num(r.volume5m)>40000) return {c:"hot",t:"Hot"}; if(a&&a<180) return {c:"fresh",t:"Fresh"}; return {c:"fresh",t:"Live"}; }
 let BOSSES=[]; const TD={};
 async function load(){
   let rows=[];
@@ -184,75 +258,60 @@ async function load(){
     const og=(j&&(j.launches||j.ogres))||[]; for(const o of og){ if(o&&(o.mint||o.symbol)) rows.push({tokenMint:o.mint,symbol:o.symbol||o.name,_ogre:true,marketCap:o.marketCap,bondingProgressPct:o.bondingProgressPct,pairAgeSeconds:o.ageSeconds,holders:o.holders}); } }catch(_){}
   try{ const r=await fetch(API+"/api/web/community-raids",{cache:"no-store"}); const j=await r.json();
     const crs=((j&&j.raids)||[]).filter(c=>c&&c.mint).slice(0,12);
-    // enrich each submitted coin with real market data (token-read) so it's a full boss
     const enriched=await Promise.all(crs.map(async (cr)=>{ let td=TD[cr.mint];
       if(!td){ td={}; try{ const tr=await fetch(API+"/api/web/token-read?mint="+encodeURIComponent(cr.mint),{cache:"force-cache"}); const tj=await tr.json(); if(tj&&tj.ok){ td=tj; TD[cr.mint]=tj; } }catch(_){} }
-      return {tokenMint:cr.mint, symbol:(td.symbol||cr.symbol), _community:true, by:cr.by, bumps:cr.bumps,
-        marketCap:td.marketCapUsd, liquidityUsd:td.liquidityUsd, bondingProgressPct:td.bondingProgressPct}; }));
+      return {tokenMint:cr.mint, symbol:(td.symbol||cr.symbol), _community:true, by:cr.by, bumps:cr.bumps, marketCap:td.marketCapUsd, liquidityUsd:td.liquidityUsd, bondingProgressPct:td.bondingProgressPct}; }));
     for(const e of enriched) rows.push(e); }catch(_){}
   try{ const r=await fetch(API+"/api/web/live-pairs?bucket=live&sort=fresh",{cache:"no-store"}); const j=await r.json();
     const lr=(j&&j.livePairs&&j.livePairs.rows)||(j&&j.rows)||[]; for(const x of lr){ if(x&&x.tokenMint) rows.push(x); } }catch(_){}
-  // dedupe by mint, cap
   const seen=new Set(); BOSSES=[];
-  for(const r of rows){ const m=mintOf(r); if(!m||seen.has(m))continue; seen.add(m); BOSSES.push(r); if(BOSSES.length>=12)break; }
-  if(!BOSSES.length){ // offline-safe sample
-    BOSSES=[{tokenMint:"syn1",symbol:"OGREX",_ogre:true,marketCap:14000,bondingProgressPct:38,holders:120},
-      {tokenMint:"syn2",symbol:"PEPE2",marketCap:6000,pairAgeSeconds:50,m5:62,volume5m:70000},
-      {tokenMint:"syn3",symbol:"WOJAK",marketCap:22000,pairAgeSeconds:600,m5:12,volume5m:9000}];
-  }
+  for(const r of rows){ const m=mintOf(r); if(!m||seen.has(m))continue; seen.add(m); BOSSES.push(r); if(BOSSES.length>=10)break; }
+  if(!BOSSES.length){ BOSSES=[{tokenMint:"syn1",symbol:"OGREX",_ogre:true,marketCap:14000,bondingProgressPct:38,holders:120},
+      {tokenMint:"syn2",symbol:"PEPE2",marketCap:6000,pairAgeSeconds:50,m5:62,volume5m:70000}]; }
   render(); renderStats();
 }
 function renderStats(){
   const live=BOSSES.length, legend=BOSSES.filter(b=>b._ogre).length;
-  $("#statbar").innerHTML=`<div class="stat"><div class="n">${live}</div><div class="l">Active bosses</div></div>`+
-    `<div class="stat"><div class="n">${legend}</div><div class="l">SlimeWire launches</div></div>`+
+  $("#statbar").innerHTML=`<div class="stat"><div class="n" id="sR">—</div><div class="l">Active raids</div></div>`+
+    `<div class="stat"><div class="n">${live}</div><div class="l">Boss coins</div></div>`+
     `<div class="stat"><div class="n">${store.raidPts||0}</div><div class="l">Your raid pts</div></div>`;
 }
 function render(){
-  const box=$("#bosses"); if(!BOSSES.length){ box.innerHTML='<div class="empty">No active bosses right now — check back, or launch one.</div>'; return; }
+  const box=$("#bosses"); if(!BOSSES.length){ box.innerHTML='<div class="empty">No boss coins right now.</div>'; return; }
   box.innerHTML="";
   for(const r of BOSSES){
     const sym=symOf(r), mint=mintOf(r), hp=bossHp(r), tag=bossTag(r), m5=num(r.m5??r.priceChangeM5);
     const isSyn=String(mint).startsWith("syn");
     const apeHref=isSyn?"/terminal":(SITE+"/t?ca="+encodeURIComponent(mint));
-    const raided=!!store.raided[mint];
     const av=API+"/api/web/token-image?mint="+encodeURIComponent(mint);
     const d=document.createElement("div"); d.className="boss"+(r._ogre?" legend":"");
     d.innerHTML=`<div class="tagrow">
-        <img class="av" src="${isSyn?"":av}" alt="" width="42" height="42" loading="lazy" decoding="async" onerror="this.style.visibility='hidden'">
-        <div><div class="nm">${r._ogre?"🧌 ":""}$${esc(sym)}</div><div class="sub">${r._community?("⚔️ crew raid by "+esc(r.by||"anon")):r._ogre?"Born on SlimeWire":"live pair · "+ageStr(r)+" old"}</div></div>
-        <span class="badge ${tag.c}">${tag.t}</span>
-      </div>
+        <img class="av" src="${isSyn?"":av}" alt="" width="40" height="40" loading="lazy" decoding="async" onerror="this.style.visibility='hidden'">
+        <div><div class="nm">${r._ogre?"🧌 ":""}$${esc(sym)}</div><div class="sub">${r._community?("crew raid by "+esc(r.by||"anon")):r._ogre?"Born on SlimeWire":ageStr(r)+" old"}</div></div>
+        <span class="badge ${tag.c}">${tag.t}</span></div>
       <div class="hpwrap"><div class="hl"><span>BOSS HP</span><span>${Math.round(hp)}%</span></div><div class="hpbar"><div class="hpfill" style="width:${hp}%"></div></div></div>
-      <div class="mrow">
-        <div class="m"><span>MC</span><b>${fmtUsd(r.marketCap||r.marketCapUsd)}</b></div>
+      <div class="mrow"><div class="m"><span>MC</span><b>${fmtUsd(r.marketCap||r.marketCapUsd)}</b></div>
         <div class="m"><span>5m</span><b class="${m5>=0?'up':'down'}">${m5>=0?'+':''}${Math.round(m5)}%</b></div>
-        <div class="m"><span>Vol 5m</span><b>${fmtUsd(r.volume5m)}</b></div>
-        ${num(r.holders)?`<div class="m"><span>Holders</span><b>${num(r.holders)}</b></div>`:""}
-      </div>
-      <div class="acts">
-        <a class="ape" href="${apeHref}" target="_blank" rel="noopener">⚡ Ape $${esc(sym)}</a>
+        <div class="m"><span>Vol 5m</span><b>${fmtUsd(r.volume5m)}</b></div></div>
+      <div class="acts"><a class="ape" href="${apeHref}" target="_blank" rel="noopener">⚡ Ape $${esc(sym)}</a>
         <a href="${apeHref}" target="_blank" rel="noopener">📈 Chart</a>
-        <button class="raid ${raided?'done':''}" data-raid="${esc(mint)}" data-sym="${esc(sym)}">${raided?'🔥 Raided':'⚔️ Join Raid'}</button>
-      </div>`;
+        <button data-raidcoin="${esc(mint)}" data-sym="${esc(sym)}">⚔️ Rally</button></div>`;
     box.appendChild(d);
   }
-  $$("[data-raid]").forEach(b=>b.onclick=()=>joinRaid(b.dataset.raid,b.dataset.sym,b));
+  $$("[data-raidcoin]").forEach(b=>b.onclick=()=>rallyCoin(b.dataset.raidcoin,b.dataset.sym,b));
 }
-function joinRaid(mint,sym,btn){
+function rallyCoin(mint,sym,btn){
   const isSyn=String(mint).startsWith("syn");
-  const link=isSyn?(SITE+"/raids"):(SITE+"/t?ca="+encodeURIComponent(mint));
-  const txt=`⚔️ RAIDING $${sym} on @SlimeWire 🐸🔥\n\nEvery launch is a boss — join the raid, ape the survivors.\nCA: ${isSyn?"(live on slimewire)":mint}\n\n${SITE}/raids`;
+  const txt=`⚔️ RAIDING $${sym} on @SlimeWire 🐸🔥\n\nEvery launch is a boss — rally the swamp, ape the survivors.\nCA: ${isSyn?"(live on slimewire)":mint}\n\n${SITE}/raids`;
   window.open("https://twitter.com/intent/tweet?text="+encodeURIComponent(txt),"_blank");
-  if(!store.raided[mint]){ store.raided[mint]=Date.now(); store.raidPts=(store.raidPts||0)+10; save();
-    if(btn){ btn.classList.add("done"); btn.textContent="🔥 Raided"; }
-    toast("⚔️ +10 raid pts! Rally your crew for more."); renderStats(); submitRaid();
-  } else { toast("Already raided this boss — bring your crew!"); }
+  if(!store.raided["c:"+mint]){ store.raided["c:"+mint]=Date.now(); store.raidPts=(store.raidPts||0)+10; save();
+    if(btn){ btn.textContent="🔥 Rallied"; } toast("⚔️ +10 raid pts! Rally your crew."); renderStats(); submitRaid(); }
+  else toast("Already rallied — bring your crew!");
 }
 let subT; function submitRaid(){ clearTimeout(subT); subT=setTimeout(async()=>{
   const tag=($("#tag").value||store.lbName||"").trim(); if(tag){ store.lbName=tag.slice(0,16); save(); }
   try{ await fetch(API+"/api/web/swamp-leaderboard",{method:"POST",headers:{"content-type":"application/json"},
-    body:JSON.stringify({mode:"raids",score:store.raidPts||0,name:(store.lbName||"anon"),clan:store.clan||"",meta:Object.keys(store.raided).length+" bosses"})}); }catch(_){}
+    body:JSON.stringify({mode:"raids",score:store.raidPts||0,name:(store.lbName||"anon"),clan:store.clan||"",meta:Object.keys(store.raided).length+" raids"})}); }catch(_){}
   loadLb(curLb);
 },700); }
 
@@ -267,26 +326,20 @@ async function loadLb(mode){ curLb=mode;
 $$("[data-lb]").forEach(b=>b.onclick=()=>{ $$("[data-lb]").forEach(x=>x.classList.remove("on")); b.classList.add("on"); loadLb(b.dataset.lb); });
 $("#tag").value=store.lbName||"";
 $("#tag").addEventListener("change",()=>{ store.lbName=$("#tag").value.trim().slice(0,16); save(); });
-
 $("#rSubmit").onclick=async()=>{
   const mint=($("#rMint").value||"").trim(), sym=($("#rSym").value||"").trim();
   if(mint.replace(/[^A-Za-z0-9]/g,"").length<32){ toast("Paste a valid token contract address (mint)"); return; }
   try{ const r=await fetch(API+"/api/web/community-raids",{method:"POST",headers:{"content-type":"application/json"},
       body:JSON.stringify({mint,symbol:sym,by:(store.lbName||"anon")})}); const j=await r.json();
-    if(j&&j.ok){ toast("🔥 Raid started! Rally your crew."); $("#rMint").value=""; $("#rSym").value=""; load();
-      const txt=`⚔️ RAIDING $${j.symbol} on @SlimeWire 🐸🔥\nJoin the raid 👇\n${SITE}/raids`;
-      window.open("https://twitter.com/intent/tweet?text="+encodeURIComponent(txt),"_blank");
+    if(j&&j.ok){ toast("🔥 On the board! Rally your crew."); $("#rMint").value=""; $("#rSym").value=""; load();
+      window.open("https://twitter.com/intent/tweet?text="+encodeURIComponent(`⚔️ RAIDING $${j.symbol||sym} on @SlimeWire 🐸🔥\nJoin the raid 👇\n${SITE}/raids`),"_blank");
     } else toast(j&&j.error?("Couldn't start: "+j.error):"Couldn't start raid"); }catch(_){ toast("Network error"); }
 };
-async function loadPosts(){ try{ const r=await fetch(API+"/api/web/raid-posts",{cache:"no-store"}); const j=await r.json();
-    const rows=(j&&j.posts)||[]; const box=$("#posts");
-    if(!rows.length){ box.innerHTML='<div class="empty">no raid posts yet — use <b>/raid</b> in Telegram</div>'; return; }
-    box.innerHTML=rows.slice(0,8).map((p,i)=>`<div class="row"><span class="rk">#${i+1}</span><a class="nm" href="${esc(p.url)}" target="_blank" rel="noopener" style="color:var(--blue)">${esc(p.by||"anon")}${p.symbol?(" · $"+esc(p.symbol)):""}</a><span class="sc">${j.liveMetrics?("❤"+(p.likes||0)+" ↻"+(p.rts||0)):("🔥"+(p.score||0))}</span></div>`).join("");
-  }catch(_){ } }
-load(); loadLb("raids"); loadPosts();
-setInterval(()=>{ if(document.hidden) return; load(); loadPosts(); }, 60000);
+function refreshRaidCount(){ fetch(API+"/api/web/raid-posts",{cache:"no-store"}).then(r=>r.json()).then(j=>{ const el=$("#sR"); if(el) el.textContent=((j&&j.posts)||[]).length; }).catch(()=>{}); }
+load(); loadLb("raids"); loadPosts(); setTimeout(refreshRaidCount,400);
+setInterval(()=>{ if(document.hidden) return; load(); loadPosts(); refreshRaidCount(); }, 60000);
 // test hook
-window.__RAIDS={ get bosses(){return BOSSES;}, joinRaid:()=>{ if(BOSSES[0]) joinRaid(mintOf(BOSSES[0]),symOf(BOSSES[0]),null); }, get pts(){return store.raidPts;}, load };
+window.__RAIDS={ get bosses(){return BOSSES;}, rally:()=>{ if(BOSSES[0]) rallyCoin(mintOf(BOSSES[0]),symOf(BOSSES[0]),null); }, get pts(){return store.raidPts;}, load, loadPosts };
 })();
 </script>
 </body>

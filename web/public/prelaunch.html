@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Prelaunch — SlimeWire</title>
+<meta name="description" content="SlimeWire prelaunch hype. Countdown to launch, fill the hype meter, claim an allowlist spot, refer the swamp, and ride the survivors.">
+<meta property="og:title" content="SlimeWire Prelaunch — fill the cauldron">
+<meta property="og:description" content="Countdown to launch. Fill the hype meter with the swamp, claim an allowlist spot, refer your crew, ride the survivors.">
+<meta property="og:image" content="https://www.slimewire.org/assets/slimewire/swamp/art/og-survivors.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="/assets/slimewire/svg/slimewire-mark.svg">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;700;800;900&display=swap" rel="stylesheet">
+<style>
+  :root{ --bg:#04070a; --card:rgba(9,17,12,0.72); --line:rgba(141,255,90,0.16); --line2:rgba(141,255,90,0.34);
+    --tx:#eafff0; --dim:#8fae9b; --green:#8dff5a; --green2:#27e06a; --red:#ff6b6b; --gold:#ffd45a; --gold2:#b9892b; --purp:#a98bff; }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0; background:var(--bg); color:var(--tx); font-family:Inter,system-ui,sans-serif; -webkit-font-smoothing:antialiased;}
+  body{min-height:100vh; position:relative; overflow-x:hidden;
+    background:
+      radial-gradient(120% 70% at 18% -8%, rgba(39,224,106,0.16), transparent 60%),
+      radial-gradient(110% 60% at 92% 4%, rgba(255,212,90,0.08), transparent 55%),
+      radial-gradient(140% 90% at 50% 120%, rgba(20,60,32,0.6), transparent 60%),
+      linear-gradient(180deg,#04070a,#050b08 60%,#04070a);}
+  a{color:inherit; text-decoration:none;}
+  .wrap{max-width:1100px; margin:0 auto; padding:0 16px calc(64px + env(safe-area-inset-bottom));}
+  header.top{position:sticky; top:0; z-index:20; background:rgba(4,7,10,0.86); border-bottom:1px solid var(--line);}
+  .topin{max-width:1100px; margin:0 auto; display:flex; align-items:center; gap:14px; padding:11px 16px;}
+  .brand{display:flex; align-items:center; gap:9px; font-weight:900; font-size:1.05rem;}
+  .brand img{width:26px; height:26px;} .brand b{color:var(--green);}
+  .navlinks{margin-left:auto; display:flex; gap:4px; align-items:center;}
+  .navlinks a{color:var(--dim); font-weight:800; font-size:0.86rem; padding:7px 11px; border-radius:10px; transition:.15s;}
+  .navlinks a:hover{color:var(--tx); background:rgba(141,255,90,0.08);}
+  .navlinks a.cta{color:#05210f; background:linear-gradient(135deg,var(--green),var(--green2));}
+  .hero{padding:30px 0 8px;}
+  .hero .eyebrow{display:inline-flex; align-items:center; gap:7px; font-size:0.72rem; font-weight:900; letter-spacing:1px; text-transform:uppercase;
+    color:var(--gold); background:rgba(255,212,90,0.1); border:1px solid rgba(255,212,90,0.28); padding:5px 12px; border-radius:99px;}
+  .hero h1{font-size:clamp(1.9rem,6vw,3rem); margin:12px 0 6px; font-weight:900; letter-spacing:-0.6px; line-height:1.02;}
+  .hero h1 .slime{color:var(--green); text-shadow:0 0 26px rgba(141,255,90,0.45);}
+  .hero p{color:#bfe9cc; max-width:660px; margin:0; line-height:1.55; font-size:1rem;}
+  .layout{display:grid; grid-template-columns:1fr; gap:22px; margin-top:24px;}
+  @media(min-width:900px){ .layout{ grid-template-columns:1fr 320px; } }
+  /* featured cauldron */
+  .feat{position:relative; background:var(--card); border:1px solid var(--line2); border-radius:22px; padding:22px; overflow:hidden; backdrop-filter:blur(10px); box-shadow:0 0 40px rgba(39,224,106,0.08);}
+  .feat::before{content:""; position:absolute; left:0; right:0; top:0; height:1px; background:linear-gradient(90deg,transparent,var(--line2),transparent);}
+  .feat .ftop{display:flex; align-items:center; gap:13px; margin-bottom:6px;}
+  .feat .fav{width:54px; height:54px; border-radius:15px; background:#08120b; border:1px solid var(--line2); object-fit:cover; flex:none;}
+  .feat .fnm{font-weight:900; font-size:1.45rem; line-height:1.05;} .feat .fby{color:var(--dim); font-size:0.78rem; font-weight:700;}
+  .feat .live{margin-left:auto; font-size:0.66rem; font-weight:900; letter-spacing:0.6px; text-transform:uppercase; color:var(--green); background:rgba(141,255,90,0.12); border:1px solid var(--line2); padding:5px 11px; border-radius:99px;}
+  .blurb{color:#cfe9d6; font-size:0.92rem; line-height:1.5; margin:12px 0 0;}
+  /* countdown */
+  .cd{display:flex; gap:9px; justify-content:center; margin:20px 0 6px;}
+  .cd .seg{background:rgba(4,12,7,0.72); border:1px solid var(--line2); border-radius:14px; padding:11px 0; min-width:70px; text-align:center; flex:1; max-width:92px;}
+  .cd .seg b{display:block; font-size:1.9rem; font-weight:900; font-variant-numeric:tabular-nums; color:var(--green); text-shadow:0 0 16px rgba(141,255,90,0.4); line-height:1;}
+  .cd .seg span{display:block; font-size:0.6rem; color:var(--dim); font-weight:800; text-transform:uppercase; letter-spacing:0.8px; margin-top:6px;}
+  .cd.ended .seg b{color:var(--gold);}
+  .cdlbl{text-align:center; color:var(--dim); font-size:0.74rem; font-weight:800; text-transform:uppercase; letter-spacing:0.8px; margin-bottom:4px;}
+  /* meters */
+  .meter{margin:18px 0 4px;}
+  .meter .ml{display:flex; justify-content:space-between; font-size:0.76rem; color:var(--dim); font-weight:800; margin-bottom:6px;}
+  .meter .ml b{color:var(--green); font-variant-numeric:tabular-nums;}
+  .mbar{height:16px; border-radius:99px; background:rgba(4,12,7,0.72); border:1px solid var(--line); overflow:hidden; position:relative;}
+  .mfill{height:100%; border-radius:99px; background:linear-gradient(90deg,#1f8f3e,var(--green2) 55%,var(--green)); box-shadow:0 0 18px rgba(141,255,90,0.5) inset; transition:width .9s cubic-bezier(.4,1.2,.5,1); min-width:8px; position:relative;}
+  .mfill::after{content:""; position:absolute; right:0; top:0; bottom:0; width:16px; background:linear-gradient(90deg,transparent,rgba(223,255,206,0.85)); border-radius:99px;}
+  .allow{display:flex; align-items:center; gap:10px; margin-top:14px; padding:12px 14px; background:rgba(141,255,90,0.05); border:1px solid var(--line); border-radius:13px;}
+  .allow .an{font-weight:900; font-size:1.5rem; color:var(--green); font-variant-numeric:tabular-nums;} .allow .al{color:var(--dim); font-size:0.8rem; font-weight:700; line-height:1.3;}
+  /* tasks */
+  .tasks{display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin:16px 0 4px;}
+  @media(max-width:430px){ .tasks{ grid-template-columns:1fr; } }
+  .task{display:flex; align-items:center; justify-content:center; gap:7px; border:1px solid var(--line2); background:rgba(141,255,90,0.05); color:var(--tx); border-radius:12px; padding:12px; font-weight:800; font-size:0.86rem; cursor:pointer; transition:.12s; font-family:inherit;}
+  .task:hover{background:rgba(141,255,90,0.12);} .task.done{background:rgba(141,255,90,0.16); border-color:var(--green); color:var(--green);}
+  .cta-row{display:grid; grid-template-columns:1fr auto; gap:9px; margin-top:14px;}
+  .btnfull{display:flex; align-items:center; justify-content:center; gap:7px; text-align:center; background:linear-gradient(135deg,var(--green),var(--green2)); color:#05210f; border-radius:13px; padding:14px; font-weight:900; cursor:pointer; border:0; width:100%; font-family:inherit; font-size:0.98rem; box-shadow:0 8px 26px rgba(39,224,106,0.3);}
+  .btngold{background:linear-gradient(135deg,var(--gold),var(--gold2)); color:#2a1c02; box-shadow:none;}
+  .btnghost{background:rgba(141,255,90,0.05); color:var(--tx); border:1px solid var(--line2); box-shadow:none; padding:14px 16px;}
+  .reflink{display:flex; gap:8px; align-items:center; margin-top:14px; padding:11px 13px; background:rgba(4,12,7,0.6); border:1px dashed var(--line2); border-radius:12px;}
+  .reflink code{flex:1; font-size:0.76rem; color:var(--green); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:ui-monospace,monospace;}
+  .reflink button{background:rgba(141,255,90,0.1); border:1px solid var(--line2); color:var(--tx); border-radius:9px; padding:8px 12px; font-weight:800; cursor:pointer; font-family:inherit; font-size:0.8rem;}
+  /* side */
+  .side .panel{background:var(--card); border:1px solid var(--line); border-radius:16px; padding:16px; margin-bottom:15px; backdrop-filter:blur(8px);}
+  .panel h3{margin:0 0 10px; font-size:0.98rem; font-weight:900;}
+  .lb .row{display:flex; align-items:center; gap:9px; padding:8px 4px; font-size:0.86rem; border-bottom:1px solid var(--line);} .lb .row:last-child{border:0;}
+  .lb .rk{width:22px; font-weight:900; color:var(--dim);} .lb .row:nth-child(1) .rk{color:var(--gold);}
+  .lb .nm{flex:1; font-weight:800; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;} .lb .sc{font-weight:900; color:var(--green); font-variant-numeric:tabular-nums;}
+  .mini{display:flex; flex-direction:column; gap:10px;}
+  .mini .row{display:flex; align-items:center; gap:11px; padding:10px; background:rgba(141,255,90,0.04); border:1px solid var(--line); border-radius:13px; cursor:pointer; transition:.12s;}
+  .mini .row:hover{border-color:var(--line2);} .mini .row.on{border-color:var(--green);}
+  .mini .av{width:38px; height:38px; border-radius:10px; background:#08120b; border:1px solid var(--line); object-fit:cover; flex:none;}
+  .mini .nm{font-weight:900; font-size:0.92rem;} .mini .sub{color:var(--dim); font-size:0.72rem; font-weight:700;}
+  .mini .hp{margin-left:auto; font-weight:900; color:var(--green); font-size:0.86rem;}
+  .promo{background:linear-gradient(160deg,rgba(255,212,90,0.1),rgba(141,255,90,0.05)); border:1px solid rgba(255,212,90,0.24);}
+  .promo p{color:#cfe9d6; font-size:0.84rem; line-height:1.5; margin:0 0 12px;}
+  .tagin{width:100%; background:#08120b; border:1px solid var(--line2); color:var(--tx); border-radius:10px; padding:10px 12px; font-weight:700; outline:none; margin-bottom:8px; font-family:inherit;}
+  .tagin:focus{border-color:var(--green);} textarea.tagin{resize:vertical; min-height:60px;}
+  .empty{color:var(--dim); text-align:center; padding:26px; font-size:0.9rem;}
+  .toast{position:fixed; left:50%; bottom:26px; transform:translateX(-50%); background:#0a160e; border:1px solid var(--line2); color:var(--tx); padding:11px 20px; border-radius:12px; font-weight:800; opacity:0; transition:.25s; z-index:40; box-shadow:0 12px 44px rgba(0,0,0,0.6); pointer-events:none; max-width:90vw; text-align:center;}
+  .toast.on{opacity:1;}
+  .foot{color:var(--dim); font-size:0.8rem; text-align:center; padding:30px 0 10px;} .foot a{color:var(--green);}
+  .spin{width:34px;height:34px;border-radius:50%;border:3px solid rgba(141,255,90,0.12);border-top-color:var(--green);animation:sp 1s linear infinite;margin:36px auto;}
+  @keyframes sp{to{transform:rotate(360deg);}}
+</style>
+</head>
+<body>
+<header class="top"><div class="topin">
+  <a class="brand" href="/"><img src="/assets/slimewire/svg/slimewire-mark.svg" alt="" onerror="this.style.display='none'">Slime<b>Wire</b></a>
+  <nav class="navlinks">
+    <a href="/hub">Hub</a>
+    <a href="/raids">Raids</a>
+    <a href="/launch">Launch</a>
+    <a class="cta" href="/terminal">Terminal</a>
+  </nav>
+</div></header>
+
+<div class="wrap">
+  <section class="hero">
+    <span class="eyebrow">🔥 Fill the cauldron before it drops</span>
+    <h1>SlimeWire <span class="slime">Prelaunch</span></h1>
+    <p>The swamp hypes a coin <b>before</b> it launches. Watch the countdown, fill the <b>hype meter</b>, grab an <b>allowlist spot</b>, refer your crew for the leaderboard — then ride the survivors when it drops.</p>
+  </section>
+
+  <div class="layout">
+    <main>
+      <div id="feat"><div class="spin"></div></div>
+    </main>
+    <aside class="side">
+      <div class="panel">
+        <h3>🏆 Top referrers</h3>
+        <div class="lb" id="refs"><div class="empty">Share your link to climb. 🐸</div></div>
+      </div>
+      <div class="panel">
+        <h3>⏳ More prelaunches</h3>
+        <div class="mini" id="more"><div class="empty">loading…</div></div>
+      </div>
+      <div class="panel promo">
+        <h3>🚀 List your prelaunch</h3>
+        <p>Building a coin? Put it in the cauldron and let the swamp hype it before you launch.</p>
+        <input class="tagin" id="pName" maxlength="32" placeholder="project name">
+        <input class="tagin" id="pSym" maxlength="12" placeholder="$TICKER">
+        <div style="display:flex;gap:8px"><input class="tagin" id="pDays" inputmode="numeric" placeholder="days (1-30)" style="flex:1"><input class="tagin" id="pTarget" inputmode="numeric" placeholder="hype goal" style="flex:1"></div>
+        <input class="tagin" id="pX" placeholder="X link (optional)">
+        <input class="tagin" id="pTg" placeholder="Telegram link (optional)">
+        <textarea class="tagin" id="pBlurb" maxlength="280" placeholder="one-line pitch (optional)"></textarea>
+        <button class="btnfull btngold" id="pSubmit">🔥 Add to the cauldron</button>
+      </div>
+    </aside>
+  </div>
+  <div class="foot">SlimeWire · prelaunch hype · <a href="/raids">Raids</a> · <a href="/launch">Launch</a> · <a href="/proof">Proof</a></div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+(function(){
+const $=(s)=>document.querySelector(s), $$=(s)=>[...document.querySelectorAll(s)];
+const API = (location.hostname.includes("onrender.com")||location.hostname==="localhost"||location.hostname==="127.0.0.1") ? "" : "https://ogrevolbot.onrender.com";
+const SITE="https://www.slimewire.org";
+const KEY="slimewireSwamp";
+const store=(()=>{ try{ return JSON.parse(localStorage.getItem(KEY)||"{}"); }catch{ return {}; } })();
+if(!store.preTasks||typeof store.preTasks!=="object") store.preTasks={};
+const save=()=>{ try{ localStorage.setItem(KEY,JSON.stringify(store)); }catch(_){} };
+const num=(v)=>{ const n=Number(v); return isFinite(n)?n:0; };
+function fmtN(n){ n=num(n); if(n>=1e6)return (n/1e6).toFixed(1)+"M"; if(n>=1e3)return (n/1e3).toFixed(1)+"k"; return String(Math.round(n)); }
+let toastT; function toast(m){ const t=$("#toast"); t.textContent=m; t.classList.add("on"); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove("on"),2300); }
+function esc(s){ return String(s).replace(/[<>&"]/g,c=>({"<":"&lt;",">":"&gt;","&":"&amp;","\"":"&quot;"}[c])); }
+const q=new URLSearchParams(location.search);
+const REF=(q.get("ref")||"").replace(/[^A-Za-z0-9_$. -]/g,"").slice(0,16);
+const myTag=()=>(store.lbName||"").trim().slice(0,16);
+
+let LIST=[], FEAT=null, cdT=null;
+function pickFeatured(){ const id=q.get("id"); if(id){ const f=LIST.find(p=>p.id===id); if(f) return f; }
+  const live=LIST.filter(p=>p.live); return (live[0]||LIST[0]||null); }
+
+function startCountdown(deadline){
+  clearInterval(cdT);
+  const tick=()=>{ const ms=Date.parse(deadline)-Date.now(); const box=$("#cd"); if(!box) return;
+    if(ms<=0){ box.classList.add("ended"); box.innerHTML=seg("00","days")+seg("00","hrs")+seg("00","min")+seg("00","sec"); $("#cdlbl")&&($("#cdlbl").textContent="🚀 Launching now"); clearInterval(cdT); return; }
+    const s=Math.floor(ms/1000); const d=Math.floor(s/86400), h=Math.floor(s%86400/3600), m=Math.floor(s%3600/60), sec=s%60;
+    box.innerHTML=seg(String(d).padStart(2,"0"),"days")+seg(String(h).padStart(2,"0"),"hrs")+seg(String(m).padStart(2,"0"),"min")+seg(String(sec).padStart(2,"0"),"sec"); };
+  function seg(v,l){ return `<div class="seg"><b>${v}</b><span>${l}</span></div>`; }
+  tick(); cdT=setInterval(tick,1000);
+}
+
+function renderFeatured(){
+  FEAT=pickFeatured(); const box=$("#feat");
+  if(!FEAT){ box.innerHTML='<div class="feat"><div class="empty">No prelaunches in the cauldron yet — be the first to add one. 🔥</div></div>'; return; }
+  const p=FEAT, target=Math.max(1,num(p.target)||50), interest=num(p.interest), backers=num(p.backerCount);
+  const hypePct=Math.max(2,Math.min(100,Math.round(interest/target*100)));
+  const av=p.image?esc(p.image):(API+"/api/web/token-image?mint="+encodeURIComponent(p.symbol||""));
+  const refUrl=SITE+"/prelaunch?id="+encodeURIComponent(p.id)+(myTag()?("&ref="+encodeURIComponent(myTag())):"");
+  const tdone=store.preTasks[p.id]||{};
+  box.innerHTML=`<div class="feat">
+    <div class="ftop">
+      <img class="fav" src="${av}" alt="" onerror="this.style.visibility='hidden'">
+      <div><div class="fnm">$${esc(p.symbol||"")} <span style="color:var(--dim);font-weight:700;font-size:0.9rem">${esc(p.name||"")}</span></div><div class="fby">by ${esc(p.by||"anon")}</div></div>
+      <span class="live">${p.live?"● Live":"Launched"}</span>
+    </div>
+    ${p.blurb?`<div class="blurb">${esc(p.blurb)}</div>`:""}
+    <div class="cdlbl" id="cdlbl">⏳ Launches in</div>
+    <div class="cd" id="cd"></div>
+    <div class="meter"><div class="ml"><span>🔥 Hype meter</span><b>${fmtN(interest)} / ${fmtN(target)}</b></div><div class="mbar"><div class="mfill" style="width:${hypePct}%"></div></div></div>
+    <div class="allow"><div class="an">${fmtN(backers)}</div><div class="al">on the <b>allowlist</b> — claim your spot before launch</div></div>
+    <div class="tasks">
+      <button class="task ${tdone.x?'done':''}" data-task="x" ${p.x?"":"disabled style=opacity:.4"}>${tdone.x?'✓ ':''}𝕏 Follow</button>
+      <button class="task ${tdone.tg?'done':''}" data-task="tg" ${p.tg?"":"disabled style=opacity:.4"}>${tdone.tg?'✓ ':''}✈ Join TG</button>
+      <button class="task ${tdone.rt?'done':''}" data-task="rt">${tdone.rt?'✓ ':''}🔁 Hype it</button>
+    </div>
+    <div class="cta-row">
+      <button class="btnfull" id="joinBtn">🔥 Claim allowlist + hype</button>
+      <button class="btnfull btnghost" id="shareBtn">𝕏 Share</button>
+    </div>
+    <div class="reflink"><code id="refUrl">${esc(refUrl)}</code><button id="copyRef">Copy</button></div>
+  </div>`;
+  startCountdown(p.deadline);
+  $$("[data-task]").forEach(b=>b.addEventListener("click",()=>doTask(b.dataset.task,b)));
+  $("#joinBtn").onclick=()=>joinHype(true);
+  $("#shareBtn").onclick=shareFeat;
+  $("#copyRef").onclick=()=>{ navigator.clipboard&&navigator.clipboard.writeText(refUrl); toast("Referral link copied — share to climb the board!"); };
+}
+function doTask(kind,btn){ const p=FEAT; if(!p) return;
+  if(kind==="x"&&p.x) window.open(p.x,"_blank");
+  else if(kind==="tg"&&p.tg) window.open(p.tg,"_blank");
+  else if(kind==="rt") shareFeat();
+  const t=store.preTasks[p.id]||(store.preTasks[p.id]={}); if(!t[kind]){ t[kind]=1; save(); btn.classList.add("done"); btn.textContent="✓ "+btn.textContent.replace(/^✓ /,""); joinHype(false); }
+}
+function shareFeat(){ const p=FEAT; if(!p) return;
+  const refUrl=SITE+"/prelaunch?id="+encodeURIComponent(p.id)+(myTag()?("&ref="+encodeURIComponent(myTag())):"");
+  const txt=`🔥 $${p.symbol} prelaunch is filling the cauldron on @SlimeWire 🐸\nCountdown's live — claim an allowlist spot before it drops 👇\n${refUrl}`;
+  window.open("https://twitter.com/intent/tweet?text="+encodeURIComponent(txt),"_blank");
+  const t=store.preTasks[p.id]||(store.preTasks[p.id]={}); if(!t.rt){ t.rt=1; save(); }
+}
+async function joinHype(claim){ const p=FEAT; if(!p) return;
+  try{ const r=await fetch(API+"/api/web/presale-interest",{method:"POST",headers:{"content-type":"application/json"},
+      body:JSON.stringify({id:p.id, by:(myTag()||""), ref:REF})}); const j=await r.json();
+    if(j&&j.ok){ p.interest=num(j.interest); if(typeof j.backerCount==="number") p.backerCount=j.backerCount; renderFeatured();
+      if(claim) toast(myTag()?"🔥 You're on the allowlist! Refer your crew to climb.":"🔥 Hype added! Set a raider tag to claim your spot."); }
+  }catch(_){ if(claim) toast("Network error — try again."); }
+}
+
+async function load(){
+  try{ const r=await fetch(API+"/api/web/presales",{cache:"no-store"}); const j=await r.json(); LIST=(j&&j.presales)||[]; }catch(_){ LIST=[]; }
+  if(!LIST.length){ LIST=[{id:"demo",symbol:"OGRE",name:"Swamp King",by:"slimewire",live:true,interest:312,backerCount:208,target:500,
+    deadline:new Date(Date.now()+ (1*86400+6*3600+12*60)*1000).toISOString(), blurb:"The boss of the swamp. Fill the cauldron.", x:"https://twitter.com/SlimeWire", tg:"https://t.me/SlimeWireBot", topRefs:[{tag:"frogfather",n:34},{tag:"slimelord",n:21}]}]; }
+  renderFeatured(); renderMore(); renderRefs();
+}
+function renderMore(){ const box=$("#more"); const others=LIST.filter(p=>!FEAT||p.id!==FEAT.id).slice(0,8);
+  if(!others.length){ box.innerHTML='<div class="empty">just the one cooking right now 🔥</div>'; return; }
+  box.innerHTML=""; for(const p of others){ const tgt=Math.max(1,num(p.target)||50); const pct=Math.min(100,Math.round(num(p.interest)/tgt*100));
+    const d=document.createElement("div"); d.className="row"+(FEAT&&p.id===FEAT.id?" on":"");
+    d.innerHTML=`<img class="av" src="${p.image?esc(p.image):(API+"/api/web/token-image?mint="+encodeURIComponent(p.symbol||""))}" onerror="this.style.visibility='hidden'"><div><div class="nm">$${esc(p.symbol||"")}</div><div class="sub">${p.live?"● live":"ended"} · ${fmtN(num(p.interest))} hype</div></div><div class="hp">${pct}%</div>`;
+    d.onclick=()=>{ FEAT=p; renderFeatured(); renderMore(); renderRefs(); window.scrollTo({top:0,behavior:"smooth"}); };
+    box.appendChild(d); }
+}
+function renderRefs(){ const box=$("#refs"); const refs=(FEAT&&FEAT.topRefs)||[];
+  if(!refs.length){ box.innerHTML='<div class="empty">Share your link to be the first referrer. 🐸</div>'; return; }
+  box.innerHTML=refs.map((r,i)=>`<div class="row ${r.tag===myTag()?'me':''}"><span class="rk">#${i+1}</span><span class="nm">${esc(r.tag)}</span><span class="sc">${num(r.n)} refs</span></div>`).join(""); }
+
+$("#pSubmit").onclick=async()=>{
+  const name=($("#pName").value||"").trim(), symbol=($("#pSym").value||"").trim();
+  if(!name||!symbol){ toast("Project name + ticker required"); return; }
+  const body={ name, symbol, days:num($("#pDays").value)||3, target:num($("#pTarget").value)||50,
+    x:($("#pX").value||"").trim(), tg:($("#pTg").value||"").trim(), blurb:($("#pBlurb").value||"").trim(), by:(myTag()||"anon") };
+  try{ const r=await fetch(API+"/api/web/presales",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)}); const j=await r.json();
+    if(j&&j.ok){ toast("🔥 In the cauldron! Share to fill the hype meter."); ["pName","pSym","pDays","pTarget","pX","pTg","pBlurb"].forEach(id=>$("#"+id).value=""); load(); }
+    else toast(j&&j.error?("Couldn't add: "+j.error):"Couldn't add prelaunch"); }catch(_){ toast("Network error"); }
+};
+load();
+setInterval(()=>{ if(document.hidden) return; load(); }, 45000);
+window.__PRELAUNCH={ get list(){return LIST;}, get feat(){return FEAT;}, load };
+})();
+</script>
+</body>
+</html>

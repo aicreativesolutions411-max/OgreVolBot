@@ -1341,9 +1341,36 @@ button:disabled {
   animation: navGamePulse 2.4s ease-in-out infinite;
 }
 .tabs a.nav-game.nav-raids { background: linear-gradient(135deg, #ff6b6b, #ffcf5a); }
+.tabs a.nav-game.nav-prelaunch { background: linear-gradient(135deg, #ffcf5a, #8dff5a); }
 .tabs a.nav-game.nav-hub { background: linear-gradient(135deg, #b06bff, #c9b3ff); }
 .tabs a.nav-game:hover { filter: brightness(1.06); transform: translateY(-1px); }
 @keyframes navGamePulse { 0%, 100% { box-shadow: 0 0 12px rgba(114, 255, 35, 0.3); } 50% { box-shadow: 0 0 26px rgba(114, 255, 35, 0.65); } }
+
+/* PREMIUM "Pro" pill — the autopilot tier. Dark glass + gold ring + the Higgs slime-crown emblem
+   as its icon (the emblem has a dark bg baked in, so it blends into the dark pill). Specificity
+   .tabs button.tab-pro-pill (0,2,1) deliberately beats .tabs button so the premium look always wins. */
+.tabs button.tab-pro-pill {
+  padding: 8px 15px;
+  border-radius: 12px;
+  font-weight: 900;
+  font-size: 0.9rem;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+  color: #ffd45a;
+  border: 1px solid rgba(255, 212, 90, 0.55);
+  background: linear-gradient(135deg, rgba(255, 212, 90, 0.15), rgba(141, 255, 90, 0.10));
+  box-shadow: 0 0 16px rgba(255, 212, 90, 0.25);
+  animation: proPulse 2.8s ease-in-out infinite;
+}
+.tabs button.tab-pro-pill::before {
+  background-image: url("./assets/slimewire/pro-emblem.webp");
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  filter: drop-shadow(0 0 6px rgba(141, 255, 90, 0.5));
+}
+.tabs button.tab-pro-pill:hover { filter: brightness(1.08); transform: translateY(-1px); }
+@keyframes proPulse { 0%, 100% { box-shadow: 0 0 12px rgba(255, 212, 90, 0.28); } 50% { box-shadow: 0 0 26px rgba(255, 212, 90, 0.6); } }
 
 .tabs button[data-active="true"],
 .mode-row button[data-active="true"] {

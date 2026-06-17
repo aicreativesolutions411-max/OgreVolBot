@@ -40,3 +40,6 @@ v2-*.png
 v3-*.png
 ogre*.png
 vid-*.mp4
+
+# local dev preview config
+.claude/launch.json

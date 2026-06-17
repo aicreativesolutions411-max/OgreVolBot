@@ -1002,19 +1002,24 @@ const autopilotEngine = createAutopilotEngine({
   // deduped, and filtered to genuine depth (>= $20k liquidity) so phantom dust never reaches the
   // scalp brain. The engine still applies its own liquidScore + $20k minLiqAbs gate on top.
   getLiquidFeed: async () => {
-    let vol = null, mom = null;
+    let vol = null, mom = null, liqf = null;
     try {
-      [vol, mom] = await Promise.all([
+      [vol, mom, liqf] = await Promise.all([
         webLivePairs("autopilot", "live", { sort: "volume" }).catch(() => null),
-        webLivePairs("autopilot", "live", { sort: "momentum" }).catch(() => null)
+        webLivePairs("autopilot", "live", { sort: "momentum" }).catch(() => null),
+        webLivePairs("autopilot", "live", { sort: "liquidity" }).catch(() => null)
       ]);
     } catch {}
     const seen = new Set();
     const out = [];
-    for (const feed of [vol, mom]) {
+    // $6k is the real-depth floor for the last-hour window (those movers run ~$4-15k liquidity;
+    // a $20k floor returned an EMPTY feed every cycle, so scalp fell back to fresh dust and bought
+    // nothing). $6k still filters pure phantom dust and fills tiny scalp bets cleanly; the engine's
+    // liquidScore + minLiqAbs do the finer gating. Liquidity sort surfaces the deepest coins first.
+    for (const feed of [liqf, vol, mom]) {
       for (const r of (Array.isArray(feed?.rows) ? feed.rows : [])) {
         if (!r || !r.tokenMint || seen.has(r.tokenMint)) continue;
-        if ((Number(r.liquidityUsd) || 0) < 20000) continue; // real depth only — the whole point
+        if ((Number(r.liquidityUsd) || 0) < 6000) continue; // real depth only — the whole point
         seen.add(r.tokenMint);
         out.push({
           tokenMint: r.tokenMint,
@@ -1035,7 +1040,9 @@ const autopilotEngine = createAutopilotEngine({
         });
       }
     }
-    return out;
+    // Deepest liquidity first — scalp should prefer the most realizable (cleanest-fill) movers.
+    out.sort((a, b) => (Number(b.liquidityUsd) || 0) - (Number(a.liquidityUsd) || 0));
+    return out.slice(0, 60);
   },
   getPairLite: async (mint) => {
     // FAST PATH for pump.fun coins: the live PumpPortal trade tick is in-memory
@@ -2469,6 +2476,10 @@ function startHealthServer() {
     }
     if (request.method === "GET" && ["/launch", "/become-a-boss", "/launchpad-info"].includes(requestUrl.pathname)) {
       await serveStaticHtmlPage(response, "launch.html");
+      return;
+    }
+    if (request.method === "GET" && ["/prelaunch", "/pre-launch", "/hype"].includes(requestUrl.pathname)) {
+      await serveStaticHtmlPage(response, "prelaunch.html");
       return;
     }
     if (request.method === "GET" && ["/receipts", "/receipt", "/swamp-card"].includes(requestUrl.pathname)) {
@@ -3973,7 +3984,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
       const store = await readPresales().catch(() => ({ presales: [] }));
       const now = Date.now();
       const presales = (store.presales || [])
-        .map((p) => ({ ...p, backers: undefined, backerCount: Array.isArray(p.backers) ? p.backers.length : 0, live: Date.parse(p.deadline || "") > now }))
+        .map((p) => ({ ...p, backers: undefined, refs: undefined, backerCount: Array.isArray(p.backers) ? p.backers.length : 0, topRefs: Object.entries(p.refs || {}).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([tag, n]) => ({ tag, n })), live: Date.parse(p.deadline || "") > now }))
         .sort((a, b) => (b.live - a.live) || (Number(b.interest) || 0) - (Number(a.interest) || 0))
         .slice(0, 60);
       sendCachedWebJson(request, response, 200, { ok: true, presales }, "public, max-age=10, stale-while-revalidate=60");
@@ -3993,6 +4004,7 @@ async function handleWebApiRequest(request, response, requestUrl) {
     }
     // Raid posts: X posts registered via TG /raid, ranked by likes+RTs.
     if (request.method === "GET" && pathname === "/api/web/raid-posts") {
+      void refreshRaidEngagement(); // fire-and-forget: keep likes/RTs live (free, throttled to 60s)
       const store = await readRaidPosts().catch(() => ({ posts: [] }));
       const posts = (store.posts || []).slice(0, 25);
       // liveMetrics is now always true: real like/RT counts come from the free fxtwitter mirror
@@ -24332,20 +24344,35 @@ async function handleTelegramRaidCommand(chatId, message, argument) {
   const by = "@" + String(from.username || from.first_name || "anon").replace(/[^A-Za-z0-9_]/g, "").slice(0, 24);
   if (!arg || !/x\.com|twitter\.com/i.test(arg)) {
     await sayHtml(chatId, [
-      "⚔️ <b>/raid &lt;your X post link&gt;</b>",
+      "⚔️ <b>/raid &lt;your X post link&gt; [$TICKER] [target]</b>",
       "",
-      "Drop the link to your raid post and it joins the <b>raid leaderboard</b> — ranked by likes + retweets — at <a href=\"https://www.slimewire.org/raids\">slimewire.org/raids</a>.",
-      "Get your crew to like &amp; RT it to climb the board. 🔥"
+      "Drop your raid post and it becomes a <b>boss</b> on the board — its <b>slime gauge</b> fills with real likes + retweets (no API key needed).",
+      "Optional: add a <b>$TICKER</b> and a <b>target</b> (total likes+RTs to smash), e.g. <code>/raid &lt;link&gt; $OGRE 500</code>.",
+      "Board: <a href=\"https://www.slimewire.org/raids\">slimewire.org/raids</a> 🔥"
     ].join("\n"));
     return;
   }
-  const res = await submitRaidPost({ url: arg, by });
+  // Parse: the X link, an optional $TICKER, and an optional numeric target (likes+RT goal). Strip
+  // the URL first so the tweet id's digits aren't mistaken for the target.
+  const url = (arg.match(/https?:\/\/\S+/) || [])[0] || arg;
+  const rest = arg.replace(url, " ");
+  const symMatch = rest.match(/\$?([A-Za-z][A-Za-z0-9_]{1,11})\b/);
+  const symbol = symMatch ? symMatch[1] : "";
+  const numMatch = rest.match(/\b(\d{2,7})\b/);
+  const target = numMatch ? Number(numMatch[1]) : 0;
+  const res = await submitRaidPost({ url, by, symbol, target });
   if (res.ok) {
+    const shareTxt = `⚔️ RAID THIS${symbol ? " for $" + symbol : ""} on @SlimeWire 🐸🔥 — like + RT to fill the gauge\n${url}`;
     await sayHtml(chatId, [
-      "🔥 <b>Raid logged on the board!</b>",
-      res.liveMetrics ? `Current score: <b>${res.score}</b> (live likes + RTs).` : "It climbs as your post gets likes + RTs — rally your crew.",
-      "Board: <a href=\"https://www.slimewire.org/raids\">slimewire.org/raids</a>"
-    ].join("\n"));
+      `🔥 <b>${symbol ? "$" + escapeTelegramHtml(symbol) + " " : ""}raid is live on the board!</b>`,
+      target ? `Target: <b>${target}</b> likes + RTs to smash. ` : "",
+      "The whole swamp can pile on — tap below to raid it. 🐸"
+    ].join("\n"), {
+      inline_keyboard: [[
+        { text: "⚔️ Raid board", url: "https://www.slimewire.org/raids" },
+        { text: "𝕏 Share", url: "https://twitter.com/intent/tweet?text=" + encodeURIComponent(shareTxt) }
+      ]]
+    });
   } else {
     await say(chatId, "Send a valid X post link, e.g.\n/raid https://x.com/you/status/123");
   }
@@ -26920,8 +26947,11 @@ async function bumpPresaleInterest(body = {}) {
   p.backers = Array.isArray(p.backers) ? p.backers : [];
   if (who && !p.backers.includes(who)) p.backers.push(who);
   p.interest = Math.max(Number(p.interest) || 0, p.backers.length) + (who ? 0 : 1);
+  // REFERRAL credit: whoever's link brought this hyper gets a point on the referral leaderboard.
+  const ref = String(body.ref || "").replace(/[^A-Za-z0-9_$. -]/g, "").slice(0, 16);
+  if (ref && ref !== who) { p.refs = p.refs && typeof p.refs === "object" ? p.refs : {}; p.refs[ref] = (p.refs[ref] || 0) + 1; }
   await writeJsonFile(presalesPath(), store);
-  return { ok: true, interest: p.interest };
+  return { ok: true, interest: p.interest, backerCount: p.backers.length };
 }
 
 // --- Raid posts: /raid in Telegram registers an X post, ranked by likes+RTs ---
@@ -26961,18 +26991,44 @@ async function fetchXEngagement(tweetId) {
   return null;
 }
 function raidPostScore(p) { return (p.likes || 0) + (p.rts || 0) * 3 + (p.replies || 0) + (p.bumps || 0) * 5; }
+
+// Keep the raid board's like/RT counts LIVE without anyone re-bumping: throttled to once/60s and
+// fire-and-forget from the GET, it re-pulls the top posts' engagement from the free fxtwitter
+// mirror so the boss gauges climb on their own as the swamp raids. Zero cost (no X API key).
+let _raidRefreshAt = 0;
+let _raidRefreshing = false;
+async function refreshRaidEngagement(maxAgeMs = 60_000) {
+  if (_raidRefreshing || Date.now() - _raidRefreshAt < maxAgeMs) return;
+  _raidRefreshing = true; _raidRefreshAt = Date.now();
+  try {
+    const store = await readRaidPosts();
+    const posts = (store.posts || []).slice(0, 15);
+    let changed = false;
+    for (const p of posts) {
+      const eng = await fetchXEngagement(p.tid).catch(() => null);
+      if (eng) {
+        p.likes = eng.likes; p.rts = eng.rts; p.replies = eng.replies;
+        if (eng.views) p.views = eng.views;
+        p.score = raidPostScore(p); p.refreshedAt = new Date().toISOString();
+        changed = true;
+      }
+    }
+    if (changed) { store.posts = store.posts.sort((a, b) => (b.score || 0) - (a.score || 0)); await writeJsonFile(raidPostsPath(), store); }
+  } catch {} finally { _raidRefreshing = false; }
+}
 async function submitRaidPost(body = {}) {
   const url = String(body.url || "").slice(0, 300);
   const tid = parseTweetId(url);
   if (!tid) return { ok: false, error: "need an x.com post link" };
   const by = String(body.by || "anon").replace(/[^A-Za-z0-9_@. -]/g, "").slice(0, 24) || "anon";
   const sym = String(body.symbol || "").replace(/[^A-Za-z0-9_$]/g, "").slice(0, 12);
+  const target = Math.max(0, Math.min(1000000, Math.round(Number(body.target) || 0))); // 0 = auto milestone on the board
   const store = await readRaidPosts();
   const now = new Date().toISOString();
   const eng = await fetchXEngagement(tid);
   let p = store.posts.find((x) => x.tid === tid);
-  if (p) { p.bumps = (p.bumps || 1) + 1; p.at = now; if (eng) { p.likes = eng.likes; p.rts = eng.rts; p.replies = eng.replies; } }
-  else { p = { tid, url: `https://x.com/i/status/${tid}`, by, symbol: sym, at: now, bumps: 1, likes: eng ? eng.likes : 0, rts: eng ? eng.rts : 0, replies: eng ? eng.replies : 0 }; store.posts.push(p); }
+  if (p) { p.bumps = (p.bumps || 1) + 1; p.at = now; if (sym) p.symbol = sym; if (target) p.target = target; if (eng) { p.likes = eng.likes; p.rts = eng.rts; p.replies = eng.replies; } }
+  else { p = { tid, url: `https://x.com/i/status/${tid}`, by, symbol: sym, target, at: now, bumps: 1, likes: eng ? eng.likes : 0, rts: eng ? eng.rts : 0, replies: eng ? eng.replies : 0 }; store.posts.push(p); }
   p.score = raidPostScore(p);
   store.posts = store.posts.sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, 200);
   await writeJsonFile(raidPostsPath(), store);
