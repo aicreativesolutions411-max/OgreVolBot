@@ -1604,7 +1604,30 @@ export function createAutopilotEngine(deps) {
     for (const cand of scored) {
       if (chopPaused) break;                            // sitting out the chop — no fresh snipes
       if (state.stopped || now() >= state.endAt) break; // never open after a stop/timer
-      if (state.open.length >= maxNow) break;            // tape-aware concurrent cap
+      if (state.open.length >= maxNow) {
+        // CAPITAL ROTATION — "don't sit in a dead bag while a better winner is right there." At
+        // capacity, dump the weakest DEAD-FLAT position to free a slot for a clearly-stronger setup,
+        // so capital chases live momentum instead of decaying in a stagnant coin. Conservative so it
+        // never churns fees: only bags held >90s that are FLAT (not winning, not stopped), NOT already
+        // banking (tp1) and NOT riding toward a smart-money exit; only swap for a meaningfully higher
+        // score; and at most one rotation per ~30s.
+        let weak = null;
+        if (nowMs - (state.lastRotateAt || 0) >= 30_000) {
+          for (const p of state.open) {
+            const heldS = (now() - p.openedAt) / 1000;
+            const mv = p.entryMc > 0 ? ((Number(p.lastMc) || p.entryMc) / p.entryMc - 1) * 100 : 0;
+            if (heldS < 90 || p.tp1Done) continue;                              // fair chance / already working
+            if (p.smartExitPct && mv >= p.smartExitPct * 0.5) continue;         // riding toward a smart exit
+            if (mv > 8 || mv < -4) continue;                                    // only dead-flat (winners ride, losers hit the stop)
+            if (!weak || mv < weak.mv) weak = { p, mv };
+          }
+        }
+        if (!weak || !(cand.fs >= (weak.p.fs || 0) + 8)) break;                 // nothing worth rotating → respect the cap
+        record("info", `🔄 Rotate: dump flat ${weak.p.sym} (${round(weak.mv, 1)}%) → stronger ${cand.r.symbol} (${P.liquid ? "ls" : "fs"} ${Math.round(cand.fs)})`);
+        try { await doSell(weak.p, 100, "rotate"); } catch (e) { record("warn", `rotate sell failed: ${e && e.message}`); break; }
+        state.lastRotateAt = nowMs;
+        // slot freed → fall through and open this stronger candidate
+      }
       // Within-cycle pile-in guard: don't open a 2nd of the same NAME we just opened
       // this very cycle (a clone can appear multiple times in one feed refresh).
       if (state.open.some((p) => normSym(p.sym) === normSym(cand.r.symbol))) continue;
