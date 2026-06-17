@@ -25242,8 +25242,8 @@ async function handleGroupBotCallback(query, userId) {
 function groupBuyQuickBuyUrl(mint) { return `https://slimewire.org/t?ca=${encodeURIComponent(mint)}`; }
 const groupBuyLastAlertAt = new Map(); // mint -> ts (shared so the socket + the poll fallback never double-alert)
 const groupBuyMarkup = (mint) => ({ inline_keyboard: [[
-  { text: "⚡ Quick Buy on SlimeWire", url: groupBuyQuickBuyUrl(mint) },
-  { text: "📈 Chart", url: `https://dexscreener.com/solana/${mint}` }
+  { text: "⚡ Quick Buy", url: groupBuyQuickBuyUrl(mint) },
+  { text: "📈 Chart", url: `https://slimewire.org/chart-lab?ca=${encodeURIComponent(mint)}` }
 ]] });
 // Token IMAGE for buy/raid cards — the coin's own art: DexScreener metadata first, Pump fallback
 // (exactly "metadata default from dex, backup pump"). Cached 5 min so per-buy alerts stay cheap.
@@ -25275,30 +25275,38 @@ function groupAlertMediaFor(entry, fallbackImageUrl) {
 }
 // Post a buy alert to every group tracking this token. solAmount>0 = a TRUE per-buy (from the
 // swap-api trade feed); solAmount<=0 = the DexScreener aggregate fallback ("buys rolling in").
-async function postGroupBuy(mint, { solAmount = 0, mcUsd = 0, trader = "", sym = "" } = {}) {
+async function postGroupBuy(mint, { solAmount = 0, usdAmount = 0, tokens = 0, priceUsd = 0, mcUsd = 0, liqUsd = 0, vol24 = 0, change24 = null, trader = "", sym = "" } = {}) {
   const store = await readGroupBot();
   const perBuy = solAmount > 0;
   const symClean = (String(sym || "").replace(/[<>&]/g, "")) || shortMint(mint);
   const defImg = await resolveGroupTokenImage(mint).catch(() => "");
+  const fmtUsd0 = (v) => "$" + Math.round(Number(v) || 0).toLocaleString();
+  const fmtPx = (v) => { v = Number(v) || 0; return v >= 1 ? "$" + v.toFixed(3) : v >= 0.001 ? "$" + v.toFixed(5) : "$" + v.toPrecision(3); };
+  const fmtTok = (v) => { v = Number(v) || 0; return v >= 1e6 ? (v / 1e6).toFixed(2) + "M" : v >= 1e3 ? (v / 1e3).toFixed(1) + "K" : Math.round(v).toLocaleString(); };
   for (const [chatId, e] of Object.entries(store.groups || {})) {
     if (!groupBotFeatureOn(e, "buybot") || e.token !== mint) continue;
     const min = Number(e.minBuySol) || 0;
     if (perBuy && min > 0 && solAmount < min) continue; // admin min-buy filter (per-buy only)
     let lines;
     if (perBuy) {
-      const emo = "🟢".repeat(Math.max(1, Math.min(14, Math.round(solAmount / 0.2) || 1)));
+      // SkeletonPriceBot-style rich buy card: emoji size bar + ticker + spent/got/price + market stats.
+      const emo = "🟢".repeat(Math.max(3, Math.min(28, Math.round(solAmount / 0.15) || 3)));
       lines = [
         emo,
-        `<b>$${escapeTelegramHtml(symClean)} — BUY</b>`,
-        `💰 ${solAmount.toFixed(3)} SOL` + (mcUsd > 0 ? ` · 🏦 MC $${Math.round(mcUsd).toLocaleString()}` : ""),
+        `<b>$${escapeTelegramHtml(symClean)} Buy!</b>`,
+        `💵 <b>${solAmount.toFixed(3)} SOL</b>${usdAmount > 0 ? ` (${fmtUsd0(usdAmount)})` : ""}`,
+        tokens > 0 ? `🪙 Got <b>${fmtTok(tokens)}</b> $${escapeTelegramHtml(symClean)}` : "",
+        priceUsd > 0 ? `🏷 Price <b>${fmtPx(priceUsd)}</b>` : "",
+        (mcUsd > 0 || liqUsd > 0) ? `📊 MC <b>${fmtUsd0(mcUsd)}</b>${liqUsd > 0 ? ` · Liq ${fmtUsd0(liqUsd)}` : ""}` : "",
+        (vol24 > 0 || change24 != null) ? `📈 Vol24 <b>${fmtUsd0(vol24)}</b>${change24 != null && isFinite(change24) ? ` · ${change24 >= 0 ? "🟢 +" : "🔴 "}${Math.round(change24)}%` : ""}` : "",
         trader ? `👤 <code>${escapeTelegramHtml(trader.slice(0, 4))}…${escapeTelegramHtml(trader.slice(-4))}</code>` : "",
-        `⚡ <a href="${groupBuyQuickBuyUrl(mint)}">Quick Buy on SlimeWire</a> · slimewire.org`
+        `⚡ <a href="${groupBuyQuickBuyUrl(mint)}">Buy $${escapeTelegramHtml(symClean)} on SlimeWire</a>`
       ].filter(Boolean);
     } else {
       lines = [
         `🟢 <b>Buys rolling in — $${escapeTelegramHtml(symClean)}</b>`,
-        mcUsd > 0 ? `🏦 MC $${Math.round(mcUsd).toLocaleString()}` : "",
-        `⚡ <a href="${groupBuyQuickBuyUrl(mint)}">Quick Buy on SlimeWire</a> · slimewire.org`
+        (mcUsd > 0 || liqUsd > 0) ? `📊 MC <b>${fmtUsd0(mcUsd)}</b>${liqUsd > 0 ? ` · Liq ${fmtUsd0(liqUsd)}` : ""}` : "",
+        `⚡ <a href="${groupBuyQuickBuyUrl(mint)}">Buy on SlimeWire</a> · slimewire.org`
       ].filter(Boolean);
     }
     if (e.customText) lines.unshift(`<b>${escapeTelegramHtml(String(e.customText).slice(0, 160))}</b>`);
@@ -25405,6 +25413,9 @@ async function pollGroupBuyTrades() {
       const firstPoll = !groupBuySeenTx.has(mint);
       const p = bestDexPairForToken(mint, pairs);
       const mcUsd = p ? Number(p.marketCap || p.fdv) || 0 : 0;
+      const liqUsd = p ? Number(p.liquidity?.usd) || 0 : 0;
+      const vol24 = p ? Number(p.volume?.h24) || 0 : 0;
+      const change24 = p && p.priceChange && p.priceChange.h24 != null ? Number(p.priceChange.h24) : null;
       const sym = (p && p.baseToken && p.baseToken.symbol) || "";
       const fresh = [];
       for (const t of trades) {
@@ -25421,7 +25432,7 @@ async function pollGroupBuyTrades() {
         const trader = String(t.userAddress || "");
         if (trader) { try { recordEarlyBuyer(mint, { side: "buy", trader }); } catch {} }
         if (posted >= 6) continue; // flood cap per poll (largest first); min-buy filter still applies in postGroupBuy
-        await postGroupBuy(mint, { solAmount: Number(t.amountSol) || 0, mcUsd, trader, sym });
+        await postGroupBuy(mint, { solAmount: Number(t.amountSol) || 0, usdAmount: Number(t.amountUsd) || 0, tokens: Number(t.baseAmount) || 0, priceUsd: Number(t.priceUsd) || 0, mcUsd, liqUsd, vol24, change24, trader, sym });
         posted += 1;
       }
       if (posted) groupBuyLastAlertAt.set(mint, Date.now());
