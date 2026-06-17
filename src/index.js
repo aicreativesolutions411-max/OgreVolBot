@@ -3995,7 +3995,9 @@ async function handleWebApiRequest(request, response, requestUrl) {
     if (request.method === "GET" && pathname === "/api/web/raid-posts") {
       const store = await readRaidPosts().catch(() => ({ posts: [] }));
       const posts = (store.posts || []).slice(0, 25);
-      sendCachedWebJson(request, response, 200, { ok: true, posts, liveMetrics: !!(process.env.X_BEARER_TOKEN || process.env.TWITTER_BEARER_TOKEN) }, "public, max-age=15, stale-while-revalidate=120");
+      // liveMetrics is now always true: real like/RT counts come from the free fxtwitter mirror
+      // (fetchXEngagement) even when no paid X bearer token is configured.
+      sendCachedWebJson(request, response, 200, { ok: true, posts, liveMetrics: true }, "public, max-age=15, stale-while-revalidate=120");
       return;
     }
     if (request.method === "POST" && pathname === "/api/web/raid-posts") {
@@ -26927,14 +26929,36 @@ function raidPostsPath() { return path.join(CONFIG.dataDir, "raid-posts.json"); 
 async function readRaidPosts() { const s = await readJson(raidPostsPath()); if (!Array.isArray(s.posts)) s.posts = []; return s; }
 function parseTweetId(url) { const m = /(?:x\.com|twitter\.com)\/[^/]+\/status\/(\d+)/i.exec(String(url || "")); return m ? m[1] : null; }
 async function fetchXEngagement(tweetId) {
+  if (!tweetId) return null;
+  // PREFERRED: official X API, but ONLY if a bearer token is configured (most accurate, has
+  // impressions). Most deploys won't set one — that's a paid product — so this is best-effort.
   const token = process.env.X_BEARER_TOKEN || process.env.TWITTER_BEARER_TOKEN;
-  if (!token || !tweetId) return null;
+  if (token) {
+    try {
+      const r = await fetch(`https://api.twitter.com/2/tweets/${tweetId}?tweet.fields=public_metrics`, { headers: { Authorization: `Bearer ${token}` } });
+      if (r.ok) {
+        const j = await r.json(); const m = j && j.data && j.data.public_metrics;
+        if (m) return { likes: m.like_count || 0, rts: (m.retweet_count || 0) + (m.quote_count || 0), replies: m.reply_count || 0, views: Number(m.impression_count) || 0, source: "x-api" };
+      }
+    } catch {}
+  }
+  // FREE FALLBACK (no API key, no cost): fxtwitter mirrors a post's PUBLIC counts as plain JSON.
+  // This is what makes the raid board's likes/RTs real without paying for the X API. Same mirror
+  // we already use for in-chat tweet previews (embedTweetLinks / postXPost).
   try {
-    const r = await fetch(`https://api.twitter.com/2/tweets/${tweetId}?tweet.fields=public_metrics`, { headers: { Authorization: `Bearer ${token}` } });
-    if (!r.ok) return null;
-    const j = await r.json(); const m = j && j.data && j.data.public_metrics; if (!m) return null;
-    return { likes: m.like_count || 0, rts: (m.retweet_count || 0) + (m.quote_count || 0), replies: m.reply_count || 0 };
-  } catch { return null; }
+    const j = await fetchJson(`https://api.fxtwitter.com/status/${tweetId}`, { timeoutMs: 7000, headers: { "User-Agent": "SlimeWireBot/1.0" } }).catch(() => null);
+    const t = j && (j.tweet || (j.tweets && j.tweets[0]));
+    if (t) {
+      return {
+        likes: Number(t.likes) || 0,
+        rts: (Number(t.retweets) || 0) + (Number(t.quotes) || 0),
+        replies: Number(t.replies) || 0,
+        views: Number(t.views) || 0,
+        source: "fxtwitter"
+      };
+    }
+  } catch {}
+  return null;
 }
 function raidPostScore(p) { return (p.likes || 0) + (p.rts || 0) * 3 + (p.replies || 0) + (p.bumps || 0) * 5; }
 async function submitRaidPost(body = {}) {
