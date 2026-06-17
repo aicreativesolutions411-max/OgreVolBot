@@ -1251,6 +1251,14 @@ export function createAutopilotEngine(deps) {
         }
       }
       if (mc > 0) {
+        // One-time entry anchor: lock the basis to the FIRST live read (same source as every tick
+        // after), within a few seconds of opening, so a fresh position starts at ~0% — no phantom
+        // "instantly up" from a scan-vs-live mismatch. The time guard avoids hiding a real move if
+        // the first read is unusually late.
+        if (pos.anchorPending) {
+          pos.anchorPending = false;
+          if (now() - pos.openedAt < 6000) { pos.entryMc = mc; if (liq > 0) pos.entryLiq = liq; }
+        }
         pos.lastMc = mc;
         if (liq > 0) pos.lastLiq = liq;
         pos.missed = 0;
@@ -1731,8 +1739,8 @@ export function createAutopilotEngine(deps) {
     if (!state || state.stopped) return; // never open once stopped
     const mint = row.tokenMint;
     const sym = row.symbol || row.baseToken?.symbol || shortMint(mint);
-    const entryMc = Number(row.marketCap) || 0;
-    const entryLiq = Number(row.liquidityUsd) || 0;
+    let entryMc = Number(row.marketCap) || 0;
+    let entryLiq = Number(row.liquidityUsd) || 0;
     if (entryMc <= 0) return;
     // Start the live pump trade-tick stream for this coin so prices update instantly.
     try { onOpen(mint); } catch {}
@@ -1762,6 +1770,19 @@ export function createAutopilotEngine(deps) {
       return;
     }
 
+    // ANCHOR the entry to the REALIZABLE mark right after the fill — read from the SAME live price
+    // source the display uses for lastMc (getPairLite). Without this, entry stays the stale SCAN
+    // price while lastMc jumps to the post-buy live price (our own buy moved the curve + spread),
+    // so a brand-new position shows "instantly up" when it isn't. Anchoring makes it start at ~0%
+    // and only show green on a REAL move past entry. Falls back to the scan price if the read fails.
+    try {
+      const lite = await getPairLite(mint);
+      const liteMc = Number(lite && lite.marketCap) || 0;
+      if (liteMc > 0) entryMc = liteMc;
+      const liteLiq = Number(lite && lite.liquidityUsd) || 0;
+      if (liteLiq > 0) entryLiq = liteLiq;
+    } catch {}
+
     state.bank -= sizeSol;
     state.tradeNo += 1;
     const pos = {
@@ -1775,6 +1796,9 @@ export function createAutopilotEngine(deps) {
       tokenAmount,
       remFrac: 1,
       openedAt: now(),
+      // The first confirmed live read in manageExits locks the true entry basis (same price source
+      // we compare every tick), so a fresh buy can't flash "instantly up" from a source mismatch.
+      anchorPending: true,
       missed: 0,
       tp1Done: false,
       tp2Done: false,
